@@ -162,7 +162,7 @@ func (s Struct) WriteDefn(l *LineWriter) {
 		l.Write("\t// Version is the version of this message used with a Kafka broker.")
 		l.Write("Version int16")
 	}
-	for _, f := range s.Fields {
+	for i, f := range s.Fields {
 		if f.Comment != "" {
 			l.Write("%s", f.Comment)
 		}
@@ -171,6 +171,9 @@ func (s Struct) WriteDefn(l *LineWriter) {
 			version = " // v" + strconv.Itoa(f.MinVersion) + "+"
 		}
 		l.Write("%s %s%s", f.FieldName, f.Type.TypeName(), version)
+		if i < len(s.Fields)-1 {
+			l.Write("") // blank between fields
+		}
 	}
 	l.Write("}")
 }

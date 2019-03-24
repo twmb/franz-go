@@ -59,8 +59,8 @@ RecordBatch => not top level
   // Bits 0 thru 3 correspond to compression:
   //   - 000 is no compression
   //   - 001 is snappy compression
-  //   - 002 is lz4 compression
-  //   - 003 is zstd compression (produce request version 7+)
+  //   - 010 is lz4 compression
+  //   - 011 is zstd compression (produce request version 7+)
   //
   // Bit 4 is the timestamp type, with 0 meaning CreateTime corresponding
   // to the timestamp being from the producer, and 1 meaning LogAppendTime
