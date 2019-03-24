@@ -1,0 +1,169 @@
+// Header is user provided metadata for a record. Kafka does not look at
+// headers at all; they are solely for producers and consumers.
+Header => not top level
+  Key: varint-bytes
+  Value: varint-bytes
+
+// A Record is a Kafka v0.11.0.0 record. It corresponds to an individual
+// message as it is written on the wire.
+Record => not top level
+  // Length is the length of this record on the wire of everything that
+  // follows this field. It is an int32 encoded as a varint.
+  Length: varint
+  // Attributes are record level attributes. This field currently is unused.
+  Attributes: int8
+  // TimestampDelta is the millisecond delta of this record's timestamp
+  // from the record's RecordBatch's FirstTimestamp.
+  TimestampDelta: varint
+  // OffsetDelta is the delta of this record's offset from the record's
+  // RecordBatch's FirstOffset.
+  //
+  // For producing, this is usually equal to the index of the record in
+  // the record batch.
+  OffsetDelta: varint
+  // Key is an blob of data for a record.
+  //
+  // Key's are usually used for hashing the record to specific Kafka partitions.
+  Key: varint-bytes
+  // Value is  a blob of data. This field is the main "message" portion of a
+  // record.
+  Value: varint-bytes
+  // Headers are optional user provided metadata for records.
+  Headers: [Header]
+
+// RecordBatch is a Kafka concept that groups many individual records together
+// in a more optimized format.
+RecordBatch => not top level
+  // WireLength is not officially a field in a RecordBatch, however,
+  // RecordBatch is a special form of NULLABLE_BYTES. Since all nullable
+  // bytes must be prefixed with a int32 length, we throw that here.
+  WireLength: int32
+  // FirstOffset is the first offset in a record batch.
+  //
+  // For producing, this is usually 0.
+  FirstOffset: int64
+  // Length is the wire length of everything that follows this field.
+  Length: int32
+  // PartitionLeaderEpoch is a number that Kafka uses for cluster
+  // communication. Clients generally do not need to worry about this
+  // field and producers should set it to -1.
+  PartitionLeaderEpoch: int32
+  // Magic is the current "magic" number of this message format.
+  // The current magic number is 2.
+  Magic: int8
+  // CRC is the crc of everything that follows this field using the
+  // Castagnoli polynomial.
+  CRC: int32
+  // Attributes describe the records array of this batch.
+  //
+  // Bits 0 thru 3 correspond to compression:
+  //   - 000 is no compression
+  //   - 001 is snappy compression
+  //   - 002 is lz4 compression
+  //   - 003 is zstd compression (produce request version 7+)
+  //
+  // Bit 4 is the timestamp type, with 0 meaning CreateTime corresponding
+  // to the timestamp being from the producer, and 1 meaning LogAppendTime
+  // corresponding to the timestamp being from the broker.
+  //
+  // Bit 5 indicates whether the batch is part of a transaction (1 is yes).
+  //
+  // Bit 6 indicates if the batch includes a control message (1 is yes).
+  // Control messages are used to enable transactions and are generated from
+  // the broker. Clients should not return control batches to applications.
+  Attributes: int16
+  // LastOffsetDelta is the offset of the last message in a batch. This is
+  // by the broker to ensure correct behavior even with batch compaction.
+  LastOffsetDelta: int32
+  // FirstTimestamp is the timestamp (in milliseconds) of the first record
+  // in a batch.
+  FirstTimestamp: int32
+  // MaxTimestamp is the timestamp (in milliseconds) of the last record
+  // in a batch. Similar to LastOffsetDelta, this is used to ensure correct
+  // behavior with compacting.
+  MaxTimestamp: int64
+  // ProducerId is the broker assigned producerId from an InitProducerId
+  // request.
+  //
+  // Clients that wish to support idempotent messages and transactions must
+  // set this field.
+  ProducerId: int64
+  // ProducerEpoch is the broker assigned producerEpoch from an InitProducerId
+  // request.
+  //
+  // Clients that wish to support idempotent messages and transactions must
+  // set this field.
+  ProducerEpoch: int16
+  // FirstSequence is the producer assigned sequence number used by the
+  // broker to deduplicate messages.
+  //
+  // Clients that wish to support idempotent messages and transactions must
+  // set this field.
+  //
+  // The sequence number for each record in a batch is OffsetDelta + FirstSequence.
+  FirstSequence: int32
+  // Records are the batch of records to send.
+  //
+  // Note that to compress a batch, you compress the entire set of records
+  // and then use that as the value for a single record.
+  Records: [Record]
+
+ProduceRequest => key 0, max version 7, min version 2
+  TransactionID: nullable-string // v3+
+  Acks: int16
+  Timeout: int32
+  TopicData: [=>]
+    Topic: string
+    Data: [=>]
+      Partition: int32
+      Records: RecordBatch
+
+ProduceResponse => from ProduceRequest
+  Responses: [=>]
+    Topic: string
+    PartitionResponses: [=>]
+      Partition: int32
+      ErrorCode: int16
+      BaseOffset: int64
+      LogAppendTime: int64 // v5+
+  ThrottleTimeMs: int32
+
+MetadataRequest => key 3, max version 8
+  Topics: [string]
+  AllowAutoTopicCreation: bool // v4+
+  IncludeClusterAuthorizedOperations: bool // v8+
+  IncludeTopicAuthorizedOperations: bool // v8+
+
+MetadataResponse => from MetadataRequest
+  ThrottleTimeMs: int32 // v3+
+  Brokers: [=>]
+    NodeID: int32
+    Host: string
+    Port: int32
+    Rack: nullable-string // v1+
+  ClusterID: nullable-string // v2+
+  ControllerID: int32 // v1+
+  TopicMetadata: [=>]
+    ErrorCode: int16
+    Topic: string
+    IsInternal: bool // v1+
+    PartitionMetadata: [=>]
+      ErrorCode: int16
+      Partition: int32
+      Leader: int32
+      LeaderEpoch: int32 // v7+
+      Replicas: [int32]
+      ISR: [int32]
+      OfflineReplicas: [int32] // v5+
+    AuthorizedOperations: int32 // v8+
+  AuthorizedOperations: int32 // v8+
+
+ApiVersionsRequest => key 18, max version 2
+
+ApiVersionsResponse => from ApiVersionsRequest
+  ErrorCode: int16
+  ApiVersions: [=>]
+    ApiKey: int16
+    MinVersion: int16
+    MaxVersion: int16
+  ThrottleTimeMs: int32 // v1+
