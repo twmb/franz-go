@@ -13,6 +13,10 @@ import (
 	"golang.org/x/exp/rand"
 )
 
+// TODO STRICT LENGTH VALIDATION
+// max bytes: 1G
+// client id length: int16
+
 type (
 	// Opt is an option to configure a client.
 	Opt interface {
@@ -54,7 +58,7 @@ func NewClient(seedBrokers []string, opts ...Opt) (*Client, error) {
 			maxRecordBatchBytes: 1000000,   // Kafka max.message.bytes default is 1000012
 			maxBrokerWriteBytes: 100 << 20, // Kafka socket.request.max.bytes default is 100<<20
 
-			brokerBufBytes: 100 << 30, // "unbounded"; hard stop at maxBrokerWriteBytes
+			brokerBufBytes: 1 << 30, // "unbounded"; hard stop at maxBrokerWriteBytes
 			brokerBufDur:   250 * time.Millisecond,
 
 			// TODO partitioner
@@ -190,11 +194,11 @@ type (
 		acks        RequiredAcks
 		compression []CompressionCodec // order of preference
 
-		maxRecordBatchBytes int
-		maxBrokerWriteBytes int
+		maxRecordBatchBytes int32
+		maxBrokerWriteBytes int32
 		maxBrokerBufdRecs   int
 
-		brokerBufBytes int
+		brokerBufBytes int32
 		brokerBufDur   time.Duration
 
 		partitioner Partitioner
@@ -267,7 +271,10 @@ func WithRequiredAcks(acks RequiredAcks) OptProducer {
 }
 
 // CompressionCodec configures how records are compressed before being sent.
-// TODO expand: batch? individually?
+//
+// Records are compressed within individual topics and partitions, inside of a
+// RecordBatch. All records in a RecordBatch are compressed into one record
+// for that batch.
 type CompressionCodec struct {
 	codec int // 1: gzip, 2: snappy, 3: lz4, 4: zstd
 	level int
@@ -337,7 +344,7 @@ func WithCompressionPreference(preference ...CompressionCodec) OptProducer {
 // Note that this is the maximum size of a record batch before compression.
 // If a batch compresses poorly and actually grows the batch, the uncompressed
 // form will be used.
-func WithMaxRecordBatchBytes(v int) OptProducer {
+func WithMaxRecordBatchBytes(v int32) OptProducer {
 	return producerOpt{func(cfg *producerCfg) { cfg.maxRecordBatchBytes = v }}
 }
 
@@ -349,7 +356,7 @@ func WithMaxRecordBatchBytes(v int) OptProducer {
 //
 // This number corresponds to the a broker's socket.request.max.bytes, which
 // defaults to 100MiB.
-func WithBrokerMaxWriteBytes(v int) OptProducer {
+func WithBrokerMaxWriteBytes(v int32) OptProducer {
 	return producerOpt{func(cfg *producerCfg) { cfg.maxBrokerWriteBytes = v }}
 }
 
@@ -361,7 +368,7 @@ func WithBrokerMaxWriteBytes(v int) OptProducer {
 // buffer byte limit.
 //
 // To disable record buffering, set this to zero.
-func WithBrokerBufferBytes(v int) OptProducer {
+func WithBrokerBufferBytes(v int32) OptProducer {
 	return producerOpt{func(cfg *producerCfg) { cfg.brokerBufBytes = v }}
 }
 

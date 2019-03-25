@@ -23,6 +23,8 @@ func (c *Client) Produce(
 	// if partition not in partitions
 	//broker := p.cl.findBrokerLeader(partition)
 	//_ = broker
+	// TODO KIP-359: if broker LeaderEpoch known, set it in produce request
+	// and handle response errors
 	return nil
 }
 

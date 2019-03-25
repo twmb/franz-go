@@ -6,13 +6,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/twmb/kgo/kmsg"
 	"golang.org/x/exp/rand"
-)
-
-type version int8
-
-const (
-	v0_0_11_0 version = iota
 )
 
 type partitions struct {
@@ -30,10 +25,12 @@ type Client struct {
 	seedBrokers []string
 
 	brokersMu      sync.Mutex
-	untriedSeeds   []string
-	untriedBrokers map[int32]*broker  // unopened brokers
-	triedBrokers   map[int32]struct{} // dead broker IDs
-	brokers        []*broker          // opened brokers
+	untriedBrokers map[int32]*broker // unopened brokers
+	brokers        map[int32]*broker // opened brokers
+
+	// seedBroker is the broker we use until a metadata request is issued.
+	// Once we have broker IDs, we close the unknown-id seed broker.
+	seedBroker *broker
 
 	topicPartsMu sync.Mutex   // guards writes
 	topicParts   atomic.Value // map[string]partitions
@@ -42,28 +39,28 @@ type Client struct {
 // Brokers: always tick at fastest frequency of all topics sending to that broker
 // Brokers: each topic requires its own ProduceRequest
 
-func (c *Client) allPartitionsFor(topic string) ([]int32, error) {
-	parts, err := c.partitionsFor(topic)
+func (c *Client) allPartitionsForTopic(topic string) ([]int32, error) {
+	parts, err := c.partitionsForTopic(topic)
 	if err != nil {
 		return nil, err
 	}
 	return parts.all, nil
 }
 
-func (c *Client) writablePartitionsFor(topic string) ([]int32, error) {
-	parts, err := c.partitionsFor(topic)
+func (c *Client) writablePartitionsForTopic(topic string) ([]int32, error) {
+	parts, err := c.partitionsForTopic(topic)
 	if err != nil {
 		return nil, err
 	}
 	return parts.writable, nil
 }
 
-func (c *Client) partitionsFor(topic string) (partitions, error) {
+func (c *Client) partitionsForTopic(topic string) (partitions, error) {
 	topicParts := c.topicParts.Load().(map[string]partitions)
 	parts, exists := topicParts[topic]
 
 	if !exists {
-		if err := c.fetchMetadataFor(topic); err != nil {
+		if err := c.fetchMetadataForTopic(topic); err != nil {
 			return partitions{}, err
 		}
 		topicParts = c.topicParts.Load().(map[string]partitions)
@@ -75,36 +72,33 @@ func (c *Client) partitionsFor(topic string) (partitions, error) {
 	return parts, nil
 }
 
-func (c *Client) resetBrokers() {
-	c.untriedSeeds = append(c.untriedSeeds[:0], c.seedBrokers...)
-	for id := range c.untriedBrokers { // should be no untried brokers
-		delete(c.untriedBrokers, id)
+func (c *Client) closeBroker(b *broker) {
+	b.brokersMu.Lock()
+	defer b.brokersMu.Unlock()
+
+	b.dieOnce()
+	if b == c.seedBroker {
+		c.seedBroker = nil
+		return
 	}
-	for id := range c.triedBrokers {
-		delete(c.triedBrokers, id)
-	}
+	delete(b.brokers, id)
 }
 
-// tryBroker tries to open a broker, moving the addr from the untried list
-// to the tried list.
-func (c *Client) tryUntriedSeed() error {
-	addr := c.untriedSeeds[0]
-	c.untriedSeeds = c.untriedSeeds[1:]
+func (c *Client) tryUntriedSeedBroker(addr string) error {
 	broker := &broker{cl: c, addr: addr}
 	if err := broker.connect(); err != nil {
 		return err
 	}
-	c.brokers = append(c.brokers, broker)
+	c.seedBroker = c
 	return nil
 }
 
 func (c *Client) tryUntriedBroker(id int32, broker *broker) error {
 	delete(c.untriedBrokers, id)
-	c.triedBrokers[id] = struct{}{}
 	if err := broker.connect(); err != nil {
 		return err
 	}
-	c.brokers = append(c.brokers, broker)
+	c.brokers[id] = broker
 	return nil
 }
 
@@ -115,15 +109,8 @@ func (c *Client) broker() (*broker, error) {
 	defer c.brokersMu.Unlock()
 
 	var err error
-	// If we have no live brokers, attempt to open a new one from
-	// first our untried known brokers, and then our untried seeds.
-	if len(c.brokers) == 0 {
-		// If we tried everything and everything died,
-		// reset the seeds and begin retrying.
-		if len(c.untriedSeeds) == 0 && len(c.untriedBrokers) == 0 {
-			c.resetBrokers()
-		}
-
+	if len(c.brokers) == 0 && c.seedBroker != nil {
+		// Try all of our ID-known untried brokers.
 		for id, broker := range c.untriedBrokers {
 			if err = c.tryUntriedBroker(id, broker); err != nil {
 				continue
@@ -131,13 +118,17 @@ func (c *Client) broker() (*broker, error) {
 			break
 		}
 
-		// If we still have no brokers, try while we have untried seeds.
+		// Otherwise, try a permutation of the seeds until one opens.
 		if len(c.brokers) == 0 {
-			for len(c.untriedSeeds) > 0 {
-				if err = c.tryUntriedSeed(); err != nil {
-					continue
+			seeds := append([]string(nil), c.seedBrokers...)
+			c.rngMu.Lock()
+			c.rng.Shuffle(len(seeds), func(i, j int) { seeds[i], seeds[j] = seeds[j], seeds[i] })
+			c.rngMu.Unlock()
+
+			for len(seeds) > 0 {
+				if err = c.tryUntriedSeedBroker(); err == nil {
+					break
 				}
-				break
 			}
 		}
 	}
@@ -146,29 +137,51 @@ func (c *Client) broker() (*broker, error) {
 		return nil, err
 	}
 
-	if len(c.brokers) == 0 {
-		// TODO: we could have, over time, connected to everything and
-		// had only one untried broker. If we had a single untried
-		// broker, then we will only try that one rather than resetting
-		// brokers. We should have a better reset policy.
-		return nil, errNoBrokers
+	// With no err, either an untried broker or a seed broker opened.
+	var b *broker
+	for _, broker := range c.brokers {
+		b = broker
+		break
 	}
-
-	n := 0
-	if l := len(c.brokers); l > 0 {
-		c.rngMu.Lock()
-		n = c.rng.Intn(l)
-		c.rngMu.Unlock()
+	if b == nil {
+		b = c.seedBroker
 	}
-
-	return c.brokers[n], nil
+	return b, nil
 }
 
-func (c *Client) fetchMetadataFor(topic string) error {
+func (c *Client) fetchMetadataForTopic(topic string) error {
 	broker, err := c.broker()
 	if err != nil {
 		return err
 	}
-	_ = broker
-	return nil
+	broker.wait(
+		new(kmsg.MetadataRequest),
+		func(resp kmsg.Response, respErr error) {
+			if err = respErr; err != nil {
+				c.closeBroker(broker)
+				// error in write / read: TODO dereg broker
+				return
+			}
+			meta := resp.(*kmsg.MetadataResponse)
+			c.parseMetadata(meta)
+
+		},
+	)
+	return err
+}
+
+func (c *Client) parseMetadata(meta *kmsg.MetadataResponse) {
+	c.brokersMu.Lock()
+	defer c.brokersMu.Unlock()
+
+	for _, broker := range c.Brokers {
+		// id, host, port
+	}
+
+	// register all brokers
+	// TODO save controller ID (broker #) for admin client
+	// over all topics,
+	// check topic err...
+	// save partition, unless leader not available
+	_ = meta
 }

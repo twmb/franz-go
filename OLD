@@ -43,6 +43,14 @@ func appendMessageRequest(
 	return dst
 }
 
+func messageRequestOverhead(clientID *string) int32 {
+	const base = 4 + 2 + 2 + 4
+	if clientID == nil {
+		return base + 2
+	}
+	return base + 2 + int32(len(*clientID))
+}
+
 type messageResponseKind interface {
 	readFrom([]byte) error
 }
@@ -182,7 +190,7 @@ type produceResponsePartition struct {
 	partition      int32
 	errCode        int16
 	baseOffset     int64
-	logAppendTime  int64
+	logAppendTime  int64 // millis
 	logStartOffset int64 // v5+
 }
 
@@ -375,69 +383,4 @@ func (m *metadataResponse) readFrom(src []byte) error {
 //   - v2+ adds nothing, but quota violations are responded to before throttling
 type apiVersionsRequest struct {
 	version int16
-}
-
-func (*apiVersionsRequest) key() int16                 { return 18 }
-func (*apiVersionsRequest) maxVersion() int16          { return 3 }
-func (a *apiVersionsRequest) setVersion(v int16)       { a.version = v }
-func (*apiVersionsRequest) appendTo(dst []byte) []byte { return dst }
-func (a *apiVersionsRequest) responseKind() messageResponseKind {
-	return &apiVersionsResponse{version: a.version}
-}
-
-type apiVersionsResponse struct {
-	version            int16
-	errCode            int16
-	keys               apiVersions
-	throttleTimeMillis int32 // v1+
-}
-
-type apiVersions [messagesMaxKey + 1]int16
-
-func (a *apiVersionsResponse) readFrom(src []byte) error {
-	b := binreader{src: src}
-
-	a.errCode = b.rint16()
-	nkeys := b.rarrayLen()
-	if nkeys < 0 {
-		return errInvalidResp
-	}
-
-	for i := 0; i < len(a.keys[:]); i++ {
-		a.keys[i] = -1 // default unsupported for all keys
-	}
-
-	keys := make(map[int16]int16, nkeys)
-	for i := int32(0); i < nkeys; i++ {
-		key := b.rint16()
-		// We discard the lower bound since Kafka is currently entirely
-		// backwards compatible.
-		b.rint16()
-		keys[key] = b.rint16()
-	}
-
-	// For all keys both the broker and our client supports, copy the
-	// key's max supported version.
-	for key, keyMax := range keys {
-		if key > messagesMaxKey { // we do not know of this new command
-			continue
-		}
-		a.keys[key] = keyMax
-	}
-
-	if a.version >= 1 {
-		a.throttleTimeMillis = b.rint32()
-	}
-
-	return b.complete()
-}
-
-func (a *apiVersionsResponse) String() string {
-	var sb strings.Builder
-	sb.WriteString("versions =>\n")
-	for key := int16(0); key < int16(len(a.keys[:])); key++ {
-		fmt.Fprintf(&sb, "  %2d => ..%d\n", key, a.keys[key])
-	}
-	sb.WriteString("-----------")
-	return sb.String()
 }

@@ -8,108 +8,142 @@ import (
 	"net"
 	"sync"
 	"sync/atomic"
+
+	"github.com/twmb/kgo/kmsg"
 )
+
+type promisedReq struct {
+	req     kmsg.Request
+	promise func(kmsg.Response, error)
+}
+
+type promisedResp struct {
+	correlationID int32
+	resp          kmsg.Response
+	promise       func(kmsg.Response, error)
+}
+
+type apiVersions [kmsg.MaxKey + 1]int16
 
 type broker struct {
 	cl *Client
 
 	id   int32
 	addr string
-	conn net.Conn
 
-	versions apiVersions
+	cxnMu sync.Mutex
+	cxn   *brokerCxn
 
-	reqs  chan promisedReq
-	resps chan promisedResp
+	bufferedReq bufferedProduceRequest
 
-	/*
-		bufdRecs    bufferedRecords
-		flushRecs   bool         // forces a flush
-		overflowRec writeAndThen // stores a record that would have overflown bufdRecs
-
-		flushTimer        *time.Timer
-		flushTimerRunning bool
-		mustFlushBuf      bool
-		mustFlushRecs     bool
-	*/
+	reqs chan promisedReq
 
 	dieMu sync.RWMutex
-	dead  int64 // atomic
+	// dead is an atomic so that a fully backed up request chan
+	// does not block a shutdown.
+	dead int64
 }
 
-type promisedReq struct {
-	req     func(*broker) messageRequestKind
-	promise func(messageResponseKind, error)
+func (c *Client) newBroker(addr string, id int32) *broker {
+	b := &broker{
+		cl: c,
+
+		id:   id,
+		addr: addr,
+
+		reqs: make(chan promisedReq, 100), // TODO size limitation for max inflight reqs?
+	}
+	b.bufferedReq.br = b
+	b.bufferedReq.reset()
+	go b.handleReqs()
+
+	return b
 }
 
-type promisedResp struct {
-	correlationID int32
-	resp          messageResponseKind
-	promise       func(messageResponseKind, error)
+func (b *broker) loadConnection() (*brokerCxn, error) {
+	b.cxnMu.Lock()
+	cxn := b.cxn
+	b.cxnMu.Unlock()
+
+	if cxn != nil {
+		return cxn, nil
+	}
+
+	// we have no connection: connect on demand
+	conn, err := b.connect()
+	if err != nil {
+		return nil, err
+	}
+
+	cxn = &brokerCxn{
+		conn:     conn,
+		clientID: b.cl.cfg.client.id,
+	}
+	if err = cxn.init(); err != nil {
+		conn.Close()
+		return nil, err
+	}
+
+	b.cxn = cxn
+	return cxn, nil
 }
 
-// called under broker lock
-// TODO
+// connect connects to the broker's addr, returning the new connection.
+//
 // Should we not wait for handshake? Should we not do any network IO?
 // Should we not wait for api versions response?
-func (b *broker) connect() error {
+func (b *broker) connect() (net.Conn, error) {
 	conn, err := b.cl.cfg.client.dialFn(b.addr)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if b.cl.cfg.client.tlsCfg != nil {
 		tlsconn := tls.Client(conn, b.cl.cfg.client.tlsCfg)
 		// TODO SetDeadline, then clear
 		if err = tlsconn.Handshake(); err != nil {
 			conn.Close()
-			return err
+			return nil, err
 		}
 		conn = tlsconn
 	}
 
-	b.conn = conn
-
-	b.reqs = make(chan promisedReq, 100)
-	b.resps = make(chan promisedResp, 100)
-
-	go b.handleReqs()
-
-	var api *apiVersionsResponse
-	b.wait(
-		func(*broker) messageRequestKind { return new(apiVersionsRequest) },
-		func(resp messageResponseKind, respErr error) {
-			if err = respErr; err != nil {
-				return
-			}
-			api = resp.(*apiVersionsResponse)
-			err = kafkaErr(api.errCode)
-		},
-	)
-	if err != nil {
-		b.dieOnce()
-		return err
-	}
-	b.versions = api.keys
-
-	return nil
+	return conn, nil
 }
 
-func (b *broker) dieOnce() {
+// readResponse reads a response from conn and ensures that the correlation
+// ID matches, returning a newly allocated slice on success or an error.
+func readResponse(conn io.Reader, correlationID int32) ([]byte, error) {
+	sizeBuf := make([]byte, 4)
+	if _, err := io.ReadFull(conn, sizeBuf[:4]); err != nil {
+		return nil, err
+	}
+	size := int32(binary.BigEndian.Uint32(sizeBuf[:4]))
+
+	buf := make([]byte, size)
+	if _, err := io.ReadFull(conn, buf); err != nil {
+		return nil, err
+	}
+
+	if len(buf) < 4 {
+		return nil, errNotEnoughData
+	}
+	gotID := int32(binary.BigEndian.Uint32(buf))
+	buf = buf[4:]
+	if gotID != correlationID {
+		return nil, errCorrelationIDMismatch
+	}
+	return buf, nil
+}
+
+func (b *broker) stopForever() {
 	if atomic.SwapInt64(&b.dead, 1) == 1 {
 		return
 	}
-
-	b.conn.Close() // kill anything writing / reading
 
 	// begin draining reqs before lock/unlocking to ensure nothing
 	// sitting on the rlock will block our lock
 	go func() {
 		for pr := range b.reqs {
-			pr.promise(nil, errClientClosing)
-		}
-	}()
-	go func() {
-		for pr := range b.resps {
 			pr.promise(nil, errClientClosing)
 		}
 	}()
@@ -121,28 +155,152 @@ func (b *broker) dieOnce() {
 	close(b.reqs)
 }
 
+// do issues a request to the broker, eventually calling the response
+// once a the request either fails or is responded to (with failure or not).
+//
+// The promise will block broker processing.
 func (b *broker) do(
-	req func(*broker) messageRequestKind,
-	promise func(messageResponseKind, error),
+	req kmsg.Request,
+	promise func(kmsg.Response, error),
 ) {
+	dead := false
+
 	b.dieMu.RLock()
-	if atomic.LoadInt64(&b.dead) == 0 {
+	if atomic.LoadInt64(&b.dead) == 1 {
+		dead = true
+	} else {
 		b.reqs <- promisedReq{req, promise}
 	}
 	b.dieMu.RUnlock()
+
+	if dead {
+		promise(nil, errBrokerDead)
+	}
 }
 
-func (b *broker) wait(
-	req func(*broker) messageRequestKind,
-	promise func(messageResponseKind, error),
+// doAsyncPromise is the same as do, but the promise is ran concurrently
+// so as to not block the broker's request/response processing.
+func (b *broker) doAsyncPromise(
+	req kmsg.Request,
+	promise func(kmsg.Response, error),
 ) {
+	b.do(req, func(resp kmsg.Response, err error) {
+		go promise(resp, err)
+	})
+}
+
+// wait is the same as do, but this waits for the response to finish.
+//
+// This does not block the broker's request/response processing because this is
+// inherently already tied to a running goroutine.
+func (b *broker) wait(
+	req kmsg.Request,
+	promise func(kmsg.Response, error),
+) {
+	var resp kmsg.Response
+	var err error
 	done := make(chan struct{})
-	wait := func(k messageResponseKind, err error) {
-		defer close(done)
-		promise(k, err)
+	wait := func(k kmsg.Response, err error) {
+		resp, err = k, err
+		close(done)
 	}
 	b.do(req, wait)
 	<-done
+	promise(resp, err)
+}
+
+func (b *broker) handleReqs() {
+	defer func() {
+		b.cxnMu.Lock()
+		cxn := b.cxn
+		b.cxnMu.Unlock()
+
+		if cxn != nil {
+			cxn.die()
+		}
+	}()
+
+	for pr := range b.reqs {
+		cxn, err := b.loadConnection()
+		if err != nil {
+			pr.promise(nil, err)
+			continue
+		}
+
+		// We have a cxn: version bound our message and write it.
+		req := pr.req
+		brokerMax := cxn.versions[req.Key()]
+		ourMax := req.MaxVersion()
+		version := brokerMax
+		if brokerMax > ourMax {
+			version = ourMax
+		}
+		if version < req.MinVersion() {
+			pr.promise(nil, errBrokerTooOld)
+			continue
+		}
+		req.SetVersion(version) // always go for highest version
+
+		correlationID, err := cxn.writeRequest(req)
+		if err != nil {
+			pr.promise(nil, err)
+			cxn.die()
+			continue
+		}
+
+		cxn.enqueueResp(promisedResp{
+			correlationID,
+			req.ResponseKind(),
+			pr.promise,
+		})
+	}
+}
+
+type brokerCxn struct {
+	conn          net.Conn
+	reqBuf        []byte
+	versions      apiVersions
+	correlationID int32
+	clientID      *string
+
+	mu    sync.RWMutex
+	resps chan promisedResp
+	// dead is an atomic so that a completely backed up
+	// resps chan cannot block connection killing.
+	dead int64
+}
+
+func (cx *brokerCxn) init() error {
+	if err := cx.requestAPIVersions(); err != nil {
+		return err
+	}
+	cx.resps = make(chan promisedResp, 100)
+	go cx.handleResps()
+	return nil
+}
+
+func (cx *brokerCxn) requestAPIVersions() (err error) {
+	req := new(kmsg.ApiVersionsRequest)
+	corrID, err := cx.writeRequest(req)
+	if err != nil {
+		return err
+	}
+	rawResp, err := readResponse(cx.conn, corrID)
+	if err != nil {
+		return err
+	}
+	resp := req.ResponseKind().(*kmsg.ApiVersionsResponse)
+	if err = resp.ReadFrom(rawResp); err != nil {
+		return err
+	}
+
+	for _, keyVersions := range resp.ApiVersions {
+		if keyVersions.ApiKey > kmsg.MaxKey {
+			continue
+		}
+		cx.versions[keyVersions.ApiKey] = keyVersions.MaxVersion
+	}
+	return nil
 }
 
 type errWrite struct {
@@ -154,79 +312,67 @@ func (e *errWrite) Error() string {
 	return fmt.Sprintf("err after %d bytes written: %v", e.wrote, e.err)
 }
 
-func (b *broker) handleReqs() {
-	defer b.dieOnce()
+func (cx *brokerCxn) writeRequest(req kmsg.Request) (int32, error) {
+	cx.reqBuf = kmsg.AppendRequest(
+		cx.reqBuf[:0],
+		req,
+		cx.correlationID,
+		cx.clientID,
+	)
+	n, err := cx.conn.Write(cx.reqBuf)
+	if err != nil {
+		return 0, &errWrite{n, err}
+	}
+	id := cx.correlationID
+	cx.correlationID++
+	return id, nil
+}
 
-	go b.handleResps()
-	defer close(b.resps)
+func (cx *brokerCxn) die() {
+	if atomic.SwapInt64(&cx.dead, 1) == 1 {
+		return
+	}
 
-	var buf []byte
-	var correlationID int32
-	for pr := range b.reqs {
-		req := pr.req(b)
-		brokerMax := b.versions[req.key()]
-		ourMax := req.maxVersion()
-		version := brokerMax
-		if brokerMax > ourMax {
-			version = ourMax
-		}
-		if mv, ok := req.(messageRequestMinVersioner); ok {
-			if version < mv.minVersion() {
-				pr.promise(nil, errBrokerTooOld)
-			}
-		}
-		req.setVersion(version) // always go for highest version
-		buf = appendMessageRequest(
-			buf[:0],
-			req,
-			version,
-			correlationID,
-			b.cl.cfg.client.id,
-		)
+	cx.conn.Close() // interrupt any write
 
-		n, err := b.conn.Write(buf)
-		if err != nil {
-			pr.promise(nil, &errWrite{n, err})
-			return
+	go func() {
+		for pr := range cx.resps {
+			pr.promise(nil, errBrokerConnectionDied)
 		}
+	}()
 
-		b.resps <- promisedResp{
-			correlationID,
-			req.responseKind(),
-			pr.promise,
-		}
-		correlationID++
+	cx.mu.Lock()
+	cx.mu.Unlock()
+
+	close(cx.resps) // after lock, nothing sends down resps
+}
+
+func (cx *brokerCxn) enqueueResp(pr promisedResp) {
+	dead := false
+
+	cx.mu.RLock()
+	if atomic.LoadInt64(&cx.dead) == 1 {
+		dead = true
+	} else {
+		cx.resps <- pr
+	}
+	cx.mu.RUnlock()
+
+	if dead {
+		pr.promise(nil, errBrokerConnectionDied)
 	}
 }
 
-func (b *broker) handleResps() {
-	defer b.dieOnce()
+func (cx *brokerCxn) handleResps() {
+	defer cx.die()
 
 	rawSize := make([]byte, 4)
-	var buf []byte // TODO opt to disable buf reuse
-	for pr := range b.resps {
-		if _, err := io.ReadFull(b.conn, rawSize); err != nil {
+	for pr := range cx.resps {
+		raw, err := readResponse(cx.conn, pr.correlationID)
+		if err != nil {
 			pr.promise(nil, err)
 			return
 		}
-		size := int32(binary.BigEndian.Uint32(rawSize))
-
-		buf = append(buf[:0], make([]byte, size)...)
-		if _, err := io.ReadFull(b.conn, buf); err != nil {
-			pr.promise(nil, err)
-			return
-		}
-
-		if len(buf) < 4 {
-			pr.promise(nil, errNotEnoughData)
-		}
-		correlationID := int32(binary.BigEndian.Uint32(buf))
-		buf = buf[4:]
-		if correlationID != pr.correlationID {
-			pr.promise(nil, errCorrelationIDMismatch)
-			return
-		}
-
-		pr.promise(pr.resp, pr.resp.readFrom(buf))
+		pr.promise(pr.resp, pr.resp.ReadFrom(raw))
 	}
 }
