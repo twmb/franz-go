@@ -128,34 +128,103 @@ ProduceResponse => from ProduceRequest
       LogAppendTime: int64 // v5+
   ThrottleTimeMs: int32
 
+// MetadataRequest requests metadata from Kafka.
 MetadataRequest => key 3, max version 8
+  // Topics is a list of topics to return metadata about. If this is null,
+  // all topics are included. If this is empty, no topics are.
+  // For v0 (<Kafka 0.10.0.0), if this is empty, all topics are included.
   Topics: [string]
+  // AllowAutoTopicCreation, introduced in Kafka 0.11.0.0, allows topic
+  // auto creation of the topics in this request if they do not exist.
   AllowAutoTopicCreation: bool // v4+
+  // IncludeClusterAuthorizedOperations, introduced in Kakfa 2.3.0, specifies
+  // whether to return a bitfield of AclOperations that this client can perform
+  // on the cluster.
   IncludeClusterAuthorizedOperations: bool // v8+
+  // IncludeTopicAuthorizedOperations, introduced in Kakfa 2.3.0, specifies
+  // whether to return a bitfield of AclOperations that this client can perform
+  // on individual topics.
   IncludeTopicAuthorizedOperations: bool // v8+
 
+// MetadataResponse is returned for a MetdataRequest.
 MetadataResponse => from MetadataRequest
+  // ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+  // after this request.
+  // For Kafka < 2.0.0, the throttle is applied before issuing a response.
+  // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
   ThrottleTimeMs: int32 // v3+
+  // Brokers is a set of alive Kafka brokers.
   Brokers: [=>]
+    // NodeID is the node ID of a Kafka broker.
     NodeID: int32
+    // Host is the hostname of a Kafka broker.
     Host: string
+    // Port is the port of a Kafka broker.
     Port: int32
+    // Rack is the rack this Kafka broker is in.
     Rack: nullable-string // v1+
+  // ClusterID, proposed in KIP-78 and introduced in Kafka 0.10.1.0, is a
+  // unique string specifying the cluster that the replying Kafka belongs to.
   ClusterID: nullable-string // v2+
+  // ControllerID is the ID of the controller broker (the admin broker).
   ControllerID: int32 // v1+
+  // TopicMetadata contains metadata about each topic requested in the
+  // MetadataRequest.
   TopicMetadata: [=>]
+    // ErrorCode is any error for a topic in a metadata request.
+    //
+    // TOPIC_AUTHORIZATION_FAILED: returned if the client is not authorized
+    // to describe the topic, or if the metadata request specified topic auto
+    // creation, the topic did not exist, and the user lacks permission to create.
+    //
+    // UNKNOWN_TOPIC_OR_PARTITION: returned if a topic does not exist and
+    // the request did not specify autocreation.
+    //
+    // LEADER_NOT_AVAILABLE: returned if a new topic is created successfully
+    // (since there is no leader on an immediately new topic).
+    //
+    // There can be a myriad of other errors for unsuccessful topic creation.
     ErrorCode: int16
+    // Topic is the topic this metadata corresponds to.
     Topic: string
+    // IsInternal signifies whether this topic is a Kafka internal topic.
     IsInternal: bool // v1+
+    // PartitionMetadata contains metadata about partitions for a topic.
     PartitionMetadata: [=>]
+      // ErrorCode is any error for a partition in topic metadata.
+      //
+      // LEADER_NOT_AVAILABLE is returned if a leader is unavailable for this
+      // partition. For v0 metadata responses, this is also returned if a
+      // partition leader's listener does not exist.
+      //
+      // LISTENER_NOT_FOUND is returned if a leader ID is known but the
+      // listener for it is not (v1+).
+      //
+      // REPLICA_NOT_AVAILABLE is returned in v0 responses if any replica is
+      // unavailable.
       ErrorCode: int16
+      // Partition is a partition number for a topic.
       Partition: int32
+      // Leader is the broker leader for this partition. This will be -1
+      // on leader / listener error.
       Leader: int32
+      // LeaderEpoch, proposed in KIP-320 and introduced in Kafka 2.1.0  is the
+      // epoch of the broker leader.
       LeaderEpoch: int32 // v7+
+      // Replicas returns all broker IDs containing replicas of this partition.
       Replicas: [int32]
+      // ISR returns all broker IDs of in-sync replicas of this partition.
       ISR: [int32]
+      // OfflineReplicas, proposed in KIP-112 and introduced in Kafka 1.0,
+      // returns all offline broker IDs that should be replicating this partition.
       OfflineReplicas: [int32] // v5+
+    // AuthorizedOperations, proposed in KIP-430 and introduced in Kafka 2.3.0,
+    // returns a bitfield (corresponding to AclOperation) containing which
+    // operations the client is allowed to perform on this topic.
+    // This is only returned if requested.
     AuthorizedOperations: int32 // v8+
+  // AuthorizedOperations returns a bitfield containing which operations the
+  // client is allowed to perform on this cluster.
   AuthorizedOperations: int32 // v8+
 
 ApiVersionsRequest => key 18, max version 2
