@@ -1,31 +1,60 @@
 package kgo
 
+import "time"
+
 // func (p *Producer) BeginTransaction() *ProducerTransaction
 // func (p *ProducerTransaction) Produce(r *Record)
 
 func (c *Client) Produce(
 	topic string,
 	r *Record,
-	callback func(string, *Record),
+	promise func(string, *Record, error),
 ) error {
-	var partitions []int32
-	var err error
-	if c.cfg.producer.partitioner.RequiresConsistency(r) {
-		partitions, err = c.allPartitionsFor(topic)
-	} else {
-		partitions, err = c.writablePartitionsFor(topic)
-	}
+
+	partitions, err := c.partitionsForTopic(topic)
 	if err != nil {
 		return err
 	}
-	partition := c.cfg.producer.partitioner.Partition(r, len(partitions))
-	_ = partition
-	// if partition not in partitions
-	//broker := p.cl.findBrokerLeader(partition)
-	//_ = broker
-	// TODO KIP-359: if broker LeaderEpoch known, set it in produce request
-	// and handle response errors
-	return nil
-}
 
-// Server: all requests are responded to in order; we can rely on that.
+	ids := partitions.writableIDs
+	mapping := partitions.writable
+	if c.cfg.producer.partitioner.RequiresConsistency(r) {
+		ids = partitions.allIDs
+		mapping = partitions.all
+	}
+	if len(ids) == 0 {
+		return errNoPartitionIDs
+	}
+
+	idIdx := c.cfg.producer.partitioner.Partition(r, len(ids))
+	if idIdx > len(ids) {
+		idIdx = len(ids) - 1
+	}
+
+	id := ids[idIdx]
+	partition, exists := mapping[id]
+	if !exists {
+		return errUnknownPartition // should never happen
+	}
+
+	c.brokersMu.RLock()
+	broker, exists := c.brokers[partition.leader]
+	c.brokersMu.RUnlock()
+
+	if !exists {
+		return errUnknownBrokerForLeader
+	}
+
+	if r.Timestamp.IsZero() {
+		r.Timestamp = time.Now()
+	}
+
+	return broker.bufferedReq.buffer(
+		topic,
+		partition.id,
+		promisedRecord{
+			promise: promise,
+			r:       r,
+		},
+	)
+}
