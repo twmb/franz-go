@@ -160,7 +160,7 @@ func Parse(raw []byte) {
 		}
 
 		// if this is a comment line, keep it and continue.
-		if strings.HasPrefix(line, "// ") {
+		if strings.HasPrefix(line, "//") {
 			if len(nextComment) > 0 {
 				nextComment += "\n"
 			}
