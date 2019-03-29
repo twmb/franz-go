@@ -36,6 +36,7 @@ type AdminRequest interface {
 	// IsAdminRequest returns true if the request should be issued to a
 	// Kafka controller.
 	IsAdminRequest() bool
+	Request
 }
 
 // Response represents a type that Kafka responds with.
