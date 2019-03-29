@@ -61,7 +61,7 @@ func NewClient(seedBrokers []string, opts ...Opt) (*Client, error) {
 			brokerBufBytes: 1 << 30, // "unbounded"; hard stop at maxBrokerWriteBytes
 			brokerBufDur:   250 * time.Millisecond,
 
-			// TODO partitioner
+			partitioner: RandomPartitioner(),
 		},
 	}
 
@@ -93,7 +93,7 @@ func NewClient(seedBrokers []string, opts ...Opt) (*Client, error) {
 		return domainRe.MatchString(strings.ToLower(domain))
 	}
 
-	brokers := make([]string, 0, len(seedBrokers))
+	seedAddrs := make([]string, 0, len(seedBrokers))
 	for _, seedBroker := range seedBrokers {
 		addr := seedBroker
 		port := 9092 // default kafka port
@@ -110,7 +110,7 @@ func NewClient(seedBrokers []string, opts ...Opt) (*Client, error) {
 			return nil, fmt.Errorf("%q is neither an IP address nor a domain", addr)
 		}
 
-		brokers = append(brokers, net.JoinHostPort(addr, strconv.Itoa(port)))
+		seedAddrs = append(seedAddrs, net.JoinHostPort(addr, strconv.Itoa(port)))
 	}
 
 	c := &Client{
@@ -118,14 +118,20 @@ func NewClient(seedBrokers []string, opts ...Opt) (*Client, error) {
 
 		rng: rand.New(new(rand.PCGSource)),
 
-		seedBrokers:    brokers,
-		untriedSeeds:   append([]string(nil), brokers...),
-		untriedBrokers: make(map[int32]*broker),
-		triedBrokers:   make(map[int32]struct{}),
+		controllerID: unknownControllerID,
+
+		brokers:    make(map[int32]*broker),
+		topicParts: make(map[string]*partitions),
 	}
 	c.rng.Seed(uint64(time.Now().UnixNano()))
 
-	return c, (&broker{cl: c, addr: brokers[0]}).connect()
+	for i, seedAddr := range seedAddrs {
+		b := c.newBroker(seedAddr, unknownSeedID(i))
+		c.brokers[b.id] = b
+		c.anyBroker = append(c.anyBroker, b)
+	}
+
+	return c, nil
 }
 
 // ********** CLIENT CONFIGURATION **********
@@ -193,6 +199,8 @@ type (
 	producerCfg struct {
 		acks        RequiredAcks
 		compression []CompressionCodec // order of preference
+
+		allowAutoTopicCreation bool
 
 		maxRecordBatchBytes int32
 		maxBrokerWriteBytes int32
@@ -268,6 +276,12 @@ func RequireAllISRAcks() RequiredAcks { return RequiredAcks{-1} }
 // the default RequireLeaderAck.
 func WithRequiredAcks(acks RequiredAcks) OptProducer {
 	return producerOpt{func(cfg *producerCfg) { cfg.acks = acks }}
+}
+
+// WithAllowAutoTopicCreation enables topics to be auto created if they do not
+// exist when sending messages to them.
+func WithAllowAutoTopicCreation() OptProducer {
+	return producerOpt{func(cfg *producerCfg) { cfg.allowAutoTopicCreation = true }}
 }
 
 // CompressionCodec configures how records are compressed before being sent.
