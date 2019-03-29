@@ -103,12 +103,7 @@ func (b *bufferedProduceRequest) flush() {
 		timeout: int32(time.Second / 1e6), // TODO
 		data:    data,
 	}
-	// TODO doSequencedAsyncPromise
-	// broker contains locked list,
-	// first on list begins itself
-	// when funcs finish, remove self from front, check if still front
-	// and begin new
-	b.br.do(
+	b.br.doSequencedAsyncPromise(
 		req,
 		func(resp kmsg.Response, err error) {
 			if err != nil {
@@ -181,7 +176,9 @@ func (b *bufferedProduceRequest) reset() {
 
 	b.batches = make(map[string]map[int32]*recordBatch, 1)
 	// TODO if adding transactionalID, increase length here
-	b.wireLength = 2 + 4 + 4 + // acks + timeout + batches array len
+	// Currently we use 4 bytes for the ID to signify the null
+	// transactional ID.
+	b.wireLength = 2 + 2 + 4 + 4 + // null string + acks + timeout + batches array len
 		messageRequestOverhead(b.br.cl.cfg.client.id)
 }
 
