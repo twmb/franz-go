@@ -187,7 +187,7 @@ func (b *BinReader) Varlong() int64 {
 }
 
 func (b *BinReader) Span(l int) []byte {
-	if len(b.Src) < int(l) {
+	if len(b.Src) < l || l < 0 {
 		b.bad = true
 		return nil
 	}
