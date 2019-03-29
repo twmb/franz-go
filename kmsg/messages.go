@@ -7,7 +7,7 @@ const MaxKey = 18
 // Header is user provided metadata for a record. Kafka does not look at
 // headers at all; they are solely for producers and consumers.
 type Header struct {
-	Key []byte
+	Key string
 
 	Value []byte
 }
@@ -42,17 +42,19 @@ type Record struct {
 	// record.
 	Value []byte
 
-	// Headers are optional user provided metadata for records.
+	// Headers are optional user provided metadata for records. Unlike normal
+	// arrays, the number of headers is encoded as a varint.
 	Headers []Header
 }
 
 // RecordBatch is a Kafka concept that groups many individual records together
 // in a more optimized format.
 type RecordBatch struct {
-	// WireLength is not officially a field in a RecordBatch, however,
-	// RecordBatch is a special form of NULLABLE_BYTES. Since all nullable
-	// bytes must be prefixed with a int32 length, we throw that here.
-	WireLength int32
+	// NullableBytesLength is not officially a field in a RecordBatch, however,
+	// RecordBatch is a special form of NULLABLE_BYTES. Since all nullable bytes
+	// must be prefixed with a int32 length, we throw that here.
+	// This length should not include itself, only data that follows.
+	NullableBytesLength int32
 
 	// FirstOffset is the first offset in a record batch.
 	//
@@ -100,7 +102,7 @@ type RecordBatch struct {
 
 	// FirstTimestamp is the timestamp (in milliseconds) of the first record
 	// in a batch.
-	FirstTimestamp int32
+	FirstTimestamp int64
 
 	// MaxTimestamp is the timestamp (in milliseconds) of the last record
 	// in a batch. Similar to LastOffsetDelta, this is used to ensure correct
@@ -201,7 +203,7 @@ func (v *ProduceRequest) AppendTo(dst []byte) []byte {
 					{
 						v := &v.Records
 						{
-							v := v.WireLength
+							v := v.NullableBytesLength
 							dst = AppendInt32(dst, v)
 						}
 						{
@@ -234,7 +236,7 @@ func (v *ProduceRequest) AppendTo(dst []byte) []byte {
 						}
 						{
 							v := v.FirstTimestamp
-							dst = AppendInt32(dst, v)
+							dst = AppendInt64(dst, v)
 						}
 						{
 							v := v.MaxTimestamp
@@ -283,12 +285,12 @@ func (v *ProduceRequest) AppendTo(dst []byte) []byte {
 								}
 								{
 									v := v.Headers
-									dst = AppendArrayLen(dst, len(v))
+									dst = AppendVarint(dst, int32(len(v)))
 									for i := range v {
 										v := &v[i]
 										{
 											v := v.Key
-											dst = AppendVarintBytes(dst, v)
+											dst = AppendVarintString(dst, v)
 										}
 										{
 											v := v.Value
@@ -313,7 +315,9 @@ type ProduceResponseResponsesPartitionResponses struct {
 
 	BaseOffset int64
 
-	LogAppendTime int64 // v5+
+	LogAppendTime int64 // v2+
+
+	LogStartOffset int64 // v5+
 }
 type ProduceResponseResponses struct {
 	Topic string
@@ -337,48 +341,48 @@ func (v *ProduceResponse) ReadFrom(src []byte) error {
 		{
 			v := s.Responses
 			a := v
-			{
-				v := new(ProduceResponseResponses)
-				for i := b.ArrayLen(); i > 0; i-- {
+			for i := b.ArrayLen(); i > 0; i-- {
+				a = append(a, ProduceResponseResponses{})
+				v := &a[len(a)-1]
+				{
+					s := v
 					{
-						s := v
-						{
-							v := b.String()
-							s.Topic = v
-						}
-						{
-							v := s.PartitionResponses
-							a := v
+						v := b.String()
+						s.Topic = v
+					}
+					{
+						v := s.PartitionResponses
+						a := v
+						for i := b.ArrayLen(); i > 0; i-- {
+							a = append(a, ProduceResponseResponsesPartitionResponses{})
+							v := &a[len(a)-1]
 							{
-								v := new(ProduceResponseResponsesPartitionResponses)
-								for i := b.ArrayLen(); i > 0; i-- {
-									{
-										s := v
-										{
-											v := b.Int32()
-											s.Partition = v
-										}
-										{
-											v := b.Int16()
-											s.ErrorCode = v
-										}
-										{
-											v := b.Int64()
-											s.BaseOffset = v
-										}
-										if version >= 5 {
-											v := b.Int64()
-											s.LogAppendTime = v
-										}
-									}
-									a = append(a, *v)
+								s := v
+								{
+									v := b.Int32()
+									s.Partition = v
+								}
+								{
+									v := b.Int16()
+									s.ErrorCode = v
+								}
+								{
+									v := b.Int64()
+									s.BaseOffset = v
+								}
+								if version >= 2 {
+									v := b.Int64()
+									s.LogAppendTime = v
+								}
+								if version >= 5 {
+									v := b.Int64()
+									s.LogStartOffset = v
 								}
 							}
-							v = a
-							s.PartitionResponses = v
 						}
+						v = a
+						s.PartitionResponses = v
 					}
-					a = append(a, *v)
 				}
 			}
 			v = a
@@ -392,15 +396,27 @@ func (v *ProduceResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+// MetadataRequest requests metadata from Kafka.
 type MetadataRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
-	Topics  []string
+	// Topics is a list of topics to return metadata about. If this is null,
+	// all topics are included. If this is empty, no topics are.
+	// For v0 (<Kafka 0.10.0.0), if this is empty, all topics are included.
+	Topics []string
 
+	// AllowAutoTopicCreation, introduced in Kafka 0.11.0.0, allows topic
+	// auto creation of the topics in this request if they do not exist.
 	AllowAutoTopicCreation bool // v4+
 
+	// IncludeClusterAuthorizedOperations, introduced in Kakfa 2.3.0, specifies
+	// whether to return a bitfield of AclOperations that this client can perform
+	// on the cluster.
 	IncludeClusterAuthorizedOperations bool // v8+
 
+	// IncludeTopicAuthorizedOperations, introduced in Kakfa 2.3.0, specifies
+	// whether to return a bitfield of AclOperations that this client can perform
+	// on individual topics.
 	IncludeTopicAuthorizedOperations bool // v8+
 }
 
@@ -438,53 +454,111 @@ func (v *MetadataRequest) AppendTo(dst []byte) []byte {
 }
 
 type MetadataResponseBrokers struct {
+	// NodeID is the node ID of a Kafka broker.
 	NodeID int32
 
+	// Host is the hostname of a Kafka broker.
 	Host string
 
+	// Port is the port of a Kafka broker.
 	Port int32
 
+	// Rack is the rack this Kafka broker is in.
 	Rack *string // v1+
 }
 type MetadataResponseTopicMetadataPartitionMetadata struct {
+	// ErrorCode is any error for a partition in topic metadata.
+	//
+	// LEADER_NOT_AVAILABLE is returned if a leader is unavailable for this
+	// partition. For v0 metadata responses, this is also returned if a
+	// partition leader's listener does not exist.
+	//
+	// LISTENER_NOT_FOUND is returned if a leader ID is known but the
+	// listener for it is not (v1+).
+	//
+	// REPLICA_NOT_AVAILABLE is returned in v0 responses if any replica is
+	// unavailable.
 	ErrorCode int16
 
+	// Partition is a partition number for a topic.
 	Partition int32
 
+	// Leader is the broker leader for this partition. This will be -1
+	// on leader / listener error.
 	Leader int32
 
+	// LeaderEpoch, proposed in KIP-320 and introduced in Kafka 2.1.0  is the
+	// epoch of the broker leader.
 	LeaderEpoch int32 // v7+
 
+	// Replicas returns all broker IDs containing replicas of this partition.
 	Replicas []int32
 
+	// ISR returns all broker IDs of in-sync replicas of this partition.
 	ISR []int32
 
+	// OfflineReplicas, proposed in KIP-112 and introduced in Kafka 1.0,
+	// returns all offline broker IDs that should be replicating this partition.
 	OfflineReplicas []int32 // v5+
 }
 type MetadataResponseTopicMetadata struct {
+	// ErrorCode is any error for a topic in a metadata request.
+	//
+	// TOPIC_AUTHORIZATION_FAILED: returned if the client is not authorized
+	// to describe the topic, or if the metadata request specified topic auto
+	// creation, the topic did not exist, and the user lacks permission to create.
+	//
+	// UNKNOWN_TOPIC_OR_PARTITION: returned if a topic does not exist and
+	// the request did not specify autocreation.
+	//
+	// LEADER_NOT_AVAILABLE: returned if a new topic is created successfully
+	// (since there is no leader on an immediately new topic).
+	//
+	// There can be a myriad of other errors for unsuccessful topic creation.
 	ErrorCode int16
 
+	// Topic is the topic this metadata corresponds to.
 	Topic string
 
+	// IsInternal signifies whether this topic is a Kafka internal topic.
 	IsInternal bool // v1+
 
+	// PartitionMetadata contains metadata about partitions for a topic.
 	PartitionMetadata []MetadataResponseTopicMetadataPartitionMetadata
 
+	// AuthorizedOperations, proposed in KIP-430 and introduced in Kafka 2.3.0,
+	// returns a bitfield (corresponding to AclOperation) containing which
+	// operations the client is allowed to perform on this topic.
+	// This is only returned if requested.
 	AuthorizedOperations int32 // v8+
 }
+
+// MetadataResponse is returned for a MetdataRequest.
 type MetadataResponse struct {
 	// Version is the version of this message used with a Kafka broker.
-	Version        int16
+	Version int16
+	// ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+	// after this request.
+	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
+	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
 	ThrottleTimeMs int32 // v3+
 
+	// Brokers is a set of alive Kafka brokers.
 	Brokers []MetadataResponseBrokers
 
+	// ClusterID, proposed in KIP-78 and introduced in Kafka 0.10.1.0, is a
+	// unique string specifying the cluster that the replying Kafka belongs to.
 	ClusterID *string // v2+
 
+	// ControllerID is the ID of the controller broker (the admin broker).
 	ControllerID int32 // v1+
 
+	// TopicMetadata contains metadata about each topic requested in the
+	// MetadataRequest.
 	TopicMetadata []MetadataResponseTopicMetadata
 
+	// AuthorizedOperations returns a bitfield containing which operations the
+	// client is allowed to perform on this cluster.
 	AuthorizedOperations int32 // v8+
 }
 
@@ -501,29 +575,27 @@ func (v *MetadataResponse) ReadFrom(src []byte) error {
 		{
 			v := s.Brokers
 			a := v
-			{
-				v := new(MetadataResponseBrokers)
-				for i := b.ArrayLen(); i > 0; i-- {
+			for i := b.ArrayLen(); i > 0; i-- {
+				a = append(a, MetadataResponseBrokers{})
+				v := &a[len(a)-1]
+				{
+					s := v
 					{
-						s := v
-						{
-							v := b.Int32()
-							s.NodeID = v
-						}
-						{
-							v := b.String()
-							s.Host = v
-						}
-						{
-							v := b.Int32()
-							s.Port = v
-						}
-						if version >= 1 {
-							v := b.NullableString()
-							s.Rack = v
-						}
+						v := b.Int32()
+						s.NodeID = v
 					}
-					a = append(a, *v)
+					{
+						v := b.String()
+						s.Host = v
+					}
+					{
+						v := b.Int32()
+						s.Port = v
+					}
+					if version >= 1 {
+						v := b.NullableString()
+						s.Rack = v
+					}
 				}
 			}
 			v = a
@@ -540,90 +612,86 @@ func (v *MetadataResponse) ReadFrom(src []byte) error {
 		{
 			v := s.TopicMetadata
 			a := v
-			{
-				v := new(MetadataResponseTopicMetadata)
-				for i := b.ArrayLen(); i > 0; i-- {
+			for i := b.ArrayLen(); i > 0; i-- {
+				a = append(a, MetadataResponseTopicMetadata{})
+				v := &a[len(a)-1]
+				{
+					s := v
 					{
-						s := v
-						{
-							v := b.Int16()
-							s.ErrorCode = v
-						}
-						{
-							v := b.String()
-							s.Topic = v
-						}
-						if version >= 1 {
-							v := b.Bool()
-							s.IsInternal = v
-						}
-						{
-							v := s.PartitionMetadata
-							a := v
+						v := b.Int16()
+						s.ErrorCode = v
+					}
+					{
+						v := b.String()
+						s.Topic = v
+					}
+					if version >= 1 {
+						v := b.Bool()
+						s.IsInternal = v
+					}
+					{
+						v := s.PartitionMetadata
+						a := v
+						for i := b.ArrayLen(); i > 0; i-- {
+							a = append(a, MetadataResponseTopicMetadataPartitionMetadata{})
+							v := &a[len(a)-1]
 							{
-								v := new(MetadataResponseTopicMetadataPartitionMetadata)
-								for i := b.ArrayLen(); i > 0; i-- {
-									{
-										s := v
-										{
-											v := b.Int16()
-											s.ErrorCode = v
-										}
-										{
-											v := b.Int32()
-											s.Partition = v
-										}
-										{
-											v := b.Int32()
-											s.Leader = v
-										}
-										if version >= 7 {
-											v := b.Int32()
-											s.LeaderEpoch = v
-										}
-										{
-											v := s.Replicas
-											a := v
-											for i := b.ArrayLen(); i > 0; i-- {
-												v := b.Int32()
-												a = append(a, v)
-											}
-											v = a
-											s.Replicas = v
-										}
-										{
-											v := s.ISR
-											a := v
-											for i := b.ArrayLen(); i > 0; i-- {
-												v := b.Int32()
-												a = append(a, v)
-											}
-											v = a
-											s.ISR = v
-										}
-										if version >= 5 {
-											v := s.OfflineReplicas
-											a := v
-											for i := b.ArrayLen(); i > 0; i-- {
-												v := b.Int32()
-												a = append(a, v)
-											}
-											v = a
-											s.OfflineReplicas = v
-										}
+								s := v
+								{
+									v := b.Int16()
+									s.ErrorCode = v
+								}
+								{
+									v := b.Int32()
+									s.Partition = v
+								}
+								{
+									v := b.Int32()
+									s.Leader = v
+								}
+								if version >= 7 {
+									v := b.Int32()
+									s.LeaderEpoch = v
+								}
+								{
+									v := s.Replicas
+									a := v
+									for i := b.ArrayLen(); i > 0; i-- {
+										v := b.Int32()
+										a = append(a, v)
 									}
-									a = append(a, *v)
+									v = a
+									s.Replicas = v
+								}
+								{
+									v := s.ISR
+									a := v
+									for i := b.ArrayLen(); i > 0; i-- {
+										v := b.Int32()
+										a = append(a, v)
+									}
+									v = a
+									s.ISR = v
+								}
+								if version >= 5 {
+									v := s.OfflineReplicas
+									a := v
+									for i := b.ArrayLen(); i > 0; i-- {
+										v := b.Int32()
+										a = append(a, v)
+									}
+									v = a
+									s.OfflineReplicas = v
 								}
 							}
-							v = a
-							s.PartitionMetadata = v
 						}
-						if version >= 8 {
-							v := b.Int32()
-							s.AuthorizedOperations = v
-						}
+						v = a
+						s.PartitionMetadata = v
 					}
-					a = append(a, *v)
+					if version >= 8 {
+						v := b.Int32()
+						s.AuthorizedOperations = v
+					}
 				}
 			}
 			v = a
@@ -685,25 +753,23 @@ func (v *ApiVersionsResponse) ReadFrom(src []byte) error {
 		{
 			v := s.ApiVersions
 			a := v
-			{
-				v := new(ApiVersionsResponseApiVersions)
-				for i := b.ArrayLen(); i > 0; i-- {
+			for i := b.ArrayLen(); i > 0; i-- {
+				a = append(a, ApiVersionsResponseApiVersions{})
+				v := &a[len(a)-1]
+				{
+					s := v
 					{
-						s := v
-						{
-							v := b.Int16()
-							s.ApiKey = v
-						}
-						{
-							v := b.Int16()
-							s.MinVersion = v
-						}
-						{
-							v := b.Int16()
-							s.MaxVersion = v
-						}
+						v := b.Int16()
+						s.ApiKey = v
 					}
-					a = append(a, *v)
+					{
+						v := b.Int16()
+						s.MinVersion = v
+					}
+					{
+						v := b.Int16()
+						s.MaxVersion = v
+					}
 				}
 			}
 			v = a
