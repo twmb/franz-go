@@ -1,187 +1,209 @@
 package kgo
 
 import (
-	"errors"
+	"fmt"
+	"net"
+	"strconv"
 	"sync"
 	"sync/atomic"
-	"time"
 
+	"github.com/davecgh/go-spew/spew"
+	"github.com/twmb/kgo/kerr"
 	"github.com/twmb/kgo/kmsg"
 	"golang.org/x/exp/rand"
 )
 
+type partition struct {
+	id          int32
+	leader      int32
+	leaderEpoch int32
+	replicas    []int32
+	isr         []int32
+	offline     []int32
+}
+
 type partitions struct {
-	when     time.Time
-	all      []int32
-	writable []int32
+	loaded  int64
+	loadErr error
+
+	// allIDs and writableIDs correspond to the partition IDs in the
+	// two slices below. We save the IDs here as well since that is
+	// the common want.
+	allIDs      []int32
+	writableIDs []int32
+
+	all      map[int32]*partition // id => partition
+	writable map[int32]*partition // id => partition, eliding partitions with no leader
+
+	loading chan struct{}
 }
 
 type Client struct {
 	cfg cfg
 
-	rngMu sync.Mutex
-	rng   *rand.Rand
+	rng *rand.Rand
 
-	seedBrokers []string
+	brokersMu    sync.RWMutex
+	brokers      map[int32]*broker // broker id => broker
+	anyBroker    []*broker         // TODO multiArmBandit anyBroker
+	anyBrokerIdx int
 
-	brokersMu      sync.Mutex
-	untriedBrokers map[int32]*broker // unopened brokers
-	brokers        map[int32]*broker // opened brokers
+	// TODO can add lastReq to broker and a daily ticker to clean up
+	// gone brokers
 
-	// seedBroker is the broker we use until a metadata request is issued.
-	// Once we have broker IDs, we close the unknown-id seed broker.
-	seedBroker *broker
+	controllerID int32 // atomic
 
-	topicPartsMu sync.Mutex   // guards writes
-	topicParts   atomic.Value // map[string]partitions
+	topicPartsMu sync.RWMutex
+	topicParts   map[string]*partitions // topic => partitions, from metadata resp
 }
 
-// Brokers: always tick at fastest frequency of all topics sending to that broker
-// Brokers: each topic requires its own ProduceRequest
-
-func (c *Client) allPartitionsForTopic(topic string) ([]int32, error) {
-	parts, err := c.partitionsForTopic(topic)
-	if err != nil {
-		return nil, err
-	}
-	return parts.all, nil
-}
-
-func (c *Client) writablePartitionsForTopic(topic string) ([]int32, error) {
-	parts, err := c.partitionsForTopic(topic)
-	if err != nil {
-		return nil, err
-	}
-	return parts.writable, nil
-}
-
-func (c *Client) partitionsForTopic(topic string) (partitions, error) {
-	topicParts := c.topicParts.Load().(map[string]partitions)
-	parts, exists := topicParts[topic]
+func (c *Client) partitionsForTopic(topic string) (*partitions, error) {
+	c.topicPartsMu.RLock()
+	parts, exists := c.topicParts[topic]
+	c.topicPartsMu.RUnlock()
 
 	if !exists {
-		if err := c.fetchMetadataForTopic(topic); err != nil {
-			return partitions{}, err
-		}
-		topicParts = c.topicParts.Load().(map[string]partitions)
-		if parts, exists = topicParts[topic]; !exists {
-			return partitions{}, errors.New("TODO") // TODO
-		}
-	}
-
-	return parts, nil
-}
-
-func (c *Client) closeBroker(b *broker) {
-	b.brokersMu.Lock()
-	defer b.brokersMu.Unlock()
-
-	b.dieOnce()
-	if b == c.seedBroker {
-		c.seedBroker = nil
-		return
-	}
-	delete(b.brokers, id)
-}
-
-func (c *Client) tryUntriedSeedBroker(addr string) error {
-	broker := &broker{cl: c, addr: addr}
-	if err := broker.connect(); err != nil {
-		return err
-	}
-	c.seedBroker = c
-	return nil
-}
-
-func (c *Client) tryUntriedBroker(id int32, broker *broker) error {
-	delete(c.untriedBrokers, id)
-	if err := broker.connect(); err != nil {
-		return err
-	}
-	c.brokers[id] = broker
-	return nil
-}
-
-// broker returns a random broker from the set of known live brokers,
-// attempting to create a connection to a broker if none are live.
-func (c *Client) broker() (*broker, error) {
-	c.brokersMu.Lock()
-	defer c.brokersMu.Unlock()
-
-	var err error
-	if len(c.brokers) == 0 && c.seedBroker != nil {
-		// Try all of our ID-known untried brokers.
-		for id, broker := range c.untriedBrokers {
-			if err = c.tryUntriedBroker(id, broker); err != nil {
-				continue
+		c.topicPartsMu.Lock()
+		parts, exists = c.topicParts[topic]
+		if !exists {
+			parts = &partitions{
+				loading:  make(chan struct{}),
+				all:      make(map[int32]*partition),
+				writable: make(map[int32]*partition),
 			}
-			break
+			c.topicParts[topic] = parts
+			go c.fetchTopicMetadata(parts, topic)
 		}
-
-		// Otherwise, try a permutation of the seeds until one opens.
-		if len(c.brokers) == 0 {
-			seeds := append([]string(nil), c.seedBrokers...)
-			c.rngMu.Lock()
-			c.rng.Shuffle(len(seeds), func(i, j int) { seeds[i], seeds[j] = seeds[j], seeds[i] })
-			c.rngMu.Unlock()
-
-			for len(seeds) > 0 {
-				if err = c.tryUntriedSeedBroker(); err == nil {
-					break
-				}
-			}
-		}
+		c.topicPartsMu.Unlock()
 	}
 
-	if err != nil {
-		return nil, err
+	if atomic.LoadInt64(&parts.loaded) == 0 {
+		<-parts.loading
 	}
 
-	// With no err, either an untried broker or a seed broker opened.
-	var b *broker
-	for _, broker := range c.brokers {
-		b = broker
-		break
-	}
-	if b == nil {
-		b = c.seedBroker
-	}
-	return b, nil
+	// TODO retriable
+	// -- add kerr.Retriable(error)
+	// -- no to auth fail, yes to all else
+
+	return parts, parts.loadErr
 }
 
-func (c *Client) fetchMetadataForTopic(topic string) error {
-	broker, err := c.broker()
-	if err != nil {
-		return err
+// broker returns a random broker from all brokers ever known.
+func (c *Client) broker() *broker {
+	c.brokersMu.RLock()
+	defer c.brokersMu.RUnlock()
+
+	b := c.anyBroker[c.anyBrokerIdx]
+	c.anyBrokerIdx++
+	if c.anyBrokerIdx == len(c.anyBroker) {
+		c.anyBrokerIdx = 0
+		c.rng.Shuffle(len(c.anyBroker), func(i, j int) { c.anyBroker[i], c.anyBroker[j] = c.anyBroker[j], c.anyBroker[i] })
 	}
+	return b
+}
+
+// fetchTopicMetadata fetches metadata for a topic, storing results into parts.
+//
+// Since metadata requests always return all live brokers and the controller
+// ID, this additionally updates the client's known brokers and controller ID.
+func (c *Client) fetchTopicMetadata(parts *partitions, topic string) {
+	defer atomic.StoreInt64(&parts.loaded, 1)
+	defer close(parts.loading)
+
+	broker := c.broker()
+
+	var meta *kmsg.MetadataResponse
 	broker.wait(
-		new(kmsg.MetadataRequest),
+		&kmsg.MetadataRequest{
+			Topics:                 []string{topic},
+			AllowAutoTopicCreation: c.cfg.producer.allowAutoTopicCreation,
+		},
 		func(resp kmsg.Response, respErr error) {
-			if err = respErr; err != nil {
-				c.closeBroker(broker)
-				// error in write / read: TODO dereg broker
+			if parts.loadErr = respErr; parts.loadErr != nil {
 				return
 			}
-			meta := resp.(*kmsg.MetadataResponse)
-			c.parseMetadata(meta)
-
+			meta = resp.(*kmsg.MetadataResponse)
+			spew.Dump(meta)
 		},
 	)
-	return err
+
+	if parts.loadErr != nil {
+		return // TODO error in read/write, retry
+	}
+
+	// Update the controller ID and brokers now since they are always
+	// included in metadata responses.
+	if meta.ControllerID > 0 {
+		atomic.StoreInt32(&c.controllerID, meta.ControllerID)
+	}
+	c.updateBrokers(meta.Brokers)
+
+	// Since we requested one topic, we expect one topic metadata
+	// and the topic should match.
+	if len(meta.TopicMetadata) != 1 || meta.TopicMetadata[0].Topic != topic {
+		parts.loadErr = fmt.Errorf("kafka did not reply to topic %s in metadata request", topic)
+		return
+	}
+	t := meta.TopicMetadata[0]
+	parts.loadErr = kerr.ErrorForCode(t.ErrorCode)
+	if parts.loadErr != nil {
+		return
+	}
+
+	// Finally, update the topic's partition metadata.
+	for i := range t.PartitionMetadata {
+		partMeta := &t.PartitionMetadata[i]
+
+		p := &partition{
+			id:          partMeta.Partition,
+			leader:      partMeta.Leader,
+			leaderEpoch: partMeta.LeaderEpoch,
+			replicas:    partMeta.Replicas,
+			isr:         partMeta.ISR,
+			offline:     partMeta.OfflineReplicas,
+		}
+
+		parts.allIDs = append(parts.allIDs, p.id)
+		parts.all[p.id] = p
+
+		switch kerr.ErrorForCode(partMeta.ErrorCode) {
+		case kerr.LeaderNotAvailable,
+			kerr.ListenerNotFound:
+			continue
+		}
+
+		parts.writableIDs = append(parts.writableIDs, p.id)
+		parts.writable[p.id] = p
+	}
 }
 
-func (c *Client) parseMetadata(meta *kmsg.MetadataResponse) {
+func (c *Client) updateBrokers(brokers []kmsg.MetadataResponseBrokers) {
 	c.brokersMu.Lock()
 	defer c.brokersMu.Unlock()
 
-	for _, broker := range c.Brokers {
-		// id, host, port
+	addrChanged := false
+	for _, broker := range brokers {
+		addr := net.JoinHostPort(broker.Host, strconv.Itoa(int(broker.Port)))
+
+		b, exists := c.brokers[broker.NodeID]
+		if exists { // exists, but addr changed: migrate
+			if b.addr != addr {
+				b.stopForever()
+				c.brokers[broker.NodeID] = c.newBroker(addr, broker.NodeID)
+				addrChanged = true
+			}
+		} else { // does not exist: make new
+			b = c.newBroker(addr, broker.NodeID)
+			c.brokers[broker.NodeID] = b
+			c.anyBroker = append(c.anyBroker, b)
+		}
 	}
 
-	// register all brokers
-	// TODO save controller ID (broker #) for admin client
-	// over all topics,
-	// check topic err...
-	// save partition, unless leader not available
-	_ = meta
+	if addrChanged { // if any addr changed, we need to update the pointers in anyBrokers
+		c.anyBroker = make([]*broker, 0, len(c.brokers))
+		for _, broker := range c.brokers {
+			c.anyBroker = append(c.anyBroker, broker)
+		}
+		c.anyBrokerIdx = 0
+	}
 }
