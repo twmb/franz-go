@@ -1,5 +1,10 @@
 package main
 
+// TODO ref against core/src/main/scala/kafka/server/KafkaApis.scala
+// ~line 111 main handler for all requests
+// Add CanVersion or something to check whether features are being used
+// on an unsupported version.
+
 import (
 	"bytes"
 	"fmt"
@@ -42,7 +47,8 @@ type (
 	VarintBytes    struct{}
 
 	Array struct {
-		Inner Type
+		Inner         Type
+		IsVarintArray bool
 	}
 
 	StructField struct {

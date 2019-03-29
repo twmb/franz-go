@@ -107,6 +107,12 @@ func (s *Struct) BuildFrom(scanner *LineScanner, level int) (unprocessed string,
 		}
 
 		isArray := false
+		isVarintArray := false
+		if strings.HasPrefix(typ, "varint[") {
+			isArray = true
+			isVarintArray = true
+			typ = typ[len("varint[") : len(typ)-1]
+		}
 		if typ[0] == '[' {
 			isArray = true
 			typ = typ[1 : len(typ)-1]
@@ -126,7 +132,10 @@ func (s *Struct) BuildFrom(scanner *LineScanner, level int) (unprocessed string,
 		}
 
 		if isArray {
-			f.Type = Array{Inner: f.Type}
+			f.Type = Array{
+				Inner:         f.Type,
+				IsVarintArray: isVarintArray,
+			}
 		}
 
 		s.Fields = append(s.Fields, f)

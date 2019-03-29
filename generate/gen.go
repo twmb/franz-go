@@ -2,6 +2,9 @@ package main
 
 import "strconv"
 
+// TODO sizeof structs for rarraylen
+// TODO Kind() Admin, Produce, Consume
+
 func (Bool) TypeName() string           { return "bool" }
 func (Int8) TypeName() string           { return "int8" }
 func (Int16) TypeName() string          { return "int16" }
@@ -41,7 +44,11 @@ func (VarintString) WriteAppend(l *LineWriter)   { primAppend("VarintString", l)
 func (VarintBytes) WriteAppend(l *LineWriter)    { primAppend("VarintBytes", l) }
 
 func (a Array) WriteAppend(l *LineWriter) {
-	l.Write("dst = AppendArrayLen(dst, len(v))")
+	if a.IsVarintArray {
+		l.Write("dst = AppendVarint(dst, int32(len(v)))")
+	} else {
+		l.Write("dst = AppendArrayLen(dst, len(v))")
+	}
 	l.Write("for i := range v {")
 	if _, isStruct := a.Inner.(Struct); isStruct {
 		// If the array elements are structs, we avoid copying the
@@ -99,20 +106,21 @@ func (a Array) WriteDecode(l *LineWriter) {
 	// variable so that the scope opened just below can use its own
 	// v variable. At the end, we reset v with any updates to a.
 	l.Write("a := v")
-	if s, isStruct := a.Inner.(Struct); isStruct {
-		// For structs, we will set fields in a single struct
-		// that we then deref to copy into the array.
-		// We can rely on this working because struct decoding
-		// always visits every field to reset the fields.
-		l.Write("{")
-		l.Write("v := new(%s)", s.Name)
-	}
-	l.Write("for i := b.ArrayLen(); i > 0; i-- {")
-	a.Inner.WriteDecode(l)
-	if _, isStruct := a.Inner.(Struct); isStruct {
-		l.Write("a = append(a, *v)")
-		l.Write("}")
+	if a.IsVarintArray {
+		l.Write("for i := b.Varint(); i > 0; i-- {")
 	} else {
+		l.Write("for i := b.ArrayLen(); i > 0; i-- {")
+	}
+	if s, isStruct := a.Inner.(Struct); isStruct {
+		// With structs, we append early and use a pointer to the
+		// new element, avoiding double copying.
+		l.Write("a = append(a, %s{})", s.Name)
+		l.Write("v := &a[len(a)-1]")
+	}
+	// Kafka does not have arrays of arrays, so we do not need
+	// to worry about that case.
+	a.Inner.WriteDecode(l)
+	if _, isStruct := a.Inner.(Struct); !isStruct {
 		l.Write("a = append(a, v)")
 	}
 	l.Write("}")
@@ -120,6 +128,9 @@ func (a Array) WriteDecode(l *LineWriter) {
 }
 
 func (s Struct) WriteDecode(l *LineWriter) {
+	if len(s.Fields) == 0 {
+		return
+	}
 	l.Write("{")
 	l.Write("s := v")
 	for _, f := range s.Fields {
