@@ -820,6 +820,7 @@ func (*DeleteTopicsRequest) MaxVersion() int16          { return 3 }
 func (*DeleteTopicsRequest) MinVersion() int16          { return 0 }
 func (v *DeleteTopicsRequest) SetVersion(version int16) { v.Version = version }
 func (v *DeleteTopicsRequest) GetVersion() int16        { return v.Version }
+func (v *DeleteTopicsRequest) IsAdminRequest() bool     { return true }
 func (v *DeleteTopicsRequest) ResponseKind() Response {
 	return &DeleteTopicsResponse{Version: v.Version}
 }

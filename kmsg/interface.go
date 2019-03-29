@@ -31,6 +31,13 @@ type Request interface {
 	ResponseKind() Response
 }
 
+// AdminRequest represents a request that must be issued to Kafka controllers.
+type AdminRequest interface {
+	// IsAdminRequest returns true if the request should be issued to a
+	// Kafka controller.
+	IsAdminRequest() bool
+}
+
 // Response represents a type that Kafka responds with.
 type Response interface {
 	// ReadFrom parses all of the input slice into the response type.
