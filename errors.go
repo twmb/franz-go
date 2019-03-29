@@ -19,4 +19,9 @@ var (
 
 	errBrokerDead           = errors.New("broker has been closed")
 	errBrokerConnectionDied = errors.New("broker connection has died")
+
+	errNoPartitionIDs = errors.New("topic currently has no known partition IDs")
+
+	errUnknownPartition       = errors.New("unknown partition")
+	errUnknownBrokerForLeader = errors.New("no broker is known for partition leader id")
 )
