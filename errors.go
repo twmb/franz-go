@@ -24,4 +24,6 @@ var (
 
 	errUnknownPartition       = errors.New("unknown partition")
 	errUnknownBrokerForLeader = errors.New("no broker is known for partition leader id")
+
+	errUnknownController = errors.New("controller is unknown")
 )

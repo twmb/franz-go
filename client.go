@@ -38,6 +38,7 @@ type partitions struct {
 	loading chan struct{}
 }
 
+// Client issues requests and handles responses to a Kafka cluster.
 type Client struct {
 	cfg cfg
 
@@ -100,6 +101,31 @@ func (c *Client) broker() *broker {
 		c.rng.Shuffle(len(c.anyBroker), func(i, j int) { c.anyBroker[i], c.anyBroker[j] = c.anyBroker[j], c.anyBroker[i] })
 	}
 	return b
+}
+
+// fetchBrokerMetadata issues a metadata request solely for broker information.
+// TODO: retriable
+func (c *Client) fetchBrokerMetadata() error {
+	broker := c.broker()
+	var meta *kmsg.MetadataResponse
+	var err error
+	broker.wait(
+		new(kmsg.MetadataRequest),
+		func(resp kmsg.Response, respErr error) {
+			if err = respErr; err != nil {
+				return
+			}
+			meta = resp.(*kmsg.MetadataResponse)
+		},
+	)
+	if err != nil {
+		return err
+	}
+	if meta.ControllerID > 0 {
+		atomic.StoreInt32(&c.controllerID, meta.ControllerID)
+	}
+	c.updateBrokers(meta.Brokers)
+	return nil
 }
 
 // fetchTopicMetadata fetches metadata for a topic, storing results into parts.
@@ -176,6 +202,9 @@ func (c *Client) fetchTopicMetadata(parts *partitions, topic string) {
 	}
 }
 
+// updateBrokers is called with the broker portion of every metadata response.
+// All metadata responses contain all known live brokers, so we can always
+// use the response.
 func (c *Client) updateBrokers(brokers []kmsg.MetadataResponseBrokers) {
 	c.brokersMu.Lock()
 	defer c.brokersMu.Unlock()
@@ -205,4 +234,35 @@ func (c *Client) updateBrokers(brokers []kmsg.MetadataResponseBrokers) {
 		}
 		c.anyBrokerIdx = 0
 	}
+}
+
+// Admin issues an admin request to the controller broker, waiting for and
+// returning the Kafka response or an error.
+//
+// If the controller ID is unknown, this will attempt to fetch it. If the
+// fetch errors, this will return an unknown controller error.
+func (c *Client) Admin(req kmsg.AdminRequest) (kmsg.Response, error) {
+	if c.controllerID < 0 {
+		if err := c.fetchBrokerMetadata(); err != nil {
+			return err
+		}
+		if c.controllerID < 0 {
+			return errUnknownController
+		}
+	}
+
+	c.brokersMu.Lock()
+	controller, exists := c.brokers[c.controllerID]
+	c.brokersMu.Unlock()
+
+	if !exists {
+		return errUnknownController
+	}
+
+	var resp kmsg.Response
+	var err error
+	controller.wait(req, func(kresp kmsg.Response, kerr error) {
+		resp, err = kresp, kerr
+	})
+	return resp, err
 }
