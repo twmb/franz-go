@@ -7,10 +7,10 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/davecgh/go-spew/spew"
+	"golang.org/x/exp/rand"
+
 	"github.com/twmb/kgo/kerr"
 	"github.com/twmb/kgo/kmsg"
-	"golang.org/x/exp/rand"
 )
 
 type partition struct {
@@ -123,7 +123,6 @@ func (c *Client) fetchTopicMetadata(parts *partitions, topic string) {
 				return
 			}
 			meta = resp.(*kmsg.MetadataResponse)
-			spew.Dump(meta)
 		},
 	)
 
