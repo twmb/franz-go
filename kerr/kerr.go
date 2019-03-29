@@ -22,11 +22,11 @@ func (e *Error) Error() string {
 	return e.Message
 }
 
-// Code returns the error corresponding to the given error code.
+// ErrorForCode returns the error corresponding to the given error code.
 //
 // If the code is unknown, this returns UnknownServerError.
 // If the code is 0, this returns nil.
-func Code(code int16) error {
+func ErrorForCode(code int16) error {
 	err, exists := code2err[code]
 	if !exists {
 		return UnknownServerError
