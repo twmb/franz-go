@@ -5,6 +5,16 @@ import "time"
 // func (p *Producer) BeginTransaction() *ProducerTransaction
 // func (p *ProducerTransaction) Produce(r *Record)
 
+func noPromise(string, *Record, error) {}
+
+// Produce sends a record to Kafka under the given topic, calling promise with
+// the topic/record/error when Kafka replies.
+//
+// If the record cannot be written, due to it being too large or the client
+// being unable to find a partition, this will return an error.
+//
+// The promise is optional, but not using it means you will not know if Kafka
+// recorded a record properly.
 func (c *Client) Produce(
 	topic string,
 	r *Record,
@@ -47,6 +57,10 @@ func (c *Client) Produce(
 
 	if r.Timestamp.IsZero() {
 		r.Timestamp = time.Now()
+	}
+
+	if promise == nil {
+		promise = noPromise
 	}
 
 	return broker.bufferedReq.buffer(
