@@ -5,6 +5,8 @@
 // adds new fields over time without bumping the major API version.
 package kmsg
 
+import "github.com/twmb/kgo/kbin"
+
 // Request represents a type that can be requested to Kafka.
 type Request interface {
 	// Key returns the protocol key for this message kind.
@@ -60,11 +62,11 @@ func AppendRequest(
 	clientID *string,
 ) []byte {
 	dst = append(dst, 0, 0, 0, 0) // reserve length
-	dst = AppendInt16(dst, r.Key())
-	dst = AppendInt16(dst, r.GetVersion())
-	dst = AppendInt32(dst, correlationID)
-	dst = AppendNullableString(dst, clientID)
+	dst = kbin.AppendInt16(dst, r.Key())
+	dst = kbin.AppendInt16(dst, r.GetVersion())
+	dst = kbin.AppendInt32(dst, correlationID)
+	dst = kbin.AppendNullableString(dst, clientID)
 	dst = r.AppendTo(dst)
-	AppendInt32(dst[:0], int32(len(dst[4:])))
+	kbin.AppendInt32(dst[:0], int32(len(dst[4:])))
 	return dst
 }
