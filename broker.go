@@ -24,6 +24,11 @@ type promisedResp struct {
 	promise       func(kmsg.Response, error)
 }
 
+type awaitingResp struct {
+	resp    kmsg.Response
+	promise func(kmsg.Response, error)
+}
+
 type apiVersions [kmsg.MaxKey + 1]int16
 
 // broker manages the concept how a client would interact with a broker.
@@ -40,6 +45,12 @@ type broker struct {
 
 	// bufferedReq manages buffering writes for a produce request.
 	bufferedReq bufferedProduceRequest
+
+	// seqResps, guarded by seqRespsMu, contains responses that must be
+	// handled sequentially. These responses are handled asyncronously,
+	// but sequentially.
+	seqRespsMu sync.Mutex
+	seqResps   []awaitingResp
 
 	// dieMu guards sending to reqs in case the broker has been
 	// permanently stopped.
@@ -128,6 +139,46 @@ func (b *broker) doAsyncPromise(
 	b.do(req, func(resp kmsg.Response, err error) {
 		go promise(resp, err)
 	})
+}
+
+// doSequencedAsyncPromise is the same as do, but all requests using this
+// function have their responses handled sequentially.
+//
+// This is important for example for odering of produce requests.
+func (b *broker) doSequencedAsyncPromise(
+	req kmsg.Request,
+	promise func(kmsg.Response, error),
+) {
+	b.do(req, func(resp kmsg.Response, err error) {
+		if err != nil {
+			go promise(nil, err)
+			return
+		}
+
+		b.seqRespsMu.Lock()
+		defer b.seqRespsMu.Unlock()
+
+		b.seqResps = append(b.seqResps, awaitingResp{resp, promise})
+		if len(b.seqResps) > 0 {
+			go b.handleSeqResp()
+		}
+	})
+}
+
+// handleSeqResp handles a sequenced response while there is one.
+func (b *broker) handleSeqResp() {
+start:
+
+	b.seqRespsMu.Lock()
+	awaitingResp := b.seqResps[0]
+	b.seqResps = b.seqResps[1:]
+	more := len(b.seqResps) > 0
+	b.seqRespsMu.Unlock()
+
+	awaitingResp.promise(awaitingResp.resp, nil)
+	if more {
+		goto start
+	}
 }
 
 // wait is the same as do, but this waits for the response to finish.
