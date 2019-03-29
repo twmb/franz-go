@@ -244,10 +244,10 @@ func (c *Client) updateBrokers(brokers []kmsg.MetadataResponseBrokers) {
 func (c *Client) Admin(req kmsg.AdminRequest) (kmsg.Response, error) {
 	if c.controllerID < 0 {
 		if err := c.fetchBrokerMetadata(); err != nil {
-			return err
+			return nil, err
 		}
 		if c.controllerID < 0 {
-			return errUnknownController
+			return nil, errUnknownController
 		}
 	}
 
@@ -256,7 +256,7 @@ func (c *Client) Admin(req kmsg.AdminRequest) (kmsg.Response, error) {
 	c.brokersMu.Unlock()
 
 	if !exists {
-		return errUnknownController
+		return nil, errUnknownController
 	}
 
 	var resp kmsg.Response
