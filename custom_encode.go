@@ -26,7 +26,6 @@ func (*messageBufferedProduceRequest) MinVersion() int16    { return 3 }
 func (m *messageBufferedProduceRequest) SetVersion(v int16) { m.version = v }
 func (m *messageBufferedProduceRequest) GetVersion() int16  { return m.version }
 func (m *messageBufferedProduceRequest) AppendTo(dst []byte) []byte {
-	start := dst
 	if m.version >= 3 {
 		dst = kmsg.AppendNullableString(dst, nil) // TODO transactional ID
 	}
