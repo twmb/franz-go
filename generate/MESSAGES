@@ -230,12 +230,71 @@ MetadataResponse => from MetadataRequest
   // client is allowed to perform on this cluster.
   AuthorizedOperations: int32 // v8+
 
+// ApiVersionsRequest requests what API versions a Kafka broker supports.
+//
+// Because a client does not know what version of ApiVersionsRequest a broker
+// supports, Kafka responds to versions with the highest version it supports.
+// This allows clients to always use the latest version of ApiVersionsRequest.
+// If the broker supports only a lower version of the request, it will reply
+// with an UNSUPPORTED_VERSION error.
 ApiVersionsRequest => key 18, max version 2
 
+// ApiVersionsResponse is returned for an ApiVersionsRequest.
 ApiVersionsResponse => from ApiVersionsRequest
+  // ErrorCode is UNSUPPORTED_VERSION if the request was issued with a higher
+  // version than the broker supports. Regardless of the error, the broker
+  // replies with the ApiVersions it supports.
   ErrorCode: int16
+  // ApiVersions is an array corresponding to API keys the broker supports
+  // and the range of supported versions for each key.
   ApiVersions: [=>]
+    // ApiKey is the key of a message request.
     ApiKey: int16
+    // MinVersion is the min version a broker supports for an API key.
     MinVersion: int16
+    // MaxVersion is the max version a broker supports for an API key.
     MaxVersion: int16
+  // ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+  // after this request.
+  // For Kafka < 2.0.0, the throttle is applied before issuing a response.
+  // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
   ThrottleTimeMs: int32 // v1+
+
+// DeleteTopicsRequest deletes a Kafka topic.
+DeleteTopicsRequest => key 20, max version 3
+  // Topics is an array of topics to delete.
+  Topics: [string]
+  // Timeout is the millisecond timeout of this request.
+  Timeout: int32
+
+// DeleteTopicsResponse is returned for a DeleteTopicsRequest.
+// Version 3 added the TOPIC_DELETION_DISABLED error proposed in KIP-322
+// and introduced in Kafka 2.1.0. Prior, the request timed out.
+DeleteTopicsResponse => from DeleteTopicsRequest
+  // ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+  // after this request.
+  // For Kafka < 2.0.0, the throttle is applied before issuing a response.
+  // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
+  ThrottleTimeMs: int32 // v1+
+  // TopicErrorCodes is contains the error codes for each topic requested
+  // for deletion (or no error code).
+  TopicErrorCodes: [=>]
+    // Topic is the topic requested for deletion.
+    Topic: string
+    // ErrorCode is the error code returned for an individual topic in
+    // deletion request.
+    //
+    // TOPIC_AUTHORIZATION_FAILED is returned if the client is not authorized
+    // to delete a topic.
+    //
+    // UNKNOWN_TOPIC_OR_PARTITION is returned if the broker does not know of
+    // the topic.
+    //
+    // NOT_CONTROLLER is returned if the request was not issued to a Kafka
+    // controller.
+    //
+    // TOPIC_DELETION_DISABLED is returned for deletion requests version 3+
+    // and brokers >= 2.1.0. INVALID_REQUEST is issued for request versions
+    // 0-2 against brokers >= 2.1.0. Otherwise, the request hangs until it
+    // times out.
+    ErrorCode: int16
