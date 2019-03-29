@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"math"
 	"net"
 	"regexp"
 	"strconv"
@@ -55,8 +56,9 @@ func NewClient(seedBrokers []string, opts ...Opt) (*Client, error) {
 			acks:        RequireLeaderAck(),
 			compression: []CompressionCodec{NoCompression()},
 
-			maxRecordBatchBytes: 1000000,   // Kafka max.message.bytes default is 1000012
-			maxBrokerWriteBytes: 100 << 20, // Kafka socket.request.max.bytes default is 100<<20
+			maxRecordBatchBytes: 1000000,       // Kafka max.message.bytes default is 1000012
+			maxBrokerWriteBytes: 100 << 20,     // Kafka socket.request.max.bytes default is 100<<20
+			maxBrokerBufdRecs:   math.MaxInt32, // unlimited
 
 			brokerBufBytes: 1 << 30, // "unbounded"; hard stop at maxBrokerWriteBytes
 			brokerBufDur:   250 * time.Millisecond,
