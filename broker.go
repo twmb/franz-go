@@ -402,7 +402,6 @@ func (cx *brokerCxn) handleResps() {
 			pr.promise(nil, err)
 			return
 		}
-		fmt.Println("got resp\n", raw)
 		pr.promise(pr.resp, pr.resp.ReadFrom(raw))
 	}
 }
