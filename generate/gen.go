@@ -204,6 +204,9 @@ func (s Struct) WriteGetVersionFunc(l *LineWriter) {
 func (s Struct) WriteSetVersionFunc(l *LineWriter) {
 	l.Write("func (v *%s) SetVersion(version int16) { v.Version = version }", s.Name)
 }
+func (s Struct) WriteAdminFunc(l *LineWriter) {
+	l.Write("func (v *%s) IsAdminRequest() bool { return true }", s.Name)
+}
 func (s Struct) WriteResponseKindFunc(l *LineWriter) {
 	l.Write("func (v *%s) ResponseKind() Response { return &%s{Version: v.Version }}", s.Name, s.ResponseKind)
 }

@@ -261,7 +261,7 @@ ApiVersionsResponse => from ApiVersionsRequest
   ThrottleTimeMs: int32 // v1+
 
 // DeleteTopicsRequest deletes a Kafka topic.
-DeleteTopicsRequest => key 20, max version 3
+DeleteTopicsRequest => key 20, max version 3, admin
   // Topics is an array of topics to delete.
   Topics: [string]
   // Timeout is the millisecond timeout of this request.

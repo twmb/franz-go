@@ -214,7 +214,12 @@ func Parse(raw []byte) {
 			continue
 		}
 
-		// key, max, min optional
+		// key, max, min (optional), admin (optional])
+		const adminStr = ", admin"
+		if idx := strings.Index(rem, adminStr); idx > 0 {
+			s.Admin = true
+			rem = rem[:idx]
+		}
 		const minStr = ", min version "
 		if idx := strings.Index(rem, minStr); idx > 0 {
 			min, err := strconv.Atoi(rem[idx+len(minStr):])

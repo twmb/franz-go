@@ -1,0 +1,49 @@
+2.0
+
+    KIP-279: OffsetsForLeaderEpochResponse v1 introduces a partition-level leader_epoch field.
+    KIP-219: Bump up the protocol versions of non-cluster action requests and responses that are throttled on quota violation.
+    KIP-290: Bump up the protocol versions ACL create, describe and delete requests and responses.
+
+
+1.1.0
+
+    KIP-226 introduced DescribeConfigs Request/Response v1.
+    KIP-227 introduced Fetch Request/Response v7.
+
+
+1.0
+
+    KIP-112: LeaderAndIsrRequest v1 introduces a partition-level is_new field.
+    KIP-112: UpdateMetadataRequest v4 introduces a partition-level offline_replicas field.
+    KIP-112: MetadataResponse v5 introduces a partition-level offline_replicas field.
+    KIP-112: ProduceResponse v4 introduces error code for KafkaStorageException.
+    KIP-112: FetchResponse v6 introduces error code for KafkaStorageException.
+    KIP-152: SaslAuthenticate request has been added to enable reporting of authentication failures. This request will be used if the SaslHandshake request version is greater than 0.
+
+0.11.0.0
+
+    KIP-107: FetchRequest v5 introduces a partition-level log_start_offset field.
+    KIP-107: FetchResponse v5 introduces a partition-level log_start_offset field.
+    KIP-82: ProduceRequest v3 introduces an array of header in the message protocol, containing key field and value field.
+    KIP-82: FetchResponse v5 introduces an array of header in the message protocol, containing key field and value field.
+
+also KIP-98 with FetchRequest v4 for message format v2
+
+0.10.0.2
+
+    KIP-88: OffsetFetchRequest v2 supports retrieval of offsets for all topics if the topics array is set to null.
+    KIP-88: OffsetFetchResponse v2 introduces a top-level error_code field.
+    KIP-103: UpdateMetadataRequest v3 introduces a listener_name field to the elements of the end_points array.
+    KIP-108: CreateTopicsRequest v1 introduces a validate_only field.
+    KIP-108: CreateTopicsResponse v1 introduces an error_message field to the elements of the topic_errors array.
+
+
+0.10.0.1
+
+    ListOffsetRequest v1 supports accurate offset search based on timestamps.
+    MetadataResponse v2 introduces a new field: "cluster_id".
+    FetchRequest v3 supports limiting the response size (in addition to the existing per partition limit), it returns messages bigger than the limits if required to make progress and the order of partitions in the request is now significant.
+    JoinGroup v1 introduces a new field: "rebalance_timeout".
+
+
+KIP-35 0.10.0.0 introduced ApiVersions

@@ -63,6 +63,7 @@ type (
 		Comment  string
 		Name     string
 
+		Admin        bool   // only relevant if TopLevel
 		Key          int    // only relevant if TopLevel
 		MinVersion   int    // only relevant if TopLevel
 		MaxVersion   int    // only relevant if TopLevel
@@ -100,6 +101,9 @@ func main() {
 				s.WriteMinVersionFunc(l)
 				s.WriteSetVersionFunc(l)
 				s.WriteGetVersionFunc(l)
+				if s.Admin {
+					s.WriteAdminFunc(l)
+				}
 				s.WriteResponseKindFunc(l)
 				l.Write("") // newline before append func
 				s.WriteAppendFunc(l)
