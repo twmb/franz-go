@@ -9,6 +9,9 @@ import (
 	"github.com/twmb/kgo/kmsg"
 )
 
+// TODO KIP-359: if broker LeaderEpoch known, set it in produce request
+// and handle response errors
+
 // promisedRecord ties a record with the callback that will be called once
 // a batch is finally written and receives a response.
 type promisedRecord struct {
@@ -136,7 +139,7 @@ func (b *bufferedProduceRequest) flush() {
 					}
 					delete(partitions, partition)
 
-					err := kerr.Code(responsePartition.ErrorCode)
+					err := kerr.ErrorForCode(responsePartition.ErrorCode)
 					// TODO:
 					// retriable errors
 					// duplicate sequence num
@@ -194,7 +197,7 @@ type messageResponseKind interface {
 	readFrom([]byte) error
 }
 
-func (b *bufferedProduceRequest) buffer(topic string, partition int32, pr promisedRecord) {
+func (b *bufferedProduceRequest) buffer(topic string, partition int32, pr promisedRecord) error {
 	// TODO check record lengths.
 
 	b.mu.Lock()
@@ -208,7 +211,7 @@ start:
 			4 // partition number
 		newBatch, _, ok := b.newRecordBatch(topic, pr, newOverhead)
 		if !ok {
-			return // new record was too large
+			return errRecordTooLarge
 		}
 
 		// With or without flushing, we are creating this topic for this batch.
@@ -216,7 +219,7 @@ start:
 		b.nrecords++
 		b.batches[topic] = map[int32]*recordBatch{partition: newBatch}
 		b.maybeFlush()
-		return
+		return nil
 	}
 
 	recordBatch, exists := partitionBatches[partition]
@@ -224,7 +227,7 @@ start:
 		const newOverhead = 4 // new partition number
 		newBatch, flushed, ok := b.newRecordBatch(topic, pr, newOverhead)
 		if !ok {
-			return
+			return errRecordTooLarge
 		}
 		if flushed {
 			goto start // recreate the topic now that it is gone
@@ -235,7 +238,7 @@ start:
 		b.nrecords++
 		partitionBatches[partition] = newBatch
 		b.maybeFlush()
-		return
+		return nil
 	}
 
 	recordNums := recordBatch.calculateRecordNumbers(pr.r)
@@ -245,8 +248,7 @@ start:
 	}
 	canFit, flushed := b.tryFitLength(recordNums.wireLength)
 	if !canFit {
-		pr.promise(topic, pr.r, errRecordTooLarge) // record can't fit at all
-		return
+		return errRecordTooLarge
 	}
 	if flushed {
 		goto start // topic & partitions are gone
@@ -254,10 +256,10 @@ start:
 
 	recordBatch.appendRecord(pr, recordNums)
 	b.maybeFlush()
+	return nil
 }
 
-// newRecordBatch tries to create a new recordBatch for a record. If the batch
-// ends up being too large, the promise is called.
+// newRecordBatch tries to create a new recordBatch for a record.
 //
 // newOverhead is the extra overhead that will come along with creating this
 // new batch.
@@ -271,14 +273,12 @@ func (b *bufferedProduceRequest) newRecordBatch(
 ) (*recordBatch, bool, bool) {
 	newBatch := newRecordBatch(pr)
 	if newBatch.wireLength > b.br.cl.cfg.producer.maxRecordBatchBytes {
-		pr.promise(topic, pr.r, errRecordTooLarge) // single record is too large
 		return nil, false, false
 	}
 
 	extraLength := newOverhead + newBatch.wireLength
 	canFit, flushed := b.tryFitLength(extraLength)
 	if !canFit {
-		pr.promise(topic, pr.r, errRecordTooLarge)
 		return nil, flushed, false
 	}
 
@@ -364,7 +364,7 @@ type recordBatch struct {
 func (b *recordBatch) calculateRecordNumbers(r *Record) recordNumbers {
 	tsMillis := r.Timestamp.UnixNano() / 1e6
 	tsDelta := int32(tsMillis - b.firstTimestamp)
-	offsetDelta := int32(len(b.records) - 1)
+	offsetDelta := int32(len(b.records)) // since called before adding record, delta is the current end
 
 	l := 1 + // attributes, int8 unused
 		varintLen(int64(tsDelta)) +
@@ -373,7 +373,7 @@ func (b *recordBatch) calculateRecordNumbers(r *Record) recordNumbers {
 		len(r.Key) +
 		varintLen(int64(len(r.Value))) +
 		len(r.Value) +
-		4 // int32 array len headers
+		varintLen(int64(len(r.Headers))) // int32 array len headers
 
 	for _, h := range r.Headers {
 		l += varintLen(int64(len(h.Key))) +
