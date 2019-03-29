@@ -26,7 +26,10 @@ func (*messageBufferedProduceRequest) MinVersion() int16    { return 3 }
 func (m *messageBufferedProduceRequest) SetVersion(v int16) { m.version = v }
 func (m *messageBufferedProduceRequest) GetVersion() int16  { return m.version }
 func (m *messageBufferedProduceRequest) AppendTo(dst []byte) []byte {
-	// TODO if adding transactionalID, encode
+	start := dst
+	if m.version >= 3 {
+		dst = kmsg.AppendNullableString(dst, nil) // TODO transactional ID
+	}
 	dst = kmsg.AppendInt16(dst, m.acks)
 	dst = kmsg.AppendInt32(dst, m.timeout)
 	dst = kmsg.AppendArrayLen(dst, len(m.data))
@@ -46,11 +49,10 @@ func (m *messageBufferedProduceRequest) ResponseKind() kmsg.Response {
 }
 
 func (r *recordBatch) appendTo(dst []byte) []byte {
-	dst = kmsg.AppendInt32(dst, r.wireLength) // NULLABLE_BYTES leading length
-	dst = kmsg.AppendInt64(dst, 0)            // firstOffset, defined as zero for producing
+	dst = kmsg.AppendInt32(dst, r.wireLength-4) // NULLABLE_BYTES leading length, minus itself
+	dst = kmsg.AppendInt64(dst, 0)              // firstOffset, defined as zero for producing
 
-	lengthStart := len(dst)        // fill at end
-	dst = kmsg.AppendInt32(dst, 0) // reserved length
+	dst = kmsg.AppendInt32(dst, r.wireLength-4-8-4) // minus nullable bytes, minus baseOffset, minus self
 
 	dst = kmsg.AppendInt32(dst, -1) // partitionLeaderEpoch, unused in clients
 	dst = kmsg.AppendInt8(dst, 2)   // magic, defined as 2 for records v0.11.0.0+
@@ -77,8 +79,7 @@ func (r *recordBatch) appendTo(dst []byte) []byte {
 		dst = pnr.appendTo(dst)
 	}
 
-	kmsg.AppendInt32(dst[lengthStart:], int32(len(dst[lengthStart+4:])))
-	kmsg.AppendInt32(dst[crcStart:], int32(crc32.Checksum(dst[crcStart+4:], crc32c)))
+	kmsg.AppendInt32(dst[:crcStart], int32(crc32.Checksum(dst[crcStart+4:], crc32c)))
 
 	return dst
 }
@@ -90,7 +91,7 @@ func (pnr promisedNumberedRecord) appendTo(dst []byte) []byte {
 	dst = kmsg.AppendVarint(dst, pnr.n.offsetDelta)
 	dst = kmsg.AppendVarintBytes(dst, pnr.pr.r.Key)
 	dst = kmsg.AppendVarintBytes(dst, pnr.pr.r.Value)
-	dst = kmsg.AppendArrayLen(dst, len(pnr.pr.r.Headers))
+	dst = kmsg.AppendVarint(dst, int32(len(pnr.pr.r.Headers)))
 	for _, h := range pnr.pr.r.Headers {
 		dst = kmsg.AppendVarintString(dst, h.Key)
 		dst = kmsg.AppendVarintBytes(dst, h.Value)
