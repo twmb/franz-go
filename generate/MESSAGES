@@ -1,0 +1,300 @@
+// Header is user provided metadata for a record. Kafka does not look at
+// headers at all; they are solely for producers and consumers.
+Header => not top level
+  Key: varint-string
+  Value: varint-bytes
+
+// A Record is a Kafka v0.11.0.0 record. It corresponds to an individual
+// message as it is written on the wire.
+Record => not top level
+  // Length is the length of this record on the wire of everything that
+  // follows this field. It is an int32 encoded as a varint.
+  Length: varint
+  // Attributes are record level attributes. This field currently is unused.
+  Attributes: int8
+  // TimestampDelta is the millisecond delta of this record's timestamp
+  // from the record's RecordBatch's FirstTimestamp.
+  TimestampDelta: varint
+  // OffsetDelta is the delta of this record's offset from the record's
+  // RecordBatch's FirstOffset.
+  //
+  // For producing, this is usually equal to the index of the record in
+  // the record batch.
+  OffsetDelta: varint
+  // Key is an blob of data for a record.
+  //
+  // Key's are usually used for hashing the record to specific Kafka partitions.
+  Key: varint-bytes
+  // Value is  a blob of data. This field is the main "message" portion of a
+  // record.
+  Value: varint-bytes
+  // Headers are optional user provided metadata for records. Unlike normal
+  // arrays, the number of headers is encoded as a varint.
+  Headers: varint[Header]
+
+// RecordBatch is a Kafka concept that groups many individual records together
+// in a more optimized format.
+RecordBatch => not top level
+  // NullableBytesLength is not officially a field in a RecordBatch, however,
+  // RecordBatch is a special form of NULLABLE_BYTES. Since all nullable bytes
+  // must be prefixed with a int32 length, we throw that here.
+  // This length should not include itself, only data that follows.
+  NullableBytesLength: int32
+  // FirstOffset is the first offset in a record batch.
+  //
+  // For producing, this is usually 0.
+  FirstOffset: int64
+  // Length is the wire length of everything that follows this field.
+  Length: int32
+  // PartitionLeaderEpoch is a number that Kafka uses for cluster
+  // communication. Clients generally do not need to worry about this
+  // field and producers should set it to -1.
+  PartitionLeaderEpoch: int32
+  // Magic is the current "magic" number of this message format.
+  // The current magic number is 2.
+  Magic: int8
+  // CRC is the crc of everything that follows this field using the
+  // Castagnoli polynomial.
+  CRC: int32
+  // Attributes describe the records array of this batch.
+  //
+  // Bits 0 thru 3 correspond to compression:
+  //   - 000 is no compression
+  //   - 001 is snappy compression
+  //   - 010 is lz4 compression
+  //   - 011 is zstd compression (produce request version 7+)
+  //
+  // Bit 4 is the timestamp type, with 0 meaning CreateTime corresponding
+  // to the timestamp being from the producer, and 1 meaning LogAppendTime
+  // corresponding to the timestamp being from the broker.
+  //
+  // Bit 5 indicates whether the batch is part of a transaction (1 is yes).
+  //
+  // Bit 6 indicates if the batch includes a control message (1 is yes).
+  // Control messages are used to enable transactions and are generated from
+  // the broker. Clients should not return control batches to applications.
+  Attributes: int16
+  // LastOffsetDelta is the offset of the last message in a batch. This is
+  // by the broker to ensure correct behavior even with batch compaction.
+  LastOffsetDelta: int32
+  // FirstTimestamp is the timestamp (in milliseconds) of the first record
+  // in a batch.
+  FirstTimestamp: int64
+  // MaxTimestamp is the timestamp (in milliseconds) of the last record
+  // in a batch. Similar to LastOffsetDelta, this is used to ensure correct
+  // behavior with compacting.
+  MaxTimestamp: int64
+  // ProducerId is the broker assigned producerId from an InitProducerId
+  // request.
+  //
+  // Clients that wish to support idempotent messages and transactions must
+  // set this field.
+  ProducerId: int64
+  // ProducerEpoch is the broker assigned producerEpoch from an InitProducerId
+  // request.
+  //
+  // Clients that wish to support idempotent messages and transactions must
+  // set this field.
+  ProducerEpoch: int16
+  // FirstSequence is the producer assigned sequence number used by the
+  // broker to deduplicate messages.
+  //
+  // Clients that wish to support idempotent messages and transactions must
+  // set this field.
+  //
+  // The sequence number for each record in a batch is OffsetDelta + FirstSequence.
+  FirstSequence: int32
+  // Records are the batch of records to send.
+  //
+  // Note that to compress a batch, you compress the entire set of records
+  // and then use that as the value for a single record.
+  Records: [Record]
+
+ProduceRequest => key 0, max version 7, min version 2
+  TransactionID: nullable-string // v3+
+  Acks: int16
+  Timeout: int32
+  TopicData: [=>]
+    Topic: string
+    Data: [=>]
+      Partition: int32
+      Records: RecordBatch
+
+ProduceResponse => from ProduceRequest
+  Responses: [=>]
+    Topic: string
+    PartitionResponses: [=>]
+      Partition: int32
+      ErrorCode: int16
+      BaseOffset: int64
+      LogAppendTime: int64 // v2+
+      LogStartOffset: int64 // v5+
+  ThrottleTimeMs: int32
+
+// MetadataRequest requests metadata from Kafka.
+MetadataRequest => key 3, max version 8
+  // Topics is a list of topics to return metadata about. If this is null,
+  // all topics are included. If this is empty, no topics are.
+  // For v0 (<Kafka 0.10.0.0), if this is empty, all topics are included.
+  Topics: [string]
+  // AllowAutoTopicCreation, introduced in Kafka 0.11.0.0, allows topic
+  // auto creation of the topics in this request if they do not exist.
+  AllowAutoTopicCreation: bool // v4+
+  // IncludeClusterAuthorizedOperations, introduced in Kakfa 2.3.0, specifies
+  // whether to return a bitfield of AclOperations that this client can perform
+  // on the cluster.
+  IncludeClusterAuthorizedOperations: bool // v8+
+  // IncludeTopicAuthorizedOperations, introduced in Kakfa 2.3.0, specifies
+  // whether to return a bitfield of AclOperations that this client can perform
+  // on individual topics.
+  IncludeTopicAuthorizedOperations: bool // v8+
+
+// MetadataResponse is returned for a MetdataRequest.
+MetadataResponse => from MetadataRequest
+  // ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+  // after this request.
+  // For Kafka < 2.0.0, the throttle is applied before issuing a response.
+  // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
+  ThrottleTimeMs: int32 // v3+
+  // Brokers is a set of alive Kafka brokers.
+  Brokers: [=>]
+    // NodeID is the node ID of a Kafka broker.
+    NodeID: int32
+    // Host is the hostname of a Kafka broker.
+    Host: string
+    // Port is the port of a Kafka broker.
+    Port: int32
+    // Rack is the rack this Kafka broker is in.
+    Rack: nullable-string // v1+
+  // ClusterID, proposed in KIP-78 and introduced in Kafka 0.10.1.0, is a
+  // unique string specifying the cluster that the replying Kafka belongs to.
+  ClusterID: nullable-string // v2+
+  // ControllerID is the ID of the controller broker (the admin broker).
+  ControllerID: int32 // v1+
+  // TopicMetadata contains metadata about each topic requested in the
+  // MetadataRequest.
+  TopicMetadata: [=>]
+    // ErrorCode is any error for a topic in a metadata request.
+    //
+    // TOPIC_AUTHORIZATION_FAILED: returned if the client is not authorized
+    // to describe the topic, or if the metadata request specified topic auto
+    // creation, the topic did not exist, and the user lacks permission to create.
+    //
+    // UNKNOWN_TOPIC_OR_PARTITION: returned if a topic does not exist and
+    // the request did not specify autocreation.
+    //
+    // LEADER_NOT_AVAILABLE: returned if a new topic is created successfully
+    // (since there is no leader on an immediately new topic).
+    //
+    // There can be a myriad of other errors for unsuccessful topic creation.
+    ErrorCode: int16
+    // Topic is the topic this metadata corresponds to.
+    Topic: string
+    // IsInternal signifies whether this topic is a Kafka internal topic.
+    IsInternal: bool // v1+
+    // PartitionMetadata contains metadata about partitions for a topic.
+    PartitionMetadata: [=>]
+      // ErrorCode is any error for a partition in topic metadata.
+      //
+      // LEADER_NOT_AVAILABLE is returned if a leader is unavailable for this
+      // partition. For v0 metadata responses, this is also returned if a
+      // partition leader's listener does not exist.
+      //
+      // LISTENER_NOT_FOUND is returned if a leader ID is known but the
+      // listener for it is not (v1+).
+      //
+      // REPLICA_NOT_AVAILABLE is returned in v0 responses if any replica is
+      // unavailable.
+      ErrorCode: int16
+      // Partition is a partition number for a topic.
+      Partition: int32
+      // Leader is the broker leader for this partition. This will be -1
+      // on leader / listener error.
+      Leader: int32
+      // LeaderEpoch, proposed in KIP-320 and introduced in Kafka 2.1.0  is the
+      // epoch of the broker leader.
+      LeaderEpoch: int32 // v7+
+      // Replicas returns all broker IDs containing replicas of this partition.
+      Replicas: [int32]
+      // ISR returns all broker IDs of in-sync replicas of this partition.
+      ISR: [int32]
+      // OfflineReplicas, proposed in KIP-112 and introduced in Kafka 1.0,
+      // returns all offline broker IDs that should be replicating this partition.
+      OfflineReplicas: [int32] // v5+
+    // AuthorizedOperations, proposed in KIP-430 and introduced in Kafka 2.3.0,
+    // returns a bitfield (corresponding to AclOperation) containing which
+    // operations the client is allowed to perform on this topic.
+    // This is only returned if requested.
+    AuthorizedOperations: int32 // v8+
+  // AuthorizedOperations returns a bitfield containing which operations the
+  // client is allowed to perform on this cluster.
+  AuthorizedOperations: int32 // v8+
+
+// ApiVersionsRequest requests what API versions a Kafka broker supports.
+//
+// Because a client does not know what version of ApiVersionsRequest a broker
+// supports, Kafka responds to versions with the highest version it supports.
+// This allows clients to always use the latest version of ApiVersionsRequest.
+// If the broker supports only a lower version of the request, it will reply
+// with an UNSUPPORTED_VERSION error.
+ApiVersionsRequest => key 18, max version 2
+
+// ApiVersionsResponse is returned for an ApiVersionsRequest.
+ApiVersionsResponse => from ApiVersionsRequest
+  // ErrorCode is UNSUPPORTED_VERSION if the request was issued with a higher
+  // version than the broker supports. Regardless of the error, the broker
+  // replies with the ApiVersions it supports.
+  ErrorCode: int16
+  // ApiVersions is an array corresponding to API keys the broker supports
+  // and the range of supported versions for each key.
+  ApiVersions: [=>]
+    // ApiKey is the key of a message request.
+    ApiKey: int16
+    // MinVersion is the min version a broker supports for an API key.
+    MinVersion: int16
+    // MaxVersion is the max version a broker supports for an API key.
+    MaxVersion: int16
+  // ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+  // after this request.
+  // For Kafka < 2.0.0, the throttle is applied before issuing a response.
+  // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
+  ThrottleTimeMs: int32 // v1+
+
+// DeleteTopicsRequest deletes a Kafka topic.
+DeleteTopicsRequest => key 20, max version 3, admin
+  // Topics is an array of topics to delete.
+  Topics: [string]
+  // Timeout is the millisecond timeout of this request.
+  Timeout: int32
+
+// DeleteTopicsResponse is returned for a DeleteTopicsRequest.
+// Version 3 added the TOPIC_DELETION_DISABLED error proposed in KIP-322
+// and introduced in Kafka 2.1.0. Prior, the request timed out.
+DeleteTopicsResponse => from DeleteTopicsRequest
+  // ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+  // after this request.
+  // For Kafka < 2.0.0, the throttle is applied before issuing a response.
+  // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
+  ThrottleTimeMs: int32 // v1+
+  // TopicErrorCodes is contains the error codes for each topic requested
+  // for deletion (or no error code).
+  TopicErrorCodes: [=>]
+    // Topic is the topic requested for deletion.
+    Topic: string
+    // ErrorCode is the error code returned for an individual topic in
+    // deletion request.
+    //
+    // TOPIC_AUTHORIZATION_FAILED is returned if the client is not authorized
+    // to delete a topic.
+    //
+    // UNKNOWN_TOPIC_OR_PARTITION is returned if the broker does not know of
+    // the topic.
+    //
+    // NOT_CONTROLLER is returned if the request was not issued to a Kafka
+    // controller.
+    //
+    // TOPIC_DELETION_DISABLED is returned for deletion requests version 3+
+    // and brokers >= 2.1.0. INVALID_REQUEST is issued for request versions
+    // 0-2 against brokers >= 2.1.0. Otherwise, the request hangs until it
+    // times out.
+    ErrorCode: int16
