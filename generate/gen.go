@@ -25,7 +25,7 @@ func (s Struct) TypeName() string       { return s.Name }
 // primAppend corresponds to the primitive append functions in
 // kmsg/primitives.go.
 func primAppend(name string, l *LineWriter) {
-	l.Write("dst = Append%s(dst, v)", name)
+	l.Write("dst = kbin.Append%s(dst, v)", name)
 }
 
 func (Bool) WriteAppend(l *LineWriter)           { primAppend("Bool", l) }
@@ -45,9 +45,9 @@ func (VarintBytes) WriteAppend(l *LineWriter)    { primAppend("VarintBytes", l) 
 
 func (a Array) WriteAppend(l *LineWriter) {
 	if a.IsVarintArray {
-		l.Write("dst = AppendVarint(dst, int32(len(v)))")
+		l.Write("dst = kbin.AppendVarint(dst, int32(len(v)))")
 	} else {
-		l.Write("dst = AppendArrayLen(dst, len(v))")
+		l.Write("dst = kbin.AppendArrayLen(dst, len(v))")
 	}
 	l.Write("for i := range v {")
 	if _, isStruct := a.Inner.(Struct); isStruct {
@@ -224,7 +224,7 @@ func (s Struct) WriteDecodeFunc(l *LineWriter) {
 	l.Write("func (v *%s) ReadFrom(src []byte) error {", s.Name)
 	l.Write("version := v.Version")
 	l.Write("_ = version")
-	l.Write("b := BinReader{Src: src}")
+	l.Write("b := kbin.Reader{Src: src}")
 	s.WriteDecode(l)
 	l.Write("return b.Complete()")
 	l.Write("}")

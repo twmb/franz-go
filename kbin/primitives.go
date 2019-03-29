@@ -1,4 +1,5 @@
-package kmsg
+// Package kbin contains Kafka primitive reading and writing functions.
+package kbin
 
 import (
 	"encoding/binary"
@@ -7,7 +8,7 @@ import (
 
 // This file contains primitive type encoding and decoding.
 //
-// The BinReader helper can be used even when content runs out
+// The Reader helper can be used even when content runs out
 // or an error is hit; all other number requests will return
 // zero so a decode will basically no-op.
 
@@ -101,12 +102,12 @@ func AppendArrayLen(dst []byte, l int) []byte {
 	return AppendInt32(dst, int32(l))
 }
 
-type BinReader struct {
+type Reader struct {
 	Src []byte
 	bad bool
 }
 
-func (b *BinReader) Bool() bool {
+func (b *Reader) Bool() bool {
 	if len(b.Src) < 1 {
 		b.bad = true
 		return false
@@ -116,7 +117,7 @@ func (b *BinReader) Bool() bool {
 	return t
 }
 
-func (b *BinReader) Int8() int8 {
+func (b *Reader) Int8() int8 {
 	if len(b.Src) < 1 {
 		b.bad = true
 		return 0
@@ -126,7 +127,7 @@ func (b *BinReader) Int8() int8 {
 	return int8(r)
 }
 
-func (b *BinReader) Int16() int16 {
+func (b *Reader) Int16() int16 {
 	if len(b.Src) < 2 {
 		b.bad = true
 		return 0
@@ -136,7 +137,7 @@ func (b *BinReader) Int16() int16 {
 	return r
 }
 
-func (b *BinReader) Int32() int32 {
+func (b *Reader) Int32() int32 {
 	if len(b.Src) < 4 {
 		b.bad = true
 		return 0
@@ -146,7 +147,7 @@ func (b *BinReader) Int32() int32 {
 	return r
 }
 
-func (b *BinReader) Int64() int64 {
+func (b *Reader) Int64() int64 {
 	if len(b.Src) < 8 {
 		b.bad = true
 		return 0
@@ -156,7 +157,7 @@ func (b *BinReader) Int64() int64 {
 	return r
 }
 
-func (b *BinReader) Uint32() uint32 {
+func (b *Reader) Uint32() uint32 {
 	if len(b.Src) < 4 {
 		b.bad = true
 		return 0
@@ -166,7 +167,7 @@ func (b *BinReader) Uint32() uint32 {
 	return r
 }
 
-func (b *BinReader) Varint() int32 {
+func (b *Reader) Varint() int32 {
 	val, n := binary.Varint(b.Src)
 	if n <= 0 || n > 5 {
 		b.bad = true
@@ -176,7 +177,7 @@ func (b *BinReader) Varint() int32 {
 	return int32(val)
 }
 
-func (b *BinReader) Varlong() int64 {
+func (b *Reader) Varlong() int64 {
 	val, n := binary.Varint(b.Src)
 	if n <= 0 {
 		b.bad = true
@@ -186,7 +187,7 @@ func (b *BinReader) Varlong() int64 {
 	return int64(val)
 }
 
-func (b *BinReader) Span(l int) []byte {
+func (b *Reader) Span(l int) []byte {
 	if len(b.Src) < l || l < 0 {
 		b.bad = true
 		return nil
@@ -196,12 +197,12 @@ func (b *BinReader) Span(l int) []byte {
 	return r
 }
 
-func (b *BinReader) String() string {
+func (b *Reader) String() string {
 	l := b.Int16()
 	return string(b.Span(int(l)))
 }
 
-func (b *BinReader) NullableString() *string {
+func (b *Reader) NullableString() *string {
 	l := b.Int16()
 	if l < 0 {
 		return nil
@@ -210,12 +211,12 @@ func (b *BinReader) NullableString() *string {
 	return &s
 }
 
-func (b *BinReader) Bytes() []byte {
+func (b *Reader) Bytes() []byte {
 	l := b.Int32()
 	return b.Span(int(l))
 }
 
-func (b *BinReader) NullableBytes() *[]byte {
+func (b *Reader) NullableBytes() *[]byte {
 	l := b.Int32()
 	if l < 0 {
 		return nil
@@ -224,22 +225,22 @@ func (b *BinReader) NullableBytes() *[]byte {
 	return &r
 }
 
-func (b *BinReader) ArrayLen() int32 {
+func (b *Reader) ArrayLen() int32 {
 	return b.Int32()
 }
 
-func (b *BinReader) VarintBytes() []byte {
+func (b *Reader) VarintBytes() []byte {
 	l := b.Varint()
 	return b.Span(int(l))
 }
 
-func (b *BinReader) VarintString() string {
+func (b *Reader) VarintString() string {
 	return string(b.VarintBytes())
 }
 
 // Complete returns ErrNotEnoughData if the source ran out while decoding,
 // or ErrTooMuchData if there is data remaining, or nil.
-func (b *BinReader) Complete() error {
+func (b *Reader) Complete() error {
 	if b.bad {
 		return ErrNotEnoughData
 	}
