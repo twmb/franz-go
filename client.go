@@ -52,11 +52,8 @@ type Client struct {
 
 	brokersMu    sync.RWMutex
 	brokers      map[int32]*broker // broker id => broker
-	anyBroker    []*broker         // TODO multiArmBandit anyBroker
+	anyBroker    []*broker
 	anyBrokerIdx int
-
-	// TODO can add lastReq to broker and a daily ticker to clean up
-	// gone brokers
 
 	controllerID int32 // atomic
 
@@ -224,34 +221,41 @@ func (c *Client) fetchTopicMetadata(parts *partitions, topic string) {
 // All metadata responses contain all known live brokers, so we can always
 // use the response.
 func (c *Client) updateBrokers(brokers []kmsg.MetadataResponseBrokers) {
+	newBrokers := make(map[int32]*broker, len(brokers))
+	newAnyBroker := make([]*broker, 0, len(brokers))
+
 	c.brokersMu.Lock()
 	defer c.brokersMu.Unlock()
 
-	addrChanged := false
 	for _, broker := range brokers {
 		addr := net.JoinHostPort(broker.Host, strconv.Itoa(int(broker.Port)))
 
 		b, exists := c.brokers[broker.NodeID]
-		if exists { // exists, but addr changed: migrate
+		if exists {
+			delete(c.brokers, b.id)
 			if b.addr != addr {
 				b.stopForever()
-				c.brokers[broker.NodeID] = c.newBroker(addr, broker.NodeID)
-				addrChanged = true
+				b = c.newBroker(addr, b.id)
 			}
-		} else { // does not exist: make new
+		} else {
 			b = c.newBroker(addr, broker.NodeID)
-			c.brokers[broker.NodeID] = b
-			c.anyBroker = append(c.anyBroker, b)
+		}
+
+		newBrokers[b.id] = b
+		newAnyBroker = append(newAnyBroker, b)
+	}
+
+	for goneID, goneBroker := range c.brokers {
+		if goneID < -1 { // seed broker, unknown ID, always keep
+			newBrokers[goneID] = goneBroker
+			newAnyBroker = append(newAnyBroker, goneBroker)
+		} else {
+			goneBroker.stopForever()
 		}
 	}
 
-	if addrChanged { // if any addr changed, we need to update the pointers in anyBrokers
-		c.anyBroker = make([]*broker, 0, len(c.brokers))
-		for _, broker := range c.brokers {
-			c.anyBroker = append(c.anyBroker, broker)
-		}
-		c.anyBrokerIdx = 0
-	}
+	c.brokers = newBrokers
+	c.anyBroker = newAnyBroker
 }
 
 // Admin issues an admin request to the controller broker, waiting for and
