@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"golang.org/x/exp/rand"
 
@@ -38,6 +39,11 @@ type partitions struct {
 	loading chan struct{}
 }
 
+func (p *partitions) loadComplete() {
+	atomic.StoreInt64(&p.loaded, 1)
+	close(p.loading)
+}
+
 // Client issues requests and handles responses to a Kafka cluster.
 type Client struct {
 	cfg cfg
@@ -59,6 +65,8 @@ type Client struct {
 }
 
 func (c *Client) partitionsForTopic(topic string) (*partitions, error) {
+	var retries int
+start:
 	c.topicPartsMu.RLock()
 	parts, exists := c.topicParts[topic]
 	c.topicPartsMu.RUnlock()
@@ -82,9 +90,20 @@ func (c *Client) partitionsForTopic(topic string) (*partitions, error) {
 		<-parts.loading
 	}
 
-	// TODO retriable
-	// -- add kerr.Retriable(error)
-	// -- no to auth fail, yes to all else
+	if parts.loadErr != nil && errIsRetriable(parts.loadErr) {
+		c.topicPartsMu.Lock()
+		partsNow := c.topicParts[topic]
+		if partsNow == parts {
+			delete(c.topicParts, topic)
+		}
+		c.topicPartsMu.Unlock()
+
+		if retries < 3 { // TODO config opt
+			fmt.Println("sleeping before topic partition retry")
+			time.Sleep(time.Second)
+			goto start
+		}
+	}
 
 	return parts, parts.loadErr
 }
@@ -133,8 +152,7 @@ func (c *Client) fetchBrokerMetadata() error {
 // Since metadata requests always return all live brokers and the controller
 // ID, this additionally updates the client's known brokers and controller ID.
 func (c *Client) fetchTopicMetadata(parts *partitions, topic string) {
-	defer atomic.StoreInt64(&parts.loaded, 1)
-	defer close(parts.loading)
+	defer parts.loadComplete()
 
 	broker := c.broker()
 
