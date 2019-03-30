@@ -34,6 +34,12 @@ func ErrorForCode(code int16) error {
 	return err
 }
 
+// IsRetriable returns whether a Kafka error is considered retriable.
+func IsRetriable(err error) bool {
+	kerr, ok := err.(*Error)
+	return ok && kerr.Retriable
+}
+
 var (
 	UnknownServerError                 = &Error{"UNKNOWN_SERVER_ERROR", -1, false}
 	OffsetOutOfRange                   = &Error{"OFFSET_OUT_OF_RANGE", 1, false}
