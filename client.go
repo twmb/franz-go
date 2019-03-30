@@ -120,7 +120,6 @@ func (c *Client) broker() *broker {
 }
 
 // fetchBrokerMetadata issues a metadata request solely for broker information.
-// TODO: retriable
 func (c *Client) fetchBrokerMetadata() error {
 	broker := c.broker()
 	var meta *kmsg.MetadataResponse
@@ -264,8 +263,14 @@ func (c *Client) updateBrokers(brokers []kmsg.MetadataResponseBrokers) {
 // If the controller ID is unknown, this will attempt to fetch it. If the
 // fetch errors, this will return an unknown controller error.
 func (c *Client) Admin(req kmsg.AdminRequest) (kmsg.Response, error) {
+start:
 	if c.controllerID < 0 {
 		if err := c.fetchBrokerMetadata(); err != nil {
+			if isRetriable(err) && retries < 3 {
+				retries++
+				time.Sleep(time.Second) // TODO make better
+				goto start
+			}
 			return nil, err
 		}
 		if c.controllerID < 0 {
@@ -273,9 +278,9 @@ func (c *Client) Admin(req kmsg.AdminRequest) (kmsg.Response, error) {
 		}
 	}
 
-	c.brokersMu.Lock()
+	c.brokersMu.RLock()
 	controller, exists := c.brokers[c.controllerID]
-	c.brokersMu.Unlock()
+	c.brokersMu.RUnlock()
 
 	if !exists {
 		return nil, errUnknownController
