@@ -24,7 +24,7 @@ type promisedResp struct {
 	promise       func(kmsg.Response, error)
 }
 
-type awaitingResp struct {
+type waitingResp struct {
 	resp    kmsg.Response
 	promise func(kmsg.Response, error)
 }
@@ -50,7 +50,7 @@ type broker struct {
 	// handled sequentially. These responses are handled asyncronously,
 	// but sequentially.
 	seqRespsMu sync.Mutex
-	seqResps   []awaitingResp
+	seqResps   []waitingResp
 
 	// dieMu guards sending to reqs in case the broker has been
 	// permanently stopped.
@@ -158,8 +158,8 @@ func (b *broker) doSequencedAsyncPromise(
 		b.seqRespsMu.Lock()
 		defer b.seqRespsMu.Unlock()
 
-		b.seqResps = append(b.seqResps, awaitingResp{resp, promise})
-		if len(b.seqResps) > 0 {
+		b.seqResps = append(b.seqResps, waitingResp{resp, promise})
+		if len(b.seqResps) == 1 {
 			go b.handleSeqResp()
 		}
 	})
@@ -170,12 +170,12 @@ func (b *broker) handleSeqResp() {
 start:
 
 	b.seqRespsMu.Lock()
-	awaitingResp := b.seqResps[0]
+	waitingResp := b.seqResps[0]
 	b.seqResps = b.seqResps[1:]
 	more := len(b.seqResps) > 0
 	b.seqRespsMu.Unlock()
 
-	awaitingResp.promise(awaitingResp.resp, nil)
+	waitingResp.promise(waitingResp.resp, nil)
 	if more {
 		goto start
 	}
@@ -192,8 +192,8 @@ func (b *broker) wait(
 	var resp kmsg.Response
 	var err error
 	done := make(chan struct{})
-	wait := func(k kmsg.Response, err error) {
-		resp, err = k, err
+	wait := func(k kmsg.Response, kerr error) {
+		resp, err = k, kerr
 		close(done)
 	}
 	b.do(req, wait)
@@ -279,14 +279,14 @@ func (b *broker) loadConnection() (*brokerCxn, error) {
 func (b *broker) connect() (net.Conn, error) {
 	conn, err := b.cl.cfg.client.dialFn(b.addr)
 	if err != nil {
-		return nil, err
+		return nil, retriableErr(err)
 	}
 	if b.cl.cfg.client.tlsCfg != nil {
 		tlsconn := tls.Client(conn, b.cl.cfg.client.tlsCfg)
 		// TODO SetDeadline, then clear
 		if err = tlsconn.Handshake(); err != nil {
 			conn.Close()
-			return nil, err
+			return nil, retriableErr(err)
 		}
 		conn = tlsconn
 	}
@@ -336,7 +336,7 @@ func (cx *brokerCxn) requestAPIVersions() (err error) {
 	}
 	resp := req.ResponseKind().(*kmsg.ApiVersionsResponse)
 	if err = resp.ReadFrom(rawResp); err != nil {
-		return err
+		return retriableErr(err)
 	}
 
 	for _, keyVersions := range resp.ApiVersions {
@@ -369,7 +369,7 @@ func (cx *brokerCxn) writeRequest(req kmsg.Request) (int32, error) {
 	)
 	n, err := cx.conn.Write(cx.reqBuf)
 	if err != nil {
-		return 0, &errWrite{n, err}
+		return 0, retriableErr(&errWrite{n, err})
 	}
 	id := cx.correlationID
 	cx.correlationID++
@@ -381,7 +381,7 @@ func (cx *brokerCxn) writeRequest(req kmsg.Request) (int32, error) {
 func readResponse(conn io.Reader, correlationID int32) ([]byte, error) {
 	sizeBuf := make([]byte, 4)
 	if _, err := io.ReadFull(conn, sizeBuf[:4]); err != nil {
-		return nil, err
+		return nil, retriableErr(err)
 	}
 	size := int32(binary.BigEndian.Uint32(sizeBuf[:4]))
 	if size < 0 {
@@ -390,7 +390,7 @@ func readResponse(conn io.Reader, correlationID int32) ([]byte, error) {
 
 	buf := make([]byte, size)
 	if _, err := io.ReadFull(conn, buf); err != nil {
-		return nil, err
+		return nil, retriableErr(err)
 	}
 
 	if len(buf) < 4 {
