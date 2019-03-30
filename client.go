@@ -167,7 +167,7 @@ func (c *Client) fetchTopicMetadata(parts *partitions, topic string) {
 	)
 
 	if parts.loadErr != nil {
-		return // TODO error in read/write, retry
+		return
 	}
 
 	// Update the controller ID and brokers now since they are always
