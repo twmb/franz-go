@@ -263,10 +263,11 @@ func (c *Client) updateBrokers(brokers []kmsg.MetadataResponseBrokers) {
 // If the controller ID is unknown, this will attempt to fetch it. If the
 // fetch errors, this will return an unknown controller error.
 func (c *Client) Admin(req kmsg.AdminRequest) (kmsg.Response, error) {
+	retries := 0
 start:
 	if c.controllerID < 0 {
 		if err := c.fetchBrokerMetadata(); err != nil {
-			if isRetriable(err) && retries < 3 {
+			if errIsRetriable(err) && retries < 3 {
 				retries++
 				time.Sleep(time.Second) // TODO make better
 				goto start
