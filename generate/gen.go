@@ -2,8 +2,6 @@ package main
 
 import "strconv"
 
-// TODO sizeof structs for rarraylen
-
 func (Bool) TypeName() string           { return "bool" }
 func (Int8) TypeName() string           { return "int8" }
 func (Int16) TypeName() string          { return "int16" }

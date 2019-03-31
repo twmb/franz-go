@@ -226,7 +226,14 @@ func (b *Reader) NullableBytes() *[]byte {
 }
 
 func (b *Reader) ArrayLen() int32 {
-	return b.Int32()
+	r := b.Int32()
+	// The min size of a Kafka type is a byte, so if we do not have
+	// at least the array length of bytes left, it is bad.
+	if len(b.Src) < int(r) {
+		b.bad = true
+		return 0
+	}
+	return r
 }
 
 func (b *Reader) VarintBytes() []byte {
