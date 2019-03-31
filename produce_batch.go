@@ -102,6 +102,8 @@ func (b *bufferedProduceRequest) flush() {
 		acks:    b.br.cl.cfg.producer.acks.val,
 		timeout: int32(time.Second / 1e6), // TODO
 		data:    data,
+
+		compression: b.br.cl.cfg.producer.compression,
 	}
 	b.br.doSequencedAsyncPromise(
 		req,

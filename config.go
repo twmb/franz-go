@@ -2,7 +2,6 @@ package kgo
 
 import (
 	"crypto/tls"
-	"errors"
 	"fmt"
 	"math"
 	"net"
@@ -285,56 +284,6 @@ func WithRequiredAcks(acks RequiredAcks) OptProducer {
 func WithAllowAutoTopicCreation() OptProducer {
 	return producerOpt{func(cfg *producerCfg) { cfg.allowAutoTopicCreation = true }}
 }
-
-// CompressionCodec configures how records are compressed before being sent.
-//
-// Records are compressed within individual topics and partitions, inside of a
-// RecordBatch. All records in a RecordBatch are compressed into one record
-// for that batch.
-type CompressionCodec struct {
-	codec int // 1: gzip, 2: snappy, 3: lz4, 4: zstd
-	level int
-}
-
-func (c CompressionCodec) validate() error {
-	// KIP-390
-	var min, max int
-	var name string
-	switch c.codec {
-	case 0:
-		min, max, name = 0, 0, "no-compression"
-	case 1:
-		min, max, name = 0, 9, "gzip"
-	case 3:
-		min, max, name = 0, 12, "lz4" // 12 is LZ4HC_CLEVEL_MAX in C
-	case 4: // can be negative? but we will not support that for now
-		min, max, name = 1, 22, "zstd"
-	default:
-		return errors.New("unknown compression codec")
-	}
-	if c.level < min || c.level > max {
-		return fmt.Errorf("invalid %s compression level %d (min %d, max %d)", name, c.level, min, max)
-	}
-	return nil
-}
-
-// NoCompression is the default compression used for messages and can be used
-// as a fallback compression option.
-func NoCompression() CompressionCodec { return CompressionCodec{0, 0} }
-
-// GzipCompression enables gzip compression. Level must be between 0 and 9.
-func GzipCompression(level int) CompressionCodec { return CompressionCodec{1, level} }
-
-// SnappyCompression enables snappy compression.
-func SnappyCompression() CompressionCodec { return CompressionCodec{2, 0} }
-
-// Lz4Compression enables lz4 compression. Level must be between 0 and 12.
-func Lz4Compression(level int) CompressionCodec { return CompressionCodec{3, level} }
-
-// ZstdCompression enables zstd compression. Level must be between 1 and 22.
-//
-// TODO currently unsupported
-func ZstdCompression(level int) CompressionCodec { return CompressionCodec{4, level} }
 
 // WithCompressionPreference sets the compression codec to use for records.
 //
