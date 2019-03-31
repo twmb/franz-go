@@ -4,6 +4,7 @@ package main
 // ~line 111 main handler for all requests
 // Add CanVersion or something to check whether features are being used
 // on an unsupported version.
+// Can have -v0 mean up to v0 (max version)
 
 import (
 	"bytes"
@@ -54,6 +55,7 @@ type (
 	StructField struct {
 		Comment    string
 		MinVersion int
+		MaxVersion int
 		FieldName  string
 		Type       Type
 	}

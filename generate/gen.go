@@ -3,7 +3,6 @@ package main
 import "strconv"
 
 // TODO sizeof structs for rarraylen
-// TODO Kind() Admin, Produce, Consume
 
 func (Bool) TypeName() string           { return "bool" }
 func (Int8) TypeName() string           { return "int8" }
@@ -63,7 +62,9 @@ func (a Array) WriteAppend(l *LineWriter) {
 
 func (s Struct) WriteAppend(l *LineWriter) {
 	for _, f := range s.Fields {
-		if f.MinVersion != 0 {
+		if f.MaxVersion > -1 {
+			l.Write("if version >= %d && version <= %d {", f.MinVersion, f.MaxVersion)
+		} else if f.MinVersion != 0 {
 			l.Write("if version >= %d {", f.MinVersion)
 		} else {
 			l.Write("{")
@@ -134,7 +135,9 @@ func (s Struct) WriteDecode(l *LineWriter) {
 	l.Write("{")
 	l.Write("s := v")
 	for _, f := range s.Fields {
-		if f.MinVersion > 0 {
+		if f.MaxVersion > -1 {
+			l.Write("if version >= %d && version <= %d {", f.MinVersion, f.MaxVersion)
+		} else if f.MinVersion > 0 {
 			l.Write("if version >= %d {", f.MinVersion)
 		} else {
 			l.Write("{")

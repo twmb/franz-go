@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"strconv"
 	"strings"
 )
@@ -88,20 +89,20 @@ func (s *Struct) BuildFrom(scanner *LineScanner, level int) (unprocessed string,
 		}
 
 		f := StructField{
-			Comment:   nextComment,
-			FieldName: fields[0],
+			Comment:    nextComment,
+			FieldName:  fields[0],
+			MaxVersion: -1,
 		}
 		nextComment = ""
 
 		typ := fields[1]
 
-		// Parse the version from the type on the right. Currently all
-		// versions are right open ended, but v3+ looks better than v3.
+		// Parse the version from the type on the right.
 		if idx := strings.Index(typ, " // v"); idx > 0 {
 			var err error
-			f.MinVersion, err = strconv.Atoi(strings.TrimSuffix(typ[idx+5:], "+"))
+			f.MinVersion, f.MaxVersion, err = parseVersion(typ[idx+4:]) // start after ` // ` but include v
 			if err != nil {
-				die("unable to parse min version on line %q: %v", line, err)
+				die("unable to parse version on line %q: %v", line, err)
 			}
 			typ = typ[:idx]
 		}
@@ -143,6 +144,45 @@ func (s *Struct) BuildFrom(scanner *LineScanner, level int) (unprocessed string,
 
 	// we have no unprocessed line here.
 	return "", done
+}
+
+func parseVersion(in string) (int, int, error) {
+	max := -1
+	if strings.IndexByte(in, '-') == -1 {
+		if !strings.HasSuffix(in, "+") {
+			return 0, 0, fmt.Errorf("open ended version %q missing + suffix", in)
+		}
+		if !strings.HasPrefix(in, "v") {
+			return 0, 0, fmt.Errorf("open ended version %q mising v prefix", in)
+		}
+		min, err := strconv.Atoi(in[1 : len(in)-1])
+		return min, max, err
+	}
+
+	min := 0
+	span := strings.Split(in, "-")
+	if len(span) != 2 {
+		return 0, 0, fmt.Errorf("version %q invalid multiple ranges", in)
+	}
+	for _, part := range []struct {
+		src string
+		dst *int
+	}{
+		{span[0], &min},
+		{span[1], &max},
+	} {
+		if !strings.HasPrefix(part.src, "v") {
+			return 0, 0, fmt.Errorf("version number in range %q missing v prefix", in)
+		}
+		var err error
+		if *part.dst, err = strconv.Atoi(part.src[1:]); err != nil {
+			return 0, 0, fmt.Errorf("version number in range %q atoi err %v", in, err)
+		}
+	}
+	if max < min {
+		return 0, 0, fmt.Errorf("min %d > max %d on line %q", min, max, in)
+	}
+	return min, max, nil
 }
 
 // Parse parses the raw contents of a messages file and adds all newly
