@@ -84,13 +84,13 @@ RecordBatch => not top level
   // in a batch. Similar to LastOffsetDelta, this is used to ensure correct
   // behavior with compacting.
   MaxTimestamp: int64
-  // ProducerId is the broker assigned producerId from an InitProducerId
+  // ProducerID is the broker assigned producerID from an InitProducerID
   // request.
   //
   // Clients that wish to support idempotent messages and transactions must
   // set this field.
-  ProducerId: int64
-  // ProducerEpoch is the broker assigned producerEpoch from an InitProducerId
+  ProducerID: int64
+  // ProducerEpoch is the broker assigned producerEpoch from an InitProducerID
   // request.
   //
   // Clients that wish to support idempotent messages and transactions must
@@ -130,6 +130,66 @@ ProduceResponse => from ProduceRequest
       LogAppendTime: int64 // v2+
       LogStartOffset: int64 // v5+
   ThrottleTimeMs: int32
+
+FetchRequest => key 1, max version 10
+  ReplicaID: int32
+  MaxWaitTime: int32
+  MinBytes: int32
+  MaxBytes: int32 // v3+
+  IsolationLevel: int8 // v4+
+  SessionID: int32 // v7+
+  SessionEpoch: int32 // v7+
+  Topics: [=>]
+    Topic: string
+    Partitions: [=>]
+      Partition: int32
+      CurrentLeaderEpoch: int32 // v9+
+      FetchOffset: int64
+      LogStartOffset: int64 // v5+
+      PartitionMaxBytes: int32
+  ForgottenTopicsData: [=>]
+    Topic: string
+    Partitions: [int32]
+
+FetchResponse => from FetchRequest
+  ThrottleTimeMs: int32 // v1+
+  ErrorCode: int16 // v7+
+  SessionID: int32 // v7+
+  Responses: [=>]
+    Topic: string
+    PartitionResponses: [=>]
+      PartitionHeader: =>
+        Partition: int32
+        ErrorCode: int16
+        HighWatermark: int64
+        LastStableOffset: int64 // v4+
+        LogStartOffset: int64 // v5+
+        AbortedTransactions: [=>] // v4+
+          ProducerID: int64 // v4+
+          FirstOffset: int64 // v4+
+      RecordSet: [Record]
+
+ListOffsetsRequest => key 2, max version 4, min version 1, admin
+  ReplicaID: int32
+  IsolationLevel: int8 // v2+
+  Topics: [=>]
+    Topic: string
+    Partitions: [=>]
+      Partition: int32
+      CurrentLeaderEpoch: int32 // v4+
+      Timestamp: int64
+      MaxNumOffsets: int32
+
+ListOffsetsResponse => from ListOffsetsRequest
+  ThrottleTimeMs: int32 // v2+
+  Responses: [=>]
+    Topic: string
+    PartitionResponses: [=>]
+      Partition: int32
+      ErrorCode: int16
+      Timestamp: int64
+      Offset: int64 // v1+
+      LeaderEpoch: int32 // v4+
 
 // MetadataRequest requests metadata from Kafka.
 MetadataRequest => key 3, max version 8
@@ -229,6 +289,103 @@ MetadataResponse => from MetadataRequest
   // AuthorizedOperations returns a bitfield containing which operations the
   // client is allowed to perform on this cluster.
   AuthorizedOperations: int32 // v8+
+
+LeaderAndISRRequest => key 4, max version 1, admin
+  ControllerID: int32
+  ControllerEpoch: int32
+  PartitionStates: [=>]
+    Topic: string
+    Partition: int32
+    ControllerEpoch: int32
+    Leader: int32
+    LeaderEpoch: int32
+    ISR: [int32]
+    ZKVersion: int32
+    Replicas: [int32]
+    IsNew: bool
+  LiveLeaders: [=>]
+    ID: int32
+    Host: string
+    Port: int32
+
+LeaderAndISRResponse => from LeaderAndISRRequest
+  ErrorCode: int16
+  Partitions: [=>]
+    Topic: string
+    Partition: int32
+    ErrorCode: int16
+
+StopReplicaRequest => key 5, max version 0, admin
+  ControllerID: int32
+  ControllerEpoch: int32
+  DeletePartitions: bool
+  Partitions: [=>]
+    Topic: string
+    Partition: int32
+
+StopReplicaResponse => from StopReplicaRequest
+  ErrorCode: int16
+  Partitions: [=>]
+    Topic: string
+    Partition: int32
+    ErrorCode: int16
+
+// V1 switched LiveBrokers struct type
+UpdateMetadataRequest => key 6, max version 4, min version 1, admin
+  ControllerID: int32
+  ControllerEpoch: int32
+  PartitionStates: [=>]
+    Topic: string
+    Partition: int32
+    ControllerEpoch: int32
+    Leader: int32
+    LeaderEpoch: int32
+    ISR: [int32]
+    ZKVersion: int32
+    Replicas: [int32]
+    OfflineReplicas: [int32]
+  LiveBrokers: [=>]
+    ID: int32
+    Endpoints: [=>] // v1+
+      Port: int32 // v1+
+      Host: string // v1+
+      ListenerName: string // v3+
+      SecurityProtocolType: int16 // v1+
+    Rack: nullable-string // v2+
+
+UpdateMetadataResponse => from UpdateMetadataRequest
+  ErrorCode: int16
+
+ControlledShutdownRequest => key 7, max version 1, admin
+  BrokerID: int32
+
+ControlledShutdownResponse => from ControlledShutdownRequest
+  ErrorCode: int16
+  PartitionsRemaining: [=>]
+    Topic: string
+    Partition: int32
+
+OffsetCommitRequest => key 8, max version 6
+  GroupID: string
+  GenerationID: int32 // v1+
+  MemberID: string // v1+
+  RetentionTime: int64 // v2-v4
+  Topics: [=>]
+    Topic: string
+    Partitions: [=>]
+      Partition: int32
+      Offset: int64
+      Timestamp: int64 // v1-v1
+      LeaderEpoch: int32 // v6+
+      Metadata: nullable-string
+
+OffsetCommitResponse => from OffsetCommitRequest
+  ThrottleTimeMs: int32 // v3+
+  Responses: [=>]
+    Topic: string
+    PartitionResponses: [=>]
+      Partition: int32
+      ErrorCode: int16
 
 // ApiVersionsRequest requests what API versions a Kafka broker supports.
 //
