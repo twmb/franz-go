@@ -279,14 +279,14 @@ func (b *broker) loadConnection() (*brokerCxn, error) {
 func (b *broker) connect() (net.Conn, error) {
 	conn, err := b.cl.cfg.client.dialFn(b.addr)
 	if err != nil {
-		return nil, retriableErr(err)
+		return nil, maybeRetriableConnErr(err)
 	}
 	if b.cl.cfg.client.tlsCfg != nil {
 		tlsconn := tls.Client(conn, b.cl.cfg.client.tlsCfg)
 		// TODO SetDeadline, then clear
 		if err = tlsconn.Handshake(); err != nil {
 			conn.Close()
-			return nil, retriableErr(err)
+			return nil, maybeRetriableConnErr(err)
 		}
 		conn = tlsconn
 	}
@@ -336,7 +336,7 @@ func (cx *brokerCxn) requestAPIVersions() (err error) {
 	}
 	resp := req.ResponseKind().(*kmsg.ApiVersionsResponse)
 	if err = resp.ReadFrom(rawResp); err != nil {
-		return retriableErr(err)
+		return maybeRetriableConnErr(err)
 	}
 
 	for _, keyVersions := range resp.ApiVersions {
@@ -367,9 +367,8 @@ func (cx *brokerCxn) writeRequest(req kmsg.Request) (int32, error) {
 		cx.correlationID,
 		cx.clientID,
 	)
-	n, err := cx.conn.Write(cx.reqBuf)
-	if err != nil {
-		return 0, retriableErr(&errWrite{n, err})
+	if _, err := cx.conn.Write(cx.reqBuf); err != nil {
+		return 0, maybeRetriableConnErr(err)
 	}
 	id := cx.correlationID
 	cx.correlationID++
@@ -381,7 +380,7 @@ func (cx *brokerCxn) writeRequest(req kmsg.Request) (int32, error) {
 func readResponse(conn io.Reader, correlationID int32) ([]byte, error) {
 	sizeBuf := make([]byte, 4)
 	if _, err := io.ReadFull(conn, sizeBuf[:4]); err != nil {
-		return nil, retriableErr(err)
+		return nil, maybeRetriableConnErr(err)
 	}
 	size := int32(binary.BigEndian.Uint32(sizeBuf[:4]))
 	if size < 0 {
@@ -390,7 +389,7 @@ func readResponse(conn io.Reader, correlationID int32) ([]byte, error) {
 
 	buf := make([]byte, size)
 	if _, err := io.ReadFull(conn, buf); err != nil {
-		return nil, retriableErr(err)
+		return nil, maybeRetriableConnErr(err)
 	}
 
 	if len(buf) < 4 {
