@@ -43,8 +43,7 @@ type broker struct {
 	// This field is managed serially in handleReqs.
 	cxn *brokerCxn
 
-	// bufferedReq manages buffering writes for a produce request.
-	bufferedReq bufferedProduceRequest
+	bt *brokerToppars
 
 	// seqResps, guarded by seqRespsMu, contains responses that must be
 	// handled sequentially. These responses are handled asyncronously,
@@ -71,7 +70,7 @@ func unknownSeedID(seedNum int) int32 {
 }
 
 func (c *Client) newBroker(addr string, id int32) *broker {
-	b := &broker{
+	br := &broker{
 		cl: c,
 
 		id:   id,
@@ -79,11 +78,10 @@ func (c *Client) newBroker(addr string, id int32) *broker {
 
 		reqs: make(chan promisedReq, 100), // TODO size limitation for max inflight reqs?
 	}
-	b.bufferedReq.br = b
-	b.bufferedReq.reset()
-	go b.handleReqs()
+	br.bt = newBrokerToppars(br)
+	go br.handleReqs()
 
-	return b
+	return br
 }
 
 // stopForever permanently disables this broker.

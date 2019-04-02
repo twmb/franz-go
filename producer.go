@@ -63,7 +63,7 @@ func (c *Client) Produce(
 		promise = noPromise
 	}
 
-	return broker.bufferedReq.buffer(
+	return broker.bt.addRecord(
 		topic,
 		partition.id,
 		promisedRecord{
@@ -71,4 +71,6 @@ func (c *Client) Produce(
 			r:       r,
 		},
 	)
+
+	return nil
 }
