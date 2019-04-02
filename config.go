@@ -297,10 +297,10 @@ func WithCompressionPreference(preference ...CompressionCodec) OptProducer {
 }
 
 // WithMaxRecordBatchBytes upper bounds the size of a record batch, overriding
-// the default 100MB.
+// the default 1MB.
 //
 // This corresponds to Kafka's max.message.bytes, which defaults to 1,000,012
-// bytes (just over 100MB).
+// bytes (just over 1MB).
 //
 // RecordBatch's are independent of a ProduceRequest: a record batch is
 // specific to a topic, whereas the produce request can contain many record
