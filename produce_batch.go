@@ -2,7 +2,6 @@ package kgo
 
 import (
 	"math/bits"
-	"sync"
 )
 
 // TODO KIP-359: if broker LeaderEpoch known, set it in produce request
@@ -31,7 +30,7 @@ type promisedNumberedRecord struct {
 
 // newRecordBatch returns a new record batch for a topic and partition
 // containing the given record.
-func newRecordBatch(pr promisedRecord, overhead int32) *recordBatch {
+func newRecordBatch(pr promisedRecord) *recordBatch {
 	const recordBatchOverhead = 4 + // NULLABLE_BYTES overhead
 		8 + // firstOffset
 		4 + // batchLength
@@ -71,8 +70,6 @@ func (b *recordBatch) appendRecord(pr promisedRecord, nums recordNumbers) {
 // recordBatch is the type used for buffering records before they are written.
 type recordBatch struct {
 	tried bool // if this was sent before
-
-	mu sync.Mutex
 
 	wireLength int32 // tracks total size this batch would currently encode as
 

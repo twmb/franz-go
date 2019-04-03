@@ -63,7 +63,9 @@ func (c *Client) Produce(
 		promise = noPromise
 	}
 
-	return broker.bt.addRecord(
+	// TODO validate lengths here
+
+	broker.bt.bufferRecord(
 		topic,
 		partition.id,
 		promisedRecord{
@@ -71,6 +73,5 @@ func (c *Client) Produce(
 			r:       r,
 		},
 	)
-
 	return nil
 }

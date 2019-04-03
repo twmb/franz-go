@@ -10,18 +10,66 @@ import (
 )
 
 type brokerToppars struct {
+	// br is the broker this brokerToppars belongs to.
 	br *broker
 
+	// baseWireLength is the minimum wire length of a produce request
+	// for a client.
 	baseWireLength int32
 
-	mu         sync.Mutex
-	nrecs      int64
-	toppars    map[topparID]*toppar
+	// nrecs is an atomic covering the total number of records buffered
+	// in a brokerToppar.
+	nrecs int64
+
+	// mu guards concurrent concurrent access to toppars and allToppars.
+	mu sync.Mutex
+	// toppars contains all toppars for a broker, grouped by
+	// topic and partition.
+	toppars map[string]map[int32]*toppar // topic => partition => toppar
+	// allToppars, used for building batches, contains all toppars.
 	allToppars []*toppar
+
+	// allTopparsStart is where we will begin in allToppars for building a
+	// batch. This increments by one every produce request, avoiding
+	// starvation for large record batches that cannot fit into
+	// currently-built requests.
+	allTopparsStart int
+}
+
+// toppar captures buffered records for a TOPic and PARtition.
+type toppar struct {
+	// topic is the topic this toppar belongs to.
+	topic string
+	// part is the partition this toppar belongs to.
+	part int32
+
+	// allTopparsIdx signifies the index into brokerToppars' allToppars
+	// field that this toppar is.
+	//
+	// This field is updated whenever a toppar moves around in allToppars.
+	allTopparsIdx int
+
+	// idWireLength covers the topic string and the part array length.
+	// It does not cover part numbers nor record batches.
+	idWireLength int32
+
+	// mu guards all fields below
+	mu sync.Mutex
+
+	// batches contains batches being built for produce requests.
+	// This could be empty if a request just drained every record
+	// buffered for the toppar.
+	batches []*recordBatch
+
+	// backoffDeadline is used for retries: if a toppar's records fail and
+	// are requeued to the front of batches, the batch will not be retried
+	// until after the deadline.
+	backoffDeadline time.Time
 }
 
 func newBrokerToppars(br *broker) *brokerToppars {
-	const messageRequestOverhead int32 = 2 + // key
+	const messageRequestOverhead int32 = 4 + // full length
+		2 + // key
 		2 + // version
 		4 + // correlation ID
 		2 // client ID len
@@ -33,7 +81,7 @@ func newBrokerToppars(br *broker) *brokerToppars {
 	bt := &brokerToppars{
 		br:             br,
 		baseWireLength: messageRequestOverhead + produceRequestOverhead,
-		toppars:        make(map[topparID]*toppar, 1),
+		toppars:        make(map[string]map[int32]*toppar, 1),
 	}
 	if br.cl.cfg.client.id != nil {
 		bt.baseWireLength += int32(len(*br.cl.cfg.client.id))
@@ -42,6 +90,8 @@ func newBrokerToppars(br *broker) *brokerToppars {
 	return bt
 }
 
+// createRequest returns a produceRequest from currently buffered records
+// and whether there are more records to create requests from.
 func (bt *brokerToppars) createRequest() (*messageBufferedProduceRequest, bool) {
 	request := &messageBufferedProduceRequest{
 		// TODO transactional ID
@@ -52,31 +102,37 @@ func (bt *brokerToppars) createRequest() (*messageBufferedProduceRequest, bool) 
 		compression: bt.br.cl.cfg.producer.compression,
 	}
 
-	// TODO vary starting index. We may skip a large batch.
-	// We can use starting index and always increment it by
-	// one. This will get a single large batch at some point,
-	// problem is then we should keep toppars in order.
-	// Remove currently loses ordering.
-
-	now := time.Now()
 	wireLength := bt.baseWireLength
 	wireLengthLimit := bt.br.cl.cfg.producer.maxBrokerWriteBytes
 
+	// To minimize mutex usage, we count records used and track
+	// toppars used in two local variables.
 	var reqRecs int
 	var reqTPs []*toppar
 
+	// We load the current allToppars here. If any new appends happen, they
+	// will not invalidate allToppars since the order has not changed.
+	// We will just miss those new toppars in this request.
 	bt.mu.Lock()
 	allToppars := bt.allToppars
 	bt.mu.Unlock()
 
-	for _, tp := range allToppars {
+	idx := bt.allTopparsStart
+	now := time.Now()
+	for i := 0; i < len(allToppars); i++ {
+		tp := allToppars[idx]
+		if idx = idx + 1; idx == len(allToppars) {
+			idx = 0
+		}
+
 		tp.mu.Lock()
-		if !tp.backoffDeadline.IsZero() &&
-			now.Before(tp.backoffDeadline) {
+		if !tp.backoffDeadline.IsZero() && now.Before(tp.backoffDeadline) {
 			tp.mu.Unlock()
 			continue
 		}
 
+		// This toppar could have zero batches if a prior produce
+		// request drained the records.
 		if len(tp.batches) == 0 {
 			tp.mu.Unlock()
 			reqTPs = append(reqTPs, tp)
@@ -84,57 +140,83 @@ func (bt *brokerToppars) createRequest() (*messageBufferedProduceRequest, bool) 
 		}
 
 		batch := tp.batches[0]
-		tp.mu.Unlock()
-
-		batch.mu.Lock()
 		batchWireLength := 4 + batch.wireLength // part ID + batch
 
 		// If this topic does not exist yet in the request,
 		// we need to add the topic's overhead.
-		reqTopicPart, reqTopicPartExists := request.data[tp.id.topic]
+		reqTopicPart, reqTopicPartExists := request.data[tp.topic]
 		if !reqTopicPartExists {
 			batchWireLength += tp.idWireLength
 		}
 
-		// If this new topic/part/batch would exceed
-		// the max wire length, we skip it.
-		// It will fit on a future built request.
+		// If this new topic/part/batch would exceed the max wire
+		// length, we skip it. It will fit on a future built request.
 		if wireLength+batchWireLength > wireLengthLimit {
-			batch.mu.Unlock()
+			tp.mu.Unlock()
 			continue
 		}
-		batch.tried = true
-		batch.mu.Unlock()
 
+		// Before unlocking the toppar, track that we are trying
+		// the batch to avoid new records being added to it.
+		batch.tried = true
+		tp.mu.Unlock()
+
+		// Now that we are for sure using the batch, create the
+		// topic and partition in the request for it if necessary.
 		if !reqTopicPartExists {
 			reqTopicPart = make(map[int32]*recordBatch, 1)
-			request.data[tp.id.topic] = reqTopicPart
+			request.data[tp.topic] = reqTopicPart
 		}
 
-		reqTopicPart[tp.id.part] = batch
+		wireLength += batchWireLength
+		reqTopicPart[tp.part] = batch
 		reqRecs += len(batch.records)
 		reqTPs = append(reqTPs, tp)
 	}
 
+	// Over all toppars we used, increment past the toppar's first batch.
+	//
+	// If the toppar had no batches, we remove it. We only remove toppars
+	// from being tracked after we have seen, in a new produce request,
+	// that it still has no batches.
+	//
+	// This allows us to avoid repeatedly deleting toppars that are then
+	// recreated immediately.
 	bt.mu.Lock()
 	for _, tp := range reqTPs {
 		tp.mu.Lock()
-		if len(tp.batches) > 0 {
-			tp.batches = tp.batches[1:]
-		}
 		if len(tp.batches) == 0 {
-			bt.removeTopparID(tp.id)
+			// If we are removing the toppar that we began on,
+			// decrement allTopparsStart so we do not skip past
+			// whatever we swap into its place.
+			if tp.allTopparsIdx == bt.allTopparsStart {
+				bt.allTopparsStart--
+			}
+			bt.removeTopparID(tp)
+		} else {
+			tp.batches = tp.batches[1:]
 		}
 		tp.mu.Unlock()
 	}
+	lenToppars := len(bt.toppars)
 	bt.mu.Unlock()
+
+	// Finally, for the next request, start on the next toppar.
+	bt.allTopparsStart++
+	if bt.allTopparsStart == lenToppars {
+		bt.allTopparsStart = 0
+	}
 
 	return request, atomic.AddInt64(&bt.nrecs, int64(-reqRecs)) > 0
 }
 
-func (bt *brokerToppars) removeTopparID(id topparID) {
-	rm := bt.toppars[id]
-	delete(bt.toppars, id)
+// removeToppar removes the tracking of a toppar from the brokerToppars.
+func (bt *brokerToppars) removeTopparID(rm *toppar) {
+	topicParts := bt.toppars[rm.topic]
+	delete(topicParts, rm.part)
+	if len(topicParts) == 0 {
+		delete(bt.toppars, rm.topic)
+	}
 
 	if rm.allTopparsIdx != len(bt.allToppars)-1 {
 		bt.allToppars[rm.allTopparsIdx], bt.allToppars[len(bt.allToppars)-1] =
@@ -146,99 +228,76 @@ func (bt *brokerToppars) removeTopparID(id topparID) {
 	bt.allToppars = bt.allToppars[:len(bt.allToppars)-1]
 }
 
-func (bt *brokerToppars) addNewToppar(tp *toppar) {
-	bt.toppars[tp.id] = tp
-	bt.allToppars = append(bt.allToppars, tp)
-	tp.allTopparsIdx = len(bt.allToppars) - 1
-}
-
-// By the time we are adding a record, we know it has a valid length, for
-// we have already looked up the part from Kafka with the topic name.
-func (bt *brokerToppars) addRecord(topic string, part int32, pr promisedRecord) error {
-	// TODO check record length
-
-	id := topparID{topic, part}
-
-	// Lock the broker toppars to load or create this toppar.
-	// Lock the toppar while at it.
+// loadAndLockToppar returns the toppar under topic, part, creating it as
+// necessary, and returning it locked.
+func (bt *brokerToppars) loadAndLockToppar(topic string, part int32) *toppar {
 	bt.mu.Lock()
-	tp, topparExists := bt.toppars[id]
+
+	topicParts, partsExist := bt.toppars[topic]
+	if !partsExist {
+		topicParts = make(map[int32]*toppar, 1)
+		bt.toppars[topic] = topicParts
+	}
+
+	tp, topparExists := topicParts[part]
 	if !topparExists {
 		tp = &toppar{
-			id:           topparID{topic, part},
-			idWireLength: 2 + int32(len(topic)) + 4,
+			topic:         topic,
+			part:          part,
+			allTopparsIdx: len(bt.allToppars),
+			idWireLength:  2 + int32(len(topic)) + 4, // topic len, topic, parts array len
 		}
-		bt.addNewToppar(tp)
-		tp.mu.Lock()
-	} else {
-		tp.mu.Lock()
+		topicParts[part] = tp
+		bt.allToppars = append(bt.allToppars, tp)
 	}
-	bt.mu.Unlock()
-	defer tp.mu.Unlock()
 
-	// fits returns if an extra amount of data could fit with the
-	// base amount of data in a produce request write.
-	fits := func(extra int32) bool {
-		return bt.baseWireLength+extra <= bt.br.cl.cfg.producer.maxBrokerWriteBytes
-	}
+	tp.mu.Lock()
+	bt.mu.Unlock()
+
+	return tp
+}
+
+// bufferRecord buffers a promised record under the given topic / partition.
+//
+// By the time we are adding a record, we know it has a valid length, for
+// we have already looked up the part from Kafka with the topic name.
+func (bt *brokerToppars) bufferRecord(topic string, part int32, pr promisedRecord) {
+	tp := bt.loadAndLockToppar(topic, part)
 
 	newBatch := true
 	if len(tp.batches) > 0 {
 		batch := tp.batches[len(tp.batches)-1]
 		prNums := batch.calculateRecordNumbers(pr.r)
-		batch.mu.Lock()
-		if !batch.tried && fits(batch.wireLength+prNums.wireLength) {
+		newBatchLength := batch.wireLength + prNums.wireLength
+		if !batch.tried &&
+			newBatchLength <= bt.br.cl.cfg.producer.maxRecordBatchBytes {
 			newBatch = false
 			batch.appendRecord(pr, prNums)
 		}
-		batch.mu.Unlock()
 	}
 
 	if newBatch {
-		batch := newRecordBatch(pr, bt.baseWireLength+tp.idWireLength)
-		if !fits(tp.idWireLength + batch.wireLength) {
-			return errRecordTooLarge // this batch alone is too large
-		}
-		tp.batches = append(tp.batches, batch)
+		tp.batches = append(tp.batches, newRecordBatch(pr))
 	}
+	tp.mu.Unlock()
 
 	if atomic.AddInt64(&bt.nrecs, 1) == 1 {
 		go bt.drain()
 	}
-
-	return nil
-}
-
-type topparID struct {
-	topic string
-	part  int32
-}
-
-type toppar struct {
-	id            topparID
-	allTopparsIdx int
-
-	// idWireLength covers the topic string and the part array length.
-	// It does not cover part numbers nor record batches.
-	idWireLength int32
-
-	tried bool // for retries TODO
-
-	mu sync.Mutex
-
-	batches         []*recordBatch
-	backoffDeadline time.Time
 }
 
 func (bt *brokerToppars) drain() {
 	again := true
+	sem := make(chan struct{}, 1)
 	for again {
 		var req *messageBufferedProduceRequest
+		sem <- struct{}{}
 		req, again = bt.createRequest()
 
 		bt.br.doSequencedAsyncPromise(
 			req,
 			func(resp kmsg.Response, err error) {
+				defer func() { <-sem }()
 				if err != nil {
 					for topic, partitions := range req.data {
 						for _, batch := range partitions {
