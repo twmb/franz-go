@@ -92,12 +92,12 @@ func newBrokerToppars(br *broker) *brokerToppars {
 
 // createRequest returns a produceRequest from currently buffered records
 // and whether there are more records to create requests from.
-func (bt *brokerToppars) createRequest() (*messageBufferedProduceRequest, bool) {
-	request := &messageBufferedProduceRequest{
+func (bt *brokerToppars) createRequest() (*produceRequest, bool) {
+	request := &produceRequest{
 		// TODO transactional ID
-		acks:    bt.br.cl.cfg.producer.acks.val,
-		timeout: int32(time.Second / 1e6), // TODO
-		data:    make(map[string]map[int32]*recordBatch, 1),
+		acks:             bt.br.cl.cfg.producer.acks.val,
+		timeout:          int32(time.Second / 1e6), // TODO
+		topicsPartitions: make(map[string]map[int32]*recordBatch, 1),
 
 		compression: bt.br.cl.cfg.producer.compression,
 	}
@@ -144,8 +144,8 @@ func (bt *brokerToppars) createRequest() (*messageBufferedProduceRequest, bool) 
 
 		// If this topic does not exist yet in the request,
 		// we need to add the topic's overhead.
-		reqTopicPart, reqTopicPartExists := request.data[tp.topic]
-		if !reqTopicPartExists {
+		topicPartitions, topicPartitionExists := request.topicsPartitions[tp.topic]
+		if !topicPartitionExists {
 			batchWireLength += tp.idWireLength
 		}
 
@@ -163,13 +163,13 @@ func (bt *brokerToppars) createRequest() (*messageBufferedProduceRequest, bool) 
 
 		// Now that we are for sure using the batch, create the
 		// topic and partition in the request for it if necessary.
-		if !reqTopicPartExists {
-			reqTopicPart = make(map[int32]*recordBatch, 1)
-			request.data[tp.topic] = reqTopicPart
+		if !topicPartitionExists {
+			topicPartitions = make(map[int32]*recordBatch, 1)
+			request.topicsPartitions[tp.topic] = topicPartitions
 		}
 
 		wireLength += batchWireLength
-		reqTopicPart[tp.part] = batch
+		topicPartitions[tp.part] = batch
 		reqRecs += len(batch.records)
 		reqTPs = append(reqTPs, tp)
 	}
@@ -290,7 +290,7 @@ func (bt *brokerToppars) drain() {
 	again := true
 	sem := make(chan struct{}, 1)
 	for again {
-		var req *messageBufferedProduceRequest
+		var req *produceRequest
 		sem <- struct{}{}
 		req, again = bt.createRequest()
 
@@ -299,7 +299,7 @@ func (bt *brokerToppars) drain() {
 			func(resp kmsg.Response, err error) {
 				defer func() { <-sem }()
 				if err != nil {
-					for topic, partitions := range req.data {
+					for topic, partitions := range req.topicsPartitions {
 						for _, batch := range partitions {
 							for _, record := range batch.records {
 								record.pr.promise(topic, record.pr.r, err)
@@ -312,11 +312,11 @@ func (bt *brokerToppars) drain() {
 				pr := resp.(*kmsg.ProduceResponse)
 				for _, responseTopic := range pr.Responses {
 					topic := responseTopic.Topic
-					partitions, ok := req.data[topic]
+					partitions, ok := req.topicsPartitions[topic]
 					if !ok {
 						continue // ???
 					}
-					delete(req.data, topic)
+					delete(req.topicsPartitions, topic)
 
 					for _, responsePartition := range responseTopic.PartitionResponses {
 						partition := responsePartition.Partition
@@ -348,7 +348,7 @@ func (bt *brokerToppars) drain() {
 						}
 					}
 				}
-				for topic, partitions := range req.data {
+				for topic, partitions := range req.topicsPartitions {
 					for _, batch := range partitions {
 						for _, record := range batch.records {
 							record.pr.promise(topic, record.pr.r, errNoResp)
