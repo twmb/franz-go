@@ -3,7 +3,6 @@ package kgo
 import (
 	"crypto/tls"
 	"fmt"
-	"math"
 	"net"
 	"regexp"
 	"strconv"
@@ -55,12 +54,8 @@ func NewClient(seedBrokers []string, opts ...Opt) (*Client, error) {
 			acks:        RequireLeaderAck(),
 			compression: []CompressionCodec{NoCompression()},
 
-			maxRecordBatchBytes: 1000000,       // Kafka max.message.bytes default is 1000012
-			maxBrokerWriteBytes: 100 << 20,     // Kafka socket.request.max.bytes default is 100<<20
-			maxBrokerBufdRecs:   math.MaxInt32, // unlimited
-
-			brokerBufBytes: 1 << 30, // "unbounded"; hard stop at maxBrokerWriteBytes
-			brokerBufDur:   250 * time.Millisecond,
+			maxRecordBatchBytes: 1000000,   // Kafka max.message.bytes default is 1000012
+			maxBrokerWriteBytes: 100 << 20, // Kafka socket.request.max.bytes default is 100<<20
 
 			partitioner: RandomPartitioner(),
 		},
@@ -205,10 +200,6 @@ type (
 
 		maxRecordBatchBytes int32
 		maxBrokerWriteBytes int32
-		maxBrokerBufdRecs   int
-
-		brokerBufBytes int32
-		brokerBufDur   time.Duration
 
 		partitioner Partitioner
 
@@ -239,6 +230,10 @@ func (cfg *producerCfg) validate() error {
 	if cfg.maxBrokerWriteBytes < cfg.maxRecordBatchBytes {
 		return fmt.Errorf("max broker write bytes %d is erroneously less than max record batch bytes %d", cfg.maxBrokerWriteBytes, cfg.maxRecordBatchBytes)
 	}
+
+	// TODO maxBrokerWriteBytes should be > 2*max.MathInt16 (client ID,
+	// transactional ID) + maxRecordBatchBytes + 2+2+4+2+2+2+4+4 (message
+	// request + producer thing) + 2 (transactional ID)
 
 	// upper bound broker write bytes to avoid any problems with
 	// overflowing numbers in calculations.
@@ -303,8 +298,11 @@ func WithCompressionPreference(preference ...CompressionCodec) OptProducer {
 // bytes (just over 1MB).
 //
 // RecordBatch's are independent of a ProduceRequest: a record batch is
-// specific to a topic, whereas the produce request can contain many record
-// batches for many topics.
+// specific to a topic and partition, whereas the produce request can contain
+// many record batches for many topics.
+//
+// If a single record encodes larger than this number (before compression), it
+// will will not be written and a callback will have the appropriate error.
 //
 // Note that this is the maximum size of a record batch before compression.
 // If a batch compresses poorly and actually grows the batch, the uncompressed
@@ -316,31 +314,10 @@ func WithMaxRecordBatchBytes(v int32) OptProducer {
 // WithBrokerMaxWriteBytes upper bounds the number of bytes written to a broker
 // connection in a single write, overriding the default 100MiB.
 //
-// If a single record encodes larger than this number, it will will not be
-// written and a callback will have the appropriate error.
-//
 // This number corresponds to the a broker's socket.request.max.bytes, which
 // defaults to 100MiB.
 func WithBrokerMaxWriteBytes(v int32) OptProducer {
 	return producerOpt{func(cfg *producerCfg) { cfg.maxBrokerWriteBytes = v }}
-}
-
-// WithBrokerBufferBytes sets when a broker will attempt to flush a produce
-// request, overriding the unbounded default.
-//
-// Note that this setting can increase memory usage on a per broker basis,
-// since each broker may buffer many records in memory before hitting the
-// buffer byte limit.
-//
-// To disable record buffering, set this to zero.
-func WithBrokerBufferBytes(v int32) OptProducer {
-	return producerOpt{func(cfg *producerCfg) { cfg.brokerBufBytes = v }}
-}
-
-// WithBrokerMaxBufferDuration sets the maximum amount of time that brokers
-// will buffer records before writing, overriding the default 250ms.
-func WithBrokerMaxBufferDuration(d time.Duration) OptProducer {
-	return producerOpt{func(cfg *producerCfg) { cfg.brokerBufDur = d }}
 }
 
 // WithPartitioner uses the given partitioner to partition records, overriding
