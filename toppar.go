@@ -1,6 +1,7 @@
 package kgo
 
 import (
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -12,6 +13,13 @@ import (
 type brokerToppars struct {
 	// br is the broker this brokerToppars belongs to.
 	br *broker
+
+	// inflightSem controls the number of concurrent produce requests.  We
+	// start with a limit of 1, which covers Kafka v0.11.0.0. On the first
+	// response, we check what version was set in the request. If it is at
+	// least 4, which 1.0.0 introduced, we upgrade the sem size.
+	inflightSem    atomic.Value
+	inflightV1Plus bool
 
 	// baseWireLength is the minimum wire length of a produce request
 	// for a client.
@@ -83,6 +91,7 @@ func newBrokerToppars(br *broker) *brokerToppars {
 		baseWireLength: messageRequestOverhead + produceRequestOverhead,
 		toppars:        make(map[string]map[int32]*toppar, 1),
 	}
+	bt.inflightSem.Store(make(chan struct{}, 1))
 	if br.cl.cfg.client.id != nil {
 		bt.baseWireLength += int32(len(*br.cl.cfg.client.id))
 	}
@@ -288,75 +297,87 @@ func (bt *brokerToppars) bufferRecord(topic string, part int32, pr promisedRecor
 
 func (bt *brokerToppars) drain() {
 	again := true
-	sem := make(chan struct{}, 1)
 	for again {
 		var req *produceRequest
+		sem := bt.inflightSem.Load().(chan struct{})
 		sem <- struct{}{}
 		req, again = bt.createRequest()
 
 		bt.br.doSequencedAsyncPromise(
 			req,
 			func(resp kmsg.Response, err error) {
-				defer func() { <-sem }()
-				if err != nil {
-					for topic, partitions := range req.topicsPartitions {
-						for _, batch := range partitions {
-							for _, record := range batch.records {
-								record.pr.promise(topic, record.pr.r, err)
-							}
-						}
-					}
-					return
-				}
-
-				pr := resp.(*kmsg.ProduceResponse)
-				for _, responseTopic := range pr.Responses {
-					topic := responseTopic.Topic
-					partitions, ok := req.topicsPartitions[topic]
-					if !ok {
-						continue // ???
-					}
-					delete(req.topicsPartitions, topic)
-
-					for _, responsePartition := range responseTopic.PartitionResponses {
-						partition := responsePartition.Partition
-						batch, ok := partitions[partition]
-						if !ok {
-							continue // ???
-						}
-						delete(partitions, partition)
-
-						err := kerr.ErrorForCode(responsePartition.ErrorCode)
-						// TODO:
-						// retriable errors
-						// duplicate sequence num
-						for i, record := range batch.records {
-							if err == nil {
-								record.pr.r.Offset = int64(i)
-								record.pr.r.Partition = partition
-								if record.pr.r.TimestampType.IsLogAppendTime() {
-									record.pr.r.Timestamp = time.Unix(0, responsePartition.LogAppendTime*1e4)
-								}
-							}
-							record.pr.promise(topic, record.pr.r, err)
-						}
-					}
-
-					for _, batch := range partitions {
-						for _, record := range batch.records {
-							record.pr.promise(topic, record.pr.r, errNoResp)
-						}
-					}
-				}
-				for topic, partitions := range req.topicsPartitions {
-					for _, batch := range partitions {
-						for _, record := range batch.records {
-							record.pr.promise(topic, record.pr.r, errNoResp)
-						}
-					}
-				}
+				bt.handleReqResp(req, resp, err)
+				<-sem
 			},
 		)
+	}
+}
 
+func (bt *brokerToppars) handleReqResp(req *produceRequest, resp kmsg.Response, err error) {
+	if !bt.inflightV1Plus && req.version >= 4 {
+		bt.inflightV1Plus = true
+		// NOTE we CANNOT store inflight >= 5. Kafka only supports up
+		// to 5 concurrent in flight requests per topic/partition. The
+		// first store here races with our original 1 buffer, allowing
+		// one more than we store.
+		bt.inflightSem.Store(make(chan struct{}, 2))
+	}
+	if err != nil {
+		for topic, partitions := range req.topicsPartitions {
+			for _, batch := range partitions {
+				for _, record := range batch.records {
+					record.pr.promise(topic, record.pr.r, err)
+				}
+			}
+		}
+		return
+	}
+
+	pr := resp.(*kmsg.ProduceResponse)
+	for _, responseTopic := range pr.Responses {
+		topic := responseTopic.Topic
+		partitions, ok := req.topicsPartitions[topic]
+		if !ok {
+			continue // ???
+		}
+		delete(req.topicsPartitions, topic)
+
+		for _, responsePartition := range responseTopic.PartitionResponses {
+			partition := responsePartition.Partition
+			batch, ok := partitions[partition]
+			if !ok {
+				continue // ???
+			}
+			delete(partitions, partition)
+
+			err := kerr.ErrorForCode(responsePartition.ErrorCode)
+			// TODO:
+			// retriable errors
+			// duplicate sequence num
+			for i, record := range batch.records {
+				if err == nil {
+					record.pr.r.Offset = int64(i)
+					record.pr.r.Partition = partition
+					if record.pr.r.TimestampType.IsLogAppendTime() {
+						record.pr.r.Timestamp = time.Unix(0, responsePartition.LogAppendTime*1e4)
+					}
+				}
+				record.pr.promise(topic, record.pr.r, err)
+			}
+		}
+
+		for _, batch := range partitions {
+			for _, record := range batch.records {
+				record.pr.promise(topic, record.pr.r, errNoResp)
+			}
+		}
+	}
+	for topic, partitions := range req.topicsPartitions {
+		for _, batch := range partitions {
+			for _, record := range batch.records {
+				fmt.Println("YO")
+				record.pr.promise(topic, record.pr.r, errNoResp)
+			}
+		}
 	}
 }
