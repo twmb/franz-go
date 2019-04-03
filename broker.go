@@ -1,7 +1,6 @@
 package kgo
 
 import (
-	"crypto/tls"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -279,16 +278,6 @@ func (b *broker) connect() (net.Conn, error) {
 	if err != nil {
 		return nil, maybeRetriableConnErr(err)
 	}
-	if b.cl.cfg.client.tlsCfg != nil {
-		tlsconn := tls.Client(conn, b.cl.cfg.client.tlsCfg)
-		// TODO SetDeadline, then clear
-		if err = tlsconn.Handshake(); err != nil {
-			conn.Close()
-			return nil, maybeRetriableConnErr(err)
-		}
-		conn = tlsconn
-	}
-
 	return conn, nil
 }
 

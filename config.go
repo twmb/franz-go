@@ -1,7 +1,6 @@
 package kgo
 
 import (
-	"crypto/tls"
 	"fmt"
 	"net"
 	"regexp"
@@ -144,7 +143,8 @@ type (
 	clientCfg struct {
 		id     *string
 		dialFn func(string) (net.Conn, error)
-		tlsCfg *tls.Config
+
+		// tlsCfg *tls.Config
 
 		// TODO Conn timeouts? Or, DialFn wrapper?
 		// TODO SASL
@@ -171,14 +171,9 @@ func WithClientID(id *string) OptClient {
 }
 
 // WithDialFn uses fn to dial addresses, overriding the default dialer that
-// uses a 10s timeout.
+// uses a 10s timeout and no TLS.
 func WithDialFn(fn func(string) (net.Conn, error)) OptClient {
 	return clientOpt{func(cfg *clientCfg) { cfg.dialFn = fn }}
-}
-
-// WithTLSCfg uses tlsCfg for all connections.
-func WithTLSCfg(tlsCfg *tls.Config) OptClient {
-	return clientOpt{func(cfg *clientCfg) { cfg.tlsCfg = tlsCfg }}
 }
 
 // ********** PRODUCER CONFIGURATION **********
