@@ -45,9 +45,8 @@ func errIsRetriable(err error) bool {
 }
 
 type connErr struct {
-	err                 error
-	sameBrokerRetriable bool
-	clientRetriable     bool
+	err       error
+	retriable bool
 }
 
 func (c *connErr) Error() string {
@@ -57,9 +56,8 @@ func (c *connErr) Error() string {
 func maybeRetriableConnErr(err error) error {
 	if netErr, ok := err.(net.Error); ok {
 		return &connErr{
-			err:                 err,
-			sameBrokerRetriable: netErr.Temporary(),
-			clientRetriable:     true,
+			err:       err,
+			retriable: netErr.Temporary(),
 		}
 	}
 	return err
