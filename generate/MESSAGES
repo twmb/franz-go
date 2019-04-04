@@ -67,6 +67,7 @@ RecordBatch => not top level
   // Bit 4 is the timestamp type, with 0 meaning CreateTime corresponding
   // to the timestamp being from the producer, and 1 meaning LogAppendTime
   // corresponding to the timestamp being from the broker.
+  // Setting this to LogAppendTime will cause batches to be rejected.
   //
   // Bit 5 indicates whether the batch is part of a transaction (1 is yes).
   //
@@ -110,25 +111,109 @@ RecordBatch => not top level
   // and then use that as the value for a single record.
   Records: [Record]
 
+// ProduceRequest issues records to be created to Kafka.
+//
+// The min version of this type is currently 2, released with Kafka 0.11.0.0.
+// Prior, the RecordBatch format was completely different (and was called a
+// MessageSet).
+//
+// Note that the special client ID "__admin_client" will allow you to produce
+// records to internal topics. This is generally recommended if you want to
+// break your Kafka cluster.
 ProduceRequest => key 0, max version 7, min version 2
   TransactionID: nullable-string // v3+
+  // Acks specifies the number of acks that the partition leaders must receive
+  // from in sync replicas before considering a record batch fully written.
+  //
+  // Valid values are -1, 0, or 1 corresponding to all, none, or one.
+  //
+  // Note that if no acks are requested, Kafka will close the connection
+  // if any topic or partition errors to trigger a client metadata refresh.
   Acks: int16
+  // Timeout is the millisecond timeout of this request.
   Timeout: int32
+  // TopicData is an array of topics to send record batches to.
   TopicData: [=>]
+    // Topic is a topic to send record batches to.
     Topic: string
+    // Data is an array of partitions to send record batches to.
     Data: [=>]
+      // Partition is a partition to send a record batch to.
       Partition: int32
+      // Records is a batch of records to write to a topic's partition.
       Records: RecordBatch
 
+// ProduceResponse is returned for a ProduceRequest.
 ProduceResponse => from ProduceRequest
+  // Responses is an array of responses for the topic's that batches were sent
+  // to.
   Responses: [=>]
+    // Topic is the topic this response pertains to.
     Topic: string
+    // PartitionResponses is an array of responses for the partition's that
+    // batches were sent to.
     PartitionResponses: [=>]
+      // Partition is the partition this response pertains to.
       Partition: int32
+      // ErrorCode is any error for a topic/partition in the request.
+      // There are many error codes for produce requests.
+      //
+      // TRANSACTIONAL_ID_AUTHORIZATION_FAILED is returned for all topics and
+      // partitions if the request had a transactional ID but the client
+      // is not authorized for transactions.
+      //
+      // CLUSTER_AUTHORIZATION_FAILED is returned for all topics and partitions
+      // if the request was idempotent but the client is not authorized
+      // for idempotent requests.
+      //
+      // TOPIC_AUTHORIZATION_FAILED is returned for all topics the client
+      // is not authorized to talk to.
+      //
+      // INVALID_REQUIRED_ACKS is returned if the request contained an invalid
+      // number for "acks".
+      //
+      // CORRUPT_MESSAGE is returned for many reasons, generally related to
+      // problems with messages (invalid magic, size mismatch, etc.).
+      //
+      // MESSAGE_TOO_LARGE is returned if a record batch is larger than the
+      // broker's configured max.message.size.
+      //
+      // RECORD_LIST_TOO_LARGE is returned if the record batch is larger than
+      // the broker's segment.bytes.
+      //
+      // INVALID_TIMESTAMP is returned if the record batch uses LogAppendTime
+      // or if the timestamp delta from when the broker receives the message
+      // is more than the broker's log.message.timestamp.difference.max.ms.
+      //
+      // KAFKA_STORAGE_ERROR is returned if the log directory for a partition
+      // is offline.
+      //
+      // DUPLICATE_SEQUENCE_NUMBER is returned for Kafka <1.1.0 when a
+      // sequence number is detected as a duplicate. After, out of order
+      // is returned.
+      //
+      // UNKNOWN_TOPIC_OR_PARTITION is returned if the topic or partition
+      // is unknown.
+      //
+      // NOT_LEADER_FOR_PARTITION is returned if the broker is not a leader
+      // for this partition. This means that the client has stale metadata.
+      //
+      // NOT_ENOUGH_REPLICAS is returned if all acks are required, but there
+      // are not enough in sync replicas yet.
+      //
+      // INVALID_PRODUCER_EPOCH
+      //
+      // UNKNOWN_PRODUCER_ID // v5+
+      //
+      // OUT_OF_ORDER_SEQUENCE_NUMBER
       ErrorCode: int16
       BaseOffset: int64
       LogAppendTime: int64 // v2+
       LogStartOffset: int64 // v5+
+  // ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+  // after this request.
+  // For Kafka < 2.0.0, the throttle is applied before issuing a response.
+  // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
   ThrottleTimeMs: int32
 
 FetchRequest => key 1, max version 10
