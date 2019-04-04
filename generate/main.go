@@ -5,6 +5,7 @@ package main
 // Add CanVersion or something to check whether features are being used
 // on an unsupported version.
 // Can have -v0 mean up to v0 (max version)
+// https://allmychanges.com/p/java/kafka/ <- finally a good changelog source.
 
 import (
 	"bytes"
