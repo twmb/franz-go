@@ -61,6 +61,16 @@ type Client struct {
 	topicParts   map[string]*partitions // topic => partitions, from metadata resp
 }
 
+// newTopicParts creates and returns new partitions
+func newTopicParts() *partitions {
+	parts := &partitions{
+		loading:  make(chan struct{}),
+		all:      make(map[int32]*partition),
+		writable: make(map[int32]*partition),
+	}
+	return parts
+}
+
 func (c *Client) partitionsForTopic(topic string) (*partitions, error) {
 	var retries int
 start:
@@ -72,11 +82,7 @@ start:
 		c.topicPartsMu.Lock()
 		parts, exists = c.topicParts[topic]
 		if !exists {
-			parts = &partitions{
-				loading:  make(chan struct{}),
-				all:      make(map[int32]*partition),
-				writable: make(map[int32]*partition),
-			}
+			parts = c.newTopicParts()
 			c.topicParts[topic] = parts
 			go c.fetchTopicMetadata(parts, topic)
 		}

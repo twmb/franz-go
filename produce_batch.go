@@ -2,6 +2,7 @@ package kgo
 
 import (
 	"math/bits"
+	"time"
 )
 
 // TODO KIP-359: if broker LeaderEpoch known, set it in produce request
@@ -46,6 +47,7 @@ func newRecordBatch(pr promisedRecord) *recordBatch {
 		4 + // baseSequence
 		4 // record array length
 	b := &recordBatch{
+		created:        time.Now(),
 		firstTimestamp: pr.r.Timestamp.UnixNano() / 1e6,
 		records:        make([]promisedNumberedRecord, 0, 10),
 	}
@@ -69,7 +71,8 @@ func (b *recordBatch) appendRecord(pr promisedRecord, nums recordNumbers) {
 
 // recordBatch is the type used for buffering records before they are written.
 type recordBatch struct {
-	tried bool // if this was sent before
+	created time.Time // when this struct was made
+	tried   bool      // if this was sent before
 
 	wireLength int32 // tracks total size this batch would currently encode as
 
