@@ -24,17 +24,12 @@ type brokerToppars struct {
 	// for a client.
 	baseWireLength int32
 
-	// nrecs is an atomic covering the total number of records buffered
-	// in a brokerToppar.
-	nrecs int64
-
 	// The following backoff fields are used to ensure that the drain loop
 	// begins appropriately after noticing all batches are in a backoff
 	// state. The usage is complicated but documented.
-	backoffRecsTimer *time.Timer
-	backoffRecsMu    sync.Mutex
-	backoffRecsSeq   uint64 // incremented under backoffRecsMu
-	backoffRecs      int64  // zeroed under backoffRecsMu
+	backoffTimer *time.Timer
+	backoffSeq   uint64 // incremented under mu
+	draining     bool
 
 	// mu guards concurrent concurrent access to toppars and allToppars.
 	mu sync.Mutex
@@ -121,10 +116,9 @@ func (bt *brokerToppars) createRequest() (*produceRequest, bool) {
 	wireLength := bt.baseWireLength
 	wireLengthLimit := bt.br.cl.cfg.producer.maxBrokerWriteBytes
 
-	// To minimize mutex usage, we count records used and track
-	// toppars used in two local variables.
-	var reqRecs int
 	var reqTPs []*toppar
+	var soonestDeadline time.Time
+	var deadlineTPs int
 
 	// We load the current allToppars here. If any new appends happen, they
 	// will not invalidate allToppars since the order has not changed.
@@ -142,8 +136,13 @@ func (bt *brokerToppars) createRequest() (*produceRequest, bool) {
 		}
 
 		tp.mu.Lock()
-		if now.Before(tp.backoffDeadline) {
+		dl := tp.backoffDeadline
+		if now.Before(dl) {
 			tp.mu.Unlock()
+			if dl.Before(soonestDeadline) {
+				soonestDeadline = dl
+			}
+			deadlineTPs++
 			continue
 		}
 
@@ -186,7 +185,6 @@ func (bt *brokerToppars) createRequest() (*produceRequest, bool) {
 
 		wireLength += batchWireLength
 		topicPartitions[tp.part] = batch
-		reqRecs += len(batch.records)
 		reqTPs = append(reqTPs, tp)
 	}
 
@@ -199,6 +197,11 @@ func (bt *brokerToppars) createRequest() (*produceRequest, bool) {
 	// This allows us to avoid repeatedly deleting toppars that are then
 	// recreated immediately.
 	bt.mu.Lock()
+
+	// If the sum of deadline toppars and used toppars is not all toppars,
+	// then we definitely have a topper with data for another request.
+	more := len(reqTPs)+deadlineTPs != len(bt.allToppars)
+
 	for _, tp := range reqTPs {
 		tp.mu.Lock()
 		if len(tp.batches) == 0 {
@@ -211,19 +214,31 @@ func (bt *brokerToppars) createRequest() (*produceRequest, bool) {
 			bt.removeToppar(tp)
 		} else {
 			tp.batches = tp.batches[1:]
+
+			// If there are more batches in a used toppar,
+			// we have more for a request.
+			more = more || len(tp.batches) > 0
 		}
 		tp.mu.Unlock()
 	}
-	lenToppars := len(bt.toppars)
-	bt.mu.Unlock()
 
-	// Finally, for the next request, start on the next toppar.
+	// If all toppars had future deadlines, we backoff.
+	if !more && deadlineTPs == len(bt.allToppars) {
+		bt.beginDrainBackoff(soonestDeadline.Sub(now))
+	}
+
+	// For the next produce request, start on the next toppar.
 	bt.allTopparsStart++
-	if bt.allTopparsStart == lenToppars {
+	if bt.allTopparsStart == len(bt.allToppars) {
 		bt.allTopparsStart = 0
 	}
 
-	return request, atomic.AddInt64(&bt.nrecs, int64(-reqRecs)) > 0
+	// Lastly, just before we release the bt mu, update if we
+	// will be draining more or not.
+	bt.draining = more
+	bt.mu.Unlock()
+
+	return request, more
 }
 
 // removeToppar removes the tracking of a toppar from the brokerToppars.
@@ -291,8 +306,8 @@ func (bt *brokerToppars) bufferRecord(topic string, part int32, pr promisedRecor
 	tp := bt.loadAndLockToppar(topic, part)
 
 	newBatch := true
-	hasBatches := len(tp.batches) > 0
-	if hasBatches {
+	firstBatch := len(tp.batches) == 0
+	if !firstBatch {
 		batch := tp.batches[len(tp.batches)-1]
 		prNums := batch.calculateRecordNumbers(pr.r)
 		newBatchLength := batch.wireLength + prNums.wireLength
@@ -305,40 +320,13 @@ func (bt *brokerToppars) bufferRecord(topic string, part int32, pr promisedRecor
 
 	if newBatch {
 		tp.batches = append(tp.batches, newRecordBatch(pr))
+
+		if firstBatch {
+			bt.maybeBeginDraining()
+		}
 	}
 
-	// APPEND:
-	// first batch, first append
-	//   lock, check if draining, no:
-	//     drain
-	//
-	// BACKOFF:
-	// not draining:
-	//
-
-	// Why nrecs is important:
-	// - If we keep a two tier locking system, then a new toppar could
-	//   be created as we drain batches. If this is the case...
-	//   ... ok we can continue draining if len(toppars different)
-
-	// So in drain,
-	// capture toppars
-	// if everything in our own set is backoff,
-	// and at the end, if no new toppars exist
-	// backoff
-	// inside mutex to ensure a concurrent append does not create new
-	// toppar that we would miss
-	//
-
-	// NO: if we enqueue to a backoff toppar we will STILL NEVER
-	// RESTART DRAINING
-
-	// We only begin draining if this is truly the first record.
-	// We could have batches in the backoff state where their record count
-	// is tracked in backoffRecs.
-	if atomic.AddInt64(&bt.nrecs, 1) == 1 && !hasBatches {
-		bt.beginDraining()
-	}
+	tp.mu.Unlock()
 
 	// hasBatches ensures that we do not start draining batches if the
 	// toppar we added the record to is in a backoff state.
@@ -353,7 +341,24 @@ func (bt *brokerToppars) bufferRecord(topic string, part int32, pr promisedRecor
 	//
 	// This lock ensures that we do not both have the record added to a
 	// concurrently built batch while still thinking this record is bufd.
-	tp.mu.Unlock()
+}
+
+func (bt *brokerToppars) maybeBeginDraining() {
+	bt.mu.Lock()
+	defer bt.mu.Unlock()
+
+	if bt.draining {
+		return
+	}
+	bt.draining = true
+
+	if bt.backoffTimer != nil { // some backoff is afoot
+		bt.backoffTimer.Stop()
+		bt.backoffTimer = nil
+		bt.backoffSeq++
+	}
+
+	go bt.drain()
 }
 
 // beginDrainBackoff is called if all toppars are detected to be in a backoff
@@ -362,34 +367,8 @@ func (bt *brokerToppars) bufferRecord(topic string, part int32, pr promisedRecor
 // This stops the world to ensure that everything is still in a backoff state,
 // and if so, begins a timer that will eventually restart the drain loop
 // after the soonest backoff deadline.
-func (bt *brokerToppars) beginDrainBackoff() {
-	bt.mu.Lock() // block any new record appends
-	defer bt.mu.Unlock()
-
-	now := time.Now()
-
-	var soonestDeadline time.Time
-	for _, tp := range bt.allToppars {
-		tp.mu.Lock()
-		if now.Before(tp.backoffDeadline) && len(tp.batches) > 0 {
-			tp.mu.Unlock()
-			go bt.drain() // something recovered, begin draining again
-			return
-		}
-
-		if soonestDeadline.IsZero() || tp.backoffDeadline.Before(soonestDeadline) {
-			soonestDeadline = tp.backoffDeadline
-		}
-		tp.mu.Unlock()
-	}
-
-	// If we make it here, we have blocked any new toppar from being
-	// created and all existing toppars are in a backoff state.
-	// No drain is running.
-	// We have non-zero nrecs.
-	// Save those nrecs into backoff recs.
-	bt.backoffRecs = atomic.SwapInt64(&bt.nrecs, 0)
-	seq := bt.backoffRecsSeq
+func (bt *brokerToppars) beginDrainBackoff(after time.Duration) {
+	seq := bt.backoffSeq
 
 	// After this timer starts, new records could come pouring in and may
 	// race restarting the drain.
@@ -400,36 +379,18 @@ func (bt *brokerToppars) beginDrainBackoff() {
 	//
 	// If this timer fires before a record is added, this will see the
 	// backoff seq is the same, add the backoff recs, and begin draining.
-	bt.backoffRecsTimer = time.AfterFunc(soonestDeadline.Sub(now), func() {
-		bt.backoffRecsMu.Lock()
-		defer bt.backoffRecsMu.Unlock()
+	bt.backoffTimer = time.AfterFunc(after, func() {
+		bt.mu.Lock()
+		defer bt.mu.Unlock()
 
-		if seq != bt.backoffRecsSeq {
+		if seq != bt.backoffSeq {
 			return
 		}
 
-		// If we are this far, we will be the one to start draining.
-		bt.backoffRecsTimer = nil
-		atomic.AddInt64(&bt.nrecs, bt.backoffRecs)
-		bt.backoffRecs = 0
-
+		bt.backoffTimer = nil
+		bt.draining = true
 		go bt.drain()
 	})
-}
-
-func (bt *brokerToppars) beginDraining() {
-	bt.backoffRecsMu.Lock()
-	defer bt.backoffRecsMu.Unlock()
-
-	if bt.backoffRecsTimer != nil { // some backoff is afoot
-		bt.backoffRecsTimer.Stop()
-		bt.backoffRecsTimer = nil
-		bt.backoffRecsSeq++
-		atomic.AddInt64(&bt.nrecs, bt.backoffRecs)
-		bt.backoffRecs = 0
-	}
-
-	go bt.drain()
 }
 
 func (bt *brokerToppars) drain() {
@@ -445,8 +406,7 @@ func (bt *brokerToppars) drain() {
 		// were in a backoff state.
 		if len(req.topicsPartitions) == 0 {
 			<-sem // wont be using that
-			bt.beginDrainBackoff()
-			return
+			continue
 		}
 
 		bt.br.doSequencedAsyncPromise(
@@ -480,23 +440,26 @@ func (bt *brokerToppars) topparForEachBatch(recordBatches map[string]map[int32]*
 	}
 }
 
-func (tp *toppar) requeueBatchInOrder(b *batch) {
+func (tp *toppar) requeueBatchInOrder(b *recordBatch) {
 	next := make([]*recordBatch, 0, len(tp.batches)+1)
-	for i, on := range tp.batches {
+	batches := tp.batches
+	for len(batches) > 0 {
+		on := tp.batches[0]
 		if on.created.After(b.created) {
-			next = append(next, b)
-			next = append(next, tp.batches[i+1:]...)
 			break
 		}
 		next = append(next, on)
+		batches = batches[1:]
 	}
-	tp.batches = on
+	next = append(next, b)
+	next = append(next, batches...)
 }
 
 // requeueEntireReq requeues all batches in req to the brokerToppars.
 // This is done if a retriable network error occured.
 func (bt *brokerToppars) requeueEntireReq(req *produceRequest) {
-	bt.topparForEachBatch(req.topicPartitions, func(tp *toppar, batch *recordBatch) {
+	backoffDeadline := time.Now().Add(time.Second)
+	bt.topparForEachBatch(req.topicsPartitions, func(tp *toppar, batch *recordBatch) {
 		tp.backoffDeadline = backoffDeadline
 		tp.requeueBatchInOrder(batch)
 	})
@@ -634,11 +597,11 @@ func (bt *brokerToppars) handleRetryBatches(retry map[string]map[int32]*recordBa
 	migrate := make(map[string][]int32, len(retry))
 
 	bt.topparForEachBatch(retry, func(tp *toppar, batch *recordBatch) {
-		// If the first batch has the "forever" backoff, then
-		// this topic is already being refreshed. This batch will
-		// auto migrate whenever that refresh finishes.
+		// If the toppar has the "forever" backoff, then this topic is
+		// already being refreshed. This batch will auto migrate
+		// whenever that refresh finishes.
 		if len(tp.batches) == 0 ||
-			!tp.batches.backoffDeadline.Equal(forever) {
+			!tp.backoffDeadline.Equal(forever) {
 
 			migrate[tp.topic] = append(migrate[tp.topic], tp.part)
 		}
@@ -663,7 +626,7 @@ start:
 	}
 
 	cl.brokersMu.Lock()
-	var retryMigrate []byte
+	var retryMigrate []int32
 	for _, migratePart := range migrateParts {
 		broker, exists := cl.brokers[loadParts.all[migratePart].leader]
 		if !exists {
@@ -682,11 +645,14 @@ start:
 
 	// FINALLY, let new writes go to the new broker.
 	cl.topicPartsMu.Lock()
-	cl.topicParts[topic] = parts
+	cl.topicParts[topic] = loadParts
 	cl.topicPartsMu.Unlock()
 }
 
 func (bt *brokerToppars) migrateTopicPartTo(topic string, partition int32, br *broker) {
+}
+
+/*
 	bt.mu.Lock()
 	tp := bt.toppars[topic][partition]
 	bt.mu.Unlock()
@@ -714,5 +680,7 @@ func (bt *brokerToppars) migrateTopicPartTo(topic string, partition int32, br *b
 	}
 	tp.mu.Unlock()
 
+	// let produce request remove toppar, we can just nil the pointer
 	bt.removeToppar(tp)
 }
+*/

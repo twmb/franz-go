@@ -82,7 +82,7 @@ start:
 		c.topicPartsMu.Lock()
 		parts, exists = c.topicParts[topic]
 		if !exists {
-			parts = c.newTopicParts()
+			parts = newTopicParts()
 			c.topicParts[topic] = parts
 			go c.fetchTopicMetadata(parts, topic)
 		}
