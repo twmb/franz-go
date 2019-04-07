@@ -2,7 +2,6 @@ package kgo
 
 import (
 	"math/bits"
-	"time"
 )
 
 // TODO KIP-359: if broker LeaderEpoch known, set it in produce request
@@ -31,7 +30,7 @@ type promisedNumberedRecord struct {
 
 // newRecordBatch returns a new record batch for a topic and partition
 // containing the given record.
-func newRecordBatch(pr promisedRecord) *recordBatch {
+func (bt *brokerToppars) newRecordBatch(firstSeq int32, pr promisedRecord) *recordBatch {
 	const recordBatchOverhead = 4 + // NULLABLE_BYTES overhead
 		8 + // firstOffset
 		4 + // batchLength
@@ -42,14 +41,16 @@ func newRecordBatch(pr promisedRecord) *recordBatch {
 		4 + // lastOffsetDelta
 		8 + // firstTimestamp
 		8 + // maxTimestamp
-		8 + // producerId
+		8 + // producerID
 		2 + // producerEpoch
 		4 + // baseSequence
 		4 // record array length
 	b := &recordBatch{
-		created:        time.Now(),
 		firstTimestamp: pr.r.Timestamp.UnixNano() / 1e6,
 		records:        make([]promisedNumberedRecord, 0, 10),
+		producerID:     bt.br.cl.producerID,
+		producerEpoch:  bt.br.cl.producerEpoch,
+		baseSequence:   firstSeq,
 	}
 	pnr := promisedNumberedRecord{
 		n:  b.calculateRecordNumbers(pr.r),
@@ -71,19 +72,18 @@ func (b *recordBatch) appendRecord(pr promisedRecord, nums recordNumbers) {
 
 // recordBatch is the type used for buffering records before they are written.
 type recordBatch struct {
-	created time.Time // when this struct was made
-	tried   bool      // if this was sent before
+	tp    *toppar // who owns us, set when tried is set
+	tried bool    // if this was sent before
 
 	wireLength int32 // tracks total size this batch would currently encode as
 
 	attrs          int16
 	firstTimestamp int64 // since unix epoch, in millis
 
-	// The following three are used for idempotent message delivery
-	// following an InitProducerId request.
-	// producerId    int64  defined as -1 until we support it
-	// producerEpoch int16  defined as -1 until we support it
-	// baseSequence  int32  defined as -1 until we support it
+	// The following three are used for idempotent message delivery.
+	producerID    int64
+	producerEpoch int16
+	baseSequence  int32
 
 	records []promisedNumberedRecord
 }

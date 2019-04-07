@@ -1,6 +1,11 @@
 package kgo
 
-import "time"
+import (
+	"time"
+
+	"github.com/twmb/kgo/kerr"
+	"github.com/twmb/kgo/kmsg"
+)
 
 // func (p *Producer) BeginTransaction() *ProducerTransaction
 // func (p *ProducerTransaction) Produce(r *Record)
@@ -20,7 +25,22 @@ func (c *Client) Produce(
 	r *Record,
 	promise func(string, *Record, error),
 ) error {
+	/*
+		produceID := c.produceID.Load().(*string)
+		if produceID == nil {
+			c.produceIDMu.Lock()
+			produceID = c.produceID.Load().(*string)
+			if produceID == nil {
+				produceID = c.fetchProduceID()
+				if produceID != nil {
+					return errUnableToFetchProduceID
+				}
+			}
+			c.produceIDMu.Unlock()
+		}
+	*/
 
+start:
 	partitions, err := c.partitionsForTopic(topic)
 	if err != nil {
 		return err
@@ -47,11 +67,19 @@ func (c *Client) Produce(
 		return errUnknownPartition // should never happen
 	}
 
+	partitions.mu.RLock()
+	if partitions.migrated {
+		partitions.mu.RUnlock()
+		<-partitions.migrateCh
+		goto start
+	}
+
 	c.brokersMu.RLock()
 	broker, exists := c.brokers[partition.leader]
 	c.brokersMu.RUnlock()
 
 	if !exists {
+		partitions.mu.RUnlock()
 		return errUnknownBrokerForLeader
 	}
 
@@ -65,6 +93,10 @@ func (c *Client) Produce(
 
 	// TODO validate lengths here
 
+	// TODO KIP-359 will eventually introduce leader epoch to
+	// differentiation between UNKNOWN_LEADER_EPOCH (we have have more up
+	// to date info) and FENCED_LEADER_EPOCH.
+
 	broker.bt.bufferRecord(
 		topic,
 		partition.id,
@@ -73,5 +105,45 @@ func (c *Client) Produce(
 			r:       r,
 		},
 	)
+	partitions.mu.RUnlock()
 	return nil
+}
+
+func (c *Client) initProducerID() {
+	broker := c.broker()
+
+	var initResp *kmsg.InitProducerIDResponse
+	var retry bool
+start:
+	broker.wait(
+		&kmsg.InitProducerIDRequest{ /*TODO transactional ID */ },
+		func(resp kmsg.Response, respErr error) {
+			if respErr != nil {
+				switch v := respErr.(type) {
+				case *connErr:
+					retry = true
+				case *clientErr:
+					switch v {
+					case errBrokerDead,
+						errBrokerConnectionDied:
+						retry = true
+					}
+				}
+				return
+			}
+			initResp = resp.(*kmsg.InitProducerIDResponse)
+		},
+	)
+
+	if retry {
+		goto start // TODO limit amount
+	}
+
+	// TODO handle initResp err
+	if kerr.ErrorForCode(initResp.ErrorCode) != nil {
+		panic("TODO")
+	}
+
+	c.producerID = initResp.ProducerID
+	c.producerEpoch = initResp.ProducerEpoch
 }

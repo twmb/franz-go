@@ -126,6 +126,8 @@ func NewClient(seedBrokers []string, opts ...Opt) (*Client, error) {
 		c.anyBroker = append(c.anyBroker, b)
 	}
 
+	c.initProducerID() // TODO move to proper area (once-ish in Produce)
+
 	return c, nil
 }
 

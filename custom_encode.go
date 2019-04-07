@@ -80,9 +80,9 @@ func (r *recordBatch) appendTo(dst []byte, compressor *compressor) []byte {
 	lastRecord := r.records[len(r.records)-1]
 	dst = kbin.AppendInt64(dst, r.firstTimestamp+int64(lastRecord.n.timestampDelta))
 
-	dst = kbin.AppendInt64(dst, -1) // producerId
-	dst = kbin.AppendInt16(dst, -1) // producerEpoch
-	dst = kbin.AppendInt32(dst, -1) // baseSequence
+	dst = kbin.AppendInt64(dst, r.producerID)
+	dst = kbin.AppendInt16(dst, r.producerEpoch)
+	dst = kbin.AppendInt32(dst, r.baseSequence)
 
 	dst = kbin.AppendArrayLen(dst, len(r.records))
 	recordsAt := len(dst)

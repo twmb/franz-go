@@ -27,6 +27,9 @@ type partitions struct {
 	loaded  int64
 	loadErr error
 
+	mu       sync.RWMutex
+	migrated bool
+
 	// allIDs and writableIDs correspond to the partition IDs in the
 	// two slices below. We save the IDs here as well since that is
 	// the common want.
@@ -36,7 +39,8 @@ type partitions struct {
 	all      map[int32]*partition // id => partition
 	writable map[int32]*partition // id => partition, eliding partitions with no leader
 
-	loading chan struct{}
+	loading   chan struct{}
+	migrateCh chan struct{}
 }
 
 func (p *partitions) loadComplete() {
@@ -56,6 +60,11 @@ type Client struct {
 	anyBrokerIdx int
 
 	controllerID int32 // atomic
+
+	producerID    int64
+	producerEpoch int16
+
+	produceMu sync.RWMutex
 
 	topicPartsMu sync.RWMutex
 	topicParts   map[string]*partitions // topic => partitions, from metadata resp
@@ -113,8 +122,8 @@ start:
 
 // broker returns a random broker from all brokers ever known.
 func (c *Client) broker() *broker {
-	c.brokersMu.RLock()
-	defer c.brokersMu.RUnlock()
+	c.brokersMu.Lock()
+	defer c.brokersMu.Unlock()
 
 	b := c.anyBroker[c.anyBrokerIdx]
 	c.anyBrokerIdx++

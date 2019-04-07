@@ -39,14 +39,13 @@ func errIsRetriable(err error) bool {
 	case *kerr.Error:
 		return kerr.IsRetriable(err)
 	case *clientErr:
-		return err.retriable
+		return true
 	}
 	return false
 }
 
 type connErr struct {
-	err       error
-	retriable bool
+	err error
 }
 
 func (c *connErr) Error() string {
@@ -54,11 +53,8 @@ func (c *connErr) Error() string {
 }
 
 func maybeRetriableConnErr(err error) error {
-	if netErr, ok := err.(net.Error); ok {
-		return &connErr{
-			err:       err,
-			retriable: netErr.Temporary(),
-		}
+	if _, ok := err.(net.Error); ok {
+		return &connErr{err: err}
 	}
 	return err
 }

@@ -250,7 +250,7 @@ func (b *broker) handleReqs() {
 // loadConection returns the broker's connection, creating it if necessary
 // and returning an error of if that fails.
 func (b *broker) loadConnection() (*brokerCxn, error) {
-	if b.cxn != nil {
+	if b.cxn != nil && atomic.LoadInt64(&b.cxn.dead) == 0 {
 		return b.cxn, nil
 	}
 
@@ -269,6 +269,7 @@ func (b *broker) loadConnection() (*brokerCxn, error) {
 	}
 
 	b.cxn = cxn
+	//time.AfterFunc(2000*time.Millisecond, func() { conn.Close() })
 	return cxn, nil
 }
 
