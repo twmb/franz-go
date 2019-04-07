@@ -44,7 +44,7 @@ func (a Array) WriteAppend(l *LineWriter) {
 	if a.IsVarintArray {
 		l.Write("dst = kbin.AppendVarint(dst, int32(len(v)))")
 	} else {
-		l.Write("dst = kbin.AppendArrayLen(dst, len(v))")
+		l.Write("dst = kbin.AppendArrayLen(dst, len(v), v == nil)")
 	}
 	l.Write("for i := range v {")
 	if _, isStruct := a.Inner.(Struct); isStruct {
