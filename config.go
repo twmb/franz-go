@@ -14,6 +14,10 @@ import (
 // TODO STRICT LENGTH VALIDATION
 // max bytes: 1G
 // client id length: int16
+// delivery.timeout.ms? (120s, upper bound on how long til acknowledged)
+// max.block.ms? (60s, upper bound on how long blocked on Produce)
+// reconnect.backoff.max.ms? (1s)
+// reconnect.backoff.ms
 
 type (
 	// Opt is an option to configure a client.
@@ -148,6 +152,9 @@ type (
 
 		// tlsCfg *tls.Config
 
+		retryBackoff   time.Duration
+		requestTimeout int32
+
 		// TODO Conn timeouts? Or, DialFn wrapper?
 		// TODO SASL
 		// TODO allow unsupported features
@@ -178,6 +185,24 @@ func WithDialFn(fn func(string) (net.Conn, error)) OptClient {
 	return clientOpt{func(cfg *clientCfg) { cfg.dialFn = fn }}
 }
 
+// WithRetryBackoff sets how long to wait before retrying failed but retriable
+// requests, overriding the default 100ms.
+//
+// This corresponds to Kafka's retry.backoff.ms setting.
+func WithRetryBackoff(backoff time.Duration) OptClient {
+	return clientOpt{func(cfg *clientCfg) { cfg.retryBackoff = backoff }}
+}
+
+// WithRequestTimeout sets how long Kafka broker's are allowed to respond
+// to requests, overriding the default 30s. If a broker exceeds this duration,
+// it will reply with a request timeout error.
+//
+// This corresponds to Kafka's request.timeout.ms setting. It is invalid to use
+// >596h (math.MaxInt32 milliseconds).
+func WithRequestTimeout(limit time.Duration) OptClient {
+	return clientOpt{func(cfg *clientCfg) { cfg.requestTimeout = int32(limit.Nanoseconds() / 1e6) }}
+}
+
 // ********** PRODUCER CONFIGURATION **********
 
 type (
@@ -203,9 +228,6 @@ type (
 		// TODO:
 		// retries
 		// retry backoff
-
-		// MAYBE:
-		// idempotency
 	}
 )
 
