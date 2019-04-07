@@ -464,18 +464,11 @@ func (bt *brokerToppars) handleReqResp(req *produceRequest, resp kmsg.Response, 
 	// If we had an err, it is from the client itself. This is either a
 	// retriable conn failure or a total loss (e.g. auth failure).
 	if err != nil {
-		switch v := err.(type) {
-		case *connErr:
-			// conn errs are always retriable
+		if isRetriableBrokerErr(err) {
 			bt.requeueEntireReq(req)
-			return
-		case *clientErr:
-			if v == errBrokerConnectionDied {
-				bt.requeueEntireReq(req)
-				return
-			}
+		} else {
+			bt.errorReqAndRemoveToppars(req, err)
 		}
-		bt.errorReqAndRemoveToppars(req, err)
 		return
 	}
 

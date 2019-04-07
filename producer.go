@@ -119,16 +119,7 @@ start:
 		&kmsg.InitProducerIDRequest{ /*TODO transactional ID */ },
 		func(resp kmsg.Response, respErr error) {
 			if respErr != nil {
-				switch v := respErr.(type) {
-				case *connErr:
-					retry = true
-				case *clientErr:
-					switch v {
-					case errBrokerDead,
-						errBrokerConnectionDied:
-						retry = true
-					}
-				}
+				retry = isRetriableBrokerErr(respErr)
 				return
 			}
 			initResp = resp.(*kmsg.InitProducerIDResponse)
