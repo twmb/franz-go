@@ -65,8 +65,8 @@ var (
 	InvalidRequiredAcks                = &Error{"INVALID_REQUIRED_ACKS", 21, false}
 	IllegalGeneration                  = &Error{"ILLEGAL_GENERATION", 22, false}
 	InconsistentGroupProtocol          = &Error{"INCONSISTENT_GROUP_PROTOCOL", 23, false}
-	InvalidGroupId                     = &Error{"INVALID_GROUP_ID", 24, false}
-	UnknownMemberId                    = &Error{"UNKNOWN_MEMBER_ID", 25, false}
+	InvalidGroupID                     = &Error{"INVALID_GROUP_ID", 24, false}
+	UnknownMemberID                    = &Error{"UNKNOWN_MEMBER_ID", 25, false}
 	InvalidSessionTimeout              = &Error{"INVALID_SESSION_TIMEOUT", 26, false}
 	RebalanceInProgress                = &Error{"REBALANCE_IN_PROGRESS", 27, false}
 	InvalidCommitOffsetSize            = &Error{"INVALID_COMMIT_OFFSET_SIZE", 28, false}
@@ -90,17 +90,17 @@ var (
 	DuplicateSequenceNumber            = &Error{"DUPLICATE_SEQUENCE_NUMBER", 46, false}
 	InvalidProducerEpoch               = &Error{"INVALID_PRODUCER_EPOCH", 47, false}
 	InvalidTxnState                    = &Error{"INVALID_TXN_STATE", 48, false}
-	InvalidProducerIdMapping           = &Error{"INVALID_PRODUCER_ID_MAPPING", 49, false}
+	InvalidProducerIDMapping           = &Error{"INVALID_PRODUCER_ID_MAPPING", 49, false}
 	InvalidTransactionTimeout          = &Error{"INVALID_TRANSACTION_TIMEOUT", 50, false}
 	ConcurrentTransactions             = &Error{"CONCURRENT_TRANSACTIONS", 51, false}
 	TransactionCoordinatorFenced       = &Error{"TRANSACTION_COORDINATOR_FENCED", 52, false}
-	TransactionalIdAuthorizationFailed = &Error{"TRANSACTIONAL_ID_AUTHORIZATION_FAILED", 53, false}
+	TransactionalIDAuthorizationFailed = &Error{"TRANSACTIONAL_ID_AUTHORIZATION_FAILED", 53, false}
 	SecurityDisabled                   = &Error{"SECURITY_DISABLED", 54, false}
 	OperationNotAttempted              = &Error{"OPERATION_NOT_ATTEMPTED", 55, false}
 	KafkaStorageError                  = &Error{"KAFKA_STORAGE_ERROR", 56, true}
 	LogDirNotFound                     = &Error{"LOG_DIR_NOT_FOUND", 57, false}
 	SaslAuthenticationFailed           = &Error{"SASL_AUTHENTICATION_FAILED", 58, false}
-	UnknownProducerId                  = &Error{"UNKNOWN_PRODUCER_ID", 59, false}
+	UnknownProducerID                  = &Error{"UNKNOWN_PRODUCER_ID", 59, false}
 	ReassignmentInProgress             = &Error{"REASSIGNMENT_IN_PROGRESS", 60, false}
 	DelegationTokenAuthDisabled        = &Error{"DELEGATION_TOKEN_AUTH_DISABLED", 61, false}
 	DelegationTokenNotFound            = &Error{"DELEGATION_TOKEN_NOT_FOUND", 62, false}
@@ -110,8 +110,8 @@ var (
 	DelegationTokenExpired             = &Error{"DELEGATION_TOKEN_EXPIRED", 66, false}
 	InvalidPrincipalType               = &Error{"INVALID_PRINCIPAL_TYPE", 67, false}
 	NonEmptyGroup                      = &Error{"NON_EMPTY_GROUP", 68, false}
-	GroupIdNotFound                    = &Error{"GROUP_ID_NOT_FOUND", 69, false}
-	FetchSessionIdNotFound             = &Error{"FETCH_SESSION_ID_NOT_FOUND", 70, true}
+	GroupIDNotFound                    = &Error{"GROUP_ID_NOT_FOUND", 69, false}
+	FetchSessionIDNotFound             = &Error{"FETCH_SESSION_ID_NOT_FOUND", 70, true}
 	InvalidFetchSessionEpoch           = &Error{"INVALID_FETCH_SESSION_EPOCH", 71, true}
 	ListenerNotFound                   = &Error{"LISTENER_NOT_FOUND", 72, true}
 	TopicDeletionDisabled              = &Error{"TOPIC_DELETION_DISABLED", 73, false}
@@ -146,8 +146,8 @@ var code2err = map[int16]error{
 	21: InvalidRequiredAcks,
 	22: IllegalGeneration,
 	23: InconsistentGroupProtocol,
-	24: InvalidGroupId,
-	25: UnknownMemberId,
+	24: InvalidGroupID,
+	25: UnknownMemberID,
 	26: InvalidSessionTimeout,
 	27: RebalanceInProgress,
 	28: InvalidCommitOffsetSize,
@@ -171,17 +171,17 @@ var code2err = map[int16]error{
 	46: DuplicateSequenceNumber,
 	47: InvalidProducerEpoch,
 	48: InvalidTxnState,
-	49: InvalidProducerIdMapping,
+	49: InvalidProducerIDMapping,
 	50: InvalidTransactionTimeout,
 	51: ConcurrentTransactions,
 	52: TransactionCoordinatorFenced,
-	53: TransactionalIdAuthorizationFailed,
+	53: TransactionalIDAuthorizationFailed,
 	54: SecurityDisabled,
 	55: OperationNotAttempted,
 	56: KafkaStorageError,
 	57: LogDirNotFound,
 	58: SaslAuthenticationFailed,
-	59: UnknownProducerId,
+	59: UnknownProducerID,
 	60: ReassignmentInProgress,
 	61: DelegationTokenAuthDisabled,
 	62: DelegationTokenNotFound,
@@ -191,8 +191,8 @@ var code2err = map[int16]error{
 	66: DelegationTokenExpired,
 	67: InvalidPrincipalType,
 	68: NonEmptyGroup,
-	69: GroupIdNotFound,
-	70: FetchSessionIdNotFound,
+	69: GroupIDNotFound,
+	70: FetchSessionIDNotFound,
 	71: InvalidFetchSessionEpoch,
 	72: ListenerNotFound,
 	73: TopicDeletionDisabled,
