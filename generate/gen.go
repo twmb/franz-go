@@ -173,6 +173,7 @@ func (s Struct) WriteDefn(l *LineWriter) {
 		// Top level messages always have a Version field.
 		l.Write("\t// Version is the version of this message used with a Kafka broker.")
 		l.Write("Version int16")
+		l.Write("")
 	}
 	for i, f := range s.Fields {
 		if f.Comment != "" {
