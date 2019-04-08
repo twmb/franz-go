@@ -102,7 +102,7 @@ start:
 		<-parts.loading
 	}
 
-	if parts.loadErr != nil && errIsRetriable(parts.loadErr) {
+	if parts.loadErr != nil && (errIsRetriable(parts.loadErr) || isRetriableBrokerErr(parts.loadErr)) { // TODO cleanup
 		c.topicPartsMu.Lock()
 		partsNow := c.topicParts[topic]
 		if partsNow == parts {
@@ -272,6 +272,17 @@ func (c *Client) updateBrokers(brokers []kmsg.MetadataResponseBrokers) {
 	c.anyBroker = newAnyBroker
 }
 
+func (c *Client) Request(req kmsg.Request) (kmsg.Response, error) {
+	broker := c.broker()
+
+	var resp kmsg.Response
+	var err error
+	broker.wait(req, func(kresp kmsg.Response, kerr error) {
+		resp, err = kresp, kerr
+	})
+	return resp, err
+}
+
 // Admin issues an admin request to the controller broker, waiting for and
 // returning the Kafka response or an error.
 //
@@ -284,7 +295,7 @@ start:
 		if err := c.fetchBrokerMetadata(); err != nil {
 			if errIsRetriable(err) && retries < 3 {
 				retries++
-				time.Sleep(time.Second) // TODO make better
+				time.Sleep(c.cfg.client.retryBackoff)
 				goto start
 			}
 			return nil, err

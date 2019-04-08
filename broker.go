@@ -26,6 +26,7 @@ type promisedResp struct {
 type waitingResp struct {
 	resp    kmsg.Response
 	promise func(kmsg.Response, error)
+	err     error
 }
 
 type apiVersions [kmsg.MaxKey + 1]int16
@@ -136,35 +137,28 @@ func (b *broker) doSequencedAsyncPromise(
 	promise func(kmsg.Response, error),
 ) {
 	b.do(req, func(resp kmsg.Response, err error) {
-		if err != nil {
-			go promise(nil, err)
-			return
-		}
-
 		b.seqRespsMu.Lock()
-		defer b.seqRespsMu.Unlock()
-
-		b.seqResps = append(b.seqResps, waitingResp{resp, promise})
+		b.seqResps = append(b.seqResps, waitingResp{resp, promise, err})
 		if len(b.seqResps) == 1 {
-			go b.handleSeqResp()
+			go b.handleSeqResp(b.seqResps[0])
 		}
+		b.seqRespsMu.Unlock()
 	})
 }
 
 // handleSeqResp handles a sequenced response while there is one.
-func (b *broker) handleSeqResp() {
-start:
+func (b *broker) handleSeqResp(wr waitingResp) {
+more:
+	wr.promise(wr.resp, wr.err)
 
 	b.seqRespsMu.Lock()
-	waitingResp := b.seqResps[0]
 	b.seqResps = b.seqResps[1:]
-	more := len(b.seqResps) > 0
-	b.seqRespsMu.Unlock()
-
-	waitingResp.promise(waitingResp.resp, nil)
-	if more {
-		goto start
+	if len(b.seqResps) > 0 {
+		wr = b.seqResps[0]
+		b.seqRespsMu.Unlock()
+		goto more
 	}
+	b.seqRespsMu.Unlock()
 }
 
 // wait is the same as do, but this waits for the response to finish.
@@ -263,7 +257,6 @@ func (b *broker) loadConnection() (*brokerCxn, error) {
 	}
 
 	b.cxn = cxn
-	//time.AfterFunc(2000*time.Millisecond, func() { conn.Close() })
 	return cxn, nil
 }
 
@@ -421,7 +414,7 @@ func (cx *brokerCxn) waitResp(pr promisedResp) {
 	}
 }
 
-// handleResps handles all broker responses serially.
+// handleResps serially handles all broker responses for an single connection.
 func (cx *brokerCxn) handleResps() {
 	defer cx.die() // always track our death
 

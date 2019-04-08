@@ -18,7 +18,7 @@ type produceRequest struct {
 
 	acks             int16
 	timeout          int32
-	topicsPartitions map[string]map[int32]*recordBatch
+	topicsPartitions map[string]map[int32]topparBatch
 
 	compression []CompressionCodec
 }

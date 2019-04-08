@@ -4,9 +4,6 @@ import (
 	"math/bits"
 )
 
-// TODO KIP-359: if broker LeaderEpoch known, set it in produce request
-// and handle response errors
-
 // promisedRecord ties a record with the callback that will be called once
 // a batch is finally written and receives a response.
 type promisedRecord struct {
@@ -72,8 +69,7 @@ func (b *recordBatch) appendRecord(pr promisedRecord, nums recordNumbers) {
 
 // recordBatch is the type used for buffering records before they are written.
 type recordBatch struct {
-	tp    *toppar // who owns us, set when tried is set
-	tried bool    // if this was sent before
+	tried bool // if this was sent before and is thus now immutable
 
 	wireLength int32 // tracks total size this batch would currently encode as
 
