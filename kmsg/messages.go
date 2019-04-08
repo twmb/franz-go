@@ -6,7 +6,7 @@ import "github.com/twmb/kgo/kbin"
 
 // MaxKey is the maximum key used for any messages in this package.
 // Note that this value may change as Kafka adds more messages.
-const MaxKey = 22
+const MaxKey = 35
 
 // Header is user provided metadata for a record. Kafka does not look at
 // headers at all; they are solely for producers and consumers.
@@ -213,7 +213,7 @@ func (v *ProduceRequest) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.TopicData
-		dst = kbin.AppendArrayLen(dst, len(v))
+		dst = kbin.AppendArrayLen(dst, len(v), v == nil)
 		for i := range v {
 			v := &v[i]
 			{
@@ -222,7 +222,7 @@ func (v *ProduceRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Data
-				dst = kbin.AppendArrayLen(dst, len(v))
+				dst = kbin.AppendArrayLen(dst, len(v), v == nil)
 				for i := range v {
 					v := &v[i]
 					{
@@ -285,7 +285,7 @@ func (v *ProduceRequest) AppendTo(dst []byte) []byte {
 						}
 						{
 							v := v.Records
-							dst = kbin.AppendArrayLen(dst, len(v))
+							dst = kbin.AppendArrayLen(dst, len(v), v == nil)
 							for i := range v {
 								v := &v[i]
 								{
@@ -440,7 +440,7 @@ type ProduceResponseResponses struct {
 	PartitionResponses []ProduceResponseResponsesPartitionResponses
 }
 
-// ProduceResponse is returned for a ProduceRequest.
+// ProduceResponse is returned from a ProduceRequest.
 type ProduceResponse struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
@@ -604,7 +604,7 @@ func (v *FetchRequest) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Topics
-		dst = kbin.AppendArrayLen(dst, len(v))
+		dst = kbin.AppendArrayLen(dst, len(v), v == nil)
 		for i := range v {
 			v := &v[i]
 			{
@@ -613,7 +613,7 @@ func (v *FetchRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Partitions
-				dst = kbin.AppendArrayLen(dst, len(v))
+				dst = kbin.AppendArrayLen(dst, len(v), v == nil)
 				for i := range v {
 					v := &v[i]
 					{
@@ -642,7 +642,7 @@ func (v *FetchRequest) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.ForgottenTopicsData
-		dst = kbin.AppendArrayLen(dst, len(v))
+		dst = kbin.AppendArrayLen(dst, len(v), v == nil)
 		for i := range v {
 			v := &v[i]
 			{
@@ -651,7 +651,7 @@ func (v *FetchRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Partitions
-				dst = kbin.AppendArrayLen(dst, len(v))
+				dst = kbin.AppendArrayLen(dst, len(v), v == nil)
 				for i := range v {
 					v := v[i]
 					dst = kbin.AppendInt32(dst, v)
@@ -861,27 +861,51 @@ func (v *FetchResponse) ReadFrom(src []byte) error {
 }
 
 type ListOffsetsRequestTopicsPartitions struct {
+	// Partition is a partition of a topic to get offsets for.
 	Partition int32
 
+	// CurrentLeaderEpoch, proposed in KIP-320 and introduced in Kafka 2.1.0,
+	// allows brokers to check if the client is fenced (has an out of date
+	// leader) or is using an unknown leader.
 	CurrentLeaderEpoch int32 // v4+
 
+	// Timestamp controls which offset to return in a response for this
+	// partition.
+	//
+	// The offset returned will be the one of the message whose timestamp is
+	// the first timestamp greater than or equal to this requested timestamp.
+	//
+	// If no such message is found, the log end offset is returned.
+	//
+	// There exist two special timestamps: -2 corresponds to the earliest
+	// timestamp, and -1 corresponds to the latest.
 	Timestamp int64
-
-	MaxNumOffsets int32
 }
 type ListOffsetsRequestTopics struct {
+	// Topic is a topic to get offsets for.
 	Topic string
 
+	// Partitions is an array of partitions in a topic to get offsets for.
 	Partitions []ListOffsetsRequestTopicsPartitions
 }
 type ListOffsetsRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
+	// ReplicaID is the broker ID to get offsets from. As a Kafka client, use -1.
+	// The consumer replica ID (-1) causes requests to only succeed if issued
+	// against the leader broker.
 	ReplicaID int32
 
+	// IsolationLevel configures which record offsets are visible in the
+	// response. READ_UNCOMMITTED (0) makes all records visible. READ_COMMITTED
+	// (1) makes non-transactional and committed transactional records visible.
+	// READ_COMMITTED means all offsets smaller than the last stable offset and
+	// includes aborted transactions (allowing consumers to discard aborted
+	// records).
 	IsolationLevel int8 // v2+
 
+	// Topics is an array of topics to get offsets for.
 	Topics []ListOffsetsRequestTopics
 }
 
@@ -906,7 +930,7 @@ func (v *ListOffsetsRequest) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Topics
-		dst = kbin.AppendArrayLen(dst, len(v))
+		dst = kbin.AppendArrayLen(dst, len(v), v == nil)
 		for i := range v {
 			v := &v[i]
 			{
@@ -915,7 +939,7 @@ func (v *ListOffsetsRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Partitions
-				dst = kbin.AppendArrayLen(dst, len(v))
+				dst = kbin.AppendArrayLen(dst, len(v), v == nil)
 				for i := range v {
 					v := &v[i]
 					{
@@ -930,10 +954,6 @@ func (v *ListOffsetsRequest) AppendTo(dst []byte) []byte {
 						v := v.Timestamp
 						dst = kbin.AppendInt64(dst, v)
 					}
-					{
-						v := v.MaxNumOffsets
-						dst = kbin.AppendInt32(dst, v)
-					}
 				}
 			}
 		}
@@ -942,27 +962,81 @@ func (v *ListOffsetsRequest) AppendTo(dst []byte) []byte {
 }
 
 type ListOffsetsResponseResponsesPartitionResponses struct {
+	// Partition is the partition this array slot is for.
 	Partition int32
 
+	// TOPIC_AUTHORIZATION_FAILED is returned if the client is not authorized
+	// to describe the topic.
+	//
+	// INVALID_REQUEST is returned if the requested topic partitions had
+	// contained duplicates.
+	//
+	// KAFKA_STORAGE_EXCEPTION is returned if the topic / partition is in
+	// an offline log directory.
+	//
+	// UNSUPPORTED_FOR_MESSAGE_FORMAT is returned if the broker is using
+	// Kafka 0.10.0 messages and the requested timestamp was not -1 nor -2.
+	//
+	// NOT_LEADER_FOR_PARTITION is returned if the broker is not a leader
+	// for this partition. This means that the client has stale metadata.
+	// If the request used the debug replica ID, the returned error will
+	// be REPLICA_NOT_AVAILABLE.
+	//
+	// UNKNOWN_TOPIC_OR_PARTITION is returned if the broker does not know
+	// of the requested topic or partition.
+	//
+	// FENCED_LEADER_EPOCH is returned if the broker has a higher leader
+	// epoch than what the request sent.
+	//
+	// UNKNOWN_LEADER_EPOCH is returned if the request used a leader epoch
+	// that the broker does not know about.
+	//
+	// OFFSET_NOT_AVAILABLE, introduced in Kafka 2.2.0 with produce request
+	// v5+, is returned when talking to a broker that is a new leader while
+	// that broker's high water mark catches up. This avoids situations where
+	// the old broker returned higher offsets than the new broker would. Note
+	// that if unclean leader election is allowed, you could still run into
+	// the situation where offsets returned from list offsets requests are
+	// not monotonically increasing. This error is only returned if the
+	// request used the consumer replica ID (-1). If the client did not use
+	// a v5+ list offsets request, LEADER_NOT_AVAILABLE is returned.
+	// See KIP-207 for more details.
 	ErrorCode int16
 
+	// If the request was for the earliest or latest timestamp (-2 or -1), or
+	// if an offset could not be found after the requested one, this will be -1.
 	Timestamp int64
 
+	// Offset is the offset corresponding to the record on or after the
+	// requested timestamp. If one could not be found, this will be -1.
 	Offset int64 // v1+
 
+	// LeaderEpoch is the leader epoch of the record at this offset,
+	// or -1 if there was no leader epoch.
 	LeaderEpoch int32 // v4+
 }
 type ListOffsetsResponseResponses struct {
+	// Topic is the topic this array slot is for.
 	Topic string
 
+	// PartitionResponses is an array of partition responses corresponding to
+	// the requested partitions for a topic.
 	PartitionResponses []ListOffsetsResponseResponsesPartitionResponses
 }
+
+// ListOffsetsResponse is returned from a ListOffsetsRequest.
 type ListOffsetsResponse struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
+	// ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+	// after this request.
+	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
+	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
 	ThrottleTimeMs int32 // v2+
 
+	// Responses is an array of topic / partition responses corresponding to
+	// the requested topics and partitions.
 	Responses []ListOffsetsResponseResponses
 }
 
@@ -1067,7 +1141,7 @@ func (v *MetadataRequest) AppendTo(dst []byte) []byte {
 	_ = version
 	{
 		v := v.Topics
-		dst = kbin.AppendArrayLen(dst, len(v))
+		dst = kbin.AppendArrayLen(dst, len(v), v == nil)
 		for i := range v {
 			v := v[i]
 			dst = kbin.AppendString(dst, v)
@@ -1139,14 +1213,14 @@ type MetadataResponseTopicMetadataPartitionMetadata struct {
 type MetadataResponseTopicMetadata struct {
 	// ErrorCode is any error for a topic in a metadata request.
 	//
-	// TOPIC_AUTHORIZATION_FAILED: returned if the client is not authorized
+	// TOPIC_AUTHORIZATION_FAILED is returned if the client is not authorized
 	// to describe the topic, or if the metadata request specified topic auto
 	// creation, the topic did not exist, and the user lacks permission to create.
 	//
-	// UNKNOWN_TOPIC_OR_PARTITION: returned if a topic does not exist and
+	// UNKNOWN_TOPIC_OR_PARTITION is returned if a topic does not exist and
 	// the request did not specify autocreation.
 	//
-	// LEADER_NOT_AVAILABLE: returned if a new topic is created successfully
+	// LEADER_NOT_AVAILABLE is returned if a new topic is created successfully
 	// (since there is no leader on an immediately new topic).
 	//
 	// There can be a myriad of other errors for unsuccessful topic creation.
@@ -1168,7 +1242,7 @@ type MetadataResponseTopicMetadata struct {
 	AuthorizedOperations int32 // v8+
 }
 
-// MetadataResponse is returned for a MetdataRequest.
+// MetadataResponse is returned from a MetdataRequest.
 type MetadataResponse struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
@@ -1403,7 +1477,7 @@ func (v *LeaderAndISRRequest) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.PartitionStates
-		dst = kbin.AppendArrayLen(dst, len(v))
+		dst = kbin.AppendArrayLen(dst, len(v), v == nil)
 		for i := range v {
 			v := &v[i]
 			{
@@ -1428,7 +1502,7 @@ func (v *LeaderAndISRRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.ISR
-				dst = kbin.AppendArrayLen(dst, len(v))
+				dst = kbin.AppendArrayLen(dst, len(v), v == nil)
 				for i := range v {
 					v := v[i]
 					dst = kbin.AppendInt32(dst, v)
@@ -1440,7 +1514,7 @@ func (v *LeaderAndISRRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Replicas
-				dst = kbin.AppendArrayLen(dst, len(v))
+				dst = kbin.AppendArrayLen(dst, len(v), v == nil)
 				for i := range v {
 					v := v[i]
 					dst = kbin.AppendInt32(dst, v)
@@ -1454,7 +1528,7 @@ func (v *LeaderAndISRRequest) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.LiveLeaders
-		dst = kbin.AppendArrayLen(dst, len(v))
+		dst = kbin.AppendArrayLen(dst, len(v), v == nil)
 		for i := range v {
 			v := &v[i]
 			{
@@ -1572,7 +1646,7 @@ func (v *StopReplicaRequest) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Partitions
-		dst = kbin.AppendArrayLen(dst, len(v))
+		dst = kbin.AppendArrayLen(dst, len(v), v == nil)
 		for i := range v {
 			v := &v[i]
 			{
@@ -1716,7 +1790,7 @@ func (v *UpdateMetadataRequest) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.PartitionStates
-		dst = kbin.AppendArrayLen(dst, len(v))
+		dst = kbin.AppendArrayLen(dst, len(v), v == nil)
 		for i := range v {
 			v := &v[i]
 			{
@@ -1741,7 +1815,7 @@ func (v *UpdateMetadataRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.ISR
-				dst = kbin.AppendArrayLen(dst, len(v))
+				dst = kbin.AppendArrayLen(dst, len(v), v == nil)
 				for i := range v {
 					v := v[i]
 					dst = kbin.AppendInt32(dst, v)
@@ -1753,7 +1827,7 @@ func (v *UpdateMetadataRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Replicas
-				dst = kbin.AppendArrayLen(dst, len(v))
+				dst = kbin.AppendArrayLen(dst, len(v), v == nil)
 				for i := range v {
 					v := v[i]
 					dst = kbin.AppendInt32(dst, v)
@@ -1761,7 +1835,7 @@ func (v *UpdateMetadataRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.OfflineReplicas
-				dst = kbin.AppendArrayLen(dst, len(v))
+				dst = kbin.AppendArrayLen(dst, len(v), v == nil)
 				for i := range v {
 					v := v[i]
 					dst = kbin.AppendInt32(dst, v)
@@ -1771,7 +1845,7 @@ func (v *UpdateMetadataRequest) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.LiveBrokers
-		dst = kbin.AppendArrayLen(dst, len(v))
+		dst = kbin.AppendArrayLen(dst, len(v), v == nil)
 		for i := range v {
 			v := &v[i]
 			{
@@ -1780,7 +1854,7 @@ func (v *UpdateMetadataRequest) AppendTo(dst []byte) []byte {
 			}
 			if version >= 1 {
 				v := v.Endpoints
-				dst = kbin.AppendArrayLen(dst, len(v))
+				dst = kbin.AppendArrayLen(dst, len(v), v == nil)
 				for i := range v {
 					v := &v[i]
 					if version >= 1 {
@@ -1968,7 +2042,7 @@ func (v *OffsetCommitRequest) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Topics
-		dst = kbin.AppendArrayLen(dst, len(v))
+		dst = kbin.AppendArrayLen(dst, len(v), v == nil)
 		for i := range v {
 			v := &v[i]
 			{
@@ -1977,7 +2051,7 @@ func (v *OffsetCommitRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Partitions
-				dst = kbin.AppendArrayLen(dst, len(v))
+				dst = kbin.AppendArrayLen(dst, len(v), v == nil)
 				for i := range v {
 					v := &v[i]
 					{
@@ -2114,7 +2188,7 @@ type ApiVersionsResponseApiVersions struct {
 	MaxVersion int16
 }
 
-// ApiVersionsResponse is returned for an ApiVersionsRequest.
+// ApiVersionsResponse is returned from an ApiVersionsRequest.
 type ApiVersionsResponse struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
@@ -2205,7 +2279,7 @@ func (v *DeleteTopicsRequest) AppendTo(dst []byte) []byte {
 	_ = version
 	{
 		v := v.Topics
-		dst = kbin.AppendArrayLen(dst, len(v))
+		dst = kbin.AppendArrayLen(dst, len(v), v == nil)
 		for i := range v {
 			v := v[i]
 			dst = kbin.AppendString(dst, v)
@@ -2241,7 +2315,7 @@ type DeleteTopicsResponseTopicErrorCodes struct {
 	ErrorCode int16
 }
 
-// DeleteTopicsResponse is returned for a DeleteTopicsRequest.
+// DeleteTopicsResponse is returned from a DeleteTopicsRequest.
 // Version 3 added the TOPIC_DELETION_DISABLED error proposed in KIP-322
 // and introduced in Kafka 2.1.0. Prior, the request timed out.
 type DeleteTopicsResponse struct {
@@ -2344,6 +2418,7 @@ type InitProducerIDResponse struct {
 	// INVALID_TRANSACTION_TIMEOUT if timeout equal to over over transaction.max.timeout.ms or under 0
 	// COORDINATOR_LOAD_IN_PROGRESS
 	// NOT_COORDINATOR
+	// COORDINATOR_NOT_AVAILABLE
 	// CONCURRENT_TRANSACTIONS
 	ErrorCode int16
 
@@ -2375,6 +2450,164 @@ func (v *InitProducerIDResponse) ReadFrom(src []byte) error {
 		{
 			v := b.Int16()
 			s.ProducerEpoch = v
+		}
+	}
+	return b.Complete()
+}
+
+type DescribeLogDirsRequestTopics struct {
+	Topic string
+
+	Partitions []int32
+}
+type DescribeLogDirsRequest struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	Topics []DescribeLogDirsRequestTopics
+}
+
+func (*DescribeLogDirsRequest) Key() int16                 { return 35 }
+func (*DescribeLogDirsRequest) MaxVersion() int16          { return 1 }
+func (*DescribeLogDirsRequest) MinVersion() int16          { return 0 }
+func (v *DescribeLogDirsRequest) SetVersion(version int16) { v.Version = version }
+func (v *DescribeLogDirsRequest) GetVersion() int16        { return v.Version }
+func (v *DescribeLogDirsRequest) IsAdminRequest() bool     { return true }
+func (v *DescribeLogDirsRequest) ResponseKind() Response {
+	return &DescribeLogDirsResponse{Version: v.Version}
+}
+
+func (v *DescribeLogDirsRequest) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	{
+		v := v.Topics
+		dst = kbin.AppendArrayLen(dst, len(v), v == nil)
+		for i := range v {
+			v := &v[i]
+			{
+				v := v.Topic
+				dst = kbin.AppendString(dst, v)
+			}
+			{
+				v := v.Partitions
+				dst = kbin.AppendArrayLen(dst, len(v), v == nil)
+				for i := range v {
+					v := v[i]
+					dst = kbin.AppendInt32(dst, v)
+				}
+			}
+		}
+	}
+	return dst
+}
+
+type DescribeLogDirsResponseLogDirsTopicsPartitions struct {
+	Partition int32
+
+	Size int64
+
+	OffsetLag int64
+
+	IsFuture bool
+}
+type DescribeLogDirsResponseLogDirsTopics struct {
+	Topic string
+
+	Partitions []DescribeLogDirsResponseLogDirsTopicsPartitions
+}
+type DescribeLogDirsResponseLogDirs struct {
+	ErrorCode int16
+
+	LogDir string
+
+	Topics []DescribeLogDirsResponseLogDirsTopics
+}
+type DescribeLogDirsResponse struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	ThrottleTimeMs int32
+
+	LogDirs []DescribeLogDirsResponseLogDirs
+}
+
+func (v *DescribeLogDirsResponse) ReadFrom(src []byte) error {
+	version := v.Version
+	_ = version
+	b := kbin.Reader{Src: src}
+	{
+		s := v
+		{
+			v := b.Int32()
+			s.ThrottleTimeMs = v
+		}
+		{
+			v := s.LogDirs
+			a := v
+			for i := b.ArrayLen(); i > 0; i-- {
+				a = append(a, DescribeLogDirsResponseLogDirs{})
+				v := &a[len(a)-1]
+				{
+					s := v
+					{
+						v := b.Int16()
+						s.ErrorCode = v
+					}
+					{
+						v := b.String()
+						s.LogDir = v
+					}
+					{
+						v := s.Topics
+						a := v
+						for i := b.ArrayLen(); i > 0; i-- {
+							a = append(a, DescribeLogDirsResponseLogDirsTopics{})
+							v := &a[len(a)-1]
+							{
+								s := v
+								{
+									v := b.String()
+									s.Topic = v
+								}
+								{
+									v := s.Partitions
+									a := v
+									for i := b.ArrayLen(); i > 0; i-- {
+										a = append(a, DescribeLogDirsResponseLogDirsTopicsPartitions{})
+										v := &a[len(a)-1]
+										{
+											s := v
+											{
+												v := b.Int32()
+												s.Partition = v
+											}
+											{
+												v := b.Int64()
+												s.Size = v
+											}
+											{
+												v := b.Int64()
+												s.OffsetLag = v
+											}
+											{
+												v := b.Bool()
+												s.IsFuture = v
+											}
+										}
+									}
+									v = a
+									s.Partitions = v
+								}
+							}
+						}
+						v = a
+						s.Topics = v
+					}
+				}
+			}
+			v = a
+			s.LogDirs = v
 		}
 	}
 	return b.Complete()
