@@ -1,15 +1,14 @@
 package kgo
 
 import (
-	"crypto/tls"
 	"encoding/binary"
-	"fmt"
 	"io"
 	"math"
 	"net"
 	"sync"
 	"sync/atomic"
 
+	"github.com/twmb/kgo/kbin"
 	"github.com/twmb/kgo/kmsg"
 )
 
@@ -27,6 +26,7 @@ type promisedResp struct {
 type waitingResp struct {
 	resp    kmsg.Response
 	promise func(kmsg.Response, error)
+	err     error
 }
 
 type apiVersions [kmsg.MaxKey + 1]int16
@@ -43,8 +43,7 @@ type broker struct {
 	// This field is managed serially in handleReqs.
 	cxn *brokerCxn
 
-	// bufferedReq manages buffering writes for a produce request.
-	bufferedReq bufferedProduceRequest
+	bt *brokerToppars
 
 	// seqResps, guarded by seqRespsMu, contains responses that must be
 	// handled sequentially. These responses are handled asyncronously,
@@ -71,19 +70,18 @@ func unknownSeedID(seedNum int) int32 {
 }
 
 func (c *Client) newBroker(addr string, id int32) *broker {
-	b := &broker{
+	br := &broker{
 		cl: c,
 
 		id:   id,
 		addr: addr,
 
-		reqs: make(chan promisedReq, 100), // TODO size limitation for max inflight reqs?
+		reqs: make(chan promisedReq, 10),
 	}
-	b.bufferedReq.br = b
-	b.bufferedReq.reset()
-	go b.handleReqs()
+	br.bt = newBrokerToppars(br)
+	go br.handleReqs()
 
-	return b
+	return br
 }
 
 // stopForever permanently disables this broker.
@@ -96,7 +94,7 @@ func (b *broker) stopForever() {
 	// sitting on the rlock will block our lock
 	go func() {
 		for pr := range b.reqs {
-			pr.promise(nil, errClientClosing)
+			pr.promise(nil, ErrBrokerDead)
 		}
 	}()
 
@@ -126,19 +124,8 @@ func (b *broker) do(
 	b.dieMu.RUnlock()
 
 	if dead {
-		promise(nil, errBrokerDead)
+		promise(nil, ErrBrokerDead)
 	}
-}
-
-// doAsyncPromise is the same as do, but the promise is ran concurrently
-// so as to not block the broker's request/response processing.
-func (b *broker) doAsyncPromise(
-	req kmsg.Request,
-	promise func(kmsg.Response, error),
-) {
-	b.do(req, func(resp kmsg.Response, err error) {
-		go promise(resp, err)
-	})
 }
 
 // doSequencedAsyncPromise is the same as do, but all requests using this
@@ -150,35 +137,28 @@ func (b *broker) doSequencedAsyncPromise(
 	promise func(kmsg.Response, error),
 ) {
 	b.do(req, func(resp kmsg.Response, err error) {
-		if err != nil {
-			go promise(nil, err)
-			return
-		}
-
 		b.seqRespsMu.Lock()
-		defer b.seqRespsMu.Unlock()
-
-		b.seqResps = append(b.seqResps, waitingResp{resp, promise})
+		b.seqResps = append(b.seqResps, waitingResp{resp, promise, err})
 		if len(b.seqResps) == 1 {
-			go b.handleSeqResp()
+			go b.handleSeqResp(b.seqResps[0])
 		}
+		b.seqRespsMu.Unlock()
 	})
 }
 
 // handleSeqResp handles a sequenced response while there is one.
-func (b *broker) handleSeqResp() {
-start:
+func (b *broker) handleSeqResp(wr waitingResp) {
+more:
+	wr.promise(wr.resp, wr.err)
 
 	b.seqRespsMu.Lock()
-	waitingResp := b.seqResps[0]
 	b.seqResps = b.seqResps[1:]
-	more := len(b.seqResps) > 0
-	b.seqRespsMu.Unlock()
-
-	waitingResp.promise(waitingResp.resp, nil)
-	if more {
-		goto start
+	if len(b.seqResps) > 0 {
+		wr = b.seqResps[0]
+		b.seqRespsMu.Unlock()
+		goto more
 	}
+	b.seqRespsMu.Unlock()
 }
 
 // wait is the same as do, but this waits for the response to finish.
@@ -223,14 +203,19 @@ func (b *broker) handleReqs() {
 
 		// version bound our request
 		req := pr.req
-		brokerMax := cxn.versions[req.Key()]
+		key := req.Key()
+		if int(key) > len(cxn.versions[:]) {
+			pr.promise(nil, ErrUnknownRequestKey)
+			continue
+		}
+		brokerMax := cxn.versions[key]
 		ourMax := req.MaxVersion()
 		version := brokerMax
 		if brokerMax > ourMax {
 			version = ourMax
 		}
 		if version < req.MinVersion() {
-			pr.promise(nil, errBrokerTooOld)
+			pr.promise(nil, ErrBrokerTooOld)
 			continue
 		}
 		req.SetVersion(version) // always go for highest version
@@ -253,7 +238,7 @@ func (b *broker) handleReqs() {
 // loadConection returns the broker's connection, creating it if necessary
 // and returning an error of if that fails.
 func (b *broker) loadConnection() (*brokerCxn, error) {
-	if b.cxn != nil {
+	if b.cxn != nil && atomic.LoadInt64(&b.cxn.dead) == 0 {
 		return b.cxn, nil
 	}
 
@@ -279,18 +264,11 @@ func (b *broker) loadConnection() (*brokerCxn, error) {
 func (b *broker) connect() (net.Conn, error) {
 	conn, err := b.cl.cfg.client.dialFn(b.addr)
 	if err != nil {
-		return nil, maybeRetriableConnErr(err)
-	}
-	if b.cl.cfg.client.tlsCfg != nil {
-		tlsconn := tls.Client(conn, b.cl.cfg.client.tlsCfg)
-		// TODO SetDeadline, then clear
-		if err = tlsconn.Handshake(); err != nil {
-			conn.Close()
-			return nil, maybeRetriableConnErr(err)
+		if _, ok := err.(net.Error); ok {
+			return nil, ErrConnDead
 		}
-		conn = tlsconn
+		return nil, err
 	}
-
 	return conn, nil
 }
 
@@ -336,7 +314,11 @@ func (cx *brokerCxn) requestAPIVersions() (err error) {
 	}
 	resp := req.ResponseKind().(*kmsg.ApiVersionsResponse)
 	if err = resp.ReadFrom(rawResp); err != nil {
-		return maybeRetriableConnErr(err)
+		return ErrConnDead
+	}
+
+	for i := 0; i < kmsg.MaxKey; i++ {
+		cx.versions[i] = -1
 	}
 
 	for _, keyVersions := range resp.ApiVersions {
@@ -346,16 +328,6 @@ func (cx *brokerCxn) requestAPIVersions() (err error) {
 		cx.versions[keyVersions.ApiKey] = keyVersions.MaxVersion
 	}
 	return nil
-}
-
-// errWrite is the error returned when a message request write fails.
-type errWrite struct {
-	wrote int
-	err   error
-}
-
-func (e *errWrite) Error() string {
-	return fmt.Sprintf("err after %d bytes written: %v", e.wrote, e.err)
 }
 
 // writeRequest writes a message request to the broker connection, bumping the
@@ -368,7 +340,7 @@ func (cx *brokerCxn) writeRequest(req kmsg.Request) (int32, error) {
 		cx.clientID,
 	)
 	if _, err := cx.conn.Write(cx.reqBuf); err != nil {
-		return 0, maybeRetriableConnErr(err)
+		return 0, ErrConnDead
 	}
 	id := cx.correlationID
 	cx.correlationID++
@@ -380,25 +352,25 @@ func (cx *brokerCxn) writeRequest(req kmsg.Request) (int32, error) {
 func readResponse(conn io.Reader, correlationID int32) ([]byte, error) {
 	sizeBuf := make([]byte, 4)
 	if _, err := io.ReadFull(conn, sizeBuf[:4]); err != nil {
-		return nil, maybeRetriableConnErr(err)
+		return nil, ErrConnDead
 	}
 	size := int32(binary.BigEndian.Uint32(sizeBuf[:4]))
 	if size < 0 {
-		return nil, errInvalidResp
+		return nil, ErrInvalidRespSize
 	}
 
 	buf := make([]byte, size)
 	if _, err := io.ReadFull(conn, buf); err != nil {
-		return nil, maybeRetriableConnErr(err)
+		return nil, ErrConnDead
 	}
 
 	if len(buf) < 4 {
-		return nil, errNotEnoughData
+		return nil, kbin.ErrNotEnoughData
 	}
 	gotID := int32(binary.BigEndian.Uint32(buf))
 	buf = buf[4:]
 	if gotID != correlationID {
-		return nil, errCorrelationIDMismatch
+		return nil, ErrCorrelationIDMismatch
 	}
 	return buf, nil
 }
@@ -414,7 +386,7 @@ func (cx *brokerCxn) die() {
 
 	go func() {
 		for pr := range cx.resps {
-			pr.promise(nil, errBrokerConnectionDied)
+			pr.promise(nil, ErrConnDead)
 		}
 	}()
 
@@ -438,11 +410,11 @@ func (cx *brokerCxn) waitResp(pr promisedResp) {
 	cx.dieMu.RUnlock()
 
 	if dead {
-		pr.promise(nil, errBrokerConnectionDied)
+		pr.promise(nil, ErrConnDead)
 	}
 }
 
-// handleResps handles all broker responses serially.
+// handleResps serially handles all broker responses for an single connection.
 func (cx *brokerCxn) handleResps() {
 	defer cx.die() // always track our death
 

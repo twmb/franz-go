@@ -1,6 +1,12 @@
 package kgo
 
-import "time"
+import (
+	"sync/atomic"
+	"time"
+
+	"github.com/twmb/kgo/kerr"
+	"github.com/twmb/kgo/kmsg"
+)
 
 // func (p *Producer) BeginTransaction() *ProducerTransaction
 // func (p *ProducerTransaction) Produce(r *Record)
@@ -20,11 +26,17 @@ func (c *Client) Produce(
 	r *Record,
 	promise func(string, *Record, error),
 ) error {
+	if err := c.ensureProducerIDInit(); err != nil {
+		return err
+	}
 
 	partitions, err := c.partitionsForTopic(topic)
 	if err != nil {
 		return err
 	}
+
+	partitions.mu.RLock()
+	// TODO switch to defer? large loss.
 
 	ids := partitions.writableIDs
 	mapping := partitions.writable
@@ -33,6 +45,7 @@ func (c *Client) Produce(
 		mapping = partitions.all
 	}
 	if len(ids) == 0 {
+		partitions.mu.RUnlock()
 		return errNoPartitionIDs
 	}
 
@@ -44,15 +57,8 @@ func (c *Client) Produce(
 	id := ids[idIdx]
 	partition, exists := mapping[id]
 	if !exists {
+		partitions.mu.RUnlock()
 		return errUnknownPartition // should never happen
-	}
-
-	c.brokersMu.RLock()
-	broker, exists := c.brokers[partition.leader]
-	c.brokersMu.RUnlock()
-
-	if !exists {
-		return errUnknownBrokerForLeader
 	}
 
 	if r.Timestamp.IsZero() {
@@ -63,12 +69,68 @@ func (c *Client) Produce(
 		promise = noPromise
 	}
 
-	return broker.bufferedReq.buffer(
-		topic,
-		partition.id,
+	// TODO validate lengths here
+
+	// TODO KIP-359 will eventually introduce leader epoch to
+	// differentiation between UNKNOWN_LEADER_EPOCH (we have have more up
+	// to date info) and FENCED_LEADER_EPOCH.
+
+	partition.toppar.bufferRecord(
 		promisedRecord{
 			promise: promise,
 			r:       r,
 		},
 	)
+	partitions.mu.RUnlock()
+	return nil
+}
+
+func (c *Client) ensureProducerIDInit() error {
+	if atomic.LoadInt64(&c.producerIDLoaded) == 1 {
+		return nil
+	}
+
+	c.producerIDMu.Lock()
+	err := c.initProducerID()
+	c.producerIDMu.Unlock()
+
+	return err
+}
+
+func (c *Client) initProducerID() error {
+	broker := c.broker()
+
+	var initResp *kmsg.InitProducerIDResponse
+	var err error
+start:
+	broker.wait(
+		&kmsg.InitProducerIDRequest{ /*TODO transactional ID */ },
+		func(resp kmsg.Response, respErr error) {
+			if err = respErr; err != nil {
+				return
+			}
+			initResp = resp.(*kmsg.InitProducerIDResponse)
+		},
+	)
+
+	if err != nil {
+		if isRetriableBrokerErr(err) {
+			time.Sleep(c.cfg.client.retryBackoff)
+			goto start // TODO limit amount
+		} else {
+			return err
+		}
+	}
+
+	// TODO handle initResp err
+	if err = kerr.ErrorForCode(initResp.ErrorCode); err != nil {
+		return err
+	}
+
+	c.producerID = initResp.ProducerID
+	c.producerEpoch = initResp.ProducerEpoch
+
+	atomic.StoreInt64(&c.producerIDLoaded, 1)
+
+	return nil
 }

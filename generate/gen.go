@@ -44,7 +44,7 @@ func (a Array) WriteAppend(l *LineWriter) {
 	if a.IsVarintArray {
 		l.Write("dst = kbin.AppendVarint(dst, int32(len(v)))")
 	} else {
-		l.Write("dst = kbin.AppendArrayLen(dst, len(v))")
+		l.Write("dst = kbin.AppendArrayLen(dst, len(v), v == nil)")
 	}
 	l.Write("for i := range v {")
 	if _, isStruct := a.Inner.(Struct); isStruct {
@@ -173,6 +173,7 @@ func (s Struct) WriteDefn(l *LineWriter) {
 		// Top level messages always have a Version field.
 		l.Write("\t// Version is the version of this message used with a Kafka broker.")
 		l.Write("Version int16")
+		l.Write("")
 	}
 	for i, f := range s.Fields {
 		if f.Comment != "" {

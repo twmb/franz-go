@@ -2,15 +2,7 @@ package kgo
 
 import (
 	"math/bits"
-	"sync"
-	"time"
-
-	"github.com/twmb/kgo/kerr"
-	"github.com/twmb/kgo/kmsg"
 )
-
-// TODO KIP-359: if broker LeaderEpoch known, set it in produce request
-// and handle response errors
 
 // promisedRecord ties a record with the callback that will be called once
 // a batch is finally written and receives a response.
@@ -33,277 +25,9 @@ type promisedNumberedRecord struct {
 	pr promisedRecord
 }
 
-// bufferedProduceRequest is a produceRequest before it turns into a produce
-// request on the wire.
-type bufferedProduceRequest struct {
-	br *broker
-
-	mu sync.Mutex
-
-	// wireLength tracks how long everything that is buffered is, were this
-	// written as a produce request.
-	wireLength int32
-	nrecords   int
-
-	// forceTimer contains an AfterFunc that will force a
-	// flush for all buffered messages.
-	flushTimer        *time.Timer
-	flushTimerRunning bool
-	flushSeq          uint64
-
-	// transactionalID  *string  unused and unaccounted for right now
-	// timeout          int32    unused right now
-
-	batches map[string]map[int32]*recordBatch
-}
-
-func (b *bufferedProduceRequest) maybeFlush() {
-	if b.nrecords > b.br.cl.cfg.producer.maxBrokerBufdRecs {
-		b.flush()
-		return
-	}
-	if b.wireLength > b.br.cl.cfg.producer.brokerBufBytes {
-		b.flush()
-		return
-	}
-	if !b.flushTimerRunning {
-		b.beginFlushTimer()
-	}
-}
-
-func (b *bufferedProduceRequest) beginFlushTimer() {
-	b.flushTimerRunning = true
-	seq := b.flushSeq
-	b.flushTimer = time.AfterFunc(b.br.cl.cfg.producer.brokerBufDur, func() {
-		b.mu.Lock()
-		defer b.mu.Unlock()
-
-		if b.flushSeq == seq {
-			b.flush()
-		}
-	})
-}
-
-func (b *bufferedProduceRequest) timerFlush(seq uint64) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	if b.flushSeq == seq {
-		b.flush()
-		return
-	}
-}
-
-func (b *bufferedProduceRequest) flush() {
-	defer b.reset()
-
-	data := b.batches
-	req := &messageBufferedProduceRequest{
-		acks:    b.br.cl.cfg.producer.acks.val,
-		timeout: int32(time.Second / 1e6), // TODO
-		data:    data,
-
-		compression: b.br.cl.cfg.producer.compression,
-	}
-	b.br.doSequencedAsyncPromise(
-		req,
-		func(resp kmsg.Response, err error) {
-			if err != nil {
-				for topic, partitions := range data {
-					for _, batch := range partitions {
-						for _, record := range batch.records {
-							record.pr.promise(topic, record.pr.r, err)
-						}
-					}
-				}
-				return
-			}
-
-			pr := resp.(*kmsg.ProduceResponse)
-			for _, responseTopic := range pr.Responses {
-				topic := responseTopic.Topic
-				partitions, ok := data[topic]
-				if !ok {
-					continue // ???
-				}
-				delete(data, topic)
-
-				for _, responsePartition := range responseTopic.PartitionResponses {
-					partition := responsePartition.Partition
-					batch, ok := partitions[partition]
-					if !ok {
-						continue // ???
-					}
-					delete(partitions, partition)
-
-					err := kerr.ErrorForCode(responsePartition.ErrorCode)
-					// TODO:
-					// retriable errors
-					// duplicate sequence num
-					for i, record := range batch.records {
-						if err == nil {
-							record.pr.r.Offset = int64(i)
-							record.pr.r.Partition = partition
-							if record.pr.r.TimestampType.IsLogAppendTime() {
-								record.pr.r.Timestamp = time.Unix(0, responsePartition.LogAppendTime*1e4)
-							}
-						}
-						record.pr.promise(topic, record.pr.r, err)
-					}
-				}
-
-				for _, batch := range partitions {
-					for _, record := range batch.records {
-						record.pr.promise(topic, record.pr.r, errNoResp)
-					}
-				}
-			}
-			for topic, partitions := range data {
-				for _, batch := range partitions {
-					for _, record := range batch.records {
-						record.pr.promise(topic, record.pr.r, errNoResp)
-					}
-				}
-			}
-		},
-	)
-}
-
-func (b *bufferedProduceRequest) reset() {
-	if b.flushTimerRunning {
-		b.flushTimerRunning = false
-		b.flushTimer.Stop()
-		b.flushSeq++
-	}
-
-	b.batches = make(map[string]map[int32]*recordBatch, 1)
-	// TODO if adding transactionalID, increase length here
-	// Currently we use 4 bytes for the ID to signify the null
-	// transactional ID.
-	b.wireLength = 2 + 2 + 4 + 4 + // null string + acks + timeout + batches array len
-		messageRequestOverhead(b.br.cl.cfg.client.id)
-}
-
-func messageRequestOverhead(clientID *string) int32 {
-	const base = 4 + 2 + 2 + 4
-	if clientID == nil {
-		return base + 2
-	}
-	return base + 2 + int32(len(*clientID))
-}
-
-type messageResponseKind interface {
-	readFrom([]byte) error
-}
-
-func (b *bufferedProduceRequest) buffer(topic string, partition int32, pr promisedRecord) error {
-	// TODO check record lengths.
-
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-start:
-	partitionBatches, exists := b.batches[topic]
-	if !exists {
-		newOverhead := 2 + int32(len(topic)) + // new topic string
-			4 + // partitions array len
-			4 // partition number
-		newBatch, _, ok := b.newRecordBatch(topic, pr, newOverhead)
-		if !ok {
-			return errRecordTooLarge
-		}
-
-		// With or without flushing, we are creating this topic for this batch.
-		b.wireLength += newOverhead + newBatch.wireLength
-		b.nrecords++
-		b.batches[topic] = map[int32]*recordBatch{partition: newBatch}
-		b.maybeFlush()
-		return nil
-	}
-
-	recordBatch, exists := partitionBatches[partition]
-	if !exists {
-		const newOverhead = 4 // new partition number
-		newBatch, flushed, ok := b.newRecordBatch(topic, pr, newOverhead)
-		if !ok {
-			return errRecordTooLarge
-		}
-		if flushed {
-			goto start // recreate the topic now that it is gone
-		}
-
-		// We did not flush and we can fit the new batch: keep it.
-		b.wireLength += newOverhead + newBatch.wireLength
-		b.nrecords++
-		partitionBatches[partition] = newBatch
-		b.maybeFlush()
-		return nil
-	}
-
-	recordNums := recordBatch.calculateRecordNumbers(pr.r)
-	if recordBatch.wireLength+recordNums.wireLength > b.br.cl.cfg.producer.maxRecordBatchBytes {
-		b.flush()
-		goto start // would overflow batch, flush and try again
-	}
-	canFit, flushed := b.tryFitLength(recordNums.wireLength)
-	if !canFit {
-		return errRecordTooLarge
-	}
-	if flushed {
-		goto start // topic & partitions are gone
-	}
-
-	recordBatch.appendRecord(pr, recordNums)
-	b.maybeFlush()
-	return nil
-}
-
-// newRecordBatch tries to create a new recordBatch for a record.
-//
-// newOverhead is the extra overhead that will come along with creating this
-// new batch.
-//
-// This returns the new batch, if a flush occured, and if the record can be
-// kept or not due to size reasons.
-func (b *bufferedProduceRequest) newRecordBatch(
-	topic string, // only used for the promise
-	pr promisedRecord,
-	newOverhead int32,
-) (*recordBatch, bool, bool) {
-	newBatch := newRecordBatch(pr)
-	if newBatch.wireLength > b.br.cl.cfg.producer.maxRecordBatchBytes {
-		return nil, false, false
-	}
-
-	extraLength := newOverhead + newBatch.wireLength
-	canFit, flushed := b.tryFitLength(extraLength)
-	if !canFit {
-		return nil, flushed, false
-	}
-
-	return newBatch, flushed, true
-}
-
-// Returns if some extra length can be buffered. If no, this tries flushing
-// and checks again.
-func (b *bufferedProduceRequest) tryFitLength(extraLength int32) (canFit, flushed bool) {
-	maxBytes := b.br.cl.cfg.producer.maxBrokerWriteBytes
-	if b.wireLength+extraLength > maxBytes {
-		b.flush()
-
-		// Even after a flush, the extra overhead could cause
-		// an overflow.
-		if b.wireLength+extraLength > maxBytes {
-			return false, false
-		}
-		return true, true
-	}
-	return true, false
-}
-
 // newRecordBatch returns a new record batch for a topic and partition
 // containing the given record.
-func newRecordBatch(pr promisedRecord) *recordBatch {
+func (bt *brokerToppars) newRecordBatch(firstSeq int32, pr promisedRecord) *recordBatch {
 	const recordBatchOverhead = 4 + // NULLABLE_BYTES overhead
 		8 + // firstOffset
 		4 + // batchLength
@@ -314,13 +38,16 @@ func newRecordBatch(pr promisedRecord) *recordBatch {
 		4 + // lastOffsetDelta
 		8 + // firstTimestamp
 		8 + // maxTimestamp
-		8 + // producerId
+		8 + // producerID
 		2 + // producerEpoch
 		4 + // baseSequence
 		4 // record array length
 	b := &recordBatch{
 		firstTimestamp: pr.r.Timestamp.UnixNano() / 1e6,
 		records:        make([]promisedNumberedRecord, 0, 10),
+		producerID:     bt.br.cl.producerID,
+		producerEpoch:  bt.br.cl.producerEpoch,
+		baseSequence:   firstSeq,
 	}
 	pnr := promisedNumberedRecord{
 		n:  b.calculateRecordNumbers(pr.r),
@@ -342,16 +69,17 @@ func (b *recordBatch) appendRecord(pr promisedRecord, nums recordNumbers) {
 
 // recordBatch is the type used for buffering records before they are written.
 type recordBatch struct {
+	tried bool // if this was sent before and is thus now immutable
+
 	wireLength int32 // tracks total size this batch would currently encode as
 
 	attrs          int16
 	firstTimestamp int64 // since unix epoch, in millis
 
-	// The following three are used for idempotent message delivery
-	// following an InitProducerId request.
-	// producerId    int64  defined as -1 until we support it
-	// producerEpoch int16  defined as -1 until we support it
-	// baseSequence  int32  defined as -1 until we support it
+	// The following three are used for idempotent message delivery.
+	producerID    int64
+	producerEpoch int16
+	baseSequence  int32
 
 	records []promisedNumberedRecord
 }

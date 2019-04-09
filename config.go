@@ -1,9 +1,7 @@
 package kgo
 
 import (
-	"crypto/tls"
 	"fmt"
-	"math"
 	"net"
 	"regexp"
 	"strconv"
@@ -16,6 +14,10 @@ import (
 // TODO STRICT LENGTH VALIDATION
 // max bytes: 1G
 // client id length: int16
+// delivery.timeout.ms? (120s, upper bound on how long til acknowledged)
+// max.block.ms? (60s, upper bound on how long blocked on Produce)
+// reconnect.backoff.max.ms? (1s)
+// reconnect.backoff.ms
 
 type (
 	// Opt is an option to configure a client.
@@ -50,17 +52,16 @@ func NewClient(seedBrokers []string, opts ...Opt) (*Client, error) {
 		client: clientCfg{
 			id:     &defaultID,
 			dialFn: stddial,
+
+			retryBackoff:   100 * time.Millisecond,
+			requestTimeout: int32(30 * time.Second / 1e4),
 		},
 		producer: producerCfg{
 			acks:        RequireLeaderAck(),
 			compression: []CompressionCodec{NoCompression()},
 
-			maxRecordBatchBytes: 1000000,       // Kafka max.message.bytes default is 1000012
-			maxBrokerWriteBytes: 100 << 20,     // Kafka socket.request.max.bytes default is 100<<20
-			maxBrokerBufdRecs:   math.MaxInt32, // unlimited
-
-			brokerBufBytes: 1 << 30, // "unbounded"; hard stop at maxBrokerWriteBytes
-			brokerBufDur:   250 * time.Millisecond,
+			maxRecordBatchBytes: 1000000,   // Kafka max.message.bytes default is 1000012
+			maxBrokerWriteBytes: 100 << 20, // Kafka socket.request.max.bytes default is 100<<20
 
 			partitioner: RandomPartitioner(),
 		},
@@ -122,7 +123,7 @@ func NewClient(seedBrokers []string, opts ...Opt) (*Client, error) {
 		controllerID: unknownControllerID,
 
 		brokers:    make(map[int32]*broker),
-		topicParts: make(map[string]*partitions),
+		topicParts: make(map[string]*topicPartitions),
 	}
 	c.rng.Seed(uint64(time.Now().UnixNano()))
 
@@ -149,7 +150,11 @@ type (
 	clientCfg struct {
 		id     *string
 		dialFn func(string) (net.Conn, error)
-		tlsCfg *tls.Config
+
+		// tlsCfg *tls.Config
+
+		retryBackoff   time.Duration
+		requestTimeout int32
 
 		// TODO Conn timeouts? Or, DialFn wrapper?
 		// TODO SASL
@@ -176,14 +181,27 @@ func WithClientID(id *string) OptClient {
 }
 
 // WithDialFn uses fn to dial addresses, overriding the default dialer that
-// uses a 10s timeout.
+// uses a 10s timeout and no TLS.
 func WithDialFn(fn func(string) (net.Conn, error)) OptClient {
 	return clientOpt{func(cfg *clientCfg) { cfg.dialFn = fn }}
 }
 
-// WithTLSCfg uses tlsCfg for all connections.
-func WithTLSCfg(tlsCfg *tls.Config) OptClient {
-	return clientOpt{func(cfg *clientCfg) { cfg.tlsCfg = tlsCfg }}
+// WithRetryBackoff sets how long to wait before retrying failed but retriable
+// requests, overriding the default 100ms.
+//
+// This corresponds to Kafka's retry.backoff.ms setting.
+func WithRetryBackoff(backoff time.Duration) OptClient {
+	return clientOpt{func(cfg *clientCfg) { cfg.retryBackoff = backoff }}
+}
+
+// WithRequestTimeout sets how long Kafka broker's are allowed to respond
+// to requests, overriding the default 30s. If a broker exceeds this duration,
+// it will reply with a request timeout error.
+//
+// This corresponds to Kafka's request.timeout.ms setting. It is invalid to use
+// >596h (math.MaxInt32 milliseconds).
+func WithRequestTimeout(limit time.Duration) OptClient {
+	return clientOpt{func(cfg *clientCfg) { cfg.requestTimeout = int32(limit / 1e6) }}
 }
 
 // ********** PRODUCER CONFIGURATION **********
@@ -205,19 +223,12 @@ type (
 
 		maxRecordBatchBytes int32
 		maxBrokerWriteBytes int32
-		maxBrokerBufdRecs   int
-
-		brokerBufBytes int32
-		brokerBufDur   time.Duration
 
 		partitioner Partitioner
 
 		// TODO:
 		// retries
 		// retry backoff
-
-		// MAYBE:
-		// idempotency
 	}
 )
 
@@ -239,6 +250,10 @@ func (cfg *producerCfg) validate() error {
 	if cfg.maxBrokerWriteBytes < cfg.maxRecordBatchBytes {
 		return fmt.Errorf("max broker write bytes %d is erroneously less than max record batch bytes %d", cfg.maxBrokerWriteBytes, cfg.maxRecordBatchBytes)
 	}
+
+	// TODO maxBrokerWriteBytes should be > 2*max.MathInt16 (client ID,
+	// transactional ID) + maxRecordBatchBytes + 2+2+4+2+2+2+4+4 (message
+	// request + producer thing) + 2 (transactional ID)
 
 	// upper bound broker write bytes to avoid any problems with
 	// overflowing numbers in calculations.
@@ -297,14 +312,17 @@ func WithCompressionPreference(preference ...CompressionCodec) OptProducer {
 }
 
 // WithMaxRecordBatchBytes upper bounds the size of a record batch, overriding
-// the default 100MB.
+// the default 1MB.
 //
 // This corresponds to Kafka's max.message.bytes, which defaults to 1,000,012
-// bytes (just over 100MB).
+// bytes (just over 1MB).
 //
 // RecordBatch's are independent of a ProduceRequest: a record batch is
-// specific to a topic, whereas the produce request can contain many record
-// batches for many topics.
+// specific to a topic and partition, whereas the produce request can contain
+// many record batches for many topics.
+//
+// If a single record encodes larger than this number (before compression), it
+// will will not be written and a callback will have the appropriate error.
 //
 // Note that this is the maximum size of a record batch before compression.
 // If a batch compresses poorly and actually grows the batch, the uncompressed
@@ -316,31 +334,10 @@ func WithMaxRecordBatchBytes(v int32) OptProducer {
 // WithBrokerMaxWriteBytes upper bounds the number of bytes written to a broker
 // connection in a single write, overriding the default 100MiB.
 //
-// If a single record encodes larger than this number, it will will not be
-// written and a callback will have the appropriate error.
-//
 // This number corresponds to the a broker's socket.request.max.bytes, which
 // defaults to 100MiB.
 func WithBrokerMaxWriteBytes(v int32) OptProducer {
 	return producerOpt{func(cfg *producerCfg) { cfg.maxBrokerWriteBytes = v }}
-}
-
-// WithBrokerBufferBytes sets when a broker will attempt to flush a produce
-// request, overriding the unbounded default.
-//
-// Note that this setting can increase memory usage on a per broker basis,
-// since each broker may buffer many records in memory before hitting the
-// buffer byte limit.
-//
-// To disable record buffering, set this to zero.
-func WithBrokerBufferBytes(v int32) OptProducer {
-	return producerOpt{func(cfg *producerCfg) { cfg.brokerBufBytes = v }}
-}
-
-// WithBrokerMaxBufferDuration sets the maximum amount of time that brokers
-// will buffer records before writing, overriding the default 250ms.
-func WithBrokerMaxBufferDuration(d time.Duration) OptProducer {
-	return producerOpt{func(cfg *producerCfg) { cfg.brokerBufDur = d }}
 }
 
 // WithPartitioner uses the given partitioner to partition records, overriding

@@ -9,38 +9,38 @@ import (
 
 var crc32c = crc32.MakeTable(crc32.Castagnoli) // record crc's use Castagnoli table
 
-// messageBufferedProduceRequest is a kmsg.Request that is used when we want to
+// produceRequest is a kmsg.Request that is used when we want to
 // flush our buffered records.
 //
 // It is the same as kmsg.ProduceRequest, but with a custom AppendTo.
-type messageBufferedProduceRequest struct {
+type produceRequest struct {
 	version int16
 
-	acks    int16
-	timeout int32
-	data    map[string]map[int32]*recordBatch
+	acks             int16
+	timeout          int32
+	topicsPartitions map[string]map[int32]topparBatch
 
 	compression []CompressionCodec
 }
 
-func (*messageBufferedProduceRequest) Key() int16           { return 0 }
-func (*messageBufferedProduceRequest) MaxVersion() int16    { return 7 }
-func (*messageBufferedProduceRequest) MinVersion() int16    { return 3 }
-func (m *messageBufferedProduceRequest) SetVersion(v int16) { m.version = v }
-func (m *messageBufferedProduceRequest) GetVersion() int16  { return m.version }
-func (m *messageBufferedProduceRequest) AppendTo(dst []byte) []byte {
-	if m.version >= 3 {
+func (*produceRequest) Key() int16           { return 0 }
+func (*produceRequest) MaxVersion() int16    { return 7 }
+func (*produceRequest) MinVersion() int16    { return 3 }
+func (p *produceRequest) SetVersion(v int16) { p.version = v }
+func (p *produceRequest) GetVersion() int16  { return p.version }
+func (p *produceRequest) AppendTo(dst []byte) []byte {
+	if p.version >= 3 {
 		dst = kbin.AppendNullableString(dst, nil) // TODO transactional ID
 	}
 
-	compressor := loadProduceCompressor(m.compression, m.version)
+	compressor := loadProduceCompressor(p.compression, p.version)
 
-	dst = kbin.AppendInt16(dst, m.acks)
-	dst = kbin.AppendInt32(dst, m.timeout)
-	dst = kbin.AppendArrayLen(dst, len(m.data))
-	for topic, partitions := range m.data {
+	dst = kbin.AppendInt16(dst, p.acks)
+	dst = kbin.AppendInt32(dst, p.timeout)
+	dst = kbin.AppendArrayLen(dst, len(p.topicsPartitions), p.topicsPartitions == nil)
+	for topic, partitions := range p.topicsPartitions {
 		dst = kbin.AppendString(dst, topic)
-		dst = kbin.AppendArrayLen(dst, len(partitions))
+		dst = kbin.AppendArrayLen(dst, len(partitions), partitions == nil)
 		for partition, batch := range partitions {
 			dst = kbin.AppendInt32(dst, partition)
 			dst = batch.appendTo(dst, compressor)
@@ -49,8 +49,8 @@ func (m *messageBufferedProduceRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 
-func (m *messageBufferedProduceRequest) ResponseKind() kmsg.Response {
-	return &kmsg.ProduceResponse{Version: m.version}
+func (p *produceRequest) ResponseKind() kmsg.Response {
+	return &kmsg.ProduceResponse{Version: p.version}
 }
 
 func (r *recordBatch) appendTo(dst []byte, compressor *compressor) []byte {
@@ -80,11 +80,11 @@ func (r *recordBatch) appendTo(dst []byte, compressor *compressor) []byte {
 	lastRecord := r.records[len(r.records)-1]
 	dst = kbin.AppendInt64(dst, r.firstTimestamp+int64(lastRecord.n.timestampDelta))
 
-	dst = kbin.AppendInt64(dst, -1) // producerId
-	dst = kbin.AppendInt16(dst, -1) // producerEpoch
-	dst = kbin.AppendInt32(dst, -1) // baseSequence
+	dst = kbin.AppendInt64(dst, r.producerID)
+	dst = kbin.AppendInt16(dst, r.producerEpoch)
+	dst = kbin.AppendInt32(dst, r.baseSequence)
 
-	dst = kbin.AppendArrayLen(dst, len(r.records))
+	dst = kbin.AppendArrayLen(dst, len(r.records), r.records == nil)
 	recordsAt := len(dst)
 	for _, pnr := range r.records {
 		dst = pnr.appendTo(dst)
