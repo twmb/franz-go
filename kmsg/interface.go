@@ -5,7 +5,9 @@
 // adds new fields over time without bumping the major API version.
 package kmsg
 
-import "github.com/twmb/kgo/kbin"
+import (
+	"github.com/twmb/kgo/kbin"
+)
 
 // Request represents a type that can be requested to Kafka.
 type Request interface {
@@ -69,4 +71,9 @@ func AppendRequest(
 	dst = r.AppendTo(dst)
 	kbin.AppendInt32(dst[:0], int32(len(dst[4:])))
 	return dst
+}
+
+// StringPtr is a helper to return a pointer to a string.
+func StringPtr(in string) *string {
+	return &in
 }
