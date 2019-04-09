@@ -292,50 +292,48 @@ func (c *Client) updateBrokers(brokers []kmsg.MetadataResponseBrokers) {
 	c.anyBroker = newAnyBroker
 }
 
+// Request issues a request to Kafka, waiting for and returning the response or
+// an error.
+//
+// If the request is an admin request, this will issue it to the Kafka
+// controller. If the controller ID is unknown, this will attempt to fetch it.
+// If the fetch errors, this will return an unknown controller error.
 func (c *Client) Request(req kmsg.Request) (kmsg.Response, error) {
-	broker := c.broker()
+	var broker *broker
+
+	if _, admin := req.(kmsg.AdminRequest); admin {
+		retries := 0
+	start:
+		if c.controllerID < 0 {
+			if err := c.fetchBrokerMetadata(); err != nil {
+				if isRetriableErr(err) && retries < 3 {
+					retries++
+					time.Sleep(c.cfg.client.retryBackoff)
+					goto start
+				}
+				return nil, err
+			}
+			if c.controllerID < 0 {
+				return nil, errUnknownController
+			}
+		}
+
+		c.brokersMu.RLock()
+		controller, exists := c.brokers[c.controllerID]
+		c.brokersMu.RUnlock()
+
+		if !exists {
+			return nil, errUnknownController
+		}
+		broker = controller
+
+	} else {
+		broker = c.broker()
+	}
 
 	var resp kmsg.Response
 	var err error
 	broker.wait(req, func(kresp kmsg.Response, kerr error) {
-		resp, err = kresp, kerr
-	})
-	return resp, err
-}
-
-// Admin issues an admin request to the controller broker, waiting for and
-// returning the Kafka response or an error.
-//
-// If the controller ID is unknown, this will attempt to fetch it. If the
-// fetch errors, this will return an unknown controller error.
-func (c *Client) Admin(req kmsg.AdminRequest) (kmsg.Response, error) {
-	retries := 0
-start:
-	if c.controllerID < 0 {
-		if err := c.fetchBrokerMetadata(); err != nil {
-			if isRetriableErr(err) && retries < 3 {
-				retries++
-				time.Sleep(c.cfg.client.retryBackoff)
-				goto start
-			}
-			return nil, err
-		}
-		if c.controllerID < 0 {
-			return nil, errUnknownController
-		}
-	}
-
-	c.brokersMu.RLock()
-	controller, exists := c.brokers[c.controllerID]
-	c.brokersMu.RUnlock()
-
-	if !exists {
-		return nil, errUnknownController
-	}
-
-	var resp kmsg.Response
-	var err error
-	controller.wait(req, func(kresp kmsg.Response, kerr error) {
 		resp, err = kresp, kerr
 	})
 	return resp, err
