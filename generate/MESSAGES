@@ -390,7 +390,7 @@ MetadataRequest => key 3, max version 8
   // Topics is a list of topics to return metadata about. If this is null,
   // all topics are included. If this is empty, no topics are.
   // For v0 (<Kafka 0.10.0.0), if this is empty, all topics are included.
-  Topics: [string]
+  Topics: nullable[string]
   // AllowAutoTopicCreation, introduced in Kafka 0.11.0.0, allows topic
   // auto creation of the topics in this request if they do not exist.
   AllowAutoTopicCreation: bool // v4+
@@ -611,7 +611,83 @@ ApiVersionsResponse => from ApiVersionsRequest
   // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
   ThrottleTimeMs: int32 // v1+
 
-// DeleteTopicsRequest deletes a Kafka topic.
+// CreateTopicsRequest creates Kafka topics.
+CreateTopicsRequest => key 19, max version 3, admin
+  // Topics is an array of topics to attempt to create.
+  Topics: [=>]
+    // Topic is a topic to create.
+    Topic: string
+    // NumPartitions is how many partitions to give a topic.
+    NumPartitions: int32
+    // ReplicationFactor is how many replicas every partition must have.
+    ReplicationFactor: int16
+    // ReplicaAssignment is an array to manually dicate replicas and their
+    // partitions for a topic. If using this, both ReplicationFactor and
+    // NumPartitions must be -1.
+    ReplicaAssignment: [=>]
+      // Partition is a partition to create.
+      Partition: int32
+      // Replicas are broker IDs the partition must exist on.
+      Replicas: [int32]
+    // ConfigEntries is an array of key value config pairs for a topic.
+    // These correspond to Kafka Topic-Level Configs: http://kafka.apache.org/documentation/#topicconfigs.
+    ConfigEntries: [=>]
+      // ConfigName is a topic level config key (e.g. segment.bytes).
+      ConfigName: string
+      // ConfigValue is a topic level config value (e.g. 1073741824)
+      ConfigValue: nullable-string
+  // Timeout is how long to allow for this request.
+  Timeout: int32
+  // ValidateOnly is makes this request a dry-run; everything is validated but
+  // no topics are actually created.
+  ValidateOnly: bool // v1+
+
+// CreateTopicsResponse is returned from a CreateTopicsRequest.
+CreateTopicsResponse => from CreateTopicsRequest
+  // ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+  // after this request.
+  // For Kafka < 2.0.0, the throttle is applied before issuing a response.
+  // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
+  ThrottleTimeMs: int32 // v2+
+  // TopicErrors is an the array of requested topics for creation and their
+  // creation errors.
+  TopicErrors: [=>]
+    // Topic is the topic this error response corresponds to.
+    Topic: string
+    // NOT_CONTROLLER is returned if the request was not issued to a Kafka
+    // controller.
+    //
+    // TOPIC_AUTHORIZATION_FAILED is returned if the client is not authorized
+    //
+    // INVALID_REQUEST is returned if the same topic occurred multiple times
+    // in the request.
+    //
+    // POLICY_VIOLATION is returned if the broker is using a
+    // create.topic.policy.class.name that returns a policy violation.
+    //
+    // INVALID_TOPIC_EXCEPTION if the topic collides with another topic when
+    // both topic's names' periods are replaced with underscores (e.g.
+    // topic.foo and topic_foo collide).
+    //
+    // TOPIC_ALREADY_EXISTS is returned if the topic already exists.
+    //
+    // INVALID_PARTITIONS is returned if the requested number of partitions is
+    // <= 0.
+    //
+    // INVALID_REPLICATION_FACTOR is returned if the requested replication
+    // factor is <= 0.
+    //
+    // INVALID_REPLICA_ASSIGNMENT is returned if not all partitions have the same
+    // number of replicas, or duplica replicas are assigned, or the partitions
+    // are not consecutive starting from 0.
+    //
+    // INVALID_CONFIG is returned if the requested topic config is invalid.
+    // to create a topic.
+    ErrorCode: int16
+    // ErrorMessage is an informative message if the topic creation failed.
+    ErrorMessage: nullable-string // v1+
+
+// DeleteTopicsRequest deletes Kafka topics.
 DeleteTopicsRequest => key 20, max version 3, admin
   // Topics is an array of topics to delete.
   Topics: [string]
