@@ -52,6 +52,9 @@ func NewClient(seedBrokers []string, opts ...Opt) (*Client, error) {
 		client: clientCfg{
 			id:     &defaultID,
 			dialFn: stddial,
+
+			retryBackoff:   100 * time.Millisecond,
+			requestTimeout: int32(30 * time.Second / 1e4),
 		},
 		producer: producerCfg{
 			acks:        RequireLeaderAck(),
@@ -120,7 +123,7 @@ func NewClient(seedBrokers []string, opts ...Opt) (*Client, error) {
 		controllerID: unknownControllerID,
 
 		brokers:    make(map[int32]*broker),
-		topicParts: make(map[string]*partitions),
+		topicParts: make(map[string]*topicPartitions),
 	}
 	c.rng.Seed(uint64(time.Now().UnixNano()))
 
@@ -129,8 +132,6 @@ func NewClient(seedBrokers []string, opts ...Opt) (*Client, error) {
 		c.brokers[b.id] = b
 		c.anyBroker = append(c.anyBroker, b)
 	}
-
-	c.initProducerID() // TODO move to proper area (once-ish in Produce)
 
 	return c, nil
 }
@@ -200,7 +201,7 @@ func WithRetryBackoff(backoff time.Duration) OptClient {
 // This corresponds to Kafka's request.timeout.ms setting. It is invalid to use
 // >596h (math.MaxInt32 milliseconds).
 func WithRequestTimeout(limit time.Duration) OptClient {
-	return clientOpt{func(cfg *clientCfg) { cfg.requestTimeout = int32(limit.Nanoseconds() / 1e6) }}
+	return clientOpt{func(cfg *clientCfg) { cfg.requestTimeout = int32(limit / 1e6) }}
 }
 
 // ********** PRODUCER CONFIGURATION **********

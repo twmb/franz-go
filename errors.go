@@ -47,14 +47,21 @@ var (
 	// If this error happens, the client closes the broker connection.
 	ErrInvalidRespSize = errors.New("invalid response size less than zero")
 
+	// ErrInvalidResp is a generic error used when Kafka responded
+	// unexpectedly.
+	ErrInvalidResp = errors.New("invalid response")
+
 	// ErrCorrelationIDMismatch is a temporary error returned when Kafka
 	// replies with a different correlation ID than we were expecting for
 	// the request the client issued.
 	//
 	// If this error happens, the client closes the broker connection.
 	ErrCorrelationIDMismatch = errors.New("correlation ID mismatch")
+
+	ErrPartitionDeleted = errors.New("TODO")
 )
 
+// TODO ErrBrokerDead is retriable, but topics need to be remapped.
 func isRetriableBrokerErr(err error) bool {
 	switch err {
 	case ErrBrokerDead,
@@ -66,12 +73,9 @@ func isRetriableBrokerErr(err error) bool {
 	return false
 }
 
-func errIsRetriable(err error) bool {
-	switch err := err.(type) {
-	case *kerr.Error:
+func isRetriableErr(err error) bool {
+	if err, ok := err.(*kerr.Error); ok {
 		return kerr.IsRetriable(err)
-	case *clientErr:
-		return true
 	}
-	return false
+	return isRetriableBrokerErr(err)
 }

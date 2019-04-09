@@ -14,21 +14,27 @@ import (
 	"github.com/twmb/kgo/kmsg"
 )
 
-type partition struct {
-	id          int32
-	leader      int32
-	leaderEpoch int32
-	replicas    []int32
-	isr         []int32
-	offline     []int32
+type topicPartition struct {
+	topic     string // our topic
+	partition int32  // our partition number
+
+	leader      int32 // our current broker leader
+	leaderEpoch int32 // our current broker leader epoch
+
+	toppar topparBuffer
+
+	writable bool
+
+	replicas []int32
+	isr      []int32
+	offline  []int32
 }
 
-type partitions struct {
+type topicPartitions struct {
 	loaded  int64
 	loadErr error
 
-	mu       sync.RWMutex
-	migrated bool
+	mu sync.RWMutex
 
 	// allIDs and writableIDs correspond to the partition IDs in the
 	// two slices below. We save the IDs here as well since that is
@@ -36,14 +42,13 @@ type partitions struct {
 	allIDs      []int32
 	writableIDs []int32
 
-	all      map[int32]*partition // id => partition
-	writable map[int32]*partition // id => partition, eliding partitions with no leader
+	all      map[int32]*topicPartition // partition num => partition
+	writable map[int32]*topicPartition // partition num => partition, eliding partitions with no leader
 
-	loading   chan struct{}
-	migrateCh chan struct{}
+	loading chan struct{}
 }
 
-func (p *partitions) loadComplete() {
+func (p *topicPartitions) loadComplete() {
 	atomic.StoreInt64(&p.loaded, 1)
 	close(p.loading)
 }
@@ -61,26 +66,28 @@ type Client struct {
 
 	controllerID int32 // atomic
 
-	producerID    int64
-	producerEpoch int16
+	producerID       int64
+	producerEpoch    int16
+	producerIDLoaded int64
+	producerIDMu     sync.Mutex
 
 	produceMu sync.RWMutex
 
 	topicPartsMu sync.RWMutex
-	topicParts   map[string]*partitions // topic => partitions, from metadata resp
+	topicParts   map[string]*topicPartitions
 }
 
-// newTopicParts creates and returns new partitions
-func newTopicParts() *partitions {
-	parts := &partitions{
+// newTopicParts creates and returns new topicPartitions
+func newTopicParts() *topicPartitions {
+	parts := &topicPartitions{
 		loading:  make(chan struct{}),
-		all:      make(map[int32]*partition),
-		writable: make(map[int32]*partition),
+		all:      make(map[int32]*topicPartition),
+		writable: make(map[int32]*topicPartition),
 	}
 	return parts
 }
 
-func (c *Client) partitionsForTopic(topic string) (*partitions, error) {
+func (c *Client) partitionsForTopic(topic string) (*topicPartitions, error) {
 	var retries int
 start:
 	c.topicPartsMu.RLock()
@@ -93,7 +100,7 @@ start:
 		if !exists {
 			parts = newTopicParts()
 			c.topicParts[topic] = parts
-			go c.fetchTopicMetadata(parts, topic)
+			go c.fetchTopicMetadataIntoParts(parts, topic, true)
 		}
 		c.topicPartsMu.Unlock()
 	}
@@ -102,7 +109,7 @@ start:
 		<-parts.loading
 	}
 
-	if parts.loadErr != nil && (errIsRetriable(parts.loadErr) || isRetriableBrokerErr(parts.loadErr)) { // TODO cleanup
+	if parts.loadErr != nil && isRetriableErr(parts.loadErr) {
 		c.topicPartsMu.Lock()
 		partsNow := c.topicParts[topic]
 		if partsNow == parts {
@@ -111,7 +118,7 @@ start:
 		c.topicPartsMu.Unlock()
 
 		if retries < 3 { // TODO config opt
-			fmt.Println("sleeping before topic partition retry")
+			fmt.Println("sleeping 1s before topic partition retry")
 			time.Sleep(time.Second)
 			goto start
 		}
@@ -136,18 +143,7 @@ func (c *Client) broker() *broker {
 
 // fetchBrokerMetadata issues a metadata request solely for broker information.
 func (c *Client) fetchBrokerMetadata() error {
-	broker := c.broker()
-	var meta *kmsg.MetadataResponse
-	var err error
-	broker.wait(
-		new(kmsg.MetadataRequest),
-		func(resp kmsg.Response, respErr error) {
-			if err = respErr; err != nil {
-				return
-			}
-			meta = resp.(*kmsg.MetadataResponse)
-		},
-	)
+	meta, err := c.fetchMetadata()
 	if err != nil {
 		return err
 	}
@@ -158,29 +154,11 @@ func (c *Client) fetchBrokerMetadata() error {
 	return nil
 }
 
-// fetchTopicMetadata fetches metadata for a topic, storing results into parts.
-//
-// Since metadata requests always return all live brokers and the controller
-// ID, this additionally updates the client's known brokers and controller ID.
-func (c *Client) fetchTopicMetadata(parts *partitions, topic string) {
+func (c *Client) fetchTopicMetadataIntoParts(parts *topicPartitions, topic string, addToBroker bool) {
 	defer parts.loadComplete()
 
-	broker := c.broker()
-
 	var meta *kmsg.MetadataResponse
-	broker.wait(
-		&kmsg.MetadataRequest{
-			Topics:                 []string{topic},
-			AllowAutoTopicCreation: c.cfg.producer.allowAutoTopicCreation,
-		},
-		func(resp kmsg.Response, respErr error) {
-			if parts.loadErr = respErr; parts.loadErr != nil {
-				return
-			}
-			meta = resp.(*kmsg.MetadataResponse)
-		},
-	)
-
+	meta, parts.loadErr = c.fetchMetadata(topic)
 	if parts.loadErr != nil {
 		return
 	}
@@ -195,7 +173,7 @@ func (c *Client) fetchTopicMetadata(parts *partitions, topic string) {
 	// Since we requested one topic, we expect one topic metadata
 	// and the topic should match.
 	if len(meta.TopicMetadata) != 1 || meta.TopicMetadata[0].Topic != topic {
-		parts.loadErr = fmt.Errorf("kafka did not reply to topic %s in metadata request", topic)
+		parts.loadErr = ErrInvalidResp
 		return
 	}
 	t := meta.TopicMetadata[0]
@@ -208,17 +186,39 @@ func (c *Client) fetchTopicMetadata(parts *partitions, topic string) {
 	for i := range t.PartitionMetadata {
 		partMeta := &t.PartitionMetadata[i]
 
-		p := &partition{
-			id:          partMeta.Partition,
-			leader:      partMeta.Leader,
-			leaderEpoch: partMeta.LeaderEpoch,
-			replicas:    partMeta.Replicas,
-			isr:         partMeta.ISR,
-			offline:     partMeta.OfflineReplicas,
+		c.brokersMu.RLock()
+		broker, exists := c.brokers[partMeta.Leader]
+		c.brokersMu.RUnlock()
+
+		if !exists {
+			parts.loadErr = errUnknownBrokerForLeader
+			return
 		}
 
-		parts.allIDs = append(parts.allIDs, p.id)
-		parts.all[p.id] = p
+		p := &topicPartition{
+			topic:     topic,
+			partition: partMeta.Partition,
+
+			leader:      partMeta.Leader,
+			leaderEpoch: partMeta.LeaderEpoch,
+
+			toppar: topparBuffer{
+				idWireLength: 2 + int32(len(topic)) + 4,
+				drainer:      broker.bt,
+			},
+
+			replicas: partMeta.Replicas,
+			isr:      partMeta.ISR,
+			offline:  partMeta.OfflineReplicas,
+		}
+		p.toppar.owner = p
+
+		if addToBroker {
+			broker.bt.addToppar(&p.toppar)
+		}
+
+		parts.allIDs = append(parts.allIDs, p.partition)
+		parts.all[p.partition] = p
 
 		switch kerr.ErrorForCode(partMeta.ErrorCode) {
 		case kerr.LeaderNotAvailable,
@@ -226,9 +226,29 @@ func (c *Client) fetchTopicMetadata(parts *partitions, topic string) {
 			continue
 		}
 
-		parts.writableIDs = append(parts.writableIDs, p.id)
-		parts.writable[p.id] = p
+		p.writable = true
+		parts.writableIDs = append(parts.writableIDs, p.partition)
+		parts.writable[p.partition] = p
 	}
+}
+
+func (c *Client) fetchMetadata(topics ...string) (*kmsg.MetadataResponse, error) {
+	broker := c.broker()
+	var meta *kmsg.MetadataResponse
+	var err error
+	broker.wait(
+		&kmsg.MetadataRequest{
+			Topics:                 topics,
+			AllowAutoTopicCreation: c.cfg.producer.allowAutoTopicCreation,
+		},
+		func(resp kmsg.Response, respErr error) {
+			if err = respErr; err != nil {
+				return
+			}
+			meta = resp.(*kmsg.MetadataResponse)
+		},
+	)
+	return meta, err
 }
 
 // updateBrokers is called with the broker portion of every metadata response.
@@ -293,7 +313,7 @@ func (c *Client) Admin(req kmsg.AdminRequest) (kmsg.Response, error) {
 start:
 	if c.controllerID < 0 {
 		if err := c.fetchBrokerMetadata(); err != nil {
-			if errIsRetriable(err) && retries < 3 {
+			if isRetriableErr(err) && retries < 3 {
 				retries++
 				time.Sleep(c.cfg.client.retryBackoff)
 				goto start

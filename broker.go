@@ -264,7 +264,7 @@ func (b *broker) loadConnection() (*brokerCxn, error) {
 func (b *broker) connect() (net.Conn, error) {
 	conn, err := b.cl.cfg.client.dialFn(b.addr)
 	if err != nil {
-		if nerr, ok := err.(net.Error); ok && nerr.Temporary() {
+		if _, ok := err.(net.Error); ok {
 			return nil, ErrConnDead
 		}
 		return nil, err

@@ -26,11 +26,10 @@ type brokerToppars struct {
 
 	mu sync.Mutex // guards all fields below
 
-	draining     bool                         // are we actively draining toppars into batches?
-	backoffTimer *time.Timer                  // runs if all toppars are in a backoff state
-	backoffSeq   uint64                       // guards against timers starting drains they should not
-	toppars      map[string]map[int32]*toppar // topic => partition => toppar
-	allToppars   []*toppar                    // contains all toppers; used for batch building
+	draining     bool            // are we actively draining toppars into batches?
+	backoffTimer *time.Timer     // runs if all toppars are in a backoff state
+	backoffSeq   uint64          // guards against timers starting drains they should not
+	allToppars   []*topparBuffer // contains all toppers; used for batch building
 
 	// allTopparsStart is where we will begin in allToppars for building a
 	// batch. This increments by one every produce request, avoiding
@@ -39,35 +38,33 @@ type brokerToppars struct {
 	allTopparsStart int
 }
 
-// toppar captures buffered records for a TOPic and PARtition.
-type toppar struct {
-	topic string
-	part  int32
-
-	// allTopparsIdx is this toppar's index into the owning brokerToppar's
-	// allToppars. This is used to aid in removing the toppar.
-	allTopparsIdx int
+type topparBuffer struct {
+	owner *topicPartition // we reach back for our topic, partition
 
 	// idWireLength covers the topic string and the part array length.
 	// It does not cover part numbers nor record batches.
 	idWireLength int32
 
-	mu sync.Mutex // guards all fields below
+	mu sync.Mutex // gaurds all fields below
+
+	// drainer is who is currently draining this buffer. This can change
+	// if a topic / partition is remapped to a different broker.
+	drainer *brokerToppars
+
+	// allTopparsIdx is our index into the drainer's allToppars. This exists
+	// to aid removing this buffer from the drainer when necessary.
+	allTopparsIdx int
 
 	// sequenceNum is what we use for the baseSequence in a record batch.
 	// This is incremented by one for every record appended to the toppar.
 	sequenceNum int32
 
-	// batches contains all un-acknowledged or actively being built
-	// record batches. Once a batch is acknowledged successfully,
-	// it is removed.
+	// batches contains all batches that have not had promises called.
 	batches []*recordBatch
-	// batchDrainIdx is where the next brokerToppar's drain will start
-	// in batches. If any batch fails, this is reset to 0 to automatically
-	// "requeue" everything.
+	// batchDrainIdx is where the next produce request will drain from.
 	batchDrainIdx int
 
-	// requeueSeq is incremented whenever a record batch is "requeued".
+	// failSeq is incremented whenever a record batch is fails somehow.
 	//
 	// This field is only needed because we allow multiple in flight
 	// requests. One request could be accepted by Kafka and then the
@@ -80,19 +77,16 @@ type toppar struct {
 	// this second batch. When we re-send the first batch, Kafka will reply
 	// as if it is the first time it is seeing it. We do not want to call
 	// the second batch's promises before the first.
-	requeueSeq uint64
+	failSeq uint64
 
-	// backoffDeadline is used for retries: if a toppar's records fail and
-	// are requeued to the front of batches, the batch will not be retried
-	// until after the deadline.
-	backoffDeadline time.Time
+	backoffDeadline time.Time // used for retries
 }
 
 // topparBatch wraps a recordBatch for a produce request with the toppar the
-// recordBatch came from and the requeueSeq at the time it was used.
+// recordBatch came from and the failSeq at the time it was used.
 type topparBatch struct {
-	toppar     *toppar
-	requeueSeq uint64
+	toppar  *topparBuffer
+	failSeq uint64
 	*recordBatch
 }
 
@@ -110,7 +104,6 @@ func newBrokerToppars(br *broker) *brokerToppars {
 	bt := &brokerToppars{
 		br:             br,
 		baseWireLength: messageRequestOverhead + produceRequestOverhead,
-		toppars:        make(map[string]map[int32]*toppar, 1),
 	}
 	bt.inflightSem.Store(make(chan struct{}, 1))
 	if br.cl.cfg.client.id != nil {
@@ -154,7 +147,7 @@ func (bt *brokerToppars) createRequest() (*produceRequest, bool) {
 		if dl := tp.backoffDeadline; now.Before(dl) {
 			tp.mu.Unlock()
 
-			if dl.Before(soonestDeadline) {
+			if soonestDeadline.IsZero() || dl.Before(soonestDeadline) {
 				soonestDeadline = dl
 			}
 			deadlineTPs++
@@ -169,8 +162,8 @@ func (bt *brokerToppars) createRequest() (*produceRequest, bool) {
 		batch := tp.batches[tp.batchDrainIdx]
 		batchWireLength := 4 + batch.wireLength // part ID + batch
 
-		topicPartitions, topicPartitionExists := request.topicsPartitions[tp.topic]
-		if !topicPartitionExists {
+		topicPartitions, topicPartitionsExists := request.topicsPartitions[tp.owner.topic]
+		if !topicPartitionsExists {
 			batchWireLength += tp.idWireLength // new topic in the request: add topic overhead
 		}
 
@@ -185,7 +178,7 @@ func (bt *brokerToppars) createRequest() (*produceRequest, bool) {
 		batch.tried = true // we are using the batch, so it must now be immutable
 		tp.batchDrainIdx++
 
-		requeueSeq := tp.requeueSeq // save this for below before unlocking tp
+		failSeq := tp.failSeq // save this for below before unlocking tp
 
 		if !moreToDrain {
 			moreToDrain = len(tp.batches) > tp.batchDrainIdx
@@ -194,15 +187,15 @@ func (bt *brokerToppars) createRequest() (*produceRequest, bool) {
 
 		// Now that we are for sure using the batch, create the
 		// topic and partition in the request for it if necessary.
-		if !topicPartitionExists {
+		if !topicPartitionsExists {
 			topicPartitions = make(map[int32]topparBatch, 1)
-			request.topicsPartitions[tp.topic] = topicPartitions
+			request.topicsPartitions[tp.owner.topic] = topicPartitions
 		}
 
 		wireLength += batchWireLength
-		topicPartitions[tp.part] = topparBatch{
+		topicPartitions[tp.owner.partition] = topparBatch{
 			toppar:      tp,
-			requeueSeq:  requeueSeq,
+			failSeq:     failSeq,
 			recordBatch: batch,
 		}
 	}
@@ -224,12 +217,13 @@ func (bt *brokerToppars) createRequest() (*produceRequest, bool) {
 // incrementing past the toppar's now-known-to-be-in-Kafka ONLY IF the batch
 // has the same requeue seq as the toppar.
 //
-// See docs on the toppar requeueSeq field.
-func (bt *brokerToppars) maybeIncPastTopparBatchSuccess(batch topparBatch) bool {
+// See docs on the toppar failSeq field.
+func maybeIncPastTopparBatchSuccess(batch topparBatch) bool {
 	tp := batch.toppar
 	incd := false
 	tp.mu.Lock()
-	if batch.requeueSeq == tp.requeueSeq {
+	if batch.failSeq == tp.failSeq {
+		tp.batches[0] = nil
 		tp.batches = tp.batches[1:]
 		tp.batchDrainIdx--
 		incd = true
@@ -238,69 +232,10 @@ func (bt *brokerToppars) maybeIncPastTopparBatchSuccess(batch topparBatch) bool 
 	return incd
 }
 
-// removeToppar removes the tracking of a toppar from the brokerToppars.
-func (bt *brokerToppars) removeToppar(rm *toppar) {
-	topicParts := bt.toppars[rm.topic]
-	delete(topicParts, rm.part)
-	if len(topicParts) == 0 {
-		delete(bt.toppars, rm.topic)
-	}
-
-	if rm.allTopparsIdx != len(bt.allToppars)-1 {
-		bt.allToppars[rm.allTopparsIdx], bt.allToppars[len(bt.allToppars)-1] =
-			bt.allToppars[len(bt.allToppars)-1], nil
-
-		bt.allToppars[rm.allTopparsIdx].allTopparsIdx = rm.allTopparsIdx
-	}
-
-	bt.allToppars = bt.allToppars[:len(bt.allToppars)-1]
-	if bt.allTopparsStart == len(bt.allToppars) {
-		bt.allTopparsStart = 0
-	}
-}
-
-// newToppar creates and returns a new toppar under the given topic and part.
-//
-// The new toppar is added to all toppars, but is not added to the toppars map.
-// The caller must have loaded the map to know the toppar does not exist, so
-// the caller can add the new toppar cheaply.
-func (bt *brokerToppars) newToppar(topic string, part int32) *toppar {
-	tp := &toppar{
-		topic:         topic,
-		part:          part,
-		allTopparsIdx: len(bt.allToppars),
-		idWireLength:  2 + int32(len(topic)) + 4, // topic len, topic, parts array len
-	}
-	bt.allToppars = append(bt.allToppars, tp)
-	return tp
-}
-
-// loadAndLockToppar returns the toppar under topic, part, creating it as
-// necessary, and returning it locked.
-func (bt *brokerToppars) loadAndLockToppar(topic string, part int32) *toppar {
-	bt.mu.Lock()
-
-	topicParts, partsExist := bt.toppars[topic]
-	if !partsExist {
-		topicParts = make(map[int32]*toppar, 1)
-		bt.toppars[topic] = topicParts
-	}
-
-	tp, topparExists := topicParts[part]
-	if !topparExists {
-		tp = bt.newToppar(topic, part)
-		topicParts[part] = tp
-	}
-
+func (tp *topparBuffer) bufferRecord(pr promisedRecord) {
 	tp.mu.Lock()
-	bt.mu.Unlock()
 
-	return tp
-}
-
-// bufferRecord buffers a promised record under the given topic / partition.
-func (bt *brokerToppars) bufferRecord(topic string, part int32, pr promisedRecord) {
-	tp := bt.loadAndLockToppar(topic, part)
+	bt := tp.drainer
 
 	newBatch := true
 	firstBatch := tp.batchDrainIdx == len(tp.batches)
@@ -316,8 +251,12 @@ func (bt *brokerToppars) bufferRecord(topic string, part int32, pr promisedRecor
 		}
 	}
 
+	var pause bool
 	if newBatch {
 		tp.batches = append(tp.batches, bt.newRecordBatch(tp.sequenceNum, pr))
+		if len(tp.batches) > 5 {
+			pause = true
+		}
 	}
 	tp.sequenceNum++
 
@@ -325,6 +264,11 @@ func (bt *brokerToppars) bufferRecord(topic string, part int32, pr promisedRecor
 
 	if firstBatch {
 		bt.maybeBeginDraining()
+	}
+
+	// If we are buffering so fast that we are backing up, let's pause.
+	if pause {
+		time.Sleep(time.Millisecond)
 	}
 }
 
@@ -361,6 +305,7 @@ func (bt *brokerToppars) beginDrainBackoff(after time.Duration) {
 
 		bt.backoffTimer = nil
 		bt.draining = true
+
 		go bt.drain()
 	})
 }
@@ -398,25 +343,12 @@ func (bt *brokerToppars) drain() {
 	}
 }
 
-func (bt *brokerToppars) eachExistingTopparForBatch(topparBatches map[string]map[int32]topparBatch, fn func(*toppar, topparBatch)) {
-	bt.mu.Lock()
-	defer bt.mu.Unlock()
-
-	for topic, partitions := range topparBatches {
-		topicParts, topicPartsExist := bt.toppars[topic]
-		if !topicPartsExist {
-			// If the topic does not exists, this topic was
-			// migrated off of this batch.
-			continue
-		}
-		for partition, batch := range partitions {
-			tp, partitionExists := topicParts[partition]
-			if !partitionExists {
-				continue // same
-			}
-			tp.mu.Lock()
-			fn(tp, batch)
-			tp.mu.Unlock()
+func (bt *brokerToppars) eachTopparBatch(topparBatches map[string]map[int32]topparBatch, fn func(topparBatch)) {
+	for _, partitions := range topparBatches {
+		for _, batch := range partitions {
+			batch.toppar.mu.Lock()
+			fn(batch)
+			batch.toppar.mu.Unlock()
 		}
 	}
 }
@@ -426,16 +358,14 @@ func (bt *brokerToppars) eachExistingTopparForBatch(topparBatches map[string]map
 func (bt *brokerToppars) requeueEntireReq(req *produceRequest) {
 	backoffDeadline := time.Now().Add(bt.br.cl.cfg.client.retryBackoff)
 	maybeBeginDraining := false
-	// The only reason a toppar would not exist here is if were migrated
-	// off of the broker to a different toppar, in which case the drain
-	// index has already been reset.
-	bt.eachExistingTopparForBatch(req.topicsPartitions, func(tp *toppar, batch topparBatch) {
-		if batch.requeueSeq == tp.requeueSeq {
-			tp.batchDrainIdx = 0
-			tp.backoffDeadline = backoffDeadline
-			tp.requeueSeq++
-			maybeBeginDraining = true
+	bt.eachTopparBatch(req.topicsPartitions, func(batch topparBatch) {
+		if batch.failSeq != batch.toppar.failSeq {
+			return
 		}
+		batch.toppar.batchDrainIdx = 0
+		batch.toppar.backoffDeadline = backoffDeadline
+		batch.toppar.failSeq++
+		maybeBeginDraining = true
 	})
 
 	if maybeBeginDraining {
@@ -443,26 +373,30 @@ func (bt *brokerToppars) requeueEntireReq(req *produceRequest) {
 	}
 }
 
-func (bt *brokerToppars) errorReqAndRemoveToppars(req *produceRequest, err error) {
+// errorAllReqToppars errors every record buffered in all toppars in a request.
+// This is called for unrecoverable errors, such as auth failures.
+func (bt *brokerToppars) errorAllReqToppars(req *produceRequest, err error) {
 	for topic, partitions := range req.topicsPartitions {
-		bt.errorTopicPartsAndRemoveToppars(topic, partitions, err)
+		bt.errorAllPartitionToppars(topic, partitions, err)
 	}
 }
 
-func (bt *brokerToppars) errorTopicPartsAndRemoveToppars(topic string, partitions map[int32]topparBatch, err error) {
+// errorAllPartitionToppars errors every record buffered in all toppars in
+// a request's topic partition.
+func (bt *brokerToppars) errorAllPartitionToppars(topic string, partitions map[int32]topparBatch, err error) {
 	for _, batch := range partitions {
 		tp := batch.toppar
-		bt.mu.Lock()
 		tp.mu.Lock()
-		bt.removeToppar(tp)
-		tp.mu.Unlock()
-		bt.mu.Unlock()
-		for _, batch := range tp.batches {
-			for _, record := range batch.records {
-				record.pr.promise(topic, record.pr.r, err)
+		if batch.failSeq == tp.failSeq {
+			tp.failSeq++ // make sure a second in-flight does not do this again
+			for _, batch := range tp.batches {
+				for _, record := range batch.records {
+					record.pr.promise(topic, record.pr.r, err)
+				}
 			}
+			tp.batches = nil
 		}
-		tp.batches = nil
+		tp.mu.Unlock()
 	}
 }
 
@@ -474,25 +408,35 @@ func (bt *brokerToppars) handleReqResp(req *produceRequest, resp kmsg.Response, 
 			// supports up to 5 concurrent in flight requests per
 			// topic/partition. The first store here races with our
 			// original 1 buffer, allowing one more than we store.
-			bt.inflightSem.Store(make(chan struct{}, 2))
+			bt.inflightSem.Store(make(chan struct{}, 4))
 		}
-	}
-
-	// If we had an err, it is from the client itself. This is either a
-	// retriable conn failure or a total loss (e.g. auth failure).
-	if err != nil {
-		if isRetriableBrokerErr(err) {
-			bt.requeueEntireReq(req)
-		} else {
-			bt.errorReqAndRemoveToppars(req, err)
-		}
-		return
 	}
 
 	// retry tracks topics and partitions that we will retry.
 	// It is initialized on the first failed topic/partition.
 	var retry map[string]map[int32]topparBatch
-	defer bt.handleRetryBatches(retry)
+	defer func() {
+		if len(retry) > 0 {
+			bt.handleRetryBatches(retry)
+		}
+	}()
+
+	// If we had an err, it is from the client itself. This is either a
+	// retriable conn failure or a total loss (e.g. auth failure).
+	if err != nil {
+		if isRetriableBrokerErr(err) {
+			if err == ErrBrokerDead {
+				// The broker was closed. This could be from
+				// broker migration, so we retry.
+				retry = req.topicsPartitions
+			} else {
+				bt.requeueEntireReq(req)
+			}
+		} else {
+			bt.errorAllReqToppars(req, err)
+		}
+		return
+	}
 
 	pr := resp.(*kmsg.ProduceResponse)
 	for _, responseTopic := range pr.Responses {
@@ -536,7 +480,7 @@ func (bt *brokerToppars) handleReqResp(req *produceRequest, resp kmsg.Response, 
 				// If the sequence numbers do not align, then we had two
 				// requests in flight: the first issued on a cxn that died,
 				// the second issued on a new connection causing this error.
-				if batch.requeueSeq != batch.toppar.requeueSeq {
+				if batch.failSeq != batch.toppar.failSeq {
 					continue
 				}
 				panic("OOO SEQUENCE NUM - TODO") // TODO
@@ -544,13 +488,16 @@ func (bt *brokerToppars) handleReqResp(req *produceRequest, resp kmsg.Response, 
 			case kerr.UnknownProducerID:
 				// 1.0.0+: if LogStartOffset is not our last acked + 1, then data loss
 				// Otherwise, same log rotation as in OOO sequence number.
+				if batch.failSeq != batch.toppar.failSeq {
+					continue
+				}
 				panic("UNKNOWN PRODUCER ID - TODO") // TODO
 
 			case kerr.InvalidProducerEpoch:
 				panic("INVALID EPOCH - TODO") // TODO
 
 			default:
-				incd := bt.maybeIncPastTopparBatchSuccess(batch)
+				incd := maybeIncPastTopparBatchSuccess(batch)
 				if !incd {
 					continue
 				}
@@ -562,155 +509,156 @@ func (bt *brokerToppars) handleReqResp(req *produceRequest, resp kmsg.Response, 
 			}
 		}
 
-		bt.errorTopicPartsAndRemoveToppars(topic, partitions, errNoResp)
+		if len(partitions) > 0 {
+			bt.errorAllPartitionToppars(topic, partitions, errNoResp)
+		}
 	}
-	bt.errorReqAndRemoveToppars(req, errNoResp)
+	if len(req.topicsPartitions) > 0 {
+		bt.errorAllReqToppars(req, errNoResp)
+	}
 }
 
 var forever = time.Now().Add(100 * 365 * 24 * time.Hour)
 
-// handleRetryBatches requeues all batches that failed in a produce request
-// back to the brokerToppars.
 func (bt *brokerToppars) handleRetryBatches(retry map[string]map[int32]topparBatch) {
-	if retry == nil {
-		return
-	}
+	bt.eachTopparBatch(retry, func(batch topparBatch) {
+		if batch.failSeq != batch.toppar.failSeq ||
+			batch.toppar.backoffDeadline == forever {
 
-	migrate := make(map[string][]int32, len(retry))
+			skipTopicRetry := retry[batch.toppar.owner.topic]
+			delete(skipTopicRetry, batch.toppar.owner.partition)
+			if len(skipTopicRetry) == 0 {
+				delete(retry, batch.toppar.owner.topic)
+			}
 
-	// The only way the toppar does not exist is if it is already
-	// migrated. This is called inside handling a produce resp, so
-	// a prior resp may have failed and the retry here would be
-	// from the second in flight. This is further reinforced
-	// with the requeueSeq check.
-	bt.eachExistingTopparForBatch(retry, func(tp *toppar, batch topparBatch) {
-		if tp.backoffDeadline != forever { // if we are not already migrating
-			migrate[tp.topic] = append(migrate[tp.topic], tp.part)
+			return
 		}
-		tp.backoffDeadline = forever // tombstone
-		tp.batchDrainIdx = 0
+
+		batch.toppar.backoffDeadline = forever // tombstone
+		batch.toppar.batchDrainIdx = 0
+		batch.toppar.failSeq++
 	})
 
-	for topic, migrateParts := range migrate {
+	for topic, migrateParts := range retry {
 		go bt.migrateTopic(topic, migrateParts)
 	}
 }
 
-func (bt *brokerToppars) migrateTopic(topic string, migrateParts []int32) {
+func (bt *brokerToppars) migrateTopic(topic string, migrateParts map[int32]topparBatch) {
 	cl := bt.br.cl
 
 start:
 	loadParts := newTopicParts()
-	cl.fetchTopicMetadata(loadParts, topic)
+	cl.fetchTopicMetadataIntoParts(loadParts, topic, false)
 	if loadParts.loadErr != nil {
-		time.Sleep(time.Second) // TODO, also max retries
+		time.Sleep(cl.cfg.client.retryBackoff) // TODO max retries
 		goto start
 	}
 
-	type partDest struct {
-		part int32
-		dest *broker
-	}
-	var partDests []partDest
-
-	cl.brokersMu.Lock()
-	var retryMigrate []int32
-	for _, migratePart := range migrateParts {
-		broker, exists := cl.brokers[loadParts.all[migratePart].leader]
-		if !exists {
-			retryMigrate = append(retryMigrate, migratePart)
-			continue
-		}
-		partDests = append(partDests, partDest{migratePart, broker})
-	}
-	cl.brokersMu.Unlock()
-
-	if len(retryMigrate) != 0 {
-		time.Sleep(time.Second) // TODO
-		goto start
-	}
-
+	var deletedParts []*topicPartition
 	defer func() {
-		bt.maybeBeginDraining()
-		for _, partDest := range partDests {
-			partDest.dest.bt.maybeBeginDraining()
+		for _, tp := range deletedParts {
+			tp.toppar.drainer.removeToppar(&tp.toppar)
+
+			tp.toppar.mu.Lock()
+			defer tp.toppar.mu.Unlock()
+
+			tp.toppar.failSeq++ // just in case
+			for _, batch := range tp.toppar.batches {
+				for _, record := range batch.records {
+					record.pr.promise(tp.topic, record.pr.r, ErrPartitionDeleted)
+				}
+			}
 		}
 	}()
 
-	// until everything is migrated.
-	cl.topicPartsMu.Lock()
-	oldParts := cl.topicParts[topic]
-	cl.topicPartsMu.Unlock()
+	// If any part we want to migrate no longer exists, the partition
+	// has been deleted.
+	for migratePart, migrateToppar := range migrateParts {
+		if _, exists := loadParts.all[migratePart]; !exists {
+			deletedParts = append(deletedParts, migrateToppar.toppar.owner)
+		}
+	}
 
-	// blocks any writes to toppar, after the unlock, everything
-	// is waiting. concurrent writes unordered, who cares.
-	// TODO cleanup doc
-	oldParts.mu.Lock()
-	oldParts.migrated = true
-	oldParts.migrateCh = make(chan struct{})
-	oldParts.mu.Unlock()
+	existingParts, err := cl.partitionsForTopic(topic)
+	if err != nil {
+		panic("migrating existing topic, existing parts have err " + err.Error())
+	}
 
-	defer close(oldParts.migrateCh)
+	// We block all records from being added while we migrate partitions.
+	existingParts.mu.Lock()
+	defer existingParts.mu.Unlock()
 
-	defer func() {
-		cl.topicPartsMu.Lock()
-		cl.topicParts[topic] = loadParts
-		cl.topicPartsMu.Unlock()
-	}()
+	existingParts.allIDs = loadParts.allIDs
+	existingParts.writableIDs = loadParts.writableIDs
 
+	// For all existing parts, if they no longer exist, we will call all
+	// buffered records with a partition deleted error.
+	//
+	// If the toppar does exist, but the drainer is different (leader
+	// broker changed), we remove the toppar from the old drainer and add
+	// it to the new.
+	for id, tp := range existingParts.all {
+		if newTP, exists := loadParts.all[id]; !exists {
+			deletedParts = append(deletedParts, tp)
+		} else if newTP.toppar.drainer != tp.toppar.drainer {
+			tp.toppar.drainer.removeToppar(&tp.toppar)
+			tp.toppar.drainer = newTP.toppar.drainer
+			tp.toppar.drainer.addToppar(&tp.toppar)
+		} else {
+			tp.toppar.clearBackoff()
+			tp.toppar.drainer.maybeBeginDraining()
+		}
+		delete(loadParts.all, id)
+	}
+
+	// For any new parts that we did not know about prior, we add them.
+	for id, tp := range loadParts.all {
+		existingParts.all[id] = tp
+		tp.toppar.drainer.addToppar(&tp.toppar)
+	}
+
+	// We store the new writable parts into the existing parts.
+	// Over all of them, we set the new toppar to the old (but updated).
+	existingParts.writable = loadParts.writable
+	for id := range existingParts.writable {
+		existingParts.writable[id] = existingParts.all[id]
+		// TODO err if went from writable to non-writable and not
+		// requires hash consistency.
+	}
+}
+
+func (tp *topparBuffer) clearBackoff() {
+	tp.mu.Lock()
+	tp.backoffDeadline = time.Time{}
+	tp.mu.Unlock()
+}
+
+func (bt *brokerToppars) addToppar(add *topparBuffer) {
+	bt.mu.Lock()
+	add.allTopparsIdx = len(bt.allToppars)
+	bt.allToppars = append(bt.allToppars, add)
+	bt.mu.Unlock()
+
+	add.clearBackoff()
+
+	bt.maybeBeginDraining()
+}
+
+// removeToppar removes the tracking of a toppar from the brokerToppars.
+func (bt *brokerToppars) removeToppar(rm *topparBuffer) {
 	bt.mu.Lock()
 	defer bt.mu.Unlock()
 
-	for _, partDest := range partDests {
-		bt.migrateTopicPartTo(topic, partDest.part, partDest.dest)
-	}
-}
+	if rm.allTopparsIdx != len(bt.allToppars)-1 {
+		bt.allToppars[rm.allTopparsIdx], bt.allToppars[len(bt.allToppars)-1] =
+			bt.allToppars[len(bt.allToppars)-1], nil
 
-func (bt *brokerToppars) migrateTopicPartTo(topic string, partition int32, br *broker) {
-	tp := bt.toppars[topic][partition]
-	if bt == br.bt {
-		bt.clearTopparBackoff(tp)
-		return
+		bt.allToppars[rm.allTopparsIdx].allTopparsIdx = rm.allTopparsIdx
 	}
 
-	bt.removeToppar(tp)
-
-	br.bt.mu.Lock()
-	destParts, exists := br.bt.toppars[topic]
-	if !exists {
-		destParts = make(map[int32]*toppar, 1)
-		br.bt.toppars[topic] = destParts
+	bt.allToppars = bt.allToppars[:len(bt.allToppars)-1]
+	if bt.allTopparsStart == len(bt.allToppars) {
+		bt.allTopparsStart = 0
 	}
-	destTP, exists := destParts[partition]
-	if !exists {
-		destParts[partition] = tp
-		tp.allTopparsIdx = len(br.bt.allToppars)
-		br.bt.allToppars = append(br.bt.allToppars, tp)
-	}
-	br.bt.mu.Unlock()
-
-	tp.mu.Lock()
-	if exists {
-		// If the destination topic and partition already exists,
-		// whoever is using this client is producing to the same
-		// topic across multiple goroutines. One of those was
-		// sitting in Produce for an inordinate amount of time
-		// and had a stale loaded partitions.
-		//
-		// They clearly do not care about strict ordering, so
-		// we will append all of the logs in this re-migrated
-		// partiion to the existing toppar.
-		for _, batch := range tp.batches {
-			//batch.toppar = destTP
-			destTP.batches = append(destTP.batches, batch)
-		}
-	}
-	tp.backoffDeadline = time.Time{}
-	tp.mu.Unlock()
-}
-
-func (bt *brokerToppars) clearTopparBackoff(tp *toppar) {
-	tp.mu.Lock()
-	tp.backoffDeadline = time.Time{}
-	tp.mu.Unlock()
 }
