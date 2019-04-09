@@ -109,12 +109,16 @@ func (s *Struct) BuildFrom(scanner *LineScanner, level int) (unprocessed string,
 
 		isArray := false
 		isVarintArray := false
+		isNullableArray := false
 		if strings.HasPrefix(typ, "varint[") {
 			isArray = true
 			isVarintArray = true
 			typ = typ[len("varint[") : len(typ)-1]
-		}
-		if typ[0] == '[' {
+		} else if strings.HasPrefix(typ, "nullable[") {
+			isArray = true
+			isNullableArray = true
+			typ = typ[len("nullable[") : len(typ)-1]
+		} else if typ[0] == '[' {
 			isArray = true
 			typ = typ[1 : len(typ)-1]
 		}
@@ -134,8 +138,9 @@ func (s *Struct) BuildFrom(scanner *LineScanner, level int) (unprocessed string,
 
 		if isArray {
 			f.Type = Array{
-				Inner:         f.Type,
-				IsVarintArray: isVarintArray,
+				Inner:           f.Type,
+				IsVarintArray:   isVarintArray,
+				IsNullableArray: isNullableArray,
 			}
 		}
 

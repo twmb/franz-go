@@ -213,7 +213,7 @@ func (v *ProduceRequest) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.TopicData
-		dst = kbin.AppendArrayLen(dst, len(v), v == nil)
+		dst = kbin.AppendArrayLen(dst, len(v))
 		for i := range v {
 			v := &v[i]
 			{
@@ -222,7 +222,7 @@ func (v *ProduceRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Data
-				dst = kbin.AppendArrayLen(dst, len(v), v == nil)
+				dst = kbin.AppendArrayLen(dst, len(v))
 				for i := range v {
 					v := &v[i]
 					{
@@ -285,7 +285,7 @@ func (v *ProduceRequest) AppendTo(dst []byte) []byte {
 						}
 						{
 							v := v.Records
-							dst = kbin.AppendArrayLen(dst, len(v), v == nil)
+							dst = kbin.AppendArrayLen(dst, len(v))
 							for i := range v {
 								v := &v[i]
 								{
@@ -604,7 +604,7 @@ func (v *FetchRequest) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Topics
-		dst = kbin.AppendArrayLen(dst, len(v), v == nil)
+		dst = kbin.AppendArrayLen(dst, len(v))
 		for i := range v {
 			v := &v[i]
 			{
@@ -613,7 +613,7 @@ func (v *FetchRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Partitions
-				dst = kbin.AppendArrayLen(dst, len(v), v == nil)
+				dst = kbin.AppendArrayLen(dst, len(v))
 				for i := range v {
 					v := &v[i]
 					{
@@ -642,7 +642,7 @@ func (v *FetchRequest) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.ForgottenTopicsData
-		dst = kbin.AppendArrayLen(dst, len(v), v == nil)
+		dst = kbin.AppendArrayLen(dst, len(v))
 		for i := range v {
 			v := &v[i]
 			{
@@ -651,7 +651,7 @@ func (v *FetchRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Partitions
-				dst = kbin.AppendArrayLen(dst, len(v), v == nil)
+				dst = kbin.AppendArrayLen(dst, len(v))
 				for i := range v {
 					v := v[i]
 					dst = kbin.AppendInt32(dst, v)
@@ -930,7 +930,7 @@ func (v *ListOffsetsRequest) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Topics
-		dst = kbin.AppendArrayLen(dst, len(v), v == nil)
+		dst = kbin.AppendArrayLen(dst, len(v))
 		for i := range v {
 			v := &v[i]
 			{
@@ -939,7 +939,7 @@ func (v *ListOffsetsRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Partitions
-				dst = kbin.AppendArrayLen(dst, len(v), v == nil)
+				dst = kbin.AppendArrayLen(dst, len(v))
 				for i := range v {
 					v := &v[i]
 					{
@@ -1141,7 +1141,7 @@ func (v *MetadataRequest) AppendTo(dst []byte) []byte {
 	_ = version
 	{
 		v := v.Topics
-		dst = kbin.AppendArrayLen(dst, len(v), v == nil)
+		dst = kbin.AppendNullableArrayLen(dst, len(v), v == nil)
 		for i := range v {
 			v := v[i]
 			dst = kbin.AppendString(dst, v)
@@ -1477,7 +1477,7 @@ func (v *LeaderAndISRRequest) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.PartitionStates
-		dst = kbin.AppendArrayLen(dst, len(v), v == nil)
+		dst = kbin.AppendArrayLen(dst, len(v))
 		for i := range v {
 			v := &v[i]
 			{
@@ -1502,7 +1502,7 @@ func (v *LeaderAndISRRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.ISR
-				dst = kbin.AppendArrayLen(dst, len(v), v == nil)
+				dst = kbin.AppendArrayLen(dst, len(v))
 				for i := range v {
 					v := v[i]
 					dst = kbin.AppendInt32(dst, v)
@@ -1514,7 +1514,7 @@ func (v *LeaderAndISRRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Replicas
-				dst = kbin.AppendArrayLen(dst, len(v), v == nil)
+				dst = kbin.AppendArrayLen(dst, len(v))
 				for i := range v {
 					v := v[i]
 					dst = kbin.AppendInt32(dst, v)
@@ -1528,7 +1528,7 @@ func (v *LeaderAndISRRequest) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.LiveLeaders
-		dst = kbin.AppendArrayLen(dst, len(v), v == nil)
+		dst = kbin.AppendArrayLen(dst, len(v))
 		for i := range v {
 			v := &v[i]
 			{
@@ -1646,7 +1646,7 @@ func (v *StopReplicaRequest) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Partitions
-		dst = kbin.AppendArrayLen(dst, len(v), v == nil)
+		dst = kbin.AppendArrayLen(dst, len(v))
 		for i := range v {
 			v := &v[i]
 			{
@@ -1790,7 +1790,7 @@ func (v *UpdateMetadataRequest) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.PartitionStates
-		dst = kbin.AppendArrayLen(dst, len(v), v == nil)
+		dst = kbin.AppendArrayLen(dst, len(v))
 		for i := range v {
 			v := &v[i]
 			{
@@ -1815,7 +1815,7 @@ func (v *UpdateMetadataRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.ISR
-				dst = kbin.AppendArrayLen(dst, len(v), v == nil)
+				dst = kbin.AppendArrayLen(dst, len(v))
 				for i := range v {
 					v := v[i]
 					dst = kbin.AppendInt32(dst, v)
@@ -1827,7 +1827,7 @@ func (v *UpdateMetadataRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Replicas
-				dst = kbin.AppendArrayLen(dst, len(v), v == nil)
+				dst = kbin.AppendArrayLen(dst, len(v))
 				for i := range v {
 					v := v[i]
 					dst = kbin.AppendInt32(dst, v)
@@ -1835,7 +1835,7 @@ func (v *UpdateMetadataRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.OfflineReplicas
-				dst = kbin.AppendArrayLen(dst, len(v), v == nil)
+				dst = kbin.AppendArrayLen(dst, len(v))
 				for i := range v {
 					v := v[i]
 					dst = kbin.AppendInt32(dst, v)
@@ -1845,7 +1845,7 @@ func (v *UpdateMetadataRequest) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.LiveBrokers
-		dst = kbin.AppendArrayLen(dst, len(v), v == nil)
+		dst = kbin.AppendArrayLen(dst, len(v))
 		for i := range v {
 			v := &v[i]
 			{
@@ -1854,7 +1854,7 @@ func (v *UpdateMetadataRequest) AppendTo(dst []byte) []byte {
 			}
 			if version >= 1 {
 				v := v.Endpoints
-				dst = kbin.AppendArrayLen(dst, len(v), v == nil)
+				dst = kbin.AppendArrayLen(dst, len(v))
 				for i := range v {
 					v := &v[i]
 					if version >= 1 {
@@ -2042,7 +2042,7 @@ func (v *OffsetCommitRequest) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Topics
-		dst = kbin.AppendArrayLen(dst, len(v), v == nil)
+		dst = kbin.AppendArrayLen(dst, len(v))
 		for i := range v {
 			v := &v[i]
 			{
@@ -2051,7 +2051,7 @@ func (v *OffsetCommitRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Partitions
-				dst = kbin.AppendArrayLen(dst, len(v), v == nil)
+				dst = kbin.AppendArrayLen(dst, len(v))
 				for i := range v {
 					v := &v[i]
 					{
@@ -2252,7 +2252,228 @@ func (v *ApiVersionsResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
-// DeleteTopicsRequest deletes a Kafka topic.
+type CreateTopicsRequestTopicsReplicaAssignment struct {
+	// Partition is a partition to create.
+	Partition int32
+
+	// Replicas are broker IDs the partition must exist on.
+	Replicas []int32
+}
+type CreateTopicsRequestTopicsConfigEntries struct {
+	// ConfigName is a topic level config key (e.g. segment.bytes).
+	ConfigName string
+
+	// ConfigValue is a topic level config value (e.g. 1073741824)
+	ConfigValue *string
+}
+type CreateTopicsRequestTopics struct {
+	// Topic is a topic to create.
+	Topic string
+
+	// NumPartitions is how many partitions to give a topic.
+	NumPartitions int32
+
+	// ReplicationFactor is how many replicas every partition must have.
+	ReplicationFactor int16
+
+	// ReplicaAssignment is an array to manually dicate replicas and their
+	// partitions for a topic. If using this, both ReplicationFactor and
+	// NumPartitions must be -1.
+	ReplicaAssignment []CreateTopicsRequestTopicsReplicaAssignment
+
+	// ConfigEntries is an array of key value config pairs for a topic.
+	// These correspond to Kafka Topic-Level Configs: http://kafka.apache.org/documentation/#topicconfigs.
+	ConfigEntries []CreateTopicsRequestTopicsConfigEntries
+}
+
+// CreateTopicsRequest creates Kafka topics.
+type CreateTopicsRequest struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	// Topics is an array of topics to attempt to create.
+	Topics []CreateTopicsRequestTopics
+
+	// Timeout is how long to allow for this request.
+	Timeout int32
+
+	// ValidateOnly is makes this request a dry-run; everything is validated but
+	// no topics are actually created.
+	ValidateOnly bool // v1+
+}
+
+func (*CreateTopicsRequest) Key() int16                 { return 19 }
+func (*CreateTopicsRequest) MaxVersion() int16          { return 3 }
+func (*CreateTopicsRequest) MinVersion() int16          { return 0 }
+func (v *CreateTopicsRequest) SetVersion(version int16) { v.Version = version }
+func (v *CreateTopicsRequest) GetVersion() int16        { return v.Version }
+func (v *CreateTopicsRequest) IsAdminRequest() bool     { return true }
+func (v *CreateTopicsRequest) ResponseKind() Response {
+	return &CreateTopicsResponse{Version: v.Version}
+}
+
+func (v *CreateTopicsRequest) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	{
+		v := v.Topics
+		dst = kbin.AppendArrayLen(dst, len(v))
+		for i := range v {
+			v := &v[i]
+			{
+				v := v.Topic
+				dst = kbin.AppendString(dst, v)
+			}
+			{
+				v := v.NumPartitions
+				dst = kbin.AppendInt32(dst, v)
+			}
+			{
+				v := v.ReplicationFactor
+				dst = kbin.AppendInt16(dst, v)
+			}
+			{
+				v := v.ReplicaAssignment
+				dst = kbin.AppendArrayLen(dst, len(v))
+				for i := range v {
+					v := &v[i]
+					{
+						v := v.Partition
+						dst = kbin.AppendInt32(dst, v)
+					}
+					{
+						v := v.Replicas
+						dst = kbin.AppendArrayLen(dst, len(v))
+						for i := range v {
+							v := v[i]
+							dst = kbin.AppendInt32(dst, v)
+						}
+					}
+				}
+			}
+			{
+				v := v.ConfigEntries
+				dst = kbin.AppendArrayLen(dst, len(v))
+				for i := range v {
+					v := &v[i]
+					{
+						v := v.ConfigName
+						dst = kbin.AppendString(dst, v)
+					}
+					{
+						v := v.ConfigValue
+						dst = kbin.AppendNullableString(dst, v)
+					}
+				}
+			}
+		}
+	}
+	{
+		v := v.Timeout
+		dst = kbin.AppendInt32(dst, v)
+	}
+	if version >= 1 {
+		v := v.ValidateOnly
+		dst = kbin.AppendBool(dst, v)
+	}
+	return dst
+}
+
+type CreateTopicsResponseTopicErrors struct {
+	// Topic is the topic this error response corresponds to.
+	Topic string
+
+	// NOT_CONTROLLER is returned if the request was not issued to a Kafka
+	// controller.
+	//
+	// TOPIC_AUTHORIZATION_FAILED is returned if the client is not authorized
+	//
+	// INVALID_REQUEST is returned if the same topic occurred multiple times
+	// in the request.
+	//
+	// POLICY_VIOLATION is returned if the broker is using a
+	// create.topic.policy.class.name that returns a policy violation.
+	//
+	// INVALID_TOPIC_EXCEPTION if the topic collides with another topic when
+	// both topic's names' periods are replaced with underscores (e.g.
+	// topic.foo and topic_foo collide).
+	//
+	// TOPIC_ALREADY_EXISTS is returned if the topic already exists.
+	//
+	// INVALID_PARTITIONS is returned if the requested number of partitions is
+	// <= 0.
+	//
+	// INVALID_REPLICATION_FACTOR is returned if the requested replication
+	// factor is <= 0.
+	//
+	// INVALID_REPLICA_ASSIGNMENT is returned if not all partitions have the same
+	// number of replicas, or duplica replicas are assigned, or the partitions
+	// are not consecutive starting from 0.
+	//
+	// INVALID_CONFIG is returned if the requested topic config is invalid.
+	// to create a topic.
+	ErrorCode int16
+
+	// ErrorMessage is an informative message if the topic creation failed.
+	ErrorMessage *string // v1+
+}
+
+// CreateTopicsResponse is returned from a CreateTopicsRequest.
+type CreateTopicsResponse struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	// ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+	// after this request.
+	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
+	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
+	ThrottleTimeMs int32 // v2+
+
+	// TopicErrors is an the array of requested topics for creation and their
+	// creation errors.
+	TopicErrors []CreateTopicsResponseTopicErrors
+}
+
+func (v *CreateTopicsResponse) ReadFrom(src []byte) error {
+	version := v.Version
+	_ = version
+	b := kbin.Reader{Src: src}
+	{
+		s := v
+		if version >= 2 {
+			v := b.Int32()
+			s.ThrottleTimeMs = v
+		}
+		{
+			v := s.TopicErrors
+			a := v
+			for i := b.ArrayLen(); i > 0; i-- {
+				a = append(a, CreateTopicsResponseTopicErrors{})
+				v := &a[len(a)-1]
+				{
+					s := v
+					{
+						v := b.String()
+						s.Topic = v
+					}
+					{
+						v := b.Int16()
+						s.ErrorCode = v
+					}
+					if version >= 1 {
+						v := b.NullableString()
+						s.ErrorMessage = v
+					}
+				}
+			}
+			v = a
+			s.TopicErrors = v
+		}
+	}
+	return b.Complete()
+}
+
+// DeleteTopicsRequest deletes Kafka topics.
 type DeleteTopicsRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
@@ -2279,7 +2500,7 @@ func (v *DeleteTopicsRequest) AppendTo(dst []byte) []byte {
 	_ = version
 	{
 		v := v.Topics
-		dst = kbin.AppendArrayLen(dst, len(v), v == nil)
+		dst = kbin.AppendArrayLen(dst, len(v))
 		for i := range v {
 			v := v[i]
 			dst = kbin.AppendString(dst, v)
@@ -2482,7 +2703,7 @@ func (v *DescribeLogDirsRequest) AppendTo(dst []byte) []byte {
 	_ = version
 	{
 		v := v.Topics
-		dst = kbin.AppendArrayLen(dst, len(v), v == nil)
+		dst = kbin.AppendArrayLen(dst, len(v))
 		for i := range v {
 			v := &v[i]
 			{
@@ -2491,7 +2712,7 @@ func (v *DescribeLogDirsRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Partitions
-				dst = kbin.AppendArrayLen(dst, len(v), v == nil)
+				dst = kbin.AppendArrayLen(dst, len(v))
 				for i := range v {
 					v := v[i]
 					dst = kbin.AppendInt32(dst, v)

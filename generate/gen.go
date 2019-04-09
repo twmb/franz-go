@@ -43,8 +43,10 @@ func (VarintBytes) WriteAppend(l *LineWriter)    { primAppend("VarintBytes", l) 
 func (a Array) WriteAppend(l *LineWriter) {
 	if a.IsVarintArray {
 		l.Write("dst = kbin.AppendVarint(dst, int32(len(v)))")
+	} else if a.IsNullableArray {
+		l.Write("dst = kbin.AppendNullableArrayLen(dst, len(v), v == nil)")
 	} else {
-		l.Write("dst = kbin.AppendArrayLen(dst, len(v), v == nil)")
+		l.Write("dst = kbin.AppendArrayLen(dst, len(v))")
 	}
 	l.Write("for i := range v {")
 	if _, isStruct := a.Inner.(Struct); isStruct {

@@ -49,8 +49,9 @@ type (
 	VarintBytes    struct{}
 
 	Array struct {
-		Inner         Type
-		IsVarintArray bool
+		Inner           Type
+		IsVarintArray   bool
+		IsNullableArray bool
 	}
 
 	StructField struct {

@@ -37,10 +37,10 @@ func (p *produceRequest) AppendTo(dst []byte) []byte {
 
 	dst = kbin.AppendInt16(dst, p.acks)
 	dst = kbin.AppendInt32(dst, p.timeout)
-	dst = kbin.AppendArrayLen(dst, len(p.topicsPartitions), p.topicsPartitions == nil)
+	dst = kbin.AppendArrayLen(dst, len(p.topicsPartitions))
 	for topic, partitions := range p.topicsPartitions {
 		dst = kbin.AppendString(dst, topic)
-		dst = kbin.AppendArrayLen(dst, len(partitions), partitions == nil)
+		dst = kbin.AppendArrayLen(dst, len(partitions))
 		for partition, batch := range partitions {
 			dst = kbin.AppendInt32(dst, partition)
 			dst = batch.appendTo(dst, compressor)
@@ -84,7 +84,7 @@ func (r *recordBatch) appendTo(dst []byte, compressor *compressor) []byte {
 	dst = kbin.AppendInt16(dst, r.producerEpoch)
 	dst = kbin.AppendInt32(dst, r.baseSequence)
 
-	dst = kbin.AppendArrayLen(dst, len(r.records), r.records == nil)
+	dst = kbin.AppendArrayLen(dst, len(r.records))
 	recordsAt := len(dst)
 	for _, pnr := range r.records {
 		dst = pnr.appendTo(dst)
