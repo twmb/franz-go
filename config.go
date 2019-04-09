@@ -108,6 +108,10 @@ func NewClient(seedBrokers []string, opts ...Opt) (*Client, error) {
 			}
 		}
 
+		if addr == "localhost" {
+			addr = "127.0.0.1"
+		}
+
 		if !isAddr(addr) && !isDomain(addr) {
 			return nil, fmt.Errorf("%q is neither an IP address nor a domain", addr)
 		}
