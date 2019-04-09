@@ -98,10 +98,14 @@ func AppendVarintBytes(dst []byte, b []byte) []byte {
 	return append(dst, b...)
 }
 
-func AppendArrayLen(dst []byte, l int, isNil bool) []byte {
+func AppendNullableArrayLen(dst []byte, l int, isNil bool) []byte {
 	if isNil {
 		return AppendInt32(dst, -1)
 	}
+	return AppendInt32(dst, int32(l))
+}
+
+func AppendArrayLen(dst []byte, l int) []byte {
 	return AppendInt32(dst, int32(l))
 }
 
