@@ -254,7 +254,7 @@ func (c *Client) fetchMetadata(topics ...string) (*kmsg.MetadataResponse, error)
 // updateBrokers is called with the broker portion of every metadata response.
 // All metadata responses contain all known live brokers, so we can always
 // use the response.
-func (c *Client) updateBrokers(brokers []kmsg.MetadataResponseBrokers) {
+func (c *Client) updateBrokers(brokers []kmsg.MetadataResponseBroker) {
 	newBrokers := make(map[int32]*broker, len(brokers))
 	newAnyBroker := make([]*broker, 0, len(brokers))
 
