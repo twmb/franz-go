@@ -338,3 +338,49 @@ func (c *Client) Request(req kmsg.Request) (kmsg.Response, error) {
 	})
 	return resp, err
 }
+
+// Broker returns a handle to a specific broker to directly issue requests to.
+// Note that there is no guarantee that this broker exists; if it does not,
+// requests will fail with ErrUnknownBroker.
+func (c *Client) Broker(id int) *Broker {
+	return &Broker{
+		id: int32(id),
+		cl: c,
+	}
+}
+
+// Broker pairs a broker ID with a client to directly issue requests to a
+// specific broker.
+type Broker struct {
+	id int32
+	cl *Client
+}
+
+// Request issues a request to a broker. If the broker does not exist in the
+// client, this returns ErrUnknownBroker.
+func (b *Broker) Request(req kmsg.Request) (kmsg.Response, error) {
+	b.cl.brokersMu.RLock()
+	br, exists := b.cl.brokers[b.id]
+	b.cl.brokersMu.RUnlock()
+
+	if !exists {
+		// If the broker does not exist, we try once to update brokers.
+		if err := b.cl.fetchBrokerMetadata(); err == nil {
+			b.cl.brokersMu.RLock()
+			br, exists = b.cl.brokers[b.id]
+			b.cl.brokersMu.RUnlock()
+			if !exists {
+				return nil, ErrUnknownBroker
+			}
+		} else {
+			return nil, ErrUnknownBroker
+		}
+	}
+
+	var resp kmsg.Response
+	var err error
+	br.wait(req, func(kresp kmsg.Response, kerr error) {
+		resp, err = kresp, kerr
+	})
+	return resp, err
+}

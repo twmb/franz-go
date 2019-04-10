@@ -33,6 +33,10 @@ var (
 	errUnknownBrokerForLeader = &clientErr{err: errors.New("no broker is known for partition leader id"), retriable: true}
 	errUnknownController      = &clientErr{err: errors.New("controller is unknown"), retriable: true}
 
+	// ErrUnknownBroker is returned when issuing a request o a broker that
+	// the client does not know about.
+	ErrUnknownBroker = errors.New("unknown broker")
+
 	// ErrBrokerDead is a temporary error returned when a broker chosen for
 	// a request is stopped due to a concurrent metadata response.
 	ErrBrokerDead = errors.New("broker has died - the broker id either migrated or no longer exists")
