@@ -107,29 +107,41 @@ func (s *Struct) BuildFrom(scanner *LineScanner, level int) (unprocessed string,
 			typ = typ[:idx]
 		}
 
+		// We cut the array start here. We cut the end after knowing
+		// if it is a struct with a renamed type or not.
 		isArray := false
 		isVarintArray := false
 		isNullableArray := false
 		if strings.HasPrefix(typ, "varint[") {
 			isArray = true
 			isVarintArray = true
-			typ = typ[len("varint[") : len(typ)-1]
+			typ = typ[len("varint["):]
 		} else if strings.HasPrefix(typ, "nullable[") {
 			isArray = true
 			isNullableArray = true
-			typ = typ[len("nullable[") : len(typ)-1]
+			typ = typ[len("nullable["):]
 		} else if typ[0] == '[' {
 			isArray = true
-			typ = typ[1 : len(typ)-1]
+			typ = typ[1:]
 		}
 
-		if typ == "=>" {
+		if strings.HasPrefix(typ, "=>") {
 			var newS Struct
 			newS.Name = s.Name + f.FieldName
+			if isArray {
+				if rename := strings.TrimPrefix(typ, "=>]"); rename != "" {
+					newS.Name = s.Name + rename
+				} else {
+					newS.Name = strings.TrimSuffix(newS.Name, "s") // make plural singular
+				}
+			}
 			unprocessed, done = newS.BuildFrom(scanner, level+1)
 			f.Type = newS
 			newStructs = append(newStructs, newS)
 		} else {
+			if isArray {
+				typ = typ[:len(typ)-1] // cut array end
+			}
 			if types[typ] == nil {
 				die("unknown type %q on line %q", typ, line)
 			}
