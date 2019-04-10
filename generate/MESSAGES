@@ -581,6 +581,48 @@ OffsetCommitResponse => from OffsetCommitRequest
       Partition: int32
       ErrorCode: int16
 
+// DescribeGroupsRequest requests metadata for group IDs.
+DescribeGroupsRequest => key 15, max version 2, admin
+  // GroupIDs is an array of group IDs to request metadata for.
+  // If this is empty, the response will include all groups.
+  GroupIDs: [string]
+
+// DescribeGroupsResponse is returned from a DescribeGroupsRequest.
+DescribeGroupsResponse => from DescribeGroupsRequest
+  // ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+  // after this request.
+  // For Kafka < 2.0.0, the throttle is applied before issuing a response.
+  // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
+  ThrottleTimeMs: int32
+  // Groups is an array of group metadata.
+  Groups: [=>]
+    // ErrorCode is the error code for an individual group in a request.
+    //
+    // GROUP_AUTHORIZATION_FAILED is returned if the client is not authorized
+    // to describe a group.
+    //
+    // INVALID_GROUP_ID is returned if the requested group ID is invalid.
+    //
+    // COORDINATOR_NOT_AVAILABLE is returned if the coordinator for this
+    // group is not yet active.
+    //
+    // COORDINATOR_LOAD_IN_PROGRESS is returned if the group is loading.
+    //
+    // NOT_COORDINATOR is returned if the requested broker is not the
+    // coordinator for this group.
+    ErrorCode: int16
+    // GroupID is the id of this group.
+    GroupID: string
+    State: string
+    ProtocolType: string
+    Protocol: string
+    Members: [=>]
+      MemberID: string
+      ClientID: string
+      ClientHost: string
+      MemberMetadata: bytes
+      MemberAssignment: bytes
+
 // ApiVersionsRequest requests what API versions a Kafka broker supports.
 //
 // Because a client does not know what version of ApiVersionsRequest a broker
@@ -654,6 +696,8 @@ CreateTopicsResponse => from CreateTopicsRequest
   TopicErrors: [=>]
     // Topic is the topic this error response corresponds to.
     Topic: string
+    // ErrorCode is the error code for an individual topic creation.
+    //
     // NOT_CONTROLLER is returned if the request was not issued to a Kafka
     // controller.
     //
@@ -752,6 +796,76 @@ InitProducerIDResponse => from InitProducerIDRequest
   // the current producer epoch
   ProducerEpoch: int16
 
+// DescribeACLsRequest describes ACLs. Unfortunately, there exists little
+// official documentation on this.
+DescribeACLsRequest => key 29, max version 1, admin
+  ResourceType: int8
+  ResourceName: nullable-string
+  ResourcePatternTypeFilter: int8
+  Principal: nullable-string
+  Host: nullable-string
+  Operation: int8
+  PermissionType: int8
+
+DescribeACLsResponse => from DescribeACLsRequest
+  ThrottleTimeMs: int32
+  // ErrorCode is the error code returned on request failure.
+  //
+  // CLUSTER_AUTHORIZATION_FAILED is returned if the client is not authorized
+  // to describe the cluster.
+  //
+  // SECURITY_DISABLED is returned if there is no authorizer configured on the
+  // broker.
+  ErrorCode: int16
+  ErrorMessage: nullable-string
+  Resources: [=>]
+    ResourceType: int8
+    ResourceName: string
+    ResourcePatternType: int8 // v1+
+    ACLs: [=>]
+      // Principal is who this ACL applies to.
+      Principal: string
+      // Host is on which host this ACL applies.
+      Host: string
+      // Operation is a type of operation this ACL applies to.
+      //
+      // UNKNOWN (0) is an operation that we do not understand (old client).
+      //
+      // ANY (1) mathches any ACL operation in a filter.
+      //
+      // ALL (2) (implies everything)
+      //
+      // READ (3) (implies DESCRIBE)
+      //
+      // WRITE (4) (implies DESCRIBE)
+      //
+      // CREATE (5)
+      //
+      // DELETE (6) (implies DESCRIBE)
+      //
+      // ALTER (7) (implies DESCRIBE)
+      //
+      // DESCRIBE (8)
+      //
+      // CLUSTER_ACTION (9)
+      //
+      // DESCRIBE_CONFIGS (10)
+      //
+      // ALTER_CONFIGS (11) (implies DESCRIBE_CONFIGS)
+      //
+      // IDEMPOTENT_WRITE (12)
+      Operation: int8
+      // PermissionType is how this ACL is applied.
+      //
+      // UNKNOWN is a permission type we do not understand (old client).
+      //
+      // ANY allows anything.
+      //
+      // DENY disallows access.
+      //
+      // ALLOW allows access.
+      PermissionType: int8
+
 // DescribeConfigsRequest issues a request to describe configs that Kafka
 // currently has. These are the key/value pairs that one uses to configure
 // brokers and topics.
@@ -810,6 +924,7 @@ DescribeConfigsResponse => from DescribeConfigsRequest
     // ConfigEntries contains information about key/value config pairs for
     // the requested resource.
     ConfigEntries: [=>]ConfigEntry
+      // ConfigName is a key this entry corresponds to (e.g. segment.bytes).
       ConfigName: string
       // ConfigValue is the value for this config key. If the key is sensitive,
       // the value will be null.
@@ -821,19 +936,19 @@ DescribeConfigsResponse => from DescribeConfigsRequest
       IsDefault: bool // v0-v0
       // ConfigSource is where this config entry is from. Note that if there
       // are no config synonyms, the source is DEFAULT_CONFIG. The values of
-      // this enum are in order as follows.
+      // this enum are as follows.
       //
-      // DYNAMIC_TOPIC_CONFIG: dynamic topic config for a specific topic
+      // UNKNOWN (0): unknown; e.g. an altar request was issued with no source set
       //
-      // DYNAMIC_BROKER_CONFIG: dynamic broker config for a specific broker
+      // DYNAMIC_TOPIC_CONFIG (1): dynamic topic config for a specific topic
       //
-      // DYNAMIC_DEFAULT_BROKER_CONFIG: dynamic broker config used as the default for all brokers in a cluster
+      // DYNAMIC_BROKER_CONFIG (2): dynamic broker config for a specific broker
       //
-      // STATIC_BROKER_CONFIG: static broker config provided at start up
+      // DYNAMIC_DEFAULT_BROKER_CONFIG (3): dynamic broker config used as the default for all brokers in a cluster
       //
-      // DEFAULT_CONFIG: built-in default configuration for those that have defaults
+      // STATIC_BROKER_CONFIG (4): static broker config provided at start up
       //
-      // UNKNOWN: unknown; e.g. an altar request was issued with no source set
+      // DEFAULT_CONFIG (5): built-in default configuration for those that have defaults
       ConfigSource: int8 // v1+
       // IsSensitive signifies whether this is a sensitive config key, which
       // is either a password or an unknown type.
@@ -845,20 +960,178 @@ DescribeConfigsResponse => from DescribeConfigsRequest
         ConfigValue: nullable-string
         ConfigSource: int8
 
+// AlterConfigsRequest issues a request to alter either topic or broker
+// configs.
+AlterConfigsRequest => key 33, max version 1, admin
+  // Resources is an array of configs to alter.
+  Resources: [=>]
+    // ResourceType is an enum corresponding to the type of config to alter.
+    // The only two valid values are 2 (for topic) and 4 (for broker).
+    ResourceType: int8
+    // ResourceName is the name of config to alter.
+    //
+    // If the requested type is a topic, this corresponds to a topic name.
+    //
+    // If the requested type if a broker, this should either be empty or be
+    // the ID of the broker this request is issued to. If it is empty, this
+    // updates all broker configs. If a specific ID, this updates just the
+    // broker. Using a specific ID also ensures that brokers reload config
+    // or secret files even if the file path has not changed. Lastly, password
+    // config options can only be defined on a per broker basis.
+    ResourceName: string
+    // ConfigEntries contains key/value config pairs to set on the resource.
+    ConfigEntries: [=>]ConfigEntry
+      // ConfigName is a key to set (e.g. segment.bytes).
+      ConfigName: string
+      // ConfigValue is a value to set for the key (e.g. 10).
+      ConfigValue: nullable-string
+  // ValidateOnly validates the request but does not apply it.
+  ValidateOnly: bool
+
+// AlterConfigsResponse is returned from an AlterConfigsRequest.
+AlterConfigsResponse => from AlterConfigsRequest
+  // ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+  // after this request.
+  // For Kafka < 2.0.0, the throttle is applied before issuing a response.
+  // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
+  ThrottleTimeMs: int32
+  // Resources are responses for each resource in the alter request.
+  Resources: [=>]
+    // ErrorCode is the error code returned for altering configs.
+    //
+    // CLUSTER_AUTHORIZATION_FAILED is returned if asking to alter broker
+    // configs but the client is not authorized to do so.
+    //
+    // TOPIC_AUTHORIZATION_FAILED is returned if asking to alter topic
+    // configs but the client is not authorized to do so.
+    //
+    // INVALID_TOPIC_EXCEPTION is returned if the requested topic was invalid.
+    //
+    // UNKNOWN_TOPIC_OR_PARTITION is returned if the broker does not know of
+    // the requested topic.
+    //
+    // INVALID_REQUEST is returned if the requested config is invalid or if
+    // asking Kafka to describe an invalid resource.
+    ErrorCode: int16
+    // ErrorMessage is an informative message if the alter config failed.
+    ErrorMessage: nullable-string
+    // ResourceType is the enum corresponding to the type of altered config.
+    ResourceType: int8
+    // ResourceName is the name corresponding to the alter config request.
+    ResourceName: string
+
+// DescribeLogDirsRequest requests directory information for topic partitions.
+// This request was added in support of KIP-113.
 DescribeLogDirsRequest => key 35, max version 1, admin
+  // Topics is an array of topics to describe the log dirs of. If this is
+  // empty, the response includes all topics and all of their partitions.
   Topics: [=>]
+    // Topic is a topic to describe the log dir of.
     Topic: string
+    // Partitions contains topic partitions to describe the log dirs of.
     Partitions: [int32]
 
+// DescribeLogDirsResponse is returned from a DescribeLogDirsRequest.
 DescribeLogDirsResponse => from DescribeLogDirsRequest
+  // ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+  // after this request.
+  // For Kafka < 2.0.0, the throttle is applied before issuing a response.
+  // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
   ThrottleTimeMs: int32
+  // LogDirs pairs log directories with the topics and partitions that are
+  // stored in those directores.
   LogDirs: [=>]
+    // ErrorCode is the error code returned for descrbing log dirs.
+    //
+    // KAFKA_STORAGE_ERROR is returned if the log directoy is offline.
     ErrorCode: int16
+    // LogDir is the absolute path of a log directory.
     LogDir: string
+    // Topics is an array of topics within a log directory.
     Topics: [=>]
+      // Topic is the name of a Kafka topic.
       Topic: string
+      // Partitions is the set of queried partitions for a topic that are
+      // within a log directory.
       Partitions: [=>]
+        // Partition is a partition ID.
         Partition: int32
+        // Size is the total size of the log sements of this partition, in bytes.
         Size: int64
+        // OffsetLag is how far behind the log end offset is compared to
+        // the partition's high watermark (if this is the current log for
+        // the partition) or compared to the current replica's log end
+        // offset (if this is the future log for the patition).
+        //
+        // The math is,
+        //
+        // if IsFuture, localLogEndOffset - futurelogEndOffset.
+        //
+        // otherwise, max(localHighWatermark - logEndOffset, 0).
         OffsetLag: int64
+        // IsFuture is true if this replica was created by an
+        // AlterReplicaLogDirsRequest and will replace the current log of the
+        // replica in the future.
         IsFuture: bool
+
+// CreatePartitionsRequest creates additional partitions for topics.
+CreatePartitionsRequest => key 37, max version 1, admin
+  // TopicPartitions paris topics with their partition creation requests.
+  TopicPartitions: [=>]
+    // Topic is a topic for which to create additional partitions for.
+    Topic: string
+    // NewPartitions contains the total number of partitions a topic must
+    // have after this request, and the assignment of which brokers should
+    // own new partitions.
+    NewPartitions: [=>]
+      // Count is the final count of partitions this topic must have. This
+      // must be greater than the current number of partitions.
+      Count: int32
+      // Assignment is an array containing which brokers NEW partitions
+      // should be assigned to. This must be the delta of Count and the
+      // number of current partitions in length.
+      Assignment: [int32]
+  // Timeout is how long to allow for this request.
+  Timeout: int32
+  // ValidateOnly is makes this request a dry-run; everything is validated but
+  // no partitions are actually created.
+  ValidateOnly: bool
+
+// CreatePartitionsResponse is returned from a CreatePartitionsRequest.
+CreatePartitionsResponse => from CreatePartitionsRequest
+  // ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+  // after this request.
+  // For Kafka < 2.0.0, the throttle is applied before issuing a response.
+  // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
+  ThrottleTimeMs: int32
+  // TopicErrors is an the array of requested topics with partition creations
+  // and their creation errors.
+  TopicErrors: [=>]
+    // Topic is the topic that partitions were requested to be made for.
+    Topic: string
+    // ErrorCode is the error code returned for each topic in the request.
+    //
+    // NOT_CONTROLLER is returned if the request was not issued to a Kafka
+    // controller.
+    //
+    // TOPIC_AUTHORIZATION_FAILED is returned if the client is not authorized
+    // to create partitions for a topic.
+    //
+    // INVALID_REQUEST is returned for duplicate topics in the request.
+    //
+    // INVALID_TOPIC_EXCEPTION is returned if the topic is queued for deletion.
+    //
+    // REASSIGNMENT_IN_PROGRESS is returned if the request was issued while
+    // partitions were being reassigned.
+    //
+    // UNKNOWN_TOPIC_OR_PARTITION is returned if the broker does not know of
+    // the topic for which to create partitions.
+    //
+    // INVALID_PARTITIONS is returned if the request would drop the total
+    // count of partitions down, or if the request would not add any more
+    // partitions, or if the request uses unknown brokers, or if the request
+    // assigns a different number of brokers than the increase in the
+    // partition count.
+    ErrorCode: int16
+    // ErrorMessage is an informative message if the topic creation failed.
+    ErrorMessage: nullable-string
