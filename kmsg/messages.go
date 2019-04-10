@@ -6,7 +6,7 @@ import "github.com/twmb/kgo/kbin"
 
 // MaxKey is the maximum key used for any messages in this package.
 // Note that this value may change as Kafka adds more messages.
-const MaxKey = 35
+const MaxKey = 37
 
 // Header is user provided metadata for a record. Kafka does not look at
 // headers at all; they are solely for producers and consumers.
@@ -2152,6 +2152,175 @@ func (v *OffsetCommitResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+// DescribeGroupsRequest requests metadata for group IDs.
+type DescribeGroupsRequest struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	// GroupIDs is an array of group IDs to request metadata for.
+	// If this is empty, the response will include all groups.
+	GroupIDs []string
+}
+
+func (*DescribeGroupsRequest) Key() int16                 { return 15 }
+func (*DescribeGroupsRequest) MaxVersion() int16          { return 2 }
+func (*DescribeGroupsRequest) MinVersion() int16          { return 0 }
+func (v *DescribeGroupsRequest) SetVersion(version int16) { v.Version = version }
+func (v *DescribeGroupsRequest) GetVersion() int16        { return v.Version }
+func (v *DescribeGroupsRequest) IsAdminRequest() bool     { return true }
+func (v *DescribeGroupsRequest) ResponseKind() Response {
+	return &DescribeGroupsResponse{Version: v.Version}
+}
+
+func (v *DescribeGroupsRequest) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	{
+		v := v.GroupIDs
+		dst = kbin.AppendArrayLen(dst, len(v))
+		for i := range v {
+			v := v[i]
+			dst = kbin.AppendString(dst, v)
+		}
+	}
+	return dst
+}
+
+type DescribeGroupsResponseGroupMember struct {
+	MemberID string
+
+	ClientID string
+
+	ClientHost string
+
+	MemberMetadata []byte
+
+	MemberAssignment []byte
+}
+type DescribeGroupsResponseGroup struct {
+	// ErrorCode is the error code for an individual group in a request.
+	//
+	// GROUP_AUTHORIZATION_FAILED is returned if the client is not authorized
+	// to describe a group.
+	//
+	// INVALID_GROUP_ID is returned if the requested group ID is invalid.
+	//
+	// COORDINATOR_NOT_AVAILABLE is returned if the coordinator for this
+	// group is not yet active.
+	//
+	// COORDINATOR_LOAD_IN_PROGRESS is returned if the group is loading.
+	//
+	// NOT_COORDINATOR is returned if the requested broker is not the
+	// coordinator for this group.
+	ErrorCode int16
+
+	// GroupID is the id of this group.
+	GroupID string
+
+	State string
+
+	ProtocolType string
+
+	Protocol string
+
+	Members []DescribeGroupsResponseGroupMember
+}
+
+// DescribeGroupsResponse is returned from a DescribeGroupsRequest.
+type DescribeGroupsResponse struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	// ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+	// after this request.
+	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
+	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
+	ThrottleTimeMs int32
+
+	// Groups is an array of group metadata.
+	Groups []DescribeGroupsResponseGroup
+}
+
+func (v *DescribeGroupsResponse) ReadFrom(src []byte) error {
+	version := v.Version
+	_ = version
+	b := kbin.Reader{Src: src}
+	{
+		s := v
+		{
+			v := b.Int32()
+			s.ThrottleTimeMs = v
+		}
+		{
+			v := s.Groups
+			a := v
+			for i := b.ArrayLen(); i > 0; i-- {
+				a = append(a, DescribeGroupsResponseGroup{})
+				v := &a[len(a)-1]
+				{
+					s := v
+					{
+						v := b.Int16()
+						s.ErrorCode = v
+					}
+					{
+						v := b.String()
+						s.GroupID = v
+					}
+					{
+						v := b.String()
+						s.State = v
+					}
+					{
+						v := b.String()
+						s.ProtocolType = v
+					}
+					{
+						v := b.String()
+						s.Protocol = v
+					}
+					{
+						v := s.Members
+						a := v
+						for i := b.ArrayLen(); i > 0; i-- {
+							a = append(a, DescribeGroupsResponseGroupMember{})
+							v := &a[len(a)-1]
+							{
+								s := v
+								{
+									v := b.String()
+									s.MemberID = v
+								}
+								{
+									v := b.String()
+									s.ClientID = v
+								}
+								{
+									v := b.String()
+									s.ClientHost = v
+								}
+								{
+									v := b.Bytes()
+									s.MemberMetadata = v
+								}
+								{
+									v := b.Bytes()
+									s.MemberAssignment = v
+								}
+							}
+						}
+						v = a
+						s.Members = v
+					}
+				}
+			}
+			v = a
+			s.Groups = v
+		}
+	}
+	return b.Complete()
+}
+
 // ApiVersionsRequest requests what API versions a Kafka broker supports.
 //
 // Because a client does not know what version of ApiVersionsRequest a broker
@@ -2383,6 +2552,8 @@ type CreateTopicsResponseTopicError struct {
 	// Topic is the topic this error response corresponds to.
 	Topic string
 
+	// ErrorCode is the error code for an individual topic creation.
+	//
 	// NOT_CONTROLLER is returned if the request was not issued to a Kafka
 	// controller.
 	//
@@ -2676,6 +2847,223 @@ func (v *InitProducerIDResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+// DescribeACLsRequest describes ACLs. Unfortunately, there exists little
+// official documentation on this.
+type DescribeACLsRequest struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	ResourceType int8
+
+	ResourceName *string
+
+	ResourcePatternTypeFilter int8
+
+	Principal *string
+
+	Host *string
+
+	Operation int8
+
+	PermissionType int8
+}
+
+func (*DescribeACLsRequest) Key() int16                 { return 29 }
+func (*DescribeACLsRequest) MaxVersion() int16          { return 1 }
+func (*DescribeACLsRequest) MinVersion() int16          { return 0 }
+func (v *DescribeACLsRequest) SetVersion(version int16) { v.Version = version }
+func (v *DescribeACLsRequest) GetVersion() int16        { return v.Version }
+func (v *DescribeACLsRequest) IsAdminRequest() bool     { return true }
+func (v *DescribeACLsRequest) ResponseKind() Response {
+	return &DescribeACLsResponse{Version: v.Version}
+}
+
+func (v *DescribeACLsRequest) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	{
+		v := v.ResourceType
+		dst = kbin.AppendInt8(dst, v)
+	}
+	{
+		v := v.ResourceName
+		dst = kbin.AppendNullableString(dst, v)
+	}
+	{
+		v := v.ResourcePatternTypeFilter
+		dst = kbin.AppendInt8(dst, v)
+	}
+	{
+		v := v.Principal
+		dst = kbin.AppendNullableString(dst, v)
+	}
+	{
+		v := v.Host
+		dst = kbin.AppendNullableString(dst, v)
+	}
+	{
+		v := v.Operation
+		dst = kbin.AppendInt8(dst, v)
+	}
+	{
+		v := v.PermissionType
+		dst = kbin.AppendInt8(dst, v)
+	}
+	return dst
+}
+
+type DescribeACLsResponseResourceACL struct {
+	// Principal is who this ACL applies to.
+	Principal string
+
+	// Host is on which host this ACL applies.
+	Host string
+
+	// Operation is a type of operation this ACL applies to.
+	//
+	// UNKNOWN (0) is an operation that we do not understand (old client).
+	//
+	// ANY (1) mathches any ACL operation in a filter.
+	//
+	// ALL (2) (implies everything)
+	//
+	// READ (3) (implies DESCRIBE)
+	//
+	// WRITE (4) (implies DESCRIBE)
+	//
+	// CREATE (5)
+	//
+	// DELETE (6) (implies DESCRIBE)
+	//
+	// ALTER (7) (implies DESCRIBE)
+	//
+	// DESCRIBE (8)
+	//
+	// CLUSTER_ACTION (9)
+	//
+	// DESCRIBE_CONFIGS (10)
+	//
+	// ALTER_CONFIGS (11) (implies DESCRIBE_CONFIGS)
+	//
+	// IDEMPOTENT_WRITE (12)
+	Operation int8
+
+	// PermissionType is how this ACL is applied.
+	//
+	// UNKNOWN is a permission type we do not understand (old client).
+	//
+	// ANY allows anything.
+	//
+	// DENY disallows access.
+	//
+	// ALLOW allows access.
+	PermissionType int8
+}
+type DescribeACLsResponseResource struct {
+	ResourceType int8
+
+	ResourceName string
+
+	ResourcePatternType int8 // v1+
+
+	ACLs []DescribeACLsResponseResourceACL
+}
+type DescribeACLsResponse struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	ThrottleTimeMs int32
+
+	// ErrorCode is the error code returned on request failure.
+	//
+	// CLUSTER_AUTHORIZATION_FAILED is returned if the client is not authorized
+	// to describe the cluster.
+	//
+	// SECURITY_DISABLED is returned if there is no authorizer configured on the
+	// broker.
+	ErrorCode int16
+
+	ErrorMessage *string
+
+	Resources []DescribeACLsResponseResource
+}
+
+func (v *DescribeACLsResponse) ReadFrom(src []byte) error {
+	version := v.Version
+	_ = version
+	b := kbin.Reader{Src: src}
+	{
+		s := v
+		{
+			v := b.Int32()
+			s.ThrottleTimeMs = v
+		}
+		{
+			v := b.Int16()
+			s.ErrorCode = v
+		}
+		{
+			v := b.NullableString()
+			s.ErrorMessage = v
+		}
+		{
+			v := s.Resources
+			a := v
+			for i := b.ArrayLen(); i > 0; i-- {
+				a = append(a, DescribeACLsResponseResource{})
+				v := &a[len(a)-1]
+				{
+					s := v
+					{
+						v := b.Int8()
+						s.ResourceType = v
+					}
+					{
+						v := b.String()
+						s.ResourceName = v
+					}
+					if version >= 1 {
+						v := b.Int8()
+						s.ResourcePatternType = v
+					}
+					{
+						v := s.ACLs
+						a := v
+						for i := b.ArrayLen(); i > 0; i-- {
+							a = append(a, DescribeACLsResponseResourceACL{})
+							v := &a[len(a)-1]
+							{
+								s := v
+								{
+									v := b.String()
+									s.Principal = v
+								}
+								{
+									v := b.String()
+									s.Host = v
+								}
+								{
+									v := b.Int8()
+									s.Operation = v
+								}
+								{
+									v := b.Int8()
+									s.PermissionType = v
+								}
+							}
+						}
+						v = a
+						s.ACLs = v
+					}
+				}
+			}
+			v = a
+			s.Resources = v
+		}
+	}
+	return b.Complete()
+}
+
 type DescribeConfigsRequestResource struct {
 	// ResourceType is an enum corresponding to the type of config to describe.
 	// The only two valid values are 2 (for topic) and 4 (for broker).
@@ -2761,6 +3149,7 @@ type DescribeConfigsResponseResourceConfigEntryConfigSynonym struct {
 	ConfigSource int8
 }
 type DescribeConfigsResponseResourceConfigEntry struct {
+	// ConfigName is a key this entry corresponds to (e.g. segment.bytes).
 	ConfigName string
 
 	// ConfigValue is the value for this config key. If the key is sensitive,
@@ -2776,19 +3165,19 @@ type DescribeConfigsResponseResourceConfigEntry struct {
 
 	// ConfigSource is where this config entry is from. Note that if there
 	// are no config synonyms, the source is DEFAULT_CONFIG. The values of
-	// this enum are in order as follows.
+	// this enum are as follows.
 	//
-	// DYNAMIC_TOPIC_CONFIG: dynamic topic config for a specific topic
+	// UNKNOWN (0): unknown; e.g. an altar request was issued with no source set
 	//
-	// DYNAMIC_BROKER_CONFIG: dynamic broker config for a specific broker
+	// DYNAMIC_TOPIC_CONFIG (1): dynamic topic config for a specific topic
 	//
-	// DYNAMIC_DEFAULT_BROKER_CONFIG: dynamic broker config used as the default for all brokers in a cluster
+	// DYNAMIC_BROKER_CONFIG (2): dynamic broker config for a specific broker
 	//
-	// STATIC_BROKER_CONFIG: static broker config provided at start up
+	// DYNAMIC_DEFAULT_BROKER_CONFIG (3): dynamic broker config used as the default for all brokers in a cluster
 	//
-	// DEFAULT_CONFIG: built-in default configuration for those that have defaults
+	// STATIC_BROKER_CONFIG (4): static broker config provided at start up
 	//
-	// UNKNOWN: unknown; e.g. an altar request was issued with no source set
+	// DEFAULT_CONFIG (5): built-in default configuration for those that have defaults
 	ConfigSource int8 // v1+
 
 	// IsSensitive signifies whether this is a sensitive config key, which
@@ -2951,15 +3340,199 @@ func (v *DescribeConfigsResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+type AlterConfigsRequestResourceConfigEntry struct {
+	// ConfigName is a key to set (e.g. segment.bytes).
+	ConfigName string
+
+	// ConfigValue is a value to set for the key (e.g. 10).
+	ConfigValue *string
+}
+type AlterConfigsRequestResource struct {
+	// ResourceType is an enum corresponding to the type of config to alter.
+	// The only two valid values are 2 (for topic) and 4 (for broker).
+	ResourceType int8
+
+	// ResourceName is the name of config to alter.
+	//
+	// If the requested type is a topic, this corresponds to a topic name.
+	//
+	// If the requested type if a broker, this should either be empty or be
+	// the ID of the broker this request is issued to. If it is empty, this
+	// updates all broker configs. If a specific ID, this updates just the
+	// broker. Using a specific ID also ensures that brokers reload config
+	// or secret files even if the file path has not changed. Lastly, password
+	// config options can only be defined on a per broker basis.
+	ResourceName string
+
+	// ConfigEntries contains key/value config pairs to set on the resource.
+	ConfigEntries []AlterConfigsRequestResourceConfigEntry
+}
+
+// AlterConfigsRequest issues a request to alter either topic or broker
+// configs.
+type AlterConfigsRequest struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	// Resources is an array of configs to alter.
+	Resources []AlterConfigsRequestResource
+
+	// ValidateOnly validates the request but does not apply it.
+	ValidateOnly bool
+}
+
+func (*AlterConfigsRequest) Key() int16                 { return 33 }
+func (*AlterConfigsRequest) MaxVersion() int16          { return 1 }
+func (*AlterConfigsRequest) MinVersion() int16          { return 0 }
+func (v *AlterConfigsRequest) SetVersion(version int16) { v.Version = version }
+func (v *AlterConfigsRequest) GetVersion() int16        { return v.Version }
+func (v *AlterConfigsRequest) IsAdminRequest() bool     { return true }
+func (v *AlterConfigsRequest) ResponseKind() Response {
+	return &AlterConfigsResponse{Version: v.Version}
+}
+
+func (v *AlterConfigsRequest) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	{
+		v := v.Resources
+		dst = kbin.AppendArrayLen(dst, len(v))
+		for i := range v {
+			v := &v[i]
+			{
+				v := v.ResourceType
+				dst = kbin.AppendInt8(dst, v)
+			}
+			{
+				v := v.ResourceName
+				dst = kbin.AppendString(dst, v)
+			}
+			{
+				v := v.ConfigEntries
+				dst = kbin.AppendArrayLen(dst, len(v))
+				for i := range v {
+					v := &v[i]
+					{
+						v := v.ConfigName
+						dst = kbin.AppendString(dst, v)
+					}
+					{
+						v := v.ConfigValue
+						dst = kbin.AppendNullableString(dst, v)
+					}
+				}
+			}
+		}
+	}
+	{
+		v := v.ValidateOnly
+		dst = kbin.AppendBool(dst, v)
+	}
+	return dst
+}
+
+type AlterConfigsResponseResource struct {
+	// ErrorCode is the error code returned for altering configs.
+	//
+	// CLUSTER_AUTHORIZATION_FAILED is returned if asking to alter broker
+	// configs but the client is not authorized to do so.
+	//
+	// TOPIC_AUTHORIZATION_FAILED is returned if asking to alter topic
+	// configs but the client is not authorized to do so.
+	//
+	// INVALID_TOPIC_EXCEPTION is returned if the requested topic was invalid.
+	//
+	// UNKNOWN_TOPIC_OR_PARTITION is returned if the broker does not know of
+	// the requested topic.
+	//
+	// INVALID_REQUEST is returned if the requested config is invalid or if
+	// asking Kafka to describe an invalid resource.
+	ErrorCode int16
+
+	// ErrorMessage is an informative message if the alter config failed.
+	ErrorMessage *string
+
+	// ResourceType is the enum corresponding to the type of altered config.
+	ResourceType int8
+
+	// ResourceName is the name corresponding to the alter config request.
+	ResourceName string
+}
+
+// AlterConfigsResponse is returned from an AlterConfigsRequest.
+type AlterConfigsResponse struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	// ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+	// after this request.
+	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
+	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
+	ThrottleTimeMs int32
+
+	// Resources are responses for each resource in the alter request.
+	Resources []AlterConfigsResponseResource
+}
+
+func (v *AlterConfigsResponse) ReadFrom(src []byte) error {
+	version := v.Version
+	_ = version
+	b := kbin.Reader{Src: src}
+	{
+		s := v
+		{
+			v := b.Int32()
+			s.ThrottleTimeMs = v
+		}
+		{
+			v := s.Resources
+			a := v
+			for i := b.ArrayLen(); i > 0; i-- {
+				a = append(a, AlterConfigsResponseResource{})
+				v := &a[len(a)-1]
+				{
+					s := v
+					{
+						v := b.Int16()
+						s.ErrorCode = v
+					}
+					{
+						v := b.NullableString()
+						s.ErrorMessage = v
+					}
+					{
+						v := b.Int8()
+						s.ResourceType = v
+					}
+					{
+						v := b.String()
+						s.ResourceName = v
+					}
+				}
+			}
+			v = a
+			s.Resources = v
+		}
+	}
+	return b.Complete()
+}
+
 type DescribeLogDirsRequestTopic struct {
+	// Topic is a topic to describe the log dir of.
 	Topic string
 
+	// Partitions contains topic partitions to describe the log dirs of.
 	Partitions []int32
 }
+
+// DescribeLogDirsRequest requests directory information for topic partitions.
+// This request was added in support of KIP-113.
 type DescribeLogDirsRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
+	// Topics is an array of topics to describe the log dirs of. If this is
+	// empty, the response includes all topics and all of their partitions.
 	Topics []DescribeLogDirsRequestTopic
 }
 
@@ -2999,32 +3572,63 @@ func (v *DescribeLogDirsRequest) AppendTo(dst []byte) []byte {
 }
 
 type DescribeLogDirsResponseLogDirTopicPartition struct {
+	// Partition is a partition ID.
 	Partition int32
 
+	// Size is the total size of the log sements of this partition, in bytes.
 	Size int64
 
+	// OffsetLag is how far behind the log end offset is compared to
+	// the partition's high watermark (if this is the current log for
+	// the partition) or compared to the current replica's log end
+	// offset (if this is the future log for the patition).
+	//
+	// The math is,
+	//
+	// if IsFuture, localLogEndOffset - futurelogEndOffset.
+	//
+	// otherwise, max(localHighWatermark - logEndOffset, 0).
 	OffsetLag int64
 
+	// IsFuture is true if this replica was created by an
+	// AlterReplicaLogDirsRequest and will replace the current log of the
+	// replica in the future.
 	IsFuture bool
 }
 type DescribeLogDirsResponseLogDirTopic struct {
+	// Topic is the name of a Kafka topic.
 	Topic string
 
+	// Partitions is the set of queried partitions for a topic that are
+	// within a log directory.
 	Partitions []DescribeLogDirsResponseLogDirTopicPartition
 }
 type DescribeLogDirsResponseLogDir struct {
+	// ErrorCode is the error code returned for descrbing log dirs.
+	//
+	// KAFKA_STORAGE_ERROR is returned if the log directoy is offline.
 	ErrorCode int16
 
+	// LogDir is the absolute path of a log directory.
 	LogDir string
 
+	// Topics is an array of topics within a log directory.
 	Topics []DescribeLogDirsResponseLogDirTopic
 }
+
+// DescribeLogDirsResponse is returned from a DescribeLogDirsRequest.
 type DescribeLogDirsResponse struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
+	// ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+	// after this request.
+	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
+	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
 	ThrottleTimeMs int32
 
+	// LogDirs pairs log directories with the topics and partitions that are
+	// stored in those directores.
 	LogDirs []DescribeLogDirsResponseLogDir
 }
 
@@ -3104,6 +3708,184 @@ func (v *DescribeLogDirsResponse) ReadFrom(src []byte) error {
 			}
 			v = a
 			s.LogDirs = v
+		}
+	}
+	return b.Complete()
+}
+
+type CreatePartitionsRequestTopicPartitionNewPartition struct {
+	// Count is the final count of partitions this topic must have. This
+	// must be greater than the current number of partitions.
+	Count int32
+
+	// Assignment is an array containing which brokers NEW partitions
+	// should be assigned to. This must be the delta of Count and the
+	// number of current partitions in length.
+	Assignment []int32
+}
+type CreatePartitionsRequestTopicPartition struct {
+	// Topic is a topic for which to create additional partitions for.
+	Topic string
+
+	// NewPartitions contains the total number of partitions a topic must
+	// have after this request, and the assignment of which brokers should
+	// own new partitions.
+	NewPartitions []CreatePartitionsRequestTopicPartitionNewPartition
+}
+
+// CreatePartitionsRequest creates additional partitions for topics.
+type CreatePartitionsRequest struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	// TopicPartitions paris topics with their partition creation requests.
+	TopicPartitions []CreatePartitionsRequestTopicPartition
+
+	// Timeout is how long to allow for this request.
+	Timeout int32
+
+	// ValidateOnly is makes this request a dry-run; everything is validated but
+	// no partitions are actually created.
+	ValidateOnly bool
+}
+
+func (*CreatePartitionsRequest) Key() int16                 { return 37 }
+func (*CreatePartitionsRequest) MaxVersion() int16          { return 1 }
+func (*CreatePartitionsRequest) MinVersion() int16          { return 0 }
+func (v *CreatePartitionsRequest) SetVersion(version int16) { v.Version = version }
+func (v *CreatePartitionsRequest) GetVersion() int16        { return v.Version }
+func (v *CreatePartitionsRequest) IsAdminRequest() bool     { return true }
+func (v *CreatePartitionsRequest) ResponseKind() Response {
+	return &CreatePartitionsResponse{Version: v.Version}
+}
+
+func (v *CreatePartitionsRequest) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	{
+		v := v.TopicPartitions
+		dst = kbin.AppendArrayLen(dst, len(v))
+		for i := range v {
+			v := &v[i]
+			{
+				v := v.Topic
+				dst = kbin.AppendString(dst, v)
+			}
+			{
+				v := v.NewPartitions
+				dst = kbin.AppendArrayLen(dst, len(v))
+				for i := range v {
+					v := &v[i]
+					{
+						v := v.Count
+						dst = kbin.AppendInt32(dst, v)
+					}
+					{
+						v := v.Assignment
+						dst = kbin.AppendArrayLen(dst, len(v))
+						for i := range v {
+							v := v[i]
+							dst = kbin.AppendInt32(dst, v)
+						}
+					}
+				}
+			}
+		}
+	}
+	{
+		v := v.Timeout
+		dst = kbin.AppendInt32(dst, v)
+	}
+	{
+		v := v.ValidateOnly
+		dst = kbin.AppendBool(dst, v)
+	}
+	return dst
+}
+
+type CreatePartitionsResponseTopicError struct {
+	// Topic is the topic that partitions were requested to be made for.
+	Topic string
+
+	// ErrorCode is the error code returned for each topic in the request.
+	//
+	// NOT_CONTROLLER is returned if the request was not issued to a Kafka
+	// controller.
+	//
+	// TOPIC_AUTHORIZATION_FAILED is returned if the client is not authorized
+	// to create partitions for a topic.
+	//
+	// INVALID_REQUEST is returned for duplicate topics in the request.
+	//
+	// INVALID_TOPIC_EXCEPTION is returned if the topic is queued for deletion.
+	//
+	// REASSIGNMENT_IN_PROGRESS is returned if the request was issued while
+	// partitions were being reassigned.
+	//
+	// UNKNOWN_TOPIC_OR_PARTITION is returned if the broker does not know of
+	// the topic for which to create partitions.
+	//
+	// INVALID_PARTITIONS is returned if the request would drop the total
+	// count of partitions down, or if the request would not add any more
+	// partitions, or if the request uses unknown brokers, or if the request
+	// assigns a different number of brokers than the increase in the
+	// partition count.
+	ErrorCode int16
+
+	// ErrorMessage is an informative message if the topic creation failed.
+	ErrorMessage *string
+}
+
+// CreatePartitionsResponse is returned from a CreatePartitionsRequest.
+type CreatePartitionsResponse struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	// ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+	// after this request.
+	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
+	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
+	ThrottleTimeMs int32
+
+	// TopicErrors is an the array of requested topics with partition creations
+	// and their creation errors.
+	TopicErrors []CreatePartitionsResponseTopicError
+}
+
+func (v *CreatePartitionsResponse) ReadFrom(src []byte) error {
+	version := v.Version
+	_ = version
+	b := kbin.Reader{Src: src}
+	{
+		s := v
+		{
+			v := b.Int32()
+			s.ThrottleTimeMs = v
+		}
+		{
+			v := s.TopicErrors
+			a := v
+			for i := b.ArrayLen(); i > 0; i-- {
+				a = append(a, CreatePartitionsResponseTopicError{})
+				v := &a[len(a)-1]
+				{
+					s := v
+					{
+						v := b.String()
+						s.Topic = v
+					}
+					{
+						v := b.Int16()
+						s.ErrorCode = v
+					}
+					{
+						v := b.NullableString()
+						s.ErrorMessage = v
+					}
+				}
+			}
+			v = a
+			s.TopicErrors = v
 		}
 	}
 	return b.Complete()
