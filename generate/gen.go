@@ -12,7 +12,7 @@ func (Varint) TypeName() string         { return "int32" }
 func (Varlong) TypeName() string        { return "int64" }
 func (String) TypeName() string         { return "string" }
 func (NullableString) TypeName() string { return "*string" }
-func (Bytes) TypeName() string          { return "bytes" }
+func (Bytes) TypeName() string          { return "[]byte" }
 func (NullableBytes) TypeName() string  { return "*[]byte" }
 func (VarintString) TypeName() string   { return "string" }
 func (VarintBytes) TypeName() string    { return "[]byte" }
