@@ -337,7 +337,7 @@ func (v *ProduceRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 
-type ProduceResponseResponsesPartitionResponses struct {
+type ProduceResponseResponsePartitionResponse struct {
 	// Partition is the partition this response pertains to.
 	Partition int32
 
@@ -431,13 +431,13 @@ type ProduceResponseResponsesPartitionResponses struct {
 	// producer ID out of existence, or if Kafka lost data.
 	LogStartOffset int64 // v5+
 }
-type ProduceResponseResponses struct {
+type ProduceResponseResponse struct {
 	// Topic is the topic this response pertains to.
 	Topic string
 
 	// PartitionResponses is an array of responses for the partition's that
 	// batches were sent to.
-	PartitionResponses []ProduceResponseResponsesPartitionResponses
+	PartitionResponses []ProduceResponseResponsePartitionResponse
 }
 
 // ProduceResponse is returned from a ProduceRequest.
@@ -447,7 +447,7 @@ type ProduceResponse struct {
 
 	// Responses is an array of responses for the topic's that batches were sent
 	// to.
-	Responses []ProduceResponseResponses
+	Responses []ProduceResponseResponse
 
 	// ThrottleTimeMs is how long of a throttle Kafka will apply to the client
 	// after this request.
@@ -466,7 +466,7 @@ func (v *ProduceResponse) ReadFrom(src []byte) error {
 			v := s.Responses
 			a := v
 			for i := b.ArrayLen(); i > 0; i-- {
-				a = append(a, ProduceResponseResponses{})
+				a = append(a, ProduceResponseResponse{})
 				v := &a[len(a)-1]
 				{
 					s := v
@@ -478,7 +478,7 @@ func (v *ProduceResponse) ReadFrom(src []byte) error {
 						v := s.PartitionResponses
 						a := v
 						for i := b.ArrayLen(); i > 0; i-- {
-							a = append(a, ProduceResponseResponsesPartitionResponses{})
+							a = append(a, ProduceResponseResponsePartitionResponse{})
 							v := &a[len(a)-1]
 							{
 								s := v
@@ -520,7 +520,7 @@ func (v *ProduceResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
-type FetchRequestTopicsPartitions struct {
+type FetchRequestTopicPartition struct {
 	Partition int32
 
 	CurrentLeaderEpoch int32 // v9+
@@ -531,10 +531,10 @@ type FetchRequestTopicsPartitions struct {
 
 	PartitionMaxBytes int32
 }
-type FetchRequestTopics struct {
+type FetchRequestTopic struct {
 	Topic string
 
-	Partitions []FetchRequestTopicsPartitions
+	Partitions []FetchRequestTopicPartition
 }
 type FetchRequestForgottenTopicsData struct {
 	Topic string
@@ -559,7 +559,7 @@ type FetchRequest struct {
 
 	SessionEpoch int32 // v7+
 
-	Topics []FetchRequestTopics
+	Topics []FetchRequestTopic
 
 	ForgottenTopicsData []FetchRequestForgottenTopicsData
 }
@@ -662,12 +662,12 @@ func (v *FetchRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 
-type FetchResponseResponsesPartitionResponsesPartitionHeaderAbortedTransactions struct {
-	ProducerID int64 // v4+
+type FetchResponseResponsePartitionResponsePartitionHeaderAbortedTransaction struct {
+	ProducerID int64
 
-	FirstOffset int64 // v4+
+	FirstOffset int64
 }
-type FetchResponseResponsesPartitionResponsesPartitionHeader struct {
+type FetchResponseResponsePartitionResponsePartitionHeader struct {
 	Partition int32
 
 	ErrorCode int16
@@ -678,17 +678,17 @@ type FetchResponseResponsesPartitionResponsesPartitionHeader struct {
 
 	LogStartOffset int64 // v5+
 
-	AbortedTransactions []FetchResponseResponsesPartitionResponsesPartitionHeaderAbortedTransactions // v4+
+	AbortedTransactions []FetchResponseResponsePartitionResponsePartitionHeaderAbortedTransaction // v4+
 }
-type FetchResponseResponsesPartitionResponses struct {
-	PartitionHeader FetchResponseResponsesPartitionResponsesPartitionHeader
+type FetchResponseResponsePartitionResponse struct {
+	PartitionHeader FetchResponseResponsePartitionResponsePartitionHeader
 
 	RecordSet []Record
 }
-type FetchResponseResponses struct {
+type FetchResponseResponse struct {
 	Topic string
 
-	PartitionResponses []FetchResponseResponsesPartitionResponses
+	PartitionResponses []FetchResponseResponsePartitionResponse
 }
 type FetchResponse struct {
 	// Version is the version of this message used with a Kafka broker.
@@ -700,7 +700,7 @@ type FetchResponse struct {
 
 	SessionID int32 // v7+
 
-	Responses []FetchResponseResponses
+	Responses []FetchResponseResponse
 }
 
 func (v *FetchResponse) ReadFrom(src []byte) error {
@@ -725,7 +725,7 @@ func (v *FetchResponse) ReadFrom(src []byte) error {
 			v := s.Responses
 			a := v
 			for i := b.ArrayLen(); i > 0; i-- {
-				a = append(a, FetchResponseResponses{})
+				a = append(a, FetchResponseResponse{})
 				v := &a[len(a)-1]
 				{
 					s := v
@@ -737,7 +737,7 @@ func (v *FetchResponse) ReadFrom(src []byte) error {
 						v := s.PartitionResponses
 						a := v
 						for i := b.ArrayLen(); i > 0; i-- {
-							a = append(a, FetchResponseResponsesPartitionResponses{})
+							a = append(a, FetchResponseResponsePartitionResponse{})
 							v := &a[len(a)-1]
 							{
 								s := v
@@ -769,15 +769,15 @@ func (v *FetchResponse) ReadFrom(src []byte) error {
 											v := s.AbortedTransactions
 											a := v
 											for i := b.ArrayLen(); i > 0; i-- {
-												a = append(a, FetchResponseResponsesPartitionResponsesPartitionHeaderAbortedTransactions{})
+												a = append(a, FetchResponseResponsePartitionResponsePartitionHeaderAbortedTransaction{})
 												v := &a[len(a)-1]
 												{
 													s := v
-													if version >= 4 {
+													{
 														v := b.Int64()
 														s.ProducerID = v
 													}
-													if version >= 4 {
+													{
 														v := b.Int64()
 														s.FirstOffset = v
 													}
@@ -860,7 +860,7 @@ func (v *FetchResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
-type ListOffsetsRequestTopicsPartitions struct {
+type ListOffsetsRequestTopicPartition struct {
 	// Partition is a partition of a topic to get offsets for.
 	Partition int32
 
@@ -881,12 +881,12 @@ type ListOffsetsRequestTopicsPartitions struct {
 	// timestamp, and -1 corresponds to the latest.
 	Timestamp int64
 }
-type ListOffsetsRequestTopics struct {
+type ListOffsetsRequestTopic struct {
 	// Topic is a topic to get offsets for.
 	Topic string
 
 	// Partitions is an array of partitions in a topic to get offsets for.
-	Partitions []ListOffsetsRequestTopicsPartitions
+	Partitions []ListOffsetsRequestTopicPartition
 }
 type ListOffsetsRequest struct {
 	// Version is the version of this message used with a Kafka broker.
@@ -906,7 +906,7 @@ type ListOffsetsRequest struct {
 	IsolationLevel int8 // v2+
 
 	// Topics is an array of topics to get offsets for.
-	Topics []ListOffsetsRequestTopics
+	Topics []ListOffsetsRequestTopic
 }
 
 func (*ListOffsetsRequest) Key() int16                 { return 2 }
@@ -961,7 +961,7 @@ func (v *ListOffsetsRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 
-type ListOffsetsResponseResponsesPartitionResponses struct {
+type ListOffsetsResponseResponsePartitionResponse struct {
 	// Partition is the partition this array slot is for.
 	Partition int32
 
@@ -1015,13 +1015,13 @@ type ListOffsetsResponseResponsesPartitionResponses struct {
 	// or -1 if there was no leader epoch.
 	LeaderEpoch int32 // v4+
 }
-type ListOffsetsResponseResponses struct {
+type ListOffsetsResponseResponse struct {
 	// Topic is the topic this array slot is for.
 	Topic string
 
 	// PartitionResponses is an array of partition responses corresponding to
 	// the requested partitions for a topic.
-	PartitionResponses []ListOffsetsResponseResponsesPartitionResponses
+	PartitionResponses []ListOffsetsResponseResponsePartitionResponse
 }
 
 // ListOffsetsResponse is returned from a ListOffsetsRequest.
@@ -1037,7 +1037,7 @@ type ListOffsetsResponse struct {
 
 	// Responses is an array of topic / partition responses corresponding to
 	// the requested topics and partitions.
-	Responses []ListOffsetsResponseResponses
+	Responses []ListOffsetsResponseResponse
 }
 
 func (v *ListOffsetsResponse) ReadFrom(src []byte) error {
@@ -1054,7 +1054,7 @@ func (v *ListOffsetsResponse) ReadFrom(src []byte) error {
 			v := s.Responses
 			a := v
 			for i := b.ArrayLen(); i > 0; i-- {
-				a = append(a, ListOffsetsResponseResponses{})
+				a = append(a, ListOffsetsResponseResponse{})
 				v := &a[len(a)-1]
 				{
 					s := v
@@ -1066,7 +1066,7 @@ func (v *ListOffsetsResponse) ReadFrom(src []byte) error {
 						v := s.PartitionResponses
 						a := v
 						for i := b.ArrayLen(); i > 0; i-- {
-							a = append(a, ListOffsetsResponseResponsesPartitionResponses{})
+							a = append(a, ListOffsetsResponseResponsePartitionResponse{})
 							v := &a[len(a)-1]
 							{
 								s := v
@@ -1162,7 +1162,7 @@ func (v *MetadataRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 
-type MetadataResponseBrokers struct {
+type MetadataResponseBroker struct {
 	// NodeID is the node ID of a Kafka broker.
 	NodeID int32
 
@@ -1254,7 +1254,7 @@ type MetadataResponse struct {
 	ThrottleTimeMs int32 // v3+
 
 	// Brokers is a set of alive Kafka brokers.
-	Brokers []MetadataResponseBrokers
+	Brokers []MetadataResponseBroker
 
 	// ClusterID, proposed in KIP-78 and introduced in Kafka 0.10.1.0, is a
 	// unique string specifying the cluster that the replying Kafka belongs to.
@@ -1286,7 +1286,7 @@ func (v *MetadataResponse) ReadFrom(src []byte) error {
 			v := s.Brokers
 			a := v
 			for i := b.ArrayLen(); i > 0; i-- {
-				a = append(a, MetadataResponseBrokers{})
+				a = append(a, MetadataResponseBroker{})
 				v := &a[len(a)-1]
 				{
 					s := v
@@ -1415,7 +1415,7 @@ func (v *MetadataResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
-type LeaderAndISRRequestPartitionStates struct {
+type LeaderAndISRRequestPartitionState struct {
 	Topic string
 
 	Partition int32
@@ -1434,7 +1434,7 @@ type LeaderAndISRRequestPartitionStates struct {
 
 	IsNew bool
 }
-type LeaderAndISRRequestLiveLeaders struct {
+type LeaderAndISRRequestLiveLeader struct {
 	ID int32
 
 	Host string
@@ -1449,9 +1449,9 @@ type LeaderAndISRRequest struct {
 
 	ControllerEpoch int32
 
-	PartitionStates []LeaderAndISRRequestPartitionStates
+	PartitionStates []LeaderAndISRRequestPartitionState
 
-	LiveLeaders []LeaderAndISRRequestLiveLeaders
+	LiveLeaders []LeaderAndISRRequestLiveLeader
 }
 
 func (*LeaderAndISRRequest) Key() int16                 { return 4 }
@@ -1548,7 +1548,7 @@ func (v *LeaderAndISRRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 
-type LeaderAndISRResponsePartitions struct {
+type LeaderAndISRResponsePartition struct {
 	Topic string
 
 	Partition int32
@@ -1561,7 +1561,7 @@ type LeaderAndISRResponse struct {
 
 	ErrorCode int16
 
-	Partitions []LeaderAndISRResponsePartitions
+	Partitions []LeaderAndISRResponsePartition
 }
 
 func (v *LeaderAndISRResponse) ReadFrom(src []byte) error {
@@ -1578,7 +1578,7 @@ func (v *LeaderAndISRResponse) ReadFrom(src []byte) error {
 			v := s.Partitions
 			a := v
 			for i := b.ArrayLen(); i > 0; i-- {
-				a = append(a, LeaderAndISRResponsePartitions{})
+				a = append(a, LeaderAndISRResponsePartition{})
 				v := &a[len(a)-1]
 				{
 					s := v
@@ -1603,7 +1603,7 @@ func (v *LeaderAndISRResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
-type StopReplicaRequestPartitions struct {
+type StopReplicaRequestPartition struct {
 	Topic string
 
 	Partition int32
@@ -1618,7 +1618,7 @@ type StopReplicaRequest struct {
 
 	DeletePartitions bool
 
-	Partitions []StopReplicaRequestPartitions
+	Partitions []StopReplicaRequestPartition
 }
 
 func (*StopReplicaRequest) Key() int16                 { return 5 }
@@ -1662,7 +1662,7 @@ func (v *StopReplicaRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 
-type StopReplicaResponsePartitions struct {
+type StopReplicaResponsePartition struct {
 	Topic string
 
 	Partition int32
@@ -1675,7 +1675,7 @@ type StopReplicaResponse struct {
 
 	ErrorCode int16
 
-	Partitions []StopReplicaResponsePartitions
+	Partitions []StopReplicaResponsePartition
 }
 
 func (v *StopReplicaResponse) ReadFrom(src []byte) error {
@@ -1692,7 +1692,7 @@ func (v *StopReplicaResponse) ReadFrom(src []byte) error {
 			v := s.Partitions
 			a := v
 			for i := b.ArrayLen(); i > 0; i-- {
-				a = append(a, StopReplicaResponsePartitions{})
+				a = append(a, StopReplicaResponsePartition{})
 				v := &a[len(a)-1]
 				{
 					s := v
@@ -1717,7 +1717,7 @@ func (v *StopReplicaResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
-type UpdateMetadataRequestPartitionStates struct {
+type UpdateMetadataRequestPartitionState struct {
 	Topic string
 
 	Partition int32
@@ -1736,19 +1736,19 @@ type UpdateMetadataRequestPartitionStates struct {
 
 	OfflineReplicas []int32
 }
-type UpdateMetadataRequestLiveBrokersEndpoints struct {
-	Port int32 // v1+
+type UpdateMetadataRequestLiveBrokerEndpoint struct {
+	Port int32
 
-	Host string // v1+
+	Host string
 
 	ListenerName string // v3+
 
-	SecurityProtocolType int16 // v1+
+	SecurityProtocolType int16
 }
-type UpdateMetadataRequestLiveBrokers struct {
+type UpdateMetadataRequestLiveBroker struct {
 	ID int32
 
-	Endpoints []UpdateMetadataRequestLiveBrokersEndpoints // v1+
+	Endpoints []UpdateMetadataRequestLiveBrokerEndpoint // v1+
 
 	Rack *string // v2+
 }
@@ -1762,9 +1762,9 @@ type UpdateMetadataRequest struct {
 
 	ControllerEpoch int32
 
-	PartitionStates []UpdateMetadataRequestPartitionStates
+	PartitionStates []UpdateMetadataRequestPartitionState
 
-	LiveBrokers []UpdateMetadataRequestLiveBrokers
+	LiveBrokers []UpdateMetadataRequestLiveBroker
 }
 
 func (*UpdateMetadataRequest) Key() int16                 { return 6 }
@@ -1857,11 +1857,11 @@ func (v *UpdateMetadataRequest) AppendTo(dst []byte) []byte {
 				dst = kbin.AppendArrayLen(dst, len(v))
 				for i := range v {
 					v := &v[i]
-					if version >= 1 {
+					{
 						v := v.Port
 						dst = kbin.AppendInt32(dst, v)
 					}
-					if version >= 1 {
+					{
 						v := v.Host
 						dst = kbin.AppendString(dst, v)
 					}
@@ -1869,7 +1869,7 @@ func (v *UpdateMetadataRequest) AppendTo(dst []byte) []byte {
 						v := v.ListenerName
 						dst = kbin.AppendString(dst, v)
 					}
-					if version >= 1 {
+					{
 						v := v.SecurityProtocolType
 						dst = kbin.AppendInt16(dst, v)
 					}
@@ -1981,7 +1981,7 @@ func (v *ControlledShutdownResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
-type OffsetCommitRequestTopicsPartitions struct {
+type OffsetCommitRequestTopicPartition struct {
 	Partition int32
 
 	Offset int64
@@ -1992,10 +1992,10 @@ type OffsetCommitRequestTopicsPartitions struct {
 
 	Metadata *string
 }
-type OffsetCommitRequestTopics struct {
+type OffsetCommitRequestTopic struct {
 	Topic string
 
-	Partitions []OffsetCommitRequestTopicsPartitions
+	Partitions []OffsetCommitRequestTopicPartition
 }
 type OffsetCommitRequest struct {
 	// Version is the version of this message used with a Kafka broker.
@@ -2009,7 +2009,7 @@ type OffsetCommitRequest struct {
 
 	RetentionTime int64 // v2+
 
-	Topics []OffsetCommitRequestTopics
+	Topics []OffsetCommitRequestTopic
 }
 
 func (*OffsetCommitRequest) Key() int16                 { return 8 }
@@ -2081,15 +2081,15 @@ func (v *OffsetCommitRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 
-type OffsetCommitResponseResponsesPartitionResponses struct {
+type OffsetCommitResponseResponsePartitionResponse struct {
 	Partition int32
 
 	ErrorCode int16
 }
-type OffsetCommitResponseResponses struct {
+type OffsetCommitResponseResponse struct {
 	Topic string
 
-	PartitionResponses []OffsetCommitResponseResponsesPartitionResponses
+	PartitionResponses []OffsetCommitResponseResponsePartitionResponse
 }
 type OffsetCommitResponse struct {
 	// Version is the version of this message used with a Kafka broker.
@@ -2097,7 +2097,7 @@ type OffsetCommitResponse struct {
 
 	ThrottleTimeMs int32 // v3+
 
-	Responses []OffsetCommitResponseResponses
+	Responses []OffsetCommitResponseResponse
 }
 
 func (v *OffsetCommitResponse) ReadFrom(src []byte) error {
@@ -2114,7 +2114,7 @@ func (v *OffsetCommitResponse) ReadFrom(src []byte) error {
 			v := s.Responses
 			a := v
 			for i := b.ArrayLen(); i > 0; i-- {
-				a = append(a, OffsetCommitResponseResponses{})
+				a = append(a, OffsetCommitResponseResponse{})
 				v := &a[len(a)-1]
 				{
 					s := v
@@ -2126,7 +2126,7 @@ func (v *OffsetCommitResponse) ReadFrom(src []byte) error {
 						v := s.PartitionResponses
 						a := v
 						for i := b.ArrayLen(); i > 0; i-- {
-							a = append(a, OffsetCommitResponseResponsesPartitionResponses{})
+							a = append(a, OffsetCommitResponseResponsePartitionResponse{})
 							v := &a[len(a)-1]
 							{
 								s := v
@@ -2177,7 +2177,7 @@ func (v *ApiVersionsRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 
-type ApiVersionsResponseApiVersions struct {
+type ApiVersionsResponseApiVersion struct {
 	// ApiKey is the key of a message request.
 	ApiKey int16
 
@@ -2200,7 +2200,7 @@ type ApiVersionsResponse struct {
 
 	// ApiVersions is an array corresponding to API keys the broker supports
 	// and the range of supported versions for each key.
-	ApiVersions []ApiVersionsResponseApiVersions
+	ApiVersions []ApiVersionsResponseApiVersion
 
 	// ThrottleTimeMs is how long of a throttle Kafka will apply to the client
 	// after this request.
@@ -2223,7 +2223,7 @@ func (v *ApiVersionsResponse) ReadFrom(src []byte) error {
 			v := s.ApiVersions
 			a := v
 			for i := b.ArrayLen(); i > 0; i-- {
-				a = append(a, ApiVersionsResponseApiVersions{})
+				a = append(a, ApiVersionsResponseApiVersion{})
 				v := &a[len(a)-1]
 				{
 					s := v
@@ -2252,21 +2252,21 @@ func (v *ApiVersionsResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
-type CreateTopicsRequestTopicsReplicaAssignment struct {
+type CreateTopicsRequestTopicReplicaAssignment struct {
 	// Partition is a partition to create.
 	Partition int32
 
 	// Replicas are broker IDs the partition must exist on.
 	Replicas []int32
 }
-type CreateTopicsRequestTopicsConfigEntries struct {
+type CreateTopicsRequestTopicConfigEntry struct {
 	// ConfigName is a topic level config key (e.g. segment.bytes).
 	ConfigName string
 
 	// ConfigValue is a topic level config value (e.g. 1073741824)
 	ConfigValue *string
 }
-type CreateTopicsRequestTopics struct {
+type CreateTopicsRequestTopic struct {
 	// Topic is a topic to create.
 	Topic string
 
@@ -2279,11 +2279,11 @@ type CreateTopicsRequestTopics struct {
 	// ReplicaAssignment is an array to manually dicate replicas and their
 	// partitions for a topic. If using this, both ReplicationFactor and
 	// NumPartitions must be -1.
-	ReplicaAssignment []CreateTopicsRequestTopicsReplicaAssignment
+	ReplicaAssignment []CreateTopicsRequestTopicReplicaAssignment
 
 	// ConfigEntries is an array of key value config pairs for a topic.
 	// These correspond to Kafka Topic-Level Configs: http://kafka.apache.org/documentation/#topicconfigs.
-	ConfigEntries []CreateTopicsRequestTopicsConfigEntries
+	ConfigEntries []CreateTopicsRequestTopicConfigEntry
 }
 
 // CreateTopicsRequest creates Kafka topics.
@@ -2292,7 +2292,7 @@ type CreateTopicsRequest struct {
 	Version int16
 
 	// Topics is an array of topics to attempt to create.
-	Topics []CreateTopicsRequestTopics
+	Topics []CreateTopicsRequestTopic
 
 	// Timeout is how long to allow for this request.
 	Timeout int32
@@ -2379,7 +2379,7 @@ func (v *CreateTopicsRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 
-type CreateTopicsResponseTopicErrors struct {
+type CreateTopicsResponseTopicError struct {
 	// Topic is the topic this error response corresponds to.
 	Topic string
 
@@ -2431,7 +2431,7 @@ type CreateTopicsResponse struct {
 
 	// TopicErrors is an the array of requested topics for creation and their
 	// creation errors.
-	TopicErrors []CreateTopicsResponseTopicErrors
+	TopicErrors []CreateTopicsResponseTopicError
 }
 
 func (v *CreateTopicsResponse) ReadFrom(src []byte) error {
@@ -2448,7 +2448,7 @@ func (v *CreateTopicsResponse) ReadFrom(src []byte) error {
 			v := s.TopicErrors
 			a := v
 			for i := b.ArrayLen(); i > 0; i-- {
-				a = append(a, CreateTopicsResponseTopicErrors{})
+				a = append(a, CreateTopicsResponseTopicError{})
 				v := &a[len(a)-1]
 				{
 					s := v
@@ -2513,7 +2513,7 @@ func (v *DeleteTopicsRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 
-type DeleteTopicsResponseTopicErrorCodes struct {
+type DeleteTopicsResponseTopicErrorCode struct {
 	// Topic is the topic requested for deletion.
 	Topic string
 
@@ -2551,7 +2551,7 @@ type DeleteTopicsResponse struct {
 
 	// TopicErrorCodes is contains the error codes for each topic requested
 	// for deletion (or no error code).
-	TopicErrorCodes []DeleteTopicsResponseTopicErrorCodes
+	TopicErrorCodes []DeleteTopicsResponseTopicErrorCode
 }
 
 func (v *DeleteTopicsResponse) ReadFrom(src []byte) error {
@@ -2568,7 +2568,7 @@ func (v *DeleteTopicsResponse) ReadFrom(src []byte) error {
 			v := s.TopicErrorCodes
 			a := v
 			for i := b.ArrayLen(); i > 0; i-- {
-				a = append(a, DeleteTopicsResponseTopicErrorCodes{})
+				a = append(a, DeleteTopicsResponseTopicErrorCode{})
 				v := &a[len(a)-1]
 				{
 					s := v
@@ -2676,7 +2676,282 @@ func (v *InitProducerIDResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
-type DescribeLogDirsRequestTopics struct {
+type DescribeConfigsRequestResource struct {
+	// ResourceType is an enum corresponding to the type of config to describe.
+	// The only two valid values are 2 (for topic) and 4 (for broker).
+	ResourceType int8
+
+	// ResourceName is the name of config to describe.
+	//
+	// If the requested type is a topic, this corresponds to a topic name.
+	//
+	// If the requested type if a broker, this should either be empty or be
+	// the ID of the broker this request is issued to. If it is empty, this
+	// returns all broker configs, but only the dynamic configuration values.
+	// If a specific ID, this returns all broker config values.
+	ResourceName string
+
+	// ConfigNames is a list of config entries to return. Null requests all.
+	ConfigNames []string
+}
+
+// DescribeConfigsRequest issues a request to describe configs that Kafka
+// currently has. These are the key/value pairs that one uses to configure
+// brokers and topics.
+type DescribeConfigsRequest struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	// Resources is a list of resources to describe.
+	Resources []DescribeConfigsRequestResource
+
+	// IncludeSynonyms signifies whether to return config entry synonyms for
+	// all config entries.
+	IncludeSynonyms bool // v1+
+}
+
+func (*DescribeConfigsRequest) Key() int16                 { return 32 }
+func (*DescribeConfigsRequest) MaxVersion() int16          { return 2 }
+func (*DescribeConfigsRequest) MinVersion() int16          { return 0 }
+func (v *DescribeConfigsRequest) SetVersion(version int16) { v.Version = version }
+func (v *DescribeConfigsRequest) GetVersion() int16        { return v.Version }
+func (v *DescribeConfigsRequest) IsAdminRequest() bool     { return true }
+func (v *DescribeConfigsRequest) ResponseKind() Response {
+	return &DescribeConfigsResponse{Version: v.Version}
+}
+
+func (v *DescribeConfigsRequest) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	{
+		v := v.Resources
+		dst = kbin.AppendArrayLen(dst, len(v))
+		for i := range v {
+			v := &v[i]
+			{
+				v := v.ResourceType
+				dst = kbin.AppendInt8(dst, v)
+			}
+			{
+				v := v.ResourceName
+				dst = kbin.AppendString(dst, v)
+			}
+			{
+				v := v.ConfigNames
+				dst = kbin.AppendNullableArrayLen(dst, len(v), v == nil)
+				for i := range v {
+					v := v[i]
+					dst = kbin.AppendString(dst, v)
+				}
+			}
+		}
+	}
+	if version >= 1 {
+		v := v.IncludeSynonyms
+		dst = kbin.AppendBool(dst, v)
+	}
+	return dst
+}
+
+type DescribeConfigsResponseResourceConfigEntryConfigSynonym struct {
+	ConfigName string
+
+	ConfigValue *string
+
+	ConfigSource int8
+}
+type DescribeConfigsResponseResourceConfigEntry struct {
+	ConfigName string
+
+	// ConfigValue is the value for this config key. If the key is sensitive,
+	// the value will be null.
+	ConfigValue *string
+
+	// ReadOnly signifies whether this is not a dynamic config option.
+	ReadOnly bool
+
+	// IsDefault is whether this is a default config option. This has been
+	// replaced in favor of ConfigSource.
+	IsDefault bool
+
+	// ConfigSource is where this config entry is from. Note that if there
+	// are no config synonyms, the source is DEFAULT_CONFIG. The values of
+	// this enum are in order as follows.
+	//
+	// DYNAMIC_TOPIC_CONFIG: dynamic topic config for a specific topic
+	//
+	// DYNAMIC_BROKER_CONFIG: dynamic broker config for a specific broker
+	//
+	// DYNAMIC_DEFAULT_BROKER_CONFIG: dynamic broker config used as the default for all brokers in a cluster
+	//
+	// STATIC_BROKER_CONFIG: static broker config provided at start up
+	//
+	// DEFAULT_CONFIG: built-in default configuration for those that have defaults
+	//
+	// UNKNOWN: unknown; e.g. an altar request was issued with no source set
+	ConfigSource int8 // v1+
+
+	// IsSensitive signifies whether this is a sensitive config key, which
+	// is either a password or an unknown type.
+	IsSensitive bool
+
+	// ConfigSynonyms contains config key/value pairs that can be used in
+	// place of this config entry, in order of preference.
+	ConfigSynonyms []DescribeConfigsResponseResourceConfigEntryConfigSynonym // v1+
+}
+type DescribeConfigsResponseResource struct {
+	// ErrorCode is the error code returned for describing configs.
+	//
+	// INVALID_REQUEST is returned if asking to descibe an invalid resource
+	// type.
+	//
+	// CLUSTER_AUTHORIZATION_FAILED is returned if asking to describe broker
+	// configs but the client is not authorized to do so.
+	//
+	// TOPIC_AUTHORIZATION_FAILED is returned if asking to describe topic
+	// configs but the client is not authorized to do so.
+	//
+	// INVALID_TOPIC_EXCEPTION is returned if the requested topic was invalid.
+	//
+	// UNKNOWN_TOPIC_OR_PARTITION is returned if the broker does not know of
+	// the requested topic.
+	ErrorCode int16
+
+	// ErrorMessage is an informative message if the describe config failed.
+	ErrorMessage *string
+
+	// ResourceType is the enum corresponding to the type of described config.
+	ResourceType int8
+
+	// ResourceName is the name corresponding to the describe config request.
+	ResourceName string
+
+	// ConfigEntries contains information about key/value config pairs for
+	// the requested resource.
+	ConfigEntries []DescribeConfigsResponseResourceConfigEntry
+}
+
+// DescribeConfigsResponse is returned from a DescribeConfigsRequest.
+type DescribeConfigsResponse struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	// ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+	// after this request.
+	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
+	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
+	ThrottleTimeMs int32
+
+	// Resources are responses for each resource in the describe config request.
+	Resources []DescribeConfigsResponseResource
+}
+
+func (v *DescribeConfigsResponse) ReadFrom(src []byte) error {
+	version := v.Version
+	_ = version
+	b := kbin.Reader{Src: src}
+	{
+		s := v
+		{
+			v := b.Int32()
+			s.ThrottleTimeMs = v
+		}
+		{
+			v := s.Resources
+			a := v
+			for i := b.ArrayLen(); i > 0; i-- {
+				a = append(a, DescribeConfigsResponseResource{})
+				v := &a[len(a)-1]
+				{
+					s := v
+					{
+						v := b.Int16()
+						s.ErrorCode = v
+					}
+					{
+						v := b.NullableString()
+						s.ErrorMessage = v
+					}
+					{
+						v := b.Int8()
+						s.ResourceType = v
+					}
+					{
+						v := b.String()
+						s.ResourceName = v
+					}
+					{
+						v := s.ConfigEntries
+						a := v
+						for i := b.ArrayLen(); i > 0; i-- {
+							a = append(a, DescribeConfigsResponseResourceConfigEntry{})
+							v := &a[len(a)-1]
+							{
+								s := v
+								{
+									v := b.String()
+									s.ConfigName = v
+								}
+								{
+									v := b.NullableString()
+									s.ConfigValue = v
+								}
+								{
+									v := b.Bool()
+									s.ReadOnly = v
+								}
+								if version >= 0 && version <= 0 {
+									v := b.Bool()
+									s.IsDefault = v
+								}
+								if version >= 1 {
+									v := b.Int8()
+									s.ConfigSource = v
+								}
+								{
+									v := b.Bool()
+									s.IsSensitive = v
+								}
+								if version >= 1 {
+									v := s.ConfigSynonyms
+									a := v
+									for i := b.ArrayLen(); i > 0; i-- {
+										a = append(a, DescribeConfigsResponseResourceConfigEntryConfigSynonym{})
+										v := &a[len(a)-1]
+										{
+											s := v
+											{
+												v := b.String()
+												s.ConfigName = v
+											}
+											{
+												v := b.NullableString()
+												s.ConfigValue = v
+											}
+											{
+												v := b.Int8()
+												s.ConfigSource = v
+											}
+										}
+									}
+									v = a
+									s.ConfigSynonyms = v
+								}
+							}
+						}
+						v = a
+						s.ConfigEntries = v
+					}
+				}
+			}
+			v = a
+			s.Resources = v
+		}
+	}
+	return b.Complete()
+}
+
+type DescribeLogDirsRequestTopic struct {
 	Topic string
 
 	Partitions []int32
@@ -2685,7 +2960,7 @@ type DescribeLogDirsRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
-	Topics []DescribeLogDirsRequestTopics
+	Topics []DescribeLogDirsRequestTopic
 }
 
 func (*DescribeLogDirsRequest) Key() int16                 { return 35 }
@@ -2723,7 +2998,7 @@ func (v *DescribeLogDirsRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 
-type DescribeLogDirsResponseLogDirsTopicsPartitions struct {
+type DescribeLogDirsResponseLogDirTopicPartition struct {
 	Partition int32
 
 	Size int64
@@ -2732,17 +3007,17 @@ type DescribeLogDirsResponseLogDirsTopicsPartitions struct {
 
 	IsFuture bool
 }
-type DescribeLogDirsResponseLogDirsTopics struct {
+type DescribeLogDirsResponseLogDirTopic struct {
 	Topic string
 
-	Partitions []DescribeLogDirsResponseLogDirsTopicsPartitions
+	Partitions []DescribeLogDirsResponseLogDirTopicPartition
 }
-type DescribeLogDirsResponseLogDirs struct {
+type DescribeLogDirsResponseLogDir struct {
 	ErrorCode int16
 
 	LogDir string
 
-	Topics []DescribeLogDirsResponseLogDirsTopics
+	Topics []DescribeLogDirsResponseLogDirTopic
 }
 type DescribeLogDirsResponse struct {
 	// Version is the version of this message used with a Kafka broker.
@@ -2750,7 +3025,7 @@ type DescribeLogDirsResponse struct {
 
 	ThrottleTimeMs int32
 
-	LogDirs []DescribeLogDirsResponseLogDirs
+	LogDirs []DescribeLogDirsResponseLogDir
 }
 
 func (v *DescribeLogDirsResponse) ReadFrom(src []byte) error {
@@ -2767,7 +3042,7 @@ func (v *DescribeLogDirsResponse) ReadFrom(src []byte) error {
 			v := s.LogDirs
 			a := v
 			for i := b.ArrayLen(); i > 0; i-- {
-				a = append(a, DescribeLogDirsResponseLogDirs{})
+				a = append(a, DescribeLogDirsResponseLogDir{})
 				v := &a[len(a)-1]
 				{
 					s := v
@@ -2783,7 +3058,7 @@ func (v *DescribeLogDirsResponse) ReadFrom(src []byte) error {
 						v := s.Topics
 						a := v
 						for i := b.ArrayLen(); i > 0; i-- {
-							a = append(a, DescribeLogDirsResponseLogDirsTopics{})
+							a = append(a, DescribeLogDirsResponseLogDirTopic{})
 							v := &a[len(a)-1]
 							{
 								s := v
@@ -2795,7 +3070,7 @@ func (v *DescribeLogDirsResponse) ReadFrom(src []byte) error {
 									v := s.Partitions
 									a := v
 									for i := b.ArrayLen(); i > 0; i-- {
-										a = append(a, DescribeLogDirsResponseLogDirsTopicsPartitions{})
+										a = append(a, DescribeLogDirsResponseLogDirTopicPartition{})
 										v := &a[len(a)-1]
 										{
 											s := v
