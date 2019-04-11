@@ -1,7 +1,9 @@
 package kgo
 
 import (
-	"math/bits"
+	"sync"
+
+	"github.com/twmb/kgo/kbin"
 )
 
 // promisedRecord ties a record with the callback that will be called once
@@ -25,6 +27,13 @@ type promisedNumberedRecord struct {
 	pr promisedRecord
 }
 
+var noPNR promisedNumberedRecord
+var emptyRecordsPool = sync.Pool{
+	New: func() interface{} {
+		return make([]promisedNumberedRecord, 0, 500)
+	},
+}
+
 // newRecordBatch returns a new record batch for a topic and partition
 // containing the given record.
 func (bt *brokerToppars) newRecordBatch(firstSeq int32, pr promisedRecord) *recordBatch {
@@ -44,7 +53,7 @@ func (bt *brokerToppars) newRecordBatch(firstSeq int32, pr promisedRecord) *reco
 		4 // record array length
 	b := &recordBatch{
 		firstTimestamp: pr.r.Timestamp.UnixNano() / 1e6,
-		records:        make([]promisedNumberedRecord, 0, 10),
+		records:        emptyRecordsPool.Get().([]promisedNumberedRecord),
 		producerID:     bt.br.cl.producerID,
 		producerEpoch:  bt.br.cl.producerEpoch,
 		baseSequence:   firstSeq,
@@ -94,40 +103,25 @@ func (b *recordBatch) calculateRecordNumbers(r *Record) recordNumbers {
 	offsetDelta := int32(len(b.records)) // since called before adding record, delta is the current end
 
 	l := 1 + // attributes, int8 unused
-		varintLen(int64(tsDelta)) +
-		varintLen(int64(offsetDelta)) +
-		varintLen(int64(len(r.Key))) +
+		kbin.VarintLen(int64(tsDelta)) +
+		kbin.VarintLen(int64(offsetDelta)) +
+		kbin.VarintLen(int64(len(r.Key))) +
 		len(r.Key) +
-		varintLen(int64(len(r.Value))) +
+		kbin.VarintLen(int64(len(r.Value))) +
 		len(r.Value) +
-		varintLen(int64(len(r.Headers))) // int32 array len headers
+		kbin.VarintLen(int64(len(r.Headers))) // int32 array len headers
 
 	for _, h := range r.Headers {
-		l += varintLen(int64(len(h.Key))) +
+		l += kbin.VarintLen(int64(len(h.Key))) +
 			len(h.Key) +
-			varintLen(int64(len(h.Value))) +
+			kbin.VarintLen(int64(len(h.Value))) +
 			len(h.Value)
 	}
 
 	return recordNumbers{
-		wireLength:     int32(varintLen(int64(l)) + l),
+		wireLength:     int32(kbin.VarintLen(int64(l)) + l),
 		lengthField:    int32(l),
 		timestampDelta: tsDelta,
 		offsetDelta:    offsetDelta,
 	}
-}
-
-// varintLens could only be length 65, but using 256 allows bounds check
-// elimination on lookup.
-var varintLens [256]byte
-
-func init() {
-	for i := 0; i < len(varintLens[:]); i++ {
-		varintLens[i] = byte((i-1)/7) + 1
-	}
-}
-
-func varintLen(i int64) int {
-	u := uint64(i)<<1 ^ uint64(i>>63)
-	return int(varintLens[byte(bits.Len64(u))])
 }

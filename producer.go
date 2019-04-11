@@ -26,6 +26,10 @@ func (c *Client) Produce(
 	r *Record,
 	promise func(string, *Record, error),
 ) error {
+	if atomic.AddInt64(&c.bufferedRecords, 1) > c.cfg.producer.maxBufferedRecords {
+		<-c.waitBuffer
+	}
+
 	if err := c.ensureProducerIDInit(); err != nil {
 		return err
 	}
@@ -91,10 +95,13 @@ func (c *Client) ensureProducerIDInit() error {
 	}
 
 	c.producerIDMu.Lock()
-	err := c.initProducerID()
-	c.producerIDMu.Unlock()
+	defer c.producerIDMu.Unlock()
 
-	return err
+	if atomic.LoadInt64(&c.producerIDLoaded) == 1 {
+		return nil
+	}
+
+	return c.initProducerID()
 }
 
 func (c *Client) initProducerID() error {
@@ -133,4 +140,11 @@ start:
 	atomic.StoreInt64(&c.producerIDLoaded, 1)
 
 	return nil
+}
+
+func (c *Client) promise(topic string, pr promisedRecord, err error) {
+	if atomic.AddInt64(&c.bufferedRecords, -1) >= c.cfg.producer.maxBufferedRecords {
+		go func() { c.waitBuffer <- struct{}{} }()
+	}
+	pr.promise(topic, pr.r, err)
 }

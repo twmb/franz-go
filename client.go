@@ -71,10 +71,11 @@ type Client struct {
 	producerIDLoaded int64
 	producerIDMu     sync.Mutex
 
-	produceMu sync.RWMutex
-
 	topicPartsMu sync.RWMutex
 	topicParts   map[string]*topicPartitions
+
+	bufferedRecords int64
+	waitBuffer      chan struct{}
 }
 
 // newTopicParts creates and returns new topicPartitions

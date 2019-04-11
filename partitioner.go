@@ -20,21 +20,25 @@ type Partitioner interface {
 }
 
 type randomPartitioner struct {
-	rngMu sync.Mutex
-	rng   *rand.Rand
+	rngs sync.Pool
 }
 
 // RandomPartitioner randomly chooses partitions for messages.
 func RandomPartitioner() Partitioner {
-	r := &randomPartitioner{rng: rand.New(new(rand.PCGSource))}
-	r.rng.Seed(uint64(time.Now().UnixNano()))
+	r := &randomPartitioner{
+		rngs: sync.Pool{
+			New: func() interface{} {
+				rng := rand.New(new(rand.PCGSource))
+				rng.Seed(uint64(time.Now().UnixNano()))
+				return rng
+			}}}
 	return r
 }
 
 func (*randomPartitioner) RequiresConsistency(*Record) bool { return false }
 func (r *randomPartitioner) Partition(_ *Record, n int) int {
-	r.rngMu.Lock()
-	ret := r.rng.Intn(n)
-	r.rngMu.Unlock()
+	rng := r.rngs.Get().(*rand.Rand)
+	ret := rng.Intn(n)
+	r.rngs.Put(rng)
 	return ret
 }

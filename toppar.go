@@ -251,12 +251,8 @@ func (tp *topparBuffer) bufferRecord(pr promisedRecord) {
 		}
 	}
 
-	var pause bool
 	if newBatch {
 		tp.batches = append(tp.batches, bt.newRecordBatch(tp.sequenceNum, pr))
-		if len(tp.batches) > 5 {
-			pause = true
-		}
 	}
 	tp.sequenceNum++
 
@@ -265,18 +261,13 @@ func (tp *topparBuffer) bufferRecord(pr promisedRecord) {
 	if firstBatch {
 		bt.maybeBeginDraining()
 	}
-
-	// If we are buffering so fast that we are backing up, let's pause.
-	if pause {
-		time.Sleep(time.Millisecond)
-	}
 }
 
 func (bt *brokerToppars) maybeBeginDraining() {
 	bt.mu.Lock()
-	defer bt.mu.Unlock()
 
 	if bt.draining {
+		bt.mu.Unlock()
 		return
 	}
 	bt.draining = true
@@ -286,6 +277,7 @@ func (bt *brokerToppars) maybeBeginDraining() {
 		bt.backoffTimer = nil
 		bt.backoffSeq++
 	}
+	bt.mu.Unlock()
 
 	go bt.drain()
 }
@@ -312,6 +304,12 @@ func (bt *brokerToppars) beginDrainBackoff(after time.Duration) {
 
 // drain drains buffered records and issues produce requests.
 func (bt *brokerToppars) drain() {
+	// Before we begin draining, sleep a tiny bit. This helps when a
+	// high volume new toppar began draining; rather than immediately
+	// eating just one record, we allow it to buffer a bit before we
+	// loop draining.
+	time.Sleep(10 * time.Millisecond)
+
 	again := true
 	for again {
 		var req *produceRequest
@@ -390,9 +388,11 @@ func (bt *brokerToppars) errorAllPartitionToppars(topic string, partitions map[i
 		if batch.failSeq == tp.failSeq {
 			tp.failSeq++ // make sure a second in-flight does not do this again
 			for _, batch := range tp.batches {
-				for _, record := range batch.records {
-					record.pr.promise(topic, record.pr.r, err)
+				for i, record := range batch.records {
+					bt.br.cl.promise(topic, record.pr, err)
+					batch.records[i] = noPNR
 				}
+				emptyRecordsPool.Put(batch.records[:0])
 			}
 			tp.batches = nil
 		}
@@ -504,8 +504,10 @@ func (bt *brokerToppars) handleReqResp(req *produceRequest, resp kmsg.Response, 
 				for i, record := range batch.records {
 					record.pr.r.Offset = responsePartition.BaseOffset + int64(i)
 					record.pr.r.Partition = partition
-					record.pr.promise(topic, record.pr.r, err)
+					bt.br.cl.promise(topic, record.pr, err)
+					batch.records[i] = noPNR
 				}
+				emptyRecordsPool.Put(batch.records[:0])
 			}
 		}
 
@@ -565,9 +567,11 @@ start:
 
 			tp.toppar.failSeq++ // just in case
 			for _, batch := range tp.toppar.batches {
-				for _, record := range batch.records {
-					record.pr.promise(tp.topic, record.pr.r, ErrPartitionDeleted)
+				for i, record := range batch.records {
+					bt.br.cl.promise(topic, record.pr, ErrPartitionDeleted)
+					batch.records[i] = noPNR
 				}
+				emptyRecordsPool.Put(batch.records[:0])
 			}
 		}
 	}()

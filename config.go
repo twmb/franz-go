@@ -62,6 +62,7 @@ func NewClient(seedBrokers []string, opts ...Opt) (*Client, error) {
 
 			maxRecordBatchBytes: 1000000,   // Kafka max.message.bytes default is 1000012
 			maxBrokerWriteBytes: 100 << 20, // Kafka socket.request.max.bytes default is 100<<20
+			maxBufferedRecords:  100000,
 
 			partitioner: RandomPartitioner(),
 		},
@@ -128,6 +129,8 @@ func NewClient(seedBrokers []string, opts ...Opt) (*Client, error) {
 
 		brokers:    make(map[int32]*broker),
 		topicParts: make(map[string]*topicPartitions),
+
+		waitBuffer: make(chan struct{}, 100),
 	}
 	c.rng.Seed(uint64(time.Now().UnixNano()))
 
@@ -227,6 +230,7 @@ type (
 
 		maxRecordBatchBytes int32
 		maxBrokerWriteBytes int32
+		maxBufferedRecords  int64
 
 		partitioner Partitioner
 
