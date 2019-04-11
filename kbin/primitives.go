@@ -4,6 +4,7 @@ package kbin
 import (
 	"encoding/binary"
 	"errors"
+	"math/bits"
 )
 
 // This file contains primitive type encoding and decoding.
@@ -46,13 +47,50 @@ func AppendUint32(dst []byte, u uint32) []byte {
 	return append(dst, byte(u>>24), byte(u>>16), byte(u>>8), byte(u))
 }
 
+// varintLens could only be length 65, but using 256 allows bounds check
+// elimination on lookup.
+var varintLens [256]byte
+
+func init() {
+	for i := 0; i < len(varintLens[:]); i++ {
+		varintLens[i] = byte((i-1)/7) + 1
+	}
+}
+
+func VarintLen(i int64) int {
+	u := uint64(i)<<1 ^ uint64(i>>63)
+	return int(varintLens[byte(bits.Len64(u))])
+}
+
 func AppendVarint(dst []byte, i int32) []byte {
 	u := uint32(i)<<1 ^ uint32(i>>31)
-	for u&0x7f != u {
-		dst = append(dst, byte(u&0x7f|0x80))
-		u >>= 7
+	switch VarintLen(int64(i)) {
+	case 5:
+		return append(dst,
+			byte(u&0x7f|0x80),
+			byte((u>>7)&0x7f|0x80),
+			byte((u>>14)&0x7f|0x80),
+			byte((u>>21)&0x7f|0x80),
+			byte(u>>28))
+	case 4:
+		return append(dst,
+			byte(u&0x7f|0x80),
+			byte((u>>7)&0x7f|0x80),
+			byte((u>>14)&0x7f|0x80),
+			byte(u>>21))
+	case 3:
+		return append(dst,
+			byte(u&0x7f|0x80),
+			byte((u>>7)&0x7f|0x80),
+			byte(u>>14))
+	case 2:
+		return append(dst,
+			byte(u&0x7f|0x80),
+			byte(u>>7))
+	case 1:
+		return append(dst, byte(u))
 	}
-	return append(dst, byte(u))
+	return dst
 }
 
 func AppendVarlong(dst []byte, i int64) []byte {
