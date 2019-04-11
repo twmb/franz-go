@@ -3777,6 +3777,174 @@ func (v *AlterConfigsResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+type AlterReplicaLogDirsRequestLogDirTopic struct {
+	// Topic is a topic to move.
+	Topic string
+
+	// Partitions contains partitions for the topic to move.
+	Partitions []int32
+}
+type AlterReplicaLogDirsRequestLogDir struct {
+	// LogDir is an absolute path where everything listed below should
+	// end up.
+	LogDir string
+
+	// Topics contains topics to move to the above log directory.
+	Topics []AlterReplicaLogDirsRequestLogDirTopic
+}
+
+// AlterReplicaLogDirsRequest requests for log directories to be moved
+// within Kafka.
+//
+// This is primarily useful for moving directories between disks.
+type AlterReplicaLogDirsRequest struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	// LogDirs contains absolute paths of where you want things to end up.
+	LogDirs []AlterReplicaLogDirsRequestLogDir
+}
+
+func (*AlterReplicaLogDirsRequest) Key() int16                 { return 34 }
+func (*AlterReplicaLogDirsRequest) MaxVersion() int16          { return 1 }
+func (*AlterReplicaLogDirsRequest) MinVersion() int16          { return 0 }
+func (v *AlterReplicaLogDirsRequest) SetVersion(version int16) { v.Version = version }
+func (v *AlterReplicaLogDirsRequest) GetVersion() int16        { return v.Version }
+func (v *AlterReplicaLogDirsRequest) IsAdminRequest() bool     { return true }
+func (v *AlterReplicaLogDirsRequest) ResponseKind() Response {
+	return &AlterReplicaLogDirsResponse{Version: v.Version}
+}
+
+func (v *AlterReplicaLogDirsRequest) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	{
+		v := v.LogDirs
+		dst = kbin.AppendArrayLen(dst, len(v))
+		for i := range v {
+			v := &v[i]
+			{
+				v := v.LogDir
+				dst = kbin.AppendString(dst, v)
+			}
+			{
+				v := v.Topics
+				dst = kbin.AppendArrayLen(dst, len(v))
+				for i := range v {
+					v := &v[i]
+					{
+						v := v.Topic
+						dst = kbin.AppendString(dst, v)
+					}
+					{
+						v := v.Partitions
+						dst = kbin.AppendArrayLen(dst, len(v))
+						for i := range v {
+							v := v[i]
+							dst = kbin.AppendInt32(dst, v)
+						}
+					}
+				}
+			}
+		}
+	}
+	return dst
+}
+
+type AlterReplicaLogDirsResponseTopicPartition struct {
+	// Partition is the partition this array slot corresponds to.
+	Partition int32
+
+	// CLUSTER_AUTHORIZATION_FAILED is returned if the client is not
+	// authorized to alter replica dirs.
+	//
+	// LOG_DIR_NOT_FOUND is returned when the requested log directory
+	// is not in the broker config.
+	//
+	// KAFKA_STORAGE_EXCEPTION is returned when destination directory or
+	// requested replica is offline.
+	//
+	// REPLICA_NOT_AVAILABLE is returned if the replica does not exist
+	// yet.
+	ErrorCode int16
+}
+type AlterReplicaLogDirsResponseTopic struct {
+	// Topic is the topic this array slot corresponds to.
+	Topic string
+
+	// Partitions contains responses to each partition that was requested
+	// to move.
+	Partitions []AlterReplicaLogDirsResponseTopicPartition
+}
+
+// AlterReplicaLogDirsResponse is returned from an AlterReplicaLogDirsRequest.
+type AlterReplicaLogDirsResponse struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	// ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+	// after this request.
+	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
+	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
+	ThrottleTimeMs int32
+
+	// Topics contains responses to each topic that had partitions requested
+	// for moving.
+	Topics []AlterReplicaLogDirsResponseTopic
+}
+
+func (v *AlterReplicaLogDirsResponse) ReadFrom(src []byte) error {
+	version := v.Version
+	_ = version
+	b := kbin.Reader{Src: src}
+	{
+		s := v
+		{
+			v := b.Int32()
+			s.ThrottleTimeMs = v
+		}
+		{
+			v := s.Topics
+			a := v
+			for i := b.ArrayLen(); i > 0; i-- {
+				a = append(a, AlterReplicaLogDirsResponseTopic{})
+				v := &a[len(a)-1]
+				{
+					s := v
+					{
+						v := b.String()
+						s.Topic = v
+					}
+					{
+						v := s.Partitions
+						a := v
+						for i := b.ArrayLen(); i > 0; i-- {
+							a = append(a, AlterReplicaLogDirsResponseTopicPartition{})
+							v := &a[len(a)-1]
+							{
+								s := v
+								{
+									v := b.Int32()
+									s.Partition = v
+								}
+								{
+									v := b.Int16()
+									s.ErrorCode = v
+								}
+							}
+						}
+						v = a
+						s.Partitions = v
+					}
+				}
+			}
+			v = a
+			s.Topics = v
+		}
+	}
+	return b.Complete()
+}
+
 type DescribeLogDirsRequestTopic struct {
 	// Topic is a topic to describe the log dir of.
 	Topic string
