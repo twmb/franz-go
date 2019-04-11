@@ -285,6 +285,8 @@ FetchResponse => from FetchRequest
           FirstOffset: int64
       RecordSet: [Record]
 
+// ListOffsetsRequest requests partition offsets from Kafka for use in
+// consuming records.
 ListOffsetsRequest => key 2, max version 4, min version 1, admin
   // ReplicaID is the broker ID to get offsets from. As a Kafka client, use -1.
   // The consumer replica ID (-1) causes requests to only succeed if issued
@@ -484,10 +486,21 @@ MetadataResponse => from MetadataRequest
   // client is allowed to perform on this cluster.
   AuthorizedOperations: int32 // v8+
 
-LeaderAndISRRequest => key 4, max version 1, admin
+// LeaderAndISRRequest is an advanced request that controller brokers use
+// to broadcast state to other brokers. Manually using this request is a
+// great way to break your cluster.
+//
+// As this is an advanced request and there is little reason to issue it as a
+// client, this request is undocumented.
+//
+// Kafka 1.0.0 introduced version 1. Kafka 2.2.0 introduced version 2, proposed
+// in KIP-380, which changed the layout of the struct to be more memory
+// efficient.
+LeaderAndISRRequest => key 4, max version 2, admin
   ControllerID: int32
   ControllerEpoch: int32
-  PartitionStates: [=>]
+  BrokerEpoch: int64 // v2+
+  PartitionStates: [=>] // v0-v1
     Topic: string
     Partition: int32
     ControllerEpoch: int32
@@ -496,12 +509,24 @@ LeaderAndISRRequest => key 4, max version 1, admin
     ISR: [int32]
     ZKVersion: int32
     Replicas: [int32]
-    IsNew: bool
+    IsNew: bool // v1+
+  TopicStates: [=>] // v2+
+    Topic: string
+    PartitionStates: [=>]
+      Partition: int32
+      ControllerEpoch: int32
+      Leader: int32
+      LeaderEpoch: int32
+      ISR: [int32]
+      ZKVersion: int32
+      Replicas: [int32]
+      IsNew: bool
   LiveLeaders: [=>]
     ID: int32
     Host: string
     Port: int32
 
+// LeaderAndISRResponse is returned from a LeaderAndISRRequest.
 LeaderAndISRResponse => from LeaderAndISRRequest
   ErrorCode: int16
   Partitions: [=>]
@@ -509,14 +534,24 @@ LeaderAndISRResponse => from LeaderAndISRRequest
     Partition: int32
     ErrorCode: int16
 
-StopReplicaRequest => key 5, max version 0, admin
+// StopReplicaRequest is an advanced request that brokers use to stop replicas.
+//
+// As this is an advanced request and there is little reason to issue it as a
+// client, this request is undocumented.
+//
+// Kafka 2.2.0 introduced version 1, proposed in KIP-380, which changed the
+// layout of the struct to be more memory efficient.
+StopReplicaRequest => key 5, max version 1, admin
   ControllerID: int32
   ControllerEpoch: int32
+  BrokerEpoch: int64 // v1+
   DeletePartitions: bool
   Partitions: [=>]
     Topic: string
-    Partition: int32
+    Partition: int32 // v0-v0
+    PartitionIDs: [int32] // v1+
 
+// StopReplicasResponse is returned from a StopReplicasRequest.
 StopReplicaResponse => from StopReplicaRequest
   ErrorCode: int16
   Partitions: [=>]
@@ -524,11 +559,21 @@ StopReplicaResponse => from StopReplicaRequest
     Partition: int32
     ErrorCode: int16
 
-// V1 switched LiveBrokers struct type
-UpdateMetadataRequest => key 6, max version 4, min version 1, admin
+// UpdateMetadataRequest is an advanced request that brokers use to
+// issue metadata updates to each other.
+//
+// As this is an advanced request and there is little reason to issue it as a
+// client, this request is undocumented.
+//
+// Version 1 changed the layout of the live brokers.
+//
+// Kafka 2.2.0 introduced version 5, proposed in KIP-380, which changed the
+// layout of the struct to be more memory efficient.
+UpdateMetadataRequest => key 6, max version 5, admin
   ControllerID: int32
   ControllerEpoch: int32
-  PartitionStates: [=>]
+  BrokerEpoch: int64 // v5+
+  PartitionStates: [=>] // v0-v4
     Topic: string
     Partition: int32
     ControllerEpoch: int32
@@ -538,8 +583,21 @@ UpdateMetadataRequest => key 6, max version 4, min version 1, admin
     ZKVersion: int32
     Replicas: [int32]
     OfflineReplicas: [int32]
+  TopicStates: [=>] // v5+
+    Topic: string
+    PartitionStates: [=>]
+      Partition: int32
+      ControllerEpoch: int32
+      Leader: int32
+      LeaderEpoch: int32
+      ISR: [int32]
+      ZKVersion: int32
+      Replicas: [int32]
+      OfflineReplicas: [int32]
   LiveBrokers: [=>]
     ID: int32
+    Host: string // v0-v0
+    Port: int32 // v0-v0
     Endpoints: [=>] // v1+
       Port: int32
       Host: string
@@ -547,12 +605,23 @@ UpdateMetadataRequest => key 6, max version 4, min version 1, admin
       SecurityProtocolType: int16
     Rack: nullable-string // v2+
 
+// UpdateMetadataResponses is returned from an UpdateMetadataRequest.
 UpdateMetadataResponse => from UpdateMetadataRequest
   ErrorCode: int16
 
-ControlledShutdownRequest => key 7, max version 1, admin
+// ControlledShutdownRequest is an advanced request that can be used to
+// sthudown a broker in a controlled manner.
+//
+// As this is an advanced request and there is little reason to issue it as a
+// client, this request is undocumented. However, the minimal amount of fields
+// here makes the usage rather obvious.
+//
+// Kafka 2.2.0 introduced version 2, proposed in KIP-380.
+ControlledShutdownRequest => key 7, max version 2, admin
   BrokerID: int32
+  BrokerEpoch: int64 // v2+
 
+// ControlledShutdownResponse is returned from a ControlledShutdownRequest.
 ControlledShutdownResponse => from ControlledShutdownRequest
   ErrorCode: int16
   PartitionsRemaining: [=>]
@@ -673,7 +742,7 @@ CreateTopicsRequest => key 19, max version 3, admin
       Replicas: [int32]
     // ConfigEntries is an array of key value config pairs for a topic.
     // These correspond to Kafka Topic-Level Configs: http://kafka.apache.org/documentation/#topicconfigs.
-    ConfigEntries: [=>]ConfigEntry
+    ConfigEntries: [=>ConfigEntry]
       // ConfigName is a topic level config key (e.g. segment.bytes).
       ConfigName: string
       // ConfigValue is a topic level config value (e.g. 1073741824)
@@ -923,7 +992,7 @@ DescribeConfigsResponse => from DescribeConfigsRequest
     ResourceName: string
     // ConfigEntries contains information about key/value config pairs for
     // the requested resource.
-    ConfigEntries: [=>]ConfigEntry
+    ConfigEntries: [=>ConfigEntry]
       // ConfigName is a key this entry corresponds to (e.g. segment.bytes).
       ConfigName: string
       // ConfigValue is the value for this config key. If the key is sensitive,
@@ -980,7 +1049,7 @@ AlterConfigsRequest => key 33, max version 1, admin
     // config options can only be defined on a per broker basis.
     ResourceName: string
     // ConfigEntries contains key/value config pairs to set on the resource.
-    ConfigEntries: [=>]ConfigEntry
+    ConfigEntries: [=>ConfigEntry]
       // ConfigName is a key to set (e.g. segment.bytes).
       ConfigName: string
       // ConfigValue is a value to set for the key (e.g. 10).
@@ -1025,7 +1094,7 @@ AlterConfigsResponse => from AlterConfigsRequest
 DescribeLogDirsRequest => key 35, max version 1, admin
   // Topics is an array of topics to describe the log dirs of. If this is
   // empty, the response includes all topics and all of their partitions.
-  Topics: [=>]
+  Topics: nullable[=>]
     // Topic is a topic to describe the log dir of.
     Topic: string
     // Partitions contains topic partitions to describe the log dirs of.
@@ -1082,15 +1151,23 @@ CreatePartitionsRequest => key 37, max version 1, admin
     Topic: string
     // NewPartitions contains the total number of partitions a topic must
     // have after this request, and the assignment of which brokers should
-    // own new partitions.
-    NewPartitions: [=>]
+    // own new partitions and replicas.
+    NewPartitions: =>
       // Count is the final count of partitions this topic must have. This
       // must be greater than the current number of partitions.
       Count: int32
-      // Assignment is an array containing which brokers NEW partitions
-      // should be assigned to. This must be the delta of Count and the
-      // number of current partitions in length.
-      Assignment: [int32]
+      // Assignment is a two-level array, the first corresponding to new
+      // partitions, the second contining broker IDs for where new partition
+      // replicas should live.
+      //
+      // The second level, the replicas, cannot have duplicate broker IDs
+      // (i.e. you cannot replicate a single partition twice on the same
+      // broker). Additionally, the number of replicas must match the current
+      // number of replicas per partition on the topic.
+      //
+      // The first level's length must be equal to the delta of Count and
+      // the current number of partitions.
+      Assignment: [[int32]]
   // Timeout is how long to allow for this request.
   Timeout: int32
   // ValidateOnly is makes this request a dry-run; everything is validated but
