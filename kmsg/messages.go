@@ -888,6 +888,9 @@ type ListOffsetsRequestTopic struct {
 	// Partitions is an array of partitions in a topic to get offsets for.
 	Partitions []ListOffsetsRequestTopicPartition
 }
+
+// ListOffsetsRequest requests partition offsets from Kafka for use in
+// consuming records.
 type ListOffsetsRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
@@ -1432,7 +1435,29 @@ type LeaderAndISRRequestPartitionState struct {
 
 	Replicas []int32
 
+	IsNew bool // v1+
+}
+type LeaderAndISRRequestTopicStatePartitionState struct {
+	Partition int32
+
+	ControllerEpoch int32
+
+	Leader int32
+
+	LeaderEpoch int32
+
+	ISR []int32
+
+	ZKVersion int32
+
+	Replicas []int32
+
 	IsNew bool
+}
+type LeaderAndISRRequestTopicState struct {
+	Topic string
+
+	PartitionStates []LeaderAndISRRequestTopicStatePartitionState
 }
 type LeaderAndISRRequestLiveLeader struct {
 	ID int32
@@ -1441,6 +1466,17 @@ type LeaderAndISRRequestLiveLeader struct {
 
 	Port int32
 }
+
+// LeaderAndISRRequest is an advanced request that controller brokers use
+// to broadcast state to other brokers. Manually using this request is a
+// great way to break your cluster.
+//
+// As this is an advanced request and there is little reason to issue it as a
+// client, this request is undocumented.
+//
+// Kafka 1.0.0 introduced version 1. Kafka 2.2.0 introduced version 2, proposed
+// in KIP-380, which changed the layout of the struct to be more memory
+// efficient.
 type LeaderAndISRRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
@@ -1449,13 +1485,17 @@ type LeaderAndISRRequest struct {
 
 	ControllerEpoch int32
 
+	BrokerEpoch int64 // v2+
+
 	PartitionStates []LeaderAndISRRequestPartitionState
+
+	TopicStates []LeaderAndISRRequestTopicState // v2+
 
 	LiveLeaders []LeaderAndISRRequestLiveLeader
 }
 
 func (*LeaderAndISRRequest) Key() int16                 { return 4 }
-func (*LeaderAndISRRequest) MaxVersion() int16          { return 1 }
+func (*LeaderAndISRRequest) MaxVersion() int16          { return 2 }
 func (*LeaderAndISRRequest) MinVersion() int16          { return 0 }
 func (v *LeaderAndISRRequest) SetVersion(version int16) { v.Version = version }
 func (v *LeaderAndISRRequest) GetVersion() int16        { return v.Version }
@@ -1475,7 +1515,11 @@ func (v *LeaderAndISRRequest) AppendTo(dst []byte) []byte {
 		v := v.ControllerEpoch
 		dst = kbin.AppendInt32(dst, v)
 	}
-	{
+	if version >= 2 {
+		v := v.BrokerEpoch
+		dst = kbin.AppendInt64(dst, v)
+	}
+	if version >= 0 && version <= 1 {
 		v := v.PartitionStates
 		dst = kbin.AppendArrayLen(dst, len(v))
 		for i := range v {
@@ -1520,9 +1564,67 @@ func (v *LeaderAndISRRequest) AppendTo(dst []byte) []byte {
 					dst = kbin.AppendInt32(dst, v)
 				}
 			}
-			{
+			if version >= 1 {
 				v := v.IsNew
 				dst = kbin.AppendBool(dst, v)
+			}
+		}
+	}
+	if version >= 2 {
+		v := v.TopicStates
+		dst = kbin.AppendArrayLen(dst, len(v))
+		for i := range v {
+			v := &v[i]
+			{
+				v := v.Topic
+				dst = kbin.AppendString(dst, v)
+			}
+			{
+				v := v.PartitionStates
+				dst = kbin.AppendArrayLen(dst, len(v))
+				for i := range v {
+					v := &v[i]
+					{
+						v := v.Partition
+						dst = kbin.AppendInt32(dst, v)
+					}
+					{
+						v := v.ControllerEpoch
+						dst = kbin.AppendInt32(dst, v)
+					}
+					{
+						v := v.Leader
+						dst = kbin.AppendInt32(dst, v)
+					}
+					{
+						v := v.LeaderEpoch
+						dst = kbin.AppendInt32(dst, v)
+					}
+					{
+						v := v.ISR
+						dst = kbin.AppendArrayLen(dst, len(v))
+						for i := range v {
+							v := v[i]
+							dst = kbin.AppendInt32(dst, v)
+						}
+					}
+					{
+						v := v.ZKVersion
+						dst = kbin.AppendInt32(dst, v)
+					}
+					{
+						v := v.Replicas
+						dst = kbin.AppendArrayLen(dst, len(v))
+						for i := range v {
+							v := v[i]
+							dst = kbin.AppendInt32(dst, v)
+						}
+					}
+					{
+						v := v.IsNew
+						dst = kbin.AppendBool(dst, v)
+					}
+				}
 			}
 		}
 	}
@@ -1555,6 +1657,8 @@ type LeaderAndISRResponsePartition struct {
 
 	ErrorCode int16
 }
+
+// LeaderAndISRResponse is returned from a LeaderAndISRRequest.
 type LeaderAndISRResponse struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
@@ -1607,7 +1711,17 @@ type StopReplicaRequestPartition struct {
 	Topic string
 
 	Partition int32
+
+	PartitionIDs []int32 // v1+
 }
+
+// StopReplicaRequest is an advanced request that brokers use to stop replicas.
+//
+// As this is an advanced request and there is little reason to issue it as a
+// client, this request is undocumented.
+//
+// Kafka 2.2.0 introduced version 1, proposed in KIP-380, which changed the
+// layout of the struct to be more memory efficient.
 type StopReplicaRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
@@ -1616,13 +1730,15 @@ type StopReplicaRequest struct {
 
 	ControllerEpoch int32
 
+	BrokerEpoch int64 // v1+
+
 	DeletePartitions bool
 
 	Partitions []StopReplicaRequestPartition
 }
 
 func (*StopReplicaRequest) Key() int16                 { return 5 }
-func (*StopReplicaRequest) MaxVersion() int16          { return 0 }
+func (*StopReplicaRequest) MaxVersion() int16          { return 1 }
 func (*StopReplicaRequest) MinVersion() int16          { return 0 }
 func (v *StopReplicaRequest) SetVersion(version int16) { v.Version = version }
 func (v *StopReplicaRequest) GetVersion() int16        { return v.Version }
@@ -1640,6 +1756,10 @@ func (v *StopReplicaRequest) AppendTo(dst []byte) []byte {
 		v := v.ControllerEpoch
 		dst = kbin.AppendInt32(dst, v)
 	}
+	if version >= 1 {
+		v := v.BrokerEpoch
+		dst = kbin.AppendInt64(dst, v)
+	}
 	{
 		v := v.DeletePartitions
 		dst = kbin.AppendBool(dst, v)
@@ -1653,9 +1773,17 @@ func (v *StopReplicaRequest) AppendTo(dst []byte) []byte {
 				v := v.Topic
 				dst = kbin.AppendString(dst, v)
 			}
-			{
+			if version >= 0 && version <= 0 {
 				v := v.Partition
 				dst = kbin.AppendInt32(dst, v)
+			}
+			if version >= 1 {
+				v := v.PartitionIDs
+				dst = kbin.AppendArrayLen(dst, len(v))
+				for i := range v {
+					v := v[i]
+					dst = kbin.AppendInt32(dst, v)
+				}
 			}
 		}
 	}
@@ -1669,6 +1797,8 @@ type StopReplicaResponsePartition struct {
 
 	ErrorCode int16
 }
+
+// StopReplicasResponse is returned from a StopReplicasRequest.
 type StopReplicaResponse struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
@@ -1736,6 +1866,28 @@ type UpdateMetadataRequestPartitionState struct {
 
 	OfflineReplicas []int32
 }
+type UpdateMetadataRequestTopicStatePartitionState struct {
+	Partition int32
+
+	ControllerEpoch int32
+
+	Leader int32
+
+	LeaderEpoch int32
+
+	ISR []int32
+
+	ZKVersion int32
+
+	Replicas []int32
+
+	OfflineReplicas []int32
+}
+type UpdateMetadataRequestTopicState struct {
+	Topic string
+
+	PartitionStates []UpdateMetadataRequestTopicStatePartitionState
+}
 type UpdateMetadataRequestLiveBrokerEndpoint struct {
 	Port int32
 
@@ -1748,12 +1900,25 @@ type UpdateMetadataRequestLiveBrokerEndpoint struct {
 type UpdateMetadataRequestLiveBroker struct {
 	ID int32
 
+	Host string
+
+	Port int32
+
 	Endpoints []UpdateMetadataRequestLiveBrokerEndpoint // v1+
 
 	Rack *string // v2+
 }
 
-// V1 switched LiveBrokers struct type
+// UpdateMetadataRequest is an advanced request that brokers use to
+// issue metadata updates to each other.
+//
+// As this is an advanced request and there is little reason to issue it as a
+// client, this request is undocumented.
+//
+// Version 1 changed the layout of the live brokers.
+//
+// Kafka 2.2.0 introduced version 5, proposed in KIP-380, which changed the
+// layout of the struct to be more memory efficient.
 type UpdateMetadataRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
@@ -1762,14 +1927,18 @@ type UpdateMetadataRequest struct {
 
 	ControllerEpoch int32
 
+	BrokerEpoch int64 // v5+
+
 	PartitionStates []UpdateMetadataRequestPartitionState
+
+	TopicStates []UpdateMetadataRequestTopicState // v5+
 
 	LiveBrokers []UpdateMetadataRequestLiveBroker
 }
 
 func (*UpdateMetadataRequest) Key() int16                 { return 6 }
-func (*UpdateMetadataRequest) MaxVersion() int16          { return 4 }
-func (*UpdateMetadataRequest) MinVersion() int16          { return 1 }
+func (*UpdateMetadataRequest) MaxVersion() int16          { return 5 }
+func (*UpdateMetadataRequest) MinVersion() int16          { return 0 }
 func (v *UpdateMetadataRequest) SetVersion(version int16) { v.Version = version }
 func (v *UpdateMetadataRequest) GetVersion() int16        { return v.Version }
 func (v *UpdateMetadataRequest) IsAdminRequest() bool     { return true }
@@ -1788,7 +1957,11 @@ func (v *UpdateMetadataRequest) AppendTo(dst []byte) []byte {
 		v := v.ControllerEpoch
 		dst = kbin.AppendInt32(dst, v)
 	}
-	{
+	if version >= 5 {
+		v := v.BrokerEpoch
+		dst = kbin.AppendInt64(dst, v)
+	}
+	if version >= 0 && version <= 4 {
 		v := v.PartitionStates
 		dst = kbin.AppendArrayLen(dst, len(v))
 		for i := range v {
@@ -1843,6 +2016,68 @@ func (v *UpdateMetadataRequest) AppendTo(dst []byte) []byte {
 			}
 		}
 	}
+	if version >= 5 {
+		v := v.TopicStates
+		dst = kbin.AppendArrayLen(dst, len(v))
+		for i := range v {
+			v := &v[i]
+			{
+				v := v.Topic
+				dst = kbin.AppendString(dst, v)
+			}
+			{
+				v := v.PartitionStates
+				dst = kbin.AppendArrayLen(dst, len(v))
+				for i := range v {
+					v := &v[i]
+					{
+						v := v.Partition
+						dst = kbin.AppendInt32(dst, v)
+					}
+					{
+						v := v.ControllerEpoch
+						dst = kbin.AppendInt32(dst, v)
+					}
+					{
+						v := v.Leader
+						dst = kbin.AppendInt32(dst, v)
+					}
+					{
+						v := v.LeaderEpoch
+						dst = kbin.AppendInt32(dst, v)
+					}
+					{
+						v := v.ISR
+						dst = kbin.AppendArrayLen(dst, len(v))
+						for i := range v {
+							v := v[i]
+							dst = kbin.AppendInt32(dst, v)
+						}
+					}
+					{
+						v := v.ZKVersion
+						dst = kbin.AppendInt32(dst, v)
+					}
+					{
+						v := v.Replicas
+						dst = kbin.AppendArrayLen(dst, len(v))
+						for i := range v {
+							v := v[i]
+							dst = kbin.AppendInt32(dst, v)
+						}
+					}
+					{
+						v := v.OfflineReplicas
+						dst = kbin.AppendArrayLen(dst, len(v))
+						for i := range v {
+							v := v[i]
+							dst = kbin.AppendInt32(dst, v)
+						}
+					}
+				}
+			}
+		}
+	}
 	{
 		v := v.LiveBrokers
 		dst = kbin.AppendArrayLen(dst, len(v))
@@ -1850,6 +2085,14 @@ func (v *UpdateMetadataRequest) AppendTo(dst []byte) []byte {
 			v := &v[i]
 			{
 				v := v.ID
+				dst = kbin.AppendInt32(dst, v)
+			}
+			if version >= 0 && version <= 0 {
+				v := v.Host
+				dst = kbin.AppendString(dst, v)
+			}
+			if version >= 0 && version <= 0 {
+				v := v.Port
 				dst = kbin.AppendInt32(dst, v)
 			}
 			if version >= 1 {
@@ -1884,6 +2127,7 @@ func (v *UpdateMetadataRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 
+// UpdateMetadataResponses is returned from an UpdateMetadataRequest.
 type UpdateMetadataResponse struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
@@ -1905,15 +2149,25 @@ func (v *UpdateMetadataResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+// ControlledShutdownRequest is an advanced request that can be used to
+// sthudown a broker in a controlled manner.
+//
+// As this is an advanced request and there is little reason to issue it as a
+// client, this request is undocumented. However, the minimal amount of fields
+// here makes the usage rather obvious.
+//
+// Kafka 2.2.0 introduced version 2, proposed in KIP-380.
 type ControlledShutdownRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
 	BrokerID int32
+
+	BrokerEpoch int64 // v2+
 }
 
 func (*ControlledShutdownRequest) Key() int16                 { return 7 }
-func (*ControlledShutdownRequest) MaxVersion() int16          { return 1 }
+func (*ControlledShutdownRequest) MaxVersion() int16          { return 2 }
 func (*ControlledShutdownRequest) MinVersion() int16          { return 0 }
 func (v *ControlledShutdownRequest) SetVersion(version int16) { v.Version = version }
 func (v *ControlledShutdownRequest) GetVersion() int16        { return v.Version }
@@ -1929,6 +2183,10 @@ func (v *ControlledShutdownRequest) AppendTo(dst []byte) []byte {
 		v := v.BrokerID
 		dst = kbin.AppendInt32(dst, v)
 	}
+	if version >= 2 {
+		v := v.BrokerEpoch
+		dst = kbin.AppendInt64(dst, v)
+	}
 	return dst
 }
 
@@ -1937,6 +2195,8 @@ type ControlledShutdownResponsePartitionsRemaining struct {
 
 	Partition int32
 }
+
+// ControlledShutdownResponse is returned from a ControlledShutdownRequest.
 type ControlledShutdownResponse struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
@@ -3551,7 +3811,7 @@ func (v *DescribeLogDirsRequest) AppendTo(dst []byte) []byte {
 	_ = version
 	{
 		v := v.Topics
-		dst = kbin.AppendArrayLen(dst, len(v))
+		dst = kbin.AppendNullableArrayLen(dst, len(v), v == nil)
 		for i := range v {
 			v := &v[i]
 			{
@@ -3713,15 +3973,23 @@ func (v *DescribeLogDirsResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
-type CreatePartitionsRequestTopicPartitionNewPartition struct {
+type CreatePartitionsRequestTopicPartitionNewPartitions struct {
 	// Count is the final count of partitions this topic must have. This
 	// must be greater than the current number of partitions.
 	Count int32
 
-	// Assignment is an array containing which brokers NEW partitions
-	// should be assigned to. This must be the delta of Count and the
-	// number of current partitions in length.
-	Assignment []int32
+	// Assignment is a two-level array, the first corresponding to new
+	// partitions, the second contining broker IDs for where new partition
+	// replicas should live.
+	//
+	// The second level, the replicas, cannot have duplicate broker IDs
+	// (i.e. you cannot replicate a single partition twice on the same
+	// broker). Additionally, the number of replicas must match the current
+	// number of replicas per partition on the topic.
+	//
+	// The first level's length must be equal to the delta of Count and
+	// the current number of partitions.
+	Assignment [][]int32
 }
 type CreatePartitionsRequestTopicPartition struct {
 	// Topic is a topic for which to create additional partitions for.
@@ -3729,8 +3997,8 @@ type CreatePartitionsRequestTopicPartition struct {
 
 	// NewPartitions contains the total number of partitions a topic must
 	// have after this request, and the assignment of which brokers should
-	// own new partitions.
-	NewPartitions []CreatePartitionsRequestTopicPartitionNewPartition
+	// own new partitions and replicas.
+	NewPartitions CreatePartitionsRequestTopicPartitionNewPartitions
 }
 
 // CreatePartitionsRequest creates additional partitions for topics.
@@ -3772,16 +4040,16 @@ func (v *CreatePartitionsRequest) AppendTo(dst []byte) []byte {
 				dst = kbin.AppendString(dst, v)
 			}
 			{
-				v := v.NewPartitions
-				dst = kbin.AppendArrayLen(dst, len(v))
-				for i := range v {
-					v := &v[i]
-					{
-						v := v.Count
-						dst = kbin.AppendInt32(dst, v)
-					}
-					{
-						v := v.Assignment
+				v := &v.NewPartitions
+				{
+					v := v.Count
+					dst = kbin.AppendInt32(dst, v)
+				}
+				{
+					v := v.Assignment
+					dst = kbin.AppendArrayLen(dst, len(v))
+					for i := range v {
+						v := v[i]
 						dst = kbin.AppendArrayLen(dst, len(v))
 						for i := range v {
 							v := v[i]
