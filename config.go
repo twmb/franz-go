@@ -57,7 +57,7 @@ func NewClient(seedBrokers []string, opts ...Opt) (*Client, error) {
 			requestTimeout: int32(30 * time.Second / 1e4),
 		},
 		producer: producerCfg{
-			acks:        RequireLeaderAck(),
+			acks:        RequireAllISRAcks(),
 			compression: []CompressionCodec{NoCompression()},
 
 			maxRecordBatchBytes: 1000000,   // Kafka max.message.bytes default is 1000012
@@ -102,11 +102,11 @@ func NewClient(seedBrokers []string, opts ...Opt) (*Client, error) {
 		port := 9092 // default kafka port
 		var err error
 		if colon := strings.IndexByte(addr, ':'); colon > 0 {
-			addr = addr[:colon]
 			port, err = strconv.Atoi(addr[colon+1:])
 			if err != nil {
 				return nil, fmt.Errorf("unable to parse addr:port in %q", seedBroker)
 			}
+			addr = addr[:colon]
 		}
 
 		if addr == "localhost" {

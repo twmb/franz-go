@@ -133,10 +133,12 @@ func (bt *brokerToppars) createRequest() (*produceRequest, bool) {
 		deadlineTPs     int
 		moreToDrain     bool
 		now             = time.Now()
+
+		visited int
 	)
 
 	idx := bt.allTopparsStart
-	for i := 0; i < len(bt.allToppars); i++ {
+	for ; visited < len(bt.allToppars); visited++ {
 		tp := bt.allToppars[idx]
 		if idx = idx + 1; idx == len(bt.allToppars) {
 			idx = 0
@@ -198,6 +200,10 @@ func (bt *brokerToppars) createRequest() (*produceRequest, bool) {
 			failSeq:     failSeq,
 			recordBatch: batch,
 		}
+	}
+
+	if visited != len(bt.allToppars) {
+		moreToDrain = true
 	}
 
 	if !moreToDrain && deadlineTPs != 0 {
@@ -308,7 +314,7 @@ func (bt *brokerToppars) drain() {
 	// high volume new toppar began draining; rather than immediately
 	// eating just one record, we allow it to buffer a bit before we
 	// loop draining.
-	time.Sleep(10 * time.Millisecond)
+	time.Sleep(time.Millisecond)
 
 	again := true
 	for again {
