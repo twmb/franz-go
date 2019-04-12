@@ -132,6 +132,9 @@ func AppendVarintString(dst []byte, s string) []byte {
 }
 
 func AppendVarintBytes(dst []byte, b []byte) []byte {
+	if b == nil {
+		return AppendVarint(dst, -1)
+	}
 	dst = AppendVarint(dst, int32(len(b)))
 	return append(dst, b...)
 }
