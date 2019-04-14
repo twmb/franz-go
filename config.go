@@ -35,7 +35,16 @@ func (cfg *cfg) validate() error {
 	if err := cfg.client.validate(); err != nil {
 		return err
 	}
-	return cfg.producer.validate()
+	if err := cfg.producer.validate(); err != nil {
+		return err
+	}
+
+	if cfg.client.maxBrokerWriteBytes < cfg.producer.maxRecordBatchBytes {
+		return fmt.Errorf("max broker write bytes %d is erroneously less than max record batch bytes %d",
+			cfg.client.maxBrokerWriteBytes, cfg.producer.maxRecordBatchBytes)
+	}
+
+	return nil
 }
 
 // domainRe validates domains: a label, and at least one dot-label.
@@ -55,13 +64,14 @@ func NewClient(seedBrokers []string, opts ...Opt) (*Client, error) {
 
 			retryBackoff:   100 * time.Millisecond,
 			requestTimeout: int32(30 * time.Second / 1e4),
+
+			maxBrokerWriteBytes: 100 << 20, // Kafka socket.request.max.bytes default is 100<<20
 		},
 		producer: producerCfg{
 			acks:        RequireAllISRAcks(),
 			compression: []CompressionCodec{NoCompression()},
 
-			maxRecordBatchBytes: 1000000,   // Kafka max.message.bytes default is 1000012
-			maxBrokerWriteBytes: 100 << 20, // Kafka socket.request.max.bytes default is 100<<20
+			maxRecordBatchBytes: 1000000, // Kafka max.message.bytes default is 1000012
 			maxBufferedRecords:  100000,
 
 			partitioner: RandomPartitioner(),
@@ -158,16 +168,13 @@ type (
 		id     *string
 		dialFn func(string) (net.Conn, error)
 
-		// tlsCfg *tls.Config
-
 		retryBackoff   time.Duration
 		requestTimeout int32
 
-		// TODO Conn timeouts? Or, DialFn wrapper?
+		maxBrokerWriteBytes int32
+
+		// TODO dial fn convenience wrappers for tls, timeouts
 		// TODO SASL
-		// TODO allow unsupported features
-		// TODO kafka < 0.10.0.0 ? ( no API versions )
-		// TODO kafka < 0.11.0.0 ? ( no record batch)
 	}
 )
 
@@ -175,6 +182,14 @@ func (opt clientOpt) isopt()               {}
 func (opt clientOpt) apply(cfg *clientCfg) { opt.fn(cfg) }
 
 func (cfg *clientCfg) validate() error {
+	if cfg.maxBrokerWriteBytes < 1<<10 {
+		return fmt.Errorf("max broker write bytes %d is less than min acceptable %d", cfg.maxBrokerWriteBytes, 1<<10)
+	}
+	// upper bound broker write bytes to avoid any problems with
+	// overflowing numbers in calculations.
+	if cfg.maxBrokerWriteBytes > 1<<30 {
+		return fmt.Errorf("max broker write bytes %d is greater than max acceptable %d", cfg.maxBrokerWriteBytes, 1<<30)
+	}
 	return nil
 }
 
@@ -211,6 +226,18 @@ func WithRequestTimeout(limit time.Duration) OptClient {
 	return clientOpt{func(cfg *clientCfg) { cfg.requestTimeout = int32(limit / 1e6) }}
 }
 
+// WithBrokerMaxWriteBytes upper bounds the number of bytes written to a broker
+// connection in a single write, overriding the default 100MiB.
+//
+// This number corresponds to the a broker's socket.request.max.bytes, which
+// defaults to 100MiB.
+//
+// The only Kafka request that could come reasonable close to hitting this
+// limit should be produce requests.
+func WithBrokerMaxWriteBytes(v int32) OptClient {
+	return clientOpt{func(cfg *clientCfg) { cfg.maxBrokerWriteBytes = v }}
+}
+
 // ********** PRODUCER CONFIGURATION **********
 
 type (
@@ -229,7 +256,6 @@ type (
 		allowAutoTopicCreation bool
 
 		maxRecordBatchBytes int32
-		maxBrokerWriteBytes int32
 		maxBufferedRecords  int64
 
 		partitioner Partitioner
@@ -252,22 +278,10 @@ func (cfg *producerCfg) validate() error {
 	if cfg.maxRecordBatchBytes < 1<<10 {
 		return fmt.Errorf("max record batch bytes %d is less than min acceptable %d", cfg.maxRecordBatchBytes, 1<<10)
 	}
-	if cfg.maxBrokerWriteBytes < 1<<10 {
-		return fmt.Errorf("max broker write bytes %d is less than min acceptable %d", cfg.maxBrokerWriteBytes, 1<<10)
-	}
-	if cfg.maxBrokerWriteBytes < cfg.maxRecordBatchBytes {
-		return fmt.Errorf("max broker write bytes %d is erroneously less than max record batch bytes %d", cfg.maxBrokerWriteBytes, cfg.maxRecordBatchBytes)
-	}
 
 	// TODO maxBrokerWriteBytes should be > 2*max.MathInt16 (client ID,
 	// transactional ID) + maxRecordBatchBytes + 2+2+4+2+2+2+4+4 (message
 	// request + producer thing) + 2 (transactional ID)
-
-	// upper bound broker write bytes to avoid any problems with
-	// overflowing numbers in calculations.
-	if cfg.maxBrokerWriteBytes > 1<<30 {
-		return fmt.Errorf("max broker write bytes %d is greater than max acceptable %d", cfg.maxBrokerWriteBytes, 1<<30)
-	}
 
 	return nil
 }
@@ -296,31 +310,31 @@ func RequireLeaderAck() RequiredAcks { return RequiredAcks{1} }
 // wrote a record before the leader replies success.
 func RequireAllISRAcks() RequiredAcks { return RequiredAcks{-1} }
 
-// WithRequiredAcks sets the required acks for produced records, overriding
-// the default RequireLeaderAck.
-func WithRequiredAcks(acks RequiredAcks) OptProducer {
+// WithProduceRequiredAcks sets the required acks for produced records,
+// overriding the default RequireLeaderAck.
+func WithProduceRequiredAcks(acks RequiredAcks) OptProducer {
 	return producerOpt{func(cfg *producerCfg) { cfg.acks = acks }}
 }
 
-// WithAllowAutoTopicCreation enables topics to be auto created if they do not
-// exist when sending messages to them.
-func WithAllowAutoTopicCreation() OptProducer {
+// WithProduceAutoTopicCreation enables topics to be auto created if they do
+// not exist when sending messages to them.
+func WithProduceAutoTopicCreation() OptProducer {
 	return producerOpt{func(cfg *producerCfg) { cfg.allowAutoTopicCreation = true }}
 }
 
-// WithCompressionPreference sets the compression codec to use for records.
+// WithProduceCompression sets the compression codec to use for records.
 //
 // Compression is chosen in the order preferred based on broker support.
 // For example, zstd compression was introduced in Kafka 2.1.0, so the
 // preference can be first zstd, fallback gzip, fallback none.
 //
 // The default preference is no compression.
-func WithCompressionPreference(preference ...CompressionCodec) OptProducer {
+func WithProduceCompression(preference ...CompressionCodec) OptProducer {
 	return producerOpt{func(cfg *producerCfg) { cfg.compression = preference }}
 }
 
-// WithMaxRecordBatchBytes upper bounds the size of a record batch, overriding
-// the default 1MB.
+// WithProduceMaxRecordBatchBytes upper bounds the size of a record batch,
+// overriding the default 1MB.
 //
 // This corresponds to Kafka's max.message.bytes, which defaults to 1,000,012
 // bytes (just over 1MB).
@@ -335,22 +349,13 @@ func WithCompressionPreference(preference ...CompressionCodec) OptProducer {
 // Note that this is the maximum size of a record batch before compression.
 // If a batch compresses poorly and actually grows the batch, the uncompressed
 // form will be used.
-func WithMaxRecordBatchBytes(v int32) OptProducer {
+func WithProduceMaxRecordBatchBytes(v int32) OptProducer {
 	return producerOpt{func(cfg *producerCfg) { cfg.maxRecordBatchBytes = v }}
 }
 
-// WithBrokerMaxWriteBytes upper bounds the number of bytes written to a broker
-// connection in a single write, overriding the default 100MiB.
-//
-// This number corresponds to the a broker's socket.request.max.bytes, which
-// defaults to 100MiB.
-func WithBrokerMaxWriteBytes(v int32) OptProducer {
-	return producerOpt{func(cfg *producerCfg) { cfg.maxBrokerWriteBytes = v }}
-}
-
-// WithPartitioner uses the given partitioner to partition records, overriding
-// the default hash partitioner.
-func WithPartitioner(partitioner Partitioner) OptProducer {
+// WithProducePartitioner uses the given partitioner to partition records,
+// overriding the default hash partitioner.
+func WithProducePartitioner(partitioner Partitioner) OptProducer {
 	return producerOpt{func(cfg *producerCfg) { cfg.partitioner = partitioner }}
 }
 

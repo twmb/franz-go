@@ -126,7 +126,7 @@ func (bt *brokerToppars) createRequest() (*produceRequest, bool) {
 	}
 
 	wireLength := bt.baseWireLength
-	wireLengthLimit := bt.br.cl.cfg.producer.maxBrokerWriteBytes
+	wireLengthLimit := bt.br.cl.cfg.client.maxBrokerWriteBytes
 
 	var (
 		soonestDeadline time.Time
