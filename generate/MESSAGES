@@ -263,7 +263,7 @@ FetchRequest => key 1, max version 10
       FetchOffset: int64
       LogStartOffset: int64 // v5+
       PartitionMaxBytes: int32
-  ForgottenTopicsData: [=>]
+  ForgottenTopicsData: [=>] // v7+
     Topic: string
     Partitions: [int32]
 
