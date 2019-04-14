@@ -6,7 +6,7 @@ import "github.com/twmb/kgo/kbin"
 
 // MaxKey is the maximum key used for any messages in this package.
 // Note that this value may change as Kafka adds more messages.
-const MaxKey = 37
+const MaxKey = 43
 
 // Header is user provided metadata for a record. Kafka does not look at
 // headers at all; they are solely for producers and consumers.
@@ -2246,6 +2246,10 @@ type OffsetCommitRequestTopicPartition struct {
 
 	Offset int64
 
+	// expiration is Timestamp + offset.retention.minutes.
+	// if non-zero.
+	// if zero, current time + offset.retention.minutes.
+	// KIP-211
 	Timestamp int64 // v1+
 
 	LeaderEpoch int32 // v6+
@@ -2267,6 +2271,11 @@ type OffsetCommitRequest struct {
 
 	MemberID string // v1+
 
+	// replaces offset.retention.minutes and timestamp field below
+	// removed, why? problem:
+	// - rarely committing consumer's offset expired
+	// - restart or rebalance, now does not know last committed offset
+	// - now they have to restart from end or beginnig, leading to dups or loss.
 	RetentionTime int64 // v2+
 
 	Topics []OffsetCommitRequestTopic
@@ -2407,6 +2416,658 @@ func (v *OffsetCommitResponse) ReadFrom(src []byte) error {
 			}
 			v = a
 			s.Responses = v
+		}
+	}
+	return b.Complete()
+}
+
+type OffsetFetchRequestTopicPartition struct {
+	Partition int32
+}
+type OffsetFetchRequestTopic struct {
+	Topic string
+
+	Partitions []OffsetFetchRequestTopicPartition
+}
+type OffsetFetchRequest struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	GroupID string
+
+	Topics []OffsetFetchRequestTopic
+}
+
+func (*OffsetFetchRequest) Key() int16                 { return 9 }
+func (*OffsetFetchRequest) MaxVersion() int16          { return 5 }
+func (*OffsetFetchRequest) MinVersion() int16          { return 0 }
+func (v *OffsetFetchRequest) SetVersion(version int16) { v.Version = version }
+func (v *OffsetFetchRequest) GetVersion() int16        { return v.Version }
+func (v *OffsetFetchRequest) ResponseKind() Response   { return &OffsetFetchResponse{Version: v.Version} }
+
+func (v *OffsetFetchRequest) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	{
+		v := v.GroupID
+		dst = kbin.AppendString(dst, v)
+	}
+	{
+		v := v.Topics
+		dst = kbin.AppendArrayLen(dst, len(v))
+		for i := range v {
+			v := &v[i]
+			{
+				v := v.Topic
+				dst = kbin.AppendString(dst, v)
+			}
+			{
+				v := v.Partitions
+				dst = kbin.AppendArrayLen(dst, len(v))
+				for i := range v {
+					v := &v[i]
+					{
+						v := v.Partition
+						dst = kbin.AppendInt32(dst, v)
+					}
+				}
+			}
+		}
+	}
+	return dst
+}
+
+type OffsetFetchResponseResponseTopicPartitionResponse struct {
+	Partition int32
+
+	Offset int64
+
+	LeaderEpoch int32 // v5+
+
+	Metadata *string
+
+	ErrorCode int16
+}
+type OffsetFetchResponseResponseTopic struct {
+	Topic string
+
+	PartitionResponses []OffsetFetchResponseResponseTopicPartitionResponse
+}
+type OffsetFetchResponseResponse struct {
+	Topic []OffsetFetchResponseResponseTopic
+}
+type OffsetFetchResponse struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	ThrottleTimeMs int32
+
+	Responses []OffsetFetchResponseResponse
+
+	ErrorCode int16 // v2+
+}
+
+func (v *OffsetFetchResponse) ReadFrom(src []byte) error {
+	version := v.Version
+	_ = version
+	b := kbin.Reader{Src: src}
+	{
+		s := v
+		{
+			v := b.Int32()
+			s.ThrottleTimeMs = v
+		}
+		{
+			v := s.Responses
+			a := v
+			for i := b.ArrayLen(); i > 0; i-- {
+				a = append(a, OffsetFetchResponseResponse{})
+				v := &a[len(a)-1]
+				{
+					s := v
+					{
+						v := s.Topic
+						a := v
+						for i := b.ArrayLen(); i > 0; i-- {
+							a = append(a, OffsetFetchResponseResponseTopic{})
+							v := &a[len(a)-1]
+							{
+								s := v
+								{
+									v := b.String()
+									s.Topic = v
+								}
+								{
+									v := s.PartitionResponses
+									a := v
+									for i := b.ArrayLen(); i > 0; i-- {
+										a = append(a, OffsetFetchResponseResponseTopicPartitionResponse{})
+										v := &a[len(a)-1]
+										{
+											s := v
+											{
+												v := b.Int32()
+												s.Partition = v
+											}
+											{
+												v := b.Int64()
+												s.Offset = v
+											}
+											if version >= 5 {
+												v := b.Int32()
+												s.LeaderEpoch = v
+											}
+											{
+												v := b.NullableString()
+												s.Metadata = v
+											}
+											{
+												v := b.Int16()
+												s.ErrorCode = v
+											}
+										}
+									}
+									v = a
+									s.PartitionResponses = v
+								}
+							}
+						}
+						v = a
+						s.Topic = v
+					}
+				}
+			}
+			v = a
+			s.Responses = v
+		}
+		if version >= 2 {
+			v := b.Int16()
+			s.ErrorCode = v
+		}
+	}
+	return b.Complete()
+}
+
+// FindCoordinatorRequest requests the coordinator for a group or transaction.
+type FindCoordinatorRequest struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	// CoordinatorKey is the ID to use for finding the coordinator. For groups,
+	// this is the group ID, for transactional producer, this is the
+	// transactional ID.
+	//
+	// In v0 this was called GroupID.
+	CoordinatorKey string
+
+	// CoordinatorType is the type that key is. GroupIDs are type 0,
+	// transactional IDs are type 1.
+	CoordinatorType int8 // v1+
+}
+
+func (*FindCoordinatorRequest) Key() int16                 { return 10 }
+func (*FindCoordinatorRequest) MaxVersion() int16          { return 2 }
+func (*FindCoordinatorRequest) MinVersion() int16          { return 0 }
+func (v *FindCoordinatorRequest) SetVersion(version int16) { v.Version = version }
+func (v *FindCoordinatorRequest) GetVersion() int16        { return v.Version }
+func (v *FindCoordinatorRequest) ResponseKind() Response {
+	return &FindCoordinatorResponse{Version: v.Version}
+}
+
+func (v *FindCoordinatorRequest) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	{
+		v := v.CoordinatorKey
+		dst = kbin.AppendString(dst, v)
+	}
+	if version >= 1 {
+		v := v.CoordinatorType
+		dst = kbin.AppendInt8(dst, v)
+	}
+	return dst
+}
+
+type FindCoordinatorResponseCoordinator struct {
+	// NodeID is the broker ID of the coordinator.
+	NodeID int32
+
+	// Host is the host of the coordinator.
+	Host string
+
+	// Port is the port of the coordinator.
+	Port int32
+}
+
+// FindCoordinatorResponse is returned from a FindCoordinatorRequest.
+type FindCoordinatorResponse struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	// ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+	// after this request.
+	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
+	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
+	ThrottleTimeMs int32 // v1+
+
+	// ErrorCode is the error returned for the request.
+	//
+	// GROUP_AUTHORIZATION_FAILED is returned if for a group ID request and the
+	// client is not authorized to describe groups.
+	//
+	// TRANSACTIONAL_ID_AUTHORIZATION_FAILED is returned for a transactional ID
+	// request and the client is not authorized to describe transactional IDs.
+	//
+	// INVALID_REQUEST is returned if not asking for a known type (group,
+	// or transaction).
+	//
+	// COORDINATOR_NOT_AVAILABLE is returned if the coordinator is not available
+	// for the requested ID, or if the requested ID does not exist.
+	ErrorCode int16
+
+	// ErrorMessage is an informative message if the request errored.
+	ErrorMessage *string // v1+
+
+	// Coordinator is the coordinator for the requested ID if the request did
+	// not error.
+	Coordinator FindCoordinatorResponseCoordinator
+}
+
+func (v *FindCoordinatorResponse) ReadFrom(src []byte) error {
+	version := v.Version
+	_ = version
+	b := kbin.Reader{Src: src}
+	{
+		s := v
+		if version >= 1 {
+			v := b.Int32()
+			s.ThrottleTimeMs = v
+		}
+		{
+			v := b.Int16()
+			s.ErrorCode = v
+		}
+		if version >= 1 {
+			v := b.NullableString()
+			s.ErrorMessage = v
+		}
+		{
+			v := &s.Coordinator
+			{
+				s := v
+				{
+					v := b.Int32()
+					s.NodeID = v
+				}
+				{
+					v := b.String()
+					s.Host = v
+				}
+				{
+					v := b.Int32()
+					s.Port = v
+				}
+			}
+		}
+	}
+	return b.Complete()
+}
+
+type JoinGroupRequestGroupProtocol struct {
+	ProtocolName string
+
+	ProtocolMetadata []byte
+}
+type JoinGroupRequest struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	GroupID string
+
+	SessionTimeout int32
+
+	RebalanceTimeout int32 // v1+
+
+	MemberID string
+
+	ProtocolType string
+
+	GroupProtocols []JoinGroupRequestGroupProtocol
+}
+
+func (*JoinGroupRequest) Key() int16                 { return 11 }
+func (*JoinGroupRequest) MaxVersion() int16          { return 4 }
+func (*JoinGroupRequest) MinVersion() int16          { return 0 }
+func (v *JoinGroupRequest) SetVersion(version int16) { v.Version = version }
+func (v *JoinGroupRequest) GetVersion() int16        { return v.Version }
+func (v *JoinGroupRequest) ResponseKind() Response   { return &JoinGroupResponse{Version: v.Version} }
+
+func (v *JoinGroupRequest) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	{
+		v := v.GroupID
+		dst = kbin.AppendString(dst, v)
+	}
+	{
+		v := v.SessionTimeout
+		dst = kbin.AppendInt32(dst, v)
+	}
+	if version >= 1 {
+		v := v.RebalanceTimeout
+		dst = kbin.AppendInt32(dst, v)
+	}
+	{
+		v := v.MemberID
+		dst = kbin.AppendString(dst, v)
+	}
+	{
+		v := v.ProtocolType
+		dst = kbin.AppendString(dst, v)
+	}
+	{
+		v := v.GroupProtocols
+		dst = kbin.AppendArrayLen(dst, len(v))
+		for i := range v {
+			v := &v[i]
+			{
+				v := v.ProtocolName
+				dst = kbin.AppendString(dst, v)
+			}
+			{
+				v := v.ProtocolMetadata
+				dst = kbin.AppendBytes(dst, v)
+			}
+		}
+	}
+	return dst
+}
+
+type JoinGroupResponseMember struct {
+	MemberID string
+
+	MemberMetadata []byte
+}
+type JoinGroupResponse struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	ThrottleTimeMs int32 // v2+
+
+	ErrorCode int16
+
+	GenerationID int32
+
+	GroupProtocol string
+
+	LeaderID string
+
+	MemberID string
+
+	Members []JoinGroupResponseMember
+}
+
+func (v *JoinGroupResponse) ReadFrom(src []byte) error {
+	version := v.Version
+	_ = version
+	b := kbin.Reader{Src: src}
+	{
+		s := v
+		if version >= 2 {
+			v := b.Int32()
+			s.ThrottleTimeMs = v
+		}
+		{
+			v := b.Int16()
+			s.ErrorCode = v
+		}
+		{
+			v := b.Int32()
+			s.GenerationID = v
+		}
+		{
+			v := b.String()
+			s.GroupProtocol = v
+		}
+		{
+			v := b.String()
+			s.LeaderID = v
+		}
+		{
+			v := b.String()
+			s.MemberID = v
+		}
+		{
+			v := s.Members
+			a := v
+			for i := b.ArrayLen(); i > 0; i-- {
+				a = append(a, JoinGroupResponseMember{})
+				v := &a[len(a)-1]
+				{
+					s := v
+					{
+						v := b.String()
+						s.MemberID = v
+					}
+					{
+						v := b.Bytes()
+						s.MemberMetadata = v
+					}
+				}
+			}
+			v = a
+			s.Members = v
+		}
+	}
+	return b.Complete()
+}
+
+type HeartbeatRequest struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	GroupID string
+
+	GenerationID int32
+
+	MemberID string
+}
+
+func (*HeartbeatRequest) Key() int16                 { return 12 }
+func (*HeartbeatRequest) MaxVersion() int16          { return 2 }
+func (*HeartbeatRequest) MinVersion() int16          { return 0 }
+func (v *HeartbeatRequest) SetVersion(version int16) { v.Version = version }
+func (v *HeartbeatRequest) GetVersion() int16        { return v.Version }
+func (v *HeartbeatRequest) ResponseKind() Response   { return &HeartbeatResponse{Version: v.Version} }
+
+func (v *HeartbeatRequest) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	{
+		v := v.GroupID
+		dst = kbin.AppendString(dst, v)
+	}
+	{
+		v := v.GenerationID
+		dst = kbin.AppendInt32(dst, v)
+	}
+	{
+		v := v.MemberID
+		dst = kbin.AppendString(dst, v)
+	}
+	return dst
+}
+
+type HeartbeatResponse struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	ThrottleTimeMs int32 // v1+
+
+	ErrorCode int16
+}
+
+func (v *HeartbeatResponse) ReadFrom(src []byte) error {
+	version := v.Version
+	_ = version
+	b := kbin.Reader{Src: src}
+	{
+		s := v
+		if version >= 1 {
+			v := b.Int32()
+			s.ThrottleTimeMs = v
+		}
+		{
+			v := b.Int16()
+			s.ErrorCode = v
+		}
+	}
+	return b.Complete()
+}
+
+type LeaveGroupRequest struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	GroupID string
+
+	MemberID string
+}
+
+func (*LeaveGroupRequest) Key() int16                 { return 13 }
+func (*LeaveGroupRequest) MaxVersion() int16          { return 2 }
+func (*LeaveGroupRequest) MinVersion() int16          { return 0 }
+func (v *LeaveGroupRequest) SetVersion(version int16) { v.Version = version }
+func (v *LeaveGroupRequest) GetVersion() int16        { return v.Version }
+func (v *LeaveGroupRequest) ResponseKind() Response   { return &LeaveGroupResponse{Version: v.Version} }
+
+func (v *LeaveGroupRequest) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	{
+		v := v.GroupID
+		dst = kbin.AppendString(dst, v)
+	}
+	{
+		v := v.MemberID
+		dst = kbin.AppendString(dst, v)
+	}
+	return dst
+}
+
+type LeaveGroupResponse struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	ThrottleTimeMs int32 // v1+
+
+	ErrorCode int16
+}
+
+func (v *LeaveGroupResponse) ReadFrom(src []byte) error {
+	version := v.Version
+	_ = version
+	b := kbin.Reader{Src: src}
+	{
+		s := v
+		if version >= 1 {
+			v := b.Int32()
+			s.ThrottleTimeMs = v
+		}
+		{
+			v := b.Int16()
+			s.ErrorCode = v
+		}
+	}
+	return b.Complete()
+}
+
+type SyncGroupRequestGroupAssignment struct {
+	MemberID string
+
+	MemberAssignment []byte
+}
+type SyncGroupRequest struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	GroupID string
+
+	GenerationID int32
+
+	MemberID string
+
+	GroupAssignment []SyncGroupRequestGroupAssignment
+}
+
+func (*SyncGroupRequest) Key() int16                 { return 14 }
+func (*SyncGroupRequest) MaxVersion() int16          { return 2 }
+func (*SyncGroupRequest) MinVersion() int16          { return 0 }
+func (v *SyncGroupRequest) SetVersion(version int16) { v.Version = version }
+func (v *SyncGroupRequest) GetVersion() int16        { return v.Version }
+func (v *SyncGroupRequest) ResponseKind() Response   { return &SyncGroupResponse{Version: v.Version} }
+
+func (v *SyncGroupRequest) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	{
+		v := v.GroupID
+		dst = kbin.AppendString(dst, v)
+	}
+	{
+		v := v.GenerationID
+		dst = kbin.AppendInt32(dst, v)
+	}
+	{
+		v := v.MemberID
+		dst = kbin.AppendString(dst, v)
+	}
+	{
+		v := v.GroupAssignment
+		dst = kbin.AppendArrayLen(dst, len(v))
+		for i := range v {
+			v := &v[i]
+			{
+				v := v.MemberID
+				dst = kbin.AppendString(dst, v)
+			}
+			{
+				v := v.MemberAssignment
+				dst = kbin.AppendBytes(dst, v)
+			}
+		}
+	}
+	return dst
+}
+
+type SyncGroupResponse struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	ThrottleTimeMs int32 // v1+
+
+	ErrorCode int16
+
+	MemberAssignment []byte
+}
+
+func (v *SyncGroupResponse) ReadFrom(src []byte) error {
+	version := v.Version
+	_ = version
+	b := kbin.Reader{Src: src}
+	{
+		s := v
+		if version >= 1 {
+			v := b.Int32()
+			s.ThrottleTimeMs = v
+		}
+		{
+			v := b.Int16()
+			s.ErrorCode = v
+		}
+		{
+			v := b.Bytes()
+			s.MemberAssignment = v
 		}
 	}
 	return b.Complete()
@@ -2576,6 +3237,138 @@ func (v *DescribeGroupsResponse) ReadFrom(src []byte) error {
 			}
 			v = a
 			s.Groups = v
+		}
+	}
+	return b.Complete()
+}
+
+type ListGroupsRequest struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+}
+
+func (*ListGroupsRequest) Key() int16                 { return 16 }
+func (*ListGroupsRequest) MaxVersion() int16          { return 2 }
+func (*ListGroupsRequest) MinVersion() int16          { return 0 }
+func (v *ListGroupsRequest) SetVersion(version int16) { v.Version = version }
+func (v *ListGroupsRequest) GetVersion() int16        { return v.Version }
+func (v *ListGroupsRequest) ResponseKind() Response   { return &ListGroupsResponse{Version: v.Version} }
+
+func (v *ListGroupsRequest) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	return dst
+}
+
+type ListGroupsResponseGroup struct {
+	GroupID string
+
+	ProtocolType string
+}
+type ListGroupsResponse struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	ThrottleTimeMs int32 // v1+
+
+	ErrorCode int16
+
+	Groups []ListGroupsResponseGroup
+}
+
+func (v *ListGroupsResponse) ReadFrom(src []byte) error {
+	version := v.Version
+	_ = version
+	b := kbin.Reader{Src: src}
+	{
+		s := v
+		if version >= 1 {
+			v := b.Int32()
+			s.ThrottleTimeMs = v
+		}
+		{
+			v := b.Int16()
+			s.ErrorCode = v
+		}
+		{
+			v := s.Groups
+			a := v
+			for i := b.ArrayLen(); i > 0; i-- {
+				a = append(a, ListGroupsResponseGroup{})
+				v := &a[len(a)-1]
+				{
+					s := v
+					{
+						v := b.String()
+						s.GroupID = v
+					}
+					{
+						v := b.String()
+						s.ProtocolType = v
+					}
+				}
+			}
+			v = a
+			s.Groups = v
+		}
+	}
+	return b.Complete()
+}
+
+type SASLHandshakeRequest struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	Mechanism string
+}
+
+func (*SASLHandshakeRequest) Key() int16                 { return 17 }
+func (*SASLHandshakeRequest) MaxVersion() int16          { return 1 }
+func (*SASLHandshakeRequest) MinVersion() int16          { return 0 }
+func (v *SASLHandshakeRequest) SetVersion(version int16) { v.Version = version }
+func (v *SASLHandshakeRequest) GetVersion() int16        { return v.Version }
+func (v *SASLHandshakeRequest) ResponseKind() Response {
+	return &SASLHandshakeResponse{Version: v.Version}
+}
+
+func (v *SASLHandshakeRequest) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	{
+		v := v.Mechanism
+		dst = kbin.AppendString(dst, v)
+	}
+	return dst
+}
+
+type SASLHandshakeResponse struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	ErrorCode int16
+
+	EnabledMechanisms []string
+}
+
+func (v *SASLHandshakeResponse) ReadFrom(src []byte) error {
+	version := v.Version
+	_ = version
+	b := kbin.Reader{Src: src}
+	{
+		s := v
+		{
+			v := b.Int16()
+			s.ErrorCode = v
+		}
+		{
+			v := s.EnabledMechanisms
+			a := v
+			for i := b.ArrayLen(); i > 0; i-- {
+				v := b.String()
+				a = append(a, v)
+			}
+			v = a
+			s.EnabledMechanisms = v
 		}
 	}
 	return b.Complete()
@@ -3020,6 +3813,147 @@ func (v *DeleteTopicsResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+type DeleteRecordsRequestTopicPartition struct {
+	Partition int32
+
+	Offset int64
+}
+type DeleteRecordsRequestTopic struct {
+	Topic string
+
+	Partitions []DeleteRecordsRequestTopicPartition
+}
+type DeleteRecordsRequest struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	Topics []DeleteRecordsRequestTopic
+
+	Timeout int32
+}
+
+func (*DeleteRecordsRequest) Key() int16                 { return 21 }
+func (*DeleteRecordsRequest) MaxVersion() int16          { return 1 }
+func (*DeleteRecordsRequest) MinVersion() int16          { return 0 }
+func (v *DeleteRecordsRequest) SetVersion(version int16) { v.Version = version }
+func (v *DeleteRecordsRequest) GetVersion() int16        { return v.Version }
+func (v *DeleteRecordsRequest) ResponseKind() Response {
+	return &DeleteRecordsResponse{Version: v.Version}
+}
+
+func (v *DeleteRecordsRequest) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	{
+		v := v.Topics
+		dst = kbin.AppendArrayLen(dst, len(v))
+		for i := range v {
+			v := &v[i]
+			{
+				v := v.Topic
+				dst = kbin.AppendString(dst, v)
+			}
+			{
+				v := v.Partitions
+				dst = kbin.AppendArrayLen(dst, len(v))
+				for i := range v {
+					v := &v[i]
+					{
+						v := v.Partition
+						dst = kbin.AppendInt32(dst, v)
+					}
+					{
+						v := v.Offset
+						dst = kbin.AppendInt64(dst, v)
+					}
+				}
+			}
+		}
+	}
+	{
+		v := v.Timeout
+		dst = kbin.AppendInt32(dst, v)
+	}
+	return dst
+}
+
+type DeleteRecordsResponseTopicPartition struct {
+	Partition int32
+
+	LowWatermark int64
+
+	ErrorCode int16
+}
+type DeleteRecordsResponseTopic struct {
+	Topic string
+
+	Partitions []DeleteRecordsResponseTopicPartition
+}
+type DeleteRecordsResponse struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	ThrottleTimeMs int32
+
+	Topics []DeleteRecordsResponseTopic
+}
+
+func (v *DeleteRecordsResponse) ReadFrom(src []byte) error {
+	version := v.Version
+	_ = version
+	b := kbin.Reader{Src: src}
+	{
+		s := v
+		{
+			v := b.Int32()
+			s.ThrottleTimeMs = v
+		}
+		{
+			v := s.Topics
+			a := v
+			for i := b.ArrayLen(); i > 0; i-- {
+				a = append(a, DeleteRecordsResponseTopic{})
+				v := &a[len(a)-1]
+				{
+					s := v
+					{
+						v := b.String()
+						s.Topic = v
+					}
+					{
+						v := s.Partitions
+						a := v
+						for i := b.ArrayLen(); i > 0; i-- {
+							a = append(a, DeleteRecordsResponseTopicPartition{})
+							v := &a[len(a)-1]
+							{
+								s := v
+								{
+									v := b.Int32()
+									s.Partition = v
+								}
+								{
+									v := b.Int64()
+									s.LowWatermark = v
+								}
+								{
+									v := b.Int16()
+									s.ErrorCode = v
+								}
+							}
+						}
+						v = a
+						s.Partitions = v
+					}
+				}
+			}
+			v = a
+			s.Topics = v
+		}
+	}
+	return b.Complete()
+}
+
 type InitProducerIDRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
@@ -3102,6 +4036,760 @@ func (v *InitProducerIDResponse) ReadFrom(src []byte) error {
 		{
 			v := b.Int16()
 			s.ProducerEpoch = v
+		}
+	}
+	return b.Complete()
+}
+
+type OffsetForLeaderEpochRequestTopicPartition struct {
+	Partition int32
+
+	CurrentLeaderEpoch int32 // v2+
+
+	LeaderEpoch int32
+}
+type OffsetForLeaderEpochRequestTopic struct {
+	Topic string
+
+	Partitions []OffsetForLeaderEpochRequestTopicPartition
+}
+type OffsetForLeaderEpochRequest struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	Topics []OffsetForLeaderEpochRequestTopic
+}
+
+func (*OffsetForLeaderEpochRequest) Key() int16                 { return 23 }
+func (*OffsetForLeaderEpochRequest) MaxVersion() int16          { return 2 }
+func (*OffsetForLeaderEpochRequest) MinVersion() int16          { return 0 }
+func (v *OffsetForLeaderEpochRequest) SetVersion(version int16) { v.Version = version }
+func (v *OffsetForLeaderEpochRequest) GetVersion() int16        { return v.Version }
+func (v *OffsetForLeaderEpochRequest) ResponseKind() Response {
+	return &OffsetForLeaderEpochResponse{Version: v.Version}
+}
+
+func (v *OffsetForLeaderEpochRequest) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	{
+		v := v.Topics
+		dst = kbin.AppendArrayLen(dst, len(v))
+		for i := range v {
+			v := &v[i]
+			{
+				v := v.Topic
+				dst = kbin.AppendString(dst, v)
+			}
+			{
+				v := v.Partitions
+				dst = kbin.AppendArrayLen(dst, len(v))
+				for i := range v {
+					v := &v[i]
+					{
+						v := v.Partition
+						dst = kbin.AppendInt32(dst, v)
+					}
+					if version >= 2 {
+						v := v.CurrentLeaderEpoch
+						dst = kbin.AppendInt32(dst, v)
+					}
+					{
+						v := v.LeaderEpoch
+						dst = kbin.AppendInt32(dst, v)
+					}
+				}
+			}
+		}
+	}
+	return dst
+}
+
+type OffsetForLeaderEpochResponseTopicPartition struct {
+	ErrorCode int16
+
+	Partition int32
+
+	LeaderEpoch int32
+
+	EndOffset int64
+}
+type OffsetForLeaderEpochResponseTopic struct {
+	Topic string
+
+	Partitions []OffsetForLeaderEpochResponseTopicPartition
+}
+type OffsetForLeaderEpochResponse struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	ThrottleTimeMs int32
+
+	Topics []OffsetForLeaderEpochResponseTopic
+}
+
+func (v *OffsetForLeaderEpochResponse) ReadFrom(src []byte) error {
+	version := v.Version
+	_ = version
+	b := kbin.Reader{Src: src}
+	{
+		s := v
+		{
+			v := b.Int32()
+			s.ThrottleTimeMs = v
+		}
+		{
+			v := s.Topics
+			a := v
+			for i := b.ArrayLen(); i > 0; i-- {
+				a = append(a, OffsetForLeaderEpochResponseTopic{})
+				v := &a[len(a)-1]
+				{
+					s := v
+					{
+						v := b.String()
+						s.Topic = v
+					}
+					{
+						v := s.Partitions
+						a := v
+						for i := b.ArrayLen(); i > 0; i-- {
+							a = append(a, OffsetForLeaderEpochResponseTopicPartition{})
+							v := &a[len(a)-1]
+							{
+								s := v
+								{
+									v := b.Int16()
+									s.ErrorCode = v
+								}
+								{
+									v := b.Int32()
+									s.Partition = v
+								}
+								{
+									v := b.Int32()
+									s.LeaderEpoch = v
+								}
+								{
+									v := b.Int64()
+									s.EndOffset = v
+								}
+							}
+						}
+						v = a
+						s.Partitions = v
+					}
+				}
+			}
+			v = a
+			s.Topics = v
+		}
+	}
+	return b.Complete()
+}
+
+type AddPartitionsToTxnRequestTopic struct {
+	Topic string
+
+	Partitions []int32
+}
+type AddPartitionsToTxnRequest struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	TransactionalID string
+
+	ProducerID int64
+
+	ProducerEpoch int16
+
+	Topics []AddPartitionsToTxnRequestTopic
+}
+
+func (*AddPartitionsToTxnRequest) Key() int16                 { return 24 }
+func (*AddPartitionsToTxnRequest) MaxVersion() int16          { return 1 }
+func (*AddPartitionsToTxnRequest) MinVersion() int16          { return 0 }
+func (v *AddPartitionsToTxnRequest) SetVersion(version int16) { v.Version = version }
+func (v *AddPartitionsToTxnRequest) GetVersion() int16        { return v.Version }
+func (v *AddPartitionsToTxnRequest) ResponseKind() Response {
+	return &AddPartitionsToTxnResponse{Version: v.Version}
+}
+
+func (v *AddPartitionsToTxnRequest) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	{
+		v := v.TransactionalID
+		dst = kbin.AppendString(dst, v)
+	}
+	{
+		v := v.ProducerID
+		dst = kbin.AppendInt64(dst, v)
+	}
+	{
+		v := v.ProducerEpoch
+		dst = kbin.AppendInt16(dst, v)
+	}
+	{
+		v := v.Topics
+		dst = kbin.AppendArrayLen(dst, len(v))
+		for i := range v {
+			v := &v[i]
+			{
+				v := v.Topic
+				dst = kbin.AppendString(dst, v)
+			}
+			{
+				v := v.Partitions
+				dst = kbin.AppendArrayLen(dst, len(v))
+				for i := range v {
+					v := v[i]
+					dst = kbin.AppendInt32(dst, v)
+				}
+			}
+		}
+	}
+	return dst
+}
+
+type AddPartitionsToTxnResponseErrorPartitionError struct {
+	Partition int32
+
+	ErrorCode int16
+}
+type AddPartitionsToTxnResponseError struct {
+	Topic string
+
+	PartitionErrors []AddPartitionsToTxnResponseErrorPartitionError
+}
+type AddPartitionsToTxnResponse struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	ThrottleTimeMs int32
+
+	Errors []AddPartitionsToTxnResponseError
+}
+
+func (v *AddPartitionsToTxnResponse) ReadFrom(src []byte) error {
+	version := v.Version
+	_ = version
+	b := kbin.Reader{Src: src}
+	{
+		s := v
+		{
+			v := b.Int32()
+			s.ThrottleTimeMs = v
+		}
+		{
+			v := s.Errors
+			a := v
+			for i := b.ArrayLen(); i > 0; i-- {
+				a = append(a, AddPartitionsToTxnResponseError{})
+				v := &a[len(a)-1]
+				{
+					s := v
+					{
+						v := b.String()
+						s.Topic = v
+					}
+					{
+						v := s.PartitionErrors
+						a := v
+						for i := b.ArrayLen(); i > 0; i-- {
+							a = append(a, AddPartitionsToTxnResponseErrorPartitionError{})
+							v := &a[len(a)-1]
+							{
+								s := v
+								{
+									v := b.Int32()
+									s.Partition = v
+								}
+								{
+									v := b.Int16()
+									s.ErrorCode = v
+								}
+							}
+						}
+						v = a
+						s.PartitionErrors = v
+					}
+				}
+			}
+			v = a
+			s.Errors = v
+		}
+	}
+	return b.Complete()
+}
+
+type AddOffsetsToTxnRequest struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	TransactionalID string
+
+	ProducerID int64
+
+	ProducerEpoch int16
+
+	GroupID string
+}
+
+func (*AddOffsetsToTxnRequest) Key() int16                 { return 25 }
+func (*AddOffsetsToTxnRequest) MaxVersion() int16          { return 1 }
+func (*AddOffsetsToTxnRequest) MinVersion() int16          { return 0 }
+func (v *AddOffsetsToTxnRequest) SetVersion(version int16) { v.Version = version }
+func (v *AddOffsetsToTxnRequest) GetVersion() int16        { return v.Version }
+func (v *AddOffsetsToTxnRequest) ResponseKind() Response {
+	return &AddOffsetsToTxnResponse{Version: v.Version}
+}
+
+func (v *AddOffsetsToTxnRequest) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	{
+		v := v.TransactionalID
+		dst = kbin.AppendString(dst, v)
+	}
+	{
+		v := v.ProducerID
+		dst = kbin.AppendInt64(dst, v)
+	}
+	{
+		v := v.ProducerEpoch
+		dst = kbin.AppendInt16(dst, v)
+	}
+	{
+		v := v.GroupID
+		dst = kbin.AppendString(dst, v)
+	}
+	return dst
+}
+
+type AddOffsetsToTxnResponse struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	ThrottleTimeMs int32
+
+	ErrorCode int16
+}
+
+func (v *AddOffsetsToTxnResponse) ReadFrom(src []byte) error {
+	version := v.Version
+	_ = version
+	b := kbin.Reader{Src: src}
+	{
+		s := v
+		{
+			v := b.Int32()
+			s.ThrottleTimeMs = v
+		}
+		{
+			v := b.Int16()
+			s.ErrorCode = v
+		}
+	}
+	return b.Complete()
+}
+
+type EndTxnRequest struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	TransactionalID string
+
+	ProducerID int64
+
+	ProducerEpoch int16
+
+	TransactionalResult bool
+}
+
+func (*EndTxnRequest) Key() int16                 { return 26 }
+func (*EndTxnRequest) MaxVersion() int16          { return 1 }
+func (*EndTxnRequest) MinVersion() int16          { return 0 }
+func (v *EndTxnRequest) SetVersion(version int16) { v.Version = version }
+func (v *EndTxnRequest) GetVersion() int16        { return v.Version }
+func (v *EndTxnRequest) ResponseKind() Response   { return &EndTxnResponse{Version: v.Version} }
+
+func (v *EndTxnRequest) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	{
+		v := v.TransactionalID
+		dst = kbin.AppendString(dst, v)
+	}
+	{
+		v := v.ProducerID
+		dst = kbin.AppendInt64(dst, v)
+	}
+	{
+		v := v.ProducerEpoch
+		dst = kbin.AppendInt16(dst, v)
+	}
+	{
+		v := v.TransactionalResult
+		dst = kbin.AppendBool(dst, v)
+	}
+	return dst
+}
+
+type EndTxnResponse struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	ThrottleTimeMs int32
+
+	ErrorCode int16
+}
+
+func (v *EndTxnResponse) ReadFrom(src []byte) error {
+	version := v.Version
+	_ = version
+	b := kbin.Reader{Src: src}
+	{
+		s := v
+		{
+			v := b.Int32()
+			s.ThrottleTimeMs = v
+		}
+		{
+			v := b.Int16()
+			s.ErrorCode = v
+		}
+	}
+	return b.Complete()
+}
+
+type WriteTxnMarkersRequestTransactionMarkerTopic struct {
+	Topic string
+
+	Partitions []int32
+}
+type WriteTxnMarkersRequestTransactionMarker struct {
+	ProducerID int64
+
+	ProducerEpoch int16
+
+	TransactionResult bool
+
+	Topics []WriteTxnMarkersRequestTransactionMarkerTopic
+
+	CoordinatorEpoch int32
+}
+type WriteTxnMarkersRequest struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	TransactionMarkers []WriteTxnMarkersRequestTransactionMarker
+}
+
+func (*WriteTxnMarkersRequest) Key() int16                 { return 27 }
+func (*WriteTxnMarkersRequest) MaxVersion() int16          { return 0 }
+func (*WriteTxnMarkersRequest) MinVersion() int16          { return 0 }
+func (v *WriteTxnMarkersRequest) SetVersion(version int16) { v.Version = version }
+func (v *WriteTxnMarkersRequest) GetVersion() int16        { return v.Version }
+func (v *WriteTxnMarkersRequest) ResponseKind() Response {
+	return &WriteTxnMarkersResponse{Version: v.Version}
+}
+
+func (v *WriteTxnMarkersRequest) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	{
+		v := v.TransactionMarkers
+		dst = kbin.AppendArrayLen(dst, len(v))
+		for i := range v {
+			v := &v[i]
+			{
+				v := v.ProducerID
+				dst = kbin.AppendInt64(dst, v)
+			}
+			{
+				v := v.ProducerEpoch
+				dst = kbin.AppendInt16(dst, v)
+			}
+			{
+				v := v.TransactionResult
+				dst = kbin.AppendBool(dst, v)
+			}
+			{
+				v := v.Topics
+				dst = kbin.AppendArrayLen(dst, len(v))
+				for i := range v {
+					v := &v[i]
+					{
+						v := v.Topic
+						dst = kbin.AppendString(dst, v)
+					}
+					{
+						v := v.Partitions
+						dst = kbin.AppendArrayLen(dst, len(v))
+						for i := range v {
+							v := v[i]
+							dst = kbin.AppendInt32(dst, v)
+						}
+					}
+				}
+			}
+			{
+				v := v.CoordinatorEpoch
+				dst = kbin.AppendInt32(dst, v)
+			}
+		}
+	}
+	return dst
+}
+
+type WriteTxnMarkersResponseTransactionMarkerTopicPartition struct {
+	Partition int32
+
+	ErrorCode int16
+}
+type WriteTxnMarkersResponseTransactionMarkerTopic struct {
+	Topic string
+
+	Partitions []WriteTxnMarkersResponseTransactionMarkerTopicPartition
+}
+type WriteTxnMarkersResponseTransactionMarker struct {
+	ProducerID int64
+
+	Topics []WriteTxnMarkersResponseTransactionMarkerTopic
+}
+type WriteTxnMarkersResponse struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	TransactionMarkers []WriteTxnMarkersResponseTransactionMarker
+}
+
+func (v *WriteTxnMarkersResponse) ReadFrom(src []byte) error {
+	version := v.Version
+	_ = version
+	b := kbin.Reader{Src: src}
+	{
+		s := v
+		{
+			v := s.TransactionMarkers
+			a := v
+			for i := b.ArrayLen(); i > 0; i-- {
+				a = append(a, WriteTxnMarkersResponseTransactionMarker{})
+				v := &a[len(a)-1]
+				{
+					s := v
+					{
+						v := b.Int64()
+						s.ProducerID = v
+					}
+					{
+						v := s.Topics
+						a := v
+						for i := b.ArrayLen(); i > 0; i-- {
+							a = append(a, WriteTxnMarkersResponseTransactionMarkerTopic{})
+							v := &a[len(a)-1]
+							{
+								s := v
+								{
+									v := b.String()
+									s.Topic = v
+								}
+								{
+									v := s.Partitions
+									a := v
+									for i := b.ArrayLen(); i > 0; i-- {
+										a = append(a, WriteTxnMarkersResponseTransactionMarkerTopicPartition{})
+										v := &a[len(a)-1]
+										{
+											s := v
+											{
+												v := b.Int32()
+												s.Partition = v
+											}
+											{
+												v := b.Int16()
+												s.ErrorCode = v
+											}
+										}
+									}
+									v = a
+									s.Partitions = v
+								}
+							}
+						}
+						v = a
+						s.Topics = v
+					}
+				}
+			}
+			v = a
+			s.TransactionMarkers = v
+		}
+	}
+	return b.Complete()
+}
+
+type TxnOffsetCommitRequestTopicPartition struct {
+	Partition int32
+
+	Offset int64
+
+	LeaderEpoch int32 // v2+
+
+	Metadata *string
+}
+type TxnOffsetCommitRequestTopic struct {
+	Topic string
+
+	Partitions []TxnOffsetCommitRequestTopicPartition
+}
+type TxnOffsetCommitRequest struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	TransactionalID string
+
+	GroupID string
+
+	ProducerID int64
+
+	ProducerEpoch int16
+
+	Topics []TxnOffsetCommitRequestTopic
+}
+
+func (*TxnOffsetCommitRequest) Key() int16                 { return 28 }
+func (*TxnOffsetCommitRequest) MaxVersion() int16          { return 2 }
+func (*TxnOffsetCommitRequest) MinVersion() int16          { return 0 }
+func (v *TxnOffsetCommitRequest) SetVersion(version int16) { v.Version = version }
+func (v *TxnOffsetCommitRequest) GetVersion() int16        { return v.Version }
+func (v *TxnOffsetCommitRequest) ResponseKind() Response {
+	return &TxnOffsetCommitResponse{Version: v.Version}
+}
+
+func (v *TxnOffsetCommitRequest) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	{
+		v := v.TransactionalID
+		dst = kbin.AppendString(dst, v)
+	}
+	{
+		v := v.GroupID
+		dst = kbin.AppendString(dst, v)
+	}
+	{
+		v := v.ProducerID
+		dst = kbin.AppendInt64(dst, v)
+	}
+	{
+		v := v.ProducerEpoch
+		dst = kbin.AppendInt16(dst, v)
+	}
+	{
+		v := v.Topics
+		dst = kbin.AppendArrayLen(dst, len(v))
+		for i := range v {
+			v := &v[i]
+			{
+				v := v.Topic
+				dst = kbin.AppendString(dst, v)
+			}
+			{
+				v := v.Partitions
+				dst = kbin.AppendArrayLen(dst, len(v))
+				for i := range v {
+					v := &v[i]
+					{
+						v := v.Partition
+						dst = kbin.AppendInt32(dst, v)
+					}
+					{
+						v := v.Offset
+						dst = kbin.AppendInt64(dst, v)
+					}
+					if version >= 2 {
+						v := v.LeaderEpoch
+						dst = kbin.AppendInt32(dst, v)
+					}
+					{
+						v := v.Metadata
+						dst = kbin.AppendNullableString(dst, v)
+					}
+				}
+			}
+		}
+	}
+	return dst
+}
+
+type TxnOffsetCommitResponseTopicPartition struct {
+	Partition int32
+
+	ErrorCode int16
+}
+type TxnOffsetCommitResponseTopic struct {
+	Topic string
+
+	Partitions []TxnOffsetCommitResponseTopicPartition
+}
+type TxnOffsetCommitResponse struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	ThrottleTimeMs int32
+
+	Topics []TxnOffsetCommitResponseTopic
+}
+
+func (v *TxnOffsetCommitResponse) ReadFrom(src []byte) error {
+	version := v.Version
+	_ = version
+	b := kbin.Reader{Src: src}
+	{
+		s := v
+		{
+			v := b.Int32()
+			s.ThrottleTimeMs = v
+		}
+		{
+			v := s.Topics
+			a := v
+			for i := b.ArrayLen(); i > 0; i-- {
+				a = append(a, TxnOffsetCommitResponseTopic{})
+				v := &a[len(a)-1]
+				{
+					s := v
+					{
+						v := b.String()
+						s.Topic = v
+					}
+					{
+						v := s.Partitions
+						a := v
+						for i := b.ArrayLen(); i > 0; i-- {
+							a = append(a, TxnOffsetCommitResponseTopicPartition{})
+							v := &a[len(a)-1]
+							{
+								s := v
+								{
+									v := b.Int32()
+									s.Partition = v
+								}
+								{
+									v := b.Int16()
+									s.ErrorCode = v
+								}
+							}
+						}
+						v = a
+						s.Partitions = v
+					}
+				}
+			}
+			v = a
+			s.Topics = v
 		}
 	}
 	return b.Complete()
@@ -3319,6 +5007,316 @@ func (v *DescribeACLsResponse) ReadFrom(src []byte) error {
 			}
 			v = a
 			s.Resources = v
+		}
+	}
+	return b.Complete()
+}
+
+type CreateACLsRequestCreation struct {
+	ResourceType int8
+
+	ResourceName string
+
+	ResourcePatternType int8 // v1+
+
+	Principal string
+
+	Host string
+
+	Operation int8
+
+	PermissionType int8
+}
+type CreateACLsRequest struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	Creations []CreateACLsRequestCreation
+}
+
+func (*CreateACLsRequest) Key() int16                 { return 30 }
+func (*CreateACLsRequest) MaxVersion() int16          { return 1 }
+func (*CreateACLsRequest) MinVersion() int16          { return 0 }
+func (v *CreateACLsRequest) SetVersion(version int16) { v.Version = version }
+func (v *CreateACLsRequest) GetVersion() int16        { return v.Version }
+func (v *CreateACLsRequest) IsAdminRequest() bool     { return true }
+func (v *CreateACLsRequest) ResponseKind() Response   { return &CreateACLsResponse{Version: v.Version} }
+
+func (v *CreateACLsRequest) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	{
+		v := v.Creations
+		dst = kbin.AppendArrayLen(dst, len(v))
+		for i := range v {
+			v := &v[i]
+			{
+				v := v.ResourceType
+				dst = kbin.AppendInt8(dst, v)
+			}
+			{
+				v := v.ResourceName
+				dst = kbin.AppendString(dst, v)
+			}
+			if version >= 1 {
+				v := v.ResourcePatternType
+				dst = kbin.AppendInt8(dst, v)
+			}
+			{
+				v := v.Principal
+				dst = kbin.AppendString(dst, v)
+			}
+			{
+				v := v.Host
+				dst = kbin.AppendString(dst, v)
+			}
+			{
+				v := v.Operation
+				dst = kbin.AppendInt8(dst, v)
+			}
+			{
+				v := v.PermissionType
+				dst = kbin.AppendInt8(dst, v)
+			}
+		}
+	}
+	return dst
+}
+
+type CreateACLsResponseCreationResponse struct {
+	ErrorCode int16
+
+	ErrorMessage *string
+}
+type CreateACLsResponse struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	ThrottleTimeMs int32
+
+	CreationResponses []CreateACLsResponseCreationResponse
+}
+
+func (v *CreateACLsResponse) ReadFrom(src []byte) error {
+	version := v.Version
+	_ = version
+	b := kbin.Reader{Src: src}
+	{
+		s := v
+		{
+			v := b.Int32()
+			s.ThrottleTimeMs = v
+		}
+		{
+			v := s.CreationResponses
+			a := v
+			for i := b.ArrayLen(); i > 0; i-- {
+				a = append(a, CreateACLsResponseCreationResponse{})
+				v := &a[len(a)-1]
+				{
+					s := v
+					{
+						v := b.Int16()
+						s.ErrorCode = v
+					}
+					{
+						v := b.NullableString()
+						s.ErrorMessage = v
+					}
+				}
+			}
+			v = a
+			s.CreationResponses = v
+		}
+	}
+	return b.Complete()
+}
+
+type DeleteACLsRequestFilter struct {
+	ResourceType int8
+
+	ResourceName *string
+
+	ResourcePatternTypeFilter int8 // v1+
+
+	Principal *string
+
+	Host *string
+
+	Operation int8
+
+	PermissionType int8
+}
+type DeleteACLsRequest struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	Filters []DeleteACLsRequestFilter
+}
+
+func (*DeleteACLsRequest) Key() int16                 { return 31 }
+func (*DeleteACLsRequest) MaxVersion() int16          { return 1 }
+func (*DeleteACLsRequest) MinVersion() int16          { return 0 }
+func (v *DeleteACLsRequest) SetVersion(version int16) { v.Version = version }
+func (v *DeleteACLsRequest) GetVersion() int16        { return v.Version }
+func (v *DeleteACLsRequest) IsAdminRequest() bool     { return true }
+func (v *DeleteACLsRequest) ResponseKind() Response   { return &DeleteACLsResponse{Version: v.Version} }
+
+func (v *DeleteACLsRequest) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	{
+		v := v.Filters
+		dst = kbin.AppendArrayLen(dst, len(v))
+		for i := range v {
+			v := &v[i]
+			{
+				v := v.ResourceType
+				dst = kbin.AppendInt8(dst, v)
+			}
+			{
+				v := v.ResourceName
+				dst = kbin.AppendNullableString(dst, v)
+			}
+			if version >= 1 {
+				v := v.ResourcePatternTypeFilter
+				dst = kbin.AppendInt8(dst, v)
+			}
+			{
+				v := v.Principal
+				dst = kbin.AppendNullableString(dst, v)
+			}
+			{
+				v := v.Host
+				dst = kbin.AppendNullableString(dst, v)
+			}
+			{
+				v := v.Operation
+				dst = kbin.AppendInt8(dst, v)
+			}
+			{
+				v := v.PermissionType
+				dst = kbin.AppendInt8(dst, v)
+			}
+		}
+	}
+	return dst
+}
+
+type DeleteACLsResponseFilterResponseMatchingACL struct {
+	ErrorCode int16
+
+	ErrorMessage *string
+
+	ResourceType int8
+
+	ResourceName string
+
+	ResourcePatternType int8 // v1+
+
+	Principal string
+
+	Host string
+
+	Operation int8
+
+	PermissionType int8
+}
+type DeleteACLsResponseFilterResponse struct {
+	ErrorCode int16
+
+	ErrorMessage *string
+
+	MatchingACLs []DeleteACLsResponseFilterResponseMatchingACL
+}
+type DeleteACLsResponse struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	ThrottleTimeMs int32
+
+	FilterResponses []DeleteACLsResponseFilterResponse
+}
+
+func (v *DeleteACLsResponse) ReadFrom(src []byte) error {
+	version := v.Version
+	_ = version
+	b := kbin.Reader{Src: src}
+	{
+		s := v
+		{
+			v := b.Int32()
+			s.ThrottleTimeMs = v
+		}
+		{
+			v := s.FilterResponses
+			a := v
+			for i := b.ArrayLen(); i > 0; i-- {
+				a = append(a, DeleteACLsResponseFilterResponse{})
+				v := &a[len(a)-1]
+				{
+					s := v
+					{
+						v := b.Int16()
+						s.ErrorCode = v
+					}
+					{
+						v := b.NullableString()
+						s.ErrorMessage = v
+					}
+					{
+						v := s.MatchingACLs
+						a := v
+						for i := b.ArrayLen(); i > 0; i-- {
+							a = append(a, DeleteACLsResponseFilterResponseMatchingACL{})
+							v := &a[len(a)-1]
+							{
+								s := v
+								{
+									v := b.Int16()
+									s.ErrorCode = v
+								}
+								{
+									v := b.NullableString()
+									s.ErrorMessage = v
+								}
+								{
+									v := b.Int8()
+									s.ResourceType = v
+								}
+								{
+									v := b.String()
+									s.ResourceName = v
+								}
+								if version >= 1 {
+									v := b.Int8()
+									s.ResourcePatternType = v
+								}
+								{
+									v := b.String()
+									s.Principal = v
+								}
+								{
+									v := b.String()
+									s.Host = v
+								}
+								{
+									v := b.Int8()
+									s.Operation = v
+								}
+								{
+									v := b.Int8()
+									s.PermissionType = v
+								}
+							}
+						}
+						v = a
+						s.MatchingACLs = v
+					}
+				}
+			}
+			v = a
+			s.FilterResponses = v
 		}
 	}
 	return b.Complete()
@@ -4141,6 +6139,71 @@ func (v *DescribeLogDirsResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+type SASLAuthenticateRequest struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	SASLAuthBytes []byte
+}
+
+func (*SASLAuthenticateRequest) Key() int16                 { return 36 }
+func (*SASLAuthenticateRequest) MaxVersion() int16          { return 1 }
+func (*SASLAuthenticateRequest) MinVersion() int16          { return 0 }
+func (v *SASLAuthenticateRequest) SetVersion(version int16) { v.Version = version }
+func (v *SASLAuthenticateRequest) GetVersion() int16        { return v.Version }
+func (v *SASLAuthenticateRequest) ResponseKind() Response {
+	return &SASLAuthenticateResponse{Version: v.Version}
+}
+
+func (v *SASLAuthenticateRequest) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	{
+		v := v.SASLAuthBytes
+		dst = kbin.AppendBytes(dst, v)
+	}
+	return dst
+}
+
+type SASLAuthenticateResponse struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	ErrorCode int16
+
+	ErrorMessage *string
+
+	SASLAuthBytes []byte
+
+	SessionLifetimeMs int64 // v1+
+}
+
+func (v *SASLAuthenticateResponse) ReadFrom(src []byte) error {
+	version := v.Version
+	_ = version
+	b := kbin.Reader{Src: src}
+	{
+		s := v
+		{
+			v := b.Int16()
+			s.ErrorCode = v
+		}
+		{
+			v := b.NullableString()
+			s.ErrorMessage = v
+		}
+		{
+			v := b.Bytes()
+			s.SASLAuthBytes = v
+		}
+		if version >= 1 {
+			v := b.Int64()
+			s.SessionLifetimeMs = v
+		}
+	}
+	return b.Complete()
+}
+
 type CreatePartitionsRequestTopicPartitionNewPartitions struct {
 	// Count is the final count of partitions this topic must have. This
 	// must be greater than the current number of partitions.
@@ -4322,6 +6385,704 @@ func (v *CreatePartitionsResponse) ReadFrom(src []byte) error {
 			}
 			v = a
 			s.TopicErrors = v
+		}
+	}
+	return b.Complete()
+}
+
+type CreateDelegationTokenRequestRenewer struct {
+	PrincipalType string
+
+	Name string
+}
+type CreateDelegationTokenRequest struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	Renewers []CreateDelegationTokenRequestRenewer
+
+	MaxLifetime int64
+}
+
+func (*CreateDelegationTokenRequest) Key() int16                 { return 38 }
+func (*CreateDelegationTokenRequest) MaxVersion() int16          { return 1 }
+func (*CreateDelegationTokenRequest) MinVersion() int16          { return 0 }
+func (v *CreateDelegationTokenRequest) SetVersion(version int16) { v.Version = version }
+func (v *CreateDelegationTokenRequest) GetVersion() int16        { return v.Version }
+func (v *CreateDelegationTokenRequest) IsAdminRequest() bool     { return true }
+func (v *CreateDelegationTokenRequest) ResponseKind() Response {
+	return &CreateDelegationTokenResponse{Version: v.Version}
+}
+
+func (v *CreateDelegationTokenRequest) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	{
+		v := v.Renewers
+		dst = kbin.AppendArrayLen(dst, len(v))
+		for i := range v {
+			v := &v[i]
+			{
+				v := v.PrincipalType
+				dst = kbin.AppendString(dst, v)
+			}
+			{
+				v := v.Name
+				dst = kbin.AppendString(dst, v)
+			}
+		}
+	}
+	{
+		v := v.MaxLifetime
+		dst = kbin.AppendInt64(dst, v)
+	}
+	return dst
+}
+
+type CreateDelegationTokenResponseOwner struct {
+	PrincipalType string
+
+	Name string
+}
+type CreateDelegationTokenResponse struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	ErrorCode int16
+
+	Owner CreateDelegationTokenResponseOwner
+
+	IssueTimestamp int64
+
+	ExpiryTimestamp int64
+
+	MaxTimestamp int64
+
+	TokenID string
+
+	HMAC []byte
+
+	ThrottleTimeMs int32
+}
+
+func (v *CreateDelegationTokenResponse) ReadFrom(src []byte) error {
+	version := v.Version
+	_ = version
+	b := kbin.Reader{Src: src}
+	{
+		s := v
+		{
+			v := b.Int16()
+			s.ErrorCode = v
+		}
+		{
+			v := &s.Owner
+			{
+				s := v
+				{
+					v := b.String()
+					s.PrincipalType = v
+				}
+				{
+					v := b.String()
+					s.Name = v
+				}
+			}
+		}
+		{
+			v := b.Int64()
+			s.IssueTimestamp = v
+		}
+		{
+			v := b.Int64()
+			s.ExpiryTimestamp = v
+		}
+		{
+			v := b.Int64()
+			s.MaxTimestamp = v
+		}
+		{
+			v := b.String()
+			s.TokenID = v
+		}
+		{
+			v := b.Bytes()
+			s.HMAC = v
+		}
+		{
+			v := b.Int32()
+			s.ThrottleTimeMs = v
+		}
+	}
+	return b.Complete()
+}
+
+type RenewDelegationTokenRequest struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	HMAC []byte
+
+	RenewTimePeriod int64
+}
+
+func (*RenewDelegationTokenRequest) Key() int16                 { return 39 }
+func (*RenewDelegationTokenRequest) MaxVersion() int16          { return 1 }
+func (*RenewDelegationTokenRequest) MinVersion() int16          { return 0 }
+func (v *RenewDelegationTokenRequest) SetVersion(version int16) { v.Version = version }
+func (v *RenewDelegationTokenRequest) GetVersion() int16        { return v.Version }
+func (v *RenewDelegationTokenRequest) IsAdminRequest() bool     { return true }
+func (v *RenewDelegationTokenRequest) ResponseKind() Response {
+	return &RenewDelegationTokenResponse{Version: v.Version}
+}
+
+func (v *RenewDelegationTokenRequest) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	{
+		v := v.HMAC
+		dst = kbin.AppendBytes(dst, v)
+	}
+	{
+		v := v.RenewTimePeriod
+		dst = kbin.AppendInt64(dst, v)
+	}
+	return dst
+}
+
+type RenewDelegationTokenResponse struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	ErrorCode int16
+
+	ExpiryTimestamp int64
+
+	ThrottleTimeMs int32
+}
+
+func (v *RenewDelegationTokenResponse) ReadFrom(src []byte) error {
+	version := v.Version
+	_ = version
+	b := kbin.Reader{Src: src}
+	{
+		s := v
+		{
+			v := b.Int16()
+			s.ErrorCode = v
+		}
+		{
+			v := b.Int64()
+			s.ExpiryTimestamp = v
+		}
+		{
+			v := b.Int32()
+			s.ThrottleTimeMs = v
+		}
+	}
+	return b.Complete()
+}
+
+type ExpireDelegationTokenRequest struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	HMAC []byte
+
+	ExpiryTimePeriod int64
+}
+
+func (*ExpireDelegationTokenRequest) Key() int16                 { return 40 }
+func (*ExpireDelegationTokenRequest) MaxVersion() int16          { return 1 }
+func (*ExpireDelegationTokenRequest) MinVersion() int16          { return 0 }
+func (v *ExpireDelegationTokenRequest) SetVersion(version int16) { v.Version = version }
+func (v *ExpireDelegationTokenRequest) GetVersion() int16        { return v.Version }
+func (v *ExpireDelegationTokenRequest) IsAdminRequest() bool     { return true }
+func (v *ExpireDelegationTokenRequest) ResponseKind() Response {
+	return &ExpireDelegationTokenResponse{Version: v.Version}
+}
+
+func (v *ExpireDelegationTokenRequest) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	{
+		v := v.HMAC
+		dst = kbin.AppendBytes(dst, v)
+	}
+	{
+		v := v.ExpiryTimePeriod
+		dst = kbin.AppendInt64(dst, v)
+	}
+	return dst
+}
+
+type ExpireDelegationTokenResponse struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	ErrorCode int16
+
+	ExpiryTimestamp int64
+
+	ThrottleTimeMs int32
+}
+
+func (v *ExpireDelegationTokenResponse) ReadFrom(src []byte) error {
+	version := v.Version
+	_ = version
+	b := kbin.Reader{Src: src}
+	{
+		s := v
+		{
+			v := b.Int16()
+			s.ErrorCode = v
+		}
+		{
+			v := b.Int64()
+			s.ExpiryTimestamp = v
+		}
+		{
+			v := b.Int32()
+			s.ThrottleTimeMs = v
+		}
+	}
+	return b.Complete()
+}
+
+type DescribeDelegationTokenRequestOwner struct {
+	PrincipalType string
+
+	Name string
+}
+type DescribeDelegationTokenRequest struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	Owners []DescribeDelegationTokenRequestOwner
+}
+
+func (*DescribeDelegationTokenRequest) Key() int16                 { return 41 }
+func (*DescribeDelegationTokenRequest) MaxVersion() int16          { return 1 }
+func (*DescribeDelegationTokenRequest) MinVersion() int16          { return 0 }
+func (v *DescribeDelegationTokenRequest) SetVersion(version int16) { v.Version = version }
+func (v *DescribeDelegationTokenRequest) GetVersion() int16        { return v.Version }
+func (v *DescribeDelegationTokenRequest) IsAdminRequest() bool     { return true }
+func (v *DescribeDelegationTokenRequest) ResponseKind() Response {
+	return &DescribeDelegationTokenResponnse{Version: v.Version}
+}
+
+func (v *DescribeDelegationTokenRequest) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	{
+		v := v.Owners
+		dst = kbin.AppendArrayLen(dst, len(v))
+		for i := range v {
+			v := &v[i]
+			{
+				v := v.PrincipalType
+				dst = kbin.AppendString(dst, v)
+			}
+			{
+				v := v.Name
+				dst = kbin.AppendString(dst, v)
+			}
+		}
+	}
+	return dst
+}
+
+type DescribeDelegationTokenResponnseTokenDetailOwner struct {
+	PrincipalType string
+
+	Name string
+}
+type DescribeDelegationTokenResponnseTokenDetailRenewer struct {
+	PrincipalType string
+
+	Name string
+}
+type DescribeDelegationTokenResponnseTokenDetail struct {
+	Owner DescribeDelegationTokenResponnseTokenDetailOwner
+
+	IssueTimestamp int64
+
+	ExpiryTimestamp int64
+
+	MaxTimestamp int64
+
+	TokenID string
+
+	HMAC []byte
+
+	Renewers []DescribeDelegationTokenResponnseTokenDetailRenewer
+}
+type DescribeDelegationTokenResponnse struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	ErrorCode int16
+
+	TokenDetails []DescribeDelegationTokenResponnseTokenDetail
+
+	ThrottleTimeMs int32
+}
+
+func (v *DescribeDelegationTokenResponnse) ReadFrom(src []byte) error {
+	version := v.Version
+	_ = version
+	b := kbin.Reader{Src: src}
+	{
+		s := v
+		{
+			v := b.Int16()
+			s.ErrorCode = v
+		}
+		{
+			v := s.TokenDetails
+			a := v
+			for i := b.ArrayLen(); i > 0; i-- {
+				a = append(a, DescribeDelegationTokenResponnseTokenDetail{})
+				v := &a[len(a)-1]
+				{
+					s := v
+					{
+						v := &s.Owner
+						{
+							s := v
+							{
+								v := b.String()
+								s.PrincipalType = v
+							}
+							{
+								v := b.String()
+								s.Name = v
+							}
+						}
+					}
+					{
+						v := b.Int64()
+						s.IssueTimestamp = v
+					}
+					{
+						v := b.Int64()
+						s.ExpiryTimestamp = v
+					}
+					{
+						v := b.Int64()
+						s.MaxTimestamp = v
+					}
+					{
+						v := b.String()
+						s.TokenID = v
+					}
+					{
+						v := b.Bytes()
+						s.HMAC = v
+					}
+					{
+						v := s.Renewers
+						a := v
+						for i := b.ArrayLen(); i > 0; i-- {
+							a = append(a, DescribeDelegationTokenResponnseTokenDetailRenewer{})
+							v := &a[len(a)-1]
+							{
+								s := v
+								{
+									v := b.String()
+									s.PrincipalType = v
+								}
+								{
+									v := b.String()
+									s.Name = v
+								}
+							}
+						}
+						v = a
+						s.Renewers = v
+					}
+				}
+			}
+			v = a
+			s.TokenDetails = v
+		}
+		{
+			v := b.Int32()
+			s.ThrottleTimeMs = v
+		}
+	}
+	return b.Complete()
+}
+
+// DeleteGroupsRequest deletes consumer groups. This request was added for
+// Kafka 1.1.0 corresponding to the removal of RetentionTime from
+// OffsetCommitRequest. See KIP-229 for more details.
+type DeleteGroupsRequests struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	// Groups is a list of groups to delete.
+	Groups []string
+}
+
+func (*DeleteGroupsRequests) Key() int16                 { return 42 }
+func (*DeleteGroupsRequests) MaxVersion() int16          { return 1 }
+func (*DeleteGroupsRequests) MinVersion() int16          { return 0 }
+func (v *DeleteGroupsRequests) SetVersion(version int16) { v.Version = version }
+func (v *DeleteGroupsRequests) GetVersion() int16        { return v.Version }
+func (v *DeleteGroupsRequests) IsAdminRequest() bool     { return true }
+func (v *DeleteGroupsRequests) ResponseKind() Response {
+	return &DeleteGroupsResponse{Version: v.Version}
+}
+
+func (v *DeleteGroupsRequests) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	{
+		v := v.Groups
+		dst = kbin.AppendArrayLen(dst, len(v))
+		for i := range v {
+			v := v[i]
+			dst = kbin.AppendString(dst, v)
+		}
+	}
+	return dst
+}
+
+type DeleteGroupsResponseGroupErrorCode struct {
+	// GroupID is a group ID requested for deletion.
+	GroupID string
+
+	// ErrorCode is the error code returned for this group's deletion request.
+	//
+	// GROUP_AUTHORIZATION_FAILED is returned if the client is not authorized
+	// to delete a group.
+	//
+	// INVALID_GROUP_ID is returned if the requested group ID is invalid.
+	//
+	// COORDINATOR_NOT_AVAILABLE is returned if the coordinator for this
+	// group is not yet active.
+	//
+	// GROUP_ID_NOT_FOUND is returned if the group ID does not exist.
+	//
+	// NON_EMPTY_GROUP is returned if attempting to delete a group that is
+	// not in the empty state.
+	ErrorCode int16
+}
+
+// DeleteGroupsResponse is returned from a DeleteGroupsRequest.
+type DeleteGroupsResponse struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	// ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+	// after this request.
+	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
+	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
+	ThrottleTimeMs int32
+
+	// GroupErrorCodes are the responses to each group requested for deletion.
+	GroupErrorCodes []DeleteGroupsResponseGroupErrorCode
+}
+
+func (v *DeleteGroupsResponse) ReadFrom(src []byte) error {
+	version := v.Version
+	_ = version
+	b := kbin.Reader{Src: src}
+	{
+		s := v
+		{
+			v := b.Int32()
+			s.ThrottleTimeMs = v
+		}
+		{
+			v := s.GroupErrorCodes
+			a := v
+			for i := b.ArrayLen(); i > 0; i-- {
+				a = append(a, DeleteGroupsResponseGroupErrorCode{})
+				v := &a[len(a)-1]
+				{
+					s := v
+					{
+						v := b.String()
+						s.GroupID = v
+					}
+					{
+						v := b.Int16()
+						s.ErrorCode = v
+					}
+				}
+			}
+			v = a
+			s.GroupErrorCodes = v
+		}
+	}
+	return b.Complete()
+}
+
+type ElectPreferredLeadersRequestTopicPartition struct {
+	// Topic is a topic to trigger leader elections for (but only for the
+	// partitions below).
+	Topic string
+
+	// Partitions is an array of partitions in a topic to trigger leader
+	// elections for. If null, this triggers elections for all partitions.
+	Partitions []int32
+}
+
+// ElectPreferredLeadersRequest begins a leader election for all given topic
+// partitions. This request was added in Kafka 2.2.0 to replace the zookeeper
+// only option of triggering leader elections before. See KIP-183 for more
+// details.
+type ElectPreferredLeadersRequest struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	// TopicPartitions is an array of topics and corresponding partitions to
+	// trigger leader elections for.
+	TopicPartitions []ElectPreferredLeadersRequestTopicPartition
+
+	// TimeoutMs is how long to wait for the response. This limits how long to
+	// wait since responses are not sent until election results are complete.
+	TimeoutMs int32
+}
+
+func (*ElectPreferredLeadersRequest) Key() int16                 { return 43 }
+func (*ElectPreferredLeadersRequest) MaxVersion() int16          { return 0 }
+func (*ElectPreferredLeadersRequest) MinVersion() int16          { return 0 }
+func (v *ElectPreferredLeadersRequest) SetVersion(version int16) { v.Version = version }
+func (v *ElectPreferredLeadersRequest) GetVersion() int16        { return v.Version }
+func (v *ElectPreferredLeadersRequest) IsAdminRequest() bool     { return true }
+func (v *ElectPreferredLeadersRequest) ResponseKind() Response {
+	return &ElectPreferredLeadersResponse{Version: v.Version}
+}
+
+func (v *ElectPreferredLeadersRequest) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	{
+		v := v.TopicPartitions
+		dst = kbin.AppendArrayLen(dst, len(v))
+		for i := range v {
+			v := &v[i]
+			{
+				v := v.Topic
+				dst = kbin.AppendString(dst, v)
+			}
+			{
+				v := v.Partitions
+				dst = kbin.AppendNullableArrayLen(dst, len(v), v == nil)
+				for i := range v {
+					v := v[i]
+					dst = kbin.AppendInt32(dst, v)
+				}
+			}
+		}
+	}
+	{
+		v := v.TimeoutMs
+		dst = kbin.AppendInt32(dst, v)
+	}
+	return dst
+}
+
+type ElectPreferredLeadersResponseReplicaElectionResultPartitionResult struct {
+	// PartitionID is the partition for this result.
+	PartitionID int32
+
+	// ErrorCode is the error code returned for this topic/partition leader
+	// election.
+	//
+	// CLUSTER_AUTHORIZATION_FAILED is returned if the client is not
+	// authorized to trigger leader elections.
+	//
+	// NOT_CONTROLLER is returned if the request was not issued to a Kafka
+	// controller.
+	//
+	// UNKNOWN_TOPIC_OR_PARTITION is returned if the topic/partition does
+	// not exist on any broker in the cluster (this is slightly different
+	// from the usual meaning of a single broker not knowing of the topic
+	// partition).
+	//
+	// PREFERRED_LEADER_NOT_AVAILABLE is returned if the preferred leader
+	// could not be elected (for example, the preferred leader was not in
+	// the ISR).
+	ErrorCode int16
+
+	// ErrorMessage is an informative message if the leader election failed.
+	ErrorMessage *string
+}
+type ElectPreferredLeadersResponseReplicaElectionResult struct {
+	// Topic is topic for the given partition results below.
+	Topic string
+
+	// PartitionResults contains election results for a topic's partitions.
+	PartitionResults []ElectPreferredLeadersResponseReplicaElectionResultPartitionResult
+}
+type ElectPreferredLeadersResponse struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	// ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+	// after responding to this request.
+	ThrottleTimeMs int32
+
+	// ReplicaElectionResults is the leader election results for each requested
+	// topic / partition.
+	ReplicaElectionResults []ElectPreferredLeadersResponseReplicaElectionResult
+}
+
+func (v *ElectPreferredLeadersResponse) ReadFrom(src []byte) error {
+	version := v.Version
+	_ = version
+	b := kbin.Reader{Src: src}
+	{
+		s := v
+		{
+			v := b.Int32()
+			s.ThrottleTimeMs = v
+		}
+		{
+			v := s.ReplicaElectionResults
+			a := v
+			for i := b.ArrayLen(); i > 0; i-- {
+				a = append(a, ElectPreferredLeadersResponseReplicaElectionResult{})
+				v := &a[len(a)-1]
+				{
+					s := v
+					{
+						v := b.String()
+						s.Topic = v
+					}
+					{
+						v := s.PartitionResults
+						a := v
+						for i := b.ArrayLen(); i > 0; i-- {
+							a = append(a, ElectPreferredLeadersResponseReplicaElectionResultPartitionResult{})
+							v := &a[len(a)-1]
+							{
+								s := v
+								{
+									v := b.Int32()
+									s.PartitionID = v
+								}
+								{
+									v := b.Int16()
+									s.ErrorCode = v
+								}
+								{
+									v := b.NullableString()
+									s.ErrorMessage = v
+								}
+							}
+						}
+						v = a
+						s.PartitionResults = v
+					}
+				}
+			}
+			v = a
+			s.ReplicaElectionResults = v
 		}
 	}
 	return b.Complete()
