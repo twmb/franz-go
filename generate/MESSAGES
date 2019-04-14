@@ -632,12 +632,21 @@ OffsetCommitRequest => key 8, max version 6
   GroupID: string
   GenerationID: int32 // v1+
   MemberID: string // v1+
+  // replaces offset.retention.minutes and timestamp field below
+  // removed, why? problem:
+  // - rarely committing consumer's offset expired
+  // - restart or rebalance, now does not know last committed offset
+  // - now they have to restart from end or beginnig, leading to dups or loss.
   RetentionTime: int64 // v2-v4
   Topics: [=>]
     Topic: string
     Partitions: [=>]
       Partition: int32
       Offset: int64
+      // expiration is Timestamp + offset.retention.minutes.
+      // if non-zero.
+      // if zero, current time + offset.retention.minutes.
+      // KIP-211
       Timestamp: int64 // v1-v1
       LeaderEpoch: int32 // v6+
       Metadata: nullable-string
@@ -1259,3 +1268,89 @@ CreatePartitionsResponse => from CreatePartitionsRequest
     ErrorCode: int16
     // ErrorMessage is an informative message if the topic creation failed.
     ErrorMessage: nullable-string
+
+// DeleteGroupsRequest deletes consumer groups. This request was added for
+// Kafka 1.1.0 corresponding to the removal of RetentionTime from
+// OffsetCommitRequest. See KIP-229 for more details.
+DeleteGroupsRequests => key 42, max version 1, admin
+  // Groups is a list of groups to delete.
+  Groups: [string]
+
+// DeleteGroupsResponse is returned from a DeleteGroupsRequest.
+DeleteGroupsResponse => from DeleteGroupsRequests
+  // ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+  // after this request.
+  // For Kafka < 2.0.0, the throttle is applied before issuing a response.
+  // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
+  ThrottleTimeMs: int32
+  // GroupErrorCodes are the responses to each group requested for deletion.
+  GroupErrorCodes: [=>]
+    // GroupID is a group ID requested for deletion.
+    GroupID: string
+    // ErrorCode is the error code returned for this group's deletion request.
+    //
+    // GROUP_AUTHORIZATION_FAILED is returned if the client is not authorized
+    // to delete a group.
+    //
+    // INVALID_GROUP_ID is returned if the requested group ID is invalid.
+    //
+    // COORDINATOR_NOT_AVAILABLE is returned if the coordinator for this
+    // group is not yet active.
+    //
+    // GROUP_ID_NOT_FOUND is returned if the group ID does not exist.
+    //
+    // NON_EMPTY_GROUP is returned if attempting to delete a group that is
+    // not in the empty state.
+    ErrorCode: int16
+
+// ElectPreferredLeadersRequest begins a leader election for all given topic
+// partitions. This request was added in Kafka 2.2.0 to replace the zookeeper
+// only option of triggering leader elections before. See KIP-183 for more
+// details.
+ElectPreferredLeadersRequest => key 43, max version 0, admin
+  // TopicPartitions is an array of topics and corresponding partitions to
+  // trigger leader elections for.
+  TopicPartitions: [=>]
+    // Topic is a topic to trigger leader elections for (but only for the
+    // partitions below).
+    Topic: string
+    // Partitions is an array of partitions in a topic to trigger leader
+    // elections for. If null, this triggers elections for all partitions.
+    Partitions: nullable[int32]
+  // TimeoutMs is how long to wait for the response. This limits how long to
+  // wait since responses are not sent until election results are complete.
+  TimeoutMs: int32
+
+ElectPreferredLeadersResponse => from ElectPreferredLeadersRequest
+  // ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+  // after responding to this request.
+  ThrottleTimeMs: int32
+  // ReplicaElectionResults is the leader election results for each requested
+  // topic / partition.
+  ReplicaElectionResults: [=>]
+    // Topic is topic for the given partition results below.
+    Topic: string
+    // PartitionResults contains election results for a topic's partitions.
+    PartitionResults: [=>]
+      // PartitionID is the partition for this result.
+      PartitionID: int32
+      // ErrorCode is the error code returned for this topic/partition leader
+      // election.
+      //
+      // CLUSTER_AUTHORIZATION_FAILED is returned if the client is not
+      // authorized to trigger leader elections.
+      //
+      // NOT_CONTROLLER is returned if the request was not issued to a Kafka
+      // controller.
+      //
+      // UNKNOWN_TOPIC_OR_PARTITION is returned if the topic/partition does
+      // not exist on any broker in the cluster (this is slightly different
+      // from the usual meaning of a single broker not knowing of the topic
+      // partition).
+      //
+      // PREFERRED_LEADER_NOT_AVAILABLE is returned if the preferred leader
+      // could not be elected (for example, the preferred leader was not in
+      // the ISR).
+      ErrorCode: int16
+      // ErrorMessage is an informative message if the leader election failed.
+      ErrorMessage: nullable-string
