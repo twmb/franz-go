@@ -2,22 +2,23 @@ package main
 
 import "strconv"
 
-func (Bool) TypeName() string           { return "bool" }
-func (Int8) TypeName() string           { return "int8" }
-func (Int16) TypeName() string          { return "int16" }
-func (Int32) TypeName() string          { return "int32" }
-func (Int64) TypeName() string          { return "int64" }
-func (Uint32) TypeName() string         { return "uint32" }
-func (Varint) TypeName() string         { return "int32" }
-func (Varlong) TypeName() string        { return "int64" }
-func (String) TypeName() string         { return "string" }
-func (NullableString) TypeName() string { return "*string" }
-func (Bytes) TypeName() string          { return "[]byte" }
-func (NullableBytes) TypeName() string  { return "*[]byte" }
-func (VarintString) TypeName() string   { return "string" }
-func (VarintBytes) TypeName() string    { return "[]byte" }
-func (a Array) TypeName() string        { return "[]" + a.Inner.TypeName() }
-func (s Struct) TypeName() string       { return s.Name }
+func (Bool) TypeName() string                  { return "bool" }
+func (Int8) TypeName() string                  { return "int8" }
+func (Int16) TypeName() string                 { return "int16" }
+func (Int32) TypeName() string                 { return "int32" }
+func (Int64) TypeName() string                 { return "int64" }
+func (Uint32) TypeName() string                { return "uint32" }
+func (Varint) TypeName() string                { return "int32" }
+func (Varlong) TypeName() string               { return "int64" }
+func (String) TypeName() string                { return "string" }
+func (NullableString) TypeName() string        { return "*string" }
+func (Bytes) TypeName() string                 { return "[]byte" }
+func (NullableBytes) TypeName() string         { return "*[]byte" }
+func (VarintString) TypeName() string          { return "string" }
+func (VarintBytes) TypeName() string           { return "[]byte" }
+func (a Array) TypeName() string               { return "[]" + a.Inner.TypeName() }
+func (s Struct) TypeName() string              { return s.Name }
+func (FieldLengthMinusBytes) TypeName() string { return "[]byte" }
 
 // primAppend corresponds to the primitive append functions in
 // kmsg/primitives.go.
@@ -39,6 +40,10 @@ func (Bytes) WriteAppend(l *LineWriter)          { primAppend("Bytes", l) }
 func (NullableBytes) WriteAppend(l *LineWriter)  { primAppend("Bool", l) }
 func (VarintString) WriteAppend(l *LineWriter)   { primAppend("VarintString", l) }
 func (VarintBytes) WriteAppend(l *LineWriter)    { primAppend("VarintBytes", l) }
+
+func (FieldLengthMinusBytes) WriteAppend(l *LineWriter) {
+	l.Write("dst = append(dst, v...)")
+}
 
 func (a Array) WriteAppend(l *LineWriter) {
 	if a.IsVarintArray {
@@ -102,6 +107,10 @@ func (NullableBytes) WriteDecode(l *LineWriter)  { primDecode("Bool", l) }
 func (VarintString) WriteDecode(l *LineWriter)   { primDecode("VarintString", l) }
 func (VarintBytes) WriteDecode(l *LineWriter)    { primDecode("VarintBytes", l) }
 
+func (f FieldLengthMinusBytes) WriteDecode(l *LineWriter) {
+	l.Write("v := b.Span(int(s.%s) - %d)", f.Field, f.LengthMinus)
+}
+
 func (a Array) WriteDecode(l *LineWriter) {
 	// For decoding arrays, we copy our "v" variable to our own "a"
 	// variable so that the scope opened just below can use its own
@@ -118,9 +127,18 @@ func (a Array) WriteDecode(l *LineWriter) {
 		l.Write("a = append(a, %s{})", s.Name)
 		l.Write("v := &a[len(a)-1]")
 	}
+	if a, isArray := a.Inner.(Array); isArray {
+		// With nested arrays, we declare a new v and introduce scope
+		// so that the next level will not collide with our current "a".
+		l.Write("v := %s{}", a.TypeName())
+		l.Write("{")
+	}
 	// Kafka does not have arrays of arrays, so we do not need
 	// to worry about that case.
 	a.Inner.WriteDecode(l)
+	if _, isArray := a.Inner.(Array); isArray {
+		l.Write("}")
+	}
 	if _, isStruct := a.Inner.(Struct); !isStruct {
 		l.Write("a = append(a, v)")
 	}
@@ -217,8 +235,12 @@ func (s Struct) WriteResponseKindFunc(l *LineWriter) {
 
 func (s Struct) WriteAppendFunc(l *LineWriter) {
 	l.Write("func (v *%s) AppendTo(dst []byte) []byte {", s.Name)
-	l.Write("version := v.Version")
-	l.Write("_ = version")
+	// The Record struct is special (not top level) and does not have
+	// a version.
+	if s.Name != "Record" {
+		l.Write("version := v.Version")
+		l.Write("_ = version")
+	}
 	s.WriteAppend(l)
 	l.Write("return dst")
 	l.Write("}")
@@ -226,8 +248,12 @@ func (s Struct) WriteAppendFunc(l *LineWriter) {
 
 func (s Struct) WriteDecodeFunc(l *LineWriter) {
 	l.Write("func (v *%s) ReadFrom(src []byte) error {", s.Name)
-	l.Write("version := v.Version")
-	l.Write("_ = version")
+	// The Record struct is special (not top level) and does not have
+	// a version.
+	if s.Name != "Record" {
+		l.Write("version := v.Version")
+		l.Write("_ = version")
+	}
 	l.Write("b := kbin.Reader{Src: src}")
 	s.WriteDecode(l)
 	l.Write("return b.Complete()")

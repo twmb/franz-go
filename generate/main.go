@@ -48,6 +48,11 @@ type (
 	VarintString   struct{}
 	VarintBytes    struct{}
 
+	FieldLengthMinusBytes struct {
+		Field       string
+		LengthMinus int
+	}
+
 	Array struct {
 		Inner           Type
 		IsVarintArray   bool
@@ -120,6 +125,14 @@ func main() {
 			} else {
 				s.WriteDecodeFunc(l)
 			}
+		}
+
+		// We special case the "Record" struct because this struct can
+		// be compressed into itself. We want to easily decompress it
+		// back out into more records.
+		if s.Name == "Record" {
+			s.WriteAppendFunc(l)
+			s.WriteDecodeFunc(l)
 		}
 	}
 

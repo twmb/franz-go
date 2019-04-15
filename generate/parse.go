@@ -140,6 +140,17 @@ func (s *Struct) BuildFrom(scanner *LineScanner, level int) (unprocessed string,
 			unprocessed, done = newS.BuildFrom(scanner, level+1)
 			f.Type = newS
 			newStructs = append(newStructs, newS)
+		} else if strings.HasPrefix(typ, "length-field-minus => ") {
+			typ = strings.TrimPrefix(typ, "length-field-minus => ")
+			from, minus, err := parseFieldLength(typ)
+			if err != nil {
+				die("unable to parse field-length-bytes in %q: %v", typ, err)
+			}
+			f.Type = FieldLengthMinusBytes{
+				Field:       from,
+				LengthMinus: minus,
+			}
+
 		} else {
 			if types[typ] == nil {
 				die("unknown type %q on line %q", typ, line)
@@ -203,6 +214,18 @@ func parseVersion(in string) (int, int, error) {
 		return 0, 0, fmt.Errorf("min %d > max %d on line %q", min, max, in)
 	}
 	return min, max, nil
+}
+
+func parseFieldLength(in string) (string, int, error) {
+	lr := strings.Split(in, " - ")
+	if len(lr) != 2 {
+		return "", 0, fmt.Errorf("expected only two fields around ' = ', saw %d", len(lr))
+	}
+	length, err := strconv.Atoi(lr[1])
+	if err != nil {
+		return "", 0, fmt.Errorf("unable to parse length sub in %q", lr[1])
+	}
+	return lr[0], length, nil
 }
 
 // Parse parses the raw contents of a messages file and adds all newly
