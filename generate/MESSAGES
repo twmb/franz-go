@@ -105,11 +105,20 @@ RecordBatch => not top level
   //
   // The sequence number for each record in a batch is OffsetDelta + FirstSequence.
   FirstSequence: int32
-  // Records are the batch of records to send.
+  // NumRecords is the number of records in the array below.
   //
-  // Note that to compress a batch, you compress the entire set of records
-  // and then use that as the value for a single record.
-  Records: [Record]
+  // This is separate from Records due to the potential for records to be
+  // compressed.
+  NumRecords: int32
+  // Records contains records, either compressed or uncompressed.
+  //
+  // For uncompressed records, this is an array of records ([Record]).
+  //
+  // For compressed records, the length of the uncompressed array is kept
+  // but everything that follows is compressed.
+  //
+  // The number of bytes is expected to be the Length field minus 48.
+  Records: length-field-minus => Length - 48
 
 // ProduceRequest issues records to be created to Kafka.
 //
@@ -283,7 +292,7 @@ FetchResponse => from FetchRequest
         AbortedTransactions: [=>] // v4+
           ProducerID: int64
           FirstOffset: int64
-      RecordSet: [Record]
+      RecordSet: RecordBatch
 
 // ListOffsetsRequest requests partition offsets from Kafka for use in
 // consuming records.
