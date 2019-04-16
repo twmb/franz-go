@@ -26,7 +26,7 @@ var (
 	// not support the client minimum supported version of the request).
 	ErrBrokerTooOld = errors.New("broker is too old; this client does not support the broker")
 
-	errNoResp = errors.New("message was not replied to in a produce response")
+	errNoResp = errors.New("message was not replied to in a response")
 
 	errNoPartitionIDs         = &clientErr{err: errors.New("topic currently has no known partition IDs"), retriable: true}
 	errUnknownPartition       = &clientErr{err: errors.New("unknown partition"), retriable: true}
