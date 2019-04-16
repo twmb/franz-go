@@ -35,11 +35,6 @@ Record => not top level
 // RecordBatch is a Kafka concept that groups many individual records together
 // in a more optimized format.
 RecordBatch => not top level
-  // NullableBytesLength is not officially a field in a RecordBatch, however,
-  // RecordBatch is a special form of NULLABLE_BYTES. Since all nullable bytes
-  // must be prefixed with a int32 length, we throw that here.
-  // This length should not include itself, only data that follows.
-  NullableBytesLength: int32
   // FirstOffset is the first offset in a record batch.
   //
   // For producing, this is usually 0.
@@ -118,7 +113,7 @@ RecordBatch => not top level
   // but everything that follows is compressed.
   //
   // The number of bytes is expected to be the Length field minus 48.
-  Records: length-field-minus => Length - 48
+  Records: length-field-minus => Length - 49
 
 // ProduceRequest issues records to be created to Kafka.
 //
@@ -150,7 +145,12 @@ ProduceRequest => key 0, max version 7, min version 2
       // Partition is a partition to send a record batch to.
       Partition: int32
       // Records is a batch of records to write to a topic's partition.
-      Records: RecordBatch
+      // The size of the batch is prefixed with an int32 length; it is
+      // valid to have a zero length batch corresponding to no batch.
+      // It is additionally valid to have a partial message following
+      // the set. Kafka does this as an "optimization"; it should be
+      // ignored.
+      Records: sized-struct => RecordBatch
 
 // ProduceResponse is returned from a ProduceRequest.
 ProduceResponse => from ProduceRequest
@@ -292,7 +292,13 @@ FetchResponse => from FetchRequest
         AbortedTransactions: [=>] // v4+
           ProducerID: int64
           FirstOffset: int64
-      RecordSet: RecordBatch
+      // Records is a batch of records read from a topic's partition.
+      // The size of the batch is prefixed with an int32 length; it is
+      // valid to have a zero length batch corresponding to no batch.
+      // It is additionally valid to have a partial message following
+      // the set. Kafka does this as an "optimization"; it should be
+      // ignored.
+      RecordSet: sized-struct => RecordBatch
 
 // ListOffsetsRequest requests partition offsets from Kafka for use in
 // consuming records.
