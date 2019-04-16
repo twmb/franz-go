@@ -1,10 +1,12 @@
 package kgo
 
 import (
+	"bytes"
 	"compress/gzip"
 	"errors"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"sync"
 	"sync/atomic"
 
@@ -208,3 +210,41 @@ func Lz4Compression(level int) CompressionCodec { return CompressionCodec{3, lev
 
 // ZstdCompression enables zstd compression. Level must be between 1 and 22.
 func ZstdCompression(level int) CompressionCodec { return CompressionCodec{4, level} }
+
+var ungzPool = sync.Pool{
+	New: func() interface{} { return new(gzip.Reader) },
+}
+
+var unlz4Pool = sync.Pool{
+	New: func() interface{} { return new(lz4.Reader) },
+}
+
+func decompress(src []byte, codec byte) ([]byte, error) {
+	switch codec {
+	case 0:
+		return src, nil
+
+	case 1:
+		ungz := ungzPool.Get().(*gzip.Reader)
+		defer ungzPool.Put(ungz)
+		if err := ungz.Reset(bytes.NewReader(src)); err != nil {
+			return nil, err
+		}
+		return ioutil.ReadAll(ungz)
+
+	case 2:
+		return snappy.Decode(nil, src)
+
+	case 3:
+		unlz4 := unlz4Pool.Get().(*lz4.Reader)
+		defer unlz4Pool.Put(unlz4)
+		unlz4.Reset(bytes.NewReader(src))
+		return ioutil.ReadAll(unlz4)
+
+	case 4:
+		return unzstd(src)
+
+	default:
+		return nil, errors.New("unknown compression codec")
+	}
+}

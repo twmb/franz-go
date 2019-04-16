@@ -30,3 +30,7 @@ func (z *zstdCompressor) Close() error { return nil }
 func newZstdWriter(level int) codecCompressor {
 	return &zstdCompressor{level: level}
 }
+
+func unzstd(src []byte) ([]byte, error) {
+	return zstd.Decompress(nil, src)
+}
