@@ -18,6 +18,7 @@ import (
 // max.block.ms? (60s, upper bound on how long blocked on Produce)
 // reconnect.backoff.max.ms? (1s)
 // reconnect.backoff.ms
+// WithRetryBackoffStrategy(func() func() time.Duration) ?
 
 type (
 	// Opt is an option to configure a client.
@@ -137,10 +138,12 @@ func NewClient(seedBrokers []string, opts ...Opt) (*Client, error) {
 
 		controllerID: unknownControllerID,
 
-		brokers:    make(map[int32]*broker),
-		topicParts: make(map[string]*topicPartitions),
+		brokers: make(map[int32]*broker),
 
-		waitBuffer: make(chan struct{}, 100),
+		producer: producer{
+			tps:        make(map[string]*topicPartitions),
+			waitBuffer: make(chan struct{}, 100),
+		},
 	}
 	c.rng.Seed(uint64(time.Now().UnixNano()))
 

@@ -547,6 +547,7 @@ func (bt *brokerToppars) handleRetryBatches(retry map[string]map[int32]topparBat
 		batch.toppar.failSeq++
 	})
 
+	// TODO: we can switch this to one metadata fetch for all retry topics
 	for topic, migrateParts := range retry {
 		go bt.migrateTopic(topic, migrateParts)
 	}
@@ -557,7 +558,9 @@ func (bt *brokerToppars) migrateTopic(topic string, migrateParts map[int32]toppa
 
 start:
 	loadParts := newTopicParts()
-	cl.fetchTopicMetadataIntoParts(loadParts, topic, false)
+	cl.fetchTopicMetadataIntoParts(map[string]*topicPartitions{
+		topic: loadParts,
+	}, false)
 	if loadParts.loadErr != nil {
 		time.Sleep(cl.cfg.client.retryBackoff) // TODO max retries
 		goto start
@@ -590,7 +593,7 @@ start:
 		}
 	}
 
-	existingParts, err := cl.partitionsForTopic(topic)
+	existingParts, err := cl.partitionsForTopicProduce(topic)
 	if err != nil {
 		panic("migrating existing topic, existing parts have err " + err.Error())
 	}

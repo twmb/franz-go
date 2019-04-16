@@ -56,8 +56,8 @@ func (bt *brokerToppars) newRecordBatch(firstSeq int32, pr promisedRecord) *reco
 	b := &recordBatch{
 		firstTimestamp: pr.r.Timestamp.UnixNano() / 1e6,
 		records:        emptyRecordsPool.Get().([]promisedNumberedRecord),
-		producerID:     bt.br.cl.producerID,
-		producerEpoch:  bt.br.cl.producerEpoch,
+		producerID:     bt.br.cl.producer.id,
+		producerEpoch:  bt.br.cl.producer.epoch,
 		baseSequence:   firstSeq,
 	}
 	pnr := promisedNumberedRecord{

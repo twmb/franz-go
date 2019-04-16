@@ -1,7 +1,6 @@
 package kgo
 
 import (
-	"fmt"
 	"net"
 	"strconv"
 	"sync"
@@ -10,48 +9,8 @@ import (
 
 	"golang.org/x/exp/rand"
 
-	"github.com/twmb/kgo/kerr"
 	"github.com/twmb/kgo/kmsg"
 )
-
-type topicPartition struct {
-	topic     string // our topic
-	partition int32  // our partition number
-
-	leader      int32 // our current broker leader
-	leaderEpoch int32 // our current broker leader epoch
-
-	toppar topparBuffer
-
-	writable bool
-
-	replicas []int32
-	isr      []int32
-	offline  []int32
-}
-
-type topicPartitions struct {
-	loaded  int64
-	loadErr error
-
-	mu sync.RWMutex
-
-	// allIDs and writableIDs correspond to the partition IDs in the
-	// two slices below. We save the IDs here as well since that is
-	// the common want.
-	allIDs      []int32
-	writableIDs []int32
-
-	all      map[int32]*topicPartition // partition num => partition
-	writable map[int32]*topicPartition // partition num => partition, eliding partitions with no leader
-
-	loading chan struct{}
-}
-
-func (p *topicPartitions) loadComplete() {
-	atomic.StoreInt64(&p.loaded, 1)
-	close(p.loading)
-}
 
 // Client issues requests and handles responses to a Kafka cluster.
 type Client struct {
@@ -66,66 +25,10 @@ type Client struct {
 
 	controllerID int32 // atomic
 
-	producerID       int64
-	producerEpoch    int16
-	producerIDLoaded int64
-	producerIDMu     sync.Mutex
+	producer producer
 
-	topicPartsMu sync.RWMutex
-	topicParts   map[string]*topicPartitions
-
-	bufferedRecords int64
-	waitBuffer      chan struct{}
-}
-
-// newTopicParts creates and returns new topicPartitions
-func newTopicParts() *topicPartitions {
-	parts := &topicPartitions{
-		loading:  make(chan struct{}),
-		all:      make(map[int32]*topicPartition),
-		writable: make(map[int32]*topicPartition),
-	}
-	return parts
-}
-
-func (c *Client) partitionsForTopic(topic string) (*topicPartitions, error) {
-	var retries int
-start:
-	c.topicPartsMu.RLock()
-	parts, exists := c.topicParts[topic]
-	c.topicPartsMu.RUnlock()
-
-	if !exists {
-		c.topicPartsMu.Lock()
-		parts, exists = c.topicParts[topic]
-		if !exists {
-			parts = newTopicParts()
-			c.topicParts[topic] = parts
-			go c.fetchTopicMetadataIntoParts(parts, topic, true)
-		}
-		c.topicPartsMu.Unlock()
-	}
-
-	if atomic.LoadInt64(&parts.loaded) == 0 {
-		<-parts.loading
-	}
-
-	if parts.loadErr != nil && isRetriableErr(parts.loadErr) {
-		c.topicPartsMu.Lock()
-		partsNow := c.topicParts[topic]
-		if partsNow == parts {
-			delete(c.topicParts, topic)
-		}
-		c.topicPartsMu.Unlock()
-
-		if retries < 3 { // TODO config opt
-			fmt.Println("sleeping 1s before topic partition retry")
-			time.Sleep(time.Second)
-			goto start
-		}
-	}
-
-	return parts, parts.loadErr
+	// simple consumer
+	simpleConsumer simpleConsumer
 }
 
 // broker returns a random broker from all brokers ever known.
@@ -144,96 +47,16 @@ func (c *Client) broker() *broker {
 
 // fetchBrokerMetadata issues a metadata request solely for broker information.
 func (c *Client) fetchBrokerMetadata() error {
-	meta, err := c.fetchMetadata()
-	if err != nil {
-		return err
-	}
-	if meta.ControllerID > 0 {
-		atomic.StoreInt32(&c.controllerID, meta.ControllerID)
-	}
-	c.updateBrokers(meta.Brokers)
-	return nil
+	_, err := c.fetchMetadata(false)
+	return err
 }
 
-func (c *Client) fetchTopicMetadataIntoParts(parts *topicPartitions, topic string, addToBroker bool) {
-	defer parts.loadComplete()
-
-	var meta *kmsg.MetadataResponse
-	meta, parts.loadErr = c.fetchMetadata(topic)
-	if parts.loadErr != nil {
-		return
+// TODO this should favor using a seedBroker so as to not use anything blocked
+// in consuming.
+func (c *Client) fetchMetadata(all bool, topics ...string) (*kmsg.MetadataResponse, error) {
+	if all {
+		topics = nil
 	}
-
-	// Update the controller ID and brokers now since they are always
-	// included in metadata responses.
-	if meta.ControllerID > 0 {
-		atomic.StoreInt32(&c.controllerID, meta.ControllerID)
-	}
-	c.updateBrokers(meta.Brokers)
-
-	// Since we requested one topic, we expect one topic metadata
-	// and the topic should match.
-	if len(meta.TopicMetadata) != 1 || meta.TopicMetadata[0].Topic != topic {
-		parts.loadErr = ErrInvalidResp
-		return
-	}
-	t := meta.TopicMetadata[0]
-	parts.loadErr = kerr.ErrorForCode(t.ErrorCode)
-	if parts.loadErr != nil {
-		return
-	}
-
-	// Finally, update the topic's partition metadata.
-	for i := range t.PartitionMetadata {
-		partMeta := &t.PartitionMetadata[i]
-
-		c.brokersMu.RLock()
-		broker, exists := c.brokers[partMeta.Leader]
-		c.brokersMu.RUnlock()
-
-		if !exists {
-			parts.loadErr = errUnknownBrokerForLeader
-			return
-		}
-
-		p := &topicPartition{
-			topic:     topic,
-			partition: partMeta.Partition,
-
-			leader:      partMeta.Leader,
-			leaderEpoch: partMeta.LeaderEpoch,
-
-			toppar: topparBuffer{
-				idWireLength: 2 + int32(len(topic)) + 4,
-				drainer:      broker.bt,
-			},
-
-			replicas: partMeta.Replicas,
-			isr:      partMeta.ISR,
-			offline:  partMeta.OfflineReplicas,
-		}
-		p.toppar.owner = p
-
-		if addToBroker {
-			broker.bt.addToppar(&p.toppar)
-		}
-
-		parts.allIDs = append(parts.allIDs, p.partition)
-		parts.all[p.partition] = p
-
-		switch kerr.ErrorForCode(partMeta.ErrorCode) {
-		case kerr.LeaderNotAvailable,
-			kerr.ListenerNotFound:
-			continue
-		}
-
-		p.writable = true
-		parts.writableIDs = append(parts.writableIDs, p.partition)
-		parts.writable[p.partition] = p
-	}
-}
-
-func (c *Client) fetchMetadata(topics ...string) (*kmsg.MetadataResponse, error) {
 	broker := c.broker()
 	var meta *kmsg.MetadataResponse
 	var err error
@@ -249,6 +72,12 @@ func (c *Client) fetchMetadata(topics ...string) (*kmsg.MetadataResponse, error)
 			meta = resp.(*kmsg.MetadataResponse)
 		},
 	)
+	if err == nil {
+		if meta.ControllerID > 0 {
+			atomic.StoreInt32(&c.controllerID, meta.ControllerID)
+		}
+		c.updateBrokers(meta.Brokers)
+	}
 	return meta, err
 }
 
@@ -291,6 +120,21 @@ func (c *Client) updateBrokers(brokers []kmsg.MetadataResponseBroker) {
 
 	c.brokers = newBrokers
 	c.anyBroker = newAnyBroker
+}
+
+// TODO Shutdown the client.
+//
+// For producing: we can just rely on the passed callbacks to ensure we do not
+// interrupt message sends. Users should just not close until the callbacks
+// return if they care about that.
+//
+// For consuming: we can interrupt everything. Is it worth it to do async
+// close? Should not matter, since it is fundamentally racy (stop consuming
+// and checkpoint later vs. interrupt, reconnect, consume where left off).
+//
+// Returns a function that waits until all connections have died.
+func (c *Client) Close() func() {
+	return nil
 }
 
 // Request issues a request to Kafka, waiting for and returning the response or
