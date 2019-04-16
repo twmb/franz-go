@@ -286,6 +286,9 @@ func (b *Reader) ArrayLen() int32 {
 
 func (b *Reader) VarintBytes() []byte {
 	l := b.Varint()
+	if l < 0 {
+		return nil
+	}
 	return b.Span(int(l))
 }
 
