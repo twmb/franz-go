@@ -77,3 +77,32 @@ func AppendRequest(
 func StringPtr(in string) *string {
 	return &in
 }
+
+// ReadFrom is a special ReadFrom for records; rather than erroring if the
+// source contains too much data, this returns the extra data.
+//
+// This will error if the src does not have enough data.
+func (r *Record) ReadFrom(src []byte) ([]byte, error) {
+	b := kbin.Reader{Src: src}
+	r.Length = b.Varint()
+	r.Attributes = b.Int8()
+	r.TimestampDelta = b.Varint()
+	r.OffsetDelta = b.Varint()
+	r.Key = b.VarintBytes()
+	r.Value = b.VarintBytes()
+
+	nheaders := b.Varint()
+	if nheaders > 0 {
+		r.Headers = make([]Header, 0, nheaders)
+		for i := nheaders; i > 0; i-- {
+			r.Headers = append(r.Headers, Header{
+				Key:   b.VarintString(),
+				Value: b.VarintBytes(),
+			})
+		}
+	}
+
+	rem := b.Src
+	b.Src = nil
+	return rem, b.Complete()
+}
