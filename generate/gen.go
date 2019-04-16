@@ -19,6 +19,7 @@ func (VarintBytes) TypeName() string           { return "[]byte" }
 func (a Array) TypeName() string               { return "[]" + a.Inner.TypeName() }
 func (s Struct) TypeName() string              { return s.Name }
 func (FieldLengthMinusBytes) TypeName() string { return "[]byte" }
+func (n SizedStruct) TypeName() string         { return n.Type.TypeName() }
 
 // primAppend corresponds to the primitive append functions in
 // kmsg/primitives.go.
@@ -40,6 +41,15 @@ func (Bytes) WriteAppend(l *LineWriter)          { primAppend("Bytes", l) }
 func (NullableBytes) WriteAppend(l *LineWriter)  { primAppend("Bool", l) }
 func (VarintString) WriteAppend(l *LineWriter)   { primAppend("VarintString", l) }
 func (VarintBytes) WriteAppend(l *LineWriter)    { primAppend("VarintBytes", l) }
+
+func (n SizedStruct) WriteAppend(l *LineWriter) {
+	l.Write("lenStart := len(dst)")
+	l.Write("dst = append(dst, 0, 0, 0, 0)")
+	l.Write("{")
+	n.Type.WriteAppend(l)
+	l.Write("}")
+	l.Write("kbin.AppendArrayLen(dst[:lenStart], len(dst))")
+}
 
 func (FieldLengthMinusBytes) WriteAppend(l *LineWriter) {
 	l.Write("dst = append(dst, v...)")
@@ -107,6 +117,26 @@ func (NullableBytes) WriteDecode(l *LineWriter)  { primDecode("Bool", l) }
 func (VarintString) WriteDecode(l *LineWriter)   { primDecode("VarintString", l) }
 func (VarintBytes) WriteDecode(l *LineWriter)    { primDecode("VarintBytes", l) }
 
+func (n SizedStruct) WriteDecode(l *LineWriter) {
+	// Sized structs can have trailing data if the struct did not
+	// consume the size fully.
+	//
+	// After the struct decode, we have to skip anything remaining.
+	l.Write("if ss := b.ArrayLen(); ss > 0 {")
+	l.Write("at := len(b.Src)")
+
+	n.Type.WriteDecode(l)
+
+	// used: at - remaining
+	// needed: ss
+	// skip: needed - used
+	l.Write("skip := int(ss) - (at - len(b.Src))")
+	l.Write("if skip > 0 {")
+	l.Write("b.Span(skip)")
+	l.Write("}")
+	l.Write("}")
+}
+
 func (f FieldLengthMinusBytes) WriteDecode(l *LineWriter) {
 	l.Write("v := b.Span(int(s.%s) - %d)", f.Field, f.LengthMinus)
 }
@@ -161,7 +191,8 @@ func (s Struct) WriteDecode(l *LineWriter) {
 			l.Write("{")
 		}
 		switch f.Type.(type) {
-		case Struct:
+		case Struct,
+			SizedStruct:
 			// For decoding a nested struct, we copy a pointer out.
 			// The nested version will then set the fields directly.
 			l.Write("v := &s.%s", f.FieldName)
@@ -174,7 +205,9 @@ func (s Struct) WriteDecode(l *LineWriter) {
 		}
 		f.Type.WriteDecode(l)
 
-		if _, isStruct := f.Type.(Struct); !isStruct {
+		_, isStruct := f.Type.(Struct)
+		_, isSizedStruct := f.Type.(SizedStruct)
+		if !isStruct && !isSizedStruct {
 			// If the field was not a struct, we need to copy the
 			// changes back.
 			l.Write("s.%s = v", f.FieldName)
@@ -235,12 +268,8 @@ func (s Struct) WriteResponseKindFunc(l *LineWriter) {
 
 func (s Struct) WriteAppendFunc(l *LineWriter) {
 	l.Write("func (v *%s) AppendTo(dst []byte) []byte {", s.Name)
-	// The Record struct is special (not top level) and does not have
-	// a version.
-	if s.Name != "Record" {
-		l.Write("version := v.Version")
-		l.Write("_ = version")
-	}
+	l.Write("version := v.Version")
+	l.Write("_ = version")
 	s.WriteAppend(l)
 	l.Write("return dst")
 	l.Write("}")
@@ -248,12 +277,8 @@ func (s Struct) WriteAppendFunc(l *LineWriter) {
 
 func (s Struct) WriteDecodeFunc(l *LineWriter) {
 	l.Write("func (v *%s) ReadFrom(src []byte) error {", s.Name)
-	// The Record struct is special (not top level) and does not have
-	// a version.
-	if s.Name != "Record" {
-		l.Write("version := v.Version")
-		l.Write("_ = version")
-	}
+	l.Write("version := v.Version")
+	l.Write("_ = version")
 	l.Write("b := kbin.Reader{Src: src}")
 	s.WriteDecode(l)
 	l.Write("return b.Complete()")

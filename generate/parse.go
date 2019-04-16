@@ -151,6 +151,12 @@ func (s *Struct) BuildFrom(scanner *LineScanner, level int) (unprocessed string,
 				LengthMinus: minus,
 			}
 
+		} else if strings.HasPrefix(typ, "sized-struct => ") {
+			typ = strings.TrimPrefix(typ, "sized-struct => ")
+			f.Type = SizedStruct{
+				Type: types[typ],
+			}
+
 		} else {
 			if types[typ] == nil {
 				die("unknown type %q on line %q", typ, line)
