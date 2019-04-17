@@ -456,8 +456,7 @@ func (bc *brokerConsumer) buildRequest() *kmsg.FetchRequest {
 
 		MaxWaitTime: 1000, // TODO
 
-		SessionID:    -1,
-		SessionEpoch: -1,
+		SessionEpoch: -1, // KIP-227, do not create a session
 
 		Topics: make([]kmsg.FetchRequestTopic, 0, len(bc.topicsConsumers)),
 	}
@@ -484,6 +483,10 @@ func (bc *brokerConsumer) buildRequest() *kmsg.FetchRequest {
 func (bc *brokerConsumer) handleResp(req *kmsg.FetchRequest, resp *kmsg.FetchResponse, err error) {
 	if err != nil {
 		if isRetriableBrokerErr(err) {
+			// If our "broker" died, it was either permanently
+			// closed or the host migrated. We close our
+			// brokerConsumer and trigger a relead of the
+			// partitionConsumers that were on it.
 			if err == ErrBrokerDead {
 				bc.reloadAllAndRemoveSelf()
 			}
@@ -521,80 +524,73 @@ func (bc *brokerConsumer) handleResp(req *kmsg.FetchRequest, resp *kmsg.FetchRes
 			continue
 		}
 
-	partitionResponses:
 		for i := range topicResp.PartitionResponses {
 			partResp := &topicResp.PartitionResponses[i]
-			partHdr := &partResp.PartitionHeader
-			partitionConsumer, exists := topicConsumers[partHdr.Partition]
+			partitionConsumer, exists := topicConsumers[partResp.Partition]
 			if !exists {
 				continue
 			}
-
-			partitionConsumer.closedMu.Lock()
-
-			if atomic.LoadInt64(&partitionConsumer.closed) == 1 {
-				partitionConsumer.closedMu.Unlock()
-				continue
-			}
-
-			if err := kerr.ErrorForCode(partHdr.ErrorCode); err != nil {
-				partitionConsumer.errorsCh <- err
-				partitionConsumer.closedMu.Unlock()
-				continue
-			}
-
-			batch := &partResp.RecordSet
-			if batch.Magic == 0 {
-				// record batch had size of zero and thus there
-				// was no batch; continue.
-				partitionConsumer.closedMu.Unlock()
-				continue
-			}
-			if batch.Magic != 2 {
-				partitionConsumer.errorsCh <- fmt.Errorf("unknown message batch magic %d", batch.Magic)
-				partitionConsumer.closedMu.Unlock()
-				continue
-			}
-
-			rawRecords := batch.Records
-			if compression := byte(batch.Attributes & 0x0007); compression != 0 {
-				var err error
-				rawRecords, err = decompress(rawRecords, compression)
-				if err != nil {
-					partitionConsumer.errorsCh <- fmt.Errorf("unable to decompress batch: %v", err)
-					partitionConsumer.closedMu.Unlock()
-					continue
-				}
-			}
-
-			kgoRecords := make([]*Record, 0, batch.NumRecords)
-			var r kmsg.Record
-			for i := batch.NumRecords; i > 0; i-- {
-				rawRecords, err = r.ReadFrom(rawRecords)
-				if err != nil {
-					partitionConsumer.errorsCh <- fmt.Errorf("invalid record batch: %v", err)
-					partitionConsumer.closedMu.Unlock()
-					continue partitionResponses
-				}
-				kgoR := recordToRecord(partHdr.Partition, batch, &r)
-				kgoRecords = append(kgoRecords, kgoR)
-			}
-
-			if len(rawRecords) != 0 {
-				partitionConsumer.errorsCh <- kbin.ErrTooMuchData
-				partitionConsumer.closedMu.Unlock()
-				continue
-			}
-			if len(kgoRecords) == 0 {
-				partitionConsumer.closedMu.Unlock()
-				continue
-			}
-
-			partitionConsumer.offset += int64(len(kgoRecords))
-			partitionConsumer.recordsCh <- kgoRecords
-			partitionConsumer.closedMu.Unlock()
+			partitionConsumer.processResponse(partResp)
 		}
 	}
+}
+
+func (p *PartitionConsumer) processResponse(resp *kmsg.FetchResponseResponsePartitionResponse) {
+	p.closedMu.Lock()
+	defer p.closedMu.Unlock()
+
+	if atomic.LoadInt64(&p.closed) == 1 {
+		p.closedMu.Unlock()
+		return
+	}
+
+	if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
+		p.errorsCh <- err
+		return
+	}
+
+	batch := &resp.RecordSet
+	if batch.Length == 0 { // record batch had size of zero; there was no batch
+		return
+	}
+	if batch.Magic != 2 {
+		p.errorsCh <- fmt.Errorf("unknown message batch magic %d", batch.Magic)
+		return
+	}
+
+	rawRecords := batch.Records
+	if compression := byte(batch.Attributes & 0x0007); compression != 0 {
+		var err error
+		rawRecords, err = decompress(rawRecords, compression)
+		if err != nil {
+			p.errorsCh <- fmt.Errorf("unable to decompress batch: %v", err)
+			return
+		}
+	}
+
+	kgoRecords := make([]*Record, 0, batch.NumRecords)
+	var r kmsg.Record
+	var err error
+	for i := batch.NumRecords; i > 0; i-- {
+		rawRecords, err = r.ReadFrom(rawRecords)
+		if err != nil {
+			p.errorsCh <- fmt.Errorf("invalid record batch: %v", err)
+			return
+		}
+		kgoR := recordToRecord(resp.Partition, batch, &r)
+		kgoRecords = append(kgoRecords, kgoR)
+	}
+
+	if len(rawRecords) != 0 {
+		p.errorsCh <- kbin.ErrTooMuchData
+		return
+	}
+	if len(kgoRecords) == 0 {
+		return
+	}
+
+	p.offset += int64(len(kgoRecords))
+	p.recordsCh <- kgoRecords
 }
 
 func (bc *brokerConsumer) reloadAllAndRemoveSelf() {
