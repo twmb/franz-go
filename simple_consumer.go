@@ -11,14 +11,35 @@ import (
 	"github.com/twmb/kgo/kmsg"
 )
 
-const (
-	// ConsumeEarliestOffset begins consuming at the earliest timestamp in
-	// a partition.
-	ConsumeEarliestOffset int64 = -2
-	// ConsumeEarliestOffset begins consuming at the latest timestamp in a
-	// partition.
-	ConsumeLatestOffset int64 = -1
-)
+type Offset struct {
+	request  int64
+	relative int64
+}
+
+// ConsumeStartOffset begins consuming at the earliest timestamp in a partition.
+func ConsumeStartOffset() Offset {
+	return Offset{request: -2}
+}
+
+// ConsumeEndOffset begins consuming at the latest timestamp in a partition.
+func ConsumeEndOffset() Offset {
+	return Offset{request: -1}
+}
+
+// ConsumeStartRelativeOffset begins consume n after the earliest offset.
+func ConsumeStartRelativeOffset(n int) Offset {
+	return Offset{request: -2, relative: int64(n)}
+}
+
+// ConsumeEndRelativeOffset begins consuming n before the latest offset.
+func ConsumeEndRelativeOffset(n int) Offset {
+	return Offset{request: -1, relative: int64(-n)}
+}
+
+// ConsumeExactOffset begins consuming at the given offset.
+func ConsumeExactOffset(o int64) Offset {
+	return Offset{request: o}
+}
 
 type TopicPartitions struct {
 	Topic      string
@@ -60,7 +81,7 @@ func (c *Client) TopicPartitions(topics ...string) ([]TopicPartitions, error) {
 // the given offset.
 //
 // This returns an error if the topic and partition is already being consumed.
-func (c *Client) ConsumePartition(topic string, partition int32, offset int64) (*PartitionConsumer, error) {
+func (c *Client) ConsumePartition(topic string, partition int32, offset Offset) (*PartitionConsumer, error) {
 	sc := &c.simpleConsumer
 	sc.mu.Lock()
 	defer sc.mu.Unlock()
@@ -88,7 +109,6 @@ func (c *Client) ConsumePartition(topic string, partition int32, offset int64) (
 	partitionConsumer = &PartitionConsumer{
 		topic:     topic,
 		partition: partition,
-		offset:    offset,
 
 		sc: sc,
 
@@ -99,7 +119,7 @@ func (c *Client) ConsumePartition(topic string, partition int32, offset int64) (
 	}
 
 	// Return the partition consumer, which will load itself appropriately.
-	go partitionConsumer.load()
+	go partitionConsumer.load(offset)
 
 	return partitionConsumer, nil
 }
@@ -154,7 +174,7 @@ type PartitionConsumer struct {
 // partition's leader.
 //
 // Once the leader is found, this triggers offset lookups.
-func (p *PartitionConsumer) load() {
+func (p *PartitionConsumer) load(offset Offset) {
 	retries := 0
 retry:
 	resp, err := p.sc.cl.fetchMetadata(false, p.topic)
@@ -187,8 +207,9 @@ retry:
 			}
 
 			p.leader = leader
+			p.epoch = partMeta.LeaderEpoch
 
-			p.loadOffsets(broker)
+			p.loadOffsets(broker, offset)
 			return
 		}
 	}
@@ -204,19 +225,21 @@ retry:
 //
 // If this is successful, we finally save the consumer to the broker and
 // begin consuming.
-func (p *PartitionConsumer) loadOffsets(broker *broker) {
-	ts := ConsumeEarliestOffset
-	if p.offset == ConsumeLatestOffset {
-		ts = ConsumeLatestOffset
-	}
+func (p *PartitionConsumer) loadOffsets(broker *broker, offset Offset) {
+	const earliest int64 = -2
+	const latest int64 = -1
 
+	ts := earliest
+	if offset.request == latest && offset.relative == 0 {
+		ts = latest
+	}
 	req := &kmsg.ListOffsetsRequest{
 		ReplicaID: -1,
 		Topics: []kmsg.ListOffsetsRequestTopic{{
 			Topic: p.topic,
 			Partitions: []kmsg.ListOffsetsRequestTopicPartition{{
 				Partition:          p.partition,
-				CurrentLeaderEpoch: -1,
+				CurrentLeaderEpoch: p.epoch,
 				Timestamp:          ts,
 			}},
 		}},
@@ -245,11 +268,16 @@ start:
 		return
 	}
 
-	// If the request was not for earliest or latest, redo the request
-	// with the other bound.
-	if p.offset != ConsumeEarliestOffset && p.offset != ConsumeLatestOffset {
+	// If the client user request was not for earliest or latest, we issued
+	// for the earliest and will now will issue for the latest to check
+	// if the client offset request was in bounds.
+	//
+	// Same for if the request was relative.
+	if earliestResp == nil &&
+		(offset.relative != 0 ||
+			offset.request != earliest && offset.request != latest) {
 		earliestResp = resp
-		req.Topics[0].Partitions[0].Timestamp = ConsumeLatestOffset
+		req.Topics[0].Partitions[0].Timestamp = latest
 		retries = 0
 		goto start
 	}
@@ -269,7 +297,7 @@ start:
 		return partResp.Offset, partResp.LeaderEpoch, nil
 	}
 
-	offset, epoch, err := getOffsetAndEpoch(resp)
+	gotOffset, epoch, err := getOffsetAndEpoch(resp)
 	p.epoch = epoch
 
 	if err != nil {
@@ -283,12 +311,24 @@ start:
 			p.errorClose(err)
 			return
 		}
-		if p.offset < earliestOffset || p.offset > offset {
+		latestOffset := gotOffset // second request was for latest
+
+		var reqOffset int64
+		if offset.request == earliest {
+			reqOffset = earliestOffset
+		} else if offset.request == latest {
+			reqOffset = latestOffset
+		}
+
+		reqOffset += offset.relative
+
+		if reqOffset < earliestOffset || reqOffset > latestOffset {
 			p.errorClose(kerr.OffsetOutOfRange)
 			return
 		}
+		p.offset = reqOffset
 	} else {
-		p.offset = offset
+		p.offset = gotOffset
 	}
 
 	p.saveAndConsume(broker)
@@ -454,7 +494,9 @@ func (bc *brokerConsumer) buildRequest() *kmsg.FetchRequest {
 	req := &kmsg.FetchRequest{
 		ReplicaID: -1,
 
-		MaxWaitTime: 1000, // TODO
+		MaxWaitTime: 100, // TODO
+		MinBytes:    1,
+		MaxBytes:    50 << 20,
 
 		SessionEpoch: -1, // KIP-227, do not create a session
 
@@ -481,6 +523,11 @@ func (bc *brokerConsumer) buildRequest() *kmsg.FetchRequest {
 }
 
 func (bc *brokerConsumer) handleResp(req *kmsg.FetchRequest, resp *kmsg.FetchResponse, err error) {
+	if err == nil {
+		// The top level error code should be 0, but just in case.
+		err = kerr.ErrorForCode(resp.ErrorCode)
+	}
+
 	if err != nil {
 		if isRetriableBrokerErr(err) {
 			// If our "broker" died, it was either permanently
@@ -521,14 +568,14 @@ func (bc *brokerConsumer) handleResp(req *kmsg.FetchRequest, resp *kmsg.FetchRes
 		topicResp := &resp.Responses[i]
 		topicConsumers, exists := bc.topicsConsumers[topicResp.Topic]
 		if !exists {
-			continue
+			continue // part consumer was closed by client user
 		}
 
 		for i := range topicResp.PartitionResponses {
 			partResp := &topicResp.PartitionResponses[i]
 			partitionConsumer, exists := topicConsumers[partResp.Partition]
 			if !exists {
-				continue
+				continue // part consumer was closed by client user
 			}
 			partitionConsumer.processResponse(partResp)
 		}
@@ -542,6 +589,27 @@ func (p *PartitionConsumer) processResponse(resp *kmsg.FetchResponseResponsePart
 	if atomic.LoadInt64(&p.closed) == 1 {
 		p.closedMu.Unlock()
 		return
+	}
+
+	// TODO
+	switch err := kerr.ErrorForCode(resp.ErrorCode); err {
+	case nil:
+
+	case kerr.UnknownTopicOrPartition,
+		kerr.NotLeaderForPartition,
+		kerr.ReplicaNotAvailable,
+		kerr.KafkaStorageError,
+		kerr.UnknownLeaderEpoch,
+		kerr.FencedLeaderEpoch:
+		// backoff
+
+	default:
+		// Fatal:
+		// - bad auth
+		// - unsupported compression
+		// - unsupported message version
+		// - out of range offset
+		// - unknown error
 	}
 
 	if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
@@ -577,7 +645,7 @@ func (p *PartitionConsumer) processResponse(resp *kmsg.FetchResponseResponsePart
 			p.errorsCh <- fmt.Errorf("invalid record batch: %v", err)
 			return
 		}
-		kgoR := recordToRecord(resp.Partition, batch, &r)
+		kgoR := recordToRecord(p.topic, p.partition, batch, &r)
 		kgoRecords = append(kgoRecords, kgoR)
 	}
 
@@ -603,7 +671,7 @@ func (bc *brokerConsumer) reloadAllAndRemoveSelf() {
 		bc.sc.mu.Unlock()
 		for _, partitionConsumers := range reload {
 			for _, partitionConsumer := range partitionConsumers {
-				go partitionConsumer.load()
+				go partitionConsumer.load(Offset{request: partitionConsumer.offset})
 			}
 		}
 	}()
