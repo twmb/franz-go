@@ -256,42 +256,160 @@ ProduceResponse => from ProduceRequest
   // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
   ThrottleTimeMs: int32
 
+// FetchRequest is a long-poll request of records from Kafka.
 FetchRequest => key 1, max version 10
+  // ReplicaID is the broker ID of performing the fetch request. Standard
+  // clients should use -1. To be a "debug" replica, use -2. The debug
+  // replica can be used to fetch messages from non-leaders.
   ReplicaID: int32
+  // MaxWaitTime is how long to wait for MinBytes to be hit before a broker
+  // responds to a fetch request.
   MaxWaitTime: int32
+  // MinBytes is the minimum amount of bytes to attempt to read before a broker
+  // responds to a fetch request.
   MinBytes: int32
+  // MaxBytes is the maximum amount of bytes to read in a fetch request. The
+  // response can exceed MaxBytes if the first record in the first non-empty
+  // partition is larger than MaxBytes.
   MaxBytes: int32 // v3+
+  // IsolationLevel changes which messages are fetched. Follower replica ID's
+  // (non-negative, non-standard-client) fetch from the end.
+  //
+  // Standard clients fetch from the high watermark, which corresponds to
+  // IsolationLevel 0, READ_UNCOMMITTED.
+  //
+  // To only read committed records, use IsolationLevel 1, corresponding to
+  // READ_COMMITTED.
   IsolationLevel: int8 // v4+
+  // SessionID is used for broker-to-broker communication.
+  //
+  // Because this is not needed in general clients, documentation is elided.
+  // Read KIP-227 for more details.
   SessionID: int32 // v7+
+  // SessionEpoch is used for broker-to-broker communication.
+  //
+  // Because this is not needed in general clients, documentation is elided.
+  // Read KIP-227 for more details.
   SessionEpoch: int32 // v7+
+  // Topic contains topics to try to fetch records for.
   Topics: [=>]
+    // Topic is a topic to try to fetch records for.
     Topic: string
+    // Partitions contains partitions in a topic to try to fetch records for.
     Partitions: [=>]
+      // Partition is a partition in a topic to try to fetch records for.
       Partition: int32
+      // CurrentLeaderEpoch, proposed in KIP-320 and introduced in Kafka 2.1.0,
+      // allows brokers to check if the client is fenced (has an out of date
+      // leader) or is using an unknown leader.
+      //
+      // The initial leader epoch can be gleaned from a MetadataResponse.
       CurrentLeaderEpoch: int32 // v9+
+      // FetchOffset is the offset to begin the fetch from. Kafka will
+      // return records at and after this offset.
       FetchOffset: int64
+      // LogStartOffset is a broker-follower only field added for KIP-107.
+      // This is the start offset of the partition in a follower.
       LogStartOffset: int64 // v5+
+      // PartitionMaxBytes is the maximum bytes to return for this partition.
+      // This can be used to limit how many bytes an individual partition in
+      // a request is allotted so that it does not dominate all of MaxBytes.
       PartitionMaxBytes: int32
+  // ForgottenTopicsData contains topics and partitions that a fetch session
+  // wants to remove from its session. This is generally only needed for
+  // brokers; see KIP-227 for more details.
   ForgottenTopicsData: [=>] // v7+
+    // Topic is a topic to remove from being tracked (with the partitions below).
     Topic: string
+    // Partitions are partitions to remove from tracking for a topic.
     Partitions: [int32]
 
+// FetchResponse is returned from a FetchRequest.
 FetchResponse => from FetchRequest
+  // ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+  // after this request.
+  // For Kafka < 2.0.0, the throttle is applied before issuing a response.
+  // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
   ThrottleTimeMs: int32 // v1+
+  // ErrorCode is a full-response error code for a fetch request. This was
+  // added in support of KIP-227. This error is only non-zero if using fetch
+  // sessions (clients should not).
+  //
+  // FETCH_SESSION_ID_NOT_FOUND is returned if the request used a
+  // session ID that the broker does not know of.
+  //
+  // INVALID_FETCH_SESSION_EPOCH is returned if the request used an
+  // invalid session epoch.
   ErrorCode: int16 // v7+
+  // SessionID is for broker to broker communication. See KIP-227 for more details.
   SessionID: int32 // v7+
+  // Responses contains an array of topic partitions and the records received
+  // for them.
   Responses: [=>]
+    // Topic is a topic that records may have been received for.
     Topic: string
+    // PartitionResponses contains partitions in a topic that records may have
+    // been received for.
     PartitionResponses: [=>]
-      PartitionHeader: =>
-        Partition: int32
-        ErrorCode: int16
-        HighWatermark: int64
-        LastStableOffset: int64 // v4+
-        LogStartOffset: int64 // v5+
-        AbortedTransactions: [=>] // v4+
-          ProducerID: int64
-          FirstOffset: int64
+      // Partition is a partition in a topic that records may have been
+      // received for.
+      Partition: int32
+      // ErrorCode is an error returned for an individual partition in a
+      // fetch request.
+      //
+      // TOPIC_AUTHORIZATION_FAILED is returned if the client is not
+      // authorized to read the partition.
+      //
+      // UNKNOWN_TOPIC_OR_PARTITION is returned if the topic or partition
+      // does not exist on this broker.
+      //
+      // UNSUPPORTED_COMPRESSION_TYPE is returned if the request version was
+      // under 10 and the batch is compressed with zstd.
+      //
+      // UNSUPPORTED_VERSION is returned if the broker has records newer than
+      // the client can support (magic value) and the broker has disabled
+      // message downconversion.
+      //
+      // NOT_LEADER_FOR_PARTITION is returned if requesting data for this
+      // partition as a follower (non-negative ReplicaID) and the broker
+      // is not the leader for this partition.
+      //
+      // REPLICA_NOT_AVAILABLE is returned if the partition exists but
+      // the requested broker is not the leader for it.
+      //
+      // KAFKA_STORAGE_EXCEPTION is returned if the requested partition is
+      // offline.
+      //
+      // UNKNOWN_LEADER_EPOCH is returned if the request used a larger leader
+      // epoch than the broker knows of.
+      //
+      // FENCED_LEADER_EPOCH is returned if the request used a smaller leader
+      // epoch than the broker is at (see KIP-320).
+      //
+      // OFFSET_OUT_OF_RANGE is returned if requesting an offset past the
+      // current end offset or before the beginning offset.
+      ErrorCode: int16
+      // HighWatermark is the current high watermark for this partition,
+      // that is, the current offset that is on all in sync replicas.
+      HighWatermark: int64
+      // LastStableOffset is the offset at which all prior offsets have
+      // been "decided". Non transactional records are always decided
+      // immediately, but transactional records are only decided once
+      // they are commited or aborted.
+      //
+      // The LastStableOffset will always be at or under the HighWatermark.
+      LastStableOffset: int64 // v4+
+      // LogStartOffset is the beginning offset for this partition.
+      // This field was added for KIP-107.
+      LogStartOffset: int64 // v5+
+      // AbortedTransactions is an array of aborted transactions within the
+      // returned offset range. This is only returned if the requested
+      // isolation level was READ_COMMITTED.
+      AbortedTransactions: [=>] // v4+
+        // ProducerID is the producer ID that caused this aborted transaction.
+        ProducerID: int64
+        // FirstOffset is the offset where this aborted transaction began.
+        FirstOffset: int64
       // Records is a batch of records read from a topic's partition.
       // The size of the batch is prefixed with an int32 length; it is
       // valid to have a zero length batch corresponding to no batch.
@@ -325,6 +443,8 @@ ListOffsetsRequest => key 2, max version 4, min version 1, admin
       // CurrentLeaderEpoch, proposed in KIP-320 and introduced in Kafka 2.1.0,
       // allows brokers to check if the client is fenced (has an out of date
       // leader) or is using an unknown leader.
+      //
+      // The initial leader epoch can be gleaned from a MetadataResponse.
       CurrentLeaderEpoch: int32 // v4+
       // Timestamp controls which offset to return in a response for this
       // partition.
@@ -355,6 +475,8 @@ ListOffsetsResponse => from ListOffsetsRequest
     PartitionResponses: [=>]
       // Partition is the partition this array slot is for.
       Partition: int32
+      // ErrorCode is any error for a topic partition in a ListOffsets request.
+      //
       // TOPIC_AUTHORIZATION_FAILED is returned if the client is not authorized
       // to describe the topic.
       //
@@ -663,6 +785,11 @@ OffsetCommitRequest => key 8, max version 6
       // if zero, current time + offset.retention.minutes.
       // KIP-211
       Timestamp: int64 // v1-v1
+      // LeaderEpoch, proposed in KIP-320 and introduced in Kafka 2.1.0,
+      // allows brokers to check if the client is fenced (has an out of date
+      // leader) or is using an unknown leader.
+      //
+      // The initial leader epoch can be gleaned from a MetadataResponse.
       LeaderEpoch: int32 // v6+
       Metadata: nullable-string
 
@@ -995,21 +1122,73 @@ DeleteTopicsResponse => from DeleteTopicsRequest
     // times out.
     ErrorCode: int16
 
-DeleteRecordsRequest => key 21, max version 1
+// DeleteRecordsRequest is an admin request to delete records from Kafka.
+// This was added for KIP-107.
+//
+// To delete records, Kafka sets the LastStableOffset for partitions to
+// the requested offset. All segments whose max partition is before the
+// requested offset are deleted, and any records within the segement before
+// the requested offset can no longer be read.
+DeleteRecordsRequest => key 21, max version 1, admin
+  // Topics contains topics for which to delete records from.
   Topics: [=>]
+    // Topic is a topic to delete records from.
     Topic: string
+    // Partitions contains partitions to delete records from.
     Partitions: [=>]
+      // Partition is a partition to delete records from.
       Partition: int32
+      // Offset is the offset to set the partition's low watermark (start
+      // offset) to. After a successful response, all records before this
+      // offset are considered deleted and are no longer readable.
+      //
+      // To delete all records, use -1, which is mapped to the partition's
+      // current high watermark.
       Offset: int64
+  // Timeout is how long to wait for a response before Kafka will return.
+  // Kafka waits for all replicas to respond to the delete reords request;
+  // any partition that all replicas do not reply to within this limit will
+  // have a timeout error.
   Timeout: int32
 
+// DeleteRecordsResponse is returned from a DeleteRecordsRequest.
 DeleteRecordsResponse => from DeleteRecordsRequest
+  // ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+  // after this request.
+  // For Kafka < 2.0.0, the throttle is applied before issuing a response.
+  // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
   ThrottleTimeMs: int32
+  // Topics contains responses for each topic in the delete records request.
   Topics: [=>]
+    // Topic is the topic this response corresponds to.
     Topic: string
+    // Partitions contains responses for each partition in a requested topic
+    // in the delete records request.
     Partitions: [=>]
+      // Partition is the partition this response corresponds to.
       Partition: int32
+      // LowWatermark is the new earliest offset for this partition.
       LowWatermark: int64
+      // ErrorCode is the error code returned for a given partition in
+      // the delete request.
+      //
+      // TOPIC_AUTHORIZATION_FAILED is returned for all partitions if the
+      // client is not authorized to delete records.
+      //
+      // UNKNOWN_TOPIC_OR_PARTITION is returned for all partitions that
+      // the requested broker does not know of.
+      //
+      // NOT_LEADER_FOR_PARTITION is returned for partitions that the
+      // requested broker is not a leader of.
+      //
+      // OFFSET_OUT_OF_RANGE is returned if the requested offset is
+      // negative or higher than the current high watermark.
+      //
+      // POLICY_VIOLATION is returned if records cannot be deleted due to
+      // broker configuration.
+      //
+      // KAFKA_STORAGE_EXCEPTION is returned if the partition is in an
+      // offline log directory.
       ErrorCode: int16
 
 InitProducerIDRequest => key 22, max version 2
@@ -1043,6 +1222,11 @@ OffsetForLeaderEpochRequest => key 23, max version 2
     Topic: string
     Partitions: [=>]
       Partition: int32
+      // CurrentLeaderEpoch, proposed in KIP-320 and introduced in Kafka 2.1.0,
+      // allows brokers to check if the client is fenced (has an out of date
+      // leader) or is using an unknown leader.
+      //
+      // The initial leader epoch can be gleaned from a MetadataResponse.
       CurrentLeaderEpoch: int32 // v2+
       LeaderEpoch: int32
 
@@ -1121,6 +1305,11 @@ TxnOffsetCommitRequest => key 28, max version 2
     Partitions: [=>]
       Partition: int32
       Offset: int64
+      // LeaderEpoch, proposed in KIP-320 and introduced in Kafka 2.1.0,
+      // allows brokers to check if the client is fenced (has an out of date
+      // leader) or is using an unknown leader.
+      //
+      // The initial leader epoch can be gleaned from a MetadataResponse.
       LeaderEpoch: int32 // v2+
       Metadata: nullable-string
 
