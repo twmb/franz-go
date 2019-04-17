@@ -205,10 +205,10 @@ func (c *Client) fetchTopicMetadataIntoParts(fetches map[string]*topicPartitions
 	}
 }
 
-func noPromise(string, *Record, error) {}
+func noPromise(*Record, error) {}
 
-// Produce sends a record to Kafka under the given topic, calling promise with
-// the topic/record/error when Kafka replies.
+// Produce sends a Kafka record to the topic in the record's Topic field,
+// calling promise with the record or an error when Kafka replies.
 //
 // If the record cannot be written, due to it being too large or the client
 // being unable to find a partition, this will return an error.
@@ -216,9 +216,8 @@ func noPromise(string, *Record, error) {}
 // The promise is optional, but not using it means you will not know if Kafka
 // recorded a record properly.
 func (c *Client) Produce(
-	topic string,
 	r *Record,
-	promise func(string, *Record, error),
+	promise func(*Record, error),
 ) error {
 	if atomic.AddInt64(&c.producer.bufferedRecords, 1) > c.cfg.producer.maxBufferedRecords {
 		<-c.producer.waitBuffer
@@ -228,7 +227,7 @@ func (c *Client) Produce(
 		return err
 	}
 
-	partitions, err := c.partitionsForTopicProduce(topic)
+	partitions, err := c.partitionsForTopicProduce(r.Topic)
 	if err != nil {
 		return err
 	}
@@ -336,9 +335,9 @@ start:
 	return nil
 }
 
-func (c *Client) promise(topic string, pr promisedRecord, err error) {
+func (c *Client) promise(pr promisedRecord, err error) {
 	if atomic.AddInt64(&c.producer.bufferedRecords, -1) >= c.cfg.producer.maxBufferedRecords {
 		go func() { c.producer.waitBuffer <- struct{}{} }()
 	}
-	pr.promise(topic, pr.r, err)
+	pr.promise(pr.r, err)
 }

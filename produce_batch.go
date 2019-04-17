@@ -11,7 +11,7 @@ import (
 // promisedRecord ties a record with the callback that will be called once
 // a batch is finally written and receives a response.
 type promisedRecord struct {
-	promise func(string, *Record, error)
+	promise func(*Record, error)
 	r       *Record
 }
 

@@ -395,7 +395,7 @@ func (bt *brokerToppars) errorAllPartitionToppars(topic string, partitions map[i
 			tp.failSeq++ // make sure a second in-flight does not do this again
 			for _, batch := range tp.batches {
 				for i, record := range batch.records {
-					bt.br.cl.promise(topic, record.pr, err)
+					bt.br.cl.promise(record.pr, err)
 					batch.records[i] = noPNR
 				}
 				emptyRecordsPool.Put(batch.records[:0])
@@ -510,7 +510,7 @@ func (bt *brokerToppars) handleReqResp(req *produceRequest, resp kmsg.Response, 
 				for i, record := range batch.records {
 					record.pr.r.Offset = responsePartition.BaseOffset + int64(i)
 					record.pr.r.Partition = partition
-					bt.br.cl.promise(topic, record.pr, err)
+					bt.br.cl.promise(record.pr, err)
 					batch.records[i] = noPNR
 				}
 				emptyRecordsPool.Put(batch.records[:0])
@@ -577,7 +577,7 @@ start:
 			tp.toppar.failSeq++ // just in case
 			for _, batch := range tp.toppar.batches {
 				for i, record := range batch.records {
-					bt.br.cl.promise(topic, record.pr, ErrPartitionDeleted)
+					bt.br.cl.promise(record.pr, ErrPartitionDeleted)
 					batch.records[i] = noPNR
 				}
 				emptyRecordsPool.Put(batch.records[:0])

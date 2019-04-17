@@ -67,12 +67,18 @@ type Record struct {
 	// uses the timestamp Kafka generates when storing the record.
 	TimestampType TimestampType
 
+	// Topic is the topic that a record is written to.
+	//
+	// This must be set for producing.
+	Topic string
+
 	// Partition is the partition that a record is written to.
 	//
 	// For producing, this is left unset. If acks are required, this field
 	// will be filled in before the produce callback if the produce is
 	// successful.
 	Partition int32
+
 	// Offset is the offset that a record is written as.
 	//
 	// For producing, this is left unset. If acks are required, this field

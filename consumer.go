@@ -7,6 +7,7 @@ import (
 )
 
 func recordToRecord(
+	topic string,
 	partition int32,
 	batch *kmsg.RecordBatch,
 	record *kmsg.Record,
@@ -19,9 +20,11 @@ func recordToRecord(
 		})
 	}
 	r := &Record{
-		Key:     record.Key,
-		Value:   record.Value,
-		Headers: h,
+		Key:       record.Key,
+		Value:     record.Value,
+		Headers:   h,
+		Topic:     topic,
+		Partition: partition,
 	}
 
 	r.Timestamp = time.Unix(0, batch.FirstTimestamp+int64(record.TimestampDelta))
@@ -30,7 +33,6 @@ func recordToRecord(
 		r.TimestampType = TimestampLogAppendTime()
 	}
 
-	r.Partition = partition
 	r.Offset = batch.FirstOffset + int64(record.OffsetDelta)
 
 	return r
