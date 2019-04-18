@@ -145,11 +145,7 @@ ProduceRequest => key 0, max version 7, min version 2
       // Partition is a partition to send a record batch to.
       Partition: int32
       // Records is a batch of records to write to a topic's partition.
-      // The size of the batch is prefixed with an int32 length; it is
-      // valid to have a zero length batch corresponding to no batch.
-      // It is additionally valid to have a partial message following
-      // the set. Kafka does this as an "optimization"; it should be
-      // ignored.
+      // The size of the batch is prefixed with an int32 length.
       Records: sized-struct => RecordBatch
 
 // ProduceResponse is returned from a ProduceRequest.
@@ -410,13 +406,12 @@ FetchResponse => from FetchRequest
         ProducerID: int64
         // FirstOffset is the offset where this aborted transaction began.
         FirstOffset: int64
-      // Records is a batch of records read from a topic's partition.
-      // The size of the batch is prefixed with an int32 length; it is
-      // valid to have a zero length batch corresponding to no batch.
-      // It is additionally valid to have a partial message following
-      // the set. Kafka does this as an "optimization"; it should be
-      // ignored.
-      RecordSet: sized-struct => RecordBatch
+      // RecordBatches is an array of record batches for a topic partition.
+      // The size prefixing the array is the byte size of all the batches,
+      // NOT the number of record batches. Kafka may include a partial record
+      // batch at the end of the array; this partial batch should be discarded.
+      // This is an optimization in Kafka that the clients must deal with.
+      RecordBatches: as-many-that-fit[RecordBatch]
 
 // ListOffsetsRequest requests partition offsets from Kafka for use in
 // consuming records.
