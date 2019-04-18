@@ -58,9 +58,10 @@ type (
 	}
 
 	Array struct {
-		Inner           Type
-		IsVarintArray   bool
-		IsNullableArray bool
+		Inner            Type
+		IsVarintArray    bool
+		IsNullableArray  bool
+		IsUnboundedArray bool
 	}
 
 	StructField struct {

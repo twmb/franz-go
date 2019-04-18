@@ -60,6 +60,10 @@ func (a Array) WriteAppend(l *LineWriter) {
 		l.Write("dst = kbin.AppendVarint(dst, int32(len(v)))")
 	} else if a.IsNullableArray {
 		l.Write("dst = kbin.AppendNullableArrayLen(dst, len(v), v == nil)")
+	} else if a.IsUnboundedArray {
+		l.Write("{") // fill in size after writing everything
+		l.Write("lenStart := len(dst)")
+		l.Write("dst = append(dst, 0, 0, 0, 0)")
 	} else {
 		l.Write("dst = kbin.AppendArrayLen(dst, len(v))")
 	}
@@ -73,6 +77,11 @@ func (a Array) WriteAppend(l *LineWriter) {
 	}
 	a.Inner.WriteAppend(l)
 	l.Write("}")
+
+	if a.IsUnboundedArray {
+		l.Write("kbin.AppendArrayLen(dst[:lenStart], len(dst))")
+		l.Write("}")
+	}
 }
 
 func (s Struct) WriteAppend(l *LineWriter) {
@@ -118,10 +127,8 @@ func (VarintString) WriteDecode(l *LineWriter)   { primDecode("VarintString", l)
 func (VarintBytes) WriteDecode(l *LineWriter)    { primDecode("VarintBytes", l) }
 
 func (n SizedStruct) WriteDecode(l *LineWriter) {
-	// Sized structs can have trailing data if the struct did not
-	// consume the size fully.
-	//
-	// After the struct decode, we have to skip anything remaining.
+	// Sized structs must read exactly what the size is; if they do
+	// not, we Span(-1) to force an error.
 	l.Write("if ss := b.ArrayLen(); ss > 0 {")
 	l.Write("at := len(b.Src)")
 
@@ -130,9 +137,8 @@ func (n SizedStruct) WriteDecode(l *LineWriter) {
 	// used: at - remaining
 	// needed: ss
 	// skip: needed - used
-	l.Write("skip := int(ss) - (at - len(b.Src))")
-	l.Write("if skip > 0 {")
-	l.Write("b.Span(skip)")
+	l.Write("if int(ss) != (at - len(b.Src)) {")
+	l.Write("b.Span(-1)")
 	l.Write("}")
 	l.Write("}")
 }
@@ -148,31 +154,50 @@ func (a Array) WriteDecode(l *LineWriter) {
 	l.Write("a := v")
 	if a.IsVarintArray {
 		l.Write("for i := b.Varint(); i > 0; i-- {")
+	} else if a.IsUnboundedArray {
+		// For unbounded arrays, we use a new binreader and consume
+		// it until we get ErrNotEnoughData.
+		l.Write("{")
+		l.Write("b := kbin.Reader{Src: b.Span(int(b.ArrayLen()))}")
+		l.Write("for len(b.Src) > 0 {")
 	} else {
 		l.Write("for i := b.ArrayLen(); i > 0; i-- {")
 	}
+
 	if s, isStruct := a.Inner.(Struct); isStruct {
 		// With structs, we append early and use a pointer to the
 		// new element, avoiding double copying.
 		l.Write("a = append(a, %s{})", s.Name)
 		l.Write("v := &a[len(a)-1]")
-	}
-	if a, isArray := a.Inner.(Array); isArray {
+	} else if a, isArray := a.Inner.(Array); isArray {
 		// With nested arrays, we declare a new v and introduce scope
 		// so that the next level will not collide with our current "a".
 		l.Write("v := %s{}", a.TypeName())
 		l.Write("{")
 	}
-	// Kafka does not have arrays of arrays, so we do not need
-	// to worry about that case.
+
 	a.Inner.WriteDecode(l)
+
 	if _, isArray := a.Inner.(Array); isArray {
+		// With nested arrays, now we release our scope.
 		l.Write("}")
-	}
-	if _, isStruct := a.Inner.(Struct); !isStruct {
+	} else if _, isStruct := a.Inner.(Struct); !isStruct {
+		// With non structs, we append after since the type is small.
 		l.Write("a = append(a, v)")
 	}
-	l.Write("}")
+
+	l.Write("}") // close the for loop
+
+	// With unbounded arrays, if we completed with NotEnoughData, the
+	// final element was partial and we discard it.
+	if a.IsUnboundedArray {
+		l.Write("if b.Complete() == kbin.ErrNotEnoughData {")
+		l.Write("a = a[:len(a)-1]")
+		l.Write("}")
+
+		l.Write("}") // close the new binreader scope
+	}
+
 	l.Write("v = a")
 }
 

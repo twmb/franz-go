@@ -114,6 +114,7 @@ func (s *Struct) BuildFrom(scanner *LineScanner, level int) (unprocessed string,
 		isArray := false
 		isVarintArray := false
 		isNullableArray := false
+		isUnboundedArray := false
 		arrayLevel := strings.Count(typ, "[")
 		if arrayLevel > 0 {
 			if strings.HasPrefix(typ, "varint[") {
@@ -122,6 +123,9 @@ func (s *Struct) BuildFrom(scanner *LineScanner, level int) (unprocessed string,
 			} else if strings.HasPrefix(typ, "nullable[") {
 				isNullableArray = true
 				typ = typ[len("nullable"):]
+			} else if strings.HasPrefix(typ, "as-many-that-fit[") {
+				isUnboundedArray = true
+				typ = typ[len("as-many-that-fit"):]
 			}
 			typ = typ[arrayLevel : len(typ)-arrayLevel]
 			isArray = true
@@ -170,9 +174,10 @@ func (s *Struct) BuildFrom(scanner *LineScanner, level int) (unprocessed string,
 				arrayLevel--
 			}
 			f.Type = Array{
-				Inner:           f.Type,
-				IsVarintArray:   isVarintArray,
-				IsNullableArray: isNullableArray,
+				Inner:            f.Type,
+				IsVarintArray:    isVarintArray,
+				IsNullableArray:  isNullableArray,
+				IsUnboundedArray: isUnboundedArray,
 			}
 		}
 
