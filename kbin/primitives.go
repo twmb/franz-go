@@ -158,6 +158,7 @@ type Reader struct {
 func (b *Reader) Bool() bool {
 	if len(b.Src) < 1 {
 		b.bad = true
+		b.Src = nil
 		return false
 	}
 	t := b.Src[0] != 0 // if '0', false
@@ -168,6 +169,7 @@ func (b *Reader) Bool() bool {
 func (b *Reader) Int8() int8 {
 	if len(b.Src) < 1 {
 		b.bad = true
+		b.Src = nil
 		return 0
 	}
 	r := b.Src[0]
@@ -178,6 +180,7 @@ func (b *Reader) Int8() int8 {
 func (b *Reader) Int16() int16 {
 	if len(b.Src) < 2 {
 		b.bad = true
+		b.Src = nil
 		return 0
 	}
 	r := int16(binary.BigEndian.Uint16(b.Src))
@@ -188,6 +191,7 @@ func (b *Reader) Int16() int16 {
 func (b *Reader) Int32() int32 {
 	if len(b.Src) < 4 {
 		b.bad = true
+		b.Src = nil
 		return 0
 	}
 	r := int32(binary.BigEndian.Uint32(b.Src))
@@ -198,6 +202,7 @@ func (b *Reader) Int32() int32 {
 func (b *Reader) Int64() int64 {
 	if len(b.Src) < 8 {
 		b.bad = true
+		b.Src = nil
 		return 0
 	}
 	r := int64(binary.BigEndian.Uint64(b.Src))
@@ -208,6 +213,7 @@ func (b *Reader) Int64() int64 {
 func (b *Reader) Uint32() uint32 {
 	if len(b.Src) < 4 {
 		b.bad = true
+		b.Src = nil
 		return 0
 	}
 	r := binary.BigEndian.Uint32(b.Src)
@@ -219,6 +225,7 @@ func (b *Reader) Varint() int32 {
 	val, n := binary.Varint(b.Src)
 	if n <= 0 || n > 5 {
 		b.bad = true
+		b.Src = nil
 		return 0
 	}
 	b.Src = b.Src[n:]
@@ -229,6 +236,7 @@ func (b *Reader) Varlong() int64 {
 	val, n := binary.Varint(b.Src)
 	if n <= 0 {
 		b.bad = true
+		b.Src = nil
 		return 0
 	}
 	b.Src = b.Src[n:]
@@ -238,6 +246,7 @@ func (b *Reader) Varlong() int64 {
 func (b *Reader) Span(l int) []byte {
 	if len(b.Src) < l || l < 0 {
 		b.bad = true
+		b.Src = nil
 		return nil
 	}
 	r := b.Src[:l:l]
@@ -279,6 +288,7 @@ func (b *Reader) ArrayLen() int32 {
 	// at least the array length of bytes left, it is bad.
 	if len(b.Src) < int(r) {
 		b.bad = true
+		b.Src = nil
 		return 0
 	}
 	return r
