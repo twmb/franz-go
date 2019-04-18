@@ -494,9 +494,9 @@ func (bc *brokerConsumer) buildRequest() *kmsg.FetchRequest {
 	req := &kmsg.FetchRequest{
 		ReplicaID: -1,
 
-		MaxWaitTime: 100, // TODO
+		MaxWaitTime: 500, // TODO
 		MinBytes:    1,
-		MaxBytes:    50 << 20,
+		MaxBytes:    500 << 20,
 
 		SessionEpoch: -1, // KIP-227, do not create a session
 
@@ -511,6 +511,7 @@ func (bc *brokerConsumer) buildRequest() *kmsg.FetchRequest {
 				CurrentLeaderEpoch: partitionConsumer.epoch,
 				FetchOffset:        partitionConsumer.offset,
 				LogStartOffset:     -1,
+				PartitionMaxBytes:  500 << 20,
 			})
 		}
 		req.Topics = append(req.Topics, kmsg.FetchRequestTopic{
@@ -617,7 +618,13 @@ func (p *PartitionConsumer) processResponse(resp *kmsg.FetchResponseResponsePart
 		return
 	}
 
-	batch := &resp.RecordSet
+	for i := range resp.RecordBatches {
+		batch := &resp.RecordBatches[i]
+		p.processBatch(batch)
+	}
+}
+
+func (p *PartitionConsumer) processBatch(batch *kmsg.RecordBatch) {
 	if batch.Length == 0 { // record batch had size of zero; there was no batch
 		return
 	}
@@ -646,6 +653,11 @@ func (p *PartitionConsumer) processResponse(resp *kmsg.FetchResponseResponsePart
 			return
 		}
 		kgoR := recordToRecord(p.topic, p.partition, batch, &r)
+		// Offset could be less than ours if we asked for an offset in
+		// the middle of a batch.
+		if kgoR.Offset < p.offset {
+			continue
+		}
 		kgoRecords = append(kgoRecords, kgoR)
 	}
 
