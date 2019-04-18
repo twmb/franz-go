@@ -152,11 +152,7 @@ type ProduceRequestTopicDataData struct {
 	Partition int32
 
 	// Records is a batch of records to write to a topic's partition.
-	// The size of the batch is prefixed with an int32 length; it is
-	// valid to have a zero length batch corresponding to no batch.
-	// It is additionally valid to have a partial message following
-	// the set. Kafka does this as an "optimization"; it should be
-	// ignored.
+	// The size of the batch is prefixed with an int32 length.
 	Records RecordBatch
 }
 type ProduceRequestTopicData struct {
@@ -752,13 +748,12 @@ type FetchResponseResponsePartitionResponse struct {
 	// isolation level was READ_COMMITTED.
 	AbortedTransactions []FetchResponseResponsePartitionResponseAbortedTransaction // v4+
 
-	// Records is a batch of records read from a topic's partition.
-	// The size of the batch is prefixed with an int32 length; it is
-	// valid to have a zero length batch corresponding to no batch.
-	// It is additionally valid to have a partial message following
-	// the set. Kafka does this as an "optimization"; it should be
-	// ignored.
-	RecordSet RecordBatch
+	// RecordBatches is an array of record batches for a topic partition.
+	// The size prefixing the array is the byte size of all the batches,
+	// NOT the number of record batches. Kafka may include a partial record
+	// batch at the end of the array; this partial batch should be discarded.
+	// This is an optimization in Kafka that the clients must deal with.
+	RecordBatches []RecordBatch
 }
 type FetchResponseResponse struct {
 	// Topic is a topic that records may have been received for.
@@ -879,73 +874,79 @@ func (v *FetchResponse) ReadFrom(src []byte) error {
 									s.AbortedTransactions = v
 								}
 								{
-									v := &s.RecordSet
-									if ss := b.ArrayLen(); ss > 0 {
-										at := len(b.Src)
-										{
-											s := v
+									v := s.RecordBatches
+									a := v
+									{
+										b := kbin.Reader{Src: b.Span(int(b.ArrayLen()))}
+										for len(b.Src) > 0 {
+											a = append(a, RecordBatch{})
+											v := &a[len(a)-1]
 											{
-												v := b.Int64()
-												s.FirstOffset = v
-											}
-											{
-												v := b.Int32()
-												s.Length = v
-											}
-											{
-												v := b.Int32()
-												s.PartitionLeaderEpoch = v
-											}
-											{
-												v := b.Int8()
-												s.Magic = v
-											}
-											{
-												v := b.Int32()
-												s.CRC = v
-											}
-											{
-												v := b.Int16()
-												s.Attributes = v
-											}
-											{
-												v := b.Int32()
-												s.LastOffsetDelta = v
-											}
-											{
-												v := b.Int64()
-												s.FirstTimestamp = v
-											}
-											{
-												v := b.Int64()
-												s.MaxTimestamp = v
-											}
-											{
-												v := b.Int64()
-												s.ProducerID = v
-											}
-											{
-												v := b.Int16()
-												s.ProducerEpoch = v
-											}
-											{
-												v := b.Int32()
-												s.FirstSequence = v
-											}
-											{
-												v := b.Int32()
-												s.NumRecords = v
-											}
-											{
-												v := b.Span(int(s.Length) - 49)
-												s.Records = v
+												s := v
+												{
+													v := b.Int64()
+													s.FirstOffset = v
+												}
+												{
+													v := b.Int32()
+													s.Length = v
+												}
+												{
+													v := b.Int32()
+													s.PartitionLeaderEpoch = v
+												}
+												{
+													v := b.Int8()
+													s.Magic = v
+												}
+												{
+													v := b.Int32()
+													s.CRC = v
+												}
+												{
+													v := b.Int16()
+													s.Attributes = v
+												}
+												{
+													v := b.Int32()
+													s.LastOffsetDelta = v
+												}
+												{
+													v := b.Int64()
+													s.FirstTimestamp = v
+												}
+												{
+													v := b.Int64()
+													s.MaxTimestamp = v
+												}
+												{
+													v := b.Int64()
+													s.ProducerID = v
+												}
+												{
+													v := b.Int16()
+													s.ProducerEpoch = v
+												}
+												{
+													v := b.Int32()
+													s.FirstSequence = v
+												}
+												{
+													v := b.Int32()
+													s.NumRecords = v
+												}
+												{
+													v := b.Span(int(s.Length) - 49)
+													s.Records = v
+												}
 											}
 										}
-										skip := int(ss) - (at - len(b.Src))
-										if skip > 0 {
-											b.Span(skip)
+										if b.Complete() == kbin.ErrNotEnoughData {
+											a = a[:len(a)-1]
 										}
 									}
+									v = a
+									s.RecordBatches = v
 								}
 							}
 						}
