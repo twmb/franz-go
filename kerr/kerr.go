@@ -57,7 +57,7 @@ qw
 q
 100@w
 :%s/_\([a-z]\)/\u\1/g
-:%s/ID/ID/g
+:%s/id/ID/g
 
 Do not forget to add code2err for new codes.
 */
@@ -144,7 +144,7 @@ var (
 	OffsetNotAvailable                 = &Error{"OFFSET_NOT_AVAILABLE", 78, true, "The leader high watermark has not caught up from a recent leader election so the offsets cannot be guaranteed to be monotonically increasing"}
 	MemberIDRequired                   = &Error{"MEMBER_ID_REQUIRED", 79, false, "The group member needs to have a valid member id before actually entering a consumer group"}
 	PreferredLeaderNotAvailable        = &Error{"PREFERRED_LEADER_NOT_AVAILABLE", 80, true, "The preferred leader was not available"}
-	GroupMaxSizeReached                = &Error{"GROUP_MAX_SIZE_REACHED", 81, false, "Consumer group The consumer group has reached its max size. already has the configured maximum number of members."}
+	GroupMaxSizeReached                = &Error{"GROUP_MAX_SIZE_REACHED", 81, false, "The consumer group has reached its max size"}
 )
 
 var code2err = map[int16]error{
