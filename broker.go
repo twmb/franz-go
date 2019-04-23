@@ -181,6 +181,16 @@ func (b *broker) wait(
 	promise(resp, err)
 }
 
+// waitResp is like wait, but just returns the response and error.
+func (b *broker) waitResp(req kmsg.Request) (kmsg.Response, error) {
+	var resp kmsg.Response
+	var err error
+	b.wait(req, func(kresp kmsg.Response, kerr error) {
+		resp, err = kresp, kerr
+	})
+	return resp, err
+}
+
 // handleReqs manages the intake of message requests for a broker.
 //
 // This creates connections as appropriate, serializes the request, and sends
