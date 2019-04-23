@@ -144,6 +144,8 @@ func NewClient(seedBrokers []string, opts ...Opt) (*Client, error) {
 			tps:        make(map[string]*topicPartitions),
 			waitBuffer: make(chan struct{}, 100),
 		},
+
+		coordinators: make(map[coordinatorKey]int32),
 	}
 	c.rng.Seed(uint64(time.Now().UnixNano()))
 
