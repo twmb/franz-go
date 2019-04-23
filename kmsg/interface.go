@@ -37,9 +37,18 @@ type Request interface {
 
 // AdminRequest represents a request that must be issued to Kafka controllers.
 type AdminRequest interface {
-	// IsAdminRequest returns true if the request should be issued to a
-	// Kafka controller.
-	IsAdminRequest() bool
+	// IsAdminRequest is a method attached to requests that must be
+	// issed to Kafka controllers.
+	IsAdminRequest()
+	Request
+}
+
+// GroupCoordinatorRequest represents a request that must be issued to a
+// group coordinator.
+type GroupCoordinatorRequest interface {
+	// IsGroupCoordinatorRequest is a method attached to requests that
+	// must be issued to group coordinators.
+	IsGroupCoordinatorRequest()
 	Request
 }
 
