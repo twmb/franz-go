@@ -26,12 +26,17 @@ var (
 	// not support the client minimum supported version of the request).
 	ErrBrokerTooOld = errors.New("broker is too old; this client does not support the broker")
 
+	// ErrClientToOld is returned when issuing request that are unknown or
+	// use an unknown version.
+	ErrClientTooOld = errors.New("client is too old; this client does not know what to do with this")
+
 	errNoResp = errors.New("message was not replied to in a response")
 
 	errNoPartitionIDs         = &clientErr{err: errors.New("topic currently has no known partition IDs"), retriable: true}
 	errUnknownPartition       = &clientErr{err: errors.New("unknown partition"), retriable: true}
 	errUnknownBrokerForLeader = &clientErr{err: errors.New("no broker is known for partition leader id"), retriable: true}
 	errUnknownController      = &clientErr{err: errors.New("controller is unknown"), retriable: true}
+	errUnknownCoordinator     = &clientErr{err: errors.New("coordinator is unknown"), retriable: true}
 
 	// ErrUnknownBroker is returned when issuing a request o a broker that
 	// the client does not know about.
