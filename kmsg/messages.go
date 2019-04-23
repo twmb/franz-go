@@ -6,7 +6,7 @@ import "github.com/twmb/kgo/kbin"
 
 // MaxKey is the maximum key used for any messages in this package.
 // Note that this value will change as Kafka adds more messages.
-const MaxKey = 43
+const MaxKey = 44
 
 // Header is user provided metadata for a record. Kafka does not look at
 // headers at all; they are solely for producers and consumers.
@@ -497,6 +497,7 @@ type FetchRequestTopicPartition struct {
 	// leader) or is using an unknown leader.
 	//
 	// The initial leader epoch can be gleaned from a MetadataResponse.
+	// To skip log truncation checking, use -1.
 	CurrentLeaderEpoch int32 // v9+
 
 	// FetchOffset is the offset to begin the fetch from. Kafka will
@@ -971,6 +972,7 @@ type ListOffsetsRequestTopicPartition struct {
 	// leader) or is using an unknown leader.
 	//
 	// The initial leader epoch can be gleaned from a MetadataResponse.
+	// To skip log truncation checking, use -1.
 	CurrentLeaderEpoch int32 // v4+
 
 	// Timestamp controls which offset to return in a response for this
@@ -1021,7 +1023,7 @@ func (*ListOffsetsRequest) MaxVersion() int16          { return 4 }
 func (*ListOffsetsRequest) MinVersion() int16          { return 1 }
 func (v *ListOffsetsRequest) SetVersion(version int16) { v.Version = version }
 func (v *ListOffsetsRequest) GetVersion() int16        { return v.Version }
-func (v *ListOffsetsRequest) IsAdminRequest() bool     { return true }
+func (v *ListOffsetsRequest) IsAdminRequest()          {}
 func (v *ListOffsetsRequest) ResponseKind() Response   { return &ListOffsetsResponse{Version: v.Version} }
 
 func (v *ListOffsetsRequest) AppendTo(dst []byte) []byte {
@@ -1229,12 +1231,12 @@ type MetadataRequest struct {
 
 	// IncludeClusterAuthorizedOperations, introduced in Kakfa 2.3.0, specifies
 	// whether to return a bitfield of AclOperations that this client can perform
-	// on the cluster.
+	// on the cluster. See KIP-430 for more details.
 	IncludeClusterAuthorizedOperations bool // v8+
 
 	// IncludeTopicAuthorizedOperations, introduced in Kakfa 2.3.0, specifies
 	// whether to return a bitfield of AclOperations that this client can perform
-	// on individual topics.
+	// on individual topics. See KIP-430 for more details.
 	IncludeTopicAuthorizedOperations bool // v8+
 }
 
@@ -1345,8 +1347,8 @@ type MetadataResponseTopicMetadata struct {
 	PartitionMetadata []MetadataResponseTopicMetadataPartitionMetadata
 
 	// AuthorizedOperations, proposed in KIP-430 and introduced in Kafka 2.3.0,
-	// returns a bitfield (corresponding to AclOperation) containing which
-	// operations the client is allowed to perform on this topic.
+	// is a bitfield (corresponding to AclOperation) containing which operations
+	// the client is allowed to perform on this topic.
 	// This is only returned if requested.
 	AuthorizedOperations int32 // v8+
 }
@@ -1376,8 +1378,8 @@ type MetadataResponse struct {
 	// MetadataRequest.
 	TopicMetadata []MetadataResponseTopicMetadata
 
-	// AuthorizedOperations returns a bitfield containing which operations the
-	// client is allowed to perform on this cluster.
+	// AuthorizedOperations is a bitfield containing which operations the client
+	// is allowed to perform on this cluster.
 	AuthorizedOperations int32 // v8+
 }
 
@@ -1605,7 +1607,7 @@ func (*LeaderAndISRRequest) MaxVersion() int16          { return 2 }
 func (*LeaderAndISRRequest) MinVersion() int16          { return 0 }
 func (v *LeaderAndISRRequest) SetVersion(version int16) { v.Version = version }
 func (v *LeaderAndISRRequest) GetVersion() int16        { return v.Version }
-func (v *LeaderAndISRRequest) IsAdminRequest() bool     { return true }
+func (v *LeaderAndISRRequest) IsAdminRequest()          {}
 func (v *LeaderAndISRRequest) ResponseKind() Response {
 	return &LeaderAndISRResponse{Version: v.Version}
 }
@@ -1848,7 +1850,7 @@ func (*StopReplicaRequest) MaxVersion() int16          { return 1 }
 func (*StopReplicaRequest) MinVersion() int16          { return 0 }
 func (v *StopReplicaRequest) SetVersion(version int16) { v.Version = version }
 func (v *StopReplicaRequest) GetVersion() int16        { return v.Version }
-func (v *StopReplicaRequest) IsAdminRequest() bool     { return true }
+func (v *StopReplicaRequest) IsAdminRequest()          {}
 func (v *StopReplicaRequest) ResponseKind() Response   { return &StopReplicaResponse{Version: v.Version} }
 
 func (v *StopReplicaRequest) AppendTo(dst []byte) []byte {
@@ -2047,7 +2049,7 @@ func (*UpdateMetadataRequest) MaxVersion() int16          { return 5 }
 func (*UpdateMetadataRequest) MinVersion() int16          { return 0 }
 func (v *UpdateMetadataRequest) SetVersion(version int16) { v.Version = version }
 func (v *UpdateMetadataRequest) GetVersion() int16        { return v.Version }
-func (v *UpdateMetadataRequest) IsAdminRequest() bool     { return true }
+func (v *UpdateMetadataRequest) IsAdminRequest()          {}
 func (v *UpdateMetadataRequest) ResponseKind() Response {
 	return &UpdateMetadataResponse{Version: v.Version}
 }
@@ -2277,7 +2279,7 @@ func (*ControlledShutdownRequest) MaxVersion() int16          { return 2 }
 func (*ControlledShutdownRequest) MinVersion() int16          { return 0 }
 func (v *ControlledShutdownRequest) SetVersion(version int16) { v.Version = version }
 func (v *ControlledShutdownRequest) GetVersion() int16        { return v.Version }
-func (v *ControlledShutdownRequest) IsAdminRequest() bool     { return true }
+func (v *ControlledShutdownRequest) IsAdminRequest()          {}
 func (v *ControlledShutdownRequest) ResponseKind() Response {
 	return &ControlledShutdownResponse{Version: v.Version}
 }
@@ -2348,55 +2350,75 @@ func (v *ControlledShutdownResponse) ReadFrom(src []byte) error {
 }
 
 type OffsetCommitRequestTopicPartition struct {
+	// Partition if a partition to commit offsets for.
 	Partition int32
 
+	// Offset is an offset to commit.
 	Offset int64
 
-	// expiration is Timestamp + offset.retention.minutes.
-	// if non-zero.
-	// if zero, current time + offset.retention.minutes.
-	// KIP-211
+	// Timestamp is the first iteration of tracking how long offset commits
+	// should persist in Kafka. This field only existed for v1.
+	// The expiration would be timestamp + offset.retention.minutes, or, if
+	// timestamp was zero, current time + offset.retention.minutes.
 	Timestamp int64 // v1+
 
 	// LeaderEpoch, proposed in KIP-320 and introduced in Kafka 2.1.0,
-	// allows brokers to check if the client is fenced (has an out of date
-	// leader) or is using an unknown leader.
+	// is the leader epoch of the record this request is committing.
 	//
 	// The initial leader epoch can be gleaned from a MetadataResponse.
+	// To skip log truncation checking, use -1.
 	LeaderEpoch int32 // v6+
 
+	// Metadata is optional data to include with committing the offset. This
+	// can contain information such as which node is doing the committing, etc.
 	Metadata *string
 }
 type OffsetCommitRequestTopic struct {
+	// Topic is a topic to commit offsets for.
 	Topic string
 
+	// Partitions contains partitions in a topic for which to commit offsets.
 	Partitions []OffsetCommitRequestTopicPartition
 }
+
+// OffsetCommitRequest commits offsets for consumed topics / partitions in
+// a group.
 type OffsetCommitRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
+	// GroupID is the group this request is committing offsets to.
 	GroupID string
 
+	// GenerationID being -1 and group being empty means the group is being used
+	// to store offsets only. No generation validation, no rebalancing.
 	GenerationID int32 // v1+
 
+	// MemberID is the ID of the client issuing this request in the group.
 	MemberID string // v1+
 
-	// replaces offset.retention.minutes and timestamp field below
-	// removed, why? problem:
-	// - rarely committing consumer's offset expired
-	// - restart or rebalance, now does not know last committed offset
-	// - now they have to restart from end or beginnig, leading to dups or loss.
+	// RetentionTime is how long this commit will persist in Kafka.
+	//
+	// This was introduced in v2, replacing an individual topic/partition's
+	// Timestamp from v1, and was removed in v5 with Kafka 2.1.0.
+	//
+	// This was removed because rarely committing consumers could have their
+	// offsets expired before committing, even though the consumer was still
+	// active. After restarting or rebalancing, the consumer would now not know
+	// the last committed offset and would have to start at the beginning or end,
+	// leading to duplicates or log loss. Read KIP-211 for more details.
 	RetentionTime int64 // v2+
 
+	// Topics is contains topics and partitions for which to commit offsets.
 	Topics []OffsetCommitRequestTopic
 }
 
-func (*OffsetCommitRequest) Key() int16                 { return 8 }
-func (*OffsetCommitRequest) MaxVersion() int16          { return 6 }
-func (*OffsetCommitRequest) MinVersion() int16          { return 0 }
-func (v *OffsetCommitRequest) SetVersion(version int16) { v.Version = version }
-func (v *OffsetCommitRequest) GetVersion() int16        { return v.Version }
+func (*OffsetCommitRequest) Key() int16                   { return 8 }
+func (*OffsetCommitRequest) MaxVersion() int16            { return 6 }
+func (*OffsetCommitRequest) MinVersion() int16            { return 0 }
+func (v *OffsetCommitRequest) SetVersion(version int16)   { v.Version = version }
+func (v *OffsetCommitRequest) GetVersion() int16          { return v.Version }
+func (v *OffsetCommitRequest) IsGroupCoordinatorRequest() {}
 func (v *OffsetCommitRequest) ResponseKind() Response {
 	return &OffsetCommitResponse{Version: v.Version}
 }
@@ -2462,21 +2484,65 @@ func (v *OffsetCommitRequest) AppendTo(dst []byte) []byte {
 }
 
 type OffsetCommitResponseResponsePartitionResponse struct {
+	// Partition is the partition in a topic this array slot corresponds to.
 	Partition int32
 
+	// ErrorCode is the error for this partition response.
+	//
+	// GROUP_AUTHORIZATION_FAILED is returned if the client is not authorized
+	// for the group.
+	//
+	// TOPIC_AUTHORIZATION_FAILED is returned if the client is not authorized
+	// for the topic / partition.
+	//
+	// UNKNOWN_TOPIC_OR_PARTITION is returned if the topic / partition does
+	// not exist.
+	//
+	// OFFSET_METADATA_TOO_LARGE is returned if the request metadata is
+	// larger than the brokers offset.metadata.max.bytes.
+	//
+	// INVALID_GROUP_ID is returned in the requested group ID is invalid.
+	//
+	// COORDINATOR_NOT_AVAILABLE is returned if the coordinator is not available
+	// (due to the requested broker shutting down or it has not completed startup).
+	//
+	// COORDINATOR_LOAD_IN_PROGRESS is returned if the group is loading.
+	//
+	// NOT_COORDINATOR is returned if the requested broker is not the coordinator
+	// for the requested group.
+	//
+	// ILLEGAL_GENERATION is returned if the request's generation ID is invalid.
+	//
+	// UNKNOWN_MEMBER_ID is returned if the group is dead or the group does not
+	// know of the request's member ID.
+	//
+	// REBALANCE_IN_PROGRESS is returned if the group is currently rebalancing.
+	//
+	// INVALID_COMMIT_OFFSET_SIZE is returned if the offset commit results in
+	// a record batch that is too large (likely due to large metadata).
 	ErrorCode int16
 }
 type OffsetCommitResponseResponse struct {
+	// Topic is the topic this offset commit response corresponds to.
 	Topic string
 
+	// PartitionResponses contains responses for each requested partition in
+	// a topic.
 	PartitionResponses []OffsetCommitResponseResponsePartitionResponse
 }
+
+// OffsetCommitResponse is returned from an OffsetCommitRequest.
 type OffsetCommitResponse struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
+	// ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+	// after this request.
+	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
+	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
 	ThrottleTimeMs int32 // v3+
 
+	// Responses contains responses for each topic / partition in the commit request.
 	Responses []OffsetCommitResponseResponse
 }
 
@@ -2533,28 +2599,38 @@ func (v *OffsetCommitResponse) ReadFrom(src []byte) error {
 }
 
 type OffsetFetchRequestTopicPartition struct {
+	// Partition is a partition to fetch offsets for in a topic.
 	Partition int32
 }
 type OffsetFetchRequestTopic struct {
+	// Topic is a topic to fetch offsets for.
 	Topic string
 
+	// Partitions in a list of partitions in a group to fetch offsets for.
 	Partitions []OffsetFetchRequestTopicPartition
 }
+
+// OffsetFetchRequest requests the most recent committed offsets for topic
+// partitions in a group.
 type OffsetFetchRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
+	// GroupID is the group to fetch offsets for.
 	GroupID string
 
+	// Topics contains topics to fetch offets for. Version 2+ allows this to be
+	// null to return all topics the client is authorized to describe in the group.
 	Topics []OffsetFetchRequestTopic
 }
 
-func (*OffsetFetchRequest) Key() int16                 { return 9 }
-func (*OffsetFetchRequest) MaxVersion() int16          { return 5 }
-func (*OffsetFetchRequest) MinVersion() int16          { return 0 }
-func (v *OffsetFetchRequest) SetVersion(version int16) { v.Version = version }
-func (v *OffsetFetchRequest) GetVersion() int16        { return v.Version }
-func (v *OffsetFetchRequest) ResponseKind() Response   { return &OffsetFetchResponse{Version: v.Version} }
+func (*OffsetFetchRequest) Key() int16                   { return 9 }
+func (*OffsetFetchRequest) MaxVersion() int16            { return 5 }
+func (*OffsetFetchRequest) MinVersion() int16            { return 0 }
+func (v *OffsetFetchRequest) SetVersion(version int16)   { v.Version = version }
+func (v *OffsetFetchRequest) GetVersion() int16          { return v.Version }
+func (v *OffsetFetchRequest) IsGroupCoordinatorRequest() {}
+func (v *OffsetFetchRequest) ResponseKind() Response     { return &OffsetFetchResponse{Version: v.Version} }
 
 func (v *OffsetFetchRequest) AppendTo(dst []byte) []byte {
 	version := v.Version
@@ -2565,7 +2641,7 @@ func (v *OffsetFetchRequest) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Topics
-		dst = kbin.AppendArrayLen(dst, len(v))
+		dst = kbin.AppendNullableArrayLen(dst, len(v), v == nil)
 		for i := range v {
 			v := &v[i]
 			{
@@ -2588,33 +2664,68 @@ func (v *OffsetFetchRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 
-type OffsetFetchResponseResponseTopicPartitionResponse struct {
+type OffsetFetchResponseResponsePartitionResponse struct {
+	// Partition is the partition in a topic this array slot corresponds to.
 	Partition int32
 
+	// Offset is the most recently committed offset for this topic partition
+	// in a group.
 	Offset int64
 
+	// LeaderEpoch is the leader epoch of the last consumed record.
+	//
+	// This was proposed in KIP-320 and introduced in Kafka 2.1.0 and allows
+	// clients to detect log truncation. See the KIP for more details.
 	LeaderEpoch int32 // v5+
 
+	// Metadata is client provided metadata corresponding to the offset commit.
+	// This can be useful for adding who made the commit, etc.
 	Metadata *string
 
+	// ErrorCode is the error for this partition response.
+	//
+	// GROUP_AUTHORIZATION_FAILED is returned if the client is not authorized
+	// to the group.
+	//
+	// INVALID_GROUP_ID is returned in the requested group ID is invalid.
+	//
+	// COORDINATOR_NOT_AVAILABLE is returned if the coordinator is not available
+	// (due to the requested broker shutting down or it has not completed startup).
+	//
+	// COORDINATOR_LOAD_IN_PROGRESS is returned if the group is loading.
+	//
+	// NOT_COORDINATOR is returned if the requested broker is not the coordinator
+	// for the requested group.
+	//
+	// UNKNOWN_TOPIC_OR_PARTITION is returned if the requested topic or partition
+	// is unknown.
 	ErrorCode int16
 }
-type OffsetFetchResponseResponseTopic struct {
+type OffsetFetchResponseResponse struct {
+	// Topic is the topic this offset fetch response corresponds to.
 	Topic string
 
-	PartitionResponses []OffsetFetchResponseResponseTopicPartitionResponse
+	// PartitionResponses contains responses for each requested partition in
+	// a topic.
+	PartitionResponses []OffsetFetchResponseResponsePartitionResponse
 }
-type OffsetFetchResponseResponse struct {
-	Topic []OffsetFetchResponseResponseTopic
-}
+
+// OffsetFetchResponse is returned from an OffsetFetchRequest.
 type OffsetFetchResponse struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
-	ThrottleTimeMs int32
+	// ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+	// after this request.
+	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
+	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
+	ThrottleTimeMs int32 // v3+
 
+	// Responses contains responses for each requested topic/partition.
 	Responses []OffsetFetchResponseResponse
 
+	// ErrorCode is a top level error code that applies to all topic/partitions.
+	// This will be any group error.
 	ErrorCode int16 // v2+
 }
 
@@ -2624,7 +2735,7 @@ func (v *OffsetFetchResponse) ReadFrom(src []byte) error {
 	b := kbin.Reader{Src: src}
 	{
 		s := v
-		{
+		if version >= 3 {
 			v := b.Int32()
 			s.ThrottleTimeMs = v
 		}
@@ -2637,54 +2748,41 @@ func (v *OffsetFetchResponse) ReadFrom(src []byte) error {
 				{
 					s := v
 					{
-						v := s.Topic
+						v := b.String()
+						s.Topic = v
+					}
+					{
+						v := s.PartitionResponses
 						a := v
 						for i := b.ArrayLen(); i > 0; i-- {
-							a = append(a, OffsetFetchResponseResponseTopic{})
+							a = append(a, OffsetFetchResponseResponsePartitionResponse{})
 							v := &a[len(a)-1]
 							{
 								s := v
 								{
-									v := b.String()
-									s.Topic = v
+									v := b.Int32()
+									s.Partition = v
 								}
 								{
-									v := s.PartitionResponses
-									a := v
-									for i := b.ArrayLen(); i > 0; i-- {
-										a = append(a, OffsetFetchResponseResponseTopicPartitionResponse{})
-										v := &a[len(a)-1]
-										{
-											s := v
-											{
-												v := b.Int32()
-												s.Partition = v
-											}
-											{
-												v := b.Int64()
-												s.Offset = v
-											}
-											if version >= 5 {
-												v := b.Int32()
-												s.LeaderEpoch = v
-											}
-											{
-												v := b.NullableString()
-												s.Metadata = v
-											}
-											{
-												v := b.Int16()
-												s.ErrorCode = v
-											}
-										}
-									}
-									v = a
-									s.PartitionResponses = v
+									v := b.Int64()
+									s.Offset = v
+								}
+								if version >= 5 {
+									v := b.Int32()
+									s.LeaderEpoch = v
+								}
+								{
+									v := b.NullableString()
+									s.Metadata = v
+								}
+								{
+									v := b.Int16()
+									s.ErrorCode = v
 								}
 							}
 						}
 						v = a
-						s.Topic = v
+						s.PartitionResponses = v
 					}
 				}
 			}
@@ -2700,6 +2798,10 @@ func (v *OffsetFetchResponse) ReadFrom(src []byte) error {
 }
 
 // FindCoordinatorRequest requests the coordinator for a group or transaction.
+//
+// This coordinator is different from the broker leader coordinator. This
+// coordinator is the partition leader for the partition that is storing
+// the group or transaction ID.
 type FindCoordinatorRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
@@ -2824,34 +2926,242 @@ func (v *FindCoordinatorResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+// GroupMemberMetadata is the metadata that is usually sent with a join group
+// request.
+type GroupMemberMetadata struct {
+	// Version is currently version 0.
+	Version int16
+
+	// Topics is the list of topics in the group.
+	Topics []string
+
+	// UserData is arbitrary client data for a given client in the group.
+	UserData []byte
+}
+
+func (v *GroupMemberMetadata) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	{
+		v := v.Version
+		dst = kbin.AppendInt16(dst, v)
+	}
+	{
+		v := v.Topics
+		dst = kbin.AppendArrayLen(dst, len(v))
+		for i := range v {
+			v := v[i]
+			dst = kbin.AppendString(dst, v)
+		}
+	}
+	{
+		v := v.UserData
+		dst = kbin.AppendBytes(dst, v)
+	}
+	return dst
+}
+func (v *GroupMemberMetadata) ReadFrom(src []byte) error {
+	version := v.Version
+	_ = version
+	b := kbin.Reader{Src: src}
+	{
+		s := v
+		{
+			v := b.Int16()
+			s.Version = v
+		}
+		{
+			v := s.Topics
+			a := v
+			for i := b.ArrayLen(); i > 0; i-- {
+				v := b.String()
+				a = append(a, v)
+			}
+			v = a
+			s.Topics = v
+		}
+		{
+			v := b.Bytes()
+			s.UserData = v
+		}
+	}
+	return b.Complete()
+}
+
+type GroupMemberAssignmentTopic struct {
+	// Topic is a topic in the assignment.
+	Topic string
+
+	// Partitions contains partitions in the assignment.
+	Partitions []int32
+}
+
+// GroupMemberAssignment is the assignment data that is usually sent with a
+// sync group request.
+type GroupMemberAssignment struct {
+	// Verson is currently version 0.
+	Version int16
+
+	// Topics contains topics in the assignment.
+	Topics []GroupMemberAssignmentTopic
+
+	// UserData is arbitrary client data for a given client in the group. This
+	// was added for the sticky assignment with KIP-341.
+	UserData []byte
+}
+
+func (v *GroupMemberAssignment) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	{
+		v := v.Version
+		dst = kbin.AppendInt16(dst, v)
+	}
+	{
+		v := v.Topics
+		dst = kbin.AppendArrayLen(dst, len(v))
+		for i := range v {
+			v := &v[i]
+			{
+				v := v.Topic
+				dst = kbin.AppendString(dst, v)
+			}
+			{
+				v := v.Partitions
+				dst = kbin.AppendArrayLen(dst, len(v))
+				for i := range v {
+					v := v[i]
+					dst = kbin.AppendInt32(dst, v)
+				}
+			}
+		}
+	}
+	{
+		v := v.UserData
+		dst = kbin.AppendBytes(dst, v)
+	}
+	return dst
+}
+func (v *GroupMemberAssignment) ReadFrom(src []byte) error {
+	version := v.Version
+	_ = version
+	b := kbin.Reader{Src: src}
+	{
+		s := v
+		{
+			v := b.Int16()
+			s.Version = v
+		}
+		{
+			v := s.Topics
+			a := v
+			for i := b.ArrayLen(); i > 0; i-- {
+				a = append(a, GroupMemberAssignmentTopic{})
+				v := &a[len(a)-1]
+				{
+					s := v
+					{
+						v := b.String()
+						s.Topic = v
+					}
+					{
+						v := s.Partitions
+						a := v
+						for i := b.ArrayLen(); i > 0; i-- {
+							v := b.Int32()
+							a = append(a, v)
+						}
+						v = a
+						s.Partitions = v
+					}
+				}
+			}
+			v = a
+			s.Topics = v
+		}
+		{
+			v := b.Bytes()
+			s.UserData = v
+		}
+	}
+	return b.Complete()
+}
+
 type JoinGroupRequestGroupProtocol struct {
+	// ProtocolName is a name of a protocol. This is arbitrary, but is used
+	// in the official client to agree on a partition balancing strategy.
+	//
+	// The official client uses range, roundrobin, or sticky (which was
+	// introduced in KIP-54).
 	ProtocolName string
 
+	// ProtocolMetadata is arbitrary information to pass along with this
+	// protocol name for this member.
+	//
+	// Note that while this is not documented in any protocol page,
+	// this is usually a serialized GroupMemberMetadata as described in
+	// https://cwiki.apache.org/confluence/display/KAFKA/Kafka+Client-side+Assignment+Proposal.
+	//
+	// The protocol metadata is where group members will communicate which
+	// topics they collectively as a group want to consume.
 	ProtocolMetadata []byte
 }
+
+// JoinGroupRequest issues a request to join a Kafka group. This will create a
+// group if one does not exist. If joining an existing group, this may trigger
+// a group rebalance.
+//
+// This will trigger a group rebalance if the request is from the group leader,
+// or if the request is from a group member with different metadata, or if the
+// request is with a new group member.
+//
+// Version 4 introduced replying to joins of existing groups with
+// MEMBER_ID_REQUIRED, which requires re-issuing the join group with the
+// returned member ID. See KIP-394 for more details.
 type JoinGroupRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
+	// GroupID is the group to join.
 	GroupID string
 
+	// SessionTimeoutMs is how long a member in the group can go between
+	// heartbeats. If a member does not send a heartbeat within this timeout,
+	// the broker will remove the member from the group and initiate a rebalance.
 	SessionTimeout int32
 
+	// RebalanceTimeout is how long the broker waits for members to join a group
+	// once a rebalance begins. Members that do not rejoin within this timeout
+	// will be removed from the group. Members must commit offsets within this
+	// timeout.
 	RebalanceTimeout int32 // v1+
 
+	// MemberID is the member ID to join the group with. When joining a group for
+	// the first time, use the empty string. The response will contain the member
+	// ID that should be used going forward.
 	MemberID string
 
+	// ProtocolType is the "type" of protocol being used for the join group.
+	// The initial group creation sets the type; all additional members must
+	// have the same type or they will be rejected.
+	//
+	// This is completely arbitrary, but the Java client and everything else
+	// uses "consumer" as the protocol type.
 	ProtocolType string
 
+	// GroupProtocols contains arbitrary information that group members use
+	// for rebalancing. All group members must agree on at least one protocol
+	// name.
 	GroupProtocols []JoinGroupRequestGroupProtocol
 }
 
-func (*JoinGroupRequest) Key() int16                 { return 11 }
-func (*JoinGroupRequest) MaxVersion() int16          { return 4 }
-func (*JoinGroupRequest) MinVersion() int16          { return 0 }
-func (v *JoinGroupRequest) SetVersion(version int16) { v.Version = version }
-func (v *JoinGroupRequest) GetVersion() int16        { return v.Version }
-func (v *JoinGroupRequest) ResponseKind() Response   { return &JoinGroupResponse{Version: v.Version} }
+func (*JoinGroupRequest) Key() int16                   { return 11 }
+func (*JoinGroupRequest) MaxVersion() int16            { return 4 }
+func (*JoinGroupRequest) MinVersion() int16            { return 0 }
+func (v *JoinGroupRequest) SetVersion(version int16)   { v.Version = version }
+func (v *JoinGroupRequest) GetVersion() int16          { return v.Version }
+func (v *JoinGroupRequest) IsGroupCoordinatorRequest() {}
+func (v *JoinGroupRequest) ResponseKind() Response     { return &JoinGroupResponse{Version: v.Version} }
 
 func (v *JoinGroupRequest) AppendTo(dst []byte) []byte {
 	version := v.Version
@@ -2895,26 +3205,78 @@ func (v *JoinGroupRequest) AppendTo(dst []byte) []byte {
 }
 
 type JoinGroupResponseMember struct {
+	// MemberID is a member in this group.
 	MemberID string
 
+	// MemberMetadata is the metadata for this member.
 	MemberMetadata []byte
 }
+
+// JoinGroupResponse is returned from a JoinGroupRequest.
 type JoinGroupResponse struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
+	// ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+	// after this request.
+	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
+	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
 	ThrottleTimeMs int32 // v2+
 
+	// ErrorCode is the error for the join group request.
+	//
+	// GROUP_AUTHORIZATION_FAILED is returned if the client is not authorized
+	// to the group (no read perms).
+	//
+	// INVALID_GROUP_ID is returned in the requested group ID is invalid.
+	//
+	// COORDINATOR_NOT_AVAILABLE is returned if the coordinator is not available
+	// (due to the requested broker shutting down or it has not completed startup).
+	//
+	// COORDINATOR_LOAD_IN_PROGRESS is returned if the group is loading.
+	//
+	// NOT_COORDINATOR is returned if the requested broker is not the coordinator
+	// for the requested group.
+	//
+	// INVALID_SESSION_TIMEOUT is returned if the requested RebalanceTimeout is
+	// not within the broker's group.{min,max}.session.timeout.ms.
+	//
+	// INCONSISTENT_GROUP_PROTOCOL is returned if the requested protocols are
+	// incompatible with the existing group member's protocols, or if the join
+	// was for a new group but contained no protocols.
+	//
+	// UNKNOWN_MEMBER_ID is returned is the requested group is dead (likely
+	// just migrated to another coordinator or the group is temporarily unstable),
+	// or if the request was for a new group but contained a non-empty member ID,
+	// or if the group does not have the requested member ID (and the client must
+	// do the new-join-group dance).
+	//
+	// MEMBER_ID_REQUIRED is returned on the initial join of an existing group.
+	// This error was proposed in KIP-394 and introduced in Kafka 2.2.0 to
+	// prevent flaky clients from continually triggering rebalances and prevent
+	// these clients from consuming RAM with metadata. If a client sees
+	// this error, it should re-issue the join with the MemberID in the response.
+	// Non-flaky clients will join with this new member ID, but flaky clients
+	// will not join quickly enough before the pending member ID is rotated out
+	// due to hitting the session.timeout.ms.
+	//
+	// GROUP_MAX_SIZE_REACHED is returned as of Kafka 2.2.0 if the group has
+	// reached a broker's group.max.size.
 	ErrorCode int16
 
+	// GenerationID is the current "generation" of this group.
 	GenerationID int32
 
+	// GroupProtocol is the agreed upon protocol.
 	GroupProtocol string
 
+	// LeaderID is the leader member.
 	LeaderID string
 
+	// MemberID is the member of the receiving clientj.
 	MemberID string
 
+	// Members contains all other members of this group.
 	Members []JoinGroupResponseMember
 }
 
@@ -2973,23 +3335,29 @@ func (v *JoinGroupResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+// HeartbeatRequest issues a heartbeat for a member in a group, ensuring that
+// Kafka does not expire the member from the group.
 type HeartbeatRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
+	// GroupID is the group ID this heartbeat is for.
 	GroupID string
 
+	// GenerationID is the group generation this heartbeat is for.
 	GenerationID int32
 
+	// MemberID is the member ID this member is for.
 	MemberID string
 }
 
-func (*HeartbeatRequest) Key() int16                 { return 12 }
-func (*HeartbeatRequest) MaxVersion() int16          { return 2 }
-func (*HeartbeatRequest) MinVersion() int16          { return 0 }
-func (v *HeartbeatRequest) SetVersion(version int16) { v.Version = version }
-func (v *HeartbeatRequest) GetVersion() int16        { return v.Version }
-func (v *HeartbeatRequest) ResponseKind() Response   { return &HeartbeatResponse{Version: v.Version} }
+func (*HeartbeatRequest) Key() int16                   { return 12 }
+func (*HeartbeatRequest) MaxVersion() int16            { return 2 }
+func (*HeartbeatRequest) MinVersion() int16            { return 0 }
+func (v *HeartbeatRequest) SetVersion(version int16)   { v.Version = version }
+func (v *HeartbeatRequest) GetVersion() int16          { return v.Version }
+func (v *HeartbeatRequest) IsGroupCoordinatorRequest() {}
+func (v *HeartbeatRequest) ResponseKind() Response     { return &HeartbeatResponse{Version: v.Version} }
 
 func (v *HeartbeatRequest) AppendTo(dst []byte) []byte {
 	version := v.Version
@@ -3009,12 +3377,36 @@ func (v *HeartbeatRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 
+// HeartbeatResponse is returned from a HeartbeatRequest.
 type HeartbeatResponse struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
+	// ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+	// after this request.
+	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
+	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
 	ThrottleTimeMs int32 // v1+
 
+	// ErrorCode is the error for the heartbeat request.
+	//
+	// GROUP_AUTHORIZATION_FAILED is returned if the client is not authorized
+	// to the group (no read perms).
+	//
+	// INVALID_GROUP_ID is returned in the requested group ID is invalid.
+	//
+	// COORDINATOR_NOT_AVAILABLE is returned if the coordinator is not available
+	// (due to the requested broker shutting down or it has not completed startup).
+	//
+	// NOT_COORDINATOR is returned if the requested broker is not the coordinator
+	// for the requested group.
+	//
+	// UNKNOWN_MEMBER_ID is returned if the member ID is not a part of the group,
+	// or if the group is empty or dead.
+	//
+	// ILLEGAL_GENERATION is returned if the request's generation ID is invalid.
+	//
+	// REBALANCE_IN_PROGRESS is returned if the group is currently rebalancing.
 	ErrorCode int16
 }
 
@@ -3036,21 +3428,26 @@ func (v *HeartbeatResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+// LeaveGroupRequest issues a request for a group member to leave the group,
+// triggering a group rebalance.
 type LeaveGroupRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
+	// GroupID is the group to leave.
 	GroupID string
 
+	// MemberID is the member that is leaving.
 	MemberID string
 }
 
-func (*LeaveGroupRequest) Key() int16                 { return 13 }
-func (*LeaveGroupRequest) MaxVersion() int16          { return 2 }
-func (*LeaveGroupRequest) MinVersion() int16          { return 0 }
-func (v *LeaveGroupRequest) SetVersion(version int16) { v.Version = version }
-func (v *LeaveGroupRequest) GetVersion() int16        { return v.Version }
-func (v *LeaveGroupRequest) ResponseKind() Response   { return &LeaveGroupResponse{Version: v.Version} }
+func (*LeaveGroupRequest) Key() int16                   { return 13 }
+func (*LeaveGroupRequest) MaxVersion() int16            { return 2 }
+func (*LeaveGroupRequest) MinVersion() int16            { return 0 }
+func (v *LeaveGroupRequest) SetVersion(version int16)   { v.Version = version }
+func (v *LeaveGroupRequest) GetVersion() int16          { return v.Version }
+func (v *LeaveGroupRequest) IsGroupCoordinatorRequest() {}
+func (v *LeaveGroupRequest) ResponseKind() Response     { return &LeaveGroupResponse{Version: v.Version} }
 
 func (v *LeaveGroupRequest) AppendTo(dst []byte) []byte {
 	version := v.Version
@@ -3066,12 +3463,34 @@ func (v *LeaveGroupRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 
+// LeaveGroupResponse is returned from a LeaveGroupRequest.
 type LeaveGroupResponse struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
+	// ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+	// after this request.
+	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
+	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
 	ThrottleTimeMs int32 // v1+
 
+	// ErrorCode is the error for the leave group request.
+	//
+	// GROUP_AUTHORIZATION_FAILED is returned if the client is not authorized
+	// to the group (no read perms).
+	//
+	// INVALID_GROUP_ID is returned in the requested group ID is invalid.
+	//
+	// COORDINATOR_NOT_AVAILABLE is returned if the coordinator is not available
+	// (due to the requested broker shutting down or it has not completed startup).
+	//
+	// COORDINATOR_LOAD_IN_PROGRESS is returned if the group is loading.
+	//
+	// NOT_COORDINATOR is returned if the requested broker is not the coordinator
+	// for the requested group.
+	//
+	// UNKNOWN_MEMBER_ID is returned if the member ID is not a part of the group,
+	// or if the group is empty or dead.
 	ErrorCode int16
 }
 
@@ -3111,12 +3530,13 @@ type SyncGroupRequest struct {
 	GroupAssignment []SyncGroupRequestGroupAssignment
 }
 
-func (*SyncGroupRequest) Key() int16                 { return 14 }
-func (*SyncGroupRequest) MaxVersion() int16          { return 2 }
-func (*SyncGroupRequest) MinVersion() int16          { return 0 }
-func (v *SyncGroupRequest) SetVersion(version int16) { v.Version = version }
-func (v *SyncGroupRequest) GetVersion() int16        { return v.Version }
-func (v *SyncGroupRequest) ResponseKind() Response   { return &SyncGroupResponse{Version: v.Version} }
+func (*SyncGroupRequest) Key() int16                   { return 14 }
+func (*SyncGroupRequest) MaxVersion() int16            { return 2 }
+func (*SyncGroupRequest) MinVersion() int16            { return 0 }
+func (v *SyncGroupRequest) SetVersion(version int16)   { v.Version = version }
+func (v *SyncGroupRequest) GetVersion() int16          { return v.Version }
+func (v *SyncGroupRequest) IsGroupCoordinatorRequest() {}
+func (v *SyncGroupRequest) ResponseKind() Response     { return &SyncGroupResponse{Version: v.Version} }
 
 func (v *SyncGroupRequest) AppendTo(dst []byte) []byte {
 	version := v.Version
@@ -3155,6 +3575,10 @@ type SyncGroupResponse struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
+	// ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+	// after this request.
+	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
+	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
 	ThrottleTimeMs int32 // v1+
 
 	ErrorCode int16
@@ -3192,14 +3616,19 @@ type DescribeGroupsRequest struct {
 	// GroupIDs is an array of group IDs to request metadata for.
 	// If this is empty, the response will include all groups.
 	GroupIDs []string
+
+	// IncludeAuthorizedOperations, introduced in Kafka 2.3.0, specifies
+	// whether to include a bitfield of AclOperations this client can perform
+	// on the groups. See KIP-430 for more details.
+	IncludeAuthorizedOperations bool
 }
 
-func (*DescribeGroupsRequest) Key() int16                 { return 15 }
-func (*DescribeGroupsRequest) MaxVersion() int16          { return 2 }
-func (*DescribeGroupsRequest) MinVersion() int16          { return 0 }
-func (v *DescribeGroupsRequest) SetVersion(version int16) { v.Version = version }
-func (v *DescribeGroupsRequest) GetVersion() int16        { return v.Version }
-func (v *DescribeGroupsRequest) IsAdminRequest() bool     { return true }
+func (*DescribeGroupsRequest) Key() int16                   { return 15 }
+func (*DescribeGroupsRequest) MaxVersion() int16            { return 3 }
+func (*DescribeGroupsRequest) MinVersion() int16            { return 0 }
+func (v *DescribeGroupsRequest) SetVersion(version int16)   { v.Version = version }
+func (v *DescribeGroupsRequest) GetVersion() int16          { return v.Version }
+func (v *DescribeGroupsRequest) IsGroupCoordinatorRequest() {}
 func (v *DescribeGroupsRequest) ResponseKind() Response {
 	return &DescribeGroupsResponse{Version: v.Version}
 }
@@ -3215,18 +3644,31 @@ func (v *DescribeGroupsRequest) AppendTo(dst []byte) []byte {
 			dst = kbin.AppendString(dst, v)
 		}
 	}
+	{
+		v := v.IncludeAuthorizedOperations
+		dst = kbin.AppendBool(dst, v)
+	}
 	return dst
 }
 
 type DescribeGroupsResponseGroupMember struct {
+	// MemberID is the member ID of a member in this group.
 	MemberID string
 
+	// ClientID is the client ID used by this member.
 	ClientID string
 
+	// ClientHost is the host this client is running on.
 	ClientHost string
 
+	// MemberMetadata is the metadata this member included when joining
+	// the group. If using normal (Java-like) consumers, this will be of
+	// type GroupMemberMetadata.
 	MemberMetadata []byte
 
+	// MemberAssignment is the assignment for this member in the group.
+	// If using normal (Java-like) consumers, this will be of type
+	// GroupMemberAssignment.
 	MemberAssignment []byte
 }
 type DescribeGroupsResponseGroup struct {
@@ -3249,13 +3691,22 @@ type DescribeGroupsResponseGroup struct {
 	// GroupID is the id of this group.
 	GroupID string
 
+	// State is the state this group is in.
 	State string
 
+	// ProtocolType is the "type" of protocol being used for this group.
 	ProtocolType string
 
+	// Protocol is the agreed upon protocol for all members in this group.
 	Protocol string
 
+	// Members contains members in this group.
 	Members []DescribeGroupsResponseGroupMember
+
+	// AuthorizedOperations is a bitfield containing which operations the
+	// the client is allowed to perform on this group.
+	// This is only returned if requested.
+	AuthorizedOperations int32 // v3+
 }
 
 // DescribeGroupsResponse is returned from a DescribeGroupsRequest.
@@ -3344,6 +3795,10 @@ func (v *DescribeGroupsResponse) ReadFrom(src []byte) error {
 						v = a
 						s.Members = v
 					}
+					if version >= 3 {
+						v := b.Int32()
+						s.AuthorizedOperations = v
+					}
 				}
 			}
 			v = a
@@ -3353,6 +3808,7 @@ func (v *DescribeGroupsResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+// ListGroupsRequest issues a request to list all groups.
 type ListGroupsRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
@@ -3372,18 +3828,32 @@ func (v *ListGroupsRequest) AppendTo(dst []byte) []byte {
 }
 
 type ListGroupsResponseGroup struct {
+	// GroupID is a Kafka group.
 	GroupID string
 
+	// ProtocolType is the protocol type in use by the group.
 	ProtocolType string
 }
+
+// ListGroupsResponse is returned from a ListGroupsRequest.
 type ListGroupsResponse struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
+	// ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+	// after this request.
+	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
+	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
 	ThrottleTimeMs int32 // v1+
 
+	// ErrorCode is the error returned for the list groups request.
+	//
+	// COORDINATOR_NOT_AVAILABLE is returned if the coordinator is not yet active.
+	//
+	// COORDINATOR_LOAD_IN_PROGRESS is returned if the group manager is loading.
 	ErrorCode int16
 
+	// Groups is the list of groups Kafka knows of.
 	Groups []ListGroupsResponseGroup
 }
 
@@ -3640,7 +4110,7 @@ func (*CreateTopicsRequest) MaxVersion() int16          { return 3 }
 func (*CreateTopicsRequest) MinVersion() int16          { return 0 }
 func (v *CreateTopicsRequest) SetVersion(version int16) { v.Version = version }
 func (v *CreateTopicsRequest) GetVersion() int16        { return v.Version }
-func (v *CreateTopicsRequest) IsAdminRequest() bool     { return true }
+func (v *CreateTopicsRequest) IsAdminRequest()          {}
 func (v *CreateTopicsRequest) ResponseKind() Response {
 	return &CreateTopicsResponse{Version: v.Version}
 }
@@ -3825,7 +4295,7 @@ func (*DeleteTopicsRequest) MaxVersion() int16          { return 3 }
 func (*DeleteTopicsRequest) MinVersion() int16          { return 0 }
 func (v *DeleteTopicsRequest) SetVersion(version int16) { v.Version = version }
 func (v *DeleteTopicsRequest) GetVersion() int16        { return v.Version }
-func (v *DeleteTopicsRequest) IsAdminRequest() bool     { return true }
+func (v *DeleteTopicsRequest) IsAdminRequest()          {}
 func (v *DeleteTopicsRequest) ResponseKind() Response {
 	return &DeleteTopicsResponse{Version: v.Version}
 }
@@ -3970,7 +4440,7 @@ func (*DeleteRecordsRequest) MaxVersion() int16          { return 1 }
 func (*DeleteRecordsRequest) MinVersion() int16          { return 0 }
 func (v *DeleteRecordsRequest) SetVersion(version int16) { v.Version = version }
 func (v *DeleteRecordsRequest) GetVersion() int16        { return v.Version }
-func (v *DeleteRecordsRequest) IsAdminRequest() bool     { return true }
+func (v *DeleteRecordsRequest) IsAdminRequest()          {}
 func (v *DeleteRecordsRequest) ResponseKind() Response {
 	return &DeleteRecordsResponse{Version: v.Version}
 }
@@ -4811,6 +5281,7 @@ type TxnOffsetCommitRequestTopicPartition struct {
 	// leader) or is using an unknown leader.
 	//
 	// The initial leader epoch can be gleaned from a MetadataResponse.
+	// To skip log truncation checking, use -1.
 	LeaderEpoch int32 // v2+
 
 	Metadata *string
@@ -4997,7 +5468,7 @@ func (*DescribeACLsRequest) MaxVersion() int16          { return 1 }
 func (*DescribeACLsRequest) MinVersion() int16          { return 0 }
 func (v *DescribeACLsRequest) SetVersion(version int16) { v.Version = version }
 func (v *DescribeACLsRequest) GetVersion() int16        { return v.Version }
-func (v *DescribeACLsRequest) IsAdminRequest() bool     { return true }
+func (v *DescribeACLsRequest) IsAdminRequest()          {}
 func (v *DescribeACLsRequest) ResponseKind() Response {
 	return &DescribeACLsResponse{Version: v.Version}
 }
@@ -5215,7 +5686,7 @@ func (*CreateACLsRequest) MaxVersion() int16          { return 1 }
 func (*CreateACLsRequest) MinVersion() int16          { return 0 }
 func (v *CreateACLsRequest) SetVersion(version int16) { v.Version = version }
 func (v *CreateACLsRequest) GetVersion() int16        { return v.Version }
-func (v *CreateACLsRequest) IsAdminRequest() bool     { return true }
+func (v *CreateACLsRequest) IsAdminRequest()          {}
 func (v *CreateACLsRequest) ResponseKind() Response   { return &CreateACLsResponse{Version: v.Version} }
 
 func (v *CreateACLsRequest) AppendTo(dst []byte) []byte {
@@ -5335,7 +5806,7 @@ func (*DeleteACLsRequest) MaxVersion() int16          { return 1 }
 func (*DeleteACLsRequest) MinVersion() int16          { return 0 }
 func (v *DeleteACLsRequest) SetVersion(version int16) { v.Version = version }
 func (v *DeleteACLsRequest) GetVersion() int16        { return v.Version }
-func (v *DeleteACLsRequest) IsAdminRequest() bool     { return true }
+func (v *DeleteACLsRequest) IsAdminRequest()          {}
 func (v *DeleteACLsRequest) ResponseKind() Response   { return &DeleteACLsResponse{Version: v.Version} }
 
 func (v *DeleteACLsRequest) AppendTo(dst []byte) []byte {
@@ -5537,7 +6008,7 @@ func (*DescribeConfigsRequest) MaxVersion() int16          { return 2 }
 func (*DescribeConfigsRequest) MinVersion() int16          { return 0 }
 func (v *DescribeConfigsRequest) SetVersion(version int16) { v.Version = version }
 func (v *DescribeConfigsRequest) GetVersion() int16        { return v.Version }
-func (v *DescribeConfigsRequest) IsAdminRequest() bool     { return true }
+func (v *DescribeConfigsRequest) IsAdminRequest()          {}
 func (v *DescribeConfigsRequest) ResponseKind() Response {
 	return &DescribeConfigsResponse{Version: v.Version}
 }
@@ -5804,6 +6275,17 @@ type AlterConfigsRequestResource struct {
 
 // AlterConfigsRequest issues a request to alter either topic or broker
 // configs.
+//
+// Note that to alter configs, you must specify the whole config on every
+// request. All existing non-static values will be removed. This means that
+// to add one key/value to a config, you must describe the config and then
+// issue an alter request with the current config with the new key value.
+// This also means that dynamic sensitive values, which are not returned
+// in describe configs, will be lost.
+//
+// To fix this problem, the AlterConfigs request / response was deprecated
+// in Kafka 2.3.0 in favor of the new IncrementalAlterConfigs request / response.
+// See KIP-339 for more details.
 type AlterConfigsRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
@@ -5820,7 +6302,7 @@ func (*AlterConfigsRequest) MaxVersion() int16          { return 1 }
 func (*AlterConfigsRequest) MinVersion() int16          { return 0 }
 func (v *AlterConfigsRequest) SetVersion(version int16) { v.Version = version }
 func (v *AlterConfigsRequest) GetVersion() int16        { return v.Version }
-func (v *AlterConfigsRequest) IsAdminRequest() bool     { return true }
+func (v *AlterConfigsRequest) IsAdminRequest()          {}
 func (v *AlterConfigsRequest) ResponseKind() Response {
 	return &AlterConfigsResponse{Version: v.Version}
 }
@@ -5880,7 +6362,7 @@ type AlterConfigsResponseResource struct {
 	// the requested topic.
 	//
 	// INVALID_REQUEST is returned if the requested config is invalid or if
-	// asking Kafka to describe an invalid resource.
+	// asking Kafka to alter an invalid resource.
 	ErrorCode int16
 
 	// ErrorMessage is an informative message if the alter config failed.
@@ -5984,7 +6466,7 @@ func (*AlterReplicaLogDirsRequest) MaxVersion() int16          { return 1 }
 func (*AlterReplicaLogDirsRequest) MinVersion() int16          { return 0 }
 func (v *AlterReplicaLogDirsRequest) SetVersion(version int16) { v.Version = version }
 func (v *AlterReplicaLogDirsRequest) GetVersion() int16        { return v.Version }
-func (v *AlterReplicaLogDirsRequest) IsAdminRequest() bool     { return true }
+func (v *AlterReplicaLogDirsRequest) IsAdminRequest()          {}
 func (v *AlterReplicaLogDirsRequest) ResponseKind() Response {
 	return &AlterReplicaLogDirsResponse{Version: v.Version}
 }
@@ -6143,7 +6625,7 @@ func (*DescribeLogDirsRequest) MaxVersion() int16          { return 1 }
 func (*DescribeLogDirsRequest) MinVersion() int16          { return 0 }
 func (v *DescribeLogDirsRequest) SetVersion(version int16) { v.Version = version }
 func (v *DescribeLogDirsRequest) GetVersion() int16        { return v.Version }
-func (v *DescribeLogDirsRequest) IsAdminRequest() bool     { return true }
+func (v *DescribeLogDirsRequest) IsAdminRequest()          {}
 func (v *DescribeLogDirsRequest) ResponseKind() Response {
 	return &DescribeLogDirsResponse{Version: v.Version}
 }
@@ -6429,7 +6911,7 @@ func (*CreatePartitionsRequest) MaxVersion() int16          { return 1 }
 func (*CreatePartitionsRequest) MinVersion() int16          { return 0 }
 func (v *CreatePartitionsRequest) SetVersion(version int16) { v.Version = version }
 func (v *CreatePartitionsRequest) GetVersion() int16        { return v.Version }
-func (v *CreatePartitionsRequest) IsAdminRequest() bool     { return true }
+func (v *CreatePartitionsRequest) IsAdminRequest()          {}
 func (v *CreatePartitionsRequest) ResponseKind() Response {
 	return &CreatePartitionsResponse{Version: v.Version}
 }
@@ -6585,7 +7067,7 @@ func (*CreateDelegationTokenRequest) MaxVersion() int16          { return 1 }
 func (*CreateDelegationTokenRequest) MinVersion() int16          { return 0 }
 func (v *CreateDelegationTokenRequest) SetVersion(version int16) { v.Version = version }
 func (v *CreateDelegationTokenRequest) GetVersion() int16        { return v.Version }
-func (v *CreateDelegationTokenRequest) IsAdminRequest() bool     { return true }
+func (v *CreateDelegationTokenRequest) IsAdminRequest()          {}
 func (v *CreateDelegationTokenRequest) ResponseKind() Response {
 	return &CreateDelegationTokenResponse{Version: v.Version}
 }
@@ -6707,7 +7189,7 @@ func (*RenewDelegationTokenRequest) MaxVersion() int16          { return 1 }
 func (*RenewDelegationTokenRequest) MinVersion() int16          { return 0 }
 func (v *RenewDelegationTokenRequest) SetVersion(version int16) { v.Version = version }
 func (v *RenewDelegationTokenRequest) GetVersion() int16        { return v.Version }
-func (v *RenewDelegationTokenRequest) IsAdminRequest() bool     { return true }
+func (v *RenewDelegationTokenRequest) IsAdminRequest()          {}
 func (v *RenewDelegationTokenRequest) ResponseKind() Response {
 	return &RenewDelegationTokenResponse{Version: v.Version}
 }
@@ -6773,7 +7255,7 @@ func (*ExpireDelegationTokenRequest) MaxVersion() int16          { return 1 }
 func (*ExpireDelegationTokenRequest) MinVersion() int16          { return 0 }
 func (v *ExpireDelegationTokenRequest) SetVersion(version int16) { v.Version = version }
 func (v *ExpireDelegationTokenRequest) GetVersion() int16        { return v.Version }
-func (v *ExpireDelegationTokenRequest) IsAdminRequest() bool     { return true }
+func (v *ExpireDelegationTokenRequest) IsAdminRequest()          {}
 func (v *ExpireDelegationTokenRequest) ResponseKind() Response {
 	return &ExpireDelegationTokenResponse{Version: v.Version}
 }
@@ -6842,7 +7324,7 @@ func (*DescribeDelegationTokenRequest) MaxVersion() int16          { return 1 }
 func (*DescribeDelegationTokenRequest) MinVersion() int16          { return 0 }
 func (v *DescribeDelegationTokenRequest) SetVersion(version int16) { v.Version = version }
 func (v *DescribeDelegationTokenRequest) GetVersion() int16        { return v.Version }
-func (v *DescribeDelegationTokenRequest) IsAdminRequest() bool     { return true }
+func (v *DescribeDelegationTokenRequest) IsAdminRequest()          {}
 func (v *DescribeDelegationTokenRequest) ResponseKind() Response {
 	return &DescribeDelegationTokenResponnse{Version: v.Version}
 }
@@ -6993,7 +7475,7 @@ func (v *DescribeDelegationTokenResponnse) ReadFrom(src []byte) error {
 // DeleteGroupsRequest deletes consumer groups. This request was added for
 // Kafka 1.1.0 corresponding to the removal of RetentionTime from
 // OffsetCommitRequest. See KIP-229 for more details.
-type DeleteGroupsRequests struct {
+type DeleteGroupsRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
@@ -7001,17 +7483,17 @@ type DeleteGroupsRequests struct {
 	Groups []string
 }
 
-func (*DeleteGroupsRequests) Key() int16                 { return 42 }
-func (*DeleteGroupsRequests) MaxVersion() int16          { return 1 }
-func (*DeleteGroupsRequests) MinVersion() int16          { return 0 }
-func (v *DeleteGroupsRequests) SetVersion(version int16) { v.Version = version }
-func (v *DeleteGroupsRequests) GetVersion() int16        { return v.Version }
-func (v *DeleteGroupsRequests) IsAdminRequest() bool     { return true }
-func (v *DeleteGroupsRequests) ResponseKind() Response {
+func (*DeleteGroupsRequest) Key() int16                   { return 42 }
+func (*DeleteGroupsRequest) MaxVersion() int16            { return 1 }
+func (*DeleteGroupsRequest) MinVersion() int16            { return 0 }
+func (v *DeleteGroupsRequest) SetVersion(version int16)   { v.Version = version }
+func (v *DeleteGroupsRequest) GetVersion() int16          { return v.Version }
+func (v *DeleteGroupsRequest) IsGroupCoordinatorRequest() {}
+func (v *DeleteGroupsRequest) ResponseKind() Response {
 	return &DeleteGroupsResponse{Version: v.Version}
 }
 
-func (v *DeleteGroupsRequests) AppendTo(dst []byte) []byte {
+func (v *DeleteGroupsRequest) AppendTo(dst []byte) []byte {
 	version := v.Version
 	_ = version
 	{
@@ -7128,7 +7610,7 @@ func (*ElectPreferredLeadersRequest) MaxVersion() int16          { return 0 }
 func (*ElectPreferredLeadersRequest) MinVersion() int16          { return 0 }
 func (v *ElectPreferredLeadersRequest) SetVersion(version int16) { v.Version = version }
 func (v *ElectPreferredLeadersRequest) GetVersion() int16        { return v.Version }
-func (v *ElectPreferredLeadersRequest) IsAdminRequest() bool     { return true }
+func (v *ElectPreferredLeadersRequest) IsAdminRequest()          {}
 func (v *ElectPreferredLeadersRequest) ResponseKind() Response {
 	return &ElectPreferredLeadersResponse{Version: v.Version}
 }
@@ -7264,6 +7746,202 @@ func (v *ElectPreferredLeadersResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+type IncrementalAlterConfigsRequestResourceConfigEntry struct {
+	// ConfigName is a key to modify (e.g. segment.bytes).
+	ConfigName string
+
+	// Op is the type of operation to perform for this config name.
+	//
+	// SET (0) is to set a configuration value; the value must not be null.
+	//
+	// DELETE (1) is to delete a configuration key.
+	//
+	// APPEND (2) is to add a value to the list of values for a key (if the
+	// key is for a list of values).
+	//
+	// SUBTRACT (3) is to remove a value from a list of values (if the key
+	// is for a list of values).
+	Op int8
+
+	// ConfigValue is a value to set for the key (e.g. 10).
+	ConfigValue *string
+}
+type IncrementalAlterConfigsRequestResource struct {
+	// ResourceType is an enum corresponding to the type of config to alter.
+	// The only two valid values are 2 (for topic) and 4 (for broker).
+	ResourceType int8
+
+	// ResourceName is the name of config to alter.
+	//
+	// If the requested type is a topic, this corresponds to a topic name.
+	//
+	// If the requested type if a broker, this should either be empty or be
+	// the ID of the broker this request is issued to. If it is empty, this
+	// updates all broker configs. If a specific ID, this updates just the
+	// broker. Using a specific ID also ensures that brokers reload config
+	// or secret files even if the file path has not changed. Lastly, password
+	// config options can only be defined on a per broker basis.
+	ResourceName string
+
+	// ConfigEntries contains key/value config pairs to set on the resource.
+	ConfigEntries []IncrementalAlterConfigsRequestResourceConfigEntry
+}
+
+// IncrementalAlterConfigsRequest issues ar equest to alter either topic or
+// broker configs.
+//
+// This API was added in Kafka 2.3.0 to replace AlterConfigs. The key benefit
+// of this API is that consumers do not need to know the full config state
+// to add or remove new config options. See KIP-339 for more details.
+type IncrementalAlterConfigsRequest struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	// Resources is an array of configs to alter.
+	Resources []IncrementalAlterConfigsRequestResource
+
+	// ValidateOnly validates the request but does not apply it.
+	ValidateOnly bool
+}
+
+func (*IncrementalAlterConfigsRequest) Key() int16                 { return 44 }
+func (*IncrementalAlterConfigsRequest) MaxVersion() int16          { return 0 }
+func (*IncrementalAlterConfigsRequest) MinVersion() int16          { return 0 }
+func (v *IncrementalAlterConfigsRequest) SetVersion(version int16) { v.Version = version }
+func (v *IncrementalAlterConfigsRequest) GetVersion() int16        { return v.Version }
+func (v *IncrementalAlterConfigsRequest) IsAdminRequest()          {}
+func (v *IncrementalAlterConfigsRequest) ResponseKind() Response {
+	return &IncrementalAlterConfigsResponse{Version: v.Version}
+}
+
+func (v *IncrementalAlterConfigsRequest) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	{
+		v := v.Resources
+		dst = kbin.AppendArrayLen(dst, len(v))
+		for i := range v {
+			v := &v[i]
+			{
+				v := v.ResourceType
+				dst = kbin.AppendInt8(dst, v)
+			}
+			{
+				v := v.ResourceName
+				dst = kbin.AppendString(dst, v)
+			}
+			{
+				v := v.ConfigEntries
+				dst = kbin.AppendArrayLen(dst, len(v))
+				for i := range v {
+					v := &v[i]
+					{
+						v := v.ConfigName
+						dst = kbin.AppendString(dst, v)
+					}
+					{
+						v := v.Op
+						dst = kbin.AppendInt8(dst, v)
+					}
+					{
+						v := v.ConfigValue
+						dst = kbin.AppendNullableString(dst, v)
+					}
+				}
+			}
+		}
+	}
+	{
+		v := v.ValidateOnly
+		dst = kbin.AppendBool(dst, v)
+	}
+	return dst
+}
+
+type IncrementalAlterConfigsResponseResponse struct {
+	// ErrorCode is the error code returned for incrementally altering configs.
+	//
+	// CLUSTER_AUTHORIZATION_FAILED is returned if asking to alter broker
+	// configs but the client is not authorized to do so.
+	//
+	// TOPIC_AUTHORIZATION_FAILED is returned if asking to alter topic
+	// configs but the client is not authorized to do so.
+	//
+	// INVALID_TOPIC_EXCEPTION is returned if the requested topic was invalid.
+	//
+	// UNKNOWN_TOPIC_OR_PARTITION is returned if the broker does not know of
+	// the requested topic.
+	//
+	// INVALID_REQUEST is returned if the requested config is invalid or if
+	// asking Kafka to alter an invalid resource.
+	ErrorCode int16
+
+	// ErrorMessage is an informative message if the incremental alter config failed.
+	ErrorMessage *string
+
+	// ResourceType is the enum corresponding to the type of altered config.
+	ResourceType int8
+
+	// ResourceName is the name corresponding to the incremental alter config
+	// request.
+	ResourceName string
+}
+
+// IncrementalAlterConfigsResponse is returned from an IncrementalAlterConfigsRequest.
+type IncrementalAlterConfigsResponse struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	// ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+	// after responding to this request.
+	ThrottleTimeMs int32
+
+	Responses []IncrementalAlterConfigsResponseResponse
+}
+
+func (v *IncrementalAlterConfigsResponse) ReadFrom(src []byte) error {
+	version := v.Version
+	_ = version
+	b := kbin.Reader{Src: src}
+	{
+		s := v
+		{
+			v := b.Int32()
+			s.ThrottleTimeMs = v
+		}
+		{
+			v := s.Responses
+			a := v
+			for i := b.ArrayLen(); i > 0; i-- {
+				a = append(a, IncrementalAlterConfigsResponseResponse{})
+				v := &a[len(a)-1]
+				{
+					s := v
+					{
+						v := b.Int16()
+						s.ErrorCode = v
+					}
+					{
+						v := b.NullableString()
+						s.ErrorMessage = v
+					}
+					{
+						v := b.Int8()
+						s.ResourceType = v
+					}
+					{
+						v := b.String()
+						s.ResourceName = v
+					}
+				}
+			}
+			v = a
+			s.Responses = v
+		}
+	}
+	return b.Complete()
+}
+
 // RequestForKey returns the request corresponding to the given request key
 // or nil if the key is unknown.
 func RequestForKey(key int16) Request {
@@ -7355,8 +8033,10 @@ func RequestForKey(key int16) Request {
 	case 41:
 		return new(DescribeDelegationTokenRequest)
 	case 42:
-		return new(DeleteGroupsRequests)
+		return new(DeleteGroupsRequest)
 	case 43:
 		return new(ElectPreferredLeadersRequest)
+	case 44:
+		return new(IncrementalAlterConfigsRequest)
 	}
 }
