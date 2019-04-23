@@ -270,7 +270,8 @@ func Parse(raw []byte) {
 		orig := line
 		topLevel := true
 
-		name := strings.TrimSuffix(line, " => not top level")
+		name := strings.TrimSuffix(line, ", with encoding")
+		name = strings.TrimSuffix(name, " => not top level")
 		save := func() {
 			s.Name = name
 			s.TopLevel = topLevel
@@ -284,6 +285,9 @@ func Parse(raw []byte) {
 		// top level, save and continue.
 		if orig != name {
 			topLevel = false
+			if strings.HasSuffix(orig, ", with encoding") {
+				s.WithEncoding = true
+			}
 			save()
 			continue
 		}
@@ -308,12 +312,17 @@ func Parse(raw []byte) {
 			continue
 		}
 
-		// key, max, min (optional), admin (optional])
+		// key, max, min [optional], (admin|group coordinator) [optional]
 		const adminStr = ", admin"
+		const groupCoordinatorStr = ", group coordinator"
 		if idx := strings.Index(rem, adminStr); idx > 0 {
 			s.Admin = true
 			rem = rem[:idx]
+		} else if idx := strings.Index(rem, groupCoordinatorStr); idx > 0 {
+			s.GroupCoordinator = true
+			rem = rem[:idx]
 		}
+
 		const minStr = ", min version "
 		if idx := strings.Index(rem, minStr); idx > 0 {
 			min, err := strconv.Atoi(rem[idx+len(minStr):])

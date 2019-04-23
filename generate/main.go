@@ -73,15 +73,17 @@ type (
 	}
 
 	Struct struct {
-		TopLevel bool
-		Comment  string
-		Name     string
+		TopLevel     bool
+		WithEncoding bool // add a encode/decode even if not top level (only if not top level)
+		Comment      string
+		Name         string
 
-		Admin        bool   // only relevant if TopLevel
-		Key          int    // only relevant if TopLevel
-		MinVersion   int    // only relevant if TopLevel
-		MaxVersion   int    // only relevant if TopLevel
-		ResponseKind string // only relevant if TopLevel
+		Admin            bool   // only relevant if TopLevel
+		GroupCoordinator bool   // only relevant if TopLevel
+		Key              int    // only relevant if TopLevel
+		MinVersion       int    // only relevant if TopLevel
+		MaxVersion       int    // only relevant if TopLevel
+		ResponseKind     string // only relevant if TopLevel
 
 		Fields []StructField
 	}
@@ -123,6 +125,8 @@ func main() {
 				s.WriteGetVersionFunc(l)
 				if s.Admin {
 					s.WriteAdminFunc(l)
+				} else if s.GroupCoordinator {
+					s.WriteGroupCoordinatorFunc(l)
 				}
 				s.WriteResponseKindFunc(l)
 				l.Write("") // newline before append func
@@ -130,6 +134,9 @@ func main() {
 			} else {
 				s.WriteDecodeFunc(l)
 			}
+		} else if s.WithEncoding {
+			s.WriteAppendFunc(l)
+			s.WriteDecodeFunc(l)
 		}
 	}
 
