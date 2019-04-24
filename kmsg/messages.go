@@ -2516,7 +2516,7 @@ type OffsetCommitResponseResponsePartitionResponse struct {
 	// UNKNOWN_MEMBER_ID is returned if the group is dead or the group does not
 	// know of the request's member ID.
 	//
-	// REBALANCE_IN_PROGRESS is returned if the group is currently rebalancing.
+	// REBALANCE_IN_PROGRESS is returned if the group is finishing a rebalance.
 	//
 	// INVALID_COMMIT_OFFSET_SIZE is returned if the offset commit results in
 	// a record batch that is too large (likely due to large metadata).
@@ -3131,9 +3131,16 @@ type JoinGroupRequest struct {
 	SessionTimeout int32
 
 	// RebalanceTimeout is how long the broker waits for members to join a group
-	// once a rebalance begins. Members that do not rejoin within this timeout
-	// will be removed from the group. Members must commit offsets within this
-	// timeout.
+	// once a rebalance begins. Kafka waits for the longest rebalance of all
+	// members in the group. Member sessions are still alive; heartbeats will be
+	// replied to with REBALANCE_IN_PROGRESS. Those members must transition to
+	// joining within this rebalance timeout. Members that do not rejoin within
+	// this timeout will be removed from the group. Members must commit offsets
+	// within this timeout.
+	//
+	// The first join for a new group has a 3 second grace period for other
+	// members to join; this grace period is extended until the RebalanceTimeout
+	// is up or until 3 seconds lapse with no new members.
 	RebalanceTimeout int32 // v1+
 
 	// MemberID is the member ID to join the group with. When joining a group for
@@ -3238,7 +3245,7 @@ type JoinGroupResponse struct {
 	// NOT_COORDINATOR is returned if the requested broker is not the coordinator
 	// for the requested group.
 	//
-	// INVALID_SESSION_TIMEOUT is returned if the requested RebalanceTimeout is
+	// INVALID_SESSION_TIMEOUT is returned if the requested SessionTimeout is
 	// not within the broker's group.{min,max}.session.timeout.ms.
 	//
 	// INCONSISTENT_GROUP_PROTOCOL is returned if the requested protocols are
@@ -3276,7 +3283,9 @@ type JoinGroupResponse struct {
 	// MemberID is the member of the receiving clientj.
 	MemberID string
 
-	// Members contains all other members of this group.
+	// Members contains all other members of this group. Only the group leader
+	// receives the members. The leader is responsible for balancing subscribed
+	// topic partitions and replying appropriately in a SyncGroup request.
 	Members []JoinGroupResponseMember
 }
 
@@ -3513,20 +3522,34 @@ func (v *LeaveGroupResponse) ReadFrom(src []byte) error {
 }
 
 type SyncGroupRequestGroupAssignment struct {
+	// MemberID is the member this assignment is for.
 	MemberID string
 
+	// MemberAssignment is the assignment for this member. This is typically
+	// of type GroupMemberAssignment.
 	MemberAssignment []byte
 }
+
+// SyncGroupRequest is issued by all group members after they receive a a
+// response for JoinGroup. The group leader is responsible for sending member
+// assignments with the request; all other members do not.
+//
+// Once the leader sends the group assignment, all members will be replied to.
 type SyncGroupRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
+	// GroupID is the group ID this sync group is for.
 	GroupID string
 
+	// GenerationID is the group generation this sync is for.
 	GenerationID int32
 
+	// MemberID is the member ID this member is.
 	MemberID string
 
+	// GroupAssignment, sent only from the group leader, is the topic partition
+	// assignment it has decided on for all members.
 	GroupAssignment []SyncGroupRequestGroupAssignment
 }
 
@@ -3571,6 +3594,7 @@ func (v *SyncGroupRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 
+// SyncGroupResponse is returned from a SyncGroupRequest.
 type SyncGroupResponse struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
@@ -3581,8 +3605,31 @@ type SyncGroupResponse struct {
 	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
 	ThrottleTimeMs int32 // v1+
 
+	// ErrorCode is the error for the sync group request.
+	//
+	// GROUP_AUTHORIZATION_FAILED is returned if the client is not authorized
+	// to the group (no read perms).
+	//
+	// INVALID_GROUP_ID is returned in the requested group ID is invalid.
+	//
+	// COORDINATOR_NOT_AVAILABLE is returned if the coordinator is not available.
+	//
+	// NOT_COORDINATOR is returned if the requested broker is not the coordinator
+	// for the requested group.
+	//
+	// UNKNOWN_MEMBER_ID is returned if the member ID is not a part of the group,
+	// or if the group is empty or dead.
+	//
+	// ILLEGAL_GENERATION is returned if the request's generation ID is invalid.
+	//
+	// REBALANCE_IN_PROGRESS is returned if the group switched back to rebalancing.
+	//
+	// UNKNOWN_SERVER_ERROR is returned if the store of the group assignment
+	// resulted in a too large message.
 	ErrorCode int16
 
+	// MemberAssignment is the assignment for this member that the leader
+	// determined.
 	MemberAssignment []byte
 }
 
