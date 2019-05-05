@@ -70,7 +70,6 @@ var (
 	ErrPartitionDeleted = errors.New("TODO")
 )
 
-// TODO ErrBrokerDead is retriable, but topics need to be remapped.
 func isRetriableBrokerErr(err error) bool {
 	switch err {
 	case ErrBrokerDead,
