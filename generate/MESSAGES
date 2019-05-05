@@ -601,7 +601,7 @@ MetadataResponse => from MetadataRequest
       // Leader is the broker leader for this partition. This will be -1
       // on leader / listener error.
       Leader: int32
-      // LeaderEpoch, proposed in KIP-320 and introduced in Kafka 2.1.0  is the
+      // LeaderEpoch, proposed in KIP-320 and introduced in Kafka 2.1.0 is the
       // epoch of the broker leader.
       LeaderEpoch: int32 // v7+
       // Replicas returns all broker IDs containing replicas of this partition.
@@ -1558,7 +1558,7 @@ DeleteRecordsResponse => from DeleteRecordsRequest
       // offline log directory.
       ErrorCode: int16
 
-InitProducerIDRequest => key 22, max version 2
+InitProducerIDRequest => key 22, max version 2, txn coordinator
   TransactionalID: nullable-string
   TransactionTimeoutMs: int32
 
@@ -1607,7 +1607,7 @@ OffsetForLeaderEpochResponse => from OffsetForLeaderEpochRequest
       LeaderEpoch: int32
       EndOffset: int64
 
-AddPartitionsToTxnRequest => key 24, max version 1
+AddPartitionsToTxnRequest => key 24, max version 1, txn coordinator
   TransactionalID: string
   ProducerID: int64
   ProducerEpoch: int16
@@ -1623,7 +1623,7 @@ AddPartitionsToTxnResponse => from AddPartitionsToTxnRequest
       Partition: int32
       ErrorCode: int16
 
-AddOffsetsToTxnRequest => key 25, max version 1
+AddOffsetsToTxnRequest => key 25, max version 1, txn coordinator
   TransactionalID: string
   ProducerID: int64
   ProducerEpoch: int16
@@ -1633,7 +1633,7 @@ AddOffsetsToTxnResponse => from AddOffsetsToTxnRequest
   ThrottleTimeMs: int32
   ErrorCode: int16
 
-EndTxnRequest => key 26, max version 1
+EndTxnRequest => key 26, max version 1, txn coordinator
   TransactionalID: string
   ProducerID: int64
   ProducerEpoch: int16
@@ -1662,7 +1662,7 @@ WriteTxnMarkersResponse => from WriteTxnMarkersRequest
         Partition: int32
         ErrorCode: int16
 
-TxnOffsetCommitRequest => key 28, max version 2
+TxnOffsetCommitRequest => key 28, max version 2, txn coordinator
   TransactionalID: string
   GroupID: string
   ProducerID: int64
