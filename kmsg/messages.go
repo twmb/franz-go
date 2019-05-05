@@ -1307,7 +1307,7 @@ type MetadataResponseTopicMetadataPartitionMetadata struct {
 	// on leader / listener error.
 	Leader int32
 
-	// LeaderEpoch, proposed in KIP-320 and introduced in Kafka 2.1.0  is the
+	// LeaderEpoch, proposed in KIP-320 and introduced in Kafka 2.1.0 is the
 	// epoch of the broker leader.
 	LeaderEpoch int32 // v7+
 
@@ -4651,6 +4651,7 @@ func (*InitProducerIDRequest) MaxVersion() int16          { return 2 }
 func (*InitProducerIDRequest) MinVersion() int16          { return 0 }
 func (v *InitProducerIDRequest) SetVersion(version int16) { v.Version = version }
 func (v *InitProducerIDRequest) GetVersion() int16        { return v.Version }
+func (v *InitProducerIDRequest) IsTxnCoordinatorRequest() {}
 func (v *InitProducerIDRequest) ResponseKind() Response {
 	return &InitProducerIDResponse{Version: v.Version}
 }
@@ -4899,6 +4900,7 @@ func (*AddPartitionsToTxnRequest) MaxVersion() int16          { return 1 }
 func (*AddPartitionsToTxnRequest) MinVersion() int16          { return 0 }
 func (v *AddPartitionsToTxnRequest) SetVersion(version int16) { v.Version = version }
 func (v *AddPartitionsToTxnRequest) GetVersion() int16        { return v.Version }
+func (v *AddPartitionsToTxnRequest) IsTxnCoordinatorRequest() {}
 func (v *AddPartitionsToTxnRequest) ResponseKind() Response {
 	return &AddPartitionsToTxnResponse{Version: v.Version}
 }
@@ -5029,6 +5031,7 @@ func (*AddOffsetsToTxnRequest) MaxVersion() int16          { return 1 }
 func (*AddOffsetsToTxnRequest) MinVersion() int16          { return 0 }
 func (v *AddOffsetsToTxnRequest) SetVersion(version int16) { v.Version = version }
 func (v *AddOffsetsToTxnRequest) GetVersion() int16        { return v.Version }
+func (v *AddOffsetsToTxnRequest) IsTxnCoordinatorRequest() {}
 func (v *AddOffsetsToTxnRequest) ResponseKind() Response {
 	return &AddOffsetsToTxnResponse{Version: v.Version}
 }
@@ -5100,6 +5103,7 @@ func (*EndTxnRequest) MaxVersion() int16          { return 1 }
 func (*EndTxnRequest) MinVersion() int16          { return 0 }
 func (v *EndTxnRequest) SetVersion(version int16) { v.Version = version }
 func (v *EndTxnRequest) GetVersion() int16        { return v.Version }
+func (v *EndTxnRequest) IsTxnCoordinatorRequest() {}
 func (v *EndTxnRequest) ResponseKind() Response   { return &EndTxnResponse{Version: v.Version} }
 
 func (v *EndTxnRequest) AppendTo(dst []byte) []byte {
@@ -5358,6 +5362,7 @@ func (*TxnOffsetCommitRequest) MaxVersion() int16          { return 2 }
 func (*TxnOffsetCommitRequest) MinVersion() int16          { return 0 }
 func (v *TxnOffsetCommitRequest) SetVersion(version int16) { v.Version = version }
 func (v *TxnOffsetCommitRequest) GetVersion() int16        { return v.Version }
+func (v *TxnOffsetCommitRequest) IsTxnCoordinatorRequest() {}
 func (v *TxnOffsetCommitRequest) ResponseKind() Response {
 	return &TxnOffsetCommitResponse{Version: v.Version}
 }

@@ -52,6 +52,15 @@ type GroupCoordinatorRequest interface {
 	Request
 }
 
+// TxnCoordinatorRequest represents a request that must be issued to a
+// transaction coordinator.
+type TxnCoordinatorRequest interface {
+	// IsTxnCoordinatorRequest is a method attached to requests that
+	// must be issued to transaction coordinators.
+	IsTxnCoordinatorRequest()
+	Request
+}
+
 // Response represents a type that Kafka responds with.
 type Response interface {
 	// ReadFrom parses all of the input slice into the response type.
