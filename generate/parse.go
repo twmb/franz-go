@@ -312,14 +312,18 @@ func Parse(raw []byte) {
 			continue
 		}
 
-		// key, max, min [optional], (admin|group coordinator) [optional]
+		// key, max, min [optional], (admin|(group|txn) coordinator) [optional]
 		const adminStr = ", admin"
 		const groupCoordinatorStr = ", group coordinator"
+		const txnCoordinatorStr = ", txn coordinator"
 		if idx := strings.Index(rem, adminStr); idx > 0 {
 			s.Admin = true
 			rem = rem[:idx]
 		} else if idx := strings.Index(rem, groupCoordinatorStr); idx > 0 {
 			s.GroupCoordinator = true
+			rem = rem[:idx]
+		} else if idx := strings.Index(rem, txnCoordinatorStr); idx > 0 {
+			s.TxnCoordinator = true
 			rem = rem[:idx]
 		}
 

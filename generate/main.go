@@ -80,6 +80,7 @@ type (
 
 		Admin            bool   // only relevant if TopLevel
 		GroupCoordinator bool   // only relevant if TopLevel
+		TxnCoordinator   bool   // only relevant if TopLevel
 		Key              int    // only relevant if TopLevel
 		MinVersion       int    // only relevant if TopLevel
 		MaxVersion       int    // only relevant if TopLevel
@@ -127,6 +128,8 @@ func main() {
 					s.WriteAdminFunc(l)
 				} else if s.GroupCoordinator {
 					s.WriteGroupCoordinatorFunc(l)
+				} else if s.TxnCoordinator {
+					s.WriteTxnCoordinatorFunc(l)
 				}
 				s.WriteResponseKindFunc(l)
 				l.Write("") // newline before append func

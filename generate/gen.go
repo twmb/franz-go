@@ -290,6 +290,9 @@ func (s Struct) WriteAdminFunc(l *LineWriter) {
 func (s Struct) WriteGroupCoordinatorFunc(l *LineWriter) {
 	l.Write("func (v *%s) IsGroupCoordinatorRequest() {}", s.Name)
 }
+func (s Struct) WriteTxnCoordinatorFunc(l *LineWriter) {
+	l.Write("func (v *%s) IsTxnCoordinatorRequest() {}", s.Name)
+}
 func (s Struct) WriteResponseKindFunc(l *LineWriter) {
 	l.Write("func (v *%s) ResponseKind() Response { return &%s{Version: v.Version }}", s.Name, s.ResponseKind)
 }
