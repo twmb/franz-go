@@ -1,6 +1,7 @@
 package kgo
 
 import (
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -8,6 +9,12 @@ import (
 	"github.com/twmb/kgo/kerr"
 	"github.com/twmb/kgo/kmsg"
 )
+
+// TODO KIP-359
+
+// TODO
+// init producer ID only on send
+// change toppars "loaded" to a state (uninit, ok, loading)
 
 type brokerToppars struct {
 	// br is the broker this brokerToppars belongs to.
@@ -17,6 +24,8 @@ type brokerToppars struct {
 	// start with a limit of 1, which covers Kafka v0.11.0.0. On the first
 	// response, we check what version was set in the request. If it is at
 	// least 4, which 1.0.0 introduced, we upgrade the sem size.
+	//
+	// Note that both v4 and v5 were introduced with 1.0.0.
 	inflightSem      atomic.Value
 	handledFirstResp bool
 
@@ -58,6 +67,10 @@ type topparBuffer struct {
 	// sequenceNum is what we use for the baseSequence in a record batch.
 	// This is incremented by one for every record appended to the toppar.
 	sequenceNum int32
+	// lastLogStartOffset is the produce response's last log start offset.
+	// For Kafka 1.0.0+ (v5 introduced the field, after v4 even though both
+	// are in the 1.0.0 release). This is used for data loss detection.
+	lastLogStartOffset int64
 
 	// batches contains all batches that have not had promises called.
 	batches []*recordBatch
@@ -241,6 +254,10 @@ func maybeIncPastTopparBatchSuccess(batch topparBatch) bool {
 func (tp *topparBuffer) bufferRecord(pr promisedRecord) {
 	tp.mu.Lock()
 
+	if pr.r.Timestamp.IsZero() {
+		pr.r.Timestamp = time.Now()
+	}
+
 	bt := tp.drainer
 
 	newBatch := true
@@ -360,7 +377,7 @@ func (bt *brokerToppars) eachTopparBatch(topparBatches map[string]map[int32]topp
 // requeueEntireReq requeues all batches in req to the brokerToppars.
 // This is done if a retriable network error occured.
 func (bt *brokerToppars) requeueEntireReq(req *produceRequest) {
-	backoffDeadline := time.Now().Add(bt.br.cl.cfg.client.retryBackoff)
+	backoffDeadline := time.Now().Add(bt.br.cl.cfg.client.retryBackoff(1)) // TODO increase level?
 	maybeBeginDraining := false
 	bt.eachTopparBatch(req.topicsPartitions, func(batch topparBatch) {
 		if batch.failSeq != batch.toppar.failSeq {
@@ -479,27 +496,36 @@ func (bt *brokerToppars) handleReqResp(req *produceRequest, resp kmsg.Response, 
 				retryParts[partition] = batch
 
 			case kerr.OutOfOrderSequenceNumber:
-				// 1.0.0+: data loss
-				// before: either data loss, or our write was so infrequent that
-				// the old data rotated out and kafka no longer knows of our ID.
-				// In that case, re-get produce ID and retry request.
-				// If the sequence numbers do not align, then we had two
-				// requests in flight: the first issued on a cxn that died,
+				// If the failSeq does not align, then we multiple requests
+				// in flight: the first issued on a cxn that died,
 				// the second issued on a new connection causing this error.
 				if batch.failSeq != batch.toppar.failSeq {
 					continue
 				}
-				panic("OOO SEQUENCE NUM - TODO") // TODO
+				// 1.0.0+: data loss
+				// before: either data loss, or our write was so infrequent that
+				// the old data rotated out and kafka no longer knows of our ID.
+				// In that case, re-get produce ID and retry request.
+				if req.version >= 5 {
+					panic("OOO SEQUENCE NUM - DATA LOSS")
+				}
+				panic("OOO SEQUENCE NUM - POTENTIAL DATA LOSS, POTENTIAL INFREQUENT PRODUCER") // TODO
 
 			case kerr.UnknownProducerID:
-				// 1.0.0+: if LogStartOffset is not our last acked + 1, then data loss
-				// Otherwise, same log rotation as in OOO sequence number.
 				if batch.failSeq != batch.toppar.failSeq {
 					continue
 				}
-				panic("UNKNOWN PRODUCER ID - TODO") // TODO
+				// 1.0.0+: if LogStartOffset is not our last acked + 1, then data loss
+				// Otherwise, same log rotation as in OOO sequence number.
+				if responsePartition.LogStartOffset != batch.toppar.sequenceNum+1 {
+					panic("UNKONWN PRODUCER ID - DATA LOSS") // TODO
+				}
+				panic("UNKNOWN PRODUCER ID - INFREQUENT PRODUCER, RE-GET") // TODO
 
 			case kerr.InvalidProducerEpoch:
+				// For transactions:
+				// either newer producer with same txn id, or
+				// producer's txn id has expired
 				panic("INVALID EPOCH - TODO") // TODO
 
 			default:
@@ -507,6 +533,8 @@ func (bt *brokerToppars) handleReqResp(req *produceRequest, resp kmsg.Response, 
 				if !incd {
 					continue
 				}
+				batch.toppar.lastLogStartOffset = responsePartition.LogStartOffset
+				fmt.Println(responsePartition.LogStartOffset)
 				for i, record := range batch.records {
 					record.pr.r.Offset = responsePartition.BaseOffset + int64(i)
 					record.pr.r.Partition = partition
@@ -556,13 +584,15 @@ func (bt *brokerToppars) handleRetryBatches(retry map[string]map[int32]topparBat
 func (bt *brokerToppars) migrateTopic(topic string, migrateParts map[int32]topparBatch) {
 	cl := bt.br.cl
 
+	tries := 1
 start:
 	loadParts := newTopicParts()
 	cl.fetchTopicMetadataIntoParts(map[string]*topicPartitions{
 		topic: loadParts,
 	}, false)
 	if loadParts.loadErr != nil {
-		time.Sleep(cl.cfg.client.retryBackoff) // TODO max retries
+		time.Sleep(cl.cfg.client.retryBackoff(tries)) // TODO max retries
+		tries++
 		goto start
 	}
 
@@ -602,8 +632,7 @@ start:
 	existingParts.mu.Lock()
 	defer existingParts.mu.Unlock()
 
-	existingParts.allIDs = loadParts.allIDs
-	existingParts.writableIDs = loadParts.writableIDs
+	existingParts.partitions = loadParts.partitions
 
 	// For all existing parts, if they no longer exist, we will call all
 	// buffered records with a partition deleted error.
