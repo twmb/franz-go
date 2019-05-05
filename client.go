@@ -13,6 +13,10 @@ import (
 	"github.com/twmb/kgo/kmsg"
 )
 
+// TODO: producing should use its own broker connections, and consuming
+// should use its own broker connections. This way, metadata/offset
+// commits are not blocked.
+
 // Client issues requests and handles responses to a Kafka cluster.
 type Client struct {
 	cfg cfg
@@ -27,12 +31,12 @@ type Client struct {
 	controllerID int32 // atomic
 
 	producer producer
+	//consumer consumer
 
 	coordinatorsMu sync.Mutex
 	coordinators   map[coordinatorKey]int32
 
-	// simple consumer
-	simpleConsumer simpleConsumer
+	closedCh chan struct{}
 }
 
 // broker returns a random broker from all brokers ever known.
@@ -55,8 +59,6 @@ func (c *Client) fetchBrokerMetadata() error {
 	return err
 }
 
-// TODO this should favor using a seedBroker so as to not use anything blocked
-// in consuming.
 func (c *Client) fetchMetadata(all bool, topics ...string) (*kmsg.MetadataResponse, error) {
 	if all {
 		topics = nil
@@ -141,61 +143,86 @@ func (c *Client) Close() func() {
 	return nil
 }
 
-// Request issues a request to Kafka, waiting for and returning the response or
-// an error.
+// Request issues a request to Kafka, waiting for and returning the response.
+// If a retriable network error occurs, or if a retriable group / transaction
+// coordinator error occurs, the request is retried. All other errors are
+// returned.
 //
 // If the request is an admin request, this will issue it to the Kafka
 // controller. If the controller ID is unknown, this will attempt to fetch it.
 // If the fetch errors, this will return an unknown controller error.
 //
-// If the request is a group coordinator request, this will issue the request
-// to the group coordinator. If the request contains multiple groups (delete
-// groups, describe groups), the request will be split into one request for
-// each group (since they could have different coordinators), all requests will
-// be issued, and then all responses are merged. Only if all requests error is
-// an error returned.
+// If the request is a group or transaction coordinator request, this will
+// issue the request to the appropriate group or transaction coordinator.
+//
+// For group coordinator requests, if the request contains multiple groups
+// (delete groups, describe groups), the request will be split into one request
+// for each group (since they could have different coordinators), all requests
+// will be issued, and then all responses are merged. Only if all requests
+// error is an error returned.
 func (c *Client) Request(req kmsg.Request) (kmsg.Response, error) {
-	if _, admin := req.(kmsg.AdminRequest); admin {
-		if controller, err := c.controller(); err != nil {
-			return nil, err
-		} else {
-			return controller.waitResp(req)
+	tries := 0
+	var resp kmsg.Response
+	var err error
+start:
+	tries++
+	if metaReq, isMetaReq := req.(*kmsg.MetadataRequest); isMetaReq {
+		// We hijack any metadata request so as to populate our
+		// own brokers and controller ID.
+		resp, err = c.fetchMetadata(metaReq.Topics == nil, metaReq.Topics...)
+	} else if _, admin := req.(kmsg.AdminRequest); admin {
+		var controller *broker
+		if controller, err = c.controller(); err == nil {
+			resp, err = controller.waitResp(req)
 		}
 	} else if groupReq, isGroupReq := req.(kmsg.GroupCoordinatorRequest); isGroupReq {
-		return c.handleGroupReq(groupReq)
+		resp, err = c.handleGroupReq(groupReq)
+	} else if txnReq, isTxnReq := req.(kmsg.TxnCoordinatorRequest); isTxnReq {
+		resp, err = c.handleTxnReq(txnReq)
 	} else {
-		return c.broker().waitResp(req)
+		resp, err = c.broker().waitResp(req)
 	}
-}
 
-// maybeBroker returns the broker for id if it exists.
-func (c *Client) maybeBroker(id int32) *broker {
-	c.brokersMu.RLock()
-	broker := c.brokers[id]
-	c.brokersMu.RUnlock()
-	return broker
+	if isRetriableErr(err) {
+		select {
+		case <-c.closedCh:
+			return nil, err
+		case <-time.After(c.cfg.client.retryBackoff(tries)):
+			goto start
+		}
+		goto start
+	}
+	return resp, err
 }
 
 // brokerOrErr returns the broker for ID or the error if the broker does not
 // exist.
 func (c *Client) brokerOrErr(id int32, err error) (*broker, error) {
-	broker := c.maybeBroker(id)
+	c.brokersMu.RLock()
+	broker := c.brokers[id]
+	c.brokersMu.RUnlock()
 	if broker == nil {
 		return nil, err
 	}
 	return broker, nil
 }
 
+// controller returns the controller broker, forcing a broker load if
+// necessary.
 func (c *Client) controller() (*broker, error) {
-	retries := 0
+	tries := 0
 start:
 	var id int32
 	if id = atomic.LoadInt32(&c.controllerID); id < 0 {
+		tries++
 		if err := c.fetchBrokerMetadata(); err != nil {
-			if isRetriableErr(err) && retries < 3 {
-				retries++
-				time.Sleep(c.cfg.client.retryBackoff)
-				goto start
+			if isRetriableBrokerErr(err) && tries < c.cfg.client.retries {
+				select {
+				case <-c.closedCh:
+					return nil, err
+				case <-time.After(c.cfg.client.retryBackoff(tries)):
+					goto start
+				}
 			}
 			return nil, err
 		}
@@ -204,11 +231,7 @@ start:
 		}
 	}
 
-	controller := c.maybeBroker(id)
-	if controller == nil {
-		return nil, errUnknownController
-	}
-	return controller, nil
+	return c.brokerOrErr(id, errUnknownController)
 }
 
 const (
@@ -221,43 +244,59 @@ type coordinatorKey struct {
 	typ  int8
 }
 
+// loadController returns the group/txn coordinator for the given key, retrying
+// as necessary.
 func (c *Client) loadCoordinator(key coordinatorKey) (*broker, error) {
-	// If we have no controller, we have never loaded brokers. We need
-	// to so that when we have the coordinator broker, we can use it.
+	// If there is no controller, we have never loaded brokers. We will
+	// need the brokers after we know which one owns this key, so force
+	// a load of the brokers now.
 	if atomic.LoadInt32(&c.controllerID) < 0 {
 		if _, err := c.controller(); err != nil {
 			return nil, err
 		}
 	}
 
-	// TODO this lock will block any group lookup; in general there should
-	// only be very few coordinators per client (one for a group, one for a
-	// transaction id), so it should be fine, but we could switch to a wait
-	// group type scenario.
+	tries := 0
+start:
+	// This lock blocks other group lookups, but in general there should
+	// only be one group and one transaction ID per client.
 	c.coordinatorsMu.Lock()
-	defer c.coordinatorsMu.Unlock()
 
 	coordinator, ok := c.coordinators[key]
 	if ok {
+		c.coordinatorsMu.Unlock()
 		return c.brokerOrErr(coordinator, errUnknownCoordinator)
 	}
 
-	// TODO Retries
+	tries++
 	kresp, err := c.broker().waitResp(&kmsg.FindCoordinatorRequest{
 		CoordinatorKey:  key.name,
 		CoordinatorType: key.typ,
 	})
-	if err != nil {
-		return nil, err
+
+	var resp *kmsg.FindCoordinatorResponse
+	if err == nil {
+		resp = kresp.(*kmsg.FindCoordinatorResponse)
+		err = kerr.ErrorForCode(resp.ErrorCode)
 	}
 
-	resp := kresp.(*kmsg.FindCoordinatorResponse)
-	if err = kerr.ErrorForCode(resp.ErrorCode); err != nil {
+	if err != nil {
+		c.coordinatorsMu.Unlock()
+		if isRetriableErr(err) && tries < c.cfg.client.retries {
+			select {
+			case <-c.closedCh:
+				return nil, err
+			case <-time.After(c.cfg.client.retryBackoff(tries)):
+				goto start
+			}
+		}
 		return nil, err
 	}
 
 	coordinator = resp.Coordinator.NodeID
 	c.coordinators[key] = coordinator
+	c.coordinatorsMu.Unlock()
+
 	return c.brokerOrErr(coordinator, errUnknownCoordinator)
 
 }
@@ -275,26 +314,6 @@ func (c *Client) loadCoordinator(key coordinatorKey) (*broker, error) {
 // containing a single group. All requests are issued serially and then the
 // responses are merged. We only return err if all requests error.
 func (c *Client) handleGroupReq(req kmsg.GroupCoordinatorRequest) (kmsg.Response, error) {
-	tries := 0
-retry:
-	resp, err := c.doHandleGroupReq(req)
-	switch err {
-	case kerr.CoordinatorNotAvailable,
-		kerr.CoordinatorLoadInProgress,
-		kerr.NotCoordinator:
-
-		if tries < 3 { // TODO better
-			tries++
-			time.Sleep(time.Second)
-			goto retry
-		}
-	}
-
-	return resp, err
-}
-
-// doHandleGroupReq is the logic for handleGroupReq.
-func (c *Client) doHandleGroupReq(req kmsg.GroupCoordinatorRequest) (kmsg.Response, error) {
 	var group2req map[string]kmsg.Request
 	var kresp kmsg.Response
 	var merge func(kmsg.Response)
@@ -375,9 +394,8 @@ func (c *Client) doHandleGroupReq(req kmsg.GroupCoordinatorRequest) (kmsg.Respon
 // handleReqGroupSimple issues a request that contains a single group ID to
 // the coordinator for the given group ID.
 //
-// This investigates the response to see if it is a retriable broker err; if
-// it is, this returns that error. All other response-internal errors are just
-// returned with the response (err is nil).
+// Response errors are inspected to see if they are retriable group errors;
+// if so, the coordinator is deleted.
 func (c *Client) handleGroupReqSimple(groupID string, req kmsg.Request) (kmsg.Response, error) {
 	coordinator, err := c.loadCoordinator(coordinatorKey{
 		name: groupID,
@@ -412,11 +430,11 @@ func (c *Client) handleGroupReqSimple(groupID string, req kmsg.Request) (kmsg.Re
 	case *kmsg.SyncGroupResponse:
 		errCode = t.ErrorCode
 	case *kmsg.DescribeGroupsResponse:
-		if len(t.Groups) > 0 { // should be
+		if len(t.Groups) > 0 {
 			errCode = t.Groups[0].ErrorCode
 		}
 	case *kmsg.DeleteGroupsResponse:
-		if len(t.GroupErrorCodes) > 0 { // should be
+		if len(t.GroupErrorCodes) > 0 {
 			errCode = t.GroupErrorCodes[0].ErrorCode
 		}
 	}
@@ -427,15 +445,97 @@ func (c *Client) handleGroupReqSimple(groupID string, req kmsg.Request) (kmsg.Re
 		kerr.NotCoordinator:
 		err = groupErr
 
-		// Trampling over other recent goot sets of this group
-		// is fine; we will just re-lookup the group.
-		//
-		// TODO tighten this with generation int in coordinator
-		// type in map[coordinatorKey]coordinator.
 		c.coordinatorsMu.Lock()
 		delete(c.coordinators, coordinatorKey{
 			name: groupID,
 			typ:  coordinatorTypeGroup,
+		})
+		c.coordinatorsMu.Unlock()
+	}
+
+	return kresp, err
+}
+
+// handleTxnReq issues a transaction request.
+//
+// Transaction requests are not as convoluted as group requests, but we do
+// still have to route the request to the proper coordinator. Doing so requires
+// looking into the actual request type and pulling out the txn id.
+func (c *Client) handleTxnReq(req kmsg.TxnCoordinatorRequest) (kmsg.Response, error) {
+	switch t := req.(type) {
+	default:
+		// All txn requests should be listed below, so if it isn't,
+		// then we do not know what this request is.
+		return nil, ErrClientTooOld
+
+	case *kmsg.InitProducerIDRequest:
+		if t.TransactionalID != nil {
+			return c.handleTxnRequest(*t.TransactionalID, req)
+		}
+		// InitProducerID can go to any broker if the transactional ID
+		// is nil.
+		return c.broker().waitResp(req)
+	case *kmsg.AddPartitionsToTxnRequest:
+		return c.handleTxnRequest(t.TransactionalID, req)
+	case *kmsg.AddOffsetsToTxnRequest:
+		return c.handleTxnRequest(t.TransactionalID, req)
+	case *kmsg.EndTxnRequest:
+		return c.handleTxnRequest(t.TransactionalID, req)
+	case *kmsg.TxnOffsetCommitRequest:
+		return c.handleTxnRequest(t.TransactionalID, req)
+	}
+}
+
+// handleTxnRequest issues a request for a transaction to the coordinator for
+// that transaction.
+//
+// The error is inspected to see if it is a retriable group error and, if so,
+// the coordinator is deleted.
+func (c *Client) handleTxnRequest(txnID string, req kmsg.Request) (kmsg.Response, error) {
+	coordinator, err := c.loadCoordinator(coordinatorKey{
+		name: txnID,
+		typ:  coordinatorTypeTxn,
+	})
+	if err != nil {
+		return nil, err
+	}
+	kresp, err := coordinator.waitResp(req)
+	if err != nil {
+		return kresp, err
+	}
+
+	var errCode int16
+	switch t := kresp.(type) {
+	case *kmsg.InitProducerIDResponse:
+		errCode = t.ErrorCode
+	case *kmsg.AddPartitionsToTxnResponse:
+		if len(t.Errors) > 0 {
+			if len(t.Errors[0].PartitionErrors) > 0 {
+				errCode = t.Errors[0].PartitionErrors[0].ErrorCode
+			}
+		}
+	case *kmsg.AddOffsetsToTxnResponse:
+		errCode = t.ErrorCode
+	case *kmsg.EndTxnResponse:
+		errCode = t.ErrorCode
+	case *kmsg.TxnOffsetCommitResponse:
+		if len(t.Topics) > 0 {
+			if len(t.Topics[0].Partitions) > 0 {
+				errCode = t.Topics[0].Partitions[0].ErrorCode
+			}
+		}
+	}
+
+	switch txnErr := kerr.ErrorForCode(errCode); txnErr {
+	case kerr.CoordinatorNotAvailable,
+		kerr.CoordinatorLoadInProgress,
+		kerr.NotCoordinator:
+		err = txnErr
+
+		c.coordinatorsMu.Lock()
+		delete(c.coordinators, coordinatorKey{
+			name: txnID,
+			typ:  coordinatorTypeTxn,
 		})
 		c.coordinatorsMu.Unlock()
 	}
@@ -461,7 +561,7 @@ type Broker struct {
 }
 
 // Request issues a request to a broker. If the broker does not exist in the
-// client, this returns ErrUnknownBroker.
+// client, this returns ErrUnknownBroker. Requests are not retried.
 func (b *Broker) Request(req kmsg.Request) (kmsg.Response, error) {
 	b.cl.brokersMu.RLock()
 	br, exists := b.cl.brokers[b.id]
