@@ -2,6 +2,7 @@ package kgo
 
 import (
 	"fmt"
+	"math"
 	"net"
 	"regexp"
 	"strconv"
@@ -18,7 +19,6 @@ import (
 // max.block.ms? (60s, upper bound on how long blocked on Produce)
 // reconnect.backoff.max.ms? (1s)
 // reconnect.backoff.ms
-// WithRetryBackoffStrategy(func() func() time.Duration) ?
 
 type (
 	// Opt is an option to configure a client.
@@ -63,7 +63,8 @@ func NewClient(seedBrokers []string, opts ...Opt) (*Client, error) {
 			id:     &defaultID,
 			dialFn: stddial,
 
-			retryBackoff:   100 * time.Millisecond,
+			retryBackoff:   func(int) time.Duration { return 100 * time.Millisecond },
+			retries:        math.MaxInt32, // effectively unbounded
 			requestTimeout: int32(30 * time.Second / 1e4),
 
 			maxBrokerWriteBytes: 100 << 20, // Kafka socket.request.max.bytes default is 100<<20
@@ -146,6 +147,8 @@ func NewClient(seedBrokers []string, opts ...Opt) (*Client, error) {
 		},
 
 		coordinators: make(map[coordinatorKey]int32),
+
+		closedCh: make(chan struct{}),
 	}
 	c.rng.Seed(uint64(time.Now().UnixNano()))
 
@@ -173,7 +176,8 @@ type (
 		id     *string
 		dialFn func(string) (net.Conn, error)
 
-		retryBackoff   time.Duration
+		retryBackoff   func(int) time.Duration
+		retries        int
 		requestTimeout int32
 
 		maxBrokerWriteBytes int32
@@ -213,12 +217,23 @@ func WithDialFn(fn func(string) (net.Conn, error)) OptClient {
 	return clientOpt{func(cfg *clientCfg) { cfg.dialFn = fn }}
 }
 
-// WithRetryBackoff sets how long to wait before retrying failed but retriable
-// requests, overriding the default 100ms.
+// WithRetryBackoff sets the backoff strategy for how long to backoff for a
+// given amount of retries, overriding the default constant 100ms.
 //
-// This corresponds to Kafka's retry.backoff.ms setting.
-func WithRetryBackoff(backoff time.Duration) OptClient {
+// The function is called with the number of failures that have occurred in a
+// row. This can be used to implement exponential backoff if desired.
+//
+// This (roughly) corresponds to Kafka's retry.backoff.ms setting.
+func WithRetryBackoff(backoff func(int) time.Duration) OptClient {
 	return clientOpt{func(cfg *clientCfg) { cfg.retryBackoff = backoff }}
+}
+
+// WithRetries sets the number of tries that retriable requests are allowed,
+// overriding the unlimited default.
+//
+// This setting applies to all types of requests.
+func WithRetries(n int) OptClient {
+	return clientOpt{func(cfg *clientCfg) { cfg.retries = n }}
 }
 
 // WithRequestTimeout sets how long Kafka broker's are allowed to respond
@@ -267,7 +282,6 @@ type (
 
 		// TODO:
 		// retries
-		// retry backoff
 	}
 )
 
