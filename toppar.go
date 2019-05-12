@@ -1,7 +1,6 @@
 package kgo
 
 import (
-	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -38,7 +37,7 @@ type brokerToppars struct {
 	draining     bool            // are we actively draining toppars into batches?
 	backoffTimer *time.Timer     // runs if all toppars are in a backoff state
 	backoffSeq   uint64          // guards against timers starting drains they should not
-	allToppars   []*topparBuffer // contains all toppers; used for batch building
+	allToppars   []*recordBuffer // contains all toppers; used for batch building
 
 	// allTopparsStart is where we will begin in allToppars for building a
 	// batch. This increments by one every produce request, avoiding
@@ -47,7 +46,7 @@ type brokerToppars struct {
 	allTopparsStart int
 }
 
-type topparBuffer struct {
+type recordBuffer struct {
 	owner *topicPartition // we reach back for our topic, partition
 
 	// idWireLength covers the topic string and the part array length.
@@ -71,35 +70,20 @@ type topparBuffer struct {
 	// For Kafka 1.0.0+ (v5 introduced the field, after v4 even though both
 	// are in the 1.0.0 release). This is used for data loss detection.
 	lastLogStartOffset int64
+	lastAckedOffset    int64
 
 	// batches contains all batches that have not had promises called.
 	batches []*recordBatch
 	// batchDrainIdx is where the next produce request will drain from.
 	batchDrainIdx int
 
-	// failSeq is incremented whenever a record batch is fails somehow.
-	//
-	// This field is only needed because we allow multiple in flight
-	// requests. One request could be accepted by Kafka and then the
-	// connection could die. The second in flight batch that we cannot
-	// cancel would trigger a new connection, can be sent successfully and
-	// then receive a successful response.
-	//
-	// We do not want to track the first successful response because we
-	// still think we failed on the first batch and will end up re-sending
-	// this second batch. When we re-send the first batch, Kafka will reply
-	// as if it is the first time it is seeing it. We do not want to call
-	// the second batch's promises before the first.
-	failSeq uint64
-
 	backoffDeadline time.Time // used for retries
 }
 
 // topparBatch wraps a recordBatch for a produce request with the toppar the
-// recordBatch came from and the failSeq at the time it was used.
+// recordBatch came from.
 type topparBatch struct {
-	toppar  *topparBuffer
-	failSeq uint64
+	toppar *recordBuffer
 	*recordBatch
 }
 
@@ -116,7 +100,7 @@ func newBrokerToppars(br *broker) *brokerToppars {
 
 	bt := &brokerToppars{
 		br:             br,
-		baseWireLength: messageRequestOverhead + produceRequestOverhead,
+		baseWireLength: messageRequestOverhead + produceRequestOverhead, // TODO + txn id len
 	}
 	bt.inflightSem.Store(make(chan struct{}, 1))
 	if br.cl.cfg.client.id != nil {
@@ -193,8 +177,6 @@ func (bt *brokerToppars) createRequest() (*produceRequest, bool) {
 		batch.tried = true // we are using the batch, so it must now be immutable
 		tp.batchDrainIdx++
 
-		failSeq := tp.failSeq // save this for below before unlocking tp
-
 		if !moreToDrain {
 			moreToDrain = len(tp.batches) > tp.batchDrainIdx
 		}
@@ -210,7 +192,6 @@ func (bt *brokerToppars) createRequest() (*produceRequest, bool) {
 		wireLength += batchWireLength
 		topicPartitions[tp.owner.partition] = topparBatch{
 			toppar:      tp,
-			failSeq:     failSeq,
 			recordBatch: batch,
 		}
 	}
@@ -232,16 +213,24 @@ func (bt *brokerToppars) createRequest() (*produceRequest, bool) {
 	return request, moreToDrain
 }
 
+// This function is necessary because we only want to remove leading batches.
+// One batch could be received successfully but the response dies in
+// disconnect, then a second batch in flight batch could cause a reconnect and
+// send successfully. We do not want to operate on that one since we still
+// think the first failed.
+func (batch topparBatch) isFirstBatchInToppar() bool {
+	return len(batch.toppar.batches) > 0 &&
+		batch.toppar.batches[0] == batch.recordBatch
+}
+
 // maybeIncPastTopparBatchSuccess is called in a successful produce response,
 // incrementing past the toppar's now-known-to-be-in-Kafka ONLY IF the batch
-// has the same requeue seq as the toppar.
-//
-// See docs on the toppar failSeq field.
+// is the first.
 func maybeIncPastTopparBatchSuccess(batch topparBatch) bool {
 	tp := batch.toppar
 	incd := false
 	tp.mu.Lock()
-	if batch.failSeq == tp.failSeq {
+	if batch.isFirstBatchInToppar() {
 		tp.batches[0] = nil
 		tp.batches = tp.batches[1:]
 		tp.batchDrainIdx--
@@ -251,7 +240,7 @@ func maybeIncPastTopparBatchSuccess(batch topparBatch) bool {
 	return incd
 }
 
-func (tp *topparBuffer) bufferRecord(pr promisedRecord) {
+func (tp *recordBuffer) bufferRecord(pr promisedRecord) {
 	tp.mu.Lock()
 
 	if pr.r.Timestamp.IsZero() {
@@ -380,12 +369,11 @@ func (bt *brokerToppars) requeueEntireReq(req *produceRequest) {
 	backoffDeadline := time.Now().Add(bt.br.cl.cfg.client.retryBackoff(1)) // TODO increase level?
 	maybeBeginDraining := false
 	bt.eachTopparBatch(req.topicsPartitions, func(batch topparBatch) {
-		if batch.failSeq != batch.toppar.failSeq {
+		if !batch.isFirstBatchInToppar() {
 			return
 		}
 		batch.toppar.batchDrainIdx = 0
 		batch.toppar.backoffDeadline = backoffDeadline
-		batch.toppar.failSeq++
 		maybeBeginDraining = true
 	})
 
@@ -408,8 +396,7 @@ func (bt *brokerToppars) errorAllPartitionToppars(topic string, partitions map[i
 	for _, batch := range partitions {
 		tp := batch.toppar
 		tp.mu.Lock()
-		if batch.failSeq == tp.failSeq {
-			tp.failSeq++ // make sure a second in-flight does not do this again
+		if batch.isFirstBatchInToppar() {
 			for _, batch := range tp.batches {
 				for i, record := range batch.records {
 					bt.br.cl.promise(record.pr, err)
@@ -499,7 +486,7 @@ func (bt *brokerToppars) handleReqResp(req *produceRequest, resp kmsg.Response, 
 				// If the failSeq does not align, then we multiple requests
 				// in flight: the first issued on a cxn that died,
 				// the second issued on a new connection causing this error.
-				if batch.failSeq != batch.toppar.failSeq {
+				if !batch.isFirstBatchInToppar() {
 					continue
 				}
 				// 1.0.0+: data loss
@@ -512,12 +499,16 @@ func (bt *brokerToppars) handleReqResp(req *produceRequest, resp kmsg.Response, 
 				panic("OOO SEQUENCE NUM - POTENTIAL DATA LOSS, POTENTIAL INFREQUENT PRODUCER") // TODO
 
 			case kerr.UnknownProducerID:
-				if batch.failSeq != batch.toppar.failSeq {
+				if !batch.isFirstBatchInToppar() {
 					continue
 				}
+				// TODO If -1, retry. If LogStartOffset is unknown, the partition moved
+				// during the time the error was raised and the time the response was
+				// constructed.
+
 				// 1.0.0+: if LogStartOffset is not our last acked + 1, then data loss
 				// Otherwise, same log rotation as in OOO sequence number.
-				if responsePartition.LogStartOffset != batch.toppar.sequenceNum+1 {
+				if responsePartition.LogStartOffset != batch.toppar.lastAckedOffset+1 {
 					panic("UNKONWN PRODUCER ID - DATA LOSS") // TODO
 				}
 				panic("UNKNOWN PRODUCER ID - INFREQUENT PRODUCER, RE-GET") // TODO
@@ -534,7 +525,7 @@ func (bt *brokerToppars) handleReqResp(req *produceRequest, resp kmsg.Response, 
 					continue
 				}
 				batch.toppar.lastLogStartOffset = responsePartition.LogStartOffset
-				fmt.Println(responsePartition.LogStartOffset)
+				batch.toppar.lastAckedOffset = responsePartition.BaseOffset + int64(len(batch.records))
 				for i, record := range batch.records {
 					record.pr.r.Offset = responsePartition.BaseOffset + int64(i)
 					record.pr.r.Partition = partition
@@ -558,7 +549,7 @@ var forever = time.Now().Add(100 * 365 * 24 * time.Hour)
 
 func (bt *brokerToppars) handleRetryBatches(retry map[string]map[int32]topparBatch) {
 	bt.eachTopparBatch(retry, func(batch topparBatch) {
-		if batch.failSeq != batch.toppar.failSeq ||
+		if !batch.isFirstBatchInToppar() ||
 			batch.toppar.backoffDeadline == forever {
 
 			skipTopicRetry := retry[batch.toppar.owner.topic]
@@ -572,7 +563,6 @@ func (bt *brokerToppars) handleRetryBatches(retry map[string]map[int32]topparBat
 
 		batch.toppar.backoffDeadline = forever // tombstone
 		batch.toppar.batchDrainIdx = 0
-		batch.toppar.failSeq++
 	})
 
 	// TODO: we can switch this to one metadata fetch for all retry topics
@@ -604,7 +594,6 @@ start:
 			tp.toppar.mu.Lock()
 			defer tp.toppar.mu.Unlock()
 
-			tp.toppar.failSeq++ // just in case
 			for _, batch := range tp.toppar.batches {
 				for i, record := range batch.records {
 					bt.br.cl.promise(record.pr, ErrPartitionDeleted)
@@ -670,13 +659,13 @@ start:
 	}
 }
 
-func (tp *topparBuffer) clearBackoff() {
+func (tp *recordBuffer) clearBackoff() {
 	tp.mu.Lock()
 	tp.backoffDeadline = time.Time{}
 	tp.mu.Unlock()
 }
 
-func (bt *brokerToppars) addToppar(add *topparBuffer) {
+func (bt *brokerToppars) addToppar(add *recordBuffer) {
 	bt.mu.Lock()
 	add.allTopparsIdx = len(bt.allToppars)
 	bt.allToppars = append(bt.allToppars, add)
@@ -688,7 +677,7 @@ func (bt *brokerToppars) addToppar(add *topparBuffer) {
 }
 
 // removeToppar removes the tracking of a toppar from the brokerToppars.
-func (bt *brokerToppars) removeToppar(rm *topparBuffer) {
+func (bt *brokerToppars) removeToppar(rm *recordBuffer) {
 	bt.mu.Lock()
 	defer bt.mu.Unlock()
 

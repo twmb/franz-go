@@ -20,7 +20,7 @@ type topicPartition struct {
 	isr      []int32
 	offline  []int32
 
-	toppar topparBuffer
+	toppar recordBuffer
 }
 
 type topicPartitions struct {
@@ -143,7 +143,7 @@ func (c *Client) fetchTopicMetadataIntoParts(fetches map[string]*topicPartitions
 				leader:      partMeta.Leader,
 				leaderEpoch: partMeta.LeaderEpoch,
 
-				toppar: topparBuffer{
+				toppar: recordBuffer{
 					idWireLength: 2 + int32(len(t.Topic)) + 4,
 					drainer:      broker.bt,
 				},
