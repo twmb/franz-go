@@ -71,7 +71,7 @@ func (c *Client) Produce(
 	id := partitions.partitions[idIdx]
 	partition := mapping[id]
 
-	partition.toppar.bufferRecord(
+	partition.records.bufferRecord(
 		promisedRecord{
 			promise: promise,
 			r:       r,

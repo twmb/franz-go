@@ -20,7 +20,6 @@ type recordNumbers struct {
 	wireLength     int32
 	lengthField    int32
 	timestampDelta int32
-	offsetDelta    int32
 }
 
 // promisedNumberedRecord ties a promisedRecord to its calculated numbers.
@@ -32,13 +31,14 @@ type promisedNumberedRecord struct {
 var noPNR promisedNumberedRecord
 var emptyRecordsPool = sync.Pool{
 	New: func() interface{} {
-		return make([]promisedNumberedRecord, 0, 500)
+		r := make([]promisedNumberedRecord, 0, 500)
+		return &r
 	},
 }
 
 // newRecordBatch returns a new record batch for a topic and partition
 // containing the given record.
-func (bt *brokerToppars) newRecordBatch(firstSeq int32, pr promisedRecord) *recordBatch {
+func (sink *recordSink) newRecordBatch(firstSeq int32, pr promisedRecord) *recordBatch {
 	const recordBatchOverhead = 4 + // NULLABLE_BYTES overhead
 		8 + // firstOffset
 		4 + // batchLength
@@ -55,9 +55,9 @@ func (bt *brokerToppars) newRecordBatch(firstSeq int32, pr promisedRecord) *reco
 		4 // record array length
 	b := &recordBatch{
 		firstTimestamp: pr.r.Timestamp.UnixNano() / 1e6,
-		records:        emptyRecordsPool.Get().([]promisedNumberedRecord),
-		producerID:     bt.br.cl.producer.id,
-		producerEpoch:  bt.br.cl.producer.epoch,
+		records:        (*(emptyRecordsPool.Get().(*[]promisedNumberedRecord)))[:0],
+		producerID:     sink.broker.client.producer.id,
+		producerEpoch:  sink.broker.client.producer.epoch,
 		baseSequence:   firstSeq,
 	}
 	pnr := promisedNumberedRecord{
@@ -80,7 +80,7 @@ func (b *recordBatch) appendRecord(pr promisedRecord, nums recordNumbers) {
 
 // recordBatch is the type used for buffering records before they are written.
 type recordBatch struct {
-	tried bool // if this was sent before and is thus now immutable
+	tries int // if this was sent before and is thus now immutable
 
 	wireLength int32 // tracks total size this batch would currently encode as
 
@@ -124,11 +124,8 @@ func (b *recordBatch) calculateRecordNumbers(r *Record) recordNumbers {
 		wireLength:     int32(kbin.VarintLen(int64(l)) + l),
 		lengthField:    int32(l),
 		timestampDelta: tsDelta,
-		offsetDelta:    offsetDelta,
 	}
 }
-
-// Below here lies our custom encoding of record batches.
 
 var crc32c = crc32.MakeTable(crc32.Castagnoli) // record crc's use Castagnoli table
 
@@ -139,11 +136,38 @@ var crc32c = crc32.MakeTable(crc32.Castagnoli) // record crc's use Castagnoli ta
 type produceRequest struct {
 	version int16
 
-	acks             int16
-	timeout          int32
-	topicsPartitions map[string]map[int32]topparBatch
+	acks    int16
+	timeout int32
+	batches reqBatches
 
 	compression []CompressionCodec
+}
+
+type reqBatches map[string]map[int32]sentBatch
+
+func (rbs reqBatches) addBatch(topic string, part int32, batch sentBatch) {
+	if rbs == nil {
+		rbs = make(reqBatches, 5)
+	}
+	topicBatches, exists := rbs[topic]
+	if !exists {
+		topicBatches = make(map[int32]sentBatch, 1)
+		rbs[topic] = topicBatches
+	}
+	topicBatches[part] = batch
+}
+
+func (rbs reqBatches) addToTopicBatches(
+	topic string,
+	partition int32,
+	topicBatches map[int32]sentBatch,
+	batch sentBatch,
+) {
+	if topicBatches == nil {
+		topicBatches = make(map[int32]sentBatch, 1)
+		rbs[topic] = topicBatches
+	}
+	topicBatches[partition] = batch
 }
 
 func (*produceRequest) Key() int16           { return 0 }
@@ -160,8 +184,8 @@ func (p *produceRequest) AppendTo(dst []byte) []byte {
 
 	dst = kbin.AppendInt16(dst, p.acks)
 	dst = kbin.AppendInt32(dst, p.timeout)
-	dst = kbin.AppendArrayLen(dst, len(p.topicsPartitions))
-	for topic, partitions := range p.topicsPartitions {
+	dst = kbin.AppendArrayLen(dst, len(p.batches))
+	for topic, partitions := range p.batches {
 		dst = kbin.AppendString(dst, topic)
 		dst = kbin.AppendArrayLen(dst, len(partitions))
 		for partition, batch := range partitions {
@@ -209,8 +233,8 @@ func (r *recordBatch) appendTo(dst []byte, compressor *compressor) []byte {
 
 	dst = kbin.AppendArrayLen(dst, len(r.records))
 	recordsAt := len(dst)
-	for _, pnr := range r.records {
-		dst = pnr.appendTo(dst)
+	for i, pnr := range r.records {
+		dst = pnr.appendTo(dst, int32(i))
 	}
 
 	if compressor != nil {
@@ -242,11 +266,11 @@ func (r *recordBatch) appendTo(dst []byte, compressor *compressor) []byte {
 	return dst
 }
 
-func (pnr promisedNumberedRecord) appendTo(dst []byte) []byte {
+func (pnr promisedNumberedRecord) appendTo(dst []byte, offsetDelta int32) []byte {
 	dst = kbin.AppendVarint(dst, pnr.n.lengthField)
 	dst = kbin.AppendInt8(dst, 0) // attributes, currently unused
 	dst = kbin.AppendVarint(dst, pnr.n.timestampDelta)
-	dst = kbin.AppendVarint(dst, pnr.n.offsetDelta)
+	dst = kbin.AppendVarint(dst, offsetDelta)
 	dst = kbin.AppendVarintBytes(dst, pnr.pr.r.Key)
 	dst = kbin.AppendVarintBytes(dst, pnr.pr.r.Value)
 	dst = kbin.AppendVarint(dst, int32(len(pnr.pr.r.Headers)))

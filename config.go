@@ -280,8 +280,7 @@ type (
 
 		partitioner Partitioner
 
-		// TODO:
-		// retries
+		txnID *string
 	}
 )
 

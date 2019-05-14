@@ -33,7 +33,7 @@ type apiVersions [kmsg.MaxKey + 1]int16
 
 // broker manages the concept how a client would interact with a broker.
 type broker struct {
-	cl *Client
+	client *Client
 
 	// id and addr are the Kafka broker ID and addr for this broker.
 	id   int32
@@ -43,7 +43,7 @@ type broker struct {
 	// This field is managed serially in handleReqs.
 	cxn *brokerCxn
 
-	bt *brokerToppars
+	recordSink *recordSink
 
 	// seqResps, guarded by seqRespsMu, contains responses that must be
 	// handled sequentially. These responses are handled asyncronously,
@@ -71,14 +71,14 @@ func unknownSeedID(seedNum int) int32 {
 
 func (c *Client) newBroker(addr string, id int32) *broker {
 	br := &broker{
-		cl: c,
+		client: c,
 
 		id:   id,
 		addr: addr,
 
 		reqs: make(chan promisedReq, 10),
 	}
-	br.bt = newBrokerToppars(br)
+	br.recordSink = newRecordSink(br)
 	go br.handleReqs()
 
 	return br
@@ -259,7 +259,7 @@ func (b *broker) loadConnection() (*brokerCxn, error) {
 
 	cxn := &brokerCxn{
 		conn:     conn,
-		clientID: b.cl.cfg.client.id,
+		clientID: b.client.cfg.client.id,
 	}
 	if err = cxn.init(); err != nil {
 		conn.Close()
@@ -272,7 +272,7 @@ func (b *broker) loadConnection() (*brokerCxn, error) {
 
 // connect connects to the broker's addr, returning the new connection.
 func (b *broker) connect() (net.Conn, error) {
-	conn, err := b.cl.cfg.client.dialFn(b.addr)
+	conn, err := b.client.cfg.client.dialFn(b.addr)
 	if err != nil {
 		if _, ok := err.(net.Error); ok {
 			return nil, ErrConnDead

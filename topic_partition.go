@@ -20,7 +20,7 @@ type topicPartition struct {
 	isr      []int32
 	offline  []int32
 
-	toppar recordBuffer
+	records records
 }
 
 type topicPartitions struct {
@@ -143,16 +143,17 @@ func (c *Client) fetchTopicMetadataIntoParts(fetches map[string]*topicPartitions
 				leader:      partMeta.Leader,
 				leaderEpoch: partMeta.LeaderEpoch,
 
-				toppar: recordBuffer{
-					idWireLength: 2 + int32(len(t.Topic)) + 4,
-					drainer:      broker.bt,
+				records: records{
+					sink: broker.recordSink,
+
+					lastAckedOffset: -1,
 				},
 
 				replicas: partMeta.Replicas,
 				isr:      partMeta.ISR,
 				offline:  partMeta.OfflineReplicas,
 			}
-			p.toppar.owner = p
+			p.records.topicPartition = p
 
 			parts.partitions = append(parts.partitions, p.partition)
 			parts.all[p.partition] = p
@@ -168,7 +169,7 @@ func (c *Client) fetchTopicMetadataIntoParts(fetches map[string]*topicPartitions
 
 		if forFirstProduce && parts.loadErr == nil {
 			for _, p := range parts.all {
-				p.toppar.drainer.addToppar(&p.toppar)
+				p.records.sink.addToppar(&p.records)
 			}
 			parts.loadComplete()
 		}
