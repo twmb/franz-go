@@ -2,6 +2,7 @@ package kgo
 
 import (
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/twmb/kgo/kerr"
@@ -22,28 +23,41 @@ type topicPartition struct {
 	records *records
 }
 
-// TODO convert topicPartitions loadErr/partitions/all/writable to atomic
+// topicPartitionsData is the data behind a topicPartition's v.
+//
+// We keep this in an atomic because it is expected to be extremely read heavy,
+// and if it were behind a lock, the lock would need holding for a good chunk
+// of code.
+type topicPartitionsData struct {
+	loadErr    error // auth, unknown, leader not avail, or creation err
+	partitions []int32
+	all        map[int32]*topicPartition // partition num => partition
+	writable   map[int32]*topicPartition // partition num => partition, eliding partitions with no leader / listener
+}
 
 type topicPartitions struct {
-	mu      sync.RWMutex
-	loadErr error // auth, unknown, leader not avail, or creation err
+	v atomic.Value // *topicPartitionsData
 
-	partitions []int32
+	// We actually do not guard any "new" condition with this condition,
+	// unlike normal conditions. The main key to producing is to have no
+	// load error. If we produce to an out of date topicPartitionData, that
+	// is fine.
+	c *sync.Cond
+}
 
-	all      map[int32]*topicPartition // partition num => partition
-	writable map[int32]*topicPartition // partition num => partition, eliding partitions with no leader / listener
-
-	seq uint64
-	c   *sync.Cond
+func (t *topicPartitions) load() *topicPartitionsData {
+	return t.v.Load().(*topicPartitionsData)
 }
 
 // newTopicParts creates and returns new topicPartitions
 func newTopicParts() *topicPartitions {
-	parts := &topicPartitions{
+	parts := &topicPartitions{}
+	parts.v.Store(&topicPartitionsData{
 		all:      make(map[int32]*topicPartition),
 		writable: make(map[int32]*topicPartition),
-	}
-	parts.c = sync.NewCond(parts.mu.RLocker())
+	})
+	var mu sync.RWMutex
+	parts.c = sync.NewCond(mu.RLocker())
 	return parts
 }
 
@@ -125,14 +139,14 @@ func (c *Client) updateMetadata() (needsRetry bool, err error) {
 }
 
 // fetchTopicMetadata fetches metadata for all reqTopics and returns new
-// topicPartitions for each topic.
-func (c *Client) fetchTopicMetadata(reqTopics []string) (map[string]*topicPartitions, error) {
+// topicPartitionsData for each topic.
+func (c *Client) fetchTopicMetadata(reqTopics []string) (map[string]*topicPartitionsData, error) {
 	meta, err := c.fetchMetadata(false, reqTopics...)
 	if err != nil {
 		return nil, err
 	}
 
-	topics := make(map[string]*topicPartitions, len(reqTopics))
+	topics := make(map[string]*topicPartitionsData, len(reqTopics))
 
 	c.brokersMu.RLock()
 	defer c.brokersMu.RUnlock()
@@ -140,7 +154,7 @@ func (c *Client) fetchTopicMetadata(reqTopics []string) (map[string]*topicPartit
 	for i := range meta.TopicMetadata {
 		topicMeta := &meta.TopicMetadata[i]
 
-		parts := &topicPartitions{
+		parts := &topicPartitionsData{
 			loadErr:  kerr.ErrorForCode(topicMeta.ErrorCode),
 			all:      make(map[int32]*topicPartition),
 			writable: make(map[int32]*topicPartition),
@@ -163,6 +177,7 @@ func (c *Client) fetchTopicMetadata(reqTopics []string) (map[string]*topicPartit
 				leaderEpoch: partMeta.LeaderEpoch,
 
 				records: &records{
+					allPartRecsIdx:  -1, // required, see below
 					lastAckedOffset: -1,
 				},
 
@@ -196,44 +211,75 @@ func (c *Client) fetchTopicMetadata(reqTopics []string) (map[string]*topicPartit
 // metadata update that caused this merge needs to be retried.
 //
 // Retries are necessary if the topic or any partition has a retriable error.
-func (l *topicPartitions) merge(r *topicPartitions) (needsRetry bool) {
-	l.mu.Lock()
-	defer func() {
-		l.seq++
-		l.mu.Unlock()
-		l.c.Broadcast()
-	}()
+func (l *topicPartitions) merge(r *topicPartitionsData) (needsRetry bool) {
+	// We do not gate our broadcast with a mutex.
+	defer l.c.Broadcast()
 
-	l.loadErr = r.loadErr
+	lv := *l.load() // copy so our field writes do not collide with reads
+	defer func() { l.v.Store(&lv) }()
+
+	lv.loadErr = r.loadErr
 	if r.loadErr != nil {
-		for _, topicPartition := range l.all {
-			topicPartition.records.maybeBumpTriesAndFailBatch0(l.loadErr)
+		for _, topicPartition := range lv.all {
+			topicPartition.records.maybeBumpTriesAndFailBatch0(lv.loadErr)
 		}
-		return kerr.IsRetriable(l.loadErr)
+		return kerr.IsRetriable(lv.loadErr)
 	}
 
-	l.partitions = r.partitions
+	lv.partitions = r.partitions
 
-	var deleted []*topicPartition // should be empty
+	var deleted []*topicPartition // should end up empty
 
-	for part, oldTP := range l.all {
+	// Migrating topicPartitions is a little tricky because we have to
+	// worry about map contents. Basically, though, we always have to keep
+	// the old "records", but we want the new of everything else.
+	for part, oldTP := range lv.all {
 		newTP, exists := r.all[part]
 		if !exists {
 			deleted = append(deleted, oldTP)
 			continue
 		}
-		needsRetry = oldTP.merge(newTP) || needsRetry
-		delete(r.all, part)
+		if newTP.loadErr != nil { // partition errors should generally be temporary
+			err := newTP.loadErr
+			*newTP = *oldTP
+			newTP.loadErr = err
+			newTP.records.maybeBumpTriesAndFailBatch0(newTP.loadErr)
+			needsRetry = true
+			continue
+		}
+		// With the same sink, we have to copy the records pointer and
+		// maybe begin draining again.
+		if newTP.records.sink == oldTP.records.sink {
+			newTP.records = oldTP.records
+			newTP.records.maybeBeginDraining()
+			continue
+		}
+		// With a different sink, we have to remove the records from
+		// the old sink, update the record's sink, add the records to
+		// the new sink, and finally copy the pointer to the new tp.
+		//
+		// Between the removal and the setting of the new sink,
+		// produced records could trigger drains for the old sink.
+		// This is ok because it will not drain from the records we
+		// just removed.
+		oldTP.records.sink.removeSource(oldTP.records)
+		oldTP.records.mu.Lock() // guard setting sink
+		oldTP.records.sink = newTP.records.sink
+		oldTP.records.mu.Unlock()
+		oldTP.records.sink.addSource(oldTP.records)
+		newTP.records = oldTP.records
 	}
 
-	for part, newTP := range r.all { // anything left in r.all is new
-		l.all[part] = newTP
-		newTP.records.sink.addSource(newTP.records)
+	for _, newTP := range r.all { // anything left in r.all is new
+		if newTP.records.allPartRecsIdx == -1 {
+			newTP.records.sink.addSource(newTP.records)
+		}
 	}
 
-	l.writable = r.writable
-	for part := range l.writable {
-		l.writable[part] = l.all[part]
+	lv.all = r.all
+	lv.writable = r.writable
+	for part := range lv.writable {
+		lv.writable[part] = lv.all[part]
 	}
 
 	if len(deleted) > 0 {
@@ -241,37 +287,6 @@ func (l *topicPartitions) merge(r *topicPartitions) (needsRetry bool) {
 	}
 
 	return needsRetry
-}
-
-// merge merges a new topicPartition into an old and returns whether the
-// metadata update that caused this merge needs to be retried. This is only
-// done under the owning topicPartition's mutex.
-//
-// Retries are necessary if the partition has a load error; this error is one
-// of leader not available, listener not found, or replica not available. All
-// of these are retriable and hopefully temporary.
-func (l *topicPartition) merge(r *topicPartition) (needsRetry bool) {
-	// We do a piecewise copy because we cannot overwrite the records
-	// field when merging. r is always from a metadata update and is new,
-	// whereas l is our existing topic and may have buffered records.
-	l.loadErr = r.loadErr
-	l.leader = r.leader
-	l.leaderEpoch = r.leaderEpoch
-	l.replicas = r.replicas
-	l.isr = r.isr
-	l.offline = r.offline
-	if l.loadErr != nil {
-		l.records.maybeBumpTriesAndFailBatch0(l.loadErr)
-		return true
-	}
-	if l.records.sink == r.records.sink {
-		l.records.maybeBeginDraining()
-	} else {
-		l.records.sink.removeSource(l.records)
-		l.records.sink = r.records.sink
-		l.records.sink.addSource(l.records)
-	}
-	return false
 }
 
 // handleDeletedPartitions calls all promises in all records in all partitions

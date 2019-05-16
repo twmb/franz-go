@@ -54,14 +54,11 @@ func (c *Client) Produce(
 		return err
 	}
 
-	partitions.mu.RLock()
-
 	mapping := partitions.writable
 	if c.cfg.producer.partitioner.RequiresConsistency(r) {
 		mapping = partitions.all
 	}
 	if len(mapping) == 0 {
-		partitions.mu.RUnlock()
 		return ErrNoPartitionsAvailable
 	}
 
@@ -75,7 +72,6 @@ func (c *Client) Produce(
 			r:       r,
 		},
 	)
-	partitions.mu.RUnlock()
 	return nil
 }
 
@@ -114,7 +110,7 @@ func (c *Client) promise(pr promisedRecord, err error) {
 	pr.promise(pr.r, err)
 }
 
-func (c *Client) partitionsForTopicProduce(topic string) (*topicPartitions, error) {
+func (c *Client) partitionsForTopicProduce(topic string) (*topicPartitionsData, error) {
 	topics := c.topics.Load().(map[string]*topicPartitions)
 	parts, exists := topics[topic]
 
@@ -135,15 +131,16 @@ func (c *Client) partitionsForTopicProduce(topic string) (*topicPartitions, erro
 	}
 
 	tries := 0
-	parts.mu.RLock()
+	v := parts.load()
 	for tries < c.cfg.client.retries &&
-		(parts.seq == 0 || kerr.IsRetriable(parts.loadErr)) {
+		(len(v.partitions) == 0 || kerr.IsRetriable(v.loadErr)) {
 		tries++
 		c.triggerUpdateMetadata()
+		parts.c.L.Lock()
 		parts.c.Wait()
+		parts.c.L.Unlock()
+		v = parts.load()
 	}
-	loadErr := parts.loadErr
-	parts.mu.RUnlock()
 
-	return parts, loadErr
+	return v, v.loadErr
 }
