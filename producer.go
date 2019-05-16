@@ -4,6 +4,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/twmb/kgo/kerr"
 	"github.com/twmb/kgo/kmsg"
 )
 
@@ -111,4 +112,33 @@ func (c *Client) promise(pr promisedRecord, err error) {
 		go func() { c.producer.waitBuffer <- struct{}{} }()
 	}
 	pr.promise(pr.r, err)
+}
+
+func (c *Client) partitionsForTopicProduce(topic string) (*topicPartitions, error) {
+	c.topicsMu.RLock()
+	parts, exists := c.topics[topic]
+	c.topicsMu.RUnlock()
+
+	if !exists {
+		c.topicsMu.Lock()
+		parts, exists = c.topics[topic]
+		if !exists {
+			parts = newTopicParts()
+			c.topics[topic] = parts
+		}
+		c.topicsMu.Unlock()
+	}
+
+	tries := 0
+	parts.mu.RLock()
+	for tries < c.cfg.client.retries &&
+		(parts.seq == 0 || kerr.IsRetriable(parts.loadErr)) {
+		tries++
+		c.triggerUpdateMetadata()
+		parts.c.Wait()
+	}
+	loadErr := parts.loadErr
+	parts.mu.RUnlock()
+
+	return parts, loadErr
 }
