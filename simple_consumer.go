@@ -1,7 +1,8 @@
+// +build none
+
 package kgo
 
 import (
-	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -11,6 +12,7 @@ import (
 	"github.com/twmb/kgo/kmsg"
 )
 
+// Offset is a message offset into a partition.
 type Offset struct {
 	request  int64
 	relative int64
@@ -41,120 +43,65 @@ func ConsumeExactOffset(o int64) Offset {
 	return Offset{request: o}
 }
 
-type TopicPartitions struct {
-	Topic      string
-	Partitions []int32
+func (cl *Client) ConsumePartitions(assignments map[string]map[int32]Offset) {
+	c := &cl.consumer
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.cl = cl
+	c.topicsConsumers = make(map[string]map[int32]*consumedPartition, 1)
+	c.brokerConsumers = make(map[int32]*brokerConsumer, 1)
+
+	for topic, partitions := range assignments {
+		topicConsumer, exists := c.topicsConsumers[topic]
+		if !exists {
+			topicConsumer = make(map[int32]*consumedPartition, 1)
+			c.topicsConsumers[topic] = topicConsumer
+		}
+
+		if _, exists := topicConsumer[partition]; exists {
+			continue // exists twice in assignment
+		}
+
+		topicConsumer[partition] = &consumedPartition{
+			topic:     topic,
+			partition: partition,
+
+			c: c,
+
+			closeDone: make(chan struct{}),
+		}
+	}
+
+	go c.load()
 }
 
-// TopicPartitions requests and returns partitions for the requested topics or
-// an error if the request failed.
-//
-// If no topics are requested, this returns all topics and their partitions.
-func (c *Client) TopicPartitions(topics ...string) ([]TopicPartitions, error) {
-	all := false
-	if len(topics) == 0 {
-		all = true
-	}
-	resp, err := c.fetchMetadata(all, topics...)
-	if err != nil {
-		return nil, err
-	}
-
-	tps := make([]TopicPartitions, 0, len(resp.TopicMetadata))
-	for _, topicMeta := range resp.TopicMetadata {
-		if topicMeta.IsInternal {
-			continue
-		}
-		tp := TopicPartitions{
-			Topic:      topicMeta.Topic,
-			Partitions: make([]int32, 0, len(topicMeta.PartitionMetadata)),
-		}
-		for _, partMeta := range topicMeta.PartitionMetadata {
-			tp.Partitions = append(tp.Partitions, partMeta.Partition)
-		}
-		tps = append(tps, tp)
-	}
-	return tps, nil
-}
-
-// ConsumePartition returns a partition consumer for a topic and partition at
-// the given offset.
-//
-// This returns an error if the topic and partition is already being consumed.
-func (c *Client) ConsumePartition(topic string, partition int32, offset Offset) (*PartitionConsumer, error) {
-	sc := &c.simpleConsumer
-	sc.mu.Lock()
-	defer sc.mu.Unlock()
-
-	// If we have never consumed, init our simple consumer.
-	if sc.topicsConsumers == nil {
-		sc.topicsConsumers = make(map[string]map[int32]*PartitionConsumer, 1)
-		sc.brokerConsumers = make(map[int32]*brokerConsumer, 1)
-		sc.cl = c
-	}
-
-	// If we have never consumed this topic, init it.
-	topicsConsumers, exists := sc.topicsConsumers[topic]
-	if !exists {
-		topicsConsumers = make(map[int32]*PartitionConsumer, 1)
-		sc.topicsConsumers[topic] = topicsConsumers
-	}
-
-	// We can only have one consumer of a partition.
-	partitionConsumer, exists := topicsConsumers[partition]
-	if exists {
-		return nil, errors.New("partition is already being consumed")
-	}
-
-	partitionConsumer = &PartitionConsumer{
-		topic:     topic,
-		partition: partition,
-
-		sc: sc,
-
-		recordsCh: make(chan []*Record, 100),
-		errorsCh:  make(chan error, 5),
-
-		closeDone: make(chan struct{}),
-	}
-
-	// Return the partition consumer, which will load itself appropriately.
-	go partitionConsumer.load(offset)
-
-	return partitionConsumer, nil
-}
-
-// simpleConsumer is the "simple" consumer that does not use consumer groups.
-// It is dumb at handling errors; responsibility for error handling is punted
-// to the user of the client.
-type simpleConsumer struct {
+// consumer maps topic partitions to brokers and fetches records for those
+// topic partitions from those brokers.
+type consumer struct {
 	cl *Client
 
-	// mu guards the two fields below.
-	mu sync.Mutex
-	// topipcsConsumers maps topics that are being consumed to the
-	// partitions in those topics that are being consumed.
-	topicsConsumers map[string]map[int32]*PartitionConsumer
-	// brokerConsumers contain brokers that have topics/partitions being
-	// consumed.
+	mu sync.Mutex // guards below
+
+	topicsConsumers map[string]map[int32]*consumedPartition
 	brokerConsumers map[int32]*brokerConsumer
 }
 
 // brokerConsumer pairs a broker with the topics and partitions on that broker
 // that are being consumed.
 type brokerConsumer struct {
-	sc              *simpleConsumer
+	c               *consumer
 	broker          *broker
 	mu              sync.Mutex // guards below
-	topicsConsumers map[string]map[int32]*PartitionConsumer
+	topicsConsumers map[string]map[int32]*consumedPartition
 }
 
-// PartitionConsumer is a partition that has been requested to be consumed.
+// consumedPartition is a partition that has been requested to be consumed.
 // This is mapped to a single broker once; if the partition ever moves
 // between brokers, the errors channel will return the relevant error
 // and the consumer will need closing.
-type PartitionConsumer struct {
-	sc *simpleConsumer // our owner
+type consumedPartition struct {
+	c *consumer // our owner
 
 	topic     string
 	partition int32
@@ -162,22 +109,21 @@ type PartitionConsumer struct {
 	offset    int64
 	epoch     int32
 
-	recordsCh chan []*Record
-	errorsCh  chan error
-
 	closedMu  sync.Mutex
 	closed    int64
 	closeDone chan struct{}
 }
 
+// fetch metadata for all parts
+
 // load fetches metadata for a partition consumer to discover the
 // partition's leader.
 //
 // Once the leader is found, this triggers offset lookups.
-func (p *PartitionConsumer) load(offset Offset) {
+func (p *consumedPartition) load(offset Offset) {
 	retries := 0
 retry:
-	resp, err := p.sc.cl.fetchMetadata(false, p.topic)
+	resp, err := p.c.cl.fetchMetadata(false, p.topic)
 	if err != nil {
 		if retries < 3 { // TODO retries
 			retries++
@@ -197,9 +143,9 @@ retry:
 		if partMeta.Partition == p.partition {
 			leader := partMeta.Leader
 
-			p.sc.cl.brokersMu.RLock()
-			broker, exists := p.sc.cl.brokers[leader]
-			p.sc.cl.brokersMu.RUnlock()
+			p.c.cl.brokersMu.RLock()
+			broker, exists := p.c.cl.brokers[leader]
+			p.c.cl.brokersMu.RUnlock()
 
 			if !exists {
 				p.errorClose(errUnknownBrokerForLeader)
@@ -225,7 +171,7 @@ retry:
 //
 // If this is successful, we finally save the consumer to the broker and
 // begin consuming.
-func (p *PartitionConsumer) loadOffsets(broker *broker, offset Offset) {
+func (p *consumedPartition) loadOffsets(broker *broker, offset Offset) {
 	const earliest int64 = -2
 	const latest int64 = -1
 
@@ -336,7 +282,7 @@ start:
 
 // saveAndConsume finally saves the partition consumer into the broker that
 // will be used for fetching.
-func (p *PartitionConsumer) saveAndConsume(broker *broker) {
+func (p *consumedPartition) saveAndConsume(broker *broker) {
 	p.closedMu.Lock()
 	defer p.closedMu.Unlock()
 
@@ -344,17 +290,17 @@ func (p *PartitionConsumer) saveAndConsume(broker *broker) {
 		return
 	}
 
-	p.sc.mu.Lock()
-	defer p.sc.mu.Unlock()
+	p.c.mu.Lock()
+	defer p.c.mu.Unlock()
 
-	bc, exists := p.sc.brokerConsumers[p.leader]
+	bc, exists := p.c.brokerConsumers[p.leader]
 	if !exists {
 		bc = &brokerConsumer{
-			sc:              p.sc,
+			c:               p.c,
 			broker:          broker,
-			topicsConsumers: make(map[string]map[int32]*PartitionConsumer),
+			topicsConsumers: make(map[string]map[int32]*consumedPartition),
 		}
-		p.sc.brokerConsumers[p.leader] = bc
+		p.c.brokerConsumers[p.leader] = bc
 		bc.mu.Lock()
 
 		go bc.fetchLoop()
@@ -365,7 +311,7 @@ func (p *PartitionConsumer) saveAndConsume(broker *broker) {
 
 	brokerTopicConsumer, exists := bc.topicsConsumers[p.topic]
 	if !exists {
-		brokerTopicConsumer = make(map[int32]*PartitionConsumer, 1)
+		brokerTopicConsumer = make(map[int32]*consumedPartition, 1)
 		bc.topicsConsumers[p.topic] = brokerTopicConsumer
 	}
 	if _, exists := brokerTopicConsumer[p.partition]; exists {
@@ -374,7 +320,7 @@ func (p *PartitionConsumer) saveAndConsume(broker *broker) {
 	brokerTopicConsumer[p.partition] = p
 }
 
-func (p *PartitionConsumer) errorClose(err error) {
+func (p *consumedPartition) errorClose(err error) {
 	p.closedMu.Lock()
 	defer p.closedMu.Unlock()
 
@@ -391,7 +337,7 @@ func (p *PartitionConsumer) errorClose(err error) {
 //
 // This must be called once a partition consumer is done being used.
 // It is safe to call multiple times.
-func (p *PartitionConsumer) Close() {
+func (p *consumedPartition) Close() {
 	if atomic.SwapInt64(&p.closed, 1) == 1 {
 		<-p.closeDone
 		return
@@ -407,18 +353,18 @@ func (p *PartitionConsumer) Close() {
 
 	defer close(p.closeDone)
 
-	p.sc.mu.Lock()
-	defer p.sc.mu.Unlock()
+	p.c.mu.Lock()
+	defer p.c.mu.Unlock()
 
 	// Remove self from simple consumer so that this topic/partition
 	// can be re-consumed if desired.
-	topicsConsumers := p.sc.topicsConsumers[p.topic]
+	topicsConsumers := p.c.topicsConsumers[p.topic]
 	delete(topicsConsumers, p.partition)
 	if len(topicsConsumers) == 0 {
-		delete(p.sc.topicsConsumers, p.topic)
+		delete(p.c.topicsConsumers, p.topic)
 	}
 
-	bc := p.sc.brokerConsumers[p.leader]
+	bc := p.c.brokerConsumers[p.leader]
 	if bc == nil {
 		return // died before saving ourselves to the broker
 	}
@@ -442,7 +388,7 @@ func (p *PartitionConsumer) Close() {
 			// simple consumer. The broker's fetchLoop will stop once it
 			// sees it is empty.
 			if len(bc.topicsConsumers) == 0 {
-				delete(p.sc.brokerConsumers, p.leader)
+				delete(p.c.brokerConsumers, p.leader)
 			}
 		}
 	}
@@ -450,13 +396,13 @@ func (p *PartitionConsumer) Close() {
 
 // Errors returns the error channel that consume errors are sent along.
 // This must be drained completely.
-func (p *PartitionConsumer) Errors() <-chan error {
+func (p *consumedPartition) Errors() <-chan error {
 	return p.errorsCh
 }
 
 // Records returns the records channel that consumed records are sent along.
 // This must be drained completely.
-func (p *PartitionConsumer) Records() <-chan []*Record {
+func (p *consumedPartition) Records() <-chan []*Record {
 	return p.recordsCh
 }
 
@@ -583,7 +529,7 @@ func (bc *brokerConsumer) handleResp(req *kmsg.FetchRequest, resp *kmsg.FetchRes
 	}
 }
 
-func (p *PartitionConsumer) processResponse(resp *kmsg.FetchResponseResponsePartitionResponse) {
+func (p *consumedPartition) processResponse(resp *kmsg.FetchResponseResponsePartitionResponse) {
 	p.closedMu.Lock()
 	defer p.closedMu.Unlock()
 
@@ -624,7 +570,7 @@ func (p *PartitionConsumer) processResponse(resp *kmsg.FetchResponseResponsePart
 	}
 }
 
-func (p *PartitionConsumer) processBatch(batch *kmsg.RecordBatch) {
+func (p *consumedPartition) processBatch(batch *kmsg.RecordBatch) {
 	if batch.Length == 0 { // record batch had size of zero; there was no batch
 		return
 	}
@@ -678,9 +624,9 @@ func (bc *brokerConsumer) reloadAllAndRemoveSelf() {
 	bc.topicsConsumers = nil
 
 	go func() {
-		bc.sc.mu.Lock()
-		delete(bc.sc.brokerConsumers, bc.broker.id)
-		bc.sc.mu.Unlock()
+		bc.c.mu.Lock()
+		delete(bc.c.brokerConsumers, bc.broker.id)
+		bc.c.mu.Unlock()
 		for _, partitionConsumers := range reload {
 			for _, partitionConsumer := range partitionConsumers {
 				go partitionConsumer.load(Offset{request: partitionConsumer.offset})
