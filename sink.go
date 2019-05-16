@@ -490,6 +490,7 @@ func (recs *records) bufferRecord(pr promisedRecord) {
 	pr.r.Timestamp = time.Now() // timestamp after locking to ensure sequential
 
 	sink := recs.sink
+	client := sink.broker.client
 
 	newBatch := true
 	firstBatch := recs.batchDrainIdx == len(recs.batches)
@@ -499,14 +500,20 @@ func (recs *records) bufferRecord(pr promisedRecord) {
 		rNums := batch.calculateRecordNumbers(pr.r)
 		newBatchLength := batch.wireLength + rNums.wireLength
 		if batch.tries == 0 &&
-			newBatchLength <= sink.broker.client.cfg.producer.maxRecordBatchBytes {
+			newBatchLength <= client.cfg.producer.maxRecordBatchBytes {
 			newBatch = false
 			batch.appendRecord(pr, rNums)
 		}
 	}
 
 	if newBatch {
-		recs.batches = append(recs.batches, sink.newRecordBatch(recs.sequenceNum, pr))
+		recs.batches = append(recs.batches,
+			newRecordBatch(
+				client.producer.id,
+				client.producer.epoch,
+				recs.sequenceNum,
+				pr,
+			))
 	}
 	recs.sequenceNum++
 
@@ -595,7 +602,7 @@ var emptyRecordsPool = sync.Pool{
 
 // newRecordBatch returns a new record batch for a topic and partition
 // containing the given record.
-func (sink *recordSink) newRecordBatch(firstSeq int32, pr promisedRecord) *recordBatch {
+func newRecordBatch(producerID int64, producerEpoch int16, firstSeq int32, pr promisedRecord) *recordBatch {
 	const recordBatchOverhead = 4 + // NULLABLE_BYTES overhead
 		8 + // firstOffset
 		4 + // batchLength
@@ -613,8 +620,8 @@ func (sink *recordSink) newRecordBatch(firstSeq int32, pr promisedRecord) *recor
 	b := &recordBatch{
 		firstTimestamp: pr.r.Timestamp.UnixNano() / 1e6,
 		records:        (*(emptyRecordsPool.Get().(*[]promisedNumberedRecord)))[:0],
-		producerID:     sink.broker.client.producer.id,
-		producerEpoch:  sink.broker.client.producer.epoch,
+		producerID:     producerID,
+		producerEpoch:  producerEpoch,
 		baseSequence:   firstSeq,
 	}
 	pnr := promisedNumberedRecord{
