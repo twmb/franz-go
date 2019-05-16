@@ -11,10 +11,6 @@ import (
 
 // TODO KIP-359
 
-// TODO
-// init producer ID only on send
-// change toppars "loaded" to a state (uninit, ok, loading)
-
 type recordSink struct {
 	broker *broker // the broker this sink belongs to
 
@@ -58,7 +54,10 @@ func newRecordSink(broker *broker) *recordSink {
 
 	sink := &recordSink{
 		broker:         broker,
-		baseWireLength: messageRequestOverhead + produceRequestOverhead, // TODO + txn id len
+		baseWireLength: messageRequestOverhead + produceRequestOverhead,
+	}
+	if broker.client.cfg.producer.txnID != nil {
+		sink.baseWireLength += int32(len(*broker.client.cfg.producer.txnID))
 	}
 	sink.inflightSem.Store(make(chan struct{}, 1))
 	if broker.client.cfg.client.id != nil {
@@ -72,7 +71,7 @@ func newRecordSink(broker *broker) *recordSink {
 // and whether there are more records to create more requests immediately.
 func (sink *recordSink) createRequest() (*produceRequest, bool) {
 	request := &produceRequest{
-		// TODO transactional ID
+		txnID:   sink.broker.client.cfg.producer.txnID,
 		acks:    sink.broker.client.cfg.producer.acks.val,
 		timeout: sink.broker.client.cfg.client.requestTimeout,
 		batches: make(reqBatches, 5),
@@ -127,9 +126,7 @@ func (sink *recordSink) createRequest() (*produceRequest, bool) {
 		batch.tries++
 		recs.batchDrainIdx++
 
-		if !moreToDrain {
-			moreToDrain = len(recs.batches) > recs.batchDrainIdx
-		}
+		moreToDrain = len(recs.batches) > recs.batchDrainIdx || moreToDrain
 		recs.mu.Unlock()
 
 		wireLength += batchWireLength
@@ -438,115 +435,20 @@ func (sink *recordSink) handleRetryBatches(retry reqBatches) {
 		batch.owner.batchDrainIdx = 0
 	})
 
-	sink.broker.client.addMetadataWaiters(retry)
-
-	// TODO: we can switch this to one metadata fetch for all retry topics
-	for topic, migrateParts := range retry {
-		go sink.migrateTopic(topic, migrateParts)
-	}
+	sink.broker.client.triggerUpdateMetadata()
 }
 
-func (sink *recordSink) migrateTopic(topic string, migrateParts map[int32]sentBatch) {
-	client := sink.broker.client
-
-	tries := 1
-start:
-	loadParts := newTopicParts()
-	client.fetchTopicMetadataIntoParts(map[string]*topicPartitions{
-		topic: loadParts,
-	}, false)
-	if loadParts.loadErr != nil {
-		time.Sleep(client.cfg.client.retryBackoff(tries)) // TODO max retries
-		tries++
-		goto start
-	}
-
-	var deletedParts []*topicPartition
-	defer func() {
-		for _, tp := range deletedParts {
-			tp.records.sink.removeToppar(&tp.records)
-
-			tp.records.mu.Lock()
-			defer tp.records.mu.Unlock()
-
-			for _, batch := range tp.records.batches {
-				for i, record := range batch.records {
-					sink.broker.client.promise(record.pr, ErrPartitionDeleted)
-					batch.records[i] = noPNR
-				}
-				emptyRecordsPool.Put(&batch.records)
-			}
-		}
-	}()
-
-	// If any part we want to migrate no longer exists, the partition
-	// has been deleted.
-	for migratePart, migrateToppar := range migrateParts {
-		if _, exists := loadParts.all[migratePart]; !exists {
-			deletedParts = append(deletedParts, migrateToppar.owner.topicPartition)
-		}
-	}
-
-	existingParts, err := client.partitionsForTopicProduce(topic)
-	if err != nil {
-		panic("migrating existing topic, existing parts have err " + err.Error())
-	}
-
-	// We block all records from being added while we migrate partitions.
-	existingParts.mu.Lock()
-	defer existingParts.mu.Unlock()
-
-	existingParts.partitions = loadParts.partitions
-
-	// For all existing parts, if they no longer exist, we will call all
-	// buffered records with a partition deleted error.
-	//
-	// If the toppar does exist, but the drain is different (leader
-	// broker changed), we remove the toppar from the old drain and add
-	// it to the new.
-	for id, tp := range existingParts.all {
-		if newTP, exists := loadParts.all[id]; !exists {
-			deletedParts = append(deletedParts, tp)
-		} else if newTP.records.sink != tp.records.sink {
-			tp.records.sink.removeToppar(&tp.records)
-			tp.records.sink = newTP.records.sink
-			tp.records.sink.addToppar(&tp.records)
-		} else {
-			tp.records.clearBackoff()
-			tp.records.sink.maybeBeginDraining()
-		}
-		delete(loadParts.all, id)
-	}
-
-	// For any new parts that we did not know about prior, we add them.
-	for id, tp := range loadParts.all {
-		existingParts.all[id] = tp
-		tp.records.sink.addToppar(&tp.records)
-	}
-
-	// We store the new writable parts into the existing parts.
-	// Over all of them, we set the new toppar to the old (but updated).
-	existingParts.writable = loadParts.writable
-	for id := range existingParts.writable {
-		existingParts.writable[id] = existingParts.all[id]
-		// TODO err if went from writable to non-writable and not
-		// requires hash consistency.
-	}
-}
-
-func (sink *recordSink) addToppar(add *records) {
+func (sink *recordSink) addSource(add *records) {
 	sink.mu.Lock()
 	add.allPartRecsIdx = len(sink.allPartRecs)
 	sink.allPartRecs = append(sink.allPartRecs, add)
 	sink.mu.Unlock()
 
-	add.clearBackoff()
-
-	sink.maybeBeginDraining()
+	add.maybeBeginDraining()
 }
 
-// removeToppar removes the tracking of a toppar from the recordSink.
-func (sink *recordSink) removeToppar(rm *records) {
+// removeSource removes the tracking of a toppar from the recordSink.
+func (sink *recordSink) removeSource(rm *records) {
 	sink.mu.Lock()
 	defer sink.mu.Unlock()
 
@@ -613,10 +515,40 @@ func (recs *records) bufferRecord(pr promisedRecord) {
 	}
 }
 
-func (recs *records) clearBackoff() {
+func (recs *records) removeBatch0Locked() {
+	recs.batches[0] = nil
+	recs.batches = recs.batches[1:]
+	recs.batchDrainIdx--
+}
+
+func (recs *records) maybeBumpTriesAndFailBatch0(err error) {
+	recs.mu.Lock()
+	defer recs.mu.Unlock()
+	if len(recs.batches) == 0 {
+		return
+	}
+	batch0 := recs.batches[0]
+	batch0.tries++
+	client := recs.sink.broker.client
+	if batch0.tries > client.cfg.client.retries {
+		recs.removeBatch0Locked()
+		for i, record := range batch0.records {
+			client.promise(record.pr, err)
+			batch0.records[i] = noPNR
+		}
+		emptyRecordsPool.Put(&batch0.records)
+	}
+}
+
+func (recs *records) maybeBeginDraining() {
 	recs.mu.Lock()
 	recs.backoffDeadline = time.Time{}
+	drain := len(recs.batches) > 0
 	recs.mu.Unlock()
+
+	if drain {
+		recs.sink.maybeBeginDraining()
+	}
 }
 
 func (recs *records) resetSequenceNums() {
@@ -667,9 +599,7 @@ func (batch sentBatch) removeFromRecordBuf() {
 	if !batch.isFirstBatchInRecordBuf() {
 		panic("removeFromRecordBuf called on non-first batch")
 	}
-	recs.batches[0] = nil
-	recs.batches = recs.batches[1:]
-	recs.batchDrainIdx--
+	recs.removeBatch0Locked()
 	recs.mu.Unlock()
 }
 

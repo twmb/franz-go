@@ -136,6 +136,7 @@ var crc32c = crc32.MakeTable(crc32.Castagnoli) // record crc's use Castagnoli ta
 type produceRequest struct {
 	version int16
 
+	txnID   *string
 	acks    int16
 	timeout int32
 	batches reqBatches
@@ -145,14 +146,14 @@ type produceRequest struct {
 
 type reqBatches map[string]map[int32]sentBatch
 
-func (rbs reqBatches) addBatch(topic string, part int32, batch sentBatch) {
-	if rbs == nil {
-		rbs = make(reqBatches, 5)
+func (rbs *reqBatches) addBatch(topic string, part int32, batch sentBatch) {
+	if *rbs == nil {
+		*rbs = make(reqBatches, 5)
 	}
-	topicBatches, exists := rbs[topic]
+	topicBatches, exists := (*rbs)[topic]
 	if !exists {
 		topicBatches = make(map[int32]sentBatch, 1)
-		rbs[topic] = topicBatches
+		(*rbs)[topic] = topicBatches
 	}
 	topicBatches[part] = batch
 }
@@ -177,7 +178,7 @@ func (p *produceRequest) SetVersion(v int16) { p.version = v }
 func (p *produceRequest) GetVersion() int16  { return p.version }
 func (p *produceRequest) AppendTo(dst []byte) []byte {
 	if p.version >= 3 {
-		dst = kbin.AppendNullableString(dst, nil) // TODO transactional ID
+		dst = kbin.AppendNullableString(dst, p.txnID)
 	}
 
 	compressor := loadProduceCompressor(p.compression, p.version)

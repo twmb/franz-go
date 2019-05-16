@@ -36,6 +36,12 @@ type Client struct {
 	coordinatorsMu sync.Mutex
 	coordinators   map[coordinatorKey]int32
 
+	topicsMu sync.RWMutex
+	topics   map[string]*topicPartitions
+
+	metadataTicker   *time.Ticker
+	updateMetadataCh chan struct{}
+
 	closedCh chan struct{}
 }
 
@@ -183,14 +189,13 @@ start:
 		resp, err = c.broker().waitResp(req)
 	}
 
-	if isRetriableErr(err) {
+	if isRetriableBrokerErr(err) && tries < c.cfg.client.retries {
 		select {
 		case <-c.closedCh:
 			return nil, err
 		case <-time.After(c.cfg.client.retryBackoff(tries)):
 			goto start
 		}
-		goto start
 	}
 	return resp, err
 }

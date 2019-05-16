@@ -63,6 +63,7 @@ func NewClient(seedBrokers []string, opts ...Opt) (*Client, error) {
 			id:     &defaultID,
 			dialFn: stddial,
 
+			// TODO rename tries, tryBackoff
 			retryBackoff:   func(int) time.Duration { return 100 * time.Millisecond },
 			retries:        math.MaxInt32, // effectively unbounded
 			requestTimeout: int32(30 * time.Second / 1e4),
@@ -142,11 +143,15 @@ func NewClient(seedBrokers []string, opts ...Opt) (*Client, error) {
 		brokers: make(map[int32]*broker),
 
 		producer: producer{
-			tps:        make(map[string]*topicPartitions),
 			waitBuffer: make(chan struct{}, 100),
 		},
 
 		coordinators: make(map[coordinatorKey]int32),
+
+		topics: make(map[string]*topicPartitions),
+
+		metadataTicker:   time.NewTicker(time.Minute), // TODO configurable?
+		updateMetadataCh: make(chan struct{}, 1),
 
 		closedCh: make(chan struct{}),
 	}
@@ -157,6 +162,7 @@ func NewClient(seedBrokers []string, opts ...Opt) (*Client, error) {
 		c.brokers[b.id] = b
 		c.anyBroker = append(c.anyBroker, b)
 	}
+	go c.updateMetadataLoop()
 
 	return c, nil
 }
@@ -270,6 +276,7 @@ type (
 	producerOpt struct{ fn func(cfg *producerCfg) }
 
 	producerCfg struct {
+		txnID       *string
 		acks        RequiredAcks
 		compression []CompressionCodec // order of preference
 
@@ -279,8 +286,6 @@ type (
 		maxBufferedRecords  int64
 
 		partitioner Partitioner
-
-		txnID *string
 	}
 )
 

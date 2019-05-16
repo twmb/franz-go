@@ -16,9 +16,6 @@ type producer struct {
 	idLoaded int32
 	idMu     sync.Mutex
 
-	tpsMu sync.RWMutex
-	tps   map[string]*topicPartitions
-
 	bufferedRecords int64
 	waitBuffer      chan struct{}
 }
