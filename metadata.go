@@ -145,10 +145,10 @@ func (c *Client) fetchTopicMetadata(reqTopics []string) (map[string]*topicPartit
 				offline:  partMeta.OfflineReplicas,
 			}
 
-			broker, exists := c.brokers[partMeta.Leader]
+			broker, exists := c.brokers[p.leader]
 			if !exists {
 				if p.loadErr == nil {
-					p.loadErr = errUnknownBrokerForLeader // should not...
+					p.loadErr = &errUnknownBrokerForPartition{p.topic, p.partition, p.leader}
 				}
 			} else {
 				p.records.sink = broker.recordSink

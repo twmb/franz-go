@@ -61,7 +61,7 @@ func (c *Client) Produce(
 	}
 	if len(mapping) == 0 {
 		partitions.mu.RUnlock()
-		return errNoPartitionIDs
+		return ErrNoPartitionsAvailable
 	}
 
 	idIdx := c.cfg.producer.partitioner.Partition(r, len(partitions.partitions))

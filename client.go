@@ -232,11 +232,11 @@ start:
 			return nil, err
 		}
 		if id = atomic.LoadInt32(&c.controllerID); id < 0 {
-			return nil, errUnknownController
+			return nil, &errUnknownController{id}
 		}
 	}
 
-	return c.brokerOrErr(id, errUnknownController)
+	return c.brokerOrErr(id, &errUnknownController{id})
 }
 
 const (
@@ -270,7 +270,7 @@ start:
 	coordinator, ok := c.coordinators[key]
 	if ok {
 		c.coordinatorsMu.Unlock()
-		return c.brokerOrErr(coordinator, errUnknownCoordinator)
+		return c.brokerOrErr(coordinator, &errUnknownCoordinator{coordinator, key})
 	}
 
 	tries++
@@ -302,7 +302,7 @@ start:
 	c.coordinators[key] = coordinator
 	c.coordinatorsMu.Unlock()
 
-	return c.brokerOrErr(coordinator, errUnknownCoordinator)
+	return c.brokerOrErr(coordinator, &errUnknownCoordinator{coordinator, key})
 
 }
 

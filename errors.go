@@ -2,6 +2,7 @@ package kgo
 
 import (
 	"errors"
+	"fmt"
 
 	"github.com/twmb/kgo/kerr"
 )
@@ -32,12 +33,6 @@ var (
 
 	errNoResp = errors.New("message was not replied to in a response")
 
-	errNoPartitionIDs         = &clientErr{err: errors.New("topic currently has no known partition IDs"), retriable: true}
-	errUnknownPartition       = &clientErr{err: errors.New("unknown partition"), retriable: true}
-	errUnknownBrokerForLeader = &clientErr{err: errors.New("no broker is known for partition leader id"), retriable: true}
-	errUnknownController      = &clientErr{err: errors.New("controller is unknown"), retriable: true}
-	errUnknownCoordinator     = &clientErr{err: errors.New("coordinator is unknown"), retriable: true}
-
 	// ErrUnknownBroker is returned when issuing a request o a broker that
 	// the client does not know about.
 	ErrUnknownBroker = errors.New("unknown broker")
@@ -67,7 +62,16 @@ var (
 	// If this error happens, the client closes the broker connection.
 	ErrCorrelationIDMismatch = errors.New("correlation ID mismatch")
 
-	ErrPartitionDeleted = errors.New("TODO")
+	// ErrNoPartitionsAvailable is returned immediately when producing a
+	// non-consistent record to a topic that has no writable partitions.
+	ErrNoPartitionsAvailable = errors.New("no partitions available")
+
+	// ErrPartitionDeleted is returned when a partition that was being
+	// written to disappears in a metadata update.
+	//
+	// Kafka does not allow downsizing partition counts in Kafka, so this
+	// error should generally not appear.
+	ErrPartitionDeleted = errors.New("partition no longer exists!")
 )
 
 func isRetriableBrokerErr(err error) bool {
@@ -86,4 +90,47 @@ func isRetriableErr(err error) bool {
 		return kerr.IsRetriable(err)
 	}
 	return isRetriableBrokerErr(err)
+}
+
+type errUnknownBrokerForPartition struct {
+	topic     string
+	partition int32
+	broker    int32
+}
+
+func (e *errUnknownBrokerForPartition) Error() string {
+	return fmt.Sprintf("Kafka replied that topic %s partition %d has broker leader %d,"+
+		" but did not reply with that broker in the broker list",
+		e.topic, e.partition, e.broker)
+}
+
+type errUnknownController struct {
+	id int32
+}
+
+func (e *errUnknownController) Error() string {
+	return fmt.Sprintf("Kafka replied that the controller broker is %d,"+
+		" but did not reply with that broker in the broker list", e.id)
+}
+
+type errUnknownCoordinator struct {
+	coordinator int32
+	key         coordinatorKey
+}
+
+func (e *errUnknownCoordinator) Error() string {
+	switch e.key.typ {
+	case coordinatorTypeGroup:
+		return fmt.Sprintf("Kafka replied that group %s has broker coordinator %d,"+
+			" but did not reply with that broker in the broker list",
+			e.key.name, e.coordinator)
+	case coordinatorTypeTxn:
+		return fmt.Sprintf("Kafka replied that txn id %s has broker coordinator %d,"+
+			" but did not reply with that broker in the broker list",
+			e.key.name, e.coordinator)
+	default:
+		return fmt.Sprintf("Kafka replied to an unknown coordinator key %s (type %d) that it has a broker coordinator %d,",
+			" but did not reply with that broker in the broker list",
+			e.key.name, e.key.typ, e.coordinator)
+	}
 }
