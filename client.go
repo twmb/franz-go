@@ -36,8 +36,8 @@ type Client struct {
 	coordinatorsMu sync.Mutex
 	coordinators   map[coordinatorKey]int32
 
-	topicsMu sync.RWMutex
-	topics   map[string]*topicPartitions
+	topicsMu sync.Mutex
+	topics   atomic.Value // map[string]*topicPartitions
 
 	metadataTicker   *time.Ticker
 	updateMetadataCh chan struct{}

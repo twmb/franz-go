@@ -102,40 +102,25 @@ func (c *Client) updateMetadataLoop() {
 // try count bumped by one.
 func (c *Client) updateMetadata() (needsRetry bool, err error) {
 	// Quickly fetch all topics we have so we can update them.
-	c.topicsMu.Lock()
-	toUpdate := make([]string, 0, len(c.topics))
-	for topic := range c.topics {
+	topics := c.topics.Load().(map[string]*topicPartitions)
+	toUpdate := make([]string, 0, len(topics))
+	for topic := range topics {
 		toUpdate = append(toUpdate, topic)
 	}
-	c.topicsMu.Unlock()
 
 	meta, err := c.fetchTopicMetadata(toUpdate)
 	if err != nil {
 		return true, err
 	}
 
-	// Again over our topics, see what needs merging from the update.
-	c.topicsMu.Lock()
-	type oldNew struct {
-		l, r *topicPartitions
-	}
-	var toMerge []oldNew
-	for topic, oldParts := range c.topics {
+	for topic, oldParts := range topics {
 		newParts, exists := meta[topic]
 		if !exists {
 			continue
 		}
-		toMerge = append(toMerge, oldNew{
-			l: oldParts,
-			r: newParts,
-		})
+		needsRetry = oldParts.merge(newParts) || needsRetry
 	}
-	c.topicsMu.Unlock()
 
-	// Finally, merge all topic partitions.
-	for _, m := range toMerge {
-		needsRetry = m.l.merge(m.r) || needsRetry
-	}
 	return needsRetry, nil
 }
 

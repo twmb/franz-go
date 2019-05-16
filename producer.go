@@ -115,16 +115,21 @@ func (c *Client) promise(pr promisedRecord, err error) {
 }
 
 func (c *Client) partitionsForTopicProduce(topic string) (*topicPartitions, error) {
-	c.topicsMu.RLock()
-	parts, exists := c.topics[topic]
-	c.topicsMu.RUnlock()
+	topics := c.topics.Load().(map[string]*topicPartitions)
+	parts, exists := topics[topic]
 
 	if !exists {
 		c.topicsMu.Lock()
-		parts, exists = c.topics[topic]
+		topics = c.topics.Load().(map[string]*topicPartitions)
+		parts, exists = topics[topic]
 		if !exists {
 			parts = newTopicParts()
-			c.topics[topic] = parts
+			newTopics := make(map[string]*topicPartitions, len(topics)+1)
+			for topic, topicPartitions := range topics {
+				newTopics[topic] = topicPartitions
+			}
+			newTopics[topic] = parts
+			c.topics.Store(newTopics)
 		}
 		c.topicsMu.Unlock()
 	}

@@ -148,14 +148,13 @@ func NewClient(seedBrokers []string, opts ...Opt) (*Client, error) {
 
 		coordinators: make(map[coordinatorKey]int32),
 
-		topics: make(map[string]*topicPartitions),
-
 		metadataTicker:   time.NewTicker(time.Minute), // TODO configurable?
 		updateMetadataCh: make(chan struct{}, 1),
 
 		closedCh: make(chan struct{}),
 	}
 	c.rng.Seed(uint64(time.Now().UnixNano()))
+	c.topics.Store(make(map[string]*topicPartitions))
 
 	for i, seedAddr := range seedAddrs {
 		b := c.newBroker(seedAddr, unknownSeedID(i))
