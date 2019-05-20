@@ -8,6 +8,10 @@ import (
 	"github.com/twmb/kgo/kerr"
 )
 
+func (c *Client) loadTopics() map[string]*topicPartitions {
+	return c.topics.Load().(map[string]*topicPartitions)
+}
+
 type topicPartition struct {
 	topic     string // our topic
 	partition int32  // our partition number
