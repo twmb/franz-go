@@ -2,30 +2,6 @@ package kgo
 
 import "time"
 
-// TimestampType signifies what type of timestamp is in a record.
-type TimestampType struct {
-	t int8
-}
-
-// TimestampCreateTime returns the CreateTime timestamp type.
-func TimestampCreateTime() TimestampType { return TimestampType{0} }
-
-// TimestampLogAppendTime returns the LogAppendTime timestamp type.
-func TimestampLogAppendTime() TimestampType { return TimestampType{1} }
-
-// IsNotAvailable returns if a timestamp type is unavailable for a record.
-//
-// Records before Kafka 0.11.0.0 did not have timestamp types.
-func (t TimestampType) IsNotAvailable() bool { return t.t == -1 }
-
-// IsCreateTime returns if a record's timestamp is from the time the record was
-// created (in a client).
-func (t TimestampType) IsCreateTime() bool { return t.t == 0 }
-
-// IsLogAppendTime returns if a record's timestamp was generated within a Kafka
-// broker.
-func (t TimestampType) IsLogAppendTime() bool { return t.t == 1 }
-
 // RecordHeader contains extra information that can be sent with Records.
 type RecordHeader struct {
 	Key   string
@@ -60,12 +36,15 @@ type Record struct {
 	// This field is always set in Produce.
 	Timestamp time.Time
 
-	// TimestampType specifies what type of timestamping to use.
+	// TimestampType specifies how Timestamp was determined.
 	//
-	// The default is CreateTime, but another option is LogAppendTime,
-	// which ignores any set timestamp when writing a record and instead
-	// uses the timestamp Kafka generates when storing the record.
-	TimestampType TimestampType
+	// The default, 0, means that the timestamp was determined in a client
+	// when the record was produced.
+	//
+	// The alternative is 1, which is when the Timestamp is set in Kafka.
+	//
+	// Records pre 0.11.0.0 did not have timestamps.
+	TimestampType int8
 
 	// Topic is the topic that a record is written to.
 	//
