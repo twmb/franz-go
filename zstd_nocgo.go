@@ -2,6 +2,8 @@
 
 package kgo
 
+// TODO https://github.com/klauspost/compress/tree/master/zstd
+
 import "errors"
 
 var hasZstd = false

@@ -49,9 +49,9 @@ func (c *Client) Produce(
 		promise = noPromise
 	}
 
-	partitions, err := c.partitionsForTopicProduce(r.Topic)
-	if err != nil {
-		return err
+	partitions := c.partitionsForTopicProduce(r.Topic)
+	if partitions.loadErr != nil {
+		return partitions.loadErr
 	}
 
 	mapping := partitions.writable
@@ -110,7 +110,7 @@ func (c *Client) promise(pr promisedRecord, err error) {
 	pr.promise(pr.r, err)
 }
 
-func (c *Client) partitionsForTopicProduce(topic string) (*topicPartitionsData, error) {
+func (c *Client) partitionsForTopicProduce(topic string) *topicPartitionsData {
 	topics := c.loadTopics()
 	parts, exists := topics[topic]
 
@@ -120,27 +120,28 @@ func (c *Client) partitionsForTopicProduce(topic string) (*topicPartitionsData, 
 		parts, exists = topics[topic]
 		if !exists {
 			parts = newTopicParts()
-			newTopics := make(map[string]*topicPartitions, len(topics)+1)
-			for topic, topicPartitions := range topics {
-				newTopics[topic] = topicPartitions
-			}
+			newTopics := c.cloneTopics()
 			newTopics[topic] = parts
 			c.topics.Store(newTopics)
 		}
 		c.topicsMu.Unlock()
 	}
 
-	tries := 0
 	v := parts.load()
-	for tries < c.cfg.client.retries &&
-		(len(v.partitions) == 0 || kerr.IsRetriable(v.loadErr)) {
-		tries++
-		c.triggerUpdateMetadata()
-		parts.c.L.Lock()
-		parts.c.Wait()
-		parts.c.L.Unlock()
-		v = parts.load()
+	if len(v.partitions) > 0 || !kerr.IsRetriable(v.loadErr) {
+		return v // fast, normal path
 	}
 
-	return v, v.loadErr
+	parts.mu.RLock()
+	defer parts.mu.RUnlock()
+
+	tries := 0
+	for tries < c.cfg.client.retries && (len(v.partitions) == 0 || kerr.IsRetriable(v.loadErr)) {
+
+		tries++
+		c.triggerUpdateMetadata()
+		parts.c.Wait()
+		v = parts.load()
+	}
+	return v
 }

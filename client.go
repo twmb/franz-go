@@ -16,6 +16,13 @@ import (
 // TODO: producing should use its own broker connections, and consuming
 // should use its own broker connections. This way, metadata/offset
 // commits are not blocked.
+//
+// This can be done on the broker struct!
+// - have three cxn pointers, three loops (spun up as necessary)
+// - depending on what type of request used,
+//   used appropriate loo
+// - request type can have field
+// - or can call broker.waitConsumer, waitProducer, wait
 
 // Client issues requests and handles responses to a Kafka cluster.
 type Client struct {
@@ -31,7 +38,7 @@ type Client struct {
 	controllerID int32 // atomic
 
 	producer producer
-	//consumer consumer
+	consumer consumer
 
 	coordinatorsMu sync.Mutex
 	coordinators   map[coordinatorKey]int32
@@ -61,13 +68,15 @@ func (c *Client) broker() *broker {
 
 // fetchBrokerMetadata issues a metadata request solely for broker information.
 func (c *Client) fetchBrokerMetadata() error {
-	_, err := c.fetchMetadata(false)
+	_, err := c.fetchMetadata(false, nil)
 	return err
 }
 
-func (c *Client) fetchMetadata(all bool, topics ...string) (*kmsg.MetadataResponse, error) {
+func (c *Client) fetchMetadata(all bool, topics []string) (*kmsg.MetadataResponse, error) {
 	if all {
 		topics = nil
+	} else {
+		topics = []string{}
 	}
 	broker := c.broker()
 	var meta *kmsg.MetadataResponse
@@ -175,7 +184,7 @@ start:
 	if metaReq, isMetaReq := req.(*kmsg.MetadataRequest); isMetaReq {
 		// We hijack any metadata request so as to populate our
 		// own brokers and controller ID.
-		resp, err = c.fetchMetadata(metaReq.Topics == nil, metaReq.Topics...)
+		resp, err = c.fetchMetadata(metaReq.Topics == nil, metaReq.Topics)
 	} else if _, admin := req.(kmsg.AdminRequest); admin {
 		var controller *broker
 		if controller, err = c.controller(); err == nil {

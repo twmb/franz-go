@@ -12,10 +12,21 @@ func (c *Client) loadTopics() map[string]*topicPartitions {
 	return c.topics.Load().(map[string]*topicPartitions)
 }
 
+func (c *Client) cloneTopics() map[string]*topicPartitions {
+	old := c.loadTopics()
+	new := make(map[string]*topicPartitions, len(old)+5)
+	for topic, topicPartition := range old {
+		new[topic] = topicPartition
+	}
+	return new
+}
+
+// topicPartition contains all information from Kafka for a topic's partition,
+// as well as all records waiting to be sent to it.
 type topicPartition struct {
-	topic     string // our topic
-	partition int32  // our partition number
-	loadErr   error  // leader/listener/replica not avail
+	topic     string
+	partition int32
+	loadErr   error // could be leader/listener/replica not avail
 
 	leader      int32 // our broker leader
 	leaderEpoch int32 // our broker leader epoch
@@ -27,26 +38,24 @@ type topicPartition struct {
 	records *records
 }
 
-// topicPartitionsData is the data behind a topicPartition's v.
+// topicPartitionsData is the data behind a topicPartitions' v.
 //
 // We keep this in an atomic because it is expected to be extremely read heavy,
 // and if it were behind a lock, the lock would need holding for a good chunk
 // of code.
 type topicPartitionsData struct {
-	loadErr    error // auth, unknown, leader not avail, or creation err
+	loadErr    error // could be auth, unknown, leader not avail, or creation err
 	partitions []int32
 	all        map[int32]*topicPartition // partition num => partition
 	writable   map[int32]*topicPartition // partition num => partition, eliding partitions with no leader / listener
 }
 
+// topicPartitions contains all information about a topic's partitions.
 type topicPartitions struct {
 	v atomic.Value // *topicPartitionsData
 
-	// We actually do not guard any "new" condition with this condition,
-	// unlike normal conditions. The main key to producing is to have no
-	// load error. If we produce to an out of date topicPartitionData, that
-	// is fine.
-	c *sync.Cond
+	mu sync.RWMutex
+	c  *sync.Cond
 }
 
 func (t *topicPartitions) load() *topicPartitionsData {
@@ -55,7 +64,7 @@ func (t *topicPartitions) load() *topicPartitionsData {
 
 // newTopicParts creates and returns new topicPartitions
 func newTopicParts() *topicPartitions {
-	parts := &topicPartitions{}
+	parts := new(topicPartitions)
 	parts.v.Store(&topicPartitionsData{
 		all:      make(map[int32]*topicPartition),
 		writable: make(map[int32]*topicPartition),
@@ -83,30 +92,23 @@ func (c *Client) updateMetadataLoop() {
 		case <-c.metadataTicker.C:
 			c.triggerUpdateMetadata()
 		case <-c.updateMetadataCh:
-			time.Sleep(time.Millisecond)
-			tries := 0
-		start:
-			tries++
 			again, err := c.updateMetadata()
-			if err != nil && tries < c.cfg.client.retries {
-				select {
-				case <-c.closedCh:
-					return
-				case <-time.After(c.cfg.client.retryBackoff(tries)):
-					goto start
-				}
-			}
-
-			if again {
+			if again || err != nil {
 				c.triggerUpdateMetadata()
 			}
 
-			// To avoid unnecessary repeated updates, we sleep 1s
-			// between updates.
+			// If we did not error, we sleep 1s before the next
+			// update to avoid unnecessary updates.
+			// If we did error, we obey the backoff function.
+			sleep := time.Second
+			if err != nil {
+				sleep = c.cfg.client.retryBackoff(tries)
+			}
+
 			select {
 			case <-c.closedCh:
 				return
-			case <-time.After(time.Second):
+			case <-time.After(sleep):
 			}
 		}
 	}
@@ -119,8 +121,7 @@ func (c *Client) updateMetadataLoop() {
 // or the record buffer for each erroring partition, has the first batch's
 // try count bumped by one.
 func (c *Client) updateMetadata() (needsRetry bool, err error) {
-	// Quickly fetch all topics we have so we can update them.
-	topics := c.topics.Load().(map[string]*topicPartitions)
+	topics := c.loadTopics()
 	toUpdate := make([]string, 0, len(topics))
 	for topic := range topics {
 		toUpdate = append(toUpdate, topic)
@@ -131,6 +132,7 @@ func (c *Client) updateMetadata() (needsRetry bool, err error) {
 		return true, err
 	}
 
+	// Merge the producer side of the update.
 	for topic, oldParts := range topics {
 		newParts, exists := meta[topic]
 		if !exists {
@@ -139,13 +141,16 @@ func (c *Client) updateMetadata() (needsRetry bool, err error) {
 		needsRetry = oldParts.merge(newParts) || needsRetry
 	}
 
+	// Trigger any consumer updates.
+	c.consumer.doOnMetadataUpdate()
+
 	return needsRetry, nil
 }
 
 // fetchTopicMetadata fetches metadata for all reqTopics and returns new
 // topicPartitionsData for each topic.
 func (c *Client) fetchTopicMetadata(reqTopics []string) (map[string]*topicPartitionsData, error) {
-	meta, err := c.fetchMetadata(false, reqTopics...)
+	meta, err := c.fetchMetadata(false, reqTopics)
 	if err != nil {
 		return nil, err
 	}
@@ -160,8 +165,8 @@ func (c *Client) fetchTopicMetadata(reqTopics []string) (map[string]*topicPartit
 
 		parts := &topicPartitionsData{
 			loadErr:  kerr.ErrorForCode(topicMeta.ErrorCode),
-			all:      make(map[int32]*topicPartition),
-			writable: make(map[int32]*topicPartition),
+			all:      make(map[int32]*topicPartition, len(topicMeta.PartitionMetadata)),
+			writable: make(map[int32]*topicPartition, len(topicMeta.PartitionMetadata)),
 		}
 		topics[topicMeta.Topic] = parts
 
@@ -216,8 +221,15 @@ func (c *Client) fetchTopicMetadata(reqTopics []string) (map[string]*topicPartit
 //
 // Retries are necessary if the topic or any partition has a retriable error.
 func (l *topicPartitions) merge(r *topicPartitionsData) (needsRetry bool) {
-	// We do not gate our broadcast with a mutex.
-	defer l.c.Broadcast()
+	defer func() {
+		// Lock&Unlock guarantees that anything that loaded the value
+		// before our broadcast but had not reached Wait will hit
+		// the wait before we broadcast.
+		l.mu.Lock()
+		l.mu.Unlock()
+
+		l.c.Broadcast()
+	}()
 
 	lv := *l.load() // copy so our field writes do not collide with reads
 	defer func() { l.v.Store(&lv) }()
@@ -235,7 +247,7 @@ func (l *topicPartitions) merge(r *topicPartitionsData) (needsRetry bool) {
 	var deleted []*topicPartition // should end up empty
 
 	// Migrating topicPartitions is a little tricky because we have to
-	// worry about map contents. Basically, though, we always have to keep
+	// worry about map contents. Basically, we always have to keep
 	// the old "records", but we want the new of everything else.
 	for part, oldTP := range lv.all {
 		newTP, exists := r.all[part]
@@ -274,7 +286,7 @@ func (l *topicPartitions) merge(r *topicPartitionsData) (needsRetry bool) {
 		newTP.records = oldTP.records
 	}
 
-	for _, newTP := range r.all { // anything left in r.all is new
+	for _, newTP := range r.all { // anything left with a negative allPartsRecsIdx index is new
 		if newTP.records.allPartRecsIdx == -1 {
 			newTP.records.sink.addSource(newTP.records)
 		}
@@ -296,7 +308,7 @@ func (l *topicPartitions) merge(r *topicPartitionsData) (needsRetry bool) {
 // handleDeletedPartitions calls all promises in all records in all partitions
 // in deleted with ErrPartitionDeleted.
 //
-// I do not think Kafka can actually delete a partition, but, just in case.
+// Kafka currently has no way to delete a partition, but, just in case.
 func handleDeletedPartitions(deleted []*topicPartition) {
 	for _, d := range deleted {
 		d.records.mu.Lock()
