@@ -280,12 +280,12 @@ FetchRequest => key 1, max version 10
   // SessionID is used for broker-to-broker communication.
   //
   // Because this is not needed in general clients, documentation is elided.
-  // Read KIP-227 for more details.
+  // Read KIP-227 for more details. Use -1 as a general client.
   SessionID: int32 // v7+
   // SessionEpoch is used for broker-to-broker communication.
   //
   // Because this is not needed in general clients, documentation is elided.
-  // Read KIP-227 for more details.
+  // Read KIP-227 for more details. Use -1 as a general client.
   SessionEpoch: int32 // v7+
   // Topic contains topics to try to fetch records for.
   Topics: [=>]
