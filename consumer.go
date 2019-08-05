@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/twmb/kgo/kerr"
 	"github.com/twmb/kgo/kmsg"
 )
 
@@ -79,6 +80,38 @@ func ConsumeExactOffset(o int64) Offset {
 	return Offset{request: o}
 }
 
+type TopicPartitions struct {
+	Topic      string
+	Partitions []int32
+}
+
+// TopicPartitions requests and returns partitions for the requested topics or
+// an error if the request failed.
+//
+// If no topics are requested, this returns all topics and their partitions.
+func (c *Client) TopicPartitions(topics ...string) ([]TopicPartitions, error) {
+	resp, err := c.fetchMetadata(len(topics) == 0, topics)
+	if err != nil {
+		return nil, err
+	}
+
+	tps := make([]TopicPartitions, 0, len(resp.TopicMetadata))
+	for _, topicMeta := range resp.TopicMetadata {
+		if topicMeta.IsInternal {
+			continue
+		}
+		tp := TopicPartitions{
+			Topic:      topicMeta.Topic,
+			Partitions: make([]int32, 0, len(topicMeta.PartitionMetadata)),
+		}
+		for _, partMeta := range topicMeta.PartitionMetadata {
+			tp.Partitions = append(tp.Partitions, partMeta.Partition)
+		}
+		tps = append(tps, tp)
+	}
+	return tps, nil
+}
+
 type consumer struct {
 	client *Client
 
@@ -134,6 +167,7 @@ func (c *Client) PollConsumer(ctx context.Context) Fetches {
 		for _, ready := range consumer.sourcesReadyForDraining {
 			fetches = append(fetches, ready.takeBuffered())
 		}
+		consumer.sourcesReadyForDraining = nil
 		consumer.sourcesReadyMu.Unlock()
 	}
 
@@ -367,7 +401,44 @@ func (c *consumer) tryBrokerOffsetLoad(broker *broker, load *offsetsWaitingLoad)
 		return
 	}
 
-	// TODO
+	for _, responseTopic := range resp.Responses {
+		topic := responseTopic.Topic
+		waitingParts, ok := load.waiting[topic]
+		if !ok {
+			continue
+		}
+
+		for _, responsePartition := range responseTopic.PartitionResponses {
+			partition := responsePartition.Partition
+			waitingPart, ok := waitingParts[partition]
+			if !ok {
+				continue
+			}
+
+			err := kerr.ErrorForCode(responsePartition.ErrorCode)
+			if err != nil {
+				if !kerr.IsRetriable(err) {
+					// TODO notify client users somehow
+					// Maybe a single fake Fetch in the
+					// first Poll.
+					delete(waitingParts, partition)
+				}
+				continue
+			}
+
+			topicPartitions := c.client.loadTopics()[topic].load()
+			topicPartition, ok := topicPartitions.all[partition]
+			if !ok {
+				continue // very weird
+			}
+
+			offset := responsePartition.Offset
+			if waitingPart.request >= 0 {
+				offset = waitingPart.request + waitingPart.relative
+			}
+			topicPartition.consumption.setOffset(offset)
+		}
+	}
 }
 
 type offsetsWaitingLoad struct {
@@ -388,7 +459,12 @@ func (o *offsetsWaitingLoad) setTopicParts(topic string, partitions map[int32]Of
 
 func (o *offsetsWaitingLoad) setTopicPart(topic string, partition int32, offset Offset) {
 	o.maybeInit()
-	o.waiting[topic][partition] = offset
+	parts := o.waiting[topic]
+	if parts == nil {
+		parts = make(map[int32]Offset)
+		o.waiting[topic] = parts
+	}
+	parts[partition] = offset
 }
 
 func (o *offsetsWaitingLoad) buildReq() *kmsg.ListOffsetsRequest {
@@ -399,6 +475,14 @@ func (o *offsetsWaitingLoad) buildReq() *kmsg.ListOffsetsRequest {
 	for topic, partitions := range o.waiting {
 		parts := make([]kmsg.ListOffsetsRequestTopicPartition, 0, len(partitions))
 		for partition, offset := range partitions {
+			// If this partition is using an exact offset request,
+			// then Assign was called with the partition not
+			// existing. We just use -1 to ensure the partition
+			// is loaded.
+			timestamp := offset.request
+			if timestamp >= 0 {
+				timestamp = -1
+			}
 			parts = append(parts, kmsg.ListOffsetsRequestTopicPartition{
 				Partition:          partition,
 				CurrentLeaderEpoch: -1, // TODO KIP-320

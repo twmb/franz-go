@@ -235,7 +235,10 @@ func (c *Client) fetchTopicMetadata(reqTopics []string) (map[string]*topicPartit
 					allPartRecsIdx:  -1, // required, see below
 					lastAckedOffset: -1,
 				},
-				consumption: new(consumption),
+				consumption: &consumption{
+					allConsumptionsIdx: -1, // same, see below
+					offset:             -1, // required to not consume until needed
+				},
 
 				replicas: partMeta.Replicas,
 				isr:      partMeta.ISR,
@@ -333,9 +336,15 @@ func (l *topicPartitions) merge(r *topicPartitionsData) (needsRetry bool) {
 
 	}
 
-	for _, newTP := range r.all { // anything left with a negative allPartsRecsIdx index is new
+	// Anything left with a negative allPartsRecsIdx is a new topic
+	// partition. We use this to add the new tp's records to its sink.
+	// Same reasoning applies to the consumption offset.
+	for _, newTP := range r.all {
 		if newTP.records.allPartRecsIdx == -1 {
 			newTP.records.sink.addSource(newTP.records)
+		}
+		if newTP.consumption.allConsumptionsIdx == -1 { // should be true if allPartsRecsIdx == -1
+			newTP.consumption.source.addConsumption(newTP.consumption)
 		}
 	}
 

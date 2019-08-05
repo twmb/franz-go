@@ -25,8 +25,9 @@ type recordSource struct {
 
 	allConsumptionsStart int
 
-	buffered    Fetch
-	hasBuffered bool
+	buffered Fetch
+
+	filling bool
 }
 
 func newRecordSource(broker *broker) *recordSource {
@@ -39,14 +40,11 @@ func newRecordSource(broker *broker) *recordSource {
 
 func (source *recordSource) addConsumption(add *consumption) {
 	source.mu.Lock()
-	wasConsuming := len(source.allConsumptions) > 0
 	add.allConsumptionsIdx = len(source.allConsumptions)
 	source.allConsumptions = append(source.allConsumptions, add)
 	source.mu.Unlock()
 
-	if !wasConsuming {
-		go source.fill()
-	}
+	source.maybeBeginConsuming()
 }
 
 func (source *recordSource) removeConsumption(rm *consumption) {
@@ -82,8 +80,10 @@ type consumption struct {
 
 func (consumption *consumption) setOffset(offset int64) {
 	consumption.mu.Lock()
-	defer consumption.mu.Unlock()
 	consumption.offset = offset
+	consumption.mu.Unlock()
+
+	consumption.source.maybeBeginConsuming()
 }
 
 func (source *recordSource) createRequest() (req *fetchRequest, again bool) {
@@ -98,18 +98,38 @@ func (source *recordSource) createRequest() (req *fetchRequest, again bool) {
 		// while we using its fields.
 		consumption.mu.Lock()
 
+		if consumption.offset == -1 {
+			consumption.mu.Unlock()
+			continue
+		}
+
+		again = true
 		req.addTopicPartitionConsumption(
 			consumption.topicPartition.topic,
 			consumption.topicPartition.partition,
 			consumption,
 		)
 
-		consumption.mu.Lock()
+		consumption.mu.Unlock()
 	}
 
 	source.allConsumptionsStart = (source.allConsumptionsStart + 1) % len(source.allConsumptions)
 
-	return req, len(source.allConsumptions) > 0
+	source.filling = again
+	return req, again
+}
+
+func (source *recordSource) maybeBeginConsuming() {
+	source.mu.Lock()
+
+	if source.filling {
+		source.mu.Unlock()
+		return
+	}
+	source.filling = true
+	source.mu.Unlock()
+
+	go source.fill()
 }
 
 func (source *recordSource) fill() {
@@ -156,6 +176,12 @@ func (source *recordSource) handleReqResp(req *fetchRequest, resp kmsg.Response,
 		Topics: make([]FetchTopic, 0, len(r.Responses)),
 	}
 
+	if err = kerr.ErrorForCode(r.ErrorCode); err != nil {
+		// TODO
+		// ErrBrokerDead: ok
+		return
+	}
+
 	for _, responseTopic := range r.Responses {
 		topic := responseTopic.Topic
 		consumedPartions, ok := req.consumptions[topic]
@@ -198,8 +224,12 @@ func (source *recordSource) handleReqResp(req *fetchRequest, resp kmsg.Response,
 		source.broker.client.triggerUpdateMetadata()
 	}
 
-	source.buffered = newFetch
-	source.broker.client.consumer.addSourceReadyForDraining(source)
+	if len(newFetch.Topics) > 0 {
+		source.buffered = newFetch
+		source.broker.client.consumer.addSourceReadyForDraining(source)
+	} else {
+		<-source.inflightSem
+	}
 }
 
 func (c *consumption) processResponsePartition(
@@ -263,7 +293,9 @@ func (c *consumption) processResponsePartition(
 		// TODO backoff permanently?
 	}
 
-	return newFetchPartition, true, requiresMetadataUpdate
+	return newFetchPartition,
+		len(newFetchPartition.Records) > 0,
+		requiresMetadataUpdate
 }
 
 func (c *consumption) processResponsePartitionBatch(
@@ -320,7 +352,7 @@ func (c *consumption) processResponsePartitionBatch(
 		return
 	}
 
-	newFetchPartition.Records = records
+	newFetchPartition.Records = append(newFetchPartition.Records, records...)
 	c.offset = currentOffset
 }
 
@@ -370,11 +402,13 @@ func (f *fetchRequest) SetVersion(v int16) { f.version = v }
 func (f *fetchRequest) GetVersion() int16  { return f.version }
 func (f *fetchRequest) AppendTo(dst []byte) []byte {
 	req := kmsg.FetchRequest{
+		Version:      f.version,
 		ReplicaID:    -1,
-		MaxWaitTime:  500, // TODO
+		MaxWaitTime:  5000, // TODO
 		MinBytes:     1,
 		MaxBytes:     500 << 20, // TODO
-		SessionEpoch: -1,        // KIP-227, we do not want to support
+		SessionID:    -1,
+		SessionEpoch: -1, // KIP-227, we do not want to support
 		Topics:       make([]kmsg.FetchRequestTopic, 0, len(f.consumptions)),
 	}
 	for topic, partitions := range f.consumptions {
