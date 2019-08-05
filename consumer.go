@@ -1,14 +1,16 @@
 package kgo
 
 import (
+	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/twmb/kgo/kmsg"
 )
 
-type consumerType int8
+type consumerType uint32
 
 const (
 	consumerTypeUnset consumerType = iota
@@ -85,14 +87,94 @@ type consumer struct {
 
 	seq uint64
 
-	offsetsWaitingLoad offsetsWaitingLoad
+	offsetsWaitingLoad *offsetsWaitingLoad
 
-	consuming map[string]map[int32]consumption
+	sourcesReadyMu          sync.Mutex
+	sourcesReadyCond        *sync.Cond
+	sourcesReadyForDraining []*recordSource
 }
 
-func (c *consumer) checkAndSetType(typ consumerType) error {
-	if c.typ == consumerTypeUnset || c.typ == typ {
+func (c *consumer) addSourceReadyForDraining(source *recordSource) {
+	c.sourcesReadyMu.Lock()
+	c.sourcesReadyForDraining = append(c.sourcesReadyForDraining, source)
+	c.sourcesReadyMu.Unlock()
+	c.sourcesReadyCond.Broadcast()
+}
+
+type FetchPartition struct {
+	Partition        int32
+	Err              error
+	HighWatermark    int64
+	LastStableOffset int64
+	Records          []*Record
+}
+
+type FetchTopic struct {
+	Topic      string
+	Partitions []FetchPartition
+}
+
+type Fetch struct {
+	Topics []FetchTopic
+}
+
+type Fetches []Fetch
+
+func (c *Client) PollConsumer(ctx context.Context) Fetches {
+	consumer := &c.consumer
+
+	if consumerType(atomic.LoadUint32((*uint32)(&consumer.typ))) == consumerTypeUnset {
+		return nil
+	}
+
+	var fetches Fetches
+
+	fill := func() {
+		consumer.sourcesReadyMu.Lock()
+		for _, ready := range consumer.sourcesReadyForDraining {
+			fetches = append(fetches, ready.takeBuffered())
+		}
+		consumer.sourcesReadyMu.Unlock()
+	}
+
+	fill()
+	if len(fetches) > 0 {
+		return fetches
+	}
+
+	done := make(chan struct{})
+	quit := false
+	go func() {
+		consumer.sourcesReadyMu.Lock()
+		defer consumer.sourcesReadyMu.Unlock()
+		defer close(done)
+
+		for !quit {
+			if len(consumer.sourcesReadyForDraining) > 0 {
+				return
+			}
+			consumer.sourcesReadyCond.Wait()
+		}
+	}()
+
+	select {
+	case <-ctx.Done():
+	case <-done:
+	}
+
+	fill()
+	return fetches
+}
+
+func (c *consumer) maybeInit(client *Client, typ consumerType) error {
+	if c.typ == consumerTypeUnset {
+		c.client = client
+		atomic.StoreUint32((*uint32)(&c.typ), uint32(typ))
 		c.typ = typ
+		c.sourcesReadyCond = sync.NewCond(&c.sourcesReadyMu)
+		return nil
+	}
+	if c.typ == typ {
 		return nil
 	}
 	switch c.typ {
@@ -112,12 +194,11 @@ func (c *Client) AssignPartitions(assignments map[string]map[int32]Offset) error
 	consumer.mu.Lock()
 	defer consumer.mu.Unlock()
 
-	if err := consumer.checkAndSetType(consumerTypeAssigned); err != nil {
+	if err := consumer.maybeInit(c, consumerTypeAssigned); err != nil {
 		return err
 	}
 
-	// Over all topic assignments, "track" new topics by adding them to our
-	// client's topics map.
+	// Ensure all topics exist so that we will fetch their metadata.
 	c.topicsMu.Lock()
 	clientTopics := c.cloneTopics()
 	for topic := range assignments {
@@ -128,19 +209,22 @@ func (c *Client) AssignPartitions(assignments map[string]map[int32]Offset) error
 	c.topics.Store(clientTopics)
 	c.topicsMu.Unlock()
 
+	// If by chance we have a topic and partition loaded and the
+	// assignments use exact offsets, we can avoid looking up offsets.
 	for topic, partitions := range assignments {
 		topicParts := clientTopics[topic].load() // must exist; ensured above
 		if topicParts == nil {
-			continue // this is almost definitely nil
+			continue
 		}
 
 		for partition, offset := range partitions {
-			part := topicPart.all[partition]
+			part := topicParts.all[partition]
 			if part == nil {
 				continue
 			}
+
 			if offset.request >= 0 {
-				topicConsumption[partition] = offset.request
+				part.consumption.setOffset(offset.request)
 				delete(partitions, partition)
 			}
 		}
@@ -149,14 +233,14 @@ func (c *Client) AssignPartitions(assignments map[string]map[int32]Offset) error
 		}
 	}
 
-	// For all remaining non-exact offsets, await their load.
+	// For all remaining offsets, await load.
 	if len(assignments) > 0 {
 		consumer.seq++
-		consumer.offsetsWaitingLoad = offsetsWaitingLoad{
-			fromSeq:  consumer.seq,
-			waitings: assignments,
+		consumer.offsetsWaitingLoad = &offsetsWaitingLoad{
+			fromSeq: consumer.seq,
+			waiting: assignments,
 		}
-		c.triggerMetadataUpdate()
+		c.triggerUpdateMetadata()
 	}
 	return nil
 }
@@ -174,13 +258,19 @@ func (o *offsetsWaitingLoad) mergeInto(c *consumer) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if o.seq < c.offsetsWaitingLoad.seq {
+	if c.offsetsWaitingLoad != nil &&
+		o.fromSeq < c.offsetsWaitingLoad.fromSeq {
 		return
 	}
-	existing := &c.offsetsWaitingLoad
+
+	existing := c.offsetsWaitingLoad
+	if existing == nil {
+		c.offsetsWaitingLoad = o
+		return
+	}
 
 	for topic, partitions := range o.waiting {
-		curTopic, exists := existing[topic]
+		curTopic, exists := existing.waiting[topic]
 		if !exists {
 			existing.setTopicParts(topic, partitions)
 			continue
@@ -191,29 +281,29 @@ func (o *offsetsWaitingLoad) mergeInto(c *consumer) {
 	}
 
 	if len(existing.waiting) > 0 {
-		c.triggerMetadataUpdate()
+		c.client.triggerUpdateMetadata()
 	}
 }
 
 func (c *consumer) doOnMetadataUpdate() {
 	c.mu.Lock()
 	toLoad := c.offsetsWaitingLoad
-	c.offsetsWaitingLoad = offsetsWaitingLoad{}
+	c.offsetsWaitingLoad = nil
 	// TODO inc tries here
 	c.mu.Unlock()
 
-	if toLoad.waiting == nil {
+	if toLoad == nil || toLoad.waiting == nil {
 		return
 	}
 
 	c.tryOffsetLoad(toLoad)
 }
 
-func (c *consumer) tryOffsetLoad(toLoad offsetsWaitingLoad) {
+func (c *consumer) tryOffsetLoad(toLoad *offsetsWaitingLoad) {
 	// If any partitions do not exist in the metadata, or we cannot find
 	// the broker leader for a partition, we reload the metadata.
-	toReload := offsetsWaitingLoad{seq: toLoad.seq}
-	brokersToLoadFrom := make(map[*broker]offsetsWaitingLoad)
+	toReload := &offsetsWaitingLoad{fromSeq: toLoad.fromSeq}
+	brokersToLoadFrom := make(map[*broker]*offsetsWaitingLoad)
 
 	// For most of this function, we hold the broker mu so that we can
 	// check if topic partition leaders exist.
@@ -226,34 +316,24 @@ func (c *consumer) tryOffsetLoad(toLoad offsetsWaitingLoad) {
 	for topic, partitions := range toLoad.waiting {
 		// The topicPartitions must exist, since AssignPartitions
 		// creates the topic (empty) if the topic is new.
-		topicPartitions := topics[topic]
+		topicPartitions := topics[topic].load()
 
 		for partition, offset := range partitions {
-			topicPartition, exists := topicPartitions[partition]
+			topicPartition, exists := topicPartitions.all[partition]
 			if !exists {
-				// Partition does not exist in our metadata
-				// load of topic partitions: save part
-				// assignment for reloading.
 				toReload.setTopicPart(topic, partition, offset)
 				continue
 			}
 
 			broker := brokers[topicPartition.leader]
-			if broker == nil {
-				// The broker does not exist in our metadata
-				// load of this topics leader. This should not
-				// happen, as Kafka would not tell us a
-				// partition leader is broker A but then also
-				// not tell us of broker A's existence.
+			if broker == nil { // should not happen
 				toReload.setTopicPart(topic, partition, offset)
 				continue
 			}
 
-			// Add this partition offset request the in-progress
-			// waiting-loads for this specific broker.
 			addLoad := brokersToLoadFrom[broker]
 			if addLoad == nil {
-				addLoad = offsetsWaitingLoad{seq: toLoad.seq}
+				addLoad = &offsetsWaitingLoad{fromSeq: toLoad.fromSeq}
 				brokersToLoadFrom[broker] = addLoad
 			}
 			addLoad.setTopicPart(topic, partition, offset)
@@ -272,7 +352,7 @@ func (c *consumer) tryOffsetLoad(toLoad offsetsWaitingLoad) {
 func (c *consumer) tryBrokerOffsetLoad(broker *broker, load *offsetsWaitingLoad) {
 	var resp *kmsg.ListOffsetsResponse
 	var err error
-	b.wait(
+	broker.wait(
 		load.buildReq(),
 		func(kresp kmsg.Response, respErr error) {
 			if err = respErr; err != nil {
@@ -308,7 +388,7 @@ func (o *offsetsWaitingLoad) setTopicParts(topic string, partitions map[int32]Of
 
 func (o *offsetsWaitingLoad) setTopicPart(topic string, partition int32, offset Offset) {
 	o.maybeInit()
-	o.waiting[topic][partition] = o
+	o.waiting[topic][partition] = offset
 }
 
 func (o *offsetsWaitingLoad) buildReq() *kmsg.ListOffsetsRequest {

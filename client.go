@@ -75,7 +75,7 @@ func (c *Client) fetchBrokerMetadata() error {
 func (c *Client) fetchMetadata(all bool, topics []string) (*kmsg.MetadataResponse, error) {
 	if all {
 		topics = nil
-	} else {
+	} else if len(topics) == 0 {
 		topics = []string{}
 	}
 	broker := c.broker()

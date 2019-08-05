@@ -5,30 +5,12 @@ import (
 	"sync"
 	"time"
 
+	"github.com/twmb/kgo/kbin"
 	"github.com/twmb/kgo/kerr"
 	"github.com/twmb/kgo/kmsg"
 )
 
 // TODO KIP-320
-
-type FetchPartition struct {
-	Partition        int32
-	Err              error
-	HighWatermark    int64
-	LastStableOffset int64
-	Records          []*Record
-}
-
-type FetchTopic struct {
-	Topic      string
-	Partitions []FetchPartition
-}
-
-type Fetch struct {
-	Topics []FetchTopic
-}
-
-type Fetches []Fetch
 
 type recordSource struct {
 	broker *broker
@@ -39,69 +21,95 @@ type recordSource struct {
 
 	// consuming tracks topics, partitions, and offsets/epochs that this
 	// source owns.
-	consuming map[string]map[int32]consumption
+	allConsumptions []*consumption
+
+	allConsumptionsStart int
 
 	buffered    Fetch
 	hasBuffered bool
 }
 
-type consumption struct {
-	offset int64
-	// TODO epoch
+func newRecordSource(broker *broker) *recordSource {
+	source := &recordSource{
+		broker:      broker,
+		inflightSem: make(chan struct{}, 1),
+	}
+	return source
 }
 
-func (source *recordSource) setConsumption(topic string, partition int32, start consumption) {
+func (source *recordSource) addConsumption(add *consumption) {
 	source.mu.Lock()
-	defer source.mu.Unlock()
-
-	wasConsuming := len(source.consuming) != 0
-	if source.consuming == nil {
-		source.consuming = make(map[string]map[int32]consumption, 1)
-	}
-	topicConsumption := source.consuming[topic]
-	if topicConsumption == nil {
-		topicConsumption = make(map[int32]consumption, 1)
-		source.consuming[topic] = topicConsumption
-	}
-	topicConsumption[partition] = start
+	wasConsuming := len(source.allConsumptions) > 0
+	add.allConsumptionsIdx = len(source.allConsumptions)
+	source.allConsumptions = append(source.allConsumptions, add)
+	source.mu.Unlock()
 
 	if !wasConsuming {
 		go source.fill()
 	}
-
 }
 
-func (source *recourdSource) createRequest() *kmsg.FetchRequest {
-	req := &kmsg.FetchRequest{
-		ReplicaID: -1,
+func (source *recordSource) removeConsumption(rm *consumption) {
+	source.mu.Lock()
+	defer source.mu.Unlock()
 
-		MaxWaitTime: 500, // TODO
-		MinBytes:    1,
-		MaxBytes:    500 << 20, // TODO
+	if rm.allConsumptionsIdx != len(source.allConsumptions)-1 {
+		source.allConsumptions[rm.allConsumptionsIdx], source.allConsumptions[len(source.allConsumptions)-1] =
+			source.allConsumptions[len(source.allConsumptions)-1], nil
 
-		SessionEpoch: -1, // KIP-227, do not create a session
-
-		Topics: make([]kmsg.FetchRequestTopic, 0, len(source.consuming)),
+		source.allConsumptions[rm.allConsumptionsIdx].allConsumptionsIdx = rm.allConsumptionsIdx
+	} else {
+		source.allConsumptions[rm.allConsumptionsIdx] = nil // do not let this source hang around
 	}
 
-	for topic, partitions := range source.consuming {
-		fetchParts := make([]kmsg.FetchRequestTopicPartition, 0, len(partitions))
-		for partition, consumption := range partitions {
-			fetchParts = append(fetchParts, kmsg.FetchRequestTopicPartition{
-				Partition:          partition,
-				CurrentLeaderEpoch: -1, // KIP-320
-				FetchOffset:        consumption.offset,
-				LogStartOffset:     -1,
-				PartitionMaxBytes:  500 << 20, // TODO
-			})
-		}
-		req.Topics = append(req.Topics, kmsg.FetchRequestTopic{
-			Topic:      topic,
-			Partitions: fetchParts,
-		})
+	source.allConsumptions = source.allConsumptions[:len(source.allConsumptions)-1]
+	if source.allConsumptionsStart == len(source.allConsumptions) {
+		source.allConsumptionsStart = 0
+	}
+}
+
+type consumption struct {
+	topicPartition *topicPartition
+
+	mu sync.Mutex
+
+	source             *recordSource
+	allConsumptionsIdx int
+
+	offset int64
+	// TODO epoch
+}
+
+func (consumption *consumption) setOffset(offset int64) {
+	consumption.mu.Lock()
+	defer consumption.mu.Unlock()
+	consumption.offset = offset
+}
+
+func (source *recordSource) createRequest() (req *fetchRequest, again bool) {
+	req = new(fetchRequest)
+
+	consumptionIdx := source.allConsumptionsStart
+	for i := 0; i < len(source.allConsumptions); i++ {
+		consumption := source.allConsumptions[consumptionIdx]
+		consumptionIdx = (consumptionIdx + 1) % len(source.allConsumptions)
+
+		// Ensure this consumption cannot be moved across topicPartitions
+		// while we using its fields.
+		consumption.mu.Lock()
+
+		req.addTopicPartitionConsumption(
+			consumption.topicPartition.topic,
+			consumption.topicPartition.partition,
+			consumption,
+		)
+
+		consumption.mu.Lock()
 	}
 
-	return req
+	source.allConsumptionsStart = (source.allConsumptionsStart + 1) % len(source.allConsumptions)
+
+	return req, len(source.allConsumptions) > 0
 }
 
 func (source *recordSource) fill() {
@@ -112,11 +120,12 @@ func (source *recordSource) fill() {
 		source.inflightSem <- struct{}{}
 
 		source.mu.Lock()
-		req, again := source.createRequest()
+		var req *fetchRequest
+		req, again = source.createRequest()
 
-		if len(req.topics) == 0 {
+		if len(req.consumptions) == 0 {
 			source.mu.Unlock()
-			<-sem
+			<-source.inflightSem
 			continue
 		}
 
@@ -130,7 +139,9 @@ func (source *recordSource) fill() {
 	}
 }
 
-func (source *recordSource) handleReqResp(req *kmsg.FetchRequest, resp kmsg.Response, err error) {
+func (source *recordSource) handleReqResp(req *fetchRequest, resp kmsg.Response, err error) {
+	var needMetadataUpdate bool
+
 	source.mu.Lock()
 	defer source.mu.Unlock()
 
@@ -146,73 +157,101 @@ func (source *recordSource) handleReqResp(req *kmsg.FetchRequest, resp kmsg.Resp
 	}
 
 	for _, responseTopic := range r.Responses {
-		consumedTopic, exists := source.consuming[responseTopic.Topic]
-		if !exists {
-			// Our consumption changed during the fetch and we are
-			// no longer consuming this topic; drop this topic.
+		topic := responseTopic.Topic
+		consumedPartions, ok := req.consumptions[topic]
+		if !ok {
 			continue
 		}
 
 		newFetchTopic := FetchTopic{
-			Topic:      responseTopic.Topic,
+			Topic:      topic,
 			Partitions: make([]FetchPartition, 0, len(responseTopic.PartitionResponses)),
 		}
+
 		for i := range responseTopic.PartitionResponses {
 			responsePartition := &responseTopic.PartitionResponses[i]
-			consumedPartition, exists := consumedTopic[responsePartition.Partition]
-			if !exists {
-				// Our consumption changed during the fetch and we are
-				// no longer consuming this partition; drop it.
+			partition := responsePartition.Partition
+			consumption, ok := consumedPartions[partition]
+			if !ok {
 				continue
 			}
 
-			var numResponsePartitionRecords int
-			for i := range responsePartition.RecordBatches {
-				numResponsePartitionRecords += len(responsePartition.RecordBatches[i].NumRecords)
-			}
-
-			newFetchPartition := FetchPartition{
-				Partition:        responsePartition.Partition,
-				Err:              kerr.ErrorForCode(responsePartition.ErrorCode),
-				HighWatermark:    responsePartition.HighWatermark,
-				LastStableOffset: responsePartition.LastStableOffset,
-				Records:          make([]*Record, 0, numResponsePartitionRecords),
-			}
-
-			for i := range responsePartition.RecordBatches {
-				if newFetchPartition.Err != nil {
-					break
-				}
-				consumedPartition.processBatch(
-					newFetchTopic.Topic,
-					newFetchPartition,
-					&responsePartition.RecordBatches[i],
+			newFetchPartition, keep, partitionNeedsMetadataUpdate :=
+				consumption.processResponsePartition(
+					source,
+					topic,
+					responsePartition,
 				)
-			}
 
-			switch newFetchPartition.Err {
-			// TODO (needs to be after processBatch cuz can set err)
-			// If retriable: send consumption back to consumer to reload
-			// metadata
-			// If not retriable: delete consumption
+			if keep {
+				newFetchTopic.Partitions = append(newFetchTopic.Partitions, newFetchPartition)
 			}
+			needMetadataUpdate = needMetadataUpdate || partitionNeedsMetadataUpdate
 		}
 
-		newFetch.Topics = append(newFetch.Topics, newFetchTopic)
+		if len(newFetchTopic.Partitions) > 0 {
+			newFetch.Topics = append(newFetch.Topics, newFetchTopic)
+		}
+	}
+
+	if needMetadataUpdate {
+		source.broker.client.triggerUpdateMetadata()
 	}
 
 	source.buffered = newFetch
-	// TODO consumer broadcast
+	source.broker.client.consumer.addSourceReadyForDraining(source)
 }
 
-/*
+func (c *consumption) processResponsePartition(
+	source *recordSource,
+	topic string,
+	responsePartition *kmsg.FetchResponseResponsePartitionResponse,
+) (
+	newFetchPartition FetchPartition,
+	keep bool,
+	requiresMetadataUpdate bool,
+) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.source != source {
+		return FetchPartition{}, false, false
+	}
+
+	var numPartitionRecords int
+	for i := range responsePartition.RecordBatches {
+		numPartitionRecords += int(responsePartition.RecordBatches[i].NumRecords)
+	}
+
+	newFetchPartition = FetchPartition{
+		Partition:        responsePartition.Partition,
+		Err:              kerr.ErrorForCode(responsePartition.ErrorCode),
+		HighWatermark:    responsePartition.HighWatermark,
+		LastStableOffset: responsePartition.LastStableOffset,
+		Records:          make([]*Record, 0, numPartitionRecords),
+	}
+
+	for i := range responsePartition.RecordBatches {
+		if newFetchPartition.Err != nil {
+			break
+		}
+		c.processResponsePartitionBatch(
+			topic,
+			&newFetchPartition,
+			&responsePartition.RecordBatches[i],
+		)
+	}
+
+	switch newFetchPartition.Err {
 	case kerr.UnknownTopicOrPartition,
 		kerr.NotLeaderForPartition,
 		kerr.ReplicaNotAvailable,
 		kerr.KafkaStorageError,
 		kerr.UnknownLeaderEpoch,
 		kerr.FencedLeaderEpoch:
-		// backoff
+
+		requiresMetadataUpdate = true
+		// TODO backoff
 
 	default:
 		// Fatal:
@@ -221,10 +260,17 @@ func (source *recordSource) handleReqResp(req *kmsg.FetchRequest, resp kmsg.Resp
 		// - unsupported message version
 		// - out of range offset
 		// - unknown error
+		// TODO backoff permanently?
 	}
-*/
 
-func (c *consumption) processBatch(topic string, newFetchPartition *FetchPartition, batch *kmsg.RecordBatch) {
+	return newFetchPartition, true, requiresMetadataUpdate
+}
+
+func (c *consumption) processResponsePartitionBatch(
+	topic string,
+	newFetchPartition *FetchPartition,
+	batch *kmsg.RecordBatch,
+) {
 	if batch.Length == 0 {
 		return // batch had size of zero: there was no batch
 	}
@@ -243,6 +289,7 @@ func (c *consumption) processBatch(topic string, newFetchPartition *FetchPartiti
 		}
 	}
 
+	currentOffset := c.offset
 	records := make([]*Record, 0, batch.NumRecords)
 	for i := batch.NumRecords; i > 0; i-- {
 		var r kmsg.Record
@@ -258,27 +305,96 @@ func (c *consumption) processBatch(topic string, newFetchPartition *FetchPartiti
 			// batch; we got offsets 0 thru 4 that we need to skip.
 			continue
 		}
+		if record.Offset != currentOffset {
+			// We asked for offset 5, then the client user reset the
+			// offset to something else while this was inflight.
+			// This response out of date.
+			continue
+		}
 		records = append(records, record)
+		currentOffset++
 	}
 
 	if len(rawRecords) != 0 {
-		newFetchPartition.Err = kmsg.ErrTooMuchData
+		newFetchPartition.Err = kbin.ErrTooMuchData
 		return
 	}
 
 	newFetchPartition.Records = records
-	c.offset += int64(len(records))
+	c.offset = currentOffset
 }
 
 func (source *recordSource) takeBuffered() Fetch {
 	source.mu.Lock()
-	var r Fetch
-	if source.hasBuffered {
-		r = source.buffered
-		source.buffered = Fetch{}
-		source.hasBuffered = false
-		<-source.inflightSem
-	}
+	r := source.buffered
+	source.buffered = Fetch{}
 	source.mu.Unlock()
+
+	<-source.inflightSem
 	return r
+}
+
+type fetchRequest struct {
+	version int16
+
+	consumptions map[string]map[int32]*consumption
+}
+
+func (req *fetchRequest) addTopicPartitionConsumption(
+	topic string,
+	partition int32,
+	c *consumption,
+) {
+	if req.consumptions == nil {
+		req.consumptions = make(map[string]map[int32]*consumption)
+	}
+	partitions := req.consumptions[topic]
+	if partitions == nil {
+		partitions = make(map[int32]*consumption)
+		req.consumptions[topic] = partitions
+	}
+	partitions[partition] = c
+}
+
+var (
+	fetchRequestBase = new(kmsg.FetchRequest)
+	fetchRequestKey  = fetchRequestBase.Key()
+	fetchRequestMax  = fetchRequestBase.MaxVersion()
+	fetchRequestMin  = fetchRequestBase.MinVersion()
+)
+
+func (*fetchRequest) Key() int16           { return fetchRequestKey }
+func (*fetchRequest) MaxVersion() int16    { return fetchRequestMax }
+func (*fetchRequest) MinVersion() int16    { return fetchRequestMin }
+func (f *fetchRequest) SetVersion(v int16) { f.version = v }
+func (f *fetchRequest) GetVersion() int16  { return f.version }
+func (f *fetchRequest) AppendTo(dst []byte) []byte {
+	req := kmsg.FetchRequest{
+		ReplicaID:    -1,
+		MaxWaitTime:  500, // TODO
+		MinBytes:     1,
+		MaxBytes:     500 << 20, // TODO
+		SessionEpoch: -1,        // KIP-227, we do not want to support
+		Topics:       make([]kmsg.FetchRequestTopic, 0, len(f.consumptions)),
+	}
+	for topic, partitions := range f.consumptions {
+		req.Topics = append(req.Topics, kmsg.FetchRequestTopic{
+			Topic:      topic,
+			Partitions: make([]kmsg.FetchRequestTopicPartition, 0, len(partitions)),
+		})
+		reqTopic := &req.Topics[len(req.Topics)-1]
+		for partition, consumption := range partitions {
+			reqTopic.Partitions = append(reqTopic.Partitions, kmsg.FetchRequestTopicPartition{
+				Partition:          partition,
+				CurrentLeaderEpoch: -1, // KIP-320
+				FetchOffset:        consumption.offset,
+				LogStartOffset:     -1,
+				PartitionMaxBytes:  500 << 20, // TODO
+			})
+		}
+	}
+	return req.AppendTo(dst)
+}
+func (f *fetchRequest) ResponseKind() kmsg.Response {
+	return &kmsg.FetchResponse{Version: f.version}
 }

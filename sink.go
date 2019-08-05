@@ -35,6 +35,17 @@ type recordSink struct {
 	backoffTimer *time.Timer // runs if all partition records are in a backoff state
 	backoffSeq   uint64      // guards against timers starting drains they should not
 
+	// TODO:tighter mutex on allPartRecs; thousands of partitions on a
+	//   sink can make batch building slow and block record producing.
+	// TODO: more important is to remove sink mutex grab from
+	//   maybeBeginProducing
+	// TODO: explore converting allPartsRecs to map[string]map[int32]
+	//   or some such to avoid repeated topic lookups
+	//   This can be done with multi level allPartRecs [][]*records,
+	//   spread allPartRecsStart across two indicies.
+	//   Big con is strong favoring of topics during producing, but
+	//   we kinda run risk of that today.
+
 	allPartRecs []*records // contains all partition's records; used for batch building
 	// allPartRecsStart is where we will begin in allPartRecs for building a
 	// batch. This increments by one every produce request, avoiding
@@ -72,7 +83,7 @@ func newRecordSink(broker *broker) *recordSink {
 // createRequest returns a produceRequest from currently buffered records
 // and whether there are more records to create more requests immediately.
 func (sink *recordSink) createRequest() (*produceRequest, bool) {
-	request := &produceRequest{
+	req := &produceRequest{
 		txnID:   sink.broker.client.cfg.producer.txnID,
 		acks:    sink.broker.client.cfg.producer.acks.val,
 		timeout: sink.broker.client.cfg.client.requestTimeout,
@@ -115,7 +126,7 @@ func (sink *recordSink) createRequest() (*produceRequest, bool) {
 
 		batch := recs.batches[recs.batchDrainIdx]
 		batchWireLength := 4 + batch.wireLength // partition, batch len
-		topicBatches := request.batches[recs.topicPartition.topic]
+		topicBatches := req.batches[recs.topicPartition.topic]
 		if topicBatches == nil {
 			batchWireLength += 2 + int32(len(recs.topicPartition.topic)) + 4 // string len, topic, array len
 		}
@@ -132,7 +143,7 @@ func (sink *recordSink) createRequest() (*produceRequest, bool) {
 		recs.mu.Unlock()
 
 		wireLength += batchWireLength
-		request.batches.addToTopicBatches(
+		req.batches.addToTopicBatches(
 			recs.topicPartition.topic,
 			recs.topicPartition.partition,
 			topicBatches,
@@ -151,7 +162,7 @@ func (sink *recordSink) createRequest() (*produceRequest, bool) {
 
 	sink.allPartRecsStart = (sink.allPartRecsStart + 1) % len(sink.allPartRecs)
 	sink.draining = moreToDrain
-	return request, moreToDrain
+	return req, moreToDrain
 }
 
 func (sink *recordSink) maybeBeginDraining() {
@@ -459,6 +470,8 @@ func (sink *recordSink) removeSource(rm *records) {
 			sink.allPartRecs[len(sink.allPartRecs)-1], nil
 
 		sink.allPartRecs[rm.allPartRecsIdx].allPartRecsIdx = rm.allPartRecsIdx
+	} else {
+		sink.allPartRecs[rm.allPartRecsIdx] = nil // do not let this removal hang around
 	}
 
 	sink.allPartRecs = sink.allPartRecs[:len(sink.allPartRecs)-1]
@@ -530,6 +543,7 @@ func (recs *records) removeBatch0Locked() {
 	recs.batchDrainIdx--
 }
 
+// TODO if not retriable, should we fail all?
 func (recs *records) maybeBumpTriesAndFailBatch0(err error) {
 	recs.mu.Lock()
 	defer recs.mu.Unlock()
@@ -785,9 +799,16 @@ func (rbs reqBatches) addToTopicBatches(
 	topicBatches[partition] = batch
 }
 
-func (*produceRequest) Key() int16           { return 0 }
-func (*produceRequest) MaxVersion() int16    { return 7 }
-func (*produceRequest) MinVersion() int16    { return 3 }
+var (
+	produceRequestBase = new(kmsg.ProduceRequest)
+	produceRequestKey  = produceRequestBase.Key()
+	produceRequestMax  = produceRequestBase.MaxVersion()
+	produceRequestMin  = produceRequestBase.MinVersion()
+)
+
+func (*produceRequest) Key() int16           { return produceRequestKey }
+func (*produceRequest) MaxVersion() int16    { return produceRequestMax }
+func (*produceRequest) MinVersion() int16    { return produceRequestMin }
 func (p *produceRequest) SetVersion(v int16) { p.version = v }
 func (p *produceRequest) GetVersion() int16  { return p.version }
 func (p *produceRequest) AppendTo(dst []byte) []byte {

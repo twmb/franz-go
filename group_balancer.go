@@ -29,7 +29,6 @@ type (
 		// TODO autocommit
 		// OnAssign
 		// OnRevoke
-		// WithErrCh
 		// SessionTimeout
 		// RebalanceTimeout
 		// MemberID

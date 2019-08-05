@@ -35,7 +35,49 @@ type topicPartition struct {
 	isr      []int32
 	offline  []int32
 
-	records *records
+	records     *records
+	consumption *consumption
+}
+
+func (old *topicPartition) migrateProductionTo(new *topicPartition) {
+	// If the new sink is different, we have to migrate any
+	// buffered records safely and we must do it such that new
+	// records being produced during this migration will still be
+	// sent after buffered records, not before.
+
+	// First, we remove the records from the old source.
+	old.records.sink.removeSource(old.records)
+
+	// Before this next lock, record producing will buffer to the
+	// in-migration-progress records and may trigger draining to
+	// the old sink. That is fine, the old sink no longer consumes
+	// from these records. We just have wasted drain triggers.
+	old.records.mu.Lock() // guard setting sink
+	old.records.sink = new.records.sink
+	old.records.mu.Unlock()
+
+	// After the unlock above, record buffering can trigger drains
+	// on the new sink, which is not yet consuming from these
+	// records. Again, just more wasted drain triggers.
+
+	// Once we add this source to the new sink (through the old
+	// topic partitions pointers), the new sink will begin
+	// draining our records.
+	old.records.sink.addSource(old.records)
+
+	// Finally, copy the records pointer to our new topic
+	// partitions, which will be atomically stored on defer.
+	new.records = old.records
+}
+
+func (old *topicPartition) migrateConsumptionTo(new *topicPartition) {
+	// This follows much the same pattern as before, but we have fewer
+	// subtle issues around needing to be careful here.
+	old.consumption.source.removeConsumption(old.consumption)
+	old.consumption.mu.Lock()
+	old.consumption.source = new.consumption.source
+	old.consumption.mu.Unlock()
+	old.consumption.source.addConsumption(old.consumption)
 }
 
 // topicPartitionsData is the data behind a topicPartitions' v.
@@ -69,8 +111,7 @@ func newTopicParts() *topicPartitions {
 		all:      make(map[int32]*topicPartition),
 		writable: make(map[int32]*topicPartition),
 	})
-	var mu sync.RWMutex
-	parts.c = sync.NewCond(mu.RLocker())
+	parts.c = sync.NewCond(parts.mu.RLocker())
 	return parts
 }
 
@@ -84,6 +125,8 @@ func (c *Client) triggerUpdateMetadata() {
 // updateMetadataLoop updates metadata whenever the update ticker ticks,
 // or whenever deliberately triggered.
 func (c *Client) updateMetadataLoop() {
+	var consecutiveErrors int
+
 	defer c.metadataTicker.Stop()
 	for {
 		select {
@@ -102,7 +145,10 @@ func (c *Client) updateMetadataLoop() {
 			// If we did error, we obey the backoff function.
 			sleep := time.Second
 			if err != nil {
-				sleep = c.cfg.client.retryBackoff(tries)
+				consecutiveErrors++
+				sleep = c.cfg.client.retryBackoff(consecutiveErrors)
+			} else {
+				consecutiveErrors = 0
 			}
 
 			select {
@@ -189,6 +235,7 @@ func (c *Client) fetchTopicMetadata(reqTopics []string) (map[string]*topicPartit
 					allPartRecsIdx:  -1, // required, see below
 					lastAckedOffset: -1,
 				},
+				consumption: new(consumption),
 
 				replicas: partMeta.Replicas,
 				isr:      partMeta.ISR,
@@ -203,6 +250,9 @@ func (c *Client) fetchTopicMetadata(reqTopics []string) (map[string]*topicPartit
 			} else {
 				p.records.sink = broker.recordSink
 				p.records.topicPartition = p
+
+				p.consumption.source = broker.recordSource
+				p.consumption.topicPartition = p
 			}
 
 			parts.partitions = append(parts.partitions, p.partition)
@@ -247,14 +297,18 @@ func (l *topicPartitions) merge(r *topicPartitionsData) (needsRetry bool) {
 	var deleted []*topicPartition // should end up empty
 
 	// Migrating topicPartitions is a little tricky because we have to
-	// worry about map contents. Basically, we always have to keep
-	// the old "records", but we want the new of everything else.
+	// worry about map contents.
+	//
+	// We update everything appropriately in the new r.all, and after
+	// this loop we copy the updated map to lv.all (which is stored
+	// atomically after the defer above).
 	for part, oldTP := range lv.all {
 		newTP, exists := r.all[part]
 		if !exists {
 			deleted = append(deleted, oldTP)
 			continue
 		}
+
 		if newTP.loadErr != nil { // partition errors should generally be temporary
 			err := newTP.loadErr
 			*newTP = *oldTP
@@ -263,27 +317,20 @@ func (l *topicPartitions) merge(r *topicPartitionsData) (needsRetry bool) {
 			needsRetry = true
 			continue
 		}
-		// With the same sink, we have to copy the records pointer and
-		// maybe begin draining again.
+
+		// If the new sink is the same as the old, we simply copy over
+		// the records pointer and maybe begin draining again.
+		//
+		// We do not need to do anything to the consumption here.
 		if newTP.records.sink == oldTP.records.sink {
 			newTP.records = oldTP.records
 			newTP.records.maybeBeginDraining()
 			continue
 		}
-		// With a different sink, we have to remove the records from
-		// the old sink, update the record's sink, add the records to
-		// the new sink, and finally copy the pointer to the new tp.
-		//
-		// Between the removal and the setting of the new sink,
-		// produced records could trigger drains for the old sink.
-		// This is ok because it will not drain from the records we
-		// just removed.
-		oldTP.records.sink.removeSource(oldTP.records)
-		oldTP.records.mu.Lock() // guard setting sink
-		oldTP.records.sink = newTP.records.sink
-		oldTP.records.mu.Unlock()
-		oldTP.records.sink.addSource(oldTP.records)
-		newTP.records = oldTP.records
+
+		oldTP.migrateProductionTo(newTP)
+		oldTP.migrateConsumptionTo(newTP)
+
 	}
 
 	for _, newTP := range r.all { // anything left with a negative allPartsRecsIdx index is new
@@ -294,9 +341,9 @@ func (l *topicPartitions) merge(r *topicPartitionsData) (needsRetry bool) {
 
 	lv.all = r.all
 	lv.writable = r.writable
-	for part := range lv.writable {
-		lv.writable[part] = lv.all[part]
-	}
+	// The left writable map needs no further updates: all changes above
+	// happened to r.all, of which r.writable contains a subset of.
+	// Modifications to r.all are seen in r.writable.
 
 	if len(deleted) > 0 {
 		go handleDeletedPartitions(deleted)

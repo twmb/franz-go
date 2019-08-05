@@ -51,6 +51,7 @@ func (c *Client) Produce(
 
 	partitions := c.partitionsForTopicProduce(r.Topic)
 	if partitions.loadErr != nil {
+		// TODO if retriable, should we buffer it?
 		return partitions.loadErr
 	}
 
@@ -128,7 +129,7 @@ func (c *Client) partitionsForTopicProduce(topic string) *topicPartitionsData {
 	}
 
 	v := parts.load()
-	if len(v.partitions) > 0 || !kerr.IsRetriable(v.loadErr) {
+	if len(v.partitions) > 0 || v.loadErr != nil && !kerr.IsRetriable(v.loadErr) {
 		return v // fast, normal path
 	}
 
@@ -136,7 +137,8 @@ func (c *Client) partitionsForTopicProduce(topic string) *topicPartitionsData {
 	defer parts.mu.RUnlock()
 
 	tries := 0
-	for tries < c.cfg.client.retries && (len(v.partitions) == 0 || kerr.IsRetriable(v.loadErr)) {
+	for tries < c.cfg.client.retries &&
+		(len(v.partitions) == 0 || v.loadErr != nil && kerr.IsRetriable(v.loadErr)) {
 
 		tries++
 		c.triggerUpdateMetadata()

@@ -43,7 +43,10 @@ type broker struct {
 	// This field is managed serially in handleReqs.
 	cxn *brokerCxn
 
-	recordSink *recordSink
+	// TODO should recordSink removed? It exists so metadata updates can
+	// copy the pointers to a topicPartiton's records field.
+	recordSink   *recordSink
+	recordSource *recordSource // same for this field
 
 	// seqResps, guarded by seqRespsMu, contains responses that must be
 	// handled sequentially. These responses are handled asyncronously,
@@ -79,6 +82,7 @@ func (c *Client) newBroker(addr string, id int32) *broker {
 		reqs: make(chan promisedReq, 10),
 	}
 	br.recordSink = newRecordSink(br)
+	br.recordSource = newRecordSource(br)
 	go br.handleReqs()
 
 	return br
