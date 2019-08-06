@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/twmb/kgo/kerr"
 	"github.com/twmb/kgo/kmsg"
