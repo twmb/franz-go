@@ -404,9 +404,9 @@ func (f *fetchRequest) AppendTo(dst []byte) []byte {
 	req := kmsg.FetchRequest{
 		Version:      f.version,
 		ReplicaID:    -1,
-		MaxWaitTime:  5000, // TODO
+		MaxWaitTime:  200, // TODO
 		MinBytes:     1,
-		MaxBytes:     500 << 20, // TODO
+		MaxBytes:     5 << 20, // TODO
 		SessionID:    -1,
 		SessionEpoch: -1, // KIP-227, we do not want to support
 		Topics:       make([]kmsg.FetchRequestTopic, 0, len(f.consumptions)),

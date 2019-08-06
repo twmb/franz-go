@@ -134,25 +134,6 @@ func (c *consumer) addSourceReadyForDraining(source *recordSource) {
 	c.sourcesReadyCond.Broadcast()
 }
 
-type FetchPartition struct {
-	Partition        int32
-	Err              error
-	HighWatermark    int64
-	LastStableOffset int64
-	Records          []*Record
-}
-
-type FetchTopic struct {
-	Topic      string
-	Partitions []FetchPartition
-}
-
-type Fetch struct {
-	Topics []FetchTopic
-}
-
-type Fetches []Fetch
-
 func (c *Client) PollConsumer(ctx context.Context) Fetches {
 	consumer := &c.consumer
 
