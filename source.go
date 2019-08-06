@@ -12,10 +12,14 @@ import (
 
 // TODO KIP-320
 
+// TODO introduce backoff below
+
 type recordSource struct {
 	broker *broker
 
 	inflightSem chan struct{} // capacity of 1
+
+	fillState uint32
 
 	mu sync.Mutex
 
@@ -26,8 +30,6 @@ type recordSource struct {
 	allConsumptionsStart int
 
 	buffered Fetch
-
-	filling bool
 }
 
 func newRecordSource(broker *broker) *recordSource {
@@ -89,6 +91,9 @@ func (consumption *consumption) setOffset(offset int64) {
 func (source *recordSource) createRequest() (req *fetchRequest, again bool) {
 	req = new(fetchRequest)
 
+	source.mu.Lock()
+	defer source.mu.Unlock()
+
 	consumptionIdx := source.allConsumptionsStart
 	for i := 0; i < len(source.allConsumptions); i++ {
 		consumption := source.allConsumptions[consumptionIdx]
@@ -115,21 +120,13 @@ func (source *recordSource) createRequest() (req *fetchRequest, again bool) {
 
 	source.allConsumptionsStart = (source.allConsumptionsStart + 1) % len(source.allConsumptions)
 
-	source.filling = again
 	return req, again
 }
 
 func (source *recordSource) maybeBeginConsuming() {
-	source.mu.Lock()
-
-	if source.filling {
-		source.mu.Unlock()
-		return
+	if maybeBeginWork(&source.fillState) {
+		go source.fill()
 	}
-	source.filling = true
-	source.mu.Unlock()
-
-	go source.fill()
 }
 
 func (source *recordSource) fill() {
@@ -139,12 +136,11 @@ func (source *recordSource) fill() {
 	for again {
 		source.inflightSem <- struct{}{}
 
-		source.mu.Lock()
 		var req *fetchRequest
 		req, again = source.createRequest()
 
 		if len(req.consumptions) == 0 {
-			source.mu.Unlock()
+			again = maybeTryFinishWork(&source.fillState, again)
 			<-source.inflightSem
 			continue
 		}
@@ -155,7 +151,7 @@ func (source *recordSource) fill() {
 				source.handleReqResp(req, resp, err)
 			},
 		)
-		source.mu.Unlock()
+		again = maybeTryFinishWork(&source.fillState, again)
 	}
 }
 

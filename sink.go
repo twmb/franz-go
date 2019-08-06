@@ -29,24 +29,13 @@ type recordSink struct {
 	// for a client.
 	baseWireLength int32
 
-	mu sync.Mutex // guards all fields below
-
-	draining     bool
+	drainState   uint32
 	backoffTimer *time.Timer // runs if all partition records are in a backoff state
-	backoffSeq   uint64      // guards against timers starting drains they should not
 
-	// TODO:tighter mutex on allPartRecs; thousands of partitions on a
-	//   sink can make batch building slow and block record producing.
-	// TODO: more important is to remove sink mutex grab from
-	//   maybeBeginProducing
-	// TODO: explore converting allPartsRecs to map[string]map[int32]
-	//   or some such to avoid repeated topic lookups
-	//   This can be done with multi level allPartRecs [][]*records,
-	//   spread allPartRecsStart across two indicies.
-	//   Big con is strong favoring of topics during producing, but
-	//   we kinda run risk of that today.
+	mu sync.Mutex // guards the two fields below
 
-	allPartRecs []*records // contains all partition's records; used for batch building
+	allPartRecs []*records // contains all partition records for batch building
+
 	// allPartRecsStart is where we will begin in allPartRecs for building a
 	// batch. This increments by one every produce request, avoiding
 	// starvation for large record batches that cannot fit into the request
@@ -69,10 +58,11 @@ func newRecordSink(broker *broker) *recordSink {
 		broker:         broker,
 		baseWireLength: messageRequestOverhead + produceRequestOverhead,
 	}
+	sink.inflightSem.Store(make(chan struct{}, 1))
+
 	if broker.client.cfg.producer.txnID != nil {
 		sink.baseWireLength += int32(len(*broker.client.cfg.producer.txnID))
 	}
-	sink.inflightSem.Store(make(chan struct{}, 1))
 	if broker.client.cfg.client.id != nil {
 		sink.baseWireLength += int32(len(*broker.client.cfg.client.id))
 	}
@@ -101,6 +91,10 @@ func (sink *recordSink) createRequest() (*produceRequest, bool) {
 		moreToDrain     bool
 		now             = time.Now()
 	)
+
+	// Prevent concurrent modification to allPartsRecs.
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
 
 	// Over every record buffer, check to see if the first batch is not
 	// backing off and that it can can fit in our request.
@@ -161,49 +155,19 @@ func (sink *recordSink) createRequest() (*produceRequest, bool) {
 	}
 
 	sink.allPartRecsStart = (sink.allPartRecsStart + 1) % len(sink.allPartRecs)
-	sink.draining = moreToDrain
 	return req, moreToDrain
 }
 
 func (sink *recordSink) maybeBeginDraining() {
-	sink.mu.Lock()
-
-	// TODO draining can probably be a combo of an atomic with multiple
-	// states and a mu. This would unblock maybeBegin.
-	if sink.draining {
-		sink.mu.Unlock()
-		return
+	if maybeBeginWork(&sink.drainState) {
+		go sink.drain()
 	}
-	sink.draining = true
-
-	if sink.backoffTimer != nil {
-		sink.backoffTimer.Stop()
-		sink.backoffTimer = nil
-		sink.backoffSeq++
-	}
-	sink.mu.Unlock()
-
-	go sink.drain()
 }
 
 // beginDrainBackoff is called if all part recs are detected to be in a backoff
 // state and no produce request can be built.
 func (sink *recordSink) beginDrainBackoff(after time.Duration) {
-	seq := sink.backoffSeq
-
-	sink.backoffTimer = time.AfterFunc(after, func() {
-		sink.mu.Lock()
-		defer sink.mu.Unlock()
-
-		if seq != sink.backoffSeq {
-			return
-		}
-
-		sink.backoffTimer = nil
-		sink.draining = true
-
-		go sink.drain()
-	})
+	sink.backoffTimer = time.AfterFunc(after, sink.maybeBeginDraining)
 }
 
 // drain drains buffered records and issues produce requests.
@@ -216,20 +180,19 @@ func (sink *recordSink) drain() {
 
 	again := true
 	for again {
+		if sink.backoffTimer != nil {
+			sink.backoffTimer.Stop()
+			sink.backoffTimer = nil
+		}
+
 		sem := sink.inflightSem.Load().(chan struct{})
 		sem <- struct{}{}
 
-		// We must hold the mu while creating the request all the way
-		// thru issuing it. If we release before issuing, the create
-		// could set sink.draining to false, a new record could start a
-		// new drain, and a new request could sneak in and be issued
-		// before this first one was.
-		sink.mu.Lock()
 		var req *produceRequest
 		req, again = sink.createRequest()
 
 		if len(req.batches) == 0 { // everything entered backoff
-			sink.mu.Unlock()
+			again = maybeTryFinishWork(&sink.drainState, again)
 			<-sem // wont be using that
 			continue
 		}
@@ -241,7 +204,7 @@ func (sink *recordSink) drain() {
 				<-sem
 			},
 		)
-		sink.mu.Unlock()
+		again = maybeTryFinishWork(&sink.drainState, again)
 	}
 }
 
@@ -433,7 +396,14 @@ func (sink *recordSink) handleRetryBatches(retry reqBatches) {
 	// potentially migrated.
 	eachSentBatchLocked(retry, func(batch sentBatch) {
 		if !batch.isFirstBatchInRecordBuf() ||
-			batch.owner.backoffDeadline == forever {
+			batch.owner.backoffDeadline == forever ||
+			batch.owner.sink != sink {
+
+			// TODO verify correctness
+			if batch.isFirstBatchInRecordBuf() &&
+				batch.owner.sink != sink {
+				batch.owner.sink.maybeBeginDraining()
+			}
 
 			skipTopicRetry := retry[batch.owner.topicPartition.topic]
 			delete(skipTopicRetry, batch.owner.topicPartition.partition)
