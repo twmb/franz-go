@@ -356,6 +356,33 @@ func (c *consumption) processResponsePartitionBatch(
 	c.offset = currentOffset
 }
 
+// recordToRecord converts a kmsg.RecordBatch's Record to a kgo Record.
+// TODO timestamp MaxTimestamp?
+func recordToRecord(
+	topic string,
+	partition int32,
+	batch *kmsg.RecordBatch,
+	record *kmsg.Record,
+) *Record {
+	h := make([]RecordHeader, 0, len(record.Headers))
+	for _, kv := range record.Headers {
+		h = append(h, RecordHeader{
+			Key:   kv.Key,
+			Value: kv.Value,
+		})
+	}
+	return &Record{
+		Key:           record.Key,
+		Value:         record.Value,
+		Headers:       h,
+		Timestamp:     time.Unix(0, batch.FirstTimestamp+int64(record.TimestampDelta)),
+		TimestampType: int8((batch.Attributes & 0x0008) >> 3),
+		Topic:         topic,
+		Partition:     partition,
+		Offset:        batch.FirstOffset + int64(record.OffsetDelta),
+	}
+}
+
 func (source *recordSource) takeBuffered() Fetch {
 	source.mu.Lock()
 	r := source.buffered
