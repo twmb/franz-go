@@ -62,6 +62,172 @@ func VarintLen(i int64) int {
 	return int(varintLens[byte(bits.Len64(u))])
 }
 
+// Varlong is a loop unrolled 64 bit varint decoder. The return semantics
+// are the same as binary.Varint.
+func Varlong(in []byte) (int64, int) {
+	var c byte
+	var x uint64
+	var n int
+
+	if len(in) < 1 {
+		goto fail
+	}
+
+	c = in[0]
+	x = uint64(c & 0x7f)
+	n = 1
+
+	if c&0x80 != 0 {
+		if len(in) < 2 {
+			goto fail
+		}
+		c = in[1]
+		x |= uint64(c&0x7f) << 7
+		n = 2
+
+		if c&0x80 != 0 {
+			if len(in) < 3 {
+				goto fail
+			}
+			c = in[2]
+			x |= uint64(c&0x7f) << 14
+			n = 3
+
+			if c&0x80 != 0 {
+				if len(in) < 4 {
+					goto fail
+				}
+				c = in[3]
+				x |= uint64(c&0x7f) << 21
+				n = 4
+
+				if c&0x80 != 0 {
+					if len(in) < 5 {
+						goto fail
+					}
+					c = in[4]
+					x |= uint64(c&0x7f) << 28
+					n = 5
+
+					if c&0x80 != 0 {
+						if len(in) < 6 {
+							goto fail
+						}
+						c = in[5]
+						x |= uint64(c&0x7f) << 35
+						n = 6
+
+						if c&0x80 != 0 {
+							if len(in) < 7 {
+								goto fail
+							}
+							c = in[6]
+							x |= uint64(c&0x7f) << 42
+							n = 7
+
+							if c&0x80 != 0 {
+								if len(in) < 8 {
+									goto fail
+								}
+								c = in[7]
+								x |= uint64(c&0x7f) << 49
+								n = 8
+
+								if c&0x80 != 0 {
+									if len(in) < 9 {
+										goto fail
+									}
+									c = in[8]
+									x |= uint64(c&0x7f) << 56
+									n = 9
+
+									if c&0x80 != 0 {
+										if len(in) < 10 {
+											goto fail
+										}
+										c = in[9]
+										if c > 1 {
+											return 0, -10
+										}
+										x |= uint64(c) << 63
+										n = 10
+
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return int64((x >> 1) ^ -(x & 1)), n
+fail:
+	return 0, 0
+}
+
+// Varint is a loop unrolled 32 bit varint decoder. The return semantics
+// are the same as binary.Varint, with the added benefit that overflows
+// in 5 byte encodings are handled rather than left to the user.
+func Varint(in []byte) (int32, int) {
+	var c byte
+	var x uint32
+	var n int
+
+	if len(in) < 1 {
+		goto fail
+	}
+
+	c = in[0]
+	x = uint32(c & 0x7f)
+	n = 1
+
+	if c&0x80 != 0 {
+		if len(in) < 2 {
+			goto fail
+		}
+		c = in[1]
+		x |= uint32(c&0x7f) << 7
+		n = 2
+
+		if c&0x80 != 0 {
+			if len(in) < 3 {
+				goto fail
+			}
+			c = in[2]
+			x |= uint32(c&0x7f) << 14
+			n = 3
+
+			if c&0x80 != 0 {
+				if len(in) < 4 {
+					goto fail
+				}
+				c = in[3]
+				x |= uint32(c&0x7f) << 21
+				n = 4
+
+				if c&0x80 != 0 {
+					if len(in) < 5 {
+						goto fail
+					}
+					c = in[4]
+					if c > 0x0f {
+						return 0, -5
+					}
+					x |= uint32(c) << 28
+					n = 5
+
+				}
+			}
+		}
+	}
+
+	return int32((x >> 1) ^ -(x & 1)), n
+fail:
+	return 0, 0
+}
+
 func AppendVarint(dst []byte, i int32) []byte {
 	u := uint32(i)<<1 ^ uint32(i>>31)
 	switch VarintLen(int64(i)) {
@@ -222,8 +388,8 @@ func (b *Reader) Uint32() uint32 {
 }
 
 func (b *Reader) Varint() int32 {
-	val, n := binary.Varint(b.Src)
-	if n <= 0 || n > 5 {
+	val, n := Varint(b.Src)
+	if n <= 0 {
 		b.bad = true
 		b.Src = nil
 		return 0
@@ -233,7 +399,7 @@ func (b *Reader) Varint() int32 {
 }
 
 func (b *Reader) Varlong() int64 {
-	val, n := binary.Varint(b.Src)
+	val, n := Varlong(b.Src)
 	if n <= 0 {
 		b.bad = true
 		b.Src = nil
