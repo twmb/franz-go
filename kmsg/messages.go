@@ -3274,13 +3274,13 @@ type JoinGroupResponse struct {
 	// GenerationID is the current "generation" of this group.
 	GenerationID int32
 
-	// GroupProtocol is the agreed upon protocol.
+	// GroupProtocol is the agreed upon protocol name.
 	GroupProtocol string
 
 	// LeaderID is the leader member.
 	LeaderID string
 
-	// MemberID is the member of the receiving clientj.
+	// MemberID is the member of the receiving client.
 	MemberID string
 
 	// Members contains all other members of this group. Only the group leader
