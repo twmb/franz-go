@@ -90,6 +90,10 @@ type consumer struct {
 	mu  sync.Mutex
 	typ consumerType
 
+	group consumerGroup
+
+	// seq is a sequence number used reloading assignments from a new
+	// asignment.
 	seq uint64
 
 	offsetsWaitingLoad *offsetsWaitingLoad

@@ -843,6 +843,9 @@ func (r *recordBatch) appendTo(dst []byte, compressor *compressor) []byte {
 		dst = pnr.appendTo(dst, int32(i))
 	}
 
+	// TODO swap compressor interface to a writer to avoid one copy here:
+	// (1) write record in pieces to compressor directly
+	// (2) append compressed data directly to dst
 	if compressor != nil {
 		toCompress := dst[recordsAt:]
 		zipr := compressor.getZipr()

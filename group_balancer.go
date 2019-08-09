@@ -1,116 +1,18 @@
 package kgo
 
-import "github.com/twmb/kgo/kmsg"
+import (
+	"fmt"
+	"sort"
 
-func (c *Client) ConsumeGroup(
-	group string,
-	topics []string,
-	balancer GroupBalancer,
-	opts ...OptGroup,
-) (*GroupConsumer, error) {
-	gc := &GroupConsumer{
-		groupID:  group,
-		topics:   topics,
-		balancer: balancer,
-	}
-	return gc, nil
-}
-
-type (
-	OptGroup interface {
-		Opt
-		apply(*groupOpt)
-	}
-
-	groupOpt struct{ fn func(cfg *groupCfg) }
-
-	groupCfg struct {
-		userData []byte
-		// TODO autocommit
-		// OnAssign
-		// OnRevoke
-		// SessionTimeout
-		// RebalanceTimeout
-		// MemberID
-
-		// UserInfo?
-	}
-
-	GroupConsumer struct {
-		groupID  string
-		topics   []string
-		balancer GroupBalancer
-
-		memberID   string
-		generation int32
-	}
-
-	partitionRecords struct {
-		partition int32
-		records   []*Record
-	}
-
-	TopicRecords struct {
-		topic string
-		parts []partitionRecords
-
-		// high watermark
-		// LSO
-		// error code
-	}
+	"github.com/davecgh/go-spew/spew"
+	"github.com/twmb/kgo/kmsg"
 )
-
-func (t *TopicRecords) Topic() string { return t.topic }
-func (t *TopicRecords) Records() []*Record {
-	sz := 0
-	for _, part := range t.parts {
-		sz += len(part.records)
-	}
-	all := make([]*Record, 0, sz)
-	for _, part := range t.parts {
-		all = append(all, part.records...)
-	}
-	return all
-}
-
-func (g *GroupConsumer) Poll() (*TopicRecords, error) {
-	// can talk to multiple brokers behind the scenes
-	//
-	// for each broker,
-	//   one in-flight (or buffered) fetch
-	//   returned immediately from poll
-	//
-	// In go,
-	// we want one goroutine per broker???
-	// but partitions can move brokers
-	// so effectively one broker can come and go
-	return nil, nil
-}
-
-// TODO commit
-
-func (g *GroupConsumer) LeaveGroup() {}
-
-func (g *GroupConsumer) MemberID() string {
-	return ""
-}
-
-type memberMetadata struct {
-	id       string
-	topics   []string
-	userdata []byte
-}
-
-type simpleTopicPartitions struct {
-	topic      string
-	partitions []int32
-}
 
 // we always use "consumer"
 type GroupBalancer interface {
-	protocolName() string // "range"
+	protocolName() string // "roundrobin"
 
-	balance(memberData []memberMetadata, partitions []simpleTopicPartitions) *kmsg.GroupMemberAssignment
+	balance(members []groupMember, topics map[string]*topicPartitions) balancePlan
 }
 
 func balancerMetadata(topics []string, userdata []byte) []byte {
@@ -121,13 +23,95 @@ func balancerMetadata(topics []string, userdata []byte) []byte {
 	}).AppendTo(nil)
 }
 
-func RangeBalancer() GroupBalancer {
-	return new(rangeBalancer)
+func RoundRobinBalancer() GroupBalancer {
+	return new(roundRobinBalancer) // TODO package level singleton
 }
 
-type rangeBalancer struct{}
+type roundRobinBalancer struct{}
 
-func (*rangeBalancer) protocolName() string { return "range" }
-func (*rangeBalancer) balance([]memberMetadata, []simpleTopicPartitions) *kmsg.GroupMemberAssignment {
-	return nil
+func (*roundRobinBalancer) protocolName() string { return "roundrobin" }
+func (*roundRobinBalancer) balance(members []groupMember, topics map[string]*topicPartitions) balancePlan {
+	type topicPartition struct {
+		topic     string
+		partition int32
+	}
+	var allPartitions []topicPartition
+
+	for topic, topicPartitions := range topics {
+		for _, partition := range topicPartitions.load().partitions {
+			allPartitions = append(allPartitions, topicPartition{
+				topic:     topic,
+				partition: partition,
+			})
+		}
+	}
+
+	sort.Slice(allPartitions, func(i, j int) bool {
+		l, r := allPartitions[i], allPartitions[j]
+		if l.topic == r.topic {
+			return l.partition < r.partition
+		}
+		return l.topic < r.topic
+	})
+
+	plan := newBalancePlan(members)
+
+	var memberIdx int
+	for _, next := range allPartitions {
+		member := members[memberIdx]
+		plan.add(member.id, next.topic, next.partition)
+		memberIdx = (memberIdx + 1) % len(members)
+	}
+
+	return plan
+}
+
+type groupMember struct {
+	id     string
+	topics []string
+} // TODO userdata
+
+type balancePlan map[string]map[string][]int32
+
+func newBalancePlan(members []groupMember) balancePlan {
+	plan := make(map[string]map[string][]int32, len(members))
+	for _, member := range members {
+		plan[member.id] = make(map[string][]int32)
+	}
+	return plan
+}
+
+func (plan balancePlan) add(member, topic string, partition int32) {
+	memberPlan := plan[member]
+	memberPlan[topic] = append(memberPlan[topic], partition)
+}
+
+func (c *consumer) balanceGroup(kmembers []kmsg.JoinGroupResponseMember) (balancePlan, error) {
+	members, err := parseGroupMembers(kmembers)
+	if err != nil {
+		return nil, err
+	}
+	sort.Slice(members, func(i, j int) bool {
+		return members[i].id < members[j].id
+	})
+	for _, member := range members {
+		sort.Strings(member.topics)
+	}
+
+	return c.group.balancer.balance(members, c.client.loadTopics()), nil
+}
+
+func parseGroupMembers(kmembers []kmsg.JoinGroupResponseMember) ([]groupMember, error) {
+	members := make([]groupMember, 0, len(kmembers))
+	for _, kmember := range kmembers {
+		var meta kmsg.GroupMemberMetadata
+		if err := meta.ReadFrom(kmember.MemberMetadata); err != nil {
+			return nil, fmt.Errorf("unable to read member metadata: %v", err) // TODO nice err
+		}
+		members = append(members, groupMember{
+			id:     kmember.MemberID,
+			topics: meta.Topics,
+		})
+	}
+	return members, nil
 }
