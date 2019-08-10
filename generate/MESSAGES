@@ -972,14 +972,45 @@ FindCoordinatorResponse => from FindCoordinatorRequest
     // Port is the port of the coordinator.
     Port: int32
 
+// StickyMemberMetadataV0 is version 0 of what was encoded in UserData for
+// GroupMemberMetadata in group join requests.
+StickyMemberMetadataV0 => not top level, with encoding no version
+  // CurrentAssignment is the assignment that a group member has when
+  // issuing a join.
+  CurrentAssignment: [=>]
+    // Topic is a topic the group member is currently assigned.
+    Topic: string
+    // Partitions are the partitions within a topic that a group member is
+    // currently assigned.
+    Partitions: [int32]
+
+// StickyMemberMetadataV1 is version 1 of what was encoded in UserData for
+// GroupMemberMetadata in group join requests.
+//
+// V1 added generation, which fixed a bug with flaky group members joining
+// repeatedly. See KIP-341 for more details.
+StickyMemberMetadataV1 => not top level, with encoding no version
+  // CurrentAssignment is the assignment that a group member has when
+  // issuing a join.
+  CurrentAssignment: [=>]
+    // Topic is a topic the group member is currently assigned.
+    Topic: string
+    // Partitions are the partitions within a topic that a group member is
+    // currently assigned.
+    Partitions: [int32]
+  // Generation is the generation of this join. This is incremented every join.
+  Generation: int32
+
 // GroupMemberMetadata is the metadata that is usually sent with a join group
 // request.
 GroupMemberMetadata => not top level, with encoding
-  // Version is currently version 0.
+  // Version is either version 0 or version 1.
   Version: int16
   // Topics is the list of topics in the group.
   Topics: [string]
   // UserData is arbitrary client data for a given client in the group.
+  // For sticky assignment with version 0, this is StickyMemberMetadataV0.
+  // For sticky assignment with version 1, this is StickyMemberMetadataV1.
   UserData: bytes
 
 // GroupMemberAssignment is the assignment data that is usually sent with a

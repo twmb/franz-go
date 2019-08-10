@@ -75,6 +75,7 @@ type (
 	Struct struct {
 		TopLevel     bool
 		WithEncoding bool // add a encode/decode even if not top level (only if not top level)
+		NoVersion    bool // with encoding, no version field
 		Comment      string
 		Name         string
 

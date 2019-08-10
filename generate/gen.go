@@ -299,8 +299,10 @@ func (s Struct) WriteResponseKindFunc(l *LineWriter) {
 
 func (s Struct) WriteAppendFunc(l *LineWriter) {
 	l.Write("func (v *%s) AppendTo(dst []byte) []byte {", s.Name)
-	l.Write("version := v.Version")
-	l.Write("_ = version")
+	if !s.NoVersion {
+		l.Write("version := v.Version")
+		l.Write("_ = version")
+	}
 	s.WriteAppend(l)
 	l.Write("return dst")
 	l.Write("}")
@@ -308,8 +310,10 @@ func (s Struct) WriteAppendFunc(l *LineWriter) {
 
 func (s Struct) WriteDecodeFunc(l *LineWriter) {
 	l.Write("func (v *%s) ReadFrom(src []byte) error {", s.Name)
-	l.Write("version := v.Version")
-	l.Write("_ = version")
+	if !s.NoVersion {
+		l.Write("version := v.Version")
+		l.Write("_ = version")
+	}
 	l.Write("b := kbin.Reader{Src: src}")
 	s.WriteDecode(l)
 	l.Write("return b.Complete()")

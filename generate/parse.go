@@ -270,7 +270,8 @@ func Parse(raw []byte) {
 		orig := line
 		topLevel := true
 
-		name := strings.TrimSuffix(line, ", with encoding")
+		name := strings.TrimSuffix(line, " no version")
+		name = strings.TrimSuffix(name, ", with encoding")
 		name = strings.TrimSuffix(name, " => not top level")
 		save := func() {
 			s.Name = name
@@ -287,6 +288,9 @@ func Parse(raw []byte) {
 			topLevel = false
 			if strings.HasSuffix(orig, ", with encoding") {
 				s.WithEncoding = true
+			} else if strings.HasSuffix(orig, ", with encoding no version") {
+				s.WithEncoding = true
+				s.NoVersion = true
 			}
 			save()
 			continue
