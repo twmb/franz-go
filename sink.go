@@ -769,16 +769,9 @@ func (rbs reqBatches) addToTopicBatches(
 	topicBatches[partition] = batch
 }
 
-var (
-	produceRequestBase = new(kmsg.ProduceRequest)
-	produceRequestKey  = produceRequestBase.Key()
-	produceRequestMax  = produceRequestBase.MaxVersion()
-	produceRequestMin  = produceRequestBase.MinVersion()
-)
-
-func (*produceRequest) Key() int16           { return produceRequestKey }
-func (*produceRequest) MaxVersion() int16    { return produceRequestMax }
-func (*produceRequest) MinVersion() int16    { return produceRequestMin }
+func (*produceRequest) Key() int16           { return 0 }
+func (*produceRequest) MaxVersion() int16    { return 7 }
+func (*produceRequest) MinVersion() int16    { return 2 }
 func (p *produceRequest) SetVersion(v int16) { p.version = v }
 func (p *produceRequest) GetVersion() int16  { return p.version }
 func (p *produceRequest) AppendTo(dst []byte) []byte {

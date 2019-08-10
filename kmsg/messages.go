@@ -165,7 +165,7 @@ type ProduceRequestTopicData struct {
 
 // ProduceRequest issues records to be created to Kafka.
 //
-// The min version of this type is currently 2, released with Kafka 0.11.0.0.
+// The min version of this type is currently 3, released with Kafka 0.11.0.0.
 // Prior, the RecordBatch format was completely different (and was called a
 // MessageSet).
 //
@@ -196,7 +196,7 @@ type ProduceRequest struct {
 
 func (*ProduceRequest) Key() int16                 { return 0 }
 func (*ProduceRequest) MaxVersion() int16          { return 7 }
-func (*ProduceRequest) MinVersion() int16          { return 2 }
+func (*ProduceRequest) MinVersion() int16          { return 3 }
 func (v *ProduceRequest) SetVersion(version int16) { v.Version = version }
 func (v *ProduceRequest) GetVersion() int16        { return v.Version }
 func (v *ProduceRequest) ResponseKind() Response   { return &ProduceResponse{Version: v.Version} }
@@ -529,6 +529,10 @@ type FetchRequestForgottenTopicsData struct {
 }
 
 // FetchRequest is a long-poll request of records from Kafka.
+//
+// The min version of this type is currently 4, released with Kafka 0.11.0.0.
+// Prior, the RecordBatch format was completely different (and was called a
+// MessageSet).
 type FetchRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
@@ -584,7 +588,7 @@ type FetchRequest struct {
 
 func (*FetchRequest) Key() int16                 { return 1 }
 func (*FetchRequest) MaxVersion() int16          { return 10 }
-func (*FetchRequest) MinVersion() int16          { return 0 }
+func (*FetchRequest) MinVersion() int16          { return 4 }
 func (v *FetchRequest) SetVersion(version int16) { v.Version = version }
 func (v *FetchRequest) GetVersion() int16        { return v.Version }
 func (v *FetchRequest) ResponseKind() Response   { return &FetchResponse{Version: v.Version} }

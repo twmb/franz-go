@@ -413,16 +413,9 @@ func (req *fetchRequest) addTopicPartitionConsumption(
 	partitions[partition] = c
 }
 
-var (
-	fetchRequestBase = new(kmsg.FetchRequest)
-	fetchRequestKey  = fetchRequestBase.Key()
-	fetchRequestMax  = fetchRequestBase.MaxVersion()
-	fetchRequestMin  = fetchRequestBase.MinVersion()
-)
-
-func (*fetchRequest) Key() int16           { return fetchRequestKey }
-func (*fetchRequest) MaxVersion() int16    { return fetchRequestMax }
-func (*fetchRequest) MinVersion() int16    { return fetchRequestMin }
+func (*fetchRequest) Key() int16           { return 1 }
+func (*fetchRequest) MaxVersion() int16    { return 10 }
+func (*fetchRequest) MinVersion() int16    { return 4 }
 func (f *fetchRequest) SetVersion(v int16) { f.version = v }
 func (f *fetchRequest) GetVersion() int16  { return f.version }
 func (f *fetchRequest) AppendTo(dst []byte) []byte {

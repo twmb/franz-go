@@ -117,14 +117,14 @@ RecordBatch => not top level
 
 // ProduceRequest issues records to be created to Kafka.
 //
-// The min version of this type is currently 2, released with Kafka 0.11.0.0.
+// The min version of this type is currently 3, released with Kafka 0.11.0.0.
 // Prior, the RecordBatch format was completely different (and was called a
 // MessageSet).
 //
 // Note that the special client ID "__admin_client" will allow you to produce
 // records to internal topics. This is generally recommended if you want to
 // break your Kafka cluster.
-ProduceRequest => key 0, max version 7, min version 2
+ProduceRequest => key 0, max version 7, min version 3
   TransactionID: nullable-string // v3+
   // Acks specifies the number of acks that the partition leaders must receive
   // from in sync replicas before considering a record batch fully written.
@@ -253,7 +253,11 @@ ProduceResponse => from ProduceRequest
   ThrottleTimeMs: int32
 
 // FetchRequest is a long-poll request of records from Kafka.
-FetchRequest => key 1, max version 10
+//
+// The min version of this type is currently 4, released with Kafka 0.11.0.0.
+// Prior, the RecordBatch format was completely different (and was called a
+// MessageSet).
+FetchRequest => key 1, max version 10, min version 4
   // ReplicaID is the broker ID of performing the fetch request. Standard
   // clients should use -1. To be a "debug" replica, use -2. The debug
   // replica can be used to fetch messages from non-leaders.
