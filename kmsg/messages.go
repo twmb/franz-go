@@ -2926,16 +2926,180 @@ func (v *FindCoordinatorResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+type StickyMemberMetadataV0CurrentAssignment struct {
+	// Topic is a topic the group member is currently assigned.
+	Topic string
+
+	// Partitions are the partitions within a topic that a group member is
+	// currently assigned.
+	Partitions []int32
+}
+
+// StickyMemberMetadataV0 is version 0 of what was encoded in UserData for
+// GroupMemberMetadata in group join requests.
+type StickyMemberMetadataV0 struct {
+	// CurrentAssignment is the assignment that a group member has when
+	// issuing a join.
+	CurrentAssignment []StickyMemberMetadataV0CurrentAssignment
+}
+
+func (v *StickyMemberMetadataV0) AppendTo(dst []byte) []byte {
+	{
+		v := v.CurrentAssignment
+		dst = kbin.AppendArrayLen(dst, len(v))
+		for i := range v {
+			v := &v[i]
+			{
+				v := v.Topic
+				dst = kbin.AppendString(dst, v)
+			}
+			{
+				v := v.Partitions
+				dst = kbin.AppendArrayLen(dst, len(v))
+				for i := range v {
+					v := v[i]
+					dst = kbin.AppendInt32(dst, v)
+				}
+			}
+		}
+	}
+	return dst
+}
+func (v *StickyMemberMetadataV0) ReadFrom(src []byte) error {
+	b := kbin.Reader{Src: src}
+	{
+		s := v
+		{
+			v := s.CurrentAssignment
+			a := v
+			for i := b.ArrayLen(); i > 0; i-- {
+				a = append(a, StickyMemberMetadataV0CurrentAssignment{})
+				v := &a[len(a)-1]
+				{
+					s := v
+					{
+						v := b.String()
+						s.Topic = v
+					}
+					{
+						v := s.Partitions
+						a := v
+						for i := b.ArrayLen(); i > 0; i-- {
+							v := b.Int32()
+							a = append(a, v)
+						}
+						v = a
+						s.Partitions = v
+					}
+				}
+			}
+			v = a
+			s.CurrentAssignment = v
+		}
+	}
+	return b.Complete()
+}
+
+type StickyMemberMetadataV1CurrentAssignment struct {
+	// Topic is a topic the group member is currently assigned.
+	Topic string
+
+	// Partitions are the partitions within a topic that a group member is
+	// currently assigned.
+	Partitions []int32
+}
+
+// StickyMemberMetadataV1 is version 1 of what was encoded in UserData for
+// GroupMemberMetadata in group join requests.
+//
+// V1 added generation, which fixed a bug with flaky group members joining
+// repeatedly. See KIP-341 for more details.
+type StickyMemberMetadataV1 struct {
+	// CurrentAssignment is the assignment that a group member has when
+	// issuing a join.
+	CurrentAssignment []StickyMemberMetadataV1CurrentAssignment
+
+	// Generation is the generation of this join. This is incremented every join.
+	Generation int32
+}
+
+func (v *StickyMemberMetadataV1) AppendTo(dst []byte) []byte {
+	{
+		v := v.CurrentAssignment
+		dst = kbin.AppendArrayLen(dst, len(v))
+		for i := range v {
+			v := &v[i]
+			{
+				v := v.Topic
+				dst = kbin.AppendString(dst, v)
+			}
+			{
+				v := v.Partitions
+				dst = kbin.AppendArrayLen(dst, len(v))
+				for i := range v {
+					v := v[i]
+					dst = kbin.AppendInt32(dst, v)
+				}
+			}
+		}
+	}
+	{
+		v := v.Generation
+		dst = kbin.AppendInt32(dst, v)
+	}
+	return dst
+}
+func (v *StickyMemberMetadataV1) ReadFrom(src []byte) error {
+	b := kbin.Reader{Src: src}
+	{
+		s := v
+		{
+			v := s.CurrentAssignment
+			a := v
+			for i := b.ArrayLen(); i > 0; i-- {
+				a = append(a, StickyMemberMetadataV1CurrentAssignment{})
+				v := &a[len(a)-1]
+				{
+					s := v
+					{
+						v := b.String()
+						s.Topic = v
+					}
+					{
+						v := s.Partitions
+						a := v
+						for i := b.ArrayLen(); i > 0; i-- {
+							v := b.Int32()
+							a = append(a, v)
+						}
+						v = a
+						s.Partitions = v
+					}
+				}
+			}
+			v = a
+			s.CurrentAssignment = v
+		}
+		{
+			v := b.Int32()
+			s.Generation = v
+		}
+	}
+	return b.Complete()
+}
+
 // GroupMemberMetadata is the metadata that is usually sent with a join group
 // request.
 type GroupMemberMetadata struct {
-	// Version is currently version 0.
+	// Version is either version 0 or version 1.
 	Version int16
 
 	// Topics is the list of topics in the group.
 	Topics []string
 
 	// UserData is arbitrary client data for a given client in the group.
+	// For sticky assignment with version 0, this is StickyMemberMetadataV0.
+	// For sticky assignment with version 1, this is StickyMemberMetadataV1.
 	UserData []byte
 }
 
