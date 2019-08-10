@@ -39,14 +39,27 @@ type broker struct {
 	id   int32
 	addr string
 
-	// cxn manages a single tcp connection to a broker.
-	// This field is managed serially in handleReqs.
-	cxn *brokerCxn
+	// The cxn fields each manage a single tcp connection to one broker.
+	// Each field is managed serially in handleReqs. This means that only
+	// one write can happen at a time, regardless of which connection the
+	// write goes to, but the write is expected to be fast whereas the wait
+	// for the response is expected to be slow.
+	//
+	// Produce requests go to cxnProduce, fetch to cxnFetch, and all others
+	// to cxnNormal.
+	cxnNormal  *brokerCxn
+	cxnProduce *brokerCxn
+	cxnFetch   *brokerCxn
 
-	// TODO should recordSink removed? It exists so metadata updates can
-	// copy the pointers to a topicPartiton's records field.
+	// recordSink and recordSource exist so that metadata updates can
+	// copy these pointers to a topicPartition's record's sink field
+	// and consumption's source field.
+	//
+	// Brokers are created with these two fields initialized; when
+	// a topic partition wants to use the broker, it copies these
+	// pointers.
 	recordSink   *recordSink
-	recordSource *recordSource // same for this field
+	recordSource *recordSource
 
 	// seqResps, guarded by seqRespsMu, contains responses that must be
 	// handled sequentially. These responses are handled asyncronously,
@@ -203,26 +216,31 @@ func (b *broker) waitResp(req kmsg.Request) (kmsg.Response, error) {
 // If any of these steps fail, the promise is called with the relevant error.
 func (b *broker) handleReqs() {
 	defer func() {
-		if b.cxn != nil {
-			b.cxn.die()
+		for _, cxn := range []*brokerCxn{
+			b.cxnNormal,
+			b.cxnProduce,
+			b.cxnFetch,
+		} {
+			if cxn != nil {
+				cxn.die()
+			}
 		}
 	}()
 
 	for pr := range b.reqs {
-		cxn, err := b.loadConnection()
+		req := pr.req
+		cxn, err := b.loadConnection(req.Key())
 		if err != nil {
 			pr.promise(nil, err)
 			continue
 		}
 
 		// version bound our request
-		req := pr.req
-		key := req.Key()
-		if int(key) > len(cxn.versions[:]) {
+		if int(req.Key()) > len(cxn.versions[:]) {
 			pr.promise(nil, ErrUnknownRequestKey)
 			continue
 		}
-		brokerMax := cxn.versions[key]
+		brokerMax := cxn.versions[req.Key()]
 		ourMax := req.MaxVersion()
 		version := brokerMax
 		if brokerMax > ourMax {
@@ -251,9 +269,16 @@ func (b *broker) handleReqs() {
 
 // loadConection returns the broker's connection, creating it if necessary
 // and returning an error of if that fails.
-func (b *broker) loadConnection() (*brokerCxn, error) {
-	if b.cxn != nil && atomic.LoadInt64(&b.cxn.dead) == 0 {
-		return b.cxn, nil
+func (b *broker) loadConnection(reqKey int16) (*brokerCxn, error) {
+	pcxn := &b.cxnNormal
+	if reqKey == 0 {
+		pcxn = &b.cxnProduce
+	} else if reqKey == 1 {
+		pcxn = &b.cxnFetch
+	}
+
+	if *pcxn != nil && atomic.LoadInt64(&(*pcxn).dead) == 0 {
+		return *pcxn, nil
 	}
 
 	conn, err := b.connect()
@@ -270,7 +295,7 @@ func (b *broker) loadConnection() (*brokerCxn, error) {
 		return nil, err
 	}
 
-	b.cxn = cxn
+	*pcxn = cxn
 	return cxn, nil
 }
 

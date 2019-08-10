@@ -13,17 +13,6 @@ import (
 	"github.com/twmb/kgo/kmsg"
 )
 
-// TODO: producing should use its own broker connections, and consuming
-// should use its own broker connections. This way, metadata/offset
-// commits are not blocked.
-//
-// This can be done on the broker struct!
-// - have three cxn pointers, three loops (spun up as necessary)
-// - depending on what type of request used,
-//   used appropriate loo
-// - request type can have field
-// - or can call broker.waitConsumer, waitProducer, wait
-
 // Client issues requests and handles responses to a Kafka cluster.
 type Client struct {
 	cfg cfg
@@ -175,6 +164,9 @@ func (c *Client) Close() func() {
 // for each group (since they could have different coordinators), all requests
 // will be issued, and then all responses are merged. Only if all requests
 // error is an error returned.
+//
+// In short, this tries to do the correct thing depending on what type of
+// request is being issued.
 func (c *Client) Request(req kmsg.Request) (kmsg.Response, error) {
 	tries := 0
 	var resp kmsg.Response
