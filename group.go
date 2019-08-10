@@ -32,7 +32,7 @@ func WithGroupTopics(topics ...string) GroupOpt {
 // WithGroupBalancers sets the balancer to use for dividing topic partitions
 // among group members, overriding the default two [roundrobin, range].
 func WithGroupBalancers(balancers ...GroupBalancer) GroupOpt {
-	return groupOpt{func(cfg *consumerGroup) { cfg.balancer = balancer }}
+	return groupOpt{func(cfg *consumerGroup) { cfg.balancers = balancers }}
 }
 
 // AssignGroup assigns a group to consume from, overriding any prior
@@ -51,7 +51,10 @@ func (c *Client) AssignGroup(group string, opts ...GroupOpt) error {
 	if consumer.group.id != "" {
 		return errors.New("client already has a group")
 	}
-	consumer.group.balancer = RangeBalancer()
+	consumer.group.balancers = []GroupBalancer{
+		RoundRobinBalancer(),
+		RangeBalancer(),
+	}
 	consumer.group.id = group
 	for _, opt := range opts {
 		opt.apply(&consumer.group)
@@ -75,9 +78,9 @@ func (c *Client) AssignGroup(group string, opts ...GroupOpt) error {
 
 type (
 	consumerGroup struct {
-		id       string
-		topics   []string
-		balancer GroupBalancer
+		id        string
+		topics    []string
+		balancers []GroupBalancer
 
 		memberID string
 
@@ -98,14 +101,6 @@ func (c *Client) consumeGroup() {
 	c.consumer.joinGroup()
 }
 
-func balancerMetadata(topics []string, userdata []byte) []byte {
-	return (&kmsg.GroupMemberMetadata{
-		Version:  0,
-		Topics:   topics,
-		UserData: userdata,
-	}).AppendTo(nil)
-}
-
 func (c *consumer) joinGroup() error {
 start:
 	var memberID string
@@ -115,12 +110,7 @@ start:
 		RebalanceTimeout: 1000,
 		ProtocolType:     "consumer",
 		MemberID:         memberID,
-		GroupProtocols: []kmsg.JoinGroupRequestGroupProtocol{
-			{
-				ProtocolName:     c.group.balancer.protocolName(),
-				ProtocolMetadata: balancerMetadata(c.group.topics, nil),
-			},
-		},
+		GroupProtocols:   c.joinGroupProtocols(),
 	}
 	kresp, err := c.client.Request(&req)
 	if err != nil {
@@ -141,8 +131,7 @@ start:
 
 	var plan balancePlan
 	if resp.LeaderID == resp.MemberID {
-		// TODO take into account the protocol here, combined w/ multiple protos above
-		plan, err = c.balanceGroup(resp.Members)
+		plan, err = c.balanceGroup(resp.GroupProtocol, resp.Members)
 		if err != nil {
 			return err
 		}
@@ -180,4 +169,20 @@ func (c *consumer) syncGroup(plan balancePlan, generation int32) error {
 	}
 	spew.Dump(kassignment)
 	return nil
+}
+
+func (c *consumer) joinGroupProtocols() []kmsg.JoinGroupRequestGroupProtocol {
+	meta := (&kmsg.GroupMemberMetadata{
+		Version: 0,
+		Topics:  c.group.topics,
+	}).AppendTo(nil)
+
+	var protos []kmsg.JoinGroupRequestGroupProtocol
+	for _, balancer := range c.group.balancers {
+		protos = append(protos, kmsg.JoinGroupRequestGroupProtocol{
+			ProtocolName:     balancer.protocolName(),
+			ProtocolMetadata: meta,
+		})
+	}
+	return protos
 }
