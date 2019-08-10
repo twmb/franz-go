@@ -29,9 +29,9 @@ func WithGroupTopics(topics ...string) GroupOpt {
 	return groupOpt{func(cfg *consumerGroup) { cfg.topics = append(cfg.topics, topics...) }}
 }
 
-// WithGroupBalancer sets the balancer to use for dividing topic partitions
-// among group members.
-func WithGroupBalancer(balancer GroupBalancer) GroupOpt {
+// WithGroupBalancers sets the balancer to use for dividing topic partitions
+// among group members, overriding the default two [roundrobin, range].
+func WithGroupBalancers(balancers ...GroupBalancer) GroupOpt {
 	return groupOpt{func(cfg *consumerGroup) { cfg.balancer = balancer }}
 }
 
@@ -51,7 +51,7 @@ func (c *Client) AssignGroup(group string, opts ...GroupOpt) error {
 	if consumer.group.id != "" {
 		return errors.New("client already has a group")
 	}
-	consumer.group.balancer = RoundRobinBalancer()
+	consumer.group.balancer = RangeBalancer()
 	consumer.group.id = group
 	for _, opt := range opts {
 		opt.apply(&consumer.group)
@@ -62,7 +62,7 @@ func (c *Client) AssignGroup(group string, opts ...GroupOpt) error {
 	clientTopics := c.cloneTopics()
 	for _, topic := range c.consumer.group.topics {
 		if _, exists := clientTopics[topic]; !exists {
-			clientTopics[topic] = newTopicParts()
+			clientTopics[topic] = newTopicPartitions()
 		}
 	}
 	c.topics.Store(clientTopics)
@@ -98,6 +98,14 @@ func (c *Client) consumeGroup() {
 	c.consumer.joinGroup()
 }
 
+func balancerMetadata(topics []string, userdata []byte) []byte {
+	return (&kmsg.GroupMemberMetadata{
+		Version:  0,
+		Topics:   topics,
+		UserData: userdata,
+	}).AppendTo(nil)
+}
+
 func (c *consumer) joinGroup() error {
 start:
 	var memberID string
@@ -109,7 +117,7 @@ start:
 		MemberID:         memberID,
 		GroupProtocols: []kmsg.JoinGroupRequestGroupProtocol{
 			{
-				ProtocolName:     "range",
+				ProtocolName:     c.group.balancer.protocolName(),
 				ProtocolMetadata: balancerMetadata(c.group.topics, nil),
 			},
 		},

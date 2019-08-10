@@ -120,7 +120,7 @@ func (c *Client) partitionsForTopicProduce(topic string) *topicPartitionsData {
 		topics = c.loadTopics()
 		parts, exists = topics[topic]
 		if !exists {
-			parts = newTopicParts()
+			parts = newTopicPartitions()
 			newTopics := c.cloneTopics()
 			newTopics[topic] = parts
 			c.topics.Store(newTopics)

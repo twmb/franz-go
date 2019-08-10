@@ -194,7 +194,7 @@ func (c *Client) AssignPartitions(assignments map[string]map[int32]Offset) error
 	clientTopics := c.cloneTopics()
 	for topic := range assignments {
 		if _, exists := clientTopics[topic]; !exists {
-			clientTopics[topic] = newTopicParts()
+			clientTopics[topic] = newTopicPartitions()
 		}
 	}
 	c.topics.Store(clientTopics)
