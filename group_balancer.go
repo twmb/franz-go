@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/davecgh/go-spew/spew"
 	"github.com/twmb/kgo/kmsg"
 )
 
@@ -84,6 +83,25 @@ func newBalancePlan(members []groupMember) balancePlan {
 func (plan balancePlan) add(member, topic string, partition int32) {
 	memberPlan := plan[member]
 	memberPlan[topic] = append(memberPlan[topic], partition)
+}
+
+func (plan balancePlan) intoAssignment() []kmsg.SyncGroupRequestGroupAssignment {
+	kassignments := make([]kmsg.SyncGroupRequestGroupAssignment, len(plan))
+	for member, assignment := range plan {
+		var kassignment kmsg.GroupMemberAssignment
+		for topic, partitions := range assignment {
+			kassignment.Topics = append(kassignment.Topics, kmsg.GroupMemberAssignmentTopic{
+				Topic:      topic,
+				Partitions: partitions,
+			})
+		}
+		kassignments = append(kassignments, kmsg.SyncGroupRequestGroupAssignment{
+			MemberID:         member,
+			MemberAssignment: kassignment.AppendTo(nil),
+		})
+	}
+	return kassignments
+
 }
 
 func (c *consumer) balanceGroup(kmembers []kmsg.JoinGroupResponseMember) (balancePlan, error) {

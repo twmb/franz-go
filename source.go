@@ -103,6 +103,8 @@ func (source *recordSource) createRequest() (req *fetchRequest, again bool) {
 		// while we using its fields.
 		consumption.mu.Lock()
 
+		// If the offset is -1, a metadata update added a consuption to
+		// this source, but it is not yet in use.
 		if consumption.offset == -1 {
 			consumption.mu.Unlock()
 			continue

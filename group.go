@@ -12,24 +12,31 @@ import (
 // TODO strengthen errors
 // TODO remove error from AssignGroup / AssignPartitions
 
+// GroupOpt is an option to configure group consuming.
 type GroupOpt interface {
 	apply(*consumerGroup)
 }
 
+// groupOpt implements GroupOpt.
 type groupOpt struct {
 	fn func(cfg *consumerGroup)
 }
 
 func (opt groupOpt) apply(cfg *consumerGroup) { opt.fn(cfg) }
 
+// WithGroupTopics adds topics to use for group consuming.
 func WithGroupTopics(topics ...string) GroupOpt {
 	return groupOpt{func(cfg *consumerGroup) { cfg.topics = append(cfg.topics, topics...) }}
 }
 
+// WithGroupBalancer sets the balancer to use for dividing topic partitions
+// among group members.
 func WithGroupBalancer(balancer GroupBalancer) GroupOpt {
 	return groupOpt{func(cfg *consumerGroup) { cfg.balancer = balancer }}
 }
 
+// AssignGroup assigns a group to consume from, overriding any prior
+// assignment. To leave a group, you can AssignGroup with an empty group.
 func (c *Client) AssignGroup(group string, opts ...GroupOpt) error {
 	consumer := &c.consumer
 	consumer.mu.Lock()
@@ -76,16 +83,11 @@ type (
 
 		generation int32
 
-		userData []byte
-
 		// TODO autocommit
 		// OnAssign
 		// OnRevoke
 		// SessionTimeout
 		// RebalanceTimeout
-		// MemberID
-
-		// UserInfo?
 	}
 )
 
@@ -138,7 +140,36 @@ start:
 		}
 	}
 
+	if err = c.syncGroup(plan, resp.GenerationID); err != nil {
+		return err
+	}
+
 	return nil
 }
 
 // TODO commit, leave group, member id
+
+func (c *consumer) syncGroup(plan balancePlan, generation int32) error {
+	req := kmsg.SyncGroupRequest{
+		GroupID:         c.group.id,
+		GenerationID:    generation,
+		MemberID:        c.group.memberID,
+		GroupAssignment: plan.intoAssignment(),
+	}
+	kresp, err := c.client.Request(&req)
+	if err != nil {
+		return err
+	}
+	resp := kresp.(*kmsg.SyncGroupResponse)
+	if err != nil {
+		return err // TODO differentiate retriable?
+	}
+
+	kassignment := new(kmsg.GroupMemberAssignment)
+	err = kassignment.ReadFrom(resp.MemberAssignment)
+	if err != nil {
+		return err
+	}
+	spew.Dump(kassignment)
+	return nil
+}
