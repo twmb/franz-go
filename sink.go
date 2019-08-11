@@ -11,8 +11,6 @@ import (
 	"github.com/twmb/kgo/kmsg"
 )
 
-// TODO KIP-359
-
 type recordSink struct {
 	broker *broker // the broker this sink belongs to
 
@@ -34,13 +32,13 @@ type recordSink struct {
 
 	mu sync.Mutex // guards the two fields below
 
-	allPartRecs []*records // contains all partition records for batch building
+	recordBuffers []*recordBuffer // contains all partition records for batch building
 
-	// allPartRecsStart is where we will begin in allPartRecs for building a
-	// batch. This increments by one every produce request, avoiding
-	// starvation for large record batches that cannot fit into the request
-	// that is currently being built.
-	allPartRecsStart int
+	// recordBuffersStart is where we will begin in recordBuffers for
+	// building a batch. This increments by one every produce request,
+	// avoiding starvation for large record batches that cannot fit into
+	// the request that is currently being built.
+	recordBuffersStart int
 }
 
 func newRecordSink(broker *broker) *recordSink {
@@ -82,10 +80,10 @@ func (sink *recordSink) createRequest() (*produceRequest, bool) {
 		compression: sink.broker.client.cfg.producer.compression,
 	}
 
-	wireLength := sink.baseWireLength
-	wireLengthLimit := sink.broker.client.cfg.client.maxBrokerWriteBytes
-
 	var (
+		wireLength      = sink.baseWireLength
+		wireLengthLimit = sink.broker.client.cfg.client.maxBrokerWriteBytes
+
 		soonestDeadline time.Time
 		numDeadlined    int
 		moreToDrain     bool
@@ -98,14 +96,14 @@ func (sink *recordSink) createRequest() (*produceRequest, bool) {
 
 	// Over every record buffer, check to see if the first batch is not
 	// backing off and that it can can fit in our request.
-	allPartRecsIdx := sink.allPartRecsStart
-	for i := 0; i < len(sink.allPartRecs); i++ {
-		recs := sink.allPartRecs[allPartRecsIdx]
-		allPartRecsIdx = (allPartRecsIdx + 1) % len(sink.allPartRecs)
+	recordBuffersIdx := sink.recordBuffersStart
+	for i := 0; i < len(sink.recordBuffers); i++ {
+		recordBuffer := sink.recordBuffers[recordBuffersIdx]
+		recordBuffersIdx = (recordBuffersIdx + 1) % len(sink.recordBuffers)
 
-		recs.mu.Lock()
-		if dl := recs.backoffDeadline; now.Before(dl) {
-			recs.mu.Unlock()
+		recordBuffer.mu.Lock()
+		if dl := recordBuffer.backoffDeadline; now.Before(dl) {
+			recordBuffer.mu.Unlock()
 			if soonestDeadline.IsZero() || dl.Before(soonestDeadline) {
 				soonestDeadline = dl
 			}
@@ -113,38 +111,33 @@ func (sink *recordSink) createRequest() (*produceRequest, bool) {
 			continue
 		}
 
-		if len(recs.batches) == recs.batchDrainIdx {
-			recs.mu.Unlock()
+		if len(recordBuffer.batches) == recordBuffer.batchDrainIdx {
+			recordBuffer.mu.Unlock()
 			continue
 		}
 
-		batch := recs.batches[recs.batchDrainIdx]
+		batch := recordBuffer.batches[recordBuffer.batchDrainIdx]
 		batchWireLength := 4 + batch.wireLength // partition, batch len
-		topicBatches := req.batches[recs.topicPartition.topic]
-		if topicBatches == nil {
-			batchWireLength += 2 + int32(len(recs.topicPartition.topic)) + 4 // string len, topic, array len
+		if _, exists := req.batches[recordBuffer.topicPartition.topic]; !exists {
+			batchWireLength += 2 + int32(len(recordBuffer.topicPartition.topic)) + 4 // string len, topic, array len
 		}
 		if wireLength+batchWireLength > wireLengthLimit {
-			recs.mu.Unlock()
+			recordBuffer.mu.Unlock()
 			moreToDrain = true
 			continue
 		}
 
 		batch.tries++
-		recs.batchDrainIdx++
+		recordBuffer.batchDrainIdx++
 
-		moreToDrain = len(recs.batches) > recs.batchDrainIdx || moreToDrain
-		recs.mu.Unlock()
+		moreToDrain = len(recordBuffer.batches) > recordBuffer.batchDrainIdx || moreToDrain
+		recordBuffer.mu.Unlock()
 
 		wireLength += batchWireLength
-		req.batches.addToTopicBatches(
-			recs.topicPartition.topic,
-			recs.topicPartition.partition,
-			topicBatches,
-			sentBatch{
-				owner:       recs,
-				recordBatch: batch,
-			},
+		req.batches.addBatch(
+			recordBuffer.topicPartition.topic,
+			recordBuffer.topicPartition.partition,
+			batch,
 		)
 	}
 
@@ -154,7 +147,7 @@ func (sink *recordSink) createRequest() (*produceRequest, bool) {
 		sink.beginDrainBackoff(soonestDeadline.Sub(now))
 	}
 
-	sink.allPartRecsStart = (sink.allPartRecsStart + 1) % len(sink.allPartRecs)
+	sink.recordBuffersStart = (sink.recordBuffersStart + 1) % len(sink.recordBuffers)
 	return req, moreToDrain
 }
 
@@ -164,8 +157,8 @@ func (sink *recordSink) maybeBeginDraining() {
 	}
 }
 
-// beginDrainBackoff is called if all part recs are detected to be in a backoff
-// state and no produce request can be built.
+// beginDrainBackoff is called if all record buffers are detected to be in a
+// backoff state and no produce request can be built.
 func (sink *recordSink) beginDrainBackoff(after time.Duration) {
 	sink.backoffTimer = time.AfterFunc(after, sink.maybeBeginDraining)
 }
@@ -215,7 +208,7 @@ func (sink *recordSink) requeueUnattemptedReq(req *produceRequest) {
 	// presumed to be exceedingly temporary.
 	backoffDeadline := time.Now().Add(sink.broker.client.cfg.client.retryBackoff(1))
 	maybeBeginDraining := false
-	eachSentBatchLocked(req.batches, func(batch sentBatch) {
+	eachSentBatchLocked(req.batches, func(batch *recordBatch) {
 		if !batch.isFirstBatchInRecordBuf() {
 			return
 		}
@@ -224,34 +217,47 @@ func (sink *recordSink) requeueUnattemptedReq(req *produceRequest) {
 		maybeBeginDraining = true
 	})
 
+	// TODO here, all sinks
 	if maybeBeginDraining {
 		sink.maybeBeginDraining()
 	}
 }
 
-func (sink *recordSink) errorAllReqBuffers(req *produceRequest, err error) {
+// Called on unrecoverable error (auth failure, lack of response).
+func errorAllRecordsInAllRecordBuffersInRequest(
+	client *Client,
+	req *produceRequest,
+	err error,
+) {
 	for _, partitions := range req.batches {
-		sink.errorAllReqPartitionBuffers(partitions, err)
+		errorAllRecordsInAllRecordBuffersInPartitions(
+			client,
+			partitions,
+			err,
+		)
 	}
 }
 
-// errorAllReqPartitionBuffers errors all records in all partitions in a topic.
-// This is called for unrecoverable errors, such as auth failures.
-func (sink *recordSink) errorAllReqPartitionBuffers(partitions map[int32]sentBatch, err error) {
+// Called on unrecoverable error (auth failure, lack of response).
+func errorAllRecordsInAllRecordBuffersInPartitions(
+	client *Client,
+	partitions map[int32]*recordBatch,
+	err error,
+) {
 	for _, batch := range partitions {
-		recs := batch.owner
-		recs.mu.Lock()
+		recordBuffer := batch.owner
+		recordBuffer.mu.Lock()
 		if batch.isFirstBatchInRecordBuf() {
-			for _, batch := range recs.batches {
+			for _, batch := range recordBuffer.batches {
 				for i, record := range batch.records {
-					sink.broker.client.promise(record.pr, err)
+					client.promise(record.pr, err)
 					batch.records[i] = noPNR
 				}
 				emptyRecordsPool.Put(&batch.records)
 			}
-			recs.batches = nil
+			recordBuffer.batches = nil
 		}
-		recs.mu.Unlock()
+		recordBuffer.mu.Unlock()
 	}
 }
 
@@ -279,7 +285,11 @@ func (sink *recordSink) handleReqClientErr(req *produceRequest, err error) {
 		sink.requeueUnattemptedReq(req)
 
 	default:
-		sink.errorAllReqBuffers(req, err)
+		errorAllRecordsInAllRecordBuffersInRequest(
+			sink.broker.client,
+			req,
+			err,
+		)
 	}
 }
 
@@ -357,11 +367,19 @@ func (sink *recordSink) handleReqResp(req *produceRequest, resp kmsg.Response, e
 		}
 
 		if len(partitions) > 0 {
-			sink.errorAllReqPartitionBuffers(partitions, errNoResp)
+			errorAllRecordsInAllRecordBuffersInPartitions(
+				sink.broker.client,
+				partitions,
+				errNoResp,
+			)
 		}
 	}
 	if len(req.batches) > 0 {
-		sink.errorAllReqBuffers(req, errNoResp)
+		errorAllRecordsInAllRecordBuffersInRequest(
+			sink.broker.client,
+			req,
+			errNoResp,
+		)
 	}
 
 	if len(reqRetry) > 0 {
@@ -369,7 +387,7 @@ func (sink *recordSink) handleReqResp(req *produceRequest, resp kmsg.Response, e
 	}
 }
 
-func (sink *recordSink) finishBatch(batch sentBatch, partition int32, baseOffset int64, err error) {
+func (sink *recordSink) finishBatch(batch *recordBatch, partition int32, baseOffset int64, err error) {
 	batch.removeFromRecordBuf()
 	if err == nil {
 		batch.owner.lastAckedOffset = baseOffset + int64(len(batch.records))
@@ -394,7 +412,7 @@ func (sink *recordSink) handleRetryBatches(retry reqBatches) {
 	//
 	// All batches that remain need to have metadata fetched and be
 	// potentially migrated.
-	eachSentBatchLocked(retry, func(batch sentBatch) {
+	eachSentBatchLocked(retry, func(batch *recordBatch) {
 		if !batch.isFirstBatchInRecordBuf() ||
 			batch.owner.backoffDeadline == forever ||
 			batch.owner.sink != sink {
@@ -421,43 +439,43 @@ func (sink *recordSink) handleRetryBatches(retry reqBatches) {
 	sink.broker.client.triggerUpdateMetadata()
 }
 
-func (sink *recordSink) addSource(add *records) {
+func (sink *recordSink) addSource(add *recordBuffer) {
 	sink.mu.Lock()
-	add.allPartRecsIdx = len(sink.allPartRecs)
-	sink.allPartRecs = append(sink.allPartRecs, add)
+	add.recordBuffersIdx = len(sink.recordBuffers)
+	sink.recordBuffers = append(sink.recordBuffers, add)
 	sink.mu.Unlock()
 
 	add.maybeBeginDraining()
 }
 
 // removeSource removes the tracking of a toppar from the recordSink.
-func (sink *recordSink) removeSource(rm *records) {
+func (sink *recordSink) removeSource(rm *recordBuffer) {
 	sink.mu.Lock()
 	defer sink.mu.Unlock()
 
-	if rm.allPartRecsIdx != len(sink.allPartRecs)-1 {
-		sink.allPartRecs[rm.allPartRecsIdx], sink.allPartRecs[len(sink.allPartRecs)-1] =
-			sink.allPartRecs[len(sink.allPartRecs)-1], nil
+	if rm.recordBuffersIdx != len(sink.recordBuffers)-1 {
+		sink.recordBuffers[rm.recordBuffersIdx], sink.recordBuffers[len(sink.recordBuffers)-1] =
+			sink.recordBuffers[len(sink.recordBuffers)-1], nil
 
-		sink.allPartRecs[rm.allPartRecsIdx].allPartRecsIdx = rm.allPartRecsIdx
+		sink.recordBuffers[rm.recordBuffersIdx].recordBuffersIdx = rm.recordBuffersIdx
 	} else {
-		sink.allPartRecs[rm.allPartRecsIdx] = nil // do not let this removal hang around
+		sink.recordBuffers[rm.recordBuffersIdx] = nil // do not let this removal hang around
 	}
 
-	sink.allPartRecs = sink.allPartRecs[:len(sink.allPartRecs)-1]
-	if sink.allPartRecsStart == len(sink.allPartRecs) {
-		sink.allPartRecsStart = 0
+	sink.recordBuffers = sink.recordBuffers[:len(sink.recordBuffers)-1]
+	if sink.recordBuffersStart == len(sink.recordBuffers) {
+		sink.recordBuffersStart = 0
 	}
 }
 
-// records buffers records to be sent to a topic/partition.
-type records struct {
+// recordBuffer buffers records to be sent to a topic/partition.
+type recordBuffer struct {
 	topicPartition *topicPartition
 
 	mu sync.Mutex
 
-	sink           *recordSink // who is draining us
-	allPartRecsIdx int         // index into sink's allPartRecs; aids in removal from drain
+	sink             *recordSink // who is draining us
+	recordBuffersIdx int         // index into sink's recordBuffers; aids in removal from drain
 
 	sequenceNum     int32 // used for baseSequence in a record batch
 	lastAckedOffset int64 // Kafka 1.0.0+ (v5+), used for data loss detection
@@ -467,19 +485,19 @@ type records struct {
 	backoffDeadline time.Time // for retries
 }
 
-func (recs *records) bufferRecord(pr promisedRecord) {
-	recs.mu.Lock()
+func (recordBuffer *recordBuffer) bufferRecord(pr promisedRecord) {
+	recordBuffer.mu.Lock()
 
 	pr.r.Timestamp = time.Now() // timestamp after locking to ensure sequential
 
-	sink := recs.sink
+	sink := recordBuffer.sink
 	client := sink.broker.client
 
 	newBatch := true
-	firstBatch := recs.batchDrainIdx == len(recs.batches)
+	firstBatch := recordBuffer.batchDrainIdx == len(recordBuffer.batches)
 
 	if !firstBatch {
-		batch := recs.batches[len(recs.batches)-1]
+		batch := recordBuffer.batches[len(recordBuffer.batches)-1]
 		rNums := batch.calculateRecordNumbers(pr.r)
 		newBatchLength := batch.wireLength + rNums.wireLength
 		if batch.tries == 0 &&
@@ -490,41 +508,40 @@ func (recs *records) bufferRecord(pr promisedRecord) {
 	}
 
 	if newBatch {
-		recs.batches = append(recs.batches,
-			newRecordBatch(
+		recordBuffer.batches = append(recordBuffer.batches,
+			recordBuffer.newRecordBatch(
 				client.producer.id,
 				client.producer.epoch,
-				recs.sequenceNum,
 				pr,
 			))
 	}
-	recs.sequenceNum++
+	recordBuffer.sequenceNum++
 
-	recs.mu.Unlock()
+	recordBuffer.mu.Unlock()
 
 	if firstBatch {
 		sink.maybeBeginDraining()
 	}
 }
 
-func (recs *records) removeBatch0Locked() {
-	recs.batches[0] = nil
-	recs.batches = recs.batches[1:]
-	recs.batchDrainIdx--
+func (recordBuffer *recordBuffer) removeBatch0Locked() {
+	recordBuffer.batches[0] = nil
+	recordBuffer.batches = recordBuffer.batches[1:]
+	recordBuffer.batchDrainIdx--
 }
 
 // TODO if not retriable, should we fail all?
-func (recs *records) maybeBumpTriesAndFailBatch0(err error) {
-	recs.mu.Lock()
-	defer recs.mu.Unlock()
-	if len(recs.batches) == 0 {
+func (recordBuffer *recordBuffer) maybeBumpTriesAndFailBatch0(err error) {
+	recordBuffer.mu.Lock()
+	defer recordBuffer.mu.Unlock()
+	if len(recordBuffer.batches) == 0 {
 		return
 	}
-	batch0 := recs.batches[0]
+	batch0 := recordBuffer.batches[0]
 	batch0.tries++
-	client := recs.sink.broker.client
+	client := recordBuffer.sink.broker.client
 	if batch0.tries > client.cfg.client.retries {
-		recs.removeBatch0Locked()
+		recordBuffer.removeBatch0Locked()
 		for i, record := range batch0.records {
 			client.promise(record.pr, err)
 			batch0.records[i] = noPNR
@@ -533,26 +550,26 @@ func (recs *records) maybeBumpTriesAndFailBatch0(err error) {
 	}
 }
 
-func (recs *records) maybeBeginDraining() {
-	recs.mu.Lock()
-	recs.backoffDeadline = time.Time{}
-	drain := len(recs.batches) > 0
-	recs.mu.Unlock()
+func (recordBuffer *recordBuffer) maybeBeginDraining() {
+	recordBuffer.mu.Lock()
+	recordBuffer.backoffDeadline = time.Time{}
+	drain := len(recordBuffer.batches) > 0
+	recordBuffer.mu.Unlock()
 
 	if drain {
-		recs.sink.maybeBeginDraining()
+		recordBuffer.sink.maybeBeginDraining()
 	}
 }
 
-func (recs *records) resetSequenceNums() {
-	recs.mu.Lock()
-	defer recs.mu.Unlock()
+func (recordBuffer *recordBuffer) resetSequenceNums() {
+	recordBuffer.mu.Lock()
+	defer recordBuffer.mu.Unlock()
 
-	recs.sequenceNum = 0
-	recs.lastAckedOffset = -1
-	for _, batch := range recs.batches {
-		batch.baseSequence = recs.sequenceNum
-		recs.sequenceNum += int32(len(batch.records))
+	recordBuffer.sequenceNum = 0
+	recordBuffer.lastAckedOffset = -1
+	for _, batch := range recordBuffer.batches {
+		batch.baseSequence = recordBuffer.sequenceNum
+		recordBuffer.sequenceNum += int32(len(batch.records))
 	}
 }
 
@@ -586,7 +603,7 @@ var emptyRecordsPool = sync.Pool{
 
 // newRecordBatch returns a new record batch for a topic and partition
 // containing the given record.
-func newRecordBatch(producerID int64, producerEpoch int16, firstSeq int32, pr promisedRecord) *recordBatch {
+func (records *recordBuffer) newRecordBatch(producerID int64, producerEpoch int16, pr promisedRecord) *recordBatch {
 	const recordBatchOverhead = 4 + // NULLABLE_BYTES overhead
 		8 + // firstOffset
 		4 + // batchLength
@@ -602,11 +619,12 @@ func newRecordBatch(producerID int64, producerEpoch int16, firstSeq int32, pr pr
 		4 + // baseSequence
 		4 // record array length
 	b := &recordBatch{
+		owner:          records,
 		firstTimestamp: pr.r.Timestamp.UnixNano() / 1e6,
 		records:        (*(emptyRecordsPool.Get().(*[]promisedNumberedRecord)))[:0],
 		producerID:     producerID,
 		producerEpoch:  producerEpoch,
-		baseSequence:   firstSeq,
+		baseSequence:   records.sequenceNum,
 	}
 	pnr := promisedNumberedRecord{
 		n:  b.calculateRecordNumbers(pr.r),
@@ -628,6 +646,8 @@ func (b *recordBatch) appendRecord(pr promisedRecord, nums recordNumbers) {
 
 // recordBatch is the type used for buffering records before they are written.
 type recordBatch struct {
+	owner *recordBuffer // who owns us
+
 	tries int // if this was sent before and is thus now immutable
 
 	wireLength int32 // tracks total size this batch would currently encode as
@@ -675,14 +695,7 @@ func (b *recordBatch) calculateRecordNumbers(r *Record) recordNumbers {
 	}
 }
 
-// sentBatch wraps a recordBatch for a produce request with the record buffer
-// the batch came from.
-type sentBatch struct {
-	owner *records
-	*recordBatch
-}
-
-func eachSentBatchLocked(sent reqBatches, fn func(sentBatch)) {
+func eachSentBatchLocked(sent reqBatches, fn func(*recordBatch)) {
 	for _, partitions := range sent {
 		for _, batch := range partitions {
 			batch.owner.mu.Lock()
@@ -692,7 +705,7 @@ func eachSentBatchLocked(sent reqBatches, fn func(sentBatch)) {
 	}
 }
 
-// isFirstBatchInRecordBuf returns if the batch in an sentBatch is the first batch
+// isFirstBatchInRecordBuf returns if the batch in an recordBatch is the first batch
 // in a records.
 //
 // This function is necessary because we only want to remove leading batches.
@@ -700,13 +713,13 @@ func eachSentBatchLocked(sent reqBatches, fn func(sentBatch)) {
 // disconnect, then a second batch in flight batch could cause a reconnect and
 // send successfully. We do not want to operate on that one since we still
 // think the first failed.
-func (batch sentBatch) isFirstBatchInRecordBuf() bool {
-	return len(batch.owner.batches) > 0 && batch.owner.batches[0] == batch.recordBatch
+func (batch *recordBatch) isFirstBatchInRecordBuf() bool {
+	return len(batch.owner.batches) > 0 && batch.owner.batches[0] == batch
 }
 
 // isFirstBatchInRecordBufLocked is used when not already inside the batch's
 // records mu.
-func (batch sentBatch) isFirstBatchInRecordBufLocked() bool {
+func (batch *recordBatch) isFirstBatchInRecordBufLocked() bool {
 	batch.owner.mu.Lock()
 	r := batch.isFirstBatchInRecordBuf()
 	batch.owner.mu.Unlock()
@@ -715,14 +728,14 @@ func (batch sentBatch) isFirstBatchInRecordBufLocked() bool {
 
 // removeFromRecordBuf is called in a successful produce response, incrementing
 // past the record buffer's now-known-to-be-in-Kafka-batch.
-func (batch sentBatch) removeFromRecordBuf() {
-	recs := batch.owner
-	recs.mu.Lock()
+func (batch *recordBatch) removeFromRecordBuf() {
+	recordBuffer := batch.owner
+	recordBuffer.mu.Lock()
 	if !batch.isFirstBatchInRecordBuf() {
 		panic("removeFromRecordBuf called on non-first batch")
 	}
-	recs.removeBatch0Locked()
-	recs.mu.Unlock()
+	recordBuffer.removeBatch0Locked()
+	recordBuffer.mu.Unlock()
 }
 
 var crc32c = crc32.MakeTable(crc32.Castagnoli) // record crc's use Castagnoli table
@@ -742,31 +755,18 @@ type produceRequest struct {
 	compression []CompressionCodec
 }
 
-type reqBatches map[string]map[int32]sentBatch
+type reqBatches map[string]map[int32]*recordBatch
 
-func (rbs *reqBatches) addBatch(topic string, part int32, batch sentBatch) {
+func (rbs *reqBatches) addBatch(topic string, part int32, batch *recordBatch) {
 	if *rbs == nil {
 		*rbs = make(reqBatches, 5)
 	}
 	topicBatches, exists := (*rbs)[topic]
 	if !exists {
-		topicBatches = make(map[int32]sentBatch, 1)
+		topicBatches = make(map[int32]*recordBatch, 1)
 		(*rbs)[topic] = topicBatches
 	}
 	topicBatches[part] = batch
-}
-
-func (rbs reqBatches) addToTopicBatches(
-	topic string,
-	partition int32,
-	topicBatches map[int32]sentBatch,
-	batch sentBatch,
-) {
-	if topicBatches == nil {
-		topicBatches = make(map[int32]sentBatch, 1)
-		rbs[topic] = topicBatches
-	}
-	topicBatches[partition] = batch
 }
 
 func (*produceRequest) Key() int16           { return 0 }

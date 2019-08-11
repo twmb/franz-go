@@ -78,7 +78,7 @@ type topicPartition struct {
 	isr      []int32
 	offline  []int32
 
-	records     *records
+	records     *recordBuffer
 	consumption *consumption
 }
 
