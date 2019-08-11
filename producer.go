@@ -69,8 +69,8 @@ func (c *Client) Produce(
 
 	partition.records.bufferRecord(
 		promisedRecord{
-			promise: promise,
-			r:       r,
+			promise,
+			r,
 		},
 	)
 	return nil
@@ -104,11 +104,11 @@ func (c *Client) initProducerID() error {
 	return nil
 }
 
-func (c *Client) promise(pr promisedRecord, err error) {
+func (c *Client) finishRecordPromise(pnr promisedNumberedRecord, err error) {
 	if atomic.AddInt64(&c.producer.bufferedRecords, -1) >= c.cfg.producer.maxBufferedRecords {
 		go func() { c.producer.waitBuffer <- struct{}{} }()
 	}
-	pr.promise(pr.r, err)
+	pnr.promise(pnr.Record, err)
 }
 
 func (c *Client) partitionsForTopicProduce(topic string) *topicPartitionsData {

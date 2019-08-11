@@ -180,10 +180,17 @@ func (l *topicPartitions) merge(r *topicPartitionsData) (needsRetry bool) {
 
 	lv.loadErr = r.loadErr
 	if r.loadErr != nil {
-		for _, topicPartition := range lv.all {
-			topicPartition.records.maybeBumpTriesAndFailBatch0(lv.loadErr)
+		retriable := kerr.IsRetriable(r.loadErr)
+		if retriable {
+			for _, topicPartition := range lv.all {
+				topicPartition.records.bumpTriesAndMaybeFailBatch0(lv.loadErr)
+			}
+		} else {
+			for _, topicPartition := range lv.all {
+				topicPartition.records.failAllRecords(lv.loadErr)
+			}
 		}
-		return kerr.IsRetriable(lv.loadErr)
+		return retriable
 	}
 
 	lv.partitions = r.partitions
@@ -207,7 +214,7 @@ func (l *topicPartitions) merge(r *topicPartitionsData) (needsRetry bool) {
 			err := newTP.loadErr
 			*newTP = *oldTP
 			newTP.loadErr = err
-			newTP.records.maybeBumpTriesAndFailBatch0(newTP.loadErr)
+			newTP.records.bumpTriesAndMaybeFailBatch0(newTP.loadErr)
 			needsRetry = true
 			continue
 		}
@@ -218,7 +225,7 @@ func (l *topicPartitions) merge(r *topicPartitionsData) (needsRetry bool) {
 		// We do not need to do anything to the consumption here.
 		if newTP.records.sink == oldTP.records.sink {
 			newTP.records = oldTP.records
-			newTP.records.maybeBeginDraining()
+			newTP.records.resetBackoffAndMaybeTriggerSinkDrain()
 			continue
 		}
 
@@ -263,7 +270,7 @@ func handleDeletedPartitions(deleted []*topicPartition) {
 		sink.removeSource(d.records)
 		for _, batch := range d.records.batches {
 			for i, record := range batch.records {
-				sink.broker.client.promise(record.pr, ErrPartitionDeleted)
+				sink.broker.client.finishRecordPromise(record, ErrPartitionDeleted)
 				batch.records[i] = noPNR
 			}
 			emptyRecordsPool.Put(&batch.records)

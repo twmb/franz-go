@@ -31,9 +31,11 @@ var (
 	// use an unknown version.
 	ErrClientTooOld = errors.New("client is too old; this client does not know what to do with this")
 
-	errNoResp = errors.New("message was not replied to in a response")
+	// ErrNoResp is the error used if Kafka does not reply to a topic or
+	// partition in a produce request. This error should never be seen.
+	ErrNoResp = errors.New("message was not replied to in a response")
 
-	// ErrUnknownBroker is returned when issuing a request o a broker that
+	// ErrUnknownBroker is returned when issuing a request to a broker that
 	// the client does not know about.
 	ErrUnknownBroker = errors.New("unknown broker")
 
