@@ -1,18 +1,24 @@
 // Package sticky provides the overcomplicated Java sticky partitioning
-// strategy for Kafka.
+// strategy for Kafka, with modifications made to remove useless work the Java
+// side did.
+//
+// One of the larger changes is to not sort partitions by move preference
+// before performing reassignment. This was removed after determining that it
+// was largely useless (see github.com/Shopify/sarama/pull/1416/files#r314967609)
 package sticky
 
 import (
-	"container/heap"
 	"reflect"
 	"sort"
 
 	"github.com/google/btree"
 
-	"github.com/twmb/go-sliceheap"
-
 	"github.com/twmb/kgo/kmsg"
 )
+
+// Sticky partitioning has two versions, the latter from KIP-341 preventing a
+// bug. The second version introduced generations with the default generation
+// from the first generation's consumers defaulting to -1.
 
 const defaultGeneration = -1
 
@@ -60,44 +66,21 @@ type balancer struct {
 	//
 	// This is used eventually as a hint of "these may be good partitions
 	// to move if necessary".
-	priorPlanStragglers map[topicPartition]memberGeneration
+	priorPlanStragglers map[topicPartition]string
 
 	// isFreshAssignment tracks whether this is the first join for a group.
 	// This is true if no member has userdata (plan is empty)
 	isFreshAssignment bool
+	// areSubscriptionsIdentical tracks if every member can consume the
+	// same partitions. If true, this makes the isBalanced check much
+	// simpler.
+	areSubscriptionsIdentical bool
 
 	// partitionConsumers maps all possible partitions to consume to the
 	// members that are consuming them.
 	//
 	// We initialize this from our plan and modify it during reassignment.
 	partitionConsumers map[topicPartition]string
-
-	// unassignedPartitions tracks all partitions to be consumed that are
-	// currently not assigned to a member.
-	//
-	// This is initalized at the same time as partitionConsumers and is
-	// drained during reassignment.
-	unassignedPartitions []topicPartition
-
-	// partitionsByMovePreference orders partitions from most-want-to-move
-	// to least.
-	//
-	// There are two potential orderings: if this is a fresh assignment, or
-	// not every member can consume the same, the we order by partitions
-	// with the fewest consumers (then topic, partition fallback). This
-	// ordering allows partitions that are least likely to be assigned to
-	// be assigned first.
-	//
-	// If everything can consume the same and this is not a fresh
-	// assignment, then we order by partitions from consumers consuming the
-	// most. That is, ordered by partitions on the most consuming members
-	// to the least.
-	//
-	// The varying sort ordering makes usage of this hard to reason about.
-	//
-	// Note that we leave out partitions that only have one potential
-	// consumer.
-	partitionsByMovePreference []topicPartition
 
 	// consumers2AllPotentialPartitions maps each member to all of the
 	// partitions it theoretically could consume. This is repeatedly used
@@ -118,6 +101,24 @@ type balancer struct {
 	//
 	// This is built once and never modified thereafter.
 	partitions2AllPotentialConsumers staticPartitionMembers
+
+	// partitionMovements tracks how partitions move during reassigning.
+	// Its sole purpose is to aid in reversing partition movements if
+	// necessary.
+	partitionMovements map[topicPartition]movement
+	// movementsByTopic tracks how movements happen for partitions within a
+	// topic. As with partitionMovements, its sole purpose is to aid in
+	// reversing partition movements if necessary.
+	movementsByTopic map[string]map[movement]map[topicPartition]struct{}
+}
+
+type topicPartition struct {
+	topic     string
+	partition int32
+}
+
+type movement struct {
+	src, dst string
 }
 
 func newBalancer(members []GroupMember, topics map[string][]int32) *balancer {
@@ -126,12 +127,15 @@ func newBalancer(members []GroupMember, topics map[string][]int32) *balancer {
 		topics:  topics,
 
 		plan:                make(membersPartitions),
-		priorPlanStragglers: make(map[topicPartition]memberGeneration),
+		priorPlanStragglers: make(map[topicPartition]string),
 
 		partitionConsumers: make(map[topicPartition]string),
 
 		partitions2AllPotentialConsumers: make(staticPartitionMembers),
 		consumers2AllPotentialPartitions: make(staticMembersPartitions),
+
+		partitionMovements: make(map[topicPartition]movement),
+		movementsByTopic:   make(map[string]map[movement]map[topicPartition]struct{}),
 	}
 	for _, member := range members {
 		b.members[member.ID] = member
@@ -139,14 +143,19 @@ func newBalancer(members []GroupMember, topics map[string][]int32) *balancer {
 	return b
 }
 
-type topicPartition struct {
-	topic     string
-	partition int32
-}
-
-type memberGeneration struct {
-	memberID   string
-	generation int32
+func (b *balancer) into() Plan {
+	plan := make(Plan)
+	for member, partitions := range b.plan {
+		topics, exists := plan[member]
+		if !exists {
+			topics = make(map[string][]int32)
+			plan[member] = topics
+		}
+		for _, partition := range *partitions {
+			topics[partition.topic] = append(topics[partition.topic], partition.partition)
+		}
+	}
+	return plan
 }
 
 // staticMembersPartitions is like membersPartitions below, but is used only
@@ -196,14 +205,6 @@ func (m membersPartitions) btreeByConsumersPartitions() *btree.BTree {
 	return bt
 }
 
-func (m membersPartitions) heapByConsumersPartitions() sliceheap.Heap {
-	consumersPartitions := m.intoConsumersPartitions()
-	return sliceheap.On(&consumersPartitions, func(i, j int) bool {
-		l, r := consumersPartitions[i], consumersPartitions[j]
-		return l.less(r)
-	})
-}
-
 func (mps membersPartitions) deepClone() membersPartitions {
 	clone := make(membersPartitions, len(mps))
 	for member, partitions := range mps {
@@ -213,44 +214,15 @@ func (mps membersPartitions) deepClone() membersPartitions {
 	return clone
 }
 
-// cloneFilteringNonExistentPartitions returns a copy of mps with
-// all partitions that no longer exist in the client removed.
-func (mps membersPartitions) deepCloneFilteringNonExistentPartitions(
-	partitions2AllPotentialMembers staticPartitionMembers,
-) membersPartitions {
-	filtered := make(membersPartitions, len(mps))
-	for member, partitions := range mps {
-		var clonePartitions []topicPartition
-		for _, partition := range *partitions {
-			if _, exists := partitions2AllPotentialMembers[partition]; !exists {
-				continue
-			}
-			clonePartitions = append(clonePartitions, partition)
-		}
-		filtered[member] = &clonePartitions
-	}
-	return filtered
-}
-
 // staticPartitionMember is the same as partitionMembers, but we type name it
 // to imply immutability in reading. All mutable uses go through cloneKeys
 // or shallowClone.
 type staticPartitionMembers map[topicPartition][]string
 
-type partitionMembers map[topicPartition][]string
-
 func (orig staticPartitionMembers) cloneKeys() map[topicPartition]struct{} {
 	dup := make(map[topicPartition]struct{}, len(orig))
-	for partition, _ := range orig {
+	for partition := range orig {
 		dup[partition] = struct{}{}
-	}
-	return dup
-}
-
-func (orig staticPartitionMembers) shallowClone() partitionMembers {
-	dup := make(partitionMembers, len(orig))
-	for partition, members := range orig {
-		dup[partition] = members
 	}
 	return dup
 }
@@ -272,12 +244,11 @@ func Balance(members []GroupMember, topics map[string][]int32) Plan {
 	// We init this after initAllConsumersPartitions, which can add new
 	// members that were not in the prior plan.
 	b.planByNumPartitions = b.plan.btreeByConsumersPartitions()
-	b.determineUnassignedPartitions()
-	b.sortPartitionsByMovePreference()
+	b.assignUnassignedPartitions()
 
 	b.balance()
 
-	return nil
+	return b.into()
 }
 
 func strsHas(search []string, needle string) bool {
@@ -301,6 +272,11 @@ func partitionsHas(search []topicPartition, needle topicPartition) bool {
 // parseMemberMetadata parses all member userdata to initialize plan and
 // priorPlanStragglers.
 func (b *balancer) parseMemberMetadata() {
+	type memberGeneration struct {
+		member     string
+		generation int32
+	}
+
 	// all partitions => members that are consuming those partitions
 	// Each partition should only have one consumer, but a flaky member
 	// could rejoin with an old generation (stale user data) and say it
@@ -337,15 +313,15 @@ func (b *balancer) parseMemberMetadata() {
 			return partitionConsumers[i].generation > partitionConsumers[j].generation
 		})
 
-		memberID := partitionConsumers[0].memberID
-		memberPartitions := b.plan[memberID]
+		member := partitionConsumers[0].member
+		memberPartitions := b.plan[member]
 		if memberPartitions == nil {
 			memberPartitions = new([]topicPartition)
-			b.plan[memberID] = memberPartitions
+			b.plan[member] = memberPartitions
 		}
 		*memberPartitions = append(*memberPartitions, partition)
 		if len(partitionConsumers) > 1 {
-			b.priorPlanStragglers[partition] = partitionConsumers[1]
+			b.priorPlanStragglers[partition] = partitionConsumers[1].member
 		}
 	}
 
@@ -420,19 +396,44 @@ func (b *balancer) initAllConsumersPartitions() {
 			b.plan[member.ID] = new([]topicPartition)
 		}
 	}
+
+	b.setIfMemberSubscriptionsIdentical()
 }
 
-// determineUnassignedPartitions does what the name says.
+// Determines whether each member can consume the same partitions.
+//
+// The Java code also checks consumers2, but it also stuffs partitions that no
+// members can consume into partitions2, which returns false unnecessarily.
+// With our code, the maps should be reverse identical.
+func (b *balancer) setIfMemberSubscriptionsIdentical() {
+	var firstMembers []string
+	var firstSet bool
+	for _, members := range b.partitions2AllPotentialConsumers {
+		sort.Strings(members)
+		if !firstSet {
+			firstMembers = members
+			firstSet = true
+			continue
+		}
+		if !reflect.DeepEqual(members, firstMembers) {
+			return
+		}
+	}
+	b.areSubscriptionsIdentical = true
+}
+
+// assignUnassignedPartitions does what the name says.
 //
 // Partitions that a member was consuming but is no longer interested in, as
 // well as new partitions that nobody was consuming, are unassigned.
-func (b *balancer) determineUnassignedPartitions() {
+func (b *balancer) assignUnassignedPartitions() {
 	// To build a list of unassigned partitions, we visit all partitions
 	// in the current plan and, if they still exist and the prior consumer
 	// no longer wants to consume them, we track it as unassigned.
 	// After, we add all new partitions.
 	unvisitedPartitions := b.partitions2AllPotentialConsumers.cloneKeys()
 
+	var unassignedPartitions []topicPartition
 	for member, partitions := range b.plan {
 		var keepIdx int
 		for _, partition := range *partitions {
@@ -446,7 +447,7 @@ func (b *balancer) determineUnassignedPartitions() {
 			b.partitionConsumers[partition] = member
 
 			if !strsHas(b.members[member].Topics, partition.topic) {
-				b.unassignedPartitions = append(b.unassignedPartitions, partition)
+				unassignedPartitions = append(unassignedPartitions, partition)
 				continue
 			}
 
@@ -456,132 +457,23 @@ func (b *balancer) determineUnassignedPartitions() {
 		*partitions = (*partitions)[:keepIdx]
 	}
 	for unvisited := range unvisitedPartitions {
-		b.unassignedPartitions = append(b.unassignedPartitions, unvisited)
-	}
-}
-
-// sortPartitionsByMovePreference does a bunch of logic to try to order
-// partitions in a certain way to be moved later.
-//
-// Inexplicably, there are two potential ways of sorting:
-// 1) ascending order of partition by the number of consumers it has
-// 2) ascending order of partition from the most loaded consumer
-// The phrasings of these two orderings are expanded below.
-//
-// The second sorting only kicks in if every group member can consume
-// the same partitions. Any imbalance causes the first sorting.
-func (b *balancer) sortPartitionsByMovePreference() {
-	// We avoid adding partitions to the move preference if the partition
-	// only has one potential consumer.
-	//
-	// This effectively takes the place of the fixedPartitions loop in
-	// balance in the Java code.
-	maybeAddPartition := func(partition topicPartition, potentialConsumers []string) {
-		if len(potentialConsumers) > 1 {
-			b.partitionsByMovePreference = append(b.partitionsByMovePreference, partition)
-		}
+		unassignedPartitions = append(unassignedPartitions, unvisited)
 	}
 
-	// If not everything consumes the same or this is a fresh assignment,
-	// we order by least-likely-to-be-consumed.
-	if b.isFreshAssignment || !b.memberSubscriptionsIdentical() {
-		for partition, potentialConsumers := range b.partitions2AllPotentialConsumers {
-			maybeAddPartition(partition, potentialConsumers)
-		}
-		sort.Slice(b.partitionsByMovePreference, func(i, j int) bool {
-			l, r := b.partitionsByMovePreference[i], b.partitionsByMovePreference[j]
-
-			lPotentials := len(b.partitions2AllPotentialConsumers[l])
-			rPotentials := len(b.partitions2AllPotentialConsumers[r])
-
-			return lPotentials < rPotentials ||
-				lPotentials == rPotentials &&
-					(l.topic < r.topic ||
-						l.topic == r.topic &&
-							l.partition < r.partition)
-		})
-	}
-
-	// This is not a fresh assignment, and all consumers can equally
-	// consume all partitions.
-	//
-	// Our sort by move preference here will be partitions on consumers
-	// that are consuming the most. That is, partitions on consumers
-	// consuming the most are the most likely to be moved.
-	consumersByNumPartitions := b.plan.
-		deepCloneFilteringNonExistentPartitions(b.partitions2AllPotentialConsumers).
-		heapByConsumersPartitions()
-	heap.Init(consumersByNumPartitions)
-
-	// Every loop below peels off a partition from the consumer with the
-	// largest amount of partitions. Preference is given to partitions
-	// that a straggler thinks they own, otherwise, it's just the first.
-	unvisitedPartitions := b.partitions2AllPotentialConsumers.shallowClone()
-	for consumersByNumPartitions.Len() > 0 {
-		consumerWithMostPartitions := consumersByNumPartitions.Peek().(*memberWithPartitions)
-		partitions := consumerWithMostPartitions.partitions
-		var useIdx int
-		for idx, partition := range *partitions {
-			if _, exists := b.priorPlanStragglers[partition]; exists {
-				useIdx = idx
-				break
-			}
-		}
-
-		usePartition := (*partitions)[useIdx]
-		potentialConsumers := unvisitedPartitions[usePartition]
-		delete(unvisitedPartitions, usePartition)
-
-		maybeAddPartition(usePartition, potentialConsumers)
-
-		if useIdx == 0 { // common case
-			*partitions = (*partitions)[1:]
-		} else { // less common: shift from right to preserve ordering
-			*partitions = append((*partitions)[:useIdx], (*partitions)[useIdx+1:]...)
-		}
-		if len(*partitions) > 0 {
-			heap.Fix(consumersByNumPartitions, 0)
-		} else {
-			heap.Pop(consumersByNumPartitions)
-		}
-	}
-	for unvisited, potentialConsumers := range unvisitedPartitions {
-		maybeAddPartition(unvisited, potentialConsumers)
-	}
-}
-
-// Returns whether each member can consume the same partitions.
-// The Java code also checks consumers2, but it also stuffs partitions that no
-// members can consume into partitions2, which returns false unnecessarily.
-// With our code, the maps should be reverse identical.
-func (b *balancer) memberSubscriptionsIdentical() bool {
-	var firstMembers []string
-	var firstSet bool
-	for _, members := range b.partitions2AllPotentialConsumers {
-		sort.Strings(members)
-		if !firstSet {
-			firstMembers = members
-			firstSet = true
-			continue
-		}
-		if !reflect.DeepEqual(members, firstMembers) {
-			return false
-		}
-	}
-	return true
-}
-
-func (b *balancer) balance() {
-	// First, we assign all unassigned partitions to consumers.
-	for _, partition := range b.unassignedPartitions {
+	// With our list of unassigned partitions, if the partition can be
+	// assigned, we assign it to the least loaded member.
+	for _, partition := range unassignedPartitions {
 		if _, exists := b.partitions2AllPotentialConsumers[partition]; !exists {
 			continue
 		}
 		b.assignPartition(partition)
 	}
 
-	// Next, we eliminate from reassignment all members that cannot have
-	// their now assigned partition set changed.
+}
+
+func (b *balancer) balance() {
+	// First, we eliminate from reassignment all members that cannot have
+	// their assigned partition set changed.
 	fixedMembers := make(membersPartitions)
 	for member, partitions := range b.plan {
 		if !b.canMemberParticipateInMove(member, *partitions) {
@@ -594,7 +486,45 @@ func (b *balancer) balance() {
 		}
 	}
 
-	// preBalancePlan := plan.deepClone()
+	preBalancePlan := b.plan.deepClone()
+	didReassign := b.doReassignments()
+	if !b.isFreshAssignment && didReassign && calcBalanceScore(preBalancePlan) >= calcBalanceScore(b.plan) {
+		b.plan = preBalancePlan
+	}
+
+	// Finally, we add back the fixed members we removed earlier.
+	// We do not need to update planByNumPartitions since we are done.
+	for member, partitions := range fixedMembers {
+		b.plan[member] = partitions
+	}
+}
+
+// calcBalanceScore calculates how balanced a plan is by summing deltas of how
+// many partitions each member is consuming. The lower the aggregate delta, the
+// beter.
+func calcBalanceScore(plan membersPartitions) int {
+	absDelta := func(l, r int) int {
+		v := l - r
+		if v < 0 {
+			return -v
+		}
+		return v
+	}
+
+	var score int
+	memberSizes := make(map[string]int, len(plan))
+	for member, partitions := range plan {
+		memberSizes[member] = len(*partitions)
+	}
+
+	// Sums a triangle of size deltas.
+	for member, size := range memberSizes {
+		delete(memberSizes, member)
+		for _, otherSize := range memberSizes {
+			score += absDelta(size, otherSize)
+		}
+	}
+	return score
 }
 
 // assignPartition looks for the first member that can assume this unassigned
@@ -630,6 +560,12 @@ func (b *balancer) isBalanced() bool {
 	// is 0 or 1, we are balanced.
 	if len(*minConsumer.partitions) >= len(*maxConsumer.partitions)-1 {
 		return true
+	}
+	// An optimization not in the Java code: if we know all subscriptions
+	// are identical, then if the partition delta is more than one, we know
+	// that we are not balanced.
+	if b.areSubscriptionsIdentical {
+		return false
 	}
 
 	// Across all members, across the partitions a member could have, if
@@ -725,10 +661,193 @@ func (b *balancer) canMemberParticipateInMove(
 	return false
 }
 
-func (b *balancer) doReassignments() {
-	//didReassign := false
+// doReassignments loops trying to move partitions until the plan is balanced
+// or until no moves happen.
+//
+// This loops over all partitions, each time seeing if each partition has a
+// better place to be.
+func (b *balancer) doReassignments() (didReassign bool) {
 	modified := true
 	for modified {
 		modified = false
+		for partition := range b.partitions2AllPotentialConsumers {
+			if b.isBalanced() {
+				return
+			}
+			currentConsumer := b.partitionConsumers[partition]
+
+			// If a straggler thought it owned this partition, and our consumer is more
+			// loaded than that straggler, we may as well give the partition back.
+			stragglerMember, exists := b.priorPlanStragglers[partition]
+			if exists && len(*b.plan[stragglerMember]) < len(*b.plan[currentConsumer])-1 {
+				b.reassignPartitionToMember(partition, stragglerMember)
+				didReassign = true
+				modified = true
+				continue
+			}
+
+			// Otherwise, if any other consumer is less loaded and can take the
+			// partition, we know the partition can be handed off.
+			for _, otherConsumer := range b.partitions2AllPotentialConsumers[partition] {
+				if currentConsumer == otherConsumer {
+					continue
+				}
+				if len(*b.plan[otherConsumer]) < len(*b.plan[currentConsumer])-1 {
+					b.reassignPartitionToLeastLoadedMember(partition)
+					didReassign = true
+					modified = true
+					break
+				}
+			}
+		}
 	}
+	return
+}
+
+// reassignPartitionToLeastLoaded member looks for the least loaded member that
+// can take a partition and reassigns it to that member.
+func (b *balancer) reassignPartitionToLeastLoadedMember(partition topicPartition) {
+	okMembers := make(map[string]struct{})
+	for _, member := range b.partitions2AllPotentialConsumers[partition] {
+		okMembers[member] = struct{}{}
+	}
+	var dstMember string
+	b.planByNumPartitions.Ascend(func(item btree.Item) bool {
+		memberWithFewestPartitions := item.(memberWithPartitions)
+		potentialConsumer := memberWithFewestPartitions.member
+		if _, canTake := okMembers[potentialConsumer]; !canTake {
+			return true
+		}
+		dstMember = potentialConsumer
+		return false
+	})
+	b.reassignPartitionToMember(partition, dstMember)
+}
+
+// reassignPartitionToMember reassigns a partition to dstMember, potentially
+// undoing a prior move if this detects a partition when there-and-back.
+func (b *balancer) reassignPartitionToMember(partition topicPartition, dstMember string) {
+	srcMember := b.partitionConsumers[partition]
+	partition = b.maybeGetPartitionReversal(partition, srcMember, dstMember)
+	b.doPartitionMove(partition, srcMember, dstMember)
+}
+
+// doPartitionMove updates the balancer's structures to record a movement.
+func (b *balancer) doPartitionMove(partition topicPartition, srcMember, dstMember string) {
+	oldPartitions := b.plan[srcMember]
+	newPartitions := b.plan[dstMember]
+
+	// Remove the elements from our btree before we change the sort order.
+	b.planByNumPartitions.Delete(memberWithPartitions{
+		srcMember,
+		oldPartitions,
+	})
+	b.planByNumPartitions.Delete(memberWithPartitions{
+		dstMember,
+		newPartitions,
+	})
+
+	for idx, oldPartition := range *oldPartitions { // remove from old member
+		if oldPartition == partition {
+			(*oldPartitions)[idx] = (*oldPartitions)[len(*oldPartitions)-1]
+			*oldPartitions = (*oldPartitions)[:len(*oldPartitions)-1]
+			break
+		}
+	}
+	*newPartitions = append(*newPartitions, partition) // add to new
+
+	// Now add back the changed elements to our btree.
+	b.planByNumPartitions.ReplaceOrInsert(memberWithPartitions{
+		srcMember,
+		oldPartitions,
+	})
+	b.planByNumPartitions.ReplaceOrInsert(memberWithPartitions{
+		dstMember,
+		newPartitions,
+	})
+
+	// Finally, record the movement and update which member is consuming
+	// the partition.
+	b.recordMovement(partition, srcMember, dstMember)
+	b.partitionConsumers[partition] = dstMember
+}
+
+// maybeGetPartitionReversal is used when we want to move a partition within a
+// topic from member A to member B. If it turns out that we already moved a
+// different partition within that topic from B to A (through some chain), then
+// rather than moving what we want to, we reverse a prior move.
+//
+// We only do the reversal action for partitions in the same topic. We do not
+// want to reverse a move of a topic back to a member that is no longer
+// consuming that topic.
+func (b *balancer) maybeGetPartitionReversal(partition topicPartition, srcMember, dstMember string) topicPartition {
+	topicMovements, exists := b.movementsByTopic[partition.topic]
+	if !exists {
+		return partition
+	}
+
+	// If we are moving from B to C, and we prior moved from A to B, change
+	// our source to the original source, A.
+	if priorMovement, exists := b.partitionMovements[partition]; exists {
+		srcMember = priorMovement.src
+	}
+
+	reverseMovement := movement{dstMember, srcMember}
+	reverseMovedPartitions, exists := topicMovements[reverseMovement]
+	if !exists {
+		return partition
+	}
+	for partition := range reverseMovedPartitions {
+		return partition
+	}
+	panic("unreachable")
+}
+
+// recordMovement tracks moving a partition from srcMember to dstMember.
+//
+// If the partition has moved prior, then that prior movement's dst is the
+// srcMember. We delete that prior movement and instead track a movement from
+// the original source to our dst.
+func (b *balancer) recordMovement(partition topicPartition, srcMember, dstMember string) {
+	move := movement{srcMember, dstMember}
+	if priorMove, wasMoved := b.partitionMovements[partition]; wasMoved {
+		b.deleteMovement(partition, priorMove)
+		if priorMove.src == dstMember { // note that the prior movement's dst is srcMember
+			return
+		}
+		move = movement{priorMove.src, dstMember}
+	}
+	b.addMovement(partition, move)
+}
+
+// deleteMovement deletes a partition's movement.
+func (b *balancer) deleteMovement(partition topicPartition, priorMove movement) {
+	delete(b.partitionMovements, partition)
+	topicMovements := b.movementsByTopic[partition.topic]
+	topicPartitionMovements := topicMovements[priorMove]
+	delete(topicPartitionMovements, partition)
+	if len(topicPartitionMovements) > 0 {
+		return
+	}
+	delete(topicMovements, priorMove)
+	if len(topicMovements) > 0 {
+		return
+	}
+	delete(b.movementsByTopic, partition.topic)
+}
+
+// addMovement tracks a partition's movement.
+func (b *balancer) addMovement(partition topicPartition, move movement) {
+	b.partitionMovements[partition] = move
+	topicMovements, exists := b.movementsByTopic[partition.topic]
+	if !exists {
+		topicMovements = make(map[movement]map[topicPartition]struct{})
+		b.movementsByTopic[partition.topic] = topicMovements
+	}
+	topicPartitionMovements, exists := topicMovements[move]
+	if !exists {
+		topicPartitionMovements = make(map[topicPartition]struct{})
+		topicMovements[move] = topicPartitionMovements
+	}
+	topicPartitionMovements[partition] = struct{}{}
 }
