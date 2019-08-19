@@ -6,6 +6,7 @@
 package sticky
 
 import (
+	"fmt"
 	"reflect"
 	"sort"
 
@@ -91,24 +92,11 @@ type balancer struct {
 	//
 	// This is built once and never modified thereafter.
 	partitions2AllPotentialConsumers staticPartitionMembers
-
-	// partitionMovements tracks how partitions move during reassigning.
-	// Its sole purpose is to aid in reversing partition movements if
-	// necessary.
-	partitionMovements map[topicPartition]movement
-	// movementsByTopic tracks how movements happen for partitions within a
-	// topic. As with partitionMovements, its sole purpose is to aid in
-	// reversing partition movements if necessary.
-	movementsByTopic map[string]map[movement]map[topicPartition]struct{}
 }
 
 type topicPartition struct {
 	topic     string
 	partition int32
-}
-
-type movement struct {
-	src, dst string
 }
 
 func newBalancer(members []GroupMember, topics map[string][]int32) *balancer {
@@ -122,9 +110,6 @@ func newBalancer(members []GroupMember, topics map[string][]int32) *balancer {
 
 		partitions2AllPotentialConsumers: make(staticPartitionMembers),
 		consumers2AllPotentialPartitions: make(staticMembersPartitions),
-
-		partitionMovements: make(map[topicPartition]movement),
-		movementsByTopic:   make(map[string]map[movement]map[topicPartition]struct{}),
 	}
 	for _, member := range members {
 		b.members[member.ID] = member
@@ -166,9 +151,9 @@ type memberWithPartitions struct {
 }
 
 func (l memberWithPartitions) less(r memberWithPartitions) bool {
-	return len(*l.partitions) > len(*r.partitions) ||
+	return len(*l.partitions) < len(*r.partitions) ||
 		len(*l.partitions) == len(*r.partitions) &&
-			l.member > r.member
+			l.member < r.member
 }
 
 func (l memberWithPartitions) Less(r btree.Item) bool {
@@ -268,6 +253,7 @@ func (b *balancer) parseMemberMetadata() {
 			member.ID,
 			generation,
 		}
+		fmt.Println("deserialized", memberPlan, generation)
 		for _, topicPartition := range memberPlan {
 			partitionConsumers := partitionConsumersByGeneration[topicPartition]
 			var doublyConsumed bool
@@ -470,9 +456,12 @@ func (b *balancer) balance() {
 		startingPlan[member] = memberPartitions
 	}
 
-	didReassign := b.doReassignments(startingPlan)
+	didReassign := b.doReassigning(startingPlan)
 
-	if !b.isFreshAssignment && didReassign && calcBalanceScore(preBalancePlan) >= calcBalanceScore(b.plan) {
+	if !b.isFreshAssignment && didReassign && calcBalanceScore(b.plan) >= calcBalanceScore(preBalancePlan) {
+		fmt.Printf("resetting plan, score sux, before: %d, after %d\n",
+			calcBalanceScore(preBalancePlan),
+			calcBalanceScore(b.plan))
 		b.plan = preBalancePlan
 	}
 }
@@ -521,6 +510,7 @@ func (b *balancer) assignPartition(unassigned topicPartition) {
 		// btree. If we edo this after changing the order, the tree
 		// will not be able to delete the item.
 		b.planByNumPartitions.Delete(item)
+
 		partitions := memberWithFewestPartitions.partitions
 		*partitions = append(*partitions, unassigned)
 		// Add the item back to its new sorted position.
@@ -570,63 +560,25 @@ func (b *balancer) isBalanced() bool {
 			return true
 		}
 
-		comparedMembers := make(map[string]struct{})
-
-		for _, partition := range currentPartitions {
-			otherMember := b.partitionConsumers[partition]
+		for possiblePartition := range possiblePartitions {
+			otherMember := b.partitionConsumers[possiblePartition]
 			if otherMember == currentMember {
 				continue
 			}
-			if _, comparedMember := comparedMembers[otherMember]; comparedMember {
-				continue
-			}
-			comparedMembers[otherMember] = struct{}{}
 
 			otherPartitions := *b.plan[otherMember]
 
-			if len(currentPartitions) < len(otherPartitions)-1 {
+			if len(currentPartitions) < len(otherPartitions) {
 				balanced = false
 				return false
 			}
-			if len(currentPartitions) == len(otherPartitions) {
-				return true
-			}
-
-			// If this member is consuming ONE less than another member, and that
-			// member has a partition we can have, we still may be balanced.
-			//
-			// If the union of what both of these members could consume is equal
-			// to that they are consuming now, then moving the partition from
-			// the other member to this member would have no benefit. The other
-			// member can consume nothing more than the partition we are considering
-			// for moving, so moving the partition will just cause this same
-			// imbalance in the other direction.
-			//
-			// Note that the Java code does not do this check, but it is not
-			// detrimental.
-			//
-			// TODO switch to not using union map but instead counting common.
-			otherPossiblePartitions := b.consumers2AllPotentialPartitions[otherMember]
-			possiblePartitionsUnion := make(map[topicPartition]struct{}, len(currentPartitions)+len(otherPartitions))
-			for partition := range possiblePartitions {
-				possiblePartitionsUnion[partition] = struct{}{}
-			}
-			for partition := range otherPossiblePartitions {
-				possiblePartitionsUnion[partition] = struct{}{}
-			}
-			if len(currentPartitions)+len(otherPartitions) == len(possiblePartitionsUnion) {
-				return true
-			}
-
-			balanced = false
-			return false
 		}
 		return true
 	})
 	return balanced
 }
 
-// doReassignments loops trying to move partitions until the plan is balanced
+// doReassigning loops trying to move partitions until the plan is balanced
 // or until no moves happen.
 //
 // This loops over all partitions, each time seeing if each partition has a
@@ -669,12 +621,18 @@ func (b *balancer) isBalanced() bool {
 // candidate to steal, know that it had 5 prior, and steal it back. B freezes,
 // the same process happens between C and A, and A freezes. This preserves
 // stickiness.
-func (b *balancer) doReassignments(startingPlan map[string]map[topicPartition]struct{}) (didReassign bool) {
+func (b *balancer) doReassigning(startingPlan map[string]map[topicPartition]struct{}) (didReassign bool) {
 	cyclers := make(map[topicPartition]map[string]struct{})
 	frozenMembers := make(map[string]struct{})
 	modified := true
+	fmt.Println("before reassign:")
+	for member, partitions := range b.plan {
+		fmt.Printf("%s => %v\n", member, *partitions)
+	}
+	fmt.Println("reassigning!")
 	for modified {
 		if b.isBalanced() {
+			fmt.Println("is balanced! quitting.")
 			return
 		}
 		modified = false
@@ -682,7 +640,9 @@ func (b *balancer) doReassignments(startingPlan map[string]map[topicPartition]st
 		b.planByNumPartitions.Ascend(func(item btree.Item) bool {
 			leastLoaded := item.(memberWithPartitions)
 			myMember := leastLoaded.member
+			fmt.Println("ascending on", myMember)
 			if _, frozen := frozenMembers[myMember]; frozen {
+				fmt.Println("frozen! continuing...")
 				return true
 			}
 			myPartitions := *leastLoaded.partitions
@@ -703,11 +663,15 @@ func (b *balancer) doReassignments(startingPlan map[string]map[topicPartition]st
 				}
 
 				otherPartitions := *b.plan[otherMember]
-				if len(myPartitions) < len(otherPartitions) {
-					if mostOtherPartitions < len(otherPartitions) {
+				if len(myPartitions) < len(otherPartitions) &&
+					len(otherPartitions) >= mostOtherPartitions {
+					if mostOtherPartitions > 0 &&
+						mostOtherPartitions < len(otherPartitions) {
+						fmt.Println("resetting steal candidates, found member with higher partitions", len(otherPartitions))
 						stealCandidates = stealCandidates[:0]
 					}
 					mostOtherPartitions = len(otherPartitions)
+					fmt.Printf("found candidate with %d partitions to steal from %s: %v\n", mostOtherPartitions, otherMember, partition)
 					stealCandidates = append(stealCandidates, stealCandidate{
 						otherMember,
 						partition,
@@ -721,6 +685,7 @@ func (b *balancer) doReassignments(startingPlan map[string]map[topicPartition]st
 				// future loops. Nothing should steal from us since we
 				// are the least loaded member.
 				frozenMembers[myMember] = struct{}{}
+				fmt.Println("no steal candidates! freezing...")
 				return true
 			}
 
@@ -733,11 +698,14 @@ func (b *balancer) doReassignments(startingPlan map[string]map[topicPartition]st
 				}
 			}
 
+			fmt.Printf("%s: stealing t %s p %d from %s\n", myMember, steal.partition.topic, steal.partition.partition, steal.member)
+
 			cycle := cyclers[steal.partition]
 			if cycle == nil {
 				cycle = make(map[string]struct{})
 				cyclers[steal.partition] = cycle
 			} else if _, exists := cycle[myMember]; exists {
+				fmt.Printf("freezing %s\n", myMember)
 				frozenMembers[myMember] = struct{}{}
 			}
 			cycle[myMember] = struct{}{}
@@ -756,12 +724,6 @@ func (b *balancer) doReassignments(startingPlan map[string]map[topicPartition]st
 // reassignPartition reassigns a partition from srcMember to dstMember, potentially
 // undoing a prior move if this detects a partition when there-and-back.
 func (b *balancer) reassignPartition(partition topicPartition, srcMember, dstMember string) {
-	partition = b.maybeGetPartitionReversal(partition, srcMember, dstMember)
-	b.doPartitionMove(partition, srcMember, dstMember)
-}
-
-// doPartitionMove updates the balancer's structures to record a movement.
-func (b *balancer) doPartitionMove(partition topicPartition, srcMember, dstMember string) {
 	oldPartitions := b.plan[srcMember]
 	newPartitions := b.plan[dstMember]
 
@@ -784,6 +746,10 @@ func (b *balancer) doPartitionMove(partition topicPartition, srcMember, dstMembe
 	}
 	*newPartitions = append(*newPartitions, partition) // add to new
 
+	fmt.Println("reassign results")
+	fmt.Printf("%s => %v\n", srcMember, *oldPartitions)
+	fmt.Printf("%s => %v\n", dstMember, *newPartitions)
+
 	// Now add back the changed elements to our btree.
 	b.planByNumPartitions.ReplaceOrInsert(memberWithPartitions{
 		srcMember,
@@ -794,88 +760,6 @@ func (b *balancer) doPartitionMove(partition topicPartition, srcMember, dstMembe
 		newPartitions,
 	})
 
-	// Finally, record the movement and update which member is consuming
-	// the partition.
-	b.recordMovement(partition, srcMember, dstMember)
+	// Finally, update which member is consuming the partition.
 	b.partitionConsumers[partition] = dstMember
-}
-
-// maybeGetPartitionReversal is used when we want to move a partition within a
-// topic from member A to member B. If it turns out that we already moved a
-// different partition within that topic from B to A (through some chain), then
-// rather than moving what we want to, we reverse a prior move.
-//
-// We only do the reversal action for partitions in the same topic. We do not
-// want to reverse a move of a topic back to a member that is no longer
-// consuming that topic.
-func (b *balancer) maybeGetPartitionReversal(partition topicPartition, srcMember, dstMember string) topicPartition {
-	topicMovements, exists := b.movementsByTopic[partition.topic]
-	if !exists {
-		return partition
-	}
-
-	// If we are moving from B to C, and we prior moved from A to B, change
-	// our source to the original source, A.
-	if priorMovement, exists := b.partitionMovements[partition]; exists {
-		srcMember = priorMovement.src
-	}
-
-	reverseMovement := movement{dstMember, srcMember}
-	reverseMovedPartitions, exists := topicMovements[reverseMovement]
-	if !exists {
-		return partition
-	}
-	for partition := range reverseMovedPartitions {
-		return partition
-	}
-	panic("unreachable")
-}
-
-// recordMovement tracks moving a partition from srcMember to dstMember.
-//
-// If the partition has moved prior, then that prior movement's dst is the
-// srcMember. We delete that prior movement and instead track a movement from
-// the original source to our dst.
-func (b *balancer) recordMovement(partition topicPartition, srcMember, dstMember string) {
-	move := movement{srcMember, dstMember}
-	if priorMove, wasMoved := b.partitionMovements[partition]; wasMoved {
-		b.deleteMovement(partition, priorMove)
-		if priorMove.src == dstMember { // note that the prior movement's dst is srcMember
-			return
-		}
-		move = movement{priorMove.src, dstMember}
-	}
-	b.addMovement(partition, move)
-}
-
-// deleteMovement deletes a partition's movement.
-func (b *balancer) deleteMovement(partition topicPartition, priorMove movement) {
-	delete(b.partitionMovements, partition)
-	topicMovements := b.movementsByTopic[partition.topic]
-	topicPartitionMovements := topicMovements[priorMove]
-	delete(topicPartitionMovements, partition)
-	if len(topicPartitionMovements) > 0 {
-		return
-	}
-	delete(topicMovements, priorMove)
-	if len(topicMovements) > 0 {
-		return
-	}
-	delete(b.movementsByTopic, partition.topic)
-}
-
-// addMovement tracks a partition's movement.
-func (b *balancer) addMovement(partition topicPartition, move movement) {
-	b.partitionMovements[partition] = move
-	topicMovements, exists := b.movementsByTopic[partition.topic]
-	if !exists {
-		topicMovements = make(map[movement]map[topicPartition]struct{})
-		b.movementsByTopic[partition.topic] = topicMovements
-	}
-	topicPartitionMovements, exists := topicMovements[move]
-	if !exists {
-		topicPartitionMovements = make(map[topicPartition]struct{})
-		topicMovements[move] = topicPartitionMovements
-	}
-	topicPartitionMovements[partition] = struct{}{}
 }
