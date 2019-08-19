@@ -1,10 +1,8 @@
 // Package sticky provides the overcomplicated Java sticky partitioning
-// strategy for Kafka, with modifications made to remove useless work the Java
-// side did.
+// strategy for Kafka, with modifications made to be stickier and fairer.
 //
-// One of the larger changes is to not sort partitions by move preference
-// before performing reassignment. This was removed after determining that it
-// was largely useless (see github.com/Shopify/sarama/pull/1416/files#r314967609)
+// For some points on how Java's strategy is flawed, see
+// https://github.com/Shopify/sarama/pull/1416/files/b29086bdaae0da7ce71eae3f854d50685fd6b631#r315005878
 package sticky
 
 import (
@@ -460,30 +458,22 @@ func (b *balancer) assignUnassignedPartitions() {
 }
 
 func (b *balancer) balance() {
-	// First, we eliminate from reassignment all members that cannot have
-	// their assigned partition set changed.
-	fixedMembers := make(membersPartitions)
-	for member, partitions := range b.plan {
-		if !b.canMemberParticipateInMove(member, *partitions) {
-			fixedMembers[member] = partitions
-			b.planByNumPartitions.Delete(memberWithPartitions{
-				member,
-				partitions,
-			})
-			delete(b.plan, member)
+	// Make two copies of our current plan: one for the balance score
+	// calculation later, and one for easy steal lookup in reassigning.
+	preBalancePlan := b.plan.deepClone()
+	startingPlan := make(map[string]map[topicPartition]struct{}, len(preBalancePlan))
+	for member, partitions := range preBalancePlan {
+		memberPartitions := make(map[topicPartition]struct{}, len(*partitions))
+		for _, partition := range *partitions {
+			memberPartitions[partition] = struct{}{}
 		}
+		startingPlan[member] = memberPartitions
 	}
 
-	preBalancePlan := b.plan.deepClone()
-	didReassign := b.doReassignments()
+	didReassign := b.doReassignments(startingPlan)
+
 	if !b.isFreshAssignment && didReassign && calcBalanceScore(preBalancePlan) >= calcBalanceScore(b.plan) {
 		b.plan = preBalancePlan
-	}
-
-	// Finally, we add back the fixed members we removed earlier.
-	// We do not need to update planByNumPartitions since we are done.
-	for member, partitions := range fixedMembers {
-		b.plan[member] = partitions
 	}
 }
 
@@ -614,6 +604,8 @@ func (b *balancer) isBalanced() bool {
 			//
 			// Note that the Java code does not do this check, but it is not
 			// detrimental.
+			//
+			// TODO switch to not using union map but instead counting common.
 			otherPossiblePartitions := b.consumers2AllPotentialPartitions[otherMember]
 			possiblePartitionsUnion := make(map[topicPartition]struct{}, len(currentPartitions)+len(otherPartitions))
 			for partition := range possiblePartitions {
@@ -634,64 +626,50 @@ func (b *balancer) isBalanced() bool {
 	return balanced
 }
 
-// A member can only participate in reassignment if it has more partitions it
-// could potentially consume or if any of the partitions on it can be consumed
-// by a different member.
-func (b *balancer) canMemberParticipateInMove(
-	memberID string,
-	memberPartitions []topicPartition,
-) bool {
-	maxPartitions := len(b.consumers2AllPotentialPartitions[memberID])
-	if len(memberPartitions) < maxPartitions {
-		return true
-	}
-	for _, partition := range memberPartitions {
-		potentialConsumers := b.partitions2AllPotentialConsumers[partition]
-		if len(potentialConsumers) > 1 {
-			return true
-		}
-	}
-	return false
-}
-
 // doReassignments loops trying to move partitions until the plan is balanced
 // or until no moves happen.
 //
 // This loops over all partitions, each time seeing if each partition has a
 // better place to be.
-func (b *balancer) doReassignments() (didReassign bool) {
-	// cyclers is how we prevent partition stealing cycles.
-	//
-	// Say we have 5 members, A B C D E.
-	//
-	// A consumes 1 2 3 4
-	// B consumes 2 3 4 5
-	// C consumes 1 3 4 5
-	// D consumes 7 8 9 a b c
-	// E consumes 7 8 9 a b c
-	//
-	// D and E exist to ensure that isBalanced returns false.
-	//
-	// If the setup is
-	// A -> 1 2
-	// B -> 3 4
-	// C -> 5
-	// ... (D and E do not matter)
-	//
-	// Then we have a steal cycle: none of A, B, nor C will be happy since
-	// they will all think they can steal one more from the other two.
-	//
-	// If a partition gets stolen around a set of members,
-	// then they MUST be the members with the fewest partitions,
-	// and they MUST have at most one partition difference between them.
-	//
-	// The reason for this is that cycles can only form by the least
-	// consuming member stealing a single partition from another member
-	// that then itself becomes the least consuming member. Thus, at most
-	// one difference.
-	//
-	// Once a cycle is detected, we can freeze all members in the cycle to
-	// prevent any more partition stealing from any of them.
+//
+// cyclers is how we prevent partition stealing cycles.
+//
+// Say we have 5 members, A B C D E.
+//
+// A consumes 1 2 3 4 5
+// B consumes 1 2 3 4 5
+// C consumes 1 2 3 4 5
+// D consumes 7 8 9 a b c
+// E consumes 7 8 9 a b c
+//
+// D and E exist to ensure that isBalanced returns false.
+//
+// If the setup is
+// A -> 1 2
+// B -> 3 4
+// C -> 5
+// ... (D and E do not matter)
+//
+// Then we have a steal cycle: none of A, B, nor C will be happy since they
+// will all think they can steal one more from the other two.
+//
+// If a partition CAN get stolen around a set of members, then those members
+// MUST be the members with the fewest partitions, and they MUST have at most
+// one partition difference between them.
+//
+// The reason for this is that cycles can only form by the least consuming
+// member stealing a single partition from another member that then itself
+// becomes the least consuming member. Thus, at most one difference.
+//
+// If a partition can go in a cycle, we freeze the member it ends on, which is
+// the one it started on.
+//
+// It is expected that cycles will be of length two due to logic below about
+// stealing back partitions. If C steals 5 from B, B will next see 5 as a
+// candidate to steal, know that it had 5 prior, and steal it back. B freezes,
+// the same process happens between C and A, and A freezes. This preserves
+// stickiness.
+func (b *balancer) doReassignments(startingPlan map[string]map[topicPartition]struct{}) (didReassign bool) {
 	cyclers := make(map[topicPartition]map[string]struct{})
 	frozenMembers := make(map[string]struct{})
 	modified := true
@@ -707,59 +685,72 @@ func (b *balancer) doReassignments() (didReassign bool) {
 			if _, frozen := frozenMembers[myMember]; frozen {
 				return true
 			}
-			myPartitions := len(*leastLoaded.partitions)
+			myPartitions := *leastLoaded.partitions
 
-			var mostOtherMember string
+			type stealCandidate struct {
+				member    string
+				partition topicPartition
+			}
+			var stealCandidates []stealCandidate
 			var mostOtherPartitions int
-			var stealPartition topicPartition
 			for partition := range b.consumers2AllPotentialPartitions[myMember] {
 				otherMember := b.partitionConsumers[partition]
 				if otherMember == leastLoaded.member {
 					continue
 				}
-
-				otherPartitions := len(*b.plan[otherMember])
-				if myPartitions < otherPartitions &&
-					mostOtherPartitions < otherPartitions {
-
-					mostOtherMember = otherMember
-					mostOtherPartitions = otherPartitions
-					stealPartition = partition
+				if _, frozen := frozenMembers[otherMember]; frozen {
+					continue
 				}
-			}
 
-			// If we found a partition to steal, we do so.
-			if mostOtherPartitions != 0 {
-				cycle := cyclers[stealPartition]
-				if cycle == nil {
-					cycle = make(map[string]struct{})
-					cycle[mostOtherMember] = struct{}{}
-				} else {
-					if _, exists := cycle[mostOtherMember]; exists {
-						for member := range cycle {
-							frozenMembers[member] = struct{}{}
-						}
-					} else {
-						cycle[mostOtherMember] = struct{}{}
+				otherPartitions := *b.plan[otherMember]
+				if len(myPartitions) < len(otherPartitions) {
+					if mostOtherPartitions < len(otherPartitions) {
+						stealCandidates = stealCandidates[:0]
 					}
+					mostOtherPartitions = len(otherPartitions)
+					stealCandidates = append(stealCandidates, stealCandidate{
+						otherMember,
+						partition,
+					})
 				}
-				cycle[myMember] = struct{}{}
-
-				b.reassignPartition(stealPartition, mostOtherMember, myMember)
-				didReassign = true
-				modified = true
-				return false
 			}
 
-			// If we did not find a partition to steal, we freeze
-			// this member to prevent it from consideration for
-			// future loops. Nothing should steal from us since we
-			// are the least loaded member.
-			frozenMembers[myMember] = struct{}{}
-			return true
+			if len(stealCandidates) == 0 {
+				// If we did not find a partition to steal, we freeze
+				// this member to prevent it from consideration for
+				// future loops. Nothing should steal from us since we
+				// are the least loaded member.
+				frozenMembers[myMember] = struct{}{}
+				return true
+			}
+
+			steal := stealCandidates[0]
+			myStartingPartitions := startingPlan[myMember]
+			for _, candidate := range stealCandidates {
+				if _, hadPrior := myStartingPartitions[candidate.partition]; hadPrior {
+					steal = candidate
+					break
+				}
+			}
+
+			cycle := cyclers[steal.partition]
+			if cycle == nil {
+				cycle = make(map[string]struct{})
+				cyclers[steal.partition] = cycle
+			} else if _, exists := cycle[myMember]; exists {
+				frozenMembers[myMember] = struct{}{}
+			}
+			cycle[myMember] = struct{}{}
+			cycle[steal.member] = struct{}{}
+
+			b.reassignPartition(steal.partition, steal.member, myMember)
+			didReassign = true
+			modified = true
+			return false
+
 		})
 	}
-	return
+	return didReassign
 }
 
 // reassignPartition reassigns a partition from srcMember to dstMember, potentially
