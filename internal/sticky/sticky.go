@@ -59,15 +59,6 @@ type balancer struct {
 	// this field are visible in plan.
 	planByNumPartitions *btree.BTree
 
-	// priorPlanStragglers is related to plan above. This tracks partitions
-	// that have at least two members thinking they are consuming the same
-	// partition. The member with the higher generation is stuck into plan,
-	// the one with the lower is stuck here.
-	//
-	// This is used eventually as a hint of "these may be good partitions
-	// to move if necessary".
-	priorPlanStragglers map[topicPartition]string
-
 	// isFreshAssignment tracks whether this is the first join for a group.
 	// This is true if no member has userdata (plan is empty)
 	isFreshAssignment bool
@@ -80,6 +71,7 @@ type balancer struct {
 	// members that are consuming them.
 	//
 	// We initialize this from our plan and modify it during reassignment.
+	// We use this to know what member we are stealing partitions from.
 	partitionConsumers map[topicPartition]string
 
 	// consumers2AllPotentialPartitions maps each member to all of the
@@ -126,8 +118,7 @@ func newBalancer(members []GroupMember, topics map[string][]int32) *balancer {
 		members: make(map[string]GroupMember, len(members)),
 		topics:  topics,
 
-		plan:                make(membersPartitions),
-		priorPlanStragglers: make(map[topicPartition]string),
+		plan: make(membersPartitions),
 
 		partitionConsumers: make(map[topicPartition]string),
 
@@ -260,17 +251,7 @@ func strsHas(search []string, needle string) bool {
 	return false
 }
 
-func partitionsHas(search []topicPartition, needle topicPartition) bool {
-	for _, check := range search {
-		if check == needle {
-			return true
-		}
-	}
-	return false
-}
-
-// parseMemberMetadata parses all member userdata to initialize plan and
-// priorPlanStragglers.
+// parseMemberMetadata parses all member userdata to initialize the prior plan.
 func (b *balancer) parseMemberMetadata() {
 	type memberGeneration struct {
 		member     string
@@ -320,9 +301,6 @@ func (b *balancer) parseMemberMetadata() {
 			b.plan[member] = memberPartitions
 		}
 		*memberPartitions = append(*memberPartitions, partition)
-		if len(partitionConsumers) > 1 {
-			b.priorPlanStragglers[partition] = partitionConsumers[1].member
-		}
 	}
 
 	b.isFreshAssignment = len(b.plan) == 0
@@ -479,7 +457,6 @@ func (b *balancer) assignUnassignedPartitions() {
 		}
 		b.assignPartition(partition)
 	}
-
 }
 
 func (b *balancer) balance() {
@@ -565,6 +542,11 @@ func (b *balancer) assignPartition(unassigned topicPartition) {
 }
 
 func (b *balancer) isBalanced() bool {
+	// The plan could be empty if no member is subscribing to anything the
+	// client has or if all members are fixed.
+	if len(b.plan) == 0 {
+		return true
+	}
 	minConsumer := b.planByNumPartitions.Min().(memberWithPartitions)
 	maxConsumer := b.planByNumPartitions.Max().(memberWithPartitions)
 	// If the delta between the min and the max consumer's partition's
@@ -678,67 +660,111 @@ func (b *balancer) canMemberParticipateInMove(
 // This loops over all partitions, each time seeing if each partition has a
 // better place to be.
 func (b *balancer) doReassignments() (didReassign bool) {
+	// cyclers is how we prevent partition stealing cycles.
+	//
+	// Say we have 5 members, A B C D E.
+	//
+	// A consumes 1 2 3 4
+	// B consumes 2 3 4 5
+	// C consumes 1 3 4 5
+	// D consumes 7 8 9 a b c
+	// E consumes 7 8 9 a b c
+	//
+	// D and E exist to ensure that isBalanced returns false.
+	//
+	// If the setup is
+	// A -> 1 2
+	// B -> 3 4
+	// C -> 5
+	// ... (D and E do not matter)
+	//
+	// Then we have a steal cycle: none of A, B, nor C will be happy since
+	// they will all think they can steal one more from the other two.
+	//
+	// If a partition gets stolen around a set of members,
+	// then they MUST be the members with the fewest partitions,
+	// and they MUST have at most one partition difference between them.
+	//
+	// The reason for this is that cycles can only form by the least
+	// consuming member stealing a single partition from another member
+	// that then itself becomes the least consuming member. Thus, at most
+	// one difference.
+	//
+	// Once a cycle is detected, we can freeze all members in the cycle to
+	// prevent any more partition stealing from any of them.
+	cyclers := make(map[topicPartition]map[string]struct{})
+	frozenMembers := make(map[string]struct{})
 	modified := true
 	for modified {
+		if b.isBalanced() {
+			return
+		}
 		modified = false
-		for partition := range b.partitions2AllPotentialConsumers {
-			if b.isBalanced() {
-				return
-			}
-			currentConsumer := b.partitionConsumers[partition]
 
-			// If a straggler thought it owned this partition, and our consumer is more
-			// loaded than that straggler, we may as well give the partition back.
-			stragglerMember, exists := b.priorPlanStragglers[partition]
-			if exists && len(*b.plan[stragglerMember]) < len(*b.plan[currentConsumer])-1 {
-				b.reassignPartitionToMember(partition, stragglerMember)
-				didReassign = true
-				modified = true
-				continue
+		b.planByNumPartitions.Ascend(func(item btree.Item) bool {
+			leastLoaded := item.(memberWithPartitions)
+			myMember := leastLoaded.member
+			if _, frozen := frozenMembers[myMember]; frozen {
+				return true
 			}
+			myPartitions := len(*leastLoaded.partitions)
 
-			// Otherwise, if any other consumer is less loaded and can take the
-			// partition, we know the partition can be handed off.
-			for otherConsumer := range b.partitions2AllPotentialConsumers[partition] {
-				if currentConsumer == otherConsumer {
+			var mostOtherMember string
+			var mostOtherPartitions int
+			var stealPartition topicPartition
+			for partition := range b.consumers2AllPotentialPartitions[myMember] {
+				otherMember := b.partitionConsumers[partition]
+				if otherMember == leastLoaded.member {
 					continue
 				}
-				if len(*b.plan[otherConsumer]) < len(*b.plan[currentConsumer])-1 {
-					b.reassignPartitionToLeastLoadedMember(partition)
-					didReassign = true
-					modified = true
-					break
+
+				otherPartitions := len(*b.plan[otherMember])
+				if myPartitions < otherPartitions &&
+					mostOtherPartitions < otherPartitions {
+
+					mostOtherMember = otherMember
+					mostOtherPartitions = otherPartitions
+					stealPartition = partition
 				}
 			}
-		}
+
+			// If we found a partition to steal, we do so.
+			if mostOtherPartitions != 0 {
+				cycle := cyclers[stealPartition]
+				if cycle == nil {
+					cycle = make(map[string]struct{})
+					cycle[mostOtherMember] = struct{}{}
+				} else {
+					if _, exists := cycle[mostOtherMember]; exists {
+						for member := range cycle {
+							frozenMembers[member] = struct{}{}
+						}
+					} else {
+						cycle[mostOtherMember] = struct{}{}
+					}
+				}
+				cycle[myMember] = struct{}{}
+
+				b.reassignPartition(stealPartition, mostOtherMember, myMember)
+				didReassign = true
+				modified = true
+				return false
+			}
+
+			// If we did not find a partition to steal, we freeze
+			// this member to prevent it from consideration for
+			// future loops. Nothing should steal from us since we
+			// are the least loaded member.
+			frozenMembers[myMember] = struct{}{}
+			return true
+		})
 	}
 	return
 }
 
-// reassignPartitionToLeastLoaded member looks for the least loaded member that
-// can take a partition and reassigns it to that member.
-func (b *balancer) reassignPartitionToLeastLoadedMember(partition topicPartition) {
-	okMembers := make(map[string]struct{})
-	for member := range b.partitions2AllPotentialConsumers[partition] {
-		okMembers[member] = struct{}{}
-	}
-	var dstMember string
-	b.planByNumPartitions.Ascend(func(item btree.Item) bool {
-		memberWithFewestPartitions := item.(memberWithPartitions)
-		potentialConsumer := memberWithFewestPartitions.member
-		if _, canTake := okMembers[potentialConsumer]; !canTake {
-			return true
-		}
-		dstMember = potentialConsumer
-		return false
-	})
-	b.reassignPartitionToMember(partition, dstMember)
-}
-
-// reassignPartitionToMember reassigns a partition to dstMember, potentially
+// reassignPartition reassigns a partition from srcMember to dstMember, potentially
 // undoing a prior move if this detects a partition when there-and-back.
-func (b *balancer) reassignPartitionToMember(partition topicPartition, dstMember string) {
-	srcMember := b.partitionConsumers[partition]
+func (b *balancer) reassignPartition(partition topicPartition, srcMember, dstMember string) {
 	partition = b.maybeGetPartitionReversal(partition, srcMember, dstMember)
 	b.doPartitionMove(partition, srcMember, dstMember)
 }
