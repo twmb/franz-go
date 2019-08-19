@@ -161,7 +161,7 @@ func (b *balancer) into() Plan {
 // staticMembersPartitions is like membersPartitions below, but is used only
 // for consumers2AllPotentialPartitions. The value is built once and never
 // changed. Essentially, this is a clearer type.
-type staticMembersPartitions map[string][]topicPartition
+type staticMembersPartitions map[string]map[topicPartition]struct{}
 
 // membersPartitions maps members to a pointer of their partitions.  We use a
 // pointer so that modifications through memberWithPartitions can be seen in
@@ -217,7 +217,7 @@ func (mps membersPartitions) deepClone() membersPartitions {
 // staticPartitionMember is the same as partitionMembers, but we type name it
 // to imply immutability in reading. All mutable uses go through cloneKeys
 // or shallowClone.
-type staticPartitionMembers map[topicPartition][]string
+type staticPartitionMembers map[topicPartition]map[string]struct{}
 
 func (orig staticPartitionMembers) cloneKeys() map[topicPartition]struct{} {
 	dup := make(map[topicPartition]struct{}, len(orig))
@@ -384,9 +384,21 @@ func (b *balancer) initAllConsumersPartitions() {
 				continue
 			}
 			for _, partition := range partitions {
+				consumerPotentialPartitions := b.consumers2AllPotentialPartitions[member.ID]
+				if consumerPotentialPartitions == nil {
+					consumerPotentialPartitions = make(map[topicPartition]struct{})
+					b.consumers2AllPotentialPartitions[member.ID] = consumerPotentialPartitions
+				}
+
 				topicPartition := topicPartition{topic, partition}
-				b.consumers2AllPotentialPartitions[member.ID] = append(b.consumers2AllPotentialPartitions[member.ID], topicPartition)
-				b.partitions2AllPotentialConsumers[topicPartition] = append(b.partitions2AllPotentialConsumers[topicPartition], member.ID)
+				partitionPotentialConsumers := b.partitions2AllPotentialConsumers[topicPartition]
+				if partitionPotentialConsumers == nil {
+					partitionPotentialConsumers = make(map[string]struct{})
+					b.partitions2AllPotentialConsumers[topicPartition] = partitionPotentialConsumers
+				}
+
+				consumerPotentialPartitions[topicPartition] = struct{}{}
+				partitionPotentialConsumers[member.ID] = struct{}{}
 			}
 		}
 		// Lastly, if this is a new member, the plan everything is
@@ -406,10 +418,9 @@ func (b *balancer) initAllConsumersPartitions() {
 // members can consume into partitions2, which returns false unnecessarily.
 // With our code, the maps should be reverse identical.
 func (b *balancer) setIfMemberSubscriptionsIdentical() {
-	var firstMembers []string
+	var firstMembers map[string]struct{}
 	var firstSet bool
 	for _, members := range b.partitions2AllPotentialConsumers {
-		sort.Strings(members)
 		if !firstSet {
 			firstMembers = members
 			firstSet = true
@@ -535,7 +546,7 @@ func (b *balancer) assignPartition(unassigned topicPartition) {
 		memberWithFewestPartitions := item.(memberWithPartitions)
 		member := memberWithFewestPartitions.member
 		memberPotentials := b.consumers2AllPotentialPartitions[member]
-		if !partitionsHas(memberPotentials, unassigned) {
+		if _, memberCanUse := memberPotentials[unassigned]; !memberCanUse {
 			return true
 		}
 
@@ -623,10 +634,10 @@ func (b *balancer) isBalanced() bool {
 			// detrimental.
 			otherPossiblePartitions := b.consumers2AllPotentialPartitions[otherMember]
 			possiblePartitionsUnion := make(map[topicPartition]struct{}, len(currentPartitions)+len(otherPartitions))
-			for _, partition := range possiblePartitions {
+			for partition := range possiblePartitions {
 				possiblePartitionsUnion[partition] = struct{}{}
 			}
-			for _, partition := range otherPossiblePartitions {
+			for partition := range otherPossiblePartitions {
 				possiblePartitionsUnion[partition] = struct{}{}
 			}
 			if len(currentPartitions)+len(otherPartitions) == len(possiblePartitionsUnion) {
@@ -688,7 +699,7 @@ func (b *balancer) doReassignments() (didReassign bool) {
 
 			// Otherwise, if any other consumer is less loaded and can take the
 			// partition, we know the partition can be handed off.
-			for _, otherConsumer := range b.partitions2AllPotentialConsumers[partition] {
+			for otherConsumer := range b.partitions2AllPotentialConsumers[partition] {
 				if currentConsumer == otherConsumer {
 					continue
 				}
@@ -708,7 +719,7 @@ func (b *balancer) doReassignments() (didReassign bool) {
 // can take a partition and reassigns it to that member.
 func (b *balancer) reassignPartitionToLeastLoadedMember(partition topicPartition) {
 	okMembers := make(map[string]struct{})
-	for _, member := range b.partitions2AllPotentialConsumers[partition] {
+	for member := range b.partitions2AllPotentialConsumers[partition] {
 		okMembers[member] = struct{}{}
 	}
 	var dstMember string
