@@ -541,63 +541,72 @@ func Test_stickyBalanceStrategy_Plan(t *testing.T) {
 			// Scheme:
 			// Every time we steal a partition,
 			// can one of ours now trickle down (+1)?
-			// A -> 1 c
-			// B -> 3 4
-			// C -> 5 3
-			// D -> a b
-			// E -> e d
+			// Max O(members*partitions) every steal,
+			// since each partition on recursion tree must hit a member,
+			// and we care about member levels.
+			// Further, can narrow scope to members at or less than us
 			//
+			// Round 1,
+			// E steals e,
+			// checks all of e's potential consumers,
+			// D and E, E is min, stops.
+			// A -> 1 2
+			// B -> 3 4
+			// C -> 5
+			// D -> a b c d
+			// E -> e
+			//
+			// Memoize:
+			// Member => who we can shift to who is less or equal
+			// Invalidate:
+			// Any member change invalidates the member
+			//  But by updating the memo?
 			//
 			// Scheme:
-			// Within cycles,
-			// Order LTR based off
-			// 1) # partitions
-			// 2) # possible partitions
-			// 3)
+			// Memoize who we can send to that would be beneficial,
+			// as we past the lowest members
+			// Only steal if score increases
+			// Or if we know somebody down stream can be helped
 			//
-			// A takes all,
-			// B takes 1-5
-			// C takes 3-5
-			// D, E take a-e
+			// Store for B: [-1, C]
 			//
-			// Letting min and min+1 steal:
-			// A -> 1 2
-			// B -> 4
-			// C -> 5 3
-			// D -> b c d e
-			// E -> a
-			//
-			// A -> 1 2 c
-			// B -> 4
-			// C -> 5 3
-			// D -> d e
-			// E -> a b
-			//
-			// A -> 2 c
-			// B -> 4 1
-			// C -> 5 3
-			// D -> d e
-			// E -> a b
-			//
-			// Laying down from nothing, prefering sticky
-			// A -> 1
-			// B -> 3
-			// C -> 5
-			// D -> a
-			// E -> e (steal e)
-			//
-			// A -> 1 2
-			// B -> 3 4
-			// C -> 5
-			// D -> a b
-			// E -> e d (steal d, anybody with 0 can steal from E)
-			//
+			// So when
 			// A -> 1 2
 			// B -> 3 4
 			// C -> 5
 			// D -> a b c
 			// E -> e d
 			//
+			// Memo:
+			// A: [-1, B]
+			// B: [-1, C]
+			//
+			// Also reverse memo:
+			// C: B
+			// B: A
+
+			// E: does not steal c since no net gain +1 / -1
+			// B: cannot steal
+			//
+			// A for C: +1 -1, checks map, sees 0, checks that map, sees -1: net gain -1, steals.
+			// So only recurse if 0
+			// If -, steal and give.
+			//
+			//
+			//
+			// Round 2,
+			// C checks B,
+			// can steal 3 or 4,
+			// will not help score,
+			// does nothing.
+			// E steals d,
+			// checks all of e's and d's potential consumers,
+			// D and E, E is min, stops.
+			// A -> 1 2
+			// B -> 3 4
+			// C -> 5
+			// D -> a b c
+			// E -> e d
 			//
 			// Ideal:
 			// A -> 1 e

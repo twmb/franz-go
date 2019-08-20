@@ -419,13 +419,14 @@ func (b *balancer) assignUnassignedPartitions() {
 			}
 
 			delete(unvisitedPartitions, partition)
-			b.partitionConsumers[partition] = member
 
+			// O(N^2), can improve TODO make members topics a map
 			if !strsHas(b.members[member].Topics, partition.topic) {
 				unassignedPartitions = append(unassignedPartitions, partition)
 				continue
 			}
 
+			b.partitionConsumers[partition] = member
 			(*partitions)[keepIdx] = partition
 			keepIdx++
 		}
