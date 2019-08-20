@@ -538,10 +538,66 @@ func Test_stickyBalanceStrategy_Plan(t *testing.T) {
 			// D -> a b c d e
 			// E ->
 			//
+			// Scheme:
+			// Every time we steal a partition,
+			// can one of ours now trickle down (+1)?
+			// A -> 1 c
+			// B -> 3 4
+			// C -> 5 3
+			// D -> a b
+			// E -> e d
+			//
+			//
+			// Scheme:
+			// Within cycles,
+			// Order LTR based off
+			// 1) # partitions
+			// 2) # possible partitions
+			// 3)
+			//
 			// A takes all,
 			// B takes 1-5
 			// C takes 3-5
 			// D, E take a-e
+			//
+			// Letting min and min+1 steal:
+			// A -> 1 2
+			// B -> 4
+			// C -> 5 3
+			// D -> b c d e
+			// E -> a
+			//
+			// A -> 1 2 c
+			// B -> 4
+			// C -> 5 3
+			// D -> d e
+			// E -> a b
+			//
+			// A -> 2 c
+			// B -> 4 1
+			// C -> 5 3
+			// D -> d e
+			// E -> a b
+			//
+			// Laying down from nothing, prefering sticky
+			// A -> 1
+			// B -> 3
+			// C -> 5
+			// D -> a
+			// E -> e (steal e)
+			//
+			// A -> 1 2
+			// B -> 3 4
+			// C -> 5
+			// D -> a b
+			// E -> e d (steal d, anybody with 0 can steal from E)
+			//
+			// A -> 1 2
+			// B -> 3 4
+			// C -> 5
+			// D -> a b c
+			// E -> e d
+			//
 			//
 			// Ideal:
 			// A -> 1 e

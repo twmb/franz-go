@@ -5,6 +5,8 @@
 // https://github.com/Shopify/sarama/pull/1416/files/b29086bdaae0da7ce71eae3f854d50685fd6b631#r315005878
 package sticky
 
+// Give each member in same rung to steal one,
+
 import (
 	"fmt"
 	"reflect"
@@ -622,30 +624,67 @@ func (b *balancer) isBalanced() bool {
 // the same process happens between C and A, and A freezes. This preserves
 // stickiness.
 func (b *balancer) doReassigning(startingPlan map[string]map[topicPartition]struct{}) (didReassign bool) {
-	cyclers := make(map[topicPartition]map[string]struct{})
-	frozenMembers := make(map[string]struct{})
 	modified := true
 	fmt.Println("before reassign:")
 	for member, partitions := range b.plan {
 		fmt.Printf("%s => %v\n", member, *partitions)
 	}
 	fmt.Println("reassigning!")
+	lastScore := calcBalanceScore(b.plan)
+	lastPlan := b.plan.deepClone()
+	frozenMembers := make(map[string]struct{})
+	var includePlus bool
 	for modified {
 		if b.isBalanced() {
 			fmt.Println("is balanced! quitting.")
-			return
+			return didReassign
 		}
 		modified = false
 
+		process := make([]memberWithPartitions, 0)
+		var foundFirst bool
+		var roundParts int
 		b.planByNumPartitions.Ascend(func(item btree.Item) bool {
 			leastLoaded := item.(memberWithPartitions)
 			myMember := leastLoaded.member
-			fmt.Println("ascending on", myMember)
-			if _, frozen := frozenMembers[myMember]; frozen {
-				fmt.Println("frozen! continuing...")
+			if _, isFrozen := frozenMembers[myMember]; isFrozen {
 				return true
 			}
 			myPartitions := *leastLoaded.partitions
+			if !foundFirst {
+				foundFirst = true
+				roundParts = len(myPartitions)
+				process = append(process, leastLoaded)
+				fmt.Println("adding", myMember, "for processing")
+				return true
+			}
+			if includePlus {
+				if len(myPartitions) > roundParts+1 {
+					return false
+				}
+			} else {
+				if len(myPartitions) > roundParts {
+					return false
+				}
+			}
+			process = append(process, leastLoaded)
+			fmt.Println("adding", myMember, "for processing")
+			return true
+		})
+
+		ogProcess := process
+		_ = ogProcess
+		for len(process) > 0 {
+			sort.Slice(process, func(i, j int) bool {
+				return len(*process[i].partitions) < len(*process[j].partitions)
+			})
+			leastLoaded := process[0]
+			process = process[1:]
+			myMember := leastLoaded.member
+			myPartitions := *leastLoaded.partitions
+			if len(myPartitions) == len(b.consumers2AllPotentialPartitions[myMember]) {
+				continue
+			}
 
 			type stealCandidate struct {
 				member    string
@@ -658,7 +697,7 @@ func (b *balancer) doReassigning(startingPlan map[string]map[topicPartition]stru
 				if otherMember == leastLoaded.member {
 					continue
 				}
-				if _, frozen := frozenMembers[otherMember]; frozen {
+				if _, isFrozen := frozenMembers[otherMember]; isFrozen {
 					continue
 				}
 
@@ -684,9 +723,7 @@ func (b *balancer) doReassigning(startingPlan map[string]map[topicPartition]stru
 				// this member to prevent it from consideration for
 				// future loops. Nothing should steal from us since we
 				// are the least loaded member.
-				frozenMembers[myMember] = struct{}{}
-				fmt.Println("no steal candidates! freezing...")
-				return true
+				continue
 			}
 
 			steal := stealCandidates[0]
@@ -694,29 +731,42 @@ func (b *balancer) doReassigning(startingPlan map[string]map[topicPartition]stru
 			for _, candidate := range stealCandidates {
 				if _, hadPrior := myStartingPartitions[candidate.partition]; hadPrior {
 					steal = candidate
+					fmt.Println("going to steal back!")
 					break
 				}
 			}
 
 			fmt.Printf("%s: stealing t %s p %d from %s\n", myMember, steal.partition.topic, steal.partition.partition, steal.member)
 
-			cycle := cyclers[steal.partition]
-			if cycle == nil {
-				cycle = make(map[string]struct{})
-				cyclers[steal.partition] = cycle
-			} else if _, exists := cycle[myMember]; exists {
-				fmt.Printf("freezing %s\n", myMember)
-				frozenMembers[myMember] = struct{}{}
-			}
-			cycle[myMember] = struct{}{}
-			cycle[steal.member] = struct{}{}
-
 			b.reassignPartition(steal.partition, steal.member, myMember)
 			didReassign = true
 			modified = true
-			return false
+		}
 
-		})
+		newScore := calcBalanceScore(b.plan)
+		fmt.Println("NEW SCORE", newScore, "LAST SCORE", lastScore)
+		if newScore > lastScore {
+			panic("NO GOOD")
+		}
+		if newScore == lastScore {
+			if includePlus {
+				// freeze all processed members
+				for _, leastLoaded := range ogProcess {
+					fmt.Println("MEMBZ", leastLoaded.member, len(*leastLoaded.partitions), roundParts)
+					if len(*leastLoaded.partitions) == roundParts {
+						frozenMembers[leastLoaded.member] = struct{}{}
+						fmt.Println("SAME SCORE, fREEZING", leastLoaded.member)
+					}
+				}
+			}
+			fmt.Println("NEW SCORE EQUAL, INCLUDING EXTRA IN NEXT TRY")
+			includePlus = true
+		} else {
+			includePlus = false
+		}
+		lastScore = newScore
+		lastPlan = b.plan.deepClone()
+		_ = lastPlan
 	}
 	return didReassign
 }
