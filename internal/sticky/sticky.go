@@ -6,7 +6,6 @@
 package sticky
 
 import (
-	"fmt"
 	"reflect"
 	"sort"
 
@@ -141,7 +140,7 @@ func (b *balancer) into() Plan {
 			topics = make(map[string][]int32)
 			plan[member] = topics
 		}
-		for _, partition := range *partitions {
+		for partition := range partitions {
 			topics[partition.topic] = append(topics[partition.topic], partition.partition)
 		}
 	}
@@ -153,22 +152,19 @@ func (b *balancer) into() Plan {
 // changed. Essentially, this is a clearer type.
 type staticMembersPartitions map[string]map[topicPartition]struct{}
 
-// membersPartitions maps members to a pointer of their partitions.  We use a
-// pointer so that modifications through memberWithPartitions can be seen in
-// any membersPartitions map.
-type membersPartitions map[string]*[]topicPartition
+// membersPartitions maps members to a pointer of their partitions.
+type membersPartitions map[string]map[topicPartition]struct{}
 
 // memberWithPartitions ties a member to a pointer to its partitions.
-//
-// This is generally used for sorting purposes.
+// The partitions is the same map that is in membersPartitions.
 type memberWithPartitions struct {
 	member     string
-	partitions *[]topicPartition
+	partitions map[topicPartition]struct{}
 }
 
 func (l memberWithPartitions) less(r memberWithPartitions) bool {
-	return len(*l.partitions) < len(*r.partitions) ||
-		len(*l.partitions) == len(*r.partitions) &&
+	return len(l.partitions) < len(r.partitions) ||
+		len(l.partitions) == len(r.partitions) &&
 			l.member < r.member
 }
 
@@ -195,15 +191,6 @@ func (m membersPartitions) rbtreeByConsumersPartitions() *rbtree.Tree {
 		t.Insert(memberWithPartitions)
 	}
 	return &t
-}
-
-func (mps membersPartitions) deepClone() membersPartitions {
-	clone := make(membersPartitions, len(mps))
-	for member, partitions := range mps {
-		dup := append(make([]topicPartition, 0, len(*partitions)), *partitions...)
-		clone[member] = &dup
-	}
-	return clone
 }
 
 // staticPartitionMember is the same as partitionMembers, but we type name it
@@ -241,15 +228,6 @@ func Balance(members []GroupMember, topics map[string][]int32) Plan {
 	b.balance()
 
 	return b.into()
-}
-
-func strsHas(search []string, needle string) bool {
-	for _, check := range search {
-		if check == needle {
-			return true
-		}
-	}
-	return false
 }
 
 // parseMemberMetadata parses all member userdata to initialize the prior plan.
@@ -298,10 +276,10 @@ func (b *balancer) parseMemberMetadata() {
 		member := partitionConsumers[0].member
 		memberPartitions := b.plan[member]
 		if memberPartitions == nil {
-			memberPartitions = new([]topicPartition)
+			memberPartitions = make(map[topicPartition]struct{})
 			b.plan[member] = memberPartitions
 		}
-		*memberPartitions = append(*memberPartitions, partition)
+		memberPartitions[partition] = struct{}{}
 	}
 
 	b.isFreshAssignment = len(b.plan) == 0
@@ -384,7 +362,7 @@ func (b *balancer) initAllConsumersPartitions() {
 		// using will not know of it. We add that it is consuming nothing
 		// in that plan here.
 		if _, exists := b.plan[member.id]; !exists {
-			b.plan[member.id] = new([]topicPartition)
+			b.plan[member.id] = make(map[topicPartition]struct{})
 		}
 	}
 
@@ -425,11 +403,11 @@ func (b *balancer) assignUnassignedPartitions() {
 
 	var unassignedPartitions []topicPartition
 	for member, partitions := range b.plan {
-		var keepIdx int
-		for _, partition := range *partitions {
+		for partition := range partitions {
 			// If this partition no longer exists at all, likely due to the
 			// topic being deleted, we remove the partition from the member.
 			if _, exists := b.partitions2AllPotentialConsumers[partition]; !exists {
+				delete(partitions, partition)
 				continue
 			}
 
@@ -437,14 +415,12 @@ func (b *balancer) assignUnassignedPartitions() {
 
 			if _, memberStillWantsTopic := b.members[member].topics[partition.topic]; !memberStillWantsTopic {
 				unassignedPartitions = append(unassignedPartitions, partition)
+				delete(partitions, partition)
 				continue
 			}
 
 			b.partitionConsumers[partition] = member
-			(*partitions)[keepIdx] = partition
-			keepIdx++
 		}
-		*partitions = (*partitions)[:keepIdx]
 	}
 	for unvisited := range unvisitedPartitions {
 		unassignedPartitions = append(unassignedPartitions, unvisited)
@@ -461,50 +437,7 @@ func (b *balancer) assignUnassignedPartitions() {
 }
 
 func (b *balancer) balance() {
-	// Make two copies of our current plan: one for the balance score
-	// calculation later, and one for easy steal lookup in reassigning.
-	prebalancePlan := b.plan.deepClone()
-	startingPlan := make(map[string]map[topicPartition]struct{}, len(prebalancePlan))
-	for member, partitions := range prebalancePlan {
-		memberPartitions := make(map[topicPartition]struct{}, len(*partitions))
-		for _, partition := range *partitions {
-			memberPartitions[partition] = struct{}{}
-		}
-		startingPlan[member] = memberPartitions
-	}
-	_ = startingPlan
-
 	b.shuffle()
-
-	// TODO this should be unnecessary once 3scheme is done
-}
-
-// calcBalanceScore calculates how balanced a plan is by summing deltas of how
-// many partitions each member is consuming. The lower the aggregate delta, the
-// beter.
-func calcBalanceScore(plan membersPartitions) int {
-	absDelta := func(l, r int) int {
-		v := l - r
-		if v < 0 {
-			return -v
-		}
-		return v
-	}
-
-	var score int
-	memberSizes := make(map[string]int, len(plan))
-	for member, partitions := range plan {
-		memberSizes[member] = len(*partitions)
-	}
-
-	// Sums a triangle of size deltas.
-	for member, size := range memberSizes {
-		delete(memberSizes, member)
-		for _, otherSize := range memberSizes {
-			score += absDelta(size, otherSize)
-		}
-	}
-	return score
 }
 
 // assignPartition looks for the first member that can assume this unassigned
@@ -519,10 +452,9 @@ func (b *balancer) assignPartition(unassigned topicPartition) {
 			continue
 		}
 
-		partitions := memberWithFewestPartitions.partitions
-		*partitions = append(*partitions, unassigned)
-		b.planByNumPartitions.Fix(it.Node()) // can do since Item contains pointer
+		memberWithFewestPartitions.partitions[unassigned] = struct{}{}
 		b.partitionConsumers[unassigned] = member
+		b.planByNumPartitions.Fix(it.Node()) // can do since Item contains pointer
 		return
 	}
 }
@@ -532,14 +464,10 @@ func (b *balancer) assignPartition(unassigned topicPartition) {
 //
 // O(M * P^2) i.e. not great.
 func (b *balancer) shuffle() {
-	// Map of dependents down,
-	// If we see there is a dependent down,
-	// Steal up,
-	// Reset at dependent
 	for it := rbtree.IterAt(b.planByNumPartitions.Min()); it.Ok(); it.Right() { // O(M)
 		leastLoaded := it.Item().(memberWithPartitions)
 		myMember := leastLoaded.member
-		myPartitions := *leastLoaded.partitions
+		myPartitions := leastLoaded.partitions
 
 		var mostHavingMember string
 		var mostHavingNum int
@@ -549,7 +477,7 @@ func (b *balancer) shuffle() {
 			if current == myMember {
 				continue
 			}
-			currentPartitions := *b.plan[current]
+			currentPartitions := b.plan[current]
 			if len(currentPartitions) > mostHavingNum &&
 				len(currentPartitions) > len(myPartitions)+1 {
 
@@ -588,18 +516,8 @@ func (b *balancer) reassignPartition(partition topicPartition, srcMember, dstMem
 			newPartitions,
 		}))
 
-	for idx, oldPartition := range *oldPartitions { // remove from old member
-		if oldPartition == partition {
-			(*oldPartitions)[idx] = (*oldPartitions)[len(*oldPartitions)-1]
-			*oldPartitions = (*oldPartitions)[:len(*oldPartitions)-1]
-			break
-		}
-	}
-	*newPartitions = append(*newPartitions, partition) // add to new
-
-	fmt.Println("reassign results")
-	fmt.Printf("%s => %v\n", srcMember, *oldPartitions)
-	fmt.Printf("%s => %v\n", dstMember, *newPartitions)
+	delete(oldPartitions, partition)
+	newPartitions[partition] = struct{}{}
 
 	// Now add back the changed elements to our btree.
 	b.planByNumPartitions.Reinsert(srcNode)
@@ -608,3 +526,8 @@ func (b *balancer) reassignPartition(partition topicPartition, srcMember, dstMem
 	// Finally, update which member is consuming the partition.
 	b.partitionConsumers[partition] = dstMember
 }
+
+// Map of dependents down,
+// If we see there is a dependent down,
+// Steal up,
+// Reset at dependent
