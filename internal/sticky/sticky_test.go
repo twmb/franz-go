@@ -538,76 +538,6 @@ func Test_stickyBalanceStrategy_Plan(t *testing.T) {
 			// D -> a b c d e
 			// E ->
 			//
-			// Scheme:
-			// Every time we steal a partition,
-			// can one of ours now trickle down (+1)?
-			// Max O(members*partitions) every steal,
-			// since each partition on recursion tree must hit a member,
-			// and we care about member levels.
-			// Further, can narrow scope to members at or less than us
-			//
-			// Round 1,
-			// E steals e,
-			// checks all of e's potential consumers,
-			// D and E, E is min, stops.
-			// A -> 1 2
-			// B -> 3 4
-			// C -> 5
-			// D -> a b c d
-			// E -> e
-			//
-			// Memoize:
-			// Member => who we can shift to who is less or equal
-			// Invalidate:
-			// Any member change invalidates the member
-			//  But by updating the memo?
-			//
-			// Scheme:
-			// Memoize who we can send to that would be beneficial,
-			// as we past the lowest members
-			// Only steal if score increases
-			// Or if we know somebody down stream can be helped
-			//
-			// Store for B: [-1, C]
-			//
-			// So when
-			// A -> 1 2
-			// B -> 3 4
-			// C -> 5
-			// D -> a b c
-			// E -> e d
-			//
-			// Memo:
-			// A: [-1, B]
-			// B: [-1, C]
-			//
-			// Also reverse memo:
-			// C: B
-			// B: A
-
-			// E: does not steal c since no net gain +1 / -1
-			// B: cannot steal
-			//
-			// A for C: +1 -1, checks map, sees 0, checks that map, sees -1: net gain -1, steals.
-			// So only recurse if 0
-			// If -, steal and give.
-			//
-			//
-			//
-			// Round 2,
-			// C checks B,
-			// can steal 3 or 4,
-			// will not help score,
-			// does nothing.
-			// E steals d,
-			// checks all of e's and d's potential consumers,
-			// D and E, E is min, stops.
-			// A -> 1 2
-			// B -> 3 4
-			// C -> 5
-			// D -> a b c
-			// E -> e d
-			//
 			// Ideal:
 			// A -> 1 e
 			// B -> 2 3
@@ -662,6 +592,126 @@ func Test_stickyBalanceStrategy_Plan(t *testing.T) {
 				"c": []int32{0},
 				"d": []int32{0},
 				"e": []int32{0},
+			},
+		},
+
+		{
+			// Start:
+			// A: [1 2 3 4]
+			// B: [1 2 3 4 5 6 7 8 9 a b c d]
+			// C: [5 6 7 8 9 a b c d]
+			// D: [5 6 7 8 9 a b c d e f g h i j]
+			// E: [e]
+			// F: [f]
+			// G: [g]
+			// H: [h]
+			// I: [i]
+			// J: [j]
+			//
+			// A ->
+			// B -> 1 2 3 4
+			// C -> 5 6 7 8 9 a b c d
+			// D -> e f g h i j
+			// E ->
+			// F ->
+			// G ->
+			// H ->
+			// I ->
+			// J ->
+			//
+			// Ideal:
+			// A -> 1 2 3
+			// B -> 4 c d
+			// C -> 5 6 7 b
+			// D -> 8 9 a
+			// E -> e
+			// F -> f
+			// G -> g
+			// H -> h
+			// I -> i
+			// J -> j
+			name: "odd pyramid",
+			members: []GroupMember{
+				{ID: "A", Topics: []string{"1", "2", "3", "4"},
+					Version: 1,
+					UserData: newUD().
+						encode()},
+				{ID: "B", Topics: []string{"1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "c", "d"},
+					Version: 1,
+					UserData: newUD().
+						assign("1", 0).
+						assign("2", 0).
+						assign("3", 0).
+						assign("4", 0).
+						encode()},
+				{ID: "C", Topics: []string{"5", "6", "7", "8", "9", "a", "b", "c", "d"},
+					Version: 1,
+					UserData: newUD().
+						assign("5", 0).
+						assign("6", 0).
+						assign("7", 0).
+						assign("8", 0).
+						assign("9", 0).
+						assign("a", 0).
+						assign("b", 0).
+						assign("c", 0).
+						assign("d", 0).
+						encode()},
+				{ID: "D", Topics: []string{"5", "6", "7", "8", "9", "a", "b", "c", "d", "e", "f", "g", "h", "i", "j"},
+					Version: 1,
+					UserData: newUD().
+						assign("e", 0).
+						assign("f", 0).
+						assign("g", 0).
+						assign("h", 0).
+						assign("i", 0).
+						assign("j", 0).
+						encode()},
+				{ID: "E", Topics: []string{"e"},
+					Version: 1,
+					UserData: newUD().
+						encode()},
+				{ID: "F", Topics: []string{"f"},
+					Version: 1,
+					UserData: newUD().
+						encode()},
+				{ID: "G", Topics: []string{"g"},
+					Version: 1,
+					UserData: newUD().
+						encode()},
+				{ID: "H", Topics: []string{"h"},
+					Version: 1,
+					UserData: newUD().
+						encode()},
+				{ID: "I", Topics: []string{"i"},
+					Version: 1,
+					UserData: newUD().
+						encode()},
+				{ID: "J", Topics: []string{"j"},
+					Version: 1,
+					UserData: newUD().
+						encode()},
+			},
+			topics: map[string][]int32{
+				"1": []int32{0},
+				"2": []int32{0},
+				"3": []int32{0},
+				"4": []int32{0},
+				"5": []int32{0},
+				"6": []int32{0},
+				"7": []int32{0},
+				"8": []int32{0},
+				"9": []int32{0},
+				"a": []int32{0},
+				"b": []int32{0},
+				"c": []int32{0},
+				"d": []int32{0},
+				"e": []int32{0},
+				"f": []int32{0},
+				"g": []int32{0},
+				"h": []int32{0},
+				"i": []int32{0},
+				"j": []int32{0},
 			},
 		},
 

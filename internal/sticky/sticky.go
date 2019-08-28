@@ -5,14 +5,12 @@
 // https://github.com/Shopify/sarama/pull/1416/files/b29086bdaae0da7ce71eae3f854d50685fd6b631#r315005878
 package sticky
 
-// Give each member in same rung to steal one,
-
 import (
 	"fmt"
 	"reflect"
 	"sort"
 
-	"github.com/google/btree"
+	"github.com/twmb/go-rbtree"
 
 	"github.com/twmb/kgo/kmsg"
 )
@@ -31,13 +29,20 @@ type GroupMember struct {
 	UserData []byte
 }
 
+type groupMember struct {
+	id       string
+	version  int16
+	topics   map[string]struct{}
+	userData []byte
+}
+
 type Plan map[string]map[string][]int32
 
 type balancer struct {
 	// members are the members in play for this balance.
 	//
 	// This is built in newBalancer mapping member IDs to the GroupMember.
-	members map[string]GroupMember
+	members map[string]groupMember
 
 	// topics are the topic names and partitions that the client knows of
 	// and passed to be used for balancing.
@@ -58,15 +63,15 @@ type balancer struct {
 	//
 	// The nodes in the btree reference values in plan, meaning updates in
 	// this field are visible in plan.
-	planByNumPartitions *btree.BTree
+	planByNumPartitions *rbtree.Tree
 
 	// isFreshAssignment tracks whether this is the first join for a group.
 	// This is true if no member has userdata (plan is empty)
 	isFreshAssignment bool
-	// areSubscriptionsIdentical tracks if every member can consume the
+	// subscriptionsAreIdentical tracks if every member can consume the
 	// same partitions. If true, this makes the isBalanced check much
 	// simpler.
-	areSubscriptionsIdentical bool
+	subscriptionsAreIdentical bool
 
 	// partitionConsumers maps all possible partitions to consume to the
 	// members that are consuming them.
@@ -103,7 +108,7 @@ type topicPartition struct {
 
 func newBalancer(members []GroupMember, topics map[string][]int32) *balancer {
 	b := &balancer{
-		members: make(map[string]GroupMember, len(members)),
+		members: make(map[string]groupMember, len(members)),
 		topics:  topics,
 
 		plan: make(membersPartitions),
@@ -114,13 +119,22 @@ func newBalancer(members []GroupMember, topics map[string][]int32) *balancer {
 		consumers2AllPotentialPartitions: make(staticMembersPartitions),
 	}
 	for _, member := range members {
-		b.members[member.ID] = member
+		gm := groupMember{
+			id:       member.ID,
+			version:  member.Version,
+			topics:   make(map[string]struct{}, len(member.Topics)),
+			userData: member.UserData,
+		}
+		for _, topic := range member.Topics {
+			gm.topics[topic] = struct{}{}
+		}
+		b.members[gm.id] = gm
 	}
 	return b
 }
 
 func (b *balancer) into() Plan {
-	plan := make(Plan)
+	plan := make(Plan, len(b.plan))
 	for member, partitions := range b.plan {
 		topics, exists := plan[member]
 		if !exists {
@@ -158,33 +172,35 @@ func (l memberWithPartitions) less(r memberWithPartitions) bool {
 			l.member < r.member
 }
 
-func (l memberWithPartitions) Less(r btree.Item) bool {
+func (l memberWithPartitions) Less(r rbtree.Item) bool {
 	return l.less(r.(memberWithPartitions))
 }
 
 func (m membersPartitions) intoConsumersPartitions() []memberWithPartitions {
 	var consumersPartitions []memberWithPartitions
 	for member, partitions := range m {
-		consumersPartitions = append(consumersPartitions, memberWithPartitions{
-			member,
-			partitions,
-		})
+		consumersPartitions = append(consumersPartitions,
+			memberWithPartitions{
+				member,
+				partitions,
+			},
+		)
 	}
 	return consumersPartitions
 }
 
-func (m membersPartitions) btreeByConsumersPartitions() *btree.BTree {
-	bt := btree.New(8)
+func (m membersPartitions) rbtreeByConsumersPartitions() *rbtree.Tree {
+	var t rbtree.Tree
 	for _, memberWithPartitions := range m.intoConsumersPartitions() {
-		bt.ReplaceOrInsert(memberWithPartitions)
+		t.Insert(memberWithPartitions)
 	}
-	return bt
+	return &t
 }
 
 func (mps membersPartitions) deepClone() membersPartitions {
 	clone := make(membersPartitions, len(mps))
 	for member, partitions := range mps {
-		dup := append([]topicPartition(nil), *partitions...)
+		dup := append(make([]topicPartition, 0, len(*partitions)), *partitions...)
 		clone[member] = &dup
 	}
 	return clone
@@ -219,7 +235,7 @@ func Balance(members []GroupMember, topics map[string][]int32) Plan {
 	//
 	// We init this after initAllConsumersPartitions, which can add new
 	// members that were not in the prior plan.
-	b.planByNumPartitions = b.plan.btreeByConsumersPartitions()
+	b.planByNumPartitions = b.plan.rbtreeByConsumersPartitions()
 	b.assignUnassignedPartitions()
 
 	b.balance()
@@ -250,12 +266,11 @@ func (b *balancer) parseMemberMetadata() {
 	partitionConsumersByGeneration := make(map[topicPartition][]memberGeneration)
 
 	for _, member := range b.members {
-		memberPlan, generation := deserializeUserData(member.Version, member.UserData)
+		memberPlan, generation := deserializeUserData(member.version, member.userData)
 		memberGeneration := memberGeneration{
-			member.ID,
+			member.id,
 			generation,
 		}
-		fmt.Println("deserialized", memberPlan, generation)
 		for _, topicPartition := range memberPlan {
 			partitionConsumers := partitionConsumersByGeneration[topicPartition]
 			var doublyConsumed bool
@@ -342,16 +357,16 @@ func deserializeUserData(version int16, userdata []byte) (memberPlan []topicPart
 // preference unnecessarily.
 func (b *balancer) initAllConsumersPartitions() {
 	for _, member := range b.members {
-		for _, topic := range member.Topics {
+		for topic := range member.topics {
 			partitions, exists := b.topics[topic]
 			if !exists {
 				continue
 			}
 			for _, partition := range partitions {
-				consumerPotentialPartitions := b.consumers2AllPotentialPartitions[member.ID]
+				consumerPotentialPartitions := b.consumers2AllPotentialPartitions[member.id]
 				if consumerPotentialPartitions == nil {
 					consumerPotentialPartitions = make(map[topicPartition]struct{})
-					b.consumers2AllPotentialPartitions[member.ID] = consumerPotentialPartitions
+					b.consumers2AllPotentialPartitions[member.id] = consumerPotentialPartitions
 				}
 
 				topicPartition := topicPartition{topic, partition}
@@ -362,14 +377,14 @@ func (b *balancer) initAllConsumersPartitions() {
 				}
 
 				consumerPotentialPartitions[topicPartition] = struct{}{}
-				partitionPotentialConsumers[member.ID] = struct{}{}
+				partitionPotentialConsumers[member.id] = struct{}{}
 			}
 		}
 		// Lastly, if this is a new member, the plan everything is
 		// using will not know of it. We add that it is consuming nothing
 		// in that plan here.
-		if _, exists := b.plan[member.ID]; !exists {
-			b.plan[member.ID] = new([]topicPartition)
+		if _, exists := b.plan[member.id]; !exists {
+			b.plan[member.id] = new([]topicPartition)
 		}
 	}
 
@@ -394,7 +409,7 @@ func (b *balancer) setIfMemberSubscriptionsIdentical() {
 			return
 		}
 	}
-	b.areSubscriptionsIdentical = true
+	b.subscriptionsAreIdentical = true
 }
 
 // assignUnassignedPartitions does what the name says.
@@ -420,8 +435,7 @@ func (b *balancer) assignUnassignedPartitions() {
 
 			delete(unvisitedPartitions, partition)
 
-			// O(N^2), can improve TODO make members topics a map
-			if !strsHas(b.members[member].Topics, partition.topic) {
+			if _, memberStillWantsTopic := b.members[member].topics[partition.topic]; !memberStillWantsTopic {
 				unassignedPartitions = append(unassignedPartitions, partition)
 				continue
 			}
@@ -449,24 +463,20 @@ func (b *balancer) assignUnassignedPartitions() {
 func (b *balancer) balance() {
 	// Make two copies of our current plan: one for the balance score
 	// calculation later, and one for easy steal lookup in reassigning.
-	preBalancePlan := b.plan.deepClone()
-	startingPlan := make(map[string]map[topicPartition]struct{}, len(preBalancePlan))
-	for member, partitions := range preBalancePlan {
+	prebalancePlan := b.plan.deepClone()
+	startingPlan := make(map[string]map[topicPartition]struct{}, len(prebalancePlan))
+	for member, partitions := range prebalancePlan {
 		memberPartitions := make(map[topicPartition]struct{}, len(*partitions))
 		for _, partition := range *partitions {
 			memberPartitions[partition] = struct{}{}
 		}
 		startingPlan[member] = memberPartitions
 	}
+	_ = startingPlan
 
-	didReassign := b.doReassigning(startingPlan)
+	b.shuffle()
 
-	if !b.isFreshAssignment && didReassign && calcBalanceScore(b.plan) >= calcBalanceScore(preBalancePlan) {
-		fmt.Printf("resetting plan, score sux, before: %d, after %d\n",
-			calcBalanceScore(preBalancePlan),
-			calcBalanceScore(b.plan))
-		b.plan = preBalancePlan
-	}
+	// TODO this should be unnecessary once 3scheme is done
 }
 
 // calcBalanceScore calculates how balanced a plan is by summing deltas of how
@@ -501,327 +511,58 @@ func calcBalanceScore(plan membersPartitions) int {
 // partition, in order from members with smallest partitions, and assigns
 // the partition to it.
 func (b *balancer) assignPartition(unassigned topicPartition) {
-	b.planByNumPartitions.Ascend(func(item btree.Item) bool {
-		memberWithFewestPartitions := item.(memberWithPartitions)
+	for it := rbtree.IterAt(b.planByNumPartitions.Min()); it.Ok(); it.Right() {
+		memberWithFewestPartitions := it.Item().(memberWithPartitions)
 		member := memberWithFewestPartitions.member
 		memberPotentials := b.consumers2AllPotentialPartitions[member]
-		if _, memberCanUse := memberPotentials[unassigned]; !memberCanUse {
-			return true
+		if _, memberCanConsumePartition := memberPotentials[unassigned]; !memberCanConsumePartition {
+			continue
 		}
-
-		// Before we change the sort order, delete this item from our
-		// btree. If we edo this after changing the order, the tree
-		// will not be able to delete the item.
-		b.planByNumPartitions.Delete(item)
 
 		partitions := memberWithFewestPartitions.partitions
 		*partitions = append(*partitions, unassigned)
-		// Add the item back to its new sorted position.
-		b.planByNumPartitions.ReplaceOrInsert(memberWithFewestPartitions)
-
+		b.planByNumPartitions.Fix(it.Node()) // can do since Item contains pointer
 		b.partitionConsumers[unassigned] = member
-		return false
-	})
+		return
+	}
 }
 
-// doReassigning loops trying to move partitions until the plan is balanced
+// shuffle loops trying to move partitions until the plan is balanced
 // or until no moves happen.
-func (b *balancer) doReassigning(startingPlan map[string]map[topicPartition]struct{}) (didReassign bool) {
-	downstreamFromTo := make(map[string]map[string][]topicPartition) // up => down => what down wants from up
-	downstreamToFrom := make(map[string]map[string]int)              // down => who it is on up, and how many we want to steal
-	downstreamRegistered := make(map[string]struct{})
-	modified := true
-	for modified {
-		modified = false
-		b.planByNumPartitions.Ascend(func(item btree.Item) bool {
-			leastLoaded := item.(memberWithPartitions)
-			myMember := leastLoaded.member
-			fmt.Println("on", myMember)
-			myPartitions := *leastLoaded.partitions
+//
+// O(M * P^2) i.e. not great.
+func (b *balancer) shuffle() {
+	// Map of dependents down,
+	// If we see there is a dependent down,
+	// Steal up,
+	// Reset at dependent
+	for it := rbtree.IterAt(b.planByNumPartitions.Min()); it.Ok(); it.Right() { // O(M)
+		leastLoaded := it.Item().(memberWithPartitions)
+		myMember := leastLoaded.member
+		myPartitions := *leastLoaded.partitions
 
-			if _, isDownstreamed := downstreamRegistered[myMember]; isDownstreamed {
-				fmt.Println("I am downstream, skipping")
-				return true
+		var mostHavingMember string
+		var mostHavingNum int
+		var stealPart topicPartition
+		for wantPart := range b.consumers2AllPotentialPartitions[myMember] { // O(P)
+			current := b.partitionConsumers[wantPart]
+			if current == myMember {
+				continue
 			}
+			currentPartitions := *b.plan[current]
+			if len(currentPartitions) > mostHavingNum &&
+				len(currentPartitions) > len(myPartitions)+1 {
 
-			if len(myPartitions) == len(b.consumers2AllPotentialPartitions[myMember]) {
-				fmt.Println("I have all I can have!")
-				return true
+				mostHavingMember = current
+				mostHavingNum = len(currentPartitions)
+				stealPart = wantPart
 			}
-
-			// We, the least loaded member, try to steal a partition we can own
-			// from the most-loaded member of all members owning our partitions.
-			type stealCandidate struct {
-				member    string
-				partition topicPartition
-			}
-			var stealCandidates []stealCandidate
-			var mostOtherPartitions int
-			for partition := range b.consumers2AllPotentialPartitions[myMember] {
-				otherMember := b.partitionConsumers[partition]
-				if otherMember == leastLoaded.member {
-					continue
-				}
-
-				otherPartitions := *b.plan[otherMember]
-				_, otherIsDownstreamed := downstreamToFrom[otherMember]
-
-				if (len(myPartitions) < len(otherPartitions) || otherIsDownstreamed && len(myPartitions) == len(otherPartitions)) &&
-					len(otherPartitions) >= mostOtherPartitions {
-
-					if mostOtherPartitions > 0 &&
-						mostOtherPartitions < len(otherPartitions) {
-						fmt.Println("resetting steal candidates, found member with higher partitions", len(otherPartitions))
-						stealCandidates = stealCandidates[:0]
-					}
-					mostOtherPartitions = len(otherPartitions)
-					fmt.Printf("found candidate with %d partitions to steal from %s: %v\n", mostOtherPartitions, otherMember, partition)
-					stealCandidates = append(stealCandidates, stealCandidate{
-						otherMember,
-						partition,
-					})
-				}
-			}
-
-			if len(stealCandidates) == 0 {
-				// TODO save pivot to always go GTE this
-				fmt.Println("no steal candidates :(")
-				return true
-			}
-
-			steal := stealCandidates[0]
-
-			// If the candidate members have only one more partition than us,
-			// then we conditionally steal.
-			// If we know stealing will help a dependent member, we steal and
-			// bubble down our help.
-			// Otherwise, _we_ register that we are a dependent member on what
-			// we would steal.
-			if mostOtherPartitions == len(myPartitions)+1 {
-				// If there is a negative delta downstream of us, we steal!
-				if downstreamTo, hasDownstream := downstreamFromTo[myMember]; hasDownstream {
-					b.reassignPartition(steal.partition, steal.member, myMember)
-					fmt.Printf("%s: saw downstreamTo, stealing t %s p %d from %s\n", myMember, steal.partition.topic, steal.partition.partition, steal.member)
-					b.bubbleDownstream(myMember, downstreamTo, downstreamFromTo)
-
-					didReassign = true
-					modified = true
-					return false
-				}
-
-				// Stealing any partition in this set will not help our score.
-				// Record among all members that, if they overflow, they can
-				// offload to us.
-				for _, candidate := range stealCandidates {
-					downstreamTo := downstreamFromTo[candidate.member]
-					if downstreamTo == nil {
-						downstreamTo = make(map[string][]topicPartition)
-						downstreamFromTo[candidate.member] = downstreamTo
-					}
-					fmt.Printf("registering downstream %s from %s under %s\n", candidate.partition.topic, myMember, candidate.member)
-					downstreamTo[myMember] = append(downstreamTo[myMember], candidate.partition)
-
-					downstreamFrom := downstreamToFrom[myMember]
-					if downstreamFrom == nil {
-						downstreamFrom = make(map[string]int)
-						downstreamToFrom[myMember] = downstreamFrom
-					}
-					downstreamFrom[candidate.member]++
-				}
-				downstreamRegistered[myMember] = struct{}{}
-				return true
-			}
-
-			// If the candidate members have equal partitions to us, then
-			// the candidate must be downstream of something.
-			// We steal, and continue stealing up.
-			if mostOtherPartitions == len(myPartitions) {
-				for _, candidate := range stealCandidates {
-					downstreamTo := downstreamFromTo[candidate.member]
-					if downstreamTo == nil {
-						downstreamTo = make(map[string][]topicPartition)
-						downstreamFromTo[candidate.member] = downstreamTo
-					}
-					fmt.Printf("registering downstream %s from %s under %s\n", candidate.partition.topic, myMember, candidate.member)
-					downstreamTo[myMember] = append(downstreamTo[myMember], candidate.partition)
-
-					downstreamFrom := downstreamToFrom[myMember]
-					if downstreamFrom == nil {
-						downstreamFrom = make(map[string]int)
-						downstreamToFrom[myMember] = downstreamFrom
-					}
-					downstreamFrom[candidate.member]++
-					downstreamRegistered[myMember] = struct{}{}
-				}
-				b.bubbleDownUpstream(myMember, downstreamFromTo, downstreamToFrom)
-				return true
-			}
-
-			fmt.Printf("%s: stealing t %s p %d from %s\n", myMember, steal.partition.topic, steal.partition.partition, steal.member)
-
-			b.reassignPartition(steal.partition, steal.member, myMember)
-			didReassign = true
-			modified = true
-			return false
-		})
-
-	}
-	return didReassign
-}
-
-func (b *balancer) bubbleDownstream(
-	fromMember string,
-	downstreamTo map[string][]topicPartition,
-	downstreamFromTo map[string]map[string][]topicPartition,
-) {
-	fmt.Printf("bubbling downstream from %s\n", fromMember)
-	for downstreamTo != nil {
-		var downMember string
-		var downPotentials []topicPartition
-		for downMember, downPotentials = range downstreamTo {
-			break
-		}
-		steal := downPotentials[len(downPotentials)-1]
-		delete(downstreamTo, downMember)
-		fmt.Printf("chose %s from %s to %s to bubble downstream\n", steal.topic, fromMember, downMember)
-		b.reassignPartition(steal, fromMember, downMember)
-		downstreamTo = downstreamFromTo[downMember]
-		fromMember = downMember
-	}
-}
-
-type downstreams struct {
-	// stealWantersByWhoCanServe maps members to downstream members who
-	// want a partition.
-	// If B has 2 partitions and A has 3, B is downstream from A and
-	// wants one partition.
-	// The second map (B) holds the partitions from A that B wants.
-	// The third map level can be a slice, but is a map for lookup
-	// purposes.
-	//
-	// Left to right, FROM B, A wants any of X partitions.
-	stealWantersByWhoCanServe map[string]map[string]map[topicPartition]struct{}
-
-	// waitingStealersToStealees is the reverse of the above: B wants from A.
-	// The second map (A) holds how many partitions B wants from A.
-	// B could want more than one if there are more dependent levels:
-	// say both C and D have 2, and B has 2, then there three wants
-	// from A.
-	waitingStealersToStealees map[string]wantSteals
-}
-
-type wantSteals struct {
-	numWant     int
-	whoCanServe map[string]struct{}
-}
-
-func (d *downstreams) addPartitionWant(victim, me string, partition topicPartiion) {
-	stealWantersFromVictim := d.stealWantersByWhoCanServe[victim]
-	if stealWantersFromVictim == nil {
-		stealWantersFromVictim = make(map[string]map[topicPartition]struct{})
-		d.stealWantersByWhoCanServe[victim] = stealWantersFromVictim
-	}
-
-	myWantsFromVictim := stealWantersFromVictim[me]
-	if myWantsFromVictim == nil {
-		myWantsFromVictim = make(map[topicPartition]struct{})
-		stealWantersFromVictim[me] = myWantsFromVictim
-	}
-
-	// Register that to wants any partitions in the set from from.
-	fmt.Printf("registering downstream %s from %s under %s\n", partition.topic, victim, me)
-	myWantsFromVictim[partition] = struct{}{}
-
-	myStealWants := d.waitingStealersToStealees[me]
-	myStealWants.numWant++
-	if myStealWants.whoCanServe == nil {
-		myStealWants.whoCanServe = make(map[string]struct{})
-	}
-	myStealWants.whoCanServe[victim] = struct{}{}
-
-	// We also need to add in anything waiting on us.
-	for stealWantersOfMyself := range d.stealWantersByWhoCanServe[me] {
-		for stealWanterOfMyself := range stealWantersOfMyself {
-			myStealWants.whoCanServe.numWant += d.waitingStealersToStealees[stealWanterOfMyself].numWant
-		}
-	}
-
-	d.waitingStealersToStealees[me] = myStealWants
-}
-
-// trackFromTo records a movement of a partition from from to to.
-func (d *downstreams) trackStolenPartition(victim, me string, partition topicPartition) {
-	myWantsFromVictim := d.stealWantersByWhoCanServe[victim][me]
-	delete(myWantsFromVictim, partition)
-	// If there is no more possibility to steal from from to to, we delete
-	// stop tracking to under from.
-	var stopWantingFromVictim bool
-	if len(myWantsFromVictim) == 0 {
-		stopWantingFromVictim = true
-		delete(d.stealWantersByWhoCanServe[victim], me)
-		// If nobody wants to steal from from anymore, we delete from.
-		if len(d.stealWantersByWhoCanServe[victim]) == 0 {
-			delete(d.stealWantersByWhoCanServe, victim)
-		}
-	}
-
-	myStealWants := d.waitingStealersToStealees[me]
-	myStealWants.numWant--
-	if stopWantingFromVictim {
-		delete(myStealWants, victim)
-	}
-	if myStealWants.numWant == 0 {
-		delete(d.waitingStealersToStealees, me)
-	} else {
-		d.waitingStealersToStealees[me] = myStealWants
-	}
-}
-
-func (b *balancer) bubbleDownUpstream(
-	toMember string,
-	d *downstreams,
-) {
-	fmt.Println("PLAN BEFORE BUBBLIN DOWN UP")
-	for member, partitions := range b.plan {
-		fmt.Printf("%s => %v\n", member, *partitions)
-	}
-	fmt.Printf("bubbling down upstream to %s\n", toMember)
-	on := toMember
-	for {
-		// Who can we take from?
-		takeFroms := downstreamToFrom[on]
-		if takeFroms == nil {
-			// If nobody, then the prior loop reached the top.
-			break
-		}
-		var takeFrom string
-		for takeFrom = range takeFroms {
-			break
-		}
-		takeFroms[takeFrom]--
-		if takeFroms[takeFrom] == 0 {
-			delete(takeFroms, takeFrom)
 		}
 
-		var downPotentials []topicPartition
-		for _, downPotentials = range downstreamFromTo[takeFrom] {
-			break
+		if mostHavingMember != "" {
+			b.reassignPartition(stealPart, mostHavingMember, myMember)
+			it.Reset(rbtree.Before(b.planByNumPartitions.Min()))
 		}
-
-		steal := downPotentials[len(downPotentials)-1]
-		fmt.Printf("stealing %s from upstream %s to %s\n", steal.topic, takeFrom, on)
-		b.reassignPartition(steal, takeFrom, on)
-		on = takeFrom
-	}
-
-	fmt.Println("done bubbling up down, current plan")
-	for member, partitions := range b.plan {
-		fmt.Printf("%s => %v\n", member, *partitions)
-	}
-	fmt.Println("maybe bubbling downstream")
-
-	if downstreamTo, hasDownstream := downstreamFromTo[toMember]; hasDownstream {
-		b.bubbleDownstream(toMember, downstreamTo, downstreamFromTo)
 	}
 }
 
@@ -833,14 +574,19 @@ func (b *balancer) reassignPartition(partition topicPartition, srcMember, dstMem
 	newPartitions := b.plan[dstMember]
 
 	// Remove the elements from our btree before we change the sort order.
-	b.planByNumPartitions.Delete(memberWithPartitions{
-		srcMember,
-		oldPartitions,
-	})
-	b.planByNumPartitions.Delete(memberWithPartitions{
-		dstMember,
-		newPartitions,
-	})
+	// We have to delete both now rather than fixing both below because we
+	// change two sort orders.
+	srcNode := b.planByNumPartitions.Delete(
+		b.planByNumPartitions.Find(memberWithPartitions{
+			srcMember,
+			oldPartitions,
+		}))
+
+	dstNode := b.planByNumPartitions.Delete(
+		b.planByNumPartitions.Find(memberWithPartitions{
+			dstMember,
+			newPartitions,
+		}))
 
 	for idx, oldPartition := range *oldPartitions { // remove from old member
 		if oldPartition == partition {
@@ -856,14 +602,8 @@ func (b *balancer) reassignPartition(partition topicPartition, srcMember, dstMem
 	fmt.Printf("%s => %v\n", dstMember, *newPartitions)
 
 	// Now add back the changed elements to our btree.
-	b.planByNumPartitions.ReplaceOrInsert(memberWithPartitions{
-		srcMember,
-		oldPartitions,
-	})
-	b.planByNumPartitions.ReplaceOrInsert(memberWithPartitions{
-		dstMember,
-		newPartitions,
-	})
+	b.planByNumPartitions.Reinsert(srcNode)
+	b.planByNumPartitions.Reinsert(dstNode)
 
 	// Finally, update which member is consuming the partition.
 	b.partitionConsumers[partition] = dstMember
