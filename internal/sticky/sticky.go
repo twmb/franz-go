@@ -6,6 +6,7 @@
 package sticky
 
 import (
+	"fmt"
 	"reflect"
 	"sort"
 
@@ -464,20 +465,33 @@ func (b *balancer) assignPartition(unassigned topicPartition) {
 //
 // O(M * P^2) i.e. not great.
 func (b *balancer) shuffle() {
+	var deps dependents
+	deps.reset()
+	var nexts []*rbtree.Node
 	for it := rbtree.IterAt(b.planByNumPartitions.Min()); it.Ok(); it.Right() { // O(M)
 		leastLoaded := it.Item().(memberWithPartitions)
 		myMember := leastLoaded.member
+		fmt.Println("on", myMember)
 		myPartitions := leastLoaded.partitions
 
-		var mostHavingMember string
-		var mostHavingNum int
-		var stealPart topicPartition
+		var (
+			mostHavingMember string
+			mostHavingNum    int
+			stealPart        topicPartition
+
+			equals []memberPartition
+			plus1s []memberPartition
+
+			hasDependent = deps.hasDependent(myMember)
+		)
+
 		for wantPart := range b.consumers2AllPotentialPartitions[myMember] { // O(P)
 			current := b.partitionConsumers[wantPart]
 			if current == myMember {
 				continue
 			}
 			currentPartitions := b.plan[current]
+
 			if len(currentPartitions) > mostHavingNum &&
 				len(currentPartitions) > len(myPartitions)+1 {
 
@@ -485,14 +499,78 @@ func (b *balancer) shuffle() {
 				mostHavingNum = len(currentPartitions)
 				stealPart = wantPart
 			}
+
+			if mostHavingNum > len(myPartitions)+1 {
+				continue
+			}
+
+			mp := memberPartition{
+				current,
+				wantPart,
+			}
+
+			if len(currentPartitions) == len(myPartitions) {
+				equals = append(equals, mp)
+			} else if len(currentPartitions) == len(myPartitions)+1 {
+				plus1s = append(plus1s, mp)
+			}
 		}
 
 		if mostHavingMember != "" {
 			b.reassignPartition(stealPart, mostHavingMember, myMember)
 			it.Reset(rbtree.Before(b.planByNumPartitions.Min()))
+			deps.reset()
+			continue
+		}
+
+		if len(plus1s) > 0 {
+			if hasDependent {
+				deps.bubbleDown(b, plus1s[0].member, myMember, plus1s[0].part)
+				it.Reset(rbtree.Before(b.planByNumPartitions.Min()))
+			} else {
+				var stole bool
+				for _, plus1 := range plus1s {
+					if deps.isDependent(plus1.member) {
+						deps.bubbleDown(b, plus1.member, myMember, plus1.part)
+						it.Reset(rbtree.Before(b.planByNumPartitions.Min()))
+						stole = true
+						break
+					}
+				}
+
+				if !stole {
+					for _, plus1 := range plus1s {
+						deps.addDependent(plus1, myMember)
+					}
+				}
+			}
+
+		} else if len(equals) > 0 {
+			if hasDependent {
+				for _, equal := range equals {
+					deps.addDependent(equal, myMember)
+				}
+			}
 		}
 	}
 }
+
+// If equal,
+// If has downstream (save yes at top of loop)
+// Register down[equal] = append(down[equal], self) (addDependent(self, equal)
+
+// If +1,
+// If has downstream, hasDependent(self)
+// steal to self, bubble down from self
+
+// If +1,
+// If other has up, isDependent(other)
+// steal to self, work from self
+
+// If +1,
+// If not has downstream,
+// If not other has up,
+// addDependent(self, other)
 
 // reassignPartition reassigns a partition from srcMember to dstMember, potentially
 // undoing a prior move if this detects a partition when there-and-back.
@@ -516,10 +594,12 @@ func (b *balancer) reassignPartition(partition topicPartition, srcMember, dstMem
 			newPartitions,
 		}))
 
+	fmt.Printf("reassigning %s from %s to %s\n", partition.topic, srcMember, dstMember)
+
 	delete(oldPartitions, partition)
 	newPartitions[partition] = struct{}{}
 
-	// Now add back the changed elements to our btree.
+	// Now add back the changed elements to our rbtree.
 	b.planByNumPartitions.Reinsert(srcNode)
 	b.planByNumPartitions.Reinsert(dstNode)
 
@@ -527,7 +607,73 @@ func (b *balancer) reassignPartition(partition topicPartition, srcMember, dstMem
 	b.partitionConsumers[partition] = dstMember
 }
 
-// Map of dependents down,
-// If we see there is a dependent down,
-// Steal up,
-// Reset at dependent
+type dependents struct {
+	// down: FROM key, we WANT the values
+	down map[string][]memberPartition
+	// up: FROM key, the values (values) WANT something from us
+	up map[string][]string
+}
+
+func (d *dependents) reset() {
+	fmt.Print("clearing dependents\n\n")
+	if d.down == nil {
+		d.down = make(map[string][]memberPartition)
+		d.up = make(map[string][]string)
+		return
+	}
+	for down := range d.down {
+		delete(d.down, down)
+	}
+	for up := range d.up {
+		delete(d.up, up)
+	}
+}
+
+type memberPartition struct {
+	member string
+	part   topicPartition
+}
+
+func (d dependents) addDependent(src memberPartition, dst string) {
+	fmt.Printf("dependent: %s wants %s from %s\n", dst, src.member, src.part.topic)
+	d.down[dst] = append(d.down[dst], src)
+	d.up[src.member] = append(d.up[src.member], dst)
+}
+
+func (d dependents) hasDependent(src string) bool {
+	fmt.Printf("%s has dependent? %v\n", src, len(d.down[src]) > 0)
+	return len(d.up[src]) > 0
+}
+
+func (d dependents) isDependent(dst string) bool {
+	fmt.Printf("%s is dependent? %v\n", dst, len(d.down[dst]) > 0)
+	return len(d.down[dst]) > 0
+}
+
+func (d dependents) bubbleDown(b *balancer, src, dst string, part topicPartition) {
+	defer d.reset()
+
+start:
+	fmt.Printf("bubbling %s from %s to %s\n", part.topic, src, dst)
+
+	b.reassignPartition(part, src, dst)
+	// dst just stole,
+	// so we try to bubble down from dst,
+	// who is dependent on dst?
+
+	// First, to prevent circles, delete that anything is dependent on the
+	// src we just stole from.
+	delete(d.up, src)
+
+	src = dst
+	furtherDependents, exists := d.up[src]
+	if !exists {
+		return
+	}
+
+	dst = furtherDependents[0]
+	dstWants := d.down[dst]
+	want := dstWants[0]
+	part = want.part
+	goto start
+}
