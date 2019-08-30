@@ -467,90 +467,82 @@ func (b *balancer) assignPartition(unassigned topicPartition) {
 func (b *balancer) shuffle() {
 	var deps dependents
 	deps.reset()
-	var nexts []*rbtree.Node
+
 	for it := rbtree.IterAt(b.planByNumPartitions.Min()); it.Ok(); it.Right() { // O(M)
-		leastLoaded := it.Item().(memberWithPartitions)
-		myMember := leastLoaded.member
-		fmt.Println("on", myMember)
-		myPartitions := leastLoaded.partitions
+		on := it.Item().(memberWithPartitions)
+
+		fmt.Println("on", on.member)
 
 		var (
-			mostHavingMember string
-			mostHavingNum    int
-			stealPart        topicPartition
+			mostMember string
+			mostNum    int
+			toSteal    topicPartition
 
 			equals []memberPartition
 			plus1s []memberPartition
-
-			hasDependent = deps.hasDependent(myMember)
 		)
 
-		for wantPart := range b.consumers2AllPotentialPartitions[myMember] { // O(P)
-			current := b.partitionConsumers[wantPart]
-			if current == myMember {
+		for wantPart := range b.consumers2AllPotentialPartitions[on.member] { // O(P)
+			other := b.partitionConsumers[wantPart]
+			if other == on.member {
 				continue
 			}
-			currentPartitions := b.plan[current]
+			otherPartitions := b.plan[other]
 
-			if len(currentPartitions) > mostHavingNum &&
-				len(currentPartitions) > len(myPartitions)+1 {
+			if len(otherPartitions) > mostNum &&
+				len(otherPartitions) > len(on.partitions)+1 {
 
-				mostHavingMember = current
-				mostHavingNum = len(currentPartitions)
-				stealPart = wantPart
+				mostMember = other
+				mostNum = len(otherPartitions)
+				toSteal = wantPart
 			}
 
-			if mostHavingNum > len(myPartitions)+1 {
+			if mostNum > len(on.partitions)+1 {
 				continue
 			}
 
-			mp := memberPartition{
-				current,
-				wantPart,
-			}
-
-			if len(currentPartitions) == len(myPartitions) {
-				equals = append(equals, mp)
-			} else if len(currentPartitions) == len(myPartitions)+1 {
-				plus1s = append(plus1s, mp)
+			if len(otherPartitions) == len(on.partitions) {
+				equals = append(equals, memberPartition{other, wantPart})
+			} else if len(otherPartitions) == len(on.partitions)+1 {
+				plus1s = append(plus1s, memberPartition{other, wantPart})
 			}
 		}
 
-		if mostHavingMember != "" {
-			b.reassignPartition(stealPart, mostHavingMember, myMember)
-			it.Reset(rbtree.Before(b.planByNumPartitions.Min()))
+		if mostMember != "" {
+			fmt.Println("stealing from most member")
+			b.reassignPartition(toSteal, mostMember, on.member)
+			it.Reset(rbtree.Under(b.planByNumPartitions.Min()))
 			deps.reset()
 			continue
 		}
 
 		if len(plus1s) > 0 {
-			if hasDependent {
-				deps.bubbleDown(b, plus1s[0].member, myMember, plus1s[0].part)
-				it.Reset(rbtree.Before(b.planByNumPartitions.Min()))
+			if deps.hasDependent(on.member) {
+				deps.bubbleDown(b, plus1s[0], on.member)
+				it.Reset(rbtree.Under(b.planByNumPartitions.Min()))
+				continue
 			} else {
-				var stole bool
 				for _, plus1 := range plus1s {
-					if deps.isDependent(plus1.member) {
-						deps.bubbleDown(b, plus1.member, myMember, plus1.part)
-						it.Reset(rbtree.Before(b.planByNumPartitions.Min()))
-						stole = true
-						break
-					}
-				}
-
-				if !stole {
-					for _, plus1 := range plus1s {
-						deps.addDependent(plus1, myMember)
-					}
+					deps.addDependent(plus1, on.member)
 				}
 			}
 
 		} else if len(equals) > 0 {
-			if hasDependent {
+			if deps.hasDependent(on.member) {
 				for _, equal := range equals {
-					deps.addDependent(equal, myMember)
+					deps.addDependent(equal, on.member)
 				}
 			}
+		}
+
+		if len(deps.order) > 0 {
+			found := b.planByNumPartitions.Find(memberWithPartitions{
+				deps.order[0],
+				b.plan[deps.order[0]],
+			})
+			it.Reset(rbtree.Under(found))
+			fmt.Println("resetting before", deps.order[0], "(right:", it.PeekRight(), ", found:", found, ")")
+			deps.order = deps.order[1:]
 		}
 	}
 }
@@ -564,12 +556,7 @@ func (b *balancer) shuffle() {
 // steal to self, bubble down from self
 
 // If +1,
-// If other has up, isDependent(other)
-// steal to self, work from self
-
-// If +1,
 // If not has downstream,
-// If not other has up,
 // addDependent(self, other)
 
 // reassignPartition reassigns a partition from srcMember to dstMember, potentially
@@ -612,6 +599,8 @@ type dependents struct {
 	down map[string][]memberPartition
 	// up: FROM key, the values (values) WANT something from us
 	up map[string][]string
+
+	order []string
 }
 
 func (d *dependents) reset() {
@@ -627,6 +616,7 @@ func (d *dependents) reset() {
 	for up := range d.up {
 		delete(d.up, up)
 	}
+	d.order = d.order[:0]
 }
 
 type memberPartition struct {
@@ -634,46 +624,54 @@ type memberPartition struct {
 	part   topicPartition
 }
 
-func (d dependents) addDependent(src memberPartition, dst string) {
+func (d *dependents) addDependent(src memberPartition, dst string) {
+	if _, srcIsAlreadyDown := d.down[src.member]; srcIsAlreadyDown {
+		fmt.Printf("skipping adding dependent %s wanting %s; src is already down\n", dst, src.member)
+		return
+	}
+
 	fmt.Printf("dependent: %s wants %s from %s\n", dst, src.member, src.part.topic)
+	_, isNewSrc := d.up[src.member]
 	d.down[dst] = append(d.down[dst], src)
 	d.up[src.member] = append(d.up[src.member], dst)
+
+	if isNewSrc {
+		fmt.Println("added", src.member, "to order")
+		// TODO need to order BY LEVEL
+		// So really,
+		// Order planByNumPartition
+		// Group partition levels,
+		// then we can change order here.
+		d.order = append(d.order, src.member)
+	}
 }
 
-func (d dependents) hasDependent(src string) bool {
-	fmt.Printf("%s has dependent? %v\n", src, len(d.down[src]) > 0)
+func (d *dependents) hasDependent(src string) bool {
+	fmt.Printf("%s has dependent? %v\n", src, len(d.up[src]) > 0)
 	return len(d.up[src]) > 0
 }
 
-func (d dependents) isDependent(dst string) bool {
-	fmt.Printf("%s is dependent? %v\n", dst, len(d.down[dst]) > 0)
-	return len(d.down[dst]) > 0
-}
-
-func (d dependents) bubbleDown(b *balancer, src, dst string, part topicPartition) {
+func (d *dependents) bubbleDown(b *balancer, src memberPartition, dst string) {
 	defer d.reset()
 
 start:
-	fmt.Printf("bubbling %s from %s to %s\n", part.topic, src, dst)
+	fmt.Printf("bubbling %s from %s to %s\n", src.part.topic, src.member, dst)
 
-	b.reassignPartition(part, src, dst)
+	b.reassignPartition(src.part, src.member, dst)
 	// dst just stole,
 	// so we try to bubble down from dst,
 	// who is dependent on dst?
 
 	// First, to prevent circles, delete that anything is dependent on the
 	// src we just stole from.
-	delete(d.up, src)
+	delete(d.up, src.member)
 
-	src = dst
-	furtherDependents, exists := d.up[src]
+	furtherDependents, exists := d.up[dst]
 	if !exists {
 		return
 	}
 
 	dst = furtherDependents[0]
-	dstWants := d.down[dst]
-	want := dstWants[0]
-	part = want.part
+	src = d.down[dst][0]
 	goto start
 }
