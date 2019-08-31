@@ -6,6 +6,7 @@
 package sticky
 
 import (
+	"container/list"
 	"fmt"
 	"reflect"
 	"sort"
@@ -106,6 +107,10 @@ type topicPartition struct {
 	partition int32
 }
 
+func (t topicPartition) isZero() bool {
+	return len(t.topic) == 0
+}
+
 func newBalancer(members []GroupMember, topics map[string][]int32) *balancer {
 	b := &balancer{
 		members: make(map[string]groupMember, len(members)),
@@ -164,21 +169,28 @@ type partitionLevel struct {
 	members membersPartitions
 }
 
-func (b *balancer) moveMemberLevel(
+func (b *balancer) fixMemberLevel(
 	src *rbtree.Node,
 	member string,
 	partitions memberPartitions,
+) {
+	b.removeLevelingMember(src, member)
+	newLevel := len(partitions)
+	b.planByNumPartitions.FindWithOrInsertWith(
+		func(n *rbtree.Node) int { return newLevel - n.Item.(partitionLevel).level },
+		func() rbtree.Item { return newPartitionLevel(newLevel) },
+	).Item.(partitionLevel).members[member] = partitions
+}
+
+func (b *balancer) removeLevelingMember(
+	src *rbtree.Node,
+	member string,
 ) {
 	currentLevel := src.Item.(partitionLevel)
 	delete(currentLevel.members, member)
 	if len(currentLevel.members) == 0 {
 		b.planByNumPartitions.Delete(src)
 	}
-	newLevel := len(partitions)
-	b.planByNumPartitions.FindWithOrInsertWith(
-		func(n *rbtree.Node) int { return newLevel - n.Item.(partitionLevel).level },
-		func() rbtree.Item { return newPartitionLevel(newLevel) },
-	).Item.(partitionLevel).members[member] = partitions
 }
 
 func (l partitionLevel) Less(r rbtree.Item) bool {
@@ -461,10 +473,43 @@ func (b *balancer) assignPartition(unassigned topicPartition) {
 			}
 			partitions[unassigned] = struct{}{}
 			b.partitionConsumers[unassigned] = member
-			b.moveMemberLevel(it.Node(), member, partitions)
+			b.fixMemberLevel(it.Node(), member, partitions)
 			return
 		}
 	}
+}
+
+func (b *balancer) findStealPartition(
+	member string,
+	partitions map[topicPartition]struct{},
+	potentials map[topicPartition]struct{},
+	plus1sBase []topicPartition,
+) (
+	steal topicPartition,
+	plus1s []topicPartition,
+) {
+	plus1s = plus1sBase[:0]
+
+	if len(partitions) == len(potentials) {
+		return
+	}
+
+	var stealeeNum int
+	for want := range potentials { // O(P)
+		other := b.partitionConsumers[want]
+		if other == member {
+			continue
+		}
+		otherNum := len(b.plan[other])
+
+		if otherNum > stealeeNum && otherNum > len(partitions)+1 {
+			steal, stealeeNum = want, otherNum
+		}
+		if steal.isZero() && otherNum == len(partitions)+1 {
+			plus1s = append(plus1s, want)
+		}
+	}
+	return
 }
 
 // shuffle loops trying to move partitions until the plan is balanced
@@ -472,220 +517,188 @@ func (b *balancer) assignPartition(unassigned topicPartition) {
 //
 // O(M * P^2) i.e. not great.
 func (b *balancer) shuffle() {
-	//var deps dependents
-	//deps.reset()
+	deps := newDependents()
+
+	var plus1s []topicPartition
 
 iter:
-	for it := rbtree.IterAt(b.planByNumPartitions.Min()); it.Ok(); it.Right() { // O(M)
+	// O(lg(level disparity))?, which is at most P (all partitions in one)?
+	for it := rbtree.IterAt(b.planByNumPartitions.Min()); it.Ok(); it.Right() {
 		level := it.Item().(partitionLevel)
 		fmt.Println("on level", level.level)
 		for member, partitions := range level.members {
 			fmt.Println("on", member)
 
-			var (
-				mostMember     string
-				mostPartitions memberPartitions
+			potentials := b.consumers2AllPotentialPartitions[member]
+			var steal topicPartition
+			steal, plus1s = b.findStealPartition(member, partitions, potentials, plus1s[:0])
 
-				toSteal topicPartition
+			// If we found a member we can steal from, we do so and fix
+			// our position and the stealees position in the level heap.
+			if !steal.isZero() {
+				b.reassignPartition(member, steal)
 
-				//equals []memberPartition
-				//plus1s []memberPartition
-			)
-
-			for wantPart := range b.consumers2AllPotentialPartitions[member] { // O(P)
-				other := b.partitionConsumers[wantPart]
-				if other == member {
-					continue
+				// We only need to reset iterating if we cleared this level,
+				// otherwise we can just continue looping on this level.
+				if len(level.members) == 0 {
+					it.Reset(rbtree.Into(b.planByNumPartitions.Min()))
+					continue iter
 				}
-				otherPartitions := b.plan[other]
-
-				if len(otherPartitions) > len(mostPartitions) &&
-					len(otherPartitions) > len(partitions)+1 {
-
-					mostMember = other
-					mostPartitions = otherPartitions
-					toSteal = wantPart
-				}
-
-				if len(mostPartitions) > len(partitions)+1 {
-					continue
-				}
-
-				/*
-					if len(otherPartitions) == len(partitions) {
-						equals = append(equals, memberPartition{other, wantPart})
-					} else if len(otherPartitions) == len(partitions)+1 {
-						plus1s = append(plus1s, memberPartition{other, wantPart})
-					}
-				*/
+				continue
 			}
 
-			if mostMember != "" {
-				b.reassignPartition(
-					it.Node(),
-					mostMember,
-					mostPartitions,
-					member,
-					partitions,
-					toSteal,
-				)
-				it.Reset(rbtree.Under(b.planByNumPartitions.Min()))
-				//deps.reset()
-				continue iter
+			// We found nothing obvious to steal to steal.
+			//
+			// If we see a +1, and we have a chain, we steal.
+			//
+			// Otherwise, we now will delete ourself from iter
+			// consideration. If we have all we can have and no
+			// dependents, we continue; else, we register ourself
+			// dependent on everything that we could steal from.
+
+			if len(plus1s) > 0 && deps.memberHasDependents(member) {
+				b.reassignPartition(member, plus1s[0])
+
+				deps.bubbleDown(b, member)
+
+				if len(level.members) == 0 {
+					it.Reset(rbtree.Into(b.planByNumPartitions.Min()))
+					continue iter
+				}
+				continue
 			}
 
-			/*
-				if len(plus1s) > 0 {
-					if deps.hasDependent(member) {
-						deps.bubbleDown(b, plus1s[0], member)
-						it.Reset(rbtree.Under(b.planByNumPartitions.Min()))
-						continue
-					} else {
-						for _, plus1 := range plus1s {
-							deps.addDependent(plus1, member)
-						}
-					}
+			//b.removeLevelingMember(it.Node(), member)
+			if len(partitions) == len(potentials) &&
+				!deps.memberHasDependents(member) {
+				continue
+			}
 
-				} else if len(equals) > 0 {
-					if deps.hasDependent(member) {
-						for _, equal := range equals {
-							deps.addDependent(equal, member)
-						}
-					}
-				}
-
-				if len(deps.order) > 0 {
-					found := b.planByNumPartitions.Find(memberWithPartitions{
-						deps.order[0],
-						b.plan[deps.order[0]],
-					})
-					it.Reset(rbtree.Under(found))
-					fmt.Println("resetting before", deps.order[0], "(right:", it.PeekRight(), ", found:", found, ")")
-					deps.order = deps.order[1:]
-				}
-			*/
 		}
 	}
 }
 
-// If equal,
-// If has downstream (save yes at top of loop)
-// Register down[equal] = append(down[equal], self) (addDependent(self, equal)
+func (b *balancer) reassignPartition(dst string, partition topicPartition) {
+	src := b.partitionConsumers[partition]
+	b.partitionConsumers[partition] = dst
 
-// If +1,
-// If has downstream, hasDependent(self)
-// steal to self, bubble down from self
+	srcPartitions := b.plan[src]
+	dstPartitions := b.plan[dst]
 
-// If +1,
-// If not has downstream,
-// addDependent(self, other)
+	fmt.Printf("reassigning %s from %s to %s\n", partition.topic, src, dst)
 
-// reassignPartition reassigns a partition from srcMember to dstMember, potentially
-// undoing a prior move if this detects a partition when there-and-back.
-// 2*O(log members)
-func (b *balancer) reassignPartition(
-	dstStartNode *rbtree.Node,
-	srcMember string,
-	srcPartitions memberPartitions,
-	dstMember string,
-	dstPartitions memberPartitions,
-	steal topicPartition,
-) {
-	fmt.Printf("reassigning %s from %s to %s\n", steal.topic, srcMember, dstMember)
+	delete(srcPartitions, partition)
+	dstPartitions[partition] = struct{}{}
 
-	dstPartitions[steal] = struct{}{}
-	b.moveMemberLevel(dstStartNode, dstMember, dstPartitions)
-
-	srcStartNode := b.planByNumPartitions.FindWith(func(n *rbtree.Node) int {
-		return len(srcPartitions) - n.Item.(partitionLevel).level
-	})
-	delete(srcPartitions, steal)
-	b.moveMemberLevel(srcStartNode, srcMember, srcPartitions)
-
-	b.partitionConsumers[steal] = dstMember
+	b.fixMemberLevel(
+		b.planByNumPartitions.FindWith(func(n *rbtree.Node) int {
+			return len(srcPartitions) + 1 - n.Item.(partitionLevel).level
+		}),
+		src,
+		srcPartitions,
+	)
+	b.fixMemberLevel(
+		b.planByNumPartitions.FindWith(func(n *rbtree.Node) int {
+			return len(dstPartitions) - 1 - n.Item.(partitionLevel).level
+		}),
+		dst,
+		dstPartitions,
+	)
 }
-
-/*
 
 type dependents struct {
-	// down: FROM key, we WANT the values
-	down map[string][]memberPartition
-	// up: FROM key, the values (values) WANT something from us
-	up map[string][]string
-
-	order []string
+	chains map[string]*chain
 }
 
-func (d *dependents) reset() {
-	fmt.Print("clearing dependents\n\n")
-	if d.down == nil {
-		d.down = make(map[string][]memberPartition)
-		d.up = make(map[string][]string)
-		return
-	}
-	for down := range d.down {
-		delete(d.down, down)
-	}
-	for up := range d.up {
-		delete(d.up, up)
-	}
-	d.order = d.order[:0]
-}
-
-type memberPartition struct {
-	member string
-	part   topicPartition
-}
-
-func (d *dependents) addDependent(src memberPartition, dst string) {
-	if _, srcIsAlreadyDown := d.down[src.member]; srcIsAlreadyDown {
-		fmt.Printf("skipping adding dependent %s wanting %s; src is already down\n", dst, src.member)
-		return
-	}
-
-	fmt.Printf("dependent: %s wants %s from %s\n", dst, src.member, src.part.topic)
-	_, isNewSrc := d.up[src.member]
-	d.down[dst] = append(d.down[dst], src)
-	d.up[src.member] = append(d.up[src.member], dst)
-
-	if isNewSrc {
-		fmt.Println("added", src.member, "to order")
-		// TODO need to order BY LEVEL
-		// So really,
-		// Order planByNumPartition
-		// Group partition levels,
-		// then we can change order here.
-		d.order = append(d.order, src.member)
+func newDependents() *dependents {
+	return &dependents{
+		chains: make(map[string][]*chain),
 	}
 }
 
-func (d *dependents) hasDependent(src string) bool {
-	fmt.Printf("%s has dependent? %v\n", src, len(d.up[src]) > 0)
-	return len(d.up[src]) > 0
+func (deps *dependents) memberHasDependents(member string) bool {
+	return len(deps.chains[member]) > 0
 }
 
-func (d *dependents) bubbleDown(b *balancer, src memberPartition, dst string) {
-	defer d.reset()
-
+func (deps *dependents) bubbleDown(b *balancer, src string) {
+	srcChains := deps.chains[src]
 start:
-	fmt.Printf("bubbling %s from %s to %s\n", src.part.topic, src.member, dst)
-
-	b.reassignPartition(src.part, src.member, dst)
-	// dst just stole,
-	// so we try to bubble down from dst,
-	// who is dependent on dst?
-
-	// First, to prevent circles, delete that anything is dependent on the
-	// src we just stole from.
-	delete(d.up, src.member)
-
-	furtherDependents, exists := d.up[dst]
-	if !exists {
-		return
+	minChain := srcChains[0]
+	for _, chain := range srcChains[1:] {
+		if chain.minParts < minChain.minParts {
+			minChain = chain
+		}
 	}
 
-	dst = furtherDependents[0]
-	src = d.down[dst][0]
-	goto start
+	dstElem := minChain.list.Front()
+	dst := dstElem.Value.(string)
+
+bubble:
+	fmt.Printf("bubble down, src %s, dst %s\n", src, dst)
+	var take topicPartition
+	for take = range b.consumers2AllPotentialPartitions[src] {
+		if _, canTake := b.partitions2AllPotentialConsumers[take][dst]; canTake {
+			break
+		}
+	}
+
+	// If the chain we chose actually cannot take anything, then a
+	// different equal chain under us took whatever this one could have.
+	//
+	// We delete this chain, since this member will never have another
+	// partition for this chain, and we go back to the start to work on the
+	// other equal chain.
+	//
+	// Can this be transitively messed up?
+	if take.isZero() {
+		srcChains = srcChains[1:]
+		deps.chains[src] = srcChains
+		goto start
+	}
+
+	b.reassignPartition(dst, take)
+	dstElem = dstElem.Next()
+	if dstElem != nil {
+		src = dst
+		dst = dstElem.Value.(string)
+		if len(b.plan[dst]) != minChain.minParts {
+			goto bubble
+		}
+	}
+
+	if len(b.plan[dst]) > minChain.minParts {
+		minChain.minParts++
+	}
+	minChain.totParts++
 }
-*/
+
+type chain struct {
+	list     list.List
+	minParts int
+	totParts int
+
+	possibleParts map[topicPartition]struct{}
+}
+
+func newChain() *chain {
+	c := &chain{
+		possibleParts: make(map[topicPartition]struct{}),
+	}
+	c.list.Init()
+	return c
+}
+
+func (c *chain) pushMember(member string, numParts int, possiblePartitions map[topicPartition]struct{}) {
+	c.list.PushBack(member)
+	if c.minParts == 0 {
+		c.minParts = numParts
+	}
+	c.totParts += numParts
+	for possiblePartition := range possiblePartitions {
+		c.possibleParts[possiblePartition] = struct{}{}
+	}
+}
+
+func (c *chain) maxParts() int {
+	return len(c.possibleParts)
+}
