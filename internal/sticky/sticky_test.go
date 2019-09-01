@@ -867,3 +867,84 @@ func Test_stickyBalanceStrategy_Plan(t *testing.T) {
 		})
 	}
 }
+
+func BenchmarkOne(b *testing.B) {
+	// Start:
+	// A: [1 2 3]
+	// B: [1 2 3 4 5 6]
+	// C: [4 5 6 7 8 9]
+	// D: [6 7 8 9 a b c d e f]
+	// E: [6 7 8 9 a b c d e f]
+	//
+	// A -> 1 2
+	// B -> 3
+	// C -> 4 5
+	// D -> 6 7
+	// E -> 8 9 a b c d e f
+	//
+	// Ideal:
+	// A -> 1 2 3
+	// B -> 4 5 6
+	// C -> 7 8 9
+	// D -> a b c
+	name := "big disbalance to equal"
+	members := []GroupMember{
+		{ID: "A", Topics: []string{"1", "2", "3"},
+			Version: 1,
+			UserData: newUD().
+				assign("1", 0).
+				assign("2", 0).
+				encode()},
+		{ID: "B", Topics: []string{"1", "2", "3", "4", "5", "6"},
+			Version: 1,
+			UserData: newUD().
+				assign("3", 0).
+				encode()},
+		{ID: "C", Topics: []string{"4", "5", "6", "7", "8", "9"},
+			Version: 1,
+			UserData: newUD().
+				assign("4", 0).
+				assign("5", 0).
+				encode()},
+		{ID: "D", Topics: []string{"6", "7", "8", "9", "a", "b", "c", "d", "e", "f"},
+			Version: 1,
+			UserData: newUD().
+				assign("6", 0).
+				assign("7", 0).
+				encode()},
+		{ID: "E", Topics: []string{"6", "7", "8", "9", "a", "b", "c", "d", "e", "f"},
+			Version: 1,
+			UserData: newUD().
+				assign("8", 0).
+				assign("9", 0).
+				assign("a", 0).
+				assign("b", 0).
+				assign("c", 0).
+				assign("d", 0).
+				assign("e", 0).
+				assign("f", 0).
+				encode()},
+	}
+	topics := map[string][]int32{
+		"1": []int32{0},
+		"2": []int32{0},
+		"3": []int32{0},
+		"4": []int32{0},
+		"5": []int32{0},
+		"6": []int32{0},
+		"7": []int32{0},
+		"8": []int32{0},
+		"9": []int32{0},
+		"a": []int32{0},
+		"b": []int32{0},
+		"c": []int32{0},
+		"d": []int32{0},
+		"e": []int32{0},
+		"f": []int32{0},
+	}
+	b.Run(name, func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			Balance(members, topics)
+		}
+	})
+}

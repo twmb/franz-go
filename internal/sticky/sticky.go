@@ -6,7 +6,6 @@
 package sticky
 
 import (
-	"fmt"
 	"reflect"
 	"sort"
 
@@ -534,11 +533,11 @@ func (b *balancer) shuffle() {
 	// O(lg(level disparity))?, which is at most P (all partitions in one)?
 	for min := b.planByNumPartitions.Min(); min != nil; min = b.planByNumPartitions.Min() {
 		level := min.Item.(partitionLevel)
-		fmt.Println("on level", level.level, "with", len(level.members), "members")
 		for len(level.members) > 0 {
 			for member, partitions := range level.members {
-				fmt.Println("on", member)
 
+				// TODO evaluate whether we should "findStealPartition" at all
+				// vs. just using the stealGraph
 				potentials := b.consumers2AllPotentialPartitions[member]
 				steal := b.findStealPartition(member, partitions, potentials)
 
@@ -551,10 +550,8 @@ func (b *balancer) shuffle() {
 
 				// If we could not steal from a big imbalance, we may be
 				// have a transitive steal.
-				fmt.Println("checking steal path for", member)
 				stealPath, found := b.stealGraph.findSteal(member)
 				if found {
-					fmt.Println(member, "found path", stealPath)
 					for _, segment := range stealPath {
 						b.reassignPartition(segment.dst, segment.part)
 					}
@@ -579,8 +576,6 @@ func (b *balancer) reassignPartition(dst string, partition topicPartition) {
 
 	srcPartitions := b.plan[src]
 	dstPartitions := b.plan[dst]
-
-	fmt.Printf("reassigning %s from %s (at %d) to %s (at %d)\n", partition.topic, src, len(srcPartitions), dst, len(dstPartitions))
 
 	delete(srcPartitions, partition)
 	dstPartitions[partition] = struct{}{}
