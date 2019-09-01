@@ -99,6 +99,8 @@ type balancer struct {
 	//
 	// This is built once and never modified thereafter.
 	partitions2AllPotentialConsumers staticPartitionMembers
+
+	stealGraph graph
 }
 
 type topicPartition struct {
@@ -121,6 +123,8 @@ func newBalancer(members []GroupMember, topics map[string][]int32) *balancer {
 
 		partitions2AllPotentialConsumers: make(staticPartitionMembers),
 		consumers2AllPotentialPartitions: make(staticMembersPartitions),
+
+		stealGraph: newGraph(),
 	}
 	for _, member := range members {
 		gm := groupMember{
@@ -243,6 +247,7 @@ func Balance(members []GroupMember, topics map[string][]int32) Plan {
 	// members that were not in the prior plan.
 	b.planByNumPartitions = b.plan.rbtreeByLevel()
 	b.assignUnassignedPartitions()
+	b.initStealGraph()
 
 	b.balance()
 
@@ -455,6 +460,22 @@ func (b *balancer) assignUnassignedPartitions() {
 	}
 }
 
+func (b *balancer) initStealGraph() {
+	for member, partitions := range b.plan {
+		b.stealGraph.add(member, partitions)
+	}
+
+	for member := range b.plan {
+		for potential := range b.consumers2AllPotentialPartitions[member] {
+			owner := b.partitionConsumers[potential]
+			if owner == member {
+				continue
+			}
+			b.stealGraph.link(member, potential)
+		}
+	}
+}
+
 func (b *balancer) balance() {
 	b.shuffle()
 }
@@ -491,7 +512,7 @@ func (b *balancer) findStealPartition(
 	}
 
 	var stealeeNum int
-	for want := range potentials { // O(P)
+	for want := range potentials { // O(P); maybe switch to ordered heap ? Would be M log(M) ?
 		other := b.partitionConsumers[want]
 		if other == member {
 			continue
@@ -510,7 +531,6 @@ func (b *balancer) findStealPartition(
 //
 // O(M * P^2) i.e. not great.
 func (b *balancer) shuffle() {
-	g := newGraph()
 
 iter:
 	// O(lg(level disparity))?, which is at most P (all partitions in one)?
@@ -521,8 +541,7 @@ iter:
 			fmt.Println("on", member)
 
 			potentials := b.consumers2AllPotentialPartitions[member]
-			var steal topicPartition
-			steal = b.findStealPartition(member, partitions, potentials)
+			steal := b.findStealPartition(member, partitions, potentials)
 
 			// If we found a member we can steal from, we do so and fix
 			// our position and the stealees position in the level heap.
@@ -546,8 +565,27 @@ iter:
 			// consideration. If we have all we can have and no
 			// dependents, we continue; else, we register ourself
 			// dependent on everything that we could steal from.
-			g.add(member, partitions)
-			//b.removeLevelingMember(it.Node(), member)
+			//fmt.Printf("removing %s\n", member)
+			//b.removeLevelingMember(
+			//	b.planByNumPartitions.FindWith(func(n *rbtree.Node) int {
+			//		return len(partitions) - n.Item.(partitionLevel).level
+			//	}),
+			//	member,
+			//)
+		}
+
+		// Everything remaining in this level could not steal a partition.
+		fmt.Println("on level", level.level, "finding steal paths for under levels")
+		for member := range b.stealGraph.lvl2node[level.level-1] {
+			fmt.Println("checking steal path for", member)
+			stealPath, found := b.stealGraph.findSteal(member)
+			if found {
+				fmt.Println(member, "found path", stealPath)
+				for _, segment := range stealPath {
+					b.reassignPartition(segment.dst, segment.part)
+				}
+				it.Reset(rbtree.Into(b.planByNumPartitions.Min()))
+			}
 		}
 
 		// Every time we finish a level
@@ -583,4 +621,6 @@ func (b *balancer) reassignPartition(dst string, partition topicPartition) {
 		dst,
 		dstPartitions,
 	)
+
+	b.stealGraph.changeOwnership(src, dst, partition)
 }

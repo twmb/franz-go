@@ -1,6 +1,8 @@
 package sticky
 
-import "container/heap"
+import (
+	"container/heap"
+)
 
 type graph struct {
 	// node => edges out
@@ -53,24 +55,34 @@ func (g graph) link(src string, edge topicPartition) {
 }
 
 func (g graph) changeOwnership(oldDst, newDst string, edge topicPartition) {
-	oldLvl := g.node2lvl[oldDst]
-	g.node2lvl[oldDst] = oldLvl - 1
+	oldDstLvl := g.node2lvl[oldDst]
+	g.node2lvl[oldDst] = oldDstLvl - 1
 
-	delete(g.lvl2node[oldLvl], oldDst)
-	g.lvl2node[oldLvl-1][oldDst] = struct{}{}
+	delete(g.lvl2node[oldDstLvl], oldDst)
+	newOldDstLvl := g.lvl2node[oldDstLvl-1]
+	if newOldDstLvl == nil {
+		newOldDstLvl = make(map[string]struct{})
+		g.lvl2node[oldDstLvl-1] = newOldDstLvl
+	}
+	newOldDstLvl[oldDst] = struct{}{}
 
-	newLvl := g.node2lvl[newDst]
-	g.node2lvl[newDst] = newLvl + 1
+	newDstLvl := g.node2lvl[newDst]
+	g.node2lvl[newDst] = newDstLvl + 1
 
-	delete(g.lvl2node[newLvl], newDst)
-	g.lvl2node[newLvl+1][newDst] = struct{}{}
+	delete(g.lvl2node[newDstLvl], newDst)
+	newNewDstLvl := g.lvl2node[newDstLvl+1]
+	if newNewDstLvl == nil {
+		newNewDstLvl = make(map[string]struct{})
+		g.lvl2node[newDstLvl+1] = newNewDstLvl
+	}
+	newNewDstLvl[newDst] = struct{}{}
 
 	g.cxns[edge].dst = newDst
 }
 
 // findSteal uses A* search to find a path from a source node to the first node
 // it can reach two levels up.
-func (g graph) findSteal(from string) ([]topicPartition, bool) {
+func (g graph) findSteal(from string) ([]stealSegment, bool) {
 	done := make(map[string]struct{}, len(g.node2lvl))
 
 	scores := make(pathScores, len(g.node2lvl))
@@ -79,14 +91,15 @@ func (g graph) findSteal(from string) ([]topicPartition, bool) {
 
 	first.gscore = 0
 	first.fscore = h(first)
+	done[first.node] = struct{}{}
 
 	rem := &pathHeap{first}
 	for rem.Len() > 0 {
 		current := heap.Pop(rem).(*pathScore)
 		if current.level > first.level+1 {
-			var path []topicPartition
+			var path []stealSegment
 			for current.parent != nil {
-				path = append(path, current.srcEdge)
+				path = append(path, stealSegment{current.parent.node, current.srcEdge})
 				current = current.parent
 			}
 			return path, true
@@ -115,6 +128,11 @@ func (g graph) findSteal(from string) ([]topicPartition, bool) {
 	}
 
 	return nil, false
+}
+
+type stealSegment struct {
+	dst  string
+	part topicPartition
 }
 
 type pathScore struct {
