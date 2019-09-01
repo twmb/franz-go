@@ -2,14 +2,17 @@ package sticky
 
 import (
 	"fmt"
+	"math/rand"
 	"testing"
 )
 
 func Test_stickyBalanceStrategy_Plan(t *testing.T) {
 	for _, test := range []struct {
-		name    string
-		members []GroupMember
-		topics  map[string][]int32
+		name         string
+		members      []GroupMember
+		topics       map[string][]int32
+		unusedTopics []string
+		nsticky      int
 	}{
 		{
 			name: "one consumer, no topics",
@@ -44,6 +47,7 @@ func Test_stickyBalanceStrategy_Plan(t *testing.T) {
 				"t1": []int32{0, 1, 2},
 				"t2": []int32{0, 1, 2},
 			},
+			unusedTopics: []string{"t2"},
 		},
 
 		{
@@ -115,10 +119,12 @@ func Test_stickyBalanceStrategy_Plan(t *testing.T) {
 					UserData: oldUD().
 						assign("t1", 1, 3, 0, 7, 10, 6).
 						encode()},
+				{ID: "C", Topics: []string{"t1"}},
 			},
 			topics: map[string][]int32{
 				"t1": []int32{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11},
 			},
+			nsticky: 8,
 		},
 
 		{
@@ -135,8 +141,11 @@ func Test_stickyBalanceStrategy_Plan(t *testing.T) {
 				{ID: "C", Topics: []string{"t1"}},
 			},
 			topics: map[string][]int32{
-				"t1": []int32{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12},
+				"t1":     []int32{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12},
+				"unused": []int32{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12},
 			},
+			unusedTopics: []string{"unused"},
+			nsticky:      9,
 		},
 
 		{
@@ -152,6 +161,7 @@ func Test_stickyBalanceStrategy_Plan(t *testing.T) {
 				"t1": []int32{0},
 				"t2": []int32{0},
 			},
+			unusedTopics: []string{"t1"},
 		},
 
 		{
@@ -172,6 +182,7 @@ func Test_stickyBalanceStrategy_Plan(t *testing.T) {
 				"t1": []int32{0, 1},
 				"t2": []int32{0, 1},
 			},
+			nsticky: 1,
 		},
 
 		{
@@ -223,6 +234,7 @@ func Test_stickyBalanceStrategy_Plan(t *testing.T) {
 				"8": []int32{0},
 				"9": []int32{0},
 			},
+			nsticky: 7,
 		},
 
 		{
@@ -277,20 +289,13 @@ func Test_stickyBalanceStrategy_Plan(t *testing.T) {
 				"8": []int32{0},
 				"9": []int32{0},
 			},
+			nsticky: 5,
 		},
 
 		{
 			// A -> 1, [in all]
 			// B -> 2, [in 2, 3, 4]
 			// D -> 3, 4, 5, 6, 7, 8, 9
-			//
-			// A -> 1, 9, 8, 7
-			// B -> 2,
-			// D -> 3, 4, 5, 6
-			//
-			// A -> 1, 9, 8, 7
-			// B -> 2, 3
-			// D -> 4, 5, 6
 			//
 			// Ideal:
 			// A -> 1, 9, 8
@@ -331,7 +336,179 @@ func Test_stickyBalanceStrategy_Plan(t *testing.T) {
 				"8": []int32{0},
 				"9": []int32{0},
 			},
+			nsticky: 5,
 		},
+
+		{
+			// Start:
+			// A -> 1 2
+			// B -> 3 4
+			// C -> 5
+			// D -> a b c d e
+			// E ->
+			//
+			// Ideal:
+			// A -> 1 e
+			// B -> 2 3
+			// C -> 4 5
+			// D -> a b
+			// E -> c d
+			name: "complicated steals",
+			members: []GroupMember{
+				{ID: "A", Topics: []string{"1", "2", "3", "4", "5", "a", "b", "c", "d", "e"},
+					Version: 1,
+					UserData: newUD().
+						assign("1", 0).
+						assign("2", 0).
+						encode()},
+				{ID: "B", Topics: []string{"1", "2", "3", "4", "5"},
+					Version: 1,
+					UserData: newUD().
+						assign("3", 0).
+						assign("4", 0).
+						encode()},
+				{ID: "C", Topics: []string{"3", "4", "5"},
+					Version: 1,
+					UserData: newUD().
+						assign("5", 0).
+						encode()},
+				{ID: "D", Topics: []string{"a", "b", "c", "d", "e"},
+					Version: 1,
+					UserData: newUD().
+						assign("a", 0).
+						assign("b", 0).
+						assign("c", 0).
+						assign("d", 0).
+						assign("e", 0).
+						encode()},
+				{ID: "E", Topics: []string{"a", "b", "c", "d", "e"},
+					Version: 1,
+					UserData: newUD().
+						encode()},
+			},
+			topics: map[string][]int32{
+				"1": []int32{0},
+				"2": []int32{0},
+				"3": []int32{0},
+				"4": []int32{0},
+				"5": []int32{0},
+				"6": []int32{0},
+				"7": []int32{0},
+				"8": []int32{0},
+				"9": []int32{0},
+				"a": []int32{0},
+				"b": []int32{0},
+				"c": []int32{0},
+				"d": []int32{0},
+				"e": []int32{0},
+			},
+			nsticky: 5,
+		},
+
+		{
+			// Start:
+			// A: [1 2 3]
+			// B: [1 2 3 4 5 6]
+			// C: [4 5 6 7 8 9]
+			// D: [6 7 8 9 a b c d e f]
+			// E: [6 7 8 9 a b c d e f]
+			//
+			// A -> 1 2
+			// B -> 3
+			// C -> 4 5
+			// D -> 6 7
+			// E -> 8 9 a b c d e f
+			//
+			// Ideal:
+			// A -> 1 2 3
+			// B -> 4 5 6
+			// C -> 7 8 9
+			// D -> a b c
+			// E -> d e f
+			name: "big disbalance to equal",
+			members: []GroupMember{
+				{ID: "A", Topics: []string{"1", "2", "3"},
+					Version: 1,
+					UserData: newUD().
+						assign("1", 0).
+						assign("2", 0).
+						encode()},
+				{ID: "B", Topics: []string{"1", "2", "3", "4", "5", "6"},
+					Version: 1,
+					UserData: newUD().
+						assign("3", 0).
+						encode()},
+				{ID: "C", Topics: []string{"4", "5", "6", "7", "8", "9"},
+					Version: 1,
+					UserData: newUD().
+						assign("4", 0).
+						assign("5", 0).
+						encode()},
+				{ID: "D", Topics: []string{"6", "7", "8", "9", "a", "b", "c", "d", "e", "f"},
+					Version: 1,
+					UserData: newUD().
+						assign("6", 0).
+						assign("7", 0).
+						encode()},
+				{ID: "E", Topics: []string{"6", "7", "8", "9", "a", "b", "c", "d", "e", "f"},
+					Version: 1,
+					UserData: newUD().
+						assign("8", 0).
+						assign("9", 0).
+						assign("a", 0).
+						assign("b", 0).
+						assign("c", 0).
+						assign("d", 0).
+						assign("e", 0).
+						assign("f", 0).
+						encode()},
+			},
+			topics: map[string][]int32{
+				"1": []int32{0},
+				"2": []int32{0},
+				"3": []int32{0},
+				"4": []int32{0},
+				"5": []int32{0},
+				"6": []int32{0},
+				"7": []int32{0},
+				"8": []int32{0},
+				"9": []int32{0},
+				"a": []int32{0},
+				"b": []int32{0},
+				"c": []int32{0},
+				"d": []int32{0},
+				"e": []int32{0},
+				"f": []int32{0},
+			},
+			nsticky: 5,
+		},
+
+		//
+	} {
+
+		t.Run(test.name, func(t *testing.T) {
+			plan := Balance(test.members, test.topics)
+			testEqualDivvy(t, plan, test.nsticky, test.members)
+			testPlanUsage(t, plan, test.topics, test.unusedTopics)
+		})
+	}
+}
+
+// For imbalanced plans, we can have multiple results per partition count.
+// resultOptions aids in these results; see help_test.
+type resultOptions struct {
+	candidates []string
+	times      int
+}
+
+func TestImbalanced(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		members []GroupMember
+		topics  map[string][]int32
+		nsticky int
+		balance map[int]resultOptions
+	}{
 
 		{
 			// Start:
@@ -382,6 +559,12 @@ func Test_stickyBalanceStrategy_Plan(t *testing.T) {
 				"7": []int32{0},
 				"8": []int32{0},
 				"9": []int32{0},
+			},
+			nsticky: 2 + 3,
+			balance: map[int]resultOptions{
+				2: {[]string{"A", "D"}, 2},
+				1: {[]string{"B"}, 1},
+				3: {[]string{"C"}, 1},
 			},
 		},
 
@@ -445,6 +628,12 @@ func Test_stickyBalanceStrategy_Plan(t *testing.T) {
 				"9": []int32{0},
 				"a": []int32{0},
 				"b": []int32{0},
+			},
+			nsticky: 2 + 1 + 3,
+			balance: map[int]resultOptions{ // B and C could alternate
+				2: {[]string{"A", "B", "C"}, 2},
+				1: {[]string{"B", "C"}, 1},
+				3: {[]string{"D", "E"}, 2},
 			},
 		},
 
@@ -528,70 +717,11 @@ func Test_stickyBalanceStrategy_Plan(t *testing.T) {
 				"d": []int32{0},
 				"e": []int32{0},
 			},
-		},
-
-		{
-			// Start:
-			// A -> 1 2
-			// B -> 3 4
-			// C -> 5
-			// D -> a b c d e
-			// E ->
-			//
-			// Ideal:
-			// A -> 1 e
-			// B -> 2 3
-			// C -> 4 5
-			// D -> a b
-			// E -> c d
-			name: "complicated steals",
-			members: []GroupMember{
-				{ID: "A", Topics: []string{"1", "2", "3", "4", "5", "a", "b", "c", "d", "e"},
-					Version: 1,
-					UserData: newUD().
-						assign("1", 0).
-						assign("2", 0).
-						encode()},
-				{ID: "B", Topics: []string{"1", "2", "3", "4", "5"},
-					Version: 1,
-					UserData: newUD().
-						assign("3", 0).
-						assign("4", 0).
-						encode()},
-				{ID: "C", Topics: []string{"3", "4", "5"},
-					Version: 1,
-					UserData: newUD().
-						assign("5", 0).
-						encode()},
-				{ID: "D", Topics: []string{"a", "b", "c", "d", "e"},
-					Version: 1,
-					UserData: newUD().
-						assign("a", 0).
-						assign("b", 0).
-						assign("c", 0).
-						assign("d", 0).
-						assign("e", 0).
-						encode()},
-				{ID: "E", Topics: []string{"a", "b", "c", "d", "e"},
-					Version: 1,
-					UserData: newUD().
-						encode()},
-			},
-			topics: map[string][]int32{
-				"1": []int32{0},
-				"2": []int32{0},
-				"3": []int32{0},
-				"4": []int32{0},
-				"5": []int32{0},
-				"6": []int32{0},
-				"7": []int32{0},
-				"8": []int32{0},
-				"9": []int32{0},
-				"a": []int32{0},
-				"b": []int32{0},
-				"c": []int32{0},
-				"d": []int32{0},
-				"e": []int32{0},
+			nsticky: 12,
+			balance: map[int]resultOptions{
+				2: {[]string{"A", "B", "C", "D", "G"}, 5},
+				1: {[]string{"E"}, 1},
+				3: {[]string{"F"}, 1},
 			},
 		},
 
@@ -713,6 +843,12 @@ func Test_stickyBalanceStrategy_Plan(t *testing.T) {
 				"i": []int32{0},
 				"j": []int32{0},
 			},
+			nsticky: 1 + 4,
+			balance: map[int]resultOptions{
+				3: {[]string{"A", "B", "D"}, 3},
+				4: {[]string{"C"}, 1},
+				1: {[]string{"E", "F", "G", "H", "I", "J"}, 6},
+			},
 		},
 
 		{
@@ -777,93 +913,20 @@ func Test_stickyBalanceStrategy_Plan(t *testing.T) {
 				"b": []int32{0},
 				"c": []int32{0},
 			},
-		},
-
-		{
-			// Start:
-			// A: [1 2 3]
-			// B: [1 2 3 4 5 6]
-			// C: [4 5 6 7 8 9]
-			// D: [6 7 8 9 a b c d e f]
-			// E: [6 7 8 9 a b c d e f]
-			//
-			// A -> 1 2
-			// B -> 3
-			// C -> 4 5
-			// D -> 6 7
-			// E -> 8 9 a b c d e f
-			//
-			// Ideal:
-			// A -> 1 2 3
-			// B -> 4 5 6
-			// C -> 7 8 9
-			// D -> a b c
-			name: "big disbalance to equal",
-			members: []GroupMember{
-				{ID: "A", Topics: []string{"1", "2", "3"},
-					Version: 1,
-					UserData: newUD().
-						assign("1", 0).
-						assign("2", 0).
-						encode()},
-				{ID: "B", Topics: []string{"1", "2", "3", "4", "5", "6"},
-					Version: 1,
-					UserData: newUD().
-						assign("3", 0).
-						encode()},
-				{ID: "C", Topics: []string{"4", "5", "6", "7", "8", "9"},
-					Version: 1,
-					UserData: newUD().
-						assign("4", 0).
-						assign("5", 0).
-						encode()},
-				{ID: "D", Topics: []string{"6", "7", "8", "9", "a", "b", "c", "d", "e", "f"},
-					Version: 1,
-					UserData: newUD().
-						assign("6", 0).
-						assign("7", 0).
-						encode()},
-				{ID: "E", Topics: []string{"6", "7", "8", "9", "a", "b", "c", "d", "e", "f"},
-					Version: 1,
-					UserData: newUD().
-						assign("8", 0).
-						assign("9", 0).
-						assign("a", 0).
-						assign("b", 0).
-						assign("c", 0).
-						assign("d", 0).
-						assign("e", 0).
-						assign("f", 0).
-						encode()},
-			},
-			topics: map[string][]int32{
-				"1": []int32{0},
-				"2": []int32{0},
-				"3": []int32{0},
-				"4": []int32{0},
-				"5": []int32{0},
-				"6": []int32{0},
-				"7": []int32{0},
-				"8": []int32{0},
-				"9": []int32{0},
-				"a": []int32{0},
-				"b": []int32{0},
-				"c": []int32{0},
-				"d": []int32{0},
-				"e": []int32{0},
-				"f": []int32{0},
+			nsticky: 2 + 4,
+			balance: map[int]resultOptions{
+				2: {[]string{"A", "B"}, 1},
+				3: {[]string{"A", "B", "C"}, 2},
+				4: {[]string{"D"}, 1},
 			},
 		},
 
 		//
 	} {
-
 		t.Run(test.name, func(t *testing.T) {
 			plan := Balance(test.members, test.topics)
-			testEqualDivvy(t, plan)
-			for member, topics := range plan {
-				fmt.Printf("%s: %v\n", member, topics)
-			}
+			testStickyResult(t, plan, test.members, test.nsticky, test.balance)
+			testPlanUsage(t, plan, test.topics, nil)
 		})
 	}
 }
@@ -947,4 +1010,33 @@ func BenchmarkOne(b *testing.B) {
 			Balance(members, topics)
 		}
 	})
+}
+
+func BenchmarkLarge(b *testing.B) {
+	r := rand.New(rand.NewSource(0))
+	var members []GroupMember
+	for i := 0; i < 200; i++ {
+		topics := make([]string, 200)
+		for j := 0; j < 200; j++ {
+			topics[j] = fmt.Sprintf("topic%d", j)
+		}
+		members = append(members, GroupMember{
+			ID:     fmt.Sprintf("consumer%d", i),
+			Topics: topics,
+		})
+	}
+	topics := make(map[string][]int32, 40)
+	for i := 0; i < 40; i++ {
+		partitionCount := r.Intn(20)
+		partitions := make([]int32, partitionCount)
+		for j := 0; j < partitionCount; j++ {
+			partitions[j] = int32(j)
+		}
+		topics[fmt.Sprintf("topic%d", i)] = partitions
+	}
+
+	b.ResetTimer()
+	for n := 0; n < b.N; n++ {
+		Balance(members, topics)
+	}
 }

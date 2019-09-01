@@ -538,6 +538,14 @@ func (b *balancer) shuffle() {
 
 				// TODO evaluate whether we should "findStealPartition" at all
 				// vs. just using the stealGraph
+				// Would have to change A* to search all nodes at a match rather
+				// than returning on first match so that we can use the node with
+				// the most partitions. This is necessary to preserve stickiness.
+				// With the current approach, we stop at first match since all
+				// first matches are +2 only guaranteed. If we remove the heap
+				// part, then the first match may steal from a node that could
+				// be sticky; we would need to iterate over all at level to keep
+				// stickiness by only taking from most loaded.
 				potentials := b.consumers2AllPotentialPartitions[member]
 				steal := b.findStealPartition(member, partitions, potentials)
 
