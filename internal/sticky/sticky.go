@@ -6,7 +6,6 @@
 package sticky
 
 import (
-	"container/list"
 	"fmt"
 	"reflect"
 	"sort"
@@ -483,12 +482,9 @@ func (b *balancer) findStealPartition(
 	member string,
 	partitions map[topicPartition]struct{},
 	potentials map[topicPartition]struct{},
-	plus1sBase []topicPartition,
 ) (
 	steal topicPartition,
-	plus1s []topicPartition,
 ) {
-	plus1s = plus1sBase[:0]
 
 	if len(partitions) == len(potentials) {
 		return
@@ -505,9 +501,6 @@ func (b *balancer) findStealPartition(
 		if otherNum > stealeeNum && otherNum > len(partitions)+1 {
 			steal, stealeeNum = want, otherNum
 		}
-		if steal.isZero() && otherNum == len(partitions)+1 {
-			plus1s = append(plus1s, want)
-		}
 	}
 	return
 }
@@ -517,9 +510,7 @@ func (b *balancer) findStealPartition(
 //
 // O(M * P^2) i.e. not great.
 func (b *balancer) shuffle() {
-	deps := newDependents()
-
-	var plus1s []topicPartition
+	g := newGraph()
 
 iter:
 	// O(lg(level disparity))?, which is at most P (all partitions in one)?
@@ -531,7 +522,7 @@ iter:
 
 			potentials := b.consumers2AllPotentialPartitions[member]
 			var steal topicPartition
-			steal, plus1s = b.findStealPartition(member, partitions, potentials, plus1s[:0])
+			steal = b.findStealPartition(member, partitions, potentials)
 
 			// If we found a member we can steal from, we do so and fix
 			// our position and the stealees position in the level heap.
@@ -555,26 +546,14 @@ iter:
 			// consideration. If we have all we can have and no
 			// dependents, we continue; else, we register ourself
 			// dependent on everything that we could steal from.
-
-			if len(plus1s) > 0 && deps.memberHasDependents(member) {
-				b.reassignPartition(member, plus1s[0])
-
-				deps.bubbleDown(b, member)
-
-				if len(level.members) == 0 {
-					it.Reset(rbtree.Into(b.planByNumPartitions.Min()))
-					continue iter
-				}
-				continue
-			}
-
+			g.add(member, partitions)
 			//b.removeLevelingMember(it.Node(), member)
-			if len(partitions) == len(potentials) &&
-				!deps.memberHasDependents(member) {
-				continue
-			}
-
 		}
+
+		// Every time we finish a level
+		// For every node in the graph in the prior level,
+		// Attempt to steal into this level we just finished,
+		// Then delete nodes in this level from graph.
 	}
 }
 
@@ -604,101 +583,4 @@ func (b *balancer) reassignPartition(dst string, partition topicPartition) {
 		dst,
 		dstPartitions,
 	)
-}
-
-type dependents struct {
-	chains map[string]*chain
-}
-
-func newDependents() *dependents {
-	return &dependents{
-		chains: make(map[string][]*chain),
-	}
-}
-
-func (deps *dependents) memberHasDependents(member string) bool {
-	return len(deps.chains[member]) > 0
-}
-
-func (deps *dependents) bubbleDown(b *balancer, src string) {
-	srcChains := deps.chains[src]
-start:
-	minChain := srcChains[0]
-	for _, chain := range srcChains[1:] {
-		if chain.minParts < minChain.minParts {
-			minChain = chain
-		}
-	}
-
-	dstElem := minChain.list.Front()
-	dst := dstElem.Value.(string)
-
-bubble:
-	fmt.Printf("bubble down, src %s, dst %s\n", src, dst)
-	var take topicPartition
-	for take = range b.consumers2AllPotentialPartitions[src] {
-		if _, canTake := b.partitions2AllPotentialConsumers[take][dst]; canTake {
-			break
-		}
-	}
-
-	// If the chain we chose actually cannot take anything, then a
-	// different equal chain under us took whatever this one could have.
-	//
-	// We delete this chain, since this member will never have another
-	// partition for this chain, and we go back to the start to work on the
-	// other equal chain.
-	//
-	// Can this be transitively messed up?
-	if take.isZero() {
-		srcChains = srcChains[1:]
-		deps.chains[src] = srcChains
-		goto start
-	}
-
-	b.reassignPartition(dst, take)
-	dstElem = dstElem.Next()
-	if dstElem != nil {
-		src = dst
-		dst = dstElem.Value.(string)
-		if len(b.plan[dst]) != minChain.minParts {
-			goto bubble
-		}
-	}
-
-	if len(b.plan[dst]) > minChain.minParts {
-		minChain.minParts++
-	}
-	minChain.totParts++
-}
-
-type chain struct {
-	list     list.List
-	minParts int
-	totParts int
-
-	possibleParts map[topicPartition]struct{}
-}
-
-func newChain() *chain {
-	c := &chain{
-		possibleParts: make(map[topicPartition]struct{}),
-	}
-	c.list.Init()
-	return c
-}
-
-func (c *chain) pushMember(member string, numParts int, possiblePartitions map[topicPartition]struct{}) {
-	c.list.PushBack(member)
-	if c.minParts == 0 {
-		c.minParts = numParts
-	}
-	c.totParts += numParts
-	for possiblePartition := range possiblePartitions {
-		c.possibleParts[possiblePartition] = struct{}{}
-	}
-}
-
-func (c *chain) maxParts() int {
-	return len(c.possibleParts)
 }
