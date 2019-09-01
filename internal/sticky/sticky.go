@@ -531,67 +531,45 @@ func (b *balancer) findStealPartition(
 //
 // O(M * P^2) i.e. not great.
 func (b *balancer) shuffle() {
-
-iter:
 	// O(lg(level disparity))?, which is at most P (all partitions in one)?
-	for it := rbtree.IterAt(b.planByNumPartitions.Min()); it.Ok(); it.Right() {
-		level := it.Item().(partitionLevel)
-		fmt.Println("on level", level.level)
-		for member, partitions := range level.members {
-			fmt.Println("on", member)
+	for min := b.planByNumPartitions.Min(); min != nil; min = b.planByNumPartitions.Min() {
+		level := min.Item.(partitionLevel)
+		fmt.Println("on level", level.level, "with", len(level.members), "members")
+		for len(level.members) > 0 {
+			for member, partitions := range level.members {
+				fmt.Println("on", member)
 
-			potentials := b.consumers2AllPotentialPartitions[member]
-			steal := b.findStealPartition(member, partitions, potentials)
+				potentials := b.consumers2AllPotentialPartitions[member]
+				steal := b.findStealPartition(member, partitions, potentials)
 
-			// If we found a member we can steal from, we do so and fix
-			// our position and the stealees position in the level heap.
-			if !steal.isZero() {
-				b.reassignPartition(member, steal)
+				// If we found a member we can steal from, we do so and fix
+				// our position and the stealees position in the level heap.
+				if !steal.isZero() {
+					b.reassignPartition(member, steal)
+					continue
+				}
 
-				// We only need to reset iterating if we cleared this level,
-				// otherwise we can just continue looping on this level.
+				// If we could not steal from a big imbalance, we may be
+				// have a transitive steal.
+				fmt.Println("checking steal path for", member)
+				stealPath, found := b.stealGraph.findSteal(member)
+				if found {
+					fmt.Println(member, "found path", stealPath)
+					for _, segment := range stealPath {
+						b.reassignPartition(segment.dst, segment.part)
+					}
+					continue
+				}
+
+				// If we did not have a transitive steal, this member
+				// will never grow past this level and can be removed
+				// from consideration.
+				delete(level.members, member)
 				if len(level.members) == 0 {
-					it.Reset(rbtree.Into(b.planByNumPartitions.Min()))
-					continue iter
+					b.planByNumPartitions.Delete(b.planByNumPartitions.Min())
 				}
-				continue
-			}
-
-			// We found nothing obvious to steal to steal.
-			//
-			// If we see a +1, and we have a chain, we steal.
-			//
-			// Otherwise, we now will delete ourself from iter
-			// consideration. If we have all we can have and no
-			// dependents, we continue; else, we register ourself
-			// dependent on everything that we could steal from.
-			//fmt.Printf("removing %s\n", member)
-			//b.removeLevelingMember(
-			//	b.planByNumPartitions.FindWith(func(n *rbtree.Node) int {
-			//		return len(partitions) - n.Item.(partitionLevel).level
-			//	}),
-			//	member,
-			//)
-		}
-
-		// Everything remaining in this level could not steal a partition.
-		fmt.Println("on level", level.level, "finding steal paths for under levels")
-		for member := range b.stealGraph.lvl2node[level.level-1] {
-			fmt.Println("checking steal path for", member)
-			stealPath, found := b.stealGraph.findSteal(member)
-			if found {
-				fmt.Println(member, "found path", stealPath)
-				for _, segment := range stealPath {
-					b.reassignPartition(segment.dst, segment.part)
-				}
-				it.Reset(rbtree.Into(b.planByNumPartitions.Min()))
 			}
 		}
-
-		// Every time we finish a level
-		// For every node in the graph in the prior level,
-		// Attempt to steal into this level we just finished,
-		// Then delete nodes in this level from graph.
 	}
 }
 
@@ -602,7 +580,7 @@ func (b *balancer) reassignPartition(dst string, partition topicPartition) {
 	srcPartitions := b.plan[src]
 	dstPartitions := b.plan[dst]
 
-	fmt.Printf("reassigning %s from %s to %s\n", partition.topic, src, dst)
+	fmt.Printf("reassigning %s from %s (at %d) to %s (at %d)\n", partition.topic, src, len(srcPartitions), dst, len(dstPartitions))
 
 	delete(srcPartitions, partition)
 	dstPartitions[partition] = struct{}{}
