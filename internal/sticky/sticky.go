@@ -367,8 +367,9 @@ func (b *balancer) assignUnassignedAndInitGraph() {
 	}
 
 	// Lastly, with everything assigned, we build our steal graph for balancing.
-	for member, partitions := range b.plan {
-		b.stealGraph.add(member, partitions)
+	b.stealGraph.cxns = partitionConsumers
+	for member := range b.plan {
+		b.stealGraph.add(member)
 	}
 	for partition, potentials := range partitionPotentials {
 		owner := partitionConsumers[partition]

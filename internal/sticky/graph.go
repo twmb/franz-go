@@ -19,27 +19,25 @@ type graph struct {
 	// It is common for the graph to be highly connected.
 	nparts int
 
-	// edge => who owns this edge.
+	// edge => who owns this edge; built in balancer's assignUnassigned
 	cxns map[*topicPartition]string
 
 	// pathHeap is reset every search
 	pathHeap pathHeap
+	done     map[string]struct{}
 }
 
 func newGraph(plan membersPartitions, nparts int) graph {
 	return graph{
-		out:    make(map[string]map[*topicPartition]struct{}),
+		out:    make(map[string]map[*topicPartition]struct{}, len(plan)),
 		plan:   plan,
 		nparts: nparts,
-		cxns:   make(map[*topicPartition]string),
+		done:   make(map[string]struct{}, 20),
 	}
 }
 
-func (g *graph) add(node string, partitions memberPartitions) {
+func (g *graph) add(node string) {
 	g.out[node] = make(map[*topicPartition]struct{}, g.nparts)
-	for partition := range partitions {
-		g.cxns[partition] = node
-	}
 }
 
 func (g graph) link(src string, edge *topicPartition) {
@@ -52,9 +50,9 @@ func (g graph) changeOwnership(edge *topicPartition, newDst string) {
 
 // findSteal uses A* search to find a path from the best node it can reach.
 func (g *graph) findSteal(from string) ([]stealSegment, bool) {
-	done := make(map[string]struct{}, 20)
+	done := make(map[string]struct{}, 10)
 
-	scores := make(pathScores, 20)
+	scores := make(pathScores, 10)
 	first, _ := scores.get(from, g.plan)
 
 	// For A*, if we never overestimate (with h), then the path we find is
