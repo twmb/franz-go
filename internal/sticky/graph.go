@@ -9,22 +9,22 @@ import "container/heap"
 type graph struct {
 	// node => edges out
 	// "from a node, which partitions could we steal?"
-	out map[uint32]map[*topicPartition]struct{}
+	out []map[*topicPartition]struct{}
 
 	// reference to balancer plan for determining node levels
 	plan membersPartitions
 
 	// edge => who owns this edge; built in balancer's assignUnassigned
-	cxns map[*topicPartition]uint32
+	cxns map[*topicPartition]int
 }
 
 func newGraph(
 	plan membersPartitions,
-	partitionConsumers map[*topicPartition]uint32,
-	partitionPotentials map[*topicPartition][]uint32,
+	partitionConsumers map[*topicPartition]int,
+	partitionPotentials map[*topicPartition][]int,
 ) graph {
 	g := graph{
-		out:  make(map[uint32]map[*topicPartition]struct{}, len(plan)),
+		out:  make([]map[*topicPartition]struct{}, len(plan)),
 		plan: plan,
 		cxns: partitionConsumers,
 	}
@@ -42,13 +42,13 @@ func newGraph(
 	return g
 }
 
-func (g graph) changeOwnership(edge *topicPartition, newDst uint32) {
+func (g graph) changeOwnership(edge *topicPartition, newDst int) {
 	g.cxns[edge] = newDst
 }
 
 // findSteal uses A* search to find a path from the best node it can reach.
-func (g graph) findSteal(from uint32) ([]stealSegment, bool) {
-	done := make(map[uint32]struct{}, 10)
+func (g graph) findSteal(from int) ([]stealSegment, bool) {
+	done := make(map[int]struct{}, 10)
 
 	scores := make(pathScores, 10)
 	first, _ := scores.get(from, g.plan)
@@ -114,13 +114,13 @@ func (g graph) findSteal(from uint32) ([]stealSegment, bool) {
 }
 
 type stealSegment struct {
-	src  uint32
-	dst  uint32
+	src  int
+	dst  int
 	part *topicPartition
 }
 
 type pathScore struct {
-	node    uint32
+	node    int
 	parent  *pathScore
 	srcEdge *topicPartition
 	level   int
@@ -128,10 +128,11 @@ type pathScore struct {
 	fscore  int
 }
 
-type pathScores map[uint32]*pathScore
+type pathScores []*pathScore
 
-func (p pathScores) get(node uint32, plan membersPartitions) (*pathScore, bool) {
-	r, exists := p[node]
+func (p pathScores) get(node int, plan membersPartitions) (*pathScore, bool) {
+	r := p[node]
+	exists := r != nil
 	if !exists {
 		r = &pathScore{
 			node:   node,
