@@ -14,6 +14,9 @@ type graph struct {
 
 	node2lvl map[string]int
 	lvl2node map[int]map[string]struct{}
+
+	// pathHeap is reset every search
+	pathHeap pathHeap
 }
 
 type nodeDst struct {
@@ -80,26 +83,32 @@ func (g graph) changeOwnership(oldDst, newDst string, edge topicPartition) {
 	g.cxns[edge].dst = newDst
 }
 
-// findSteal uses A* search to find a path from a source node to the first node
-// it can reach two levels up.
-func (g graph) findSteal(from string) ([]stealSegment, bool) {
+// findSteal uses A* search to find a path from the best node it can reach.
+func (g *graph) findSteal(from string) ([]stealSegment, bool) {
 	done := make(map[string]struct{})
 
 	scores := make(pathScores)
 	first, _ := scores.get(from, g.node2lvl)
-	h := func(p *pathScore) uint { return p.level + 2 - first.level }
+
+	h := func(p *pathScore) int { return -p.level }
 
 	first.gscore = 0
 	first.fscore = h(first)
 	done[first.node] = struct{}{}
 
-	rem := &pathHeap{first}
+	g.pathHeap = g.pathHeap[:0]
+	g.pathHeap = append(g.pathHeap, first)
+	rem := &g.pathHeap
 	for rem.Len() > 0 {
 		current := heap.Pop(rem).(*pathScore)
 		if current.level > first.level+1 {
 			var path []stealSegment
 			for current.parent != nil {
-				path = append(path, stealSegment{current.parent.node, current.srcEdge})
+				path = append(path, stealSegment{
+					current.node,
+					current.parent.node,
+					current.srcEdge,
+				})
 				current = current.parent
 			}
 			return path, true
@@ -131,6 +140,7 @@ func (g graph) findSteal(from string) ([]stealSegment, bool) {
 }
 
 type stealSegment struct {
+	src  string
 	dst  string
 	part topicPartition
 }
@@ -139,9 +149,9 @@ type pathScore struct {
 	node    string
 	parent  *pathScore
 	srcEdge topicPartition
-	level   uint
-	gscore  uint
-	fscore  uint
+	level   int
+	gscore  int
+	fscore  int
 }
 
 type pathScores map[string]*pathScore
@@ -150,11 +160,11 @@ func (p pathScores) get(node string, node2lvl map[string]int) (*pathScore, bool)
 	r, exists := p[node]
 	if !exists {
 		r = &pathScore{
-			node:  node,
-			level: uint(node2lvl[node]),
+			node:   node,
+			level:  node2lvl[node],
+			gscore: 1 << 31,
+			fscore: 1 << 31,
 		}
-		r.gscore--
-		r.fscore--
 		p[node] = r
 	}
 	return r, !exists
