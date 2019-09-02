@@ -9,48 +9,46 @@ import "container/heap"
 type graph struct {
 	// node => edges out
 	// "from a node, which partitions could we steal?"
-	out map[string]map[*topicPartition]struct{}
+	out map[uint32]map[*topicPartition]struct{}
 
-	// reference to balancer plan
+	// reference to balancer plan for determining node levels
 	plan membersPartitions
 
-	// In the worst case, if every node is linked to each other, each
-	// node will have nparts edges. We preallocate the worst case.
-	// It is common for the graph to be highly connected.
-	nparts int
-
 	// edge => who owns this edge; built in balancer's assignUnassigned
-	cxns map[*topicPartition]string
-
-	// pathHeap is reset every search
-	pathHeap pathHeap
-	done     map[string]struct{}
+	cxns map[*topicPartition]uint32
 }
 
-func newGraph(plan membersPartitions, nparts int) graph {
-	return graph{
-		out:    make(map[string]map[*topicPartition]struct{}, len(plan)),
-		plan:   plan,
-		nparts: nparts,
-		done:   make(map[string]struct{}, 20),
+func newGraph(
+	plan membersPartitions,
+	partitionConsumers map[*topicPartition]uint32,
+	partitionPotentials map[*topicPartition][]uint32,
+) graph {
+	g := graph{
+		out:  make(map[uint32]map[*topicPartition]struct{}, len(plan)),
+		plan: plan,
+		cxns: partitionConsumers,
 	}
+	for member := range plan {
+		// In the worst case, if every node is linked to each other,
+		// each node will have nparts edges. We preallocate the worst
+		// case. It is common for the graph to be highly connected.
+		g.out[member] = make(map[*topicPartition]struct{}, len(partitionConsumers))
+	}
+	for partition, potentials := range partitionPotentials {
+		for _, potential := range potentials {
+			g.out[potential][partition] = struct{}{}
+		}
+	}
+	return g
 }
 
-func (g *graph) add(node string) {
-	g.out[node] = make(map[*topicPartition]struct{}, g.nparts)
-}
-
-func (g graph) link(src string, edge *topicPartition) {
-	g.out[src][edge] = struct{}{}
-}
-
-func (g graph) changeOwnership(edge *topicPartition, newDst string) {
+func (g graph) changeOwnership(edge *topicPartition, newDst uint32) {
 	g.cxns[edge] = newDst
 }
 
 // findSteal uses A* search to find a path from the best node it can reach.
-func (g *graph) findSteal(from string) ([]stealSegment, bool) {
-	done := make(map[string]struct{}, 10)
+func (g graph) findSteal(from uint32) ([]stealSegment, bool) {
+	done := make(map[uint32]struct{}, 10)
 
 	scores := make(pathScores, 10)
 	first, _ := scores.get(from, g.plan)
@@ -74,9 +72,7 @@ func (g *graph) findSteal(from string) ([]stealSegment, bool) {
 	first.fscore = h(first)
 	done[first.node] = struct{}{}
 
-	g.pathHeap = g.pathHeap[:0]
-	g.pathHeap = append(g.pathHeap, first)
-	rem := &g.pathHeap
+	rem := &pathHeap{first}
 	for rem.Len() > 0 {
 		current := heap.Pop(rem).(*pathScore)
 		if current.level > first.level+1 {
@@ -118,13 +114,13 @@ func (g *graph) findSteal(from string) ([]stealSegment, bool) {
 }
 
 type stealSegment struct {
-	src  string
-	dst  string
+	src  uint32
+	dst  uint32
 	part *topicPartition
 }
 
 type pathScore struct {
-	node    string
+	node    uint32
 	parent  *pathScore
 	srcEdge *topicPartition
 	level   int
@@ -132,9 +128,9 @@ type pathScore struct {
 	fscore  int
 }
 
-type pathScores map[string]*pathScore
+type pathScores map[uint32]*pathScore
 
-func (p pathScores) get(node string, plan membersPartitions) (*pathScore, bool) {
+func (p pathScores) get(node uint32, plan membersPartitions) (*pathScore, bool) {
 	r, exists := p[node]
 	if !exists {
 		r = &pathScore{

@@ -32,10 +32,16 @@ type Plan map[string]map[string][]int32
 type balancer struct {
 	// members are the members in play for this balance.
 	// This is built in newBalancer mapping member IDs to the GroupMember.
-	members map[string]GroupMember
+	members map[uint32]GroupMember
+
+	// memberNums and memberNames map member names to numbers (and back).
+	// We use numbers throughout balancing for a significant speed boost.
+	memberNums  map[string]uint32
+	memberNames map[uint32]string
+	nextNum     uint32
 
 	// topics are the topic names and partitions that the client knows of
-	// and passed to be used for balancing.
+	// and passed to be used for assigning unassigned partitions.
 	topics map[string][]int32
 
 	// partBuf and partBuf at contain the backing topicPartitions that
@@ -49,7 +55,7 @@ type balancer struct {
 	//
 	// The newer generation goes into plan directly, the older gets
 	// stuffed here.
-	stales map[*topicPartition]string
+	stales map[*topicPartition]uint32
 
 	// plan is what we are building and balancing.
 	plan membersPartitions
@@ -77,16 +83,17 @@ func newBalancer(members []GroupMember, topics map[string][]int32) *balancer {
 	}
 
 	b := &balancer{
-		members: make(map[string]GroupMember, len(members)),
-		topics:  topics,
-		partBuf: make([]topicPartition, nparts),
-		stales:  make(map[*topicPartition]string),
-		plan:    make(membersPartitions, len(members)),
+		members:     make(map[uint32]GroupMember, len(members)),
+		memberNums:  make(map[string]uint32, len(members)),
+		memberNames: make(map[uint32]string, len(members)),
+		topics:      topics,
+		partBuf:     make([]topicPartition, nparts),
+		stales:      make(map[*topicPartition]uint32),
+		plan:        make(membersPartitions, len(members)),
 	}
-	b.stealGraph = newGraph(b.plan, nparts)
 
 	for _, member := range members {
-		b.members[member.ID] = member
+		b.members[b.memberNum(member.ID)] = member
 	}
 	return b
 }
@@ -94,10 +101,11 @@ func newBalancer(members []GroupMember, topics map[string][]int32) *balancer {
 func (b *balancer) into() Plan {
 	plan := make(Plan, len(b.plan))
 	for member, partitions := range b.plan {
-		topics, exists := plan[member]
+		name := b.memberName(member)
+		topics, exists := plan[name]
 		if !exists {
 			topics = make(map[string][]int32)
-			plan[member] = topics
+			plan[name] = topics
 		}
 		for partition := range partitions {
 			topics[partition.topic] = append(topics[partition.topic], partition.partition)
@@ -113,11 +121,26 @@ func (b *balancer) newPartitionPointer(p topicPartition) *topicPartition {
 	return r
 }
 
+func (b *balancer) memberNum(name string) uint32 {
+	num, exists := b.memberNums[name]
+	if !exists {
+		num = b.nextNum
+		b.nextNum++
+		b.memberNums[name] = num
+		b.memberNames[num] = name
+	}
+	return num
+}
+
+func (b *balancer) memberName(num uint32) string {
+	return b.memberNames[num]
+}
+
 // memberPartitions contains partitions for a member.
 type memberPartitions map[*topicPartition]struct{}
 
 // membersPartitions maps members to their partitions.
-type membersPartitions map[string]memberPartitions
+type membersPartitions map[uint32]memberPartitions
 
 type partitionLevel struct {
 	level   int
@@ -126,7 +149,7 @@ type partitionLevel struct {
 
 func (b *balancer) fixMemberLevel(
 	src *rbtree.Node,
-	member string,
+	member uint32,
 	partitions memberPartitions,
 ) {
 	b.removeLevelingMember(src, member)
@@ -139,7 +162,7 @@ func (b *balancer) fixMemberLevel(
 
 func (b *balancer) removeLevelingMember(
 	src *rbtree.Node,
-	member string,
+	member uint32,
 ) {
 	currentLevel := src.Item.(partitionLevel)
 	delete(currentLevel.members, member)
@@ -225,7 +248,7 @@ func (b *balancer) parseMemberMetadata() {
 			return partitionConsumers[i].generation > partitionConsumers[j].generation
 		})
 
-		member := partitionConsumers[0].member
+		member := b.memberNum(partitionConsumers[0].member)
 		partitions := b.plan[member]
 		if partitions == nil {
 			partitions = make(memberPartitions)
@@ -236,7 +259,7 @@ func (b *balancer) parseMemberMetadata() {
 		partitions[tpp] = struct{}{}
 
 		if len(partitionConsumers) > 1 {
-			b.stales[tpp] = partitionConsumers[1].member
+			b.stales[tpp] = b.memberNum(partitionConsumers[1].member)
 		}
 	}
 }
@@ -295,14 +318,14 @@ func (b *balancer) assignUnassignedAndInitGraph() {
 		}
 	}
 
-	partitionPotentials := make(map[*topicPartition][]string, cap(b.partBuf))
+	partitionPotentials := make(map[*topicPartition][]uint32, cap(b.partBuf))
 
 	// First, over all members in this assignment, map each partition to
 	// the members that can consume it. We will use this for assigning.
-	for _, member := range b.members {
+	for num, member := range b.members {
 		// If this is a new member, reserve it in our plan.
-		if _, exists := b.plan[member.ID]; !exists {
-			b.plan[member.ID] = make(memberPartitions, 100)
+		if _, exists := b.plan[num]; !exists {
+			b.plan[num] = make(memberPartitions, 100)
 		}
 		for _, topic := range member.Topics {
 			for _, partition := range b.topics[topic] {
@@ -314,9 +337,9 @@ func (b *balancer) assignUnassignedAndInitGraph() {
 				}
 				potentials, exists := partitionPotentials[tpp]
 				if !exists {
-					potentials = make([]string, 0, len(b.members))
+					potentials = make([]uint32, 0, len(b.members))
 				}
-				potentials = append(potentials, member.ID)
+				potentials = append(potentials, num)
 				partitionPotentials[tpp] = potentials
 			}
 		}
@@ -325,11 +348,11 @@ func (b *balancer) assignUnassignedAndInitGraph() {
 	// Next, over the prior plan, un-map deleted topics or topics that
 	// members no longer want. This is where we determine what is now
 	// unassigned.
-	unassigned := make(map[*topicPartition]struct{}, nparts)
+	unassigned := make(map[*topicPartition]struct{}, cap(b.partBuf))
 	for _, partition := range partitionPointers {
 		unassigned[partition] = struct{}{}
 	}
-	partitionConsumers := make(map[*topicPartition]string, nparts)
+	partitionConsumers := make(map[*topicPartition]uint32, cap(b.partBuf))
 	for member, partitions := range b.plan {
 		for partition := range partitions {
 			if _, exists := partitionPotentials[partition]; !exists { // topic baleted
@@ -367,15 +390,7 @@ func (b *balancer) assignUnassignedAndInitGraph() {
 	}
 
 	// Lastly, with everything assigned, we build our steal graph for balancing.
-	b.stealGraph.cxns = partitionConsumers
-	for member := range b.plan {
-		b.stealGraph.add(member)
-	}
-	for partition, potentials := range partitionPotentials {
-		for _, potential := range potentials {
-			b.stealGraph.link(potential, partition)
-		}
-	}
+	b.stealGraph = newGraph(b.plan, partitionConsumers, partitionPotentials)
 }
 
 // tryRestickyStales is a pre-assigning step where, for all stale members,
@@ -385,8 +400,8 @@ func (b *balancer) assignUnassignedAndInitGraph() {
 // This effectively re-stickies members before we balance further.
 func (b *balancer) tryRestickyStales(
 	unassigned map[*topicPartition]struct{},
-	partitionPotentials map[*topicPartition][]string,
-	partitionConsumers map[*topicPartition]string,
+	partitionPotentials map[*topicPartition][]uint32,
+	partitionConsumers map[*topicPartition]uint32,
 ) {
 	for stale, lastOwner := range b.stales {
 		potentials := partitionPotentials[stale]
@@ -420,8 +435,8 @@ func (b *balancer) tryRestickyStales(
 
 // assignPartition looks for the least loaded member that can take this
 // partition and assigns it to that member.
-func (b *balancer) assignPartition(unassigned *topicPartition, potentials []string) string {
-	var minMember string
+func (b *balancer) assignPartition(unassigned *topicPartition, potentials []uint32) uint32 {
+	var minMember uint32
 	var minPartitions memberPartitions
 	for _, potential := range potentials {
 		partitions := b.plan[potential]
@@ -470,7 +485,7 @@ func (b *balancer) balance() {
 	}
 }
 
-func (b *balancer) reassignPartition(src, dst string, partition *topicPartition) {
+func (b *balancer) reassignPartition(src, dst uint32, partition *topicPartition) {
 	srcPartitions := b.plan[src]
 	dstPartitions := b.plan[dst]
 
