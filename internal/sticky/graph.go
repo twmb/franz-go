@@ -9,22 +9,22 @@ import "container/heap"
 type graph struct {
 	// node => edges out
 	// "from a node, which partitions could we steal?"
-	out []map[*topicPartition]struct{}
+	out []memberPartitions
 
 	// reference to balancer plan for determining node levels
 	plan membersPartitions
 
 	// edge => who owns this edge; built in balancer's assignUnassigned
-	cxns map[*topicPartition]int
+	cxns []int
 }
 
 func newGraph(
 	plan membersPartitions,
-	partitionConsumers map[*topicPartition]int,
-	partitionPotentials map[*topicPartition][]int,
+	partitionConsumers []int,
+	partitionPotentials [][]int,
 ) graph {
 	g := graph{
-		out:  make([]map[*topicPartition]struct{}, len(plan)),
+		out:  make([]memberPartitions, len(plan)),
 		plan: plan,
 		cxns: partitionConsumers,
 	}
@@ -32,17 +32,17 @@ func newGraph(
 		// In the worst case, if every node is linked to each other,
 		// each node will have nparts edges. We preallocate the worst
 		// case. It is common for the graph to be highly connected.
-		g.out[member] = make(map[*topicPartition]struct{}, len(partitionConsumers))
+		g.out[member] = make(memberPartitions, 0, len(partitionConsumers))
 	}
-	for partition, potentials := range partitionPotentials {
+	for partNum, potentials := range partitionPotentials {
 		for _, potential := range potentials {
-			g.out[potential][partition] = struct{}{}
+			g.out[potential].add(partNum)
 		}
 	}
 	return g
 }
 
-func (g graph) changeOwnership(edge *topicPartition, newDst int) {
+func (g graph) changeOwnership(edge int, newDst int) {
 	g.cxns[edge] = newDst
 }
 
@@ -90,7 +90,7 @@ func (g graph) findSteal(from int) ([]stealSegment, bool) {
 
 		done[current.node] = struct{}{}
 
-		for edge := range g.out[current.node] { // O(P) worst case, should be less
+		for _, edge := range g.out[current.node] { // O(P) worst case, should be less
 			neighborNode := g.cxns[edge]
 			if _, isDone := done[neighborNode]; isDone {
 				continue
@@ -114,15 +114,15 @@ func (g graph) findSteal(from int) ([]stealSegment, bool) {
 }
 
 type stealSegment struct {
-	src  int
-	dst  int
-	part *topicPartition
+	src  int // member num
+	dst  int // member num
+	part int // topicPartition; partNum
 }
 
 type pathScore struct {
-	node    int
+	node    int // member num
 	parent  *pathScore
-	srcEdge *topicPartition
+	srcEdge int // topicPartition; partNum
 	level   int
 	gscore  int
 	fscore  int
