@@ -2,7 +2,6 @@ package sticky
 
 import (
 	"fmt"
-	"math/rand"
 	"testing"
 )
 
@@ -931,6 +930,279 @@ func TestImbalanced(t *testing.T) {
 	}
 }
 
+func Test_stickyBalanceStrategy_Plan_KIP54_ExampleOne(t *testing.T) {
+	// PLAN 1
+	members := []GroupMember{
+		{ID: "A", Topics: []string{"1", "2", "3", "4"}},
+		{ID: "B", Topics: []string{"1", "2", "3", "4"}},
+		{ID: "C", Topics: []string{"1", "2", "3", "4"}},
+	}
+	topics := map[string][]int32{
+		"1": []int32{0, 1},
+		"2": []int32{0, 1},
+		"3": []int32{0, 1},
+		"4": []int32{0, 1},
+	}
+	plan1 := Balance(members, topics)
+	testEqualDivvy(t, plan1, 0, members)
+	testPlanUsage(t, plan1, topics, nil)
+
+	// PLAN 2
+	members[1].UserData = udEncode(0, 0, plan1["B"])
+	members[2].UserData = udEncode(0, 0, plan1["C"])
+	nsticky := 8 - partitionsForMember(plan1["A"])
+	members = members[1:]
+	plan2 := Balance(members, topics)
+	testEqualDivvy(t, plan2, nsticky, members)
+	testPlanUsage(t, plan2, topics, nil)
+}
+
+func Test_stickyBalanceStrategy_Plan_KIP54_ExampleTwo(t *testing.T) {
+	// PLAN 1
+	members := []GroupMember{
+		{ID: "1", Topics: []string{"1"}},
+		{ID: "2", Topics: []string{"1", "2"}},
+		{ID: "3", Topics: []string{"1", "2", "3"}},
+	}
+	topics := map[string][]int32{
+		"1": []int32{0},
+		"2": []int32{0, 1},
+		"3": []int32{0, 1, 2},
+	}
+	plan1 := Balance(members, topics)
+	balance1 := map[int]resultOptions{
+		1: {[]string{"1"}, 1},
+		2: {[]string{"2"}, 1},
+		3: {[]string{"3"}, 1},
+	}
+	testStickyResult(t, plan1, members, 0, balance1)
+	testPlanUsage(t, plan1, topics, nil)
+	if len(plan1["1"]["1"]) != 1 || len(plan1["2"]["2"]) != 2 || len(plan1["3"]["3"]) != 3 {
+		t.Error("Incorrect distribution of topic partition assignments")
+	}
+
+	// PLAN 2
+	members[1].UserData = udEncode(0, 0, plan1["2"])
+	members[2].UserData = udEncode(0, 0, plan1["3"])
+	members = members[1:]
+	plan2 := Balance(members, topics)
+	balance2 := map[int]resultOptions{
+		3: {[]string{"2", "3"}, 2},
+	}
+	testStickyResult(t, plan2, members, 5, balance2)
+	testPlanUsage(t, plan2, topics, nil)
+	if len(plan2["2"]["1"]) != 1 || len(plan2["2"]["2"]) != 2 || len(plan2["3"]["3"]) != 3 {
+		t.Error("Incorrect distribution of topic partition assignments")
+	}
+}
+
+func Test_stickyBalanceStrategy_Plan_KIP54_ExampleThree(t *testing.T) {
+	// PLAN 1
+	members := []GroupMember{
+		{ID: "1", Topics: []string{"1", "2"}},
+		{ID: "2", Topics: []string{"1", "2"}},
+	}
+	topics := map[string][]int32{
+		"1": []int32{0, 1},
+		"2": []int32{0, 1},
+	}
+	plan1 := Balance(members, topics)
+	balance1 := map[int]resultOptions{
+		2: {[]string{"1", "2"}, 2},
+	}
+	testStickyResult(t, plan1, members, 0, balance1)
+	testPlanUsage(t, plan1, topics, nil)
+
+	// PLAN 2
+	members[1].UserData = udEncode(0, 0, plan1["2"])
+	members = append(members, GroupMember{
+		ID: "3", Topics: []string{"1", "2"},
+	})
+	plan2 := Balance(members, topics)
+	balance2 := map[int]resultOptions{
+		1: {[]string{"1", "3"}, 2},
+		2: {[]string{"2"}, 1},
+	}
+	testStickyResult(t, plan2, members, 2, balance2)
+	testPlanUsage(t, plan2, topics, nil)
+}
+
+func Test_stickyBalanceStrategy_Plan_AddRemoveConsumerOneTopic(t *testing.T) {
+	// PLAN 1
+	members := []GroupMember{
+		{ID: "1", Topics: []string{"T"}},
+	}
+	topics := map[string][]int32{
+		"T": []int32{0, 1, 2},
+	}
+	plan1 := Balance(members, topics)
+	balance1 := map[int]resultOptions{
+		3: {[]string{"1"}, 1},
+	}
+	testStickyResult(t, plan1, members, 0, balance1)
+	testPlanUsage(t, plan1, topics, nil)
+
+	// PLAN 2
+	members[0].UserData = udEncode(0, 0, plan1["1"])
+	members = append(members, GroupMember{
+		ID: "2", Topics: []string{"T"},
+	})
+	plan2 := Balance(members, topics)
+	balance2 := map[int]resultOptions{
+		1: {[]string{"2"}, 1},
+		2: {[]string{"1"}, 1},
+	}
+	testStickyResult(t, plan2, members, 2, balance2)
+	testPlanUsage(t, plan2, topics, nil)
+
+	// PLAN 3
+	members[1].UserData = udEncode(0, 0, plan2["2"])
+	members = members[1:]
+	plan3 := Balance(members, topics)
+	balance3 := map[int]resultOptions{
+		3: {[]string{"2"}, 1},
+	}
+	testStickyResult(t, plan3, members, 1, balance3)
+	testPlanUsage(t, plan3, topics, nil)
+}
+
+func Test_stickyBalanceStrategy_Plan_AssignmentWithMultipleGenerations1(t *testing.T) {
+	topics := map[string][]int32{"1": []int32{0, 1, 2, 3, 4, 5}}
+	members := []GroupMember{
+		{ID: "1", Topics: []string{"1"}, Version: 1},
+		{ID: "2", Topics: []string{"1"}, Version: 1},
+		{ID: "3", Topics: []string{"1"}, Version: 1},
+	}
+	plan1 := Balance(members, topics)
+	testEqualDivvy(t, plan1, 0, members)
+	testPlanUsage(t, plan1, topics, nil)
+
+	// PLAN 2
+	members[0].UserData = udEncode(1, 1, plan1["1"])
+	members[1].UserData = udEncode(1, 1, plan1["2"])
+	members = members[:2] // delete 3
+
+	plan2 := Balance(members, topics)
+	testEqualDivvy(t, plan2, 4, members)
+	testPlanUsage(t, plan2, topics, nil)
+
+	// PLAN 3
+	members = members[1:] // delete 1
+	members[0].UserData = udEncode(1, 2, plan2["2"])
+	members = append(members, GroupMember{
+		ID:       "3",
+		Topics:   []string{"1"},
+		Version:  1,
+		UserData: udEncode(1, 1, plan1["3"]),
+	})
+
+	plan3 := Balance(members, topics)
+	testEqualDivvy(t, plan3, 4, members)
+	testPlanUsage(t, plan3, topics, nil)
+}
+
+func Test_stickyBalanceStrategy_Plan_AssignmentWithMultipleGenerations2(t *testing.T) {
+	topics := map[string][]int32{"1": []int32{0, 1, 2, 3, 4, 5}}
+	members := []GroupMember{
+		{ID: "1", Topics: []string{"1"}, Version: 1},
+		{ID: "2", Topics: []string{"1"}, Version: 1},
+		{ID: "3", Topics: []string{"1"}, Version: 1},
+	}
+	plan1 := Balance(members, topics)
+	testEqualDivvy(t, plan1, 0, members)
+	testPlanUsage(t, plan1, topics, nil)
+
+	// PLAN 2
+	members[1].UserData = udEncode(1, 1, plan1["2"])
+	ogMembers := members
+	members = members[1:2]
+
+	plan2 := Balance(members, topics)
+	testEqualDivvy(t, plan2, 2, members)
+	testPlanUsage(t, plan2, topics, nil)
+
+	// PLAN 3
+	members = ogMembers
+	members[0].UserData = udEncode(1, 1, plan1["1"])
+	members[1].UserData = udEncode(1, 2, plan2["2"])
+	members[2].UserData = udEncode(1, 1, plan1["3"])
+	plan3 := Balance(members, topics)
+
+	testEqualDivvy(t, plan3, 6, members)
+	testPlanUsage(t, plan3, topics, nil)
+}
+
+func Test_stickyBalanceStrategy_Plan_AssignmentWithConflictingPreviousGenerations(t *testing.T) {
+
+	topics := map[string][]int32{"1": []int32{0, 1, 2, 3, 4, 5}}
+	members := []GroupMember{
+		{ID: "1", Topics: []string{"1"},
+			Version: 1,
+			UserData: newUD().
+				assign("1", 0, 1, 4).
+				setGeneration(1).
+				encode()},
+		{ID: "2", Topics: []string{"1"},
+			Version: 1,
+			UserData: newUD().
+				assign("1", 0, 2, 3). // double zero consumption... OK I guess...
+				setGeneration(1).
+				encode()},
+		{ID: "3", Topics: []string{"1"},
+			Version: 1,
+			UserData: newUD().
+				assign("1", 3, 4, 5).
+				setGeneration(2).
+				encode()},
+	}
+
+	plan := Balance(members, topics)
+
+	testEqualDivvy(t, plan, 6, members)
+	testPlanUsage(t, plan, topics, nil)
+}
+
+func Test_stickyBalanceStrategy_Plan_SchemaBackwardCompatibility(t *testing.T) {
+	topics := map[string][]int32{"1": []int32{0, 1, 2}}
+	members := []GroupMember{
+		{ID: "1", Topics: []string{"1"},
+			Version: 1,
+			UserData: newUD().
+				assign("1", 0, 2).
+				setGeneration(1).
+				encode()},
+		{ID: "2", Topics: []string{"1"},
+			Version: 0,
+			UserData: oldUD().
+				assign("1", 1).
+				encode()},
+		{ID: "3", Topics: []string{"1"}},
+	}
+
+	plan := Balance(members, topics)
+	testEqualDivvy(t, plan, 2, members)
+	testPlanUsage(t, plan, topics, nil)
+}
+
+func Test_stickyBalanceStrategy_Plan_ConflictingPreviousAssignments(t *testing.T) {
+	topics := map[string][]int32{"1": []int32{0, 1}}
+	members := []GroupMember{
+		{ID: "1", Topics: []string{"1"},
+			Version: 1,
+			UserData: newUD().
+				assign("1", 0, 1).
+				encode()},
+		{ID: "2", Topics: []string{"1"},
+			Version: 1,
+			UserData: newUD().
+				assign("1", 0, 1).
+				encode()},
+	}
+	plan := Balance(members, topics)
+	testEqualDivvy(t, plan, 2, members)
+	testPlanUsage(t, plan, topics, nil)
+}
+
 func BenchmarkOne(b *testing.B) {
 	// Start:
 	// A: [1 2 3]
@@ -1012,12 +1284,20 @@ func BenchmarkOne(b *testing.B) {
 	})
 }
 
-func BenchmarkLarge(b *testing.B) {
-	r := rand.New(rand.NewSource(0))
+func TestLarge(t *testing.T) {
+	members, topics := makeLargeBalance(t)
+	plan := Balance(members, topics)
+	testPlanUsage(t, plan, topics, nil)
+}
+
+const topicNum = 20
+const partitionNum = 100
+
+func makeLargeBalance(tb testing.TB) ([]GroupMember, map[string][]int32) {
 	var members []GroupMember
-	for i := 0; i < 200; i++ {
-		topics := make([]string, 200)
-		for j := 0; j < 200; j++ {
+	for i := 0; i < topicNum; i++ {
+		topics := make([]string, topicNum)
+		for j := range topics {
 			topics[j] = fmt.Sprintf("topic%d", j)
 		}
 		members = append(members, GroupMember{
@@ -1025,16 +1305,51 @@ func BenchmarkLarge(b *testing.B) {
 			Topics: topics,
 		})
 	}
-	topics := make(map[string][]int32, 40)
-	for i := 0; i < 40; i++ {
-		partitionCount := r.Intn(20)
-		partitions := make([]int32, partitionCount)
-		for j := 0; j < partitionCount; j++ {
+
+	// now we make topicNum topics
+	topics := make(map[string][]int32)
+	var totalPartitions int
+	for i := 0; i < topicNum; i++ {
+		totalPartitions += partitionNum
+		partitions := make([]int32, partitionNum)
+		for j := range partitions {
 			partitions[j] = int32(j)
 		}
 		topics[fmt.Sprintf("topic%d", i)] = partitions
 	}
+	tb.Logf("%d total partitions; %d total members", totalPartitions, len(members))
+	return members, topics
+}
 
+func makeLargeBalanceWithExisting(tb testing.TB) ([]GroupMember, map[string][]int32) {
+	members, topics := makeLargeBalance(tb)
+	plan := Balance(members, topics)
+
+	oldMembers := members
+	members = members[:0]
+	for i := 0; i < topicNum; i++ {
+		consumer := fmt.Sprintf("consumer%d", i)
+		members = append(members, GroupMember{
+			ID:       consumer,
+			Version:  1,
+			Topics:   oldMembers[i].Topics, // evaluated before overwrite
+			UserData: udEncode(1, 1, plan[consumer]),
+		})
+	}
+	return members, topics
+}
+
+func BenchmarkLarge(b *testing.B) {
+	members, topics := makeLargeBalance(b)
+	b.ResetTimer()
+	for n := 0; n < b.N; n++ {
+		Balance(members, topics)
+	}
+}
+
+func BenchmarkLargeWithExisting(b *testing.B) {
+	members, topics := makeLargeBalance(b)
+	members = members[1:]
 	b.ResetTimer()
 	for n := 0; n < b.N; n++ {
 		Balance(members, topics)

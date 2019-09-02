@@ -25,6 +25,11 @@ func newUD() *udBuilder {
 	}
 }
 
+func (b *udBuilder) setGeneration(n int) *udBuilder {
+	b.generation = n
+	return b
+}
+
 func (b *udBuilder) assign(topic string, partitions ...int32) *udBuilder {
 	if b.assignments == nil {
 		b.assignments = make(map[string][]int32)
@@ -61,6 +66,14 @@ func udEncode(version, generation int, assignments map[string][]int32) []byte {
 		return v1.AppendTo(nil)
 	}
 	return nil
+}
+
+func partitionsForMember(member map[string][]int32) int {
+	var total int
+	for _, partitions := range member {
+		total += len(partitions)
+	}
+	return total
 }
 
 func testEqualDivvy(t *testing.T, plan Plan, expSticky int, input []GroupMember) {
@@ -104,7 +117,10 @@ func testStickyResult(
 	var stickiness int
 	for member, topics := range plan {
 		stickiness += getStickiness(member, topics, input)
-		nparts := len(plan[member])
+		var nparts int
+		for _, partitions := range plan[member] {
+			nparts += len(partitions)
+		}
 
 		expParts := exp[nparts]
 		expParts.times--
@@ -139,6 +155,7 @@ func getStickiness(member string, memberPlan map[string][]int32, input []GroupMe
 	for _, in := range input {
 		if in.ID == member {
 			priorPlan, _ = deserializeUserData(in.Version, in.UserData)
+			break
 		}
 	}
 	if len(priorPlan) == 0 {
