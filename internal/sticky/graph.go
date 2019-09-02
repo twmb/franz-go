@@ -7,10 +7,10 @@ import (
 type graph struct {
 	// node => edges out
 	// "from a node, which partitions could we steal?"
-	out map[string]map[topicPartition]struct{}
+	out map[string]map[*topicPartition]struct{}
 
 	// edge => who has this edge & dst
-	cxns map[topicPartition]*nodeDst
+	cxns map[*topicPartition]*nodeDst
 
 	node2lvl map[string]int
 	lvl2node map[int]map[string]struct{}
@@ -26,15 +26,15 @@ type nodeDst struct {
 
 func newGraph() graph {
 	return graph{
-		out:      make(map[string]map[topicPartition]struct{}),
-		cxns:     make(map[topicPartition]*nodeDst),
+		out:      make(map[string]map[*topicPartition]struct{}),
+		cxns:     make(map[*topicPartition]*nodeDst),
 		node2lvl: make(map[string]int),
 		lvl2node: make(map[int]map[string]struct{}),
 	}
 }
 
 func (g *graph) add(node string, partitions memberPartitions) {
-	g.out[node] = make(map[topicPartition]struct{})
+	g.out[node] = make(map[*topicPartition]struct{}, 100)
 	g.node2lvl[node] = len(partitions)
 
 	lvlNodes := g.lvl2node[len(partitions)]
@@ -47,17 +47,17 @@ func (g *graph) add(node string, partitions memberPartitions) {
 	for partition := range partitions {
 		g.cxns[partition] = &nodeDst{
 			dst: node,
-			ins: make(map[string]struct{}),
+			ins: make(map[string]struct{}, 100),
 		}
 	}
 }
 
-func (g graph) link(src string, edge topicPartition) {
+func (g graph) link(src string, edge *topicPartition) {
 	g.out[src][edge] = struct{}{}
 	g.cxns[edge].ins[src] = struct{}{}
 }
 
-func (g graph) changeOwnership(oldDst, newDst string, edge topicPartition) {
+func (g graph) changeOwnership(oldDst, newDst string, edge *topicPartition) {
 	oldDstLvl := g.node2lvl[oldDst]
 	g.node2lvl[oldDst] = oldDstLvl - 1
 
@@ -85,9 +85,9 @@ func (g graph) changeOwnership(oldDst, newDst string, edge topicPartition) {
 
 // findSteal uses A* search to find a path from the best node it can reach.
 func (g *graph) findSteal(from string) ([]stealSegment, bool) {
-	done := make(map[string]struct{})
+	done := make(map[string]struct{}, 20)
 
-	scores := make(pathScores)
+	scores := make(pathScores, 20)
 	first, _ := scores.get(from, g.node2lvl)
 
 	h := func(p *pathScore) int { return -p.level }
@@ -142,13 +142,13 @@ func (g *graph) findSteal(from string) ([]stealSegment, bool) {
 type stealSegment struct {
 	src  string
 	dst  string
-	part topicPartition
+	part *topicPartition
 }
 
 type pathScore struct {
 	node    string
 	parent  *pathScore
-	srcEdge topicPartition
+	srcEdge *topicPartition
 	level   int
 	gscore  int
 	fscore  int

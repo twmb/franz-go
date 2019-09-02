@@ -1,5 +1,5 @@
-// Package sticky provides the overcomplicated Java sticky partitioning
-// strategy for Kafka, with modifications made to be stickier and fairer.
+// Package sticky provides sticky partitioning strategy for Kafka,
+// with a complete overhaul to be more understandable and optimal.
 //
 // For some points on how Java's strategy is flawed, see
 // https://github.com/Shopify/sarama/pull/1416/files/b29086bdaae0da7ce71eae3f854d50685fd6b631#r315005878
@@ -31,31 +31,30 @@ type Plan map[string]map[string][]int32
 
 type balancer struct {
 	// members are the members in play for this balance.
-	//
 	// This is built in newBalancer mapping member IDs to the GroupMember.
 	members map[string]GroupMember
 
 	// topics are the topic names and partitions that the client knows of
 	// and passed to be used for balancing.
-	//
-	// This is repeatedly used for filtering topics that members indicate
-	// they can consume but that our client does not know of.
 	topics map[string][]int32
 
-	// plan is the plan that we are building to balance partitions.
-	//
-	// This is initialized with data from the userdata each group member
-	// is sending with the join. After, we use this to move partitions
-	// around or assign new partitions.
+	// partBuf and partBuf at contain the backing topicPartitions that
+	// are referenced in the algorithm, reducing thousands of small
+	// allocations to one large one.
+	partBuf   []topicPartition
+	partBufAt int
+
+	// plan is what we are building and balancing.
 	plan membersPartitions
 
-	// planByNumPartitions orders plan member partitions by the number of
-	// partitions each member is consuming.
+	// planByNumPartitions orders plan members into partition count levels.
 	//
-	// The nodes in the btree reference values in plan, meaning updates in
+	// The nodes in the tree reference values in plan, meaning updates in
 	// this field are visible in plan.
 	planByNumPartitions *rbtree.Tree
 
+	// stealGraph is a graphical representation of members and partitions
+	// they want to steal.
 	stealGraph graph
 }
 
@@ -65,14 +64,19 @@ type topicPartition struct {
 }
 
 func newBalancer(members []GroupMember, topics map[string][]int32) *balancer {
+	var nparts int
+	for _, partitions := range topics {
+		nparts += len(partitions)
+	}
+
 	b := &balancer{
-		members: make(map[string]GroupMember, len(members)),
-		topics:  topics,
-
-		plan: make(membersPartitions),
-
+		members:    make(map[string]GroupMember, len(members)),
+		topics:     topics,
+		partBuf:    make([]topicPartition, nparts),
+		plan:       make(membersPartitions),
 		stealGraph: newGraph(),
 	}
+
 	for _, member := range members {
 		b.members[member.ID] = member
 	}
@@ -94,8 +98,15 @@ func (b *balancer) into() Plan {
 	return plan
 }
 
+func (b *balancer) newPartitionPointer(p topicPartition) *topicPartition {
+	b.partBuf[b.partBufAt] = p
+	r := &b.partBuf[b.partBufAt]
+	b.partBufAt++
+	return r
+}
+
 // memberPartitions contains partitions for a member.
-type memberPartitions map[topicPartition]struct{}
+type memberPartitions map[*topicPartition]struct{}
 
 // membersPartitions maps members to their partitions.
 type membersPartitions map[string]memberPartitions
@@ -149,39 +160,12 @@ func (m membersPartitions) rbtreeByLevel() *rbtree.Tree {
 	return &t
 }
 
-// staticPartitionMember is the same as partitionMembers, but we type name it
-// to imply immutability in reading. All mutable uses go through cloneKeys
-// or shallowClone.
-type staticPartitionMembers map[topicPartition]map[string]struct{}
-
-func (orig staticPartitionMembers) cloneKeys() map[topicPartition]struct{} {
-	dup := make(map[topicPartition]struct{}, len(orig))
-	for partition := range orig {
-		dup[partition] = struct{}{}
-	}
-	return dup
-}
-
 func Balance(members []GroupMember, topics map[string][]int32) Plan {
-	// Code below relies on members to be sorted. It should be: that is the
-	// contract of the Balance interface. But, just in case.
-	sort.Slice(members, func(i, j int) bool { return members[i].ID < members[j].ID })
-
 	b := newBalancer(members, topics)
-
-	// Parse the member metadata for figure out what everybody was doing.
 	b.parseMemberMetadata()
-	// For planByNumPartitions, we use a btree heap since we will be
-	// accessing both the min and max often as well as ranging from
-	// smallest to largest.
-	//
-	// We init this after initAllConsumersPartitions, which can add new
-	// members that were not in the prior plan.
 	b.assignUnassignedAndInitGraph()
 	b.planByNumPartitions = b.plan.rbtreeByLevel()
-
 	b.balance()
-
 	return b.into()
 }
 
@@ -205,6 +189,11 @@ func (b *balancer) parseMemberMetadata() {
 			generation,
 		}
 		for _, topicPartition := range memberPlan {
+			// If the topic no longer exists in our topics, no sense keeping
+			// it around here only to be deleted later.
+			if _, exists := b.topics[topicPartition.topic]; !exists {
+				continue
+			}
 			partitionConsumers := partitionConsumersByGeneration[topicPartition]
 			var doublyConsumed bool
 			for _, otherConsumer := range partitionConsumers { // expected to be very few if any others
@@ -234,7 +223,8 @@ func (b *balancer) parseMemberMetadata() {
 			partitions = make(memberPartitions)
 			b.plan[member] = partitions
 		}
-		partitions[partition] = struct{}{}
+
+		partitions[b.newPartitionPointer(partition)] = struct{}{}
 	}
 }
 
@@ -279,28 +269,41 @@ func deserializeUserData(version int16, userdata []byte) (memberPlan []topicPart
 	return memberPlan, generation
 }
 
+// assignUnassignedAndInitGraph is a long function that assigns unassigned
+// functions to the least loaded members and initializes our steal graph.
+//
+// Doing so requires a bunch of metadata, and in the process we want to remove
+// partitions from the plan that no longer exist in the client.
 func (b *balancer) assignUnassignedAndInitGraph() {
-	var nparts int
-	for partitions := range b.topics {
-		nparts += len(partitions)
+	nparts := cap(b.partBuf)
+	partitionPointers := make(map[topicPartition]*topicPartition, nparts)
+	for _, partitions := range b.plan {
+		for partition := range partitions {
+			partitionPointers[*partition] = partition
+		}
 	}
 
-	partitionPotentials := make(map[topicPartition][]string, nparts)
+	partitionPotentials := make(map[*topicPartition][]string, nparts)
 
 	// First, over all members in this assignment, map each partition to
 	// the members that can consume it. We will use this for assigning.
 	for _, member := range b.members {
 		// If this is a new member, reserve it in our plan.
 		if _, exists := b.plan[member.ID]; !exists {
-			b.plan[member.ID] = make(map[topicPartition]struct{})
+			b.plan[member.ID] = make(memberPartitions, 100)
 		}
 		for _, topic := range member.Topics {
 			for _, partition := range b.topics[topic] {
 				tp := topicPartition{topic, partition}
-				if potentials, exists := partitionPotentials[tp]; !exists {
-					partitionPotentials[tp] = append(make([]string, 0, len(b.members)), member.ID)
+				tpp, exists := partitionPointers[tp]
+				if !exists {
+					tpp = b.newPartitionPointer(tp)
+					partitionPointers[tp] = tpp
+				}
+				if potentials, exists := partitionPotentials[tpp]; !exists {
+					partitionPotentials[tpp] = append(make([]string, 0, len(b.members)), member.ID)
 				} else {
-					partitionPotentials[tp] = append(potentials, member.ID)
+					partitionPotentials[tpp] = append(potentials, member.ID)
 				}
 			}
 		}
@@ -309,11 +312,11 @@ func (b *balancer) assignUnassignedAndInitGraph() {
 	// Next, over the prior plan, un-map deleted topics or topics that
 	// members no longer want. This is where we determine what is now
 	// unassigned.
-	unassigned := make(map[topicPartition]struct{}, nparts)
-	for partition := range partitionPotentials {
+	unassigned := make(map[*topicPartition]struct{}, nparts)
+	for _, partition := range partitionPointers {
 		unassigned[partition] = struct{}{}
 	}
-	partitionConsumers := make(map[topicPartition]string, nparts)
+	partitionConsumers := make(map[*topicPartition]string, nparts)
 	for member, partitions := range b.plan {
 		for partition := range partitions {
 			if _, exists := partitionPotentials[partition]; !exists { // topic baleted
@@ -363,10 +366,9 @@ func (b *balancer) assignUnassignedAndInitGraph() {
 	}
 }
 
-// assignPartition looks for the first member that can assume this unassigned
-// partition, in order from members with smallest partitions, and assigns
-// the partition to it.
-func (b *balancer) assignPartition(unassigned topicPartition, potentials []string) string {
+// assignPartition looks for the least loaded member that can take this
+// partition and assigns it to that member.
+func (b *balancer) assignPartition(unassigned *topicPartition, potentials []string) string {
 	var minMember string
 	var minPartitions memberPartitions
 	for _, potential := range potentials {
@@ -381,33 +383,32 @@ func (b *balancer) assignPartition(unassigned topicPartition, potentials []strin
 	return minMember
 }
 
+// balance loops trying to move partitions until the plan is as balanced
+// as it can be.
 func (b *balancer) balance() {
-	b.shuffle()
-}
-
-// shuffle loops trying to move partitions until the plan is balanced
-// or until no moves happen.
-//
-// O(M * P^2) i.e. not great.
-func (b *balancer) shuffle() {
-	// O(lg(level disparity))?, which is at most P (all partitions in one)?
 	for min := b.planByNumPartitions.Min(); b.planByNumPartitions.Len() > 1; min = b.planByNumPartitions.Min() {
 		level := min.Item.(partitionLevel)
+		// If this max level is within one of this level, then nothing
+		// can steal down so we return early.
+		if b.planByNumPartitions.Max().Item.(partitionLevel).level <= level.level+1 {
+			return
+		}
+		// We continually loop over this level until every meber is
+		// static (deleted) or bumped up a level. It is possible for a
+		// member to bump itself up only to have a different in this
+		// level steal from it and bump that original member back down,
+		// which is why we do not just loop once over level.members.
 		for len(level.members) > 0 {
 			for member := range level.members {
-				// If we could not steal from a big imbalance, we may be
-				// have a transitive steal.
-				stealPath, found := b.stealGraph.findSteal(member)
-				if found {
+				if stealPath, found := b.stealGraph.findSteal(member); found {
 					for _, segment := range stealPath {
 						b.reassignPartition(segment.src, segment.dst, segment.part)
 					}
 					continue
 				}
 
-				// If we did not have a transitive steal, this member
-				// will never grow past this level and can be removed
-				// from consideration.
+				// If we could not find a steal path, this
+				// member is not static (will never grow).
 				delete(level.members, member)
 				if len(level.members) == 0 {
 					b.planByNumPartitions.Delete(b.planByNumPartitions.Min())
@@ -417,7 +418,7 @@ func (b *balancer) shuffle() {
 	}
 }
 
-func (b *balancer) reassignPartition(src, dst string, partition topicPartition) {
+func (b *balancer) reassignPartition(src, dst string, partition *topicPartition) {
 	srcPartitions := b.plan[src]
 	dstPartitions := b.plan[dst]
 
