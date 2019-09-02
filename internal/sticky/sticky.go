@@ -44,6 +44,13 @@ type balancer struct {
 	partBuf   []topicPartition
 	partBufAt int
 
+	// Stales tracks partitions that are doubly subscribed in this join
+	// where one of the subscribers is on an old generation.
+	//
+	// The newer generation goes into plan directly, the older gets
+	// stuffed here.
+	stales map[*topicPartition]string
+
 	// plan is what we are building and balancing.
 	plan membersPartitions
 
@@ -70,12 +77,13 @@ func newBalancer(members []GroupMember, topics map[string][]int32) *balancer {
 	}
 
 	b := &balancer{
-		members:    make(map[string]GroupMember, len(members)),
-		topics:     topics,
-		partBuf:    make([]topicPartition, nparts),
-		plan:       make(membersPartitions),
-		stealGraph: newGraph(),
+		members: make(map[string]GroupMember, len(members)),
+		topics:  topics,
+		partBuf: make([]topicPartition, nparts),
+		stales:  make(map[*topicPartition]string),
+		plan:    make(membersPartitions, len(members)),
 	}
+	b.stealGraph = newGraph(b.plan, nparts)
 
 	for _, member := range members {
 		b.members[member.ID] = member
@@ -224,7 +232,12 @@ func (b *balancer) parseMemberMetadata() {
 			b.plan[member] = partitions
 		}
 
-		partitions[b.newPartitionPointer(partition)] = struct{}{}
+		tpp := b.newPartitionPointer(partition)
+		partitions[tpp] = struct{}{}
+
+		if len(partitionConsumers) > 1 {
+			b.stales[tpp] = partitionConsumers[1].member
+		}
 	}
 }
 
@@ -341,6 +354,8 @@ func (b *balancer) assignUnassignedAndInitGraph() {
 		}
 	}
 
+	b.tryRestickyStales(unassigned, partitionPotentials, partitionConsumers)
+
 	// We now assign everything we know is not currently assigned.
 	for partition := range unassigned {
 		potentials := partitionPotentials[partition]
@@ -361,7 +376,52 @@ func (b *balancer) assignUnassignedAndInitGraph() {
 			if owner == potential {
 				continue
 			}
+			// We technically should link a partition even if the
+			// owner is the same so that we can re-steal if if it
+			// is stolen from us, but due to the implementation,
+			// there is never a need to re-steal: a member should
+			// never need to steal the same partition twice.
 			b.stealGraph.link(potential, partition)
+		}
+	}
+}
+
+// tryRestickyStales is a pre-assigning step where, for all stale members,
+// we give partitions back to them if the partition is currently on an
+// over loaded member or unassigned.
+//
+// This effectively re-stickies members before we balance further.
+func (b *balancer) tryRestickyStales(
+	unassigned map[*topicPartition]struct{},
+	partitionPotentials map[*topicPartition][]string,
+	partitionConsumers map[*topicPartition]string,
+) {
+	for stale, lastOwner := range b.stales {
+		potentials := partitionPotentials[stale]
+		if len(potentials) == 0 {
+			continue
+		}
+		var canTake bool
+		for _, potential := range potentials {
+			if potential == lastOwner {
+				canTake = true
+			}
+		}
+		if !canTake {
+			return
+		}
+
+		if _, isUnassigned := unassigned[stale]; isUnassigned {
+			b.plan[lastOwner][stale] = struct{}{}
+			delete(unassigned, stale)
+		}
+
+		currentOwner := partitionConsumers[stale]
+		lastOwnerPartitions := b.plan[lastOwner]
+		currentOwnerPartitions := b.plan[currentOwner]
+		if len(lastOwnerPartitions)+1 < len(currentOwnerPartitions) {
+			delete(currentOwnerPartitions, stale)
+			lastOwnerPartitions[stale] = struct{}{}
 		}
 	}
 }
@@ -422,23 +482,26 @@ func (b *balancer) reassignPartition(src, dst string, partition *topicPartition)
 	srcPartitions := b.plan[src]
 	dstPartitions := b.plan[dst]
 
+	oldSrcLevel := len(srcPartitions)
+	oldDstLevel := len(dstPartitions)
+
 	delete(srcPartitions, partition)
 	dstPartitions[partition] = struct{}{}
 
 	b.fixMemberLevel(
 		b.planByNumPartitions.FindWith(func(n *rbtree.Node) int {
-			return len(srcPartitions) + 1 - n.Item.(partitionLevel).level
+			return oldSrcLevel - n.Item.(partitionLevel).level
 		}),
 		src,
 		srcPartitions,
 	)
 	b.fixMemberLevel(
 		b.planByNumPartitions.FindWith(func(n *rbtree.Node) int {
-			return len(dstPartitions) - 1 - n.Item.(partitionLevel).level
+			return oldDstLevel - n.Item.(partitionLevel).level
 		}),
 		dst,
 		dstPartitions,
 	)
 
-	b.stealGraph.changeOwnership(src, dst, partition)
+	b.stealGraph.changeOwnership(partition, dst)
 }

@@ -1291,7 +1291,7 @@ func TestLarge(t *testing.T) {
 }
 
 const topicNum = 20
-const partitionNum = 100
+const partitionNum = 200
 
 func makeLargeBalance(tb testing.TB) ([]GroupMember, map[string][]int32) {
 	var members []GroupMember
@@ -1348,7 +1348,7 @@ func BenchmarkLarge(b *testing.B) {
 }
 
 func BenchmarkLargeWithExisting(b *testing.B) {
-	members, topics := makeLargeBalance(b)
+	members, topics := makeLargeBalanceWithExisting(b)
 	members = members[1:]
 	b.ResetTimer()
 	for n := 0; n < b.N; n++ {
