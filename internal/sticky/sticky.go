@@ -288,15 +288,14 @@ func deserializeUserData(version int16, userdata []byte) (memberPlan []topicPart
 // Doing so requires a bunch of metadata, and in the process we want to remove
 // partitions from the plan that no longer exist in the client.
 func (b *balancer) assignUnassignedAndInitGraph() {
-	nparts := cap(b.partBuf)
-	partitionPointers := make(map[topicPartition]*topicPartition, nparts)
+	partitionPointers := make(map[topicPartition]*topicPartition, cap(b.partBuf))
 	for _, partitions := range b.plan {
 		for partition := range partitions {
 			partitionPointers[*partition] = partition
 		}
 	}
 
-	partitionPotentials := make(map[*topicPartition][]string, nparts)
+	partitionPotentials := make(map[*topicPartition][]string, cap(b.partBuf))
 
 	// First, over all members in this assignment, map each partition to
 	// the members that can consume it. We will use this for assigning.
@@ -313,11 +312,12 @@ func (b *balancer) assignUnassignedAndInitGraph() {
 					tpp = b.newPartitionPointer(tp)
 					partitionPointers[tp] = tpp
 				}
-				if potentials, exists := partitionPotentials[tpp]; !exists {
-					partitionPotentials[tpp] = append(make([]string, 0, len(b.members)), member.ID)
-				} else {
-					partitionPotentials[tpp] = append(potentials, member.ID)
+				potentials, exists := partitionPotentials[tpp]
+				if !exists {
+					potentials = make([]string, 0, len(b.members))
 				}
+				potentials = append(potentials, member.ID)
+				partitionPotentials[tpp] = potentials
 			}
 		}
 	}
@@ -372,16 +372,7 @@ func (b *balancer) assignUnassignedAndInitGraph() {
 		b.stealGraph.add(member)
 	}
 	for partition, potentials := range partitionPotentials {
-		owner := partitionConsumers[partition]
 		for _, potential := range potentials {
-			if owner == potential {
-				continue
-			}
-			// We technically should link a partition even if the
-			// owner is the same so that we can re-steal if if it
-			// is stolen from us, but due to the implementation,
-			// there is never a need to re-steal: a member should
-			// never need to steal the same partition twice.
 			b.stealGraph.link(potential, partition)
 		}
 	}
@@ -454,7 +445,7 @@ func (b *balancer) balance() {
 		if b.planByNumPartitions.Max().Item.(partitionLevel).level <= level.level+1 {
 			return
 		}
-		// We continually loop over this level until every meber is
+		// We continually loop over this level until every member is
 		// static (deleted) or bumped up a level. It is possible for a
 		// member to bump itself up only to have a different in this
 		// level steal from it and bump that original member back down,
