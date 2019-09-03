@@ -3,9 +3,6 @@ kgo
 
 TODO
 ====
-- KIP-54 (sticky assignor)
-- KIP-341 (sticky assignor bugfix)
-
 - KIP-320 (fetcher log truncation detection)
 
 - KIP-467 (produce response error change for per-record errors)

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/twmb/kgo/internal/sticky"
 	"github.com/twmb/kgo/kmsg"
 )
 
@@ -11,16 +12,23 @@ import (
 type GroupBalancer interface {
 	// protocolName returns the name of the protocol, e.g. roundrobin,
 	// range, sticky.
-	protocolName() string // "roundrobin"
+	protocolName() string // "sticky"
 
 	// balance balances topics and partitions among group members.
+	//
+	// The input members are guaranteed to be sorted by member ID, and
+	// each member's topics are guaranteed to be sorted.
+	//
+	// TODO switch topics to map[string]int32? (number being # of topics)
 	balance(members []groupMember, topics map[string][]int32) balancePlan
 }
 
 // groupMember is a member id and the topics that member is interested in.
 type groupMember struct {
-	id     string
-	topics []string
+	id       string
+	version  int16
+	topics   []string
+	userdata []byte
 }
 
 // balancePlan is the result of balancing topic partitions among members.
@@ -62,7 +70,6 @@ func (plan balancePlan) intoAssignment() []kmsg.SyncGroupRequestGroupAssignment 
 		})
 	}
 	return kassignments
-
 }
 
 // balanceGroup returns a balancePlan from a join group response.
@@ -75,10 +82,10 @@ func (c *consumer) balanceGroup(proto string, kmembers []kmsg.JoinGroupResponseM
 		return nil, fmt.Errorf("NO MEMBERS") // TODO nice err
 	}
 	sort.Slice(members, func(i, j int) bool {
-		return members[i].id < members[j].id
+		return members[i].id < members[j].id // guarantee sorted members
 	})
 	for _, member := range members {
-		sort.Strings(member.topics)
+		sort.Strings(member.topics) // guarantee sorted topics
 	}
 
 	for _, balancer := range c.group.balancers {
@@ -99,8 +106,10 @@ func parseGroupMembers(kmembers []kmsg.JoinGroupResponseMember) ([]groupMember, 
 			return nil, fmt.Errorf("unable to read member metadata: %v", err) // TODO nice err
 		}
 		members = append(members, groupMember{
-			id:     kmember.MemberID,
-			topics: meta.Topics,
+			id:       kmember.MemberID,
+			version:  meta.Version,
+			topics:   meta.Topics,
+			userdata: meta.UserData,
 		})
 	}
 	return members, nil
@@ -128,36 +137,23 @@ type roundRobinBalancer struct{}
 
 func (*roundRobinBalancer) protocolName() string { return "roundrobin" }
 func (*roundRobinBalancer) balance(members []groupMember, topics map[string][]int32) balancePlan {
-	type topicPartition struct {
-		topic     string
-		partition int32
-	}
-	var allPartitions []topicPartition
-
-	for topic, partitions := range topics { // layout all topic partitions
-		for _, partition := range partitions {
-			allPartitions = append(allPartitions, topicPartition{
-				topic:     topic,
-				partition: partition,
-			})
+	topics2PotentialConsumers := make(map[string][]string)
+	for _, member := range members {
+		for _, topic := range member.topics {
+			topics2PotentialConsumers[topic] = append(topics2PotentialConsumers[topic], member.id)
 		}
 	}
-
-	sort.Slice(allPartitions, func(i, j int) bool { // order them
-		l, r := allPartitions[i], allPartitions[j]
-		if l.topic == r.topic {
-			return l.partition < r.partition
-		}
-		return l.topic < r.topic
-	})
 
 	plan := newBalancePlan(members)
+	for topic, potentialConsumers := range topics2PotentialConsumers {
+		sort.Strings(potentialConsumers)
 
-	var memberIdx int
-	for _, next := range allPartitions { // then assign them to the members, easy enough
-		member := members[memberIdx]
-		plan.addPartition(member.id, next.topic, next.partition)
-		memberIdx = (memberIdx + 1) % len(members)
+		var consumerIdx int
+		for _, partition := range topics[topic] {
+			member := potentialConsumers[consumerIdx]
+			plan.addPartition(member, topic, partition)
+			consumerIdx = (consumerIdx + 1) % len(potentialConsumers)
+		}
 	}
 
 	return plan
@@ -166,7 +162,7 @@ func (*roundRobinBalancer) balance(members []groupMember, topics map[string][]in
 // RangeBalancer returns a group balancer that, per topic, maps partitions to
 // group members. Since this works on a topic level, uneven partitions per
 // topic to the number of members can lead to slight partition consumption
-// disparities..
+// disparities.
 //
 // Suppose there are two members M0 and M1, two topics t0 and t1, and each
 // topic has three partitions p0, p1, and p2. The partition balancing will be
@@ -183,45 +179,110 @@ type rangeBalancer struct{}
 
 func (*rangeBalancer) protocolName() string { return "range" }
 func (*rangeBalancer) balance(members []groupMember, topics map[string][]int32) balancePlan {
-	type topicPartitions struct {
-		topic      string
-		partitions []int32
+	topics2PotentialConsumers := make(map[string][]string)
+	for _, member := range members {
+		for _, topic := range member.topics {
+			topics2PotentialConsumers[topic] = append(topics2PotentialConsumers[topic], member.id)
+		}
 	}
-	var allTopics []topicPartitions
-
-	for topic, partitions := range topics {
-		sort.Slice(partitions, func(i, j int) bool { return partitions[i] < partitions[j] })
-		allTopics = append(allTopics, topicPartitions{
-			topic:      topic,
-			partitions: partitions,
-		})
-	}
-
-	sort.Slice(allTopics, func(i, j int) bool {
-		return allTopics[i].topic < allTopics[j].topic
-	})
 
 	plan := newBalancePlan(members)
+	for topic, potentialConsumers := range topics2PotentialConsumers {
+		sort.Strings(potentialConsumers)
 
-	for _, parts := range allTopics {
-		numParts := len(parts.partitions)
+		partitions := topics[topic]
+		numParts := len(partitions)
 		div, rem := numParts/len(members), numParts%len(members)
 
-		var memberIdx int
-		for len(parts.partitions) > 0 {
+		var consumerIdx int
+		for len(partitions) > 0 {
 			num := div
 			if rem > 0 {
 				num++
 				rem--
 			}
 
-			member := members[memberIdx]
-			plan.addPartitions(member.id, parts.topic, parts.partitions[:num])
+			member := potentialConsumers[consumerIdx]
+			plan.addPartitions(member, topic, partitions[:num])
 
-			memberIdx++
-			parts.partitions = parts.partitions[num:]
+			consumerIdx++
+			partitions = partitions[num:]
 		}
 	}
 
 	return plan
+}
+
+// StickyBalancer returns a group balancer that ensures minimal partition
+// movement on group changes while also ensuring optimal balancing.
+//
+// Suppose there are three members M0, M1, and M3, and two topics t0 and t1
+// each with three partitions p0, p1, and p2. If the initial balance plan looks
+// like
+//
+//     M0: [t0p0, t0p1, t0p2]
+//     M1: [t1p0, t1p1, t1p2]
+//     M2: [t2p0, t2p2, t2p2]
+//
+// If M2 disappears, both roundrobin and range would have mostly destructive
+// reassignments.
+//
+// Range would result in
+//
+//     M0: [t0p0, t0p1, t1p0, t1p1, t2p0, t2p1]
+//     M1: [t0p2, t1p2, t2p2]
+//
+// which is imbalanced and has 3 partitions move from members that did not need
+// to move (t0p2, t1p0, t1p1).
+//
+// RoundRobin would result in
+//
+//     M0: [t0p0, t0p2, t1p1, t2p0, t2p2]
+//     M1: [t0p1, t1p0, t1p2, t2p1]
+//
+// which is balanced, but has 2 partitions move when they do not need to
+// (t0p1, t1p1).
+//
+// Stick balancing results in
+//
+//     M0: [t0p0, t0p1, t0p2, t2p0, t2p2]
+//     M1: [t1p0, t1p1, t1p2, t2p1]
+//
+// which is balanced and does not cause any unnecessary partition movement.
+// The actual t2 partitions may not be in that exact combination, but they
+// will be balanced.
+//
+// An advantage of the sticky consumer is that it allows API users to
+// potentially avoid some cleanup until after the consumer knows which
+// partitions it is losing when it gets its new assignment. Users can
+// then only cleanup state for partitions that changed, which will be
+// minimal (see KIP-54; this client also includes the KIP-351 bugfix).
+//
+// Note that this API implements the sticky partitioning quite differently from
+// the Java implementation. The Java implementaiton is difficult to reason
+// about and has many edge cases that result in non-optimal balancing. This API
+// uses a different algorithm (A*) to ensure optimal balancing while being an
+// order of magnitude faster. Since the new strategy is a strict improvement
+// over the Java strategy, it is entirely compatible. Any Go client sharing a
+// group with a Java client will not have its decisions undone on leadership
+// change from a Go consumer to a Java one.
+func StickyBalancer() GroupBalancer {
+	return new(stickyBalancer)
+}
+
+type stickyBalancer struct{}
+
+func (*stickyBalancer) protocolName() string { return "sticky" }
+func (*stickyBalancer) balance(members []groupMember, topics map[string][]int32) balancePlan {
+	stickyMembers := make([]sticky.GroupMember, 0, len(members))
+	for _, member := range members {
+		stickyMembers = append(stickyMembers, sticky.GroupMember{
+			ID:       member.id,
+			Version:  member.version,
+			Topics:   member.topics,
+			UserData: member.userdata,
+		})
+	}
+
+	return balancePlan(sticky.Balance(stickyMembers, topics))
 }
