@@ -90,7 +90,7 @@ func newBalancer(members []GroupMember, topics map[string][]int32) *balancer {
 		plan:        make(membersPartitions, len(members)),
 		topics:      topics,
 		partNames:   make([]topicPartition, nparts),
-		partNums:    make(map[*topicPartition]int, nparts),
+		partNums:    make(map[*topicPartition]int, nparts*4/3),
 		stales:      make(map[int]int),
 	}
 
@@ -109,12 +109,17 @@ func (b *balancer) into() Plan {
 		name := b.memberName(memberNum)
 		topics, exists := plan[name]
 		if !exists {
-			topics = make(map[string][]int32)
+			topics = make(map[string][]int32, 20)
 			plan[name] = topics
 		}
 		for _, partNum := range partNums {
 			partition := b.partName(partNum)
-			topics[partition.topic] = append(topics[partition.topic], partition.partition)
+			topicPartitions := topics[partition.topic]
+			if len(topicPartitions) == 0 {
+				topicPartitions = make([]int32, 0, 40)
+			}
+			topicPartitions = append(topicPartitions, partition.partition)
+			topics[partition.topic] = topicPartitions
 		}
 	}
 	return plan
@@ -250,16 +255,14 @@ func Balance(members []GroupMember, topics map[string][]int32) Plan {
 
 // parseMemberMetadata parses all member userdata to initialize the prior plan.
 func (b *balancer) parseMemberMetadata() {
-	type memberGeneration struct {
-		member     string
-		generation int32
-	}
 
 	// all partitions => members that are consuming those partitions
 	// Each partition should only have one consumer, but a flaky member
 	// could rejoin with an old generation (stale user data) and say it
 	// is consuming something a different member is. See KIP-341.
-	partitionConsumersByGeneration := make(map[topicPartition][]memberGeneration)
+	partitionConsumersByGeneration := make(map[topicPartition][]memberGeneration, cap(b.partNames)*4/3)
+	partitionConsumersBuf := make([]memberGeneration, cap(b.partNames))
+	var partitionConsumersNext int
 
 	for _, member := range b.members {
 		memberPlan, generation := deserializeUserData(member.Version, member.UserData)
@@ -286,15 +289,20 @@ func (b *balancer) parseMemberMetadata() {
 			if doublyConsumed {
 				continue
 			}
+			if len(partitionConsumers) == 0 {
+				partitionConsumers = partitionConsumersBuf[:0:1]
+				partitionConsumersBuf = partitionConsumersBuf[1:]
+				partitionConsumersNext++
+			}
 			partitionConsumers = append(partitionConsumers, memberGeneration)
 			partitionConsumersByGeneration[topicPartition] = partitionConsumers
 		}
 	}
 
+	var mgs memberGenerations
 	for partition, partitionConsumers := range partitionConsumersByGeneration {
-		sort.Slice(partitionConsumers, func(i, j int) bool {
-			return partitionConsumers[i].generation > partitionConsumers[j].generation
-		})
+		mgs = memberGenerations(partitionConsumers)
+		sort.Sort(&mgs)
 
 		memberNum := b.memberNum(partitionConsumers[0].member)
 		partNums := &b.plan[memberNum]
@@ -307,6 +315,16 @@ func (b *balancer) parseMemberMetadata() {
 		}
 	}
 }
+
+type memberGeneration struct {
+	member     string
+	generation int32
+}
+type memberGenerations []memberGeneration
+
+func (m *memberGenerations) Less(i, j int) bool { return (*m)[i].generation > (*m)[j].generation }
+func (m *memberGenerations) Swap(i, j int)      { (*m)[i], (*m)[j] = (*m)[j], (*m)[i] }
+func (m *memberGenerations) Len() int           { return len(*m) }
 
 // deserializeUserData returns the topic partitions a member was consuming and
 // the join generation it was consuming from.
@@ -355,7 +373,7 @@ func deserializeUserData(version int16, userdata []byte) (memberPlan []topicPart
 // Doing so requires a bunch of metadata, and in the process we want to remove
 // partitions from the plan that no longer exist in the client.
 func (b *balancer) assignUnassignedAndInitGraph() {
-	partitionNums := make(map[topicPartition]int, cap(b.partNames))
+	partitionNums := make(map[topicPartition]int, cap(b.partNames)*4/3)
 	for i := 0; i < b.nextPartNum; i++ {
 		partitionNums[b.partNames[i]] = i
 	}
