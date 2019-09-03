@@ -14,6 +14,14 @@ func Test_stickyBalanceStrategy_Plan(t *testing.T) {
 		nsticky      int
 	}{
 		{
+			name:    "no members, no plan",
+			members: []GroupMember{},
+			topics: map[string][]int32{
+				"a": []int32{0},
+			},
+		},
+
+		{
 			name: "one consumer, no topics",
 			members: []GroupMember{
 				{ID: "A"},
@@ -855,7 +863,7 @@ func TestImbalanced(t *testing.T) {
 			// A: [1 2 3]
 			// B: [3 4 5]
 			// C: [3 4 5 6 7 8 9 a b c]
-			// D: [3 4 5 6 7 8 9 a b c]
+			// D: [3 4 5 6 7 8 9 a b c z]
 			//
 			// A -> 1 2
 			// B ->
@@ -867,7 +875,7 @@ func TestImbalanced(t *testing.T) {
 			// B -> 3 4 5
 			// C -> 7 8 9
 			// D -> 9 a b c
-			name: "chain stop",
+			name: "chain stop and noexist drop",
 			members: []GroupMember{
 				{ID: "A", Topics: []string{"1", "2", "3"},
 					Version: 1,
@@ -896,6 +904,7 @@ func TestImbalanced(t *testing.T) {
 						assign("a", 0).
 						assign("b", 0).
 						assign("c", 0).
+						assign("x", 0). // no longer exists; dropped in parseMemberMetadata
 						encode()},
 			},
 			topics: map[string][]int32{
@@ -917,6 +926,76 @@ func TestImbalanced(t *testing.T) {
 				2: {[]string{"A", "B"}, 1},
 				3: {[]string{"A", "B", "C"}, 2},
 				4: {[]string{"D"}, 1},
+			},
+		},
+
+		//
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			plan := Balance(test.members, test.topics)
+			testStickyResult(t, plan, test.members, test.nsticky, test.balance)
+			testPlanUsage(t, plan, test.topics, nil)
+		})
+	}
+}
+
+func TestMultiGenerational(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		members []GroupMember
+		topics  map[string][]int32
+		nsticky int
+		balance map[int]resultOptions
+	}{
+
+		{
+			// When old generation cannot take back.
+			//
+			// Start:
+			// A -> 1 2 (gen 1, unassigned in gen 2, no longer interested)
+			// B -> 3 4 (gen 2)
+			// C -> 1 2 5 (gen 2)
+			//
+			// Ideal:
+			// A -> 4
+			// B -> 3
+			// C -> 1 2 5
+			name: "!canTake branch in resticky",
+			members: []GroupMember{
+				{ID: "A", Topics: []string{"3", "4"},
+					Version: 1,
+					UserData: newUD().
+						assign("1", 0).
+						assign("2", 0).
+						setGeneration(1).
+						encode()},
+				{ID: "B", Topics: []string{"3", "4"},
+					Version: 1,
+					UserData: newUD().
+						assign("3", 0).
+						assign("4", 0).
+						setGeneration(2).
+						encode()},
+				{ID: "C", Topics: []string{"1", "2", "5"},
+					Version: 1,
+					UserData: newUD().
+						assign("1", 0).
+						assign("2", 0).
+						assign("5", 0).
+						setGeneration(2).
+						encode()},
+			},
+			topics: map[string][]int32{
+				"1": []int32{0},
+				"2": []int32{0},
+				"3": []int32{0},
+				"4": []int32{0},
+				"5": []int32{0},
+			},
+			nsticky: 4,
+			balance: map[int]resultOptions{
+				1: {[]string{"A", "B"}, 2},
+				3: {[]string{"C"}, 1},
 			},
 		},
 

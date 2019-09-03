@@ -154,8 +154,14 @@ func (b *balancer) memberName(num int) string {
 }
 
 func (m *memberPartitions) remove(needle int) {
-	i := m.find(needle)
-	(*m)[i] = (*m)[len(*m)-1]
+	var d int
+	for i, check := range *m {
+		if check == needle {
+			d = i
+			break
+		}
+	}
+	(*m)[d] = (*m)[len(*m)-1]
 	*m = (*m)[:len(*m)-1]
 }
 
@@ -163,21 +169,8 @@ func (m *memberPartitions) add(partNum int) {
 	*m = append(*m, partNum)
 }
 
-func (m *memberPartitions) find(needle int) int {
-	for i, check := range *m {
-		if check == needle {
-			return i
-		}
-	}
-	return -1
-}
-
 func (m *memberPartitions) len() int {
 	return len(*m)
-}
-
-func (m *memberPartitions) has(needle int) bool {
-	return m.find(needle) == -1
 }
 
 // memberPartitions contains partitions for a member.
@@ -404,7 +397,7 @@ func (b *balancer) assignUnassignedAndInitGraph() {
 	for memberNum := range b.plan {
 		partNums := &b.plan[memberNum]
 		for _, partNum := range *partNums {
-			if len(partitionPotentials[partNum]) == 0 { // topic baleted
+			if len(partitionPotentials[partNum]) == 0 { // all prior subscriptions stopped wanting this partition
 				partitionConsumers[partNum] = deletedPart
 				partNums.remove(partNum)
 				continue
@@ -460,10 +453,7 @@ func (b *balancer) tryRestickyStales(
 	partitionConsumers []int,
 ) {
 	for staleNum, lastOwnerNum := range b.stales {
-		potentials := partitionPotentials[staleNum]
-		if len(potentials) == 0 {
-			continue
-		}
+		potentials := partitionPotentials[staleNum] // there must be a potential consumer if we are here
 		var canTake bool
 		for _, potentialNum := range potentials {
 			if potentialNum == lastOwnerNum {
@@ -474,16 +464,14 @@ func (b *balancer) tryRestickyStales(
 			return
 		}
 
+		// The part cannot be unassigned here; a stale member
+		// would just have it. The part also cannot be deleted;
+		// if it is, there are no potential consumers and the
+		// logic above continues before getting here. The part
+		// must be on a different owner (cannot be lastOwner),
+		// otherwise it would not be a lastOwner in the stales
+		// map; it would just be the current owner.
 		currentOwner := partitionConsumers[staleNum]
-		if currentOwner == deletedPart {
-			continue
-		}
-		if currentOwner == unassignedPart {
-			b.plan[lastOwnerNum].add(staleNum)
-			partitionConsumers[staleNum] = lastOwnerNum
-			continue
-		}
-
 		lastOwnerPartitions := &b.plan[lastOwnerNum]
 		currentOwnerPartitions := &b.plan[currentOwner]
 		if lastOwnerPartitions.len()+1 < currentOwnerPartitions.len() {
