@@ -10,6 +10,12 @@ import (
 	"github.com/twmb/kgo/kmsg"
 )
 
+// NOTE
+// For epoch
+// On metadata update
+// just update the consumption epoch!!
+// Same can be done in producer side when kafka gets that.
+
 type consumerType uint32
 
 const (

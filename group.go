@@ -32,8 +32,7 @@ func WithGroupTopics(topics ...string) GroupOpt {
 // WithGroupBalancers sets the balancer to use for dividing topic partitions
 // among group members, overriding the defaults.
 //
-// The current default is [roundrobin, range]. When sticky balancing is added
-// in the future, the default may change to [sticky, roundrobin, range].
+// The current default is [sticky, roundrobin, range].
 //
 // For balancing, Kafka chooses the first protocol that all group members agree
 // to support.
@@ -58,6 +57,7 @@ func (c *Client) AssignGroup(group string, opts ...GroupOpt) error {
 		return errors.New("client already has a group")
 	}
 	consumer.group.balancers = []GroupBalancer{
+		StickyBalancer(),
 		RoundRobinBalancer(),
 		RangeBalancer(),
 	}

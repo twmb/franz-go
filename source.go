@@ -10,8 +10,6 @@ import (
 	"github.com/twmb/kgo/kmsg"
 )
 
-// TODO KIP-320
-
 // TODO introduce backoff below
 
 type recordSource struct {
@@ -77,15 +75,15 @@ type consumption struct {
 	allConsumptionsIdx int
 
 	offset int64
-	// TODO epoch
 }
 
 func (consumption *consumption) setOffset(offset int64) {
 	consumption.mu.Lock()
 	consumption.offset = offset
+	source := consumption.source
 	consumption.mu.Unlock()
 
-	consumption.source.maybeBeginConsuming()
+	source.maybeBeginConsuming()
 }
 
 func (source *recordSource) createRequest() (req *fetchRequest, again bool) {
