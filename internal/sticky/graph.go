@@ -28,11 +28,14 @@ func newGraph(
 		plan: plan,
 		cxns: partitionConsumers,
 	}
-	for member := range plan {
+	memberPartsBufs := make([]int, len(plan)*len(partitionConsumers))
+	for memberNum := range plan {
+		memberPartsBuf := memberPartsBufs[:0:len(partitionConsumers)]
+		memberPartsBufs = memberPartsBufs[len(partitionConsumers):]
 		// In the worst case, if every node is linked to each other,
 		// each node will have nparts edges. We preallocate the worst
 		// case. It is common for the graph to be highly connected.
-		g.out[member] = make(memberPartitions, 0, len(partitionConsumers))
+		g.out[memberNum] = memberPartsBuf
 	}
 	for partNum, potentials := range partitionPotentials {
 		for _, potential := range potentials {

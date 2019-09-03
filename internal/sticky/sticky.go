@@ -362,6 +362,7 @@ func (b *balancer) assignUnassignedAndInitGraph() {
 
 	// For each partition, who can consume it?
 	partitionPotentials := make([][]int, cap(b.partNames))
+	potentialsBufs := make([]int, len(b.members)*cap(b.partNames))
 
 	// First, over all members in this assignment, map each partition to
 	// the members that can consume it. We will use this for assigning.
@@ -377,7 +378,9 @@ func (b *balancer) assignUnassignedAndInitGraph() {
 				}
 				potentials := &partitionPotentials[partNum]
 				if cap(*potentials) == 0 {
-					*potentials = make([]int, 0, len(b.members))
+					potentialBuf := potentialsBufs[:0:len(b.members)]
+					potentialsBufs = potentialsBufs[len(b.members):]
+					*potentials = potentialBuf
 				}
 				*potentials = append(*potentials, memberNum)
 			}
