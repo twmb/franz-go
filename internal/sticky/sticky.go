@@ -397,16 +397,15 @@ func (b *balancer) assignUnassignedAndInitGraph() {
 	// Next, over the prior plan, un-map deleted topics or topics that
 	// members no longer want. This is where we determine what is now
 	// unassigned.
-	unassignedNums := make(map[int]struct{}, cap(b.partNames))
-	for _, partNum := range b.partNums {
-		unassignedNums[partNum] = struct{}{}
-	}
 	partitionConsumers := make([]int, cap(b.partNames)) // partNum => consuming member
+	for i := range partitionConsumers {
+		partitionConsumers[i] = unassignedPart
+	}
 	for memberNum := range b.plan {
 		partNums := &b.plan[memberNum]
 		for _, partNum := range *partNums {
 			if len(partitionPotentials[partNum]) == 0 { // topic baleted
-				delete(unassignedNums, partNum)
+				partitionConsumers[partNum] = deletedPart
 				partNums.remove(partNum)
 				continue
 			}
@@ -423,15 +422,17 @@ func (b *balancer) assignUnassignedAndInitGraph() {
 				partNums.remove(partNum)
 				continue
 			}
-			delete(unassignedNums, partNum)
 			partitionConsumers[partNum] = memberNum
 		}
 	}
 
-	b.tryRestickyStales(unassignedNums, partitionPotentials, partitionConsumers)
+	b.tryRestickyStales(partitionPotentials, partitionConsumers)
 
 	// We now assign everything we know is not currently assigned.
-	for partNum := range unassignedNums {
+	for partNum, owner := range partitionConsumers {
+		if owner != unassignedPart {
+			continue
+		}
 		potentials := partitionPotentials[partNum]
 		if len(potentials) == 0 {
 			continue
@@ -444,13 +445,17 @@ func (b *balancer) assignUnassignedAndInitGraph() {
 	b.stealGraph = newGraph(b.plan, partitionConsumers, partitionPotentials)
 }
 
+const (
+	deletedPart    = -2
+	unassignedPart = -1
+)
+
 // tryRestickyStales is a pre-assigning step where, for all stale members,
 // we give partitions back to them if the partition is currently on an
 // over loaded member or unassigned.
 //
 // This effectively re-stickies members before we balance further.
 func (b *balancer) tryRestickyStales(
-	unassignedNums map[int]struct{},
 	partitionPotentials [][]int,
 	partitionConsumers []int,
 ) {
@@ -469,12 +474,16 @@ func (b *balancer) tryRestickyStales(
 			return
 		}
 
-		if _, isUnassigned := unassignedNums[staleNum]; isUnassigned {
+		currentOwner := partitionConsumers[staleNum]
+		if currentOwner == deletedPart {
+			continue
+		}
+		if currentOwner == unassignedPart {
 			b.plan[lastOwnerNum].add(staleNum)
-			delete(unassignedNums, staleNum)
+			partitionConsumers[staleNum] = lastOwnerNum
+			continue
 		}
 
-		currentOwner := partitionConsumers[staleNum]
 		lastOwnerPartitions := &b.plan[lastOwnerNum]
 		currentOwnerPartitions := &b.plan[currentOwner]
 		if lastOwnerPartitions.len()+1 < currentOwnerPartitions.len() {
