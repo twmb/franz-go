@@ -48,7 +48,7 @@ type balancer struct {
 	// map topic partitions to numbers and back. This provides significant
 	// speed boosts.
 	partNames   []topicPartition
-	partNums    map[*topicPartition]int
+	partNums    map[topicPartition]int
 	nextPartNum int
 
 	// Stales tracks partNums that are doubly subscribed in this join
@@ -90,7 +90,7 @@ func newBalancer(members []GroupMember, topics map[string][]int32) *balancer {
 		plan:        make(membersPartitions, len(members)),
 		topics:      topics,
 		partNames:   make([]topicPartition, nparts),
-		partNums:    make(map[*topicPartition]int, nparts*4/3),
+		partNums:    make(map[topicPartition]int, nparts*4/3),
 		stales:      make(map[int]int),
 	}
 
@@ -129,13 +129,9 @@ func (b *balancer) newPartitionNum(p topicPartition) int {
 	r := b.nextPartNum
 	tpp := &b.partNames[r]
 	*tpp = p
-	b.partNums[tpp] = r
+	b.partNums[*tpp] = r
 	b.nextPartNum++
 	return r
-}
-
-func (b *balancer) partNum(p *topicPartition) int {
-	return b.partNums[p]
 }
 
 func (b *balancer) partName(num int) *topicPartition {
@@ -255,7 +251,6 @@ func Balance(members []GroupMember, topics map[string][]int32) Plan {
 
 // parseMemberMetadata parses all member userdata to initialize the prior plan.
 func (b *balancer) parseMemberMetadata() {
-
 	// all partitions => members that are consuming those partitions
 	// Each partition should only have one consumer, but a flaky member
 	// could rejoin with an old generation (stale user data) and say it
@@ -373,11 +368,6 @@ func deserializeUserData(version int16, userdata []byte) (memberPlan []topicPart
 // Doing so requires a bunch of metadata, and in the process we want to remove
 // partitions from the plan that no longer exist in the client.
 func (b *balancer) assignUnassignedAndInitGraph() {
-	partitionNums := make(map[topicPartition]int, cap(b.partNames)*4/3)
-	for i := 0; i < b.nextPartNum; i++ {
-		partitionNums[b.partNames[i]] = i
-	}
-
 	// For each partition, who can consume it?
 	partitionPotentials := make([][]int, cap(b.partNames))
 	potentialsBufs := make([]int, len(b.members)*cap(b.partNames))
@@ -389,10 +379,9 @@ func (b *balancer) assignUnassignedAndInitGraph() {
 		for _, topic := range member.Topics {
 			for _, partition := range b.topics[topic] {
 				tp := topicPartition{topic, partition}
-				partNum, exists := partitionNums[tp]
+				partNum, exists := b.partNums[tp]
 				if !exists {
 					partNum = b.newPartitionNum(tp)
-					partitionNums[tp] = partNum
 				}
 				potentials := &partitionPotentials[partNum]
 				if cap(*potentials) == 0 {
@@ -409,7 +398,7 @@ func (b *balancer) assignUnassignedAndInitGraph() {
 	// members no longer want. This is where we determine what is now
 	// unassigned.
 	unassignedNums := make(map[int]struct{}, cap(b.partNames))
-	for _, partNum := range partitionNums {
+	for _, partNum := range b.partNums {
 		unassignedNums[partNum] = struct{}{}
 	}
 	partitionConsumers := make([]int, cap(b.partNames)) // partNum => consuming member
