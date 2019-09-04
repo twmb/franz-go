@@ -15,7 +15,7 @@ type graph struct {
 	plan membersPartitions
 
 	// edge => who owns this edge; built in balancer's assignUnassigned
-	cxns []int
+	cxns []uint16
 
 	// scores are all node scores from a seach node. The gscore field
 	// is reset on findSteal to noScore.
@@ -30,8 +30,8 @@ type graph struct {
 
 func newGraph(
 	plan membersPartitions,
-	partitionConsumers []int,
-	partitionPotentials [][]int,
+	partitionConsumers []uint16,
+	partitionPotentials [][]uint16,
 ) graph {
 	g := graph{
 		out:     make([]memberPartitions, len(plan)),
@@ -40,7 +40,7 @@ func newGraph(
 		scores:  make([]pathScore, len(plan)),
 		heapBuf: make([]*pathScore, len(plan)/2),
 	}
-	memberPartsBufs := make([]int, len(plan)*len(partitionConsumers))
+	memberPartsBufs := make([]uint32, len(plan)*len(partitionConsumers))
 	for memberNum := range plan {
 		memberPartsBuf := memberPartsBufs[:0:len(partitionConsumers)]
 		memberPartsBufs = memberPartsBufs[len(partitionConsumers):]
@@ -51,18 +51,18 @@ func newGraph(
 	}
 	for partNum, potentials := range partitionPotentials {
 		for _, potential := range potentials {
-			g.out[potential].add(partNum)
+			g.out[potential].add(uint32(partNum))
 		}
 	}
 	return g
 }
 
-func (g *graph) changeOwnership(edge int, newDst int) {
+func (g *graph) changeOwnership(edge uint32, newDst uint16) {
 	g.cxns[edge] = newDst
 }
 
 // findSteal uses A* search to find a path from the best node it can reach.
-func (g *graph) findSteal(from int) ([]stealSegment, bool) {
+func (g *graph) findSteal(from uint16) ([]stealSegment, bool) {
 	// First, we must reset our scores from any prior run. This is O(M),
 	// but is fast and faster than making a map and extending it a lot.
 	for i := range g.scores {
@@ -84,7 +84,7 @@ func (g *graph) findSteal(from int) ([]stealSegment, bool) {
 	// nodes that _are_ 10 levels higher to flood out any bad path and to
 	// jump to the top of the priority queue. If there is no high level
 	// to steal from, our estimator works normally.
-	h := func(p *pathScore) int { return first.level + 2 - p.level }
+	h := func(p *pathScore) int64 { return int64(first.level + 2 - p.level) }
 
 	first.gscore = 0
 	first.fscore = h(first)
@@ -126,6 +126,8 @@ func (g *graph) findSteal(from int) ([]stealSegment, bool) {
 				if isNew {
 					heap.Push(rem, neighbor)
 				}
+				// We never need to fix the heap position; it is
+				// not possible for us to find a lower score.
 			}
 		}
 	}
@@ -134,18 +136,18 @@ func (g *graph) findSteal(from int) ([]stealSegment, bool) {
 }
 
 type stealSegment struct {
-	src  int // member num
-	dst  int // member num
-	part int // topicPartition; partNum
+	src  uint16 // member num
+	dst  uint16 // member num
+	part uint32 // topicPartition; partNum
 }
 
 type pathScore struct {
-	node    int // member num
+	node    uint16 // member num
 	parent  *pathScore
-	srcEdge int // topicPartition; partNum
+	srcEdge uint32 // topicPartition; partNum
 	level   int
-	gscore  int
-	fscore  int
+	gscore  int64
+	fscore  int64
 	done    bool
 }
 
@@ -154,7 +156,7 @@ type pathScores []pathScore
 const infinityScore = 1 << 31
 const noScore = 1<<31 - 1
 
-func (g *graph) getScore(node int) (*pathScore, bool) {
+func (g *graph) getScore(node uint16) (*pathScore, bool) {
 	r := &g.scores[node]
 	exists := r.gscore != noScore
 	if !exists {
@@ -173,8 +175,12 @@ func (g *graph) getScore(node int) (*pathScore, bool) {
 
 type pathHeap []*pathScore
 
-func (p *pathHeap) Len() int      { return len(*p) }
-func (p *pathHeap) Swap(i, j int) { (*p)[i], (*p)[j] = (*p)[j], (*p)[i] }
+func (p *pathHeap) Len() int { return len(*p) }
+func (p *pathHeap) Swap(i, j int) {
+	h := *p
+	h[i], h[j] = h[j], h[i]
+
+}
 
 func (p *pathHeap) Less(i, j int) bool {
 	l, r := (*p)[i], (*p)[j]
@@ -185,8 +191,9 @@ func (p *pathHeap) Less(i, j int) bool {
 
 func (p *pathHeap) Push(x interface{}) { *p = append(*p, x.(*pathScore)) }
 func (p *pathHeap) Pop() interface{} {
-	l := len(*p)
-	r := (*p)[l-1]
-	*p = (*p)[:l-1]
+	h := *p
+	l := len(h)
+	r := h[l-1]
+	*p = h[:l-1]
 	return r
 }

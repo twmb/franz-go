@@ -6,6 +6,7 @@
 package sticky
 
 import (
+	"math"
 	"sort"
 
 	"github.com/twmb/go-rbtree"
@@ -16,6 +17,10 @@ import (
 // Sticky partitioning has two versions, the latter from KIP-341 preventing a
 // bug. The second version introduced generations with the default generation
 // from the first generation's consumers defaulting to -1.
+
+// We can support up to 65533 members; two slots are reserved.
+// We can support up to 4,294,967,295 partitions.
+// I expect a server to fall over before reaching either of these numbers.
 
 const defaultGeneration = -1
 
@@ -36,9 +41,9 @@ type balancer struct {
 
 	// memberNums and memberNames map member names to numbers (and back).
 	// We use numbers throughout balancing for a significant speed boost.
-	memberNums    map[string]int
+	memberNums    map[string]uint16
 	memberNames   []string
-	nextMemberNum int
+	nextMemberNum uint16
 
 	// topics are the topic names and partitions that the client knows of
 	// and passed to be used for assigning unassigned partitions.
@@ -48,15 +53,15 @@ type balancer struct {
 	// map topic partitions to numbers and back. This provides significant
 	// speed boosts.
 	partNames   []topicPartition
-	partNums    map[topicPartition]int
-	nextPartNum int
+	partNums    map[topicPartition]uint32
+	nextPartNum uint32
 
 	// Stales tracks partNums that are doubly subscribed in this join
 	// where one of the subscribers is on an old generation.
 	//
 	// The newer generation goes into plan directly, the older gets
 	// stuffed here.
-	stales map[int]int // partNum => stale memberNum
+	stales map[uint32]uint16 // partNum => stale memberNum
 
 	// plan is what we are building and balancing.
 	plan membersPartitions
@@ -89,13 +94,13 @@ func newBalancer(members []GroupMember, topics map[string][]int32) *balancer {
 
 	b := &balancer{
 		members:     make([]GroupMember, len(members)),
-		memberNums:  make(map[string]int, len(members)),
+		memberNums:  make(map[string]uint16, len(members)),
 		memberNames: make([]string, len(members)),
 		plan:        make(membersPartitions, len(members)),
 		topics:      topics,
 		partNames:   make([]topicPartition, nparts),
-		partNums:    make(map[topicPartition]int, nparts*4/3),
-		stales:      make(map[int]int),
+		partNums:    make(map[topicPartition]uint32, nparts*4/3),
+		stales:      make(map[uint32]uint16),
 	}
 
 	evenDivvy := nparts/len(members) + 1
@@ -110,7 +115,7 @@ func newBalancer(members []GroupMember, topics map[string][]int32) *balancer {
 func (b *balancer) into() Plan {
 	plan := make(Plan, len(b.plan))
 	for memberNum, partNums := range b.plan {
-		name := b.memberName(memberNum)
+		name := b.memberName(uint16(memberNum))
 		topics, exists := plan[name]
 		if !exists {
 			topics = make(map[string][]int32, 20)
@@ -129,7 +134,7 @@ func (b *balancer) into() Plan {
 	return plan
 }
 
-func (b *balancer) newPartitionNum(p topicPartition) int {
+func (b *balancer) newPartitionNum(p topicPartition) uint32 {
 	r := b.nextPartNum
 	tpp := &b.partNames[r]
 	*tpp = p
@@ -138,11 +143,11 @@ func (b *balancer) newPartitionNum(p topicPartition) int {
 	return r
 }
 
-func (b *balancer) partName(num int) *topicPartition {
+func (b *balancer) partName(num uint32) *topicPartition {
 	return &b.partNames[num]
 }
 
-func (b *balancer) memberNum(name string) int {
+func (b *balancer) memberNum(name string) uint16 {
 	num, exists := b.memberNums[name]
 	if !exists {
 		num = b.nextMemberNum
@@ -153,11 +158,11 @@ func (b *balancer) memberNum(name string) int {
 	return num
 }
 
-func (b *balancer) memberName(num int) string {
+func (b *balancer) memberName(num uint16) string {
 	return b.memberNames[num]
 }
 
-func (m *memberPartitions) remove(needle int) {
+func (m *memberPartitions) remove(needle uint32) {
 	s := *m
 	var d int
 	for i, check := range s {
@@ -170,14 +175,14 @@ func (m *memberPartitions) remove(needle int) {
 	*m = s[:len(s)-1]
 }
 
-func (m *memberPartitions) takeEnd() int {
+func (m *memberPartitions) takeEnd() uint32 {
 	s := *m
 	r := s[len(s)-1]
 	*m = s[:len(s)-1]
 	return r
 }
 
-func (m *memberPartitions) add(partNum int) {
+func (m *memberPartitions) add(partNum uint32) {
 	*m = append(*m, partNum)
 }
 
@@ -186,21 +191,21 @@ func (m *memberPartitions) len() int {
 }
 
 // memberPartitions contains partitions for a member.
-type memberPartitions []int
+type memberPartitions []uint32
 
 // membersPartitions maps members to their partitions.
 type membersPartitions []memberPartitions
 
 type partitionLevel struct {
 	level   int
-	members []int
+	members []uint16
 }
 
 // partitionLevel's members field used to be a map, but removing it gains a
 // slight perf boost at the cost of removing members being O(M).
 // Even with the worse complexity, scanning a short list can be faster
 // than managing a map, and we expect groups to not be _too_ large.
-func (p *partitionLevel) removeMember(memberNum int) {
+func (p *partitionLevel) removeMember(memberNum uint16) {
 	for i, v := range p.members {
 		if v == memberNum {
 			p.members[i] = p.members[len(p.members)-1]
@@ -219,7 +224,7 @@ func (b *balancer) findLevel(level int) *partitionLevel {
 
 func (b *balancer) fixMemberLevel(
 	src *rbtree.Node,
-	memberNum int,
+	memberNum uint16,
 	partNums memberPartitions,
 ) {
 	b.removeLevelingMember(src, memberNum)
@@ -230,7 +235,7 @@ func (b *balancer) fixMemberLevel(
 
 func (b *balancer) removeLevelingMember(
 	src *rbtree.Node,
-	memberNum int,
+	memberNum uint16,
 ) {
 	level := src.Item.(*partitionLevel)
 	level.removeMember(memberNum)
@@ -250,7 +255,7 @@ func newPartitionLevel(level int) *partitionLevel {
 func (b *balancer) initPlanByNumPartitions() {
 	for memberNum, partNums := range b.plan {
 		partLevel := b.findLevel(len(partNums))
-		partLevel.members = append(partLevel.members, memberNum)
+		partLevel.members = append(partLevel.members, uint16(memberNum))
 	}
 }
 
@@ -277,7 +282,6 @@ func (b *balancer) parseMemberMetadata() {
 	// is consuming something a different member is. See KIP-341.
 	partitionConsumersByGeneration := make(map[topicPartition][]memberGeneration, cap(b.partNames)*4/3)
 	partitionConsumersBuf := make([]memberGeneration, cap(b.partNames))
-	var partitionConsumersNext int
 
 	for _, member := range b.members {
 		memberPlan, generation := deserializeUserData(member.Version, member.UserData)
@@ -307,7 +311,6 @@ func (b *balancer) parseMemberMetadata() {
 			if len(partitionConsumers) == 0 {
 				partitionConsumers = partitionConsumersBuf[:0:1]
 				partitionConsumersBuf = partitionConsumersBuf[1:]
-				partitionConsumersNext++
 			}
 			partitionConsumers = append(partitionConsumers, memberGeneration)
 			partitionConsumersByGeneration[topicPartition] = partitionConsumers
@@ -398,8 +401,8 @@ func (b *balancer) assignUnassignedAndInitGraph() {
 	// below in the partition mapping. Doing this two step process allows
 	// for a 10x speed boost rather than ranging over all partitions many
 	// times.
-	membersBufs := make([]int, len(b.topics)*len(b.members))
-	topics2memberNums := make(map[string][]int, len(b.topics))
+	membersBufs := make([]uint16, len(b.topics)*len(b.members))
+	topics2memberNums := make(map[string][]uint16, len(b.topics))
 	for memberNum, member := range b.members {
 		for _, topic := range member.Topics {
 			if _, exists := b.topics[topic]; !exists {
@@ -410,12 +413,12 @@ func (b *balancer) assignUnassignedAndInitGraph() {
 				memberNums = membersBufs[:0:len(b.memberNums)]
 				membersBufs = membersBufs[len(b.memberNums):]
 			}
-			topics2memberNums[topic] = append(memberNums, memberNum)
+			topics2memberNums[topic] = append(memberNums, uint16(memberNum))
 		}
 	}
 
-	partitionPotentials := make([][]int, cap(b.partNames)) // for each partition, who can consume it?
-	var firstTopicMembers []int
+	partitionPotentials := make([][]uint16, cap(b.partNames)) // for each partition, who can consume it?
+	var firstTopicMembers []uint16
 	for topic, topicMembers := range topics2memberNums {
 		for _, partition := range b.topics[topic] {
 			tp := topicPartition{topic, partition}
@@ -447,7 +450,7 @@ func (b *balancer) assignUnassignedAndInitGraph() {
 	// Next, over the prior plan, un-map deleted topics or topics that
 	// members no longer want. This is where we determine what is now
 	// unassigned.
-	partitionConsumers := make([]int, cap(b.partNames)) // partNum => consuming member
+	partitionConsumers := make([]uint16, cap(b.partNames)) // partNum => consuming member
 	for i := range partitionConsumers {
 		partitionConsumers[i] = unassignedPart
 	}
@@ -472,7 +475,7 @@ func (b *balancer) assignUnassignedAndInitGraph() {
 				partNums.remove(partNum)
 				continue
 			}
-			partitionConsumers[partNum] = memberNum
+			partitionConsumers[partNum] = uint16(memberNum)
 		}
 	}
 
@@ -487,7 +490,7 @@ func (b *balancer) assignUnassignedAndInitGraph() {
 		if len(potentials) == 0 {
 			continue
 		}
-		assigned := b.assignPartition(partNum, potentials)
+		assigned := b.assignPartition(uint32(partNum), potentials)
 		partitionConsumers[partNum] = assigned
 	}
 
@@ -499,8 +502,8 @@ func (b *balancer) assignUnassignedAndInitGraph() {
 }
 
 const (
-	deletedPart    = -2
-	unassignedPart = -1
+	deletedPart    = math.MaxUint16
+	unassignedPart = math.MaxUint16 - 1
 )
 
 // tryRestickyStales is a pre-assigning step where, for all stale members,
@@ -509,8 +512,8 @@ const (
 //
 // This effectively re-stickies members before we balance further.
 func (b *balancer) tryRestickyStales(
-	partitionPotentials [][]int,
-	partitionConsumers []int,
+	partitionPotentials [][]uint16,
+	partitionConsumers []uint16,
 ) {
 	for staleNum, lastOwnerNum := range b.stales {
 		potentials := partitionPotentials[staleNum] // there must be a potential consumer if we are here
@@ -543,8 +546,8 @@ func (b *balancer) tryRestickyStales(
 
 // assignPartition looks for the least loaded member that can take this
 // partition and assigns it to that member.
-func (b *balancer) assignPartition(unassignedNum int, potentials []int) int {
-	var minMemberNum int
+func (b *balancer) assignPartition(unassignedNum uint32, potentials []uint16) uint16 {
+	var minMemberNum uint16
 	var minPartNums *memberPartitions
 	for _, potentialNum := range potentials {
 		partNums := &b.plan[potentialNum]
@@ -643,7 +646,7 @@ func (b *balancer) balanceComplex() {
 	}
 }
 
-func (b *balancer) reassignPartition(src, dst int, partNum int) {
+func (b *balancer) reassignPartition(src, dst uint16, partNum uint32) {
 	srcPartitions := &b.plan[src]
 	dstPartitions := &b.plan[dst]
 

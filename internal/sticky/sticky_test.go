@@ -905,7 +905,7 @@ func TestImbalanced(t *testing.T) {
 						assign("a", 0).
 						assign("b", 0).
 						assign("c", 0).
-						assign("x", 0). // no longer exists; dropped in parseMemberMetadata
+						assign("z", 0). // no longer exists; dropped in parseMemberMetadata
 						encode()},
 			},
 			topics: map[string][]int32{
@@ -1296,7 +1296,7 @@ func TestLarge(t *testing.T) {
 	}
 }
 
-const topicNum = 20
+const topicNum = 100
 const partitionNum = 200
 
 func makeLargeBalance(tb testing.TB, withImbalance bool) ([]GroupMember, map[string][]int32) {
