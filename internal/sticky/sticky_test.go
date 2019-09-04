@@ -895,7 +895,8 @@ func TestImbalanced(t *testing.T) {
 						assign("4", 0).
 						assign("5", 0).
 						encode()},
-				{ID: "D", Topics: []string{"3", "4", "5", "6", "7", "8", "9", "a", "b", "c"},
+				{ID: "D", Topics: []string{"3", "4", "5", "6", "7", "8", "9", "a", "b", "c",
+					"x"}, // x does not exist; hits continue branch in assign
 					Version: 1,
 					UserData: newUD().
 						assign("6", 0).
