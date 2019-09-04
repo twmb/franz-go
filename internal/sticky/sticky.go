@@ -134,13 +134,15 @@ func (b *balancer) into() Plan {
 	return plan
 }
 
-func (b *balancer) newPartitionNum(p topicPartition) uint32 {
-	r := b.nextPartNum
-	tpp := &b.partNames[r]
-	*tpp = p
-	b.partNums[*tpp] = r
-	b.nextPartNum++
-	return r
+func (b *balancer) partNum(p topicPartition) uint32 {
+	num, exists := b.partNums[p]
+	if !exists {
+		num = b.nextPartNum
+		b.nextPartNum++
+		b.partNums[p] = num
+		b.partNames[num] = p
+	}
+	return num
 }
 
 func (b *balancer) partName(num uint32) *topicPartition {
@@ -280,7 +282,7 @@ func (b *balancer) parseMemberMetadata() {
 	// Each partition should only have one consumer, but a flaky member
 	// could rejoin with an old generation (stale user data) and say it
 	// is consuming something a different member is. See KIP-341.
-	partitionConsumersByGeneration := make(map[topicPartition][]memberGeneration, cap(b.partNames)*4/3)
+	partitionConsumersByGeneration := make([][]memberGeneration, cap(b.partNames))
 	partitionConsumersBuf := make([]memberGeneration, cap(b.partNames))
 
 	for _, member := range b.members {
@@ -295,7 +297,8 @@ func (b *balancer) parseMemberMetadata() {
 			if _, exists := b.topics[topicPartition.topic]; !exists {
 				continue
 			}
-			partitionConsumers := partitionConsumersByGeneration[topicPartition]
+			partNum := b.partNum(topicPartition)
+			partitionConsumers := partitionConsumersByGeneration[partNum]
 			var doublyConsumed bool
 			for _, otherConsumer := range partitionConsumers { // expected to be very few if any others
 				if otherConsumer.generation == generation {
@@ -312,24 +315,24 @@ func (b *balancer) parseMemberMetadata() {
 				partitionConsumers = partitionConsumersBuf[:0:1]
 				partitionConsumersBuf = partitionConsumersBuf[1:]
 			}
-			partitionConsumers = append(partitionConsumers, memberGeneration)
-			partitionConsumersByGeneration[topicPartition] = partitionConsumers
+			partitionConsumersByGeneration[partNum] = append(partitionConsumers, memberGeneration)
 		}
 	}
 
 	var mgs memberGenerations
-	for partition, partitionConsumers := range partitionConsumersByGeneration {
+	for partNum, partitionConsumers := range partitionConsumersByGeneration {
+		if len(partitionConsumers) == 0 {
+			continue
+		}
 		mgs = memberGenerations(partitionConsumers)
 		sort.Sort(&mgs)
 
 		memberNum := b.memberNum(partitionConsumers[0].member)
 		partNums := &b.plan[memberNum]
-
-		partNum := b.newPartitionNum(partition)
-		partNums.add(partNum)
+		partNums.add(uint32(partNum))
 
 		if len(partitionConsumers) > 1 {
-			b.stales[partNum] = b.memberNum(partitionConsumers[1].member)
+			b.stales[uint32(partNum)] = b.memberNum(partitionConsumers[1].member)
 		}
 	}
 }
@@ -422,10 +425,7 @@ func (b *balancer) assignUnassignedAndInitGraph() {
 	for topic, topicMembers := range topics2memberNums {
 		for _, partition := range b.topics[topic] {
 			tp := topicPartition{topic, partition}
-			partNum, exists := b.partNums[tp]
-			if !exists {
-				partNum = b.newPartitionNum(tp)
-			}
+			partNum := b.partNum(tp)
 			partitionPotentials[partNum] = topicMembers
 		}
 
