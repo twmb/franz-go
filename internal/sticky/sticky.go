@@ -67,6 +67,10 @@ type balancer struct {
 	// this field are visible in plan.
 	planByNumPartitions *rbtree.Tree
 
+	// if the subscriptions are complex (all members do _not_ consume the
+	// same partitions), then we build a graph and use that for assigning.
+	isComplex bool
+
 	// stealGraph is a graphical representation of members and partitions
 	// they want to steal.
 	stealGraph graph
@@ -235,6 +239,9 @@ func Balance(members []GroupMember, topics map[string][]int32) Plan {
 		return make(Plan)
 	}
 	b := newBalancer(members, topics)
+	if cap(b.partNames) == 0 {
+		return make(Plan)
+	}
 	b.parseMemberMetadata()
 	b.assignUnassignedAndInitGraph()
 	b.planByNumPartitions = b.plan.rbtreeByLevel()
@@ -308,11 +315,13 @@ type memberGeneration struct {
 	member     string
 	generation int32
 }
+
+// for alloc avoidance since it is easy enough.
 type memberGenerations []memberGeneration
 
-func (m *memberGenerations) Less(i, j int) bool { return (*m)[i].generation > (*m)[j].generation }
-func (m *memberGenerations) Swap(i, j int)      { (*m)[i], (*m)[j] = (*m)[j], (*m)[i] }
 func (m *memberGenerations) Len() int           { return len(*m) }
+func (m *memberGenerations) Less(i, j int) bool { s := *m; return s[i].generation > s[j].generation }
+func (m *memberGenerations) Swap(i, j int)      { s := *m; s[i], s[j] = s[j], s[i] }
 
 // deserializeUserData returns the topic partitions a member was consuming and
 // the join generation it was consuming from.
@@ -368,7 +377,6 @@ func (b *balancer) assignUnassignedAndInitGraph() {
 	// First, over all members in this assignment, map each partition to
 	// the members that can consume it. We will use this for assigning.
 	for memberNum, member := range b.members {
-		// If this is a new member, reserve it in our plan.
 		for _, topic := range member.Topics {
 			for _, partition := range b.topics[topic] {
 				tp := topicPartition{topic, partition}
@@ -383,6 +391,21 @@ func (b *balancer) assignUnassignedAndInitGraph() {
 					*potentials = potentialBuf
 				}
 				*potentials = append(*potentials, memberNum)
+			}
+		}
+	}
+
+	firstPotentials := partitionPotentials[0]
+complexCheck:
+	for _, potentials := range partitionPotentials[1:] {
+		if len(potentials) != len(firstPotentials) {
+			b.isComplex = true
+			break
+		}
+		for i, v := range potentials {
+			if v != firstPotentials[i] {
+				b.isComplex = true
+				break complexCheck
 			}
 		}
 	}
@@ -434,7 +457,8 @@ func (b *balancer) assignUnassignedAndInitGraph() {
 		partitionConsumers[partNum] = assigned
 	}
 
-	// Lastly, with everything assigned, we build our steal graph for balancing.
+	// Lastly, with everything assigned, we build our steal graph for
+	// balancing if needed.
 	b.stealGraph = newGraph(b.plan, partitionConsumers, partitionPotentials)
 }
 
@@ -501,6 +525,20 @@ func (b *balancer) assignPartition(unassignedNum int, potentials []int) int {
 // balance loops trying to move partitions until the plan is as balanced
 // as it can be.
 func (b *balancer) balance() {
+	b.balanceComplex()
+	return
+
+	for {
+		min := b.planByNumPartitions.Min().Item.(partitionLevel)
+		max := b.planByNumPartitions.Max().Item.(partitionLevel)
+
+		if max.level <= min.level+1 {
+			return
+		}
+	}
+}
+
+func (b *balancer) balanceComplex() {
 	for min := b.planByNumPartitions.Min(); b.planByNumPartitions.Len() > 1; min = b.planByNumPartitions.Min() {
 		level := min.Item.(partitionLevel)
 		// If this max level is within one of this level, then nothing
@@ -559,4 +597,7 @@ func (b *balancer) reassignPartition(src, dst int, partNum int) {
 	)
 
 	b.stealGraph.changeOwnership(partNum, dst)
+}
+
+func (b *balancer) shuffleEasy() {
 }
