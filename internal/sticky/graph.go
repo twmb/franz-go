@@ -16,6 +16,16 @@ type graph struct {
 
 	// edge => who owns this edge; built in balancer's assignUnassigned
 	cxns []int
+
+	// scores are all node scores from a seach node. The gscore field
+	// is reset on findSteal to noScore.
+	scores pathScores
+
+	// heapBuf and pathBuf are backing buffers that are reused every
+	// findSteal; note that pathBuf must be done being used before
+	// the next find steal, but it always is.
+	heapBuf pathHeap
+	pathBuf []stealSegment
 }
 
 func newGraph(
@@ -24,9 +34,11 @@ func newGraph(
 	partitionPotentials [][]int,
 ) graph {
 	g := graph{
-		out:  make([]memberPartitions, len(plan)),
-		plan: plan,
-		cxns: partitionConsumers,
+		out:     make([]memberPartitions, len(plan)),
+		plan:    plan,
+		cxns:    partitionConsumers,
+		scores:  make([]pathScore, len(plan)),
+		heapBuf: make([]*pathScore, len(plan)/2),
 	}
 	memberPartsBufs := make([]int, len(plan)*len(partitionConsumers))
 	for memberNum := range plan {
@@ -45,16 +57,19 @@ func newGraph(
 	return g
 }
 
-func (g graph) changeOwnership(edge int, newDst int) {
+func (g *graph) changeOwnership(edge int, newDst int) {
 	g.cxns[edge] = newDst
 }
 
 // findSteal uses A* search to find a path from the best node it can reach.
-func (g graph) findSteal(from int) ([]stealSegment, bool) {
-	done := make(map[int]struct{}, 10)
+func (g *graph) findSteal(from int) ([]stealSegment, bool) {
+	// First, we must reset our scores from any prior run. This is O(M),
+	// but is fast and faster than making a map and extending it a lot.
+	for i := range g.scores {
+		g.scores[i].gscore = noScore
+	}
 
-	scores := make(pathScores, 10)
-	first, _ := scores.get(from, g.plan)
+	first, _ := g.getScore(from)
 
 	// For A*, if we never overestimate (with h), then the path we find is
 	// optimal. A true estimation of our distance to any node is the node's
@@ -73,13 +88,14 @@ func (g graph) findSteal(from int) ([]stealSegment, bool) {
 
 	first.gscore = 0
 	first.fscore = h(first)
-	done[first.node] = struct{}{}
+	first.done = true
 
-	rem := &pathHeap{first}
+	g.heapBuf = append(g.heapBuf[:0], first)
+	rem := &g.heapBuf
 	for rem.Len() > 0 {
 		current := heap.Pop(rem).(*pathScore)
 		if current.level > first.level+1 {
-			var path []stealSegment
+			path := g.pathBuf[:0]
 			for current.parent != nil {
 				path = append(path, stealSegment{
 					current.node,
@@ -88,19 +104,20 @@ func (g graph) findSteal(from int) ([]stealSegment, bool) {
 				})
 				current = current.parent
 			}
+			g.pathBuf = path
 			return path, true
 		}
 
-		done[current.node] = struct{}{}
+		current.done = true
 
 		for _, edge := range g.out[current.node] { // O(P) worst case, should be less
 			neighborNode := g.cxns[edge]
-			if _, isDone := done[neighborNode]; isDone {
+			neighbor, isNew := g.getScore(neighborNode)
+			if neighbor.done {
 				continue
 			}
 
 			gscore := current.gscore + 1
-			neighbor, isNew := scores.get(neighborNode, g.plan)
 			if gscore < neighbor.gscore {
 				neighbor.parent = current
 				neighbor.srcEdge = edge
@@ -129,21 +146,27 @@ type pathScore struct {
 	level   int
 	gscore  int
 	fscore  int
+	done    bool
 }
 
-type pathScores []*pathScore
+type pathScores []pathScore
 
-func (p pathScores) get(node int, plan membersPartitions) (*pathScore, bool) {
-	r := p[node]
-	exists := r != nil
+const infinityScore = 1 << 31
+const noScore = 1<<31 - 1
+
+func (g *graph) getScore(node int) (*pathScore, bool) {
+	r := &g.scores[node]
+	exists := r.gscore != noScore
 	if !exists {
-		r = &pathScore{
-			node:   node,
-			level:  len(plan[node]),
-			gscore: 1 << 31,
-			fscore: 1 << 31,
+		*r = pathScore{
+			node:    node,
+			parent:  nil,
+			srcEdge: 0,
+			level:   len(g.plan[node]),
+			gscore:  infinityScore,
+			fscore:  infinityScore,
+			done:    false,
 		}
-		p[node] = r
 	}
 	return r, !exists
 }
