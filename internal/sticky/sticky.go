@@ -390,42 +390,56 @@ func deserializeUserData(version int16, userdata []byte) (memberPlan []topicPart
 // Doing so requires a bunch of metadata, and in the process we want to remove
 // partitions from the plan that no longer exist in the client.
 func (b *balancer) assignUnassignedAndInitGraph() {
-	// For each partition, who can consume it?
-	partitionPotentials := make([][]int, cap(b.partNames))
-	potentialsBufs := make([]int, len(b.members)*cap(b.partNames))
-
 	// First, over all members in this assignment, map each partition to
 	// the members that can consume it. We will use this for assigning.
+	//
+	// To do this mapping efficiently, we first map each topic to the
+	// memberNums that can consume those topics, and then use the results
+	// below in the partition mapping. Doing this two step process allows
+	// for a 10x speed boost rather than ranging over all partitions many
+	// times.
+	membersBufs := make([]int, len(b.topics)*len(b.members))
+	topics2memberNums := make(map[string][]int, len(b.topics))
 	for memberNum, member := range b.members {
 		for _, topic := range member.Topics {
-			for _, partition := range b.topics[topic] {
-				tp := topicPartition{topic, partition}
-				partNum, exists := b.partNums[tp]
-				if !exists {
-					partNum = b.newPartitionNum(tp)
-				}
-				potentials := &partitionPotentials[partNum]
-				if cap(*potentials) == 0 {
-					potentialBuf := potentialsBufs[:0:len(b.members)]
-					potentialsBufs = potentialsBufs[len(b.members):]
-					*potentials = potentialBuf
-				}
-				*potentials = append(*potentials, memberNum)
+			if _, exists := b.topics[topic]; !exists {
+				continue
 			}
+			memberNums := topics2memberNums[topic]
+			if cap(memberNums) == 0 {
+				memberNums = membersBufs[:0:len(b.memberNums)]
+				membersBufs = membersBufs[len(b.memberNums):]
+			}
+			topics2memberNums[topic] = append(memberNums, memberNum)
 		}
 	}
 
-	firstPotentials := partitionPotentials[0]
-complexCheck:
-	for _, potentials := range partitionPotentials[1:] {
-		if len(potentials) != len(firstPotentials) {
-			b.isComplex = true
-			break
+	partitionPotentials := make([][]int, cap(b.partNames)) // for each partition, who can consume it?
+	var firstTopicMembers []int
+	for topic, topicMembers := range topics2memberNums {
+		for _, partition := range b.topics[topic] {
+			tp := topicPartition{topic, partition}
+			partNum, exists := b.partNums[tp]
+			if !exists {
+				partNum = b.newPartitionNum(tp)
+			}
+			partitionPotentials[partNum] = topicMembers
 		}
-		for i, v := range potentials {
-			if v != firstPotentials[i] {
+
+		// While building partition potentials, we can check whether
+		// all topics are consumed the same.
+		if firstTopicMembers == nil {
+			firstTopicMembers = topicMembers
+			continue
+		}
+		if b.isComplex || len(topicMembers) != len(firstTopicMembers) {
+			b.isComplex = true
+			continue
+		}
+		for i, memberNum := range topicMembers {
+			if memberNum != firstTopicMembers[i] {
 				b.isComplex = true
-				break complexCheck
+				break
 			}
 		}
 	}
