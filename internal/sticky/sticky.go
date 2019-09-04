@@ -65,7 +65,7 @@ type balancer struct {
 	//
 	// The nodes in the tree reference values in plan, meaning updates in
 	// this field are visible in plan.
-	planByNumPartitions *rbtree.Tree
+	planByNumPartitions rbtree.Tree
 
 	// if the subscriptions are complex (all members do _not_ consume the
 	// same partitions), then we build a graph and use that for assigning.
@@ -158,15 +158,23 @@ func (b *balancer) memberName(num int) string {
 }
 
 func (m *memberPartitions) remove(needle int) {
+	s := *m
 	var d int
-	for i, check := range *m {
+	for i, check := range s {
 		if check == needle {
 			d = i
 			break
 		}
 	}
-	(*m)[d] = (*m)[len(*m)-1]
-	*m = (*m)[:len(*m)-1]
+	s[d] = s[len(s)-1]
+	*m = s[:len(s)-1]
+}
+
+func (m *memberPartitions) takeEnd() int {
+	s := *m
+	r := s[len(s)-1]
+	*m = s[:len(s)-1]
+	return r
 }
 
 func (m *memberPartitions) add(partNum int) {
@@ -183,11 +191,30 @@ type memberPartitions []int
 // membersPartitions maps members to their partitions.
 type membersPartitions []memberPartitions
 
-type membersLevel map[int]memberPartitions
-
 type partitionLevel struct {
 	level   int
-	members membersLevel
+	members []int
+}
+
+// partitionLevel's members field used to be a map, but removing it gains a
+// slight perf boost at the cost of removing members being O(M).
+// Even with the worse complexity, scanning a short list can be faster
+// than managing a map, and we expect groups to not be _too_ large.
+func (p *partitionLevel) removeMember(memberNum int) {
+	for i, v := range p.members {
+		if v == memberNum {
+			p.members[i] = p.members[len(p.members)-1]
+			p.members = p.members[:len(p.members)-1]
+			return
+		}
+	}
+}
+
+func (b *balancer) findLevel(level int) *partitionLevel {
+	return b.planByNumPartitions.FindWithOrInsertWith(
+		func(n *rbtree.Node) int { return level - n.Item.(*partitionLevel).level },
+		func() rbtree.Item { return newPartitionLevel(level) },
+	).Item.(*partitionLevel)
 }
 
 func (b *balancer) fixMemberLevel(
@@ -197,41 +224,34 @@ func (b *balancer) fixMemberLevel(
 ) {
 	b.removeLevelingMember(src, memberNum)
 	newLevel := len(partNums)
-	b.planByNumPartitions.FindWithOrInsertWith(
-		func(n *rbtree.Node) int { return newLevel - n.Item.(partitionLevel).level },
-		func() rbtree.Item { return newPartitionLevel(newLevel) },
-	).Item.(partitionLevel).members[memberNum] = partNums
+	partLevel := b.findLevel(newLevel)
+	partLevel.members = append(partLevel.members, memberNum)
 }
 
 func (b *balancer) removeLevelingMember(
 	src *rbtree.Node,
 	memberNum int,
 ) {
-	currentLevel := src.Item.(partitionLevel)
-	delete(currentLevel.members, memberNum)
-	if len(currentLevel.members) == 0 {
+	level := src.Item.(*partitionLevel)
+	level.removeMember(memberNum)
+	if len(level.members) == 0 {
 		b.planByNumPartitions.Delete(src)
 	}
 }
 
 func (l partitionLevel) Less(r rbtree.Item) bool {
-	return l.level < r.(partitionLevel).level
+	return l.level < r.(*partitionLevel).level
 }
 
-func newPartitionLevel(level int) partitionLevel {
-	return partitionLevel{level, make(membersLevel)}
+func newPartitionLevel(level int) *partitionLevel {
+	return &partitionLevel{level: level}
 }
 
-func (m membersPartitions) rbtreeByLevel() *rbtree.Tree {
-	var t rbtree.Tree
-	for memberNum, partNums := range m {
-		level := len(partNums)
-		t.FindWithOrInsertWith(
-			func(n *rbtree.Node) int { return level - n.Item.(partitionLevel).level },
-			func() rbtree.Item { return newPartitionLevel(level) },
-		).Item.(partitionLevel).members[memberNum] = partNums
+func (b *balancer) initPlanByNumPartitions() {
+	for memberNum, partNums := range b.plan {
+		partLevel := b.findLevel(len(partNums))
+		partLevel.members = append(partLevel.members, memberNum)
 	}
-	return &t
 }
 
 func Balance(members []GroupMember, topics map[string][]int32) Plan {
@@ -244,7 +264,7 @@ func Balance(members []GroupMember, topics map[string][]int32) Plan {
 	}
 	b.parseMemberMetadata()
 	b.assignUnassignedAndInitGraph()
-	b.planByNumPartitions = b.plan.rbtreeByLevel()
+	b.initPlanByNumPartitions()
 	b.balance()
 	return b.into()
 }
@@ -459,7 +479,9 @@ complexCheck:
 
 	// Lastly, with everything assigned, we build our steal graph for
 	// balancing if needed.
-	b.stealGraph = newGraph(b.plan, partitionConsumers, partitionPotentials)
+	if b.isComplex {
+		b.stealGraph = newGraph(b.plan, partitionConsumers, partitionPotentials)
+	}
 }
 
 const (
@@ -525,47 +547,83 @@ func (b *balancer) assignPartition(unassignedNum int, potentials []int) int {
 // balance loops trying to move partitions until the plan is as balanced
 // as it can be.
 func (b *balancer) balance() {
-	b.balanceComplex()
-	return
+	if b.isComplex {
+		b.balanceComplex()
+		return
+	}
 
+	// If all partitions are consumed equally, we have a very easy
+	// algorithm to balance: while the min and max levels are separated
+	// by over two, take from the top and give to the bottom.
+	min := b.planByNumPartitions.Min().Item.(*partitionLevel)
+	max := b.planByNumPartitions.Max().Item.(*partitionLevel)
 	for {
-		min := b.planByNumPartitions.Min().Item.(partitionLevel)
-		max := b.planByNumPartitions.Max().Item.(partitionLevel)
-
 		if max.level <= min.level+1 {
 			return
+		}
+
+		minRem := min.members
+		maxRem := max.members
+		for len(minRem) > 0 && len(maxRem) > 0 {
+			dst := minRem[0]
+			src := maxRem[0]
+
+			minRem = minRem[1:]
+			maxRem = maxRem[1:]
+
+			srcPartitions := &b.plan[src]
+			dstPartitions := &b.plan[dst]
+
+			dstPartitions.add(srcPartitions.takeEnd())
+		}
+
+		nextUp := b.findLevel(min.level + 1)
+		nextDown := b.findLevel(max.level - 1)
+
+		upEnd := len(min.members) - len(minRem)
+		downEnd := len(max.members) - len(maxRem)
+
+		nextUp.members = append(nextUp.members, min.members[:upEnd]...)
+		nextDown.members = append(nextDown.members, max.members[:downEnd]...)
+
+		min.members = min.members[upEnd:]
+		max.members = max.members[downEnd:]
+
+		if len(min.members) == 0 {
+			b.planByNumPartitions.Delete(b.planByNumPartitions.Min())
+			min = b.planByNumPartitions.Min().Item.(*partitionLevel)
+		}
+		if len(max.members) == 0 {
+			b.planByNumPartitions.Delete(b.planByNumPartitions.Max())
+			max = b.planByNumPartitions.Max().Item.(*partitionLevel)
 		}
 	}
 }
 
 func (b *balancer) balanceComplex() {
 	for min := b.planByNumPartitions.Min(); b.planByNumPartitions.Len() > 1; min = b.planByNumPartitions.Min() {
-		level := min.Item.(partitionLevel)
+		level := min.Item.(*partitionLevel)
 		// If this max level is within one of this level, then nothing
 		// can steal down so we return early.
-		if b.planByNumPartitions.Max().Item.(partitionLevel).level <= level.level+1 {
+		if b.planByNumPartitions.Max().Item.(*partitionLevel).level <= level.level+1 {
 			return
 		}
 		// We continually loop over this level until every member is
-		// static (deleted) or bumped up a level. It is possible for a
-		// member to bump itself up only to have a different in this
-		// level steal from it and bump that original member back down,
-		// which is why we do not just loop once over level.members.
+		// static (deleted) or bumped up a level.
 		for len(level.members) > 0 {
-			for memberNum := range level.members {
-				if stealPath, found := b.stealGraph.findSteal(memberNum); found {
-					for _, segment := range stealPath {
-						b.reassignPartition(segment.src, segment.dst, segment.part)
-					}
-					continue
+			memberNum := level.members[0]
+			if stealPath, found := b.stealGraph.findSteal(memberNum); found {
+				for _, segment := range stealPath {
+					b.reassignPartition(segment.src, segment.dst, segment.part)
 				}
+				continue
+			}
 
-				// If we could not find a steal path, this
-				// member is not static (will never grow).
-				delete(level.members, memberNum)
-				if len(level.members) == 0 {
-					b.planByNumPartitions.Delete(b.planByNumPartitions.Min())
-				}
+			// If we could not find a steal path, this
+			// member is not static (will never grow).
+			level.removeMember(memberNum)
+			if len(level.members) == 0 {
+				b.planByNumPartitions.Delete(b.planByNumPartitions.Min())
 			}
 		}
 	}
@@ -583,21 +641,18 @@ func (b *balancer) reassignPartition(src, dst int, partNum int) {
 
 	b.fixMemberLevel(
 		b.planByNumPartitions.FindWith(func(n *rbtree.Node) int {
-			return oldSrcLevel - n.Item.(partitionLevel).level
+			return oldSrcLevel - n.Item.(*partitionLevel).level
 		}),
 		src,
 		*srcPartitions,
 	)
 	b.fixMemberLevel(
 		b.planByNumPartitions.FindWith(func(n *rbtree.Node) int {
-			return oldDstLevel - n.Item.(partitionLevel).level
+			return oldDstLevel - n.Item.(*partitionLevel).level
 		}),
 		dst,
 		*dstPartitions,
 	)
 
 	b.stealGraph.changeOwnership(partNum, dst)
-}
-
-func (b *balancer) shuffleEasy() {
 }
