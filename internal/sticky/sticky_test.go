@@ -2,6 +2,7 @@ package sticky
 
 import (
 	"fmt"
+	"math/rand"
 	"testing"
 )
 
@@ -1364,15 +1365,23 @@ func BenchmarkOne(b *testing.B) {
 }
 
 func TestLarge(t *testing.T) {
-	members, topics := makeLargeBalance(t)
-	plan := Balance(members, topics)
-	testPlanUsage(t, plan, topics, nil)
+	{
+		members, topics := makeLargeBalance(t, false)
+		plan := Balance(members, topics)
+		testPlanUsage(t, plan, topics, nil)
+	}
+	{
+		members, topics := makeLargeBalance(t, true)
+		plan := Balance(members, topics)
+		testPlanUsage(t, plan, topics, nil)
+	}
 }
 
 const topicNum = 20
 const partitionNum = 200
 
-func makeLargeBalance(tb testing.TB) ([]GroupMember, map[string][]int32) {
+func makeLargeBalance(tb testing.TB, withImbalance bool) ([]GroupMember, map[string][]int32) {
+	rng := rand.New(rand.NewSource(0))
 	var members []GroupMember
 	for i := 0; i < topicNum; i++ {
 		topics := make([]string, topicNum)
@@ -1384,13 +1393,20 @@ func makeLargeBalance(tb testing.TB) ([]GroupMember, map[string][]int32) {
 			Topics: topics,
 		})
 	}
+	if withImbalance {
+		members = append(members, GroupMember{
+			ID:     "imbalance",
+			Topics: []string{"topic0"},
+		})
+	}
 
 	// now we make topicNum topics
 	topics := make(map[string][]int32)
 	var totalPartitions int
 	for i := 0; i < topicNum; i++ {
-		totalPartitions += partitionNum
-		partitions := make([]int32, partitionNum)
+		n := rng.Intn(partitionNum * 5 / 2)
+		totalPartitions += n
+		partitions := make([]int32, n)
 		for j := range partitions {
 			partitions[j] = int32(j)
 		}
@@ -1400,8 +1416,8 @@ func makeLargeBalance(tb testing.TB) ([]GroupMember, map[string][]int32) {
 	return members, topics
 }
 
-func makeLargeBalanceWithExisting(tb testing.TB) ([]GroupMember, map[string][]int32) {
-	members, topics := makeLargeBalance(tb)
+func makeLargeBalanceWithExisting(tb testing.TB, withImbalance bool) ([]GroupMember, map[string][]int32) {
+	members, topics := makeLargeBalance(tb, withImbalance)
 	plan := Balance(members, topics)
 
 	oldMembers := members
@@ -1419,7 +1435,7 @@ func makeLargeBalanceWithExisting(tb testing.TB) ([]GroupMember, map[string][]in
 }
 
 func BenchmarkLarge(b *testing.B) {
-	members, topics := makeLargeBalance(b)
+	members, topics := makeLargeBalance(b, false)
 	b.ResetTimer()
 	for n := 0; n < b.N; n++ {
 		Balance(members, topics)
@@ -1427,7 +1443,24 @@ func BenchmarkLarge(b *testing.B) {
 }
 
 func BenchmarkLargeWithExisting(b *testing.B) {
-	members, topics := makeLargeBalanceWithExisting(b)
+	members, topics := makeLargeBalanceWithExisting(b, false)
+	members = members[1:]
+	b.ResetTimer()
+	for n := 0; n < b.N; n++ {
+		Balance(members, topics)
+	}
+}
+
+func BenchmarkLargeImbalanced(b *testing.B) {
+	members, topics := makeLargeBalance(b, true)
+	b.ResetTimer()
+	for n := 0; n < b.N; n++ {
+		Balance(members, topics)
+	}
+}
+
+func BenchmarkLargeWithExistingImbalanced(b *testing.B) {
+	members, topics := makeLargeBalanceWithExisting(b, true)
 	members = members[1:]
 	b.ResetTimer()
 	for n := 0; n < b.N; n++ {
