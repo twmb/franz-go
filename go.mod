@@ -9,7 +9,7 @@ require (
 	github.com/davecgh/go-spew v1.1.1
 	github.com/golang/snappy v0.0.1
 	github.com/pierrec/lz4 v2.0.5+incompatible
-	github.com/pkg/profile v1.3.0
 	github.com/segmentio/kafka-go v0.2.2
+	github.com/twmb/go-rbtree v1.0.0
 	golang.org/x/exp v0.0.0-20190316020145-860388717186
 )
