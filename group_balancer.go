@@ -128,6 +128,12 @@ func parseGroupMembers(kmembers []kmsg.JoinGroupResponseMember) ([]groupMember, 
 //     M0: [t0p0, t0p2, t1p1]
 //     M1: [t0p1, t1p0, t1p2]
 //
+// If all members subscribe to all topics equally, the roundrobin balancer
+// will give a perfect balance. However, if topic subscriptions are quite
+// unequal, the roundrobin balancer may lead to a bad balance. See KIP-49
+// for one example (note that the fair strategy mentioned in KIP-49 does
+// not exist).
+//
 // This is equivalent to the Java roundrobin balancer.
 func RoundRobinBalancer() GroupBalancer {
 	return new(roundRobinBalancer)
@@ -137,22 +143,58 @@ type roundRobinBalancer struct{}
 
 func (*roundRobinBalancer) protocolName() string { return "roundrobin" }
 func (*roundRobinBalancer) balance(members []groupMember, topics map[string][]int32) balancePlan {
-	topics2PotentialConsumers := make(map[string][]string)
+	// Get all the topics all members are subscribed to.
+	memberTopics := make(map[string]struct{}, len(topics))
 	for _, member := range members {
 		for _, topic := range member.topics {
-			topics2PotentialConsumers[topic] = append(topics2PotentialConsumers[topic], member.id)
+			memberTopics[topic] = struct{}{}
 		}
 	}
 
-	plan := newBalancePlan(members)
-	for topic, potentialConsumers := range topics2PotentialConsumers {
-		sort.Strings(potentialConsumers)
-
-		var consumerIdx int
+	type topicPartition struct {
+		topic     string
+		partition int32
+	}
+	var nparts int
+	for _, partitions := range topics {
+		nparts += len(partitions)
+	}
+	// Order all partitions available to balance, filtering out those that
+	// no members are subscribed to.
+	allParts := make([]topicPartition, 0, nparts)
+	for topic := range memberTopics {
 		for _, partition := range topics[topic] {
-			member := potentialConsumers[consumerIdx]
-			plan.addPartition(member, topic, partition)
-			consumerIdx = (consumerIdx + 1) % len(potentialConsumers)
+			allParts = append(allParts, topicPartition{
+				topic,
+				partition,
+			})
+		}
+	}
+	sort.Slice(allParts, func(i, j int) bool {
+		l, r := allParts[i], allParts[j]
+		return l.topic < r.topic || l.topic == r.topic && l.partition < r.partition
+	})
+
+	plan := newBalancePlan(members)
+	// While parts are unassigned, assign them.
+	var memberIdx int
+	for len(allParts) > 0 {
+		next := allParts[0]
+		allParts = allParts[1:]
+
+		// The Java roundrobin strategy walks members circularly until
+		// a member can take this partition, and then starts the next
+		// partition where the circular iterator left off.
+	assigned:
+		for {
+			member := members[memberIdx]
+			memberIdx = (memberIdx + 1) % len(members)
+			for _, topic := range member.topics {
+				if topic == next.topic {
+					plan.addPartition(member.id, next.topic, next.partition)
+					break assigned
+				}
+			}
 		}
 	}
 
@@ -243,7 +285,7 @@ func (*rangeBalancer) balance(members []groupMember, topics map[string][]int32) 
 // which is balanced, but has 2 partitions move when they do not need to
 // (t0p1, t1p1).
 //
-// Stick balancing results in
+// Sticky balancing results in
 //
 //     M0: [t0p0, t0p1, t0p2, t2p0, t2p2]
 //     M1: [t1p0, t1p1, t1p2, t2p1]
@@ -260,12 +302,13 @@ func (*rangeBalancer) balance(members []groupMember, topics map[string][]int32) 
 //
 // Note that this API implements the sticky partitioning quite differently from
 // the Java implementation. The Java implementaiton is difficult to reason
-// about and has many edge cases that result in non-optimal balancing. This API
-// uses a different algorithm (A*) to ensure optimal balancing while being an
-// order of magnitude faster. Since the new strategy is a strict improvement
-// over the Java strategy, it is entirely compatible. Any Go client sharing a
-// group with a Java client will not have its decisions undone on leadership
-// change from a Go consumer to a Java one.
+// about and has many edge cases that result in non-optimal balancing (albeit,
+// you likely have to be trying to hit those edge cases). This API uses a
+// different algorithm (A*) to ensure optimal balancing while being an order of
+// magnitude faster. Since the new strategy is a strict improvement over the
+// Java strategy, it is entirely compatible. Any Go client sharing a group with
+// a Java client will not have its decisions undone on leadership change from a
+// Go consumer to a Java one.
 func StickyBalancer() GroupBalancer {
 	return new(stickyBalancer)
 }
