@@ -11,6 +11,15 @@ import (
 	"github.com/twmb/kgo/kmsg"
 )
 
+// TODO linger:
+// - important to keep broker CPU small if producers are low throughput, but many many producers
+// - can have atomic, bytesBuffered
+// - inc on bufferRecord
+// - dec on createRequest
+// - if still enough for batch, go again
+// - else linger, if new record pushes past enough for batch, signal the linger to stop
+// - on toppar move, inc/dec as necessary, should not affect loop much
+
 type recordSink struct {
 	broker *broker // the broker this sink belongs to
 

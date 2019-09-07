@@ -1043,7 +1043,7 @@ GroupMemberAssignment => not top level, with encoding
 // Version 4 introduced replying to joins of existing groups with
 // MEMBER_ID_REQUIRED, which requires re-issuing the join group with the
 // returned member ID. See KIP-394 for more details.
-JoinGroupRequest => key 11, max version 4, group coordinator
+JoinGroupRequest => key 11, max version 5, group coordinator
   // GroupID is the group to join.
   GroupID: string
   // SessionTimeoutMs is how long a member in the group can go between
@@ -1093,6 +1093,8 @@ JoinGroupRequest => key 11, max version 4, group coordinator
     // The protocol metadata is where group members will communicate which
     // topics they collectively as a group want to consume.
     ProtocolMetadata: bytes
+    // TODO document: see KIP-429
+    ProtocolVersion: int32 // v5+
 
 // JoinGroupResponse is returned from a JoinGroupRequest.
 JoinGroupResponse => from JoinGroupRequest

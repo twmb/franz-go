@@ -305,10 +305,17 @@ func (*rangeBalancer) balance(members []groupMember, topics map[string][]int32) 
 // about and has many edge cases that result in non-optimal balancing (albeit,
 // you likely have to be trying to hit those edge cases). This API uses a
 // different algorithm (A*) to ensure optimal balancing while being an order of
-// magnitude faster. Since the new strategy is a strict improvement over the
-// Java strategy, it is entirely compatible. Any Go client sharing a group with
-// a Java client will not have its decisions undone on leadership change from a
-// Go consumer to a Java one.
+// magnitude faster.
+//
+// Since the new strategy is a strict improvement over the Java strategy, it is
+// entirely compatible. Any Go client sharing a group with a Java client will
+// not have its decisions undone on leadership change from a Go consumer to a
+// Java one. Java balancers do not apply the strategy it comes up with if it
+// deems the balance score equal to or worse than the original score (the score
+// being effectively equal to the standard deviation of the mean number of
+// assigned partitions). This Go sticky balancer is optimal and extra sticky.
+// Thus, the Java balancer will never back out of a strategy from this
+// balancer.
 func StickyBalancer() GroupBalancer {
 	return new(stickyBalancer)
 }

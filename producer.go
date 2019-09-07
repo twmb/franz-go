@@ -8,6 +8,11 @@ import (
 	"github.com/twmb/kgo/kmsg"
 )
 
+// TODO KIP-380:
+// - change bufferRecord API to bufferRecord((pr promisedRecord, notIfNewBatch bool) (appended bool)
+// - call with (pr, true)
+// - if not appended, repartition, then call again on new partition with (pr, false)
+
 // func (p *Producer) BeginTransaction() *ProducerTransaction
 // func (p *ProducerTransaction) Produce(r *Record)
 
