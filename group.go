@@ -88,9 +88,9 @@ type (
 		topics    []string
 		balancers []GroupBalancer
 
-		memberID string
-
+		memberID   string
 		generation int32
+		assigned   map[string][]int32
 
 		// TODO autocommit
 		// OnAssign
@@ -178,16 +178,15 @@ func (c *consumer) syncGroup(plan balancePlan, generation int32) error {
 }
 
 func (c *consumer) joinGroupProtocols() []kmsg.JoinGroupRequestGroupProtocol {
-	meta := (&kmsg.GroupMemberMetadata{
-		Version: 0,
-		Topics:  c.group.topics,
-	}).AppendTo(nil)
-
 	var protos []kmsg.JoinGroupRequestGroupProtocol
 	for _, balancer := range c.group.balancers {
 		protos = append(protos, kmsg.JoinGroupRequestGroupProtocol{
-			ProtocolName:     balancer.protocolName(),
-			ProtocolMetadata: meta,
+			ProtocolName: balancer.protocolName(),
+			ProtocolMetadata: balancer.metaFor(
+				c.group.topics,
+				c.group.assigned,
+				c.group.generation,
+			),
 		})
 	}
 	return protos

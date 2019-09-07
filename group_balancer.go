@@ -14,6 +14,14 @@ type GroupBalancer interface {
 	// range, sticky.
 	protocolName() string // "sticky"
 
+	// metaFor returns the userdata to use in JoinGroup, given the topic
+	// interests and the current assignment.
+	metaFor(
+		interests []string,
+		currentAssignment map[string][]int32,
+		generation int32,
+	) []byte
+
 	// balance balances topics and partitions among group members.
 	//
 	// The input members are guaranteed to be sorted by member ID, and
@@ -115,6 +123,13 @@ func parseGroupMembers(kmembers []kmsg.JoinGroupResponseMember) ([]groupMember, 
 	return members, nil
 }
 
+func basicMetaFor(interests []string) []byte {
+	return (&kmsg.GroupMemberMetadata{
+		Version: 0,
+		Topics:  interests,
+	}).AppendTo(nil)
+}
+
 ///////////////////
 // Balance Plans //
 ///////////////////
@@ -142,6 +157,9 @@ func RoundRobinBalancer() GroupBalancer {
 type roundRobinBalancer struct{}
 
 func (*roundRobinBalancer) protocolName() string { return "roundrobin" }
+func (*roundRobinBalancer) metaFor(interests []string, _ map[string][]int32, _ int32) []byte {
+	return basicMetaFor(interests)
+}
 func (*roundRobinBalancer) balance(members []groupMember, topics map[string][]int32) balancePlan {
 	// Get all the topics all members are subscribed to.
 	memberTopics := make(map[string]struct{}, len(topics))
@@ -220,6 +238,9 @@ func RangeBalancer() GroupBalancer {
 type rangeBalancer struct{}
 
 func (*rangeBalancer) protocolName() string { return "range" }
+func (*rangeBalancer) metaFor(interests []string, _ map[string][]int32, _ int32) []byte {
+	return basicMetaFor(interests)
+}
 func (*rangeBalancer) balance(members []groupMember, topics map[string][]int32) balancePlan {
 	topics2PotentialConsumers := make(map[string][]string)
 	for _, member := range members {
@@ -323,6 +344,25 @@ func StickyBalancer() GroupBalancer {
 type stickyBalancer struct{}
 
 func (*stickyBalancer) protocolName() string { return "sticky" }
+func (*stickyBalancer) metaFor(interests []string, currentAssignment map[string][]int32, generation int32) []byte {
+	meta := kmsg.GroupMemberMetadata{
+		Version: 1,
+		Topics:  interests,
+	}
+	stickyMeta := kmsg.StickyMemberMetadataV1{
+		Generation: generation,
+	}
+	for topic, partitions := range currentAssignment {
+		stickyMeta.CurrentAssignment = append(stickyMeta.CurrentAssignment,
+			kmsg.StickyMemberMetadataV1CurrentAssignment{
+				Topic:      topic,
+				Partitions: partitions,
+			})
+	}
+	meta.UserData = stickyMeta.AppendTo(nil)
+	return meta.AppendTo(nil)
+
+}
 func (*stickyBalancer) balance(members []groupMember, topics map[string][]int32) balancePlan {
 	stickyMembers := make([]sticky.GroupMember, 0, len(members))
 	for _, member := range members {

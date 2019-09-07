@@ -144,7 +144,7 @@ type RecordBatch struct {
 	// For compressed records, the length of the uncompressed array is kept
 	// but everything that follows is compressed.
 	//
-	// The number of bytes is expected to be the Length field minus 48.
+	// The number of bytes is expected to be the Length field minus 49.
 	Records []byte
 }
 type ProduceRequestTopicDataData struct {
@@ -3273,6 +3273,9 @@ type JoinGroupRequestGroupProtocol struct {
 	// The protocol metadata is where group members will communicate which
 	// topics they collectively as a group want to consume.
 	ProtocolMetadata []byte
+
+	// TODO document: see KIP-429
+	ProtocolVersion int32 // v5+
 }
 
 // JoinGroupRequest issues a request to join a Kafka group. This will create a
@@ -3331,7 +3334,7 @@ type JoinGroupRequest struct {
 }
 
 func (*JoinGroupRequest) Key() int16                   { return 11 }
-func (*JoinGroupRequest) MaxVersion() int16            { return 4 }
+func (*JoinGroupRequest) MaxVersion() int16            { return 5 }
 func (*JoinGroupRequest) MinVersion() int16            { return 0 }
 func (v *JoinGroupRequest) SetVersion(version int16)   { v.Version = version }
 func (v *JoinGroupRequest) GetVersion() int16          { return v.Version }
@@ -3373,6 +3376,10 @@ func (v *JoinGroupRequest) AppendTo(dst []byte) []byte {
 			{
 				v := v.ProtocolMetadata
 				dst = kbin.AppendBytes(dst, v)
+			}
+			if version >= 5 {
+				v := v.ProtocolVersion
+				dst = kbin.AppendInt32(dst, v)
 			}
 		}
 	}

@@ -112,7 +112,7 @@ RecordBatch => not top level
   // For compressed records, the length of the uncompressed array is kept
   // but everything that follows is compressed.
   //
-  // The number of bytes is expected to be the Length field minus 48.
+  // The number of bytes is expected to be the Length field minus 49.
   Records: length-field-minus => Length - 49
 
 // ProduceRequest issues records to be created to Kafka.
@@ -1016,6 +1016,7 @@ GroupMemberMetadata => not top level, with encoding
   // For sticky assignment with version 0, this is StickyMemberMetadataV0.
   // For sticky assignment with version 1, this is StickyMemberMetadataV1.
   UserData: bytes
+  // TODO docs, add discard-extra field and parse type
 
 // GroupMemberAssignment is the assignment data that is usually sent with a
 // sync group request.
