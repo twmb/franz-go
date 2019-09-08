@@ -2401,6 +2401,9 @@ type OffsetCommitRequest struct {
 	// MemberID is the ID of the client issuing this request in the group.
 	MemberID string // v1+
 
+	// GroupInstanceID is the instance ID of this member in the group (KIP-345).
+	GroupInstanceID string // v7+
+
 	// RetentionTime is how long this commit will persist in Kafka.
 	//
 	// This was introduced in v2, replacing an individual topic/partition's
@@ -2410,7 +2413,10 @@ type OffsetCommitRequest struct {
 	// offsets expired before committing, even though the consumer was still
 	// active. After restarting or rebalancing, the consumer would now not know
 	// the last committed offset and would have to start at the beginning or end,
-	// leading to duplicates or log loss. Read KIP-211 for more details.
+	// leading to duplicates or log loss.
+	//
+	// Post 2.1.0, if this field is empty, offsets are only deleted once the
+	// group is empty. Read KIP-211 for more details.
 	RetentionTime int64 // v2+
 
 	// Topics is contains topics and partitions for which to commit offsets.
@@ -2418,7 +2424,7 @@ type OffsetCommitRequest struct {
 }
 
 func (*OffsetCommitRequest) Key() int16                   { return 8 }
-func (*OffsetCommitRequest) MaxVersion() int16            { return 6 }
+func (*OffsetCommitRequest) MaxVersion() int16            { return 7 }
 func (*OffsetCommitRequest) MinVersion() int16            { return 0 }
 func (v *OffsetCommitRequest) SetVersion(version int16)   { v.Version = version }
 func (v *OffsetCommitRequest) GetVersion() int16          { return v.Version }
@@ -2440,6 +2446,10 @@ func (v *OffsetCommitRequest) AppendTo(dst []byte) []byte {
 	}
 	if version >= 1 {
 		v := v.MemberID
+		dst = kbin.AppendString(dst, v)
+	}
+	if version >= 7 {
+		v := v.GroupInstanceID
 		dst = kbin.AppendString(dst, v)
 	}
 	if version >= 2 && version <= 4 {
@@ -3273,9 +3283,6 @@ type JoinGroupRequestGroupProtocol struct {
 	// The protocol metadata is where group members will communicate which
 	// topics they collectively as a group want to consume.
 	ProtocolMetadata []byte
-
-	// TODO document: see KIP-429
-	ProtocolVersion int32 // v5+
 }
 
 // JoinGroupRequest issues a request to join a Kafka group. This will create a
@@ -3289,6 +3296,9 @@ type JoinGroupRequestGroupProtocol struct {
 // Version 4 introduced replying to joins of existing groups with
 // MEMBER_ID_REQUIRED, which requires re-issuing the join group with the
 // returned member ID. See KIP-394 for more details.
+//
+// Version 5 introduced GroupInstanceID, allowing for more "static" membership.
+// See KIP-345 for more details.
 type JoinGroupRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
@@ -3318,6 +3328,10 @@ type JoinGroupRequest struct {
 	// the first time, use the empty string. The response will contain the member
 	// ID that should be used going forward.
 	MemberID string
+
+	// GroupInstanceID is a user configured ID that is used for making a group
+	// member "static", allowing many rebalances to be avoided.
+	GroupInstanceID string // v5+
 
 	// ProtocolType is the "type" of protocol being used for the join group.
 	// The initial group creation sets the type; all additional members must
@@ -3360,6 +3374,10 @@ func (v *JoinGroupRequest) AppendTo(dst []byte) []byte {
 		v := v.MemberID
 		dst = kbin.AppendString(dst, v)
 	}
+	if version >= 5 {
+		v := v.GroupInstanceID
+		dst = kbin.AppendString(dst, v)
+	}
 	{
 		v := v.ProtocolType
 		dst = kbin.AppendString(dst, v)
@@ -3377,10 +3395,6 @@ func (v *JoinGroupRequest) AppendTo(dst []byte) []byte {
 				v := v.ProtocolMetadata
 				dst = kbin.AppendBytes(dst, v)
 			}
-			if version >= 5 {
-				v := v.ProtocolVersion
-				dst = kbin.AppendInt32(dst, v)
-			}
 		}
 	}
 	return dst
@@ -3389,6 +3403,9 @@ func (v *JoinGroupRequest) AppendTo(dst []byte) []byte {
 type JoinGroupResponseMember struct {
 	// MemberID is a member in this group.
 	MemberID string
+
+	// GroupInstanceID is an instance ID of a member in this group (KIP-345).
+	GroupInstanceID string // v5+
 
 	// MemberMetadata is the metadata for this member.
 	MemberMetadata []byte
@@ -3506,6 +3523,10 @@ func (v *JoinGroupResponse) ReadFrom(src []byte) error {
 						v := b.String()
 						s.MemberID = v
 					}
+					if version >= 5 {
+						v := b.String()
+						s.GroupInstanceID = v
+					}
 					{
 						v := b.Bytes()
 						s.MemberMetadata = v
@@ -3533,10 +3554,13 @@ type HeartbeatRequest struct {
 
 	// MemberID is the member ID this member is for.
 	MemberID string
+
+	// GroupInstanceID is the instance ID of this member in the group (KIP-345).
+	GroupInstanceID string // v3+
 }
 
 func (*HeartbeatRequest) Key() int16                   { return 12 }
-func (*HeartbeatRequest) MaxVersion() int16            { return 2 }
+func (*HeartbeatRequest) MaxVersion() int16            { return 3 }
 func (*HeartbeatRequest) MinVersion() int16            { return 0 }
 func (v *HeartbeatRequest) SetVersion(version int16)   { v.Version = version }
 func (v *HeartbeatRequest) GetVersion() int16          { return v.Version }
@@ -3556,6 +3580,10 @@ func (v *HeartbeatRequest) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.MemberID
+		dst = kbin.AppendString(dst, v)
+	}
+	if version >= 3 {
+		v := v.GroupInstanceID
 		dst = kbin.AppendString(dst, v)
 	}
 	return dst
@@ -3612,8 +3640,17 @@ func (v *HeartbeatResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+type LeaveGroupRequestMemberIdentitie struct {
+	MemberID string
+
+	GroupInstanceID string
+}
+
 // LeaveGroupRequest issues a request for a group member to leave the group,
 // triggering a group rebalance.
+//
+// Version 3 changed removed MemberID and added a batch instance+member ID
+// way of leaving a group.
 type LeaveGroupRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
@@ -3623,10 +3660,14 @@ type LeaveGroupRequest struct {
 
 	// MemberID is the member that is leaving.
 	MemberID string
+
+	// MemberIdentities are member and group instance IDs to cause to leave
+	// a group.
+	MemberIdentities []LeaveGroupRequestMemberIdentitie // v3+
 }
 
 func (*LeaveGroupRequest) Key() int16                   { return 13 }
-func (*LeaveGroupRequest) MaxVersion() int16            { return 2 }
+func (*LeaveGroupRequest) MaxVersion() int16            { return 3 }
 func (*LeaveGroupRequest) MinVersion() int16            { return 0 }
 func (v *LeaveGroupRequest) SetVersion(version int16)   { v.Version = version }
 func (v *LeaveGroupRequest) GetVersion() int16          { return v.Version }
@@ -3640,9 +3681,24 @@ func (v *LeaveGroupRequest) AppendTo(dst []byte) []byte {
 		v := v.GroupID
 		dst = kbin.AppendString(dst, v)
 	}
-	{
+	if version >= 0 && version <= 2 {
 		v := v.MemberID
 		dst = kbin.AppendString(dst, v)
+	}
+	if version >= 3 {
+		v := v.MemberIdentities
+		dst = kbin.AppendArrayLen(dst, len(v))
+		for i := range v {
+			v := &v[i]
+			{
+				v := v.MemberID
+				dst = kbin.AppendString(dst, v)
+			}
+			{
+				v := v.GroupInstanceID
+				dst = kbin.AppendString(dst, v)
+			}
+		}
 	}
 	return dst
 }
@@ -3723,13 +3779,16 @@ type SyncGroupRequest struct {
 	// MemberID is the member ID this member is.
 	MemberID string
 
+	// GroupInstanceID is the instance ID of this member in the group (KIP-345).
+	GroupInstanceID string // v3+
+
 	// GroupAssignment, sent only from the group leader, is the topic partition
 	// assignment it has decided on for all members.
 	GroupAssignment []SyncGroupRequestGroupAssignment
 }
 
 func (*SyncGroupRequest) Key() int16                   { return 14 }
-func (*SyncGroupRequest) MaxVersion() int16            { return 2 }
+func (*SyncGroupRequest) MaxVersion() int16            { return 3 }
 func (*SyncGroupRequest) MinVersion() int16            { return 0 }
 func (v *SyncGroupRequest) SetVersion(version int16)   { v.Version = version }
 func (v *SyncGroupRequest) GetVersion() int16          { return v.Version }
@@ -3749,6 +3808,10 @@ func (v *SyncGroupRequest) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.MemberID
+		dst = kbin.AppendString(dst, v)
+	}
+	if version >= 3 {
+		v := v.GroupInstanceID
 		dst = kbin.AppendString(dst, v)
 	}
 	{

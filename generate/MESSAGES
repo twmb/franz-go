@@ -768,7 +768,7 @@ ControlledShutdownResponse => from ControlledShutdownRequest
 
 // OffsetCommitRequest commits offsets for consumed topics / partitions in
 // a group.
-OffsetCommitRequest => key 8, max version 6, group coordinator
+OffsetCommitRequest => key 8, max version 7, group coordinator
   // GroupID is the group this request is committing offsets to.
   GroupID: string
   // GenerationID being -1 and group being empty means the group is being used
@@ -776,6 +776,8 @@ OffsetCommitRequest => key 8, max version 6, group coordinator
   GenerationID: int32 // v1+
   // MemberID is the ID of the client issuing this request in the group.
   MemberID: string // v1+
+  // GroupInstanceID is the instance ID of this member in the group (KIP-345).
+  GroupInstanceID: string // v7+
   // RetentionTime is how long this commit will persist in Kafka.
   //
   // This was introduced in v2, replacing an individual topic/partition's
@@ -785,7 +787,10 @@ OffsetCommitRequest => key 8, max version 6, group coordinator
   // offsets expired before committing, even though the consumer was still
   // active. After restarting or rebalancing, the consumer would now not know
   // the last committed offset and would have to start at the beginning or end,
-  // leading to duplicates or log loss. Read KIP-211 for more details.
+  // leading to duplicates or log loss.
+  //
+  // Post 2.1.0, if this field is empty, offsets are only deleted once the
+  // group is empty. Read KIP-211 for more details.
   RetentionTime: int64 // v2-v4
   // Topics is contains topics and partitions for which to commit offsets.
   Topics: [=>]
@@ -1044,6 +1049,9 @@ GroupMemberAssignment => not top level, with encoding
 // Version 4 introduced replying to joins of existing groups with
 // MEMBER_ID_REQUIRED, which requires re-issuing the join group with the
 // returned member ID. See KIP-394 for more details.
+//
+// Version 5 introduced GroupInstanceID, allowing for more "static" membership.
+// See KIP-345 for more details.
 JoinGroupRequest => key 11, max version 5, group coordinator
   // GroupID is the group to join.
   GroupID: string
@@ -1067,6 +1075,9 @@ JoinGroupRequest => key 11, max version 5, group coordinator
   // the first time, use the empty string. The response will contain the member
   // ID that should be used going forward.
   MemberID: string
+  // GroupInstanceID is a user configured ID that is used for making a group
+  // member "static", allowing many rebalances to be avoided.
+  GroupInstanceID: string // v5+
   // ProtocolType is the "type" of protocol being used for the join group.
   // The initial group creation sets the type; all additional members must
   // have the same type or they will be rejected.
@@ -1094,8 +1105,6 @@ JoinGroupRequest => key 11, max version 5, group coordinator
     // The protocol metadata is where group members will communicate which
     // topics they collectively as a group want to consume.
     ProtocolMetadata: bytes
-    // TODO document: see KIP-429
-    ProtocolVersion: int32 // v5+
 
 // JoinGroupResponse is returned from a JoinGroupRequest.
 JoinGroupResponse => from JoinGroupRequest
@@ -1158,18 +1167,22 @@ JoinGroupResponse => from JoinGroupRequest
   Members: [=>]
     // MemberID is a member in this group.
     MemberID: string
+    // GroupInstanceID is an instance ID of a member in this group (KIP-345).
+    GroupInstanceID: string // v5+
     // MemberMetadata is the metadata for this member.
     MemberMetadata: bytes
 
 // HeartbeatRequest issues a heartbeat for a member in a group, ensuring that
 // Kafka does not expire the member from the group.
-HeartbeatRequest => key 12, max version 2, group coordinator
+HeartbeatRequest => key 12, max version 3, group coordinator
   // GroupID is the group ID this heartbeat is for.
   GroupID: string
   // GenerationID is the group generation this heartbeat is for.
   GenerationID: int32
   // MemberID is the member ID this member is for.
   MemberID: string
+  // GroupInstanceID is the instance ID of this member in the group (KIP-345).
+  GroupInstanceID: string // v3+
 
 // HeartbeatResponse is returned from a HeartbeatRequest.
 HeartbeatResponse => from HeartbeatRequest
@@ -1201,11 +1214,19 @@ HeartbeatResponse => from HeartbeatRequest
 
 // LeaveGroupRequest issues a request for a group member to leave the group,
 // triggering a group rebalance.
-LeaveGroupRequest => key 13, max version 2, group coordinator
+//
+// Version 3 changed removed MemberID and added a batch instance+member ID
+// way of leaving a group.
+LeaveGroupRequest => key 13, max version 3, group coordinator
   // GroupID is the group to leave.
   GroupID: string
   // MemberID is the member that is leaving.
-  MemberID: string
+  MemberID: string // v0-v2
+  // MemberIdentities are member and group instance IDs to cause to leave
+  // a group.
+  MemberIdentities: [=>] // v3+
+    MemberID: string
+    GroupInstanceID: string
 
 // LeaveGroupResponse is returned from a LeaveGroupRequest.
 LeaveGroupResponse => from LeaveGroupRequest
@@ -1238,13 +1259,15 @@ LeaveGroupResponse => from LeaveGroupRequest
 // assignments with the request; all other members do not.
 //
 // Once the leader sends the group assignment, all members will be replied to.
-SyncGroupRequest => key 14, max version 2, group coordinator
+SyncGroupRequest => key 14, max version 3, group coordinator
   // GroupID is the group ID this sync group is for.
   GroupID: string
   // GenerationID is the group generation this sync is for.
   GenerationID: int32
   // MemberID is the member ID this member is.
   MemberID: string
+  // GroupInstanceID is the instance ID of this member in the group (KIP-345).
+  GroupInstanceID: string // v3+
   // GroupAssignment, sent only from the group leader, is the topic partition
   // assignment it has decided on for all members.
   GroupAssignment: [=>]
