@@ -40,6 +40,31 @@ func WithGroupBalancers(balancers ...GroupBalancer) GroupOpt {
 	return groupOpt{func(cfg *consumerGroup) { cfg.balancers = balancers }}
 }
 
+// WithGroupSessionTimeout sets how long a member the group can go between
+// heartbeats, overriding the default 10,000ms. If a member does not heartbeat
+// within this timeout, the broker will remove the member from the group and
+// initiate a rebalance.
+//
+// This corresponds to Kafka's session.timeout.ms setting and must be within
+// the broker's group.min.session.timeout.ms and group.max.session.timeout.ms.
+func WithGroupSessionTimeout(timeout time.Duration) GroupOpt {
+	return groupOpt{func(cfg *consumerGroup) { cfg.sessionTimeoutMS = int32(timeout.Milliseconds()) }}
+}
+
+// WithGroupRebalanceTimeout sets how long group members are allowed to take
+// when a JoinGroup is initiated (i.e., a rebalance has begun), overriding the
+// default 60,000ms. This is essentially how long all members are allowed to
+// complete work and commit offsets.
+//
+// Kafka uses the largest rebalance timeout of all members in the group. If a
+// member does not rejoin within this timeout, Kafka will kick that member from
+// the group.
+//
+// This corresponds to Kafka's rebalance.timeout.ms.
+func WithGroupRebalanceTimeout(timeout time.Duration) GroupOpt {
+	return groupOpt{func(cfg *consumerGroup) { cfg.rebalanceTimeoutMS = int32(timeout.Milliseconds()) }}
+}
+
 // AssignGroup assigns a group to consume from, overriding any prior
 // assignment. To leave a group, you can AssignGroup with an empty group.
 func (c *Client) AssignGroup(group string, opts ...GroupOpt) error {
@@ -56,12 +81,18 @@ func (c *Client) AssignGroup(group string, opts ...GroupOpt) error {
 	if consumer.group.id != "" {
 		return errors.New("client already has a group")
 	}
-	consumer.group.balancers = []GroupBalancer{
-		StickyBalancer(),
-		RoundRobinBalancer(),
-		RangeBalancer(),
+	consumer.group = consumerGroup{
+		id: group,
+		// topics from opts
+		balancers: []GroupBalancer{
+			StickyBalancer(),
+			RoundRobinBalancer(),
+			RangeBalancer(),
+		},
+
+		sessionTimeoutMS:   10000,
+		rebalanceTimeoutMS: 60000,
 	}
-	consumer.group.id = group
 	for _, opt := range opts {
 		opt.apply(&consumer.group)
 	}
@@ -92,28 +123,28 @@ type (
 		generation int32
 		assigned   map[string][]int32
 
+		sessionTimeoutMS   int32
+		rebalanceTimeoutMS int32
+
 		// TODO autocommit
 		// OnAssign
 		// OnRevoke
-		// SessionTimeout
-		// RebalanceTimeout
 	}
 )
 
 func (c *Client) consumeGroup() {
-	// TODO await first metadata update
-	c.triggerUpdateMetadata()
-	time.Sleep(time.Second)
 	c.consumer.joinGroup()
 }
 
 func (c *consumer) joinGroup() error {
+	c.client.waitmeta()
+
 start:
 	var memberID string
 	req := kmsg.JoinGroupRequest{
 		GroupID:          c.group.id,
-		SessionTimeout:   10000, // TODO also rename to MS?
-		RebalanceTimeout: 1000,
+		SessionTimeout:   c.group.sessionTimeoutMS,
+		RebalanceTimeout: c.group.rebalanceTimeoutMS,
 		ProtocolType:     "consumer",
 		MemberID:         memberID,
 		GroupProtocols:   c.joinGroupProtocols(),
@@ -128,8 +159,8 @@ start:
 	if err == kerr.MemberIDRequired {
 		memberID = resp.MemberID // KIP-394
 		goto start
-	} else if err != nil {
-		return err // TODO differentiate retriable?
+	} else {
+		return err // Request retries as necesary, so this must be a failure
 	}
 
 	c.group.memberID = resp.MemberID
@@ -150,8 +181,6 @@ start:
 	return nil
 }
 
-// TODO commit, leave group, member id
-
 func (c *consumer) syncGroup(plan balancePlan, generation int32) error {
 	req := kmsg.SyncGroupRequest{
 		GroupID:         c.group.id,
@@ -165,7 +194,7 @@ func (c *consumer) syncGroup(plan balancePlan, generation int32) error {
 	}
 	resp := kresp.(*kmsg.SyncGroupResponse)
 	if err != nil {
-		return err // TODO differentiate retriable?
+		return err // Request retries as necesary, so this must be a failure
 	}
 
 	kassignment := new(kmsg.GroupMemberAssignment)
