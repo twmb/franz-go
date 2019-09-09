@@ -15,3 +15,19 @@ TODO
 - KIP-429 (incremental rebalance, see KAFKA-8179)
 
 - KIP-380 (sticky partition producing)
+
+- KIP-423 (no rebalance on JoinGroup from leader in certain cases; under discussion)
+
+- add support for MessageSet v0/v1
+- cleanup generating (names are not great)
+
+
+OffsetCommit (internal, `__consumer_offsets`):
+KIP-211: v2
+KIP-320: v3
+
+KIP-384: ?
+
+GroupMemberMetadata (internal, `__consumer_offsets` metadata):
+KIP-211: v2
+KIP-345: v3
