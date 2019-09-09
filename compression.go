@@ -4,15 +4,20 @@ import (
 	"bytes"
 	"compress/gzip"
 	"errors"
-	"fmt"
 	"io"
 	"io/ioutil"
 	"sync"
 	"sync/atomic"
 
 	"github.com/golang/snappy"
+	"github.com/klauspost/compress/zstd"
 	"github.com/pierrec/lz4"
 )
+
+// NOTE: level configuration was removed at some point due to it likely being
+// more configuration than necessary; we may add level options as new functions
+// down the line. The code below supports levels; zstd levels will need wiring
+// in and levels will need validating.
 
 // compressorsMu guards concurrent writes to compressors.
 var compressorMu sync.Mutex
@@ -24,12 +29,24 @@ var compressors atomic.Value
 
 func init() {
 	compressors.Store(map[CompressionCodec]*compressor{
-		CompressionCodec{0, 0}: nil,
+		CompressionCodec{}: nil, // required default
 	})
 }
 
-// Not quite sure why, but the snappy writer doesn't write messages the way
-// Kafka wants.
+var tozstd, _ = zstd.NewWriter(nil)
+
+type zstdCompressor struct {
+	dst io.Writer // always a *sliceWriter
+}
+
+func (z *zstdCompressor) Reset(dst io.Writer) { z.dst = dst }
+func (z *zstdCompressor) Write(p []byte) (int, error) {
+	sw := z.dst.(*sliceWriter)
+	sw.base = tozstd.EncodeAll(p, sw.base[:0])
+	return len(p), nil
+}
+func (z *zstdCompressor) Close() error { return nil }
+
 type snappyCompressor struct {
 	dst io.Writer // always a *sliceWriter
 }
@@ -109,7 +126,7 @@ func (c *compressor) putZipr(z *zipr) {
 // The input codecs must have been validated.
 func loadProduceCompressor(codecs []CompressionCodec, produceRequestVersion int16) *compressor {
 	for _, codec := range codecs {
-		if codec.codec == 4 && (produceRequestVersion < 7 || !hasZstd) {
+		if codec.codec == 4 && (produceRequestVersion < 7) {
 			continue
 		}
 
@@ -130,13 +147,13 @@ func loadProduceCompressor(codecs []CompressionCodec, produceRequestVersion int1
 				level := codec.level
 				switch codec.codec {
 				case 1:
-					n = func() interface{} { cc, _ := gzip.NewWriterLevel(nil, level); return &zipr{cc: cc} }
+					n = func() interface{} { cc, _ := gzip.NewWriterLevel(nil, int(level)); return &zipr{cc: cc} }
 				case 2:
 					n = func() interface{} { return &zipr{cc: new(snappyCompressor)} }
 				case 3:
-					n = func() interface{} { return &zipr{cc: &lz4.Writer{Header: lz4.Header{CompressionLevel: level}}} }
+					n = func() interface{} { return &zipr{cc: new(lz4.Writer)} }
 				case 4:
-					n = func() interface{} { return &zipr{cc: newZstdWriter(level)} }
+					n = func() interface{} { return &zipr{cc: new(zstdCompressor)} }
 				}
 
 				// Create the next codec map, copying all the
@@ -167,49 +184,25 @@ func loadProduceCompressor(codecs []CompressionCodec, produceRequestVersion int1
 // RecordBatch. All records in a RecordBatch are compressed into one record
 // for that batch.
 type CompressionCodec struct {
-	codec int // 1: gzip, 2: snappy, 3: lz4, 4: zstd
-	level int
-}
-
-func (c CompressionCodec) validate() error {
-	// KIP-390
-	var min, max int
-	var name string
-	switch c.codec {
-	case 0:
-		min, max, name = 0, 0, "no-compression"
-	case 1:
-		min, max, name = 0, 9, "gzip"
-	case 2:
-		min, max, name = 0, 0, "snappy"
-	case 3:
-		min, max, name = 0, 12, "lz4" // 12 is LZ4HC_CLEVEL_MAX in C
-	case 4: // can be negative? but we will not support that for now
-		min, max, name = 1, 22, "zstd"
-	default:
-		return errors.New("unknown compression codec")
-	}
-	if c.level < min || c.level > max {
-		return fmt.Errorf("invalid %s compression level %d (min %d, max %d)", name, c.level, min, max)
-	}
-	return nil
+	codec int8 // 1: gzip, 2: snappy, 3: lz4, 4: zstd
+	level int8
 }
 
 // NoCompression is the default compression used for messages and can be used
 // as a fallback compression option.
 func NoCompression() CompressionCodec { return CompressionCodec{0, 0} }
 
-// GzipCompression enables gzip compression. Level must be between 0 and 9.
-func GzipCompression(level int) CompressionCodec { return CompressionCodec{1, level} }
+// GzipCompression enables gzip compression with the default compression level.
+func GzipCompression() CompressionCodec { return CompressionCodec{1, gzip.DefaultCompression} }
 
 // SnappyCompression enables snappy compression.
 func SnappyCompression() CompressionCodec { return CompressionCodec{2, 0} }
 
-// Lz4Compression enables lz4 compression. Level must be between 0 and 12.
-func Lz4Compression(level int) CompressionCodec { return CompressionCodec{3, level} }
+// Lz4Compression enables lz4 compression with the fastest compression level.
+func Lz4Compression() CompressionCodec { return CompressionCodec{3, 0} }
 
-// ZstdCompression enables zstd compression. Level must be between 1 and 22.
-func ZstdCompression(level int) CompressionCodec { return CompressionCodec{4, level} }
+// ZstdCompression enables zstd compression with the default compression level.
+func ZstdCompression() CompressionCodec { return CompressionCodec{4, 0} }
 
 var ungzPool = sync.Pool{
 	New: func() interface{} { return new(gzip.Reader) },
@@ -218,6 +211,8 @@ var ungzPool = sync.Pool{
 var unlz4Pool = sync.Pool{
 	New: func() interface{} { return new(lz4.Reader) },
 }
+
+var unzstd, _ = zstd.NewReader(nil)
 
 func decompress(src []byte, codec byte) ([]byte, error) {
 	switch codec {
@@ -242,7 +237,7 @@ func decompress(src []byte, codec byte) ([]byte, error) {
 		return ioutil.ReadAll(unlz4)
 
 	case 4:
-		return unzstd(src)
+		return unzstd.DecodeAll(src, nil)
 
 	default:
 		return nil, errors.New("unknown compression codec")

@@ -3,13 +3,12 @@ module github.com/twmb/kgo
 go 1.12
 
 require (
-	github.com/DataDog/zstd v1.3.5
-	github.com/Shopify/sarama v1.21.0
-	github.com/confluentinc/confluent-kafka-go v1.0.0
 	github.com/davecgh/go-spew v1.1.1
 	github.com/golang/snappy v0.0.1
+	github.com/google/go-cmp v0.3.1 // indirect
+	github.com/klauspost/compress v1.8.2
+	github.com/klauspost/cpuid v1.2.1 // indirect
 	github.com/pierrec/lz4 v2.0.5+incompatible
-	github.com/segmentio/kafka-go v0.2.2
 	github.com/twmb/go-rbtree v1.0.0
 	golang.org/x/exp v0.0.0-20190316020145-860388717186
 )

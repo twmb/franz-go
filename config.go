@@ -293,11 +293,6 @@ func (opt producerOpt) isopt()                 {}
 func (opt producerOpt) apply(cfg *producerCfg) { opt.fn(cfg) }
 
 func (cfg *producerCfg) validate() error {
-	for _, codec := range cfg.compression {
-		if err := codec.validate(); err != nil {
-			return err
-		}
-	}
 	if cfg.maxRecordBatchBytes < 1<<10 {
 		return fmt.Errorf("max record batch bytes %d is less than min acceptable %d", cfg.maxRecordBatchBytes, 1<<10)
 	}
