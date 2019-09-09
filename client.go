@@ -37,6 +37,7 @@ type Client struct {
 
 	metadataTicker   *time.Ticker
 	updateMetadataCh chan struct{}
+	metawait         metawait
 
 	closedCh chan struct{}
 }

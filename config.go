@@ -155,6 +155,7 @@ func NewClient(seedBrokers []string, opts ...Opt) (*Client, error) {
 	}
 	c.rng.Seed(uint64(time.Now().UnixNano()))
 	c.topics.Store(make(map[string]*topicPartitions))
+	c.metawait.init()
 
 	for i, seedAddr := range seedAddrs {
 		b := c.newBroker(seedAddr, unknownSeedID(i))

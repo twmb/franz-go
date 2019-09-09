@@ -1,10 +1,67 @@
 package kgo
 
 import (
+	"sync"
 	"time"
 
 	"github.com/twmb/kgo/kerr"
 )
+
+type metawait struct {
+	mu         sync.Mutex
+	c          *sync.Cond
+	lastUpdate time.Time
+}
+
+func (m *metawait) init() { m.c = sync.NewCond(&m.mu) }
+func (m *metawait) signal() {
+	m.mu.Lock()
+	m.lastUpdate = time.Now()
+	m.mu.Unlock()
+	m.c.Broadcast()
+}
+
+// waitmeta returns immediately if metadata was updated within the last second,
+// otherwise this waits for up to one second for a metadata update to complete.
+func (c *Client) waitmeta() {
+	now := time.Now()
+
+	c.metawait.mu.Lock()
+	if now.Sub(c.metawait.lastUpdate) < time.Second {
+		c.metawait.mu.Unlock()
+		return
+	}
+	c.metawait.mu.Unlock()
+
+	c.triggerUpdateMetadata()
+
+	quit := false
+	done := make(chan struct{})
+	timeout := time.NewTimer(time.Second)
+	defer timeout.Stop()
+
+	go func() {
+		defer close(done)
+		c.metawait.mu.Lock()
+		defer c.metawait.mu.Unlock()
+
+		for !quit {
+			if now.Sub(c.metawait.lastUpdate) < time.Second {
+				return
+			}
+			c.metawait.c.Wait()
+		}
+	}()
+
+	select {
+	case <-done:
+	case <-timeout.C:
+		c.metawait.mu.Lock()
+		quit = true
+		c.metawait.mu.Unlock()
+		c.metawait.c.Broadcast()
+	}
+}
 
 func (c *Client) triggerUpdateMetadata() {
 	select {
@@ -58,6 +115,8 @@ func (c *Client) updateMetadataLoop() {
 // or the record buffer for each erroring partition, has the first batch's
 // try count bumped by one.
 func (c *Client) updateMetadata() (needsRetry bool, err error) {
+	defer c.metawait.signal()
+
 	topics := c.loadTopics()
 	toUpdate := make([]string, 0, len(topics))
 	for topic := range topics {
