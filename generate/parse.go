@@ -1,8 +1,8 @@
 package main
 
 import (
-	"bytes"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -30,25 +30,27 @@ var types = map[string]Type{
 	"varint-bytes":    VarintBytes{},
 }
 
-// LineScanner is a really shoddy scanner that allows us to peek an entire
-// line.
+// LineScanner is a shoddy scanner that allows us to peek an entire line.
 type LineScanner struct {
-	buf []byte
+	buf  string
+	nlat int
 }
 
-func (l *LineScanner) HasLine() bool {
-	return bytes.IndexByte(l.buf, '\n') >= 0
+func (l *LineScanner) Ok() bool {
+	if l.nlat >= 0 {
+		return true
+	}
+	l.nlat = strings.IndexByte(l.buf, '\n')
+	return l.nlat >= 0
 }
 
-func (l *LineScanner) Line() string {
-	idx := bytes.IndexByte(l.buf, '\n')
-	r := string(l.buf[:idx])
-	return r
+func (l *LineScanner) Peek() string {
+	return l.buf[:l.nlat]
 }
 
-func (l *LineScanner) KeepLine() {
-	idx := bytes.IndexByte(l.buf, '\n')
-	l.buf = l.buf[idx+1:]
+func (l *LineScanner) Next() {
+	l.buf = l.buf[l.nlat+1:]
+	l.nlat = -1
 }
 
 // BuildFrom parses a struct, building it from the current scanner. Level
@@ -56,24 +58,24 @@ func (l *LineScanner) KeepLine() {
 //
 // If a blank line is ever encountered, the struct is done being built and
 // the done status is bubbled up through all recursion levels.
-func (s *Struct) BuildFrom(scanner *LineScanner, level int) (unprocessed string, done bool) {
+func (s *Struct) BuildFrom(scanner *LineScanner, level int) (done bool) {
 	fieldSpaces := strings.Repeat(" ", 2*(level+1))
 
 	var nextComment string
 
-	for !done && scanner.HasLine() { // check done before scanning the new line
-		line := scanner.Line()
-		if len(line) == 0 { // empty lines mean done
-			scanner.KeepLine()
-			return "", true
+	for !done && scanner.Ok() {
+		line := scanner.Peek()
+		if len(line) == 0 { // struct we were working on is done
+			scanner.Next()
+			return true
 		}
 		if !strings.HasPrefix(line, fieldSpaces) {
-			return line, false
+			return false // inner level struct done
 		}
-		// we will be keeping this line
-		scanner.KeepLine()
-		line = line[len(fieldSpaces):]
 
+		scanner.Next() // we will be keeping this line, so skip the scanner to the next now
+
+		line = line[len(fieldSpaces):]
 		if strings.HasPrefix(line, "//") { // buffer comments
 			if nextComment != "" {
 				nextComment += "\n"
@@ -97,24 +99,24 @@ func (s *Struct) BuildFrom(scanner *LineScanner, level int) (unprocessed string,
 
 		typ := fields[1]
 
-		// Parse the version from the type on the right.
-		if idx := strings.Index(typ, " // v"); idx > 0 {
+		if idx := strings.Index(typ, " // v"); idx > 0 { // first, check version bounds
 			var err error
-			f.MinVersion, f.MaxVersion, err = parseVersion(typ[idx+4:]) // start after ` // ` but include v
+			f.MinVersion, f.MaxVersion, err = parseVersion(typ[idx+4:]) // start at first v
 			if err != nil {
 				die("unable to parse version on line %q: %v", line, err)
 			}
 			typ = typ[:idx]
 		}
 
+		// First, some array processing. Arrays can be nested.
 		// We count the array depth here, check if it is encoded
 		// specially, and remove any array decoration.
 		//
-		// This does not support special modifiers at all levels.
+		// This does not support special modifiers at any level but
+		// the outside level.
 		isArray := false
 		isVarintArray := false
 		isNullableArray := false
-		isUnboundedArray := false
 		arrayLevel := strings.Count(typ, "[")
 		if arrayLevel > 0 {
 			if strings.HasPrefix(typ, "varint[") {
@@ -123,28 +125,28 @@ func (s *Struct) BuildFrom(scanner *LineScanner, level int) (unprocessed string,
 			} else if strings.HasPrefix(typ, "nullable[") {
 				isNullableArray = true
 				typ = typ[len("nullable"):]
-			} else if strings.HasPrefix(typ, "as-many-that-fit[") {
-				isUnboundedArray = true
-				typ = typ[len("as-many-that-fit"):]
 			}
 			typ = typ[arrayLevel : len(typ)-arrayLevel]
 			isArray = true
 		}
 
-		if strings.HasPrefix(typ, "=>") {
+		switch {
+		case strings.HasPrefix(typ, "=>"): // nested struct; recurse
 			var newS Struct
 			newS.Name = s.Name + f.FieldName
+			newS.Anonymous = true
 			if isArray {
-				if rename := typ[2:]; rename != "" {
+				if rename := typ[2:]; rename != "" { // allow rename hint after `=>`; braces were stripped above
 					newS.Name = s.Name + rename
 				} else {
 					newS.Name = strings.TrimSuffix(newS.Name, "s") // make plural singular
 				}
 			}
-			unprocessed, done = newS.BuildFrom(scanner, level+1)
+			done = newS.BuildFrom(scanner, level+1)
 			f.Type = newS
 			newStructs = append(newStructs, newS)
-		} else if strings.HasPrefix(typ, "length-field-minus => ") {
+
+		case strings.HasPrefix(typ, "length-field-minus => "): // special bytes referencing another field
 			typ = strings.TrimPrefix(typ, "length-field-minus => ")
 			from, minus, err := parseFieldLength(typ)
 			if err != nil {
@@ -155,73 +157,45 @@ func (s *Struct) BuildFrom(scanner *LineScanner, level int) (unprocessed string,
 				LengthMinus: minus,
 			}
 
-		} else if strings.HasPrefix(typ, "sized-struct => ") {
-			typ = strings.TrimPrefix(typ, "sized-struct => ")
-			f.Type = SizedStruct{
-				Type: types[typ],
-			}
-
-		} else {
+		default: // type is known, lookup and set
 			if types[typ] == nil {
 				die("unknown type %q on line %q", typ, line)
 			}
 			f.Type = types[typ]
 		}
 
+		// Finally, this field is an array, wrap what we parsed in an
+		// array (perhaps multilevel).
 		if isArray {
 			for arrayLevel > 1 {
 				f.Type = Array{Inner: f.Type}
 				arrayLevel--
 			}
 			f.Type = Array{
-				Inner:            f.Type,
-				IsVarintArray:    isVarintArray,
-				IsNullableArray:  isNullableArray,
-				IsUnboundedArray: isUnboundedArray,
+				Inner:           f.Type,
+				IsVarintArray:   isVarintArray,
+				IsNullableArray: isNullableArray,
 			}
 		}
 
 		s.Fields = append(s.Fields, f)
 	}
 
-	// we have no unprocessed line here.
-	return "", done
+	return done
 }
 
-func parseVersion(in string) (int, int, error) {
-	max := -1
-	if strings.IndexByte(in, '-') == -1 {
-		if !strings.HasSuffix(in, "+") {
-			return 0, 0, fmt.Errorf("open ended version %q missing + suffix", in)
-		}
-		if !strings.HasPrefix(in, "v") {
-			return 0, 0, fmt.Errorf("open ended version %q mising v prefix", in)
-		}
-		min, err := strconv.Atoi(in[1 : len(in)-1])
-		return min, max, err
-	}
+var versionRe = regexp.MustCompile(`^v(\d+)(?:\+|\-v(\d+))$`)
 
-	min := 0
-	span := strings.Split(in, "-")
-	if len(span) != 2 {
-		return 0, 0, fmt.Errorf("version %q invalid multiple ranges", in)
+func parseVersion(in string) (int, int, error) {
+	match := versionRe.FindStringSubmatch(in)
+	if len(match) == 0 {
+		return 0, 0, fmt.Errorf("invalid version %q", in)
 	}
-	for _, part := range []struct {
-		src string
-		dst *int
-	}{
-		{span[0], &min},
-		{span[1], &max},
-	} {
-		if !strings.HasPrefix(part.src, "v") {
-			return 0, 0, fmt.Errorf("version number in range %q missing v prefix", in)
-		}
-		var err error
-		if *part.dst, err = strconv.Atoi(part.src[1:]); err != nil {
-			return 0, 0, fmt.Errorf("version number in range %q atoi err %v", in, err)
-		}
-	}
-	if max < min {
+	min, _ := strconv.Atoi(match[1])
+	max, _ := strconv.Atoi(match[2])
+	if match[2] == "" {
+		max = -1
+	} else if max < min {
 		return 0, 0, fmt.Errorf("min %d > max %d on line %q", min, max, in)
 	}
 	return min, max, nil
@@ -242,37 +216,42 @@ func parseFieldLength(in string) (string, int, error) {
 // Parse parses the raw contents of a messages file and adds all newly
 // parsed structs to newStructs.
 func Parse(raw []byte) {
-	scanner := &LineScanner{buf: raw}
+	scanner := &LineScanner{
+		buf:  string(raw),
+		nlat: -1,
+	}
 
-	var nextComment string
+	var nextComment strings.Builder
+	resetComment := func() {
+		l := nextComment.Len()
+		nextComment.Reset()
+		nextComment.Grow(l)
+	}
 
-	for scanner.HasLine() {
-		line := scanner.Line()
-		scanner.KeepLine()
-		if len(line) == 0 {
+	for scanner.Ok() {
+		line := scanner.Peek()
+		scanner.Next()
+		if len(line) == 0 { // allow for arbitrary comments
+			resetComment()
 			continue
 		}
 
-		// if this is a comment line, keep it and continue.
-		if strings.HasPrefix(line, "//") {
-			if len(nextComment) > 0 {
-				nextComment += "\n"
+		if strings.HasPrefix(line, "//") { // comment? keep and continue
+			if nextComment.Len() > 0 {
+				nextComment.WriteByte('\n')
 			}
-			nextComment += line
+			nextComment.WriteString(line)
 			continue
 		}
 
 		s := Struct{
-			Comment: nextComment,
+			Comment: nextComment.String(),
 		}
-		nextComment = ""
+		resetComment()
 
-		orig := line
 		topLevel := true
 
-		name := strings.TrimSuffix(line, " no version")
-		name = strings.TrimSuffix(name, ", with encoding")
-		name = strings.TrimSuffix(name, " => not top level")
+		name := strings.TrimSuffix(line, " => not top level")
 		save := func() {
 			s.Name = name
 			s.TopLevel = topLevel
@@ -281,23 +260,27 @@ func Parse(raw []byte) {
 			newStructs = append(newStructs, s)
 		}
 
-		// A top level struct can say it is not top level to avoid
-		// having encode/decode/etc funcs generated. If we trimmed not
-		// top level, save and continue.
-		if orig != name {
+		if line != name { // if we trimmed, this is not top level
 			topLevel = false
-			if strings.HasSuffix(orig, ", with encoding") {
-				s.WithEncoding = true
-			} else if strings.HasSuffix(orig, ", with encoding no version") {
-				s.WithEncoding = true
-				s.NoVersion = true
-			}
 			save()
 			continue
 		}
 
-		// This is a top level struct, so we parse a few more
-		// things.
+		if strings.HasSuffix(name, "Response =>") { // response following a request?
+			last := strings.Replace(name, "Response =>", "Request", 1)
+			prior := &newStructs[len(newStructs)-1]
+			if prior.Name != last {
+				die("from %q does not refer to last message defn on line %q", last, line)
+			}
+			name = strings.TrimSuffix(name, " =>")
+			prior.ResponseKind = name
+			save()
+			continue
+		}
+
+		// At this point, we are dealing with a top level request.
+		// The order, l to r, is key, version, admin/group/txn.
+		// We strip and process r to l.
 		delim := strings.Index(name, " =>")
 		if delim == -1 {
 			die("missing struct delimiter on line %q", line)
@@ -305,41 +288,17 @@ func Parse(raw []byte) {
 		rem := name[delim+3:]
 		name = name[:delim]
 
-		if strings.HasPrefix(rem, " from ") {
-			last := rem[6:]
-			prior := &newStructs[len(newStructs)-1]
-			if prior.Name != last {
-				die("from %q does not refer to last message defn on line %q", last, line)
-			}
-			prior.ResponseKind = name
-			save()
-			continue
-		}
-
-		// key, max, min [optional], (admin|(group|txn) coordinator) [optional]
-		const adminStr = ", admin"
-		const groupCoordinatorStr = ", group coordinator"
-		const txnCoordinatorStr = ", txn coordinator"
-		if idx := strings.Index(rem, adminStr); idx > 0 {
+		if idx := strings.Index(rem, ", admin"); idx > 0 {
 			s.Admin = true
 			rem = rem[:idx]
-		} else if idx := strings.Index(rem, groupCoordinatorStr); idx > 0 {
+		} else if idx := strings.Index(rem, ", group coordinator"); idx > 0 {
 			s.GroupCoordinator = true
 			rem = rem[:idx]
-		} else if idx := strings.Index(rem, txnCoordinatorStr); idx > 0 {
+		} else if idx := strings.Index(rem, ", txn coordinator"); idx > 0 {
 			s.TxnCoordinator = true
 			rem = rem[:idx]
 		}
 
-		const minStr = ", min version "
-		if idx := strings.Index(rem, minStr); idx > 0 {
-			min, err := strconv.Atoi(rem[idx+len(minStr):])
-			if err != nil {
-				die("min version on line %q parse err: %v", line, err)
-			}
-			s.MinVersion = min
-			rem = rem[:idx]
-		}
 		const maxStr = ", max version "
 		if idx := strings.Index(rem, maxStr); idx == -1 {
 			die("missing max version on line %q", line)

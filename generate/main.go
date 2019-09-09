@@ -48,20 +48,15 @@ type (
 	VarintString   struct{}
 	VarintBytes    struct{}
 
-	SizedStruct struct {
-		Type Type
-	}
-
 	FieldLengthMinusBytes struct {
 		Field       string
 		LengthMinus int
 	}
 
 	Array struct {
-		Inner            Type
-		IsVarintArray    bool
-		IsNullableArray  bool
-		IsUnboundedArray bool
+		Inner           Type
+		IsVarintArray   bool
+		IsNullableArray bool
 	}
 
 	StructField struct {
@@ -73,21 +68,20 @@ type (
 	}
 
 	Struct struct {
-		TopLevel     bool
-		WithEncoding bool // add a encode/decode even if not top level (only if not top level)
-		NoVersion    bool // with encoding, no version field
-		Comment      string
-		Name         string
-
-		Admin            bool   // only relevant if TopLevel
-		GroupCoordinator bool   // only relevant if TopLevel
-		TxnCoordinator   bool   // only relevant if TopLevel
-		Key              int    // only relevant if TopLevel
-		MinVersion       int    // only relevant if TopLevel
-		MaxVersion       int    // only relevant if TopLevel
-		ResponseKind     string // only relevant if TopLevel
+		TopLevel  bool
+		Anonymous bool // if inner struct
+		Comment   string
+		Name      string
 
 		Fields []StructField
+
+		// Only TopLevel relevant fields:
+		Admin            bool
+		GroupCoordinator bool
+		TxnCoordinator   bool
+		Key              int
+		MaxVersion       int
+		ResponseKind     string
 	}
 )
 
@@ -98,9 +92,9 @@ func (l *LineWriter) Write(line string, args ...interface{}) {
 
 //go:generate sh -c "go run . | gofmt > ../kmsg/messages.go"
 func main() {
-	f, err := ioutil.ReadFile("MESSAGES")
+	f, err := ioutil.ReadFile("DEFINITIONS")
 	if err != nil {
-		die("unable to read MESSAGES file: %v", err)
+		die("unable to read DEFINITIONS file: %v", err)
 	}
 	Parse(f)
 
@@ -138,7 +132,7 @@ func main() {
 			} else {
 				s.WriteDecodeFunc(l)
 			}
-		} else if s.WithEncoding {
+		} else if !s.Anonymous {
 			s.WriteAppendFunc(l)
 			s.WriteDecodeFunc(l)
 		}
