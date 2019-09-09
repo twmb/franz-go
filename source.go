@@ -5,7 +5,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/twmb/kgo/kbin"
 	"github.com/twmb/kgo/kerr"
 	"github.com/twmb/kgo/kmsg"
 )
@@ -244,9 +243,11 @@ func (c *consumption) processResponsePartition(
 		return FetchPartition{}, false, false
 	}
 
+	batches := kmsg.ReadFetchResponseBatches(responsePartition.RecordBatches)
+
 	var numPartitionRecords int
-	for i := range responsePartition.RecordBatches {
-		numPartitionRecords += int(responsePartition.RecordBatches[i].NumRecords)
+	for i := range batches {
+		numPartitionRecords += int(batches[i].NumRecords)
 	}
 
 	newFetchPartition = FetchPartition{
@@ -257,14 +258,14 @@ func (c *consumption) processResponsePartition(
 		Records:          make([]*Record, 0, numPartitionRecords),
 	}
 
-	for i := range responsePartition.RecordBatches {
+	for i := range batches {
 		if newFetchPartition.Err != nil {
 			break
 		}
 		c.processResponsePartitionBatch(
 			topic,
 			&newFetchPartition,
-			&responsePartition.RecordBatches[i],
+			&batches[i],
 		)
 	}
 
@@ -299,9 +300,6 @@ func (c *consumption) processResponsePartitionBatch(
 	newFetchPartition *FetchPartition,
 	batch *kmsg.RecordBatch,
 ) {
-	if batch.Length == 0 {
-		return // batch had size of zero: there was no batch
-	}
 	if batch.Magic != 2 {
 		newFetchPartition.Err = fmt.Errorf("unknown batch magic %d", batch.Magic)
 		return
@@ -317,39 +315,28 @@ func (c *consumption) processResponsePartitionBatch(
 		}
 	}
 
-	currentOffset := c.offset
-	records := make([]*Record, 0, batch.NumRecords)
-	for i := batch.NumRecords; i > 0; i-- {
-		var r kmsg.Record
-		var err error
-		rawRecords, err = r.ReadFrom(rawRecords)
-		if err != nil {
-			newFetchPartition.Err = fmt.Errorf("invalid record batch: %v", err)
-			return
-		}
-		record := recordToRecord(topic, newFetchPartition.Partition, batch, &r)
+	krecords, err := kmsg.ReadRecords(int(batch.NumRecords), rawRecords)
+	if err != nil {
+		newFetchPartition.Err = fmt.Errorf("invalid record batch: %v", err)
+		return
+	}
+
+	for i := range krecords {
+		record := recordToRecord(topic, newFetchPartition.Partition, batch, &krecords[i])
 		if record.Offset < c.offset {
 			// We asked for offset 5, but that was in the middle of a
 			// batch; we got offsets 0 thru 4 that we need to skip.
 			continue
 		}
-		if record.Offset != currentOffset {
+		if record.Offset != c.offset {
 			// We asked for offset 5, then the client user reset the
 			// offset to something else while this was inflight.
 			// This response out of date.
 			continue
 		}
-		records = append(records, record)
-		currentOffset++
+		newFetchPartition.Records = append(newFetchPartition.Records, record)
+		c.offset++
 	}
-
-	if len(rawRecords) != 0 {
-		newFetchPartition.Err = kbin.ErrTooMuchData
-		return
-	}
-
-	newFetchPartition.Records = append(newFetchPartition.Records, records...)
-	c.offset = currentOffset
 }
 
 // recordToRecord converts a kmsg.RecordBatch's Record to a kgo Record.
