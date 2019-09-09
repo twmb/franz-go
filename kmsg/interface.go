@@ -6,6 +6,8 @@
 package kmsg
 
 import (
+	"encoding/binary"
+
 	"github.com/twmb/kgo/kbin"
 )
 
@@ -96,31 +98,44 @@ func StringPtr(in string) *string {
 	return &in
 }
 
-// ReadFrom is a special ReadFrom for records; rather than erroring if the
-// source contains too much data, this returns the extra data.
-//
-// This will error if the src does not have enough data.
-func (r *Record) ReadFrom(src []byte) ([]byte, error) {
-	b := kbin.Reader{Src: src}
-	r.Length = b.Varint()
-	r.Attributes = b.Int8()
-	r.TimestampDelta = b.Varint()
-	r.OffsetDelta = b.Varint()
-	r.Key = b.VarintBytes()
-	r.Value = b.VarintBytes()
-
-	nheaders := b.Varint()
-	if nheaders > 0 {
-		r.Headers = make([]Header, 0, nheaders)
-		for i := nheaders; i > 0; i-- {
-			r.Headers = append(r.Headers, Header{
-				Key:   b.VarintString(),
-				Value: b.VarintBytes(),
-			})
+// ReadRecords reads n records from in and returns them, returning
+// kerr.ErrNotEnoughData if in does not contain enough data.
+func ReadRecords(n int, in []byte) ([]Record, error) {
+	rs := make([]Record, n)
+	for i := 0; i < n; i++ {
+		length, used := kbin.Varint(in)
+		total := used + int(length)
+		if used == 0 || length < 0 || len(in) < total {
+			return nil, kbin.ErrNotEnoughData
 		}
+		if err := (&rs[i]).ReadFrom(in[:total]); err != nil {
+			return nil, err
+		}
+		in = in[total:]
 	}
+	return rs, nil
+}
 
-	rem := b.Src
-	b.Src = nil
-	return rem, b.Complete()
+// ReadFetchResponseBatches reads as many record batches as possible from in,
+// discarding any final trailing record batch. This is intended to be used
+// for processing RecordBatches from a FetchResponse, where Kafka, as an
+// internal optimization, may include a partial final RecordBatch.
+func ReadFetchResponseBatches(in []byte) []RecordBatch {
+	var bs []RecordBatch
+	for len(in) > 12 {
+		length := int32(binary.BigEndian.Uint32(in[8:]))
+		length += 12
+		if len(in) < int(length) {
+			return bs
+		}
+
+		var b RecordBatch
+		if err := b.ReadFrom(in[:length]); err != nil {
+			return bs
+		}
+		bs = append(bs, b)
+
+		in = in[length:]
+	}
+	return bs
 }
