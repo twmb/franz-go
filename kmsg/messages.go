@@ -8,12 +8,304 @@ import "github.com/twmb/kgo/kbin"
 // Note that this value will change as Kafka adds more messages.
 const MaxKey = 44
 
+type MessageV0Message struct {
+	// CRC is the crc of everything that follows this field (NOT using the
+	// Castagnoli polynomial, as is the case in the 0.11+ RecordBatch).
+	CRC int32
+
+	// Magic is 0.
+	Magic int8
+
+	// Attributes describe the attributes of this message.
+	//
+	// Bits 0 thru 2 correspond to compression:
+	//   - 00 is no compression
+	//   - 01 is gzip compression
+	//   - 10 is snappy compression
+	//
+	// The remaining bits are unused and must be 0.
+	Attributes int8
+
+	// Key is an blob of data for a record.
+	//
+	// Key's are usually used for hashing the record to specific Kafka partitions.
+	Key []byte
+
+	// Value is  a blob of data. This field is the main "message" portion of a
+	// record.
+	Value []byte
+}
+
+// MessageV0 is the message format Kafka used prior to 0.10.
+//
+// To produce or fetch messages, Kafka would write many messages contiguously
+// as an array without specifying the array length.
+type MessageV0 struct {
+	// Offset is the offset of this record.
+	//
+	// If this is the outer message of a recursive message set (i.e. a
+	// message set has been compressed and this is the outer message),
+	// then the offset should be the offset of the last inner value.
+	Offset int64
+
+	// MessageSize is the size of everything that follows in this message.
+	MessageSize int32
+
+	// Message is a Kafka message.
+	Message MessageV0Message
+}
+
+func (v *MessageV0) AppendTo(dst []byte) []byte {
+	{
+		v := v.Offset
+		dst = kbin.AppendInt64(dst, v)
+	}
+	{
+		v := v.MessageSize
+		dst = kbin.AppendInt32(dst, v)
+	}
+	{
+		v := &v.Message
+		{
+			v := v.CRC
+			dst = kbin.AppendInt32(dst, v)
+		}
+		{
+			v := v.Magic
+			dst = kbin.AppendInt8(dst, v)
+		}
+		{
+			v := v.Attributes
+			dst = kbin.AppendInt8(dst, v)
+		}
+		{
+			v := v.Key
+			dst = kbin.AppendVarintBytes(dst, v)
+		}
+		{
+			v := v.Value
+			dst = kbin.AppendVarintBytes(dst, v)
+		}
+	}
+	return dst
+}
+func (v *MessageV0) ReadFrom(src []byte) error {
+	b := kbin.Reader{Src: src}
+	{
+		s := v
+		{
+			v := b.Int64()
+			s.Offset = v
+		}
+		{
+			v := b.Int32()
+			s.MessageSize = v
+		}
+		{
+			v := &s.Message
+			{
+				s := v
+				{
+					v := b.Int32()
+					s.CRC = v
+				}
+				{
+					v := b.Int8()
+					s.Magic = v
+				}
+				{
+					v := b.Int8()
+					s.Attributes = v
+				}
+				{
+					v := b.VarintBytes()
+					s.Key = v
+				}
+				{
+					v := b.VarintBytes()
+					s.Value = v
+				}
+			}
+		}
+	}
+	return b.Complete()
+}
+
+type MessageV1Message struct {
+	// CRC is the crc of everything that follows this field (NOT using the
+	// Castagnoli polynomial, as is the case in the 0.11+ RecordBatch).
+	CRC int32
+
+	// Magic is 1.
+	Magic int8
+
+	// Attributes describe the attributes of this message.
+	//
+	// Bits 0 thru 2 correspond to compression:
+	//   - 00 is no compression
+	//   - 01 is gzip compression
+	//   - 10 is snappy compression
+	//
+	// Bit 3 is the timestamp type, with 0 meaning CreateTime corresponding
+	// to the timestamp being from the producer, and 1 meaning LogAppendTime
+	// corresponding to the timestamp being from the broker.
+	// Setting this to LogAppendTime will cause batches to be rejected.
+	//
+	// The remaining bits are unused and must be 0.
+	Attributes int8
+
+	Timestamp int64
+
+	// Key is an blob of data for a record.
+	//
+	// Key's are usually used for hashing the record to specific Kafka partitions.
+	Key []byte
+
+	// Value is  a blob of data. This field is the main "message" portion of a
+	// record.
+	Value []byte
+}
+
+// MessageV0 is the message format Kafka used prior to 0.11.
+//
+// To produce or fetch messages, Kafka would write many messages contiguously
+// as an array without specifying the array length.
+//
+// To support compression, an entire message set would be compressed and used
+// as the Value in another message set (thus being "recursive"). The key for
+// this outer message set must be null.
+type MessageV1 struct {
+	// Offset is the offset of this record.
+	//
+	// Different from v0, if this message set is a recursive message set
+	// (that is, compressed and inside another message set), the offset
+	// on the inner set is relative to the offset of the outer set.
+	Offset int64
+
+	// MessageSize is the size of everything that follows in this message.
+	MessageSize int32
+
+	// Message is a Kafka message.
+	Message MessageV1Message
+}
+
+func (v *MessageV1) AppendTo(dst []byte) []byte {
+	{
+		v := v.Offset
+		dst = kbin.AppendInt64(dst, v)
+	}
+	{
+		v := v.MessageSize
+		dst = kbin.AppendInt32(dst, v)
+	}
+	{
+		v := &v.Message
+		{
+			v := v.CRC
+			dst = kbin.AppendInt32(dst, v)
+		}
+		{
+			v := v.Magic
+			dst = kbin.AppendInt8(dst, v)
+		}
+		{
+			v := v.Attributes
+			dst = kbin.AppendInt8(dst, v)
+		}
+		{
+			v := v.Timestamp
+			dst = kbin.AppendInt64(dst, v)
+		}
+		{
+			v := v.Key
+			dst = kbin.AppendVarintBytes(dst, v)
+		}
+		{
+			v := v.Value
+			dst = kbin.AppendVarintBytes(dst, v)
+		}
+	}
+	return dst
+}
+func (v *MessageV1) ReadFrom(src []byte) error {
+	b := kbin.Reader{Src: src}
+	{
+		s := v
+		{
+			v := b.Int64()
+			s.Offset = v
+		}
+		{
+			v := b.Int32()
+			s.MessageSize = v
+		}
+		{
+			v := &s.Message
+			{
+				s := v
+				{
+					v := b.Int32()
+					s.CRC = v
+				}
+				{
+					v := b.Int8()
+					s.Magic = v
+				}
+				{
+					v := b.Int8()
+					s.Attributes = v
+				}
+				{
+					v := b.Int64()
+					s.Timestamp = v
+				}
+				{
+					v := b.VarintBytes()
+					s.Key = v
+				}
+				{
+					v := b.VarintBytes()
+					s.Value = v
+				}
+			}
+		}
+	}
+	return b.Complete()
+}
+
 // Header is user provided metadata for a record. Kafka does not look at
 // headers at all; they are solely for producers and consumers.
 type Header struct {
 	Key string
 
 	Value []byte
+}
+
+func (v *Header) AppendTo(dst []byte) []byte {
+	{
+		v := v.Key
+		dst = kbin.AppendVarintString(dst, v)
+	}
+	{
+		v := v.Value
+		dst = kbin.AppendVarintBytes(dst, v)
+	}
+	return dst
+}
+func (v *Header) ReadFrom(src []byte) error {
+	b := kbin.Reader{Src: src}
+	{
+		s := v
+		{
+			v := b.VarintString()
+			s.Key = v
+		}
+		{
+			v := b.VarintBytes()
+			s.Value = v
+		}
+	}
+	return b.Complete()
 }
 
 // A Record is a Kafka v0.11.0.0 record. It corresponds to an individual
@@ -49,6 +341,101 @@ type Record struct {
 	// Headers are optional user provided metadata for records. Unlike normal
 	// arrays, the number of headers is encoded as a varint.
 	Headers []Header
+}
+
+func (v *Record) AppendTo(dst []byte) []byte {
+	{
+		v := v.Length
+		dst = kbin.AppendVarint(dst, v)
+	}
+	{
+		v := v.Attributes
+		dst = kbin.AppendInt8(dst, v)
+	}
+	{
+		v := v.TimestampDelta
+		dst = kbin.AppendVarint(dst, v)
+	}
+	{
+		v := v.OffsetDelta
+		dst = kbin.AppendVarint(dst, v)
+	}
+	{
+		v := v.Key
+		dst = kbin.AppendVarintBytes(dst, v)
+	}
+	{
+		v := v.Value
+		dst = kbin.AppendVarintBytes(dst, v)
+	}
+	{
+		v := v.Headers
+		dst = kbin.AppendVarint(dst, int32(len(v)))
+		for i := range v {
+			v := &v[i]
+			{
+				v := v.Key
+				dst = kbin.AppendVarintString(dst, v)
+			}
+			{
+				v := v.Value
+				dst = kbin.AppendVarintBytes(dst, v)
+			}
+		}
+	}
+	return dst
+}
+func (v *Record) ReadFrom(src []byte) error {
+	b := kbin.Reader{Src: src}
+	{
+		s := v
+		{
+			v := b.Varint()
+			s.Length = v
+		}
+		{
+			v := b.Int8()
+			s.Attributes = v
+		}
+		{
+			v := b.Varint()
+			s.TimestampDelta = v
+		}
+		{
+			v := b.Varint()
+			s.OffsetDelta = v
+		}
+		{
+			v := b.VarintBytes()
+			s.Key = v
+		}
+		{
+			v := b.VarintBytes()
+			s.Value = v
+		}
+		{
+			v := s.Headers
+			a := v
+			for i := b.Varint(); i > 0; i-- {
+				a = append(a, Header{})
+				v := &a[len(a)-1]
+				{
+					s := v
+					{
+						v := b.VarintString()
+						s.Key = v
+					}
+					{
+						v := b.VarintBytes()
+						s.Value = v
+					}
+				}
+			}
+			v = a
+			s.Headers = v
+		}
+	}
+	return b.Complete()
 }
 
 // RecordBatch is a Kafka concept that groups many individual records together
@@ -147,13 +534,140 @@ type RecordBatch struct {
 	// The number of bytes is expected to be the Length field minus 49.
 	Records []byte
 }
+
+func (v *RecordBatch) AppendTo(dst []byte) []byte {
+	{
+		v := v.FirstOffset
+		dst = kbin.AppendInt64(dst, v)
+	}
+	{
+		v := v.Length
+		dst = kbin.AppendInt32(dst, v)
+	}
+	{
+		v := v.PartitionLeaderEpoch
+		dst = kbin.AppendInt32(dst, v)
+	}
+	{
+		v := v.Magic
+		dst = kbin.AppendInt8(dst, v)
+	}
+	{
+		v := v.CRC
+		dst = kbin.AppendInt32(dst, v)
+	}
+	{
+		v := v.Attributes
+		dst = kbin.AppendInt16(dst, v)
+	}
+	{
+		v := v.LastOffsetDelta
+		dst = kbin.AppendInt32(dst, v)
+	}
+	{
+		v := v.FirstTimestamp
+		dst = kbin.AppendInt64(dst, v)
+	}
+	{
+		v := v.MaxTimestamp
+		dst = kbin.AppendInt64(dst, v)
+	}
+	{
+		v := v.ProducerID
+		dst = kbin.AppendInt64(dst, v)
+	}
+	{
+		v := v.ProducerEpoch
+		dst = kbin.AppendInt16(dst, v)
+	}
+	{
+		v := v.FirstSequence
+		dst = kbin.AppendInt32(dst, v)
+	}
+	{
+		v := v.NumRecords
+		dst = kbin.AppendInt32(dst, v)
+	}
+	{
+		v := v.Records
+		dst = append(dst, v...)
+	}
+	return dst
+}
+func (v *RecordBatch) ReadFrom(src []byte) error {
+	b := kbin.Reader{Src: src}
+	{
+		s := v
+		{
+			v := b.Int64()
+			s.FirstOffset = v
+		}
+		{
+			v := b.Int32()
+			s.Length = v
+		}
+		{
+			v := b.Int32()
+			s.PartitionLeaderEpoch = v
+		}
+		{
+			v := b.Int8()
+			s.Magic = v
+		}
+		{
+			v := b.Int32()
+			s.CRC = v
+		}
+		{
+			v := b.Int16()
+			s.Attributes = v
+		}
+		{
+			v := b.Int32()
+			s.LastOffsetDelta = v
+		}
+		{
+			v := b.Int64()
+			s.FirstTimestamp = v
+		}
+		{
+			v := b.Int64()
+			s.MaxTimestamp = v
+		}
+		{
+			v := b.Int64()
+			s.ProducerID = v
+		}
+		{
+			v := b.Int16()
+			s.ProducerEpoch = v
+		}
+		{
+			v := b.Int32()
+			s.FirstSequence = v
+		}
+		{
+			v := b.Int32()
+			s.NumRecords = v
+		}
+		{
+			v := b.Span(int(s.Length) - 49)
+			s.Records = v
+		}
+	}
+	return b.Complete()
+}
+
 type ProduceRequestTopicDataData struct {
 	// Partition is a partition to send a record batch to.
 	Partition int32
 
 	// Records is a batch of records to write to a topic's partition.
-	// The size of the batch is prefixed with an int32 length.
-	Records RecordBatch
+	//
+	// For Kafka pre 0.11.0, the contents of the byte array is a serialized
+	// message set. At or after 0.11.0, the contents of the byte array is a
+	// serialized RecordBatch.
+	Records []byte
 }
 type ProduceRequestTopicData struct {
 	// Topic is a topic to send record batches to.
@@ -165,9 +679,8 @@ type ProduceRequestTopicData struct {
 
 // ProduceRequest issues records to be created to Kafka.
 //
-// The min version of this type is currently 3, released with Kafka 0.11.0.0.
-// Prior, the RecordBatch format was completely different (and was called a
-// MessageSet).
+// Kafka 0.11.0.0 changed Records to be a completely new type, the RecordBatch.
+// Prior, the Records field contained a MessageSet.
 //
 // Note that the special client ID "__admin_client" will allow you to produce
 // records to internal topics. This is generally recommended if you want to
@@ -196,7 +709,7 @@ type ProduceRequest struct {
 
 func (*ProduceRequest) Key() int16                 { return 0 }
 func (*ProduceRequest) MaxVersion() int16          { return 7 }
-func (*ProduceRequest) MinVersion() int16          { return 3 }
+func (*ProduceRequest) MinVersion() int16          { return 0 }
 func (v *ProduceRequest) SetVersion(version int16) { v.Version = version }
 func (v *ProduceRequest) GetVersion() int16        { return v.Version }
 func (v *ProduceRequest) ResponseKind() Response   { return &ProduceResponse{Version: v.Version} }
@@ -236,67 +749,7 @@ func (v *ProduceRequest) AppendTo(dst []byte) []byte {
 					}
 					{
 						v := v.Records
-						lenStart := len(dst)
-						dst = append(dst, 0, 0, 0, 0)
-						{
-							{
-								v := v.FirstOffset
-								dst = kbin.AppendInt64(dst, v)
-							}
-							{
-								v := v.Length
-								dst = kbin.AppendInt32(dst, v)
-							}
-							{
-								v := v.PartitionLeaderEpoch
-								dst = kbin.AppendInt32(dst, v)
-							}
-							{
-								v := v.Magic
-								dst = kbin.AppendInt8(dst, v)
-							}
-							{
-								v := v.CRC
-								dst = kbin.AppendInt32(dst, v)
-							}
-							{
-								v := v.Attributes
-								dst = kbin.AppendInt16(dst, v)
-							}
-							{
-								v := v.LastOffsetDelta
-								dst = kbin.AppendInt32(dst, v)
-							}
-							{
-								v := v.FirstTimestamp
-								dst = kbin.AppendInt64(dst, v)
-							}
-							{
-								v := v.MaxTimestamp
-								dst = kbin.AppendInt64(dst, v)
-							}
-							{
-								v := v.ProducerID
-								dst = kbin.AppendInt64(dst, v)
-							}
-							{
-								v := v.ProducerEpoch
-								dst = kbin.AppendInt16(dst, v)
-							}
-							{
-								v := v.FirstSequence
-								dst = kbin.AppendInt32(dst, v)
-							}
-							{
-								v := v.NumRecords
-								dst = kbin.AppendInt32(dst, v)
-							}
-							{
-								v := v.Records
-								dst = append(dst, v...)
-							}
-						}
-						kbin.AppendArrayLen(dst[:lenStart], len(dst))
+						dst = kbin.AppendBytes(dst, v)
 					}
 				}
 			}
@@ -530,9 +983,13 @@ type FetchRequestForgottenTopicsData struct {
 
 // FetchRequest is a long-poll request of records from Kafka.
 //
-// The min version of this type is currently 4, released with Kafka 0.11.0.0.
-// Prior, the RecordBatch format was completely different (and was called a
-// MessageSet).
+// Kafka 0.11.0.0 released v4 and changed the returned RecordBatches to contain
+// the RecordBatch type. Prior, Kafka used the MessageSet type (and, for v0 and
+// v1, Kafka used a different type).
+//
+// Note that starting in v3, Kafka began processing partitions in order,
+// meaning the order of partitions in the fetch request is important due to
+// potential size constraints.
 type FetchRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
@@ -588,7 +1045,7 @@ type FetchRequest struct {
 
 func (*FetchRequest) Key() int16                 { return 1 }
 func (*FetchRequest) MaxVersion() int16          { return 10 }
-func (*FetchRequest) MinVersion() int16          { return 4 }
+func (*FetchRequest) MinVersion() int16          { return 0 }
 func (v *FetchRequest) SetVersion(version int16) { v.Version = version }
 func (v *FetchRequest) GetVersion() int16        { return v.Version }
 func (v *FetchRequest) ResponseKind() Response   { return &FetchResponse{Version: v.Version} }
@@ -754,11 +1211,18 @@ type FetchResponseResponsePartitionResponse struct {
 	AbortedTransactions []FetchResponseResponsePartitionResponseAbortedTransaction // v4+
 
 	// RecordBatches is an array of record batches for a topic partition.
-	// The size prefixing the array is the byte size of all the batches,
-	// NOT the number of record batches. Kafka may include a partial record
-	// batch at the end of the array; this partial batch should be discarded.
-	// This is an optimization in Kafka that the clients must deal with.
-	RecordBatches []RecordBatch
+	//
+	// This is encoded as a raw byte array, with the standard int32 size
+	// prefix. One important catch to note is that the final element of the
+	// array may be **partial**. This is an optimization in Kafka that
+	// clients must deal with by discarding a partial trailing batch.
+	//
+	// Starting v2, this transitioned to the MessageSet v1 format (and this
+	// would contain many MessageV1 structs).
+	//
+	// Starting v4, this transitioned to the RecordBatch format (thus this
+	// contains many RecordBatch structs).
+	RecordBatches []byte
 }
 type FetchResponseResponse struct {
 	// Topic is a topic that records may have been received for.
@@ -879,78 +1343,7 @@ func (v *FetchResponse) ReadFrom(src []byte) error {
 									s.AbortedTransactions = v
 								}
 								{
-									v := s.RecordBatches
-									a := v
-									{
-										b := kbin.Reader{Src: b.Span(int(b.ArrayLen()))}
-										for len(b.Src) > 0 {
-											a = append(a, RecordBatch{})
-											v := &a[len(a)-1]
-											{
-												s := v
-												{
-													v := b.Int64()
-													s.FirstOffset = v
-												}
-												{
-													v := b.Int32()
-													s.Length = v
-												}
-												{
-													v := b.Int32()
-													s.PartitionLeaderEpoch = v
-												}
-												{
-													v := b.Int8()
-													s.Magic = v
-												}
-												{
-													v := b.Int32()
-													s.CRC = v
-												}
-												{
-													v := b.Int16()
-													s.Attributes = v
-												}
-												{
-													v := b.Int32()
-													s.LastOffsetDelta = v
-												}
-												{
-													v := b.Int64()
-													s.FirstTimestamp = v
-												}
-												{
-													v := b.Int64()
-													s.MaxTimestamp = v
-												}
-												{
-													v := b.Int64()
-													s.ProducerID = v
-												}
-												{
-													v := b.Int16()
-													s.ProducerEpoch = v
-												}
-												{
-													v := b.Int32()
-													s.FirstSequence = v
-												}
-												{
-													v := b.Int32()
-													s.NumRecords = v
-												}
-												{
-													v := b.Span(int(s.Length) - 49)
-													s.Records = v
-												}
-											}
-										}
-										if b.Complete() == kbin.ErrNotEnoughData {
-											a = a[:len(a)-1]
-										}
-									}
-									v = a
+									v := b.Bytes()
 									s.RecordBatches = v
 								}
 							}
@@ -990,6 +1383,10 @@ type ListOffsetsRequestTopicPartition struct {
 	// There exist two special timestamps: -2 corresponds to the earliest
 	// timestamp, and -1 corresponds to the latest.
 	Timestamp int64
+
+	// MaxNumOffsets is the maximum number of offsets to report.
+	// This was removed after v0.
+	MaxNumOffsets int32
 }
 type ListOffsetsRequestTopic struct {
 	// Topic is a topic to get offsets for.
@@ -1024,7 +1421,7 @@ type ListOffsetsRequest struct {
 
 func (*ListOffsetsRequest) Key() int16                 { return 2 }
 func (*ListOffsetsRequest) MaxVersion() int16          { return 4 }
-func (*ListOffsetsRequest) MinVersion() int16          { return 1 }
+func (*ListOffsetsRequest) MinVersion() int16          { return 0 }
 func (v *ListOffsetsRequest) SetVersion(version int16) { v.Version = version }
 func (v *ListOffsetsRequest) GetVersion() int16        { return v.Version }
 func (v *ListOffsetsRequest) IsAdminRequest()          {}
@@ -1066,6 +1463,10 @@ func (v *ListOffsetsRequest) AppendTo(dst []byte) []byte {
 					{
 						v := v.Timestamp
 						dst = kbin.AppendInt64(dst, v)
+					}
+					if version >= 0 && version <= 0 {
+						v := v.MaxNumOffsets
+						dst = kbin.AppendInt32(dst, v)
 					}
 				}
 			}
@@ -1117,6 +1518,10 @@ type ListOffsetsResponseResponsePartitionResponse struct {
 	// a v5+ list offsets request, LEADER_NOT_AVAILABLE is returned.
 	// See KIP-207 for more details.
 	ErrorCode int16
+
+	// OldStyleOffsets is a list of offsets. This was removed after
+	// version 0 and, since it is so historic, is undocumented.
+	OldStyleOffsets []int64
 
 	// If the request was for the earliest or latest timestamp (-2 or -1), or
 	// if an offset could not be found after the requested one, this will be -1.
@@ -1192,6 +1597,16 @@ func (v *ListOffsetsResponse) ReadFrom(src []byte) error {
 								{
 									v := b.Int16()
 									s.ErrorCode = v
+								}
+								if version >= 0 && version <= 0 {
+									v := s.OldStyleOffsets
+									a := v
+									for i := b.ArrayLen(); i > 0; i-- {
+										v := b.Int64()
+										a = append(a, v)
+									}
+									v = a
+									s.OldStyleOffsets = v
 								}
 								{
 									v := b.Int64()
@@ -3118,8 +3533,6 @@ type GroupMemberMetadata struct {
 }
 
 func (v *GroupMemberMetadata) AppendTo(dst []byte) []byte {
-	version := v.Version
-	_ = version
 	{
 		v := v.Version
 		dst = kbin.AppendInt16(dst, v)
@@ -3139,8 +3552,6 @@ func (v *GroupMemberMetadata) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *GroupMemberMetadata) ReadFrom(src []byte) error {
-	version := v.Version
-	_ = version
 	b := kbin.Reader{Src: src}
 	{
 		s := v
@@ -3189,8 +3600,6 @@ type GroupMemberAssignment struct {
 }
 
 func (v *GroupMemberAssignment) AppendTo(dst []byte) []byte {
-	version := v.Version
-	_ = version
 	{
 		v := v.Version
 		dst = kbin.AppendInt16(dst, v)
@@ -3221,8 +3630,6 @@ func (v *GroupMemberAssignment) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *GroupMemberAssignment) ReadFrom(src []byte) error {
-	version := v.Version
-	_ = version
 	b := kbin.Reader{Src: src}
 	{
 		s := v
@@ -7616,7 +8023,7 @@ func (v *DescribeDelegationTokenRequest) SetVersion(version int16) { v.Version =
 func (v *DescribeDelegationTokenRequest) GetVersion() int16        { return v.Version }
 func (v *DescribeDelegationTokenRequest) IsAdminRequest()          {}
 func (v *DescribeDelegationTokenRequest) ResponseKind() Response {
-	return &DescribeDelegationTokenResponnse{Version: v.Version}
+	return &DescribeDelegationTokenResponse{Version: v.Version}
 }
 
 func (v *DescribeDelegationTokenRequest) AppendTo(dst []byte) []byte {
@@ -7640,18 +8047,18 @@ func (v *DescribeDelegationTokenRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 
-type DescribeDelegationTokenResponnseTokenDetailOwner struct {
+type DescribeDelegationTokenResponseTokenDetailOwner struct {
 	PrincipalType string
 
 	Name string
 }
-type DescribeDelegationTokenResponnseTokenDetailRenewer struct {
+type DescribeDelegationTokenResponseTokenDetailRenewer struct {
 	PrincipalType string
 
 	Name string
 }
-type DescribeDelegationTokenResponnseTokenDetail struct {
-	Owner DescribeDelegationTokenResponnseTokenDetailOwner
+type DescribeDelegationTokenResponseTokenDetail struct {
+	Owner DescribeDelegationTokenResponseTokenDetailOwner
 
 	IssueTimestamp int64
 
@@ -7663,20 +8070,20 @@ type DescribeDelegationTokenResponnseTokenDetail struct {
 
 	HMAC []byte
 
-	Renewers []DescribeDelegationTokenResponnseTokenDetailRenewer
+	Renewers []DescribeDelegationTokenResponseTokenDetailRenewer
 }
-type DescribeDelegationTokenResponnse struct {
+type DescribeDelegationTokenResponse struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
 	ErrorCode int16
 
-	TokenDetails []DescribeDelegationTokenResponnseTokenDetail
+	TokenDetails []DescribeDelegationTokenResponseTokenDetail
 
 	ThrottleTimeMs int32
 }
 
-func (v *DescribeDelegationTokenResponnse) ReadFrom(src []byte) error {
+func (v *DescribeDelegationTokenResponse) ReadFrom(src []byte) error {
 	version := v.Version
 	_ = version
 	b := kbin.Reader{Src: src}
@@ -7690,7 +8097,7 @@ func (v *DescribeDelegationTokenResponnse) ReadFrom(src []byte) error {
 			v := s.TokenDetails
 			a := v
 			for i := b.ArrayLen(); i > 0; i-- {
-				a = append(a, DescribeDelegationTokenResponnseTokenDetail{})
+				a = append(a, DescribeDelegationTokenResponseTokenDetail{})
 				v := &a[len(a)-1]
 				{
 					s := v
@@ -7732,7 +8139,7 @@ func (v *DescribeDelegationTokenResponnse) ReadFrom(src []byte) error {
 						v := s.Renewers
 						a := v
 						for i := b.ArrayLen(); i > 0; i-- {
-							a = append(a, DescribeDelegationTokenResponnseTokenDetailRenewer{})
+							a = append(a, DescribeDelegationTokenResponseTokenDetailRenewer{})
 							v := &a[len(a)-1]
 							{
 								s := v
