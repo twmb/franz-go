@@ -347,7 +347,7 @@ ProduceResponse =>
 // Note that starting in v3, Kafka began processing partitions in order,
 // meaning the order of partitions in the fetch request is important due to
 // potential size constraints.
-FetchRequest => key 1, max version 10
+FetchRequest => key 1, max version 11
   // ReplicaID is the broker ID of performing the fetch request. Standard
   // clients should use -1. To be a "debug" replica, use -2. The debug
   // replica can be used to fetch messages from non-leaders.
@@ -414,6 +414,9 @@ FetchRequest => key 1, max version 10
     Topic: string
     // Partitions are partitions to remove from tracking for a topic.
     Partitions: [int32]
+  // Rack ID of the consumer making this request (see KIP-392; introduced in
+  // Kafka 2.2.0).
+  RackID: string // v11+
 
 // FetchResponse is returned from a FetchRequest.
 FetchResponse =>
@@ -501,6 +504,9 @@ FetchResponse =>
         ProducerID: int64
         // FirstOffset is the offset where this aborted transaction began.
         FirstOffset: int64
+      // PreferredReadReplica is the preferred replica for the consumer
+      // to use on its next fetch request. See KIP-392.
+      PreferredReadReplica: int32 // v11+
       // RecordBatches is an array of record batches for a topic partition.
       //
       // This is encoded as a raw byte array, with the standard int32 size
@@ -517,7 +523,11 @@ FetchResponse =>
 
 // ListOffsetsRequest requests partition offsets from Kafka for use in
 // consuming records.
-ListOffsetsRequest => key 2, max version 4, admin
+//
+// Version 5, introduced in Kafka 2.2.0, is the same as version 4. Using
+// version 5 implies you support Kafka's OffsetNotAvailableException
+// See KIP-207 for details.
+ListOffsetsRequest => key 2, max version 5, admin
   // ReplicaID is the broker ID to get offsets from. As a Kafka client, use -1.
   // The consumer replica ID (-1) causes requests to only succeed if issued
   // against the leader broker.
@@ -736,8 +746,8 @@ MetadataResponse =>
 //
 // Kafka 1.0.0 introduced version 1. Kafka 2.2.0 introduced version 2, proposed
 // in KIP-380, which changed the layout of the struct to be more memory
-// efficient.
-LeaderAndISRRequest => key 4, max version 2, admin
+// efficient. Kafka 2.4.0 introduced version 3 with KIP-455.
+LeaderAndISRRequest => key 4, max version 3, admin
   ControllerID: int32
   ControllerEpoch: int32
   BrokerEpoch: int64 // v2+
@@ -761,6 +771,8 @@ LeaderAndISRRequest => key 4, max version 2, admin
       ISR: [int32]
       ZKVersion: int32
       Replicas: [int32]
+      AddingReplicas: [int32] // v3+
+      RemovingReplicas: [int32] // v3+
       IsNew: bool
   LiveLeaders: [=>]
     ID: int32
@@ -1157,7 +1169,7 @@ GroupMemberAssignment => not top level
 JoinGroupRequest => key 11, max version 5, group coordinator
   // GroupID is the group to join.
   GroupID: string
-  // SessionTimeoutMs is how long a member in the group can go between
+  // SessionTimeout is how long a member in the group can go between
   // heartbeats. If a member does not send a heartbeat within this timeout,
   // the broker will remove the member from the group and initiate a rebalance.
   SessionTimeout: int32
@@ -1413,7 +1425,7 @@ SyncGroupResponse =>
   MemberAssignment: bytes
 
 // DescribeGroupsRequest requests metadata for group IDs.
-DescribeGroupsRequest => key 15, max version 3, group coordinator
+DescribeGroupsRequest => key 15, max version 4, group coordinator
   // GroupIDs is an array of group IDs to request metadata for.
   // If this is empty, the response will include all groups.
   GroupIDs: [string]
@@ -1458,6 +1470,8 @@ DescribeGroupsResponse =>
     Members: [=>]
       // MemberID is the member ID of a member in this group.
       MemberID: string
+      // GroupInstanceID is the instance ID of this member in the group (KIP-345).
+      GroupInstanceID: string // v4+
       // ClientID is the client ID used by this member.
       ClientID: string
       // ClientHost is the host this client is running on.
@@ -1536,7 +1550,10 @@ ApiVersionsResponse =>
   ThrottleTimeMs: int32 // v1+
 
 // CreateTopicsRequest creates Kafka topics.
-CreateTopicsRequest => key 19, max version 3, admin
+//
+// Version 4, introduced in Kafka 2.4.0, implies client support for
+// creation defaults. See KIP-464.
+CreateTopicsRequest => key 19, max version 4, admin
   // Topics is an array of topics to attempt to create.
   Topics: [=>]
     // Topic is a topic to create.
@@ -1747,7 +1764,12 @@ InitProducerIDResponse =>
   // the current producer epoch
   ProducerEpoch: int16
 
-OffsetForLeaderEpochRequest => key 23, max version 2
+// TODO more docs.s
+// KIP-392 in v3.
+OffsetForLeaderEpochRequest => key 23, max version 3
+  // ReplicaID is the broker ID of the follower, or -1 if this request is
+  // from a consumer.
+  ReplicaID: int32 // v3+
   Topics: [=>]
     Topic: string
     Partitions: [=>]
@@ -2403,8 +2425,12 @@ DeleteGroupsResponse =>
 // ElectPreferredLeadersRequest begins a leader election for all given topic
 // partitions. This request was added in Kafka 2.2.0 to replace the zookeeper
 // only option of triggering leader elections before. See KIP-183 for more
-// details.
-ElectPreferredLeadersRequest => key 43, max version 0, admin
+// details. KIP-460 introduced the ElectionType field with Kafka 2.4.0.
+ElectPreferredLeadersRequest => key 43, max version 1, admin
+  // ElectionType is the type of election to conduct. 0 elects the preferred
+  // replica, 1 elects the first live replica if there are no in-sync replicas
+  // (i.e., unclean leader election).
+  ElectionType: int8 // v1+
   // TopicPartitions is an array of topics and corresponding partitions to
   // trigger leader elections for.
   TopicPartitions: [=>]
@@ -2422,6 +2448,11 @@ ElectPreferredLeadersResponse =>
   // ThrottleTimeMs is how long of a throttle Kafka will apply to the client
   // after responding to this request.
   ThrottleTimeMs: int32
+  // ErrorCode is any error that applies to all partitions.
+  //
+  // CLUSTER_AUTHORIZATION_FAILED is returned if the client is not
+  // authorized to reassign partitions.
+  ErrorCode: int16
   // ReplicaElectionResults is the leader election results for each requested
   // topic / partition.
   ReplicaElectionResults: [=>]
@@ -2504,6 +2535,9 @@ IncrementalAlterConfigsResponse =>
   Responses: [=>]
     // ErrorCode is the error code returned for incrementally altering configs.
     //
+    // NOT_CONTROLLER is returned if the request was not issued to a Kafka
+    // controller.
+    //
     // CLUSTER_AUTHORIZATION_FAILED is returned if asking to alter broker
     // configs but the client is not authorized to do so.
     //
@@ -2525,3 +2559,104 @@ IncrementalAlterConfigsResponse =>
     // ResourceName is the name corresponding to the incremental alter config
     // request.
     ResourceName: string
+
+// AlterPartitionReassignmentsRequest, proposed in KIP-455 and implemented in
+// Kafka 2.4.0, is a request to reassign partitions to certain brokers.
+//
+// ACL wise, this requires ALTER on CLUSTER.
+AlterPartitionReassignmentsRequest => key 45, max version 0, admin
+  // TimeoutMs is how long to wait for the response.
+  TimeoutMs: int32
+  // Topics are topics for which to reassign partitions of.
+  Topics: [=>]
+    // Topic is a topic to reassign the partitions of.
+    Topic: string
+    // Partitions contains partitions to reassign.
+    Partitions: [=>]
+      // Partition is a partition to reassign.
+      Partition: int32
+      // Replicas are replicas to place the partition on, or null to
+      // cancel a pending reassignment of this partition.
+      Replicas: nullable[int32]
+
+// AlterPartitionReassignmentsResponse is returned for an AlterPartitionReassignmentsRequest.
+AlterPartitionReassignmentsResponse =>
+  // ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+  // after responding to this request.
+  ThrottleTimeMs: int32
+  // ErrorCode is any global (applied to all partitions) error code.
+  ErrorCode: int16
+  // ErrorMessage is any global (applied to all partitions) error message.
+  ErrorMessage: nullable-string
+  // Topics contains responses for each topic requested.
+  Topics: [=>]
+    // Topic is the topic being responded to.
+    Topic: string
+    // Partitions contains responses for partitions.
+    Partitions: [=>]
+      // Partition is the partition being responded to.
+      Partition: int32
+      // ErrorCode is the error code returned for partition reassignments.
+      //
+      // REQUEST_TIMED_OUT is returned if the request timed out.
+      //
+      // NOT_CONTROLLER is returned if the request was not issued to a Kafka
+      // controller.
+      //
+      // CLUSTER_AUTHORIZATION_FAILED is returned if the client is not
+      // authorized to reassign partitions.
+      //
+      // NO_REASSIGNMENT_IN_PROGRESS is returned for partition reassignment
+      // cancellations when the partition was not being reassigned.
+      //
+      // UNKNOWN_TOPIC_OR_PARTITION is returned if the broker does not know of
+      // the requested topic or the topic is being deleted.
+      ErrorCode: int16
+      // ErrorMessage is an informative message if the partition reassignment failed.
+      ErrorMessage: nullable-string
+
+// ListPartitionReassignmentsRequest, proposed in KIP-455 and implemented in
+// Kafka 2.4.0, is a request to list in progress partition reassignments.
+//
+// ACL wise, this requires DESCRIBE on CLUSTER.
+ListPartitionReassignmentsRequest => key 46, max version 0, admin
+  // TimeoutMs is how long to wait for the response.
+  TimeoutMs: int32
+  // Topics are topics to list in progress partition reassignments of.
+  Topics: [=>]
+    // Topic is a topic to list in progress partition reassingments of.
+    Topic: string
+    // Partitions are partitions to list in progress reassignments of.
+    Partitions: [int32]
+
+// ListPartitionReassignmentsResponse is returned for a ListPartitionReassignmentsRequest.
+ListPartitionReassignmentsResponse =>
+  // ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+  // after responding to this request.
+  ThrottleTimeMs: int32
+  // ErrorCode is the error code returned for listing reassignments.
+  //
+  // REQUEST_TIMED_OUT is returned if the request timed out.
+  //
+  // NOT_CONTROLLER is returned if the request was not issued to a Kafka
+  // controller.
+  //
+  // CLUSTER_AUTHORIZATION_FAILED is returned if the client is not
+  // authorized to reassign partitions.
+  ErrorCode: int16
+  // ErrorMessage is any global (applied to all partitions) error message.
+  ErrorMessage: nullable-string
+  // Topics contains responses for each topic requested.
+  Topics: [=>]
+    // Topic is the topic being responded to.
+    Topic: string
+    // Partitions contains responses for partitions.
+    Partitions: [=>]
+      // Partition is the partition being responded to.
+      Partition: int32
+      // Replicas is the partition's current replicas.
+      Replicas: [int32]
+      // AddingReplicas are replicas currently being added to the partition.
+      AddingReplicas: [int32]
+      // RemovingReplicas are replicas currently being removed from the partition.
+      RemovingReplicas: [int32]
