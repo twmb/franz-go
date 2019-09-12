@@ -7,6 +7,8 @@ import (
 	"github.com/twmb/kgo/kerr"
 )
 
+// TODO client.Forget(topics ...string) to delete topic from the client.
+
 type metawait struct {
 	mu         sync.Mutex
 	c          *sync.Cond
