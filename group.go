@@ -4,7 +4,6 @@ import (
 	"errors"
 	"time"
 
-	"github.com/davecgh/go-spew/spew"
 	"github.com/twmb/kgo/kerr"
 	"github.com/twmb/kgo/kmsg"
 )
@@ -65,6 +64,18 @@ func WithGroupRebalanceTimeout(timeout time.Duration) GroupOpt {
 	return groupOpt{func(cfg *consumerGroup) { cfg.rebalanceTimeoutMS = int32(timeout.Milliseconds()) }}
 }
 
+// WithGroupHeartbeatInterval sets how long a group member goes between
+// heartbeats to Kafka, overriding the default 3,000ms.
+//
+// Kafka uses heartbeats to ensure that a group member's session stays active.
+// This value can be any value lower than the session timeout, but should be no
+// higher than 1/3rd the session timeout.
+//
+// This corresponds to Kafka's heartbeat.interval.ms.
+func WithGroupHeartbeatInterval(interval time.Duration) GroupOpt {
+	return groupOpt{func(cfg *consumerGroup) { cfg.heartbeatIntervalMS = int32(interval.Milliseconds()) }}
+}
+
 // AssignGroup assigns a group to consume from, overriding any prior
 // assignment. To leave a group, you can AssignGroup with an empty group.
 func (c *Client) AssignGroup(group string, opts ...GroupOpt) error {
@@ -90,8 +101,9 @@ func (c *Client) AssignGroup(group string, opts ...GroupOpt) error {
 			RangeBalancer(),
 		},
 
-		sessionTimeoutMS:   10000,
-		rebalanceTimeoutMS: 60000,
+		sessionTimeoutMS:    10000,
+		rebalanceTimeoutMS:  60000,
+		heartbeatIntervalMS: 3000,
 	}
 	for _, opt := range opts {
 		opt.apply(&consumer.group)
@@ -123,20 +135,40 @@ type (
 		generation int32
 		assigned   map[string][]int32
 
-		sessionTimeoutMS   int32
-		rebalanceTimeoutMS int32
+		sessionTimeoutMS    int32
+		rebalanceTimeoutMS  int32
+		heartbeatIntervalMS int32
 
 		// TODO autocommit
 		// OnAssign
 		// OnRevoke
+		// OnLost (incremental)
 	}
 )
 
 func (c *Client) consumeGroup() {
-	c.consumer.joinGroup()
+	var consecutiveErrors int
+loop:
+	for {
+		err := c.consumer.joinAndSync()
+		if err != nil {
+			consecutiveErrors++
+			select {
+			case <-c.closedCh:
+				return
+			case <-time.After(c.cfg.client.retryBackoff(consecutiveErrors)):
+				continue loop
+			}
+		}
+		consecutiveErrors = 0
+
+		err = c.consumer.fetchOffsets()
+		// fetch offsets
+		// heartbeat
+	}
 }
 
-func (c *consumer) joinGroup() error {
+func (c *consumer) joinAndSync() error {
 	c.client.waitmeta()
 
 start:
@@ -155,11 +187,11 @@ start:
 	}
 	resp := kresp.(*kmsg.JoinGroupResponse)
 
-	err = kerr.ErrorForCode(resp.ErrorCode)
-	if err == kerr.MemberIDRequired {
-		memberID = resp.MemberID // KIP-394
-		goto start
-	} else {
+	if err = kerr.ErrorForCode(resp.ErrorCode); err != nil {
+		if err == kerr.MemberIDRequired {
+			memberID = resp.MemberID // KIP-394
+			goto start
+		}
 		return err // Request retries as necesary, so this must be a failure
 	}
 
@@ -175,6 +207,9 @@ start:
 	}
 
 	if err = c.syncGroup(plan, resp.GenerationID); err != nil {
+		if err == kerr.RebalanceInProgress {
+			goto start
+		}
 		return err
 	}
 
@@ -190,19 +225,20 @@ func (c *consumer) syncGroup(plan balancePlan, generation int32) error {
 	}
 	kresp, err := c.client.Request(&req)
 	if err != nil {
-		return err
-	}
-	resp := kresp.(*kmsg.SyncGroupResponse)
-	if err != nil {
 		return err // Request retries as necesary, so this must be a failure
 	}
+	resp := kresp.(*kmsg.SyncGroupResponse)
 
 	kassignment := new(kmsg.GroupMemberAssignment)
-	err = kassignment.ReadFrom(resp.MemberAssignment)
-	if err != nil {
+	if err = kassignment.ReadFrom(resp.MemberAssignment); err != nil {
 		return err
 	}
-	spew.Dump(kassignment)
+
+	c.group.assigned = make(map[string][]int32)
+	for _, topic := range kassignment.Topics {
+		c.group.assigned[topic.Topic] = topic.Partitions
+	}
+
 	return nil
 }
 
