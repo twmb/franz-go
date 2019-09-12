@@ -145,6 +145,10 @@ var (
 	MemberIDRequired                   = &Error{"MEMBER_ID_REQUIRED", 79, false, "The group member needs to have a valid member id before actually entering a consumer group"}
 	PreferredLeaderNotAvailable        = &Error{"PREFERRED_LEADER_NOT_AVAILABLE", 80, true, "The preferred leader was not available"}
 	GroupMaxSizeReached                = &Error{"GROUP_MAX_SIZE_REACHED", 81, false, "The consumer group has reached its max size"}
+	FencedInstanceID                   = &Error{"FENCED_INSTANCE_ID", 82, false, "The broker rejected this static consumer since another consumer with the same group.instance.id has registered with a different member.id."}
+	EligibleLeadersNotAvailable        = &Error{"ELIGIBLE_LEADERS_NOT_AVAILABLE", 83, true, "Eligible topic partition leaders are not available"}
+	ElectionNotNeeded                  = &Error{"ELECTION_NOT_NEEDED", 84, true, "Leader election not needed for topic partition"}
+	NoReassignmentInProgress           = &Error{"NO_REASSIGNMENT_IN_PROGRESS", 85, false, "No partition reassignment is in progress."}
 )
 
 var code2err = map[int16]error{
@@ -231,4 +235,8 @@ var code2err = map[int16]error{
 	79: MemberIDRequired,
 	80: PreferredLeaderNotAvailable,
 	81: GroupMaxSizeReached,
+	82: FencedInstanceID,
+	83: EligibleLeadersNotAvailable,
+	84: ElectionNotNeeded,
+	85: NoReassignmentInProgress,
 }
