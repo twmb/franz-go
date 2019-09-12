@@ -6,7 +6,7 @@ import "github.com/twmb/kgo/kbin"
 
 // MaxKey is the maximum key used for any messages in this package.
 // Note that this value will change as Kafka adds more messages.
-const MaxKey = 44
+const MaxKey = 46
 
 type MessageV0Message struct {
 	// CRC is the crc of everything that follows this field (NOT using the
@@ -1041,10 +1041,14 @@ type FetchRequest struct {
 	// wants to remove from its session. This is generally only needed for
 	// brokers; see KIP-227 for more details.
 	ForgottenTopicsData []FetchRequestForgottenTopicsData // v7+
+
+	// Rack ID of the consumer making this request (see KIP-392; introduced in
+	// Kafka 2.2.0).
+	RackID string // v11+
 }
 
 func (*FetchRequest) Key() int16                 { return 1 }
-func (*FetchRequest) MaxVersion() int16          { return 10 }
+func (*FetchRequest) MaxVersion() int16          { return 11 }
 func (*FetchRequest) MinVersion() int16          { return 0 }
 func (v *FetchRequest) SetVersion(version int16) { v.Version = version }
 func (v *FetchRequest) GetVersion() int16        { return v.Version }
@@ -1138,6 +1142,10 @@ func (v *FetchRequest) AppendTo(dst []byte) []byte {
 			}
 		}
 	}
+	if version >= 11 {
+		v := v.RackID
+		dst = kbin.AppendString(dst, v)
+	}
 	return dst
 }
 
@@ -1209,6 +1217,10 @@ type FetchResponseResponsePartitionResponse struct {
 	// returned offset range. This is only returned if the requested
 	// isolation level was READ_COMMITTED.
 	AbortedTransactions []FetchResponseResponsePartitionResponseAbortedTransaction // v4+
+
+	// PreferredReadReplica is the preferred replica for the consumer
+	// to use on its next fetch request. See KIP-392.
+	PreferredReadReplica int32 // v11+
 
 	// RecordBatches is an array of record batches for a topic partition.
 	//
@@ -1342,6 +1354,10 @@ func (v *FetchResponse) ReadFrom(src []byte) error {
 									v = a
 									s.AbortedTransactions = v
 								}
+								if version >= 11 {
+									v := b.Int32()
+									s.PreferredReadReplica = v
+								}
 								{
 									v := b.Bytes()
 									s.RecordBatches = v
@@ -1398,6 +1414,10 @@ type ListOffsetsRequestTopic struct {
 
 // ListOffsetsRequest requests partition offsets from Kafka for use in
 // consuming records.
+//
+// Version 5, introduced in Kafka 2.2.0, is the same as version 4. Using
+// version 5 implies you support Kafka's OffsetNotAvailableException
+// See KIP-207 for details.
 type ListOffsetsRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
@@ -1420,7 +1440,7 @@ type ListOffsetsRequest struct {
 }
 
 func (*ListOffsetsRequest) Key() int16                 { return 2 }
-func (*ListOffsetsRequest) MaxVersion() int16          { return 4 }
+func (*ListOffsetsRequest) MaxVersion() int16          { return 5 }
 func (*ListOffsetsRequest) MinVersion() int16          { return 0 }
 func (v *ListOffsetsRequest) SetVersion(version int16) { v.Version = version }
 func (v *ListOffsetsRequest) GetVersion() int16        { return v.Version }
@@ -1979,6 +1999,10 @@ type LeaderAndISRRequestTopicStatePartitionState struct {
 
 	Replicas []int32
 
+	AddingReplicas []int32 // v3+
+
+	RemovingReplicas []int32 // v3+
+
 	IsNew bool
 }
 type LeaderAndISRRequestTopicState struct {
@@ -2003,7 +2027,7 @@ type LeaderAndISRRequestLiveLeader struct {
 //
 // Kafka 1.0.0 introduced version 1. Kafka 2.2.0 introduced version 2, proposed
 // in KIP-380, which changed the layout of the struct to be more memory
-// efficient.
+// efficient. Kafka 2.4.0 introduced version 3 with KIP-455.
 type LeaderAndISRRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
@@ -2022,7 +2046,7 @@ type LeaderAndISRRequest struct {
 }
 
 func (*LeaderAndISRRequest) Key() int16                 { return 4 }
-func (*LeaderAndISRRequest) MaxVersion() int16          { return 2 }
+func (*LeaderAndISRRequest) MaxVersion() int16          { return 3 }
 func (*LeaderAndISRRequest) MinVersion() int16          { return 0 }
 func (v *LeaderAndISRRequest) SetVersion(version int16) { v.Version = version }
 func (v *LeaderAndISRRequest) GetVersion() int16        { return v.Version }
@@ -2141,6 +2165,22 @@ func (v *LeaderAndISRRequest) AppendTo(dst []byte) []byte {
 					}
 					{
 						v := v.Replicas
+						dst = kbin.AppendArrayLen(dst, len(v))
+						for i := range v {
+							v := v[i]
+							dst = kbin.AppendInt32(dst, v)
+						}
+					}
+					if version >= 3 {
+						v := v.AddingReplicas
+						dst = kbin.AppendArrayLen(dst, len(v))
+						for i := range v {
+							v := v[i]
+							dst = kbin.AppendInt32(dst, v)
+						}
+					}
+					if version >= 3 {
+						v := v.RemovingReplicas
 						dst = kbin.AppendArrayLen(dst, len(v))
 						for i := range v {
 							v := v[i]
@@ -3713,7 +3753,7 @@ type JoinGroupRequest struct {
 	// GroupID is the group to join.
 	GroupID string
 
-	// SessionTimeoutMs is how long a member in the group can go between
+	// SessionTimeout is how long a member in the group can go between
 	// heartbeats. If a member does not send a heartbeat within this timeout,
 	// the broker will remove the member from the group and initiate a rebalance.
 	SessionTimeout int32
@@ -4316,7 +4356,7 @@ type DescribeGroupsRequest struct {
 }
 
 func (*DescribeGroupsRequest) Key() int16                   { return 15 }
-func (*DescribeGroupsRequest) MaxVersion() int16            { return 3 }
+func (*DescribeGroupsRequest) MaxVersion() int16            { return 4 }
 func (*DescribeGroupsRequest) MinVersion() int16            { return 0 }
 func (v *DescribeGroupsRequest) SetVersion(version int16)   { v.Version = version }
 func (v *DescribeGroupsRequest) GetVersion() int16          { return v.Version }
@@ -4346,6 +4386,9 @@ func (v *DescribeGroupsRequest) AppendTo(dst []byte) []byte {
 type DescribeGroupsResponseGroupMember struct {
 	// MemberID is the member ID of a member in this group.
 	MemberID string
+
+	// GroupInstanceID is the instance ID of this member in the group (KIP-345).
+	GroupInstanceID string // v4+
 
 	// ClientID is the client ID used by this member.
 	ClientID string
@@ -4465,6 +4508,10 @@ func (v *DescribeGroupsResponse) ReadFrom(src []byte) error {
 								{
 									v := b.String()
 									s.MemberID = v
+								}
+								if version >= 4 {
+									v := b.String()
+									s.GroupInstanceID = v
 								}
 								{
 									v := b.String()
@@ -4782,6 +4829,9 @@ type CreateTopicsRequestTopic struct {
 }
 
 // CreateTopicsRequest creates Kafka topics.
+//
+// Version 4, introduced in Kafka 2.4.0, implies client support for
+// creation defaults. See KIP-464.
 type CreateTopicsRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
@@ -4798,7 +4848,7 @@ type CreateTopicsRequest struct {
 }
 
 func (*CreateTopicsRequest) Key() int16                 { return 19 }
-func (*CreateTopicsRequest) MaxVersion() int16          { return 3 }
+func (*CreateTopicsRequest) MaxVersion() int16          { return 4 }
 func (*CreateTopicsRequest) MinVersion() int16          { return 0 }
 func (v *CreateTopicsRequest) SetVersion(version int16) { v.Version = version }
 func (v *CreateTopicsRequest) GetVersion() int16        { return v.Version }
@@ -5387,15 +5437,22 @@ type OffsetForLeaderEpochRequestTopic struct {
 
 	Partitions []OffsetForLeaderEpochRequestTopicPartition
 }
+
+// TODO more docs.s
+// KIP-392 in v3.
 type OffsetForLeaderEpochRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
+
+	// ReplicaID is the broker ID of the follower, or -1 if this request is
+	// from a consumer.
+	ReplicaID int32 // v3+
 
 	Topics []OffsetForLeaderEpochRequestTopic
 }
 
 func (*OffsetForLeaderEpochRequest) Key() int16                 { return 23 }
-func (*OffsetForLeaderEpochRequest) MaxVersion() int16          { return 2 }
+func (*OffsetForLeaderEpochRequest) MaxVersion() int16          { return 3 }
 func (*OffsetForLeaderEpochRequest) MinVersion() int16          { return 0 }
 func (v *OffsetForLeaderEpochRequest) SetVersion(version int16) { v.Version = version }
 func (v *OffsetForLeaderEpochRequest) GetVersion() int16        { return v.Version }
@@ -5406,6 +5463,10 @@ func (v *OffsetForLeaderEpochRequest) ResponseKind() Response {
 func (v *OffsetForLeaderEpochRequest) AppendTo(dst []byte) []byte {
 	version := v.Version
 	_ = version
+	if version >= 3 {
+		v := v.ReplicaID
+		dst = kbin.AppendInt32(dst, v)
+	}
 	{
 		v := v.Topics
 		dst = kbin.AppendArrayLen(dst, len(v))
@@ -8288,10 +8349,15 @@ type ElectPreferredLeadersRequestTopicPartition struct {
 // ElectPreferredLeadersRequest begins a leader election for all given topic
 // partitions. This request was added in Kafka 2.2.0 to replace the zookeeper
 // only option of triggering leader elections before. See KIP-183 for more
-// details.
+// details. KIP-460 introduced the ElectionType field with Kafka 2.4.0.
 type ElectPreferredLeadersRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
+
+	// ElectionType is the type of election to conduct. 0 elects the preferred
+	// replica, 1 elects the first live replica if there are no in-sync replicas
+	// (i.e., unclean leader election).
+	ElectionType int8 // v1+
 
 	// TopicPartitions is an array of topics and corresponding partitions to
 	// trigger leader elections for.
@@ -8303,7 +8369,7 @@ type ElectPreferredLeadersRequest struct {
 }
 
 func (*ElectPreferredLeadersRequest) Key() int16                 { return 43 }
-func (*ElectPreferredLeadersRequest) MaxVersion() int16          { return 0 }
+func (*ElectPreferredLeadersRequest) MaxVersion() int16          { return 1 }
 func (*ElectPreferredLeadersRequest) MinVersion() int16          { return 0 }
 func (v *ElectPreferredLeadersRequest) SetVersion(version int16) { v.Version = version }
 func (v *ElectPreferredLeadersRequest) GetVersion() int16        { return v.Version }
@@ -8315,6 +8381,10 @@ func (v *ElectPreferredLeadersRequest) ResponseKind() Response {
 func (v *ElectPreferredLeadersRequest) AppendTo(dst []byte) []byte {
 	version := v.Version
 	_ = version
+	if version >= 1 {
+		v := v.ElectionType
+		dst = kbin.AppendInt8(dst, v)
+	}
 	{
 		v := v.TopicPartitions
 		dst = kbin.AppendArrayLen(dst, len(v))
@@ -8382,6 +8452,12 @@ type ElectPreferredLeadersResponse struct {
 	// after responding to this request.
 	ThrottleTimeMs int32
 
+	// ErrorCode is any error that applies to all partitions.
+	//
+	// CLUSTER_AUTHORIZATION_FAILED is returned if the client is not
+	// authorized to reassign partitions.
+	ErrorCode int16
+
 	// ReplicaElectionResults is the leader election results for each requested
 	// topic / partition.
 	ReplicaElectionResults []ElectPreferredLeadersResponseReplicaElectionResult
@@ -8396,6 +8472,10 @@ func (v *ElectPreferredLeadersResponse) ReadFrom(src []byte) error {
 		{
 			v := b.Int32()
 			s.ThrottleTimeMs = v
+		}
+		{
+			v := b.Int16()
+			s.ErrorCode = v
 		}
 		{
 			v := s.ReplicaElectionResults
@@ -8558,6 +8638,9 @@ func (v *IncrementalAlterConfigsRequest) AppendTo(dst []byte) []byte {
 type IncrementalAlterConfigsResponseResponse struct {
 	// ErrorCode is the error code returned for incrementally altering configs.
 	//
+	// NOT_CONTROLLER is returned if the request was not issued to a Kafka
+	// controller.
+	//
 	// CLUSTER_AUTHORIZATION_FAILED is returned if asking to alter broker
 	// configs but the client is not authorized to do so.
 	//
@@ -8634,6 +8717,398 @@ func (v *IncrementalAlterConfigsResponse) ReadFrom(src []byte) error {
 			}
 			v = a
 			s.Responses = v
+		}
+	}
+	return b.Complete()
+}
+
+type AlterPartitionReassignmentsRequestTopicPartition struct {
+	// Partition is a partition to reassign.
+	Partition int32
+
+	// Replicas are replicas to place the partition on, or null to
+	// cancel a pending reassignment of this partition.
+	Replicas []int32
+}
+type AlterPartitionReassignmentsRequestTopic struct {
+	// Topic is a topic to reassign the partitions of.
+	Topic string
+
+	// Partitions contains partitions to reassign.
+	Partitions []AlterPartitionReassignmentsRequestTopicPartition
+}
+
+// AlterPartitionReassignmentsRequest, proposed in KIP-455 and implemented in
+// Kafka 2.4.0, is a request to reassign partitions to certain brokers.
+//
+// ACL wise, this requires ALTER on CLUSTER.
+type AlterPartitionReassignmentsRequest struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	// TimeoutMs is how long to wait for the response.
+	TimeoutMs int32
+
+	// Topics are topics for which to reassign partitions of.
+	Topics []AlterPartitionReassignmentsRequestTopic
+}
+
+func (*AlterPartitionReassignmentsRequest) Key() int16                 { return 45 }
+func (*AlterPartitionReassignmentsRequest) MaxVersion() int16          { return 0 }
+func (*AlterPartitionReassignmentsRequest) MinVersion() int16          { return 0 }
+func (v *AlterPartitionReassignmentsRequest) SetVersion(version int16) { v.Version = version }
+func (v *AlterPartitionReassignmentsRequest) GetVersion() int16        { return v.Version }
+func (v *AlterPartitionReassignmentsRequest) IsAdminRequest()          {}
+func (v *AlterPartitionReassignmentsRequest) ResponseKind() Response {
+	return &AlterPartitionReassignmentsResponse{Version: v.Version}
+}
+
+func (v *AlterPartitionReassignmentsRequest) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	{
+		v := v.TimeoutMs
+		dst = kbin.AppendInt32(dst, v)
+	}
+	{
+		v := v.Topics
+		dst = kbin.AppendArrayLen(dst, len(v))
+		for i := range v {
+			v := &v[i]
+			{
+				v := v.Topic
+				dst = kbin.AppendString(dst, v)
+			}
+			{
+				v := v.Partitions
+				dst = kbin.AppendArrayLen(dst, len(v))
+				for i := range v {
+					v := &v[i]
+					{
+						v := v.Partition
+						dst = kbin.AppendInt32(dst, v)
+					}
+					{
+						v := v.Replicas
+						dst = kbin.AppendNullableArrayLen(dst, len(v), v == nil)
+						for i := range v {
+							v := v[i]
+							dst = kbin.AppendInt32(dst, v)
+						}
+					}
+				}
+			}
+		}
+	}
+	return dst
+}
+
+type AlterPartitionReassignmentsResponseTopicPartition struct {
+	// Partition is the partition being responded to.
+	Partition int32
+
+	// ErrorCode is the error code returned for partition reassignments.
+	//
+	// REQUEST_TIMED_OUT is returned if the request timed out.
+	//
+	// NOT_CONTROLLER is returned if the request was not issued to a Kafka
+	// controller.
+	//
+	// CLUSTER_AUTHORIZATION_FAILED is returned if the client is not
+	// authorized to reassign partitions.
+	//
+	// NO_REASSIGNMENT_IN_PROGRESS is returned for partition reassignment
+	// cancellations when the partition was not being reassigned.
+	//
+	// UNKNOWN_TOPIC_OR_PARTITION is returned if the broker does not know of
+	// the requested topic or the topic is being deleted.
+	ErrorCode int16
+
+	// ErrorMessage is an informative message if the partition reassignment failed.
+	ErrorMessage *string
+}
+type AlterPartitionReassignmentsResponseTopic struct {
+	// Topic is the topic being responded to.
+	Topic string
+
+	// Partitions contains responses for partitions.
+	Partitions []AlterPartitionReassignmentsResponseTopicPartition
+}
+
+// AlterPartitionReassignmentsResponse is returned for an AlterPartitionReassignmentsRequest.
+type AlterPartitionReassignmentsResponse struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	// ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+	// after responding to this request.
+	ThrottleTimeMs int32
+
+	// ErrorCode is any global (applied to all partitions) error code.
+	ErrorCode int16
+
+	// ErrorMessage is any global (applied to all partitions) error message.
+	ErrorMessage *string
+
+	// Topics contains responses for each topic requested.
+	Topics []AlterPartitionReassignmentsResponseTopic
+}
+
+func (v *AlterPartitionReassignmentsResponse) ReadFrom(src []byte) error {
+	version := v.Version
+	_ = version
+	b := kbin.Reader{Src: src}
+	{
+		s := v
+		{
+			v := b.Int32()
+			s.ThrottleTimeMs = v
+		}
+		{
+			v := b.Int16()
+			s.ErrorCode = v
+		}
+		{
+			v := b.NullableString()
+			s.ErrorMessage = v
+		}
+		{
+			v := s.Topics
+			a := v
+			for i := b.ArrayLen(); i > 0; i-- {
+				a = append(a, AlterPartitionReassignmentsResponseTopic{})
+				v := &a[len(a)-1]
+				{
+					s := v
+					{
+						v := b.String()
+						s.Topic = v
+					}
+					{
+						v := s.Partitions
+						a := v
+						for i := b.ArrayLen(); i > 0; i-- {
+							a = append(a, AlterPartitionReassignmentsResponseTopicPartition{})
+							v := &a[len(a)-1]
+							{
+								s := v
+								{
+									v := b.Int32()
+									s.Partition = v
+								}
+								{
+									v := b.Int16()
+									s.ErrorCode = v
+								}
+								{
+									v := b.NullableString()
+									s.ErrorMessage = v
+								}
+							}
+						}
+						v = a
+						s.Partitions = v
+					}
+				}
+			}
+			v = a
+			s.Topics = v
+		}
+	}
+	return b.Complete()
+}
+
+type ListPartitionReassignmentsRequestTopic struct {
+	// Topic is a topic to list in progress partition reassingments of.
+	Topic string
+
+	// Partitions are partitions to list in progress reassignments of.
+	Partitions []int32
+}
+
+// ListPartitionReassignmentsRequest, proposed in KIP-455 and implemented in
+// Kafka 2.4.0, is a request to list in progress partition reassignments.
+//
+// ACL wise, this requires DESCRIBE on CLUSTER.
+type ListPartitionReassignmentsRequest struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	// TimeoutMs is how long to wait for the response.
+	TimeoutMs int32
+
+	// Topics are topics to list in progress partition reassignments of.
+	Topics []ListPartitionReassignmentsRequestTopic
+}
+
+func (*ListPartitionReassignmentsRequest) Key() int16                 { return 46 }
+func (*ListPartitionReassignmentsRequest) MaxVersion() int16          { return 0 }
+func (*ListPartitionReassignmentsRequest) MinVersion() int16          { return 0 }
+func (v *ListPartitionReassignmentsRequest) SetVersion(version int16) { v.Version = version }
+func (v *ListPartitionReassignmentsRequest) GetVersion() int16        { return v.Version }
+func (v *ListPartitionReassignmentsRequest) IsAdminRequest()          {}
+func (v *ListPartitionReassignmentsRequest) ResponseKind() Response {
+	return &ListPartitionReassignmentsResponse{Version: v.Version}
+}
+
+func (v *ListPartitionReassignmentsRequest) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	{
+		v := v.TimeoutMs
+		dst = kbin.AppendInt32(dst, v)
+	}
+	{
+		v := v.Topics
+		dst = kbin.AppendArrayLen(dst, len(v))
+		for i := range v {
+			v := &v[i]
+			{
+				v := v.Topic
+				dst = kbin.AppendString(dst, v)
+			}
+			{
+				v := v.Partitions
+				dst = kbin.AppendArrayLen(dst, len(v))
+				for i := range v {
+					v := v[i]
+					dst = kbin.AppendInt32(dst, v)
+				}
+			}
+		}
+	}
+	return dst
+}
+
+type ListPartitionReassignmentsResponseTopicPartition struct {
+	// Partition is the partition being responded to.
+	Partition int32
+
+	// Replicas is the partition's current replicas.
+	Replicas []int32
+
+	// AddingReplicas are replicas currently being added to the partition.
+	AddingReplicas []int32
+
+	// RemovingReplicas are replicas currently being removed from the partition.
+	RemovingReplicas []int32
+}
+type ListPartitionReassignmentsResponseTopic struct {
+	// Topic is the topic being responded to.
+	Topic string
+
+	// Partitions contains responses for partitions.
+	Partitions []ListPartitionReassignmentsResponseTopicPartition
+}
+
+// ListPartitionReassignmentsResponse is returned for a ListPartitionReassignmentsRequest.
+type ListPartitionReassignmentsResponse struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	// ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+	// after responding to this request.
+	ThrottleTimeMs int32
+
+	// ErrorCode is the error code returned for listing reassignments.
+	//
+	// REQUEST_TIMED_OUT is returned if the request timed out.
+	//
+	// NOT_CONTROLLER is returned if the request was not issued to a Kafka
+	// controller.
+	//
+	// CLUSTER_AUTHORIZATION_FAILED is returned if the client is not
+	// authorized to reassign partitions.
+	ErrorCode int16
+
+	// ErrorMessage is any global (applied to all partitions) error message.
+	ErrorMessage *string
+
+	// Topics contains responses for each topic requested.
+	Topics []ListPartitionReassignmentsResponseTopic
+}
+
+func (v *ListPartitionReassignmentsResponse) ReadFrom(src []byte) error {
+	version := v.Version
+	_ = version
+	b := kbin.Reader{Src: src}
+	{
+		s := v
+		{
+			v := b.Int32()
+			s.ThrottleTimeMs = v
+		}
+		{
+			v := b.Int16()
+			s.ErrorCode = v
+		}
+		{
+			v := b.NullableString()
+			s.ErrorMessage = v
+		}
+		{
+			v := s.Topics
+			a := v
+			for i := b.ArrayLen(); i > 0; i-- {
+				a = append(a, ListPartitionReassignmentsResponseTopic{})
+				v := &a[len(a)-1]
+				{
+					s := v
+					{
+						v := b.String()
+						s.Topic = v
+					}
+					{
+						v := s.Partitions
+						a := v
+						for i := b.ArrayLen(); i > 0; i-- {
+							a = append(a, ListPartitionReassignmentsResponseTopicPartition{})
+							v := &a[len(a)-1]
+							{
+								s := v
+								{
+									v := b.Int32()
+									s.Partition = v
+								}
+								{
+									v := s.Replicas
+									a := v
+									for i := b.ArrayLen(); i > 0; i-- {
+										v := b.Int32()
+										a = append(a, v)
+									}
+									v = a
+									s.Replicas = v
+								}
+								{
+									v := s.AddingReplicas
+									a := v
+									for i := b.ArrayLen(); i > 0; i-- {
+										v := b.Int32()
+										a = append(a, v)
+									}
+									v = a
+									s.AddingReplicas = v
+								}
+								{
+									v := s.RemovingReplicas
+									a := v
+									for i := b.ArrayLen(); i > 0; i-- {
+										v := b.Int32()
+										a = append(a, v)
+									}
+									v = a
+									s.RemovingReplicas = v
+								}
+							}
+						}
+						v = a
+						s.Partitions = v
+					}
+				}
+			}
+			v = a
+			s.Topics = v
 		}
 	}
 	return b.Complete()
@@ -8735,5 +9210,112 @@ func RequestForKey(key int16) Request {
 		return new(ElectPreferredLeadersRequest)
 	case 44:
 		return new(IncrementalAlterConfigsRequest)
+	case 45:
+		return new(AlterPartitionReassignmentsRequest)
+	case 46:
+		return new(ListPartitionReassignmentsRequest)
+	}
+}
+
+// NameForKey returns the name (e.g., "Fetch") corresponding to a given request key
+// or "" if the key is unknown.
+func NameForKey(key int16) string {
+	switch key {
+	default:
+		return ""
+	case 0:
+		return "Produce"
+	case 1:
+		return "Fetch"
+	case 2:
+		return "ListOffsets"
+	case 3:
+		return "Metadata"
+	case 4:
+		return "LeaderAndISR"
+	case 5:
+		return "StopReplica"
+	case 6:
+		return "UpdateMetadata"
+	case 7:
+		return "ControlledShutdown"
+	case 8:
+		return "OffsetCommit"
+	case 9:
+		return "OffsetFetch"
+	case 10:
+		return "FindCoordinator"
+	case 11:
+		return "JoinGroup"
+	case 12:
+		return "Heartbeat"
+	case 13:
+		return "LeaveGroup"
+	case 14:
+		return "SyncGroup"
+	case 15:
+		return "DescribeGroups"
+	case 16:
+		return "ListGroups"
+	case 17:
+		return "SASLHandshake"
+	case 18:
+		return "ApiVersions"
+	case 19:
+		return "CreateTopics"
+	case 20:
+		return "DeleteTopics"
+	case 21:
+		return "DeleteRecords"
+	case 22:
+		return "InitProducerID"
+	case 23:
+		return "OffsetForLeaderEpoch"
+	case 24:
+		return "AddPartitionsToTxn"
+	case 25:
+		return "AddOffsetsToTxn"
+	case 26:
+		return "EndTxn"
+	case 27:
+		return "WriteTxnMarkers"
+	case 28:
+		return "TxnOffsetCommit"
+	case 29:
+		return "DescribeACLs"
+	case 30:
+		return "CreateACLs"
+	case 31:
+		return "DeleteACLs"
+	case 32:
+		return "DescribeConfigs"
+	case 33:
+		return "AlterConfigs"
+	case 34:
+		return "AlterReplicaLogDirs"
+	case 35:
+		return "DescribeLogDirs"
+	case 36:
+		return "SASLAuthenticate"
+	case 37:
+		return "CreatePartitions"
+	case 38:
+		return "CreateDelegationToken"
+	case 39:
+		return "RenewDelegationToken"
+	case 40:
+		return "ExpireDelegationToken"
+	case 41:
+		return "DescribeDelegationToken"
+	case 42:
+		return "DeleteGroups"
+	case 43:
+		return "ElectPreferredLeaders"
+	case 44:
+		return "IncrementalAlterConfigs"
+	case 45:
+		return "AlterPartitionReassignments"
+	case 46:
+		return "ListPartitionReassignments"
 	}
 }
