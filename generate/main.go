@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
+	"strings"
 )
 
 var maxKey int
@@ -145,6 +146,17 @@ func main() {
 	l.Write("default: return nil")
 	for _, key2struct := range keys2structs {
 		l.Write("case %d: return new(%s)", key2struct.Key, key2struct.Name)
+	}
+	l.Write("}")
+	l.Write("}")
+
+	l.Write("// NameForKey returns the name (e.g., \"Fetch\") corresponding to a given request key")
+	l.Write("// or \"\" if the key is unknown.")
+	l.Write("func NameForKey(key int16) string {")
+	l.Write("switch key {")
+	l.Write("default: return \"\"")
+	for _, key2struct := range keys2structs {
+		l.Write("case %d: return \"%s\"", key2struct.Key, strings.TrimSuffix(key2struct.Name, "Request"))
 	}
 	l.Write("}")
 	l.Write("}")

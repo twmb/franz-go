@@ -32,8 +32,9 @@ var types = map[string]Type{
 
 // LineScanner is a shoddy scanner that allows us to peek an entire line.
 type LineScanner struct {
-	buf  string
-	nlat int
+	lineno int
+	buf    string
+	nlat   int
 }
 
 func (l *LineScanner) Ok() bool {
@@ -49,6 +50,7 @@ func (l *LineScanner) Peek() string {
 }
 
 func (l *LineScanner) Next() {
+	l.lineno++
 	l.buf = l.buf[l.nlat+1:]
 	l.nlat = -1
 }
@@ -87,7 +89,7 @@ func (s *Struct) BuildFrom(scanner *LineScanner, level int) (done bool) {
 		// Fields are name on left, type on right.
 		fields := strings.Split(line, ": ")
 		if len(fields) != 2 || len(fields[0]) == 0 || len(fields[1]) == 0 {
-			die("improper struct field format on line %q", line)
+			die("improper struct field format on line %q (%d)", line, scanner.lineno)
 		}
 
 		f := StructField{
