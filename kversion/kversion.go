@@ -56,7 +56,7 @@ func V0_8_2() Versions {
 	v[8]++ // 1 offset commit KAFKA-1462
 	v[9]++ // 1 offset fetch KAFKA-1841 161b1aa16e I think?
 	v = append(v,
-		0, // 10 Gind coordinator KAFKA-1012 a670537aa3
+		0, // 10 find coordinator KAFKA-1012 a670537aa3
 		0, // 11 join group (same)
 		0, // 12 heartbeat (same)
 	)

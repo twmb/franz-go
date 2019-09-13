@@ -10,6 +10,7 @@ import (
 
 	"github.com/twmb/kgo/kbin"
 	"github.com/twmb/kgo/kmsg"
+	"github.com/twmb/kgo/kversion"
 )
 
 type promisedReq struct {
@@ -235,13 +236,24 @@ func (b *broker) handleReqs() {
 			continue
 		}
 
-		// version bound our request
-		if int(req.Key()) > len(cxn.versions[:]) {
+		// version bound our request:
+		// If we have no versions, then a max versions bound prevented
+		// us from requesting versions at all.
+		// We also check the max version bound.
+		if int(req.Key()) > len(cxn.versions[:]) ||
+			b.client.cfg.client.maxVersions != nil &&
+				int(req.Key()) > len(b.client.cfg.client.maxVersions) {
 			pr.promise(nil, ErrUnknownRequestKey)
 			continue
 		}
 		brokerMax := cxn.versions[req.Key()]
 		ourMax := req.MaxVersion()
+		if b.client.cfg.client.maxVersions != nil {
+			userMax := b.client.cfg.client.maxVersions[req.Key()]
+			if userMax < ourMax {
+				ourMax = userMax
+			}
+		}
 		version := brokerMax
 		if brokerMax > ourMax {
 			version = ourMax
@@ -290,7 +302,7 @@ func (b *broker) loadConnection(reqKey int16) (*brokerCxn, error) {
 		conn:     conn,
 		clientID: b.client.cfg.client.id,
 	}
-	if err = cxn.init(); err != nil {
+	if err = cxn.init(b.client.cfg.client.maxVersions); err != nil {
 		conn.Close()
 		return nil, err
 	}
@@ -330,10 +342,16 @@ type brokerCxn struct {
 	dead int64
 }
 
-func (cx *brokerCxn) init() error {
+func (cx *brokerCxn) init(maxVersions kversion.Versions) error {
+	for i := 0; i < kmsg.MaxKey; i++ {
+		cx.versions[i] = -1
+	}
+
 	// TODO sasl
-	if err := cx.requestAPIVersions(); err != nil {
-		return err
+	if maxVersions == nil || len(maxVersions) > 18 {
+		if err := cx.requestAPIVersions(); err != nil {
+			return err
+		}
 	}
 	cx.resps = make(chan promisedResp, 100)
 	go cx.handleResps()
@@ -354,10 +372,6 @@ func (cx *brokerCxn) requestAPIVersions() (err error) {
 	resp := req.ResponseKind().(*kmsg.ApiVersionsResponse)
 	if err = resp.ReadFrom(rawResp); err != nil {
 		return ErrConnDead
-	}
-
-	for i := 0; i < kmsg.MaxKey; i++ {
-		cx.versions[i] = -1
 	}
 
 	for _, keyVersions := range resp.ApiVersions {

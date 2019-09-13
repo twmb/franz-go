@@ -98,6 +98,16 @@ func (c *Client) initProducerID() error {
 		// TODO txn id
 	})
 	if err != nil {
+		// If our broker is too old, then well...
+		//
+		// Note this is dependent on the first broker we hit;
+		// there are other areas in this client where we assume
+		// what we hit first is the default.
+		if err == ErrUnknownRequestKey {
+			atomic.StoreInt32(&c.producer.idLoaded, 1)
+			err = nil
+			return err
+		}
 		return err
 	}
 	initResp := resp.(*kmsg.InitProducerIDResponse)

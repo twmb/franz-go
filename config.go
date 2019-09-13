@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/twmb/kgo/kversion"
 	"golang.org/x/exp/rand"
 )
 
@@ -185,6 +186,7 @@ type (
 		dialFn func(string) (net.Conn, error)
 
 		seedBrokers []string
+		maxVersions kversion.Versions
 
 		retryBackoff   func(int) time.Duration
 		retries        int
@@ -231,6 +233,17 @@ func WithDialFn(fn func(string) (net.Conn, error)) OptClient {
 // default 127.0.0.1:9092.
 func WithSeedBrokers(seeds ...string) OptClient {
 	return clientOpt{func(cfg *clientCfg) { cfg.seedBrokers = append(cfg.seedBrokers[:0], seeds...) }}
+}
+
+// WithMaxVersions sets the maximum Kafka version to try, overriding the
+// internal unbounded (latest) versions.
+//
+// Note that specific max version pinning is required if trying to interact
+// with versions pre 0.10.0. Otherwise, unless using more complicated requests
+// that this client itself does not natively use, it is generally safe to opt
+// for the latest version.
+func WithMaxVersions(versions kversion.Versions) OptClient {
+	return clientOpt{func(cfg *clientCfg) { cfg.maxVersions = versions }}
 }
 
 // WithRetryBackoff sets the backoff strategy for how long to backoff for a
