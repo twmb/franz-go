@@ -29,8 +29,10 @@ type recordSink struct {
 	// least 4, which 1.0.0 introduced, we upgrade the sem size.
 	//
 	// Note that both v4 and v5 were introduced with 1.0.0.
-	inflightSem      atomic.Value
-	handledFirstResp bool
+	inflightSem         atomic.Value
+	handledFirstResp    bool
+	produceVersionKnown int32 // atomic bool; 1 is true
+	produceVersion      int16 // is set before produceVersionKnown
 
 	// baseWireLength is the minimum wire length of a produce request
 	// for a client.
@@ -127,6 +129,21 @@ func (sink *recordSink) createRequest() (*produceRequest, bool) {
 
 		batch := recordBuffer.batches[recordBuffer.batchDrainIdx]
 		batchWireLength := 4 + batch.wireLength // partition, batch len
+
+		if sink.produceVersionKnown == 0 {
+			v2BatchWireLength := 4 + batch.v2wireLength
+			if v2BatchWireLength > batchWireLength {
+				batchWireLength = v2BatchWireLength
+			}
+		} else {
+			switch sink.produceVersion {
+			case 0, 1:
+				batchWireLength = 4 + batch.v0wireLength
+			case 2:
+				batchWireLength = 4 + batch.v2wireLength
+			}
+		}
+
 		if _, exists := req.batches[recordBuffer.topicPartition.topic]; !exists {
 			batchWireLength += 2 + int32(len(recordBuffer.topicPartition.topic)) + 4 // string len, topic, array len
 		}
@@ -287,6 +304,8 @@ func (sink *recordSink) errorAllRecordsInAllRecordBuffersInPartitions(
 func (sink *recordSink) firstRespCheck(version int16) {
 	if !sink.handledFirstResp {
 		sink.handledFirstResp = true
+		sink.produceVersion = version
+		atomic.StoreInt32(&sink.produceVersionKnown, 1)
 		if version >= 4 {
 			sink.inflightSem.Store(make(chan struct{}, 4))
 		}
@@ -515,6 +534,24 @@ type recordBuffer struct {
 	backoffDeadline time.Time
 }
 
+const recordsOverhead = 4 // NULLABLE_BYTES
+
+func messageSet0Length(r *Record) int32 {
+	const length = 0 +
+		8 + // offset
+		4 + // size
+		4 + // crc
+		1 + // magic
+		1 + // attributes
+		4 + // key array bytes len
+		4 // value array bytes len
+	return length + int32(len(r.Key)) + int32(len(r.Value))
+}
+
+func messageSet2Length(r *Record) int32 {
+	return messageSet0Length(r) + 8 // timestamp
+}
+
 func (recordBuffer *recordBuffer) bufferRecord(pr promisedRecord) {
 	recordBuffer.mu.Lock()
 
@@ -529,7 +566,30 @@ func (recordBuffer *recordBuffer) bufferRecord(pr promisedRecord) {
 	if !firstBatch {
 		batch := recordBuffer.batches[len(recordBuffer.batches)-1]
 		recordNumbers := batch.calculateRecordNumbers(pr.Record)
+
 		newBatchLength := batch.wireLength + recordNumbers.wireLength
+
+		// If we do not know the broker version, we may be talking
+		// to <0.11.0 and be using message sets. Until we know the
+		// broker version, we pessimisitically cut our batch off using
+		// the largest record length numbers.
+		produceVersionKnown := atomic.LoadInt32(&sink.produceVersionKnown) == 1
+		if !produceVersionKnown {
+			v2newBatchLength := batch.v2wireLength + messageSet2Length(pr.Record)
+			if v2newBatchLength > newBatchLength { // we only check v2 since it is larger than v0
+				newBatchLength = v2newBatchLength
+			}
+		} else {
+			// If we do know our broker version and it is indeed
+			// an old one, we use the appropriate length.
+			switch sink.produceVersion {
+			case 0, 1:
+				newBatchLength = batch.v0wireLength + messageSet0Length(pr.Record)
+			case 2:
+				newBatchLength = batch.v2wireLength + messageSet2Length(pr.Record)
+			}
+		}
+
 		if batch.tries == 0 &&
 			newBatchLength <= client.cfg.producer.maxRecordBatchBytes {
 			newBatch = false
@@ -685,7 +745,7 @@ var emptyRecordsPool = sync.Pool{
 // newRecordBatch returns a new record batch for a topic and partition
 // containing the given record.
 func (records *recordBuffer) newRecordBatch(producerID int64, producerEpoch int16, pr promisedRecord) *recordBatch {
-	const recordBatchOverhead = 4 + // NULLABLE_BYTES overhead
+	const recordBatchOverhead = recordsOverhead + // NULLABLE_BYTES
 		8 + // firstOffset
 		4 + // batchLength
 		4 + // partitionLeaderEpoch
@@ -713,12 +773,16 @@ func (records *recordBuffer) newRecordBatch(producerID int64, producerEpoch int1
 	}
 	b.records = append(b.records, pnr)
 	b.wireLength = recordBatchOverhead + pnr.wireLength
+	b.v0wireLength = recordsOverhead + messageSet0Length(pr.Record)
+	b.v2wireLength = recordsOverhead + messageSet2Length(pr.Record)
 	return b
 }
 
 // appendRecord saves a new record to a batch.
 func (b *recordBatch) appendRecord(pr promisedRecord, nums recordNumbers) {
 	b.wireLength += nums.wireLength
+	b.v0wireLength += messageSet0Length(pr.Record)
+	b.v2wireLength += messageSet2Length(pr.Record)
 	b.records = append(b.records, promisedNumberedRecord{
 		nums,
 		pr,
@@ -731,7 +795,9 @@ type recordBatch struct {
 
 	tries int // if this was sent before and is thus now immutable
 
-	wireLength int32 // tracks total size this batch would currently encode as
+	v0wireLength int32 // same as wireLength, but for message set v0
+	v2wireLength int32 // same as wireLength, but for message set v2
+	wireLength   int32 // tracks total size this batch would currently encode as
 
 	attrs          int16
 	firstTimestamp int64 // since unix epoch, in millis
@@ -878,7 +944,7 @@ func (rbs reqBatches) onEachBatchWhileBatchOwnerLocked(fn func(*recordBatch)) {
 
 func (*produceRequest) Key() int16           { return 0 }
 func (*produceRequest) MaxVersion() int16    { return 7 }
-func (*produceRequest) MinVersion() int16    { return 2 }
+func (*produceRequest) MinVersion() int16    { return 0 }
 func (p *produceRequest) SetVersion(v int16) { p.version = v }
 func (p *produceRequest) GetVersion() int16  { return p.version }
 func (p *produceRequest) AppendTo(dst []byte) []byte {
@@ -891,12 +957,17 @@ func (p *produceRequest) AppendTo(dst []byte) []byte {
 	dst = kbin.AppendInt16(dst, p.acks)
 	dst = kbin.AppendInt32(dst, p.timeout)
 	dst = kbin.AppendArrayLen(dst, len(p.batches))
+
 	for topic, partitions := range p.batches {
 		dst = kbin.AppendString(dst, topic)
 		dst = kbin.AppendArrayLen(dst, len(partitions))
 		for partition, batch := range partitions {
 			dst = kbin.AppendInt32(dst, partition)
-			dst = batch.appendTo(dst, compressor)
+			if p.version < 3 {
+				dst = batch.appendToAsMessageSet(dst, uint8(p.version), compressor)
+			} else {
+				dst = batch.appendTo(dst, compressor)
+			}
 		}
 	}
 	return dst
@@ -989,5 +1060,75 @@ func (pnr promisedNumberedRecord) appendTo(dst []byte, offsetDelta int32) []byte
 		dst = kbin.AppendVarintString(dst, h.Key)
 		dst = kbin.AppendVarintBytes(dst, h.Value)
 	}
+	return dst
+}
+
+func (r *recordBatch) appendToAsMessageSet(dst []byte, version uint8, compressor *compressor) []byte {
+	nullableBytesLenAt := len(dst)
+	dst = append(dst, 0, 0, 0, 0) // nullable bytes len
+	for i, pnr := range r.records {
+		dst = appendMessageTo(
+			dst,
+			version,
+			0,
+			int64(i),
+			r.firstTimestamp+int64(pnr.timestampDelta),
+			pnr.Record,
+		)
+	}
+
+	if compressor != nil {
+		toCompress := dst[nullableBytesLenAt+4:] // skip nullable bytes leading prefix
+		zipr := compressor.getZipr()
+		defer compressor.putZipr(zipr)
+
+		compressed := zipr.compress(toCompress)
+		inner := &Record{Value: compressed}
+		wrappedLength := messageSet0Length(inner)
+		if version == 2 {
+			wrappedLength += 8 // timestamp
+		}
+
+		if compressed != nil &&
+			int(wrappedLength) < len(toCompress) {
+
+			dst = appendMessageTo(
+				dst[:nullableBytesLenAt+4],
+				version,
+				compressor.attrs,
+				int64(len(r.records)-1),
+				r.firstTimestamp,
+				inner,
+			)
+		}
+	}
+
+	kbin.AppendInt32(dst[:nullableBytesLenAt], int32(len(dst[nullableBytesLenAt+4:])))
+	return dst
+}
+
+func appendMessageTo(
+	dst []byte,
+	version uint8,
+	attributes int8,
+	offset int64,
+	timestamp int64,
+	r *Record,
+) []byte {
+	magic := version >> 1
+	dst = kbin.AppendInt64(dst, offset)
+	msgSizeStart := len(dst)
+	dst = append(dst, 0, 0, 0, 0)
+	crc32Start := len(dst)
+	dst = append(dst, 0, 0, 0, 0)
+	dst = append(dst, magic)
+	dst = append(dst, byte(attributes))
+	if version == 1 {
+		dst = kbin.AppendInt64(dst, timestamp)
+	}
+	dst = kbin.AppendNullableBytes(dst, r.Key)
+	dst = kbin.AppendNullableBytes(dst, r.Value)
+	kbin.AppendInt32(dst[:crc32Start], int32(crc32.ChecksumIEEE(dst[crc32Start+4:])))
+	kbin.AppendInt32(dst[:msgSizeStart], int32(len(dst[msgSizeStart+4:])))
 	return dst
 }
