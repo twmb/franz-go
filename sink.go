@@ -1123,7 +1123,7 @@ func appendMessageTo(
 	dst = append(dst, 0, 0, 0, 0)
 	dst = append(dst, magic)
 	dst = append(dst, byte(attributes))
-	if version == 1 {
+	if magic == 1 {
 		dst = kbin.AppendInt64(dst, timestamp)
 	}
 	dst = kbin.AppendNullableBytes(dst, r.Key)
