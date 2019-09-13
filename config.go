@@ -56,12 +56,14 @@ var stddialer = net.Dialer{Timeout: 10 * time.Second}
 
 func stddial(addr string) (net.Conn, error) { return stddialer.Dial("tcp", addr) }
 
-func NewClient(seedBrokers []string, opts ...Opt) (*Client, error) {
+func NewClient(opts ...Opt) (*Client, error) {
 	defaultID := "kgo"
 	cfg := cfg{
 		client: clientCfg{
 			id:     &defaultID,
 			dialFn: stddial,
+
+			seedBrokers: []string{"127.0.0.1"},
 
 			// TODO rename tries, tryBackoff
 			retryBackoff:   func(int) time.Duration { return 100 * time.Millisecond },
@@ -109,8 +111,8 @@ func NewClient(seedBrokers []string, opts ...Opt) (*Client, error) {
 		return domainRe.MatchString(strings.ToLower(domain))
 	}
 
-	seedAddrs := make([]string, 0, len(seedBrokers))
-	for _, seedBroker := range seedBrokers {
+	seedAddrs := make([]string, 0, len(cfg.client.seedBrokers))
+	for _, seedBroker := range cfg.client.seedBrokers {
 		addr := seedBroker
 		port := 9092 // default kafka port
 		var err error
@@ -182,6 +184,8 @@ type (
 		id     *string
 		dialFn func(string) (net.Conn, error)
 
+		seedBrokers []string
+
 		retryBackoff   func(int) time.Duration
 		retries        int
 		requestTimeout int32
@@ -221,6 +225,12 @@ func WithClientID(id *string) OptClient {
 // uses a 10s timeout and no TLS.
 func WithDialFn(fn func(string) (net.Conn, error)) OptClient {
 	return clientOpt{func(cfg *clientCfg) { cfg.dialFn = fn }}
+}
+
+// WithSeedBrokers sets the seed brokers for the client to use, overriding the
+// default 127.0.0.1:9092.
+func WithSeedBrokers(seeds ...string) OptClient {
+	return clientOpt{func(cfg *clientCfg) { cfg.seedBrokers = append(cfg.seedBrokers[:0], seeds...) }}
 }
 
 // WithRetryBackoff sets the backoff strategy for how long to backoff for a
