@@ -30,10 +30,10 @@ MessageV0 => not top level
     // Key is an blob of data for a record.
     //
     // Key's are usually used for hashing the record to specific Kafka partitions.
-    Key: varint-bytes
+    Key: nullable-bytes
     // Value is  a blob of data. This field is the main "message" portion of a
     // record.
-    Value: varint-bytes
+    Value: nullable-bytes
 
 // MessageV0 is the message format Kafka used prior to 0.11.
 //
@@ -73,14 +73,15 @@ MessageV1 => not top level
     //
     // The remaining bits are unused and must be 0.
     Attributes: int8
+    // Timestamp is the millisecond timestamp of this message.
     Timestamp: int64
     // Key is an blob of data for a record.
     //
     // Key's are usually used for hashing the record to specific Kafka partitions.
-    Key: varint-bytes
+    Key: nullable-bytes
     // Value is  a blob of data. This field is the main "message" portion of a
     // record.
-    Value: varint-bytes
+    Value: nullable-bytes
 
 // Header is user provided metadata for a record. Kafka does not look at
 // headers at all; they are solely for producers and consumers.
@@ -201,8 +202,8 @@ RecordBatch => not top level
 
 // ProduceRequest issues records to be created to Kafka.
 //
-// Kafka 0.11.0.0 changed Records to be a completely new type, the RecordBatch.
-// Prior, the Records field contained a MessageSet.
+// Kafka 0.9.0 (v1) changed Records from MessageSet v0 to MessageSet v1.
+// Kafka 0.11.0 (v3) again changed Records to RecordBatch.
 //
 // Note that the special client ID "__admin_client" will allow you to produce
 // records to internal topics. This is generally recommended if you want to
@@ -336,7 +337,7 @@ ProduceResponse =>
   // after this request.
   // For Kafka < 2.0.0, the throttle is applied before issuing a response.
   // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
-  ThrottleTimeMs: int32
+  ThrottleTimeMs: int32 // v1+
 
 // FetchRequest is a long-poll request of records from Kafka.
 //

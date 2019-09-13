@@ -13,7 +13,7 @@ func (Varlong) TypeName() string               { return "int64" }
 func (String) TypeName() string                { return "string" }
 func (NullableString) TypeName() string        { return "*string" }
 func (Bytes) TypeName() string                 { return "[]byte" }
-func (NullableBytes) TypeName() string         { return "*[]byte" }
+func (NullableBytes) TypeName() string         { return "[]byte" }
 func (VarintString) TypeName() string          { return "string" }
 func (VarintBytes) TypeName() string           { return "[]byte" }
 func (a Array) TypeName() string               { return "[]" + a.Inner.TypeName() }
@@ -37,7 +37,7 @@ func (Varlong) WriteAppend(l *LineWriter)        { primAppend("Varlong", l) }
 func (String) WriteAppend(l *LineWriter)         { primAppend("String", l) }
 func (NullableString) WriteAppend(l *LineWriter) { primAppend("NullableString", l) }
 func (Bytes) WriteAppend(l *LineWriter)          { primAppend("Bytes", l) }
-func (NullableBytes) WriteAppend(l *LineWriter)  { primAppend("Bool", l) }
+func (NullableBytes) WriteAppend(l *LineWriter)  { primAppend("NullableBytes", l) }
 func (VarintString) WriteAppend(l *LineWriter)   { primAppend("VarintString", l) }
 func (VarintBytes) WriteAppend(l *LineWriter)    { primAppend("VarintBytes", l) }
 
@@ -103,7 +103,7 @@ func (Varlong) WriteDecode(l *LineWriter)        { primDecode("Varlong", l) }
 func (String) WriteDecode(l *LineWriter)         { primDecode("String", l) }
 func (NullableString) WriteDecode(l *LineWriter) { primDecode("NullableString", l) }
 func (Bytes) WriteDecode(l *LineWriter)          { primDecode("Bytes", l) }
-func (NullableBytes) WriteDecode(l *LineWriter)  { primDecode("Bool", l) }
+func (NullableBytes) WriteDecode(l *LineWriter)  { primDecode("NullableBytes", l) }
 func (VarintString) WriteDecode(l *LineWriter)   { primDecode("VarintString", l) }
 func (VarintBytes) WriteDecode(l *LineWriter)    { primDecode("VarintBytes", l) }
 

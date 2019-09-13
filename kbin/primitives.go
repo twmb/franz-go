@@ -285,11 +285,11 @@ func AppendBytes(dst, b []byte) []byte {
 	return append(dst, b...)
 }
 
-func AppendNullableBytes(dst []byte, b *[]byte) []byte {
+func AppendNullableBytes(dst []byte, b []byte) []byte {
 	if b == nil {
 		return AppendInt32(dst, -1)
 	}
-	return AppendBytes(dst, *b)
+	return AppendBytes(dst, b)
 }
 
 func AppendVarintString(dst []byte, s string) []byte {
@@ -439,13 +439,13 @@ func (b *Reader) Bytes() []byte {
 	return b.Span(int(l))
 }
 
-func (b *Reader) NullableBytes() *[]byte {
+func (b *Reader) NullableBytes() []byte {
 	l := b.Int32()
 	if l < 0 {
 		return nil
 	}
 	r := b.Span(int(l))
-	return &r
+	return r
 }
 
 func (b *Reader) ArrayLen() int32 {

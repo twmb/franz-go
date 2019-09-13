@@ -80,11 +80,11 @@ func (v *MessageV0) AppendTo(dst []byte) []byte {
 		}
 		{
 			v := v.Key
-			dst = kbin.AppendVarintBytes(dst, v)
+			dst = kbin.AppendNullableBytes(dst, v)
 		}
 		{
 			v := v.Value
-			dst = kbin.AppendVarintBytes(dst, v)
+			dst = kbin.AppendNullableBytes(dst, v)
 		}
 	}
 	return dst
@@ -118,11 +118,11 @@ func (v *MessageV0) ReadFrom(src []byte) error {
 					s.Attributes = v
 				}
 				{
-					v := b.VarintBytes()
+					v := b.NullableBytes()
 					s.Key = v
 				}
 				{
-					v := b.VarintBytes()
+					v := b.NullableBytes()
 					s.Value = v
 				}
 			}
@@ -154,6 +154,7 @@ type MessageV1Message struct {
 	// The remaining bits are unused and must be 0.
 	Attributes int8
 
+	// Timestamp is the millisecond timestamp of this message.
 	Timestamp int64
 
 	// Key is an blob of data for a record.
@@ -218,11 +219,11 @@ func (v *MessageV1) AppendTo(dst []byte) []byte {
 		}
 		{
 			v := v.Key
-			dst = kbin.AppendVarintBytes(dst, v)
+			dst = kbin.AppendNullableBytes(dst, v)
 		}
 		{
 			v := v.Value
-			dst = kbin.AppendVarintBytes(dst, v)
+			dst = kbin.AppendNullableBytes(dst, v)
 		}
 	}
 	return dst
@@ -260,11 +261,11 @@ func (v *MessageV1) ReadFrom(src []byte) error {
 					s.Timestamp = v
 				}
 				{
-					v := b.VarintBytes()
+					v := b.NullableBytes()
 					s.Key = v
 				}
 				{
-					v := b.VarintBytes()
+					v := b.NullableBytes()
 					s.Value = v
 				}
 			}
@@ -679,8 +680,8 @@ type ProduceRequestTopicData struct {
 
 // ProduceRequest issues records to be created to Kafka.
 //
-// Kafka 0.11.0.0 changed Records to be a completely new type, the RecordBatch.
-// Prior, the Records field contained a MessageSet.
+// Kafka 0.9.0 (v1) changed Records from MessageSet v0 to MessageSet v1.
+// Kafka 0.11.0 (v3) again changed Records to RecordBatch.
 //
 // Note that the special client ID "__admin_client" will allow you to produce
 // records to internal topics. This is generally recommended if you want to
@@ -874,7 +875,7 @@ type ProduceResponse struct {
 	// after this request.
 	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
 	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
-	ThrottleTimeMs int32
+	ThrottleTimeMs int32 // v1+
 }
 
 func (v *ProduceResponse) ReadFrom(src []byte) error {
@@ -933,7 +934,7 @@ func (v *ProduceResponse) ReadFrom(src []byte) error {
 			v = a
 			s.Responses = v
 		}
-		{
+		if version >= 1 {
 			v := b.Int32()
 			s.ThrottleTimeMs = v
 		}
