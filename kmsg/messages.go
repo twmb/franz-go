@@ -750,7 +750,7 @@ func (v *ProduceRequest) AppendTo(dst []byte) []byte {
 					}
 					{
 						v := v.Records
-						dst = kbin.AppendBytes(dst, v)
+						dst = kbin.AppendNullableBytes(dst, v)
 					}
 				}
 			}
@@ -1337,7 +1337,11 @@ func (v *FetchResponse) ReadFrom(src []byte) error {
 								if version >= 4 {
 									v := s.AbortedTransactions
 									a := v
-									for i := b.ArrayLen(); i > 0; i-- {
+									i := b.ArrayLen()
+									if version < 0 || i == 0 {
+										a = []FetchResponseResponsePartitionResponseAbortedTransaction{}
+									}
+									for ; i > 0; i-- {
 										a = append(a, FetchResponseResponsePartitionResponseAbortedTransaction{})
 										v := &a[len(a)-1]
 										{
@@ -1360,7 +1364,7 @@ func (v *FetchResponse) ReadFrom(src []byte) error {
 									s.PreferredReadReplica = v
 								}
 								{
-									v := b.Bytes()
+									v := b.NullableBytes()
 									s.RecordBatches = v
 								}
 							}
@@ -1660,8 +1664,8 @@ type MetadataRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
-	// Topics is a list of topics to return metadata about. If this is null,
-	// all topics are included. If this is empty, no topics are.
+	// Topics is a list of topics to return metadata about. If this is null
+	// in v1+, all topics are included. If this is empty, no topics are.
 	// For v0 (<Kafka 0.10.0.0), if this is empty, all topics are included.
 	Topics []string
 
@@ -1692,7 +1696,11 @@ func (v *MetadataRequest) AppendTo(dst []byte) []byte {
 	_ = version
 	{
 		v := v.Topics
-		dst = kbin.AppendNullableArrayLen(dst, len(v), v == nil)
+		if version > 1 {
+			dst = kbin.AppendNullableArrayLen(dst, len(v), v == nil)
+		} else {
+			dst = kbin.AppendArrayLen(dst, len(v))
+		}
 		for i := range v {
 			v := v[i]
 			dst = kbin.AppendString(dst, v)
@@ -2858,7 +2866,7 @@ type OffsetCommitRequest struct {
 	MemberID string // v1+
 
 	// GroupInstanceID is the instance ID of this member in the group (KIP-345).
-	GroupInstanceID string // v7+
+	GroupInstanceID *string // v7+
 
 	// RetentionTime is how long this commit will persist in Kafka.
 	//
@@ -2906,7 +2914,7 @@ func (v *OffsetCommitRequest) AppendTo(dst []byte) []byte {
 	}
 	if version >= 7 {
 		v := v.GroupInstanceID
-		dst = kbin.AppendString(dst, v)
+		dst = kbin.AppendNullableString(dst, v)
 	}
 	if version >= 2 && version <= 4 {
 		v := v.RetentionTime
@@ -3111,7 +3119,11 @@ func (v *OffsetFetchRequest) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Topics
-		dst = kbin.AppendNullableArrayLen(dst, len(v), v == nil)
+		if version > 2 {
+			dst = kbin.AppendNullableArrayLen(dst, len(v), v == nil)
+		} else {
+			dst = kbin.AppendArrayLen(dst, len(v))
+		}
 		for i := range v {
 			v := &v[i]
 			{
@@ -3779,7 +3791,7 @@ type JoinGroupRequest struct {
 
 	// GroupInstanceID is a user configured ID that is used for making a group
 	// member "static", allowing many rebalances to be avoided.
-	GroupInstanceID string // v5+
+	GroupInstanceID *string // v5+
 
 	// ProtocolType is the "type" of protocol being used for the join group.
 	// The initial group creation sets the type; all additional members must
@@ -3824,7 +3836,7 @@ func (v *JoinGroupRequest) AppendTo(dst []byte) []byte {
 	}
 	if version >= 5 {
 		v := v.GroupInstanceID
-		dst = kbin.AppendString(dst, v)
+		dst = kbin.AppendNullableString(dst, v)
 	}
 	{
 		v := v.ProtocolType
@@ -3853,7 +3865,7 @@ type JoinGroupResponseMember struct {
 	MemberID string
 
 	// GroupInstanceID is an instance ID of a member in this group (KIP-345).
-	GroupInstanceID string // v5+
+	GroupInstanceID *string // v5+
 
 	// MemberMetadata is the metadata for this member.
 	MemberMetadata []byte
@@ -3972,7 +3984,7 @@ func (v *JoinGroupResponse) ReadFrom(src []byte) error {
 						s.MemberID = v
 					}
 					if version >= 5 {
-						v := b.String()
+						v := b.NullableString()
 						s.GroupInstanceID = v
 					}
 					{
@@ -4004,7 +4016,7 @@ type HeartbeatRequest struct {
 	MemberID string
 
 	// GroupInstanceID is the instance ID of this member in the group (KIP-345).
-	GroupInstanceID string // v3+
+	GroupInstanceID *string // v3+
 }
 
 func (*HeartbeatRequest) Key() int16                   { return 12 }
@@ -4032,7 +4044,7 @@ func (v *HeartbeatRequest) AppendTo(dst []byte) []byte {
 	}
 	if version >= 3 {
 		v := v.GroupInstanceID
-		dst = kbin.AppendString(dst, v)
+		dst = kbin.AppendNullableString(dst, v)
 	}
 	return dst
 }
@@ -4088,10 +4100,10 @@ func (v *HeartbeatResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
-type LeaveGroupRequestMemberIdentitie struct {
+type LeaveGroupRequestMember struct {
 	MemberID string
 
-	GroupInstanceID string
+	GroupInstanceID *string
 }
 
 // LeaveGroupRequest issues a request for a group member to leave the group,
@@ -4109,9 +4121,8 @@ type LeaveGroupRequest struct {
 	// MemberID is the member that is leaving.
 	MemberID string
 
-	// MemberIdentities are member and group instance IDs to cause to leave
-	// a group.
-	MemberIdentities []LeaveGroupRequestMemberIdentitie // v3+
+	// Members are member and group instance IDs to cause to leave a group.
+	Members []LeaveGroupRequestMember // v3+
 }
 
 func (*LeaveGroupRequest) Key() int16                   { return 13 }
@@ -4134,7 +4145,7 @@ func (v *LeaveGroupRequest) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendString(dst, v)
 	}
 	if version >= 3 {
-		v := v.MemberIdentities
+		v := v.Members
 		dst = kbin.AppendArrayLen(dst, len(v))
 		for i := range v {
 			v := &v[i]
@@ -4144,11 +4155,20 @@ func (v *LeaveGroupRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.GroupInstanceID
-				dst = kbin.AppendString(dst, v)
+				dst = kbin.AppendNullableString(dst, v)
 			}
 		}
 	}
 	return dst
+}
+
+type LeaveGroupResponseMember struct {
+	MemberID string
+
+	GroupInstanceID *string
+
+	// An individual member's leave error code.
+	ErrorCode int16
 }
 
 // LeaveGroupResponse is returned from a LeaveGroupRequest.
@@ -4180,6 +4200,9 @@ type LeaveGroupResponse struct {
 	// UNKNOWN_MEMBER_ID is returned if the member ID is not a part of the group,
 	// or if the group is empty or dead.
 	ErrorCode int16
+
+	// Members are the list of members and group instance IDs that left the group.
+	Members []LeaveGroupResponseMember // v3+
 }
 
 func (v *LeaveGroupResponse) ReadFrom(src []byte) error {
@@ -4195,6 +4218,31 @@ func (v *LeaveGroupResponse) ReadFrom(src []byte) error {
 		{
 			v := b.Int16()
 			s.ErrorCode = v
+		}
+		if version >= 3 {
+			v := s.Members
+			a := v
+			for i := b.ArrayLen(); i > 0; i-- {
+				a = append(a, LeaveGroupResponseMember{})
+				v := &a[len(a)-1]
+				{
+					s := v
+					{
+						v := b.String()
+						s.MemberID = v
+					}
+					{
+						v := b.NullableString()
+						s.GroupInstanceID = v
+					}
+					{
+						v := b.Int16()
+						s.ErrorCode = v
+					}
+				}
+			}
+			v = a
+			s.Members = v
 		}
 	}
 	return b.Complete()
@@ -4228,7 +4276,7 @@ type SyncGroupRequest struct {
 	MemberID string
 
 	// GroupInstanceID is the instance ID of this member in the group (KIP-345).
-	GroupInstanceID string // v3+
+	GroupInstanceID *string // v3+
 
 	// GroupAssignment, sent only from the group leader, is the topic partition
 	// assignment it has decided on for all members.
@@ -4260,7 +4308,7 @@ func (v *SyncGroupRequest) AppendTo(dst []byte) []byte {
 	}
 	if version >= 3 {
 		v := v.GroupInstanceID
-		dst = kbin.AppendString(dst, v)
+		dst = kbin.AppendNullableString(dst, v)
 	}
 	{
 		v := v.GroupAssignment
@@ -4389,7 +4437,7 @@ type DescribeGroupsResponseGroupMember struct {
 	MemberID string
 
 	// GroupInstanceID is the instance ID of this member in the group (KIP-345).
-	GroupInstanceID string // v4+
+	GroupInstanceID *string // v4+
 
 	// ClientID is the client ID used by this member.
 	ClientID string
@@ -4511,7 +4559,7 @@ func (v *DescribeGroupsResponse) ReadFrom(src []byte) error {
 									s.MemberID = v
 								}
 								if version >= 4 {
-									v := b.String()
+									v := b.NullableString()
 									s.GroupInstanceID = v
 								}
 								{
@@ -7375,7 +7423,7 @@ type DescribeLogDirsRequest struct {
 	Version int16
 
 	// Topics is an array of topics to describe the log dirs of. If this is
-	// empty, the response includes all topics and all of their partitions.
+	// null, the response includes all topics and all of their partitions.
 	Topics []DescribeLogDirsRequestTopic
 }
 
@@ -7695,7 +7743,7 @@ func (v *CreatePartitionsRequest) AppendTo(dst []byte) []byte {
 				}
 				{
 					v := v.Assignment
-					dst = kbin.AppendArrayLen(dst, len(v))
+					dst = kbin.AppendNullableArrayLen(dst, len(v), v == nil)
 					for i := range v {
 						v := v[i]
 						dst = kbin.AppendArrayLen(dst, len(v))
@@ -8075,6 +8123,7 @@ type DescribeDelegationTokenRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
+	// Owners contains owners to describe delegation tokens for, or null for all.
 	Owners []DescribeDelegationTokenRequestOwner
 }
 
@@ -8093,7 +8142,7 @@ func (v *DescribeDelegationTokenRequest) AppendTo(dst []byte) []byte {
 	_ = version
 	{
 		v := v.Owners
-		dst = kbin.AppendArrayLen(dst, len(v))
+		dst = kbin.AppendNullableArrayLen(dst, len(v), v == nil)
 		for i := range v {
 			v := &v[i]
 			{
@@ -8343,7 +8392,7 @@ type ElectPreferredLeadersRequestTopicPartition struct {
 	Topic string
 
 	// Partitions is an array of partitions in a topic to trigger leader
-	// elections for. If null, this triggers elections for all partitions.
+	// elections for.
 	Partitions []int32
 }
 
@@ -8361,7 +8410,7 @@ type ElectPreferredLeadersRequest struct {
 	ElectionType int8 // v1+
 
 	// TopicPartitions is an array of topics and corresponding partitions to
-	// trigger leader elections for.
+	// trigger leader elections for, or null for all.
 	TopicPartitions []ElectPreferredLeadersRequestTopicPartition
 
 	// TimeoutMs is how long to wait for the response. This limits how long to
@@ -8388,7 +8437,7 @@ func (v *ElectPreferredLeadersRequest) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.TopicPartitions
-		dst = kbin.AppendArrayLen(dst, len(v))
+		dst = kbin.AppendNullableArrayLen(dst, len(v), v == nil)
 		for i := range v {
 			v := &v[i]
 			{
@@ -8397,7 +8446,7 @@ func (v *ElectPreferredLeadersRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Partitions
-				dst = kbin.AppendNullableArrayLen(dst, len(v), v == nil)
+				dst = kbin.AppendArrayLen(dst, len(v))
 				for i := range v {
 					v := v[i]
 					dst = kbin.AppendInt32(dst, v)
@@ -8938,7 +8987,8 @@ type ListPartitionReassignmentsRequest struct {
 	// TimeoutMs is how long to wait for the response.
 	TimeoutMs int32
 
-	// Topics are topics to list in progress partition reassignments of.
+	// Topics are topics to list in progress partition reassignments of, or null
+	// to list everything.
 	Topics []ListPartitionReassignmentsRequestTopic
 }
 
@@ -8961,7 +9011,7 @@ func (v *ListPartitionReassignmentsRequest) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Topics
-		dst = kbin.AppendArrayLen(dst, len(v))
+		dst = kbin.AppendNullableArrayLen(dst, len(v), v == nil)
 		for i := range v {
 			v := &v[i]
 			{
