@@ -300,7 +300,7 @@ start:
 		return nil, err
 	}
 
-	coordinator = resp.Coordinator.NodeID
+	coordinator = resp.NodeID
 	c.coordinators[key] = coordinator
 	c.coordinatorsMu.Unlock()
 

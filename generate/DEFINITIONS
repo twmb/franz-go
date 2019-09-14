@@ -11,29 +11,27 @@ MessageV0 => not top level
   Offset: int64
   // MessageSize is the size of everything that follows in this message.
   MessageSize: int32
-  // Message is a Kafka message.
-  Message: =>
-    // CRC is the crc of everything that follows this field (NOT using the
-    // Castagnoli polynomial, as is the case in the 0.11+ RecordBatch).
-    CRC: int32
-    // Magic is 0.
-    Magic: int8
-    // Attributes describe the attributes of this message.
-    //
-    // Bits 0 thru 2 correspond to compression:
-    //   - 00 is no compression
-    //   - 01 is gzip compression
-    //   - 10 is snappy compression
-    //
-    // The remaining bits are unused and must be 0.
-    Attributes: int8
-    // Key is an blob of data for a record.
-    //
-    // Key's are usually used for hashing the record to specific Kafka partitions.
-    Key: nullable-bytes
-    // Value is  a blob of data. This field is the main "message" portion of a
-    // record.
-    Value: nullable-bytes
+  // CRC is the crc of everything that follows this field (NOT using the
+  // Castagnoli polynomial, as is the case in the 0.11+ RecordBatch).
+  CRC: int32
+  // Magic is 0.
+  Magic: int8
+  // Attributes describe the attributes of this message.
+  //
+  // Bits 0 thru 2 correspond to compression:
+  //   - 00 is no compression
+  //   - 01 is gzip compression
+  //   - 10 is snappy compression
+  //
+  // The remaining bits are unused and must be 0.
+  Attributes: int8
+  // Key is an blob of data for a record.
+  //
+  // Key's are usually used for hashing the record to specific Kafka partitions.
+  Key: nullable-bytes
+  // Value is  a blob of data. This field is the main "message" portion of a
+  // record.
+  Value: nullable-bytes
 
 // MessageV0 is the message format Kafka used prior to 0.11.
 //
@@ -52,36 +50,34 @@ MessageV1 => not top level
   Offset: int64
   // MessageSize is the size of everything that follows in this message.
   MessageSize: int32
-  // Message is a Kafka message.
-  Message: =>
-    // CRC is the crc of everything that follows this field (NOT using the
-    // Castagnoli polynomial, as is the case in the 0.11+ RecordBatch).
-    CRC: int32
-    // Magic is 1.
-    Magic: int8
-    // Attributes describe the attributes of this message.
-    //
-    // Bits 0 thru 2 correspond to compression:
-    //   - 00 is no compression
-    //   - 01 is gzip compression
-    //   - 10 is snappy compression
-    //
-    // Bit 3 is the timestamp type, with 0 meaning CreateTime corresponding
-    // to the timestamp being from the producer, and 1 meaning LogAppendTime
-    // corresponding to the timestamp being from the broker.
-    // Setting this to LogAppendTime will cause batches to be rejected.
-    //
-    // The remaining bits are unused and must be 0.
-    Attributes: int8
-    // Timestamp is the millisecond timestamp of this message.
-    Timestamp: int64
-    // Key is an blob of data for a record.
-    //
-    // Key's are usually used for hashing the record to specific Kafka partitions.
-    Key: nullable-bytes
-    // Value is  a blob of data. This field is the main "message" portion of a
-    // record.
-    Value: nullable-bytes
+  // CRC is the crc of everything that follows this field (NOT using the
+  // Castagnoli polynomial, as is the case in the 0.11+ RecordBatch).
+  CRC: int32
+  // Magic is 1.
+  Magic: int8
+  // Attributes describe the attributes of this message.
+  //
+  // Bits 0 thru 2 correspond to compression:
+  //   - 00 is no compression
+  //   - 01 is gzip compression
+  //   - 10 is snappy compression
+  //
+  // Bit 3 is the timestamp type, with 0 meaning CreateTime corresponding
+  // to the timestamp being from the producer, and 1 meaning LogAppendTime
+  // corresponding to the timestamp being from the broker.
+  // Setting this to LogAppendTime will cause batches to be rejected.
+  //
+  // The remaining bits are unused and must be 0.
+  Attributes: int8
+  // Timestamp is the millisecond timestamp of this message.
+  Timestamp: int64
+  // Key is an blob of data for a record.
+  //
+  // Key's are usually used for hashing the record to specific Kafka partitions.
+  Key: nullable-bytes
+  // Value is  a blob of data. This field is the main "message" portion of a
+  // record.
+  Value: nullable-bytes
 
 // Header is user provided metadata for a record. Kafka does not look at
 // headers at all; they are solely for producers and consumers.
@@ -1087,15 +1083,12 @@ FindCoordinatorResponse =>
   ErrorCode: int16
   // ErrorMessage is an informative message if the request errored.
   ErrorMessage: nullable-string // v1+
-  // Coordinator is the coordinator for the requested ID if the request did
-  // not error.
-  Coordinator: =>
-    // NodeID is the broker ID of the coordinator.
-    NodeID: int32
-    // Host is the host of the coordinator.
-    Host: string
-    // Port is the port of the coordinator.
-    Port: int32
+  // NodeID is the broker ID of the coordinator.
+  NodeID: int32
+  // Host is the host of the coordinator.
+  Host: string
+  // Port is the port of the coordinator.
+  Port: int32
 
 // StickyMemberMetadataV0 is version 0 of what was encoded in UserData for
 // GroupMemberMetadata in group join requests.
@@ -2273,25 +2266,21 @@ CreatePartitionsRequest => key 37, max version 1, admin
   TopicPartitions: [=>]
     // Topic is a topic for which to create additional partitions for.
     Topic: string
-    // NewPartitions contains the total number of partitions a topic must
-    // have after this request, and the assignment of which brokers should
-    // own new partitions and replicas.
-    NewPartitions: =>
-      // Count is the final count of partitions this topic must have. This
-      // must be greater than the current number of partitions.
-      Count: int32
-      // Assignment is a two-level array, the first corresponding to new
-      // partitions, the second contining broker IDs for where new partition
-      // replicas should live.
-      //
-      // The second level, the replicas, cannot have duplicate broker IDs
-      // (i.e. you cannot replicate a single partition twice on the same
-      // broker). Additionally, the number of replicas must match the current
-      // number of replicas per partition on the topic.
-      //
-      // The first level's length must be equal to the delta of Count and
-      // the current number of partitions.
-      Assignment: nullable[[int32]]
+    // Count is the final count of partitions this topic must have after this
+    // request. This must be greater than the current number of partitions.
+    Count: int32
+    // Assignment is a two-level array, the first corresponding to new
+    // partitions, the second contining broker IDs for where new partition
+    // replicas should live.
+    //
+    // The second level, the replicas, cannot have duplicate broker IDs
+    // (i.e. you cannot replicate a single partition twice on the same
+    // broker). Additionally, the number of replicas must match the current
+    // number of replicas per partition on the topic.
+    //
+    // The first level's length must be equal to the delta of Count and
+    // the current number of partitions.
+    Assignment: nullable[[int32]]
   // Timeout is how long to allow for this request.
   Timeout: int32
   // ValidateOnly is makes this request a dry-run; everything is validated but
@@ -2345,9 +2334,8 @@ CreateDelegationTokenRequest => key 38, max version 1, admin
 
 CreateDelegationTokenResponse =>
   ErrorCode: int16
-  Owner: =>
-    PrincipalType: string
-    Name: string
+  PrincipalType: string
+  OwnerName: string
   IssueTimestamp: int64
   ExpiryTimestamp: int64
   MaxTimestamp: int64
@@ -2382,9 +2370,8 @@ DescribeDelegationTokenRequest => key 41, max version 1, admin
 DescribeDelegationTokenResponse =>
   ErrorCode: int16
   TokenDetails: [=>]
-    Owner: =>
-      PrincipalType: string
-      Name: string
+    PrincipalType: string
+    OwnerName: string
     IssueTimestamp: int64
     ExpiryTimestamp: int64
     MaxTimestamp: int64

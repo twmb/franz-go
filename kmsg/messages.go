@@ -8,7 +8,21 @@ import "github.com/twmb/kgo/kbin"
 // Note that this value will change as Kafka adds more messages.
 const MaxKey = 46
 
-type MessageV0Message struct {
+// MessageV0 is the message format Kafka used prior to 0.10.
+//
+// To produce or fetch messages, Kafka would write many messages contiguously
+// as an array without specifying the array length.
+type MessageV0 struct {
+	// Offset is the offset of this record.
+	//
+	// If this is the outer message of a recursive message set (i.e. a
+	// message set has been compressed and this is the outer message),
+	// then the offset should be the offset of the last inner value.
+	Offset int64
+
+	// MessageSize is the size of everything that follows in this message.
+	MessageSize int32
+
 	// CRC is the crc of everything that follows this field (NOT using the
 	// Castagnoli polynomial, as is the case in the 0.11+ RecordBatch).
 	CRC int32
@@ -36,25 +50,6 @@ type MessageV0Message struct {
 	Value []byte
 }
 
-// MessageV0 is the message format Kafka used prior to 0.10.
-//
-// To produce or fetch messages, Kafka would write many messages contiguously
-// as an array without specifying the array length.
-type MessageV0 struct {
-	// Offset is the offset of this record.
-	//
-	// If this is the outer message of a recursive message set (i.e. a
-	// message set has been compressed and this is the outer message),
-	// then the offset should be the offset of the last inner value.
-	Offset int64
-
-	// MessageSize is the size of everything that follows in this message.
-	MessageSize int32
-
-	// Message is a Kafka message.
-	Message MessageV0Message
-}
-
 func (v *MessageV0) AppendTo(dst []byte) []byte {
 	{
 		v := v.Offset
@@ -65,27 +60,24 @@ func (v *MessageV0) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendInt32(dst, v)
 	}
 	{
-		v := &v.Message
-		{
-			v := v.CRC
-			dst = kbin.AppendInt32(dst, v)
-		}
-		{
-			v := v.Magic
-			dst = kbin.AppendInt8(dst, v)
-		}
-		{
-			v := v.Attributes
-			dst = kbin.AppendInt8(dst, v)
-		}
-		{
-			v := v.Key
-			dst = kbin.AppendNullableBytes(dst, v)
-		}
-		{
-			v := v.Value
-			dst = kbin.AppendNullableBytes(dst, v)
-		}
+		v := v.CRC
+		dst = kbin.AppendInt32(dst, v)
+	}
+	{
+		v := v.Magic
+		dst = kbin.AppendInt8(dst, v)
+	}
+	{
+		v := v.Attributes
+		dst = kbin.AppendInt8(dst, v)
+	}
+	{
+		v := v.Key
+		dst = kbin.AppendNullableBytes(dst, v)
+	}
+	{
+		v := v.Value
+		dst = kbin.AppendNullableBytes(dst, v)
 	}
 	return dst
 }
@@ -102,36 +94,48 @@ func (v *MessageV0) ReadFrom(src []byte) error {
 			s.MessageSize = v
 		}
 		{
-			v := &s.Message
-			{
-				s := v
-				{
-					v := b.Int32()
-					s.CRC = v
-				}
-				{
-					v := b.Int8()
-					s.Magic = v
-				}
-				{
-					v := b.Int8()
-					s.Attributes = v
-				}
-				{
-					v := b.NullableBytes()
-					s.Key = v
-				}
-				{
-					v := b.NullableBytes()
-					s.Value = v
-				}
-			}
+			v := b.Int32()
+			s.CRC = v
+		}
+		{
+			v := b.Int8()
+			s.Magic = v
+		}
+		{
+			v := b.Int8()
+			s.Attributes = v
+		}
+		{
+			v := b.NullableBytes()
+			s.Key = v
+		}
+		{
+			v := b.NullableBytes()
+			s.Value = v
 		}
 	}
 	return b.Complete()
 }
 
-type MessageV1Message struct {
+// MessageV0 is the message format Kafka used prior to 0.11.
+//
+// To produce or fetch messages, Kafka would write many messages contiguously
+// as an array without specifying the array length.
+//
+// To support compression, an entire message set would be compressed and used
+// as the Value in another message set (thus being "recursive"). The key for
+// this outer message set must be null.
+type MessageV1 struct {
+	// Offset is the offset of this record.
+	//
+	// Different from v0, if this message set is a recursive message set
+	// (that is, compressed and inside another message set), the offset
+	// on the inner set is relative to the offset of the outer set.
+	Offset int64
+
+	// MessageSize is the size of everything that follows in this message.
+	MessageSize int32
+
 	// CRC is the crc of everything that follows this field (NOT using the
 	// Castagnoli polynomial, as is the case in the 0.11+ RecordBatch).
 	CRC int32
@@ -167,29 +171,6 @@ type MessageV1Message struct {
 	Value []byte
 }
 
-// MessageV0 is the message format Kafka used prior to 0.11.
-//
-// To produce or fetch messages, Kafka would write many messages contiguously
-// as an array without specifying the array length.
-//
-// To support compression, an entire message set would be compressed and used
-// as the Value in another message set (thus being "recursive"). The key for
-// this outer message set must be null.
-type MessageV1 struct {
-	// Offset is the offset of this record.
-	//
-	// Different from v0, if this message set is a recursive message set
-	// (that is, compressed and inside another message set), the offset
-	// on the inner set is relative to the offset of the outer set.
-	Offset int64
-
-	// MessageSize is the size of everything that follows in this message.
-	MessageSize int32
-
-	// Message is a Kafka message.
-	Message MessageV1Message
-}
-
 func (v *MessageV1) AppendTo(dst []byte) []byte {
 	{
 		v := v.Offset
@@ -200,31 +181,28 @@ func (v *MessageV1) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendInt32(dst, v)
 	}
 	{
-		v := &v.Message
-		{
-			v := v.CRC
-			dst = kbin.AppendInt32(dst, v)
-		}
-		{
-			v := v.Magic
-			dst = kbin.AppendInt8(dst, v)
-		}
-		{
-			v := v.Attributes
-			dst = kbin.AppendInt8(dst, v)
-		}
-		{
-			v := v.Timestamp
-			dst = kbin.AppendInt64(dst, v)
-		}
-		{
-			v := v.Key
-			dst = kbin.AppendNullableBytes(dst, v)
-		}
-		{
-			v := v.Value
-			dst = kbin.AppendNullableBytes(dst, v)
-		}
+		v := v.CRC
+		dst = kbin.AppendInt32(dst, v)
+	}
+	{
+		v := v.Magic
+		dst = kbin.AppendInt8(dst, v)
+	}
+	{
+		v := v.Attributes
+		dst = kbin.AppendInt8(dst, v)
+	}
+	{
+		v := v.Timestamp
+		dst = kbin.AppendInt64(dst, v)
+	}
+	{
+		v := v.Key
+		dst = kbin.AppendNullableBytes(dst, v)
+	}
+	{
+		v := v.Value
+		dst = kbin.AppendNullableBytes(dst, v)
 	}
 	return dst
 }
@@ -241,34 +219,28 @@ func (v *MessageV1) ReadFrom(src []byte) error {
 			s.MessageSize = v
 		}
 		{
-			v := &s.Message
-			{
-				s := v
-				{
-					v := b.Int32()
-					s.CRC = v
-				}
-				{
-					v := b.Int8()
-					s.Magic = v
-				}
-				{
-					v := b.Int8()
-					s.Attributes = v
-				}
-				{
-					v := b.Int64()
-					s.Timestamp = v
-				}
-				{
-					v := b.NullableBytes()
-					s.Key = v
-				}
-				{
-					v := b.NullableBytes()
-					s.Value = v
-				}
-			}
+			v := b.Int32()
+			s.CRC = v
+		}
+		{
+			v := b.Int8()
+			s.Magic = v
+		}
+		{
+			v := b.Int8()
+			s.Attributes = v
+		}
+		{
+			v := b.Int64()
+			s.Timestamp = v
+		}
+		{
+			v := b.NullableBytes()
+			s.Key = v
+		}
+		{
+			v := b.NullableBytes()
+			s.Value = v
 		}
 	}
 	return b.Complete()
@@ -3323,17 +3295,6 @@ func (v *FindCoordinatorRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 
-type FindCoordinatorResponseCoordinator struct {
-	// NodeID is the broker ID of the coordinator.
-	NodeID int32
-
-	// Host is the host of the coordinator.
-	Host string
-
-	// Port is the port of the coordinator.
-	Port int32
-}
-
 // FindCoordinatorResponse is returned from a FindCoordinatorRequest.
 type FindCoordinatorResponse struct {
 	// Version is the version of this message used with a Kafka broker.
@@ -3363,9 +3324,14 @@ type FindCoordinatorResponse struct {
 	// ErrorMessage is an informative message if the request errored.
 	ErrorMessage *string // v1+
 
-	// Coordinator is the coordinator for the requested ID if the request did
-	// not error.
-	Coordinator FindCoordinatorResponseCoordinator
+	// NodeID is the broker ID of the coordinator.
+	NodeID int32
+
+	// Host is the host of the coordinator.
+	Host string
+
+	// Port is the port of the coordinator.
+	Port int32
 }
 
 func (v *FindCoordinatorResponse) ReadFrom(src []byte) error {
@@ -3387,22 +3353,16 @@ func (v *FindCoordinatorResponse) ReadFrom(src []byte) error {
 			s.ErrorMessage = v
 		}
 		{
-			v := &s.Coordinator
-			{
-				s := v
-				{
-					v := b.Int32()
-					s.NodeID = v
-				}
-				{
-					v := b.String()
-					s.Host = v
-				}
-				{
-					v := b.Int32()
-					s.Port = v
-				}
-			}
+			v := b.Int32()
+			s.NodeID = v
+		}
+		{
+			v := b.String()
+			s.Host = v
+		}
+		{
+			v := b.Int32()
+			s.Port = v
 		}
 	}
 	return b.Complete()
@@ -7669,9 +7629,12 @@ func (v *SASLAuthenticateResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
-type CreatePartitionsRequestTopicPartitionNewPartitions struct {
-	// Count is the final count of partitions this topic must have. This
-	// must be greater than the current number of partitions.
+type CreatePartitionsRequestTopicPartition struct {
+	// Topic is a topic for which to create additional partitions for.
+	Topic string
+
+	// Count is the final count of partitions this topic must have after this
+	// request. This must be greater than the current number of partitions.
 	Count int32
 
 	// Assignment is a two-level array, the first corresponding to new
@@ -7686,15 +7649,6 @@ type CreatePartitionsRequestTopicPartitionNewPartitions struct {
 	// The first level's length must be equal to the delta of Count and
 	// the current number of partitions.
 	Assignment [][]int32
-}
-type CreatePartitionsRequestTopicPartition struct {
-	// Topic is a topic for which to create additional partitions for.
-	Topic string
-
-	// NewPartitions contains the total number of partitions a topic must
-	// have after this request, and the assignment of which brokers should
-	// own new partitions and replicas.
-	NewPartitions CreatePartitionsRequestTopicPartitionNewPartitions
 }
 
 // CreatePartitionsRequest creates additional partitions for topics.
@@ -7736,21 +7690,18 @@ func (v *CreatePartitionsRequest) AppendTo(dst []byte) []byte {
 				dst = kbin.AppendString(dst, v)
 			}
 			{
-				v := &v.NewPartitions
-				{
-					v := v.Count
-					dst = kbin.AppendInt32(dst, v)
-				}
-				{
-					v := v.Assignment
-					dst = kbin.AppendNullableArrayLen(dst, len(v), v == nil)
+				v := v.Count
+				dst = kbin.AppendInt32(dst, v)
+			}
+			{
+				v := v.Assignment
+				dst = kbin.AppendNullableArrayLen(dst, len(v), v == nil)
+				for i := range v {
+					v := v[i]
+					dst = kbin.AppendArrayLen(dst, len(v))
 					for i := range v {
 						v := v[i]
-						dst = kbin.AppendArrayLen(dst, len(v))
-						for i := range v {
-							v := v[i]
-							dst = kbin.AppendInt32(dst, v)
-						}
+						dst = kbin.AppendInt32(dst, v)
 					}
 				}
 			}
@@ -7904,18 +7855,15 @@ func (v *CreateDelegationTokenRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 
-type CreateDelegationTokenResponseOwner struct {
-	PrincipalType string
-
-	Name string
-}
 type CreateDelegationTokenResponse struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
 	ErrorCode int16
 
-	Owner CreateDelegationTokenResponseOwner
+	PrincipalType string
+
+	OwnerName string
 
 	IssueTimestamp int64
 
@@ -7941,18 +7889,12 @@ func (v *CreateDelegationTokenResponse) ReadFrom(src []byte) error {
 			s.ErrorCode = v
 		}
 		{
-			v := &s.Owner
-			{
-				s := v
-				{
-					v := b.String()
-					s.PrincipalType = v
-				}
-				{
-					v := b.String()
-					s.Name = v
-				}
-			}
+			v := b.String()
+			s.PrincipalType = v
+		}
+		{
+			v := b.String()
+			s.OwnerName = v
 		}
 		{
 			v := b.Int64()
@@ -8158,18 +8100,15 @@ func (v *DescribeDelegationTokenRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 
-type DescribeDelegationTokenResponseTokenDetailOwner struct {
-	PrincipalType string
-
-	Name string
-}
 type DescribeDelegationTokenResponseTokenDetailRenewer struct {
 	PrincipalType string
 
 	Name string
 }
 type DescribeDelegationTokenResponseTokenDetail struct {
-	Owner DescribeDelegationTokenResponseTokenDetailOwner
+	PrincipalType string
+
+	OwnerName string
 
 	IssueTimestamp int64
 
@@ -8213,18 +8152,12 @@ func (v *DescribeDelegationTokenResponse) ReadFrom(src []byte) error {
 				{
 					s := v
 					{
-						v := &s.Owner
-						{
-							s := v
-							{
-								v := b.String()
-								s.PrincipalType = v
-							}
-							{
-								v := b.String()
-								s.Name = v
-							}
-						}
+						v := b.String()
+						s.PrincipalType = v
+					}
+					{
+						v := b.String()
+						s.OwnerName = v
 					}
 					{
 						v := b.Int64()
