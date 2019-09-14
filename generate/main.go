@@ -58,6 +58,7 @@ type (
 		Inner           Type
 		IsVarintArray   bool
 		IsNullableArray bool
+		NullableVersion int
 	}
 
 	StructField struct {

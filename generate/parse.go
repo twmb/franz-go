@@ -119,14 +119,31 @@ func (s *Struct) BuildFrom(scanner *LineScanner, level int) (done bool) {
 		isArray := false
 		isVarintArray := false
 		isNullableArray := false
+		nullableArrayVersion := 0
 		arrayLevel := strings.Count(typ, "[")
 		if arrayLevel > 0 {
 			if strings.HasPrefix(typ, "varint[") {
 				isVarintArray = true
 				typ = typ[len("varint"):]
-			} else if strings.HasPrefix(typ, "nullable[") {
+			} else if strings.HasPrefix(typ, "nullable") {
 				isNullableArray = true
 				typ = typ[len("nullable"):]
+				if strings.HasPrefix(typ, "-v") {
+					typ = typ[len("-v"):]
+					vend := strings.IndexByte(typ, '[')
+					if vend < 2 {
+						die("empty nullable array version number")
+					}
+					if typ[vend-1] != '+' {
+						die("max version number bound is unhandled in arrays")
+					}
+					var err error
+					nullableArrayVersion, err = strconv.Atoi(typ[:vend-1])
+					if err != nil {
+						die("improper nullable array version number %q: %v", typ[:vend-1], err)
+					}
+					typ = typ[vend:]
+				}
 			}
 			typ = typ[arrayLevel : len(typ)-arrayLevel]
 			isArray = true
@@ -177,6 +194,7 @@ func (s *Struct) BuildFrom(scanner *LineScanner, level int) (done bool) {
 				Inner:           f.Type,
 				IsVarintArray:   isVarintArray,
 				IsNullableArray: isNullableArray,
+				NullableVersion: nullableArrayVersion,
 			}
 		}
 

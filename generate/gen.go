@@ -49,7 +49,15 @@ func (a Array) WriteAppend(l *LineWriter) {
 	if a.IsVarintArray {
 		l.Write("dst = kbin.AppendVarint(dst, int32(len(v)))")
 	} else if a.IsNullableArray {
-		l.Write("dst = kbin.AppendNullableArrayLen(dst, len(v), v == nil)")
+		if a.NullableVersion > 0 {
+			l.Write("if version > %d {", a.NullableVersion)
+			l.Write("dst = kbin.AppendNullableArrayLen(dst, len(v), v == nil)")
+			l.Write("} else {")
+			l.Write("dst = kbin.AppendArrayLen(dst, len(v))")
+			l.Write("}")
+		} else {
+			l.Write("dst = kbin.AppendNullableArrayLen(dst, len(v), v == nil)")
+		}
 	} else {
 		l.Write("dst = kbin.AppendArrayLen(dst, len(v))")
 	}
@@ -118,6 +126,12 @@ func (a Array) WriteDecode(l *LineWriter) {
 	l.Write("a := v")
 	if a.IsVarintArray {
 		l.Write("for i := b.Varint(); i > 0; i-- {")
+	} else if a.IsNullableArray {
+		l.Write("i := b.ArrayLen()")
+		l.Write("if version < %d || i == 0 {", a.NullableVersion)
+		l.Write("a = %s{}", a.TypeName())
+		l.Write("}")
+		l.Write("for ; i > 0; i-- {")
 	} else {
 		l.Write("for i := b.ArrayLen(); i > 0; i-- {")
 	}
