@@ -246,7 +246,6 @@ func (b *broker) handleReqs() {
 			pr.promise(nil, ErrUnknownRequestKey)
 			continue
 		}
-		brokerMax := cxn.versions[req.Key()]
 		ourMax := req.MaxVersion()
 		if b.client.cfg.client.maxVersions != nil {
 			userMax := b.client.cfg.client.maxVersions[req.Key()]
@@ -254,9 +253,12 @@ func (b *broker) handleReqs() {
 				ourMax = userMax
 			}
 		}
-		version := brokerMax
-		if brokerMax > ourMax {
-			version = ourMax
+
+		// If brokerMax is negative, we have no api versions because
+		// the client is pinned pre 0.10.0 and we stick with our max.
+		version := ourMax
+		if brokerMax := cxn.versions[req.Key()]; brokerMax >= 0 && brokerMax < ourMax {
+			version = brokerMax
 		}
 		if version < req.MinVersion() {
 			pr.promise(nil, ErrBrokerTooOld)
