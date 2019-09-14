@@ -162,7 +162,7 @@ loop:
 		}
 		consecutiveErrors = 0
 
-		err = c.consumer.fetchOffsets()
+		//err = c.consumer.fetchOffsets()
 		// fetch offsets
 		// heartbeat
 	}
