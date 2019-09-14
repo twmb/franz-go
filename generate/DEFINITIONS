@@ -233,7 +233,7 @@ ProduceRequest => key 0, max version 7
       // For Kafka pre 0.11.0, the contents of the byte array is a serialized
       // message set. At or after 0.11.0, the contents of the byte array is a
       // serialized RecordBatch.
-      Records: bytes
+      Records: nullable-bytes
 
 // ProduceResponse is returned from a ProduceRequest.
 ProduceResponse =>
@@ -500,7 +500,7 @@ FetchResponse =>
       // AbortedTransactions is an array of aborted transactions within the
       // returned offset range. This is only returned if the requested
       // isolation level was READ_COMMITTED.
-      AbortedTransactions: [=>] // v4+
+      AbortedTransactions: nullable[=>] // v4+
         // ProducerID is the producer ID that caused this aborted transaction.
         ProducerID: int64
         // FirstOffset is the offset where this aborted transaction began.
@@ -520,7 +520,7 @@ FetchResponse =>
       //
       // Starting v4, this transitioned to the RecordBatch format (thus this
       // contains many RecordBatch structs).
-      RecordBatches: bytes
+      RecordBatches: nullable-bytes
 
 // ListOffsetsRequest requests partition offsets from Kafka for use in
 // consuming records.
@@ -641,10 +641,10 @@ ListOffsetsResponse =>
 
 // MetadataRequest requests metadata from Kafka.
 MetadataRequest => key 3, max version 8
-  // Topics is a list of topics to return metadata about. If this is null,
-  // all topics are included. If this is empty, no topics are.
+  // Topics is a list of topics to return metadata about. If this is null
+  // in v1+, all topics are included. If this is empty, no topics are.
   // For v0 (<Kafka 0.10.0.0), if this is empty, all topics are included.
-  Topics: nullable[string]
+  Topics: nullable-v1+[string]
   // AllowAutoTopicCreation, introduced in Kafka 0.11.0.0, allows topic
   // auto creation of the topics in this request if they do not exist.
   AllowAutoTopicCreation: bool // v4+
@@ -893,7 +893,7 @@ OffsetCommitRequest => key 8, max version 7, group coordinator
   // MemberID is the ID of the client issuing this request in the group.
   MemberID: string // v1+
   // GroupInstanceID is the instance ID of this member in the group (KIP-345).
-  GroupInstanceID: string // v7+
+  GroupInstanceID: nullable-string // v7+
   // RetentionTime is how long this commit will persist in Kafka.
   //
   // This was introduced in v2, replacing an individual topic/partition's
@@ -991,7 +991,7 @@ OffsetFetchRequest => key 9, max version 5, group coordinator
   GroupID: string
   // Topics contains topics to fetch offets for. Version 2+ allows this to be
   // null to return all topics the client is authorized to describe in the group.
-  Topics: nullable[=>]
+  Topics: nullable-v2+[=>]
     // Topic is a topic to fetch offsets for.
     Topic: string
     // Partitions in a list of partitions in a group to fetch offsets for.
@@ -1192,7 +1192,7 @@ JoinGroupRequest => key 11, max version 5, group coordinator
   MemberID: string
   // GroupInstanceID is a user configured ID that is used for making a group
   // member "static", allowing many rebalances to be avoided.
-  GroupInstanceID: string // v5+
+  GroupInstanceID: nullable-string // v5+
   // ProtocolType is the "type" of protocol being used for the join group.
   // The initial group creation sets the type; all additional members must
   // have the same type or they will be rejected.
@@ -1283,7 +1283,7 @@ JoinGroupResponse =>
     // MemberID is a member in this group.
     MemberID: string
     // GroupInstanceID is an instance ID of a member in this group (KIP-345).
-    GroupInstanceID: string // v5+
+    GroupInstanceID: nullable-string // v5+
     // MemberMetadata is the metadata for this member.
     MemberMetadata: bytes
 
@@ -1297,7 +1297,7 @@ HeartbeatRequest => key 12, max version 3, group coordinator
   // MemberID is the member ID this member is for.
   MemberID: string
   // GroupInstanceID is the instance ID of this member in the group (KIP-345).
-  GroupInstanceID: string // v3+
+  GroupInstanceID: nullable-string // v3+
 
 // HeartbeatResponse is returned from a HeartbeatRequest.
 HeartbeatResponse =>
@@ -1337,11 +1337,10 @@ LeaveGroupRequest => key 13, max version 3, group coordinator
   GroupID: string
   // MemberID is the member that is leaving.
   MemberID: string // v0-v2
-  // MemberIdentities are member and group instance IDs to cause to leave
-  // a group.
-  MemberIdentities: [=>] // v3+
+  // Members are member and group instance IDs to cause to leave a group.
+  Members: [=>] // v3+
     MemberID: string
-    GroupInstanceID: string
+    GroupInstanceID: nullable-string
 
 // LeaveGroupResponse is returned from a LeaveGroupRequest.
 LeaveGroupResponse =>
@@ -1368,6 +1367,12 @@ LeaveGroupResponse =>
   // UNKNOWN_MEMBER_ID is returned if the member ID is not a part of the group,
   // or if the group is empty or dead.
   ErrorCode: int16
+  // Members are the list of members and group instance IDs that left the group.
+  Members: [=>] // v3+
+    MemberID: string
+    GroupInstanceID: nullable-string
+    // An individual member's leave error code.
+    ErrorCode: int16
 
 // SyncGroupRequest is issued by all group members after they receive a a
 // response for JoinGroup. The group leader is responsible for sending member
@@ -1382,7 +1387,7 @@ SyncGroupRequest => key 14, max version 3, group coordinator
   // MemberID is the member ID this member is.
   MemberID: string
   // GroupInstanceID is the instance ID of this member in the group (KIP-345).
-  GroupInstanceID: string // v3+
+  GroupInstanceID: nullable-string // v3+
   // GroupAssignment, sent only from the group leader, is the topic partition
   // assignment it has decided on for all members.
   GroupAssignment: [=>]
@@ -1472,7 +1477,7 @@ DescribeGroupsResponse =>
       // MemberID is the member ID of a member in this group.
       MemberID: string
       // GroupInstanceID is the instance ID of this member in the group (KIP-345).
-      GroupInstanceID: string // v4+
+      GroupInstanceID: nullable-string // v4+
       // ClientID is the client ID used by this member.
       ClientID: string
       // ClientHost is the host this client is running on.
@@ -2203,7 +2208,7 @@ AlterReplicaLogDirsResponse =>
 // This request was added in support of KIP-113.
 DescribeLogDirsRequest => key 35, max version 1, admin
   // Topics is an array of topics to describe the log dirs of. If this is
-  // empty, the response includes all topics and all of their partitions.
+  // null, the response includes all topics and all of their partitions.
   Topics: nullable[=>]
     // Topic is a topic to describe the log dir of.
     Topic: string
@@ -2286,7 +2291,7 @@ CreatePartitionsRequest => key 37, max version 1, admin
       //
       // The first level's length must be equal to the delta of Count and
       // the current number of partitions.
-      Assignment: [[int32]]
+      Assignment: nullable[[int32]]
   // Timeout is how long to allow for this request.
   Timeout: int32
   // ValidateOnly is makes this request a dry-run; everything is validated but
@@ -2369,7 +2374,8 @@ ExpireDelegationTokenResponse =>
   ThrottleTimeMs: int32
 
 DescribeDelegationTokenRequest => key 41, max version 1, admin
-  Owners: [=>]
+  // Owners contains owners to describe delegation tokens for, or null for all.
+  Owners: nullable[=>]
     PrincipalType: string
     Name: string
 
@@ -2433,14 +2439,14 @@ ElectPreferredLeadersRequest => key 43, max version 1, admin
   // (i.e., unclean leader election).
   ElectionType: int8 // v1+
   // TopicPartitions is an array of topics and corresponding partitions to
-  // trigger leader elections for.
-  TopicPartitions: [=>]
+  // trigger leader elections for, or null for all.
+  TopicPartitions: nullable[=>]
     // Topic is a topic to trigger leader elections for (but only for the
     // partitions below).
     Topic: string
     // Partitions is an array of partitions in a topic to trigger leader
-    // elections for. If null, this triggers elections for all partitions.
-    Partitions: nullable[int32]
+    // elections for.
+    Partitions: [int32]
   // TimeoutMs is how long to wait for the response. This limits how long to
   // wait since responses are not sent until election results are complete.
   TimeoutMs: int32
@@ -2623,8 +2629,9 @@ AlterPartitionReassignmentsResponse =>
 ListPartitionReassignmentsRequest => key 46, max version 0, admin
   // TimeoutMs is how long to wait for the response.
   TimeoutMs: int32
-  // Topics are topics to list in progress partition reassignments of.
-  Topics: [=>]
+  // Topics are topics to list in progress partition reassignments of, or null
+  // to list everything.
+  Topics: nullable[=>]
     // Topic is a topic to list in progress partition reassingments of.
     Topic: string
     // Partitions are partitions to list in progress reassignments of.
