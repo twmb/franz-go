@@ -10,6 +10,9 @@ import (
 )
 
 // TODO introduce backoff below
+// TODO cleanup code at bottom
+// TODO fixup offset if message set / record batch decoding fails.
+//      If any batch fails, we set error, but we may have bumped offset.
 
 type recordSource struct {
 	broker *broker
@@ -201,6 +204,7 @@ func (source *recordSource) handleReqResp(req *fetchRequest, resp kmsg.Response,
 				consumption.processResponsePartition(
 					source,
 					topic,
+					r.Version,
 					responsePartition,
 				)
 
@@ -230,6 +234,7 @@ func (source *recordSource) handleReqResp(req *fetchRequest, resp kmsg.Response,
 func (c *consumption) processResponsePartition(
 	source *recordSource,
 	topic string,
+	version int16,
 	responsePartition *kmsg.FetchResponseResponsePartitionResponse,
 ) (
 	newFetchPartition FetchPartition,
@@ -243,30 +248,39 @@ func (c *consumption) processResponsePartition(
 		return FetchPartition{}, false, false
 	}
 
-	batches := kmsg.ReadFetchResponseBatches(responsePartition.RecordBatches)
-
-	var numPartitionRecords int
-	for i := range batches {
-		numPartitionRecords += int(batches[i].NumRecords)
-	}
-
 	newFetchPartition = FetchPartition{
 		Partition:        responsePartition.Partition,
 		Err:              kerr.ErrorForCode(responsePartition.ErrorCode),
 		HighWatermark:    responsePartition.HighWatermark,
 		LastStableOffset: responsePartition.LastStableOffset,
-		Records:          make([]*Record, 0, numPartitionRecords),
 	}
 
-	for i := range batches {
-		if newFetchPartition.Err != nil {
-			break
+	switch version {
+	case 0, 1:
+		messages := kmsg.ReadFetchResponseV0Messages(responsePartition.RecordBatches)
+		newFetchPartition.Records = make([]*Record, 0, len(messages))
+		c.processV0Messages(topic, &newFetchPartition, messages)
+	case 2, 3:
+		messages := kmsg.ReadFetchResponseV1Messages(responsePartition.RecordBatches)
+		newFetchPartition.Records = make([]*Record, 0, len(messages))
+		c.processV1Messages(topic, &newFetchPartition, messages)
+	default:
+		batches := kmsg.ReadFetchResponseBatches(responsePartition.RecordBatches)
+		var numPartitionRecords int
+		for i := range batches {
+			numPartitionRecords += int(batches[i].NumRecords)
 		}
-		c.processResponsePartitionBatch(
-			topic,
-			&newFetchPartition,
-			&batches[i],
-		)
+		newFetchPartition.Records = make([]*Record, 0, numPartitionRecords)
+		for i := range batches {
+			if newFetchPartition.Err != nil {
+				break
+			}
+			c.processResponsePartitionBatch(
+				topic,
+				&newFetchPartition,
+				&batches[i],
+			)
+		}
 	}
 
 	switch newFetchPartition.Err {
@@ -323,24 +337,127 @@ func (c *consumption) processResponsePartitionBatch(
 
 	for i := range krecords {
 		record := recordToRecord(topic, newFetchPartition.Partition, batch, &krecords[i])
-		if record.Offset < c.offset {
-			// We asked for offset 5, but that was in the middle of a
-			// batch; we got offsets 0 thru 4 that we need to skip.
-			continue
-		}
-		if record.Offset != c.offset {
-			// We asked for offset 5, then the client user reset the
-			// offset to something else while this was inflight.
-			// This response out of date.
-			continue
-		}
-		newFetchPartition.Records = append(newFetchPartition.Records, record)
-		c.offset++
+		c.maybeAddRecord(newFetchPartition, record)
 	}
 }
 
+func (c *consumption) processV1Messages(
+	topic string,
+	newFetchPartition *FetchPartition,
+	messages []kmsg.MessageV1,
+) {
+	for i := range messages {
+		message := &messages[i]
+		compression := byte(message.Attributes & 0x0003)
+		if compression == 0 {
+			c.processV1Message(topic, newFetchPartition, message)
+			continue
+		}
+
+		rawMessages, err := decompress(message.Value, compression)
+		if err != nil {
+			newFetchPartition.Err = fmt.Errorf("unable to decompress messages: %v", err)
+			return
+		}
+		innerMessages := kmsg.ReadFetchResponseV1Messages(rawMessages)
+		if len(innerMessages) == 0 {
+			return
+		}
+		firstOffset := message.Offset - int64(len(innerMessages)) + 1
+		for i := range innerMessages {
+			innerMessage := &innerMessages[i]
+			innerMessage.Offset = firstOffset + int64(i)
+			c.processV1Message(topic, newFetchPartition, innerMessage)
+		}
+	}
+}
+
+func (c *consumption) processV1Message(
+	topic string,
+	newFetchPartition *FetchPartition,
+	message *kmsg.MessageV1,
+) {
+	if message.Magic != 1 {
+		newFetchPartition.Err = fmt.Errorf("unknown message magic %d", message.Magic)
+		return
+	}
+	if message.Attributes != 0 {
+		newFetchPartition.Err = fmt.Errorf("unknown attributes on uncompressed message %d", message.Attributes)
+		return
+	}
+	record := v1MessageToRecord(topic, newFetchPartition.Partition, message)
+	c.maybeAddRecord(newFetchPartition, record)
+}
+
+func (c *consumption) processV0Messages(
+	topic string,
+	newFetchPartition *FetchPartition,
+	messages []kmsg.MessageV0,
+) {
+	for i := range messages {
+		message := &messages[i]
+		compression := byte(message.Attributes & 0x0003)
+		if compression == 0 {
+			c.processV0Message(topic, newFetchPartition, message)
+			continue
+		}
+
+		rawMessages, err := decompress(message.Value, compression)
+		if err != nil {
+			newFetchPartition.Err = fmt.Errorf("unable to decompress messages: %v", err)
+			return
+		}
+		innerMessages := kmsg.ReadFetchResponseV0Messages(rawMessages)
+		if len(innerMessages) == 0 {
+			return
+		}
+		firstOffset := message.Offset - int64(len(innerMessages)) + 1
+		for i := range innerMessages {
+			innerMessage := &innerMessages[i]
+			innerMessage.Offset = firstOffset + int64(i)
+			c.processV0Message(topic, newFetchPartition, innerMessage)
+		}
+	}
+}
+
+func (c *consumption) processV0Message(
+	topic string,
+	newFetchPartition *FetchPartition,
+	message *kmsg.MessageV0,
+) {
+	if message.Magic != 0 {
+		newFetchPartition.Err = fmt.Errorf("unknown message magic %d", message.Magic)
+		return
+	}
+	if message.Attributes != 0 {
+		newFetchPartition.Err = fmt.Errorf("unknown attributes on uncompressed message %d", message.Attributes)
+		return
+	}
+	record := v0MessageToRecord(topic, newFetchPartition.Partition, message)
+	c.maybeAddRecord(newFetchPartition, record)
+}
+
+func (c *consumption) maybeAddRecord(newFetchPartition *FetchPartition, record *Record) {
+	if record.Offset < c.offset {
+		// We asked for offset 5, but that was in the middle of a
+		// batch; we got offsets 0 thru 4 that we need to skip.
+		return
+	}
+	if record.Offset != c.offset {
+		// We asked for offset 5, then the client user reset the
+		// offset to something else while this was inflight.
+		// This response out of date.
+		return
+	}
+	newFetchPartition.Records = append(newFetchPartition.Records, record)
+	c.offset++
+}
+
+func timeFromMillis(millis int64) time.Time {
+	return time.Unix(0, millis*1e6)
+}
+
 // recordToRecord converts a kmsg.RecordBatch's Record to a kgo Record.
-// TODO timestamp MaxTimestamp?
 func recordToRecord(
 	topic string,
 	partition int32,
@@ -358,11 +475,42 @@ func recordToRecord(
 		Key:           record.Key,
 		Value:         record.Value,
 		Headers:       h,
-		Timestamp:     time.Unix(0, batch.FirstTimestamp+int64(record.TimestampDelta)),
+		Timestamp:     timeFromMillis(batch.FirstTimestamp + int64(record.TimestampDelta)),
 		TimestampType: int8((batch.Attributes & 0x0008) >> 3),
 		Topic:         topic,
 		Partition:     partition,
 		Offset:        batch.FirstOffset + int64(record.OffsetDelta),
+	}
+}
+
+func v0MessageToRecord(
+	topic string,
+	partition int32,
+	message *kmsg.MessageV0,
+) *Record {
+	return &Record{
+		Key:           message.Key,
+		Value:         message.Value,
+		TimestampType: -1,
+		Topic:         topic,
+		Partition:     partition,
+		Offset:        message.Offset,
+	}
+}
+
+func v1MessageToRecord(
+	topic string,
+	partition int32,
+	message *kmsg.MessageV1,
+) *Record {
+	return &Record{
+		Key:           message.Key,
+		Value:         message.Value,
+		Timestamp:     timeFromMillis(message.Timestamp),
+		TimestampType: (message.Attributes & 0x0004) >> 2,
+		Topic:         topic,
+		Partition:     partition,
+		Offset:        message.Offset,
 	}
 }
 
@@ -399,8 +547,7 @@ func (req *fetchRequest) addTopicPartitionConsumption(
 }
 
 func (*fetchRequest) Key() int16           { return 1 }
-func (*fetchRequest) MaxVersion() int16    { return 10 }
-func (*fetchRequest) MinVersion() int16    { return 4 }
+func (*fetchRequest) MaxVersion() int16    { return 11 }
 func (f *fetchRequest) SetVersion(v int16) { f.version = v }
 func (f *fetchRequest) GetVersion() int16  { return f.version }
 func (f *fetchRequest) AppendTo(dst []byte) []byte {
