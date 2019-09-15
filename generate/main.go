@@ -118,7 +118,6 @@ func main() {
 				keys2structs = append(keys2structs, s)
 				s.WriteKeyFunc(l)
 				s.WriteMaxVersionFunc(l)
-				s.WriteMinVersionFunc(l)
 				s.WriteSetVersionFunc(l)
 				s.WriteGetVersionFunc(l)
 				if s.Admin {

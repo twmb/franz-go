@@ -682,7 +682,6 @@ type ProduceRequest struct {
 
 func (*ProduceRequest) Key() int16                 { return 0 }
 func (*ProduceRequest) MaxVersion() int16          { return 7 }
-func (*ProduceRequest) MinVersion() int16          { return 0 }
 func (v *ProduceRequest) SetVersion(version int16) { v.Version = version }
 func (v *ProduceRequest) GetVersion() int16        { return v.Version }
 func (v *ProduceRequest) ResponseKind() Response   { return &ProduceResponse{Version: v.Version} }
@@ -1022,7 +1021,6 @@ type FetchRequest struct {
 
 func (*FetchRequest) Key() int16                 { return 1 }
 func (*FetchRequest) MaxVersion() int16          { return 11 }
-func (*FetchRequest) MinVersion() int16          { return 0 }
 func (v *FetchRequest) SetVersion(version int16) { v.Version = version }
 func (v *FetchRequest) GetVersion() int16        { return v.Version }
 func (v *FetchRequest) ResponseKind() Response   { return &FetchResponse{Version: v.Version} }
@@ -1418,7 +1416,6 @@ type ListOffsetsRequest struct {
 
 func (*ListOffsetsRequest) Key() int16                 { return 2 }
 func (*ListOffsetsRequest) MaxVersion() int16          { return 5 }
-func (*ListOffsetsRequest) MinVersion() int16          { return 0 }
 func (v *ListOffsetsRequest) SetVersion(version int16) { v.Version = version }
 func (v *ListOffsetsRequest) GetVersion() int16        { return v.Version }
 func (v *ListOffsetsRequest) IsAdminRequest()          {}
@@ -1658,7 +1655,6 @@ type MetadataRequest struct {
 
 func (*MetadataRequest) Key() int16                 { return 3 }
 func (*MetadataRequest) MaxVersion() int16          { return 8 }
-func (*MetadataRequest) MinVersion() int16          { return 0 }
 func (v *MetadataRequest) SetVersion(version int16) { v.Version = version }
 func (v *MetadataRequest) GetVersion() int16        { return v.Version }
 func (v *MetadataRequest) ResponseKind() Response   { return &MetadataResponse{Version: v.Version} }
@@ -2028,7 +2024,6 @@ type LeaderAndISRRequest struct {
 
 func (*LeaderAndISRRequest) Key() int16                 { return 4 }
 func (*LeaderAndISRRequest) MaxVersion() int16          { return 3 }
-func (*LeaderAndISRRequest) MinVersion() int16          { return 0 }
 func (v *LeaderAndISRRequest) SetVersion(version int16) { v.Version = version }
 func (v *LeaderAndISRRequest) GetVersion() int16        { return v.Version }
 func (v *LeaderAndISRRequest) IsAdminRequest()          {}
@@ -2287,7 +2282,6 @@ type StopReplicaRequest struct {
 
 func (*StopReplicaRequest) Key() int16                 { return 5 }
 func (*StopReplicaRequest) MaxVersion() int16          { return 1 }
-func (*StopReplicaRequest) MinVersion() int16          { return 0 }
 func (v *StopReplicaRequest) SetVersion(version int16) { v.Version = version }
 func (v *StopReplicaRequest) GetVersion() int16        { return v.Version }
 func (v *StopReplicaRequest) IsAdminRequest()          {}
@@ -2486,7 +2480,6 @@ type UpdateMetadataRequest struct {
 
 func (*UpdateMetadataRequest) Key() int16                 { return 6 }
 func (*UpdateMetadataRequest) MaxVersion() int16          { return 5 }
-func (*UpdateMetadataRequest) MinVersion() int16          { return 0 }
 func (v *UpdateMetadataRequest) SetVersion(version int16) { v.Version = version }
 func (v *UpdateMetadataRequest) GetVersion() int16        { return v.Version }
 func (v *UpdateMetadataRequest) IsAdminRequest()          {}
@@ -2716,7 +2709,6 @@ type ControlledShutdownRequest struct {
 
 func (*ControlledShutdownRequest) Key() int16                 { return 7 }
 func (*ControlledShutdownRequest) MaxVersion() int16          { return 2 }
-func (*ControlledShutdownRequest) MinVersion() int16          { return 0 }
 func (v *ControlledShutdownRequest) SetVersion(version int16) { v.Version = version }
 func (v *ControlledShutdownRequest) GetVersion() int16        { return v.Version }
 func (v *ControlledShutdownRequest) IsAdminRequest()          {}
@@ -2861,7 +2853,6 @@ type OffsetCommitRequest struct {
 
 func (*OffsetCommitRequest) Key() int16                   { return 8 }
 func (*OffsetCommitRequest) MaxVersion() int16            { return 7 }
-func (*OffsetCommitRequest) MinVersion() int16            { return 0 }
 func (v *OffsetCommitRequest) SetVersion(version int16)   { v.Version = version }
 func (v *OffsetCommitRequest) GetVersion() int16          { return v.Version }
 func (v *OffsetCommitRequest) IsGroupCoordinatorRequest() {}
@@ -3076,7 +3067,6 @@ type OffsetFetchRequest struct {
 
 func (*OffsetFetchRequest) Key() int16                   { return 9 }
 func (*OffsetFetchRequest) MaxVersion() int16            { return 5 }
-func (*OffsetFetchRequest) MinVersion() int16            { return 0 }
 func (v *OffsetFetchRequest) SetVersion(version int16)   { v.Version = version }
 func (v *OffsetFetchRequest) GetVersion() int16          { return v.Version }
 func (v *OffsetFetchRequest) IsGroupCoordinatorRequest() {}
@@ -3274,7 +3264,6 @@ type FindCoordinatorRequest struct {
 
 func (*FindCoordinatorRequest) Key() int16                 { return 10 }
 func (*FindCoordinatorRequest) MaxVersion() int16          { return 2 }
-func (*FindCoordinatorRequest) MinVersion() int16          { return 0 }
 func (v *FindCoordinatorRequest) SetVersion(version int16) { v.Version = version }
 func (v *FindCoordinatorRequest) GetVersion() int16        { return v.Version }
 func (v *FindCoordinatorRequest) ResponseKind() Response {
@@ -3769,7 +3758,6 @@ type JoinGroupRequest struct {
 
 func (*JoinGroupRequest) Key() int16                   { return 11 }
 func (*JoinGroupRequest) MaxVersion() int16            { return 5 }
-func (*JoinGroupRequest) MinVersion() int16            { return 0 }
 func (v *JoinGroupRequest) SetVersion(version int16)   { v.Version = version }
 func (v *JoinGroupRequest) GetVersion() int16          { return v.Version }
 func (v *JoinGroupRequest) IsGroupCoordinatorRequest() {}
@@ -3981,7 +3969,6 @@ type HeartbeatRequest struct {
 
 func (*HeartbeatRequest) Key() int16                   { return 12 }
 func (*HeartbeatRequest) MaxVersion() int16            { return 3 }
-func (*HeartbeatRequest) MinVersion() int16            { return 0 }
 func (v *HeartbeatRequest) SetVersion(version int16)   { v.Version = version }
 func (v *HeartbeatRequest) GetVersion() int16          { return v.Version }
 func (v *HeartbeatRequest) IsGroupCoordinatorRequest() {}
@@ -4087,7 +4074,6 @@ type LeaveGroupRequest struct {
 
 func (*LeaveGroupRequest) Key() int16                   { return 13 }
 func (*LeaveGroupRequest) MaxVersion() int16            { return 3 }
-func (*LeaveGroupRequest) MinVersion() int16            { return 0 }
 func (v *LeaveGroupRequest) SetVersion(version int16)   { v.Version = version }
 func (v *LeaveGroupRequest) GetVersion() int16          { return v.Version }
 func (v *LeaveGroupRequest) IsGroupCoordinatorRequest() {}
@@ -4245,7 +4231,6 @@ type SyncGroupRequest struct {
 
 func (*SyncGroupRequest) Key() int16                   { return 14 }
 func (*SyncGroupRequest) MaxVersion() int16            { return 3 }
-func (*SyncGroupRequest) MinVersion() int16            { return 0 }
 func (v *SyncGroupRequest) SetVersion(version int16)   { v.Version = version }
 func (v *SyncGroupRequest) GetVersion() int16          { return v.Version }
 func (v *SyncGroupRequest) IsGroupCoordinatorRequest() {}
@@ -4366,7 +4351,6 @@ type DescribeGroupsRequest struct {
 
 func (*DescribeGroupsRequest) Key() int16                   { return 15 }
 func (*DescribeGroupsRequest) MaxVersion() int16            { return 4 }
-func (*DescribeGroupsRequest) MinVersion() int16            { return 0 }
 func (v *DescribeGroupsRequest) SetVersion(version int16)   { v.Version = version }
 func (v *DescribeGroupsRequest) GetVersion() int16          { return v.Version }
 func (v *DescribeGroupsRequest) IsGroupCoordinatorRequest() {}
@@ -4564,7 +4548,6 @@ type ListGroupsRequest struct {
 
 func (*ListGroupsRequest) Key() int16                 { return 16 }
 func (*ListGroupsRequest) MaxVersion() int16          { return 2 }
-func (*ListGroupsRequest) MinVersion() int16          { return 0 }
 func (v *ListGroupsRequest) SetVersion(version int16) { v.Version = version }
 func (v *ListGroupsRequest) GetVersion() int16        { return v.Version }
 func (v *ListGroupsRequest) ResponseKind() Response   { return &ListGroupsResponse{Version: v.Version} }
@@ -4653,7 +4636,6 @@ type SASLHandshakeRequest struct {
 
 func (*SASLHandshakeRequest) Key() int16                 { return 17 }
 func (*SASLHandshakeRequest) MaxVersion() int16          { return 1 }
-func (*SASLHandshakeRequest) MinVersion() int16          { return 0 }
 func (v *SASLHandshakeRequest) SetVersion(version int16) { v.Version = version }
 func (v *SASLHandshakeRequest) GetVersion() int16        { return v.Version }
 func (v *SASLHandshakeRequest) ResponseKind() Response {
@@ -4717,7 +4699,6 @@ type ApiVersionsRequest struct {
 
 func (*ApiVersionsRequest) Key() int16                 { return 18 }
 func (*ApiVersionsRequest) MaxVersion() int16          { return 2 }
-func (*ApiVersionsRequest) MinVersion() int16          { return 0 }
 func (v *ApiVersionsRequest) SetVersion(version int16) { v.Version = version }
 func (v *ApiVersionsRequest) GetVersion() int16        { return v.Version }
 func (v *ApiVersionsRequest) ResponseKind() Response   { return &ApiVersionsResponse{Version: v.Version} }
@@ -4858,7 +4839,6 @@ type CreateTopicsRequest struct {
 
 func (*CreateTopicsRequest) Key() int16                 { return 19 }
 func (*CreateTopicsRequest) MaxVersion() int16          { return 4 }
-func (*CreateTopicsRequest) MinVersion() int16          { return 0 }
 func (v *CreateTopicsRequest) SetVersion(version int16) { v.Version = version }
 func (v *CreateTopicsRequest) GetVersion() int16        { return v.Version }
 func (v *CreateTopicsRequest) IsAdminRequest()          {}
@@ -5043,7 +5023,6 @@ type DeleteTopicsRequest struct {
 
 func (*DeleteTopicsRequest) Key() int16                 { return 20 }
 func (*DeleteTopicsRequest) MaxVersion() int16          { return 3 }
-func (*DeleteTopicsRequest) MinVersion() int16          { return 0 }
 func (v *DeleteTopicsRequest) SetVersion(version int16) { v.Version = version }
 func (v *DeleteTopicsRequest) GetVersion() int16        { return v.Version }
 func (v *DeleteTopicsRequest) IsAdminRequest()          {}
@@ -5188,7 +5167,6 @@ type DeleteRecordsRequest struct {
 
 func (*DeleteRecordsRequest) Key() int16                 { return 21 }
 func (*DeleteRecordsRequest) MaxVersion() int16          { return 1 }
-func (*DeleteRecordsRequest) MinVersion() int16          { return 0 }
 func (v *DeleteRecordsRequest) SetVersion(version int16) { v.Version = version }
 func (v *DeleteRecordsRequest) GetVersion() int16        { return v.Version }
 func (v *DeleteRecordsRequest) IsAdminRequest()          {}
@@ -5352,7 +5330,6 @@ type InitProducerIDRequest struct {
 
 func (*InitProducerIDRequest) Key() int16                 { return 22 }
 func (*InitProducerIDRequest) MaxVersion() int16          { return 2 }
-func (*InitProducerIDRequest) MinVersion() int16          { return 0 }
 func (v *InitProducerIDRequest) SetVersion(version int16) { v.Version = version }
 func (v *InitProducerIDRequest) GetVersion() int16        { return v.Version }
 func (v *InitProducerIDRequest) IsTxnCoordinatorRequest() {}
@@ -5462,7 +5439,6 @@ type OffsetForLeaderEpochRequest struct {
 
 func (*OffsetForLeaderEpochRequest) Key() int16                 { return 23 }
 func (*OffsetForLeaderEpochRequest) MaxVersion() int16          { return 3 }
-func (*OffsetForLeaderEpochRequest) MinVersion() int16          { return 0 }
 func (v *OffsetForLeaderEpochRequest) SetVersion(version int16) { v.Version = version }
 func (v *OffsetForLeaderEpochRequest) GetVersion() int16        { return v.Version }
 func (v *OffsetForLeaderEpochRequest) ResponseKind() Response {
@@ -5612,7 +5588,6 @@ type AddPartitionsToTxnRequest struct {
 
 func (*AddPartitionsToTxnRequest) Key() int16                 { return 24 }
 func (*AddPartitionsToTxnRequest) MaxVersion() int16          { return 1 }
-func (*AddPartitionsToTxnRequest) MinVersion() int16          { return 0 }
 func (v *AddPartitionsToTxnRequest) SetVersion(version int16) { v.Version = version }
 func (v *AddPartitionsToTxnRequest) GetVersion() int16        { return v.Version }
 func (v *AddPartitionsToTxnRequest) IsTxnCoordinatorRequest() {}
@@ -5743,7 +5718,6 @@ type AddOffsetsToTxnRequest struct {
 
 func (*AddOffsetsToTxnRequest) Key() int16                 { return 25 }
 func (*AddOffsetsToTxnRequest) MaxVersion() int16          { return 1 }
-func (*AddOffsetsToTxnRequest) MinVersion() int16          { return 0 }
 func (v *AddOffsetsToTxnRequest) SetVersion(version int16) { v.Version = version }
 func (v *AddOffsetsToTxnRequest) GetVersion() int16        { return v.Version }
 func (v *AddOffsetsToTxnRequest) IsTxnCoordinatorRequest() {}
@@ -5815,7 +5789,6 @@ type EndTxnRequest struct {
 
 func (*EndTxnRequest) Key() int16                 { return 26 }
 func (*EndTxnRequest) MaxVersion() int16          { return 1 }
-func (*EndTxnRequest) MinVersion() int16          { return 0 }
 func (v *EndTxnRequest) SetVersion(version int16) { v.Version = version }
 func (v *EndTxnRequest) GetVersion() int16        { return v.Version }
 func (v *EndTxnRequest) IsTxnCoordinatorRequest() {}
@@ -5895,7 +5868,6 @@ type WriteTxnMarkersRequest struct {
 
 func (*WriteTxnMarkersRequest) Key() int16                 { return 27 }
 func (*WriteTxnMarkersRequest) MaxVersion() int16          { return 0 }
-func (*WriteTxnMarkersRequest) MinVersion() int16          { return 0 }
 func (v *WriteTxnMarkersRequest) SetVersion(version int16) { v.Version = version }
 func (v *WriteTxnMarkersRequest) GetVersion() int16        { return v.Version }
 func (v *WriteTxnMarkersRequest) ResponseKind() Response {
@@ -6074,7 +6046,6 @@ type TxnOffsetCommitRequest struct {
 
 func (*TxnOffsetCommitRequest) Key() int16                 { return 28 }
 func (*TxnOffsetCommitRequest) MaxVersion() int16          { return 2 }
-func (*TxnOffsetCommitRequest) MinVersion() int16          { return 0 }
 func (v *TxnOffsetCommitRequest) SetVersion(version int16) { v.Version = version }
 func (v *TxnOffsetCommitRequest) GetVersion() int16        { return v.Version }
 func (v *TxnOffsetCommitRequest) IsTxnCoordinatorRequest() {}
@@ -6232,7 +6203,6 @@ type DescribeACLsRequest struct {
 
 func (*DescribeACLsRequest) Key() int16                 { return 29 }
 func (*DescribeACLsRequest) MaxVersion() int16          { return 1 }
-func (*DescribeACLsRequest) MinVersion() int16          { return 0 }
 func (v *DescribeACLsRequest) SetVersion(version int16) { v.Version = version }
 func (v *DescribeACLsRequest) GetVersion() int16        { return v.Version }
 func (v *DescribeACLsRequest) IsAdminRequest()          {}
@@ -6450,7 +6420,6 @@ type CreateACLsRequest struct {
 
 func (*CreateACLsRequest) Key() int16                 { return 30 }
 func (*CreateACLsRequest) MaxVersion() int16          { return 1 }
-func (*CreateACLsRequest) MinVersion() int16          { return 0 }
 func (v *CreateACLsRequest) SetVersion(version int16) { v.Version = version }
 func (v *CreateACLsRequest) GetVersion() int16        { return v.Version }
 func (v *CreateACLsRequest) IsAdminRequest()          {}
@@ -6570,7 +6539,6 @@ type DeleteACLsRequest struct {
 
 func (*DeleteACLsRequest) Key() int16                 { return 31 }
 func (*DeleteACLsRequest) MaxVersion() int16          { return 1 }
-func (*DeleteACLsRequest) MinVersion() int16          { return 0 }
 func (v *DeleteACLsRequest) SetVersion(version int16) { v.Version = version }
 func (v *DeleteACLsRequest) GetVersion() int16        { return v.Version }
 func (v *DeleteACLsRequest) IsAdminRequest()          {}
@@ -6772,7 +6740,6 @@ type DescribeConfigsRequest struct {
 
 func (*DescribeConfigsRequest) Key() int16                 { return 32 }
 func (*DescribeConfigsRequest) MaxVersion() int16          { return 2 }
-func (*DescribeConfigsRequest) MinVersion() int16          { return 0 }
 func (v *DescribeConfigsRequest) SetVersion(version int16) { v.Version = version }
 func (v *DescribeConfigsRequest) GetVersion() int16        { return v.Version }
 func (v *DescribeConfigsRequest) IsAdminRequest()          {}
@@ -7066,7 +7033,6 @@ type AlterConfigsRequest struct {
 
 func (*AlterConfigsRequest) Key() int16                 { return 33 }
 func (*AlterConfigsRequest) MaxVersion() int16          { return 1 }
-func (*AlterConfigsRequest) MinVersion() int16          { return 0 }
 func (v *AlterConfigsRequest) SetVersion(version int16) { v.Version = version }
 func (v *AlterConfigsRequest) GetVersion() int16        { return v.Version }
 func (v *AlterConfigsRequest) IsAdminRequest()          {}
@@ -7230,7 +7196,6 @@ type AlterReplicaLogDirsRequest struct {
 
 func (*AlterReplicaLogDirsRequest) Key() int16                 { return 34 }
 func (*AlterReplicaLogDirsRequest) MaxVersion() int16          { return 1 }
-func (*AlterReplicaLogDirsRequest) MinVersion() int16          { return 0 }
 func (v *AlterReplicaLogDirsRequest) SetVersion(version int16) { v.Version = version }
 func (v *AlterReplicaLogDirsRequest) GetVersion() int16        { return v.Version }
 func (v *AlterReplicaLogDirsRequest) IsAdminRequest()          {}
@@ -7389,7 +7354,6 @@ type DescribeLogDirsRequest struct {
 
 func (*DescribeLogDirsRequest) Key() int16                 { return 35 }
 func (*DescribeLogDirsRequest) MaxVersion() int16          { return 1 }
-func (*DescribeLogDirsRequest) MinVersion() int16          { return 0 }
 func (v *DescribeLogDirsRequest) SetVersion(version int16) { v.Version = version }
 func (v *DescribeLogDirsRequest) GetVersion() int16        { return v.Version }
 func (v *DescribeLogDirsRequest) IsAdminRequest()          {}
@@ -7573,7 +7537,6 @@ type SASLAuthenticateRequest struct {
 
 func (*SASLAuthenticateRequest) Key() int16                 { return 36 }
 func (*SASLAuthenticateRequest) MaxVersion() int16          { return 1 }
-func (*SASLAuthenticateRequest) MinVersion() int16          { return 0 }
 func (v *SASLAuthenticateRequest) SetVersion(version int16) { v.Version = version }
 func (v *SASLAuthenticateRequest) GetVersion() int16        { return v.Version }
 func (v *SASLAuthenticateRequest) ResponseKind() Response {
@@ -7669,7 +7632,6 @@ type CreatePartitionsRequest struct {
 
 func (*CreatePartitionsRequest) Key() int16                 { return 37 }
 func (*CreatePartitionsRequest) MaxVersion() int16          { return 1 }
-func (*CreatePartitionsRequest) MinVersion() int16          { return 0 }
 func (v *CreatePartitionsRequest) SetVersion(version int16) { v.Version = version }
 func (v *CreatePartitionsRequest) GetVersion() int16        { return v.Version }
 func (v *CreatePartitionsRequest) IsAdminRequest()          {}
@@ -7822,7 +7784,6 @@ type CreateDelegationTokenRequest struct {
 
 func (*CreateDelegationTokenRequest) Key() int16                 { return 38 }
 func (*CreateDelegationTokenRequest) MaxVersion() int16          { return 1 }
-func (*CreateDelegationTokenRequest) MinVersion() int16          { return 0 }
 func (v *CreateDelegationTokenRequest) SetVersion(version int16) { v.Version = version }
 func (v *CreateDelegationTokenRequest) GetVersion() int16        { return v.Version }
 func (v *CreateDelegationTokenRequest) IsAdminRequest()          {}
@@ -7935,7 +7896,6 @@ type RenewDelegationTokenRequest struct {
 
 func (*RenewDelegationTokenRequest) Key() int16                 { return 39 }
 func (*RenewDelegationTokenRequest) MaxVersion() int16          { return 1 }
-func (*RenewDelegationTokenRequest) MinVersion() int16          { return 0 }
 func (v *RenewDelegationTokenRequest) SetVersion(version int16) { v.Version = version }
 func (v *RenewDelegationTokenRequest) GetVersion() int16        { return v.Version }
 func (v *RenewDelegationTokenRequest) IsAdminRequest()          {}
@@ -8001,7 +7961,6 @@ type ExpireDelegationTokenRequest struct {
 
 func (*ExpireDelegationTokenRequest) Key() int16                 { return 40 }
 func (*ExpireDelegationTokenRequest) MaxVersion() int16          { return 1 }
-func (*ExpireDelegationTokenRequest) MinVersion() int16          { return 0 }
 func (v *ExpireDelegationTokenRequest) SetVersion(version int16) { v.Version = version }
 func (v *ExpireDelegationTokenRequest) GetVersion() int16        { return v.Version }
 func (v *ExpireDelegationTokenRequest) IsAdminRequest()          {}
@@ -8071,7 +8030,6 @@ type DescribeDelegationTokenRequest struct {
 
 func (*DescribeDelegationTokenRequest) Key() int16                 { return 41 }
 func (*DescribeDelegationTokenRequest) MaxVersion() int16          { return 1 }
-func (*DescribeDelegationTokenRequest) MinVersion() int16          { return 0 }
 func (v *DescribeDelegationTokenRequest) SetVersion(version int16) { v.Version = version }
 func (v *DescribeDelegationTokenRequest) GetVersion() int16        { return v.Version }
 func (v *DescribeDelegationTokenRequest) IsAdminRequest()          {}
@@ -8226,7 +8184,6 @@ type DeleteGroupsRequest struct {
 
 func (*DeleteGroupsRequest) Key() int16                   { return 42 }
 func (*DeleteGroupsRequest) MaxVersion() int16            { return 1 }
-func (*DeleteGroupsRequest) MinVersion() int16            { return 0 }
 func (v *DeleteGroupsRequest) SetVersion(version int16)   { v.Version = version }
 func (v *DeleteGroupsRequest) GetVersion() int16          { return v.Version }
 func (v *DeleteGroupsRequest) IsGroupCoordinatorRequest() {}
@@ -8353,7 +8310,6 @@ type ElectPreferredLeadersRequest struct {
 
 func (*ElectPreferredLeadersRequest) Key() int16                 { return 43 }
 func (*ElectPreferredLeadersRequest) MaxVersion() int16          { return 1 }
-func (*ElectPreferredLeadersRequest) MinVersion() int16          { return 0 }
 func (v *ElectPreferredLeadersRequest) SetVersion(version int16) { v.Version = version }
 func (v *ElectPreferredLeadersRequest) GetVersion() int16        { return v.Version }
 func (v *ElectPreferredLeadersRequest) IsAdminRequest()          {}
@@ -8566,7 +8522,6 @@ type IncrementalAlterConfigsRequest struct {
 
 func (*IncrementalAlterConfigsRequest) Key() int16                 { return 44 }
 func (*IncrementalAlterConfigsRequest) MaxVersion() int16          { return 0 }
-func (*IncrementalAlterConfigsRequest) MinVersion() int16          { return 0 }
 func (v *IncrementalAlterConfigsRequest) SetVersion(version int16) { v.Version = version }
 func (v *IncrementalAlterConfigsRequest) GetVersion() int16        { return v.Version }
 func (v *IncrementalAlterConfigsRequest) IsAdminRequest()          {}
@@ -8738,7 +8693,6 @@ type AlterPartitionReassignmentsRequest struct {
 
 func (*AlterPartitionReassignmentsRequest) Key() int16                 { return 45 }
 func (*AlterPartitionReassignmentsRequest) MaxVersion() int16          { return 0 }
-func (*AlterPartitionReassignmentsRequest) MinVersion() int16          { return 0 }
 func (v *AlterPartitionReassignmentsRequest) SetVersion(version int16) { v.Version = version }
 func (v *AlterPartitionReassignmentsRequest) GetVersion() int16        { return v.Version }
 func (v *AlterPartitionReassignmentsRequest) IsAdminRequest()          {}
@@ -8927,7 +8881,6 @@ type ListPartitionReassignmentsRequest struct {
 
 func (*ListPartitionReassignmentsRequest) Key() int16                 { return 46 }
 func (*ListPartitionReassignmentsRequest) MaxVersion() int16          { return 0 }
-func (*ListPartitionReassignmentsRequest) MinVersion() int16          { return 0 }
 func (v *ListPartitionReassignmentsRequest) SetVersion(version int16) { v.Version = version }
 func (v *ListPartitionReassignmentsRequest) GetVersion() int16        { return v.Version }
 func (v *ListPartitionReassignmentsRequest) IsAdminRequest()          {}

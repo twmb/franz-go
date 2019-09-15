@@ -260,10 +260,6 @@ func (b *broker) handleReqs() {
 		if brokerMax := cxn.versions[req.Key()]; brokerMax >= 0 && brokerMax < ourMax {
 			version = brokerMax
 		}
-		if version < req.MinVersion() {
-			pr.promise(nil, ErrBrokerTooOld)
-			continue
-		}
 		req.SetVersion(version) // always go for highest version
 
 		correlationID, err := cxn.writeRequest(req)

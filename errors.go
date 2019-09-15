@@ -21,12 +21,6 @@ var (
 	// key larger than kmsg.MaxKey.
 	ErrUnknownRequestKey = errors.New("request key is unknown")
 
-	// ErrBrokerTooOld is returned when issuing a kmsg.Request to a broker
-	// that does not understand the request (either the broker cannot
-	// handle the request due to not knowing of the key, or the broker does
-	// not support the client minimum supported version of the request).
-	ErrBrokerTooOld = errors.New("broker is too old; this client does not support the broker")
-
 	// ErrClientToOld is returned when issuing request that are unknown or
 	// use an unknown version.
 	ErrClientTooOld = errors.New("client is too old; this client does not know what to do with this")

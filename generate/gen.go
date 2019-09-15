@@ -235,9 +235,6 @@ func (s Struct) WriteKeyFunc(l *LineWriter) {
 func (s Struct) WriteMaxVersionFunc(l *LineWriter) {
 	l.Write("func (*%s) MaxVersion() int16 { return %d }", s.Name, s.MaxVersion)
 }
-func (s Struct) WriteMinVersionFunc(l *LineWriter) {
-	l.Write("func (*%s) MinVersion() int16 { return 0 }", s.Name)
-}
 func (s Struct) WriteGetVersionFunc(l *LineWriter) {
 	l.Write("func (v *%s) GetVersion() int16 { return v.Version }", s.Name)
 }

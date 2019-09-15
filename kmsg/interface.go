@@ -22,8 +22,6 @@ type Request interface {
 	// versions based off of the max of a message's max version in the
 	// client and the broker's max supported version.
 	MaxVersion() int16
-	// MinVersion returns the minimum protocol version this message supports.
-	MinVersion() int16
 	// SetVersion sets the version to use for this request and response.
 	SetVersion(int16)
 	// GetVersion returns the version currently set to use for the request
