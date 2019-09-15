@@ -3,6 +3,7 @@ package kgo
 import (
 	"bytes"
 	"compress/gzip"
+	"encoding/binary"
 	"errors"
 	"io"
 	"io/ioutil"
@@ -214,6 +215,8 @@ var unlz4Pool = sync.Pool{
 
 var unzstd, _ = zstd.NewReader(nil)
 
+var xerialPfx = []byte{130, 83, 78, 65, 80, 80, 89, 0}
+
 func decompress(src []byte, codec byte) ([]byte, error) {
 	switch codec {
 	case 0:
@@ -228,6 +231,9 @@ func decompress(src []byte, codec byte) ([]byte, error) {
 		return ioutil.ReadAll(ungz)
 
 	case 2:
+		if len(src) > 16 && bytes.HasPrefix(src, xerialPfx) {
+			return xerialDecode(src)
+		}
 		return snappy.Decode(nil, src)
 
 	case 3:
@@ -242,4 +248,32 @@ func decompress(src []byte, codec byte) ([]byte, error) {
 	default:
 		return nil, errors.New("unknown compression codec")
 	}
+}
+
+var errMalformedXerial = errors.New("malformed xerial framing")
+
+func xerialDecode(src []byte) ([]byte, error) {
+	// bytes 0-8: xerial header
+	// bytes 8-16: xerial version
+	// everything after: uint32 chunk size, snappy chunk
+	// we come into this function knowing src is at least 16
+	src = src[16:]
+	var dst, chunk []byte
+	var err error
+	for len(src) > 0 {
+		if len(src) < 4 {
+			return nil, errMalformedXerial
+		}
+		size := int32(binary.BigEndian.Uint32(src))
+		src = src[4:]
+		if size < 0 || len(src) < int(size) {
+			return nil, errMalformedXerial
+		}
+		if chunk, err = snappy.Decode(chunk[:cap(chunk)], src[:size]); err != nil {
+			return nil, err
+		}
+		src = src[size:]
+		dst = append(dst, chunk...)
+	}
+	return dst, nil
 }
