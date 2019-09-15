@@ -41,9 +41,9 @@ type Record struct {
 	// The default, 0, means that the timestamp was determined in a client
 	// when the record was produced.
 	//
-	// The alternative is 1, which is when the Timestamp is set in Kafka.
+	// An alternative is 1, which is when the Timestamp is set in Kafka.
 	//
-	// Records pre 0.11.0.0 did not have timestamps.
+	// Records pre 0.10.0 did not have timestamps and have value -1.
 	TimestampType int8
 
 	// Topic is the topic that a record is written to.
