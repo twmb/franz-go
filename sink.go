@@ -131,16 +131,16 @@ func (sink *recordSink) createRequest() (*produceRequest, bool) {
 		batchWireLength := 4 + batch.wireLength // partition, batch len
 
 		if sink.produceVersionKnown == 0 {
-			v2BatchWireLength := 4 + batch.v2wireLength
-			if v2BatchWireLength > batchWireLength {
-				batchWireLength = v2BatchWireLength
+			v1BatchWireLength := 4 + batch.v1wireLength
+			if v1BatchWireLength > batchWireLength {
+				batchWireLength = v1BatchWireLength
 			}
 		} else {
 			switch sink.produceVersion {
 			case 0, 1:
 				batchWireLength = 4 + batch.v0wireLength
 			case 2:
-				batchWireLength = 4 + batch.v2wireLength
+				batchWireLength = 4 + batch.v1wireLength
 			}
 		}
 
@@ -548,7 +548,7 @@ func messageSet0Length(r *Record) int32 {
 	return length + int32(len(r.Key)) + int32(len(r.Value))
 }
 
-func messageSet2Length(r *Record) int32 {
+func messageSet1Length(r *Record) int32 {
 	return messageSet0Length(r) + 8 // timestamp
 }
 
@@ -575,9 +575,9 @@ func (recordBuffer *recordBuffer) bufferRecord(pr promisedRecord) {
 		// the largest record length numbers.
 		produceVersionKnown := atomic.LoadInt32(&sink.produceVersionKnown) == 1
 		if !produceVersionKnown {
-			v2newBatchLength := batch.v2wireLength + messageSet2Length(pr.Record)
-			if v2newBatchLength > newBatchLength { // we only check v2 since it is larger than v0
-				newBatchLength = v2newBatchLength
+			v1newBatchLength := batch.v1wireLength + messageSet1Length(pr.Record)
+			if v1newBatchLength > newBatchLength { // we only check v1 since it is larger than v0
+				newBatchLength = v1newBatchLength
 			}
 		} else {
 			// If we do know our broker version and it is indeed
@@ -586,7 +586,7 @@ func (recordBuffer *recordBuffer) bufferRecord(pr promisedRecord) {
 			case 0, 1:
 				newBatchLength = batch.v0wireLength + messageSet0Length(pr.Record)
 			case 2:
-				newBatchLength = batch.v2wireLength + messageSet2Length(pr.Record)
+				newBatchLength = batch.v1wireLength + messageSet1Length(pr.Record)
 			}
 		}
 
@@ -774,7 +774,7 @@ func (records *recordBuffer) newRecordBatch(producerID int64, producerEpoch int1
 	b.records = append(b.records, pnr)
 	b.wireLength = recordBatchOverhead + pnr.wireLength
 	b.v0wireLength = recordsOverhead + messageSet0Length(pr.Record)
-	b.v2wireLength = recordsOverhead + messageSet2Length(pr.Record)
+	b.v1wireLength = recordsOverhead + messageSet1Length(pr.Record)
 	return b
 }
 
@@ -782,7 +782,7 @@ func (records *recordBuffer) newRecordBatch(producerID int64, producerEpoch int1
 func (b *recordBatch) appendRecord(pr promisedRecord, nums recordNumbers) {
 	b.wireLength += nums.wireLength
 	b.v0wireLength += messageSet0Length(pr.Record)
-	b.v2wireLength += messageSet2Length(pr.Record)
+	b.v1wireLength += messageSet1Length(pr.Record)
 	b.records = append(b.records, promisedNumberedRecord{
 		nums,
 		pr,
@@ -796,7 +796,7 @@ type recordBatch struct {
 	tries int // if this was sent before and is thus now immutable
 
 	v0wireLength int32 // same as wireLength, but for message set v0
-	v2wireLength int32 // same as wireLength, but for message set v2
+	v1wireLength int32 // same as wireLength, but for message set v1
 	wireLength   int32 // tracks total size this batch would currently encode as
 
 	attrs          int16
@@ -944,7 +944,6 @@ func (rbs reqBatches) onEachBatchWhileBatchOwnerLocked(fn func(*recordBatch)) {
 
 func (*produceRequest) Key() int16           { return 0 }
 func (*produceRequest) MaxVersion() int16    { return 7 }
-func (*produceRequest) MinVersion() int16    { return 0 }
 func (p *produceRequest) SetVersion(v int16) { p.version = v }
 func (p *produceRequest) GetVersion() int16  { return p.version }
 func (p *produceRequest) AppendTo(dst []byte) []byte {
