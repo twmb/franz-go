@@ -242,7 +242,7 @@ func (b *broker) handleReqs() {
 		// We also check the max version bound.
 		if int(req.Key()) > len(cxn.versions[:]) ||
 			b.client.cfg.client.maxVersions != nil &&
-				int(req.Key()) > len(b.client.cfg.client.maxVersions) {
+				int(req.Key()) >= len(b.client.cfg.client.maxVersions) {
 			pr.promise(nil, ErrUnknownRequestKey)
 			continue
 		}
