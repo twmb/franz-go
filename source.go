@@ -77,15 +77,24 @@ type consumption struct {
 	allConsumptionsIdx int
 
 	offset int64
+	seq    uint64
 }
 
-func (consumption *consumption) setOffset(offset int64) {
+func (consumption *consumption) setOffset(offset int64, fromSeq uint64) {
 	consumption.mu.Lock()
-	consumption.offset = offset
-	source := consumption.source
-	consumption.mu.Unlock()
+	defer consumption.mu.Unlock()
 
-	source.maybeBeginConsuming()
+	if fromSeq < consumption.seq {
+		return
+	}
+
+	consumption.offset = offset
+	consumption.seq = fromSeq
+	source := consumption.source
+
+	if offset != -1 {
+		source.maybeBeginConsuming()
+	}
 }
 
 func (source *recordSource) createRequest() (req *fetchRequest, again bool) {
@@ -103,7 +112,7 @@ func (source *recordSource) createRequest() (req *fetchRequest, again bool) {
 		// while we using its fields.
 		consumption.mu.Lock()
 
-		// If the offset is -1, a metadata update added a consuption to
+		// If the offset is -1, a metadata update added a consumption to
 		// this source, but it is not yet in use.
 		if consumption.offset == -1 {
 			consumption.mu.Unlock()

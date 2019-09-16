@@ -77,12 +77,13 @@ func (c *Client) triggerUpdateMetadata() {
 func (c *Client) updateMetadataLoop() {
 	var consecutiveErrors int
 
-	defer c.metadataTicker.Stop()
+	ticker := time.NewTicker(time.Minute) // TODO configurable
+	defer ticker.Stop()
 	for {
 		select {
 		case <-c.closedCh:
 			return
-		case <-c.metadataTicker.C:
+		case <-ticker.C:
 			c.triggerUpdateMetadata()
 		case <-c.updateMetadataCh:
 			again, err := c.updateMetadata()
@@ -125,9 +126,35 @@ func (c *Client) updateMetadata() (needsRetry bool, err error) {
 		toUpdate = append(toUpdate, topic)
 	}
 
-	meta, err := c.fetchTopicMetadata(toUpdate)
+	meta, all, err := c.fetchTopicMetadata(toUpdate)
 	if err != nil {
 		return true, err
+	}
+
+	// If we are consuming with regex and thus fetched all topics, the
+	// metadata may have returned topics we are not yet tracking.
+	// We have to add those topics to our topics map so that we can
+	// save their information in the merge just below.
+	if all {
+		var hasNew bool
+		c.topicsMu.Lock()
+		topics = c.loadTopics()
+		for topic := range meta {
+			if _, exists := topics[topic]; !exists {
+				hasNew = true
+				break
+			}
+		}
+		if hasNew {
+			topics = c.cloneTopics()
+			for topic := range meta {
+				if _, exists := topics[topic]; !exists {
+					topics[topic] = newTopicPartitions()
+				}
+			}
+			c.topics.Store(topics)
+		}
+		c.topicsMu.Unlock()
 	}
 
 	// Merge the producer side of the update.
@@ -147,10 +174,14 @@ func (c *Client) updateMetadata() (needsRetry bool, err error) {
 
 // fetchTopicMetadata fetches metadata for all reqTopics and returns new
 // topicPartitionsData for each topic.
-func (c *Client) fetchTopicMetadata(reqTopics []string) (map[string]*topicPartitionsData, error) {
-	meta, err := c.fetchMetadata(false, reqTopics)
+func (c *Client) fetchTopicMetadata(reqTopics []string) (map[string]*topicPartitionsData, bool, error) {
+	c.consumer.mu.Lock()
+	all := c.consumer.typ == consumerTypeDirect && c.consumer.direct.regexTopics
+	// || c.consumer.typ == consumerTypeGroup && c.consumer.group.regexTopics
+	c.consumer.mu.Unlock()
+	meta, err := c.fetchMetadata(all, reqTopics)
 	if err != nil {
-		return nil, err
+		return nil, all, err
 	}
 
 	topics := make(map[string]*topicPartitionsData, len(reqTopics))
@@ -218,7 +249,7 @@ func (c *Client) fetchTopicMetadata(reqTopics []string) (map[string]*topicPartit
 		}
 	}
 
-	return topics, nil
+	return topics, all, nil
 }
 
 // merge merges a new topicPartition into an old and returns whether the

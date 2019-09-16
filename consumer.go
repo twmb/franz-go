@@ -2,12 +2,18 @@ package kgo
 
 import (
 	"context"
-	"fmt"
 	"sync"
-	"sync/atomic"
 
 	"github.com/twmb/kgo/kerr"
 	"github.com/twmb/kgo/kmsg"
+)
+
+type consumerType int8
+
+const (
+	consumerTypeUnset = -1 + iota
+	consumerTypeDirect
+	consumerTypeGroup
 )
 
 // NOTE
@@ -15,14 +21,6 @@ import (
 // On metadata update
 // just update the consumption epoch!!
 // Same can be done in producer side when kafka gets that.
-
-type consumerType uint32
-
-const (
-	consumerTypeUnset consumerType = iota
-	consumerTypeAssigned
-	consumerTypeGroup
-)
 
 // Offset is a message offset into a partition.
 type Offset struct {
@@ -93,10 +91,12 @@ func (c *Client) TopicPartitions(topics ...string) ([]TopicPartitions, error) {
 type consumer struct {
 	client *Client
 
-	mu  sync.Mutex
-	typ consumerType
+	mu     sync.Mutex
+	group  consumerGroup
+	direct consumerDirect
+	typ    consumerType
 
-	group consumerGroup
+	usingPartitions []*topicPartition
 
 	// seq is a sequence number used reloading assignments from a new
 	// asignment.
@@ -119,12 +119,10 @@ func (c *consumer) addSourceReadyForDraining(source *recordSource) {
 func (c *Client) PollConsumer(ctx context.Context) Fetches {
 	consumer := &c.consumer
 
-	if consumerType(atomic.LoadUint32((*uint32)(&consumer.typ))) == consumerTypeUnset {
-		return nil
-	}
-
 	var fetches Fetches
 
+	// TODO fixup only return if seq same.
+	// ALSO: setOffset invalidates consumption offset?
 	fill := func() {
 		consumer.sourcesReadyMu.Lock()
 		for _, ready := range consumer.sourcesReadyForDraining {
@@ -163,53 +161,43 @@ func (c *Client) PollConsumer(ctx context.Context) Fetches {
 	return fetches
 }
 
-func (c *consumer) maybeInit(client *Client, typ consumerType) error {
-	if c.typ == consumerTypeUnset {
-		c.client = client
-		atomic.StoreUint32((*uint32)(&c.typ), uint32(typ))
-		c.typ = typ
-		c.sourcesReadyCond = sync.NewCond(&c.sourcesReadyMu)
-		return nil
-	}
-	if c.typ == typ {
-		return nil
-	}
-	switch c.typ {
-	case consumerTypeAssigned:
-		return fmt.Errorf("cannot assign partitions to a client that is being used as a group consumer")
-	case consumerTypeGroup:
-		return fmt.Errorf("cannot assign partitions to a client that is being used as a direct partition consumer")
-	}
-	panic("unreachable")
-}
+// requires lock
+func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, invalidateOld bool) {
+	seq := c.seq
 
-// TODO arg: op (set, add, remove)
-// If added, we need to keep original assignments in case of the mergeInto below
-// This takes ownership of the assignments.
-func (c *Client) AssignPartitions(assignments map[string]map[int32]Offset) error {
-	consumer := &c.consumer
-	consumer.mu.Lock()
-	defer consumer.mu.Unlock()
+	if invalidateOld {
+		c.seq++
+		seq = c.seq
 
-	if err := consumer.maybeInit(c, consumerTypeAssigned); err != nil {
-		return err
+		// First, stop all fetches for prior assignments. After our consumer
+		// lock is released, fetches will return nothing historic.
+		for _, usedPartition := range c.usingPartitions {
+			usedPartition.consumption.setOffset(-1, seq)
+		}
+		c.usingPartitions = c.usingPartitions[:0]
 	}
 
 	// Ensure all topics exist so that we will fetch their metadata.
-	c.topicsMu.Lock()
-	clientTopics := c.cloneTopics()
+	// This assignment could contain nothing (for the purposes of
+	// invalidating active fetches), so we only do this if needed.
+	if len(assignments) == 0 {
+		return
+	}
+
+	c.client.topicsMu.Lock()
+	clientTopics := c.client.cloneTopics()
 	for topic := range assignments {
 		if _, exists := clientTopics[topic]; !exists {
 			clientTopics[topic] = newTopicPartitions()
 		}
 	}
-	c.topics.Store(clientTopics)
-	c.topicsMu.Unlock()
+	c.client.topics.Store(clientTopics)
+	c.client.topicsMu.Unlock()
 
-	// If by chance we have a topic and partition loaded and the
-	// assignments use exact offsets, we can avoid looking up offsets.
+	// If we have a topic and partition loaded and the assignments use
+	// exact offsets, we can avoid looking up offsets.
 	for topic, partitions := range assignments {
-		topicParts := clientTopics[topic].load() // must exist; ensured above
+		topicParts := clientTopics[topic].load() // must be loadable; ensured above
 		if topicParts == nil {
 			continue
 		}
@@ -221,7 +209,8 @@ func (c *Client) AssignPartitions(assignments map[string]map[int32]Offset) error
 			}
 
 			if offset.request >= 0 {
-				part.consumption.setOffset(offset.request)
+				part.consumption.setOffset(offset.request, seq)
+				c.usingPartitions = append(c.usingPartitions, part)
 				delete(partitions, partition)
 			}
 		}
@@ -232,14 +221,11 @@ func (c *Client) AssignPartitions(assignments map[string]map[int32]Offset) error
 
 	// For all remaining offsets, await load.
 	if len(assignments) > 0 {
-		consumer.seq++
-		consumer.offsetsWaitingLoad = &offsetsWaitingLoad{
-			fromSeq: consumer.seq,
+		(&offsetsWaitingLoad{
+			fromSeq: seq,
 			waiting: assignments,
-		}
-		c.triggerUpdateMetadata()
+		}).mergeIntoLocked(c)
 	}
-	return nil
 }
 
 // mergeInto is used to merge waiting offsets into a consumer.
@@ -248,21 +234,29 @@ func (c *Client) AssignPartitions(assignments map[string]map[int32]Offset) error
 // responsible for topic partitions. All failing loads get merged back into the
 // consumer for a future load retry.
 func (o *offsetsWaitingLoad) mergeInto(c *consumer) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	o.mergeIntoLocked(c)
+}
+
+// mergeIntoLocked is called directly from assignOffsets, which already
+// has the consumer locked.
+func (o *offsetsWaitingLoad) mergeIntoLocked(c *consumer) {
 	if len(o.waiting) == 0 {
 		return
 	}
 
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if c.offsetsWaitingLoad != nil &&
-		o.fromSeq < c.offsetsWaitingLoad.fromSeq {
+	if o.fromSeq < c.seq {
 		return
 	}
 
+	// If this is the first reload, we trigger a metadata update.
+	// If this is non-nil, then a metadata update has not returned
+	// yet and we merge into the exisiting wait and avoid updating.
 	existing := c.offsetsWaitingLoad
 	if existing == nil {
 		c.offsetsWaitingLoad = o
+		c.client.triggerUpdateMetadata()
 		return
 	}
 
@@ -276,24 +270,36 @@ func (o *offsetsWaitingLoad) mergeInto(c *consumer) {
 			curTopic[partition] = offset
 		}
 	}
-
-	if len(existing.waiting) > 0 {
-		c.client.triggerUpdateMetadata()
-	}
 }
 
 func (c *consumer) doOnMetadataUpdate() {
 	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// First, call our direct or group on updates; these may set more
+	// partitions to load.
+	switch c.typ {
+	case consumerTypeUnset:
+		c.mu.Unlock()
+		return
+	case consumerTypeDirect:
+		c.onMetadataUpdateDirect()
+	case consumerTypeGroup:
+		// TODO if leader, reprocess partitions to see if new assignments
+	}
+
+	// Finally, process any updates.
+	c.resetAndLoadOffsets()
+}
+
+// requires mu
+func (c *consumer) resetAndLoadOffsets() {
 	toLoad := c.offsetsWaitingLoad
 	c.offsetsWaitingLoad = nil
-	// TODO inc tries here
-	c.mu.Unlock()
-
 	if toLoad == nil || toLoad.waiting == nil {
 		return
 	}
-
-	c.tryOffsetLoad(toLoad)
+	go c.tryOffsetLoad(toLoad)
 }
 
 func (c *consumer) tryOffsetLoad(toLoad *offsetsWaitingLoad) {
@@ -311,8 +317,8 @@ func (c *consumer) tryOffsetLoad(toLoad *offsetsWaitingLoad) {
 	// offsets for those partitions.
 	topics := c.client.loadTopics()
 	for topic, partitions := range toLoad.waiting {
-		// The topicPartitions must exist, since AssignPartitions
-		// creates the topic (empty) if the topic is new.
+		// The topicPartitions must exist, since assignPartitions
+		// creates the topic if the topic is new.
 		topicPartitions := topics[topic].load()
 
 		for partition, offset := range partitions {
@@ -364,6 +370,12 @@ func (c *consumer) tryBrokerOffsetLoad(broker *broker, load *offsetsWaitingLoad)
 		return
 	}
 
+	type toSet struct {
+		topicPartition *topicPartition
+		offset         int64
+	}
+	var toSets []toSet
+
 	for _, responseTopic := range resp.Responses {
 		topic := responseTopic.Topic
 		waitingParts, ok := load.waiting[topic]
@@ -395,12 +407,42 @@ func (c *consumer) tryBrokerOffsetLoad(broker *broker, load *offsetsWaitingLoad)
 				continue // very weird
 			}
 
+			// We have a response for what we wanted to load:
+			// delete our want from the map to avoid reload.
+			delete(waitingParts, partition)
+			if len(waitingParts) == 0 {
+				delete(load.waiting, topic)
+			}
+
 			offset := responsePartition.Offset
 			if waitingPart.request >= 0 {
 				offset = waitingPart.request + waitingPart.relative
 			}
-			topicPartition.consumption.setOffset(offset)
+			toSets = append(toSets, toSet{
+				topicPartition,
+				offset,
+			})
 		}
+	}
+
+	// If for some reason Kafka did not reply to some of our list request,
+	// we re-request.
+	if len(load.waiting) > 0 {
+		load.mergeInto(c)
+	}
+	if len(toSets) == 0 {
+		return
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if load.fromSeq < c.seq {
+		return
+	}
+	for _, toSet := range toSets {
+		toSet.topicPartition.consumption.setOffset(toSet.offset, c.seq)
+		c.usingPartitions = append(c.usingPartitions, toSet.topicPartition)
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/twmb/kgo/kversion"
@@ -151,11 +152,12 @@ func NewClient(opts ...Opt) (*Client, error) {
 
 		coordinators: make(map[coordinatorKey]int32),
 
-		metadataTicker:   time.NewTicker(time.Minute), // TODO configurable?
 		updateMetadataCh: make(chan struct{}, 1),
 
 		closedCh: make(chan struct{}),
 	}
+	c.consumer.client = c
+	c.consumer.sourcesReadyCond = sync.NewCond(&c.consumer.sourcesReadyMu)
 	c.rng.Seed(uint64(time.Now().UnixNano()))
 	c.topics.Store(make(map[string]*topicPartitions))
 	c.metawait.init()

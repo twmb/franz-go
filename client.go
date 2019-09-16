@@ -35,7 +35,6 @@ type Client struct {
 	topicsMu sync.Mutex
 	topics   atomic.Value // map[string]*topicPartitions
 
-	metadataTicker   *time.Ticker
 	updateMetadataCh chan struct{}
 	metawait         metawait
 

@@ -9,7 +9,6 @@ import (
 )
 
 // TODO strengthen errors
-// TODO remove error from AssignGroup / AssignPartitions
 
 // GroupOpt is an option to configure group consuming.
 type GroupOpt interface {
@@ -78,20 +77,21 @@ func WithGroupHeartbeatInterval(interval time.Duration) GroupOpt {
 
 // AssignGroup assigns a group to consume from, overriding any prior
 // assignment. To leave a group, you can AssignGroup with an empty group.
-func (c *Client) AssignGroup(group string, opts ...GroupOpt) error {
+func (c *Client) AssignGroup(group string, opts ...GroupOpt) {
 	consumer := &c.consumer
 	consumer.mu.Lock()
 	defer consumer.mu.Unlock()
 
-	if err := consumer.maybeInit(c, consumerTypeGroup); err != nil {
-		return err
-	}
-	if group == "" {
-		return errors.New("invalid empty group name")
-	}
-	if consumer.group.id != "" {
-		return errors.New("client already has a group")
-	}
+	// TODO:
+	// empty: leave
+	// non-empty, same: do nothing
+	// non-empty, different: leave, switch group
+	// 	if group == "" {
+	//		return errors.New("invalid empty group name")
+	//	}
+	//	if consumer.group.id != "" {
+	//		return errors.New("client already has a group")
+	//	}
 	consumer.group = consumerGroup{
 		id: group,
 		// topics from opts
@@ -121,8 +121,6 @@ func (c *Client) AssignGroup(group string, opts ...GroupOpt) error {
 	c.topicsMu.Unlock()
 
 	go c.consumeGroup()
-
-	return nil
 }
 
 type (
@@ -151,6 +149,15 @@ func (c *Client) consumeGroup() {
 loop:
 	for {
 		err := c.consumer.joinAndSync()
+		if err == nil {
+			err = c.consumer.fetchOffsets()
+			if err == nil {
+				err = c.heartbeat()
+				if err == kerr.RebalanceInProgress {
+					continue
+				}
+			}
+		}
 		if err != nil {
 			consecutiveErrors++
 			select {
@@ -161,10 +168,33 @@ loop:
 			}
 		}
 		consecutiveErrors = 0
+	}
+}
 
-		//err = c.consumer.fetchOffsets()
-		// fetch offsets
-		// heartbeat
+func (c *Client) heartbeat() error {
+	interval := time.Millisecond * time.Duration(c.consumer.group.rebalanceTimeoutMS)
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+		case <-c.closedCh:
+			return errors.New("client closed")
+		}
+
+		req := &kmsg.HeartbeatRequest{
+			GroupID:      c.consumer.group.id,
+			GenerationID: c.consumer.group.generation,
+			MemberID:     c.consumer.group.memberID,
+		}
+		kresp, err := c.Request(req)
+		if err != nil {
+			return err
+		}
+		resp := kresp.(*kmsg.HeartbeatResponse)
+		if err = kerr.ErrorForCode(resp.ErrorCode); err != nil {
+			return err
+		}
 	}
 }
 
@@ -255,4 +285,47 @@ func (c *consumer) joinGroupProtocols() []kmsg.JoinGroupRequestGroupProtocol {
 		})
 	}
 	return protos
+}
+
+func (c *consumer) fetchOffsets() error {
+	req := kmsg.OffsetFetchRequest{
+		GroupID: c.group.id,
+	}
+	for topic, partitions := range c.group.assigned {
+		req.Topics = append(req.Topics, kmsg.OffsetFetchRequestTopic{
+			Topic:      topic,
+			Partitions: partitions,
+		})
+	}
+	kresp, err := c.client.Request(&req)
+	if err != nil {
+		return err
+	}
+	resp := kresp.(*kmsg.OffsetFetchResponse)
+	errCode := resp.ErrorCode
+	if resp.Version < 2 && len(resp.Responses) > 0 && len(resp.Responses[0].PartitionResponses) > 0 {
+		errCode = resp.Responses[0].PartitionResponses[0].ErrorCode
+	}
+	if err = kerr.ErrorForCode(errCode); err != nil && !kerr.IsRetriable(err) {
+		return err
+	}
+
+	// TODO KIP-320
+	offsets := make(map[string]map[int32]Offset)
+	for _, response := range resp.Responses {
+		topicOffsets := make(map[int32]Offset)
+		offsets[response.Topic] = topicOffsets
+		for _, partitionResponse := range response.PartitionResponses {
+			if partitionResponse.ErrorCode != 0 {
+				return kerr.ErrorForCode(partitionResponse.ErrorCode)
+			}
+			topicOffsets[partitionResponse.Partition] = ConsumeExactOffset(partitionResponse.Offset)
+		}
+	}
+
+	c.mu.Lock()
+	c.assignPartitions(offsets, true)
+	c.resetAndLoadOffsets()
+	c.mu.Unlock()
+	return nil
 }
