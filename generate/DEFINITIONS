@@ -991,9 +991,7 @@ OffsetFetchRequest => key 9, max version 5, group coordinator
     // Topic is a topic to fetch offsets for.
     Topic: string
     // Partitions in a list of partitions in a group to fetch offsets for.
-    Partitions: [=>]
-      // Partition is a partition to fetch offsets for in a topic.
-      Partition: int32
+    Partitions: [int32]
 
 // OffsetFetchResponse is returned from an OffsetFetchRequest.
 OffsetFetchResponse =>

@@ -3039,16 +3039,12 @@ func (v *OffsetCommitResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
-type OffsetFetchRequestTopicPartition struct {
-	// Partition is a partition to fetch offsets for in a topic.
-	Partition int32
-}
 type OffsetFetchRequestTopic struct {
 	// Topic is a topic to fetch offsets for.
 	Topic string
 
 	// Partitions in a list of partitions in a group to fetch offsets for.
-	Partitions []OffsetFetchRequestTopicPartition
+	Partitions []int32
 }
 
 // OffsetFetchRequest requests the most recent committed offsets for topic
@@ -3096,11 +3092,8 @@ func (v *OffsetFetchRequest) AppendTo(dst []byte) []byte {
 				v := v.Partitions
 				dst = kbin.AppendArrayLen(dst, len(v))
 				for i := range v {
-					v := &v[i]
-					{
-						v := v.Partition
-						dst = kbin.AppendInt32(dst, v)
-					}
+					v := v[i]
+					dst = kbin.AppendInt32(dst, v)
 				}
 			}
 		}
