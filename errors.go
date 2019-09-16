@@ -7,15 +7,6 @@ import (
 	"github.com/twmb/kgo/kerr"
 )
 
-type clientErr struct {
-	err       error
-	retriable bool
-}
-
-func (c *clientErr) Error() string {
-	return c.err.Error()
-}
-
 var (
 	// ErrUnknownRequestKey is returned when using a kmsg.Request with a
 	// key larger than kmsg.MaxKey.
@@ -67,7 +58,7 @@ var (
 	//
 	// Kafka does not allow downsizing partition counts in Kafka, so this
 	// error should generally not appear.
-	ErrPartitionDeleted = errors.New("partition no longer exists!")
+	ErrPartitionDeleted = errors.New("partition no longer exists")
 )
 
 func isRetriableBrokerErr(err error) bool {
@@ -125,8 +116,7 @@ func (e *errUnknownCoordinator) Error() string {
 			" but did not reply with that broker in the broker list",
 			e.key.name, e.coordinator)
 	default:
-		return fmt.Sprintf("Kafka replied to an unknown coordinator key %s (type %d) that it has a broker coordinator %d,",
-			" but did not reply with that broker in the broker list",
-			e.key.name, e.key.typ, e.coordinator)
+		return fmt.Sprintf("Kafka replied to an unknown coordinator key %s (type %d) that it has a broker coordinator %d,"+
+			" but did not reply with that broker in the broker list", e.key.name, e.key.typ, e.coordinator)
 	}
 }
