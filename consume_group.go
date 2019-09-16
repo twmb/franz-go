@@ -172,7 +172,7 @@ loop:
 }
 
 func (c *Client) heartbeat() error {
-	interval := time.Millisecond * time.Duration(c.consumer.group.rebalanceTimeoutMS)
+	interval := time.Millisecond * time.Duration(c.consumer.group.heartbeatIntervalMS)
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
