@@ -22,34 +22,34 @@ type groupOpt struct {
 
 func (opt groupOpt) apply(cfg *consumerGroup) { opt.fn(cfg) }
 
-// WithGroupTopics adds topics to use for group consuming.
-func WithGroupTopics(topics ...string) GroupOpt {
+// GroupTopics adds topics to use for group consuming.
+func GroupTopics(topics ...string) GroupOpt {
 	return groupOpt{func(cfg *consumerGroup) { cfg.topics = append(cfg.topics, topics...) }}
 }
 
-// WithGroupBalancers sets the balancer to use for dividing topic partitions
+// GroupBalancers sets the balancer to use for dividing topic partitions
 // among group members, overriding the defaults.
 //
 // The current default is [sticky, roundrobin, range].
 //
 // For balancing, Kafka chooses the first protocol that all group members agree
 // to support.
-func WithGroupBalancers(balancers ...GroupBalancer) GroupOpt {
+func GroupBalancers(balancers ...GroupBalancer) GroupOpt {
 	return groupOpt{func(cfg *consumerGroup) { cfg.balancers = balancers }}
 }
 
-// WithGroupSessionTimeout sets how long a member the group can go between
+// GroupSessionTimeout sets how long a member the group can go between
 // heartbeats, overriding the default 10,000ms. If a member does not heartbeat
-// within this timeout, the broker will remove the member from the group and
+// in this timeout, the broker will remove the member from the group and
 // initiate a rebalance.
 //
 // This corresponds to Kafka's session.timeout.ms setting and must be within
 // the broker's group.min.session.timeout.ms and group.max.session.timeout.ms.
-func WithGroupSessionTimeout(timeout time.Duration) GroupOpt {
+func GroupSessionTimeout(timeout time.Duration) GroupOpt {
 	return groupOpt{func(cfg *consumerGroup) { cfg.sessionTimeoutMS = int32(timeout.Milliseconds()) }}
 }
 
-// WithGroupRebalanceTimeout sets how long group members are allowed to take
+// GroupRebalanceTimeout sets how long group members are allowed to take
 // when a JoinGroup is initiated (i.e., a rebalance has begun), overriding the
 // default 60,000ms. This is essentially how long all members are allowed to
 // complete work and commit offsets.
@@ -59,11 +59,11 @@ func WithGroupSessionTimeout(timeout time.Duration) GroupOpt {
 // the group.
 //
 // This corresponds to Kafka's rebalance.timeout.ms.
-func WithGroupRebalanceTimeout(timeout time.Duration) GroupOpt {
+func GroupRebalanceTimeout(timeout time.Duration) GroupOpt {
 	return groupOpt{func(cfg *consumerGroup) { cfg.rebalanceTimeoutMS = int32(timeout.Milliseconds()) }}
 }
 
-// WithGroupHeartbeatInterval sets how long a group member goes between
+// GroupHeartbeatInterval sets how long a group member goes between
 // heartbeats to Kafka, overriding the default 3,000ms.
 //
 // Kafka uses heartbeats to ensure that a group member's session stays active.
@@ -71,7 +71,7 @@ func WithGroupRebalanceTimeout(timeout time.Duration) GroupOpt {
 // higher than 1/3rd the session timeout.
 //
 // This corresponds to Kafka's heartbeat.interval.ms.
-func WithGroupHeartbeatInterval(interval time.Duration) GroupOpt {
+func GroupHeartbeatInterval(interval time.Duration) GroupOpt {
 	return groupOpt{func(cfg *consumerGroup) { cfg.heartbeatIntervalMS = int32(interval.Milliseconds()) }}
 }
 
