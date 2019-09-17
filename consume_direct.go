@@ -1,19 +1,17 @@
 package kgo
 
-import (
-	"regexp"
-)
+import "regexp"
 
 // ConsumeOpt is an option to configure direct topic / partition consuming.
 type ConsumeOpt interface {
-	apply(*consumerDirect)
+	apply(*directConsumer)
 }
 
 type directConsumeOpt struct {
-	fn func(cfg *consumerDirect)
+	fn func(cfg *directConsumer)
 }
 
-func (opt directConsumeOpt) apply(cfg *consumerDirect) { opt.fn(cfg) }
+func (opt directConsumeOpt) apply(cfg *directConsumer) { opt.fn(cfg) }
 
 // ConsumeTopics sets topics to consume directly and the offsets to start
 // consuming partitions from in those topics.
@@ -21,7 +19,7 @@ func (opt directConsumeOpt) apply(cfg *consumerDirect) { opt.fn(cfg) }
 // If a metadata update sees partitions added to a topic, the client will
 // automatically begin consuming from those new partitions.
 func ConsumeTopics(offset Offset, topics ...string) ConsumeOpt {
-	return directConsumeOpt{func(cfg *consumerDirect) {
+	return directConsumeOpt{func(cfg *directConsumer) {
 		cfg.topics = make(map[string]Offset, len(topics))
 		for _, topic := range topics {
 			cfg.topics[topic] = offset
@@ -37,16 +35,16 @@ func ConsumeTopics(offset Offset, topics ...string) ConsumeOpt {
 // offsets on partitions in this option are used in favor of the more general
 // topic offset from ConsumeTopics.
 func ConsumePartitions(partitions map[string]map[int32]Offset) ConsumeOpt {
-	return directConsumeOpt{func(cfg *consumerDirect) { cfg.partitions = partitions }}
+	return directConsumeOpt{func(cfg *directConsumer) { cfg.partitions = partitions }}
 }
 
 // ConsumeTopicsRegex sets all topics in ConsumeTopics to be parsed as regular
 // expressions.
 func ConsumeTopicsRegex() ConsumeOpt {
-	return directConsumeOpt{func(cfg *consumerDirect) { cfg.regexTopics = true }}
+	return directConsumeOpt{func(cfg *directConsumer) { cfg.regexTopics = true }}
 }
 
-type consumerDirect struct {
+type directConsumer struct {
 	topics     map[string]Offset
 	partitions map[string]map[int32]Offset
 
@@ -63,39 +61,34 @@ func (cl *Client) AssignPartitions(opts ...ConsumeOpt) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	c.assignPartitions(nil, true) // invalidate old assignments
-	c.direct = consumerDirect{
+	c.unassignPrior()
+
+	d := &directConsumer{
 		topics:     make(map[string]Offset),
 		partitions: make(map[string]map[int32]Offset),
 		reTopics:   make(map[string]Offset),
 		reIgnore:   make(map[string]struct{}),
 		using:      make(map[string]map[int32]struct{}),
 	}
-
 	for _, opt := range opts {
-		opt.apply(&c.direct)
+		opt.apply(d)
 	}
-
-	if c.typ == consumerTypeGroup {
-		// TODO leave group
-	}
-	c.typ = consumerTypeDirect
-	if len(c.direct.topics) == 0 && len(c.direct.partitions) == 0 {
+	if len(d.topics) == 0 && len(d.partitions) == 0 {
 		c.typ = consumerTypeUnset
 		return
 	}
+	c.typ = consumerTypeDirect
+	c.direct = d
 
-	if !c.direct.regexTopics {
-		ensureTopics := make(map[string]struct{})
-		for topic := range c.direct.topics {
-			ensureTopics[topic] = struct{}{}
-		}
-		for topic := range c.direct.partitions {
-			ensureTopics[topic] = struct{}{}
-		}
+	if !d.regexTopics {
 		cl.topicsMu.Lock()
 		clientTopics := cl.cloneTopics()
-		for topic := range ensureTopics {
+		for topic := range d.topics {
+			if _, exists := clientTopics[topic]; !exists {
+				clientTopics[topic] = newTopicPartitions()
+			}
+		}
+		for topic := range d.partitions {
 			if _, exists := clientTopics[topic]; !exists {
 				clientTopics[topic] = newTopicPartitions()
 			}
@@ -107,14 +100,14 @@ func (cl *Client) AssignPartitions(opts ...ConsumeOpt) {
 	cl.triggerUpdateMetadata()
 }
 
-// requires consumer lock
-// and then client topics lock in assign
-func (c *consumer) onMetadataUpdateDirect() {
-	d := &c.direct
-
+// findNewAssignments returns new partitions to consume at given offsets
+// based off the current topics.
+func (d *directConsumer) findNewAssignments(
+	topics map[string]*topicPartitions,
+) map[string]map[int32]Offset {
 	// First, we build everything we could theoretically want to consume.
 	toUse := make(map[string]map[int32]Offset, 10)
-	for topic, topicPartitions := range c.client.loadTopics() {
+	for topic, topicPartitions := range topics {
 		var useTopic bool
 		var useOffset Offset
 
@@ -186,7 +179,7 @@ func (c *consumer) onMetadataUpdateDirect() {
 	}
 
 	if len(toUse) == 0 {
-		return
+		return nil
 	}
 
 	// Finally, toUse contains new partitions that we must consume.
@@ -201,5 +194,6 @@ func (c *consumer) onMetadataUpdateDirect() {
 			topicUsing[partition] = struct{}{}
 		}
 	}
-	c.assignPartitions(toUse, false)
+
+	return toUse
 }

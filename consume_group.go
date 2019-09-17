@@ -8,23 +8,32 @@ import (
 	"github.com/twmb/kgo/kmsg"
 )
 
-// TODO strengthen errors
-
 // GroupOpt is an option to configure group consuming.
 type GroupOpt interface {
-	apply(*consumerGroup)
+	apply(*groupConsumer)
 }
 
 // groupOpt implements GroupOpt.
 type groupOpt struct {
-	fn func(cfg *consumerGroup)
+	fn func(cfg *groupConsumer)
 }
 
-func (opt groupOpt) apply(cfg *consumerGroup) { opt.fn(cfg) }
+func (opt groupOpt) apply(cfg *groupConsumer) { opt.fn(cfg) }
 
 // GroupTopics adds topics to use for group consuming.
 func GroupTopics(topics ...string) GroupOpt {
-	return groupOpt{func(cfg *consumerGroup) { cfg.topics = append(cfg.topics, topics...) }}
+	return groupOpt{func(cfg *groupConsumer) {
+		cfg.topics = make(map[string]struct{}, len(topics))
+		for _, topic := range topics {
+			cfg.topics[topic] = struct{}{}
+		}
+	}}
+}
+
+// GroupTopicsRegex sets all topics in GroupTopics to be parsed as regular
+// expressions.
+func GroupTopicsRegex() GroupOpt {
+	return groupOpt{func(cfg *groupConsumer) { cfg.regexTopics = true }}
 }
 
 // GroupBalancers sets the balancer to use for dividing topic partitions
@@ -35,7 +44,7 @@ func GroupTopics(topics ...string) GroupOpt {
 // For balancing, Kafka chooses the first protocol that all group members agree
 // to support.
 func GroupBalancers(balancers ...GroupBalancer) GroupOpt {
-	return groupOpt{func(cfg *consumerGroup) { cfg.balancers = balancers }}
+	return groupOpt{func(cfg *groupConsumer) { cfg.balancers = balancers }}
 }
 
 // GroupSessionTimeout sets how long a member the group can go between
@@ -46,7 +55,7 @@ func GroupBalancers(balancers ...GroupBalancer) GroupOpt {
 // This corresponds to Kafka's session.timeout.ms setting and must be within
 // the broker's group.min.session.timeout.ms and group.max.session.timeout.ms.
 func GroupSessionTimeout(timeout time.Duration) GroupOpt {
-	return groupOpt{func(cfg *consumerGroup) { cfg.sessionTimeoutMS = int32(timeout.Milliseconds()) }}
+	return groupOpt{func(cfg *groupConsumer) { cfg.sessionTimeoutMS = int32(timeout.Milliseconds()) }}
 }
 
 // GroupRebalanceTimeout sets how long group members are allowed to take
@@ -60,7 +69,7 @@ func GroupSessionTimeout(timeout time.Duration) GroupOpt {
 //
 // This corresponds to Kafka's rebalance.timeout.ms.
 func GroupRebalanceTimeout(timeout time.Duration) GroupOpt {
-	return groupOpt{func(cfg *consumerGroup) { cfg.rebalanceTimeoutMS = int32(timeout.Milliseconds()) }}
+	return groupOpt{func(cfg *groupConsumer) { cfg.rebalanceTimeoutMS = int32(timeout.Milliseconds()) }}
 }
 
 // GroupHeartbeatInterval sets how long a group member goes between
@@ -72,98 +81,117 @@ func GroupRebalanceTimeout(timeout time.Duration) GroupOpt {
 //
 // This corresponds to Kafka's heartbeat.interval.ms.
 func GroupHeartbeatInterval(interval time.Duration) GroupOpt {
-	return groupOpt{func(cfg *consumerGroup) { cfg.heartbeatIntervalMS = int32(interval.Milliseconds()) }}
+	return groupOpt{func(cfg *groupConsumer) { cfg.heartbeatIntervalMS = int32(interval.Milliseconds()) }}
+}
+
+type groupConsumer struct {
+	c  *consumer // used to change consumer state; generally c.mu is grabbed on access
+	cl *Client   // used for running requests / adding to topics map
+
+	id        string
+	topics    map[string]struct{}
+	balancers []GroupBalancer
+	leader    bool
+	leave     chan struct{}
+
+	regexTopics bool
+	reTopics    map[string]struct{}
+	reIgnore    map[string]struct{}
+
+	memberID   string
+	generation int32
+	assigned   map[string][]int32
+
+	sessionTimeoutMS    int32
+	rebalanceTimeoutMS  int32
+	heartbeatIntervalMS int32
+
+	// TODO autocommit
+	// OnAssign
+	// OnRevoke
+	// OnLost (incremental)
 }
 
 // AssignGroup assigns a group to consume from, overriding any prior
 // assignment. To leave a group, you can AssignGroup with an empty group.
-func (c *Client) AssignGroup(group string, opts ...GroupOpt) {
-	consumer := &c.consumer
-	consumer.mu.Lock()
-	defer consumer.mu.Unlock()
+func (cl *Client) AssignGroup(group string, opts ...GroupOpt) {
+	c := &cl.consumer
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
-	// TODO:
-	// empty: leave
-	// non-empty, same: do nothing
-	// non-empty, different: leave, switch group
-	// 	if group == "" {
-	//		return errors.New("invalid empty group name")
-	//	}
-	//	if consumer.group.id != "" {
-	//		return errors.New("client already has a group")
-	//	}
-	consumer.group = consumerGroup{
+	c.unassignPrior()
+	if len(group) == 0 {
+		return
+	}
+
+	g := &groupConsumer{
+		c:  c,
+		cl: cl,
 		id: group,
-		// topics from opts
+
 		balancers: []GroupBalancer{
 			StickyBalancer(),
 			RoundRobinBalancer(),
 			RangeBalancer(),
 		},
 
+		leave: make(chan struct{}),
+
+		reTopics: make(map[string]struct{}),
+		reIgnore: make(map[string]struct{}),
+
 		sessionTimeoutMS:    10000,
 		rebalanceTimeoutMS:  60000,
 		heartbeatIntervalMS: 3000,
 	}
 	for _, opt := range opts {
-		opt.apply(&consumer.group)
+		opt.apply(g)
 	}
+	if len(g.topics) == 0 {
+		c.typ = consumerTypeUnset
+		return
+	}
+	c.typ = consumerTypeGroup
+	c.group = g
 
 	// Ensure all topics exist so that we will fetch their metadata.
-	c.topicsMu.Lock()
-	clientTopics := c.cloneTopics()
-	for _, topic := range c.consumer.group.topics {
-		if _, exists := clientTopics[topic]; !exists {
-			clientTopics[topic] = newTopicPartitions()
+	if !g.regexTopics {
+		cl.topicsMu.Lock()
+		clientTopics := cl.cloneTopics()
+		for topic := range g.topics {
+			if _, exists := clientTopics[topic]; !exists {
+				clientTopics[topic] = newTopicPartitions()
+			}
 		}
+		cl.topics.Store(clientTopics)
+		cl.topicsMu.Unlock()
 	}
-	c.topics.Store(clientTopics)
-	c.topicsMu.Unlock()
 
-	go c.consumeGroup()
+	go g.manage()
 }
 
-type (
-	consumerGroup struct {
-		id        string
-		topics    []string
-		balancers []GroupBalancer
-
-		memberID   string
-		generation int32
-		assigned   map[string][]int32
-
-		sessionTimeoutMS    int32
-		rebalanceTimeoutMS  int32
-		heartbeatIntervalMS int32
-
-		// TODO autocommit
-		// OnAssign
-		// OnRevoke
-		// OnLost (incremental)
-	}
-)
-
-func (c *Client) consumeGroup() {
+func (g *groupConsumer) manage() {
 	var consecutiveErrors int
 loop:
 	for {
-		err := c.consumer.joinAndSync()
+		err := g.joinAndSync()
 		if err == nil {
-			err = c.consumer.fetchOffsets()
+			err = g.fetchOffsets()
 			if err == nil {
-				err = c.heartbeat()
+				err = g.heartbeat()
 				if err == kerr.RebalanceInProgress {
-					continue
+					err = nil
 				}
 			}
 		}
 		if err != nil {
 			consecutiveErrors++
 			select {
-			case <-c.closedCh:
+			case <-g.leave:
 				return
-			case <-time.After(c.cfg.client.retryBackoff(consecutiveErrors)):
+			case <-g.cl.closedCh:
+				return
+			case <-time.After(g.cl.cfg.client.retryBackoff(consecutiveErrors)):
 				continue loop
 			}
 		}
@@ -171,23 +199,25 @@ loop:
 	}
 }
 
-func (c *Client) heartbeat() error {
-	interval := time.Millisecond * time.Duration(c.consumer.group.heartbeatIntervalMS)
+func (g *groupConsumer) heartbeat() error {
+	interval := time.Millisecond * time.Duration(g.heartbeatIntervalMS)
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ticker.C:
-		case <-c.closedCh:
+		case <-g.leave:
+			return errors.New("left group")
+		case <-g.cl.closedCh:
 			return errors.New("client closed")
 		}
 
 		req := &kmsg.HeartbeatRequest{
-			GroupID:      c.consumer.group.id,
-			GenerationID: c.consumer.group.generation,
-			MemberID:     c.consumer.group.memberID,
+			GroupID:      g.id,
+			GenerationID: g.generation,
+			MemberID:     g.memberID,
 		}
-		kresp, err := c.Request(req)
+		kresp, err := g.cl.Request(bgctx, req)
 		if err != nil {
 			return err
 		}
@@ -198,20 +228,21 @@ func (c *Client) heartbeat() error {
 	}
 }
 
-func (c *consumer) joinAndSync() error {
-	c.client.waitmeta()
+func (g *groupConsumer) joinAndSync() error {
+	g.cl.waitmeta()
 
+	g.leader = false
 start:
 	var memberID string
 	req := kmsg.JoinGroupRequest{
-		GroupID:          c.group.id,
-		SessionTimeout:   c.group.sessionTimeoutMS,
-		RebalanceTimeout: c.group.rebalanceTimeoutMS,
+		GroupID:          g.id,
+		SessionTimeout:   g.sessionTimeoutMS,
+		RebalanceTimeout: g.rebalanceTimeoutMS,
 		ProtocolType:     "consumer",
 		MemberID:         memberID,
-		GroupProtocols:   c.joinGroupProtocols(),
+		GroupProtocols:   g.joinGroupProtocols(),
 	}
-	kresp, err := c.client.Request(&req)
+	kresp, err := g.cl.Request(bgctx, &req)
 	if err != nil {
 		return err
 	}
@@ -225,18 +256,19 @@ start:
 		return err // Request retries as necesary, so this must be a failure
 	}
 
-	c.group.memberID = resp.MemberID
-	c.group.generation = resp.GenerationID
+	g.memberID = resp.MemberID
+	g.generation = resp.GenerationID
 
 	var plan balancePlan
 	if resp.LeaderID == resp.MemberID {
-		plan, err = c.balanceGroup(resp.GroupProtocol, resp.Members)
+		plan, err = g.balanceGroup(resp.GroupProtocol, resp.Members)
 		if err != nil {
 			return err
 		}
+		g.leader = true
 	}
 
-	if err = c.syncGroup(plan, resp.GenerationID); err != nil {
+	if err = g.syncGroup(plan, resp.GenerationID); err != nil {
 		if err == kerr.RebalanceInProgress {
 			goto start
 		}
@@ -246,14 +278,14 @@ start:
 	return nil
 }
 
-func (c *consumer) syncGroup(plan balancePlan, generation int32) error {
+func (g *groupConsumer) syncGroup(plan balancePlan, generation int32) error {
 	req := kmsg.SyncGroupRequest{
-		GroupID:         c.group.id,
+		GroupID:         g.id,
 		GenerationID:    generation,
-		MemberID:        c.group.memberID,
+		MemberID:        g.memberID,
 		GroupAssignment: plan.intoAssignment(),
 	}
-	kresp, err := c.client.Request(&req)
+	kresp, err := g.cl.Request(bgctx, &req)
 	if err != nil {
 		return err // Request retries as necesary, so this must be a failure
 	}
@@ -264,40 +296,44 @@ func (c *consumer) syncGroup(plan balancePlan, generation int32) error {
 		return err
 	}
 
-	c.group.assigned = make(map[string][]int32)
+	g.assigned = make(map[string][]int32)
 	for _, topic := range kassignment.Topics {
-		c.group.assigned[topic.Topic] = topic.Partitions
+		g.assigned[topic.Topic] = topic.Partitions
 	}
 
 	return nil
 }
 
-func (c *consumer) joinGroupProtocols() []kmsg.JoinGroupRequestGroupProtocol {
+func (g *groupConsumer) joinGroupProtocols() []kmsg.JoinGroupRequestGroupProtocol {
+	topics := make([]string, 0, len(g.topics))
+	for topic := range g.topics {
+		topics = append(topics, topic)
+	}
 	var protos []kmsg.JoinGroupRequestGroupProtocol
-	for _, balancer := range c.group.balancers {
+	for _, balancer := range g.balancers {
 		protos = append(protos, kmsg.JoinGroupRequestGroupProtocol{
 			ProtocolName: balancer.protocolName(),
 			ProtocolMetadata: balancer.metaFor(
-				c.group.topics,
-				c.group.assigned,
-				c.group.generation,
+				topics,
+				g.assigned,
+				g.generation,
 			),
 		})
 	}
 	return protos
 }
 
-func (c *consumer) fetchOffsets() error {
+func (g *groupConsumer) fetchOffsets() error {
 	req := kmsg.OffsetFetchRequest{
-		GroupID: c.group.id,
+		GroupID: g.id,
 	}
-	for topic, partitions := range c.group.assigned {
+	for topic, partitions := range g.assigned {
 		req.Topics = append(req.Topics, kmsg.OffsetFetchRequestTopic{
 			Topic:      topic,
 			Partitions: partitions,
 		})
 	}
-	kresp, err := c.client.Request(&req)
+	kresp, err := g.cl.Request(bgctx, &req)
 	if err != nil {
 		return err
 	}
@@ -323,9 +359,10 @@ func (c *consumer) fetchOffsets() error {
 		}
 	}
 
-	c.mu.Lock()
-	c.assignPartitions(offsets, true)
-	c.resetAndLoadOffsets()
-	c.mu.Unlock()
+	// TODO seq here
+	g.c.mu.Lock()
+	g.c.assignPartitions(offsets, true)
+	g.c.resetAndLoadOffsets()
+	g.c.mu.Unlock()
 	return nil
 }

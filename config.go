@@ -156,7 +156,7 @@ func NewClient(opts ...Opt) (*Client, error) {
 
 		closedCh: make(chan struct{}),
 	}
-	c.consumer.client = c
+	c.consumer.cl = c
 	c.consumer.sourcesReadyCond = sync.NewCond(&c.consumer.sourcesReadyMu)
 	c.rng.Seed(uint64(time.Now().UnixNano()))
 	c.topics.Store(make(map[string]*topicPartitions))

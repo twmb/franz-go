@@ -11,7 +11,7 @@ import (
 type consumerType int8
 
 const (
-	consumerTypeUnset = -1 + iota
+	consumerTypeUnset = iota
 	consumerTypeDirect
 	consumerTypeGroup
 )
@@ -56,44 +56,12 @@ func ConsumeExactOffset(o int64) Offset {
 	return Offset{request: o}
 }
 
-type TopicPartitions struct {
-	Topic      string
-	Partitions []int32
-}
-
-// TopicPartitions requests and returns partitions for the requested topics or
-// an error if the request failed.
-//
-// If no topics are requested, this returns all topics and their partitions.
-func (c *Client) TopicPartitions(topics ...string) ([]TopicPartitions, error) {
-	resp, err := c.fetchMetadata(len(topics) == 0, topics)
-	if err != nil {
-		return nil, err
-	}
-
-	tps := make([]TopicPartitions, 0, len(resp.TopicMetadata))
-	for _, topicMeta := range resp.TopicMetadata {
-		if topicMeta.IsInternal {
-			continue
-		}
-		tp := TopicPartitions{
-			Topic:      topicMeta.Topic,
-			Partitions: make([]int32, 0, len(topicMeta.PartitionMetadata)),
-		}
-		for _, partMeta := range topicMeta.PartitionMetadata {
-			tp.Partitions = append(tp.Partitions, partMeta.Partition)
-		}
-		tps = append(tps, tp)
-	}
-	return tps, nil
-}
-
 type consumer struct {
-	client *Client
+	cl *Client
 
 	mu     sync.Mutex
-	group  consumerGroup
-	direct consumerDirect
+	group  *groupConsumer
+	direct *directConsumer
 	typ    consumerType
 
 	usingPartitions []*topicPartition
@@ -107,6 +75,11 @@ type consumer struct {
 	sourcesReadyMu          sync.Mutex
 	sourcesReadyCond        *sync.Cond
 	sourcesReadyForDraining []*recordSource
+}
+
+func (c *consumer) unassignPrior() {
+	c.assignPartitions(nil, true) // invalidate old assignments
+	// c.maybeLeaveGroup()
 }
 
 func (c *consumer) addSourceReadyForDraining(source *recordSource) {
@@ -184,15 +157,15 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, inv
 		return
 	}
 
-	c.client.topicsMu.Lock()
-	clientTopics := c.client.cloneTopics()
+	c.cl.topicsMu.Lock()
+	clientTopics := c.cl.cloneTopics()
 	for topic := range assignments {
 		if _, exists := clientTopics[topic]; !exists {
 			clientTopics[topic] = newTopicPartitions()
 		}
 	}
-	c.client.topics.Store(clientTopics)
-	c.client.topicsMu.Unlock()
+	c.cl.topics.Store(clientTopics)
+	c.cl.topicsMu.Unlock()
 
 	// If we have a topic and partition loaded and the assignments use
 	// exact offsets, we can avoid looking up offsets.
@@ -256,7 +229,7 @@ func (o *offsetsWaitingLoad) mergeIntoLocked(c *consumer) {
 	existing := c.offsetsWaitingLoad
 	if existing == nil {
 		c.offsetsWaitingLoad = o
-		c.client.triggerUpdateMetadata()
+		c.cl.triggerUpdateMetadata()
 		return
 	}
 
@@ -280,10 +253,9 @@ func (c *consumer) doOnMetadataUpdate() {
 	// partitions to load.
 	switch c.typ {
 	case consumerTypeUnset:
-		c.mu.Unlock()
 		return
 	case consumerTypeDirect:
-		c.onMetadataUpdateDirect()
+		c.assignPartitions(c.direct.findNewAssignments(c.cl.loadTopics()), false)
 	case consumerTypeGroup:
 		// TODO if leader, reprocess partitions to see if new assignments
 	}
@@ -310,12 +282,12 @@ func (c *consumer) tryOffsetLoad(toLoad *offsetsWaitingLoad) {
 
 	// For most of this function, we hold the broker mu so that we can
 	// check if topic partition leaders exist.
-	c.client.brokersMu.RLock()
-	brokers := c.client.brokers
+	c.cl.brokersMu.RLock()
+	brokers := c.cl.brokers
 
 	// Map all waiting partition loads to the brokers that can load the
 	// offsets for those partitions.
-	topics := c.client.loadTopics()
+	topics := c.cl.loadTopics()
 	for topic, partitions := range toLoad.waiting {
 		// The topicPartitions must exist, since assignPartitions
 		// creates the topic if the topic is new.
@@ -343,7 +315,7 @@ func (c *consumer) tryOffsetLoad(toLoad *offsetsWaitingLoad) {
 		}
 	}
 
-	c.client.brokersMu.RUnlock()
+	c.cl.brokersMu.RUnlock()
 
 	for broker, brokerLoad := range brokersToLoadFrom {
 		go c.tryBrokerOffsetLoad(broker, brokerLoad)
@@ -353,22 +325,12 @@ func (c *consumer) tryOffsetLoad(toLoad *offsetsWaitingLoad) {
 }
 
 func (c *consumer) tryBrokerOffsetLoad(broker *broker, load *offsetsWaitingLoad) {
-	var resp *kmsg.ListOffsetsResponse
-	var err error
-	broker.wait(
-		load.buildReq(),
-		func(kresp kmsg.Response, respErr error) {
-			if err = respErr; err != nil {
-				return
-			}
-			resp = kresp.(*kmsg.ListOffsetsResponse)
-		},
-	)
-
+	kresp, err := broker.waitResp(bgctx, load.buildReq())
 	if err != nil {
 		load.mergeInto(c)
 		return
 	}
+	resp := kresp.(*kmsg.ListOffsetsResponse)
 
 	type toSet struct {
 		topicPartition *topicPartition
@@ -401,7 +363,7 @@ func (c *consumer) tryBrokerOffsetLoad(broker *broker, load *offsetsWaitingLoad)
 				continue
 			}
 
-			topicPartitions := c.client.loadTopics()[topic].load()
+			topicPartitions := c.cl.loadTopics()[topic].load()
 			topicPartition, ok := topicPartitions.all[partition]
 			if !ok {
 				continue // very weird

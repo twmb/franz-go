@@ -81,7 +81,7 @@ func (plan balancePlan) intoAssignment() []kmsg.SyncGroupRequestGroupAssignment 
 }
 
 // balanceGroup returns a balancePlan from a join group response.
-func (c *consumer) balanceGroup(proto string, kmembers []kmsg.JoinGroupResponseMember) (balancePlan, error) {
+func (g *groupConsumer) balanceGroup(proto string, kmembers []kmsg.JoinGroupResponseMember) (balancePlan, error) {
 	members, err := parseGroupMembers(kmembers)
 	if err != nil {
 		return nil, err
@@ -96,9 +96,9 @@ func (c *consumer) balanceGroup(proto string, kmembers []kmsg.JoinGroupResponseM
 		sort.Strings(member.topics) // guarantee sorted topics
 	}
 
-	for _, balancer := range c.group.balancers {
+	for _, balancer := range g.balancers {
 		if balancer.protocolName() == proto {
-			return balancer.balance(members, c.client.loadShortTopics()), nil
+			return balancer.balance(members, g.cl.loadShortTopics()), nil
 		}
 	}
 	return nil, fmt.Errorf("Odd") // TODO nice err
