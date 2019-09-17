@@ -179,7 +179,7 @@ func (c *Client) fetchTopicMetadata(reqTopics []string) (map[string]*topicPartit
 	all := c.consumer.typ == consumerTypeDirect && c.consumer.direct.regexTopics
 	// || c.consumer.typ == consumerTypeGroup && c.consumer.group.regexTopics
 	c.consumer.mu.Unlock()
-	meta, err := c.fetchMetadata(all, reqTopics)
+	meta, err := c.fetchMetadata(bgctx, all, reqTopics)
 	if err != nil {
 		return nil, all, err
 	}

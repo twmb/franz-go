@@ -94,7 +94,7 @@ func (c *Client) ensureProducerIDInit() error {
 }
 
 func (c *Client) initProducerID() error {
-	resp, err := c.Request(&kmsg.InitProducerIDRequest{
+	resp, err := c.Request(bgctx, &kmsg.InitProducerIDRequest{
 		// TODO txn id
 	})
 	if err != nil {

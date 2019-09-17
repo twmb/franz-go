@@ -157,6 +157,7 @@ func (source *recordSource) fill() {
 		}
 
 		source.broker.doSequencedAsyncPromise(
+			bgctx,
 			req,
 			func(resp kmsg.Response, err error) {
 				source.handleReqResp(req, resp, err)

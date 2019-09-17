@@ -1,6 +1,7 @@
 package kgo
 
 import (
+	"context"
 	"net"
 	"strconv"
 	"sync"
@@ -12,6 +13,9 @@ import (
 	"github.com/twmb/kgo/kerr"
 	"github.com/twmb/kgo/kmsg"
 )
+
+// TODO move into client, close on client.Close()
+var bgctx = context.Background()
 
 // Client issues requests and handles responses to a Kafka cluster.
 type Client struct {
@@ -56,38 +60,30 @@ func (c *Client) broker() *broker {
 }
 
 // fetchBrokerMetadata issues a metadata request solely for broker information.
-func (c *Client) fetchBrokerMetadata() error {
-	_, err := c.fetchMetadata(false, nil)
+func (c *Client) fetchBrokerMetadata(ctx context.Context) error {
+	_, err := c.fetchMetadata(ctx, false, nil)
 	return err
 }
 
-func (c *Client) fetchMetadata(all bool, topics []string) (*kmsg.MetadataResponse, error) {
+func (c *Client) fetchMetadata(ctx context.Context, all bool, topics []string) (*kmsg.MetadataResponse, error) {
 	if all {
 		topics = nil
 	} else if len(topics) == 0 {
 		topics = []string{}
 	}
 	broker := c.broker()
-	var meta *kmsg.MetadataResponse
-	var err error
-	broker.wait(
-		&kmsg.MetadataRequest{
-			Topics:                 topics,
-			AllowAutoTopicCreation: c.cfg.producer.allowAutoTopicCreation,
-		},
-		func(resp kmsg.Response, respErr error) {
-			if err = respErr; err != nil {
-				return
-			}
-			meta = resp.(*kmsg.MetadataResponse)
-		},
-	)
-	if err == nil {
-		if meta.ControllerID > 0 {
-			atomic.StoreInt32(&c.controllerID, meta.ControllerID)
-		}
-		c.updateBrokers(meta.Brokers)
+	kresp, err := broker.waitResp(ctx, &kmsg.MetadataRequest{
+		Topics:                 topics,
+		AllowAutoTopicCreation: c.cfg.producer.allowAutoTopicCreation,
+	})
+	if err != nil {
+		return nil, err
 	}
+	meta := kresp.(*kmsg.MetadataResponse)
+	if meta.ControllerID > 0 {
+		atomic.StoreInt32(&c.controllerID, meta.ControllerID)
+	}
+	c.updateBrokers(meta.Brokers)
 	return meta, err
 }
 
@@ -167,31 +163,57 @@ func (c *Client) Close() func() {
 //
 // In short, this tries to do the correct thing depending on what type of
 // request is being issued.
-func (c *Client) Request(req kmsg.Request) (kmsg.Response, error) {
-	tries := 0
+//
+// The passed context can be used to cancel a request and return early.
+// Note that if the request is not canceled before it is written to Kafka,
+// you may just end up canceling and not receiving the response to what Kafka
+// inevitably does.
+func (c *Client) Request(ctx context.Context, req kmsg.Request) (kmsg.Response, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	var resp kmsg.Response
 	var err error
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		resp, err = c.request(ctx, req)
+	}()
+	select {
+	case <-done:
+		return resp, err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// request is the logic for Request.
+func (c *Client) request(ctx context.Context, req kmsg.Request) (kmsg.Response, error) {
+	var resp kmsg.Response
+	var err error
+	tries := 0
 start:
 	tries++
 	if metaReq, isMetaReq := req.(*kmsg.MetadataRequest); isMetaReq {
 		// We hijack any metadata request so as to populate our
 		// own brokers and controller ID.
-		resp, err = c.fetchMetadata(metaReq.Topics == nil, metaReq.Topics)
+		resp, err = c.fetchMetadata(ctx, metaReq.Topics == nil, metaReq.Topics)
 	} else if _, admin := req.(kmsg.AdminRequest); admin {
 		var controller *broker
-		if controller, err = c.controller(); err == nil {
-			resp, err = controller.waitResp(req)
+		if controller, err = c.controller(ctx); err == nil {
+			resp, err = controller.waitResp(ctx, req)
 		}
 	} else if groupReq, isGroupReq := req.(kmsg.GroupCoordinatorRequest); isGroupReq {
-		resp, err = c.handleGroupReq(groupReq)
+		resp, err = c.handleGroupReq(ctx, groupReq)
 	} else if txnReq, isTxnReq := req.(kmsg.TxnCoordinatorRequest); isTxnReq {
-		resp, err = c.handleTxnReq(txnReq)
+		resp, err = c.handleTxnReq(ctx, txnReq)
 	} else {
-		resp, err = c.broker().waitResp(req)
+		resp, err = c.broker().waitResp(ctx, req)
 	}
 
 	if isRetriableBrokerErr(err) && tries < c.cfg.client.retries {
 		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
 		case <-c.closedCh:
 			return nil, err
 		case <-time.After(c.cfg.client.retryBackoff(tries)):
@@ -215,13 +237,13 @@ func (c *Client) brokerOrErr(id int32, err error) (*broker, error) {
 
 // controller returns the controller broker, forcing a broker load if
 // necessary.
-func (c *Client) controller() (*broker, error) {
+func (c *Client) controller(ctx context.Context) (*broker, error) {
 	tries := 0
 start:
 	var id int32
 	if id = atomic.LoadInt32(&c.controllerID); id < 0 {
 		tries++
-		if err := c.fetchBrokerMetadata(); err != nil {
+		if err := c.fetchBrokerMetadata(ctx); err != nil {
 			if isRetriableBrokerErr(err) && tries < c.cfg.client.retries {
 				select {
 				case <-c.closedCh:
@@ -252,12 +274,12 @@ type coordinatorKey struct {
 
 // loadController returns the group/txn coordinator for the given key, retrying
 // as necessary.
-func (c *Client) loadCoordinator(key coordinatorKey) (*broker, error) {
+func (c *Client) loadCoordinator(ctx context.Context, key coordinatorKey) (*broker, error) {
 	// If there is no controller, we have never loaded brokers. We will
 	// need the brokers after we know which one owns this key, so force
 	// a load of the brokers now.
 	if atomic.LoadInt32(&c.controllerID) < 0 {
-		if _, err := c.controller(); err != nil {
+		if _, err := c.controller(ctx); err != nil {
 			return nil, err
 		}
 	}
@@ -275,7 +297,7 @@ start:
 	}
 
 	tries++
-	kresp, err := c.broker().waitResp(&kmsg.FindCoordinatorRequest{
+	kresp, err := c.broker().waitResp(ctx, &kmsg.FindCoordinatorRequest{
 		CoordinatorKey:  key.name,
 		CoordinatorType: key.typ,
 	})
@@ -319,7 +341,7 @@ start:
 // Those that go to multiple have the groups split into individual requests
 // containing a single group. All requests are issued serially and then the
 // responses are merged. We only return err if all requests error.
-func (c *Client) handleGroupReq(req kmsg.GroupCoordinatorRequest) (kmsg.Response, error) {
+func (c *Client) handleGroupReq(ctx context.Context, req kmsg.GroupCoordinatorRequest) (kmsg.Response, error) {
 	var group2req map[string]kmsg.Request
 	var kresp kmsg.Response
 	var merge func(kmsg.Response)
@@ -331,17 +353,17 @@ func (c *Client) handleGroupReq(req kmsg.GroupCoordinatorRequest) (kmsg.Response
 		return nil, ErrClientTooOld
 
 	case *kmsg.OffsetCommitRequest:
-		return c.handleGroupReqSimple(t.GroupID, req)
+		return c.handleGroupReqSimple(ctx, t.GroupID, req)
 	case *kmsg.OffsetFetchRequest:
-		return c.handleGroupReqSimple(t.GroupID, req)
+		return c.handleGroupReqSimple(ctx, t.GroupID, req)
 	case *kmsg.JoinGroupRequest:
-		return c.handleGroupReqSimple(t.GroupID, req)
+		return c.handleGroupReqSimple(ctx, t.GroupID, req)
 	case *kmsg.HeartbeatRequest:
-		return c.handleGroupReqSimple(t.GroupID, req)
+		return c.handleGroupReqSimple(ctx, t.GroupID, req)
 	case *kmsg.LeaveGroupRequest:
-		return c.handleGroupReqSimple(t.GroupID, req)
+		return c.handleGroupReqSimple(ctx, t.GroupID, req)
 	case *kmsg.SyncGroupRequest:
-		return c.handleGroupReqSimple(t.GroupID, req)
+		return c.handleGroupReqSimple(ctx, t.GroupID, req)
 
 	case *kmsg.DescribeGroupsRequest:
 		group2req = make(map[string]kmsg.Request)
@@ -380,7 +402,7 @@ func (c *Client) handleGroupReq(req kmsg.GroupCoordinatorRequest) (kmsg.Response
 	var firstErr error
 	var errs int
 	for id, req := range group2req {
-		resp, err := c.handleGroupReqSimple(id, req)
+		resp, err := c.handleGroupReqSimple(ctx, id, req)
 		if err != nil {
 			errs++
 			if firstErr == nil {
@@ -402,15 +424,15 @@ func (c *Client) handleGroupReq(req kmsg.GroupCoordinatorRequest) (kmsg.Response
 //
 // Response errors are inspected to see if they are retriable group errors;
 // if so, the coordinator is deleted.
-func (c *Client) handleGroupReqSimple(groupID string, req kmsg.Request) (kmsg.Response, error) {
-	coordinator, err := c.loadCoordinator(coordinatorKey{
+func (c *Client) handleGroupReqSimple(ctx context.Context, groupID string, req kmsg.Request) (kmsg.Response, error) {
+	coordinator, err := c.loadCoordinator(ctx, coordinatorKey{
 		name: groupID,
 		typ:  coordinatorTypeGroup,
 	})
 	if err != nil {
 		return nil, err
 	}
-	kresp, err := coordinator.waitResp(req)
+	kresp, err := coordinator.waitResp(ctx, req)
 	if err != nil {
 		return kresp, err
 	}
@@ -467,7 +489,7 @@ func (c *Client) handleGroupReqSimple(groupID string, req kmsg.Request) (kmsg.Re
 // Transaction requests are not as convoluted as group requests, but we do
 // still have to route the request to the proper coordinator. Doing so requires
 // looking into the actual request type and pulling out the txn id.
-func (c *Client) handleTxnReq(req kmsg.TxnCoordinatorRequest) (kmsg.Response, error) {
+func (c *Client) handleTxnReq(ctx context.Context, req kmsg.TxnCoordinatorRequest) (kmsg.Response, error) {
 	switch t := req.(type) {
 	default:
 		// All txn requests should be listed below, so if it isn't,
@@ -476,19 +498,19 @@ func (c *Client) handleTxnReq(req kmsg.TxnCoordinatorRequest) (kmsg.Response, er
 
 	case *kmsg.InitProducerIDRequest:
 		if t.TransactionalID != nil {
-			return c.handleTxnRequest(*t.TransactionalID, req)
+			return c.handleTxnRequest(ctx, *t.TransactionalID, req)
 		}
 		// InitProducerID can go to any broker if the transactional ID
 		// is nil.
-		return c.broker().waitResp(req)
+		return c.broker().waitResp(ctx, req)
 	case *kmsg.AddPartitionsToTxnRequest:
-		return c.handleTxnRequest(t.TransactionalID, req)
+		return c.handleTxnRequest(ctx, t.TransactionalID, req)
 	case *kmsg.AddOffsetsToTxnRequest:
-		return c.handleTxnRequest(t.TransactionalID, req)
+		return c.handleTxnRequest(ctx, t.TransactionalID, req)
 	case *kmsg.EndTxnRequest:
-		return c.handleTxnRequest(t.TransactionalID, req)
+		return c.handleTxnRequest(ctx, t.TransactionalID, req)
 	case *kmsg.TxnOffsetCommitRequest:
-		return c.handleTxnRequest(t.TransactionalID, req)
+		return c.handleTxnRequest(ctx, t.TransactionalID, req)
 	}
 }
 
@@ -497,15 +519,15 @@ func (c *Client) handleTxnReq(req kmsg.TxnCoordinatorRequest) (kmsg.Response, er
 //
 // The error is inspected to see if it is a retriable group error and, if so,
 // the coordinator is deleted.
-func (c *Client) handleTxnRequest(txnID string, req kmsg.Request) (kmsg.Response, error) {
-	coordinator, err := c.loadCoordinator(coordinatorKey{
+func (c *Client) handleTxnRequest(ctx context.Context, txnID string, req kmsg.Request) (kmsg.Response, error) {
+	coordinator, err := c.loadCoordinator(ctx, coordinatorKey{
 		name: txnID,
 		typ:  coordinatorTypeTxn,
 	})
 	if err != nil {
 		return nil, err
 	}
-	kresp, err := coordinator.waitResp(req)
+	kresp, err := coordinator.waitResp(ctx, req)
 	if err != nil {
 		return kresp, err
 	}
@@ -568,14 +590,38 @@ type Broker struct {
 
 // Request issues a request to a broker. If the broker does not exist in the
 // client, this returns ErrUnknownBroker. Requests are not retried.
-func (b *Broker) Request(req kmsg.Request) (kmsg.Response, error) {
+//
+// The passed context can be used to cancel a request and return early.
+// Note that if the request is not canceled before it is written to Kafka,
+// you may just end up canceling and not receiving the response to what Kafka
+// inevitably does.
+func (b *Broker) Request(ctx context.Context, req kmsg.Request) (kmsg.Response, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var resp kmsg.Response
+	var err error
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		resp, err = b.request(ctx, req)
+	}()
+	select {
+	case <-done:
+		return resp, err
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// request is the logic for Request.
+func (b *Broker) request(ctx context.Context, req kmsg.Request) (kmsg.Response, error) {
 	b.cl.brokersMu.RLock()
 	br, exists := b.cl.brokers[b.id]
 	b.cl.brokersMu.RUnlock()
 
 	if !exists {
 		// If the broker does not exist, we try once to update brokers.
-		if err := b.cl.fetchBrokerMetadata(); err == nil {
+		if err := b.cl.fetchBrokerMetadata(ctx); err == nil {
 			b.cl.brokersMu.RLock()
 			br, exists = b.cl.brokers[b.id]
 			b.cl.brokersMu.RUnlock()
@@ -587,5 +633,5 @@ func (b *Broker) Request(req kmsg.Request) (kmsg.Response, error) {
 		}
 	}
 
-	return br.waitResp(req)
+	return br.waitResp(ctx, req)
 }

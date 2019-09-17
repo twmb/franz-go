@@ -1,6 +1,7 @@
 package kgo
 
 import (
+	"context"
 	"encoding/binary"
 	"io"
 	"math"
@@ -14,6 +15,7 @@ import (
 )
 
 type promisedReq struct {
+	ctx     context.Context
 	req     kmsg.Request
 	promise func(kmsg.Response, error)
 }
@@ -128,6 +130,7 @@ func (b *broker) stopForever() {
 //
 // The promise will block broker processing.
 func (b *broker) do(
+	ctx context.Context,
 	req kmsg.Request,
 	promise func(kmsg.Response, error),
 ) {
@@ -137,7 +140,7 @@ func (b *broker) do(
 	if atomic.LoadInt64(&b.dead) == 1 {
 		dead = true
 	} else {
-		b.reqs <- promisedReq{req, promise}
+		b.reqs <- promisedReq{ctx, req, promise}
 	}
 	b.dieMu.RUnlock()
 
@@ -149,12 +152,16 @@ func (b *broker) do(
 // doSequencedAsyncPromise is the same as do, but all requests using this
 // function have their responses handled sequentially.
 //
-// This is important for example for odering of produce requests.
+// This is important for example for ordering of produce requests.
+//
+// Note that the requests may finish out of order (e.g. dead connection kills
+// latter request); this is handled appropriately in producing.
 func (b *broker) doSequencedAsyncPromise(
+	ctx context.Context,
 	req kmsg.Request,
 	promise func(kmsg.Response, error),
 ) {
-	b.do(req, func(resp kmsg.Response, err error) {
+	b.do(ctx, req, func(resp kmsg.Response, err error) {
 		b.seqRespsMu.Lock()
 		b.seqResps = append(b.seqResps, waitingResp{resp, promise, err})
 		if len(b.seqResps) == 1 {
@@ -179,33 +186,17 @@ more:
 	b.seqRespsMu.Unlock()
 }
 
-// wait is the same as do, but this waits for the response to finish.
-//
-// This does not block the broker's request/response processing because this is
-// inherently already tied to a running goroutine.
-func (b *broker) wait(
-	req kmsg.Request,
-	promise func(kmsg.Response, error),
-) {
+// waitResp runs a req, waits for the resp and returns the resp and err.
+func (b *broker) waitResp(ctx context.Context, req kmsg.Request) (kmsg.Response, error) {
 	var resp kmsg.Response
 	var err error
 	done := make(chan struct{})
-	wait := func(k kmsg.Response, kerr error) {
-		resp, err = k, kerr
+	wait := func(kresp kmsg.Response, kerr error) {
+		resp, err = kresp, kerr
 		close(done)
 	}
-	b.do(req, wait)
+	b.do(ctx, req, wait)
 	<-done
-	promise(resp, err)
-}
-
-// waitResp is like wait, but just returns the response and error.
-func (b *broker) waitResp(req kmsg.Request) (kmsg.Response, error) {
-	var resp kmsg.Response
-	var err error
-	b.wait(req, func(kresp kmsg.Response, kerr error) {
-		resp, err = kresp, kerr
-	})
 	return resp, err
 }
 
@@ -261,6 +252,17 @@ func (b *broker) handleReqs() {
 			version = brokerMax
 		}
 		req.SetVersion(version) // always go for highest version
+
+		// Juuuust before we issue the request, we check if it was
+		// canceled. If it is not, we do not cancel hereafter.
+		if tryDone := pr.ctx.Done(); tryDone != nil {
+			select {
+			case <-tryDone:
+				pr.promise(nil, pr.ctx.Err())
+				continue
+			default:
+			}
+		}
 
 		correlationID, err := cxn.writeRequest(req)
 		if err != nil {
