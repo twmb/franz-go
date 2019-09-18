@@ -114,11 +114,11 @@ func ReadRecords(n int, in []byte) ([]Record, error) {
 	return rs, nil
 }
 
-// ReadFetchResponseBatches reads as many record batches as possible from in,
+// ReadRecordBatches reads as many record batches as possible from in,
 // discarding any final trailing record batch. This is intended to be used
 // for processing RecordBatches from a FetchResponse, where Kafka, as an
 // internal optimization, may include a partial final RecordBatch.
-func ReadFetchResponseBatches(in []byte) []RecordBatch {
+func ReadRecordBatches(in []byte) []RecordBatch {
 	var bs []RecordBatch
 	for len(in) > 12 {
 		length := int32(binary.BigEndian.Uint32(in[8:]))
@@ -136,11 +136,11 @@ func ReadFetchResponseBatches(in []byte) []RecordBatch {
 	return bs
 }
 
-// ReadFetchResponseV1Messages reads as many v1 message sets as possible from
+// ReadV1Messages reads as many v1 message sets as possible from
 // in, discarding any final trailing message set. This is intended to be used
 // for processing v1 MessageSets from a FetchResponse, where Kafka, as an
 // internal optimization, may include a partial final MessageSet.
-func ReadFetchResponseV1Messages(in []byte) []MessageV1 {
+func ReadV1Messages(in []byte) []MessageV1 {
 	var ms []MessageV1
 	for len(in) > 12 {
 		length := int32(binary.BigEndian.Uint32(in[8:]))
@@ -158,11 +158,11 @@ func ReadFetchResponseV1Messages(in []byte) []MessageV1 {
 	return ms
 }
 
-// ReadFetchResponseV0Messages reads as many v0 message sets as possible from
+// ReadV0Messages reads as many v0 message sets as possible from
 // in, discarding any final trailing message set. This is intended to be used
 // for processing v0 MessageSets from a FetchResponse, where Kafka, as an
 // internal optimization, may include a partial final MessageSet.
-func ReadFetchResponseV0Messages(in []byte) []MessageV0 {
+func ReadV0Messages(in []byte) []MessageV0 {
 	var ms []MessageV0
 	for len(in) > 12 {
 		length := int32(binary.BigEndian.Uint32(in[8:]))

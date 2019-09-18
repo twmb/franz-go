@@ -1120,14 +1120,14 @@ func (v *FetchRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 
-type FetchResponseResponsePartitionResponseAbortedTransaction struct {
+type FetchResponseTopicPartitionAbortedTransaction struct {
 	// ProducerID is the producer ID that caused this aborted transaction.
 	ProducerID int64
 
 	// FirstOffset is the offset where this aborted transaction began.
 	FirstOffset int64
 }
-type FetchResponseResponsePartitionResponse struct {
+type FetchResponseTopicPartition struct {
 	// Partition is a partition in a topic that records may have been
 	// received for.
 	Partition int32
@@ -1187,7 +1187,7 @@ type FetchResponseResponsePartitionResponse struct {
 	// AbortedTransactions is an array of aborted transactions within the
 	// returned offset range. This is only returned if the requested
 	// isolation level was READ_COMMITTED.
-	AbortedTransactions []FetchResponseResponsePartitionResponseAbortedTransaction // v4+
+	AbortedTransactions []FetchResponseTopicPartitionAbortedTransaction // v4+
 
 	// PreferredReadReplica is the preferred replica for the consumer
 	// to use on its next fetch request. See KIP-392.
@@ -1207,13 +1207,13 @@ type FetchResponseResponsePartitionResponse struct {
 	// contains many RecordBatch structs).
 	RecordBatches []byte
 }
-type FetchResponseResponse struct {
+type FetchResponseTopic struct {
 	// Topic is a topic that records may have been received for.
 	Topic string
 
 	// PartitionResponses contains partitions in a topic that records may have
 	// been received for.
-	PartitionResponses []FetchResponseResponsePartitionResponse
+	Partitions []FetchResponseTopicPartition
 }
 
 // FetchResponse is returned from a FetchRequest.
@@ -1243,7 +1243,7 @@ type FetchResponse struct {
 
 	// Responses contains an array of topic partitions and the records received
 	// for them.
-	Responses []FetchResponseResponse
+	Topics []FetchResponseTopic
 }
 
 func (v *FetchResponse) ReadFrom(src []byte) error {
@@ -1265,10 +1265,10 @@ func (v *FetchResponse) ReadFrom(src []byte) error {
 			s.SessionID = v
 		}
 		{
-			v := s.Responses
+			v := s.Topics
 			a := v
 			for i := b.ArrayLen(); i > 0; i-- {
-				a = append(a, FetchResponseResponse{})
+				a = append(a, FetchResponseTopic{})
 				v := &a[len(a)-1]
 				{
 					s := v
@@ -1277,10 +1277,10 @@ func (v *FetchResponse) ReadFrom(src []byte) error {
 						s.Topic = v
 					}
 					{
-						v := s.PartitionResponses
+						v := s.Partitions
 						a := v
 						for i := b.ArrayLen(); i > 0; i-- {
-							a = append(a, FetchResponseResponsePartitionResponse{})
+							a = append(a, FetchResponseTopicPartition{})
 							v := &a[len(a)-1]
 							{
 								s := v
@@ -1309,10 +1309,10 @@ func (v *FetchResponse) ReadFrom(src []byte) error {
 									a := v
 									i := b.ArrayLen()
 									if version < 0 || i == 0 {
-										a = []FetchResponseResponsePartitionResponseAbortedTransaction{}
+										a = []FetchResponseTopicPartitionAbortedTransaction{}
 									}
 									for ; i > 0; i-- {
-										a = append(a, FetchResponseResponsePartitionResponseAbortedTransaction{})
+										a = append(a, FetchResponseTopicPartitionAbortedTransaction{})
 										v := &a[len(a)-1]
 										{
 											s := v
@@ -1340,12 +1340,12 @@ func (v *FetchResponse) ReadFrom(src []byte) error {
 							}
 						}
 						v = a
-						s.PartitionResponses = v
+						s.Partitions = v
 					}
 				}
 			}
 			v = a
-			s.Responses = v
+			s.Topics = v
 		}
 	}
 	return b.Complete()

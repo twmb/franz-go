@@ -436,12 +436,12 @@ FetchResponse =>
   SessionID: int32 // v7+
   // Responses contains an array of topic partitions and the records received
   // for them.
-  Responses: [=>]
+  Topics: [=>]
     // Topic is a topic that records may have been received for.
     Topic: string
     // PartitionResponses contains partitions in a topic that records may have
     // been received for.
-    PartitionResponses: [=>]
+    Partitions: [=>]
       // Partition is a partition in a topic that records may have been
       // received for.
       Partition: int32
