@@ -85,7 +85,7 @@ func (sink *recordSink) createRequest() (*produceRequest, bool) {
 	req := &produceRequest{
 		txnID:   sink.broker.client.cfg.producer.txnID,
 		acks:    sink.broker.client.cfg.producer.acks.val,
-		timeout: sink.broker.client.cfg.client.requestTimeout,
+		timeout: int32(sink.broker.client.cfg.producer.requestTimeout.Milliseconds()),
 		batches: make(reqBatches, 5),
 
 		compression: sink.broker.client.cfg.producer.compression,

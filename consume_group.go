@@ -258,13 +258,12 @@ func (g *groupConsumer) joinAndSync() error {
 
 	g.leader = false
 start:
-	var memberID string
 	req := kmsg.JoinGroupRequest{
 		GroupID:          g.id,
 		SessionTimeout:   int32(g.sessionTimeout.Milliseconds()),
 		RebalanceTimeout: int32(g.rebalanceTimeout.Milliseconds()),
 		ProtocolType:     "consumer",
-		MemberID:         memberID,
+		MemberID:         g.memberID,
 		GroupProtocols:   g.joinGroupProtocols(),
 	}
 	kresp, err := g.cl.Request(g.ctx, &req)
@@ -274,8 +273,12 @@ start:
 	resp := kresp.(*kmsg.JoinGroupResponse)
 
 	if err = kerr.ErrorForCode(resp.ErrorCode); err != nil {
-		if err == kerr.MemberIDRequired {
-			memberID = resp.MemberID // KIP-394
+		switch err {
+		case kerr.MemberIDRequired:
+			g.memberID = resp.MemberID // KIP-394
+			goto start
+		case kerr.UnknownMemberID:
+			g.memberID = ""
 			goto start
 		}
 		return err // Request retries as necesary, so this must be a failure

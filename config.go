@@ -59,9 +59,8 @@ func defaultCfg() cfg {
 			seedBrokers: []string{"127.0.0.1"},
 
 			// TODO rename tries, tryBackoff
-			retryBackoff:   func(int) time.Duration { return 100 * time.Millisecond },
-			retries:        math.MaxInt32, // effectively unbounded
-			requestTimeout: int32(30 * time.Second / 1e4),
+			retryBackoff: func(int) time.Duration { return 100 * time.Millisecond },
+			retries:      math.MaxInt32, // effectively unbounded
 
 			maxBrokerWriteBytes: 100 << 20, // Kafka socket.request.max.bytes default is 100<<20
 
@@ -73,6 +72,7 @@ func defaultCfg() cfg {
 			compression:         []CompressionCodec{NoCompression()},
 			maxRecordBatchBytes: 1000000, // Kafka max.message.bytes default is 1000012
 			maxBufferedRecords:  100000,
+			requestTimeout:      30 * time.Second,
 			partitioner:         RandomPartitioner(),
 		},
 
@@ -102,9 +102,8 @@ type (
 		seedBrokers []string
 		maxVersions kversion.Versions
 
-		retryBackoff   func(int) time.Duration
-		retries        int
-		requestTimeout int32
+		retryBackoff func(int) time.Duration
+		retries      int
 
 		maxBrokerWriteBytes int32
 
@@ -181,16 +180,6 @@ func WithRetries(n int) OptClient {
 	return clientOpt{func(cfg *clientCfg) { cfg.retries = n }}
 }
 
-// WithRequestTimeout sets how long Kafka broker's are allowed to respond
-// to requests, overriding the default 30s. If a broker exceeds this duration,
-// it will reply with a request timeout error.
-//
-// This corresponds to Kafka's request.timeout.ms setting. It is invalid to use
-// >596h (math.MaxInt32 milliseconds).
-func WithRequestTimeout(limit time.Duration) OptClient {
-	return clientOpt{func(cfg *clientCfg) { cfg.requestTimeout = int32(limit / 1e6) }}
-}
-
 // WithBrokerMaxWriteBytes upper bounds the number of bytes written to a broker
 // connection in a single write, overriding the default 100MiB.
 //
@@ -232,6 +221,7 @@ type (
 
 		maxRecordBatchBytes int32
 		maxBufferedRecords  int64
+		requestTimeout      time.Duration
 
 		partitioner Partitioner
 	}
@@ -323,6 +313,17 @@ func WithProduceMaxRecordBatchBytes(v int32) OptProducer {
 // overriding the default hash partitioner.
 func WithProducePartitioner(partitioner Partitioner) OptProducer {
 	return producerOpt{func(cfg *producerCfg) { cfg.partitioner = partitioner }}
+}
+
+// WithProduceTimeout sets how long Kafka broker's are allowed to respond to
+// produce requests, overriding the default 30s. If a broker exceeds this
+// duration, it will reply with a request timeout error.
+//
+// This corresponds to Kafka's request.timeout.ms setting, but only applies to
+// produce requests. The reason for this is that most Kafka requests do not
+// actually have a timeout field.
+func WithProduceTimeout(limit time.Duration) OptProducer {
+	return producerOpt{func(cfg *producerCfg) { cfg.requestTimeout = limit }}
 }
 
 // ********** CONSUMER CONFIGURATION **********
