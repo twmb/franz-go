@@ -220,7 +220,7 @@ func (sink *recordSink) drain() {
 		}
 
 		sink.broker.doSequencedAsyncPromise(
-			bgctx,
+			sink.broker.client.ctx,
 			req,
 			func(resp kmsg.Response, err error) {
 				sink.handleReqResp(req, resp, err)

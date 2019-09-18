@@ -2,8 +2,11 @@ package kgo
 
 import (
 	"context"
+	"fmt"
 	"net"
+	"regexp"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -14,12 +17,12 @@ import (
 	"github.com/twmb/kgo/kmsg"
 )
 
-// TODO move into client, close on client.Close()
-var bgctx = context.Background()
-
 // Client issues requests and handles responses to a Kafka cluster.
 type Client struct {
 	cfg cfg
+
+	ctx       context.Context
+	ctxCancel func()
 
 	rng *rand.Rand
 
@@ -41,8 +44,103 @@ type Client struct {
 
 	updateMetadataCh chan struct{}
 	metawait         metawait
+}
 
-	closedCh chan struct{}
+// domainRe validates domains: a label, and at least one dot-label.
+var domainRe = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*(?:\.[a-z0-9]+(?:-[a-z0-9]+)*)+$`)
+
+// stddialer is the default dialer for dialing connections.
+var stddialer = net.Dialer{Timeout: 10 * time.Second}
+
+func stddial(addr string) (net.Conn, error) { return stddialer.Dial("tcp", addr) }
+
+func NewClient(opts ...Opt) (*Client, error) {
+	cfg := defaultCfg()
+	for _, opt := range opts {
+		switch opt := opt.(type) {
+		case OptClient:
+			opt.apply(&cfg.client)
+		case OptProducer:
+			opt.apply(&cfg.producer)
+		default:
+			panic(fmt.Sprintf("unknown opt type: %#v", opt))
+		}
+	}
+
+	if err := cfg.validate(); err != nil {
+		return nil, err
+	}
+
+	isAddr := func(addr string) bool { return net.ParseIP(addr) != nil }
+	isDomain := func(domain string) bool {
+		if len(domain) < 3 || len(domain) > 255 {
+			return false
+		}
+		for _, label := range strings.Split(domain, ".") {
+			if len(label) > 63 {
+				return false
+			}
+		}
+		return domainRe.MatchString(strings.ToLower(domain))
+	}
+
+	seedAddrs := make([]string, 0, len(cfg.client.seedBrokers))
+	for _, seedBroker := range cfg.client.seedBrokers {
+		addr := seedBroker
+		port := 9092 // default kafka port
+		var err error
+		if colon := strings.IndexByte(addr, ':'); colon > 0 {
+			port, err = strconv.Atoi(addr[colon+1:])
+			if err != nil {
+				return nil, fmt.Errorf("unable to parse addr:port in %q", seedBroker)
+			}
+			addr = addr[:colon]
+		}
+
+		if addr == "localhost" {
+			addr = "127.0.0.1"
+		}
+
+		if !isAddr(addr) && !isDomain(addr) {
+			return nil, fmt.Errorf("%q is neither an IP address nor a domain", addr)
+		}
+
+		seedAddrs = append(seedAddrs, net.JoinHostPort(addr, strconv.Itoa(port)))
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	c := &Client{
+		cfg:       cfg,
+		ctx:       ctx,
+		ctxCancel: cancel,
+		rng:       rand.New(new(rand.PCGSource)),
+
+		controllerID: unknownControllerID,
+		brokers:      make(map[int32]*broker),
+
+		producer: producer{
+			waitBuffer: make(chan struct{}, 100),
+		},
+
+		coordinators: make(map[coordinatorKey]int32),
+
+		updateMetadataCh: make(chan struct{}, 1),
+	}
+	c.consumer.cl = c
+	c.consumer.sourcesReadyCond = sync.NewCond(&c.consumer.sourcesReadyMu)
+	c.rng.Seed(uint64(time.Now().UnixNano()))
+	c.topics.Store(make(map[string]*topicPartitions))
+	c.metawait.init()
+
+	for i, seedAddr := range seedAddrs {
+		b := c.newBroker(seedAddr, unknownSeedID(i))
+		c.brokers[b.id] = b
+		c.anyBroker = append(c.anyBroker, b)
+	}
+	go c.updateMetadataLoop()
+
+	return c, nil
 }
 
 // broker returns a random broker from all brokers ever known.
@@ -214,7 +312,7 @@ start:
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
-		case <-c.closedCh:
+		case <-c.ctx.Done():
 			return nil, err
 		case <-time.After(c.cfg.client.retryBackoff(tries)):
 			goto start
@@ -246,7 +344,9 @@ start:
 		if err := c.fetchBrokerMetadata(ctx); err != nil {
 			if isRetriableBrokerErr(err) && tries < c.cfg.client.retries {
 				select {
-				case <-c.closedCh:
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				case <-c.ctx.Done():
 					return nil, err
 				case <-time.After(c.cfg.client.retryBackoff(tries)):
 					goto start
@@ -312,7 +412,9 @@ start:
 		c.coordinatorsMu.Unlock()
 		if isRetriableErr(err) && tries < c.cfg.client.retries {
 			select {
-			case <-c.closedCh:
+			case <-ctx.Done():
+				return nil, err
+			case <-c.ctx.Done():
 				return nil, err
 			case <-time.After(c.cfg.client.retryBackoff(tries)):
 				goto start

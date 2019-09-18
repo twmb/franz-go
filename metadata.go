@@ -77,11 +77,11 @@ func (c *Client) triggerUpdateMetadata() {
 func (c *Client) updateMetadataLoop() {
 	var consecutiveErrors int
 
-	ticker := time.NewTicker(time.Minute) // TODO configurable
+	ticker := time.NewTicker(c.cfg.client.metadataMaxAge)
 	defer ticker.Stop()
 	for {
 		select {
-		case <-c.closedCh:
+		case <-c.ctx.Done():
 			return
 		case <-ticker.C:
 			c.triggerUpdateMetadata()
@@ -103,7 +103,7 @@ func (c *Client) updateMetadataLoop() {
 			}
 
 			select {
-			case <-c.closedCh:
+			case <-c.ctx.Done():
 				return
 			case <-time.After(sleep):
 			}
@@ -176,10 +176,10 @@ func (c *Client) updateMetadata() (needsRetry bool, err error) {
 // topicPartitionsData for each topic.
 func (c *Client) fetchTopicMetadata(reqTopics []string) (map[string]*topicPartitionsData, bool, error) {
 	c.consumer.mu.Lock()
-	all := c.consumer.typ == consumerTypeDirect && c.consumer.direct.regexTopics
-	// || c.consumer.typ == consumerTypeGroup && c.consumer.group.regexTopics
+	all := c.consumer.typ == consumerTypeDirect && c.consumer.direct.regexTopics ||
+		c.consumer.typ == consumerTypeGroup && c.consumer.group.regexTopics
 	c.consumer.mu.Unlock()
-	meta, err := c.fetchMetadata(bgctx, all, reqTopics)
+	meta, err := c.fetchMetadata(c.ctx, all, reqTopics)
 	if err != nil {
 		return nil, all, err
 	}
@@ -220,7 +220,9 @@ func (c *Client) fetchTopicMetadata(reqTopics []string) (map[string]*topicPartit
 				},
 				consumption: &consumption{
 					allConsumptionsIdx: -1, // same, see below
-					offset:             -1, // required to not consume until needed
+					seqOffset: seqOffset{
+						offset: -1, // required to not consume until needed
+					},
 				},
 
 				replicas: partMeta.Replicas,
@@ -333,7 +335,7 @@ func (l *topicPartitions) merge(r *topicPartitionsData) (needsRetry bool) {
 		if newTP.records.recordBuffersIdx == -1 {
 			newTP.records.sink.addSource(newTP.records)
 		}
-		if newTP.consumption.allConsumptionsIdx == -1 { // should be true if allPartsRecsIdx == -1
+		if newTP.consumption.allConsumptionsIdx == -1 { // should be true if recordBuffersIdx == -1
 			newTP.consumption.source.addConsumption(newTP.consumption)
 		}
 	}

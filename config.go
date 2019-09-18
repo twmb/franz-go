@@ -4,14 +4,9 @@ import (
 	"fmt"
 	"math"
 	"net"
-	"regexp"
-	"strconv"
-	"strings"
-	"sync"
 	"time"
 
 	"github.com/twmb/kgo/kversion"
-	"golang.org/x/exp/rand"
 )
 
 // TODO STRICT LENGTH VALIDATION
@@ -31,6 +26,7 @@ type (
 	cfg struct {
 		client   clientCfg
 		producer producerCfg
+		consumer consumerCfg
 	}
 )
 
@@ -39,6 +35,9 @@ func (cfg *cfg) validate() error {
 		return err
 	}
 	if err := cfg.producer.validate(); err != nil {
+		return err
+	}
+	if err := cfg.consumer.validate(); err != nil {
 		return err
 	}
 
@@ -50,17 +49,9 @@ func (cfg *cfg) validate() error {
 	return nil
 }
 
-// domainRe validates domains: a label, and at least one dot-label.
-var domainRe = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*(?:\.[a-z0-9]+(?:-[a-z0-9]+)*)+$`)
-
-// stddialer is the default dialer for dialing connections.
-var stddialer = net.Dialer{Timeout: 10 * time.Second}
-
-func stddial(addr string) (net.Conn, error) { return stddialer.Dial("tcp", addr) }
-
-func NewClient(opts ...Opt) (*Client, error) {
+func defaultCfg() cfg {
 	defaultID := "kgo"
-	cfg := cfg{
+	return cfg{
 		client: clientCfg{
 			id:     &defaultID,
 			dialFn: stddial,
@@ -73,103 +64,24 @@ func NewClient(opts ...Opt) (*Client, error) {
 			requestTimeout: int32(30 * time.Second / 1e4),
 
 			maxBrokerWriteBytes: 100 << 20, // Kafka socket.request.max.bytes default is 100<<20
-		},
-		producer: producerCfg{
-			acks:        RequireAllISRAcks(),
-			compression: []CompressionCodec{NoCompression()},
 
+			metadataMaxAge: 5 * time.Minute,
+		},
+
+		producer: producerCfg{
+			acks:                RequireAllISRAcks(),
+			compression:         []CompressionCodec{NoCompression()},
 			maxRecordBatchBytes: 1000000, // Kafka max.message.bytes default is 1000012
 			maxBufferedRecords:  100000,
-
-			partitioner: RandomPartitioner(),
-		},
-	}
-
-	for _, opt := range opts {
-		switch opt := opt.(type) {
-		case OptClient:
-			opt.apply(&cfg.client)
-		case OptProducer:
-			opt.apply(&cfg.producer)
-		default:
-			panic(fmt.Sprintf("unknown opt type: %#v", opt))
-		}
-	}
-
-	if err := cfg.validate(); err != nil {
-		return nil, err
-	}
-
-	isAddr := func(addr string) bool { return net.ParseIP(addr) != nil }
-	isDomain := func(domain string) bool {
-		if len(domain) < 3 || len(domain) > 255 {
-			return false
-		}
-		for _, label := range strings.Split(domain, ".") {
-			if len(label) > 63 {
-				return false
-			}
-		}
-		return domainRe.MatchString(strings.ToLower(domain))
-	}
-
-	seedAddrs := make([]string, 0, len(cfg.client.seedBrokers))
-	for _, seedBroker := range cfg.client.seedBrokers {
-		addr := seedBroker
-		port := 9092 // default kafka port
-		var err error
-		if colon := strings.IndexByte(addr, ':'); colon > 0 {
-			port, err = strconv.Atoi(addr[colon+1:])
-			if err != nil {
-				return nil, fmt.Errorf("unable to parse addr:port in %q", seedBroker)
-			}
-			addr = addr[:colon]
-		}
-
-		if addr == "localhost" {
-			addr = "127.0.0.1"
-		}
-
-		if !isAddr(addr) && !isDomain(addr) {
-			return nil, fmt.Errorf("%q is neither an IP address nor a domain", addr)
-		}
-
-		seedAddrs = append(seedAddrs, net.JoinHostPort(addr, strconv.Itoa(port)))
-	}
-
-	c := &Client{
-		cfg: cfg,
-
-		rng: rand.New(new(rand.PCGSource)),
-
-		controllerID: unknownControllerID,
-
-		brokers: make(map[int32]*broker),
-
-		producer: producer{
-			waitBuffer: make(chan struct{}, 100),
+			partitioner:         RandomPartitioner(),
 		},
 
-		coordinators: make(map[coordinatorKey]int32),
-
-		updateMetadataCh: make(chan struct{}, 1),
-
-		closedCh: make(chan struct{}),
+		consumer: consumerCfg{
+			maxWait:      500,
+			maxBytes:     50 << 20,
+			maxPartBytes: 10 << 20,
+		},
 	}
-	c.consumer.cl = c
-	c.consumer.sourcesReadyCond = sync.NewCond(&c.consumer.sourcesReadyMu)
-	c.rng.Seed(uint64(time.Now().UnixNano()))
-	c.topics.Store(make(map[string]*topicPartitions))
-	c.metawait.init()
-
-	for i, seedAddr := range seedAddrs {
-		b := c.newBroker(seedAddr, unknownSeedID(i))
-		c.brokers[b.id] = b
-		c.anyBroker = append(c.anyBroker, b)
-	}
-	go c.updateMetadataLoop()
-
-	return c, nil
 }
 
 // ********** CLIENT CONFIGURATION **********
@@ -195,6 +107,8 @@ type (
 		requestTimeout int32
 
 		maxBrokerWriteBytes int32
+
+		metadataMaxAge time.Duration
 
 		// TODO dial fn convenience wrappers for tls, timeouts
 		// TODO SASL
@@ -287,6 +201,15 @@ func WithRequestTimeout(limit time.Duration) OptClient {
 // limit should be produce requests.
 func WithBrokerMaxWriteBytes(v int32) OptClient {
 	return clientOpt{func(cfg *clientCfg) { cfg.maxBrokerWriteBytes = v }}
+}
+
+// WithMetadataMaxAge sets the maximum age for the client's cached metadata,
+// overriding the default 5m, to allow detection of new topics, partitions,
+// etc.
+//
+// This corresponds to Kafka's metadata.max.age.ms.
+func WithMetadataMaxAge(age time.Duration) OptClient {
+	return clientOpt{func(cfg *clientCfg) { cfg.metadataMaxAge = age }}
 }
 
 // ********** PRODUCER CONFIGURATION **********
@@ -403,3 +326,56 @@ func WithProducePartitioner(partitioner Partitioner) OptProducer {
 }
 
 // ********** CONSUMER CONFIGURATION **********
+
+type (
+	// OptConsumer is an option to configure how a client consumes records.
+	OptConsumer interface {
+		Opt
+		apply(*consumerCfg)
+	}
+
+	consumerOpt struct{ fn func(cfg *consumerCfg) }
+
+	consumerCfg struct {
+		maxWait      int32
+		maxBytes     int32
+		maxPartBytes int32
+	}
+)
+
+func (opt consumerOpt) isopt()                 {}
+func (opt consumerOpt) apply(cfg *consumerCfg) { opt.fn(cfg) }
+
+func (cfg *consumerCfg) validate() error {
+	return nil
+}
+
+// WithConsumeMaxWait sets the maximum amount of time a broker will wait for a
+// fetch response to hit the minimum number of required bytes before returning,
+// overriding the default 500ms.
+//
+// This corresponds to the Java replica.fetch.wait.max.ms setting.
+func WithConsumeMaxWait(wait time.Duration) OptConsumer {
+	return consumerOpt{func(cfg *consumerCfg) { cfg.maxWait = int32(wait.Milliseconds()) }}
+}
+
+// WithConsumeMaxBytes sets the maximum amount of bytes a broker will try to
+// send during a fetch, overriding the default 50MiB. Note that brokers may not
+// obey this limit if it has messages larger than this limit. Also note that
+// this client sends a fetch to each broker concurrently, meaning the client
+// will buffer up to <brokers * max bytes> worth of memory.
+//
+// This corresponds to the Java fetch.max.bytes setting.
+func WithConsumeMaxBytes(b int32) OptConsumer {
+	return consumerOpt{func(cfg *consumerCfg) { cfg.maxBytes = b }}
+}
+
+// WithConsumeMaxPartitionBytes sets the maximum amount of bytes that will be
+// consumed for a single partition in a fetch request, overriding the default
+// 10MiB. Note that if a single batch is larger than this number, that batch
+// will still be returned so the client can make progress.
+//
+// This corresponds to the Java max.partition.fetch.bytes setting.
+func WithConsumeMaxPartitionBytes(b int32) OptConsumer {
+	return consumerOpt{func(cfg *consumerCfg) { cfg.maxPartBytes = b }}
+}
