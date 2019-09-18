@@ -72,6 +72,7 @@ type consumption struct {
 	source             *recordSource
 	allConsumptionsIdx int
 
+	usable bool
 	seqOffset
 }
 
@@ -95,6 +96,7 @@ type seqOffsetFrom struct {
 // hereafter until the buffered response is taken, we update the offset
 // in the frozen seqOffsetFrom view.
 func (c *consumption) freezeFrom() *seqOffsetFrom {
+	c.usable = false
 	return &seqOffsetFrom{
 		seqOffset: c.seqOffset,
 		from:      c,
@@ -122,12 +124,31 @@ func (consumption *consumption) setOffset(offset int64, fromSeq uint64) {
 		return
 	}
 
+	consumption.usable = true
 	consumption.offset = offset
 	consumption.seq = fromSeq
-	source := consumption.source
 
 	if offset != -1 {
-		source.maybeBeginConsuming()
+		consumption.source.maybeBeginConsuming()
+	}
+}
+
+// restartOffset resets a consumption to usable and triggers the source to
+// begin consuming again. This is called if a consumption was used in a fetch
+// that ultimately returned no new data.
+func (consumption *consumption) restartOffset(fromSeq uint64) {
+	consumption.mu.Lock()
+	defer consumption.mu.Unlock()
+
+	// fromSeq could be less than seq if this setOffset is from a
+	// takeBuffered after assignment invalidation.
+	if fromSeq < consumption.seq {
+		return
+	}
+
+	consumption.usable = true
+	if consumption.offset != -1 {
+		consumption.source.maybeBeginConsuming()
 	}
 }
 
@@ -147,10 +168,23 @@ func (source *recordSource) takeBuffered() (Fetch, uint64) {
 	return r.fetch, r.seq
 }
 
+// updateOffsets is called when a buffered fetch is taken; we update all
+// consumption offsets and set them usable for new fetches.
 func (source *recordSource) updateOffsets(reqOffsets map[string]map[int32]*seqOffsetFrom) {
 	for _, partitions := range reqOffsets {
 		for _, o := range partitions {
 			o.from.setOffset(o.offset, o.seq)
+		}
+	}
+	<-source.inflightSem
+}
+
+// restartOffsets is called when a fetch returns no data; we set all the
+// consumptions to usable again so we can reissue a new fetch.
+func (source *recordSource) restartOffsets(reqOffsets map[string]map[int32]*seqOffsetFrom) {
+	for _, partitions := range reqOffsets {
+		for _, o := range partitions {
+			o.from.restartOffset(o.seq)
 		}
 	}
 	<-source.inflightSem
@@ -177,7 +211,7 @@ func (source *recordSource) createRequest() (req *fetchRequest, again bool) {
 
 		// If the offset is -1, a metadata update added a consumption to
 		// this source, but it is not yet in use.
-		if consumption.offset == -1 {
+		if consumption.offset == -1 || !consumption.usable {
 			consumption.mu.Unlock()
 			continue
 		}
@@ -208,7 +242,7 @@ func (source *recordSource) fill() {
 		var req *fetchRequest
 		req, again = source.createRequest()
 
-		if req.numOffsets == 0 {
+		if req.numOffsets == 0 { // must be at least one if a consumption was usable
 			again = maybeTryFinishWork(&source.fillState, again)
 			<-source.inflightSem
 			continue
@@ -289,7 +323,7 @@ func (source *recordSource) handleReqResp(req *fetchRequest, resp kmsg.Response,
 		}
 		source.broker.client.consumer.addSourceReadyForDraining(req.maxSeq, source)
 	} else {
-		<-source.inflightSem
+		source.restartOffsets(req.offsets)
 	}
 }
 
