@@ -85,6 +85,12 @@ func GroupHeartbeatInterval(interval time.Duration) GroupOpt {
 	return groupOpt{func(cfg *groupConsumer) { cfg.heartbeatInterval = interval }}
 }
 
+// GroupResetOffset sets the offset to reset to when consuming a partition
+// that has no commits, overriding the default start offset.
+func GroupResetOffset(offset Offset) GroupOpt {
+	return groupOpt{func(cfg *groupConsumer) { cfg.resetOffset = offset }}
+}
+
 type groupConsumer struct {
 	c   *consumer // used to change consumer state; generally c.mu is grabbed on access
 	cl  *Client   // used for running requests / adding to topics map
@@ -109,6 +115,8 @@ type groupConsumer struct {
 	sessionTimeout    time.Duration
 	rebalanceTimeout  time.Duration
 	heartbeatInterval time.Duration
+
+	resetOffset Offset
 
 	// TODO autocommit
 	// OnAssign
@@ -151,6 +159,8 @@ func (cl *Client) AssignGroup(group string, opts ...GroupOpt) {
 		sessionTimeout:    10000 * time.Millisecond,
 		rebalanceTimeout:  60000 * time.Millisecond,
 		heartbeatInterval: 3000 * time.Millisecond,
+
+		resetOffset: ConsumeStartOffset(),
 	}
 	for _, opt := range opts {
 		opt.apply(g)
@@ -354,8 +364,8 @@ func (g *groupConsumer) fetchOffsets() error {
 	}
 	resp := kresp.(*kmsg.OffsetFetchResponse)
 	errCode := resp.ErrorCode
-	if resp.Version < 2 && len(resp.Responses) > 0 && len(resp.Responses[0].PartitionResponses) > 0 {
-		errCode = resp.Responses[0].PartitionResponses[0].ErrorCode
+	if resp.Version < 2 && len(resp.Topics) > 0 && len(resp.Topics[0].Partitions) > 0 {
+		errCode = resp.Topics[0].Partitions[0].ErrorCode
 	}
 	if err = kerr.ErrorForCode(errCode); err != nil && !kerr.IsRetriable(err) {
 		return err
@@ -363,14 +373,18 @@ func (g *groupConsumer) fetchOffsets() error {
 
 	// TODO KIP-320
 	offsets := make(map[string]map[int32]Offset)
-	for _, response := range resp.Responses {
+	for _, rTopic := range resp.Topics {
 		topicOffsets := make(map[int32]Offset)
-		offsets[response.Topic] = topicOffsets
-		for _, partitionResponse := range response.PartitionResponses {
-			if partitionResponse.ErrorCode != 0 {
-				return kerr.ErrorForCode(partitionResponse.ErrorCode)
+		offsets[rTopic.Topic] = topicOffsets
+		for _, rPartition := range rTopic.Partitions {
+			if rPartition.ErrorCode != 0 {
+				return kerr.ErrorForCode(rPartition.ErrorCode)
 			}
-			topicOffsets[partitionResponse.Partition] = ConsumeExactOffset(partitionResponse.Offset)
+			offset := ConsumeExactOffset(rPartition.Offset)
+			if rPartition.Offset == -1 {
+				offset = g.resetOffset
+			}
+			topicOffsets[rPartition.Partition] = offset
 		}
 	}
 
