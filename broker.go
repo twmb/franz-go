@@ -255,13 +255,14 @@ func (b *broker) handleReqs() {
 
 		// Juuuust before we issue the request, we check if it was
 		// canceled. If it is not, we do not cancel hereafter.
-		if tryDone := pr.ctx.Done(); tryDone != nil {
-			select {
-			case <-tryDone:
-				pr.promise(nil, pr.ctx.Err())
-				continue
-			default:
-			}
+		// We only check the promised req's ctx, not our clients.
+		// The client ctx is closed on shutdown, which kills the
+		// cxn anyway.
+		select {
+		case <-pr.ctx.Done():
+			pr.promise(nil, pr.ctx.Err())
+			continue
+		default:
 		}
 
 		correlationID, err := cxn.writeRequest(req)
