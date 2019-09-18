@@ -56,7 +56,7 @@ func GroupBalancers(balancers ...GroupBalancer) GroupOpt {
 // This corresponds to Kafka's session.timeout.ms setting and must be within
 // the broker's group.min.session.timeout.ms and group.max.session.timeout.ms.
 func GroupSessionTimeout(timeout time.Duration) GroupOpt {
-	return groupOpt{func(cfg *groupConsumer) { cfg.sessionTimeoutMS = int32(timeout.Milliseconds()) }}
+	return groupOpt{func(cfg *groupConsumer) { cfg.sessionTimeout = timeout }}
 }
 
 // GroupRebalanceTimeout sets how long group members are allowed to take
@@ -70,7 +70,7 @@ func GroupSessionTimeout(timeout time.Duration) GroupOpt {
 //
 // This corresponds to Kafka's rebalance.timeout.ms.
 func GroupRebalanceTimeout(timeout time.Duration) GroupOpt {
-	return groupOpt{func(cfg *groupConsumer) { cfg.rebalanceTimeoutMS = int32(timeout.Milliseconds()) }}
+	return groupOpt{func(cfg *groupConsumer) { cfg.rebalanceTimeout = timeout }}
 }
 
 // GroupHeartbeatInterval sets how long a group member goes between
@@ -82,7 +82,7 @@ func GroupRebalanceTimeout(timeout time.Duration) GroupOpt {
 //
 // This corresponds to Kafka's heartbeat.interval.ms.
 func GroupHeartbeatInterval(interval time.Duration) GroupOpt {
-	return groupOpt{func(cfg *groupConsumer) { cfg.heartbeatIntervalMS = int32(interval.Milliseconds()) }}
+	return groupOpt{func(cfg *groupConsumer) { cfg.heartbeatInterval = interval }}
 }
 
 type groupConsumer struct {
@@ -106,9 +106,9 @@ type groupConsumer struct {
 	generation int32
 	assigned   map[string][]int32
 
-	sessionTimeoutMS    int32
-	rebalanceTimeoutMS  int32
-	heartbeatIntervalMS int32
+	sessionTimeout    time.Duration
+	rebalanceTimeout  time.Duration
+	heartbeatInterval time.Duration
 
 	// TODO autocommit
 	// OnAssign
@@ -148,9 +148,9 @@ func (cl *Client) AssignGroup(group string, opts ...GroupOpt) {
 		reTopics: make(map[string]struct{}),
 		reIgnore: make(map[string]struct{}),
 
-		sessionTimeoutMS:    10000,
-		rebalanceTimeoutMS:  60000,
-		heartbeatIntervalMS: 3000,
+		sessionTimeout:    10000 * time.Millisecond,
+		rebalanceTimeout:  60000 * time.Millisecond,
+		heartbeatInterval: 3000 * time.Millisecond,
 	}
 	for _, opt := range opts {
 		opt.apply(g)
@@ -218,8 +218,7 @@ func (g *groupConsumer) leave() {
 }
 
 func (g *groupConsumer) heartbeat() error {
-	interval := time.Millisecond * time.Duration(g.heartbeatIntervalMS)
-	ticker := time.NewTicker(interval)
+	ticker := time.NewTicker(g.heartbeatInterval)
 	defer ticker.Stop()
 	for {
 		select {
@@ -252,8 +251,8 @@ start:
 	var memberID string
 	req := kmsg.JoinGroupRequest{
 		GroupID:          g.id,
-		SessionTimeout:   g.sessionTimeoutMS,
-		RebalanceTimeout: g.rebalanceTimeoutMS,
+		SessionTimeout:   int32(g.sessionTimeout.Milliseconds()),
+		RebalanceTimeout: int32(g.rebalanceTimeout.Milliseconds()),
 		ProtocolType:     "consumer",
 		MemberID:         memberID,
 		GroupProtocols:   g.joinGroupProtocols(),
