@@ -233,14 +233,14 @@ ProduceRequest => key 0, max version 7
 
 // ProduceResponse is returned from a ProduceRequest.
 ProduceResponse =>
-  // Responses is an array of responses for the topic's that batches were sent
+  // Topics is an array of responses for the topic's that batches were sent
   // to.
-  Responses: [=>]
+  Topics: [=>]
     // Topic is the topic this response pertains to.
     Topic: string
-    // PartitionResponses is an array of responses for the partition's that
+    // Partitions is an array of responses for the partition's that
     // batches were sent to.
-    PartitionResponses: [=>]
+    Partitions: [=>]
       // Partition is the partition this response pertains to.
       Partition: int32
       // ErrorCode is any error for a topic/partition in the request.
@@ -434,12 +434,12 @@ FetchResponse =>
   ErrorCode: int16 // v7+
   // SessionID is for broker to broker communication. See KIP-227 for more details.
   SessionID: int32 // v7+
-  // Responses contains an array of topic partitions and the records received
+  // Topics contains an array of topic partitions and the records received
   // for them.
   Topics: [=>]
     // Topic is a topic that records may have been received for.
     Topic: string
-    // PartitionResponses contains partitions in a topic that records may have
+    // Partitions contains partitions in a topic that records may have
     // been received for.
     Partitions: [=>]
       // Partition is a partition in a topic that records may have been
@@ -573,14 +573,14 @@ ListOffsetsResponse =>
   // For Kafka < 2.0.0, the throttle is applied before issuing a response.
   // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
   ThrottleTimeMs: int32 // v2+
-  // Responses is an array of topic / partition responses corresponding to
+  // Topics is an array of topic / partition responses corresponding to
   // the requested topics and partitions.
-  Responses: [=>]
+  Topics: [=>]
     // Topic is the topic this array slot is for.
     Topic: string
-    // PartitionResponses is an array of partition responses corresponding to
+    // Partitions is an array of partition responses corresponding to
     // the requested partitions for a topic.
-    PartitionResponses: [=>]
+    Partitions: [=>]
       // Partition is the partition this array slot is for.
       Partition: int32
       // ErrorCode is any error for a topic partition in a ListOffsets request.
@@ -936,13 +936,13 @@ OffsetCommitResponse =>
   // For Kafka < 2.0.0, the throttle is applied before issuing a response.
   // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
   ThrottleTimeMs: int32 // v3+
-  // Responses contains responses for each topic / partition in the commit request.
-  Responses: [=>]
+  // Topics contains responses for each topic / partition in the commit request.
+  Topics: [=>]
     // Topic is the topic this offset commit response corresponds to.
     Topic: string
-    // PartitionResponses contains responses for each requested partition in
+    // Partitions contains responses for each requested partition in
     // a topic.
-    PartitionResponses: [=>]
+    Partitions: [=>]
       // Partition is the partition in a topic this array slot corresponds to.
       Partition: int32
       // ErrorCode is the error for this partition response.
@@ -1000,13 +1000,13 @@ OffsetFetchResponse =>
   // For Kafka < 2.0.0, the throttle is applied before issuing a response.
   // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
   ThrottleTimeMs: int32 // v3+
-  // Responses contains responses for each requested topic/partition.
-  Responses: [=>]
+  // Topics contains responses for each requested topic/partition.
+  Topics: [=>]
     // Topic is the topic this offset fetch response corresponds to.
     Topic: string
-    // PartitionResponses contains responses for each requested partition in
+    // Partitions contains responses for each requested partition in
     // a topic.
-    PartitionResponses: [=>]
+    Partitions: [=>]
       // Partition is the partition in a topic this array slot corresponds to.
       Partition: int32
       // Offset is the most recently committed offset for this topic partition

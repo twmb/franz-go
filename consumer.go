@@ -374,21 +374,21 @@ func (c *consumer) tryBrokerOffsetLoad(broker *broker, load *offsetsWaitingLoad)
 	}
 	var toSets []toSet
 
-	for _, responseTopic := range resp.Responses {
-		topic := responseTopic.Topic
+	for _, rTopic := range resp.Topics {
+		topic := rTopic.Topic
 		waitingParts, ok := load.waiting[topic]
 		if !ok {
 			continue
 		}
 
-		for _, responsePartition := range responseTopic.PartitionResponses {
-			partition := responsePartition.Partition
+		for _, rPartition := range rTopic.Partitions {
+			partition := rPartition.Partition
 			waitingPart, ok := waitingParts[partition]
 			if !ok {
 				continue
 			}
 
-			err := kerr.ErrorForCode(responsePartition.ErrorCode)
+			err := kerr.ErrorForCode(rPartition.ErrorCode)
 			if err != nil {
 				if !kerr.IsRetriable(err) {
 					// TODO notify client users somehow
@@ -412,7 +412,7 @@ func (c *consumer) tryBrokerOffsetLoad(broker *broker, load *offsetsWaitingLoad)
 				delete(load.waiting, topic)
 			}
 
-			offset := responsePartition.Offset
+			offset := rPartition.Offset
 			if waitingPart.request >= 0 {
 				offset = waitingPart.request + waitingPart.relative
 			}

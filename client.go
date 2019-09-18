@@ -542,14 +542,14 @@ func (c *Client) handleGroupReqSimple(ctx context.Context, groupID string, req k
 	var errCode int16
 	switch t := kresp.(type) {
 	case *kmsg.OffsetCommitResponse:
-		if len(t.Responses) > 0 && len(t.Responses[0].PartitionResponses) > 0 {
-			errCode = t.Responses[0].PartitionResponses[0].ErrorCode
+		if len(t.Topics) > 0 && len(t.Topics[0].Partitions) > 0 {
+			errCode = t.Topics[0].Partitions[0].ErrorCode
 		}
 	case *kmsg.OffsetFetchResponse:
 		if t.Version >= 2 {
 			errCode = t.ErrorCode
-		} else if len(t.Responses) > 0 && len(t.Responses[0].PartitionResponses) > 0 {
-			errCode = t.Responses[0].PartitionResponses[0].ErrorCode
+		} else if len(t.Topics) > 0 && len(t.Topics[0].Partitions) > 0 {
+			errCode = t.Topics[0].Partitions[0].ErrorCode
 		}
 	case *kmsg.JoinGroupResponse:
 		errCode = t.ErrorCode

@@ -343,16 +343,16 @@ func (sink *recordSink) handleReqResp(req *produceRequest, resp kmsg.Response, e
 	var reqRetry reqBatches // handled at the end
 
 	pr := resp.(*kmsg.ProduceResponse)
-	for _, responseTopic := range pr.Responses {
-		topic := responseTopic.Topic
+	for _, rTopic := range pr.Topics {
+		topic := rTopic.Topic
 		partitions, ok := req.batches[topic]
 		if !ok {
 			continue
 		}
 		delete(req.batches, topic)
 
-		for _, responsePartition := range responseTopic.PartitionResponses {
-			partition := responsePartition.Partition
+		for _, rPartition := range rTopic.Partitions {
+			partition := rPartition.Partition
 			batch, ok := partitions[partition]
 			if !ok {
 				continue
@@ -374,8 +374,8 @@ func (sink *recordSink) handleReqResp(req *produceRequest, resp kmsg.Response, e
 				continue
 			}
 
-			err := kerr.ErrorForCode(responsePartition.ErrorCode)
-			finishBatch := func() { sink.broker.client.finishBatch(batch, partition, responsePartition.BaseOffset, err) }
+			err := kerr.ErrorForCode(rPartition.ErrorCode)
+			finishBatch := func() { sink.broker.client.finishBatch(batch, partition, rPartition.BaseOffset, err) }
 			switch {
 			case kerr.IsRetriable(err) &&
 				err != kerr.CorruptMessage &&
@@ -386,7 +386,7 @@ func (sink *recordSink) handleReqResp(req *produceRequest, resp kmsg.Response, e
 			case err == kerr.UnknownProducerID: // 1.0.0+ only
 				// If -1, retry: the partition moved between the error being raised
 				// in Kafka and the time the response was constructed.
-				if responsePartition.LogStartOffset == -1 {
+				if rPartition.LogStartOffset == -1 {
 					reqRetry.addBatch(topic, partition, batch)
 					continue
 				}
@@ -399,7 +399,7 @@ func (sink *recordSink) handleReqResp(req *produceRequest, resp kmsg.Response, e
 				//
 				// OutOfOrderSequenceNumber could be ambiguous pre 1.0.0, but we
 				// will assume it is data loss (and just rely on the default below).
-				if responsePartition.LogStartOffset <= batch.owner.lastAckedOffset {
+				if rPartition.LogStartOffset <= batch.owner.lastAckedOffset {
 					finishBatch()
 					continue
 				}

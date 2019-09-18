@@ -730,7 +730,7 @@ func (v *ProduceRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 
-type ProduceResponseResponsePartitionResponse struct {
+type ProduceResponseTopicPartition struct {
 	// Partition is the partition this response pertains to.
 	Partition int32
 
@@ -824,13 +824,13 @@ type ProduceResponseResponsePartitionResponse struct {
 	// producer ID out of existence, or if Kafka lost data.
 	LogStartOffset int64 // v5+
 }
-type ProduceResponseResponse struct {
+type ProduceResponseTopic struct {
 	// Topic is the topic this response pertains to.
 	Topic string
 
-	// PartitionResponses is an array of responses for the partition's that
+	// Partitions is an array of responses for the partition's that
 	// batches were sent to.
-	PartitionResponses []ProduceResponseResponsePartitionResponse
+	Partitions []ProduceResponseTopicPartition
 }
 
 // ProduceResponse is returned from a ProduceRequest.
@@ -838,9 +838,9 @@ type ProduceResponse struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
-	// Responses is an array of responses for the topic's that batches were sent
+	// Topics is an array of responses for the topic's that batches were sent
 	// to.
-	Responses []ProduceResponseResponse
+	Topics []ProduceResponseTopic
 
 	// ThrottleTimeMs is how long of a throttle Kafka will apply to the client
 	// after this request.
@@ -856,10 +856,10 @@ func (v *ProduceResponse) ReadFrom(src []byte) error {
 	{
 		s := v
 		{
-			v := s.Responses
+			v := s.Topics
 			a := v
 			for i := b.ArrayLen(); i > 0; i-- {
-				a = append(a, ProduceResponseResponse{})
+				a = append(a, ProduceResponseTopic{})
 				v := &a[len(a)-1]
 				{
 					s := v
@@ -868,10 +868,10 @@ func (v *ProduceResponse) ReadFrom(src []byte) error {
 						s.Topic = v
 					}
 					{
-						v := s.PartitionResponses
+						v := s.Partitions
 						a := v
 						for i := b.ArrayLen(); i > 0; i-- {
-							a = append(a, ProduceResponseResponsePartitionResponse{})
+							a = append(a, ProduceResponseTopicPartition{})
 							v := &a[len(a)-1]
 							{
 								s := v
@@ -898,12 +898,12 @@ func (v *ProduceResponse) ReadFrom(src []byte) error {
 							}
 						}
 						v = a
-						s.PartitionResponses = v
+						s.Partitions = v
 					}
 				}
 			}
 			v = a
-			s.Responses = v
+			s.Topics = v
 		}
 		if version >= 1 {
 			v := b.Int32()
@@ -1211,7 +1211,7 @@ type FetchResponseTopic struct {
 	// Topic is a topic that records may have been received for.
 	Topic string
 
-	// PartitionResponses contains partitions in a topic that records may have
+	// Partitions contains partitions in a topic that records may have
 	// been received for.
 	Partitions []FetchResponseTopicPartition
 }
@@ -1241,7 +1241,7 @@ type FetchResponse struct {
 	// SessionID is for broker to broker communication. See KIP-227 for more details.
 	SessionID int32 // v7+
 
-	// Responses contains an array of topic partitions and the records received
+	// Topics contains an array of topic partitions and the records received
 	// for them.
 	Topics []FetchResponseTopic
 }
@@ -1469,7 +1469,7 @@ func (v *ListOffsetsRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 
-type ListOffsetsResponseResponsePartitionResponse struct {
+type ListOffsetsResponseTopicPartition struct {
 	// Partition is the partition this array slot is for.
 	Partition int32
 
@@ -1529,13 +1529,13 @@ type ListOffsetsResponseResponsePartitionResponse struct {
 	// or -1 if there was no leader epoch.
 	LeaderEpoch int32 // v4+
 }
-type ListOffsetsResponseResponse struct {
+type ListOffsetsResponseTopic struct {
 	// Topic is the topic this array slot is for.
 	Topic string
 
-	// PartitionResponses is an array of partition responses corresponding to
+	// Partitions is an array of partition responses corresponding to
 	// the requested partitions for a topic.
-	PartitionResponses []ListOffsetsResponseResponsePartitionResponse
+	Partitions []ListOffsetsResponseTopicPartition
 }
 
 // ListOffsetsResponse is returned from a ListOffsetsRequest.
@@ -1549,9 +1549,9 @@ type ListOffsetsResponse struct {
 	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
 	ThrottleTimeMs int32 // v2+
 
-	// Responses is an array of topic / partition responses corresponding to
+	// Topics is an array of topic / partition responses corresponding to
 	// the requested topics and partitions.
-	Responses []ListOffsetsResponseResponse
+	Topics []ListOffsetsResponseTopic
 }
 
 func (v *ListOffsetsResponse) ReadFrom(src []byte) error {
@@ -1565,10 +1565,10 @@ func (v *ListOffsetsResponse) ReadFrom(src []byte) error {
 			s.ThrottleTimeMs = v
 		}
 		{
-			v := s.Responses
+			v := s.Topics
 			a := v
 			for i := b.ArrayLen(); i > 0; i-- {
-				a = append(a, ListOffsetsResponseResponse{})
+				a = append(a, ListOffsetsResponseTopic{})
 				v := &a[len(a)-1]
 				{
 					s := v
@@ -1577,10 +1577,10 @@ func (v *ListOffsetsResponse) ReadFrom(src []byte) error {
 						s.Topic = v
 					}
 					{
-						v := s.PartitionResponses
+						v := s.Partitions
 						a := v
 						for i := b.ArrayLen(); i > 0; i-- {
-							a = append(a, ListOffsetsResponseResponsePartitionResponse{})
+							a = append(a, ListOffsetsResponseTopicPartition{})
 							v := &a[len(a)-1]
 							{
 								s := v
@@ -1617,12 +1617,12 @@ func (v *ListOffsetsResponse) ReadFrom(src []byte) error {
 							}
 						}
 						v = a
-						s.PartitionResponses = v
+						s.Partitions = v
 					}
 				}
 			}
 			v = a
-			s.Responses = v
+			s.Topics = v
 		}
 	}
 	return b.Complete()
@@ -2924,7 +2924,7 @@ func (v *OffsetCommitRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 
-type OffsetCommitResponseResponsePartitionResponse struct {
+type OffsetCommitResponseTopicPartition struct {
 	// Partition is the partition in a topic this array slot corresponds to.
 	Partition int32
 
@@ -2963,13 +2963,13 @@ type OffsetCommitResponseResponsePartitionResponse struct {
 	// a record batch that is too large (likely due to large metadata).
 	ErrorCode int16
 }
-type OffsetCommitResponseResponse struct {
+type OffsetCommitResponseTopic struct {
 	// Topic is the topic this offset commit response corresponds to.
 	Topic string
 
-	// PartitionResponses contains responses for each requested partition in
+	// Partitions contains responses for each requested partition in
 	// a topic.
-	PartitionResponses []OffsetCommitResponseResponsePartitionResponse
+	Partitions []OffsetCommitResponseTopicPartition
 }
 
 // OffsetCommitResponse is returned from an OffsetCommitRequest.
@@ -2983,8 +2983,8 @@ type OffsetCommitResponse struct {
 	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
 	ThrottleTimeMs int32 // v3+
 
-	// Responses contains responses for each topic / partition in the commit request.
-	Responses []OffsetCommitResponseResponse
+	// Topics contains responses for each topic / partition in the commit request.
+	Topics []OffsetCommitResponseTopic
 }
 
 func (v *OffsetCommitResponse) ReadFrom(src []byte) error {
@@ -2998,10 +2998,10 @@ func (v *OffsetCommitResponse) ReadFrom(src []byte) error {
 			s.ThrottleTimeMs = v
 		}
 		{
-			v := s.Responses
+			v := s.Topics
 			a := v
 			for i := b.ArrayLen(); i > 0; i-- {
-				a = append(a, OffsetCommitResponseResponse{})
+				a = append(a, OffsetCommitResponseTopic{})
 				v := &a[len(a)-1]
 				{
 					s := v
@@ -3010,10 +3010,10 @@ func (v *OffsetCommitResponse) ReadFrom(src []byte) error {
 						s.Topic = v
 					}
 					{
-						v := s.PartitionResponses
+						v := s.Partitions
 						a := v
 						for i := b.ArrayLen(); i > 0; i-- {
-							a = append(a, OffsetCommitResponseResponsePartitionResponse{})
+							a = append(a, OffsetCommitResponseTopicPartition{})
 							v := &a[len(a)-1]
 							{
 								s := v
@@ -3028,12 +3028,12 @@ func (v *OffsetCommitResponse) ReadFrom(src []byte) error {
 							}
 						}
 						v = a
-						s.PartitionResponses = v
+						s.Partitions = v
 					}
 				}
 			}
 			v = a
-			s.Responses = v
+			s.Topics = v
 		}
 	}
 	return b.Complete()
@@ -3101,7 +3101,7 @@ func (v *OffsetFetchRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 
-type OffsetFetchResponseResponsePartitionResponse struct {
+type OffsetFetchResponseTopicPartition struct {
 	// Partition is the partition in a topic this array slot corresponds to.
 	Partition int32
 
@@ -3138,13 +3138,13 @@ type OffsetFetchResponseResponsePartitionResponse struct {
 	// is unknown.
 	ErrorCode int16
 }
-type OffsetFetchResponseResponse struct {
+type OffsetFetchResponseTopic struct {
 	// Topic is the topic this offset fetch response corresponds to.
 	Topic string
 
-	// PartitionResponses contains responses for each requested partition in
+	// Partitions contains responses for each requested partition in
 	// a topic.
-	PartitionResponses []OffsetFetchResponseResponsePartitionResponse
+	Partitions []OffsetFetchResponseTopicPartition
 }
 
 // OffsetFetchResponse is returned from an OffsetFetchRequest.
@@ -3158,8 +3158,8 @@ type OffsetFetchResponse struct {
 	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
 	ThrottleTimeMs int32 // v3+
 
-	// Responses contains responses for each requested topic/partition.
-	Responses []OffsetFetchResponseResponse
+	// Topics contains responses for each requested topic/partition.
+	Topics []OffsetFetchResponseTopic
 
 	// ErrorCode is a top level error code that applies to all topic/partitions.
 	// This will be any group error.
@@ -3177,10 +3177,10 @@ func (v *OffsetFetchResponse) ReadFrom(src []byte) error {
 			s.ThrottleTimeMs = v
 		}
 		{
-			v := s.Responses
+			v := s.Topics
 			a := v
 			for i := b.ArrayLen(); i > 0; i-- {
-				a = append(a, OffsetFetchResponseResponse{})
+				a = append(a, OffsetFetchResponseTopic{})
 				v := &a[len(a)-1]
 				{
 					s := v
@@ -3189,10 +3189,10 @@ func (v *OffsetFetchResponse) ReadFrom(src []byte) error {
 						s.Topic = v
 					}
 					{
-						v := s.PartitionResponses
+						v := s.Partitions
 						a := v
 						for i := b.ArrayLen(); i > 0; i-- {
-							a = append(a, OffsetFetchResponseResponsePartitionResponse{})
+							a = append(a, OffsetFetchResponseTopicPartition{})
 							v := &a[len(a)-1]
 							{
 								s := v
@@ -3219,12 +3219,12 @@ func (v *OffsetFetchResponse) ReadFrom(src []byte) error {
 							}
 						}
 						v = a
-						s.PartitionResponses = v
+						s.Partitions = v
 					}
 				}
 			}
 			v = a
-			s.Responses = v
+			s.Topics = v
 		}
 		if version >= 2 {
 			v := b.Int16()
