@@ -9,27 +9,25 @@ import (
 	"github.com/twmb/kgo/kmsg"
 )
 
-// TODO introduce backoff below
-// TODO cleanup code at bottom
-// TODO fixup offset if message set / record batch decoding fails.
-//      If any batch fails, we set error, but we may have bumped offset.
+// TODO doc that if fetch partition errors midway thru, Fetch will have valid
+// records to consume
+// TODO backoff consumptions on partition errors
 
 type recordSource struct {
 	broker *broker
 
 	inflightSem chan struct{} // capacity of 1
+	fillState   uint32
 
-	fillState uint32
-
+	// guards all below
 	mu sync.Mutex
 
 	// consuming tracks topics, partitions, and offsets/epochs that this
 	// source owns.
-	allConsumptions []*consumption
-
+	allConsumptions      []*consumption
 	allConsumptionsStart int
 
-	buffered Fetch
+	buffered bufferedFetch
 }
 
 func newRecordSource(broker *broker) *recordSource {
@@ -45,8 +43,6 @@ func (source *recordSource) addConsumption(add *consumption) {
 	add.allConsumptionsIdx = len(source.allConsumptions)
 	source.allConsumptions = append(source.allConsumptions, add)
 	source.mu.Unlock()
-
-	source.maybeBeginConsuming()
 }
 
 func (source *recordSource) removeConsumption(rm *consumption) {
@@ -76,14 +72,52 @@ type consumption struct {
 	source             *recordSource
 	allConsumptionsIdx int
 
+	seqOffset
+}
+
+// seqOffset is an offset we are consuming and the corresponding assign seq
+// this offset is originally from. The seq is key to ensuring we do not
+// return old fetches if a client's Assign* is called again.
+type seqOffset struct {
 	offset int64
 	seq    uint64
 }
 
+// seqOffsetFrom is updated while processing a fetch response. One the response
+// is taken, we only update the consumption's offset _if_ the seq is the same
+// (by going through setOffset).
+type seqOffsetFrom struct {
+	seqOffset
+	from *consumption
+}
+
+// freezeFrom is called when adding an offset to a fetch request; from
+// hereafter until the buffered response is taken, we update the offset
+// in the frozen seqOffsetFrom view.
+func (c *consumption) freezeFrom() *seqOffsetFrom {
+	return &seqOffsetFrom{
+		seqOffset: c.seqOffset,
+		from:      c,
+	}
+}
+
+// setOffset sets the consumptions offset and seq, doing nothing if the seq is
+// out of date. The seq will be out of date if an Assign is called and then a
+// buffered fetch is drained (invalidated).
+//
+// Otherwise, normally, buffered fetches call setOffset to update the
+// consuption's offset and to allow the source to continue draining.
+//
+// Note that, since this is always the entry to update offsets, we do not need
+// to do much complicated "is this still the source" management if the
+// consumption moves across sources due to metadata updates. Buffered fetches
+// will update the consumption and then simply start the new source.
 func (consumption *consumption) setOffset(offset int64, fromSeq uint64) {
 	consumption.mu.Lock()
 	defer consumption.mu.Unlock()
 
+	// fromSeq could be less than seq if this setOffset is from a
+	// takeBuffered after assignment invalidation.
 	if fromSeq < consumption.seq {
 		return
 	}
@@ -97,8 +131,37 @@ func (consumption *consumption) setOffset(offset int64, fromSeq uint64) {
 	}
 }
 
+// bufferedFetch is a fetch response waiting to be consumed by the client, as
+// well as offsests to update consumptions to once the fetch is taken.
+type bufferedFetch struct {
+	fetch      Fetch
+	seq        uint64
+	reqOffsets map[string]map[int32]*seqOffsetFrom
+}
+
+// takeBuffered drains a buffered fetch and updates offsets.
+func (source *recordSource) takeBuffered() (Fetch, uint64) {
+	r := source.buffered
+	source.buffered = bufferedFetch{}
+	go source.updateOffsets(r.reqOffsets)
+	return r.fetch, r.seq
+}
+
+func (source *recordSource) updateOffsets(reqOffsets map[string]map[int32]*seqOffsetFrom) {
+	for _, partitions := range reqOffsets {
+		for _, o := range partitions {
+			o.from.setOffset(o.offset, o.seq)
+		}
+	}
+	<-source.inflightSem
+}
+
 func (source *recordSource) createRequest() (req *fetchRequest, again bool) {
-	req = new(fetchRequest)
+	req = &fetchRequest{
+		maxWait:      source.broker.client.cfg.consumer.maxWait,
+		maxBytes:     source.broker.client.cfg.consumer.maxBytes,
+		maxPartBytes: source.broker.client.cfg.consumer.maxPartBytes,
+	}
 
 	source.mu.Lock()
 	defer source.mu.Unlock()
@@ -120,12 +183,7 @@ func (source *recordSource) createRequest() (req *fetchRequest, again bool) {
 		}
 
 		again = true
-		req.addTopicPartitionConsumption(
-			consumption.topicPartition.topic,
-			consumption.topicPartition.partition,
-			consumption,
-		)
-
+		req.addConsumptionLocked(consumption)
 		consumption.mu.Unlock()
 	}
 
@@ -150,14 +208,14 @@ func (source *recordSource) fill() {
 		var req *fetchRequest
 		req, again = source.createRequest()
 
-		if len(req.consumptions) == 0 {
+		if req.numOffsets == 0 {
 			again = maybeTryFinishWork(&source.fillState, again)
 			<-source.inflightSem
 			continue
 		}
 
-		source.broker.doSequencedAsyncPromise(
-			bgctx,
+		source.broker.do(
+			source.broker.client.ctx,
 			req,
 			func(resp kmsg.Response, err error) {
 				source.handleReqResp(req, resp, err)
@@ -168,10 +226,7 @@ func (source *recordSource) fill() {
 }
 
 func (source *recordSource) handleReqResp(req *fetchRequest, resp kmsg.Response, err error) {
-	var needMetadataUpdate bool
-
-	source.mu.Lock()
-	defer source.mu.Unlock()
+	var needMetaUpdate bool
 
 	if err != nil {
 		// TODO
@@ -181,7 +236,7 @@ func (source *recordSource) handleReqResp(req *fetchRequest, resp kmsg.Response,
 
 	r := resp.(*kmsg.FetchResponse)
 	newFetch := Fetch{
-		Topics: make([]FetchTopic, 0, len(r.Responses)),
+		Topics: make([]FetchTopic, 0, len(r.Topics)),
 	}
 
 	if err = kerr.ErrorForCode(r.ErrorCode); err != nil {
@@ -190,110 +245,99 @@ func (source *recordSource) handleReqResp(req *fetchRequest, resp kmsg.Response,
 		return
 	}
 
-	for _, responseTopic := range r.Responses {
-		topic := responseTopic.Topic
-		consumedPartions, ok := req.consumptions[topic]
+	for _, rTopic := range r.Topics {
+		topic := rTopic.Topic
+		topicOffsets, ok := req.offsets[topic]
 		if !ok {
 			continue
 		}
 
-		newFetchTopic := FetchTopic{
+		fetchTopic := FetchTopic{
 			Topic:      topic,
-			Partitions: make([]FetchPartition, 0, len(responseTopic.PartitionResponses)),
+			Partitions: make([]FetchPartition, 0, len(rTopic.Partitions)),
 		}
 
-		for i := range responseTopic.PartitionResponses {
-			responsePartition := &responseTopic.PartitionResponses[i]
-			partition := responsePartition.Partition
-			consumption, ok := consumedPartions[partition]
+		for i := range rTopic.Partitions {
+			rPartition := &rTopic.Partitions[i]
+			partition := rPartition.Partition
+			partOffset, ok := topicOffsets[partition]
 			if !ok {
 				continue
 			}
 
-			newFetchPartition, keep, partitionNeedsMetadataUpdate :=
-				consumption.processResponsePartition(
-					source,
-					topic,
-					r.Version,
-					responsePartition,
-				)
-
-			if keep {
-				newFetchTopic.Partitions = append(newFetchTopic.Partitions, newFetchPartition)
+			fetchPart, partNeedsMetaUpdate := partOffset.processRespPartition(topic, r.Version, rPartition)
+			if len(fetchPart.Records) > 0 || fetchPart.Err != nil {
+				fetchTopic.Partitions = append(fetchTopic.Partitions, fetchPart)
 			}
-			needMetadataUpdate = needMetadataUpdate || partitionNeedsMetadataUpdate
+			needMetaUpdate = needMetaUpdate || partNeedsMetaUpdate
 		}
 
-		if len(newFetchTopic.Partitions) > 0 {
-			newFetch.Topics = append(newFetch.Topics, newFetchTopic)
+		if len(fetchTopic.Partitions) > 0 {
+			newFetch.Topics = append(newFetch.Topics, fetchTopic)
 		}
 	}
 
-	if needMetadataUpdate {
+	if needMetaUpdate {
 		source.broker.client.triggerUpdateMetadata()
 	}
 
 	if len(newFetch.Topics) > 0 {
-		source.buffered = newFetch
-		source.broker.client.consumer.addSourceReadyForDraining(source)
+		source.buffered = bufferedFetch{
+			fetch:      newFetch,
+			seq:        req.maxSeq,
+			reqOffsets: req.offsets,
+		}
+		source.broker.client.consumer.addSourceReadyForDraining(req.maxSeq, source)
 	} else {
 		<-source.inflightSem
 	}
 }
 
-func (c *consumption) processResponsePartition(
-	source *recordSource,
+// processRespPartition processes all records in all potentially compressed
+// batches (or message sets) and returns a fetch partition containing those
+// records.
+//
+// This returns that a metadata update is needed if any part has a recoverable
+// error.
+//
+// Recoverable errors are stripped; if a partition has a recoverable error
+// immediately with no records, it should be discarded.
+func (o *seqOffset) processRespPartition(
 	topic string,
 	version int16,
-	responsePartition *kmsg.FetchResponseResponsePartitionResponse,
+	rPartition *kmsg.FetchResponseTopicPartition,
 ) (
-	newFetchPartition FetchPartition,
-	keep bool,
-	requiresMetadataUpdate bool,
+	fetchPart FetchPartition,
+	needMetaUpdate bool,
 ) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if c.source != source {
-		return FetchPartition{}, false, false
-	}
-
-	newFetchPartition = FetchPartition{
-		Partition:        responsePartition.Partition,
-		Err:              kerr.ErrorForCode(responsePartition.ErrorCode),
-		HighWatermark:    responsePartition.HighWatermark,
-		LastStableOffset: responsePartition.LastStableOffset,
+	fetchPart = FetchPartition{
+		Partition:        rPartition.Partition,
+		Err:              kerr.ErrorForCode(rPartition.ErrorCode),
+		HighWatermark:    rPartition.HighWatermark,
+		LastStableOffset: rPartition.LastStableOffset,
 	}
 
 	switch version {
 	case 0, 1:
-		messages := kmsg.ReadFetchResponseV0Messages(responsePartition.RecordBatches)
-		newFetchPartition.Records = make([]*Record, 0, len(messages))
-		c.processV0Messages(topic, &newFetchPartition, messages)
+		o.processV0Messages(topic, &fetchPart, kmsg.ReadV0Messages(rPartition.RecordBatches))
 	case 2, 3:
-		messages := kmsg.ReadFetchResponseV1Messages(responsePartition.RecordBatches)
-		newFetchPartition.Records = make([]*Record, 0, len(messages))
-		c.processV1Messages(topic, &newFetchPartition, messages)
+		o.processV1Messages(topic, &fetchPart, kmsg.ReadV1Messages(rPartition.RecordBatches))
 	default:
-		batches := kmsg.ReadFetchResponseBatches(responsePartition.RecordBatches)
+		batches := kmsg.ReadRecordBatches(rPartition.RecordBatches)
 		var numPartitionRecords int
 		for i := range batches {
 			numPartitionRecords += int(batches[i].NumRecords)
 		}
-		newFetchPartition.Records = make([]*Record, 0, numPartitionRecords)
+		fetchPart.Records = make([]*Record, 0, numPartitionRecords)
 		for i := range batches {
-			if newFetchPartition.Err != nil {
+			o.processRecordBatch(topic, &fetchPart, &batches[i])
+			if fetchPart.Err != nil {
 				break
 			}
-			c.processResponsePartitionBatch(
-				topic,
-				&newFetchPartition,
-				&batches[i],
-			)
 		}
 	}
 
-	switch newFetchPartition.Err {
+	switch fetchPart.Err {
 	case kerr.UnknownTopicOrPartition,
 		kerr.NotLeaderForPartition,
 		kerr.ReplicaNotAvailable,
@@ -301,7 +345,8 @@ func (c *consumption) processResponsePartition(
 		kerr.UnknownLeaderEpoch,
 		kerr.FencedLeaderEpoch:
 
-		requiresMetadataUpdate = true
+		needMetaUpdate = true
+		fetchPart.Err = nil
 		// TODO backoff
 
 	default:
@@ -314,62 +359,60 @@ func (c *consumption) processResponsePartition(
 		// TODO backoff permanently?
 	}
 
-	return newFetchPartition,
-		len(newFetchPartition.Records) > 0,
-		requiresMetadataUpdate
+	return fetchPart, needMetaUpdate
 }
 
-func (c *consumption) processResponsePartitionBatch(
+//////////////////////////////////////
+// processing records to fetch part //
+//////////////////////////////////////
+
+func (o *seqOffset) processRecordBatch(
 	topic string,
-	newFetchPartition *FetchPartition,
+	fetchPart *FetchPartition,
 	batch *kmsg.RecordBatch,
 ) {
 	if batch.Magic != 2 {
-		newFetchPartition.Err = fmt.Errorf("unknown batch magic %d", batch.Magic)
+		fetchPart.Err = fmt.Errorf("unknown batch magic %d", batch.Magic)
 		return
 	}
-
 	rawRecords := batch.Records
 	if compression := byte(batch.Attributes & 0x0007); compression != 0 {
 		var err error
-		rawRecords, err = decompress(rawRecords, compression)
-		if err != nil {
-			newFetchPartition.Err = fmt.Errorf("unable to decompress batch: %v", err)
+		if rawRecords, err = decompress(rawRecords, compression); err != nil {
+			fetchPart.Err = fmt.Errorf("unable to decompress batch: %v", err)
 			return
 		}
 	}
-
 	krecords, err := kmsg.ReadRecords(int(batch.NumRecords), rawRecords)
 	if err != nil {
-		newFetchPartition.Err = fmt.Errorf("invalid record batch: %v", err)
+		fetchPart.Err = fmt.Errorf("invalid record batch: %v", err)
 		return
 	}
-
 	for i := range krecords {
-		record := recordToRecord(topic, newFetchPartition.Partition, batch, &krecords[i])
-		c.maybeAddRecord(newFetchPartition, record)
+		record := recordToRecord(topic, fetchPart.Partition, batch, &krecords[i])
+		o.maybeAddRecord(fetchPart, record)
 	}
 }
 
-func (c *consumption) processV1Messages(
+func (o *seqOffset) processV1Messages(
 	topic string,
-	newFetchPartition *FetchPartition,
+	fetchPart *FetchPartition,
 	messages []kmsg.MessageV1,
 ) {
 	for i := range messages {
 		message := &messages[i]
 		compression := byte(message.Attributes & 0x0003)
 		if compression == 0 {
-			c.processV1Message(topic, newFetchPartition, message)
+			o.processV1Message(topic, fetchPart, message)
 			continue
 		}
 
 		rawMessages, err := decompress(message.Value, compression)
 		if err != nil {
-			newFetchPartition.Err = fmt.Errorf("unable to decompress messages: %v", err)
+			fetchPart.Err = fmt.Errorf("unable to decompress messages: %v", err)
 			return
 		}
-		innerMessages := kmsg.ReadFetchResponseV1Messages(rawMessages)
+		innerMessages := kmsg.ReadV1Messages(rawMessages)
 		if len(innerMessages) == 0 {
 			return
 		}
@@ -377,47 +420,47 @@ func (c *consumption) processV1Messages(
 		for i := range innerMessages {
 			innerMessage := &innerMessages[i]
 			innerMessage.Offset = firstOffset + int64(i)
-			c.processV1Message(topic, newFetchPartition, innerMessage)
+			o.processV1Message(topic, fetchPart, innerMessage)
 		}
 	}
 }
 
-func (c *consumption) processV1Message(
+func (o *seqOffset) processV1Message(
 	topic string,
-	newFetchPartition *FetchPartition,
+	fetchPart *FetchPartition,
 	message *kmsg.MessageV1,
 ) {
 	if message.Magic != 1 {
-		newFetchPartition.Err = fmt.Errorf("unknown message magic %d", message.Magic)
+		fetchPart.Err = fmt.Errorf("unknown message magic %d", message.Magic)
 		return
 	}
 	if message.Attributes != 0 {
-		newFetchPartition.Err = fmt.Errorf("unknown attributes on uncompressed message %d", message.Attributes)
+		fetchPart.Err = fmt.Errorf("unknown attributes on uncompressed message %d", message.Attributes)
 		return
 	}
-	record := v1MessageToRecord(topic, newFetchPartition.Partition, message)
-	c.maybeAddRecord(newFetchPartition, record)
+	record := v1MessageToRecord(topic, fetchPart.Partition, message)
+	o.maybeAddRecord(fetchPart, record)
 }
 
-func (c *consumption) processV0Messages(
+func (o *seqOffset) processV0Messages(
 	topic string,
-	newFetchPartition *FetchPartition,
+	fetchPart *FetchPartition,
 	messages []kmsg.MessageV0,
 ) {
 	for i := range messages {
 		message := &messages[i]
 		compression := byte(message.Attributes & 0x0003)
 		if compression == 0 {
-			c.processV0Message(topic, newFetchPartition, message)
+			o.processV0Message(topic, fetchPart, message)
 			continue
 		}
 
 		rawMessages, err := decompress(message.Value, compression)
 		if err != nil {
-			newFetchPartition.Err = fmt.Errorf("unable to decompress messages: %v", err)
+			fetchPart.Err = fmt.Errorf("unable to decompress messages: %v", err)
 			return
 		}
-		innerMessages := kmsg.ReadFetchResponseV0Messages(rawMessages)
+		innerMessages := kmsg.ReadV0Messages(rawMessages)
 		if len(innerMessages) == 0 {
 			return
 		}
@@ -425,43 +468,47 @@ func (c *consumption) processV0Messages(
 		for i := range innerMessages {
 			innerMessage := &innerMessages[i]
 			innerMessage.Offset = firstOffset + int64(i)
-			c.processV0Message(topic, newFetchPartition, innerMessage)
+			o.processV0Message(topic, fetchPart, innerMessage)
 		}
 	}
 }
 
-func (c *consumption) processV0Message(
+func (o *seqOffset) processV0Message(
 	topic string,
-	newFetchPartition *FetchPartition,
+	fetchPart *FetchPartition,
 	message *kmsg.MessageV0,
 ) {
 	if message.Magic != 0 {
-		newFetchPartition.Err = fmt.Errorf("unknown message magic %d", message.Magic)
+		fetchPart.Err = fmt.Errorf("unknown message magic %d", message.Magic)
 		return
 	}
 	if message.Attributes != 0 {
-		newFetchPartition.Err = fmt.Errorf("unknown attributes on uncompressed message %d", message.Attributes)
+		fetchPart.Err = fmt.Errorf("unknown attributes on uncompressed message %d", message.Attributes)
 		return
 	}
-	record := v0MessageToRecord(topic, newFetchPartition.Partition, message)
-	c.maybeAddRecord(newFetchPartition, record)
+	record := v0MessageToRecord(topic, fetchPart.Partition, message)
+	o.maybeAddRecord(fetchPart, record)
 }
 
-func (c *consumption) maybeAddRecord(newFetchPartition *FetchPartition, record *Record) {
-	if record.Offset < c.offset {
+func (o *seqOffset) maybeAddRecord(fetchPart *FetchPartition, record *Record) {
+	if record.Offset < o.offset {
 		// We asked for offset 5, but that was in the middle of a
 		// batch; we got offsets 0 thru 4 that we need to skip.
 		return
 	}
-	if record.Offset != c.offset {
+	if record.Offset != o.offset {
 		// We asked for offset 5, then the client user reset the
 		// offset to something else while this was inflight.
 		// This response out of date.
 		return
 	}
-	newFetchPartition.Records = append(newFetchPartition.Records, record)
-	c.offset++
+	fetchPart.Records = append(fetchPart.Records, record)
+	o.offset++
 }
+
+///////////////////////////////
+// kmsg.Record to kgo.Record //
+///////////////////////////////
 
 func timeFromMillis(millis int64) time.Time {
 	return time.Unix(0, millis*1e6)
@@ -524,36 +571,43 @@ func v1MessageToRecord(
 	}
 }
 
-func (source *recordSource) takeBuffered() Fetch {
-	source.mu.Lock()
-	r := source.buffered
-	source.buffered = Fetch{}
-	source.mu.Unlock()
-
-	<-source.inflightSem
-	return r
-}
+//////////////////
+// fetchRequest //
+//////////////////
 
 type fetchRequest struct {
-	version int16
+	version      int16
+	maxWait      int32
+	maxBytes     int32
+	maxPartBytes int32
 
-	consumptions map[string]map[int32]*consumption
+	maxSeq     uint64
+	numOffsets int
+	offsets    map[string]map[int32]*seqOffsetFrom
 }
 
-func (req *fetchRequest) addTopicPartitionConsumption(
-	topic string,
-	partition int32,
-	c *consumption,
-) {
-	if req.consumptions == nil {
-		req.consumptions = make(map[string]map[int32]*consumption)
+func (f *fetchRequest) addConsumptionLocked(c *consumption) {
+	if f.offsets == nil {
+		f.offsets = make(map[string]map[int32]*seqOffsetFrom)
 	}
-	partitions := req.consumptions[topic]
+	topic := c.topicPartition.topic
+	partitions := f.offsets[topic]
 	if partitions == nil {
-		partitions = make(map[int32]*consumption)
-		req.consumptions[topic] = partitions
+		partitions = make(map[int32]*seqOffsetFrom)
+		f.offsets[topic] = partitions
 	}
-	partitions[partition] = c
+	partition := c.topicPartition.partition
+	o := c.freezeFrom()
+
+	// AssignPartitions or AssignGroup could have been called in the middle
+	// of our req being built, invalidating part of the req. We invalidate
+	// by only tracking the latest seq.
+	if o.seq > f.maxSeq {
+		f.maxSeq = o.seq
+		f.numOffsets = 0
+	}
+	f.numOffsets++
+	partitions[partition] = o
 }
 
 func (*fetchRequest) Key() int16           { return 1 }
@@ -564,26 +618,29 @@ func (f *fetchRequest) AppendTo(dst []byte) []byte {
 	req := kmsg.FetchRequest{
 		Version:      f.version,
 		ReplicaID:    -1,
-		MaxWaitTime:  200, // TODO
+		MaxWaitTime:  f.maxWait,
 		MinBytes:     1,
-		MaxBytes:     5 << 20, // TODO
+		MaxBytes:     f.maxBytes,
 		SessionID:    -1,
 		SessionEpoch: -1, // KIP-227, we do not want to support
-		Topics:       make([]kmsg.FetchRequestTopic, 0, len(f.consumptions)),
+		Topics:       make([]kmsg.FetchRequestTopic, 0, len(f.offsets)),
 	}
-	for topic, partitions := range f.consumptions {
+	for topic, partitions := range f.offsets {
 		req.Topics = append(req.Topics, kmsg.FetchRequestTopic{
 			Topic:      topic,
 			Partitions: make([]kmsg.FetchRequestTopicPartition, 0, len(partitions)),
 		})
 		reqTopic := &req.Topics[len(req.Topics)-1]
-		for partition, consumption := range partitions {
+		for partition, seqOffset := range partitions {
+			if seqOffset.seq < f.maxSeq {
+				continue // all offsets in the fetch must come from the same seq
+			}
 			reqTopic.Partitions = append(reqTopic.Partitions, kmsg.FetchRequestTopicPartition{
 				Partition:          partition,
 				CurrentLeaderEpoch: -1, // KIP-320
-				FetchOffset:        consumption.offset,
+				FetchOffset:        seqOffset.offset,
 				LogStartOffset:     -1,
-				PartitionMaxBytes:  500 << 20, // TODO
+				PartitionMaxBytes:  f.maxPartBytes,
 			})
 		}
 	}

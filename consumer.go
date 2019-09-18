@@ -66,43 +66,68 @@ type consumer struct {
 
 	usingPartitions []*topicPartition
 
-	// seq is a sequence number used reloading assignments from a new
-	// asignment.
-	seq uint64
-
 	offsetsWaitingLoad *offsetsWaitingLoad
 
 	sourcesReadyMu          sync.Mutex
 	sourcesReadyCond        *sync.Cond
 	sourcesReadyForDraining []*recordSource
+
+	// seq corresponds to the number of assigned groups or partitions.
+	//
+	// It is updated under both the sources ready mu and potentially
+	// also the consumer mu itself.
+	//
+	// Incrementing it invalidates prior assignments and fetches.
+	seq uint64
 }
 
+// unassignPrior invalidates old assignments, ensures that nothing is assigned,
+// and leaves any group.
 func (c *consumer) unassignPrior() {
 	c.assignPartitions(nil, true) // invalidate old assignments
-	// c.maybeLeaveGroup()
+	if c.typ == consumerTypeGroup {
+		c.typ = consumerTypeUnset
+		c.group.leave()
+	}
 }
 
-func (c *consumer) addSourceReadyForDraining(source *recordSource) {
+// addSourceReadyForDraining tracks that a source needs its buffered fetch
+// consumed. If the seq this source is from is out of date, the source is
+// immediately drained.
+func (c *consumer) addSourceReadyForDraining(seq uint64, source *recordSource) {
+	var broadcast bool
 	c.sourcesReadyMu.Lock()
-	c.sourcesReadyForDraining = append(c.sourcesReadyForDraining, source)
+	if seq < c.seq {
+		source.takeBuffered()
+	} else {
+		c.sourcesReadyForDraining = append(c.sourcesReadyForDraining, source)
+		broadcast = true
+	}
 	c.sourcesReadyMu.Unlock()
-	c.sourcesReadyCond.Broadcast()
+	if broadcast {
+		c.sourcesReadyCond.Broadcast()
+	}
 }
 
-func (c *Client) PollConsumer(ctx context.Context) Fetches {
-	consumer := &c.consumer
+func (cl *Client) PollFetches(ctx context.Context) Fetches {
+	c := &cl.consumer
 
 	var fetches Fetches
 
-	// TODO fixup only return if seq same.
-	// ALSO: setOffset invalidates consumption offset?
 	fill := func() {
-		consumer.sourcesReadyMu.Lock()
-		for _, ready := range consumer.sourcesReadyForDraining {
-			fetches = append(fetches, ready.takeBuffered())
+		c.sourcesReadyMu.Lock()
+		for _, ready := range c.sourcesReadyForDraining {
+			// If PollFetches is running concurrent with an
+			// assignment, the assignment may have invalidated
+			// some buffered fetches.
+			fetch, seq := ready.takeBuffered()
+			if seq < c.seq {
+				continue
+			}
+			fetches = append(fetches, fetch)
 		}
-		consumer.sourcesReadyForDraining = nil
-		consumer.sourcesReadyMu.Unlock()
+		c.sourcesReadyForDraining = nil
+		c.sourcesReadyMu.Unlock()
 	}
 
 	fill()
@@ -113,15 +138,15 @@ func (c *Client) PollConsumer(ctx context.Context) Fetches {
 	done := make(chan struct{})
 	quit := false
 	go func() {
-		consumer.sourcesReadyMu.Lock()
-		defer consumer.sourcesReadyMu.Unlock()
+		c.sourcesReadyMu.Lock()
+		defer c.sourcesReadyMu.Unlock()
 		defer close(done)
 
 		for !quit {
-			if len(consumer.sourcesReadyForDraining) > 0 {
+			if len(c.sourcesReadyForDraining) > 0 {
 				return
 			}
-			consumer.sourcesReadyCond.Wait()
+			c.sourcesReadyCond.Wait()
 		}
 	}()
 
@@ -134,11 +159,14 @@ func (c *Client) PollConsumer(ctx context.Context) Fetches {
 	return fetches
 }
 
-// requires lock
+// assignPartitions, called under the consumer's mu, is used to set new
+// consumptions or add to the existing consumptions. If invalidateOld is true,
+// this invalidates old assignments / active fetches / buffered fetches.
 func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, invalidateOld bool) {
 	seq := c.seq
 
 	if invalidateOld {
+		c.sourcesReadyMu.Lock()
 		c.seq++
 		seq = c.seq
 
@@ -147,16 +175,24 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, inv
 		for _, usedPartition := range c.usingPartitions {
 			usedPartition.consumption.setOffset(-1, seq)
 		}
+
+		// Also drain any buffered, now stale, fetches.
+		for _, ready := range c.sourcesReadyForDraining {
+			ready.takeBuffered()
+		}
+		c.sourcesReadyForDraining = nil
+		c.sourcesReadyMu.Unlock()
+
 		c.usingPartitions = c.usingPartitions[:0]
 	}
 
-	// Ensure all topics exist so that we will fetch their metadata.
 	// This assignment could contain nothing (for the purposes of
 	// invalidating active fetches), so we only do this if needed.
 	if len(assignments) == 0 {
 		return
 	}
 
+	// Ensure all topics exist so that we will fetch their metadata.
 	c.cl.topicsMu.Lock()
 	clientTopics := c.cl.cloneTopics()
 	for topic := range assignments {
@@ -264,7 +300,7 @@ func (c *consumer) doOnMetadataUpdate() {
 	c.resetAndLoadOffsets()
 }
 
-// requires mu
+// resetAndLoadOffsets empties offsetsWaitingLoad and tries loading them.
 func (c *consumer) resetAndLoadOffsets() {
 	toLoad := c.offsetsWaitingLoad
 	c.offsetsWaitingLoad = nil
@@ -325,7 +361,7 @@ func (c *consumer) tryOffsetLoad(toLoad *offsetsWaitingLoad) {
 }
 
 func (c *consumer) tryBrokerOffsetLoad(broker *broker, load *offsetsWaitingLoad) {
-	kresp, err := broker.waitResp(bgctx, load.buildReq())
+	kresp, err := broker.waitResp(c.cl.ctx, load.buildReq())
 	if err != nil {
 		load.mergeInto(c)
 		return

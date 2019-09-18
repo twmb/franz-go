@@ -1,6 +1,7 @@
 package kgo
 
 import (
+	"context"
 	"errors"
 	"time"
 
@@ -85,14 +86,17 @@ func GroupHeartbeatInterval(interval time.Duration) GroupOpt {
 }
 
 type groupConsumer struct {
-	c  *consumer // used to change consumer state; generally c.mu is grabbed on access
-	cl *Client   // used for running requests / adding to topics map
+	c   *consumer // used to change consumer state; generally c.mu is grabbed on access
+	cl  *Client   // used for running requests / adding to topics map
+	seq uint64    // consumer's seq at time of Assign and after every fetch offsets
+
+	ctx    context.Context
+	cancel func()
 
 	id        string
 	topics    map[string]struct{}
 	balancers []GroupBalancer
 	leader    bool
-	leave     chan struct{}
 
 	regexTopics bool
 	reTopics    map[string]struct{}
@@ -124,9 +128,15 @@ func (cl *Client) AssignGroup(group string, opts ...GroupOpt) {
 		return
 	}
 
+	ctx, cancel := context.WithCancel(cl.ctx)
 	g := &groupConsumer{
-		c:  c,
-		cl: cl,
+		c:   c,
+		cl:  cl,
+		seq: c.seq,
+
+		ctx:    ctx,
+		cancel: cancel,
+
 		id: group,
 
 		balancers: []GroupBalancer{
@@ -134,8 +144,6 @@ func (cl *Client) AssignGroup(group string, opts ...GroupOpt) {
 			RoundRobinBalancer(),
 			RangeBalancer(),
 		},
-
-		leave: make(chan struct{}),
 
 		reTopics: make(map[string]struct{}),
 		reIgnore: make(map[string]struct{}),
@@ -187,9 +195,7 @@ loop:
 		if err != nil {
 			consecutiveErrors++
 			select {
-			case <-g.leave:
-				return
-			case <-g.cl.closedCh:
+			case <-g.ctx.Done():
 				return
 			case <-time.After(g.cl.cfg.client.retryBackoff(consecutiveErrors)):
 				continue loop
@@ -199,6 +205,18 @@ loop:
 	}
 }
 
+func (g *groupConsumer) leave() {
+	g.cancel()
+	g.cl.Request(g.cl.ctx, &kmsg.LeaveGroupRequest{
+		GroupID:  g.id,
+		MemberID: g.memberID,
+		Members: []kmsg.LeaveGroupRequestMember{{
+			MemberID:        g.memberID,
+			GroupInstanceID: nil, // TODO KIP-345
+		}},
+	})
+}
+
 func (g *groupConsumer) heartbeat() error {
 	interval := time.Millisecond * time.Duration(g.heartbeatIntervalMS)
 	ticker := time.NewTicker(interval)
@@ -206,10 +224,8 @@ func (g *groupConsumer) heartbeat() error {
 	for {
 		select {
 		case <-ticker.C:
-		case <-g.leave:
-			return errors.New("left group")
-		case <-g.cl.closedCh:
-			return errors.New("client closed")
+		case <-g.ctx.Done():
+			return errors.New("left group or client closed")
 		}
 
 		req := &kmsg.HeartbeatRequest{
@@ -217,7 +233,7 @@ func (g *groupConsumer) heartbeat() error {
 			GenerationID: g.generation,
 			MemberID:     g.memberID,
 		}
-		kresp, err := g.cl.Request(bgctx, req)
+		kresp, err := g.cl.Request(g.ctx, req)
 		if err != nil {
 			return err
 		}
@@ -242,7 +258,7 @@ start:
 		MemberID:         memberID,
 		GroupProtocols:   g.joinGroupProtocols(),
 	}
-	kresp, err := g.cl.Request(bgctx, &req)
+	kresp, err := g.cl.Request(g.ctx, &req)
 	if err != nil {
 		return err
 	}
@@ -285,7 +301,7 @@ func (g *groupConsumer) syncGroup(plan balancePlan, generation int32) error {
 		MemberID:        g.memberID,
 		GroupAssignment: plan.intoAssignment(),
 	}
-	kresp, err := g.cl.Request(bgctx, &req)
+	kresp, err := g.cl.Request(g.ctx, &req)
 	if err != nil {
 		return err // Request retries as necesary, so this must be a failure
 	}
@@ -333,7 +349,7 @@ func (g *groupConsumer) fetchOffsets() error {
 			Partitions: partitions,
 		})
 	}
-	kresp, err := g.cl.Request(bgctx, &req)
+	kresp, err := g.cl.Request(g.ctx, &req)
 	if err != nil {
 		return err
 	}
@@ -359,10 +375,15 @@ func (g *groupConsumer) fetchOffsets() error {
 		}
 	}
 
-	// TODO seq here
 	g.c.mu.Lock()
+	defer g.c.mu.Unlock()
+
+	if g.seq < g.c.seq {
+		return errors.New("stale group")
+	}
 	g.c.assignPartitions(offsets, true)
+	g.seq = g.c.seq // track bumped
+
 	g.c.resetAndLoadOffsets()
-	g.c.mu.Unlock()
 	return nil
 }
