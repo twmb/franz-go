@@ -169,12 +169,25 @@ func (c *Client) fetchMetadata(ctx context.Context, all bool, topics []string) (
 	} else if len(topics) == 0 {
 		topics = []string{}
 	}
+	tries := 0
+start:
+	tries++
 	broker := c.broker()
 	kresp, err := broker.waitResp(ctx, &kmsg.MetadataRequest{
 		Topics:                 topics,
 		AllowAutoTopicCreation: c.cfg.producer.allowAutoTopicCreation,
 	})
 	if err != nil {
+		if isRetriableBrokerErr(err) && tries < c.cfg.client.retries {
+			select {
+			case <-ctx.Done():
+				return nil, err
+			case <-c.ctx.Done():
+				return nil, err
+			case <-time.After(c.cfg.client.retryBackoff(tries)):
+				goto start
+			}
+		}
 		return nil, err
 	}
 	meta := kresp.(*kmsg.MetadataResponse)
@@ -308,7 +321,7 @@ start:
 		resp, err = c.broker().waitResp(ctx, req)
 	}
 
-	if isRetriableBrokerErr(err) && tries < c.cfg.client.retries {
+	if (kerr.IsRetriable(err) || isRetriableBrokerErr(err)) && tries < c.cfg.client.retries {
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
