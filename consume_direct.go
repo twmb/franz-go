@@ -167,7 +167,7 @@ func (d *directConsumer) findNewAssignments(
 	for topic, partitions := range d.using {
 		toUseTopic, exists := toUse[topic]
 		if !exists {
-			continue // weird; TODO forgotten topic
+			continue // forgotten topic
 		}
 		if len(partitions) == len(toUseTopic) {
 			delete(toUse, topic)

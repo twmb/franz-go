@@ -52,13 +52,6 @@ var (
 	// ErrNoPartitionsAvailable is returned immediately when producing a
 	// non-consistent record to a topic that has no writable partitions.
 	ErrNoPartitionsAvailable = errors.New("no partitions available")
-
-	// ErrPartitionDeleted is returned when a partition that was being
-	// written to disappears in a metadata update.
-	//
-	// Kafka does not allow downsizing partition counts in Kafka, so this
-	// error should generally not appear.
-	ErrPartitionDeleted = errors.New("partition no longer exists")
 )
 
 func isRetriableBrokerErr(err error) bool {

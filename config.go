@@ -9,14 +9,6 @@ import (
 	"github.com/twmb/kgo/kversion"
 )
 
-// TODO STRICT LENGTH VALIDATION
-// max bytes: 1G
-// client id length: int16
-// delivery.timeout.ms? (120s, upper bound on how long til acknowledged)
-// max.block.ms? (60s, upper bound on how long blocked on Produce)
-// reconnect.backoff.max.ms? (1s)
-// reconnect.backoff.ms
-
 type (
 	// Opt is an option to configure a client.
 	Opt interface {
@@ -58,7 +50,6 @@ func defaultCfg() cfg {
 
 			seedBrokers: []string{"127.0.0.1"},
 
-			// TODO rename tries, tryBackoff
 			retryBackoff: func(int) time.Duration { return 100 * time.Millisecond },
 			retries:      math.MaxInt32, // effectively unbounded
 
@@ -109,7 +100,6 @@ type (
 
 		metadataMaxAge time.Duration
 
-		// TODO dial fn convenience wrappers for tls, timeouts
 		// TODO SASL
 	}
 )
@@ -234,10 +224,6 @@ func (cfg *producerCfg) validate() error {
 	if cfg.maxRecordBatchBytes < 1<<10 {
 		return fmt.Errorf("max record batch bytes %d is less than min acceptable %d", cfg.maxRecordBatchBytes, 1<<10)
 	}
-
-	// TODO maxBrokerWriteBytes should be > 2*max.MathInt16 (client ID,
-	// transactional ID) + maxRecordBatchBytes + 2+2+4+2+2+2+4+4 (message
-	// request + producer thing) + 2 (transactional ID)
 
 	return nil
 }

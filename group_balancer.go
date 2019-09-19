@@ -26,8 +26,6 @@ type GroupBalancer interface {
 	//
 	// The input members are guaranteed to be sorted by member ID, and
 	// each member's topics are guaranteed to be sorted.
-	//
-	// TODO switch topics to map[string]int32? (number being # of topics)
 	balance(members []groupMember, topics map[string][]int32) balancePlan
 }
 
@@ -87,7 +85,7 @@ func (g *groupConsumer) balanceGroup(proto string, kmembers []kmsg.JoinGroupResp
 		return nil, err
 	}
 	if len(members) == 0 {
-		return nil, fmt.Errorf("NO MEMBERS") // TODO nice err
+		return nil, ErrInvalidResp
 	}
 	sort.Slice(members, func(i, j int) bool {
 		return members[i].id < members[j].id // guarantee sorted members
@@ -101,7 +99,7 @@ func (g *groupConsumer) balanceGroup(proto string, kmembers []kmsg.JoinGroupResp
 			return balancer.balance(members, g.cl.loadShortTopics()), nil
 		}
 	}
-	return nil, fmt.Errorf("Odd") // TODO nice err
+	return nil, ErrInvalidResp
 }
 
 // parseGroupMembers takes the raw data in from a join group response and

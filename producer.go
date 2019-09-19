@@ -8,7 +8,7 @@ import (
 	"github.com/twmb/kgo/kmsg"
 )
 
-// TODO KIP-380:
+// TODO KIP-480:
 // - change bufferRecord API to bufferRecord((pr promisedRecord, notIfNewBatch bool) (appended bool)
 // - call with (pr, true)
 // - if not appended, repartition, then call again on new partition with (pr, false)
@@ -34,13 +34,18 @@ func noPromise(*Record, error) {}
 // If the record cannot be written, due to it being too large or the client
 // being unable to find a partition, this will return an error.
 //
+// For simplicity, this function considers messages too large if they are
+// within 512 bytes of the record batch byte limit.
+//
 // The promise is optional, but not using it means you will not know if Kafka
 // recorded a record properly.
 func (c *Client) Produce(
 	r *Record,
 	promise func(*Record, error),
 ) error {
-	// TODO validate lengths here
+	if len(r.Key)+len(r.Value) > int(c.cfg.producer.maxRecordBatchBytes)-512 {
+		return kerr.MessageTooLarge
+	}
 
 	if atomic.AddInt64(&c.producer.bufferedRecords, 1) > c.cfg.producer.maxBufferedRecords {
 		<-c.producer.waitBuffer
@@ -55,8 +60,7 @@ func (c *Client) Produce(
 	}
 
 	partitions := c.partitionsForTopicProduce(r.Topic)
-	if partitions.loadErr != nil {
-		// TODO if retriable, should we buffer it?
+	if partitions.loadErr != nil && !kerr.IsRetriable(partitions.loadErr) {
 		return partitions.loadErr
 	}
 
@@ -144,7 +148,7 @@ func (c *Client) partitionsForTopicProduce(topic string) *topicPartitionsData {
 	}
 
 	v := parts.load()
-	if len(v.partitions) > 0 || v.loadErr != nil && !kerr.IsRetriable(v.loadErr) {
+	if len(v.partitions) > 0 {
 		return v // fast, normal path
 	}
 
@@ -152,9 +156,7 @@ func (c *Client) partitionsForTopicProduce(topic string) *topicPartitionsData {
 	defer parts.mu.RUnlock()
 
 	tries := 0
-	for tries < c.cfg.client.retries &&
-		(len(v.partitions) == 0 || v.loadErr != nil && kerr.IsRetriable(v.loadErr)) {
-
+	for tries < c.cfg.client.retries && len(v.partitions) == 0 {
 		tries++
 		c.triggerUpdateMetadata()
 		parts.c.Wait()
