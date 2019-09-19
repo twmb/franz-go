@@ -1,6 +1,7 @@
 package kgo
 
 import (
+	"context"
 	"sync"
 	"time"
 
@@ -25,11 +26,11 @@ func (m *metawait) signal() {
 
 // waitmeta returns immediately if metadata was updated within the last second,
 // otherwise this waits for up to one second for a metadata update to complete.
-func (c *Client) waitmeta() {
+func (c *Client) waitmeta(ctx context.Context, wait time.Duration) {
 	now := time.Now()
 
 	c.metawait.mu.Lock()
-	if now.Sub(c.metawait.lastUpdate) < time.Second {
+	if now.Sub(c.metawait.lastUpdate) < 10*time.Second {
 		c.metawait.mu.Unlock()
 		return
 	}
@@ -39,7 +40,7 @@ func (c *Client) waitmeta() {
 
 	quit := false
 	done := make(chan struct{})
-	timeout := time.NewTimer(time.Second)
+	timeout := time.NewTimer(wait)
 	defer timeout.Stop()
 
 	go func() {
@@ -57,12 +58,15 @@ func (c *Client) waitmeta() {
 
 	select {
 	case <-done:
+		return
 	case <-timeout.C:
-		c.metawait.mu.Lock()
-		quit = true
-		c.metawait.mu.Unlock()
-		c.metawait.c.Broadcast()
+	case <-ctx.Done():
 	}
+
+	c.metawait.mu.Lock()
+	quit = true
+	c.metawait.mu.Unlock()
+	c.metawait.c.Broadcast()
 }
 
 func (c *Client) triggerUpdateMetadata() {
@@ -289,8 +293,6 @@ func (l *topicPartitions) merge(r *topicPartitionsData) (needsRetry bool) {
 
 	lv.partitions = r.partitions
 
-	var deleted []*topicPartition // should end up empty
-
 	// Migrating topicPartitions is a little tricky because we have to
 	// worry about map contents.
 	//
@@ -300,7 +302,11 @@ func (l *topicPartitions) merge(r *topicPartitionsData) (needsRetry bool) {
 	for part, oldTP := range lv.all {
 		newTP, exists := r.all[part]
 		if !exists {
-			deleted = append(deleted, oldTP)
+			// Individual partitions cannot be deleted, so if this
+			// partition does not exist anymore, either the topic
+			// was deleted and recreated, which we do not handle
+			// yet (and cannot on most Kafka's), or the broker we
+			// fetched metadata from is out of date.
 			continue
 		}
 
@@ -345,30 +351,5 @@ func (l *topicPartitions) merge(r *topicPartitionsData) (needsRetry bool) {
 	// The left writable map needs no further updates: all changes above
 	// happened to r.all, of which r.writable contains a subset of.
 	// Modifications to r.all are seen in r.writable.
-
-	if len(deleted) > 0 {
-		go handleDeletedPartitions(deleted)
-	}
-
 	return needsRetry
-}
-
-// handleDeletedPartitions calls all promises in all records in all partitions
-// in deleted with ErrPartitionDeleted.
-//
-// Kafka currently has no way to delete a partition, but, just in case.
-func handleDeletedPartitions(deleted []*topicPartition) {
-	for _, d := range deleted {
-		d.records.mu.Lock()
-		sink := d.records.sink
-		sink.removeSource(d.records)
-		for _, batch := range d.records.batches {
-			for i, record := range batch.records {
-				sink.broker.client.finishRecordPromise(record, ErrPartitionDeleted)
-				batch.records[i] = noPNR
-			}
-			emptyRecordsPool.Put(&batch.records)
-		}
-		d.records.mu.Unlock()
-	}
 }
