@@ -159,6 +159,19 @@ func (c *Client) broker() *broker {
 	return b
 }
 
+func (c *Client) waitTries(ctx context.Context, tries int) bool {
+	after := time.NewTimer(c.cfg.client.retryBackoff(tries))
+	defer after.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-c.ctx.Done():
+		return false
+	case <-after.C:
+		return true
+	}
+}
+
 // fetchBrokerMetadata issues a metadata request solely for broker information.
 func (c *Client) fetchBrokerMetadata(ctx context.Context) error {
 	_, err := c.fetchMetadata(ctx, false, nil)
@@ -181,14 +194,10 @@ start:
 	})
 	if err != nil {
 		if isRetriableBrokerErr(err) && tries < c.cfg.client.retries {
-			select {
-			case <-ctx.Done():
-				return nil, err
-			case <-c.ctx.Done():
-				return nil, err
-			case <-time.After(c.cfg.client.retryBackoff(tries)):
+			if ok := c.waitTries(ctx, tries); ok {
 				goto start
 			}
+			return nil, err
 		}
 		return nil, err
 	}
@@ -269,6 +278,8 @@ func (c *Client) Close() {
 	c.stopBrokers = true
 	for _, broker := range c.brokers {
 		broker.stopForever()
+		broker.recordSink.maybeBeginDraining()    // awaken anything in backoff
+		broker.recordSource.maybeBeginConsuming() // same
 	}
 	c.brokersMu.Unlock()
 
@@ -345,14 +356,10 @@ start:
 	}
 
 	if (kerr.IsRetriable(err) || isRetriableBrokerErr(err)) && tries < c.cfg.client.retries {
-		select {
-		case <-ctx.Done():
-			return nil, err
-		case <-c.ctx.Done():
-			return nil, err
-		case <-time.After(c.cfg.client.retryBackoff(tries)):
+		if ok := c.waitTries(ctx, tries); ok {
 			goto start
 		}
+		return nil, err
 	}
 	return resp, err
 }
@@ -379,14 +386,10 @@ start:
 		tries++
 		if err := c.fetchBrokerMetadata(ctx); err != nil {
 			if isRetriableBrokerErr(err) && tries < c.cfg.client.retries {
-				select {
-				case <-ctx.Done():
-					return nil, err
-				case <-c.ctx.Done():
-					return nil, err
-				case <-time.After(c.cfg.client.retryBackoff(tries)):
+				if ok := c.waitTries(ctx, tries); ok {
 					goto start
 				}
+				return nil, err
 			}
 			return nil, err
 		}
@@ -447,14 +450,10 @@ start:
 	if err != nil {
 		c.coordinatorsMu.Unlock()
 		if isRetriableErr(err) && tries < c.cfg.client.retries {
-			select {
-			case <-ctx.Done():
-				return nil, err
-			case <-c.ctx.Done():
-				return nil, err
-			case <-time.After(c.cfg.client.retryBackoff(tries)):
+			if ok := c.waitTries(ctx, tries); ok {
 				goto start
 			}
+			return nil, err
 		}
 		return nil, err
 	}

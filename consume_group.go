@@ -237,10 +237,12 @@ loop:
 			backoff := g.cl.cfg.client.retryBackoff(consecutiveErrors)
 			deadline := time.Now().Add(backoff)
 			g.cl.waitmeta(g.ctx, backoff)
+			after := time.NewTimer(time.Until(deadline))
 			select {
 			case <-g.ctx.Done():
+				after.Stop()
 				return
-			case <-time.After(time.Until(deadline)):
+			case <-after.C:
 				continue loop
 			}
 		}

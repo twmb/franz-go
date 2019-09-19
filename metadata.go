@@ -105,10 +105,12 @@ func (c *Client) updateMetadataLoop() {
 				consecutiveErrors = 0
 			}
 
+			after := time.NewTimer(sleep)
 			select {
 			case <-c.ctx.Done():
+				after.Stop()
 				return
-			case <-time.After(sleep):
+			case <-after.C:
 			}
 		}
 	}
