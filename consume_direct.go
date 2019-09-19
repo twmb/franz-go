@@ -73,7 +73,7 @@ func (cl *Client) AssignPartitions(opts ...ConsumeOpt) {
 	for _, opt := range opts {
 		opt.apply(d)
 	}
-	if len(d.topics) == 0 && len(d.partitions) == 0 {
+	if len(d.topics) == 0 && len(d.partitions) == 0 || c.dead {
 		c.typ = consumerTypeUnset
 		return
 	}

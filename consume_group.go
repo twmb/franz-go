@@ -162,9 +162,6 @@ func (cl *Client) AssignGroup(group string, opts ...GroupOpt) {
 	defer c.mu.Unlock()
 
 	c.unassignPrior()
-	if len(group) == 0 {
-		return
-	}
 
 	ctx, cancel := context.WithCancel(cl.ctx)
 	g := &groupConsumer{
@@ -195,7 +192,7 @@ func (cl *Client) AssignGroup(group string, opts ...GroupOpt) {
 	for _, opt := range opts {
 		opt.apply(g)
 	}
-	if len(g.topics) == 0 {
+	if len(group) == 0 || len(g.topics) == 0 || c.dead {
 		c.typ = consumerTypeUnset
 		return
 	}

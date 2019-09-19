@@ -30,6 +30,7 @@ type Client struct {
 	brokers      map[int32]*broker // broker id => broker
 	anyBroker    []*broker
 	anyBrokerIdx int
+	stopBrokers  bool // set to true on close to stop updateBrokers
 
 	controllerID int32 // atomic
 
@@ -140,6 +141,7 @@ func NewClient(opts ...Opt) (*Client, error) {
 	}
 	go c.updateMetadataLoop()
 
+	nclientsInc()
 	return c, nil
 }
 
@@ -208,6 +210,10 @@ func (c *Client) updateBrokers(brokers []kmsg.MetadataResponseBroker) {
 	c.brokersMu.Lock()
 	defer c.brokersMu.Unlock()
 
+	if c.stopBrokers {
+		return
+	}
+
 	for _, broker := range brokers {
 		addr := net.JoinHostPort(broker.Host, strconv.Itoa(int(broker.Port)))
 
@@ -239,19 +245,34 @@ func (c *Client) updateBrokers(brokers []kmsg.MetadataResponseBroker) {
 	c.anyBroker = newAnyBroker
 }
 
-// TODO Shutdown the client.
-//
-// For producing: we can just rely on the passed callbacks to ensure we do not
-// interrupt message sends. Users should just not close until the callbacks
-// return if they care about that.
-//
-// For consuming: we can interrupt everything. Is it worth it to do async
-// close? Should not matter, since it is fundamentally racy (stop consuming
-// and checkpoint later vs. interrupt, reconnect, consume where left off).
-//
-// Returns a function that waits until all connections have died.
-func (c *Client) Close() func() {
-	return nil
+// Close leaves any group and closes all connections and goroutines.
+func (c *Client) Close() {
+	// First, kill the consumer. Setting dead to true and then assigning
+	// nothing will
+	// 1) invalidate active fetches
+	// 2) ensure consumptions are unassigned, stopping all source filling
+	// 3) ensures no more assigns can happen
+	c.consumer.mu.Lock()
+	if c.consumer.dead { // client already closed
+		c.consumer.mu.Unlock()
+		return
+	}
+	c.consumer.dead = true
+	c.consumer.mu.Unlock()
+	c.AssignPartitions()
+
+	// Now we kill the client context and all brokers, ensuring all
+	// requests fail. This will finish all producer callbacks and
+	// stop the metadata loop.
+	c.ctxCancel()
+	c.brokersMu.Lock()
+	c.stopBrokers = true
+	for _, broker := range c.brokers {
+		broker.stopForever()
+	}
+	c.brokersMu.Unlock()
+
+	nclientsDec()
 }
 
 // Request issues a request to Kafka, waiting for and returning the response.
@@ -294,6 +315,8 @@ func (c *Client) Request(ctx context.Context, req kmsg.Request) (kmsg.Response, 
 		return resp, err
 	case <-ctx.Done():
 		return nil, ctx.Err()
+	case <-c.ctx.Done():
+		return nil, c.ctx.Err()
 	}
 }
 
@@ -324,7 +347,7 @@ start:
 	if (kerr.IsRetriable(err) || isRetriableBrokerErr(err)) && tries < c.cfg.client.retries {
 		select {
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return nil, err
 		case <-c.ctx.Done():
 			return nil, err
 		case <-time.After(c.cfg.client.retryBackoff(tries)):
@@ -358,7 +381,7 @@ start:
 			if isRetriableBrokerErr(err) && tries < c.cfg.client.retries {
 				select {
 				case <-ctx.Done():
-					return nil, ctx.Err()
+					return nil, err
 				case <-c.ctx.Done():
 					return nil, err
 				case <-time.After(c.cfg.client.retryBackoff(tries)):
@@ -725,6 +748,8 @@ func (b *Broker) Request(ctx context.Context, req kmsg.Request) (kmsg.Response, 
 		return resp, err
 	case <-ctx.Done():
 		return nil, ctx.Err()
+	case <-b.cl.ctx.Done():
+		return nil, b.cl.ctx.Err()
 	}
 }
 

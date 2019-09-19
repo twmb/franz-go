@@ -79,6 +79,10 @@ type consumer struct {
 	//
 	// Incrementing it invalidates prior assignments and fetches.
 	seq uint64
+
+	// dead is set when the client closes; this being true means that any
+	// Assign does nothing (aside from unassigning everything prior).
+	dead bool
 }
 
 // unassignPrior invalidates old assignments, ensures that nothing is assigned,

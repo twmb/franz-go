@@ -61,6 +61,7 @@ func (c *Client) waitmeta(ctx context.Context, wait time.Duration) {
 		return
 	case <-timeout.C:
 	case <-ctx.Done():
+	case <-c.ctx.Done():
 	}
 
 	c.metawait.mu.Lock()

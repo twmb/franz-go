@@ -124,9 +124,9 @@ func (consumption *consumption) setOffset(offset int64, fromSeq uint64) {
 		return
 	}
 
-	consumption.usable = true
 	consumption.offset = offset
 	consumption.seq = fromSeq
+	consumption.usable = offset != -1
 
 	if offset != -1 {
 		consumption.source.maybeBeginConsuming()
@@ -263,8 +263,8 @@ func (source *recordSource) handleReqResp(req *fetchRequest, resp kmsg.Response,
 	var needMetaUpdate bool
 
 	if err != nil {
-		// TODO
-		// ErrBrokerDead: ok
+		// TODO actually do something on err
+		source.restartOffsets(req.offsets)
 		return
 	}
 
@@ -273,11 +273,8 @@ func (source *recordSource) handleReqResp(req *fetchRequest, resp kmsg.Response,
 		Topics: make([]FetchTopic, 0, len(r.Topics)),
 	}
 
-	if err = kerr.ErrorForCode(r.ErrorCode); err != nil {
-		// TODO
-		// ErrBrokerDead: ok
-		return
-	}
+	// We do not look at the overall ErrorCode; this should only be set if
+	// using sessions, which we are not.
 
 	for _, rTopic := range r.Topics {
 		topic := rTopic.Topic
@@ -384,11 +381,11 @@ func (o *seqOffset) processRespPartition(
 		// TODO backoff
 
 	default:
+		// - out of range offset (use reset policy!)
 		// Fatal:
 		// - bad auth
 		// - unsupported compression
 		// - unsupported message version
-		// - out of range offset
 		// - unknown error
 		// TODO backoff permanently?
 	}

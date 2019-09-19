@@ -213,7 +213,34 @@ var unlz4Pool = sync.Pool{
 	New: func() interface{} { return new(lz4.Reader) },
 }
 
-var unzstd, _ = zstd.NewReader(nil)
+// nclientsInc is called at the end of NewClient, initializing unzstd if that
+// is the first client.
+//
+// Is this ugly? Yes. But, reusing a zstd decompressor allows for some better
+// concurrency control. As well, a zstd decompressor begins goroutines in
+// NewReader and only closes them when the reader is closed. We do not want
+// those goroutines to persist after the client is closed.
+func nclientsInc() {
+	nclientsMu.Lock()
+	defer nclientsMu.Unlock()
+	nclients++
+	if nclients == 1 {
+		unzstd, _ = zstd.NewReader(nil)
+	}
+}
+
+func nclientsDec() { // see above
+	nclientsMu.Lock()
+	defer nclientsMu.Unlock()
+	nclients--
+	if nclients == 0 {
+		unzstd.Close()
+	}
+}
+
+var nclientsMu sync.Mutex // see above
+var nclients int
+var unzstd *zstd.Decoder
 
 var xerialPfx = []byte{130, 83, 78, 65, 80, 80, 89, 0}
 
