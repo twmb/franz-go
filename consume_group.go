@@ -3,11 +3,14 @@ package kgo
 import (
 	"context"
 	"errors"
+	"sync"
 	"time"
 
 	"github.com/twmb/kgo/kerr"
 	"github.com/twmb/kgo/kmsg"
 )
+
+// TODO: regex, leader rejoin
 
 // GroupOpt is an option to configure group consuming.
 type GroupOpt interface {
@@ -91,6 +94,32 @@ func GroupResetOffset(offset Offset) GroupOpt {
 	return groupOpt{func(cfg *groupConsumer) { cfg.resetOffset = offset }}
 }
 
+// GroupOnAssign sets the function to be called when a group is joined after
+// partitions are assigned before fetches begin.
+//
+// Note that this function combined with onRevoke should combined not exceed
+// the rebalance interval. It is possible for the group, immediately after
+// finishing a balance, to re-enter a new balancing session.
+//
+// The onAssign function is passed the group's context, which is only canceled
+// if the group is left or the client is closed.
+func GroupOnAssign(onAssign func(context.Context, map[string][]int32)) GroupOpt {
+	return groupOpt{func(cfg *groupConsumer) { cfg.onAssign = onAssign }}
+}
+
+// GroupOnRevoke sets the function to be called once a group transitions from
+// stable to rebalancing.
+//
+// Note that this function combined with onAssign should combined not exceed
+// the rebalance interval. It is possible for the group, immediately after
+// finishing a balance, to re-enter a new balancing session.
+//
+// The onRevoke function is passed the group's context, which is only canceled
+// if the group is left or the client is closed.
+func GroupOnRevoke(onRevoke func(context.Context, map[string][]int32)) GroupOpt {
+	return groupOpt{func(cfg *groupConsumer) { cfg.onRevoke = onRevoke }}
+}
+
 type groupConsumer struct {
 	c   *consumer // used to change consumer state; generally c.mu is grabbed on access
 	cl  *Client   // used for running requests / adding to topics map
@@ -118,9 +147,10 @@ type groupConsumer struct {
 
 	resetOffset Offset
 
+	onAssign func(context.Context, map[string][]int32)
+	onRevoke func(context.Context, map[string][]int32)
+
 	// TODO autocommit
-	// OnAssign
-	// OnRevoke
 	// OnLost (incremental)
 }
 
@@ -190,24 +220,30 @@ func (cl *Client) AssignGroup(group string, opts ...GroupOpt) {
 
 func (g *groupConsumer) manage() {
 	var consecutiveErrors int
+	g.cl.waitmeta(g.ctx, g.sessionTimeout)
+
 loop:
 	for {
 		err := g.joinAndSync()
 		if err == nil {
-			err = g.fetchOffsets()
-			if err == nil {
-				err = g.heartbeat()
+			if err = g.setupAssigned(); err != nil {
 				if err == kerr.RebalanceInProgress {
 					err = nil
 				}
 			}
 		}
+
 		if err != nil {
 			consecutiveErrors++
+			// Waiting for the backoff is a good time to update our
+			// metadata; maybe the error is from stale metadata.
+			backoff := g.cl.cfg.client.retryBackoff(consecutiveErrors)
+			deadline := time.Now().Add(backoff)
+			g.cl.waitmeta(g.ctx, backoff)
 			select {
 			case <-g.ctx.Done():
 				return
-			case <-time.After(g.cl.cfg.client.retryBackoff(consecutiveErrors)):
+			case <-time.After(time.Until(deadline)):
 				continue loop
 			}
 		}
@@ -227,35 +263,166 @@ func (g *groupConsumer) leave() {
 	})
 }
 
-func (g *groupConsumer) heartbeat() error {
+type assignRevokeSession struct {
+	mu         sync.Mutex
+	assigned   bool
+	assignDone chan struct{}
+	revoked    bool
+	revokeDone chan struct{}
+}
+
+func (s *assignRevokeSession) revoke(g *groupConsumer) <-chan struct{} {
+	s.mu.Lock()
+	revoked := s.revoked
+	assigned := s.assigned
+
+	s.revoked = true
+	if s.revokeDone == nil {
+		s.revokeDone = make(chan struct{})
+	}
+	s.mu.Unlock()
+
+	if !revoked {
+		go func() {
+			defer close(s.revokeDone)
+			if assigned {
+				<-s.assignDone
+				if g.onRevoke != nil {
+					g.onRevoke(g.ctx, g.assigned)
+				}
+			}
+		}()
+	}
+	return s.revokeDone
+}
+
+func (s *assignRevokeSession) assign(g *groupConsumer) {
+	s.mu.Lock()
+	if s.revoked {
+		s.mu.Unlock()
+		return
+	}
+	s.assigned = true
+	s.assignDone = make(chan struct{})
+	s.mu.Unlock()
+	defer close(s.assignDone)
+
+	if g.onAssign != nil {
+		g.onAssign(g.ctx, g.assigned)
+	}
+}
+
+func (g *groupConsumer) setupAssigned() error {
+	hbErrCh := make(chan error, 1)
+	fetchErrCh := make(chan error, 1)
+	ctx, cancel := context.WithCancel(g.ctx)
+
+	s := new(assignRevokeSession)
+
+	go func() {
+		hbErrCh <- g.heartbeat(fetchErrCh, s)
+		cancel() // potentially kill fetching
+	}()
+
+	doneOnAssign := make(chan struct{})
+	go func() {
+		s.assign(g)
+		close(doneOnAssign)
+	}()
+
+	select {
+	case err := <-hbErrCh:
+		// heartbeat calls onRevoke if necessary, so we do not here.
+		return err
+	case <-doneOnAssign:
+	}
+
+	go func() {
+		fetchErrCh <- g.fetchOffsets(ctx)
+	}()
+
+	return <-hbErrCh
+}
+
+// heartbeat issues heartbeat requests to Kafka for the duration of a group
+// session.
+//
+// This function is began before fetching offsets to allow the consumer's
+// onAssign to be called before fetching. If the eventual offset fetch errors,
+// we continue heartbeating until onRevoke finishes and our metadata is
+// updated.
+//
+// If the offset fetch is successful, then we basically sit in this function
+// until a heartbeat errors or us, being the leader, decides to re-join.
+func (g *groupConsumer) heartbeat(fetchErrCh <-chan error, s *assignRevokeSession) error {
 	ticker := time.NewTicker(g.heartbeatInterval)
 	defer ticker.Stop()
+
+	var metadone, revoked <-chan struct{}
+	var didMetadone, didRevoke bool
+	var lastErr error
+
 	for {
+		var err error
 		select {
 		case <-ticker.C:
+			req := &kmsg.HeartbeatRequest{
+				GroupID:      g.id,
+				GenerationID: g.generation,
+				MemberID:     g.memberID,
+			}
+			var kresp kmsg.Response
+			kresp, err = g.cl.Request(g.ctx, req)
+			if err == nil {
+				resp := kresp.(*kmsg.HeartbeatResponse)
+				err = kerr.ErrorForCode(resp.ErrorCode)
+			}
+		case err = <-fetchErrCh:
+			fetchErrCh = nil
+		case <-metadone:
+			metadone = nil
+			didMetadone = true
+		case <-revoked:
+			revoked = nil
+			didRevoke = true
 		case <-g.ctx.Done():
+			s.revoke(g)
 			return errors.New("left group or client closed")
 		}
 
-		req := &kmsg.HeartbeatRequest{
-			GroupID:      g.id,
-			GenerationID: g.generation,
-			MemberID:     g.memberID,
+		if didMetadone && didRevoke {
+			return lastErr
 		}
-		kresp, err := g.cl.Request(g.ctx, req)
-		if err != nil {
-			return err
+
+		if err == nil {
+			continue
 		}
-		resp := kresp.(*kmsg.HeartbeatResponse)
-		if err = kerr.ErrorForCode(resp.ErrorCode); err != nil {
-			return err
+
+		// Since we errored, we must revoke.
+		if !didRevoke && revoked == nil {
+			revoked = s.revoke(g)
 		}
+		// Since we errored, while waiting for the revoke to finish, we
+		// update our metadata. A leader may have re-joined with new
+		// metadata, and we want the update.
+		if !didMetadone && metadone == nil {
+			metawait := g.rebalanceTimeout - 5*time.Second
+			waited := make(chan struct{})
+			metadone = waited
+			go func() {
+				g.cl.waitmeta(g.ctx, metawait)
+				close(waited)
+			}()
+		}
+
+		// We always save the latest error; generally this should be
+		// REBALANCE_IN_PROGRESS, but if the revoke takes too long,
+		// Kafka may boot us and we will get a different error.
+		lastErr = err
 	}
 }
 
 func (g *groupConsumer) joinAndSync() error {
-	g.cl.waitmeta()
-
 	g.leader = false
 start:
 	req := kmsg.JoinGroupRequest{
@@ -351,7 +518,7 @@ func (g *groupConsumer) joinGroupProtocols() []kmsg.JoinGroupRequestGroupProtoco
 	return protos
 }
 
-func (g *groupConsumer) fetchOffsets() error {
+func (g *groupConsumer) fetchOffsets(ctx context.Context) error {
 	req := kmsg.OffsetFetchRequest{
 		GroupID: g.id,
 	}
@@ -361,7 +528,7 @@ func (g *groupConsumer) fetchOffsets() error {
 			Partitions: partitions,
 		})
 	}
-	kresp, err := g.cl.Request(g.ctx, &req)
+	kresp, err := g.cl.Request(ctx, &req)
 	if err != nil {
 		return err
 	}
