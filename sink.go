@@ -241,7 +241,7 @@ func (sink *recordSink) requeueUnattemptedReq(req *produceRequest) {
 	// that the drain loop can set the backoff timer if necessary.
 	maybeBeginDraining := false
 	req.batches.onEachBatchWhileBatchOwnerLocked(func(batch *recordBatch) {
-		if batch.lockedTryCanBackoffInSink(sink) {
+		if batch.lockedIsFirstBatchInSink(sink) {
 			batch.owner.backoffDeadline = backoffDeadline
 			maybeBeginDraining = true
 		}
@@ -449,7 +449,7 @@ var forever = time.Now().Add(100 * 365 * 24 * time.Hour)
 
 func (sink *recordSink) handleRetryBatches(retry reqBatches) {
 	retry.onEachBatchWhileBatchOwnerLocked(func(batch *recordBatch) {
-		if batch.lockedTryCanBackoffInSink(sink) {
+		if batch.lockedIsFirstBatchInSink(sink) {
 			batch.owner.backoffDeadline = forever // tombstone
 		}
 	})
@@ -875,10 +875,9 @@ func (batch *recordBatch) removeFromRecordBuf() {
 	recordBuffer.mu.Unlock()
 }
 
-// lockedTryCanBackoffInSink returns whether a batch can backoff within a sink.
-// This returns false if the batch is not the first batch or if the batch's
-// owner moved to a different sink.
-func (batch *recordBatch) lockedTryCanBackoffInSink(sink *recordSink) bool {
+// lockedIsFirstBatchInSink returns whether a batch is the first batch in
+// the given sink.
+func (batch *recordBatch) lockedIsFirstBatchInSink(sink *recordSink) bool {
 	if !batch.lockedIsFirstBatchInRecordBuf() {
 		return false
 	}
