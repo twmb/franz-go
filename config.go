@@ -71,6 +71,7 @@ func defaultCfg() cfg {
 			maxWait:      500,
 			maxBytes:     50 << 20,
 			maxPartBytes: 10 << 20,
+			resetOffset:  ConsumeStartOffset(),
 		},
 	}
 }
@@ -327,6 +328,7 @@ type (
 		maxWait      int32
 		maxBytes     int32
 		maxPartBytes int32
+		resetOffset  Offset
 	}
 )
 
@@ -365,4 +367,11 @@ func WithConsumeMaxBytes(b int32) OptConsumer {
 // This corresponds to the Java max.partition.fetch.bytes setting.
 func WithConsumeMaxPartitionBytes(b int32) OptConsumer {
 	return consumerOpt{func(cfg *consumerCfg) { cfg.maxPartBytes = b }}
+}
+
+// WithConsumeResetOffset sets the offset to restart consuming from when a
+// partition has no commits (for groups) or when a fetch sees an
+// OffsetOutOfRange error, overriding the default ConsumeStartOffset.
+func WithConsumeResetOffset(offset Offset) OptConsumer {
+	return consumerOpt{func(cfg *consumerCfg) { cfg.resetOffset = offset }}
 }

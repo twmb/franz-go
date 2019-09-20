@@ -88,12 +88,6 @@ func GroupHeartbeatInterval(interval time.Duration) GroupOpt {
 	return groupOpt{func(cfg *groupConsumer) { cfg.heartbeatInterval = interval }}
 }
 
-// GroupResetOffset sets the offset to reset to when consuming a partition
-// that has no commits, overriding the default start offset.
-func GroupResetOffset(offset Offset) GroupOpt {
-	return groupOpt{func(cfg *groupConsumer) { cfg.resetOffset = offset }}
-}
-
 // GroupOnAssign sets the function to be called when a group is joined after
 // partitions are assigned before fetches begin.
 //
@@ -145,8 +139,6 @@ type groupConsumer struct {
 	rebalanceTimeout  time.Duration
 	heartbeatInterval time.Duration
 
-	resetOffset Offset
-
 	onAssign func(context.Context, map[string][]int32)
 	onRevoke func(context.Context, map[string][]int32)
 
@@ -186,8 +178,6 @@ func (cl *Client) AssignGroup(group string, opts ...GroupOpt) {
 		sessionTimeout:    10000 * time.Millisecond,
 		rebalanceTimeout:  60000 * time.Millisecond,
 		heartbeatInterval: 3000 * time.Millisecond,
-
-		resetOffset: ConsumeStartOffset(),
 	}
 	for _, opt := range opts {
 		opt.apply(g)
@@ -551,7 +541,7 @@ func (g *groupConsumer) fetchOffsets(ctx context.Context) error {
 			}
 			offset := ConsumeExactOffset(rPartition.Offset)
 			if rPartition.Offset == -1 {
-				offset = g.resetOffset
+				offset = g.cl.cfg.consumer.resetOffset
 			}
 			topicOffsets[rPartition.Partition] = offset
 		}

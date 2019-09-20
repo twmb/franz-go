@@ -340,7 +340,14 @@ func (source *recordSource) handleReqResp(req *fetchRequest, resp kmsg.Response,
 
 	// We do not look at the overall ErrorCode; this should only be set if
 	// using sessions, which we are not.
-
+	//
+	// If any partition errors with OffsetOutOfRange, we reload the offset
+	// for that partition according to the client's configured offset
+	// policy. Everything to reload gets stuffed into reloadOffsets, which
+	// is merged into the consumer before a metadata update is triggered.
+	reloadOffsets := offsetsWaitingLoad{
+		fromSeq: req.maxSeq,
+	}
 	for _, rTopic := range r.Topics {
 		topic := rTopic.Topic
 		topicOffsets, ok := req.offsets[topic]
@@ -366,11 +373,21 @@ func (source *recordSource) handleReqResp(req *fetchRequest, resp kmsg.Response,
 				fetchTopic.Partitions = append(fetchTopic.Partitions, fetchPart)
 			}
 			needMetaUpdate = needMetaUpdate || partNeedsMetaUpdate
+			if fetchPart.Err == kerr.OffsetOutOfRange {
+				reloadOffsets.setTopicPart(topic, partition, source.broker.client.cfg.consumer.resetOffset)
+			}
 		}
 
 		if len(fetchTopic.Partitions) > 0 {
 			newFetch.Topics = append(newFetch.Topics, fetchTopic)
 		}
+	}
+
+	if len(reloadOffsets.waiting) > 0 {
+		consumer := &source.broker.client.consumer
+		consumer.mu.Lock()
+		reloadOffsets.mergeIntoLocked(consumer)
+		consumer.mu.Unlock()
 	}
 
 	if needMetaUpdate {
@@ -450,10 +467,6 @@ func (o *seqOffsetFrom) processRespPartition(
 		kerr.FencedLeaderEpoch:
 
 		fetchPart.Err = nil
-		o.from.setFailing(o.seq)
-
-	case kerr.OffsetOutOfRange:
-		// TODO reset policy
 		o.from.setFailing(o.seq)
 
 	default:
