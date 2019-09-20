@@ -322,11 +322,12 @@ func (l *topicPartitions) merge(r *topicPartitionsData) (needsRetry bool) {
 
 		// If the new sink is the same as the old, we simply copy over
 		// the records pointer and maybe begin draining again.
-		//
-		// We do not need to do anything to the consumption here.
+		// Same logic for the consumption.
 		if newTP.records.sink == oldTP.records.sink {
 			newTP.records = oldTP.records
 			newTP.records.resetBackoffAndMaybeTriggerSinkDrain()
+			newTP.consumption = oldTP.consumption
+			newTP.consumption.clearFailing()
 			continue
 		}
 

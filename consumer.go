@@ -113,6 +113,8 @@ func (c *consumer) addSourceReadyForDraining(seq uint64, source *recordSource) {
 	}
 }
 
+// If a partition has an error midway through processing a batch, the partition
+// may still have valid records to consume.
 func (cl *Client) PollFetches(ctx context.Context) Fetches {
 	c := &cl.consumer
 
@@ -177,7 +179,7 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, inv
 		// First, stop all fetches for prior assignments. After our consumer
 		// lock is released, fetches will return nothing historic.
 		for _, usedPartition := range c.usingPartitions {
-			usedPartition.consumption.setOffset(-1, seq)
+			usedPartition.consumption.setOffset(-1, seq, false)
 		}
 
 		// Also drain any buffered, now stale, fetches.
@@ -222,7 +224,7 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, inv
 			}
 
 			if offset.request >= 0 {
-				part.consumption.setOffset(offset.request, seq)
+				part.consumption.setOffset(offset.request, seq, false)
 				c.usingPartitions = append(c.usingPartitions, part)
 				delete(partitions, partition)
 			}
@@ -443,7 +445,7 @@ func (c *consumer) tryBrokerOffsetLoad(broker *broker, load *offsetsWaitingLoad)
 		return
 	}
 	for _, toSet := range toSets {
-		toSet.topicPartition.consumption.setOffset(toSet.offset, c.seq)
+		toSet.topicPartition.consumption.setOffset(toSet.offset, c.seq, false)
 		c.usingPartitions = append(c.usingPartitions, toSet.topicPartition)
 	}
 }

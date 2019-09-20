@@ -3,15 +3,12 @@ package kgo
 import (
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/twmb/kgo/kerr"
 	"github.com/twmb/kgo/kmsg"
 )
-
-// TODO doc that if fetch partition errors midway thru, Fetch will have valid
-// records to consume
-// TODO backoff consumptions on partition errors
 
 type recordSource struct {
 	broker *broker
@@ -43,6 +40,9 @@ func (source *recordSource) addConsumption(add *consumption) {
 	add.allConsumptionsIdx = len(source.allConsumptions)
 	source.allConsumptions = append(source.allConsumptions, add)
 	source.mu.Unlock()
+	// We always clear the failing, since this could have been from moving
+	// a failing partition from one source to another (clearing the fail).
+	add.clearFailing()
 }
 
 func (source *recordSource) removeConsumption(rm *consumption) {
@@ -72,8 +72,14 @@ type consumption struct {
 	source             *recordSource
 	allConsumptionsIdx int
 
-	usable bool
 	seqOffset
+
+	inUse bool
+
+	// failing is an atomic set when we encounter a partition error.
+	// It is always cleared on metadata update; if it is 1, then the
+	// meta update locks the consumption and restarts it.
+	failing int32
 }
 
 // seqOffset is an offset we are consuming and the corresponding assign seq
@@ -90,13 +96,17 @@ type seqOffset struct {
 type seqOffsetFrom struct {
 	seqOffset
 	from *consumption
+
+	// If respErrored is true, then taking buffered batch does not clear
+	// the fail state.
+	respErrored bool
 }
 
-// freezeFrom is called when adding an offset to a fetch request; from
+// use is called when adding an offset to a fetch request; from
 // hereafter until the buffered response is taken, we update the offset
 // in the frozen seqOffsetFrom view.
-func (c *consumption) freezeFrom() *seqOffsetFrom {
-	c.usable = false
+func (c *consumption) use() *seqOffsetFrom {
+	c.inUse = true
 	return &seqOffsetFrom{
 		seqOffset: c.seqOffset,
 		from:      c,
@@ -110,11 +120,9 @@ func (c *consumption) freezeFrom() *seqOffsetFrom {
 // Otherwise, normally, buffered fetches call setOffset to update the
 // consuption's offset and to allow the source to continue draining.
 //
-// Note that, since this is always the entry to update offsets, we do not need
-// to do much complicated "is this still the source" management if the
-// consumption moves across sources due to metadata updates. Buffered fetches
-// will update the consumption and then simply start the new source.
-func (consumption *consumption) setOffset(offset int64, fromSeq uint64) {
+// If a buffered fetch had an error, this does not clear the error state. We
+// leave that for metadata updating.
+func (consumption *consumption) setOffset(offset int64, fromSeq uint64, failing bool) {
 	consumption.mu.Lock()
 	defer consumption.mu.Unlock()
 
@@ -126,7 +134,11 @@ func (consumption *consumption) setOffset(offset int64, fromSeq uint64) {
 
 	consumption.offset = offset
 	consumption.seq = fromSeq
-	consumption.usable = offset != -1
+	consumption.inUse = false
+
+	if !failing {
+		atomic.StoreInt32(&consumption.failing, 0)
+	}
 
 	if offset != -1 {
 		consumption.source.maybeBeginConsuming()
@@ -136,7 +148,7 @@ func (consumption *consumption) setOffset(offset int64, fromSeq uint64) {
 // restartOffset resets a consumption to usable and triggers the source to
 // begin consuming again. This is called if a consumption was used in a fetch
 // that ultimately returned no new data.
-func (consumption *consumption) restartOffset(fromSeq uint64) {
+func (consumption *consumption) setUnused(fromSeq uint64) {
 	consumption.mu.Lock()
 	defer consumption.mu.Unlock()
 
@@ -146,7 +158,51 @@ func (consumption *consumption) restartOffset(fromSeq uint64) {
 		return
 	}
 
-	consumption.usable = true
+	consumption.inUse = false
+
+	// setUnused clears the consumption for use again, but does nothing
+	// about its failing state nor does it restart the source.
+	//
+	// For the failing state, it can either be 0 for a full request err,
+	// which is temporary and fine. Otherwise, it could be a temporary
+	// partition error that will be cleared on meta update.
+	//
+	// For the source, setUnused it only called from unuseAll, which
+	// clears the inflight while processing a response. Since we are
+	// processing a response, the again part of a source must already
+	// be true, so it must be waiting to continue.
+}
+
+// setFailing is called once a partition has an error response. The consumption
+// is not used until a metadata update clears the failing state.
+func (consumption *consumption) setFailing(fromSeq uint64) {
+	consumption.mu.Lock()
+	consumption.mu.Unlock()
+
+	if fromSeq < consumption.seq {
+		return
+	}
+
+	consumption.inUse = false
+	atomic.StoreInt32(&consumption.failing, 1)
+}
+
+// isFailing returns whether the consumption is in an error state.
+func (consumption *consumption) isFailing() bool {
+	return atomic.LoadInt32(&consumption.failing) == 1
+}
+
+// clearFailing is called to clear any failing state.
+//
+// This is called once a consumption is added to a source (to clear a failing
+// state from migrating consumptions between sources) or when a metadata
+// update see the consumption is still on the same source.
+func (consumption *consumption) clearFailing() {
+	if atomic.SwapInt32(&consumption.failing, 0) == 0 {
+		return
+	}
+	consumption.mu.Lock()
+	defer consumption.mu.Unlock()
 	if consumption.offset != -1 {
 		consumption.source.maybeBeginConsuming()
 	}
@@ -173,18 +229,18 @@ func (source *recordSource) takeBuffered() (Fetch, uint64) {
 func (source *recordSource) updateOffsets(reqOffsets map[string]map[int32]*seqOffsetFrom) {
 	for _, partitions := range reqOffsets {
 		for _, o := range partitions {
-			o.from.setOffset(o.offset, o.seq)
+			o.from.setOffset(o.offset, o.seq, o.respErrored)
 		}
 	}
 	<-source.inflightSem
 }
 
-// restartOffsets is called when a fetch returns no data; we set all the
+// unuseAll is called when a fetch returns no data; we set all the
 // consumptions to usable again so we can reissue a new fetch.
-func (source *recordSource) restartOffsets(reqOffsets map[string]map[int32]*seqOffsetFrom) {
+func (source *recordSource) unuseAll(reqOffsets map[string]map[int32]*seqOffsetFrom) {
 	for _, partitions := range reqOffsets {
 		for _, o := range partitions {
-			o.from.restartOffset(o.seq)
+			o.from.setUnused(o.seq)
 		}
 	}
 	<-source.inflightSem
@@ -211,7 +267,7 @@ func (source *recordSource) createRequest() (req *fetchRequest, again bool) {
 
 		// If the offset is -1, a metadata update added a consumption to
 		// this source, but it is not yet in use.
-		if consumption.offset == -1 || !consumption.usable {
+		if consumption.offset == -1 || consumption.inUse || consumption.isFailing() {
 			consumption.mu.Unlock()
 			continue
 		}
@@ -259,12 +315,21 @@ func (source *recordSource) fill() {
 	}
 }
 
+func (source *recordSource) shortBackoff() {
+	after := time.NewTimer(source.broker.client.cfg.client.retryBackoff(1))
+	defer after.Stop()
+	select {
+	case <-after.C:
+	case <-source.broker.client.ctx.Done():
+	}
+}
+
 func (source *recordSource) handleReqResp(req *fetchRequest, resp kmsg.Response, err error) {
 	var needMetaUpdate bool
 
 	if err != nil {
-		// TODO actually do something on err
-		source.restartOffsets(req.offsets)
+		source.unuseAll(req.offsets)
+		source.shortBackoff()
 		return
 	}
 
@@ -320,7 +385,7 @@ func (source *recordSource) handleReqResp(req *fetchRequest, resp kmsg.Response,
 		}
 		source.broker.client.consumer.addSourceReadyForDraining(req.maxSeq, source)
 	} else {
-		source.restartOffsets(req.offsets)
+		source.unuseAll(req.offsets)
 	}
 }
 
@@ -333,13 +398,13 @@ func (source *recordSource) handleReqResp(req *fetchRequest, resp kmsg.Response,
 //
 // Recoverable errors are stripped; if a partition has a recoverable error
 // immediately with no records, it should be discarded.
-func (o *seqOffset) processRespPartition(
+func (o *seqOffsetFrom) processRespPartition(
 	topic string,
 	version int16,
 	rPartition *kmsg.FetchResponseTopicPartition,
 ) (
 	fetchPart FetchPartition,
-	needMetaUpdate bool,
+	needsMetaUpdate bool,
 ) {
 	fetchPart = FetchPartition{
 		Partition:        rPartition.Partition,
@@ -368,7 +433,15 @@ func (o *seqOffset) processRespPartition(
 		}
 	}
 
+	if fetchPart.Err != nil {
+		needsMetaUpdate = true
+		o.respErrored = true
+	}
+
 	switch fetchPart.Err {
+	case nil:
+		// do nothing
+
 	case kerr.UnknownTopicOrPartition,
 		kerr.NotLeaderForPartition,
 		kerr.ReplicaNotAvailable,
@@ -376,21 +449,22 @@ func (o *seqOffset) processRespPartition(
 		kerr.UnknownLeaderEpoch,
 		kerr.FencedLeaderEpoch:
 
-		needMetaUpdate = true
 		fetchPart.Err = nil
-		// TODO backoff
+		o.from.setFailing(o.seq)
+
+	case kerr.OffsetOutOfRange:
+		// TODO reset policy
+		o.from.setFailing(o.seq)
 
 	default:
-		// - out of range offset (use reset policy!)
-		// Fatal:
 		// - bad auth
 		// - unsupported compression
 		// - unsupported message version
 		// - unknown error
-		// TODO backoff permanently?
+		o.from.setFailing(o.seq)
 	}
 
-	return fetchPart, needMetaUpdate
+	return fetchPart, needsMetaUpdate
 }
 
 //////////////////////////////////////
@@ -628,7 +702,7 @@ func (f *fetchRequest) addConsumptionLocked(c *consumption) {
 		f.offsets[topic] = partitions
 	}
 	partition := c.topicPartition.partition
-	o := c.freezeFrom()
+	o := c.use()
 
 	// AssignPartitions or AssignGroup could have been called in the middle
 	// of our req being built, invalidating part of the req. We invalidate
