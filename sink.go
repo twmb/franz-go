@@ -383,27 +383,41 @@ func (sink *recordSink) handleReqResp(req *produceRequest, resp kmsg.Response, e
 				// Retriable: add to retry map.
 				reqRetry.addBatch(topic, partition, batch)
 
+			case err == kerr.OutOfOrderSequenceNumber:
+				// OOOSN always means data loss 1.0.0+ and is ambiguous prior.
+				// We assume the worst and only continue if requested.
+				if !sink.broker.client.cfg.producer.continueOnDataLoss {
+					finishBatch()
+					continue
+				}
+				if sink.broker.client.cfg.producer.onDataLoss != nil {
+					sink.broker.client.cfg.producer.onDataLoss(topic, partition)
+				}
+				batch.owner.resetSequenceNums()
+				reqRetry.addBatch(topic, partition, batch)
+
 			case err == kerr.UnknownProducerID: // 1.0.0+ only
 				// If -1, retry: the partition moved between the error being raised
-				// in Kafka and the time the response was constructed.
+				// in Kafka and the time the response was constructed. We will
+				// get the offset on retry.
 				if rPartition.LogStartOffset == -1 {
 					reqRetry.addBatch(topic, partition, batch)
 					continue
 				}
 
 				// LogStartOffset <= last acked: data loss.
-				//
-				// The official client resets the producer ID on non transactional
-				// requests. Doing so avoids perma-OOOSN errors, but may not be the
-				// best considering it could cause ordering problems.
-				//
-				// OutOfOrderSequenceNumber could be ambiguous pre 1.0.0, but we
-				// will assume it is data loss (and just rely on the default below).
 				if rPartition.LogStartOffset <= batch.owner.lastAckedOffset {
-					finishBatch()
-					continue
+					if !sink.broker.client.cfg.producer.continueOnDataLoss {
+						finishBatch()
+						continue
+					}
+					if sink.broker.client.cfg.producer.onDataLoss != nil {
+						sink.broker.client.cfg.producer.onDataLoss(topic, partition)
+					}
 				}
-				// Otherwise, the log head rotated; we need to reset seq's and retry.
+
+				// The log head rotated (or the continue on data loss
+				// option was specified); we reset seq's and retry.
 				batch.owner.resetSequenceNums()
 				reqRetry.addBatch(topic, partition, batch)
 

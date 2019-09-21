@@ -215,6 +215,9 @@ type (
 		requestTimeout      time.Duration
 
 		partitioner Partitioner
+
+		continueOnDataLoss bool
+		onDataLoss         func(string, int32)
 	}
 )
 
@@ -311,6 +314,29 @@ func WithProducePartitioner(partitioner Partitioner) OptProducer {
 // actually have a timeout field.
 func WithProduceTimeout(limit time.Duration) OptProducer {
 	return producerOpt{func(cfg *producerCfg) { cfg.requestTimeout = limit }}
+}
+
+// WithProduceContinueOnDataLoss sets the client to continue producing if data
+// loss is detected, overriding the default false.
+//
+// This can be combined with WithProduceOnDataLoss to ensure client progress
+// while being notified that data loss occurred.
+func WithProduceContinueOnDataLoss() OptProducer {
+	return producerOpt{func(cfg *producerCfg) { cfg.continueOnDataLoss = true }}
+}
+
+// WithProduceOnDataLoss sets a function to call if data loss is detected when
+// producing records.
+//
+// This can be combined with WithProduceContinueOnDataLoss to ensure client
+// progress while being notified that data loss occurred.
+//
+// The passed function will be called with the topic and partition that data
+// loss was detected on. Note that this option is unnecessary if you are not
+// using WithProduceContinueOnDataLoss, as record production will fail with out
+// of order sequence number or unknown producer id errors.
+func WithProduceOnDataLoss(fn func(string, int32)) OptProducer {
+	return producerOpt{func(cfg *producerCfg) { cfg.onDataLoss = fn }}
 }
 
 // ********** CONSUMER CONFIGURATION **********
