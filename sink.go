@@ -724,7 +724,12 @@ func (recordBuffer *recordBuffer) resetSequenceNums() {
 
 	recordBuffer.sequenceNum = 0
 	for _, batch := range recordBuffer.batches {
-		batch.baseSequence = recordBuffer.sequenceNum
+		// We store the new sequence atomically because there may be
+		// more requests being built and sent concurrently. It is fine
+		// that they get the new sequence num, they will fail with
+		// OOOSN, but the error will be dropped since they are not the
+		// first batch.
+		atomic.StoreInt32(&batch.baseSequence, recordBuffer.sequenceNum)
 		recordBuffer.sequenceNum += int32(len(batch.records))
 	}
 }
@@ -1019,7 +1024,7 @@ func (r *recordBatch) appendTo(dst []byte, compressor *compressor) []byte {
 
 	dst = kbin.AppendInt64(dst, r.producerID)
 	dst = kbin.AppendInt16(dst, r.producerEpoch)
-	dst = kbin.AppendInt32(dst, r.baseSequence)
+	dst = kbin.AppendInt32(dst, atomic.LoadInt32(&r.baseSequence)) // read atomically in case of concurrent reset
 
 	dst = kbin.AppendArrayLen(dst, len(r.records))
 	recordsAt := len(dst)
