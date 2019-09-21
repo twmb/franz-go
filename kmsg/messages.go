@@ -473,6 +473,11 @@ type RecordBatch struct {
 	//
 	// Clients that wish to support idempotent messages and transactions must
 	// set this field.
+	//
+	// Note that when not using transactions, any producer here is always
+	// accepted (and the epoch is always zero). Outside transactions, the ID
+	// is used only to deduplicate requests (and there must be at max 5
+	// concurrent requests).
 	ProducerID int64
 
 	// ProducerEpoch is the broker assigned producerEpoch from an InitProducerID
@@ -793,14 +798,15 @@ type ProduceResponseTopicPartition struct {
 	// the same transaction ID, or the transaction ID used has expired.
 	//
 	// UNKNOWN_PRODUCER_ID, added in Kafka 1.0.0 (message format v5+) is
-	// returned if the producer used an ID that Kafka does not know about.
-	// The LogStartOffset must be checked in this case. If the offset is
-	// greater than the last acknowledged offset, then no data loss has
-	// occurred; the client just sent data so long ago that Kafka rotated
-	// the partition out of existence and no longer knows of this producer
-	// ID. In this case, initialize a new ID. If the log start offset is
-	// equal to or less than what the client sent prior, then data loss
-	// has occurred. This See KAFKA-5793 for more details.
+	// returned if the producer used an ID that Kafka does not know about or
+	// if the request has a larger sequence number than Kafka expects.  The
+	// LogStartOffset must be checked in this case. If the offset is greater
+	// than the last acknowledged offset, then no data loss has occurred; the
+	// client just sent data so long ago that Kafka rotated the partition out
+	// of existence and no longer knows of this producer ID. In this case,
+	// reset your sequence numbers to 0. If the log start offset is equal to
+	// or less than what the client sent prior, then data loss has occurred.
+	// This See KAFKA-5793 for more details.
 	//
 	// OUT_OF_ORDER_SEQUENCE_NUMBER is sent if the batch's FirstSequence was
 	// not what it should be (the last FirstSequence, plus the number of
@@ -5366,10 +5372,11 @@ type InitProducerIDResponse struct {
 	// CONCURRENT_TRANSACTIONS
 	ErrorCode int16
 
-	// the generated producer ID
+	// ProducerID is the next producer ID that Kafka generated. This ID is used
+	// to ensure repeated produce requests do not result in duplicate records.
 	ProducerID int64
 
-	// the current producer epoch
+	// the current producer epoch (txn only)
 	ProducerEpoch int16
 }
 
