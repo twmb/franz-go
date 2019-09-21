@@ -3,7 +3,6 @@ package kgo
 import (
 	"fmt"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/twmb/kgo/kerr"
@@ -15,6 +14,8 @@ type recordSource struct {
 
 	inflightSem chan struct{} // capacity of 1
 	fillState   uint32
+
+	consecutiveFailures int
 
 	// guards all below
 	mu sync.Mutex
@@ -74,12 +75,14 @@ type consumption struct {
 
 	seqOffset
 
+	// inUse is set whenever the consumption is chosen for an in flight
+	// fetch request and reset to false if the fetch response has no usable
+	// records or when the buffered usable records are taken.
 	inUse bool
 
-	// failing is an atomic set when we encounter a partition error.
-	// It is always cleared on metadata update; if it is 1, then the
-	// meta update locks the consumption and restarts it.
-	failing int32
+	// failing is set when we encounter a partition error.
+	// It is always cleared on metadata update.
+	failing bool
 }
 
 // seqOffset is an offset we are consuming and the corresponding assign seq
@@ -96,10 +99,6 @@ type seqOffset struct {
 type seqOffsetFrom struct {
 	seqOffset
 	from *consumption
-
-	// If respErrored is true, then taking buffered batch does not clear
-	// the fail state.
-	respErrored bool
 }
 
 // use is called when adding an offset to a fetch request; from
@@ -122,7 +121,7 @@ func (c *consumption) use() *seqOffsetFrom {
 //
 // If a buffered fetch had an error, this does not clear the error state. We
 // leave that for metadata updating.
-func (consumption *consumption) setOffset(offset int64, fromSeq uint64, failing bool) {
+func (consumption *consumption) setOffset(offset int64, fromSeq uint64) {
 	consumption.mu.Lock()
 	defer consumption.mu.Unlock()
 
@@ -131,16 +130,15 @@ func (consumption *consumption) setOffset(offset int64, fromSeq uint64, failing 
 	if fromSeq < consumption.seq {
 		return
 	}
-
-	consumption.offset = offset
-	consumption.seq = fromSeq
+	if fromSeq > consumption.seq {
+		consumption.failing = false
+		consumption.seq = fromSeq
+	}
 	consumption.inUse = false
 
-	if !failing {
-		atomic.StoreInt32(&consumption.failing, 0)
-	}
-
-	if offset != -1 {
+	lastOffset := consumption.offset
+	consumption.offset = offset
+	if offset != -1 && offset != lastOffset {
 		consumption.source.maybeBeginConsuming()
 	}
 }
@@ -159,37 +157,31 @@ func (consumption *consumption) setUnused(fromSeq uint64) {
 	}
 
 	consumption.inUse = false
-
-	// setUnused clears the consumption for use again, but does nothing
-	// about its failing state nor does it restart the source.
-	//
-	// For the failing state, it can either be 0 for a full request err,
-	// which is temporary and fine. Otherwise, it could be a temporary
-	// partition error that will be cleared on meta update.
-	//
-	// For the source, setUnused it only called from unuseAll, which
-	// clears the inflight while processing a response. Since we are
-	// processing a response, the again part of a source must already
-	// be true, so it must be waiting to continue.
+	// No need to maybeBeginConsuming since this is called from unuseAll
+	// which allows the source to continue when it finishes.
 }
 
 // setFailing is called once a partition has an error response. The consumption
 // is not used until a metadata update clears the failing state.
+//
+// In sinks, we only update recordBuffer state if the buffer is on the same
+// sink when it is time to update. That is, we only update state if the buffer
+// did not move due to a concurrent metadata update during a produce request.
+//
+// We do not need to worry about that type of movement for a consumption. At
+// worst, an in flight fetch will see NotLeaderForPartition, setting the
+// consumption to failing and triggering a metadata update. The metadata update
+// will quickly clear the failing state and the consumption will resume as
+// normal on the new source.
 func (consumption *consumption) setFailing(fromSeq uint64) {
 	consumption.mu.Lock()
-	consumption.mu.Unlock()
+	defer consumption.mu.Unlock()
 
 	if fromSeq < consumption.seq {
 		return
 	}
 
-	consumption.inUse = false
-	atomic.StoreInt32(&consumption.failing, 1)
-}
-
-// isFailing returns whether the consumption is in an error state.
-func (consumption *consumption) isFailing() bool {
-	return atomic.LoadInt32(&consumption.failing) == 1
+	consumption.failing = true
 }
 
 // clearFailing is called to clear any failing state.
@@ -198,12 +190,13 @@ func (consumption *consumption) isFailing() bool {
 // state from migrating consumptions between sources) or when a metadata
 // update see the consumption is still on the same source.
 func (consumption *consumption) clearFailing() {
-	if atomic.SwapInt32(&consumption.failing, 0) == 0 {
-		return
-	}
 	consumption.mu.Lock()
 	defer consumption.mu.Unlock()
-	if consumption.offset != -1 {
+
+	wasFailing := consumption.failing
+	consumption.failing = false
+
+	if wasFailing && consumption.offset != -1 {
 		consumption.source.maybeBeginConsuming()
 	}
 }
@@ -229,7 +222,7 @@ func (source *recordSource) takeBuffered() (Fetch, uint64) {
 func (source *recordSource) updateOffsets(reqOffsets map[string]map[int32]*seqOffsetFrom) {
 	for _, partitions := range reqOffsets {
 		for _, o := range partitions {
-			o.from.setOffset(o.offset, o.seq, o.respErrored)
+			o.from.setOffset(o.offset, o.seq)
 		}
 	}
 	<-source.inflightSem
@@ -267,7 +260,7 @@ func (source *recordSource) createRequest() (req *fetchRequest, again bool) {
 
 		// If the offset is -1, a metadata update added a consumption to
 		// this source, but it is not yet in use.
-		if consumption.offset == -1 || consumption.inUse || consumption.isFailing() {
+		if consumption.offset == -1 || consumption.inUse || consumption.failing {
 			consumption.mu.Unlock()
 			continue
 		}
@@ -315,8 +308,9 @@ func (source *recordSource) fill() {
 	}
 }
 
-func (source *recordSource) shortBackoff() {
-	after := time.NewTimer(source.broker.client.cfg.client.retryBackoff(1))
+func (source *recordSource) backoff() {
+	source.consecutiveFailures++
+	after := time.NewTimer(source.broker.client.cfg.client.retryBackoff(source.consecutiveFailures))
 	defer after.Stop()
 	select {
 	case <-after.C:
@@ -325,13 +319,15 @@ func (source *recordSource) shortBackoff() {
 }
 
 func (source *recordSource) handleReqResp(req *fetchRequest, resp kmsg.Response, err error) {
-	var needMetaUpdate bool
+	var needsMetaUpdate bool
 
 	if err != nil {
 		source.unuseAll(req.offsets)
-		source.shortBackoff()
+		source.broker.client.triggerUpdateMetadata()
+		source.backoff()
 		return
 	}
+	source.consecutiveFailures = 0
 
 	r := resp.(*kmsg.FetchResponse)
 	newFetch := Fetch{
@@ -372,7 +368,7 @@ func (source *recordSource) handleReqResp(req *fetchRequest, resp kmsg.Response,
 			if len(fetchPart.Records) > 0 || fetchPart.Err != nil {
 				fetchTopic.Partitions = append(fetchTopic.Partitions, fetchPart)
 			}
-			needMetaUpdate = needMetaUpdate || partNeedsMetaUpdate
+			needsMetaUpdate = needsMetaUpdate || partNeedsMetaUpdate
 			if fetchPart.Err == kerr.OffsetOutOfRange {
 				reloadOffsets.setTopicPart(topic, partition, source.broker.client.cfg.consumer.resetOffset)
 			}
@@ -390,7 +386,7 @@ func (source *recordSource) handleReqResp(req *fetchRequest, resp kmsg.Response,
 		consumer.mu.Unlock()
 	}
 
-	if needMetaUpdate {
+	if needsMetaUpdate {
 		source.broker.client.triggerUpdateMetadata()
 	}
 
@@ -452,7 +448,6 @@ func (o *seqOffsetFrom) processRespPartition(
 
 	if fetchPart.Err != nil {
 		needsMetaUpdate = true
-		o.respErrored = true
 	}
 
 	switch fetchPart.Err {
@@ -467,7 +462,7 @@ func (o *seqOffsetFrom) processRespPartition(
 		kerr.FencedLeaderEpoch:
 
 		fetchPart.Err = nil
-		o.from.setFailing(o.seq)
+		fallthrough
 
 	default:
 		// - bad auth

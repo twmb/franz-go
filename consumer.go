@@ -179,7 +179,7 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, inv
 		// First, stop all fetches for prior assignments. After our consumer
 		// lock is released, fetches will return nothing historic.
 		for _, usedPartition := range c.usingPartitions {
-			usedPartition.consumption.setOffset(-1, seq, false)
+			usedPartition.consumption.setOffset(-1, seq)
 		}
 
 		// Also drain any buffered, now stale, fetches.
@@ -224,7 +224,7 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, inv
 			}
 
 			if offset.request >= 0 {
-				part.consumption.setOffset(offset.request, seq, false)
+				part.consumption.setOffset(offset.request, seq)
 				c.usingPartitions = append(c.usingPartitions, part)
 				delete(partitions, partition)
 			}
@@ -284,6 +284,27 @@ func (o *offsetsWaitingLoad) mergeIntoLocked(c *consumer) {
 		for partition, offset := range partitions {
 			curTopic[partition] = offset
 		}
+	}
+}
+
+func (c *consumer) deletePartition(p *topicPartition) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	for i, using := range c.usingPartitions {
+		if using == p {
+			c.usingPartitions[i] = c.usingPartitions[len(c.usingPartitions)-1]
+			c.usingPartitions = c.usingPartitions[:len(c.usingPartitions)-1]
+			break
+		}
+	}
+
+	switch c.typ {
+	case consumerTypeUnset:
+		return
+	case consumerTypeDirect:
+		c.direct.deleteUsing(p.topic, p.partition)
+	case consumerTypeGroup:
 	}
 }
 
@@ -445,7 +466,7 @@ func (c *consumer) tryBrokerOffsetLoad(broker *broker, load *offsetsWaitingLoad)
 		return
 	}
 	for _, toSet := range toSets {
-		toSet.topicPartition.consumption.setOffset(toSet.offset, c.seq, false)
+		toSet.topicPartition.consumption.setOffset(toSet.offset, c.seq)
 		c.usingPartitions = append(c.usingPartitions, toSet.topicPartition)
 	}
 }

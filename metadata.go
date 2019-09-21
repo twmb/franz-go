@@ -198,9 +198,10 @@ func (c *Client) fetchTopicMetadata(reqTopics []string) (map[string]*topicPartit
 		topicMeta := &meta.TopicMetadata[i]
 
 		parts := &topicPartitionsData{
-			loadErr:  kerr.ErrorForCode(topicMeta.ErrorCode),
-			all:      make(map[int32]*topicPartition, len(topicMeta.PartitionMetadata)),
-			writable: make(map[int32]*topicPartition, len(topicMeta.PartitionMetadata)),
+			loadErr:    kerr.ErrorForCode(topicMeta.ErrorCode),
+			isInternal: topicMeta.IsInternal,
+			all:        make(map[int32]*topicPartition, len(topicMeta.PartitionMetadata)),
+			writable:   make(map[int32]*topicPartition, len(topicMeta.PartitionMetadata)),
 		}
 		topics[topicMeta.Topic] = parts
 
@@ -221,7 +222,7 @@ func (c *Client) fetchTopicMetadata(reqTopics []string) (map[string]*topicPartit
 
 				records: &recordBuffer{
 					recordBuffersIdx: -1, // required, see below
-					lastAckedOffset:  -1,
+					lastAckedOffset:  -1, // expected sentinel
 				},
 				consumption: &consumption{
 					allConsumptionsIdx: -1, // same, see below
@@ -294,6 +295,8 @@ func (l *topicPartitions) merge(r *topicPartitionsData) (needsRetry bool) {
 
 	lv.partitions = r.partitions
 
+	var deleted []*topicPartition // should end up empty
+
 	// Migrating topicPartitions is a little tricky because we have to
 	// worry about map contents.
 	//
@@ -308,6 +311,7 @@ func (l *topicPartitions) merge(r *topicPartitionsData) (needsRetry bool) {
 			// was deleted and recreated, which we do not handle
 			// yet (and cannot on most Kafka's), or the broker we
 			// fetched metadata from is out of date.
+			deleted = append(deleted, oldTP)
 			continue
 		}
 
@@ -350,8 +354,41 @@ func (l *topicPartitions) merge(r *topicPartitionsData) (needsRetry bool) {
 
 	lv.all = r.all
 	lv.writable = r.writable
+
+	// Handle anything deleted. We do this serially so that something can't
+	// re-trigger a metadata update and have some logic collide with our
+	// deletion cleanup.
+	if len(deleted) > 0 {
+		handleDeletedPartitions(deleted)
+	}
+
 	// The left writable map needs no further updates: all changes above
 	// happened to r.all, of which r.writable contains a subset of.
 	// Modifications to r.all are seen in r.writable.
 	return needsRetry
+}
+
+// handleDeletedPartitions calls all promises in all records in all partitions
+// in deleted with ErrPartitionDeleted, as well as removes topic partition
+// consumptions from their sources.
+//
+// We can encounter a deleted partition if a topic is deleted and recreated
+// with fewer partitions. We have to clear the consumptions so that if more
+// partitions are reencountered in the future, they will be used.
+func handleDeletedPartitions(deleted []*topicPartition) {
+	for _, d := range deleted {
+		sink := d.records.sink
+		sink.removeSource(d.records)
+		for _, batch := range d.records.batches {
+			for i, record := range batch.records {
+				sink.broker.client.finishRecordPromise(record, ErrPartitionDeleted)
+				batch.records[i] = noPNR
+			}
+			emptyRecordsPool.Put(&batch.records)
+		}
+
+		source := d.consumption.source
+		source.removeConsumption(d.consumption)
+		source.broker.client.consumer.deletePartition(d)
+	}
 }

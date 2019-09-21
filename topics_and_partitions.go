@@ -59,6 +59,7 @@ func (t *topicPartitions) load() *topicPartitionsData {
 // and if it were behind a lock, the lock would need to be held for a while.
 type topicPartitionsData struct {
 	loadErr    error // could be auth, unknown, leader not avail, or creation err
+	isInternal bool
 	partitions []int32
 	all        map[int32]*topicPartition // partition num => partition
 	writable   map[int32]*topicPartition // partition num => partition, eliding partitions with no leader / listener

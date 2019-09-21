@@ -144,6 +144,9 @@ func (d *directConsumer) findNewAssignments(
 		// set all partitions as usable.
 		if useTopic {
 			partitions := topicPartitions.load()
+			if d.regexTopics && partitions.isInternal {
+				continue
+			}
 			toUseTopic := make(map[int32]Offset, len(partitions.partitions))
 			for _, partition := range partitions.partitions {
 				toUseTopic[partition] = useOffset
@@ -196,4 +199,15 @@ func (d *directConsumer) findNewAssignments(
 	}
 
 	return toUse
+}
+
+func (d *directConsumer) deleteUsing(topic string, partition int32) {
+	if d.using == nil {
+		return
+	}
+	partitions := d.using[topic]
+	if partitions == nil {
+		return
+	}
+	delete(partitions, partition)
 }
