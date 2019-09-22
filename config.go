@@ -214,6 +214,7 @@ type (
 		maxBufferedRecords  int64
 		requestTimeout      time.Duration
 		linger              time.Duration
+		recordTimeout       time.Duration
 
 		partitioner Partitioner
 
@@ -348,6 +349,23 @@ func WithProduceOnDataLoss(fn func(string, int32)) OptProducer {
 // timers running (and stopping and restarting) unnecessarily.
 func WithProduceLinger(linger time.Duration) OptProducer {
 	return producerOpt{func(cfg *producerCfg) { cfg.linger = linger }}
+}
+
+// WithProduceRecordTimeout sets a rough time of how long a record can sit
+// around in a batch before timing out.
+//
+// Note that the timeout for all records in a batch inherit the timeout of the
+// first record in that batch. That is, once the first record's timeout
+// expires, all records in the batch are expired. This generally is a non-issue
+// unless using this option with lingering. In that case, simply add the linger
+// to the record timeout to avoid problems.
+//
+// Also note that the timeout is only evaluated after a produce response, and
+// only for batches that need to be retried. Thus, a sink backoff may delay
+// record timeout slightly. As with lingering, this also should generally be a
+// non-issue.
+func WithProduceRecordTimeout(timeout time.Duration) OptProducer {
+	return producerOpt{func(cfg *producerCfg) { cfg.recordTimeout = timeout }}
 }
 
 // ********** CONSUMER CONFIGURATION **********

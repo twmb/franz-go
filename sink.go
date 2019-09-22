@@ -11,10 +11,10 @@ import (
 	"github.com/twmb/kgo/kmsg"
 )
 
-// TODO per record timeout:
-
 type recordSink struct {
 	broker *broker // the broker this sink belongs to
+
+	recordTimeout time.Duration // from producer cfg
 
 	// inflightSem controls the number of concurrent produce requests.  We
 	// start with a limit of 1, which covers Kafka v0.11.0.0. On the first
@@ -64,6 +64,7 @@ func newRecordSink(broker *broker) *recordSink {
 		4 // topics array length
 
 	sink := &recordSink{
+		recordTimeout:  broker.client.cfg.producer.recordTimeout,
 		broker:         broker,
 		baseWireLength: messageRequestOverhead + produceRequestOverhead,
 	}
@@ -239,6 +240,9 @@ func (sink *recordSink) requeueUnattemptedReq(req *produceRequest) {
 	var maybeBeginDraining bool
 	req.batches.onEachBatchWhileBatchOwnerLocked(func(batch *recordBatch) {
 		if batch.lockedIsFirstBatch() {
+			if batch.isTimedOut(sink.recordTimeout) {
+				batch.owner.lockedFailBatch0(ErrRecordTimeout)
+			}
 			maybeBeginDraining = true
 			batch.owner.batchDrainIdx = 0
 		}
@@ -473,6 +477,9 @@ func (sink *recordSink) handleRetryBatches(retry reqBatches, withBackoff bool) {
 	retry.onEachBatchWhileBatchOwnerLocked(func(batch *recordBatch) {
 		if batch.lockedIsFirstBatch() {
 			batch.owner.batchDrainIdx = 0
+			if batch.isTimedOut(sink.recordTimeout) {
+				batch.owner.lockedFailBatch0(ErrRecordTimeout)
+			}
 			if withBackoff {
 				batch.owner.failing = true
 				needsMetaUpdate = true
@@ -700,13 +707,19 @@ func (recordBuffer *recordBuffer) bumpTriesAndMaybeFailBatch0(err error) {
 	batch0.tries++
 	client := recordBuffer.sink.broker.client
 	if batch0.tries > client.cfg.client.retries {
-		recordBuffer.lockedRemoveBatch0()
-		for i, pnr := range batch0.records {
-			client.finishRecordPromise(pnr, err)
-			batch0.records[i] = noPNR
-		}
-		emptyRecordsPool.Put(&batch0.records)
+		recordBuffer.lockedFailBatch0(err)
 	}
+}
+
+func (recordBuffer *recordBuffer) lockedFailBatch0(err error) {
+	batch0 := recordBuffer.batches[0]
+	client := recordBuffer.sink.broker.client
+	recordBuffer.lockedRemoveBatch0()
+	for i, pnr := range batch0.records {
+		client.finishRecordPromise(pnr, err)
+		batch0.records[i] = noPNR
+	}
+	emptyRecordsPool.Put(&batch0.records)
 }
 
 // failAllRecords is called on a non-retriable error to fail all records
@@ -922,6 +935,15 @@ func (batch *recordBatch) removeFromRecordBuf() {
 	recordBuffer.mu.Lock()
 	recordBuffer.lockedRemoveBatch0()
 	recordBuffer.mu.Unlock()
+}
+
+// isTimedOut, called only on frozen batches, returns whether the first record
+// in a batch is past the limit.
+func (batch *recordBatch) isTimedOut(limit time.Duration) bool {
+	if limit == 0 {
+		return false
+	}
+	return time.Since(batch.records[0].Timestamp) > limit
 }
 
 ////////////////////

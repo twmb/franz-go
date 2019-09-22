@@ -60,6 +60,10 @@ var (
 	// error should generally not appear. This will only appear if a topic
 	// is deleted and recreated with fewer partitions.
 	ErrPartitionDeleted = errors.New("partition no longer exists")
+
+	// ErrRecordTimeout is returned when records are unable to be produced
+	// and they hit the configured record timeout limit.
+	ErrRecordTimeout = errors.New("records have timed out before they were able to be produced")
 )
 
 func isRetriableBrokerErr(err error) bool {
