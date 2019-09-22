@@ -91,6 +91,8 @@ func (p *stickyKeyTopicPartitioner) partition(r *Record, n int) int {
 	if r.Key != nil {
 		// https://github.com/apache/kafka/blob/d91a94e/clients/src/main/java/org/apache/kafka/clients/producer/internals/DefaultPartitioner.java#L59
 		// https://github.com/apache/kafka/blob/d91a94e/clients/src/main/java/org/apache/kafka/common/utils/Utils.java#L865-L867
+		// Java just masks the sign bit out to get a positive number,
+		// which ultimately was never necessary but here we are.
 		return int(murmur2(r.Key)&0x7fffffff) % n
 	}
 	if p.onPart == -1 {
@@ -102,13 +104,18 @@ func (p *stickyKeyTopicPartitioner) partition(r *Record, n int) int {
 // Straight from the C++ code and from the Java code duplicating it.
 // https://github.com/apache/kafka/blob/d91a94e/clients/src/main/java/org/apache/kafka/common/utils/Utils.java#L383-L421
 // https://github.com/aappleby/smhasher/blob/61a0530f/src/MurmurHash2.cpp#L37-L86
-func murmur2(b []byte) int32 {
-	seed := uint32(0x9747b28c)
-	const m = int32(0x5bd1e995)
-	const r = 24
-	h := int32(seed) ^ int32(len(b))
+//
+// The Java code uses ints but with unsigned shifts, likely due to Java not
+// having unsigned ints which is a joke in its own right.
+func murmur2(b []byte) uint32 {
+	const (
+		seed uint32 = 0x9747b28c
+		m    uint32 = 0x5bd1e995
+		r           = 24
+	)
+	h := seed ^ uint32(len(b))
 	for len(b) >= 4 {
-		k := int32(b[3])<<24 + int32(b[2])<<16 + int32(b[1])<<8 + int32(b[0])
+		k := uint32(b[3])<<24 + uint32(b[2])<<16 + uint32(b[1])<<8 + uint32(b[0])
 		b = b[4:]
 		k *= m
 		k ^= k >> r
@@ -119,13 +126,13 @@ func murmur2(b []byte) int32 {
 	}
 	switch len(b) {
 	case 3:
-		h ^= int32(b[2]) << 16
+		h ^= uint32(b[2]) << 16
 		fallthrough
 	case 2:
-		h ^= int32(b[1]) << 8
+		h ^= uint32(b[1]) << 8
 		fallthrough
 	case 1:
-		h ^= int32(b[0])
+		h ^= uint32(b[0])
 		h *= m
 	}
 
