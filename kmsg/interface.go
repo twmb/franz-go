@@ -74,7 +74,9 @@ type Response interface {
 // Kafka request.
 //
 // clientID is optional; nil means to not send, whereas empty means the client
-// id is the empty string.
+// id is the empty string. If the request is controlled shutdown v0, this does
+// not include the client ID, as controlled shutdown used its own special
+// no-client-id encoding at that version.
 func AppendRequest(
 	dst []byte,
 	r Request,
@@ -82,9 +84,14 @@ func AppendRequest(
 	clientID *string,
 ) []byte {
 	dst = append(dst, 0, 0, 0, 0) // reserve length
-	dst = kbin.AppendInt16(dst, r.Key())
-	dst = kbin.AppendInt16(dst, r.GetVersion())
+	k := r.Key()
+	v := r.GetVersion()
+	dst = kbin.AppendInt16(dst, k)
+	dst = kbin.AppendInt16(dst, v)
 	dst = kbin.AppendInt32(dst, correlationID)
+	if k == 7 && v == 0 {
+		return dst
+	}
 	dst = kbin.AppendNullableString(dst, clientID)
 	dst = r.AppendTo(dst)
 	kbin.AppendInt32(dst[:0], int32(len(dst[4:])))

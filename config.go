@@ -122,11 +122,14 @@ func (cfg *clientCfg) validate() error {
 
 // WithClientID uses id for all requests sent to Kafka brokers, overriding the
 // default "kgo".
-//
-// This accepts a pointer to a string because Kafka allows differentiation
-// between writing a null string and an empty string.
-func WithClientID(id *string) OptClient {
-	return clientOpt{func(cfg *clientCfg) { cfg.id = id }}
+func WithClientID(id string) OptClient {
+	return clientOpt{func(cfg *clientCfg) { cfg.id = &id }}
+}
+
+// WithoutClientID sets the client ID to null for all requests sent to Kafka
+// brokers, overriding the default "kgo".
+func WithoutClientID() OptClient {
+	return clientOpt{func(cfg *clientCfg) { cfg.id = nil }}
 }
 
 // WithDialFn uses fn to dial addresses, overriding the default dialer that

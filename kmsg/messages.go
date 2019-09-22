@@ -2704,6 +2704,9 @@ func (v *UpdateMetadataResponse) ReadFrom(src []byte) error {
 // here makes the usage rather obvious.
 //
 // Kafka 2.2.0 introduced version 2, proposed in KIP-380.
+//
+// Note that version 0 of this request uses a special encoding format
+// where the request does not include the client ID.
 type ControlledShutdownRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
