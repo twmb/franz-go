@@ -186,9 +186,9 @@ func (consumption *consumption) setFailing(fromSeq uint64) {
 
 // clearFailing is called to clear any failing state.
 //
-// This is called once a consumption is added to a source (to clear a failing
-// state from migrating consumptions between sources) or when a metadata
-// update see the consumption is still on the same source.
+// This is called when a consumption is added to a source (to clear a failing
+// state from migrating consumptions between sources) or when a metadata update
+// sees the consumption is still on the same source.
 func (consumption *consumption) clearFailing() {
 	consumption.mu.Lock()
 	defer consumption.mu.Unlock()

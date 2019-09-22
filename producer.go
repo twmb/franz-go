@@ -109,8 +109,7 @@ func (c *Client) initProducerID() error {
 		// what we hit first is the default.
 		if err == ErrUnknownRequestKey {
 			atomic.StoreInt32(&c.producer.idLoaded, 1)
-			err = nil
-			return err
+			return nil
 		}
 		return err
 	}

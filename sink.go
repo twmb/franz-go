@@ -20,6 +20,8 @@ import (
 // - else linger, if new record pushes past enough for batch, signal the linger to stop
 // - on toppar move, inc/dec as necessary, should not affect loop much
 
+// TODO per record timeout:
+
 type recordSink struct {
 	broker *broker // the broker this sink belongs to
 
@@ -30,7 +32,6 @@ type recordSink struct {
 	//
 	// Note that both v4 and v5 were introduced with 1.0.0.
 	inflightSem         atomic.Value
-	handledFirstResp    bool
 	produceVersionKnown int32 // atomic bool; 1 is true
 	produceVersion      int16 // is set before produceVersionKnown
 
@@ -38,18 +39,26 @@ type recordSink struct {
 	// for a client.
 	baseWireLength int32
 
-	drainState   uint32
-	backoffTimer *time.Timer // runs if all partition records are in a backoff state
+	// drainState is an atomic used for maybeBeginWork.
+	drainState uint32
+
+	// backoffSeq is used to prevent pile on failures from unprocessed
+	// responses when the first already triggered a backoff. Once the
+	// sink backs off, the seq is incremented followed by doBackoff
+	// being cleared. No pile on failure will cause an additional
+	// backoff; only new failures will.
+	backoffSeq uint32
+	doBackoff  uint32
+	// consecutiveFailures is incremented every backoff and cleared every
+	// successful response. Note that for simplicity if we have a
+	// successful response following an error response before the error
+	// response's backoff occurs, the backoff is not cleared.
+	consecutiveFailures uint32
 
 	mu sync.Mutex // guards the two fields below
 
-	recordBuffers []*recordBuffer // contains all partition records for batch building
-
-	// recordBuffersStart is where we will begin in recordBuffers for
-	// building a batch. This increments by one every produce request,
-	// avoiding starvation for large record batches that cannot fit into
-	// the request that is currently being built.
-	recordBuffersStart int
+	recordBuffers      []*recordBuffer // contains all partition records for batch building
+	recordBuffersStart int             // +1 every req to avoid large batch starvation
 }
 
 func newRecordSink(broker *broker) *recordSink {
@@ -95,10 +104,7 @@ func (sink *recordSink) createRequest() (*produceRequest, bool) {
 		wireLength      = sink.baseWireLength
 		wireLengthLimit = sink.broker.client.cfg.client.maxBrokerWriteBytes
 
-		soonestDeadline time.Time
-		numDeadlined    int
-		moreToDrain     bool
-		now             = time.Now()
+		moreToDrain bool
 	)
 
 	// Prevent concurrent modification to allPartsRecs.
@@ -113,16 +119,7 @@ func (sink *recordSink) createRequest() (*produceRequest, bool) {
 		recordBuffersIdx = (recordBuffersIdx + 1) % len(sink.recordBuffers)
 
 		recordBuffer.mu.Lock()
-		if dl := recordBuffer.backoffDeadline; now.Before(dl) {
-			recordBuffer.mu.Unlock()
-			if soonestDeadline.IsZero() || dl.Before(soonestDeadline) {
-				soonestDeadline = dl
-			}
-			numDeadlined++
-			continue
-		}
-
-		if len(recordBuffer.batches) == recordBuffer.batchDrainIdx {
+		if recordBuffer.failing || len(recordBuffer.batches) == recordBuffer.batchDrainIdx {
 			recordBuffer.mu.Unlock()
 			continue
 		}
@@ -167,12 +164,6 @@ func (sink *recordSink) createRequest() (*produceRequest, bool) {
 		)
 	}
 
-	// If we have no more to drain, yet some bufs are backing off, we
-	// begin the drain backoff for when the soonest is ready.
-	if !moreToDrain && numDeadlined != 0 && soonestDeadline != forever {
-		sink.beginDrainBackoff(soonestDeadline.Sub(now))
-	}
-
 	sink.recordBuffersStart = (sink.recordBuffersStart + 1) % len(sink.recordBuffers)
 	return req, moreToDrain
 }
@@ -183,10 +174,14 @@ func (sink *recordSink) maybeBeginDraining() {
 	}
 }
 
-// beginDrainBackoff is called if all record buffers are detected to be in a
-// backoff state and no produce request can be built.
-func (sink *recordSink) beginDrainBackoff(after time.Duration) {
-	sink.backoffTimer = time.AfterFunc(after, sink.maybeBeginDraining)
+func (sink *recordSink) backoff() {
+	tries := int(atomic.AddUint32(&sink.consecutiveFailures, 1))
+	after := time.NewTimer(sink.broker.client.cfg.client.retryBackoff(tries))
+	defer after.Stop()
+	select {
+	case <-after.C:
+	case <-sink.broker.client.ctx.Done():
+	}
 }
 
 // drain drains buffered records and issues produce requests.
@@ -202,9 +197,10 @@ func (sink *recordSink) drain() {
 
 	again := true
 	for again {
-		if sink.backoffTimer != nil {
-			sink.backoffTimer.Stop()
-			sink.backoffTimer = nil
+		if atomic.SwapUint32(&sink.doBackoff, 0) == 1 {
+			sink.backoff()
+			atomic.AddUint32(&sink.backoffSeq, 1)
+			atomic.StoreUint32(&sink.doBackoff, 0) // clear any pile on failures before seq inc
 		}
 
 		sem := sink.inflightSem.Load().(chan struct{})
@@ -213,12 +209,13 @@ func (sink *recordSink) drain() {
 		var req *produceRequest
 		req, again = sink.createRequest()
 
-		if len(req.batches) == 0 { // everything entered backoff
+		if len(req.batches) == 0 { // everything is failing
 			again = maybeTryFinishWork(&sink.drainState, again)
 			<-sem // wont be using that
 			continue
 		}
 
+		req.backoffSeq = sink.backoffSeq
 		sink.broker.doSequencedAsyncPromise(
 			sink.broker.client.ctx,
 			req,
@@ -231,23 +228,20 @@ func (sink *recordSink) drain() {
 	}
 }
 
-// requeueUnattemptedReq requeues all batches in req to the recordSink.
-// This is done if a retriable network error occured.
+// requeueUnattemptedReq resets all drain indices to zero on all buffers
+// where the batch is the first in the buffer.
 func (sink *recordSink) requeueUnattemptedReq(req *produceRequest) {
-	// We use a first-level backoff since these network errors are
-	// presumed to be exceedingly temporary.
-	backoffDeadline := time.Now().Add(sink.broker.client.cfg.client.retryBackoff(1))
-	// If we set any backoff state, we maybeBeginDraining. We do this so
-	// that the drain loop can set the backoff timer if necessary.
-	maybeBeginDraining := false
+	var maybeBeginDraining bool
 	req.batches.onEachBatchWhileBatchOwnerLocked(func(batch *recordBatch) {
-		if batch.lockedIsFirstBatchInSink(sink) {
-			batch.owner.backoffDeadline = backoffDeadline
+		if batch.lockedIsFirstBatch() {
 			maybeBeginDraining = true
+			batch.owner.batchDrainIdx = 0
 		}
 	})
-
 	if maybeBeginDraining {
+		if req.backoffSeq == atomic.LoadUint32(&sink.backoffSeq) {
+			atomic.StoreUint32(&sink.doBackoff, 1)
+		}
 		sink.maybeBeginDraining()
 	}
 }
@@ -286,7 +280,7 @@ func (sink *recordSink) errorAllRecordsInAllRecordBuffersInPartitions(
 		recordBuffer.mu.Lock()
 		// We error here even if the buffer is now on a different sink;
 		// no reason to wait for the same error on a different sink.
-		if batch.lockedIsFirstBatchInRecordBuf() {
+		if batch.lockedIsFirstBatch() {
 			recordBuffer.lockedFailAllRecords(err)
 		}
 		recordBuffer.mu.Unlock()
@@ -303,8 +297,7 @@ func (sink *recordSink) errorAllRecordsInAllRecordBuffersInPartitions(
 // capacity one). We store four here, meaning new drain loops will load the
 // higher capacity sem without read/write pointer racing a current loop.
 func (sink *recordSink) firstRespCheck(version int16) {
-	if !sink.handledFirstResp {
-		sink.handledFirstResp = true
+	if sink.produceVersionKnown == 0 {
 		sink.produceVersion = version
 		atomic.StoreInt32(&sink.produceVersionKnown, 1)
 		if version >= 4 {
@@ -320,7 +313,7 @@ func (sink *recordSink) handleReqClientErr(req *produceRequest, err error) {
 	case err == ErrBrokerDead:
 		// A dead broker means the broker may have migrated, so we
 		// retry to force a metadata reload.
-		sink.handleRetryBatches(req.batches)
+		sink.handleRetryBatches(req.batches, true)
 
 	case isRetriableBrokerErr(err):
 		sink.requeueUnattemptedReq(req)
@@ -339,8 +332,12 @@ func (sink *recordSink) handleReqResp(req *produceRequest, resp kmsg.Response, e
 		sink.handleReqClientErr(req, err)
 		return
 	}
+	atomic.StoreUint32(&sink.consecutiveFailures, 0)
 
 	var reqRetry reqBatches // handled at the end
+	// On normal retriable errors, we backoff. We only do not if we detect
+	// data loss and data loss is our only error.
+	var backoffRetry bool
 
 	pr := resp.(*kmsg.ProduceResponse)
 	for _, rTopic := range pr.Topics {
@@ -381,12 +378,13 @@ func (sink *recordSink) handleReqResp(req *produceRequest, resp kmsg.Response, e
 				err != kerr.CorruptMessage &&
 				batch.tries < sink.broker.client.cfg.client.retries:
 				// Retriable: add to retry map.
+				backoffRetry = true
 				reqRetry.addBatch(topic, partition, batch)
 
 			case err == kerr.OutOfOrderSequenceNumber:
 				// OOOSN always means data loss 1.0.0+ and is ambiguous prior.
 				// We assume the worst and only continue if requested.
-				if !sink.broker.client.cfg.producer.continueOnDataLoss {
+				if sink.broker.client.cfg.producer.stopOnDataLoss {
 					finishBatch()
 					continue
 				}
@@ -401,13 +399,14 @@ func (sink *recordSink) handleReqResp(req *produceRequest, resp kmsg.Response, e
 				// in Kafka and the time the response was constructed. We will
 				// get the offset on retry.
 				if rPartition.LogStartOffset == -1 {
+					backoffRetry = true
 					reqRetry.addBatch(topic, partition, batch)
 					continue
 				}
 
 				// LogStartOffset <= last acked: data loss.
 				if rPartition.LogStartOffset <= batch.owner.lastAckedOffset {
-					if !sink.broker.client.cfg.producer.continueOnDataLoss {
+					if sink.broker.client.cfg.producer.stopOnDataLoss {
 						finishBatch()
 						continue
 					}
@@ -441,7 +440,7 @@ func (sink *recordSink) handleReqResp(req *produceRequest, resp kmsg.Response, e
 	}
 
 	if len(reqRetry) > 0 {
-		sink.handleRetryBatches(reqRetry)
+		sink.handleRetryBatches(reqRetry, backoffRetry)
 	}
 }
 
@@ -459,28 +458,37 @@ func (client *Client) finishBatch(batch *recordBatch, partition int32, baseOffse
 	emptyRecordsPool.Put(&batch.records)
 }
 
-var forever = time.Now().Add(100 * 365 * 24 * time.Hour)
-
-func (sink *recordSink) handleRetryBatches(retry reqBatches) {
+// handleRetryBatches sets any first-buf-batch to failing and triggers a
+// metadata that will eventually clear the failing state.
+//
+// If the retry is due to detecting data loss (and only that), then we
+// do not need to refresh metadata.
+func (sink *recordSink) handleRetryBatches(retry reqBatches, withBackoff bool) {
+	var needsMetaUpdate bool
 	retry.onEachBatchWhileBatchOwnerLocked(func(batch *recordBatch) {
-		if batch.lockedIsFirstBatchInSink(sink) {
-			batch.owner.backoffDeadline = forever // tombstone
+		if batch.lockedIsFirstBatch() {
+			batch.owner.batchDrainIdx = 0
+			if withBackoff {
+				batch.owner.failing = true
+				needsMetaUpdate = true
+			}
 		}
 	})
 
-	// A metadata update triggers all sinks to maybeBeginDraining.
-	sink.broker.client.triggerUpdateMetadata()
+	if needsMetaUpdate {
+		sink.broker.client.triggerUpdateMetadata()
+	}
 }
 
 // addSource adds a new recordBuffer to a sink, unconditionally resetting the
-// backoff timer using the buffer's resetBackoffAndMaybeTriggerSinkDrain.
+// backoff timer using the buffer's clearFailing.
 func (sink *recordSink) addSource(add *recordBuffer) {
 	sink.mu.Lock()
 	add.recordBuffersIdx = len(sink.recordBuffers)
 	sink.recordBuffers = append(sink.recordBuffers, add)
 	sink.mu.Unlock()
 
-	add.resetBackoffAndMaybeTriggerSinkDrain()
+	add.clearFailing()
 }
 
 // removeSource removes the tracking of a toppar from the recordSink.
@@ -542,11 +550,9 @@ type recordBuffer struct {
 	// This is read while buffering and modified in a few places.
 	batchDrainIdx int
 
-	// backoffDeadline is used for retries. If a network error occurs,
-	// we backoff for a short deadline. Otherwise, we set the backoff
-	// to forever and wait for a metadata update. The metadata update
-	// always calls maybeBeginDraining.
-	backoffDeadline time.Time
+	// failing is set when we encounter a partition error.
+	// It is always cleared on metadata update.
+	failing bool
 }
 
 const recordsOverhead = 4 // NULLABLE_BYTES
@@ -647,9 +653,6 @@ func (recordBuffer *recordBuffer) lockedRemoveBatch0() {
 //
 // This is also called if the entire topic errors, which has similar retriable
 // errors.
-//
-// Effectively, we have some means of slowly discarding a shouldn't-be-but-is
-// permanently failing partition.
 func (recordBuffer *recordBuffer) bumpTriesAndMaybeFailBatch0(err error) {
 	recordBuffer.mu.Lock()
 	defer recordBuffer.mu.Unlock()
@@ -696,20 +699,20 @@ func (recordBuffer *recordBuffer) lockedFailAllRecords(err error) {
 	recordBuffer.batches = nil
 }
 
-// resetBackoffAndMaybeTriggerSinkDrain clears the backoff on a buffer and
-// triggers a sink drain if there were any buffered records.
+// clearFailing is called to clear any failing state.
 //
-// Note that this does not reset the drain index. There could be an inflight
-// batch that eventually resets the drain index.
-func (recordBuffer *recordBuffer) resetBackoffAndMaybeTriggerSinkDrain() {
+// This is called when a buffer is added to a sink (to clear a failing state
+// from migrating buffers between sinks) or when a metadata update sees the
+// sink is still on the same source.
+func (recordBuffer *recordBuffer) clearFailing() {
 	recordBuffer.mu.Lock()
-	recordBuffer.backoffDeadline = time.Time{}
-	drain := len(recordBuffer.batches) != recordBuffer.batchDrainIdx
-	sink := recordBuffer.sink
-	recordBuffer.mu.Unlock()
+	defer recordBuffer.mu.Unlock()
 
-	if drain {
-		sink.maybeBeginDraining()
+	wasFailing := recordBuffer.failing
+	recordBuffer.failing = false
+
+	if wasFailing && len(recordBuffer.batches) != recordBuffer.batchDrainIdx {
+		recordBuffer.sink.maybeBeginDraining()
 	}
 }
 
@@ -798,17 +801,6 @@ func (records *recordBuffer) newRecordBatch(producerID int64, producerEpoch int1
 	return b
 }
 
-// appendRecord saves a new record to a batch.
-func (b *recordBatch) appendRecord(pr promisedRecord, nums recordNumbers) {
-	b.wireLength += nums.wireLength
-	b.v0wireLength += messageSet0Length(pr.Record)
-	b.v1wireLength += messageSet1Length(pr.Record)
-	b.records = append(b.records, promisedNumberedRecord{
-		nums,
-		pr,
-	})
-}
-
 // recordBatch is the type used for buffering records before they are written.
 type recordBatch struct {
 	owner *recordBuffer // who owns us
@@ -830,10 +822,19 @@ type recordBatch struct {
 	records []promisedNumberedRecord
 }
 
-// calculateRecordNumbers returns the record numbers for a record if it were
-// added to the record batch.
-//
-// No attempt is made to calculate overflows here; that should be done prior.
+// appendRecord saves a new record to a batch.
+func (b *recordBatch) appendRecord(pr promisedRecord, nums recordNumbers) {
+	b.wireLength += nums.wireLength
+	b.v0wireLength += messageSet0Length(pr.Record)
+	b.v1wireLength += messageSet1Length(pr.Record)
+	b.records = append(b.records, promisedNumberedRecord{
+		nums,
+		pr,
+	})
+}
+
+// calculateRecordNumbers returns the numbers for a record if it were added to
+// the record batch. Nothing accounts for overflows; that should be done prior.
 func (b *recordBatch) calculateRecordNumbers(r *Record) recordNumbers {
 	tsMillis := r.Timestamp.UnixNano() / 1e6
 	tsDelta := int32(tsMillis - b.firstTimestamp)
@@ -846,7 +847,7 @@ func (b *recordBatch) calculateRecordNumbers(r *Record) recordNumbers {
 		len(r.Key) +
 		kbin.VarintLen(int64(len(r.Value))) +
 		len(r.Value) +
-		kbin.VarintLen(int64(len(r.Headers))) // int32 array len headers
+		kbin.VarintLen(int64(len(r.Headers))) // varint array len headers
 
 	for _, h := range r.Headers {
 		l += kbin.VarintLen(int64(len(h.Key))) +
@@ -862,22 +863,17 @@ func (b *recordBatch) calculateRecordNumbers(r *Record) recordNumbers {
 	}
 }
 
-// lockedIsFirstBatchInRecordBuf returns if the batch in an recordBatch is the
-// first batch in a records.
-//
-// This function is necessary because we only want to remove leading batches.
-// One batch could be received successfully but the response dies in
-// disconnect, then a second batch in flight batch could cause a reconnect and
-// send successfully. We do not want to operate on that one since we still
-// think the first failed.
-func (batch *recordBatch) lockedIsFirstBatchInRecordBuf() bool {
+// lockedIsFirstBatch returns if the batch in an recordBatch is the first batch
+// in a records. We only ever want to update batch / buffer logic if the batch
+// is the first in the buffer.
+func (batch *recordBatch) lockedIsFirstBatch() bool {
 	return len(batch.owner.batches) > 0 && batch.owner.batches[0] == batch
 }
 
 // The above, but inside the owning recordBuffer mutex.
 func (batch *recordBatch) isFirstBatchInRecordBuf() bool {
 	batch.owner.mu.Lock()
-	r := batch.lockedIsFirstBatchInRecordBuf()
+	r := batch.lockedIsFirstBatch()
 	batch.owner.mu.Unlock()
 	return r
 }
@@ -887,35 +883,8 @@ func (batch *recordBatch) isFirstBatchInRecordBuf() bool {
 func (batch *recordBatch) removeFromRecordBuf() {
 	recordBuffer := batch.owner
 	recordBuffer.mu.Lock()
-	if !batch.lockedIsFirstBatchInRecordBuf() {
-		panic("removeFromRecordBuf called on non-first batch")
-	}
 	recordBuffer.lockedRemoveBatch0()
 	recordBuffer.mu.Unlock()
-}
-
-// lockedIsFirstBatchInSink returns whether a batch is the first batch in
-// the given sink.
-func (batch *recordBatch) lockedIsFirstBatchInSink(sink *recordSink) bool {
-	if !batch.lockedIsFirstBatchInRecordBuf() {
-		return false
-	}
-
-	// We always reset the drain index. This function is only called as a
-	// result of an error that wants to cause the batch to backoff.
-	batch.owner.batchDrainIdx = 0
-
-	// If the batch's owner moved sinks due to a concurrent metadata
-	// update, then we trigger that sink to maybe start draining due to our
-	// drain index reset.
-	if batch.owner.sink != sink {
-		batch.owner.sink.maybeBeginDraining()
-		return false
-	}
-
-	// Since the sink is the same and this is the first batch, the caller
-	// can backoff.
-	return true
 }
 
 ////////////////////
@@ -928,6 +897,8 @@ func (batch *recordBatch) lockedIsFirstBatchInSink(sink *recordSink) bool {
 // It is the same as kmsg.ProduceRequest, but with a custom AppendTo.
 type produceRequest struct {
 	version int16
+
+	backoffSeq uint32
 
 	txnID   *string
 	acks    int16

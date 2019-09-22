@@ -329,7 +329,7 @@ func (l *topicPartitions) merge(r *topicPartitionsData) (needsRetry bool) {
 		// Same logic for the consumption.
 		if newTP.records.sink == oldTP.records.sink {
 			newTP.records = oldTP.records
-			newTP.records.resetBackoffAndMaybeTriggerSinkDrain()
+			newTP.records.clearFailing()
 			newTP.consumption = oldTP.consumption
 			newTP.consumption.clearFailing()
 			continue
