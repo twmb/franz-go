@@ -595,7 +595,7 @@ func messageSet1Length(r *Record) int32 {
 	return messageSet0Length(r) + 8 // timestamp
 }
 
-func (recordBuffer *recordBuffer) bufferRecord(pr promisedRecord) {
+func (recordBuffer *recordBuffer) bufferRecord(pr promisedRecord, abortOnNewBatch bool) bool {
 	recordBuffer.mu.Lock()
 	defer recordBuffer.mu.Unlock()
 
@@ -642,6 +642,9 @@ func (recordBuffer *recordBuffer) bufferRecord(pr promisedRecord) {
 	}
 
 	if newBatch {
+		if abortOnNewBatch {
+			return false
+		}
 		recordBuffer.batches = append(recordBuffer.batches,
 			recordBuffer.newRecordBatch(
 				client.producer.id,
@@ -666,6 +669,7 @@ func (recordBuffer *recordBuffer) bufferRecord(pr promisedRecord) {
 			recordBuffer.lockedStartLinger()
 		}
 	}
+	return true
 }
 
 func (recordBuffer *recordBuffer) lockedStartLinger() {

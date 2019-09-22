@@ -3,15 +3,11 @@ package kgo
 import (
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/twmb/kgo/kerr"
 	"github.com/twmb/kgo/kmsg"
 )
-
-// TODO KIP-480:
-// - change bufferRecord API to bufferRecord((pr promisedRecord, notIfNewBatch bool) (appended bool)
-// - call with (pr, true)
-// - if not appended, repartition, then call again on new partition with (pr, false)
 
 // func (p *Producer) BeginTransaction() *ProducerTransaction
 // func (p *ProducerTransaction) Produce(r *Record)
@@ -59,29 +55,54 @@ func (c *Client) Produce(
 		promise = noPromise
 	}
 
-	partitions := c.partitionsForTopicProduce(r.Topic)
-	if partitions.loadErr != nil && !kerr.IsRetriable(partitions.loadErr) {
-		return partitions.loadErr
+	parts, partsData := c.partitionsForTopicProduce(r.Topic)
+	if partsData.loadErr != nil && !kerr.IsRetriable(partsData.loadErr) {
+		return partsData.loadErr
 	}
-
-	mapping := partitions.writable
-	if c.cfg.producer.partitioner.RequiresConsistency(r) {
-		mapping = partitions.all
-	}
-	if len(mapping) == 0 {
+	if len(partsData.all) == 0 {
 		return ErrNoPartitionsAvailable
 	}
 
-	idIdx := c.cfg.producer.partitioner.Partition(r, len(partitions.partitions))
-	id := partitions.partitions[idIdx]
+	parts.partsMu.Lock()
+	defer parts.partsMu.Unlock()
+	if parts.partitioner == nil {
+		parts.partitioner = c.cfg.producer.partitioner.forTopic(r.Topic)
+	}
+
+	mapping := partsData.writable
+	possibilities := partsData.writablePartitions
+	if parts.partitioner.requiresConsistency(r) {
+		mapping = partsData.all
+		possibilities = partsData.partitions
+	}
+	if len(possibilities) == 0 {
+		return ErrNoPartitionsAvailable
+	}
+
+	idIdx := parts.partitioner.partition(r, len(possibilities))
+	id := possibilities[idIdx]
 	partition := mapping[id]
 
-	partition.records.bufferRecord(
+	appended := partition.records.bufferRecord(
 		promisedRecord{
 			promise,
 			r,
 		},
+		true, // KIP-480
 	)
+	if !appended {
+		parts.partitioner.onNewBatch()
+		idIdx = parts.partitioner.partition(r, len(possibilities))
+		id = possibilities[idIdx]
+		partition = mapping[id]
+		partition.records.bufferRecord(
+			promisedRecord{
+				promise,
+				r,
+			},
+			false, // KIP-480
+		)
+	}
 	return nil
 }
 
@@ -129,7 +150,7 @@ func (c *Client) finishRecordPromise(pnr promisedNumberedRecord, err error) {
 	pnr.promise(pnr.Record, err)
 }
 
-func (c *Client) partitionsForTopicProduce(topic string) *topicPartitionsData {
+func (c *Client) partitionsForTopicProduce(topic string) (*topicPartitions, *topicPartitionsData) {
 	topics := c.loadTopics()
 	parts, exists := topics[topic]
 
@@ -148,18 +169,20 @@ func (c *Client) partitionsForTopicProduce(topic string) *topicPartitionsData {
 
 	v := parts.load()
 	if len(v.partitions) > 0 {
-		return v // fast, normal path
+		return parts, v // fast, normal path
 	}
 
+	start := time.Now()
 	parts.mu.RLock()
 	defer parts.mu.RUnlock()
 
 	tries := 0
-	for tries < c.cfg.client.retries && len(v.partitions) == 0 {
+	for tries < c.cfg.client.retries && len(v.partitions) == 0 &&
+		(c.cfg.producer.recordTimeout == 0 || time.Since(start) < c.cfg.producer.recordTimeout) {
 		tries++
 		c.triggerUpdateMetadata()
 		parts.c.Wait()
 		v = parts.load()
 	}
-	return v
+	return parts, v
 }

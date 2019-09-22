@@ -64,7 +64,7 @@ func defaultCfg() cfg {
 			maxRecordBatchBytes: 1000000, // Kafka max.message.bytes default is 1000012
 			maxBufferedRecords:  100000,
 			requestTimeout:      30 * time.Second,
-			partitioner:         RandomPartitioner(),
+			partitioner:         StickyKeyPartitioner(),
 		},
 
 		consumer: consumerCfg{
@@ -302,7 +302,7 @@ func WithProduceMaxRecordBatchBytes(v int32) OptProducer {
 }
 
 // WithProducePartitioner uses the given partitioner to partition records,
-// overriding the default hash partitioner.
+// overriding the default StickyKeyPartitioner.
 func WithProducePartitioner(partitioner Partitioner) OptProducer {
 	return producerOpt{func(cfg *producerCfg) { cfg.partitioner = partitioner }}
 }

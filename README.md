@@ -45,7 +45,6 @@ TODO
 - KIP-429 (incremental rebalance, see KAFKA-8179; 2.4.0)
 - KIP-464 (defaults for create topic, KIP-464; 2.4.0)
 - KIP-467 (produce response error change for per-record errors; 2.4.0)
-- KIP-480 (sticky partition producing; 2.4.0)
 
 NOT YET (KIP under discussion)
 -------
@@ -94,3 +93,4 @@ DONE
 - KIP-430 (include authorized ops in describe groups; 2.3.0)
 - KIP-455 (admin replica reassignment; 2.4.0)
 - KIP-460 (admin leader election; 2.4.0)
+- KIP-480 (sticky partition producing; 2.4.0)

@@ -45,6 +45,9 @@ func newTopicPartitions() *topicPartitions {
 type topicPartitions struct {
 	v atomic.Value // *topicPartitionsData
 
+	partsMu     sync.Mutex
+	partitioner topicPartitioner
+
 	mu sync.RWMutex
 	c  *sync.Cond
 }
@@ -58,11 +61,12 @@ func (t *topicPartitions) load() *topicPartitionsData {
 // We keep this in an atomic because it is expected to be extremely read heavy,
 // and if it were behind a lock, the lock would need to be held for a while.
 type topicPartitionsData struct {
-	loadErr    error // could be auth, unknown, leader not avail, or creation err
-	isInternal bool
-	partitions []int32
-	all        map[int32]*topicPartition // partition num => partition
-	writable   map[int32]*topicPartition // partition num => partition, eliding partitions with no leader / listener
+	loadErr            error // could be auth, unknown, leader not avail, or creation err
+	isInternal         bool
+	partitions         []int32
+	writablePartitions []int32
+	all                map[int32]*topicPartition // partition num => partition
+	writable           map[int32]*topicPartition // partition num => partition, eliding partitions with no leader / listener
 }
 
 // topicPartition contains all information from Kafka for a topic's partition,

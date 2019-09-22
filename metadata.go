@@ -254,6 +254,7 @@ func (c *Client) fetchTopicMetadata(reqTopics []string) (map[string]*topicPartit
 			parts.partitions = append(parts.partitions, p.partition)
 			parts.all[p.partition] = p
 			if p.loadErr == nil {
+				parts.writablePartitions = append(parts.writablePartitions, p.partition)
 				parts.writable[p.partition] = p
 			}
 		}
@@ -296,6 +297,7 @@ func (l *topicPartitions) merge(r *topicPartitionsData) (needsRetry bool) {
 	}
 
 	lv.partitions = r.partitions
+	lv.writablePartitions = r.writablePartitions
 
 	var deleted []*topicPartition // should end up empty
 
