@@ -11,15 +11,6 @@ import (
 	"github.com/twmb/kgo/kmsg"
 )
 
-// TODO linger:
-// - important to keep broker CPU small if producers are low throughput, but many many producers
-// - can have atomic, bytesBuffered
-// - inc on bufferRecord
-// - dec on createRequest
-// - if still enough for batch, go again
-// - else linger, if new record pushes past enough for batch, signal the linger to stop
-// - on toppar move, inc/dec as necessary, should not affect loop much
-
 // TODO per record timeout:
 
 type recordSink struct {
@@ -153,7 +144,21 @@ func (sink *recordSink) createRequest() (*produceRequest, bool) {
 		batch.tries++
 		recordBuffer.batchDrainIdx++
 
-		moreToDrain = len(recordBuffer.batches) > recordBuffer.batchDrainIdx || moreToDrain
+		recordBuffer.lockedStopLinger()
+
+		// If lingering is configured, we have more to drain if there
+		// is more than one backed up batches. If there is only one, we
+		// re-start the batch's linger.
+		if recordBuffer.linger > 0 {
+			if len(recordBuffer.batches) > recordBuffer.batchDrainIdx+1 {
+				moreToDrain = true
+			} else if len(recordBuffer.batches) == recordBuffer.batchDrainIdx+1 {
+				recordBuffer.lockedStartLinger()
+			}
+		} else {
+			// No lingering is simple.
+			moreToDrain = len(recordBuffer.batches) > recordBuffer.batchDrainIdx || moreToDrain
+		}
 		recordBuffer.mu.Unlock()
 
 		wireLength += batchWireLength
@@ -477,6 +482,8 @@ func (sink *recordSink) handleRetryBatches(retry reqBatches, withBackoff bool) {
 
 	if needsMetaUpdate {
 		sink.broker.client.triggerUpdateMetadata()
+	} else if !withBackoff {
+		sink.maybeBeginDraining()
 	}
 }
 
@@ -550,6 +557,14 @@ type recordBuffer struct {
 	// This is read while buffering and modified in a few places.
 	batchDrainIdx int
 
+	// lingering is a timer that avoids starting maybeBeginDraining until
+	// expired, allowing for more records to be buffered in a single batch.
+	//
+	// Note that if something else starts a drain, if the first batch of
+	// this buffer fits into the request, it will be used.
+	lingering *time.Timer
+	linger    time.Duration // client configuration
+
 	// failing is set when we encounter a partition error.
 	// It is always cleared on metadata update.
 	failing bool
@@ -575,6 +590,7 @@ func messageSet1Length(r *Record) int32 {
 
 func (recordBuffer *recordBuffer) bufferRecord(pr promisedRecord) {
 	recordBuffer.mu.Lock()
+	defer recordBuffer.mu.Unlock()
 
 	pr.Timestamp = time.Now() // timestamp after locking to ensure sequential
 
@@ -628,10 +644,31 @@ func (recordBuffer *recordBuffer) bufferRecord(pr promisedRecord) {
 	}
 	recordBuffer.sequenceNum++
 
-	recordBuffer.mu.Unlock()
+	if recordBuffer.linger == 0 {
+		if firstBatch {
+			sink.maybeBeginDraining()
+		}
+	} else {
+		// With linger, if this is a new batch but not the first, we
+		// stop lingering and begin draining. The drain loop will
+		// restart our linger once this buffer has one batch left.
+		if newBatch && !firstBatch {
+			recordBuffer.lockedStopLinger()
+			sink.maybeBeginDraining()
+		} else if firstBatch {
+			recordBuffer.lockedStartLinger()
+		}
+	}
+}
 
-	if firstBatch {
-		sink.maybeBeginDraining()
+func (recordBuffer *recordBuffer) lockedStartLinger() {
+	recordBuffer.lingering = time.AfterFunc(recordBuffer.linger, recordBuffer.sink.maybeBeginDraining)
+}
+
+func (recordBuffer *recordBuffer) lockedStopLinger() {
+	if recordBuffer.lingering != nil {
+		recordBuffer.lingering.Stop()
+		recordBuffer.lingering = nil
 	}
 }
 

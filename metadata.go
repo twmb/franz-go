@@ -223,6 +223,8 @@ func (c *Client) fetchTopicMetadata(reqTopics []string) (map[string]*topicPartit
 				records: &recordBuffer{
 					recordBuffersIdx: -1, // required, see below
 					lastAckedOffset:  -1, // expected sentinel
+
+					linger: c.cfg.producer.linger,
 				},
 				consumption: &consumption{
 					allConsumptionsIdx: -1, // same, see below
