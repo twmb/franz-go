@@ -22,6 +22,8 @@ const (
 // just update the consumption epoch!!
 // Same can be done in producer side when kafka gets that.
 
+// UncommittedOffsets() map[string]map[int32]int64
+
 // Offset is a message offset into a partition.
 type Offset struct {
 	request  int64
@@ -320,7 +322,7 @@ func (c *consumer) doOnMetadataUpdate() {
 	case consumerTypeDirect:
 		c.assignPartitions(c.direct.findNewAssignments(c.cl.loadTopics()), false)
 	case consumerTypeGroup:
-		// TODO if leader, reprocess partitions to see if new assignments
+		c.group.findNewAssignments(c.cl.loadTopics())
 	}
 
 	// Finally, process any updates.

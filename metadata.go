@@ -23,12 +23,12 @@ func (m *metawait) signal() {
 }
 
 // waitmeta returns immediately if metadata was updated within the last second,
-// otherwise this waits for up to one second for a metadata update to complete.
+// otherwise this waits for up to wait for a metadata update to complete.
 func (c *Client) waitmeta(ctx context.Context, wait time.Duration) {
 	now := time.Now()
 
 	c.metawait.mu.Lock()
-	if now.Sub(c.metawait.lastUpdate) < 10*time.Second {
+	if now.Sub(c.metawait.lastUpdate) < time.Second {
 		c.metawait.mu.Unlock()
 		return
 	}
@@ -282,6 +282,7 @@ func (l *topicPartitions) merge(r *topicPartitionsData) (needsRetry bool) {
 	defer func() { l.v.Store(&lv) }()
 
 	lv.loadErr = r.loadErr
+	lv.isInternal = r.isInternal
 	if r.loadErr != nil {
 		retriable := kerr.IsRetriable(r.loadErr)
 		if retriable {

@@ -3,14 +3,13 @@ package kgo
 import (
 	"context"
 	"errors"
+	"regexp"
 	"sync"
 	"time"
 
 	"github.com/twmb/kgo/kerr"
 	"github.com/twmb/kgo/kmsg"
 )
-
-// TODO: regex, leader rejoin
 
 // GroupOpt is an option to configure group consuming.
 type GroupOpt interface {
@@ -125,11 +124,15 @@ type groupConsumer struct {
 	id        string
 	topics    map[string]struct{}
 	balancers []GroupBalancer
-	leader    bool
+
+	mu     sync.Mutex          // guards the two below
+	leader bool                // whether we are leader right now
+	using  map[string]struct{} // topics we are currently using
+
+	leaderRejoin chan struct{} // cap 1; potentially sent to when leader
 
 	regexTopics bool
-	reTopics    map[string]struct{}
-	reIgnore    map[string]struct{}
+	reSeen      map[string]struct{}
 
 	memberID   string
 	generation int32
@@ -172,8 +175,9 @@ func (cl *Client) AssignGroup(group string, opts ...GroupOpt) {
 			RangeBalancer(),
 		},
 
-		reTopics: make(map[string]struct{}),
-		reIgnore: make(map[string]struct{}),
+		using:        make(map[string]struct{}),
+		leaderRejoin: make(chan struct{}, 1),
+		reSeen:       make(map[string]struct{}),
 
 		sessionTimeout:    10000 * time.Millisecond,
 		rebalanceTimeout:  60000 * time.Millisecond,
@@ -202,13 +206,11 @@ func (cl *Client) AssignGroup(group string, opts ...GroupOpt) {
 		cl.topicsMu.Unlock()
 	}
 
-	go g.manage()
+	cl.triggerUpdateMetadata()
 }
 
 func (g *groupConsumer) manage() {
 	var consecutiveErrors int
-	g.cl.waitmeta(g.ctx, g.sessionTimeout)
-
 loop:
 	for {
 		err := g.joinAndSync()
@@ -366,6 +368,15 @@ func (g *groupConsumer) heartbeat(fetchErrCh <-chan error, s *assignRevokeSessio
 				resp := kresp.(*kmsg.HeartbeatResponse)
 				err = kerr.ErrorForCode(resp.ErrorCode)
 			}
+		case <-g.leaderRejoin:
+			// If we are leader and a metadata update
+			// triggers us to rejoin, we just pretend
+			// we are rebalancing.
+			//
+			// No need to maintain leader at this point
+			// since we are going to rejoin.
+			err = kerr.RebalanceInProgress
+			g.clearLeader()
 		case err = <-fetchErrCh:
 			fetchErrCh = nil
 		case <-metadone:
@@ -395,11 +406,10 @@ func (g *groupConsumer) heartbeat(fetchErrCh <-chan error, s *assignRevokeSessio
 		// update our metadata. A leader may have re-joined with new
 		// metadata, and we want the update.
 		if !didMetadone && metadone == nil {
-			metawait := g.rebalanceTimeout - 5*time.Second
 			waited := make(chan struct{})
 			metadone = waited
 			go func() {
-				g.cl.waitmeta(g.ctx, metawait)
+				g.cl.waitmeta(g.ctx, g.sessionTimeout)
 				close(waited)
 			}()
 		}
@@ -411,8 +421,36 @@ func (g *groupConsumer) heartbeat(fetchErrCh <-chan error, s *assignRevokeSessio
 	}
 }
 
-func (g *groupConsumer) joinAndSync() error {
+func (g *groupConsumer) setLeader() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.leader = true
+}
+
+func (g *groupConsumer) clearLeader() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
 	g.leader = false
+
+	// After we set leader false, we always drain the rejoin channel to
+	// ensure we will not be doubly rejoined when we should not be.
+	select {
+	case <-g.leaderRejoin:
+	default:
+	}
+}
+
+// rejoin is called if we are leader: this ensures the heartbeat loop will
+// see we need to rejoin.
+func (g *groupConsumer) rejoin() {
+	select {
+	case g.leaderRejoin <- struct{}{}:
+	default:
+	}
+}
+
+func (g *groupConsumer) joinAndSync() error {
+	g.clearLeader()
 start:
 	req := kmsg.JoinGroupRequest{
 		GroupID:          g.id,
@@ -449,7 +487,7 @@ start:
 		if err != nil {
 			return err
 		}
-		g.leader = true
+		g.setLeader()
 	}
 
 	if err = g.syncGroup(plan, resp.GenerationID); err != nil {
@@ -489,10 +527,12 @@ func (g *groupConsumer) syncGroup(plan balancePlan, generation int32) error {
 }
 
 func (g *groupConsumer) joinGroupProtocols() []kmsg.JoinGroupRequestGroupProtocol {
-	topics := make([]string, 0, len(g.topics))
-	for topic := range g.topics {
+	g.mu.Lock()
+	topics := make([]string, 0, len(g.using))
+	for topic := range g.using {
 		topics = append(topics, topic)
 	}
+	g.mu.Unlock()
 	var protos []kmsg.JoinGroupRequestGroupProtocol
 	for _, balancer := range g.balancers {
 		protos = append(protos, kmsg.JoinGroupRequestGroupProtocol{
@@ -558,4 +598,58 @@ func (g *groupConsumer) fetchOffsets(ctx context.Context) error {
 
 	g.c.resetAndLoadOffsets()
 	return nil
+}
+
+func (g *groupConsumer) findNewAssignments(topics map[string]*topicPartitions) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	toUse := make(map[string]struct{}, len(topics))
+	for topic, topicPartitions := range topics {
+		// If we are already using this topic, no need to check it.
+		if _, exists := g.using[topic]; exists {
+			continue
+		}
+
+		var useTopic bool
+		if g.regexTopics {
+			if _, exists := g.reSeen[topic]; !exists {
+				g.reSeen[topic] = struct{}{} // set we have seen so we do not reevaluate next time
+				for reTopic := range g.topics {
+					if match, _ := regexp.MatchString(reTopic, topic); match {
+						useTopic = true
+						break
+					}
+				}
+			}
+		} else {
+			_, useTopic = g.topics[topic]
+		}
+
+		if useTopic {
+			if g.regexTopics && topicPartitions.load().isInternal {
+				continue
+			}
+			toUse[topic] = struct{}{}
+		}
+
+	}
+
+	// Nothing new to add.
+	if len(toUse) == 0 {
+		return
+	}
+
+	wasManaging := len(g.using) != 0
+	for topic := range toUse {
+		g.using[topic] = struct{}{}
+	}
+
+	if !wasManaging {
+		go g.manage()
+	}
+
+	if g.leader {
+		g.rejoin()
+	}
 }

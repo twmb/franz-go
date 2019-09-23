@@ -9,6 +9,8 @@ import (
 	"github.com/twmb/kgo/kmsg"
 )
 
+// TODO ctx for start before partitions loaded
+
 // func (p *Producer) BeginTransaction() *ProducerTransaction
 // func (p *ProducerTransaction) Produce(r *Record)
 
