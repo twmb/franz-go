@@ -1,8 +1,6 @@
 package kgo
 
-import (
-	"golang.org/x/exp/rand"
-)
+import "golang.org/x/exp/rand"
 
 // Partitioner creates topic partitioners to determine which partition messages
 // should be sent to.

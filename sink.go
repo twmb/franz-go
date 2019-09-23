@@ -429,6 +429,9 @@ func (sink *recordSink) handleReqResp(req *produceRequest, resp kmsg.Response, e
 				batch.owner.resetSequenceNums()
 				reqRetry.addBatch(topic, partition, batch)
 
+			case err == kerr.DuplicateSequenceNumber: // ignorable, but we should not get
+				err = nil
+				fallthrough
 			default:
 				finishBatch()
 			}

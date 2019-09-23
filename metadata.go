@@ -299,7 +299,21 @@ func (l *topicPartitions) merge(r *topicPartitionsData) (needsRetry bool) {
 	lv.partitions = r.partitions
 	lv.writablePartitions = r.writablePartitions
 
-	var deleted []*topicPartition // should end up empty
+	// We should have no deleted partitions, but there are two cases where
+	// we could.
+	//
+	// 1) an admin added partitions, we saw, then we re-fetched metadata
+	//    from an out of date broker that did not have the new partitions
+	// 2) a topic was deleted and recreated with fewer partitions
+	//
+	// Both of these scenarios should be rare to non-existent. If we see a
+	// delete partition, we remove it from sinks / sources and error all
+	// buffered records for it. This isn't the best behavior in the first
+	// scenario, but it isn't showstopping. The new broker will eventually
+	// see the new partitions and we will eventually pick them up. In the
+	// latter, we avoid trying to forever produce to a partition that truly
+	// does no longer exist.
+	var deleted []*topicPartition
 
 	// Migrating topicPartitions is a little tricky because we have to
 	// worry about map contents.
