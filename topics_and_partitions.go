@@ -61,6 +61,7 @@ func (t *topicPartitions) load() *topicPartitionsData {
 // We keep this in an atomic because it is expected to be extremely read heavy,
 // and if it were behind a lock, the lock would need to be held for a while.
 type topicPartitionsData struct {
+	// NOTE if adding anything to this struct, be sure to fix meta merge.
 	loadErr            error // could be auth, unknown, leader not avail, or creation err
 	isInternal         bool
 	partitions         []int32
