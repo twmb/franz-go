@@ -1,6 +1,10 @@
 package kgo
 
-import "golang.org/x/exp/rand"
+import (
+	"time"
+
+	"golang.org/x/exp/rand"
+)
 
 // Partitioner creates topic partitioners to determine which partition messages
 // should be sent to.
@@ -33,10 +37,12 @@ func StickyPartitioner() Partitioner {
 type stickyPartitioner struct{}
 
 func (*stickyPartitioner) forTopic(string) topicPartitioner {
-	return &stickyTopicPartitioner{
+	s := &stickyTopicPartitioner{
 		onPart: -1,
 		rng:    rand.New(new(rand.PCGSource)),
 	}
+	s.rng.Seed(uint64(time.Now().UnixNano()))
+	return s
 }
 
 type stickyTopicPartitioner struct {
@@ -72,10 +78,12 @@ func StickyKeyPartitioner() Partitioner {
 type keyPartitioner struct{}
 
 func (*keyPartitioner) forTopic(string) topicPartitioner {
-	return &stickyKeyTopicPartitioner{
+	s := &stickyKeyTopicPartitioner{
 		onPart: -1,
 		rng:    rand.New(new(rand.PCGSource)),
 	}
+	s.rng.Seed(uint64(time.Now().UnixNano()))
+	return s
 }
 
 type stickyKeyTopicPartitioner struct {
