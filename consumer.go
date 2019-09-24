@@ -22,8 +22,6 @@ const (
 // just update the consumption epoch!!
 // Same can be done in producer side when kafka gets that.
 
-// UncommittedOffsets() map[string]map[int32]int64
-
 // Offset is a message offset into a partition.
 type Offset struct {
 	request  int64
@@ -65,6 +63,11 @@ type consumer struct {
 	group  *groupConsumer
 	direct *directConsumer
 	typ    consumerType
+
+	// fetchMu gaurds concurrent PollFetches. While polling should happen
+	// serially, we must ensure it, especially to ensure we track updating
+	// offsets properly.
+	fetchMu sync.Mutex
 
 	usingPartitions []*topicPartition
 
@@ -115,12 +118,25 @@ func (c *consumer) addSourceReadyForDraining(seq uint64, source *recordSource) {
 	}
 }
 
+func (c *consumer) updateUncommitted(fetches Fetches, seq uint64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.typ != consumerTypeGroup || seq != c.seq {
+		return
+	}
+	c.group.updateUncommitted(fetches)
+}
+
 // If a partition has an error midway through processing a batch, the partition
 // may still have valid records to consume.
 func (cl *Client) PollFetches(ctx context.Context) Fetches {
 	c := &cl.consumer
+	c.fetchMu.Lock()
+	defer c.fetchMu.Unlock()
 
 	var fetches Fetches
+	var fetchSeq uint64
+	defer func() { c.updateUncommitted(fetches, fetchSeq) }()
 
 	fill := func() {
 		c.sourcesReadyMu.Lock()
@@ -132,6 +148,7 @@ func (cl *Client) PollFetches(ctx context.Context) Fetches {
 			if seq < c.seq {
 				continue
 			}
+			fetchSeq = seq
 			fetches = append(fetches, fetch)
 		}
 		c.sourcesReadyForDraining = nil

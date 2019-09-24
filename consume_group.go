@@ -107,10 +107,23 @@ func GroupOnAssign(onAssign func(context.Context, map[string][]int32)) GroupOpt 
 // the rebalance interval. It is possible for the group, immediately after
 // finishing a balance, to re-enter a new balancing session.
 //
+// If autocommit is enabled, the default onRevoke is to commit all offsets.
+//
 // The onRevoke function is passed the group's context, which is only canceled
 // if the group is left or the client is closed.
 func GroupOnRevoke(onRevoke func(context.Context, map[string][]int32)) GroupOpt {
 	return groupOpt{func(cfg *groupConsumer) { cfg.onRevoke = onRevoke }}
+}
+
+// GroupDisableAutoCommit disable auto committing.
+func GroupDisableAutoCommit() GroupOpt {
+	return groupOpt{func(cfg *groupConsumer) { cfg.autocommitDisable = true }}
+}
+
+// GroupAutoCommitInterval sets how long to go between autocommits, overriding the
+// default 5s.
+func GroupAutoCommitInterval(interval time.Duration) GroupOpt {
+	return groupOpt{func(cfg *groupConsumer) { cfg.autocommitInterval = interval }}
 }
 
 type groupConsumer struct {
@@ -125,9 +138,12 @@ type groupConsumer struct {
 	topics    map[string]struct{}
 	balancers []GroupBalancer
 
-	mu     sync.Mutex          // guards the two below
-	leader bool                // whether we are leader right now
-	using  map[string]struct{} // topics we are currently using
+	mu           sync.Mutex          // guards this block
+	leader       bool                // whether we are leader right now
+	using        map[string]struct{} // topics we are currently using
+	uncommitted  uncommitted
+	commitCancel func()
+	commitDone   chan struct{}
 
 	leaderRejoin chan struct{} // cap 1; potentially sent to when leader
 
@@ -144,6 +160,10 @@ type groupConsumer struct {
 
 	onAssign func(context.Context, map[string][]int32)
 	onRevoke func(context.Context, map[string][]int32)
+
+	blockAuto          bool
+	autocommitDisable  bool
+	autocommitInterval time.Duration
 
 	// TODO autocommit
 	// OnLost (incremental)
@@ -182,7 +202,10 @@ func (cl *Client) AssignGroup(group string, opts ...GroupOpt) {
 		sessionTimeout:    10000 * time.Millisecond,
 		rebalanceTimeout:  60000 * time.Millisecond,
 		heartbeatInterval: 3000 * time.Millisecond,
+
+		autocommitInterval: 5 * time.Second,
 	}
+	g.onRevoke = g.defaultRevoke
 	for _, opt := range opts {
 		opt.apply(g)
 	}
@@ -204,6 +227,10 @@ func (cl *Client) AssignGroup(group string, opts ...GroupOpt) {
 		}
 		cl.topics.Store(clientTopics)
 		cl.topicsMu.Unlock()
+	}
+
+	if !g.autocommitDisable && g.autocommitInterval > 0 {
+		go g.loopCommit()
 	}
 
 	cl.triggerUpdateMetadata()
@@ -254,6 +281,9 @@ func (g *groupConsumer) leave() {
 	})
 }
 
+// assignRevokeSession ensures that we call onRevoke if onAssign is called
+// once we join a group, and that onAssign is NOT called if the group is
+// already dead (and, in that case, that revoke is not called either).
 type assignRevokeSession struct {
 	mu         sync.Mutex
 	assigned   bool
@@ -400,6 +430,16 @@ func (g *groupConsumer) heartbeat(fetchErrCh <-chan error, s *assignRevokeSessio
 
 		// Since we errored, we must revoke.
 		if !didRevoke && revoked == nil {
+			// First, immediately stop fetching what we were and
+			// ensure we will fetch no more.
+			g.c.mu.Lock()
+			if g.seq == g.c.seq {
+				g.c.assignPartitions(nil, true)
+				g.seq = g.c.seq // track bump
+			}
+			g.c.mu.Unlock()
+
+			// Now we call the user provided revoke callback.
 			revoked = s.revoke(g)
 		}
 		// Since we errored, while waiting for the revoke to finish, we
@@ -431,6 +471,7 @@ func (g *groupConsumer) clearLeader() {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.leader = false
+	g.uncommitted = nil
 
 	// After we set leader false, we always drain the rejoin channel to
 	// ensure we will not be doubly rejoined when we should not be.
@@ -547,6 +588,8 @@ func (g *groupConsumer) joinGroupProtocols() []kmsg.JoinGroupRequestGroupProtoco
 	return protos
 }
 
+// fetchOffsets is issued once we join a group to see what the prior commits
+// were for the partitions we were assigned.
 func (g *groupConsumer) fetchOffsets(ctx context.Context) error {
 	req := kmsg.OffsetFetchRequest{
 		GroupID: g.id,
@@ -594,12 +637,16 @@ func (g *groupConsumer) fetchOffsets(ctx context.Context) error {
 		return errors.New("stale group")
 	}
 	g.c.assignPartitions(offsets, true)
-	g.seq = g.c.seq // track bumped
+	g.seq = g.c.seq // track bump
 
 	g.c.resetAndLoadOffsets()
 	return nil
 }
 
+// findNewAssignments is called under the consumer lock at the end of a
+// metadata update. This updates which topics the group wants to use and (1)
+// joins the group if not yet joined and (2) rejoins the group if leader and
+// there are new topics to use.
 func (g *groupConsumer) findNewAssignments(topics map[string]*topicPartitions) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -635,7 +682,6 @@ func (g *groupConsumer) findNewAssignments(topics map[string]*topicPartitions) {
 
 	}
 
-	// Nothing new to add.
 	if len(toUse) == 0 {
 		return
 	}
@@ -652,4 +698,315 @@ func (g *groupConsumer) findNewAssignments(topics map[string]*topicPartitions) {
 	if g.leader {
 		g.rejoin()
 	}
+}
+
+// uncommit tracks the latest offset polled (+1) and the latest commit.
+// The reason head is just past the latest offset is beceause we want
+// to commit TO an offset, not BEFORE an offset.
+type uncommit struct {
+	head      int64
+	committed int64
+}
+
+type uncommitted map[string]map[int32]uncommit
+
+// updateUncommitted sets the latest uncommitted offset. This is called under
+// the consumer lock, but grabs the group lock to ensure no collision with
+// commit.
+func (g *groupConsumer) updateUncommitted(fetches Fetches) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	for _, fetch := range fetches {
+		var topicOffsets map[int32]uncommit
+		for _, topic := range fetch.Topics {
+			for _, partition := range topic.Partitions {
+				if len(partition.Records) == 0 {
+					continue
+				}
+				offset := partition.Records[len(partition.Records)-1].Offset
+
+				if topicOffsets == nil {
+					if g.uncommitted == nil {
+						g.uncommitted = make(uncommitted, 10)
+					}
+					topicOffsets = g.uncommitted[topic.Topic]
+					if topicOffsets == nil {
+						topicOffsets = make(map[int32]uncommit, 20)
+						g.uncommitted[topic.Topic] = topicOffsets
+					}
+				}
+				uncommit, exists := topicOffsets[partition.Partition]
+				// Our new head points just past the final consumed offset,
+				// that is, if we rejoin, this is the offset to begin at.
+				newhead := offset + 1
+				if exists && uncommit.head > newhead {
+					continue // odd
+				}
+				uncommit.head = newhead
+				topicOffsets[partition.Partition] = uncommit
+			}
+		}
+	}
+}
+
+// updateCommitted updates the group's uncommitted map. This function triply
+// verifies that the resp matches the req as it should and that the req does
+// not somehow contain more than what is in our uncommitted map.
+func (g *groupConsumer) updateCommitted(
+	req *kmsg.OffsetCommitRequest,
+	resp *kmsg.OffsetCommitResponse,
+) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	if req.GenerationID != g.generation {
+		return
+	}
+	if g.uncommitted == nil || // just in case
+		len(req.Topics) != len(resp.Topics) { // bad kafka
+		return
+	}
+
+	for i := range resp.Topics {
+		reqTopic := &req.Topics[i]
+		respTopic := &resp.Topics[i]
+		topic := g.uncommitted[respTopic.Topic]
+		if topic == nil || // just in case
+			reqTopic.Topic != respTopic.Topic || // bad kafka
+			len(reqTopic.Partitions) != len(respTopic.Partitions) { // same
+			continue
+		}
+
+		for i := range respTopic.Partitions {
+			reqPart := &reqTopic.Partitions[i]
+			respPart := &respTopic.Partitions[i]
+			uncommit, exists := topic[respPart.Partition]
+			if !exists || // just in case
+				respPart.ErrorCode != 0 || // bad commit
+				reqPart.Partition != respPart.Partition { // bad kafka
+				continue
+			}
+
+			uncommit.committed = reqPart.Offset
+			topic[respPart.Partition] = uncommit
+		}
+	}
+}
+
+func (g *groupConsumer) loopCommit() {
+	ticker := time.NewTicker(g.autocommitInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+		case <-g.ctx.Done():
+			return
+		}
+
+		g.mu.Lock()
+		if !g.blockAuto {
+			g.commit(context.Background(), g.getUncommittedLocked(), nil)
+		}
+		g.mu.Unlock()
+	}
+}
+
+// Uncommitted returns the latest uncommitted offsets. Uncommitted offsets are
+// always updated on calls to PollFetches.
+//
+// If there are no uncommitted offsets, this returns nil.
+func (cl *Client) Uncommitted() map[string]map[int32]int64 {
+	cl.consumer.mu.Lock()
+	defer cl.consumer.mu.Unlock()
+	if cl.consumer.typ != consumerTypeGroup {
+		return nil
+	}
+	return cl.consumer.group.getUncommitted()
+}
+
+func (g *groupConsumer) getUncommitted() map[string]map[int32]int64 {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.getUncommittedLocked()
+}
+
+func (g *groupConsumer) getUncommittedLocked() map[string]map[int32]int64 {
+	if g.uncommitted == nil {
+		return nil
+	}
+
+	var uncommitted map[string]map[int32]int64
+	for topic, partitions := range g.uncommitted {
+		var topicUncommitted map[int32]int64
+		for partition, uncommit := range partitions {
+			if uncommit.head == uncommit.committed {
+				continue
+			}
+			if topicUncommitted == nil {
+				if uncommitted == nil {
+					uncommitted = make(map[string]map[int32]int64, len(g.uncommitted))
+				}
+				topicUncommitted = uncommitted[topic]
+				if topicUncommitted == nil {
+					topicUncommitted = make(map[int32]int64, len(partitions))
+					uncommitted[topic] = topicUncommitted
+				}
+			}
+			topicUncommitted[partition] = uncommit.head
+		}
+	}
+	return uncommitted
+}
+
+// Commit commits the given offsets for a group, calling onDone if non-nil once
+// the commit response is received. If uncommitted is empty or the client is
+// not consuming as a group, this is function returns immediately.
+//
+// If autocommitting is enabled, this function blocks autocommitting while
+// until this function is complete and the onDone has returned.
+//
+// Note that this function ensures absolute ordering of commit requests by
+// canceling prior requests and ensuring they are done before executing a new
+// one. This means, for absolute control, you can use this function to
+// periodically commit async and then issue a final sync commit before
+// quitting. This differs from the Java async commit, which does not retry
+// requests to avoid trampling on future commits.
+//
+// If using autocommitting, autocommitting will resume once this is complete,
+// committing only if the client's internal uncommitted offsets counters are
+// higher than the known last commit.
+func (cl *Client) Commit(
+	ctx context.Context,
+	uncommitted map[string]map[int32]int64,
+	onDone func(*kmsg.OffsetCommitRequest, *kmsg.OffsetCommitResponse, error),
+) {
+	if onDone == nil {
+		onDone = func(_ *kmsg.OffsetCommitRequest, _ *kmsg.OffsetCommitResponse, _ error) {}
+	}
+	cl.consumer.mu.Lock()
+	defer cl.consumer.mu.Unlock()
+	if cl.consumer.typ != consumerTypeGroup {
+		onDone(new(kmsg.OffsetCommitRequest), new(kmsg.OffsetCommitResponse), nil)
+		return
+	}
+	if len(uncommitted) == 0 {
+		onDone(new(kmsg.OffsetCommitRequest), new(kmsg.OffsetCommitResponse), nil)
+		return
+	}
+
+	g := cl.consumer.group
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	g.blockAuto = true
+	unblock := func(req *kmsg.OffsetCommitRequest, resp *kmsg.OffsetCommitResponse, err error) {
+		if onDone != nil {
+			onDone(req, resp, err)
+		}
+		g.mu.Lock()
+		defer g.mu.Unlock()
+		g.blockAuto = false
+	}
+
+	g.commit(ctx, uncommitted, unblock)
+}
+
+// defaultRevoke commits the last fetched offsets and waits for the commit to
+// finish. This is the default onRevoke function which, when combined with the
+// default autocommit, ensures we never miss committing everything.
+//
+// Note that the heartbeat loop invalidates all buffered, unpolled fetches
+// before revoking, meaning this truly will commit all polled fetches.
+func (g *groupConsumer) defaultRevoke(_ context.Context, _ map[string][]int32) {
+	if !g.autocommitDisable {
+		wait := make(chan struct{})
+		g.cl.Commit(g.ctx, g.getUncommitted(), func(_ *kmsg.OffsetCommitRequest, _ *kmsg.OffsetCommitResponse, _ error) {
+			close(wait)
+		})
+		<-wait
+	}
+}
+
+// commit is the logic for Commit; see Commit's documentation
+func (g *groupConsumer) commit(
+	ctx context.Context,
+	uncommitted map[string]map[int32]int64,
+	onDone func(*kmsg.OffsetCommitRequest, *kmsg.OffsetCommitResponse, error),
+) {
+	if onDone == nil { // note we must always call onDone
+		onDone = func(_ *kmsg.OffsetCommitRequest, _ *kmsg.OffsetCommitResponse, _ error) {}
+	}
+	if len(uncommitted) == 0 { // only empty if called thru autocommit / default revoke
+		onDone(new(kmsg.OffsetCommitRequest), new(kmsg.OffsetCommitResponse), nil)
+		return
+	}
+
+	if g.commitCancel != nil {
+		g.commitCancel() // cancel any prior commit
+	}
+	priorDone := g.commitDone
+
+	commitCtx, commitCancel := context.WithCancel(g.ctx) // enable ours to be canceled and waited for
+	commitDone := make(chan struct{})
+
+	g.commitCancel = commitCancel
+	g.commitDone = commitDone
+
+	memberID := g.memberID
+	req := &kmsg.OffsetCommitRequest{
+		GroupID:         g.id,
+		GenerationID:    g.generation,
+		MemberID:        memberID,
+		GroupInstanceID: nil, // TODO KIP-345
+	}
+	// TODO capture epoch for KIP-320 before the goroutine below
+	// to avoid race read/write problems
+
+	if ctx.Done() != nil {
+		go func() {
+			select {
+			case <-ctx.Done():
+				commitCancel()
+			case <-commitCtx.Done():
+			}
+		}()
+	}
+
+	go func() {
+		defer close(commitDone) // allow future commits to continue when we are done
+		defer commitCancel()
+		if priorDone != nil { // wait for any prior request to finish
+			<-priorDone
+		}
+
+		for topic, partitions := range uncommitted {
+			req.Topics = append(req.Topics, kmsg.OffsetCommitRequestTopic{
+				Topic: topic,
+			})
+			reqTopic := &req.Topics[len(req.Topics)-1]
+			for partition, offset := range partitions {
+				reqTopic.Partitions = append(reqTopic.Partitions, kmsg.OffsetCommitRequestTopicPartition{
+					Partition:   partition,
+					Offset:      offset,
+					LeaderEpoch: -1, // TODO KIP-320,
+					Metadata:    &memberID,
+				})
+			}
+		}
+
+		var kresp kmsg.Response
+		var err error
+		if len(req.Topics) > 0 {
+			kresp, err = g.cl.Request(commitCtx, req)
+		}
+		if err != nil {
+			onDone(req, nil, err)
+			return
+		}
+		resp := kresp.(*kmsg.OffsetCommitResponse)
+		g.updateCommitted(req, resp)
+		onDone(req, resp, nil)
+	}()
 }
