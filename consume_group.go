@@ -171,6 +171,7 @@ type groupConsumer struct {
 
 // AssignGroup assigns a group to consume from, overriding any prior
 // assignment. To leave a group, you can AssignGroup with an empty group.
+// It is recommended to do one final syncronous commit before leaving a group.
 func (cl *Client) AssignGroup(group string, opts ...GroupOpt) {
 	c := &cl.consumer
 	c.mu.Lock()
@@ -860,12 +861,18 @@ func (g *groupConsumer) getUncommittedLocked() map[string]map[int32]int64 {
 	return uncommitted
 }
 
-// Commit commits the given offsets for a group, calling onDone if non-nil once
-// the commit response is received. If uncommitted is empty or the client is
-// not consuming as a group, this is function returns immediately.
+// Commit commits the given offsets for a group, calling onDone with the commit
+// request and either the response or an error if the response was not issued.
+// If uncommitted is empty or the client is not consuming as a group, onDone is
+// called with nil, nil, nil and this function returns immediately. It is OK if
+// onDone is nil.
 //
-// If autocommitting is enabled, this function blocks autocommitting while
-// until this function is complete and the onDone has returned.
+// If autocommitting is enabled, this function blocks autocommitting until this
+// function is complete and the onDone has returned.
+//
+// This function itself does not wait for the commit to finish; that is, by
+// default, this function is an asyncronous commit. You can use the provided
+// callback to make it sync.
 //
 // Note that this function ensures absolute ordering of commit requests by
 // canceling prior requests and ensuring they are done before executing a new
