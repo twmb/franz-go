@@ -2790,6 +2790,408 @@ func (v *ControlledShutdownResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+// OffsetCommitKey is the key for the Kafka internal __consumer_offsets topic
+// if the key starts with an int16 with a value of 0 or 1.
+//
+// This type was introduced in KAFKA-1012 commit a670537aa3 with release 0.8.2
+// and has been in use ever since.
+type OffsetCommitKey struct {
+	// Version is which encoding version this value is using.
+	Version int16
+
+	// Group is the group being committed.
+	Group string
+
+	// Topic is the topic being committed.
+	Topic string
+
+	// Partition is the partition being committed.
+	Partition int32
+}
+
+func (v *OffsetCommitKey) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	{
+		v := v.Version
+		dst = kbin.AppendInt16(dst, v)
+	}
+	{
+		v := v.Group
+		dst = kbin.AppendString(dst, v)
+	}
+	{
+		v := v.Topic
+		dst = kbin.AppendString(dst, v)
+	}
+	{
+		v := v.Partition
+		dst = kbin.AppendInt32(dst, v)
+	}
+	return dst
+}
+func (v *OffsetCommitKey) ReadFrom(src []byte) error {
+	b := kbin.Reader{Src: src}
+	version := b.Int16()
+	v.Version = version
+	{
+		s := v
+		{
+			v := b.String()
+			s.Group = v
+		}
+		{
+			v := b.String()
+			s.Topic = v
+		}
+		{
+			v := b.Int32()
+			s.Partition = v
+		}
+	}
+	return b.Complete()
+}
+
+// OffsetCommitValue is the value for the Kafka internal __consumer_offsets
+// topic if the key is of OffsetCommitKey type.
+//
+// Version 0 was introduced with the key version 0.
+//
+// KAFKA-1634 commit c5df2a8e3a in 0.9.0 released version 1.
+//
+// KAFKA-4682 commit 418a91b5d4, proposed in KIP-211 and included in 2.1.0
+// released version 2.
+//
+// KAFKA-7437 commit 9f7267dd2f, proposed in KIP-320 and included in 2.1.0
+// released version 3.
+type OffsetCommitValue struct {
+	// Version is which encoding version this value is using.
+	Version int16
+
+	// Offset is the committed offset.
+	Offset int64
+
+	// LeaderEpoch is the epoch of the leader committing this message.
+	LeaderEpoch int32 // v3+
+
+	// Metadata is the metadata included in the commit.
+	Metadata string
+
+	// CommitTimestamp is when this commit occurred.
+	CommitTimestamp int64
+
+	// ExpireTimestamp, introduced in v1 and dropped in v2 with KIP-111,
+	// is when this commit expires.
+	ExpireTimestamp int64 // v1+
+}
+
+func (v *OffsetCommitValue) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	{
+		v := v.Version
+		dst = kbin.AppendInt16(dst, v)
+	}
+	{
+		v := v.Offset
+		dst = kbin.AppendInt64(dst, v)
+	}
+	if version >= 3 {
+		v := v.LeaderEpoch
+		dst = kbin.AppendInt32(dst, v)
+	}
+	{
+		v := v.Metadata
+		dst = kbin.AppendString(dst, v)
+	}
+	{
+		v := v.CommitTimestamp
+		dst = kbin.AppendInt64(dst, v)
+	}
+	if version >= 1 && version <= 1 {
+		v := v.ExpireTimestamp
+		dst = kbin.AppendInt64(dst, v)
+	}
+	return dst
+}
+func (v *OffsetCommitValue) ReadFrom(src []byte) error {
+	b := kbin.Reader{Src: src}
+	version := b.Int16()
+	v.Version = version
+	{
+		s := v
+		{
+			v := b.Int64()
+			s.Offset = v
+		}
+		if version >= 3 {
+			v := b.Int32()
+			s.LeaderEpoch = v
+		}
+		{
+			v := b.String()
+			s.Metadata = v
+		}
+		{
+			v := b.Int64()
+			s.CommitTimestamp = v
+		}
+		if version >= 1 && version <= 1 {
+			v := b.Int64()
+			s.ExpireTimestamp = v
+		}
+	}
+	return b.Complete()
+}
+
+// GroupMetadataKey is the key for the Kafka internal __consumer_offsets topic
+// if the key starts with an int16 with a value of 2.
+//
+// This type was introduced in KAFKA-2017 commit 7c33475274 with release 0.9.0
+// and has been in use ever since.
+type GroupMetadataKey struct {
+	// Version is which encoding version this value is using.
+	Version int16
+
+	// Group is the group this metadata is for.
+	Group string
+}
+
+func (v *GroupMetadataKey) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	{
+		v := v.Version
+		dst = kbin.AppendInt16(dst, v)
+	}
+	{
+		v := v.Group
+		dst = kbin.AppendString(dst, v)
+	}
+	return dst
+}
+func (v *GroupMetadataKey) ReadFrom(src []byte) error {
+	b := kbin.Reader{Src: src}
+	version := b.Int16()
+	v.Version = version
+	{
+		s := v
+		{
+			v := b.String()
+			s.Group = v
+		}
+	}
+	return b.Complete()
+}
+
+type GroupMetadataValueMember struct {
+	// MemberID is a group member.
+	MemberID string
+
+	// GroupInstanceID is the instance ID of this member in the group (KIP-345).
+	GroupInstanceID *string // v3+
+
+	// ClientID is the client ID of this group member.
+	ClientID string
+
+	// ClientHost is the hostname of this group member.
+	ClientHost string
+
+	// RebalanceTimeout is the rebalance timeout of this group member.
+	RebalanceTimeout int32 // v1+
+
+	// SessionTimeout is the session timeout of this group member.
+	SessionTimeout int32
+
+	// Subscription is the subscription of this group member.
+	Subscription []byte
+
+	// Assignment is what the leader assigned this group member.
+	Assignment []byte
+}
+
+// GroupMetadataValue is the value for the Kafka internal __consumer_offsets
+// topic if the key is of GroupMetadataKey type.
+//
+// Version 0 was introduced with the key version 0.
+//
+// KAFKA-3888 commit 40b1dd3f49, proposed in KIP-62 and included in 0.10.1
+// released version 1.
+//
+// KAFKA-4682 commit 418a91b5d4, proposed in KIP-211 and included in 2.1.0
+// released version 2.
+//
+// KAFKA-7862 commit 0f995ba6be, proposed in KIP-345 and included in 2.3.0
+// released version 3.
+type GroupMetadataValue struct {
+	// Version is the version of this value.
+	Version int16
+
+	// ProtocolType is the type of protocol being used for the group
+	// (i.e., "consumer").
+	ProtocolType string
+
+	// Generation is the generation of this group.
+	Generation int32
+
+	// Protocol is the agreed upon protocol all members are using to partition
+	// (i.e., "sticky").
+	Protocol *string
+
+	// Leader is the group leader.
+	Leader *string
+
+	// CurrentStateTimestamp is the timestamp for this state of the group
+	// (stable, etc.).
+	CurrentStateTimestamp int64 // v2+
+
+	// Members are the group members.
+	Members []GroupMetadataValueMember
+}
+
+func (v *GroupMetadataValue) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	{
+		v := v.Version
+		dst = kbin.AppendInt16(dst, v)
+	}
+	{
+		v := v.ProtocolType
+		dst = kbin.AppendString(dst, v)
+	}
+	{
+		v := v.Generation
+		dst = kbin.AppendInt32(dst, v)
+	}
+	{
+		v := v.Protocol
+		dst = kbin.AppendNullableString(dst, v)
+	}
+	{
+		v := v.Leader
+		dst = kbin.AppendNullableString(dst, v)
+	}
+	if version >= 2 {
+		v := v.CurrentStateTimestamp
+		dst = kbin.AppendInt64(dst, v)
+	}
+	{
+		v := v.Members
+		dst = kbin.AppendArrayLen(dst, len(v))
+		for i := range v {
+			v := &v[i]
+			{
+				v := v.MemberID
+				dst = kbin.AppendString(dst, v)
+			}
+			if version >= 3 {
+				v := v.GroupInstanceID
+				dst = kbin.AppendNullableString(dst, v)
+			}
+			{
+				v := v.ClientID
+				dst = kbin.AppendString(dst, v)
+			}
+			{
+				v := v.ClientHost
+				dst = kbin.AppendString(dst, v)
+			}
+			if version >= 1 {
+				v := v.RebalanceTimeout
+				dst = kbin.AppendInt32(dst, v)
+			}
+			{
+				v := v.SessionTimeout
+				dst = kbin.AppendInt32(dst, v)
+			}
+			{
+				v := v.Subscription
+				dst = kbin.AppendBytes(dst, v)
+			}
+			{
+				v := v.Assignment
+				dst = kbin.AppendBytes(dst, v)
+			}
+		}
+	}
+	return dst
+}
+func (v *GroupMetadataValue) ReadFrom(src []byte) error {
+	b := kbin.Reader{Src: src}
+	version := b.Int16()
+	v.Version = version
+	{
+		s := v
+		{
+			v := b.String()
+			s.ProtocolType = v
+		}
+		{
+			v := b.Int32()
+			s.Generation = v
+		}
+		{
+			v := b.NullableString()
+			s.Protocol = v
+		}
+		{
+			v := b.NullableString()
+			s.Leader = v
+		}
+		if version >= 2 {
+			v := b.Int64()
+			s.CurrentStateTimestamp = v
+		}
+		{
+			v := s.Members
+			a := v
+			for i := b.ArrayLen(); i > 0; i-- {
+				a = append(a, GroupMetadataValueMember{})
+				v := &a[len(a)-1]
+				{
+					s := v
+					{
+						v := b.String()
+						s.MemberID = v
+					}
+					if version >= 3 {
+						v := b.NullableString()
+						s.GroupInstanceID = v
+					}
+					{
+						v := b.String()
+						s.ClientID = v
+					}
+					{
+						v := b.String()
+						s.ClientHost = v
+					}
+					if version >= 1 {
+						v := b.Int32()
+						s.RebalanceTimeout = v
+					}
+					{
+						v := b.Int32()
+						s.SessionTimeout = v
+					}
+					{
+						v := b.Bytes()
+						s.Subscription = v
+					}
+					{
+						v := b.Bytes()
+						s.Assignment = v
+					}
+				}
+			}
+			v = a
+			s.Members = v
+		}
+	}
+	return b.Complete()
+}
+
 type OffsetCommitRequestTopicPartition struct {
 	// Partition if a partition to commit offsets for.
 	Partition int32
@@ -3359,7 +3761,7 @@ func (v *FindCoordinatorResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
-type StickyMemberMetadataV0CurrentAssignment struct {
+type StickyMemberMetadataCurrentAssignment struct {
 	// Topic is a topic the group member is currently assigned.
 	Topic string
 
@@ -3368,157 +3770,22 @@ type StickyMemberMetadataV0CurrentAssignment struct {
 	Partitions []int32
 }
 
-// StickyMemberMetadataV0 is version 0 of what was encoded in UserData for
-// GroupMemberMetadata in group join requests.
-type StickyMemberMetadataV0 struct {
-	// CurrentAssignment is the assignment that a group member has when
-	// issuing a join.
-	CurrentAssignment []StickyMemberMetadataV0CurrentAssignment
-}
-
-func (v *StickyMemberMetadataV0) AppendTo(dst []byte) []byte {
-	{
-		v := v.CurrentAssignment
-		dst = kbin.AppendArrayLen(dst, len(v))
-		for i := range v {
-			v := &v[i]
-			{
-				v := v.Topic
-				dst = kbin.AppendString(dst, v)
-			}
-			{
-				v := v.Partitions
-				dst = kbin.AppendArrayLen(dst, len(v))
-				for i := range v {
-					v := v[i]
-					dst = kbin.AppendInt32(dst, v)
-				}
-			}
-		}
-	}
-	return dst
-}
-func (v *StickyMemberMetadataV0) ReadFrom(src []byte) error {
-	b := kbin.Reader{Src: src}
-	{
-		s := v
-		{
-			v := s.CurrentAssignment
-			a := v
-			for i := b.ArrayLen(); i > 0; i-- {
-				a = append(a, StickyMemberMetadataV0CurrentAssignment{})
-				v := &a[len(a)-1]
-				{
-					s := v
-					{
-						v := b.String()
-						s.Topic = v
-					}
-					{
-						v := s.Partitions
-						a := v
-						for i := b.ArrayLen(); i > 0; i-- {
-							v := b.Int32()
-							a = append(a, v)
-						}
-						v = a
-						s.Partitions = v
-					}
-				}
-			}
-			v = a
-			s.CurrentAssignment = v
-		}
-	}
-	return b.Complete()
-}
-
-type StickyMemberMetadataV1CurrentAssignment struct {
-	// Topic is a topic the group member is currently assigned.
-	Topic string
-
-	// Partitions are the partitions within a topic that a group member is
-	// currently assigned.
-	Partitions []int32
-}
-
-// StickyMemberMetadataV1 is version 1 of what was encoded in UserData for
-// GroupMemberMetadata in group join requests.
+// StickyMemberMetadata is is what is encoded in UserData for
+// GroupMemberMetadata in group join requests with the sticky partitioning
+// strategy.
+//
+// For forwards compatibility, there may be extra data at the end to be
+// ignored.
 //
 // V1 added generation, which fixed a bug with flaky group members joining
 // repeatedly. See KIP-341 for more details.
-type StickyMemberMetadataV1 struct {
+type StickyMemberMetadata struct {
 	// CurrentAssignment is the assignment that a group member has when
 	// issuing a join.
-	CurrentAssignment []StickyMemberMetadataV1CurrentAssignment
+	CurrentAssignment []StickyMemberMetadataCurrentAssignment
 
 	// Generation is the generation of this join. This is incremented every join.
 	Generation int32
-}
-
-func (v *StickyMemberMetadataV1) AppendTo(dst []byte) []byte {
-	{
-		v := v.CurrentAssignment
-		dst = kbin.AppendArrayLen(dst, len(v))
-		for i := range v {
-			v := &v[i]
-			{
-				v := v.Topic
-				dst = kbin.AppendString(dst, v)
-			}
-			{
-				v := v.Partitions
-				dst = kbin.AppendArrayLen(dst, len(v))
-				for i := range v {
-					v := v[i]
-					dst = kbin.AppendInt32(dst, v)
-				}
-			}
-		}
-	}
-	{
-		v := v.Generation
-		dst = kbin.AppendInt32(dst, v)
-	}
-	return dst
-}
-func (v *StickyMemberMetadataV1) ReadFrom(src []byte) error {
-	b := kbin.Reader{Src: src}
-	{
-		s := v
-		{
-			v := s.CurrentAssignment
-			a := v
-			for i := b.ArrayLen(); i > 0; i-- {
-				a = append(a, StickyMemberMetadataV1CurrentAssignment{})
-				v := &a[len(a)-1]
-				{
-					s := v
-					{
-						v := b.String()
-						s.Topic = v
-					}
-					{
-						v := s.Partitions
-						a := v
-						for i := b.ArrayLen(); i > 0; i-- {
-							v := b.Int32()
-							a = append(a, v)
-						}
-						v = a
-						s.Partitions = v
-					}
-				}
-			}
-			v = a
-			s.CurrentAssignment = v
-		}
-		{
-			v := b.Int32()
-			s.Generation = v
-		}
-	}
-	return b.Complete()
 }
 
 // GroupMemberMetadata is the metadata that is usually sent with a join group
@@ -3531,8 +3798,7 @@ type GroupMemberMetadata struct {
 	Topics []string
 
 	// UserData is arbitrary client data for a given client in the group.
-	// For sticky assignment with version 0, this is StickyMemberMetadataV0.
-	// For sticky assignment with version 1, this is StickyMemberMetadataV1.
+	// For sticky assignment, this is StickyMemberMetadata.
 	UserData []byte
 }
 
@@ -3598,8 +3864,7 @@ type GroupMemberAssignment struct {
 	// Topics contains topics in the assignment.
 	Topics []GroupMemberAssignmentTopic
 
-	// UserData is arbitrary client data for a given client in the group. This
-	// was added for the sticky assignment with KIP-341.
+	// UserData is arbitrary client data for a given client in the group.
 	UserData []byte
 }
 
