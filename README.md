@@ -4,18 +4,12 @@ kgo
 TODO
 ====
 
+- on metadata update, if topic gone, instead of delete immediately
+- set "first delete saw"
+- after X time, process deletion
+- fixes stale metadata problem
+
 - cleanup generating (names are not great)
-
-
-OffsetCommit (internal, `__consumer_offsets`):
-
-- KIP-211: v2
-- KIP-320: v3
-- KIP-384: ?
-
-GroupMemberMetadata (internal, `__consumer_offsets` metadata):
-- KIP-211: v2
-- KIP-345: v3
 
 ACL descriptions in KIP-133
 
@@ -31,7 +25,6 @@ TODO
 - KIP-43 (sasl enhancements)
 - KIP-48 (create / describe delegation token; 1.1.0)
 - KIP-98 (EOS; 0.11.0)
-- KIP-103 (update metadata bump adding `listener_name`; 0.10.2)
 - KIP-140 (describe/create/delete ACLs; 0.11.0)
 - KIP-152 (more sasl, introduce sasl authenticate; 1.0.0)
 - KIP-207 (new error in list offset request; 2.2.0)
@@ -44,6 +37,7 @@ TODO
 - KIP-429 (incremental rebalance, see KAFKA-8179; 2.4.0)
 - KIP-464 (defaults for create topic, KIP-464; 2.4.0)
 - KIP-467 (produce response error change for per-record errors; 2.4.0)
+- KIP-526
 
 NOT YET (KIP under discussion)
 -------
