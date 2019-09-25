@@ -270,11 +270,22 @@ func Parse(raw []byte) {
 		resetComment()
 
 		topLevel := true
+		withVersionField, withNoEncoding := false, false
 
 		name := strings.TrimSuffix(line, " => not top level")
+		if withVersion := strings.TrimSuffix(name, " => not top level, with version field"); withVersion != name {
+			name = withVersion
+			withVersionField = true
+		}
+		if noEncoding := strings.TrimSuffix(name, " => not top level, no encoding"); noEncoding != name {
+			name = noEncoding
+			withNoEncoding = true
+		}
 		save := func() {
 			s.Name = name
 			s.TopLevel = topLevel
+			s.WithVersionField = withVersionField
+			s.WithNoEncoding = withNoEncoding
 			s.BuildFrom(scanner, 0)
 			types[name] = s
 			newStructs = append(newStructs, s)

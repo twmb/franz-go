@@ -167,9 +167,22 @@ func (s Struct) WriteDecode(l *LineWriter) {
 	if len(s.Fields) == 0 {
 		return
 	}
+	rangeFrom := s.Fields
+	if s.WithVersionField {
+		f := s.Fields[0]
+		if f.FieldName != "Version" {
+			die("expected first field in 'with version field' type to be version, is %s", f.FieldName)
+		}
+		if f.Type != (Int16{}) {
+			die("expected field version type to be int16, was %v", f.Type)
+		}
+		rangeFrom = s.Fields[1:]
+		l.Write("version := b.Int16()")
+		l.Write("v.Version = version")
+	}
 	l.Write("{")
 	l.Write("s := v")
-	for _, f := range s.Fields {
+	for _, f := range rangeFrom {
 		if f.MaxVersion > -1 {
 			l.Write("if version >= %d && version <= %d {", f.MinVersion, f.MaxVersion)
 		} else if f.MinVersion > 0 {
@@ -256,7 +269,7 @@ func (s Struct) WriteResponseKindFunc(l *LineWriter) {
 
 func (s Struct) WriteAppendFunc(l *LineWriter) {
 	l.Write("func (v *%s) AppendTo(dst []byte) []byte {", s.Name)
-	if s.TopLevel {
+	if s.TopLevel || s.WithVersionField {
 		l.Write("version := v.Version")
 		l.Write("_ = version")
 	}

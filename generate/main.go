@@ -63,10 +63,12 @@ type (
 	}
 
 	Struct struct {
-		TopLevel  bool
-		Anonymous bool // if inner struct
-		Comment   string
-		Name      string
+		TopLevel         bool
+		WithVersionField bool // if not top level
+		WithNoEncoding   bool // if not top level
+		Anonymous        bool // if inner struct
+		Comment          string
+		Name             string
 
 		Fields []StructField
 
@@ -126,7 +128,7 @@ func main() {
 			} else {
 				s.WriteDecodeFunc(l)
 			}
-		} else if !s.Anonymous {
+		} else if !s.Anonymous && !s.WithNoEncoding {
 			s.WriteAppendFunc(l)
 			s.WriteDecodeFunc(l)
 		}
