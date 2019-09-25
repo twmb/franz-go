@@ -22,8 +22,6 @@ import (
 // We can support up to 4,294,967,295 partitions.
 // I expect a server to fall over before reaching either of these numbers.
 
-const defaultGeneration = -1
-
 type GroupMember struct {
 	ID string
 
@@ -267,7 +265,7 @@ func Balance(members []GroupMember, topics map[string][]int32) Plan {
 	}
 	b := newBalancer(members, topics)
 	if cap(b.partNames) == 0 {
-		return make(Plan)
+		return b.into()
 	}
 	b.parseMemberMetadata()
 	b.assignUnassignedAndInitGraph()
@@ -356,34 +354,17 @@ func (m *memberGenerations) Swap(i, j int)      { s := *m; s[i], s[j] = s[j], s[
 // we return empty defaults. The member will just be assumed to have no
 // history.
 func deserializeUserData(version int16, userdata []byte) (memberPlan []topicPartition, generation int32) {
-	generation = defaultGeneration
-	switch version {
-	case 0:
-		var v0 kmsg.StickyMemberMetadataV0
-		if err := v0.ReadFrom(userdata); err != nil {
-			return nil, 0
-		}
-		for _, topicAssignment := range v0.CurrentAssignment {
-			for _, partition := range topicAssignment.Partitions {
-				memberPlan = append(memberPlan, topicPartition{
-					topicAssignment.Topic,
-					partition,
-				})
-			}
-		}
-	case 1:
-		var v1 kmsg.StickyMemberMetadataV1
-		if err := v1.ReadFrom(userdata); err != nil {
-			return nil, 0
-		}
-		generation = v1.Generation
-		for _, topicAssignment := range v1.CurrentAssignment {
-			for _, partition := range topicAssignment.Partitions {
-				memberPlan = append(memberPlan, topicPartition{
-					topicAssignment.Topic,
-					partition,
-				})
-			}
+	var s kmsg.StickyMemberMetadata
+	if err := s.ReadFrom(userdata, version); err != nil {
+		return nil, 0
+	}
+	generation = s.Generation
+	for _, topicAssignment := range s.CurrentAssignment {
+		for _, partition := range topicAssignment.Partitions {
+			memberPlan = append(memberPlan, topicPartition{
+				topicAssignment.Topic,
+				partition,
+			})
 		}
 	}
 

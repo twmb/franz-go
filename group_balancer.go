@@ -347,17 +347,17 @@ func (*stickyBalancer) metaFor(interests []string, currentAssignment map[string]
 		Version: 1,
 		Topics:  interests,
 	}
-	stickyMeta := kmsg.StickyMemberMetadataV1{
+	stickyMeta := kmsg.StickyMemberMetadata{
 		Generation: generation,
 	}
 	for topic, partitions := range currentAssignment {
 		stickyMeta.CurrentAssignment = append(stickyMeta.CurrentAssignment,
-			kmsg.StickyMemberMetadataV1CurrentAssignment{
+			kmsg.StickyMemberMetadataCurrentAssignment{
 				Topic:      topic,
 				Partitions: partitions,
 			})
 	}
-	meta.UserData = stickyMeta.AppendTo(nil)
+	meta.UserData = stickyMeta.AppendTo(nil, 1) // we are using v1 sticky data
 	return meta.AppendTo(nil)
 
 }
