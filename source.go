@@ -609,14 +609,11 @@ func (o *seqOffset) maybeAddRecord(fetchPart *FetchPartition, record *Record) {
 		// batch; we got offsets 0 thru 4 that we need to skip.
 		return
 	}
-	if record.Offset != o.offset {
-		// We asked for offset 5, then the client user reset the
-		// offset to something else while this was inflight.
-		// This response out of date.
-		return
-	}
 	fetchPart.Records = append(fetchPart.Records, record)
-	o.offset++
+	// The record offset may be much larger than our expected offset if the
+	// topic is compacted. That is fine; we ensure increasing offsets and
+	// only keep the resulting offset if the seq is the same.
+	o.offset = record.Offset + 1
 }
 
 ///////////////////////////////
