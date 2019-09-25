@@ -887,6 +887,107 @@ ControlledShutdownResponse =>
     Topic: string
     Partition: int32
 
+// OffsetCommitKey is the key for the Kafka internal __consumer_offsets topic
+// if the key starts with an int16 with a value of 0 or 1.
+//
+// This type was introduced in KAFKA-1012 commit a670537aa3 with release 0.8.2
+// and has been in use ever since.
+OffsetCommitKey => not top level, with version field
+  // Version is which encoding version this value is using.
+  Version: int16
+  // Group is the group being committed.
+  Group: string
+  // Topic is the topic being committed.
+  Topic: string
+  // Partition is the partition being committed.
+  Partition: int32
+
+// OffsetCommitValue is the value for the Kafka internal __consumer_offsets
+// topic if the key is of OffsetCommitKey type.
+//
+// Version 0 was introduced with the key version 0.
+//
+// KAFKA-1634 commit c5df2a8e3a in 0.9.0 released version 1.
+//
+// KAFKA-4682 commit 418a91b5d4, proposed in KIP-211 and included in 2.1.0
+// released version 2.
+//
+// KAFKA-7437 commit 9f7267dd2f, proposed in KIP-320 and included in 2.1.0
+// released version 3.
+OffsetCommitValue => not top level, with version field
+  // Version is which encoding version this value is using.
+  Version: int16
+  // Offset is the committed offset.
+  Offset: int64
+  // LeaderEpoch is the epoch of the leader committing this message.
+  LeaderEpoch: int32 // v3+
+  // Metadata is the metadata included in the commit.
+  Metadata: string
+  // CommitTimestamp is when this commit occurred.
+  CommitTimestamp: int64
+  // ExpireTimestamp, introduced in v1 and dropped in v2 with KIP-111,
+  // is when this commit expires.
+  ExpireTimestamp: int64 // v1-v1
+
+// GroupMetadataKey is the key for the Kafka internal __consumer_offsets topic
+// if the key starts with an int16 with a value of 2.
+//
+// This type was introduced in KAFKA-2017 commit 7c33475274 with release 0.9.0
+// and has been in use ever since.
+GroupMetadataKey => not top level, with version field
+  // Version is which encoding version this value is using.
+  Version: int16
+  // Group is the group this metadata is for.
+  Group: string
+
+// GroupMetadataValue is the value for the Kafka internal __consumer_offsets
+// topic if the key is of GroupMetadataKey type.
+//
+// Version 0 was introduced with the key version 0.
+//
+// KAFKA-3888 commit 40b1dd3f49, proposed in KIP-62 and included in 0.10.1
+// released version 1.
+//
+// KAFKA-4682 commit 418a91b5d4, proposed in KIP-211 and included in 2.1.0
+// released version 2.
+//
+// KAFKA-7862 commit 0f995ba6be, proposed in KIP-345 and included in 2.3.0
+// released version 3.
+GroupMetadataValue => not top level, with version field
+  // Version is the version of this value.
+  Version: int16
+  // ProtocolType is the type of protocol being used for the group
+  // (i.e., "consumer").
+  ProtocolType: string
+  // Generation is the generation of this group.
+  Generation: int32
+  // Protocol is the agreed upon protocol all members are using to partition
+  // (i.e., "sticky").
+  Protocol: nullable-string
+  // Leader is the group leader.
+  Leader: nullable-string
+  // CurrentStateTimestamp is the timestamp for this state of the group
+  // (stable, etc.).
+  CurrentStateTimestamp: int64 // v2+
+  // Members are the group members.
+  Members: [=>]
+    // MemberID is a group member.
+    MemberID: string
+    // GroupInstanceID is the instance ID of this member in the group (KIP-345).
+    GroupInstanceID: nullable-string // v3+
+    // ClientID is the client ID of this group member.
+    ClientID: string
+    // ClientHost is the hostname of this group member.
+    ClientHost: string
+    // RebalanceTimeout is the rebalance timeout of this group member.
+    RebalanceTimeout: int32 // v1+
+    // SessionTimeout is the session timeout of this group member.
+    SessionTimeout: int32
+    // Subscription is the subscription of this group member.
+    Subscription: bytes
+    // Assignment is what the leader assigned this group member.
+    Assignment: bytes
+
 // OffsetCommitRequest commits offsets for consumed topics / partitions in
 // a group.
 OffsetCommitRequest => key 8, max version 7, group coordinator
@@ -1097,24 +1198,16 @@ FindCoordinatorResponse =>
   // Port is the port of the coordinator.
   Port: int32
 
-// StickyMemberMetadataV0 is version 0 of what was encoded in UserData for
-// GroupMemberMetadata in group join requests.
-StickyMemberMetadataV0 => not top level
-  // CurrentAssignment is the assignment that a group member has when
-  // issuing a join.
-  CurrentAssignment: [=>]
-    // Topic is a topic the group member is currently assigned.
-    Topic: string
-    // Partitions are the partitions within a topic that a group member is
-    // currently assigned.
-    Partitions: [int32]
-
-// StickyMemberMetadataV1 is version 1 of what was encoded in UserData for
-// GroupMemberMetadata in group join requests.
+// StickyMemberMetadata is is what is encoded in UserData for
+// GroupMemberMetadata in group join requests with the sticky partitioning
+// strategy.
+//
+// For forwards compatibility, there may be extra data at the end to be
+// ignored.
 //
 // V1 added generation, which fixed a bug with flaky group members joining
 // repeatedly. See KIP-341 for more details.
-StickyMemberMetadataV1 => not top level
+StickyMemberMetadata => not top level, no encoding
   // CurrentAssignment is the assignment that a group member has when
   // issuing a join.
   CurrentAssignment: [=>]
@@ -1134,8 +1227,7 @@ GroupMemberMetadata => not top level
   // Topics is the list of topics in the group.
   Topics: [string]
   // UserData is arbitrary client data for a given client in the group.
-  // For sticky assignment with version 0, this is StickyMemberMetadataV0.
-  // For sticky assignment with version 1, this is StickyMemberMetadataV1.
+  // For sticky assignment, this is StickyMemberMetadata.
   UserData: bytes
 
 // GroupMemberAssignment is the assignment data that is usually sent with a
@@ -1149,8 +1241,7 @@ GroupMemberAssignment => not top level
     Topic: string
     // Partitions contains partitions in the assignment.
     Partitions: [int32]
-  // UserData is arbitrary client data for a given client in the group. This
-  // was added for the sticky assignment with KIP-341.
+  // UserData is arbitrary client data for a given client in the group.
   UserData: bytes
 
 // JoinGroupRequest issues a request to join a Kafka group. This will create a
