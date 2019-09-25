@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"regexp"
+	"sort"
 	"sync"
 	"time"
 
@@ -165,8 +166,7 @@ type groupConsumer struct {
 	autocommitDisable  bool
 	autocommitInterval time.Duration
 
-	// TODO autocommit
-	// OnLost (incremental)
+	// TODO OnLost (incremental)
 }
 
 // AssignGroup assigns a group to consume from, overriding any prior
@@ -769,6 +769,13 @@ func (g *groupConsumer) updateCommitted(
 		return
 	}
 
+	sort.Slice(req.Topics, func(i, j int) bool {
+		return req.Topics[i].Topic < req.Topics[j].Topic
+	})
+	sort.Slice(resp.Topics, func(i, j int) bool {
+		return resp.Topics[i].Topic < resp.Topics[j].Topic
+	})
+
 	for i := range resp.Topics {
 		reqTopic := &req.Topics[i]
 		respTopic := &resp.Topics[i]
@@ -778,6 +785,13 @@ func (g *groupConsumer) updateCommitted(
 			len(reqTopic.Partitions) != len(respTopic.Partitions) { // same
 			continue
 		}
+
+		sort.Slice(reqTopic.Partitions, func(i, j int) bool {
+			return reqTopic.Partitions[i].Partition < reqTopic.Partitions[j].Partition
+		})
+		sort.Slice(respTopic.Partitions, func(i, j int) bool {
+			return respTopic.Partitions[i].Partition < respTopic.Partitions[j].Partition
+		})
 
 		for i := range respTopic.Partitions {
 			reqPart := &reqTopic.Partitions[i]
