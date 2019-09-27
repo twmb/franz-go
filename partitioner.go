@@ -55,7 +55,7 @@ func (*stickyTopicPartitioner) requiresConsistency(*Record) bool { return false 
 func (p *stickyTopicPartitioner) partition(_ *Record, n int) int {
 	if p.onPart == -1 || p.onPart >= n {
 		if n == 1 {
-			p.onPart = 1
+			p.onPart = 0
 		} else {
 			for {
 				p.onPart = p.rng.Intn(n)
@@ -112,7 +112,7 @@ func (p *stickyKeyTopicPartitioner) partition(r *Record, n int) int {
 	}
 	if p.onPart == -1 || p.onPart >= n {
 		if n == 1 {
-			p.onPart = 1
+			p.onPart = 0
 		} else {
 			for {
 				p.onPart = p.rng.Intn(n)
