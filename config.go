@@ -56,6 +56,7 @@ func defaultCfg() cfg {
 			maxBrokerWriteBytes: 100 << 20, // Kafka socket.request.max.bytes default is 100<<20
 
 			metadataMaxAge: 5 * time.Minute,
+			metadataMinAge: 10 * time.Second,
 		},
 
 		producer: producerCfg{
@@ -100,6 +101,7 @@ type (
 		maxBrokerWriteBytes int32
 
 		metadataMaxAge time.Duration
+		metadataMinAge time.Duration
 
 		// TODO SASL
 	}
@@ -193,6 +195,17 @@ func WithBrokerMaxWriteBytes(v int32) OptClient {
 // This corresponds to Kafka's metadata.max.age.ms.
 func WithMetadataMaxAge(age time.Duration) OptClient {
 	return clientOpt{func(cfg *clientCfg) { cfg.metadataMaxAge = age }}
+}
+
+// WithMetadataMinAge sets the minimum time between metadata queries,
+// overriding the default 10s. You may want to raise or lower this to reduce
+// the number of metadata queries the client will make. Notably, if metadata
+// detects an error in any topic or partition, it triggers itself to update as
+// soon as allowed. Additionally, any connection failures causing backoff while
+// producing or consuming trigger metadata updates, because the client must
+// assume that maybe the connection died due to a broker dying.
+func WithMetadataMinAge(age time.Duration) OptClient {
+	return clientOpt{func(cfg *clientCfg) { cfg.metadataMinAge = age }}
 }
 
 // ********** PRODUCER CONFIGURATION **********

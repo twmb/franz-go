@@ -34,7 +34,7 @@ func (c *Client) waitmeta(ctx context.Context, wait time.Duration) {
 	}
 	c.metawait.mu.Unlock()
 
-	c.triggerUpdateMetadata()
+	c.triggerUpdateMetadataNow()
 
 	quit := false
 	done := make(chan struct{})
@@ -75,45 +75,73 @@ func (c *Client) triggerUpdateMetadata() {
 	}
 }
 
+func (c *Client) triggerUpdateMetadataNow() {
+	select {
+	case c.updateMetadataNowCh <- struct{}{}:
+	default:
+	}
+}
+
 // updateMetadataLoop updates metadata whenever the update ticker ticks,
 // or whenever deliberately triggered.
 func (c *Client) updateMetadataLoop() {
 	defer close(c.metadone)
 	var consecutiveErrors int
+	var lastAt time.Time
 
 	ticker := time.NewTicker(c.cfg.client.metadataMaxAge)
 	defer ticker.Stop()
+loop:
 	for {
+		var now bool
 		select {
 		case <-c.ctx.Done():
 			return
 		case <-ticker.C:
 			c.triggerUpdateMetadata()
+			continue loop
+		case <-c.updateMetadataNowCh:
+			now = true
 		case <-c.updateMetadataCh:
-			again, err := c.updateMetadata()
-			if again || err != nil {
-				c.triggerUpdateMetadata()
-			}
+		}
 
-			// If we did not error, we sleep 1s before the next
-			// update to avoid unnecessary updates.
-			// If we did error, we obey the backoff function.
-			sleep := time.Second
-			if err != nil {
-				consecutiveErrors++
-				sleep = c.cfg.client.retryBackoff(consecutiveErrors)
-			} else {
-				consecutiveErrors = 0
-			}
-
-			after := time.NewTimer(sleep)
-			select {
-			case <-c.ctx.Done():
-				after.Stop()
-				return
-			case <-after.C:
+		if !now {
+			if wait := c.cfg.client.metadataMinAge - time.Since(lastAt); wait > 0 {
+				timer := time.NewTimer(wait)
+				select {
+				case <-c.ctx.Done():
+					timer.Stop()
+					return
+				case <-c.updateMetadataNowCh:
+					timer.Stop()
+				case <-timer.C:
+				}
 			}
 		}
+
+		again, err := c.updateMetadata()
+		if again || err != nil {
+			if now {
+				c.triggerUpdateMetadataNow()
+			} else {
+				c.triggerUpdateMetadata()
+			}
+		}
+		if err == nil {
+			lastAt = time.Now()
+			consecutiveErrors = 0
+			continue
+		}
+
+		consecutiveErrors++
+		after := time.NewTimer(c.cfg.client.retryBackoff(consecutiveErrors))
+		select {
+		case <-c.ctx.Done():
+			after.Stop()
+			return
+		case <-after.C:
+		}
+
 	}
 }
 
@@ -234,6 +262,7 @@ func (c *Client) fetchTopicMetadata(reqTopics []string) (map[string]*topicPartit
 					seqOffset: seqOffset{
 						offset: -1, // required to not consume until needed
 					},
+					failing: true,
 				},
 
 				replicas: partMeta.Replicas,

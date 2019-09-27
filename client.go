@@ -42,9 +42,10 @@ type Client struct {
 	topicsMu sync.Mutex
 	topics   atomic.Value // map[string]*topicPartitions
 
-	updateMetadataCh chan struct{}
-	metawait         metawait
-	metadone         chan struct{}
+	updateMetadataCh    chan struct{}
+	updateMetadataNowCh chan struct{} // like above, but with high priority
+	metawait            metawait
+	metadone            chan struct{}
 }
 
 // stddialer is the default dialer for dialing connections.
@@ -106,8 +107,9 @@ func NewClient(opts ...Opt) (*Client, error) {
 
 		coordinators: make(map[coordinatorKey]int32),
 
-		updateMetadataCh: make(chan struct{}, 1),
-		metadone:         make(chan struct{}),
+		updateMetadataCh:    make(chan struct{}, 1),
+		updateMetadataNowCh: make(chan struct{}, 1),
+		metadone:            make(chan struct{}),
 	}
 	c.consumer.cl = c
 	c.consumer.sourcesReadyCond = sync.NewCond(&c.consumer.sourcesReadyMu)
