@@ -36,12 +36,16 @@ func StickyPartitioner() Partitioner {
 type stickyPartitioner struct{}
 
 func (*stickyPartitioner) forTopic(string) topicPartitioner {
-	s := &stickyTopicPartitioner{
+	p := newStickyTopicPartitioner()
+	return &p
+}
+
+func newStickyTopicPartitioner() stickyTopicPartitioner {
+	return stickyTopicPartitioner{
 		lastPart: -1,
 		onPart:   -1,
 		rng:      rand.New(rand.NewSource(time.Now().UnixNano())),
 	}
-	return s
 }
 
 type stickyTopicPartitioner struct {
@@ -54,15 +58,9 @@ func (p *stickyTopicPartitioner) onNewBatch()                    { p.lastPart, p
 func (*stickyTopicPartitioner) requiresConsistency(*Record) bool { return false }
 func (p *stickyTopicPartitioner) partition(_ *Record, n int) int {
 	if p.onPart == -1 || p.onPart >= n {
-		if n == 1 {
-			p.onPart = 0
-		} else {
-			for {
-				p.onPart = p.rng.Intn(n)
-				if p.onPart != p.lastPart {
-					break
-				}
-			}
+		p.onPart = p.rng.Intn(n)
+		if p.onPart == p.lastPart {
+			p.onPart = (p.onPart + 1) % n
 		}
 	}
 	return p.onPart
@@ -87,20 +85,13 @@ func StickyKeyPartitioner() Partitioner {
 type keyPartitioner struct{}
 
 func (*keyPartitioner) forTopic(string) topicPartitioner {
-	s := &stickyKeyTopicPartitioner{
-		onPart: -1,
-		rng:    rand.New(rand.NewSource(time.Now().UnixNano())),
-	}
-	return s
+	return &stickyKeyTopicPartitioner{newStickyTopicPartitioner()}
 }
 
 type stickyKeyTopicPartitioner struct {
-	lastPart int
-	onPart   int
-	rng      *rand.Rand
+	stickyTopicPartitioner
 }
 
-func (p *stickyKeyTopicPartitioner) onNewBatch()                      { p.lastPart, p.onPart = p.onPart, -1 }
 func (*stickyKeyTopicPartitioner) requiresConsistency(r *Record) bool { return r.Key != nil }
 func (p *stickyKeyTopicPartitioner) partition(r *Record, n int) int {
 	if r.Key != nil {
@@ -110,19 +101,7 @@ func (p *stickyKeyTopicPartitioner) partition(r *Record, n int) int {
 		// which ultimately was never necessary but here we are.
 		return int(murmur2(r.Key)&0x7fffffff) % n
 	}
-	if p.onPart == -1 || p.onPart >= n {
-		if n == 1 {
-			p.onPart = 0
-		} else {
-			for {
-				p.onPart = p.rng.Intn(n)
-				if p.onPart != p.lastPart {
-					break
-				}
-			}
-		}
-	}
-	return p.onPart
+	return p.stickyTopicPartitioner.partition(r, n)
 }
 
 // Straight from the C++ code and from the Java code duplicating it.
