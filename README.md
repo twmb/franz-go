@@ -13,8 +13,6 @@ TODO
 
 ACL descriptions in KIP-133
 
-KIP-211: behavior changes between versions! Cannot rely on field.
-
 KIPS
 ====
 
