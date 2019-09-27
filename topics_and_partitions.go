@@ -93,7 +93,12 @@ type topicPartition struct {
 // must be done such that records produced during migration follow those
 // already buffered.
 func (old *topicPartition) migrateProductionTo(new *topicPartition) {
-	old.records.sink.removeSource(old.records) // first, remove our record source from the old sink
+	// We could be migrating _from_ a nil sink if the original sink had a
+	// load error. The new sink will not be nil, since we do not migrate
+	// to failing sinks.
+	if old.records.sink != nil {
+		old.records.sink.removeSource(old.records) // first, remove our record source from the old sink
+	}
 
 	// Before this next lock, record producing will buffer to the
 	// in-migration-progress records and may trigger draining to
@@ -111,7 +116,8 @@ func (old *topicPartition) migrateProductionTo(new *topicPartition) {
 	old.records.sink.addSource(old.records) // add our record source to the new sink
 
 	// At this point, the new sink will be draining our records. We lastly
-	// need to copy the records pointer to our new topicPartition.
+	// need to copy the records pointer to our new topicPartition and clear
+	// its failing state.
 	new.records = old.records
 }
 
@@ -122,7 +128,9 @@ func (old *topicPartition) migrateProductionTo(new *topicPartition) {
 // The pattern is the same as above, albeit no concurrent-produce issues to
 // worry about.
 func (old *topicPartition) migrateConsumptionTo(new *topicPartition) {
-	old.consumption.source.removeConsumption(old.consumption)
+	if old.consumption.source != nil {
+		old.consumption.source.removeConsumption(old.consumption)
+	}
 	old.consumption.mu.Lock()
 	old.consumption.source = new.consumption.source
 	old.consumption.mu.Unlock()

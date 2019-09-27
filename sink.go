@@ -107,16 +107,16 @@ func (sink *recordSink) createRequest() (*produceRequest, bool) {
 	// backing off and that it can can fit in our request.
 	recordBuffersIdx := sink.recordBuffersStart
 	for i := 0; i < len(sink.recordBuffers); i++ {
-		recordBuffer := sink.recordBuffers[recordBuffersIdx]
+		recBuf := sink.recordBuffers[recordBuffersIdx]
 		recordBuffersIdx = (recordBuffersIdx + 1) % len(sink.recordBuffers)
 
-		recordBuffer.mu.Lock()
-		if recordBuffer.failing || len(recordBuffer.batches) == recordBuffer.batchDrainIdx {
-			recordBuffer.mu.Unlock()
+		recBuf.mu.Lock()
+		if recBuf.failing || len(recBuf.batches) == recBuf.batchDrainIdx {
+			recBuf.mu.Unlock()
 			continue
 		}
 
-		batch := recordBuffer.batches[recordBuffer.batchDrainIdx]
+		batch := recBuf.batches[recBuf.batchDrainIdx]
 		batchWireLength := 4 + batch.wireLength // partition, batch len
 
 		if sink.produceVersionKnown == 0 {
@@ -133,44 +133,48 @@ func (sink *recordSink) createRequest() (*produceRequest, bool) {
 			}
 		}
 
-		if _, exists := req.batches[recordBuffer.topicPartition.topic]; !exists {
-			batchWireLength += 2 + int32(len(recordBuffer.topicPartition.topic)) + 4 // string len, topic, array len
+		if _, exists := req.batches[recBuf.topicPartition.topic]; !exists {
+			batchWireLength += 2 + int32(len(recBuf.topicPartition.topic)) + 4 // string len, topic, array len
 		}
 		if wireLength+batchWireLength > wireLengthLimit {
-			recordBuffer.mu.Unlock()
+			recBuf.mu.Unlock()
 			moreToDrain = true
 			continue
 		}
 
 		batch.tries++
-		recordBuffer.batchDrainIdx++
+		recBuf.batchDrainIdx++
 
-		recordBuffer.lockedStopLinger()
+		recBuf.lockedStopLinger()
 
 		// If lingering is configured, we have more to drain if there
 		// is more than one backed up batches. If there is only one, we
 		// re-start the batch's linger.
-		if recordBuffer.linger > 0 {
-			if len(recordBuffer.batches) > recordBuffer.batchDrainIdx+1 {
+		if recBuf.linger > 0 {
+			if len(recBuf.batches) > recBuf.batchDrainIdx+1 {
 				moreToDrain = true
-			} else if len(recordBuffer.batches) == recordBuffer.batchDrainIdx+1 {
-				recordBuffer.lockedStartLinger()
+			} else if len(recBuf.batches) == recBuf.batchDrainIdx+1 {
+				recBuf.lockedStartLinger()
 			}
 		} else {
 			// No lingering is simple.
-			moreToDrain = len(recordBuffer.batches) > recordBuffer.batchDrainIdx || moreToDrain
+			moreToDrain = len(recBuf.batches) > recBuf.batchDrainIdx || moreToDrain
 		}
-		recordBuffer.mu.Unlock()
+		recBuf.mu.Unlock()
 
 		wireLength += batchWireLength
 		req.batches.addBatch(
-			recordBuffer.topicPartition.topic,
-			recordBuffer.topicPartition.partition,
+			recBuf.topicPartition.topic,
+			recBuf.topicPartition.partition,
 			batch,
 		)
 	}
 
-	sink.recordBuffersStart = (sink.recordBuffersStart + 1) % len(sink.recordBuffers)
+	// We could have lost our only record buffer just before we grabbed the
+	// lock above.
+	if len(sink.recordBuffers) > 0 {
+		sink.recordBuffersStart = (sink.recordBuffersStart + 1) % len(sink.recordBuffers)
+	}
 	return req, moreToDrain
 }
 
@@ -285,14 +289,14 @@ func (sink *recordSink) errorAllRecordsInAllRecordBuffersInPartitions(
 	err error,
 ) {
 	for _, batch := range partitions {
-		recordBuffer := batch.owner
-		recordBuffer.mu.Lock()
+		recBuf := batch.owner
+		recBuf.mu.Lock()
 		// We error here even if the buffer is now on a different sink;
 		// no reason to wait for the same error on a different sink.
 		if batch.lockedIsFirstBatch() {
-			recordBuffer.lockedFailAllRecords(err)
+			recBuf.lockedFailAllRecords(err)
 		}
-		recordBuffer.mu.Unlock()
+		recBuf.mu.Unlock()
 	}
 }
 
@@ -529,7 +533,12 @@ func (sink *recordSink) removeSource(rm *recordBuffer) {
 }
 
 // recordBuffer buffers records to be sent to a topic/partition.
+//
+// Special care must be taken to not access the sink before it is actually
+// loaded (non-nil).
 type recordBuffer struct {
+	cl *Client // for config access / producer id
+
 	topicPartition *topicPartition
 
 	// lastAckedOffset, present for Kafka 1.0.0+ (v5+), is used for data
@@ -598,20 +607,23 @@ func messageSet1Length(r *Record) int32 {
 	return messageSet0Length(r) + 8 // timestamp
 }
 
-func (recordBuffer *recordBuffer) bufferRecord(pr promisedRecord, abortOnNewBatch bool) bool {
-	recordBuffer.mu.Lock()
-	defer recordBuffer.mu.Unlock()
+// bufferRecord usually buffers a record, but does not if abortOnNewBatch is
+// true and if this function would create a new batch.
+//
+// This function is careful not to touch the record sink if the sink is nil,
+// which it could be on metadata load err. Note that if the sink is ever not
+// nil, then the sink will forever not be nil.
+func (recBuf *recordBuffer) bufferRecord(pr promisedRecord, abortOnNewBatch bool) bool {
+	recBuf.mu.Lock()
+	defer recBuf.mu.Unlock()
 
 	pr.Timestamp = time.Now() // timestamp after locking to ensure sequential
 
-	sink := recordBuffer.sink
-	client := sink.broker.client
-
 	newBatch := true
-	firstBatch := recordBuffer.batchDrainIdx == len(recordBuffer.batches)
+	firstBatch := recBuf.batchDrainIdx == len(recBuf.batches)
 
 	if !firstBatch {
-		batch := recordBuffer.batches[len(recordBuffer.batches)-1]
+		batch := recBuf.batches[len(recBuf.batches)-1]
 		recordNumbers := batch.calculateRecordNumbers(pr.Record)
 
 		newBatchLength := batch.wireLength + recordNumbers.wireLength
@@ -620,7 +632,7 @@ func (recordBuffer *recordBuffer) bufferRecord(pr promisedRecord, abortOnNewBatc
 		// to <0.11.0 and be using message sets. Until we know the
 		// broker version, we pessimisitically cut our batch off using
 		// the largest record length numbers.
-		produceVersionKnown := atomic.LoadInt32(&sink.produceVersionKnown) == 1
+		produceVersionKnown := recBuf.sink != nil && atomic.LoadInt32(&recBuf.sink.produceVersionKnown) == 1
 		if !produceVersionKnown {
 			v1newBatchLength := batch.v1wireLength + messageSet1Length(pr.Record)
 			if v1newBatchLength > newBatchLength { // we only check v1 since it is larger than v0
@@ -629,7 +641,7 @@ func (recordBuffer *recordBuffer) bufferRecord(pr promisedRecord, abortOnNewBatc
 		} else {
 			// If we do know our broker version and it is indeed
 			// an old one, we use the appropriate length.
-			switch sink.produceVersion {
+			switch recBuf.sink.produceVersion {
 			case 0, 1:
 				newBatchLength = batch.v0wireLength + messageSet0Length(pr.Record)
 			case 2:
@@ -638,7 +650,7 @@ func (recordBuffer *recordBuffer) bufferRecord(pr promisedRecord, abortOnNewBatc
 		}
 
 		if batch.tries == 0 &&
-			newBatchLength <= client.cfg.producer.maxRecordBatchBytes {
+			newBatchLength <= recBuf.cl.cfg.producer.maxRecordBatchBytes {
 			newBatch = false
 			batch.appendRecord(pr, recordNumbers)
 		}
@@ -648,48 +660,54 @@ func (recordBuffer *recordBuffer) bufferRecord(pr promisedRecord, abortOnNewBatc
 		if abortOnNewBatch {
 			return false
 		}
-		recordBuffer.batches = append(recordBuffer.batches,
-			recordBuffer.newRecordBatch(
-				client.producer.id,
-				client.producer.epoch,
+		recBuf.batches = append(recBuf.batches,
+			recBuf.newRecordBatch(
+				recBuf.cl.producer.id,
+				recBuf.cl.producer.epoch,
 				pr,
 			))
 	}
-	recordBuffer.sequenceNum++
+	recBuf.sequenceNum++
 
-	if recordBuffer.linger == 0 {
+	// Our sink could be nil if our metadata loaded a partition that is
+	// erroring.
+	if recBuf.sink == nil {
+		return true
+	}
+
+	if recBuf.linger == 0 {
 		if firstBatch {
-			sink.maybeBeginDraining()
+			recBuf.sink.maybeBeginDraining()
 		}
 	} else {
 		// With linger, if this is a new batch but not the first, we
 		// stop lingering and begin draining. The drain loop will
 		// restart our linger once this buffer has one batch left.
 		if newBatch && !firstBatch {
-			recordBuffer.lockedStopLinger()
-			sink.maybeBeginDraining()
+			recBuf.lockedStopLinger()
+			recBuf.sink.maybeBeginDraining()
 		} else if firstBatch {
-			recordBuffer.lockedStartLinger()
+			recBuf.lockedStartLinger()
 		}
 	}
 	return true
 }
 
-func (recordBuffer *recordBuffer) lockedStartLinger() {
-	recordBuffer.lingering = time.AfterFunc(recordBuffer.linger, recordBuffer.sink.maybeBeginDraining)
+func (recBuf *recordBuffer) lockedStartLinger() {
+	recBuf.lingering = time.AfterFunc(recBuf.linger, recBuf.sink.maybeBeginDraining)
 }
 
-func (recordBuffer *recordBuffer) lockedStopLinger() {
-	if recordBuffer.lingering != nil {
-		recordBuffer.lingering.Stop()
-		recordBuffer.lingering = nil
+func (recBuf *recordBuffer) lockedStopLinger() {
+	if recBuf.lingering != nil {
+		recBuf.lingering.Stop()
+		recBuf.lingering = nil
 	}
 }
 
-func (recordBuffer *recordBuffer) lockedRemoveBatch0() {
-	recordBuffer.batches[0] = nil
-	recordBuffer.batches = recordBuffer.batches[1:]
-	recordBuffer.batchDrainIdx--
+func (recBuf *recordBuffer) lockedRemoveBatch0() {
+	recBuf.batches[0] = nil
+	recBuf.batches = recBuf.batches[1:]
+	recBuf.batchDrainIdx--
 }
 
 // bumpTriesAndMaybeFailBatch0 is called during metadata updating.
@@ -704,26 +722,24 @@ func (recordBuffer *recordBuffer) lockedRemoveBatch0() {
 //
 // This is also called if the entire topic errors, which has similar retriable
 // errors.
-func (recordBuffer *recordBuffer) bumpTriesAndMaybeFailBatch0(err error) {
-	recordBuffer.mu.Lock()
-	defer recordBuffer.mu.Unlock()
-	if len(recordBuffer.batches) == 0 {
+func (recBuf *recordBuffer) bumpTriesAndMaybeFailBatch0(err error) {
+	recBuf.mu.Lock()
+	defer recBuf.mu.Unlock()
+	if len(recBuf.batches) == 0 {
 		return
 	}
-	batch0 := recordBuffer.batches[0]
+	batch0 := recBuf.batches[0]
 	batch0.tries++
-	client := recordBuffer.sink.broker.client
-	if batch0.tries > client.cfg.client.retries {
-		recordBuffer.lockedFailBatch0(err)
+	if batch0.tries > recBuf.cl.cfg.client.retries {
+		recBuf.lockedFailBatch0(err)
 	}
 }
 
-func (recordBuffer *recordBuffer) lockedFailBatch0(err error) {
-	batch0 := recordBuffer.batches[0]
-	client := recordBuffer.sink.broker.client
-	recordBuffer.lockedRemoveBatch0()
+func (recBuf *recordBuffer) lockedFailBatch0(err error) {
+	batch0 := recBuf.batches[0]
+	recBuf.lockedRemoveBatch0()
 	for i, pnr := range batch0.records {
-		client.finishRecordPromise(pnr, err)
+		recBuf.cl.finishRecordPromise(pnr, err)
 		batch0.records[i] = noPNR
 	}
 	emptyRecordsPool.Put(&batch0.records)
@@ -733,19 +749,17 @@ func (recordBuffer *recordBuffer) lockedFailBatch0(err error) {
 // currently buffered in this recordBuffer.
 //
 // For example, this is called in metadata on invalid auth errors.
-func (recordBuffer *recordBuffer) failAllRecords(err error) {
-	recordBuffer.mu.Lock()
-	defer recordBuffer.mu.Unlock()
-	recordBuffer.lockedFailAllRecords(err)
+func (recBuf *recordBuffer) failAllRecords(err error) {
+	recBuf.mu.Lock()
+	defer recBuf.mu.Unlock()
+	recBuf.lockedFailAllRecords(err)
 }
 
 // lockedFailAllRecords is the same as above, but already in a lock.
-func (recordBuffer *recordBuffer) lockedFailAllRecords(err error) {
-	client := recordBuffer.sink.broker.client
-
-	for _, batch := range recordBuffer.batches {
+func (recBuf *recordBuffer) lockedFailAllRecords(err error) {
+	for _, batch := range recBuf.batches {
 		for i, pnr := range batch.records {
-			client.finishRecordPromise(
+			recBuf.cl.finishRecordPromise(
 				pnr,
 				err,
 			)
@@ -753,7 +767,7 @@ func (recordBuffer *recordBuffer) lockedFailAllRecords(err error) {
 		}
 		emptyRecordsPool.Put(&batch.records)
 	}
-	recordBuffer.batches = nil
+	recBuf.batches = nil
 }
 
 // clearFailing is called to clear any failing state.
@@ -761,36 +775,39 @@ func (recordBuffer *recordBuffer) lockedFailAllRecords(err error) {
 // This is called when a buffer is added to a sink (to clear a failing state
 // from migrating buffers between sinks) or when a metadata update sees the
 // sink is still on the same source.
-func (recordBuffer *recordBuffer) clearFailing() {
-	recordBuffer.mu.Lock()
-	defer recordBuffer.mu.Unlock()
+//
+// Note the sink cannot be nil here, since nil sinks correspond to load errors,
+// and partitions with load errors do not call clearFailing.
+func (recBuf *recordBuffer) clearFailing() {
+	recBuf.mu.Lock()
+	defer recBuf.mu.Unlock()
 
-	wasFailing := recordBuffer.failing
-	recordBuffer.failing = false
+	wasFailing := recBuf.failing
+	recBuf.failing = false
 
-	if wasFailing && len(recordBuffer.batches) != recordBuffer.batchDrainIdx {
-		recordBuffer.sink.maybeBeginDraining()
+	if wasFailing && len(recBuf.batches) != recBuf.batchDrainIdx {
+		recBuf.sink.maybeBeginDraining()
 	}
 }
 
 // resetSequenceNumbers is called in a special error during produce response
 // handling. See above where it is used.
-func (recordBuffer *recordBuffer) resetSequenceNums() {
-	recordBuffer.lastAckedOffset = -1
+func (recBuf *recordBuffer) resetSequenceNums() {
+	recBuf.lastAckedOffset = -1
 
 	// Guard modification of sequenceNum and batches access.
-	recordBuffer.mu.Lock()
-	defer recordBuffer.mu.Unlock()
+	recBuf.mu.Lock()
+	defer recBuf.mu.Unlock()
 
-	recordBuffer.sequenceNum = 0
-	for _, batch := range recordBuffer.batches {
+	recBuf.sequenceNum = 0
+	for _, batch := range recBuf.batches {
 		// We store the new sequence atomically because there may be
 		// more requests being built and sent concurrently. It is fine
 		// that they get the new sequence num, they will fail with
 		// OOOSN, but the error will be dropped since they are not the
 		// first batch.
-		atomic.StoreInt32(&batch.baseSequence, recordBuffer.sequenceNum)
-		recordBuffer.sequenceNum += int32(len(batch.records))
+		atomic.StoreInt32(&batch.baseSequence, recBuf.sequenceNum)
+		recBuf.sequenceNum += int32(len(batch.records))
 	}
 }
 
@@ -824,7 +841,7 @@ var emptyRecordsPool = sync.Pool{
 
 // newRecordBatch returns a new record batch for a topic and partition
 // containing the given record.
-func (records *recordBuffer) newRecordBatch(producerID int64, producerEpoch int16, pr promisedRecord) *recordBatch {
+func (recBuf *recordBuffer) newRecordBatch(producerID int64, producerEpoch int16, pr promisedRecord) *recordBatch {
 	const recordBatchOverhead = recordsOverhead + // NULLABLE_BYTES
 		8 + // firstOffset
 		4 + // batchLength
@@ -840,12 +857,12 @@ func (records *recordBuffer) newRecordBatch(producerID int64, producerEpoch int1
 		4 + // baseSequence
 		4 // record array length
 	b := &recordBatch{
-		owner:          records,
+		owner:          recBuf,
 		firstTimestamp: pr.Timestamp.UnixNano() / 1e6,
 		records:        (*(emptyRecordsPool.Get().(*[]promisedNumberedRecord)))[:0],
 		producerID:     producerID,
 		producerEpoch:  producerEpoch,
-		baseSequence:   records.sequenceNum,
+		baseSequence:   recBuf.sequenceNum,
 	}
 	pnr := promisedNumberedRecord{
 		b.calculateRecordNumbers(pr.Record),
@@ -938,10 +955,10 @@ func (batch *recordBatch) isFirstBatchInRecordBuf() bool {
 // removeFromRecordBuf is called in a successful produce response, incrementing
 // past the record buffer's now-known-to-be-in-Kafka-batch.
 func (batch *recordBatch) removeFromRecordBuf() {
-	recordBuffer := batch.owner
-	recordBuffer.mu.Lock()
-	recordBuffer.lockedRemoveBatch0()
-	recordBuffer.mu.Unlock()
+	recBuf := batch.owner
+	recBuf.mu.Lock()
+	recBuf.lockedRemoveBatch0()
+	recBuf.mu.Unlock()
 }
 
 // isTimedOut, called only on frozen batches, returns whether the first record

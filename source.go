@@ -121,42 +121,44 @@ func (c *consumption) use() *seqOffsetFrom {
 //
 // If a buffered fetch had an error, this does not clear the error state. We
 // leave that for metadata updating.
-func (consumption *consumption) setOffset(offset int64, fromSeq uint64) {
-	consumption.mu.Lock()
-	defer consumption.mu.Unlock()
+func (c *consumption) setOffset(offset int64, fromSeq uint64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
 	// fromSeq could be less than seq if this setOffset is from a
 	// takeBuffered after assignment invalidation.
-	if fromSeq < consumption.seq {
+	if fromSeq < c.seq {
 		return
 	}
-	if fromSeq > consumption.seq {
-		consumption.failing = false
-		consumption.seq = fromSeq
+	if fromSeq > c.seq {
+		c.failing = false
+		c.seq = fromSeq
 	}
-	consumption.inUse = false
+	c.inUse = false
 
-	lastOffset := consumption.offset
-	consumption.offset = offset
-	if offset != -1 && offset != lastOffset {
-		consumption.source.maybeBeginConsuming()
+	lastOffset := c.offset
+	c.offset = offset
+	// The source could theoretically be nil here if we loaded a failing
+	// partition.
+	if offset != -1 && offset != lastOffset && c.source != nil {
+		c.source.maybeBeginConsuming()
 	}
 }
 
 // restartOffset resets a consumption to usable and triggers the source to
 // begin consuming again. This is called if a consumption was used in a fetch
 // that ultimately returned no new data.
-func (consumption *consumption) setUnused(fromSeq uint64) {
-	consumption.mu.Lock()
-	defer consumption.mu.Unlock()
+func (c *consumption) setUnused(fromSeq uint64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
 	// fromSeq could be less than seq if this setOffset is from a
 	// takeBuffered after assignment invalidation.
-	if fromSeq < consumption.seq {
+	if fromSeq < c.seq {
 		return
 	}
 
-	consumption.inUse = false
+	c.inUse = false
 	// No need to maybeBeginConsuming since this is called from unuseAll
 	// which allows the source to continue when it finishes.
 }
@@ -168,20 +170,20 @@ func (consumption *consumption) setUnused(fromSeq uint64) {
 // sink when it is time to update. That is, we only update state if the buffer
 // did not move due to a concurrent metadata update during a produce request.
 //
-// We do not need to worry about that type of movement for a consumption. At
+// We do not need to worry about that type of movement for a c. At
 // worst, an in flight fetch will see NotLeaderForPartition, setting the
 // consumption to failing and triggering a metadata update. The metadata update
 // will quickly clear the failing state and the consumption will resume as
 // normal on the new source.
-func (consumption *consumption) setFailing(fromSeq uint64) {
-	consumption.mu.Lock()
-	defer consumption.mu.Unlock()
+func (c *consumption) setFailing(fromSeq uint64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
-	if fromSeq < consumption.seq {
+	if fromSeq < c.seq {
 		return
 	}
 
-	consumption.failing = true
+	c.failing = true
 }
 
 // clearFailing is called to clear any failing state.
@@ -189,15 +191,18 @@ func (consumption *consumption) setFailing(fromSeq uint64) {
 // This is called when a consumption is added to a source (to clear a failing
 // state from migrating consumptions between sources) or when a metadata update
 // sees the consumption is still on the same source.
-func (consumption *consumption) clearFailing() {
-	consumption.mu.Lock()
-	defer consumption.mu.Unlock()
+//
+// Note the source cannot be nil here, since nil sources correspond to load
+// errors, and partitions with load errors do not call clearFailing.
+func (c *consumption) clearFailing() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
-	wasFailing := consumption.failing
-	consumption.failing = false
+	wasFailing := c.failing
+	c.failing = false
 
-	if wasFailing && consumption.offset != -1 {
-		consumption.source.maybeBeginConsuming()
+	if wasFailing && c.offset != -1 {
+		c.source.maybeBeginConsuming()
 	}
 }
 
@@ -251,26 +256,30 @@ func (source *recordSource) createRequest() (req *fetchRequest, again bool) {
 
 	consumptionIdx := source.allConsumptionsStart
 	for i := 0; i < len(source.allConsumptions); i++ {
-		consumption := source.allConsumptions[consumptionIdx]
+		c := source.allConsumptions[consumptionIdx]
 		consumptionIdx = (consumptionIdx + 1) % len(source.allConsumptions)
 
 		// Ensure this consumption cannot be moved across topicPartitions
 		// while we using its fields.
-		consumption.mu.Lock()
+		c.mu.Lock()
 
 		// If the offset is -1, a metadata update added a consumption to
 		// this source, but it is not yet in use.
-		if consumption.offset == -1 || consumption.inUse || consumption.failing {
-			consumption.mu.Unlock()
+		if c.offset == -1 || c.inUse || c.failing {
+			c.mu.Unlock()
 			continue
 		}
 
 		again = true
-		req.addConsumptionLocked(consumption)
-		consumption.mu.Unlock()
+		req.addConsumptionLocked(c)
+		c.mu.Unlock()
 	}
 
-	source.allConsumptionsStart = (source.allConsumptionsStart + 1) % len(source.allConsumptions)
+	// We could have lost our only record buffer just before we grabbed the
+	// lock above.
+	if len(source.allConsumptions) > 0 {
+		source.allConsumptionsStart = (source.allConsumptionsStart + 1) % len(source.allConsumptions)
+	}
 
 	return req, again
 }

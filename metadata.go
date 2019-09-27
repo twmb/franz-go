@@ -78,6 +78,7 @@ func (c *Client) triggerUpdateMetadata() {
 // updateMetadataLoop updates metadata whenever the update ticker ticks,
 // or whenever deliberately triggered.
 func (c *Client) updateMetadataLoop() {
+	defer close(c.metadone)
 	var consecutiveErrors int
 
 	ticker := time.NewTicker(c.cfg.client.metadataMaxAge)
@@ -221,6 +222,8 @@ func (c *Client) fetchTopicMetadata(reqTopics []string) (map[string]*topicPartit
 				leaderEpoch: partMeta.LeaderEpoch,
 
 				records: &recordBuffer{
+					cl: c,
+
 					recordBuffersIdx: -1, // required, see below
 					lastAckedOffset:  -1, // expected sentinel
 
@@ -238,6 +241,9 @@ func (c *Client) fetchTopicMetadata(reqTopics []string) (map[string]*topicPartit
 				offline:  partMeta.OfflineReplicas,
 			}
 
+			p.records.topicPartition = p
+			p.consumption.topicPartition = p
+
 			broker, exists := c.brokers[p.leader]
 			if !exists {
 				if p.loadErr == nil {
@@ -245,10 +251,7 @@ func (c *Client) fetchTopicMetadata(reqTopics []string) (map[string]*topicPartit
 				}
 			} else {
 				p.records.sink = broker.recordSink
-				p.records.topicPartition = p
-
 				p.consumption.source = broker.recordSource
-				p.consumption.topicPartition = p
 			}
 
 			parts.partitions = append(parts.partitions, p.partition)
@@ -348,21 +351,25 @@ func (l *topicPartitions) merge(r *topicPartitionsData) (needsRetry bool) {
 		// Same logic for the consumption.
 		if newTP.records.sink == oldTP.records.sink {
 			newTP.records = oldTP.records
-			newTP.records.clearFailing()
 			newTP.consumption = oldTP.consumption
-			newTP.consumption.clearFailing()
-			continue
+		} else {
+			oldTP.migrateProductionTo(newTP)
+			oldTP.migrateConsumptionTo(newTP)
 		}
-
-		oldTP.migrateProductionTo(newTP)
-		oldTP.migrateConsumptionTo(newTP)
-
+		newTP.records.clearFailing()
+		newTP.consumption.clearFailing()
 	}
 
 	// Anything left with a negative allPartsRecsIdx is a new topic
 	// partition. We use this to add the new tp's records to its sink.
 	// Same reasoning applies to the consumption offset.
 	for _, newTP := range r.all {
+		// If the partition has a load error, even if it is new, we
+		// can't do anything with it now. Its record sink and source
+		// consumption will be nil.
+		if newTP.loadErr != nil {
+			continue
+		}
 		if newTP.records.recordBuffersIdx == -1 {
 			newTP.records.sink.addSource(newTP.records)
 		}
