@@ -422,9 +422,10 @@ type RecordBatch struct {
 	// Length is the wire length of everything that follows this field.
 	Length int32
 
-	// PartitionLeaderEpoch is a number that Kafka uses for cluster
-	// communication. Clients generally do not need to worry about this
-	// field and producers should set it to -1.
+	// PartitionLeaderEpoch is the leader epoch of the broker at the time
+	// this batch was written. Kafka uses this for cluster communication,
+	// but clients can also use this to better aid truncation detection.
+	// See KIP-320. Producers should set this to -1.
 	PartitionLeaderEpoch int32
 
 	// Magic is the current "magic" number of this message format.
@@ -825,7 +826,7 @@ type ProduceResponseTopicPartition struct {
 	// append time flag (which producers cannot do).
 	LogAppendTime int64 // v2+
 
-	// LogStartOffset, introduced in Kafka 1.0.0,  can be used to see if an
+	// LogStartOffset, introduced in Kafka 1.0.0, can be used to see if an
 	// UNKNOWN_PRODUCER_ID means Kafka rotated records containing the used
 	// producer ID out of existence, or if Kafka lost data.
 	LogStartOffset int64 // v5+
@@ -927,7 +928,7 @@ type FetchRequestTopicPartition struct {
 	// allows brokers to check if the client is fenced (has an out of date
 	// leader) or is using an unknown leader.
 	//
-	// The initial leader epoch can be gleaned from a MetadataResponse.
+	// The initial leader epoch can be determined from a MetadataResponse.
 	// To skip log truncation checking, use -1.
 	CurrentLeaderEpoch int32 // v9+
 
@@ -1365,7 +1366,7 @@ type ListOffsetsRequestTopicPartition struct {
 	// allows brokers to check if the client is fenced (has an out of date
 	// leader) or is using an unknown leader.
 	//
-	// The initial leader epoch can be gleaned from a MetadataResponse.
+	// The initial leader epoch can be determined from a MetadataResponse.
 	// To skip log truncation checking, use -1.
 	CurrentLeaderEpoch int32 // v4+
 
@@ -3208,7 +3209,7 @@ type OffsetCommitRequestTopicPartition struct {
 	// LeaderEpoch, proposed in KIP-320 and introduced in Kafka 2.1.0,
 	// is the leader epoch of the record this request is committing.
 	//
-	// The initial leader epoch can be gleaned from a MetadataResponse.
+	// The initial leader epoch can be determined from a MetadataResponse.
 	// To skip log truncation checking, use -1.
 	LeaderEpoch int32 // v6+
 
@@ -5586,6 +5587,7 @@ func (v *DeleteRecordsResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+// TODO
 type InitProducerIDRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
@@ -5675,33 +5677,42 @@ func (v *InitProducerIDResponse) ReadFrom(src []byte) error {
 }
 
 type OffsetForLeaderEpochRequestTopicPartition struct {
+	// Partition is the number of a partition.
 	Partition int32
 
 	// CurrentLeaderEpoch, proposed in KIP-320 and introduced in Kafka 2.1.0,
 	// allows brokers to check if the client is fenced (has an out of date
-	// leader) or is using an unknown leader.
+	// leader) or if the client is ahead of the broker.
 	//
-	// The initial leader epoch can be gleaned from a MetadataResponse.
+	// The initial leader epoch can be determined from a MetadataResponse.
 	CurrentLeaderEpoch int32 // v2+
 
+	// LeaderEpoch is the epoch to fetch the end offset for.
 	LeaderEpoch int32
 }
 type OffsetForLeaderEpochRequestTopic struct {
+	// Topic is the name of a topic.
 	Topic string
 
+	// Partitions are partitions within a topic to fetch leader epoch offsets for.
 	Partitions []OffsetForLeaderEpochRequestTopicPartition
 }
 
-// TODO more docs.s
-// KIP-392 in v3.
+// OffsetForLeaderEpochRequest requests log end offsets for partitions.
+//
+// Version 2, proposed in KIP-320 and introduced in Kafka 2.1.0, can be used by
+// consumers to perform more accurate offset resetting in the case of data loss.
+//
+// In support of version 2, this requires DESCRIBE on TOPIC.
 type OffsetForLeaderEpochRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
-	// ReplicaID is the broker ID of the follower, or -1 if this request is
-	// from a consumer.
+	// ReplicaID, added in support of KIP-392, is the broker ID of the follower,
+	// or -1 if this request is from a consumer.
 	ReplicaID int32 // v3+
 
+	// Topics are topics to fetch leader epoch offsets for.
 	Topics []OffsetForLeaderEpochRequestTopic
 }
 
@@ -5754,25 +5765,72 @@ func (v *OffsetForLeaderEpochRequest) AppendTo(dst []byte) []byte {
 }
 
 type OffsetForLeaderEpochResponseTopicPartition struct {
+	// ErrorCode is the error code returned on request failure.
+	//
+	// TOPIC_AUTHORIZATION_FAILED is returned if the client does not have
+	// the necessary permissions to issue this request.
+	//
+	// KAFKA_STORAGE_ERROR is returned if the partition is offline.
+	//
+	// NOT_LEADER_FOR_PARTITION is returned if the broker knows of the partition
+	// but does not own it.
+	//
+	// UNKNOWN_TOPIC_OR_PARTITION is returned if the broker does not know of the
+	// partition.
+	//
+	// FENCED_LEADER_EPOCH is returned if the client is using a current leader epoch
+	// older than the actual leader epoch.
+	//
+	// UNKNOWN_LEADER_EPOCH if returned if the client is using a current leader epoch
+	// that the actual leader does not know of. This could occur when the client
+	// has newer metadata than the broker when the broker just became the leader for
+	//  a replica.
 	ErrorCode int16
 
+	// Partition is the partition this response is for.
 	Partition int32
 
+	// LeaderEpoch is similar to the requested leader epoch, but corresponds to the
+	// next field. If the requested leader epoch is unknown, this is -1. If the
+	// requested epoch had no records produced during the requested epoch, this
+	// is the first prior epoch that had records.
 	LeaderEpoch int32
 
+	// EndOffset is either (1) just past the last recorded offset in the
+	// current partition if the broker leader has the same epoch as the
+	// leader epoch in the request, or (2) the beginning offset of the next
+	// epoch if the leader is past the requested epoch. The second scenario
+	// can be seen as equivalent to the first: the beginning offset of the
+	// next epoch is just past the final offset of the prior epoch.
+	//
+	// (2) allows consumers to detect data loss: if the consumer consumed
+	// past the end offset that is returned, then the consumer should reset
+	// to the returned offset and the consumer knows everything past the end
+	// offset was lost.
+	//
+	// With the prior field, consumers know that at this offset, the broker
+	// either has no more records (consumer is caught up), or the broker
+	// transitioned to a new epoch.
 	EndOffset int64
 }
 type OffsetForLeaderEpochResponseTopic struct {
+	// Topic is the topic this response corresponds to.
 	Topic string
 
+	// Partitions are responses to partitions in a topic in the request.
 	Partitions []OffsetForLeaderEpochResponseTopicPartition
 }
+
+// OffsetForLeaderEpochResponse is returned from an OffsetForLeaderEpochRequest.
 type OffsetForLeaderEpochResponse struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
-	ThrottleTimeMs int32
+	// ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+	// after this request.
+	ThrottleTimeMs int32 // v2+
 
+	// Topics are responses to topics in the request.
 	Topics []OffsetForLeaderEpochResponseTopic
 }
 
@@ -5782,7 +5840,7 @@ func (v *OffsetForLeaderEpochResponse) ReadFrom(src []byte) error {
 	b := kbin.Reader{Src: src}
 	{
 		s := v
-		{
+		if version >= 2 {
 			v := b.Int32()
 			s.ThrottleTimeMs = v
 		}
@@ -6286,7 +6344,7 @@ type TxnOffsetCommitRequestTopicPartition struct {
 	// allows brokers to check if the client is fenced (has an out of date
 	// leader) or is using an unknown leader.
 	//
-	// The initial leader epoch can be gleaned from a MetadataResponse.
+	// The initial leader epoch can be determined from a MetadataResponse.
 	// To skip log truncation checking, use -1.
 	LeaderEpoch int32 // v2+
 
@@ -8544,7 +8602,7 @@ func (v *DeleteGroupsResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
-type ElectPreferredLeadersRequestTopicPartition struct {
+type ElectLeadersRequestTopic struct {
 	// Topic is a topic to trigger leader elections for (but only for the
 	// partitions below).
 	Topic string
@@ -8554,11 +8612,11 @@ type ElectPreferredLeadersRequestTopicPartition struct {
 	Partitions []int32
 }
 
-// ElectPreferredLeadersRequest begins a leader election for all given topic
+// ElectLeadersRequest begins a leader election for all given topic
 // partitions. This request was added in Kafka 2.2.0 to replace the zookeeper
 // only option of triggering leader elections before. See KIP-183 for more
 // details. KIP-460 introduced the ElectionType field with Kafka 2.4.0.
-type ElectPreferredLeadersRequest struct {
+type ElectLeadersRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
@@ -8567,25 +8625,25 @@ type ElectPreferredLeadersRequest struct {
 	// (i.e., unclean leader election).
 	ElectionType int8 // v1+
 
-	// TopicPartitions is an array of topics and corresponding partitions to
+	// Topics is an array of topics and corresponding partitions to
 	// trigger leader elections for, or null for all.
-	TopicPartitions []ElectPreferredLeadersRequestTopicPartition
+	Topics []ElectLeadersRequestTopic
 
 	// TimeoutMs is how long to wait for the response. This limits how long to
 	// wait since responses are not sent until election results are complete.
 	TimeoutMs int32
 }
 
-func (*ElectPreferredLeadersRequest) Key() int16                 { return 43 }
-func (*ElectPreferredLeadersRequest) MaxVersion() int16          { return 1 }
-func (v *ElectPreferredLeadersRequest) SetVersion(version int16) { v.Version = version }
-func (v *ElectPreferredLeadersRequest) GetVersion() int16        { return v.Version }
-func (v *ElectPreferredLeadersRequest) IsAdminRequest()          {}
-func (v *ElectPreferredLeadersRequest) ResponseKind() Response {
-	return &ElectPreferredLeadersResponse{Version: v.Version}
+func (*ElectLeadersRequest) Key() int16                 { return 43 }
+func (*ElectLeadersRequest) MaxVersion() int16          { return 1 }
+func (v *ElectLeadersRequest) SetVersion(version int16) { v.Version = version }
+func (v *ElectLeadersRequest) GetVersion() int16        { return v.Version }
+func (v *ElectLeadersRequest) IsAdminRequest()          {}
+func (v *ElectLeadersRequest) ResponseKind() Response {
+	return &ElectLeadersResponse{Version: v.Version}
 }
 
-func (v *ElectPreferredLeadersRequest) AppendTo(dst []byte) []byte {
+func (v *ElectLeadersRequest) AppendTo(dst []byte) []byte {
 	version := v.Version
 	_ = version
 	if version >= 1 {
@@ -8593,7 +8651,7 @@ func (v *ElectPreferredLeadersRequest) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendInt8(dst, v)
 	}
 	{
-		v := v.TopicPartitions
+		v := v.Topics
 		dst = kbin.AppendNullableArrayLen(dst, len(v), v == nil)
 		for i := range v {
 			v := &v[i]
@@ -8618,9 +8676,9 @@ func (v *ElectPreferredLeadersRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 
-type ElectPreferredLeadersResponseReplicaElectionResultPartitionResult struct {
-	// PartitionID is the partition for this result.
-	PartitionID int32
+type ElectLeadersResponseTopicPartition struct {
+	// Partition is the partition for this result.
+	Partition int32
 
 	// ErrorCode is the error code returned for this topic/partition leader
 	// election.
@@ -8644,14 +8702,14 @@ type ElectPreferredLeadersResponseReplicaElectionResultPartitionResult struct {
 	// ErrorMessage is an informative message if the leader election failed.
 	ErrorMessage *string
 }
-type ElectPreferredLeadersResponseReplicaElectionResult struct {
+type ElectLeadersResponseTopic struct {
 	// Topic is topic for the given partition results below.
 	Topic string
 
-	// PartitionResults contains election results for a topic's partitions.
-	PartitionResults []ElectPreferredLeadersResponseReplicaElectionResultPartitionResult
+	// Partitions contains election results for a topic's partitions.
+	Partitions []ElectLeadersResponseTopicPartition
 }
-type ElectPreferredLeadersResponse struct {
+type ElectLeadersResponse struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
@@ -8663,14 +8721,13 @@ type ElectPreferredLeadersResponse struct {
 	//
 	// CLUSTER_AUTHORIZATION_FAILED is returned if the client is not
 	// authorized to reassign partitions.
-	ErrorCode int16
+	ErrorCode int16 // v1+
 
-	// ReplicaElectionResults is the leader election results for each requested
-	// topic / partition.
-	ReplicaElectionResults []ElectPreferredLeadersResponseReplicaElectionResult
+	// Topics contains leader election results for each requested topic.
+	Topics []ElectLeadersResponseTopic
 }
 
-func (v *ElectPreferredLeadersResponse) ReadFrom(src []byte) error {
+func (v *ElectLeadersResponse) ReadFrom(src []byte) error {
 	version := v.Version
 	_ = version
 	b := kbin.Reader{Src: src}
@@ -8680,15 +8737,15 @@ func (v *ElectPreferredLeadersResponse) ReadFrom(src []byte) error {
 			v := b.Int32()
 			s.ThrottleTimeMs = v
 		}
-		{
+		if version >= 1 {
 			v := b.Int16()
 			s.ErrorCode = v
 		}
 		{
-			v := s.ReplicaElectionResults
+			v := s.Topics
 			a := v
 			for i := b.ArrayLen(); i > 0; i-- {
-				a = append(a, ElectPreferredLeadersResponseReplicaElectionResult{})
+				a = append(a, ElectLeadersResponseTopic{})
 				v := &a[len(a)-1]
 				{
 					s := v
@@ -8697,16 +8754,16 @@ func (v *ElectPreferredLeadersResponse) ReadFrom(src []byte) error {
 						s.Topic = v
 					}
 					{
-						v := s.PartitionResults
+						v := s.Partitions
 						a := v
 						for i := b.ArrayLen(); i > 0; i-- {
-							a = append(a, ElectPreferredLeadersResponseReplicaElectionResultPartitionResult{})
+							a = append(a, ElectLeadersResponseTopicPartition{})
 							v := &a[len(a)-1]
 							{
 								s := v
 								{
 									v := b.Int32()
-									s.PartitionID = v
+									s.Partition = v
 								}
 								{
 									v := b.Int16()
@@ -8719,12 +8776,12 @@ func (v *ElectPreferredLeadersResponse) ReadFrom(src []byte) error {
 							}
 						}
 						v = a
-						s.PartitionResults = v
+						s.Partitions = v
 					}
 				}
 			}
 			v = a
-			s.ReplicaElectionResults = v
+			s.Topics = v
 		}
 	}
 	return b.Complete()
@@ -9412,7 +9469,7 @@ func RequestForKey(key int16) Request {
 	case 42:
 		return new(DeleteGroupsRequest)
 	case 43:
-		return new(ElectPreferredLeadersRequest)
+		return new(ElectLeadersRequest)
 	case 44:
 		return new(IncrementalAlterConfigsRequest)
 	case 45:
@@ -9515,7 +9572,7 @@ func NameForKey(key int16) string {
 	case 42:
 		return "DeleteGroups"
 	case 43:
-		return "ElectPreferredLeaders"
+		return "ElectLeaders"
 	case 44:
 		return "IncrementalAlterConfigs"
 	case 45:
