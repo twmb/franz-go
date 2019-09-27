@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -47,9 +46,6 @@ type Client struct {
 	metawait         metawait
 }
 
-// domainRe validates domains: a label, and at least one dot-label.
-var domainRe = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*(?:\.[a-z0-9]+(?:-[a-z0-9]+)*)+$`)
-
 // stddialer is the default dialer for dialing connections.
 var stddialer = net.Dialer{Timeout: 10 * time.Second}
 
@@ -72,19 +68,6 @@ func NewClient(opts ...Opt) (*Client, error) {
 		return nil, err
 	}
 
-	isAddr := func(addr string) bool { return net.ParseIP(addr) != nil }
-	isDomain := func(domain string) bool {
-		if len(domain) < 3 || len(domain) > 255 {
-			return false
-		}
-		for _, label := range strings.Split(domain, ".") {
-			if len(label) > 63 {
-				return false
-			}
-		}
-		return domainRe.MatchString(strings.ToLower(domain))
-	}
-
 	seedAddrs := make([]string, 0, len(cfg.client.seedBrokers))
 	for _, seedBroker := range cfg.client.seedBrokers {
 		addr := seedBroker
@@ -100,10 +83,6 @@ func NewClient(opts ...Opt) (*Client, error) {
 
 		if addr == "localhost" {
 			addr = "127.0.0.1"
-		}
-
-		if !isAddr(addr) && !isDomain(addr) {
-			return nil, fmt.Errorf("%q is neither an IP address nor a domain", addr)
 		}
 
 		seedAddrs = append(seedAddrs, net.JoinHostPort(addr, strconv.Itoa(port)))
@@ -149,6 +128,10 @@ func NewClient(opts ...Opt) (*Client, error) {
 func (c *Client) broker() *broker {
 	c.brokersMu.Lock()
 	defer c.brokersMu.Unlock()
+
+	if c.anyBrokerIdx >= len(c.anyBroker) {
+		c.anyBrokerIdx = 0
+	}
 
 	b := c.anyBroker[c.anyBrokerIdx]
 	c.anyBrokerIdx++
