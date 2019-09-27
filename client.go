@@ -44,6 +44,7 @@ type Client struct {
 
 	updateMetadataCh chan struct{}
 	metawait         metawait
+	metadone         chan struct{}
 }
 
 // stddialer is the default dialer for dialing connections.
@@ -106,6 +107,7 @@ func NewClient(opts ...Opt) (*Client, error) {
 		coordinators: make(map[coordinatorKey]int32),
 
 		updateMetadataCh: make(chan struct{}, 1),
+		metadone:         make(chan struct{}),
 	}
 	c.consumer.cl = c
 	c.consumer.sourcesReadyCond = sync.NewCond(&c.consumer.sourcesReadyMu)
@@ -265,6 +267,19 @@ func (c *Client) Close() {
 		broker.recordSource.maybeBeginConsuming() // same
 	}
 	c.brokersMu.Unlock()
+
+	// Wait for metadata to quit so we know no more erroring topic
+	// partitions will be created.
+	<-c.metadone
+
+	// We must manually fail all partitions that never had a sink.
+	for _, partitions := range c.loadTopics() {
+		for _, partition := range partitions.load().all {
+			if partition.records.sink == nil {
+				partition.records.failAllRecords(ErrBrokerDead)
+			}
+		}
+	}
 
 	nclientsDec()
 }
