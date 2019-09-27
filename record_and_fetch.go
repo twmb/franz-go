@@ -58,6 +58,10 @@ type Record struct {
 	// successful.
 	Partition int32
 
+	// LeaderEpoch is the leader epoch of the broker at the time this
+	// record was written, or -1 if on message sets.
+	LeaderEpoch int32
+
 	// Offset is the offset that a record is written as.
 	//
 	// For producing, this is left unset. If acks are required, this field
