@@ -53,7 +53,7 @@ type stickyTopicPartitioner struct {
 func (p *stickyTopicPartitioner) onNewBatch()                    { p.lastPart, p.onPart = p.onPart, -1 }
 func (*stickyTopicPartitioner) requiresConsistency(*Record) bool { return false }
 func (p *stickyTopicPartitioner) partition(_ *Record, n int) int {
-	if p.onPart == -1 {
+	if p.onPart == -1 || p.onPart >= n {
 		if n == 1 {
 			p.onPart = 1
 		} else {
@@ -95,10 +95,9 @@ func (*keyPartitioner) forTopic(string) topicPartitioner {
 }
 
 type stickyKeyTopicPartitioner struct {
-	lastPart  int
-	onPart    int
-	sinceLast int
-	rng       *rand.Rand
+	lastPart int
+	onPart   int
+	rng      *rand.Rand
 }
 
 func (p *stickyKeyTopicPartitioner) onNewBatch()                      { p.lastPart, p.onPart = p.onPart, -1 }
@@ -111,9 +110,7 @@ func (p *stickyKeyTopicPartitioner) partition(r *Record, n int) int {
 		// which ultimately was never necessary but here we are.
 		return int(murmur2(r.Key)&0x7fffffff) % n
 	}
-	p.sinceLast++
-	if p.onPart == -1 {
-		p.sinceLast = 0
+	if p.onPart == -1 || p.onPart >= n {
 		if n == 1 {
 			p.onPart = 1
 		} else {
