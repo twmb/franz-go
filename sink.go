@@ -208,6 +208,7 @@ func (sink *recordSink) drain() {
 	again := true
 	for again {
 		if atomic.SwapUint32(&sink.doBackoff, 0) == 1 {
+			sink.broker.client.triggerUpdateMetadata()
 			sink.backoff()
 			atomic.AddUint32(&sink.backoffSeq, 1)
 			atomic.StoreUint32(&sink.doBackoff, 0) // clear any pile on failures before seq inc
@@ -501,8 +502,8 @@ func (sink *recordSink) handleRetryBatches(retry reqBatches, withBackoff bool) {
 	}
 }
 
-// addSource adds a new recordBuffer to a sink, unconditionally resetting the
-// backoff timer using the buffer's clearFailing.
+// addSource adds a new recordBuffer to a sink, unconditionally clearing
+// the fail state.
 func (sink *recordSink) addSource(add *recordBuffer) {
 	sink.mu.Lock()
 	add.recordBuffersIdx = len(sink.recordBuffers)
