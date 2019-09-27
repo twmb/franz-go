@@ -1,9 +1,8 @@
 package kgo
 
 import (
+	"math/rand"
 	"time"
-
-	"golang.org/x/exp/rand"
 )
 
 // Partitioner creates topic partitioners to determine which partition messages
@@ -38,23 +37,33 @@ type stickyPartitioner struct{}
 
 func (*stickyPartitioner) forTopic(string) topicPartitioner {
 	s := &stickyTopicPartitioner{
-		onPart: -1,
-		rng:    rand.New(new(rand.PCGSource)),
+		lastPart: -1,
+		onPart:   -1,
+		rng:      rand.New(rand.NewSource(time.Now().UnixNano())),
 	}
-	s.rng.Seed(uint64(time.Now().UnixNano()))
 	return s
 }
 
 type stickyTopicPartitioner struct {
-	onPart int
-	rng    *rand.Rand
+	lastPart int
+	onPart   int
+	rng      *rand.Rand
 }
 
-func (p *stickyTopicPartitioner) onNewBatch()                    { p.onPart = -1 }
+func (p *stickyTopicPartitioner) onNewBatch()                    { p.lastPart, p.onPart = p.onPart, -1 }
 func (*stickyTopicPartitioner) requiresConsistency(*Record) bool { return false }
 func (p *stickyTopicPartitioner) partition(_ *Record, n int) int {
 	if p.onPart == -1 {
-		p.onPart = p.rng.Intn(n)
+		if n == 1 {
+			p.onPart = 1
+		} else {
+			for {
+				p.onPart = p.rng.Intn(n)
+				if p.onPart != p.lastPart {
+					break
+				}
+			}
+		}
 	}
 	return p.onPart
 }
@@ -80,18 +89,19 @@ type keyPartitioner struct{}
 func (*keyPartitioner) forTopic(string) topicPartitioner {
 	s := &stickyKeyTopicPartitioner{
 		onPart: -1,
-		rng:    rand.New(new(rand.PCGSource)),
+		rng:    rand.New(rand.NewSource(time.Now().UnixNano())),
 	}
-	s.rng.Seed(uint64(time.Now().UnixNano()))
 	return s
 }
 
 type stickyKeyTopicPartitioner struct {
-	onPart int
-	rng    *rand.Rand
+	lastPart  int
+	onPart    int
+	sinceLast int
+	rng       *rand.Rand
 }
 
-func (p *stickyKeyTopicPartitioner) onNewBatch()                      { p.onPart = -1 }
+func (p *stickyKeyTopicPartitioner) onNewBatch()                      { p.lastPart, p.onPart = p.onPart, -1 }
 func (*stickyKeyTopicPartitioner) requiresConsistency(r *Record) bool { return r.Key != nil }
 func (p *stickyKeyTopicPartitioner) partition(r *Record, n int) int {
 	if r.Key != nil {
@@ -101,8 +111,19 @@ func (p *stickyKeyTopicPartitioner) partition(r *Record, n int) int {
 		// which ultimately was never necessary but here we are.
 		return int(murmur2(r.Key)&0x7fffffff) % n
 	}
+	p.sinceLast++
 	if p.onPart == -1 {
-		p.onPart = p.rng.Intn(n)
+		p.sinceLast = 0
+		if n == 1 {
+			p.onPart = 1
+		} else {
+			for {
+				p.onPart = p.rng.Intn(n)
+				if p.onPart != p.lastPart {
+					break
+				}
+			}
+		}
 	}
 	return p.onPart
 }
