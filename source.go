@@ -198,10 +198,12 @@ func (c *consumption) clearFailing() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	wasFailing := c.failing
 	c.failing = false
 
-	if wasFailing && c.offset != -1 {
+	// We always restart draining if we can; it is possible that we were
+	// not failing in the erroring sense, but that the broker the
+	// consumption was on disappeared and the consumption migrated.
+	if c.offset != -1 {
 		c.source.maybeBeginConsuming()
 	}
 }
@@ -331,9 +333,9 @@ func (source *recordSource) handleReqResp(req *fetchRequest, resp kmsg.Response,
 	var needsMetaUpdate bool
 
 	if err != nil {
+		source.backoff() // backoff before unuseAll to avoid inflight race
 		source.unuseAll(req.offsets)
 		source.broker.client.triggerUpdateMetadata()
-		source.backoff()
 		return
 	}
 	source.consecutiveFailures = 0
