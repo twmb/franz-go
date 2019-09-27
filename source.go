@@ -502,7 +502,12 @@ func (o *seqOffset) processRecordBatch(
 		return
 	}
 	for i := range krecords {
-		record := recordToRecord(topic, fetchPart.Partition, batch, &krecords[i])
+		record := recordToRecord(
+			topic,
+			fetchPart.Partition,
+			batch,
+			&krecords[i],
+		)
 		o.maybeAddRecord(fetchPart, record)
 	}
 }
@@ -646,6 +651,7 @@ func recordToRecord(
 		TimestampType: int8((batch.Attributes & 0x0008) >> 3),
 		Topic:         topic,
 		Partition:     partition,
+		LeaderEpoch:   batch.PartitionLeaderEpoch,
 		Offset:        batch.FirstOffset + int64(record.OffsetDelta),
 	}
 }
@@ -661,6 +667,7 @@ func v0MessageToRecord(
 		TimestampType: -1,
 		Topic:         topic,
 		Partition:     partition,
+		LeaderEpoch:   -1,
 		Offset:        message.Offset,
 	}
 }
@@ -677,6 +684,7 @@ func v1MessageToRecord(
 		TimestampType: (message.Attributes & 0x0004) >> 2,
 		Topic:         topic,
 		Partition:     partition,
+		LeaderEpoch:   -1,
 		Offset:        message.Offset,
 	}
 }
