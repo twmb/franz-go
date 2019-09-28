@@ -220,14 +220,14 @@ func (c *Client) fetchTopicMetadata(reqTopics []string) (map[string]*topicPartit
 	c.brokersMu.RLock()
 	defer c.brokersMu.RUnlock()
 
-	for i := range meta.TopicMetadata {
-		topicMeta := &meta.TopicMetadata[i]
+	for i := range meta.Topics {
+		topicMeta := &meta.Topics[i]
 
 		parts := &topicPartitionsData{
 			loadErr:    kerr.ErrorForCode(topicMeta.ErrorCode),
 			isInternal: topicMeta.IsInternal,
-			all:        make(map[int32]*topicPartition, len(topicMeta.PartitionMetadata)),
-			writable:   make(map[int32]*topicPartition, len(topicMeta.PartitionMetadata)),
+			all:        make(map[int32]*topicPartition, len(topicMeta.Partitions)),
+			writable:   make(map[int32]*topicPartition, len(topicMeta.Partitions)),
 		}
 		topics[topicMeta.Topic] = parts
 
@@ -235,8 +235,8 @@ func (c *Client) fetchTopicMetadata(reqTopics []string) (map[string]*topicPartit
 			continue
 		}
 
-		for i := range topicMeta.PartitionMetadata {
-			partMeta := &topicMeta.PartitionMetadata[i]
+		for i := range topicMeta.Partitions {
+			partMeta := &topicMeta.Partitions[i]
 
 			p := &topicPartition{
 				topic:     topicMeta.Topic,

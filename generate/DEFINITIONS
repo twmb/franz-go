@@ -682,9 +682,9 @@ MetadataResponse =>
   ClusterID: nullable-string // v2+
   // ControllerID is the ID of the controller broker (the admin broker).
   ControllerID: int32 // v1+
-  // TopicMetadata contains metadata about each topic requested in the
+  // Topics contains metadata about each topic requested in the
   // MetadataRequest.
-  TopicMetadata: [=>]
+  Topics: [=>]
     // ErrorCode is any error for a topic in a metadata request.
     //
     // TOPIC_AUTHORIZATION_FAILED is returned if the client is not authorized
@@ -703,8 +703,8 @@ MetadataResponse =>
     Topic: string
     // IsInternal signifies whether this topic is a Kafka internal topic.
     IsInternal: bool // v1+
-    // PartitionMetadata contains metadata about partitions for a topic.
-    PartitionMetadata: [=>]
+    // Partitions contains metadata about partitions for a topic.
+    Partitions: [=>]
       // ErrorCode is any error for a partition in topic metadata.
       //
       // LEADER_NOT_AVAILABLE is returned if a leader is unavailable for this

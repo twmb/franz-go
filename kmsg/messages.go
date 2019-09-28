@@ -1709,7 +1709,7 @@ type MetadataResponseBroker struct {
 	// Rack is the rack this Kafka broker is in.
 	Rack *string // v1+
 }
-type MetadataResponseTopicMetadataPartitionMetadata struct {
+type MetadataResponseTopicPartition struct {
 	// ErrorCode is any error for a partition in topic metadata.
 	//
 	// LEADER_NOT_AVAILABLE is returned if a leader is unavailable for this
@@ -1744,7 +1744,7 @@ type MetadataResponseTopicMetadataPartitionMetadata struct {
 	// returns all offline broker IDs that should be replicating this partition.
 	OfflineReplicas []int32 // v5+
 }
-type MetadataResponseTopicMetadata struct {
+type MetadataResponseTopic struct {
 	// ErrorCode is any error for a topic in a metadata request.
 	//
 	// TOPIC_AUTHORIZATION_FAILED is returned if the client is not authorized
@@ -1766,8 +1766,8 @@ type MetadataResponseTopicMetadata struct {
 	// IsInternal signifies whether this topic is a Kafka internal topic.
 	IsInternal bool // v1+
 
-	// PartitionMetadata contains metadata about partitions for a topic.
-	PartitionMetadata []MetadataResponseTopicMetadataPartitionMetadata
+	// Partitions contains metadata about partitions for a topic.
+	Partitions []MetadataResponseTopicPartition
 
 	// AuthorizedOperations, proposed in KIP-430 and introduced in Kafka 2.3.0,
 	// is a bitfield (corresponding to AclOperation) containing which operations
@@ -1797,9 +1797,9 @@ type MetadataResponse struct {
 	// ControllerID is the ID of the controller broker (the admin broker).
 	ControllerID int32 // v1+
 
-	// TopicMetadata contains metadata about each topic requested in the
+	// Topics contains metadata about each topic requested in the
 	// MetadataRequest.
-	TopicMetadata []MetadataResponseTopicMetadata
+	Topics []MetadataResponseTopic
 
 	// AuthorizedOperations is a bitfield containing which operations the client
 	// is allowed to perform on this cluster.
@@ -1854,10 +1854,10 @@ func (v *MetadataResponse) ReadFrom(src []byte) error {
 			s.ControllerID = v
 		}
 		{
-			v := s.TopicMetadata
+			v := s.Topics
 			a := v
 			for i := b.ArrayLen(); i > 0; i-- {
-				a = append(a, MetadataResponseTopicMetadata{})
+				a = append(a, MetadataResponseTopic{})
 				v := &a[len(a)-1]
 				{
 					s := v
@@ -1874,10 +1874,10 @@ func (v *MetadataResponse) ReadFrom(src []byte) error {
 						s.IsInternal = v
 					}
 					{
-						v := s.PartitionMetadata
+						v := s.Partitions
 						a := v
 						for i := b.ArrayLen(); i > 0; i-- {
-							a = append(a, MetadataResponseTopicMetadataPartitionMetadata{})
+							a = append(a, MetadataResponseTopicPartition{})
 							v := &a[len(a)-1]
 							{
 								s := v
@@ -1930,7 +1930,7 @@ func (v *MetadataResponse) ReadFrom(src []byte) error {
 							}
 						}
 						v = a
-						s.PartitionMetadata = v
+						s.Partitions = v
 					}
 					if version >= 8 {
 						v := b.Int32()
@@ -1939,7 +1939,7 @@ func (v *MetadataResponse) ReadFrom(src []byte) error {
 				}
 			}
 			v = a
-			s.TopicMetadata = v
+			s.Topics = v
 		}
 		if version >= 8 {
 			v := b.Int32()
