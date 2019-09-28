@@ -77,12 +77,7 @@ type topicPartition struct {
 	partition int32
 	loadErr   error // could be leader/listener/replica not avail
 
-	leader      int32 // our broker leader
-	leaderEpoch int32 // our broker leader epoch
-
-	replicas []int32
-	isr      []int32
-	offline  []int32
+	leader int32 // our broker leader
 
 	records     *recordBuffer
 	consumption *consumption

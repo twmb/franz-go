@@ -243,8 +243,7 @@ func (c *Client) fetchTopicMetadata(reqTopics []string) (map[string]*topicPartit
 				partition: partMeta.Partition,
 				loadErr:   kerr.ErrorForCode(partMeta.ErrorCode),
 
-				leader:      partMeta.Leader,
-				leaderEpoch: partMeta.LeaderEpoch,
+				leader: partMeta.Leader,
 
 				records: &recordBuffer{
 					cl: c,
@@ -261,10 +260,6 @@ func (c *Client) fetchTopicMetadata(reqTopics []string) (map[string]*topicPartit
 					},
 					failing: true,
 				},
-
-				replicas: partMeta.Replicas,
-				isr:      partMeta.ISR,
-				offline:  partMeta.OfflineReplicas,
 			}
 
 			p.records.topicPartition = p

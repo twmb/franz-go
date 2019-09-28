@@ -5417,7 +5417,7 @@ type DeleteRecordsRequestTopic struct {
 //
 // To delete records, Kafka sets the LastStableOffset for partitions to
 // the requested offset. All segments whose max partition is before the
-// requested offset are deleted, and any records within the segement before
+// requested offset are deleted, and any records within the segment before
 // the requested offset can no longer be read.
 type DeleteRecordsRequest struct {
 	// Version is the version of this message used with a Kafka broker.

@@ -10,6 +10,7 @@ import (
 )
 
 // TODO ctx for start before partitions loaded
+// TODO KIP-359 leader epoch in produce request when it is released
 
 // func (p *Producer) BeginTransaction() *ProducerTransaction
 // func (p *ProducerTransaction) Produce(r *Record)
