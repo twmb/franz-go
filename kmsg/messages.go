@@ -5790,7 +5790,7 @@ type OffsetForLeaderEpochResponseTopicPartition struct {
 	// Partition is the partition this response is for.
 	Partition int32
 
-	// LeaderEpoch is similar to the requested leader epoch, but corresponds to the
+	// LeaderEpoch is similar to the requested leader epoch, but pairs with the
 	// next field. If the requested leader epoch is unknown, this is -1. If the
 	// requested epoch had no records produced during the requested epoch, this
 	// is the first prior epoch that had records.
