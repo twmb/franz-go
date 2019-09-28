@@ -91,18 +91,15 @@ func (c *Client) updateMetadataLoop() {
 
 	ticker := time.NewTicker(c.cfg.client.metadataMaxAge)
 	defer ticker.Stop()
-loop:
 	for {
 		var now bool
 		select {
 		case <-c.ctx.Done():
 			return
 		case <-ticker.C:
-			c.triggerUpdateMetadata()
-			continue loop
+		case <-c.updateMetadataCh:
 		case <-c.updateMetadataNowCh:
 			now = true
-		case <-c.updateMetadataCh:
 		}
 
 		if !now {

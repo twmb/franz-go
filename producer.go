@@ -174,6 +174,15 @@ func (c *Client) partitionsForTopicProduce(topic string) (*topicPartitions, *top
 		return parts, v // fast, normal path
 	}
 
+	if !exists {
+		// If the client did not have the topic, we obviously _must_
+		// refresh metadata. We sleep just a little bit to allow pile
+		// on metadata updates if the client is suddenly sending to a
+		// bunch of new topics (i.e., at startup).
+		time.Sleep(50 * time.Millisecond)
+		c.triggerUpdateMetadataNow()
+	}
+
 	start := time.Now()
 	parts.mu.RLock()
 	defer parts.mu.RUnlock()
