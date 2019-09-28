@@ -239,21 +239,26 @@ func (c *Client) fetchTopicMetadata(reqTopics []string) (map[string]*topicPartit
 			partMeta := &topicMeta.Partitions[i]
 
 			p := &topicPartition{
-				topic:     topicMeta.Topic,
-				partition: partMeta.Partition,
-				loadErr:   kerr.ErrorForCode(partMeta.ErrorCode),
+				loadErr: kerr.ErrorForCode(partMeta.ErrorCode),
 
 				leader: partMeta.Leader,
 
 				records: &recordBuffer{
 					cl: c,
 
+					topic:     topicMeta.Topic,
+					partition: partMeta.Partition,
+
 					recordBuffersIdx: -1, // required, see below
 					lastAckedOffset:  -1, // expected sentinel
 
 					linger: c.cfg.producer.linger,
 				},
+
 				consumption: &consumption{
+					topic:     topicMeta.Topic,
+					partition: partMeta.Partition,
+
 					allConsumptionsIdx: -1, // same, see below
 					seqOffset: seqOffset{
 						offset: -1, // required to not consume until needed
@@ -262,24 +267,21 @@ func (c *Client) fetchTopicMetadata(reqTopics []string) (map[string]*topicPartit
 				},
 			}
 
-			p.records.topicPartition = p
-			p.consumption.topicPartition = p
-
 			broker, exists := c.brokers[p.leader]
 			if !exists {
 				if p.loadErr == nil {
-					p.loadErr = &errUnknownBrokerForPartition{p.topic, p.partition, p.leader}
+					p.loadErr = &errUnknownBrokerForPartition{topicMeta.Topic, partMeta.Partition, p.leader}
 				}
 			} else {
 				p.records.sink = broker.recordSink
 				p.consumption.source = broker.recordSource
 			}
 
-			parts.partitions = append(parts.partitions, p.partition)
-			parts.all[p.partition] = p
+			parts.partitions = append(parts.partitions, partMeta.Partition)
+			parts.all[partMeta.Partition] = p
 			if p.loadErr == nil {
-				parts.writablePartitions = append(parts.writablePartitions, p.partition)
-				parts.writable[p.partition] = p
+				parts.writablePartitions = append(parts.writablePartitions, partMeta.Partition)
+				parts.writable[partMeta.Partition] = p
 			}
 		}
 	}

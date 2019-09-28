@@ -133,8 +133,8 @@ func (sink *recordSink) createRequest() (*produceRequest, bool) {
 			}
 		}
 
-		if _, exists := req.batches[recBuf.topicPartition.topic]; !exists {
-			batchWireLength += 2 + int32(len(recBuf.topicPartition.topic)) + 4 // string len, topic, array len
+		if _, exists := req.batches[recBuf.topic]; !exists {
+			batchWireLength += 2 + int32(len(recBuf.topic)) + 4 // string len, topic, array len
 		}
 		if wireLength+batchWireLength > wireLengthLimit {
 			recBuf.mu.Unlock()
@@ -164,8 +164,8 @@ func (sink *recordSink) createRequest() (*produceRequest, bool) {
 
 		wireLength += batchWireLength
 		req.batches.addBatch(
-			recBuf.topicPartition.topic,
-			recBuf.topicPartition.partition,
+			recBuf.topic,
+			recBuf.partition,
 			batch,
 		)
 	}
@@ -540,7 +540,8 @@ func (sink *recordSink) removeSource(rm *recordBuffer) {
 type recordBuffer struct {
 	cl *Client // for config access / producer id
 
-	topicPartition *topicPartition
+	topic     string
+	partition int32
 
 	// lastAckedOffset, present for Kafka 1.0.0+ (v5+), is used for data
 	// loss detection on UnknownProducerID errors.

@@ -73,9 +73,7 @@ type topicPartitionsData struct {
 // topicPartition contains all information from Kafka for a topic's partition,
 // as well as what a client is producing to it or info about consuming from it.
 type topicPartition struct {
-	topic     string
-	partition int32
-	loadErr   error // could be leader/listener/replica not avail
+	loadErr error // could be leader/listener/replica not avail
 
 	leader int32 // our broker leader
 

@@ -66,7 +66,8 @@ func (source *recordSource) removeConsumption(rm *consumption) {
 }
 
 type consumption struct {
-	topicPartition *topicPartition
+	topic     string
+	partition int32
 
 	mu sync.Mutex
 
@@ -719,13 +720,11 @@ func (f *fetchRequest) addConsumptionLocked(c *consumption) {
 	if f.offsets == nil {
 		f.offsets = make(map[string]map[int32]*seqOffsetFrom)
 	}
-	topic := c.topicPartition.topic
-	partitions := f.offsets[topic]
+	partitions := f.offsets[c.topic]
 	if partitions == nil {
 		partitions = make(map[int32]*seqOffsetFrom)
-		f.offsets[topic] = partitions
+		f.offsets[c.topic] = partitions
 	}
-	partition := c.topicPartition.partition
 	o := c.use()
 
 	// AssignPartitions or AssignGroup could have been called in the middle
@@ -736,7 +735,7 @@ func (f *fetchRequest) addConsumptionLocked(c *consumption) {
 		f.numOffsets = 0
 	}
 	f.numOffsets++
-	partitions[partition] = o
+	partitions[c.partition] = o
 }
 
 func (*fetchRequest) Key() int16           { return 1 }

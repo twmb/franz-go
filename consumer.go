@@ -322,7 +322,7 @@ func (c *consumer) deletePartition(p *topicPartition) {
 	case consumerTypeUnset:
 		return
 	case consumerTypeDirect:
-		c.direct.deleteUsing(p.topic, p.partition)
+		c.direct.deleteUsing(p.consumption.topic, p.consumption.partition)
 	case consumerTypeGroup:
 	}
 }
