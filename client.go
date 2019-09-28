@@ -3,14 +3,13 @@ package kgo
 import (
 	"context"
 	"fmt"
+	"math/rand"
 	"net"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"golang.org/x/exp/rand"
 
 	"github.com/twmb/kgo/kerr"
 	"github.com/twmb/kgo/kmsg"
@@ -96,7 +95,7 @@ func NewClient(opts ...Opt) (*Client, error) {
 		cfg:       cfg,
 		ctx:       ctx,
 		ctxCancel: cancel,
-		rng:       rand.New(new(rand.PCGSource)),
+		rng:       rand.New(rand.NewSource(time.Now().UnixNano())),
 
 		controllerID: unknownControllerID,
 		brokers:      make(map[int32]*broker),
@@ -113,7 +112,6 @@ func NewClient(opts ...Opt) (*Client, error) {
 	}
 	c.consumer.cl = c
 	c.consumer.sourcesReadyCond = sync.NewCond(&c.consumer.sourcesReadyMu)
-	c.rng.Seed(uint64(time.Now().UnixNano()))
 	c.topics.Store(make(map[string]*topicPartitions))
 	c.metawait.init()
 

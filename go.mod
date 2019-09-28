@@ -10,5 +10,4 @@ require (
 	github.com/klauspost/cpuid v1.2.1 // indirect
 	github.com/pierrec/lz4 v2.0.5+incompatible
 	github.com/twmb/go-rbtree v1.0.0
-	golang.org/x/exp v0.0.0-20190316020145-860388717186
 )
