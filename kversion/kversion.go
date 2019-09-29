@@ -295,10 +295,12 @@ func Tip() Versions {
 	v[4]++  // 3 leader and isr KAFKA-8345 81900d0ba0 KIP-455
 	v[15]++ // 4 describe group KAFKA-8538 f8db022b08 KIP-345
 	v[19]++ // 4 create topics KAFKA-8305 8e161580b8 KIP-464
+	v[19]++ // 5 create topics KAFKA-8907 5d0052fe00 KIP-525
 	v[43]++ // 1 elect preferred leaders KAFKA-8286 121308cc7a KIP-460
 	v = append(v,
 		0, // 45 alter partition reassignments KAFKA-8345 81900d0ba0 KIP-455
 		0, // 46 list partition reassignments (same)
+		0, // 47 offset delete KAFKA-8730 e24d0e22ab KIP-496
 	)
 	return v
 }
