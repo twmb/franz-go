@@ -7393,6 +7393,9 @@ func (v *DescribeConfigsResponse) ReadFrom(src []byte) error {
 
 type AlterConfigsRequestResourceConfigEntry struct {
 	// ConfigName is a key to set (e.g. segment.bytes).
+	//
+	// For broker loggers, see KIP-412 section "Request/Response Overview"
+	// for details on how to change per logger log levels.
 	ConfigName string
 
 	// ConfigValue is a value to set for the key (e.g. 10).
@@ -7400,7 +7403,8 @@ type AlterConfigsRequestResourceConfigEntry struct {
 }
 type AlterConfigsRequestResource struct {
 	// ResourceType is an enum corresponding to the type of config to alter.
-	// The only two valid values are 2 (for topic) and 4 (for broker).
+	// The possible valid values are 2 (for topic), 4 (for broker),
+	// and 8 (for broker logger).
 	ResourceType int8
 
 	// ResourceName is the name of config to alter.
@@ -7413,6 +7417,8 @@ type AlterConfigsRequestResource struct {
 	// broker. Using a specific ID also ensures that brokers reload config
 	// or secret files even if the file path has not changed. Lastly, password
 	// config options can only be defined on a per broker basis.
+	//
+	// If the type is broker logger, this must be a broker ID.
 	ResourceName string
 
 	// ConfigEntries contains key/value config pairs to set on the resource.
@@ -8795,6 +8801,8 @@ type ElectLeadersResponseTopic struct {
 	// Partitions contains election results for a topic's partitions.
 	Partitions []ElectLeadersResponseTopicPartition
 }
+
+// ElectLeadersResponse is a response for an ElectLeadersRequest.
 type ElectLeadersResponse struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
