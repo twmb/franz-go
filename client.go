@@ -55,14 +55,7 @@ func stddial(addr string) (net.Conn, error) { return stddialer.Dial("tcp", addr)
 func NewClient(opts ...Opt) (*Client, error) {
 	cfg := defaultCfg()
 	for _, opt := range opts {
-		switch opt := opt.(type) {
-		case OptClient:
-			opt.apply(&cfg.client)
-		case OptProducer:
-			opt.apply(&cfg.producer)
-		default:
-			panic(fmt.Sprintf("unknown opt type: %#v", opt))
-		}
+		opt.apply(&cfg)
 	}
 
 	if err := cfg.validate(); err != nil {

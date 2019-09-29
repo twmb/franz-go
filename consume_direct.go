@@ -2,8 +2,8 @@ package kgo
 
 import "regexp"
 
-// ConsumeOpt is an option to configure direct topic / partition consuming.
-type ConsumeOpt interface {
+// DirectConsumeOpt is an option to configure direct topic / partition consuming.
+type DirectConsumeOpt interface {
 	apply(*directConsumer)
 }
 
@@ -18,7 +18,7 @@ func (opt directConsumeOpt) apply(cfg *directConsumer) { opt.fn(cfg) }
 //
 // If a metadata update sees partitions added to a topic, the client will
 // automatically begin consuming from those new partitions.
-func ConsumeTopics(offset Offset, topics ...string) ConsumeOpt {
+func ConsumeTopics(offset Offset, topics ...string) DirectConsumeOpt {
 	return directConsumeOpt{func(cfg *directConsumer) {
 		cfg.topics = make(map[string]Offset, len(topics))
 		for _, topic := range topics {
@@ -34,13 +34,13 @@ func ConsumeTopics(offset Offset, topics ...string) ConsumeOpt {
 // partition is set in this option and that topic is also set in ConsumeTopics,
 // offsets on partitions in this option are used in favor of the more general
 // topic offset from ConsumeTopics.
-func ConsumePartitions(partitions map[string]map[int32]Offset) ConsumeOpt {
+func ConsumePartitions(partitions map[string]map[int32]Offset) DirectConsumeOpt {
 	return directConsumeOpt{func(cfg *directConsumer) { cfg.partitions = partitions }}
 }
 
 // ConsumeTopicsRegex sets all topics in ConsumeTopics to be parsed as regular
 // expressions.
-func ConsumeTopicsRegex() ConsumeOpt {
+func ConsumeTopicsRegex() DirectConsumeOpt {
 	return directConsumeOpt{func(cfg *directConsumer) { cfg.regexTopics = true }}
 }
 
@@ -56,7 +56,7 @@ type directConsumer struct {
 }
 
 // This takes ownership of the assignments.
-func (cl *Client) AssignPartitions(opts ...ConsumeOpt) {
+func (cl *Client) AssignPartitions(opts ...DirectConsumeOpt) {
 	c := &cl.consumer
 	c.mu.Lock()
 	defer c.mu.Unlock()

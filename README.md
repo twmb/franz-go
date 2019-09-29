@@ -27,7 +27,6 @@ TODO
 - KIP-152 (more sasl, introduce sasl authenticate; 1.0.0)
 - KIP-207 (new error in list offset request; 2.2.0)
 - KIP-345 (static group membership, see KAFKA-8224)
-- KIP-359 (verify leader epoch in produce requests)
 - KIP-368 (periodically reauth sasl; 2.2.0)
 - KIP-392 (fetch request from closest replica w/ rack; 2.2.0)
 - KIP-412 (dynamic log levels with incremental alter configs; 2.4.0)
@@ -36,11 +35,14 @@ TODO
 - KIP-467 (produce response error change for per-record errors; 2.4.0)
 - KIP-526
 
-NOT YET (KIP under discussion)
+NOT YET (KIP under discussion / unmerged PR)
 -------
+- KIP-359 (verify leader epoch in produce requests)
+- KIP-360 (safe epoch bumping for `UNKNOWN_PRODUCER_ID`)
 - KIP-392 (new field in fetch; for brokers only)
 - KIP-423 (no rebalance on JoinGroup from leader in certain cases; under discussion)
 - KIP-447 (transaction changes to better support group changes)
+- KIP-482 (tagged fields; KAFKA-8885)
 - KIP-496 (new admin command)
 - KIP-497 (new admin command)
 - KIP-516 (topic.id field in some commands, including fetch)

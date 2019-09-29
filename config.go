@@ -9,18 +9,20 @@ import (
 	"github.com/twmb/kgo/kversion"
 )
 
-type (
-	// Opt is an option to configure a client.
-	Opt interface {
-		isopt()
-	}
+// Opt is an option to configure a client.
+type Opt interface {
+	apply(*cfg)
+}
 
-	cfg struct {
-		client   clientCfg
-		producer producerCfg
-		consumer consumerCfg
-	}
-)
+type clientOpt struct{ fn func(*cfg) }
+
+func (opt clientOpt) apply(cfg *cfg) { opt.fn(cfg) }
+
+type cfg struct {
+	client   clientCfg
+	producer producerCfg
+	consumer consumerCfg
+}
 
 func (cfg *cfg) validate() error {
 	if err := cfg.client.validate(); err != nil {
@@ -79,36 +81,23 @@ func defaultCfg() cfg {
 
 // ********** CLIENT CONFIGURATION **********
 
-type (
-	// OptClient is an option to configure client settings.
-	OptClient interface {
-		Opt
-		apply(*clientCfg)
-	}
+type clientCfg struct {
+	id     *string
+	dialFn func(string) (net.Conn, error)
 
-	clientOpt struct{ fn func(cfg *clientCfg) }
+	seedBrokers []string
+	maxVersions kversion.Versions
 
-	clientCfg struct {
-		id     *string
-		dialFn func(string) (net.Conn, error)
+	retryBackoff func(int) time.Duration
+	retries      int
 
-		seedBrokers []string
-		maxVersions kversion.Versions
+	maxBrokerWriteBytes int32
 
-		retryBackoff func(int) time.Duration
-		retries      int
+	metadataMaxAge time.Duration
+	metadataMinAge time.Duration
 
-		maxBrokerWriteBytes int32
-
-		metadataMaxAge time.Duration
-		metadataMinAge time.Duration
-
-		// TODO SASL
-	}
-)
-
-func (opt clientOpt) isopt()               {}
-func (opt clientOpt) apply(cfg *clientCfg) { opt.fn(cfg) }
+	// TODO SASL
+}
 
 func (cfg *clientCfg) validate() error {
 	if cfg.maxBrokerWriteBytes < 1<<10 {
@@ -124,26 +113,26 @@ func (cfg *clientCfg) validate() error {
 
 // WithClientID uses id for all requests sent to Kafka brokers, overriding the
 // default "kgo".
-func WithClientID(id string) OptClient {
-	return clientOpt{func(cfg *clientCfg) { cfg.id = &id }}
+func WithClientID(id string) Opt {
+	return clientOpt{func(cfg *cfg) { cfg.client.id = &id }}
 }
 
 // WithoutClientID sets the client ID to null for all requests sent to Kafka
 // brokers, overriding the default "kgo".
-func WithoutClientID() OptClient {
-	return clientOpt{func(cfg *clientCfg) { cfg.id = nil }}
+func WithoutClientID() Opt {
+	return clientOpt{func(cfg *cfg) { cfg.client.id = nil }}
 }
 
 // WithDialFn uses fn to dial addresses, overriding the default dialer that
 // uses a 10s timeout and no TLS.
-func WithDialFn(fn func(string) (net.Conn, error)) OptClient {
-	return clientOpt{func(cfg *clientCfg) { cfg.dialFn = fn }}
+func WithDialFn(fn func(string) (net.Conn, error)) Opt {
+	return clientOpt{func(cfg *cfg) { cfg.client.dialFn = fn }}
 }
 
 // WithSeedBrokers sets the seed brokers for the client to use, overriding the
 // default 127.0.0.1:9092.
-func WithSeedBrokers(seeds ...string) OptClient {
-	return clientOpt{func(cfg *clientCfg) { cfg.seedBrokers = append(cfg.seedBrokers[:0], seeds...) }}
+func WithSeedBrokers(seeds ...string) Opt {
+	return clientOpt{func(cfg *cfg) { cfg.client.seedBrokers = append(cfg.client.seedBrokers[:0], seeds...) }}
 }
 
 // WithMaxVersions sets the maximum Kafka version to try, overriding the
@@ -153,8 +142,8 @@ func WithSeedBrokers(seeds ...string) OptClient {
 // with versions pre 0.10.0. Otherwise, unless using more complicated requests
 // that this client itself does not natively use, it is generally safe to opt
 // for the latest version.
-func WithMaxVersions(versions kversion.Versions) OptClient {
-	return clientOpt{func(cfg *clientCfg) { cfg.maxVersions = versions }}
+func WithMaxVersions(versions kversion.Versions) Opt {
+	return clientOpt{func(cfg *cfg) { cfg.client.maxVersions = versions }}
 }
 
 // WithRetryBackoff sets the backoff strategy for how long to backoff for a
@@ -164,16 +153,16 @@ func WithMaxVersions(versions kversion.Versions) OptClient {
 // row. This can be used to implement exponential backoff if desired.
 //
 // This (roughly) corresponds to Kafka's retry.backoff.ms setting.
-func WithRetryBackoff(backoff func(int) time.Duration) OptClient {
-	return clientOpt{func(cfg *clientCfg) { cfg.retryBackoff = backoff }}
+func WithRetryBackoff(backoff func(int) time.Duration) Opt {
+	return clientOpt{func(cfg *cfg) { cfg.client.retryBackoff = backoff }}
 }
 
 // WithRetries sets the number of tries that retriable requests are allowed,
 // overriding the unlimited default.
 //
 // This setting applies to all types of requests.
-func WithRetries(n int) OptClient {
-	return clientOpt{func(cfg *clientCfg) { cfg.retries = n }}
+func WithRetries(n int) Opt {
+	return clientOpt{func(cfg *cfg) { cfg.client.retries = n }}
 }
 
 // WithBrokerMaxWriteBytes upper bounds the number of bytes written to a broker
@@ -184,8 +173,8 @@ func WithRetries(n int) OptClient {
 //
 // The only Kafka request that could come reasonable close to hitting this
 // limit should be produce requests.
-func WithBrokerMaxWriteBytes(v int32) OptClient {
-	return clientOpt{func(cfg *clientCfg) { cfg.maxBrokerWriteBytes = v }}
+func WithBrokerMaxWriteBytes(v int32) Opt {
+	return clientOpt{func(cfg *cfg) { cfg.client.maxBrokerWriteBytes = v }}
 }
 
 // WithMetadataMaxAge sets the maximum age for the client's cached metadata,
@@ -193,8 +182,8 @@ func WithBrokerMaxWriteBytes(v int32) OptClient {
 // etc.
 //
 // This corresponds to Kafka's metadata.max.age.ms.
-func WithMetadataMaxAge(age time.Duration) OptClient {
-	return clientOpt{func(cfg *clientCfg) { cfg.metadataMaxAge = age }}
+func WithMetadataMaxAge(age time.Duration) Opt {
+	return clientOpt{func(cfg *cfg) { cfg.client.metadataMaxAge = age }}
 }
 
 // WithMetadataMinAge sets the minimum time between metadata queries,
@@ -204,43 +193,30 @@ func WithMetadataMaxAge(age time.Duration) OptClient {
 // soon as allowed. Additionally, any connection failures causing backoff while
 // producing or consuming trigger metadata updates, because the client must
 // assume that maybe the connection died due to a broker dying.
-func WithMetadataMinAge(age time.Duration) OptClient {
-	return clientOpt{func(cfg *clientCfg) { cfg.metadataMinAge = age }}
+func WithMetadataMinAge(age time.Duration) Opt {
+	return clientOpt{func(cfg *cfg) { cfg.client.metadataMinAge = age }}
 }
 
 // ********** PRODUCER CONFIGURATION **********
 
-type (
-	// OptProducer is an option to configure how a client produces records.
-	OptProducer interface {
-		Opt
-		apply(*producerCfg)
-	}
+type producerCfg struct {
+	txnID       *string
+	acks        RequiredAcks
+	compression []CompressionCodec // order of preference
 
-	producerOpt struct{ fn func(cfg *producerCfg) }
+	allowAutoTopicCreation bool
 
-	producerCfg struct {
-		txnID       *string
-		acks        RequiredAcks
-		compression []CompressionCodec // order of preference
+	maxRecordBatchBytes int32
+	maxBufferedRecords  int64
+	requestTimeout      time.Duration
+	linger              time.Duration
+	recordTimeout       time.Duration
 
-		allowAutoTopicCreation bool
+	partitioner Partitioner
 
-		maxRecordBatchBytes int32
-		maxBufferedRecords  int64
-		requestTimeout      time.Duration
-		linger              time.Duration
-		recordTimeout       time.Duration
-
-		partitioner Partitioner
-
-		stopOnDataLoss bool
-		onDataLoss     func(string, int32)
-	}
-)
-
-func (opt producerOpt) isopt()                 {}
-func (opt producerOpt) apply(cfg *producerCfg) { opt.fn(cfg) }
+	stopOnDataLoss bool
+	onDataLoss     func(string, int32)
+}
 
 func (cfg *producerCfg) validate() error {
 	if cfg.maxRecordBatchBytes < 1<<10 {
@@ -276,14 +252,14 @@ func RequireAllISRAcks() RequiredAcks { return RequiredAcks{-1} }
 
 // WithProduceRequiredAcks sets the required acks for produced records,
 // overriding the default RequireLeaderAck.
-func WithProduceRequiredAcks(acks RequiredAcks) OptProducer {
-	return producerOpt{func(cfg *producerCfg) { cfg.acks = acks }}
+func WithProduceRequiredAcks(acks RequiredAcks) Opt {
+	return clientOpt{func(cfg *cfg) { cfg.producer.acks = acks }}
 }
 
 // WithProduceAutoTopicCreation enables topics to be auto created if they do
 // not exist when sending messages to them.
-func WithProduceAutoTopicCreation() OptProducer {
-	return producerOpt{func(cfg *producerCfg) { cfg.allowAutoTopicCreation = true }}
+func WithProduceAutoTopicCreation() Opt {
+	return clientOpt{func(cfg *cfg) { cfg.producer.allowAutoTopicCreation = true }}
 }
 
 // WithProduceCompression sets the compression codec to use for records.
@@ -293,8 +269,8 @@ func WithProduceAutoTopicCreation() OptProducer {
 // preference can be first zstd, fallback gzip, fallback none.
 //
 // The default preference is no compression.
-func WithProduceCompression(preference ...CompressionCodec) OptProducer {
-	return producerOpt{func(cfg *producerCfg) { cfg.compression = preference }}
+func WithProduceCompression(preference ...CompressionCodec) Opt {
+	return clientOpt{func(cfg *cfg) { cfg.producer.compression = preference }}
 }
 
 // WithProduceMaxRecordBatchBytes upper bounds the size of a record batch,
@@ -313,14 +289,14 @@ func WithProduceCompression(preference ...CompressionCodec) OptProducer {
 // Note that this is the maximum size of a record batch before compression.
 // If a batch compresses poorly and actually grows the batch, the uncompressed
 // form will be used.
-func WithProduceMaxRecordBatchBytes(v int32) OptProducer {
-	return producerOpt{func(cfg *producerCfg) { cfg.maxRecordBatchBytes = v }}
+func WithProduceMaxRecordBatchBytes(v int32) Opt {
+	return clientOpt{func(cfg *cfg) { cfg.producer.maxRecordBatchBytes = v }}
 }
 
 // WithProducePartitioner uses the given partitioner to partition records,
 // overriding the default StickyKeyPartitioner.
-func WithProducePartitioner(partitioner Partitioner) OptProducer {
-	return producerOpt{func(cfg *producerCfg) { cfg.partitioner = partitioner }}
+func WithProducePartitioner(partitioner Partitioner) Opt {
+	return clientOpt{func(cfg *cfg) { cfg.producer.partitioner = partitioner }}
 }
 
 // WithProduceTimeout sets how long Kafka broker's are allowed to respond to
@@ -330,14 +306,14 @@ func WithProducePartitioner(partitioner Partitioner) OptProducer {
 // This corresponds to Kafka's request.timeout.ms setting, but only applies to
 // produce requests. The reason for this is that most Kafka requests do not
 // actually have a timeout field.
-func WithProduceTimeout(limit time.Duration) OptProducer {
-	return producerOpt{func(cfg *producerCfg) { cfg.requestTimeout = limit }}
+func WithProduceTimeout(limit time.Duration) Opt {
+	return clientOpt{func(cfg *cfg) { cfg.producer.requestTimeout = limit }}
 }
 
 // WithProduceStopOnDataLoss sets the client to stop producing if data loss is
 // detected, overriding the default false.
-func WithProduceStopOnDataLoss() OptProducer {
-	return producerOpt{func(cfg *producerCfg) { cfg.stopOnDataLoss = true }}
+func WithProduceStopOnDataLoss() Opt {
+	return clientOpt{func(cfg *cfg) { cfg.producer.stopOnDataLoss = true }}
 }
 
 // WithProduceOnDataLoss sets a function to call if data loss is detected when
@@ -345,8 +321,8 @@ func WithProduceStopOnDataLoss() OptProducer {
 //
 // The passed function will be called with the topic and partition that data
 // loss was detected on.
-func WithProduceOnDataLoss(fn func(string, int32)) OptProducer {
-	return producerOpt{func(cfg *producerCfg) { cfg.onDataLoss = fn }}
+func WithProduceOnDataLoss(fn func(string, int32)) Opt {
+	return clientOpt{func(cfg *cfg) { cfg.producer.onDataLoss = fn }}
 }
 
 // WithProduceLinger sets how long individual topic partitions will linger
@@ -363,8 +339,8 @@ func WithProduceOnDataLoss(fn func(string, int32)) OptProducer {
 // producer will likely be producing to many partitions; it is both unnecessary
 // to linger in this case and inefficient because the client will have many
 // timers running (and stopping and restarting) unnecessarily.
-func WithProduceLinger(linger time.Duration) OptProducer {
-	return producerOpt{func(cfg *producerCfg) { cfg.linger = linger }}
+func WithProduceLinger(linger time.Duration) Opt {
+	return clientOpt{func(cfg *cfg) { cfg.producer.linger = linger }}
 }
 
 // WithProduceRecordTimeout sets a rough time of how long a record can sit
@@ -380,31 +356,18 @@ func WithProduceLinger(linger time.Duration) OptProducer {
 // only for batches that need to be retried. Thus, a sink backoff may delay
 // record timeout slightly. As with lingering, this also should generally be a
 // non-issue.
-func WithProduceRecordTimeout(timeout time.Duration) OptProducer {
-	return producerOpt{func(cfg *producerCfg) { cfg.recordTimeout = timeout }}
+func WithProduceRecordTimeout(timeout time.Duration) Opt {
+	return clientOpt{func(cfg *cfg) { cfg.producer.recordTimeout = timeout }}
 }
 
 // ********** CONSUMER CONFIGURATION **********
 
-type (
-	// OptConsumer is an option to configure how a client consumes records.
-	OptConsumer interface {
-		Opt
-		apply(*consumerCfg)
-	}
-
-	consumerOpt struct{ fn func(cfg *consumerCfg) }
-
-	consumerCfg struct {
-		maxWait      int32
-		maxBytes     int32
-		maxPartBytes int32
-		resetOffset  Offset
-	}
-)
-
-func (opt consumerOpt) isopt()                 {}
-func (opt consumerOpt) apply(cfg *consumerCfg) { opt.fn(cfg) }
+type consumerCfg struct {
+	maxWait      int32
+	maxBytes     int32
+	maxPartBytes int32
+	resetOffset  Offset
+}
 
 func (cfg *consumerCfg) validate() error {
 	return nil
@@ -415,8 +378,8 @@ func (cfg *consumerCfg) validate() error {
 // overriding the default 500ms.
 //
 // This corresponds to the Java replica.fetch.wait.max.ms setting.
-func WithConsumeMaxWait(wait time.Duration) OptConsumer {
-	return consumerOpt{func(cfg *consumerCfg) { cfg.maxWait = int32(wait.Milliseconds()) }}
+func WithConsumeMaxWait(wait time.Duration) Opt {
+	return clientOpt{func(cfg *cfg) { cfg.consumer.maxWait = int32(wait.Milliseconds()) }}
 }
 
 // WithConsumeMaxBytes sets the maximum amount of bytes a broker will try to
@@ -426,8 +389,8 @@ func WithConsumeMaxWait(wait time.Duration) OptConsumer {
 // will buffer up to <brokers * max bytes> worth of memory.
 //
 // This corresponds to the Java fetch.max.bytes setting.
-func WithConsumeMaxBytes(b int32) OptConsumer {
-	return consumerOpt{func(cfg *consumerCfg) { cfg.maxBytes = b }}
+func WithConsumeMaxBytes(b int32) Opt {
+	return clientOpt{func(cfg *cfg) { cfg.consumer.maxBytes = b }}
 }
 
 // WithConsumeMaxPartitionBytes sets the maximum amount of bytes that will be
@@ -436,13 +399,13 @@ func WithConsumeMaxBytes(b int32) OptConsumer {
 // will still be returned so the client can make progress.
 //
 // This corresponds to the Java max.partition.fetch.bytes setting.
-func WithConsumeMaxPartitionBytes(b int32) OptConsumer {
-	return consumerOpt{func(cfg *consumerCfg) { cfg.maxPartBytes = b }}
+func WithConsumeMaxPartitionBytes(b int32) Opt {
+	return clientOpt{func(cfg *cfg) { cfg.consumer.maxPartBytes = b }}
 }
 
 // WithConsumeResetOffset sets the offset to restart consuming from when a
 // partition has no commits (for groups) or when a fetch sees an
 // OffsetOutOfRange error, overriding the default ConsumeStartOffset.
-func WithConsumeResetOffset(offset Offset) OptConsumer {
-	return consumerOpt{func(cfg *consumerCfg) { cfg.resetOffset = offset }}
+func WithConsumeResetOffset(offset Offset) Opt {
+	return clientOpt{func(cfg *cfg) { cfg.consumer.resetOffset = offset }}
 }
