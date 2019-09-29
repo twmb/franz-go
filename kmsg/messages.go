@@ -5071,10 +5071,14 @@ type CreateTopicsRequestTopic struct {
 	// Topic is a topic to create.
 	Topic string
 
-	// NumPartitions is how many partitions to give a topic.
+	// NumPartitions is how many partitions to give a topic. This must
+	// be -1 if specifying partitions manually (see ReplicaAssignment)
+	// or, starting v4+, to use the broker default partitions.
 	NumPartitions int32
 
 	// ReplicationFactor is how many replicas every partition must have.
+	// This must be -1 if specifying partitions manually (see ReplicaAssignment)
+	// or, starting v4+, to use the broker default replication factor.
 	ReplicationFactor int16
 
 	// ReplicaAssignment is an array to manually dicate replicas and their
