@@ -1651,7 +1651,9 @@ ApiVersionsResponse =>
 //
 // Version 4, introduced in Kafka 2.4.0, implies client support for
 // creation defaults. See KIP-464.
-CreateTopicsRequest => key 19, max version 4, admin
+//
+// Version 5, also in 2.4.0, returns topic configs in the response (KIP-525).
+CreateTopicsRequest => key 19, max version 5, admin
   // Topics is an array of topics to attempt to create.
   Topics: [=>]
     // Topic is a topic to create.
@@ -1727,6 +1729,27 @@ CreateTopicsResponse =>
     ErrorCode: int16
     // ErrorMessage is an informative message if the topic creation failed.
     ErrorMessage: nullable-string // v1+
+    // ConfigErrorCode is non-zero if configs are unable to be returned.
+    ConfigErrorCode: int16 // v5+
+    // NumPartitions is how many partitions were created for this topic.
+    NumPartitions: int32 // v5+
+    // ReplicationFactor is how many replicas every partition has for this topic.
+    ReplicationFactor: int16 // v5+
+    // Configs contains this topic's configuration.
+    Configs: nullable[=>] // v5+
+      // Name is the configuration name (e.g. segment.bytes).
+      Name: string
+      // Value is the value for this config key. If the key is sensitive,
+      // the value will be null.
+      Value: nullable-string
+      // ReadOnly signifies whether this is not a dynamic config option.
+      ReadOnly: bool
+      // ConfigSource is where this config entry is from. See the documentation
+      // on DescribeConfigsRequest's ConfigSource for more details.
+      ConfigSource: int8
+      // IsSensitive signifies whether this is a sensitive config key, which
+      // is either a password or an unknown type.
+      IsSensitive: bool
 
 // DeleteTopicsRequest deletes Kafka topics.
 DeleteTopicsRequest => key 20, max version 3, admin
@@ -2199,11 +2222,11 @@ DescribeConfigsResponse =>
     // ConfigEntries contains information about key/value config pairs for
     // the requested resource.
     ConfigEntries: [=>ConfigEntry]
-      // ConfigName is a key this entry corresponds to (e.g. segment.bytes).
-      ConfigName: string
-      // ConfigValue is the value for this config key. If the key is sensitive,
+      // Name is a key this entry corresponds to (e.g. segment.bytes).
+      Name: string
+      // Value is the value for this config key. If the key is sensitive,
       // the value will be null.
-      ConfigValue: nullable-string
+      Value: nullable-string
       // ReadOnly signifies whether this is not a dynamic config option.
       ReadOnly: bool
       // IsDefault is whether this is a default config option. This has been
@@ -2810,3 +2833,58 @@ ListPartitionReassignmentsResponse =>
       AddingReplicas: [int32]
       // RemovingReplicas are replicas currently being removed from the partition.
       RemovingReplicas: [int32]
+
+// OffsetDeleteRequest, proposed in KIP-496 and implemented in Kafka 2.4.0, is
+// a request to delete group offsets.
+//
+// ACL wise, this requires DELETE on GROUP for the group and READ on TOPIC for
+// each topic.
+OffsetDeleteRequest => key 47, max version 0, admin
+  // GroupID is the group to delete offsets in.
+  GroupID: string
+  // Topics are topics to delete offsets in.
+  Topics: [=>]
+    // Topic is a topic to delete offsets in.
+    Topic: string
+    // Partitions are partitions to delete offsets for.
+    Partitions: [int32]
+
+// OffsetDeleteResponse is a response to an offset delete request.
+OffsetDeleteResponse =>
+  // ErrorCode is any group wide error.
+  //
+  // GROUP_AUTHORIZATION_FAILED is returned if the client is not authorized
+  // for the group.
+  //
+  // INVALID_GROUP_ID is returned in the requested group ID is invalid.
+  //
+  // COORDINATOR_NOT_AVAILABLE is returned if the coordinator is not available.
+  //
+  // COORDINATOR_LOAD_IN_PROGRESS is returned if the group is loading.
+  //
+  // NOT_COORDINATOR is returned if the requested broker is not the coordinator
+  // for the requested group.
+  //
+  // GROUP_ID_NOT_FOUND is returned if the group ID does not exist.
+  ErrorCode: int16
+  // ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+  // after responding to this request.
+  ThrottleTimeMs: int32
+  // Topics are responses to requested topics.
+  Topics: [=>]
+    // Topic is the topic being responded to.
+    Topic: string
+    // Partitions are partitions being responded to.
+    Partitions: [=>]
+      // Partition is the partition being responded to.
+      Partition: int32
+      // ErrorCode is any per partition error code.
+      //
+      // TOPIC_AUTHORIZATION_FAILED is returned if the client is not authorized
+      // for the topic / partition.
+      //
+      // UNKNOWN_TOPIC_OR_PARTITION is returned if the broker does not know of
+      // the requested topic.
+      //
+      // GROUP_SUBSCRIBED_TO_TOPIC is returned if the topic is still subscribed to.
+      ErrorCode: int16

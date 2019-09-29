@@ -149,6 +149,7 @@ var (
 	EligibleLeadersNotAvailable        = &Error{"ELIGIBLE_LEADERS_NOT_AVAILABLE", 83, true, "Eligible topic partition leaders are not available"}
 	ElectionNotNeeded                  = &Error{"ELECTION_NOT_NEEDED", 84, true, "Leader election not needed for topic partition"}
 	NoReassignmentInProgress           = &Error{"NO_REASSIGNMENT_IN_PROGRESS", 85, false, "No partition reassignment is in progress."}
+	GroupSubscribedToTopic             = &Error{"GROUP_SUBSCRIBED_TO_TOPIC", 86, false, "Deleting offsets of a topic is forbidden while the consumer group is actively subscribed to it."}
 )
 
 var code2err = map[int16]error{
@@ -239,4 +240,5 @@ var code2err = map[int16]error{
 	83: EligibleLeadersNotAvailable,
 	84: ElectionNotNeeded,
 	85: NoReassignmentInProgress,
+	86: GroupSubscribedToTopic,
 }

@@ -6,7 +6,7 @@ import "github.com/twmb/kgo/kbin"
 
 // MaxKey is the maximum key used for any messages in this package.
 // Note that this value will change as Kafka adds more messages.
-const MaxKey = 46
+const MaxKey = 47
 
 // MessageV0 is the message format Kafka used prior to 0.10.
 //
@@ -5091,6 +5091,8 @@ type CreateTopicsRequestTopic struct {
 //
 // Version 4, introduced in Kafka 2.4.0, implies client support for
 // creation defaults. See KIP-464.
+//
+// Version 5, also in 2.4.0, returns topic configs in the response (KIP-525).
 type CreateTopicsRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
@@ -5107,7 +5109,7 @@ type CreateTopicsRequest struct {
 }
 
 func (*CreateTopicsRequest) Key() int16                 { return 19 }
-func (*CreateTopicsRequest) MaxVersion() int16          { return 4 }
+func (*CreateTopicsRequest) MaxVersion() int16          { return 5 }
 func (v *CreateTopicsRequest) SetVersion(version int16) { v.Version = version }
 func (v *CreateTopicsRequest) GetVersion() int16        { return v.Version }
 func (v *CreateTopicsRequest) IsAdminRequest()          {}
@@ -5182,6 +5184,25 @@ func (v *CreateTopicsRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 
+type CreateTopicsResponseTopicErrorConfig struct {
+	// Name is the configuration name (e.g. segment.bytes).
+	Name string
+
+	// Value is the value for this config key. If the key is sensitive,
+	// the value will be null.
+	Value *string
+
+	// ReadOnly signifies whether this is not a dynamic config option.
+	ReadOnly bool
+
+	// ConfigSource is where this config entry is from. See the documentation
+	// on DescribeConfigsRequest's ConfigSource for more details.
+	ConfigSource int8
+
+	// IsSensitive signifies whether this is a sensitive config key, which
+	// is either a password or an unknown type.
+	IsSensitive bool
+}
 type CreateTopicsResponseTopicError struct {
 	// Topic is the topic this error response corresponds to.
 	Topic string
@@ -5221,6 +5242,18 @@ type CreateTopicsResponseTopicError struct {
 
 	// ErrorMessage is an informative message if the topic creation failed.
 	ErrorMessage *string // v1+
+
+	// ConfigErrorCode is non-zero if configs are unable to be returned.
+	ConfigErrorCode int16 // v5+
+
+	// NumPartitions is how many partitions were created for this topic.
+	NumPartitions int32 // v5+
+
+	// ReplicationFactor is how many replicas every partition has for this topic.
+	ReplicationFactor int16 // v5+
+
+	// Configs contains this topic's configuration.
+	Configs []CreateTopicsResponseTopicErrorConfig // v5+
 }
 
 // CreateTopicsResponse is returned from a CreateTopicsRequest.
@@ -5268,6 +5301,55 @@ func (v *CreateTopicsResponse) ReadFrom(src []byte) error {
 					if version >= 1 {
 						v := b.NullableString()
 						s.ErrorMessage = v
+					}
+					if version >= 5 {
+						v := b.Int16()
+						s.ConfigErrorCode = v
+					}
+					if version >= 5 {
+						v := b.Int32()
+						s.NumPartitions = v
+					}
+					if version >= 5 {
+						v := b.Int16()
+						s.ReplicationFactor = v
+					}
+					if version >= 5 {
+						v := s.Configs
+						a := v
+						i := b.ArrayLen()
+						if version < 0 || i == 0 {
+							a = []CreateTopicsResponseTopicErrorConfig{}
+						}
+						for ; i > 0; i-- {
+							a = append(a, CreateTopicsResponseTopicErrorConfig{})
+							v := &a[len(a)-1]
+							{
+								s := v
+								{
+									v := b.String()
+									s.Name = v
+								}
+								{
+									v := b.NullableString()
+									s.Value = v
+								}
+								{
+									v := b.Bool()
+									s.ReadOnly = v
+								}
+								{
+									v := b.Int8()
+									s.ConfigSource = v
+								}
+								{
+									v := b.Bool()
+									s.IsSensitive = v
+								}
+							}
+						}
+						v = a
+						s.Configs = v
 					}
 				}
 			}
@@ -7114,12 +7196,12 @@ type DescribeConfigsResponseResourceConfigEntryConfigSynonym struct {
 	ConfigSource int8
 }
 type DescribeConfigsResponseResourceConfigEntry struct {
-	// ConfigName is a key this entry corresponds to (e.g. segment.bytes).
-	ConfigName string
+	// Name is a key this entry corresponds to (e.g. segment.bytes).
+	Name string
 
-	// ConfigValue is the value for this config key. If the key is sensitive,
+	// Value is the value for this config key. If the key is sensitive,
 	// the value will be null.
-	ConfigValue *string
+	Value *string
 
 	// ReadOnly signifies whether this is not a dynamic config option.
 	ReadOnly bool
@@ -7244,11 +7326,11 @@ func (v *DescribeConfigsResponse) ReadFrom(src []byte) error {
 								s := v
 								{
 									v := b.String()
-									s.ConfigName = v
+									s.Name = v
 								}
 								{
 									v := b.NullableString()
-									s.ConfigValue = v
+									s.Value = v
 								}
 								{
 									v := b.Bool()
@@ -9376,6 +9458,177 @@ func (v *ListPartitionReassignmentsResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+type OffsetDeleteRequestTopic struct {
+	// Topic is a topic to delete offsets in.
+	Topic string
+
+	// Partitions are partitions to delete offsets for.
+	Partitions []int32
+}
+
+// OffsetDeleteRequest, proposed in KIP-496 and implemented in Kafka 2.4.0, is
+// a request to delete group offsets.
+//
+// ACL wise, this requires DELETE on GROUP for the group and READ on TOPIC for
+// each topic.
+type OffsetDeleteRequest struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	// GroupID is the group to delete offsets in.
+	GroupID string
+
+	// Topics are topics to delete offsets in.
+	Topics []OffsetDeleteRequestTopic
+}
+
+func (*OffsetDeleteRequest) Key() int16                 { return 47 }
+func (*OffsetDeleteRequest) MaxVersion() int16          { return 0 }
+func (v *OffsetDeleteRequest) SetVersion(version int16) { v.Version = version }
+func (v *OffsetDeleteRequest) GetVersion() int16        { return v.Version }
+func (v *OffsetDeleteRequest) IsAdminRequest()          {}
+func (v *OffsetDeleteRequest) ResponseKind() Response {
+	return &OffsetDeleteResponse{Version: v.Version}
+}
+
+func (v *OffsetDeleteRequest) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	{
+		v := v.GroupID
+		dst = kbin.AppendString(dst, v)
+	}
+	{
+		v := v.Topics
+		dst = kbin.AppendArrayLen(dst, len(v))
+		for i := range v {
+			v := &v[i]
+			{
+				v := v.Topic
+				dst = kbin.AppendString(dst, v)
+			}
+			{
+				v := v.Partitions
+				dst = kbin.AppendArrayLen(dst, len(v))
+				for i := range v {
+					v := v[i]
+					dst = kbin.AppendInt32(dst, v)
+				}
+			}
+		}
+	}
+	return dst
+}
+
+type OffsetDeleteResponseTopicPartition struct {
+	// Partition is the partition being responded to.
+	Partition int32
+
+	// ErrorCode is any per partition error code.
+	//
+	// TOPIC_AUTHORIZATION_FAILED is returned if the client is not authorized
+	// for the topic / partition.
+	//
+	// UNKNOWN_TOPIC_OR_PARTITION is returned if the broker does not know of
+	// the requested topic.
+	//
+	// GROUP_SUBSCRIBED_TO_TOPIC is returned if the topic is still subscribed to.
+	ErrorCode int16
+}
+type OffsetDeleteResponseTopic struct {
+	// Topic is the topic being responded to.
+	Topic string
+
+	// Partitions are partitions being responded to.
+	Partitions []OffsetDeleteResponseTopicPartition
+}
+
+// OffsetDeleteResponse is a response to an offset delete request.
+type OffsetDeleteResponse struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	// ErrorCode is any group wide error.
+	//
+	// GROUP_AUTHORIZATION_FAILED is returned if the client is not authorized
+	// for the group.
+	//
+	// INVALID_GROUP_ID is returned in the requested group ID is invalid.
+	//
+	// COORDINATOR_NOT_AVAILABLE is returned if the coordinator is not available.
+	//
+	// COORDINATOR_LOAD_IN_PROGRESS is returned if the group is loading.
+	//
+	// NOT_COORDINATOR is returned if the requested broker is not the coordinator
+	// for the requested group.
+	//
+	// GROUP_ID_NOT_FOUND is returned if the group ID does not exist.
+	ErrorCode int16
+
+	// ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+	// after responding to this request.
+	ThrottleTimeMs int32
+
+	// Topics are responses to requested topics.
+	Topics []OffsetDeleteResponseTopic
+}
+
+func (v *OffsetDeleteResponse) ReadFrom(src []byte) error {
+	version := v.Version
+	_ = version
+	b := kbin.Reader{Src: src}
+	{
+		s := v
+		{
+			v := b.Int16()
+			s.ErrorCode = v
+		}
+		{
+			v := b.Int32()
+			s.ThrottleTimeMs = v
+		}
+		{
+			v := s.Topics
+			a := v
+			for i := b.ArrayLen(); i > 0; i-- {
+				a = append(a, OffsetDeleteResponseTopic{})
+				v := &a[len(a)-1]
+				{
+					s := v
+					{
+						v := b.String()
+						s.Topic = v
+					}
+					{
+						v := s.Partitions
+						a := v
+						for i := b.ArrayLen(); i > 0; i-- {
+							a = append(a, OffsetDeleteResponseTopicPartition{})
+							v := &a[len(a)-1]
+							{
+								s := v
+								{
+									v := b.Int32()
+									s.Partition = v
+								}
+								{
+									v := b.Int16()
+									s.ErrorCode = v
+								}
+							}
+						}
+						v = a
+						s.Partitions = v
+					}
+				}
+			}
+			v = a
+			s.Topics = v
+		}
+	}
+	return b.Complete()
+}
+
 // RequestForKey returns the request corresponding to the given request key
 // or nil if the key is unknown.
 func RequestForKey(key int16) Request {
@@ -9476,6 +9729,8 @@ func RequestForKey(key int16) Request {
 		return new(AlterPartitionReassignmentsRequest)
 	case 46:
 		return new(ListPartitionReassignmentsRequest)
+	case 47:
+		return new(OffsetDeleteRequest)
 	}
 }
 
@@ -9579,5 +9834,7 @@ func NameForKey(key int16) string {
 		return "AlterPartitionReassignments"
 	case 46:
 		return "ListPartitionReassignments"
+	case 47:
+		return "OffsetDelete"
 	}
 }
