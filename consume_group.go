@@ -223,7 +223,7 @@ func (cl *Client) AssignGroup(group string, opts ...GroupOpt) {
 		clientTopics := cl.cloneTopics()
 		for topic := range g.topics {
 			if _, exists := clientTopics[topic]; !exists {
-				clientTopics[topic] = newTopicPartitions()
+				clientTopics[topic] = newTopicPartitions(topic)
 			}
 		}
 		cl.topics.Store(clientTopics)

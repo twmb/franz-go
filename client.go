@@ -41,6 +41,11 @@ type Client struct {
 	topicsMu sync.Mutex
 	topics   atomic.Value // map[string]*topicPartitions
 
+	// unknownTopics buffers all records for topics that are not loaded
+	unknownTopicsMu   sync.Mutex
+	unknownTopics     map[string][]promisedRecord
+	unknownTopicsWait map[string]chan struct{}
+
 	updateMetadataCh    chan struct{}
 	updateMetadataNowCh chan struct{} // like above, but with high priority
 	metawait            metawait
@@ -97,7 +102,9 @@ func NewClient(opts ...Opt) (*Client, error) {
 			waitBuffer: make(chan struct{}, 100),
 		},
 
-		coordinators: make(map[coordinatorKey]int32),
+		coordinators:      make(map[coordinatorKey]int32),
+		unknownTopics:     make(map[string][]promisedRecord),
+		unknownTopicsWait: make(map[string]chan struct{}),
 
 		updateMetadataCh:    make(chan struct{}, 1),
 		updateMetadataNowCh: make(chan struct{}, 1),

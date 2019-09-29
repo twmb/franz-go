@@ -102,6 +102,9 @@ func (c *Client) updateMetadataLoop() {
 			now = true
 		}
 
+		var nowTries int
+	start:
+		nowTries++
 		if !now {
 			if wait := c.cfg.client.metadataMinAge - time.Since(lastAt); wait > 0 {
 				timer := time.NewTimer(wait)
@@ -113,22 +116,29 @@ func (c *Client) updateMetadataLoop() {
 					timer.Stop()
 				case <-timer.C:
 				}
-
-				// Drain any refire that occured during our wait.
-				select {
-				case <-c.updateMetadataCh:
-				default:
-				}
 			}
+		} else {
+			// Even with an "update now", we sleep just a bit to allow some
+			// potential pile on now triggers.
+			time.Sleep(50 * time.Millisecond)
+		}
+
+		// Drain any refires that occured during our waiting.
+		select {
+		case <-c.updateMetadataCh:
+		default:
+		}
+		select {
+		case <-c.updateMetadataNowCh:
+		default:
 		}
 
 		again, err := c.updateMetadata()
 		if again || err != nil {
-			if now {
-				c.triggerUpdateMetadataNow()
-			} else {
-				c.triggerUpdateMetadata()
+			if now && nowTries < 10 {
+				goto start
 			}
+			c.triggerUpdateMetadata()
 		}
 		if err == nil {
 			lastAt = time.Now()
@@ -186,7 +196,7 @@ func (c *Client) updateMetadata() (needsRetry bool, err error) {
 			topics = c.cloneTopics()
 			for topic := range meta {
 				if _, exists := topics[topic]; !exists {
-					topics[topic] = newTopicPartitions()
+					topics[topic] = newTopicPartitions(topic)
 				}
 			}
 			c.topics.Store(topics)
@@ -200,7 +210,7 @@ func (c *Client) updateMetadata() (needsRetry bool, err error) {
 		if !exists {
 			continue
 		}
-		needsRetry = oldParts.merge(newParts) || needsRetry
+		needsRetry = c.mergeTopicPartitions(oldParts, newParts) || needsRetry
 	}
 
 	// Trigger any consumer updates.
@@ -301,23 +311,14 @@ func (c *Client) fetchTopicMetadata(reqTopics []string) (map[string]*topicPartit
 	return topics, all, nil
 }
 
-// merge merges a new topicPartition into an old and returns whether the
-// metadata update that caused this merge needs to be retried.
+// mergeTopicPartitions merges a new topicPartition into an old and returns
+// whether the metadata update that caused this merge needs to be retried.
 //
 // Retries are necessary if the topic or any partition has a retriable error.
-func (l *topicPartitions) merge(r *topicPartitionsData) (needsRetry bool) {
-	defer func() {
-		// Lock&Unlock guarantees that anything that loaded the value
-		// before our broadcast but had not reached Wait will hit
-		// the wait before we broadcast.
-		l.mu.Lock()
-		l.mu.Unlock()
-
-		l.c.Broadcast()
-	}()
-
+func (c *Client) mergeTopicPartitions(l *topicPartitions, r *topicPartitionsData) (needsRetry bool) {
 	lv := *l.load() // copy so our field writes do not collide with reads
-	defer func() { l.v.Store(&lv) }()
+	hadPartitions := len(lv.all) != 0
+	defer func() { c.storePartitionsUpdate(l, &lv, hadPartitions) }()
 
 	lv.loadErr = r.loadErr
 	lv.isInternal = r.isInternal
@@ -448,8 +449,8 @@ func handleDeletedPartitions(deleted []*topicPartition) {
 		sink := d.records.sink
 		sink.removeSource(d.records)
 		for _, batch := range d.records.batches {
-			for i, record := range batch.records {
-				sink.broker.client.finishRecordPromise(record, ErrPartitionDeleted)
+			for i, pnr := range batch.records {
+				sink.broker.client.finishRecordPromise(pnr.promisedRecord, ErrPartitionDeleted)
 				batch.records[i] = noPNR
 			}
 			emptyRecordsPool.Put(&batch.records)

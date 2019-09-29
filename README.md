@@ -4,11 +4,6 @@ kgo
 TODO
 ====
 
-- on metadata update, if topic gone, instead of delete immediately
-- set "first delete saw"
-- after X time, process deletion
-- fixes stale metadata problem
-
 - cleanup generating (names are not great)
 
 ACL descriptions in KIP-133
@@ -31,7 +26,6 @@ TODO
 - KIP-345 (static group membership, see KAFKA-8224)
 - KIP-392 (fetch request from closest replica w/ rack; 2.2.0)
 - KIP-429 (incremental rebalance, see KAFKA-8179; 2.4.0)
-- KIP-526 (reduce metadata lookups)
 
 NOT YET (KIP under discussion / unmerged PR)
 -------
@@ -91,3 +85,4 @@ DONE
 - KIP-480 (sticky partition producing; 2.4.0)
 - KIP-496 (offset delete admin command; 2.4.0)
 - KIP-525 (create topics v5 returns configs; 2.4.0)
+- KIP-526 (reduce metadata lookups; done minus part 2, which we wont do)

@@ -469,7 +469,7 @@ func (client *Client) finishBatch(batch *recordBatch, partition int32, baseOffse
 	for i, pnr := range batch.records {
 		pnr.Offset = baseOffset + int64(i)
 		pnr.Partition = partition
-		client.finishRecordPromise(pnr, err)
+		client.finishRecordPromise(pnr.promisedRecord, err)
 		batch.records[i] = noPNR
 	}
 	emptyRecordsPool.Put(&batch.records)
@@ -741,7 +741,7 @@ func (recBuf *recordBuffer) lockedFailBatch0(err error) {
 	batch0 := recBuf.batches[0]
 	recBuf.lockedRemoveBatch0()
 	for i, pnr := range batch0.records {
-		recBuf.cl.finishRecordPromise(pnr, err)
+		recBuf.cl.finishRecordPromise(pnr.promisedRecord, err)
 		batch0.records[i] = noPNR
 	}
 	emptyRecordsPool.Put(&batch0.records)
@@ -762,7 +762,7 @@ func (recBuf *recordBuffer) lockedFailAllRecords(err error) {
 	for _, batch := range recBuf.batches {
 		for i, pnr := range batch.records {
 			recBuf.cl.finishRecordPromise(
-				pnr,
+				pnr.promisedRecord,
 				err,
 			)
 			batch.records[i] = noPNR

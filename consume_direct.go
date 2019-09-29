@@ -85,12 +85,12 @@ func (cl *Client) AssignPartitions(opts ...DirectConsumeOpt) {
 		clientTopics := cl.cloneTopics()
 		for topic := range d.topics {
 			if _, exists := clientTopics[topic]; !exists {
-				clientTopics[topic] = newTopicPartitions()
+				clientTopics[topic] = newTopicPartitions(topic)
 			}
 		}
 		for topic := range d.partitions {
 			if _, exists := clientTopics[topic]; !exists {
-				clientTopics[topic] = newTopicPartitions()
+				clientTopics[topic] = newTopicPartitions(topic)
 			}
 		}
 		cl.topics.Store(clientTopics)

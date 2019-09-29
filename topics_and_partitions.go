@@ -3,6 +3,8 @@ package kgo
 import (
 	"sync"
 	"sync/atomic"
+
+	"github.com/twmb/kgo/kerr"
 )
 
 // loadTopics returns the client's current topics and their partitions.
@@ -31,13 +33,14 @@ func (c *Client) loadShortTopics() map[string][]int32 {
 	return short
 }
 
-func newTopicPartitions() *topicPartitions {
-	parts := new(topicPartitions)
+func newTopicPartitions(topic string) *topicPartitions {
+	parts := &topicPartitions{
+		topic: topic,
+	}
 	parts.v.Store(&topicPartitionsData{
 		all:      make(map[int32]*topicPartition),
 		writable: make(map[int32]*topicPartition),
 	})
-	parts.c = sync.NewCond(parts.mu.RLocker())
 	return parts
 }
 
@@ -48,12 +51,66 @@ type topicPartitions struct {
 	partsMu     sync.Mutex
 	partitioner topicPartitioner
 
-	mu sync.RWMutex
-	c  *sync.Cond
+	topic string
 }
 
 func (t *topicPartitions) load() *topicPartitionsData {
 	return t.v.Load().(*topicPartitionsData)
+}
+
+func (c *Client) storePartitionsUpdate(l *topicPartitions, lv *topicPartitionsData, hadPartitions bool) {
+	defer l.v.Store(lv)
+	// If the topic already had partitions, then there would be no
+	// unknown topic waiting and we do not need to notify anything.
+	if hadPartitions {
+		return
+	}
+
+	c.unknownTopicsMu.Lock()
+	defer c.unknownTopicsMu.Unlock()
+
+	// If there are no unknown topics or this topic is not unknown, then we
+	// are fine as well.
+	if len(c.unknownTopics) == 0 {
+		return
+	}
+	if _, exists := c.unknownTopics[l.topic]; !exists {
+		return
+	}
+
+	unknown := c.unknownTopics[l.topic]
+	unknownWait := c.unknownTopicsWait[l.topic]
+
+	// If we loaded no partitions because of a retriable error, we signal
+	// the waiting goroutine that a try happened. It is possible the
+	// goroutine is quitting and will not be draining unknownWait, so we do
+	// not require the send.
+	if len(lv.all) == 0 && kerr.IsRetriable(lv.loadErr) {
+		select {
+		case unknownWait <- struct{}{}:
+		default:
+		}
+		return
+	}
+
+	// We loaded partitions and there are waiting topics. We delete the
+	// topic from the unknown maps, close the unknown wait to kill the
+	// waiting goroutine, and partition all records.
+	delete(c.unknownTopics, l.topic)
+	delete(c.unknownTopicsWait, l.topic)
+	close(unknownWait)
+
+	// Note that we have to partition records or error under the unknown
+	// topics mu to ensure ordering.
+	if lv.loadErr != nil {
+		for _, pr := range unknown {
+			c.finishRecordPromise(pr, lv.loadErr)
+		}
+		return
+	}
+	for _, pr := range unknown {
+		c.doPartitionRecord(l, lv, pr)
+	}
 }
 
 // topicPartitionsData is the data behind a topicPartitions' v.

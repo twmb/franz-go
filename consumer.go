@@ -277,22 +277,12 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, inv
 		return
 	}
 
-	// Ensure all topics exist so that we will fetch their metadata.
-	c.cl.topicsMu.Lock()
-	clientTopics := c.cl.cloneTopics()
-	for topic := range assignments {
-		if _, exists := clientTopics[topic]; !exists {
-			clientTopics[topic] = newTopicPartitions()
-		}
-	}
-	c.cl.topics.Store(clientTopics)
-	c.cl.topicsMu.Unlock()
-
 	// If we have a topic and partition loaded and the assignments use
 	// exact offsets, we can avoid looking up offsets.
 	waiting := offsetsWaitingLoad{
 		fromSeq: seq,
 	}
+	clientTopics := c.cl.loadTopics()
 	for topic, partitions := range assignments {
 		topicParts := clientTopics[topic].load() // must be loadable; ensured above
 		if topicParts == nil {
