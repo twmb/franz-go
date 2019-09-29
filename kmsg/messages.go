@@ -5437,7 +5437,6 @@ func (*DeleteRecordsRequest) Key() int16                 { return 21 }
 func (*DeleteRecordsRequest) MaxVersion() int16          { return 1 }
 func (v *DeleteRecordsRequest) SetVersion(version int16) { v.Version = version }
 func (v *DeleteRecordsRequest) GetVersion() int16        { return v.Version }
-func (v *DeleteRecordsRequest) IsAdminRequest()          {}
 func (v *DeleteRecordsRequest) ResponseKind() Response {
 	return &DeleteRecordsResponse{Version: v.Version}
 }

@@ -1774,7 +1774,7 @@ DeleteTopicsResponse =>
 // the requested offset. All segments whose max partition is before the
 // requested offset are deleted, and any records within the segment before
 // the requested offset can no longer be read.
-DeleteRecordsRequest => key 21, max version 1, admin
+DeleteRecordsRequest => key 21, max version 1
   // Topics contains topics for which to delete records from.
   Topics: [=>]
     // Topic is a topic to delete records from.
