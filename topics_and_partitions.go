@@ -75,7 +75,8 @@ type topicPartitionsData struct {
 type topicPartition struct {
 	loadErr error // could be leader/listener/replica not avail
 
-	leader int32 // our broker leader
+	leader      int32 // our broker leader
+	leaderEpoch int32 // the broker leader's epoch
 
 	records     *recordBuffer
 	consumption *consumption

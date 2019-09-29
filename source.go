@@ -41,6 +41,7 @@ func (source *recordSource) addConsumption(add *consumption) {
 	add.allConsumptionsIdx = len(source.allConsumptions)
 	source.allConsumptions = append(source.allConsumptions, add)
 	source.mu.Unlock()
+
 	// We always clear the failing, since this could have been from moving
 	// a failing partition from one source to another (clearing the fail).
 	add.clearFailing()
@@ -84,14 +85,23 @@ type consumption struct {
 	// failing is set when we encounter a partition error.
 	// It is always cleared on metadata update.
 	failing bool
+
+	// loadingOffsets is true when we are resetting offsets with
+	// ListOffsets or with OffsetsForLeaderEpoch.
+	//
+	// This is unconditionally reset whenever assigning partitions
+	// or when the requests mentioned in the prior sentence finish.
+	loadingOffsets bool
 }
 
 // seqOffset is an offset we are consuming and the corresponding assign seq
 // this offset is originally from. The seq is key to ensuring we do not
 // return old fetches if a client's Assign* is called again.
 type seqOffset struct {
-	offset int64
-	seq    uint64
+	offset             int64
+	lastConsumedEpoch  int32
+	currentLeaderEpoch int32
+	seq                uint64
 }
 
 // seqOffsetFrom is updated while processing a fetch response. One the response
@@ -122,7 +132,13 @@ func (c *consumption) use() *seqOffsetFrom {
 //
 // If a buffered fetch had an error, this does not clear the error state. We
 // leave that for metadata updating.
-func (c *consumption) setOffset(offset int64, fromSeq uint64) {
+func (c *consumption) setOffset(
+	currentEpoch int32,
+	clearLoading bool,
+	offset int64,
+	epoch int32,
+	fromSeq uint64,
+) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -134,14 +150,22 @@ func (c *consumption) setOffset(offset int64, fromSeq uint64) {
 	if fromSeq > c.seq {
 		c.failing = false
 		c.seq = fromSeq
+	} else if currentEpoch < c.currentLeaderEpoch {
+		// If the seq is the same but the current epoch is stale, this set
+		// is from something out of date and a prior set bumped the epoch.
+		return
 	}
 	c.inUse = false
+	if clearLoading {
+		c.loadingOffsets = false
+	}
 
-	lastOffset := c.offset
 	c.offset = offset
+	c.lastConsumedEpoch = epoch
+	c.currentLeaderEpoch = currentEpoch
 	// The source could theoretically be nil here if we loaded a failing
 	// partition.
-	if offset != -1 && offset != lastOffset && c.source != nil {
+	if offset != -1 && c.source != nil {
 		c.source.maybeBeginConsuming()
 	}
 }
@@ -187,26 +211,45 @@ func (c *consumption) setFailing(fromSeq uint64) {
 	c.failing = true
 }
 
-// clearFailing is called to clear any failing state.
+// clearFailing is called to clear any failing state and compare
+// the current leader epoch to our last leader epoch.
 //
 // This is called when a consumption is added to a source (to clear a failing
 // state from migrating consumptions between sources) or when a metadata update
 // sees the consumption is still on the same source.
 //
 // Note the source cannot be nil here, since nil sources correspond to load
-// errors, and partitions with load errors do not call clearFailing.
+// errors, and partitions with load errors do not call this.
 func (c *consumption) clearFailing() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	c.failing = false
 
-	// We always restart draining if we can; it is possible that we were
-	// not failing in the erroring sense, but that the broker the
-	// consumption was on disappeared and the consumption migrated.
-	if c.offset != -1 {
+	// If we are in use, there is nothing to be gained by checking the
+	// epoch now. Additionally, if we are fenced, then no use starting.
+	if c.inUse || c.loadingOffsets {
+		return
+	}
+
+	// We always restart draining if we can and if the partition is not in
+	// use; it is possible that we were not failing in the erroring sense,
+	// but that the broker the consumption was on disappeared and the
+	// consumption migrated.
+	if c.offset != -1 && !c.inUse {
 		c.source.maybeBeginConsuming()
 	}
+}
+
+func (c *consumption) setLoadingOffsets(fromSeq uint64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if fromSeq < c.seq {
+		return
+	}
+
+	c.loadingOffsets = true
 }
 
 // bufferedFetch is a fetch response waiting to be consumed by the client, as
@@ -215,6 +258,11 @@ type bufferedFetch struct {
 	fetch      Fetch
 	seq        uint64
 	reqOffsets map[string]map[int32]*seqOffsetFrom
+}
+
+type fetchSeq struct {
+	Fetch
+	seq uint64
 }
 
 // takeBuffered drains a buffered fetch and updates offsets.
@@ -230,7 +278,7 @@ func (source *recordSource) takeBuffered() (Fetch, uint64) {
 func (source *recordSource) updateOffsets(reqOffsets map[string]map[int32]*seqOffsetFrom) {
 	for _, partitions := range reqOffsets {
 		for _, o := range partitions {
-			o.from.setOffset(o.offset, o.seq)
+			o.from.setOffset(o.currentLeaderEpoch, false, o.offset, o.lastConsumedEpoch, o.seq)
 		}
 	}
 	<-source.inflightSem
@@ -268,13 +316,13 @@ func (source *recordSource) createRequest() (req *fetchRequest, again bool) {
 
 		// If the offset is -1, a metadata update added a consumption to
 		// this source, but it is not yet in use.
-		if c.offset == -1 || c.inUse || c.failing {
+		if c.offset == -1 || c.inUse || c.failing || c.loadingOffsets {
 			c.mu.Unlock()
 			continue
 		}
 
 		again = true
-		req.addConsumptionLocked(c)
+		req.fetchConsumptionLocked(c)
 		c.mu.Unlock()
 	}
 
@@ -330,7 +378,7 @@ func (source *recordSource) backoff() {
 	}
 }
 
-func (source *recordSource) handleReqResp(req *fetchRequest, resp kmsg.Response, err error) {
+func (source *recordSource) handleReqResp(req *fetchRequest, kresp kmsg.Response, err error) {
 	var needsMetaUpdate bool
 
 	if err != nil {
@@ -341,9 +389,9 @@ func (source *recordSource) handleReqResp(req *fetchRequest, resp kmsg.Response,
 	}
 	source.consecutiveFailures = 0
 
-	r := resp.(*kmsg.FetchResponse)
+	resp := kresp.(*kmsg.FetchResponse)
 	newFetch := Fetch{
-		Topics: make([]FetchTopic, 0, len(r.Topics)),
+		Topics: make([]FetchTopic, 0, len(resp.Topics)),
 	}
 
 	// We do not look at the overall ErrorCode; this should only be set if
@@ -356,7 +404,7 @@ func (source *recordSource) handleReqResp(req *fetchRequest, resp kmsg.Response,
 	reloadOffsets := offsetsWaitingLoad{
 		fromSeq: req.maxSeq,
 	}
-	for _, rTopic := range r.Topics {
+	for _, rTopic := range resp.Topics {
 		topic := rTopic.Topic
 		topicOffsets, ok := req.offsets[topic]
 		if !ok {
@@ -376,13 +424,36 @@ func (source *recordSource) handleReqResp(req *fetchRequest, resp kmsg.Response,
 				continue
 			}
 
-			fetchPart, partNeedsMetaUpdate := partOffset.processRespPartition(topic, r.Version, rPartition)
+			fetchPart, partNeedsMetaUpdate := partOffset.processRespPartition(topic, resp.Version, rPartition)
 			if len(fetchPart.Records) > 0 || fetchPart.Err != nil {
 				fetchTopic.Partitions = append(fetchTopic.Partitions, fetchPart)
 			}
 			needsMetaUpdate = needsMetaUpdate || partNeedsMetaUpdate
+
+			// If we are out of range, we reset to what we can.
+			// With Kafka >= 2.1.0, we should only get offset out
+			// of range if we fetch before the start, but a user
+			// user could start past the end and want to reset to
+			// the end. We respect that.
 			if fetchPart.Err == kerr.OffsetOutOfRange {
-				reloadOffsets.setTopicPart(topic, partition, source.broker.client.cfg.consumer.resetOffset)
+				partOffset.from.setLoadingOffsets(partOffset.seq)
+				reloadOffsets.setTopicPartForList(topic, partition, source.broker.client.cfg.consumer.resetOffset)
+
+			} else if fetchPart.Err == kerr.FencedLeaderEpoch {
+				// With fenced leader epoch, we notify an error only if
+				// necessary after we find out if loss occurred.
+				fetchPart.Err = nil
+				// If we have consumed nothing, then we got unlucky
+				// by being fenced right after we grabbed metadata.
+				// We just refresh metadata and try again.
+				if partOffset.lastConsumedEpoch >= 0 {
+					partOffset.from.setLoadingOffsets(partOffset.seq)
+					reloadOffsets.setTopicPartForEpoch(topic, partition, Offset{
+						request:      partOffset.offset,
+						epoch:        partOffset.lastConsumedEpoch,
+						currentEpoch: partOffset.currentLeaderEpoch,
+					})
+				}
 			}
 		}
 
@@ -391,7 +462,7 @@ func (source *recordSource) handleReqResp(req *fetchRequest, resp kmsg.Response,
 		}
 	}
 
-	if len(reloadOffsets.waiting) > 0 {
+	if !reloadOffsets.isEmpty() {
 		consumer := &source.broker.client.consumer
 		consumer.mu.Lock()
 		reloadOffsets.mergeIntoLocked(consumer)
@@ -470,10 +541,9 @@ func (o *seqOffsetFrom) processRespPartition(
 		kerr.NotLeaderForPartition,
 		kerr.ReplicaNotAvailable,
 		kerr.KafkaStorageError,
-		kerr.UnknownLeaderEpoch,
-		kerr.FencedLeaderEpoch:
+		kerr.UnknownLeaderEpoch:
 
-		fetchPart.Err = nil
+		fetchPart.Err = nil // recoverable with client backoff; hide the error
 		fallthrough
 
 	default:
@@ -631,6 +701,7 @@ func (o *seqOffset) maybeAddRecord(fetchPart *FetchPartition, record *Record) {
 	// topic is compacted. That is fine; we ensure increasing offsets and
 	// only keep the resulting offset if the seq is the same.
 	o.offset = record.Offset + 1
+	o.lastConsumedEpoch = record.LeaderEpoch
 }
 
 ///////////////////////////////
@@ -716,7 +787,7 @@ type fetchRequest struct {
 	offsets    map[string]map[int32]*seqOffsetFrom
 }
 
-func (f *fetchRequest) addConsumptionLocked(c *consumption) {
+func (f *fetchRequest) fetchConsumptionLocked(c *consumption) {
 	if f.offsets == nil {
 		f.offsets = make(map[string]map[int32]*seqOffsetFrom)
 	}
@@ -765,7 +836,7 @@ func (f *fetchRequest) AppendTo(dst []byte) []byte {
 			}
 			reqTopic.Partitions = append(reqTopic.Partitions, kmsg.FetchRequestTopicPartition{
 				Partition:          partition,
-				CurrentLeaderEpoch: -1, // KIP-320
+				CurrentLeaderEpoch: seqOffset.currentLeaderEpoch,
 				FetchOffset:        seqOffset.offset,
 				LogStartOffset:     -1,
 				PartitionMaxBytes:  f.maxPartBytes,

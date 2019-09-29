@@ -113,6 +113,12 @@ func (c *Client) updateMetadataLoop() {
 					timer.Stop()
 				case <-timer.C:
 				}
+
+				// Drain any refire that occured during our wait.
+				select {
+				case <-c.updateMetadataCh:
+				default:
+				}
 			}
 		}
 
@@ -237,11 +243,16 @@ func (c *Client) fetchTopicMetadata(reqTopics []string) (map[string]*topicPartit
 
 		for i := range topicMeta.Partitions {
 			partMeta := &topicMeta.Partitions[i]
+			leaderEpoch := partMeta.LeaderEpoch
+			if meta.Version < 7 {
+				leaderEpoch = -1
+			}
 
 			p := &topicPartition{
 				loadErr: kerr.ErrorForCode(partMeta.ErrorCode),
 
-				leader: partMeta.Leader,
+				leader:      partMeta.Leader,
+				leaderEpoch: leaderEpoch,
 
 				records: &recordBuffer{
 					cl: c,
@@ -261,9 +272,10 @@ func (c *Client) fetchTopicMetadata(reqTopics []string) (map[string]*topicPartit
 
 					allConsumptionsIdx: -1, // same, see below
 					seqOffset: seqOffset{
-						offset: -1, // required to not consume until needed
+						offset:             -1, // required to not consume until needed
+						currentLeaderEpoch: leaderEpoch,
+						lastConsumedEpoch:  -1, // required sentinel
 					},
-					failing: true,
 				},
 			}
 
@@ -366,6 +378,13 @@ func (l *topicPartitions) merge(r *topicPartitionsData) (needsRetry bool) {
 			newTP.loadErr = err
 			newTP.records.bumpTriesAndMaybeFailBatch0(newTP.loadErr)
 			needsRetry = true
+			continue
+		}
+
+		// Update the old's leader epoch before we do any pointer
+		// copying. Our epoch should not go backwards, but just in
+		// case, we can guard against it.
+		if newTP.leaderEpoch < oldTP.leaderEpoch {
 			continue
 		}
 

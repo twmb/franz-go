@@ -72,7 +72,7 @@ func defaultCfg() cfg {
 			maxWait:      500,
 			maxBytes:     50 << 20,
 			maxPartBytes: 10 << 20,
-			resetOffset:  ConsumeStartOffset(),
+			resetOffset:  NewOffset(AtStart()),
 		},
 	}
 }

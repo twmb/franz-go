@@ -66,6 +66,27 @@ var (
 	ErrRecordTimeout = errors.New("records have timed out before they were able to be produced")
 )
 
+// ErrDataLoss is returned for Kafka >=2.1.0 when data loss is detected and the
+// client is able to reset to the last valid offset.
+type ErrDataLoss struct {
+	// Topic is the topic data loss was detected on.
+	Topic string
+	// Partition is the partition data loss was detected on.
+	Partition int32
+	// ConsumedTo is what the client had consumed to for this partition before
+	// data loss was detected.
+	ConsumedTo int64
+	// ResetTo is what the client reset the partition to; everything from
+	// ResetTo to ConsumedTo was lost.
+	ResetTo int64
+}
+
+func (e *ErrDataLoss) Error() string {
+	return fmt.Sprintf("topic %s partition %d lost records;"+
+		" the client consumed to offset %d but was reset to offset %d",
+		e.Topic, e.Partition, e.ConsumedTo, e.ResetTo)
+}
+
 func isRetriableBrokerErr(err error) bool {
 	switch err {
 	case ErrBrokerDead,

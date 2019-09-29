@@ -614,7 +614,6 @@ func (g *groupConsumer) fetchOffsets(ctx context.Context) error {
 		return err
 	}
 
-	// TODO KIP-320
 	offsets := make(map[string]map[int32]Offset)
 	for _, rTopic := range resp.Topics {
 		topicOffsets := make(map[int32]Offset)
@@ -623,7 +622,13 @@ func (g *groupConsumer) fetchOffsets(ctx context.Context) error {
 			if rPartition.ErrorCode != 0 {
 				return kerr.ErrorForCode(rPartition.ErrorCode)
 			}
-			offset := ConsumeExactOffset(rPartition.Offset)
+			offset := Offset{
+				request: rPartition.Offset,
+				epoch:   -1,
+			}
+			if resp.Version >= 5 { // KIP-320
+				offset.epoch = rPartition.LeaderEpoch
+			}
 			if rPartition.Offset == -1 {
 				offset = g.cl.cfg.consumer.resetOffset
 			}
@@ -702,11 +707,18 @@ func (g *groupConsumer) findNewAssignments(topics map[string]*topicPartitions) {
 }
 
 // uncommit tracks the latest offset polled (+1) and the latest commit.
-// The reason head is just past the latest offset is beceause we want
+// The reason head is just past the latest offset is because we want
 // to commit TO an offset, not BEFORE an offset.
 type uncommit struct {
-	head      int64
-	committed int64
+	head      EpochOffset
+	committed EpochOffset
+}
+
+// EpochOffset combines a record offset with the leader epoch the broker
+// was at when the record was written.
+type EpochOffset struct {
+	Epoch  int32
+	Offset int64
 }
 
 type uncommitted map[string]map[int32]uncommit
@@ -725,7 +737,7 @@ func (g *groupConsumer) updateUncommitted(fetches Fetches) {
 				if len(partition.Records) == 0 {
 					continue
 				}
-				offset := partition.Records[len(partition.Records)-1].Offset
+				final := partition.Records[len(partition.Records)-1]
 
 				if topicOffsets == nil {
 					if g.uncommitted == nil {
@@ -740,11 +752,14 @@ func (g *groupConsumer) updateUncommitted(fetches Fetches) {
 				uncommit, exists := topicOffsets[partition.Partition]
 				// Our new head points just past the final consumed offset,
 				// that is, if we rejoin, this is the offset to begin at.
-				newhead := offset + 1
-				if exists && uncommit.head > newhead {
+				newOffset := final.Offset + 1
+				if exists && uncommit.head.Offset > newOffset {
 					continue // odd
 				}
-				uncommit.head = newhead
+				uncommit.head = EpochOffset{
+					final.LeaderEpoch, // -1 if old message / unknown
+					newOffset,
+				}
 				topicOffsets[partition.Partition] = uncommit
 			}
 		}
@@ -803,7 +818,10 @@ func (g *groupConsumer) updateCommitted(
 				continue
 			}
 
-			uncommit.committed = reqPart.Offset
+			uncommit.committed = EpochOffset{
+				reqPart.LeaderEpoch,
+				reqPart.Offset,
+			}
 			topic[respPart.Partition] = uncommit
 		}
 	}
@@ -832,7 +850,7 @@ func (g *groupConsumer) loopCommit() {
 // always updated on calls to PollFetches.
 //
 // If there are no uncommitted offsets, this returns nil.
-func (cl *Client) Uncommitted() map[string]map[int32]int64 {
+func (cl *Client) Uncommitted() map[string]map[int32]EpochOffset {
 	cl.consumer.mu.Lock()
 	defer cl.consumer.mu.Unlock()
 	if cl.consumer.typ != consumerTypeGroup {
@@ -841,31 +859,31 @@ func (cl *Client) Uncommitted() map[string]map[int32]int64 {
 	return cl.consumer.group.getUncommitted()
 }
 
-func (g *groupConsumer) getUncommitted() map[string]map[int32]int64 {
+func (g *groupConsumer) getUncommitted() map[string]map[int32]EpochOffset {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	return g.getUncommittedLocked()
 }
 
-func (g *groupConsumer) getUncommittedLocked() map[string]map[int32]int64 {
+func (g *groupConsumer) getUncommittedLocked() map[string]map[int32]EpochOffset {
 	if g.uncommitted == nil {
 		return nil
 	}
 
-	var uncommitted map[string]map[int32]int64
+	var uncommitted map[string]map[int32]EpochOffset
 	for topic, partitions := range g.uncommitted {
-		var topicUncommitted map[int32]int64
+		var topicUncommitted map[int32]EpochOffset
 		for partition, uncommit := range partitions {
 			if uncommit.head == uncommit.committed {
 				continue
 			}
 			if topicUncommitted == nil {
 				if uncommitted == nil {
-					uncommitted = make(map[string]map[int32]int64, len(g.uncommitted))
+					uncommitted = make(map[string]map[int32]EpochOffset, len(g.uncommitted))
 				}
 				topicUncommitted = uncommitted[topic]
 				if topicUncommitted == nil {
-					topicUncommitted = make(map[int32]int64, len(partitions))
+					topicUncommitted = make(map[int32]EpochOffset, len(partitions))
 					uncommitted[topic] = topicUncommitted
 				}
 			}
@@ -900,7 +918,7 @@ func (g *groupConsumer) getUncommittedLocked() map[string]map[int32]int64 {
 // higher than the known last commit.
 func (cl *Client) Commit(
 	ctx context.Context,
-	uncommitted map[string]map[int32]int64,
+	uncommitted map[string]map[int32]EpochOffset,
 	onDone func(*kmsg.OffsetCommitRequest, *kmsg.OffsetCommitResponse, error),
 ) {
 	if onDone == nil {
@@ -953,7 +971,7 @@ func (g *groupConsumer) defaultRevoke(_ context.Context, _ map[string][]int32) {
 // commit is the logic for Commit; see Commit's documentation
 func (g *groupConsumer) commit(
 	ctx context.Context,
-	uncommitted map[string]map[int32]int64,
+	uncommitted map[string]map[int32]EpochOffset,
 	onDone func(*kmsg.OffsetCommitRequest, *kmsg.OffsetCommitResponse, error),
 ) {
 	if onDone == nil { // note we must always call onDone
@@ -982,8 +1000,6 @@ func (g *groupConsumer) commit(
 		MemberID:        memberID,
 		GroupInstanceID: nil, // TODO KIP-345
 	}
-	// TODO capture epoch for KIP-320 before the goroutine below
-	// to avoid race read/write problems
 
 	if ctx.Done() != nil {
 		go func() {
@@ -1007,11 +1023,11 @@ func (g *groupConsumer) commit(
 				Topic: topic,
 			})
 			reqTopic := &req.Topics[len(req.Topics)-1]
-			for partition, offset := range partitions {
+			for partition, eo := range partitions {
 				reqTopic.Partitions = append(reqTopic.Partitions, kmsg.OffsetCommitRequestTopicPartition{
 					Partition:   partition,
-					Offset:      offset,
-					LeaderEpoch: -1, // TODO KIP-320,
+					Offset:      eo.Offset,
+					LeaderEpoch: eo.Epoch, // KIP-320
 					Metadata:    &memberID,
 				})
 			}
