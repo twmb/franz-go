@@ -1588,7 +1588,7 @@ DescribeGroupsResponse =>
     AuthorizedOperations: int32 // v3+
 
 // ListGroupsRequest issues a request to list all groups.
-ListGroupsRequest => key 16, max version 2
+ListGroupsRequest => key 16, max version 2, admin
 
 // ListGroupsResponse is returned from a ListGroupsRequest.
 ListGroupsResponse =>

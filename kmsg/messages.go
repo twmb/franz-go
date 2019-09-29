@@ -4818,6 +4818,7 @@ func (*ListGroupsRequest) Key() int16                 { return 16 }
 func (*ListGroupsRequest) MaxVersion() int16          { return 2 }
 func (v *ListGroupsRequest) SetVersion(version int16) { v.Version = version }
 func (v *ListGroupsRequest) GetVersion() int16        { return v.Version }
+func (v *ListGroupsRequest) IsAdminRequest()          {}
 func (v *ListGroupsRequest) ResponseKind() Response   { return &ListGroupsResponse{Version: v.Version} }
 
 func (v *ListGroupsRequest) AppendTo(dst []byte) []byte {
