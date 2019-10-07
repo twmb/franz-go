@@ -187,7 +187,7 @@ start:
 		return nil, err
 	}
 	meta := kresp.(*kmsg.MetadataResponse)
-	if meta.ControllerID > 0 {
+	if meta.ControllerID >= 0 {
 		atomic.StoreInt32(&c.controllerID, meta.ControllerID)
 	}
 	c.updateBrokers(meta.Brokers)
