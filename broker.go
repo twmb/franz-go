@@ -403,7 +403,7 @@ func (cx *brokerCxn) writeRequest(req kmsg.Request) (int32, error) {
 
 // readResponse reads a response from conn, ensures the correlation ID is
 // correct, and returns a newly allocated slice on success.
-func readResponse(conn io.Reader, correlationID int32) ([]byte, error) {
+func readResponse(conn io.ReadCloser, correlationID int32) ([]byte, error) {
 	sizeBuf := make([]byte, 4)
 	if _, err := io.ReadFull(conn, sizeBuf[:4]); err != nil {
 		return nil, ErrConnDead
@@ -424,6 +424,7 @@ func readResponse(conn io.Reader, correlationID int32) ([]byte, error) {
 	gotID := int32(binary.BigEndian.Uint32(buf))
 	buf = buf[4:]
 	if gotID != correlationID {
+		conn.Close()
 		return nil, ErrCorrelationIDMismatch
 	}
 	return buf, nil
