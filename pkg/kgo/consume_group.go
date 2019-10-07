@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/twmb/kgo/kerr"
-	"github.com/twmb/kgo/kmsg"
+	"github.com/twmb/kgo/pkg/kerr"
+	"github.com/twmb/kgo/pkg/kmsg"
 )
 
 // GroupOpt is an option to configure group consuming.

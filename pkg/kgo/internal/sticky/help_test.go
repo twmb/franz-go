@@ -3,7 +3,7 @@ package sticky
 import (
 	"testing"
 
-	"github.com/twmb/kgo/kmsg"
+	"github.com/twmb/kgo/pkg/kmsg"
 )
 
 type udBuilder struct {

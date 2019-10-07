@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"text/tabwriter"
 
-	"github.com/twmb/kgo/kmsg"
+	"github.com/twmb/kgo/pkg/kmsg"
 )
 
 // Versions is a list of versions, with each item corresponding to a Kafka key

@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/twmb/kgo/kerr"
+	"github.com/twmb/kgo/pkg/kerr"
 )
 
 type metawait struct {

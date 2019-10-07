@@ -4,7 +4,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/twmb/kgo/kerr"
+	"github.com/twmb/kgo/pkg/kerr"
 )
 
 var (

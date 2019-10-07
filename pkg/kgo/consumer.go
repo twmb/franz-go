@@ -4,8 +4,8 @@ import (
 	"context"
 	"sync"
 
-	"github.com/twmb/kgo/kerr"
-	"github.com/twmb/kgo/kmsg"
+	"github.com/twmb/kgo/pkg/kerr"
+	"github.com/twmb/kgo/pkg/kmsg"
 )
 
 // Offset is a message offset into a partition.

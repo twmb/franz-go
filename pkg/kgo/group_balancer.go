@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/twmb/kgo/internal/sticky"
-	"github.com/twmb/kgo/kmsg"
+	"github.com/twmb/kgo/pkg/kgo/internal/sticky"
+	"github.com/twmb/kgo/pkg/kmsg"
 )
 
 // GroupBalancer balances topics and partitions among group members.

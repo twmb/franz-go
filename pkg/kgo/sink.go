@@ -6,9 +6,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/twmb/kgo/kbin"
-	"github.com/twmb/kgo/kerr"
-	"github.com/twmb/kgo/kmsg"
+	"github.com/twmb/kgo/pkg/kbin"
+	"github.com/twmb/kgo/pkg/kerr"
+	"github.com/twmb/kgo/pkg/kmsg"
 )
 
 type recordSink struct {

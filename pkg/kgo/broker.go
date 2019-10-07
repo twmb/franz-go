@@ -9,9 +9,9 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/twmb/kgo/kbin"
-	"github.com/twmb/kgo/kmsg"
-	"github.com/twmb/kgo/kversion"
+	"github.com/twmb/kgo/pkg/kbin"
+	"github.com/twmb/kgo/pkg/kmsg"
+	"github.com/twmb/kgo/pkg/kversion"
 )
 
 type promisedReq struct {

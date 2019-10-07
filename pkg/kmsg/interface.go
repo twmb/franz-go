@@ -8,7 +8,7 @@ package kmsg
 import (
 	"encoding/binary"
 
-	"github.com/twmb/kgo/kbin"
+	"github.com/twmb/kgo/pkg/kbin"
 )
 
 // Request represents a type that can be requested to Kafka.

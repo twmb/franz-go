@@ -6,8 +6,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/twmb/kgo/kerr"
-	"github.com/twmb/kgo/kmsg"
+	"github.com/twmb/kgo/pkg/kerr"
+	"github.com/twmb/kgo/pkg/kmsg"
 )
 
 // TODO KIP-359 leader epoch in produce request when it is released

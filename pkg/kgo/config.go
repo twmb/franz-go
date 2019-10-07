@@ -6,7 +6,7 @@ import (
 	"net"
 	"time"
 
-	"github.com/twmb/kgo/kversion"
+	"github.com/twmb/kgo/pkg/kversion"
 )
 
 // Opt is an option to configure a client.
