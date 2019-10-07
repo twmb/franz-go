@@ -17,10 +17,12 @@ TODO
 - KIP-12 (sasl & ssl)
 - KIP-43 (sasl enhancements)
 - KIP-48 (create / describe delegation token; 1.1.0)
+- KIP-84 (sasl scram; 0.10.2)
 - KIP-140 (describe/create/delete ACLs; 0.11.0)
 - KIP-152 (more sasl, introduce sasl authenticate; 1.0.0)
 - KIP-255 (oauth via sasl/oauthbearer; 2.0.0)
 - KIP-368 (periodically reauth sasl; 2.2.0)
+
 
 - KIP-98 (EOS; 0.11.0)
 - KIP-345 (static group membership, see KAFKA-8224)
@@ -35,8 +37,9 @@ NOT YET (KIP under discussion / unmerged PR)
 - KIP-423 (no rebalance on JoinGroup from leader in certain cases; under discussion)
 - KIP-447 (transaction changes to better support group changes)
 - KIP-467 (produce response error change for per-record errors; 2.4.0)
-- KIP-482 (tagged fields; KAFKA-8885)
+- KIP-482 (tagged fields; KAFKA-8885; 2.4.0)
 - KIP-497 (new inter broker admin command "alter isr")
+- KIP-511 (add client name / version in apiversions req; 2.4.0)
 - KIP-516 (topic.id field in some commands, including fetch)
 - KIP-518 (list groups by state command change)
 
