@@ -1,4 +1,4 @@
-module github.com/twmb/kgo
+module github.com/twmb/kafka-go
 
 go 1.12
 
