@@ -4,8 +4,8 @@ import (
 	"context"
 	"sync"
 
-	"github.com/twmb/kgo/pkg/kerr"
-	"github.com/twmb/kgo/pkg/kmsg"
+	"github.com/twmb/kafka-go/pkg/kerr"
+	"github.com/twmb/kafka-go/pkg/kmsg"
 )
 
 // Offset is a message offset into a partition.

@@ -4,7 +4,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/twmb/kgo/pkg/kerr"
+	"github.com/twmb/kafka-go/pkg/kerr"
 )
 
 var (

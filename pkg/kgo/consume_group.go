@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/twmb/kgo/pkg/kerr"
-	"github.com/twmb/kgo/pkg/kmsg"
+	"github.com/twmb/kafka-go/pkg/kerr"
+	"github.com/twmb/kafka-go/pkg/kmsg"
 )
 
 // GroupOpt is an option to configure group consuming.

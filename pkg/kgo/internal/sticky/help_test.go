@@ -3,7 +3,7 @@ package sticky
 import (
 	"testing"
 
-	"github.com/twmb/kgo/pkg/kmsg"
+	"github.com/twmb/kafka-go/pkg/kmsg"
 )
 
 type udBuilder struct {

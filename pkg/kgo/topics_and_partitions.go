@@ -4,7 +4,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/twmb/kgo/pkg/kerr"
+	"github.com/twmb/kafka-go/pkg/kerr"
 )
 
 // loadTopics returns the client's current topics and their partitions.

@@ -6,9 +6,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/twmb/kgo/pkg/kbin"
-	"github.com/twmb/kgo/pkg/kerr"
-	"github.com/twmb/kgo/pkg/kmsg"
+	"github.com/twmb/kafka-go/pkg/kbin"
+	"github.com/twmb/kafka-go/pkg/kerr"
+	"github.com/twmb/kafka-go/pkg/kmsg"
 )
 
 type recordSink struct {

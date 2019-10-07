@@ -9,9 +9,9 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/twmb/kgo/pkg/kbin"
-	"github.com/twmb/kgo/pkg/kmsg"
-	"github.com/twmb/kgo/pkg/kversion"
+	"github.com/twmb/kafka-go/pkg/kbin"
+	"github.com/twmb/kafka-go/pkg/kmsg"
+	"github.com/twmb/kafka-go/pkg/kversion"
 )
 
 type promisedReq struct {

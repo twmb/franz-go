@@ -11,8 +11,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/twmb/kgo/pkg/kerr"
-	"github.com/twmb/kgo/pkg/kmsg"
+	"github.com/twmb/kafka-go/pkg/kerr"
+	"github.com/twmb/kafka-go/pkg/kmsg"
 )
 
 // Client issues requests and handles responses to a Kafka cluster.
