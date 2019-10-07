@@ -1,0 +1,25 @@
+version: "3.7"
+services:
+  zookeeper:
+    image: twmb:zk-3.5.5
+    network_mode: host
+
+  kafka-1:
+    image: twmb:kafka-2.12-2.3.0
+    depends_on:
+      - zookeeper
+    network_mode: host
+    environment:
+      KPROP_BROKER_ID: 1
+      KPROP_LISTENERS: 'PLAINTEXT://localhost:9092,SASL_PLAINTEXT://localhost:9093'
+      KPROP_SASL_ENABLED_MECHANISMS: 'PLAIN,SCRAM-SHA-256,SCRAM-SHA-512'
+      KAFKA_OPTS: "-Djava.security.auth.login.config=/kafka/config/kafka_server_jaas.conf"
+    volumes:
+      - type: bind
+        source: ${PWD}/kafka_server_jaas.conf
+        target: /kafka/config/kafka_server_jaas.conf
+        read_only: true
+      - type: bind
+        source: ${PWD}/setup.sh
+        target: /kafka/setup.sh
+        read_only: true
