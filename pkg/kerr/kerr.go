@@ -150,6 +150,7 @@ var (
 	ElectionNotNeeded                  = &Error{"ELECTION_NOT_NEEDED", 84, true, "Leader election not needed for topic partition"}
 	NoReassignmentInProgress           = &Error{"NO_REASSIGNMENT_IN_PROGRESS", 85, false, "No partition reassignment is in progress."}
 	GroupSubscribedToTopic             = &Error{"GROUP_SUBSCRIBED_TO_TOPIC", 86, false, "Deleting offsets of a topic is forbidden while the consumer group is actively subscribed to it."}
+	InvalidRecord                      = &Error{"INVALID_RECORD", 87, false, "This record has failed the validation on broker and hence be rejected."}
 )
 
 var code2err = map[int16]error{
@@ -241,4 +242,5 @@ var code2err = map[int16]error{
 	84: ElectionNotNeeded,
 	85: NoReassignmentInProgress,
 	86: GroupSubscribedToTopic,
+	87: InvalidRecord,
 }

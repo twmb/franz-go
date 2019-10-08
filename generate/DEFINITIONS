@@ -210,7 +210,7 @@ RecordBatch => not top level
 // Note that the special client ID "__admin_client" will allow you to produce
 // records to internal topics. This is generally recommended if you want to
 // break your Kafka cluster.
-ProduceRequest => key 0, max version 7
+ProduceRequest => key 0, max version 8
   TransactionID: nullable-string // v3+
   // Acks specifies the number of acks that the partition leaders must receive
   // from in sync replicas before considering a record batch fully written.
@@ -336,6 +336,16 @@ ProduceResponse =>
       // UNKNOWN_PRODUCER_ID means Kafka rotated records containing the used
       // producer ID out of existence, or if Kafka lost data.
       LogStartOffset: int64 // v5+
+      // ErrorRecords are indices of individual records that caused a batch
+      // to error. This was added for KIP-467.
+      ErrorRecords: [=>] // v8+
+        // RelativeOffset is the offset of the record that caused problems.
+        RelativeOffset: int32
+        // ErrorMessage is the error of this record.
+        ErrorMessage: nullable-string
+      // ErrorMessage is the global error message of of what caused this batch
+      // to error.
+      ErrorMessage: nullable-string // v8+
   // ThrottleTimeMs is how long of a throttle Kafka will apply to the client
   // after this request.
   // For Kafka < 2.0.0, the throttle is applied before issuing a response.
@@ -1864,7 +1874,7 @@ DeleteRecordsResponse =>
       ErrorCode: int16
 
 // TODO
-InitProducerIDRequest => key 22, max version 2, txn coordinator
+InitProducerIDRequest => key 22, max version 1, txn coordinator
   TransactionalID: nullable-string
   TransactionTimeoutMs: int32
 

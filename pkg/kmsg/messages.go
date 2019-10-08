@@ -687,7 +687,7 @@ type ProduceRequest struct {
 }
 
 func (*ProduceRequest) Key() int16                 { return 0 }
-func (*ProduceRequest) MaxVersion() int16          { return 7 }
+func (*ProduceRequest) MaxVersion() int16          { return 8 }
 func (v *ProduceRequest) SetVersion(version int16) { v.Version = version }
 func (v *ProduceRequest) GetVersion() int16        { return v.Version }
 func (v *ProduceRequest) ResponseKind() Response   { return &ProduceResponse{Version: v.Version} }
@@ -736,6 +736,13 @@ func (v *ProduceRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 
+type ProduceResponseTopicPartitionErrorRecord struct {
+	// RelativeOffset is the offset of the record that caused problems.
+	RelativeOffset int32
+
+	// ErrorMessage is the error of this record.
+	ErrorMessage *string
+}
 type ProduceResponseTopicPartition struct {
 	// Partition is the partition this response pertains to.
 	Partition int32
@@ -830,6 +837,14 @@ type ProduceResponseTopicPartition struct {
 	// UNKNOWN_PRODUCER_ID means Kafka rotated records containing the used
 	// producer ID out of existence, or if Kafka lost data.
 	LogStartOffset int64 // v5+
+
+	// ErrorRecords are indices of individual records that caused a batch
+	// to error. This was added for KIP-467.
+	ErrorRecords []ProduceResponseTopicPartitionErrorRecord // v8+
+
+	// ErrorMessage is the global error message of of what caused this batch
+	// to error.
+	ErrorMessage *string // v8+
 }
 type ProduceResponseTopic struct {
 	// Topic is the topic this response pertains to.
@@ -901,6 +916,31 @@ func (v *ProduceResponse) ReadFrom(src []byte) error {
 								if version >= 5 {
 									v := b.Int64()
 									s.LogStartOffset = v
+								}
+								if version >= 8 {
+									v := s.ErrorRecords
+									a := v
+									for i := b.ArrayLen(); i > 0; i-- {
+										a = append(a, ProduceResponseTopicPartitionErrorRecord{})
+										v := &a[len(a)-1]
+										{
+											s := v
+											{
+												v := b.Int32()
+												s.RelativeOffset = v
+											}
+											{
+												v := b.NullableString()
+												s.ErrorMessage = v
+											}
+										}
+									}
+									v = a
+									s.ErrorRecords = v
+								}
+								if version >= 8 {
+									v := b.NullableString()
+									s.ErrorMessage = v
 								}
 							}
 						}
@@ -5684,7 +5724,7 @@ type InitProducerIDRequest struct {
 }
 
 func (*InitProducerIDRequest) Key() int16                 { return 22 }
-func (*InitProducerIDRequest) MaxVersion() int16          { return 2 }
+func (*InitProducerIDRequest) MaxVersion() int16          { return 1 }
 func (v *InitProducerIDRequest) SetVersion(version int16) { v.Version = version }
 func (v *InitProducerIDRequest) GetVersion() int16        { return v.Version }
 func (v *InitProducerIDRequest) IsTxnCoordinatorRequest() {}
