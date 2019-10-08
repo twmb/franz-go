@@ -34,7 +34,7 @@ func V0_8_0() Versions {
 		0, // 1 fetch
 		0, // 2 list offset
 		0, // 3 metadata
-		0, // 4 leader and ISR
+		0, // 4 leader and isr
 		0, // 5 stop replica
 		0, // 6 update metadata, actually not supported for a bit
 		0, // 7 controlled shutdown, actually not supported for a bit
@@ -117,7 +117,7 @@ func V0_11_0() Versions {
 	v[0]++  // 3 produce KAFKA-4816 5bd06f1d54 KIP-98
 	v[1]++  // 4 fetch (same)
 	v[1]++  // 5 fetch KAFKA-4586 8b05ad406d KIP-107
-	v[3]++  // 4 metadata KAFKA-5291 7311dcbc53
+	v[3]++  // 4 metadata KAFKA-5291 7311dcbc53 (3 below)
 	v[9]++  // 3 offset fetch KAFKA-3853 c2d9b95f36 KIP-98
 	v[10]++ // 1 find coordinator KAFKA-5043 d0e7c6b930 KIP-98
 	v = append(v,
@@ -159,7 +159,7 @@ func V1_0_0() Versions {
 	v[0]++ // 4 produce KAFKA-4763 fc93fb4b61 KIP-112
 	v[1]++ // 6 fetch (same)
 	v[3]++ // 5 metadata (same)
-	v[4]++ // 1 leader and ISR (same)
+	v[4]++ // 1 leader and isr (same)
 	v[6]++ // 4 update metadata (same)
 
 	v[0]++  // 5 produce KAFKA-5793 94692288be
@@ -202,15 +202,15 @@ func V2_0_0() Versions {
 	v[10]++ // 2 find coordinator (same)
 	v[11]++ // 3 join group (same)
 	v[12]++ // 2 heartbeat (same)
-	v[13]++ // 3 leave group (same)
+	v[13]++ // 2 leave group (same)
 	v[14]++ // 2 sync group (same)
 	v[15]++ // 2 describe groups (same)
 	v[16]++ // 2 list group (same)
-	v[18]++ // 2 api versions
+	v[18]++ // 2 api versions (same)
 	v[19]++ // 3 create topics (same)
 	v[20]++ // 2 delete topics (same)
 	v[21]++ // 1 delete records (same)
-	v[22]++ // 2 init producer id (same)
+	v[22]++ // 1 init producer id (same)
 	v[24]++ // 1 add partitions to txn (same)
 	v[25]++ // 1 add offsets to txn (same)
 	v[26]++ // 1 end txn (same)
@@ -302,5 +302,33 @@ func Tip() Versions {
 		0, // 46 list partition reassignments (same)
 		0, // 47 offset delete KAFKA-8730 e24d0e22ab KIP-496
 	)
+
+	// introducing flexible versions; 24 were bumped, only api versions was added to (for KIP-511)
+	v[3]++  // 9 metadata KAFKA-8885 apache/kafka#7325 KIP-482
+	v[4]++  // 4 leader and isr (same)
+	v[5]++  // 2 stop replica (same)
+	v[6]++  // 6 update metadata (same)
+	v[7]++  // 3 controlled shutdown (same)
+	v[8]++  // 8 offset commit (same)
+	v[9]++  // 6 offset fetch (same)
+	v[10]++ // 3 find coordinator (same)
+	v[11]++ // 6 join group (same)
+	v[12]++ // 4 heartbeat (same)
+	v[13]++ // 4 leave group (same)
+	v[14]++ // 4 sync group (same)
+	v[15]++ // 5 describe groups (same)
+	v[16]++ // 3 list group (same)
+	v[18]++ // 3 api versions (same, also KIP-511)
+	v[19]++ // 6 create topics (same)
+	v[20]++ // 4 delete topics (same)
+	v[22]++ // 2 init producer id (same)
+	v[38]++ // 2 create delegation token (same)
+	v[42]++ // 2 delete groups (same)
+	v[43]++ // 2 elect preferred leaders (same)
+	v[44]++ // 1 incremental alter configs (same)
+	// also 45, 46; not bumped since in same release
+
+	v[0]++ // 8 produce KAFKA-8729 f6f24c4700 KIP-467
+
 	return v
 }
