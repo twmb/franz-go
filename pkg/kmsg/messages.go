@@ -4996,11 +4996,18 @@ func (v *SASLHandshakeResponse) ReadFrom(src []byte) error {
 
 // ApiVersionsRequest requests what API versions a Kafka broker supports.
 //
-// Because a client does not know what version of ApiVersionsRequest a broker
-// supports, Kafka responds to versions with the highest version it supports.
-// This allows clients to always use the latest version of ApiVersionsRequest.
-// If the broker supports only a lower version of the request, it will reply
-// with an UNSUPPORTED_VERSION error.
+// Note that the client does not know the version a broker supports before
+// sending this request.
+//
+// Before Kafka 2.4.0, if the client used a version larger than the broker
+// understands, the broker would reply with an UNSUPPORTED_VERSION error using
+// the version 0 message format (i.e., 6 bytes long!). The client should retry
+// with a lower version.
+//
+// After Kafka 2.4.0, if the client uses a version larger than the broker
+// understands, the broker replies with UNSUPPORTED_VERSIONS using the version
+// 0 message format but additionally includes the api versions the broker does
+// support.
 type ApiVersionsRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
@@ -5035,8 +5042,11 @@ type ApiVersionsResponse struct {
 	Version int16
 
 	// ErrorCode is UNSUPPORTED_VERSION if the request was issued with a higher
-	// version than the broker supports. Regardless of the error, the broker
-	// replies with the ApiVersions it supports.
+	// version than the broker supports. Before Kafka 2.4.0, if this error is
+	// returned, the rest of this struct will be empty.
+	//
+	// Starting in Kafka 2.4.0 (with version 3), even with an UNSUPPORTED_VERSION
+	// error, the broker still replies with the ApiVersions it supports.
 	ErrorCode int16
 
 	// ApiVersions is an array corresponding to API keys the broker supports

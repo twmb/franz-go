@@ -349,7 +349,7 @@ func (cx *brokerCxn) init(maxVersions kversion.Versions) error {
 	}
 
 	// TODO sasl
-	if maxVersions == nil || len(maxVersions) > 18 {
+	if maxVersions == nil || len(maxVersions) >= 19 {
 		if err := cx.requestAPIVersions(); err != nil {
 			return err
 		}
@@ -359,8 +359,12 @@ func (cx *brokerCxn) init(maxVersions kversion.Versions) error {
 	return nil
 }
 
-func (cx *brokerCxn) requestAPIVersions() (err error) {
-	req := new(kmsg.ApiVersionsRequest)
+func (cx *brokerCxn) requestAPIVersions() error {
+	maxVersion := int16(2)
+start:
+	req := &kmsg.ApiVersionsRequest{
+		Version: maxVersion,
+	}
 	corrID, err := cx.writeRequest(req)
 	if err != nil {
 		return err
@@ -370,8 +374,31 @@ func (cx *brokerCxn) requestAPIVersions() (err error) {
 	if err != nil {
 		return err
 	}
+	if len(rawResp) < 2 {
+		return ErrConnDead
+	}
+
 	resp := req.ResponseKind().(*kmsg.ApiVersionsResponse)
+
+	// If we used a version larger than Kafka supports, Kafka replies with
+	// Version 0 and an UNSUPPORTED_VERSION error.
+	//
+	// Pre Kafka 2.4.0, we have to retry the request with version 0.
+	// Post, Kafka replies with all versions.
+	if rawResp[1] == 35 {
+		if maxVersion == 0 {
+			return ErrConnDead
+		}
+		if string(rawResp) == "\x00\x23\x00\x00\x00\x00" {
+			maxVersion = 0
+			goto start
+		}
+		resp.Version = 0
+	}
 	if err = resp.ReadFrom(rawResp); err != nil {
+		return ErrConnDead
+	}
+	if len(resp.ApiVersions) == 0 {
 		return ErrConnDead
 	}
 
