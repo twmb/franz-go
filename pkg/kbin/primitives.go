@@ -22,44 +22,61 @@ var (
 	ErrTooMuchData = errors.New("response contained too much data to be valid")
 )
 
+// AppendBool appends 1 for true or 0 for false to dst.
 func AppendBool(dst []byte, v bool) []byte {
 	if v {
 		return append(dst, 1)
 	}
 	return append(dst, 0)
 }
+
+// AppendInt8 appends an int8 to dst.
 func AppendInt8(dst []byte, i int8) []byte {
 	return append(dst, byte(i))
 }
+
+// AppendInt16 appends a big endian int16 to dst.
 func AppendInt16(dst []byte, i int16) []byte {
 	u := uint16(i)
 	return append(dst, byte(u>>8), byte(u))
 }
+
+// AppendInt32 appends a big endian int32 to dst.
 func AppendInt32(dst []byte, i int32) []byte {
 	return AppendUint32(dst, uint32(i))
 }
+
+// AppendInt64 appends a big endian int64 to dst.
 func AppendInt64(dst []byte, i int64) []byte {
 	u := uint64(i)
 	return append(dst, byte(u>>56), byte(u>>48), byte(u>>40), byte(u>>32),
 		byte(u>>24), byte(u>>16), byte(u>>8), byte(u))
 }
+
+// AppendUint32 appends a big endian uint32 to dst.
 func AppendUint32(dst []byte, u uint32) []byte {
 	return append(dst, byte(u>>24), byte(u>>16), byte(u>>8), byte(u))
 }
 
-// varintLens could only be length 65, but using 256 allows bounds check
+// uvarintLens could only be length 65, but using 256 allows bounds check
 // elimination on lookup.
-var varintLens [256]byte
+var uvarintLens [256]byte
 
 func init() {
-	for i := 0; i < len(varintLens[:]); i++ {
-		varintLens[i] = byte((i-1)/7) + 1
+	for i := 0; i < len(uvarintLens[:]); i++ {
+		uvarintLens[i] = byte((i-1)/7) + 1
 	}
 }
 
+// VarintLen returns how long i would be if it were varint encoded.
 func VarintLen(i int64) int {
 	u := uint64(i)<<1 ^ uint64(i>>63)
-	return int(varintLens[byte(bits.Len64(u))])
+	return UvarintLen(u)
+}
+
+// UvarintLen returns how long u would be if it were uvarint encoded.
+func UvarintLen(u uint64) int {
+	return int(uvarintLens[byte(bits.Len64(u))])
 }
 
 // Varlong is a loop unrolled 64 bit varint decoder. The return semantics
@@ -171,6 +188,14 @@ fail:
 // are the same as binary.Varint, with the added benefit that overflows
 // in 5 byte encodings are handled rather than left to the user.
 func Varint(in []byte) (int32, int) {
+	x, n := Uvarint(in)
+	return int32((x >> 1) ^ -(x & 1)), n
+}
+
+// Uvarint is a loop unrolled 32 bit uvarint decoder. The return semantics
+// are the same as binary.Uvarint, with the added benefit that overflows
+// in 5 byte encodings are handled rather than left to the user.
+func Uvarint(in []byte) (uint32, int) {
 	var c byte
 	var x uint32
 	var n int
@@ -223,14 +248,19 @@ func Varint(in []byte) (int32, int) {
 		}
 	}
 
-	return int32((x >> 1) ^ -(x & 1)), n
+	return x, n
 fail:
 	return 0, 0
 }
 
+// AppendVarint appends a varint encoded i to dst.
 func AppendVarint(dst []byte, i int32) []byte {
-	u := uint32(i)<<1 ^ uint32(i>>31)
-	switch VarintLen(int64(i)) {
+	return AppendUvarint(dst, uint32(i)<<1^uint32(i>>31))
+}
+
+// AppendUvarint appends a uvarint encoded u to dst.
+func AppendUvarint(dst []byte, u uint32) []byte {
+	switch UvarintLen(uint64(u)) {
 	case 5:
 		return append(dst,
 			byte(u&0x7f|0x80),
@@ -259,6 +289,7 @@ func AppendVarint(dst []byte, i int32) []byte {
 	return dst
 }
 
+// AppendVarlong appends a varint encoded i to dst.
 func AppendVarlong(dst []byte, i int64) []byte {
 	u := uint64(i)<<1 ^ uint64(i>>63)
 	for u&0x7f != u {
@@ -268,11 +299,24 @@ func AppendVarlong(dst []byte, i int64) []byte {
 	return append(dst, byte(u))
 }
 
+// AppendString appends a string to dst prefixed with its int16 length.
 func AppendString(dst []byte, s string) []byte {
 	dst = AppendInt16(dst, int16(len(s)))
 	return append(dst, s...)
 }
 
+// AppendCompactString appends a string to dst prefixed with its uvarint length
+// starting at 1; 0 is reserved for null, which compact strings are not
+// (nullable compact ones are!). Thus, the length is the decoded uvarint - 1.
+//
+// For KIP-482.
+func AppendCompactString(dst []byte, s string) []byte {
+	dst = AppendUvarint(dst, 1+uint32(len(s)))
+	return append(dst, s...)
+}
+
+// AppendNullableString appends potentially nil string to dst prefixed with its
+// int16 length or int16(-1) if nil.
 func AppendNullableString(dst []byte, s *string) []byte {
 	if s == nil {
 		return AppendInt16(dst, -1)
@@ -280,11 +324,36 @@ func AppendNullableString(dst []byte, s *string) []byte {
 	return AppendString(dst, *s)
 }
 
+// AppendCompactNullableString appends a potentially nil string to dst with its
+// uvarint length starting at 1, with 0 indicating null. Thus, the length is
+// the decoded uvarint - 1.
+//
+// For KIP-482.
+func AppendCompactNullableString(dst []byte, s *string) []byte {
+	if s == nil {
+		return AppendUvarint(dst, 0)
+	}
+	return AppendCompactString(dst, *s)
+}
+
+// AppendBytes appends bytes to dst prefixed with its int32 length.
 func AppendBytes(dst, b []byte) []byte {
 	dst = AppendInt32(dst, int32(len(b)))
 	return append(dst, b...)
 }
 
+// AppendCompactBytes appends bytes to dst prefixed with a its uvarint length
+// starting at 1; 0 is reserved for null, which compact bytes are not (nullable
+// compact ones are!). Thus, the length is the decoded uvarint - 1.
+//
+// For KIP-482.
+func AppendCompactBytes(dst, b []byte) []byte {
+	dst = AppendUvarint(dst, 1+uint32(len(b)))
+	return append(dst, b...)
+}
+
+// AppendNullableBytes appends a potentially nil slice to dst prefixed with its
+// int32 length or int32(-1) if nil.
 func AppendNullableBytes(dst []byte, b []byte) []byte {
 	if b == nil {
 		return AppendInt32(dst, -1)
@@ -292,11 +361,27 @@ func AppendNullableBytes(dst []byte, b []byte) []byte {
 	return AppendBytes(dst, b)
 }
 
+// AppendCompactNullableBytes appends a potentially nil slice to dst with its
+// uvarint length starting at 1, with 0 indicating null. Thus, the length is
+// the decoded uvarint - 1.
+//
+// For KIP-482.
+func AppendCompactNullableBytes(dst []byte, b []byte) []byte {
+	if b == nil {
+		return AppendUvarint(dst, 0)
+	}
+	return AppendCompactBytes(dst, b)
+}
+
+// AppendVarintString appends a string to dst prefixed with its length encoded
+// as a varint.
 func AppendVarintString(dst []byte, s string) []byte {
 	dst = AppendVarint(dst, int32(len(s)))
 	return append(dst, s...)
 }
 
+// AppendVarintBytes appends a slice to dst prefixed with its length encoded as
+// a varint.
 func AppendVarintBytes(dst []byte, b []byte) []byte {
 	if b == nil {
 		return AppendVarint(dst, -1)
@@ -305,6 +390,21 @@ func AppendVarintBytes(dst []byte, b []byte) []byte {
 	return append(dst, b...)
 }
 
+// AppendArrayLen appends the length of an array as an int32 to dst.
+func AppendArrayLen(dst []byte, l int) []byte {
+	return AppendInt32(dst, int32(l))
+}
+
+// AppendCompactArrayLen appends the length of an array as a uvarint to dst
+// as the length + 1.
+//
+// For KIP-482.
+func AppendCompactArrayLen(dst []byte, l int) []byte {
+	return AppendUvarint(dst, 1+uint32(l))
+}
+
+// AppendNullableArrayLen appends the length of an array as an int32 to dst,
+// or -1 if isNil is true.
 func AppendNullableArrayLen(dst []byte, l int, isNil bool) []byte {
 	if isNil {
 		return AppendInt32(dst, -1)
@@ -312,15 +412,28 @@ func AppendNullableArrayLen(dst []byte, l int, isNil bool) []byte {
 	return AppendInt32(dst, int32(l))
 }
 
-func AppendArrayLen(dst []byte, l int) []byte {
-	return AppendInt32(dst, int32(l))
+// AppendCompactNullableArrayLen appends the length of an array as a uvarint to
+// dst as the length + 1; if isNil is true, this appends 0 as a uvarint.
+//
+// For KIP-482.
+func AppendCompactNullableArrayLen(dst []byte, l int, isNil bool) []byte {
+	if isNil {
+		return AppendUvarint(dst, 0)
+	}
+	return AppendUvarint(dst, 1+uint32(l))
 }
 
+// Reader is used to decode Kafka messages.
+//
+// For all functions on Reader, if the reader has been invalidated, functions
+// return defaults (false, 0, nil, ""). Use Complete to detect if the reader
+// was invalidated or if the reader has remaining data.
 type Reader struct {
 	Src []byte
 	bad bool
 }
 
+// Bool returns a bool from the reader.
 func (b *Reader) Bool() bool {
 	if len(b.Src) < 1 {
 		b.bad = true
@@ -332,6 +445,7 @@ func (b *Reader) Bool() bool {
 	return t
 }
 
+// Int8 returns an int8 from the reader.
 func (b *Reader) Int8() int8 {
 	if len(b.Src) < 1 {
 		b.bad = true
@@ -343,6 +457,7 @@ func (b *Reader) Int8() int8 {
 	return int8(r)
 }
 
+// Int16 returns an int16 from the reader.
 func (b *Reader) Int16() int16 {
 	if len(b.Src) < 2 {
 		b.bad = true
@@ -354,6 +469,7 @@ func (b *Reader) Int16() int16 {
 	return r
 }
 
+// Int32 returns an int32 from the reader.
 func (b *Reader) Int32() int32 {
 	if len(b.Src) < 4 {
 		b.bad = true
@@ -365,6 +481,7 @@ func (b *Reader) Int32() int32 {
 	return r
 }
 
+// Int64 returns an int64 from the reader.
 func (b *Reader) Int64() int64 {
 	if len(b.Src) < 8 {
 		b.bad = true
@@ -376,6 +493,7 @@ func (b *Reader) Int64() int64 {
 	return r
 }
 
+// Uint32 returns a uint32 from the reader.
 func (b *Reader) Uint32() uint32 {
 	if len(b.Src) < 4 {
 		b.bad = true
@@ -387,6 +505,7 @@ func (b *Reader) Uint32() uint32 {
 	return r
 }
 
+// Varint returns a varint int32 from the reader.
 func (b *Reader) Varint() int32 {
 	val, n := Varint(b.Src)
 	if n <= 0 {
@@ -398,6 +517,19 @@ func (b *Reader) Varint() int32 {
 	return int32(val)
 }
 
+// Uvarint returns a uvarint encoded uint32 from the reader.
+func (b *Reader) Uvarint() uint32 {
+	val, n := Uvarint(b.Src)
+	if n <= 0 {
+		b.bad = true
+		b.Src = nil
+		return 0
+	}
+	b.Src = b.Src[n:]
+	return val
+}
+
+// Varlong returns a varlong int64 from the reader.
 func (b *Reader) Varlong() int64 {
 	val, n := Varlong(b.Src)
 	if n <= 0 {
@@ -409,6 +541,7 @@ func (b *Reader) Varlong() int64 {
 	return int64(val)
 }
 
+// Span returns l bytes from the reader.
 func (b *Reader) Span(l int) []byte {
 	if len(b.Src) < l || l < 0 {
 		b.bad = true
@@ -420,11 +553,19 @@ func (b *Reader) Span(l int) []byte {
 	return r
 }
 
+// String returns a Kafka string from the reader.
 func (b *Reader) String() string {
 	l := b.Int16()
 	return string(b.Span(int(l)))
 }
 
+// CompactString returns a Kafka compact string from the reader.
+func (b *Reader) CompactString() string {
+	l := int(b.Uvarint()) - 1
+	return string(b.Span(l))
+}
+
+// NullableString returns a Kafka nullable string from the reader.
 func (b *Reader) NullableString() *string {
 	l := b.Int16()
 	if l < 0 {
@@ -434,11 +575,35 @@ func (b *Reader) NullableString() *string {
 	return &s
 }
 
+// CompactNullableString returns a Kafka compact nullable string from the
+// reader.
+func (b *Reader) CompactNullableString() *string {
+	l := int(b.Uvarint()) - 1
+	if l < 0 {
+		return nil
+	}
+	s := string(b.Span(int(l)))
+	return &s
+}
+
+// Bytes returns a Kafka byte array from the reader.
+//
+// This never returns nil.
 func (b *Reader) Bytes() []byte {
 	l := b.Int32()
 	return b.Span(int(l))
 }
 
+// CompactBytes returns a Kafka compact byte array from the reader.
+//
+// This never returns nil.
+func (b *Reader) CompactBytes() []byte {
+	l := int(b.Uvarint()) - 1
+	return b.Span(int(l))
+}
+
+// NullableBytes returns a Kafka nullable byte array from the reader, returning
+// nil as appropriate.
 func (b *Reader) NullableBytes() []byte {
 	l := b.Int32()
 	if l < 0 {
@@ -448,6 +613,18 @@ func (b *Reader) NullableBytes() []byte {
 	return r
 }
 
+// CompactNullableBytes returns a Kafka compact nullable byte array from the
+// reader, returning nil as appropriate.
+func (b *Reader) CompactNullableBytes() []byte {
+	l := int(b.Uvarint()) - 1
+	if l < 0 {
+		return nil
+	}
+	r := b.Span(int(l))
+	return r
+}
+
+// ArrayLen returns a Kafka array length from the reader.
 func (b *Reader) ArrayLen() int32 {
 	r := b.Int32()
 	// The min size of a Kafka type is a byte, so if we do not have
@@ -460,6 +637,21 @@ func (b *Reader) ArrayLen() int32 {
 	return r
 }
 
+// CompactArrayLen returns a Kafka compact array length from the reader.
+func (b *Reader) CompactArrayLen() int32 {
+	r := int32(b.Uvarint()) - 1
+	// The min size of a Kafka type is a byte, so if we do not have
+	// at least the array length of bytes left, it is bad.
+	if len(b.Src) < int(r) {
+		b.bad = true
+		b.Src = nil
+		return 0
+	}
+	return r
+}
+
+// VarintBytes returns a Kafka encoded varint array from the reader, returning
+// nil as appropriate.
 func (b *Reader) VarintBytes() []byte {
 	l := b.Varint()
 	if l < 0 {
@@ -468,6 +660,7 @@ func (b *Reader) VarintBytes() []byte {
 	return b.Span(int(l))
 }
 
+// VarintString returns a Kafka encoded varint string from the reader.
 func (b *Reader) VarintString() string {
 	return string(b.VarintBytes())
 }
