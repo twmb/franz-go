@@ -303,7 +303,7 @@ func Tip() Versions {
 		0, // 47 offset delete KAFKA-8730 e24d0e22ab KIP-496
 	)
 
-	// introducing flexible versions; 24 were bumped, only api versions was added to (for KIP-511)
+	// introducing flexible versions; 24 were bumped
 	v[3]++  // 9 metadata KAFKA-8885 apache/kafka#7325 KIP-482
 	v[4]++  // 4 leader and isr (same)
 	v[5]++  // 2 stop replica (same)
@@ -318,7 +318,7 @@ func Tip() Versions {
 	v[14]++ // 4 sync group (same)
 	v[15]++ // 5 describe groups (same)
 	v[16]++ // 3 list group (same)
-	v[18]++ // 3 api versions (same, also KIP-511)
+	v[18]++ // 3 api versions (same, also KIP-511 [non-flexible fields added])
 	v[19]++ // 6 create topics (same)
 	v[20]++ // 4 delete topics (same)
 	v[22]++ // 2 init producer id (same)
