@@ -151,7 +151,7 @@ func (s *Struct) BuildFrom(scanner *LineScanner, level int) (done bool) {
 
 		switch {
 		case strings.HasPrefix(typ, "=>"): // nested struct; recurse
-			var newS Struct
+			newS := Struct{FromFlexible: s.FromFlexible}
 			newS.Name = s.Name + f.FieldName
 			newS.Anonymous = true
 			if isArray {
@@ -181,13 +181,18 @@ func (s *Struct) BuildFrom(scanner *LineScanner, level int) (done bool) {
 				die("unknown type %q on line %q", typ, line)
 			}
 			f.Type = types[typ]
+			if s.FromFlexible {
+				if setter, ok := f.Type.(FlexibleSetter); ok {
+					f.Type = setter.AsFromFlexible()
+				}
+			}
 		}
 
 		// Finally, this field is an array, wrap what we parsed in an
 		// array (perhaps multilevel).
 		if isArray {
 			for arrayLevel > 1 {
-				f.Type = Array{Inner: f.Type}
+				f.Type = Array{Inner: f.Type, FromFlexible: s.FromFlexible}
 				arrayLevel--
 			}
 			f.Type = Array{
@@ -195,6 +200,7 @@ func (s *Struct) BuildFrom(scanner *LineScanner, level int) (done bool) {
 				IsVarintArray:   isVarintArray,
 				IsNullableArray: isNullableArray,
 				NullableVersion: nullableArrayVersion,
+				FromFlexible:    s.FromFlexible,
 			}
 		}
 
@@ -266,6 +272,8 @@ func Parse(raw []byte) {
 
 		s := Struct{
 			Comment: nextComment.String(),
+
+			FlexibleAt: -1, // by default, not flexible
 		}
 		resetComment()
 
@@ -305,6 +313,10 @@ func Parse(raw []byte) {
 			}
 			name = strings.TrimSuffix(name, " =>")
 			prior.ResponseKind = name
+			if prior.FromFlexible {
+				s.FlexibleAt = prior.FlexibleAt
+				s.FromFlexible = true
+			}
 			save()
 			continue
 		}
@@ -321,13 +333,37 @@ func Parse(raw []byte) {
 
 		if idx := strings.Index(rem, ", admin"); idx > 0 {
 			s.Admin = true
+			if rem[idx:] != ", admin" {
+				die("unknown content after \"admin\" in %q", rem[idx:])
+			}
 			rem = rem[:idx]
 		} else if idx := strings.Index(rem, ", group coordinator"); idx > 0 {
 			s.GroupCoordinator = true
+			if rem[idx:] != ", group coordinator" {
+				die("unknown content after \"group coordinator\" in %q", rem[idx:])
+			}
 			rem = rem[:idx]
 		} else if idx := strings.Index(rem, ", txn coordinator"); idx > 0 {
 			s.TxnCoordinator = true
+			if rem[idx:] != ", txn coordinator" {
+				die("unknown content q after \"txn coordinator\" in %q", rem[idx:])
+			}
 			rem = rem[:idx]
+		}
+
+		if strings.HasSuffix(rem, "+") {
+			const flexibleStr = ", flexible v"
+			if idx := strings.Index(rem, flexibleStr); idx == -1 {
+				die("missing flexible text on string ending with + in %q", rem)
+			} else {
+				flexible, err := strconv.Atoi(rem[idx+len(flexibleStr) : len(rem)-1])
+				if err != nil {
+					die("flexible version on line %q parse err: %v", line, err)
+				}
+				s.FlexibleAt = flexible
+				s.FromFlexible = true
+				rem = rem[:idx]
+			}
 		}
 
 		const maxStr = ", max version "

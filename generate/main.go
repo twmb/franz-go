@@ -27,31 +27,38 @@ type (
 		TypeName() string
 	}
 
-	Bool           struct{}
-	Int8           struct{}
-	Int16          struct{}
-	Int32          struct{}
-	Int64          struct{}
-	Uint32         struct{}
-	Varint         struct{}
-	Varlong        struct{}
-	String         struct{}
-	NullableString struct{}
-	Bytes          struct{}
-	NullableBytes  struct{}
-	VarintString   struct{}
-	VarintBytes    struct{}
+	Bool         struct{}
+	Int8         struct{}
+	Int16        struct{}
+	Int32        struct{}
+	Int64        struct{}
+	Uint32       struct{}
+	Varint       struct{}
+	Varlong      struct{}
+	VarintString struct{}
+	VarintBytes  struct{}
 
 	FieldLengthMinusBytes struct {
 		Field       string
 		LengthMinus int
 	}
 
+	// The following four types can be encoded "compact"; this happens on
+	// flexible versions.
+	String         struct{ FromFlexible bool }
+	NullableString struct{ FromFlexible bool }
+	Bytes          struct{ FromFlexible bool }
+	NullableBytes  struct{ FromFlexible bool }
+
 	Array struct {
 		Inner           Type
 		IsVarintArray   bool
 		IsNullableArray bool
 		NullableVersion int
+
+		// FromFlexible is true if this is inside a struct that has
+		// flexible versions.
+		FromFlexible bool
 	}
 
 	StructField struct {
@@ -70,6 +77,11 @@ type (
 		Comment          string
 		Name             string
 
+		// FromFlexible tracks if this struct is either
+		// (a) top level and has flexible versions, or
+		// (b) nested in a top level struct that has flexible versions
+		FromFlexible bool
+
 		Fields []StructField
 
 		// Only TopLevel relevant fields:
@@ -78,9 +90,21 @@ type (
 		TxnCoordinator   bool
 		Key              int
 		MaxVersion       int
+		FlexibleAt       int
 		ResponseKind     string
 	}
 )
+
+type FlexibleSetter interface {
+	AsFromFlexible() Type
+}
+
+func (s String) AsFromFlexible() Type         { dup := s; s.FromFlexible = true; return dup }
+func (s NullableString) AsFromFlexible() Type { dup := s; s.FromFlexible = true; return dup }
+func (s Bytes) AsFromFlexible() Type          { dup := s; s.FromFlexible = true; return dup }
+func (s NullableBytes) AsFromFlexible() Type  { dup := s; s.FromFlexible = true; return dup }
+func (s Array) AsFromFlexible() Type          { dup := s; s.FromFlexible = true; return dup }
+func (s Struct) AsFromFlexible() Type         { dup := s; s.FromFlexible = true; return dup }
 
 func (l *LineWriter) Write(line string, args ...interface{}) {
 	fmt.Fprintf(l.buf, line, args...)

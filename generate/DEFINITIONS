@@ -653,7 +653,7 @@ ListOffsetsResponse =>
       LeaderEpoch: int32 // v4+
 
 // MetadataRequest requests metadata from Kafka.
-MetadataRequest => key 3, max version 8
+MetadataRequest => key 3, max version 9, flexible v9+
   // Topics is a list of topics to return metadata about. If this is null
   // in v1+, all topics are included. If this is empty, no topics are.
   // For v0 (<Kafka 0.10.0.0), if this is empty, all topics are included.
@@ -1620,6 +1620,8 @@ ListGroupsResponse =>
     // ProtocolType is the protocol type in use by the group.
     ProtocolType: string
 
+// TODO
+// SASLHandshakeRequest
 SASLHandshakeRequest => key 17, max version 1
   Mechanism: string
 
@@ -1994,6 +1996,7 @@ OffsetForLeaderEpochResponse =>
       // transitioned to a new epoch.
       EndOffset: int64
 
+// TODO
 AddPartitionsToTxnRequest => key 24, max version 1, txn coordinator
   TransactionalID: string
   ProducerID: int64
@@ -2078,6 +2081,7 @@ TxnOffsetCommitResponse =>
 
 // DescribeACLsRequest describes ACLs. Unfortunately, there exists little
 // official documentation on this.
+// TODO
 DescribeACLsRequest => key 29, max version 1, admin
   ResourceType: int8
   ResourceName: nullable-string
@@ -2460,6 +2464,7 @@ DescribeLogDirsResponse =>
         // replica in the future.
         IsFuture: bool
 
+// TODO
 SASLAuthenticateRequest => key 36, max version 1
   SASLAuthBytes: bytes
 
@@ -2535,6 +2540,7 @@ CreatePartitionsResponse =>
     // ErrorMessage is an informative message if the topic creation failed.
     ErrorMessage: nullable-string
 
+// TODO
 CreateDelegationTokenRequest => key 38, max version 1, admin
   Renewers: [=>]
     PrincipalType: string

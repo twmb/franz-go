@@ -181,11 +181,19 @@ Named structs have a few potential modifiers.
 
 If a struct is not top level,
 meaning it is not a request or response type struct,
-the first and only modifier must be `not top level`.
+the first modifier must be `not top level`.
 These non-top-level structs can be used to define
 structs that are embedded in requests or responses
 that are commonly used / more special than anonymous structs.
 For example, a `Record`, `RecordBatch`, or `StickyMemberMetadata`.
+
+For "not top level" structs, there are two other potential mutually exclusive modifiers:
+
+1) `, with version field` indicates that the struct contains a Version field.
+If a version field exists, it must be the first field.
+This modifier allows non-top-level structs to still have proper version fields.
+2) `, no encoding` indicates that encode and decode functions should not be generated for this struct.
+
 
 If a struct is top level,
 if the struct is a request type,

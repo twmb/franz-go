@@ -26,40 +26,75 @@ func primAppend(name string, l *LineWriter) {
 	l.Write("dst = kbin.Append%s(dst, v)", name)
 }
 
-func (Bool) WriteAppend(l *LineWriter)           { primAppend("Bool", l) }
-func (Int8) WriteAppend(l *LineWriter)           { primAppend("Int8", l) }
-func (Int16) WriteAppend(l *LineWriter)          { primAppend("Int16", l) }
-func (Int32) WriteAppend(l *LineWriter)          { primAppend("Int32", l) }
-func (Int64) WriteAppend(l *LineWriter)          { primAppend("Int64", l) }
-func (Uint32) WriteAppend(l *LineWriter)         { primAppend("Uint32", l) }
-func (Varint) WriteAppend(l *LineWriter)         { primAppend("Varint", l) }
-func (Varlong) WriteAppend(l *LineWriter)        { primAppend("Varlong", l) }
-func (String) WriteAppend(l *LineWriter)         { primAppend("String", l) }
-func (NullableString) WriteAppend(l *LineWriter) { primAppend("NullableString", l) }
-func (Bytes) WriteAppend(l *LineWriter)          { primAppend("Bytes", l) }
-func (NullableBytes) WriteAppend(l *LineWriter)  { primAppend("NullableBytes", l) }
-func (VarintString) WriteAppend(l *LineWriter)   { primAppend("VarintString", l) }
-func (VarintBytes) WriteAppend(l *LineWriter)    { primAppend("VarintBytes", l) }
+func compactAppend(fromFlexible bool, name string, l *LineWriter) {
+	if fromFlexible {
+		l.Write("if isFlexible {")
+		primAppend("Compact"+name, l)
+		l.Write("} else {")
+		defer l.Write("}")
+	}
+	primAppend(name, l)
+}
+
+func (Bool) WriteAppend(l *LineWriter)         { primAppend("Bool", l) }
+func (Int8) WriteAppend(l *LineWriter)         { primAppend("Int8", l) }
+func (Int16) WriteAppend(l *LineWriter)        { primAppend("Int16", l) }
+func (Int32) WriteAppend(l *LineWriter)        { primAppend("Int32", l) }
+func (Int64) WriteAppend(l *LineWriter)        { primAppend("Int64", l) }
+func (Uint32) WriteAppend(l *LineWriter)       { primAppend("Uint32", l) }
+func (Varint) WriteAppend(l *LineWriter)       { primAppend("Varint", l) }
+func (Varlong) WriteAppend(l *LineWriter)      { primAppend("Varlong", l) }
+func (VarintString) WriteAppend(l *LineWriter) { primAppend("VarintString", l) }
+func (VarintBytes) WriteAppend(l *LineWriter)  { primAppend("VarintBytes", l) }
+
+func (v String) WriteAppend(l *LineWriter)         { compactAppend(v.FromFlexible, "String", l) }
+func (v NullableString) WriteAppend(l *LineWriter) { compactAppend(v.FromFlexible, "NullableString", l) }
+func (v Bytes) WriteAppend(l *LineWriter)          { compactAppend(v.FromFlexible, "Bytes", l) }
+func (v NullableBytes) WriteAppend(l *LineWriter)  { compactAppend(v.FromFlexible, "NullableBytes", l) }
 
 func (FieldLengthMinusBytes) WriteAppend(l *LineWriter) {
 	l.Write("dst = append(dst, v...)")
 }
 
 func (a Array) WriteAppend(l *LineWriter) {
+	writeNullable := func() {
+		if a.FromFlexible {
+			l.Write("if isFlexible {")
+			l.Write("dst = kbin.AppendCompactNullableArrayLen(dst, len(v), v == nil)")
+			l.Write("} else {")
+			l.Write("dst = kbin.AppendNullableArrayLen(dst, len(v), v == nil)")
+			l.Write("}")
+		} else {
+			l.Write("dst = kbin.AppendNullableArrayLen(dst, len(v), v == nil)")
+		}
+	}
+
+	writeNormal := func() {
+		if a.FromFlexible {
+			l.Write("if isFlexible {")
+			l.Write("dst = kbin.AppendCompactArrayLen(dst, len(v))")
+			l.Write("} else {")
+			l.Write("dst = kbin.AppendArrayLen(dst, len(v))")
+			l.Write("}")
+		} else {
+			l.Write("dst = kbin.AppendArrayLen(dst, len(v))")
+		}
+	}
+
 	if a.IsVarintArray {
 		l.Write("dst = kbin.AppendVarint(dst, int32(len(v)))")
 	} else if a.IsNullableArray {
 		if a.NullableVersion > 0 {
 			l.Write("if version > %d {", a.NullableVersion)
-			l.Write("dst = kbin.AppendNullableArrayLen(dst, len(v), v == nil)")
+			writeNullable()
 			l.Write("} else {")
-			l.Write("dst = kbin.AppendArrayLen(dst, len(v))")
+			writeNormal()
 			l.Write("}")
 		} else {
-			l.Write("dst = kbin.AppendNullableArrayLen(dst, len(v), v == nil)")
+			writeNullable()
 		}
 	} else {
-		l.Write("dst = kbin.AppendArrayLen(dst, len(v))")
+		writeNormal()
 	}
 	l.Write("for i := range v {")
 	if _, isStruct := a.Inner.(Struct); isStruct {
@@ -100,20 +135,38 @@ func primDecode(name string, l *LineWriter) {
 	l.Write("v := b.%s()", name)
 }
 
-func (Bool) WriteDecode(l *LineWriter)           { primDecode("Bool", l) }
-func (Int8) WriteDecode(l *LineWriter)           { primDecode("Int8", l) }
-func (Int16) WriteDecode(l *LineWriter)          { primDecode("Int16", l) }
-func (Int32) WriteDecode(l *LineWriter)          { primDecode("Int32", l) }
-func (Int64) WriteDecode(l *LineWriter)          { primDecode("Int64", l) }
-func (Uint32) WriteDecode(l *LineWriter)         { primDecode("Uint32", l) }
-func (Varint) WriteDecode(l *LineWriter)         { primDecode("Varint", l) }
-func (Varlong) WriteDecode(l *LineWriter)        { primDecode("Varlong", l) }
-func (String) WriteDecode(l *LineWriter)         { primDecode("String", l) }
-func (NullableString) WriteDecode(l *LineWriter) { primDecode("NullableString", l) }
-func (Bytes) WriteDecode(l *LineWriter)          { primDecode("Bytes", l) }
-func (NullableBytes) WriteDecode(l *LineWriter)  { primDecode("NullableBytes", l) }
-func (VarintString) WriteDecode(l *LineWriter)   { primDecode("VarintString", l) }
-func (VarintBytes) WriteDecode(l *LineWriter)    { primDecode("VarintBytes", l) }
+func compactDecode(fromFlexible bool, name, typ string, l *LineWriter) {
+	if fromFlexible {
+		l.Write("var v %s", typ)
+		l.Write("if isFlexible {")
+		l.Write("v = b.Compact%s()", name)
+		l.Write("} else {")
+		l.Write("v = b.%s()", name)
+		l.Write("}")
+	} else {
+		l.Write("v := b.%s()", name)
+	}
+}
+
+func (Bool) WriteDecode(l *LineWriter)         { primDecode("Bool", l) }
+func (Int8) WriteDecode(l *LineWriter)         { primDecode("Int8", l) }
+func (Int16) WriteDecode(l *LineWriter)        { primDecode("Int16", l) }
+func (Int32) WriteDecode(l *LineWriter)        { primDecode("Int32", l) }
+func (Int64) WriteDecode(l *LineWriter)        { primDecode("Int64", l) }
+func (Uint32) WriteDecode(l *LineWriter)       { primDecode("Uint32", l) }
+func (Varint) WriteDecode(l *LineWriter)       { primDecode("Varint", l) }
+func (Varlong) WriteDecode(l *LineWriter)      { primDecode("Varlong", l) }
+func (VarintString) WriteDecode(l *LineWriter) { primDecode("VarintString", l) }
+func (VarintBytes) WriteDecode(l *LineWriter)  { primDecode("VarintBytes", l) }
+
+func (v String) WriteDecode(l *LineWriter) { compactDecode(v.FromFlexible, "String", "string", l) }
+func (v NullableString) WriteDecode(l *LineWriter) {
+	compactDecode(v.FromFlexible, "NullableString", "*string", l)
+}
+func (v Bytes) WriteDecode(l *LineWriter) { compactDecode(v.FromFlexible, "Bytes", "[]byte", l) }
+func (v NullableBytes) WriteDecode(l *LineWriter) {
+	compactDecode(v.FromFlexible, "NullableBytes", "[]byte", l)
+}
 
 func (f FieldLengthMinusBytes) WriteDecode(l *LineWriter) {
 	l.Write("v := b.Span(int(s.%s) - %d)", f.Field, f.LengthMinus)
@@ -127,13 +180,32 @@ func (a Array) WriteDecode(l *LineWriter) {
 	if a.IsVarintArray {
 		l.Write("for i := b.Varint(); i > 0; i-- {")
 	} else if a.IsNullableArray {
-		l.Write("i := b.ArrayLen()")
+		if a.FromFlexible {
+			l.Write("var i int32")
+			l.Write("if isFlexible {")
+			l.Write("i = b.CompactArrayLen()")
+			l.Write("} else {")
+			l.Write("i = b.ArrayLen()")
+			l.Write("}")
+		} else {
+			l.Write("i := b.ArrayLen()")
+		}
 		l.Write("if version < %d || i == 0 {", a.NullableVersion)
 		l.Write("a = %s{}", a.TypeName())
 		l.Write("}")
 		l.Write("for ; i > 0; i-- {")
 	} else {
-		l.Write("for i := b.ArrayLen(); i > 0; i-- {")
+		if a.FromFlexible {
+			l.Write("var i int32")
+			l.Write("if isFlexible {")
+			l.Write("i = b.CompactArrayLen()")
+			l.Write("} else {")
+			l.Write("i = b.ArrayLen()")
+			l.Write("}")
+			l.Write("for ; i > 0; i-- {")
+		} else {
+			l.Write("for i := b.ArrayLen(); i > 0; i-- {")
+		}
 	}
 
 	if s, isStruct := a.Inner.(Struct); isStruct {
@@ -273,6 +345,10 @@ func (s Struct) WriteAppendFunc(l *LineWriter) {
 		l.Write("version := v.Version")
 		l.Write("_ = version")
 	}
+	if s.TopLevel && s.FlexibleAt >= 0 {
+		l.Write("isFlexible := version >= %d", s.FlexibleAt)
+		l.Write("_ = isFlexible")
+	}
 	s.WriteAppend(l)
 	l.Write("return dst")
 	l.Write("}")
@@ -283,6 +359,10 @@ func (s Struct) WriteDecodeFunc(l *LineWriter) {
 	if s.TopLevel {
 		l.Write("version := v.Version")
 		l.Write("_ = version")
+	}
+	if s.TopLevel && s.FlexibleAt >= 0 {
+		l.Write("isFlexible := version >= %d", s.FlexibleAt)
+		l.Write("_ = isFlexible")
 	}
 	l.Write("b := kbin.Reader{Src: src}")
 	s.WriteDecode(l)
