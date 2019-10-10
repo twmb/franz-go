@@ -111,7 +111,7 @@ func (l *LineWriter) Write(line string, args ...interface{}) {
 	l.buf.WriteByte('\n')
 }
 
-//go:generate sh -c "go run . | gofmt > ../pkg/kmsg/messages.go"
+//go:generate sh -c "go run . | gofmt > ../pkg/kmsg/generated.go"
 func main() {
 	f, err := ioutil.ReadFile("DEFINITIONS")
 	if err != nil {

@@ -127,6 +127,14 @@ func (s Struct) WriteAppend(l *LineWriter) {
 		f.Type.WriteAppend(l)
 		l.Write("}")
 	}
+
+	// TODO once tags exist, we can fill in this section with something
+	// relevant.
+	if s.FromFlexible {
+		l.Write("if isFlexible {")
+		l.Write("dst = append(dst, 0)")
+		l.Write("}")
+	}
 }
 
 // primDecode corresponds to the binreader primitive decoding functions in
@@ -285,6 +293,13 @@ func (s Struct) WriteDecode(l *LineWriter) {
 		l.Write("}")
 	}
 	l.Write("}")
+
+	// TODO once tags exist, something relevant
+	if s.FromFlexible {
+		l.Write("if isFlexible {")
+		l.Write("skipTags(&b)")
+		l.Write("}")
+	}
 }
 
 func (s Struct) WriteDefn(l *LineWriter) {

@@ -1743,6 +1743,9 @@ func (v *MetadataRequest) AppendTo(dst []byte) []byte {
 		v := v.IncludeTopicAuthorizedOperations
 		dst = kbin.AppendBool(dst, v)
 	}
+	if isFlexible {
+		dst = append(dst, 0)
+	}
 	return dst
 }
 
@@ -1899,6 +1902,9 @@ func (v *MetadataResponse) ReadFrom(src []byte) error {
 						s.Rack = v
 					}
 				}
+				if isFlexible {
+					skipTags(&b)
+				}
 			}
 			v = a
 			s.Brokers = v
@@ -2016,6 +2022,9 @@ func (v *MetadataResponse) ReadFrom(src []byte) error {
 									s.OfflineReplicas = v
 								}
 							}
+							if isFlexible {
+								skipTags(&b)
+							}
 						}
 						v = a
 						s.Partitions = v
@@ -2025,6 +2034,9 @@ func (v *MetadataResponse) ReadFrom(src []byte) error {
 						s.AuthorizedOperations = v
 					}
 				}
+				if isFlexible {
+					skipTags(&b)
+				}
 			}
 			v = a
 			s.Topics = v
@@ -2033,6 +2045,9 @@ func (v *MetadataResponse) ReadFrom(src []byte) error {
 			v := b.Int32()
 			s.AuthorizedOperations = v
 		}
+	}
+	if isFlexible {
+		skipTags(&b)
 	}
 	return b.Complete()
 }
