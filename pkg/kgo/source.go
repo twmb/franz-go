@@ -816,14 +816,14 @@ func (f *fetchRequest) GetVersion() int16  { return f.version }
 func (f *fetchRequest) IsFlexible() bool   { return false } // version 11 is not flexible
 func (f *fetchRequest) AppendTo(dst []byte) []byte {
 	req := kmsg.FetchRequest{
-		Version:      f.version,
-		ReplicaID:    -1,
-		MaxWaitTime:  f.maxWait,
-		MinBytes:     1,
-		MaxBytes:     f.maxBytes,
-		SessionID:    -1,
-		SessionEpoch: -1, // KIP-227, we do not want to support
-		Topics:       make([]kmsg.FetchRequestTopic, 0, len(f.offsets)),
+		Version:       f.version,
+		ReplicaID:     -1,
+		MaxWaitMillis: f.maxWait,
+		MinBytes:      1,
+		MaxBytes:      f.maxBytes,
+		SessionID:     -1,
+		SessionEpoch:  -1, // KIP-227, we do not want to support
+		Topics:        make([]kmsg.FetchRequestTopic, 0, len(f.offsets)),
 	}
 	for topic, partitions := range f.offsets {
 		req.Topics = append(req.Topics, kmsg.FetchRequestTopic{

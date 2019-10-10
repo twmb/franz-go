@@ -362,10 +362,12 @@ func (cx *brokerCxn) init(maxVersions kversion.Versions) error {
 }
 
 func (cx *brokerCxn) requestAPIVersions() error {
-	maxVersion := int16(2)
+	maxVersion := int16(3)
 start:
 	req := &kmsg.ApiVersionsRequest{
-		Version: maxVersion,
+		Version:               maxVersion,
+		ClientSoftwareName:    "kgo",
+		ClientSoftwareVersion: "0.0.1",
 	}
 	corrID, err := cx.writeRequest(req)
 	if err != nil {
@@ -400,15 +402,15 @@ start:
 	if err = resp.ReadFrom(rawResp); err != nil {
 		return ErrConnDead
 	}
-	if len(resp.ApiVersions) == 0 {
+	if len(resp.ApiKeys) == 0 {
 		return ErrConnDead
 	}
 
-	for _, keyVersions := range resp.ApiVersions {
-		if keyVersions.ApiKey > kmsg.MaxKey {
+	for _, key := range resp.ApiKeys {
+		if key.ApiKey > kmsg.MaxKey {
 			continue
 		}
-		cx.versions[keyVersions.ApiKey] = keyVersions.MaxVersion
+		cx.versions[key.ApiKey] = key.MaxVersion
 	}
 	return nil
 }

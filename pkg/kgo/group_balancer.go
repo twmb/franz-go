@@ -108,7 +108,7 @@ func parseGroupMembers(kmembers []kmsg.JoinGroupResponseMember) ([]groupMember, 
 	members := make([]groupMember, 0, len(kmembers))
 	for _, kmember := range kmembers {
 		var meta kmsg.GroupMemberMetadata
-		if err := meta.ReadFrom(kmember.MemberMetadata); err != nil {
+		if err := meta.ReadFrom(kmember.ProtocolMetadata); err != nil {
 			return nil, fmt.Errorf("unable to read member metadata: %v", err)
 		}
 		members = append(members, groupMember{

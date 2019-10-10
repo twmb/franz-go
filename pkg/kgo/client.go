@@ -173,10 +173,13 @@ func (c *Client) fetchMetadata(ctx context.Context, all bool, topics []string) (
 start:
 	tries++
 	broker := c.broker()
-	kresp, err := broker.waitResp(ctx, &kmsg.MetadataRequest{
-		Topics:                 topics,
+	req := &kmsg.MetadataRequest{
 		AllowAutoTopicCreation: c.cfg.producer.allowAutoTopicCreation,
-	})
+	}
+	for _, topic := range topics {
+		req.Topics = append(req.Topics, kmsg.MetadataRequestTopic{topic})
+	}
+	kresp, err := broker.waitResp(ctx, req)
 	if err != nil {
 		if isRetriableBrokerErr(err) && tries < c.cfg.client.retries {
 			if ok := c.waitTries(ctx, tries); ok {
@@ -339,7 +342,11 @@ start:
 	if metaReq, isMetaReq := req.(*kmsg.MetadataRequest); isMetaReq {
 		// We hijack any metadata request so as to populate our
 		// own brokers and controller ID.
-		resp, err = c.fetchMetadata(ctx, metaReq.Topics == nil, metaReq.Topics)
+		topics := make([]string, 0, len(metaReq.Topics))
+		for _, topic := range metaReq.Topics {
+			topics = append(topics, topic.Topic)
+		}
+		resp, err = c.fetchMetadata(ctx, metaReq.Topics == nil, topics)
 	} else if _, admin := req.(kmsg.AdminRequest); admin {
 		var controller *broker
 		if controller, err = c.controller(ctx); err == nil {
@@ -488,23 +495,23 @@ func (c *Client) handleGroupReq(ctx context.Context, req kmsg.GroupCoordinatorRe
 		return nil, ErrClientTooOld
 
 	case *kmsg.OffsetCommitRequest:
-		return c.handleGroupReqSimple(ctx, t.GroupID, req)
+		return c.handleGroupReqSimple(ctx, t.Group, req)
 	case *kmsg.OffsetFetchRequest:
-		return c.handleGroupReqSimple(ctx, t.GroupID, req)
+		return c.handleGroupReqSimple(ctx, t.Group, req)
 	case *kmsg.JoinGroupRequest:
-		return c.handleGroupReqSimple(ctx, t.GroupID, req)
+		return c.handleGroupReqSimple(ctx, t.Group, req)
 	case *kmsg.HeartbeatRequest:
-		return c.handleGroupReqSimple(ctx, t.GroupID, req)
+		return c.handleGroupReqSimple(ctx, t.Group, req)
 	case *kmsg.LeaveGroupRequest:
-		return c.handleGroupReqSimple(ctx, t.GroupID, req)
+		return c.handleGroupReqSimple(ctx, t.Group, req)
 	case *kmsg.SyncGroupRequest:
-		return c.handleGroupReqSimple(ctx, t.GroupID, req)
+		return c.handleGroupReqSimple(ctx, t.Group, req)
 
 	case *kmsg.DescribeGroupsRequest:
 		group2req = make(map[string]kmsg.Request)
-		for _, id := range t.GroupIDs {
+		for _, id := range t.Groups {
 			group2req[id] = &kmsg.DescribeGroupsRequest{
-				GroupIDs:                    []string{id},
+				Groups:                      []string{id},
 				IncludeAuthorizedOperations: t.IncludeAuthorizedOperations,
 			}
 		}
@@ -513,7 +520,7 @@ func (c *Client) handleGroupReq(ctx context.Context, req kmsg.GroupCoordinatorRe
 		merge = func(newKResp kmsg.Response) {
 			newResp := newKResp.(*kmsg.DescribeGroupsResponse)
 			resp.Version = newResp.Version
-			resp.ThrottleTimeMs = newResp.ThrottleTimeMs
+			resp.ThrottleMillis = newResp.ThrottleMillis
 			resp.Groups = append(resp.Groups, newResp.Groups...)
 		}
 
@@ -529,8 +536,8 @@ func (c *Client) handleGroupReq(ctx context.Context, req kmsg.GroupCoordinatorRe
 		merge = func(newKResp kmsg.Response) {
 			newResp := newKResp.(*kmsg.DeleteGroupsResponse)
 			resp.Version = newResp.Version
-			resp.ThrottleTimeMs = newResp.ThrottleTimeMs
-			resp.GroupErrorCodes = append(resp.GroupErrorCodes, newResp.GroupErrorCodes...)
+			resp.ThrottleMillis = newResp.ThrottleMillis
+			resp.Groups = append(resp.Groups, newResp.Groups...)
 		}
 	}
 
@@ -559,9 +566,9 @@ func (c *Client) handleGroupReq(ctx context.Context, req kmsg.GroupCoordinatorRe
 //
 // Response errors are inspected to see if they are retriable group errors;
 // if so, the coordinator is deleted.
-func (c *Client) handleGroupReqSimple(ctx context.Context, groupID string, req kmsg.Request) (kmsg.Response, error) {
+func (c *Client) handleGroupReqSimple(ctx context.Context, group string, req kmsg.Request) (kmsg.Response, error) {
 	coordinator, err := c.loadCoordinator(ctx, coordinatorKey{
-		name: groupID,
+		name: group,
 		typ:  coordinatorTypeGroup,
 	})
 	if err != nil {
@@ -597,8 +604,8 @@ func (c *Client) handleGroupReqSimple(ctx context.Context, groupID string, req k
 			errCode = t.Groups[0].ErrorCode
 		}
 	case *kmsg.DeleteGroupsResponse:
-		if len(t.GroupErrorCodes) > 0 {
-			errCode = t.GroupErrorCodes[0].ErrorCode
+		if len(t.Groups) > 0 {
+			errCode = t.Groups[0].ErrorCode
 		}
 	}
 
@@ -610,7 +617,7 @@ func (c *Client) handleGroupReqSimple(ctx context.Context, groupID string, req k
 
 		c.coordinatorsMu.Lock()
 		delete(c.coordinators, coordinatorKey{
-			name: groupID,
+			name: group,
 			typ:  coordinatorTypeGroup,
 		})
 		c.coordinatorsMu.Unlock()
@@ -672,9 +679,9 @@ func (c *Client) handleTxnRequest(ctx context.Context, txnID string, req kmsg.Re
 	case *kmsg.InitProducerIDResponse:
 		errCode = t.ErrorCode
 	case *kmsg.AddPartitionsToTxnResponse:
-		if len(t.Errors) > 0 {
-			if len(t.Errors[0].PartitionErrors) > 0 {
-				errCode = t.Errors[0].PartitionErrors[0].ErrorCode
+		if len(t.Topics) > 0 {
+			if len(t.Topics[0].Partitions) > 0 {
+				errCode = t.Topics[0].Partitions[0].ErrorCode
 			}
 		}
 	case *kmsg.AddOffsetsToTxnResponse:

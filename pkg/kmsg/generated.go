@@ -5031,9 +5031,9 @@ type DescribeGroupsRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
-	// Group is an array of group IDs to request metadata for.
+	// Groups is an array of group IDs to request metadata for.
 	// If this is empty, the response will include all groups.
-	Group []string
+	Groups []string
 
 	// IncludeAuthorizedOperations, introduced in Kafka 2.3.0, specifies
 	// whether to include a bitfield of AclOperations this client can perform
@@ -5057,7 +5057,7 @@ func (v *DescribeGroupsRequest) AppendTo(dst []byte) []byte {
 	isFlexible := version >= 5
 	_ = isFlexible
 	{
-		v := v.Group
+		v := v.Groups
 		if isFlexible {
 			dst = kbin.AppendCompactArrayLen(dst, len(v))
 		} else {

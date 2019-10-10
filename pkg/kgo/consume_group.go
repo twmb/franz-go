@@ -273,11 +273,11 @@ loop:
 func (g *groupConsumer) leave() {
 	g.cancel()
 	g.cl.Request(g.cl.ctx, &kmsg.LeaveGroupRequest{
-		GroupID:  g.id,
+		Group:    g.id,
 		MemberID: g.memberID,
 		Members: []kmsg.LeaveGroupRequestMember{{
-			MemberID:        g.memberID,
-			GroupInstanceID: nil, // TODO KIP-345
+			MemberID:   g.memberID,
+			InstanceID: nil, // TODO KIP-345
 		}},
 	})
 }
@@ -389,9 +389,9 @@ func (g *groupConsumer) heartbeat(fetchErrCh <-chan error, s *assignRevokeSessio
 		select {
 		case <-ticker.C:
 			req := &kmsg.HeartbeatRequest{
-				GroupID:      g.id,
-				GenerationID: g.generation,
-				MemberID:     g.memberID,
+				Group:      g.id,
+				Generation: g.generation,
+				MemberID:   g.memberID,
 			}
 			var kresp kmsg.Response
 			kresp, err = g.cl.Request(g.ctx, req)
@@ -495,12 +495,12 @@ func (g *groupConsumer) joinAndSync() error {
 	g.clearLeader()
 start:
 	req := kmsg.JoinGroupRequest{
-		GroupID:          g.id,
-		SessionTimeout:   int32(g.sessionTimeout.Milliseconds()),
-		RebalanceTimeout: int32(g.rebalanceTimeout.Milliseconds()),
-		ProtocolType:     "consumer",
-		MemberID:         g.memberID,
-		GroupProtocols:   g.joinGroupProtocols(),
+		Group:                  g.id,
+		SessionTimeoutMillis:   int32(g.sessionTimeout.Milliseconds()),
+		RebalanceTimeoutMillis: int32(g.rebalanceTimeout.Milliseconds()),
+		ProtocolType:           "consumer",
+		MemberID:               g.memberID,
+		Protocols:              g.joinGroupProtocols(),
 	}
 	kresp, err := g.cl.Request(g.ctx, &req)
 	if err != nil {
@@ -521,18 +521,18 @@ start:
 	}
 
 	g.memberID = resp.MemberID
-	g.generation = resp.GenerationID
+	g.generation = resp.Generation
 
 	var plan balancePlan
 	if resp.LeaderID == resp.MemberID {
-		plan, err = g.balanceGroup(resp.GroupProtocol, resp.Members)
+		plan, err = g.balanceGroup(resp.Protocol, resp.Members)
 		if err != nil {
 			return err
 		}
 		g.setLeader()
 	}
 
-	if err = g.syncGroup(plan, resp.GenerationID); err != nil {
+	if err = g.syncGroup(plan, resp.Generation); err != nil {
 		if err == kerr.RebalanceInProgress {
 			goto start
 		}
@@ -544,8 +544,8 @@ start:
 
 func (g *groupConsumer) syncGroup(plan balancePlan, generation int32) error {
 	req := kmsg.SyncGroupRequest{
-		GroupID:         g.id,
-		GenerationID:    generation,
+		Group:           g.id,
+		Generation:      generation,
 		MemberID:        g.memberID,
 		GroupAssignment: plan.intoAssignment(),
 	}
@@ -568,18 +568,18 @@ func (g *groupConsumer) syncGroup(plan balancePlan, generation int32) error {
 	return nil
 }
 
-func (g *groupConsumer) joinGroupProtocols() []kmsg.JoinGroupRequestGroupProtocol {
+func (g *groupConsumer) joinGroupProtocols() []kmsg.JoinGroupRequestProtocol {
 	g.mu.Lock()
 	topics := make([]string, 0, len(g.using))
 	for topic := range g.using {
 		topics = append(topics, topic)
 	}
 	g.mu.Unlock()
-	var protos []kmsg.JoinGroupRequestGroupProtocol
+	var protos []kmsg.JoinGroupRequestProtocol
 	for _, balancer := range g.balancers {
-		protos = append(protos, kmsg.JoinGroupRequestGroupProtocol{
-			ProtocolName: balancer.protocolName(),
-			ProtocolMetadata: balancer.metaFor(
+		protos = append(protos, kmsg.JoinGroupRequestProtocol{
+			Name: balancer.protocolName(),
+			Metadata: balancer.metaFor(
 				topics,
 				g.assigned,
 				g.generation,
@@ -593,7 +593,7 @@ func (g *groupConsumer) joinGroupProtocols() []kmsg.JoinGroupRequestGroupProtoco
 // were for the partitions we were assigned.
 func (g *groupConsumer) fetchOffsets(ctx context.Context) error {
 	req := kmsg.OffsetFetchRequest{
-		GroupID: g.id,
+		Group: g.id,
 	}
 	for topic, partitions := range g.assigned {
 		req.Topics = append(req.Topics, kmsg.OffsetFetchRequestTopic{
@@ -776,7 +776,7 @@ func (g *groupConsumer) updateCommitted(
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
-	if req.GenerationID != g.generation {
+	if req.Generation != g.generation {
 		return
 	}
 	if g.uncommitted == nil || // just in case
@@ -995,10 +995,10 @@ func (g *groupConsumer) commit(
 
 	memberID := g.memberID
 	req := &kmsg.OffsetCommitRequest{
-		GroupID:         g.id,
-		GenerationID:    g.generation,
-		MemberID:        memberID,
-		GroupInstanceID: nil, // TODO KIP-345
+		Group:      g.id,
+		Generation: g.generation,
+		MemberID:   memberID,
+		InstanceID: nil, // TODO KIP-345
 	}
 
 	if ctx.Done() != nil {
