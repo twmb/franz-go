@@ -781,7 +781,7 @@ LeaderAndISRRequestTopicPartition => not top level, no encoding
 // Kafka 1.0.0 introduced version 1. Kafka 2.2.0 introduced version 2, proposed
 // in KIP-380, which changed the layout of the struct to be more memory
 // efficient. Kafka 2.4.0 introduced version 3 with KIP-455.
-LeaderAndISRRequest => key 4, max version 3, admin
+LeaderAndISRRequest => key 4, max version 4, flexible v4+, admin
   ControllerID: int32
   ControllerEpoch: int32
   BrokerEpoch: int64 // v2+
@@ -809,7 +809,7 @@ LeaderAndISRResponse =>
 //
 // Kafka 2.2.0 introduced version 1, proposed in KIP-380, which changed the
 // layout of the struct to be more memory efficient.
-StopReplicaRequest => key 5, max version 1, admin
+StopReplicaRequest => key 5, max version 2, flexible v2+, admin
   ControllerID: int32
   ControllerEpoch: int32
   BrokerEpoch: int64 // v1+
@@ -848,7 +848,7 @@ UpdateMetadataRequestTopicPartition => not top level, no encoding
 //
 // Kafka 2.2.0 introduced version 5, proposed in KIP-380, which changed the
 // layout of the struct to be more memory efficient.
-UpdateMetadataRequest => key 6, max version 5, admin
+UpdateMetadataRequest => key 6, max version 6, flexible v6+, admin
   ControllerID: int32
   ControllerEpoch: int32
   BrokerEpoch: int64 // v5+
@@ -882,7 +882,7 @@ UpdateMetadataResponse =>
 //
 // Note that version 0 of this request uses a special encoding format
 // where the request does not include the client ID.
-ControlledShutdownRequest => key 7, max version 2, admin
+ControlledShutdownRequest => key 7, max version 3, flexible v3+, admin
   BrokerID: int32
   BrokerEpoch: int64 // v2+
 
@@ -996,7 +996,7 @@ GroupMetadataValue => not top level, with version field
 
 // OffsetCommitRequest commits offsets for consumed topics / partitions in
 // a group.
-OffsetCommitRequest => key 8, max version 7, group coordinator
+OffsetCommitRequest => key 8, max version 8, flexible v8+, group coordinator
   // Group is the group this request is committing offsets to.
   Group: string
   // Generation being -1 and group being empty means the group is being used
@@ -1098,7 +1098,7 @@ OffsetCommitResponse =>
 
 // OffsetFetchRequest requests the most recent committed offsets for topic
 // partitions in a group.
-OffsetFetchRequest => key 9, max version 5, group coordinator
+OffsetFetchRequest => key 9, max version 6, flexible v6+, group coordinator
   // Group is the group to fetch offsets for.
   Group: string
   // Topics contains topics to fetch offets for. Version 2+ allows this to be
@@ -1163,7 +1163,7 @@ OffsetFetchResponse =>
 // This coordinator is different from the broker leader coordinator. This
 // coordinator is the partition leader for the partition that is storing
 // the group or transaction ID.
-FindCoordinatorRequest => key 10, max version 2
+FindCoordinatorRequest => key 10, max version 3, flexible v3+
   // CoordinatorKey is the ID to use for finding the coordinator. For groups,
   // this is the group name, for transactional producer, this is the
   // transactional ID.
@@ -1262,7 +1262,7 @@ GroupMemberAssignment => not top level
 //
 // Version 5 introduced InstanceID, allowing for more "static" membership.
 // See KIP-345 for more details.
-JoinGroupRequest => key 11, max version 5, group coordinator
+JoinGroupRequest => key 11, max version 6, flexible v6+, group coordinator
   // Group is the group to join.
   Group: string
   // SessionTimeoutMillis is how long a member in the group can go between
@@ -1384,7 +1384,7 @@ JoinGroupResponse =>
 
 // HeartbeatRequest issues a heartbeat for a member in a group, ensuring that
 // Kafka does not expire the member from the group.
-HeartbeatRequest => key 12, max version 3, group coordinator
+HeartbeatRequest => key 12, max version 4, flexible v4+, group coordinator
   // Group is the group ID this heartbeat is for.
   Group: string
   // Generation is the group generation this heartbeat is for.
@@ -1427,7 +1427,7 @@ HeartbeatResponse =>
 //
 // Version 3 changed removed MemberID and added a batch instance+member ID
 // way of leaving a group.
-LeaveGroupRequest => key 13, max version 3, group coordinator
+LeaveGroupRequest => key 13, max version 4, flexible v4+, group coordinator
   // Group is the group to leave.
   Group: string
   // MemberID is the member that is leaving.
@@ -1474,7 +1474,7 @@ LeaveGroupResponse =>
 // assignments with the request; all other members do not.
 //
 // Once the leader sends the group assignment, all members will be replied to.
-SyncGroupRequest => key 14, max version 3, group coordinator
+SyncGroupRequest => key 14, max version 4, flexible v4+, group coordinator
   // Group is the group ID this sync group is for.
   Group: string
   // Generation is the group generation this sync is for.
@@ -1526,7 +1526,7 @@ SyncGroupResponse =>
   MemberAssignment: bytes
 
 // DescribeGroupsRequest requests metadata for group IDs.
-DescribeGroupsRequest => key 15, max version 4, group coordinator
+DescribeGroupsRequest => key 15, max version 5, flexible v5+, group coordinator
   // Group is an array of group IDs to request metadata for.
   // If this is empty, the response will include all groups.
   Group: [string]
@@ -1591,7 +1591,7 @@ DescribeGroupsResponse =>
     AuthorizedOperations: int32 // v3+
 
 // ListGroupsRequest issues a request to list all groups.
-ListGroupsRequest => key 16, max version 2, admin
+ListGroupsRequest => key 16, max version 3, flexible v3+, admin
 
 // ListGroupsResponse is returned from a ListGroupsRequest.
 ListGroupsResponse =>
@@ -1694,7 +1694,7 @@ ApiVersionsResponse =>
 // creation defaults. See KIP-464.
 //
 // Version 5, also in 2.4.0, returns topic configs in the response (KIP-525).
-CreateTopicsRequest => key 19, max version 5, admin
+CreateTopicsRequest => key 19, max version 6, flexible v6+, admin
   // Topics is an array of topics to attempt to create.
   Topics: [=>]
     // Topic is a topic to create.
@@ -1796,7 +1796,7 @@ CreateTopicsResponse =>
       IsSensitive: bool
 
 // DeleteTopicsRequest deletes Kafka topics.
-DeleteTopicsRequest => key 20, max version 3, admin
+DeleteTopicsRequest => key 20, max version 4, flexible v4+, admin
   // Topics is an array of topics to delete.
   Topics: [string]
   // TimeoutMillis is the millisecond timeout of this request.
@@ -1903,7 +1903,7 @@ DeleteRecordsResponse =>
       ErrorCode: int16
 
 // TODO
-InitProducerIDRequest => key 22, max version 1, txn coordinator
+InitProducerIDRequest => key 22, max version 2, flexible v2+, txn coordinator
   TransactionalID: nullable-string
   TransactionTimeoutMillis: int32
 
@@ -2559,7 +2559,7 @@ CreatePartitionsResponse =>
     ErrorMessage: nullable-string
 
 // TODO
-CreateDelegationTokenRequest => key 38, max version 1, admin
+CreateDelegationTokenRequest => key 38, max version 2, flexible v2+, admin
   Renewers: [=>]
     PrincipalType: string
     Name: string
@@ -2618,7 +2618,7 @@ DescribeDelegationTokenResponse =>
 // DeleteGroupsRequest deletes consumer groups. This request was added for
 // Kafka 1.1.0 corresponding to the removal of RetentionTimeMillis from
 // OffsetCommitRequest. See KIP-229 for more details.
-DeleteGroupsRequest => key 42, max version 1, group coordinator
+DeleteGroupsRequest => key 42, max version 2, flexible v2+, group coordinator
   // Groups is a list of groups to delete.
   Groups: [string]
 
@@ -2653,7 +2653,7 @@ DeleteGroupsResponse =>
 // partitions. This request was added in Kafka 2.2.0 to replace the zookeeper
 // only option of triggering leader elections before. See KIP-183 for more
 // details. KIP-460 introduced the ElectionType field with Kafka 2.4.0.
-ElectLeadersRequest => key 43, max version 1, admin
+ElectLeadersRequest => key 43, max version 2, flexible v2+, admin
   // ElectionType is the type of election to conduct. 0 elects the preferred
   // replica, 1 elects the first live replica if there are no in-sync replicas
   // (i.e., unclean leader election).
@@ -2716,7 +2716,7 @@ ElectLeadersResponse =>
 // This API was added in Kafka 2.3.0 to replace AlterConfigs. The key benefit
 // of this API is that consumers do not need to know the full config state
 // to add or remove new config options. See KIP-339 for more details.
-IncrementalAlterConfigsRequest => key 44, max version 0, admin
+IncrementalAlterConfigsRequest => key 44, max version 1, flexible v1+, admin
   // Resources is an array of configs to alter.
   Resources: [=>]
     // ResourceType is an enum corresponding to the type of config to alter.
@@ -2791,7 +2791,7 @@ IncrementalAlterConfigsResponse =>
 // Kafka 2.4.0, is a request to reassign partitions to certain brokers.
 //
 // ACL wise, this requires ALTER on CLUSTER.
-AlterPartitionReassignmentsRequest => key 45, max version 0, admin
+AlterPartitionReassignmentsRequest => key 45, max version 0, flexible v0+, admin
   // TimeoutMillis is how long to wait for the response.
   TimeoutMillis: int32
   // Topics are topics for which to reassign partitions of.
@@ -2846,7 +2846,7 @@ AlterPartitionReassignmentsResponse =>
 // Kafka 2.4.0, is a request to list in progress partition reassignments.
 //
 // ACL wise, this requires DESCRIBE on CLUSTER.
-ListPartitionReassignmentsRequest => key 46, max version 0, admin
+ListPartitionReassignmentsRequest => key 46, max version 0, flexible v0+, admin
   // TimeoutMillis is how long to wait for the response.
   TimeoutMillis: int32
   // Topics are topics to list in progress partition reassignments of, or null
