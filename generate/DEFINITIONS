@@ -211,23 +211,25 @@ RecordBatch => not top level
 // records to internal topics. This is generally recommended if you want to
 // break your Kafka cluster.
 ProduceRequest => key 0, max version 8
+  // TransactionID is the transaction ID to use for this request, allowing for
+  // exactly once semantics.
   TransactionID: nullable-string // v3+
   // Acks specifies the number of acks that the partition leaders must receive
   // from in sync replicas before considering a record batch fully written.
   //
-  // Valid values are -1, 0, or 1 corresponding to all, none, or one.
+  // Valid values are -1, 0, or 1 corresponding to all, none, or the leader only.
   //
   // Note that if no acks are requested, Kafka will close the connection
   // if any topic or partition errors to trigger a client metadata refresh.
   Acks: int16
-  // Timeout is the millisecond timeout of this request.
-  Timeout: int32
-  // TopicData is an array of topics to send record batches to.
-  TopicData: [=>]
+  // TimeoutMillis is the millisecond timeout of this request.
+  TimeoutMillis: int32
+  // Topics is an array of topics to send record batches to.
+  Topics: [=>]
     // Topic is a topic to send record batches to.
     Topic: string
-    // Data is an array of partitions to send record batches to.
-    Data: [=>]
+    // Partitions is an array of partitions to send record batches to.
+    Partitions: [=>]
       // Partition is a partition to send a record batch to.
       Partition: int32
       // Records is a batch of records to write to a topic's partition.
@@ -328,9 +330,9 @@ ProduceResponse =>
       // BaseOffset is the offset that the records in the produce request began
       // at in the partition.
       BaseOffset: int64
-      // LogAppendTime is the time that records were appended to the partition
-      // inside Kafka. This is only not -1 if records were written with the log
-      // append time flag (which producers cannot do).
+      // LogAppendTime is the millisecond that records were appended to the
+      // partition inside Kafka. This is only not -1 if records were written
+      // with the log append time flag (which producers cannot do).
       LogAppendTime: int64 // v2+
       // LogStartOffset, introduced in Kafka 1.0.0, can be used to see if an
       // UNKNOWN_PRODUCER_ID means Kafka rotated records containing the used
@@ -346,11 +348,11 @@ ProduceResponse =>
       // ErrorMessage is the global error message of of what caused this batch
       // to error.
       ErrorMessage: nullable-string // v8+
-  // ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+  // ThrottleMillis is how long of a throttle Kafka will apply to the client
   // after this request.
   // For Kafka < 2.0.0, the throttle is applied before issuing a response.
   // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
-  ThrottleTimeMs: int32 // v1+
+  ThrottleMillis: int32 // v1+
 
 // FetchRequest is a long-poll request of records from Kafka.
 //
@@ -366,9 +368,9 @@ FetchRequest => key 1, max version 11
   // clients should use -1. To be a "debug" replica, use -2. The debug
   // replica can be used to fetch messages from non-leaders.
   ReplicaID: int32
-  // MaxWaitTime is how long to wait for MinBytes to be hit before a broker
+  // MaxWaitMillis is how long to wait for MinBytes to be hit before a broker
   // responds to a fetch request.
-  MaxWaitTime: int32
+  MaxWaitMillis: int32
   // MinBytes is the minimum amount of bytes to attempt to read before a broker
   // responds to a fetch request.
   MinBytes: int32
@@ -428,17 +430,17 @@ FetchRequest => key 1, max version 11
     Topic: string
     // Partitions are partitions to remove from tracking for a topic.
     Partitions: [int32]
-  // Rack ID of the consumer making this request (see KIP-392; introduced in
+  // Rack of the consumer making this request (see KIP-392; introduced in
   // Kafka 2.2.0).
-  RackID: string // v11+
+  Rack: string // v11+
 
 // FetchResponse is returned from a FetchRequest.
 FetchResponse =>
-  // ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+  // ThrottleMillis is how long of a throttle Kafka will apply to the client
   // after this request.
   // For Kafka < 2.0.0, the throttle is applied before issuing a response.
   // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
-  ThrottleTimeMs: int32 // v1+
+  ThrottleMillis: int32 // v1+
   // ErrorCode is a full-response error code for a fetch request. This was
   // added in support of KIP-227. This error is only non-zero if using fetch
   // sessions (clients should not).
@@ -585,11 +587,11 @@ ListOffsetsRequest => key 2, max version 5, admin
 
 // ListOffsetsResponse is returned from a ListOffsetsRequest.
 ListOffsetsResponse =>
-  // ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+  // ThrottleMillis is how long of a throttle Kafka will apply to the client
   // after this request.
   // For Kafka < 2.0.0, the throttle is applied before issuing a response.
   // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
-  ThrottleTimeMs: int32 // v2+
+  ThrottleMillis: int32 // v2+
   // Topics is an array of topic / partition responses corresponding to
   // the requested topics and partitions.
   Topics: [=>]
@@ -657,7 +659,9 @@ MetadataRequest => key 3, max version 9, flexible v9+
   // Topics is a list of topics to return metadata about. If this is null
   // in v1+, all topics are included. If this is empty, no topics are.
   // For v0 (<Kafka 0.10.0.0), if this is empty, all topics are included.
-  Topics: nullable-v1+[string]
+  Topics: nullable-v1+[=>]
+    // Topic is the topic to request metadata for.
+    Topic: string
   // AllowAutoTopicCreation, introduced in Kafka 0.11.0.0, allows topic
   // auto creation of the topics in this request if they do not exist.
   AllowAutoTopicCreation: bool // v4+
@@ -672,11 +676,11 @@ MetadataRequest => key 3, max version 9, flexible v9+
 
 // MetadataResponse is returned from a MetdataRequest.
 MetadataResponse =>
-  // ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+  // ThrottleMillis is how long of a throttle Kafka will apply to the client
   // after this request.
   // For Kafka < 2.0.0, the throttle is applied before issuing a response.
   // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
-  ThrottleTimeMs: int32 // v3+
+  ThrottleMillis: int32 // v3+
   // Brokers is a set of alive Kafka brokers.
   Brokers: [=>]
     // NodeID is the node ID of a Kafka broker.
@@ -751,6 +755,22 @@ MetadataResponse =>
   // is allowed to perform on this cluster.
   AuthorizedOperations: int32 // v8+
 
+// LeaderAndISRRequestTopicPartition is a common struct that is used across
+// different versions of LeaderAndISRRequest.
+LeaderAndISRRequestTopicPartition => not top level, no encoding
+  Topic: string // v0-v1
+  Partition: int32
+  ControllerEpoch: int32
+  Leader: int32
+  LeaderEpoch: int32
+  ISR: [int32]
+  ZKVersion: int32
+  Replicas: [int32]
+  AddingReplicas: [int32] // v3+
+  RemovingReplicas: [int32] // v3+
+  IsNew: bool // v1+
+
+
 // LeaderAndISRRequest is an advanced request that controller brokers use
 // to broadcast state to other brokers. Manually using this request is a
 // great way to break your cluster.
@@ -765,31 +785,12 @@ LeaderAndISRRequest => key 4, max version 3, admin
   ControllerID: int32
   ControllerEpoch: int32
   BrokerEpoch: int64 // v2+
-  PartitionStates: [=>] // v0-v1
-    Topic: string
-    Partition: int32
-    ControllerEpoch: int32
-    Leader: int32
-    LeaderEpoch: int32
-    ISR: [int32]
-    ZKVersion: int32
-    Replicas: [int32]
-    IsNew: bool // v1+
+  PartitionStates: [LeaderAndISRRequestTopicPartition] // v0-v1
   TopicStates: [=>] // v2+
     Topic: string
-    PartitionStates: [=>]
-      Partition: int32
-      ControllerEpoch: int32
-      Leader: int32
-      LeaderEpoch: int32
-      ISR: [int32]
-      ZKVersion: int32
-      Replicas: [int32]
-      AddingReplicas: [int32] // v3+
-      RemovingReplicas: [int32] // v3+
-      IsNew: bool
+    PartitionStates: [LeaderAndISRRequestTopicPartition]
   LiveLeaders: [=>]
-    ID: int32
+    BrokerID: int32
     Host: string
     Port: int32
 
@@ -813,10 +814,10 @@ StopReplicaRequest => key 5, max version 1, admin
   ControllerEpoch: int32
   BrokerEpoch: int64 // v1+
   DeletePartitions: bool
-  Partitions: [=>]
+  Topics: [=>]
     Topic: string
     Partition: int32 // v0-v0
-    PartitionIDs: [int32] // v1+
+    Partitions: [int32] // v1+
 
 // StopReplicasResponse is returned from a StopReplicasRequest.
 StopReplicaResponse =>
@@ -825,6 +826,17 @@ StopReplicaResponse =>
     Topic: string
     Partition: int32
     ErrorCode: int16
+
+UpdateMetadataRequestTopicPartition => not top level, no encoding
+  Topic: string // v0-v4
+  Partition: int32
+  ControllerEpoch: int32
+  Leader: int32
+  LeaderEpoch: int32
+  ISR: [int32]
+  ZKVersion: int32
+  Replicas: [int32]
+  OfflineReplicas: [int32]
 
 // UpdateMetadataRequest is an advanced request that brokers use to
 // issue metadata updates to each other.
@@ -840,27 +852,10 @@ UpdateMetadataRequest => key 6, max version 5, admin
   ControllerID: int32
   ControllerEpoch: int32
   BrokerEpoch: int64 // v5+
-  PartitionStates: [=>] // v0-v4
-    Topic: string
-    Partition: int32
-    ControllerEpoch: int32
-    Leader: int32
-    LeaderEpoch: int32
-    ISR: [int32]
-    ZKVersion: int32
-    Replicas: [int32]
-    OfflineReplicas: [int32]
+  PartitionStates: [UpdateMetadataRequestTopicPartition] // v0-v4
   TopicStates: [=>] // v5+
     Topic: string
-    PartitionStates: [=>]
-      Partition: int32
-      ControllerEpoch: int32
-      Leader: int32
-      LeaderEpoch: int32
-      ISR: [int32]
-      ZKVersion: int32
-      Replicas: [int32]
-      OfflineReplicas: [int32]
+    PartitionStates: [UpdateMetadataRequestTopicPartition]
   LiveBrokers: [=>]
     ID: int32
     Host: string // v0-v0
@@ -869,7 +864,7 @@ UpdateMetadataRequest => key 6, max version 5, admin
       Port: int32
       Host: string
       ListenerName: string // v3+
-      SecurityProtocolType: int16
+      SecurityProtocol: int16
     Rack: nullable-string // v2+
 
 // UpdateMetadataResponses is returned from an UpdateMetadataRequest.
@@ -984,16 +979,16 @@ GroupMetadataValue => not top level, with version field
   Members: [=>]
     // MemberID is a group member.
     MemberID: string
-    // GroupInstanceID is the instance ID of this member in the group (KIP-345).
-    GroupInstanceID: nullable-string // v3+
+    // InstanceID is the instance ID of this member in the group (KIP-345).
+    InstanceID: nullable-string // v3+
     // ClientID is the client ID of this group member.
     ClientID: string
     // ClientHost is the hostname of this group member.
     ClientHost: string
-    // RebalanceTimeout is the rebalance timeout of this group member.
-    RebalanceTimeout: int32 // v1+
-    // SessionTimeout is the session timeout of this group member.
-    SessionTimeout: int32
+    // RebalanceTimeoutMillis is the rebalance timeout of this group member.
+    RebalanceTimeoutMillis: int32 // v1+
+    // SessionTimeoutMillis is the session timeout of this group member.
+    SessionTimeoutMillis: int32
     // Subscription is the subscription of this group member.
     Subscription: bytes
     // Assignment is what the leader assigned this group member.
@@ -1002,16 +997,16 @@ GroupMetadataValue => not top level, with version field
 // OffsetCommitRequest commits offsets for consumed topics / partitions in
 // a group.
 OffsetCommitRequest => key 8, max version 7, group coordinator
-  // GroupID is the group this request is committing offsets to.
-  GroupID: string
-  // GenerationID being -1 and group being empty means the group is being used
+  // Group is the group this request is committing offsets to.
+  Group: string
+  // Generation being -1 and group being empty means the group is being used
   // to store offsets only. No generation validation, no rebalancing.
-  GenerationID: int32 // v1+
+  Generation: int32 // v1+
   // MemberID is the ID of the client issuing this request in the group.
   MemberID: string // v1+
-  // GroupInstanceID is the instance ID of this member in the group (KIP-345).
-  GroupInstanceID: nullable-string // v7+
-  // RetentionTime is how long this commit will persist in Kafka.
+  // InstanceID is the instance ID of this member in the group (KIP-345).
+  InstanceID: nullable-string // v7+
+  // RetentionTimeMillis is how long this commit will persist in Kafka.
   //
   // This was introduced in v2, replacing an individual topic/partition's
   // Timestamp from v1, and was removed in v5 with Kafka 2.1.0.
@@ -1024,7 +1019,7 @@ OffsetCommitRequest => key 8, max version 7, group coordinator
   //
   // Post 2.1.0, if this field is empty, offsets are only deleted once the
   // group is empty. Read KIP-211 for more details.
-  RetentionTime: int64 // v2-v4
+  RetentionTimeMillis: int64 // v2-v4
   // Topics is contains topics and partitions for which to commit offsets.
   Topics: [=>]
     // Topic is a topic to commit offsets for.
@@ -1052,11 +1047,11 @@ OffsetCommitRequest => key 8, max version 7, group coordinator
 
 // OffsetCommitResponse is returned from an OffsetCommitRequest.
 OffsetCommitResponse =>
-  // ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+  // ThrottleMillis is how long of a throttle Kafka will apply to the client
   // after this request.
   // For Kafka < 2.0.0, the throttle is applied before issuing a response.
   // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
-  ThrottleTimeMs: int32 // v3+
+  ThrottleMillis: int32 // v3+
   // Topics contains responses for each topic / partition in the commit request.
   Topics: [=>]
     // Topic is the topic this offset commit response corresponds to.
@@ -1104,8 +1099,8 @@ OffsetCommitResponse =>
 // OffsetFetchRequest requests the most recent committed offsets for topic
 // partitions in a group.
 OffsetFetchRequest => key 9, max version 5, group coordinator
-  // GroupID is the group to fetch offsets for.
-  GroupID: string
+  // Group is the group to fetch offsets for.
+  Group: string
   // Topics contains topics to fetch offets for. Version 2+ allows this to be
   // null to return all topics the client is authorized to describe in the group.
   Topics: nullable-v2+[=>]
@@ -1116,11 +1111,11 @@ OffsetFetchRequest => key 9, max version 5, group coordinator
 
 // OffsetFetchResponse is returned from an OffsetFetchRequest.
 OffsetFetchResponse =>
-  // ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+  // ThrottleMillis is how long of a throttle Kafka will apply to the client
   // after this request.
   // For Kafka < 2.0.0, the throttle is applied before issuing a response.
   // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
-  ThrottleTimeMs: int32 // v3+
+  ThrottleMillis: int32 // v3+
   // Topics contains responses for each requested topic/partition.
   Topics: [=>]
     // Topic is the topic this offset fetch response corresponds to.
@@ -1170,22 +1165,20 @@ OffsetFetchResponse =>
 // the group or transaction ID.
 FindCoordinatorRequest => key 10, max version 2
   // CoordinatorKey is the ID to use for finding the coordinator. For groups,
-  // this is the group ID, for transactional producer, this is the
+  // this is the group name, for transactional producer, this is the
   // transactional ID.
-  //
-  // In v0 this was called GroupID.
   CoordinatorKey: string // v0+
-  // CoordinatorType is the type that key is. GroupIDs are type 0,
+  // CoordinatorType is the type that key is. Groups are type 0,
   // transactional IDs are type 1.
   CoordinatorType: int8 // v1+
 
 // FindCoordinatorResponse is returned from a FindCoordinatorRequest.
 FindCoordinatorResponse =>
-  // ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+  // ThrottleMillis is how long of a throttle Kafka will apply to the client
   // after this request.
   // For Kafka < 2.0.0, the throttle is applied before issuing a response.
   // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
-  ThrottleTimeMs: int32 // v1+
+  ThrottleMillis: int32 // v1+
   // ErrorCode is the error returned for the request.
   //
   // GROUP_AUTHORIZATION_FAILED is returned if for a group ID request and the
@@ -1267,16 +1260,16 @@ GroupMemberAssignment => not top level
 // MEMBER_ID_REQUIRED, which requires re-issuing the join group with the
 // returned member ID. See KIP-394 for more details.
 //
-// Version 5 introduced GroupInstanceID, allowing for more "static" membership.
+// Version 5 introduced InstanceID, allowing for more "static" membership.
 // See KIP-345 for more details.
 JoinGroupRequest => key 11, max version 5, group coordinator
-  // GroupID is the group to join.
-  GroupID: string
-  // SessionTimeout is how long a member in the group can go between
+  // Group is the group to join.
+  Group: string
+  // SessionTimeoutMillis is how long a member in the group can go between
   // heartbeats. If a member does not send a heartbeat within this timeout,
   // the broker will remove the member from the group and initiate a rebalance.
-  SessionTimeout: int32
-  // RebalanceTimeout is how long the broker waits for members to join a group
+  SessionTimeoutMillis: int32
+  // RebalanceTimeoutMillis is how long the broker waits for members to join a group
   // once a rebalance begins. Kafka waits for the longest rebalance of all
   // members in the group. Member sessions are still alive; heartbeats will be
   // replied to with REBALANCE_IN_PROGRESS. Those members must transition to
@@ -1285,16 +1278,16 @@ JoinGroupRequest => key 11, max version 5, group coordinator
   // within this timeout.
   //
   // The first join for a new group has a 3 second grace period for other
-  // members to join; this grace period is extended until the RebalanceTimeout
+  // members to join; this grace period is extended until the RebalanceTimeoutMillis
   // is up or until 3 seconds lapse with no new members.
-  RebalanceTimeout: int32 // v1+
+  RebalanceTimeoutMillis: int32 // v1+
   // MemberID is the member ID to join the group with. When joining a group for
   // the first time, use the empty string. The response will contain the member
   // ID that should be used going forward.
   MemberID: string
-  // GroupInstanceID is a user configured ID that is used for making a group
+  // InstanceID is a user configured ID that is used for making a group
   // member "static", allowing many rebalances to be avoided.
-  GroupInstanceID: nullable-string // v5+
+  InstanceID: nullable-string // v5+
   // ProtocolType is the "type" of protocol being used for the join group.
   // The initial group creation sets the type; all additional members must
   // have the same type or they will be rejected.
@@ -1302,17 +1295,17 @@ JoinGroupRequest => key 11, max version 5, group coordinator
   // This is completely arbitrary, but the Java client and everything else
   // uses "consumer" as the protocol type.
   ProtocolType: string
-  // GroupProtocols contains arbitrary information that group members use
+  // Protocols contains arbitrary information that group members use
   // for rebalancing. All group members must agree on at least one protocol
   // name.
-  GroupProtocols: [=>]
-    // ProtocolName is a name of a protocol. This is arbitrary, but is used
+  Protocols: [=>]
+    // Name is a name of a protocol. This is arbitrary, but is used
     // in the official client to agree on a partition balancing strategy.
     //
     // The official client uses range, roundrobin, or sticky (which was
     // introduced in KIP-54).
-    ProtocolName: string
-    // ProtocolMetadata is arbitrary information to pass along with this
+    Name: string
+    // Metadata is arbitrary information to pass along with this
     // protocol name for this member.
     //
     // Note that while this is not documented in any protocol page,
@@ -1321,15 +1314,15 @@ JoinGroupRequest => key 11, max version 5, group coordinator
     //
     // The protocol metadata is where group members will communicate which
     // topics they collectively as a group want to consume.
-    ProtocolMetadata: bytes
+    Metadata: bytes
 
 // JoinGroupResponse is returned from a JoinGroupRequest.
 JoinGroupResponse =>
-  // ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+  // ThrottleMillis is how long of a throttle Kafka will apply to the client
   // after this request.
   // For Kafka < 2.0.0, the throttle is applied before issuing a response.
   // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
-  ThrottleTimeMs: int32 // v2+
+  ThrottleMillis: int32 // v2+
   // ErrorCode is the error for the join group request.
   //
   // GROUP_AUTHORIZATION_FAILED is returned if the client is not authorized
@@ -1370,10 +1363,10 @@ JoinGroupResponse =>
   // GROUP_MAX_SIZE_REACHED is returned as of Kafka 2.2.0 if the group has
   // reached a broker's group.max.size.
   ErrorCode: int16
-  // GenerationID is the current "generation" of this group.
-  GenerationID: int32
-  // GroupProtocol is the agreed upon protocol name.
-  GroupProtocol: string
+  // Generation is the current "generation" of this group.
+  Generation: int32
+  // Protocol is the agreed upon protocol name.
+  Protocol: string
   // LeaderID is the leader member.
   LeaderID: string
   // MemberID is the member of the receiving client.
@@ -1384,30 +1377,30 @@ JoinGroupResponse =>
   Members: [=>]
     // MemberID is a member in this group.
     MemberID: string
-    // GroupInstanceID is an instance ID of a member in this group (KIP-345).
-    GroupInstanceID: nullable-string // v5+
-    // MemberMetadata is the metadata for this member.
-    MemberMetadata: bytes
+    // InstanceID is an instance ID of a member in this group (KIP-345).
+    InstanceID: nullable-string // v5+
+    // ProtocolMetadata is the metadata for this member for this protocol.
+    ProtocolMetadata: bytes
 
 // HeartbeatRequest issues a heartbeat for a member in a group, ensuring that
 // Kafka does not expire the member from the group.
 HeartbeatRequest => key 12, max version 3, group coordinator
-  // GroupID is the group ID this heartbeat is for.
-  GroupID: string
-  // GenerationID is the group generation this heartbeat is for.
-  GenerationID: int32
+  // Group is the group ID this heartbeat is for.
+  Group: string
+  // Generation is the group generation this heartbeat is for.
+  Generation: int32
   // MemberID is the member ID this member is for.
   MemberID: string
-  // GroupInstanceID is the instance ID of this member in the group (KIP-345).
-  GroupInstanceID: nullable-string // v3+
+  // InstanceID is the instance ID of this member in the group (KIP-345).
+  InstanceID: nullable-string // v3+
 
 // HeartbeatResponse is returned from a HeartbeatRequest.
 HeartbeatResponse =>
-  // ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+  // ThrottleMillis is how long of a throttle Kafka will apply to the client
   // after this request.
   // For Kafka < 2.0.0, the throttle is applied before issuing a response.
   // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
-  ThrottleTimeMs: int32 // v1+
+  ThrottleMillis: int32 // v1+
   // ErrorCode is the error for the heartbeat request.
   //
   // GROUP_AUTHORIZATION_FAILED is returned if the client is not authorized
@@ -1435,22 +1428,22 @@ HeartbeatResponse =>
 // Version 3 changed removed MemberID and added a batch instance+member ID
 // way of leaving a group.
 LeaveGroupRequest => key 13, max version 3, group coordinator
-  // GroupID is the group to leave.
-  GroupID: string
+  // Group is the group to leave.
+  Group: string
   // MemberID is the member that is leaving.
   MemberID: string // v0-v2
   // Members are member and group instance IDs to cause to leave a group.
   Members: [=>] // v3+
     MemberID: string
-    GroupInstanceID: nullable-string
+    InstanceID: nullable-string
 
 // LeaveGroupResponse is returned from a LeaveGroupRequest.
 LeaveGroupResponse =>
-  // ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+  // ThrottleMillis is how long of a throttle Kafka will apply to the client
   // after this request.
   // For Kafka < 2.0.0, the throttle is applied before issuing a response.
   // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
-  ThrottleTimeMs: int32 // v1+
+  ThrottleMillis: int32 // v1+
   // ErrorCode is the error for the leave group request.
   //
   // GROUP_AUTHORIZATION_FAILED is returned if the client is not authorized
@@ -1472,7 +1465,7 @@ LeaveGroupResponse =>
   // Members are the list of members and group instance IDs that left the group.
   Members: [=>] // v3+
     MemberID: string
-    GroupInstanceID: nullable-string
+    InstanceID: nullable-string
     // An individual member's leave error code.
     ErrorCode: int16
 
@@ -1482,14 +1475,14 @@ LeaveGroupResponse =>
 //
 // Once the leader sends the group assignment, all members will be replied to.
 SyncGroupRequest => key 14, max version 3, group coordinator
-  // GroupID is the group ID this sync group is for.
-  GroupID: string
-  // GenerationID is the group generation this sync is for.
-  GenerationID: int32
+  // Group is the group ID this sync group is for.
+  Group: string
+  // Generation is the group generation this sync is for.
+  Generation: int32
   // MemberID is the member ID this member is.
   MemberID: string
-  // GroupInstanceID is the instance ID of this member in the group (KIP-345).
-  GroupInstanceID: nullable-string // v3+
+  // InstanceID is the instance ID of this member in the group (KIP-345).
+  InstanceID: nullable-string // v3+
   // GroupAssignment, sent only from the group leader, is the topic partition
   // assignment it has decided on for all members.
   GroupAssignment: [=>]
@@ -1501,11 +1494,11 @@ SyncGroupRequest => key 14, max version 3, group coordinator
 
 // SyncGroupResponse is returned from a SyncGroupRequest.
 SyncGroupResponse =>
-  // ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+  // ThrottleMillis is how long of a throttle Kafka will apply to the client
   // after this request.
   // For Kafka < 2.0.0, the throttle is applied before issuing a response.
   // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
-  ThrottleTimeMs: int32 // v1+
+  ThrottleMillis: int32 // v1+
   // ErrorCode is the error for the sync group request.
   //
   // GROUP_AUTHORIZATION_FAILED is returned if the client is not authorized
@@ -1534,9 +1527,9 @@ SyncGroupResponse =>
 
 // DescribeGroupsRequest requests metadata for group IDs.
 DescribeGroupsRequest => key 15, max version 4, group coordinator
-  // GroupIDs is an array of group IDs to request metadata for.
+  // Group is an array of group IDs to request metadata for.
   // If this is empty, the response will include all groups.
-  GroupIDs: [string]
+  Group: [string]
   // IncludeAuthorizedOperations, introduced in Kafka 2.3.0, specifies
   // whether to include a bitfield of AclOperations this client can perform
   // on the groups. See KIP-430 for more details.
@@ -1544,11 +1537,11 @@ DescribeGroupsRequest => key 15, max version 4, group coordinator
 
 // DescribeGroupsResponse is returned from a DescribeGroupsRequest.
 DescribeGroupsResponse =>
-  // ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+  // ThrottleMillis is how long of a throttle Kafka will apply to the client
   // after this request.
   // For Kafka < 2.0.0, the throttle is applied before issuing a response.
   // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
-  ThrottleTimeMs: int32
+  ThrottleMillis: int32
   // Groups is an array of group metadata.
   Groups: [=>]
     // ErrorCode is the error code for an individual group in a request.
@@ -1566,8 +1559,8 @@ DescribeGroupsResponse =>
     // NOT_COORDINATOR is returned if the requested broker is not the
     // coordinator for this group.
     ErrorCode: int16
-    // GroupID is the id of this group.
-    GroupID: string
+    // Group is the id of this group.
+    Group: string
     // State is the state this group is in.
     State: string
     // ProtocolType is the "type" of protocol being used for this group.
@@ -1578,16 +1571,16 @@ DescribeGroupsResponse =>
     Members: [=>]
       // MemberID is the member ID of a member in this group.
       MemberID: string
-      // GroupInstanceID is the instance ID of this member in the group (KIP-345).
-      GroupInstanceID: nullable-string // v4+
+      // InstanceID is the instance ID of this member in the group (KIP-345).
+      InstanceID: nullable-string // v4+
       // ClientID is the client ID used by this member.
       ClientID: string
       // ClientHost is the host this client is running on.
       ClientHost: string
-      // MemberMetadata is the metadata this member included when joining
+      // ProtocolMetadata is the metadata this member included when joining
       // the group. If using normal (Java-like) consumers, this will be of
       // type GroupMemberMetadata.
-      MemberMetadata: bytes
+      ProtocolMetadata: bytes
       // MemberAssignment is the assignment for this member in the group.
       // If using normal (Java-like) consumers, this will be of type
       // GroupMemberAssignment.
@@ -1602,11 +1595,11 @@ ListGroupsRequest => key 16, max version 2, admin
 
 // ListGroupsResponse is returned from a ListGroupsRequest.
 ListGroupsResponse =>
-  // ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+  // ThrottleMillis is how long of a throttle Kafka will apply to the client
   // after this request.
   // For Kafka < 2.0.0, the throttle is applied before issuing a response.
   // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
-  ThrottleTimeMs: int32 // v1+
+  ThrottleMillis: int32 // v1+
   // ErrorCode is the error returned for the list groups request.
   //
   // COORDINATOR_NOT_AVAILABLE is returned if the coordinator is not yet active.
@@ -1615,19 +1608,33 @@ ListGroupsResponse =>
   ErrorCode: int16
   // Groups is the list of groups Kafka knows of.
   Groups: [=>]
-    // GroupID is a Kafka group.
-    GroupID: string
+    // Group is a Kafka group.
+    Group: string
     // ProtocolType is the protocol type in use by the group.
     ProtocolType: string
 
-// TODO
-// SASLHandshakeRequest
+// SASLHandshakeRequest begins the sasl authentication flow. Note that Kerberos
+// GSSAPI authentication has its own unique flow.
 SASLHandshakeRequest => key 17, max version 1
+  // Mechanism is the mechanism to use for the sasl handshake (e.g., "PLAIN").
+  //
+  // For version 0, if this mechanism is supported, it is expected that the
+  // client immediately authenticates using this mechanism. Note that the
+  // only mechanism exclusive to v0 is PLAIN.
+  //
+  // For version 1, if the mechanism is supported, the next request to issue
+  // is SASLHandshakeRequest.
   Mechanism: string
 
+// SASLHandshakeResponse is returned for a SASLHandshakeRequest.
 SASLHandshakeResponse =>
+  // ErrorCode is non-zero for ILLEGAL_SASL_STATE, meaning a sasl handshake
+  // is not expected at this point in the connection, or UNSUPPORTED_SASL_MECHANISM,
+  // meaning the requested mechanism is not supported.
   ErrorCode: int16
-  EnabledMechanisms: [string]
+  // SupportedMechanisms is the list of mechanisms supported if this request
+  // errored.
+  SupportedMechanisms: [string]
 
 // ApiVersionsRequest requests what API versions a Kafka broker supports.
 //
@@ -1643,7 +1650,19 @@ SASLHandshakeResponse =>
 // understands, the broker replies with UNSUPPORTED_VERSIONS using the version
 // 0 message format but additionally includes the api versions the broker does
 // support.
-ApiVersionsRequest => key 18, max version 2
+ApiVersionsRequest => key 18, max version 3, flexible v3+
+  // ClientSoftwareName, added for KIP-511 with Kafka 2.4.0, is the name of the
+  // client issuing this request. The broker can use this to enrich its own
+  // debugging information of which version of what clients are connected.
+  //
+  // If using v3, this field is required and must match the following pattern:
+  //
+  //     [a-zA-Z0-9](?:[a-zA-Z0-9\\-.]*[a-zA-Z0-9])?
+  //
+  ClientSoftwareName: string // v3+
+  // ClientSoftwareVersion is the version of the software name in the prior
+  // field. It must match the same regex (thus, this is also required).
+  ClientSoftwareVersion: string // v3+
 
 // ApiVersionsResponse is returned from an ApiVersionsRequest.
 ApiVersionsResponse =>
@@ -1652,22 +1671,22 @@ ApiVersionsResponse =>
   // returned, the rest of this struct will be empty.
   //
   // Starting in Kafka 2.4.0 (with version 3), even with an UNSUPPORTED_VERSION
-  // error, the broker still replies with the ApiVersions it supports.
+  // error, the broker still replies with the ApiKeys it supports.
   ErrorCode: int16
-  // ApiVersions is an array corresponding to API keys the broker supports
+  // ApiKeys is an array corresponding to API keys the broker supports
   // and the range of supported versions for each key.
-  ApiVersions: [=>]
+  ApiKeys: [=>]
     // ApiKey is the key of a message request.
     ApiKey: int16
     // MinVersion is the min version a broker supports for an API key.
     MinVersion: int16
     // MaxVersion is the max version a broker supports for an API key.
     MaxVersion: int16
-  // ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+  // ThrottleMillis is how long of a throttle Kafka will apply to the client
   // after this request.
   // For Kafka < 2.0.0, the throttle is applied before issuing a response.
   // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
-  ThrottleTimeMs: int32 // v1+
+  ThrottleMillis: int32 // v1+
 
 // CreateTopicsRequest creates Kafka topics.
 //
@@ -1696,30 +1715,29 @@ CreateTopicsRequest => key 19, max version 5, admin
       Partition: int32
       // Replicas are broker IDs the partition must exist on.
       Replicas: [int32]
-    // ConfigEntries is an array of key value config pairs for a topic.
+    // Configs is an array of key value config pairs for a topic.
     // These correspond to Kafka Topic-Level Configs: http://kafka.apache.org/documentation/#topicconfigs.
-    ConfigEntries: [=>ConfigEntry]
-      // ConfigName is a topic level config key (e.g. segment.bytes).
-      ConfigName: string
-      // ConfigValue is a topic level config value (e.g. 1073741824)
-      ConfigValue: nullable-string
-  // Timeout is how long to allow for this request.
-  Timeout: int32
+    Configs: [=>]
+      // Name is a topic level config key (e.g. segment.bytes).
+      Name: string
+      // Value is a topic level config value (e.g. 1073741824)
+      Value: nullable-string
+  // TimeoutMillis is how long to allow for this request.
+  TimeoutMillis: int32
   // ValidateOnly is makes this request a dry-run; everything is validated but
   // no topics are actually created.
   ValidateOnly: bool // v1+
 
 // CreateTopicsResponse is returned from a CreateTopicsRequest.
 CreateTopicsResponse =>
-  // ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+  // ThrottleMillis is how long of a throttle Kafka will apply to the client
   // after this request.
   // For Kafka < 2.0.0, the throttle is applied before issuing a response.
   // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
-  ThrottleTimeMs: int32 // v2+
-  // TopicErrors is an the array of requested topics for creation and their
-  // creation errors.
-  TopicErrors: [=>]
-    // Topic is the topic this error response corresponds to.
+  ThrottleMillis: int32 // v2+
+  // Topics contains responses to the requested topic creations.
+  Topics: [=>]
+    // Topic is the topic this response corresponds to.
     Topic: string
     // ErrorCode is the error code for an individual topic creation.
     //
@@ -1770,9 +1788,9 @@ CreateTopicsResponse =>
       Value: nullable-string
       // ReadOnly signifies whether this is not a dynamic config option.
       ReadOnly: bool
-      // ConfigSource is where this config entry is from. See the documentation
-      // on DescribeConfigsRequest's ConfigSource for more details.
-      ConfigSource: int8
+      // Source is where this config entry is from. See the documentation
+      // on DescribeConfigsRequest's Source for more details.
+      Source: int8
       // IsSensitive signifies whether this is a sensitive config key, which
       // is either a password or an unknown type.
       IsSensitive: bool
@@ -1781,21 +1799,20 @@ CreateTopicsResponse =>
 DeleteTopicsRequest => key 20, max version 3, admin
   // Topics is an array of topics to delete.
   Topics: [string]
-  // Timeout is the millisecond timeout of this request.
-  Timeout: int32
+  // TimeoutMillis is the millisecond timeout of this request.
+  TimeoutMillis: int32
 
 // DeleteTopicsResponse is returned from a DeleteTopicsRequest.
 // Version 3 added the TOPIC_DELETION_DISABLED error proposed in KIP-322
 // and introduced in Kafka 2.1.0. Prior, the request timed out.
 DeleteTopicsResponse =>
-  // ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+  // ThrottleMillis is how long of a throttle Kafka will apply to the client
   // after this request.
   // For Kafka < 2.0.0, the throttle is applied before issuing a response.
   // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
-  ThrottleTimeMs: int32 // v1+
-  // TopicErrorCodes is contains the error codes for each topic requested
-  // for deletion (or no error code).
-  TopicErrorCodes: [=>]
+  ThrottleMillis: int32 // v1+
+  // Topics contains responses for each topic requested for deletion.
+  Topics: [=>]
     // Topic is the topic requested for deletion.
     Topic: string
     // ErrorCode is the error code returned for an individual topic in
@@ -1839,19 +1856,19 @@ DeleteRecordsRequest => key 21, max version 1
       // To delete all records, use -1, which is mapped to the partition's
       // current high watermark.
       Offset: int64
-  // Timeout is how long to wait for a response before Kafka will return.
+  // TimeoutMillis is how long to wait for a response before Kafka will return.
   // Kafka waits for all replicas to respond to the delete reords request;
   // any partition that all replicas do not reply to within this limit will
   // have a timeout error.
-  Timeout: int32
+  TimeoutMillis: int32
 
 // DeleteRecordsResponse is returned from a DeleteRecordsRequest.
 DeleteRecordsResponse =>
-  // ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+  // ThrottleMillis is how long of a throttle Kafka will apply to the client
   // after this request.
   // For Kafka < 2.0.0, the throttle is applied before issuing a response.
   // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
-  ThrottleTimeMs: int32
+  ThrottleMillis: int32
   // Topics contains responses for each topic in the delete records request.
   Topics: [=>]
     // Topic is the topic this response corresponds to.
@@ -1888,14 +1905,14 @@ DeleteRecordsResponse =>
 // TODO
 InitProducerIDRequest => key 22, max version 1, txn coordinator
   TransactionalID: nullable-string
-  TransactionTimeoutMs: int32
+  TransactionTimeoutMillis: int32
 
 InitProducerIDResponse =>
-  // ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+  // ThrottleMillis is how long of a throttle Kafka will apply to the client
   // after this request.
   // For Kafka < 2.0.0, the throttle is applied before issuing a response.
   // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
-  ThrottleTimeMs: int32
+  ThrottleMillis: int32
   // CLUSTER_AUTHORIZATION_FAILED if idempotent and not authed
   //
   // transactional errors:
@@ -1942,9 +1959,9 @@ OffsetForLeaderEpochRequest => key 23, max version 3
 
 // OffsetForLeaderEpochResponse is returned from an OffsetForLeaderEpochRequest.
 OffsetForLeaderEpochResponse =>
-  // ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+  // ThrottleMillis is how long of a throttle Kafka will apply to the client
   // after this request.
-  ThrottleTimeMs: int32 // v2+
+  ThrottleMillis: int32 // v2+
   // Topics are responses to topics in the request.
   Topics: [=>]
     // Topic is the topic this response corresponds to.
@@ -2006,10 +2023,10 @@ AddPartitionsToTxnRequest => key 24, max version 1, txn coordinator
     Partitions: [int32]
 
 AddPartitionsToTxnResponse =>
-  ThrottleTimeMs: int32
-  Errors: [=>]
+  ThrottleMillis: int32
+  Topics: [=>]
     Topic: string
-    PartitionErrors: [=>]
+    Partitions: [=>]
       Partition: int32
       ErrorCode: int16
 
@@ -2017,10 +2034,10 @@ AddOffsetsToTxnRequest => key 25, max version 1, txn coordinator
   TransactionalID: string
   ProducerID: int64
   ProducerEpoch: int16
-  GroupID: string
+  Group: string
 
 AddOffsetsToTxnResponse =>
-  ThrottleTimeMs: int32
+  ThrottleMillis: int32
   ErrorCode: int16
 
 EndTxnRequest => key 26, max version 1, txn coordinator
@@ -2030,21 +2047,21 @@ EndTxnRequest => key 26, max version 1, txn coordinator
   TransactionalResult: bool
 
 EndTxnResponse =>
-  ThrottleTimeMs: int32
+  ThrottleMillis: int32
   ErrorCode: int16
 
 WriteTxnMarkersRequest => key 27, max version 0
-  TransactionMarkers: [=>]
+  Markers: [=>]
     ProducerID: int64
     ProducerEpoch: int16
-    TransactionResult: bool
+    Committed: bool
     Topics: [=>]
       Topic: string
       Partitions: [int32]
     CoordinatorEpoch: int32
 
 WriteTxnMarkersResponse =>
-  TransactionMarkers: [=>]
+  Markers: [=>]
     ProducerID: int64
     Topics: [=>]
       Topic: string
@@ -2054,7 +2071,7 @@ WriteTxnMarkersResponse =>
 
 TxnOffsetCommitRequest => key 28, max version 2, txn coordinator
   TransactionalID: string
-  GroupID: string
+  Group: string
   ProducerID: int64
   ProducerEpoch: int16
   Topics: [=>]
@@ -2072,7 +2089,7 @@ TxnOffsetCommitRequest => key 28, max version 2, txn coordinator
       Metadata: nullable-string
 
 TxnOffsetCommitResponse =>
-  ThrottleTimeMs: int32
+  ThrottleMillis: int32
   Topics: [=>]
     Topic: string
     Partitions: [=>]
@@ -2092,7 +2109,7 @@ DescribeACLsRequest => key 29, max version 1, admin
   PermissionType: int8
 
 DescribeACLsResponse =>
-  ThrottleTimeMs: int32
+  ThrottleMillis: int32
   // ErrorCode is the error code returned on request failure.
   //
   // CLUSTER_AUTHORIZATION_FAILED is returned if the client is not authorized
@@ -2161,7 +2178,7 @@ CreateACLsRequest => key 30, max version 1, admin
     PermissionType: int8
 
 CreateACLsResponse =>
-  ThrottleTimeMs: int32
+  ThrottleMillis: int32
   CreationResponses: [=>]
     ErrorCode: int16
     ErrorMessage: nullable-string
@@ -2177,7 +2194,7 @@ DeleteACLsRequest => key 31, max version 1, admin
     PermissionType: int8
 
 DeleteACLsResponse =>
-  ThrottleTimeMs: int32
+  ThrottleMillis: int32
   FilterResponses: [=>]
     ErrorCode: int16
     ErrorMessage: nullable-string
@@ -2218,11 +2235,11 @@ DescribeConfigsRequest => key 32, max version 2, admin
 
 // DescribeConfigsResponse is returned from a DescribeConfigsRequest.
 DescribeConfigsResponse =>
-  // ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+  // ThrottleMillis is how long of a throttle Kafka will apply to the client
   // after this request.
   // For Kafka < 2.0.0, the throttle is applied before issuing a response.
   // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
-  ThrottleTimeMs: int32
+  ThrottleMillis: int32
   // Resources are responses for each resource in the describe config request.
   Resources: [=>]
     // ErrorCode is the error code returned for describing configs.
@@ -2247,9 +2264,9 @@ DescribeConfigsResponse =>
     ResourceType: int8
     // ResourceName is the name corresponding to the describe config request.
     ResourceName: string
-    // ConfigEntries contains information about key/value config pairs for
+    // Configs contains information about key/value config pairs for
     // the requested resource.
-    ConfigEntries: [=>ConfigEntry]
+    Configs: [=>]
       // Name is a key this entry corresponds to (e.g. segment.bytes).
       Name: string
       // Value is the value for this config key. If the key is sensitive,
@@ -2258,9 +2275,9 @@ DescribeConfigsResponse =>
       // ReadOnly signifies whether this is not a dynamic config option.
       ReadOnly: bool
       // IsDefault is whether this is a default config option. This has been
-      // replaced in favor of ConfigSource.
+      // replaced in favor of Source.
       IsDefault: bool // v0-v0
-      // ConfigSource is where this config entry is from. Note that if there
+      // Source is where this config entry is from. Note that if there
       // are no config synonyms, the source is DEFAULT_CONFIG. The values of
       // this enum are as follows.
       //
@@ -2275,16 +2292,16 @@ DescribeConfigsResponse =>
       // STATIC_BROKER_CONFIG (4): static broker config provided at start up
       //
       // DEFAULT_CONFIG (5): built-in default configuration for those that have defaults
-      ConfigSource: int8 // v1+
+      Source: int8 // v1+
       // IsSensitive signifies whether this is a sensitive config key, which
       // is either a password or an unknown type.
       IsSensitive: bool
       // ConfigSynonyms contains config key/value pairs that can be used in
       // place of this config entry, in order of preference.
       ConfigSynonyms: [=>] // v1+
-        ConfigName: string
-        ConfigValue: nullable-string
-        ConfigSource: int8
+        Name: string
+        Value: nullable-string
+        Source: int8
 
 // AlterConfigsRequest issues a request to alter either topic or broker
 // configs.
@@ -2319,25 +2336,25 @@ AlterConfigsRequest => key 33, max version 1, admin
     //
     // If the type is broker logger, this must be a broker ID.
     ResourceName: string
-    // ConfigEntries contains key/value config pairs to set on the resource.
-    ConfigEntries: [=>ConfigEntry]
-      // ConfigName is a key to set (e.g. segment.bytes).
+    // Configs contains key/value config pairs to set on the resource.
+    Configs: [=>]
+      // Name is a key to set (e.g. segment.bytes).
       //
       // For broker loggers, see KIP-412 section "Request/Response Overview"
       // for details on how to change per logger log levels.
-      ConfigName: string
-      // ConfigValue is a value to set for the key (e.g. 10).
-      ConfigValue: nullable-string
+      Name: string
+      // Value is a value to set for the key (e.g. 10).
+      Value: nullable-string
   // ValidateOnly validates the request but does not apply it.
   ValidateOnly: bool
 
 // AlterConfigsResponse is returned from an AlterConfigsRequest.
 AlterConfigsResponse =>
-  // ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+  // ThrottleMillis is how long of a throttle Kafka will apply to the client
   // after this request.
   // For Kafka < 2.0.0, the throttle is applied before issuing a response.
   // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
-  ThrottleTimeMs: int32
+  ThrottleMillis: int32
   // Resources are responses for each resource in the alter request.
   Resources: [=>]
     // ErrorCode is the error code returned for altering configs.
@@ -2368,11 +2385,11 @@ AlterConfigsResponse =>
 //
 // This is primarily useful for moving directories between disks.
 AlterReplicaLogDirsRequest => key 34, max version 1, admin
-  // LogDirs contains absolute paths of where you want things to end up.
-  LogDirs: [=>]
-    // LogDir is an absolute path where everything listed below should
+  // Dirs contains absolute paths of where you want things to end up.
+  Dirs: [=>]
+    // Dir is an absolute path where everything listed below should
     // end up.
-    LogDir: string
+    Dir: string
     // Topics contains topics to move to the above log directory.
     Topics: [=>]
       // Topic is a topic to move.
@@ -2382,11 +2399,11 @@ AlterReplicaLogDirsRequest => key 34, max version 1, admin
 
 // AlterReplicaLogDirsResponse is returned from an AlterReplicaLogDirsRequest.
 AlterReplicaLogDirsResponse =>
-  // ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+  // ThrottleMillis is how long of a throttle Kafka will apply to the client
   // after this request.
   // For Kafka < 2.0.0, the throttle is applied before issuing a response.
   // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
-  ThrottleTimeMs: int32
+  ThrottleMillis: int32
   // Topics contains responses to each topic that had partitions requested
   // for moving.
   Topics: [=>]
@@ -2423,20 +2440,20 @@ DescribeLogDirsRequest => key 35, max version 1, admin
 
 // DescribeLogDirsResponse is returned from a DescribeLogDirsRequest.
 DescribeLogDirsResponse =>
-  // ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+  // ThrottleMillis is how long of a throttle Kafka will apply to the client
   // after this request.
   // For Kafka < 2.0.0, the throttle is applied before issuing a response.
   // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
-  ThrottleTimeMs: int32
-  // LogDirs pairs log directories with the topics and partitions that are
+  ThrottleMillis: int32
+  // Dirs pairs log directories with the topics and partitions that are
   // stored in those directores.
-  LogDirs: [=>]
+  Dirs: [=>]
     // ErrorCode is the error code returned for descrbing log dirs.
     //
     // KAFKA_STORAGE_ERROR is returned if the log directoy is offline.
     ErrorCode: int16
-    // LogDir is the absolute path of a log directory.
-    LogDir: string
+    // Dir is the absolute path of a log directory.
+    Dir: string
     // Topics is an array of topics within a log directory.
     Topics: [=>]
       // Topic is the name of a Kafka topic.
@@ -2476,8 +2493,8 @@ SASLAuthenticateResponse =>
 
 // CreatePartitionsRequest creates additional partitions for topics.
 CreatePartitionsRequest => key 37, max version 1, admin
-  // TopicPartitions paris topics with their partition creation requests.
-  TopicPartitions: [=>]
+  // Topics contains topics to create partitions for.
+  Topics: [=>]
     // Topic is a topic for which to create additional partitions for.
     Topic: string
     // Count is the final count of partitions this topic must have after this
@@ -2487,30 +2504,31 @@ CreatePartitionsRequest => key 37, max version 1, admin
     // partitions, the second contining broker IDs for where new partition
     // replicas should live.
     //
-    // The second level, the replicas, cannot have duplicate broker IDs
-    // (i.e. you cannot replicate a single partition twice on the same
-    // broker). Additionally, the number of replicas must match the current
-    // number of replicas per partition on the topic.
+    // The second level, the replicas, cannot have duplicate broker IDs (i.e.
+    // you cannot replicate a single partition twice on the same broker).
+    // Additionally, the number of replicas must match the current number of
+    // replicas per partition on the topic.
     //
-    // The first level's length must be equal to the delta of Count and
-    // the current number of partitions.
-    Assignment: nullable[[int32]]
-  // Timeout is how long to allow for this request.
-  Timeout: int32
+    // The first level's length must be equal to the delta of Count and the
+    // current number of partitions.
+    Assignment: nullable[=>]
+      // Replicas are replicas to assign a new partition to.
+      Replicas: [int32]
+  // TimeoutMillis is how long to allow for this request.
+  TimeoutMillis: int32
   // ValidateOnly is makes this request a dry-run; everything is validated but
   // no partitions are actually created.
   ValidateOnly: bool
 
 // CreatePartitionsResponse is returned from a CreatePartitionsRequest.
 CreatePartitionsResponse =>
-  // ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+  // ThrottleMillis is how long of a throttle Kafka will apply to the client
   // after this request.
   // For Kafka < 2.0.0, the throttle is applied before issuing a response.
   // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
-  ThrottleTimeMs: int32
-  // TopicErrors is an the array of requested topics with partition creations
-  // and their creation errors.
-  TopicErrors: [=>]
+  ThrottleMillis: int32
+  // Topics is a response to each topic in the creation request.
+  Topics: [=>]
     // Topic is the topic that partitions were requested to be made for.
     Topic: string
     // ErrorCode is the error code returned for each topic in the request.
@@ -2556,7 +2574,7 @@ CreateDelegationTokenResponse =>
   MaxTimestamp: int64
   TokenID: string
   HMAC: bytes
-  ThrottleTimeMs: int32
+  ThrottleMillis: int32
 
 RenewDelegationTokenRequest => key 39, max version 1, admin
   HMAC: bytes
@@ -2565,7 +2583,7 @@ RenewDelegationTokenRequest => key 39, max version 1, admin
 RenewDelegationTokenResponse =>
   ErrorCode: int16
   ExpiryTimestamp: int64
-  ThrottleTimeMs: int32
+  ThrottleMillis: int32
 
 ExpireDelegationTokenRequest => key 40, max version 1, admin
   HMAC: bytes
@@ -2574,7 +2592,7 @@ ExpireDelegationTokenRequest => key 40, max version 1, admin
 ExpireDelegationTokenResponse =>
   ErrorCode: int16
   ExpiryTimestamp: int64
-  ThrottleTimeMs: int32
+  ThrottleMillis: int32
 
 DescribeDelegationTokenRequest => key 41, max version 1, admin
   // Owners contains owners to describe delegation tokens for, or null for all.
@@ -2595,10 +2613,10 @@ DescribeDelegationTokenResponse =>
     Renewers: [=>]
       PrincipalType: string
       Name: string
-  ThrottleTimeMs: int32
+  ThrottleMillis: int32
 
 // DeleteGroupsRequest deletes consumer groups. This request was added for
-// Kafka 1.1.0 corresponding to the removal of RetentionTime from
+// Kafka 1.1.0 corresponding to the removal of RetentionTimeMillis from
 // OffsetCommitRequest. See KIP-229 for more details.
 DeleteGroupsRequest => key 42, max version 1, group coordinator
   // Groups is a list of groups to delete.
@@ -2606,15 +2624,15 @@ DeleteGroupsRequest => key 42, max version 1, group coordinator
 
 // DeleteGroupsResponse is returned from a DeleteGroupsRequest.
 DeleteGroupsResponse =>
-  // ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+  // ThrottleMillis is how long of a throttle Kafka will apply to the client
   // after this request.
   // For Kafka < 2.0.0, the throttle is applied before issuing a response.
   // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
-  ThrottleTimeMs: int32
-  // GroupErrorCodes are the responses to each group requested for deletion.
-  GroupErrorCodes: [=>]
-    // GroupID is a group ID requested for deletion.
-    GroupID: string
+  ThrottleMillis: int32
+  // Groups are the responses to each group requested for deletion.
+  Groups: [=>]
+    // Group is a group ID requested for deletion.
+    Group: string
     // ErrorCode is the error code returned for this group's deletion request.
     //
     // GROUP_AUTHORIZATION_FAILED is returned if the client is not authorized
@@ -2649,15 +2667,15 @@ ElectLeadersRequest => key 43, max version 1, admin
     // Partitions is an array of partitions in a topic to trigger leader
     // elections for.
     Partitions: [int32]
-  // TimeoutMs is how long to wait for the response. This limits how long to
+  // TimeoutMillis is how long to wait for the response. This limits how long to
   // wait since responses are not sent until election results are complete.
-  TimeoutMs: int32
+  TimeoutMillis: int32
 
 // ElectLeadersResponse is a response for an ElectLeadersRequest.
 ElectLeadersResponse =>
-  // ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+  // ThrottleMillis is how long of a throttle Kafka will apply to the client
   // after responding to this request.
-  ThrottleTimeMs: int32
+  ThrottleMillis: int32
   // ErrorCode is any error that applies to all partitions.
   //
   // CLUSTER_AUTHORIZATION_FAILED is returned if the client is not
@@ -2715,10 +2733,10 @@ IncrementalAlterConfigsRequest => key 44, max version 0, admin
     // or secret files even if the file path has not changed. Lastly, password
     // config options can only be defined on a per broker basis.
     ResourceName: string
-    // ConfigEntries contains key/value config pairs to set on the resource.
-    ConfigEntries: [=>ConfigEntry]
-      // ConfigName is a key to modify (e.g. segment.bytes).
-      ConfigName: string
+    // Configs contains key/value config pairs to set on the resource.
+    Configs: [=>]
+      // Name is a key to modify (e.g. segment.bytes).
+      Name: string
       // Op is the type of operation to perform for this config name.
       //
       // SET (0) is to set a configuration value; the value must not be null.
@@ -2731,16 +2749,16 @@ IncrementalAlterConfigsRequest => key 44, max version 0, admin
       // SUBTRACT (3) is to remove a value from a list of values (if the key
       // is for a list of values).
       Op: int8
-      // ConfigValue is a value to set for the key (e.g. 10).
-      ConfigValue: nullable-string
+      // Value is a value to set for the key (e.g. 10).
+      Value: nullable-string
   // ValidateOnly validates the request but does not apply it.
   ValidateOnly: bool
 
 // IncrementalAlterConfigsResponse is returned from an IncrementalAlterConfigsRequest.
 IncrementalAlterConfigsResponse =>
-  // ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+  // ThrottleMillis is how long of a throttle Kafka will apply to the client
   // after responding to this request.
-  ThrottleTimeMs: int32
+  ThrottleMillis: int32
   Responses: [=>]
     // ErrorCode is the error code returned for incrementally altering configs.
     //
@@ -2774,8 +2792,8 @@ IncrementalAlterConfigsResponse =>
 //
 // ACL wise, this requires ALTER on CLUSTER.
 AlterPartitionReassignmentsRequest => key 45, max version 0, admin
-  // TimeoutMs is how long to wait for the response.
-  TimeoutMs: int32
+  // TimeoutMillis is how long to wait for the response.
+  TimeoutMillis: int32
   // Topics are topics for which to reassign partitions of.
   Topics: [=>]
     // Topic is a topic to reassign the partitions of.
@@ -2790,9 +2808,9 @@ AlterPartitionReassignmentsRequest => key 45, max version 0, admin
 
 // AlterPartitionReassignmentsResponse is returned for an AlterPartitionReassignmentsRequest.
 AlterPartitionReassignmentsResponse =>
-  // ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+  // ThrottleMillis is how long of a throttle Kafka will apply to the client
   // after responding to this request.
-  ThrottleTimeMs: int32
+  ThrottleMillis: int32
   // ErrorCode is any global (applied to all partitions) error code.
   ErrorCode: int16
   // ErrorMessage is any global (applied to all partitions) error message.
@@ -2829,8 +2847,8 @@ AlterPartitionReassignmentsResponse =>
 //
 // ACL wise, this requires DESCRIBE on CLUSTER.
 ListPartitionReassignmentsRequest => key 46, max version 0, admin
-  // TimeoutMs is how long to wait for the response.
-  TimeoutMs: int32
+  // TimeoutMillis is how long to wait for the response.
+  TimeoutMillis: int32
   // Topics are topics to list in progress partition reassignments of, or null
   // to list everything.
   Topics: nullable[=>]
@@ -2841,9 +2859,9 @@ ListPartitionReassignmentsRequest => key 46, max version 0, admin
 
 // ListPartitionReassignmentsResponse is returned for a ListPartitionReassignmentsRequest.
 ListPartitionReassignmentsResponse =>
-  // ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+  // ThrottleMillis is how long of a throttle Kafka will apply to the client
   // after responding to this request.
-  ThrottleTimeMs: int32
+  ThrottleMillis: int32
   // ErrorCode is the error code returned for listing reassignments.
   //
   // REQUEST_TIMED_OUT is returned if the request timed out.
@@ -2877,14 +2895,16 @@ ListPartitionReassignmentsResponse =>
 // ACL wise, this requires DELETE on GROUP for the group and READ on TOPIC for
 // each topic.
 OffsetDeleteRequest => key 47, max version 0, admin
-  // GroupID is the group to delete offsets in.
-  GroupID: string
+  // Group is the group to delete offsets in.
+  Group: string
   // Topics are topics to delete offsets in.
   Topics: [=>]
     // Topic is a topic to delete offsets in.
     Topic: string
     // Partitions are partitions to delete offsets for.
-    Partitions: [int32]
+    Partitions: [=>]
+      // Partition is a partition to delete offsets for.
+      Partition: int32
 
 // OffsetDeleteResponse is a response to an offset delete request.
 OffsetDeleteResponse =>
@@ -2904,9 +2924,9 @@ OffsetDeleteResponse =>
   //
   // GROUP_ID_NOT_FOUND is returned if the group ID does not exist.
   ErrorCode: int16
-  // ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+  // ThrottleMillis is how long of a throttle Kafka will apply to the client
   // after responding to this request.
-  ThrottleTimeMs: int32
+  ThrottleMillis: int32
   // Topics are responses to requested topics.
   Topics: [=>]
     // Topic is the topic being responded to.
