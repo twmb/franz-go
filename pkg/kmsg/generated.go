@@ -637,7 +637,7 @@ func (v *RecordBatch) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
-type ProduceRequestTopicDataData struct {
+type ProduceRequestTopicPartition struct {
 	// Partition is a partition to send a record batch to.
 	Partition int32
 
@@ -648,12 +648,12 @@ type ProduceRequestTopicDataData struct {
 	// serialized RecordBatch.
 	Records []byte
 }
-type ProduceRequestTopicData struct {
+type ProduceRequestTopic struct {
 	// Topic is a topic to send record batches to.
 	Topic string
 
-	// Data is an array of partitions to send record batches to.
-	Data []ProduceRequestTopicDataData
+	// Partitions is an array of partitions to send record batches to.
+	Partitions []ProduceRequestTopicPartition
 }
 
 // ProduceRequest issues records to be created to Kafka.
@@ -668,22 +668,24 @@ type ProduceRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
+	// TransactionID is the transaction ID to use for this request, allowing for
+	// exactly once semantics.
 	TransactionID *string // v3+
 
 	// Acks specifies the number of acks that the partition leaders must receive
 	// from in sync replicas before considering a record batch fully written.
 	//
-	// Valid values are -1, 0, or 1 corresponding to all, none, or one.
+	// Valid values are -1, 0, or 1 corresponding to all, none, or the leader only.
 	//
 	// Note that if no acks are requested, Kafka will close the connection
 	// if any topic or partition errors to trigger a client metadata refresh.
 	Acks int16
 
-	// Timeout is the millisecond timeout of this request.
-	Timeout int32
+	// TimeoutMillis is the millisecond timeout of this request.
+	TimeoutMillis int32
 
-	// TopicData is an array of topics to send record batches to.
-	TopicData []ProduceRequestTopicData
+	// Topics is an array of topics to send record batches to.
+	Topics []ProduceRequestTopic
 }
 
 func (*ProduceRequest) Key() int16                 { return 0 }
@@ -705,11 +707,11 @@ func (v *ProduceRequest) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendInt16(dst, v)
 	}
 	{
-		v := v.Timeout
+		v := v.TimeoutMillis
 		dst = kbin.AppendInt32(dst, v)
 	}
 	{
-		v := v.TopicData
+		v := v.Topics
 		dst = kbin.AppendArrayLen(dst, len(v))
 		for i := range v {
 			v := &v[i]
@@ -718,7 +720,7 @@ func (v *ProduceRequest) AppendTo(dst []byte) []byte {
 				dst = kbin.AppendString(dst, v)
 			}
 			{
-				v := v.Data
+				v := v.Partitions
 				dst = kbin.AppendArrayLen(dst, len(v))
 				for i := range v {
 					v := &v[i]
@@ -829,9 +831,9 @@ type ProduceResponseTopicPartition struct {
 	// at in the partition.
 	BaseOffset int64
 
-	// LogAppendTime is the time that records were appended to the partition
-	// inside Kafka. This is only not -1 if records were written with the log
-	// append time flag (which producers cannot do).
+	// LogAppendTime is the millisecond that records were appended to the
+	// partition inside Kafka. This is only not -1 if records were written
+	// with the log append time flag (which producers cannot do).
 	LogAppendTime int64 // v2+
 
 	// LogStartOffset, introduced in Kafka 1.0.0, can be used to see if an
@@ -865,11 +867,11 @@ type ProduceResponse struct {
 	// to.
 	Topics []ProduceResponseTopic
 
-	// ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+	// ThrottleMillis is how long of a throttle Kafka will apply to the client
 	// after this request.
 	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
 	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
-	ThrottleTimeMs int32 // v1+
+	ThrottleMillis int32 // v1+
 }
 
 func (v *ProduceResponse) ReadFrom(src []byte) error {
@@ -955,7 +957,7 @@ func (v *ProduceResponse) ReadFrom(src []byte) error {
 		}
 		if version >= 1 {
 			v := b.Int32()
-			s.ThrottleTimeMs = v
+			s.ThrottleMillis = v
 		}
 	}
 	return b.Complete()
@@ -1019,9 +1021,9 @@ type FetchRequest struct {
 	// replica can be used to fetch messages from non-leaders.
 	ReplicaID int32
 
-	// MaxWaitTime is how long to wait for MinBytes to be hit before a broker
+	// MaxWaitMillis is how long to wait for MinBytes to be hit before a broker
 	// responds to a fetch request.
-	MaxWaitTime int32
+	MaxWaitMillis int32
 
 	// MinBytes is the minimum amount of bytes to attempt to read before a broker
 	// responds to a fetch request.
@@ -1062,9 +1064,9 @@ type FetchRequest struct {
 	// brokers; see KIP-227 for more details.
 	ForgottenTopicsData []FetchRequestForgottenTopicsData // v7+
 
-	// Rack ID of the consumer making this request (see KIP-392; introduced in
+	// Rack of the consumer making this request (see KIP-392; introduced in
 	// Kafka 2.2.0).
-	RackID string // v11+
+	Rack string // v11+
 }
 
 func (*FetchRequest) Key() int16                 { return 1 }
@@ -1082,7 +1084,7 @@ func (v *FetchRequest) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendInt32(dst, v)
 	}
 	{
-		v := v.MaxWaitTime
+		v := v.MaxWaitMillis
 		dst = kbin.AppendInt32(dst, v)
 	}
 	{
@@ -1163,7 +1165,7 @@ func (v *FetchRequest) AppendTo(dst []byte) []byte {
 		}
 	}
 	if version >= 11 {
-		v := v.RackID
+		v := v.Rack
 		dst = kbin.AppendString(dst, v)
 	}
 	return dst
@@ -1270,11 +1272,11 @@ type FetchResponse struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
-	// ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+	// ThrottleMillis is how long of a throttle Kafka will apply to the client
 	// after this request.
 	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
 	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
-	ThrottleTimeMs int32 // v1+
+	ThrottleMillis int32 // v1+
 
 	// ErrorCode is a full-response error code for a fetch request. This was
 	// added in support of KIP-227. This error is only non-zero if using fetch
@@ -1303,7 +1305,7 @@ func (v *FetchResponse) ReadFrom(src []byte) error {
 		s := v
 		if version >= 1 {
 			v := b.Int32()
-			s.ThrottleTimeMs = v
+			s.ThrottleMillis = v
 		}
 		if version >= 7 {
 			v := b.Int16()
@@ -1593,11 +1595,11 @@ type ListOffsetsResponse struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
-	// ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+	// ThrottleMillis is how long of a throttle Kafka will apply to the client
 	// after this request.
 	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
 	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
-	ThrottleTimeMs int32 // v2+
+	ThrottleMillis int32 // v2+
 
 	// Topics is an array of topic / partition responses corresponding to
 	// the requested topics and partitions.
@@ -1612,7 +1614,7 @@ func (v *ListOffsetsResponse) ReadFrom(src []byte) error {
 		s := v
 		if version >= 2 {
 			v := b.Int32()
-			s.ThrottleTimeMs = v
+			s.ThrottleMillis = v
 		}
 		{
 			v := s.Topics
@@ -1678,6 +1680,11 @@ func (v *ListOffsetsResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+type MetadataRequestTopic struct {
+	// Topic is the topic to request metadata for.
+	Topic string
+}
+
 // MetadataRequest requests metadata from Kafka.
 type MetadataRequest struct {
 	// Version is the version of this message used with a Kafka broker.
@@ -1686,7 +1693,7 @@ type MetadataRequest struct {
 	// Topics is a list of topics to return metadata about. If this is null
 	// in v1+, all topics are included. If this is empty, no topics are.
 	// For v0 (<Kafka 0.10.0.0), if this is empty, all topics are included.
-	Topics []string
+	Topics []MetadataRequestTopic
 
 	// AllowAutoTopicCreation, introduced in Kafka 0.11.0.0, allows topic
 	// auto creation of the topics in this request if they do not exist.
@@ -1731,8 +1738,14 @@ func (v *MetadataRequest) AppendTo(dst []byte) []byte {
 			}
 		}
 		for i := range v {
-			v := v[i]
-			dst = kbin.AppendString(dst, v)
+			v := &v[i]
+			{
+				v := v.Topic
+				dst = kbin.AppendString(dst, v)
+			}
+			if isFlexible {
+				dst = append(dst, 0)
+			}
 		}
 	}
 	if version >= 4 {
@@ -1838,11 +1851,11 @@ type MetadataResponse struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
-	// ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+	// ThrottleMillis is how long of a throttle Kafka will apply to the client
 	// after this request.
 	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
 	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
-	ThrottleTimeMs int32 // v3+
+	ThrottleMillis int32 // v3+
 
 	// Brokers is a set of alive Kafka brokers.
 	Brokers []MetadataResponseBroker
@@ -1873,7 +1886,7 @@ func (v *MetadataResponse) ReadFrom(src []byte) error {
 		s := v
 		if version >= 3 {
 			v := b.Int32()
-			s.ThrottleTimeMs = v
+			s.ThrottleMillis = v
 		}
 		{
 			v := s.Brokers
@@ -2056,26 +2069,11 @@ func (v *MetadataResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
-type LeaderAndISRRequestPartitionState struct {
+// LeaderAndISRRequestTopicPartition is a common struct that is used across
+// different versions of LeaderAndISRRequest.
+type LeaderAndISRRequestTopicPartition struct {
 	Topic string
 
-	Partition int32
-
-	ControllerEpoch int32
-
-	Leader int32
-
-	LeaderEpoch int32
-
-	ISR []int32
-
-	ZKVersion int32
-
-	Replicas []int32
-
-	IsNew bool // v1+
-}
-type LeaderAndISRRequestTopicStatePartitionState struct {
 	Partition int32
 
 	ControllerEpoch int32
@@ -2094,15 +2092,15 @@ type LeaderAndISRRequestTopicStatePartitionState struct {
 
 	RemovingReplicas []int32 // v3+
 
-	IsNew bool
+	IsNew bool // v1+
 }
 type LeaderAndISRRequestTopicState struct {
 	Topic string
 
-	PartitionStates []LeaderAndISRRequestTopicStatePartitionState
+	PartitionStates []LeaderAndISRRequestTopicPartition
 }
 type LeaderAndISRRequestLiveLeader struct {
-	ID int32
+	BrokerID int32
 
 	Host string
 
@@ -2129,7 +2127,7 @@ type LeaderAndISRRequest struct {
 
 	BrokerEpoch int64 // v2+
 
-	PartitionStates []LeaderAndISRRequestPartitionState
+	PartitionStates []LeaderAndISRRequestTopicPartition
 
 	TopicStates []LeaderAndISRRequestTopicState // v2+
 
@@ -2166,7 +2164,7 @@ func (v *LeaderAndISRRequest) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendArrayLen(dst, len(v))
 		for i := range v {
 			v := &v[i]
-			{
+			if version >= 0 && version <= 1 {
 				v := v.Topic
 				dst = kbin.AppendString(dst, v)
 			}
@@ -2206,6 +2204,22 @@ func (v *LeaderAndISRRequest) AppendTo(dst []byte) []byte {
 					dst = kbin.AppendInt32(dst, v)
 				}
 			}
+			if version >= 3 {
+				v := v.AddingReplicas
+				dst = kbin.AppendArrayLen(dst, len(v))
+				for i := range v {
+					v := v[i]
+					dst = kbin.AppendInt32(dst, v)
+				}
+			}
+			if version >= 3 {
+				v := v.RemovingReplicas
+				dst = kbin.AppendArrayLen(dst, len(v))
+				for i := range v {
+					v := v[i]
+					dst = kbin.AppendInt32(dst, v)
+				}
+			}
 			if version >= 1 {
 				v := v.IsNew
 				dst = kbin.AppendBool(dst, v)
@@ -2226,6 +2240,10 @@ func (v *LeaderAndISRRequest) AppendTo(dst []byte) []byte {
 				dst = kbin.AppendArrayLen(dst, len(v))
 				for i := range v {
 					v := &v[i]
+					if version >= 0 && version <= 1 {
+						v := v.Topic
+						dst = kbin.AppendString(dst, v)
+					}
 					{
 						v := v.Partition
 						dst = kbin.AppendInt32(dst, v)
@@ -2278,7 +2296,7 @@ func (v *LeaderAndISRRequest) AppendTo(dst []byte) []byte {
 							dst = kbin.AppendInt32(dst, v)
 						}
 					}
-					{
+					if version >= 1 {
 						v := v.IsNew
 						dst = kbin.AppendBool(dst, v)
 					}
@@ -2292,7 +2310,7 @@ func (v *LeaderAndISRRequest) AppendTo(dst []byte) []byte {
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.ID
+				v := v.BrokerID
 				dst = kbin.AppendInt32(dst, v)
 			}
 			{
@@ -2365,12 +2383,12 @@ func (v *LeaderAndISRResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
-type StopReplicaRequestPartition struct {
+type StopReplicaRequestTopic struct {
 	Topic string
 
 	Partition int32
 
-	PartitionIDs []int32 // v1+
+	Partitions []int32 // v1+
 }
 
 // StopReplicaRequest is an advanced request that brokers use to stop replicas.
@@ -2392,7 +2410,7 @@ type StopReplicaRequest struct {
 
 	DeletePartitions bool
 
-	Partitions []StopReplicaRequestPartition
+	Topics []StopReplicaRequestTopic
 }
 
 func (*StopReplicaRequest) Key() int16                 { return 5 }
@@ -2423,7 +2441,7 @@ func (v *StopReplicaRequest) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendBool(dst, v)
 	}
 	{
-		v := v.Partitions
+		v := v.Topics
 		dst = kbin.AppendArrayLen(dst, len(v))
 		for i := range v {
 			v := &v[i]
@@ -2436,7 +2454,7 @@ func (v *StopReplicaRequest) AppendTo(dst []byte) []byte {
 				dst = kbin.AppendInt32(dst, v)
 			}
 			if version >= 1 {
-				v := v.PartitionIDs
+				v := v.Partitions
 				dst = kbin.AppendArrayLen(dst, len(v))
 				for i := range v {
 					v := v[i]
@@ -2505,26 +2523,9 @@ func (v *StopReplicaResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
-type UpdateMetadataRequestPartitionState struct {
+type UpdateMetadataRequestTopicPartition struct {
 	Topic string
 
-	Partition int32
-
-	ControllerEpoch int32
-
-	Leader int32
-
-	LeaderEpoch int32
-
-	ISR []int32
-
-	ZKVersion int32
-
-	Replicas []int32
-
-	OfflineReplicas []int32
-}
-type UpdateMetadataRequestTopicStatePartitionState struct {
 	Partition int32
 
 	ControllerEpoch int32
@@ -2544,7 +2545,7 @@ type UpdateMetadataRequestTopicStatePartitionState struct {
 type UpdateMetadataRequestTopicState struct {
 	Topic string
 
-	PartitionStates []UpdateMetadataRequestTopicStatePartitionState
+	PartitionStates []UpdateMetadataRequestTopicPartition
 }
 type UpdateMetadataRequestLiveBrokerEndpoint struct {
 	Port int32
@@ -2553,7 +2554,7 @@ type UpdateMetadataRequestLiveBrokerEndpoint struct {
 
 	ListenerName string // v3+
 
-	SecurityProtocolType int16
+	SecurityProtocol int16
 }
 type UpdateMetadataRequestLiveBroker struct {
 	ID int32
@@ -2587,7 +2588,7 @@ type UpdateMetadataRequest struct {
 
 	BrokerEpoch int64 // v5+
 
-	PartitionStates []UpdateMetadataRequestPartitionState
+	PartitionStates []UpdateMetadataRequestTopicPartition
 
 	TopicStates []UpdateMetadataRequestTopicState // v5+
 
@@ -2624,7 +2625,7 @@ func (v *UpdateMetadataRequest) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendArrayLen(dst, len(v))
 		for i := range v {
 			v := &v[i]
-			{
+			if version >= 0 && version <= 4 {
 				v := v.Topic
 				dst = kbin.AppendString(dst, v)
 			}
@@ -2688,6 +2689,10 @@ func (v *UpdateMetadataRequest) AppendTo(dst []byte) []byte {
 				dst = kbin.AppendArrayLen(dst, len(v))
 				for i := range v {
 					v := &v[i]
+					if version >= 0 && version <= 4 {
+						v := v.Topic
+						dst = kbin.AppendString(dst, v)
+					}
 					{
 						v := v.Partition
 						dst = kbin.AppendInt32(dst, v)
@@ -2771,7 +2776,7 @@ func (v *UpdateMetadataRequest) AppendTo(dst []byte) []byte {
 						dst = kbin.AppendString(dst, v)
 					}
 					{
-						v := v.SecurityProtocolType
+						v := v.SecurityProtocol
 						dst = kbin.AppendInt16(dst, v)
 					}
 				}
@@ -3100,8 +3105,8 @@ type GroupMetadataValueMember struct {
 	// MemberID is a group member.
 	MemberID string
 
-	// GroupInstanceID is the instance ID of this member in the group (KIP-345).
-	GroupInstanceID *string // v3+
+	// InstanceID is the instance ID of this member in the group (KIP-345).
+	InstanceID *string // v3+
 
 	// ClientID is the client ID of this group member.
 	ClientID string
@@ -3109,11 +3114,11 @@ type GroupMetadataValueMember struct {
 	// ClientHost is the hostname of this group member.
 	ClientHost string
 
-	// RebalanceTimeout is the rebalance timeout of this group member.
-	RebalanceTimeout int32 // v1+
+	// RebalanceTimeoutMillis is the rebalance timeout of this group member.
+	RebalanceTimeoutMillis int32 // v1+
 
-	// SessionTimeout is the session timeout of this group member.
-	SessionTimeout int32
+	// SessionTimeoutMillis is the session timeout of this group member.
+	SessionTimeoutMillis int32
 
 	// Subscription is the subscription of this group member.
 	Subscription []byte
@@ -3198,7 +3203,7 @@ func (v *GroupMetadataValue) AppendTo(dst []byte) []byte {
 				dst = kbin.AppendString(dst, v)
 			}
 			if version >= 3 {
-				v := v.GroupInstanceID
+				v := v.InstanceID
 				dst = kbin.AppendNullableString(dst, v)
 			}
 			{
@@ -3210,11 +3215,11 @@ func (v *GroupMetadataValue) AppendTo(dst []byte) []byte {
 				dst = kbin.AppendString(dst, v)
 			}
 			if version >= 1 {
-				v := v.RebalanceTimeout
+				v := v.RebalanceTimeoutMillis
 				dst = kbin.AppendInt32(dst, v)
 			}
 			{
-				v := v.SessionTimeout
+				v := v.SessionTimeoutMillis
 				dst = kbin.AppendInt32(dst, v)
 			}
 			{
@@ -3269,7 +3274,7 @@ func (v *GroupMetadataValue) ReadFrom(src []byte) error {
 					}
 					if version >= 3 {
 						v := b.NullableString()
-						s.GroupInstanceID = v
+						s.InstanceID = v
 					}
 					{
 						v := b.String()
@@ -3281,11 +3286,11 @@ func (v *GroupMetadataValue) ReadFrom(src []byte) error {
 					}
 					if version >= 1 {
 						v := b.Int32()
-						s.RebalanceTimeout = v
+						s.RebalanceTimeoutMillis = v
 					}
 					{
 						v := b.Int32()
-						s.SessionTimeout = v
+						s.SessionTimeoutMillis = v
 					}
 					{
 						v := b.Bytes()
@@ -3342,20 +3347,20 @@ type OffsetCommitRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
-	// GroupID is the group this request is committing offsets to.
-	GroupID string
+	// Group is the group this request is committing offsets to.
+	Group string
 
-	// GenerationID being -1 and group being empty means the group is being used
+	// Generation being -1 and group being empty means the group is being used
 	// to store offsets only. No generation validation, no rebalancing.
-	GenerationID int32 // v1+
+	Generation int32 // v1+
 
 	// MemberID is the ID of the client issuing this request in the group.
 	MemberID string // v1+
 
-	// GroupInstanceID is the instance ID of this member in the group (KIP-345).
-	GroupInstanceID *string // v7+
+	// InstanceID is the instance ID of this member in the group (KIP-345).
+	InstanceID *string // v7+
 
-	// RetentionTime is how long this commit will persist in Kafka.
+	// RetentionTimeMillis is how long this commit will persist in Kafka.
 	//
 	// This was introduced in v2, replacing an individual topic/partition's
 	// Timestamp from v1, and was removed in v5 with Kafka 2.1.0.
@@ -3368,7 +3373,7 @@ type OffsetCommitRequest struct {
 	//
 	// Post 2.1.0, if this field is empty, offsets are only deleted once the
 	// group is empty. Read KIP-211 for more details.
-	RetentionTime int64 // v2+
+	RetentionTimeMillis int64 // v2+
 
 	// Topics is contains topics and partitions for which to commit offsets.
 	Topics []OffsetCommitRequestTopic
@@ -3388,11 +3393,11 @@ func (v *OffsetCommitRequest) AppendTo(dst []byte) []byte {
 	version := v.Version
 	_ = version
 	{
-		v := v.GroupID
+		v := v.Group
 		dst = kbin.AppendString(dst, v)
 	}
 	if version >= 1 {
-		v := v.GenerationID
+		v := v.Generation
 		dst = kbin.AppendInt32(dst, v)
 	}
 	if version >= 1 {
@@ -3400,11 +3405,11 @@ func (v *OffsetCommitRequest) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendString(dst, v)
 	}
 	if version >= 7 {
-		v := v.GroupInstanceID
+		v := v.InstanceID
 		dst = kbin.AppendNullableString(dst, v)
 	}
 	if version >= 2 && version <= 4 {
-		v := v.RetentionTime
+		v := v.RetentionTimeMillis
 		dst = kbin.AppendInt64(dst, v)
 	}
 	{
@@ -3501,11 +3506,11 @@ type OffsetCommitResponse struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
-	// ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+	// ThrottleMillis is how long of a throttle Kafka will apply to the client
 	// after this request.
 	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
 	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
-	ThrottleTimeMs int32 // v3+
+	ThrottleMillis int32 // v3+
 
 	// Topics contains responses for each topic / partition in the commit request.
 	Topics []OffsetCommitResponseTopic
@@ -3519,7 +3524,7 @@ func (v *OffsetCommitResponse) ReadFrom(src []byte) error {
 		s := v
 		if version >= 3 {
 			v := b.Int32()
-			s.ThrottleTimeMs = v
+			s.ThrottleMillis = v
 		}
 		{
 			v := s.Topics
@@ -3577,8 +3582,8 @@ type OffsetFetchRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
-	// GroupID is the group to fetch offsets for.
-	GroupID string
+	// Group is the group to fetch offsets for.
+	Group string
 
 	// Topics contains topics to fetch offets for. Version 2+ allows this to be
 	// null to return all topics the client is authorized to describe in the group.
@@ -3597,7 +3602,7 @@ func (v *OffsetFetchRequest) AppendTo(dst []byte) []byte {
 	version := v.Version
 	_ = version
 	{
-		v := v.GroupID
+		v := v.Group
 		dst = kbin.AppendString(dst, v)
 	}
 	{
@@ -3677,11 +3682,11 @@ type OffsetFetchResponse struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
-	// ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+	// ThrottleMillis is how long of a throttle Kafka will apply to the client
 	// after this request.
 	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
 	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
-	ThrottleTimeMs int32 // v3+
+	ThrottleMillis int32 // v3+
 
 	// Topics contains responses for each requested topic/partition.
 	Topics []OffsetFetchResponseTopic
@@ -3699,7 +3704,7 @@ func (v *OffsetFetchResponse) ReadFrom(src []byte) error {
 		s := v
 		if version >= 3 {
 			v := b.Int32()
-			s.ThrottleTimeMs = v
+			s.ThrottleMillis = v
 		}
 		{
 			v := s.Topics
@@ -3769,13 +3774,11 @@ type FindCoordinatorRequest struct {
 	Version int16
 
 	// CoordinatorKey is the ID to use for finding the coordinator. For groups,
-	// this is the group ID, for transactional producer, this is the
+	// this is the group name, for transactional producer, this is the
 	// transactional ID.
-	//
-	// In v0 this was called GroupID.
 	CoordinatorKey string
 
-	// CoordinatorType is the type that key is. GroupIDs are type 0,
+	// CoordinatorType is the type that key is. Groups are type 0,
 	// transactional IDs are type 1.
 	CoordinatorType int8 // v1+
 }
@@ -3808,11 +3811,11 @@ type FindCoordinatorResponse struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
-	// ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+	// ThrottleMillis is how long of a throttle Kafka will apply to the client
 	// after this request.
 	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
 	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
-	ThrottleTimeMs int32 // v1+
+	ThrottleMillis int32 // v1+
 
 	// ErrorCode is the error returned for the request.
 	//
@@ -3850,7 +3853,7 @@ func (v *FindCoordinatorResponse) ReadFrom(src []byte) error {
 		s := v
 		if version >= 1 {
 			v := b.Int32()
-			s.ThrottleTimeMs = v
+			s.ThrottleMillis = v
 		}
 		{
 			v := b.Int16()
@@ -4056,15 +4059,15 @@ func (v *GroupMemberAssignment) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
-type JoinGroupRequestGroupProtocol struct {
-	// ProtocolName is a name of a protocol. This is arbitrary, but is used
+type JoinGroupRequestProtocol struct {
+	// Name is a name of a protocol. This is arbitrary, but is used
 	// in the official client to agree on a partition balancing strategy.
 	//
 	// The official client uses range, roundrobin, or sticky (which was
 	// introduced in KIP-54).
-	ProtocolName string
+	Name string
 
-	// ProtocolMetadata is arbitrary information to pass along with this
+	// Metadata is arbitrary information to pass along with this
 	// protocol name for this member.
 	//
 	// Note that while this is not documented in any protocol page,
@@ -4073,7 +4076,7 @@ type JoinGroupRequestGroupProtocol struct {
 	//
 	// The protocol metadata is where group members will communicate which
 	// topics they collectively as a group want to consume.
-	ProtocolMetadata []byte
+	Metadata []byte
 }
 
 // JoinGroupRequest issues a request to join a Kafka group. This will create a
@@ -4088,21 +4091,21 @@ type JoinGroupRequestGroupProtocol struct {
 // MEMBER_ID_REQUIRED, which requires re-issuing the join group with the
 // returned member ID. See KIP-394 for more details.
 //
-// Version 5 introduced GroupInstanceID, allowing for more "static" membership.
+// Version 5 introduced InstanceID, allowing for more "static" membership.
 // See KIP-345 for more details.
 type JoinGroupRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
-	// GroupID is the group to join.
-	GroupID string
+	// Group is the group to join.
+	Group string
 
-	// SessionTimeout is how long a member in the group can go between
+	// SessionTimeoutMillis is how long a member in the group can go between
 	// heartbeats. If a member does not send a heartbeat within this timeout,
 	// the broker will remove the member from the group and initiate a rebalance.
-	SessionTimeout int32
+	SessionTimeoutMillis int32
 
-	// RebalanceTimeout is how long the broker waits for members to join a group
+	// RebalanceTimeoutMillis is how long the broker waits for members to join a group
 	// once a rebalance begins. Kafka waits for the longest rebalance of all
 	// members in the group. Member sessions are still alive; heartbeats will be
 	// replied to with REBALANCE_IN_PROGRESS. Those members must transition to
@@ -4111,18 +4114,18 @@ type JoinGroupRequest struct {
 	// within this timeout.
 	//
 	// The first join for a new group has a 3 second grace period for other
-	// members to join; this grace period is extended until the RebalanceTimeout
+	// members to join; this grace period is extended until the RebalanceTimeoutMillis
 	// is up or until 3 seconds lapse with no new members.
-	RebalanceTimeout int32 // v1+
+	RebalanceTimeoutMillis int32 // v1+
 
 	// MemberID is the member ID to join the group with. When joining a group for
 	// the first time, use the empty string. The response will contain the member
 	// ID that should be used going forward.
 	MemberID string
 
-	// GroupInstanceID is a user configured ID that is used for making a group
+	// InstanceID is a user configured ID that is used for making a group
 	// member "static", allowing many rebalances to be avoided.
-	GroupInstanceID *string // v5+
+	InstanceID *string // v5+
 
 	// ProtocolType is the "type" of protocol being used for the join group.
 	// The initial group creation sets the type; all additional members must
@@ -4132,10 +4135,10 @@ type JoinGroupRequest struct {
 	// uses "consumer" as the protocol type.
 	ProtocolType string
 
-	// GroupProtocols contains arbitrary information that group members use
+	// Protocols contains arbitrary information that group members use
 	// for rebalancing. All group members must agree on at least one protocol
 	// name.
-	GroupProtocols []JoinGroupRequestGroupProtocol
+	Protocols []JoinGroupRequestProtocol
 }
 
 func (*JoinGroupRequest) Key() int16                   { return 11 }
@@ -4150,15 +4153,15 @@ func (v *JoinGroupRequest) AppendTo(dst []byte) []byte {
 	version := v.Version
 	_ = version
 	{
-		v := v.GroupID
+		v := v.Group
 		dst = kbin.AppendString(dst, v)
 	}
 	{
-		v := v.SessionTimeout
+		v := v.SessionTimeoutMillis
 		dst = kbin.AppendInt32(dst, v)
 	}
 	if version >= 1 {
-		v := v.RebalanceTimeout
+		v := v.RebalanceTimeoutMillis
 		dst = kbin.AppendInt32(dst, v)
 	}
 	{
@@ -4166,7 +4169,7 @@ func (v *JoinGroupRequest) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendString(dst, v)
 	}
 	if version >= 5 {
-		v := v.GroupInstanceID
+		v := v.InstanceID
 		dst = kbin.AppendNullableString(dst, v)
 	}
 	{
@@ -4174,16 +4177,16 @@ func (v *JoinGroupRequest) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendString(dst, v)
 	}
 	{
-		v := v.GroupProtocols
+		v := v.Protocols
 		dst = kbin.AppendArrayLen(dst, len(v))
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.ProtocolName
+				v := v.Name
 				dst = kbin.AppendString(dst, v)
 			}
 			{
-				v := v.ProtocolMetadata
+				v := v.Metadata
 				dst = kbin.AppendBytes(dst, v)
 			}
 		}
@@ -4195,11 +4198,11 @@ type JoinGroupResponseMember struct {
 	// MemberID is a member in this group.
 	MemberID string
 
-	// GroupInstanceID is an instance ID of a member in this group (KIP-345).
-	GroupInstanceID *string // v5+
+	// InstanceID is an instance ID of a member in this group (KIP-345).
+	InstanceID *string // v5+
 
-	// MemberMetadata is the metadata for this member.
-	MemberMetadata []byte
+	// ProtocolMetadata is the metadata for this member for this protocol.
+	ProtocolMetadata []byte
 }
 
 // JoinGroupResponse is returned from a JoinGroupRequest.
@@ -4207,11 +4210,11 @@ type JoinGroupResponse struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
-	// ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+	// ThrottleMillis is how long of a throttle Kafka will apply to the client
 	// after this request.
 	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
 	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
-	ThrottleTimeMs int32 // v2+
+	ThrottleMillis int32 // v2+
 
 	// ErrorCode is the error for the join group request.
 	//
@@ -4254,11 +4257,11 @@ type JoinGroupResponse struct {
 	// reached a broker's group.max.size.
 	ErrorCode int16
 
-	// GenerationID is the current "generation" of this group.
-	GenerationID int32
+	// Generation is the current "generation" of this group.
+	Generation int32
 
-	// GroupProtocol is the agreed upon protocol name.
-	GroupProtocol string
+	// Protocol is the agreed upon protocol name.
+	Protocol string
 
 	// LeaderID is the leader member.
 	LeaderID string
@@ -4280,7 +4283,7 @@ func (v *JoinGroupResponse) ReadFrom(src []byte) error {
 		s := v
 		if version >= 2 {
 			v := b.Int32()
-			s.ThrottleTimeMs = v
+			s.ThrottleMillis = v
 		}
 		{
 			v := b.Int16()
@@ -4288,11 +4291,11 @@ func (v *JoinGroupResponse) ReadFrom(src []byte) error {
 		}
 		{
 			v := b.Int32()
-			s.GenerationID = v
+			s.Generation = v
 		}
 		{
 			v := b.String()
-			s.GroupProtocol = v
+			s.Protocol = v
 		}
 		{
 			v := b.String()
@@ -4316,11 +4319,11 @@ func (v *JoinGroupResponse) ReadFrom(src []byte) error {
 					}
 					if version >= 5 {
 						v := b.NullableString()
-						s.GroupInstanceID = v
+						s.InstanceID = v
 					}
 					{
 						v := b.Bytes()
-						s.MemberMetadata = v
+						s.ProtocolMetadata = v
 					}
 				}
 			}
@@ -4337,17 +4340,17 @@ type HeartbeatRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
-	// GroupID is the group ID this heartbeat is for.
-	GroupID string
+	// Group is the group ID this heartbeat is for.
+	Group string
 
-	// GenerationID is the group generation this heartbeat is for.
-	GenerationID int32
+	// Generation is the group generation this heartbeat is for.
+	Generation int32
 
 	// MemberID is the member ID this member is for.
 	MemberID string
 
-	// GroupInstanceID is the instance ID of this member in the group (KIP-345).
-	GroupInstanceID *string // v3+
+	// InstanceID is the instance ID of this member in the group (KIP-345).
+	InstanceID *string // v3+
 }
 
 func (*HeartbeatRequest) Key() int16                   { return 12 }
@@ -4362,11 +4365,11 @@ func (v *HeartbeatRequest) AppendTo(dst []byte) []byte {
 	version := v.Version
 	_ = version
 	{
-		v := v.GroupID
+		v := v.Group
 		dst = kbin.AppendString(dst, v)
 	}
 	{
-		v := v.GenerationID
+		v := v.Generation
 		dst = kbin.AppendInt32(dst, v)
 	}
 	{
@@ -4374,7 +4377,7 @@ func (v *HeartbeatRequest) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendString(dst, v)
 	}
 	if version >= 3 {
-		v := v.GroupInstanceID
+		v := v.InstanceID
 		dst = kbin.AppendNullableString(dst, v)
 	}
 	return dst
@@ -4385,11 +4388,11 @@ type HeartbeatResponse struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
-	// ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+	// ThrottleMillis is how long of a throttle Kafka will apply to the client
 	// after this request.
 	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
 	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
-	ThrottleTimeMs int32 // v1+
+	ThrottleMillis int32 // v1+
 
 	// ErrorCode is the error for the heartbeat request.
 	//
@@ -4421,7 +4424,7 @@ func (v *HeartbeatResponse) ReadFrom(src []byte) error {
 		s := v
 		if version >= 1 {
 			v := b.Int32()
-			s.ThrottleTimeMs = v
+			s.ThrottleMillis = v
 		}
 		{
 			v := b.Int16()
@@ -4434,7 +4437,7 @@ func (v *HeartbeatResponse) ReadFrom(src []byte) error {
 type LeaveGroupRequestMember struct {
 	MemberID string
 
-	GroupInstanceID *string
+	InstanceID *string
 }
 
 // LeaveGroupRequest issues a request for a group member to leave the group,
@@ -4446,8 +4449,8 @@ type LeaveGroupRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
-	// GroupID is the group to leave.
-	GroupID string
+	// Group is the group to leave.
+	Group string
 
 	// MemberID is the member that is leaving.
 	MemberID string
@@ -4468,7 +4471,7 @@ func (v *LeaveGroupRequest) AppendTo(dst []byte) []byte {
 	version := v.Version
 	_ = version
 	{
-		v := v.GroupID
+		v := v.Group
 		dst = kbin.AppendString(dst, v)
 	}
 	if version >= 0 && version <= 2 {
@@ -4485,7 +4488,7 @@ func (v *LeaveGroupRequest) AppendTo(dst []byte) []byte {
 				dst = kbin.AppendString(dst, v)
 			}
 			{
-				v := v.GroupInstanceID
+				v := v.InstanceID
 				dst = kbin.AppendNullableString(dst, v)
 			}
 		}
@@ -4496,7 +4499,7 @@ func (v *LeaveGroupRequest) AppendTo(dst []byte) []byte {
 type LeaveGroupResponseMember struct {
 	MemberID string
 
-	GroupInstanceID *string
+	InstanceID *string
 
 	// An individual member's leave error code.
 	ErrorCode int16
@@ -4507,11 +4510,11 @@ type LeaveGroupResponse struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
-	// ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+	// ThrottleMillis is how long of a throttle Kafka will apply to the client
 	// after this request.
 	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
 	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
-	ThrottleTimeMs int32 // v1+
+	ThrottleMillis int32 // v1+
 
 	// ErrorCode is the error for the leave group request.
 	//
@@ -4544,7 +4547,7 @@ func (v *LeaveGroupResponse) ReadFrom(src []byte) error {
 		s := v
 		if version >= 1 {
 			v := b.Int32()
-			s.ThrottleTimeMs = v
+			s.ThrottleMillis = v
 		}
 		{
 			v := b.Int16()
@@ -4564,7 +4567,7 @@ func (v *LeaveGroupResponse) ReadFrom(src []byte) error {
 					}
 					{
 						v := b.NullableString()
-						s.GroupInstanceID = v
+						s.InstanceID = v
 					}
 					{
 						v := b.Int16()
@@ -4597,17 +4600,17 @@ type SyncGroupRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
-	// GroupID is the group ID this sync group is for.
-	GroupID string
+	// Group is the group ID this sync group is for.
+	Group string
 
-	// GenerationID is the group generation this sync is for.
-	GenerationID int32
+	// Generation is the group generation this sync is for.
+	Generation int32
 
 	// MemberID is the member ID this member is.
 	MemberID string
 
-	// GroupInstanceID is the instance ID of this member in the group (KIP-345).
-	GroupInstanceID *string // v3+
+	// InstanceID is the instance ID of this member in the group (KIP-345).
+	InstanceID *string // v3+
 
 	// GroupAssignment, sent only from the group leader, is the topic partition
 	// assignment it has decided on for all members.
@@ -4626,11 +4629,11 @@ func (v *SyncGroupRequest) AppendTo(dst []byte) []byte {
 	version := v.Version
 	_ = version
 	{
-		v := v.GroupID
+		v := v.Group
 		dst = kbin.AppendString(dst, v)
 	}
 	{
-		v := v.GenerationID
+		v := v.Generation
 		dst = kbin.AppendInt32(dst, v)
 	}
 	{
@@ -4638,7 +4641,7 @@ func (v *SyncGroupRequest) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendString(dst, v)
 	}
 	if version >= 3 {
-		v := v.GroupInstanceID
+		v := v.InstanceID
 		dst = kbin.AppendNullableString(dst, v)
 	}
 	{
@@ -4664,11 +4667,11 @@ type SyncGroupResponse struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
-	// ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+	// ThrottleMillis is how long of a throttle Kafka will apply to the client
 	// after this request.
 	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
 	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
-	ThrottleTimeMs int32 // v1+
+	ThrottleMillis int32 // v1+
 
 	// ErrorCode is the error for the sync group request.
 	//
@@ -4706,7 +4709,7 @@ func (v *SyncGroupResponse) ReadFrom(src []byte) error {
 		s := v
 		if version >= 1 {
 			v := b.Int32()
-			s.ThrottleTimeMs = v
+			s.ThrottleMillis = v
 		}
 		{
 			v := b.Int16()
@@ -4725,9 +4728,9 @@ type DescribeGroupsRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
-	// GroupIDs is an array of group IDs to request metadata for.
+	// Group is an array of group IDs to request metadata for.
 	// If this is empty, the response will include all groups.
-	GroupIDs []string
+	Group []string
 
 	// IncludeAuthorizedOperations, introduced in Kafka 2.3.0, specifies
 	// whether to include a bitfield of AclOperations this client can perform
@@ -4749,7 +4752,7 @@ func (v *DescribeGroupsRequest) AppendTo(dst []byte) []byte {
 	version := v.Version
 	_ = version
 	{
-		v := v.GroupIDs
+		v := v.Group
 		dst = kbin.AppendArrayLen(dst, len(v))
 		for i := range v {
 			v := v[i]
@@ -4767,8 +4770,8 @@ type DescribeGroupsResponseGroupMember struct {
 	// MemberID is the member ID of a member in this group.
 	MemberID string
 
-	// GroupInstanceID is the instance ID of this member in the group (KIP-345).
-	GroupInstanceID *string // v4+
+	// InstanceID is the instance ID of this member in the group (KIP-345).
+	InstanceID *string // v4+
 
 	// ClientID is the client ID used by this member.
 	ClientID string
@@ -4776,10 +4779,10 @@ type DescribeGroupsResponseGroupMember struct {
 	// ClientHost is the host this client is running on.
 	ClientHost string
 
-	// MemberMetadata is the metadata this member included when joining
+	// ProtocolMetadata is the metadata this member included when joining
 	// the group. If using normal (Java-like) consumers, this will be of
 	// type GroupMemberMetadata.
-	MemberMetadata []byte
+	ProtocolMetadata []byte
 
 	// MemberAssignment is the assignment for this member in the group.
 	// If using normal (Java-like) consumers, this will be of type
@@ -4803,8 +4806,8 @@ type DescribeGroupsResponseGroup struct {
 	// coordinator for this group.
 	ErrorCode int16
 
-	// GroupID is the id of this group.
-	GroupID string
+	// Group is the id of this group.
+	Group string
 
 	// State is the state this group is in.
 	State string
@@ -4829,11 +4832,11 @@ type DescribeGroupsResponse struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
-	// ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+	// ThrottleMillis is how long of a throttle Kafka will apply to the client
 	// after this request.
 	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
 	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
-	ThrottleTimeMs int32
+	ThrottleMillis int32
 
 	// Groups is an array of group metadata.
 	Groups []DescribeGroupsResponseGroup
@@ -4847,7 +4850,7 @@ func (v *DescribeGroupsResponse) ReadFrom(src []byte) error {
 		s := v
 		{
 			v := b.Int32()
-			s.ThrottleTimeMs = v
+			s.ThrottleMillis = v
 		}
 		{
 			v := s.Groups
@@ -4863,7 +4866,7 @@ func (v *DescribeGroupsResponse) ReadFrom(src []byte) error {
 					}
 					{
 						v := b.String()
-						s.GroupID = v
+						s.Group = v
 					}
 					{
 						v := b.String()
@@ -4891,7 +4894,7 @@ func (v *DescribeGroupsResponse) ReadFrom(src []byte) error {
 								}
 								if version >= 4 {
 									v := b.NullableString()
-									s.GroupInstanceID = v
+									s.InstanceID = v
 								}
 								{
 									v := b.String()
@@ -4903,7 +4906,7 @@ func (v *DescribeGroupsResponse) ReadFrom(src []byte) error {
 								}
 								{
 									v := b.Bytes()
-									s.MemberMetadata = v
+									s.ProtocolMetadata = v
 								}
 								{
 									v := b.Bytes()
@@ -4948,8 +4951,8 @@ func (v *ListGroupsRequest) AppendTo(dst []byte) []byte {
 }
 
 type ListGroupsResponseGroup struct {
-	// GroupID is a Kafka group.
-	GroupID string
+	// Group is a Kafka group.
+	Group string
 
 	// ProtocolType is the protocol type in use by the group.
 	ProtocolType string
@@ -4960,11 +4963,11 @@ type ListGroupsResponse struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
-	// ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+	// ThrottleMillis is how long of a throttle Kafka will apply to the client
 	// after this request.
 	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
 	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
-	ThrottleTimeMs int32 // v1+
+	ThrottleMillis int32 // v1+
 
 	// ErrorCode is the error returned for the list groups request.
 	//
@@ -4985,7 +4988,7 @@ func (v *ListGroupsResponse) ReadFrom(src []byte) error {
 		s := v
 		if version >= 1 {
 			v := b.Int32()
-			s.ThrottleTimeMs = v
+			s.ThrottleMillis = v
 		}
 		{
 			v := b.Int16()
@@ -5001,7 +5004,7 @@ func (v *ListGroupsResponse) ReadFrom(src []byte) error {
 					s := v
 					{
 						v := b.String()
-						s.GroupID = v
+						s.Group = v
 					}
 					{
 						v := b.String()
@@ -5016,12 +5019,20 @@ func (v *ListGroupsResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
-// TODO
-// SASLHandshakeRequest
+// SASLHandshakeRequest begins the sasl authentication flow. Note that Kerberos
+// GSSAPI authentication has its own unique flow.
 type SASLHandshakeRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
+	// Mechanism is the mechanism to use for the sasl handshake (e.g., "PLAIN").
+	//
+	// For version 0, if this mechanism is supported, it is expected that the
+	// client immediately authenticates using this mechanism. Note that the
+	// only mechanism exclusive to v0 is PLAIN.
+	//
+	// For version 1, if the mechanism is supported, the next request to issue
+	// is SASLHandshakeRequest.
 	Mechanism string
 }
 
@@ -5044,13 +5055,19 @@ func (v *SASLHandshakeRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 
+// SASLHandshakeResponse is returned for a SASLHandshakeRequest.
 type SASLHandshakeResponse struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
+	// ErrorCode is non-zero for ILLEGAL_SASL_STATE, meaning a sasl handshake
+	// is not expected at this point in the connection, or UNSUPPORTED_SASL_MECHANISM,
+	// meaning the requested mechanism is not supported.
 	ErrorCode int16
 
-	EnabledMechanisms []string
+	// SupportedMechanisms is the list of mechanisms supported if this request
+	// errored.
+	SupportedMechanisms []string
 }
 
 func (v *SASLHandshakeResponse) ReadFrom(src []byte) error {
@@ -5064,14 +5081,14 @@ func (v *SASLHandshakeResponse) ReadFrom(src []byte) error {
 			s.ErrorCode = v
 		}
 		{
-			v := s.EnabledMechanisms
+			v := s.SupportedMechanisms
 			a := v
 			for i := b.ArrayLen(); i > 0; i-- {
 				v := b.String()
 				a = append(a, v)
 			}
 			v = a
-			s.EnabledMechanisms = v
+			s.SupportedMechanisms = v
 		}
 	}
 	return b.Complete()
@@ -5094,22 +5111,49 @@ func (v *SASLHandshakeResponse) ReadFrom(src []byte) error {
 type ApiVersionsRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
+
+	// ClientSoftwareName, added for KIP-511 with Kafka 2.4.0, is the name of the
+	// client issuing this request. The broker can use this to enrich its own
+	// debugging information of which version of what clients are connected.
+	//
+	// If using v3, this field is required and must match the following pattern:
+	//
+	//     [a-zA-Z0-9](?:[a-zA-Z0-9\\-.]*[a-zA-Z0-9])?
+	//
+	ClientSoftwareName string // v3+
+
+	// ClientSoftwareVersion is the version of the software name in the prior
+	// field. It must match the same regex (thus, this is also required).
+	ClientSoftwareVersion string // v3+
 }
 
 func (*ApiVersionsRequest) Key() int16                 { return 18 }
-func (*ApiVersionsRequest) MaxVersion() int16          { return 2 }
+func (*ApiVersionsRequest) MaxVersion() int16          { return 3 }
 func (v *ApiVersionsRequest) SetVersion(version int16) { v.Version = version }
 func (v *ApiVersionsRequest) GetVersion() int16        { return v.Version }
-func (v *ApiVersionsRequest) IsFlexible() bool         { return false }
+func (v *ApiVersionsRequest) IsFlexible() bool         { return v.Version >= 3 }
 func (v *ApiVersionsRequest) ResponseKind() Response   { return &ApiVersionsResponse{Version: v.Version} }
 
 func (v *ApiVersionsRequest) AppendTo(dst []byte) []byte {
 	version := v.Version
 	_ = version
+	isFlexible := version >= 3
+	_ = isFlexible
+	if version >= 3 {
+		v := v.ClientSoftwareName
+		dst = kbin.AppendString(dst, v)
+	}
+	if version >= 3 {
+		v := v.ClientSoftwareVersion
+		dst = kbin.AppendString(dst, v)
+	}
+	if isFlexible {
+		dst = append(dst, 0)
+	}
 	return dst
 }
 
-type ApiVersionsResponseApiVersion struct {
+type ApiVersionsResponseApiKey struct {
 	// ApiKey is the key of a message request.
 	ApiKey int16
 
@@ -5130,23 +5174,25 @@ type ApiVersionsResponse struct {
 	// returned, the rest of this struct will be empty.
 	//
 	// Starting in Kafka 2.4.0 (with version 3), even with an UNSUPPORTED_VERSION
-	// error, the broker still replies with the ApiVersions it supports.
+	// error, the broker still replies with the ApiKeys it supports.
 	ErrorCode int16
 
-	// ApiVersions is an array corresponding to API keys the broker supports
+	// ApiKeys is an array corresponding to API keys the broker supports
 	// and the range of supported versions for each key.
-	ApiVersions []ApiVersionsResponseApiVersion
+	ApiKeys []ApiVersionsResponseApiKey
 
-	// ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+	// ThrottleMillis is how long of a throttle Kafka will apply to the client
 	// after this request.
 	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
 	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
-	ThrottleTimeMs int32 // v1+
+	ThrottleMillis int32 // v1+
 }
 
 func (v *ApiVersionsResponse) ReadFrom(src []byte) error {
 	version := v.Version
 	_ = version
+	isFlexible := version >= 3
+	_ = isFlexible
 	b := kbin.Reader{Src: src}
 	{
 		s := v
@@ -5155,10 +5201,16 @@ func (v *ApiVersionsResponse) ReadFrom(src []byte) error {
 			s.ErrorCode = v
 		}
 		{
-			v := s.ApiVersions
+			v := s.ApiKeys
 			a := v
-			for i := b.ArrayLen(); i > 0; i-- {
-				a = append(a, ApiVersionsResponseApiVersion{})
+			var i int32
+			if isFlexible {
+				i = b.CompactArrayLen()
+			} else {
+				i = b.ArrayLen()
+			}
+			for ; i > 0; i-- {
+				a = append(a, ApiVersionsResponseApiKey{})
 				v := &a[len(a)-1]
 				{
 					s := v
@@ -5175,14 +5227,20 @@ func (v *ApiVersionsResponse) ReadFrom(src []byte) error {
 						s.MaxVersion = v
 					}
 				}
+				if isFlexible {
+					SkipTags(&b)
+				}
 			}
 			v = a
-			s.ApiVersions = v
+			s.ApiKeys = v
 		}
 		if version >= 1 {
 			v := b.Int32()
-			s.ThrottleTimeMs = v
+			s.ThrottleMillis = v
 		}
+	}
+	if isFlexible {
+		SkipTags(&b)
 	}
 	return b.Complete()
 }
@@ -5194,12 +5252,12 @@ type CreateTopicsRequestTopicReplicaAssignment struct {
 	// Replicas are broker IDs the partition must exist on.
 	Replicas []int32
 }
-type CreateTopicsRequestTopicConfigEntry struct {
-	// ConfigName is a topic level config key (e.g. segment.bytes).
-	ConfigName string
+type CreateTopicsRequestTopicConfig struct {
+	// Name is a topic level config key (e.g. segment.bytes).
+	Name string
 
-	// ConfigValue is a topic level config value (e.g. 1073741824)
-	ConfigValue *string
+	// Value is a topic level config value (e.g. 1073741824)
+	Value *string
 }
 type CreateTopicsRequestTopic struct {
 	// Topic is a topic to create.
@@ -5220,9 +5278,9 @@ type CreateTopicsRequestTopic struct {
 	// NumPartitions must be -1.
 	ReplicaAssignment []CreateTopicsRequestTopicReplicaAssignment
 
-	// ConfigEntries is an array of key value config pairs for a topic.
+	// Configs is an array of key value config pairs for a topic.
 	// These correspond to Kafka Topic-Level Configs: http://kafka.apache.org/documentation/#topicconfigs.
-	ConfigEntries []CreateTopicsRequestTopicConfigEntry
+	Configs []CreateTopicsRequestTopicConfig
 }
 
 // CreateTopicsRequest creates Kafka topics.
@@ -5238,8 +5296,8 @@ type CreateTopicsRequest struct {
 	// Topics is an array of topics to attempt to create.
 	Topics []CreateTopicsRequestTopic
 
-	// Timeout is how long to allow for this request.
-	Timeout int32
+	// TimeoutMillis is how long to allow for this request.
+	TimeoutMillis int32
 
 	// ValidateOnly is makes this request a dry-run; everything is validated but
 	// no topics are actually created.
@@ -5296,16 +5354,16 @@ func (v *CreateTopicsRequest) AppendTo(dst []byte) []byte {
 				}
 			}
 			{
-				v := v.ConfigEntries
+				v := v.Configs
 				dst = kbin.AppendArrayLen(dst, len(v))
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.ConfigName
+						v := v.Name
 						dst = kbin.AppendString(dst, v)
 					}
 					{
-						v := v.ConfigValue
+						v := v.Value
 						dst = kbin.AppendNullableString(dst, v)
 					}
 				}
@@ -5313,7 +5371,7 @@ func (v *CreateTopicsRequest) AppendTo(dst []byte) []byte {
 		}
 	}
 	{
-		v := v.Timeout
+		v := v.TimeoutMillis
 		dst = kbin.AppendInt32(dst, v)
 	}
 	if version >= 1 {
@@ -5323,7 +5381,7 @@ func (v *CreateTopicsRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 
-type CreateTopicsResponseTopicErrorConfig struct {
+type CreateTopicsResponseTopicConfig struct {
 	// Name is the configuration name (e.g. segment.bytes).
 	Name string
 
@@ -5334,16 +5392,16 @@ type CreateTopicsResponseTopicErrorConfig struct {
 	// ReadOnly signifies whether this is not a dynamic config option.
 	ReadOnly bool
 
-	// ConfigSource is where this config entry is from. See the documentation
-	// on DescribeConfigsRequest's ConfigSource for more details.
-	ConfigSource int8
+	// Source is where this config entry is from. See the documentation
+	// on DescribeConfigsRequest's Source for more details.
+	Source int8
 
 	// IsSensitive signifies whether this is a sensitive config key, which
 	// is either a password or an unknown type.
 	IsSensitive bool
 }
-type CreateTopicsResponseTopicError struct {
-	// Topic is the topic this error response corresponds to.
+type CreateTopicsResponseTopic struct {
+	// Topic is the topic this response corresponds to.
 	Topic string
 
 	// ErrorCode is the error code for an individual topic creation.
@@ -5392,7 +5450,7 @@ type CreateTopicsResponseTopicError struct {
 	ReplicationFactor int16 // v5+
 
 	// Configs contains this topic's configuration.
-	Configs []CreateTopicsResponseTopicErrorConfig // v5+
+	Configs []CreateTopicsResponseTopicConfig // v5+
 }
 
 // CreateTopicsResponse is returned from a CreateTopicsRequest.
@@ -5400,15 +5458,14 @@ type CreateTopicsResponse struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
-	// ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+	// ThrottleMillis is how long of a throttle Kafka will apply to the client
 	// after this request.
 	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
 	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
-	ThrottleTimeMs int32 // v2+
+	ThrottleMillis int32 // v2+
 
-	// TopicErrors is an the array of requested topics for creation and their
-	// creation errors.
-	TopicErrors []CreateTopicsResponseTopicError
+	// Topics contains responses to the requested topic creations.
+	Topics []CreateTopicsResponseTopic
 }
 
 func (v *CreateTopicsResponse) ReadFrom(src []byte) error {
@@ -5419,13 +5476,13 @@ func (v *CreateTopicsResponse) ReadFrom(src []byte) error {
 		s := v
 		if version >= 2 {
 			v := b.Int32()
-			s.ThrottleTimeMs = v
+			s.ThrottleMillis = v
 		}
 		{
-			v := s.TopicErrors
+			v := s.Topics
 			a := v
 			for i := b.ArrayLen(); i > 0; i-- {
-				a = append(a, CreateTopicsResponseTopicError{})
+				a = append(a, CreateTopicsResponseTopic{})
 				v := &a[len(a)-1]
 				{
 					s := v
@@ -5458,10 +5515,10 @@ func (v *CreateTopicsResponse) ReadFrom(src []byte) error {
 						a := v
 						i := b.ArrayLen()
 						if version < 0 || i == 0 {
-							a = []CreateTopicsResponseTopicErrorConfig{}
+							a = []CreateTopicsResponseTopicConfig{}
 						}
 						for ; i > 0; i-- {
-							a = append(a, CreateTopicsResponseTopicErrorConfig{})
+							a = append(a, CreateTopicsResponseTopicConfig{})
 							v := &a[len(a)-1]
 							{
 								s := v
@@ -5479,7 +5536,7 @@ func (v *CreateTopicsResponse) ReadFrom(src []byte) error {
 								}
 								{
 									v := b.Int8()
-									s.ConfigSource = v
+									s.Source = v
 								}
 								{
 									v := b.Bool()
@@ -5493,7 +5550,7 @@ func (v *CreateTopicsResponse) ReadFrom(src []byte) error {
 				}
 			}
 			v = a
-			s.TopicErrors = v
+			s.Topics = v
 		}
 	}
 	return b.Complete()
@@ -5507,8 +5564,8 @@ type DeleteTopicsRequest struct {
 	// Topics is an array of topics to delete.
 	Topics []string
 
-	// Timeout is the millisecond timeout of this request.
-	Timeout int32
+	// TimeoutMillis is the millisecond timeout of this request.
+	TimeoutMillis int32
 }
 
 func (*DeleteTopicsRequest) Key() int16                 { return 20 }
@@ -5533,13 +5590,13 @@ func (v *DeleteTopicsRequest) AppendTo(dst []byte) []byte {
 		}
 	}
 	{
-		v := v.Timeout
+		v := v.TimeoutMillis
 		dst = kbin.AppendInt32(dst, v)
 	}
 	return dst
 }
 
-type DeleteTopicsResponseTopicErrorCode struct {
+type DeleteTopicsResponseTopic struct {
 	// Topic is the topic requested for deletion.
 	Topic string
 
@@ -5569,15 +5626,14 @@ type DeleteTopicsResponse struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
-	// ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+	// ThrottleMillis is how long of a throttle Kafka will apply to the client
 	// after this request.
 	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
 	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
-	ThrottleTimeMs int32 // v1+
+	ThrottleMillis int32 // v1+
 
-	// TopicErrorCodes is contains the error codes for each topic requested
-	// for deletion (or no error code).
-	TopicErrorCodes []DeleteTopicsResponseTopicErrorCode
+	// Topics contains responses for each topic requested for deletion.
+	Topics []DeleteTopicsResponseTopic
 }
 
 func (v *DeleteTopicsResponse) ReadFrom(src []byte) error {
@@ -5588,13 +5644,13 @@ func (v *DeleteTopicsResponse) ReadFrom(src []byte) error {
 		s := v
 		if version >= 1 {
 			v := b.Int32()
-			s.ThrottleTimeMs = v
+			s.ThrottleMillis = v
 		}
 		{
-			v := s.TopicErrorCodes
+			v := s.Topics
 			a := v
 			for i := b.ArrayLen(); i > 0; i-- {
-				a = append(a, DeleteTopicsResponseTopicErrorCode{})
+				a = append(a, DeleteTopicsResponseTopic{})
 				v := &a[len(a)-1]
 				{
 					s := v
@@ -5609,7 +5665,7 @@ func (v *DeleteTopicsResponse) ReadFrom(src []byte) error {
 				}
 			}
 			v = a
-			s.TopicErrorCodes = v
+			s.Topics = v
 		}
 	}
 	return b.Complete()
@@ -5649,11 +5705,11 @@ type DeleteRecordsRequest struct {
 	// Topics contains topics for which to delete records from.
 	Topics []DeleteRecordsRequestTopic
 
-	// Timeout is how long to wait for a response before Kafka will return.
+	// TimeoutMillis is how long to wait for a response before Kafka will return.
 	// Kafka waits for all replicas to respond to the delete reords request;
 	// any partition that all replicas do not reply to within this limit will
 	// have a timeout error.
-	Timeout int32
+	TimeoutMillis int32
 }
 
 func (*DeleteRecordsRequest) Key() int16                 { return 21 }
@@ -5695,7 +5751,7 @@ func (v *DeleteRecordsRequest) AppendTo(dst []byte) []byte {
 		}
 	}
 	{
-		v := v.Timeout
+		v := v.TimeoutMillis
 		dst = kbin.AppendInt32(dst, v)
 	}
 	return dst
@@ -5744,11 +5800,11 @@ type DeleteRecordsResponse struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
-	// ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+	// ThrottleMillis is how long of a throttle Kafka will apply to the client
 	// after this request.
 	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
 	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
-	ThrottleTimeMs int32
+	ThrottleMillis int32
 
 	// Topics contains responses for each topic in the delete records request.
 	Topics []DeleteRecordsResponseTopic
@@ -5762,7 +5818,7 @@ func (v *DeleteRecordsResponse) ReadFrom(src []byte) error {
 		s := v
 		{
 			v := b.Int32()
-			s.ThrottleTimeMs = v
+			s.ThrottleMillis = v
 		}
 		{
 			v := s.Topics
@@ -5817,7 +5873,7 @@ type InitProducerIDRequest struct {
 
 	TransactionalID *string
 
-	TransactionTimeoutMs int32
+	TransactionTimeoutMillis int32
 }
 
 func (*InitProducerIDRequest) Key() int16                 { return 22 }
@@ -5838,7 +5894,7 @@ func (v *InitProducerIDRequest) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendNullableString(dst, v)
 	}
 	{
-		v := v.TransactionTimeoutMs
+		v := v.TransactionTimeoutMillis
 		dst = kbin.AppendInt32(dst, v)
 	}
 	return dst
@@ -5848,11 +5904,11 @@ type InitProducerIDResponse struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
-	// ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+	// ThrottleMillis is how long of a throttle Kafka will apply to the client
 	// after this request.
 	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
 	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
-	ThrottleTimeMs int32
+	ThrottleMillis int32
 
 	// CLUSTER_AUTHORIZATION_FAILED if idempotent and not authed
 	//
@@ -5882,7 +5938,7 @@ func (v *InitProducerIDResponse) ReadFrom(src []byte) error {
 		s := v
 		{
 			v := b.Int32()
-			s.ThrottleTimeMs = v
+			s.ThrottleMillis = v
 		}
 		{
 			v := b.Int16()
@@ -6051,9 +6107,9 @@ type OffsetForLeaderEpochResponse struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
-	// ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+	// ThrottleMillis is how long of a throttle Kafka will apply to the client
 	// after this request.
-	ThrottleTimeMs int32 // v2+
+	ThrottleMillis int32 // v2+
 
 	// Topics are responses to topics in the request.
 	Topics []OffsetForLeaderEpochResponseTopic
@@ -6067,7 +6123,7 @@ func (v *OffsetForLeaderEpochResponse) ReadFrom(src []byte) error {
 		s := v
 		if version >= 2 {
 			v := b.Int32()
-			s.ThrottleTimeMs = v
+			s.ThrottleMillis = v
 		}
 		{
 			v := s.Topics
@@ -6186,23 +6242,23 @@ func (v *AddPartitionsToTxnRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 
-type AddPartitionsToTxnResponseErrorPartitionError struct {
+type AddPartitionsToTxnResponseTopicPartition struct {
 	Partition int32
 
 	ErrorCode int16
 }
-type AddPartitionsToTxnResponseError struct {
+type AddPartitionsToTxnResponseTopic struct {
 	Topic string
 
-	PartitionErrors []AddPartitionsToTxnResponseErrorPartitionError
+	Partitions []AddPartitionsToTxnResponseTopicPartition
 }
 type AddPartitionsToTxnResponse struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
-	ThrottleTimeMs int32
+	ThrottleMillis int32
 
-	Errors []AddPartitionsToTxnResponseError
+	Topics []AddPartitionsToTxnResponseTopic
 }
 
 func (v *AddPartitionsToTxnResponse) ReadFrom(src []byte) error {
@@ -6213,13 +6269,13 @@ func (v *AddPartitionsToTxnResponse) ReadFrom(src []byte) error {
 		s := v
 		{
 			v := b.Int32()
-			s.ThrottleTimeMs = v
+			s.ThrottleMillis = v
 		}
 		{
-			v := s.Errors
+			v := s.Topics
 			a := v
 			for i := b.ArrayLen(); i > 0; i-- {
-				a = append(a, AddPartitionsToTxnResponseError{})
+				a = append(a, AddPartitionsToTxnResponseTopic{})
 				v := &a[len(a)-1]
 				{
 					s := v
@@ -6228,10 +6284,10 @@ func (v *AddPartitionsToTxnResponse) ReadFrom(src []byte) error {
 						s.Topic = v
 					}
 					{
-						v := s.PartitionErrors
+						v := s.Partitions
 						a := v
 						for i := b.ArrayLen(); i > 0; i-- {
-							a = append(a, AddPartitionsToTxnResponseErrorPartitionError{})
+							a = append(a, AddPartitionsToTxnResponseTopicPartition{})
 							v := &a[len(a)-1]
 							{
 								s := v
@@ -6246,12 +6302,12 @@ func (v *AddPartitionsToTxnResponse) ReadFrom(src []byte) error {
 							}
 						}
 						v = a
-						s.PartitionErrors = v
+						s.Partitions = v
 					}
 				}
 			}
 			v = a
-			s.Errors = v
+			s.Topics = v
 		}
 	}
 	return b.Complete()
@@ -6267,7 +6323,7 @@ type AddOffsetsToTxnRequest struct {
 
 	ProducerEpoch int16
 
-	GroupID string
+	Group string
 }
 
 func (*AddOffsetsToTxnRequest) Key() int16                 { return 25 }
@@ -6296,7 +6352,7 @@ func (v *AddOffsetsToTxnRequest) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendInt16(dst, v)
 	}
 	{
-		v := v.GroupID
+		v := v.Group
 		dst = kbin.AppendString(dst, v)
 	}
 	return dst
@@ -6306,7 +6362,7 @@ type AddOffsetsToTxnResponse struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
-	ThrottleTimeMs int32
+	ThrottleMillis int32
 
 	ErrorCode int16
 }
@@ -6319,7 +6375,7 @@ func (v *AddOffsetsToTxnResponse) ReadFrom(src []byte) error {
 		s := v
 		{
 			v := b.Int32()
-			s.ThrottleTimeMs = v
+			s.ThrottleMillis = v
 		}
 		{
 			v := b.Int16()
@@ -6376,7 +6432,7 @@ type EndTxnResponse struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
-	ThrottleTimeMs int32
+	ThrottleMillis int32
 
 	ErrorCode int16
 }
@@ -6389,7 +6445,7 @@ func (v *EndTxnResponse) ReadFrom(src []byte) error {
 		s := v
 		{
 			v := b.Int32()
-			s.ThrottleTimeMs = v
+			s.ThrottleMillis = v
 		}
 		{
 			v := b.Int16()
@@ -6399,19 +6455,19 @@ func (v *EndTxnResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
-type WriteTxnMarkersRequestTransactionMarkerTopic struct {
+type WriteTxnMarkersRequestMarkerTopic struct {
 	Topic string
 
 	Partitions []int32
 }
-type WriteTxnMarkersRequestTransactionMarker struct {
+type WriteTxnMarkersRequestMarker struct {
 	ProducerID int64
 
 	ProducerEpoch int16
 
-	TransactionResult bool
+	Committed bool
 
-	Topics []WriteTxnMarkersRequestTransactionMarkerTopic
+	Topics []WriteTxnMarkersRequestMarkerTopic
 
 	CoordinatorEpoch int32
 }
@@ -6419,7 +6475,7 @@ type WriteTxnMarkersRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
-	TransactionMarkers []WriteTxnMarkersRequestTransactionMarker
+	Markers []WriteTxnMarkersRequestMarker
 }
 
 func (*WriteTxnMarkersRequest) Key() int16                 { return 27 }
@@ -6435,7 +6491,7 @@ func (v *WriteTxnMarkersRequest) AppendTo(dst []byte) []byte {
 	version := v.Version
 	_ = version
 	{
-		v := v.TransactionMarkers
+		v := v.Markers
 		dst = kbin.AppendArrayLen(dst, len(v))
 		for i := range v {
 			v := &v[i]
@@ -6448,7 +6504,7 @@ func (v *WriteTxnMarkersRequest) AppendTo(dst []byte) []byte {
 				dst = kbin.AppendInt16(dst, v)
 			}
 			{
-				v := v.TransactionResult
+				v := v.Committed
 				dst = kbin.AppendBool(dst, v)
 			}
 			{
@@ -6479,26 +6535,26 @@ func (v *WriteTxnMarkersRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 
-type WriteTxnMarkersResponseTransactionMarkerTopicPartition struct {
+type WriteTxnMarkersResponseMarkerTopicPartition struct {
 	Partition int32
 
 	ErrorCode int16
 }
-type WriteTxnMarkersResponseTransactionMarkerTopic struct {
+type WriteTxnMarkersResponseMarkerTopic struct {
 	Topic string
 
-	Partitions []WriteTxnMarkersResponseTransactionMarkerTopicPartition
+	Partitions []WriteTxnMarkersResponseMarkerTopicPartition
 }
-type WriteTxnMarkersResponseTransactionMarker struct {
+type WriteTxnMarkersResponseMarker struct {
 	ProducerID int64
 
-	Topics []WriteTxnMarkersResponseTransactionMarkerTopic
+	Topics []WriteTxnMarkersResponseMarkerTopic
 }
 type WriteTxnMarkersResponse struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
-	TransactionMarkers []WriteTxnMarkersResponseTransactionMarker
+	Markers []WriteTxnMarkersResponseMarker
 }
 
 func (v *WriteTxnMarkersResponse) ReadFrom(src []byte) error {
@@ -6508,10 +6564,10 @@ func (v *WriteTxnMarkersResponse) ReadFrom(src []byte) error {
 	{
 		s := v
 		{
-			v := s.TransactionMarkers
+			v := s.Markers
 			a := v
 			for i := b.ArrayLen(); i > 0; i-- {
-				a = append(a, WriteTxnMarkersResponseTransactionMarker{})
+				a = append(a, WriteTxnMarkersResponseMarker{})
 				v := &a[len(a)-1]
 				{
 					s := v
@@ -6523,7 +6579,7 @@ func (v *WriteTxnMarkersResponse) ReadFrom(src []byte) error {
 						v := s.Topics
 						a := v
 						for i := b.ArrayLen(); i > 0; i-- {
-							a = append(a, WriteTxnMarkersResponseTransactionMarkerTopic{})
+							a = append(a, WriteTxnMarkersResponseMarkerTopic{})
 							v := &a[len(a)-1]
 							{
 								s := v
@@ -6535,7 +6591,7 @@ func (v *WriteTxnMarkersResponse) ReadFrom(src []byte) error {
 									v := s.Partitions
 									a := v
 									for i := b.ArrayLen(); i > 0; i-- {
-										a = append(a, WriteTxnMarkersResponseTransactionMarkerTopicPartition{})
+										a = append(a, WriteTxnMarkersResponseMarkerTopicPartition{})
 										v := &a[len(a)-1]
 										{
 											s := v
@@ -6560,7 +6616,7 @@ func (v *WriteTxnMarkersResponse) ReadFrom(src []byte) error {
 				}
 			}
 			v = a
-			s.TransactionMarkers = v
+			s.Markers = v
 		}
 	}
 	return b.Complete()
@@ -6592,7 +6648,7 @@ type TxnOffsetCommitRequest struct {
 
 	TransactionalID string
 
-	GroupID string
+	Group string
 
 	ProducerID int64
 
@@ -6619,7 +6675,7 @@ func (v *TxnOffsetCommitRequest) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendString(dst, v)
 	}
 	{
-		v := v.GroupID
+		v := v.Group
 		dst = kbin.AppendString(dst, v)
 	}
 	{
@@ -6681,7 +6737,7 @@ type TxnOffsetCommitResponse struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
-	ThrottleTimeMs int32
+	ThrottleMillis int32
 
 	Topics []TxnOffsetCommitResponseTopic
 }
@@ -6694,7 +6750,7 @@ func (v *TxnOffsetCommitResponse) ReadFrom(src []byte) error {
 		s := v
 		{
 			v := b.Int32()
-			s.ThrottleTimeMs = v
+			s.ThrottleMillis = v
 		}
 		{
 			v := s.Topics
@@ -6864,7 +6920,7 @@ type DescribeACLsResponse struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
-	ThrottleTimeMs int32
+	ThrottleMillis int32
 
 	// ErrorCode is the error code returned on request failure.
 	//
@@ -6888,7 +6944,7 @@ func (v *DescribeACLsResponse) ReadFrom(src []byte) error {
 		s := v
 		{
 			v := b.Int32()
-			s.ThrottleTimeMs = v
+			s.ThrottleMillis = v
 		}
 		{
 			v := b.Int16()
@@ -7036,7 +7092,7 @@ type CreateACLsResponse struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
-	ThrottleTimeMs int32
+	ThrottleMillis int32
 
 	CreationResponses []CreateACLsResponseCreationResponse
 }
@@ -7049,7 +7105,7 @@ func (v *CreateACLsResponse) ReadFrom(src []byte) error {
 		s := v
 		{
 			v := b.Int32()
-			s.ThrottleTimeMs = v
+			s.ThrottleMillis = v
 		}
 		{
 			v := s.CreationResponses
@@ -7177,7 +7233,7 @@ type DeleteACLsResponse struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
-	ThrottleTimeMs int32
+	ThrottleMillis int32
 
 	FilterResponses []DeleteACLsResponseFilterResponse
 }
@@ -7190,7 +7246,7 @@ func (v *DeleteACLsResponse) ReadFrom(src []byte) error {
 		s := v
 		{
 			v := b.Int32()
-			s.ThrottleTimeMs = v
+			s.ThrottleMillis = v
 		}
 		{
 			v := s.FilterResponses
@@ -7343,14 +7399,14 @@ func (v *DescribeConfigsRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 
-type DescribeConfigsResponseResourceConfigEntryConfigSynonym struct {
-	ConfigName string
+type DescribeConfigsResponseResourceConfigConfigSynonym struct {
+	Name string
 
-	ConfigValue *string
+	Value *string
 
-	ConfigSource int8
+	Source int8
 }
-type DescribeConfigsResponseResourceConfigEntry struct {
+type DescribeConfigsResponseResourceConfig struct {
 	// Name is a key this entry corresponds to (e.g. segment.bytes).
 	Name string
 
@@ -7362,10 +7418,10 @@ type DescribeConfigsResponseResourceConfigEntry struct {
 	ReadOnly bool
 
 	// IsDefault is whether this is a default config option. This has been
-	// replaced in favor of ConfigSource.
+	// replaced in favor of Source.
 	IsDefault bool
 
-	// ConfigSource is where this config entry is from. Note that if there
+	// Source is where this config entry is from. Note that if there
 	// are no config synonyms, the source is DEFAULT_CONFIG. The values of
 	// this enum are as follows.
 	//
@@ -7380,7 +7436,7 @@ type DescribeConfigsResponseResourceConfigEntry struct {
 	// STATIC_BROKER_CONFIG (4): static broker config provided at start up
 	//
 	// DEFAULT_CONFIG (5): built-in default configuration for those that have defaults
-	ConfigSource int8 // v1+
+	Source int8 // v1+
 
 	// IsSensitive signifies whether this is a sensitive config key, which
 	// is either a password or an unknown type.
@@ -7388,7 +7444,7 @@ type DescribeConfigsResponseResourceConfigEntry struct {
 
 	// ConfigSynonyms contains config key/value pairs that can be used in
 	// place of this config entry, in order of preference.
-	ConfigSynonyms []DescribeConfigsResponseResourceConfigEntryConfigSynonym // v1+
+	ConfigSynonyms []DescribeConfigsResponseResourceConfigConfigSynonym // v1+
 }
 type DescribeConfigsResponseResource struct {
 	// ErrorCode is the error code returned for describing configs.
@@ -7417,9 +7473,9 @@ type DescribeConfigsResponseResource struct {
 	// ResourceName is the name corresponding to the describe config request.
 	ResourceName string
 
-	// ConfigEntries contains information about key/value config pairs for
+	// Configs contains information about key/value config pairs for
 	// the requested resource.
-	ConfigEntries []DescribeConfigsResponseResourceConfigEntry
+	Configs []DescribeConfigsResponseResourceConfig
 }
 
 // DescribeConfigsResponse is returned from a DescribeConfigsRequest.
@@ -7427,11 +7483,11 @@ type DescribeConfigsResponse struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
-	// ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+	// ThrottleMillis is how long of a throttle Kafka will apply to the client
 	// after this request.
 	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
 	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
-	ThrottleTimeMs int32
+	ThrottleMillis int32
 
 	// Resources are responses for each resource in the describe config request.
 	Resources []DescribeConfigsResponseResource
@@ -7445,7 +7501,7 @@ func (v *DescribeConfigsResponse) ReadFrom(src []byte) error {
 		s := v
 		{
 			v := b.Int32()
-			s.ThrottleTimeMs = v
+			s.ThrottleMillis = v
 		}
 		{
 			v := s.Resources
@@ -7472,10 +7528,10 @@ func (v *DescribeConfigsResponse) ReadFrom(src []byte) error {
 						s.ResourceName = v
 					}
 					{
-						v := s.ConfigEntries
+						v := s.Configs
 						a := v
 						for i := b.ArrayLen(); i > 0; i-- {
-							a = append(a, DescribeConfigsResponseResourceConfigEntry{})
+							a = append(a, DescribeConfigsResponseResourceConfig{})
 							v := &a[len(a)-1]
 							{
 								s := v
@@ -7497,7 +7553,7 @@ func (v *DescribeConfigsResponse) ReadFrom(src []byte) error {
 								}
 								if version >= 1 {
 									v := b.Int8()
-									s.ConfigSource = v
+									s.Source = v
 								}
 								{
 									v := b.Bool()
@@ -7507,21 +7563,21 @@ func (v *DescribeConfigsResponse) ReadFrom(src []byte) error {
 									v := s.ConfigSynonyms
 									a := v
 									for i := b.ArrayLen(); i > 0; i-- {
-										a = append(a, DescribeConfigsResponseResourceConfigEntryConfigSynonym{})
+										a = append(a, DescribeConfigsResponseResourceConfigConfigSynonym{})
 										v := &a[len(a)-1]
 										{
 											s := v
 											{
 												v := b.String()
-												s.ConfigName = v
+												s.Name = v
 											}
 											{
 												v := b.NullableString()
-												s.ConfigValue = v
+												s.Value = v
 											}
 											{
 												v := b.Int8()
-												s.ConfigSource = v
+												s.Source = v
 											}
 										}
 									}
@@ -7531,7 +7587,7 @@ func (v *DescribeConfigsResponse) ReadFrom(src []byte) error {
 							}
 						}
 						v = a
-						s.ConfigEntries = v
+						s.Configs = v
 					}
 				}
 			}
@@ -7542,15 +7598,15 @@ func (v *DescribeConfigsResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
-type AlterConfigsRequestResourceConfigEntry struct {
-	// ConfigName is a key to set (e.g. segment.bytes).
+type AlterConfigsRequestResourceConfig struct {
+	// Name is a key to set (e.g. segment.bytes).
 	//
 	// For broker loggers, see KIP-412 section "Request/Response Overview"
 	// for details on how to change per logger log levels.
-	ConfigName string
+	Name string
 
-	// ConfigValue is a value to set for the key (e.g. 10).
-	ConfigValue *string
+	// Value is a value to set for the key (e.g. 10).
+	Value *string
 }
 type AlterConfigsRequestResource struct {
 	// ResourceType is an enum corresponding to the type of config to alter.
@@ -7572,8 +7628,8 @@ type AlterConfigsRequestResource struct {
 	// If the type is broker logger, this must be a broker ID.
 	ResourceName string
 
-	// ConfigEntries contains key/value config pairs to set on the resource.
-	ConfigEntries []AlterConfigsRequestResourceConfigEntry
+	// Configs contains key/value config pairs to set on the resource.
+	Configs []AlterConfigsRequestResourceConfig
 }
 
 // AlterConfigsRequest issues a request to alter either topic or broker
@@ -7627,16 +7683,16 @@ func (v *AlterConfigsRequest) AppendTo(dst []byte) []byte {
 				dst = kbin.AppendString(dst, v)
 			}
 			{
-				v := v.ConfigEntries
+				v := v.Configs
 				dst = kbin.AppendArrayLen(dst, len(v))
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.ConfigName
+						v := v.Name
 						dst = kbin.AppendString(dst, v)
 					}
 					{
-						v := v.ConfigValue
+						v := v.Value
 						dst = kbin.AppendNullableString(dst, v)
 					}
 				}
@@ -7683,11 +7739,11 @@ type AlterConfigsResponse struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
-	// ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+	// ThrottleMillis is how long of a throttle Kafka will apply to the client
 	// after this request.
 	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
 	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
-	ThrottleTimeMs int32
+	ThrottleMillis int32
 
 	// Resources are responses for each resource in the alter request.
 	Resources []AlterConfigsResponseResource
@@ -7701,7 +7757,7 @@ func (v *AlterConfigsResponse) ReadFrom(src []byte) error {
 		s := v
 		{
 			v := b.Int32()
-			s.ThrottleTimeMs = v
+			s.ThrottleMillis = v
 		}
 		{
 			v := s.Resources
@@ -7736,20 +7792,20 @@ func (v *AlterConfigsResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
-type AlterReplicaLogDirsRequestLogDirTopic struct {
+type AlterReplicaLogDirsRequestDirTopic struct {
 	// Topic is a topic to move.
 	Topic string
 
 	// Partitions contains partitions for the topic to move.
 	Partitions []int32
 }
-type AlterReplicaLogDirsRequestLogDir struct {
-	// LogDir is an absolute path where everything listed below should
+type AlterReplicaLogDirsRequestDir struct {
+	// Dir is an absolute path where everything listed below should
 	// end up.
-	LogDir string
+	Dir string
 
 	// Topics contains topics to move to the above log directory.
-	Topics []AlterReplicaLogDirsRequestLogDirTopic
+	Topics []AlterReplicaLogDirsRequestDirTopic
 }
 
 // AlterReplicaLogDirsRequest requests for log directories to be moved
@@ -7760,8 +7816,8 @@ type AlterReplicaLogDirsRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
-	// LogDirs contains absolute paths of where you want things to end up.
-	LogDirs []AlterReplicaLogDirsRequestLogDir
+	// Dirs contains absolute paths of where you want things to end up.
+	Dirs []AlterReplicaLogDirsRequestDir
 }
 
 func (*AlterReplicaLogDirsRequest) Key() int16                 { return 34 }
@@ -7778,12 +7834,12 @@ func (v *AlterReplicaLogDirsRequest) AppendTo(dst []byte) []byte {
 	version := v.Version
 	_ = version
 	{
-		v := v.LogDirs
+		v := v.Dirs
 		dst = kbin.AppendArrayLen(dst, len(v))
 		for i := range v {
 			v := &v[i]
 			{
-				v := v.LogDir
+				v := v.Dir
 				dst = kbin.AppendString(dst, v)
 			}
 			{
@@ -7841,11 +7897,11 @@ type AlterReplicaLogDirsResponse struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
-	// ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+	// ThrottleMillis is how long of a throttle Kafka will apply to the client
 	// after this request.
 	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
 	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
-	ThrottleTimeMs int32
+	ThrottleMillis int32
 
 	// Topics contains responses to each topic that had partitions requested
 	// for moving.
@@ -7860,7 +7916,7 @@ func (v *AlterReplicaLogDirsResponse) ReadFrom(src []byte) error {
 		s := v
 		{
 			v := b.Int32()
-			s.ThrottleTimeMs = v
+			s.ThrottleMillis = v
 		}
 		{
 			v := s.Topics
@@ -7958,7 +8014,7 @@ func (v *DescribeLogDirsRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 
-type DescribeLogDirsResponseLogDirTopicPartition struct {
+type DescribeLogDirsResponseDirTopicPartition struct {
 	// Partition is a partition ID.
 	Partition int32
 
@@ -7982,25 +8038,25 @@ type DescribeLogDirsResponseLogDirTopicPartition struct {
 	// replica in the future.
 	IsFuture bool
 }
-type DescribeLogDirsResponseLogDirTopic struct {
+type DescribeLogDirsResponseDirTopic struct {
 	// Topic is the name of a Kafka topic.
 	Topic string
 
 	// Partitions is the set of queried partitions for a topic that are
 	// within a log directory.
-	Partitions []DescribeLogDirsResponseLogDirTopicPartition
+	Partitions []DescribeLogDirsResponseDirTopicPartition
 }
-type DescribeLogDirsResponseLogDir struct {
+type DescribeLogDirsResponseDir struct {
 	// ErrorCode is the error code returned for descrbing log dirs.
 	//
 	// KAFKA_STORAGE_ERROR is returned if the log directoy is offline.
 	ErrorCode int16
 
-	// LogDir is the absolute path of a log directory.
-	LogDir string
+	// Dir is the absolute path of a log directory.
+	Dir string
 
 	// Topics is an array of topics within a log directory.
-	Topics []DescribeLogDirsResponseLogDirTopic
+	Topics []DescribeLogDirsResponseDirTopic
 }
 
 // DescribeLogDirsResponse is returned from a DescribeLogDirsRequest.
@@ -8008,15 +8064,15 @@ type DescribeLogDirsResponse struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
-	// ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+	// ThrottleMillis is how long of a throttle Kafka will apply to the client
 	// after this request.
 	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
 	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
-	ThrottleTimeMs int32
+	ThrottleMillis int32
 
-	// LogDirs pairs log directories with the topics and partitions that are
+	// Dirs pairs log directories with the topics and partitions that are
 	// stored in those directores.
-	LogDirs []DescribeLogDirsResponseLogDir
+	Dirs []DescribeLogDirsResponseDir
 }
 
 func (v *DescribeLogDirsResponse) ReadFrom(src []byte) error {
@@ -8027,13 +8083,13 @@ func (v *DescribeLogDirsResponse) ReadFrom(src []byte) error {
 		s := v
 		{
 			v := b.Int32()
-			s.ThrottleTimeMs = v
+			s.ThrottleMillis = v
 		}
 		{
-			v := s.LogDirs
+			v := s.Dirs
 			a := v
 			for i := b.ArrayLen(); i > 0; i-- {
-				a = append(a, DescribeLogDirsResponseLogDir{})
+				a = append(a, DescribeLogDirsResponseDir{})
 				v := &a[len(a)-1]
 				{
 					s := v
@@ -8043,13 +8099,13 @@ func (v *DescribeLogDirsResponse) ReadFrom(src []byte) error {
 					}
 					{
 						v := b.String()
-						s.LogDir = v
+						s.Dir = v
 					}
 					{
 						v := s.Topics
 						a := v
 						for i := b.ArrayLen(); i > 0; i-- {
-							a = append(a, DescribeLogDirsResponseLogDirTopic{})
+							a = append(a, DescribeLogDirsResponseDirTopic{})
 							v := &a[len(a)-1]
 							{
 								s := v
@@ -8061,7 +8117,7 @@ func (v *DescribeLogDirsResponse) ReadFrom(src []byte) error {
 									v := s.Partitions
 									a := v
 									for i := b.ArrayLen(); i > 0; i-- {
-										a = append(a, DescribeLogDirsResponseLogDirTopicPartition{})
+										a = append(a, DescribeLogDirsResponseDirTopicPartition{})
 										v := &a[len(a)-1]
 										{
 											s := v
@@ -8094,7 +8150,7 @@ func (v *DescribeLogDirsResponse) ReadFrom(src []byte) error {
 				}
 			}
 			v = a
-			s.LogDirs = v
+			s.Dirs = v
 		}
 	}
 	return b.Complete()
@@ -8166,7 +8222,11 @@ func (v *SASLAuthenticateResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
-type CreatePartitionsRequestTopicPartition struct {
+type CreatePartitionsRequestTopicAssignment struct {
+	// Replicas are replicas to assign a new partition to.
+	Replicas []int32
+}
+type CreatePartitionsRequestTopic struct {
 	// Topic is a topic for which to create additional partitions for.
 	Topic string
 
@@ -8178,14 +8238,14 @@ type CreatePartitionsRequestTopicPartition struct {
 	// partitions, the second contining broker IDs for where new partition
 	// replicas should live.
 	//
-	// The second level, the replicas, cannot have duplicate broker IDs
-	// (i.e. you cannot replicate a single partition twice on the same
-	// broker). Additionally, the number of replicas must match the current
-	// number of replicas per partition on the topic.
+	// The second level, the replicas, cannot have duplicate broker IDs (i.e.
+	// you cannot replicate a single partition twice on the same broker).
+	// Additionally, the number of replicas must match the current number of
+	// replicas per partition on the topic.
 	//
-	// The first level's length must be equal to the delta of Count and
-	// the current number of partitions.
-	Assignment [][]int32
+	// The first level's length must be equal to the delta of Count and the
+	// current number of partitions.
+	Assignment []CreatePartitionsRequestTopicAssignment
 }
 
 // CreatePartitionsRequest creates additional partitions for topics.
@@ -8193,11 +8253,11 @@ type CreatePartitionsRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
-	// TopicPartitions paris topics with their partition creation requests.
-	TopicPartitions []CreatePartitionsRequestTopicPartition
+	// Topics contains topics to create partitions for.
+	Topics []CreatePartitionsRequestTopic
 
-	// Timeout is how long to allow for this request.
-	Timeout int32
+	// TimeoutMillis is how long to allow for this request.
+	TimeoutMillis int32
 
 	// ValidateOnly is makes this request a dry-run; everything is validated but
 	// no partitions are actually created.
@@ -8218,7 +8278,7 @@ func (v *CreatePartitionsRequest) AppendTo(dst []byte) []byte {
 	version := v.Version
 	_ = version
 	{
-		v := v.TopicPartitions
+		v := v.Topics
 		dst = kbin.AppendArrayLen(dst, len(v))
 		for i := range v {
 			v := &v[i]
@@ -8234,18 +8294,21 @@ func (v *CreatePartitionsRequest) AppendTo(dst []byte) []byte {
 				v := v.Assignment
 				dst = kbin.AppendNullableArrayLen(dst, len(v), v == nil)
 				for i := range v {
-					v := v[i]
-					dst = kbin.AppendArrayLen(dst, len(v))
-					for i := range v {
-						v := v[i]
-						dst = kbin.AppendInt32(dst, v)
+					v := &v[i]
+					{
+						v := v.Replicas
+						dst = kbin.AppendArrayLen(dst, len(v))
+						for i := range v {
+							v := v[i]
+							dst = kbin.AppendInt32(dst, v)
+						}
 					}
 				}
 			}
 		}
 	}
 	{
-		v := v.Timeout
+		v := v.TimeoutMillis
 		dst = kbin.AppendInt32(dst, v)
 	}
 	{
@@ -8255,7 +8318,7 @@ func (v *CreatePartitionsRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 
-type CreatePartitionsResponseTopicError struct {
+type CreatePartitionsResponseTopic struct {
 	// Topic is the topic that partitions were requested to be made for.
 	Topic string
 
@@ -8293,15 +8356,14 @@ type CreatePartitionsResponse struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
-	// ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+	// ThrottleMillis is how long of a throttle Kafka will apply to the client
 	// after this request.
 	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
 	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
-	ThrottleTimeMs int32
+	ThrottleMillis int32
 
-	// TopicErrors is an the array of requested topics with partition creations
-	// and their creation errors.
-	TopicErrors []CreatePartitionsResponseTopicError
+	// Topics is a response to each topic in the creation request.
+	Topics []CreatePartitionsResponseTopic
 }
 
 func (v *CreatePartitionsResponse) ReadFrom(src []byte) error {
@@ -8312,13 +8374,13 @@ func (v *CreatePartitionsResponse) ReadFrom(src []byte) error {
 		s := v
 		{
 			v := b.Int32()
-			s.ThrottleTimeMs = v
+			s.ThrottleMillis = v
 		}
 		{
-			v := s.TopicErrors
+			v := s.Topics
 			a := v
 			for i := b.ArrayLen(); i > 0; i-- {
-				a = append(a, CreatePartitionsResponseTopicError{})
+				a = append(a, CreatePartitionsResponseTopic{})
 				v := &a[len(a)-1]
 				{
 					s := v
@@ -8337,7 +8399,7 @@ func (v *CreatePartitionsResponse) ReadFrom(src []byte) error {
 				}
 			}
 			v = a
-			s.TopicErrors = v
+			s.Topics = v
 		}
 	}
 	return b.Complete()
@@ -8414,7 +8476,7 @@ type CreateDelegationTokenResponse struct {
 
 	HMAC []byte
 
-	ThrottleTimeMs int32
+	ThrottleMillis int32
 }
 
 func (v *CreateDelegationTokenResponse) ReadFrom(src []byte) error {
@@ -8457,7 +8519,7 @@ func (v *CreateDelegationTokenResponse) ReadFrom(src []byte) error {
 		}
 		{
 			v := b.Int32()
-			s.ThrottleTimeMs = v
+			s.ThrottleMillis = v
 		}
 	}
 	return b.Complete()
@@ -8504,7 +8566,7 @@ type RenewDelegationTokenResponse struct {
 
 	ExpiryTimestamp int64
 
-	ThrottleTimeMs int32
+	ThrottleMillis int32
 }
 
 func (v *RenewDelegationTokenResponse) ReadFrom(src []byte) error {
@@ -8523,7 +8585,7 @@ func (v *RenewDelegationTokenResponse) ReadFrom(src []byte) error {
 		}
 		{
 			v := b.Int32()
-			s.ThrottleTimeMs = v
+			s.ThrottleMillis = v
 		}
 	}
 	return b.Complete()
@@ -8570,7 +8632,7 @@ type ExpireDelegationTokenResponse struct {
 
 	ExpiryTimestamp int64
 
-	ThrottleTimeMs int32
+	ThrottleMillis int32
 }
 
 func (v *ExpireDelegationTokenResponse) ReadFrom(src []byte) error {
@@ -8589,7 +8651,7 @@ func (v *ExpireDelegationTokenResponse) ReadFrom(src []byte) error {
 		}
 		{
 			v := b.Int32()
-			s.ThrottleTimeMs = v
+			s.ThrottleMillis = v
 		}
 	}
 	return b.Complete()
@@ -8669,7 +8731,7 @@ type DescribeDelegationTokenResponse struct {
 
 	TokenDetails []DescribeDelegationTokenResponseTokenDetail
 
-	ThrottleTimeMs int32
+	ThrottleMillis int32
 }
 
 func (v *DescribeDelegationTokenResponse) ReadFrom(src []byte) error {
@@ -8746,14 +8808,14 @@ func (v *DescribeDelegationTokenResponse) ReadFrom(src []byte) error {
 		}
 		{
 			v := b.Int32()
-			s.ThrottleTimeMs = v
+			s.ThrottleMillis = v
 		}
 	}
 	return b.Complete()
 }
 
 // DeleteGroupsRequest deletes consumer groups. This request was added for
-// Kafka 1.1.0 corresponding to the removal of RetentionTime from
+// Kafka 1.1.0 corresponding to the removal of RetentionTimeMillis from
 // OffsetCommitRequest. See KIP-229 for more details.
 type DeleteGroupsRequest struct {
 	// Version is the version of this message used with a Kafka broker.
@@ -8787,9 +8849,9 @@ func (v *DeleteGroupsRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 
-type DeleteGroupsResponseGroupErrorCode struct {
-	// GroupID is a group ID requested for deletion.
-	GroupID string
+type DeleteGroupsResponseGroup struct {
+	// Group is a group ID requested for deletion.
+	Group string
 
 	// ErrorCode is the error code returned for this group's deletion request.
 	//
@@ -8813,14 +8875,14 @@ type DeleteGroupsResponse struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
-	// ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+	// ThrottleMillis is how long of a throttle Kafka will apply to the client
 	// after this request.
 	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
 	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
-	ThrottleTimeMs int32
+	ThrottleMillis int32
 
-	// GroupErrorCodes are the responses to each group requested for deletion.
-	GroupErrorCodes []DeleteGroupsResponseGroupErrorCode
+	// Groups are the responses to each group requested for deletion.
+	Groups []DeleteGroupsResponseGroup
 }
 
 func (v *DeleteGroupsResponse) ReadFrom(src []byte) error {
@@ -8831,19 +8893,19 @@ func (v *DeleteGroupsResponse) ReadFrom(src []byte) error {
 		s := v
 		{
 			v := b.Int32()
-			s.ThrottleTimeMs = v
+			s.ThrottleMillis = v
 		}
 		{
-			v := s.GroupErrorCodes
+			v := s.Groups
 			a := v
 			for i := b.ArrayLen(); i > 0; i-- {
-				a = append(a, DeleteGroupsResponseGroupErrorCode{})
+				a = append(a, DeleteGroupsResponseGroup{})
 				v := &a[len(a)-1]
 				{
 					s := v
 					{
 						v := b.String()
-						s.GroupID = v
+						s.Group = v
 					}
 					{
 						v := b.Int16()
@@ -8852,7 +8914,7 @@ func (v *DeleteGroupsResponse) ReadFrom(src []byte) error {
 				}
 			}
 			v = a
-			s.GroupErrorCodes = v
+			s.Groups = v
 		}
 	}
 	return b.Complete()
@@ -8885,9 +8947,9 @@ type ElectLeadersRequest struct {
 	// trigger leader elections for, or null for all.
 	Topics []ElectLeadersRequestTopic
 
-	// TimeoutMs is how long to wait for the response. This limits how long to
+	// TimeoutMillis is how long to wait for the response. This limits how long to
 	// wait since responses are not sent until election results are complete.
-	TimeoutMs int32
+	TimeoutMillis int32
 }
 
 func (*ElectLeadersRequest) Key() int16                 { return 43 }
@@ -8927,7 +8989,7 @@ func (v *ElectLeadersRequest) AppendTo(dst []byte) []byte {
 		}
 	}
 	{
-		v := v.TimeoutMs
+		v := v.TimeoutMillis
 		dst = kbin.AppendInt32(dst, v)
 	}
 	return dst
@@ -8972,9 +9034,9 @@ type ElectLeadersResponse struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
-	// ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+	// ThrottleMillis is how long of a throttle Kafka will apply to the client
 	// after responding to this request.
-	ThrottleTimeMs int32
+	ThrottleMillis int32
 
 	// ErrorCode is any error that applies to all partitions.
 	//
@@ -8994,7 +9056,7 @@ func (v *ElectLeadersResponse) ReadFrom(src []byte) error {
 		s := v
 		{
 			v := b.Int32()
-			s.ThrottleTimeMs = v
+			s.ThrottleMillis = v
 		}
 		if version >= 1 {
 			v := b.Int16()
@@ -9046,9 +9108,9 @@ func (v *ElectLeadersResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
-type IncrementalAlterConfigsRequestResourceConfigEntry struct {
-	// ConfigName is a key to modify (e.g. segment.bytes).
-	ConfigName string
+type IncrementalAlterConfigsRequestResourceConfig struct {
+	// Name is a key to modify (e.g. segment.bytes).
+	Name string
 
 	// Op is the type of operation to perform for this config name.
 	//
@@ -9063,8 +9125,8 @@ type IncrementalAlterConfigsRequestResourceConfigEntry struct {
 	// is for a list of values).
 	Op int8
 
-	// ConfigValue is a value to set for the key (e.g. 10).
-	ConfigValue *string
+	// Value is a value to set for the key (e.g. 10).
+	Value *string
 }
 type IncrementalAlterConfigsRequestResource struct {
 	// ResourceType is an enum corresponding to the type of config to alter.
@@ -9083,8 +9145,8 @@ type IncrementalAlterConfigsRequestResource struct {
 	// config options can only be defined on a per broker basis.
 	ResourceName string
 
-	// ConfigEntries contains key/value config pairs to set on the resource.
-	ConfigEntries []IncrementalAlterConfigsRequestResourceConfigEntry
+	// Configs contains key/value config pairs to set on the resource.
+	Configs []IncrementalAlterConfigsRequestResourceConfig
 }
 
 // IncrementalAlterConfigsRequest issues ar equest to alter either topic or
@@ -9131,12 +9193,12 @@ func (v *IncrementalAlterConfigsRequest) AppendTo(dst []byte) []byte {
 				dst = kbin.AppendString(dst, v)
 			}
 			{
-				v := v.ConfigEntries
+				v := v.Configs
 				dst = kbin.AppendArrayLen(dst, len(v))
 				for i := range v {
 					v := &v[i]
 					{
-						v := v.ConfigName
+						v := v.Name
 						dst = kbin.AppendString(dst, v)
 					}
 					{
@@ -9144,7 +9206,7 @@ func (v *IncrementalAlterConfigsRequest) AppendTo(dst []byte) []byte {
 						dst = kbin.AppendInt8(dst, v)
 					}
 					{
-						v := v.ConfigValue
+						v := v.Value
 						dst = kbin.AppendNullableString(dst, v)
 					}
 				}
@@ -9195,9 +9257,9 @@ type IncrementalAlterConfigsResponse struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
-	// ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+	// ThrottleMillis is how long of a throttle Kafka will apply to the client
 	// after responding to this request.
-	ThrottleTimeMs int32
+	ThrottleMillis int32
 
 	Responses []IncrementalAlterConfigsResponseResponse
 }
@@ -9210,7 +9272,7 @@ func (v *IncrementalAlterConfigsResponse) ReadFrom(src []byte) error {
 		s := v
 		{
 			v := b.Int32()
-			s.ThrottleTimeMs = v
+			s.ThrottleMillis = v
 		}
 		{
 			v := s.Responses
@@ -9269,8 +9331,8 @@ type AlterPartitionReassignmentsRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
-	// TimeoutMs is how long to wait for the response.
-	TimeoutMs int32
+	// TimeoutMillis is how long to wait for the response.
+	TimeoutMillis int32
 
 	// Topics are topics for which to reassign partitions of.
 	Topics []AlterPartitionReassignmentsRequestTopic
@@ -9290,7 +9352,7 @@ func (v *AlterPartitionReassignmentsRequest) AppendTo(dst []byte) []byte {
 	version := v.Version
 	_ = version
 	{
-		v := v.TimeoutMs
+		v := v.TimeoutMillis
 		dst = kbin.AppendInt32(dst, v)
 	}
 	{
@@ -9363,9 +9425,9 @@ type AlterPartitionReassignmentsResponse struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
-	// ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+	// ThrottleMillis is how long of a throttle Kafka will apply to the client
 	// after responding to this request.
-	ThrottleTimeMs int32
+	ThrottleMillis int32
 
 	// ErrorCode is any global (applied to all partitions) error code.
 	ErrorCode int16
@@ -9385,7 +9447,7 @@ func (v *AlterPartitionReassignmentsResponse) ReadFrom(src []byte) error {
 		s := v
 		{
 			v := b.Int32()
-			s.ThrottleTimeMs = v
+			s.ThrottleMillis = v
 		}
 		{
 			v := b.Int16()
@@ -9457,8 +9519,8 @@ type ListPartitionReassignmentsRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
-	// TimeoutMs is how long to wait for the response.
-	TimeoutMs int32
+	// TimeoutMillis is how long to wait for the response.
+	TimeoutMillis int32
 
 	// Topics are topics to list in progress partition reassignments of, or null
 	// to list everything.
@@ -9479,7 +9541,7 @@ func (v *ListPartitionReassignmentsRequest) AppendTo(dst []byte) []byte {
 	version := v.Version
 	_ = version
 	{
-		v := v.TimeoutMs
+		v := v.TimeoutMillis
 		dst = kbin.AppendInt32(dst, v)
 	}
 	{
@@ -9530,9 +9592,9 @@ type ListPartitionReassignmentsResponse struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
-	// ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+	// ThrottleMillis is how long of a throttle Kafka will apply to the client
 	// after responding to this request.
-	ThrottleTimeMs int32
+	ThrottleMillis int32
 
 	// ErrorCode is the error code returned for listing reassignments.
 	//
@@ -9560,7 +9622,7 @@ func (v *ListPartitionReassignmentsResponse) ReadFrom(src []byte) error {
 		s := v
 		{
 			v := b.Int32()
-			s.ThrottleTimeMs = v
+			s.ThrottleMillis = v
 		}
 		{
 			v := b.Int16()
@@ -9638,12 +9700,16 @@ func (v *ListPartitionReassignmentsResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+type OffsetDeleteRequestTopicPartition struct {
+	// Partition is a partition to delete offsets for.
+	Partition int32
+}
 type OffsetDeleteRequestTopic struct {
 	// Topic is a topic to delete offsets in.
 	Topic string
 
 	// Partitions are partitions to delete offsets for.
-	Partitions []int32
+	Partitions []OffsetDeleteRequestTopicPartition
 }
 
 // OffsetDeleteRequest, proposed in KIP-496 and implemented in Kafka 2.4.0, is
@@ -9655,8 +9721,8 @@ type OffsetDeleteRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
-	// GroupID is the group to delete offsets in.
-	GroupID string
+	// Group is the group to delete offsets in.
+	Group string
 
 	// Topics are topics to delete offsets in.
 	Topics []OffsetDeleteRequestTopic
@@ -9676,7 +9742,7 @@ func (v *OffsetDeleteRequest) AppendTo(dst []byte) []byte {
 	version := v.Version
 	_ = version
 	{
-		v := v.GroupID
+		v := v.Group
 		dst = kbin.AppendString(dst, v)
 	}
 	{
@@ -9692,8 +9758,11 @@ func (v *OffsetDeleteRequest) AppendTo(dst []byte) []byte {
 				v := v.Partitions
 				dst = kbin.AppendArrayLen(dst, len(v))
 				for i := range v {
-					v := v[i]
-					dst = kbin.AppendInt32(dst, v)
+					v := &v[i]
+					{
+						v := v.Partition
+						dst = kbin.AppendInt32(dst, v)
+					}
 				}
 			}
 		}
@@ -9746,9 +9815,9 @@ type OffsetDeleteResponse struct {
 	// GROUP_ID_NOT_FOUND is returned if the group ID does not exist.
 	ErrorCode int16
 
-	// ThrottleTimeMs is how long of a throttle Kafka will apply to the client
+	// ThrottleMillis is how long of a throttle Kafka will apply to the client
 	// after responding to this request.
-	ThrottleTimeMs int32
+	ThrottleMillis int32
 
 	// Topics are responses to requested topics.
 	Topics []OffsetDeleteResponseTopic
@@ -9766,7 +9835,7 @@ func (v *OffsetDeleteResponse) ReadFrom(src []byte) error {
 		}
 		{
 			v := b.Int32()
-			s.ThrottleTimeMs = v
+			s.ThrottleMillis = v
 		}
 		{
 			v := s.Topics
