@@ -1701,7 +1701,7 @@ type MetadataRequest struct {
 }
 
 func (*MetadataRequest) Key() int16                 { return 3 }
-func (*MetadataRequest) MaxVersion() int16          { return 8 }
+func (*MetadataRequest) MaxVersion() int16          { return 9 }
 func (v *MetadataRequest) SetVersion(version int16) { v.Version = version }
 func (v *MetadataRequest) GetVersion() int16        { return v.Version }
 func (v *MetadataRequest) ResponseKind() Response   { return &MetadataResponse{Version: v.Version} }
@@ -1709,12 +1709,22 @@ func (v *MetadataRequest) ResponseKind() Response   { return &MetadataResponse{V
 func (v *MetadataRequest) AppendTo(dst []byte) []byte {
 	version := v.Version
 	_ = version
+	isFlexible := version >= 9
+	_ = isFlexible
 	{
 		v := v.Topics
 		if version > 1 {
-			dst = kbin.AppendNullableArrayLen(dst, len(v), v == nil)
+			if isFlexible {
+				dst = kbin.AppendCompactNullableArrayLen(dst, len(v), v == nil)
+			} else {
+				dst = kbin.AppendNullableArrayLen(dst, len(v), v == nil)
+			}
 		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
+			if isFlexible {
+				dst = kbin.AppendCompactArrayLen(dst, len(v))
+			} else {
+				dst = kbin.AppendArrayLen(dst, len(v))
+			}
 		}
 		for i := range v {
 			v := v[i]
@@ -1849,6 +1859,8 @@ type MetadataResponse struct {
 func (v *MetadataResponse) ReadFrom(src []byte) error {
 	version := v.Version
 	_ = version
+	isFlexible := version >= 9
+	_ = isFlexible
 	b := kbin.Reader{Src: src}
 	{
 		s := v
@@ -1859,7 +1871,13 @@ func (v *MetadataResponse) ReadFrom(src []byte) error {
 		{
 			v := s.Brokers
 			a := v
-			for i := b.ArrayLen(); i > 0; i-- {
+			var i int32
+			if isFlexible {
+				i = b.CompactArrayLen()
+			} else {
+				i = b.ArrayLen()
+			}
+			for ; i > 0; i-- {
 				a = append(a, MetadataResponseBroker{})
 				v := &a[len(a)-1]
 				{
@@ -1896,7 +1914,13 @@ func (v *MetadataResponse) ReadFrom(src []byte) error {
 		{
 			v := s.Topics
 			a := v
-			for i := b.ArrayLen(); i > 0; i-- {
+			var i int32
+			if isFlexible {
+				i = b.CompactArrayLen()
+			} else {
+				i = b.ArrayLen()
+			}
+			for ; i > 0; i-- {
 				a = append(a, MetadataResponseTopic{})
 				v := &a[len(a)-1]
 				{
@@ -1916,7 +1940,13 @@ func (v *MetadataResponse) ReadFrom(src []byte) error {
 					{
 						v := s.Partitions
 						a := v
-						for i := b.ArrayLen(); i > 0; i-- {
+						var i int32
+						if isFlexible {
+							i = b.CompactArrayLen()
+						} else {
+							i = b.ArrayLen()
+						}
+						for ; i > 0; i-- {
 							a = append(a, MetadataResponseTopicPartition{})
 							v := &a[len(a)-1]
 							{
@@ -1940,7 +1970,13 @@ func (v *MetadataResponse) ReadFrom(src []byte) error {
 								{
 									v := s.Replicas
 									a := v
-									for i := b.ArrayLen(); i > 0; i-- {
+									var i int32
+									if isFlexible {
+										i = b.CompactArrayLen()
+									} else {
+										i = b.ArrayLen()
+									}
+									for ; i > 0; i-- {
 										v := b.Int32()
 										a = append(a, v)
 									}
@@ -1950,7 +1986,13 @@ func (v *MetadataResponse) ReadFrom(src []byte) error {
 								{
 									v := s.ISR
 									a := v
-									for i := b.ArrayLen(); i > 0; i-- {
+									var i int32
+									if isFlexible {
+										i = b.CompactArrayLen()
+									} else {
+										i = b.ArrayLen()
+									}
+									for ; i > 0; i-- {
 										v := b.Int32()
 										a = append(a, v)
 									}
@@ -1960,7 +2002,13 @@ func (v *MetadataResponse) ReadFrom(src []byte) error {
 								if version >= 5 {
 									v := s.OfflineReplicas
 									a := v
-									for i := b.ArrayLen(); i > 0; i-- {
+									var i int32
+									if isFlexible {
+										i = b.CompactArrayLen()
+									} else {
+										i = b.ArrayLen()
+									}
+									for ; i > 0; i-- {
 										v := b.Int32()
 										a = append(a, v)
 									}
@@ -4936,6 +4984,8 @@ func (v *ListGroupsResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+// TODO
+// SASLHandshakeRequest
 type SASLHandshakeRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
@@ -6035,6 +6085,8 @@ type AddPartitionsToTxnRequestTopic struct {
 
 	Partitions []int32
 }
+
+// TODO
 type AddPartitionsToTxnRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
@@ -6644,6 +6696,7 @@ func (v *TxnOffsetCommitResponse) ReadFrom(src []byte) error {
 
 // DescribeACLsRequest describes ACLs. Unfortunately, there exists little
 // official documentation on this.
+// TODO
 type DescribeACLsRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
@@ -7996,6 +8049,7 @@ func (v *DescribeLogDirsResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+// TODO
 type SASLAuthenticateRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
@@ -8241,6 +8295,8 @@ type CreateDelegationTokenRequestRenewer struct {
 
 	Name string
 }
+
+// TODO
 type CreateDelegationTokenRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
