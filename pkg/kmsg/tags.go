@@ -2,9 +2,8 @@ package kmsg
 
 import "github.com/twmb/kafka-go/pkg/kbin"
 
-// until a struct has a tag, we skip tags; once we see what tags looks like
-// with an example, we will properly design the API.
-func skipTags(b *kbin.Reader) {
+// SkipTags skips tags in a reader.
+func SkipTags(b *kbin.Reader) {
 	num := b.Uvarint()
 	if num == 0 {
 		return

@@ -297,7 +297,7 @@ func (s Struct) WriteDecode(l *LineWriter) {
 	// TODO once tags exist, something relevant
 	if s.FromFlexible {
 		l.Write("if isFlexible {")
-		l.Write("skipTags(&b)")
+		l.Write("SkipTags(&b)")
 		l.Write("}")
 	}
 }
@@ -352,6 +352,13 @@ func (s Struct) WriteTxnCoordinatorFunc(l *LineWriter) {
 }
 func (s Struct) WriteResponseKindFunc(l *LineWriter) {
 	l.Write("func (v *%s) ResponseKind() Response { return &%s{Version: v.Version }}", s.Name, s.ResponseKind)
+}
+func (s Struct) WriteIsFlexibleFunc(l *LineWriter) {
+	if s.FlexibleAt >= 0 {
+		l.Write("func (v *%s) IsFlexible() bool { return v.Version >= %d }", s.Name, s.FlexibleAt)
+	} else {
+		l.Write("func (v *%s) IsFlexible() bool { return false }", s.Name)
+	}
 }
 
 func (s Struct) WriteAppendFunc(l *LineWriter) {

@@ -813,6 +813,7 @@ func (*fetchRequest) Key() int16           { return 1 }
 func (*fetchRequest) MaxVersion() int16    { return 11 }
 func (f *fetchRequest) SetVersion(v int16) { f.version = v }
 func (f *fetchRequest) GetVersion() int16  { return f.version }
+func (f *fetchRequest) IsFlexible() bool   { return false } // version 11 is not flexible
 func (f *fetchRequest) AppendTo(dst []byte) []byte {
 	req := kmsg.FetchRequest{
 		Version:      f.version,

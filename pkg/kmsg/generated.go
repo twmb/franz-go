@@ -690,6 +690,7 @@ func (*ProduceRequest) Key() int16                 { return 0 }
 func (*ProduceRequest) MaxVersion() int16          { return 8 }
 func (v *ProduceRequest) SetVersion(version int16) { v.Version = version }
 func (v *ProduceRequest) GetVersion() int16        { return v.Version }
+func (v *ProduceRequest) IsFlexible() bool         { return false }
 func (v *ProduceRequest) ResponseKind() Response   { return &ProduceResponse{Version: v.Version} }
 
 func (v *ProduceRequest) AppendTo(dst []byte) []byte {
@@ -1070,6 +1071,7 @@ func (*FetchRequest) Key() int16                 { return 1 }
 func (*FetchRequest) MaxVersion() int16          { return 11 }
 func (v *FetchRequest) SetVersion(version int16) { v.Version = version }
 func (v *FetchRequest) GetVersion() int16        { return v.Version }
+func (v *FetchRequest) IsFlexible() bool         { return false }
 func (v *FetchRequest) ResponseKind() Response   { return &FetchResponse{Version: v.Version} }
 
 func (v *FetchRequest) AppendTo(dst []byte) []byte {
@@ -1465,6 +1467,7 @@ func (*ListOffsetsRequest) Key() int16                 { return 2 }
 func (*ListOffsetsRequest) MaxVersion() int16          { return 5 }
 func (v *ListOffsetsRequest) SetVersion(version int16) { v.Version = version }
 func (v *ListOffsetsRequest) GetVersion() int16        { return v.Version }
+func (v *ListOffsetsRequest) IsFlexible() bool         { return false }
 func (v *ListOffsetsRequest) IsAdminRequest()          {}
 func (v *ListOffsetsRequest) ResponseKind() Response   { return &ListOffsetsResponse{Version: v.Version} }
 
@@ -1704,6 +1707,7 @@ func (*MetadataRequest) Key() int16                 { return 3 }
 func (*MetadataRequest) MaxVersion() int16          { return 9 }
 func (v *MetadataRequest) SetVersion(version int16) { v.Version = version }
 func (v *MetadataRequest) GetVersion() int16        { return v.Version }
+func (v *MetadataRequest) IsFlexible() bool         { return v.Version >= 9 }
 func (v *MetadataRequest) ResponseKind() Response   { return &MetadataResponse{Version: v.Version} }
 
 func (v *MetadataRequest) AppendTo(dst []byte) []byte {
@@ -1903,7 +1907,7 @@ func (v *MetadataResponse) ReadFrom(src []byte) error {
 					}
 				}
 				if isFlexible {
-					skipTags(&b)
+					SkipTags(&b)
 				}
 			}
 			v = a
@@ -2023,7 +2027,7 @@ func (v *MetadataResponse) ReadFrom(src []byte) error {
 								}
 							}
 							if isFlexible {
-								skipTags(&b)
+								SkipTags(&b)
 							}
 						}
 						v = a
@@ -2035,7 +2039,7 @@ func (v *MetadataResponse) ReadFrom(src []byte) error {
 					}
 				}
 				if isFlexible {
-					skipTags(&b)
+					SkipTags(&b)
 				}
 			}
 			v = a
@@ -2047,7 +2051,7 @@ func (v *MetadataResponse) ReadFrom(src []byte) error {
 		}
 	}
 	if isFlexible {
-		skipTags(&b)
+		SkipTags(&b)
 	}
 	return b.Complete()
 }
@@ -2136,6 +2140,7 @@ func (*LeaderAndISRRequest) Key() int16                 { return 4 }
 func (*LeaderAndISRRequest) MaxVersion() int16          { return 3 }
 func (v *LeaderAndISRRequest) SetVersion(version int16) { v.Version = version }
 func (v *LeaderAndISRRequest) GetVersion() int16        { return v.Version }
+func (v *LeaderAndISRRequest) IsFlexible() bool         { return false }
 func (v *LeaderAndISRRequest) IsAdminRequest()          {}
 func (v *LeaderAndISRRequest) ResponseKind() Response {
 	return &LeaderAndISRResponse{Version: v.Version}
@@ -2394,6 +2399,7 @@ func (*StopReplicaRequest) Key() int16                 { return 5 }
 func (*StopReplicaRequest) MaxVersion() int16          { return 1 }
 func (v *StopReplicaRequest) SetVersion(version int16) { v.Version = version }
 func (v *StopReplicaRequest) GetVersion() int16        { return v.Version }
+func (v *StopReplicaRequest) IsFlexible() bool         { return false }
 func (v *StopReplicaRequest) IsAdminRequest()          {}
 func (v *StopReplicaRequest) ResponseKind() Response   { return &StopReplicaResponse{Version: v.Version} }
 
@@ -2592,6 +2598,7 @@ func (*UpdateMetadataRequest) Key() int16                 { return 6 }
 func (*UpdateMetadataRequest) MaxVersion() int16          { return 5 }
 func (v *UpdateMetadataRequest) SetVersion(version int16) { v.Version = version }
 func (v *UpdateMetadataRequest) GetVersion() int16        { return v.Version }
+func (v *UpdateMetadataRequest) IsFlexible() bool         { return false }
 func (v *UpdateMetadataRequest) IsAdminRequest()          {}
 func (v *UpdateMetadataRequest) ResponseKind() Response {
 	return &UpdateMetadataResponse{Version: v.Version}
@@ -2824,6 +2831,7 @@ func (*ControlledShutdownRequest) Key() int16                 { return 7 }
 func (*ControlledShutdownRequest) MaxVersion() int16          { return 2 }
 func (v *ControlledShutdownRequest) SetVersion(version int16) { v.Version = version }
 func (v *ControlledShutdownRequest) GetVersion() int16        { return v.Version }
+func (v *ControlledShutdownRequest) IsFlexible() bool         { return false }
 func (v *ControlledShutdownRequest) IsAdminRequest()          {}
 func (v *ControlledShutdownRequest) ResponseKind() Response {
 	return &ControlledShutdownResponse{Version: v.Version}
@@ -3370,6 +3378,7 @@ func (*OffsetCommitRequest) Key() int16                   { return 8 }
 func (*OffsetCommitRequest) MaxVersion() int16            { return 7 }
 func (v *OffsetCommitRequest) SetVersion(version int16)   { v.Version = version }
 func (v *OffsetCommitRequest) GetVersion() int16          { return v.Version }
+func (v *OffsetCommitRequest) IsFlexible() bool           { return false }
 func (v *OffsetCommitRequest) IsGroupCoordinatorRequest() {}
 func (v *OffsetCommitRequest) ResponseKind() Response {
 	return &OffsetCommitResponse{Version: v.Version}
@@ -3580,6 +3589,7 @@ func (*OffsetFetchRequest) Key() int16                   { return 9 }
 func (*OffsetFetchRequest) MaxVersion() int16            { return 5 }
 func (v *OffsetFetchRequest) SetVersion(version int16)   { v.Version = version }
 func (v *OffsetFetchRequest) GetVersion() int16          { return v.Version }
+func (v *OffsetFetchRequest) IsFlexible() bool           { return false }
 func (v *OffsetFetchRequest) IsGroupCoordinatorRequest() {}
 func (v *OffsetFetchRequest) ResponseKind() Response     { return &OffsetFetchResponse{Version: v.Version} }
 
@@ -3774,6 +3784,7 @@ func (*FindCoordinatorRequest) Key() int16                 { return 10 }
 func (*FindCoordinatorRequest) MaxVersion() int16          { return 2 }
 func (v *FindCoordinatorRequest) SetVersion(version int16) { v.Version = version }
 func (v *FindCoordinatorRequest) GetVersion() int16        { return v.Version }
+func (v *FindCoordinatorRequest) IsFlexible() bool         { return false }
 func (v *FindCoordinatorRequest) ResponseKind() Response {
 	return &FindCoordinatorResponse{Version: v.Version}
 }
@@ -4131,6 +4142,7 @@ func (*JoinGroupRequest) Key() int16                   { return 11 }
 func (*JoinGroupRequest) MaxVersion() int16            { return 5 }
 func (v *JoinGroupRequest) SetVersion(version int16)   { v.Version = version }
 func (v *JoinGroupRequest) GetVersion() int16          { return v.Version }
+func (v *JoinGroupRequest) IsFlexible() bool           { return false }
 func (v *JoinGroupRequest) IsGroupCoordinatorRequest() {}
 func (v *JoinGroupRequest) ResponseKind() Response     { return &JoinGroupResponse{Version: v.Version} }
 
@@ -4342,6 +4354,7 @@ func (*HeartbeatRequest) Key() int16                   { return 12 }
 func (*HeartbeatRequest) MaxVersion() int16            { return 3 }
 func (v *HeartbeatRequest) SetVersion(version int16)   { v.Version = version }
 func (v *HeartbeatRequest) GetVersion() int16          { return v.Version }
+func (v *HeartbeatRequest) IsFlexible() bool           { return false }
 func (v *HeartbeatRequest) IsGroupCoordinatorRequest() {}
 func (v *HeartbeatRequest) ResponseKind() Response     { return &HeartbeatResponse{Version: v.Version} }
 
@@ -4447,6 +4460,7 @@ func (*LeaveGroupRequest) Key() int16                   { return 13 }
 func (*LeaveGroupRequest) MaxVersion() int16            { return 3 }
 func (v *LeaveGroupRequest) SetVersion(version int16)   { v.Version = version }
 func (v *LeaveGroupRequest) GetVersion() int16          { return v.Version }
+func (v *LeaveGroupRequest) IsFlexible() bool           { return false }
 func (v *LeaveGroupRequest) IsGroupCoordinatorRequest() {}
 func (v *LeaveGroupRequest) ResponseKind() Response     { return &LeaveGroupResponse{Version: v.Version} }
 
@@ -4604,6 +4618,7 @@ func (*SyncGroupRequest) Key() int16                   { return 14 }
 func (*SyncGroupRequest) MaxVersion() int16            { return 3 }
 func (v *SyncGroupRequest) SetVersion(version int16)   { v.Version = version }
 func (v *SyncGroupRequest) GetVersion() int16          { return v.Version }
+func (v *SyncGroupRequest) IsFlexible() bool           { return false }
 func (v *SyncGroupRequest) IsGroupCoordinatorRequest() {}
 func (v *SyncGroupRequest) ResponseKind() Response     { return &SyncGroupResponse{Version: v.Version} }
 
@@ -4724,6 +4739,7 @@ func (*DescribeGroupsRequest) Key() int16                   { return 15 }
 func (*DescribeGroupsRequest) MaxVersion() int16            { return 4 }
 func (v *DescribeGroupsRequest) SetVersion(version int16)   { v.Version = version }
 func (v *DescribeGroupsRequest) GetVersion() int16          { return v.Version }
+func (v *DescribeGroupsRequest) IsFlexible() bool           { return false }
 func (v *DescribeGroupsRequest) IsGroupCoordinatorRequest() {}
 func (v *DescribeGroupsRequest) ResponseKind() Response {
 	return &DescribeGroupsResponse{Version: v.Version}
@@ -4921,6 +4937,7 @@ func (*ListGroupsRequest) Key() int16                 { return 16 }
 func (*ListGroupsRequest) MaxVersion() int16          { return 2 }
 func (v *ListGroupsRequest) SetVersion(version int16) { v.Version = version }
 func (v *ListGroupsRequest) GetVersion() int16        { return v.Version }
+func (v *ListGroupsRequest) IsFlexible() bool         { return false }
 func (v *ListGroupsRequest) IsAdminRequest()          {}
 func (v *ListGroupsRequest) ResponseKind() Response   { return &ListGroupsResponse{Version: v.Version} }
 
@@ -5012,6 +5029,7 @@ func (*SASLHandshakeRequest) Key() int16                 { return 17 }
 func (*SASLHandshakeRequest) MaxVersion() int16          { return 1 }
 func (v *SASLHandshakeRequest) SetVersion(version int16) { v.Version = version }
 func (v *SASLHandshakeRequest) GetVersion() int16        { return v.Version }
+func (v *SASLHandshakeRequest) IsFlexible() bool         { return false }
 func (v *SASLHandshakeRequest) ResponseKind() Response {
 	return &SASLHandshakeResponse{Version: v.Version}
 }
@@ -5082,6 +5100,7 @@ func (*ApiVersionsRequest) Key() int16                 { return 18 }
 func (*ApiVersionsRequest) MaxVersion() int16          { return 2 }
 func (v *ApiVersionsRequest) SetVersion(version int16) { v.Version = version }
 func (v *ApiVersionsRequest) GetVersion() int16        { return v.Version }
+func (v *ApiVersionsRequest) IsFlexible() bool         { return false }
 func (v *ApiVersionsRequest) ResponseKind() Response   { return &ApiVersionsResponse{Version: v.Version} }
 
 func (v *ApiVersionsRequest) AppendTo(dst []byte) []byte {
@@ -5231,6 +5250,7 @@ func (*CreateTopicsRequest) Key() int16                 { return 19 }
 func (*CreateTopicsRequest) MaxVersion() int16          { return 5 }
 func (v *CreateTopicsRequest) SetVersion(version int16) { v.Version = version }
 func (v *CreateTopicsRequest) GetVersion() int16        { return v.Version }
+func (v *CreateTopicsRequest) IsFlexible() bool         { return false }
 func (v *CreateTopicsRequest) IsAdminRequest()          {}
 func (v *CreateTopicsRequest) ResponseKind() Response {
 	return &CreateTopicsResponse{Version: v.Version}
@@ -5495,6 +5515,7 @@ func (*DeleteTopicsRequest) Key() int16                 { return 20 }
 func (*DeleteTopicsRequest) MaxVersion() int16          { return 3 }
 func (v *DeleteTopicsRequest) SetVersion(version int16) { v.Version = version }
 func (v *DeleteTopicsRequest) GetVersion() int16        { return v.Version }
+func (v *DeleteTopicsRequest) IsFlexible() bool         { return false }
 func (v *DeleteTopicsRequest) IsAdminRequest()          {}
 func (v *DeleteTopicsRequest) ResponseKind() Response {
 	return &DeleteTopicsResponse{Version: v.Version}
@@ -5639,6 +5660,7 @@ func (*DeleteRecordsRequest) Key() int16                 { return 21 }
 func (*DeleteRecordsRequest) MaxVersion() int16          { return 1 }
 func (v *DeleteRecordsRequest) SetVersion(version int16) { v.Version = version }
 func (v *DeleteRecordsRequest) GetVersion() int16        { return v.Version }
+func (v *DeleteRecordsRequest) IsFlexible() bool         { return false }
 func (v *DeleteRecordsRequest) ResponseKind() Response {
 	return &DeleteRecordsResponse{Version: v.Version}
 }
@@ -5802,6 +5824,7 @@ func (*InitProducerIDRequest) Key() int16                 { return 22 }
 func (*InitProducerIDRequest) MaxVersion() int16          { return 1 }
 func (v *InitProducerIDRequest) SetVersion(version int16) { v.Version = version }
 func (v *InitProducerIDRequest) GetVersion() int16        { return v.Version }
+func (v *InitProducerIDRequest) IsFlexible() bool         { return false }
 func (v *InitProducerIDRequest) IsTxnCoordinatorRequest() {}
 func (v *InitProducerIDRequest) ResponseKind() Response {
 	return &InitProducerIDResponse{Version: v.Version}
@@ -5921,6 +5944,7 @@ func (*OffsetForLeaderEpochRequest) Key() int16                 { return 23 }
 func (*OffsetForLeaderEpochRequest) MaxVersion() int16          { return 3 }
 func (v *OffsetForLeaderEpochRequest) SetVersion(version int16) { v.Version = version }
 func (v *OffsetForLeaderEpochRequest) GetVersion() int16        { return v.Version }
+func (v *OffsetForLeaderEpochRequest) IsFlexible() bool         { return false }
 func (v *OffsetForLeaderEpochRequest) ResponseKind() Response {
 	return &OffsetForLeaderEpochResponse{Version: v.Version}
 }
@@ -6119,6 +6143,7 @@ func (*AddPartitionsToTxnRequest) Key() int16                 { return 24 }
 func (*AddPartitionsToTxnRequest) MaxVersion() int16          { return 1 }
 func (v *AddPartitionsToTxnRequest) SetVersion(version int16) { v.Version = version }
 func (v *AddPartitionsToTxnRequest) GetVersion() int16        { return v.Version }
+func (v *AddPartitionsToTxnRequest) IsFlexible() bool         { return false }
 func (v *AddPartitionsToTxnRequest) IsTxnCoordinatorRequest() {}
 func (v *AddPartitionsToTxnRequest) ResponseKind() Response {
 	return &AddPartitionsToTxnResponse{Version: v.Version}
@@ -6249,6 +6274,7 @@ func (*AddOffsetsToTxnRequest) Key() int16                 { return 25 }
 func (*AddOffsetsToTxnRequest) MaxVersion() int16          { return 1 }
 func (v *AddOffsetsToTxnRequest) SetVersion(version int16) { v.Version = version }
 func (v *AddOffsetsToTxnRequest) GetVersion() int16        { return v.Version }
+func (v *AddOffsetsToTxnRequest) IsFlexible() bool         { return false }
 func (v *AddOffsetsToTxnRequest) IsTxnCoordinatorRequest() {}
 func (v *AddOffsetsToTxnRequest) ResponseKind() Response {
 	return &AddOffsetsToTxnResponse{Version: v.Version}
@@ -6320,6 +6346,7 @@ func (*EndTxnRequest) Key() int16                 { return 26 }
 func (*EndTxnRequest) MaxVersion() int16          { return 1 }
 func (v *EndTxnRequest) SetVersion(version int16) { v.Version = version }
 func (v *EndTxnRequest) GetVersion() int16        { return v.Version }
+func (v *EndTxnRequest) IsFlexible() bool         { return false }
 func (v *EndTxnRequest) IsTxnCoordinatorRequest() {}
 func (v *EndTxnRequest) ResponseKind() Response   { return &EndTxnResponse{Version: v.Version} }
 
@@ -6399,6 +6426,7 @@ func (*WriteTxnMarkersRequest) Key() int16                 { return 27 }
 func (*WriteTxnMarkersRequest) MaxVersion() int16          { return 0 }
 func (v *WriteTxnMarkersRequest) SetVersion(version int16) { v.Version = version }
 func (v *WriteTxnMarkersRequest) GetVersion() int16        { return v.Version }
+func (v *WriteTxnMarkersRequest) IsFlexible() bool         { return false }
 func (v *WriteTxnMarkersRequest) ResponseKind() Response {
 	return &WriteTxnMarkersResponse{Version: v.Version}
 }
@@ -6577,6 +6605,7 @@ func (*TxnOffsetCommitRequest) Key() int16                 { return 28 }
 func (*TxnOffsetCommitRequest) MaxVersion() int16          { return 2 }
 func (v *TxnOffsetCommitRequest) SetVersion(version int16) { v.Version = version }
 func (v *TxnOffsetCommitRequest) GetVersion() int16        { return v.Version }
+func (v *TxnOffsetCommitRequest) IsFlexible() bool         { return false }
 func (v *TxnOffsetCommitRequest) IsTxnCoordinatorRequest() {}
 func (v *TxnOffsetCommitRequest) ResponseKind() Response {
 	return &TxnOffsetCommitResponse{Version: v.Version}
@@ -6735,6 +6764,7 @@ func (*DescribeACLsRequest) Key() int16                 { return 29 }
 func (*DescribeACLsRequest) MaxVersion() int16          { return 1 }
 func (v *DescribeACLsRequest) SetVersion(version int16) { v.Version = version }
 func (v *DescribeACLsRequest) GetVersion() int16        { return v.Version }
+func (v *DescribeACLsRequest) IsFlexible() bool         { return false }
 func (v *DescribeACLsRequest) IsAdminRequest()          {}
 func (v *DescribeACLsRequest) ResponseKind() Response {
 	return &DescribeACLsResponse{Version: v.Version}
@@ -6952,6 +6982,7 @@ func (*CreateACLsRequest) Key() int16                 { return 30 }
 func (*CreateACLsRequest) MaxVersion() int16          { return 1 }
 func (v *CreateACLsRequest) SetVersion(version int16) { v.Version = version }
 func (v *CreateACLsRequest) GetVersion() int16        { return v.Version }
+func (v *CreateACLsRequest) IsFlexible() bool         { return false }
 func (v *CreateACLsRequest) IsAdminRequest()          {}
 func (v *CreateACLsRequest) ResponseKind() Response   { return &CreateACLsResponse{Version: v.Version} }
 
@@ -7071,6 +7102,7 @@ func (*DeleteACLsRequest) Key() int16                 { return 31 }
 func (*DeleteACLsRequest) MaxVersion() int16          { return 1 }
 func (v *DeleteACLsRequest) SetVersion(version int16) { v.Version = version }
 func (v *DeleteACLsRequest) GetVersion() int16        { return v.Version }
+func (v *DeleteACLsRequest) IsFlexible() bool         { return false }
 func (v *DeleteACLsRequest) IsAdminRequest()          {}
 func (v *DeleteACLsRequest) ResponseKind() Response   { return &DeleteACLsResponse{Version: v.Version} }
 
@@ -7272,6 +7304,7 @@ func (*DescribeConfigsRequest) Key() int16                 { return 32 }
 func (*DescribeConfigsRequest) MaxVersion() int16          { return 2 }
 func (v *DescribeConfigsRequest) SetVersion(version int16) { v.Version = version }
 func (v *DescribeConfigsRequest) GetVersion() int16        { return v.Version }
+func (v *DescribeConfigsRequest) IsFlexible() bool         { return false }
 func (v *DescribeConfigsRequest) IsAdminRequest()          {}
 func (v *DescribeConfigsRequest) ResponseKind() Response {
 	return &DescribeConfigsResponse{Version: v.Version}
@@ -7571,6 +7604,7 @@ func (*AlterConfigsRequest) Key() int16                 { return 33 }
 func (*AlterConfigsRequest) MaxVersion() int16          { return 1 }
 func (v *AlterConfigsRequest) SetVersion(version int16) { v.Version = version }
 func (v *AlterConfigsRequest) GetVersion() int16        { return v.Version }
+func (v *AlterConfigsRequest) IsFlexible() bool         { return false }
 func (v *AlterConfigsRequest) IsAdminRequest()          {}
 func (v *AlterConfigsRequest) ResponseKind() Response {
 	return &AlterConfigsResponse{Version: v.Version}
@@ -7734,6 +7768,7 @@ func (*AlterReplicaLogDirsRequest) Key() int16                 { return 34 }
 func (*AlterReplicaLogDirsRequest) MaxVersion() int16          { return 1 }
 func (v *AlterReplicaLogDirsRequest) SetVersion(version int16) { v.Version = version }
 func (v *AlterReplicaLogDirsRequest) GetVersion() int16        { return v.Version }
+func (v *AlterReplicaLogDirsRequest) IsFlexible() bool         { return false }
 func (v *AlterReplicaLogDirsRequest) IsAdminRequest()          {}
 func (v *AlterReplicaLogDirsRequest) ResponseKind() Response {
 	return &AlterReplicaLogDirsResponse{Version: v.Version}
@@ -7892,6 +7927,7 @@ func (*DescribeLogDirsRequest) Key() int16                 { return 35 }
 func (*DescribeLogDirsRequest) MaxVersion() int16          { return 1 }
 func (v *DescribeLogDirsRequest) SetVersion(version int16) { v.Version = version }
 func (v *DescribeLogDirsRequest) GetVersion() int16        { return v.Version }
+func (v *DescribeLogDirsRequest) IsFlexible() bool         { return false }
 func (v *DescribeLogDirsRequest) IsAdminRequest()          {}
 func (v *DescribeLogDirsRequest) ResponseKind() Response {
 	return &DescribeLogDirsResponse{Version: v.Version}
@@ -8076,6 +8112,7 @@ func (*SASLAuthenticateRequest) Key() int16                 { return 36 }
 func (*SASLAuthenticateRequest) MaxVersion() int16          { return 1 }
 func (v *SASLAuthenticateRequest) SetVersion(version int16) { v.Version = version }
 func (v *SASLAuthenticateRequest) GetVersion() int16        { return v.Version }
+func (v *SASLAuthenticateRequest) IsFlexible() bool         { return false }
 func (v *SASLAuthenticateRequest) ResponseKind() Response {
 	return &SASLAuthenticateResponse{Version: v.Version}
 }
@@ -8171,6 +8208,7 @@ func (*CreatePartitionsRequest) Key() int16                 { return 37 }
 func (*CreatePartitionsRequest) MaxVersion() int16          { return 1 }
 func (v *CreatePartitionsRequest) SetVersion(version int16) { v.Version = version }
 func (v *CreatePartitionsRequest) GetVersion() int16        { return v.Version }
+func (v *CreatePartitionsRequest) IsFlexible() bool         { return false }
 func (v *CreatePartitionsRequest) IsAdminRequest()          {}
 func (v *CreatePartitionsRequest) ResponseKind() Response {
 	return &CreatePartitionsResponse{Version: v.Version}
@@ -8325,6 +8363,7 @@ func (*CreateDelegationTokenRequest) Key() int16                 { return 38 }
 func (*CreateDelegationTokenRequest) MaxVersion() int16          { return 1 }
 func (v *CreateDelegationTokenRequest) SetVersion(version int16) { v.Version = version }
 func (v *CreateDelegationTokenRequest) GetVersion() int16        { return v.Version }
+func (v *CreateDelegationTokenRequest) IsFlexible() bool         { return false }
 func (v *CreateDelegationTokenRequest) IsAdminRequest()          {}
 func (v *CreateDelegationTokenRequest) ResponseKind() Response {
 	return &CreateDelegationTokenResponse{Version: v.Version}
@@ -8437,6 +8476,7 @@ func (*RenewDelegationTokenRequest) Key() int16                 { return 39 }
 func (*RenewDelegationTokenRequest) MaxVersion() int16          { return 1 }
 func (v *RenewDelegationTokenRequest) SetVersion(version int16) { v.Version = version }
 func (v *RenewDelegationTokenRequest) GetVersion() int16        { return v.Version }
+func (v *RenewDelegationTokenRequest) IsFlexible() bool         { return false }
 func (v *RenewDelegationTokenRequest) IsAdminRequest()          {}
 func (v *RenewDelegationTokenRequest) ResponseKind() Response {
 	return &RenewDelegationTokenResponse{Version: v.Version}
@@ -8502,6 +8542,7 @@ func (*ExpireDelegationTokenRequest) Key() int16                 { return 40 }
 func (*ExpireDelegationTokenRequest) MaxVersion() int16          { return 1 }
 func (v *ExpireDelegationTokenRequest) SetVersion(version int16) { v.Version = version }
 func (v *ExpireDelegationTokenRequest) GetVersion() int16        { return v.Version }
+func (v *ExpireDelegationTokenRequest) IsFlexible() bool         { return false }
 func (v *ExpireDelegationTokenRequest) IsAdminRequest()          {}
 func (v *ExpireDelegationTokenRequest) ResponseKind() Response {
 	return &ExpireDelegationTokenResponse{Version: v.Version}
@@ -8571,6 +8612,7 @@ func (*DescribeDelegationTokenRequest) Key() int16                 { return 41 }
 func (*DescribeDelegationTokenRequest) MaxVersion() int16          { return 1 }
 func (v *DescribeDelegationTokenRequest) SetVersion(version int16) { v.Version = version }
 func (v *DescribeDelegationTokenRequest) GetVersion() int16        { return v.Version }
+func (v *DescribeDelegationTokenRequest) IsFlexible() bool         { return false }
 func (v *DescribeDelegationTokenRequest) IsAdminRequest()          {}
 func (v *DescribeDelegationTokenRequest) ResponseKind() Response {
 	return &DescribeDelegationTokenResponse{Version: v.Version}
@@ -8725,6 +8767,7 @@ func (*DeleteGroupsRequest) Key() int16                   { return 42 }
 func (*DeleteGroupsRequest) MaxVersion() int16            { return 1 }
 func (v *DeleteGroupsRequest) SetVersion(version int16)   { v.Version = version }
 func (v *DeleteGroupsRequest) GetVersion() int16          { return v.Version }
+func (v *DeleteGroupsRequest) IsFlexible() bool           { return false }
 func (v *DeleteGroupsRequest) IsGroupCoordinatorRequest() {}
 func (v *DeleteGroupsRequest) ResponseKind() Response {
 	return &DeleteGroupsResponse{Version: v.Version}
@@ -8851,6 +8894,7 @@ func (*ElectLeadersRequest) Key() int16                 { return 43 }
 func (*ElectLeadersRequest) MaxVersion() int16          { return 1 }
 func (v *ElectLeadersRequest) SetVersion(version int16) { v.Version = version }
 func (v *ElectLeadersRequest) GetVersion() int16        { return v.Version }
+func (v *ElectLeadersRequest) IsFlexible() bool         { return false }
 func (v *ElectLeadersRequest) IsAdminRequest()          {}
 func (v *ElectLeadersRequest) ResponseKind() Response {
 	return &ElectLeadersResponse{Version: v.Version}
@@ -9064,6 +9108,7 @@ func (*IncrementalAlterConfigsRequest) Key() int16                 { return 44 }
 func (*IncrementalAlterConfigsRequest) MaxVersion() int16          { return 0 }
 func (v *IncrementalAlterConfigsRequest) SetVersion(version int16) { v.Version = version }
 func (v *IncrementalAlterConfigsRequest) GetVersion() int16        { return v.Version }
+func (v *IncrementalAlterConfigsRequest) IsFlexible() bool         { return false }
 func (v *IncrementalAlterConfigsRequest) IsAdminRequest()          {}
 func (v *IncrementalAlterConfigsRequest) ResponseKind() Response {
 	return &IncrementalAlterConfigsResponse{Version: v.Version}
@@ -9235,6 +9280,7 @@ func (*AlterPartitionReassignmentsRequest) Key() int16                 { return 
 func (*AlterPartitionReassignmentsRequest) MaxVersion() int16          { return 0 }
 func (v *AlterPartitionReassignmentsRequest) SetVersion(version int16) { v.Version = version }
 func (v *AlterPartitionReassignmentsRequest) GetVersion() int16        { return v.Version }
+func (v *AlterPartitionReassignmentsRequest) IsFlexible() bool         { return false }
 func (v *AlterPartitionReassignmentsRequest) IsAdminRequest()          {}
 func (v *AlterPartitionReassignmentsRequest) ResponseKind() Response {
 	return &AlterPartitionReassignmentsResponse{Version: v.Version}
@@ -9423,6 +9469,7 @@ func (*ListPartitionReassignmentsRequest) Key() int16                 { return 4
 func (*ListPartitionReassignmentsRequest) MaxVersion() int16          { return 0 }
 func (v *ListPartitionReassignmentsRequest) SetVersion(version int16) { v.Version = version }
 func (v *ListPartitionReassignmentsRequest) GetVersion() int16        { return v.Version }
+func (v *ListPartitionReassignmentsRequest) IsFlexible() bool         { return false }
 func (v *ListPartitionReassignmentsRequest) IsAdminRequest()          {}
 func (v *ListPartitionReassignmentsRequest) ResponseKind() Response {
 	return &ListPartitionReassignmentsResponse{Version: v.Version}
@@ -9619,6 +9666,7 @@ func (*OffsetDeleteRequest) Key() int16                 { return 47 }
 func (*OffsetDeleteRequest) MaxVersion() int16          { return 0 }
 func (v *OffsetDeleteRequest) SetVersion(version int16) { v.Version = version }
 func (v *OffsetDeleteRequest) GetVersion() int16        { return v.Version }
+func (v *OffsetDeleteRequest) IsFlexible() bool         { return false }
 func (v *OffsetDeleteRequest) IsAdminRequest()          {}
 func (v *OffsetDeleteRequest) ResponseKind() Response {
 	return &OffsetDeleteResponse{Version: v.Version}

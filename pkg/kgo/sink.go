@@ -1021,6 +1021,7 @@ func (*produceRequest) Key() int16           { return 0 }
 func (*produceRequest) MaxVersion() int16    { return 8 }
 func (p *produceRequest) SetVersion(v int16) { p.version = v }
 func (p *produceRequest) GetVersion() int16  { return p.version }
+func (p *produceRequest) IsFlexible() bool   { return false } // version 8 is not flexible
 func (p *produceRequest) AppendTo(dst []byte) []byte {
 	if p.version >= 3 {
 		dst = kbin.AppendNullableString(dst, p.txnID)

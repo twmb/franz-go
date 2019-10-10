@@ -139,6 +139,8 @@ func main() {
 				s.WriteMaxVersionFunc(l)
 				s.WriteSetVersionFunc(l)
 				s.WriteGetVersionFunc(l)
+				s.WriteIsFlexibleFunc(l)
+
 				if s.Admin {
 					s.WriteAdminFunc(l)
 				} else if s.GroupCoordinator {

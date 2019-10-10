@@ -27,6 +27,9 @@ type Request interface {
 	// GetVersion returns the version currently set to use for the request
 	// and response.
 	GetVersion() int16
+	// IsFlexible returns whether the request at its current version is
+	// "flexible" as per the KIP-482.
+	IsFlexible() bool
 	// AppendTo appends this message in wire protocol form to a slice and
 	// returns the slice.
 	AppendTo([]byte) []byte
@@ -92,9 +95,22 @@ func AppendRequest(
 	if k == 7 && v == 0 {
 		return dst
 	}
-	dst = kbin.AppendNullableString(dst, clientID)
+
+	isFlexible := r.IsFlexible()
+
+	if isFlexible {
+		dst = kbin.AppendCompactNullableString(dst, clientID)
+	} else {
+		dst = kbin.AppendNullableString(dst, clientID)
+	}
+
 	dst = r.AppendTo(dst)
 	kbin.AppendInt32(dst[:0], int32(len(dst[4:])))
+
+	if isFlexible {
+		dst = append(dst, 0) // tagged section; TODO for when tags are added here
+	}
+
 	return dst
 }
 

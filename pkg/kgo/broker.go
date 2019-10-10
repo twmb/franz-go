@@ -22,6 +22,7 @@ type promisedReq struct {
 
 type promisedResp struct {
 	correlationID int32
+	flexible      bool
 	resp          kmsg.Response
 	promise       func(kmsg.Response, error)
 }
@@ -274,6 +275,7 @@ func (b *broker) handleReqs() {
 
 		cxn.waitResp(promisedResp{
 			correlationID,
+			req.IsFlexible(),
 			req.ResponseKind(),
 			pr.promise,
 		})
@@ -370,7 +372,7 @@ start:
 		return err
 	}
 
-	rawResp, err := readResponse(cx.conn, corrID)
+	rawResp, err := readResponse(cx.conn, req.IsFlexible(), corrID)
 	if err != nil {
 		return err
 	}
@@ -430,7 +432,7 @@ func (cx *brokerCxn) writeRequest(req kmsg.Request) (int32, error) {
 
 // readResponse reads a response from conn, ensures the correlation ID is
 // correct, and returns a newly allocated slice on success.
-func readResponse(conn io.ReadCloser, correlationID int32) ([]byte, error) {
+func readResponse(conn io.ReadCloser, flexible bool, correlationID int32) ([]byte, error) {
 	sizeBuf := make([]byte, 4)
 	if _, err := io.ReadFull(conn, sizeBuf[:4]); err != nil {
 		return nil, ErrConnDead
@@ -454,6 +456,19 @@ func readResponse(conn io.ReadCloser, correlationID int32) ([]byte, error) {
 		conn.Close()
 		return nil, ErrCorrelationIDMismatch
 	}
+
+	if flexible {
+		// Eat the tags at the end; we can bubble tags through somehow
+		// once they exist. These can be in a new field at the end of
+		// every top level response; ResponseTags.
+		b := kbin.Reader{Src: buf}
+		kmsg.SkipTags(&b)
+		if err := b.Complete(); err != nil {
+			conn.Close()
+			return nil, err
+		}
+	}
+
 	return buf, nil
 }
 
@@ -501,7 +516,7 @@ func (cx *brokerCxn) handleResps() {
 	defer cx.die() // always track our death
 
 	for pr := range cx.resps {
-		raw, err := readResponse(cx.conn, pr.correlationID)
+		raw, err := readResponse(cx.conn, pr.flexible, pr.correlationID)
 		if err != nil {
 			pr.promise(nil, err)
 			return
