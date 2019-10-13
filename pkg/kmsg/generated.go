@@ -83,36 +83,34 @@ func (v *MessageV0) AppendTo(dst []byte) []byte {
 }
 func (v *MessageV0) ReadFrom(src []byte) error {
 	b := kbin.Reader{Src: src}
+	s := v
 	{
-		s := v
-		{
-			v := b.Int64()
-			s.Offset = v
-		}
-		{
-			v := b.Int32()
-			s.MessageSize = v
-		}
-		{
-			v := b.Int32()
-			s.CRC = v
-		}
-		{
-			v := b.Int8()
-			s.Magic = v
-		}
-		{
-			v := b.Int8()
-			s.Attributes = v
-		}
-		{
-			v := b.NullableBytes()
-			s.Key = v
-		}
-		{
-			v := b.NullableBytes()
-			s.Value = v
-		}
+		v := b.Int64()
+		s.Offset = v
+	}
+	{
+		v := b.Int32()
+		s.MessageSize = v
+	}
+	{
+		v := b.Int32()
+		s.CRC = v
+	}
+	{
+		v := b.Int8()
+		s.Magic = v
+	}
+	{
+		v := b.Int8()
+		s.Attributes = v
+	}
+	{
+		v := b.NullableBytes()
+		s.Key = v
+	}
+	{
+		v := b.NullableBytes()
+		s.Value = v
 	}
 	return b.Complete()
 }
@@ -208,40 +206,38 @@ func (v *MessageV1) AppendTo(dst []byte) []byte {
 }
 func (v *MessageV1) ReadFrom(src []byte) error {
 	b := kbin.Reader{Src: src}
+	s := v
 	{
-		s := v
-		{
-			v := b.Int64()
-			s.Offset = v
-		}
-		{
-			v := b.Int32()
-			s.MessageSize = v
-		}
-		{
-			v := b.Int32()
-			s.CRC = v
-		}
-		{
-			v := b.Int8()
-			s.Magic = v
-		}
-		{
-			v := b.Int8()
-			s.Attributes = v
-		}
-		{
-			v := b.Int64()
-			s.Timestamp = v
-		}
-		{
-			v := b.NullableBytes()
-			s.Key = v
-		}
-		{
-			v := b.NullableBytes()
-			s.Value = v
-		}
+		v := b.Int64()
+		s.Offset = v
+	}
+	{
+		v := b.Int32()
+		s.MessageSize = v
+	}
+	{
+		v := b.Int32()
+		s.CRC = v
+	}
+	{
+		v := b.Int8()
+		s.Magic = v
+	}
+	{
+		v := b.Int8()
+		s.Attributes = v
+	}
+	{
+		v := b.Int64()
+		s.Timestamp = v
+	}
+	{
+		v := b.NullableBytes()
+		s.Key = v
+	}
+	{
+		v := b.NullableBytes()
+		s.Value = v
 	}
 	return b.Complete()
 }
@@ -267,16 +263,14 @@ func (v *Header) AppendTo(dst []byte) []byte {
 }
 func (v *Header) ReadFrom(src []byte) error {
 	b := kbin.Reader{Src: src}
+	s := v
 	{
-		s := v
-		{
-			v := b.VarintString()
-			s.Key = v
-		}
-		{
-			v := b.VarintBytes()
-			s.Value = v
-		}
+		v := b.VarintString()
+		s.Key = v
+	}
+	{
+		v := b.VarintBytes()
+		s.Value = v
 	}
 	return b.Complete()
 }
@@ -360,53 +354,49 @@ func (v *Record) AppendTo(dst []byte) []byte {
 }
 func (v *Record) ReadFrom(src []byte) error {
 	b := kbin.Reader{Src: src}
+	s := v
 	{
-		s := v
-		{
-			v := b.Varint()
-			s.Length = v
-		}
-		{
-			v := b.Int8()
-			s.Attributes = v
-		}
-		{
-			v := b.Varint()
-			s.TimestampDelta = v
-		}
-		{
-			v := b.Varint()
-			s.OffsetDelta = v
-		}
-		{
-			v := b.VarintBytes()
-			s.Key = v
-		}
-		{
-			v := b.VarintBytes()
-			s.Value = v
-		}
-		{
-			v := s.Headers
-			a := v
-			for i := b.Varint(); i > 0; i-- {
-				a = append(a, Header{})
-				v := &a[len(a)-1]
-				{
-					s := v
-					{
-						v := b.VarintString()
-						s.Key = v
-					}
-					{
-						v := b.VarintBytes()
-						s.Value = v
-					}
-				}
+		v := b.Varint()
+		s.Length = v
+	}
+	{
+		v := b.Int8()
+		s.Attributes = v
+	}
+	{
+		v := b.Varint()
+		s.TimestampDelta = v
+	}
+	{
+		v := b.Varint()
+		s.OffsetDelta = v
+	}
+	{
+		v := b.VarintBytes()
+		s.Key = v
+	}
+	{
+		v := b.VarintBytes()
+		s.Value = v
+	}
+	{
+		v := s.Headers
+		a := v
+		for i := b.Varint(); i > 0; i-- {
+			a = append(a, Header{})
+			v := &a[len(a)-1]
+			s := v
+			{
+				v := b.VarintString()
+				s.Key = v
 			}
-			v = a
-			s.Headers = v
+			{
+				v := b.VarintBytes()
+				s.Value = v
+			}
 		}
+		v = a
+		s.Headers = v
 	}
 	return b.Complete()
 }
@@ -575,64 +565,62 @@ func (v *RecordBatch) AppendTo(dst []byte) []byte {
 }
 func (v *RecordBatch) ReadFrom(src []byte) error {
 	b := kbin.Reader{Src: src}
+	s := v
 	{
-		s := v
-		{
-			v := b.Int64()
-			s.FirstOffset = v
-		}
-		{
-			v := b.Int32()
-			s.Length = v
-		}
-		{
-			v := b.Int32()
-			s.PartitionLeaderEpoch = v
-		}
-		{
-			v := b.Int8()
-			s.Magic = v
-		}
-		{
-			v := b.Int32()
-			s.CRC = v
-		}
-		{
-			v := b.Int16()
-			s.Attributes = v
-		}
-		{
-			v := b.Int32()
-			s.LastOffsetDelta = v
-		}
-		{
-			v := b.Int64()
-			s.FirstTimestamp = v
-		}
-		{
-			v := b.Int64()
-			s.MaxTimestamp = v
-		}
-		{
-			v := b.Int64()
-			s.ProducerID = v
-		}
-		{
-			v := b.Int16()
-			s.ProducerEpoch = v
-		}
-		{
-			v := b.Int32()
-			s.FirstSequence = v
-		}
-		{
-			v := b.Int32()
-			s.NumRecords = v
-		}
-		{
-			v := b.Span(int(s.Length) - 49)
-			s.Records = v
-		}
+		v := b.Int64()
+		s.FirstOffset = v
+	}
+	{
+		v := b.Int32()
+		s.Length = v
+	}
+	{
+		v := b.Int32()
+		s.PartitionLeaderEpoch = v
+	}
+	{
+		v := b.Int8()
+		s.Magic = v
+	}
+	{
+		v := b.Int32()
+		s.CRC = v
+	}
+	{
+		v := b.Int16()
+		s.Attributes = v
+	}
+	{
+		v := b.Int32()
+		s.LastOffsetDelta = v
+	}
+	{
+		v := b.Int64()
+		s.FirstTimestamp = v
+	}
+	{
+		v := b.Int64()
+		s.MaxTimestamp = v
+	}
+	{
+		v := b.Int64()
+		s.ProducerID = v
+	}
+	{
+		v := b.Int16()
+		s.ProducerEpoch = v
+	}
+	{
+		v := b.Int32()
+		s.FirstSequence = v
+	}
+	{
+		v := b.Int32()
+		s.NumRecords = v
+	}
+	{
+		v := b.Span(int(s.Length) - 49)
+		s.Records = v
 	}
 	return b.Complete()
 }
@@ -878,87 +866,79 @@ func (v *ProduceResponse) ReadFrom(src []byte) error {
 	version := v.Version
 	_ = version
 	b := kbin.Reader{Src: src}
+	s := v
 	{
-		s := v
-		{
-			v := s.Topics
-			a := v
-			for i := b.ArrayLen(); i > 0; i-- {
-				a = append(a, ProduceResponseTopic{})
-				v := &a[len(a)-1]
-				{
+		v := s.Topics
+		a := v
+		for i := b.ArrayLen(); i > 0; i-- {
+			a = append(a, ProduceResponseTopic{})
+			v := &a[len(a)-1]
+			s := v
+			{
+				v := b.String()
+				s.Topic = v
+			}
+			{
+				v := s.Partitions
+				a := v
+				for i := b.ArrayLen(); i > 0; i-- {
+					a = append(a, ProduceResponseTopicPartition{})
+					v := &a[len(a)-1]
 					s := v
 					{
-						v := b.String()
-						s.Topic = v
+						v := b.Int32()
+						s.Partition = v
 					}
 					{
-						v := s.Partitions
+						v := b.Int16()
+						s.ErrorCode = v
+					}
+					{
+						v := b.Int64()
+						s.BaseOffset = v
+					}
+					if version >= 2 {
+						v := b.Int64()
+						s.LogAppendTime = v
+					}
+					if version >= 5 {
+						v := b.Int64()
+						s.LogStartOffset = v
+					}
+					if version >= 8 {
+						v := s.ErrorRecords
 						a := v
 						for i := b.ArrayLen(); i > 0; i-- {
-							a = append(a, ProduceResponseTopicPartition{})
+							a = append(a, ProduceResponseTopicPartitionErrorRecord{})
 							v := &a[len(a)-1]
+							s := v
 							{
-								s := v
-								{
-									v := b.Int32()
-									s.Partition = v
-								}
-								{
-									v := b.Int16()
-									s.ErrorCode = v
-								}
-								{
-									v := b.Int64()
-									s.BaseOffset = v
-								}
-								if version >= 2 {
-									v := b.Int64()
-									s.LogAppendTime = v
-								}
-								if version >= 5 {
-									v := b.Int64()
-									s.LogStartOffset = v
-								}
-								if version >= 8 {
-									v := s.ErrorRecords
-									a := v
-									for i := b.ArrayLen(); i > 0; i-- {
-										a = append(a, ProduceResponseTopicPartitionErrorRecord{})
-										v := &a[len(a)-1]
-										{
-											s := v
-											{
-												v := b.Int32()
-												s.RelativeOffset = v
-											}
-											{
-												v := b.NullableString()
-												s.ErrorMessage = v
-											}
-										}
-									}
-									v = a
-									s.ErrorRecords = v
-								}
-								if version >= 8 {
-									v := b.NullableString()
-									s.ErrorMessage = v
-								}
+								v := b.Int32()
+								s.RelativeOffset = v
+							}
+							{
+								v := b.NullableString()
+								s.ErrorMessage = v
 							}
 						}
 						v = a
-						s.Partitions = v
+						s.ErrorRecords = v
+					}
+					if version >= 8 {
+						v := b.NullableString()
+						s.ErrorMessage = v
 					}
 				}
+				v = a
+				s.Partitions = v
 			}
-			v = a
-			s.Topics = v
 		}
-		if version >= 1 {
-			v := b.Int32()
-			s.ThrottleMillis = v
-		}
+		v = a
+		s.Topics = v
+	}
+	if version >= 1 {
+		v := b.Int32()
+		s.ThrottleMillis = v
 	}
 	return b.Complete()
 }
@@ -1301,103 +1281,95 @@ func (v *FetchResponse) ReadFrom(src []byte) error {
 	version := v.Version
 	_ = version
 	b := kbin.Reader{Src: src}
+	s := v
+	if version >= 1 {
+		v := b.Int32()
+		s.ThrottleMillis = v
+	}
+	if version >= 7 {
+		v := b.Int16()
+		s.ErrorCode = v
+	}
+	if version >= 7 {
+		v := b.Int32()
+		s.SessionID = v
+	}
 	{
-		s := v
-		if version >= 1 {
-			v := b.Int32()
-			s.ThrottleMillis = v
-		}
-		if version >= 7 {
-			v := b.Int16()
-			s.ErrorCode = v
-		}
-		if version >= 7 {
-			v := b.Int32()
-			s.SessionID = v
-		}
-		{
-			v := s.Topics
-			a := v
-			for i := b.ArrayLen(); i > 0; i-- {
-				a = append(a, FetchResponseTopic{})
-				v := &a[len(a)-1]
-				{
+		v := s.Topics
+		a := v
+		for i := b.ArrayLen(); i > 0; i-- {
+			a = append(a, FetchResponseTopic{})
+			v := &a[len(a)-1]
+			s := v
+			{
+				v := b.String()
+				s.Topic = v
+			}
+			{
+				v := s.Partitions
+				a := v
+				for i := b.ArrayLen(); i > 0; i-- {
+					a = append(a, FetchResponseTopicPartition{})
+					v := &a[len(a)-1]
 					s := v
 					{
-						v := b.String()
-						s.Topic = v
+						v := b.Int32()
+						s.Partition = v
 					}
 					{
-						v := s.Partitions
+						v := b.Int16()
+						s.ErrorCode = v
+					}
+					{
+						v := b.Int64()
+						s.HighWatermark = v
+					}
+					if version >= 4 {
+						v := b.Int64()
+						s.LastStableOffset = v
+					}
+					if version >= 5 {
+						v := b.Int64()
+						s.LogStartOffset = v
+					}
+					if version >= 4 {
+						v := s.AbortedTransactions
 						a := v
-						for i := b.ArrayLen(); i > 0; i-- {
-							a = append(a, FetchResponseTopicPartition{})
+						i := b.ArrayLen()
+						if version < 0 || i == 0 {
+							a = []FetchResponseTopicPartitionAbortedTransaction{}
+						}
+						for ; i > 0; i-- {
+							a = append(a, FetchResponseTopicPartitionAbortedTransaction{})
 							v := &a[len(a)-1]
+							s := v
 							{
-								s := v
-								{
-									v := b.Int32()
-									s.Partition = v
-								}
-								{
-									v := b.Int16()
-									s.ErrorCode = v
-								}
-								{
-									v := b.Int64()
-									s.HighWatermark = v
-								}
-								if version >= 4 {
-									v := b.Int64()
-									s.LastStableOffset = v
-								}
-								if version >= 5 {
-									v := b.Int64()
-									s.LogStartOffset = v
-								}
-								if version >= 4 {
-									v := s.AbortedTransactions
-									a := v
-									i := b.ArrayLen()
-									if version < 0 || i == 0 {
-										a = []FetchResponseTopicPartitionAbortedTransaction{}
-									}
-									for ; i > 0; i-- {
-										a = append(a, FetchResponseTopicPartitionAbortedTransaction{})
-										v := &a[len(a)-1]
-										{
-											s := v
-											{
-												v := b.Int64()
-												s.ProducerID = v
-											}
-											{
-												v := b.Int64()
-												s.FirstOffset = v
-											}
-										}
-									}
-									v = a
-									s.AbortedTransactions = v
-								}
-								if version >= 11 {
-									v := b.Int32()
-									s.PreferredReadReplica = v
-								}
-								{
-									v := b.NullableBytes()
-									s.RecordBatches = v
-								}
+								v := b.Int64()
+								s.ProducerID = v
+							}
+							{
+								v := b.Int64()
+								s.FirstOffset = v
 							}
 						}
 						v = a
-						s.Partitions = v
+						s.AbortedTransactions = v
+					}
+					if version >= 11 {
+						v := b.Int32()
+						s.PreferredReadReplica = v
+					}
+					{
+						v := b.NullableBytes()
+						s.RecordBatches = v
 					}
 				}
+				v = a
+				s.Partitions = v
 			}
-			v = a
-			s.Topics = v
 		}
+		v = a
+		s.Topics = v
 	}
 	return b.Complete()
 }
@@ -1610,72 +1582,66 @@ func (v *ListOffsetsResponse) ReadFrom(src []byte) error {
 	version := v.Version
 	_ = version
 	b := kbin.Reader{Src: src}
+	s := v
+	if version >= 2 {
+		v := b.Int32()
+		s.ThrottleMillis = v
+	}
 	{
-		s := v
-		if version >= 2 {
-			v := b.Int32()
-			s.ThrottleMillis = v
-		}
-		{
-			v := s.Topics
-			a := v
-			for i := b.ArrayLen(); i > 0; i-- {
-				a = append(a, ListOffsetsResponseTopic{})
-				v := &a[len(a)-1]
-				{
+		v := s.Topics
+		a := v
+		for i := b.ArrayLen(); i > 0; i-- {
+			a = append(a, ListOffsetsResponseTopic{})
+			v := &a[len(a)-1]
+			s := v
+			{
+				v := b.String()
+				s.Topic = v
+			}
+			{
+				v := s.Partitions
+				a := v
+				for i := b.ArrayLen(); i > 0; i-- {
+					a = append(a, ListOffsetsResponseTopicPartition{})
+					v := &a[len(a)-1]
 					s := v
 					{
-						v := b.String()
-						s.Topic = v
+						v := b.Int32()
+						s.Partition = v
 					}
 					{
-						v := s.Partitions
+						v := b.Int16()
+						s.ErrorCode = v
+					}
+					if version >= 0 && version <= 0 {
+						v := s.OldStyleOffsets
 						a := v
 						for i := b.ArrayLen(); i > 0; i-- {
-							a = append(a, ListOffsetsResponseTopicPartition{})
-							v := &a[len(a)-1]
-							{
-								s := v
-								{
-									v := b.Int32()
-									s.Partition = v
-								}
-								{
-									v := b.Int16()
-									s.ErrorCode = v
-								}
-								if version >= 0 && version <= 0 {
-									v := s.OldStyleOffsets
-									a := v
-									for i := b.ArrayLen(); i > 0; i-- {
-										v := b.Int64()
-										a = append(a, v)
-									}
-									v = a
-									s.OldStyleOffsets = v
-								}
-								{
-									v := b.Int64()
-									s.Timestamp = v
-								}
-								if version >= 1 {
-									v := b.Int64()
-									s.Offset = v
-								}
-								if version >= 4 {
-									v := b.Int32()
-									s.LeaderEpoch = v
-								}
-							}
+							v := b.Int64()
+							a = append(a, v)
 						}
 						v = a
-						s.Partitions = v
+						s.OldStyleOffsets = v
+					}
+					{
+						v := b.Int64()
+						s.Timestamp = v
+					}
+					if version >= 1 {
+						v := b.Int64()
+						s.Offset = v
+					}
+					if version >= 4 {
+						v := b.Int32()
+						s.LeaderEpoch = v
 					}
 				}
+				v = a
+				s.Partitions = v
 			}
-			v = a
-			s.Topics = v
 		}
+		v = a
+		s.Topics = v
 	}
 	return b.Complete()
 }
@@ -1882,86 +1848,111 @@ func (v *MetadataResponse) ReadFrom(src []byte) error {
 	isFlexible := version >= 9
 	_ = isFlexible
 	b := kbin.Reader{Src: src}
+	s := v
+	if version >= 3 {
+		v := b.Int32()
+		s.ThrottleMillis = v
+	}
 	{
-		s := v
-		if version >= 3 {
-			v := b.Int32()
-			s.ThrottleMillis = v
+		v := s.Brokers
+		a := v
+		var i int32
+		if isFlexible {
+			i = b.CompactArrayLen()
+		} else {
+			i = b.ArrayLen()
 		}
-		{
-			v := s.Brokers
-			a := v
-			var i int32
-			if isFlexible {
-				i = b.CompactArrayLen()
-			} else {
-				i = b.ArrayLen()
+		for ; i > 0; i-- {
+			a = append(a, MetadataResponseBroker{})
+			v := &a[len(a)-1]
+			s := v
+			{
+				v := b.Int32()
+				s.NodeID = v
 			}
-			for ; i > 0; i-- {
-				a = append(a, MetadataResponseBroker{})
-				v := &a[len(a)-1]
-				{
-					s := v
-					{
-						v := b.Int32()
-						s.NodeID = v
-					}
-					{
-						v := b.String()
-						s.Host = v
-					}
-					{
-						v := b.Int32()
-						s.Port = v
-					}
-					if version >= 1 {
-						v := b.NullableString()
-						s.Rack = v
-					}
-				}
+			{
+				v := b.String()
+				s.Host = v
+			}
+			{
+				v := b.Int32()
+				s.Port = v
+			}
+			if version >= 1 {
+				v := b.NullableString()
+				s.Rack = v
+			}
+			if isFlexible {
+				SkipTags(&b)
+			}
+		}
+		v = a
+		s.Brokers = v
+	}
+	if version >= 2 {
+		v := b.NullableString()
+		s.ClusterID = v
+	}
+	if version >= 1 {
+		v := b.Int32()
+		s.ControllerID = v
+	}
+	{
+		v := s.Topics
+		a := v
+		var i int32
+		if isFlexible {
+			i = b.CompactArrayLen()
+		} else {
+			i = b.ArrayLen()
+		}
+		for ; i > 0; i-- {
+			a = append(a, MetadataResponseTopic{})
+			v := &a[len(a)-1]
+			s := v
+			{
+				v := b.Int16()
+				s.ErrorCode = v
+			}
+			{
+				v := b.String()
+				s.Topic = v
+			}
+			if version >= 1 {
+				v := b.Bool()
+				s.IsInternal = v
+			}
+			{
+				v := s.Partitions
+				a := v
+				var i int32
 				if isFlexible {
-					SkipTags(&b)
+					i = b.CompactArrayLen()
+				} else {
+					i = b.ArrayLen()
 				}
-			}
-			v = a
-			s.Brokers = v
-		}
-		if version >= 2 {
-			v := b.NullableString()
-			s.ClusterID = v
-		}
-		if version >= 1 {
-			v := b.Int32()
-			s.ControllerID = v
-		}
-		{
-			v := s.Topics
-			a := v
-			var i int32
-			if isFlexible {
-				i = b.CompactArrayLen()
-			} else {
-				i = b.ArrayLen()
-			}
-			for ; i > 0; i-- {
-				a = append(a, MetadataResponseTopic{})
-				v := &a[len(a)-1]
-				{
+				for ; i > 0; i-- {
+					a = append(a, MetadataResponseTopicPartition{})
+					v := &a[len(a)-1]
 					s := v
 					{
 						v := b.Int16()
 						s.ErrorCode = v
 					}
 					{
-						v := b.String()
-						s.Topic = v
-					}
-					if version >= 1 {
-						v := b.Bool()
-						s.IsInternal = v
+						v := b.Int32()
+						s.Partition = v
 					}
 					{
-						v := s.Partitions
+						v := b.Int32()
+						s.Leader = v
+					}
+					if version >= 7 {
+						v := b.Int32()
+						s.LeaderEpoch = v
+					}
+					{
+						v := s.Replicas
 						a := v
 						var i int32
 						if isFlexible {
@@ -1970,98 +1961,65 @@ func (v *MetadataResponse) ReadFrom(src []byte) error {
 							i = b.ArrayLen()
 						}
 						for ; i > 0; i-- {
-							a = append(a, MetadataResponseTopicPartition{})
-							v := &a[len(a)-1]
-							{
-								s := v
-								{
-									v := b.Int16()
-									s.ErrorCode = v
-								}
-								{
-									v := b.Int32()
-									s.Partition = v
-								}
-								{
-									v := b.Int32()
-									s.Leader = v
-								}
-								if version >= 7 {
-									v := b.Int32()
-									s.LeaderEpoch = v
-								}
-								{
-									v := s.Replicas
-									a := v
-									var i int32
-									if isFlexible {
-										i = b.CompactArrayLen()
-									} else {
-										i = b.ArrayLen()
-									}
-									for ; i > 0; i-- {
-										v := b.Int32()
-										a = append(a, v)
-									}
-									v = a
-									s.Replicas = v
-								}
-								{
-									v := s.ISR
-									a := v
-									var i int32
-									if isFlexible {
-										i = b.CompactArrayLen()
-									} else {
-										i = b.ArrayLen()
-									}
-									for ; i > 0; i-- {
-										v := b.Int32()
-										a = append(a, v)
-									}
-									v = a
-									s.ISR = v
-								}
-								if version >= 5 {
-									v := s.OfflineReplicas
-									a := v
-									var i int32
-									if isFlexible {
-										i = b.CompactArrayLen()
-									} else {
-										i = b.ArrayLen()
-									}
-									for ; i > 0; i-- {
-										v := b.Int32()
-										a = append(a, v)
-									}
-									v = a
-									s.OfflineReplicas = v
-								}
-							}
-							if isFlexible {
-								SkipTags(&b)
-							}
+							v := b.Int32()
+							a = append(a, v)
 						}
 						v = a
-						s.Partitions = v
+						s.Replicas = v
 					}
-					if version >= 8 {
-						v := b.Int32()
-						s.AuthorizedOperations = v
+					{
+						v := s.ISR
+						a := v
+						var i int32
+						if isFlexible {
+							i = b.CompactArrayLen()
+						} else {
+							i = b.ArrayLen()
+						}
+						for ; i > 0; i-- {
+							v := b.Int32()
+							a = append(a, v)
+						}
+						v = a
+						s.ISR = v
+					}
+					if version >= 5 {
+						v := s.OfflineReplicas
+						a := v
+						var i int32
+						if isFlexible {
+							i = b.CompactArrayLen()
+						} else {
+							i = b.ArrayLen()
+						}
+						for ; i > 0; i-- {
+							v := b.Int32()
+							a = append(a, v)
+						}
+						v = a
+						s.OfflineReplicas = v
+					}
+					if isFlexible {
+						SkipTags(&b)
 					}
 				}
-				if isFlexible {
-					SkipTags(&b)
-				}
+				v = a
+				s.Partitions = v
 			}
-			v = a
-			s.Topics = v
+			if version >= 8 {
+				v := b.Int32()
+				s.AuthorizedOperations = v
+			}
+			if isFlexible {
+				SkipTags(&b)
+			}
 		}
-		if version >= 8 {
-			v := b.Int32()
-			s.AuthorizedOperations = v
-		}
+		v = a
+		s.Topics = v
+	}
+	if version >= 8 {
+		v := b.Int32()
+		s.AuthorizedOperations = v
 	}
 	if isFlexible {
 		SkipTags(&b)
@@ -2377,46 +2335,42 @@ func (v *LeaderAndISRResponse) ReadFrom(src []byte) error {
 	isFlexible := version >= 4
 	_ = isFlexible
 	b := kbin.Reader{Src: src}
+	s := v
 	{
-		s := v
-		{
-			v := b.Int16()
-			s.ErrorCode = v
+		v := b.Int16()
+		s.ErrorCode = v
+	}
+	{
+		v := s.Partitions
+		a := v
+		var i int32
+		if isFlexible {
+			i = b.CompactArrayLen()
+		} else {
+			i = b.ArrayLen()
 		}
-		{
-			v := s.Partitions
-			a := v
-			var i int32
+		for ; i > 0; i-- {
+			a = append(a, LeaderAndISRResponsePartition{})
+			v := &a[len(a)-1]
+			s := v
+			{
+				v := b.String()
+				s.Topic = v
+			}
+			{
+				v := b.Int32()
+				s.Partition = v
+			}
+			{
+				v := b.Int16()
+				s.ErrorCode = v
+			}
 			if isFlexible {
-				i = b.CompactArrayLen()
-			} else {
-				i = b.ArrayLen()
+				SkipTags(&b)
 			}
-			for ; i > 0; i-- {
-				a = append(a, LeaderAndISRResponsePartition{})
-				v := &a[len(a)-1]
-				{
-					s := v
-					{
-						v := b.String()
-						s.Topic = v
-					}
-					{
-						v := b.Int32()
-						s.Partition = v
-					}
-					{
-						v := b.Int16()
-						s.ErrorCode = v
-					}
-				}
-				if isFlexible {
-					SkipTags(&b)
-				}
-			}
-			v = a
-			s.Partitions = v
 		}
+		v = a
+		s.Partitions = v
 	}
 	if isFlexible {
 		SkipTags(&b)
@@ -2547,46 +2501,42 @@ func (v *StopReplicaResponse) ReadFrom(src []byte) error {
 	isFlexible := version >= 2
 	_ = isFlexible
 	b := kbin.Reader{Src: src}
+	s := v
 	{
-		s := v
-		{
-			v := b.Int16()
-			s.ErrorCode = v
+		v := b.Int16()
+		s.ErrorCode = v
+	}
+	{
+		v := s.Partitions
+		a := v
+		var i int32
+		if isFlexible {
+			i = b.CompactArrayLen()
+		} else {
+			i = b.ArrayLen()
 		}
-		{
-			v := s.Partitions
-			a := v
-			var i int32
+		for ; i > 0; i-- {
+			a = append(a, StopReplicaResponsePartition{})
+			v := &a[len(a)-1]
+			s := v
+			{
+				v := b.String()
+				s.Topic = v
+			}
+			{
+				v := b.Int32()
+				s.Partition = v
+			}
+			{
+				v := b.Int16()
+				s.ErrorCode = v
+			}
 			if isFlexible {
-				i = b.CompactArrayLen()
-			} else {
-				i = b.ArrayLen()
+				SkipTags(&b)
 			}
-			for ; i > 0; i-- {
-				a = append(a, StopReplicaResponsePartition{})
-				v := &a[len(a)-1]
-				{
-					s := v
-					{
-						v := b.String()
-						s.Topic = v
-					}
-					{
-						v := b.Int32()
-						s.Partition = v
-					}
-					{
-						v := b.Int16()
-						s.ErrorCode = v
-					}
-				}
-				if isFlexible {
-					SkipTags(&b)
-				}
-			}
-			v = a
-			s.Partitions = v
 		}
+		v = a
+		s.Partitions = v
 	}
 	if isFlexible {
 		SkipTags(&b)
@@ -2909,12 +2859,10 @@ func (v *UpdateMetadataResponse) ReadFrom(src []byte) error {
 	isFlexible := version >= 6
 	_ = isFlexible
 	b := kbin.Reader{Src: src}
+	s := v
 	{
-		s := v
-		{
-			v := b.Int16()
-			s.ErrorCode = v
-		}
+		v := b.Int16()
+		s.ErrorCode = v
 	}
 	if isFlexible {
 		SkipTags(&b)
@@ -2993,42 +2941,38 @@ func (v *ControlledShutdownResponse) ReadFrom(src []byte) error {
 	isFlexible := version >= 3
 	_ = isFlexible
 	b := kbin.Reader{Src: src}
+	s := v
 	{
-		s := v
-		{
-			v := b.Int16()
-			s.ErrorCode = v
+		v := b.Int16()
+		s.ErrorCode = v
+	}
+	{
+		v := s.PartitionsRemaining
+		a := v
+		var i int32
+		if isFlexible {
+			i = b.CompactArrayLen()
+		} else {
+			i = b.ArrayLen()
 		}
-		{
-			v := s.PartitionsRemaining
-			a := v
-			var i int32
+		for ; i > 0; i-- {
+			a = append(a, ControlledShutdownResponsePartitionsRemaining{})
+			v := &a[len(a)-1]
+			s := v
+			{
+				v := b.String()
+				s.Topic = v
+			}
+			{
+				v := b.Int32()
+				s.Partition = v
+			}
 			if isFlexible {
-				i = b.CompactArrayLen()
-			} else {
-				i = b.ArrayLen()
+				SkipTags(&b)
 			}
-			for ; i > 0; i-- {
-				a = append(a, ControlledShutdownResponsePartitionsRemaining{})
-				v := &a[len(a)-1]
-				{
-					s := v
-					{
-						v := b.String()
-						s.Topic = v
-					}
-					{
-						v := b.Int32()
-						s.Partition = v
-					}
-				}
-				if isFlexible {
-					SkipTags(&b)
-				}
-			}
-			v = a
-			s.PartitionsRemaining = v
 		}
+		v = a
+		s.PartitionsRemaining = v
 	}
 	if isFlexible {
 		SkipTags(&b)
@@ -3080,20 +3024,18 @@ func (v *OffsetCommitKey) ReadFrom(src []byte) error {
 	b := kbin.Reader{Src: src}
 	version := b.Int16()
 	v.Version = version
+	s := v
 	{
-		s := v
-		{
-			v := b.String()
-			s.Group = v
-		}
-		{
-			v := b.String()
-			s.Topic = v
-		}
-		{
-			v := b.Int32()
-			s.Partition = v
-		}
+		v := b.String()
+		s.Group = v
+	}
+	{
+		v := b.String()
+		s.Topic = v
+	}
+	{
+		v := b.Int32()
+		s.Partition = v
 	}
 	return b.Complete()
 }
@@ -3164,28 +3106,26 @@ func (v *OffsetCommitValue) ReadFrom(src []byte) error {
 	b := kbin.Reader{Src: src}
 	version := b.Int16()
 	v.Version = version
+	s := v
 	{
-		s := v
-		{
-			v := b.Int64()
-			s.Offset = v
-		}
-		if version >= 3 {
-			v := b.Int32()
-			s.LeaderEpoch = v
-		}
-		{
-			v := b.String()
-			s.Metadata = v
-		}
-		{
-			v := b.Int64()
-			s.CommitTimestamp = v
-		}
-		if version >= 1 && version <= 1 {
-			v := b.Int64()
-			s.ExpireTimestamp = v
-		}
+		v := b.Int64()
+		s.Offset = v
+	}
+	if version >= 3 {
+		v := b.Int32()
+		s.LeaderEpoch = v
+	}
+	{
+		v := b.String()
+		s.Metadata = v
+	}
+	{
+		v := b.Int64()
+		s.CommitTimestamp = v
+	}
+	if version >= 1 && version <= 1 {
+		v := b.Int64()
+		s.ExpireTimestamp = v
 	}
 	return b.Complete()
 }
@@ -3220,12 +3160,10 @@ func (v *GroupMetadataKey) ReadFrom(src []byte) error {
 	b := kbin.Reader{Src: src}
 	version := b.Int16()
 	v.Version = version
+	s := v
 	{
-		s := v
-		{
-			v := b.String()
-			s.Group = v
-		}
+		v := b.String()
+		s.Group = v
 	}
 	return b.Complete()
 }
@@ -3367,73 +3305,69 @@ func (v *GroupMetadataValue) ReadFrom(src []byte) error {
 	b := kbin.Reader{Src: src}
 	version := b.Int16()
 	v.Version = version
+	s := v
 	{
-		s := v
-		{
-			v := b.String()
-			s.ProtocolType = v
-		}
-		{
-			v := b.Int32()
-			s.Generation = v
-		}
-		{
-			v := b.NullableString()
-			s.Protocol = v
-		}
-		{
-			v := b.NullableString()
-			s.Leader = v
-		}
-		if version >= 2 {
-			v := b.Int64()
-			s.CurrentStateTimestamp = v
-		}
-		{
-			v := s.Members
-			a := v
-			for i := b.ArrayLen(); i > 0; i-- {
-				a = append(a, GroupMetadataValueMember{})
-				v := &a[len(a)-1]
-				{
-					s := v
-					{
-						v := b.String()
-						s.MemberID = v
-					}
-					if version >= 3 {
-						v := b.NullableString()
-						s.InstanceID = v
-					}
-					{
-						v := b.String()
-						s.ClientID = v
-					}
-					{
-						v := b.String()
-						s.ClientHost = v
-					}
-					if version >= 1 {
-						v := b.Int32()
-						s.RebalanceTimeoutMillis = v
-					}
-					{
-						v := b.Int32()
-						s.SessionTimeoutMillis = v
-					}
-					{
-						v := b.Bytes()
-						s.Subscription = v
-					}
-					{
-						v := b.Bytes()
-						s.Assignment = v
-					}
-				}
+		v := b.String()
+		s.ProtocolType = v
+	}
+	{
+		v := b.Int32()
+		s.Generation = v
+	}
+	{
+		v := b.NullableString()
+		s.Protocol = v
+	}
+	{
+		v := b.NullableString()
+		s.Leader = v
+	}
+	if version >= 2 {
+		v := b.Int64()
+		s.CurrentStateTimestamp = v
+	}
+	{
+		v := s.Members
+		a := v
+		for i := b.ArrayLen(); i > 0; i-- {
+			a = append(a, GroupMetadataValueMember{})
+			v := &a[len(a)-1]
+			s := v
+			{
+				v := b.String()
+				s.MemberID = v
 			}
-			v = a
-			s.Members = v
+			if version >= 3 {
+				v := b.NullableString()
+				s.InstanceID = v
+			}
+			{
+				v := b.String()
+				s.ClientID = v
+			}
+			{
+				v := b.String()
+				s.ClientHost = v
+			}
+			if version >= 1 {
+				v := b.Int32()
+				s.RebalanceTimeoutMillis = v
+			}
+			{
+				v := b.Int32()
+				s.SessionTimeoutMillis = v
+			}
+			{
+				v := b.Bytes()
+				s.Subscription = v
+			}
+			{
+				v := b.Bytes()
+				s.Assignment = v
+			}
 		}
+		v = a
+		s.Members = v
 	}
 	return b.Complete()
 }
@@ -3670,68 +3604,62 @@ func (v *OffsetCommitResponse) ReadFrom(src []byte) error {
 	isFlexible := version >= 8
 	_ = isFlexible
 	b := kbin.Reader{Src: src}
+	s := v
+	if version >= 3 {
+		v := b.Int32()
+		s.ThrottleMillis = v
+	}
 	{
-		s := v
-		if version >= 3 {
-			v := b.Int32()
-			s.ThrottleMillis = v
+		v := s.Topics
+		a := v
+		var i int32
+		if isFlexible {
+			i = b.CompactArrayLen()
+		} else {
+			i = b.ArrayLen()
 		}
-		{
-			v := s.Topics
-			a := v
-			var i int32
-			if isFlexible {
-				i = b.CompactArrayLen()
-			} else {
-				i = b.ArrayLen()
+		for ; i > 0; i-- {
+			a = append(a, OffsetCommitResponseTopic{})
+			v := &a[len(a)-1]
+			s := v
+			{
+				v := b.String()
+				s.Topic = v
 			}
-			for ; i > 0; i-- {
-				a = append(a, OffsetCommitResponseTopic{})
-				v := &a[len(a)-1]
-				{
+			{
+				v := s.Partitions
+				a := v
+				var i int32
+				if isFlexible {
+					i = b.CompactArrayLen()
+				} else {
+					i = b.ArrayLen()
+				}
+				for ; i > 0; i-- {
+					a = append(a, OffsetCommitResponseTopicPartition{})
+					v := &a[len(a)-1]
 					s := v
 					{
-						v := b.String()
-						s.Topic = v
+						v := b.Int32()
+						s.Partition = v
 					}
 					{
-						v := s.Partitions
-						a := v
-						var i int32
-						if isFlexible {
-							i = b.CompactArrayLen()
-						} else {
-							i = b.ArrayLen()
-						}
-						for ; i > 0; i-- {
-							a = append(a, OffsetCommitResponseTopicPartition{})
-							v := &a[len(a)-1]
-							{
-								s := v
-								{
-									v := b.Int32()
-									s.Partition = v
-								}
-								{
-									v := b.Int16()
-									s.ErrorCode = v
-								}
-							}
-							if isFlexible {
-								SkipTags(&b)
-							}
-						}
-						v = a
-						s.Partitions = v
+						v := b.Int16()
+						s.ErrorCode = v
+					}
+					if isFlexible {
+						SkipTags(&b)
 					}
 				}
-				if isFlexible {
-					SkipTags(&b)
-				}
+				v = a
+				s.Partitions = v
 			}
-			v = a
-			s.Topics = v
+			if isFlexible {
+				SkipTags(&b)
+			}
 		}
+		v = a
+		s.Topics = v
 	}
 	if isFlexible {
 		SkipTags(&b)
@@ -3893,84 +3821,78 @@ func (v *OffsetFetchResponse) ReadFrom(src []byte) error {
 	isFlexible := version >= 6
 	_ = isFlexible
 	b := kbin.Reader{Src: src}
+	s := v
+	if version >= 3 {
+		v := b.Int32()
+		s.ThrottleMillis = v
+	}
 	{
-		s := v
-		if version >= 3 {
-			v := b.Int32()
-			s.ThrottleMillis = v
+		v := s.Topics
+		a := v
+		var i int32
+		if isFlexible {
+			i = b.CompactArrayLen()
+		} else {
+			i = b.ArrayLen()
 		}
-		{
-			v := s.Topics
-			a := v
-			var i int32
-			if isFlexible {
-				i = b.CompactArrayLen()
-			} else {
-				i = b.ArrayLen()
+		for ; i > 0; i-- {
+			a = append(a, OffsetFetchResponseTopic{})
+			v := &a[len(a)-1]
+			s := v
+			{
+				v := b.String()
+				s.Topic = v
 			}
-			for ; i > 0; i-- {
-				a = append(a, OffsetFetchResponseTopic{})
-				v := &a[len(a)-1]
-				{
+			{
+				v := s.Partitions
+				a := v
+				var i int32
+				if isFlexible {
+					i = b.CompactArrayLen()
+				} else {
+					i = b.ArrayLen()
+				}
+				for ; i > 0; i-- {
+					a = append(a, OffsetFetchResponseTopicPartition{})
+					v := &a[len(a)-1]
 					s := v
 					{
-						v := b.String()
-						s.Topic = v
+						v := b.Int32()
+						s.Partition = v
 					}
 					{
-						v := s.Partitions
-						a := v
-						var i int32
-						if isFlexible {
-							i = b.CompactArrayLen()
-						} else {
-							i = b.ArrayLen()
-						}
-						for ; i > 0; i-- {
-							a = append(a, OffsetFetchResponseTopicPartition{})
-							v := &a[len(a)-1]
-							{
-								s := v
-								{
-									v := b.Int32()
-									s.Partition = v
-								}
-								{
-									v := b.Int64()
-									s.Offset = v
-								}
-								if version >= 5 {
-									v := b.Int32()
-									s.LeaderEpoch = v
-								}
-								{
-									v := b.NullableString()
-									s.Metadata = v
-								}
-								{
-									v := b.Int16()
-									s.ErrorCode = v
-								}
-							}
-							if isFlexible {
-								SkipTags(&b)
-							}
-						}
-						v = a
-						s.Partitions = v
+						v := b.Int64()
+						s.Offset = v
+					}
+					if version >= 5 {
+						v := b.Int32()
+						s.LeaderEpoch = v
+					}
+					{
+						v := b.NullableString()
+						s.Metadata = v
+					}
+					{
+						v := b.Int16()
+						s.ErrorCode = v
+					}
+					if isFlexible {
+						SkipTags(&b)
 					}
 				}
-				if isFlexible {
-					SkipTags(&b)
-				}
+				v = a
+				s.Partitions = v
 			}
-			v = a
-			s.Topics = v
+			if isFlexible {
+				SkipTags(&b)
+			}
 		}
-		if version >= 2 {
-			v := b.Int16()
-			s.ErrorCode = v
-		}
+		v = a
+		s.Topics = v
+	}
+	if version >= 2 {
+		v := b.Int16()
+		s.ErrorCode = v
 	}
 	if isFlexible {
 		SkipTags(&b)
@@ -4070,32 +3992,30 @@ func (v *FindCoordinatorResponse) ReadFrom(src []byte) error {
 	isFlexible := version >= 3
 	_ = isFlexible
 	b := kbin.Reader{Src: src}
+	s := v
+	if version >= 1 {
+		v := b.Int32()
+		s.ThrottleMillis = v
+	}
 	{
-		s := v
-		if version >= 1 {
-			v := b.Int32()
-			s.ThrottleMillis = v
-		}
-		{
-			v := b.Int16()
-			s.ErrorCode = v
-		}
-		if version >= 1 {
-			v := b.NullableString()
-			s.ErrorMessage = v
-		}
-		{
-			v := b.Int32()
-			s.NodeID = v
-		}
-		{
-			v := b.String()
-			s.Host = v
-		}
-		{
-			v := b.Int32()
-			s.Port = v
-		}
+		v := b.Int16()
+		s.ErrorCode = v
+	}
+	if version >= 1 {
+		v := b.NullableString()
+		s.ErrorMessage = v
+	}
+	{
+		v := b.Int32()
+		s.NodeID = v
+	}
+	{
+		v := b.String()
+		s.Host = v
+	}
+	{
+		v := b.Int32()
+		s.Port = v
 	}
 	if isFlexible {
 		SkipTags(&b)
@@ -4165,26 +4085,24 @@ func (v *GroupMemberMetadata) AppendTo(dst []byte) []byte {
 }
 func (v *GroupMemberMetadata) ReadFrom(src []byte) error {
 	b := kbin.Reader{Src: src}
+	s := v
 	{
-		s := v
-		{
-			v := b.Int16()
-			s.Version = v
+		v := b.Int16()
+		s.Version = v
+	}
+	{
+		v := s.Topics
+		a := v
+		for i := b.ArrayLen(); i > 0; i-- {
+			v := b.String()
+			a = append(a, v)
 		}
-		{
-			v := s.Topics
-			a := v
-			for i := b.ArrayLen(); i > 0; i-- {
-				v := b.String()
-				a = append(a, v)
-			}
-			v = a
-			s.Topics = v
-		}
-		{
-			v := b.Bytes()
-			s.UserData = v
-		}
+		v = a
+		s.Topics = v
+	}
+	{
+		v := b.Bytes()
+		s.UserData = v
 	}
 	return b.Complete()
 }
@@ -4242,43 +4160,39 @@ func (v *GroupMemberAssignment) AppendTo(dst []byte) []byte {
 }
 func (v *GroupMemberAssignment) ReadFrom(src []byte) error {
 	b := kbin.Reader{Src: src}
+	s := v
 	{
-		s := v
-		{
-			v := b.Int16()
-			s.Version = v
-		}
-		{
-			v := s.Topics
-			a := v
-			for i := b.ArrayLen(); i > 0; i-- {
-				a = append(a, GroupMemberAssignmentTopic{})
-				v := &a[len(a)-1]
-				{
-					s := v
-					{
-						v := b.String()
-						s.Topic = v
-					}
-					{
-						v := s.Partitions
-						a := v
-						for i := b.ArrayLen(); i > 0; i-- {
-							v := b.Int32()
-							a = append(a, v)
-						}
-						v = a
-						s.Partitions = v
-					}
-				}
+		v := b.Int16()
+		s.Version = v
+	}
+	{
+		v := s.Topics
+		a := v
+		for i := b.ArrayLen(); i > 0; i-- {
+			a = append(a, GroupMemberAssignmentTopic{})
+			v := &a[len(a)-1]
+			s := v
+			{
+				v := b.String()
+				s.Topic = v
 			}
-			v = a
-			s.Topics = v
+			{
+				v := s.Partitions
+				a := v
+				for i := b.ArrayLen(); i > 0; i-- {
+					v := b.Int32()
+					a = append(a, v)
+				}
+				v = a
+				s.Partitions = v
+			}
 		}
-		{
-			v := b.Bytes()
-			s.UserData = v
-		}
+		v = a
+		s.Topics = v
+	}
+	{
+		v := b.Bytes()
+		s.UserData = v
 	}
 	return b.Complete()
 }
@@ -4517,66 +4431,62 @@ func (v *JoinGroupResponse) ReadFrom(src []byte) error {
 	isFlexible := version >= 6
 	_ = isFlexible
 	b := kbin.Reader{Src: src}
+	s := v
+	if version >= 2 {
+		v := b.Int32()
+		s.ThrottleMillis = v
+	}
 	{
-		s := v
-		if version >= 2 {
-			v := b.Int32()
-			s.ThrottleMillis = v
+		v := b.Int16()
+		s.ErrorCode = v
+	}
+	{
+		v := b.Int32()
+		s.Generation = v
+	}
+	{
+		v := b.String()
+		s.Protocol = v
+	}
+	{
+		v := b.String()
+		s.LeaderID = v
+	}
+	{
+		v := b.String()
+		s.MemberID = v
+	}
+	{
+		v := s.Members
+		a := v
+		var i int32
+		if isFlexible {
+			i = b.CompactArrayLen()
+		} else {
+			i = b.ArrayLen()
 		}
-		{
-			v := b.Int16()
-			s.ErrorCode = v
-		}
-		{
-			v := b.Int32()
-			s.Generation = v
-		}
-		{
-			v := b.String()
-			s.Protocol = v
-		}
-		{
-			v := b.String()
-			s.LeaderID = v
-		}
-		{
-			v := b.String()
-			s.MemberID = v
-		}
-		{
-			v := s.Members
-			a := v
-			var i int32
+		for ; i > 0; i-- {
+			a = append(a, JoinGroupResponseMember{})
+			v := &a[len(a)-1]
+			s := v
+			{
+				v := b.String()
+				s.MemberID = v
+			}
+			if version >= 5 {
+				v := b.NullableString()
+				s.InstanceID = v
+			}
+			{
+				v := b.Bytes()
+				s.ProtocolMetadata = v
+			}
 			if isFlexible {
-				i = b.CompactArrayLen()
-			} else {
-				i = b.ArrayLen()
+				SkipTags(&b)
 			}
-			for ; i > 0; i-- {
-				a = append(a, JoinGroupResponseMember{})
-				v := &a[len(a)-1]
-				{
-					s := v
-					{
-						v := b.String()
-						s.MemberID = v
-					}
-					if version >= 5 {
-						v := b.NullableString()
-						s.InstanceID = v
-					}
-					{
-						v := b.Bytes()
-						s.ProtocolMetadata = v
-					}
-				}
-				if isFlexible {
-					SkipTags(&b)
-				}
-			}
-			v = a
-			s.Members = v
 		}
+		v = a
+		s.Members = v
 	}
 	if isFlexible {
 		SkipTags(&b)
@@ -4677,16 +4587,14 @@ func (v *HeartbeatResponse) ReadFrom(src []byte) error {
 	isFlexible := version >= 4
 	_ = isFlexible
 	b := kbin.Reader{Src: src}
+	s := v
+	if version >= 1 {
+		v := b.Int32()
+		s.ThrottleMillis = v
+	}
 	{
-		s := v
-		if version >= 1 {
-			v := b.Int32()
-			s.ThrottleMillis = v
-		}
-		{
-			v := b.Int16()
-			s.ErrorCode = v
-		}
+		v := b.Int16()
+		s.ErrorCode = v
 	}
 	if isFlexible {
 		SkipTags(&b)
@@ -4817,50 +4725,46 @@ func (v *LeaveGroupResponse) ReadFrom(src []byte) error {
 	isFlexible := version >= 4
 	_ = isFlexible
 	b := kbin.Reader{Src: src}
+	s := v
+	if version >= 1 {
+		v := b.Int32()
+		s.ThrottleMillis = v
+	}
 	{
-		s := v
-		if version >= 1 {
-			v := b.Int32()
-			s.ThrottleMillis = v
+		v := b.Int16()
+		s.ErrorCode = v
+	}
+	if version >= 3 {
+		v := s.Members
+		a := v
+		var i int32
+		if isFlexible {
+			i = b.CompactArrayLen()
+		} else {
+			i = b.ArrayLen()
 		}
-		{
-			v := b.Int16()
-			s.ErrorCode = v
-		}
-		if version >= 3 {
-			v := s.Members
-			a := v
-			var i int32
+		for ; i > 0; i-- {
+			a = append(a, LeaveGroupResponseMember{})
+			v := &a[len(a)-1]
+			s := v
+			{
+				v := b.String()
+				s.MemberID = v
+			}
+			{
+				v := b.NullableString()
+				s.InstanceID = v
+			}
+			{
+				v := b.Int16()
+				s.ErrorCode = v
+			}
 			if isFlexible {
-				i = b.CompactArrayLen()
-			} else {
-				i = b.ArrayLen()
+				SkipTags(&b)
 			}
-			for ; i > 0; i-- {
-				a = append(a, LeaveGroupResponseMember{})
-				v := &a[len(a)-1]
-				{
-					s := v
-					{
-						v := b.String()
-						s.MemberID = v
-					}
-					{
-						v := b.NullableString()
-						s.InstanceID = v
-					}
-					{
-						v := b.Int16()
-						s.ErrorCode = v
-					}
-				}
-				if isFlexible {
-					SkipTags(&b)
-				}
-			}
-			v = a
-			s.Members = v
 		}
+		v = a
+		s.Members = v
 	}
 	if isFlexible {
 		SkipTags(&b)
@@ -5005,20 +4909,18 @@ func (v *SyncGroupResponse) ReadFrom(src []byte) error {
 	isFlexible := version >= 4
 	_ = isFlexible
 	b := kbin.Reader{Src: src}
+	s := v
+	if version >= 1 {
+		v := b.Int32()
+		s.ThrottleMillis = v
+	}
 	{
-		s := v
-		if version >= 1 {
-			v := b.Int32()
-			s.ThrottleMillis = v
-		}
-		{
-			v := b.Int16()
-			s.ErrorCode = v
-		}
-		{
-			v := b.Bytes()
-			s.MemberAssignment = v
-		}
+		v := b.Int16()
+		s.ErrorCode = v
+	}
+	{
+		v := b.Bytes()
+		s.MemberAssignment = v
 	}
 	if isFlexible {
 		SkipTags(&b)
@@ -5160,104 +5062,98 @@ func (v *DescribeGroupsResponse) ReadFrom(src []byte) error {
 	isFlexible := version >= 5
 	_ = isFlexible
 	b := kbin.Reader{Src: src}
+	s := v
 	{
-		s := v
-		{
-			v := b.Int32()
-			s.ThrottleMillis = v
+		v := b.Int32()
+		s.ThrottleMillis = v
+	}
+	{
+		v := s.Groups
+		a := v
+		var i int32
+		if isFlexible {
+			i = b.CompactArrayLen()
+		} else {
+			i = b.ArrayLen()
 		}
-		{
-			v := s.Groups
-			a := v
-			var i int32
-			if isFlexible {
-				i = b.CompactArrayLen()
-			} else {
-				i = b.ArrayLen()
+		for ; i > 0; i-- {
+			a = append(a, DescribeGroupsResponseGroup{})
+			v := &a[len(a)-1]
+			s := v
+			{
+				v := b.Int16()
+				s.ErrorCode = v
 			}
-			for ; i > 0; i-- {
-				a = append(a, DescribeGroupsResponseGroup{})
-				v := &a[len(a)-1]
-				{
+			{
+				v := b.String()
+				s.Group = v
+			}
+			{
+				v := b.String()
+				s.State = v
+			}
+			{
+				v := b.String()
+				s.ProtocolType = v
+			}
+			{
+				v := b.String()
+				s.Protocol = v
+			}
+			{
+				v := s.Members
+				a := v
+				var i int32
+				if isFlexible {
+					i = b.CompactArrayLen()
+				} else {
+					i = b.ArrayLen()
+				}
+				for ; i > 0; i-- {
+					a = append(a, DescribeGroupsResponseGroupMember{})
+					v := &a[len(a)-1]
 					s := v
 					{
-						v := b.Int16()
-						s.ErrorCode = v
+						v := b.String()
+						s.MemberID = v
+					}
+					if version >= 4 {
+						v := b.NullableString()
+						s.InstanceID = v
 					}
 					{
 						v := b.String()
-						s.Group = v
+						s.ClientID = v
 					}
 					{
 						v := b.String()
-						s.State = v
+						s.ClientHost = v
 					}
 					{
-						v := b.String()
-						s.ProtocolType = v
+						v := b.Bytes()
+						s.ProtocolMetadata = v
 					}
 					{
-						v := b.String()
-						s.Protocol = v
+						v := b.Bytes()
+						s.MemberAssignment = v
 					}
-					{
-						v := s.Members
-						a := v
-						var i int32
-						if isFlexible {
-							i = b.CompactArrayLen()
-						} else {
-							i = b.ArrayLen()
-						}
-						for ; i > 0; i-- {
-							a = append(a, DescribeGroupsResponseGroupMember{})
-							v := &a[len(a)-1]
-							{
-								s := v
-								{
-									v := b.String()
-									s.MemberID = v
-								}
-								if version >= 4 {
-									v := b.NullableString()
-									s.InstanceID = v
-								}
-								{
-									v := b.String()
-									s.ClientID = v
-								}
-								{
-									v := b.String()
-									s.ClientHost = v
-								}
-								{
-									v := b.Bytes()
-									s.ProtocolMetadata = v
-								}
-								{
-									v := b.Bytes()
-									s.MemberAssignment = v
-								}
-							}
-							if isFlexible {
-								SkipTags(&b)
-							}
-						}
-						v = a
-						s.Members = v
-					}
-					if version >= 3 {
-						v := b.Int32()
-						s.AuthorizedOperations = v
+					if isFlexible {
+						SkipTags(&b)
 					}
 				}
-				if isFlexible {
-					SkipTags(&b)
-				}
+				v = a
+				s.Members = v
 			}
-			v = a
-			s.Groups = v
+			if version >= 3 {
+				v := b.Int32()
+				s.AuthorizedOperations = v
+			}
+			if isFlexible {
+				SkipTags(&b)
+			}
 		}
+		v = a
+		s.Groups = v
 	}
 	if isFlexible {
 		SkipTags(&b)
@@ -5326,46 +5222,42 @@ func (v *ListGroupsResponse) ReadFrom(src []byte) error {
 	isFlexible := version >= 3
 	_ = isFlexible
 	b := kbin.Reader{Src: src}
+	s := v
+	if version >= 1 {
+		v := b.Int32()
+		s.ThrottleMillis = v
+	}
 	{
-		s := v
-		if version >= 1 {
-			v := b.Int32()
-			s.ThrottleMillis = v
+		v := b.Int16()
+		s.ErrorCode = v
+	}
+	{
+		v := s.Groups
+		a := v
+		var i int32
+		if isFlexible {
+			i = b.CompactArrayLen()
+		} else {
+			i = b.ArrayLen()
 		}
-		{
-			v := b.Int16()
-			s.ErrorCode = v
-		}
-		{
-			v := s.Groups
-			a := v
-			var i int32
+		for ; i > 0; i-- {
+			a = append(a, ListGroupsResponseGroup{})
+			v := &a[len(a)-1]
+			s := v
+			{
+				v := b.String()
+				s.Group = v
+			}
+			{
+				v := b.String()
+				s.ProtocolType = v
+			}
 			if isFlexible {
-				i = b.CompactArrayLen()
-			} else {
-				i = b.ArrayLen()
+				SkipTags(&b)
 			}
-			for ; i > 0; i-- {
-				a = append(a, ListGroupsResponseGroup{})
-				v := &a[len(a)-1]
-				{
-					s := v
-					{
-						v := b.String()
-						s.Group = v
-					}
-					{
-						v := b.String()
-						s.ProtocolType = v
-					}
-				}
-				if isFlexible {
-					SkipTags(&b)
-				}
-			}
-			v = a
-			s.Groups = v
 		}
+		v = a
+		s.Groups = v
 	}
 	if isFlexible {
 		SkipTags(&b)
@@ -5428,22 +5320,20 @@ func (v *SASLHandshakeResponse) ReadFrom(src []byte) error {
 	version := v.Version
 	_ = version
 	b := kbin.Reader{Src: src}
+	s := v
 	{
-		s := v
-		{
-			v := b.Int16()
-			s.ErrorCode = v
+		v := b.Int16()
+		s.ErrorCode = v
+	}
+	{
+		v := s.SupportedMechanisms
+		a := v
+		for i := b.ArrayLen(); i > 0; i-- {
+			v := b.String()
+			a = append(a, v)
 		}
-		{
-			v := s.SupportedMechanisms
-			a := v
-			for i := b.ArrayLen(); i > 0; i-- {
-				v := b.String()
-				a = append(a, v)
-			}
-			v = a
-			s.SupportedMechanisms = v
-		}
+		v = a
+		s.SupportedMechanisms = v
 	}
 	return b.Complete()
 }
@@ -5548,50 +5438,46 @@ func (v *ApiVersionsResponse) ReadFrom(src []byte) error {
 	isFlexible := version >= 3
 	_ = isFlexible
 	b := kbin.Reader{Src: src}
+	s := v
 	{
-		s := v
-		{
-			v := b.Int16()
-			s.ErrorCode = v
+		v := b.Int16()
+		s.ErrorCode = v
+	}
+	{
+		v := s.ApiKeys
+		a := v
+		var i int32
+		if isFlexible {
+			i = b.CompactArrayLen()
+		} else {
+			i = b.ArrayLen()
 		}
-		{
-			v := s.ApiKeys
-			a := v
-			var i int32
+		for ; i > 0; i-- {
+			a = append(a, ApiVersionsResponseApiKey{})
+			v := &a[len(a)-1]
+			s := v
+			{
+				v := b.Int16()
+				s.ApiKey = v
+			}
+			{
+				v := b.Int16()
+				s.MinVersion = v
+			}
+			{
+				v := b.Int16()
+				s.MaxVersion = v
+			}
 			if isFlexible {
-				i = b.CompactArrayLen()
-			} else {
-				i = b.ArrayLen()
+				SkipTags(&b)
 			}
-			for ; i > 0; i-- {
-				a = append(a, ApiVersionsResponseApiKey{})
-				v := &a[len(a)-1]
-				{
-					s := v
-					{
-						v := b.Int16()
-						s.ApiKey = v
-					}
-					{
-						v := b.Int16()
-						s.MinVersion = v
-					}
-					{
-						v := b.Int16()
-						s.MaxVersion = v
-					}
-				}
-				if isFlexible {
-					SkipTags(&b)
-				}
-			}
-			v = a
-			s.ApiKeys = v
 		}
-		if version >= 1 {
-			v := b.Int32()
-			s.ThrottleMillis = v
-		}
+		v = a
+		s.ApiKeys = v
+	}
+	if version >= 1 {
+		v := b.Int32()
+		s.ThrottleMillis = v
 	}
 	if isFlexible {
 		SkipTags(&b)
@@ -5659,10 +5545,10 @@ type CreateTopicsRequest struct {
 }
 
 func (*CreateTopicsRequest) Key() int16                 { return 19 }
-func (*CreateTopicsRequest) MaxVersion() int16          { return 6 }
+func (*CreateTopicsRequest) MaxVersion() int16          { return 5 }
 func (v *CreateTopicsRequest) SetVersion(version int16) { v.Version = version }
 func (v *CreateTopicsRequest) GetVersion() int16        { return v.Version }
-func (v *CreateTopicsRequest) IsFlexible() bool         { return v.Version >= 6 }
+func (v *CreateTopicsRequest) IsFlexible() bool         { return v.Version >= 5 }
 func (v *CreateTopicsRequest) IsAdminRequest()          {}
 func (v *CreateTopicsRequest) ResponseKind() Response {
 	return &CreateTopicsResponse{Version: v.Version}
@@ -5671,7 +5557,7 @@ func (v *CreateTopicsRequest) ResponseKind() Response {
 func (v *CreateTopicsRequest) AppendTo(dst []byte) []byte {
 	version := v.Version
 	_ = version
-	isFlexible := version >= 6
+	isFlexible := version >= 5
 	_ = isFlexible
 	{
 		v := v.Topics
@@ -5825,7 +5711,10 @@ type CreateTopicsResponseTopic struct {
 	ErrorMessage *string // v1+
 
 	// ConfigErrorCode is non-zero if configs are unable to be returned.
-	ConfigErrorCode int16 // v5+
+	//
+	// This is the first tagged field, introduced in version 5. As such, it is
+	// only possible to be present in v5+.
+	ConfigErrorCode int16 // tag 0
 
 	// NumPartitions is how many partitions were created for this topic.
 	NumPartitions int32 // v5+
@@ -5855,106 +5744,109 @@ type CreateTopicsResponse struct {
 func (v *CreateTopicsResponse) ReadFrom(src []byte) error {
 	version := v.Version
 	_ = version
-	isFlexible := version >= 6
+	isFlexible := version >= 5
 	_ = isFlexible
 	b := kbin.Reader{Src: src}
+	s := v
+	if version >= 2 {
+		v := b.Int32()
+		s.ThrottleMillis = v
+	}
 	{
-		s := v
-		if version >= 2 {
-			v := b.Int32()
-			s.ThrottleMillis = v
+		v := s.Topics
+		a := v
+		var i int32
+		if isFlexible {
+			i = b.CompactArrayLen()
+		} else {
+			i = b.ArrayLen()
 		}
-		{
-			v := s.Topics
-			a := v
-			var i int32
-			if isFlexible {
-				i = b.CompactArrayLen()
-			} else {
-				i = b.ArrayLen()
+		for ; i > 0; i-- {
+			a = append(a, CreateTopicsResponseTopic{})
+			v := &a[len(a)-1]
+			s := v
+			{
+				v := b.String()
+				s.Topic = v
 			}
-			for ; i > 0; i-- {
-				a = append(a, CreateTopicsResponseTopic{})
-				v := &a[len(a)-1]
-				{
+			{
+				v := b.Int16()
+				s.ErrorCode = v
+			}
+			if version >= 1 {
+				v := b.NullableString()
+				s.ErrorMessage = v
+			}
+			if version >= 5 {
+				v := b.Int32()
+				s.NumPartitions = v
+			}
+			if version >= 5 {
+				v := b.Int16()
+				s.ReplicationFactor = v
+			}
+			if version >= 5 {
+				v := s.Configs
+				a := v
+				var i int32
+				if isFlexible {
+					i = b.CompactArrayLen()
+				} else {
+					i = b.ArrayLen()
+				}
+				if version < 0 || i == 0 {
+					a = []CreateTopicsResponseTopicConfig{}
+				}
+				for ; i > 0; i-- {
+					a = append(a, CreateTopicsResponseTopicConfig{})
+					v := &a[len(a)-1]
 					s := v
 					{
 						v := b.String()
-						s.Topic = v
+						s.Name = v
 					}
 					{
-						v := b.Int16()
-						s.ErrorCode = v
-					}
-					if version >= 1 {
 						v := b.NullableString()
-						s.ErrorMessage = v
+						s.Value = v
 					}
-					if version >= 5 {
+					{
+						v := b.Bool()
+						s.ReadOnly = v
+					}
+					{
+						v := b.Int8()
+						s.Source = v
+					}
+					{
+						v := b.Bool()
+						s.IsSensitive = v
+					}
+					if isFlexible {
+						SkipTags(&b)
+					}
+				}
+				v = a
+				s.Configs = v
+			}
+			if isFlexible {
+				for i := b.Uvarint(); i > 0; i-- {
+					tag, size := b.Uvarint(), int(b.Uvarint())
+					switch tag {
+					default:
+						b.Span(size)
+					case 0:
+						b := kbin.Reader{Src: b.Span(size)}
 						v := b.Int16()
 						s.ConfigErrorCode = v
-					}
-					if version >= 5 {
-						v := b.Int32()
-						s.NumPartitions = v
-					}
-					if version >= 5 {
-						v := b.Int16()
-						s.ReplicationFactor = v
-					}
-					if version >= 5 {
-						v := s.Configs
-						a := v
-						var i int32
-						if isFlexible {
-							i = b.CompactArrayLen()
-						} else {
-							i = b.ArrayLen()
+						if err := b.Complete(); err != nil {
+							return err
 						}
-						if version < 0 || i == 0 {
-							a = []CreateTopicsResponseTopicConfig{}
-						}
-						for ; i > 0; i-- {
-							a = append(a, CreateTopicsResponseTopicConfig{})
-							v := &a[len(a)-1]
-							{
-								s := v
-								{
-									v := b.String()
-									s.Name = v
-								}
-								{
-									v := b.NullableString()
-									s.Value = v
-								}
-								{
-									v := b.Bool()
-									s.ReadOnly = v
-								}
-								{
-									v := b.Int8()
-									s.Source = v
-								}
-								{
-									v := b.Bool()
-									s.IsSensitive = v
-								}
-							}
-							if isFlexible {
-								SkipTags(&b)
-							}
-						}
-						v = a
-						s.Configs = v
 					}
-				}
-				if isFlexible {
-					SkipTags(&b)
 				}
 			}
-			v = a
-			s.Topics = v
 		}
+		v = a
+		s.Topics = v
 	}
 	if isFlexible {
 		SkipTags(&b)
@@ -6057,42 +5949,38 @@ func (v *DeleteTopicsResponse) ReadFrom(src []byte) error {
 	isFlexible := version >= 4
 	_ = isFlexible
 	b := kbin.Reader{Src: src}
+	s := v
+	if version >= 1 {
+		v := b.Int32()
+		s.ThrottleMillis = v
+	}
 	{
-		s := v
-		if version >= 1 {
-			v := b.Int32()
-			s.ThrottleMillis = v
+		v := s.Topics
+		a := v
+		var i int32
+		if isFlexible {
+			i = b.CompactArrayLen()
+		} else {
+			i = b.ArrayLen()
 		}
-		{
-			v := s.Topics
-			a := v
-			var i int32
+		for ; i > 0; i-- {
+			a = append(a, DeleteTopicsResponseTopic{})
+			v := &a[len(a)-1]
+			s := v
+			{
+				v := b.String()
+				s.Topic = v
+			}
+			{
+				v := b.Int16()
+				s.ErrorCode = v
+			}
 			if isFlexible {
-				i = b.CompactArrayLen()
-			} else {
-				i = b.ArrayLen()
+				SkipTags(&b)
 			}
-			for ; i > 0; i-- {
-				a = append(a, DeleteTopicsResponseTopic{})
-				v := &a[len(a)-1]
-				{
-					s := v
-					{
-						v := b.String()
-						s.Topic = v
-					}
-					{
-						v := b.Int16()
-						s.ErrorCode = v
-					}
-				}
-				if isFlexible {
-					SkipTags(&b)
-				}
-			}
-			v = a
-			s.Topics = v
 		}
+		v = a
+		s.Topics = v
 	}
 	if isFlexible {
 		SkipTags(&b)
@@ -6243,54 +6131,48 @@ func (v *DeleteRecordsResponse) ReadFrom(src []byte) error {
 	version := v.Version
 	_ = version
 	b := kbin.Reader{Src: src}
+	s := v
 	{
-		s := v
-		{
-			v := b.Int32()
-			s.ThrottleMillis = v
-		}
-		{
-			v := s.Topics
-			a := v
-			for i := b.ArrayLen(); i > 0; i-- {
-				a = append(a, DeleteRecordsResponseTopic{})
-				v := &a[len(a)-1]
-				{
+		v := b.Int32()
+		s.ThrottleMillis = v
+	}
+	{
+		v := s.Topics
+		a := v
+		for i := b.ArrayLen(); i > 0; i-- {
+			a = append(a, DeleteRecordsResponseTopic{})
+			v := &a[len(a)-1]
+			s := v
+			{
+				v := b.String()
+				s.Topic = v
+			}
+			{
+				v := s.Partitions
+				a := v
+				for i := b.ArrayLen(); i > 0; i-- {
+					a = append(a, DeleteRecordsResponseTopicPartition{})
+					v := &a[len(a)-1]
 					s := v
 					{
-						v := b.String()
-						s.Topic = v
+						v := b.Int32()
+						s.Partition = v
 					}
 					{
-						v := s.Partitions
-						a := v
-						for i := b.ArrayLen(); i > 0; i-- {
-							a = append(a, DeleteRecordsResponseTopicPartition{})
-							v := &a[len(a)-1]
-							{
-								s := v
-								{
-									v := b.Int32()
-									s.Partition = v
-								}
-								{
-									v := b.Int64()
-									s.LowWatermark = v
-								}
-								{
-									v := b.Int16()
-									s.ErrorCode = v
-								}
-							}
-						}
-						v = a
-						s.Partitions = v
+						v := b.Int64()
+						s.LowWatermark = v
+					}
+					{
+						v := b.Int16()
+						s.ErrorCode = v
 					}
 				}
+				v = a
+				s.Partitions = v
 			}
-			v = a
-			s.Topics = v
 		}
+		v = a
+		s.Topics = v
 	}
 	return b.Complete()
 }
@@ -6370,24 +6252,22 @@ func (v *InitProducerIDResponse) ReadFrom(src []byte) error {
 	isFlexible := version >= 2
 	_ = isFlexible
 	b := kbin.Reader{Src: src}
+	s := v
 	{
-		s := v
-		{
-			v := b.Int32()
-			s.ThrottleMillis = v
-		}
-		{
-			v := b.Int16()
-			s.ErrorCode = v
-		}
-		{
-			v := b.Int64()
-			s.ProducerID = v
-		}
-		{
-			v := b.Int16()
-			s.ProducerEpoch = v
-		}
+		v := b.Int32()
+		s.ThrottleMillis = v
+	}
+	{
+		v := b.Int16()
+		s.ErrorCode = v
+	}
+	{
+		v := b.Int64()
+		s.ProducerID = v
+	}
+	{
+		v := b.Int16()
+		s.ProducerEpoch = v
 	}
 	if isFlexible {
 		SkipTags(&b)
@@ -6558,58 +6438,52 @@ func (v *OffsetForLeaderEpochResponse) ReadFrom(src []byte) error {
 	version := v.Version
 	_ = version
 	b := kbin.Reader{Src: src}
+	s := v
+	if version >= 2 {
+		v := b.Int32()
+		s.ThrottleMillis = v
+	}
 	{
-		s := v
-		if version >= 2 {
-			v := b.Int32()
-			s.ThrottleMillis = v
-		}
-		{
-			v := s.Topics
-			a := v
-			for i := b.ArrayLen(); i > 0; i-- {
-				a = append(a, OffsetForLeaderEpochResponseTopic{})
-				v := &a[len(a)-1]
-				{
+		v := s.Topics
+		a := v
+		for i := b.ArrayLen(); i > 0; i-- {
+			a = append(a, OffsetForLeaderEpochResponseTopic{})
+			v := &a[len(a)-1]
+			s := v
+			{
+				v := b.String()
+				s.Topic = v
+			}
+			{
+				v := s.Partitions
+				a := v
+				for i := b.ArrayLen(); i > 0; i-- {
+					a = append(a, OffsetForLeaderEpochResponseTopicPartition{})
+					v := &a[len(a)-1]
 					s := v
 					{
-						v := b.String()
-						s.Topic = v
+						v := b.Int16()
+						s.ErrorCode = v
 					}
 					{
-						v := s.Partitions
-						a := v
-						for i := b.ArrayLen(); i > 0; i-- {
-							a = append(a, OffsetForLeaderEpochResponseTopicPartition{})
-							v := &a[len(a)-1]
-							{
-								s := v
-								{
-									v := b.Int16()
-									s.ErrorCode = v
-								}
-								{
-									v := b.Int32()
-									s.Partition = v
-								}
-								{
-									v := b.Int32()
-									s.LeaderEpoch = v
-								}
-								{
-									v := b.Int64()
-									s.EndOffset = v
-								}
-							}
-						}
-						v = a
-						s.Partitions = v
+						v := b.Int32()
+						s.Partition = v
+					}
+					{
+						v := b.Int32()
+						s.LeaderEpoch = v
+					}
+					{
+						v := b.Int64()
+						s.EndOffset = v
 					}
 				}
+				v = a
+				s.Partitions = v
 			}
-			v = a
-			s.Topics = v
 		}
+		v = a
+		s.Topics = v
 	}
 	return b.Complete()
 }
@@ -6704,50 +6578,44 @@ func (v *AddPartitionsToTxnResponse) ReadFrom(src []byte) error {
 	version := v.Version
 	_ = version
 	b := kbin.Reader{Src: src}
+	s := v
 	{
-		s := v
-		{
-			v := b.Int32()
-			s.ThrottleMillis = v
-		}
-		{
-			v := s.Topics
-			a := v
-			for i := b.ArrayLen(); i > 0; i-- {
-				a = append(a, AddPartitionsToTxnResponseTopic{})
-				v := &a[len(a)-1]
-				{
+		v := b.Int32()
+		s.ThrottleMillis = v
+	}
+	{
+		v := s.Topics
+		a := v
+		for i := b.ArrayLen(); i > 0; i-- {
+			a = append(a, AddPartitionsToTxnResponseTopic{})
+			v := &a[len(a)-1]
+			s := v
+			{
+				v := b.String()
+				s.Topic = v
+			}
+			{
+				v := s.Partitions
+				a := v
+				for i := b.ArrayLen(); i > 0; i-- {
+					a = append(a, AddPartitionsToTxnResponseTopicPartition{})
+					v := &a[len(a)-1]
 					s := v
 					{
-						v := b.String()
-						s.Topic = v
+						v := b.Int32()
+						s.Partition = v
 					}
 					{
-						v := s.Partitions
-						a := v
-						for i := b.ArrayLen(); i > 0; i-- {
-							a = append(a, AddPartitionsToTxnResponseTopicPartition{})
-							v := &a[len(a)-1]
-							{
-								s := v
-								{
-									v := b.Int32()
-									s.Partition = v
-								}
-								{
-									v := b.Int16()
-									s.ErrorCode = v
-								}
-							}
-						}
-						v = a
-						s.Partitions = v
+						v := b.Int16()
+						s.ErrorCode = v
 					}
 				}
+				v = a
+				s.Partitions = v
 			}
-			v = a
-			s.Topics = v
 		}
+		v = a
+		s.Topics = v
 	}
 	return b.Complete()
 }
@@ -6810,16 +6678,14 @@ func (v *AddOffsetsToTxnResponse) ReadFrom(src []byte) error {
 	version := v.Version
 	_ = version
 	b := kbin.Reader{Src: src}
+	s := v
 	{
-		s := v
-		{
-			v := b.Int32()
-			s.ThrottleMillis = v
-		}
-		{
-			v := b.Int16()
-			s.ErrorCode = v
-		}
+		v := b.Int32()
+		s.ThrottleMillis = v
+	}
+	{
+		v := b.Int16()
+		s.ErrorCode = v
 	}
 	return b.Complete()
 }
@@ -6880,16 +6746,14 @@ func (v *EndTxnResponse) ReadFrom(src []byte) error {
 	version := v.Version
 	_ = version
 	b := kbin.Reader{Src: src}
+	s := v
 	{
-		s := v
-		{
-			v := b.Int32()
-			s.ThrottleMillis = v
-		}
-		{
-			v := b.Int16()
-			s.ErrorCode = v
-		}
+		v := b.Int32()
+		s.ThrottleMillis = v
+	}
+	{
+		v := b.Int16()
+		s.ErrorCode = v
 	}
 	return b.Complete()
 }
@@ -7000,63 +6864,55 @@ func (v *WriteTxnMarkersResponse) ReadFrom(src []byte) error {
 	version := v.Version
 	_ = version
 	b := kbin.Reader{Src: src}
+	s := v
 	{
-		s := v
-		{
-			v := s.Markers
-			a := v
-			for i := b.ArrayLen(); i > 0; i-- {
-				a = append(a, WriteTxnMarkersResponseMarker{})
-				v := &a[len(a)-1]
-				{
+		v := s.Markers
+		a := v
+		for i := b.ArrayLen(); i > 0; i-- {
+			a = append(a, WriteTxnMarkersResponseMarker{})
+			v := &a[len(a)-1]
+			s := v
+			{
+				v := b.Int64()
+				s.ProducerID = v
+			}
+			{
+				v := s.Topics
+				a := v
+				for i := b.ArrayLen(); i > 0; i-- {
+					a = append(a, WriteTxnMarkersResponseMarkerTopic{})
+					v := &a[len(a)-1]
 					s := v
 					{
-						v := b.Int64()
-						s.ProducerID = v
+						v := b.String()
+						s.Topic = v
 					}
 					{
-						v := s.Topics
+						v := s.Partitions
 						a := v
 						for i := b.ArrayLen(); i > 0; i-- {
-							a = append(a, WriteTxnMarkersResponseMarkerTopic{})
+							a = append(a, WriteTxnMarkersResponseMarkerTopicPartition{})
 							v := &a[len(a)-1]
+							s := v
 							{
-								s := v
-								{
-									v := b.String()
-									s.Topic = v
-								}
-								{
-									v := s.Partitions
-									a := v
-									for i := b.ArrayLen(); i > 0; i-- {
-										a = append(a, WriteTxnMarkersResponseMarkerTopicPartition{})
-										v := &a[len(a)-1]
-										{
-											s := v
-											{
-												v := b.Int32()
-												s.Partition = v
-											}
-											{
-												v := b.Int16()
-												s.ErrorCode = v
-											}
-										}
-									}
-									v = a
-									s.Partitions = v
-								}
+								v := b.Int32()
+								s.Partition = v
+							}
+							{
+								v := b.Int16()
+								s.ErrorCode = v
 							}
 						}
 						v = a
-						s.Topics = v
+						s.Partitions = v
 					}
 				}
+				v = a
+				s.Topics = v
 			}
-			v = a
-			s.Markers = v
 		}
+		v = a
+		s.Markers = v
 	}
 	return b.Complete()
 }
@@ -7185,50 +7041,44 @@ func (v *TxnOffsetCommitResponse) ReadFrom(src []byte) error {
 	version := v.Version
 	_ = version
 	b := kbin.Reader{Src: src}
+	s := v
 	{
-		s := v
-		{
-			v := b.Int32()
-			s.ThrottleMillis = v
-		}
-		{
-			v := s.Topics
-			a := v
-			for i := b.ArrayLen(); i > 0; i-- {
-				a = append(a, TxnOffsetCommitResponseTopic{})
-				v := &a[len(a)-1]
-				{
+		v := b.Int32()
+		s.ThrottleMillis = v
+	}
+	{
+		v := s.Topics
+		a := v
+		for i := b.ArrayLen(); i > 0; i-- {
+			a = append(a, TxnOffsetCommitResponseTopic{})
+			v := &a[len(a)-1]
+			s := v
+			{
+				v := b.String()
+				s.Topic = v
+			}
+			{
+				v := s.Partitions
+				a := v
+				for i := b.ArrayLen(); i > 0; i-- {
+					a = append(a, TxnOffsetCommitResponseTopicPartition{})
+					v := &a[len(a)-1]
 					s := v
 					{
-						v := b.String()
-						s.Topic = v
+						v := b.Int32()
+						s.Partition = v
 					}
 					{
-						v := s.Partitions
-						a := v
-						for i := b.ArrayLen(); i > 0; i-- {
-							a = append(a, TxnOffsetCommitResponseTopicPartition{})
-							v := &a[len(a)-1]
-							{
-								s := v
-								{
-									v := b.Int32()
-									s.Partition = v
-								}
-								{
-									v := b.Int16()
-									s.ErrorCode = v
-								}
-							}
-						}
-						v = a
-						s.Partitions = v
+						v := b.Int16()
+						s.ErrorCode = v
 					}
 				}
+				v = a
+				s.Partitions = v
 			}
-			v = a
-			s.Topics = v
 		}
+		v = a
+		s.Topics = v
 	}
 	return b.Complete()
 }
@@ -7379,74 +7229,68 @@ func (v *DescribeACLsResponse) ReadFrom(src []byte) error {
 	version := v.Version
 	_ = version
 	b := kbin.Reader{Src: src}
+	s := v
 	{
-		s := v
-		{
-			v := b.Int32()
-			s.ThrottleMillis = v
-		}
-		{
-			v := b.Int16()
-			s.ErrorCode = v
-		}
-		{
-			v := b.NullableString()
-			s.ErrorMessage = v
-		}
-		{
-			v := s.Resources
-			a := v
-			for i := b.ArrayLen(); i > 0; i-- {
-				a = append(a, DescribeACLsResponseResource{})
-				v := &a[len(a)-1]
-				{
+		v := b.Int32()
+		s.ThrottleMillis = v
+	}
+	{
+		v := b.Int16()
+		s.ErrorCode = v
+	}
+	{
+		v := b.NullableString()
+		s.ErrorMessage = v
+	}
+	{
+		v := s.Resources
+		a := v
+		for i := b.ArrayLen(); i > 0; i-- {
+			a = append(a, DescribeACLsResponseResource{})
+			v := &a[len(a)-1]
+			s := v
+			{
+				v := b.Int8()
+				s.ResourceType = v
+			}
+			{
+				v := b.String()
+				s.ResourceName = v
+			}
+			if version >= 1 {
+				v := b.Int8()
+				s.ResourcePatternType = v
+			}
+			{
+				v := s.ACLs
+				a := v
+				for i := b.ArrayLen(); i > 0; i-- {
+					a = append(a, DescribeACLsResponseResourceACL{})
+					v := &a[len(a)-1]
 					s := v
 					{
-						v := b.Int8()
-						s.ResourceType = v
+						v := b.String()
+						s.Principal = v
 					}
 					{
 						v := b.String()
-						s.ResourceName = v
-					}
-					if version >= 1 {
-						v := b.Int8()
-						s.ResourcePatternType = v
+						s.Host = v
 					}
 					{
-						v := s.ACLs
-						a := v
-						for i := b.ArrayLen(); i > 0; i-- {
-							a = append(a, DescribeACLsResponseResourceACL{})
-							v := &a[len(a)-1]
-							{
-								s := v
-								{
-									v := b.String()
-									s.Principal = v
-								}
-								{
-									v := b.String()
-									s.Host = v
-								}
-								{
-									v := b.Int8()
-									s.Operation = v
-								}
-								{
-									v := b.Int8()
-									s.PermissionType = v
-								}
-							}
-						}
-						v = a
-						s.ACLs = v
+						v := b.Int8()
+						s.Operation = v
+					}
+					{
+						v := b.Int8()
+						s.PermissionType = v
 					}
 				}
+				v = a
+				s.ACLs = v
 			}
-			v = a
-			s.Resources = v
 		}
+		v = a
+		s.Resources = v
 	}
 	return b.Complete()
 }
@@ -7540,33 +7384,29 @@ func (v *CreateACLsResponse) ReadFrom(src []byte) error {
 	version := v.Version
 	_ = version
 	b := kbin.Reader{Src: src}
+	s := v
 	{
-		s := v
-		{
-			v := b.Int32()
-			s.ThrottleMillis = v
-		}
-		{
-			v := s.CreationResponses
-			a := v
-			for i := b.ArrayLen(); i > 0; i-- {
-				a = append(a, CreateACLsResponseCreationResponse{})
-				v := &a[len(a)-1]
-				{
-					s := v
-					{
-						v := b.Int16()
-						s.ErrorCode = v
-					}
-					{
-						v := b.NullableString()
-						s.ErrorMessage = v
-					}
-				}
+		v := b.Int32()
+		s.ThrottleMillis = v
+	}
+	{
+		v := s.CreationResponses
+		a := v
+		for i := b.ArrayLen(); i > 0; i-- {
+			a = append(a, CreateACLsResponseCreationResponse{})
+			v := &a[len(a)-1]
+			s := v
+			{
+				v := b.Int16()
+				s.ErrorCode = v
 			}
-			v = a
-			s.CreationResponses = v
+			{
+				v := b.NullableString()
+				s.ErrorMessage = v
+			}
 		}
+		v = a
+		s.CreationResponses = v
 	}
 	return b.Complete()
 }
@@ -7681,19 +7521,32 @@ func (v *DeleteACLsResponse) ReadFrom(src []byte) error {
 	version := v.Version
 	_ = version
 	b := kbin.Reader{Src: src}
+	s := v
 	{
-		s := v
-		{
-			v := b.Int32()
-			s.ThrottleMillis = v
-		}
-		{
-			v := s.FilterResponses
-			a := v
-			for i := b.ArrayLen(); i > 0; i-- {
-				a = append(a, DeleteACLsResponseFilterResponse{})
-				v := &a[len(a)-1]
-				{
+		v := b.Int32()
+		s.ThrottleMillis = v
+	}
+	{
+		v := s.FilterResponses
+		a := v
+		for i := b.ArrayLen(); i > 0; i-- {
+			a = append(a, DeleteACLsResponseFilterResponse{})
+			v := &a[len(a)-1]
+			s := v
+			{
+				v := b.Int16()
+				s.ErrorCode = v
+			}
+			{
+				v := b.NullableString()
+				s.ErrorMessage = v
+			}
+			{
+				v := s.MatchingACLs
+				a := v
+				for i := b.ArrayLen(); i > 0; i-- {
+					a = append(a, DeleteACLsResponseFilterResponseMatchingACL{})
+					v := &a[len(a)-1]
 					s := v
 					{
 						v := b.Int16()
@@ -7704,59 +7557,40 @@ func (v *DeleteACLsResponse) ReadFrom(src []byte) error {
 						s.ErrorMessage = v
 					}
 					{
-						v := s.MatchingACLs
-						a := v
-						for i := b.ArrayLen(); i > 0; i-- {
-							a = append(a, DeleteACLsResponseFilterResponseMatchingACL{})
-							v := &a[len(a)-1]
-							{
-								s := v
-								{
-									v := b.Int16()
-									s.ErrorCode = v
-								}
-								{
-									v := b.NullableString()
-									s.ErrorMessage = v
-								}
-								{
-									v := b.Int8()
-									s.ResourceType = v
-								}
-								{
-									v := b.String()
-									s.ResourceName = v
-								}
-								if version >= 1 {
-									v := b.Int8()
-									s.ResourcePatternType = v
-								}
-								{
-									v := b.String()
-									s.Principal = v
-								}
-								{
-									v := b.String()
-									s.Host = v
-								}
-								{
-									v := b.Int8()
-									s.Operation = v
-								}
-								{
-									v := b.Int8()
-									s.PermissionType = v
-								}
-							}
-						}
-						v = a
-						s.MatchingACLs = v
+						v := b.Int8()
+						s.ResourceType = v
+					}
+					{
+						v := b.String()
+						s.ResourceName = v
+					}
+					if version >= 1 {
+						v := b.Int8()
+						s.ResourcePatternType = v
+					}
+					{
+						v := b.String()
+						s.Principal = v
+					}
+					{
+						v := b.String()
+						s.Host = v
+					}
+					{
+						v := b.Int8()
+						s.Operation = v
+					}
+					{
+						v := b.Int8()
+						s.PermissionType = v
 					}
 				}
+				v = a
+				s.MatchingACLs = v
 			}
-			v = a
-			s.FilterResponses = v
 		}
+		v = a
+		s.FilterResponses = v
 	}
 	return b.Complete()
 }
@@ -7936,103 +7770,95 @@ func (v *DescribeConfigsResponse) ReadFrom(src []byte) error {
 	version := v.Version
 	_ = version
 	b := kbin.Reader{Src: src}
+	s := v
 	{
-		s := v
-		{
-			v := b.Int32()
-			s.ThrottleMillis = v
-		}
-		{
-			v := s.Resources
-			a := v
-			for i := b.ArrayLen(); i > 0; i-- {
-				a = append(a, DescribeConfigsResponseResource{})
-				v := &a[len(a)-1]
-				{
+		v := b.Int32()
+		s.ThrottleMillis = v
+	}
+	{
+		v := s.Resources
+		a := v
+		for i := b.ArrayLen(); i > 0; i-- {
+			a = append(a, DescribeConfigsResponseResource{})
+			v := &a[len(a)-1]
+			s := v
+			{
+				v := b.Int16()
+				s.ErrorCode = v
+			}
+			{
+				v := b.NullableString()
+				s.ErrorMessage = v
+			}
+			{
+				v := b.Int8()
+				s.ResourceType = v
+			}
+			{
+				v := b.String()
+				s.ResourceName = v
+			}
+			{
+				v := s.Configs
+				a := v
+				for i := b.ArrayLen(); i > 0; i-- {
+					a = append(a, DescribeConfigsResponseResourceConfig{})
+					v := &a[len(a)-1]
 					s := v
 					{
-						v := b.Int16()
-						s.ErrorCode = v
+						v := b.String()
+						s.Name = v
 					}
 					{
 						v := b.NullableString()
-						s.ErrorMessage = v
+						s.Value = v
 					}
 					{
+						v := b.Bool()
+						s.ReadOnly = v
+					}
+					if version >= 0 && version <= 0 {
+						v := b.Bool()
+						s.IsDefault = v
+					}
+					if version >= 1 {
 						v := b.Int8()
-						s.ResourceType = v
+						s.Source = v
 					}
 					{
-						v := b.String()
-						s.ResourceName = v
+						v := b.Bool()
+						s.IsSensitive = v
 					}
-					{
-						v := s.Configs
+					if version >= 1 {
+						v := s.ConfigSynonyms
 						a := v
 						for i := b.ArrayLen(); i > 0; i-- {
-							a = append(a, DescribeConfigsResponseResourceConfig{})
+							a = append(a, DescribeConfigsResponseResourceConfigConfigSynonym{})
 							v := &a[len(a)-1]
+							s := v
 							{
-								s := v
-								{
-									v := b.String()
-									s.Name = v
-								}
-								{
-									v := b.NullableString()
-									s.Value = v
-								}
-								{
-									v := b.Bool()
-									s.ReadOnly = v
-								}
-								if version >= 0 && version <= 0 {
-									v := b.Bool()
-									s.IsDefault = v
-								}
-								if version >= 1 {
-									v := b.Int8()
-									s.Source = v
-								}
-								{
-									v := b.Bool()
-									s.IsSensitive = v
-								}
-								if version >= 1 {
-									v := s.ConfigSynonyms
-									a := v
-									for i := b.ArrayLen(); i > 0; i-- {
-										a = append(a, DescribeConfigsResponseResourceConfigConfigSynonym{})
-										v := &a[len(a)-1]
-										{
-											s := v
-											{
-												v := b.String()
-												s.Name = v
-											}
-											{
-												v := b.NullableString()
-												s.Value = v
-											}
-											{
-												v := b.Int8()
-												s.Source = v
-											}
-										}
-									}
-									v = a
-									s.ConfigSynonyms = v
-								}
+								v := b.String()
+								s.Name = v
+							}
+							{
+								v := b.NullableString()
+								s.Value = v
+							}
+							{
+								v := b.Int8()
+								s.Source = v
 							}
 						}
 						v = a
-						s.Configs = v
+						s.ConfigSynonyms = v
 					}
 				}
+				v = a
+				s.Configs = v
 			}
-			v = a
-			s.Resources = v
 		}
+		v = a
+		s.Resources = v
 	}
 	return b.Complete()
 }
@@ -8192,41 +8018,37 @@ func (v *AlterConfigsResponse) ReadFrom(src []byte) error {
 	version := v.Version
 	_ = version
 	b := kbin.Reader{Src: src}
+	s := v
 	{
-		s := v
-		{
-			v := b.Int32()
-			s.ThrottleMillis = v
-		}
-		{
-			v := s.Resources
-			a := v
-			for i := b.ArrayLen(); i > 0; i-- {
-				a = append(a, AlterConfigsResponseResource{})
-				v := &a[len(a)-1]
-				{
-					s := v
-					{
-						v := b.Int16()
-						s.ErrorCode = v
-					}
-					{
-						v := b.NullableString()
-						s.ErrorMessage = v
-					}
-					{
-						v := b.Int8()
-						s.ResourceType = v
-					}
-					{
-						v := b.String()
-						s.ResourceName = v
-					}
-				}
+		v := b.Int32()
+		s.ThrottleMillis = v
+	}
+	{
+		v := s.Resources
+		a := v
+		for i := b.ArrayLen(); i > 0; i-- {
+			a = append(a, AlterConfigsResponseResource{})
+			v := &a[len(a)-1]
+			s := v
+			{
+				v := b.Int16()
+				s.ErrorCode = v
 			}
-			v = a
-			s.Resources = v
+			{
+				v := b.NullableString()
+				s.ErrorMessage = v
+			}
+			{
+				v := b.Int8()
+				s.ResourceType = v
+			}
+			{
+				v := b.String()
+				s.ResourceName = v
+			}
 		}
+		v = a
+		s.Resources = v
 	}
 	return b.Complete()
 }
@@ -8351,50 +8173,44 @@ func (v *AlterReplicaLogDirsResponse) ReadFrom(src []byte) error {
 	version := v.Version
 	_ = version
 	b := kbin.Reader{Src: src}
+	s := v
 	{
-		s := v
-		{
-			v := b.Int32()
-			s.ThrottleMillis = v
-		}
-		{
-			v := s.Topics
-			a := v
-			for i := b.ArrayLen(); i > 0; i-- {
-				a = append(a, AlterReplicaLogDirsResponseTopic{})
-				v := &a[len(a)-1]
-				{
+		v := b.Int32()
+		s.ThrottleMillis = v
+	}
+	{
+		v := s.Topics
+		a := v
+		for i := b.ArrayLen(); i > 0; i-- {
+			a = append(a, AlterReplicaLogDirsResponseTopic{})
+			v := &a[len(a)-1]
+			s := v
+			{
+				v := b.String()
+				s.Topic = v
+			}
+			{
+				v := s.Partitions
+				a := v
+				for i := b.ArrayLen(); i > 0; i-- {
+					a = append(a, AlterReplicaLogDirsResponseTopicPartition{})
+					v := &a[len(a)-1]
 					s := v
 					{
-						v := b.String()
-						s.Topic = v
+						v := b.Int32()
+						s.Partition = v
 					}
 					{
-						v := s.Partitions
-						a := v
-						for i := b.ArrayLen(); i > 0; i-- {
-							a = append(a, AlterReplicaLogDirsResponseTopicPartition{})
-							v := &a[len(a)-1]
-							{
-								s := v
-								{
-									v := b.Int32()
-									s.Partition = v
-								}
-								{
-									v := b.Int16()
-									s.ErrorCode = v
-								}
-							}
-						}
-						v = a
-						s.Partitions = v
+						v := b.Int16()
+						s.ErrorCode = v
 					}
 				}
+				v = a
+				s.Partitions = v
 			}
-			v = a
-			s.Topics = v
 		}
+		v = a
+		s.Topics = v
 	}
 	return b.Complete()
 }
@@ -8518,79 +8334,71 @@ func (v *DescribeLogDirsResponse) ReadFrom(src []byte) error {
 	version := v.Version
 	_ = version
 	b := kbin.Reader{Src: src}
+	s := v
 	{
-		s := v
-		{
-			v := b.Int32()
-			s.ThrottleMillis = v
-		}
-		{
-			v := s.Dirs
-			a := v
-			for i := b.ArrayLen(); i > 0; i-- {
-				a = append(a, DescribeLogDirsResponseDir{})
-				v := &a[len(a)-1]
-				{
+		v := b.Int32()
+		s.ThrottleMillis = v
+	}
+	{
+		v := s.Dirs
+		a := v
+		for i := b.ArrayLen(); i > 0; i-- {
+			a = append(a, DescribeLogDirsResponseDir{})
+			v := &a[len(a)-1]
+			s := v
+			{
+				v := b.Int16()
+				s.ErrorCode = v
+			}
+			{
+				v := b.String()
+				s.Dir = v
+			}
+			{
+				v := s.Topics
+				a := v
+				for i := b.ArrayLen(); i > 0; i-- {
+					a = append(a, DescribeLogDirsResponseDirTopic{})
+					v := &a[len(a)-1]
 					s := v
 					{
-						v := b.Int16()
-						s.ErrorCode = v
-					}
-					{
 						v := b.String()
-						s.Dir = v
+						s.Topic = v
 					}
 					{
-						v := s.Topics
+						v := s.Partitions
 						a := v
 						for i := b.ArrayLen(); i > 0; i-- {
-							a = append(a, DescribeLogDirsResponseDirTopic{})
+							a = append(a, DescribeLogDirsResponseDirTopicPartition{})
 							v := &a[len(a)-1]
+							s := v
 							{
-								s := v
-								{
-									v := b.String()
-									s.Topic = v
-								}
-								{
-									v := s.Partitions
-									a := v
-									for i := b.ArrayLen(); i > 0; i-- {
-										a = append(a, DescribeLogDirsResponseDirTopicPartition{})
-										v := &a[len(a)-1]
-										{
-											s := v
-											{
-												v := b.Int32()
-												s.Partition = v
-											}
-											{
-												v := b.Int64()
-												s.Size = v
-											}
-											{
-												v := b.Int64()
-												s.OffsetLag = v
-											}
-											{
-												v := b.Bool()
-												s.IsFuture = v
-											}
-										}
-									}
-									v = a
-									s.Partitions = v
-								}
+								v := b.Int32()
+								s.Partition = v
+							}
+							{
+								v := b.Int64()
+								s.Size = v
+							}
+							{
+								v := b.Int64()
+								s.OffsetLag = v
+							}
+							{
+								v := b.Bool()
+								s.IsFuture = v
 							}
 						}
 						v = a
-						s.Topics = v
+						s.Partitions = v
 					}
 				}
+				v = a
+				s.Topics = v
 			}
-			v = a
-			s.Dirs = v
 		}
+		v = a
+		s.Dirs = v
 	}
 	return b.Complete()
 }
@@ -8639,24 +8447,22 @@ func (v *SASLAuthenticateResponse) ReadFrom(src []byte) error {
 	version := v.Version
 	_ = version
 	b := kbin.Reader{Src: src}
+	s := v
 	{
-		s := v
-		{
-			v := b.Int16()
-			s.ErrorCode = v
-		}
-		{
-			v := b.NullableString()
-			s.ErrorMessage = v
-		}
-		{
-			v := b.Bytes()
-			s.SASLAuthBytes = v
-		}
-		if version >= 1 {
-			v := b.Int64()
-			s.SessionLifetimeMs = v
-		}
+		v := b.Int16()
+		s.ErrorCode = v
+	}
+	{
+		v := b.NullableString()
+		s.ErrorMessage = v
+	}
+	{
+		v := b.Bytes()
+		s.SASLAuthBytes = v
+	}
+	if version >= 1 {
+		v := b.Int64()
+		s.SessionLifetimeMs = v
 	}
 	return b.Complete()
 }
@@ -8809,37 +8615,33 @@ func (v *CreatePartitionsResponse) ReadFrom(src []byte) error {
 	version := v.Version
 	_ = version
 	b := kbin.Reader{Src: src}
+	s := v
 	{
-		s := v
-		{
-			v := b.Int32()
-			s.ThrottleMillis = v
-		}
-		{
-			v := s.Topics
-			a := v
-			for i := b.ArrayLen(); i > 0; i-- {
-				a = append(a, CreatePartitionsResponseTopic{})
-				v := &a[len(a)-1]
-				{
-					s := v
-					{
-						v := b.String()
-						s.Topic = v
-					}
-					{
-						v := b.Int16()
-						s.ErrorCode = v
-					}
-					{
-						v := b.NullableString()
-						s.ErrorMessage = v
-					}
-				}
+		v := b.Int32()
+		s.ThrottleMillis = v
+	}
+	{
+		v := s.Topics
+		a := v
+		for i := b.ArrayLen(); i > 0; i-- {
+			a = append(a, CreatePartitionsResponseTopic{})
+			v := &a[len(a)-1]
+			s := v
+			{
+				v := b.String()
+				s.Topic = v
 			}
-			v = a
-			s.Topics = v
+			{
+				v := b.Int16()
+				s.ErrorCode = v
+			}
+			{
+				v := b.NullableString()
+				s.ErrorMessage = v
+			}
 		}
+		v = a
+		s.Topics = v
 	}
 	return b.Complete()
 }
@@ -8936,44 +8738,42 @@ func (v *CreateDelegationTokenResponse) ReadFrom(src []byte) error {
 	isFlexible := version >= 2
 	_ = isFlexible
 	b := kbin.Reader{Src: src}
+	s := v
 	{
-		s := v
-		{
-			v := b.Int16()
-			s.ErrorCode = v
-		}
-		{
-			v := b.String()
-			s.PrincipalType = v
-		}
-		{
-			v := b.String()
-			s.OwnerName = v
-		}
-		{
-			v := b.Int64()
-			s.IssueTimestamp = v
-		}
-		{
-			v := b.Int64()
-			s.ExpiryTimestamp = v
-		}
-		{
-			v := b.Int64()
-			s.MaxTimestamp = v
-		}
-		{
-			v := b.String()
-			s.TokenID = v
-		}
-		{
-			v := b.Bytes()
-			s.HMAC = v
-		}
-		{
-			v := b.Int32()
-			s.ThrottleMillis = v
-		}
+		v := b.Int16()
+		s.ErrorCode = v
+	}
+	{
+		v := b.String()
+		s.PrincipalType = v
+	}
+	{
+		v := b.String()
+		s.OwnerName = v
+	}
+	{
+		v := b.Int64()
+		s.IssueTimestamp = v
+	}
+	{
+		v := b.Int64()
+		s.ExpiryTimestamp = v
+	}
+	{
+		v := b.Int64()
+		s.MaxTimestamp = v
+	}
+	{
+		v := b.String()
+		s.TokenID = v
+	}
+	{
+		v := b.Bytes()
+		s.HMAC = v
+	}
+	{
+		v := b.Int32()
+		s.ThrottleMillis = v
 	}
 	if isFlexible {
 		SkipTags(&b)
@@ -9029,20 +8829,18 @@ func (v *RenewDelegationTokenResponse) ReadFrom(src []byte) error {
 	version := v.Version
 	_ = version
 	b := kbin.Reader{Src: src}
+	s := v
 	{
-		s := v
-		{
-			v := b.Int16()
-			s.ErrorCode = v
-		}
-		{
-			v := b.Int64()
-			s.ExpiryTimestamp = v
-		}
-		{
-			v := b.Int32()
-			s.ThrottleMillis = v
-		}
+		v := b.Int16()
+		s.ErrorCode = v
+	}
+	{
+		v := b.Int64()
+		s.ExpiryTimestamp = v
+	}
+	{
+		v := b.Int32()
+		s.ThrottleMillis = v
 	}
 	return b.Complete()
 }
@@ -9095,20 +8893,18 @@ func (v *ExpireDelegationTokenResponse) ReadFrom(src []byte) error {
 	version := v.Version
 	_ = version
 	b := kbin.Reader{Src: src}
+	s := v
 	{
-		s := v
-		{
-			v := b.Int16()
-			s.ErrorCode = v
-		}
-		{
-			v := b.Int64()
-			s.ExpiryTimestamp = v
-		}
-		{
-			v := b.Int32()
-			s.ThrottleMillis = v
-		}
+		v := b.Int16()
+		s.ErrorCode = v
+	}
+	{
+		v := b.Int64()
+		s.ExpiryTimestamp = v
+	}
+	{
+		v := b.Int32()
+		s.ThrottleMillis = v
 	}
 	return b.Complete()
 }
@@ -9194,19 +8990,52 @@ func (v *DescribeDelegationTokenResponse) ReadFrom(src []byte) error {
 	version := v.Version
 	_ = version
 	b := kbin.Reader{Src: src}
+	s := v
 	{
-		s := v
-		{
-			v := b.Int16()
-			s.ErrorCode = v
-		}
-		{
-			v := s.TokenDetails
-			a := v
-			for i := b.ArrayLen(); i > 0; i-- {
-				a = append(a, DescribeDelegationTokenResponseTokenDetail{})
-				v := &a[len(a)-1]
-				{
+		v := b.Int16()
+		s.ErrorCode = v
+	}
+	{
+		v := s.TokenDetails
+		a := v
+		for i := b.ArrayLen(); i > 0; i-- {
+			a = append(a, DescribeDelegationTokenResponseTokenDetail{})
+			v := &a[len(a)-1]
+			s := v
+			{
+				v := b.String()
+				s.PrincipalType = v
+			}
+			{
+				v := b.String()
+				s.OwnerName = v
+			}
+			{
+				v := b.Int64()
+				s.IssueTimestamp = v
+			}
+			{
+				v := b.Int64()
+				s.ExpiryTimestamp = v
+			}
+			{
+				v := b.Int64()
+				s.MaxTimestamp = v
+			}
+			{
+				v := b.String()
+				s.TokenID = v
+			}
+			{
+				v := b.Bytes()
+				s.HMAC = v
+			}
+			{
+				v := s.Renewers
+				a := v
+				for i := b.ArrayLen(); i > 0; i-- {
+					a = append(a, DescribeDelegationTokenResponseTokenDetailRenewer{})
+					v := &a[len(a)-1]
 					s := v
 					{
 						v := b.String()
@@ -9214,58 +9043,19 @@ func (v *DescribeDelegationTokenResponse) ReadFrom(src []byte) error {
 					}
 					{
 						v := b.String()
-						s.OwnerName = v
-					}
-					{
-						v := b.Int64()
-						s.IssueTimestamp = v
-					}
-					{
-						v := b.Int64()
-						s.ExpiryTimestamp = v
-					}
-					{
-						v := b.Int64()
-						s.MaxTimestamp = v
-					}
-					{
-						v := b.String()
-						s.TokenID = v
-					}
-					{
-						v := b.Bytes()
-						s.HMAC = v
-					}
-					{
-						v := s.Renewers
-						a := v
-						for i := b.ArrayLen(); i > 0; i-- {
-							a = append(a, DescribeDelegationTokenResponseTokenDetailRenewer{})
-							v := &a[len(a)-1]
-							{
-								s := v
-								{
-									v := b.String()
-									s.PrincipalType = v
-								}
-								{
-									v := b.String()
-									s.Name = v
-								}
-							}
-						}
-						v = a
-						s.Renewers = v
+						s.Name = v
 					}
 				}
+				v = a
+				s.Renewers = v
 			}
-			v = a
-			s.TokenDetails = v
 		}
-		{
-			v := b.Int32()
-			s.ThrottleMillis = v
-		}
+		v = a
+		s.TokenDetails = v
+	}
+	{
+		v := b.Int32()
+		s.ThrottleMillis = v
 	}
 	return b.Complete()
 }
@@ -9356,42 +9146,38 @@ func (v *DeleteGroupsResponse) ReadFrom(src []byte) error {
 	isFlexible := version >= 2
 	_ = isFlexible
 	b := kbin.Reader{Src: src}
+	s := v
 	{
-		s := v
-		{
-			v := b.Int32()
-			s.ThrottleMillis = v
+		v := b.Int32()
+		s.ThrottleMillis = v
+	}
+	{
+		v := s.Groups
+		a := v
+		var i int32
+		if isFlexible {
+			i = b.CompactArrayLen()
+		} else {
+			i = b.ArrayLen()
 		}
-		{
-			v := s.Groups
-			a := v
-			var i int32
+		for ; i > 0; i-- {
+			a = append(a, DeleteGroupsResponseGroup{})
+			v := &a[len(a)-1]
+			s := v
+			{
+				v := b.String()
+				s.Group = v
+			}
+			{
+				v := b.Int16()
+				s.ErrorCode = v
+			}
 			if isFlexible {
-				i = b.CompactArrayLen()
-			} else {
-				i = b.ArrayLen()
+				SkipTags(&b)
 			}
-			for ; i > 0; i-- {
-				a = append(a, DeleteGroupsResponseGroup{})
-				v := &a[len(a)-1]
-				{
-					s := v
-					{
-						v := b.String()
-						s.Group = v
-					}
-					{
-						v := b.Int16()
-						s.ErrorCode = v
-					}
-				}
-				if isFlexible {
-					SkipTags(&b)
-				}
-			}
-			v = a
-			s.Groups = v
 		}
+		v = a
+		s.Groups = v
 	}
 	if isFlexible {
 		SkipTags(&b)
@@ -9549,76 +9335,70 @@ func (v *ElectLeadersResponse) ReadFrom(src []byte) error {
 	isFlexible := version >= 2
 	_ = isFlexible
 	b := kbin.Reader{Src: src}
+	s := v
 	{
-		s := v
-		{
-			v := b.Int32()
-			s.ThrottleMillis = v
+		v := b.Int32()
+		s.ThrottleMillis = v
+	}
+	if version >= 1 {
+		v := b.Int16()
+		s.ErrorCode = v
+	}
+	{
+		v := s.Topics
+		a := v
+		var i int32
+		if isFlexible {
+			i = b.CompactArrayLen()
+		} else {
+			i = b.ArrayLen()
 		}
-		if version >= 1 {
-			v := b.Int16()
-			s.ErrorCode = v
-		}
-		{
-			v := s.Topics
-			a := v
-			var i int32
-			if isFlexible {
-				i = b.CompactArrayLen()
-			} else {
-				i = b.ArrayLen()
+		for ; i > 0; i-- {
+			a = append(a, ElectLeadersResponseTopic{})
+			v := &a[len(a)-1]
+			s := v
+			{
+				v := b.String()
+				s.Topic = v
 			}
-			for ; i > 0; i-- {
-				a = append(a, ElectLeadersResponseTopic{})
-				v := &a[len(a)-1]
-				{
+			{
+				v := s.Partitions
+				a := v
+				var i int32
+				if isFlexible {
+					i = b.CompactArrayLen()
+				} else {
+					i = b.ArrayLen()
+				}
+				for ; i > 0; i-- {
+					a = append(a, ElectLeadersResponseTopicPartition{})
+					v := &a[len(a)-1]
 					s := v
 					{
-						v := b.String()
-						s.Topic = v
+						v := b.Int32()
+						s.Partition = v
 					}
 					{
-						v := s.Partitions
-						a := v
-						var i int32
-						if isFlexible {
-							i = b.CompactArrayLen()
-						} else {
-							i = b.ArrayLen()
-						}
-						for ; i > 0; i-- {
-							a = append(a, ElectLeadersResponseTopicPartition{})
-							v := &a[len(a)-1]
-							{
-								s := v
-								{
-									v := b.Int32()
-									s.Partition = v
-								}
-								{
-									v := b.Int16()
-									s.ErrorCode = v
-								}
-								{
-									v := b.NullableString()
-									s.ErrorMessage = v
-								}
-							}
-							if isFlexible {
-								SkipTags(&b)
-							}
-						}
-						v = a
-						s.Partitions = v
+						v := b.Int16()
+						s.ErrorCode = v
+					}
+					{
+						v := b.NullableString()
+						s.ErrorMessage = v
+					}
+					if isFlexible {
+						SkipTags(&b)
 					}
 				}
-				if isFlexible {
-					SkipTags(&b)
-				}
+				v = a
+				s.Partitions = v
 			}
-			v = a
-			s.Topics = v
+			if isFlexible {
+				SkipTags(&b)
+			}
 		}
+		v = a
+		s.Topics = v
 	}
 	if isFlexible {
 		SkipTags(&b)
@@ -9807,50 +9587,46 @@ func (v *IncrementalAlterConfigsResponse) ReadFrom(src []byte) error {
 	isFlexible := version >= 1
 	_ = isFlexible
 	b := kbin.Reader{Src: src}
+	s := v
 	{
-		s := v
-		{
-			v := b.Int32()
-			s.ThrottleMillis = v
+		v := b.Int32()
+		s.ThrottleMillis = v
+	}
+	{
+		v := s.Responses
+		a := v
+		var i int32
+		if isFlexible {
+			i = b.CompactArrayLen()
+		} else {
+			i = b.ArrayLen()
 		}
-		{
-			v := s.Responses
-			a := v
-			var i int32
+		for ; i > 0; i-- {
+			a = append(a, IncrementalAlterConfigsResponseResponse{})
+			v := &a[len(a)-1]
+			s := v
+			{
+				v := b.Int16()
+				s.ErrorCode = v
+			}
+			{
+				v := b.NullableString()
+				s.ErrorMessage = v
+			}
+			{
+				v := b.Int8()
+				s.ResourceType = v
+			}
+			{
+				v := b.String()
+				s.ResourceName = v
+			}
 			if isFlexible {
-				i = b.CompactArrayLen()
-			} else {
-				i = b.ArrayLen()
+				SkipTags(&b)
 			}
-			for ; i > 0; i-- {
-				a = append(a, IncrementalAlterConfigsResponseResponse{})
-				v := &a[len(a)-1]
-				{
-					s := v
-					{
-						v := b.Int16()
-						s.ErrorCode = v
-					}
-					{
-						v := b.NullableString()
-						s.ErrorMessage = v
-					}
-					{
-						v := b.Int8()
-						s.ResourceType = v
-					}
-					{
-						v := b.String()
-						s.ResourceName = v
-					}
-				}
-				if isFlexible {
-					SkipTags(&b)
-				}
-			}
-			v = a
-			s.Responses = v
 		}
+		v = a
+		s.Responses = v
 	}
 	if isFlexible {
 		SkipTags(&b)
@@ -10019,80 +9795,74 @@ func (v *AlterPartitionReassignmentsResponse) ReadFrom(src []byte) error {
 	isFlexible := version >= 0
 	_ = isFlexible
 	b := kbin.Reader{Src: src}
+	s := v
 	{
-		s := v
-		{
-			v := b.Int32()
-			s.ThrottleMillis = v
+		v := b.Int32()
+		s.ThrottleMillis = v
+	}
+	{
+		v := b.Int16()
+		s.ErrorCode = v
+	}
+	{
+		v := b.NullableString()
+		s.ErrorMessage = v
+	}
+	{
+		v := s.Topics
+		a := v
+		var i int32
+		if isFlexible {
+			i = b.CompactArrayLen()
+		} else {
+			i = b.ArrayLen()
 		}
-		{
-			v := b.Int16()
-			s.ErrorCode = v
-		}
-		{
-			v := b.NullableString()
-			s.ErrorMessage = v
-		}
-		{
-			v := s.Topics
-			a := v
-			var i int32
-			if isFlexible {
-				i = b.CompactArrayLen()
-			} else {
-				i = b.ArrayLen()
+		for ; i > 0; i-- {
+			a = append(a, AlterPartitionReassignmentsResponseTopic{})
+			v := &a[len(a)-1]
+			s := v
+			{
+				v := b.String()
+				s.Topic = v
 			}
-			for ; i > 0; i-- {
-				a = append(a, AlterPartitionReassignmentsResponseTopic{})
-				v := &a[len(a)-1]
-				{
+			{
+				v := s.Partitions
+				a := v
+				var i int32
+				if isFlexible {
+					i = b.CompactArrayLen()
+				} else {
+					i = b.ArrayLen()
+				}
+				for ; i > 0; i-- {
+					a = append(a, AlterPartitionReassignmentsResponseTopicPartition{})
+					v := &a[len(a)-1]
 					s := v
 					{
-						v := b.String()
-						s.Topic = v
+						v := b.Int32()
+						s.Partition = v
 					}
 					{
-						v := s.Partitions
-						a := v
-						var i int32
-						if isFlexible {
-							i = b.CompactArrayLen()
-						} else {
-							i = b.ArrayLen()
-						}
-						for ; i > 0; i-- {
-							a = append(a, AlterPartitionReassignmentsResponseTopicPartition{})
-							v := &a[len(a)-1]
-							{
-								s := v
-								{
-									v := b.Int32()
-									s.Partition = v
-								}
-								{
-									v := b.Int16()
-									s.ErrorCode = v
-								}
-								{
-									v := b.NullableString()
-									s.ErrorMessage = v
-								}
-							}
-							if isFlexible {
-								SkipTags(&b)
-							}
-						}
-						v = a
-						s.Partitions = v
+						v := b.Int16()
+						s.ErrorCode = v
+					}
+					{
+						v := b.NullableString()
+						s.ErrorMessage = v
+					}
+					if isFlexible {
+						SkipTags(&b)
 					}
 				}
-				if isFlexible {
-					SkipTags(&b)
-				}
+				v = a
+				s.Partitions = v
 			}
-			v = a
-			s.Topics = v
+			if isFlexible {
+				SkipTags(&b)
+			}
 		}
+		v = a
+		s.Topics = v
 	}
 	if isFlexible {
 		SkipTags(&b)
@@ -10233,40 +10003,55 @@ func (v *ListPartitionReassignmentsResponse) ReadFrom(src []byte) error {
 	isFlexible := version >= 0
 	_ = isFlexible
 	b := kbin.Reader{Src: src}
+	s := v
 	{
-		s := v
-		{
-			v := b.Int32()
-			s.ThrottleMillis = v
+		v := b.Int32()
+		s.ThrottleMillis = v
+	}
+	{
+		v := b.Int16()
+		s.ErrorCode = v
+	}
+	{
+		v := b.NullableString()
+		s.ErrorMessage = v
+	}
+	{
+		v := s.Topics
+		a := v
+		var i int32
+		if isFlexible {
+			i = b.CompactArrayLen()
+		} else {
+			i = b.ArrayLen()
 		}
-		{
-			v := b.Int16()
-			s.ErrorCode = v
-		}
-		{
-			v := b.NullableString()
-			s.ErrorMessage = v
-		}
-		{
-			v := s.Topics
-			a := v
-			var i int32
-			if isFlexible {
-				i = b.CompactArrayLen()
-			} else {
-				i = b.ArrayLen()
+		for ; i > 0; i-- {
+			a = append(a, ListPartitionReassignmentsResponseTopic{})
+			v := &a[len(a)-1]
+			s := v
+			{
+				v := b.String()
+				s.Topic = v
 			}
-			for ; i > 0; i-- {
-				a = append(a, ListPartitionReassignmentsResponseTopic{})
-				v := &a[len(a)-1]
-				{
+			{
+				v := s.Partitions
+				a := v
+				var i int32
+				if isFlexible {
+					i = b.CompactArrayLen()
+				} else {
+					i = b.ArrayLen()
+				}
+				for ; i > 0; i-- {
+					a = append(a, ListPartitionReassignmentsResponseTopicPartition{})
+					v := &a[len(a)-1]
 					s := v
 					{
-						v := b.String()
-						s.Topic = v
+						v := b.Int32()
+						s.Partition = v
 					}
 					{
-						v := s.Partitions
+						v := s.Replicas
 						a := v
 						var i int32
 						if isFlexible {
@@ -10275,78 +10060,57 @@ func (v *ListPartitionReassignmentsResponse) ReadFrom(src []byte) error {
 							i = b.ArrayLen()
 						}
 						for ; i > 0; i-- {
-							a = append(a, ListPartitionReassignmentsResponseTopicPartition{})
-							v := &a[len(a)-1]
-							{
-								s := v
-								{
-									v := b.Int32()
-									s.Partition = v
-								}
-								{
-									v := s.Replicas
-									a := v
-									var i int32
-									if isFlexible {
-										i = b.CompactArrayLen()
-									} else {
-										i = b.ArrayLen()
-									}
-									for ; i > 0; i-- {
-										v := b.Int32()
-										a = append(a, v)
-									}
-									v = a
-									s.Replicas = v
-								}
-								{
-									v := s.AddingReplicas
-									a := v
-									var i int32
-									if isFlexible {
-										i = b.CompactArrayLen()
-									} else {
-										i = b.ArrayLen()
-									}
-									for ; i > 0; i-- {
-										v := b.Int32()
-										a = append(a, v)
-									}
-									v = a
-									s.AddingReplicas = v
-								}
-								{
-									v := s.RemovingReplicas
-									a := v
-									var i int32
-									if isFlexible {
-										i = b.CompactArrayLen()
-									} else {
-										i = b.ArrayLen()
-									}
-									for ; i > 0; i-- {
-										v := b.Int32()
-										a = append(a, v)
-									}
-									v = a
-									s.RemovingReplicas = v
-								}
-							}
-							if isFlexible {
-								SkipTags(&b)
-							}
+							v := b.Int32()
+							a = append(a, v)
 						}
 						v = a
-						s.Partitions = v
+						s.Replicas = v
+					}
+					{
+						v := s.AddingReplicas
+						a := v
+						var i int32
+						if isFlexible {
+							i = b.CompactArrayLen()
+						} else {
+							i = b.ArrayLen()
+						}
+						for ; i > 0; i-- {
+							v := b.Int32()
+							a = append(a, v)
+						}
+						v = a
+						s.AddingReplicas = v
+					}
+					{
+						v := s.RemovingReplicas
+						a := v
+						var i int32
+						if isFlexible {
+							i = b.CompactArrayLen()
+						} else {
+							i = b.ArrayLen()
+						}
+						for ; i > 0; i-- {
+							v := b.Int32()
+							a = append(a, v)
+						}
+						v = a
+						s.RemovingReplicas = v
+					}
+					if isFlexible {
+						SkipTags(&b)
 					}
 				}
-				if isFlexible {
-					SkipTags(&b)
-				}
+				v = a
+				s.Partitions = v
 			}
-			v = a
-			s.Topics = v
+			if isFlexible {
+				SkipTags(&b)
+			}
 		}
+		v = a
+		s.Topics = v
 	}
 	if isFlexible {
 		SkipTags(&b)
@@ -10481,54 +10245,48 @@ func (v *OffsetDeleteResponse) ReadFrom(src []byte) error {
 	version := v.Version
 	_ = version
 	b := kbin.Reader{Src: src}
+	s := v
 	{
-		s := v
-		{
-			v := b.Int16()
-			s.ErrorCode = v
-		}
-		{
-			v := b.Int32()
-			s.ThrottleMillis = v
-		}
-		{
-			v := s.Topics
-			a := v
-			for i := b.ArrayLen(); i > 0; i-- {
-				a = append(a, OffsetDeleteResponseTopic{})
-				v := &a[len(a)-1]
-				{
+		v := b.Int16()
+		s.ErrorCode = v
+	}
+	{
+		v := b.Int32()
+		s.ThrottleMillis = v
+	}
+	{
+		v := s.Topics
+		a := v
+		for i := b.ArrayLen(); i > 0; i-- {
+			a = append(a, OffsetDeleteResponseTopic{})
+			v := &a[len(a)-1]
+			s := v
+			{
+				v := b.String()
+				s.Topic = v
+			}
+			{
+				v := s.Partitions
+				a := v
+				for i := b.ArrayLen(); i > 0; i-- {
+					a = append(a, OffsetDeleteResponseTopicPartition{})
+					v := &a[len(a)-1]
 					s := v
 					{
-						v := b.String()
-						s.Topic = v
+						v := b.Int32()
+						s.Partition = v
 					}
 					{
-						v := s.Partitions
-						a := v
-						for i := b.ArrayLen(); i > 0; i-- {
-							a = append(a, OffsetDeleteResponseTopicPartition{})
-							v := &a[len(a)-1]
-							{
-								s := v
-								{
-									v := b.Int32()
-									s.Partition = v
-								}
-								{
-									v := b.Int16()
-									s.ErrorCode = v
-								}
-							}
-						}
-						v = a
-						s.Partitions = v
+						v := b.Int16()
+						s.ErrorCode = v
 					}
 				}
+				v = a
+				s.Partitions = v
 			}
-			v = a
-			s.Topics = v
 		}
+		v = a
+		s.Topics = v
 	}
 	return b.Complete()
 }
