@@ -65,6 +65,7 @@ type (
 		Comment    string
 		MinVersion int
 		MaxVersion int
+		Tag        int
 		FieldName  string
 		Type       Type
 	}

@@ -112,8 +112,10 @@ func (s Struct) WriteAppend(l *LineWriter) {
 	for _, f := range s.Fields {
 		if f.MaxVersion > -1 {
 			l.Write("if version >= %d && version <= %d {", f.MinVersion, f.MaxVersion)
-		} else if f.MinVersion != 0 {
+		} else if f.MinVersion > 0 {
 			l.Write("if version >= %d {", f.MinVersion)
+		} else if f.MinVersion == -1 {
+			continue
 		} else {
 			l.Write("{")
 		}
@@ -243,6 +245,29 @@ func (a Array) WriteDecode(l *LineWriter) {
 	l.Write("v = a")
 }
 
+func (f StructField) WriteDecode(l *LineWriter) {
+	switch f.Type.(type) {
+	case Struct:
+		// For decoding a nested struct, we copy a pointer out.
+		// The nested version will then set the fields directly.
+		l.Write("v := &s.%s", f.FieldName)
+	case Array:
+		// For arrays, we need to copy the array into a v
+		// field so that the array function can use it.
+		l.Write("v := s.%s", f.FieldName)
+	default:
+		// All other types use primDecode, which does a `v :=`.
+	}
+	f.Type.WriteDecode(l)
+
+	_, isStruct := f.Type.(Struct)
+	if !isStruct {
+		// If the field was not a struct, we need to copy the
+		// changes back.
+		l.Write("s.%s = v", f.FieldName)
+	}
+}
+
 func (s Struct) WriteDecode(l *LineWriter) {
 	if len(s.Fields) == 0 {
 		return
@@ -260,44 +285,65 @@ func (s Struct) WriteDecode(l *LineWriter) {
 		l.Write("version := b.Int16()")
 		l.Write("v.Version = version")
 	}
-	l.Write("{")
 	l.Write("s := v")
+
+	tags := make(map[int]StructField)
+
 	for _, f := range rangeFrom {
 		if f.MaxVersion > -1 {
 			l.Write("if version >= %d && version <= %d {", f.MinVersion, f.MaxVersion)
 		} else if f.MinVersion > 0 {
 			l.Write("if version >= %d {", f.MinVersion)
+		} else if f.MinVersion == -1 {
+			if f.Tag < 0 {
+				die("unexpected min version -1 with tag %d on field %s", f.Tag, f.FieldName)
+			}
+			if _, exists := tags[f.Tag]; exists {
+				die("unexpected duplicate tag %d on field %s", f.Tag, f.FieldName)
+			}
+			tags[f.Tag] = f
+			continue
 		} else {
 			l.Write("{")
 		}
-		switch f.Type.(type) {
-		case Struct:
-			// For decoding a nested struct, we copy a pointer out.
-			// The nested version will then set the fields directly.
-			l.Write("v := &s.%s", f.FieldName)
-		case Array:
-			// For arrays, we need to copy the array into a v
-			// field so that the array function can use it.
-			l.Write("v := s.%s", f.FieldName)
-		default:
-			// All other types use primDecode, which does a `v :=`.
-		}
-		f.Type.WriteDecode(l)
-
-		_, isStruct := f.Type.(Struct)
-		if !isStruct {
-			// If the field was not a struct, we need to copy the
-			// changes back.
-			l.Write("s.%s = v", f.FieldName)
-		}
+		f.WriteDecode(l)
 		l.Write("}")
 	}
-	l.Write("}")
 
-	// TODO once tags exist, something relevant
-	if s.FromFlexible {
-		l.Write("if isFlexible {")
+	if !s.FromFlexible {
+		return
+	}
+
+	l.Write("if isFlexible {")
+	if len(tags) == 0 {
 		l.Write("SkipTags(&b)")
+		l.Write("}")
+		return
+	}
+
+	l.Write("for i := b.Uvarint(); i > 0; i-- {")
+	defer l.Write("}")
+
+	l.Write("tag, size := b.Uvarint(), int(b.Uvarint())")
+	defer l.Write("}")
+
+	l.Write("switch tag {")
+	defer l.Write("}")
+
+	l.Write("default:")
+	l.Write("b.Span(size)") // unknown tag
+
+	for i := 0; i < len(tags); i++ {
+		f, exists := tags[i]
+		if !exists {
+			die("saw %d tags, but did not see tag %d; expected monotonically increasing", len(tags), i)
+		}
+
+		l.Write("case %d:", i)
+		l.Write("b := kbin.Reader{Src: b.Span(size)}")
+		f.WriteDecode(l)
+		l.Write("if err := b.Complete(); err != nil {")
+		l.Write("return err")
 		l.Write("}")
 	}
 }
@@ -317,11 +363,19 @@ func (s Struct) WriteDefn(l *LineWriter) {
 		if f.Comment != "" {
 			l.Write("%s", f.Comment)
 		}
-		version := ""
+		versionTag := ""
 		if f.MinVersion > 0 {
-			version = " // v" + strconv.Itoa(f.MinVersion) + "+"
+			versionTag = " // v" + strconv.Itoa(f.MinVersion) + "+"
 		}
-		l.Write("%s %s%s", f.FieldName, f.Type.TypeName(), version)
+		if f.Tag >= 0 {
+			if versionTag == "" {
+				versionTag += " // tag "
+			} else {
+				versionTag += ", tag "
+			}
+			versionTag += strconv.Itoa(f.Tag)
+		}
+		l.Write("%s %s%s", f.FieldName, f.Type.TypeName(), versionTag)
 		if i < len(s.Fields)-1 {
 			l.Write("") // blank between fields
 		}

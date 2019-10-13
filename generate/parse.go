@@ -96,16 +96,17 @@ func (s *Struct) BuildFrom(scanner *LineScanner, level int) (done bool) {
 			Comment:    nextComment,
 			FieldName:  fields[0],
 			MaxVersion: -1,
+			Tag:        -1,
 		}
 		nextComment = ""
 
 		typ := fields[1]
 
-		if idx := strings.Index(typ, " // v"); idx > 0 { // first, check version bounds
+		if idx := strings.Index(typ, " // "); idx >= 0 {
 			var err error
-			f.MinVersion, f.MaxVersion, err = parseVersion(typ[idx+4:]) // start at first v
+			f.MinVersion, f.MaxVersion, f.Tag, err = parseFieldComment(typ[idx:])
 			if err != nil {
-				die("unable to parse version on line %q: %v", line, err)
+				die("unable to parse field comment on line %q: %v", line, err)
 			}
 			typ = typ[:idx]
 		}
@@ -210,21 +211,36 @@ func (s *Struct) BuildFrom(scanner *LineScanner, level int) (done bool) {
 	return done
 }
 
-var versionRe = regexp.MustCompile(`^v(\d+)(?:\+|\-v(\d+))$`)
+// 0: entire line
+// 1: min version, if versioned
+// 2: max version, if versioned, if exists
+// 3: tag, if versioned, if exists
+// 4: tag, if not versioned
+var fieldRe = regexp.MustCompile(`^ // (?:v(\d+)(?:\+|\-v(\d+))(?:, tag (\d+))?|tag (\d+))$`)
 
-func parseVersion(in string) (int, int, error) {
-	match := versionRe.FindStringSubmatch(in)
+func parseFieldComment(in string) (int, int, int, error) {
+	match := fieldRe.FindStringSubmatch(in)
 	if len(match) == 0 {
-		return 0, 0, fmt.Errorf("invalid version %q", in)
+		return 0, 0, 0, fmt.Errorf("invalid field comment %q", in)
 	}
+
+	if match[4] != "" { // not versioned
+		tag, _ := strconv.Atoi(match[4])
+		return -1, -1, tag, nil
+	}
+
 	min, _ := strconv.Atoi(match[1])
 	max, _ := strconv.Atoi(match[2])
+	tag, _ := strconv.Atoi(match[3])
 	if match[2] == "" {
 		max = -1
 	} else if max < min {
-		return 0, 0, fmt.Errorf("min %d > max %d on line %q", min, max, in)
+		return 0, 0, 0, fmt.Errorf("min %d > max %d on line %q", min, max, in)
 	}
-	return min, max, nil
+	if match[3] == "" {
+		tag = -1
+	}
+	return min, max, tag, nil
 }
 
 func parseFieldLength(in string) (string, int, error) {
