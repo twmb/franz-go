@@ -382,9 +382,16 @@ func (v *Record) ReadFrom(src []byte) error {
 	{
 		v := s.Headers
 		a := v
-		for i := b.Varint(); i > 0; i-- {
-			a = append(a, Header{})
-			v := &a[len(a)-1]
+		var l int32
+		l = b.VarintArrayLen()
+		if !b.Ok() {
+			return b.Complete()
+		}
+		if l > 0 {
+			a = make([]Header, l)
+		}
+		for i := int32(0); i < l; i++ {
+			v := &a[i]
 			s := v
 			{
 				v := b.VarintString()
@@ -870,9 +877,16 @@ func (v *ProduceResponse) ReadFrom(src []byte) error {
 	{
 		v := s.Topics
 		a := v
-		for i := b.ArrayLen(); i > 0; i-- {
-			a = append(a, ProduceResponseTopic{})
-			v := &a[len(a)-1]
+		var l int32
+		l = b.ArrayLen()
+		if !b.Ok() {
+			return b.Complete()
+		}
+		if l > 0 {
+			a = make([]ProduceResponseTopic, l)
+		}
+		for i := int32(0); i < l; i++ {
+			v := &a[i]
 			s := v
 			{
 				v := b.String()
@@ -881,9 +895,16 @@ func (v *ProduceResponse) ReadFrom(src []byte) error {
 			{
 				v := s.Partitions
 				a := v
-				for i := b.ArrayLen(); i > 0; i-- {
-					a = append(a, ProduceResponseTopicPartition{})
-					v := &a[len(a)-1]
+				var l int32
+				l = b.ArrayLen()
+				if !b.Ok() {
+					return b.Complete()
+				}
+				if l > 0 {
+					a = make([]ProduceResponseTopicPartition, l)
+				}
+				for i := int32(0); i < l; i++ {
+					v := &a[i]
 					s := v
 					{
 						v := b.Int32()
@@ -908,9 +929,16 @@ func (v *ProduceResponse) ReadFrom(src []byte) error {
 					if version >= 8 {
 						v := s.ErrorRecords
 						a := v
-						for i := b.ArrayLen(); i > 0; i-- {
-							a = append(a, ProduceResponseTopicPartitionErrorRecord{})
-							v := &a[len(a)-1]
+						var l int32
+						l = b.ArrayLen()
+						if !b.Ok() {
+							return b.Complete()
+						}
+						if l > 0 {
+							a = make([]ProduceResponseTopicPartitionErrorRecord, l)
+						}
+						for i := int32(0); i < l; i++ {
+							v := &a[i]
 							s := v
 							{
 								v := b.Int32()
@@ -1297,9 +1325,16 @@ func (v *FetchResponse) ReadFrom(src []byte) error {
 	{
 		v := s.Topics
 		a := v
-		for i := b.ArrayLen(); i > 0; i-- {
-			a = append(a, FetchResponseTopic{})
-			v := &a[len(a)-1]
+		var l int32
+		l = b.ArrayLen()
+		if !b.Ok() {
+			return b.Complete()
+		}
+		if l > 0 {
+			a = make([]FetchResponseTopic, l)
+		}
+		for i := int32(0); i < l; i++ {
+			v := &a[i]
 			s := v
 			{
 				v := b.String()
@@ -1308,9 +1343,16 @@ func (v *FetchResponse) ReadFrom(src []byte) error {
 			{
 				v := s.Partitions
 				a := v
-				for i := b.ArrayLen(); i > 0; i-- {
-					a = append(a, FetchResponseTopicPartition{})
-					v := &a[len(a)-1]
+				var l int32
+				l = b.ArrayLen()
+				if !b.Ok() {
+					return b.Complete()
+				}
+				if l > 0 {
+					a = make([]FetchResponseTopicPartition, l)
+				}
+				for i := int32(0); i < l; i++ {
+					v := &a[i]
 					s := v
 					{
 						v := b.Int32()
@@ -1335,13 +1377,19 @@ func (v *FetchResponse) ReadFrom(src []byte) error {
 					if version >= 4 {
 						v := s.AbortedTransactions
 						a := v
-						i := b.ArrayLen()
-						if version < 0 || i == 0 {
+						var l int32
+						l = b.ArrayLen()
+						if version < 0 || l == 0 {
 							a = []FetchResponseTopicPartitionAbortedTransaction{}
 						}
-						for ; i > 0; i-- {
-							a = append(a, FetchResponseTopicPartitionAbortedTransaction{})
-							v := &a[len(a)-1]
+						if !b.Ok() {
+							return b.Complete()
+						}
+						if l > 0 {
+							a = make([]FetchResponseTopicPartitionAbortedTransaction, l)
+						}
+						for i := int32(0); i < l; i++ {
+							v := &a[i]
 							s := v
 							{
 								v := b.Int64()
@@ -1590,9 +1638,16 @@ func (v *ListOffsetsResponse) ReadFrom(src []byte) error {
 	{
 		v := s.Topics
 		a := v
-		for i := b.ArrayLen(); i > 0; i-- {
-			a = append(a, ListOffsetsResponseTopic{})
-			v := &a[len(a)-1]
+		var l int32
+		l = b.ArrayLen()
+		if !b.Ok() {
+			return b.Complete()
+		}
+		if l > 0 {
+			a = make([]ListOffsetsResponseTopic, l)
+		}
+		for i := int32(0); i < l; i++ {
+			v := &a[i]
 			s := v
 			{
 				v := b.String()
@@ -1601,9 +1656,16 @@ func (v *ListOffsetsResponse) ReadFrom(src []byte) error {
 			{
 				v := s.Partitions
 				a := v
-				for i := b.ArrayLen(); i > 0; i-- {
-					a = append(a, ListOffsetsResponseTopicPartition{})
-					v := &a[len(a)-1]
+				var l int32
+				l = b.ArrayLen()
+				if !b.Ok() {
+					return b.Complete()
+				}
+				if l > 0 {
+					a = make([]ListOffsetsResponseTopicPartition, l)
+				}
+				for i := int32(0); i < l; i++ {
+					v := &a[i]
 					s := v
 					{
 						v := b.Int32()
@@ -1616,9 +1678,17 @@ func (v *ListOffsetsResponse) ReadFrom(src []byte) error {
 					if version >= 0 && version <= 0 {
 						v := s.OldStyleOffsets
 						a := v
-						for i := b.ArrayLen(); i > 0; i-- {
+						var l int32
+						l = b.ArrayLen()
+						if !b.Ok() {
+							return b.Complete()
+						}
+						if l > 0 {
+							a = make([]int64, l)
+						}
+						for i := int32(0); i < l; i++ {
 							v := b.Int64()
-							a = append(a, v)
+							a[i] = v
 						}
 						v = a
 						s.OldStyleOffsets = v
@@ -1856,15 +1926,20 @@ func (v *MetadataResponse) ReadFrom(src []byte) error {
 	{
 		v := s.Brokers
 		a := v
-		var i int32
+		var l int32
 		if isFlexible {
-			i = b.CompactArrayLen()
+			l = b.CompactArrayLen()
 		} else {
-			i = b.ArrayLen()
+			l = b.ArrayLen()
 		}
-		for ; i > 0; i-- {
-			a = append(a, MetadataResponseBroker{})
-			v := &a[len(a)-1]
+		if !b.Ok() {
+			return b.Complete()
+		}
+		if l > 0 {
+			a = make([]MetadataResponseBroker, l)
+		}
+		for i := int32(0); i < l; i++ {
+			v := &a[i]
 			s := v
 			{
 				v := b.Int32()
@@ -1900,15 +1975,20 @@ func (v *MetadataResponse) ReadFrom(src []byte) error {
 	{
 		v := s.Topics
 		a := v
-		var i int32
+		var l int32
 		if isFlexible {
-			i = b.CompactArrayLen()
+			l = b.CompactArrayLen()
 		} else {
-			i = b.ArrayLen()
+			l = b.ArrayLen()
 		}
-		for ; i > 0; i-- {
-			a = append(a, MetadataResponseTopic{})
-			v := &a[len(a)-1]
+		if !b.Ok() {
+			return b.Complete()
+		}
+		if l > 0 {
+			a = make([]MetadataResponseTopic, l)
+		}
+		for i := int32(0); i < l; i++ {
+			v := &a[i]
 			s := v
 			{
 				v := b.Int16()
@@ -1925,15 +2005,20 @@ func (v *MetadataResponse) ReadFrom(src []byte) error {
 			{
 				v := s.Partitions
 				a := v
-				var i int32
+				var l int32
 				if isFlexible {
-					i = b.CompactArrayLen()
+					l = b.CompactArrayLen()
 				} else {
-					i = b.ArrayLen()
+					l = b.ArrayLen()
 				}
-				for ; i > 0; i-- {
-					a = append(a, MetadataResponseTopicPartition{})
-					v := &a[len(a)-1]
+				if !b.Ok() {
+					return b.Complete()
+				}
+				if l > 0 {
+					a = make([]MetadataResponseTopicPartition, l)
+				}
+				for i := int32(0); i < l; i++ {
+					v := &a[i]
 					s := v
 					{
 						v := b.Int16()
@@ -1954,15 +2039,21 @@ func (v *MetadataResponse) ReadFrom(src []byte) error {
 					{
 						v := s.Replicas
 						a := v
-						var i int32
+						var l int32
 						if isFlexible {
-							i = b.CompactArrayLen()
+							l = b.CompactArrayLen()
 						} else {
-							i = b.ArrayLen()
+							l = b.ArrayLen()
 						}
-						for ; i > 0; i-- {
+						if !b.Ok() {
+							return b.Complete()
+						}
+						if l > 0 {
+							a = make([]int32, l)
+						}
+						for i := int32(0); i < l; i++ {
 							v := b.Int32()
-							a = append(a, v)
+							a[i] = v
 						}
 						v = a
 						s.Replicas = v
@@ -1970,15 +2061,21 @@ func (v *MetadataResponse) ReadFrom(src []byte) error {
 					{
 						v := s.ISR
 						a := v
-						var i int32
+						var l int32
 						if isFlexible {
-							i = b.CompactArrayLen()
+							l = b.CompactArrayLen()
 						} else {
-							i = b.ArrayLen()
+							l = b.ArrayLen()
 						}
-						for ; i > 0; i-- {
+						if !b.Ok() {
+							return b.Complete()
+						}
+						if l > 0 {
+							a = make([]int32, l)
+						}
+						for i := int32(0); i < l; i++ {
 							v := b.Int32()
-							a = append(a, v)
+							a[i] = v
 						}
 						v = a
 						s.ISR = v
@@ -1986,15 +2083,21 @@ func (v *MetadataResponse) ReadFrom(src []byte) error {
 					if version >= 5 {
 						v := s.OfflineReplicas
 						a := v
-						var i int32
+						var l int32
 						if isFlexible {
-							i = b.CompactArrayLen()
+							l = b.CompactArrayLen()
 						} else {
-							i = b.ArrayLen()
+							l = b.ArrayLen()
 						}
-						for ; i > 0; i-- {
+						if !b.Ok() {
+							return b.Complete()
+						}
+						if l > 0 {
+							a = make([]int32, l)
+						}
+						for i := int32(0); i < l; i++ {
 							v := b.Int32()
-							a = append(a, v)
+							a[i] = v
 						}
 						v = a
 						s.OfflineReplicas = v
@@ -2343,15 +2446,20 @@ func (v *LeaderAndISRResponse) ReadFrom(src []byte) error {
 	{
 		v := s.Partitions
 		a := v
-		var i int32
+		var l int32
 		if isFlexible {
-			i = b.CompactArrayLen()
+			l = b.CompactArrayLen()
 		} else {
-			i = b.ArrayLen()
+			l = b.ArrayLen()
 		}
-		for ; i > 0; i-- {
-			a = append(a, LeaderAndISRResponsePartition{})
-			v := &a[len(a)-1]
+		if !b.Ok() {
+			return b.Complete()
+		}
+		if l > 0 {
+			a = make([]LeaderAndISRResponsePartition, l)
+		}
+		for i := int32(0); i < l; i++ {
+			v := &a[i]
 			s := v
 			{
 				v := b.String()
@@ -2509,15 +2617,20 @@ func (v *StopReplicaResponse) ReadFrom(src []byte) error {
 	{
 		v := s.Partitions
 		a := v
-		var i int32
+		var l int32
 		if isFlexible {
-			i = b.CompactArrayLen()
+			l = b.CompactArrayLen()
 		} else {
-			i = b.ArrayLen()
+			l = b.ArrayLen()
 		}
-		for ; i > 0; i-- {
-			a = append(a, StopReplicaResponsePartition{})
-			v := &a[len(a)-1]
+		if !b.Ok() {
+			return b.Complete()
+		}
+		if l > 0 {
+			a = make([]StopReplicaResponsePartition, l)
+		}
+		for i := int32(0); i < l; i++ {
+			v := &a[i]
 			s := v
 			{
 				v := b.String()
@@ -2949,15 +3062,20 @@ func (v *ControlledShutdownResponse) ReadFrom(src []byte) error {
 	{
 		v := s.PartitionsRemaining
 		a := v
-		var i int32
+		var l int32
 		if isFlexible {
-			i = b.CompactArrayLen()
+			l = b.CompactArrayLen()
 		} else {
-			i = b.ArrayLen()
+			l = b.ArrayLen()
 		}
-		for ; i > 0; i-- {
-			a = append(a, ControlledShutdownResponsePartitionsRemaining{})
-			v := &a[len(a)-1]
+		if !b.Ok() {
+			return b.Complete()
+		}
+		if l > 0 {
+			a = make([]ControlledShutdownResponsePartitionsRemaining, l)
+		}
+		for i := int32(0); i < l; i++ {
+			v := &a[i]
 			s := v
 			{
 				v := b.String()
@@ -3329,9 +3447,16 @@ func (v *GroupMetadataValue) ReadFrom(src []byte) error {
 	{
 		v := s.Members
 		a := v
-		for i := b.ArrayLen(); i > 0; i-- {
-			a = append(a, GroupMetadataValueMember{})
-			v := &a[len(a)-1]
+		var l int32
+		l = b.ArrayLen()
+		if !b.Ok() {
+			return b.Complete()
+		}
+		if l > 0 {
+			a = make([]GroupMetadataValueMember, l)
+		}
+		for i := int32(0); i < l; i++ {
+			v := &a[i]
 			s := v
 			{
 				v := b.String()
@@ -3612,15 +3737,20 @@ func (v *OffsetCommitResponse) ReadFrom(src []byte) error {
 	{
 		v := s.Topics
 		a := v
-		var i int32
+		var l int32
 		if isFlexible {
-			i = b.CompactArrayLen()
+			l = b.CompactArrayLen()
 		} else {
-			i = b.ArrayLen()
+			l = b.ArrayLen()
 		}
-		for ; i > 0; i-- {
-			a = append(a, OffsetCommitResponseTopic{})
-			v := &a[len(a)-1]
+		if !b.Ok() {
+			return b.Complete()
+		}
+		if l > 0 {
+			a = make([]OffsetCommitResponseTopic, l)
+		}
+		for i := int32(0); i < l; i++ {
+			v := &a[i]
 			s := v
 			{
 				v := b.String()
@@ -3629,15 +3759,20 @@ func (v *OffsetCommitResponse) ReadFrom(src []byte) error {
 			{
 				v := s.Partitions
 				a := v
-				var i int32
+				var l int32
 				if isFlexible {
-					i = b.CompactArrayLen()
+					l = b.CompactArrayLen()
 				} else {
-					i = b.ArrayLen()
+					l = b.ArrayLen()
 				}
-				for ; i > 0; i-- {
-					a = append(a, OffsetCommitResponseTopicPartition{})
-					v := &a[len(a)-1]
+				if !b.Ok() {
+					return b.Complete()
+				}
+				if l > 0 {
+					a = make([]OffsetCommitResponseTopicPartition, l)
+				}
+				for i := int32(0); i < l; i++ {
+					v := &a[i]
 					s := v
 					{
 						v := b.Int32()
@@ -3829,15 +3964,20 @@ func (v *OffsetFetchResponse) ReadFrom(src []byte) error {
 	{
 		v := s.Topics
 		a := v
-		var i int32
+		var l int32
 		if isFlexible {
-			i = b.CompactArrayLen()
+			l = b.CompactArrayLen()
 		} else {
-			i = b.ArrayLen()
+			l = b.ArrayLen()
 		}
-		for ; i > 0; i-- {
-			a = append(a, OffsetFetchResponseTopic{})
-			v := &a[len(a)-1]
+		if !b.Ok() {
+			return b.Complete()
+		}
+		if l > 0 {
+			a = make([]OffsetFetchResponseTopic, l)
+		}
+		for i := int32(0); i < l; i++ {
+			v := &a[i]
 			s := v
 			{
 				v := b.String()
@@ -3846,15 +3986,20 @@ func (v *OffsetFetchResponse) ReadFrom(src []byte) error {
 			{
 				v := s.Partitions
 				a := v
-				var i int32
+				var l int32
 				if isFlexible {
-					i = b.CompactArrayLen()
+					l = b.CompactArrayLen()
 				} else {
-					i = b.ArrayLen()
+					l = b.ArrayLen()
 				}
-				for ; i > 0; i-- {
-					a = append(a, OffsetFetchResponseTopicPartition{})
-					v := &a[len(a)-1]
+				if !b.Ok() {
+					return b.Complete()
+				}
+				if l > 0 {
+					a = make([]OffsetFetchResponseTopicPartition, l)
+				}
+				for i := int32(0); i < l; i++ {
+					v := &a[i]
 					s := v
 					{
 						v := b.Int32()
@@ -4093,9 +4238,17 @@ func (v *GroupMemberMetadata) ReadFrom(src []byte) error {
 	{
 		v := s.Topics
 		a := v
-		for i := b.ArrayLen(); i > 0; i-- {
+		var l int32
+		l = b.ArrayLen()
+		if !b.Ok() {
+			return b.Complete()
+		}
+		if l > 0 {
+			a = make([]string, l)
+		}
+		for i := int32(0); i < l; i++ {
 			v := b.String()
-			a = append(a, v)
+			a[i] = v
 		}
 		v = a
 		s.Topics = v
@@ -4168,9 +4321,16 @@ func (v *GroupMemberAssignment) ReadFrom(src []byte) error {
 	{
 		v := s.Topics
 		a := v
-		for i := b.ArrayLen(); i > 0; i-- {
-			a = append(a, GroupMemberAssignmentTopic{})
-			v := &a[len(a)-1]
+		var l int32
+		l = b.ArrayLen()
+		if !b.Ok() {
+			return b.Complete()
+		}
+		if l > 0 {
+			a = make([]GroupMemberAssignmentTopic, l)
+		}
+		for i := int32(0); i < l; i++ {
+			v := &a[i]
 			s := v
 			{
 				v := b.String()
@@ -4179,9 +4339,17 @@ func (v *GroupMemberAssignment) ReadFrom(src []byte) error {
 			{
 				v := s.Partitions
 				a := v
-				for i := b.ArrayLen(); i > 0; i-- {
+				var l int32
+				l = b.ArrayLen()
+				if !b.Ok() {
+					return b.Complete()
+				}
+				if l > 0 {
+					a = make([]int32, l)
+				}
+				for i := int32(0); i < l; i++ {
 					v := b.Int32()
-					a = append(a, v)
+					a[i] = v
 				}
 				v = a
 				s.Partitions = v
@@ -4459,15 +4627,20 @@ func (v *JoinGroupResponse) ReadFrom(src []byte) error {
 	{
 		v := s.Members
 		a := v
-		var i int32
+		var l int32
 		if isFlexible {
-			i = b.CompactArrayLen()
+			l = b.CompactArrayLen()
 		} else {
-			i = b.ArrayLen()
+			l = b.ArrayLen()
 		}
-		for ; i > 0; i-- {
-			a = append(a, JoinGroupResponseMember{})
-			v := &a[len(a)-1]
+		if !b.Ok() {
+			return b.Complete()
+		}
+		if l > 0 {
+			a = make([]JoinGroupResponseMember, l)
+		}
+		for i := int32(0); i < l; i++ {
+			v := &a[i]
 			s := v
 			{
 				v := b.String()
@@ -4737,15 +4910,20 @@ func (v *LeaveGroupResponse) ReadFrom(src []byte) error {
 	if version >= 3 {
 		v := s.Members
 		a := v
-		var i int32
+		var l int32
 		if isFlexible {
-			i = b.CompactArrayLen()
+			l = b.CompactArrayLen()
 		} else {
-			i = b.ArrayLen()
+			l = b.ArrayLen()
 		}
-		for ; i > 0; i-- {
-			a = append(a, LeaveGroupResponseMember{})
-			v := &a[len(a)-1]
+		if !b.Ok() {
+			return b.Complete()
+		}
+		if l > 0 {
+			a = make([]LeaveGroupResponseMember, l)
+		}
+		for i := int32(0); i < l; i++ {
+			v := &a[i]
 			s := v
 			{
 				v := b.String()
@@ -5070,15 +5248,20 @@ func (v *DescribeGroupsResponse) ReadFrom(src []byte) error {
 	{
 		v := s.Groups
 		a := v
-		var i int32
+		var l int32
 		if isFlexible {
-			i = b.CompactArrayLen()
+			l = b.CompactArrayLen()
 		} else {
-			i = b.ArrayLen()
+			l = b.ArrayLen()
 		}
-		for ; i > 0; i-- {
-			a = append(a, DescribeGroupsResponseGroup{})
-			v := &a[len(a)-1]
+		if !b.Ok() {
+			return b.Complete()
+		}
+		if l > 0 {
+			a = make([]DescribeGroupsResponseGroup, l)
+		}
+		for i := int32(0); i < l; i++ {
+			v := &a[i]
 			s := v
 			{
 				v := b.Int16()
@@ -5103,15 +5286,20 @@ func (v *DescribeGroupsResponse) ReadFrom(src []byte) error {
 			{
 				v := s.Members
 				a := v
-				var i int32
+				var l int32
 				if isFlexible {
-					i = b.CompactArrayLen()
+					l = b.CompactArrayLen()
 				} else {
-					i = b.ArrayLen()
+					l = b.ArrayLen()
 				}
-				for ; i > 0; i-- {
-					a = append(a, DescribeGroupsResponseGroupMember{})
-					v := &a[len(a)-1]
+				if !b.Ok() {
+					return b.Complete()
+				}
+				if l > 0 {
+					a = make([]DescribeGroupsResponseGroupMember, l)
+				}
+				for i := int32(0); i < l; i++ {
+					v := &a[i]
 					s := v
 					{
 						v := b.String()
@@ -5234,15 +5422,20 @@ func (v *ListGroupsResponse) ReadFrom(src []byte) error {
 	{
 		v := s.Groups
 		a := v
-		var i int32
+		var l int32
 		if isFlexible {
-			i = b.CompactArrayLen()
+			l = b.CompactArrayLen()
 		} else {
-			i = b.ArrayLen()
+			l = b.ArrayLen()
 		}
-		for ; i > 0; i-- {
-			a = append(a, ListGroupsResponseGroup{})
-			v := &a[len(a)-1]
+		if !b.Ok() {
+			return b.Complete()
+		}
+		if l > 0 {
+			a = make([]ListGroupsResponseGroup, l)
+		}
+		for i := int32(0); i < l; i++ {
+			v := &a[i]
 			s := v
 			{
 				v := b.String()
@@ -5328,9 +5521,17 @@ func (v *SASLHandshakeResponse) ReadFrom(src []byte) error {
 	{
 		v := s.SupportedMechanisms
 		a := v
-		for i := b.ArrayLen(); i > 0; i-- {
+		var l int32
+		l = b.ArrayLen()
+		if !b.Ok() {
+			return b.Complete()
+		}
+		if l > 0 {
+			a = make([]string, l)
+		}
+		for i := int32(0); i < l; i++ {
 			v := b.String()
-			a = append(a, v)
+			a[i] = v
 		}
 		v = a
 		s.SupportedMechanisms = v
@@ -5446,15 +5647,20 @@ func (v *ApiVersionsResponse) ReadFrom(src []byte) error {
 	{
 		v := s.ApiKeys
 		a := v
-		var i int32
+		var l int32
 		if isFlexible {
-			i = b.CompactArrayLen()
+			l = b.CompactArrayLen()
 		} else {
-			i = b.ArrayLen()
+			l = b.ArrayLen()
 		}
-		for ; i > 0; i-- {
-			a = append(a, ApiVersionsResponseApiKey{})
-			v := &a[len(a)-1]
+		if !b.Ok() {
+			return b.Complete()
+		}
+		if l > 0 {
+			a = make([]ApiVersionsResponseApiKey, l)
+		}
+		for i := int32(0); i < l; i++ {
+			v := &a[i]
 			s := v
 			{
 				v := b.Int16()
@@ -5755,15 +5961,20 @@ func (v *CreateTopicsResponse) ReadFrom(src []byte) error {
 	{
 		v := s.Topics
 		a := v
-		var i int32
+		var l int32
 		if isFlexible {
-			i = b.CompactArrayLen()
+			l = b.CompactArrayLen()
 		} else {
-			i = b.ArrayLen()
+			l = b.ArrayLen()
 		}
-		for ; i > 0; i-- {
-			a = append(a, CreateTopicsResponseTopic{})
-			v := &a[len(a)-1]
+		if !b.Ok() {
+			return b.Complete()
+		}
+		if l > 0 {
+			a = make([]CreateTopicsResponseTopic, l)
+		}
+		for i := int32(0); i < l; i++ {
+			v := &a[i]
 			s := v
 			{
 				v := b.String()
@@ -5788,18 +5999,23 @@ func (v *CreateTopicsResponse) ReadFrom(src []byte) error {
 			if version >= 5 {
 				v := s.Configs
 				a := v
-				var i int32
+				var l int32
 				if isFlexible {
-					i = b.CompactArrayLen()
+					l = b.CompactArrayLen()
 				} else {
-					i = b.ArrayLen()
+					l = b.ArrayLen()
 				}
-				if version < 0 || i == 0 {
+				if version < 0 || l == 0 {
 					a = []CreateTopicsResponseTopicConfig{}
 				}
-				for ; i > 0; i-- {
-					a = append(a, CreateTopicsResponseTopicConfig{})
-					v := &a[len(a)-1]
+				if !b.Ok() {
+					return b.Complete()
+				}
+				if l > 0 {
+					a = make([]CreateTopicsResponseTopicConfig, l)
+				}
+				for i := int32(0); i < l; i++ {
+					v := &a[i]
 					s := v
 					{
 						v := b.String()
@@ -5957,15 +6173,20 @@ func (v *DeleteTopicsResponse) ReadFrom(src []byte) error {
 	{
 		v := s.Topics
 		a := v
-		var i int32
+		var l int32
 		if isFlexible {
-			i = b.CompactArrayLen()
+			l = b.CompactArrayLen()
 		} else {
-			i = b.ArrayLen()
+			l = b.ArrayLen()
 		}
-		for ; i > 0; i-- {
-			a = append(a, DeleteTopicsResponseTopic{})
-			v := &a[len(a)-1]
+		if !b.Ok() {
+			return b.Complete()
+		}
+		if l > 0 {
+			a = make([]DeleteTopicsResponseTopic, l)
+		}
+		for i := int32(0); i < l; i++ {
+			v := &a[i]
 			s := v
 			{
 				v := b.String()
@@ -6139,9 +6360,16 @@ func (v *DeleteRecordsResponse) ReadFrom(src []byte) error {
 	{
 		v := s.Topics
 		a := v
-		for i := b.ArrayLen(); i > 0; i-- {
-			a = append(a, DeleteRecordsResponseTopic{})
-			v := &a[len(a)-1]
+		var l int32
+		l = b.ArrayLen()
+		if !b.Ok() {
+			return b.Complete()
+		}
+		if l > 0 {
+			a = make([]DeleteRecordsResponseTopic, l)
+		}
+		for i := int32(0); i < l; i++ {
+			v := &a[i]
 			s := v
 			{
 				v := b.String()
@@ -6150,9 +6378,16 @@ func (v *DeleteRecordsResponse) ReadFrom(src []byte) error {
 			{
 				v := s.Partitions
 				a := v
-				for i := b.ArrayLen(); i > 0; i-- {
-					a = append(a, DeleteRecordsResponseTopicPartition{})
-					v := &a[len(a)-1]
+				var l int32
+				l = b.ArrayLen()
+				if !b.Ok() {
+					return b.Complete()
+				}
+				if l > 0 {
+					a = make([]DeleteRecordsResponseTopicPartition, l)
+				}
+				for i := int32(0); i < l; i++ {
+					v := &a[i]
 					s := v
 					{
 						v := b.Int32()
@@ -6446,9 +6681,16 @@ func (v *OffsetForLeaderEpochResponse) ReadFrom(src []byte) error {
 	{
 		v := s.Topics
 		a := v
-		for i := b.ArrayLen(); i > 0; i-- {
-			a = append(a, OffsetForLeaderEpochResponseTopic{})
-			v := &a[len(a)-1]
+		var l int32
+		l = b.ArrayLen()
+		if !b.Ok() {
+			return b.Complete()
+		}
+		if l > 0 {
+			a = make([]OffsetForLeaderEpochResponseTopic, l)
+		}
+		for i := int32(0); i < l; i++ {
+			v := &a[i]
 			s := v
 			{
 				v := b.String()
@@ -6457,9 +6699,16 @@ func (v *OffsetForLeaderEpochResponse) ReadFrom(src []byte) error {
 			{
 				v := s.Partitions
 				a := v
-				for i := b.ArrayLen(); i > 0; i-- {
-					a = append(a, OffsetForLeaderEpochResponseTopicPartition{})
-					v := &a[len(a)-1]
+				var l int32
+				l = b.ArrayLen()
+				if !b.Ok() {
+					return b.Complete()
+				}
+				if l > 0 {
+					a = make([]OffsetForLeaderEpochResponseTopicPartition, l)
+				}
+				for i := int32(0); i < l; i++ {
+					v := &a[i]
 					s := v
 					{
 						v := b.Int16()
@@ -6586,9 +6835,16 @@ func (v *AddPartitionsToTxnResponse) ReadFrom(src []byte) error {
 	{
 		v := s.Topics
 		a := v
-		for i := b.ArrayLen(); i > 0; i-- {
-			a = append(a, AddPartitionsToTxnResponseTopic{})
-			v := &a[len(a)-1]
+		var l int32
+		l = b.ArrayLen()
+		if !b.Ok() {
+			return b.Complete()
+		}
+		if l > 0 {
+			a = make([]AddPartitionsToTxnResponseTopic, l)
+		}
+		for i := int32(0); i < l; i++ {
+			v := &a[i]
 			s := v
 			{
 				v := b.String()
@@ -6597,9 +6853,16 @@ func (v *AddPartitionsToTxnResponse) ReadFrom(src []byte) error {
 			{
 				v := s.Partitions
 				a := v
-				for i := b.ArrayLen(); i > 0; i-- {
-					a = append(a, AddPartitionsToTxnResponseTopicPartition{})
-					v := &a[len(a)-1]
+				var l int32
+				l = b.ArrayLen()
+				if !b.Ok() {
+					return b.Complete()
+				}
+				if l > 0 {
+					a = make([]AddPartitionsToTxnResponseTopicPartition, l)
+				}
+				for i := int32(0); i < l; i++ {
+					v := &a[i]
 					s := v
 					{
 						v := b.Int32()
@@ -6868,9 +7131,16 @@ func (v *WriteTxnMarkersResponse) ReadFrom(src []byte) error {
 	{
 		v := s.Markers
 		a := v
-		for i := b.ArrayLen(); i > 0; i-- {
-			a = append(a, WriteTxnMarkersResponseMarker{})
-			v := &a[len(a)-1]
+		var l int32
+		l = b.ArrayLen()
+		if !b.Ok() {
+			return b.Complete()
+		}
+		if l > 0 {
+			a = make([]WriteTxnMarkersResponseMarker, l)
+		}
+		for i := int32(0); i < l; i++ {
+			v := &a[i]
 			s := v
 			{
 				v := b.Int64()
@@ -6879,9 +7149,16 @@ func (v *WriteTxnMarkersResponse) ReadFrom(src []byte) error {
 			{
 				v := s.Topics
 				a := v
-				for i := b.ArrayLen(); i > 0; i-- {
-					a = append(a, WriteTxnMarkersResponseMarkerTopic{})
-					v := &a[len(a)-1]
+				var l int32
+				l = b.ArrayLen()
+				if !b.Ok() {
+					return b.Complete()
+				}
+				if l > 0 {
+					a = make([]WriteTxnMarkersResponseMarkerTopic, l)
+				}
+				for i := int32(0); i < l; i++ {
+					v := &a[i]
 					s := v
 					{
 						v := b.String()
@@ -6890,9 +7167,16 @@ func (v *WriteTxnMarkersResponse) ReadFrom(src []byte) error {
 					{
 						v := s.Partitions
 						a := v
-						for i := b.ArrayLen(); i > 0; i-- {
-							a = append(a, WriteTxnMarkersResponseMarkerTopicPartition{})
-							v := &a[len(a)-1]
+						var l int32
+						l = b.ArrayLen()
+						if !b.Ok() {
+							return b.Complete()
+						}
+						if l > 0 {
+							a = make([]WriteTxnMarkersResponseMarkerTopicPartition, l)
+						}
+						for i := int32(0); i < l; i++ {
+							v := &a[i]
 							s := v
 							{
 								v := b.Int32()
@@ -7049,9 +7333,16 @@ func (v *TxnOffsetCommitResponse) ReadFrom(src []byte) error {
 	{
 		v := s.Topics
 		a := v
-		for i := b.ArrayLen(); i > 0; i-- {
-			a = append(a, TxnOffsetCommitResponseTopic{})
-			v := &a[len(a)-1]
+		var l int32
+		l = b.ArrayLen()
+		if !b.Ok() {
+			return b.Complete()
+		}
+		if l > 0 {
+			a = make([]TxnOffsetCommitResponseTopic, l)
+		}
+		for i := int32(0); i < l; i++ {
+			v := &a[i]
 			s := v
 			{
 				v := b.String()
@@ -7060,9 +7351,16 @@ func (v *TxnOffsetCommitResponse) ReadFrom(src []byte) error {
 			{
 				v := s.Partitions
 				a := v
-				for i := b.ArrayLen(); i > 0; i-- {
-					a = append(a, TxnOffsetCommitResponseTopicPartition{})
-					v := &a[len(a)-1]
+				var l int32
+				l = b.ArrayLen()
+				if !b.Ok() {
+					return b.Complete()
+				}
+				if l > 0 {
+					a = make([]TxnOffsetCommitResponseTopicPartition, l)
+				}
+				for i := int32(0); i < l; i++ {
+					v := &a[i]
 					s := v
 					{
 						v := b.Int32()
@@ -7245,9 +7543,16 @@ func (v *DescribeACLsResponse) ReadFrom(src []byte) error {
 	{
 		v := s.Resources
 		a := v
-		for i := b.ArrayLen(); i > 0; i-- {
-			a = append(a, DescribeACLsResponseResource{})
-			v := &a[len(a)-1]
+		var l int32
+		l = b.ArrayLen()
+		if !b.Ok() {
+			return b.Complete()
+		}
+		if l > 0 {
+			a = make([]DescribeACLsResponseResource, l)
+		}
+		for i := int32(0); i < l; i++ {
+			v := &a[i]
 			s := v
 			{
 				v := b.Int8()
@@ -7264,9 +7569,16 @@ func (v *DescribeACLsResponse) ReadFrom(src []byte) error {
 			{
 				v := s.ACLs
 				a := v
-				for i := b.ArrayLen(); i > 0; i-- {
-					a = append(a, DescribeACLsResponseResourceACL{})
-					v := &a[len(a)-1]
+				var l int32
+				l = b.ArrayLen()
+				if !b.Ok() {
+					return b.Complete()
+				}
+				if l > 0 {
+					a = make([]DescribeACLsResponseResourceACL, l)
+				}
+				for i := int32(0); i < l; i++ {
+					v := &a[i]
 					s := v
 					{
 						v := b.String()
@@ -7392,9 +7704,16 @@ func (v *CreateACLsResponse) ReadFrom(src []byte) error {
 	{
 		v := s.CreationResponses
 		a := v
-		for i := b.ArrayLen(); i > 0; i-- {
-			a = append(a, CreateACLsResponseCreationResponse{})
-			v := &a[len(a)-1]
+		var l int32
+		l = b.ArrayLen()
+		if !b.Ok() {
+			return b.Complete()
+		}
+		if l > 0 {
+			a = make([]CreateACLsResponseCreationResponse, l)
+		}
+		for i := int32(0); i < l; i++ {
+			v := &a[i]
 			s := v
 			{
 				v := b.Int16()
@@ -7529,9 +7848,16 @@ func (v *DeleteACLsResponse) ReadFrom(src []byte) error {
 	{
 		v := s.FilterResponses
 		a := v
-		for i := b.ArrayLen(); i > 0; i-- {
-			a = append(a, DeleteACLsResponseFilterResponse{})
-			v := &a[len(a)-1]
+		var l int32
+		l = b.ArrayLen()
+		if !b.Ok() {
+			return b.Complete()
+		}
+		if l > 0 {
+			a = make([]DeleteACLsResponseFilterResponse, l)
+		}
+		for i := int32(0); i < l; i++ {
+			v := &a[i]
 			s := v
 			{
 				v := b.Int16()
@@ -7544,9 +7870,16 @@ func (v *DeleteACLsResponse) ReadFrom(src []byte) error {
 			{
 				v := s.MatchingACLs
 				a := v
-				for i := b.ArrayLen(); i > 0; i-- {
-					a = append(a, DeleteACLsResponseFilterResponseMatchingACL{})
-					v := &a[len(a)-1]
+				var l int32
+				l = b.ArrayLen()
+				if !b.Ok() {
+					return b.Complete()
+				}
+				if l > 0 {
+					a = make([]DeleteACLsResponseFilterResponseMatchingACL, l)
+				}
+				for i := int32(0); i < l; i++ {
+					v := &a[i]
 					s := v
 					{
 						v := b.Int16()
@@ -7778,9 +8111,16 @@ func (v *DescribeConfigsResponse) ReadFrom(src []byte) error {
 	{
 		v := s.Resources
 		a := v
-		for i := b.ArrayLen(); i > 0; i-- {
-			a = append(a, DescribeConfigsResponseResource{})
-			v := &a[len(a)-1]
+		var l int32
+		l = b.ArrayLen()
+		if !b.Ok() {
+			return b.Complete()
+		}
+		if l > 0 {
+			a = make([]DescribeConfigsResponseResource, l)
+		}
+		for i := int32(0); i < l; i++ {
+			v := &a[i]
 			s := v
 			{
 				v := b.Int16()
@@ -7801,9 +8141,16 @@ func (v *DescribeConfigsResponse) ReadFrom(src []byte) error {
 			{
 				v := s.Configs
 				a := v
-				for i := b.ArrayLen(); i > 0; i-- {
-					a = append(a, DescribeConfigsResponseResourceConfig{})
-					v := &a[len(a)-1]
+				var l int32
+				l = b.ArrayLen()
+				if !b.Ok() {
+					return b.Complete()
+				}
+				if l > 0 {
+					a = make([]DescribeConfigsResponseResourceConfig, l)
+				}
+				for i := int32(0); i < l; i++ {
+					v := &a[i]
 					s := v
 					{
 						v := b.String()
@@ -7832,9 +8179,16 @@ func (v *DescribeConfigsResponse) ReadFrom(src []byte) error {
 					if version >= 1 {
 						v := s.ConfigSynonyms
 						a := v
-						for i := b.ArrayLen(); i > 0; i-- {
-							a = append(a, DescribeConfigsResponseResourceConfigConfigSynonym{})
-							v := &a[len(a)-1]
+						var l int32
+						l = b.ArrayLen()
+						if !b.Ok() {
+							return b.Complete()
+						}
+						if l > 0 {
+							a = make([]DescribeConfigsResponseResourceConfigConfigSynonym, l)
+						}
+						for i := int32(0); i < l; i++ {
+							v := &a[i]
 							s := v
 							{
 								v := b.String()
@@ -8026,9 +8380,16 @@ func (v *AlterConfigsResponse) ReadFrom(src []byte) error {
 	{
 		v := s.Resources
 		a := v
-		for i := b.ArrayLen(); i > 0; i-- {
-			a = append(a, AlterConfigsResponseResource{})
-			v := &a[len(a)-1]
+		var l int32
+		l = b.ArrayLen()
+		if !b.Ok() {
+			return b.Complete()
+		}
+		if l > 0 {
+			a = make([]AlterConfigsResponseResource, l)
+		}
+		for i := int32(0); i < l; i++ {
+			v := &a[i]
 			s := v
 			{
 				v := b.Int16()
@@ -8181,9 +8542,16 @@ func (v *AlterReplicaLogDirsResponse) ReadFrom(src []byte) error {
 	{
 		v := s.Topics
 		a := v
-		for i := b.ArrayLen(); i > 0; i-- {
-			a = append(a, AlterReplicaLogDirsResponseTopic{})
-			v := &a[len(a)-1]
+		var l int32
+		l = b.ArrayLen()
+		if !b.Ok() {
+			return b.Complete()
+		}
+		if l > 0 {
+			a = make([]AlterReplicaLogDirsResponseTopic, l)
+		}
+		for i := int32(0); i < l; i++ {
+			v := &a[i]
 			s := v
 			{
 				v := b.String()
@@ -8192,9 +8560,16 @@ func (v *AlterReplicaLogDirsResponse) ReadFrom(src []byte) error {
 			{
 				v := s.Partitions
 				a := v
-				for i := b.ArrayLen(); i > 0; i-- {
-					a = append(a, AlterReplicaLogDirsResponseTopicPartition{})
-					v := &a[len(a)-1]
+				var l int32
+				l = b.ArrayLen()
+				if !b.Ok() {
+					return b.Complete()
+				}
+				if l > 0 {
+					a = make([]AlterReplicaLogDirsResponseTopicPartition, l)
+				}
+				for i := int32(0); i < l; i++ {
+					v := &a[i]
 					s := v
 					{
 						v := b.Int32()
@@ -8342,9 +8717,16 @@ func (v *DescribeLogDirsResponse) ReadFrom(src []byte) error {
 	{
 		v := s.Dirs
 		a := v
-		for i := b.ArrayLen(); i > 0; i-- {
-			a = append(a, DescribeLogDirsResponseDir{})
-			v := &a[len(a)-1]
+		var l int32
+		l = b.ArrayLen()
+		if !b.Ok() {
+			return b.Complete()
+		}
+		if l > 0 {
+			a = make([]DescribeLogDirsResponseDir, l)
+		}
+		for i := int32(0); i < l; i++ {
+			v := &a[i]
 			s := v
 			{
 				v := b.Int16()
@@ -8357,9 +8739,16 @@ func (v *DescribeLogDirsResponse) ReadFrom(src []byte) error {
 			{
 				v := s.Topics
 				a := v
-				for i := b.ArrayLen(); i > 0; i-- {
-					a = append(a, DescribeLogDirsResponseDirTopic{})
-					v := &a[len(a)-1]
+				var l int32
+				l = b.ArrayLen()
+				if !b.Ok() {
+					return b.Complete()
+				}
+				if l > 0 {
+					a = make([]DescribeLogDirsResponseDirTopic, l)
+				}
+				for i := int32(0); i < l; i++ {
+					v := &a[i]
 					s := v
 					{
 						v := b.String()
@@ -8368,9 +8757,16 @@ func (v *DescribeLogDirsResponse) ReadFrom(src []byte) error {
 					{
 						v := s.Partitions
 						a := v
-						for i := b.ArrayLen(); i > 0; i-- {
-							a = append(a, DescribeLogDirsResponseDirTopicPartition{})
-							v := &a[len(a)-1]
+						var l int32
+						l = b.ArrayLen()
+						if !b.Ok() {
+							return b.Complete()
+						}
+						if l > 0 {
+							a = make([]DescribeLogDirsResponseDirTopicPartition, l)
+						}
+						for i := int32(0); i < l; i++ {
+							v := &a[i]
 							s := v
 							{
 								v := b.Int32()
@@ -8623,9 +9019,16 @@ func (v *CreatePartitionsResponse) ReadFrom(src []byte) error {
 	{
 		v := s.Topics
 		a := v
-		for i := b.ArrayLen(); i > 0; i-- {
-			a = append(a, CreatePartitionsResponseTopic{})
-			v := &a[len(a)-1]
+		var l int32
+		l = b.ArrayLen()
+		if !b.Ok() {
+			return b.Complete()
+		}
+		if l > 0 {
+			a = make([]CreatePartitionsResponseTopic, l)
+		}
+		for i := int32(0); i < l; i++ {
+			v := &a[i]
 			s := v
 			{
 				v := b.String()
@@ -8998,9 +9401,16 @@ func (v *DescribeDelegationTokenResponse) ReadFrom(src []byte) error {
 	{
 		v := s.TokenDetails
 		a := v
-		for i := b.ArrayLen(); i > 0; i-- {
-			a = append(a, DescribeDelegationTokenResponseTokenDetail{})
-			v := &a[len(a)-1]
+		var l int32
+		l = b.ArrayLen()
+		if !b.Ok() {
+			return b.Complete()
+		}
+		if l > 0 {
+			a = make([]DescribeDelegationTokenResponseTokenDetail, l)
+		}
+		for i := int32(0); i < l; i++ {
+			v := &a[i]
 			s := v
 			{
 				v := b.String()
@@ -9033,9 +9443,16 @@ func (v *DescribeDelegationTokenResponse) ReadFrom(src []byte) error {
 			{
 				v := s.Renewers
 				a := v
-				for i := b.ArrayLen(); i > 0; i-- {
-					a = append(a, DescribeDelegationTokenResponseTokenDetailRenewer{})
-					v := &a[len(a)-1]
+				var l int32
+				l = b.ArrayLen()
+				if !b.Ok() {
+					return b.Complete()
+				}
+				if l > 0 {
+					a = make([]DescribeDelegationTokenResponseTokenDetailRenewer, l)
+				}
+				for i := int32(0); i < l; i++ {
+					v := &a[i]
 					s := v
 					{
 						v := b.String()
@@ -9154,15 +9571,20 @@ func (v *DeleteGroupsResponse) ReadFrom(src []byte) error {
 	{
 		v := s.Groups
 		a := v
-		var i int32
+		var l int32
 		if isFlexible {
-			i = b.CompactArrayLen()
+			l = b.CompactArrayLen()
 		} else {
-			i = b.ArrayLen()
+			l = b.ArrayLen()
 		}
-		for ; i > 0; i-- {
-			a = append(a, DeleteGroupsResponseGroup{})
-			v := &a[len(a)-1]
+		if !b.Ok() {
+			return b.Complete()
+		}
+		if l > 0 {
+			a = make([]DeleteGroupsResponseGroup, l)
+		}
+		for i := int32(0); i < l; i++ {
+			v := &a[i]
 			s := v
 			{
 				v := b.String()
@@ -9347,15 +9769,20 @@ func (v *ElectLeadersResponse) ReadFrom(src []byte) error {
 	{
 		v := s.Topics
 		a := v
-		var i int32
+		var l int32
 		if isFlexible {
-			i = b.CompactArrayLen()
+			l = b.CompactArrayLen()
 		} else {
-			i = b.ArrayLen()
+			l = b.ArrayLen()
 		}
-		for ; i > 0; i-- {
-			a = append(a, ElectLeadersResponseTopic{})
-			v := &a[len(a)-1]
+		if !b.Ok() {
+			return b.Complete()
+		}
+		if l > 0 {
+			a = make([]ElectLeadersResponseTopic, l)
+		}
+		for i := int32(0); i < l; i++ {
+			v := &a[i]
 			s := v
 			{
 				v := b.String()
@@ -9364,15 +9791,20 @@ func (v *ElectLeadersResponse) ReadFrom(src []byte) error {
 			{
 				v := s.Partitions
 				a := v
-				var i int32
+				var l int32
 				if isFlexible {
-					i = b.CompactArrayLen()
+					l = b.CompactArrayLen()
 				} else {
-					i = b.ArrayLen()
+					l = b.ArrayLen()
 				}
-				for ; i > 0; i-- {
-					a = append(a, ElectLeadersResponseTopicPartition{})
-					v := &a[len(a)-1]
+				if !b.Ok() {
+					return b.Complete()
+				}
+				if l > 0 {
+					a = make([]ElectLeadersResponseTopicPartition, l)
+				}
+				for i := int32(0); i < l; i++ {
+					v := &a[i]
 					s := v
 					{
 						v := b.Int32()
@@ -9595,15 +10027,20 @@ func (v *IncrementalAlterConfigsResponse) ReadFrom(src []byte) error {
 	{
 		v := s.Responses
 		a := v
-		var i int32
+		var l int32
 		if isFlexible {
-			i = b.CompactArrayLen()
+			l = b.CompactArrayLen()
 		} else {
-			i = b.ArrayLen()
+			l = b.ArrayLen()
 		}
-		for ; i > 0; i-- {
-			a = append(a, IncrementalAlterConfigsResponseResponse{})
-			v := &a[len(a)-1]
+		if !b.Ok() {
+			return b.Complete()
+		}
+		if l > 0 {
+			a = make([]IncrementalAlterConfigsResponseResponse, l)
+		}
+		for i := int32(0); i < l; i++ {
+			v := &a[i]
 			s := v
 			{
 				v := b.Int16()
@@ -9811,15 +10248,20 @@ func (v *AlterPartitionReassignmentsResponse) ReadFrom(src []byte) error {
 	{
 		v := s.Topics
 		a := v
-		var i int32
+		var l int32
 		if isFlexible {
-			i = b.CompactArrayLen()
+			l = b.CompactArrayLen()
 		} else {
-			i = b.ArrayLen()
+			l = b.ArrayLen()
 		}
-		for ; i > 0; i-- {
-			a = append(a, AlterPartitionReassignmentsResponseTopic{})
-			v := &a[len(a)-1]
+		if !b.Ok() {
+			return b.Complete()
+		}
+		if l > 0 {
+			a = make([]AlterPartitionReassignmentsResponseTopic, l)
+		}
+		for i := int32(0); i < l; i++ {
+			v := &a[i]
 			s := v
 			{
 				v := b.String()
@@ -9828,15 +10270,20 @@ func (v *AlterPartitionReassignmentsResponse) ReadFrom(src []byte) error {
 			{
 				v := s.Partitions
 				a := v
-				var i int32
+				var l int32
 				if isFlexible {
-					i = b.CompactArrayLen()
+					l = b.CompactArrayLen()
 				} else {
-					i = b.ArrayLen()
+					l = b.ArrayLen()
 				}
-				for ; i > 0; i-- {
-					a = append(a, AlterPartitionReassignmentsResponseTopicPartition{})
-					v := &a[len(a)-1]
+				if !b.Ok() {
+					return b.Complete()
+				}
+				if l > 0 {
+					a = make([]AlterPartitionReassignmentsResponseTopicPartition, l)
+				}
+				for i := int32(0); i < l; i++ {
+					v := &a[i]
 					s := v
 					{
 						v := b.Int32()
@@ -10019,15 +10466,20 @@ func (v *ListPartitionReassignmentsResponse) ReadFrom(src []byte) error {
 	{
 		v := s.Topics
 		a := v
-		var i int32
+		var l int32
 		if isFlexible {
-			i = b.CompactArrayLen()
+			l = b.CompactArrayLen()
 		} else {
-			i = b.ArrayLen()
+			l = b.ArrayLen()
 		}
-		for ; i > 0; i-- {
-			a = append(a, ListPartitionReassignmentsResponseTopic{})
-			v := &a[len(a)-1]
+		if !b.Ok() {
+			return b.Complete()
+		}
+		if l > 0 {
+			a = make([]ListPartitionReassignmentsResponseTopic, l)
+		}
+		for i := int32(0); i < l; i++ {
+			v := &a[i]
 			s := v
 			{
 				v := b.String()
@@ -10036,15 +10488,20 @@ func (v *ListPartitionReassignmentsResponse) ReadFrom(src []byte) error {
 			{
 				v := s.Partitions
 				a := v
-				var i int32
+				var l int32
 				if isFlexible {
-					i = b.CompactArrayLen()
+					l = b.CompactArrayLen()
 				} else {
-					i = b.ArrayLen()
+					l = b.ArrayLen()
 				}
-				for ; i > 0; i-- {
-					a = append(a, ListPartitionReassignmentsResponseTopicPartition{})
-					v := &a[len(a)-1]
+				if !b.Ok() {
+					return b.Complete()
+				}
+				if l > 0 {
+					a = make([]ListPartitionReassignmentsResponseTopicPartition, l)
+				}
+				for i := int32(0); i < l; i++ {
+					v := &a[i]
 					s := v
 					{
 						v := b.Int32()
@@ -10053,15 +10510,21 @@ func (v *ListPartitionReassignmentsResponse) ReadFrom(src []byte) error {
 					{
 						v := s.Replicas
 						a := v
-						var i int32
+						var l int32
 						if isFlexible {
-							i = b.CompactArrayLen()
+							l = b.CompactArrayLen()
 						} else {
-							i = b.ArrayLen()
+							l = b.ArrayLen()
 						}
-						for ; i > 0; i-- {
+						if !b.Ok() {
+							return b.Complete()
+						}
+						if l > 0 {
+							a = make([]int32, l)
+						}
+						for i := int32(0); i < l; i++ {
 							v := b.Int32()
-							a = append(a, v)
+							a[i] = v
 						}
 						v = a
 						s.Replicas = v
@@ -10069,15 +10532,21 @@ func (v *ListPartitionReassignmentsResponse) ReadFrom(src []byte) error {
 					{
 						v := s.AddingReplicas
 						a := v
-						var i int32
+						var l int32
 						if isFlexible {
-							i = b.CompactArrayLen()
+							l = b.CompactArrayLen()
 						} else {
-							i = b.ArrayLen()
+							l = b.ArrayLen()
 						}
-						for ; i > 0; i-- {
+						if !b.Ok() {
+							return b.Complete()
+						}
+						if l > 0 {
+							a = make([]int32, l)
+						}
+						for i := int32(0); i < l; i++ {
 							v := b.Int32()
-							a = append(a, v)
+							a[i] = v
 						}
 						v = a
 						s.AddingReplicas = v
@@ -10085,15 +10554,21 @@ func (v *ListPartitionReassignmentsResponse) ReadFrom(src []byte) error {
 					{
 						v := s.RemovingReplicas
 						a := v
-						var i int32
+						var l int32
 						if isFlexible {
-							i = b.CompactArrayLen()
+							l = b.CompactArrayLen()
 						} else {
-							i = b.ArrayLen()
+							l = b.ArrayLen()
 						}
-						for ; i > 0; i-- {
+						if !b.Ok() {
+							return b.Complete()
+						}
+						if l > 0 {
+							a = make([]int32, l)
+						}
+						for i := int32(0); i < l; i++ {
 							v := b.Int32()
-							a = append(a, v)
+							a[i] = v
 						}
 						v = a
 						s.RemovingReplicas = v
@@ -10257,9 +10732,16 @@ func (v *OffsetDeleteResponse) ReadFrom(src []byte) error {
 	{
 		v := s.Topics
 		a := v
-		for i := b.ArrayLen(); i > 0; i-- {
-			a = append(a, OffsetDeleteResponseTopic{})
-			v := &a[len(a)-1]
+		var l int32
+		l = b.ArrayLen()
+		if !b.Ok() {
+			return b.Complete()
+		}
+		if l > 0 {
+			a = make([]OffsetDeleteResponseTopic, l)
+		}
+		for i := int32(0); i < l; i++ {
+			v := &a[i]
 			s := v
 			{
 				v := b.String()
@@ -10268,9 +10750,16 @@ func (v *OffsetDeleteResponse) ReadFrom(src []byte) error {
 			{
 				v := s.Partitions
 				a := v
-				for i := b.ArrayLen(); i > 0; i-- {
-					a = append(a, OffsetDeleteResponseTopicPartition{})
-					v := &a[len(a)-1]
+				var l int32
+				l = b.ArrayLen()
+				if !b.Ok() {
+					return b.Complete()
+				}
+				if l > 0 {
+					a = make([]OffsetDeleteResponseTopicPartition, l)
+				}
+				for i := int32(0); i < l; i++ {
+					v := &a[i]
 					s := v
 					{
 						v := b.Int32()
