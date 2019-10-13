@@ -187,46 +187,42 @@ func (a Array) WriteDecode(l *LineWriter) {
 	// variable so that the scope opened just below can use its own
 	// v variable. At the end, we reset v with any updates to a.
 	l.Write("a := v")
+	l.Write("var l int32")
+
 	if a.IsVarintArray {
-		l.Write("for i := b.Varint(); i > 0; i-- {")
-	} else if a.IsNullableArray {
-		if a.FromFlexible {
-			l.Write("var i int32")
-			l.Write("if isFlexible {")
-			l.Write("i = b.CompactArrayLen()")
-			l.Write("} else {")
-			l.Write("i = b.ArrayLen()")
-			l.Write("}")
-		} else {
-			l.Write("i := b.ArrayLen()")
-		}
-		l.Write("if version < %d || i == 0 {", a.NullableVersion)
-		l.Write("a = %s{}", a.TypeName())
-		l.Write("}")
-		l.Write("for ; i > 0; i-- {")
+		l.Write("l = b.VarintArrayLen()")
 	} else {
 		if a.FromFlexible {
-			l.Write("var i int32")
 			l.Write("if isFlexible {")
-			l.Write("i = b.CompactArrayLen()")
+			l.Write("l = b.CompactArrayLen()")
 			l.Write("} else {")
-			l.Write("i = b.ArrayLen()")
+			l.Write("l = b.ArrayLen()")
 			l.Write("}")
-			l.Write("for ; i > 0; i-- {")
 		} else {
-			l.Write("for i := b.ArrayLen(); i > 0; i-- {")
+			l.Write("l = b.ArrayLen()")
+		}
+		if a.IsNullableArray {
+			l.Write("if version < %d || l == 0 {", a.NullableVersion)
+			l.Write("a = %s{}", a.TypeName())
+			l.Write("}")
 		}
 	}
 
-	if s, isStruct := a.Inner.(Struct); isStruct {
-		// With structs, we append early and use a pointer to the
-		// new element, avoiding double copying.
-		l.Write("a = append(a, %s{})", s.Name)
-		l.Write("v := &a[len(a)-1]")
-	} else if a, isArray := a.Inner.(Array); isArray {
+	l.Write("if !b.Ok() {")
+	l.Write("return b.Complete()")
+	l.Write("}")
+
+	l.Write("if l > 0 {")
+	l.Write("a = make(%s, l)", a.TypeName())
+	l.Write("}")
+
+	l.Write("for i := int32(0); i < l; i++ {")
+	if _, isStruct := a.Inner.(Struct); isStruct {
+		l.Write("v := &a[i]")
+	} else if _, isArray := a.Inner.(Array); isArray {
 		// With nested arrays, we declare a new v and introduce scope
 		// so that the next level will not collide with our current "a".
-		l.Write("v := %s{}", a.TypeName())
+		l.Write("v := a[i]")
 		l.Write("{")
 	}
 
@@ -235,9 +231,10 @@ func (a Array) WriteDecode(l *LineWriter) {
 	if _, isArray := a.Inner.(Array); isArray {
 		// With nested arrays, now we release our scope.
 		l.Write("}")
-	} else if _, isStruct := a.Inner.(Struct); !isStruct {
-		// With non structs, we append after since the type is small.
-		l.Write("a = append(a, v)")
+	}
+
+	if _, isStruct := a.Inner.(Struct); !isStruct {
+		l.Write("a[i] = v")
 	}
 
 	l.Write("}") // close the for loop
