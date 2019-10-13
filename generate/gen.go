@@ -109,15 +109,10 @@ func (a Array) WriteAppend(l *LineWriter) {
 }
 
 func (s Struct) WriteAppend(l *LineWriter) {
+	tags := make(map[int]StructField)
 	for _, f := range s.Fields {
-		if f.MaxVersion > -1 {
-			l.Write("if version >= %d && version <= %d {", f.MinVersion, f.MaxVersion)
-		} else if f.MinVersion > 0 {
-			l.Write("if version >= %d {", f.MinVersion)
-		} else if f.MinVersion == -1 {
+		if onlyTag := f.writeBeginAndTag(l, tags); onlyTag {
 			continue
-		} else {
-			l.Write("{")
 		}
 		// If the struct field is a struct itself, we avoid copying it
 		// and instead grab a pointer.
@@ -130,13 +125,44 @@ func (s Struct) WriteAppend(l *LineWriter) {
 		l.Write("}")
 	}
 
-	// TODO once tags exist, we can fill in this section with something
-	// relevant.
-	if s.FromFlexible {
-		l.Write("if isFlexible {")
-		l.Write("dst = append(dst, 0)")
-		l.Write("}")
+	if !s.FromFlexible {
+		return
 	}
+
+	if len(tags) > 0 {
+		die("tagged fields in appending is unsupported! fix this!")
+	}
+
+	l.Write("if isFlexible {")
+	l.Write("dst = append(dst, 0)")
+	l.Write("}")
+}
+
+// writeBeginAndTag begins a struct field encode/decode and adds the field to
+// the tags map if necessary. If this field is only tagged, this returns true.
+func (f StructField) writeBeginAndTag(l *LineWriter, tags map[int]StructField) (onlyTag bool) {
+	if f.MinVersion == -1 && f.MaxVersion > 0 {
+		die("unexpected negative min version %d while max version %d on field %s", f.MinVersion, f.MaxVersion, f.FieldName)
+	}
+	if f.Tag >= 0 {
+		if _, exists := tags[f.Tag]; exists {
+			die("unexpected duplicate tag %d on field %s", f.Tag, f.FieldName)
+		}
+		tags[f.Tag] = f
+	}
+	if f.MaxVersion > -1 {
+		l.Write("if version >= %d && version <= %d {", f.MinVersion, f.MaxVersion)
+	} else if f.MinVersion > 0 {
+		l.Write("if version >= %d {", f.MinVersion)
+	} else if f.MinVersion == -1 {
+		if f.Tag < 0 {
+			die("unexpected min version -1 with tag %d on field %s", f.Tag, f.FieldName)
+		}
+		return true
+	} else {
+		l.Write("{")
+	}
+	return false
 }
 
 // primDecode corresponds to the binreader primitive decoding functions in
@@ -287,21 +313,8 @@ func (s Struct) WriteDecode(l *LineWriter) {
 	tags := make(map[int]StructField)
 
 	for _, f := range rangeFrom {
-		if f.MaxVersion > -1 {
-			l.Write("if version >= %d && version <= %d {", f.MinVersion, f.MaxVersion)
-		} else if f.MinVersion > 0 {
-			l.Write("if version >= %d {", f.MinVersion)
-		} else if f.MinVersion == -1 {
-			if f.Tag < 0 {
-				die("unexpected min version -1 with tag %d on field %s", f.Tag, f.FieldName)
-			}
-			if _, exists := tags[f.Tag]; exists {
-				die("unexpected duplicate tag %d on field %s", f.Tag, f.FieldName)
-			}
-			tags[f.Tag] = f
+		if onlyTag := f.writeBeginAndTag(l, tags); onlyTag {
 			continue
-		} else {
-			l.Write("{")
 		}
 		f.WriteDecode(l)
 		l.Write("}")
@@ -334,6 +347,12 @@ func (s Struct) WriteDecode(l *LineWriter) {
 		f, exists := tags[i]
 		if !exists {
 			die("saw %d tags, but did not see tag %d; expected monotonically increasing", len(tags), i)
+		}
+
+		switch f.Type.(type) {
+		case Bool, Int8, Int16, Int32, Int64, Uint32, Varint:
+		default:
+			die("type %v unsupported in decode! fix this!", f.Type)
 		}
 
 		l.Write("case %d:", i)
