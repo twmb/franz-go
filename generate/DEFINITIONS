@@ -1694,7 +1694,7 @@ ApiVersionsResponse =>
 // creation defaults. See KIP-464.
 //
 // Version 5, also in 2.4.0, returns topic configs in the response (KIP-525).
-CreateTopicsRequest => key 19, max version 6, flexible v6+, admin
+CreateTopicsRequest => key 19, max version 5, flexible v5+, admin
   // Topics is an array of topics to attempt to create.
   Topics: [=>]
     // Topic is a topic to create.
@@ -1774,7 +1774,10 @@ CreateTopicsResponse =>
     // ErrorMessage is an informative message if the topic creation failed.
     ErrorMessage: nullable-string // v1+
     // ConfigErrorCode is non-zero if configs are unable to be returned.
-    ConfigErrorCode: int16 // v5+
+    //
+    // This is the first tagged field, introduced in version 5. As such, it is
+    // only possible to be present in v5+.
+    ConfigErrorCode: int16 // tag 0
     // NumPartitions is how many partitions were created for this topic.
     NumPartitions: int32 // v5+
     // ReplicationFactor is how many replicas every partition has for this topic.
