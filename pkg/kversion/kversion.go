@@ -295,7 +295,6 @@ func Tip() Versions {
 	v[4]++  // 3 leader and isr KAFKA-8345 81900d0ba0 KIP-455
 	v[15]++ // 4 describe group KAFKA-8538 f8db022b08 KIP-345
 	v[19]++ // 4 create topics KAFKA-8305 8e161580b8 KIP-464
-	v[19]++ // 5 create topics KAFKA-8907 5d0052fe00 KIP-525
 	v[43]++ // 1 elect preferred leaders KAFKA-8286 121308cc7a KIP-460
 	v = append(v,
 		0, // 45 alter partition reassignments KAFKA-8345 81900d0ba0 KIP-455
@@ -319,7 +318,7 @@ func Tip() Versions {
 	v[15]++ // 5 describe groups (same)
 	v[16]++ // 3 list group (same)
 	v[18]++ // 3 api versions (same, also KIP-511 [non-flexible fields added])
-	v[19]++ // 6 create topics (same)
+	v[19]++ // 5 create topics (same)
 	v[20]++ // 4 delete topics (same)
 	v[22]++ // 2 init producer id (same)
 	v[38]++ // 2 create delegation token (same)
@@ -327,6 +326,10 @@ func Tip() Versions {
 	v[43]++ // 2 elect preferred leaders (same)
 	v[44]++ // 1 incremental alter configs (same)
 	// also 45, 46; not bumped since in same release
+
+	// Create topics (19) was bumped up to 5 in KAFKA-8907 5d0052fe00
+	// KIP-525, then 6 in the above bump, then back down to 5 once the
+	// tagged PR was merged (KAFKA-8932 1f1179ea64 for the bump down).
 
 	v[0]++ // 8 produce KAFKA-8729 f6f24c4700 KIP-467
 
