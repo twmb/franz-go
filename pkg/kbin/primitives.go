@@ -637,6 +637,19 @@ func (b *Reader) ArrayLen() int32 {
 	return r
 }
 
+// VarintArrayLen returns a Kafka array length from the reader.
+func (b *Reader) VarintArrayLen() int32 {
+	r := b.Varint()
+	// The min size of a Kafka type is a byte, so if we do not have
+	// at least the array length of bytes left, it is bad.
+	if len(b.Src) < int(r) {
+		b.bad = true
+		b.Src = nil
+		return 0
+	}
+	return r
+}
+
 // CompactArrayLen returns a Kafka compact array length from the reader.
 func (b *Reader) CompactArrayLen() int32 {
 	r := int32(b.Uvarint()) - 1
@@ -675,4 +688,9 @@ func (b *Reader) Complete() error {
 		return ErrTooMuchData
 	}
 	return nil
+}
+
+// Ok returns true if the reader is still ok.
+func (b *Reader) Ok() bool {
+	return !b.bad
 }
