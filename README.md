@@ -1,11 +1,6 @@
 kgo
 ===
 
-TODO
-====
-
-- cleanup generating (names are not great)
-
 ACL descriptions in KIP-133
 
 KIPS
@@ -13,15 +8,8 @@ KIPS
 
 TODO
 ----
-- KIP-11 (authorizor interface)
-- KIP-12 (sasl & ssl)
-- KIP-43 (sasl enhancements)
 - KIP-48 (create / describe delegation token; 1.1.0)
-- KIP-84 (sasl scram; 0.10.2)
 - KIP-140 (describe/create/delete ACLs; 0.11.0)
-- KIP-152 (more sasl, introduce sasl authenticate; 1.0.0)
-- KIP-255 (oauth via sasl/oauthbearer; 2.0.0)
-- KIP-368 (periodically reauth sasl; 2.2.0)
 
 
 - KIP-98 (EOS; 0.11.0)
@@ -42,17 +30,20 @@ NOT YET (KIP under discussion / unmerged PR)
 
 DONE
 ----
+- KIP-12 (sasl & ssl; 0.9.0)
 - KIP-13 (throttling; supported but not obeyed)
 - KIP-31 (relative offsets in message set; 0.10.0)
 - KIP-32 (timestamps in message set v1; 0.10.0)
 - KIP-35 (adds ApiVersion; 0.10.0)
 - KIP-36 (rack aware replica assignment; 0.10.0)
 - KIP-40 (ListGroups and DescribeGroup v0; 0.9.0)
+- KIP-43 (sasl enhancements & handshake; 0.10.0)
 - KIP-54 (sticky group assignment)
 - KIP-62 (join group rebalnce timeout, background thread heartbeats; v0.10.1)
 - KIP-74 (fetch response size limit; 0.10.1)
 - KIP-78 (cluster id in metadata; 0.10.1)
 - KIP-79 (list offset req/resp timestamp field; 0.10.1)
+- KIP-84 (sasl scram; 0.10.2)
 - KIP-101 (offset for leader epoch introduced; broker usage yet; 0.11.0)
 - KIP-107 (delete records; 0.11.0)
 - KIP-108 (validate create topic; 0.10.2)
@@ -61,6 +52,7 @@ DONE
 - KIP-113 (JBOD log dir movement, protocol additions; 1.0.0)
 - KIP-124 (request rate quotas; 0.11.0)
 - KIP-133 (describe & alter configs; 0.11.0)
+- KIP-152 (more sasl, introduce sasl authenticate; 1.0.0)
 - KIP-183 (elect preferred leaders; 2.2.0)
 - KIP-185 (idempotent is default; 1.0.0)
 - KIP-195 (create partitions request; 1.0.0)
@@ -69,11 +61,14 @@ DONE
 - KIP-226 (describe configs v1; 1.1.0)
 - KIP-227 (incremental fetch requests; supported but not used; 1.1.0)
 - KIP-229 (delete groups request; 1.1.0)
+- KIP-255 (oauth via sasl/oauthbearer; 2.0.0)
 - KIP-279 (leader / follower failover; changed offsets for leader epoch; 2.0.0)
 - KIP-320 (fetcher log truncation detection; 2.1.0)
 - KIP-322 (new error when delete topics is disabled; 2.1.0)
 - KIP-339 (incremental alter configs; 2.3.0)
 - KIP-341 (sticky group bug fix)
+- KIP-342 (oauth extensions; 2.1.0)
+- KIP-368 (periodically reauth sasl; 2.2.0)
 - KIP-369 (always round robin produce partitioner; 2.4.0)
 - KIP-380 (inter-broker command changes; 2.2.0)
 - KIP-394 (require member.id for initial join; 2.2.0)
