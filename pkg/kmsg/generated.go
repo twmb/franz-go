@@ -1777,7 +1777,11 @@ func (v *MetadataRequest) AppendTo(dst []byte) []byte {
 			v := &v[i]
 			{
 				v := v.Topic
-				dst = kbin.AppendString(dst, v)
+				if isFlexible {
+					dst = kbin.AppendCompactString(dst, v)
+				} else {
+					dst = kbin.AppendString(dst, v)
+				}
 			}
 			if isFlexible {
 				dst = append(dst, 0)
@@ -1946,7 +1950,12 @@ func (v *MetadataResponse) ReadFrom(src []byte) error {
 				s.NodeID = v
 			}
 			{
-				v := b.String()
+				var v string
+				if isFlexible {
+					v = b.CompactString()
+				} else {
+					v = b.String()
+				}
 				s.Host = v
 			}
 			{
@@ -1954,7 +1963,12 @@ func (v *MetadataResponse) ReadFrom(src []byte) error {
 				s.Port = v
 			}
 			if version >= 1 {
-				v := b.NullableString()
+				var v *string
+				if isFlexible {
+					v = b.CompactNullableString()
+				} else {
+					v = b.NullableString()
+				}
 				s.Rack = v
 			}
 			if isFlexible {
@@ -1965,7 +1979,12 @@ func (v *MetadataResponse) ReadFrom(src []byte) error {
 		s.Brokers = v
 	}
 	if version >= 2 {
-		v := b.NullableString()
+		var v *string
+		if isFlexible {
+			v = b.CompactNullableString()
+		} else {
+			v = b.NullableString()
+		}
 		s.ClusterID = v
 	}
 	if version >= 1 {
@@ -1995,7 +2014,12 @@ func (v *MetadataResponse) ReadFrom(src []byte) error {
 				s.ErrorCode = v
 			}
 			{
-				v := b.String()
+				var v string
+				if isFlexible {
+					v = b.CompactString()
+				} else {
+					v = b.String()
+				}
 				s.Topic = v
 			}
 			if version >= 1 {
@@ -2291,6 +2315,9 @@ func (v *LeaderAndISRRequest) AppendTo(dst []byte) []byte {
 				v := v.IsNew
 				dst = kbin.AppendBool(dst, v)
 			}
+			if isFlexible {
+				dst = append(dst, 0)
+			}
 		}
 	}
 	if version >= 2 {
@@ -2304,7 +2331,11 @@ func (v *LeaderAndISRRequest) AppendTo(dst []byte) []byte {
 			v := &v[i]
 			{
 				v := v.Topic
-				dst = kbin.AppendString(dst, v)
+				if isFlexible {
+					dst = kbin.AppendCompactString(dst, v)
+				} else {
+					dst = kbin.AppendString(dst, v)
+				}
 			}
 			{
 				v := v.PartitionStates
@@ -2375,6 +2406,9 @@ func (v *LeaderAndISRRequest) AppendTo(dst []byte) []byte {
 						v := v.IsNew
 						dst = kbin.AppendBool(dst, v)
 					}
+					if isFlexible {
+						dst = append(dst, 0)
+					}
 				}
 			}
 			if isFlexible {
@@ -2397,7 +2431,11 @@ func (v *LeaderAndISRRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Host
-				dst = kbin.AppendString(dst, v)
+				if isFlexible {
+					dst = kbin.AppendCompactString(dst, v)
+				} else {
+					dst = kbin.AppendString(dst, v)
+				}
 			}
 			{
 				v := v.Port
@@ -2462,7 +2500,12 @@ func (v *LeaderAndISRResponse) ReadFrom(src []byte) error {
 			v := &a[i]
 			s := v
 			{
-				v := b.String()
+				var v string
+				if isFlexible {
+					v = b.CompactString()
+				} else {
+					v = b.String()
+				}
 				s.Topic = v
 			}
 			{
@@ -2556,7 +2599,11 @@ func (v *StopReplicaRequest) AppendTo(dst []byte) []byte {
 			v := &v[i]
 			{
 				v := v.Topic
-				dst = kbin.AppendString(dst, v)
+				if isFlexible {
+					dst = kbin.AppendCompactString(dst, v)
+				} else {
+					dst = kbin.AppendString(dst, v)
+				}
 			}
 			if version >= 0 && version <= 0 {
 				v := v.Partition
@@ -2633,7 +2680,12 @@ func (v *StopReplicaResponse) ReadFrom(src []byte) error {
 			v := &a[i]
 			s := v
 			{
-				v := b.String()
+				var v string
+				if isFlexible {
+					v = b.CompactString()
+				} else {
+					v = b.String()
+				}
 				s.Topic = v
 			}
 			{
@@ -2813,6 +2865,9 @@ func (v *UpdateMetadataRequest) AppendTo(dst []byte) []byte {
 					dst = kbin.AppendInt32(dst, v)
 				}
 			}
+			if isFlexible {
+				dst = append(dst, 0)
+			}
 		}
 	}
 	if version >= 5 {
@@ -2826,7 +2881,11 @@ func (v *UpdateMetadataRequest) AppendTo(dst []byte) []byte {
 			v := &v[i]
 			{
 				v := v.Topic
-				dst = kbin.AppendString(dst, v)
+				if isFlexible {
+					dst = kbin.AppendCompactString(dst, v)
+				} else {
+					dst = kbin.AppendString(dst, v)
+				}
 			}
 			{
 				v := v.PartitionStates
@@ -2885,6 +2944,9 @@ func (v *UpdateMetadataRequest) AppendTo(dst []byte) []byte {
 							dst = kbin.AppendInt32(dst, v)
 						}
 					}
+					if isFlexible {
+						dst = append(dst, 0)
+					}
 				}
 			}
 			if isFlexible {
@@ -2907,7 +2969,11 @@ func (v *UpdateMetadataRequest) AppendTo(dst []byte) []byte {
 			}
 			if version >= 0 && version <= 0 {
 				v := v.Host
-				dst = kbin.AppendString(dst, v)
+				if isFlexible {
+					dst = kbin.AppendCompactString(dst, v)
+				} else {
+					dst = kbin.AppendString(dst, v)
+				}
 			}
 			if version >= 0 && version <= 0 {
 				v := v.Port
@@ -2928,11 +2994,19 @@ func (v *UpdateMetadataRequest) AppendTo(dst []byte) []byte {
 					}
 					{
 						v := v.Host
-						dst = kbin.AppendString(dst, v)
+						if isFlexible {
+							dst = kbin.AppendCompactString(dst, v)
+						} else {
+							dst = kbin.AppendString(dst, v)
+						}
 					}
 					if version >= 3 {
 						v := v.ListenerName
-						dst = kbin.AppendString(dst, v)
+						if isFlexible {
+							dst = kbin.AppendCompactString(dst, v)
+						} else {
+							dst = kbin.AppendString(dst, v)
+						}
 					}
 					{
 						v := v.SecurityProtocol
@@ -2945,7 +3019,11 @@ func (v *UpdateMetadataRequest) AppendTo(dst []byte) []byte {
 			}
 			if version >= 2 {
 				v := v.Rack
-				dst = kbin.AppendNullableString(dst, v)
+				if isFlexible {
+					dst = kbin.AppendCompactNullableString(dst, v)
+				} else {
+					dst = kbin.AppendNullableString(dst, v)
+				}
 			}
 			if isFlexible {
 				dst = append(dst, 0)
@@ -3078,7 +3156,12 @@ func (v *ControlledShutdownResponse) ReadFrom(src []byte) error {
 			v := &a[i]
 			s := v
 			{
-				v := b.String()
+				var v string
+				if isFlexible {
+					v = b.CompactString()
+				} else {
+					v = b.String()
+				}
 				s.Topic = v
 			}
 			{
@@ -3584,7 +3667,11 @@ func (v *OffsetCommitRequest) AppendTo(dst []byte) []byte {
 	_ = isFlexible
 	{
 		v := v.Group
-		dst = kbin.AppendString(dst, v)
+		if isFlexible {
+			dst = kbin.AppendCompactString(dst, v)
+		} else {
+			dst = kbin.AppendString(dst, v)
+		}
 	}
 	if version >= 1 {
 		v := v.Generation
@@ -3592,11 +3679,19 @@ func (v *OffsetCommitRequest) AppendTo(dst []byte) []byte {
 	}
 	if version >= 1 {
 		v := v.MemberID
-		dst = kbin.AppendString(dst, v)
+		if isFlexible {
+			dst = kbin.AppendCompactString(dst, v)
+		} else {
+			dst = kbin.AppendString(dst, v)
+		}
 	}
 	if version >= 7 {
 		v := v.InstanceID
-		dst = kbin.AppendNullableString(dst, v)
+		if isFlexible {
+			dst = kbin.AppendCompactNullableString(dst, v)
+		} else {
+			dst = kbin.AppendNullableString(dst, v)
+		}
 	}
 	if version >= 2 && version <= 4 {
 		v := v.RetentionTimeMillis
@@ -3613,7 +3708,11 @@ func (v *OffsetCommitRequest) AppendTo(dst []byte) []byte {
 			v := &v[i]
 			{
 				v := v.Topic
-				dst = kbin.AppendString(dst, v)
+				if isFlexible {
+					dst = kbin.AppendCompactString(dst, v)
+				} else {
+					dst = kbin.AppendString(dst, v)
+				}
 			}
 			{
 				v := v.Partitions
@@ -3642,7 +3741,11 @@ func (v *OffsetCommitRequest) AppendTo(dst []byte) []byte {
 					}
 					{
 						v := v.Metadata
-						dst = kbin.AppendNullableString(dst, v)
+						if isFlexible {
+							dst = kbin.AppendCompactNullableString(dst, v)
+						} else {
+							dst = kbin.AppendNullableString(dst, v)
+						}
 					}
 					if isFlexible {
 						dst = append(dst, 0)
@@ -3753,7 +3856,12 @@ func (v *OffsetCommitResponse) ReadFrom(src []byte) error {
 			v := &a[i]
 			s := v
 			{
-				v := b.String()
+				var v string
+				if isFlexible {
+					v = b.CompactString()
+				} else {
+					v = b.String()
+				}
 				s.Topic = v
 			}
 			{
@@ -3839,7 +3947,11 @@ func (v *OffsetFetchRequest) AppendTo(dst []byte) []byte {
 	_ = isFlexible
 	{
 		v := v.Group
-		dst = kbin.AppendString(dst, v)
+		if isFlexible {
+			dst = kbin.AppendCompactString(dst, v)
+		} else {
+			dst = kbin.AppendString(dst, v)
+		}
 	}
 	{
 		v := v.Topics
@@ -3860,7 +3972,11 @@ func (v *OffsetFetchRequest) AppendTo(dst []byte) []byte {
 			v := &v[i]
 			{
 				v := v.Topic
-				dst = kbin.AppendString(dst, v)
+				if isFlexible {
+					dst = kbin.AppendCompactString(dst, v)
+				} else {
+					dst = kbin.AppendString(dst, v)
+				}
 			}
 			{
 				v := v.Partitions
@@ -3980,7 +4096,12 @@ func (v *OffsetFetchResponse) ReadFrom(src []byte) error {
 			v := &a[i]
 			s := v
 			{
-				v := b.String()
+				var v string
+				if isFlexible {
+					v = b.CompactString()
+				} else {
+					v = b.String()
+				}
 				s.Topic = v
 			}
 			{
@@ -4014,7 +4135,12 @@ func (v *OffsetFetchResponse) ReadFrom(src []byte) error {
 						s.LeaderEpoch = v
 					}
 					{
-						v := b.NullableString()
+						var v *string
+						if isFlexible {
+							v = b.CompactNullableString()
+						} else {
+							v = b.NullableString()
+						}
 						s.Metadata = v
 					}
 					{
@@ -4080,7 +4206,11 @@ func (v *FindCoordinatorRequest) AppendTo(dst []byte) []byte {
 	_ = isFlexible
 	{
 		v := v.CoordinatorKey
-		dst = kbin.AppendString(dst, v)
+		if isFlexible {
+			dst = kbin.AppendCompactString(dst, v)
+		} else {
+			dst = kbin.AppendString(dst, v)
+		}
 	}
 	if version >= 1 {
 		v := v.CoordinatorType
@@ -4147,7 +4277,12 @@ func (v *FindCoordinatorResponse) ReadFrom(src []byte) error {
 		s.ErrorCode = v
 	}
 	if version >= 1 {
-		v := b.NullableString()
+		var v *string
+		if isFlexible {
+			v = b.CompactNullableString()
+		} else {
+			v = b.NullableString()
+		}
 		s.ErrorMessage = v
 	}
 	{
@@ -4155,7 +4290,12 @@ func (v *FindCoordinatorResponse) ReadFrom(src []byte) error {
 		s.NodeID = v
 	}
 	{
-		v := b.String()
+		var v string
+		if isFlexible {
+			v = b.CompactString()
+		} else {
+			v = b.String()
+		}
 		s.Host = v
 	}
 	{
@@ -4462,7 +4602,11 @@ func (v *JoinGroupRequest) AppendTo(dst []byte) []byte {
 	_ = isFlexible
 	{
 		v := v.Group
-		dst = kbin.AppendString(dst, v)
+		if isFlexible {
+			dst = kbin.AppendCompactString(dst, v)
+		} else {
+			dst = kbin.AppendString(dst, v)
+		}
 	}
 	{
 		v := v.SessionTimeoutMillis
@@ -4474,15 +4618,27 @@ func (v *JoinGroupRequest) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.MemberID
-		dst = kbin.AppendString(dst, v)
+		if isFlexible {
+			dst = kbin.AppendCompactString(dst, v)
+		} else {
+			dst = kbin.AppendString(dst, v)
+		}
 	}
 	if version >= 5 {
 		v := v.InstanceID
-		dst = kbin.AppendNullableString(dst, v)
+		if isFlexible {
+			dst = kbin.AppendCompactNullableString(dst, v)
+		} else {
+			dst = kbin.AppendNullableString(dst, v)
+		}
 	}
 	{
 		v := v.ProtocolType
-		dst = kbin.AppendString(dst, v)
+		if isFlexible {
+			dst = kbin.AppendCompactString(dst, v)
+		} else {
+			dst = kbin.AppendString(dst, v)
+		}
 	}
 	{
 		v := v.Protocols
@@ -4495,11 +4651,19 @@ func (v *JoinGroupRequest) AppendTo(dst []byte) []byte {
 			v := &v[i]
 			{
 				v := v.Name
-				dst = kbin.AppendString(dst, v)
+				if isFlexible {
+					dst = kbin.AppendCompactString(dst, v)
+				} else {
+					dst = kbin.AppendString(dst, v)
+				}
 			}
 			{
 				v := v.Metadata
-				dst = kbin.AppendBytes(dst, v)
+				if isFlexible {
+					dst = kbin.AppendCompactBytes(dst, v)
+				} else {
+					dst = kbin.AppendBytes(dst, v)
+				}
 			}
 			if isFlexible {
 				dst = append(dst, 0)
@@ -4613,15 +4777,30 @@ func (v *JoinGroupResponse) ReadFrom(src []byte) error {
 		s.Generation = v
 	}
 	{
-		v := b.String()
+		var v string
+		if isFlexible {
+			v = b.CompactString()
+		} else {
+			v = b.String()
+		}
 		s.Protocol = v
 	}
 	{
-		v := b.String()
+		var v string
+		if isFlexible {
+			v = b.CompactString()
+		} else {
+			v = b.String()
+		}
 		s.LeaderID = v
 	}
 	{
-		v := b.String()
+		var v string
+		if isFlexible {
+			v = b.CompactString()
+		} else {
+			v = b.String()
+		}
 		s.MemberID = v
 	}
 	{
@@ -4643,15 +4822,30 @@ func (v *JoinGroupResponse) ReadFrom(src []byte) error {
 			v := &a[i]
 			s := v
 			{
-				v := b.String()
+				var v string
+				if isFlexible {
+					v = b.CompactString()
+				} else {
+					v = b.String()
+				}
 				s.MemberID = v
 			}
 			if version >= 5 {
-				v := b.NullableString()
+				var v *string
+				if isFlexible {
+					v = b.CompactNullableString()
+				} else {
+					v = b.NullableString()
+				}
 				s.InstanceID = v
 			}
 			{
-				v := b.Bytes()
+				var v []byte
+				if isFlexible {
+					v = b.CompactBytes()
+				} else {
+					v = b.Bytes()
+				}
 				s.ProtocolMetadata = v
 			}
 			if isFlexible {
@@ -4701,7 +4895,11 @@ func (v *HeartbeatRequest) AppendTo(dst []byte) []byte {
 	_ = isFlexible
 	{
 		v := v.Group
-		dst = kbin.AppendString(dst, v)
+		if isFlexible {
+			dst = kbin.AppendCompactString(dst, v)
+		} else {
+			dst = kbin.AppendString(dst, v)
+		}
 	}
 	{
 		v := v.Generation
@@ -4709,11 +4907,19 @@ func (v *HeartbeatRequest) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.MemberID
-		dst = kbin.AppendString(dst, v)
+		if isFlexible {
+			dst = kbin.AppendCompactString(dst, v)
+		} else {
+			dst = kbin.AppendString(dst, v)
+		}
 	}
 	if version >= 3 {
 		v := v.InstanceID
-		dst = kbin.AppendNullableString(dst, v)
+		if isFlexible {
+			dst = kbin.AppendCompactNullableString(dst, v)
+		} else {
+			dst = kbin.AppendNullableString(dst, v)
+		}
 	}
 	if isFlexible {
 		dst = append(dst, 0)
@@ -4815,11 +5021,19 @@ func (v *LeaveGroupRequest) AppendTo(dst []byte) []byte {
 	_ = isFlexible
 	{
 		v := v.Group
-		dst = kbin.AppendString(dst, v)
+		if isFlexible {
+			dst = kbin.AppendCompactString(dst, v)
+		} else {
+			dst = kbin.AppendString(dst, v)
+		}
 	}
 	if version >= 0 && version <= 2 {
 		v := v.MemberID
-		dst = kbin.AppendString(dst, v)
+		if isFlexible {
+			dst = kbin.AppendCompactString(dst, v)
+		} else {
+			dst = kbin.AppendString(dst, v)
+		}
 	}
 	if version >= 3 {
 		v := v.Members
@@ -4832,11 +5046,19 @@ func (v *LeaveGroupRequest) AppendTo(dst []byte) []byte {
 			v := &v[i]
 			{
 				v := v.MemberID
-				dst = kbin.AppendString(dst, v)
+				if isFlexible {
+					dst = kbin.AppendCompactString(dst, v)
+				} else {
+					dst = kbin.AppendString(dst, v)
+				}
 			}
 			{
 				v := v.InstanceID
-				dst = kbin.AppendNullableString(dst, v)
+				if isFlexible {
+					dst = kbin.AppendCompactNullableString(dst, v)
+				} else {
+					dst = kbin.AppendNullableString(dst, v)
+				}
 			}
 			if isFlexible {
 				dst = append(dst, 0)
@@ -4926,11 +5148,21 @@ func (v *LeaveGroupResponse) ReadFrom(src []byte) error {
 			v := &a[i]
 			s := v
 			{
-				v := b.String()
+				var v string
+				if isFlexible {
+					v = b.CompactString()
+				} else {
+					v = b.String()
+				}
 				s.MemberID = v
 			}
 			{
-				v := b.NullableString()
+				var v *string
+				if isFlexible {
+					v = b.CompactNullableString()
+				} else {
+					v = b.NullableString()
+				}
 				s.InstanceID = v
 			}
 			{
@@ -5000,7 +5232,11 @@ func (v *SyncGroupRequest) AppendTo(dst []byte) []byte {
 	_ = isFlexible
 	{
 		v := v.Group
-		dst = kbin.AppendString(dst, v)
+		if isFlexible {
+			dst = kbin.AppendCompactString(dst, v)
+		} else {
+			dst = kbin.AppendString(dst, v)
+		}
 	}
 	{
 		v := v.Generation
@@ -5008,11 +5244,19 @@ func (v *SyncGroupRequest) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.MemberID
-		dst = kbin.AppendString(dst, v)
+		if isFlexible {
+			dst = kbin.AppendCompactString(dst, v)
+		} else {
+			dst = kbin.AppendString(dst, v)
+		}
 	}
 	if version >= 3 {
 		v := v.InstanceID
-		dst = kbin.AppendNullableString(dst, v)
+		if isFlexible {
+			dst = kbin.AppendCompactNullableString(dst, v)
+		} else {
+			dst = kbin.AppendNullableString(dst, v)
+		}
 	}
 	{
 		v := v.GroupAssignment
@@ -5025,11 +5269,19 @@ func (v *SyncGroupRequest) AppendTo(dst []byte) []byte {
 			v := &v[i]
 			{
 				v := v.MemberID
-				dst = kbin.AppendString(dst, v)
+				if isFlexible {
+					dst = kbin.AppendCompactString(dst, v)
+				} else {
+					dst = kbin.AppendString(dst, v)
+				}
 			}
 			{
 				v := v.MemberAssignment
-				dst = kbin.AppendBytes(dst, v)
+				if isFlexible {
+					dst = kbin.AppendCompactBytes(dst, v)
+				} else {
+					dst = kbin.AppendBytes(dst, v)
+				}
 			}
 			if isFlexible {
 				dst = append(dst, 0)
@@ -5097,7 +5349,12 @@ func (v *SyncGroupResponse) ReadFrom(src []byte) error {
 		s.ErrorCode = v
 	}
 	{
-		v := b.Bytes()
+		var v []byte
+		if isFlexible {
+			v = b.CompactBytes()
+		} else {
+			v = b.Bytes()
+		}
 		s.MemberAssignment = v
 	}
 	if isFlexible {
@@ -5145,7 +5402,11 @@ func (v *DescribeGroupsRequest) AppendTo(dst []byte) []byte {
 		}
 		for i := range v {
 			v := v[i]
-			dst = kbin.AppendString(dst, v)
+			if isFlexible {
+				dst = kbin.AppendCompactString(dst, v)
+			} else {
+				dst = kbin.AppendString(dst, v)
+			}
 		}
 	}
 	{
@@ -5268,19 +5529,39 @@ func (v *DescribeGroupsResponse) ReadFrom(src []byte) error {
 				s.ErrorCode = v
 			}
 			{
-				v := b.String()
+				var v string
+				if isFlexible {
+					v = b.CompactString()
+				} else {
+					v = b.String()
+				}
 				s.Group = v
 			}
 			{
-				v := b.String()
+				var v string
+				if isFlexible {
+					v = b.CompactString()
+				} else {
+					v = b.String()
+				}
 				s.State = v
 			}
 			{
-				v := b.String()
+				var v string
+				if isFlexible {
+					v = b.CompactString()
+				} else {
+					v = b.String()
+				}
 				s.ProtocolType = v
 			}
 			{
-				v := b.String()
+				var v string
+				if isFlexible {
+					v = b.CompactString()
+				} else {
+					v = b.String()
+				}
 				s.Protocol = v
 			}
 			{
@@ -5302,27 +5583,57 @@ func (v *DescribeGroupsResponse) ReadFrom(src []byte) error {
 					v := &a[i]
 					s := v
 					{
-						v := b.String()
+						var v string
+						if isFlexible {
+							v = b.CompactString()
+						} else {
+							v = b.String()
+						}
 						s.MemberID = v
 					}
 					if version >= 4 {
-						v := b.NullableString()
+						var v *string
+						if isFlexible {
+							v = b.CompactNullableString()
+						} else {
+							v = b.NullableString()
+						}
 						s.InstanceID = v
 					}
 					{
-						v := b.String()
+						var v string
+						if isFlexible {
+							v = b.CompactString()
+						} else {
+							v = b.String()
+						}
 						s.ClientID = v
 					}
 					{
-						v := b.String()
+						var v string
+						if isFlexible {
+							v = b.CompactString()
+						} else {
+							v = b.String()
+						}
 						s.ClientHost = v
 					}
 					{
-						v := b.Bytes()
+						var v []byte
+						if isFlexible {
+							v = b.CompactBytes()
+						} else {
+							v = b.Bytes()
+						}
 						s.ProtocolMetadata = v
 					}
 					{
-						v := b.Bytes()
+						var v []byte
+						if isFlexible {
+							v = b.CompactBytes()
+						} else {
+							v = b.Bytes()
+						}
 						s.MemberAssignment = v
 					}
 					if isFlexible {
@@ -5438,11 +5749,21 @@ func (v *ListGroupsResponse) ReadFrom(src []byte) error {
 			v := &a[i]
 			s := v
 			{
-				v := b.String()
+				var v string
+				if isFlexible {
+					v = b.CompactString()
+				} else {
+					v = b.String()
+				}
 				s.Group = v
 			}
 			{
-				v := b.String()
+				var v string
+				if isFlexible {
+					v = b.CompactString()
+				} else {
+					v = b.String()
+				}
 				s.ProtocolType = v
 			}
 			if isFlexible {
@@ -5586,11 +5907,19 @@ func (v *ApiVersionsRequest) AppendTo(dst []byte) []byte {
 	_ = isFlexible
 	if version >= 3 {
 		v := v.ClientSoftwareName
-		dst = kbin.AppendString(dst, v)
+		if isFlexible {
+			dst = kbin.AppendCompactString(dst, v)
+		} else {
+			dst = kbin.AppendString(dst, v)
+		}
 	}
 	if version >= 3 {
 		v := v.ClientSoftwareVersion
-		dst = kbin.AppendString(dst, v)
+		if isFlexible {
+			dst = kbin.AppendCompactString(dst, v)
+		} else {
+			dst = kbin.AppendString(dst, v)
+		}
 	}
 	if isFlexible {
 		dst = append(dst, 0)
@@ -5776,7 +6105,11 @@ func (v *CreateTopicsRequest) AppendTo(dst []byte) []byte {
 			v := &v[i]
 			{
 				v := v.Topic
-				dst = kbin.AppendString(dst, v)
+				if isFlexible {
+					dst = kbin.AppendCompactString(dst, v)
+				} else {
+					dst = kbin.AppendString(dst, v)
+				}
 			}
 			{
 				v := v.NumPartitions
@@ -5827,11 +6160,19 @@ func (v *CreateTopicsRequest) AppendTo(dst []byte) []byte {
 					v := &v[i]
 					{
 						v := v.Name
-						dst = kbin.AppendString(dst, v)
+						if isFlexible {
+							dst = kbin.AppendCompactString(dst, v)
+						} else {
+							dst = kbin.AppendString(dst, v)
+						}
 					}
 					{
 						v := v.Value
-						dst = kbin.AppendNullableString(dst, v)
+						if isFlexible {
+							dst = kbin.AppendCompactNullableString(dst, v)
+						} else {
+							dst = kbin.AppendNullableString(dst, v)
+						}
 					}
 					if isFlexible {
 						dst = append(dst, 0)
@@ -5977,7 +6318,12 @@ func (v *CreateTopicsResponse) ReadFrom(src []byte) error {
 			v := &a[i]
 			s := v
 			{
-				v := b.String()
+				var v string
+				if isFlexible {
+					v = b.CompactString()
+				} else {
+					v = b.String()
+				}
 				s.Topic = v
 			}
 			{
@@ -5985,7 +6331,12 @@ func (v *CreateTopicsResponse) ReadFrom(src []byte) error {
 				s.ErrorCode = v
 			}
 			if version >= 1 {
-				v := b.NullableString()
+				var v *string
+				if isFlexible {
+					v = b.CompactNullableString()
+				} else {
+					v = b.NullableString()
+				}
 				s.ErrorMessage = v
 			}
 			if version >= 5 {
@@ -6018,11 +6369,21 @@ func (v *CreateTopicsResponse) ReadFrom(src []byte) error {
 					v := &a[i]
 					s := v
 					{
-						v := b.String()
+						var v string
+						if isFlexible {
+							v = b.CompactString()
+						} else {
+							v = b.String()
+						}
 						s.Name = v
 					}
 					{
-						v := b.NullableString()
+						var v *string
+						if isFlexible {
+							v = b.CompactNullableString()
+						} else {
+							v = b.NullableString()
+						}
 						s.Value = v
 					}
 					{
@@ -6106,7 +6467,11 @@ func (v *DeleteTopicsRequest) AppendTo(dst []byte) []byte {
 		}
 		for i := range v {
 			v := v[i]
-			dst = kbin.AppendString(dst, v)
+			if isFlexible {
+				dst = kbin.AppendCompactString(dst, v)
+			} else {
+				dst = kbin.AppendString(dst, v)
+			}
 		}
 	}
 	{
@@ -6189,7 +6554,12 @@ func (v *DeleteTopicsResponse) ReadFrom(src []byte) error {
 			v := &a[i]
 			s := v
 			{
-				v := b.String()
+				var v string
+				if isFlexible {
+					v = b.CompactString()
+				} else {
+					v = b.String()
+				}
 				s.Topic = v
 			}
 			{
@@ -6439,7 +6809,11 @@ func (v *InitProducerIDRequest) AppendTo(dst []byte) []byte {
 	_ = isFlexible
 	{
 		v := v.TransactionalID
-		dst = kbin.AppendNullableString(dst, v)
+		if isFlexible {
+			dst = kbin.AppendCompactNullableString(dst, v)
+		} else {
+			dst = kbin.AppendNullableString(dst, v)
+		}
 	}
 	{
 		v := v.TransactionTimeoutMillis
@@ -9091,11 +9465,19 @@ func (v *CreateDelegationTokenRequest) AppendTo(dst []byte) []byte {
 			v := &v[i]
 			{
 				v := v.PrincipalType
-				dst = kbin.AppendString(dst, v)
+				if isFlexible {
+					dst = kbin.AppendCompactString(dst, v)
+				} else {
+					dst = kbin.AppendString(dst, v)
+				}
 			}
 			{
 				v := v.Name
-				dst = kbin.AppendString(dst, v)
+				if isFlexible {
+					dst = kbin.AppendCompactString(dst, v)
+				} else {
+					dst = kbin.AppendString(dst, v)
+				}
 			}
 			if isFlexible {
 				dst = append(dst, 0)
@@ -9147,11 +9529,21 @@ func (v *CreateDelegationTokenResponse) ReadFrom(src []byte) error {
 		s.ErrorCode = v
 	}
 	{
-		v := b.String()
+		var v string
+		if isFlexible {
+			v = b.CompactString()
+		} else {
+			v = b.String()
+		}
 		s.PrincipalType = v
 	}
 	{
-		v := b.String()
+		var v string
+		if isFlexible {
+			v = b.CompactString()
+		} else {
+			v = b.String()
+		}
 		s.OwnerName = v
 	}
 	{
@@ -9167,11 +9559,21 @@ func (v *CreateDelegationTokenResponse) ReadFrom(src []byte) error {
 		s.MaxTimestamp = v
 	}
 	{
-		v := b.String()
+		var v string
+		if isFlexible {
+			v = b.CompactString()
+		} else {
+			v = b.String()
+		}
 		s.TokenID = v
 	}
 	{
-		v := b.Bytes()
+		var v []byte
+		if isFlexible {
+			v = b.CompactBytes()
+		} else {
+			v = b.Bytes()
+		}
 		s.HMAC = v
 	}
 	{
@@ -9512,7 +9914,11 @@ func (v *DeleteGroupsRequest) AppendTo(dst []byte) []byte {
 		}
 		for i := range v {
 			v := v[i]
-			dst = kbin.AppendString(dst, v)
+			if isFlexible {
+				dst = kbin.AppendCompactString(dst, v)
+			} else {
+				dst = kbin.AppendString(dst, v)
+			}
 		}
 	}
 	if isFlexible {
@@ -9587,7 +9993,12 @@ func (v *DeleteGroupsResponse) ReadFrom(src []byte) error {
 			v := &a[i]
 			s := v
 			{
-				v := b.String()
+				var v string
+				if isFlexible {
+					v = b.CompactString()
+				} else {
+					v = b.String()
+				}
 				s.Group = v
 			}
 			{
@@ -9669,7 +10080,11 @@ func (v *ElectLeadersRequest) AppendTo(dst []byte) []byte {
 			v := &v[i]
 			{
 				v := v.Topic
-				dst = kbin.AppendString(dst, v)
+				if isFlexible {
+					dst = kbin.AppendCompactString(dst, v)
+				} else {
+					dst = kbin.AppendString(dst, v)
+				}
 			}
 			{
 				v := v.Partitions
@@ -9785,7 +10200,12 @@ func (v *ElectLeadersResponse) ReadFrom(src []byte) error {
 			v := &a[i]
 			s := v
 			{
-				v := b.String()
+				var v string
+				if isFlexible {
+					v = b.CompactString()
+				} else {
+					v = b.String()
+				}
 				s.Topic = v
 			}
 			{
@@ -9815,7 +10235,12 @@ func (v *ElectLeadersResponse) ReadFrom(src []byte) error {
 						s.ErrorCode = v
 					}
 					{
-						v := b.NullableString()
+						var v *string
+						if isFlexible {
+							v = b.CompactNullableString()
+						} else {
+							v = b.NullableString()
+						}
 						s.ErrorMessage = v
 					}
 					if isFlexible {
@@ -9926,7 +10351,11 @@ func (v *IncrementalAlterConfigsRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.ResourceName
-				dst = kbin.AppendString(dst, v)
+				if isFlexible {
+					dst = kbin.AppendCompactString(dst, v)
+				} else {
+					dst = kbin.AppendString(dst, v)
+				}
 			}
 			{
 				v := v.Configs
@@ -9939,7 +10368,11 @@ func (v *IncrementalAlterConfigsRequest) AppendTo(dst []byte) []byte {
 					v := &v[i]
 					{
 						v := v.Name
-						dst = kbin.AppendString(dst, v)
+						if isFlexible {
+							dst = kbin.AppendCompactString(dst, v)
+						} else {
+							dst = kbin.AppendString(dst, v)
+						}
 					}
 					{
 						v := v.Op
@@ -9947,7 +10380,11 @@ func (v *IncrementalAlterConfigsRequest) AppendTo(dst []byte) []byte {
 					}
 					{
 						v := v.Value
-						dst = kbin.AppendNullableString(dst, v)
+						if isFlexible {
+							dst = kbin.AppendCompactNullableString(dst, v)
+						} else {
+							dst = kbin.AppendNullableString(dst, v)
+						}
 					}
 					if isFlexible {
 						dst = append(dst, 0)
@@ -10047,7 +10484,12 @@ func (v *IncrementalAlterConfigsResponse) ReadFrom(src []byte) error {
 				s.ErrorCode = v
 			}
 			{
-				v := b.NullableString()
+				var v *string
+				if isFlexible {
+					v = b.CompactNullableString()
+				} else {
+					v = b.NullableString()
+				}
 				s.ErrorMessage = v
 			}
 			{
@@ -10055,7 +10497,12 @@ func (v *IncrementalAlterConfigsResponse) ReadFrom(src []byte) error {
 				s.ResourceType = v
 			}
 			{
-				v := b.String()
+				var v string
+				if isFlexible {
+					v = b.CompactString()
+				} else {
+					v = b.String()
+				}
 				s.ResourceName = v
 			}
 			if isFlexible {
@@ -10132,7 +10579,11 @@ func (v *AlterPartitionReassignmentsRequest) AppendTo(dst []byte) []byte {
 			v := &v[i]
 			{
 				v := v.Topic
-				dst = kbin.AppendString(dst, v)
+				if isFlexible {
+					dst = kbin.AppendCompactString(dst, v)
+				} else {
+					dst = kbin.AppendString(dst, v)
+				}
 			}
 			{
 				v := v.Partitions
@@ -10242,7 +10693,12 @@ func (v *AlterPartitionReassignmentsResponse) ReadFrom(src []byte) error {
 		s.ErrorCode = v
 	}
 	{
-		v := b.NullableString()
+		var v *string
+		if isFlexible {
+			v = b.CompactNullableString()
+		} else {
+			v = b.NullableString()
+		}
 		s.ErrorMessage = v
 	}
 	{
@@ -10264,7 +10720,12 @@ func (v *AlterPartitionReassignmentsResponse) ReadFrom(src []byte) error {
 			v := &a[i]
 			s := v
 			{
-				v := b.String()
+				var v string
+				if isFlexible {
+					v = b.CompactString()
+				} else {
+					v = b.String()
+				}
 				s.Topic = v
 			}
 			{
@@ -10294,7 +10755,12 @@ func (v *AlterPartitionReassignmentsResponse) ReadFrom(src []byte) error {
 						s.ErrorCode = v
 					}
 					{
-						v := b.NullableString()
+						var v *string
+						if isFlexible {
+							v = b.CompactNullableString()
+						} else {
+							v = b.NullableString()
+						}
 						s.ErrorMessage = v
 					}
 					if isFlexible {
@@ -10371,7 +10837,11 @@ func (v *ListPartitionReassignmentsRequest) AppendTo(dst []byte) []byte {
 			v := &v[i]
 			{
 				v := v.Topic
-				dst = kbin.AppendString(dst, v)
+				if isFlexible {
+					dst = kbin.AppendCompactString(dst, v)
+				} else {
+					dst = kbin.AppendString(dst, v)
+				}
 			}
 			{
 				v := v.Partitions
@@ -10460,7 +10930,12 @@ func (v *ListPartitionReassignmentsResponse) ReadFrom(src []byte) error {
 		s.ErrorCode = v
 	}
 	{
-		v := b.NullableString()
+		var v *string
+		if isFlexible {
+			v = b.CompactNullableString()
+		} else {
+			v = b.NullableString()
+		}
 		s.ErrorMessage = v
 	}
 	{
@@ -10482,7 +10957,12 @@ func (v *ListPartitionReassignmentsResponse) ReadFrom(src []byte) error {
 			v := &a[i]
 			s := v
 			{
-				v := b.String()
+				var v string
+				if isFlexible {
+					v = b.CompactString()
+				} else {
+					v = b.String()
+				}
 				s.Topic = v
 			}
 			{
