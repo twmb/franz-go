@@ -2492,7 +2492,7 @@ SASLAuthenticateResponse =>
   ErrorCode: int16
   ErrorMessage: nullable-string
   SASLAuthBytes: bytes
-  SessionLifetimeMs: int64 // v1+
+  SessionLifetimeMillis: int64 // v1+
 
 // CreatePartitionsRequest creates additional partitions for topics.
 CreatePartitionsRequest => key 37, max version 1, admin

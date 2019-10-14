@@ -8836,7 +8836,7 @@ type SASLAuthenticateResponse struct {
 
 	SASLAuthBytes []byte
 
-	SessionLifetimeMs int64 // v1+
+	SessionLifetimeMillis int64 // v1+
 }
 
 func (v *SASLAuthenticateResponse) ReadFrom(src []byte) error {
@@ -8858,7 +8858,7 @@ func (v *SASLAuthenticateResponse) ReadFrom(src []byte) error {
 	}
 	if version >= 1 {
 		v := b.Int64()
-		s.SessionLifetimeMs = v
+		s.SessionLifetimeMillis = v
 	}
 	return b.Complete()
 }
