@@ -8,11 +8,11 @@ import (
 	"github.com/twmb/kafka-go/pkg/sasl"
 )
 
-// New returns a sasl authenticator that will call userpassFn whenever sasl
+// Plain returns a sasl mechanism that will call userpassFn whenever sasl
 // authentication is needed. The function must return the username and the
 // password to use for authentication. The username and password is used for a
 // single session.
-func New(userpassFn func(context.Context) (string, string, error)) sasl.Authenticator {
+func Plain(userpassFn func(context.Context) (string, string, error)) sasl.Mechanism {
 	return plain(userpassFn)
 }
 

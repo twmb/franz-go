@@ -14,8 +14,8 @@ type Session interface {
 	Challenge([]byte) (bool, []byte, error)
 }
 
-// Authenticator authenticates with SASL.
-type Authenticator interface {
+// Mechanism authenticates with SASL.
+type Mechanism interface {
 	// Name is the name of this SASL authentication mechanism.
 	Name() string
 

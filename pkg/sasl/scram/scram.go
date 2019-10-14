@@ -37,7 +37,7 @@ type Auth struct {
 	User string
 
 	// Pass is the password to use for authentication.
-	Pass []byte
+	Pass string
 
 	// Nonce, if provided, is the nonce to use for authentication. If not
 	// provided, this package uses 20 bytes read with crypto/rand.
@@ -52,17 +52,17 @@ type Auth struct {
 	_internal struct{} // require explicit field initalization
 }
 
-// Sha256 returns a SCRAM-SHA-256 sasl authenticator that will call authFn
+// Sha256 returns a SCRAM-SHA-256 sasl mechanism that will call authFn
 // whenever authentication is needed. The returned Auth is used for a single
 // session.
-func Sha256(authFn func(context.Context) (Auth, error)) sasl.Authenticator {
+func Sha256(authFn func(context.Context) (Auth, error)) sasl.Mechanism {
 	return scram{authFn, sha256.New, "SCRAM-SHA-256"}
 }
 
-// Sha512 returns a SCRAM-SHA-512 sasl authenticator that will call authFn
+// Sha512 returns a SCRAM-SHA-512 sasl mechanism that will call authFn
 // whenever authentication is needed. The returned Auth is used for a single
 // session.
-func Sha512(authFn func(context.Context) (Auth, error)) sasl.Authenticator {
+func Sha512(authFn func(context.Context) (Auth, error)) sasl.Mechanism {
 	return scram{authFn, sha512.New, "SCRAM-SHA-512"}
 }
 
@@ -81,12 +81,14 @@ func (s scram) Authenticate(ctx context.Context) (sasl.Session, []byte, error) {
 		return nil, nil, err
 	}
 	if len(auth.Nonce) == 0 {
-		buf := make([]byte, base64.StdEncoding.EncodedLen(20))
-		if _, err = rand.Read(buf[:20]); err != nil {
+		buf := make([]byte, 20)
+		if _, err = rand.Read(buf); err != nil {
 			return nil, nil, err
 		}
 		auth.Nonce = buf
 	}
+
+	auth.Nonce = []byte(base64.StdEncoding.EncodeToString(auth.Nonce))
 
 	clientFirstMsgBare := make([]byte, 0, 100)
 	clientFirstMsgBare = append(clientFirstMsgBare, "n="...)
@@ -119,7 +121,7 @@ type session struct {
 func (s *session) Challenge(resp []byte) (bool, []byte, error) {
 	step := s.step
 	s.step++
-	switch s.step {
+	switch step {
 	case 0:
 		response, err := s.authenticateClient(resp)
 		return false, response, err
@@ -174,7 +176,7 @@ func (s *session) authenticateClient(serverFirstMsg []byte) ([]byte, error) {
 	//////////////////
 
 	h := s.newhash()
-	saltedPassword := pbkdf2.Key(s.auth.Pass, salt, iters, h.Size(), s.newhash) // SaltedPassword := Hi(Normalize(password), salt, i)
+	saltedPassword := pbkdf2.Key([]byte(s.auth.Pass), salt, iters, h.Size(), s.newhash) // SaltedPassword := Hi(Normalize(password), salt, i)
 
 	mac := hmac.New(s.newhash, saltedPassword)
 	if _, err = mac.Write([]byte("Client Key")); err != nil {
@@ -213,7 +215,7 @@ func (s *session) authenticateClient(serverFirstMsg []byte) ([]byte, error) {
 	if _, err = mac.Write(authMsg); err != nil {
 		return nil, fmt.Errorf("hmac err: %v", err)
 	}
-	s.expServerSignature = mac.Sum(nil) // ServerSignature := HMAC(ServerKey, AuthMessage)
+	s.expServerSignature = []byte(base64.StdEncoding.EncodeToString(mac.Sum(nil))) // ServerSignature := HMAC(ServerKey, AuthMessage)
 
 	clientFinalMsg := append(clientFinalMsgWithoutProof, ",p="...)
 	clientFinalMsg = append(clientFinalMsg, base64.StdEncoding.EncodeToString(clientProof)...)
@@ -234,7 +236,7 @@ func (s *session) verifyServer(serverFinalMsg []byte) error {
 		return fmt.Errorf("server sent unexpected first kv %q", kv)
 	}
 	if !bytes.Equal(s.expServerSignature, kv[2:]) {
-		return fmt.Errorf("server signature mismatch; got %q != exp %q", s.expServerSignature, kv[2:])
+		return fmt.Errorf("server signature mismatch; got %q != exp %q", kv[2:], s.expServerSignature)
 	}
 	return nil
 }

@@ -24,9 +24,9 @@ type Auth struct {
 	_internal struct{} // require explicit field initalization
 }
 
-// New returns an OAUTHBEARER sasl authenticator that will call authFn whenever
+// Oauth returns an OAUTHBEARER sasl mechanism that will call authFn whenever
 // authentication is needed. The returned Auth is used for a single session.
-func New(authFn func(context.Context) (Auth, error)) sasl.Authenticator {
+func Oauth(authFn func(context.Context) (Auth, error)) sasl.Mechanism {
 	return oauth(authFn)
 }
 
