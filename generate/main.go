@@ -100,12 +100,12 @@ type FlexibleSetter interface {
 	AsFromFlexible() Type
 }
 
-func (s String) AsFromFlexible() Type         { dup := s; s.FromFlexible = true; return dup }
-func (s NullableString) AsFromFlexible() Type { dup := s; s.FromFlexible = true; return dup }
-func (s Bytes) AsFromFlexible() Type          { dup := s; s.FromFlexible = true; return dup }
-func (s NullableBytes) AsFromFlexible() Type  { dup := s; s.FromFlexible = true; return dup }
-func (s Array) AsFromFlexible() Type          { dup := s; s.FromFlexible = true; return dup }
-func (s Struct) AsFromFlexible() Type         { dup := s; s.FromFlexible = true; return dup }
+func (s String) AsFromFlexible() Type         { dup := s; dup.FromFlexible = true; return dup }
+func (s NullableString) AsFromFlexible() Type { dup := s; dup.FromFlexible = true; return dup }
+func (s Bytes) AsFromFlexible() Type          { dup := s; dup.FromFlexible = true; return dup }
+func (s NullableBytes) AsFromFlexible() Type  { dup := s; dup.FromFlexible = true; return dup }
+func (s Array) AsFromFlexible() Type          { dup := s; dup.FromFlexible = true; return dup }
+func (s Struct) AsFromFlexible() Type         { dup := s; dup.FromFlexible = true; return dup }
 
 func (l *LineWriter) Write(line string, args ...interface{}) {
 	fmt.Fprintf(l.buf, line, args...)
