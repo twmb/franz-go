@@ -13,14 +13,9 @@ import (
 // or an error is hit; all other number requests will return
 // zero so a decode will basically no-op.
 
-var (
-	// ErrNotEnoughData is returned when a type could not fully decode
-	// from a slice because the slice did not have enough data.
-	ErrNotEnoughData = errors.New("response did not contain enough data to be valid")
-
-	// ErrTooMuchData is returned when there is leftover data in a slice.
-	ErrTooMuchData = errors.New("response contained too much data to be valid")
-)
+// ErrNotEnoughData is returned when a type could not fully decode
+// from a slice because the slice did not have enough data.
+var ErrNotEnoughData = errors.New("response did not contain enough data to be valid")
 
 // AppendBool appends 1 for true or 0 for false to dst.
 func AppendBool(dst []byte, v bool) []byte {
@@ -678,14 +673,10 @@ func (b *Reader) VarintString() string {
 	return string(b.VarintBytes())
 }
 
-// Complete returns ErrNotEnoughData if the source ran out while decoding,
-// or ErrTooMuchData if there is data remaining, or nil.
+// Complete returns ErrNotEnoughData if the source ran out while decoding.
 func (b *Reader) Complete() error {
 	if b.bad {
 		return ErrNotEnoughData
-	}
-	if len(b.Src) > 0 {
-		return ErrTooMuchData
 	}
 	return nil
 }
