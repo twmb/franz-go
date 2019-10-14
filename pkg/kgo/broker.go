@@ -3,15 +3,19 @@ package kgo
 import (
 	"context"
 	"encoding/binary"
+	"fmt"
 	"io"
 	"math"
 	"net"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/twmb/kafka-go/pkg/kbin"
+	"github.com/twmb/kafka-go/pkg/kerr"
 	"github.com/twmb/kafka-go/pkg/kmsg"
 	"github.com/twmb/kafka-go/pkg/kversion"
+	"github.com/twmb/kafka-go/pkg/sasl"
 )
 
 type promisedReq struct {
@@ -254,6 +258,18 @@ func (b *broker) handleReqs() {
 		}
 		req.SetVersion(version) // always go for highest version
 
+		if !cxn.expiry.IsZero() && time.Now().After(cxn.expiry) {
+			// If we are after the reauth time, try to reauth. We
+			// can only have an expiry if we went the authenticate
+			// flow, so we know we are authenticating again.
+			// For KIP-368.
+			if err = cxn.doSasl(true); err != nil {
+				pr.promise(nil, err)
+				cxn.die()
+				continue
+			}
+		}
+
 		// Juuuust before we issue the request, we check if it was
 		// canceled. If it is not, we do not cancel hereafter.
 		// We only check the promised req's ctx, not our clients.
@@ -304,6 +320,8 @@ func (b *broker) loadConnection(reqKey int16) (*brokerCxn, error) {
 	cxn := &brokerCxn{
 		conn:     conn,
 		clientID: b.client.cfg.client.id,
+		ctx:      b.client.ctx,
+		sasls:    b.client.cfg.client.sasls,
 	}
 	if err = cxn.init(b.client.cfg.client.maxVersions); err != nil {
 		conn.Close()
@@ -332,6 +350,12 @@ type brokerCxn struct {
 	conn     net.Conn
 	versions apiVersions
 
+	ctx   context.Context
+	sasls []sasl.Mechanism
+
+	mechanism sasl.Mechanism
+	expiry    time.Time
+
 	// reqBuf, correlationID, and clientID are used in writing requests.
 	reqBuf        []byte
 	correlationID int32
@@ -350,12 +374,16 @@ func (cx *brokerCxn) init(maxVersions kversion.Versions) error {
 		cx.versions[i] = -1
 	}
 
-	// TODO sasl
 	if maxVersions == nil || len(maxVersions) >= 19 {
 		if err := cx.requestAPIVersions(); err != nil {
 			return err
 		}
 	}
+
+	if err := cx.sasl(); err != nil {
+		return err
+	}
+
 	cx.resps = make(chan promisedResp, 100)
 	go cx.handleResps()
 	return nil
@@ -374,7 +402,7 @@ start:
 		return err
 	}
 
-	rawResp, err := readResponse(cx.conn, req.IsFlexible(), corrID)
+	rawResp, err := readResponse(cx.conn, corrID)
 	if err != nil {
 		return err
 	}
@@ -399,6 +427,7 @@ start:
 		}
 		resp.Version = 0
 	}
+
 	if err = resp.ReadFrom(rawResp); err != nil {
 		return ErrConnDead
 	}
@@ -411,6 +440,128 @@ start:
 			continue
 		}
 		cx.versions[key.ApiKey] = key.MaxVersion
+	}
+	return nil
+}
+
+func (cx *brokerCxn) sasl() error {
+	if len(cx.sasls) == 0 {
+		return nil
+	}
+	mechanism := cx.sasls[0]
+	retried := false
+	authenticate := false
+	const handshakeKey = 17
+
+start:
+	if mechanism.Name() != "GSSAPI" && cx.versions[handshakeKey] >= 0 {
+		req := &kmsg.SASLHandshakeRequest{
+			Version:   cx.versions[handshakeKey],
+			Mechanism: mechanism.Name(),
+		}
+		corrID, err := cx.writeRequest(req)
+		if err != nil {
+			return err
+		}
+
+		rawResp, err := readResponse(cx.conn, corrID)
+		if err != nil {
+			return err
+		}
+		resp := req.ResponseKind().(*kmsg.SASLHandshakeResponse)
+		if err = resp.ReadFrom(rawResp); err != nil {
+			return err
+		}
+
+		err = kerr.ErrorForCode(resp.ErrorCode)
+		if err != nil {
+			if !retried && err == kerr.UnsupportedSaslMechanism {
+				for _, ours := range cx.sasls[1:] {
+					for _, supported := range resp.SupportedMechanisms {
+						if supported == ours.Name() {
+							mechanism = ours
+							retried = true
+							goto start
+						}
+					}
+				}
+			}
+			return err
+		}
+		authenticate = req.Version == 1
+	}
+	cx.mechanism = mechanism
+	return cx.doSasl(authenticate)
+}
+
+func (cx *brokerCxn) doSasl(authenticate bool) error {
+	session, clientWrite, err := cx.mechanism.Authenticate(cx.ctx)
+	if err != nil {
+		return err
+	}
+	if len(clientWrite) == 0 {
+		return fmt.Errorf("unexpected server-write sasl with mechanism %s", cx.mechanism.Name())
+	}
+
+	var lifetimeMillis int64
+
+	for done := false; !done; {
+		var challenge []byte
+
+		if !authenticate {
+			cx.reqBuf = append(cx.reqBuf[:0], 0, 0, 0, 0)
+			binary.BigEndian.PutUint32(cx.reqBuf, uint32(len(clientWrite)))
+			cx.reqBuf = append(cx.reqBuf, clientWrite...)
+			if _, err = cx.conn.Write(cx.reqBuf); err != nil {
+				return ErrConnDead
+			}
+			if challenge, err = readConn(cx.conn); err != nil {
+				return err
+			}
+
+		} else {
+			const authenticateKey = 37
+			req := &kmsg.SASLAuthenticateRequest{
+				Version:       cx.versions[authenticateKey],
+				SASLAuthBytes: clientWrite,
+			}
+			corrID, err := cx.writeRequest(req)
+			if err != nil {
+				return err
+			}
+			rawResp, err := readResponse(cx.conn, corrID)
+			if err != nil {
+				return err
+			}
+			resp := req.ResponseKind().(*kmsg.SASLAuthenticateResponse)
+			if err = resp.ReadFrom(rawResp); err != nil {
+				return err
+			}
+
+			if err = kerr.ErrorForCode(resp.ErrorCode); err != nil {
+				if resp.ErrorMessage != nil {
+					return fmt.Errorf("%s: %v", *resp.ErrorMessage, err)
+				}
+				return err
+			}
+			challenge = resp.SASLAuthBytes
+			lifetimeMillis = resp.SessionLifetimeMillis
+		}
+
+		if done, clientWrite, err = session.Challenge(challenge); err != nil {
+			return err
+		}
+	}
+
+	if lifetimeMillis > 0 {
+		// If we have a lifetime, we take 1s off of it to account
+		// for some processing lag or whatever.
+		// A better thing to return in the auth response would
+		// have been the deadline, but we are here now.
+		if lifetimeMillis < 5000 {
+			return fmt.Errorf("invalid short sasl lifetime millis %d", lifetimeMillis)
+		}
+		cx.expiry = time.Now().Add(time.Duration(lifetimeMillis)*time.Millisecond - time.Second)
 	}
 	return nil
 }
@@ -432,9 +583,7 @@ func (cx *brokerCxn) writeRequest(req kmsg.Request) (int32, error) {
 	return id, nil
 }
 
-// readResponse reads a response from conn, ensures the correlation ID is
-// correct, and returns a newly allocated slice on success.
-func readResponse(conn io.ReadCloser, flexible bool, correlationID int32) ([]byte, error) {
+func readConn(conn io.ReadCloser) ([]byte, error) {
 	sizeBuf := make([]byte, 4)
 	if _, err := io.ReadFull(conn, sizeBuf[:4]); err != nil {
 		return nil, ErrConnDead
@@ -448,30 +597,25 @@ func readResponse(conn io.ReadCloser, flexible bool, correlationID int32) ([]byt
 	if _, err := io.ReadFull(conn, buf); err != nil {
 		return nil, ErrConnDead
 	}
+	return buf, nil
+}
 
+// readResponse reads a response from conn, ensures the correlation ID is
+// correct, and returns a newly allocated slice on success.
+func readResponse(conn io.ReadCloser, correlationID int32) ([]byte, error) {
+	buf, err := readConn(conn)
+	if err != nil {
+		return nil, err
+	}
 	if len(buf) < 4 {
 		return nil, kbin.ErrNotEnoughData
 	}
 	gotID := int32(binary.BigEndian.Uint32(buf))
-	buf = buf[4:]
 	if gotID != correlationID {
 		conn.Close()
 		return nil, ErrCorrelationIDMismatch
 	}
-
-	if flexible {
-		// Eat the tags at the end; we can bubble tags through somehow
-		// once they exist. These can be in a new field at the end of
-		// every top level response; ResponseTags.
-		b := kbin.Reader{Src: buf}
-		kmsg.SkipTags(&b)
-		if err := b.Complete(); err != nil {
-			conn.Close()
-			return nil, err
-		}
-	}
-
-	return buf, nil
+	return buf[4:], nil
 }
 
 // die kills a broker connection (which could be dead already) and replies to
@@ -518,7 +662,7 @@ func (cx *brokerCxn) handleResps() {
 	defer cx.die() // always track our death
 
 	for pr := range cx.resps {
-		raw, err := readResponse(cx.conn, pr.flexible, pr.correlationID)
+		raw, err := readResponse(cx.conn, pr.correlationID)
 		if err != nil {
 			pr.promise(nil, err)
 			return

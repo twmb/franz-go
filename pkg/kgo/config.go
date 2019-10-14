@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/twmb/kafka-go/pkg/kversion"
+	"github.com/twmb/kafka-go/pkg/sasl"
 )
 
 // Opt is an option to configure a client.
@@ -96,7 +97,7 @@ type clientCfg struct {
 	metadataMaxAge time.Duration
 	metadataMinAge time.Duration
 
-	// TODO SASL
+	sasls []sasl.Mechanism
 }
 
 func (cfg *clientCfg) validate() error {
@@ -195,6 +196,16 @@ func WithMetadataMaxAge(age time.Duration) Opt {
 // assume that maybe the connection died due to a broker dying.
 func WithMetadataMinAge(age time.Duration) Opt {
 	return clientOpt{func(cfg *cfg) { cfg.client.metadataMinAge = age }}
+}
+
+// WithSASL appends sasl authentication options to use for all connections.
+//
+// SASL is tried in order; if the broker supports the first mechanism, all
+// connections will use that mechanism. If the first mechanism fails, the
+// client will pick the first supported mechanism. If the broker does not
+// support any client mechanisms, connections will fail.
+func WithSASL(sasls ...sasl.Mechanism) Opt {
+	return clientOpt{func(cfg *cfg) { cfg.client.sasls = append(cfg.client.sasls, sasls...) }}
 }
 
 // ********** PRODUCER CONFIGURATION **********
