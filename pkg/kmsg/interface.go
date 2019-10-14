@@ -96,21 +96,18 @@ func AppendRequest(
 		return dst
 	}
 
-	isFlexible := r.IsFlexible()
-
-	if isFlexible {
-		dst = kbin.AppendCompactNullableString(dst, clientID)
-	} else {
-		dst = kbin.AppendNullableString(dst, clientID)
-	}
+	// Even with flexible versions, we do not use a compact client id.
+	// Clients issue ApiVersions immediately before knowing the broker
+	// version, and old brokers will not be able to understand a compact
+	// client id.
+	dst = kbin.AppendNullableString(dst, clientID)
 
 	dst = r.AppendTo(dst)
-	kbin.AppendInt32(dst[:0], int32(len(dst[4:])))
-
-	if isFlexible {
+	if r.IsFlexible() {
 		dst = append(dst, 0) // tagged section; TODO for when tags are added here
 	}
 
+	kbin.AppendInt32(dst[:0], int32(len(dst[4:])))
 	return dst
 }
 
