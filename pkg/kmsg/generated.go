@@ -9173,11 +9173,17 @@ func (v *DescribeLogDirsResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
-// TODO
+// SASLAuthenticate continues a sasl authentication flow. Prior to Kafka 1.0.0,
+// authenticating with sasl involved sending raw blobs of data back and forth.
+// After, those blobs are wrapped in a SASLAuthenticateRequest The benefit of
+// this wrapping is that Kafka can indicate errors in the response, rather than
+// just closing the connection. Additionally, the response allows for further
+// extension fields.
 type SASLAuthenticateRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
+	// SASLAuthBytes contains bytes for a SASL client request.
 	SASLAuthBytes []byte
 }
 
@@ -9200,16 +9206,24 @@ func (v *SASLAuthenticateRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 
+// SASLAuthenticateResponse is returned for a SASLAuthenticateRequest.
 type SASLAuthenticateResponse struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
+	// ErrorCode is a potential error.
 	ErrorCode int16
 
+	// ErrorMessage can contain a message for an error.
 	ErrorMessage *string
 
+	// SASLAuthBytes is the server challenge continuing SASL flow.
 	SASLAuthBytes []byte
 
+	// SessionLifetimeMillis, added in Kafka 2.2.0, is how long the SASL
+	// authentication is valid for. This timeout is only enforced if the request
+	// was v1. After this timeout, Kafka expects the next bytes on the wire to
+	// begin reauthentication. Otherwise, Kafka closes the connection.
 	SessionLifetimeMillis int64 // v1+
 }
 
@@ -10518,7 +10532,7 @@ func (v *IncrementalAlterConfigsResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
-type AlterPartitionReassignmentsRequestTopicPartition struct {
+type AlterPartitionAssignmentsRequestTopicPartition struct {
 	// Partition is a partition to reassign.
 	Partition int32
 
@@ -10526,19 +10540,19 @@ type AlterPartitionReassignmentsRequestTopicPartition struct {
 	// cancel a pending reassignment of this partition.
 	Replicas []int32
 }
-type AlterPartitionReassignmentsRequestTopic struct {
+type AlterPartitionAssignmentsRequestTopic struct {
 	// Topic is a topic to reassign the partitions of.
 	Topic string
 
 	// Partitions contains partitions to reassign.
-	Partitions []AlterPartitionReassignmentsRequestTopicPartition
+	Partitions []AlterPartitionAssignmentsRequestTopicPartition
 }
 
-// AlterPartitionReassignmentsRequest, proposed in KIP-455 and implemented in
+// AlterPartitionAssignmentsRequest, proposed in KIP-455 and implemented in
 // Kafka 2.4.0, is a request to reassign partitions to certain brokers.
 //
 // ACL wise, this requires ALTER on CLUSTER.
-type AlterPartitionReassignmentsRequest struct {
+type AlterPartitionAssignmentsRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
@@ -10546,20 +10560,20 @@ type AlterPartitionReassignmentsRequest struct {
 	TimeoutMillis int32
 
 	// Topics are topics for which to reassign partitions of.
-	Topics []AlterPartitionReassignmentsRequestTopic
+	Topics []AlterPartitionAssignmentsRequestTopic
 }
 
-func (*AlterPartitionReassignmentsRequest) Key() int16                 { return 45 }
-func (*AlterPartitionReassignmentsRequest) MaxVersion() int16          { return 0 }
-func (v *AlterPartitionReassignmentsRequest) SetVersion(version int16) { v.Version = version }
-func (v *AlterPartitionReassignmentsRequest) GetVersion() int16        { return v.Version }
-func (v *AlterPartitionReassignmentsRequest) IsFlexible() bool         { return v.Version >= 0 }
-func (v *AlterPartitionReassignmentsRequest) IsAdminRequest()          {}
-func (v *AlterPartitionReassignmentsRequest) ResponseKind() Response {
-	return &AlterPartitionReassignmentsResponse{Version: v.Version}
+func (*AlterPartitionAssignmentsRequest) Key() int16                 { return 45 }
+func (*AlterPartitionAssignmentsRequest) MaxVersion() int16          { return 0 }
+func (v *AlterPartitionAssignmentsRequest) SetVersion(version int16) { v.Version = version }
+func (v *AlterPartitionAssignmentsRequest) GetVersion() int16        { return v.Version }
+func (v *AlterPartitionAssignmentsRequest) IsFlexible() bool         { return v.Version >= 0 }
+func (v *AlterPartitionAssignmentsRequest) IsAdminRequest()          {}
+func (v *AlterPartitionAssignmentsRequest) ResponseKind() Response {
+	return &AlterPartitionAssignmentsResponse{Version: v.Version}
 }
 
-func (v *AlterPartitionReassignmentsRequest) AppendTo(dst []byte) []byte {
+func (v *AlterPartitionAssignmentsRequest) AppendTo(dst []byte) []byte {
 	version := v.Version
 	_ = version
 	isFlexible := version >= 0
@@ -10626,7 +10640,7 @@ func (v *AlterPartitionReassignmentsRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 
-type AlterPartitionReassignmentsResponseTopicPartition struct {
+type AlterPartitionAssignmentsResponseTopicPartition struct {
 	// Partition is the partition being responded to.
 	Partition int32
 
@@ -10650,16 +10664,16 @@ type AlterPartitionReassignmentsResponseTopicPartition struct {
 	// ErrorMessage is an informative message if the partition reassignment failed.
 	ErrorMessage *string
 }
-type AlterPartitionReassignmentsResponseTopic struct {
+type AlterPartitionAssignmentsResponseTopic struct {
 	// Topic is the topic being responded to.
 	Topic string
 
 	// Partitions contains responses for partitions.
-	Partitions []AlterPartitionReassignmentsResponseTopicPartition
+	Partitions []AlterPartitionAssignmentsResponseTopicPartition
 }
 
-// AlterPartitionReassignmentsResponse is returned for an AlterPartitionReassignmentsRequest.
-type AlterPartitionReassignmentsResponse struct {
+// AlterPartitionAssignmentsResponse is returned for an AlterPartitionAssignmentsRequest.
+type AlterPartitionAssignmentsResponse struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
@@ -10674,10 +10688,10 @@ type AlterPartitionReassignmentsResponse struct {
 	ErrorMessage *string
 
 	// Topics contains responses for each topic requested.
-	Topics []AlterPartitionReassignmentsResponseTopic
+	Topics []AlterPartitionAssignmentsResponseTopic
 }
 
-func (v *AlterPartitionReassignmentsResponse) ReadFrom(src []byte) error {
+func (v *AlterPartitionAssignmentsResponse) ReadFrom(src []byte) error {
 	version := v.Version
 	_ = version
 	isFlexible := version >= 0
@@ -10714,7 +10728,7 @@ func (v *AlterPartitionReassignmentsResponse) ReadFrom(src []byte) error {
 			return b.Complete()
 		}
 		if l > 0 {
-			a = make([]AlterPartitionReassignmentsResponseTopic, l)
+			a = make([]AlterPartitionAssignmentsResponseTopic, l)
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
@@ -10741,7 +10755,7 @@ func (v *AlterPartitionReassignmentsResponse) ReadFrom(src []byte) error {
 					return b.Complete()
 				}
 				if l > 0 {
-					a = make([]AlterPartitionReassignmentsResponseTopicPartition, l)
+					a = make([]AlterPartitionAssignmentsResponseTopicPartition, l)
 				}
 				for i := int32(0); i < l; i++ {
 					v := &a[i]
@@ -11357,7 +11371,7 @@ func RequestForKey(key int16) Request {
 	case 44:
 		return new(IncrementalAlterConfigsRequest)
 	case 45:
-		return new(AlterPartitionReassignmentsRequest)
+		return new(AlterPartitionAssignmentsRequest)
 	case 46:
 		return new(ListPartitionReassignmentsRequest)
 	case 47:
@@ -11462,7 +11476,7 @@ func NameForKey(key int16) string {
 	case 44:
 		return "IncrementalAlterConfigs"
 	case 45:
-		return "AlterPartitionReassignments"
+		return "AlterPartitionAssignments"
 	case 46:
 		return "ListPartitionReassignments"
 	case 47:

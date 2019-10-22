@@ -2484,14 +2484,28 @@ DescribeLogDirsResponse =>
         // replica in the future.
         IsFuture: bool
 
-// TODO
+// SASLAuthenticate continues a sasl authentication flow. Prior to Kafka 1.0.0,
+// authenticating with sasl involved sending raw blobs of data back and forth.
+// After, those blobs are wrapped in a SASLAuthenticateRequest The benefit of
+// this wrapping is that Kafka can indicate errors in the response, rather than
+// just closing the connection. Additionally, the response allows for further
+// extension fields.
 SASLAuthenticateRequest => key 36, max version 1
+  // SASLAuthBytes contains bytes for a SASL client request.
   SASLAuthBytes: bytes
 
+// SASLAuthenticateResponse is returned for a SASLAuthenticateRequest.
 SASLAuthenticateResponse =>
+  // ErrorCode is a potential error.
   ErrorCode: int16
+  // ErrorMessage can contain a message for an error.
   ErrorMessage: nullable-string
+  // SASLAuthBytes is the server challenge continuing SASL flow.
   SASLAuthBytes: bytes
+  // SessionLifetimeMillis, added in Kafka 2.2.0, is how long the SASL
+  // authentication is valid for. This timeout is only enforced if the request
+  // was v1. After this timeout, Kafka expects the next bytes on the wire to
+  // begin reauthentication. Otherwise, Kafka closes the connection.
   SessionLifetimeMillis: int64 // v1+
 
 // CreatePartitionsRequest creates additional partitions for topics.
@@ -2790,11 +2804,11 @@ IncrementalAlterConfigsResponse =>
     // request.
     ResourceName: string
 
-// AlterPartitionReassignmentsRequest, proposed in KIP-455 and implemented in
+// AlterPartitionAssignmentsRequest, proposed in KIP-455 and implemented in
 // Kafka 2.4.0, is a request to reassign partitions to certain brokers.
 //
 // ACL wise, this requires ALTER on CLUSTER.
-AlterPartitionReassignmentsRequest => key 45, max version 0, flexible v0+, admin
+AlterPartitionAssignmentsRequest => key 45, max version 0, flexible v0+, admin
   // TimeoutMillis is how long to wait for the response.
   TimeoutMillis: int32
   // Topics are topics for which to reassign partitions of.
@@ -2809,8 +2823,8 @@ AlterPartitionReassignmentsRequest => key 45, max version 0, flexible v0+, admin
       // cancel a pending reassignment of this partition.
       Replicas: nullable[int32]
 
-// AlterPartitionReassignmentsResponse is returned for an AlterPartitionReassignmentsRequest.
-AlterPartitionReassignmentsResponse =>
+// AlterPartitionAssignmentsResponse is returned for an AlterPartitionAssignmentsRequest.
+AlterPartitionAssignmentsResponse =>
   // ThrottleMillis is how long of a throttle Kafka will apply to the client
   // after responding to this request.
   ThrottleMillis: int32
