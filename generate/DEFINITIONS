@@ -1206,9 +1206,6 @@ FindCoordinatorResponse =>
 // GroupMemberMetadata in group join requests with the sticky partitioning
 // strategy.
 //
-// For forwards compatibility, there may be extra data at the end to be
-// ignored.
-//
 // V1 added generation, which fixed a bug with flaky group members joining
 // repeatedly. See KIP-341 for more details.
 StickyMemberMetadata => not top level, no encoding
@@ -2099,110 +2096,167 @@ TxnOffsetCommitResponse =>
       Partition: int32
       ErrorCode: int16
 
-// DescribeACLsRequest describes ACLs. Unfortunately, there exists little
-// official documentation on this.
-// TODO
+// DescribeACLsRequest describes ACLs. Describing ACLs works on a filter basis:
+// anything that matches the filter is described. Note that there are two
+// "types" of filters in this request: the resource filter and the entry
+// filter, with entries corresponding to users. The first three fields form the
+// resource filter, the last four the entry filter.
 DescribeACLsRequest => key 29, max version 1, admin
+  // ResourceType is the type of resource to describe.
+  //
+  // UNKNOWN, 0, is unknown; you do not describe unknown types. Kafka replies
+  // with unknown if it does not understand your type. ANY, 1 will match any
+  // other type.
+  //
+  // Past these two, the following types filter for an individual type:
+  // TOPIC is 2, GROUP is 3, CLUSTER is 4, TRANSACTIONAL_ID is 5, and
+  // DELEGATION_TOKEN is 6.
   ResourceType: int8
+  // ResourceName is the name to filter out. For the CLUSTER resource type,
+  // this must be "kafka-cluster".
   ResourceName: nullable-string
-  ResourcePatternTypeFilter: int8
+  // ResourcePatternType is how ResourceName is understood. UNKNOWN is 0 and is
+  // meaningless in the request.
+  //
+  // MATCH is 1, which will match anything.
+  //
+  // LITERAL is 2, meaning the name must be an exact match.
+  //
+  // PREFIXED is 3, meaning a resource name must have our requested resource
+  // name as a prefix. That is, topic "foobar" will match "foo".
+  //
+  // This field was added with Kafka 2.0.0 for KIP-290; the default during
+  // creating is 2.
+  ResourcePatternType: int8 // v1+
+  // Principal is the user to filter for. In Kafka with the simple authorizor,
+  // all principals begin with "User:". Pluggable authorizors are allowed, but
+  // Kafka still expects principals to lead with a principal type ("User") and
+  // have a colon separating the principal name ("bob" in "User:bob").
   Principal: nullable-string
+  // Host is a host to filter for.
   Host: nullable-string
+  // Operation is an operation to filter for. UNKNOWN is 0.
+  //
+  // ANY is 1 and matches anything, otherwise... ALL is 2 and matches anything
+  // granted ALL permissions, READ is 3, WRITE is 4, CREATE is 5, DELETE is 6,
+  // ALTER is 7 DESCRIBE is 8, CLUSTER_ACTION is 9, DESCRIBE_CONFIGS is 10,
+  // ALTER_CONFIGS is 11, and IDEMPOTENT_WRITE is 12.
+  //
+  // Note that READ, WRITE, DELETE, and ALTER imply DESCRIBE, and ALTER_CONFIGS
+  // implies DESCRIBE_CONFIGS.
   Operation: int8
+  // PermissionType is the permission type to filter for. UNKNOWN is 0.
+  //
+  // ANY is 1 and matches anything, otherwise DENY (2) matches all deny
+  // permissions and ALLOW (3) matches all allow permissions.
   PermissionType: int8
 
+// DescribeACLsResponse is a response to a describe acls request.
 DescribeACLsResponse =>
+  // ThrottleMillis is how long of a throttle Kafka will apply to the client
+  // after responding to this request.
   ThrottleMillis: int32
   // ErrorCode is the error code returned on request failure.
   //
-  // CLUSTER_AUTHORIZATION_FAILED is returned if the client is not authorized
-  // to describe the cluster.
-  //
   // SECURITY_DISABLED is returned if there is no authorizer configured on the
   // broker.
+  //
+  // There can be other authorization failures.
   ErrorCode: int16
+  // ErrorMessage is a message for an error.
   ErrorMessage: nullable-string
+  // Resources are the describe resources.
   Resources: [=>]
+    // ResourceType is the resource type being described.
     ResourceType: int8
+    // ResourceName is the resource name being described.
     ResourceName: string
+    // ResourcePatternType is the pattern type being described.
     ResourcePatternType: int8 // v1+
+    // ACLs contains users / entries being described.
     ACLs: [=>]
       // Principal is who this ACL applies to.
       Principal: string
       // Host is on which host this ACL applies.
       Host: string
-      // Operation is a type of operation this ACL applies to.
-      //
-      // UNKNOWN (0) is an operation that we do not understand (old client).
-      //
-      // ANY (1) mathches any ACL operation in a filter.
-      //
-      // ALL (2) (implies everything)
-      //
-      // READ (3) (implies DESCRIBE)
-      //
-      // WRITE (4) (implies DESCRIBE)
-      //
-      // CREATE (5)
-      //
-      // DELETE (6) (implies DESCRIBE)
-      //
-      // ALTER (7) (implies DESCRIBE)
-      //
-      // DESCRIBE (8)
-      //
-      // CLUSTER_ACTION (9)
-      //
-      // DESCRIBE_CONFIGS (10)
-      //
-      // ALTER_CONFIGS (11) (implies DESCRIBE_CONFIGS)
-      //
-      // IDEMPOTENT_WRITE (12)
+      // Operation is the operation being described.
       Operation: int8
-      // PermissionType is how this ACL is applied.
-      //
-      // UNKNOWN is a permission type we do not understand (old client).
-      //
-      // ANY allows anything.
-      //
-      // DENY disallows access.
-      //
-      // ALLOW allows access.
+      // PermissionType is the permission being described.
       PermissionType: int8
 
+// CreateACLsRequest creates acls. Creating acls can be done as a batch; each
+// "creation" will be an acl entry.
+//
+// See the DescribeACLsRequest documentation for more descriptions of what
+// valid values for the fields in this request are.
 CreateACLsRequest => key 30, max version 1, admin
   Creations: [=>]
+    // ResourceType is the type of resource this acl entry will be on.
+    // It is invalid to use UNKNOWN or ANY.
     ResourceType: int8
+    // ResourceName is the name of the resource this acl entry will be on.
+    // For CLUSTER, this must be "kafka-cluster".
     ResourceName: string
+    // ResourcePatternType is the pattern type to use for the resource name.
+    // This cannot be UNKNOWN or MATCH (i.e. this must be LITERAL or PREFIXED).
+    // The default for pre-Kafka 2.0.0 is effectively LITERAL.
     ResourcePatternType: int8 // v1+
+    // Principal is the user to apply this acl for. With the Kafka simple
+    // authorizer, this must begin with "User:".
     Principal: string
+    // Host is the host IP address to use for this acl. Yes, each host to allow
+    // the principal access from must be specified as a new creation. KIP-252
+    // might solve this someday.
     Host: string
+    // Operation is the operation this acl is for. This must not be UNKNOWN or
+    // ANY.
     Operation: int8
+    // PermissionType is the permission of this acl. This must be either ALLOW
+    // or DENY.
     PermissionType: int8
 
+// CreateACLsResponse is a response for a CreateACLsRequest.
 CreateACLsResponse =>
+  // ThrottleMillis is how long of a throttle Kafka will apply to the client
+  // after responding to this request.
   ThrottleMillis: int32
-  CreationResponses: [=>]
+  // Creations contains responses to each creation request.
+  Creations: [=>]
+    // ErrorCode is an error for this particular creation (index wise).
     ErrorCode: int16
+    // ErrorMessage is a message for this error.
     ErrorMessage: nullable-string
 
+// DeleteACLsRequest deletes acls. This request works on filters the same way
+// that DescribeACLsRequest does. See DescribeACLsRequest for documentation of
+// the fields.
 DeleteACLsRequest => key 31, max version 1, admin
+  // Filters are filters for acls to delete.
   Filters: [=>]
     ResourceType: int8
     ResourceName: nullable-string
-    ResourcePatternTypeFilter: int8 // v1+
+    ResourcePatternType: int8 // v1+
     Principal: nullable-string
     Host: nullable-string
     Operation: int8
     PermissionType: int8
 
+// DeleteACLsResponse is a response for a DeleteACLsRequest.
 DeleteACLsResponse =>
+  // ThrottleMillis is how long of a throttle Kafka will apply to the client
+  // after responding to this request.
   ThrottleMillis: int32
-  FilterResponses: [=>]
+  // Filters contains a response to each requested filter.
+  Filters: [=>]
+    // ErrorCode is the overall error code for this individual filter.
     ErrorCode: int16
+    // ErrorMessage is a message for this error.
     ErrorMessage: nullable-string
+    // MatchingACLs contains all acls that were matched for this filter.
     MatchingACLs: [=>]
+      // ErrorCode contains an error for this individual acl for this filter.
       ErrorCode: int16
+      // ErrorMessage is a message for this error.
       ErrorMessage: nullable-string
       ResourceType: int8
       ResourceName: string
@@ -2219,7 +2273,7 @@ DescribeConfigsRequest => key 32, max version 2, admin
   // Resources is a list of resources to describe.
   Resources: [=>]
     // ResourceType is an enum corresponding to the type of config to describe.
-    // The only two valid values are 2 (for topic) and 4 (for broker).
+    // Valid values are 2 (topic), 4 (broker), or 8 (broker logger).
     ResourceType: int8
     // ResourceName is the name of config to describe.
     //
@@ -2295,6 +2349,8 @@ DescribeConfigsResponse =>
       // STATIC_BROKER_CONFIG (4): static broker config provided at start up
       //
       // DEFAULT_CONFIG (5): built-in default configuration for those that have defaults
+      //
+      // DYNAMIC_BROKER_LOGGER_CONFIG (6): broker logger; see KIP 412.
       Source: int8 // v1+
       // IsSensitive signifies whether this is a sensitive config key, which
       // is either a password or an unknown type.
@@ -2776,7 +2832,8 @@ IncrementalAlterConfigsResponse =>
   // ThrottleMillis is how long of a throttle Kafka will apply to the client
   // after responding to this request.
   ThrottleMillis: int32
-  Responses: [=>]
+  // Resources are responses for each resources in the alter request.
+  Resources: [=>]
     // ErrorCode is the error code returned for incrementally altering configs.
     //
     // NOT_CONTROLLER is returned if the request was not issued to a Kafka

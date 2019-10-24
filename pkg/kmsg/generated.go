@@ -4321,9 +4321,6 @@ type StickyMemberMetadataCurrentAssignment struct {
 // GroupMemberMetadata in group join requests with the sticky partitioning
 // strategy.
 //
-// For forwards compatibility, there may be extra data at the end to be
-// ignored.
-//
 // V1 added generation, which fixed a bug with flaky group members joining
 // repeatedly. See KIP-341 for more details.
 type StickyMemberMetadata struct {
@@ -7755,25 +7752,68 @@ func (v *TxnOffsetCommitResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
-// DescribeACLsRequest describes ACLs. Unfortunately, there exists little
-// official documentation on this.
-// TODO
+// DescribeACLsRequest describes ACLs. Describing ACLs works on a filter basis:
+// anything that matches the filter is described. Note that there are two
+// "types" of filters in this request: the resource filter and the entry
+// filter, with entries corresponding to users. The first three fields form the
+// resource filter, the last four the entry filter.
 type DescribeACLsRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
+	// ResourceType is the type of resource to describe.
+	//
+	// UNKNOWN, 0, is unknown; you do not describe unknown types. Kafka replies
+	// with unknown if it does not understand your type. ANY, 1 will match any
+	// other type.
+	//
+	// Past these two, the following types filter for an individual type:
+	// TOPIC is 2, GROUP is 3, CLUSTER is 4, TRANSACTIONAL_ID is 5, and
+	// DELEGATION_TOKEN is 6.
 	ResourceType int8
 
+	// ResourceName is the name to filter out. For the CLUSTER resource type,
+	// this must be "kafka-cluster".
 	ResourceName *string
 
-	ResourcePatternTypeFilter int8
+	// ResourcePatternType is how ResourceName is understood. UNKNOWN is 0 and is
+	// meaningless in the request.
+	//
+	// MATCH is 1, which will match anything.
+	//
+	// LITERAL is 2, meaning the name must be an exact match.
+	//
+	// PREFIXED is 3, meaning a resource name must have our requested resource
+	// name as a prefix. That is, topic "foobar" will match "foo".
+	//
+	// This field was added with Kafka 2.0.0 for KIP-290; the default during
+	// creating is 2.
+	ResourcePatternType int8 // v1+
 
+	// Principal is the user to filter for. In Kafka with the simple authorizor,
+	// all principals begin with "User:". Pluggable authorizors are allowed, but
+	// Kafka still expects principals to lead with a principal type ("User") and
+	// have a colon separating the principal name ("bob" in "User:bob").
 	Principal *string
 
+	// Host is a host to filter for.
 	Host *string
 
+	// Operation is an operation to filter for. UNKNOWN is 0.
+	//
+	// ANY is 1 and matches anything, otherwise... ALL is 2 and matches anything
+	// granted ALL permissions, READ is 3, WRITE is 4, CREATE is 5, DELETE is 6,
+	// ALTER is 7 DESCRIBE is 8, CLUSTER_ACTION is 9, DESCRIBE_CONFIGS is 10,
+	// ALTER_CONFIGS is 11, and IDEMPOTENT_WRITE is 12.
+	//
+	// Note that READ, WRITE, DELETE, and ALTER imply DESCRIBE, and ALTER_CONFIGS
+	// implies DESCRIBE_CONFIGS.
 	Operation int8
 
+	// PermissionType is the permission type to filter for. UNKNOWN is 0.
+	//
+	// ANY is 1 and matches anything, otherwise DENY (2) matches all deny
+	// permissions and ALLOW (3) matches all allow permissions.
 	PermissionType int8
 }
 
@@ -7798,8 +7838,8 @@ func (v *DescribeACLsRequest) AppendTo(dst []byte) []byte {
 		v := v.ResourceName
 		dst = kbin.AppendNullableString(dst, v)
 	}
-	{
-		v := v.ResourcePatternTypeFilter
+	if version >= 1 {
+		v := v.ResourcePatternType
 		dst = kbin.AppendInt8(dst, v)
 	}
 	{
@@ -7828,72 +7868,47 @@ type DescribeACLsResponseResourceACL struct {
 	// Host is on which host this ACL applies.
 	Host string
 
-	// Operation is a type of operation this ACL applies to.
-	//
-	// UNKNOWN (0) is an operation that we do not understand (old client).
-	//
-	// ANY (1) mathches any ACL operation in a filter.
-	//
-	// ALL (2) (implies everything)
-	//
-	// READ (3) (implies DESCRIBE)
-	//
-	// WRITE (4) (implies DESCRIBE)
-	//
-	// CREATE (5)
-	//
-	// DELETE (6) (implies DESCRIBE)
-	//
-	// ALTER (7) (implies DESCRIBE)
-	//
-	// DESCRIBE (8)
-	//
-	// CLUSTER_ACTION (9)
-	//
-	// DESCRIBE_CONFIGS (10)
-	//
-	// ALTER_CONFIGS (11) (implies DESCRIBE_CONFIGS)
-	//
-	// IDEMPOTENT_WRITE (12)
+	// Operation is the operation being described.
 	Operation int8
 
-	// PermissionType is how this ACL is applied.
-	//
-	// UNKNOWN is a permission type we do not understand (old client).
-	//
-	// ANY allows anything.
-	//
-	// DENY disallows access.
-	//
-	// ALLOW allows access.
+	// PermissionType is the permission being described.
 	PermissionType int8
 }
 type DescribeACLsResponseResource struct {
+	// ResourceType is the resource type being described.
 	ResourceType int8
 
+	// ResourceName is the resource name being described.
 	ResourceName string
 
+	// ResourcePatternType is the pattern type being described.
 	ResourcePatternType int8 // v1+
 
+	// ACLs contains users / entries being described.
 	ACLs []DescribeACLsResponseResourceACL
 }
+
+// DescribeACLsResponse is a response to a describe acls request.
 type DescribeACLsResponse struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
+	// ThrottleMillis is how long of a throttle Kafka will apply to the client
+	// after responding to this request.
 	ThrottleMillis int32
 
 	// ErrorCode is the error code returned on request failure.
 	//
-	// CLUSTER_AUTHORIZATION_FAILED is returned if the client is not authorized
-	// to describe the cluster.
-	//
 	// SECURITY_DISABLED is returned if there is no authorizer configured on the
 	// broker.
+	//
+	// There can be other authorization failures.
 	ErrorCode int16
 
+	// ErrorMessage is a message for an error.
 	ErrorMessage *string
 
+	// Resources are the describe resources.
 	Resources []DescribeACLsResponseResource
 }
 
@@ -7982,20 +7997,42 @@ func (v *DescribeACLsResponse) ReadFrom(src []byte) error {
 }
 
 type CreateACLsRequestCreation struct {
+	// ResourceType is the type of resource this acl entry will be on.
+	// It is invalid to use UNKNOWN or ANY.
 	ResourceType int8
 
+	// ResourceName is the name of the resource this acl entry will be on.
+	// For CLUSTER, this must be "kafka-cluster".
 	ResourceName string
 
+	// ResourcePatternType is the pattern type to use for the resource name.
+	// This cannot be UNKNOWN or MATCH (i.e. this must be LITERAL or PREFIXED).
+	// The default for pre-Kafka 2.0.0 is effectively LITERAL.
 	ResourcePatternType int8 // v1+
 
+	// Principal is the user to apply this acl for. With the Kafka simple
+	// authorizer, this must begin with "User:".
 	Principal string
 
+	// Host is the host IP address to use for this acl. Yes, each host to allow
+	// the principal access from must be specified as a new creation. KIP-252
+	// might solve this someday.
 	Host string
 
+	// Operation is the operation this acl is for. This must not be UNKNOWN or
+	// ANY.
 	Operation int8
 
+	// PermissionType is the permission of this acl. This must be either ALLOW
+	// or DENY.
 	PermissionType int8
 }
+
+// CreateACLsRequest creates acls. Creating acls can be done as a batch; each
+// "creation" will be an acl entry.
+//
+// See the DescribeACLsRequest documentation for more descriptions of what
+// valid values for the fields in this request are.
 type CreateACLsRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
@@ -8052,18 +8089,25 @@ func (v *CreateACLsRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 
-type CreateACLsResponseCreationResponse struct {
+type CreateACLsResponseCreation struct {
+	// ErrorCode is an error for this particular creation (index wise).
 	ErrorCode int16
 
+	// ErrorMessage is a message for this error.
 	ErrorMessage *string
 }
+
+// CreateACLsResponse is a response for a CreateACLsRequest.
 type CreateACLsResponse struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
+	// ThrottleMillis is how long of a throttle Kafka will apply to the client
+	// after responding to this request.
 	ThrottleMillis int32
 
-	CreationResponses []CreateACLsResponseCreationResponse
+	// Creations contains responses to each creation request.
+	Creations []CreateACLsResponseCreation
 }
 
 func (v *CreateACLsResponse) ReadFrom(src []byte) error {
@@ -8076,7 +8120,7 @@ func (v *CreateACLsResponse) ReadFrom(src []byte) error {
 		s.ThrottleMillis = v
 	}
 	{
-		v := s.CreationResponses
+		v := s.Creations
 		a := v
 		var l int32
 		l = b.ArrayLen()
@@ -8084,7 +8128,7 @@ func (v *CreateACLsResponse) ReadFrom(src []byte) error {
 			return b.Complete()
 		}
 		if l > 0 {
-			a = make([]CreateACLsResponseCreationResponse, l)
+			a = make([]CreateACLsResponseCreation, l)
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
@@ -8099,7 +8143,7 @@ func (v *CreateACLsResponse) ReadFrom(src []byte) error {
 			}
 		}
 		v = a
-		s.CreationResponses = v
+		s.Creations = v
 	}
 	return b.Complete()
 }
@@ -8109,7 +8153,7 @@ type DeleteACLsRequestFilter struct {
 
 	ResourceName *string
 
-	ResourcePatternTypeFilter int8 // v1+
+	ResourcePatternType int8 // v1+
 
 	Principal *string
 
@@ -8119,10 +8163,15 @@ type DeleteACLsRequestFilter struct {
 
 	PermissionType int8
 }
+
+// DeleteACLsRequest deletes acls. This request works on filters the same way
+// that DescribeACLsRequest does. See DescribeACLsRequest for documentation of
+// the fields.
 type DeleteACLsRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
+	// Filters are filters for acls to delete.
 	Filters []DeleteACLsRequestFilter
 }
 
@@ -8151,7 +8200,7 @@ func (v *DeleteACLsRequest) AppendTo(dst []byte) []byte {
 				dst = kbin.AppendNullableString(dst, v)
 			}
 			if version >= 1 {
-				v := v.ResourcePatternTypeFilter
+				v := v.ResourcePatternType
 				dst = kbin.AppendInt8(dst, v)
 			}
 			{
@@ -8175,9 +8224,11 @@ func (v *DeleteACLsRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 
-type DeleteACLsResponseFilterResponseMatchingACL struct {
+type DeleteACLsResponseFilterMatchingACL struct {
+	// ErrorCode contains an error for this individual acl for this filter.
 	ErrorCode int16
 
+	// ErrorMessage is a message for this error.
 	ErrorMessage *string
 
 	ResourceType int8
@@ -8194,20 +8245,28 @@ type DeleteACLsResponseFilterResponseMatchingACL struct {
 
 	PermissionType int8
 }
-type DeleteACLsResponseFilterResponse struct {
+type DeleteACLsResponseFilter struct {
+	// ErrorCode is the overall error code for this individual filter.
 	ErrorCode int16
 
+	// ErrorMessage is a message for this error.
 	ErrorMessage *string
 
-	MatchingACLs []DeleteACLsResponseFilterResponseMatchingACL
+	// MatchingACLs contains all acls that were matched for this filter.
+	MatchingACLs []DeleteACLsResponseFilterMatchingACL
 }
+
+// DeleteACLsResponse is a response for a DeleteACLsRequest.
 type DeleteACLsResponse struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
+	// ThrottleMillis is how long of a throttle Kafka will apply to the client
+	// after responding to this request.
 	ThrottleMillis int32
 
-	FilterResponses []DeleteACLsResponseFilterResponse
+	// Filters contains a response to each requested filter.
+	Filters []DeleteACLsResponseFilter
 }
 
 func (v *DeleteACLsResponse) ReadFrom(src []byte) error {
@@ -8220,7 +8279,7 @@ func (v *DeleteACLsResponse) ReadFrom(src []byte) error {
 		s.ThrottleMillis = v
 	}
 	{
-		v := s.FilterResponses
+		v := s.Filters
 		a := v
 		var l int32
 		l = b.ArrayLen()
@@ -8228,7 +8287,7 @@ func (v *DeleteACLsResponse) ReadFrom(src []byte) error {
 			return b.Complete()
 		}
 		if l > 0 {
-			a = make([]DeleteACLsResponseFilterResponse, l)
+			a = make([]DeleteACLsResponseFilter, l)
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
@@ -8250,7 +8309,7 @@ func (v *DeleteACLsResponse) ReadFrom(src []byte) error {
 					return b.Complete()
 				}
 				if l > 0 {
-					a = make([]DeleteACLsResponseFilterResponseMatchingACL, l)
+					a = make([]DeleteACLsResponseFilterMatchingACL, l)
 				}
 				for i := int32(0); i < l; i++ {
 					v := &a[i]
@@ -8297,14 +8356,14 @@ func (v *DeleteACLsResponse) ReadFrom(src []byte) error {
 			}
 		}
 		v = a
-		s.FilterResponses = v
+		s.Filters = v
 	}
 	return b.Complete()
 }
 
 type DescribeConfigsRequestResource struct {
 	// ResourceType is an enum corresponding to the type of config to describe.
-	// The only two valid values are 2 (for topic) and 4 (for broker).
+	// Valid values are 2 (topic), 4 (broker), or 8 (broker logger).
 	ResourceType int8
 
 	// ResourceName is the name of config to describe.
@@ -8416,6 +8475,8 @@ type DescribeConfigsResponseResourceConfig struct {
 	// STATIC_BROKER_CONFIG (4): static broker config provided at start up
 	//
 	// DEFAULT_CONFIG (5): built-in default configuration for those that have defaults
+	//
+	// DYNAMIC_BROKER_LOGGER_CONFIG (6): broker logger; see KIP 412.
 	Source int8 // v1+
 
 	// IsSensitive signifies whether this is a sensitive config key, which
@@ -10420,7 +10481,7 @@ func (v *IncrementalAlterConfigsRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 
-type IncrementalAlterConfigsResponseResponse struct {
+type IncrementalAlterConfigsResponseResource struct {
 	// ErrorCode is the error code returned for incrementally altering configs.
 	//
 	// NOT_CONTROLLER is returned if the request was not issued to a Kafka
@@ -10461,7 +10522,8 @@ type IncrementalAlterConfigsResponse struct {
 	// after responding to this request.
 	ThrottleMillis int32
 
-	Responses []IncrementalAlterConfigsResponseResponse
+	// Resources are responses for each resources in the alter request.
+	Resources []IncrementalAlterConfigsResponseResource
 }
 
 func (v *IncrementalAlterConfigsResponse) ReadFrom(src []byte) error {
@@ -10476,7 +10538,7 @@ func (v *IncrementalAlterConfigsResponse) ReadFrom(src []byte) error {
 		s.ThrottleMillis = v
 	}
 	{
-		v := s.Responses
+		v := s.Resources
 		a := v
 		var l int32
 		if isFlexible {
@@ -10488,7 +10550,7 @@ func (v *IncrementalAlterConfigsResponse) ReadFrom(src []byte) error {
 			return b.Complete()
 		}
 		if l > 0 {
-			a = make([]IncrementalAlterConfigsResponseResponse, l)
+			a = make([]IncrementalAlterConfigsResponseResource, l)
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
@@ -10524,7 +10586,7 @@ func (v *IncrementalAlterConfigsResponse) ReadFrom(src []byte) error {
 			}
 		}
 		v = a
-		s.Responses = v
+		s.Resources = v
 	}
 	if isFlexible {
 		SkipTags(&b)
