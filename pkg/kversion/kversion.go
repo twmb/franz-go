@@ -215,9 +215,6 @@ func V2_0_0() Versions {
 	v[25]++ // 1 add offsets to txn (same)
 	v[26]++ // 1 end txn (same)
 	v[28]++ // 1 txn offset commit (same)
-	v[29]++ // 1 describe acls (same)
-	v[30]++ // 1 create acls (same)
-	v[31]++ // 1 delete acls (same)
 	v[32]++ // 2 describe configs (same)
 	v[33]++ // 1 alter configs (same)
 	v[34]++ // 1 alter replica log dirs (same)
@@ -228,6 +225,10 @@ func V2_0_0() Versions {
 	v[40]++ // 1 expire delegation token (same)
 	v[41]++ // 1 describe delegation token (same)
 	v[42]++ // 1 delete groups (same)
+
+	v[29]++ // 1 describe acls KAFKA-6841 b3aa655a70 KIP-290
+	v[30]++ // 1 create acls (same)
+	v[31]++ // 1 delete acls (same)
 
 	v[23]++ // 1 offsets for leader epoch KAFKA-6361 9679c44d2b KIP-279
 	return v
