@@ -8014,9 +8014,9 @@ type CreateACLsRequestCreation struct {
 	// authorizer, this must begin with "User:".
 	Principal string
 
-	// Host is the host IP address to use for this acl. Yes, each host to allow
+	// Host is the host address to use for this acl. Yes, each host to allow
 	// the principal access from must be specified as a new creation. KIP-252
-	// might solve this someday.
+	// might solve this someday. The special wildcard host "*" allows all hosts.
 	Host string
 
 	// Operation is the operation this acl is for. This must not be UNKNOWN or
@@ -8089,7 +8089,7 @@ func (v *CreateACLsRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 
-type CreateACLsResponseCreation struct {
+type CreateACLsResponseResult struct {
 	// ErrorCode is an error for this particular creation (index wise).
 	ErrorCode int16
 
@@ -8106,8 +8106,8 @@ type CreateACLsResponse struct {
 	// after responding to this request.
 	ThrottleMillis int32
 
-	// Creations contains responses to each creation request.
-	Creations []CreateACLsResponseCreation
+	// Results contains responses to each creation request.
+	Results []CreateACLsResponseResult
 }
 
 func (v *CreateACLsResponse) ReadFrom(src []byte) error {
@@ -8120,7 +8120,7 @@ func (v *CreateACLsResponse) ReadFrom(src []byte) error {
 		s.ThrottleMillis = v
 	}
 	{
-		v := s.Creations
+		v := s.Results
 		a := v
 		var l int32
 		l = b.ArrayLen()
@@ -8128,7 +8128,7 @@ func (v *CreateACLsResponse) ReadFrom(src []byte) error {
 			return b.Complete()
 		}
 		if l > 0 {
-			a = make([]CreateACLsResponseCreation, l)
+			a = make([]CreateACLsResponseResult, l)
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
@@ -8143,7 +8143,7 @@ func (v *CreateACLsResponse) ReadFrom(src []byte) error {
 			}
 		}
 		v = a
-		s.Creations = v
+		s.Results = v
 	}
 	return b.Complete()
 }
@@ -8224,7 +8224,7 @@ func (v *DeleteACLsRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 
-type DeleteACLsResponseFilterMatchingACL struct {
+type DeleteACLsResponseResultMatchingACL struct {
 	// ErrorCode contains an error for this individual acl for this filter.
 	ErrorCode int16
 
@@ -8245,7 +8245,7 @@ type DeleteACLsResponseFilterMatchingACL struct {
 
 	PermissionType int8
 }
-type DeleteACLsResponseFilter struct {
+type DeleteACLsResponseResult struct {
 	// ErrorCode is the overall error code for this individual filter.
 	ErrorCode int16
 
@@ -8253,7 +8253,7 @@ type DeleteACLsResponseFilter struct {
 	ErrorMessage *string
 
 	// MatchingACLs contains all acls that were matched for this filter.
-	MatchingACLs []DeleteACLsResponseFilterMatchingACL
+	MatchingACLs []DeleteACLsResponseResultMatchingACL
 }
 
 // DeleteACLsResponse is a response for a DeleteACLsRequest.
@@ -8265,8 +8265,8 @@ type DeleteACLsResponse struct {
 	// after responding to this request.
 	ThrottleMillis int32
 
-	// Filters contains a response to each requested filter.
-	Filters []DeleteACLsResponseFilter
+	// Results contains a response to each requested filter.
+	Results []DeleteACLsResponseResult
 }
 
 func (v *DeleteACLsResponse) ReadFrom(src []byte) error {
@@ -8279,7 +8279,7 @@ func (v *DeleteACLsResponse) ReadFrom(src []byte) error {
 		s.ThrottleMillis = v
 	}
 	{
-		v := s.Filters
+		v := s.Results
 		a := v
 		var l int32
 		l = b.ArrayLen()
@@ -8287,7 +8287,7 @@ func (v *DeleteACLsResponse) ReadFrom(src []byte) error {
 			return b.Complete()
 		}
 		if l > 0 {
-			a = make([]DeleteACLsResponseFilter, l)
+			a = make([]DeleteACLsResponseResult, l)
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
@@ -8309,7 +8309,7 @@ func (v *DeleteACLsResponse) ReadFrom(src []byte) error {
 					return b.Complete()
 				}
 				if l > 0 {
-					a = make([]DeleteACLsResponseFilterMatchingACL, l)
+					a = make([]DeleteACLsResponseResultMatchingACL, l)
 				}
 				for i := int32(0); i < l; i++ {
 					v := &a[i]
@@ -8356,7 +8356,7 @@ func (v *DeleteACLsResponse) ReadFrom(src []byte) error {
 			}
 		}
 		v = a
-		s.Filters = v
+		s.Results = v
 	}
 	return b.Complete()
 }
@@ -9499,19 +9499,37 @@ func (v *CreatePartitionsResponse) ReadFrom(src []byte) error {
 }
 
 type CreateDelegationTokenRequestRenewer struct {
+	// PrincipalType is the "type" this principal is. This must be "User".
 	PrincipalType string
 
-	Name string
+	// PrincipalName is the user name allowed to renew the returned token.
+	PrincipalName string
 }
 
-// TODO
+// CreateDelegationTokenRequest issues a request to create a delegation token.
+//
+// Creating delegation tokens allows for an (ideally) quicker and easier method
+// of enabling authorization for a wide array of clients. Rather than having to
+// manage many passwords external to Kafka, you only need to manage a few
+// accounts and use those to create delegation tokens per client.
+//
+// Note that delegation tokens inherit the same ACLs as the user creating the
+// token. Thus, if you want to properly scope ACLs, you should not create
+// delegation tokens with admin accounts.
+//
+// Delegation tokens live inside of Kafka and use SASL SCRAM-SHA-256 for
+// authorization.
 type CreateDelegationTokenRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
+	// Renewers is a list of who can renew this delegation token. If empty, the
+	// default is the principal (user) who created the token.
 	Renewers []CreateDelegationTokenRequestRenewer
 
-	MaxLifetime int64
+	// MaxLifetimeMillis is how long this delegation token will be valid for.
+	// If -1, the default will be the server's delegation.token.max.lifetime.ms.
+	MaxLifetimeMillis int64
 }
 
 func (*CreateDelegationTokenRequest) Key() int16                 { return 38 }
@@ -9547,7 +9565,7 @@ func (v *CreateDelegationTokenRequest) AppendTo(dst []byte) []byte {
 				}
 			}
 			{
-				v := v.Name
+				v := v.PrincipalName
 				if isFlexible {
 					dst = kbin.AppendCompactString(dst, v)
 				} else {
@@ -9560,7 +9578,7 @@ func (v *CreateDelegationTokenRequest) AppendTo(dst []byte) []byte {
 		}
 	}
 	{
-		v := v.MaxLifetime
+		v := v.MaxLifetimeMillis
 		dst = kbin.AppendInt64(dst, v)
 	}
 	if isFlexible {
@@ -9569,26 +9587,47 @@ func (v *CreateDelegationTokenRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 
+// CreateDelegationTokenResponse is a response to a CreateDelegationTokenRequest.
 type CreateDelegationTokenResponse struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
+	// ErrorCode is any error that caused the request to fail.
 	ErrorCode int16
 
+	// PrincipalType is the type of principal that granted this delegation token.
+	// This will always be "User" with the simple authorizer.
 	PrincipalType string
 
-	OwnerName string
+	// PrincipalName is the name of the principal that granted this delegation
+	// token.
+	PrincipalName string
 
+	// IssueTimestamp is the millisecond timestamp this delegation token was
+	// issued.
 	IssueTimestamp int64
 
+	// ExpiryTimestamp is the millisecond timestamp this token will expire. The
+	// token can be renewed up to MaxTimestamp, past which point, it will be
+	// invalid. The Kafka default is 24h.
 	ExpiryTimestamp int64
 
+	// MaxTimestamp is the millisecond timestamp past which this token cannot
+	// be renewed.
 	MaxTimestamp int64
 
+	// TokenID is the ID of this token; this will be used as the username for
+	// scram authentication.
 	TokenID string
 
+	// HMAC is the password of this token; this will be used as the password for
+	// scram authentication.
 	HMAC []byte
 
+	// ThrottleMillis is how long of a throttle Kafka will apply to the client
+	// after this request.
+	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
+	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
 	ThrottleMillis int32
 }
 
@@ -9619,7 +9658,7 @@ func (v *CreateDelegationTokenResponse) ReadFrom(src []byte) error {
 		} else {
 			v = b.String()
 		}
-		s.OwnerName = v
+		s.PrincipalName = v
 	}
 	{
 		v := b.Int64()
@@ -9661,13 +9700,19 @@ func (v *CreateDelegationTokenResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+// RenewDelegationTokenRequest is a request to renew a delegation token that
+// has not yet hit its max timestamp. Note that a client using a token cannot
+// renew its own token.
 type RenewDelegationTokenRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
+	// HMAC is the HMAC of the token to be renewed.
 	HMAC []byte
 
-	RenewTimePeriod int64
+	// RenewTimeMillis is how long to renew the token for. If -1, Kafka uses its
+	// delegation.token.max.lifetime.ms.
+	RenewTimeMillis int64
 }
 
 func (*RenewDelegationTokenRequest) Key() int16                 { return 39 }
@@ -9688,20 +9733,29 @@ func (v *RenewDelegationTokenRequest) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendBytes(dst, v)
 	}
 	{
-		v := v.RenewTimePeriod
+		v := v.RenewTimeMillis
 		dst = kbin.AppendInt64(dst, v)
 	}
 	return dst
 }
 
+// RenewDelegationTokenResponse is a response to a RenewDelegationTokenRequest.
 type RenewDelegationTokenResponse struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
+	// ErrorCode is any error that caused the request to fail.
 	ErrorCode int16
 
+	// ExpiryTimestamp is the millisecond timestamp this token will expire. The
+	// token can be renewed up to MaxTimestamp, past which point, it will be
+	// invalid. The Kafka default is 24h.
 	ExpiryTimestamp int64
 
+	// ThrottleMillis is how long of a throttle Kafka will apply to the client
+	// after this request.
+	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
+	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
 	ThrottleMillis int32
 }
 
@@ -9725,13 +9779,25 @@ func (v *RenewDelegationTokenResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+// ExpireDelegationTokenRequest is a request to change the expiry timestamp
+// of a delegation token. Note that a client using a token cannot expire its
+// own token.
 type ExpireDelegationTokenRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
+	// HMAC is the HMAC of the token to change the expiry timestamp of.
 	HMAC []byte
 
-	ExpiryTimePeriod int64
+	// ExpiryTimeMillis changes the delegation token's expiry timestamp to
+	// now + expiry time millis. This can be used to force tokens to expiry
+	// quickly, or to allow tokens a grace period before expiry. This can only
+	// change the final expiry timestamp down; you cannot add enough time that
+	// would increase the expiry timestamp.
+	//
+	// Note that you can change the expiry timestamp down and then back up, so
+	// long as you change it back up before the timestamp expires.
+	ExpiryTimeMillis int64
 }
 
 func (*ExpireDelegationTokenRequest) Key() int16                 { return 40 }
@@ -9752,20 +9818,28 @@ func (v *ExpireDelegationTokenRequest) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendBytes(dst, v)
 	}
 	{
-		v := v.ExpiryTimePeriod
+		v := v.ExpiryTimeMillis
 		dst = kbin.AppendInt64(dst, v)
 	}
 	return dst
 }
 
+// ExpireDelegationTokenResponse is a response to an ExpireDelegationTokenRequest.
 type ExpireDelegationTokenResponse struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
+	// ErrorCode is any error that caused the request to fail.
 	ErrorCode int16
 
+	// ExpiryTimestamp is the new timestamp at which the delegation token will
+	// expire.
 	ExpiryTimestamp int64
 
+	// ThrottleMillis is how long of a throttle Kafka will apply to the client
+	// after this request.
+	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
+	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
 	ThrottleMillis int32
 }
 
@@ -9790,15 +9864,23 @@ func (v *ExpireDelegationTokenResponse) ReadFrom(src []byte) error {
 }
 
 type DescribeDelegationTokenRequestOwner struct {
+	// PrincipalType is a type to match to describe delegation tokens created
+	// with this principal. This would be "User" with the simple authorizer.
 	PrincipalType string
 
-	Name string
+	// PrincipalName is the name to match to describe delegation tokens created
+	// with this principal.
+	PrincipalName string
 }
+
+// DescribeDelegationTokenRequest is a request to describe delegation tokens.
 type DescribeDelegationTokenRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
 	// Owners contains owners to describe delegation tokens for, or null for all.
+	// If non-null, only tokens created from a matching principal type, name
+	// combination are printed.
 	Owners []DescribeDelegationTokenRequestOwner
 }
 
@@ -9825,7 +9907,7 @@ func (v *DescribeDelegationTokenRequest) AppendTo(dst []byte) []byte {
 				dst = kbin.AppendString(dst, v)
 			}
 			{
-				v := v.Name
+				v := v.PrincipalName
 				dst = kbin.AppendString(dst, v)
 			}
 		}
@@ -9836,33 +9918,51 @@ func (v *DescribeDelegationTokenRequest) AppendTo(dst []byte) []byte {
 type DescribeDelegationTokenResponseTokenDetailRenewer struct {
 	PrincipalType string
 
-	Name string
+	PrincipalName string
 }
 type DescribeDelegationTokenResponseTokenDetail struct {
+	// PrincipalType is the principal type of who created this token.
 	PrincipalType string
 
-	OwnerName string
+	// PrincipalName is the principal name of who created this token.
+	PrincipalName string
 
+	// IssueTimestamp is the millisecond timestamp of when this token was issued.
 	IssueTimestamp int64
 
+	// ExpiryTimestamp is the millisecond timestamp of when this token will expire.
 	ExpiryTimestamp int64
 
+	// MaxTimestamp is the millisecond timestamp past which whis token cannot
+	// be renewed.
 	MaxTimestamp int64
 
+	// TokenID is the ID (scram username) of this token.
 	TokenID string
 
+	// HMAC is the password of this token.
 	HMAC []byte
 
+	// Renewers is a list of users that can renew this token.
 	Renewers []DescribeDelegationTokenResponseTokenDetailRenewer
 }
+
+// DescribeDelegationTokenResponsee is a response to a DescribeDelegationTokenRequest.
 type DescribeDelegationTokenResponse struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
+	// ErrorCode is any error that caused the request to fail.
 	ErrorCode int16
 
+	// TokenDetails shows information about each token created from any principal
+	// in the request.
 	TokenDetails []DescribeDelegationTokenResponseTokenDetail
 
+	// ThrottleMillis is how long of a throttle Kafka will apply to the client
+	// after this request.
+	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
+	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
 	ThrottleMillis int32
 }
 
@@ -9895,7 +9995,7 @@ func (v *DescribeDelegationTokenResponse) ReadFrom(src []byte) error {
 			}
 			{
 				v := b.String()
-				s.OwnerName = v
+				s.PrincipalName = v
 			}
 			{
 				v := b.Int64()
@@ -9937,7 +10037,7 @@ func (v *DescribeDelegationTokenResponse) ReadFrom(src []byte) error {
 					}
 					{
 						v := b.String()
-						s.Name = v
+						s.PrincipalName = v
 					}
 				}
 				v = a

@@ -2204,9 +2204,9 @@ CreateACLsRequest => key 30, max version 1, admin
     // Principal is the user to apply this acl for. With the Kafka simple
     // authorizer, this must begin with "User:".
     Principal: string
-    // Host is the host IP address to use for this acl. Yes, each host to allow
+    // Host is the host address to use for this acl. Yes, each host to allow
     // the principal access from must be specified as a new creation. KIP-252
-    // might solve this someday.
+    // might solve this someday. The special wildcard host "*" allows all hosts.
     Host: string
     // Operation is the operation this acl is for. This must not be UNKNOWN or
     // ANY.
@@ -2220,8 +2220,8 @@ CreateACLsResponse =>
   // ThrottleMillis is how long of a throttle Kafka will apply to the client
   // after responding to this request.
   ThrottleMillis: int32
-  // Creations contains responses to each creation request.
-  Creations: [=>]
+  // Results contains responses to each creation request.
+  Results: [=>]
     // ErrorCode is an error for this particular creation (index wise).
     ErrorCode: int16
     // ErrorMessage is a message for this error.
@@ -2246,8 +2246,8 @@ DeleteACLsResponse =>
   // ThrottleMillis is how long of a throttle Kafka will apply to the client
   // after responding to this request.
   ThrottleMillis: int32
-  // Filters contains a response to each requested filter.
-  Filters: [=>]
+  // Results contains a response to each requested filter.
+  Results: [=>]
     // ErrorCode is the overall error code for this individual filter.
     ErrorCode: int16
     // ErrorMessage is a message for this error.
@@ -2631,61 +2631,159 @@ CreatePartitionsResponse =>
     // ErrorMessage is an informative message if the topic creation failed.
     ErrorMessage: nullable-string
 
-// TODO
+// CreateDelegationTokenRequest issues a request to create a delegation token.
+//
+// Creating delegation tokens allows for an (ideally) quicker and easier method
+// of enabling authorization for a wide array of clients. Rather than having to
+// manage many passwords external to Kafka, you only need to manage a few
+// accounts and use those to create delegation tokens per client.
+//
+// Note that delegation tokens inherit the same ACLs as the user creating the
+// token. Thus, if you want to properly scope ACLs, you should not create
+// delegation tokens with admin accounts.
+//
+// Delegation tokens live inside of Kafka and use SASL SCRAM-SHA-256 for
+// authorization.
 CreateDelegationTokenRequest => key 38, max version 2, flexible v2+, admin
+  // Renewers is a list of who can renew this delegation token. If empty, the
+  // default is the principal (user) who created the token.
   Renewers: [=>]
+    // PrincipalType is the "type" this principal is. This must be "User".
     PrincipalType: string
-    Name: string
-  MaxLifetime: int64
+    // PrincipalName is the user name allowed to renew the returned token.
+    PrincipalName: string
+  // MaxLifetimeMillis is how long this delegation token will be valid for.
+  // If -1, the default will be the server's delegation.token.max.lifetime.ms.
+  MaxLifetimeMillis: int64
 
+// CreateDelegationTokenResponse is a response to a CreateDelegationTokenRequest.
 CreateDelegationTokenResponse =>
+  // ErrorCode is any error that caused the request to fail.
   ErrorCode: int16
+  // PrincipalType is the type of principal that granted this delegation token.
+  // This will always be "User" with the simple authorizer.
   PrincipalType: string
-  OwnerName: string
+  // PrincipalName is the name of the principal that granted this delegation
+  // token.
+  PrincipalName: string
+  // IssueTimestamp is the millisecond timestamp this delegation token was
+  // issued.
   IssueTimestamp: int64
+  // ExpiryTimestamp is the millisecond timestamp this token will expire. The
+  // token can be renewed up to MaxTimestamp, past which point, it will be
+  // invalid. The Kafka default is 24h.
   ExpiryTimestamp: int64
+  // MaxTimestamp is the millisecond timestamp past which this token cannot
+  // be renewed.
   MaxTimestamp: int64
+  // TokenID is the ID of this token; this will be used as the username for
+  // scram authentication.
   TokenID: string
+  // HMAC is the password of this token; this will be used as the password for
+  // scram authentication.
   HMAC: bytes
+  // ThrottleMillis is how long of a throttle Kafka will apply to the client
+  // after this request.
+  // For Kafka < 2.0.0, the throttle is applied before issuing a response.
+  // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
   ThrottleMillis: int32
 
+// RenewDelegationTokenRequest is a request to renew a delegation token that
+// has not yet hit its max timestamp. Note that a client using a token cannot
+// renew its own token.
 RenewDelegationTokenRequest => key 39, max version 1, admin
+  // HMAC is the HMAC of the token to be renewed.
   HMAC: bytes
-  RenewTimePeriod: int64
+  // RenewTimeMillis is how long to renew the token for. If -1, Kafka uses its
+  // delegation.token.max.lifetime.ms.
+  RenewTimeMillis: int64
 
+// RenewDelegationTokenResponse is a response to a RenewDelegationTokenRequest.
 RenewDelegationTokenResponse =>
+  // ErrorCode is any error that caused the request to fail.
   ErrorCode: int16
+  // ExpiryTimestamp is the millisecond timestamp this token will expire. The
+  // token can be renewed up to MaxTimestamp, past which point, it will be
+  // invalid. The Kafka default is 24h.
   ExpiryTimestamp: int64
+  // ThrottleMillis is how long of a throttle Kafka will apply to the client
+  // after this request.
+  // For Kafka < 2.0.0, the throttle is applied before issuing a response.
+  // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
   ThrottleMillis: int32
 
+// ExpireDelegationTokenRequest is a request to change the expiry timestamp
+// of a delegation token. Note that a client using a token cannot expire its
+// own token.
 ExpireDelegationTokenRequest => key 40, max version 1, admin
+  // HMAC is the HMAC of the token to change the expiry timestamp of.
   HMAC: bytes
-  ExpiryTimePeriod: int64
+  // ExpiryTimeMillis changes the delegation token's expiry timestamp to
+  // now + expiry time millis. This can be used to force tokens to expiry
+  // quickly, or to allow tokens a grace period before expiry. This can only
+  // change the final expiry timestamp down; you cannot add enough time that
+  // would increase the expiry timestamp.
+  //
+  // Note that you can change the expiry timestamp down and then back up, so
+  // long as you change it back up before the timestamp expires.
+  ExpiryTimeMillis: int64
 
+// ExpireDelegationTokenResponse is a response to an ExpireDelegationTokenRequest.
 ExpireDelegationTokenResponse =>
+  // ErrorCode is any error that caused the request to fail.
   ErrorCode: int16
+  // ExpiryTimestamp is the new timestamp at which the delegation token will
+  // expire.
   ExpiryTimestamp: int64
+  // ThrottleMillis is how long of a throttle Kafka will apply to the client
+  // after this request.
+  // For Kafka < 2.0.0, the throttle is applied before issuing a response.
+  // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
   ThrottleMillis: int32
 
+// DescribeDelegationTokenRequest is a request to describe delegation tokens.
 DescribeDelegationTokenRequest => key 41, max version 1, admin
   // Owners contains owners to describe delegation tokens for, or null for all.
+  // If non-null, only tokens created from a matching principal type, name
+  // combination are printed.
   Owners: nullable[=>]
+    // PrincipalType is a type to match to describe delegation tokens created
+    // with this principal. This would be "User" with the simple authorizer.
     PrincipalType: string
-    Name: string
+    // PrincipalName is the name to match to describe delegation tokens created
+    // with this principal.
+    PrincipalName: string
 
+// DescribeDelegationTokenResponsee is a response to a DescribeDelegationTokenRequest.
 DescribeDelegationTokenResponse =>
+  // ErrorCode is any error that caused the request to fail.
   ErrorCode: int16
+  // TokenDetails shows information about each token created from any principal
+  // in the request.
   TokenDetails: [=>]
+    // PrincipalType is the principal type of who created this token.
     PrincipalType: string
-    OwnerName: string
+    // PrincipalName is the principal name of who created this token.
+    PrincipalName: string
+    // IssueTimestamp is the millisecond timestamp of when this token was issued.
     IssueTimestamp: int64
+    // ExpiryTimestamp is the millisecond timestamp of when this token will expire.
     ExpiryTimestamp: int64
+    // MaxTimestamp is the millisecond timestamp past which whis token cannot
+    // be renewed.
     MaxTimestamp: int64
+    // TokenID is the ID (scram username) of this token.
     TokenID: string
+    // HMAC is the password of this token.
     HMAC: bytes
+    // Renewers is a list of users that can renew this token.
     Renewers: [=>]
       PrincipalType: string
-      Name: string
+      PrincipalName: string
+  // ThrottleMillis is how long of a throttle Kafka will apply to the client
+  // after this request.
+  // For Kafka < 2.0.0, the throttle is applied before issuing a response.
+  // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
   ThrottleMillis: int32
 
 // DeleteGroupsRequest deletes consumer groups. This request was added for
