@@ -9789,7 +9789,7 @@ type ExpireDelegationTokenRequest struct {
 	// HMAC is the HMAC of the token to change the expiry timestamp of.
 	HMAC []byte
 
-	// ExpiryTimeMillis changes the delegation token's expiry timestamp to
+	// ExpiryPeriodMillis changes the delegation token's expiry timestamp to
 	// now + expiry time millis. This can be used to force tokens to expiry
 	// quickly, or to allow tokens a grace period before expiry. This can only
 	// change the final expiry timestamp down; you cannot add enough time that
@@ -9797,7 +9797,7 @@ type ExpireDelegationTokenRequest struct {
 	//
 	// Note that you can change the expiry timestamp down and then back up, so
 	// long as you change it back up before the timestamp expires.
-	ExpiryTimeMillis int64
+	ExpiryPeriodMillis int64
 }
 
 func (*ExpireDelegationTokenRequest) Key() int16                 { return 40 }
@@ -9818,7 +9818,7 @@ func (v *ExpireDelegationTokenRequest) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendBytes(dst, v)
 	}
 	{
-		v := v.ExpiryTimeMillis
+		v := v.ExpiryPeriodMillis
 		dst = kbin.AppendInt64(dst, v)
 	}
 	return dst
