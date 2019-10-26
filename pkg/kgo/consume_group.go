@@ -127,6 +127,33 @@ func GroupAutoCommitInterval(interval time.Duration) GroupOpt {
 	return groupOpt{func(cfg *groupConsumer) { cfg.autocommitInterval = interval }}
 }
 
+// GroupInstanceID sets the group consumer's instance ID, switching the group
+// member from "dynamic" to "static".
+//
+// Prior to Kafka 2.3.0, joining a group gave a group member a new member ID.
+// The group leader could not tell if this was a rejoining member. Thus, any
+// join caused the group to rebalance.
+//
+// Kafka 2.3.0 introduced the concept of an instance ID, which can persist
+// across restarts. This allows for avoiding many costly rebalances and allows
+// for stickier rebalancing for rejoining members (since the ID for balancing
+// stays the same). The main downsides are that you, the user of a client, have
+// to manage instance IDs properly, and that it may take longer to rebalance in
+// the event that a client legitimately dies.
+//
+// When using an instance ID, the client does NOT send a leave group request
+// when closing. This allows for the client ot restart with the same instance
+// ID and rejoin the group to avoid a rebalance. It is strongly recommended to
+// increase the session timeout enough to allow time for the restart (remember
+// that the default session timeout is 10s).
+//
+// To actually leave the group, you must use an external admin commant that
+// issues a leave group request on behalf of this instance ID (see kcl). If
+// necessary, this package may introduce a manual leave command in the future.
+func GroupInstanceID(id string) GroupOpt {
+	return groupOpt{func(cfg *groupConsumer) { cfg.instanceID = &id }}
+}
+
 type groupConsumer struct {
 	c   *consumer // used to change consumer state; generally c.mu is grabbed on access
 	cl  *Client   // used for running requests / adding to topics map
@@ -152,6 +179,7 @@ type groupConsumer struct {
 	reSeen      map[string]struct{}
 
 	memberID   string
+	instanceID *string
 	generation int32
 	assigned   map[string][]int32
 
@@ -272,14 +300,15 @@ loop:
 
 func (g *groupConsumer) leave() {
 	g.cancel()
-	g.cl.Request(g.cl.ctx, &kmsg.LeaveGroupRequest{
-		Group:    g.id,
-		MemberID: g.memberID,
-		Members: []kmsg.LeaveGroupRequestMember{{
-			MemberID:   g.memberID,
-			InstanceID: nil, // TODO KIP-345
-		}},
-	})
+	if g.instanceID == nil {
+		g.cl.Request(g.cl.ctx, &kmsg.LeaveGroupRequest{
+			Group:    g.id,
+			MemberID: g.memberID,
+			Members: []kmsg.LeaveGroupRequestMember{{
+				MemberID: g.memberID,
+			}},
+		})
+	}
 }
 
 // assignRevokeSession ensures that we call onRevoke if onAssign is called
@@ -392,6 +421,7 @@ func (g *groupConsumer) heartbeat(fetchErrCh <-chan error, s *assignRevokeSessio
 				Group:      g.id,
 				Generation: g.generation,
 				MemberID:   g.memberID,
+				InstanceID: g.instanceID,
 			}
 			var kresp kmsg.Response
 			kresp, err = g.cl.Request(g.ctx, req)
@@ -500,6 +530,7 @@ start:
 		RebalanceTimeoutMillis: int32(g.rebalanceTimeout.Milliseconds()),
 		ProtocolType:           "consumer",
 		MemberID:               g.memberID,
+		InstanceID:             g.instanceID,
 		Protocols:              g.joinGroupProtocols(),
 	}
 	kresp, err := g.cl.Request(g.ctx, &req)
@@ -547,6 +578,7 @@ func (g *groupConsumer) syncGroup(plan balancePlan, generation int32) error {
 		Group:           g.id,
 		Generation:      generation,
 		MemberID:        g.memberID,
+		InstanceID:      g.instanceID,
 		GroupAssignment: plan.intoAssignment(),
 	}
 	kresp, err := g.cl.Request(g.ctx, &req)
@@ -998,7 +1030,7 @@ func (g *groupConsumer) commit(
 		Group:      g.id,
 		Generation: g.generation,
 		MemberID:   memberID,
-		InstanceID: nil, // TODO KIP-345
+		InstanceID: g.instanceID,
 	}
 
 	if ctx.Done() != nil {

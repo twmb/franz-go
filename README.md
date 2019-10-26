@@ -13,7 +13,6 @@ TODO
 
 
 - KIP-98 (EOS; 0.11.0)
-- KIP-345 (static group membership, see KAFKA-8224)
 - KIP-392 (fetch request from closest replica w/ rack; 2.2.0)
 - KIP-429 (incremental rebalance, see KAFKA-8179; 2.4.0)
 
@@ -68,6 +67,7 @@ DONE
 - KIP-339 (incremental alter configs; 2.3.0)
 - KIP-341 (sticky group bug fix)
 - KIP-342 (oauth extensions; 2.1.0)
+- KIP-345 (static group membership, see KAFKA-8224)
 - KIP-368 (periodically reauth sasl; 2.2.0)
 - KIP-369 (always round robin produce partitioner; 2.4.0)
 - KIP-380 (inter-broker command changes; 2.2.0)

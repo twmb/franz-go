@@ -31,30 +31,48 @@ type GroupBalancer interface {
 
 // groupMember is a member id and the topics that member is interested in.
 type groupMember struct {
-	id       string
+	id       groupMemberID
 	version  int16
 	topics   []string
 	userdata []byte
 }
 
+type groupMemberID struct {
+	memberID    string
+	instanceID  string
+	hasInstance bool
+}
+
+func (me groupMemberID) less(other groupMemberID) bool {
+	if me.hasInstance && other.hasInstance {
+		return me.instanceID < other.instanceID
+	} else if me.hasInstance {
+		return true
+	} else if other.hasInstance {
+		return false
+	} else {
+		return me.memberID < other.memberID
+	}
+}
+
 // balancePlan is the result of balancing topic partitions among members.
 //
 // member id => topic => partitions
-type balancePlan map[string]map[string][]int32
+type balancePlan map[groupMemberID]map[string][]int32
 
 func newBalancePlan(members []groupMember) balancePlan {
-	plan := make(map[string]map[string][]int32, len(members))
+	plan := make(map[groupMemberID]map[string][]int32, len(members))
 	for _, member := range members {
 		plan[member.id] = make(map[string][]int32)
 	}
 	return plan
 }
 
-func (plan balancePlan) addPartition(member, topic string, partition int32) {
+func (plan balancePlan) addPartition(member groupMemberID, topic string, partition int32) {
 	memberPlan := plan[member]
 	memberPlan[topic] = append(memberPlan[topic], partition)
 }
-func (plan balancePlan) addPartitions(member, topic string, partitions []int32) {
+func (plan balancePlan) addPartitions(member groupMemberID, topic string, partitions []int32) {
 	memberPlan := plan[member]
 	memberPlan[topic] = append(memberPlan[topic], partitions...)
 }
@@ -71,7 +89,7 @@ func (plan balancePlan) intoAssignment() []kmsg.SyncGroupRequestGroupAssignment 
 			})
 		}
 		kassignments = append(kassignments, kmsg.SyncGroupRequestGroupAssignment{
-			MemberID:         member,
+			MemberID:         member.memberID,
 			MemberAssignment: kassignment.AppendTo(nil),
 		})
 	}
@@ -88,7 +106,7 @@ func (g *groupConsumer) balanceGroup(proto string, kmembers []kmsg.JoinGroupResp
 		return nil, ErrInvalidResp
 	}
 	sort.Slice(members, func(i, j int) bool {
-		return members[i].id < members[j].id // guarantee sorted members
+		return members[i].id.less(members[j].id) // guarantee sorted members
 	})
 	for _, member := range members {
 		sort.Strings(member.topics) // guarantee sorted topics
@@ -111,8 +129,15 @@ func parseGroupMembers(kmembers []kmsg.JoinGroupResponseMember) ([]groupMember, 
 		if err := meta.ReadFrom(kmember.ProtocolMetadata); err != nil {
 			return nil, fmt.Errorf("unable to read member metadata: %v", err)
 		}
+		id := groupMemberID{
+			memberID: kmember.MemberID,
+		}
+		if kmember.InstanceID != nil {
+			id.instanceID = *kmember.InstanceID
+			id.hasInstance = true
+		}
 		members = append(members, groupMember{
-			id:       kmember.MemberID,
+			id:       id,
 			version:  meta.Version,
 			topics:   meta.Topics,
 			userdata: meta.UserData,
@@ -240,7 +265,7 @@ func (*rangeBalancer) metaFor(interests []string, _ map[string][]int32, _ int32)
 	return basicMetaFor(interests)
 }
 func (*rangeBalancer) balance(members []groupMember, topics map[string][]int32) balancePlan {
-	topics2PotentialConsumers := make(map[string][]string)
+	topics2PotentialConsumers := make(map[string][]groupMemberID)
 	for _, member := range members {
 		for _, topic := range member.topics {
 			topics2PotentialConsumers[topic] = append(topics2PotentialConsumers[topic], member.id)
@@ -249,7 +274,9 @@ func (*rangeBalancer) balance(members []groupMember, topics map[string][]int32) 
 
 	plan := newBalancePlan(members)
 	for topic, potentialConsumers := range topics2PotentialConsumers {
-		sort.Strings(potentialConsumers)
+		sort.Slice(potentialConsumers, func(i, j int) bool {
+			return potentialConsumers[i].less(potentialConsumers[j])
+		})
 
 		partitions := topics[topic]
 		numParts := len(partitions)
@@ -365,12 +392,29 @@ func (*stickyBalancer) balance(members []groupMember, topics map[string][]int32)
 	stickyMembers := make([]sticky.GroupMember, 0, len(members))
 	for _, member := range members {
 		stickyMembers = append(stickyMembers, sticky.GroupMember{
-			ID:       member.id,
+			ID:       member.id.memberID,
 			Version:  member.version,
 			Topics:   member.topics,
 			UserData: member.userdata,
 		})
 	}
 
-	return balancePlan(sticky.Balance(stickyMembers, topics))
+	// Since our input into balancing is already sorted by instance ID,
+	// the sticky strategy does not need to worry about instance IDs at all.
+	// See my (slightly rambling) comment on KAFKA-8432.
+	stickyPlan := sticky.Balance(stickyMembers, topics)
+
+	// Annoyingly though, we do have to map the members given by the sticky
+	// plan back into our memberID+instanceID, even though the instance ID
+	// is not needed past this point.
+	plan := balancePlan(make(map[groupMemberID]map[string][]int32, len(members)))
+	for memberID, topics := range stickyPlan {
+		for _, member := range members {
+			if member.id.memberID == memberID {
+				plan[member.id] = topics
+				break
+			}
+		}
+	}
+	return plan
 }
