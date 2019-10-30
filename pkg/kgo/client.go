@@ -110,6 +110,7 @@ func NewClient(opts ...Opt) (*Client, error) {
 		updateMetadataNowCh: make(chan struct{}, 1),
 		metadone:            make(chan struct{}),
 	}
+	c.producer.flushingCond = sync.NewCond(&c.producer.flushingMu)
 	c.consumer.cl = c
 	c.consumer.sourcesReadyCond = sync.NewCond(&c.consumer.sourcesReadyMu)
 	c.topics.Store(make(map[string]*topicPartitions))

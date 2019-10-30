@@ -149,12 +149,14 @@ func (sink *recordSink) createRequest() (*produceRequest, bool) {
 
 		// If lingering is configured, we have more to drain if there
 		// is more than one backed up batches. If there is only one, we
-		// re-start the batch's linger.
+		// re-start the batch's linger (unless flushing).
 		if recBuf.linger > 0 {
 			if len(recBuf.batches) > recBuf.batchDrainIdx+1 {
 				moreToDrain = true
 			} else if len(recBuf.batches) == recBuf.batchDrainIdx+1 {
-				recBuf.lockedStartLinger()
+				if !recBuf.lockedStartLinger() {
+					moreToDrain = true
+				}
 			}
 		} else {
 			// No lingering is simple.
@@ -685,18 +687,24 @@ func (recBuf *recordBuffer) bufferRecord(pr promisedRecord, abortOnNewBatch bool
 		// With linger, if this is a new batch but not the first, we
 		// stop lingering and begin draining. The drain loop will
 		// restart our linger once this buffer has one batch left.
-		if newBatch && !firstBatch {
+		if newBatch && !firstBatch ||
+			// If this is the first batch, try lingering; if
+			// we cannot, we are being flushed and must drain.
+			firstBatch && !recBuf.lockedStartLinger() {
 			recBuf.lockedStopLinger()
 			recBuf.sink.maybeBeginDraining()
-		} else if firstBatch {
-			recBuf.lockedStartLinger()
 		}
 	}
 	return true
 }
 
-func (recBuf *recordBuffer) lockedStartLinger() {
+// lockedStartLinger begins a linger timer unless the producer is being flushed.
+func (recBuf *recordBuffer) lockedStartLinger() bool {
+	if atomic.LoadInt32(&recBuf.cl.producer.flushing) == 1 {
+		return false
+	}
 	recBuf.lingering = time.AfterFunc(recBuf.linger, recBuf.sink.maybeBeginDraining)
+	return true
 }
 
 func (recBuf *recordBuffer) lockedStopLinger() {

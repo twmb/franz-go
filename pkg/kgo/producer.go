@@ -24,6 +24,10 @@ type producer struct {
 	idMu       sync.Mutex
 	idLoading  bool
 	waitBuffer chan struct{}
+
+	flushing     int32
+	flushingMu   sync.Mutex
+	flushingCond *sync.Cond
 }
 
 func noPromise(*Record, error) {}
@@ -102,8 +106,13 @@ func (c *Client) Produce(
 }
 
 func (c *Client) finishRecordPromise(pr promisedRecord, err error) {
-	if atomic.AddInt64(&c.producer.bufferedRecords, -1) >= c.cfg.producer.maxBufferedRecords {
+	buffered := atomic.AddInt64(&c.producer.bufferedRecords, -1)
+	if buffered >= c.cfg.producer.maxBufferedRecords {
 		go func() { c.producer.waitBuffer <- struct{}{} }()
+	} else if buffered == 0 && atomic.LoadInt32(&c.producer.flushing) > 0 {
+		c.producer.flushingMu.Lock()
+		c.producer.flushingMu.Unlock()
+		c.producer.flushingCond.Broadcast()
 	}
 	pr.promise(pr.Record, err)
 }
@@ -340,5 +349,51 @@ func (c *Client) waitUnknownTopic(topic string, wait chan struct{}) {
 		for _, pr := range prs {
 			c.finishRecordPromise(pr, err)
 		}
+	}
+}
+
+// Flush hangs waiting for all buffered records to be flushed, stopping all
+// lingers if necessary.
+//
+// If the context finishes (Done), this returns the context's error.
+func (cl *Client) Flush(ctx context.Context) error {
+	// Signal to finishRecord that we want to be notified once thins hit 0.
+	atomic.AddInt32(&cl.producer.flushing, 1)
+	defer atomic.AddInt32(&cl.producer.flushing, -1)
+
+	// At this point, if lingering,
+	// nothing new will fall into a timer waiting,
+	// so we can just wake everything up through the lock,
+	// and be sure that all sinks will loop draining.
+	if cl.cfg.producer.linger > 0 {
+		for _, parts := range cl.loadTopics() {
+			for _, part := range parts.load().all {
+				part.records.mu.Lock()
+				part.records.lockedStopLinger()
+				part.records.sink.maybeBeginDraining()
+				part.records.mu.Unlock()
+			}
+		}
+	}
+
+	quit := false
+	done := make(chan struct{})
+	go func() {
+		cl.producer.flushingMu.Lock()
+		defer cl.producer.flushingMu.Unlock()
+		defer close(done)
+
+		for !quit && atomic.LoadInt64(&cl.producer.bufferedRecords) > 0 {
+			cl.producer.flushingCond.Wait()
+		}
+	}()
+
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		quit = true
+		cl.producer.flushingCond.Broadcast()
+		return ctx.Err()
 	}
 }
