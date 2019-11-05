@@ -30,7 +30,7 @@ var compressors atomic.Value
 
 func init() {
 	compressors.Store(map[CompressionCodec]*compressor{
-		CompressionCodec{}: nil, // required default
+		{}: nil, // required default
 	})
 }
 
