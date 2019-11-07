@@ -1,26 +1,19 @@
 kgo
 ===
 
-ACL descriptions in KIP-133
-
 KIPS
 ====
 
 TODO
 ----
-- KIP-48 (create / describe delegation token; 1.1.0)
-- KIP-140 (describe/create/delete ACLs; 0.11.0)
-
-
 - KIP-98 (EOS; 0.11.0)
-- KIP-392 (fetch request from closest replica w/ rack; 2.2.0)
 - KIP-429 (incremental rebalance, see KAFKA-8179; 2.4.0)
 
 NOT YET (KIP under discussion / unmerged PR)
 -------
 - KIP-359 (verify leader epoch in produce requests)
 - KIP-360 (safe epoch bumping for `UNKNOWN_PRODUCER_ID`)
-- KIP-392 (new field in fetch; for brokers only)
+- KIP-392 (fetch request from closest replica w/ rack; 2.2.0)
 - KIP-423 (no rebalance on JoinGroup from leader in certain cases; under discussion)
 - KIP-447 (transaction changes to better support group changes)
 - KIP-497 (new inter broker admin command "alter isr")
