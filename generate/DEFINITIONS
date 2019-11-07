@@ -318,7 +318,9 @@ ProduceResponse =>
       // of existence and no longer knows of this producer ID. In this case,
       // reset your sequence numbers to 0. If the log start offset is equal to
       // or less than what the client sent prior, then data loss has occurred.
-      // This See KAFKA-5793 for more details.
+      // See KAFKA-5793 for more details. NOTE: Unfortunately, even UNKNOWN_PRODUCER_ID
+      // is unsafe to handle, so this error should likely be treated the same
+      // as OUT_OF_ORDER_SEQUENCE_NUMER. See KIP-360 for more details.
       //
       // OUT_OF_ORDER_SEQUENCE_NUMBER is sent if the batch's FirstSequence was
       // not what it should be (the last FirstSequence, plus the number of

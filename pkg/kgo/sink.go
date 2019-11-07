@@ -397,9 +397,14 @@ func (sink *recordSink) handleReqResp(req *produceRequest, resp kmsg.Response, e
 				backoffRetry = true
 				reqRetry.addBatch(topic, partition, batch)
 
-			case err == kerr.OutOfOrderSequenceNumber:
+			case err == kerr.OutOfOrderSequenceNumber,
+				err == kerr.UnknownProducerID:
 				// OOOSN always means data loss 1.0.0+ and is ambiguous prior.
 				// We assume the worst and only continue if requested.
+				//
+				// UnknownProducerID was introduced to allow some form of safe
+				// handling, but KIP-360 demonstrated that resetting sequence
+				// numbers is fundamentally unsafe, so we treat it like OOOSN.
 				if sink.broker.client.cfg.producer.stopOnDataLoss {
 					finishBatch()
 					continue
@@ -407,32 +412,6 @@ func (sink *recordSink) handleReqResp(req *produceRequest, resp kmsg.Response, e
 				if sink.broker.client.cfg.producer.onDataLoss != nil {
 					sink.broker.client.cfg.producer.onDataLoss(topic, partition)
 				}
-				batch.owner.resetSequenceNums()
-				reqRetry.addBatch(topic, partition, batch)
-
-			case err == kerr.UnknownProducerID: // 1.0.0+ only
-				// If -1, retry: the partition moved between the error being raised
-				// in Kafka and the time the response was constructed. We will
-				// get the offset on retry.
-				if rPartition.LogStartOffset == -1 {
-					backoffRetry = true
-					reqRetry.addBatch(topic, partition, batch)
-					continue
-				}
-
-				// LogStartOffset <= last acked: data loss.
-				if rPartition.LogStartOffset <= batch.owner.lastAckedOffset {
-					if sink.broker.client.cfg.producer.stopOnDataLoss {
-						finishBatch()
-						continue
-					}
-					if sink.broker.client.cfg.producer.onDataLoss != nil {
-						sink.broker.client.cfg.producer.onDataLoss(topic, partition)
-					}
-				}
-
-				// The log head rotated (or the continue on data loss
-				// option was specified); we reset seq's and retry.
 				batch.owner.resetSequenceNums()
 				reqRetry.addBatch(topic, partition, batch)
 
