@@ -4323,13 +4323,17 @@ type StickyMemberMetadataCurrentAssignment struct {
 //
 // V1 added generation, which fixed a bug with flaky group members joining
 // repeatedly. See KIP-341 for more details.
+//
+// Note that clients should always try decoding as v1 and, if that fails,
+// fall back to v0. This is necessary due to there being no version number
+// anywhere in this type.
 type StickyMemberMetadata struct {
 	// CurrentAssignment is the assignment that a group member has when
 	// issuing a join.
 	CurrentAssignment []StickyMemberMetadataCurrentAssignment
 
 	// Generation is the generation of this join. This is incremented every join.
-	Generation int32
+	Generation int32 // v1+
 }
 
 // GroupMemberMetadata is the metadata that is usually sent with a join group

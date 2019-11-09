@@ -202,9 +202,8 @@ func ReadV0Messages(in []byte) []MessageV0 {
 
 // ReadFrom provides decoding various versions of sticky member metadata. A key
 // point of this type is that it does not contain a version number inside it,
-// but it is versioned. Additionally, the type is supposed to ignore extra data
-// at the end of the message for forward compatibility.
-func (s *StickyMemberMetadata) ReadFrom(src []byte, version int16) error {
+// but it is versioned: if decoding v1 fails, this falls back to v0.
+func (s *StickyMemberMetadata) ReadFrom(src []byte) error {
 	b := kbin.Reader{Src: src}
 	for i := b.ArrayLen(); i > 0; i-- {
 		var assignment StickyMemberMetadataCurrentAssignment
@@ -214,17 +213,17 @@ func (s *StickyMemberMetadata) ReadFrom(src []byte, version int16) error {
 		}
 		s.CurrentAssignment = append(s.CurrentAssignment, assignment)
 	}
-	if version > 0 {
+	if len(b.Src) > 0 {
 		s.Generation = b.Int32()
 	} else {
 		s.Generation = -1
 	}
-	b.Src = nil // skip extra junk for forward compatibility
 	return b.Complete()
 }
 
 // AppendTo provides appending various versions of sticky member metadata to dst.
-func (s *StickyMemberMetadata) AppendTo(dst []byte, version int16) []byte {
+// If generation is not -1 (default for v0), this appends as version 1.
+func (s *StickyMemberMetadata) AppendTo(dst []byte) []byte {
 	dst = kbin.AppendArrayLen(dst, len(s.CurrentAssignment))
 	for _, assignment := range s.CurrentAssignment {
 		dst = kbin.AppendString(dst, assignment.Topic)
@@ -233,7 +232,7 @@ func (s *StickyMemberMetadata) AppendTo(dst []byte, version int16) []byte {
 			dst = kbin.AppendInt32(dst, partition)
 		}
 	}
-	if version > 0 {
+	if s.Generation != -1 {
 		dst = kbin.AppendInt32(dst, s.Generation)
 	}
 	return dst

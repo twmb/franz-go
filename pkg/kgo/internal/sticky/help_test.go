@@ -50,7 +50,10 @@ func udEncode(version, generation int, assignments map[string][]int32) []byte {
 			partitions,
 		})
 	}
-	return s.AppendTo(nil, int16(version))
+	if version == 0 {
+		s.Generation = -1
+	}
+	return s.AppendTo(nil)
 }
 
 func partitionsForMember(member map[string][]int32) int {
@@ -139,7 +142,7 @@ func getStickiness(member string, memberPlan map[string][]int32, input []GroupMe
 	var priorPlan []topicPartition
 	for _, in := range input {
 		if in.ID == member {
-			priorPlan, _ = deserializeUserData(in.Version, in.UserData)
+			priorPlan, _ = deserializeUserData(in.UserData)
 			break
 		}
 	}

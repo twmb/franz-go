@@ -23,9 +23,7 @@ import (
 // I expect a server to fall over before reaching either of these numbers.
 
 type GroupMember struct {
-	ID string
-
-	Version  int16
+	ID       string
 	Topics   []string
 	UserData []byte
 }
@@ -284,7 +282,7 @@ func (b *balancer) parseMemberMetadata() {
 	partitionConsumersBuf := make([]memberGeneration, cap(b.partNames))
 
 	for _, member := range b.members {
-		memberPlan, generation := deserializeUserData(member.Version, member.UserData)
+		memberPlan, generation := deserializeUserData(member.UserData)
 		memberGeneration := memberGeneration{
 			member.ID,
 			generation,
@@ -353,9 +351,9 @@ func (m *memberGenerations) Swap(i, j int)      { s := *m; s[i], s[j] = s[j], s[
 // If anything fails or we do not understand the userdata parsing generation,
 // we return empty defaults. The member will just be assumed to have no
 // history.
-func deserializeUserData(version int16, userdata []byte) (memberPlan []topicPartition, generation int32) {
+func deserializeUserData(userdata []byte) (memberPlan []topicPartition, generation int32) {
 	var s kmsg.StickyMemberMetadata
-	if err := s.ReadFrom(userdata, version); err != nil {
+	if err := s.ReadFrom(userdata); err != nil {
 		return nil, 0
 	}
 	generation = s.Generation

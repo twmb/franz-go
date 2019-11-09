@@ -371,7 +371,7 @@ type stickyBalancer struct{}
 func (*stickyBalancer) protocolName() string { return "sticky" }
 func (*stickyBalancer) metaFor(interests []string, currentAssignment map[string][]int32, generation int32) []byte {
 	meta := kmsg.GroupMemberMetadata{
-		Version: 1,
+		Version: 0,
 		Topics:  interests,
 	}
 	stickyMeta := kmsg.StickyMemberMetadata{
@@ -384,7 +384,7 @@ func (*stickyBalancer) metaFor(interests []string, currentAssignment map[string]
 				Partitions: partitions,
 			})
 	}
-	meta.UserData = stickyMeta.AppendTo(nil, 1) // we are using v1 sticky data
+	meta.UserData = stickyMeta.AppendTo(nil)
 	return meta.AppendTo(nil)
 
 }
@@ -393,7 +393,6 @@ func (*stickyBalancer) balance(members []groupMember, topics map[string][]int32)
 	for _, member := range members {
 		stickyMembers = append(stickyMembers, sticky.GroupMember{
 			ID:       member.id.memberID,
-			Version:  member.version,
 			Topics:   member.topics,
 			UserData: member.userdata,
 		})
