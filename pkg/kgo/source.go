@@ -123,6 +123,26 @@ func (c *consumption) use() *seqOffsetFrom {
 	}
 }
 
+// resetOffset is like setOffset, but strictly for bumping the consumption's
+// sequence number so that consumption resets from its current offset/epoch.
+func (c *consumption) resetOffset(fromSeq uint64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// fromSeq could be less than seq if this setOffset is from a
+	// takeBuffered after assignment invalidation.
+	if fromSeq < c.seq {
+		return
+	}
+	c.seq = fromSeq
+	c.failing = false
+	c.inUse = false
+	c.loadingOffsets = false
+	if c.offset != -1 && c.source != nil {
+		c.source.maybeBeginConsuming()
+	}
+}
+
 // setOffset sets the consumptions offset and seq, doing nothing if the seq is
 // out of date. The seq will be out of date if an Assign is called and then a
 // buffered fetch is drained (invalidated).

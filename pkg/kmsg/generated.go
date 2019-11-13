@@ -812,7 +812,9 @@ type ProduceResponseTopicPartition struct {
 	// of existence and no longer knows of this producer ID. In this case,
 	// reset your sequence numbers to 0. If the log start offset is equal to
 	// or less than what the client sent prior, then data loss has occurred.
-	// This See KAFKA-5793 for more details.
+	// See KAFKA-5793 for more details. NOTE: Unfortunately, even UNKNOWN_PRODUCER_ID
+	// is unsafe to handle, so this error should likely be treated the same
+	// as OUT_OF_ORDER_SEQUENCE_NUMER. See KIP-360 for more details.
 	//
 	// OUT_OF_ORDER_SEQUENCE_NUMBER is sent if the batch's FirstSequence was
 	// not what it should be (the last FirstSequence, plus the number of
@@ -4335,6 +4337,11 @@ type StickyMemberMetadata struct {
 	// Generation is the generation of this join. This is incremented every join.
 	Generation int32 // v1+
 }
+type GroupMemberMetadataOwnedPartition struct {
+	Topic string
+
+	Partitions []int32
+}
 
 // GroupMemberMetadata is the metadata that is usually sent with a join group
 // request.
@@ -4342,15 +4349,22 @@ type GroupMemberMetadata struct {
 	// Version is either version 0 or version 1.
 	Version int16
 
-	// Topics is the list of topics in the group.
+	// Topics is the list of topics in the group that this member is interested
+	// in consuming.
 	Topics []string
 
 	// UserData is arbitrary client data for a given client in the group.
 	// For sticky assignment, this is StickyMemberMetadata.
 	UserData []byte
+
+	// OwnedPartitions, introduced for KIP-429, are the partitions that this
+	// member currently owns.
+	OwnedPartitions []GroupMemberMetadataOwnedPartition // v1+
 }
 
 func (v *GroupMemberMetadata) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
 	{
 		v := v.Version
 		dst = kbin.AppendInt16(dst, v)
@@ -4367,15 +4381,32 @@ func (v *GroupMemberMetadata) AppendTo(dst []byte) []byte {
 		v := v.UserData
 		dst = kbin.AppendBytes(dst, v)
 	}
+	if version >= 1 {
+		v := v.OwnedPartitions
+		dst = kbin.AppendArrayLen(dst, len(v))
+		for i := range v {
+			v := &v[i]
+			{
+				v := v.Topic
+				dst = kbin.AppendString(dst, v)
+			}
+			{
+				v := v.Partitions
+				dst = kbin.AppendArrayLen(dst, len(v))
+				for i := range v {
+					v := v[i]
+					dst = kbin.AppendInt32(dst, v)
+				}
+			}
+		}
+	}
 	return dst
 }
 func (v *GroupMemberMetadata) ReadFrom(src []byte) error {
 	b := kbin.Reader{Src: src}
+	version := b.Int16()
+	v.Version = version
 	s := v
-	{
-		v := b.Int16()
-		s.Version = v
-	}
 	{
 		v := s.Topics
 		a := v
@@ -4397,6 +4428,46 @@ func (v *GroupMemberMetadata) ReadFrom(src []byte) error {
 	{
 		v := b.Bytes()
 		s.UserData = v
+	}
+	if version >= 1 {
+		v := s.OwnedPartitions
+		a := v
+		var l int32
+		l = b.ArrayLen()
+		if !b.Ok() {
+			return b.Complete()
+		}
+		if l > 0 {
+			a = make([]GroupMemberMetadataOwnedPartition, l)
+		}
+		for i := int32(0); i < l; i++ {
+			v := &a[i]
+			s := v
+			{
+				v := b.String()
+				s.Topic = v
+			}
+			{
+				v := s.Partitions
+				a := v
+				var l int32
+				l = b.ArrayLen()
+				if !b.Ok() {
+					return b.Complete()
+				}
+				if l > 0 {
+					a = make([]int32, l)
+				}
+				for i := int32(0); i < l; i++ {
+					v := b.Int32()
+					a[i] = v
+				}
+				v = a
+				s.Partitions = v
+			}
+		}
+		v = a
+		s.OwnedPartitions = v
 	}
 	return b.Complete()
 }
@@ -4685,6 +4756,7 @@ type JoinGroupResponseMember struct {
 	InstanceID *string // v5+
 
 	// ProtocolMetadata is the metadata for this member for this protocol.
+	// This is usually of type GroupMemberMetadata.
 	ProtocolMetadata []byte
 }
 

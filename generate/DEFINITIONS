@@ -1228,14 +1228,20 @@ StickyMemberMetadata => not top level, no encoding
 
 // GroupMemberMetadata is the metadata that is usually sent with a join group
 // request.
-GroupMemberMetadata => not top level
+GroupMemberMetadata => not top level, with version field
   // Version is either version 0 or version 1.
   Version: int16
-  // Topics is the list of topics in the group.
+  // Topics is the list of topics in the group that this member is interested
+  // in consuming.
   Topics: [string]
   // UserData is arbitrary client data for a given client in the group.
   // For sticky assignment, this is StickyMemberMetadata.
   UserData: bytes
+  // OwnedPartitions, introduced for KIP-429, are the partitions that this
+  // member currently owns.
+  OwnedPartitions: [=>] // v1+
+    Topic: string
+    Partitions: [int32]
 
 // GroupMemberAssignment is the assignment data that is usually sent with a
 // sync group request.
@@ -1383,6 +1389,7 @@ JoinGroupResponse =>
     // InstanceID is an instance ID of a member in this group (KIP-345).
     InstanceID: nullable-string // v5+
     // ProtocolMetadata is the metadata for this member for this protocol.
+    // This is usually of type GroupMemberMetadata.
     ProtocolMetadata: bytes
 
 // HeartbeatRequest issues a heartbeat for a member in a group, ensuring that

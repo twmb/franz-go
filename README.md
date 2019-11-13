@@ -7,7 +7,6 @@ KIPS
 TODO
 ----
 - KIP-98 (EOS; 0.11.0)
-- KIP-429 (incremental rebalance, see KAFKA-8179; 2.4.0)
 
 NOT YET (KIP under discussion / unmerged PR)
 -------
@@ -66,6 +65,7 @@ DONE
 - KIP-380 (inter-broker command changes; 2.2.0)
 - KIP-394 (require member.id for initial join; 2.2.0)
 - KIP-412 (dynamic log levels with incremental alter configs; 2.4.0)
+- KIP-429 (incremental rebalance, see KAFKA-8179; 2.4.0)
 - KIP-430 (include authorized ops in describe groups; 2.3.0)
 - KIP-455 (admin replica reassignment; 2.4.0)
 - KIP-460 (admin leader election; 2.4.0)

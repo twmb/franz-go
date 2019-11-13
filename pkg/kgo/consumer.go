@@ -116,7 +116,7 @@ type consumer struct {
 // unassignPrior invalidates old assignments, ensures that nothing is assigned,
 // and leaves any group.
 func (c *consumer) unassignPrior() {
-	c.assignPartitions(nil, true) // invalidate old assignments
+	c.assignPartitions(nil, assignInvalidateAll) // invalidate old assignments
 	if c.typ == consumerTypeGroup {
 		c.typ = consumerTypeUnset
 		c.group.leave()
@@ -243,21 +243,67 @@ func (cl *Client) PollFetches(ctx context.Context) Fetches {
 	return fetches
 }
 
+// maybeAssignPartitions assigns partitions if seq is equal to the consumer
+// seq, returning true if assignment occured. If true, this also updates seq to
+// the new seq.
+func (c *consumer) maybeAssignPartitions(seq *uint64, assignments map[string]map[int32]Offset, how assignHow) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.seq != *seq {
+		return false
+	}
+	c.assignPartitions(assignments, how)
+	*seq = c.seq
+	return true
+}
+
+// assignHow controls how assignPartitions operates.
+type assignHow int8
+
+const (
+	// This option simply assigns new offsets, doing nothing with existing
+	// offsets / active fetches / buffered fetches.
+	assignWithoutInvalidating assignHow = iota
+
+	// This option invalidates active fetches so they will not buffer and
+	// drops all buffered fetches, and then continues to assign the new
+	// assignments.
+	assignInvalidateAll
+
+	// This option does not assign, but instead invalidates any active
+	// fetches for "assigned" (actually lost) partitions. This additionally
+	// drops all buffered fetches, because they could contain partitions we
+	// lost. Thus, with this option, the actual offset in the map is
+	// meaningless / a dummy offset.
+	assignInvalidateMatching
+)
+
 // assignPartitions, called under the consumer's mu, is used to set new
-// consumptions or add to the existing consumptions. If invalidateOld is true,
-// this invalidates old assignments / active fetches / buffered fetches.
-func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, invalidateOld bool) {
+// consumptions or add to the existing consumptions.
+func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how assignHow) {
 	seq := c.seq
 
-	if invalidateOld {
+	if how != assignWithoutInvalidating {
 		c.sourcesReadyMu.Lock()
 		c.seq++
 		seq = c.seq
 
 		// First, stop all fetches for prior assignments. After our consumer
 		// lock is released, fetches will return nothing historic.
+		keep := c.usingPartitions[:0]
 		for _, usedPartition := range c.usingPartitions {
-			usedPartition.consumption.setOffset(usedPartition.leaderEpoch, true, -1, -1, seq)
+			invalidate := how == assignInvalidateAll
+			if !invalidate {
+				if matchTopic, ok := assignments[usedPartition.consumption.topic]; ok {
+					_, invalidate = matchTopic[usedPartition.consumption.partition]
+				}
+			}
+			if invalidate {
+				usedPartition.consumption.setOffset(usedPartition.leaderEpoch, true, -1, -1, seq)
+			} else {
+				usedPartition.consumption.resetOffset(seq)
+				keep = append(keep, usedPartition)
+			}
 		}
 
 		// Also drain any buffered, now stale, fetches.
@@ -268,12 +314,12 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, inv
 		c.sourcesReadyForDraining = nil
 		c.sourcesReadyMu.Unlock()
 
-		c.usingPartitions = c.usingPartitions[:0]
+		c.usingPartitions = keep
 	}
 
 	// This assignment could contain nothing (for the purposes of
 	// invalidating active fetches), so we only do this if needed.
-	if len(assignments) == 0 {
+	if len(assignments) == 0 || how == assignInvalidateMatching {
 		return
 	}
 
@@ -346,7 +392,7 @@ func (o *offsetsWaitingLoad) mergeInto(c *consumer) {
 	o.mergeIntoLocked(c)
 }
 
-// mergeIntoLocked is called directly from assignOffsets, which already
+// mergeIntoLocked is called directly from assignPartitions, which already
 // has the consumer locked.
 func (o *offsetsWaitingLoad) mergeIntoLocked(c *consumer) {
 	if o.isEmpty() {
@@ -421,7 +467,7 @@ func (c *consumer) doOnMetadataUpdate() {
 	case consumerTypeUnset:
 		return
 	case consumerTypeDirect:
-		c.assignPartitions(c.direct.findNewAssignments(c.cl.loadTopics()), false)
+		c.assignPartitions(c.direct.findNewAssignments(c.cl.loadTopics()), assignWithoutInvalidating)
 	case consumerTypeGroup:
 		c.group.findNewAssignments(c.cl.loadTopics())
 	}
@@ -530,7 +576,7 @@ type offsetsWaitingLoad struct {
 }
 
 func (o *offsetsWaitingLoad) isEmpty() bool {
-	return o == nil || (len(o.waitingList) == 0 && len(o.waitingEpoch) == 0)
+	return o == nil || len(o.waitingList) == 0 && len(o.waitingEpoch) == 0
 }
 
 func (o *offsetsWaitingLoad) maybeInitList() {

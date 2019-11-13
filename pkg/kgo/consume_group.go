@@ -40,13 +40,18 @@ func GroupTopicsRegex() GroupOpt {
 	return groupOpt{func(cfg *groupConsumer) { cfg.regexTopics = true }}
 }
 
-// GroupBalancers sets the balancer to use for dividing topic partitions
-// among group members, overriding the defaults.
+// GroupBalancers sets the balancer to use for dividing topic partitions among
+// group members, overriding the defaults.
 //
-// The current default is [sticky, roundrobin, range].
+// The current default is [cooperative-sticky].
 //
 // For balancing, Kafka chooses the first protocol that all group members agree
 // to support.
+//
+// Note that the current default of cooperative-sticky only means that this
+// client will perform cooperative balancing, which is incompatible with eager
+// balancing. To support an eager balancing strategy, be sure to override this
+// option.
 func GroupBalancers(balancers ...GroupBalancer) GroupOpt {
 	return groupOpt{func(cfg *groupConsumer) { cfg.balancers = balancers }}
 }
@@ -88,32 +93,41 @@ func GroupHeartbeatInterval(interval time.Duration) GroupOpt {
 	return groupOpt{func(cfg *groupConsumer) { cfg.heartbeatInterval = interval }}
 }
 
-// GroupOnAssign sets the function to be called when a group is joined after
+// GroupOnAssigned sets the function to be called when a group is joined after
 // partitions are assigned before fetches begin.
 //
-// Note that this function combined with onRevoke should combined not exceed
+// Note that this function combined with onRevoked should combined not exceed
 // the rebalance interval. It is possible for the group, immediately after
 // finishing a balance, to re-enter a new balancing session.
 //
-// The onAssign function is passed the group's context, which is only canceled
-// if the group is left or the client is closed.
-func GroupOnAssign(onAssign func(context.Context, map[string][]int32)) GroupOpt {
-	return groupOpt{func(cfg *groupConsumer) { cfg.onAssign = onAssign }}
+// The onAssigned function is passed the group's context, which is only
+// canceled if the group is left or the client is closed.
+func GroupOnAssigned(onAssigned func(context.Context, map[string][]int32)) GroupOpt {
+	return groupOpt{func(cfg *groupConsumer) { cfg.onAssigned = onAssigned }}
 }
 
-// GroupOnRevoke sets the function to be called once a group transitions from
+// GroupOnRevoked sets the function to be called once a group transitions from
 // stable to rebalancing.
 //
-// Note that this function combined with onAssign should combined not exceed
+// Note that this function combined with onAssigned should combined not exceed
 // the rebalance interval. It is possible for the group, immediately after
 // finishing a balance, to re-enter a new balancing session.
 //
-// If autocommit is enabled, the default onRevoke is to commit all offsets.
+// If autocommit is enabled, the default onRevoked is to commit all offsets.
 //
-// The onRevoke function is passed the group's context, which is only canceled
+// The onRevoked function is passed the group's context, which is only canceled
 // if the group is left or the client is closed.
-func GroupOnRevoke(onRevoke func(context.Context, map[string][]int32)) GroupOpt {
-	return groupOpt{func(cfg *groupConsumer) { cfg.onRevoke = onRevoke }}
+func GroupOnRevoked(onRevoked func(context.Context, map[string][]int32)) GroupOpt {
+	return groupOpt{func(cfg *groupConsumer) { cfg.onRevoked = onRevoked }}
+}
+
+// GroupOnLost sets the function to be called on "fatal" group errors, such as
+// IllegalGeneration, UnknownMemberID, and authentication failures. This
+// function differs from onRevoked in that it is unlikely that commits will
+// succeed when partitions are outright lost, whereas commits likely will
+// succeed when revoking partitions.
+func GroupOnLost(onLost func(context.Context, map[string][]int32)) GroupOpt {
+	return groupOpt{func(cfg *groupConsumer) { cfg.onLost = onLost }}
 }
 
 // GroupDisableAutoCommit disable auto committing.
@@ -162,45 +176,48 @@ type groupConsumer struct {
 	ctx    context.Context
 	cancel func()
 
-	id        string
-	topics    map[string]struct{}
-	balancers []GroupBalancer
+	id          string
+	topics      map[string]struct{}
+	balancers   []GroupBalancer
+	cooperative bool
 
-	mu           sync.Mutex          // guards this block
-	leader       bool                // whether we are leader right now
-	using        map[string]struct{} // topics we are currently using
+	mu           sync.Mutex     // guards this block
+	leader       bool           // whether we are the leader right now
+	using        map[string]int // topics we are currently using => partitions known in that topic
 	uncommitted  uncommitted
 	commitCancel func()
 	commitDone   chan struct{}
 
-	leaderRejoin chan struct{} // cap 1; potentially sent to when leader
+	rejoinCh chan struct{} // cap 1; sent to if subscription changes (regex)
 
 	regexTopics bool
 	reSeen      map[string]struct{}
 
-	memberID   string
-	instanceID *string
-	generation int32
-	assigned   map[string][]int32
+	memberID     string
+	instanceID   *string
+	generation   int32
+	lastAssigned map[string][]int32
+	nowAssigned  map[string][]int32
 
 	sessionTimeout    time.Duration
 	rebalanceTimeout  time.Duration
 	heartbeatInterval time.Duration
 
-	onAssign func(context.Context, map[string][]int32)
-	onRevoke func(context.Context, map[string][]int32)
+	onAssigned func(context.Context, map[string][]int32)
+	onRevoked  func(context.Context, map[string][]int32)
+	onLost     func(context.Context, map[string][]int32)
 
 	blockAuto          bool
 	autocommitDisable  bool
 	autocommitInterval time.Duration
-
-	// TODO OnLost (incremental)
 }
 
 // AssignGroup assigns a group to consume from, overriding any prior
 // assignment. To leave a group, you can AssignGroup with an empty group.
 // It is recommended to do one final syncronous commit before leaving a group.
 func (cl *Client) AssignGroup(group string, opts ...GroupOpt) {
+	// TODO rejoin existing group: revoke old partitions without leaving
+	// and rejoining. See TODO in g.revoke.
 	c := &cl.consumer
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -219,14 +236,13 @@ func (cl *Client) AssignGroup(group string, opts ...GroupOpt) {
 		id: group,
 
 		balancers: []GroupBalancer{
-			StickyBalancer(),
-			RoundRobinBalancer(),
-			RangeBalancer(),
+			CooperativeStickyBalancer(),
 		},
+		cooperative: true,
 
-		using:        make(map[string]struct{}),
-		leaderRejoin: make(chan struct{}, 1),
-		reSeen:       make(map[string]struct{}),
+		using:    make(map[string]int),
+		rejoinCh: make(chan struct{}, 1),
+		reSeen:   make(map[string]struct{}),
 
 		sessionTimeout:    10000 * time.Millisecond,
 		rebalanceTimeout:  60000 * time.Millisecond,
@@ -234,13 +250,16 @@ func (cl *Client) AssignGroup(group string, opts ...GroupOpt) {
 
 		autocommitInterval: 5 * time.Second,
 	}
-	g.onRevoke = g.defaultRevoke
+	g.onRevoked = g.defaultRevoke
 	for _, opt := range opts {
 		opt.apply(g)
 	}
 	if len(group) == 0 || len(g.topics) == 0 || c.dead {
 		c.typ = consumerTypeUnset
 		return
+	}
+	for _, balancer := range g.balancers {
+		g.cooperative = g.cooperative && balancer.isCooperative()
 	}
 	c.typ = consumerTypeGroup
 	c.group = g
@@ -279,6 +298,9 @@ loop:
 		}
 
 		if err != nil {
+			if g.onLost != nil {
+				g.onLost(g.ctx, g.nowAssigned)
+			}
 			consecutiveErrors++
 			// Waiting for the backoff is a good time to update our
 			// metadata; maybe the error is from stale metadata.
@@ -311,86 +333,228 @@ func (g *groupConsumer) leave() {
 	}
 }
 
-// assignRevokeSession ensures that we call onRevoke if onAssign is called
-// once we join a group, and that onAssign is NOT called if the group is
-// already dead (and, in that case, that revoke is not called either).
+func (g *groupConsumer) diffAssigned() (added, lost map[string][]int32) {
+	if g.lastAssigned == nil {
+		return g.nowAssigned, nil
+	}
+
+	added = make(map[string][]int32, len(g.nowAssigned))
+	lost = make(map[string][]int32, len(g.nowAssigned))
+
+	// First we loop over lastAssigned to find what was lost, or what was
+	// added to topics we were working on.
+	lasts := make(map[int32]struct{}, 100)
+	for topic, lastPartitions := range g.lastAssigned {
+		nowPartitions, exists := g.nowAssigned[topic]
+		if !exists {
+			lost[topic] = lastPartitions
+			continue
+		}
+
+		for _, lastPartition := range lastPartitions {
+			lasts[lastPartition] = struct{}{}
+		}
+
+		// Anything now that does not exist in last is new,
+		// otherwise it is in common and we ignore it.
+		for _, nowPartition := range nowPartitions {
+			if _, exists := lasts[nowPartition]; !exists {
+				added[topic] = append(added[topic], nowPartition)
+			} else {
+				delete(lasts, nowPartition)
+			}
+		}
+
+		// Anything remanining in last does not exist now
+		// and is thus lost.
+		for last := range lasts {
+			lost[topic] = append(lost[topic], last)
+			delete(lasts, last) // reuse lasts
+		}
+	}
+
+	// We loop again over nowAssigned to add entirely new topics to added.
+	for topic, nowPartitions := range g.nowAssigned {
+		if _, exists := g.lastAssigned[topic]; !exists {
+			added[topic] = nowPartitions
+		}
+	}
+
+	return added, lost
+}
+
+type revokeStage int8
+
+const (
+	revokeLastSession = iota
+	revokeThisSession
+)
+
+// revoke calls onRevoked for partitions that this group member is losing and
+// updates the uncommitted map after the revoke.
+//
+// For eager consumers, this simply revokes g.assigned. This will only be
+// called at the end of a group session.
+//
+// For cooperative consumers, this either
+//
+//     (1) if revoking lost partitions from a prior session (i.e., after sync),
+//         this revokes the passed in lost
+//     (2) if revoking at the end of a session, this revokes topics that the
+//         consumer is no longer interested in consuming (TODO, actually).
+//
+// Lastly, for cooperative consumers, this must selectively delete what was
+// lost from the uncommitted map.
+func (g *groupConsumer) revoke(stage revokeStage, lost map[string][]int32) {
+	if !g.cooperative { // stage == revokeThisSession if not cooperative
+		if g.onRevoked != nil {
+			g.onRevoked(g.ctx, g.nowAssigned)
+		}
+		g.nowAssigned = nil
+		g.mu.Lock()
+		g.uncommitted = nil
+		g.mu.Unlock()
+		return
+	}
+
+	switch stage {
+	case revokeLastSession:
+		// we use lost in this case
+
+	case revokeThisSession:
+		// lost is nil for cooperative assigning. Instead, we determine
+		// lost by finding subscriptions we are no longer interested in.
+		//
+		// TODO only relevant when we allow AssignGroup with the same
+		// group to change subscriptions.
+		//
+		// Also, we must delete these partitions from nowAssigned.
+	}
+
+	if len(lost) == 0 { // if we lost nothing, do nothing
+		return
+	}
+
+	// We must now stop fetching anything we lost and invalidate any
+	// buffered fetches before falling into onRevoked.
+	//
+	// We want to invalidate buffered fetches since they may contain
+	// partitions that we lost, and we do not want a future poll to
+	// return those fetches. We could be smarter and knife out only
+	// partitions we lost, but it is simpler to just drop everything.
+	lostOffsets := make(map[string]map[int32]Offset, len(lost))
+	for lostTopic, lostPartitions := range lost {
+		lostPartitionOffsets := make(map[int32]Offset, len(lostPartitions))
+		for _, lostPartition := range lostPartitions {
+			lostPartitionOffsets[lostPartition] = Offset{}
+		}
+		lostOffsets[lostTopic] = lostPartitionOffsets
+	}
+	g.c.maybeAssignPartitions(&g.seq, lostOffsets, assignInvalidateMatching)
+
+	if g.onRevoked != nil {
+		g.onRevoked(g.ctx, lost)
+	}
+
+	defer g.rejoin()
+
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.uncommitted == nil {
+		return
+	}
+	for lostTopic, lostPartitions := range lost {
+		uncommittedPartitions := g.uncommitted[lostTopic]
+		if uncommittedPartitions == nil {
+			continue
+		}
+		for _, lostPartition := range lostPartitions {
+			delete(uncommittedPartitions, lostPartition)
+		}
+		if len(uncommittedPartitions) == 0 {
+			delete(g.uncommitted, lostTopic)
+		}
+	}
+	if len(g.uncommitted) == 0 {
+		g.uncommitted = nil
+	}
+
+}
+
+// assignRevokeSession aids in sequencing prerevoke/assign/revoke.
 type assignRevokeSession struct {
-	mu         sync.Mutex
-	assigned   bool
-	assignDone chan struct{}
-	revoked    bool
-	revokeDone chan struct{}
+	prerevokeDone chan struct{}
+	assignDone    chan struct{}
+	revokeDone    chan struct{}
+}
+
+func newAssignRevokeSession() *assignRevokeSession {
+	return &assignRevokeSession{
+		prerevokeDone: make(chan struct{}),
+		assignDone:    make(chan struct{}),
+		revokeDone:    make(chan struct{}),
+	}
+}
+
+func (s *assignRevokeSession) prerevoke(g *groupConsumer, lost map[string][]int32) <-chan struct{} {
+	go func() {
+		defer close(s.prerevokeDone)
+		if g.cooperative {
+			g.revoke(revokeLastSession, lost)
+		}
+	}()
+	return s.prerevokeDone
+}
+
+func (s *assignRevokeSession) assign(g *groupConsumer, newAssigned map[string][]int32) <-chan struct{} {
+	go func() {
+		defer close(s.assignDone)
+		<-s.prerevokeDone
+		if g.onAssigned != nil {
+			if len(newAssigned) > 0 {
+				g.onAssigned(g.ctx, newAssigned)
+			}
+		}
+	}()
+	return s.assignDone
 }
 
 func (s *assignRevokeSession) revoke(g *groupConsumer) <-chan struct{} {
-	s.mu.Lock()
-	revoked := s.revoked
-	assigned := s.assigned
-
-	s.revoked = true
-	if s.revokeDone == nil {
-		s.revokeDone = make(chan struct{})
-	}
-	s.mu.Unlock()
-
-	if !revoked {
-		go func() {
-			defer close(s.revokeDone)
-			if assigned {
-				<-s.assignDone
-				if g.onRevoke != nil {
-					g.onRevoke(g.ctx, g.assigned)
-				}
-			}
-		}()
-	}
+	go func() {
+		defer close(s.revokeDone)
+		<-s.assignDone
+		if g.onRevoked != nil {
+			g.revoke(revokeThisSession, nil)
+		}
+	}()
 	return s.revokeDone
-}
-
-func (s *assignRevokeSession) assign(g *groupConsumer) {
-	s.mu.Lock()
-	if s.revoked {
-		s.mu.Unlock()
-		return
-	}
-	s.assigned = true
-	s.assignDone = make(chan struct{})
-	s.mu.Unlock()
-	defer close(s.assignDone)
-
-	if g.onAssign != nil {
-		g.onAssign(g.ctx, g.assigned)
-	}
 }
 
 func (g *groupConsumer) setupAssigned() error {
 	hbErrCh := make(chan error, 1)
 	fetchErrCh := make(chan error, 1)
+
+	s := newAssignRevokeSession()
+	added, lost := g.diffAssigned()
+	s.prerevoke(g, lost)
+
 	ctx, cancel := context.WithCancel(g.ctx)
-
-	s := new(assignRevokeSession)
-
 	go func() {
+		defer cancel() // potentially kill offset fetching
 		hbErrCh <- g.heartbeat(fetchErrCh, s)
-		cancel() // potentially kill fetching
-	}()
-
-	doneOnAssign := make(chan struct{})
-	go func() {
-		s.assign(g)
-		close(doneOnAssign)
 	}()
 
 	select {
 	case err := <-hbErrCh:
-		// heartbeat calls onRevoke if necessary, so we do not here.
 		return err
-	case <-doneOnAssign:
+	case <-s.assign(g, added):
 	}
 
-	go func() {
-		fetchErrCh <- g.fetchOffsets(ctx)
-	}()
+	if len(added) > 0 {
+		go func() { fetchErrCh <- g.fetchOffsets(ctx, added) }()
+	} else {
+		close(fetchErrCh)
+	}
 
 	return <-hbErrCh
 }
@@ -399,9 +563,9 @@ func (g *groupConsumer) setupAssigned() error {
 // session.
 //
 // This function is began before fetching offsets to allow the consumer's
-// onAssign to be called before fetching. If the eventual offset fetch errors,
-// we continue heartbeating until onRevoke finishes and our metadata is
-// updated.
+// onAssigned to be called before fetching. If the eventual offset fetch
+// errors, we continue heartbeating until onRevoked finishes and our metadata
+// is updated.
 //
 // If the offset fetch is successful, then we basically sit in this function
 // until a heartbeat errors or us, being the leader, decides to re-join.
@@ -429,15 +593,10 @@ func (g *groupConsumer) heartbeat(fetchErrCh <-chan error, s *assignRevokeSessio
 				resp := kresp.(*kmsg.HeartbeatResponse)
 				err = kerr.ErrorForCode(resp.ErrorCode)
 			}
-		case <-g.leaderRejoin:
-			// If we are leader and a metadata update
-			// triggers us to rejoin, we just pretend
-			// we are rebalancing.
-			//
-			// No need to maintain leader at this point
-			// since we are going to rejoin.
+		case <-g.rejoinCh:
+			// If a metadata update changes our subscription,
+			// we just pretend we are rebalancing.
 			err = kerr.RebalanceInProgress
-			g.clearLeader()
 		case err = <-fetchErrCh:
 			fetchErrCh = nil
 		case <-metadone:
@@ -447,7 +606,7 @@ func (g *groupConsumer) heartbeat(fetchErrCh <-chan error, s *assignRevokeSessio
 			revoked = nil
 			didRevoke = true
 		case <-g.ctx.Done():
-			s.revoke(g)
+			<-s.assignDone // fall into onLost logic
 			return errors.New("left group or client closed")
 		}
 
@@ -461,16 +620,30 @@ func (g *groupConsumer) heartbeat(fetchErrCh <-chan error, s *assignRevokeSessio
 
 		// Since we errored, we must revoke.
 		if !didRevoke && revoked == nil {
-			// First, immediately stop fetching what we were and
-			// ensure we will fetch no more.
-			g.c.mu.Lock()
-			if g.seq == g.c.seq {
-				g.c.assignPartitions(nil, true)
-				g.seq = g.c.seq // track bump
+			// If we are an eager consumer, we stop fetching all of
+			// our current partitions as we will be revoking them.
+			if !g.cooperative {
+				g.c.maybeAssignPartitions(&g.seq, nil, assignInvalidateAll)
 			}
-			g.c.mu.Unlock()
 
-			// Now we call the user provided revoke callback.
+			// If our error is not from rebalancing, then we
+			// encountered IllegalGeneration or UnknownMemberID,
+			// both of which are unexpected and unrecoverable.
+			//
+			// We return early rather than revoking and updating
+			// metadata; the groupConsumer's manage function will
+			// call onLost with all partitions.
+			//
+			// We still wait for the session's onAssigned to be
+			// done so that we avoid calling onLost concurrently.
+			if err != kerr.RebalanceInProgress {
+				<-s.assignDone
+				return err
+			}
+
+			// Now we call the user provided revoke callback, even
+			// if cooperative: if cooperative, this only revokes
+			// partitions we no longer want to consume.
 			revoked = s.revoke(g)
 		}
 		// Since we errored, while waiting for the revoke to finish, we
@@ -492,22 +665,23 @@ func (g *groupConsumer) heartbeat(fetchErrCh <-chan error, s *assignRevokeSessio
 	}
 }
 
+// We need to lock to set the leader due to the potential for a concurrent
+// findNewAssignments.
 func (g *groupConsumer) setLeader() {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.leader = true
 }
 
-func (g *groupConsumer) clearLeader() {
+// prejoin, called at the beginning of joinAndSync, ensures we leave nothing
+// uncommitted and that the rejoinCh is drained after a new join.
+func (g *groupConsumer) prejoin() {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.leader = false
-	g.uncommitted = nil
 
-	// After we set leader false, we always drain the rejoin channel to
-	// ensure we will not be doubly rejoined when we should not be.
 	select {
-	case <-g.leaderRejoin:
+	case <-g.rejoinCh:
 	default:
 	}
 }
@@ -516,13 +690,14 @@ func (g *groupConsumer) clearLeader() {
 // see we need to rejoin.
 func (g *groupConsumer) rejoin() {
 	select {
-	case g.leaderRejoin <- struct{}{}:
+	case g.rejoinCh <- struct{}{}:
 	default:
 	}
 }
 
 func (g *groupConsumer) joinAndSync() error {
-	g.clearLeader()
+	g.prejoin()
+
 start:
 	req := kmsg.JoinGroupRequest{
 		Group:                  g.id,
@@ -592,11 +767,15 @@ func (g *groupConsumer) syncGroup(plan balancePlan, generation int32) error {
 		return err
 	}
 
-	g.assigned = make(map[string][]int32)
-	for _, topic := range kassignment.Topics {
-		g.assigned[topic.Topic] = topic.Partitions
+	// Past this point, we will fall into the setupAssigned prerevoke code,
+	// meaning for cooperative, we will revoke what we need to.
+	if g.cooperative {
+		g.lastAssigned = g.nowAssigned
 	}
-
+	g.nowAssigned = make(map[string][]int32)
+	for _, topic := range kassignment.Topics {
+		g.nowAssigned[topic.Topic] = topic.Partitions
+	}
 	return nil
 }
 
@@ -613,7 +792,7 @@ func (g *groupConsumer) joinGroupProtocols() []kmsg.JoinGroupRequestProtocol {
 			Name: balancer.protocolName(),
 			Metadata: balancer.metaFor(
 				topics,
-				g.assigned,
+				g.nowAssigned,
 				g.generation,
 			),
 		})
@@ -623,11 +802,11 @@ func (g *groupConsumer) joinGroupProtocols() []kmsg.JoinGroupRequestProtocol {
 
 // fetchOffsets is issued once we join a group to see what the prior commits
 // were for the partitions we were assigned.
-func (g *groupConsumer) fetchOffsets(ctx context.Context) error {
+func (g *groupConsumer) fetchOffsets(ctx context.Context, newAssigned map[string][]int32) error {
 	req := kmsg.OffsetFetchRequest{
 		Group: g.id,
 	}
-	for topic, partitions := range g.assigned {
+	for topic, partitions := range newAssigned {
 		req.Topics = append(req.Topics, kmsg.OffsetFetchRequestTopic{
 			Topic:      topic,
 			Partitions: partitions,
@@ -668,31 +847,58 @@ func (g *groupConsumer) fetchOffsets(ctx context.Context) error {
 		}
 	}
 
-	g.c.mu.Lock()
-	defer g.c.mu.Unlock()
-
-	if g.seq < g.c.seq {
+	// If we are an eager consumer, joining a group invalidates anything we
+	// were consuming (in reality, we have already invalidated everything
+	// we were consuming due to leaving the group to rejoin, or because
+	// this is the first join and there is nothing to invalidate).
+	//
+	// If we are a cooperative consumer, we fetch offsets for only newly
+	// assigned partitions and we must merge these new partitions in into
+	// what we were consuming.
+	assignHow := assignInvalidateAll
+	if g.cooperative {
+		assignHow = assignWithoutInvalidating
+	}
+	if !g.c.maybeAssignPartitions(&g.seq, offsets, assignHow) {
 		return errors.New("stale group")
 	}
-	g.c.assignPartitions(offsets, true)
-	g.seq = g.c.seq // track bump
-
 	g.c.resetAndLoadOffsets()
 	return nil
 }
 
 // findNewAssignments is called under the consumer lock at the end of a
-// metadata update. This updates which topics the group wants to use and (1)
-// joins the group if not yet joined and (2) rejoins the group if leader and
-// there are new topics to use.
+// metadata update, updating the topics the group wants to use and other
+// metadata.
+//
+// This joins the group if
+//  - the group has never been joined
+//  - new topics are found for consuming (changing this consumer's join metadata)
+//
+// Additionally, if the member is the leader, this rejoins the group if the
+// leader notices new partitions in an existing topic. This only focuses on
+// topics the leader itself owns; it can be added in the future to focus on all
+// topics, which would support groups that consume disparate topics. Ideally,
+// this is uncommon. This does not rejoin if the leader notices a partition is
+// lost, which is finicky.
 func (g *groupConsumer) findNewAssignments(topics map[string]*topicPartitions) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
-	toUse := make(map[string]struct{}, len(topics))
+	type change struct {
+		isNew bool
+		delta int
+	}
+
+	var numNew int
+	toChange := make(map[string]change, len(topics))
 	for topic, topicPartitions := range topics {
-		// If we are already using this topic, no need to check it.
-		if _, exists := g.using[topic]; exists {
+		numPartitions := len(topicPartitions.load().partitions)
+		// If we are already using this topic, add that it changed if
+		// there are more partitions than we were using prior.
+		if used, exists := g.using[topic]; exists {
+			if numPartitions-used > 0 {
+				toChange[topic] = change{delta: numPartitions - used}
+			}
 			continue
 		}
 
@@ -715,25 +921,26 @@ func (g *groupConsumer) findNewAssignments(topics map[string]*topicPartitions) {
 			if g.regexTopics && topicPartitions.load().isInternal {
 				continue
 			}
-			toUse[topic] = struct{}{}
+			toChange[topic] = change{isNew: true, delta: numPartitions}
+			numNew++
 		}
 
 	}
 
-	if len(toUse) == 0 {
+	if len(toChange) == 0 {
 		return
 	}
 
 	wasManaging := len(g.using) != 0
-	for topic := range toUse {
-		g.using[topic] = struct{}{}
+	for topic, change := range toChange {
+		g.using[topic] += change.delta
 	}
 
 	if !wasManaging {
 		go g.manage()
 	}
 
-	if g.leader {
+	if numNew > 0 || g.leader {
 		g.rejoin()
 	}
 }
@@ -756,7 +963,7 @@ type EpochOffset struct {
 type uncommitted map[string]map[int32]uncommit
 
 // updateUncommitted sets the latest uncommitted offset. This is called under
-// the consumer lock, but grabs the group lock to ensure no collision with
+// the consumer lock, and grabs the group lock to ensure no collision with
 // commit.
 func (g *groupConsumer) updateUncommitted(fetches Fetches) {
 	g.mu.Lock()
@@ -882,6 +1089,14 @@ func (g *groupConsumer) loopCommit() {
 // always updated on calls to PollFetches.
 //
 // If there are no uncommitted offsets, this returns nil.
+//
+// Note that, if manually committing, you should be careful with committing
+// during group rebalances. Before rejoining the group, onRevoked is called
+// with all partitions that are being lost. Once onRevoked returns, this client
+// tries to rejoin the group and resets its uncommitted state for all
+// partitions that were revoked. You must ensure you commit before the group's
+// session timeout is reached, otherwise this client will be kicked from the
+// group and the commit will fail.
 func (cl *Client) Uncommitted() map[string]map[int32]EpochOffset {
 	cl.consumer.mu.Lock()
 	defer cl.consumer.mu.Unlock()
@@ -928,15 +1143,15 @@ func (g *groupConsumer) getUncommittedLocked() map[string]map[int32]EpochOffset 
 // Commit commits the given offsets for a group, calling onDone with the commit
 // request and either the response or an error if the response was not issued.
 // If uncommitted is empty or the client is not consuming as a group, onDone is
-// called with nil, nil, nil and this function returns immediately. It is OK if
-// onDone is nil.
+// called with (nil, nil, nil) and this function returns immediately. It is OK
+// if onDone is nil.
 //
 // If autocommitting is enabled, this function blocks autocommitting until this
 // function is complete and the onDone has returned.
 //
 // This function itself does not wait for the commit to finish; that is, by
-// default, this function is an asyncronous commit. You can use the provided
-// callback to make it sync.
+// default, this function is an asyncronous commit. You can use onDone to make
+// it sync.
 //
 // Note that this function ensures absolute ordering of commit requests by
 // canceling prior requests and ensuring they are done before executing a new
@@ -985,7 +1200,7 @@ func (cl *Client) Commit(
 }
 
 // defaultRevoke commits the last fetched offsets and waits for the commit to
-// finish. This is the default onRevoke function which, when combined with the
+// finish. This is the default onRevoked function which, when combined with the
 // default autocommit, ensures we never miss committing everything.
 //
 // Note that the heartbeat loop invalidates all buffered, unpolled fetches

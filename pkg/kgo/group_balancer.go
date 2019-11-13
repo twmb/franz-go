@@ -27,6 +27,9 @@ type GroupBalancer interface {
 	// The input members are guaranteed to be sorted by member ID, and
 	// each member's topics are guaranteed to be sorted.
 	balance(members []groupMember, topics map[string][]int32) balancePlan
+
+	// isCooperative returns if this is a cooperative balance strategy.
+	isCooperative() bool
 }
 
 // groupMember is a member id and the topics that member is interested in.
@@ -35,6 +38,8 @@ type groupMember struct {
 	version  int16
 	topics   []string
 	userdata []byte
+
+	owned []kmsg.GroupMemberMetadataOwnedPartition
 }
 
 type groupMemberID struct {
@@ -62,8 +67,8 @@ type balancePlan map[groupMemberID]map[string][]int32
 
 func newBalancePlan(members []groupMember) balancePlan {
 	plan := make(map[groupMemberID]map[string][]int32, len(members))
-	for _, member := range members {
-		plan[member.id] = make(map[string][]int32)
+	for i := range members {
+		plan[members[i].id] = make(map[string][]int32)
 	}
 	return plan
 }
@@ -108,8 +113,8 @@ func (g *groupConsumer) balanceGroup(proto string, kmembers []kmsg.JoinGroupResp
 	sort.Slice(members, func(i, j int) bool {
 		return members[i].id.less(members[j].id) // guarantee sorted members
 	})
-	for _, member := range members {
-		sort.Strings(member.topics) // guarantee sorted topics
+	for i := range members {
+		sort.Strings(members[i].topics) // guarantee sorted topics
 	}
 
 	for _, balancer := range g.balancers {
@@ -141,6 +146,7 @@ func parseGroupMembers(kmembers []kmsg.JoinGroupResponseMember) ([]groupMember, 
 			version:  meta.Version,
 			topics:   meta.Topics,
 			userdata: meta.UserData,
+			owned:    meta.OwnedPartitions,
 		})
 	}
 	return members, nil
@@ -180,14 +186,15 @@ func RoundRobinBalancer() GroupBalancer {
 type roundRobinBalancer struct{}
 
 func (*roundRobinBalancer) protocolName() string { return "roundrobin" }
+func (*roundRobinBalancer) isCooperative() bool  { return false }
 func (*roundRobinBalancer) metaFor(interests []string, _ map[string][]int32, _ int32) []byte {
 	return basicMetaFor(interests)
 }
 func (*roundRobinBalancer) balance(members []groupMember, topics map[string][]int32) balancePlan {
 	// Get all the topics all members are subscribed to.
 	memberTopics := make(map[string]struct{}, len(topics))
-	for _, member := range members {
-		for _, topic := range member.topics {
+	for i := range members {
+		for _, topic := range members[i].topics {
 			memberTopics[topic] = struct{}{}
 		}
 	}
@@ -261,12 +268,14 @@ func RangeBalancer() GroupBalancer {
 type rangeBalancer struct{}
 
 func (*rangeBalancer) protocolName() string { return "range" }
+func (*rangeBalancer) isCooperative() bool  { return false }
 func (*rangeBalancer) metaFor(interests []string, _ map[string][]int32, _ int32) []byte {
 	return basicMetaFor(interests)
 }
 func (*rangeBalancer) balance(members []groupMember, topics map[string][]int32) balancePlan {
 	topics2PotentialConsumers := make(map[string][]groupMemberID)
-	for _, member := range members {
+	for i := range members {
+		member := &members[i]
 		for _, topic := range member.topics {
 			topics2PotentialConsumers[topic] = append(topics2PotentialConsumers[topic], member.id)
 		}
@@ -363,21 +372,38 @@ func (*rangeBalancer) balance(members []groupMember, topics map[string][]int32) 
 // Thus, the Java balancer will never back out of a strategy from this
 // balancer.
 func StickyBalancer() GroupBalancer {
-	return new(stickyBalancer)
+	return &stickyBalancer{cooperative: false}
 }
 
-type stickyBalancer struct{}
+type stickyBalancer struct {
+	cooperative bool
+}
 
-func (*stickyBalancer) protocolName() string { return "sticky" }
-func (*stickyBalancer) metaFor(interests []string, currentAssignment map[string][]int32, generation int32) []byte {
+func (s *stickyBalancer) protocolName() string {
+	if s.cooperative {
+		return "cooperative-sticky"
+	}
+	return "sticky"
+}
+func (s *stickyBalancer) isCooperative() bool { return s.cooperative }
+func (s *stickyBalancer) metaFor(interests []string, currentAssignment map[string][]int32, generation int32) []byte {
 	meta := kmsg.GroupMemberMetadata{
 		Version: 0,
 		Topics:  interests,
+	}
+	if s.cooperative {
+		meta.Version = 1
 	}
 	stickyMeta := kmsg.StickyMemberMetadata{
 		Generation: generation,
 	}
 	for topic, partitions := range currentAssignment {
+		if s.cooperative {
+			meta.OwnedPartitions = append(meta.OwnedPartitions, kmsg.GroupMemberMetadataOwnedPartition{
+				Topic:      topic,
+				Partitions: partitions,
+			})
+		}
 		stickyMeta.CurrentAssignment = append(stickyMeta.CurrentAssignment,
 			kmsg.StickyMemberMetadataCurrentAssignment{
 				Topic:      topic,
@@ -388,9 +414,10 @@ func (*stickyBalancer) metaFor(interests []string, currentAssignment map[string]
 	return meta.AppendTo(nil)
 
 }
-func (*stickyBalancer) balance(members []groupMember, topics map[string][]int32) balancePlan {
+func (s *stickyBalancer) balance(members []groupMember, topics map[string][]int32) balancePlan {
 	stickyMembers := make([]sticky.GroupMember, 0, len(members))
-	for _, member := range members {
+	for i := range members {
+		member := &members[i]
 		stickyMembers = append(stickyMembers, sticky.GroupMember{
 			ID:       member.id.memberID,
 			Topics:   member.topics,
@@ -408,12 +435,154 @@ func (*stickyBalancer) balance(members []groupMember, topics map[string][]int32)
 	// is not needed past this point.
 	plan := balancePlan(make(map[groupMemberID]map[string][]int32, len(members)))
 	for memberID, topics := range stickyPlan {
-		for _, member := range members {
+		for i := range members {
+			member := &members[i]
 			if member.id.memberID == memberID {
 				plan[member.id] = topics
 				break
 			}
 		}
 	}
+	if s.cooperative {
+		s.adjustCooperative(members, plan)
+	}
 	return plan
+}
+
+// CooperativeStickyBalancer performs the sticky balancing strategy, but
+// additionally opts the consumer group into "cooperative" rebalancing.
+//
+// Cooperative rebalancing differs from "eager" (the original) rebalancing in
+// that group members do not stop processing partitions during the rebalance.
+// Instead, once they receive their new assignment, each member determines
+// which partitions it needs to revoke. If any, they send a new join request
+// (before syncing), and the process starts over. This should ultimately end up
+// in only two join rounds, with the major benefit being that processing never
+// needs to stop.
+//
+// NOTE once a group is collectively using cooperative balancing, it is unsafe
+// to have a member join the group that does not support cooperative balancing.
+// If the only-eager member is elected leader, it will not know of the new
+// multiple join strategy and things will go awry. Thus, once a group is
+// entirely on cooperative rebalancing, it cannot go back.
+//
+// Migrating an eager group to cooperative balancing requires two rolling
+// bounce deploys. The first deploy should add the cooperative-sticky strategy
+// as an option (that is, each member goes from using one balance strategy to
+// two). During this deploy, Kafka will tell leaders to continue using the old
+// eager strategy, since the old eager strategy is the only one in common among
+// all members. The second rolling deploy removes the old eager strategy. At
+// this point, Kafka will tell the leader to use cooperative-sticky balancing.
+// During this roll, all members in the group that still have both strategies
+// continue to be eager and give up all of their partitions every rebalance.
+// However, once a member only has cooperative-sticky, it can begin using this
+// new strategy and things will work correctly. See KIP-429 for more details.
+func CooperativeStickyBalancer() GroupBalancer {
+	return &stickyBalancer{cooperative: true}
+}
+
+// adjustCooperative performs the final adjustment to the plan for cooperative
+// sticky assigning.
+//
+// Over the plan, remove all partitions that migrated from one member (where it
+// was assigned) to a new member (where it is now planned).
+//
+// This allows the assigned members to revoke and rejoin, which will then do
+// another rebalance where the partitions will now be on the free list to be
+// assigned.
+//
+// The implementation below is likely a bit slower than the Java version, due
+// to the Java version having the input members as maps and the input
+// partitions as a single "topic partition" type. Ideally, our much better
+// sticky balancing implementation more than makes up for the speed difference.
+func (*stickyBalancer) adjustCooperative(members []groupMember, plan balancePlan) {
+	type tp struct {
+		topic     string
+		partition int32
+	}
+	allAdded := make(map[tp]groupMemberID, 100)
+	allRevoked := make(map[tp]struct{}, 100)
+
+	// First, on all members, we find what was added and what was removed
+	// to and from that member.
+	for i := range members {
+		member := &members[i]
+
+		planned := plan[member.id]
+
+		// added   := planned - current
+		// revoked := current - planned
+
+		// This loop is banking on repeatedly ranging over []string and
+		// then []int32 to be faster than building a map and then doing
+		// O(1) lookups.
+		for ptopic, ppartitions := range planned {
+			for _, ppartition := range ppartitions {
+
+				var foundExisting bool
+			findExisting:
+				for _, ctopic := range member.owned {
+					if ctopic.Topic != ptopic {
+						continue
+					}
+					for _, cpartition := range ctopic.Partitions {
+						if cpartition != ppartition {
+							continue
+						}
+						foundExisting = true
+						break findExisting
+					}
+				}
+				if !foundExisting {
+					allAdded[tp{ptopic, ppartition}] = member.id
+				}
+
+			}
+		}
+
+		for _, ctopic := range member.owned {
+			topic := ctopic.Topic
+			ppartitions, exists := planned[topic]
+			if !exists {
+				for _, cpartition := range ctopic.Partitions {
+					allRevoked[tp{topic, cpartition}] = struct{}{}
+				}
+				continue
+			}
+
+			for _, cpartition := range ctopic.Partitions {
+				var found bool
+				for _, ppartition := range ppartitions {
+					if ppartition == cpartition {
+						found = true
+						break
+					}
+				}
+				if !found {
+					allRevoked[tp{topic, cpartition}] = struct{}{}
+				}
+			}
+		}
+	}
+
+	// Over all revoked, if the revoked partition was added to a different
+	// member, we remove that partition from the new member.
+	for tp := range allRevoked {
+		if newMember, exists := allAdded[tp]; exists {
+			ptopics := plan[newMember]
+			ppartitions := ptopics[tp.topic]
+			for i, ppartition := range ppartitions {
+				if ppartition == tp.partition {
+					ppartitions[i] = ppartitions[len(ppartitions)-1]
+					ppartitions = ppartitions[:len(ppartitions)-1]
+					break
+				}
+			}
+			if len(ppartitions) > 0 {
+				ptopics[tp.topic] = ppartitions
+			} else {
+				delete(ptopics, tp.topic)
+			}
+		}
+	}
 }
