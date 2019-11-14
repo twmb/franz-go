@@ -11,6 +11,8 @@ import (
 	"github.com/twmb/kafka-go/pkg/kmsg"
 )
 
+// TODO millis drift (sarama #1455)
+
 type recordSink struct {
 	broker *broker // the broker this sink belongs to
 
@@ -82,7 +84,7 @@ func newRecordSink(broker *broker) *recordSink {
 
 // createRequest returns a produceRequest from currently buffered records
 // and whether there are more records to create more requests immediately.
-func (sink *recordSink) createRequest() (*produceRequest, bool) {
+func (sink *recordSink) createRequest() (*produceRequest, *kmsg.AddPartitionsToTxnRequest, bool) {
 	req := &produceRequest{
 		txnID:   sink.broker.client.cfg.producer.txnID,
 		acks:    sink.broker.client.cfg.producer.acks.val,
@@ -97,6 +99,10 @@ func (sink *recordSink) createRequest() (*produceRequest, bool) {
 		wireLengthLimit = sink.broker.client.cfg.client.maxBrokerWriteBytes
 
 		moreToDrain bool
+
+		transactional  = sink.broker.client.cfg.producer.txnID != nil
+		txnReq         *kmsg.AddPartitionsToTxnRequest
+		txnAddedTopics map[string]int // topic => index in txnReq
 	)
 
 	// Prevent concurrent modification to allPartsRecs.
@@ -162,6 +168,30 @@ func (sink *recordSink) createRequest() (*produceRequest, bool) {
 			// No lingering is simple.
 			moreToDrain = len(recBuf.batches) > recBuf.batchDrainIdx || moreToDrain
 		}
+
+		if transactional && !recBuf.addedToTxn {
+			recBuf.addedToTxn = true
+			if txnReq == nil {
+				txnReq = &kmsg.AddPartitionsToTxnRequest{
+					TransactionalID: *recBuf.cl.cfg.producer.txnID,
+					ProducerID:      recBuf.cl.producer.id,
+					ProducerEpoch:   recBuf.cl.producer.epoch,
+				}
+			}
+			if txnAddedTopics == nil {
+				txnAddedTopics = make(map[string]int, 10)
+			}
+			idx, exists := txnAddedTopics[recBuf.topic]
+			if !exists {
+				idx = len(txnReq.Topics)
+				txnAddedTopics[recBuf.topic] = idx
+				txnReq.Topics = append(txnReq.Topics, kmsg.AddPartitionsToTxnRequestTopic{
+					Topic: recBuf.topic,
+				})
+			}
+			txnReq.Topics[idx].Partitions = append(txnReq.Topics[idx].Partitions, recBuf.partition)
+		}
+
 		recBuf.mu.Unlock()
 
 		wireLength += batchWireLength
@@ -177,7 +207,7 @@ func (sink *recordSink) createRequest() (*produceRequest, bool) {
 	if len(sink.recordBuffers) > 0 {
 		sink.recordBuffersStart = (sink.recordBuffersStart + 1) % len(sink.recordBuffers)
 	}
-	return req, moreToDrain
+	return req, txnReq, moreToDrain
 }
 
 func (sink *recordSink) maybeBeginDraining() {
@@ -219,8 +249,12 @@ func (sink *recordSink) drain() {
 		sem := sink.inflightSem.Load().(chan struct{})
 		sem <- struct{}{}
 
-		var req *produceRequest
-		req, again = sink.createRequest()
+		req, txnReq, goAgain := sink.createRequest()
+		again = goAgain
+
+		if txnReq != nil {
+			sink.doTxnReq(req, txnReq)
+		}
 
 		if len(req.batches) == 0 { // everything is failing
 			again = maybeTryFinishWork(&sink.drainState, again)
@@ -238,6 +272,42 @@ func (sink *recordSink) drain() {
 			},
 		)
 		again = maybeTryFinishWork(&sink.drainState, again)
+	}
+}
+
+// doTxnReq issues an AddPartitionsToTxnRequest for a produce request for all
+// partitions that need to be added to a transaction.
+//
+// If the entire request fails, all batches of the produce request are errored.
+// Otherwise, all partitions that have errors are removed.
+func (sink *recordSink) doTxnReq(req *produceRequest, txnReq *kmsg.AddPartitionsToTxnRequest) {
+	kresp, err := sink.broker.client.Request(sink.broker.client.ctx, txnReq)
+	if err != nil {
+		for _, topic := range txnReq.Topics {
+			topicBatches := req.batches[topic.Topic]
+			for _, partition := range topic.Partitions {
+				sink.broker.client.finishBatch(topicBatches[partition], partition, 0, err)
+				delete(topicBatches, partition)
+			}
+			if len(topicBatches) == 0 {
+				delete(req.batches, topic.Topic)
+			}
+		}
+		return
+	}
+
+	resp := kresp.(*kmsg.AddPartitionsToTxnResponse)
+	for _, topic := range resp.Topics {
+		topicBatches := req.batches[topic.Topic]
+		for _, partition := range topic.Partitions {
+			if err := kerr.ErrorForCode(partition.ErrorCode); err != nil {
+				sink.broker.client.finishBatch(topicBatches[partition.Partition], partition.Partition, 0, err)
+				delete(topicBatches, partition.Partition)
+			}
+			if len(topicBatches) == 0 {
+				delete(req.batches, topic.Topic)
+			}
+		}
 	}
 }
 
@@ -558,6 +628,10 @@ type recordBuffer struct {
 	// remove from the head of batches when a batch is finished.
 	// This is read while buffering and modified in a few places.
 	batchDrainIdx int
+
+	// addedToTxn, for transactions only, signifies whether this partition
+	// has been added to the transaction yet or not.
+	addedToTxn bool
 
 	// lingering is a timer that avoids starting maybeBeginDraining until
 	// expired, allowing for more records to be buffered in a single batch.

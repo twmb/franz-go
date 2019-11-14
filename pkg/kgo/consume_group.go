@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/twmb/kafka-go/pkg/kerr"
@@ -210,6 +211,8 @@ type groupConsumer struct {
 	blockAuto          bool
 	autocommitDisable  bool
 	autocommitInterval time.Duration
+
+	offsetsAddedToTxn bool
 }
 
 // AssignGroup assigns a group to consume from, overriding any prior
@@ -250,7 +253,11 @@ func (cl *Client) AssignGroup(group string, opts ...GroupOpt) {
 
 		autocommitInterval: 5 * time.Second,
 	}
-	g.onRevoked = g.defaultRevoke
+	if c.cl.cfg.producer.txnID == nil {
+		g.onRevoked = g.defaultRevoke
+	} else {
+		g.autocommitDisable = true
+	}
 	for _, opt := range opts {
 		opt.apply(g)
 	}
@@ -1008,6 +1015,8 @@ func (g *groupConsumer) updateUncommitted(fetches Fetches) {
 // updateCommitted updates the group's uncommitted map. This function triply
 // verifies that the resp matches the req as it should and that the req does
 // not somehow contain more than what is in our uncommitted map.
+//
+// NOTE if editing this function, edit updateCommittedTxn below!
 func (g *groupConsumer) updateCommitted(
 	req *kmsg.OffsetCommitRequest,
 	resp *kmsg.OffsetCommitResponse,
@@ -1019,7 +1028,7 @@ func (g *groupConsumer) updateCommitted(
 		return
 	}
 	if g.uncommitted == nil || // just in case
-		len(req.Topics) != len(resp.Topics) { // bad kafka
+		len(req.Topics) != len(resp.Topics) { // bad kafka TODO fatal error?
 		return
 	}
 
@@ -1140,11 +1149,11 @@ func (g *groupConsumer) getUncommittedLocked() map[string]map[int32]EpochOffset 
 	return uncommitted
 }
 
-// Commit commits the given offsets for a group, calling onDone with the commit
-// request and either the response or an error if the response was not issued.
-// If uncommitted is empty or the client is not consuming as a group, onDone is
-// called with (nil, nil, nil) and this function returns immediately. It is OK
-// if onDone is nil.
+// CommitOffsets commits the given offsets for a group, calling onDone with the
+// commit request and either the response or an error if the response was not
+// issued. If uncommitted is empty or the client is not consuming as a group,
+// onDone is called with (nil, nil, nil) and this function returns immediately.
+// It is OK if onDone is nil.
 //
 // If autocommitting is enabled, this function blocks autocommitting until this
 // function is complete and the onDone has returned.
@@ -1163,7 +1172,9 @@ func (g *groupConsumer) getUncommittedLocked() map[string]map[int32]EpochOffset 
 // If using autocommitting, autocommitting will resume once this is complete,
 // committing only if the client's internal uncommitted offsets counters are
 // higher than the known last commit.
-func (cl *Client) Commit(
+//
+// It is invalid to use this function to commit offsets for a transaction.
+func (cl *Client) CommitOffsets(
 	ctx context.Context,
 	uncommitted map[string]map[int32]EpochOffset,
 	onDone func(*kmsg.OffsetCommitRequest, *kmsg.OffsetCommitResponse, error),
@@ -1208,7 +1219,7 @@ func (cl *Client) Commit(
 func (g *groupConsumer) defaultRevoke(_ context.Context, _ map[string][]int32) {
 	if !g.autocommitDisable {
 		wait := make(chan struct{})
-		g.cl.Commit(g.ctx, g.getUncommitted(), func(_ *kmsg.OffsetCommitRequest, _ *kmsg.OffsetCommitResponse, _ error) {
+		g.cl.CommitOffsets(g.ctx, g.getUncommitted(), func(_ *kmsg.OffsetCommitRequest, _ *kmsg.OffsetCommitResponse, _ error) {
 			close(wait)
 		})
 		<-wait
@@ -1293,4 +1304,234 @@ func (g *groupConsumer) commit(
 		g.updateCommitted(req, resp)
 		onDone(req, resp, nil)
 	}()
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////
+// TRANSACTIONAL COMMITTING                                                               //
+// MOSTLY DUPLICATED CODE DUE TO NO GENERICS AND BECAUSE THE TYPES ARE SLIGHTLY DIFFERENT //
+////////////////////////////////////////////////////////////////////////////////////////////
+
+// CommitOffsetsForTransaction is exactly like CommitOffsets, but specifically
+// for use with transactional consuming and producing.
+//
+// Note that, like with CommitOffsets, this cancels prior unfinished commits.
+// In the unlikely event that you are committing offsets multiple times within
+// a single transaction, and your second commit does not include partitions
+// that were in the first commit, you need to wait for the first commit to finish
+// before executing the new commit.
+//
+// It is invalid to use this function if the client does not have a
+// transactional ID. As well, it is invalid to use this function outside of a
+// transaction.
+func (cl *Client) CommitOffsetsForTransaction(
+	ctx context.Context,
+	uncommitted map[string]map[int32]EpochOffset,
+	onDone func(*kmsg.TxnOffsetCommitRequest, *kmsg.TxnOffsetCommitResponse, error),
+) {
+	if onDone == nil {
+		onDone = func(_ *kmsg.TxnOffsetCommitRequest, _ *kmsg.TxnOffsetCommitResponse, _ error) {}
+	}
+	cl.consumer.mu.Lock()
+	defer cl.consumer.mu.Unlock()
+	if cl.consumer.typ != consumerTypeGroup {
+		onDone(new(kmsg.TxnOffsetCommitRequest), new(kmsg.TxnOffsetCommitResponse), nil)
+		return
+	}
+	if len(uncommitted) == 0 {
+		onDone(new(kmsg.TxnOffsetCommitRequest), new(kmsg.TxnOffsetCommitResponse), nil)
+		return
+	}
+
+	g := cl.consumer.group
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	if !g.offsetsAddedToTxn {
+		if err := cl.addOffsetsToTxn(g.ctx, g.id); err != nil {
+			if onDone != nil {
+				onDone(nil, nil, err)
+			}
+			return
+		}
+	}
+
+	g.commitTxn(ctx, uncommitted, onDone)
+}
+
+// addOffsetsToTxn ties a transactional producer to a group. Since this
+// requires a producer ID, this initializes one if it is not yet initialized.
+// This would only be the case if trying to commit before the init that occurs
+// on the first produce is complete.
+func (c *Client) addOffsetsToTxn(ctx context.Context, group string) error {
+	var idLoadingCh <-chan struct{}
+	c.producer.idMu.Lock()
+	if atomic.LoadUint32(&c.producer.idLoaded) == 0 {
+		if c.producer.idLoadingCh == nil {
+			c.producer.idLoadingCh = make(chan struct{})
+			go c.initProducerID()
+		}
+		idLoadingCh = c.producer.idLoadingCh
+	}
+	c.producer.idMu.Unlock()
+	if idLoadingCh != nil {
+		<-idLoadingCh
+	}
+	if atomic.LoadUint32(&c.producer.idLoaded) == 0 {
+		return errors.New("unable to init producer ID")
+	}
+
+	kresp, err := c.Request(ctx, &kmsg.AddOffsetsToTxnRequest{
+		TransactionalID: *c.cfg.producer.txnID,
+		ProducerID:      c.producer.id,
+		ProducerEpoch:   c.producer.epoch,
+		Group:           group,
+	})
+	if err != nil {
+		return err
+	}
+	resp := kresp.(*kmsg.AddOffsetsToTxnResponse)
+	if err = kerr.ErrorForCode(resp.ErrorCode); err != nil {
+		return err
+	}
+	return nil
+}
+
+// commitTxn is ALMOST EXACTLY THE SAME as commit, but changed for txn types.
+// We likely do not need to try to hard to invalidate old commits, since there
+// should only be one commit per transaction.
+func (g *groupConsumer) commitTxn(
+	ctx context.Context,
+	uncommitted map[string]map[int32]EpochOffset,
+	onDone func(*kmsg.TxnOffsetCommitRequest, *kmsg.TxnOffsetCommitResponse, error),
+) {
+	if onDone == nil { // note we must always call onDone
+		onDone = func(_ *kmsg.TxnOffsetCommitRequest, _ *kmsg.TxnOffsetCommitResponse, _ error) {}
+	}
+	if len(uncommitted) == 0 { // only empty if called thru autocommit / default revoke
+		onDone(new(kmsg.TxnOffsetCommitRequest), new(kmsg.TxnOffsetCommitResponse), nil)
+		return
+	}
+
+	if g.commitCancel != nil {
+		g.commitCancel() // cancel any prior commit
+	}
+	priorDone := g.commitDone
+
+	commitCtx, commitCancel := context.WithCancel(g.ctx) // enable ours to be canceled and waited for
+	commitDone := make(chan struct{})
+
+	g.commitCancel = commitCancel
+	g.commitDone = commitDone
+
+	memberID := g.memberID
+	req := &kmsg.TxnOffsetCommitRequest{
+		TransactionalID: *g.cl.cfg.producer.txnID,
+		Group:           g.id,
+		ProducerID:      g.cl.producer.id,
+		ProducerEpoch:   g.cl.producer.epoch,
+	}
+
+	if ctx.Done() != nil {
+		go func() {
+			select {
+			case <-ctx.Done():
+				commitCancel()
+			case <-commitCtx.Done():
+			}
+		}()
+	}
+
+	go func() {
+		defer close(commitDone) // allow future commits to continue when we are done
+		defer commitCancel()
+		if priorDone != nil { // wait for any prior request to finish
+			<-priorDone
+		}
+
+		for topic, partitions := range uncommitted {
+			req.Topics = append(req.Topics, kmsg.TxnOffsetCommitRequestTopic{
+				Topic: topic,
+			})
+			reqTopic := &req.Topics[len(req.Topics)-1]
+			for partition, eo := range partitions {
+				reqTopic.Partitions = append(reqTopic.Partitions, kmsg.TxnOffsetCommitRequestTopicPartition{
+					Partition:   partition,
+					Offset:      eo.Offset,
+					LeaderEpoch: eo.Epoch,
+					Metadata:    &memberID,
+				})
+			}
+		}
+
+		var kresp kmsg.Response
+		var err error
+		if len(req.Topics) > 0 {
+			kresp, err = g.cl.Request(commitCtx, req)
+		}
+		if err != nil {
+			onDone(req, nil, err)
+			return
+		}
+		resp := kresp.(*kmsg.TxnOffsetCommitResponse)
+		g.updateCommittedTxn(req, resp)
+		onDone(req, resp, nil)
+	}()
+}
+
+// updateCommittedTxn is EXACTLY THE SAME as updateCommitted, minus generation
+// checking. It's times like this function where generics would be quite
+// helpful.
+func (g *groupConsumer) updateCommittedTxn(
+	req *kmsg.TxnOffsetCommitRequest,
+	resp *kmsg.TxnOffsetCommitResponse,
+) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	if g.uncommitted == nil || // just in case
+		len(req.Topics) != len(resp.Topics) { // bad kafka TODO fatal error
+		return
+	}
+
+	sort.Slice(req.Topics, func(i, j int) bool {
+		return req.Topics[i].Topic < req.Topics[j].Topic
+	})
+	sort.Slice(resp.Topics, func(i, j int) bool {
+		return resp.Topics[i].Topic < resp.Topics[j].Topic
+	})
+
+	for i := range resp.Topics {
+		reqTopic := &req.Topics[i]
+		respTopic := &resp.Topics[i]
+		topic := g.uncommitted[respTopic.Topic]
+		if topic == nil || // just in case
+			reqTopic.Topic != respTopic.Topic || // bad kafka
+			len(reqTopic.Partitions) != len(respTopic.Partitions) { // same
+			continue
+		}
+
+		sort.Slice(reqTopic.Partitions, func(i, j int) bool {
+			return reqTopic.Partitions[i].Partition < reqTopic.Partitions[j].Partition
+		})
+		sort.Slice(respTopic.Partitions, func(i, j int) bool {
+			return respTopic.Partitions[i].Partition < respTopic.Partitions[j].Partition
+		})
+
+		for i := range respTopic.Partitions {
+			reqPart := &reqTopic.Partitions[i]
+			respPart := &respTopic.Partitions[i]
+			uncommit, exists := topic[respPart.Partition]
+			if !exists || // just in case
+				respPart.ErrorCode != 0 || // bad commit
+				reqPart.Partition != respPart.Partition { // bad kafka
+				continue
+			}
+
+			uncommit.committed = EpochOffset{
+				reqPart.LeaderEpoch,
+				reqPart.Offset,
+			}
+			topic[respPart.Partition] = uncommit
+		}
+	}
 }

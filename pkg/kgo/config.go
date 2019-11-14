@@ -63,6 +63,7 @@ func defaultCfg() cfg {
 		},
 
 		producer: producerCfg{
+			txnTimeout:          60 * time.Second,
 			acks:                RequireAllISRAcks(),
 			compression:         []CompressionCodec{NoCompression()},
 			maxRecordBatchBytes: 1000000, // Kafka max.message.bytes default is 1000012
@@ -72,10 +73,11 @@ func defaultCfg() cfg {
 		},
 
 		consumer: consumerCfg{
-			maxWait:      500,
-			maxBytes:     50 << 20,
-			maxPartBytes: 10 << 20,
-			resetOffset:  NewOffset(AtStart()),
+			maxWait:        500,
+			maxBytes:       50 << 20,
+			maxPartBytes:   10 << 20,
+			resetOffset:    NewOffset(AtStart()),
+			isolationLevel: 0,
 		},
 	}
 }
@@ -212,6 +214,7 @@ func WithSASL(sasls ...sasl.Mechanism) Opt {
 
 type producerCfg struct {
 	txnID       *string
+	txnTimeout  time.Duration
 	acks        RequiredAcks
 	compression []CompressionCodec // order of preference
 
@@ -371,13 +374,47 @@ func WithProduceRecordTimeout(timeout time.Duration) Opt {
 	return clientOpt{func(cfg *cfg) { cfg.producer.recordTimeout = timeout }}
 }
 
+// WithTransactionalID sets a transactional ID for the client, ensuring that
+// records are produced transactionally under this ID (exactly once semantics).
+//
+// For transactions, the transactional ID is only one half of the equation. You
+// must also assign a group to consume from.
+//
+// To produce transactionally, you first BeginTransaction, then produce records
+// consumed from a group, then you EndTransaction. All records prodcued outside
+// of a transaction will fail immediately with an error.
+//
+// After producing a batch, you must commit what you consumed. Autocommitting
+// offsets is disabled during transactional consuming / producing.
+//
+// Note that, unless using Kafka 2.5.0, a consumer group rebalance may be
+// problematic. Production should finish and be committed before the client
+// rejoins the group. It may be safer to use an eager group balancer and just
+// abort the transaction.
+func WithTransactionalID(id string) Opt {
+	return clientOpt{func(cfg *cfg) { cfg.producer.txnID = &id }}
+}
+
+// WithTransactionTimeout sets the allowed for a transaction, overriding the
+// default 60s. It may be a good idea to set this under the rebalance timeout
+// for a group, so that a produce will not complete successfully after the
+// consumer group has already moved the partitions the consumer/producer is
+// working on from one group member to another.
+//
+// Transaction timeouts begin when the first record is produced within a
+// transaction, not when a transaction begins.
+func WithTransactionTimeout(timeout time.Duration) Opt {
+	return clientOpt{func(cfg *cfg) { cfg.producer.txnTimeout = timeout }}
+}
+
 // ********** CONSUMER CONFIGURATION **********
 
 type consumerCfg struct {
-	maxWait      int32
-	maxBytes     int32
-	maxPartBytes int32
-	resetOffset  Offset
+	maxWait        int32
+	maxBytes       int32
+	maxPartBytes   int32
+	resetOffset    Offset
+	isolationLevel int8
 }
 
 func (cfg *consumerCfg) validate() error {
@@ -419,4 +456,23 @@ func WithConsumeMaxPartitionBytes(b int32) Opt {
 // OffsetOutOfRange error, overriding the default ConsumeStartOffset.
 func WithConsumeResetOffset(offset Offset) Opt {
 	return clientOpt{func(cfg *cfg) { cfg.consumer.resetOffset = offset }}
+}
+
+// IsolationLevel controls whether uncommitted or only committed records are
+// returned from fetch requests.
+type IsolationLevel struct {
+	level int8
+}
+
+// ReadUncommitted, the default, is an isolation level that returns the latest
+// produced records, be they committed or not.
+func ReadUncommitted() IsolationLevel { return IsolationLevel{0} }
+
+// ReadCommitted is an isolation level to only fetch committed records.
+func ReadCommitted() IsolationLevel { return IsolationLevel{1} }
+
+// WithConsumeIsolationLevel sets the "isolation level" used for fetching
+// records, overriding the default ReadUncommitted.
+func WithConsumeIsolationLevel(level IsolationLevel) Opt {
+	return clientOpt{func(cfg *cfg) { cfg.consumer.isolationLevel = level.level }}
 }

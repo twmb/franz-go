@@ -317,9 +317,10 @@ func (source *recordSource) unuseAll(reqOffsets map[string]map[int32]*seqOffsetF
 
 func (source *recordSource) createRequest() (req *fetchRequest, again bool) {
 	req = &fetchRequest{
-		maxWait:      source.broker.client.cfg.consumer.maxWait,
-		maxBytes:     source.broker.client.cfg.consumer.maxBytes,
-		maxPartBytes: source.broker.client.cfg.consumer.maxPartBytes,
+		maxWait:        source.broker.client.cfg.consumer.maxWait,
+		maxBytes:       source.broker.client.cfg.consumer.maxBytes,
+		maxPartBytes:   source.broker.client.cfg.consumer.maxPartBytes,
+		isolationLevel: source.broker.client.cfg.consumer.isolationLevel,
 	}
 
 	source.mu.Lock()
@@ -802,6 +803,8 @@ type fetchRequest struct {
 	maxBytes     int32
 	maxPartBytes int32
 
+	isolationLevel int8
+
 	maxSeq     uint64
 	numOffsets int
 	offsets    map[string]map[int32]*seqOffsetFrom
@@ -836,14 +839,15 @@ func (f *fetchRequest) GetVersion() int16  { return f.version }
 func (f *fetchRequest) IsFlexible() bool   { return false } // version 11 is not flexible
 func (f *fetchRequest) AppendTo(dst []byte) []byte {
 	req := kmsg.FetchRequest{
-		Version:       f.version,
-		ReplicaID:     -1,
-		MaxWaitMillis: f.maxWait,
-		MinBytes:      1,
-		MaxBytes:      f.maxBytes,
-		SessionID:     -1,
-		SessionEpoch:  -1, // KIP-227, we do not want to support
-		Topics:        make([]kmsg.FetchRequestTopic, 0, len(f.offsets)),
+		Version:        f.version,
+		ReplicaID:      -1,
+		MaxWaitMillis:  f.maxWait,
+		MinBytes:       1,
+		MaxBytes:       f.maxBytes,
+		IsolationLevel: f.isolationLevel,
+		SessionID:      -1,
+		SessionEpoch:   -1, // KIP-227, we do not want to support
+		Topics:         make([]kmsg.FetchRequestTopic, 0, len(f.offsets)),
 	}
 	for topic, partitions := range f.offsets {
 		req.Topics = append(req.Topics, kmsg.FetchRequestTopic{

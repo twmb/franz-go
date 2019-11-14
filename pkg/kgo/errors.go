@@ -64,6 +64,18 @@ var (
 	// ErrRecordTimeout is returned when records are unable to be produced
 	// and they hit the configured record timeout limit.
 	ErrRecordTimeout = errors.New("records have timed out before they were able to be produced")
+
+	// ErrNotTransactional is returned when trying to begin a transaction
+	// with a client that does not have a transactional ID.
+	ErrNotTransactional = errors.New("invalid attempt to begin a transaction with a non-transactional client")
+
+	// ErrAlreadyInTransaction is returned if trying to begin a transaction
+	// while the producer is already in a transaction.
+	ErrAlreadyInTransaction = errors.New("invalid attempt to begin a transaction while already in a transaction")
+
+	// ErrNotInTransaction is returned when trying to produce a record
+	// outside of a transaction.
+	ErrNotInTransaction = errors.New("cannot produce record transactionally if not in a transaction")
 )
 
 // ErrDataLoss is returned for Kafka >=2.1.0 when data loss is detected and the

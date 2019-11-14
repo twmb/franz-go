@@ -599,7 +599,8 @@ func (o *offsetsWaitingLoad) setTopicPartForList(topic string, partition int32, 
 }
 
 func (c *consumer) tryBrokerOffsetLoadList(broker *broker, load *offsetsWaitingLoad) {
-	kresp, err := broker.waitResp(c.cl.ctx, load.buildListReq())
+	kresp, err := broker.waitResp(c.cl.ctx,
+		load.buildListReq(broker.client.cfg.consumer.isolationLevel))
 	if err != nil {
 		load.mergeInto(c)
 		return
@@ -688,10 +689,11 @@ func (c *consumer) tryBrokerOffsetLoadList(broker *broker, load *offsetsWaitingL
 	}
 }
 
-func (o *offsetsWaitingLoad) buildListReq() *kmsg.ListOffsetsRequest {
+func (o *offsetsWaitingLoad) buildListReq(isolationLevel int8) *kmsg.ListOffsetsRequest {
 	req := &kmsg.ListOffsetsRequest{
-		ReplicaID: -1,
-		Topics:    make([]kmsg.ListOffsetsRequestTopic, 0, len(o.waitingList)),
+		ReplicaID:      -1,
+		IsolationLevel: isolationLevel,
+		Topics:         make([]kmsg.ListOffsetsRequestTopic, 0, len(o.waitingList)),
 	}
 	for topic, partitions := range o.waitingList {
 		parts := make([]kmsg.ListOffsetsRequestTopicPartition, 0, len(partitions))

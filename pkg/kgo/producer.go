@@ -2,6 +2,7 @@ package kgo
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -12,20 +13,68 @@ import (
 
 // TODO KIP-359 leader epoch in produce request when it is released
 
-// func (p *Producer) BeginTransaction() *ProducerTransaction
-// func (p *ProducerTransaction) Produce(r *Record)
+// BeginTransaction sets the client to a transactional state, erroring if there
+// is no transactional ID or if the client is already in a transaction.
+func (c *Client) BeginTransaction() error {
+	if c.cfg.producer.txnID == nil {
+		return ErrNotTransactional
+	}
+	if atomic.SwapUint32(&c.producer.inTxn, 1) == 1 {
+		return ErrAlreadyInTransaction
+	}
+	return nil
+}
+
+// EndTransaction ends a transaction. This is invalid to call at any time other
+// than to finish a transaction that at least one record has been produced to.
+//
+// It is invalid to call this function multiple times concurrently.
+func (c *Client) EndTransaction(ctx context.Context, commit bool) error {
+	if atomic.LoadUint32(&c.producer.inTxn) != 1 {
+		return ErrNotInTransaction
+	}
+
+	defer func() {
+		if c.consumer.typ == consumerTypeGroup {
+			c.consumer.group.offsetsAddedToTxn = false
+		}
+		atomic.StoreUint32(&c.producer.inTxn, 0)
+	}()
+
+	if err := c.Flush(ctx); err != nil {
+		return err
+	}
+
+	if atomic.LoadUint32(&c.producer.idLoaded) == 0 {
+		return errors.New("producer ID not yet loaded after a flush!")
+	}
+
+	kresp, err := c.Request(ctx, &kmsg.EndTxnRequest{
+		TransactionalID: *c.cfg.producer.txnID,
+		ProducerID:      c.producer.id,
+		ProducerEpoch:   c.producer.epoch,
+		Commit:          commit,
+	})
+
+	if err != nil {
+		return err
+	}
+	return kerr.ErrorForCode(kresp.(*kmsg.EndTxnResponse).ErrorCode)
+}
 
 type producer struct {
 	bufferedRecords int64
 
-	id         int64
-	epoch      int16
-	idLoaded   int32
-	idMu       sync.Mutex
-	idLoading  bool
-	waitBuffer chan struct{}
+	id       int64
+	epoch    int16
+	idLoaded uint32
+	inTxn    uint32
+	flushing int32
 
-	flushing     int32
+	idMu        sync.Mutex
+	idLoadingCh chan struct{} // exists if id is loading
+	waitBuffer  chan struct{}
+
 	flushingMu   sync.Mutex
 	flushingCond *sync.Cond
 }
@@ -63,6 +112,10 @@ func (c *Client) Produce(
 		return kerr.MessageTooLarge
 	}
 
+	if c.cfg.producer.txnID != nil && atomic.LoadUint32(&c.producer.inTxn) != 1 {
+		return ErrNotInTransaction
+	}
+
 	if atomic.AddInt64(&c.producer.bufferedRecords, 1) > c.cfg.producer.maxBufferedRecords {
 		select {
 		case <-c.producer.waitBuffer:
@@ -78,10 +131,10 @@ func (c *Client) Produce(
 	}
 	pr := promisedRecord{promise, r}
 
-	if atomic.LoadInt32(&c.producer.idLoaded) == 0 {
+	if atomic.LoadUint32(&c.producer.idLoaded) == 0 {
 		var buffered bool
 		c.producer.idMu.Lock()
-		if atomic.LoadInt32(&c.producer.idLoaded) == 0 {
+		if atomic.LoadUint32(&c.producer.idLoaded) == 0 {
 			// unknownTopics is guarded under either the
 			// unknownTopicsMu or producer idMu. Since
 			// we must have an ID before we move to the
@@ -91,9 +144,9 @@ func (c *Client) Produce(
 			c.addUnknownTopicRecord(pr)
 			buffered = true
 
-			if !c.producer.idLoading {
-				c.producer.idLoading = true
-				go c.initIdempotentID()
+			if c.producer.idLoadingCh == nil {
+				c.producer.idLoadingCh = make(chan struct{})
+				go c.initProducerID()
 			}
 		}
 		c.producer.idMu.Unlock()
@@ -167,24 +220,30 @@ func (c *Client) doPartitionRecord(parts *topicPartitions, partsData *topicParti
 	}
 }
 
-// initIdempotentID initalizes the client's producer ID for idempotent
+// initProducerID initalizes the client's producer ID for idempotent
 // producing only (no transactions, which are more special). After the first
 // load, this clears all buffered unknown topics.
-func (c *Client) initIdempotentID() {
-	err := c.doInitIdempotentID()
-
-	// If we were successful, to ensure ordering with concurrent produces,
-	// we must store idLoaded as the very last thing.
-	if err == nil {
-		defer atomic.StoreInt32(&c.producer.idLoaded, 1)
-	}
+func (c *Client) initProducerID() {
+	err := c.doInitProducerID()
 
 	// Grab our lock. We need to block producing until this function
 	// returns to ensure order.
 	c.producer.idMu.Lock()
 	defer c.producer.idMu.Unlock()
 
-	c.producer.idLoading = false
+	// If we were successful, we have to store that the ID is loaded before
+	// we release the mutex. Otherwise, something may grab the mu and still
+	// see the id is not loaded just before we store it is, and then it
+	// will forever sit buffered waiting for a load that will not happen.
+	//
+	// We cannot guard against two concurrent produces to the same topic,
+	// but that is fine.
+	if err == nil {
+		defer atomic.StoreUint32(&c.producer.idLoaded, 1)
+	}
+
+	close(c.producer.idLoadingCh)
+	c.producer.idLoadingCh = nil
 
 	unknown := c.unknownTopics
 	unknownWait := c.unknownTopicsWait
@@ -208,10 +267,15 @@ func (c *Client) initIdempotentID() {
 	}
 }
 
-// doInitIdempotentID is used to initialize the idempotent producer ID only. If
-// we are using transactions, more logic happens close to producing.
-func (c *Client) doInitIdempotentID() error {
-	kresp, err := c.Request(c.ctx, new(kmsg.InitProducerIDRequest))
+// doInitProducerID inits the idempotent ID and potentially the transactional
+// producer epoch.
+func (c *Client) doInitProducerID() error {
+	req := new(kmsg.InitProducerIDRequest)
+	if c.cfg.producer.txnID != nil {
+		req.TransactionalID = c.cfg.producer.txnID
+		req.TransactionTimeoutMillis = int32(c.cfg.producer.txnTimeout.Milliseconds())
+	}
+	kresp, err := c.Request(c.ctx, req)
 	if err != nil {
 		// If our broker is too old, then well...
 		//
@@ -225,7 +289,7 @@ func (c *Client) doInitIdempotentID() error {
 	}
 	resp := kresp.(*kmsg.InitProducerIDResponse)
 	c.producer.id = resp.ProducerID
-	c.producer.epoch = resp.ProducerEpoch // should always be 0
+	c.producer.epoch = resp.ProducerEpoch
 	return nil
 }
 
