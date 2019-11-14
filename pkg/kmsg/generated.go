@@ -6855,13 +6855,21 @@ func (v *DeleteRecordsResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
-// TODO
+// InitProducerIDRequest initializes a producer ID for idempotent transactions,
+// and if using transactions, a producer epoch. This is the first request
+// necessary to begin idempotent producing or transactions.
 type InitProducerIDRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
+	// TransactionalID is the ID to use for transactions if using transactions.
 	TransactionalID *string
 
+	// TransactionTimeoutMillis is how long a transaction is allowed before
+	// EndTxn is required.
+	//
+	// Note that this timeout only begins on the first AddPartitionsToTxn
+	// request.
 	TransactionTimeoutMillis int32
 }
 
@@ -6898,6 +6906,7 @@ func (v *InitProducerIDRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 
+// InitProducerIDResponse is returned for an InitProducerIDRequest.
 type InitProducerIDResponse struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
@@ -6908,23 +6917,33 @@ type InitProducerIDResponse struct {
 	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
 	ThrottleMillis int32
 
-	// CLUSTER_AUTHORIZATION_FAILED if idempotent and not authed
+	// CLUSTER_AUTHORIZATION_FAILED is returned when not using transactions if
+	// the client is not authorized for idempotent_write on cluster.
 	//
-	// transactional errors:
-	// TRANSACTIONAL_ID_AUTHORIZATION_FAILED if transactional and not authed
-	// INVALID_REQUEST if transactional id is an empty, non-null string
-	// INVALID_TRANSACTION_TIMEOUT if timeout equal to over over transaction.max.timeout.ms or under 0
-	// COORDINATOR_LOAD_IN_PROGRESS
-	// NOT_COORDINATOR
-	// COORDINATOR_NOT_AVAILABLE
-	// CONCURRENT_TRANSACTIONS
+	// TRANSACTIONAL_ID_AUTHORIZATION_FAILED is returned when using transactions
+	// if the client is not authorized to write on transactional_id.
+	//
+	// INVALID_REQUEST is returned if using transactions and the transactional id
+	// is an empty, non-null string
+	//
+	// COORDINATOR_LOAD_IN_PROGRESS is returned if the coordinator for this
+	// transactional ID is still loading.
+	//
+	// NOT_COORDINATOR is returned if the broker is not the coordinator for
+	// this transactional ID.
+	//
+	// INVALID_TRANSACTION_TIMEOUT is returned if using transactions and the timeout
+	// is equal to over over transaction.max.timeout.ms or under 0.
+	//
+	// CONCURRENT_TRANSACTIONS is returned if there is an ongoing transaction
+	// that is completing at the time this init is called.
 	ErrorCode int16
 
 	// ProducerID is the next producer ID that Kafka generated. This ID is used
 	// to ensure repeated produce requests do not result in duplicate records.
 	ProducerID int64
 
-	// the current producer epoch (txn only)
+	// ProducerEpoch is the producer epoch to use for transactions.
 	ProducerEpoch int16
 }
 
@@ -7185,22 +7204,34 @@ func (v *OffsetForLeaderEpochResponse) ReadFrom(src []byte) error {
 }
 
 type AddPartitionsToTxnRequestTopic struct {
+	// Topic is a topic name.
 	Topic string
 
+	// Partitions are partitions within a topic to add as part of the producer
+	// side of a transaction.
 	Partitions []int32
 }
 
-// TODO
+// AddPartitionsToTxnRequest begins the producer side of a transaction for all
+// partitions in the request. Before producing any records to a partition in
+// the transaction, that partition must have been added to the transaction with
+// this request.
 type AddPartitionsToTxnRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
+	// TransactionalID is the transactional ID to use for this request.
 	TransactionalID string
 
+	// ProducerID is the producer ID of the client for this transactional ID
+	// as received from InitProducerID.
 	ProducerID int64
 
+	// ProducerEpoch is the producer epoch of the client for this transactional ID
+	// as received from InitProducerID.
 	ProducerEpoch int16
 
+	// Topics are topics to add as part of the producer side of a transaction.
 	Topics []AddPartitionsToTxnRequestTopic
 }
 
@@ -7252,21 +7283,63 @@ func (v *AddPartitionsToTxnRequest) AppendTo(dst []byte) []byte {
 }
 
 type AddPartitionsToTxnResponseTopicPartition struct {
+	// Partition is a partition being responded to.
 	Partition int32
 
+	// ErrorCode is any error for this topic/partition commit.
+	//
+	// TRANSACTIONAL_ID_AUTHORIZATION_FAILED is returned if the client is
+	// not authorized for write with transactional IDs with the requested
+	// transactional ID.
+	//
+	// TOPIC_AUTHORIZATION_FAILED is returned for all topics that the client
+	// is not authorized to write to.
+	//
+	// UNKNOWN_TOPIC_OR_PARTITION is returned for all topics or partitions
+	// that the broker does not know of.
+	//
+	// OPERATION_NOT_ATTEMPTED is returned if any of the above errors occur
+	// for all partitions that did not have the above errors.
+	//
+	// INVALID_REQUEST is returned if the transactional ID is invalid.
+	//
+	// COORDINATOR_LOAD_IN_PROGRESS is returned if the coordinator for this
+	// transactional ID is still loading.
+	//
+	// NOT_COORDINATOR is returned if the broker is not the coordinator for
+	// this transactional ID.
+	//
+	// INVALID_PRODUCER_ID_MAPPING is returned if the produce request used
+	// a producer ID that is not tied to the transactional ID (i.e., mismatch
+	// from what was returned from InitProducerID).
+	//
+	// INVALID_PRODUCER_EPOCH is returned if the requested epoch does not match
+	// the broker epoch for this transactional ID.
+	//
+	// CONCURRENT_TRANSACTIONS is returned if there is an ongoing transaction for
+	// this transactional ID, if the producer ID and epoch matches the broker's.
 	ErrorCode int16
 }
 type AddPartitionsToTxnResponseTopic struct {
+	// Topic is a topic being responded to.
 	Topic string
 
+	// Partitions are responses to partitions in the request.
 	Partitions []AddPartitionsToTxnResponseTopicPartition
 }
+
+// AddPartitionsToTxnResponse is a response to an AddPartitionsToTxnRequest.
 type AddPartitionsToTxnResponse struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
+	// ThrottleMillis is how long of a throttle Kafka will apply to the client
+	// after this request.
+	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
+	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
 	ThrottleMillis int32
 
+	// Topics are responses to topics in the request.
 	Topics []AddPartitionsToTxnResponseTopic
 }
 
@@ -7330,16 +7403,30 @@ func (v *AddPartitionsToTxnResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+// AddOffsetsToTxnRequest is a request that ties produced records to what group
+// is being consumed for the transaction.
+//
+// This request must be called before TxnOffsetCommitRequest.
+//
+// Internally, this request simply adds the __consumer_offsets topic as a
+// partition for this transaction with AddPartitionsToTxn for the partition
+// in that topic that contains the group.
 type AddOffsetsToTxnRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
+	// TransactionalID is the transactional ID to use for this request.
 	TransactionalID string
 
+	// ProducerID is the producer ID of the client for this transactional ID
+	// as received from InitProducerID.
 	ProducerID int64
 
+	// ProducerEpoch is the producer epoch of the client for this transactional ID
+	// as received from InitProducerID.
 	ProducerEpoch int16
 
+	// Group is the group to tie this transaction to.
 	Group string
 }
 
@@ -7375,12 +7462,27 @@ func (v *AddOffsetsToTxnRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 
+// AddOffsetsToTxnResponse is a response to an AddOffsetsToTxnRequest.
 type AddOffsetsToTxnResponse struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
+	// ThrottleMillis is how long of a throttle Kafka will apply to the client
+	// after this request.
+	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
+	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
 	ThrottleMillis int32
 
+	// ErrorCode is any error for this topic/partition commit.
+	//
+	// TRANSACTIONAL_ID_AUTHORIZATION_FAILED is returned if the client is
+	// not authorized for write with transactional IDs with the requested
+	// transactional ID.
+	//
+	// GROUP_AUTHORIZATION_FAILED is returned if the client is not authorized
+	// to read group with the requested group id.
+	//
+	// This also can return any error that AddPartitionsToTxn returns.
 	ErrorCode int16
 }
 
@@ -7400,17 +7502,25 @@ func (v *AddOffsetsToTxnResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+// EndTxnRequest ends a transaction. This should be called after
+// TxnOffsetCommitRequest.
 type EndTxnRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
+	// TransactionalID is the transactional ID to use for this request.
 	TransactionalID string
 
+	// ProducerID is the producer ID of the client for this transactional ID
+	// as received from InitProducerID.
 	ProducerID int64
 
+	// ProducerEpoch is the producer epoch of the client for this transactional ID
+	// as received from InitProducerID.
 	ProducerEpoch int16
 
-	TransactionalResult bool
+	// Commit is whether to commit this transaction: true for yes, false for abort.
+	Commit bool
 }
 
 func (*EndTxnRequest) Key() int16                 { return 26 }
@@ -7437,18 +7547,43 @@ func (v *EndTxnRequest) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendInt16(dst, v)
 	}
 	{
-		v := v.TransactionalResult
+		v := v.Commit
 		dst = kbin.AppendBool(dst, v)
 	}
 	return dst
 }
 
+// EndTxnResponse is a response for an EndTxnRequest.
 type EndTxnResponse struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
+	// ThrottleMillis is how long of a throttle Kafka will apply to the client
+	// after this request.
+	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
+	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
 	ThrottleMillis int32
 
+	// ErrorCode is any error for this topic/partition commit.
+	//
+	// TRANSACTIONAL_ID_AUTHORIZATION_FAILED is returned if the client is
+	// not authorized for write with transactional IDs with the requested
+	// transactional ID.
+	//
+	// INVALID_REQUEST is returned if the transactional ID is invalid.
+	//
+	// INVALID_PRODUCER_ID_MAPPING is returned if the produce request used
+	// a producer ID that is not tied to the transactional ID (i.e., mismatch
+	// from what was returned from InitProducerID).
+	//
+	// INVALID_PRODUCER_EPOCH is returned if the requested epoch does not match
+	// the broker epoch for this transactional ID.
+	//
+	// CONCURRENT_TRANSACTIONS is returned if there is an ongoing transaction for
+	// this transactional ID, if the producer ID and epoch matches the broker's.
+	//
+	// INVALID_TXN_STATE is returned if this request is attempted at the wrong
+	// time (given the order of how transaction requests should go).
 	ErrorCode int16
 }
 
@@ -7484,6 +7619,10 @@ type WriteTxnMarkersRequestMarker struct {
 
 	CoordinatorEpoch int32
 }
+
+// WriteTxnMarkersRequest is a broker-to-broker request that Kafka uses to
+// finish transactions. Since this is specifically for inter-broker
+// communication, this is left undocumented.
 type WriteTxnMarkersRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
@@ -7563,6 +7702,8 @@ type WriteTxnMarkersResponseMarker struct {
 
 	Topics []WriteTxnMarkersResponseMarkerTopic
 }
+
+// WriteTxnMarkersResponse is a response to a WriteTxnMarkersRequest.
 type WriteTxnMarkersResponse struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
@@ -7649,8 +7790,11 @@ func (v *WriteTxnMarkersResponse) ReadFrom(src []byte) error {
 }
 
 type TxnOffsetCommitRequestTopicPartition struct {
+	// Partition is a partition to add for a pending commit.
 	Partition int32
 
+	// Offset is the offset within partition to commit once EndTxnRequest is
+	// called (with commit; abort obviously aborts).
 	Offset int64
 
 	// LeaderEpoch, proposed in KIP-320 and introduced in Kafka 2.1.0,
@@ -7661,34 +7805,50 @@ type TxnOffsetCommitRequestTopicPartition struct {
 	// To skip log truncation checking, use -1.
 	LeaderEpoch int32 // v2+
 
+	// Metadata is optional metadata the client wants to include with this
+	// commit.
 	Metadata *string
 }
 type TxnOffsetCommitRequestTopic struct {
+	// Topic is a topic to add for a pending commit.
 	Topic string
 
+	// Partitions are partitions to add for pending commits.
 	Partitions []TxnOffsetCommitRequestTopicPartition
 }
+
+// TxnOffsetCommitRequest sends offsets that are a part of this transaction
+// to be committed once the transaction itself finishes. This effectively
+// replaces OffsetCommitRequest for when using transactions.
 type TxnOffsetCommitRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
+	// TransactionalID is the transactional ID to use for this request.
 	TransactionalID string
 
+	// Group is the group consumed in this transaction and to be used for
+	// committing.
 	Group string
 
+	// ProducerID is the producer ID of the client for this transactional ID
+	// as received from InitProducerID.
 	ProducerID int64
 
+	// ProducerEpoch is the producer epoch of the client for this transactional ID
+	// as received from InitProducerID.
 	ProducerEpoch int16
 
+	// Topics are topics to add for pending commits.
 	Topics []TxnOffsetCommitRequestTopic
 }
 
-func (*TxnOffsetCommitRequest) Key() int16                 { return 28 }
-func (*TxnOffsetCommitRequest) MaxVersion() int16          { return 2 }
-func (v *TxnOffsetCommitRequest) SetVersion(version int16) { v.Version = version }
-func (v *TxnOffsetCommitRequest) GetVersion() int16        { return v.Version }
-func (v *TxnOffsetCommitRequest) IsFlexible() bool         { return false }
-func (v *TxnOffsetCommitRequest) IsTxnCoordinatorRequest() {}
+func (*TxnOffsetCommitRequest) Key() int16                   { return 28 }
+func (*TxnOffsetCommitRequest) MaxVersion() int16            { return 2 }
+func (v *TxnOffsetCommitRequest) SetVersion(version int16)   { v.Version = version }
+func (v *TxnOffsetCommitRequest) GetVersion() int16          { return v.Version }
+func (v *TxnOffsetCommitRequest) IsFlexible() bool           { return false }
+func (v *TxnOffsetCommitRequest) IsGroupCoordinatorRequest() {}
 func (v *TxnOffsetCommitRequest) ResponseKind() Response {
 	return &TxnOffsetCommitResponse{Version: v.Version}
 }
@@ -7750,21 +7910,70 @@ func (v *TxnOffsetCommitRequest) AppendTo(dst []byte) []byte {
 }
 
 type TxnOffsetCommitResponseTopicPartition struct {
+	// Partition is the partition this response is for.
 	Partition int32
 
+	// ErrorCode is any error for this topic/partition commit.
+	//
+	// TRANSACTIONAL_ID_AUTHORIZATION_FAILED is returned if the client is
+	// not authorized for write with transactional IDs with the requested
+	// transactional ID.
+	//
+	// GROUP_AUTHORIZATION_FAILED is returned if the client is not authorized
+	// to read group with the requested group id.
+	//
+	// TOPIC_AUTHORIZATION_FAILED is returned for all topics that the client
+	// is not authorized to read.
+	//
+	// UNKNOWN_TOPIC_OR_PARTITION is returned for all topics or partitions
+	// that the broker does not know of.
+	//
+	// INVALID_GROUP_ID is returned if the requested group does not exist.
+	//
+	// COORDINATOR_NOT_AVAILABLE is returned if the broker is not yet fully
+	// started or is shutting down, or if the group was just deleted or is
+	// migrating to another broker.
+	//
+	// COORDINATOR_LOAD_IN_PROGRESS is returned if the group is still loading.
+	//
+	// NOT_COORDINATOR is returned if the broker is not the coordinator for
+	// the group.
+	//
+	// FENCED_INSTANCE_ID is returned if the member is fenced (another newer
+	// transactional member is using the same instance ID).
+	//
+	// UNKNOWN_MEMBER_ID is returned if the consumer group does not know of
+	// this member.
+	//
+	// ILLEGAL_GENERATION is returned if the consumer group's generation is
+	// different than the requested generation.
+	//
+	// OFFSET_METADATA_TOO_LARGE is returned if the commit metadata is too
+	// large.
+	//
+	// REBALANCE_IN_PROGRESS is returned if the group is completing a rebalance.
 	ErrorCode int16
 }
 type TxnOffsetCommitResponseTopic struct {
+	// Topic is the topic this response is for.
 	Topic string
 
+	// Partitions contains responses to the partitions in this topic.
 	Partitions []TxnOffsetCommitResponseTopicPartition
 }
+
+// TxnOffsetCommitResponse is a response to a TxnOffsetCommitRequest.
 type TxnOffsetCommitResponse struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
+	// ThrottleMillis is how long of a throttle Kafka will apply to the client
+	// after this request.
+	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
+	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
 	ThrottleMillis int32
 
+	// Topics contains responses to the topics in the request.
 	Topics []TxnOffsetCommitResponseTopic
 }
 
