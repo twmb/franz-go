@@ -497,6 +497,8 @@ func (c *Client) handleGroupReq(ctx context.Context, req kmsg.GroupCoordinatorRe
 
 	case *kmsg.OffsetCommitRequest:
 		return c.handleGroupReqSimple(ctx, t.Group, req)
+	case *kmsg.TxnOffsetCommitRequest:
+		return c.handleGroupReqSimple(ctx, t.Group, req)
 	case *kmsg.OffsetFetchRequest:
 		return c.handleGroupReqSimple(ctx, t.Group, req)
 	case *kmsg.JoinGroupRequest:
@@ -566,7 +568,10 @@ func (c *Client) handleGroupReq(ctx context.Context, req kmsg.GroupCoordinatorRe
 // the coordinator for the given group ID.
 //
 // Response errors are inspected to see if they are retriable group errors;
-// if so, the coordinator is deleted.
+// that is, th group is loading or not available, not individual partition
+// errors. If so, the coordinator is deleted. Thus, if a response contains
+// many errors (one for each partition, say), then only one partition needs
+// to be investigated.
 func (c *Client) handleGroupReqSimple(ctx context.Context, group string, req kmsg.Request) (kmsg.Response, error) {
 	coordinator, err := c.loadCoordinator(ctx, coordinatorKey{
 		name: group,
@@ -585,6 +590,12 @@ func (c *Client) handleGroupReqSimple(ctx context.Context, group string, req kms
 	case *kmsg.OffsetCommitResponse:
 		if len(t.Topics) > 0 && len(t.Topics[0].Partitions) > 0 {
 			errCode = t.Topics[0].Partitions[0].ErrorCode
+		}
+	case *kmsg.TxnOffsetCommitResponse:
+		if len(t.Topics) > 0 {
+			if len(t.Topics[0].Partitions) > 0 {
+				errCode = t.Topics[0].Partitions[0].ErrorCode
+			}
 		}
 	case *kmsg.OffsetFetchResponse:
 		if t.Version >= 2 {
@@ -652,8 +663,6 @@ func (c *Client) handleTxnReq(ctx context.Context, req kmsg.TxnCoordinatorReques
 		return c.handleTxnRequest(ctx, t.TransactionalID, req)
 	case *kmsg.EndTxnRequest:
 		return c.handleTxnRequest(ctx, t.TransactionalID, req)
-	case *kmsg.TxnOffsetCommitRequest:
-		return c.handleTxnRequest(ctx, t.TransactionalID, req)
 	}
 }
 
@@ -661,7 +670,10 @@ func (c *Client) handleTxnReq(ctx context.Context, req kmsg.TxnCoordinatorReques
 // that transaction.
 //
 // The error is inspected to see if it is a retriable group error and, if so,
-// the coordinator is deleted.
+// the coordinator is deleted. That is, we only retry on coordinator errors,
+// which would be common on all partitions. Thus, if the response contains many
+// errors due to many partitions, only the first partition needs to be
+// investigated.
 func (c *Client) handleTxnRequest(ctx context.Context, txnID string, req kmsg.Request) (kmsg.Response, error) {
 	coordinator, err := c.loadCoordinator(ctx, coordinatorKey{
 		name: txnID,
@@ -689,12 +701,6 @@ func (c *Client) handleTxnRequest(ctx context.Context, txnID string, req kmsg.Re
 		errCode = t.ErrorCode
 	case *kmsg.EndTxnResponse:
 		errCode = t.ErrorCode
-	case *kmsg.TxnOffsetCommitResponse:
-		if len(t.Topics) > 0 {
-			if len(t.Topics[0].Partitions) > 0 {
-				errCode = t.Topics[0].Partitions[0].ErrorCode
-			}
-		}
 	}
 
 	switch txnErr := kerr.ErrorForCode(errCode); txnErr {
