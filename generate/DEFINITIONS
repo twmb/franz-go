@@ -137,9 +137,10 @@ RecordBatch => not top level
   //
   // Bits 0 thru 3 correspond to compression:
   //   - 000 is no compression
-  //   - 001 is snappy compression
-  //   - 010 is lz4 compression
-  //   - 011 is zstd compression (produce request version 7+)
+  //   - 001 is gzip compression
+  //   - 010 is snappy compression
+  //   - 011 is lz4 compression
+  //   - 100 is zstd compression (produce request version 7+)
   //
   // Bit 4 is the timestamp type, with 0 meaning CreateTime corresponding
   // to the timestamp being from the producer, and 1 meaning LogAppendTime
@@ -152,7 +153,7 @@ RecordBatch => not top level
   // Control messages are used to enable transactions and are generated from
   // the broker. Clients should not return control batches to applications.
   Attributes: int16
-  // LastOffsetDelta is the offset of the last message in a batch. This is
+  // LastOffsetDelta is the offset of the last message in a batch. This is used
   // by the broker to ensure correct behavior even with batch compaction.
   LastOffsetDelta: int32
   // FirstTimestamp is the timestamp (in milliseconds) of the first record
