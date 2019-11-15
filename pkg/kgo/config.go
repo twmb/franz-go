@@ -391,6 +391,9 @@ func WithProduceRecordTimeout(timeout time.Duration) Opt {
 // problematic. Production should finish and be committed before the client
 // rejoins the group. It may be safer to use an eager group balancer and just
 // abort the transaction.
+//
+// Lastly, the default read level is READ_UNCOMMITTED. Be sure to use the
+// WithConsumeIsolationLevel option if you want to only read committed.
 func WithTransactionalID(id string) Opt {
 	return clientOpt{func(cfg *cfg) { cfg.producer.txnID = &id }}
 }
@@ -415,6 +418,7 @@ type consumerCfg struct {
 	maxPartBytes   int32
 	resetOffset    Offset
 	isolationLevel int8
+	keepControl    bool
 }
 
 func (cfg *consumerCfg) validate() error {
@@ -475,4 +479,12 @@ func ReadCommitted() IsolationLevel { return IsolationLevel{1} }
 // records, overriding the default ReadUncommitted.
 func WithConsumeIsolationLevel(level IsolationLevel) Opt {
 	return clientOpt{func(cfg *cfg) { cfg.consumer.isolationLevel = level.level }}
+}
+
+// WithConsumeKeepControl sets the client to keep control messages and return
+// them with fetches, overriding the default that discards them.
+//
+// Generally, control messages are not useful.
+func WithConsumeKeepControl() Opt {
+	return clientOpt{func(cfg *cfg) { cfg.consumer.keepControl = true }}
 }

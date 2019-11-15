@@ -70,6 +70,8 @@ type consumption struct {
 	topic     string
 	partition int32
 
+	keepControl bool
+
 	mu sync.Mutex
 
 	source             *recordSource
@@ -502,7 +504,7 @@ func (source *recordSource) handleReqResp(req *fetchRequest, kresp kmsg.Response
 		}
 		source.broker.client.consumer.addSourceReadyForDraining(req.maxSeq, source)
 	} else {
-		source.unuseAll(req.offsets)
+		source.updateOffsets(req.offsets)
 	}
 }
 
@@ -530,6 +532,8 @@ func (o *seqOffsetFrom) processRespPartition(
 		LastStableOffset: rPartition.LastStableOffset,
 	}
 
+	keepControl := o.from.keepControl
+
 	switch version {
 	case 0, 1:
 		o.processV0Messages(topic, &fetchPart, kmsg.ReadV0Messages(rPartition.RecordBatches))
@@ -542,8 +546,9 @@ func (o *seqOffsetFrom) processRespPartition(
 			numPartitionRecords += int(batches[i].NumRecords)
 		}
 		fetchPart.Records = make([]*Record, 0, numPartitionRecords)
+		aborter := buildAborter(rPartition)
 		for i := range batches {
-			o.processRecordBatch(topic, &fetchPart, &batches[i])
+			o.processRecordBatch(topic, &fetchPart, &batches[i], keepControl, aborter)
 			if fetchPart.Err != nil {
 				break
 			}
@@ -578,6 +583,35 @@ func (o *seqOffsetFrom) processRespPartition(
 	return fetchPart, needsMetaUpdate
 }
 
+type aborter map[int64][]int64
+
+func buildAborter(rPartition *kmsg.FetchResponseTopicPartition) aborter {
+	if len(rPartition.AbortedTransactions) == 0 {
+		return nil
+	}
+	a := make(aborter)
+	for _, abort := range rPartition.AbortedTransactions {
+		a[abort.ProducerID] = append(a[abort.ProducerID], abort.FirstOffset)
+	}
+	return a
+}
+
+func (a aborter) shouldAbortBatch(b *kmsg.RecordBatch) bool {
+	if len(a) == 0 || b.Attributes&0b0001_0000 == 0 {
+		return false
+	}
+	pidAborts := a[b.ProducerID]
+	if len(pidAborts) == 0 {
+		return false
+	}
+	// If the first offset in this batch is less than the first offset
+	// aborted, then this batch is not aborted.
+	if b.FirstOffset < pidAborts[0] {
+		return false
+	}
+	return true
+}
+
 //////////////////////////////////////
 // processing records to fetch part //
 //////////////////////////////////////
@@ -586,6 +620,8 @@ func (o *seqOffset) processRecordBatch(
 	topic string,
 	fetchPart *FetchPartition,
 	batch *kmsg.RecordBatch,
+	keepControl bool,
+	aborter aborter,
 ) {
 	if batch.Magic != 2 {
 		fetchPart.Err = fmt.Errorf("unknown batch magic %d", batch.Magic)
@@ -604,6 +640,9 @@ func (o *seqOffset) processRecordBatch(
 		fetchPart.Err = fmt.Errorf("invalid record batch: %v", err)
 		return
 	}
+
+	abortBatch := aborter.shouldAbortBatch(batch)
+	var lastRecord *Record
 	for i := range krecords {
 		record := recordToRecord(
 			topic,
@@ -611,7 +650,17 @@ func (o *seqOffset) processRecordBatch(
 			batch,
 			&krecords[i],
 		)
-		o.maybeAddRecord(fetchPart, record)
+		lastRecord = record
+		o.maybeAddRecord(fetchPart, record, keepControl, abortBatch)
+	}
+
+	if abortBatch && lastRecord != nil && lastRecord.Attrs.IsControl() {
+		remaining := aborter[batch.ProducerID][1:]
+		if len(remaining) == 0 {
+			delete(aborter, batch.ProducerID)
+		} else {
+			aborter[batch.ProducerID] = remaining
+		}
 	}
 }
 
@@ -660,7 +709,7 @@ func (o *seqOffset) processV1Message(
 		return
 	}
 	record := v1MessageToRecord(topic, fetchPart.Partition, message)
-	o.maybeAddRecord(fetchPart, record)
+	o.maybeAddRecord(fetchPart, record, false, false)
 }
 
 func (o *seqOffset) processV0Messages(
@@ -708,16 +757,28 @@ func (o *seqOffset) processV0Message(
 		return
 	}
 	record := v0MessageToRecord(topic, fetchPart.Partition, message)
-	o.maybeAddRecord(fetchPart, record)
+	o.maybeAddRecord(fetchPart, record, false, false)
 }
 
-func (o *seqOffset) maybeAddRecord(fetchPart *FetchPartition, record *Record) {
+// maybeAddRecord keeps a record if it is within our range of offsets to keep.
+// However, if the record is being aborted, or the record is a control record
+// and the client does not want to keep control records, this does not keep
+// the record and instead only updates the seqOffset metadata.
+func (o *seqOffset) maybeAddRecord(fetchPart *FetchPartition, record *Record, keepControl bool, abort bool) {
 	if record.Offset < o.offset {
 		// We asked for offset 5, but that was in the middle of a
 		// batch; we got offsets 0 thru 4 that we need to skip.
 		return
 	}
-	fetchPart.Records = append(fetchPart.Records, record)
+
+	// We only keep control records if specifically requested.
+	if record.Attrs.IsControl() && !keepControl {
+		abort = true
+	}
+	if !abort {
+		fetchPart.Records = append(fetchPart.Records, record)
+	}
+
 	// The record offset may be much larger than our expected offset if the
 	// topic is compacted. That is fine; we ensure increasing offsets and
 	// only keep the resulting offset if the seq is the same.
@@ -747,17 +808,28 @@ func recordToRecord(
 			Value: kv.Value,
 		})
 	}
+
 	return &Record{
-		Key:           record.Key,
-		Value:         record.Value,
-		Headers:       h,
-		Timestamp:     timeFromMillis(batch.FirstTimestamp + int64(record.TimestampDelta)),
-		TimestampType: int8((batch.Attributes & 0x0008) >> 3),
-		Topic:         topic,
-		Partition:     partition,
-		LeaderEpoch:   batch.PartitionLeaderEpoch,
-		Offset:        batch.FirstOffset + int64(record.OffsetDelta),
+		Key:         record.Key,
+		Value:       record.Value,
+		Headers:     h,
+		Timestamp:   timeFromMillis(batch.FirstTimestamp + int64(record.TimestampDelta)),
+		Attrs:       RecordAttrs{uint8(batch.Attributes)},
+		Topic:       topic,
+		Partition:   partition,
+		LeaderEpoch: batch.PartitionLeaderEpoch,
+		Offset:      batch.FirstOffset + int64(record.OffsetDelta),
 	}
+}
+
+func messageAttrsToRecordAttrs(attrs int8, v0 bool) RecordAttrs {
+	uattrs := uint8(attrs)
+	timestampType := uattrs & 0b0000_0100
+	uattrs = uattrs&0b0000_0011 | timestampType<<1
+	if v0 {
+		uattrs = uattrs | 0b1000_0000
+	}
+	return RecordAttrs{uattrs}
 }
 
 func v0MessageToRecord(
@@ -766,13 +838,13 @@ func v0MessageToRecord(
 	message *kmsg.MessageV0,
 ) *Record {
 	return &Record{
-		Key:           message.Key,
-		Value:         message.Value,
-		TimestampType: -1,
-		Topic:         topic,
-		Partition:     partition,
-		LeaderEpoch:   -1,
-		Offset:        message.Offset,
+		Key:         message.Key,
+		Value:       message.Value,
+		Attrs:       messageAttrsToRecordAttrs(message.Attributes, true),
+		Topic:       topic,
+		Partition:   partition,
+		LeaderEpoch: -1,
+		Offset:      message.Offset,
 	}
 }
 
@@ -782,14 +854,14 @@ func v1MessageToRecord(
 	message *kmsg.MessageV1,
 ) *Record {
 	return &Record{
-		Key:           message.Key,
-		Value:         message.Value,
-		Timestamp:     timeFromMillis(message.Timestamp),
-		TimestampType: (message.Attributes & 0x0004) >> 2,
-		Topic:         topic,
-		Partition:     partition,
-		LeaderEpoch:   -1,
-		Offset:        message.Offset,
+		Key:         message.Key,
+		Value:       message.Value,
+		Timestamp:   timeFromMillis(message.Timestamp),
+		Attrs:       messageAttrsToRecordAttrs(message.Attributes, false),
+		Topic:       topic,
+		Partition:   partition,
+		LeaderEpoch: -1,
+		Offset:      message.Offset,
 	}
 }
 

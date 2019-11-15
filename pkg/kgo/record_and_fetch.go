@@ -8,6 +8,56 @@ type RecordHeader struct {
 	Value []byte
 }
 
+type RecordAttrs struct {
+	// 6 bits are used right now for record batches, and we use the high
+	// bit to signify no timestamp due to v0 message set.
+	//
+	// bits 1 thru 3:
+	//   000 no compression
+	//   001 gzip
+	//   010 snappy
+	//   011 lz4
+	//   100 zstd
+	// bit 4: timestamp type
+	// bit 5: is transactional
+	// bit 6: is control
+	// bit 8: no timestamp type
+	attrs uint8
+}
+
+// TimestampType specifies how Timestamp was determined.
+//
+// The default, 0, means that the timestamp was determined in a client
+// when the record was produced.
+//
+// An alternative is 1, which is when the Timestamp is set in Kafka.
+//
+// Records pre 0.10.0 did not have timestamps and have value -1.
+func (a RecordAttrs) TimestampType() int8 {
+	if a.attrs&0b1000_0000 != 0 {
+		return -1
+	}
+	return int8(a.attrs & 0b0000_1000)
+}
+
+// CompressionType signifies with which algorithm this record was compressed.
+//
+// 0 is no compression, 1 is gzip, 2 is snappy, 3 is lz4, and 4 is zstd.
+func (a RecordAttrs) CompressionType() uint8 {
+	return a.attrs & 0b0000_0111
+}
+
+// IsTransactional returns whether a record is a part of a transaction.
+func (a RecordAttrs) IsTransactional() bool {
+	return a.attrs&0b0001_0000 != 0
+}
+
+// IsControl returns whether a record is a "control" record (ABORT or COMMIT).
+// These are generally not visible unless explicitly opted into.
+func (a RecordAttrs) IsControl() bool {
+	return a.attrs&0b0010_0000 != 0
+}
+
 // Record is a record to write to Kafka.
 type Record struct {
 	// Key is an optional field that can be used for partition assignment.
@@ -36,15 +86,8 @@ type Record struct {
 	// This field is always set in Produce.
 	Timestamp time.Time
 
-	// TimestampType specifies how Timestamp was determined.
-	//
-	// The default, 0, means that the timestamp was determined in a client
-	// when the record was produced.
-	//
-	// An alternative is 1, which is when the Timestamp is set in Kafka.
-	//
-	// Records pre 0.10.0 did not have timestamps and have value -1.
-	TimestampType int8
+	// Attrs specifies what attributes were on this record.
+	Attrs RecordAttrs
 
 	// Topic is the topic that a record is written to.
 	//

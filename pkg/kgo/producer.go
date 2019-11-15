@@ -41,6 +41,8 @@ func (c *Client) EndTransaction(ctx context.Context, commit bool) error {
 		atomic.StoreUint32(&c.producer.inTxn, 0)
 	}()
 
+	// TODO if commit == false, just cancel anything currently being
+	// produced.
 	if err := c.Flush(ctx); err != nil {
 		return err
 	}
@@ -231,6 +233,11 @@ func (c *Client) initProducerID() {
 	c.producer.idMu.Lock()
 	defer c.producer.idMu.Unlock()
 
+	// close idLoadingCh before setting idLoaded to 1 to ensure anything
+	// waiting sees the loaded.
+	defer close(c.producer.idLoadingCh)
+	c.producer.idLoadingCh = nil
+
 	// If we were successful, we have to store that the ID is loaded before
 	// we release the mutex. Otherwise, something may grab the mu and still
 	// see the id is not loaded just before we store it is, and then it
@@ -241,9 +248,6 @@ func (c *Client) initProducerID() {
 	if err == nil {
 		defer atomic.StoreUint32(&c.producer.idLoaded, 1)
 	}
-
-	close(c.producer.idLoadingCh)
-	c.producer.idLoadingCh = nil
 
 	unknown := c.unknownTopics
 	unknownWait := c.unknownTopicsWait
@@ -288,6 +292,9 @@ func (c *Client) doInitProducerID() error {
 		return err
 	}
 	resp := kresp.(*kmsg.InitProducerIDResponse)
+	if err = kerr.ErrorForCode(resp.ErrorCode); err != nil {
+		return err
+	}
 	c.producer.id = resp.ProducerID
 	c.producer.epoch = resp.ProducerEpoch
 	return nil

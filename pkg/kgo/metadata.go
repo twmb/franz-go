@@ -280,6 +280,8 @@ func (c *Client) fetchTopicMetadata(reqTopics []string) (map[string]*topicPartit
 					topic:     topicMeta.Topic,
 					partition: partMeta.Partition,
 
+					keepControl: c.cfg.consumer.keepControl,
+
 					allConsumptionsIdx: -1, // same, see below
 					seqOffset: seqOffset{
 						offset:             -1, // required to not consume until needed

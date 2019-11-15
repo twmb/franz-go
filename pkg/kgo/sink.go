@@ -100,7 +100,7 @@ func (sink *recordSink) createRequest() (*produceRequest, *kmsg.AddPartitionsToT
 
 		moreToDrain bool
 
-		transactional  = sink.broker.client.cfg.producer.txnID != nil
+		transactional  = req.txnID != nil
 		txnReq         *kmsg.AddPartitionsToTxnRequest
 		txnAddedTopics map[string]int // topic => index in txnReq
 	)
@@ -1102,7 +1102,7 @@ func (p *produceRequest) AppendTo(dst []byte) []byte {
 			if p.version < 3 {
 				dst = batch.appendToAsMessageSet(dst, uint8(p.version), compressor)
 			} else {
-				dst = batch.appendTo(dst, compressor)
+				dst = batch.appendTo(dst, compressor, p.txnID != nil)
 			}
 		}
 	}
@@ -1113,7 +1113,7 @@ func (p *produceRequest) ResponseKind() kmsg.Response {
 	return &kmsg.ProduceResponse{Version: p.version}
 }
 
-func (r *recordBatch) appendTo(dst []byte, compressor *compressor) []byte {
+func (r *recordBatch) appendTo(dst []byte, compressor *compressor, transactional bool) []byte {
 	nullableBytesLen := r.wireLength - 4 // NULLABLE_BYTES leading length, minus itself
 	nullableBytesLenAt := len(dst)       // in case compression adjusting
 	dst = kbin.AppendInt32(dst, nullableBytesLen)
@@ -1131,6 +1131,9 @@ func (r *recordBatch) appendTo(dst []byte, compressor *compressor) []byte {
 	dst = kbin.AppendInt32(dst, 0) // reserved crc
 
 	attrsAt := len(dst) // in case compression adjusting
+	if transactional {
+		r.attrs |= 0x0010 // bit 5 is the "is transactional" bit
+	}
 	attrs := r.attrs
 	dst = kbin.AppendInt16(dst, attrs)
 	dst = kbin.AppendInt32(dst, int32(len(r.records)-1)) // lastOffsetDelta
