@@ -290,8 +290,7 @@ func V2_3_0() Versions {
 	return v
 }
 
-// Tip is the latest defined Kafka key versions; this may be slightly out of date.
-func Tip() Versions {
+func V2_4_0() Versions {
 	v := V2_3_0()
 	v[4]++  // 3 leader and isr KAFKA-8345 81900d0ba0 KIP-455
 	v[15]++ // 4 describe group KAFKA-8538 f8db022b08 KIP-345
@@ -334,5 +333,12 @@ func Tip() Versions {
 
 	v[0]++ // 8 produce KAFKA-8729 f6f24c4700 KIP-467
 
+	return v
+}
+
+// Tip is the latest defined Kafka key versions; this may be slightly out of date.
+func Tip() Versions {
+	v := V2_4_0()
+	v[22]++ // 3 init producer id KAFKA-8710 v[fecb977b25 KIP-360
 	return v
 }
