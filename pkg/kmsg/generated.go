@@ -437,9 +437,10 @@ type RecordBatch struct {
 	//
 	// Bits 0 thru 3 correspond to compression:
 	//   - 000 is no compression
-	//   - 001 is snappy compression
-	//   - 010 is lz4 compression
-	//   - 011 is zstd compression (produce request version 7+)
+	//   - 001 is gzip compression
+	//   - 010 is snappy compression
+	//   - 011 is lz4 compression
+	//   - 100 is zstd compression (produce request version 7+)
 	//
 	// Bit 4 is the timestamp type, with 0 meaning CreateTime corresponding
 	// to the timestamp being from the producer, and 1 meaning LogAppendTime
@@ -453,7 +454,7 @@ type RecordBatch struct {
 	// the broker. Clients should not return control batches to applications.
 	Attributes int16
 
-	// LastOffsetDelta is the offset of the last message in a batch. This is
+	// LastOffsetDelta is the offset of the last message in a batch. This is used
 	// by the broker to ensure correct behavior even with batch compaction.
 	LastOffsetDelta int32
 
@@ -3578,6 +3579,204 @@ func (v *GroupMetadataValue) ReadFrom(src []byte) error {
 		}
 		v = a
 		s.Members = v
+	}
+	return b.Complete()
+}
+
+// TxnMetadataKey is the key for the Kafka internal __transaction_state topic
+// if the key starts with an int16 with a value of 0.
+type TxnMetadataKey struct {
+	// Version is the version of this type.
+	Version int16
+
+	// TransactionalID is the transactional ID this record is for.
+	TransactionalID string
+}
+
+func (v *TxnMetadataKey) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	{
+		v := v.Version
+		dst = kbin.AppendInt16(dst, v)
+	}
+	{
+		v := v.TransactionalID
+		dst = kbin.AppendString(dst, v)
+	}
+	return dst
+}
+func (v *TxnMetadataKey) ReadFrom(src []byte) error {
+	b := kbin.Reader{Src: src}
+	version := b.Int16()
+	v.Version = version
+	s := v
+	{
+		v := b.String()
+		s.TransactionalID = v
+	}
+	return b.Complete()
+}
+
+type TxnMetadataValueTopic struct {
+	// Topic is a topic involved in this transaction.
+	Topic string
+
+	// Partitions are partitions in this topic involved in the transaction.
+	Partitions []int32
+}
+
+// TxnMetadataValue is the value for the Kafka internal __transaction_state
+// topic if the key is of TxnMetadataKey type.
+type TxnMetadataValue struct {
+	// Version is the version of this value.
+	Version int16
+
+	// ProducerID is the ID in use by the transactional ID.
+	ProducerID int64
+
+	// ProducerEpoch is the epoch associated with the producer ID.
+	ProducerEpoch int16
+
+	// TimeoutMillis is the timeout of this transaction in milliseconds.
+	TimeoutMillis int32
+
+	// State is the state this transaction is in,
+	// 0 is Empty, 1 is Ongoing, 2 is PrepareCommit, 3 is PrepareAbort, 4 is
+	// CompleteCommit, 5 is CompleteAbort, 6 is Dead, and 7 is PrepareEpochFence.
+	State int8
+
+	// Topics are topics that are involved in this transaction.
+	Topics []TxnMetadataValueTopic
+
+	// LastUpdateTimestamp is the timestamp in millis of when this transaction
+	// was last updated.
+	LastUpdateTimestamp int64
+
+	// StartTimestamp is the timestamp in millis of when this transaction started.
+	StartTimestamp int64
+}
+
+func (v *TxnMetadataValue) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	{
+		v := v.Version
+		dst = kbin.AppendInt16(dst, v)
+	}
+	{
+		v := v.ProducerID
+		dst = kbin.AppendInt64(dst, v)
+	}
+	{
+		v := v.ProducerEpoch
+		dst = kbin.AppendInt16(dst, v)
+	}
+	{
+		v := v.TimeoutMillis
+		dst = kbin.AppendInt32(dst, v)
+	}
+	{
+		v := v.State
+		dst = kbin.AppendInt8(dst, v)
+	}
+	{
+		v := v.Topics
+		dst = kbin.AppendArrayLen(dst, len(v))
+		for i := range v {
+			v := &v[i]
+			{
+				v := v.Topic
+				dst = kbin.AppendString(dst, v)
+			}
+			{
+				v := v.Partitions
+				dst = kbin.AppendArrayLen(dst, len(v))
+				for i := range v {
+					v := v[i]
+					dst = kbin.AppendInt32(dst, v)
+				}
+			}
+		}
+	}
+	{
+		v := v.LastUpdateTimestamp
+		dst = kbin.AppendInt64(dst, v)
+	}
+	{
+		v := v.StartTimestamp
+		dst = kbin.AppendInt64(dst, v)
+	}
+	return dst
+}
+func (v *TxnMetadataValue) ReadFrom(src []byte) error {
+	b := kbin.Reader{Src: src}
+	version := b.Int16()
+	v.Version = version
+	s := v
+	{
+		v := b.Int64()
+		s.ProducerID = v
+	}
+	{
+		v := b.Int16()
+		s.ProducerEpoch = v
+	}
+	{
+		v := b.Int32()
+		s.TimeoutMillis = v
+	}
+	{
+		v := b.Int8()
+		s.State = v
+	}
+	{
+		v := s.Topics
+		a := v
+		var l int32
+		l = b.ArrayLen()
+		if !b.Ok() {
+			return b.Complete()
+		}
+		if l > 0 {
+			a = make([]TxnMetadataValueTopic, l)
+		}
+		for i := int32(0); i < l; i++ {
+			v := &a[i]
+			s := v
+			{
+				v := b.String()
+				s.Topic = v
+			}
+			{
+				v := s.Partitions
+				a := v
+				var l int32
+				l = b.ArrayLen()
+				if !b.Ok() {
+					return b.Complete()
+				}
+				if l > 0 {
+					a = make([]int32, l)
+				}
+				for i := int32(0); i < l; i++ {
+					v := b.Int32()
+					a[i] = v
+				}
+				v = a
+				s.Partitions = v
+			}
+		}
+		v = a
+		s.Topics = v
+	}
+	{
+		v := b.Int64()
+		s.LastUpdateTimestamp = v
+	}
+	{
+		v := b.Int64()
+		s.StartTimestamp = v
 	}
 	return b.Complete()
 }

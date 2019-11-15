@@ -997,6 +997,41 @@ GroupMetadataValue => not top level, with version field
     // Assignment is what the leader assigned this group member.
     Assignment: bytes
 
+// TxnMetadataKey is the key for the Kafka internal __transaction_state topic
+// if the key starts with an int16 with a value of 0.
+TxnMetadataKey => not top level, with version field
+  // Version is the version of this type.
+  Version: int16
+  // TransactionalID is the transactional ID this record is for.
+  TransactionalID: string
+
+// TxnMetadataValue is the value for the Kafka internal __transaction_state
+// topic if the key is of TxnMetadataKey type.
+TxnMetadataValue => not top level, with version field
+  // Version is the version of this value.
+  Version: int16
+  // ProducerID is the ID in use by the transactional ID.
+  ProducerID: int64
+  // ProducerEpoch is the epoch associated with the producer ID.
+  ProducerEpoch: int16
+  // TimeoutMillis is the timeout of this transaction in milliseconds.
+  TimeoutMillis: int32
+  // State is the state this transaction is in,
+  // 0 is Empty, 1 is Ongoing, 2 is PrepareCommit, 3 is PrepareAbort, 4 is
+  // CompleteCommit, 5 is CompleteAbort, 6 is Dead, and 7 is PrepareEpochFence.
+  State: int8
+  // Topics are topics that are involved in this transaction.
+  Topics: [=>]
+    // Topic is a topic involved in this transaction.
+    Topic: string
+    // Partitions are partitions in this topic involved in the transaction.
+    Partitions: [int32]
+  // LastUpdateTimestamp is the timestamp in millis of when this transaction
+  // was last updated.
+  LastUpdateTimestamp: int64
+  // StartTimestamp is the timestamp in millis of when this transaction started.
+  StartTimestamp: int64
+
 // OffsetCommitRequest commits offsets for consumed topics / partitions in
 // a group.
 OffsetCommitRequest => key 8, max version 8, flexible v8+, group coordinator
