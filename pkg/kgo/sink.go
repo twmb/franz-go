@@ -50,8 +50,8 @@ type recordSink struct {
 
 	mu sync.Mutex // guards the two fields below
 
-	recordBuffers      []*recordBuffer // contains all partition records for batch building
-	recordBuffersStart int             // +1 every req to avoid large batch starvation
+	recBufs      []*recordBuffer // contains all partition records for batch building
+	recBufsStart int             // +1 every req to avoid large batch starvation
 }
 
 func newRecordSink(broker *broker) *recordSink {
@@ -111,10 +111,10 @@ func (sink *recordSink) createRequest() (*produceRequest, *kmsg.AddPartitionsToT
 
 	// Over every record buffer, check to see if the first batch is not
 	// backing off and that it can can fit in our request.
-	recordBuffersIdx := sink.recordBuffersStart
-	for i := 0; i < len(sink.recordBuffers); i++ {
-		recBuf := sink.recordBuffers[recordBuffersIdx]
-		recordBuffersIdx = (recordBuffersIdx + 1) % len(sink.recordBuffers)
+	recBufsIdx := sink.recBufsStart
+	for i := 0; i < len(sink.recBufs); i++ {
+		recBuf := sink.recBufs[recBufsIdx]
+		recBufsIdx = (recBufsIdx + 1) % len(sink.recBufs)
 
 		recBuf.mu.Lock()
 		if recBuf.failing || len(recBuf.batches) == recBuf.batchDrainIdx {
@@ -204,8 +204,8 @@ func (sink *recordSink) createRequest() (*produceRequest, *kmsg.AddPartitionsToT
 
 	// We could have lost our only record buffer just before we grabbed the
 	// lock above.
-	if len(sink.recordBuffers) > 0 {
-		sink.recordBuffersStart = (sink.recordBuffersStart + 1) % len(sink.recordBuffers)
+	if len(sink.recBufs) > 0 {
+		sink.recBufsStart = (sink.recBufsStart + 1) % len(sink.recBufs)
 	}
 	return req, txnReq, moreToDrain
 }
@@ -557,8 +557,8 @@ func (sink *recordSink) handleRetryBatches(retry reqBatches, withBackoff bool) {
 // the fail state.
 func (sink *recordSink) addSource(add *recordBuffer) {
 	sink.mu.Lock()
-	add.recordBuffersIdx = len(sink.recordBuffers)
-	sink.recordBuffers = append(sink.recordBuffers, add)
+	add.recBufsIdx = len(sink.recBufs)
+	sink.recBufs = append(sink.recBufs, add)
 	sink.mu.Unlock()
 
 	add.clearFailing()
@@ -569,18 +569,18 @@ func (sink *recordSink) removeSource(rm *recordBuffer) {
 	sink.mu.Lock()
 	defer sink.mu.Unlock()
 
-	if rm.recordBuffersIdx != len(sink.recordBuffers)-1 {
-		sink.recordBuffers[rm.recordBuffersIdx], sink.recordBuffers[len(sink.recordBuffers)-1] =
-			sink.recordBuffers[len(sink.recordBuffers)-1], nil
+	if rm.recBufsIdx != len(sink.recBufs)-1 {
+		sink.recBufs[rm.recBufsIdx], sink.recBufs[len(sink.recBufs)-1] =
+			sink.recBufs[len(sink.recBufs)-1], nil
 
-		sink.recordBuffers[rm.recordBuffersIdx].recordBuffersIdx = rm.recordBuffersIdx
+		sink.recBufs[rm.recBufsIdx].recBufsIdx = rm.recBufsIdx
 	} else {
-		sink.recordBuffers[rm.recordBuffersIdx] = nil // do not let this removal hang around
+		sink.recBufs[rm.recBufsIdx] = nil // do not let this removal hang around
 	}
 
-	sink.recordBuffers = sink.recordBuffers[:len(sink.recordBuffers)-1]
-	if sink.recordBuffersStart == len(sink.recordBuffers) {
-		sink.recordBuffersStart = 0
+	sink.recBufs = sink.recBufs[:len(sink.recBufs)-1]
+	if sink.recBufsStart == len(sink.recBufs) {
+		sink.recBufsStart = 0
 	}
 }
 
@@ -607,9 +607,9 @@ type recordBuffer struct {
 	// sink is who is currently draining us. This can be modified
 	// concurrently during a metadata update.
 	sink *recordSink
-	// recordBuffersIdx is our index into our current sink's recordBuffers
-	// field. This exists to aid in removing the buffer from the sink.
-	recordBuffersIdx int
+	// recBufsIdx is our index into our current sink's recBufs field.
+	// This exists to aid in removing the buffer from the sink.
+	recBufsIdx int
 
 	// sequenceNum is used for the baseSequence in each record batch. This
 	// is incremented in bufferRecord and can be reset when processing a

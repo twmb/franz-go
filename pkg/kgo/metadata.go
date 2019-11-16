@@ -270,8 +270,8 @@ func (c *Client) fetchTopicMetadata(reqTopics []string) (map[string]*topicPartit
 					topic:     topicMeta.Topic,
 					partition: partMeta.Partition,
 
-					recordBuffersIdx: -1, // required, see below
-					lastAckedOffset:  -1, // expected sentinel
+					recBufsIdx:      -1, // required, see below
+					lastAckedOffset: -1, // expected sentinel
 
 					linger: c.cfg.producer.linger,
 				},
@@ -415,10 +415,10 @@ func (c *Client) mergeTopicPartitions(l *topicPartitions, r *topicPartitionsData
 		if newTP.loadErr != nil {
 			continue
 		}
-		if newTP.records.recordBuffersIdx == -1 {
+		if newTP.records.recBufsIdx == -1 {
 			newTP.records.sink.addSource(newTP.records)
 		}
-		if newTP.consumption.allConsumptionsIdx == -1 { // should be true if recordBuffersIdx == -1
+		if newTP.consumption.allConsumptionsIdx == -1 { // should be true if recBufsIdx == -1
 			newTP.consumption.source.addConsumption(newTP.consumption)
 		}
 	}
