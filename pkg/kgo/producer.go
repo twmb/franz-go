@@ -2,7 +2,6 @@ package kgo
 
 import (
 	"context"
-	"errors"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -19,36 +18,115 @@ func (c *Client) BeginTransaction() error {
 	if c.cfg.producer.txnID == nil {
 		return ErrNotTransactional
 	}
-	if atomic.SwapUint32(&c.producer.inTxn, 1) == 1 {
+
+	c.producer.txnMu.Lock()
+	defer c.producer.txnMu.Unlock()
+	if c.producer.inTxn {
 		return ErrAlreadyInTransaction
 	}
+	c.producer.inTxn = true
+	atomic.StoreUint32(&c.producer.producingTxn, 1) // allow produces for txns now
 	return nil
 }
 
-// EndTransaction ends a transaction. This is invalid to call at any time other
-// than to finish a transaction that at least one record has been produced to.
+// AbortBufferedRecords fails all unflushed records with ErrAborted and waits
+// for there to be no buffered records.
 //
-// It is invalid to call this function multiple times concurrently.
-func (c *Client) EndTransaction(ctx context.Context, commit bool) error {
-	if atomic.LoadUint32(&c.producer.inTxn) != 1 {
-		return ErrNotInTransaction
+// This accepts a context to quit the wait early, but it is strongly
+// recommended to always wait for all records to be flushed. Waits should only
+// occur when waiting for currently in flight produce requests to finish.  The
+// only case where this function returns an error is if the context is canceled
+// while flushing.
+//
+// The intent of this function is to provide a way to clear the client's
+// production backlog before aborting a transaction and beginning a new one; it
+// would be erroneous to not wait for the backlog to clear before beginning a
+// new transaction, since anything not cleared may be a part of the new
+// transaction.
+//
+// Records produced during or after a call to this function may not be failed;
+// it is not recommended to call this function concurrent with producing
+// records.
+//
+// It is invalid to call this method multiple times concurrently.
+func (c *Client) AbortBufferedRecords(ctx context.Context) error {
+	var unaborting []*broker
+	c.brokersMu.Lock()
+	for _, broker := range c.brokers {
+		broker.recordSink.mu.Lock()
+		broker.recordSink.aborting = true
+		broker.recordSink.mu.Unlock()
+		broker.recordSink.maybeBeginDraining() // awaken anything in backoff
+		unaborting = append(unaborting, broker)
 	}
+	c.brokersMu.Unlock()
 
 	defer func() {
+		for _, broker := range unaborting {
+			broker.recordSink.mu.Lock()
+			broker.recordSink.aborting = false
+			broker.recordSink.mu.Unlock()
+		}
+	}()
+
+	// Like in client closing, we must manually fail all partitions
+	// that never had a sink.
+	for _, partitions := range c.loadTopics() {
+		for _, partition := range partitions.load().all {
+			partition.records.mu.Lock()
+			if partition.records.sink == nil {
+				partition.records.failAllRecords(ErrAborting)
+			}
+			partition.records.mu.Unlock()
+		}
+	}
+
+	return c.Flush(ctx)
+}
+
+// EndTransaction ends a transaction and resets the client's internal state to
+// not be in a transaction.
+//
+// Flush and CommitOffsetsForTransaction must be called before this function;
+// this function does not flush and does not itself ensure that all buffered
+// records are flushed. If no record yet has caused a partition to be added to
+// the transaction, this function does nothing and returns nil. Alternatively,
+// ErrorBufferedRecords should be called before aborting a transaction to
+// ensure that any buffered records not yet flushed will not be a part of a new
+// transaction.
+func (c *Client) EndTransaction(ctx context.Context, commit bool) error {
+	c.producer.txnMu.Lock()
+	defer c.producer.txnMu.Unlock()
+
+	atomic.StoreUint32(&c.producer.producingTxn, 0) // forbid any new produces while ending txn
+
+	defer func() {
+		c.consumer.mu.Lock()
+		defer c.consumer.mu.Unlock()
 		if c.consumer.typ == consumerTypeGroup {
 			c.consumer.group.offsetsAddedToTxn = false
 		}
-		atomic.StoreUint32(&c.producer.inTxn, 0)
 	}()
 
-	// TODO if commit == false, just cancel anything currently being
-	// produced.
-	if err := c.Flush(ctx); err != nil {
-		return err
+	if !c.producer.inTxn {
+		return ErrNotInTransaction
 	}
 
-	if atomic.LoadUint32(&c.producer.idLoaded) == 0 {
-		return errors.New("producer ID not yet loaded after a flush!")
+	// After the flush, no records are being produced to, and we can set
+	// addedToTxn to false outside of any mutex.
+	var anyAdded bool
+	for _, parts := range c.loadTopics() {
+		for _, part := range parts.load().all {
+			if part.records.addedToTxn {
+				part.records.addedToTxn = false
+				anyAdded = true
+			}
+		}
+	}
+	// If no partition was added to a transaction, then we have nothing to
+	// commit. If any were added, we know we have a producer id.
+	if !anyAdded {
+		return nil
 	}
 
 	kresp, err := c.Request(ctx, &kmsg.EndTxnRequest{
@@ -57,7 +135,6 @@ func (c *Client) EndTransaction(ctx context.Context, commit bool) error {
 		ProducerEpoch:   c.producer.epoch,
 		Commit:          commit,
 	})
-
 	if err != nil {
 		return err
 	}
@@ -67,11 +144,11 @@ func (c *Client) EndTransaction(ctx context.Context, commit bool) error {
 type producer struct {
 	bufferedRecords int64
 
-	id       int64
-	epoch    int16
-	idLoaded uint32
-	inTxn    uint32
-	flushing int32
+	id           int64
+	epoch        int16
+	idLoaded     uint32 // 1 if loaded
+	producingTxn uint32 // 1 if in txn
+	flushing     int32  // >0 if flushing, can Flush many times concurrently
 
 	idMu        sync.Mutex
 	idLoadingCh chan struct{} // exists if id is loading
@@ -79,6 +156,9 @@ type producer struct {
 
 	flushingMu   sync.Mutex
 	flushingCond *sync.Cond
+
+	txnMu sync.Mutex
+	inTxn bool
 }
 
 func noPromise(*Record, error) {}
@@ -114,7 +194,7 @@ func (c *Client) Produce(
 		return kerr.MessageTooLarge
 	}
 
-	if c.cfg.producer.txnID != nil && atomic.LoadUint32(&c.producer.inTxn) != 1 {
+	if c.cfg.producer.txnID != nil && atomic.LoadUint32(&c.producer.producingTxn) != 1 {
 		return ErrNotInTransaction
 	}
 

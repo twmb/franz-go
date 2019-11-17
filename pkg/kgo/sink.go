@@ -48,10 +48,12 @@ type recordSink struct {
 	// response's backoff occurs, the backoff is not cleared.
 	consecutiveFailures uint32
 
-	mu sync.Mutex // guards the two fields below
+	mu sync.Mutex // guards the fields below
 
 	recBufs      []*recordBuffer // contains all partition records for batch building
 	recBufsStart int             // +1 every req to avoid large batch starvation
+
+	aborting bool // set to true if aborting in EndTransaction
 }
 
 func newRecordSink(broker *broker) *recordSink {
@@ -108,6 +110,13 @@ func (sink *recordSink) createRequest() (*produceRequest, *kmsg.AddPartitionsToT
 	// Prevent concurrent modification to allPartsRecs.
 	sink.mu.Lock()
 	defer sink.mu.Unlock()
+
+	if sink.aborting {
+		for _, recBuf := range sink.recBufs {
+			recBuf.failAllRecords(ErrAborting)
+			return req, nil, false
+		}
+	}
 
 	// Over every record buffer, check to see if the first batch is not
 	// backing off and that it can can fit in our request.
@@ -169,6 +178,8 @@ func (sink *recordSink) createRequest() (*produceRequest, *kmsg.AddPartitionsToT
 			moreToDrain = len(recBuf.batches) > recBuf.batchDrainIdx || moreToDrain
 		}
 
+		recBuf.mu.Unlock()
+
 		if transactional && !recBuf.addedToTxn {
 			recBuf.addedToTxn = true
 			if txnReq == nil {
@@ -191,8 +202,6 @@ func (sink *recordSink) createRequest() (*produceRequest, *kmsg.AddPartitionsToT
 			}
 			txnReq.Topics[idx].Partitions = append(txnReq.Topics[idx].Partitions, recBuf.partition)
 		}
-
-		recBuf.mu.Unlock()
 
 		wireLength += batchWireLength
 		req.batches.addBatch(
@@ -286,7 +295,9 @@ func (sink *recordSink) doTxnReq(req *produceRequest, txnReq *kmsg.AddPartitions
 		for _, topic := range txnReq.Topics {
 			topicBatches := req.batches[topic.Topic]
 			for _, partition := range topic.Partitions {
-				sink.broker.client.finishBatch(topicBatches[partition], partition, 0, err)
+				batch := topicBatches[partition]
+				batch.owner.addedToTxn = false
+				sink.broker.client.finishBatch(batch, partition, 0, err)
 				delete(topicBatches, partition)
 			}
 			if len(topicBatches) == 0 {
@@ -301,7 +312,9 @@ func (sink *recordSink) doTxnReq(req *produceRequest, txnReq *kmsg.AddPartitions
 		topicBatches := req.batches[topic.Topic]
 		for _, partition := range topic.Partitions {
 			if err := kerr.ErrorForCode(partition.ErrorCode); err != nil {
-				sink.broker.client.finishBatch(topicBatches[partition.Partition], partition.Partition, 0, err)
+				batch := topicBatches[partition.Partition]
+				batch.owner.addedToTxn = false
+				sink.broker.client.finishBatch(batch, partition.Partition, 0, err)
 				delete(topicBatches, partition.Partition)
 			}
 			if len(topicBatches) == 0 {
@@ -598,9 +611,18 @@ type recordBuffer struct {
 	// loss detection on UnknownProducerID errors.
 	//
 	// This is only modified when processing responses, which is serial,
-	// and thus is the only field that can change without the mutex (the
-	// topicPartition field never changes).
+	// and thus can change without the mutex (the topicPartition field
+	// never changes).
 	lastAckedOffset int64
+
+	// addedToTxn, for transactions only, signifies whether this partition
+	// has been added to the transaction yet or not.
+	//
+	// This does not need to be under the mu since it is updated either
+	// serially in building a req (the first time) or after failing to add
+	// the partition to a txn (again serially), or in EndTransaction after
+	// all buffered records are flushed.
+	addedToTxn bool
 
 	mu sync.Mutex // guards r/w access to all fields below
 
@@ -628,10 +650,6 @@ type recordBuffer struct {
 	// remove from the head of batches when a batch is finished.
 	// This is read while buffering and modified in a few places.
 	batchDrainIdx int
-
-	// addedToTxn, for transactions only, signifies whether this partition
-	// has been added to the transaction yet or not.
-	addedToTxn bool
 
 	// lingering is a timer that avoids starting maybeBeginDraining until
 	// expired, allowing for more records to be buffered in a single batch.
@@ -820,6 +838,7 @@ func (recBuf *recordBuffer) failAllRecords(err error) {
 
 // lockedFailAllRecords is the same as above, but already in a lock.
 func (recBuf *recordBuffer) lockedFailAllRecords(err error) {
+	recBuf.lockedStopLinger()
 	for _, batch := range recBuf.batches {
 		for i, pnr := range batch.records {
 			recBuf.cl.finishRecordPromise(

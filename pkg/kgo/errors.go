@@ -76,6 +76,10 @@ var (
 	// ErrNotInTransaction is returned when trying to produce a record
 	// outside of a transaction.
 	ErrNotInTransaction = errors.New("cannot produce record transactionally if not in a transaction")
+
+	// ErrAborting is returned for all buffered records while
+	// AbortBufferedRecords is being called.
+	ErrAborting = errors.New("client is aborting buffered records")
 )
 
 // ErrDataLoss is returned for Kafka >=2.1.0 when data loss is detected and the

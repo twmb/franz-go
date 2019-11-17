@@ -1331,7 +1331,24 @@ func (cl *Client) CommitOffsetsForTransaction(
 	if onDone == nil {
 		onDone = func(_ *kmsg.TxnOffsetCommitRequest, _ *kmsg.TxnOffsetCommitResponse, _ error) {}
 	}
+
+	if cl.cfg.producer.txnID == nil {
+		onDone(nil, nil, ErrNotTransactional)
+		return
+	}
+
+	// Before committing, ensure we are at least in a transaction. We
+	// unlock the producer txnMu before committing to allow EndTransaction
+	// to go through, even though that could cut off our commit.
+	cl.producer.txnMu.Lock()
+	if !cl.producer.inTxn {
+		onDone(nil, nil, ErrNotInTransaction)
+		cl.producer.txnMu.Unlock()
+		return
+	}
 	cl.consumer.mu.Lock()
+	cl.producer.txnMu.Unlock()
+
 	defer cl.consumer.mu.Unlock()
 	if cl.consumer.typ != consumerTypeGroup {
 		onDone(new(kmsg.TxnOffsetCommitRequest), new(kmsg.TxnOffsetCommitResponse), nil)
