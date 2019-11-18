@@ -518,9 +518,11 @@ func (s *assignRevokeSession) assign(g *groupConsumer, newAssigned map[string][]
 		defer close(s.assignDone)
 		<-s.prerevokeDone
 		if g.onAssigned != nil {
-			if len(newAssigned) > 0 {
-				g.onAssigned(g.ctx, newAssigned)
-			}
+			// We always call on assigned, even if nothing new is
+			// assigned. This allows consumers to know that
+			// assignment is done; transactional consumers can
+			// reset offsets as necessary, for example.
+			g.onAssigned(g.ctx, newAssigned)
 		}
 	}()
 	return s.assignDone
