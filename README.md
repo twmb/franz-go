@@ -6,12 +6,11 @@ KIPS
 
 TODO
 ----
-- KIP-98 (EOS; 0.11.0)
+- KIP-360 (safe epoch bumping for `UNKNOWN_PRODUCER_ID`; 2.5.0)
 
 NOT YET (KIP under discussion / unmerged PR)
 -------
 - KIP-359 (verify leader epoch in produce requests)
-- KIP-360 (safe epoch bumping for `UNKNOWN_PRODUCER_ID`)
 - KIP-392 (fetch request from closest replica w/ rack; 2.2.0)
 - KIP-423 (no rebalance on JoinGroup from leader in certain cases; under discussion)
 - KIP-447 (transaction changes to better support group changes)
@@ -35,6 +34,7 @@ DONE
 - KIP-78 (cluster id in metadata; 0.10.1)
 - KIP-79 (list offset req/resp timestamp field; 0.10.1)
 - KIP-84 (sasl scram; 0.10.2)
+- KIP-98 (EOS; 0.11.0)
 - KIP-101 (offset for leader epoch introduced; broker usage yet; 0.11.0)
 - KIP-107 (delete records; 0.11.0)
 - KIP-108 (validate create topic; 0.10.2)

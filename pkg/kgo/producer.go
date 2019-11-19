@@ -111,6 +111,7 @@ func (c *Client) EndTransaction(ctx context.Context, commit bool) error {
 	if !c.producer.inTxn {
 		return ErrNotInTransaction
 	}
+	c.producer.inTxn = false
 
 	// After the flush, no records are being produced to, and we can set
 	// addedToTxn to false outside of any mutex.
