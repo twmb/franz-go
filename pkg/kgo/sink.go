@@ -68,17 +68,17 @@ func newRecordSink(broker *broker) *recordSink {
 		4 // topics array length
 
 	sink := &recordSink{
-		recordTimeout:  broker.client.cfg.producer.recordTimeout,
+		recordTimeout:  broker.client.cfg.recordTimeout,
 		broker:         broker,
 		baseWireLength: messageRequestOverhead + produceRequestOverhead,
 	}
 	sink.inflightSem.Store(make(chan struct{}, 1))
 
-	if broker.client.cfg.producer.txnID != nil {
-		sink.baseWireLength += int32(len(*broker.client.cfg.producer.txnID))
+	if broker.client.cfg.txnID != nil {
+		sink.baseWireLength += int32(len(*broker.client.cfg.txnID))
 	}
-	if broker.client.cfg.client.id != nil {
-		sink.baseWireLength += int32(len(*broker.client.cfg.client.id))
+	if broker.client.cfg.id != nil {
+		sink.baseWireLength += int32(len(*broker.client.cfg.id))
 	}
 
 	return sink
@@ -88,17 +88,17 @@ func newRecordSink(broker *broker) *recordSink {
 // and whether there are more records to create more requests immediately.
 func (sink *recordSink) createRequest() (*produceRequest, *kmsg.AddPartitionsToTxnRequest, bool) {
 	req := &produceRequest{
-		txnID:   sink.broker.client.cfg.producer.txnID,
-		acks:    sink.broker.client.cfg.producer.acks.val,
-		timeout: int32(sink.broker.client.cfg.producer.requestTimeout.Milliseconds()),
+		txnID:   sink.broker.client.cfg.txnID,
+		acks:    sink.broker.client.cfg.acks.val,
+		timeout: int32(sink.broker.client.cfg.requestTimeout.Milliseconds()),
 		batches: make(reqBatches, 5),
 
-		compression: sink.broker.client.cfg.producer.compression,
+		compression: sink.broker.client.cfg.compression,
 	}
 
 	var (
 		wireLength      = sink.baseWireLength
-		wireLengthLimit = sink.broker.client.cfg.client.maxBrokerWriteBytes
+		wireLengthLimit = sink.broker.client.cfg.maxBrokerWriteBytes
 
 		moreToDrain bool
 
@@ -184,7 +184,7 @@ func (sink *recordSink) createRequest() (*produceRequest, *kmsg.AddPartitionsToT
 			recBuf.addedToTxn = true
 			if txnReq == nil {
 				txnReq = &kmsg.AddPartitionsToTxnRequest{
-					TransactionalID: *recBuf.cl.cfg.producer.txnID,
+					TransactionalID: *recBuf.cl.cfg.txnID,
 					ProducerID:      recBuf.cl.producer.id,
 					ProducerEpoch:   recBuf.cl.producer.epoch,
 				}
@@ -227,7 +227,7 @@ func (sink *recordSink) maybeBeginDraining() {
 
 func (sink *recordSink) backoff() {
 	tries := int(atomic.AddUint32(&sink.consecutiveFailures, 1))
-	after := time.NewTimer(sink.broker.client.cfg.client.retryBackoff(tries))
+	after := time.NewTimer(sink.broker.client.cfg.retryBackoff(tries))
 	defer after.Stop()
 	select {
 	case <-after.C:
@@ -475,7 +475,7 @@ func (sink *recordSink) handleReqResp(req *produceRequest, resp kmsg.Response, e
 			switch {
 			case kerr.IsRetriable(err) &&
 				err != kerr.CorruptMessage &&
-				batch.tries < sink.broker.client.cfg.client.retries:
+				batch.tries < sink.broker.client.cfg.retries:
 				// Retriable: add to retry map.
 				backoffRetry = true
 				reqRetry.addBatch(topic, partition, batch)
@@ -488,12 +488,12 @@ func (sink *recordSink) handleReqResp(req *produceRequest, resp kmsg.Response, e
 				// UnknownProducerID was introduced to allow some form of safe
 				// handling, but KIP-360 demonstrated that resetting sequence
 				// numbers is fundamentally unsafe, so we treat it like OOOSN.
-				if sink.broker.client.cfg.producer.stopOnDataLoss {
+				if sink.broker.client.cfg.stopOnDataLoss {
 					finishBatch()
 					continue
 				}
-				if sink.broker.client.cfg.producer.onDataLoss != nil {
-					sink.broker.client.cfg.producer.onDataLoss(topic, partition)
+				if sink.broker.client.cfg.onDataLoss != nil {
+					sink.broker.client.cfg.onDataLoss(topic, partition)
 				}
 				batch.owner.resetSequenceNums()
 				reqRetry.addBatch(topic, partition, batch)
@@ -725,7 +725,7 @@ func (recBuf *recordBuffer) bufferRecord(pr promisedRecord, abortOnNewBatch bool
 		}
 
 		if batch.tries == 0 &&
-			newBatchLength <= recBuf.cl.cfg.producer.maxRecordBatchBytes {
+			newBatchLength <= recBuf.cl.cfg.maxRecordBatchBytes {
 			newBatch = false
 			batch.appendRecord(pr, recordNumbers)
 		}
@@ -811,7 +811,7 @@ func (recBuf *recordBuffer) bumpTriesAndMaybeFailBatch0(err error) {
 	}
 	batch0 := recBuf.batches[0]
 	batch0.tries++
-	if batch0.tries > recBuf.cl.cfg.client.retries {
+	if batch0.tries > recBuf.cl.cfg.retries {
 		recBuf.lockedFailBatch0(err)
 	}
 }

@@ -600,7 +600,7 @@ func (o *offsetsWaitingLoad) setTopicPartForList(topic string, partition int32, 
 
 func (c *consumer) tryBrokerOffsetLoadList(broker *broker, load *offsetsWaitingLoad) {
 	kresp, err := broker.waitResp(c.cl.ctx,
-		load.buildListReq(broker.client.cfg.consumer.isolationLevel))
+		load.buildListReq(broker.client.cfg.isolationLevel))
 	if err != nil {
 		load.mergeInto(c)
 		return

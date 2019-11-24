@@ -89,7 +89,7 @@ func (c *Client) updateMetadataLoop() {
 	var consecutiveErrors int
 	var lastAt time.Time
 
-	ticker := time.NewTicker(c.cfg.client.metadataMaxAge)
+	ticker := time.NewTicker(c.cfg.metadataMaxAge)
 	defer ticker.Stop()
 	for {
 		var now bool
@@ -106,7 +106,7 @@ func (c *Client) updateMetadataLoop() {
 	start:
 		nowTries++
 		if !now {
-			if wait := c.cfg.client.metadataMinAge - time.Since(lastAt); wait > 0 {
+			if wait := c.cfg.metadataMinAge - time.Since(lastAt); wait > 0 {
 				timer := time.NewTimer(wait)
 				select {
 				case <-c.ctx.Done():
@@ -147,7 +147,7 @@ func (c *Client) updateMetadataLoop() {
 		}
 
 		consecutiveErrors++
-		after := time.NewTimer(c.cfg.client.retryBackoff(consecutiveErrors))
+		after := time.NewTimer(c.cfg.retryBackoff(consecutiveErrors))
 		select {
 		case <-c.ctx.Done():
 			after.Stop()
@@ -273,14 +273,14 @@ func (c *Client) fetchTopicMetadata(reqTopics []string) (map[string]*topicPartit
 					recBufsIdx:      -1, // required, see below
 					lastAckedOffset: -1, // expected sentinel
 
-					linger: c.cfg.producer.linger,
+					linger: c.cfg.linger,
 				},
 
 				consumption: &consumption{
 					topic:     topicMeta.Topic,
 					partition: partMeta.Partition,
 
-					keepControl: c.cfg.consumer.keepControl,
+					keepControl: c.cfg.keepControl,
 
 					allConsumptionsIdx: -1, // same, see below
 					seqOffset: seqOffset{

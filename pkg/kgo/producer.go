@@ -15,7 +15,7 @@ import (
 // BeginTransaction sets the client to a transactional state, erroring if there
 // is no transactional ID or if the client is already in a transaction.
 func (c *Client) BeginTransaction() error {
-	if c.cfg.producer.txnID == nil {
+	if c.cfg.txnID == nil {
 		return ErrNotTransactional
 	}
 
@@ -131,7 +131,7 @@ func (c *Client) EndTransaction(ctx context.Context, commit bool) error {
 	}
 
 	kresp, err := c.Request(ctx, &kmsg.EndTxnRequest{
-		TransactionalID: *c.cfg.producer.txnID,
+		TransactionalID: *c.cfg.txnID,
 		ProducerID:      c.producer.id,
 		ProducerEpoch:   c.producer.epoch,
 		Commit:          commit,
@@ -191,15 +191,15 @@ func (c *Client) Produce(
 	r *Record,
 	promise func(*Record, error),
 ) error {
-	if len(r.Key)+len(r.Value) > int(c.cfg.producer.maxRecordBatchBytes)-512 {
+	if len(r.Key)+len(r.Value) > int(c.cfg.maxRecordBatchBytes)-512 {
 		return kerr.MessageTooLarge
 	}
 
-	if c.cfg.producer.txnID != nil && atomic.LoadUint32(&c.producer.producingTxn) != 1 {
+	if c.cfg.txnID != nil && atomic.LoadUint32(&c.producer.producingTxn) != 1 {
 		return ErrNotInTransaction
 	}
 
-	if atomic.AddInt64(&c.producer.bufferedRecords, 1) > c.cfg.producer.maxBufferedRecords {
+	if atomic.AddInt64(&c.producer.bufferedRecords, 1) > c.cfg.maxBufferedRecords {
 		select {
 		case <-c.producer.waitBuffer:
 		case <-c.ctx.Done():
@@ -243,7 +243,7 @@ func (c *Client) Produce(
 
 func (c *Client) finishRecordPromise(pr promisedRecord, err error) {
 	buffered := atomic.AddInt64(&c.producer.bufferedRecords, -1)
-	if buffered >= c.cfg.producer.maxBufferedRecords {
+	if buffered >= c.cfg.maxBufferedRecords {
 		go func() { c.producer.waitBuffer <- struct{}{} }()
 	} else if buffered == 0 && atomic.LoadInt32(&c.producer.flushing) > 0 {
 		c.producer.flushingMu.Lock()
@@ -275,7 +275,7 @@ func (c *Client) doPartitionRecord(parts *topicPartitions, partsData *topicParti
 	parts.partsMu.Lock()
 	defer parts.partsMu.Unlock()
 	if parts.partitioner == nil {
-		parts.partitioner = c.cfg.producer.partitioner.forTopic(pr.Topic)
+		parts.partitioner = c.cfg.partitioner.forTopic(pr.Topic)
 	}
 
 	mapping := partsData.writable
@@ -356,9 +356,9 @@ func (c *Client) initProducerID() {
 // producer epoch.
 func (c *Client) doInitProducerID() error {
 	req := new(kmsg.InitProducerIDRequest)
-	if c.cfg.producer.txnID != nil {
-		req.TransactionalID = c.cfg.producer.txnID
-		req.TransactionTimeoutMillis = int32(c.cfg.producer.txnTimeout.Milliseconds())
+	if c.cfg.txnID != nil {
+		req.TransactionalID = c.cfg.txnID
+		req.TransactionTimeoutMillis = int32(c.cfg.txnTimeout.Milliseconds())
 	}
 	kresp, err := c.Request(c.ctx, req)
 	if err != nil {
@@ -463,8 +463,8 @@ func (c *Client) addUnknownTopicRecord(pr promisedRecord) {
 
 func (c *Client) waitUnknownTopic(topic string, wait chan struct{}) {
 	var after <-chan time.Time
-	if timeout := c.cfg.producer.recordTimeout; timeout > 0 {
-		timer := time.NewTimer(c.cfg.producer.recordTimeout)
+	if timeout := c.cfg.recordTimeout; timeout > 0 {
+		timer := time.NewTimer(c.cfg.recordTimeout)
 		defer timer.Stop()
 		after = timer.C
 	}
@@ -481,7 +481,7 @@ func (c *Client) waitUnknownTopic(topic string, wait chan struct{}) {
 				return // metadata was successful!
 			}
 			tries++
-			if tries >= c.cfg.client.retries {
+			if tries >= c.cfg.retries {
 				err = ErrNoPartitionsAvailable
 			}
 		}
@@ -517,7 +517,7 @@ func (cl *Client) Flush(ctx context.Context) error {
 	// nothing new will fall into a timer waiting,
 	// so we can just wake everything up through the lock,
 	// and be sure that all sinks will loop draining.
-	if cl.cfg.producer.linger > 0 {
+	if cl.cfg.linger > 0 {
 		for _, parts := range cl.loadTopics() {
 			for _, part := range parts.load().all {
 				part.records.mu.Lock()

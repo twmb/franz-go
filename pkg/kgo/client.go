@@ -67,8 +67,8 @@ func NewClient(opts ...Opt) (*Client, error) {
 		return nil, err
 	}
 
-	seedAddrs := make([]string, 0, len(cfg.client.seedBrokers))
-	for _, seedBroker := range cfg.client.seedBrokers {
+	seedAddrs := make([]string, 0, len(cfg.seedBrokers))
+	for _, seedBroker := range cfg.seedBrokers {
 		addr := seedBroker
 		port := 9092 // default kafka port
 		var err error
@@ -146,7 +146,7 @@ func (c *Client) broker() *broker {
 }
 
 func (c *Client) waitTries(ctx context.Context, tries int) bool {
-	after := time.NewTimer(c.cfg.client.retryBackoff(tries))
+	after := time.NewTimer(c.cfg.retryBackoff(tries))
 	defer after.Stop()
 	select {
 	case <-ctx.Done():
@@ -175,14 +175,14 @@ start:
 	tries++
 	broker := c.broker()
 	req := &kmsg.MetadataRequest{
-		AllowAutoTopicCreation: c.cfg.producer.allowAutoTopicCreation,
+		AllowAutoTopicCreation: c.cfg.allowAutoTopicCreation,
 	}
 	for _, topic := range topics {
 		req.Topics = append(req.Topics, kmsg.MetadataRequestTopic{topic})
 	}
 	kresp, err := broker.waitResp(ctx, req)
 	if err != nil {
-		if isRetriableBrokerErr(err) && tries < c.cfg.client.retries {
+		if isRetriableBrokerErr(err) && tries < c.cfg.retries {
 			if ok := c.waitTries(ctx, tries); ok {
 				goto start
 			}
@@ -361,7 +361,7 @@ start:
 		resp, err = c.broker().waitResp(ctx, req)
 	}
 
-	if (kerr.IsRetriable(err) || isRetriableBrokerErr(err)) && tries < c.cfg.client.retries {
+	if (kerr.IsRetriable(err) || isRetriableBrokerErr(err)) && tries < c.cfg.retries {
 		if ok := c.waitTries(ctx, tries); ok {
 			goto start
 		}
@@ -391,7 +391,7 @@ start:
 	if id = atomic.LoadInt32(&c.controllerID); id < 0 {
 		tries++
 		if err := c.fetchBrokerMetadata(ctx); err != nil {
-			if isRetriableBrokerErr(err) && tries < c.cfg.client.retries {
+			if isRetriableBrokerErr(err) && tries < c.cfg.retries {
 				if ok := c.waitTries(ctx, tries); ok {
 					goto start
 				}
@@ -455,7 +455,7 @@ start:
 
 	if err != nil {
 		c.coordinatorsMu.Unlock()
-		if isRetriableErr(err) && tries < c.cfg.client.retries {
+		if isRetriableErr(err) && tries < c.cfg.retries {
 			if ok := c.waitTries(ctx, tries); ok {
 				goto start
 			}

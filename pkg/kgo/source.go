@@ -319,10 +319,10 @@ func (source *recordSource) unuseAll(reqOffsets map[string]map[int32]*seqOffsetF
 
 func (source *recordSource) createRequest() (req *fetchRequest, again bool) {
 	req = &fetchRequest{
-		maxWait:        source.broker.client.cfg.consumer.maxWait,
-		maxBytes:       source.broker.client.cfg.consumer.maxBytes,
-		maxPartBytes:   source.broker.client.cfg.consumer.maxPartBytes,
-		isolationLevel: source.broker.client.cfg.consumer.isolationLevel,
+		maxWait:        source.broker.client.cfg.maxWait,
+		maxBytes:       source.broker.client.cfg.maxBytes,
+		maxPartBytes:   source.broker.client.cfg.maxPartBytes,
+		isolationLevel: source.broker.client.cfg.isolationLevel,
 	}
 
 	source.mu.Lock()
@@ -393,7 +393,7 @@ func (source *recordSource) fill() {
 
 func (source *recordSource) backoff() {
 	source.consecutiveFailures++
-	after := time.NewTimer(source.broker.client.cfg.client.retryBackoff(source.consecutiveFailures))
+	after := time.NewTimer(source.broker.client.cfg.retryBackoff(source.consecutiveFailures))
 	defer after.Stop()
 	select {
 	case <-after.C:
@@ -460,7 +460,7 @@ func (source *recordSource) handleReqResp(req *fetchRequest, kresp kmsg.Response
 			// the end. We respect that.
 			if fetchPart.Err == kerr.OffsetOutOfRange {
 				partOffset.from.setLoadingOffsets(partOffset.seq)
-				reloadOffsets.setTopicPartForList(topic, partition, source.broker.client.cfg.consumer.resetOffset)
+				reloadOffsets.setTopicPartForList(topic, partition, source.broker.client.cfg.resetOffset)
 
 			} else if fetchPart.Err == kerr.FencedLeaderEpoch {
 				// With fenced leader epoch, we notify an error only if

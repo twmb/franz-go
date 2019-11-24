@@ -37,8 +37,6 @@ type waitingResp struct {
 	err     error
 }
 
-type apiVersions [kmsg.MaxKey + 1]int16
-
 // broker manages the concept how a client would interact with a broker.
 type broker struct {
 	client *Client
@@ -81,7 +79,7 @@ type broker struct {
 	// reqs manages incoming message requests.
 	reqs chan promisedReq
 	// dead is an atomic so a backed up reqs cannot block broker stoppage.
-	dead int64
+	dead int32
 }
 
 const unknownControllerID = -1
@@ -111,7 +109,7 @@ func (c *Client) newBroker(addr string, id int32) *broker {
 
 // stopForever permanently disables this broker.
 func (b *broker) stopForever() {
-	if atomic.SwapInt64(&b.dead, 1) == 1 {
+	if atomic.SwapInt32(&b.dead, 1) == 1 {
 		return
 	}
 
@@ -142,7 +140,7 @@ func (b *broker) do(
 	dead := false
 
 	b.dieMu.RLock()
-	if atomic.LoadInt64(&b.dead) == 1 {
+	if atomic.LoadInt32(&b.dead) == 1 {
 		dead = true
 	} else {
 		b.reqs <- promisedReq{ctx, req, promise}
@@ -232,19 +230,15 @@ func (b *broker) handleReqs() {
 			continue
 		}
 
-		// version bound our request:
-		// If we have no versions, then a max versions bound prevented
-		// us from requesting versions at all.
-		// We also check the max version bound.
 		if int(req.Key()) > len(cxn.versions[:]) ||
-			b.client.cfg.client.maxVersions != nil &&
-				int(req.Key()) >= len(b.client.cfg.client.maxVersions) {
+			b.client.cfg.maxVersions != nil &&
+				int(req.Key()) >= len(b.client.cfg.maxVersions) {
 			pr.promise(nil, ErrUnknownRequestKey)
 			continue
 		}
 		ourMax := req.MaxVersion()
-		if b.client.cfg.client.maxVersions != nil {
-			userMax := b.client.cfg.client.maxVersions[req.Key()]
+		if b.client.cfg.maxVersions != nil {
+			userMax := b.client.cfg.maxVersions[req.Key()]
 			if userMax < ourMax {
 				ourMax = userMax
 			}
@@ -308,7 +302,7 @@ func (b *broker) loadConnection(reqKey int16) (*brokerCxn, error) {
 		pcxn = &b.cxnFetch
 	}
 
-	if *pcxn != nil && atomic.LoadInt64(&(*pcxn).dead) == 0 {
+	if *pcxn != nil && atomic.LoadInt32(&(*pcxn).dead) == 0 {
 		return *pcxn, nil
 	}
 
@@ -319,11 +313,11 @@ func (b *broker) loadConnection(reqKey int16) (*brokerCxn, error) {
 
 	cxn := &brokerCxn{
 		conn:     conn,
-		clientID: b.client.cfg.client.id,
-		ctx:      b.client.ctx,
-		sasls:    b.client.cfg.client.sasls,
+		clientID: b.client.cfg.id,
+		saslCtx:  b.client.ctx,
+		sasls:    b.client.cfg.sasls,
 	}
-	if err = cxn.init(b.client.cfg.client.maxVersions); err != nil {
+	if err = cxn.init(b.client.cfg.maxVersions); err != nil {
 		conn.Close()
 		return nil, err
 	}
@@ -334,7 +328,7 @@ func (b *broker) loadConnection(reqKey int16) (*brokerCxn, error) {
 
 // connect connects to the broker's addr, returning the new connection.
 func (b *broker) connect() (net.Conn, error) {
-	conn, err := b.client.cfg.client.dialFn(b.addr)
+	conn, err := b.client.cfg.dialFn(b.addr)
 	if err != nil {
 		if _, ok := err.(net.Error); ok {
 			return nil, ErrConnDead
@@ -348,10 +342,10 @@ func (b *broker) connect() (net.Conn, error) {
 // the broker struct to allow lazy connection (re)creation.
 type brokerCxn struct {
 	conn     net.Conn
-	versions apiVersions
+	versions [kmsg.MaxKey + 1]int16
 
-	ctx   context.Context
-	sasls []sasl.Mechanism
+	saslCtx context.Context
+	sasls   []sasl.Mechanism
 
 	mechanism sasl.Mechanism
 	expiry    time.Time
@@ -366,30 +360,30 @@ type brokerCxn struct {
 	// resps manages reading kafka responses.
 	resps chan promisedResp
 	// dead is an atomic so that a backed up resps cannot block cxn death.
-	dead int64
+	dead int32
 }
 
-func (cx *brokerCxn) init(maxVersions kversion.Versions) error {
-	for i := 0; i < kmsg.MaxKey; i++ {
-		cx.versions[i] = -1
+func (cxn *brokerCxn) init(maxVersions kversion.Versions) error {
+	for i := 0; i < len(cxn.versions[:]); i++ {
+		cxn.versions[i] = -1
 	}
 
 	if maxVersions == nil || len(maxVersions) >= 19 {
-		if err := cx.requestAPIVersions(); err != nil {
+		if err := cxn.requestAPIVersions(); err != nil {
 			return err
 		}
 	}
 
-	if err := cx.sasl(); err != nil {
+	if err := cxn.sasl(); err != nil {
 		return err
 	}
 
-	cx.resps = make(chan promisedResp, 100)
-	go cx.handleResps()
+	cxn.resps = make(chan promisedResp, 100)
+	go cxn.handleResps()
 	return nil
 }
 
-func (cx *brokerCxn) requestAPIVersions() error {
+func (cxn *brokerCxn) requestAPIVersions() error {
 	maxVersion := int16(3)
 start:
 	req := &kmsg.ApiVersionsRequest{
@@ -397,12 +391,12 @@ start:
 		ClientSoftwareName:    "kgo",
 		ClientSoftwareVersion: "0.0.1",
 	}
-	corrID, err := cx.writeRequest(req)
+	corrID, err := cxn.writeRequest(req)
 	if err != nil {
 		return err
 	}
 
-	rawResp, err := readResponse(cx.conn, corrID)
+	rawResp, err := readResponse(cxn.conn, corrID)
 	if err != nil {
 		return err
 	}
@@ -439,32 +433,32 @@ start:
 		if key.ApiKey > kmsg.MaxKey {
 			continue
 		}
-		cx.versions[key.ApiKey] = key.MaxVersion
+		cxn.versions[key.ApiKey] = key.MaxVersion
 	}
 	return nil
 }
 
-func (cx *brokerCxn) sasl() error {
-	if len(cx.sasls) == 0 {
+func (cxn *brokerCxn) sasl() error {
+	if len(cxn.sasls) == 0 {
 		return nil
 	}
-	mechanism := cx.sasls[0]
+	mechanism := cxn.sasls[0]
 	retried := false
 	authenticate := false
 	const handshakeKey = 17
 
 start:
-	if mechanism.Name() != "GSSAPI" && cx.versions[handshakeKey] >= 0 {
+	if mechanism.Name() != "GSSAPI" && cxn.versions[handshakeKey] >= 0 {
 		req := &kmsg.SASLHandshakeRequest{
-			Version:   cx.versions[handshakeKey],
+			Version:   cxn.versions[handshakeKey],
 			Mechanism: mechanism.Name(),
 		}
-		corrID, err := cx.writeRequest(req)
+		corrID, err := cxn.writeRequest(req)
 		if err != nil {
 			return err
 		}
 
-		rawResp, err := readResponse(cx.conn, corrID)
+		rawResp, err := readResponse(cxn.conn, corrID)
 		if err != nil {
 			return err
 		}
@@ -476,7 +470,7 @@ start:
 		err = kerr.ErrorForCode(resp.ErrorCode)
 		if err != nil {
 			if !retried && err == kerr.UnsupportedSaslMechanism {
-				for _, ours := range cx.sasls[1:] {
+				for _, ours := range cxn.sasls[1:] {
 					for _, supported := range resp.SupportedMechanisms {
 						if supported == ours.Name() {
 							mechanism = ours
@@ -490,17 +484,17 @@ start:
 		}
 		authenticate = req.Version == 1
 	}
-	cx.mechanism = mechanism
-	return cx.doSasl(authenticate)
+	cxn.mechanism = mechanism
+	return cxn.doSasl(authenticate)
 }
 
-func (cx *brokerCxn) doSasl(authenticate bool) error {
-	session, clientWrite, err := cx.mechanism.Authenticate(cx.ctx)
+func (cxn *brokerCxn) doSasl(authenticate bool) error {
+	session, clientWrite, err := cxn.mechanism.Authenticate(cxn.saslCtx)
 	if err != nil {
 		return err
 	}
 	if len(clientWrite) == 0 {
-		return fmt.Errorf("unexpected server-write sasl with mechanism %s", cx.mechanism.Name())
+		return fmt.Errorf("unexpected server-write sasl with mechanism %s", cxn.mechanism.Name())
 	}
 
 	var lifetimeMillis int64
@@ -509,27 +503,27 @@ func (cx *brokerCxn) doSasl(authenticate bool) error {
 		var challenge []byte
 
 		if !authenticate {
-			cx.reqBuf = append(cx.reqBuf[:0], 0, 0, 0, 0)
-			binary.BigEndian.PutUint32(cx.reqBuf, uint32(len(clientWrite)))
-			cx.reqBuf = append(cx.reqBuf, clientWrite...)
-			if _, err = cx.conn.Write(cx.reqBuf); err != nil {
+			cxn.reqBuf = append(cxn.reqBuf[:0], 0, 0, 0, 0)
+			binary.BigEndian.PutUint32(cxn.reqBuf, uint32(len(clientWrite)))
+			cxn.reqBuf = append(cxn.reqBuf, clientWrite...)
+			if _, err = cxn.conn.Write(cxn.reqBuf); err != nil {
 				return ErrConnDead
 			}
-			if challenge, err = readConn(cx.conn); err != nil {
+			if challenge, err = readConn(cxn.conn); err != nil {
 				return err
 			}
 
 		} else {
 			const authenticateKey = 37
 			req := &kmsg.SASLAuthenticateRequest{
-				Version:       cx.versions[authenticateKey],
+				Version:       cxn.versions[authenticateKey],
 				SASLAuthBytes: clientWrite,
 			}
-			corrID, err := cx.writeRequest(req)
+			corrID, err := cxn.writeRequest(req)
 			if err != nil {
 				return err
 			}
-			rawResp, err := readResponse(cx.conn, corrID)
+			rawResp, err := readResponse(cxn.conn, corrID)
 			if err != nil {
 				return err
 			}
@@ -561,25 +555,25 @@ func (cx *brokerCxn) doSasl(authenticate bool) error {
 		if lifetimeMillis < 5000 {
 			return fmt.Errorf("invalid short sasl lifetime millis %d", lifetimeMillis)
 		}
-		cx.expiry = time.Now().Add(time.Duration(lifetimeMillis)*time.Millisecond - time.Second)
+		cxn.expiry = time.Now().Add(time.Duration(lifetimeMillis)*time.Millisecond - time.Second)
 	}
 	return nil
 }
 
 // writeRequest writes a message request to the broker connection, bumping the
 // connection's correlation ID as appropriate for the next write.
-func (cx *brokerCxn) writeRequest(req kmsg.Request) (int32, error) {
-	cx.reqBuf = kmsg.AppendRequest(
-		cx.reqBuf[:0],
+func (cxn *brokerCxn) writeRequest(req kmsg.Request) (int32, error) {
+	cxn.reqBuf = kmsg.AppendRequest(
+		cxn.reqBuf[:0],
 		req,
-		cx.correlationID,
-		cx.clientID,
+		cxn.correlationID,
+		cxn.clientID,
 	)
-	if _, err := cx.conn.Write(cx.reqBuf); err != nil {
+	if _, err := cxn.conn.Write(cxn.reqBuf); err != nil {
 		return 0, ErrConnDead
 	}
-	id := cx.correlationID
-	cx.correlationID++
+	id := cxn.correlationID
+	cxn.correlationID++
 	return id, nil
 }
 
@@ -620,37 +614,37 @@ func readResponse(conn io.ReadCloser, correlationID int32) ([]byte, error) {
 
 // die kills a broker connection (which could be dead already) and replies to
 // all requests awaiting responses appropriately.
-func (cx *brokerCxn) die() {
-	if atomic.SwapInt64(&cx.dead, 1) == 1 {
+func (cxn *brokerCxn) die() {
+	if atomic.SwapInt32(&cxn.dead, 1) == 1 {
 		return
 	}
 
-	cx.conn.Close()
+	cxn.conn.Close()
 
 	go func() {
-		for pr := range cx.resps {
+		for pr := range cxn.resps {
 			pr.promise(nil, ErrConnDead)
 		}
 	}()
 
-	cx.dieMu.Lock()
-	cx.dieMu.Unlock()
+	cxn.dieMu.Lock()
+	cxn.dieMu.Unlock()
 
-	close(cx.resps) // after lock, nothing sends down resps
+	close(cxn.resps) // after lock, nothing sends down resps
 }
 
 // waitResp, called serially by a broker's handleReqs, manages handling a
 // message requests's response.
-func (cx *brokerCxn) waitResp(pr promisedResp) {
+func (cxn *brokerCxn) waitResp(pr promisedResp) {
 	dead := false
 
-	cx.dieMu.RLock()
-	if atomic.LoadInt64(&cx.dead) == 1 {
+	cxn.dieMu.RLock()
+	if atomic.LoadInt32(&cxn.dead) == 1 {
 		dead = true
 	} else {
-		cx.resps <- pr
+		cxn.resps <- pr
 	}
-	cx.dieMu.RUnlock()
+	cxn.dieMu.RUnlock()
 
 	if dead {
 		pr.promise(nil, ErrConnDead)
@@ -658,11 +652,11 @@ func (cx *brokerCxn) waitResp(pr promisedResp) {
 }
 
 // handleResps serially handles all broker responses for an single connection.
-func (cx *brokerCxn) handleResps() {
-	defer cx.die() // always track our death
+func (cxn *brokerCxn) handleResps() {
+	defer cxn.die() // always track our death
 
-	for pr := range cx.resps {
-		raw, err := readResponse(cx.conn, pr.correlationID)
+	for pr := range cxn.resps {
+		raw, err := readResponse(cxn.conn, pr.correlationID)
 		if err != nil {
 			pr.promise(nil, err)
 			return

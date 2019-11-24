@@ -41,7 +41,7 @@ func GroupTopicsRegex() GroupOpt {
 	return groupOpt{func(cfg *groupConsumer) { cfg.regexTopics = true }}
 }
 
-// GroupBalancers sets the balancer to use for dividing topic partitions among
+// Balancers sets the balancer to use for dividing topic partitions among
 // group members, overriding the defaults.
 //
 // The current default is [cooperative-sticky].
@@ -53,22 +53,22 @@ func GroupTopicsRegex() GroupOpt {
 // client will perform cooperative balancing, which is incompatible with eager
 // balancing. To support an eager balancing strategy, be sure to override this
 // option.
-func GroupBalancers(balancers ...GroupBalancer) GroupOpt {
+func Balancers(balancers ...GroupBalancer) GroupOpt {
 	return groupOpt{func(cfg *groupConsumer) { cfg.balancers = balancers }}
 }
 
-// GroupSessionTimeout sets how long a member the group can go between
+// SessionTimeout sets how long a member the group can go between
 // heartbeats, overriding the default 10,000ms. If a member does not heartbeat
 // in this timeout, the broker will remove the member from the group and
 // initiate a rebalance.
 //
 // This corresponds to Kafka's session.timeout.ms setting and must be within
 // the broker's group.min.session.timeout.ms and group.max.session.timeout.ms.
-func GroupSessionTimeout(timeout time.Duration) GroupOpt {
+func SessionTimeout(timeout time.Duration) GroupOpt {
 	return groupOpt{func(cfg *groupConsumer) { cfg.sessionTimeout = timeout }}
 }
 
-// GroupRebalanceTimeout sets how long group members are allowed to take
+// RebalanceTimeout sets how long group members are allowed to take
 // when a JoinGroup is initiated (i.e., a rebalance has begun), overriding the
 // default 60,000ms. This is essentially how long all members are allowed to
 // complete work and commit offsets.
@@ -78,11 +78,11 @@ func GroupSessionTimeout(timeout time.Duration) GroupOpt {
 // the group.
 //
 // This corresponds to Kafka's rebalance.timeout.ms.
-func GroupRebalanceTimeout(timeout time.Duration) GroupOpt {
+func RebalanceTimeout(timeout time.Duration) GroupOpt {
 	return groupOpt{func(cfg *groupConsumer) { cfg.rebalanceTimeout = timeout }}
 }
 
-// GroupHeartbeatInterval sets how long a group member goes between
+// HeartbeatInterval sets how long a group member goes between
 // heartbeats to Kafka, overriding the default 3,000ms.
 //
 // Kafka uses heartbeats to ensure that a group member's session stays active.
@@ -90,11 +90,11 @@ func GroupRebalanceTimeout(timeout time.Duration) GroupOpt {
 // higher than 1/3rd the session timeout.
 //
 // This corresponds to Kafka's heartbeat.interval.ms.
-func GroupHeartbeatInterval(interval time.Duration) GroupOpt {
+func HeartbeatInterval(interval time.Duration) GroupOpt {
 	return groupOpt{func(cfg *groupConsumer) { cfg.heartbeatInterval = interval }}
 }
 
-// GroupOnAssigned sets the function to be called when a group is joined after
+// OnAssigned sets the function to be called when a group is joined after
 // partitions are assigned before fetches begin.
 //
 // Note that this function combined with onRevoked should combined not exceed
@@ -103,11 +103,11 @@ func GroupHeartbeatInterval(interval time.Duration) GroupOpt {
 //
 // The onAssigned function is passed the group's context, which is only
 // canceled if the group is left or the client is closed.
-func GroupOnAssigned(onAssigned func(context.Context, map[string][]int32)) GroupOpt {
+func OnAssigned(onAssigned func(context.Context, map[string][]int32)) GroupOpt {
 	return groupOpt{func(cfg *groupConsumer) { cfg.onAssigned = onAssigned }}
 }
 
-// GroupOnRevoked sets the function to be called once a group transitions from
+// OnRevoked sets the function to be called once a group transitions from
 // stable to rebalancing.
 //
 // Note that this function combined with onAssigned should combined not exceed
@@ -118,31 +118,31 @@ func GroupOnAssigned(onAssigned func(context.Context, map[string][]int32)) Group
 //
 // The onRevoked function is passed the group's context, which is only canceled
 // if the group is left or the client is closed.
-func GroupOnRevoked(onRevoked func(context.Context, map[string][]int32)) GroupOpt {
+func OnRevoked(onRevoked func(context.Context, map[string][]int32)) GroupOpt {
 	return groupOpt{func(cfg *groupConsumer) { cfg.onRevoked = onRevoked }}
 }
 
-// GroupOnLost sets the function to be called on "fatal" group errors, such as
+// OnLost sets the function to be called on "fatal" group errors, such as
 // IllegalGeneration, UnknownMemberID, and authentication failures. This
 // function differs from onRevoked in that it is unlikely that commits will
 // succeed when partitions are outright lost, whereas commits likely will
 // succeed when revoking partitions.
-func GroupOnLost(onLost func(context.Context, map[string][]int32)) GroupOpt {
+func OnLost(onLost func(context.Context, map[string][]int32)) GroupOpt {
 	return groupOpt{func(cfg *groupConsumer) { cfg.onLost = onLost }}
 }
 
-// GroupDisableAutoCommit disable auto committing.
-func GroupDisableAutoCommit() GroupOpt {
+// DisableAutoCommit disable auto committing.
+func DisableAutoCommit() GroupOpt {
 	return groupOpt{func(cfg *groupConsumer) { cfg.autocommitDisable = true }}
 }
 
-// GroupAutoCommitInterval sets how long to go between autocommits, overriding the
+// AutoCommitInterval sets how long to go between autocommits, overriding the
 // default 5s.
-func GroupAutoCommitInterval(interval time.Duration) GroupOpt {
+func AutoCommitInterval(interval time.Duration) GroupOpt {
 	return groupOpt{func(cfg *groupConsumer) { cfg.autocommitInterval = interval }}
 }
 
-// GroupInstanceID sets the group consumer's instance ID, switching the group
+// InstanceID sets the group consumer's instance ID, switching the group
 // member from "dynamic" to "static".
 //
 // Prior to Kafka 2.3.0, joining a group gave a group member a new member ID.
@@ -165,7 +165,7 @@ func GroupAutoCommitInterval(interval time.Duration) GroupOpt {
 // To actually leave the group, you must use an external admin commant that
 // issues a leave group request on behalf of this instance ID (see kcl). If
 // necessary, this package may introduce a manual leave command in the future.
-func GroupInstanceID(id string) GroupOpt {
+func InstanceID(id string) GroupOpt {
 	return groupOpt{func(cfg *groupConsumer) { cfg.instanceID = &id }}
 }
 
@@ -253,7 +253,7 @@ func (cl *Client) AssignGroup(group string, opts ...GroupOpt) {
 
 		autocommitInterval: 5 * time.Second,
 	}
-	if c.cl.cfg.producer.txnID == nil {
+	if c.cl.cfg.txnID == nil {
 		g.onRevoked = g.defaultRevoke
 	} else {
 		g.autocommitDisable = true
@@ -311,7 +311,7 @@ loop:
 			consecutiveErrors++
 			// Waiting for the backoff is a good time to update our
 			// metadata; maybe the error is from stale metadata.
-			backoff := g.cl.cfg.client.retryBackoff(consecutiveErrors)
+			backoff := g.cl.cfg.retryBackoff(consecutiveErrors)
 			deadline := time.Now().Add(backoff)
 			g.cl.waitmeta(g.ctx, backoff)
 			after := time.NewTimer(time.Until(deadline))
@@ -850,7 +850,7 @@ func (g *groupConsumer) fetchOffsets(ctx context.Context, newAssigned map[string
 				offset.epoch = rPartition.LeaderEpoch
 			}
 			if rPartition.Offset == -1 {
-				offset = g.cl.cfg.consumer.resetOffset
+				offset = g.cl.cfg.resetOffset
 			}
 			topicOffsets[rPartition.Partition] = offset
 		}
@@ -1334,7 +1334,7 @@ func (cl *Client) CommitOffsetsForTransaction(
 		onDone = func(_ *kmsg.TxnOffsetCommitRequest, _ *kmsg.TxnOffsetCommitResponse, _ error) {}
 	}
 
-	if cl.cfg.producer.txnID == nil {
+	if cl.cfg.txnID == nil {
 		onDone(nil, nil, ErrNotTransactional)
 		return
 	}
@@ -1400,7 +1400,7 @@ func (c *Client) addOffsetsToTxn(ctx context.Context, group string) error {
 	}
 
 	kresp, err := c.Request(ctx, &kmsg.AddOffsetsToTxnRequest{
-		TransactionalID: *c.cfg.producer.txnID,
+		TransactionalID: *c.cfg.txnID,
 		ProducerID:      c.producer.id,
 		ProducerEpoch:   c.producer.epoch,
 		Group:           group,
@@ -1444,7 +1444,7 @@ func (g *groupConsumer) commitTxn(
 
 	memberID := g.memberID
 	req := &kmsg.TxnOffsetCommitRequest{
-		TransactionalID: *g.cl.cfg.producer.txnID,
+		TransactionalID: *g.cl.cfg.txnID,
 		Group:           g.id,
 		ProducerID:      g.cl.producer.id,
 		ProducerEpoch:   g.cl.producer.epoch,
