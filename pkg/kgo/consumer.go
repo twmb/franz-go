@@ -143,6 +143,9 @@ func (c *consumer) addSourceReadyForDraining(seq uint64, source *recordSource) {
 
 // addFakeReadyForDraining saves a fake fetch that has important partition
 // errors--data loss or auth failures.
+//
+// TODO: maybe do not clear on assignPartitions? And, add regardless of seq?
+// Otherwise, maybe the user will never see an error.
 func (c *consumer) addFakeReadyForDraining(topic string, partition int32, err error, seq uint64) {
 	var broadcast bool
 	c.sourcesReadyMu.Lock()
@@ -276,6 +279,10 @@ const (
 	// lost. Thus, with this option, the actual offset in the map is
 	// meaningless / a dummy offset.
 	assignInvalidateMatching
+
+	// The counterpart to assignInvalidateMatching, assignSetMatching
+	// reset all matching partitions to the specified offset / epoch.
+	assignSetMatching
 )
 
 // assignPartitions, called under the consumer's mu, is used to set new
@@ -284,29 +291,49 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how
 	seq := c.seq
 
 	if how != assignWithoutInvalidating {
+		// In this block, we immediately want to ensure that nothing
+		// currently buffered will be returned and that no active
+		// fetches will keep their results.
+		//
+		// This lock ensures that nothing new will be buffered,
+		// and below bump the seq num on all consumptions to ensure
+		// that
+		// 1) now unused consumptions will not continue to loop
+		// 2) still used consumptions will continue to loop at the
+		//    appropriate offset.
 		c.sourcesReadyMu.Lock()
 		c.seq++
 		seq = c.seq
 
-		// First, stop all fetches for prior assignments. After our consumer
-		// lock is released, fetches will return nothing historic.
 		keep := c.usingPartitions[:0]
 		for _, usedPartition := range c.usingPartitions {
-			invalidate := how == assignInvalidateAll
-			if !invalidate {
+			needsReset := true
+			if how == assignInvalidateAll {
+				usedPartition.consumption.setOffset(usedPartition.leaderEpoch, true, -1, -1, seq) // case 1
+				needsReset = false
+			} else {
 				if matchTopic, ok := assignments[usedPartition.consumption.topic]; ok {
-					_, invalidate = matchTopic[usedPartition.consumption.partition]
+					matchPartition, ok := matchTopic[usedPartition.consumption.partition]
+					if !ok {
+						continue
+					}
+					needsReset = false
+					if how == assignInvalidateMatching {
+						usedPartition.consumption.setOffset(usedPartition.leaderEpoch, true, -1, -1, seq) // case 1
+					} else { // how == assignSetMatching
+						usedPartition.consumption.setOffset(usedPartition.leaderEpoch, true, matchPartition.request, matchPartition.epoch, seq) // case 2
+						keep = append(keep, usedPartition)
+					}
 				}
 			}
-			if invalidate {
-				usedPartition.consumption.setOffset(usedPartition.leaderEpoch, true, -1, -1, seq)
-			} else {
-				usedPartition.consumption.resetOffset(seq)
+			if needsReset {
+				usedPartition.consumption.resetOffset(seq) // case 2
 				keep = append(keep, usedPartition)
 			}
 		}
 
-		// Also drain any buffered, now stale, fetches.
+		// Before releasing the lock, we drain any buffered (now stale)
+		// fetches that were waiting to be polled.
 		for _, ready := range c.sourcesReadyForDraining {
 			ready.takeBuffered()
 		}
@@ -319,7 +346,7 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how
 
 	// This assignment could contain nothing (for the purposes of
 	// invalidating active fetches), so we only do this if needed.
-	if len(assignments) == 0 || how == assignInvalidateMatching {
+	if len(assignments) == 0 || (how == assignInvalidateMatching || how == assignSetMatching) {
 		return
 	}
 

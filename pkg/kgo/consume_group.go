@@ -871,6 +871,9 @@ func (g *groupConsumer) fetchOffsets(ctx context.Context, newAssigned map[string
 	if !g.c.maybeAssignPartitions(&g.seq, offsets, assignHow) {
 		return errors.New("stale group")
 	}
+	// If we can validate epochs, assigning partitions may set some
+	// partitions to wait for that validation. Thus, to ensure we continue
+	// the offset loading process, we must reset and load offsets here.
 	g.c.resetAndLoadOffsets()
 	return nil
 }
@@ -1090,10 +1093,54 @@ func (g *groupConsumer) loopCommit() {
 
 		g.mu.Lock()
 		if !g.blockAuto {
-			g.commit(context.Background(), g.getUncommittedLocked(), nil)
+			g.commit(context.Background(), g.getUncommittedLocked(true), nil)
 		}
 		g.mu.Unlock()
 	}
+}
+
+// ResetToCommitted resets the client's fetch offsets to the last committed
+// offsets if the client is consuming as a group.
+//
+// The main use of this method is to effectively provide a way to reset
+// consumption after aborting a batch.
+func (cl *Client) ResetToCommitted() {
+	c := cl.consumer
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.typ != consumerTypeGroup {
+		return
+	}
+
+	g := c.group
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	if c.seq != g.seq {
+		return
+	}
+
+	committed := g.getUncommittedLocked(false)
+	offsets := make(map[string]map[int32]Offset, len(committed))
+	for topic, partitions := range committed {
+		topicOffsets := make(map[int32]Offset, len(partitions))
+		for partition, epochOffset := range partitions {
+			topicOffsets[partition] = Offset{
+				request: epochOffset.Offset,
+				epoch:   epochOffset.Epoch,
+			}
+		}
+		offsets[topic] = topicOffsets
+	}
+
+	if len(offsets) == 0 {
+		return
+	}
+
+	c.assignPartitions(offsets, assignSetMatching)
+	g.seq = c.seq
 }
 
 // Uncommitted returns the latest uncommitted offsets. Uncommitted offsets are
@@ -1120,10 +1167,10 @@ func (cl *Client) Uncommitted() map[string]map[int32]EpochOffset {
 func (g *groupConsumer) getUncommitted() map[string]map[int32]EpochOffset {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	return g.getUncommittedLocked()
+	return g.getUncommittedLocked(true)
 }
 
-func (g *groupConsumer) getUncommittedLocked() map[string]map[int32]EpochOffset {
+func (g *groupConsumer) getUncommittedLocked(head bool) map[string]map[int32]EpochOffset {
 	if g.uncommitted == nil {
 		return nil
 	}
@@ -1145,7 +1192,11 @@ func (g *groupConsumer) getUncommittedLocked() map[string]map[int32]EpochOffset 
 					uncommitted[topic] = topicUncommitted
 				}
 			}
-			topicUncommitted[partition] = uncommit.head
+			if head {
+				topicUncommitted[partition] = uncommit.head
+			} else {
+				topicUncommitted[partition] = uncommit.committed
+			}
 		}
 	}
 	return uncommitted
@@ -1313,7 +1364,7 @@ func (g *groupConsumer) commit(
 // MOSTLY DUPLICATED CODE DUE TO NO GENERICS AND BECAUSE THE TYPES ARE SLIGHTLY DIFFERENT //
 ////////////////////////////////////////////////////////////////////////////////////////////
 
-// CommitOffsetsForTransaction is exactly like CommitOffsets, but specifically
+// CommitTransactionOffsets is exactly like CommitOffsets, but specifically
 // for use with transactional consuming and producing.
 //
 // Note that, like with CommitOffsets, this cancels prior unfinished commits.
@@ -1325,7 +1376,7 @@ func (g *groupConsumer) commit(
 // It is invalid to use this function if the client does not have a
 // transactional ID. As well, it is invalid to use this function outside of a
 // transaction.
-func (cl *Client) CommitOffsetsForTransaction(
+func (cl *Client) CommitTransactionOffsets(
 	ctx context.Context,
 	uncommitted map[string]map[int32]EpochOffset,
 	onDone func(*kmsg.TxnOffsetCommitRequest, *kmsg.TxnOffsetCommitResponse, error),
