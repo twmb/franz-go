@@ -244,40 +244,40 @@ func (c *Client) updateBrokers(brokers []kmsg.MetadataResponseBroker) {
 }
 
 // Close leaves any group and closes all connections and goroutines.
-func (c *Client) Close() {
+func (cl *Client) Close() {
 	// First, kill the consumer. Setting dead to true and then assigning
 	// nothing will
 	// 1) invalidate active fetches
 	// 2) ensure consumptions are unassigned, stopping all source filling
 	// 3) ensures no more assigns can happen
-	c.consumer.mu.Lock()
-	if c.consumer.dead { // client already closed
-		c.consumer.mu.Unlock()
+	cl.consumer.mu.Lock()
+	if cl.consumer.dead { // client already closed
+		cl.consumer.mu.Unlock()
 		return
 	}
-	c.consumer.dead = true
-	c.consumer.mu.Unlock()
-	c.AssignPartitions()
+	cl.consumer.dead = true
+	cl.consumer.mu.Unlock()
+	cl.AssignPartitions()
 
 	// Now we kill the client context and all brokers, ensuring all
 	// requests fail. This will finish all producer callbacks and
 	// stop the metadata loop.
-	c.ctxCancel()
-	c.brokersMu.Lock()
-	c.stopBrokers = true
-	for _, broker := range c.brokers {
+	cl.ctxCancel()
+	cl.brokersMu.Lock()
+	cl.stopBrokers = true
+	for _, broker := range cl.brokers {
 		broker.stopForever()
 		broker.recordSink.maybeBeginDraining()    // awaken anything in backoff
 		broker.recordSource.maybeBeginConsuming() // same
 	}
-	c.brokersMu.Unlock()
+	cl.brokersMu.Unlock()
 
 	// Wait for metadata to quit so we know no more erroring topic
 	// partitions will be created.
-	<-c.metadone
+	<-cl.metadone
 
 	// We must manually fail all partitions that never had a sink.
-	for _, partitions := range c.loadTopics() {
+	for _, partitions := range cl.loadTopics() {
 		for _, partition := range partitions.load().all {
 			if partition.records.sink == nil {
 				partition.records.failAllRecords(ErrBrokerDead)
@@ -313,7 +313,7 @@ func (c *Client) Close() {
 // Note that if the request is not canceled before it is written to Kafka,
 // you may just end up canceling and not receiving the response to what Kafka
 // inevitably does.
-func (c *Client) Request(ctx context.Context, req kmsg.Request) (kmsg.Response, error) {
+func (cl *Client) Request(ctx context.Context, req kmsg.Request) (kmsg.Response, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	var resp kmsg.Response
@@ -321,15 +321,15 @@ func (c *Client) Request(ctx context.Context, req kmsg.Request) (kmsg.Response, 
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		resp, err = c.request(ctx, req)
+		resp, err = cl.request(ctx, req)
 	}()
 	select {
 	case <-done:
 		return resp, err
 	case <-ctx.Done():
 		return nil, ctx.Err()
-	case <-c.ctx.Done():
-		return nil, c.ctx.Err()
+	case <-cl.ctx.Done():
+		return nil, cl.ctx.Err()
 	}
 }
 
@@ -723,10 +723,10 @@ func (c *Client) handleTxnRequest(ctx context.Context, txnID string, req kmsg.Re
 // Broker returns a handle to a specific broker to directly issue requests to.
 // Note that there is no guarantee that this broker exists; if it does not,
 // requests will fail with ErrUnknownBroker.
-func (c *Client) Broker(id int) *Broker {
+func (cl *Client) Broker(id int) *Broker {
 	return &Broker{
 		id: int32(id),
-		cl: c,
+		cl: cl,
 	}
 }
 
