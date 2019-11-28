@@ -1954,7 +1954,7 @@ DeleteRecordsResponse =>
 // InitProducerIDRequest initializes a producer ID for idempotent transactions,
 // and if using transactions, a producer epoch. This is the first request
 // necessary to begin idempotent producing or transactions.
-InitProducerIDRequest => key 22, max version 2, flexible v2+, txn coordinator
+InitProducerIDRequest => key 22, max version 3, flexible v2+, txn coordinator
   // TransactionalID is the ID to use for transactions if using transactions.
   TransactionalID: nullable-string
   // TransactionTimeoutMillis is how long a transaction is allowed before
@@ -1963,6 +1963,13 @@ InitProducerIDRequest => key 22, max version 2, flexible v2+, txn coordinator
   // Note that this timeout only begins on the first AddPartitionsToTxn
   // request.
   TransactionTimeoutMillis: int32
+  // ProducerID, added for KIP-360, is the current producer ID. This allows
+  // the client to potentially recover on UNKNOWN_PRODUCER_ID errors.
+  ProducerID: int64 // v3+
+  // The producer's current epoch. This will be checked against the producer
+  // epoch on the broker, and the request will return an error if they do not
+  // match. Also added for KIP-360.
+  ProducerEpoch: int16 // v3+
 
 // InitProducerIDResponse is returned for an InitProducerIDRequest.
 InitProducerIDResponse =>

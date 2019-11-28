@@ -7070,10 +7070,19 @@ type InitProducerIDRequest struct {
 	// Note that this timeout only begins on the first AddPartitionsToTxn
 	// request.
 	TransactionTimeoutMillis int32
+
+	// ProducerID, added for KIP-360, is the current producer ID. This allows
+	// the client to potentially recover on UNKNOWN_PRODUCER_ID errors.
+	ProducerID int64 // v3+
+
+	// The producer's current epoch. This will be checked against the producer
+	// epoch on the broker, and the request will return an error if they do not
+	// match. Also added for KIP-360.
+	ProducerEpoch int16 // v3+
 }
 
 func (*InitProducerIDRequest) Key() int16                 { return 22 }
-func (*InitProducerIDRequest) MaxVersion() int16          { return 2 }
+func (*InitProducerIDRequest) MaxVersion() int16          { return 3 }
 func (v *InitProducerIDRequest) SetVersion(version int16) { v.Version = version }
 func (v *InitProducerIDRequest) GetVersion() int16        { return v.Version }
 func (v *InitProducerIDRequest) IsFlexible() bool         { return v.Version >= 2 }
@@ -7098,6 +7107,14 @@ func (v *InitProducerIDRequest) AppendTo(dst []byte) []byte {
 	{
 		v := v.TransactionTimeoutMillis
 		dst = kbin.AppendInt32(dst, v)
+	}
+	if version >= 3 {
+		v := v.ProducerID
+		dst = kbin.AppendInt64(dst, v)
+	}
+	if version >= 3 {
+		v := v.ProducerEpoch
+		dst = kbin.AppendInt16(dst, v)
 	}
 	if isFlexible {
 		dst = append(dst, 0)
