@@ -9,6 +9,7 @@ import (
 	"github.com/twmb/kafka-go/pkg/kbin"
 	"github.com/twmb/kafka-go/pkg/kerr"
 	"github.com/twmb/kafka-go/pkg/kmsg"
+	"github.com/twmb/kafka-go/pkg/krec"
 )
 
 // TODO millis drift (sarama #1455)
@@ -666,7 +667,7 @@ type recordBuffer struct {
 
 const recordsOverhead = 4 // NULLABLE_BYTES
 
-func messageSet0Length(r *Record) int32 {
+func messageSet0Length(r *krec.Rec) int32 {
 	const length = 0 +
 		8 + // offset
 		4 + // size
@@ -678,7 +679,7 @@ func messageSet0Length(r *Record) int32 {
 	return length + int32(len(r.Key)) + int32(len(r.Value))
 }
 
-func messageSet1Length(r *Record) int32 {
+func messageSet1Length(r *krec.Rec) int32 {
 	return messageSet0Length(r) + 8 // timestamp
 }
 
@@ -699,7 +700,7 @@ func (recBuf *recordBuffer) bufferRecord(pr promisedRecord, abortOnNewBatch bool
 
 	if !firstBatch {
 		batch := recBuf.batches[len(recBuf.batches)-1]
-		recordNumbers := batch.calculateRecordNumbers(pr.Record)
+		recordNumbers := batch.calculateRecordNumbers(pr.Rec)
 
 		newBatchLength := batch.wireLength + recordNumbers.wireLength
 
@@ -709,7 +710,7 @@ func (recBuf *recordBuffer) bufferRecord(pr promisedRecord, abortOnNewBatch bool
 		// the largest record length numbers.
 		produceVersionKnown := recBuf.sink != nil && atomic.LoadInt32(&recBuf.sink.produceVersionKnown) == 1
 		if !produceVersionKnown {
-			v1newBatchLength := batch.v1wireLength + messageSet1Length(pr.Record)
+			v1newBatchLength := batch.v1wireLength + messageSet1Length(pr.Rec)
 			if v1newBatchLength > newBatchLength { // we only check v1 since it is larger than v0
 				newBatchLength = v1newBatchLength
 			}
@@ -718,9 +719,9 @@ func (recBuf *recordBuffer) bufferRecord(pr promisedRecord, abortOnNewBatch bool
 			// an old one, we use the appropriate length.
 			switch recBuf.sink.produceVersion {
 			case 0, 1:
-				newBatchLength = batch.v0wireLength + messageSet0Length(pr.Record)
+				newBatchLength = batch.v0wireLength + messageSet0Length(pr.Rec)
 			case 2:
-				newBatchLength = batch.v1wireLength + messageSet1Length(pr.Record)
+				newBatchLength = batch.v1wireLength + messageSet1Length(pr.Rec)
 			}
 		}
 
@@ -896,8 +897,8 @@ func (recBuf *recordBuffer) resetSequenceNums() {
 // promisedRecord ties a record with the callback that will be called once
 // a batch is finally written and receives a response.
 type promisedRecord struct {
-	promise func(*Record, error)
-	*Record
+	promise func(*krec.Rec, error)
+	*krec.Rec
 }
 
 // recordNumbers tracks a few numbers for a record that is buffered.
@@ -947,13 +948,13 @@ func (recBuf *recordBuffer) newRecordBatch(producerID int64, producerEpoch int16
 		baseSequence:   recBuf.sequenceNum,
 	}
 	pnr := promisedNumberedRecord{
-		b.calculateRecordNumbers(pr.Record),
+		b.calculateRecordNumbers(pr.Rec),
 		pr,
 	}
 	b.records = append(b.records, pnr)
 	b.wireLength = recordBatchOverhead + pnr.wireLength
-	b.v0wireLength = recordsOverhead + messageSet0Length(pr.Record)
-	b.v1wireLength = recordsOverhead + messageSet1Length(pr.Record)
+	b.v0wireLength = recordsOverhead + messageSet0Length(pr.Rec)
+	b.v1wireLength = recordsOverhead + messageSet1Length(pr.Rec)
 	return b
 }
 
@@ -981,8 +982,8 @@ type recordBatch struct {
 // appendRecord saves a new record to a batch.
 func (b *recordBatch) appendRecord(pr promisedRecord, nums recordNumbers) {
 	b.wireLength += nums.wireLength
-	b.v0wireLength += messageSet0Length(pr.Record)
-	b.v1wireLength += messageSet1Length(pr.Record)
+	b.v0wireLength += messageSet0Length(pr.Rec)
+	b.v1wireLength += messageSet1Length(pr.Rec)
 	b.records = append(b.records, promisedNumberedRecord{
 		nums,
 		pr,
@@ -991,7 +992,7 @@ func (b *recordBatch) appendRecord(pr promisedRecord, nums recordNumbers) {
 
 // calculateRecordNumbers returns the numbers for a record if it were added to
 // the record batch. Nothing accounts for overflows; that should be done prior.
-func (b *recordBatch) calculateRecordNumbers(r *Record) recordNumbers {
+func (b *recordBatch) calculateRecordNumbers(r *krec.Rec) recordNumbers {
 	tsMillis := r.Timestamp.UnixNano() / 1e6
 	tsDelta := int32(tsMillis - b.firstTimestamp)
 	offsetDelta := int32(len(b.records)) // since called before adding record, delta is the current end
@@ -1228,7 +1229,7 @@ func (r *recordBatch) appendToAsMessageSet(dst []byte, version uint8, compressor
 			0,
 			int64(i),
 			r.firstTimestamp+int64(pnr.timestampDelta),
-			pnr.Record,
+			pnr.Rec,
 		)
 	}
 
@@ -1238,7 +1239,7 @@ func (r *recordBatch) appendToAsMessageSet(dst []byte, version uint8, compressor
 		defer compressor.putZipr(zipr)
 
 		compressed := zipr.compress(toCompress)
-		inner := &Record{Value: compressed}
+		inner := &krec.Rec{Value: compressed}
 		wrappedLength := messageSet0Length(inner)
 		if version == 2 {
 			wrappedLength += 8 // timestamp
@@ -1268,7 +1269,7 @@ func appendMessageTo(
 	attributes int8,
 	offset int64,
 	timestamp int64,
-	r *Record,
+	r *krec.Rec,
 ) []byte {
 	magic := version >> 1
 	dst = kbin.AppendInt64(dst, offset)

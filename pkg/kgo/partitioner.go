@@ -3,6 +3,8 @@ package kgo
 import (
 	"math/rand"
 	"time"
+
+	"github.com/twmb/kafka-go/pkg/krec"
 )
 
 // Partitioner creates topic partitioners to determine which partition messages
@@ -20,10 +22,10 @@ type topicPartitioner interface {
 	// partition even if a partition is down.
 	// If true, a record may hash to a partition that cannot be written to
 	// and will error until the partition comes back.
-	requiresConsistency(*Record) bool
+	requiresConsistency(*krec.Rec) bool
 	// partition determines, among a set of n partitions, which index should
 	// be chosen to use for the partition for r.
-	partition(r *Record, n int) int
+	partition(r *krec.Rec, n int) int
 }
 
 // StickyPartitioner is the same as StickyKeyPartitioner, but with no logic to
@@ -54,9 +56,9 @@ type stickyTopicPartitioner struct {
 	rng      *rand.Rand
 }
 
-func (p *stickyTopicPartitioner) onNewBatch()                    { p.lastPart, p.onPart = p.onPart, -1 }
-func (*stickyTopicPartitioner) requiresConsistency(*Record) bool { return false }
-func (p *stickyTopicPartitioner) partition(_ *Record, n int) int {
+func (p *stickyTopicPartitioner) onNewBatch()                      { p.lastPart, p.onPart = p.onPart, -1 }
+func (*stickyTopicPartitioner) requiresConsistency(*krec.Rec) bool { return false }
+func (p *stickyTopicPartitioner) partition(_ *krec.Rec, n int) int {
 	if p.onPart == -1 || p.onPart >= n {
 		p.onPart = p.rng.Intn(n)
 		if p.onPart == p.lastPart {
@@ -92,8 +94,8 @@ type stickyKeyTopicPartitioner struct {
 	stickyTopicPartitioner
 }
 
-func (*stickyKeyTopicPartitioner) requiresConsistency(r *Record) bool { return r.Key != nil }
-func (p *stickyKeyTopicPartitioner) partition(r *Record, n int) int {
+func (*stickyKeyTopicPartitioner) requiresConsistency(r *krec.Rec) bool { return r.Key != nil }
+func (p *stickyKeyTopicPartitioner) partition(r *krec.Rec, n int) int {
 	if r.Key != nil {
 		// https://github.com/apache/kafka/blob/d91a94e/clients/src/main/java/org/apache/kafka/clients/producer/internals/DefaultPartitioner.java#L59
 		// https://github.com/apache/kafka/blob/d91a94e/clients/src/main/java/org/apache/kafka/common/utils/Utils.java#L865-L867

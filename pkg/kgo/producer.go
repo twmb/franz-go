@@ -8,6 +8,7 @@ import (
 
 	"github.com/twmb/kafka-go/pkg/kerr"
 	"github.com/twmb/kafka-go/pkg/kmsg"
+	"github.com/twmb/kafka-go/pkg/krec"
 )
 
 // TODO KIP-359 leader epoch in produce request when it is released
@@ -162,7 +163,7 @@ type producer struct {
 	inTxn bool
 }
 
-func noPromise(*Record, error) {}
+func noPromise(*krec.Rec, error) {}
 
 // Produce sends a Kafka record to the topic in the record's Topic field,
 // calling promise with the record or an error when Kafka replies.
@@ -188,8 +189,8 @@ func noPromise(*Record, error) {}
 // reason for a topic to not load promptly is if it does not exist.
 func (cl *Client) Produce(
 	ctx context.Context,
-	r *Record,
-	promise func(*Record, error),
+	r *krec.Rec,
+	promise func(*krec.Rec, error),
 ) error {
 	if len(r.Key)+len(r.Value) > int(cl.cfg.maxRecordBatchBytes)-512 {
 		return kerr.MessageTooLarge
@@ -250,7 +251,7 @@ func (cl *Client) finishRecordPromise(pr promisedRecord, err error) {
 		cl.producer.flushingMu.Unlock()
 		cl.producer.flushingCond.Broadcast()
 	}
-	pr.promise(pr.Record, err)
+	pr.promise(pr.Rec, err)
 }
 
 // partitionRecord loads the partitions for a topic and produce to them. If
@@ -280,7 +281,7 @@ func (cl *Client) doPartitionRecord(parts *topicPartitions, partsData *topicPart
 
 	mapping := partsData.writable
 	possibilities := partsData.writablePartitions
-	if parts.partitioner.requiresConsistency(pr.Record) {
+	if parts.partitioner.requiresConsistency(pr.Rec) {
 		mapping = partsData.all
 		possibilities = partsData.partitions
 	}
@@ -289,14 +290,14 @@ func (cl *Client) doPartitionRecord(parts *topicPartitions, partsData *topicPart
 		return
 	}
 
-	idIdx := parts.partitioner.partition(pr.Record, len(possibilities))
+	idIdx := parts.partitioner.partition(pr.Rec, len(possibilities))
 	id := possibilities[idIdx]
 	partition := mapping[id]
 
 	appended := partition.records.bufferRecord(pr, true) // KIP-480
 	if !appended {
 		parts.partitioner.onNewBatch()
-		idIdx = parts.partitioner.partition(pr.Record, len(possibilities))
+		idIdx = parts.partitioner.partition(pr.Rec, len(possibilities))
 		id = possibilities[idIdx]
 		partition = mapping[id]
 		partition.records.bufferRecord(pr, false) // KIP-480
