@@ -115,7 +115,7 @@ func (v *MessageV0) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
-// MessageV0 is the message format Kafka used prior to 0.11.
+// MessageV1 is the message format Kafka used prior to 0.11.
 //
 // To produce or fetch messages, Kafka would write many messages contiguously
 // as an array without specifying the array length.

@@ -33,7 +33,7 @@ MessageV0 => not top level
   // record.
   Value: nullable-bytes
 
-// MessageV0 is the message format Kafka used prior to 0.11.
+// MessageV1 is the message format Kafka used prior to 0.11.
 //
 // To produce or fetch messages, Kafka would write many messages contiguously
 // as an array without specifying the array length.
