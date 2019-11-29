@@ -47,6 +47,18 @@ var (
 	ErrCorrelationIDMismatch = errors.New("correlation ID mismatch")
 )
 
+// IsRetriableErr returns if an error is a temporary broker error.
+func IsRetriableErr(err error) bool {
+	switch err {
+	case ErrBrokerDead,
+		ErrConnDead,
+		ErrCorrelationIDMismatch,
+		ErrInvalidRespSize:
+		return true
+	}
+	return false
+}
+
 type promisedReq struct {
 	ctx     context.Context
 	req     kmsg.Request
