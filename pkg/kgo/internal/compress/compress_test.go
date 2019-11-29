@@ -51,6 +51,12 @@ func TestCompressDecompress(t *testing.T) {
 			[]Codec{4, 3},
 		} {
 			c, _ := NewCompressor(codecs...)
+			if c == nil {
+				if codecs[0] == 0 {
+					continue
+				}
+				t.Errorf("unexpected nil compressor from codecs %v", codecs)
+			}
 			var wg sync.WaitGroup
 			for i := 0; i < 5; i++ {
 				wg.Add(1)

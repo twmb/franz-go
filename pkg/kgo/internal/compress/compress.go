@@ -47,6 +47,9 @@ func NewCompressor(codecs ...Codec) (*Compressor, error) {
 		len(codecs) > 1 && (codecs[1] < 0 || codecs[1] > 4) {
 		return nil, errors.New("unknown compression codec")
 	}
+	if codecs[0] == 0 {
+		return nil, nil
+	}
 	if len(codecs) == 1 {
 		codecs = append(codecs, -1) // not using a second codec, see below
 	}
