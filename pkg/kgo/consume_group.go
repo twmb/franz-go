@@ -834,6 +834,7 @@ func (g *groupConsumer) fetchOffsets(ctx context.Context, newAssigned map[string
 		return err
 	}
 
+	// TODO sarama#1542, response does not necessarily match request
 	offsets := make(map[string]map[int32]Offset)
 	for _, rTopic := range resp.Topics {
 		topicOffsets := make(map[int32]Offset)
