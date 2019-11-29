@@ -30,47 +30,33 @@ func (l *Loop) MaybeBegin() bool {
 	return state == stateWorking
 }
 
-// FinishState is a self documenting type to make MaybeFinish usages more
-// understable.
-type FinishState struct {
-	again bool
-}
-
-// Continue returns a finish state that signifies the caller knows a work
-// loop should continue.
-func Continue() FinishState { return FinishState{true} }
-
-// End returns a finish state that signifies the caller thinks it should
-// stop working.
-func End() FinishState { return FinishState{false} }
-
 // MaybeFinish demotes Loop's internal state and returns whether work should
 // actually stop. This function should be called before looping to continue
 // work.
 //
-// If again is true, this will avoid demoting from working to not working.
-// Again would be true if the loop knows it should continue working; calling
-// this function is necessary even in this case to update Loop's internal
-// state.
+// If willGoAgain is true, this will avoid demoting from working to not
+// working. Again would be true if the loop knows it should continue working;
+// calling this function is necessary even in this case to update Loop's
+// internal state.
 //
 // This function is a no-op if the loop is already finished, but generally,
 // since the loop itself calls MaybeFinish after it has been started, this
 // should never be called if the loop is unstarted.
-func (l *Loop) MaybeFinish(finishState FinishState) bool {
+func (l *Loop) MaybeFinish(willGoAgain bool) bool {
 	switch state := atomic.LoadUint32(&l.state); state {
 	// Working:
 	// If again, we know we should continue; keep our state.
 	// If not again, we try to downgrade state and stop.
 	// If we cannot, then something slipped in to say keep going.
 	case stateWorking:
-		if !finishState.again {
-			finishState.again = !atomic.CompareAndSwapUint32(&l.state, state, stateUnstarted)
+		if !willGoAgain {
+			willGoAgain = !atomic.CompareAndSwapUint32(&l.state, state, stateUnstarted)
 		}
 	// Continue: demote ourself and run again no matter what.
 	case stateContinueWorking:
 		atomic.StoreUint32(&l.state, stateWorking)
-		finishState.again = true
+		willGoAgain = true
 	}
 
-	return !finishState.again
+	return !willGoAgain
 }

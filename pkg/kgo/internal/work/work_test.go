@@ -25,19 +25,19 @@ func TestSequential(t *testing.T) {
 	}
 
 	// demote sequence
-	if l.MaybeFinish(Continue()) {
+	if l.MaybeFinish(true) {
 		t.Error("signaled to end even though state was continue working")
 	}
 	if l.state != stateWorking {
 		t.Errorf("invalid internal state %d != stateWorking", l.state)
 	}
-	if l.MaybeFinish(Continue()) {
+	if l.MaybeFinish(true) {
 		t.Error("signaled to end even though we wanted to continue on state working")
 	}
 	if l.state != stateWorking {
 		t.Errorf("invalid internal state %d != stateWorking", l.state)
 	}
-	if !l.MaybeFinish(End()) {
+	if !l.MaybeFinish(false) {
 		t.Error("signaled to continue even though we wanted to end on state working")
 	}
 	if l.state != stateUnstarted {
@@ -53,9 +53,9 @@ func TestConcurrent(t *testing.T) {
 		if i%2 == 0 {
 			go l.MaybeBegin()
 		} else if i%3 == 0 {
-			go l.MaybeFinish(Continue())
+			go l.MaybeFinish(true)
 		} else {
-			go l.MaybeFinish(End())
+			go l.MaybeFinish(false)
 		}
 	}
 }
@@ -72,7 +72,7 @@ func BenchmarkMaybeFinishWorking(b *testing.B) {
 	var l Loop
 	for i := 0; i < b.N; i++ {
 		l.state = stateWorking
-		l.MaybeFinish(End())
+		l.MaybeFinish(false)
 	}
 }
 
@@ -80,6 +80,6 @@ func BenchmarkMaybeFinishContinueWorking(b *testing.B) {
 	var l Loop
 	for i := 0; i < b.N; i++ {
 		l.state = stateContinueWorking
-		l.MaybeFinish(End())
+		l.MaybeFinish(false)
 	}
 }
