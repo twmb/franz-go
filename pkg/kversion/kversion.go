@@ -350,5 +350,7 @@ func Tip() Versions {
 	v[40]++ // 2 expire delegation token
 	v[41]++ // 2 describe delegation token
 
+	v[28]++ // 3 txn offset commit KAFKA-9365 ed7c071e07f KIP-447
+
 	return v
 }

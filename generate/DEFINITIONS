@@ -2274,7 +2274,7 @@ WriteTxnMarkersResponse =>
 // TxnOffsetCommitRequest sends offsets that are a part of this transaction
 // to be committed once the transaction itself finishes. This effectively
 // replaces OffsetCommitRequest for when using transactions.
-TxnOffsetCommitRequest => key 28, max version 2, group coordinator
+TxnOffsetCommitRequest => key 28, max version 3, flexible v3+, group coordinator
   // TransactionalID is the transactional ID to use for this request.
   TransactionalID: string
   // Group is the group consumed in this transaction and to be used for
@@ -2286,6 +2286,12 @@ TxnOffsetCommitRequest => key 28, max version 2, group coordinator
   // ProducerEpoch is the producer epoch of the client for this transactional ID
   // as received from InitProducerID.
   ProducerEpoch: int16
+  // Generation is the group generation this heartbeat is for.
+  Generation: int32 // v3+
+  // MemberID is the member ID this member is for.
+  MemberID: string // v3+
+  // InstanceID is the instance ID of this member in the group (KIP-345, KIP-447).
+  InstanceID: nullable-string // v3+
   // Topics are topics to add for pending commits.
   Topics: [=>]
     // Topic is a topic to add for a pending commit.

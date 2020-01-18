@@ -8091,15 +8091,24 @@ type TxnOffsetCommitRequest struct {
 	// as received from InitProducerID.
 	ProducerEpoch int16
 
+	// Generation is the group generation this heartbeat is for.
+	Generation int32 // v3+
+
+	// MemberID is the member ID this member is for.
+	MemberID string // v3+
+
+	// InstanceID is the instance ID of this member in the group (KIP-345, KIP-447).
+	InstanceID *string // v3+
+
 	// Topics are topics to add for pending commits.
 	Topics []TxnOffsetCommitRequestTopic
 }
 
 func (*TxnOffsetCommitRequest) Key() int16                   { return 28 }
-func (*TxnOffsetCommitRequest) MaxVersion() int16            { return 2 }
+func (*TxnOffsetCommitRequest) MaxVersion() int16            { return 3 }
 func (v *TxnOffsetCommitRequest) SetVersion(version int16)   { v.Version = version }
 func (v *TxnOffsetCommitRequest) GetVersion() int16          { return v.Version }
-func (v *TxnOffsetCommitRequest) IsFlexible() bool           { return false }
+func (v *TxnOffsetCommitRequest) IsFlexible() bool           { return v.Version >= 3 }
 func (v *TxnOffsetCommitRequest) IsGroupCoordinatorRequest() {}
 func (v *TxnOffsetCommitRequest) ResponseKind() Response {
 	return &TxnOffsetCommitResponse{Version: v.Version}
@@ -8108,13 +8117,23 @@ func (v *TxnOffsetCommitRequest) ResponseKind() Response {
 func (v *TxnOffsetCommitRequest) AppendTo(dst []byte) []byte {
 	version := v.Version
 	_ = version
+	isFlexible := version >= 3
+	_ = isFlexible
 	{
 		v := v.TransactionalID
-		dst = kbin.AppendString(dst, v)
+		if isFlexible {
+			dst = kbin.AppendCompactString(dst, v)
+		} else {
+			dst = kbin.AppendString(dst, v)
+		}
 	}
 	{
 		v := v.Group
-		dst = kbin.AppendString(dst, v)
+		if isFlexible {
+			dst = kbin.AppendCompactString(dst, v)
+		} else {
+			dst = kbin.AppendString(dst, v)
+		}
 	}
 	{
 		v := v.ProducerID
@@ -8124,18 +8143,50 @@ func (v *TxnOffsetCommitRequest) AppendTo(dst []byte) []byte {
 		v := v.ProducerEpoch
 		dst = kbin.AppendInt16(dst, v)
 	}
+	if version >= 3 {
+		v := v.Generation
+		dst = kbin.AppendInt32(dst, v)
+	}
+	if version >= 3 {
+		v := v.MemberID
+		if isFlexible {
+			dst = kbin.AppendCompactString(dst, v)
+		} else {
+			dst = kbin.AppendString(dst, v)
+		}
+	}
+	if version >= 3 {
+		v := v.InstanceID
+		if isFlexible {
+			dst = kbin.AppendCompactNullableString(dst, v)
+		} else {
+			dst = kbin.AppendNullableString(dst, v)
+		}
+	}
 	{
 		v := v.Topics
-		dst = kbin.AppendArrayLen(dst, len(v))
+		if isFlexible {
+			dst = kbin.AppendCompactArrayLen(dst, len(v))
+		} else {
+			dst = kbin.AppendArrayLen(dst, len(v))
+		}
 		for i := range v {
 			v := &v[i]
 			{
 				v := v.Topic
-				dst = kbin.AppendString(dst, v)
+				if isFlexible {
+					dst = kbin.AppendCompactString(dst, v)
+				} else {
+					dst = kbin.AppendString(dst, v)
+				}
 			}
 			{
 				v := v.Partitions
-				dst = kbin.AppendArrayLen(dst, len(v))
+				if isFlexible {
+					dst = kbin.AppendCompactArrayLen(dst, len(v))
+				} else {
+					dst = kbin.AppendArrayLen(dst, len(v))
+				}
 				for i := range v {
 					v := &v[i]
 					{
@@ -8152,11 +8203,24 @@ func (v *TxnOffsetCommitRequest) AppendTo(dst []byte) []byte {
 					}
 					{
 						v := v.Metadata
-						dst = kbin.AppendNullableString(dst, v)
+						if isFlexible {
+							dst = kbin.AppendCompactNullableString(dst, v)
+						} else {
+							dst = kbin.AppendNullableString(dst, v)
+						}
+					}
+					if isFlexible {
+						dst = append(dst, 0)
 					}
 				}
 			}
+			if isFlexible {
+				dst = append(dst, 0)
+			}
 		}
+	}
+	if isFlexible {
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -8232,6 +8296,8 @@ type TxnOffsetCommitResponse struct {
 func (v *TxnOffsetCommitResponse) ReadFrom(src []byte) error {
 	version := v.Version
 	_ = version
+	isFlexible := version >= 3
+	_ = isFlexible
 	b := kbin.Reader{Src: src}
 	s := v
 	{
@@ -8242,7 +8308,11 @@ func (v *TxnOffsetCommitResponse) ReadFrom(src []byte) error {
 		v := s.Topics
 		a := v
 		var l int32
-		l = b.ArrayLen()
+		if isFlexible {
+			l = b.CompactArrayLen()
+		} else {
+			l = b.ArrayLen()
+		}
 		if !b.Ok() {
 			return b.Complete()
 		}
@@ -8253,14 +8323,23 @@ func (v *TxnOffsetCommitResponse) ReadFrom(src []byte) error {
 			v := &a[i]
 			s := v
 			{
-				v := b.String()
+				var v string
+				if isFlexible {
+					v = b.CompactString()
+				} else {
+					v = b.String()
+				}
 				s.Topic = v
 			}
 			{
 				v := s.Partitions
 				a := v
 				var l int32
-				l = b.ArrayLen()
+				if isFlexible {
+					l = b.CompactArrayLen()
+				} else {
+					l = b.ArrayLen()
+				}
 				if !b.Ok() {
 					return b.Complete()
 				}
@@ -8278,13 +8357,22 @@ func (v *TxnOffsetCommitResponse) ReadFrom(src []byte) error {
 						v := b.Int16()
 						s.ErrorCode = v
 					}
+					if isFlexible {
+						SkipTags(&b)
+					}
 				}
 				v = a
 				s.Partitions = v
 			}
+			if isFlexible {
+				SkipTags(&b)
+			}
 		}
 		v = a
 		s.Topics = v
+	}
+	if isFlexible {
+		SkipTags(&b)
 	}
 	return b.Complete()
 }
