@@ -339,6 +339,7 @@ func V2_4_0() Versions {
 // Tip is the latest defined Kafka key versions; this may be slightly out of date.
 func Tip() Versions {
 	v := V2_4_0()
-	v[22]++ // 3 init producer id KAFKA-8710 v[fecb977b25 KIP-360
+	v[22]++ // 3 init producer id KAFKA-8710 fecb977b25 KIP-360
+	v[9]++  // 7 offset fetch KAFKA-9346 6da70f9b95 KIP-447
 	return v
 }

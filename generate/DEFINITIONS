@@ -1136,7 +1136,7 @@ OffsetCommitResponse =>
 
 // OffsetFetchRequest requests the most recent committed offsets for topic
 // partitions in a group.
-OffsetFetchRequest => key 9, max version 6, flexible v6+, group coordinator
+OffsetFetchRequest => key 9, max version 7, flexible v6+, group coordinator
   // Group is the group to fetch offsets for.
   Group: string
   // Topics contains topics to fetch offets for. Version 2+ allows this to be
@@ -1146,6 +1146,11 @@ OffsetFetchRequest => key 9, max version 6, flexible v6+, group coordinator
     Topic: string
     // Partitions in a list of partitions in a group to fetch offsets for.
     Partitions: [int32]
+  // RequireStable signifies whether the broker should wait on returning
+  // unstable offsets, instead setting a retriable error on the relevant
+  // unstable partitions (UNSTABLE_OFFSET_COMMIT). See KIP-447 for more
+  // details.
+  RequireStable: bool // v7+
 
 // OffsetFetchResponse is returned from an OffsetFetchRequest.
 OffsetFetchResponse =>
@@ -1191,6 +1196,9 @@ OffsetFetchResponse =>
       //
       // UNKNOWN_TOPIC_OR_PARTITION is returned if the requested topic or partition
       // is unknown.
+      //
+      // UNSTABLE_OFFSET_COMMIT is returned for v7+ if the request set RequireStable.
+      // See KIP-447 for more details.
       ErrorCode: int16
   // ErrorCode is a top level error code that applies to all topic/partitions.
   // This will be any group error.

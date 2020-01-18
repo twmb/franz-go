@@ -4131,10 +4131,16 @@ type OffsetFetchRequest struct {
 	// Topics contains topics to fetch offets for. Version 2+ allows this to be
 	// null to return all topics the client is authorized to describe in the group.
 	Topics []OffsetFetchRequestTopic
+
+	// RequireStable signifies whether the broker should wait on returning
+	// unstable offsets, instead setting a retriable error on the relevant
+	// unstable partitions (UNSTABLE_OFFSET_COMMIT). See KIP-447 for more
+	// details.
+	RequireStable bool // v7+
 }
 
 func (*OffsetFetchRequest) Key() int16                   { return 9 }
-func (*OffsetFetchRequest) MaxVersion() int16            { return 6 }
+func (*OffsetFetchRequest) MaxVersion() int16            { return 7 }
 func (v *OffsetFetchRequest) SetVersion(version int16)   { v.Version = version }
 func (v *OffsetFetchRequest) GetVersion() int16          { return v.Version }
 func (v *OffsetFetchRequest) IsFlexible() bool           { return v.Version >= 6 }
@@ -4196,6 +4202,10 @@ func (v *OffsetFetchRequest) AppendTo(dst []byte) []byte {
 			}
 		}
 	}
+	if version >= 7 {
+		v := v.RequireStable
+		dst = kbin.AppendBool(dst, v)
+	}
 	if isFlexible {
 		dst = append(dst, 0)
 	}
@@ -4237,6 +4247,9 @@ type OffsetFetchResponseTopicPartition struct {
 	//
 	// UNKNOWN_TOPIC_OR_PARTITION is returned if the requested topic or partition
 	// is unknown.
+	//
+	// UNSTABLE_OFFSET_COMMIT is returned for v7+ if the request set RequireStable.
+	// See KIP-447 for more details.
 	ErrorCode int16
 }
 type OffsetFetchResponseTopic struct {
