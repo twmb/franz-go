@@ -44,11 +44,15 @@ func (rbs *reqBatches) addBatch(topic string, part int32, batch *recBatch) {
 	topicBatches[part] = batch
 }
 
-func (rbs reqBatches) onEachBatchWhileBatchOwnerLocked(fn func(*recBatch)) {
+// This function runs fn on each batch if the batch is the first batch in
+// the owning recBuf.
+func (rbs reqBatches) onEachFirstBatchWhileBatchOwnerLocked(fn func(*recBatch)) {
 	for _, partitions := range rbs {
 		for _, batch := range partitions {
 			batch.owner.mu.Lock()
-			fn(batch)
+			if batch.lockedIsFirstBatch() {
+				fn(batch)
+			}
 			batch.owner.mu.Unlock()
 		}
 	}
