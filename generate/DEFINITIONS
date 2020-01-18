@@ -1669,7 +1669,7 @@ ListGroupsResponse =>
 
 // SASLHandshakeRequest begins the sasl authentication flow. Note that Kerberos
 // GSSAPI authentication has its own unique flow.
-SASLHandshakeRequest => key 17, max version 1
+SASLHandshakeRequest => key 17, max version 2, flexible v2+
   // Mechanism is the mechanism to use for the sasl handshake (e.g., "PLAIN").
   //
   // For version 0, if this mechanism is supported, it is expected that the
@@ -2814,7 +2814,7 @@ DescribeLogDirsResponse =>
 // this wrapping is that Kafka can indicate errors in the response, rather than
 // just closing the connection. Additionally, the response allows for further
 // extension fields.
-SASLAuthenticateRequest => key 36, max version 1
+SASLAuthenticateRequest => key 36, max version 2, flexible v2+
   // SASLAuthBytes contains bytes for a SASL client request.
   SASLAuthBytes: bytes
 
@@ -2833,7 +2833,7 @@ SASLAuthenticateResponse =>
   SessionLifetimeMillis: int64 // v1+
 
 // CreatePartitionsRequest creates additional partitions for topics.
-CreatePartitionsRequest => key 37, max version 1, admin
+CreatePartitionsRequest => key 37, max version 2, flexible v2+, admin
   // Topics contains topics to create partitions for.
   Topics: [=>]
     // Topic is a topic for which to create additional partitions for.
@@ -2959,7 +2959,7 @@ CreateDelegationTokenResponse =>
 // RenewDelegationTokenRequest is a request to renew a delegation token that
 // has not yet hit its max timestamp. Note that a client using a token cannot
 // renew its own token.
-RenewDelegationTokenRequest => key 39, max version 1, admin
+RenewDelegationTokenRequest => key 39, max version 2, flexible v2+, admin
   // HMAC is the HMAC of the token to be renewed.
   HMAC: bytes
   // RenewTimeMillis is how long to renew the token for. If -1, Kafka uses its
@@ -2983,7 +2983,7 @@ RenewDelegationTokenResponse =>
 // ExpireDelegationTokenRequest is a request to change the expiry timestamp
 // of a delegation token. Note that a client using a token cannot expire its
 // own token.
-ExpireDelegationTokenRequest => key 40, max version 1, admin
+ExpireDelegationTokenRequest => key 40, max version 2, flexible v2+, admin
   // HMAC is the HMAC of the token to change the expiry timestamp of.
   HMAC: bytes
   // ExpiryPeriodMillis changes the delegation token's expiry timestamp to
@@ -3010,7 +3010,7 @@ ExpireDelegationTokenResponse =>
   ThrottleMillis: int32
 
 // DescribeDelegationTokenRequest is a request to describe delegation tokens.
-DescribeDelegationTokenRequest => key 41, max version 1, admin
+DescribeDelegationTokenRequest => key 41, max version 2, flexible v2+, admin
   // Owners contains owners to describe delegation tokens for, or null for all.
   // If non-null, only tokens created from a matching principal type, name
   // combination are printed.

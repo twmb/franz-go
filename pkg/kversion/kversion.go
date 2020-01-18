@@ -341,5 +341,14 @@ func Tip() Versions {
 	v := V2_4_0()
 	v[22]++ // 3 init producer id KAFKA-8710 fecb977b25 KIP-360
 	v[9]++  // 7 offset fetch KAFKA-9346 6da70f9b95 KIP-447
+
+	// more flexible versions, KAFKA-9420 0a2569e2b99 KIP-482, 6 bumped
+	v[16]++ // 2 sasl handshake
+	v[36]++ // 2 sasl authenticate
+	v[37]++ // 2 create partitions
+	v[39]++ // 2 renew delegation token
+	v[40]++ // 2 expire delegation token
+	v[41]++ // 2 describe delegation token
+
 	return v
 }

@@ -6082,10 +6082,10 @@ type SASLHandshakeRequest struct {
 }
 
 func (*SASLHandshakeRequest) Key() int16                 { return 17 }
-func (*SASLHandshakeRequest) MaxVersion() int16          { return 1 }
+func (*SASLHandshakeRequest) MaxVersion() int16          { return 2 }
 func (v *SASLHandshakeRequest) SetVersion(version int16) { v.Version = version }
 func (v *SASLHandshakeRequest) GetVersion() int16        { return v.Version }
-func (v *SASLHandshakeRequest) IsFlexible() bool         { return false }
+func (v *SASLHandshakeRequest) IsFlexible() bool         { return v.Version >= 2 }
 func (v *SASLHandshakeRequest) ResponseKind() Response {
 	return &SASLHandshakeResponse{Version: v.Version}
 }
@@ -6093,9 +6093,18 @@ func (v *SASLHandshakeRequest) ResponseKind() Response {
 func (v *SASLHandshakeRequest) AppendTo(dst []byte) []byte {
 	version := v.Version
 	_ = version
+	isFlexible := version >= 2
+	_ = isFlexible
 	{
 		v := v.Mechanism
-		dst = kbin.AppendString(dst, v)
+		if isFlexible {
+			dst = kbin.AppendCompactString(dst, v)
+		} else {
+			dst = kbin.AppendString(dst, v)
+		}
+	}
+	if isFlexible {
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -6118,6 +6127,8 @@ type SASLHandshakeResponse struct {
 func (v *SASLHandshakeResponse) ReadFrom(src []byte) error {
 	version := v.Version
 	_ = version
+	isFlexible := version >= 2
+	_ = isFlexible
 	b := kbin.Reader{Src: src}
 	s := v
 	{
@@ -6128,7 +6139,11 @@ func (v *SASLHandshakeResponse) ReadFrom(src []byte) error {
 		v := s.SupportedMechanisms
 		a := v
 		var l int32
-		l = b.ArrayLen()
+		if isFlexible {
+			l = b.CompactArrayLen()
+		} else {
+			l = b.ArrayLen()
+		}
 		if !b.Ok() {
 			return b.Complete()
 		}
@@ -6136,11 +6151,19 @@ func (v *SASLHandshakeResponse) ReadFrom(src []byte) error {
 			a = make([]string, l)
 		}
 		for i := int32(0); i < l; i++ {
-			v := b.String()
+			var v string
+			if isFlexible {
+				v = b.CompactString()
+			} else {
+				v = b.String()
+			}
 			a[i] = v
 		}
 		v = a
 		s.SupportedMechanisms = v
+	}
+	if isFlexible {
+		SkipTags(&b)
 	}
 	return b.Complete()
 }
@@ -9763,10 +9786,10 @@ type SASLAuthenticateRequest struct {
 }
 
 func (*SASLAuthenticateRequest) Key() int16                 { return 36 }
-func (*SASLAuthenticateRequest) MaxVersion() int16          { return 1 }
+func (*SASLAuthenticateRequest) MaxVersion() int16          { return 2 }
 func (v *SASLAuthenticateRequest) SetVersion(version int16) { v.Version = version }
 func (v *SASLAuthenticateRequest) GetVersion() int16        { return v.Version }
-func (v *SASLAuthenticateRequest) IsFlexible() bool         { return false }
+func (v *SASLAuthenticateRequest) IsFlexible() bool         { return v.Version >= 2 }
 func (v *SASLAuthenticateRequest) ResponseKind() Response {
 	return &SASLAuthenticateResponse{Version: v.Version}
 }
@@ -9774,9 +9797,18 @@ func (v *SASLAuthenticateRequest) ResponseKind() Response {
 func (v *SASLAuthenticateRequest) AppendTo(dst []byte) []byte {
 	version := v.Version
 	_ = version
+	isFlexible := version >= 2
+	_ = isFlexible
 	{
 		v := v.SASLAuthBytes
-		dst = kbin.AppendBytes(dst, v)
+		if isFlexible {
+			dst = kbin.AppendCompactBytes(dst, v)
+		} else {
+			dst = kbin.AppendBytes(dst, v)
+		}
+	}
+	if isFlexible {
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -9805,6 +9837,8 @@ type SASLAuthenticateResponse struct {
 func (v *SASLAuthenticateResponse) ReadFrom(src []byte) error {
 	version := v.Version
 	_ = version
+	isFlexible := version >= 2
+	_ = isFlexible
 	b := kbin.Reader{Src: src}
 	s := v
 	{
@@ -9812,16 +9846,29 @@ func (v *SASLAuthenticateResponse) ReadFrom(src []byte) error {
 		s.ErrorCode = v
 	}
 	{
-		v := b.NullableString()
+		var v *string
+		if isFlexible {
+			v = b.CompactNullableString()
+		} else {
+			v = b.NullableString()
+		}
 		s.ErrorMessage = v
 	}
 	{
-		v := b.Bytes()
+		var v []byte
+		if isFlexible {
+			v = b.CompactBytes()
+		} else {
+			v = b.Bytes()
+		}
 		s.SASLAuthBytes = v
 	}
 	if version >= 1 {
 		v := b.Int64()
 		s.SessionLifetimeMillis = v
+	}
+	if isFlexible {
+		SkipTags(&b)
 	}
 	return b.Complete()
 }
@@ -9869,10 +9916,10 @@ type CreatePartitionsRequest struct {
 }
 
 func (*CreatePartitionsRequest) Key() int16                 { return 37 }
-func (*CreatePartitionsRequest) MaxVersion() int16          { return 1 }
+func (*CreatePartitionsRequest) MaxVersion() int16          { return 2 }
 func (v *CreatePartitionsRequest) SetVersion(version int16) { v.Version = version }
 func (v *CreatePartitionsRequest) GetVersion() int16        { return v.Version }
-func (v *CreatePartitionsRequest) IsFlexible() bool         { return false }
+func (v *CreatePartitionsRequest) IsFlexible() bool         { return v.Version >= 2 }
 func (v *CreatePartitionsRequest) IsAdminRequest()          {}
 func (v *CreatePartitionsRequest) ResponseKind() Response {
 	return &CreatePartitionsResponse{Version: v.Version}
@@ -9881,14 +9928,24 @@ func (v *CreatePartitionsRequest) ResponseKind() Response {
 func (v *CreatePartitionsRequest) AppendTo(dst []byte) []byte {
 	version := v.Version
 	_ = version
+	isFlexible := version >= 2
+	_ = isFlexible
 	{
 		v := v.Topics
-		dst = kbin.AppendArrayLen(dst, len(v))
+		if isFlexible {
+			dst = kbin.AppendCompactArrayLen(dst, len(v))
+		} else {
+			dst = kbin.AppendArrayLen(dst, len(v))
+		}
 		for i := range v {
 			v := &v[i]
 			{
 				v := v.Topic
-				dst = kbin.AppendString(dst, v)
+				if isFlexible {
+					dst = kbin.AppendCompactString(dst, v)
+				} else {
+					dst = kbin.AppendString(dst, v)
+				}
 			}
 			{
 				v := v.Count
@@ -9896,18 +9953,32 @@ func (v *CreatePartitionsRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Assignment
-				dst = kbin.AppendNullableArrayLen(dst, len(v), v == nil)
+				if isFlexible {
+					dst = kbin.AppendCompactNullableArrayLen(dst, len(v), v == nil)
+				} else {
+					dst = kbin.AppendNullableArrayLen(dst, len(v), v == nil)
+				}
 				for i := range v {
 					v := &v[i]
 					{
 						v := v.Replicas
-						dst = kbin.AppendArrayLen(dst, len(v))
+						if isFlexible {
+							dst = kbin.AppendCompactArrayLen(dst, len(v))
+						} else {
+							dst = kbin.AppendArrayLen(dst, len(v))
+						}
 						for i := range v {
 							v := v[i]
 							dst = kbin.AppendInt32(dst, v)
 						}
 					}
+					if isFlexible {
+						dst = append(dst, 0)
+					}
 				}
+			}
+			if isFlexible {
+				dst = append(dst, 0)
 			}
 		}
 	}
@@ -9918,6 +9989,9 @@ func (v *CreatePartitionsRequest) AppendTo(dst []byte) []byte {
 	{
 		v := v.ValidateOnly
 		dst = kbin.AppendBool(dst, v)
+	}
+	if isFlexible {
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -9973,6 +10047,8 @@ type CreatePartitionsResponse struct {
 func (v *CreatePartitionsResponse) ReadFrom(src []byte) error {
 	version := v.Version
 	_ = version
+	isFlexible := version >= 2
+	_ = isFlexible
 	b := kbin.Reader{Src: src}
 	s := v
 	{
@@ -9983,7 +10059,11 @@ func (v *CreatePartitionsResponse) ReadFrom(src []byte) error {
 		v := s.Topics
 		a := v
 		var l int32
-		l = b.ArrayLen()
+		if isFlexible {
+			l = b.CompactArrayLen()
+		} else {
+			l = b.ArrayLen()
+		}
 		if !b.Ok() {
 			return b.Complete()
 		}
@@ -9994,7 +10074,12 @@ func (v *CreatePartitionsResponse) ReadFrom(src []byte) error {
 			v := &a[i]
 			s := v
 			{
-				v := b.String()
+				var v string
+				if isFlexible {
+					v = b.CompactString()
+				} else {
+					v = b.String()
+				}
 				s.Topic = v
 			}
 			{
@@ -10002,12 +10087,23 @@ func (v *CreatePartitionsResponse) ReadFrom(src []byte) error {
 				s.ErrorCode = v
 			}
 			{
-				v := b.NullableString()
+				var v *string
+				if isFlexible {
+					v = b.CompactNullableString()
+				} else {
+					v = b.NullableString()
+				}
 				s.ErrorMessage = v
+			}
+			if isFlexible {
+				SkipTags(&b)
 			}
 		}
 		v = a
 		s.Topics = v
+	}
+	if isFlexible {
+		SkipTags(&b)
 	}
 	return b.Complete()
 }
@@ -10230,10 +10326,10 @@ type RenewDelegationTokenRequest struct {
 }
 
 func (*RenewDelegationTokenRequest) Key() int16                 { return 39 }
-func (*RenewDelegationTokenRequest) MaxVersion() int16          { return 1 }
+func (*RenewDelegationTokenRequest) MaxVersion() int16          { return 2 }
 func (v *RenewDelegationTokenRequest) SetVersion(version int16) { v.Version = version }
 func (v *RenewDelegationTokenRequest) GetVersion() int16        { return v.Version }
-func (v *RenewDelegationTokenRequest) IsFlexible() bool         { return false }
+func (v *RenewDelegationTokenRequest) IsFlexible() bool         { return v.Version >= 2 }
 func (v *RenewDelegationTokenRequest) IsAdminRequest()          {}
 func (v *RenewDelegationTokenRequest) ResponseKind() Response {
 	return &RenewDelegationTokenResponse{Version: v.Version}
@@ -10242,13 +10338,22 @@ func (v *RenewDelegationTokenRequest) ResponseKind() Response {
 func (v *RenewDelegationTokenRequest) AppendTo(dst []byte) []byte {
 	version := v.Version
 	_ = version
+	isFlexible := version >= 2
+	_ = isFlexible
 	{
 		v := v.HMAC
-		dst = kbin.AppendBytes(dst, v)
+		if isFlexible {
+			dst = kbin.AppendCompactBytes(dst, v)
+		} else {
+			dst = kbin.AppendBytes(dst, v)
+		}
 	}
 	{
 		v := v.RenewTimeMillis
 		dst = kbin.AppendInt64(dst, v)
+	}
+	if isFlexible {
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -10276,6 +10381,8 @@ type RenewDelegationTokenResponse struct {
 func (v *RenewDelegationTokenResponse) ReadFrom(src []byte) error {
 	version := v.Version
 	_ = version
+	isFlexible := version >= 2
+	_ = isFlexible
 	b := kbin.Reader{Src: src}
 	s := v
 	{
@@ -10289,6 +10396,9 @@ func (v *RenewDelegationTokenResponse) ReadFrom(src []byte) error {
 	{
 		v := b.Int32()
 		s.ThrottleMillis = v
+	}
+	if isFlexible {
+		SkipTags(&b)
 	}
 	return b.Complete()
 }
@@ -10315,10 +10425,10 @@ type ExpireDelegationTokenRequest struct {
 }
 
 func (*ExpireDelegationTokenRequest) Key() int16                 { return 40 }
-func (*ExpireDelegationTokenRequest) MaxVersion() int16          { return 1 }
+func (*ExpireDelegationTokenRequest) MaxVersion() int16          { return 2 }
 func (v *ExpireDelegationTokenRequest) SetVersion(version int16) { v.Version = version }
 func (v *ExpireDelegationTokenRequest) GetVersion() int16        { return v.Version }
-func (v *ExpireDelegationTokenRequest) IsFlexible() bool         { return false }
+func (v *ExpireDelegationTokenRequest) IsFlexible() bool         { return v.Version >= 2 }
 func (v *ExpireDelegationTokenRequest) IsAdminRequest()          {}
 func (v *ExpireDelegationTokenRequest) ResponseKind() Response {
 	return &ExpireDelegationTokenResponse{Version: v.Version}
@@ -10327,13 +10437,22 @@ func (v *ExpireDelegationTokenRequest) ResponseKind() Response {
 func (v *ExpireDelegationTokenRequest) AppendTo(dst []byte) []byte {
 	version := v.Version
 	_ = version
+	isFlexible := version >= 2
+	_ = isFlexible
 	{
 		v := v.HMAC
-		dst = kbin.AppendBytes(dst, v)
+		if isFlexible {
+			dst = kbin.AppendCompactBytes(dst, v)
+		} else {
+			dst = kbin.AppendBytes(dst, v)
+		}
 	}
 	{
 		v := v.ExpiryPeriodMillis
 		dst = kbin.AppendInt64(dst, v)
+	}
+	if isFlexible {
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -10360,6 +10479,8 @@ type ExpireDelegationTokenResponse struct {
 func (v *ExpireDelegationTokenResponse) ReadFrom(src []byte) error {
 	version := v.Version
 	_ = version
+	isFlexible := version >= 2
+	_ = isFlexible
 	b := kbin.Reader{Src: src}
 	s := v
 	{
@@ -10373,6 +10494,9 @@ func (v *ExpireDelegationTokenResponse) ReadFrom(src []byte) error {
 	{
 		v := b.Int32()
 		s.ThrottleMillis = v
+	}
+	if isFlexible {
+		SkipTags(&b)
 	}
 	return b.Complete()
 }
@@ -10399,10 +10523,10 @@ type DescribeDelegationTokenRequest struct {
 }
 
 func (*DescribeDelegationTokenRequest) Key() int16                 { return 41 }
-func (*DescribeDelegationTokenRequest) MaxVersion() int16          { return 1 }
+func (*DescribeDelegationTokenRequest) MaxVersion() int16          { return 2 }
 func (v *DescribeDelegationTokenRequest) SetVersion(version int16) { v.Version = version }
 func (v *DescribeDelegationTokenRequest) GetVersion() int16        { return v.Version }
-func (v *DescribeDelegationTokenRequest) IsFlexible() bool         { return false }
+func (v *DescribeDelegationTokenRequest) IsFlexible() bool         { return v.Version >= 2 }
 func (v *DescribeDelegationTokenRequest) IsAdminRequest()          {}
 func (v *DescribeDelegationTokenRequest) ResponseKind() Response {
 	return &DescribeDelegationTokenResponse{Version: v.Version}
@@ -10411,20 +10535,40 @@ func (v *DescribeDelegationTokenRequest) ResponseKind() Response {
 func (v *DescribeDelegationTokenRequest) AppendTo(dst []byte) []byte {
 	version := v.Version
 	_ = version
+	isFlexible := version >= 2
+	_ = isFlexible
 	{
 		v := v.Owners
-		dst = kbin.AppendNullableArrayLen(dst, len(v), v == nil)
+		if isFlexible {
+			dst = kbin.AppendCompactNullableArrayLen(dst, len(v), v == nil)
+		} else {
+			dst = kbin.AppendNullableArrayLen(dst, len(v), v == nil)
+		}
 		for i := range v {
 			v := &v[i]
 			{
 				v := v.PrincipalType
-				dst = kbin.AppendString(dst, v)
+				if isFlexible {
+					dst = kbin.AppendCompactString(dst, v)
+				} else {
+					dst = kbin.AppendString(dst, v)
+				}
 			}
 			{
 				v := v.PrincipalName
-				dst = kbin.AppendString(dst, v)
+				if isFlexible {
+					dst = kbin.AppendCompactString(dst, v)
+				} else {
+					dst = kbin.AppendString(dst, v)
+				}
+			}
+			if isFlexible {
+				dst = append(dst, 0)
 			}
 		}
+	}
+	if isFlexible {
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -10483,6 +10627,8 @@ type DescribeDelegationTokenResponse struct {
 func (v *DescribeDelegationTokenResponse) ReadFrom(src []byte) error {
 	version := v.Version
 	_ = version
+	isFlexible := version >= 2
+	_ = isFlexible
 	b := kbin.Reader{Src: src}
 	s := v
 	{
@@ -10493,7 +10639,11 @@ func (v *DescribeDelegationTokenResponse) ReadFrom(src []byte) error {
 		v := s.TokenDetails
 		a := v
 		var l int32
-		l = b.ArrayLen()
+		if isFlexible {
+			l = b.CompactArrayLen()
+		} else {
+			l = b.ArrayLen()
+		}
 		if !b.Ok() {
 			return b.Complete()
 		}
@@ -10504,11 +10654,21 @@ func (v *DescribeDelegationTokenResponse) ReadFrom(src []byte) error {
 			v := &a[i]
 			s := v
 			{
-				v := b.String()
+				var v string
+				if isFlexible {
+					v = b.CompactString()
+				} else {
+					v = b.String()
+				}
 				s.PrincipalType = v
 			}
 			{
-				v := b.String()
+				var v string
+				if isFlexible {
+					v = b.CompactString()
+				} else {
+					v = b.String()
+				}
 				s.PrincipalName = v
 			}
 			{
@@ -10524,18 +10684,32 @@ func (v *DescribeDelegationTokenResponse) ReadFrom(src []byte) error {
 				s.MaxTimestamp = v
 			}
 			{
-				v := b.String()
+				var v string
+				if isFlexible {
+					v = b.CompactString()
+				} else {
+					v = b.String()
+				}
 				s.TokenID = v
 			}
 			{
-				v := b.Bytes()
+				var v []byte
+				if isFlexible {
+					v = b.CompactBytes()
+				} else {
+					v = b.Bytes()
+				}
 				s.HMAC = v
 			}
 			{
 				v := s.Renewers
 				a := v
 				var l int32
-				l = b.ArrayLen()
+				if isFlexible {
+					l = b.CompactArrayLen()
+				} else {
+					l = b.ArrayLen()
+				}
 				if !b.Ok() {
 					return b.Complete()
 				}
@@ -10546,16 +10720,32 @@ func (v *DescribeDelegationTokenResponse) ReadFrom(src []byte) error {
 					v := &a[i]
 					s := v
 					{
-						v := b.String()
+						var v string
+						if isFlexible {
+							v = b.CompactString()
+						} else {
+							v = b.String()
+						}
 						s.PrincipalType = v
 					}
 					{
-						v := b.String()
+						var v string
+						if isFlexible {
+							v = b.CompactString()
+						} else {
+							v = b.String()
+						}
 						s.PrincipalName = v
+					}
+					if isFlexible {
+						SkipTags(&b)
 					}
 				}
 				v = a
 				s.Renewers = v
+			}
+			if isFlexible {
+				SkipTags(&b)
 			}
 		}
 		v = a
@@ -10564,6 +10754,9 @@ func (v *DescribeDelegationTokenResponse) ReadFrom(src []byte) error {
 	{
 		v := b.Int32()
 		s.ThrottleMillis = v
+	}
+	if isFlexible {
+		SkipTags(&b)
 	}
 	return b.Complete()
 }
