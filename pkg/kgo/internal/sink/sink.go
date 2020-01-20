@@ -31,7 +31,7 @@ var (
 	ErrAborting = errors.New("client is aborting buffered records")
 )
 
-// Broker issues a requests, calling promises sequentially.
+// Broker issues requests, calling promises sequentially.
 type Broker interface {
 	SeqReq(context.Context, kmsg.Request, func(kmsg.Response, error))
 }
@@ -341,12 +341,14 @@ func (s *Sink) drain() {
 		sem := s.inflightSem.Load().(chan struct{})
 		sem <- struct{}{}
 
-		req, txnReq, goAgain := s.createReq()
+		var req *produceRequest
+		var txnReq *kmsg.AddPartitionsToTxnRequest
+		req, txnReq, again = s.createReq()
 
 		// If we created a request with no batches, everything may be
 		// failing or lingering. Release the sem and continue.
 		if len(req.batches) == 0 {
-			again = s.drainState.MaybeFinish(goAgain)
+			again = s.drainState.MaybeFinish(again)
 			<-sem
 			continue
 		}
@@ -369,7 +371,7 @@ func (s *Sink) drain() {
 					finishBatch(s.cl, batch, partition, 0, err)
 				}
 			}
-			again = s.drainState.MaybeFinish(goAgain)
+			again = s.drainState.MaybeFinish(again)
 			<-sem
 			continue
 		}
@@ -378,7 +380,7 @@ func (s *Sink) drain() {
 		// could have non-fatal errored, but removed some batches that
 		// could not be added to the txn.
 		if len(req.batches) == 0 {
-			again = s.drainState.MaybeFinish(goAgain)
+			again = s.drainState.MaybeFinish(again)
 			<-sem
 			continue
 		}
@@ -398,7 +400,7 @@ func (s *Sink) drain() {
 			},
 		)
 
-		again = s.drainState.MaybeFinish(goAgain)
+		again = s.drainState.MaybeFinish(again)
 	}
 }
 
