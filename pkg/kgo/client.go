@@ -35,6 +35,9 @@ type Client struct {
 	producer producer
 	consumer consumer
 
+	compressor   *compressor
+	decompressor *decompressor
+
 	coordinatorsMu sync.Mutex
 	coordinators   map[coordinatorKey]int32
 
@@ -102,6 +105,8 @@ func NewClient(opts ...Opt) (*Client, error) {
 			waitBuffer: make(chan struct{}, 100),
 		},
 
+		decompressor: newDecompressor(),
+
 		coordinators:      make(map[coordinatorKey]int32),
 		unknownTopics:     make(map[string][]promisedRecord),
 		unknownTopicsWait: make(map[string]chan struct{}),
@@ -116,6 +121,12 @@ func NewClient(opts ...Opt) (*Client, error) {
 	c.topics.Store(make(map[string]*topicPartitions))
 	c.metawait.init()
 
+	compressor, err := newCompressor(c.cfg.compression...)
+	if err != nil {
+		return nil, err
+	}
+	c.compressor = compressor
+
 	for i, seedAddr := range seedAddrs {
 		b := c.newBroker(seedAddr, unknownSeedID(i))
 		c.brokers[b.id] = b
@@ -123,7 +134,6 @@ func NewClient(opts ...Opt) (*Client, error) {
 	}
 	go c.updateMetadataLoop()
 
-	nclientsInc()
 	return c, nil
 }
 
@@ -285,7 +295,8 @@ func (cl *Client) Close() {
 		}
 	}
 
-	nclientsDec()
+	cl.compressor.close()
+	cl.decompressor.close()
 }
 
 // Request issues a request to Kafka, waiting for and returning the response.

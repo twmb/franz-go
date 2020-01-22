@@ -418,6 +418,8 @@ func (source *recordSource) handleReqResp(req *fetchRequest, kresp kmsg.Response
 		Topics: make([]FetchTopic, 0, len(resp.Topics)),
 	}
 
+	decompressor := source.broker.client.decompressor
+
 	// We do not look at the overall ErrorCode; this should only be set if
 	// using sessions, which we are not.
 	//
@@ -448,7 +450,7 @@ func (source *recordSource) handleReqResp(req *fetchRequest, kresp kmsg.Response
 				continue
 			}
 
-			fetchPart, partNeedsMetaUpdate := partOffset.processRespPartition(topic, resp.Version, rPartition)
+			fetchPart, partNeedsMetaUpdate := partOffset.processRespPartition(topic, resp.Version, rPartition, decompressor)
 			if len(fetchPart.Records) > 0 || fetchPart.Err != nil {
 				fetchTopic.Partitions = append(fetchTopic.Partitions, fetchPart)
 			}
@@ -522,6 +524,7 @@ func (o *seqOffsetFrom) processRespPartition(
 	topic string,
 	version int16,
 	rPartition *kmsg.FetchResponseTopicPartition,
+	decompressor *decompressor,
 ) (
 	fetchPart FetchPartition,
 	needsMetaUpdate bool,
@@ -537,9 +540,9 @@ func (o *seqOffsetFrom) processRespPartition(
 
 	switch version {
 	case 0, 1:
-		o.processV0Messages(topic, &fetchPart, kmsg.ReadV0Messages(rPartition.RecordBatches))
+		o.processV0Messages(topic, &fetchPart, kmsg.ReadV0Messages(rPartition.RecordBatches), decompressor)
 	case 2, 3:
-		o.processV1Messages(topic, &fetchPart, kmsg.ReadV1Messages(rPartition.RecordBatches))
+		o.processV1Messages(topic, &fetchPart, kmsg.ReadV1Messages(rPartition.RecordBatches), decompressor)
 	default:
 		batches := kmsg.ReadRecordBatches(rPartition.RecordBatches)
 		var numPartitionRecords int
@@ -549,7 +552,7 @@ func (o *seqOffsetFrom) processRespPartition(
 		fetchPart.Records = make([]*krec.Rec, 0, numPartitionRecords)
 		aborter := buildAborter(rPartition)
 		for i := range batches {
-			o.processRecordBatch(topic, &fetchPart, &batches[i], keepControl, aborter)
+			o.processRecordBatch(topic, &fetchPart, &batches[i], keepControl, aborter, decompressor)
 			if fetchPart.Err != nil {
 				break
 			}
@@ -623,6 +626,7 @@ func (o *seqOffset) processRecordBatch(
 	batch *kmsg.RecordBatch,
 	keepControl bool,
 	aborter aborter,
+	decompressor *decompressor,
 ) {
 	if batch.Magic != 2 {
 		fetchPart.Err = fmt.Errorf("unknown batch magic %d", batch.Magic)
@@ -631,7 +635,7 @@ func (o *seqOffset) processRecordBatch(
 	rawRecords := batch.Records
 	if compression := byte(batch.Attributes & 0x0007); compression != 0 {
 		var err error
-		if rawRecords, err = decompress(rawRecords, compression); err != nil {
+		if rawRecords, err = decompressor.decompress(rawRecords, compression); err != nil {
 			fetchPart.Err = fmt.Errorf("unable to decompress batch: %v", err)
 			return
 		}
@@ -669,6 +673,7 @@ func (o *seqOffset) processV1Messages(
 	topic string,
 	fetchPart *FetchPartition,
 	messages []kmsg.MessageV1,
+	decompressor *decompressor,
 ) {
 	for i := range messages {
 		message := &messages[i]
@@ -678,7 +683,7 @@ func (o *seqOffset) processV1Messages(
 			continue
 		}
 
-		rawMessages, err := decompress(message.Value, compression)
+		rawMessages, err := decompressor.decompress(message.Value, compression)
 		if err != nil {
 			fetchPart.Err = fmt.Errorf("unable to decompress messages: %v", err)
 			return
@@ -717,6 +722,7 @@ func (o *seqOffset) processV0Messages(
 	topic string,
 	fetchPart *FetchPartition,
 	messages []kmsg.MessageV0,
+	decompressor *decompressor,
 ) {
 	for i := range messages {
 		message := &messages[i]
@@ -726,7 +732,7 @@ func (o *seqOffset) processV0Messages(
 			continue
 		}
 
-		rawMessages, err := decompress(message.Value, compression)
+		rawMessages, err := decompressor.decompress(message.Value, compression)
 		if err != nil {
 			fetchPart.Err = fmt.Errorf("unable to decompress messages: %v", err)
 			return

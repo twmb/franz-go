@@ -94,7 +94,7 @@ func (sink *recordSink) createRequest() (*produceRequest, *kmsg.AddPartitionsToT
 		timeout: int32(sink.broker.client.cfg.requestTimeout.Milliseconds()),
 		batches: make(reqBatches, 5),
 
-		compression: sink.broker.client.cfg.compression,
+		compressor: sink.broker.client.compressor,
 	}
 
 	var (
@@ -1071,7 +1071,7 @@ type produceRequest struct {
 	timeout int32
 	batches reqBatches
 
-	compression []CompressionCodec
+	compressor *compressor
 }
 
 type reqBatches map[string]map[int32]*recordBatch
@@ -1108,8 +1108,6 @@ func (p *produceRequest) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendNullableString(dst, p.txnID)
 	}
 
-	compressor := loadProduceCompressor(p.compression, p.version)
-
 	dst = kbin.AppendInt16(dst, p.acks)
 	dst = kbin.AppendInt32(dst, p.timeout)
 	dst = kbin.AppendArrayLen(dst, len(p.batches))
@@ -1120,9 +1118,9 @@ func (p *produceRequest) AppendTo(dst []byte) []byte {
 		for partition, batch := range partitions {
 			dst = kbin.AppendInt32(dst, partition)
 			if p.version < 3 {
-				dst = batch.appendToAsMessageSet(dst, uint8(p.version), compressor)
+				dst = batch.appendToAsMessageSet(dst, uint8(p.version), p.compressor)
 			} else {
-				dst = batch.appendTo(dst, compressor, p.txnID != nil)
+				dst = batch.appendTo(dst, p.compressor, p.txnID != nil, p.version)
 			}
 		}
 	}
@@ -1133,7 +1131,7 @@ func (p *produceRequest) ResponseKind() kmsg.Response {
 	return &kmsg.ProduceResponse{Version: p.version}
 }
 
-func (r *recordBatch) appendTo(dst []byte, compressor *compressor, transactional bool) []byte {
+func (r *recordBatch) appendTo(dst []byte, compressor *compressor, transactional bool, version int16) []byte {
 	nullableBytesLen := r.wireLength - 4 // NULLABLE_BYTES leading length, minus itself
 	nullableBytesLenAt := len(dst)       // in case compression adjusting
 	dst = kbin.AppendInt32(dst, nullableBytesLen)
@@ -1175,10 +1173,10 @@ func (r *recordBatch) appendTo(dst []byte, compressor *compressor, transactional
 
 	if compressor != nil {
 		toCompress := dst[recordsAt:]
-		zipr := compressor.getZipr()
-		defer compressor.putZipr(zipr)
+		w := sliceWriters.Get().(*sliceWriter)
+		defer sliceWriters.Put(w)
 
-		compressed := zipr.compress(toCompress)
+		compressed, codec := compressor.compress(w, toCompress, int16(version))
 		if compressed != nil && // nil would be from an error
 			len(compressed) < len(toCompress) {
 
@@ -1190,7 +1188,7 @@ func (r *recordBatch) appendTo(dst []byte, compressor *compressor, transactional
 			savings := int32(len(toCompress) - len(compressed))
 			nullableBytesLen -= savings
 			batchLen -= savings
-			attrs |= int16(compressor.attrs)
+			attrs |= int16(codec)
 			kbin.AppendInt32(dst[:nullableBytesLenAt], nullableBytesLen)
 			kbin.AppendInt32(dst[:batchLenAt], batchLen)
 			kbin.AppendInt16(dst[:attrsAt], attrs)
@@ -1235,10 +1233,10 @@ func (r *recordBatch) appendToAsMessageSet(dst []byte, version uint8, compressor
 
 	if compressor != nil {
 		toCompress := dst[nullableBytesLenAt+4:] // skip nullable bytes leading prefix
-		zipr := compressor.getZipr()
-		defer compressor.putZipr(zipr)
+		w := sliceWriters.Get().(*sliceWriter)
+		defer sliceWriters.Put(w)
 
-		compressed := zipr.compress(toCompress)
+		compressed, codec := compressor.compress(w, toCompress, int16(version))
 		inner := &krec.Rec{Value: compressed}
 		wrappedLength := messageSet0Length(inner)
 		if version == 2 {
@@ -1251,7 +1249,7 @@ func (r *recordBatch) appendToAsMessageSet(dst []byte, version uint8, compressor
 			dst = appendMessageTo(
 				dst[:nullableBytesLenAt+4],
 				version,
-				compressor.attrs,
+				codec,
 				int64(len(r.records)-1),
 				r.firstTimestamp,
 				inner,
