@@ -21,10 +21,10 @@ import (
 // Thus while it is an ugly test, it is effective.
 func Test_stickyAdjustCooperative(t *testing.T) {
 	id := func(name string) groupMemberID { return groupMemberID{memberID: name} }
-	assn := func(in map[string][]int32) []kmsg.GroupMemberMetadataAssignedPartition {
-		var ks []kmsg.GroupMemberMetadataAssignedPartition
+	assn := func(in map[string][]int32) []kmsg.GroupMemberMetadataOwnedPartition {
+		var ks []kmsg.GroupMemberMetadataOwnedPartition
 		for topic, partitions := range in {
-			ks = append(ks, kmsg.GroupMemberMetadataAssignedPartition{
+			ks = append(ks, kmsg.GroupMemberMetadataOwnedPartition{
 				Topic:      topic,
 				Partitions: partitions,
 			})
@@ -34,21 +34,21 @@ func Test_stickyAdjustCooperative(t *testing.T) {
 
 	members := []groupMember{
 		{id: id("a"),
-			assigned: assn(map[string][]int32{
+			owned: assn(map[string][]int32{
 				"t1":      {1, 2, 3, 4},
 				"tmove":   {1, 2},
 				"tdelete": {1, 2},
 			})},
 
 		{id: id("b"),
-			assigned: assn(map[string][]int32{
+			owned: assn(map[string][]int32{
 				"t2": {1, 2, 3},
 			})},
 
-		{id: id("c")}, // eager member: nothing assigned
+		{id: id("c")}, // eager member: nothing owned
 
 		{id: id("d"), // also thinks it owned t1 (similar to KIP-341)
-			assigned: assn(map[string][]int32{
+			owned: assn(map[string][]int32{
 				"t1": {1, 2, 3, 4},
 			})},
 	}
