@@ -264,16 +264,14 @@ func (c *Client) fetchTopicMetadata(reqTopics []string) (map[string]*topicPartit
 				leader:      partMeta.Leader,
 				leaderEpoch: leaderEpoch,
 
-				records: &recordBuffer{
-					cl: c,
+				records: &recBuf{
+					cfg: &c.cfg,
+					cl:  c,
 
 					topic:     topicMeta.Topic,
 					partition: partMeta.Partition,
 
-					recBufsIdx:      -1, // required, see below
-					lastAckedOffset: -1, // expected sentinel
-
-					linger: c.cfg.linger,
+					recBufsIdx: -1, // required, see below
 				},
 
 				consumption: &consumption{
@@ -297,7 +295,7 @@ func (c *Client) fetchTopicMetadata(reqTopics []string) (map[string]*topicPartit
 					p.loadErr = &errUnknownBrokerForPartition{topicMeta.Topic, partMeta.Partition, p.leader}
 				}
 			} else {
-				p.records.sink = broker.recordSink
+				p.records.sink = broker.sink
 				p.consumption.source = broker.recordSource
 			}
 
@@ -328,7 +326,7 @@ func (c *Client) mergeTopicPartitions(l *topicPartitions, r *topicPartitionsData
 		retriable := kerr.IsRetriable(r.loadErr)
 		if retriable {
 			for _, topicPartition := range lv.all {
-				topicPartition.records.bumpTriesAndMaybeFailBatch0(lv.loadErr)
+				topicPartition.records.bumpRepeatedLoadErr(lv.loadErr)
 			}
 		} else {
 			for _, topicPartition := range lv.all {
@@ -379,7 +377,7 @@ func (c *Client) mergeTopicPartitions(l *topicPartitions, r *topicPartitionsData
 			err := newTP.loadErr
 			*newTP = *oldTP
 			newTP.loadErr = err
-			newTP.records.bumpTriesAndMaybeFailBatch0(newTP.loadErr)
+			newTP.records.bumpRepeatedLoadErr(newTP.loadErr)
 			needsRetry = true
 			continue
 		}
@@ -416,7 +414,7 @@ func (c *Client) mergeTopicPartitions(l *topicPartitions, r *topicPartitionsData
 			continue
 		}
 		if newTP.records.recBufsIdx == -1 {
-			newTP.records.sink.addSource(newTP.records)
+			newTP.records.sink.addRecBuf(newTP.records)
 		}
 		if newTP.consumption.allConsumptionsIdx == -1 { // should be true if recBufsIdx == -1
 			newTP.consumption.source.addConsumption(newTP.consumption)
@@ -449,10 +447,10 @@ func (c *Client) mergeTopicPartitions(l *topicPartitions, r *topicPartitionsData
 func handleDeletedPartitions(deleted []*topicPartition) {
 	for _, d := range deleted {
 		sink := d.records.sink
-		sink.removeSource(d.records)
+		sink.removeRecBuf(d.records)
 		for _, batch := range d.records.batches {
 			for i, pnr := range batch.records {
-				sink.broker.client.finishRecordPromise(pnr.promisedRecord, ErrPartitionDeleted)
+				sink.cl.finishRecordPromise(pnr.promisedRec, ErrPartitionDeleted)
 				batch.records[i] = noPNR
 			}
 			emptyRecordsPool.Put(&batch.records)

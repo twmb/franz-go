@@ -46,7 +46,7 @@ type Client struct {
 
 	// unknownTopics buffers all records for topics that are not loaded
 	unknownTopicsMu   sync.Mutex
-	unknownTopics     map[string][]promisedRecord
+	unknownTopics     map[string][]promisedRec
 	unknownTopicsWait map[string]chan struct{}
 
 	updateMetadataCh    chan struct{}
@@ -108,7 +108,7 @@ func NewClient(opts ...Opt) (*Client, error) {
 		decompressor: newDecompressor(),
 
 		coordinators:      make(map[coordinatorKey]int32),
-		unknownTopics:     make(map[string][]promisedRecord),
+		unknownTopics:     make(map[string][]promisedRec),
 		unknownTopicsWait: make(map[string]chan struct{}),
 
 		updateMetadataCh:    make(chan struct{}, 1),
@@ -277,7 +277,7 @@ func (cl *Client) Close() {
 	cl.stopBrokers = true
 	for _, broker := range cl.brokers {
 		broker.stopForever()
-		broker.recordSink.maybeBeginDraining()    // awaken anything in backoff
+		broker.sink.maybeDrain()                  // awaken anything in backoff
 		broker.recordSource.maybeBeginConsuming() // same
 	}
 	cl.brokersMu.Unlock()

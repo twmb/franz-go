@@ -57,14 +57,13 @@ type broker struct {
 	cxnProduce *brokerCxn
 	cxnFetch   *brokerCxn
 
-	// recordSink and recordSource exist so that metadata updates can
-	// copy these pointers to a topicPartition's record's sink field
-	// and consumption's source field.
+	// sink and source exist so that metadata updates can copy these
+	// pointers to a topicPartition's record's sink field and consumption's
+	// source field.
 	//
-	// Brokers are created with these two fields initialized; when
-	// a topic partition wants to use the broker, it copies these
-	// pointers.
-	recordSink   *recordSink
+	// Brokers are created with these two fields initialized; when a topic
+	// partition wants to use the broker, it copies these pointers.
+	sink         *sink
 	recordSource *recordSource
 
 	// seqResps, guarded by seqRespsMu, contains responses that must be
@@ -100,7 +99,7 @@ func (c *Client) newBroker(addr string, id int32) *broker {
 
 		reqs: make(chan promisedReq, 10),
 	}
-	br.recordSink = newRecordSink(br)
+	br.sink = newSink(&c.cfg, c, br)
 	br.recordSource = newRecordSource(br)
 	go br.handleReqs()
 

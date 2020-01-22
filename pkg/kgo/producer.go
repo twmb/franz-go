@@ -54,19 +54,19 @@ func (cl *Client) AbortBufferedRecords(ctx context.Context) error {
 	var unaborting []*broker
 	cl.brokersMu.Lock()
 	for _, broker := range cl.brokers {
-		broker.recordSink.mu.Lock()
-		broker.recordSink.aborting = true
-		broker.recordSink.mu.Unlock()
-		broker.recordSink.maybeBeginDraining() // awaken anything in backoff
+		broker.sink.mu.Lock()
+		broker.sink.aborting = true
+		broker.sink.mu.Unlock()
+		broker.sink.maybeDrain() // awaken anything in backoff
 		unaborting = append(unaborting, broker)
 	}
 	cl.brokersMu.Unlock()
 
 	defer func() {
 		for _, broker := range unaborting {
-			broker.recordSink.mu.Lock()
-			broker.recordSink.aborting = false
-			broker.recordSink.mu.Unlock()
+			broker.sink.mu.Lock()
+			broker.sink.aborting = false
+			broker.sink.mu.Unlock()
 		}
 	}()
 
@@ -213,7 +213,7 @@ func (cl *Client) Produce(
 	if promise == nil {
 		promise = noPromise
 	}
-	pr := promisedRecord{promise, r}
+	pr := promisedRec{promise, r}
 
 	if atomic.LoadUint32(&cl.producer.idLoaded) == 0 {
 		var buffered bool
@@ -242,7 +242,7 @@ func (cl *Client) Produce(
 	return nil
 }
 
-func (cl *Client) finishRecordPromise(pr promisedRecord, err error) {
+func (cl *Client) finishRecordPromise(pr promisedRec, err error) {
 	buffered := atomic.AddInt64(&cl.producer.bufferedRecords, -1)
 	if buffered >= cl.cfg.maxBufferedRecords {
 		go func() { cl.producer.waitBuffer <- struct{}{} }()
@@ -257,7 +257,7 @@ func (cl *Client) finishRecordPromise(pr promisedRecord, err error) {
 // partitionRecord loads the partitions for a topic and produce to them. If
 // the topic does not currently exist, the record is buffered in unknownTopics
 // for a metadata update to deal with.
-func (cl *Client) partitionRecord(pr promisedRecord) {
+func (cl *Client) partitionRecord(pr promisedRec) {
 	parts, partsData := cl.partitionsForTopicProduce(pr)
 	if parts == nil {
 		return
@@ -267,7 +267,7 @@ func (cl *Client) partitionRecord(pr promisedRecord) {
 
 // doPartitionRecord is the logic behind record partitioning and producing if
 // the client knows of the topic's partitions.
-func (cl *Client) doPartitionRecord(parts *topicPartitions, partsData *topicPartitionsData, pr promisedRecord) {
+func (cl *Client) doPartitionRecord(parts *topicPartitions, partsData *topicPartitionsData, pr promisedRec) {
 	if partsData.loadErr != nil && !kerr.IsRetriable(partsData.loadErr) {
 		cl.finishRecordPromise(pr, partsData.loadErr)
 		return
@@ -333,7 +333,7 @@ func (cl *Client) initProducerID() {
 
 	unknown := cl.unknownTopics
 	unknownWait := cl.unknownTopicsWait
-	cl.unknownTopics = make(map[string][]promisedRecord)
+	cl.unknownTopics = make(map[string][]promisedRec)
 	cl.unknownTopicsWait = make(map[string]chan struct{})
 
 	if err != nil {
@@ -384,7 +384,7 @@ func (cl *Client) doInitProducerID() error {
 
 // partitionsForTopicProduce returns the topic partitions for a record.
 // If the topic is not loaded yet, this buffers the record.
-func (cl *Client) partitionsForTopicProduce(pr promisedRecord) (*topicPartitions, *topicPartitionsData) {
+func (cl *Client) partitionsForTopicProduce(pr promisedRec) (*topicPartitions, *topicPartitionsData) {
 	topic := pr.Topic
 
 	// 1) if the topic exists and there are partitions, then we can simply
@@ -449,7 +449,7 @@ func (cl *Client) partitionsForTopicProduce(pr promisedRecord) (*topicPartitions
 	return nil, nil
 }
 
-func (cl *Client) addUnknownTopicRecord(pr promisedRecord) {
+func (cl *Client) addUnknownTopicRecord(pr promisedRec) {
 	existing := cl.unknownTopics[pr.Topic]
 	existing = append(existing, pr)
 	cl.unknownTopics[pr.Topic] = existing
@@ -510,21 +510,18 @@ func (cl *Client) waitUnknownTopic(topic string, wait chan struct{}) {
 //
 // If the context finishes (Done), this returns the context's error.
 func (cl *Client) Flush(ctx context.Context) error {
-	// Signal to finishRecord that we want to be notified once thins hit 0.
+	// Signal to finishRecord that we want to be notified once buffered hits 0.
 	atomic.AddInt32(&cl.producer.flushing, 1)
 	defer atomic.AddInt32(&cl.producer.flushing, -1)
 
-	// At this point, if lingering,
-	// nothing new will fall into a timer waiting,
-	// so we can just wake everything up through the lock,
-	// and be sure that all sinks will loop draining.
+	// At this point, if lingering is configured, nothing will _start_ a
+	// linger because the producer's flushing atomic int32 is nonzero.  We
+	// must wake anything that could be lingering up, after which all sinks
+	// will loop draining.
 	if cl.cfg.linger > 0 {
 		for _, parts := range cl.loadTopics() {
 			for _, part := range parts.load().all {
-				part.records.mu.Lock()
-				part.records.lockedStopLinger()
-				part.records.sink.maybeBeginDraining()
-				part.records.mu.Unlock()
+				part.records.unlinger()
 			}
 		}
 	}

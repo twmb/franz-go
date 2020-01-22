@@ -14,7 +14,7 @@ type recordSource struct {
 	broker *broker
 
 	inflightSem chan struct{} // capacity of 1
-	fillState   uint32
+	fillState   workLoop
 
 	consecutiveFailures int
 
@@ -360,7 +360,7 @@ func (source *recordSource) createRequest() (req *fetchRequest, again bool) {
 }
 
 func (source *recordSource) maybeBeginConsuming() {
-	if maybeBeginWork(&source.fillState) {
+	if source.fillState.maybeBegin() {
 		go source.fill()
 	}
 }
@@ -376,7 +376,7 @@ func (source *recordSource) fill() {
 		req, again = source.createRequest()
 
 		if req.numOffsets == 0 { // must be at least one if a consumption was usable
-			again = maybeTryFinishWork(&source.fillState, again)
+			again = source.fillState.maybeFinish(again)
 			<-source.inflightSem
 			continue
 		}
@@ -388,7 +388,7 @@ func (source *recordSource) fill() {
 				source.handleReqResp(req, resp, err)
 			},
 		)
-		again = maybeTryFinishWork(&source.fillState, again)
+		again = source.fillState.maybeFinish(again)
 	}
 }
 

@@ -8,18 +8,19 @@ const (
 	stateContinueWorking
 )
 
-// maybeBeginWork changes workState to some form of working and returns whether
-// the caller needs to begin work.
-func maybeBeginWork(workState *uint32) bool {
+type workLoop struct{ state uint32 }
+
+// maybeBegin returns whether a work loop should begin.
+func (l *workLoop) maybeBegin() bool {
 	var state uint32
 	var done bool
 	for !done {
-		switch state = atomic.LoadUint32(workState); state {
+		switch state = atomic.LoadUint32(&l.state); state {
 		case stateUnstarted:
-			done = atomic.CompareAndSwapUint32(workState, state, stateWorking)
+			done = atomic.CompareAndSwapUint32(&l.state, state, stateWorking)
 			state = stateWorking
 		case stateWorking:
-			done = atomic.CompareAndSwapUint32(workState, state, stateContinueWorking)
+			done = atomic.CompareAndSwapUint32(&l.state, state, stateContinueWorking)
 			state = stateContinueWorking
 		case stateContinueWorking:
 			done = true
@@ -29,25 +30,33 @@ func maybeBeginWork(workState *uint32) bool {
 	return state == stateWorking
 }
 
-// maybeTryFinishWork demotes workState and returns whether work should
-// continue.
+// maybeFinish demotes loop's internal state and returns whether work should
+// actually stop. This function should be called before looping to continue
+// work.
 //
-// If again is true, this will avoid demoting from working to not working.
-func maybeTryFinishWork(workState *uint32, again bool) bool {
-	switch state := atomic.LoadUint32(workState); state {
+// If willGoAgain is true, this will avoid demoting from working to not
+// working. Again would be true if the loop knows it should continue working;
+// calling this function is necessary even in this case to update loop's
+// internal state.
+//
+// This function is a no-op if the loop is already finished, but generally,
+// since the loop itself calls MaybeFinish after it has been started, this
+// should never be called if the loop is unstarted.
+func (l *workLoop) maybeFinish(willGoAgain bool) bool {
+	switch state := atomic.LoadUint32(&l.state); state {
 	// Working:
 	// If again, we know we should continue; keep our state.
 	// If not again, we try to downgrade state and stop.
 	// If we cannot, then something slipped in to say keep going.
 	case stateWorking:
-		if !again {
-			again = !atomic.CompareAndSwapUint32(workState, state, stateUnstarted)
+		if !willGoAgain {
+			willGoAgain = !atomic.CompareAndSwapUint32(&l.state, state, stateUnstarted)
 		}
 	// Continue: demote ourself and run again no matter what.
 	case stateContinueWorking:
-		atomic.StoreUint32(workState, stateWorking)
-		again = true
+		atomic.StoreUint32(&l.state, stateWorking)
+		willGoAgain = true
 	}
 
-	return again
+	return !willGoAgain
 }

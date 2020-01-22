@@ -135,7 +135,7 @@ type topicPartition struct {
 	leader      int32 // our broker leader
 	leaderEpoch int32 // the broker leader's epoch
 
-	records     *recordBuffer
+	records     *recBuf
 	consumption *consumption
 }
 
@@ -148,7 +148,7 @@ func (old *topicPartition) migrateProductionTo(new *topicPartition) {
 	// load error. The new sink will not be nil, since we do not migrate
 	// to failing sinks.
 	if old.records.sink != nil {
-		old.records.sink.removeSource(old.records) // first, remove our record source from the old sink
+		old.records.sink.removeRecBuf(old.records) // first, remove our record source from the old sink
 	}
 
 	// Before this next lock, record producing will buffer to the
@@ -164,7 +164,7 @@ func (old *topicPartition) migrateProductionTo(new *topicPartition) {
 	// on the new sink, which is not yet consuming from these
 	// records. Again, just more wasted drain triggers.
 
-	old.records.sink.addSource(old.records) // add our record source to the new sink
+	old.records.sink.addRecBuf(old.records) // add our record source to the new sink
 
 	// At this point, the new sink will be draining our records. We lastly
 	// need to copy the records pointer to our new topicPartition and clear
