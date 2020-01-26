@@ -336,7 +336,8 @@ func (cl *Client) producerID() (int64, int16, error) {
 		defer cl.producer.idMu.Unlock()
 
 		if id = cl.producer.id.Load().(*producerID); id.err == errReloadProducerID {
-			cl.producer.id.Store(cl.doInitProducerID(id.id, id.epoch))
+			id = cl.doInitProducerID(id.id, id.epoch)
+			cl.producer.id.Store(id)
 		}
 	}
 
