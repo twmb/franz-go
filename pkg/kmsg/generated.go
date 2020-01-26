@@ -3635,8 +3635,14 @@ type TxnMetadataValue struct {
 	// ProducerID is the ID in use by the transactional ID.
 	ProducerID int64
 
+	// LastProducerID is the last ID in use for a producer; see KIP-360.
+	LastProducerID int64 // v1+
+
 	// ProducerEpoch is the epoch associated with the producer ID.
 	ProducerEpoch int16
+
+	// LastProducerEpoch is the last epoch in use for a producer; see KIP-360.
+	LastProducerEpoch int16 // v1+
 
 	// TimeoutMillis is the timeout of this transaction in milliseconds.
 	TimeoutMillis int32
@@ -3668,8 +3674,16 @@ func (v *TxnMetadataValue) AppendTo(dst []byte) []byte {
 		v := v.ProducerID
 		dst = kbin.AppendInt64(dst, v)
 	}
+	if version >= 1 {
+		v := v.LastProducerID
+		dst = kbin.AppendInt64(dst, v)
+	}
 	{
 		v := v.ProducerEpoch
+		dst = kbin.AppendInt16(dst, v)
+	}
+	if version >= 1 {
+		v := v.LastProducerEpoch
 		dst = kbin.AppendInt16(dst, v)
 	}
 	{
@@ -3718,9 +3732,17 @@ func (v *TxnMetadataValue) ReadFrom(src []byte) error {
 		v := b.Int64()
 		s.ProducerID = v
 	}
+	if version >= 1 {
+		v := b.Int64()
+		s.LastProducerID = v
+	}
 	{
 		v := b.Int16()
 		s.ProducerEpoch = v
+	}
+	if version >= 1 {
+		v := b.Int16()
+		s.LastProducerEpoch = v
 	}
 	{
 		v := b.Int32()
