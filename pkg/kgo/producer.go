@@ -2,6 +2,7 @@ package kgo
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -54,19 +55,14 @@ func (cl *Client) AbortBufferedRecords(ctx context.Context) error {
 	var unaborting []*broker
 	cl.brokersMu.Lock()
 	for _, broker := range cl.brokers {
-		broker.sink.mu.Lock()
-		broker.sink.aborting = true
-		broker.sink.mu.Unlock()
-		broker.sink.maybeDrain() // awaken anything in backoff
+		broker.sink.setAborting()
 		unaborting = append(unaborting, broker)
 	}
 	cl.brokersMu.Unlock()
 
 	defer func() {
 		for _, broker := range unaborting {
-			broker.sink.mu.Lock()
-			broker.sink.aborting = false
-			broker.sink.mu.Unlock()
+			broker.sink.clearAborting()
 		}
 	}()
 
@@ -95,6 +91,10 @@ func (cl *Client) AbortBufferedRecords(ctx context.Context) error {
 // ErrorBufferedRecords should be called before aborting a transaction to
 // ensure that any buffered records not yet flushed will not be a part of a new
 // transaction.
+//
+// If records failed with UnknownProducerID and your Kafka version is at least
+// 2.5.0, then aborting here will potentially allow the client to recover for
+// more production.
 func (cl *Client) EndTransaction(ctx context.Context, commit bool) error {
 	cl.producer.txnMu.Lock()
 	defer cl.producer.txnMu.Unlock()
@@ -131,10 +131,51 @@ func (cl *Client) EndTransaction(ctx context.Context, commit bool) error {
 		return nil
 	}
 
+	id, epoch, err := cl.producerID()
+	if err != nil {
+		if commit {
+			return ErrCommitWithFatalID
+		}
+
+		switch err.(type) {
+		case *kerr.Error:
+			if err != kerr.UnknownProducerID || cl.producer.idVersion <= 2 {
+				return err // fatal, unrecoverable
+			}
+
+			// At this point, nothing is being produced and the
+			// producer ID is loads with an error. Before we allow
+			// production to continue, we reset all sequence
+			// numbers. Storing errReloadProducerID will reset the
+			// id / epoch appropriately and everything will work as
+			// per KIP-360.
+			for _, tp := range cl.loadTopics() {
+				for _, tpd := range tp.load().all {
+					tpd.records.resetSeq()
+				}
+			}
+
+			// With UnknownProducerID and v3 init id, we can recover.
+			// No sense issuing an abort request, though.
+			cl.producer.id.Store(&producerID{
+				id:    id,
+				epoch: epoch,
+				err:   errReloadProducerID,
+			})
+			return nil
+
+		default:
+			// If this is not a kerr.Error, then it was some arbitrary
+			// client error. We can try the EndTxnRequest in the hopes
+			// that our id / epoch is valid, but the id / epoch may
+			// have never loaded (and thus will be -1 / -1).
+		}
+	}
+
 	kresp, err := cl.Request(ctx, &kmsg.EndTxnRequest{
 		TransactionalID: *cl.cfg.txnID,
-		ProducerID:      cl.producer.id,
-		ProducerEpoch:   cl.producer.epoch,
+		ProducerID:      id,
+		ProducerEpoch:   epoch,
 		Commit:          commit,
 	})
 	if err != nil {
@@ -146,15 +187,13 @@ func (cl *Client) EndTransaction(ctx context.Context, commit bool) error {
 type producer struct {
 	bufferedRecords int64
 
-	id           int64
-	epoch        int16
-	idLoaded     uint32 // 1 if loaded
+	id           atomic.Value
 	producingTxn uint32 // 1 if in txn
 	flushing     int32  // >0 if flushing, can Flush many times concurrently
 
-	idMu        sync.Mutex
-	idLoadingCh chan struct{} // exists if id is loading
-	waitBuffer  chan struct{}
+	idMu       sync.Mutex
+	idVersion  int16
+	waitBuffer chan struct{}
 
 	flushingMu   sync.Mutex
 	flushingCond *sync.Cond
@@ -214,30 +253,6 @@ func (cl *Client) Produce(
 		promise = noPromise
 	}
 	pr := promisedRec{promise, r}
-
-	if atomic.LoadUint32(&cl.producer.idLoaded) == 0 {
-		var buffered bool
-		cl.producer.idMu.Lock()
-		if atomic.LoadUint32(&cl.producer.idLoaded) == 0 {
-			// unknownTopics is guarded under either the
-			// unknownTopicsMu or producer idMu. Since
-			// we must have an ID before we move to the
-			// loading topics stage, we will always have
-			// producer idMu and then unknownTopicsMu
-			// non overlapping.
-			cl.addUnknownTopicRecord(pr)
-			buffered = true
-
-			if cl.producer.idLoadingCh == nil {
-				cl.producer.idLoadingCh = make(chan struct{})
-				go cl.initProducerID()
-			}
-		}
-		cl.producer.idMu.Unlock()
-		if buffered {
-			return nil
-		}
-	}
 	cl.partitionRecord(pr)
 	return nil
 }
@@ -304,63 +319,77 @@ func (cl *Client) doPartitionRecord(parts *topicPartitions, partsData *topicPart
 	}
 }
 
+type producerID struct {
+	id    int64
+	epoch int16
+	err   error
+}
+
+var errReloadProducerID = errors.New("producer id needs reloading")
+
 // initProducerID initalizes the client's producer ID for idempotent
 // producing only (no transactions, which are more special). After the first
 // load, this clears all buffered unknown topics.
-func (cl *Client) initProducerID() {
-	err := cl.doInitProducerID()
+func (cl *Client) producerID() (int64, int16, error) {
+	id := cl.producer.id.Load().(*producerID)
+	if id.err == errReloadProducerID {
+		cl.producer.idMu.Lock()
+		defer cl.producer.idMu.Unlock()
 
-	// Grab our lock. We need to block producing until this function
-	// returns to ensure order.
+		if id = cl.producer.id.Load().(*producerID); id.err == errReloadProducerID {
+			cl.producer.id.Store(cl.doInitProducerID(id.id, id.epoch))
+		}
+	}
+
+	return id.id, id.epoch, id.err
+}
+
+func (cl *Client) failProducerID(id int64, epoch int16, err error) {
 	cl.producer.idMu.Lock()
 	defer cl.producer.idMu.Unlock()
 
-	// close idLoadingCh before setting idLoaded to 1 to ensure anything
-	// waiting sees the loaded.
-	defer close(cl.producer.idLoadingCh)
-	cl.producer.idLoadingCh = nil
+	current := cl.producer.id.Load().(*producerID)
+	if current.id != id || current.epoch != epoch {
+		return // failed an old id
+	}
 
-	// If we were successful, we have to store that the ID is loaded before
-	// we release the mutex. Otherwise, something may grab the mu and still
-	// see the id is not loaded just before we store it is, and then it
-	// will forever sit buffered waiting for a load that will not happen.
+	// If this is not UnknownProducerID, then we cannot recover production.
 	//
-	// We cannot guard against two concurrent produces to the same topic,
-	// but that is fine.
-	if err == nil {
-		defer atomic.StoreUint32(&cl.producer.idLoaded, 1)
+	// If this is UnknownProducerID without a txnID, then we are here from
+	// stopOnDataLoss in sink.go (see large comment there).
+	if err != kerr.UnknownProducerID || cl.cfg.txnID == nil {
+		cl.producer.id.Store(&producerID{
+			id:    id,
+			epoch: epoch,
+			err:   err,
+		})
+		return // fatal error
 	}
 
-	unknown := cl.unknownTopics
-	unknownWait := cl.unknownTopicsWait
-	cl.unknownTopics = make(map[string][]promisedRec)
-	cl.unknownTopicsWait = make(map[string]chan struct{})
+	// need to not produce until everything failed?
 
-	if err != nil {
-		for i, prs := range unknown {
-			close(unknownWait[i])
-			for _, pr := range prs {
-				cl.finishRecordPromise(pr, err)
-			}
-		}
-		return
-	}
-	for i, prs := range unknown {
-		close(unknownWait[i])
-		for _, pr := range prs {
-			cl.partitionRecord(pr)
-		}
-	}
+	// UNKNOWN_PRODUCER_ID
+	// if txn id,
+	// store abortable error,
+
+	// which can be cleared in EndTransaction (store "need reload" error)
+	// when cleared, reset sequence numbers if abortable error
+
+	return
 }
 
 // doInitProducerID inits the idempotent ID and potentially the transactional
 // producer epoch.
-func (cl *Client) doInitProducerID() error {
-	req := new(kmsg.InitProducerIDRequest)
+func (cl *Client) doInitProducerID(lastID int64, lastEpoch int16) *producerID {
+	req := &kmsg.InitProducerIDRequest{
+		TransactionalID: cl.cfg.txnID,
+		ProducerID:      lastID,
+		ProducerEpoch:   lastEpoch,
+	}
 	if cl.cfg.txnID != nil {
-		req.TransactionalID = cl.cfg.txnID
 		req.TransactionTimeoutMillis = int32(cl.cfg.txnTimeout.Milliseconds())
 	}
+
 	kresp, err := cl.Request(cl.ctx, req)
 	if err != nil {
 		// If our broker is too old, then well...
@@ -369,17 +398,23 @@ func (cl *Client) doInitProducerID() error {
 		// there are other areas in this client where we assume
 		// what we hit first is the default.
 		if err == ErrUnknownRequestKey {
-			return nil
+			return &producerID{-1, -1, nil}
 		}
-		return err
+		return &producerID{-1, -1, err}
 	}
 	resp := kresp.(*kmsg.InitProducerIDResponse)
 	if err = kerr.ErrorForCode(resp.ErrorCode); err != nil {
-		return err
+		return &producerID{-1, -1, err}
 	}
-	cl.producer.id = resp.ProducerID
-	cl.producer.epoch = resp.ProducerEpoch
-	return nil
+
+	// We track if this was v3. We do not need to gate this behind a mutex,
+	// since no request is issued before the ID is loaded, meaning nothing
+	// checks this value in a racy way.
+	if cl.producer.idVersion == -1 {
+		cl.producer.idVersion = req.Version
+	}
+
+	return &producerID{resp.ProducerID, resp.ProducerEpoch, nil}
 }
 
 // partitionsForTopicProduce returns the topic partitions for a record.
@@ -511,6 +546,7 @@ func (cl *Client) waitUnknownTopic(topic string, wait chan struct{}) {
 // If the context finishes (Done), this returns the context's error.
 func (cl *Client) Flush(ctx context.Context) error {
 	// Signal to finishRecord that we want to be notified once buffered hits 0.
+	// Also forbid any new producing to start a linger.
 	atomic.AddInt32(&cl.producer.flushing, 1)
 	defer atomic.AddInt32(&cl.producer.flushing, -1)
 

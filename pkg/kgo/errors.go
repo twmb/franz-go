@@ -80,6 +80,10 @@ var (
 	// ErrAborting is returned for all buffered records while
 	// AbortBufferedRecords is being called.
 	ErrAborting = errors.New("client is aborting buffered records")
+
+	// ErrCommitWithFatalID is returned when trying to commit in
+	// EndTransaction with a producer ID that has failed.
+	ErrCommitWithFatalID = errors.New("cannot commit with a fatal producer id; retry with an abort")
 )
 
 // ErrDataLoss is returned for Kafka >=2.1.0 when data loss is detected and the

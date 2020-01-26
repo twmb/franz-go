@@ -103,6 +103,7 @@ func NewClient(opts ...Opt) (*Client, error) {
 
 		producer: producer{
 			waitBuffer: make(chan struct{}, 100),
+			idVersion:  -1,
 		},
 
 		decompressor: newDecompressor(),
@@ -115,6 +116,11 @@ func NewClient(opts ...Opt) (*Client, error) {
 		updateMetadataNowCh: make(chan struct{}, 1),
 		metadone:            make(chan struct{}),
 	}
+	c.producer.id.Store(&producerID{
+		id:    -1,
+		epoch: -1,
+		err:   errReloadProducerID,
+	})
 	c.producer.flushingCond = sync.NewCond(&c.producer.flushingMu)
 	c.consumer.cl = c
 	c.consumer.sourcesReadyCond = sync.NewCond(&c.consumer.sourcesReadyMu)

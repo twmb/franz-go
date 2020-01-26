@@ -99,7 +99,7 @@ func (s *sink) createReq() (*produceRequest, *kmsg.AddPartitionsToTxnRequest, bo
 		txnID:   s.cfg.txnID,
 		acks:    s.cfg.acks.val,
 		timeout: int32(s.cfg.requestTimeout.Milliseconds()),
-		batches: make(reqBatches, 5),
+		batches: make(seqRecBatches, 5),
 
 		compressor: s.cl.compressor,
 	}
@@ -185,6 +185,9 @@ func (s *sink) createReq() (*produceRequest, *kmsg.AddPartitionsToTxnRequest, bo
 			moreToDrain = len(recBuf.batches) > recBuf.batchDrainIdx || moreToDrain
 		}
 
+		seq := recBuf.seq
+		recBuf.seq += int32(len(batch.records))
+
 		recBuf.mu.Unlock()
 
 		if transactional && !recBuf.addedToTxn {
@@ -212,6 +215,7 @@ func (s *sink) createReq() (*produceRequest, *kmsg.AddPartitionsToTxnRequest, bo
 		req.batches.addBatch(
 			recBuf.topic,
 			recBuf.partition,
+			seq,
 			batch,
 		)
 	}
@@ -297,17 +301,16 @@ func (s *sink) drain() {
 			err = s.doTxnReq(req, txnReq, id, epoch)
 		}
 
-		// If the producer ID errored, or the txn req had an
-		// unrecoverable error, then we fail all remaining batches,
-		// release our sem, and continue.
-		//
-		// The ProducerID func above should forever after return
-		// the fatal error (unless it can reset, KIP-360).
+		// If the producer ID fn or txn req errored, we fail everything.
+		// The error is unrecoverable.
 		if err != nil {
+			s.cl.failProducerID(req.producerID, req.producerEpoch, err)
 			for _, partitions := range req.batches {
-				for partition, batch := range partitions {
-					s.cl.finishBatch(batch, partition, 0, err)
+				for _, batch := range partitions {
+					batch.owner.addedToTxn = false
+					batch.owner.failAllRecords(err)
 				}
+
 			}
 			again = s.drainState.maybeFinish(again)
 			<-sem
@@ -315,8 +318,8 @@ func (s *sink) drain() {
 		}
 
 		// Again we check if there are any batches to send: our txn req
-		// could have non-fatal errored, but removed some batches that
-		// could not be added to the txn.
+		// could have had some non-fatal partition errors that removed
+		// partitions from our req.
 		if len(req.batches) == 0 {
 			again = s.drainState.maybeFinish(again)
 			<-sem
@@ -344,11 +347,6 @@ func (s *sink) drain() {
 
 // doTxnReq issues an AddPartitionsToTxnRequest for a produce request for all
 // partitions that need to be added to a transaction.
-//
-// If the entire request fails, all batches of the produce request are finished
-// with an the error. Otherwise, all partitions that have errors are removed.
-// If any partition has a fatal transactional error, this fails the client's
-// producer id and returns the error.
 func (s *sink) doTxnReq(
 	req *produceRequest,
 	txnReq *kmsg.AddPartitionsToTxnRequest,
@@ -358,27 +356,14 @@ func (s *sink) doTxnReq(
 	txnReq.ProducerID = producerID
 	txnReq.ProducerEpoch = producerEpoch
 	kresp, err := s.cl.Request(s.cl.ctx, txnReq)
-	if err != nil {
-		for _, topic := range txnReq.Topics {
-			topicBatches := req.batches[topic.Topic]
-			for _, partition := range topic.Partitions {
-				batch := topicBatches[partition]
-				batch.owner.addedToTxn = false
-				s.cl.finishBatch(batch, partition, 0, err)
-				delete(topicBatches, partition)
-			}
-			if len(topicBatches) == 0 {
-				delete(req.batches, topic.Topic)
-			}
-		}
-		// We return nil here because the client CAN actually continue.
-		// However, users likely want to abort the batch on error, and
-		// they can do so with their promise.
-		return nil
+
+	if err != nil { // if we could not even complete the request, this is fatal.
+		return err
 	}
 
 	resp := kresp.(*kmsg.AddPartitionsToTxnResponse)
 	var retErr error
+	var fatal bool
 	for _, topic := range resp.Topics {
 		topicBatches := req.batches[topic.Topic]
 		for _, partition := range topic.Partitions {
@@ -386,15 +371,17 @@ func (s *sink) doTxnReq(
 				switch err {
 				case kerr.InvalidProducerIDMapping,
 					kerr.InvalidProducerEpoch:
-					retErr = err // all partitions should have the same error
+					retErr = err // all partitions should have the same fatal error
 
-					s.cl.failProducerID(producerID, producerEpoch, err) // this is unrecoverable (unless KIP-360)
+					fatal = true
 				}
 
 				batch := topicBatches[partition.Partition]
 				batch.owner.addedToTxn = false
-				s.cl.finishBatch(batch, partition.Partition, 0, err)
-				delete(topicBatches, partition.Partition)
+				if !fatal {
+					batch.owner.resetBatchDrainIdx()
+					delete(topicBatches, partition.Partition)
+				}
 			}
 			if len(topicBatches) == 0 {
 				delete(req.batches, topic.Topic)
@@ -408,12 +395,12 @@ func (s *sink) doTxnReq(
 // where the batch is the first in the buffer.
 func (s *sink) requeueUnattemptedReq(req *produceRequest) {
 	var maybeDrain bool
-	req.batches.onEachFirstBatchWhileBatchOwnerLocked(func(batch *recBatch) {
+	req.batches.onEachFirstBatchWhileBatchOwnerLocked(func(batch seqRecBatch) {
 		if batch.isTimedOut(s.cfg.recordTimeout) {
-			batch.owner.lockedFailBatch0(ErrRecordTimeout)
+			batch.owner.lockedFailAllRecords(ErrRecordTimeout)
 		}
+		batch.owner.resetBatchDrainIdx()
 		maybeDrain = true
-		batch.owner.batchDrainIdx = 0
 	})
 	if maybeDrain {
 		// If the sink has not backed off since issuing this request,
@@ -451,7 +438,7 @@ func (s *sink) errorAllRecordsInAllRecordBuffersInRequest(
 // errorAllRecordsInAllRecordBuffersInPartitions is similar to the extra
 // verbosely named function just above; read that documentation.
 func (s *sink) errorAllRecordsInAllRecordBuffersInPartitions(
-	partitions map[int32]*recBatch,
+	partitions map[int32]seqRecBatch,
 	err error,
 ) {
 	for _, batch := range partitions {
@@ -517,7 +504,7 @@ func (s *sink) handleReqResp(req *produceRequest, resp kmsg.Response, err error)
 	s.firstRespCheck(req.version)
 	atomic.StoreUint32(&s.consecutiveFailures, 0)
 
-	var reqRetry reqBatches // handled at the end
+	var reqRetry seqRecBatches // handled at the end
 	// On normal retriable errors, we backoff. We only do not if we detect
 	// data loss and data loss is our only error.
 	var backoffRetry bool
@@ -561,7 +548,7 @@ func (s *sink) handleReqResp(req *produceRequest, resp kmsg.Response, err error)
 				batch.tries < s.cfg.retries:
 				// Retriable: add to retry map.
 				backoffRetry = true
-				reqRetry.addBatch(topic, partition, batch)
+				reqRetry.addSeqBatch(topic, partition, batch)
 
 			case err == kerr.OutOfOrderSequenceNumber,
 				err == kerr.UnknownProducerID:
@@ -571,22 +558,32 @@ func (s *sink) handleReqResp(req *produceRequest, resp kmsg.Response, err error)
 				// UnknownProducerID was introduced to allow some form of safe
 				// handling, but KIP-360 demonstrated that resetting sequence
 				// numbers is fundamentally unsafe, so we treat it like OOOSN.
-				if s.cfg.stopOnDataLoss {
+				//
+				// 2.5.0 introduced some behavior to potentially safely reset
+				// the sequence numbers by bumping an epoch (see KIP-360).
+				// For the idempotent producer, the solution is to fail all
+				// buffered records and then let the client user reset things
+				// with the understanding that they cannot guard against
+				// potential dups / reordering at that point. Realistically,
+				// that's no better than just a config knob that allows
+				// the user to continue (our stopOnDataLoss flag), so
+				// we do not try any logic in the idempotent case.
+				if s.cfg.stopOnDataLoss || err == kerr.UnknownProducerID && s.cl.producer.idVersion >= 3 && s.cfg.txnID != nil {
 					s.cl.failProducerID(req.producerID, req.producerEpoch, err)
-					s.cl.finishBatch(batch, partition, rPartition.BaseOffset, err)
+					s.cl.finishBatch(batch.recBatch, partition, rPartition.BaseOffset, err)
 					continue
 				}
 				if s.cfg.onDataLoss != nil {
 					s.cfg.onDataLoss(topic, partition)
 				}
-				batch.owner.resetSequenceNums()
-				reqRetry.addBatch(topic, partition, batch)
+				batch.owner.resetSeq()
+				reqRetry.addSeqBatch(topic, partition, batch)
 
 			case err == kerr.DuplicateSequenceNumber: // ignorable, but we should not get
 				err = nil
 				fallthrough
 			default:
-				s.cl.finishBatch(batch, partition, rPartition.BaseOffset, err)
+				s.cl.finishBatch(batch.recBatch, partition, rPartition.BaseOffset, err)
 			}
 		}
 
@@ -630,13 +627,13 @@ func (cl *Client) finishBatch(batch *recBatch, partition int32, baseOffset int64
 //
 // If the retry is due to detecting data loss (and only that), then we
 // do not need to refresh metadata.
-func (s *sink) handleRetryBatches(retry reqBatches, withBackoff bool) {
+func (s *sink) handleRetryBatches(retry seqRecBatches, withBackoff bool) {
 	var needsMetaUpdate bool
-	retry.onEachFirstBatchWhileBatchOwnerLocked(func(batch *recBatch) {
-		batch.owner.batchDrainIdx = 0
+	retry.onEachFirstBatchWhileBatchOwnerLocked(func(batch seqRecBatch) {
 		if batch.isTimedOut(s.cfg.recordTimeout) {
-			batch.owner.lockedFailBatch0(ErrRecordTimeout)
+			batch.owner.lockedFailAllRecords(ErrRecordTimeout)
 		}
+		batch.owner.resetBatchDrainIdx()
 		if withBackoff {
 			batch.owner.failing = true
 			needsMetaUpdate = true
@@ -714,10 +711,13 @@ type recBuf struct {
 	// This exists to aid in removing the buffer from the sink.
 	recBufsIdx int
 
-	// sequenceNum is used for the baseSequence in each record batch. This
-	// is incremented in bufferRecord and can be reset when processing a
-	// response.
-	sequenceNum int32
+	// seq is used for the seq in each record batch. This is incremented in
+	// bufferRecord and can be reset when processing a response.
+	seq int32
+	// batch0Seq is the seq of the batch at batchDrainIdx 0. If we reset
+	// the drain index, we reset seq with this number. If we successfully
+	// finish batch 0, we bump this.
+	batch0Seq int32
 
 	// batches is our list of buffered records. Batches are appended as the
 	// final batch crosses size thresholds or as drain freezes batches from
@@ -825,7 +825,6 @@ func (recBuf *recBuf) bufferRecord(pr promisedRec, abortOnNewBatch bool) bool {
 		}
 		recBuf.batches = append(recBuf.batches, recBuf.newRecordBatch(pr))
 	}
-	recBuf.sequenceNum++
 
 	// Our sink could be nil if our metadata loaded a partition that is
 	// erroring.
@@ -885,22 +884,6 @@ func (recBuf *recBuf) unlinger() {
 	}
 }
 
-func (recBuf *recBuf) lockedRemoveBatch0() {
-	recBuf.batches[0] = nil
-	recBuf.batches = recBuf.batches[1:]
-	recBuf.batchDrainIdx--
-}
-
-func (recBuf *recBuf) lockedFailBatch0(err error) {
-	batch0 := recBuf.batches[0]
-	recBuf.lockedRemoveBatch0()
-	for i, pnr := range batch0.records {
-		recBuf.cl.finishRecordPromise(pnr.promisedRec, err)
-		batch0.records[i] = noPNR
-	}
-	emptyRecordsPool.Put(&batch0.records)
-}
-
 // bumpRepeatedLoadErr is provided to bump a buffer's number of consecutive
 // load errors during metadata updates.
 //
@@ -938,6 +921,10 @@ func (recBuf *recBuf) failAllRecords(err error) {
 }
 
 // lockedFailAllRecords is the same as above, but already in a lock.
+//
+// This is used anywhere where we have to fail and remove an entire batch.  It
+// is likely we did not even attempt the batch, so we cannot remove it and
+// leave the others because our seq num chain would be broken.
 func (recBuf *recBuf) lockedFailAllRecords(err error) {
 	recBuf.lockedStopLinger()
 	for _, batch := range recBuf.batches {
@@ -947,8 +934,8 @@ func (recBuf *recBuf) lockedFailAllRecords(err error) {
 		}
 		emptyRecordsPool.Put(&batch.records)
 	}
+	recBuf.resetBatchDrainIdx()
 	recBuf.batches = nil
-	recBuf.batchDrainIdx = 0
 }
 
 // clearFailing clears a buffer's failing state if it is failing.
@@ -971,27 +958,23 @@ func (recBuf *recBuf) clearFailing() {
 	}
 }
 
-// ResetSequenceNums resets a buffer's sequence numbers.
+func (recBuf *recBuf) resetBatchDrainIdx() {
+	recBuf.seq = recBuf.batch0Seq
+	recBuf.batchDrainIdx = 0
+}
+
+// resetSeq resets a buffer's seq.
 //
 // Pre 2.5.0, this function should only be called if it is *acceptable* to
 // continue on data loss. The client does this automatically given proper
 // configuration.
 //
 // 2.5.0+, it is safe to call this if the producer ID can be reset (KIP-360).
-func (recBuf *recBuf) resetSequenceNums() {
-	recBuf.mu.Lock() // for sequenceNum and batches access
+func (recBuf *recBuf) resetSeq() {
+	recBuf.mu.Lock()
 	defer recBuf.mu.Unlock()
-
-	recBuf.sequenceNum = 0
-	for _, batch := range recBuf.batches {
-		// We store the new sequence atomically because there may be
-		// more requests being built and sent concurrently. It is fine
-		// that they get the new sequence num, they will still fail
-		// with OOOSN, but the error will be dropped since they are not
-		// the first batch.
-		atomic.StoreInt32(&batch.baseSequence, recBuf.sequenceNum)
-		recBuf.sequenceNum += int32(len(batch.records))
-	}
+	recBuf.seq = 0
+	recBuf.batch0Seq = 0
 }
 
 // promisedRec ties a record with the callback that will be called once
@@ -1035,9 +1018,12 @@ type recBatch struct {
 	attrs          int16
 	firstTimestamp int64 // since unix epoch, in millis
 
-	baseSequence int32
-
 	records []promisedNumberedRecord
+}
+
+type seqRecBatch struct {
+	seq int32
+	*recBatch
 }
 
 // appendRecord saves a new record to a batch.
@@ -1066,13 +1052,12 @@ func (recBuf *recBuf) newRecordBatch(pr promisedRec) *recBatch {
 		8 + // maxTimestamp
 		8 + // producerID
 		2 + // producerEpoch
-		4 + // baseSequence
+		4 + // seq
 		4 // record array length
 	b := &recBatch{
 		owner:          recBuf,
 		firstTimestamp: pr.Timestamp.UnixNano() / 1e6,
 		records:        (*(emptyRecordsPool.Get().(*[]promisedNumberedRecord)))[:0],
-		baseSequence:   recBuf.sequenceNum,
 	}
 	pnr := promisedNumberedRecord{
 		b.calculateRecordNumbers(pr.Rec),
@@ -1125,9 +1110,9 @@ func (batch *recBatch) lockedIsFirstBatch() bool {
 // The above, but inside the owning recBuf mutex.
 func (batch *recBatch) isFirstBatchInRecordBuf() bool {
 	batch.owner.mu.Lock()
-	r := batch.lockedIsFirstBatch()
-	batch.owner.mu.Unlock()
-	return r
+	defer batch.owner.mu.Unlock()
+
+	return batch.lockedIsFirstBatch()
 }
 
 // removeFromRecordBuf is called in a successful produce response, incrementing
@@ -1135,8 +1120,16 @@ func (batch *recBatch) isFirstBatchInRecordBuf() bool {
 func (batch *recBatch) removeFromRecordBuf() {
 	recBuf := batch.owner
 	recBuf.mu.Lock()
-	recBuf.lockedRemoveBatch0()
-	recBuf.mu.Unlock()
+	defer recBuf.mu.Unlock()
+
+	// This could not be the first batch if the user aborted everything
+	// concurrently.
+	if batch.lockedIsFirstBatch() {
+		recBuf.batch0Seq += int32(len(recBuf.batches[0].records))
+		recBuf.batches[0] = nil
+		recBuf.batches = recBuf.batches[1:]
+		recBuf.batchDrainIdx--
+	}
 }
 
 // isTimedOut, called only on frozen batches, returns whether the first record
@@ -1164,7 +1157,7 @@ type produceRequest struct {
 	txnID   *string
 	acks    int16
 	timeout int32
-	batches reqBatches
+	batches seqRecBatches
 
 	producerID    int64
 	producerEpoch int16
@@ -1172,21 +1165,33 @@ type produceRequest struct {
 	compressor *compressor
 }
 
-type reqBatches map[string]map[int32]*recBatch
+type seqRecBatches map[string]map[int32]seqRecBatch
 
-func (rbs *reqBatches) addBatch(topic string, part int32, batch *recBatch) {
+func (rbs *seqRecBatches) addBatch(topic string, part int32, seq int32, batch *recBatch) {
 	if *rbs == nil {
-		*rbs = make(reqBatches, 5)
+		*rbs = make(seqRecBatches, 5)
 	}
 	topicBatches, exists := (*rbs)[topic]
 	if !exists {
-		topicBatches = make(map[int32]*recBatch, 1)
+		topicBatches = make(map[int32]seqRecBatch, 1)
+		(*rbs)[topic] = topicBatches
+	}
+	topicBatches[part] = seqRecBatch{seq, batch}
+}
+
+func (rbs *seqRecBatches) addSeqBatch(topic string, part int32, batch seqRecBatch) {
+	if *rbs == nil {
+		*rbs = make(seqRecBatches, 5)
+	}
+	topicBatches, exists := (*rbs)[topic]
+	if !exists {
+		topicBatches = make(map[int32]seqRecBatch, 1)
 		(*rbs)[topic] = topicBatches
 	}
 	topicBatches[part] = batch
 }
 
-func (rbs reqBatches) onEachFirstBatchWhileBatchOwnerLocked(fn func(*recBatch)) {
+func (rbs seqRecBatches) onEachFirstBatchWhileBatchOwnerLocked(fn func(seqRecBatch)) {
 	for _, partitions := range rbs {
 		for _, batch := range partitions {
 			batch.owner.mu.Lock()
@@ -1238,7 +1243,7 @@ func (p *produceRequest) ResponseKind() kmsg.Response {
 	return &kmsg.ProduceResponse{Version: p.version}
 }
 
-func (r *recBatch) appendTo(
+func (r seqRecBatch) appendTo(
 	dst []byte,
 	compressor *compressor,
 	producerID int64,
@@ -1277,7 +1282,7 @@ func (r *recBatch) appendTo(
 
 	dst = kbin.AppendInt64(dst, producerID)
 	dst = kbin.AppendInt16(dst, producerEpoch)
-	dst = kbin.AppendInt32(dst, atomic.LoadInt32(&r.baseSequence)) // read atomically in case of concurrent reset
+	dst = kbin.AppendInt32(dst, r.seq)
 
 	dst = kbin.AppendArrayLen(dst, len(r.records))
 	recordsAt := len(dst)
@@ -1331,7 +1336,7 @@ func (pnr promisedNumberedRecord) appendTo(dst []byte, offsetDelta int32) []byte
 	return dst
 }
 
-func (r *recBatch) appendToAsMessageSet(dst []byte, version uint8, compressor *compressor) []byte {
+func (r seqRecBatch) appendToAsMessageSet(dst []byte, version uint8, compressor *compressor) []byte {
 	nullableBytesLenAt := len(dst)
 	dst = append(dst, 0, 0, 0, 0) // nullable bytes len
 	for i, pnr := range r.records {

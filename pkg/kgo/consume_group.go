@@ -6,7 +6,6 @@ import (
 	"regexp"
 	"sort"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/twmb/kafka-go/pkg/kerr"
@@ -1433,28 +1432,17 @@ func (cl *Client) CommitTransactionOffsets(
 // requires a producer ID, this initializes one if it is not yet initialized.
 // This would only be the case if trying to commit before the init that occurs
 // on the first produce is complete.
+//
+// TODO: take into account group context in initProducerID
 func (c *Client) addOffsetsToTxn(ctx context.Context, group string) error {
-	var idLoadingCh <-chan struct{}
-	c.producer.idMu.Lock()
-	if atomic.LoadUint32(&c.producer.idLoaded) == 0 {
-		if c.producer.idLoadingCh == nil {
-			c.producer.idLoadingCh = make(chan struct{})
-			go c.initProducerID()
-		}
-		idLoadingCh = c.producer.idLoadingCh
+	id, epoch, err := c.producerID()
+	if err != nil {
+		return err
 	}
-	c.producer.idMu.Unlock()
-	if idLoadingCh != nil {
-		<-idLoadingCh
-	}
-	if atomic.LoadUint32(&c.producer.idLoaded) == 0 {
-		return errors.New("unable to init producer ID")
-	}
-
 	kresp, err := c.Request(ctx, &kmsg.AddOffsetsToTxnRequest{
 		TransactionalID: *c.cfg.txnID,
-		ProducerID:      c.producer.id,
-		ProducerEpoch:   c.producer.epoch,
+		ProducerID:      id,
+		ProducerEpoch:   epoch,
 		Group:           group,
 	})
 	if err != nil {
@@ -1495,11 +1483,18 @@ func (g *groupConsumer) commitTxn(
 	g.commitDone = commitDone
 
 	memberID := g.memberID
+
+	// We issue this request even if the producer ID is failed; the request
+	// will fail if it is.
+	//
+	// The id must have been set at least once by this point because of
+	// addOffsetsToTxn.
+	id, epoch, _ := g.cl.producerID()
 	req := &kmsg.TxnOffsetCommitRequest{
 		TransactionalID: *g.cl.cfg.txnID,
 		Group:           g.id,
-		ProducerID:      g.cl.producer.id,
-		ProducerEpoch:   g.cl.producer.epoch,
+		ProducerID:      id,
+		ProducerEpoch:   epoch,
 	}
 
 	if ctx.Done() != nil {
