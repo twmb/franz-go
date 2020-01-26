@@ -7,7 +7,6 @@ import (
 
 	"github.com/twmb/kafka-go/pkg/kerr"
 	"github.com/twmb/kafka-go/pkg/kmsg"
-	"github.com/twmb/kafka-go/pkg/krec"
 )
 
 type recordSource struct {
@@ -549,7 +548,7 @@ func (o *seqOffsetFrom) processRespPartition(
 		for i := range batches {
 			numPartitionRecords += int(batches[i].NumRecords)
 		}
-		fetchPart.Records = make([]*krec.Rec, 0, numPartitionRecords)
+		fetchPart.Records = make([]*Record, 0, numPartitionRecords)
 		aborter := buildAborter(rPartition)
 		for i := range batches {
 			o.processRecordBatch(topic, &fetchPart, &batches[i], keepControl, aborter, decompressor)
@@ -647,7 +646,7 @@ func (o *seqOffset) processRecordBatch(
 	}
 
 	abortBatch := aborter.shouldAbortBatch(batch)
-	var lastRecord *krec.Rec
+	var lastRecord *Record
 	for i := range krecords {
 		record := recordToRecord(
 			topic,
@@ -771,7 +770,7 @@ func (o *seqOffset) processV0Message(
 // However, if the record is being aborted, or the record is a control record
 // and the client does not want to keep control records, this does not keep
 // the record and instead only updates the seqOffset metadata.
-func (o *seqOffset) maybeAddRecord(fetchPart *FetchPartition, record *krec.Rec, keepControl bool, abort bool) {
+func (o *seqOffset) maybeAddRecord(fetchPart *FetchPartition, record *Record, keepControl bool, abort bool) {
 	if record.Offset < o.offset {
 		// We asked for offset 5, but that was in the middle of a
 		// batch; we got offsets 0 thru 4 that we need to skip.
@@ -807,21 +806,21 @@ func recordToRecord(
 	partition int32,
 	batch *kmsg.RecordBatch,
 	record *kmsg.Record,
-) *krec.Rec {
-	h := make([]krec.Header, 0, len(record.Headers))
+) *Record {
+	h := make([]RecordHeader, 0, len(record.Headers))
 	for _, kv := range record.Headers {
-		h = append(h, krec.Header{
+		h = append(h, RecordHeader{
 			Key:   kv.Key,
 			Value: kv.Value,
 		})
 	}
 
-	return &krec.Rec{
+	return &Record{
 		Key:         record.Key,
 		Value:       record.Value,
 		Headers:     h,
 		Timestamp:   timeFromMillis(batch.FirstTimestamp + int64(record.TimestampDelta)),
-		Attrs:       krec.Attrs(batch.Attributes), // NOTE if Kafka adds attributes to record, fix here
+		Attrs:       RecordAttrs{uint8(batch.Attributes)},
 		Topic:       topic,
 		Partition:   partition,
 		LeaderEpoch: batch.PartitionLeaderEpoch,
@@ -829,23 +828,22 @@ func recordToRecord(
 	}
 }
 
-func messageAttrsToRecordAttrs(attrs int8, v0 bool) krec.Attrs {
-	u8attrs := uint8(attrs)
-	timestampType := u8attrs & 0b0000_0100
-	u8attrs = u8attrs&0b0000_0011 | timestampType<<1
-	kattrs := krec.Attrs(u8attrs)
+func messageAttrsToRecordAttrs(attrs int8, v0 bool) RecordAttrs {
+	uattrs := uint8(attrs)
+	timestampType := uattrs & 0b0000_0100
+	uattrs = uattrs&0b0000_0011 | timestampType<<1
 	if v0 {
-		kattrs = kattrs | krec.UnknownTimestampBit
+		uattrs = uattrs | 0b1000_0000
 	}
-	return kattrs
+	return RecordAttrs{uattrs}
 }
 
 func v0MessageToRecord(
 	topic string,
 	partition int32,
 	message *kmsg.MessageV0,
-) *krec.Rec {
-	return &krec.Rec{
+) *Record {
+	return &Record{
 		Key:         message.Key,
 		Value:       message.Value,
 		Attrs:       messageAttrsToRecordAttrs(message.Attributes, true),
@@ -860,8 +858,8 @@ func v1MessageToRecord(
 	topic string,
 	partition int32,
 	message *kmsg.MessageV1,
-) *krec.Rec {
-	return &krec.Rec{
+) *Record {
+	return &Record{
 		Key:         message.Key,
 		Value:       message.Value,
 		Timestamp:   timeFromMillis(message.Timestamp),
