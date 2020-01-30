@@ -352,5 +352,7 @@ func Tip() Versions {
 
 	v[28]++ // 3 txn offset commit KAFKA-9365 ed7c071e07f KIP-447
 
+	v[29]++ // 2 describe acls KAFKA-9026 40b35178e5 KIP-482 (for flexible versions)
+
 	return v
 }

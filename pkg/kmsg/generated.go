@@ -8465,10 +8465,10 @@ type DescribeACLsRequest struct {
 }
 
 func (*DescribeACLsRequest) Key() int16                 { return 29 }
-func (*DescribeACLsRequest) MaxVersion() int16          { return 1 }
+func (*DescribeACLsRequest) MaxVersion() int16          { return 2 }
 func (v *DescribeACLsRequest) SetVersion(version int16) { v.Version = version }
 func (v *DescribeACLsRequest) GetVersion() int16        { return v.Version }
-func (v *DescribeACLsRequest) IsFlexible() bool         { return false }
+func (v *DescribeACLsRequest) IsFlexible() bool         { return v.Version >= 2 }
 func (v *DescribeACLsRequest) IsAdminRequest()          {}
 func (v *DescribeACLsRequest) ResponseKind() Response {
 	return &DescribeACLsResponse{Version: v.Version}
@@ -8477,13 +8477,19 @@ func (v *DescribeACLsRequest) ResponseKind() Response {
 func (v *DescribeACLsRequest) AppendTo(dst []byte) []byte {
 	version := v.Version
 	_ = version
+	isFlexible := version >= 2
+	_ = isFlexible
 	{
 		v := v.ResourceType
 		dst = kbin.AppendInt8(dst, v)
 	}
 	{
 		v := v.ResourceName
-		dst = kbin.AppendNullableString(dst, v)
+		if isFlexible {
+			dst = kbin.AppendCompactNullableString(dst, v)
+		} else {
+			dst = kbin.AppendNullableString(dst, v)
+		}
 	}
 	if version >= 1 {
 		v := v.ResourcePatternType
@@ -8491,11 +8497,19 @@ func (v *DescribeACLsRequest) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Principal
-		dst = kbin.AppendNullableString(dst, v)
+		if isFlexible {
+			dst = kbin.AppendCompactNullableString(dst, v)
+		} else {
+			dst = kbin.AppendNullableString(dst, v)
+		}
 	}
 	{
 		v := v.Host
-		dst = kbin.AppendNullableString(dst, v)
+		if isFlexible {
+			dst = kbin.AppendCompactNullableString(dst, v)
+		} else {
+			dst = kbin.AppendNullableString(dst, v)
+		}
 	}
 	{
 		v := v.Operation
@@ -8504,6 +8518,9 @@ func (v *DescribeACLsRequest) AppendTo(dst []byte) []byte {
 	{
 		v := v.PermissionType
 		dst = kbin.AppendInt8(dst, v)
+	}
+	if isFlexible {
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -8562,6 +8579,8 @@ type DescribeACLsResponse struct {
 func (v *DescribeACLsResponse) ReadFrom(src []byte) error {
 	version := v.Version
 	_ = version
+	isFlexible := version >= 2
+	_ = isFlexible
 	b := kbin.Reader{Src: src}
 	s := v
 	{
@@ -8573,14 +8592,23 @@ func (v *DescribeACLsResponse) ReadFrom(src []byte) error {
 		s.ErrorCode = v
 	}
 	{
-		v := b.NullableString()
+		var v *string
+		if isFlexible {
+			v = b.CompactNullableString()
+		} else {
+			v = b.NullableString()
+		}
 		s.ErrorMessage = v
 	}
 	{
 		v := s.Resources
 		a := v
 		var l int32
-		l = b.ArrayLen()
+		if isFlexible {
+			l = b.CompactArrayLen()
+		} else {
+			l = b.ArrayLen()
+		}
 		if !b.Ok() {
 			return b.Complete()
 		}
@@ -8595,7 +8623,12 @@ func (v *DescribeACLsResponse) ReadFrom(src []byte) error {
 				s.ResourceType = v
 			}
 			{
-				v := b.String()
+				var v string
+				if isFlexible {
+					v = b.CompactString()
+				} else {
+					v = b.String()
+				}
 				s.ResourceName = v
 			}
 			if version >= 1 {
@@ -8606,7 +8639,11 @@ func (v *DescribeACLsResponse) ReadFrom(src []byte) error {
 				v := s.ACLs
 				a := v
 				var l int32
-				l = b.ArrayLen()
+				if isFlexible {
+					l = b.CompactArrayLen()
+				} else {
+					l = b.ArrayLen()
+				}
 				if !b.Ok() {
 					return b.Complete()
 				}
@@ -8617,11 +8654,21 @@ func (v *DescribeACLsResponse) ReadFrom(src []byte) error {
 					v := &a[i]
 					s := v
 					{
-						v := b.String()
+						var v string
+						if isFlexible {
+							v = b.CompactString()
+						} else {
+							v = b.String()
+						}
 						s.Principal = v
 					}
 					{
-						v := b.String()
+						var v string
+						if isFlexible {
+							v = b.CompactString()
+						} else {
+							v = b.String()
+						}
 						s.Host = v
 					}
 					{
@@ -8632,13 +8679,22 @@ func (v *DescribeACLsResponse) ReadFrom(src []byte) error {
 						v := b.Int8()
 						s.PermissionType = v
 					}
+					if isFlexible {
+						SkipTags(&b)
+					}
 				}
 				v = a
 				s.ACLs = v
 			}
+			if isFlexible {
+				SkipTags(&b)
+			}
 		}
 		v = a
 		s.Resources = v
+	}
+	if isFlexible {
+		SkipTags(&b)
 	}
 	return b.Complete()
 }

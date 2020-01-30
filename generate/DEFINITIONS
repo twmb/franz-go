@@ -2379,7 +2379,7 @@ TxnOffsetCommitResponse =>
 // "types" of filters in this request: the resource filter and the entry
 // filter, with entries corresponding to users. The first three fields form the
 // resource filter, the last four the entry filter.
-DescribeACLsRequest => key 29, max version 1, admin
+DescribeACLsRequest => key 29, max version 2, flexible v2+, admin
   // ResourceType is the type of resource to describe.
   //
   // UNKNOWN, 0, is unknown; you do not describe unknown types. Kafka replies
