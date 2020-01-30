@@ -60,3 +60,7 @@ func (l *workLoop) maybeFinish(again bool) bool {
 
 	return again
 }
+
+func (l *workLoop) hardFinish() {
+	atomic.StoreUint32(&l.state, stateUnstarted)
+}

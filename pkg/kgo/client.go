@@ -101,11 +101,6 @@ func NewClient(opts ...Opt) (*Client, error) {
 		controllerID: unknownControllerID,
 		brokers:      make(map[int32]*broker),
 
-		producer: producer{
-			waitBuffer: make(chan struct{}, 100),
-			idVersion:  -1,
-		},
-
 		decompressor: newDecompressor(),
 
 		coordinators:      make(map[coordinatorKey]int32),
@@ -116,12 +111,7 @@ func NewClient(opts ...Opt) (*Client, error) {
 		updateMetadataNowCh: make(chan struct{}, 1),
 		metadone:            make(chan struct{}),
 	}
-	c.producer.id.Store(&producerID{
-		id:    -1,
-		epoch: -1,
-		err:   errReloadProducerID,
-	})
-	c.producer.flushingCond = sync.NewCond(&c.producer.flushingMu)
+	c.producer.init()
 	c.consumer.cl = c
 	c.consumer.sourcesReadyCond = sync.NewCond(&c.consumer.sourcesReadyMu)
 	c.topics.Store(make(map[string]*topicPartitions))
@@ -295,9 +285,7 @@ func (cl *Client) Close() {
 	// We must manually fail all partitions that never had a sink.
 	for _, partitions := range cl.loadTopics() {
 		for _, partition := range partitions.load().all {
-			if partition.records.sink == nil {
-				partition.records.failAllRecords(ErrBrokerDead)
-			}
+			partition.records.failAllRecords(ErrBrokerDead)
 		}
 	}
 

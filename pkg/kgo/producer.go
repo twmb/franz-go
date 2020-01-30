@@ -35,7 +35,7 @@ func (cl *Client) BeginTransaction() error {
 //
 // This accepts a context to quit the wait early, but it is strongly
 // recommended to always wait for all records to be flushed. Waits should only
-// occur when waiting for currently in flight produce requests to finish.  The
+// occur when waiting for currently in flight produce requests to finish. The
 // only case where this function returns an error is if the context is canceled
 // while flushing.
 //
@@ -45,39 +45,54 @@ func (cl *Client) BeginTransaction() error {
 // new transaction, since anything not cleared may be a part of the new
 // transaction.
 //
-// Records produced during or after a call to this function may not be failed;
-// it is not recommended to call this function concurrent with producing
-// records.
+// Records produced during or after a call to this function may not be failed,
+// thus it is incorrect to concurrently produce with this function.
 //
 // It is invalid to call this method multiple times concurrently.
 func (cl *Client) AbortBufferedRecords(ctx context.Context) error {
-	var unaborting []*broker
-	cl.brokersMu.Lock()
-	for _, broker := range cl.brokers {
-		broker.sink.setAborting()
-		unaborting = append(unaborting, broker)
-	}
-	cl.brokersMu.Unlock()
+	atomic.StoreUint32(&cl.producer.aborting, 1)
+	defer atomic.StoreUint32(&cl.producer.aborting, 0)
+	// At this point, all drain loops that start will immediately stop,
+	// thus they will not begin any AddPartitionsToTxn request. We must
+	// now wait for any req currently built to be done being issued.
 
-	defer func() {
-		for _, broker := range unaborting {
-			broker.sink.clearAborting()
+	for _, partitions := range cl.loadTopics() { // a good a time as any to fail all records
+		for _, partition := range partitions.load().all {
+			partition.records.failAllRecords(ErrAborting)
+		}
+	}
+
+	// Now, we wait for any active drain to stop. We must wait for all
+	// drains to stop otherwise we could end up with some exceptionally
+	// weird scenario where we end a txn and begin a new one before a
+	// prior AddPartitionsToTxn request that was built is issued.
+	//
+	// By waiting for our drains count to hit 0, we know that at that
+	// point, no new AddPartitionsToTxn request will be sent.
+	quit := false
+	done := make(chan struct{})
+	go func() {
+		cl.producer.notifyMu.Lock()
+		defer cl.producer.notifyMu.Unlock()
+		defer close(done)
+
+		for !quit && atomic.LoadInt32(&cl.producer.drains) > 0 {
+			cl.producer.notifyCond.Wait()
 		}
 	}()
 
-	// Like in client closing, we must manually fail all partitions
-	// that never had a sink.
-	for _, partitions := range cl.loadTopics() {
-		for _, partition := range partitions.load().all {
-			partition.records.mu.Lock()
-			if partition.records.sink == nil {
-				partition.records.failAllRecords(ErrAborting)
-			}
-			partition.records.mu.Unlock()
-		}
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		quit = true
+		cl.producer.notifyCond.Broadcast()
+		return ctx.Err()
 	}
 
-	return cl.Flush(ctx)
+	// All records were failed above, and all drains are stopped. We are
+	// safe to return.
+	return nil
 }
 
 // EndTransaction ends a transaction and resets the client's internal state to
@@ -87,7 +102,7 @@ func (cl *Client) AbortBufferedRecords(ctx context.Context) error {
 // this function does not flush and does not itself ensure that all buffered
 // records are flushed. If no record yet has caused a partition to be added to
 // the transaction, this function does nothing and returns nil. Alternatively,
-// ErrorBufferedRecords should be called before aborting a transaction to
+// AbortBufferedRecords should be called before aborting a transaction to
 // ensure that any buffered records not yet flushed will not be a part of a new
 // transaction.
 //
@@ -124,11 +139,6 @@ func (cl *Client) EndTransaction(ctx context.Context, commit bool) error {
 			}
 		}
 	}
-	// If no partition was added to a transaction, then we have nothing to
-	// commit. If any were added, we know we have a producer id.
-	if !anyAdded {
-		return nil
-	}
 
 	id, epoch, err := cl.producerID()
 	if err != nil {
@@ -143,7 +153,7 @@ func (cl *Client) EndTransaction(ctx context.Context, commit bool) error {
 			}
 
 			// At this point, nothing is being produced and the
-			// producer ID is loads with an error. Before we allow
+			// producer ID loads with an error. Before we allow
 			// production to continue, we reset all sequence
 			// numbers. Storing errReloadProducerID will reset the
 			// id / epoch appropriately and everything will work as
@@ -171,6 +181,11 @@ func (cl *Client) EndTransaction(ctx context.Context, commit bool) error {
 		}
 	}
 
+	// If no partition was added to a transaction, then we have nothing to commit.
+	if !anyAdded {
+		return nil
+	}
+
 	kresp, err := cl.Request(ctx, &kmsg.EndTxnRequest{
 		TransactionalID: *cl.cfg.txnID,
 		ProducerID:      id,
@@ -189,17 +204,46 @@ type producer struct {
 	id           atomic.Value
 	producingTxn uint32 // 1 if in txn
 	flushing     int32  // >0 if flushing, can Flush many times concurrently
+	aborting     uint32 // 1 means yes
+	drains       int32  // number of sinks draining
 
 	idMu       sync.Mutex
 	idVersion  int16
 	waitBuffer chan struct{}
 
-	flushingMu   sync.Mutex
-	flushingCond *sync.Cond
+	// notifyMu and notifyCond are used for flush and drain notifications.
+	notifyMu   sync.Mutex
+	notifyCond *sync.Cond
 
 	txnMu sync.Mutex
 	inTxn bool
 }
+
+func (p *producer) init() {
+	p.waitBuffer = make(chan struct{}, 100)
+	p.idVersion = -1
+	p.id.Store(&producerID{
+		id:    -1,
+		epoch: -1,
+		err:   errReloadProducerID,
+	})
+	p.notifyCond = sync.NewCond(&p.notifyMu)
+}
+
+func (p *producer) incDrains() {
+	atomic.AddInt32(&p.drains, 1)
+}
+
+func (p *producer) decDrains() {
+	if atomic.AddInt32(&p.drains, -1) != 0 || atomic.LoadUint32(&p.aborting) == 0 {
+		return
+	}
+	p.notifyMu.Lock()
+	p.notifyMu.Unlock()
+	p.notifyCond.Broadcast()
+}
+
+func (p *producer) isAborting() bool { return atomic.LoadUint32(&p.aborting) == 1 }
 
 func noPromise(*Record, error) {}
 
@@ -209,14 +253,14 @@ func noPromise(*Record, error) {}
 // The promise is optional, but not using it means you will not know if Kafka
 // recorded a record properly.
 //
-// If the record is too large, this will return an error.  For simplicity, this
+// If the record is too large, this will return an error. For simplicity, this
 // function considers messages too large if they are within 512 bytes of the
 // record batch byte limit. This may be made more precise in the future if
 // necessary.
 //
-// The context is used if the client currently currently has the max amount of
-// buffered records. If so, the client waits for some records to complete or
-// for the context or client to quit.
+// The context is used if the client currently has the max amount of buffered
+// records. If so, the client waits for some records to complete or for the
+// context or client to quit.
 //
 // The first buffered record for an unknown topic begins a timeout for the
 // configured record timeout limit; all records buffered within the wait will
@@ -239,11 +283,24 @@ func (cl *Client) Produce(
 	}
 
 	if atomic.AddInt64(&cl.producer.bufferedRecords, 1) > cl.cfg.maxBufferedRecords {
+		// If the client ctx cancels or the produce ctx cancels, we
+		// need to un-count our buffering of this record. As well, to
+		// be safe, we need to drain a slot from the waitBuffer chan,
+		// which will be sent to. Thus, for easiness, if either ctx is
+		// canceled, we just finish a fake promise with no record
+		// (i.e., pretending we finished this record) and drain the
+		// waitBuffer as normal.
+		drainBuffered := func() {
+			go func() { <-cl.producer.waitBuffer }()
+			cl.finishRecordPromise(promisedRec{noPromise, nil}, nil)
+		}
 		select {
 		case <-cl.producer.waitBuffer:
 		case <-cl.ctx.Done():
+			drainBuffered()
 			return cl.ctx.Err()
 		case <-ctx.Done():
+			drainBuffered()
 			return ctx.Err()
 		}
 	}
@@ -251,8 +308,7 @@ func (cl *Client) Produce(
 	if promise == nil {
 		promise = noPromise
 	}
-	pr := promisedRec{promise, r}
-	cl.partitionRecord(pr)
+	cl.partitionRecord(promisedRec{promise, r})
 	return nil
 }
 
@@ -261,9 +317,9 @@ func (cl *Client) finishRecordPromise(pr promisedRec, err error) {
 	if buffered >= cl.cfg.maxBufferedRecords {
 		go func() { cl.producer.waitBuffer <- struct{}{} }()
 	} else if buffered == 0 && atomic.LoadInt32(&cl.producer.flushing) > 0 {
-		cl.producer.flushingMu.Lock()
-		cl.producer.flushingMu.Unlock()
-		cl.producer.flushingCond.Broadcast()
+		cl.producer.notifyMu.Lock()
+		cl.producer.notifyMu.Unlock()
+		cl.producer.notifyCond.Broadcast()
 	}
 	pr.promise(pr.Record, err)
 }
@@ -273,15 +329,9 @@ func (cl *Client) finishRecordPromise(pr promisedRec, err error) {
 // for a metadata update to deal with.
 func (cl *Client) partitionRecord(pr promisedRec) {
 	parts, partsData := cl.partitionsForTopicProduce(pr)
-	if parts == nil {
+	if parts == nil { // saved in unknownTopics
 		return
 	}
-	cl.doPartitionRecord(parts, partsData, pr)
-}
-
-// doPartitionRecord is the logic behind record partitioning and producing if
-// the client knows of the topic's partitions.
-func (cl *Client) doPartitionRecord(parts *topicPartitions, partsData *topicPartitionsData, pr promisedRec) {
 	if partsData.loadErr != nil && !kerr.IsRetriable(partsData.loadErr) {
 		cl.finishRecordPromise(pr, partsData.loadErr)
 		return
@@ -357,25 +407,14 @@ func (cl *Client) failProducerID(id int64, epoch int16, err error) {
 	//
 	// If this is UnknownProducerID without a txnID, then we are here from
 	// stopOnDataLoss in sink.go (see large comment there).
-	if err != kerr.UnknownProducerID || cl.cfg.txnID == nil {
-		cl.producer.id.Store(&producerID{
-			id:    id,
-			epoch: epoch,
-			err:   err,
-		})
-		return // fatal error
-	}
-
-	// need to not produce until everything failed?
-
-	// UNKNOWN_PRODUCER_ID
-	// if txn id,
-	// store abortable error,
-
-	// which can be cleared in EndTransaction (store "need reload" error)
-	// when cleared, reset sequence numbers if abortable error
-
-	return
+	//
+	// If this is UnknownProducerID with a txnID, then EndTransaction will
+	// recover us.
+	cl.producer.id.Store(&producerID{
+		id:    id,
+		epoch: epoch,
+		err:   err,
+	})
 }
 
 // doInitProducerID inits the idempotent ID and potentially the transactional
@@ -463,8 +502,9 @@ func (cl *Client) partitionsForTopicProduce(pr promisedRec) (*topicPartitions, *
 	if exists {
 		// 3) if the topic does exist, either partitions were loaded,
 		// meaning we can just return the load since we are guaranteed
-		// (single goroutine) sequential now, or they were not loaded
-		// and we must add our record in order under unknownTopicsMu.
+		// (if producing to this topic in a single goroutine)
+		// sequential now, or they were not loaded and we must add our
+		// record in order under unknownTopicsMu.
 		cl.unknownTopicsMu.Lock()
 		topics = cl.loadTopics()
 		parts = topics[topic]
@@ -551,7 +591,7 @@ func (cl *Client) Flush(ctx context.Context) error {
 	defer atomic.AddInt32(&cl.producer.flushing, -1)
 
 	// At this point, if lingering is configured, nothing will _start_ a
-	// linger because the producer's flushing atomic int32 is nonzero.  We
+	// linger because the producer's flushing atomic int32 is nonzero. We
 	// must wake anything that could be lingering up, after which all sinks
 	// will loop draining.
 	if cl.cfg.linger > 0 {
@@ -565,12 +605,12 @@ func (cl *Client) Flush(ctx context.Context) error {
 	quit := false
 	done := make(chan struct{})
 	go func() {
-		cl.producer.flushingMu.Lock()
-		defer cl.producer.flushingMu.Unlock()
+		cl.producer.notifyMu.Lock()
+		defer cl.producer.notifyMu.Unlock()
 		defer close(done)
 
 		for !quit && atomic.LoadInt64(&cl.producer.bufferedRecords) > 0 {
-			cl.producer.flushingCond.Wait()
+			cl.producer.notifyCond.Wait()
 		}
 	}()
 
@@ -579,7 +619,7 @@ func (cl *Client) Flush(ctx context.Context) error {
 		return nil
 	case <-ctx.Done():
 		quit = true
-		cl.producer.flushingCond.Broadcast()
+		cl.producer.notifyCond.Broadcast()
 		return ctx.Err()
 	}
 }
