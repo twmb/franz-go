@@ -7,6 +7,7 @@ func (Int8) TypeName() string                  { return "int8" }
 func (Int16) TypeName() string                 { return "int16" }
 func (Int32) TypeName() string                 { return "int32" }
 func (Int64) TypeName() string                 { return "int64" }
+func (Float64) TypeName() string               { return "float64" }
 func (Uint32) TypeName() string                { return "uint32" }
 func (Varint) TypeName() string                { return "int32" }
 func (Varlong) TypeName() string               { return "int64" }
@@ -41,16 +42,19 @@ func (Int8) WriteAppend(l *LineWriter)         { primAppend("Int8", l) }
 func (Int16) WriteAppend(l *LineWriter)        { primAppend("Int16", l) }
 func (Int32) WriteAppend(l *LineWriter)        { primAppend("Int32", l) }
 func (Int64) WriteAppend(l *LineWriter)        { primAppend("Int64", l) }
+func (Float64) WriteAppend(l *LineWriter)      { primAppend("Float64", l) }
 func (Uint32) WriteAppend(l *LineWriter)       { primAppend("Uint32", l) }
 func (Varint) WriteAppend(l *LineWriter)       { primAppend("Varint", l) }
 func (Varlong) WriteAppend(l *LineWriter)      { primAppend("Varlong", l) }
 func (VarintString) WriteAppend(l *LineWriter) { primAppend("VarintString", l) }
 func (VarintBytes) WriteAppend(l *LineWriter)  { primAppend("VarintBytes", l) }
 
-func (v String) WriteAppend(l *LineWriter)         { compactAppend(v.FromFlexible, "String", l) }
-func (v NullableString) WriteAppend(l *LineWriter) { compactAppend(v.FromFlexible, "NullableString", l) }
-func (v Bytes) WriteAppend(l *LineWriter)          { compactAppend(v.FromFlexible, "Bytes", l) }
-func (v NullableBytes) WriteAppend(l *LineWriter)  { compactAppend(v.FromFlexible, "NullableBytes", l) }
+func (v String) WriteAppend(l *LineWriter) { compactAppend(v.FromFlexible, "String", l) }
+func (v NullableString) WriteAppend(l *LineWriter) {
+	compactAppend(v.FromFlexible, "NullableString", l)
+}
+func (v Bytes) WriteAppend(l *LineWriter)         { compactAppend(v.FromFlexible, "Bytes", l) }
+func (v NullableBytes) WriteAppend(l *LineWriter) { compactAppend(v.FromFlexible, "NullableBytes", l) }
 
 func (FieldLengthMinusBytes) WriteAppend(l *LineWriter) {
 	l.Write("dst = append(dst, v...)")
@@ -189,6 +193,7 @@ func (Int8) WriteDecode(l *LineWriter)         { primDecode("Int8", l) }
 func (Int16) WriteDecode(l *LineWriter)        { primDecode("Int16", l) }
 func (Int32) WriteDecode(l *LineWriter)        { primDecode("Int32", l) }
 func (Int64) WriteDecode(l *LineWriter)        { primDecode("Int64", l) }
+func (Float64) WriteDecode(l *LineWriter)      { primDecode("Float64", l) }
 func (Uint32) WriteDecode(l *LineWriter)       { primDecode("Uint32", l) }
 func (Varint) WriteDecode(l *LineWriter)       { primDecode("Varint", l) }
 func (Varlong) WriteDecode(l *LineWriter)      { primDecode("Varlong", l) }
@@ -350,7 +355,7 @@ func (s Struct) WriteDecode(l *LineWriter) {
 		}
 
 		switch f.Type.(type) {
-		case Bool, Int8, Int16, Int32, Int64, Uint32, Varint:
+		case Bool, Int8, Int16, Int32, Int64, Float64, Uint32, Varint:
 		default:
 			die("type %v unsupported in decode! fix this!", f.Type)
 		}

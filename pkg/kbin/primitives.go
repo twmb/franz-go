@@ -4,6 +4,7 @@ package kbin
 import (
 	"encoding/binary"
 	"errors"
+	"math"
 	"math/bits"
 )
 
@@ -43,7 +44,15 @@ func AppendInt32(dst []byte, i int32) []byte {
 
 // AppendInt64 appends a big endian int64 to dst.
 func AppendInt64(dst []byte, i int64) []byte {
-	u := uint64(i)
+	return appendUint64(dst, uint64(i))
+}
+
+// AppendFloat64 appends a big endian float64 to dst.
+func AppendFloat64(dst []byte, f float64) []byte {
+	return appendUint64(dst, math.Float64bits(f))
+}
+
+func appendUint64(dst []byte, u uint64) []byte {
 	return append(dst, byte(u>>56), byte(u>>48), byte(u>>40), byte(u>>32),
 		byte(u>>24), byte(u>>16), byte(u>>8), byte(u))
 }
@@ -478,12 +487,21 @@ func (b *Reader) Int32() int32 {
 
 // Int64 returns an int64 from the reader.
 func (b *Reader) Int64() int64 {
+	return int64(b.readUint64())
+}
+
+// Float64 returns a float64 from the reader.
+func (b *Reader) Float64() float64 {
+	return math.Float64frombits(b.readUint64())
+}
+
+func (b *Reader) readUint64() uint64 {
 	if len(b.Src) < 8 {
 		b.bad = true
 		b.Src = nil
 		return 0
 	}
-	r := int64(binary.BigEndian.Uint64(b.Src))
+	r := binary.BigEndian.Uint64(b.Src)
 	b.Src = b.Src[8:]
 	return r
 }

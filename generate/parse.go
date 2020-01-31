@@ -19,6 +19,7 @@ var types = map[string]Type{
 	"int16":           Int16{},
 	"int32":           Int32{},
 	"int64":           Int64{},
+	"float64":         Float64{},
 	"uint32":          Uint32{},
 	"varint":          Varint{},
 	"varlong":         Varlong{},
