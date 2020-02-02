@@ -96,12 +96,13 @@ func (cl *Client) storePartitionsUpdate(l *topicPartitions, lv *topicPartitionsD
 	// We loaded partitions and there are waiting topics. We delete the
 	// topic from the unknown maps, close the unknown wait to kill the
 	// waiting goroutine, and partition all records.
+	//
+	// Note that we have to partition records _or_ finish with error now
+	// while under the unknown topics mu to ensure ordering.
 	delete(cl.unknownTopics, l.topic)
 	delete(cl.unknownTopicsWait, l.topic)
 	close(unknownWait)
 
-	// Note that we have to partition records or error under the unknown
-	// topics mu to ensure ordering.
 	if lv.loadErr != nil {
 		for _, pr := range unknown {
 			cl.finishRecordPromise(pr, lv.loadErr)

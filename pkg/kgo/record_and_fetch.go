@@ -8,6 +8,8 @@ type RecordHeader struct {
 	Value []byte
 }
 
+// RecordAttrs contains additional meta information about a record, such as its
+// compression or timestamp type.
 type RecordAttrs struct {
 	// 6 bits are used right now for record batches, and we use the high
 	// bit to signify no timestamp due to v0 message set.
@@ -113,39 +115,96 @@ type Record struct {
 	Offset int64
 }
 
+// FetchPartition is a response for a partition in a fetched topic from a
+// broker.
 type FetchPartition struct {
-	Partition        int32
-	Err              error
-	HighWatermark    int64
+	// Partition is the partition this is for.
+	Partition int32
+	// Err is an error for this partition in the fetch.
+	//
+	// Note that if this is a fatal error, such as data loss or non
+	// retriable errors, this partition will never be fetched again.
+	Err error
+	// HighWatermark is the current high watermark for this partition, that
+	// is, the current offset that is on all in sync replicas.
+	HighWatermark int64
+	// LastStableOffset is the offset at which all prior offsets have been
+	// "decided". Non transactional records are always decided immediately,
+	// but transactional records are only decided once they are commited or
+	// aborted.
+	//
+	// The LastStableOffset will always be at or under the HighWatermark.
 	LastStableOffset int64
-	Records          []*Record
+	// Records contains feched records for this partition.
+	Records []*Record
 }
 
+// FetchTopic is a response for a fetched topic from a broker.
 type FetchTopic struct {
-	Topic      string
+	// Topic is the topic this is for.
+	Topic string
+	// Partitions contains individual partitions in the topic that were
+	// fetched.
 	Partitions []FetchPartition
 }
 
+// Fetch is an individual response from a broker.
 type Fetch struct {
+	// Topics are all topics being responded to from a fetch to a broker.
 	Topics []FetchTopic
 }
 
+// Fetches is a group of fetches from brokers.
 type Fetches []Fetch
 
+// FetchError is an error in a fetch along with the topic and partition that
+// the error was on.
+type FetchError struct {
+	Topic     string
+	Partition int32
+	Err       error
+}
+
+// Errors returns all errors in a fetch with the topic and partition that
+// errored.
+func (fs Fetches) Errors() []FetchError {
+	var errs []FetchError
+	for _, f := range fs {
+		for _, ft := range f.Topics {
+			for _, fp := range ft.Partitions {
+				if fp.Err != nil {
+					errs = append(errs, FetchError{
+						Topic:     ft.Topic,
+						Partition: fp.Partition,
+						Err:       fp.Err,
+					})
+				}
+			}
+		}
+	}
+	return errs
+}
+
+// RecordIter returns an iterator over all records in a fetch.
+//
+// Note that errors should be inspected as well.
 func (fs Fetches) RecordIter() *FetchesRecordIter {
 	iter := &FetchesRecordIter{fetches: fs}
 	iter.prepareNext()
 	return iter
 }
 
+// FetchesRecordIter iterates over records in a fetch.
 type FetchesRecordIter struct {
 	fetches []Fetch
 }
 
+// Done returns whether there are any more records to iterate over.
 func (i *FetchesRecordIter) Done() bool {
 	return len(i.fetches) == 0
 }
 
+// Next returns the next record from a fetch.
 func (i *FetchesRecordIter) Next() *Record {
 	records := &i.fetches[0].Topics[0].Partitions[0].Records
 	next := (*records)[0]
