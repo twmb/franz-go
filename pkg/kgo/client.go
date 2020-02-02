@@ -33,6 +33,8 @@ type Client struct {
 	anyBrokerIdx int
 	stopBrokers  bool // set to true on close to stop updateBrokers
 
+	bufPool bufPool // for to brokers to share underlying reusable request buffers
+
 	controllerID int32 // atomic
 
 	producer producer
@@ -105,6 +107,8 @@ func NewClient(opts ...Opt) (*Client, error) {
 
 		controllerID: unknownControllerID,
 		brokers:      make(map[int32]*broker),
+
+		bufPool: newBufPool(),
 
 		decompressor: newDecompressor(),
 
