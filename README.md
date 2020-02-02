@@ -6,7 +6,6 @@ KIPS
 
 TODO
 ----
-- KIP-447 (transaction changes to better support group changes)
 
 NOT YET (KIP under discussion / unmerged PR)
 -------
@@ -67,6 +66,7 @@ DONE
 - KIP-412 (dynamic log levels with incremental alter configs; 2.4.0)
 - KIP-429 (incremental rebalance, see KAFKA-8179; 2.4.0)
 - KIP-430 (include authorized ops in describe groups; 2.3.0)
+- KIP-447 (transaction changes to better support group changes; 2.5.0)
 - KIP-455 (admin replica reassignment; 2.4.0)
 - KIP-460 (admin leader election; 2.4.0)
 - KIP-464 (defaults for create topic, KIP-464; 2.4.0)

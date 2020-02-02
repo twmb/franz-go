@@ -93,6 +93,22 @@ func HeartbeatInterval(interval time.Duration) GroupOpt {
 	return groupOpt{func(cfg *groupConsumer) { cfg.heartbeatInterval = interval }}
 }
 
+// RequireStableFetchOffsets sets the group consumer to require "stable" fetch
+// offsets before consuming from the group. Proposed in KIP-447 and introduced
+// in Kafka 2.5.0, stable offsets are important when consuming from partitions
+// that a transactional producer could be committing to.
+//
+// With this option, Kafka will block group consumers from fetching offsets for
+// partitions that are in an active transaction.
+//
+// Because this can block consumption, it is strongly recommended to set
+// transactional timeouts to a small value (10s) rather than the default 60s.
+// Lowering the transactional timeout will reduce the chance that consumers are
+// entirely blocked.
+func RequireStableFetchOffsets() GroupOpt {
+	return groupOpt{func(cfg *groupConsumer) { cfg.requireStable = true }}
+}
+
 // OnAssigned sets the function to be called when a group is joined after
 // partitions are assigned before fetches begin.
 //
@@ -202,6 +218,7 @@ type groupConsumer struct {
 	sessionTimeout    time.Duration
 	rebalanceTimeout  time.Duration
 	heartbeatInterval time.Duration
+	requireStable     bool
 
 	onAssigned func(context.Context, map[string][]int32)
 	onRevoked  func(context.Context, map[string][]int32)
@@ -811,8 +828,10 @@ func (g *groupConsumer) joinGroupProtocols() []kmsg.JoinGroupRequestProtocol {
 // fetchOffsets is issued once we join a group to see what the prior commits
 // were for the partitions we were assigned.
 func (g *groupConsumer) fetchOffsets(ctx context.Context, newAssigned map[string][]int32) error {
+start:
 	req := kmsg.OffsetFetchRequest{
-		Group: g.id,
+		Group:         g.id,
+		RequireStable: g.requireStable,
 	}
 	for topic, partitions := range newAssigned {
 		req.Topics = append(req.Topics, kmsg.OffsetFetchRequestTopic{
@@ -838,8 +857,18 @@ func (g *groupConsumer) fetchOffsets(ctx context.Context, newAssigned map[string
 		topicOffsets := make(map[int32]Offset)
 		offsets[rTopic.Topic] = topicOffsets
 		for _, rPartition := range rTopic.Partitions {
-			if rPartition.ErrorCode != 0 {
-				return kerr.ErrorForCode(rPartition.ErrorCode)
+			if err = kerr.ErrorForCode(rPartition.ErrorCode); err != nil {
+				// KIP-447: Unstable offset commit means there is a
+				// pending transaction that should be committing soon.
+				// We sleep for 1s and retry fetching offsets.
+				if err == kerr.UnstableOffsetCommit {
+					select {
+					case <-ctx.Done():
+					case <-time.After(time.Second):
+						goto start
+					}
+				}
+				return err
 			}
 			offset := Offset{
 				request: rPartition.Offset,
