@@ -1481,19 +1481,21 @@ func (g *groupConsumer) commitTxn(
 	g.commitCancel = commitCancel
 	g.commitDone = commitDone
 
-	memberID := g.memberID
-
 	// We issue this request even if the producer ID is failed; the request
 	// will fail if it is.
 	//
 	// The id must have been set at least once by this point because of
 	// addOffsetsToTxn.
 	id, epoch, _ := g.cl.producerID()
+	memberID := g.memberID
 	req := &kmsg.TxnOffsetCommitRequest{
 		TransactionalID: *g.cl.cfg.txnID,
 		Group:           g.id,
 		ProducerID:      id,
 		ProducerEpoch:   epoch,
+		Generation:      g.generation,
+		MemberID:        memberID,
+		InstanceID:      g.instanceID,
 	}
 
 	if ctx.Done() != nil {
