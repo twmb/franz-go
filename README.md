@@ -77,3 +77,4 @@ DONE
 - KIP-511 (add client name / version in apiversions req; 2.4.0)
 - KIP-525 (create topics v5 returns configs; 2.4.0)
 - KIP-526 (reduce metadata lookups; done minus part 2, which we wont do)
+- KIP-559 (protocol info in sync / join; 2.5.0)

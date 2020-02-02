@@ -720,6 +720,8 @@ func (g *groupConsumer) rejoin() {
 	}
 }
 
+var clientGroupProtocol = "consumer" // in the Java API, the standard client is the "consumer" protocol
+
 func (g *groupConsumer) joinAndSync() error {
 	g.prejoin()
 
@@ -728,7 +730,7 @@ start:
 		Group:                  g.id,
 		SessionTimeoutMillis:   int32(g.sessionTimeout.Milliseconds()),
 		RebalanceTimeoutMillis: int32(g.rebalanceTimeout.Milliseconds()),
-		ProtocolType:           "consumer",
+		ProtocolType:           clientGroupProtocol,
 		MemberID:               g.memberID,
 		InstanceID:             g.instanceID,
 		Protocols:              g.joinGroupProtocols(),
@@ -755,15 +757,18 @@ start:
 	g.generation = resp.Generation
 
 	var plan balancePlan
-	if resp.LeaderID == resp.MemberID {
+	var protocol string
+	leader := resp.LeaderID == resp.MemberID
+	if leader {
 		plan, err = g.balanceGroup(resp.Protocol, resp.Members)
+		protocol = resp.Protocol
 		if err != nil {
 			return err
 		}
 		g.setLeader()
 	}
 
-	if err = g.syncGroup(plan, resp.Generation); err != nil {
+	if err = g.syncGroup(leader, plan, protocol, resp.Generation); err != nil {
 		if err == kerr.RebalanceInProgress {
 			goto start
 		}
@@ -773,13 +778,19 @@ start:
 	return nil
 }
 
-func (g *groupConsumer) syncGroup(plan balancePlan, generation int32) error {
+func (g *groupConsumer) syncGroup(leader bool, plan balancePlan, protocol string, generation int32) error {
 	req := kmsg.SyncGroupRequest{
 		Group:           g.id,
 		Generation:      generation,
 		MemberID:        g.memberID,
 		InstanceID:      g.instanceID,
-		GroupAssignment: plan.intoAssignment(),
+		ProtocolType:    nil,
+		Protocol:        nil,
+		GroupAssignment: plan.intoAssignment(), // nil unless we are the leader
+	}
+	if leader {
+		req.ProtocolType = &clientGroupProtocol
+		req.Protocol = &protocol
 	}
 	kresp, err := g.cl.Request(g.ctx, &req)
 	if err != nil {

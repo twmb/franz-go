@@ -1319,7 +1319,7 @@ GroupMemberAssignment => not top level
 //
 // Version 5 introduced InstanceID, allowing for more "static" membership.
 // See KIP-345 for more details.
-JoinGroupRequest => key 11, max version 6, flexible v6+, group coordinator
+JoinGroupRequest => key 11, max version 7, flexible v6+, group coordinator
   // Group is the group to join.
   Group: string
   // SessionTimeoutMillis is how long a member in the group can go between
@@ -1422,8 +1422,14 @@ JoinGroupResponse =>
   ErrorCode: int16
   // Generation is the current "generation" of this group.
   Generation: int32
-  // Protocol is the agreed upon protocol name.
-  Protocol: string
+  // ProtocolType is the "type" of protocol being used for this group.
+  ProtocolType: string
+  // Protocol is the agreed upon protocol name (i.e. "sticky", "range").
+  //
+  // v7 of this response changed this field to be nullable; since that would
+  // effectively be a breaking API change in the non-OO world, the nullable
+  // aspect is ignored.
+  Protocol: string-ignore-nullable
   // LeaderID is the leader member.
   LeaderID: string
   // MemberID is the member of the receiving client.
@@ -1532,7 +1538,7 @@ LeaveGroupResponse =>
 // assignments with the request; all other members do not.
 //
 // Once the leader sends the group assignment, all members will be replied to.
-SyncGroupRequest => key 14, max version 4, flexible v4+, group coordinator
+SyncGroupRequest => key 14, max version 5, flexible v4+, group coordinator
   // Group is the group ID this sync group is for.
   Group: string
   // Generation is the group generation this sync is for.
@@ -1541,6 +1547,10 @@ SyncGroupRequest => key 14, max version 4, flexible v4+, group coordinator
   MemberID: string
   // InstanceID is the instance ID of this member in the group (KIP-345).
   InstanceID: nullable-string // v3+
+  // ProtocolType is the "type" of protocol being used for this group.
+  ProtocolType: nullable-string // v5+
+  // Protocol is the agreed upon protocol name (i.e. "sticky", "range").
+  Protocol: nullable-string // v5+
   // GroupAssignment, sent only from the group leader, is the topic partition
   // assignment it has decided on for all members.
   GroupAssignment: [=>]
@@ -1579,6 +1589,10 @@ SyncGroupResponse =>
   // UNKNOWN_SERVER_ERROR is returned if the store of the group assignment
   // resulted in a too large message.
   ErrorCode: int16
+  // ProtocolType is the "type" of protocol being used for this group.
+  ProtocolType: nullable-string // v5+
+  // Protocol is the agreed upon protocol name (i.e. "sticky", "range").
+  Protocol: nullable-string // v5+
   // MemberAssignment is the assignment for this member that the leader
   // determined.
   MemberAssignment: bytes

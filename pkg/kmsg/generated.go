@@ -4894,7 +4894,7 @@ type JoinGroupRequest struct {
 }
 
 func (*JoinGroupRequest) Key() int16                   { return 11 }
-func (*JoinGroupRequest) MaxVersion() int16            { return 6 }
+func (*JoinGroupRequest) MaxVersion() int16            { return 7 }
 func (v *JoinGroupRequest) SetVersion(version int16)   { v.Version = version }
 func (v *JoinGroupRequest) GetVersion() int16          { return v.Version }
 func (v *JoinGroupRequest) IsFlexible() bool           { return v.Version >= 6 }
@@ -5049,7 +5049,14 @@ type JoinGroupResponse struct {
 	// Generation is the current "generation" of this group.
 	Generation int32
 
-	// Protocol is the agreed upon protocol name.
+	// ProtocolType is the "type" of protocol being used for this group.
+	ProtocolType string
+
+	// Protocol is the agreed upon protocol name (i.e. "sticky", "range").
+	//
+	// v7 of this response changed this field to be nullable; since that would
+	// effectively be a breaking API change in the non-OO world, the nullable
+	// aspect is ignored.
 	Protocol string
 
 	// LeaderID is the leader member.
@@ -5089,6 +5096,15 @@ func (v *JoinGroupResponse) ReadFrom(src []byte) error {
 			v = b.CompactString()
 		} else {
 			v = b.String()
+		}
+		s.ProtocolType = v
+	}
+	{
+		var v string
+		if isFlexible {
+			v = b.CompactStringIgnoreNullable()
+		} else {
+			v = b.StringIgnoreNullable()
 		}
 		s.Protocol = v
 	}
@@ -5519,13 +5535,19 @@ type SyncGroupRequest struct {
 	// InstanceID is the instance ID of this member in the group (KIP-345).
 	InstanceID *string // v3+
 
+	// ProtocolType is the "type" of protocol being used for this group.
+	ProtocolType *string // v5+
+
+	// Protocol is the agreed upon protocol name (i.e. "sticky", "range").
+	Protocol *string // v5+
+
 	// GroupAssignment, sent only from the group leader, is the topic partition
 	// assignment it has decided on for all members.
 	GroupAssignment []SyncGroupRequestGroupAssignment
 }
 
 func (*SyncGroupRequest) Key() int16                   { return 14 }
-func (*SyncGroupRequest) MaxVersion() int16            { return 4 }
+func (*SyncGroupRequest) MaxVersion() int16            { return 5 }
 func (v *SyncGroupRequest) SetVersion(version int16)   { v.Version = version }
 func (v *SyncGroupRequest) GetVersion() int16          { return v.Version }
 func (v *SyncGroupRequest) IsFlexible() bool           { return v.Version >= 4 }
@@ -5559,6 +5581,22 @@ func (v *SyncGroupRequest) AppendTo(dst []byte) []byte {
 	}
 	if version >= 3 {
 		v := v.InstanceID
+		if isFlexible {
+			dst = kbin.AppendCompactNullableString(dst, v)
+		} else {
+			dst = kbin.AppendNullableString(dst, v)
+		}
+	}
+	if version >= 5 {
+		v := v.ProtocolType
+		if isFlexible {
+			dst = kbin.AppendCompactNullableString(dst, v)
+		} else {
+			dst = kbin.AppendNullableString(dst, v)
+		}
+	}
+	if version >= 5 {
+		v := v.Protocol
 		if isFlexible {
 			dst = kbin.AppendCompactNullableString(dst, v)
 		} else {
@@ -5635,6 +5673,12 @@ type SyncGroupResponse struct {
 	// resulted in a too large message.
 	ErrorCode int16
 
+	// ProtocolType is the "type" of protocol being used for this group.
+	ProtocolType *string // v5+
+
+	// Protocol is the agreed upon protocol name (i.e. "sticky", "range").
+	Protocol *string // v5+
+
 	// MemberAssignment is the assignment for this member that the leader
 	// determined.
 	MemberAssignment []byte
@@ -5654,6 +5698,24 @@ func (v *SyncGroupResponse) ReadFrom(src []byte) error {
 	{
 		v := b.Int16()
 		s.ErrorCode = v
+	}
+	if version >= 5 {
+		var v *string
+		if isFlexible {
+			v = b.CompactNullableString()
+		} else {
+			v = b.NullableString()
+		}
+		s.ProtocolType = v
+	}
+	if version >= 5 {
+		var v *string
+		if isFlexible {
+			v = b.CompactNullableString()
+		} else {
+			v = b.NullableString()
+		}
+		s.Protocol = v
 	}
 	{
 		var v []byte
