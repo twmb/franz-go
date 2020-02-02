@@ -466,7 +466,7 @@ type IsolationLevel struct {
 	level int8
 }
 
-// ReadUncommitted, the default, is an isolation level that returns the latest
+// ReadUncommitted (the default) is an isolation level that returns the latest
 // produced records, be they committed or not.
 func ReadUncommitted() IsolationLevel { return IsolationLevel{0} }
 

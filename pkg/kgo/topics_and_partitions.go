@@ -8,14 +8,14 @@ import (
 )
 
 // loadTopics returns the client's current topics and their partitions.
-func (c *Client) loadTopics() map[string]*topicPartitions {
-	return c.topics.Load().(map[string]*topicPartitions)
+func (cl *Client) loadTopics() map[string]*topicPartitions {
+	return cl.topics.Load().(map[string]*topicPartitions)
 }
 
 // cloneTopics returns a copy of the client's current topics and partitions.
 // This is a shallow copy; only the map is copied.
-func (c *Client) cloneTopics() map[string]*topicPartitions {
-	old := c.loadTopics()
+func (cl *Client) cloneTopics() map[string]*topicPartitions {
+	old := cl.loadTopics()
 	new := make(map[string]*topicPartitions, len(old)+5)
 	for topic, partitions := range old {
 		new[topic] = partitions
@@ -24,8 +24,8 @@ func (c *Client) cloneTopics() map[string]*topicPartitions {
 }
 
 // loadShortTopics returns topic names and a copy of their partition numbers.
-func (c *Client) loadShortTopics() map[string][]int32 {
-	topics := c.loadTopics()
+func (cl *Client) loadShortTopics() map[string][]int32 {
+	topics := cl.loadTopics()
 	short := make(map[string][]int32, len(topics))
 	for topic, partitions := range topics {
 		short[topic] = append([]int32(nil), partitions.load().partitions...)
@@ -58,7 +58,7 @@ func (t *topicPartitions) load() *topicPartitionsData {
 	return t.v.Load().(*topicPartitionsData)
 }
 
-func (c *Client) storePartitionsUpdate(l *topicPartitions, lv *topicPartitionsData, hadPartitions bool) {
+func (cl *Client) storePartitionsUpdate(l *topicPartitions, lv *topicPartitionsData, hadPartitions bool) {
 	defer l.v.Store(lv)
 	// If the topic already had partitions, then there would be no
 	// unknown topic waiting and we do not need to notify anything.
@@ -66,20 +66,20 @@ func (c *Client) storePartitionsUpdate(l *topicPartitions, lv *topicPartitionsDa
 		return
 	}
 
-	c.unknownTopicsMu.Lock()
-	defer c.unknownTopicsMu.Unlock()
+	cl.unknownTopicsMu.Lock()
+	defer cl.unknownTopicsMu.Unlock()
 
 	// If there are no unknown topics or this topic is not unknown, then we
 	// are fine as well.
-	if len(c.unknownTopics) == 0 {
+	if len(cl.unknownTopics) == 0 {
 		return
 	}
-	if _, exists := c.unknownTopics[l.topic]; !exists {
+	if _, exists := cl.unknownTopics[l.topic]; !exists {
 		return
 	}
 
-	unknown := c.unknownTopics[l.topic]
-	unknownWait := c.unknownTopicsWait[l.topic]
+	unknown := cl.unknownTopics[l.topic]
+	unknownWait := cl.unknownTopicsWait[l.topic]
 
 	// If we loaded no partitions because of a retriable error, we signal
 	// the waiting goroutine that a try happened. It is possible the
@@ -96,20 +96,20 @@ func (c *Client) storePartitionsUpdate(l *topicPartitions, lv *topicPartitionsDa
 	// We loaded partitions and there are waiting topics. We delete the
 	// topic from the unknown maps, close the unknown wait to kill the
 	// waiting goroutine, and partition all records.
-	delete(c.unknownTopics, l.topic)
-	delete(c.unknownTopicsWait, l.topic)
+	delete(cl.unknownTopics, l.topic)
+	delete(cl.unknownTopicsWait, l.topic)
 	close(unknownWait)
 
 	// Note that we have to partition records or error under the unknown
 	// topics mu to ensure ordering.
 	if lv.loadErr != nil {
 		for _, pr := range unknown {
-			c.finishRecordPromise(pr, lv.loadErr)
+			cl.finishRecordPromise(pr, lv.loadErr)
 		}
 		return
 	}
 	for _, pr := range unknown {
-		c.doPartitionRecord(l, lv, pr)
+		cl.doPartitionRecord(l, lv, pr)
 	}
 }
 
@@ -135,8 +135,8 @@ type topicPartition struct {
 	leader      int32 // our broker leader
 	leaderEpoch int32 // the broker leader's epoch
 
-	records     *recBuf
-	consumption *consumption
+	records *recBuf
+	cursor  *cursor
 }
 
 // migrateProductionTo is called on metadata update if a topic partition's sink
@@ -172,19 +172,19 @@ func (old *topicPartition) migrateProductionTo(new *topicPartition) {
 	new.records = old.records
 }
 
-// migrateConsumptionTo is called on metadata update if a topic partition's
+// migrateCursorTo is called on metadata update if a topic partition's
 // source has changed. This happens whenever the sink changes, since a source
 // is just the counterpart to a sink for the same topic partition.
 //
 // The pattern is the same as above, albeit no concurrent-produce issues to
 // worry about.
-func (old *topicPartition) migrateConsumptionTo(new *topicPartition) {
-	if old.consumption.source != nil {
-		old.consumption.source.removeConsumption(old.consumption)
+func (old *topicPartition) migrateCursorTo(new *topicPartition) {
+	if old.cursor.source != nil {
+		old.cursor.source.removeCursor(old.cursor)
 	}
-	old.consumption.mu.Lock()
-	old.consumption.source = new.consumption.source
-	old.consumption.mu.Unlock()
-	old.consumption.source.addConsumption(old.consumption)
-	new.consumption = old.consumption
+	old.cursor.mu.Lock()
+	old.cursor.source = new.cursor.source
+	old.cursor.mu.Unlock()
+	old.cursor.source.addCursor(old.cursor)
+	new.cursor = old.cursor
 }

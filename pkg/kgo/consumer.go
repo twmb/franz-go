@@ -47,8 +47,8 @@ func AtEnd() OffsetOpt {
 	return offsetOpt{func(o *Offset) { o.request = -1 }}
 }
 
-// Relative sets what to add to an offset after it is loaded.
-// This allows you to set, say, 100 before the end.
+// Relative sets what to add to an offset after it is loaded. This allows you
+// to set, say, 100 before the end with AtEnd() and Relative(-100).
 func Relative(n int64) OffsetOpt {
 	return offsetOpt{func(o *Offset) { o.relative = n }}
 }
@@ -97,7 +97,7 @@ type consumer struct {
 
 	sourcesReadyMu          sync.Mutex
 	sourcesReadyCond        *sync.Cond
-	sourcesReadyForDraining []*recordSource
+	sourcesReadyForDraining []*source
 	fakeReadyForDraining    []fetchSeq
 
 	// seq corresponds to the number of assigned groups or partitions.
@@ -113,6 +113,12 @@ type consumer struct {
 	dead bool
 }
 
+// fetchSeq is used for fake fetches that have no corresponding cursor.
+type fetchSeq struct {
+	Fetch
+	seq uint64
+}
+
 // unassignPrior invalidates old assignments, ensures that nothing is assigned,
 // and leaves any group.
 func (c *consumer) unassignPrior() {
@@ -126,7 +132,7 @@ func (c *consumer) unassignPrior() {
 // addSourceReadyForDraining tracks that a source needs its buffered fetch
 // consumed. If the seq this source is from is out of date, the source is
 // immediately drained.
-func (c *consumer) addSourceReadyForDraining(seq uint64, source *recordSource) {
+func (c *consumer) addSourceReadyForDraining(seq uint64, source *source) {
 	var broadcast bool
 	c.sourcesReadyMu.Lock()
 	if seq < c.seq {
@@ -143,33 +149,27 @@ func (c *consumer) addSourceReadyForDraining(seq uint64, source *recordSource) {
 
 // addFakeReadyForDraining saves a fake fetch that has important partition
 // errors--data loss or auth failures.
-//
-// TODO: maybe do not clear on assignPartitions? And, add regardless of seq?
-// Otherwise, maybe the user will never see an error.
 func (c *consumer) addFakeReadyForDraining(topic string, partition int32, err error, seq uint64) {
-	var broadcast bool
 	c.sourcesReadyMu.Lock()
+	defer c.sourcesReadyMu.Unlock()
 	if seq < c.seq {
 		return
-	} else {
-		c.fakeReadyForDraining = append(c.fakeReadyForDraining, fetchSeq{
-			Fetch{
-				Topics: []FetchTopic{{
-					Topic: topic,
-					Partitions: []FetchPartition{{
-						Partition: partition,
-						Err:       err,
-					}},
+	}
+
+	c.fakeReadyForDraining = append(c.fakeReadyForDraining, fetchSeq{
+		Fetch{
+			Topics: []FetchTopic{{
+				Topic: topic,
+				Partitions: []FetchPartition{{
+					Partition: partition,
+					Err:       err,
 				}},
-			},
-			seq,
-		})
-		broadcast = true
-	}
-	c.sourcesReadyMu.Unlock()
-	if broadcast {
-		c.sourcesReadyCond.Broadcast()
-	}
+			}},
+		},
+		seq,
+	})
+
+	c.sourcesReadyCond.Broadcast()
 }
 
 func (c *consumer) updateUncommitted(fetches Fetches, seq uint64) {
@@ -181,8 +181,12 @@ func (c *consumer) updateUncommitted(fetches Fetches, seq uint64) {
 	c.group.updateUncommitted(fetches)
 }
 
-// If a partition has an error midway through processing a batch, the partition
-// may still have valid records to consume.
+// PollFetches waits for fetches to be available, returning as soon as any
+// broker returns a fetch. If the ctx quits, this function quits.
+//
+// It is important to check all partition errors in the returned fetches. If
+// any partition has a fatal error and actually had no records, fake fetch will
+// be injected with the error.
 func (cl *Client) PollFetches(ctx context.Context) Fetches {
 	c := &cl.consumer
 	c.fetchMu.Lock()
@@ -281,12 +285,12 @@ const (
 	assignInvalidateMatching
 
 	// The counterpart to assignInvalidateMatching, assignSetMatching
-	// reset all matching partitions to the specified offset / epoch.
+	// resets all matching partitions to the specified offset / epoch.
 	assignSetMatching
 )
 
 // assignPartitions, called under the consumer's mu, is used to set new
-// consumptions or add to the existing consumptions.
+// cursors or add to the existing cursors.
 func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how assignHow) {
 	seq := c.seq
 
@@ -296,10 +300,10 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how
 		// fetches will keep their results.
 		//
 		// This lock ensures that nothing new will be buffered,
-		// and below bump the seq num on all consumptions to ensure
+		// and below bump the seq num on all cursors to ensure
 		// that
-		// 1) now unused consumptions will not continue to loop
-		// 2) still used consumptions will continue to loop at the
+		// 1) now unused cursors will not continue to loop
+		// 2) still used cursors will continue to loop at the
 		//    appropriate offset.
 		c.sourcesReadyMu.Lock()
 		c.seq++
@@ -309,25 +313,25 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how
 		for _, usedPartition := range c.usingPartitions {
 			needsReset := true
 			if how == assignInvalidateAll {
-				usedPartition.consumption.setOffset(usedPartition.leaderEpoch, true, -1, -1, seq) // case 1
+				usedPartition.cursor.setOffset(usedPartition.leaderEpoch, true, -1, -1, seq) // case 1
 				needsReset = false
 			} else {
-				if matchTopic, ok := assignments[usedPartition.consumption.topic]; ok {
-					matchPartition, ok := matchTopic[usedPartition.consumption.partition]
+				if matchTopic, ok := assignments[usedPartition.cursor.topic]; ok {
+					matchPartition, ok := matchTopic[usedPartition.cursor.partition]
 					if !ok {
 						continue
 					}
 					needsReset = false
 					if how == assignInvalidateMatching {
-						usedPartition.consumption.setOffset(usedPartition.leaderEpoch, true, -1, -1, seq) // case 1
+						usedPartition.cursor.setOffset(usedPartition.leaderEpoch, true, -1, -1, seq) // case 1
 					} else { // how == assignSetMatching
-						usedPartition.consumption.setOffset(usedPartition.leaderEpoch, true, matchPartition.request, matchPartition.epoch, seq) // case 2
+						usedPartition.cursor.setOffset(usedPartition.leaderEpoch, true, matchPartition.request, matchPartition.epoch, seq) // case 2
 						keep = append(keep, usedPartition)
 					}
 				}
 			}
 			if needsReset {
-				usedPartition.consumption.resetOffset(seq) // case 2
+				usedPartition.cursor.resetOffset(seq) // case 2
 				keep = append(keep, usedPartition)
 			}
 		}
@@ -392,7 +396,7 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how
 			if offset.request >= 0 && offset.epoch >= 0 {
 				waiting.setTopicPartForEpoch(topic, partition, offset)
 			} else if offset.request >= 0 {
-				part.consumption.setOffset(part.leaderEpoch, true, offset.request, offset.epoch, seq)
+				part.cursor.setOffset(part.leaderEpoch, true, offset.request, offset.epoch, seq)
 				c.usingPartitions = append(c.usingPartitions, part)
 				delete(partitions, partition)
 			}
@@ -479,7 +483,7 @@ func (c *consumer) deletePartition(p *topicPartition) {
 	case consumerTypeUnset:
 		return
 	case consumerTypeDirect:
-		c.direct.deleteUsing(p.consumption.topic, p.consumption.partition)
+		c.direct.deleteUsing(p.cursor.topic, p.cursor.partition)
 	case consumerTypeGroup:
 	}
 }
@@ -627,7 +631,7 @@ func (o *offsetsWaitingLoad) setTopicPartForList(topic string, partition int32, 
 
 func (c *consumer) tryBrokerOffsetLoadList(broker *broker, load *offsetsWaitingLoad) {
 	kresp, err := broker.waitResp(c.cl.ctx,
-		load.buildListReq(broker.client.cfg.isolationLevel))
+		load.buildListReq(broker.cl.cfg.isolationLevel))
 	if err != nil {
 		load.mergeInto(c)
 		return
@@ -711,7 +715,7 @@ func (c *consumer) tryBrokerOffsetLoadList(broker *broker, load *offsetsWaitingL
 		return
 	}
 	for _, toSet := range toSets {
-		toSet.topicPartition.consumption.setOffset(toSet.currentEpoch, true, toSet.offset, toSet.leaderEpoch, c.seq)
+		toSet.topicPartition.cursor.setOffset(toSet.currentEpoch, true, toSet.offset, toSet.leaderEpoch, c.seq)
 		c.usingPartitions = append(c.usingPartitions, toSet.topicPartition)
 	}
 }
@@ -863,7 +867,7 @@ func (c *consumer) tryBrokerOffsetLoadEpoch(broker *broker, load *offsetsWaiting
 		return
 	}
 	for _, toSet := range toSets {
-		toSet.topicPartition.consumption.setOffset(toSet.currentEpoch, true, toSet.offset, toSet.leaderEpoch, c.seq)
+		toSet.topicPartition.cursor.setOffset(toSet.currentEpoch, true, toSet.offset, toSet.leaderEpoch, c.seq)
 		c.usingPartitions = append(c.usingPartitions, toSet.topicPartition)
 	}
 }

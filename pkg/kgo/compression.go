@@ -101,11 +101,12 @@ func newCompressor(codecs ...CompressionCodec) (*compressor, error) {
 
 	c := new(compressor)
 
+out:
 	for _, codec := range codecs {
 		c.options = append(c.options, codec.codec)
 		switch codec.codec {
 		case 0:
-			break
+			break out
 		case 1:
 			level := codec.level
 			if _, err := gzip.NewWriterLevel(nil, int(level)); err != nil {

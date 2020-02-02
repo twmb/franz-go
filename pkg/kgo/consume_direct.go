@@ -55,6 +55,10 @@ type directConsumer struct {
 	using map[string]map[int32]struct{}
 }
 
+// AssignPartitions assigns an exact set of partitions for the client to
+// consume from. Any prior direct assignment or group assignment is
+// invalidated.
+//
 // This takes ownership of the assignments.
 func (cl *Client) AssignPartitions(opts ...DirectConsumeOpt) {
 	c := &cl.consumer

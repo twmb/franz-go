@@ -1095,25 +1095,25 @@ func (b *recBatch) calculateRecordNumbers(r *Record) recordNumbers {
 // lockedIsFirstBatch returns if the batch in a recBatch is the first batch in
 // a records. We only ever want to update batch / buffer logic if the batch is
 // the first in the buffer.
-func (batch *recBatch) lockedIsFirstBatch() bool {
-	return len(batch.owner.batches) > 0 && batch.owner.batches[0] == batch
+func (b *recBatch) lockedIsFirstBatch() bool {
+	return len(b.owner.batches) > 0 && b.owner.batches[0] == b
 }
 
 // The above, but inside the owning recBuf mutex.
-func (batch *recBatch) isFirstBatchInRecordBuf() bool {
-	batch.owner.mu.Lock()
-	defer batch.owner.mu.Unlock()
+func (b *recBatch) isFirstBatchInRecordBuf() bool {
+	b.owner.mu.Lock()
+	defer b.owner.mu.Unlock()
 
-	return batch.lockedIsFirstBatch()
+	return b.lockedIsFirstBatch()
 }
 
 // isTimedOut, called only on frozen batches, returns whether the first record
 // in a batch is past the limit.
-func (batch *recBatch) isTimedOut(limit time.Duration) bool {
+func (b *recBatch) isTimedOut(limit time.Duration) bool {
 	if limit == 0 {
 		return false
 	}
-	return time.Since(batch.records[0].Timestamp) > limit
+	return time.Since(b.records[0].Timestamp) > limit
 }
 
 ////////////////////

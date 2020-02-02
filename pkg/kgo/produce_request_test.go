@@ -212,69 +212,69 @@ func TestRecBatchAppendTo(t *testing.T) {
 
 func TestMessageSetAppendTo(t *testing.T) {
 	// golden v0, uncompressed
-	kset0_1 := kmsg.MessageV0{
+	kset01 := kmsg.MessageV0{
 		Offset: 0,
 		Key:    []byte("loooooong key 1"), // all keys/values have looooong prefix to allow compression to be shorter
 		Value:  []byte("loooooong value 1"),
 	}
-	kset0_1.MessageSize = int32(len(kset0_1.AppendTo(nil)[12:]))
-	kset0_1.CRC = int32(crc32.ChecksumIEEE(kset0_1.AppendTo(nil)[16:]))
+	kset01.MessageSize = int32(len(kset01.AppendTo(nil)[12:]))
+	kset01.CRC = int32(crc32.ChecksumIEEE(kset01.AppendTo(nil)[16:]))
 
-	kset0_2 := kmsg.MessageV0{
+	kset02 := kmsg.MessageV0{
 		Offset: 1,
 		Key:    []byte("loooooong key 2"),
 		Value:  []byte("loooooong value 2"),
 	}
-	kset0_2.CRC = int32(crc32.ChecksumIEEE(kset0_2.AppendTo(nil)[16:]))
-	kset0_2.MessageSize = int32(len(kset0_2.AppendTo(nil)[12:]))
+	kset02.CRC = int32(crc32.ChecksumIEEE(kset02.AppendTo(nil)[16:]))
+	kset02.MessageSize = int32(len(kset02.AppendTo(nil)[12:]))
 
 	// golden v1, uncompressed
-	kset1_1 := kmsg.MessageV1{
+	kset11 := kmsg.MessageV1{
 		Offset:    0,
 		Magic:     1,
 		Timestamp: 12,
 		Key:       []byte("loooooong key 1"),
 		Value:     []byte("loooooong value 1"),
 	}
-	kset1_1.CRC = int32(crc32.ChecksumIEEE(kset1_1.AppendTo(nil)[16:]))
-	kset1_1.MessageSize = int32(len(kset1_1.AppendTo(nil)[12:]))
+	kset11.CRC = int32(crc32.ChecksumIEEE(kset11.AppendTo(nil)[16:]))
+	kset11.MessageSize = int32(len(kset11.AppendTo(nil)[12:]))
 
-	kset1_2 := kmsg.MessageV1{
+	kset12 := kmsg.MessageV1{
 		Offset:    1,
 		Magic:     1,
 		Timestamp: 13,
 		Key:       []byte("loooooong key 2"),
 		Value:     []byte("loooooong value 2"),
 	}
-	kset1_2.CRC = int32(crc32.ChecksumIEEE(kset1_2.AppendTo(nil)[16:]))
-	kset1_2.MessageSize = int32(len(kset1_2.AppendTo(nil)[12:]))
+	kset12.CRC = int32(crc32.ChecksumIEEE(kset12.AppendTo(nil)[16:]))
+	kset12.MessageSize = int32(len(kset12.AppendTo(nil)[12:]))
 
 	var (
-		kset0_raw     = append(kset0_1.AppendTo(nil), kset0_2.AppendTo(nil)...) // for comparing & compressing
-		kset1_raw     = append(kset1_1.AppendTo(nil), kset1_2.AppendTo(nil)...) // for comparing & compressing
-		compressor, _ = newCompressor(CompressionCodec{codec: 2})               // snappy
+		kset0raw      = append(kset01.AppendTo(nil), kset02.AppendTo(nil)...) // for comparing & compressing
+		kset1raw      = append(kset11.AppendTo(nil), kset12.AppendTo(nil)...) // for comparing & compressing
+		compressor, _ = newCompressor(CompressionCodec{codec: 2})             // snappy
 	)
 	defer compressor.close()
 
 	// golden v0, compressed
-	kset0_c := kmsg.MessageV0{
+	kset0c := kmsg.MessageV0{
 		Offset:     1,
 		Attributes: 0x02,
 	}
-	kset0_c.Value, _ = compressor.compress(sliceWriters.Get().(*sliceWriter), kset0_raw, 1) // version 0, 1 use message set 0
-	kset0_c.CRC = int32(crc32.ChecksumIEEE(kset0_c.AppendTo(nil)[16:]))
-	kset0_c.MessageSize = int32(len(kset0_c.AppendTo(nil)[12:]))
+	kset0c.Value, _ = compressor.compress(sliceWriters.Get().(*sliceWriter), kset0raw, 1) // version 0, 1 use message set 0
+	kset0c.CRC = int32(crc32.ChecksumIEEE(kset0c.AppendTo(nil)[16:]))
+	kset0c.MessageSize = int32(len(kset0c.AppendTo(nil)[12:]))
 
 	// golden v1 compressed
-	kset1_c := kmsg.MessageV1{
+	kset1c := kmsg.MessageV1{
 		Offset:     1,
 		Magic:      1,
 		Attributes: 0x02,
-		Timestamp:  kset1_1.Timestamp,
+		Timestamp:  kset11.Timestamp,
 	}
-	kset1_c.Value, _ = compressor.compress(sliceWriters.Get().(*sliceWriter), kset1_raw, 2) // version 2 use message set 1
-	kset1_c.CRC = int32(crc32.ChecksumIEEE(kset1_c.AppendTo(nil)[16:]))
-	kset1_c.MessageSize = int32(len(kset1_c.AppendTo(nil)[12:]))
+	kset1c.Value, _ = compressor.compress(sliceWriters.Get().(*sliceWriter), kset1raw, 2) // version 2 use message set 1
+	kset1c.CRC = int32(crc32.ChecksumIEEE(kset1c.AppendTo(nil)[16:]))
+	kset1c.MessageSize = int32(len(kset1c.AppendTo(nil)[12:]))
 
 	// input
 	ourBatch := seqRecBatch{
@@ -310,24 +310,24 @@ func TestMessageSetAppendTo(t *testing.T) {
 	}
 
 	var (
-		kset0_raw_c = kset0_c.AppendTo(nil)
-		kset1_raw_c = kset1_c.AppendTo(nil)
+		kset0rawc = kset0c.AppendTo(nil)
+		kset1rawc = kset1c.AppendTo(nil)
 
-		got0_raw = ourBatch.appendToAsMessageSet(nil, 1, nil)
-		got1_raw = ourBatch.appendToAsMessageSet(nil, 2, nil)
+		got0raw = ourBatch.appendToAsMessageSet(nil, 1, nil)
+		got1raw = ourBatch.appendToAsMessageSet(nil, 2, nil)
 
-		got0_raw_c = ourBatch.appendToAsMessageSet(nil, 1, compressor)
-		got1_raw_c = ourBatch.appendToAsMessageSet(nil, 2, compressor)
+		got0rawc = ourBatch.appendToAsMessageSet(nil, 1, compressor)
+		got1rawc = ourBatch.appendToAsMessageSet(nil, 2, compressor)
 	)
 
 	for i, pair := range []struct {
 		got []byte
 		exp []byte
 	}{
-		{got0_raw, kset0_raw},
-		{got1_raw, kset1_raw},
-		{got0_raw_c, kset0_raw_c},
-		{got1_raw_c, kset1_raw_c},
+		{got0raw, kset0raw},
+		{got1raw, kset1raw},
+		{got0rawc, kset0rawc},
+		{got1rawc, kset1rawc},
 	} {
 		gotFull := pair.got
 		ourBatchSize := (&kbin.Reader{Src: gotFull}).Int32()
@@ -350,7 +350,7 @@ func TestMessageSetAppendTo(t *testing.T) {
 			Topic: "topic",
 			Partitions: []kmsg.ProduceRequestTopicPartition{{
 				Partition: 1,
-				Records:   kset0_raw_c,
+				Records:   kset0rawc,
 			}},
 		}},
 	}

@@ -833,7 +833,6 @@ func (g *groupConsumer) fetchOffsets(ctx context.Context, newAssigned map[string
 		return err
 	}
 
-	// TODO sarama#1542, response does not necessarily match request
 	offsets := make(map[string]map[int32]Offset)
 	for _, rTopic := range resp.Topics {
 		topicOffsets := make(map[int32]Offset)
@@ -1033,7 +1032,7 @@ func (g *groupConsumer) updateCommitted(
 		return
 	}
 	if g.uncommitted == nil || // just in case
-		len(req.Topics) != len(resp.Topics) { // bad kafka TODO fatal error?
+		len(req.Topics) != len(resp.Topics) { // bad kafka
 		return
 	}
 
@@ -1105,7 +1104,7 @@ func (g *groupConsumer) loopCommit() {
 // The main use of this method is to effectively provide a way to reset
 // consumption after aborting a batch.
 func (cl *Client) ResetToCommitted() {
-	c := cl.consumer
+	c := &cl.consumer
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -1434,13 +1433,13 @@ func (cl *Client) CommitTransactionOffsets(
 // on the first produce is complete.
 //
 // TODO: take into account group context in initProducerID
-func (c *Client) addOffsetsToTxn(ctx context.Context, group string) error {
-	id, epoch, err := c.producerID()
+func (cl *Client) addOffsetsToTxn(ctx context.Context, group string) error {
+	id, epoch, err := cl.producerID()
 	if err != nil {
 		return err
 	}
-	kresp, err := c.Request(ctx, &kmsg.AddOffsetsToTxnRequest{
-		TransactionalID: *c.cfg.txnID,
+	kresp, err := cl.Request(ctx, &kmsg.AddOffsetsToTxnRequest{
+		TransactionalID: *cl.cfg.txnID,
 		ProducerID:      id,
 		ProducerEpoch:   epoch,
 		Group:           group,
@@ -1555,7 +1554,7 @@ func (g *groupConsumer) updateCommittedTxn(
 	defer g.mu.Unlock()
 
 	if g.uncommitted == nil || // just in case
-		len(req.Topics) != len(resp.Topics) { // bad kafka TODO fatal error
+		len(req.Topics) != len(resp.Topics) { // bad kafka
 		return
 	}
 

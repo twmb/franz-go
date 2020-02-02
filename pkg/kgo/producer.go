@@ -83,16 +83,14 @@ func (cl *Client) AbortBufferedRecords(ctx context.Context) error {
 
 	select {
 	case <-done:
+		// All records were failed above, and all drains are stopped.
+		// We are safe to return.
 		return nil
 	case <-ctx.Done():
 		quit = true
 		cl.producer.notifyCond.Broadcast()
 		return ctx.Err()
 	}
-
-	// All records were failed above, and all drains are stopped. We are
-	// safe to return.
-	return nil
 }
 
 // EndTransaction ends a transaction and resets the client's internal state to
@@ -332,6 +330,12 @@ func (cl *Client) partitionRecord(pr promisedRec) {
 	if parts == nil { // saved in unknownTopics
 		return
 	}
+	cl.doPartitionRecord(parts, partsData, pr)
+}
+
+// doPartitionRecord is separate so that metadata updates that load unknown
+// partitions can call this directly.
+func (cl *Client) doPartitionRecord(parts *topicPartitions, partsData *topicPartitionsData, pr promisedRec) {
 	if partsData.loadErr != nil && !kerr.IsRetriable(partsData.loadErr) {
 		cl.finishRecordPromise(pr, partsData.loadErr)
 		return

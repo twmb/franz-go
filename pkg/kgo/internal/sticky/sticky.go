@@ -22,12 +22,14 @@ import (
 // We can support up to 4,294,967,295 partitions.
 // I expect a server to fall over before reaching either of these numbers.
 
+// GroupMember is a Kafka group member.
 type GroupMember struct {
 	ID       string
 	Topics   []string
 	UserData []byte
 }
 
+// Plan is the plan this package came up with (member => topic => partitions).
 type Plan map[string]map[string][]int32
 
 type balancer struct {
@@ -203,11 +205,11 @@ type partitionLevel struct {
 // slight perf boost at the cost of removing members being O(M).
 // Even with the worse complexity, scanning a short list can be faster
 // than managing a map, and we expect groups to not be _too_ large.
-func (p *partitionLevel) removeMember(memberNum uint16) {
-	for i, v := range p.members {
+func (l *partitionLevel) removeMember(memberNum uint16) {
+	for i, v := range l.members {
 		if v == memberNum {
-			p.members[i] = p.members[len(p.members)-1]
-			p.members = p.members[:len(p.members)-1]
+			l.members[i] = l.members[len(l.members)-1]
+			l.members = l.members[:len(l.members)-1]
 			return
 		}
 	}
@@ -242,7 +244,7 @@ func (b *balancer) removeLevelingMember(
 	}
 }
 
-func (l partitionLevel) Less(r rbtree.Item) bool {
+func (l *partitionLevel) Less(r rbtree.Item) bool {
 	return l.level < r.(*partitionLevel).level
 }
 
@@ -257,6 +259,8 @@ func (b *balancer) initPlanByNumPartitions() {
 	}
 }
 
+// Balance performs sticky partitioning for the given group members and topics,
+// returning the determined plan.
 func Balance(members []GroupMember, topics map[string][]int32) Plan {
 	if len(members) == 0 {
 		return make(Plan)

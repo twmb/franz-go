@@ -12,7 +12,7 @@ var (
 	// key larger than kmsg.MaxKey.
 	ErrUnknownRequestKey = errors.New("request key is unknown")
 
-	// ErrClientToOld is returned when issuing request that are unknown or
+	// ErrClientTooOld is returned when issuing request that are unknown or
 	// use an unknown version.
 	ErrClientTooOld = errors.New("client is too old; this client does not know what to do with this")
 

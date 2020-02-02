@@ -9,82 +9,101 @@ import (
 	"github.com/twmb/kafka-go/pkg/kmsg"
 )
 
-type recordSource struct {
-	broker *broker
+type source struct {
+	cfg *cfg    // client's cfg for easy access
+	b   *broker // the broker this sink belongs to
+	cl  *Client // our owning client, for metadata triggering, context, etc.
 
 	inflightSem chan struct{} // capacity of 1
 	fillState   workLoop
 
 	consecutiveFailures int
 
-	// guards all below
-	mu sync.Mutex
+	mu sync.Mutex // guards all below
 
-	// consuming tracks topics, partitions, and offsets/epochs that this
-	// source owns.
-	allConsumptions      []*consumption
-	allConsumptionsStart int
+	cursors      []*cursor // contains all partitions being consumed on this source
+	cursorsStart int       // incremented every fetch req to ensure all partitions are fetched
 
+	// buffered contains a fetch that the sink has received but that the
+	// client user has not yet polled. On poll, partitions that actually
+	// are not owned by the client anymore are removed before being
+	// returned.
 	buffered bufferedFetch
 }
 
-func newRecordSource(broker *broker) *recordSource {
-	source := &recordSource{
-		broker:      broker,
+func newSource(
+	cfg *cfg,
+	cl *Client,
+	b *broker,
+) *source {
+	return &source{
+		cfg: cfg,
+		b:   b,
+		cl:  cl,
+
 		inflightSem: make(chan struct{}, 1),
 	}
-	return source
 }
 
-func (source *recordSource) addConsumption(add *consumption) {
-	source.mu.Lock()
-	add.allConsumptionsIdx = len(source.allConsumptions)
-	source.allConsumptions = append(source.allConsumptions, add)
-	source.mu.Unlock()
+func (s *source) addCursor(add *cursor) {
+	s.mu.Lock()
+	add.allCursorsIdx = len(s.cursors)
+	s.cursors = append(s.cursors, add)
+	s.mu.Unlock()
 
 	// We always clear the failing, since this could have been from moving
 	// a failing partition from one source to another (clearing the fail).
 	add.clearFailing()
 }
 
-func (source *recordSource) removeConsumption(rm *consumption) {
-	source.mu.Lock()
-	defer source.mu.Unlock()
+func (s *source) removeCursor(rm *cursor) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
-	if rm.allConsumptionsIdx != len(source.allConsumptions)-1 {
-		source.allConsumptions[rm.allConsumptionsIdx], source.allConsumptions[len(source.allConsumptions)-1] =
-			source.allConsumptions[len(source.allConsumptions)-1], nil
+	if rm.allCursorsIdx != len(s.cursors)-1 {
+		s.cursors[rm.allCursorsIdx], s.cursors[len(s.cursors)-1] =
+			s.cursors[len(s.cursors)-1], nil
 
-		source.allConsumptions[rm.allConsumptionsIdx].allConsumptionsIdx = rm.allConsumptionsIdx
+		s.cursors[rm.allCursorsIdx].allCursorsIdx = rm.allCursorsIdx
 	} else {
-		source.allConsumptions[rm.allConsumptionsIdx] = nil // do not let this source hang around
+		s.cursors[rm.allCursorsIdx] = nil // do not let the memory hang around
 	}
 
-	source.allConsumptions = source.allConsumptions[:len(source.allConsumptions)-1]
-	if source.allConsumptionsStart == len(source.allConsumptions) {
-		source.allConsumptionsStart = 0
+	s.cursors = s.cursors[:len(s.cursors)-1]
+	if s.cursorsStart == len(s.cursors) {
+		s.cursorsStart = 0
 	}
 }
 
-type consumption struct {
+// cursor is where we are consuming from for an individual partition.
+//
+// All code on cursors takes special care to only work for the _current_
+// assignment; this means that outdated requests that return cannot return old
+// data. See the seqOffset field for more info.
+type cursor struct {
 	topic     string
 	partition int32
 
-	keepControl bool
+	keepControl bool // whether to keep control records
 
 	mu sync.Mutex
 
-	source             *recordSource
-	allConsumptionsIdx int
+	source        *source
+	allCursorsIdx int
 
+	// seqOffset is our epoch/offset that we are consuming, with a
+	// corresponding "seq" from group assignments / manual assignments.
+	// When a fetch request is issued, we "freeze" a view of the offset
+	// and only actually use the response (and update the cursor's
+	// offset) if the consumer seq has yet changed.
 	seqOffset
 
-	// inUse is set whenever the consumption is chosen for an in flight
+	// inUse is true whenever the cursor is chosen for an in flight
 	// fetch request and reset to false if the fetch response has no usable
 	// records or when the buffered usable records are taken.
 	inUse bool
 
-	// failing is set when we encounter a partition error.
+	// failing is true when we encounter a partition error.
 	// It is always cleared on metadata update.
 	failing bool
 
@@ -96,9 +115,7 @@ type consumption struct {
 	loadingOffsets bool
 }
 
-// seqOffset is an offset we are consuming and the corresponding assign seq
-// this offset is originally from. The seq is key to ensuring we do not
-// return old fetches if a client's Assign* is called again.
+// seqOffset tracks offsets/epochs with a cursor's seq.
 type seqOffset struct {
 	offset             int64
 	lastConsumedEpoch  int32
@@ -106,18 +123,17 @@ type seqOffset struct {
 	seq                uint64
 }
 
-// seqOffsetFrom is updated while processing a fetch response. One the response
-// is taken, we only update the consumption's offset _if_ the seq is the same
-// (by going through setOffset).
+// seqOffsetFrom is updated while processing a fetch response. Once the response
+// is taken, we update the cursor's offset only if the seq is the same.
 type seqOffsetFrom struct {
 	seqOffset
-	from *consumption
+	from *cursor
 }
 
-// use is called when adding an offset to a fetch request; from
-// hereafter until the buffered response is taken, we update the offset
-// in the frozen seqOffsetFrom view.
-func (c *consumption) use() *seqOffsetFrom {
+// use, for fetch requests, freezes a view of the offset/epoch for the cursor's
+// current seq. When the resulting fetch response is finally taken, we update
+// the cursor's offset/epoch only if the cursor's seq is still the same.
+func (c *cursor) use() *seqOffsetFrom {
 	c.inUse = true
 	return &seqOffsetFrom{
 		seqOffset: c.seqOffset,
@@ -125,36 +141,17 @@ func (c *consumption) use() *seqOffsetFrom {
 	}
 }
 
-// resetOffset is like setOffset, but strictly for bumping the consumption's
-// sequence number so that consumption resets from its current offset/epoch.
-func (c *consumption) resetOffset(fromSeq uint64) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	// fromSeq could be less than seq if this setOffset is from a
-	// takeBuffered after assignment invalidation.
-	if fromSeq < c.seq {
-		return
-	}
-	c.seq = fromSeq
-	c.failing = false
-	c.inUse = false
-	c.loadingOffsets = false
-	if c.offset != -1 && c.source != nil {
+// triggerConsume is called under the cursor's lock whenever the cursor maybe
+// needs to be consumed.
+func (c *cursor) triggerConsume() {
+	if c.offset != -1 && c.source != nil { // source could be nil if we loaded a failing partition
 		c.source.maybeBeginConsuming()
 	}
 }
 
-// setOffset sets the consumptions offset and seq, doing nothing if the seq is
-// out of date. The seq will be out of date if an Assign is called and then a
-// buffered fetch is drained (invalidated).
-//
-// Otherwise, normally, buffered fetches call setOffset to update the
-// consuption's offset and to allow the source to continue draining.
-//
-// If a buffered fetch had an error, this does not clear the error state. We
-// leave that for metadata updating.
-func (c *consumption) setOffset(
+// setOffset sets the cursors offset and seq, doing nothing if the seq is
+// out of date.
+func (c *cursor) setOffset(
 	currentEpoch int32,
 	clearLoading bool,
 	offset int64,
@@ -164,8 +161,6 @@ func (c *consumption) setOffset(
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	// fromSeq could be less than seq if this setOffset is from a
-	// takeBuffered after assignment invalidation.
 	if fromSeq < c.seq {
 		return
 	}
@@ -185,17 +180,28 @@ func (c *consumption) setOffset(
 	c.offset = offset
 	c.lastConsumedEpoch = epoch
 	c.currentLeaderEpoch = currentEpoch
-	// The source could theoretically be nil here if we loaded a failing
-	// partition.
-	if offset != -1 && c.source != nil {
-		c.source.maybeBeginConsuming()
-	}
+	c.triggerConsume()
 }
 
-// restartOffset resets a consumption to usable and triggers the source to
-// begin consuming again. This is called if a consumption was used in a fetch
-// that ultimately returned no new data.
-func (c *consumption) setUnused(fromSeq uint64) {
+// resetOffset is like setOffset, but strictly for bumping the cursor's seq.
+func (c *cursor) resetOffset(fromSeq uint64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if fromSeq < c.seq {
+		return
+	}
+	c.seq = fromSeq
+	c.failing = false
+	c.inUse = false
+	c.loadingOffsets = false
+	c.triggerConsume()
+}
+
+// restartOffset resets a cursor to usable and triggers the source to
+// begin consuming again. This is only called in unuseAll, where a cursor
+// was used in a fetch that ultimately returned no new data.
+func (c *cursor) setUnused(fromSeq uint64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -206,229 +212,192 @@ func (c *consumption) setUnused(fromSeq uint64) {
 	}
 
 	c.inUse = false
-	// No need to maybeBeginConsuming since this is called from unuseAll
-	// which allows the source to continue when it finishes.
+	c.triggerConsume()
 }
 
-// setFailing is called once a partition has an error response. The consumption
-// is not used until a metadata update clears the failing state.
-//
-// In sinks, we only update recordBuffer state if the buffer is on the same
-// sink when it is time to update. That is, we only update state if the buffer
-// did not move due to a concurrent metadata update during a produce request.
-//
-// We do not need to worry about that type of movement for a c. At
-// worst, an in flight fetch will see NotLeaderForPartition, setting the
-// consumption to failing and triggering a metadata update. The metadata update
-// will quickly clear the failing state and the consumption will resume as
-// normal on the new source.
-func (c *consumption) setFailing(fromSeq uint64) {
+// setFailing is called once a partition has an error response. The cursor is
+// not used until a metadata update clears the failing state.
+func (c *cursor) setFailing(fromSeq uint64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	if fromSeq < c.seq {
 		return
 	}
-
 	c.failing = true
 }
 
-// clearFailing is called to clear any failing state and compare
-// the current leader epoch to our last leader epoch.
-//
-// This is called when a consumption is added to a source (to clear a failing
-// state from migrating consumptions between sources) or when a metadata update
-// sees the consumption is still on the same source.
-//
-// Note the source cannot be nil here, since nil sources correspond to load
-// errors, and partitions with load errors do not call this.
-func (c *consumption) clearFailing() {
+// clearFailing, called on metadata update or when a cursor is added to a source,
+// clears any failing state.
+func (c *cursor) clearFailing() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	c.failing = false
 
-	// If we are in use, there is nothing to be gained by checking the
-	// epoch now. Additionally, if we are fenced, then no use starting.
+	// If we are in use or loading offsets, no reason to try to start
+	// consuming again.
 	if c.inUse || c.loadingOffsets {
 		return
 	}
-
-	// We always restart draining if we can and if the partition is not in
-	// use; it is possible that we were not failing in the erroring sense,
-	// but that the broker the consumption was on disappeared and the
-	// consumption migrated.
-	if c.offset != -1 && !c.inUse {
-		c.source.maybeBeginConsuming()
-	}
+	c.triggerConsume()
 }
 
-func (c *consumption) setLoadingOffsets(fromSeq uint64) {
+func (c *cursor) setLoadingOffsets(fromSeq uint64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	if fromSeq < c.seq {
 		return
 	}
-
 	c.loadingOffsets = true
 }
 
 // bufferedFetch is a fetch response waiting to be consumed by the client, as
-// well as offsests to update consumptions to once the fetch is taken.
+// well as offsets to update cursors to once the fetch is taken.
 type bufferedFetch struct {
 	fetch      Fetch
 	seq        uint64
 	reqOffsets map[string]map[int32]*seqOffsetFrom
 }
 
-type fetchSeq struct {
-	Fetch
-	seq uint64
-}
-
 // takeBuffered drains a buffered fetch and updates offsets.
-func (source *recordSource) takeBuffered() (Fetch, uint64) {
-	r := source.buffered
-	source.buffered = bufferedFetch{}
-	go source.updateOffsets(r.reqOffsets)
+func (s *source) takeBuffered() (Fetch, uint64) {
+	r := s.buffered
+	s.buffered = bufferedFetch{}
+	go s.updateOffsets(r.reqOffsets)
 	return r.fetch, r.seq
 }
 
 // updateOffsets is called when a buffered fetch is taken; we update all
-// consumption offsets and set them usable for new fetches.
-func (source *recordSource) updateOffsets(reqOffsets map[string]map[int32]*seqOffsetFrom) {
+// cursor offsets and set them usable for new fetches.
+func (s *source) updateOffsets(reqOffsets map[string]map[int32]*seqOffsetFrom) {
 	for _, partitions := range reqOffsets {
 		for _, o := range partitions {
 			o.from.setOffset(o.currentLeaderEpoch, false, o.offset, o.lastConsumedEpoch, o.seq)
 		}
 	}
-	<-source.inflightSem
+	<-s.inflightSem
 }
 
 // unuseAll is called when a fetch returns no data; we set all the
-// consumptions to usable again so we can reissue a new fetch.
-func (source *recordSource) unuseAll(reqOffsets map[string]map[int32]*seqOffsetFrom) {
+// cursors to usable again so we can reissue a new fetch.
+func (s *source) unuseAll(reqOffsets map[string]map[int32]*seqOffsetFrom) {
 	for _, partitions := range reqOffsets {
 		for _, o := range partitions {
 			o.from.setUnused(o.seq)
 		}
 	}
-	<-source.inflightSem
+	<-s.inflightSem
 }
 
-func (source *recordSource) createRequest() (req *fetchRequest, again bool) {
+func (s *source) createRequest() (req *fetchRequest, again bool) {
 	req = &fetchRequest{
-		maxWait:        source.broker.client.cfg.maxWait,
-		maxBytes:       source.broker.client.cfg.maxBytes,
-		maxPartBytes:   source.broker.client.cfg.maxPartBytes,
-		isolationLevel: source.broker.client.cfg.isolationLevel,
+		maxWait:        s.cfg.maxWait,
+		maxBytes:       s.cfg.maxBytes,
+		maxPartBytes:   s.cfg.maxPartBytes,
+		isolationLevel: s.cfg.isolationLevel,
 	}
 
-	source.mu.Lock()
-	defer source.mu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
-	consumptionIdx := source.allConsumptionsStart
-	for i := 0; i < len(source.allConsumptions); i++ {
-		c := source.allConsumptions[consumptionIdx]
-		consumptionIdx = (consumptionIdx + 1) % len(source.allConsumptions)
+	cursorIdx := s.cursorsStart
+	for i := 0; i < len(s.cursors); i++ {
+		c := s.cursors[cursorIdx]
+		cursorIdx = (cursorIdx + 1) % len(s.cursors)
 
-		// Ensure this consumption cannot be moved across topicPartitions
+		// Ensure this cursor cannot be moved across topicPartitions
 		// while we using its fields.
 		c.mu.Lock()
 
-		// If the offset is -1, a metadata update added a consumption to
-		// this source, but it is not yet in use.
+		// If the offset is -1, a metadata update added a cursor to
+		// this s, but it is not yet in use.
 		if c.offset == -1 || c.inUse || c.failing || c.loadingOffsets {
 			c.mu.Unlock()
 			continue
 		}
 
 		again = true
-		req.fetchConsumptionLocked(c)
+		req.fetchCursorLocked(c)
 		c.mu.Unlock()
 	}
 
 	// We could have lost our only record buffer just before we grabbed the
 	// lock above.
-	if len(source.allConsumptions) > 0 {
-		source.allConsumptionsStart = (source.allConsumptionsStart + 1) % len(source.allConsumptions)
+	if len(s.cursors) > 0 {
+		s.cursorsStart = (s.cursorsStart + 1) % len(s.cursors)
 	}
 
 	return req, again
 }
 
-func (source *recordSource) maybeBeginConsuming() {
-	if source.fillState.maybeBegin() {
-		go source.fill()
+func (s *source) maybeBeginConsuming() {
+	if s.fillState.maybeBegin() {
+		go s.fill()
 	}
 }
 
-func (source *recordSource) fill() {
+func (s *source) fill() {
 	time.Sleep(time.Millisecond)
 
 	again := true
 	for again {
-		source.inflightSem <- struct{}{}
+		s.inflightSem <- struct{}{}
 
 		var req *fetchRequest
-		req, again = source.createRequest()
+		req, again = s.createRequest()
 
-		if req.numOffsets == 0 { // must be at least one if a consumption was usable
-			again = source.fillState.maybeFinish(again)
-			<-source.inflightSem
+		if req.numOffsets == 0 { // must be at least one if a cursor was usable
+			again = s.fillState.maybeFinish(again)
+			<-s.inflightSem
 			continue
 		}
 
-		source.broker.do(
-			source.broker.client.ctx,
+		s.b.do(
+			s.cl.ctx,
 			req,
 			func(resp kmsg.Response, err error) {
-				source.handleReqResp(req, resp, err)
+				s.handleReqResp(req, resp, err)
 			},
 		)
-		again = source.fillState.maybeFinish(again)
+		again = s.fillState.maybeFinish(again)
 	}
 }
 
-func (source *recordSource) backoff() {
-	source.consecutiveFailures++
-	after := time.NewTimer(source.broker.client.cfg.retryBackoff(source.consecutiveFailures))
+func (s *source) backoff() {
+	s.consecutiveFailures++
+	after := time.NewTimer(s.cfg.retryBackoff(s.consecutiveFailures))
 	defer after.Stop()
 	select {
 	case <-after.C:
-	case <-source.broker.client.ctx.Done():
+	case <-s.cl.ctx.Done():
 	}
 }
 
-func (source *recordSource) handleReqResp(req *fetchRequest, kresp kmsg.Response, err error) {
-	var needsMetaUpdate bool
-
+func (s *source) handleReqResp(req *fetchRequest, kresp kmsg.Response, err error) {
 	if err != nil {
-		source.backoff() // backoff before unuseAll to avoid inflight race
-		source.unuseAll(req.offsets)
-		source.broker.client.triggerUpdateMetadata()
+		s.backoff() // backoff before unuseAll to avoid inflight race
+		s.unuseAll(req.offsets)
+		s.cl.triggerUpdateMetadata()
 		return
 	}
-	source.consecutiveFailures = 0
+	s.consecutiveFailures = 0
 
 	resp := kresp.(*kmsg.FetchResponse)
 	newFetch := Fetch{
 		Topics: make([]FetchTopic, 0, len(resp.Topics)),
 	}
 
-	decompressor := source.broker.client.decompressor
-
 	// We do not look at the overall ErrorCode; this should only be set if
 	// using sessions, which we are not.
 	//
 	// If any partition errors with OffsetOutOfRange, we reload the offset
-	// for that partition according to the client's configured offset
-	// policy. Everything to reload gets stuffed into reloadOffsets, which
-	// is merged into the consumer before a metadata update is triggered.
+	// for that partition a per to the client's configured offset policy.
 	reloadOffsets := offsetsWaitingLoad{
 		fromSeq: req.maxSeq,
 	}
+	var needsMetaUpdate bool
 	for _, rTopic := range resp.Topics {
 		topic := rTopic.Topic
 		topicOffsets, ok := req.offsets[topic]
@@ -449,7 +418,7 @@ func (source *recordSource) handleReqResp(req *fetchRequest, kresp kmsg.Response
 				continue
 			}
 
-			fetchPart, partNeedsMetaUpdate := partOffset.processRespPartition(topic, resp.Version, rPartition, decompressor)
+			fetchPart, partNeedsMetaUpdate := partOffset.processRespPartition(topic, resp.Version, rPartition, s.cl.decompressor)
 			if len(fetchPart.Records) > 0 || fetchPart.Err != nil {
 				fetchTopic.Partitions = append(fetchTopic.Partitions, fetchPart)
 			}
@@ -462,7 +431,7 @@ func (source *recordSource) handleReqResp(req *fetchRequest, kresp kmsg.Response
 			// the end. We respect that.
 			if fetchPart.Err == kerr.OffsetOutOfRange {
 				partOffset.from.setLoadingOffsets(partOffset.seq)
-				reloadOffsets.setTopicPartForList(topic, partition, source.broker.client.cfg.resetOffset)
+				reloadOffsets.setTopicPartForList(topic, partition, s.cfg.resetOffset)
 
 			} else if fetchPart.Err == kerr.FencedLeaderEpoch {
 				// With fenced leader epoch, we notify an error only if
@@ -488,25 +457,25 @@ func (source *recordSource) handleReqResp(req *fetchRequest, kresp kmsg.Response
 	}
 
 	if !reloadOffsets.isEmpty() {
-		consumer := &source.broker.client.consumer
+		consumer := &s.cl.consumer
 		consumer.mu.Lock()
 		reloadOffsets.mergeIntoLocked(consumer)
 		consumer.mu.Unlock()
 	}
 
 	if needsMetaUpdate {
-		source.broker.client.triggerUpdateMetadata()
+		s.cl.triggerUpdateMetadata()
 	}
 
 	if len(newFetch.Topics) > 0 {
-		source.buffered = bufferedFetch{
+		s.buffered = bufferedFetch{
 			fetch:      newFetch,
 			seq:        req.maxSeq,
 			reqOffsets: req.offsets,
 		}
-		source.broker.client.consumer.addSourceReadyForDraining(req.maxSeq, source)
+		s.cl.consumer.addSourceReadyForDraining(req.maxSeq, s)
 	} else {
-		source.updateOffsets(req.offsets)
+		s.updateOffsets(req.offsets)
 	}
 }
 
@@ -518,7 +487,7 @@ func (source *recordSource) handleReqResp(req *fetchRequest, kresp kmsg.Response
 // error.
 //
 // Recoverable errors are stripped; if a partition has a recoverable error
-// immediately with no records, it should be discarded.
+// with no records, it should be discarded.
 func (o *seqOffsetFrom) processRespPartition(
 	topic string,
 	version int16,
@@ -615,6 +584,15 @@ func (a aborter) shouldAbortBatch(b *kmsg.RecordBatch) bool {
 	return true
 }
 
+func (a aborter) trackAbortedPID(producerID int64) {
+	remaining := a[producerID][1:]
+	if len(remaining) == 0 {
+		delete(a, producerID)
+	} else {
+		a[producerID] = remaining
+	}
+}
+
 //////////////////////////////////////
 // processing records to fetch part //
 //////////////////////////////////////
@@ -659,12 +637,7 @@ func (o *seqOffset) processRecordBatch(
 	}
 
 	if abortBatch && lastRecord != nil && lastRecord.Attrs.IsControl() {
-		remaining := aborter[batch.ProducerID][1:]
-		if len(remaining) == 0 {
-			delete(aborter, batch.ProducerID)
-		} else {
-			aborter[batch.ProducerID] = remaining
-		}
+		aborter.trackAbortedPID(batch.ProducerID)
 	}
 }
 
@@ -678,7 +651,9 @@ func (o *seqOffset) processV1Messages(
 		message := &messages[i]
 		compression := byte(message.Attributes & 0x0003)
 		if compression == 0 {
-			o.processV1Message(topic, fetchPart, message)
+			if !o.processV1Message(topic, fetchPart, message) {
+				return
+			}
 			continue
 		}
 
@@ -695,7 +670,9 @@ func (o *seqOffset) processV1Messages(
 		for i := range innerMessages {
 			innerMessage := &innerMessages[i]
 			innerMessage.Offset = firstOffset + int64(i)
-			o.processV1Message(topic, fetchPart, innerMessage)
+			if !o.processV1Message(topic, fetchPart, innerMessage) {
+				return
+			}
 		}
 	}
 }
@@ -704,17 +681,18 @@ func (o *seqOffset) processV1Message(
 	topic string,
 	fetchPart *FetchPartition,
 	message *kmsg.MessageV1,
-) {
+) bool {
 	if message.Magic != 1 {
 		fetchPart.Err = fmt.Errorf("unknown message magic %d", message.Magic)
-		return
+		return false
 	}
 	if message.Attributes != 0 {
 		fetchPart.Err = fmt.Errorf("unknown attributes on uncompressed message %d", message.Attributes)
-		return
+		return false
 	}
 	record := v1MessageToRecord(topic, fetchPart.Partition, message)
 	o.maybeAddRecord(fetchPart, record, false, false)
+	return true
 }
 
 func (o *seqOffset) processV0Messages(
@@ -727,7 +705,9 @@ func (o *seqOffset) processV0Messages(
 		message := &messages[i]
 		compression := byte(message.Attributes & 0x0003)
 		if compression == 0 {
-			o.processV0Message(topic, fetchPart, message)
+			if !o.processV0Message(topic, fetchPart, message) {
+				return
+			}
 			continue
 		}
 
@@ -744,7 +724,9 @@ func (o *seqOffset) processV0Messages(
 		for i := range innerMessages {
 			innerMessage := &innerMessages[i]
 			innerMessage.Offset = firstOffset + int64(i)
-			o.processV0Message(topic, fetchPart, innerMessage)
+			if !o.processV0Message(topic, fetchPart, innerMessage) {
+				return
+			}
 		}
 	}
 }
@@ -753,17 +735,18 @@ func (o *seqOffset) processV0Message(
 	topic string,
 	fetchPart *FetchPartition,
 	message *kmsg.MessageV0,
-) {
+) bool {
 	if message.Magic != 0 {
 		fetchPart.Err = fmt.Errorf("unknown message magic %d", message.Magic)
-		return
+		return false
 	}
 	if message.Attributes != 0 {
 		fetchPart.Err = fmt.Errorf("unknown attributes on uncompressed message %d", message.Attributes)
-		return
+		return false
 	}
 	record := v0MessageToRecord(topic, fetchPart.Partition, message)
 	o.maybeAddRecord(fetchPart, record, false, false)
+	return true
 }
 
 // maybeAddRecord keeps a record if it is within our range of offsets to keep.
@@ -888,7 +871,7 @@ type fetchRequest struct {
 	offsets    map[string]map[int32]*seqOffsetFrom
 }
 
-func (f *fetchRequest) fetchConsumptionLocked(c *consumption) {
+func (f *fetchRequest) fetchCursorLocked(c *cursor) {
 	if f.offsets == nil {
 		f.offsets = make(map[string]map[int32]*seqOffsetFrom)
 	}
