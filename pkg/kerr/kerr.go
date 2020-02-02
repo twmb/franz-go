@@ -244,4 +244,5 @@ var code2err = map[int16]error{
 	85: NoReassignmentInProgress,
 	86: GroupSubscribedToTopic,
 	87: InvalidRecord,
+	88: UnstableOffsetCommit,
 }
