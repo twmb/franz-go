@@ -99,8 +99,8 @@ func (cl *Client) newBroker(addr string, id int32) *broker {
 
 		reqs: make(chan promisedReq, 10),
 	}
-	br.sink = newSink(&cl.cfg, cl, br)
-	br.source = newSource(&cl.cfg, cl, br)
+	br.sink = newSink(cl, br)
+	br.source = newSource(cl, br)
 	go br.handleReqs()
 
 	return br

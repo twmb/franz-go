@@ -10,9 +10,8 @@ import (
 )
 
 type source struct {
-	cfg *cfg    // client's cfg for easy access
-	b   *broker // the broker this sink belongs to
-	cl  *Client // our owning client, for metadata triggering, context, etc.
+	cl *Client // our owning client, for cfg, metadata triggering, context, etc.
+	b  *broker // the broker this sink belongs to
 
 	inflightSem chan struct{} // capacity of 1
 	fillState   workLoop
@@ -32,14 +31,12 @@ type source struct {
 }
 
 func newSource(
-	cfg *cfg,
 	cl *Client,
 	b *broker,
 ) *source {
 	return &source{
-		cfg: cfg,
-		b:   b,
-		cl:  cl,
+		cl: cl,
+		b:  b,
 
 		inflightSem: make(chan struct{}, 1),
 	}
@@ -293,10 +290,10 @@ func (s *source) unuseAll(reqOffsets map[string]map[int32]*seqOffsetFrom) {
 
 func (s *source) createRequest() (req *fetchRequest, again bool) {
 	req = &fetchRequest{
-		maxWait:        s.cfg.maxWait,
-		maxBytes:       s.cfg.maxBytes,
-		maxPartBytes:   s.cfg.maxPartBytes,
-		isolationLevel: s.cfg.isolationLevel,
+		maxWait:        s.cl.cfg.maxWait,
+		maxBytes:       s.cl.cfg.maxBytes,
+		maxPartBytes:   s.cl.cfg.maxPartBytes,
+		isolationLevel: s.cl.cfg.isolationLevel,
 	}
 
 	s.mu.Lock()
@@ -367,7 +364,7 @@ func (s *source) fill() {
 
 func (s *source) backoff() {
 	s.consecutiveFailures++
-	after := time.NewTimer(s.cfg.retryBackoff(s.consecutiveFailures))
+	after := time.NewTimer(s.cl.cfg.retryBackoff(s.consecutiveFailures))
 	defer after.Stop()
 	select {
 	case <-after.C:
@@ -431,7 +428,7 @@ func (s *source) handleReqResp(req *fetchRequest, kresp kmsg.Response, err error
 			// the end. We respect that.
 			if fetchPart.Err == kerr.OffsetOutOfRange {
 				partOffset.from.setLoadingOffsets(partOffset.seq)
-				reloadOffsets.setTopicPartForList(topic, partition, s.cfg.resetOffset)
+				reloadOffsets.setTopicPartForList(topic, partition, s.cl.cfg.resetOffset)
 
 			} else if fetchPart.Err == kerr.FencedLeaderEpoch {
 				// With fenced leader epoch, we notify an error only if

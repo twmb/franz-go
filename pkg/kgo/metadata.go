@@ -268,8 +268,7 @@ func (cl *Client) fetchTopicMetadata(reqTopics []string) (map[string]*topicParti
 				}
 
 				p.records = &recBuf{
-					cfg: &cl.cfg,
-					cl:  cl,
+					cl: cl,
 
 					topic:     topicMeta.Topic,
 					partition: partMeta.Partition,

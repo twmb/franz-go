@@ -12,9 +12,8 @@ import (
 )
 
 type sink struct {
-	cfg *cfg    // client's cfg for easy access
-	b   *broker // the broker this sink belongs to
-	cl  *Client // our owning client, for metadata triggering, context, etc.
+	cl *Client // our owning client, for cfg, metadata triggering, context, etc.
+	b  *broker // the broker this sink belongs to
 
 	// inflightSem controls the number of concurrent produce requests.  We
 	// start with a limit of 1, which covers Kafka v0.11.0.0. On the first
@@ -51,7 +50,6 @@ type sink struct {
 }
 
 func newSink(
-	cfg *cfg,
 	cl *Client,
 	b *broker,
 ) *sink {
@@ -66,19 +64,18 @@ func newSink(
 		4 // topics array length
 
 	s := &sink{
-		cfg: cfg,
-		b:   b,
-		cl:  cl,
+		cl: cl,
+		b:  b,
 
 		baseWireLength: messageRequestOverhead + produceRequestOverhead,
 	}
 	s.inflightSem.Store(make(chan struct{}, 1))
 
-	if cfg.txnID != nil {
-		s.baseWireLength += int32(len(*cfg.txnID))
+	if cl.cfg.txnID != nil {
+		s.baseWireLength += int32(len(*cl.cfg.txnID))
 	}
-	if cfg.id != nil {
-		s.baseWireLength += int32(len(*cfg.id))
+	if cl.cfg.id != nil {
+		s.baseWireLength += int32(len(*cl.cfg.id))
 	}
 
 	return s
@@ -88,9 +85,9 @@ func newSink(
 // and whether there are more records to create more requests immediately.
 func (s *sink) createReq() (*produceRequest, *kmsg.AddPartitionsToTxnRequest, bool) {
 	req := &produceRequest{
-		txnID:   s.cfg.txnID,
-		acks:    s.cfg.acks.val,
-		timeout: int32(s.cfg.requestTimeout.Milliseconds()),
+		txnID:   s.cl.cfg.txnID,
+		acks:    s.cl.cfg.acks.val,
+		timeout: int32(s.cl.cfg.requestTimeout.Milliseconds()),
 		batches: make(seqRecBatches, 5),
 
 		compressor: s.cl.compressor,
@@ -98,7 +95,7 @@ func (s *sink) createReq() (*produceRequest, *kmsg.AddPartitionsToTxnRequest, bo
 
 	var (
 		wireLength      = s.baseWireLength
-		wireLengthLimit = s.cfg.maxBrokerWriteBytes
+		wireLengthLimit = s.cl.cfg.maxBrokerWriteBytes
 
 		moreToDrain bool
 
@@ -158,7 +155,7 @@ func (s *sink) createReq() (*produceRequest, *kmsg.AddPartitionsToTxnRequest, bo
 		// whether there is more to drain. If this recbuf has more than
 		// one batch ready, then yes, more to drain. Otherwise, we
 		// re-linger unless we are flushing.
-		if s.cfg.linger > 0 {
+		if s.cl.cfg.linger > 0 {
 			if len(recBuf.batches) > recBuf.batchDrainIdx+1 {
 				moreToDrain = true
 			} else if len(recBuf.batches) == recBuf.batchDrainIdx+1 {
@@ -233,7 +230,7 @@ func (s *sink) maybeBackoff() {
 	s.cl.triggerUpdateMetadata() // as good a time as any
 
 	tries := int(atomic.AddUint32(&s.consecutiveFailures, 1))
-	after := time.NewTimer(s.cfg.retryBackoff(tries))
+	after := time.NewTimer(s.cl.cfg.retryBackoff(tries))
 	defer after.Stop()
 
 	select {
@@ -266,7 +263,7 @@ func (s *sink) drain() {
 	// helps when a high volume new sink began draining with no linger;
 	// rather than immediately eating just one record, we allow it to
 	// buffer a bit before we loop draining.
-	if s.cfg.linger == 0 {
+	if s.cl.cfg.linger == 0 {
 		time.Sleep(5 * time.Millisecond)
 	}
 
@@ -386,7 +383,7 @@ func (s *sink) doTxnReq(
 func (s *sink) requeueUnattemptedReq(req *produceRequest) {
 	var maybeDrain bool
 	req.batches.onEachFirstBatchWhileBatchOwnerLocked(func(batch seqRecBatch) {
-		if batch.isTimedOut(s.cfg.recordTimeout) {
+		if batch.isTimedOut(s.cl.cfg.recordTimeout) {
 			batch.owner.lockedFailAllRecords(ErrRecordTimeout)
 		}
 		batch.owner.resetBatchDrainIdx()
@@ -528,7 +525,7 @@ func (s *sink) handleReqResp(req *produceRequest, resp kmsg.Response, err error)
 			switch {
 			case kerr.IsRetriable(err) &&
 				err != kerr.CorruptMessage &&
-				batch.tries < s.cfg.retries:
+				batch.tries < s.cl.cfg.retries:
 				reqRetry.addSeqBatch(topic, partition, batch)
 
 			case err == kerr.OutOfOrderSequenceNumber,
@@ -549,13 +546,13 @@ func (s *sink) handleReqResp(req *produceRequest, resp kmsg.Response, err error)
 				// that's no better than just a config knob that allows
 				// the user to continue (our stopOnDataLoss flag), so
 				// we do not try any logic in the idempotent case.
-				if s.cfg.stopOnDataLoss || err == kerr.UnknownProducerID && s.cl.producer.idVersion >= 3 && s.cfg.txnID != nil {
+				if s.cl.cfg.stopOnDataLoss || err == kerr.UnknownProducerID && s.cl.producer.idVersion >= 3 && s.cl.cfg.txnID != nil {
 					s.cl.failProducerID(req.producerID, req.producerEpoch, err)
 					s.cl.finishBatch(batch.recBatch, partition, rPartition.BaseOffset, err)
 					continue
 				}
-				if s.cfg.onDataLoss != nil {
-					s.cfg.onDataLoss(topic, partition)
+				if s.cl.cfg.onDataLoss != nil {
+					s.cl.cfg.onDataLoss(topic, partition)
 				}
 				batch.owner.resetSeq()
 				reqRetry.addSeqBatch(topic, partition, batch)
@@ -632,7 +629,7 @@ func (cl *Client) finishBatch(batch *recBatch, partition int32, baseOffset int64
 func (s *sink) handleRetryBatches(retry seqRecBatches) {
 	var needsMetaUpdate bool
 	retry.onEachFirstBatchWhileBatchOwnerLocked(func(batch seqRecBatch) {
-		if batch.isTimedOut(s.cfg.recordTimeout) {
+		if batch.isTimedOut(s.cl.cfg.recordTimeout) {
 			batch.owner.lockedFailAllRecords(ErrRecordTimeout)
 		}
 		batch.owner.resetBatchDrainIdx()
@@ -679,8 +676,7 @@ func (s *sink) removeRecBuf(rm *recBuf) {
 // being drained by a sink. This is only not drained if the partition has
 // a load error and thus does not a have a sink to be drained into.
 type recBuf struct {
-	cfg *cfg
-	cl  *Client // for record finishing
+	cl *Client // for cfg, record finishing
 
 	topic     string
 	partition int32
@@ -810,7 +806,7 @@ func (recBuf *recBuf) bufferRecord(pr promisedRec, abortOnNewBatch bool) bool {
 			}
 		}
 
-		if batch.tries == 0 && newBatchLength <= recBuf.cfg.maxRecordBatchBytes {
+		if batch.tries == 0 && newBatchLength <= recBuf.cl.cfg.maxRecordBatchBytes {
 			newBatch = false
 			batch.appendRecord(pr, recordNumbers)
 		}
@@ -829,7 +825,7 @@ func (recBuf *recBuf) bufferRecord(pr promisedRec, abortOnNewBatch bool) bool {
 		return true
 	}
 
-	if recBuf.cfg.linger == 0 {
+	if recBuf.cl.cfg.linger == 0 {
 		if drainBatch {
 			recBuf.sink.maybeDrain()
 		}
@@ -859,7 +855,7 @@ func (recBuf *recBuf) lockedMaybeStartLinger() bool {
 	if atomic.LoadInt32(&recBuf.cl.producer.flushing) == 1 {
 		return false
 	}
-	recBuf.lingering = time.AfterFunc(recBuf.cfg.linger, recBuf.sink.maybeDrain)
+	recBuf.lingering = time.AfterFunc(recBuf.cl.cfg.linger, recBuf.sink.maybeDrain)
 	return true
 }
 
