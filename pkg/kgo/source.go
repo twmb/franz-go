@@ -47,7 +47,7 @@ func newSource(
 
 func (s *source) addCursor(add *cursor) {
 	s.mu.Lock()
-	add.allCursorsIdx = len(s.cursors)
+	add.cursorsIdx = len(s.cursors)
 	s.cursors = append(s.cursors, add)
 	s.mu.Unlock()
 
@@ -60,13 +60,13 @@ func (s *source) removeCursor(rm *cursor) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if rm.allCursorsIdx != len(s.cursors)-1 {
-		s.cursors[rm.allCursorsIdx], s.cursors[len(s.cursors)-1] =
+	if rm.cursorsIdx != len(s.cursors)-1 {
+		s.cursors[rm.cursorsIdx], s.cursors[len(s.cursors)-1] =
 			s.cursors[len(s.cursors)-1], nil
 
-		s.cursors[rm.allCursorsIdx].allCursorsIdx = rm.allCursorsIdx
+		s.cursors[rm.cursorsIdx].cursorsIdx = rm.cursorsIdx
 	} else {
-		s.cursors[rm.allCursorsIdx] = nil // do not let the memory hang around
+		s.cursors[rm.cursorsIdx] = nil // do not let the memory hang around
 	}
 
 	s.cursors = s.cursors[:len(s.cursors)-1]
@@ -88,8 +88,8 @@ type cursor struct {
 
 	mu sync.Mutex
 
-	source        *source
-	allCursorsIdx int
+	source     *source
+	cursorsIdx int
 
 	// seqOffset is our epoch/offset that we are consuming, with a
 	// corresponding "seq" from group assignments / manual assignments.

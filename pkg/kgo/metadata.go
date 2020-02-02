@@ -183,22 +183,19 @@ func (cl *Client) updateMetadata() (needsRetry bool, err error) {
 	// We have to add those topics to our topics map so that we can
 	// save their information in the merge just below.
 	if all {
-		var hasNew bool
+		var cloned bool
 		cl.topicsMu.Lock()
 		topics = cl.loadTopics()
 		for topic := range meta {
 			if _, exists := topics[topic]; !exists {
-				hasNew = true
-				break
+				if !cloned {
+					topics = cl.cloneTopics()
+					cloned = true
+				}
+				topics[topic] = newTopicPartitions(topic)
 			}
 		}
-		if hasNew {
-			topics = cl.cloneTopics()
-			for topic := range meta {
-				if _, exists := topics[topic]; !exists {
-					topics[topic] = newTopicPartitions(topic)
-				}
-			}
+		if cloned {
 			cl.topics.Store(topics)
 		}
 		cl.topicsMu.Unlock()
@@ -259,34 +256,9 @@ func (cl *Client) fetchTopicMetadata(reqTopics []string) (map[string]*topicParti
 			}
 
 			p := &topicPartition{
-				loadErr: kerr.ErrorForCode(partMeta.ErrorCode),
-
+				loadErr:     kerr.ErrorForCode(partMeta.ErrorCode),
 				leader:      partMeta.Leader,
 				leaderEpoch: leaderEpoch,
-
-				records: &recBuf{
-					cfg: &cl.cfg,
-					cl:  cl,
-
-					topic:     topicMeta.Topic,
-					partition: partMeta.Partition,
-
-					recBufsIdx: -1, // required, see below
-				},
-
-				cursor: &cursor{
-					topic:     topicMeta.Topic,
-					partition: partMeta.Partition,
-
-					keepControl: cl.cfg.keepControl,
-
-					allCursorsIdx: -1, // same, see below
-					seqOffset: seqOffset{
-						offset:             -1, // required to not consume until needed
-						currentLeaderEpoch: leaderEpoch,
-						lastConsumedEpoch:  -1, // required sentinel
-					},
-				},
 			}
 
 			broker, exists := cl.brokers[p.leader]
@@ -294,6 +266,31 @@ func (cl *Client) fetchTopicMetadata(reqTopics []string) (map[string]*topicParti
 				if p.loadErr == nil {
 					p.loadErr = &errUnknownBrokerForPartition{topicMeta.Topic, partMeta.Partition, p.leader}
 				}
+
+				p.records = &recBuf{
+					cfg: &cl.cfg,
+					cl:  cl,
+
+					topic:     topicMeta.Topic,
+					partition: partMeta.Partition,
+
+					recBufsIdx: -1,
+				}
+
+				p.cursor = &cursor{
+					topic:     topicMeta.Topic,
+					partition: partMeta.Partition,
+
+					keepControl: cl.cfg.keepControl,
+
+					cursorsIdx: -1,
+					seqOffset: seqOffset{
+						offset:             -1, // required to not consume until needed
+						currentLeaderEpoch: leaderEpoch,
+						lastConsumedEpoch:  -1, // required sentinel
+					},
+				}
+
 			} else {
 				p.records.sink = broker.sink
 				p.cursor.source = broker.source
@@ -403,7 +400,7 @@ func (cl *Client) mergeTopicPartitions(l *topicPartitions, r *topicPartitionsDat
 		newTP.cursor.clearFailing()
 	}
 
-	// Anything left with a negative allPartsRecsIdx is a new topic
+	// Anything left with a negative recBufsIdx / cursorsIdx is a new topic
 	// partition. We use this to add the new tp's records to its sink.
 	// Same reasoning applies to the cursor offset.
 	for _, newTP := range r.all {
@@ -415,8 +412,6 @@ func (cl *Client) mergeTopicPartitions(l *topicPartitions, r *topicPartitionsDat
 		}
 		if newTP.records.recBufsIdx == -1 {
 			newTP.records.sink.addRecBuf(newTP.records)
-		}
-		if newTP.cursor.allCursorsIdx == -1 { // should be true if recBufsIdx == -1
 			newTP.cursor.source.addCursor(newTP.cursor)
 		}
 	}
@@ -428,7 +423,7 @@ func (cl *Client) mergeTopicPartitions(l *topicPartitions, r *topicPartitionsDat
 	// re-trigger a metadata update and have some logic collide with our
 	// deletion cleanup.
 	if len(deleted) > 0 {
-		handleDeletedPartitions(deleted)
+		cl.handleDeletedPartitions(deleted)
 	}
 
 	// The left writable map needs no further updates: all changes above
@@ -444,20 +439,11 @@ func (cl *Client) mergeTopicPartitions(l *topicPartitions, r *topicPartitionsDat
 // We can encounter a deleted partition if a topic is deleted and recreated
 // with fewer partitions. We have to clear the cursors so that if more
 // partitions are reencountered in the future, they will be used.
-func handleDeletedPartitions(deleted []*topicPartition) {
+func (cl *Client) handleDeletedPartitions(deleted []*topicPartition) {
 	for _, d := range deleted {
-		sink := d.records.sink
-		sink.removeRecBuf(d.records)
-		for _, batch := range d.records.batches {
-			for i, pnr := range batch.records {
-				sink.cl.finishRecordPromise(pnr.promisedRec, ErrPartitionDeleted)
-				batch.records[i] = noPNR
-			}
-			emptyRecordsPool.Put(&batch.records)
-		}
-
-		source := d.cursor.source
-		source.removeCursor(d.cursor)
-		source.cl.consumer.deletePartition(d)
+		d.records.sink.removeRecBuf(d.records)
+		d.records.failAllRecords(ErrPartitionDeleted)
+		d.cursor.source.removeCursor(d.cursor)
+		cl.consumer.deletePartition(d)
 	}
 }
