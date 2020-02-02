@@ -3,8 +3,6 @@ package kgo
 import (
 	"errors"
 	"fmt"
-
-	"github.com/twmb/kafka-go/pkg/kerr"
 )
 
 var (
@@ -27,6 +25,10 @@ var (
 	// ErrBrokerDead is a temporary error returned when a broker chosen for
 	// a request is stopped due to a concurrent metadata response.
 	ErrBrokerDead = errors.New("broker has died - the broker id either migrated or no longer exists")
+
+	// ErrNoDial is a temporary error returned when a dial to a broker
+	// errors.
+	ErrNoDial = errors.New("unable to dial the broker")
 
 	// ErrConnDead is a temporary error returned when any read or write to
 	// a broker connection errors.
@@ -110,19 +112,13 @@ func (e *ErrDataLoss) Error() string {
 func isRetriableBrokerErr(err error) bool {
 	switch err {
 	case ErrBrokerDead,
+		ErrNoDial,
 		ErrConnDead,
 		ErrCorrelationIDMismatch,
 		ErrInvalidRespSize:
 		return true
 	}
 	return false
-}
-
-func isRetriableErr(err error) bool {
-	if err, ok := err.(*kerr.Error); ok {
-		return kerr.IsRetriable(err)
-	}
-	return isRetriableBrokerErr(err)
 }
 
 type errUnknownBrokerForPartition struct {

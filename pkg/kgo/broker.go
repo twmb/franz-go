@@ -324,7 +324,7 @@ func (b *broker) connect() (net.Conn, error) {
 	conn, err := b.cl.cfg.dialFn(b.addr)
 	if err != nil {
 		if _, ok := err.(net.Error); ok {
-			return nil, ErrConnDead
+			return nil, ErrNoDial
 		}
 		return nil, err
 	}

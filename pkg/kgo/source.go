@@ -145,7 +145,7 @@ func (c *cursor) use() *seqOffsetFrom {
 // needs to be consumed.
 func (c *cursor) triggerConsume() {
 	if c.offset != -1 && c.source != nil { // source could be nil if we loaded a failing partition
-		c.source.maybeBeginConsuming()
+		c.source.maybeConsume()
 	}
 }
 
@@ -332,7 +332,7 @@ func (s *source) createRequest() (req *fetchRequest, again bool) {
 	return req, again
 }
 
-func (s *source) maybeBeginConsuming() {
+func (s *source) maybeConsume() {
 	if s.fillState.maybeBegin() {
 		go s.fill()
 	}

@@ -44,7 +44,7 @@ type Client struct {
 	coordinatorsMu sync.Mutex
 	coordinators   map[coordinatorKey]int32
 
-	topicsMu sync.Mutex
+	topicsMu sync.Mutex   // locked to prevent concurrent updates; reads are always atomic
 	topics   atomic.Value // map[string]*topicPartitions
 
 	// unknownTopics buffers all records for topics that are not loaded
@@ -63,6 +63,8 @@ var stddialer = net.Dialer{Timeout: 10 * time.Second}
 
 func stddial(addr string) (net.Conn, error) { return stddialer.Dial("tcp", addr) }
 
+// NewClient returns a new Kafka client with the given options or an error if
+// the options are invalid.
 func NewClient(opts ...Opt) (*Client, error) {
 	cfg := defaultCfg()
 	for _, opt := range opts {
@@ -141,7 +143,7 @@ func (cl *Client) broker() *broker {
 	cl.brokersMu.Lock()
 	defer cl.brokersMu.Unlock()
 
-	if cl.anyBrokerIdx >= len(cl.anyBroker) {
+	if cl.anyBrokerIdx >= len(cl.anyBroker) { // metadata update lost us brokers
 		cl.anyBrokerIdx = 0
 	}
 
@@ -185,13 +187,14 @@ start:
 	broker := cl.broker()
 	req := &kmsg.MetadataRequest{
 		AllowAutoTopicCreation: cl.cfg.allowAutoTopicCreation,
+		Topics:                 make([]kmsg.MetadataRequestTopic, 0, len(topics)),
 	}
 	for _, topic := range topics {
 		req.Topics = append(req.Topics, kmsg.MetadataRequestTopic{topic})
 	}
 	kresp, err := broker.waitResp(ctx, req)
 	if err != nil {
-		if isRetriableBrokerErr(err) && tries < cl.cfg.retries {
+		if kerr.IsRetriable(err) && tries < cl.cfg.retries || isRetriableBrokerErr(err) && tries < cl.cfg.brokerErrRetries {
 			if ok := cl.waitTries(ctx, tries); ok {
 				goto start
 			}
@@ -276,8 +279,8 @@ func (cl *Client) Close() {
 	cl.stopBrokers = true
 	for _, broker := range cl.brokers {
 		broker.stopForever()
-		broker.sink.maybeDrain()            // awaken anything in backoff
-		broker.source.maybeBeginConsuming() // same
+		broker.sink.maybeDrain()     // awaken anything in backoff
+		broker.source.maybeConsume() // same
 	}
 	cl.brokersMu.Unlock()
 
@@ -306,7 +309,9 @@ func (cl *Client) Close() {
 // If the fetch errors, this will return an unknown controller error.
 //
 // If the request is a group or transaction coordinator request, this will
-// issue the request to the appropriate group or transaction coordinator.
+// issue the request to the appropriate group or transaction coordinator.  If
+// the request fails with a coordinator loading error, this internally retries
+// the request.
 //
 // For group coordinator requests, if the request contains multiple groups
 // (delete groups, describe groups), the request will be split into one request
@@ -314,12 +319,16 @@ func (cl *Client) Close() {
 // will be issued, and then all responses are merged. Only if all requests
 // error is an error returned.
 //
+// For transaction requests, the request is issued to the transaction
+// coordinator. However, if the request is an init producer ID request and the
+// request has no transactional ID, this goes to any broker.
+//
 // In short, this tries to do the correct thing depending on what type of
 // request is being issued.
 //
-// The passed context can be used to cancel a request and return early.
-// Note that if the request is not canceled before it is written to Kafka,
-// you may just end up canceling and not receiving the response to what Kafka
+// The passed context can be used to cancel a request and return early. Note
+// that if the request is not canceled before it is written to Kafka, you may
+// just end up canceling and not receiving the response to what Kafka
 // inevitably does.
 func (cl *Client) Request(ctx context.Context, req kmsg.Request) (kmsg.Response, error) {
 	ctx, cancel := context.WithCancel(ctx)
@@ -369,7 +378,7 @@ start:
 		resp, err = cl.broker().waitResp(ctx, req)
 	}
 
-	if (kerr.IsRetriable(err) || isRetriableBrokerErr(err)) && tries < cl.cfg.retries {
+	if kerr.IsRetriable(err) && tries < cl.cfg.retries || isRetriableBrokerErr(err) && tries < cl.cfg.brokerErrRetries {
 		if ok := cl.waitTries(ctx, tries); ok {
 			goto start
 		}
@@ -399,7 +408,7 @@ start:
 	if id = atomic.LoadInt32(&cl.controllerID); id < 0 {
 		tries++
 		if err := cl.fetchBrokerMetadata(ctx); err != nil {
-			if isRetriableBrokerErr(err) && tries < cl.cfg.retries {
+			if kerr.IsRetriable(err) && tries < cl.cfg.retries || isRetriableBrokerErr(err) && tries < cl.cfg.brokerErrRetries {
 				if ok := cl.waitTries(ctx, tries); ok {
 					goto start
 				}
@@ -463,7 +472,7 @@ start:
 
 	if err != nil {
 		cl.coordinatorsMu.Unlock()
-		if isRetriableErr(err) && tries < cl.cfg.retries {
+		if kerr.IsRetriable(err) && tries < cl.cfg.retries || isRetriableBrokerErr(err) && tries < cl.cfg.brokerErrRetries {
 			if ok := cl.waitTries(ctx, tries); ok {
 				goto start
 			}

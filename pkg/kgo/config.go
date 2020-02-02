@@ -47,8 +47,9 @@ type cfg struct {
 	seedBrokers []string
 	maxVersions kversion.Versions
 
-	retryBackoff func(int) time.Duration
-	retries      int
+	retryBackoff     func(int) time.Duration
+	retries          int
+	brokerErrRetries int
 
 	maxBrokerWriteBytes int32
 
@@ -116,8 +117,9 @@ func defaultCfg() cfg {
 
 		seedBrokers: []string{"127.0.0.1"},
 
-		retryBackoff: func(int) time.Duration { return 100 * time.Millisecond },
-		retries:      math.MaxInt32, // effectively unbounded
+		retryBackoff:     func(int) time.Duration { return 100 * time.Millisecond },
+		retries:          math.MaxInt32, // effectively unbounded
+		brokerErrRetries: 50,
 
 		maxBrokerWriteBytes: 100 << 20, // Kafka socket.request.max.bytes default is 100<<20
 
@@ -198,6 +200,21 @@ func RetryBackoff(backoff func(int) time.Duration) Opt {
 // This setting applies to all types of requests.
 func RequestRetries(n int) Opt {
 	return clientOpt{func(cfg *cfg) { cfg.retries = n }}
+}
+
+// BrokerErrRetries sets the number of tries that are allowed for requests,
+// overriding the default 50.
+//
+// These retries are for cases where a connection to a broker fails during a
+// request. Generally, you just must retry these requests anyway. However, if
+// Kafka cannot understand our request, it closes a connection deliberately.
+// Since the client cannot differentiate this case, we upper bound the number
+// of times we allow a connection to be cut before we call it quits on the
+// request.
+//
+// This setting applies to all but fetch and produce requests.
+func BrokerErrRetries(n int) Opt {
+	return clientOpt{func(cfg *cfg) { cfg.brokerErrRetries = n }}
 }
 
 // AutoTopicCreation enables topics to be auto created if they do
