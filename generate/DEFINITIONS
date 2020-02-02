@@ -1012,8 +1012,12 @@ TxnMetadataValue => not top level, with version field
   Version: int16
   // ProducerID is the ID in use by the transactional ID.
   ProducerID: int64
+  // LastProducerID is the last ID in use for a producer; see KIP-360.
+  LastProducerID: int64 // v1+
   // ProducerEpoch is the epoch associated with the producer ID.
   ProducerEpoch: int16
+  // LastProducerEpoch is the last epoch in use for a producer; see KIP-360.
+  LastProducerEpoch: int16 // v1+
   // TimeoutMillis is the timeout of this transaction in milliseconds.
   TimeoutMillis: int32
   // State is the state this transaction is in,
@@ -1136,7 +1140,7 @@ OffsetCommitResponse =>
 
 // OffsetFetchRequest requests the most recent committed offsets for topic
 // partitions in a group.
-OffsetFetchRequest => key 9, max version 6, flexible v6+, group coordinator
+OffsetFetchRequest => key 9, max version 7, flexible v6+, group coordinator
   // Group is the group to fetch offsets for.
   Group: string
   // Topics contains topics to fetch offets for. Version 2+ allows this to be
@@ -1146,6 +1150,11 @@ OffsetFetchRequest => key 9, max version 6, flexible v6+, group coordinator
     Topic: string
     // Partitions in a list of partitions in a group to fetch offsets for.
     Partitions: [int32]
+  // RequireStable signifies whether the broker should wait on returning
+  // unstable offsets, instead setting a retriable error on the relevant
+  // unstable partitions (UNSTABLE_OFFSET_COMMIT). See KIP-447 for more
+  // details.
+  RequireStable: bool // v7+
 
 // OffsetFetchResponse is returned from an OffsetFetchRequest.
 OffsetFetchResponse =>
@@ -1191,6 +1200,9 @@ OffsetFetchResponse =>
       //
       // UNKNOWN_TOPIC_OR_PARTITION is returned if the requested topic or partition
       // is unknown.
+      //
+      // UNSTABLE_OFFSET_COMMIT is returned for v7+ if the request set RequireStable.
+      // See KIP-447 for more details.
       ErrorCode: int16
   // ErrorCode is a top level error code that applies to all topic/partitions.
   // This will be any group error.
@@ -1661,7 +1673,7 @@ ListGroupsResponse =>
 
 // SASLHandshakeRequest begins the sasl authentication flow. Note that Kerberos
 // GSSAPI authentication has its own unique flow.
-SASLHandshakeRequest => key 17, max version 1
+SASLHandshakeRequest => key 17, max version 2, flexible v2+
   // Mechanism is the mechanism to use for the sasl handshake (e.g., "PLAIN").
   //
   // For version 0, if this mechanism is supported, it is expected that the
@@ -2266,7 +2278,7 @@ WriteTxnMarkersResponse =>
 // TxnOffsetCommitRequest sends offsets that are a part of this transaction
 // to be committed once the transaction itself finishes. This effectively
 // replaces OffsetCommitRequest for when using transactions.
-TxnOffsetCommitRequest => key 28, max version 2, group coordinator
+TxnOffsetCommitRequest => key 28, max version 3, flexible v3+, group coordinator
   // TransactionalID is the transactional ID to use for this request.
   TransactionalID: string
   // Group is the group consumed in this transaction and to be used for
@@ -2278,6 +2290,12 @@ TxnOffsetCommitRequest => key 28, max version 2, group coordinator
   // ProducerEpoch is the producer epoch of the client for this transactional ID
   // as received from InitProducerID.
   ProducerEpoch: int16
+  // Generation is the group generation this heartbeat is for.
+  Generation: int32 // v3+
+  // MemberID is the member ID this member is for.
+  MemberID: string // v3+
+  // InstanceID is the instance ID of this member in the group (KIP-345, KIP-447).
+  InstanceID: nullable-string // v3+
   // Topics are topics to add for pending commits.
   Topics: [=>]
     // Topic is a topic to add for a pending commit.
@@ -2361,7 +2379,7 @@ TxnOffsetCommitResponse =>
 // "types" of filters in this request: the resource filter and the entry
 // filter, with entries corresponding to users. The first three fields form the
 // resource filter, the last four the entry filter.
-DescribeACLsRequest => key 29, max version 1, admin
+DescribeACLsRequest => key 29, max version 2, flexible v2+, admin
   // ResourceType is the type of resource to describe.
   //
   // UNKNOWN, 0, is unknown; you do not describe unknown types. Kafka replies
@@ -2806,7 +2824,7 @@ DescribeLogDirsResponse =>
 // this wrapping is that Kafka can indicate errors in the response, rather than
 // just closing the connection. Additionally, the response allows for further
 // extension fields.
-SASLAuthenticateRequest => key 36, max version 1
+SASLAuthenticateRequest => key 36, max version 2, flexible v2+
   // SASLAuthBytes contains bytes for a SASL client request.
   SASLAuthBytes: bytes
 
@@ -2825,7 +2843,7 @@ SASLAuthenticateResponse =>
   SessionLifetimeMillis: int64 // v1+
 
 // CreatePartitionsRequest creates additional partitions for topics.
-CreatePartitionsRequest => key 37, max version 1, admin
+CreatePartitionsRequest => key 37, max version 2, flexible v2+, admin
   // Topics contains topics to create partitions for.
   Topics: [=>]
     // Topic is a topic for which to create additional partitions for.
@@ -2951,7 +2969,7 @@ CreateDelegationTokenResponse =>
 // RenewDelegationTokenRequest is a request to renew a delegation token that
 // has not yet hit its max timestamp. Note that a client using a token cannot
 // renew its own token.
-RenewDelegationTokenRequest => key 39, max version 1, admin
+RenewDelegationTokenRequest => key 39, max version 2, flexible v2+, admin
   // HMAC is the HMAC of the token to be renewed.
   HMAC: bytes
   // RenewTimeMillis is how long to renew the token for. If -1, Kafka uses its
@@ -2975,7 +2993,7 @@ RenewDelegationTokenResponse =>
 // ExpireDelegationTokenRequest is a request to change the expiry timestamp
 // of a delegation token. Note that a client using a token cannot expire its
 // own token.
-ExpireDelegationTokenRequest => key 40, max version 1, admin
+ExpireDelegationTokenRequest => key 40, max version 2, flexible v2+, admin
   // HMAC is the HMAC of the token to change the expiry timestamp of.
   HMAC: bytes
   // ExpiryPeriodMillis changes the delegation token's expiry timestamp to
@@ -3002,7 +3020,7 @@ ExpireDelegationTokenResponse =>
   ThrottleMillis: int32
 
 // DescribeDelegationTokenRequest is a request to describe delegation tokens.
-DescribeDelegationTokenRequest => key 41, max version 1, admin
+DescribeDelegationTokenRequest => key 41, max version 2, flexible v2+, admin
   // Owners contains owners to describe delegation tokens for, or null for all.
   // If non-null, only tokens created from a matching principal type, name
   // combination are printed.

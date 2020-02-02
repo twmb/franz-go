@@ -25,10 +25,10 @@ type promisedReq struct {
 }
 
 type promisedResp struct {
-	correlationID int32
-	flexible      bool
-	resp          kmsg.Response
-	promise       func(kmsg.Response, error)
+	corrID   int32
+	flexible bool
+	resp     kmsg.Response
+	promise  func(kmsg.Response, error)
 }
 
 type waitingResp struct {
@@ -39,7 +39,7 @@ type waitingResp struct {
 
 // broker manages the concept how a client would interact with a broker.
 type broker struct {
-	client *Client
+	cl *Client
 
 	// id and addr are the Kafka broker ID and addr for this broker.
 	id   int32
@@ -57,15 +57,14 @@ type broker struct {
 	cxnProduce *brokerCxn
 	cxnFetch   *brokerCxn
 
-	// recordSink and recordSource exist so that metadata updates can
-	// copy these pointers to a topicPartition's record's sink field
-	// and consumption's source field.
+	// sink and source exist so that metadata updates can copy these
+	// pointers to a topicPartition's record's sink field and consumption's
+	// source field.
 	//
-	// Brokers are created with these two fields initialized; when
-	// a topic partition wants to use the broker, it copies these
-	// pointers.
-	recordSink   *recordSink
-	recordSource *recordSource
+	// Brokers are created with these two fields initialized; when a topic
+	// partition wants to use the broker, it copies these pointers.
+	sink   *sink
+	source *source
 
 	// seqResps, guarded by seqRespsMu, contains responses that must be
 	// handled sequentially. These responses are handled asyncronously,
@@ -91,17 +90,17 @@ func unknownSeedID(seedNum int) int32 {
 	return int32(math.MinInt32 + seedNum)
 }
 
-func (c *Client) newBroker(addr string, id int32) *broker {
+func (cl *Client) newBroker(addr string, id int32) *broker {
 	br := &broker{
-		client: c,
+		cl: cl,
 
 		id:   id,
 		addr: addr,
 
 		reqs: make(chan promisedReq, 10),
 	}
-	br.recordSink = newRecordSink(br)
-	br.recordSource = newRecordSource(br)
+	br.sink = newSink(cl, br)
+	br.source = newSource(cl, br)
 	go br.handleReqs()
 
 	return br
@@ -211,15 +210,9 @@ func (b *broker) waitResp(ctx context.Context, req kmsg.Request) (kmsg.Response,
 // If any of these steps fail, the promise is called with the relevant error.
 func (b *broker) handleReqs() {
 	defer func() {
-		for _, cxn := range []*brokerCxn{
-			b.cxnNormal,
-			b.cxnProduce,
-			b.cxnFetch,
-		} {
-			if cxn != nil {
-				cxn.die()
-			}
-		}
+		b.cxnNormal.die()
+		b.cxnProduce.die()
+		b.cxnFetch.die()
 	}()
 
 	for pr := range b.reqs {
@@ -231,14 +224,14 @@ func (b *broker) handleReqs() {
 		}
 
 		if int(req.Key()) > len(cxn.versions[:]) ||
-			b.client.cfg.maxVersions != nil &&
-				int(req.Key()) >= len(b.client.cfg.maxVersions) {
+			b.cl.cfg.maxVersions != nil &&
+				int(req.Key()) >= len(b.cl.cfg.maxVersions) {
 			pr.promise(nil, ErrUnknownRequestKey)
 			continue
 		}
 		ourMax := req.MaxVersion()
-		if b.client.cfg.maxVersions != nil {
-			userMax := b.client.cfg.maxVersions[req.Key()]
+		if b.cl.cfg.maxVersions != nil {
+			userMax := b.cl.cfg.maxVersions[req.Key()]
 			if userMax < ourMax {
 				ourMax = userMax
 			}
@@ -276,7 +269,7 @@ func (b *broker) handleReqs() {
 		default:
 		}
 
-		correlationID, err := cxn.writeRequest(req)
+		corrID, err := cxn.writeRequest(req)
 		if err != nil {
 			pr.promise(nil, err)
 			cxn.die()
@@ -284,13 +277,25 @@ func (b *broker) handleReqs() {
 		}
 
 		cxn.waitResp(promisedResp{
-			correlationID,
+			corrID,
 			req.IsFlexible(),
 			req.ResponseKind(),
 			pr.promise,
 		})
 	}
 }
+
+// bufPool is used to reuse issued-request buffers across writes to brokers.
+type bufPool struct{ p *sync.Pool }
+
+func newBufPool() bufPool {
+	return bufPool{
+		p: &sync.Pool{New: func() interface{} { r := make([]byte, 1<<10); return &r }},
+	}
+}
+
+func (p bufPool) get() []byte  { return (*p.p.Get().(*[]byte))[:0] }
+func (p bufPool) put(b []byte) { p.p.Put(&b) }
 
 // loadConection returns the broker's connection, creating it if necessary
 // and returning an error of if that fails.
@@ -312,12 +317,13 @@ func (b *broker) loadConnection(reqKey int16) (*brokerCxn, error) {
 	}
 
 	cxn := &brokerCxn{
+		bufPool:  b.cl.bufPool,
 		conn:     conn,
-		clientID: b.client.cfg.id,
-		saslCtx:  b.client.ctx,
-		sasls:    b.client.cfg.sasls,
+		clientID: b.cl.cfg.id,
+		saslCtx:  b.cl.ctx,
+		sasls:    b.cl.cfg.sasls,
 	}
-	if err = cxn.init(b.client.cfg.maxVersions); err != nil {
+	if err = cxn.init(b.cl.cfg.maxVersions); err != nil {
 		conn.Close()
 		return nil, err
 	}
@@ -328,10 +334,10 @@ func (b *broker) loadConnection(reqKey int16) (*brokerCxn, error) {
 
 // connect connects to the broker's addr, returning the new connection.
 func (b *broker) connect() (net.Conn, error) {
-	conn, err := b.client.cfg.dialFn(b.addr)
+	conn, err := b.cl.cfg.dialFn(b.addr)
 	if err != nil {
 		if _, ok := err.(net.Error); ok {
-			return nil, ErrConnDead
+			return nil, ErrNoDial
 		}
 		return nil, err
 	}
@@ -350,10 +356,10 @@ type brokerCxn struct {
 	mechanism sasl.Mechanism
 	expiry    time.Time
 
-	// reqBuf, correlationID, and clientID are used in writing requests.
-	reqBuf        []byte
-	correlationID int32
-	clientID      *string
+	// bufPool, corrID, and clientID are used in writing requests.
+	bufPool  bufPool
+	corrID   int32
+	clientID *string
 
 	// dieMu guards sending to resps in case the connection has died.
 	dieMu sync.RWMutex
@@ -378,7 +384,7 @@ func (cxn *brokerCxn) init(maxVersions kversion.Versions) error {
 		return err
 	}
 
-	cxn.resps = make(chan promisedResp, 100)
+	cxn.resps = make(chan promisedResp, 10)
 	go cxn.handleResps()
 	return nil
 }
@@ -503,10 +509,17 @@ func (cxn *brokerCxn) doSasl(authenticate bool) error {
 		var challenge []byte
 
 		if !authenticate {
-			cxn.reqBuf = append(cxn.reqBuf[:0], 0, 0, 0, 0)
-			binary.BigEndian.PutUint32(cxn.reqBuf, uint32(len(clientWrite)))
-			cxn.reqBuf = append(cxn.reqBuf, clientWrite...)
-			if _, err = cxn.conn.Write(cxn.reqBuf); err != nil {
+
+			buf := cxn.bufPool.get()
+
+			buf = append(buf[:0], 0, 0, 0, 0)
+			binary.BigEndian.PutUint32(buf, uint32(len(clientWrite)))
+			buf = append(buf, clientWrite...)
+			_, err = cxn.conn.Write(buf)
+
+			cxn.bufPool.put(buf)
+
+			if err != nil {
 				return ErrConnDead
 			}
 			if challenge, err = readConn(cxn.conn); err != nil {
@@ -563,17 +576,18 @@ func (cxn *brokerCxn) doSasl(authenticate bool) error {
 // writeRequest writes a message request to the broker connection, bumping the
 // connection's correlation ID as appropriate for the next write.
 func (cxn *brokerCxn) writeRequest(req kmsg.Request) (int32, error) {
-	cxn.reqBuf = kmsg.AppendRequest(
-		cxn.reqBuf[:0],
+	buf := cxn.bufPool.get()
+	buf = kmsg.AppendRequest(
+		buf[:0],
 		req,
-		cxn.correlationID,
+		cxn.corrID,
 		cxn.clientID,
 	)
-	if _, err := cxn.conn.Write(cxn.reqBuf); err != nil {
+	if _, err := cxn.conn.Write(buf); err != nil {
 		return 0, ErrConnDead
 	}
-	id := cxn.correlationID
-	cxn.correlationID++
+	id := cxn.corrID
+	cxn.corrID++
 	return id, nil
 }
 
@@ -596,7 +610,7 @@ func readConn(conn io.ReadCloser) ([]byte, error) {
 
 // readResponse reads a response from conn, ensures the correlation ID is
 // correct, and returns a newly allocated slice on success.
-func readResponse(conn io.ReadCloser, correlationID int32) ([]byte, error) {
+func readResponse(conn io.ReadCloser, corrID int32) ([]byte, error) {
 	buf, err := readConn(conn)
 	if err != nil {
 		return nil, err
@@ -605,7 +619,7 @@ func readResponse(conn io.ReadCloser, correlationID int32) ([]byte, error) {
 		return nil, kbin.ErrNotEnoughData
 	}
 	gotID := int32(binary.BigEndian.Uint32(buf))
-	if gotID != correlationID {
+	if gotID != corrID {
 		conn.Close()
 		return nil, ErrCorrelationIDMismatch
 	}
@@ -615,6 +629,9 @@ func readResponse(conn io.ReadCloser, correlationID int32) ([]byte, error) {
 // die kills a broker connection (which could be dead already) and replies to
 // all requests awaiting responses appropriately.
 func (cxn *brokerCxn) die() {
+	if cxn == nil {
+		return
+	}
 	if atomic.SwapInt32(&cxn.dead, 1) == 1 {
 		return
 	}
@@ -656,7 +673,7 @@ func (cxn *brokerCxn) handleResps() {
 	defer cxn.die() // always track our death
 
 	for pr := range cxn.resps {
-		raw, err := readResponse(cxn.conn, pr.correlationID)
+		raw, err := readResponse(cxn.conn, pr.corrID)
 		if err != nil {
 			pr.promise(nil, err)
 			return

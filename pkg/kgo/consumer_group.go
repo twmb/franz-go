@@ -6,7 +6,6 @@ import (
 	"regexp"
 	"sort"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/twmb/kafka-go/pkg/kerr"
@@ -834,7 +833,6 @@ func (g *groupConsumer) fetchOffsets(ctx context.Context, newAssigned map[string
 		return err
 	}
 
-	// TODO sarama#1542, response does not necessarily match request
 	offsets := make(map[string]map[int32]Offset)
 	for _, rTopic := range resp.Topics {
 		topicOffsets := make(map[int32]Offset)
@@ -1034,7 +1032,7 @@ func (g *groupConsumer) updateCommitted(
 		return
 	}
 	if g.uncommitted == nil || // just in case
-		len(req.Topics) != len(resp.Topics) { // bad kafka TODO fatal error?
+		len(req.Topics) != len(resp.Topics) { // bad kafka
 		return
 	}
 
@@ -1106,7 +1104,7 @@ func (g *groupConsumer) loopCommit() {
 // The main use of this method is to effectively provide a way to reset
 // consumption after aborting a batch.
 func (cl *Client) ResetToCommitted() {
-	c := cl.consumer
+	c := &cl.consumer
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -1433,28 +1431,17 @@ func (cl *Client) CommitTransactionOffsets(
 // requires a producer ID, this initializes one if it is not yet initialized.
 // This would only be the case if trying to commit before the init that occurs
 // on the first produce is complete.
-func (c *Client) addOffsetsToTxn(ctx context.Context, group string) error {
-	var idLoadingCh <-chan struct{}
-	c.producer.idMu.Lock()
-	if atomic.LoadUint32(&c.producer.idLoaded) == 0 {
-		if c.producer.idLoadingCh == nil {
-			c.producer.idLoadingCh = make(chan struct{})
-			go c.initProducerID()
-		}
-		idLoadingCh = c.producer.idLoadingCh
+//
+// TODO: take into account group context in initProducerID
+func (cl *Client) addOffsetsToTxn(ctx context.Context, group string) error {
+	id, epoch, err := cl.producerID()
+	if err != nil {
+		return err
 	}
-	c.producer.idMu.Unlock()
-	if idLoadingCh != nil {
-		<-idLoadingCh
-	}
-	if atomic.LoadUint32(&c.producer.idLoaded) == 0 {
-		return errors.New("unable to init producer ID")
-	}
-
-	kresp, err := c.Request(ctx, &kmsg.AddOffsetsToTxnRequest{
-		TransactionalID: *c.cfg.txnID,
-		ProducerID:      c.producer.id,
-		ProducerEpoch:   c.producer.epoch,
+	kresp, err := cl.Request(ctx, &kmsg.AddOffsetsToTxnRequest{
+		TransactionalID: *cl.cfg.txnID,
+		ProducerID:      id,
+		ProducerEpoch:   epoch,
 		Group:           group,
 	})
 	if err != nil {
@@ -1494,12 +1481,21 @@ func (g *groupConsumer) commitTxn(
 	g.commitCancel = commitCancel
 	g.commitDone = commitDone
 
+	// We issue this request even if the producer ID is failed; the request
+	// will fail if it is.
+	//
+	// The id must have been set at least once by this point because of
+	// addOffsetsToTxn.
+	id, epoch, _ := g.cl.producerID()
 	memberID := g.memberID
 	req := &kmsg.TxnOffsetCommitRequest{
 		TransactionalID: *g.cl.cfg.txnID,
 		Group:           g.id,
-		ProducerID:      g.cl.producer.id,
-		ProducerEpoch:   g.cl.producer.epoch,
+		ProducerID:      id,
+		ProducerEpoch:   epoch,
+		Generation:      g.generation,
+		MemberID:        memberID,
+		InstanceID:      g.instanceID,
 	}
 
 	if ctx.Done() != nil {
@@ -1560,7 +1556,7 @@ func (g *groupConsumer) updateCommittedTxn(
 	defer g.mu.Unlock()
 
 	if g.uncommitted == nil || // just in case
-		len(req.Topics) != len(resp.Topics) { // bad kafka TODO fatal error
+		len(req.Topics) != len(resp.Topics) { // bad kafka
 		return
 	}
 

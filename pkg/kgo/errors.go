@@ -3,8 +3,6 @@ package kgo
 import (
 	"errors"
 	"fmt"
-
-	"github.com/twmb/kafka-go/pkg/kerr"
 )
 
 var (
@@ -12,7 +10,7 @@ var (
 	// key larger than kmsg.MaxKey.
 	ErrUnknownRequestKey = errors.New("request key is unknown")
 
-	// ErrClientToOld is returned when issuing request that are unknown or
+	// ErrClientTooOld is returned when issuing request that are unknown or
 	// use an unknown version.
 	ErrClientTooOld = errors.New("client is too old; this client does not know what to do with this")
 
@@ -27,6 +25,10 @@ var (
 	// ErrBrokerDead is a temporary error returned when a broker chosen for
 	// a request is stopped due to a concurrent metadata response.
 	ErrBrokerDead = errors.New("broker has died - the broker id either migrated or no longer exists")
+
+	// ErrNoDial is a temporary error returned when a dial to a broker
+	// errors.
+	ErrNoDial = errors.New("unable to dial the broker")
 
 	// ErrConnDead is a temporary error returned when any read or write to
 	// a broker connection errors.
@@ -80,6 +82,10 @@ var (
 	// ErrAborting is returned for all buffered records while
 	// AbortBufferedRecords is being called.
 	ErrAborting = errors.New("client is aborting buffered records")
+
+	// ErrCommitWithFatalID is returned when trying to commit in
+	// EndTransaction with a producer ID that has failed.
+	ErrCommitWithFatalID = errors.New("cannot commit with a fatal producer id; retry with an abort")
 )
 
 // ErrDataLoss is returned for Kafka >=2.1.0 when data loss is detected and the
@@ -106,19 +112,13 @@ func (e *ErrDataLoss) Error() string {
 func isRetriableBrokerErr(err error) bool {
 	switch err {
 	case ErrBrokerDead,
+		ErrNoDial,
 		ErrConnDead,
 		ErrCorrelationIDMismatch,
 		ErrInvalidRespSize:
 		return true
 	}
 	return false
-}
-
-func isRetriableErr(err error) bool {
-	if err, ok := err.(*kerr.Error); ok {
-		return kerr.IsRetriable(err)
-	}
-	return isRetriableBrokerErr(err)
 }
 
 type errUnknownBrokerForPartition struct {

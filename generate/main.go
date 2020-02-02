@@ -32,6 +32,7 @@ type (
 	Int16        struct{}
 	Int32        struct{}
 	Int64        struct{}
+	Float64      struct{}
 	Uint32       struct{}
 	Varint       struct{}
 	Varlong      struct{}

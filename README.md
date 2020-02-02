@@ -6,14 +6,13 @@ KIPS
 
 TODO
 ----
-- KIP-360 (safe epoch bumping for `UNKNOWN_PRODUCER_ID`; 2.5.0)
+- KIP-447 (transaction changes to better support group changes)
 
 NOT YET (KIP under discussion / unmerged PR)
 -------
 - KIP-359 (verify leader epoch in produce requests)
 - KIP-392 (fetch request from closest replica w/ rack; 2.2.0)
 - KIP-423 (no rebalance on JoinGroup from leader in certain cases; under discussion)
-- KIP-447 (transaction changes to better support group changes)
 - KIP-497 (new inter broker admin command "alter isr")
 - KIP-516 (topic.id field in some commands, including fetch)
 - KIP-518 (list groups by state command change)
@@ -60,6 +59,7 @@ DONE
 - KIP-341 (sticky group bug fix)
 - KIP-342 (oauth extensions; 2.1.0)
 - KIP-345 (static group membership, see KAFKA-8224)
+- KIP-360 (safe epoch bumping for `UNKNOWN_PRODUCER_ID`; 2.5.0)
 - KIP-368 (periodically reauth sasl; 2.2.0)
 - KIP-369 (always round robin produce partitioner; 2.4.0)
 - KIP-380 (inter-broker command changes; 2.2.0)

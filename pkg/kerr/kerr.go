@@ -151,6 +151,7 @@ var (
 	NoReassignmentInProgress           = &Error{"NO_REASSIGNMENT_IN_PROGRESS", 85, false, "No partition reassignment is in progress."}
 	GroupSubscribedToTopic             = &Error{"GROUP_SUBSCRIBED_TO_TOPIC", 86, false, "Deleting offsets of a topic is forbidden while the consumer group is actively subscribed to it."}
 	InvalidRecord                      = &Error{"INVALID_RECORD", 87, false, "This record has failed the validation on broker and hence be rejected."}
+	UnstableOffsetCommit               = &Error{"UNSTABLE_OFFSET_COMMIT", 88, true, "There are unstable offsets that need to be cleared."}
 )
 
 var code2err = map[int16]error{
@@ -243,4 +244,5 @@ var code2err = map[int16]error{
 	85: NoReassignmentInProgress,
 	86: GroupSubscribedToTopic,
 	87: InvalidRecord,
+	88: UnstableOffsetCommit,
 }

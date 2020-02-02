@@ -24,17 +24,17 @@ func (m *metawait) signal() {
 
 // waitmeta returns immediately if metadata was updated within the last second,
 // otherwise this waits for up to wait for a metadata update to complete.
-func (c *Client) waitmeta(ctx context.Context, wait time.Duration) {
+func (cl *Client) waitmeta(ctx context.Context, wait time.Duration) {
 	now := time.Now()
 
-	c.metawait.mu.Lock()
-	if now.Sub(c.metawait.lastUpdate) < time.Second {
-		c.metawait.mu.Unlock()
+	cl.metawait.mu.Lock()
+	if now.Sub(cl.metawait.lastUpdate) < time.Second {
+		cl.metawait.mu.Unlock()
 		return
 	}
-	c.metawait.mu.Unlock()
+	cl.metawait.mu.Unlock()
 
-	c.triggerUpdateMetadataNow()
+	cl.triggerUpdateMetadataNow()
 
 	quit := false
 	done := make(chan struct{})
@@ -43,14 +43,14 @@ func (c *Client) waitmeta(ctx context.Context, wait time.Duration) {
 
 	go func() {
 		defer close(done)
-		c.metawait.mu.Lock()
-		defer c.metawait.mu.Unlock()
+		cl.metawait.mu.Lock()
+		defer cl.metawait.mu.Unlock()
 
 		for !quit {
-			if now.Sub(c.metawait.lastUpdate) < time.Second {
+			if now.Sub(cl.metawait.lastUpdate) < time.Second {
 				return
 			}
-			c.metawait.c.Wait()
+			cl.metawait.c.Wait()
 		}
 	}()
 
@@ -59,46 +59,46 @@ func (c *Client) waitmeta(ctx context.Context, wait time.Duration) {
 		return
 	case <-timeout.C:
 	case <-ctx.Done():
-	case <-c.ctx.Done():
+	case <-cl.ctx.Done():
 	}
 
-	c.metawait.mu.Lock()
+	cl.metawait.mu.Lock()
 	quit = true
-	c.metawait.mu.Unlock()
-	c.metawait.c.Broadcast()
+	cl.metawait.mu.Unlock()
+	cl.metawait.c.Broadcast()
 }
 
-func (c *Client) triggerUpdateMetadata() {
+func (cl *Client) triggerUpdateMetadata() {
 	select {
-	case c.updateMetadataCh <- struct{}{}:
+	case cl.updateMetadataCh <- struct{}{}:
 	default:
 	}
 }
 
-func (c *Client) triggerUpdateMetadataNow() {
+func (cl *Client) triggerUpdateMetadataNow() {
 	select {
-	case c.updateMetadataNowCh <- struct{}{}:
+	case cl.updateMetadataNowCh <- struct{}{}:
 	default:
 	}
 }
 
 // updateMetadataLoop updates metadata whenever the update ticker ticks,
 // or whenever deliberately triggered.
-func (c *Client) updateMetadataLoop() {
-	defer close(c.metadone)
+func (cl *Client) updateMetadataLoop() {
+	defer close(cl.metadone)
 	var consecutiveErrors int
 	var lastAt time.Time
 
-	ticker := time.NewTicker(c.cfg.metadataMaxAge)
+	ticker := time.NewTicker(cl.cfg.metadataMaxAge)
 	defer ticker.Stop()
 	for {
 		var now bool
 		select {
-		case <-c.ctx.Done():
+		case <-cl.ctx.Done():
 			return
 		case <-ticker.C:
-		case <-c.updateMetadataCh:
-		case <-c.updateMetadataNowCh:
+		case <-cl.updateMetadataCh:
+		case <-cl.updateMetadataNowCh:
 			now = true
 		}
 
@@ -106,13 +106,13 @@ func (c *Client) updateMetadataLoop() {
 	start:
 		nowTries++
 		if !now {
-			if wait := c.cfg.metadataMinAge - time.Since(lastAt); wait > 0 {
+			if wait := cl.cfg.metadataMinAge - time.Since(lastAt); wait > 0 {
 				timer := time.NewTimer(wait)
 				select {
-				case <-c.ctx.Done():
+				case <-cl.ctx.Done():
 					timer.Stop()
 					return
-				case <-c.updateMetadataNowCh:
+				case <-cl.updateMetadataNowCh:
 					timer.Stop()
 				case <-timer.C:
 				}
@@ -125,20 +125,20 @@ func (c *Client) updateMetadataLoop() {
 
 		// Drain any refires that occured during our waiting.
 		select {
-		case <-c.updateMetadataCh:
+		case <-cl.updateMetadataCh:
 		default:
 		}
 		select {
-		case <-c.updateMetadataNowCh:
+		case <-cl.updateMetadataNowCh:
 		default:
 		}
 
-		again, err := c.updateMetadata()
+		again, err := cl.updateMetadata()
 		if again || err != nil {
 			if now && nowTries < 10 {
 				goto start
 			}
-			c.triggerUpdateMetadata()
+			cl.triggerUpdateMetadata()
 		}
 		if err == nil {
 			lastAt = time.Now()
@@ -147,9 +147,9 @@ func (c *Client) updateMetadataLoop() {
 		}
 
 		consecutiveErrors++
-		after := time.NewTimer(c.cfg.retryBackoff(consecutiveErrors))
+		after := time.NewTimer(cl.cfg.retryBackoff(consecutiveErrors))
 		select {
-		case <-c.ctx.Done():
+		case <-cl.ctx.Done():
 			after.Stop()
 			return
 		case <-after.C:
@@ -164,16 +164,16 @@ func (c *Client) updateMetadataLoop() {
 // If any topics or partitions have an error, all record buffers in the topic,
 // or the record buffer for each erroring partition, has the first batch's
 // try count bumped by one.
-func (c *Client) updateMetadata() (needsRetry bool, err error) {
-	defer c.metawait.signal()
+func (cl *Client) updateMetadata() (needsRetry bool, err error) {
+	defer cl.metawait.signal()
 
-	topics := c.loadTopics()
+	topics := cl.loadTopics()
 	toUpdate := make([]string, 0, len(topics))
 	for topic := range topics {
 		toUpdate = append(toUpdate, topic)
 	}
 
-	meta, all, err := c.fetchTopicMetadata(toUpdate)
+	meta, all, err := cl.fetchTopicMetadata(toUpdate)
 	if err != nil {
 		return true, err
 	}
@@ -183,25 +183,22 @@ func (c *Client) updateMetadata() (needsRetry bool, err error) {
 	// We have to add those topics to our topics map so that we can
 	// save their information in the merge just below.
 	if all {
-		var hasNew bool
-		c.topicsMu.Lock()
-		topics = c.loadTopics()
+		var cloned bool
+		cl.topicsMu.Lock()
+		topics = cl.loadTopics()
 		for topic := range meta {
 			if _, exists := topics[topic]; !exists {
-				hasNew = true
-				break
-			}
-		}
-		if hasNew {
-			topics = c.cloneTopics()
-			for topic := range meta {
-				if _, exists := topics[topic]; !exists {
-					topics[topic] = newTopicPartitions(topic)
+				if !cloned {
+					topics = cl.cloneTopics()
+					cloned = true
 				}
+				topics[topic] = newTopicPartitions(topic)
 			}
-			c.topics.Store(topics)
 		}
-		c.topicsMu.Unlock()
+		if cloned {
+			cl.topics.Store(topics)
+		}
+		cl.topicsMu.Unlock()
 	}
 
 	// Merge the producer side of the update.
@@ -210,31 +207,31 @@ func (c *Client) updateMetadata() (needsRetry bool, err error) {
 		if !exists {
 			continue
 		}
-		needsRetry = c.mergeTopicPartitions(oldParts, newParts) || needsRetry
+		needsRetry = cl.mergeTopicPartitions(oldParts, newParts) || needsRetry
 	}
 
 	// Trigger any consumer updates.
-	c.consumer.doOnMetadataUpdate()
+	cl.consumer.doOnMetadataUpdate()
 
 	return needsRetry, nil
 }
 
 // fetchTopicMetadata fetches metadata for all reqTopics and returns new
 // topicPartitionsData for each topic.
-func (c *Client) fetchTopicMetadata(reqTopics []string) (map[string]*topicPartitionsData, bool, error) {
-	c.consumer.mu.Lock()
-	all := c.consumer.typ == consumerTypeDirect && c.consumer.direct.regexTopics ||
-		c.consumer.typ == consumerTypeGroup && c.consumer.group.regexTopics
-	c.consumer.mu.Unlock()
-	meta, err := c.fetchMetadata(c.ctx, all, reqTopics)
+func (cl *Client) fetchTopicMetadata(reqTopics []string) (map[string]*topicPartitionsData, bool, error) {
+	cl.consumer.mu.Lock()
+	all := cl.consumer.typ == consumerTypeDirect && cl.consumer.direct.regexTopics ||
+		cl.consumer.typ == consumerTypeGroup && cl.consumer.group.regexTopics
+	cl.consumer.mu.Unlock()
+	meta, err := cl.fetchMetadata(cl.ctx, all, reqTopics)
 	if err != nil {
 		return nil, all, err
 	}
 
 	topics := make(map[string]*topicPartitionsData, len(reqTopics))
 
-	c.brokersMu.RLock()
-	defer c.brokersMu.RUnlock()
+	cl.brokersMu.RLock()
+	defer cl.brokersMu.RUnlock()
 
 	for i := range meta.Topics {
 		topicMeta := &meta.Topics[i]
@@ -259,46 +256,43 @@ func (c *Client) fetchTopicMetadata(reqTopics []string) (map[string]*topicPartit
 			}
 
 			p := &topicPartition{
-				loadErr: kerr.ErrorForCode(partMeta.ErrorCode),
-
+				loadErr:     kerr.ErrorForCode(partMeta.ErrorCode),
 				leader:      partMeta.Leader,
 				leaderEpoch: leaderEpoch,
+			}
 
-				records: &recordBuffer{
-					cl: c,
+			broker, exists := cl.brokers[p.leader]
+			if !exists {
+				if p.loadErr == nil {
+					p.loadErr = &errUnknownBrokerForPartition{topicMeta.Topic, partMeta.Partition, p.leader}
+				}
+
+				p.records = &recBuf{
+					cl: cl,
 
 					topic:     topicMeta.Topic,
 					partition: partMeta.Partition,
 
-					recBufsIdx:      -1, // required, see below
-					lastAckedOffset: -1, // expected sentinel
+					recBufsIdx: -1,
+				}
 
-					linger: c.cfg.linger,
-				},
-
-				consumption: &consumption{
+				p.cursor = &cursor{
 					topic:     topicMeta.Topic,
 					partition: partMeta.Partition,
 
-					keepControl: c.cfg.keepControl,
+					keepControl: cl.cfg.keepControl,
 
-					allConsumptionsIdx: -1, // same, see below
+					cursorsIdx: -1,
 					seqOffset: seqOffset{
 						offset:             -1, // required to not consume until needed
 						currentLeaderEpoch: leaderEpoch,
 						lastConsumedEpoch:  -1, // required sentinel
 					},
-				},
-			}
-
-			broker, exists := c.brokers[p.leader]
-			if !exists {
-				if p.loadErr == nil {
-					p.loadErr = &errUnknownBrokerForPartition{topicMeta.Topic, partMeta.Partition, p.leader}
 				}
+
 			} else {
-				p.records.sink = broker.recordSink
-				p.consumption.source = broker.recordSource
+				p.records.sink = broker.sink
+				p.cursor.source = broker.source
 			}
 
 			parts.partitions = append(parts.partitions, partMeta.Partition)
@@ -317,10 +311,10 @@ func (c *Client) fetchTopicMetadata(reqTopics []string) (map[string]*topicPartit
 // whether the metadata update that caused this merge needs to be retried.
 //
 // Retries are necessary if the topic or any partition has a retriable error.
-func (c *Client) mergeTopicPartitions(l *topicPartitions, r *topicPartitionsData) (needsRetry bool) {
+func (cl *Client) mergeTopicPartitions(l *topicPartitions, r *topicPartitionsData) (needsRetry bool) {
 	lv := *l.load() // copy so our field writes do not collide with reads
 	hadPartitions := len(lv.all) != 0
-	defer func() { c.storePartitionsUpdate(l, &lv, hadPartitions) }()
+	defer func() { cl.storePartitionsUpdate(l, &lv, hadPartitions) }()
 
 	lv.loadErr = r.loadErr
 	lv.isInternal = r.isInternal
@@ -328,7 +322,7 @@ func (c *Client) mergeTopicPartitions(l *topicPartitions, r *topicPartitionsData
 		retriable := kerr.IsRetriable(r.loadErr)
 		if retriable {
 			for _, topicPartition := range lv.all {
-				topicPartition.records.bumpTriesAndMaybeFailBatch0(lv.loadErr)
+				topicPartition.records.bumpRepeatedLoadErr(lv.loadErr)
 			}
 		} else {
 			for _, topicPartition := range lv.all {
@@ -379,7 +373,7 @@ func (c *Client) mergeTopicPartitions(l *topicPartitions, r *topicPartitionsData
 			err := newTP.loadErr
 			*newTP = *oldTP
 			newTP.loadErr = err
-			newTP.records.bumpTriesAndMaybeFailBatch0(newTP.loadErr)
+			newTP.records.bumpRepeatedLoadErr(newTP.loadErr)
 			needsRetry = true
 			continue
 		}
@@ -393,33 +387,31 @@ func (c *Client) mergeTopicPartitions(l *topicPartitions, r *topicPartitionsData
 
 		// If the new sink is the same as the old, we simply copy over
 		// the records pointer and maybe begin draining again.
-		// Same logic for the consumption.
+		// Same logic for the cursor.
 		if newTP.records.sink == oldTP.records.sink {
 			newTP.records = oldTP.records
-			newTP.consumption = oldTP.consumption
+			newTP.cursor = oldTP.cursor
 		} else {
 			oldTP.migrateProductionTo(newTP)
-			oldTP.migrateConsumptionTo(newTP)
+			oldTP.migrateCursorTo(newTP)
 		}
 		newTP.records.clearFailing()
-		newTP.consumption.clearFailing()
+		newTP.cursor.clearFailing()
 	}
 
-	// Anything left with a negative allPartsRecsIdx is a new topic
+	// Anything left with a negative recBufsIdx / cursorsIdx is a new topic
 	// partition. We use this to add the new tp's records to its sink.
-	// Same reasoning applies to the consumption offset.
+	// Same reasoning applies to the cursor offset.
 	for _, newTP := range r.all {
 		// If the partition has a load error, even if it is new, we
 		// can't do anything with it now. Its record sink and source
-		// consumption will be nil.
+		// cursor will be nil.
 		if newTP.loadErr != nil {
 			continue
 		}
 		if newTP.records.recBufsIdx == -1 {
-			newTP.records.sink.addSource(newTP.records)
-		}
-		if newTP.consumption.allConsumptionsIdx == -1 { // should be true if recBufsIdx == -1
-			newTP.consumption.source.addConsumption(newTP.consumption)
+			newTP.records.sink.addRecBuf(newTP.records)
+			newTP.cursor.source.addCursor(newTP.cursor)
 		}
 	}
 
@@ -430,7 +422,7 @@ func (c *Client) mergeTopicPartitions(l *topicPartitions, r *topicPartitionsData
 	// re-trigger a metadata update and have some logic collide with our
 	// deletion cleanup.
 	if len(deleted) > 0 {
-		handleDeletedPartitions(deleted)
+		cl.handleDeletedPartitions(deleted)
 	}
 
 	// The left writable map needs no further updates: all changes above
@@ -441,25 +433,16 @@ func (c *Client) mergeTopicPartitions(l *topicPartitions, r *topicPartitionsData
 
 // handleDeletedPartitions calls all promises in all records in all partitions
 // in deleted with ErrPartitionDeleted, as well as removes topic partition
-// consumptions from their sources.
+// cursors from their sources.
 //
 // We can encounter a deleted partition if a topic is deleted and recreated
-// with fewer partitions. We have to clear the consumptions so that if more
+// with fewer partitions. We have to clear the cursors so that if more
 // partitions are reencountered in the future, they will be used.
-func handleDeletedPartitions(deleted []*topicPartition) {
+func (cl *Client) handleDeletedPartitions(deleted []*topicPartition) {
 	for _, d := range deleted {
-		sink := d.records.sink
-		sink.removeSource(d.records)
-		for _, batch := range d.records.batches {
-			for i, pnr := range batch.records {
-				sink.broker.client.finishRecordPromise(pnr.promisedRecord, ErrPartitionDeleted)
-				batch.records[i] = noPNR
-			}
-			emptyRecordsPool.Put(&batch.records)
-		}
-
-		source := d.consumption.source
-		source.removeConsumption(d.consumption)
-		source.broker.client.consumer.deletePartition(d)
+		d.records.sink.removeRecBuf(d.records)
+		d.records.failAllRecords(ErrPartitionDeleted)
+		d.cursor.source.removeCursor(d.cursor)
+		cl.consumer.deletePartition(d)
 	}
 }
