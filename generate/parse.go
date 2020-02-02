@@ -14,21 +14,22 @@ import (
 var newStructs []Struct
 
 var types = map[string]Type{
-	"bool":            Bool{},
-	"int8":            Int8{},
-	"int16":           Int16{},
-	"int32":           Int32{},
-	"int64":           Int64{},
-	"float64":         Float64{},
-	"uint32":          Uint32{},
-	"varint":          Varint{},
-	"varlong":         Varlong{},
-	"string":          String{},
-	"nullable-string": NullableString{},
-	"bytes":           Bytes{},
-	"nullable-bytes":  NullableBytes{},
-	"varint-string":   VarintString{},
-	"varint-bytes":    VarintBytes{},
+	"bool":                   Bool{},
+	"int8":                   Int8{},
+	"int16":                  Int16{},
+	"int32":                  Int32{},
+	"int64":                  Int64{},
+	"float64":                Float64{},
+	"uint32":                 Uint32{},
+	"varint":                 Varint{},
+	"varlong":                Varlong{},
+	"string":                 String{},
+	"string-ignore-nullable": StringIgnoreNullable{},
+	"nullable-string":        NullableString{},
+	"bytes":                  Bytes{},
+	"nullable-bytes":         NullableBytes{},
+	"varint-string":          VarintString{},
+	"varint-bytes":           VarintBytes{},
 }
 
 // LineScanner is a shoddy scanner that allows us to peek an entire line.
