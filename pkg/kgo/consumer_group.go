@@ -424,7 +424,8 @@ const (
 //     (1) if revoking lost partitions from a prior session (i.e., after sync),
 //         this revokes the passed in lost
 //     (2) if revoking at the end of a session, this revokes topics that the
-//         consumer is no longer interested in consuming (TODO, actually).
+//         consumer is no longer interested in consuming (TODO, actually, only
+//         once we allow subscriptions to change without leaving the group).
 //
 // Lastly, for cooperative consumers, this must selectively delete what was
 // lost from the uncommitted map.
@@ -1471,8 +1472,6 @@ func (cl *Client) CommitTransactionOffsets(
 // requires a producer ID, this initializes one if it is not yet initialized.
 // This would only be the case if trying to commit before the init that occurs
 // on the first produce is complete.
-//
-// TODO: take into account group context in initProducerID
 func (cl *Client) addOffsetsToTxn(ctx context.Context, group string) error {
 	id, epoch, err := cl.producerID()
 	if err != nil {
@@ -1595,6 +1594,9 @@ func (g *groupConsumer) updateCommittedTxn(
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
+	if req.Generation != g.generation {
+		return
+	}
 	if g.uncommitted == nil || // just in case
 		len(req.Topics) != len(resp.Topics) { // bad kafka
 		return

@@ -59,7 +59,7 @@ type directConsumer struct {
 // consume from. Any prior direct assignment or group assignment is
 // invalidated.
 //
-// This takes ownership of the assignments.
+// This takes ownership of any assignments.
 func (cl *Client) AssignPartitions(opts ...DirectConsumeOpt) {
 	c := &cl.consumer
 	c.mu.Lock()
@@ -84,24 +84,27 @@ func (cl *Client) AssignPartitions(opts ...DirectConsumeOpt) {
 	c.typ = consumerTypeDirect
 	c.direct = d
 
-	if !d.regexTopics {
-		cl.topicsMu.Lock()
-		clientTopics := cl.cloneTopics()
-		for topic := range d.topics {
-			if _, exists := clientTopics[topic]; !exists {
-				clientTopics[topic] = newTopicPartitions(topic)
-			}
-		}
-		for topic := range d.partitions {
-			if _, exists := clientTopics[topic]; !exists {
-				clientTopics[topic] = newTopicPartitions(topic)
-			}
-		}
-		cl.topics.Store(clientTopics)
-		cl.topicsMu.Unlock()
+	defer cl.triggerUpdateMetadata()
+
+	if d.regexTopics {
+		return
 	}
 
-	cl.triggerUpdateMetadata()
+	cl.topicsMu.Lock()
+	defer cl.topicsMu.Unlock()
+
+	clientTopics := cl.cloneTopics()
+	for topic := range d.topics {
+		if _, exists := clientTopics[topic]; !exists {
+			clientTopics[topic] = newTopicPartitions(topic)
+		}
+	}
+	for topic := range d.partitions {
+		if _, exists := clientTopics[topic]; !exists {
+			clientTopics[topic] = newTopicPartitions(topic)
+		}
+	}
+	cl.topics.Store(clientTopics)
 }
 
 // findNewAssignments returns new partitions to consume at given offsets
@@ -128,8 +131,8 @@ func (d *directConsumer) findNewAssignments(
 			} else {
 				for reTopic, offset := range d.topics {
 					if match, _ := regexp.MatchString(reTopic, topic); match {
-						useOffset = offset
 						useTopic = true
+						useOffset = offset
 						d.reTopics[topic] = offset
 						break
 					}
@@ -205,6 +208,8 @@ func (d *directConsumer) findNewAssignments(
 	return toUse
 }
 
+// deleteUsing is for deleting a specific partition from the consumer; this
+// is called sequentially at the end of a metadata update.
 func (d *directConsumer) deleteUsing(topic string, partition int32) {
 	if d.using == nil {
 		return

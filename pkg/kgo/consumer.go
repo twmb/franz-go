@@ -473,6 +473,10 @@ func (c *consumer) deletePartition(p *topicPartition) {
 
 	for i, using := range c.usingPartitions {
 		if using == p {
+			// No calling setOffset here to invalidate the cursor;
+			// partition deletion does not cause a seq bump. But,
+			// the cursor has been removed from its source, meaning
+			// it will not be consumed anymore.
 			c.usingPartitions[i] = c.usingPartitions[len(c.usingPartitions)-1]
 			c.usingPartitions = c.usingPartitions[:len(c.usingPartitions)-1]
 			break
