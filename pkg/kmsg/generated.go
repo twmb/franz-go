@@ -8806,19 +8806,25 @@ type CreateACLsRequest struct {
 }
 
 func (*CreateACLsRequest) Key() int16                 { return 30 }
-func (*CreateACLsRequest) MaxVersion() int16          { return 1 }
+func (*CreateACLsRequest) MaxVersion() int16          { return 2 }
 func (v *CreateACLsRequest) SetVersion(version int16) { v.Version = version }
 func (v *CreateACLsRequest) GetVersion() int16        { return v.Version }
-func (v *CreateACLsRequest) IsFlexible() bool         { return false }
+func (v *CreateACLsRequest) IsFlexible() bool         { return v.Version >= 2 }
 func (v *CreateACLsRequest) IsAdminRequest()          {}
 func (v *CreateACLsRequest) ResponseKind() Response   { return &CreateACLsResponse{Version: v.Version} }
 
 func (v *CreateACLsRequest) AppendTo(dst []byte) []byte {
 	version := v.Version
 	_ = version
+	isFlexible := version >= 2
+	_ = isFlexible
 	{
 		v := v.Creations
-		dst = kbin.AppendArrayLen(dst, len(v))
+		if isFlexible {
+			dst = kbin.AppendCompactArrayLen(dst, len(v))
+		} else {
+			dst = kbin.AppendArrayLen(dst, len(v))
+		}
 		for i := range v {
 			v := &v[i]
 			{
@@ -8827,7 +8833,11 @@ func (v *CreateACLsRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.ResourceName
-				dst = kbin.AppendString(dst, v)
+				if isFlexible {
+					dst = kbin.AppendCompactString(dst, v)
+				} else {
+					dst = kbin.AppendString(dst, v)
+				}
 			}
 			if version >= 1 {
 				v := v.ResourcePatternType
@@ -8835,11 +8845,19 @@ func (v *CreateACLsRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Principal
-				dst = kbin.AppendString(dst, v)
+				if isFlexible {
+					dst = kbin.AppendCompactString(dst, v)
+				} else {
+					dst = kbin.AppendString(dst, v)
+				}
 			}
 			{
 				v := v.Host
-				dst = kbin.AppendString(dst, v)
+				if isFlexible {
+					dst = kbin.AppendCompactString(dst, v)
+				} else {
+					dst = kbin.AppendString(dst, v)
+				}
 			}
 			{
 				v := v.Operation
@@ -8849,7 +8867,13 @@ func (v *CreateACLsRequest) AppendTo(dst []byte) []byte {
 				v := v.PermissionType
 				dst = kbin.AppendInt8(dst, v)
 			}
+			if isFlexible {
+				dst = append(dst, 0)
+			}
 		}
+	}
+	if isFlexible {
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -8878,6 +8902,8 @@ type CreateACLsResponse struct {
 func (v *CreateACLsResponse) ReadFrom(src []byte) error {
 	version := v.Version
 	_ = version
+	isFlexible := version >= 2
+	_ = isFlexible
 	b := kbin.Reader{Src: src}
 	s := v
 	{
@@ -8888,7 +8914,11 @@ func (v *CreateACLsResponse) ReadFrom(src []byte) error {
 		v := s.Results
 		a := v
 		var l int32
-		l = b.ArrayLen()
+		if isFlexible {
+			l = b.CompactArrayLen()
+		} else {
+			l = b.ArrayLen()
+		}
 		if !b.Ok() {
 			return b.Complete()
 		}
@@ -8903,12 +8933,23 @@ func (v *CreateACLsResponse) ReadFrom(src []byte) error {
 				s.ErrorCode = v
 			}
 			{
-				v := b.NullableString()
+				var v *string
+				if isFlexible {
+					v = b.CompactNullableString()
+				} else {
+					v = b.NullableString()
+				}
 				s.ErrorMessage = v
+			}
+			if isFlexible {
+				SkipTags(&b)
 			}
 		}
 		v = a
 		s.Results = v
+	}
+	if isFlexible {
+		SkipTags(&b)
 	}
 	return b.Complete()
 }
@@ -8941,19 +8982,25 @@ type DeleteACLsRequest struct {
 }
 
 func (*DeleteACLsRequest) Key() int16                 { return 31 }
-func (*DeleteACLsRequest) MaxVersion() int16          { return 1 }
+func (*DeleteACLsRequest) MaxVersion() int16          { return 2 }
 func (v *DeleteACLsRequest) SetVersion(version int16) { v.Version = version }
 func (v *DeleteACLsRequest) GetVersion() int16        { return v.Version }
-func (v *DeleteACLsRequest) IsFlexible() bool         { return false }
+func (v *DeleteACLsRequest) IsFlexible() bool         { return v.Version >= 2 }
 func (v *DeleteACLsRequest) IsAdminRequest()          {}
 func (v *DeleteACLsRequest) ResponseKind() Response   { return &DeleteACLsResponse{Version: v.Version} }
 
 func (v *DeleteACLsRequest) AppendTo(dst []byte) []byte {
 	version := v.Version
 	_ = version
+	isFlexible := version >= 2
+	_ = isFlexible
 	{
 		v := v.Filters
-		dst = kbin.AppendArrayLen(dst, len(v))
+		if isFlexible {
+			dst = kbin.AppendCompactArrayLen(dst, len(v))
+		} else {
+			dst = kbin.AppendArrayLen(dst, len(v))
+		}
 		for i := range v {
 			v := &v[i]
 			{
@@ -8962,7 +9009,11 @@ func (v *DeleteACLsRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.ResourceName
-				dst = kbin.AppendNullableString(dst, v)
+				if isFlexible {
+					dst = kbin.AppendCompactNullableString(dst, v)
+				} else {
+					dst = kbin.AppendNullableString(dst, v)
+				}
 			}
 			if version >= 1 {
 				v := v.ResourcePatternType
@@ -8970,11 +9021,19 @@ func (v *DeleteACLsRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Principal
-				dst = kbin.AppendNullableString(dst, v)
+				if isFlexible {
+					dst = kbin.AppendCompactNullableString(dst, v)
+				} else {
+					dst = kbin.AppendNullableString(dst, v)
+				}
 			}
 			{
 				v := v.Host
-				dst = kbin.AppendNullableString(dst, v)
+				if isFlexible {
+					dst = kbin.AppendCompactNullableString(dst, v)
+				} else {
+					dst = kbin.AppendNullableString(dst, v)
+				}
 			}
 			{
 				v := v.Operation
@@ -8984,7 +9043,13 @@ func (v *DeleteACLsRequest) AppendTo(dst []byte) []byte {
 				v := v.PermissionType
 				dst = kbin.AppendInt8(dst, v)
 			}
+			if isFlexible {
+				dst = append(dst, 0)
+			}
 		}
+	}
+	if isFlexible {
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -9037,6 +9102,8 @@ type DeleteACLsResponse struct {
 func (v *DeleteACLsResponse) ReadFrom(src []byte) error {
 	version := v.Version
 	_ = version
+	isFlexible := version >= 2
+	_ = isFlexible
 	b := kbin.Reader{Src: src}
 	s := v
 	{
@@ -9047,7 +9114,11 @@ func (v *DeleteACLsResponse) ReadFrom(src []byte) error {
 		v := s.Results
 		a := v
 		var l int32
-		l = b.ArrayLen()
+		if isFlexible {
+			l = b.CompactArrayLen()
+		} else {
+			l = b.ArrayLen()
+		}
 		if !b.Ok() {
 			return b.Complete()
 		}
@@ -9062,14 +9133,23 @@ func (v *DeleteACLsResponse) ReadFrom(src []byte) error {
 				s.ErrorCode = v
 			}
 			{
-				v := b.NullableString()
+				var v *string
+				if isFlexible {
+					v = b.CompactNullableString()
+				} else {
+					v = b.NullableString()
+				}
 				s.ErrorMessage = v
 			}
 			{
 				v := s.MatchingACLs
 				a := v
 				var l int32
-				l = b.ArrayLen()
+				if isFlexible {
+					l = b.CompactArrayLen()
+				} else {
+					l = b.ArrayLen()
+				}
 				if !b.Ok() {
 					return b.Complete()
 				}
@@ -9084,7 +9164,12 @@ func (v *DeleteACLsResponse) ReadFrom(src []byte) error {
 						s.ErrorCode = v
 					}
 					{
-						v := b.NullableString()
+						var v *string
+						if isFlexible {
+							v = b.CompactNullableString()
+						} else {
+							v = b.NullableString()
+						}
 						s.ErrorMessage = v
 					}
 					{
@@ -9092,7 +9177,12 @@ func (v *DeleteACLsResponse) ReadFrom(src []byte) error {
 						s.ResourceType = v
 					}
 					{
-						v := b.String()
+						var v string
+						if isFlexible {
+							v = b.CompactString()
+						} else {
+							v = b.String()
+						}
 						s.ResourceName = v
 					}
 					if version >= 1 {
@@ -9100,11 +9190,21 @@ func (v *DeleteACLsResponse) ReadFrom(src []byte) error {
 						s.ResourcePatternType = v
 					}
 					{
-						v := b.String()
+						var v string
+						if isFlexible {
+							v = b.CompactString()
+						} else {
+							v = b.String()
+						}
 						s.Principal = v
 					}
 					{
-						v := b.String()
+						var v string
+						if isFlexible {
+							v = b.CompactString()
+						} else {
+							v = b.String()
+						}
 						s.Host = v
 					}
 					{
@@ -9115,13 +9215,22 @@ func (v *DeleteACLsResponse) ReadFrom(src []byte) error {
 						v := b.Int8()
 						s.PermissionType = v
 					}
+					if isFlexible {
+						SkipTags(&b)
+					}
 				}
 				v = a
 				s.MatchingACLs = v
 			}
+			if isFlexible {
+				SkipTags(&b)
+			}
 		}
 		v = a
 		s.Results = v
+	}
+	if isFlexible {
+		SkipTags(&b)
 	}
 	return b.Complete()
 }
