@@ -761,8 +761,11 @@ start:
 	var protocol string
 	leader := resp.LeaderID == resp.MemberID
 	if leader {
-		plan, err = g.balanceGroup(resp.Protocol, resp.Members)
-		protocol = resp.Protocol
+		protocol := ""
+		if resp.Protocol != nil {
+			protocol = *resp.Protocol
+		}
+		plan, err = g.balanceGroup(protocol, resp.Members)
 		if err != nil {
 			return err
 		}
