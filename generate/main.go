@@ -47,11 +47,13 @@ type (
 	// The following types can be encoded "compact"; this happens on
 	// flexible versions. If adding types here, be sure to add the
 	// AsFromFlexible method below.
-	String               struct{ FromFlexible bool }
-	StringIgnoreNullable struct{ FromFlexible bool }
-	NullableString       struct{ FromFlexible bool }
-	Bytes                struct{ FromFlexible bool }
-	NullableBytes        struct{ FromFlexible bool }
+	String         struct{ FromFlexible bool }
+	NullableString struct {
+		FromFlexible    bool
+		NullableVersion int
+	}
+	Bytes         struct{ FromFlexible bool }
+	NullableBytes struct{ FromFlexible bool }
 
 	Array struct {
 		Inner           Type
@@ -103,13 +105,12 @@ type FlexibleSetter interface {
 	AsFromFlexible() Type
 }
 
-func (s String) AsFromFlexible() Type               { dup := s; dup.FromFlexible = true; return dup }
-func (s NullableString) AsFromFlexible() Type       { dup := s; dup.FromFlexible = true; return dup }
-func (s StringIgnoreNullable) AsFromFlexible() Type { dup := s; dup.FromFlexible = true; return dup }
-func (s Bytes) AsFromFlexible() Type                { dup := s; dup.FromFlexible = true; return dup }
-func (s NullableBytes) AsFromFlexible() Type        { dup := s; dup.FromFlexible = true; return dup }
-func (s Array) AsFromFlexible() Type                { dup := s; dup.FromFlexible = true; return dup }
-func (s Struct) AsFromFlexible() Type               { dup := s; dup.FromFlexible = true; return dup }
+func (s String) AsFromFlexible() Type         { dup := s; dup.FromFlexible = true; return dup }
+func (s NullableString) AsFromFlexible() Type { dup := s; dup.FromFlexible = true; return dup }
+func (s Bytes) AsFromFlexible() Type          { dup := s; dup.FromFlexible = true; return dup }
+func (s NullableBytes) AsFromFlexible() Type  { dup := s; dup.FromFlexible = true; return dup }
+func (s Array) AsFromFlexible() Type          { dup := s; dup.FromFlexible = true; return dup }
+func (s Struct) AsFromFlexible() Type         { dup := s; dup.FromFlexible = true; return dup }
 
 func (l *LineWriter) Write(line string, args ...interface{}) {
 	fmt.Fprintf(l.buf, line, args...)

@@ -12,7 +12,6 @@ func (Uint32) TypeName() string                { return "uint32" }
 func (Varint) TypeName() string                { return "int32" }
 func (Varlong) TypeName() string               { return "int64" }
 func (String) TypeName() string                { return "string" }
-func (StringIgnoreNullable) TypeName() string  { return "string" }
 func (NullableString) TypeName() string        { return "*string" }
 func (Bytes) TypeName() string                 { return "[]byte" }
 func (NullableBytes) TypeName() string         { return "[]byte" }
@@ -50,9 +49,11 @@ func (Varlong) WriteAppend(l *LineWriter)      { primAppend("Varlong", l) }
 func (VarintString) WriteAppend(l *LineWriter) { primAppend("VarintString", l) }
 func (VarintBytes) WriteAppend(l *LineWriter)  { primAppend("VarintBytes", l) }
 
-func (v String) WriteAppend(l *LineWriter)               { compactAppend(v.FromFlexible, "String", l) }
-func (v StringIgnoreNullable) WriteAppend(l *LineWriter) { compactAppend(v.FromFlexible, "String", l) }
+func (v String) WriteAppend(l *LineWriter) { compactAppend(v.FromFlexible, "String", l) }
 func (v NullableString) WriteAppend(l *LineWriter) {
+	if v.NullableVersion > 0 {
+		panic("unhandled non-nullable to nullable string")
+	}
 	compactAppend(v.FromFlexible, "NullableString", l)
 }
 func (v Bytes) WriteAppend(l *LineWriter)         { compactAppend(v.FromFlexible, "Bytes", l) }
@@ -203,15 +204,52 @@ func (VarintString) WriteDecode(l *LineWriter) { primDecode("VarintString", l) }
 func (VarintBytes) WriteDecode(l *LineWriter)  { primDecode("VarintBytes", l) }
 
 func (v String) WriteDecode(l *LineWriter) { compactDecode(v.FromFlexible, "String", "string", l) }
-func (v StringIgnoreNullable) WriteDecode(l *LineWriter) {
-	compactDecode(v.FromFlexible, "StringIgnoreNullable", "string", l)
-}
-func (v NullableString) WriteDecode(l *LineWriter) {
-	compactDecode(v.FromFlexible, "NullableString", "*string", l)
-}
-func (v Bytes) WriteDecode(l *LineWriter) { compactDecode(v.FromFlexible, "Bytes", "[]byte", l) }
+func (v Bytes) WriteDecode(l *LineWriter)  { compactDecode(v.FromFlexible, "Bytes", "[]byte", l) }
 func (v NullableBytes) WriteDecode(l *LineWriter) {
 	compactDecode(v.FromFlexible, "NullableBytes", "[]byte", l)
+}
+
+func (v NullableString) WriteDecode(l *LineWriter) {
+	// If there is a nullable version, we write a "read string, then set
+	// pointer" block.
+	if v.NullableVersion > 0 {
+		l.Write("var v *string")
+		l.Write("if version < %d {", v.NullableVersion)
+		l.Write("var vv string")
+		if v.FromFlexible {
+			l.Write("if isFlexible {")
+			l.Write("vv = b.CompactString()")
+			l.Write("} else {")
+			l.Write("vv = b.String()")
+			l.Write("}")
+		} else {
+			l.Write("vv = b.String()")
+		}
+		l.Write("v = &vv")
+		l.Write("} else {")
+		defer l.Write("}")
+	}
+
+	if v.FromFlexible {
+		// If we had a nullable version, then we already declared v and
+		// do not need to again.
+		if v.NullableVersion == 0 {
+			l.Write("var v *string")
+		}
+		l.Write("if isFlexible {")
+		l.Write("v = b.CompactNullableString()")
+		l.Write("} else {")
+		l.Write("v = b.NullableString()")
+		l.Write("}")
+	} else {
+		// If we had a nullable version, v has been declared and we
+		// reuse it, if not, we declare v.
+		if v.NullableVersion == 0 {
+			l.Write("v := b.NullableString()")
+		} else {
+			l.Write("v = b.NullableString()")
+		}
+	}
 }
 
 func (f FieldLengthMinusBytes) WriteDecode(l *LineWriter) {

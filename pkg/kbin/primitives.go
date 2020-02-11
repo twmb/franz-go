@@ -588,16 +588,6 @@ func (b *Reader) NullableString() *string {
 	return &s
 }
 
-// CompactStringIgnoreNullable returns a potentially nullable Kafka string from
-// the reader. The returned string is never null.
-func (b *Reader) StringIgnoreNullable() string {
-	l := b.Int16()
-	if l < 0 {
-		return ""
-	}
-	return string(b.Span(int(l)))
-}
-
 // CompactNullableString returns a Kafka compact nullable string from the
 // reader.
 func (b *Reader) CompactNullableString() *string {
@@ -607,16 +597,6 @@ func (b *Reader) CompactNullableString() *string {
 	}
 	s := string(b.Span(int(l)))
 	return &s
-}
-
-// CompactStringIgnoreNullable returns a Kafka compact, potentially nullable
-// string from the reader. The returned string is never null.
-func (b *Reader) CompactStringIgnoreNullable() string {
-	l := int(b.Uvarint()) - 1
-	if l < 0 {
-		return ""
-	}
-	return string(b.Span(int(l)))
 }
 
 // Bytes returns a Kafka byte array from the reader.

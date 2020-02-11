@@ -5054,10 +5054,8 @@ type JoinGroupResponse struct {
 
 	// Protocol is the agreed upon protocol name (i.e. "sticky", "range").
 	//
-	// v7 of this response changed this field to be nullable; since that would
-	// effectively be a breaking API change in the non-OO world, the nullable
-	// aspect is ignored.
-	Protocol string
+	// v7 of this response changed this field to be nullable.
+	Protocol *string
 
 	// LeaderID is the leader member.
 	LeaderID string
@@ -5100,11 +5098,21 @@ func (v *JoinGroupResponse) ReadFrom(src []byte) error {
 		s.ProtocolType = v
 	}
 	{
-		var v string
-		if isFlexible {
-			v = b.CompactStringIgnoreNullable()
+		var v *string
+		if version < 7 {
+			var vv string
+			if isFlexible {
+				vv = b.CompactString()
+			} else {
+				vv = b.String()
+			}
+			v = &vv
 		} else {
-			v = b.StringIgnoreNullable()
+			if isFlexible {
+				v = b.CompactNullableString()
+			} else {
+				v = b.NullableString()
+			}
 		}
 		s.Protocol = v
 	}

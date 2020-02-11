@@ -14,22 +14,21 @@ import (
 var newStructs []Struct
 
 var types = map[string]Type{
-	"bool":                   Bool{},
-	"int8":                   Int8{},
-	"int16":                  Int16{},
-	"int32":                  Int32{},
-	"int64":                  Int64{},
-	"float64":                Float64{},
-	"uint32":                 Uint32{},
-	"varint":                 Varint{},
-	"varlong":                Varlong{},
-	"string":                 String{},
-	"string-ignore-nullable": StringIgnoreNullable{},
-	"nullable-string":        NullableString{},
-	"bytes":                  Bytes{},
-	"nullable-bytes":         NullableBytes{},
-	"varint-string":          VarintString{},
-	"varint-bytes":           VarintBytes{},
+	"bool":            Bool{},
+	"int8":            Int8{},
+	"int16":           Int16{},
+	"int32":           Int32{},
+	"int64":           Int64{},
+	"float64":         Float64{},
+	"uint32":          Uint32{},
+	"varint":          Varint{},
+	"varlong":         Varlong{},
+	"string":          String{},
+	"nullable-string": NullableString{},
+	"bytes":           Bytes{},
+	"nullable-bytes":  NullableBytes{},
+	"varint-string":   VarintString{},
+	"varint-bytes":    VarintBytes{},
 }
 
 // LineScanner is a shoddy scanner that allows us to peek an entire line.
@@ -66,6 +65,7 @@ func (s *Struct) BuildFrom(scanner *LineScanner, level int) (done bool) {
 	fieldSpaces := strings.Repeat(" ", 2*(level+1))
 
 	var nextComment string
+	var err error
 
 	for !done && scanner.Ok() {
 		line := scanner.Peek()
@@ -105,7 +105,6 @@ func (s *Struct) BuildFrom(scanner *LineScanner, level int) (done bool) {
 		typ := fields[1]
 
 		if idx := strings.Index(typ, " // "); idx >= 0 {
-			var err error
 			f.MinVersion, f.MaxVersion, f.Tag, err = parseFieldComment(typ[idx:])
 			if err != nil {
 				die("unable to parse field comment on line %q: %v", line, err)
@@ -119,10 +118,10 @@ func (s *Struct) BuildFrom(scanner *LineScanner, level int) (done bool) {
 		//
 		// This does not support special modifiers at any level but
 		// the outside level.
-		isArray := false
-		isVarintArray := false
-		isNullableArray := false
-		nullableArrayVersion := 0
+		var isArray,
+			isVarintArray,
+			isNullableArray bool
+		nullableVersion := 0
 		arrayLevel := strings.Count(typ, "[")
 		if arrayLevel > 0 {
 			if strings.HasPrefix(typ, "varint[") {
@@ -140,9 +139,7 @@ func (s *Struct) BuildFrom(scanner *LineScanner, level int) (done bool) {
 					if typ[vend-1] != '+' {
 						die("max version number bound is unhandled in arrays")
 					}
-					var err error
-					nullableArrayVersion, err = strconv.Atoi(typ[:vend-1])
-					if err != nil {
+					if nullableVersion, err = strconv.Atoi(typ[:vend-1]); err != nil {
 						die("improper nullable array version number %q: %v", typ[:vend-1], err)
 					}
 					typ = typ[vend:]
@@ -179,6 +176,18 @@ func (s *Struct) BuildFrom(scanner *LineScanner, level int) (done bool) {
 				LengthMinus: minus,
 			}
 
+		case strings.HasPrefix(typ, "nullable-string-v"):
+			if typ[len(typ)-1] != '+' {
+				die("invalid missing + at end of nullable-string-v; nullable-strings cannot become nullable and then become non-nullable")
+			}
+			if nullableVersion, err = strconv.Atoi(typ[len("nullable-string-v") : len(typ)-1]); err != nil {
+				die("improper nullable string version number in %q: %v", typ, err)
+			}
+			f.Type = NullableString{
+				FromFlexible:    s.FromFlexible,
+				NullableVersion: nullableVersion,
+			}
+
 		default: // type is known, lookup and set
 			if types[typ] == nil {
 				die("unknown type %q on line %q", typ, line)
@@ -202,7 +211,7 @@ func (s *Struct) BuildFrom(scanner *LineScanner, level int) (done bool) {
 				Inner:           f.Type,
 				IsVarintArray:   isVarintArray,
 				IsNullableArray: isNullableArray,
-				NullableVersion: nullableArrayVersion,
+				NullableVersion: nullableVersion,
 				FromFlexible:    s.FromFlexible,
 			}
 		}

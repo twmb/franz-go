@@ -1426,10 +1426,8 @@ JoinGroupResponse =>
   ProtocolType: string
   // Protocol is the agreed upon protocol name (i.e. "sticky", "range").
   //
-  // v7 of this response changed this field to be nullable; since that would
-  // effectively be a breaking API change in the non-OO world, the nullable
-  // aspect is ignored.
-  Protocol: string-ignore-nullable
+  // v7 of this response changed this field to be nullable.
+  Protocol: nullable-string-v7+
   // LeaderID is the leader member.
   LeaderID: string
   // MemberID is the member of the receiving client.
