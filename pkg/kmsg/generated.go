@@ -5050,7 +5050,7 @@ type JoinGroupResponse struct {
 	Generation int32
 
 	// ProtocolType is the "type" of protocol being used for this group.
-	ProtocolType string
+	ProtocolType *string // v7+
 
 	// Protocol is the agreed upon protocol name (i.e. "sticky", "range").
 	//
@@ -5088,12 +5088,12 @@ func (v *JoinGroupResponse) ReadFrom(src []byte) error {
 		v := b.Int32()
 		s.Generation = v
 	}
-	{
-		var v string
+	if version >= 7 {
+		var v *string
 		if isFlexible {
-			v = b.CompactString()
+			v = b.CompactNullableString()
 		} else {
-			v = b.String()
+			v = b.NullableString()
 		}
 		s.ProtocolType = v
 	}

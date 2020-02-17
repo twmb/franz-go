@@ -1423,7 +1423,7 @@ JoinGroupResponse =>
   // Generation is the current "generation" of this group.
   Generation: int32
   // ProtocolType is the "type" of protocol being used for this group.
-  ProtocolType: string
+  ProtocolType: nullable-string // v7+
   // Protocol is the agreed upon protocol name (i.e. "sticky", "range").
   //
   // v7 of this response changed this field to be nullable.

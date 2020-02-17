@@ -356,5 +356,8 @@ func Tip() Versions {
 	v[30]++ // 2 create acls KAFKA-9027 738e14edb KIP-482 (flexible)
 	v[31]++ // 2 delete acls KAFKA-9028 738e14edb KIP-482 (flexible)
 
+	v[11]++ // 7 join group KAFKA-9437 96c4ce480 KIP-559
+	v[14]++ // 5 sync group (same)
+
 	return v
 }
