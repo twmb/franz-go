@@ -577,6 +577,7 @@ func (cxn *brokerCxn) doSasl(authenticate bool) error {
 // connection's correlation ID as appropriate for the next write.
 func (cxn *brokerCxn) writeRequest(req kmsg.Request) (int32, error) {
 	buf := cxn.bufPool.get()
+	defer cxn.bufPool.put(buf)
 	buf = kmsg.AppendRequest(
 		buf[:0],
 		req,

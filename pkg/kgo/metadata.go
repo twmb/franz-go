@@ -259,24 +259,17 @@ func (cl *Client) fetchTopicMetadata(reqTopics []string) (map[string]*topicParti
 				loadErr:     kerr.ErrorForCode(partMeta.ErrorCode),
 				leader:      partMeta.Leader,
 				leaderEpoch: leaderEpoch,
-			}
 
-			broker, exists := cl.brokers[p.leader]
-			if !exists {
-				if p.loadErr == nil {
-					p.loadErr = &errUnknownBrokerForPartition{topicMeta.Topic, partMeta.Partition, p.leader}
-				}
-
-				p.records = &recBuf{
+				records: &recBuf{
 					cl: cl,
 
 					topic:     topicMeta.Topic,
 					partition: partMeta.Partition,
 
 					recBufsIdx: -1,
-				}
+				},
 
-				p.cursor = &cursor{
+				cursor: &cursor{
 					topic:     topicMeta.Topic,
 					partition: partMeta.Partition,
 
@@ -288,6 +281,13 @@ func (cl *Client) fetchTopicMetadata(reqTopics []string) (map[string]*topicParti
 						currentLeaderEpoch: leaderEpoch,
 						lastConsumedEpoch:  -1, // required sentinel
 					},
+				},
+			}
+
+			broker, exists := cl.brokers[p.leader]
+			if !exists {
+				if p.loadErr == nil {
+					p.loadErr = &errUnknownBrokerForPartition{topicMeta.Topic, partMeta.Partition, p.leader}
 				}
 
 			} else {

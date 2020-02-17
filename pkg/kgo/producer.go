@@ -87,7 +87,9 @@ func (cl *Client) AbortBufferedRecords(ctx context.Context) error {
 		// We are safe to return.
 		return nil
 	case <-ctx.Done():
+		cl.producer.notifyMu.Lock()
 		quit = true
+		cl.producer.notifyMu.Unlock()
 		cl.producer.notifyCond.Broadcast()
 		return ctx.Err()
 	}
@@ -622,7 +624,9 @@ func (cl *Client) Flush(ctx context.Context) error {
 	case <-done:
 		return nil
 	case <-ctx.Done():
+		cl.producer.notifyMu.Lock()
 		quit = true
+		cl.producer.notifyMu.Unlock()
 		cl.producer.notifyCond.Broadcast()
 		return ctx.Err()
 	}

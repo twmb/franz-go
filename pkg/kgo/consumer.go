@@ -233,16 +233,17 @@ func (cl *Client) PollFetches(ctx context.Context) Fetches {
 		defer c.sourcesReadyMu.Unlock()
 		defer close(done)
 
-		for !quit {
-			if len(c.sourcesReadyForDraining) > 0 {
-				return
-			}
+		for !quit && len(c.sourcesReadyForDraining) == 0 {
 			c.sourcesReadyCond.Wait()
 		}
 	}()
 
 	select {
 	case <-ctx.Done():
+		c.sourcesReadyMu.Lock()
+		quit = true
+		c.sourcesReadyMu.Unlock()
+		c.sourcesReadyCond.Broadcast()
 	case <-done:
 	}
 

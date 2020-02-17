@@ -191,7 +191,7 @@ start:
 	broker := cl.broker()
 	req := &kmsg.MetadataRequest{
 		AllowAutoTopicCreation: cl.cfg.allowAutoTopicCreation,
-		Topics:                 make([]kmsg.MetadataRequestTopic, 0, len(topics)),
+		// DO NOT preallocate topics, since nil is significant
 	}
 	for _, topic := range topics {
 		req.Topics = append(req.Topics, kmsg.MetadataRequestTopic{topic})
