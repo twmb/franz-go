@@ -44,6 +44,8 @@ type cfg struct {
 	id     *string
 	dialFn func(string) (net.Conn, error)
 
+	logger Logger
+
 	seedBrokers []string
 	maxVersions kversion.Versions
 
@@ -115,6 +117,8 @@ func defaultCfg() cfg {
 		id:     &defaultID,
 		dialFn: stddial,
 
+		logger: new(nopLogger),
+
 		seedBrokers: []string{"127.0.0.1"},
 
 		retryBackoff:     func(int) time.Duration { return 100 * time.Millisecond },
@@ -154,6 +158,14 @@ func ClientID(id string) Opt {
 // brokers, overriding the default "kgo".
 func DisableClientID() Opt {
 	return clientOpt{func(cfg *cfg) { cfg.id = nil }}
+}
+
+// WithLogger sets the client to use the given logger, overriding the default
+// to not use a logger.
+//
+// It is invalid to use a nil logger; doing so will cause panics.
+func WithLogger(l Logger) Opt {
+	return clientOpt{func(cfg *cfg) { cfg.logger = &wrappedLogger{l} }}
 }
 
 // Dial uses fn to dial addresses, overriding the default dialer that
