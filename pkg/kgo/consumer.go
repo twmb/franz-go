@@ -290,10 +290,29 @@ const (
 	assignSetMatching
 )
 
+func (h assignHow) String() string {
+	switch h {
+	case assignWithoutInvalidating:
+		return "assign without invalidating"
+	case assignInvalidateAll:
+		return "assign invalidate all"
+	case assignInvalidateMatching:
+		return "assign invalidate matching"
+	case assignSetMatching:
+		return "assign set matching"
+	}
+	return ""
+}
+
 // assignPartitions, called under the consumer's mu, is used to set new
 // cursors or add to the existing cursors.
 func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how assignHow) {
 	seq := c.seq
+
+	c.cl.cfg.logger.Log(LogLevelInfo, "assigning partitions",
+		"assignments", assignments,
+		"how", how.String(),
+	)
 
 	if how != assignWithoutInvalidating {
 		// In this block, we immediately want to ensure that nothing
@@ -318,16 +337,14 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how
 				needsReset = false
 			} else {
 				if matchTopic, ok := assignments[usedPartition.cursor.topic]; ok {
-					matchPartition, ok := matchTopic[usedPartition.cursor.partition]
-					if !ok {
-						continue
-					}
-					needsReset = false
-					if how == assignInvalidateMatching {
-						usedPartition.cursor.setOffset(usedPartition.leaderEpoch, true, -1, -1, seq) // case 1
-					} else { // how == assignSetMatching
-						usedPartition.cursor.setOffset(usedPartition.leaderEpoch, true, matchPartition.request, matchPartition.epoch, seq) // case 2
-						keep = append(keep, usedPartition)
+					if matchPartition, ok := matchTopic[usedPartition.cursor.partition]; ok {
+						needsReset = false
+						if how == assignInvalidateMatching {
+							usedPartition.cursor.setOffset(usedPartition.leaderEpoch, true, -1, -1, seq) // case 1
+						} else { // how == assignSetMatching
+							usedPartition.cursor.setOffset(usedPartition.leaderEpoch, true, matchPartition.request, matchPartition.epoch, seq) // case 2
+							keep = append(keep, usedPartition)
+						}
 					}
 				}
 			}
@@ -347,6 +364,8 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how
 		c.sourcesReadyMu.Unlock()
 
 		c.usingPartitions = keep
+
+		c.cl.cfg.logger.Log(LogLevelInfo, "assign maybe invalidated some partitions", "kept", keep)
 	}
 
 	// This assignment could contain nothing (for the purposes of
@@ -354,6 +373,8 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how
 	if len(assignments) == 0 || (how == assignInvalidateMatching || how == assignSetMatching) {
 		return
 	}
+
+	c.cl.cfg.logger.Log(LogLevelInfo, "assign requires loading offsets")
 
 	// If we have a topic and partition loaded and the assignments use
 	// exact offsets, we can avoid looking up offsets.
@@ -406,6 +427,8 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how
 			delete(assignments, topic)
 		}
 	}
+
+	c.cl.cfg.logger.Log(LogLevelInfo, "assign setting offsets to load", "to_load", assignments)
 
 	waiting.waitingList = assignments
 	if !waiting.isEmpty() {
