@@ -635,6 +635,7 @@ func (o *offsetsWaitingLoad) setTopicPartForList(topic string, partition int32, 
 }
 
 func (c *consumer) tryBrokerOffsetLoadList(broker *broker, load *offsetsWaitingLoad) {
+	c.cl.cfg.logger.Log(LogLevelInfo, "issuing list offsets request")
 	kresp, err := broker.waitResp(c.cl.ctx,
 		load.buildListReq(c.cl.cfg.isolationLevel))
 	if err != nil {
@@ -643,12 +644,16 @@ func (c *consumer) tryBrokerOffsetLoadList(broker *broker, load *offsetsWaitingL
 	}
 	resp := kresp.(*kmsg.ListOffsetsResponse)
 
+	type toSetNums struct { // used for logging
+		offset       int64
+		leaderEpoch  int32
+		currentEpoch int32
+	}
 	type toSet struct {
 		topicPartition *topicPartition
-		offset         int64
-		leaderEpoch    int32
-		currentEpoch   int32
+		toSetNums
 	}
+	var toSetsNums []toSetNums
 	var toSets []toSet
 
 	for _, rTopic := range resp.Topics {
@@ -697,12 +702,13 @@ func (c *consumer) tryBrokerOffsetLoadList(broker *broker, load *offsetsWaitingL
 				leaderEpoch = -1
 			}
 
-			toSets = append(toSets, toSet{
-				topicPartition,
+			toSetNums := toSetNums{
 				offset,
 				leaderEpoch,
 				waitingPart.currentEpoch,
-			})
+			}
+			toSetsNums = append(toSetsNums, toSetNums)
+			toSets = append(toSets, toSet{topicPartition, toSetNums})
 		}
 	}
 
@@ -719,6 +725,8 @@ func (c *consumer) tryBrokerOffsetLoadList(broker *broker, load *offsetsWaitingL
 	if load.fromSeq < c.seq {
 		return
 	}
+
+	c.cl.cfg.logger.Log(LogLevelInfo, "fetched offsets, setting", "offsets", toSetsNums)
 	for _, toSet := range toSets {
 		toSet.topicPartition.cursor.setOffset(toSet.currentEpoch, true, toSet.offset, toSet.leaderEpoch, c.seq)
 		c.usingPartitions = append(c.usingPartitions, toSet.topicPartition)

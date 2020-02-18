@@ -185,9 +185,14 @@ func InstanceID(id string) GroupOpt {
 }
 
 type groupConsumer struct {
-	c   *consumer // used to change consumer state; generally c.mu is grabbed on access
-	cl  *Client   // used for running requests / adding to topics map
-	seq uint64    // consumer's seq at time of Assign and after every fetch offsets
+	c  *consumer // used to change consumer state; generally c.mu is grabbed on access
+	cl *Client   // used for running requests / adding to topics map
+
+	// seq is the consumer's seq at the time of AssignGroup.
+	//
+	// This number can change, but all changes are under the consumer lock.
+	// As such, it is unsafe to read this without holding that lock.
+	seq uint64
 
 	ctx    context.Context
 	cancel func()
@@ -301,6 +306,7 @@ func (cl *Client) AssignGroup(group string, opts ...GroupOpt) {
 	}
 
 	if !g.autocommitDisable && g.autocommitInterval > 0 {
+		g.cl.cfg.logger.Log(LogLevelInfo, "beginning commit loop")
 		go g.loopCommit()
 	}
 
@@ -308,6 +314,8 @@ func (cl *Client) AssignGroup(group string, opts ...GroupOpt) {
 }
 
 func (g *groupConsumer) manage() {
+	g.cl.cfg.logger.Log(LogLevelInfo, "beginning to manage the group lifecycle")
+
 	var consecutiveErrors int
 loop:
 	for {
@@ -328,6 +336,12 @@ loop:
 			// Waiting for the backoff is a good time to update our
 			// metadata; maybe the error is from stale metadata.
 			backoff := g.cl.cfg.retryBackoff(consecutiveErrors)
+			g.cl.cfg.logger.Log(LogLevelError, "join and sync loop errored",
+				"err", err,
+				"lost", g.nowAssigned,
+				"consecutive_errors", consecutiveErrors,
+				"backoff", backoff,
+			)
 			deadline := time.Now().Add(backoff)
 			g.cl.waitmeta(g.ctx, backoff)
 			after := time.NewTimer(time.Until(deadline))
@@ -346,11 +360,17 @@ loop:
 func (g *groupConsumer) leave() {
 	g.cancel()
 	if g.instanceID == nil {
+		g.cl.cfg.logger.Log(LogLevelInfo,
+			"leaving group",
+			"group", g.id,
+			"memberID", g.memberID,
+		)
 		g.cl.Request(g.cl.ctx, &kmsg.LeaveGroupRequest{
 			Group:    g.id,
 			MemberID: g.memberID,
 			Members: []kmsg.LeaveGroupRequestMember{{
 				MemberID: g.memberID,
+				// no instance ID
 			}},
 		})
 	}
@@ -431,6 +451,8 @@ const (
 // lost from the uncommitted map.
 func (g *groupConsumer) revoke(stage revokeStage, lost map[string][]int32) {
 	if !g.cooperative { // stage == revokeThisSession if not cooperative
+		g.cl.cfg.logger.Log(LogLevelInfo, "eager consumer revoking prior assigned partitions",
+			"revoking", g.nowAssigned)
 		if g.onRevoked != nil {
 			g.onRevoked(g.ctx, g.nowAssigned)
 		}
@@ -476,6 +498,8 @@ func (g *groupConsumer) revoke(stage revokeStage, lost map[string][]int32) {
 	}
 	g.c.maybeAssignPartitions(&g.seq, lostOffsets, assignInvalidateMatching)
 
+	g.cl.cfg.logger.Log(LogLevelInfo, "cooperative consumer revoking lost partitions",
+		"lost", lost)
 	if g.onRevoked != nil {
 		g.onRevoked(g.ctx, lost)
 	}
@@ -567,6 +591,7 @@ func (g *groupConsumer) setupAssigned() error {
 	ctx, cancel := context.WithCancel(g.ctx)
 	go func() {
 		defer cancel() // potentially kill offset fetching
+		g.cl.cfg.logger.Log(LogLevelInfo, "beginning heartbeat loop")
 		hbErrCh <- g.heartbeat(fetchErrCh, s)
 	}()
 
@@ -577,7 +602,11 @@ func (g *groupConsumer) setupAssigned() error {
 	}
 
 	if len(added) > 0 {
-		go func() { fetchErrCh <- g.fetchOffsets(ctx, added) }()
+		go func() {
+			g.cl.cfg.logger.Log(LogLevelInfo, "fetching offsets for added partitions",
+				"added", added)
+			fetchErrCh <- g.fetchOffsets(ctx, added)
+		}()
 	} else {
 		close(fetchErrCh)
 	}
@@ -637,11 +666,16 @@ func (g *groupConsumer) heartbeat(fetchErrCh <-chan error, s *assignRevokeSessio
 		}
 
 		if didMetadone && didRevoke {
+			g.cl.cfg.logger.Log(LogLevelInfo, "heartbeat loop complete", "err", err)
 			return lastErr
 		}
 
 		if err == nil {
 			continue
+		}
+
+		if lastErr == nil {
+			g.cl.cfg.logger.Log(LogLevelInfo, "heartbeat errored", "err", err)
 		}
 
 		// Since we errored, we must revoke.
@@ -724,6 +758,7 @@ func (g *groupConsumer) rejoin() {
 var clientGroupProtocol = "consumer" // in the Java API, the standard client is the "consumer" protocol
 
 func (g *groupConsumer) joinAndSync() error {
+	g.cl.cfg.logger.Log(LogLevelInfo, "joining group")
 	g.prejoin()
 
 start:
@@ -738,6 +773,7 @@ start:
 	}
 	kresp, err := g.cl.Request(g.ctx, &req)
 	if err != nil {
+		g.cl.cfg.logger.Log(LogLevelWarn, "join group failed", "err", err)
 		return err
 	}
 	resp := kresp.(*kmsg.JoinGroupResponse)
@@ -746,8 +782,10 @@ start:
 		switch err {
 		case kerr.MemberIDRequired:
 			g.memberID = resp.MemberID // KIP-394
+			g.cl.cfg.logger.Log(LogLevelInfo, "join returned MemberIDRequired, rejoining with response's MemberID")
 			goto start
 		case kerr.UnknownMemberID:
+			g.cl.cfg.logger.Log(LogLevelInfo, "join returned UnknownMemberID, rejoining without a member id")
 			g.memberID = ""
 			goto start
 		}
@@ -761,19 +799,38 @@ start:
 	var protocol string
 	leader := resp.LeaderID == resp.MemberID
 	if leader {
-		protocol := ""
 		if resp.Protocol != nil {
 			protocol = *resp.Protocol
 		}
+
+		g.cl.cfg.logger.Log(LogLevelInfo, "joined, balancing group",
+			"memberID", g.memberID,
+			"instanceID", g.instanceID,
+			"generation", g.generation,
+			"balance_protocol", protocol,
+			"leader", true,
+		)
+
 		plan, err = g.balanceGroup(protocol, resp.Members)
+
 		if err != nil {
+			g.cl.cfg.logger.Log(LogLevelError, "unable to balance", "err", err)
 			return err
 		}
 		g.setLeader()
+
+	} else {
+		g.cl.cfg.logger.Log(LogLevelInfo, "joined",
+			"memberID", g.memberID,
+			"instanceID", g.instanceID,
+			"generation", g.generation,
+			"leader", false,
+		)
 	}
 
-	if err = g.syncGroup(leader, plan, protocol, resp.Generation); err != nil {
+	if err = g.syncGroup(leader, plan, protocol); err != nil {
 		if err == kerr.RebalanceInProgress {
+			g.cl.cfg.logger.Log(LogLevelInfo, "sync failed with RebalanceInProgress, rejoining")
 			goto start
 		}
 		return err
@@ -782,28 +839,43 @@ start:
 	return nil
 }
 
-func (g *groupConsumer) syncGroup(leader bool, plan balancePlan, protocol string, generation int32) error {
+func (g *groupConsumer) syncGroup(leader bool, plan balancePlan, protocol string) error {
+
 	req := kmsg.SyncGroupRequest{
 		Group:           g.id,
-		Generation:      generation,
+		Generation:      g.generation,
 		MemberID:        g.memberID,
 		InstanceID:      g.instanceID,
 		ProtocolType:    nil,
 		Protocol:        nil,
 		GroupAssignment: plan.intoAssignment(), // nil unless we are the leader
 	}
+
 	if leader {
 		req.ProtocolType = &clientGroupProtocol
 		req.Protocol = &protocol
+		g.cl.cfg.logger.Log(LogLevelInfo, "syncing",
+			"protocol_type", clientGroupProtocol,
+			"protocol", protocol,
+		)
+	} else {
+		g.cl.cfg.logger.Log(LogLevelInfo, "syncing")
 	}
+
 	kresp, err := g.cl.Request(g.ctx, &req)
 	if err != nil {
+		g.cl.cfg.logger.Log(LogLevelWarn, "sync failed", "err", err)
 		return err // Request retries as necesary, so this must be a failure
 	}
 	resp := kresp.(*kmsg.SyncGroupResponse)
+	if err = kerr.ErrorForCode(resp.ErrorCode); err != nil {
+		g.cl.cfg.logger.Log(LogLevelWarn, "sync failed", "err", err)
+		return err
+	}
 
 	kassignment := new(kmsg.GroupMemberAssignment)
 	if err = kassignment.ReadFrom(resp.MemberAssignment); err != nil {
+		g.cl.cfg.logger.Log(LogLevelError, "sync assignment parse failed", "err", err)
 		return err
 	}
 
@@ -816,6 +888,7 @@ func (g *groupConsumer) syncGroup(leader bool, plan balancePlan, protocol string
 	for _, topic := range kassignment.Topics {
 		g.nowAssigned[topic.Topic] = topic.Partitions
 	}
+	g.cl.cfg.logger.Log(LogLevelInfo, "synced successfully", "assigned", g.nowAssigned)
 	return nil
 }
 
@@ -856,6 +929,7 @@ start:
 	}
 	kresp, err := g.cl.Request(ctx, &req)
 	if err != nil {
+		g.cl.cfg.logger.Log(LogLevelWarn, "fetch offsets failed", "err", err)
 		return err
 	}
 	resp := kresp.(*kmsg.OffsetFetchResponse)
@@ -864,6 +938,7 @@ start:
 		errCode = resp.Topics[0].Partitions[0].ErrorCode
 	}
 	if err = kerr.ErrorForCode(errCode); err != nil && !kerr.IsRetriable(err) {
+		g.cl.cfg.logger.Log(LogLevelError, "fetch offsets failed with non-retriable error", "err", err)
 		return err
 	}
 
@@ -914,6 +989,9 @@ start:
 	if !g.c.maybeAssignPartitions(&g.seq, offsets, assignHow) {
 		return errors.New("stale group")
 	}
+
+	g.cl.cfg.logger.Log(LogLevelInfo, "fetched committed offsets",
+		"offsets", offsets)
 	// If we can validate epochs, assigning partitions may set some
 	// partitions to wait for that validation. Thus, to ensure we continue
 	// the offset loading process, we must reset and load offsets here.
@@ -1024,6 +1102,8 @@ func (g *groupConsumer) updateUncommitted(fetches Fetches) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
+	part2offset := make(map[int32]int64) // for Debug logging
+
 	for _, fetch := range fetches {
 		var topicOffsets map[int32]uncommit
 		for _, topic := range fetch.Topics {
@@ -1055,9 +1135,12 @@ func (g *groupConsumer) updateUncommitted(fetches Fetches) {
 					newOffset,
 				}
 				topicOffsets[partition.Partition] = uncommit
+				part2offset[partition.Partition] = newOffset
 			}
 		}
 	}
+
+	g.cl.cfg.logger.Log(LogLevelDebug, "updated uncommitted", "part2offset", part2offset)
 }
 
 // updateCommitted updates the group's uncommitted map. This function triply
@@ -1086,6 +1169,8 @@ func (g *groupConsumer) updateCommitted(
 	sort.Slice(resp.Topics, func(i, j int) bool {
 		return resp.Topics[i].Topic < resp.Topics[j].Topic
 	})
+
+	part2offset := make(map[int32]int64) // for Debug logging
 
 	for i := range resp.Topics {
 		reqTopic := &req.Topics[i]
@@ -1119,8 +1204,11 @@ func (g *groupConsumer) updateCommitted(
 				reqPart.Offset,
 			}
 			topic[respPart.Partition] = uncommit
+			part2offset[respPart.Partition] = reqPart.Offset
 		}
 	}
+
+	g.cl.cfg.logger.Log(LogLevelDebug, "updated committed", "part2offset", part2offset)
 }
 
 func (g *groupConsumer) loopCommit() {
@@ -1183,7 +1271,7 @@ func (cl *Client) ResetToCommitted() {
 	}
 
 	c.assignPartitions(offsets, assignSetMatching)
-	g.seq = c.seq
+	g.seq = c.seq // under consumer lock, so this is safe
 }
 
 // Uncommitted returns the latest uncommitted offsets. Uncommitted offsets are
@@ -1480,6 +1568,13 @@ func (cl *Client) addOffsetsToTxn(ctx context.Context, group string) error {
 	if err != nil {
 		return err
 	}
+
+	cl.cfg.logger.Log(LogLevelInfo, "adding offsets to txn",
+		"txn", *cl.cfg.txnID,
+		"producerID", id,
+		"producerEpoch", epoch,
+		"group", group,
+	)
 	kresp, err := cl.Request(ctx, &kmsg.AddOffsetsToTxnRequest{
 		TransactionalID: *cl.cfg.txnID,
 		ProducerID:      id,
