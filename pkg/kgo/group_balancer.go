@@ -84,7 +84,7 @@ func (plan balancePlan) addPartitions(member groupMemberID, topic string, partit
 
 // intoAssignment translates a balance plan to the kmsg equivalent type.
 func (plan balancePlan) intoAssignment() []kmsg.SyncGroupRequestGroupAssignment {
-	kassignments := make([]kmsg.SyncGroupRequestGroupAssignment, len(plan))
+	kassignments := make([]kmsg.SyncGroupRequestGroupAssignment, 0, len(plan))
 	for member, assignment := range plan {
 		var kassignment kmsg.GroupMemberAssignment
 		for topic, partitions := range assignment {
