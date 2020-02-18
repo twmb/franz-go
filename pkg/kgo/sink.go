@@ -913,10 +913,20 @@ func (recBuf *recBuf) failAllRecords(err error) {
 func (recBuf *recBuf) lockedFailAllRecords(err error) {
 	recBuf.lockedStopLinger()
 	for _, batch := range recBuf.batches {
+		// We need to guard our clearing of records against a
+		// concurrent write. This is the only spot that the records
+		// slice can be modified outside of the main recBuf
+		// batch-buffering logic. Since we lock the recBuf, we do not
+		// need to worry about record buffering. However, we need to
+		// worry about a buffered write that will eventually read this
+		// batch. So, we lock while we clear.
+		batch.mu.Lock()
 		for i, pnr := range batch.records {
 			recBuf.cl.finishRecordPromise(pnr.promisedRec, err)
 			batch.records[i] = noPNR
 		}
+		batch.records = nil
+		batch.mu.Unlock()
 		emptyRecordsPool.Put(&batch.records)
 	}
 	recBuf.resetBatchDrainIdx()
@@ -1004,6 +1014,11 @@ type recBatch struct {
 	attrs          int16
 	firstTimestamp int64 // since unix epoch, in millis
 
+	// mu guards against records being concurrently modified in
+	// lockedFailAllRecords just as we are writing the request.
+	// See comment in that function and in appendTo.
+	mu sync.Mutex
+
 	records []promisedNumberedRecord
 }
 
@@ -1017,6 +1032,9 @@ type seqRecBatch struct {
 }
 
 // appendRecord saves a new record to a batch.
+//
+// This is called under the owning recBuf's mu, meaning records cannot be
+// concurrently modified by failing.
 func (b *recBatch) appendRecord(pr promisedRec, nums recordNumbers) {
 	b.wireLength += nums.wireLength
 	b.v1wireLength += messageSet1Length(pr.Record)
@@ -1192,6 +1210,15 @@ func (p *produceRequest) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendString(dst, topic)
 		dst = kbin.AppendArrayLen(dst, len(partitions))
 		for partition, batch := range partitions {
+			// Concurrently, a lockedFailAllRecords could have
+			// failed this batch WHILE IT WAS BUFFERED before it
+			// was sent. We need to guard against our records being
+			// cleared.
+			batch.mu.Lock()
+			if batch.records == nil {
+				batch.mu.Unlock()
+				continue
+			}
 			dst = kbin.AppendInt32(dst, partition)
 			if p.version < 3 {
 				dst = batch.appendToAsMessageSet(dst, uint8(p.version), p.compressor)
@@ -1205,6 +1232,7 @@ func (p *produceRequest) AppendTo(dst []byte) []byte {
 					p.compressor,
 				)
 			}
+			batch.mu.Unlock()
 		}
 	}
 	return dst
