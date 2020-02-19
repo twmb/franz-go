@@ -332,6 +332,10 @@ func (s *sink) drain() {
 		req.producerEpoch = epoch
 		req.backoffSeq = s.backoffSeq // safe to read outside mu since we are in drain loop
 
+		s.cl.cfg.logger.Log(LogLevelDebug, "scheduling produce request",
+			"broker_id", s.b.id,
+			"broker_addr", s.b.addr,
+		)
 		s.b.doSequencedAsyncPromise(
 			s.cl.ctx,
 			req,
