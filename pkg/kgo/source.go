@@ -262,7 +262,7 @@ type bufferedFetch struct {
 func (s *source) takeBuffered() (Fetch, uint64) {
 	r := s.buffered
 	s.buffered = bufferedFetch{}
-	go s.updateOffsets(r.reqOffsets)
+	s.updateOffsets(r.reqOffsets)
 	return r.fetch, r.seq
 }
 
@@ -351,6 +351,10 @@ func (s *source) fill() {
 			continue
 		}
 
+		s.cl.cfg.logger.Log(LogLevelDebug, "scheduling fetch request",
+			"broker_id", s.b.id,
+			"broker_addr", s.b.addr,
+		)
 		s.b.do(
 			s.cl.ctx,
 			req,
