@@ -172,15 +172,6 @@ func (c *consumer) addFakeReadyForDraining(topic string, partition int32, err er
 	c.sourcesReadyCond.Broadcast()
 }
 
-func (c *consumer) updateUncommitted(fetches Fetches, seq uint64) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.typ != consumerTypeGroup || seq != c.seq {
-		return
-	}
-	c.group.updateUncommitted(fetches)
-}
-
 // PollFetches waits for fetches to be available, returning as soon as any
 // broker returns a fetch. If the ctx quits, this function quits.
 //
@@ -193,8 +184,23 @@ func (cl *Client) PollFetches(ctx context.Context) Fetches {
 	defer c.fetchMu.Unlock()
 
 	var fetches Fetches
-	var fetchSeq uint64
-	defer func() { c.updateUncommitted(fetches, fetchSeq) }()
+
+	defer func() {
+		if len(fetches) > 0 {
+			toppars := make(map[int32][2]int64)
+			for _, fetch := range fetches {
+				for _, topic := range fetch.Topics {
+					for _, partition := range topic.Partitions {
+						toppars[partition.Partition] = [2]int64{
+							partition.Records[0].Offset,
+							partition.Records[len(partition.Records)-1].Offset,
+						}
+					}
+				}
+			}
+			cl.cfg.logger.Log(LogLevelDebug, "returning fetch", "part_stop_start", toppars)
+		}
+	}()
 
 	fill := func() {
 		c.sourcesReadyMu.Lock()
@@ -206,7 +212,6 @@ func (cl *Client) PollFetches(ctx context.Context) Fetches {
 			if seq < c.seq {
 				continue
 			}
-			fetchSeq = seq
 			fetches = append(fetches, fetch)
 		}
 		for _, ready := range c.fakeReadyForDraining {
@@ -214,10 +219,23 @@ func (cl *Client) PollFetches(ctx context.Context) Fetches {
 			if seq < c.seq {
 				continue
 			}
-			fetchSeq = seq
 			fetches = append(fetches, fetch)
 		}
 		c.sourcesReadyForDraining = nil
+
+		// Before releasing the sourcesReadyMu, we want to update our
+		// uncommitted. If we updated after, then we could end up with
+		// weird interactions with group invalidations where we return
+		// a stale fetch after committing in onRevoke.
+		//
+		// A blocking onRevoke commit, on finish, allows a new group
+		// session to start. If we returned stale fetches that did not
+		// have their uncommitted offset tracked, then we would allow
+		// duplicates.
+		if c.typ == consumerTypeGroup && len(fetches) > 0 {
+			c.group.updateUncommitted(fetches)
+		}
+
 		c.sourcesReadyMu.Unlock()
 	}
 
@@ -309,10 +327,7 @@ func (h assignHow) String() string {
 func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how assignHow) {
 	seq := c.seq
 
-	c.cl.cfg.logger.Log(LogLevelInfo, "assigning partitions",
-		"assignments", assignments,
-		"how", how.String(),
-	)
+	c.cl.cfg.logger.Log(LogLevelInfo, "assigning partitions", "how", how.String())
 
 	if how != assignWithoutInvalidating {
 		// In this block, we immediately want to ensure that nothing
@@ -364,8 +379,6 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how
 		c.sourcesReadyMu.Unlock()
 
 		c.usingPartitions = keep
-
-		c.cl.cfg.logger.Log(LogLevelInfo, "assign maybe invalidated some partitions", "kept", keep)
 	}
 
 	// This assignment could contain nothing (for the purposes of
@@ -667,16 +680,12 @@ func (c *consumer) tryBrokerOffsetLoadList(broker *broker, load *offsetsWaitingL
 	}
 	resp := kresp.(*kmsg.ListOffsetsResponse)
 
-	type toSetNums struct { // used for logging
-		offset       int64
-		leaderEpoch  int32
-		currentEpoch int32
-	}
 	type toSet struct {
 		topicPartition *topicPartition
-		toSetNums
+		offset         int64
+		leaderEpoch    int32
+		currentEpoch   int32
 	}
-	var toSetsNums []toSetNums
 	var toSets []toSet
 
 	for _, rTopic := range resp.Topics {
@@ -725,13 +734,12 @@ func (c *consumer) tryBrokerOffsetLoadList(broker *broker, load *offsetsWaitingL
 				leaderEpoch = -1
 			}
 
-			toSetNums := toSetNums{
+			toSets = append(toSets, toSet{
+				topicPartition,
 				offset,
 				leaderEpoch,
 				waitingPart.currentEpoch,
-			}
-			toSetsNums = append(toSetsNums, toSetNums)
-			toSets = append(toSets, toSet{topicPartition, toSetNums})
+			})
 		}
 	}
 
@@ -749,7 +757,7 @@ func (c *consumer) tryBrokerOffsetLoadList(broker *broker, load *offsetsWaitingL
 		return
 	}
 
-	c.cl.cfg.logger.Log(LogLevelInfo, "fetched offsets, setting", "offsets", toSetsNums)
+	c.cl.cfg.logger.Log(LogLevelInfo, "fetched offsets, setting")
 	for _, toSet := range toSets {
 		toSet.topicPartition.cursor.setOffset(toSet.currentEpoch, true, toSet.offset, toSet.leaderEpoch, c.seq)
 		c.usingPartitions = append(c.usingPartitions, toSet.topicPartition)
