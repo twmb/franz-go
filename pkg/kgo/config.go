@@ -138,7 +138,7 @@ func defaultCfg() cfg {
 		requestTimeout:      30 * time.Second,
 		partitioner:         StickyKeyPartitioner(),
 
-		maxWait:        500,
+		maxWait:        5000,
 		maxBytes:       50 << 20,
 		maxPartBytes:   10 << 20,
 		resetOffset:    NewOffset(AtStart()),
@@ -454,7 +454,7 @@ func TransactionTimeout(timeout time.Duration) ProducerOpt {
 
 // FetchMaxWait sets the maximum amount of time a broker will wait for a
 // fetch response to hit the minimum number of required bytes before returning,
-// overriding the default 500ms.
+// overriding the default 5s.
 //
 // This corresponds to the Java replica.fetch.wait.max.ms setting.
 func FetchMaxWait(wait time.Duration) ConsumerOpt {
