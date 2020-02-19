@@ -12,6 +12,9 @@ import (
 	"github.com/twmb/kafka-go/pkg/kmsg"
 )
 
+// TODO add SyncCommitOffsets / SyncCommitTransactionalOffsets?
+// then update OnRevoked and CommitOffsets docs
+
 // GroupOpt is an option to configure group consuming.
 type GroupOpt interface {
 	apply(*groupConsumer)
@@ -133,6 +136,16 @@ func OnAssigned(onAssigned func(context.Context, map[string][]int32)) GroupOpt {
 //
 // The onRevoked function is passed the group's context, which is only canceled
 // if the group is left or the client is closed.
+//
+// The onRevoked function is called at the end of a group session even if there
+// are no partitions being revoked. This is significant! It is not safe to
+// commit fetches polled before the revoke after the revoke returns, because
+// a new join and sync session may have started. If you commit after onRevoke
+// returns, then your commit will be silently discarded, while the next fetch
+// will effectively rewind your commit and you will receive double logs.
+//
+// Thus, if you are committing offsets manually, then to ensure you do not
+// receive double logs, you must properly set OnRevoked.
 func OnRevoked(onRevoked func(context.Context, map[string][]int32)) GroupOpt {
 	return groupOpt{func(cfg *groupConsumer) { cfg.onRevoked = onRevoked }}
 }
@@ -146,14 +159,14 @@ func OnLost(onLost func(context.Context, map[string][]int32)) GroupOpt {
 	return groupOpt{func(cfg *groupConsumer) { cfg.onLost = onLost }}
 }
 
-// DisableAutoCommit disable auto committing.
-func DisableAutoCommit() GroupOpt {
+// DisableAutocommit disable auto committing.
+func DisableAutocommit() GroupOpt {
 	return groupOpt{func(cfg *groupConsumer) { cfg.autocommitDisable = true }}
 }
 
-// AutoCommitInterval sets how long to go between autocommits, overriding the
+// AutocommitInterval sets how long to go between autocommits, overriding the
 // default 5s.
-func AutoCommitInterval(interval time.Duration) GroupOpt {
+func AutocommitInterval(interval time.Duration) GroupOpt {
 	return groupOpt{func(cfg *groupConsumer) { cfg.autocommitInterval = interval }}
 }
 
@@ -208,17 +221,17 @@ type groupConsumer struct {
 	uncommitted  uncommitted
 	commitCancel func()
 	commitDone   chan struct{}
+	memberID     string
+	generation   int32
 
 	rejoinCh chan struct{} // cap 1; sent to if subscription changes (regex)
 
 	regexTopics bool
 	reSeen      map[string]struct{}
 
-	memberID     string
 	instanceID   *string
-	generation   int32
-	lastAssigned map[string][]int32
-	nowAssigned  map[string][]int32
+	lastAssigned map[string][]int32 // only updated in join&sync loop
+	nowAssigned  map[string][]int32 // only updated in join&sync loop
 
 	sessionTimeout    time.Duration
 	rebalanceTimeout  time.Duration
@@ -477,10 +490,6 @@ func (g *groupConsumer) revoke(stage revokeStage, lost map[string][]int32) {
 		// Also, we must delete these partitions from nowAssigned.
 	}
 
-	if len(lost) == 0 { // if we lost nothing, do nothing
-		return
-	}
-
 	// We must now stop fetching anything we lost and invalidate any
 	// buffered fetches before falling into onRevoked.
 	//
@@ -496,12 +505,20 @@ func (g *groupConsumer) revoke(stage revokeStage, lost map[string][]int32) {
 		}
 		lostOffsets[lostTopic] = lostPartitionOffsets
 	}
+
+	// We MUST invalidate before calling onRevoke, because we want to allow
+	// commits in onReoke to be the FINAL offsets; we do not want to allow
+	// new fetches for revoked partitions after a call to revoke before we
+	// invalidate those partitions.
 	g.c.maybeAssignPartitions(&g.seq, lostOffsets, assignInvalidateMatching)
 
-	g.cl.cfg.logger.Log(LogLevelInfo, "cooperative consumer revoking lost partitions",
-		"lost", lost)
+	g.cl.cfg.logger.Log(LogLevelInfo, "cooperative consumer revoking lost partitions", "lost", lost)
 	if g.onRevoked != nil {
 		g.onRevoked(g.ctx, lost)
+	}
+
+	if len(lost) == 0 { // if we lost nothing, do nothing
+		return
 	}
 
 	defer g.rejoin()
@@ -625,29 +642,29 @@ func (g *groupConsumer) setupAssigned() error {
 // If the offset fetch is successful, then we basically sit in this function
 // until a heartbeat errors or us, being the leader, decides to re-join.
 func (g *groupConsumer) heartbeat(fetchErrCh <-chan error, s *assignRevokeSession) error {
-	ticker := time.NewTicker(g.heartbeatInterval)
+	interval := g.heartbeatInterval
+	if len(g.nowAssigned) == 0 && interval > 500*time.Millisecond {
+		interval = 500 * time.Millisecond
+	}
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
+	var cooperativeFastCheck <-chan time.Time
+	if g.cooperative {
+		cooperativeFastCheck = time.After(500 * time.Millisecond)
+	}
+
 	var metadone, revoked <-chan struct{}
-	var didMetadone, didRevoke bool
+	var heartbeat, didMetadone, didRevoke bool
 	var lastErr error
 
 	for {
 		var err error
 		select {
+		case <-cooperativeFastCheck:
+			heartbeat = true
 		case <-ticker.C:
-			req := &kmsg.HeartbeatRequest{
-				Group:      g.id,
-				Generation: g.generation,
-				MemberID:   g.memberID,
-				InstanceID: g.instanceID,
-			}
-			var kresp kmsg.Response
-			kresp, err = g.cl.Request(g.ctx, req)
-			if err == nil {
-				resp := kresp.(*kmsg.HeartbeatResponse)
-				err = kerr.ErrorForCode(resp.ErrorCode)
-			}
+			heartbeat = true
 		case <-g.rejoinCh:
 			// If a metadata update changes our subscription,
 			// we just pretend we are rebalancing.
@@ -663,6 +680,21 @@ func (g *groupConsumer) heartbeat(fetchErrCh <-chan error, s *assignRevokeSessio
 		case <-g.ctx.Done():
 			<-s.assignDone // fall into onLost logic
 			return errors.New("left group or client closed")
+		}
+
+		if heartbeat {
+			req := &kmsg.HeartbeatRequest{
+				Group:      g.id,
+				Generation: g.generation,
+				MemberID:   g.memberID,
+				InstanceID: g.instanceID,
+			}
+			var kresp kmsg.Response
+			kresp, err = g.cl.Request(g.ctx, req)
+			if err == nil {
+				resp := kresp.(*kmsg.HeartbeatResponse)
+				err = kerr.ErrorForCode(resp.ErrorCode)
+			}
 		}
 
 		if didMetadone && didRevoke {
@@ -781,19 +813,25 @@ start:
 	if err = kerr.ErrorForCode(resp.ErrorCode); err != nil {
 		switch err {
 		case kerr.MemberIDRequired:
+			g.mu.Lock()
 			g.memberID = resp.MemberID // KIP-394
+			g.mu.Unlock()
 			g.cl.cfg.logger.Log(LogLevelInfo, "join returned MemberIDRequired, rejoining with response's MemberID")
 			goto start
 		case kerr.UnknownMemberID:
-			g.cl.cfg.logger.Log(LogLevelInfo, "join returned UnknownMemberID, rejoining without a member id")
+			g.mu.Lock()
 			g.memberID = ""
+			g.mu.Unlock()
+			g.cl.cfg.logger.Log(LogLevelInfo, "join returned UnknownMemberID, rejoining without a member id")
 			goto start
 		}
 		return err // Request retries as necesary, so this must be a failure
 	}
 
+	g.mu.Lock()
 	g.memberID = resp.MemberID
 	g.generation = resp.Generation
+	g.mu.Unlock()
 
 	var plan balancePlan
 	var protocol string
@@ -990,8 +1028,7 @@ start:
 		return errors.New("stale group")
 	}
 
-	g.cl.cfg.logger.Log(LogLevelInfo, "fetched committed offsets",
-		"offsets", offsets)
+	g.cl.cfg.logger.Log(LogLevelInfo, "fetched committed offsets")
 	// If we can validate epochs, assigning partitions may set some
 	// partitions to wait for that validation. Thus, to ensure we continue
 	// the offset loading process, we must reset and load offsets here.
@@ -1102,7 +1139,10 @@ func (g *groupConsumer) updateUncommitted(fetches Fetches) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
-	part2offset := make(map[int32]int64) // for Debug logging
+	type lastNow struct {
+		last, now int64
+	}
+	part2offset := make(map[int32]lastNow) // for Debug logging
 
 	for _, fetch := range fetches {
 		var topicOffsets map[int32]uncommit
@@ -1130,12 +1170,13 @@ func (g *groupConsumer) updateUncommitted(fetches Fetches) {
 				if exists && uncommit.head.Offset > newOffset {
 					continue // odd
 				}
+				lastOffset := uncommit.head.Offset
 				uncommit.head = EpochOffset{
 					final.LeaderEpoch, // -1 if old message / unknown
 					newOffset,
 				}
 				topicOffsets[partition.Partition] = uncommit
-				part2offset[partition.Partition] = newOffset
+				part2offset[partition.Partition] = lastNow{lastOffset, newOffset}
 			}
 		}
 	}
@@ -1224,7 +1265,12 @@ func (g *groupConsumer) loopCommit() {
 
 		g.mu.Lock()
 		if !g.blockAuto {
-			g.commit(context.Background(), g.getUncommittedLocked(true), nil)
+			g.cl.cfg.logger.Log(LogLevelDebug, "autocommitting")
+			g.commit(context.Background(), g.getUncommittedLocked(true), func(_ *kmsg.OffsetCommitRequest, _ *kmsg.OffsetCommitResponse, err error) {
+				if err != nil {
+					g.cl.cfg.logger.Log(LogLevelDebug, "autocommit failed", "err", err)
+				}
+			})
 		}
 		g.mu.Unlock()
 	}
@@ -1358,11 +1404,20 @@ func (g *groupConsumer) getUncommittedLocked(head bool) map[string]map[int32]Epo
 // higher than the known last commit.
 //
 // It is invalid to use this function to commit offsets for a transaction.
+//
+// If manually committing, you likely want to set OnRevoked to commit
+// syncronously. Otherwise, you may end up trying to commit offsets that are
+// expired to to the join and sync session rotating, and then you will
+// re-receive those offsets, leading to duplicates. As long as *every* commit
+// is syncronous (i.e. the commit in onRevoked), then you can be sure that a
+// manual commit will not cancel an outstanding commit.
 func (cl *Client) CommitOffsets(
 	ctx context.Context,
 	uncommitted map[string]map[int32]EpochOffset,
 	onDone func(*kmsg.OffsetCommitRequest, *kmsg.OffsetCommitResponse, error),
 ) {
+	cl.cfg.logger.Log(LogLevelDebug, "in CommitOffsets", "with", uncommitted)
+	defer cl.cfg.logger.Log(LogLevelDebug, "left CommitOffsets")
 	if onDone == nil {
 		onDone = func(_ *kmsg.OffsetCommitRequest, _ *kmsg.OffsetCommitResponse, _ error) {}
 	}
@@ -1403,7 +1458,10 @@ func (cl *Client) CommitOffsets(
 func (g *groupConsumer) defaultRevoke(_ context.Context, _ map[string][]int32) {
 	if !g.autocommitDisable {
 		wait := make(chan struct{})
-		g.cl.CommitOffsets(g.ctx, g.getUncommitted(), func(_ *kmsg.OffsetCommitRequest, _ *kmsg.OffsetCommitResponse, _ error) {
+		g.cl.CommitOffsets(g.ctx, g.getUncommitted(), func(_ *kmsg.OffsetCommitRequest, _ *kmsg.OffsetCommitResponse, err error) {
+			if err != nil {
+				g.cl.cfg.logger.Log(LogLevelDebug, "default revoke failed", "err", err)
+			}
 			close(wait)
 		})
 		<-wait
@@ -1411,6 +1469,8 @@ func (g *groupConsumer) defaultRevoke(_ context.Context, _ map[string][]int32) {
 }
 
 // commit is the logic for Commit; see Commit's documentation
+//
+// This is called under the groupConsumer's lock.
 func (g *groupConsumer) commit(
 	ctx context.Context,
 	uncommitted map[string]map[int32]EpochOffset,
@@ -1424,9 +1484,7 @@ func (g *groupConsumer) commit(
 		return
 	}
 
-	if g.commitCancel != nil {
-		g.commitCancel() // cancel any prior commit
-	}
+	priorCancel := g.commitCancel
 	priorDone := g.commitDone
 
 	commitCtx, commitCancel := context.WithCancel(g.ctx) // enable ours to be canceled and waited for
@@ -1457,8 +1515,15 @@ func (g *groupConsumer) commit(
 		defer close(commitDone) // allow future commits to continue when we are done
 		defer commitCancel()
 		if priorDone != nil { // wait for any prior request to finish
-			<-priorDone
+			select {
+			case <-priorDone:
+			default:
+				g.cl.cfg.logger.Log(LogLevelDebug, "canceling prior commit to issue another")
+				priorCancel()
+				<-priorDone
+			}
 		}
+		g.cl.cfg.logger.Log(LogLevelDebug, "issuing commit", "uncommitted", uncommitted)
 
 		for topic, partitions := range uncommitted {
 			req.Topics = append(req.Topics, kmsg.OffsetCommitRequestTopic{
@@ -1610,6 +1675,7 @@ func (g *groupConsumer) commitTxn(
 	if g.commitCancel != nil {
 		g.commitCancel() // cancel any prior commit
 	}
+	priorCancel := g.commitCancel
 	priorDone := g.commitDone
 
 	commitCtx, commitCancel := context.WithCancel(g.ctx) // enable ours to be canceled and waited for
@@ -1648,9 +1714,16 @@ func (g *groupConsumer) commitTxn(
 	go func() {
 		defer close(commitDone) // allow future commits to continue when we are done
 		defer commitCancel()
-		if priorDone != nil { // wait for any prior request to finish
-			<-priorDone
+		if priorDone != nil {
+			select {
+			case <-priorDone:
+			default:
+				g.cl.cfg.logger.Log(LogLevelDebug, "canceling prior txn commit to issue another")
+				priorCancel()
+				<-priorDone // wait for any prior request to finish
+			}
 		}
+		g.cl.cfg.logger.Log(LogLevelDebug, "issuing txn commit", "uncommitted", uncommitted)
 
 		for topic, partitions := range uncommitted {
 			req.Topics = append(req.Topics, kmsg.TxnOffsetCommitRequestTopic{
