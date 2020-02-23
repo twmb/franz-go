@@ -1685,7 +1685,7 @@ ListGroupsResponse =>
 
 // SASLHandshakeRequest begins the sasl authentication flow. Note that Kerberos
 // GSSAPI authentication has its own unique flow.
-SASLHandshakeRequest => key 17, max version 2, flexible v2+
+SASLHandshakeRequest => key 17, max version 1
   // Mechanism is the mechanism to use for the sasl handshake (e.g., "PLAIN").
   //
   // For version 0, if this mechanism is supported, it is expected that the

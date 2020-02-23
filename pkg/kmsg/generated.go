@@ -6174,10 +6174,10 @@ type SASLHandshakeRequest struct {
 }
 
 func (*SASLHandshakeRequest) Key() int16                 { return 17 }
-func (*SASLHandshakeRequest) MaxVersion() int16          { return 2 }
+func (*SASLHandshakeRequest) MaxVersion() int16          { return 1 }
 func (v *SASLHandshakeRequest) SetVersion(version int16) { v.Version = version }
 func (v *SASLHandshakeRequest) GetVersion() int16        { return v.Version }
-func (v *SASLHandshakeRequest) IsFlexible() bool         { return v.Version >= 2 }
+func (v *SASLHandshakeRequest) IsFlexible() bool         { return false }
 func (v *SASLHandshakeRequest) ResponseKind() Response {
 	return &SASLHandshakeResponse{Version: v.Version}
 }
@@ -6185,18 +6185,9 @@ func (v *SASLHandshakeRequest) ResponseKind() Response {
 func (v *SASLHandshakeRequest) AppendTo(dst []byte) []byte {
 	version := v.Version
 	_ = version
-	isFlexible := version >= 2
-	_ = isFlexible
 	{
 		v := v.Mechanism
-		if isFlexible {
-			dst = kbin.AppendCompactString(dst, v)
-		} else {
-			dst = kbin.AppendString(dst, v)
-		}
-	}
-	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendString(dst, v)
 	}
 	return dst
 }
@@ -6219,8 +6210,6 @@ type SASLHandshakeResponse struct {
 func (v *SASLHandshakeResponse) ReadFrom(src []byte) error {
 	version := v.Version
 	_ = version
-	isFlexible := version >= 2
-	_ = isFlexible
 	b := kbin.Reader{Src: src}
 	s := v
 	{
@@ -6231,11 +6220,7 @@ func (v *SASLHandshakeResponse) ReadFrom(src []byte) error {
 		v := s.SupportedMechanisms
 		a := v
 		var l int32
-		if isFlexible {
-			l = b.CompactArrayLen()
-		} else {
-			l = b.ArrayLen()
-		}
+		l = b.ArrayLen()
 		if !b.Ok() {
 			return b.Complete()
 		}
@@ -6243,19 +6228,11 @@ func (v *SASLHandshakeResponse) ReadFrom(src []byte) error {
 			a = make([]string, l)
 		}
 		for i := int32(0); i < l; i++ {
-			var v string
-			if isFlexible {
-				v = b.CompactString()
-			} else {
-				v = b.String()
-			}
+			v := b.String()
 			a[i] = v
 		}
 		v = a
 		s.SupportedMechanisms = v
-	}
-	if isFlexible {
-		SkipTags(&b)
 	}
 	return b.Complete()
 }
