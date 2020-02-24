@@ -106,7 +106,7 @@ func TestProduceConsumeGroup(t *testing.T) {
 
 	// Begin a goroutine to produce all of our records.
 	go func() {
-		cl, err := NewClient(WithLogger(BasicLogger(LogLevelInfo, true)))
+		cl, err := NewClient(WithLogger(BasicLogger(LogLevelDebug, true)))
 		if err != nil {
 			errs <- err
 		}
@@ -115,9 +115,6 @@ func TestProduceConsumeGroup(t *testing.T) {
 		finalParts := make(map[int32]int64)
 		var wg sync.WaitGroup
 		for i := 0; i < limit; i++ {
-			if i%10000 == 0 {
-				fmt.Println("TOTAL PROD", i)
-			}
 			myKey := strconv.Itoa(i)
 			wg.Add(1)
 			cl.Produce(
@@ -135,7 +132,18 @@ func TestProduceConsumeGroup(t *testing.T) {
 					if got := string(r.Key); got != myKey {
 						errs <- fmt.Errorf("unexpected out of order key; got %s != exp %v", got, myKey)
 					}
+
 					finalPartsMu.Lock()
+					current, ok := finalParts[r.Partition]
+					if ok {
+						if r.Offset != current+1 {
+							errs <- fmt.Errorf("partition produced offsets out of order, got %d != exp %d", r.Offset, current+1)
+						}
+					} else {
+						if r.Offset != 0 {
+							errs <- fmt.Errorf("expected first produced record to partition to have offset 0, got %d", r.Offset)
+						}
+					}
 					finalParts[r.Partition] = r.Offset
 					finalPartsMu.Unlock()
 				},
@@ -293,7 +301,7 @@ out:
 	for {
 		select {
 		case err := <-errs:
-			t.Error(err)
+			t.Fatal(err)
 		case <-doneConsume:
 			break out
 		}
