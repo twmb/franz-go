@@ -19,7 +19,7 @@ type source struct {
 	consecutiveFailures int
 
 	// session supports fetch sessions as per KIP-227. This is updated
-	// serially when creating a requeset and when handling a req response.
+	// serially when creating a request and when handling a req response.
 	// As such, modifications to it do not need to be under a lock.
 	session fetchSession
 
