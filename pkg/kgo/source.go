@@ -18,6 +18,11 @@ type source struct {
 
 	consecutiveFailures int
 
+	// session supports fetch sessions as per KIP-227. This is updated
+	// serially when creating a requeset and when handling a req response.
+	// As such, modifications to it do not need to be under a lock.
+	session fetchSession
+
 	mu sync.Mutex // guards all below
 
 	cursors      []*cursor // contains all partitions being consumed on this source
@@ -288,12 +293,14 @@ func (s *source) unuseAll(reqOffsets map[string]map[int32]*seqOffsetFrom) {
 	<-s.inflightSem
 }
 
-func (s *source) createRequest() (req *fetchRequest, again bool) {
+func (s *source) createReq() (req *fetchRequest, again bool) {
 	req = &fetchRequest{
 		maxWait:        s.cl.cfg.maxWait,
 		maxBytes:       s.cl.cfg.maxBytes,
 		maxPartBytes:   s.cl.cfg.maxPartBytes,
 		isolationLevel: s.cl.cfg.isolationLevel,
+
+		session: &s.session,
 	}
 
 	s.mu.Lock()
@@ -343,7 +350,7 @@ func (s *source) fill() {
 		s.inflightSem <- struct{}{}
 
 		var req *fetchRequest
-		req, again = s.createRequest()
+		req, again = s.createReq()
 
 		if req.numOffsets == 0 { // must be at least one if a cursor was usable
 			again = s.fillState.maybeFinish(again)
@@ -379,6 +386,7 @@ func (s *source) backoff() {
 func (s *source) handleReqResp(req *fetchRequest, kresp kmsg.Response, err error) {
 	if err != nil {
 		s.backoff() // backoff before unuseAll to avoid inflight race
+		s.session.reset()
 		s.unuseAll(req.offsets)
 		s.cl.triggerUpdateMetadata()
 		return
@@ -386,6 +394,36 @@ func (s *source) handleReqResp(req *fetchRequest, kresp kmsg.Response, err error
 	s.consecutiveFailures = 0
 
 	resp := kresp.(*kmsg.FetchResponse)
+
+	// If our session errored, we reset the session and retry the request
+	// without delay.
+	switch err := kerr.ErrorForCode(resp.ErrorCode); err {
+	case nil:
+	case kerr.FetchSessionIDNotFound:
+		// If the session ID is not found, we may have had our session
+		// evicted or we may not be able to establish a session because
+		// the broker is maxed out and our session would be worse than
+		// existing ones.
+		//
+		// We never try to establish a session again.
+		if s.session.epoch == 0 {
+			s.session.id = -1
+			s.session.epoch = -1
+			s.cl.cfg.logger.Log(LogLevelInfo,
+				"session failed with IDNotFound while trying to establish a session; broker likely maxed on sessions; continuing on without using sessions")
+		}
+		fallthrough
+	case kerr.InvalidFetchSessionEpoch:
+		if s.session.id != -1 {
+			s.cl.cfg.logger.Log(LogLevelInfo, "resetting fetch session", "err", err)
+			s.session.reset()
+		}
+		s.unuseAll(req.offsets)
+		return
+	}
+
+	s.session.bumpEpoch(resp.SessionID)
+
 	newFetch := Fetch{
 		Topics: make([]FetchTopic, 0, len(resp.Topics)),
 	}
@@ -466,6 +504,8 @@ func (s *source) handleReqResp(req *fetchRequest, kresp kmsg.Response, err error
 
 	if needsMetaUpdate {
 		s.cl.triggerUpdateMetadata()
+		s.cl.cfg.logger.Log(LogLevelInfo, "fetch had a partition error; trigging metadata update and resetting the session")
+		s.session.reset()
 	}
 
 	if len(newFetch.Topics) > 0 {
@@ -870,6 +910,8 @@ type fetchRequest struct {
 	maxSeq     uint64
 	numOffsets int
 	offsets    map[string]map[int32]*seqOffsetFrom
+
+	session *fetchSession
 }
 
 func (f *fetchRequest) fetchCursorLocked(c *cursor) {
@@ -892,6 +934,10 @@ func (f *fetchRequest) fetchCursorLocked(c *cursor) {
 	}
 	f.numOffsets++
 	partitions[c.partition] = o
+
+	if o.seq > f.session.seq {
+		f.session.resetWithSeq(o.seq)
+	}
 }
 
 func (*fetchRequest) Key() int16           { return 1 }
@@ -907,31 +953,90 @@ func (f *fetchRequest) AppendTo(dst []byte) []byte {
 		MinBytes:       1,
 		MaxBytes:       f.maxBytes,
 		IsolationLevel: f.isolationLevel,
-		SessionID:      -1,
-		SessionEpoch:   -1, // KIP-227, we do not want to support
+		SessionID:      f.session.id,
+		SessionEpoch:   f.session.epoch,
 		Topics:         make([]kmsg.FetchRequestTopic, 0, len(f.offsets)),
 	}
+
 	for topic, partitions := range f.offsets {
 		req.Topics = append(req.Topics, kmsg.FetchRequestTopic{
 			Topic:      topic,
 			Partitions: make([]kmsg.FetchRequestTopicPartition, 0, len(partitions)),
 		})
 		reqTopic := &req.Topics[len(req.Topics)-1]
+
+		if f.session.used == nil {
+			f.session.used = make(map[string]map[int32]EpochOffset)
+		}
+		partsInSession := f.session.used[topic]
+		if partsInSession == nil {
+			partsInSession = make(map[int32]EpochOffset)
+			f.session.used[topic] = partsInSession
+		}
+
 		for partition, seqOffset := range partitions {
 			if seqOffset.seq < f.maxSeq {
 				continue // all offsets in the fetch must come from the same seq
 			}
-			reqTopic.Partitions = append(reqTopic.Partitions, kmsg.FetchRequestTopicPartition{
-				Partition:          partition,
-				CurrentLeaderEpoch: seqOffset.currentLeaderEpoch,
-				FetchOffset:        seqOffset.offset,
-				LogStartOffset:     -1,
-				PartitionMaxBytes:  f.maxPartBytes,
-			})
+
+			sessionOffset, partInSession := partsInSession[partition]
+			epochOffset := EpochOffset{
+				Epoch:  seqOffset.currentLeaderEpoch,
+				Offset: seqOffset.offset,
+			}
+
+			if !partInSession || sessionOffset != epochOffset {
+				reqTopic.Partitions = append(reqTopic.Partitions, kmsg.FetchRequestTopicPartition{
+					Partition:          partition,
+					CurrentLeaderEpoch: seqOffset.currentLeaderEpoch,
+					FetchOffset:        seqOffset.offset,
+					LogStartOffset:     -1,
+					PartitionMaxBytes:  f.maxPartBytes,
+				})
+				partsInSession[partition] = epochOffset
+			}
 		}
 	}
 	return req.AppendTo(dst)
 }
 func (f *fetchRequest) ResponseKind() kmsg.Response {
 	return &kmsg.FetchResponse{Version: f.version}
+}
+
+// fetchSessions, introduced in KIP-227, allow us to send less information back
+// and forth to a Kafka broker. Rather than relying on forgotten topics to
+// remove partitions from a session, we just simply reset the session.
+type fetchSession struct {
+	// seq corresponds to the max seq in the last fetch request.
+	// Whenever this is bumped, we reset the session.
+	seq uint64
+
+	id    int32
+	epoch int32
+
+	// used is what we used last in the session. If we issue a fetch
+	// request and the partition we want to fetch is for the same
+	// offset/epoch as the last fetch, we elide writing the partition.
+	used map[string]map[int32]EpochOffset
+}
+
+// resetWithSeq bumps the fetchSession's seq and resets the session.
+func (s *fetchSession) resetWithSeq(seq uint64) {
+	s.seq = seq
+	s.reset()
+}
+
+// reset resets the session by setting the next request to use epoch 0.
+func (s *fetchSession) reset() {
+	s.epoch = 0
+	s.used = nil
+}
+
+// bumpEpoch bumps the epoch and saves the session id.
+func (s *fetchSession) bumpEpoch(id int32) {
+	s.epoch++
+	if s.epoch < 0 {
+		s.epoch = 1
+	}
+	s.id = id
 }

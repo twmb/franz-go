@@ -48,7 +48,7 @@ DONE
 - KIP-207 (new error in list offset request; 2.2.0)
 - KIP-219 (throttling happens after response; 2.0.0)
 - KIP-226 (describe configs v1; 1.1.0)
-- KIP-227 (incremental fetch requests; supported but not used; 1.1.0)
+- KIP-227 (incremental fetch requests; 1.1.0)
 - KIP-229 (delete groups request; 1.1.0)
 - KIP-255 (oauth via sasl/oauthbearer; 2.0.0)
 - KIP-279 (leader / follower failover; changed offsets for leader epoch; 2.0.0)
