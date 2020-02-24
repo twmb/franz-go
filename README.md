@@ -7,14 +7,7 @@ KIPS
 TODO
 ----
 
-NOT YET (KIP under discussion / unmerged PR)
--------
-- KIP-359 (verify leader epoch in produce requests)
 - KIP-392 (fetch request from closest replica w/ rack; 2.2.0)
-- KIP-423 (no rebalance on JoinGroup from leader in certain cases; under discussion)
-- KIP-497 (new inter broker admin command "alter isr")
-- KIP-516 (topic.id field in some commands, including fetch)
-- KIP-518 (list groups by state command change)
 
 DONE
 ----
