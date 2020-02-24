@@ -8,6 +8,10 @@ import (
 // Partitioner creates topic partitioners to determine which partition messages
 // should be sent to.
 type Partitioner interface {
+	// forTopic returns a partitioner for an individual topic. It is
+	// guaranteed that only one record will use the an individual topic's
+	// topicPartitioner at a time, meaning partitioning within a topic does
+	// not require locks.
 	forTopic(string) topicPartitioner
 }
 
