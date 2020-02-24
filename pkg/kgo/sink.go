@@ -83,7 +83,7 @@ func newSink(
 
 // createReq returns a produceRequest from currently buffered records
 // and whether there are more records to create more requests immediately.
-func (s *sink) createReq() (*produceRequest, *kmsg.AddPartitionsToTxnRequest, bool) {
+func (s *sink) createReq() (*produceRequest, int, *kmsg.AddPartitionsToTxnRequest, bool) {
 	req := &produceRequest{
 		txnID:   s.cl.cfg.txnID,
 		acks:    s.cl.cfg.acks.val,
@@ -102,6 +102,8 @@ func (s *sink) createReq() (*produceRequest, *kmsg.AddPartitionsToTxnRequest, bo
 		transactional  = req.txnID != nil
 		txnReq         *kmsg.AddPartitionsToTxnRequest
 		txnAddedTopics map[string]int // topic => index in txnReq
+
+		nAdded int
 	)
 
 	s.mu.Lock() // prevent concurrent modification to recBufs
@@ -200,6 +202,7 @@ func (s *sink) createReq() (*produceRequest, *kmsg.AddPartitionsToTxnRequest, bo
 			seq,
 			batch,
 		)
+		nAdded += len(batch.records)
 	}
 
 	// We could have lost our only record buffer just before we grabbed the
@@ -207,7 +210,7 @@ func (s *sink) createReq() (*produceRequest, *kmsg.AddPartitionsToTxnRequest, bo
 	if len(s.recBufs) > 0 {
 		s.recBufsStart = (s.recBufsStart + 1) % len(s.recBufs)
 	}
-	return req, txnReq, moreToDrain
+	return req, nAdded, txnReq, moreToDrain
 }
 
 // maybeDrain begins a drain loop on the sink if the sink is not yet draining.
@@ -284,7 +287,8 @@ func (s *sink) drain() {
 
 		var req *produceRequest
 		var txnReq *kmsg.AddPartitionsToTxnRequest
-		req, txnReq, again = s.createReq()
+		var nAdded int
+		req, nAdded, txnReq, again = s.createReq()
 
 		// If we created a request with no batches, everything may be
 		// failing or lingering. Release the sem and continue.
@@ -335,6 +339,7 @@ func (s *sink) drain() {
 		s.cl.cfg.logger.Log(LogLevelDebug, "scheduling produce request",
 			"broker_id", s.b.id,
 			"broker_addr", s.b.addr,
+			"n_records", nAdded,
 		)
 		s.b.doSequencedAsyncPromise(
 			s.cl.ctx,
