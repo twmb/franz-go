@@ -1055,24 +1055,26 @@ type FetchRequest struct {
 	// READ_COMMITTED.
 	IsolationLevel int8 // v4+
 
-	// SessionID is used for broker-to-broker communication.
+	// SessionID is used to potentially reduce the amount of back and forth
+	// data between a client and a broker. If opting in to sessions, the first
+	// ID used should be 0, and thereafter (until session resets) the ID should
+	// be the ID returned in the fetch response.
 	//
-	// Because this is not needed in general clients, documentation is elided.
-	// Read KIP-227 for more details. Use -1 as a general client.
+	// Read KIP-227 for more details. Use -1 if you want to disable sessions.
 	SessionID int32 // v7+
 
-	// SessionEpoch is used for broker-to-broker communication.
+	// SessionEpoch is the session epoch for this request if using sessions.
 	//
-	// Because this is not needed in general clients, documentation is elided.
-	// Read KIP-227 for more details. Use -1 as a general client.
+	// Read KIP-227 for more details. Use -1 if you are not using sessions.
 	SessionEpoch int32 // v7+
 
 	// Topic contains topics to try to fetch records for.
 	Topics []FetchRequestTopic
 
 	// ForgottenTopicsData contains topics and partitions that a fetch session
-	// wants to remove from its session. This is generally only needed for
-	// brokers; see KIP-227 for more details.
+	// wants to remove from its session.
+	//
+	// See KIP-227 for more details.
 	ForgottenTopicsData []FetchRequestForgottenTopicsData // v7+
 
 	// Rack of the consumer making this request (see KIP-392; introduced in
@@ -1291,7 +1293,7 @@ type FetchResponse struct {
 
 	// ErrorCode is a full-response error code for a fetch request. This was
 	// added in support of KIP-227. This error is only non-zero if using fetch
-	// sessions (clients should not).
+	// sessions.
 	//
 	// FETCH_SESSION_ID_NOT_FOUND is returned if the request used a
 	// session ID that the broker does not know of.
@@ -1300,7 +1302,9 @@ type FetchResponse struct {
 	// invalid session epoch.
 	ErrorCode int16 // v7+
 
-	// SessionID is for broker to broker communication. See KIP-227 for more details.
+	// SessionID is the id for this session if using sessions.
+	//
+	// See KIP-227 for more details.
 	SessionID int32 // v7+
 
 	// Topics contains an array of topic partitions and the records received
