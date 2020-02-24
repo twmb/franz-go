@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"os"
 	"os/exec"
 	"regexp"
 	"sort"
@@ -15,9 +16,14 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-
-	"github.com/twmb/kafka-go/pkg/kmsg"
 )
+
+var testLogLevel = func() LogLevel {
+	if strings.ToLower(os.Getenv("KGO_LOG_LEVEL")) == "debug" {
+		return LogLevelDebug
+	}
+	return LogLevelInfo
+}()
 
 var randsha = func() func() string {
 	var mu sync.Mutex
@@ -95,6 +101,16 @@ func tmpGroup(tb testing.TB) (string, func()) {
 	}
 }
 
+// TestProduceConsumeGroup tests:
+//
+// - producing a lot of messages to a single topic, ensuring that all messages
+// are produced in order.
+//
+// - a consumer group with 5 members, one that leaves immediately after joining
+// and fetching
+//
+// - that we never doubly consume records, and that all records are consumed in
+// order
 func TestProduceConsumeGroup(t *testing.T) {
 	topic, topicCleanup := tmpTopic(t)
 	defer topicCleanup()
@@ -102,26 +118,26 @@ func TestProduceConsumeGroup(t *testing.T) {
 	const limit = 1000000
 
 	errs := make(chan error, 100)
-	body := []byte(strings.Repeat(randsha(), 100))
+	body := []byte(strings.Repeat(randsha(), 100)) // a large enough body
 
 	// Begin a goroutine to produce all of our records.
 	go func() {
-		cl, err := NewClient(WithLogger(BasicLogger(LogLevelDebug, true)))
-		if err != nil {
-			errs <- err
-		}
+		cl, _ := NewClient(WithLogger(BasicLogger(testLogLevel, true)))
 		defer cl.Close()
-		var finalPartsMu sync.Mutex
-		finalParts := make(map[int32]int64)
+
+		var offsetsMu sync.Mutex
+		offsets := make(map[int32]int64)
+
 		var wg sync.WaitGroup
+		defer func() { wg.Wait() }() // wait, otherwise we fail unflushed records at the end
 		for i := 0; i < limit; i++ {
-			myKey := strconv.Itoa(i)
+			myKey := []byte(strconv.Itoa(i))
 			wg.Add(1)
 			cl.Produce(
 				context.Background(),
 				&Record{
 					Topic: topic,
-					Key:   []byte(myKey),
+					Key:   myKey,
 					Value: body,
 				},
 				func(r *Record, err error) {
@@ -129,94 +145,51 @@ func TestProduceConsumeGroup(t *testing.T) {
 					if err != nil {
 						errs <- fmt.Errorf("unexpected produce err: %v", err)
 					}
-					if got := string(r.Key); got != myKey {
-						errs <- fmt.Errorf("unexpected out of order key; got %s != exp %v", got, myKey)
+					if !bytes.Equal(r.Key, myKey) {
+						errs <- fmt.Errorf("unexpected out of order key; got %s != exp %v", r.Key, myKey)
 					}
 
-					finalPartsMu.Lock()
-					current, ok := finalParts[r.Partition]
-					if ok {
-						if r.Offset != current+1 {
-							errs <- fmt.Errorf("partition produced offsets out of order, got %d != exp %d", r.Offset, current+1)
-						}
-					} else {
-						if r.Offset != 0 {
-							errs <- fmt.Errorf("expected first produced record to partition to have offset 0, got %d", r.Offset)
-						}
+					// ensure the offsets for this partition are contiguous
+					offsetsMu.Lock()
+					current, ok := offsets[r.Partition]
+					if ok && r.Offset != current+1 {
+						errs <- fmt.Errorf("partition produced offsets out of order, got %d != exp %d", r.Offset, current+1)
+					} else if !ok && r.Offset != 0 {
+						errs <- fmt.Errorf("expected first produced record to partition to have offset 0, got %d", r.Offset)
 					}
-					finalParts[r.Partition] = r.Offset
-					finalPartsMu.Unlock()
+					offsets[r.Partition] = r.Offset
+					offsetsMu.Unlock()
 				},
 			)
 		}
-		// Wait for all our records to be published before closing the
-		// client, which otherwise would kill all buffered unflushed
-		// records.
-		wg.Wait()
 
-		fmt.Println("FINAL OFFSETS FOR PARTITIONS", finalParts) // for debugging
-		total := int64(0)
-		for _, offsets := range finalParts {
-			total += offsets + 1
-		}
-		fmt.Println("TOTAL", total)
 	}()
 
 	group, groupCleanup := tmpGroup(t)
 	defer groupCleanup()
 
-	var wgGroup sync.WaitGroup
-	var consumed uint64
-	var part2KeyMu sync.Mutex
-	part2key := make(map[int32][]int)
-
 	type partOffset struct {
 		part   int32
 		offset int64
 	}
-	partOffsets := make(map[partOffset]bool)
+	var (
+		wg       sync.WaitGroup // waits for all consumers to quit
+		consumed uint64         // used to quit consuming
+
+		groupMu     sync.Mutex
+		part2key    = make(map[int32][]int)         // ensures ordering
+		partOffsets = make(map[partOffset]struct{}) // ensures we never double consume
+	)
 
 	addConsumer := func() {
-		wgGroup.Add(1)
+		wg.Add(1)
 		go func() {
-			l := BasicLogger(LogLevelDebug, true)
+			l := BasicLogger(testLogLevel, true)
 			cl, _ := NewClient(WithLogger(l))
-			defer wgGroup.Done()
+			defer wg.Done()
 			defer cl.Close()
 
-			// Since we are committing manually after every poll, we must ensure
-			// our commits are syncronous.
-			var syncCommit sync.Mutex
-			commit := func() {
-				syncCommit.Lock()
-				defer syncCommit.Unlock()
-				committed := make(chan struct{})
-				cl.CommitOffsets(
-					context.Background(),
-					cl.Uncommitted(),
-					func(_ *kmsg.OffsetCommitRequest, _ *kmsg.OffsetCommitResponse, err error) {
-						defer close(committed)
-						// We should have no errors, not even context canceled errors,
-						// since we are ensuring every commit, even the commit in
-						// onRevoke, is syncronous and does not cancel any prior.
-						if err != nil {
-							errs <- fmt.Errorf("unable to commit offsets: %v", err)
-						}
-					},
-				)
-				<-committed
-			}
-
-			cl.AssignGroup(group,
-				GroupTopics(topic),
-				DisableAutocommit(),
-				OnRevoked(func(ctx context.Context, _ map[string][]int32) {
-					l.Log(LogLevelDebug, "in revoke")
-					defer l.Log(LogLevelDebug, "left revoke")
-					commit()
-				}),
-			)
-
+			cl.AssignGroup(group, GroupTopics(topic))
 			defer cl.AssignGroup("") // leave group to allow for group deletion
 
 			for {
@@ -237,20 +210,17 @@ func TestProduceConsumeGroup(t *testing.T) {
 					if !bytes.Equal(r.Value, body) {
 						errs <- fmt.Errorf("body not what was expected")
 					}
-					part2KeyMu.Lock()
-					if partOffsets[partOffset{r.Partition, r.Offset}] {
-						l.Log(LogLevelDebug, "ME FAIL")
-						panic(fmt.Sprintf("SAW DOUBLE OFFSET %d %d", r.Partition, r.Offset))
+
+					groupMu.Lock()
+					if _, exists := partOffsets[partOffset{r.Partition, r.Offset}]; exists {
+						errs <- fmt.Errorf("saw double offset p%do%d", r.Partition, r.Offset)
 					}
-					partOffsets[partOffset{r.Partition, r.Offset}] = true
+					partOffsets[partOffset{r.Partition, r.Offset}] = struct{}{}
 					part2key[r.Partition] = append(part2key[r.Partition], keyNum)
-					part2KeyMu.Unlock()
+					groupMu.Unlock()
 
 					atomic.AddUint64(&consumed, 1)
 				}
-
-				commit()
-				fmt.Println("TOTAL READ", atomic.LoadUint64(&consumed))
 
 				if atomic.LoadUint64(&consumed) == limit {
 					break
@@ -259,21 +229,20 @@ func TestProduceConsumeGroup(t *testing.T) {
 		}()
 	}
 
-	// Have three consumers generically poll and commit.
-	for i := 0; i < 3; i++ {
+	for i := 0; i < 3; i++ { // three consumers start with standard poll&commit behavior
 		addConsumer()
 	}
 
 	// Have one consumer quit immediately after polling, causing others to
 	// rebalance.
-	wgGroup.Add(1)
+	wg.Add(1)
 	go func() {
-		cl, _ := NewClient(WithLogger(BasicLogger(LogLevelDebug, true)))
-		defer wgGroup.Done()
+		cl, _ := NewClient(WithLogger(BasicLogger(testLogLevel, true)))
+		defer wg.Done()
 
 		cl.AssignGroup(group,
 			GroupTopics(topic),
-			DisableAutocommit(),
+			DisableAutocommit(), // we do not want to commit since we do not process records
 		)
 		defer cl.AssignGroup("") // leave group to allow for group deletion
 
@@ -284,16 +253,16 @@ func TestProduceConsumeGroup(t *testing.T) {
 		}
 	}()
 
-	// Wait 6s (past initial 3s wait period) to add two more consumers that
+	// Wait 5s (past initial 3s wait period) to add two more consumers that
 	// will trigger other consumers to lose some partitions.
-	time.Sleep(6 * time.Second)
+	time.Sleep(5 * time.Second)
 	for i := 0; i < 3; i++ {
 		addConsumer()
 	}
 
 	doneConsume := make(chan struct{})
 	go func() {
-		wgGroup.Wait()
+		wg.Wait()
 		close(doneConsume)
 	}()
 
@@ -307,9 +276,9 @@ out:
 		}
 	}
 
-	allKeys := make([]int, 0, limit)
+	allKeys := make([]int, 0, limit) // did we receive everything we sent?
 	for part, keys := range part2key {
-		if !sort.IsSorted(sort.IntSlice(keys)) {
+		if !sort.IsSorted(sort.IntSlice(keys)) { // did we consume every partition in order?
 			t.Errorf("partition %d does not have sorted keys", part)
 		}
 		allKeys = append(allKeys, keys...)
@@ -319,8 +288,7 @@ out:
 		t.Fatalf("got %d keys != exp %d", len(allKeys), limit)
 	}
 
-	sort.Ints(allKeys)
-
+	sort.Ints(allKeys) // likely unnecessary due to our duplicate checking, but just for sanity
 	for i := 0; i < limit; i++ {
 		if allKeys[i] != i {
 			t.Fatalf("got key %d != exp %d", allKeys[i], i)

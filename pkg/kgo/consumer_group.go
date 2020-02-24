@@ -12,9 +12,6 @@ import (
 	"github.com/twmb/kafka-go/pkg/kmsg"
 )
 
-// TODO add SyncCommitOffsets / SyncCommitTransactionalOffsets?
-// then update OnRevoked and CommitOffsets docs
-
 // GroupOpt is an option to configure group consuming.
 type GroupOpt interface {
 	apply(*groupConsumer)
@@ -128,24 +125,28 @@ func OnAssigned(onAssigned func(context.Context, map[string][]int32)) GroupOpt {
 // OnRevoked sets the function to be called once a group transitions from
 // stable to rebalancing.
 //
-// Note that this function combined with onAssigned should combined not exceed
-// the rebalance interval. It is possible for the group, immediately after
+// Note that this function combined with onAssigned should not exceed the
+// rebalance interval. It is possible for the group, immediately after
 // finishing a balance, to re-enter a new balancing session.
 //
-// If autocommit is enabled, the default onRevoked is to commit all offsets.
+// If autocommit is enabled, the default onRevoked is a blocking commit all
+// offsets. The reason for a blocking commit is so that no later commit cancels
+// the blocking commit. If the commit in onRevoked were canceled, then the
+// rebalance would proceed immediately and then a future commit would be out of
+// date (for the prior session).
 //
 // The onRevoked function is passed the group's context, which is only canceled
 // if the group is left or the client is closed.
 //
 // The onRevoked function is called at the end of a group session even if there
-// are no partitions being revoked. This is significant! It is not safe to
-// commit fetches polled before the revoke after the revoke returns, because
-// a new join and sync session may have started. If you commit after onRevoke
-// returns, then your commit will be silently discarded, while the next fetch
-// will effectively rewind your commit and you will receive double logs.
+// are no partitions being revoked. As hinted at earlier in this documentation,
+// it is not safe to commit fetches polled before the revoke after the revoke
+// returns. That is, you should not poll, cancel an on-revoke commit, and then
+// later commit. If you do, a new join and sync session may have started, the
+// commit will fail, and you will doubly process records.
 //
-// Thus, if you are committing offsets manually, then to ensure you do not
-// receive double logs, you must properly set OnRevoked.
+// If you are committing offsets manually (have disabled autoommitting), it is
+// highly recommended to do a proper blocking commit in OnRevoked.
 func OnRevoked(onRevoked func(context.Context, map[string][]int32)) GroupOpt {
 	return groupOpt{func(cfg *groupConsumer) { cfg.onRevoked = onRevoked }}
 }
@@ -223,6 +224,8 @@ type groupConsumer struct {
 	commitDone   chan struct{}
 	memberID     string
 	generation   int32
+
+	syncCommit sync.RWMutex
 
 	rejoinCh chan struct{} // cap 1; sent to if subscription changes (regex)
 
@@ -1379,6 +1382,72 @@ func (g *groupConsumer) getUncommittedLocked(head bool) map[string]map[int32]Epo
 	return uncommitted
 }
 
+// BlockingCommitOffsets cancels any active CommitOffsets, begins a commit that
+// cannot be canceled, and waits for that commit to complete. This function
+// will not return until the commit is done and the onDone callback is
+// complete.
+//
+// The purpose of this function is for use in OnRevoke. You do not want to have
+// a commit in OnRevoke canceled, because once the commit is done, rebalancing
+// will continue. If you cancel an OnRevoke commit and commit after the revoke,
+// you will be committing for a stale session, the commit will be dropped, and
+// you will likely doubly process records.
+//
+// For more information about committing, see the documentation for
+// CommitOffsets.
+func (cl *Client) BlockingCommitOffsets(
+	ctx context.Context,
+	uncommitted map[string]map[int32]EpochOffset,
+	onDone func(*kmsg.OffsetCommitRequest, *kmsg.OffsetCommitResponse, error),
+) {
+	done := make(chan struct{})
+	defer func() { <-done }()
+
+	func() { // anonymous func called immediately for the defers
+		cl.cfg.logger.Log(LogLevelDebug, "in BlockingCommitOffsets", "with", uncommitted)
+		defer cl.cfg.logger.Log(LogLevelDebug, "left BlockingCommitOffsets")
+		if onDone == nil {
+			onDone = func(_ *kmsg.OffsetCommitRequest, _ *kmsg.OffsetCommitResponse, _ error) {}
+		}
+		cl.consumer.mu.Lock()
+		defer cl.consumer.mu.Unlock()
+		if cl.consumer.typ != consumerTypeGroup {
+			onDone(new(kmsg.OffsetCommitRequest), new(kmsg.OffsetCommitResponse), ErrNotGroup)
+			close(done)
+			return
+		}
+		if len(uncommitted) == 0 {
+			onDone(new(kmsg.OffsetCommitRequest), new(kmsg.OffsetCommitResponse), nil)
+			close(done)
+			return
+		}
+
+		g := cl.consumer.group
+		g.syncCommit.Lock() // block all other concurrent commits until our OnDone is done.
+
+		unblockCommits := func(req *kmsg.OffsetCommitRequest, resp *kmsg.OffsetCommitResponse, err error) {
+			defer close(done)
+			defer g.syncCommit.Unlock()
+			onDone(req, resp, err)
+		}
+
+		g.mu.Lock()
+		go func() {
+			defer g.mu.Unlock()
+
+			g.blockAuto = true
+			unblockAuto := func(req *kmsg.OffsetCommitRequest, resp *kmsg.OffsetCommitResponse, err error) {
+				unblockCommits(req, resp, err)
+				g.mu.Lock()
+				defer g.mu.Unlock()
+				g.blockAuto = false
+			}
+
+			g.commit(ctx, uncommitted, unblockAuto)
+		}()
+	}()
+}
+
 // CommitOffsets commits the given offsets for a group, calling onDone with the
 // commit request and either the response or an error if the response was not
 // issued. If uncommitted is empty or the client is not consuming as a group,
@@ -1424,7 +1493,7 @@ func (cl *Client) CommitOffsets(
 	cl.consumer.mu.Lock()
 	defer cl.consumer.mu.Unlock()
 	if cl.consumer.typ != consumerTypeGroup {
-		onDone(new(kmsg.OffsetCommitRequest), new(kmsg.OffsetCommitResponse), nil)
+		onDone(new(kmsg.OffsetCommitRequest), new(kmsg.OffsetCommitResponse), ErrNotGroup)
 		return
 	}
 	if len(uncommitted) == 0 {
@@ -1433,20 +1502,27 @@ func (cl *Client) CommitOffsets(
 	}
 
 	g := cl.consumer.group
-	g.mu.Lock()
-	defer g.mu.Unlock()
+	g.syncCommit.RLock() // block SyncCommit, but allow other concurrent Commit to cancel us
 
-	g.blockAuto = true
-	unblock := func(req *kmsg.OffsetCommitRequest, resp *kmsg.OffsetCommitResponse, err error) {
-		if onDone != nil {
-			onDone(req, resp, err)
-		}
-		g.mu.Lock()
-		defer g.mu.Unlock()
-		g.blockAuto = false
+	unblockSyncCommit := func(req *kmsg.OffsetCommitRequest, resp *kmsg.OffsetCommitResponse, err error) {
+		defer g.syncCommit.RUnlock()
+		onDone(req, resp, err)
 	}
 
-	g.commit(ctx, uncommitted, unblock)
+	g.mu.Lock()
+	go func() {
+		defer g.mu.Unlock()
+
+		g.blockAuto = true
+		unblockAuto := func(req *kmsg.OffsetCommitRequest, resp *kmsg.OffsetCommitResponse, err error) {
+			unblockSyncCommit(req, resp, err)
+			g.mu.Lock()
+			defer g.mu.Unlock()
+			g.blockAuto = false
+		}
+
+		g.commit(ctx, uncommitted, unblockAuto)
+	}()
 }
 
 // defaultRevoke commits the last fetched offsets and waits for the commit to
@@ -1457,14 +1533,12 @@ func (cl *Client) CommitOffsets(
 // before revoking, meaning this truly will commit all polled fetches.
 func (g *groupConsumer) defaultRevoke(_ context.Context, _ map[string][]int32) {
 	if !g.autocommitDisable {
-		wait := make(chan struct{})
-		g.cl.CommitOffsets(g.ctx, g.getUncommitted(), func(_ *kmsg.OffsetCommitRequest, _ *kmsg.OffsetCommitResponse, err error) {
+		un := g.getUncommitted()
+		g.cl.BlockingCommitOffsets(g.ctx, un, func(_ *kmsg.OffsetCommitRequest, _ *kmsg.OffsetCommitResponse, err error) {
 			if err != nil {
 				g.cl.cfg.logger.Log(LogLevelDebug, "default revoke failed", "err", err)
 			}
-			close(wait)
 		})
-		<-wait
 	}
 }
 
@@ -1560,23 +1634,29 @@ func (g *groupConsumer) commit(
 // MOSTLY DUPLICATED CODE DUE TO NO GENERICS AND BECAUSE THE TYPES ARE SLIGHTLY DIFFERENT //
 ////////////////////////////////////////////////////////////////////////////////////////////
 
-// CommitTransactionOffsets is exactly like CommitOffsets, but specifically
-// for use with transactional consuming and producing.
+// CommitTransactionOffsets is exactly like CommitOffsets, but specifically for
+// use with transactional consuming and producing.
 //
 // Note that, like with CommitOffsets, this cancels prior unfinished commits.
 // In the unlikely event that you are committing offsets multiple times within
 // a single transaction, and your second commit does not include partitions
-// that were in the first commit, you need to wait for the first commit to finish
-// before executing the new commit.
+// that were in the first commit, you need to wait for the first commit to
+// finish before executing the new commit.
 //
 // It is invalid to use this function if the client does not have a
 // transactional ID. As well, it is invalid to use this function outside of a
 // transaction.
+//
+// Because transactions require much more care than non-transactional
+// consumers, there is no BlockingCommitTransactionOffsets api provided. It is
+// expected that you will properly manage blocking in OnRevoke as necessary.
 func (cl *Client) CommitTransactionOffsets(
 	ctx context.Context,
 	uncommitted map[string]map[int32]EpochOffset,
 	onDone func(*kmsg.TxnOffsetCommitRequest, *kmsg.TxnOffsetCommitResponse, error),
 ) {
+	cl.cfg.logger.Log(LogLevelDebug, "in CommitTransactionOffsets", "with", uncommitted)
+	defer cl.cfg.logger.Log(LogLevelDebug, "left CommitTransactionOffsets")
 	if onDone == nil {
 		onDone = func(_ *kmsg.TxnOffsetCommitRequest, _ *kmsg.TxnOffsetCommitResponse, _ error) {}
 	}
@@ -1600,7 +1680,7 @@ func (cl *Client) CommitTransactionOffsets(
 
 	defer cl.consumer.mu.Unlock()
 	if cl.consumer.typ != consumerTypeGroup {
-		onDone(new(kmsg.TxnOffsetCommitRequest), new(kmsg.TxnOffsetCommitResponse), nil)
+		onDone(new(kmsg.TxnOffsetCommitRequest), new(kmsg.TxnOffsetCommitResponse), ErrNotGroup)
 		return
 	}
 	if len(uncommitted) == 0 {

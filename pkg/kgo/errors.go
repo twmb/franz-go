@@ -67,6 +67,10 @@ var (
 	// and they hit the configured record timeout limit.
 	ErrRecordTimeout = errors.New("records have timed out before they were able to be produced")
 
+	// ErrNotGroup is returned when trying to call group functions when the
+	// client is not assigned a group.
+	ErrNotGroup = errors.New("invalid group function call when not assigned a group")
+
 	// ErrNotTransactional is returned when trying to begin a transaction
 	// with a client that does not have a transactional ID.
 	ErrNotTransactional = errors.New("invalid attempt to begin a transaction with a non-transactional client")
