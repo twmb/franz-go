@@ -25,7 +25,7 @@ func (vs Versions) String() string {
 		fmt.Fprintf(w, "%s\t%d\n", kmsg.NameForKey(int16(k)), v)
 	}
 	w.Flush()
-	return string(buf.Bytes())
+	return buf.String()
 }
 
 func V0_8_0() Versions {

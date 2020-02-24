@@ -51,7 +51,7 @@ func (fn oauth) Authenticate(ctx context.Context) (sasl.Session, []byte, error) 
 		}
 		kvs = append(kvs, kv{k, v})
 	}
-	sort.Slice(len(kvs), func(i, j int) bool { return kvs[i].k < kvs[j].k })
+	sort.Slice(kvs, func(i, j int) bool { return kvs[i].k < kvs[j].k })
 
 	// https://tools.ietf.org/html/rfc7628#section-3.1
 	init := []byte("n,,\x01auth=Bearer ")
