@@ -49,10 +49,11 @@ type Client struct {
 	topicsMu sync.Mutex   // locked to prevent concurrent updates; reads are always atomic
 	topics   atomic.Value // map[string]*topicPartitions
 
-	// unknownTopics buffers all records for topics that are not loaded
-	unknownTopicsMu   sync.Mutex
-	unknownTopics     map[string][]promisedRec
-	unknownTopicsWait map[string]chan struct{}
+	// unknownTopics buffers all records for topics that are not loaded.
+	// The map is to a pointer to a slice for reasons documented in
+	// waitUnknownTopic.
+	unknownTopicsMu sync.Mutex
+	unknownTopics   map[string]*unknownTopicProduces
 
 	updateMetadataCh    chan struct{}
 	updateMetadataNowCh chan struct{} // like above, but with high priority
@@ -112,9 +113,8 @@ func NewClient(opts ...Opt) (*Client, error) {
 
 		decompressor: newDecompressor(),
 
-		coordinators:      make(map[coordinatorKey]int32),
-		unknownTopics:     make(map[string][]promisedRec),
-		unknownTopicsWait: make(map[string]chan struct{}),
+		coordinators:  make(map[coordinatorKey]int32),
+		unknownTopics: make(map[string]*unknownTopicProduces),
 
 		updateMetadataCh:    make(chan struct{}, 1),
 		updateMetadataNowCh: make(chan struct{}, 1),

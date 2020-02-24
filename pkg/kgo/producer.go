@@ -11,8 +11,6 @@ import (
 	"github.com/twmb/kafka-go/pkg/kmsg"
 )
 
-// TODO KIP-359 leader epoch in produce request when it is released
-
 // BeginTransaction sets the client to a transactional state, erroring if there
 // is no transactional ID or if the client is already in a transaction.
 func (cl *Client) BeginTransaction() error {
@@ -217,6 +215,11 @@ type producer struct {
 
 	txnMu sync.Mutex
 	inTxn bool
+}
+
+type unknownTopicProduces struct {
+	buffered []promisedRec
+	wait     chan struct{}
 }
 
 func (p *producer) init() {
@@ -463,11 +466,12 @@ func (cl *Client) doInitProducerID(lastID int64, lastEpoch int16) *producerID {
 }
 
 // partitionsForTopicProduce returns the topic partitions for a record.
-// If the topic is not loaded yet, this buffers the record.
+// If the topic is not loaded yet, this buffers the record and returns
+// nil, nil.
 func (cl *Client) partitionsForTopicProduce(pr promisedRec) (*topicPartitions, *topicPartitionsData) {
 	topic := pr.Topic
 
-	// 1) if the topic exists and there are partitions, then we can simply
+	// If the topic exists and there are partitions, then we can simply
 	// return the parts.
 	topics := cl.loadTopics()
 	parts, exists := topics[topic]
@@ -479,38 +483,45 @@ func (cl *Client) partitionsForTopicProduce(pr promisedRec) (*topicPartitions, *
 	}
 
 	if !exists {
-		// 2) if the topic does not exist, we check again under the
-		// topics mu.
+		// If the topic does not exist, we check again under the topics
+		// mu.
 		cl.topicsMu.Lock()
 		topics = cl.loadTopics()
 		if _, exists = topics[topic]; !exists {
-			// 2a) the topic definitely does not exist; we create it.
+			// The topic definitely does not exist; we create it.
 			//
-			// Before we release the topic mu, we lock unknownTopics
-			// and add our record to ensure ordering.
+			// Before we store the new topics and release the topic
+			// mu, we lock unknownTopicsMu. We cannot allow a
+			// concurrent metadata update to see our new topic and
+			// store partitions for it before we are waiting from
+			// the addUnknownTopicRecord func. Otherwise, we would
+			// fall into the wait and never be re-notified.
 			parts = newTopicPartitions(topic)
 			newTopics := cl.cloneTopics()
 			newTopics[topic] = parts
-			cl.topics.Store(newTopics)
 
-			cl.unknownTopicsMu.Lock()
+			cl.unknownTopicsMu.Lock() // lock before store and topicsMu release
+			cl.topics.Store(newTopics)
 			cl.topicsMu.Unlock()
+
 			cl.addUnknownTopicRecord(pr)
 			cl.unknownTopicsMu.Unlock()
 
 		} else {
-			// 2b) the topic exists now; exists is true and we fall
-			// into the logic below.
+			// Topic existed: fall into the logic below.
 			cl.topicsMu.Unlock()
 		}
 	}
 
 	if exists {
-		// 3) if the topic does exist, either partitions were loaded,
+		// If the topic does exist, either partitions were loaded,
 		// meaning we can just return the load since we are guaranteed
-		// (if producing to this topic in a single goroutine)
-		// sequential now, or they were not loaded and we must add our
+		// sequential now (if producing to this topic in a single
+		// goroutine), or they were not loaded and we must add our
 		// record in order under unknownTopicsMu.
+		//
+		// See comment in storePartitionsUpdate to the ordering
+		// of our lock then load, or the comment above.
 		cl.unknownTopicsMu.Lock()
 		topics = cl.loadTopics()
 		parts = topics[topic]
@@ -530,20 +541,29 @@ func (cl *Client) partitionsForTopicProduce(pr promisedRec) (*topicPartitions, *
 	return nil, nil
 }
 
+// addUnknownTopicRecord adds a record to a topic whose partitions are
+// currently unknown. This is always called with the unknownTopicsMu held.
 func (cl *Client) addUnknownTopicRecord(pr promisedRec) {
-	existing := cl.unknownTopics[pr.Topic]
-	existing = append(existing, pr)
-	cl.unknownTopics[pr.Topic] = existing
-	if len(existing) != 1 {
-		return
+	unknown := cl.unknownTopics[pr.Topic]
+	if unknown == nil {
+		unknown = &unknownTopicProduces{
+			buffered: make([]promisedRec, 0, 100),
+			wait:     make(chan struct{}, 1),
+		}
+		cl.unknownTopics[pr.Topic] = unknown
 	}
-
-	wait := make(chan struct{}, 1)
-	cl.unknownTopicsWait[pr.Topic] = wait
-	go cl.waitUnknownTopic(pr.Topic, wait)
+	unknown.buffered = append(unknown.buffered, pr)
+	if len(unknown.buffered) == 1 {
+		go cl.waitUnknownTopic(pr.Topic, unknown)
+	}
 }
 
-func (cl *Client) waitUnknownTopic(topic string, wait chan struct{}) {
+// waitUnknownTopic waits for a notification
+func (cl *Client) waitUnknownTopic(
+	topic string,
+	unknown *unknownTopicProduces,
+) {
+	cl.cfg.logger.Log(LogLevelDebug, "waiting for unknown topic", "topic", topic)
 	var after <-chan time.Time
 	if timeout := cl.cfg.recordTimeout; timeout > 0 {
 		timer := time.NewTimer(cl.cfg.recordTimeout)
@@ -558,10 +578,12 @@ func (cl *Client) waitUnknownTopic(topic string, wait chan struct{}) {
 			err = ErrBrokerDead
 		case <-after:
 			err = ErrRecordTimeout
-		case _, ok := <-wait:
+		case _, ok := <-unknown.wait:
 			if !ok {
+				cl.cfg.logger.Log(LogLevelDebug, "done waiting for unknown topic, metadata was successful", "topic", topic)
 				return // metadata was successful!
 			}
+			cl.cfg.logger.Log(LogLevelDebug, "unknown topic wait failed, retrying wait", "topic", topic)
 			tries++
 			if tries >= cl.cfg.retries {
 				err = ErrNoPartitionsAvailable
@@ -569,20 +591,28 @@ func (cl *Client) waitUnknownTopic(topic string, wait chan struct{}) {
 		}
 	}
 
-	// We only get down here if we errored above. Clear everything waiting
-	// and call the promises with our error.
+	cl.cfg.logger.Log(LogLevelDebug, "unknown topic wait failed, done retrying, failing all records", "topic", topic)
+
+	// If we errored above, we come down here to potentially clear the
+	// topic wait and fail all buffered records. However, we could have
+	// some weird racy interactions with storePartitionsUpdate.
+	//
+	// If the pointer in the unknownTopics map is different than the one
+	// that started this goroutine, then we raced. A partitions update
+	// cleared the unknownTopics, and then a new produce went and set a
+	// completely new pointer-to-slice in unknownTopics. We do not want to
+	// fail everything in that new slice.
 	cl.unknownTopicsMu.Lock()
-	prs, ok := cl.unknownTopics[topic]
+	nowUnknown := cl.unknownTopics[topic]
+	if nowUnknown != unknown {
+		cl.unknownTopicsMu.Unlock()
+		return
+	}
 	delete(cl.unknownTopics, topic)
-	delete(cl.unknownTopicsWait, topic)
 	cl.unknownTopicsMu.Unlock()
 
-	// We could have raced with a metadata update successfully clearing the
-	// partitions.
-	if ok {
-		for _, pr := range prs {
-			cl.finishRecordPromise(pr, err)
-		}
+	for _, pr := range unknown.buffered {
+		cl.finishRecordPromise(pr, err)
 	}
 }
 

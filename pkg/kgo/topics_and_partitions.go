@@ -59,27 +59,36 @@ func (t *topicPartitions) load() *topicPartitionsData {
 }
 
 func (cl *Client) storePartitionsUpdate(l *topicPartitions, lv *topicPartitionsData, hadPartitions bool) {
-	defer l.v.Store(lv)
 	// If the topic already had partitions, then there would be no
 	// unknown topic waiting and we do not need to notify anything.
 	if hadPartitions {
+		l.v.Store(lv)
 		return
 	}
 
 	cl.unknownTopicsMu.Lock()
 	defer cl.unknownTopicsMu.Unlock()
 
+	// If the topic did not have partitions, then we need to store the
+	// partition update BEFORE unlocking the mutex.
+	//
+	// Otherwise, this function would do all the "unwait the waiters"
+	// logic, then a produce could see "oh, no partitions, I will wait",
+	// then this would store the update and never notify that new waiter.
+	//
+	// By storing before releasing the lock, we ensure that later partition
+	// loads for this topic under the unknownTopicsMu will see our update.
+	defer l.v.Store(lv)
+
 	// If there are no unknown topics or this topic is not unknown, then we
-	// are fine as well.
+	// have nothing to do.
 	if len(cl.unknownTopics) == 0 {
 		return
 	}
-	if _, exists := cl.unknownTopics[l.topic]; !exists {
+	unknown, exists := cl.unknownTopics[l.topic]
+	if !exists {
 		return
 	}
-
-	unknown := cl.unknownTopics[l.topic]
-	unknownWait := cl.unknownTopicsWait[l.topic]
 
 	// If we loaded no partitions because of a retriable error, we signal
 	// the waiting goroutine that a try happened. It is possible the
@@ -87,7 +96,7 @@ func (cl *Client) storePartitionsUpdate(l *topicPartitions, lv *topicPartitionsD
 	// not require the send.
 	if len(lv.all) == 0 && kerr.IsRetriable(lv.loadErr) {
 		select {
-		case unknownWait <- struct{}{}:
+		case unknown.wait <- struct{}{}:
 		default:
 		}
 		return
@@ -100,16 +109,15 @@ func (cl *Client) storePartitionsUpdate(l *topicPartitions, lv *topicPartitionsD
 	// Note that we have to partition records _or_ finish with error now
 	// while under the unknown topics mu to ensure ordering.
 	delete(cl.unknownTopics, l.topic)
-	delete(cl.unknownTopicsWait, l.topic)
-	close(unknownWait)
+	close(unknown.wait)
 
 	if lv.loadErr != nil {
-		for _, pr := range unknown {
+		for _, pr := range unknown.buffered {
 			cl.finishRecordPromise(pr, lv.loadErr)
 		}
 		return
 	}
-	for _, pr := range unknown {
+	for _, pr := range unknown.buffered {
 		cl.doPartitionRecord(l, lv, pr)
 	}
 }
