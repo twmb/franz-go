@@ -580,7 +580,8 @@ func (o *seqOffsetFrom) processRespPartition(
 		kerr.NotLeaderForPartition,
 		kerr.ReplicaNotAvailable,
 		kerr.KafkaStorageError,
-		kerr.UnknownLeaderEpoch:
+		kerr.UnknownLeaderEpoch,
+		kerr.OffsetNotAvailable:
 
 		fetchPart.Err = nil // recoverable with client backoff; hide the error
 		fallthrough
