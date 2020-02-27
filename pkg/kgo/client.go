@@ -368,7 +368,9 @@ start:
 		for _, topic := range metaReq.Topics {
 			topics = append(topics, topic.Topic)
 		}
-		resp, err = cl.fetchMetadata(ctx, metaReq.Topics == nil, topics)
+		// fetchMetadata does its own retrying, so we do not go
+		// into the retrying logic below.
+		return cl.fetchMetadata(ctx, metaReq.Topics == nil, topics)
 	} else if _, admin := req.(kmsg.AdminRequest); admin {
 		var controller *broker
 		if controller, err = cl.controller(ctx); err == nil {

@@ -123,7 +123,7 @@ func defaultCfg() cfg {
 
 		retryBackoff:     func(int) time.Duration { return 100 * time.Millisecond },
 		retries:          math.MaxInt32, // effectively unbounded
-		brokerErrRetries: 50,
+		brokerErrRetries: 20,
 
 		maxBrokerWriteBytes: 100 << 20, // Kafka socket.request.max.bytes default is 100<<20
 
@@ -215,7 +215,7 @@ func RequestRetries(n int) Opt {
 }
 
 // BrokerErrRetries sets the number of tries that are allowed for requests,
-// overriding the default 50.
+// overriding the default 20.
 //
 // These retries are for cases where a connection to a broker fails during a
 // request. Generally, you just must retry these requests anyway. However, if
