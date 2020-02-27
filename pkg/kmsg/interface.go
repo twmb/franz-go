@@ -102,10 +102,14 @@ func AppendRequest(
 	// client id.
 	dst = kbin.AppendNullableString(dst, clientID)
 
-	dst = r.AppendTo(dst)
+	// The flexible tags end the request header, and then begins the
+	// request body.
 	if r.IsFlexible() {
 		dst = append(dst, 0) // tagged section; TODO for when tags are added here
 	}
+
+	// Now the request body.
+	dst = r.AppendTo(dst)
 
 	kbin.AppendInt32(dst[:0], int32(len(dst[4:])))
 	return dst

@@ -25,10 +25,30 @@ type promisedReq struct {
 }
 
 type promisedResp struct {
-	corrID   int32
-	flexible bool
-	resp     kmsg.Response
-	promise  func(kmsg.Response, error)
+	corrID int32
+
+	// With flexible headers, we skip tags at the end of the response
+	// header for now because they're currently unused. However, the
+	// ApiVersions response uses v0 response header (no tags) even if the
+	// response body has flexible versions. This is done in support of the
+	// v0 fallback logic that allows for indexing into an exact offset.
+	// Thus, for ApiVersions specifically, this is false even if the
+	// request is flexible.
+	//
+	// As a side note, this note was not mentioned in KIP-482 which
+	// introduced flexible versions, and was mentioned in passing in
+	// KIP-511 which made ApiVersion flexible, so discovering what was
+	// wrong was not too fun ("Note that ApiVersionsResponse is flexible
+	// version but the response header is not flexible" is *it* in the
+	// entire KIP.)
+	//
+	// To see the version pinning, look at the code generator function
+	// generateHeaderVersion in
+	// generator/src/main/java/org/apache/kafka/message/ApiMessageTypeGenerator.java
+	flexibleHeader bool
+
+	resp    kmsg.Response
+	promise func(kmsg.Response, error)
 }
 
 type waitingResp struct {
@@ -278,7 +298,7 @@ func (b *broker) handleReqs() {
 
 		cxn.waitResp(promisedResp{
 			corrID,
-			req.IsFlexible(),
+			req.IsFlexible() && req.Key() != 18, // response header not flexible if ApiVersions; see promisedResp doc
 			req.ResponseKind(),
 			pr.promise,
 		})
@@ -402,7 +422,7 @@ start:
 		return err
 	}
 
-	rawResp, err := readResponse(cxn.conn, corrID)
+	rawResp, err := readResponse(cxn.conn, corrID, false) // api versions does *not* use flexible response headers; see comment in promisedResp
 	if err != nil {
 		return err
 	}
@@ -464,7 +484,7 @@ start:
 			return err
 		}
 
-		rawResp, err := readResponse(cxn.conn, corrID)
+		rawResp, err := readResponse(cxn.conn, corrID, req.IsFlexible())
 		if err != nil {
 			return err
 		}
@@ -536,7 +556,7 @@ func (cxn *brokerCxn) doSasl(authenticate bool) error {
 			if err != nil {
 				return err
 			}
-			rawResp, err := readResponse(cxn.conn, corrID)
+			rawResp, err := readResponse(cxn.conn, corrID, req.IsFlexible())
 			if err != nil {
 				return err
 			}
@@ -611,7 +631,7 @@ func readConn(conn io.ReadCloser) ([]byte, error) {
 
 // readResponse reads a response from conn, ensures the correlation ID is
 // correct, and returns a newly allocated slice on success.
-func readResponse(conn io.ReadCloser, corrID int32) ([]byte, error) {
+func readResponse(conn io.ReadCloser, corrID int32, flexibleHeader bool) ([]byte, error) {
 	buf, err := readConn(conn)
 	if err != nil {
 		return nil, err
@@ -623,6 +643,13 @@ func readResponse(conn io.ReadCloser, corrID int32) ([]byte, error) {
 	if gotID != corrID {
 		conn.Close()
 		return nil, ErrCorrelationIDMismatch
+	}
+	// If the response header is flexible, we skip the tags at the end of
+	// it. They are currently unused.
+	if flexibleHeader {
+		b := kbin.Reader{Src: buf[4:]}
+		kmsg.SkipTags(&b)
+		return b.Src, b.Complete()
 	}
 	return buf[4:], nil
 }
@@ -674,7 +701,7 @@ func (cxn *brokerCxn) handleResps() {
 	defer cxn.die() // always track our death
 
 	for pr := range cxn.resps {
-		raw, err := readResponse(cxn.conn, pr.corrID)
+		raw, err := readResponse(cxn.conn, pr.corrID, pr.flexibleHeader)
 		if err != nil {
 			pr.promise(nil, err)
 			return
