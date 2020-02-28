@@ -316,6 +316,11 @@ func (cl *Client) Produce(
 }
 
 func (cl *Client) finishRecordPromise(pr promisedRec, err error) {
+	// We call the promise before finishing the record; this allows users
+	// of Flush to know that all buffered records are completely done
+	// before Flush returns.
+	pr.promise(pr.Record, err)
+
 	buffered := atomic.AddInt64(&cl.producer.bufferedRecords, -1)
 	if buffered >= cl.cfg.maxBufferedRecords {
 		go func() { cl.producer.waitBuffer <- struct{}{} }()
@@ -324,7 +329,6 @@ func (cl *Client) finishRecordPromise(pr promisedRec, err error) {
 		cl.producer.notifyMu.Unlock()
 		cl.producer.notifyCond.Broadcast()
 	}
-	pr.promise(pr.Record, err)
 }
 
 // partitionRecord loads the partitions for a topic and produce to them. If
