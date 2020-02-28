@@ -1269,9 +1269,23 @@ func (g *groupConsumer) loopCommit() {
 		g.mu.Lock()
 		if !g.blockAuto {
 			g.cl.cfg.logger.Log(LogLevelDebug, "autocommitting")
-			g.commit(context.Background(), g.getUncommittedLocked(true), func(_ *kmsg.OffsetCommitRequest, _ *kmsg.OffsetCommitResponse, err error) {
+			g.commit(context.Background(), g.getUncommittedLocked(true), func(_ *kmsg.OffsetCommitRequest, resp *kmsg.OffsetCommitResponse, err error) {
 				if err != nil {
-					g.cl.cfg.logger.Log(LogLevelDebug, "autocommit failed", "err", err)
+					if err != context.Canceled {
+						g.cl.cfg.logger.Log(LogLevelError, "autocommit failed", "err", err)
+					} else {
+						g.cl.cfg.logger.Log(LogLevelDebug, "autocommit canceled")
+					}
+					return
+				}
+				for _, topic := range resp.Topics {
+					for _, partition := range topic.Partitions {
+						if err := kerr.ErrorForCode(partition.ErrorCode); err != nil {
+							g.cl.cfg.logger.Log(LogLevelError, "in autocommit: unable to commit offsets for topic partition",
+								"topic", topic.Topic,
+								"partition", partition.Partition)
+						}
+					}
 				}
 			})
 		}
@@ -1452,7 +1466,7 @@ func (cl *Client) BlockingCommitOffsets(
 // commit request and either the response or an error if the response was not
 // issued. If uncommitted is empty or the client is not consuming as a group,
 // onDone is called with (nil, nil, nil) and this function returns immediately.
-// It is OK if onDone is nil.
+// It is OK if onDone is nil, but you will not know if your commit succeeded.
 //
 // If autocommitting is enabled, this function blocks autocommitting until this
 // function is complete and the onDone has returned.
@@ -1464,15 +1478,21 @@ func (cl *Client) BlockingCommitOffsets(
 // Note that this function ensures absolute ordering of commit requests by
 // canceling prior requests and ensuring they are done before executing a new
 // one. This means, for absolute control, you can use this function to
-// periodically commit async and then issue a final sync commit before
-// quitting. This differs from the Java async commit, which does not retry
-// requests to avoid trampling on future commits.
+// periodically commit async and then issue a final sync commit before quitting
+// (this is the behavior of autocomitting and using the default revoke). This
+// differs from the Java async commit, which does not retry requests to avoid
+// trampling on future commits.
 //
 // If using autocommitting, autocommitting will resume once this is complete,
 // committing only if the client's internal uncommitted offsets counters are
 // higher than the known last commit.
 //
 // It is invalid to use this function to commit offsets for a transaction.
+//
+// It is highly recommended to check the response's partition's error codes if
+// the response is non-nil. While unlikely, individual partitions can error.
+// This is most likely to happen if a commit occurs too late in a rebalance
+// event.
 //
 // If manually committing, you likely want to set OnRevoked to commit
 // syncronously. Otherwise, you may end up trying to commit offsets that are
@@ -1534,9 +1554,19 @@ func (cl *Client) CommitOffsets(
 func (g *groupConsumer) defaultRevoke(_ context.Context, _ map[string][]int32) {
 	if !g.autocommitDisable {
 		un := g.getUncommitted()
-		g.cl.BlockingCommitOffsets(g.ctx, un, func(_ *kmsg.OffsetCommitRequest, _ *kmsg.OffsetCommitResponse, err error) {
+		g.cl.BlockingCommitOffsets(g.ctx, un, func(_ *kmsg.OffsetCommitRequest, resp *kmsg.OffsetCommitResponse, err error) {
 			if err != nil {
-				g.cl.cfg.logger.Log(LogLevelDebug, "default revoke failed", "err", err)
+				g.cl.cfg.logger.Log(LogLevelError, "default revoke failed", "err", err)
+				return
+			}
+			for _, topic := range resp.Topics {
+				for _, partition := range topic.Partitions {
+					if err := kerr.ErrorForCode(partition.ErrorCode); err != nil {
+						g.cl.cfg.logger.Log(LogLevelError, "in revoke: unable to commit offsets for topic partition",
+							"topic", topic.Topic,
+							"partition", partition.Partition)
+					}
+				}
 			}
 		})
 	}
@@ -1650,6 +1680,7 @@ func (g *groupConsumer) commit(
 // Because transactions require much more care than non-transactional
 // consumers, there is no BlockingCommitTransactionOffsets api provided. It is
 // expected that you will properly manage blocking in OnRevoke as necessary.
+// It is highly recommended to check the response's partition errors.
 func (cl *Client) CommitTransactionOffsets(
 	ctx context.Context,
 	uncommitted map[string]map[int32]EpochOffset,
