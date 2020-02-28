@@ -360,6 +360,9 @@ func (s *sink) doTxnReq(
 	req *produceRequest,
 	txnReq *kmsg.AddPartitionsToTxnRequest,
 ) error {
+	start := time.Now()
+	tries := 0
+start:
 	kresp, err := s.cl.Request(s.cl.ctx, txnReq)
 
 	if err != nil { // if we could not even complete the request, this is fatal.
@@ -371,6 +374,21 @@ func (s *sink) doTxnReq(
 		topicBatches := req.batches[topic.Topic]
 		for _, partition := range topic.Partitions {
 			if err := kerr.ErrorForCode(partition.ErrorCode); err != nil {
+				if err == kerr.ConcurrentTransactions && time.Since(start) < 10*time.Second {
+					tries++
+					s.cl.cfg.logger.Log(LogLevelInfo, "AddPartitionsToTxn failed with CONCURRENT_TRANSACTIONS, which may be because we ended a txn and began producing in a new txn too quickly; backing off and retrying",
+						"backoff", 100*time.Millisecond,
+						"since_request_tries_start", time.Since(start),
+						"tries", tries,
+					)
+					select {
+					case <-time.After(100 * time.Millisecond):
+					case <-s.cl.ctx.Done():
+						s.cl.cfg.logger.Log(LogLevelError, "abandoning AddPartitionsToTxn retry due to client ctx quitting")
+						return err
+					}
+					goto start
+				}
 				if !kerr.IsRetriable(err) {
 					return err
 				}
