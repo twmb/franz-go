@@ -6,7 +6,7 @@ import "github.com/twmb/kafka-go/pkg/kbin"
 
 // MaxKey is the maximum key used for any messages in this package.
 // Note that this value will change as Kafka adds more messages.
-const MaxKey = 47
+const MaxKey = 49
 
 // MessageV0 is the message format Kafka used prior to 0.10.
 //
@@ -2536,12 +2536,21 @@ func (v *LeaderAndISRResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+type StopReplicaRequestTopicPartitionState struct {
+	Partition int32
+
+	LeaderEpoch int32
+
+	Delete bool
+}
 type StopReplicaRequestTopic struct {
 	Topic string
 
 	Partition int32
 
 	Partitions []int32 // v1+
+
+	PartitionStates []StopReplicaRequestTopicPartitionState // v3+
 }
 
 // StopReplicaRequest is an advanced request that brokers use to stop replicas.
@@ -2551,6 +2560,9 @@ type StopReplicaRequestTopic struct {
 //
 // Kafka 2.2.0 introduced version 1, proposed in KIP-380, which changed the
 // layout of the struct to be more memory efficient.
+//
+// Kafka 2.6.0 introduced version 3, proposed in KIP-570, reorganizes partitions
+// to be stored and adds the leader epoch and delete partition fields per partition.
 type StopReplicaRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
@@ -2567,7 +2579,7 @@ type StopReplicaRequest struct {
 }
 
 func (*StopReplicaRequest) Key() int16                 { return 5 }
-func (*StopReplicaRequest) MaxVersion() int16          { return 2 }
+func (*StopReplicaRequest) MaxVersion() int16          { return 3 }
 func (v *StopReplicaRequest) SetVersion(version int16) { v.Version = version }
 func (v *StopReplicaRequest) GetVersion() int16        { return v.Version }
 func (v *StopReplicaRequest) IsFlexible() bool         { return v.Version >= 2 }
@@ -2591,7 +2603,7 @@ func (v *StopReplicaRequest) AppendTo(dst []byte) []byte {
 		v := v.BrokerEpoch
 		dst = kbin.AppendInt64(dst, v)
 	}
-	{
+	if version >= 0 && version <= 2 {
 		v := v.DeletePartitions
 		dst = kbin.AppendBool(dst, v)
 	}
@@ -2616,7 +2628,7 @@ func (v *StopReplicaRequest) AppendTo(dst []byte) []byte {
 				v := v.Partition
 				dst = kbin.AppendInt32(dst, v)
 			}
-			if version >= 1 {
+			if version >= 1 && version <= 2 {
 				v := v.Partitions
 				if isFlexible {
 					dst = kbin.AppendCompactArrayLen(dst, len(v))
@@ -2626,6 +2638,32 @@ func (v *StopReplicaRequest) AppendTo(dst []byte) []byte {
 				for i := range v {
 					v := v[i]
 					dst = kbin.AppendInt32(dst, v)
+				}
+			}
+			if version >= 3 {
+				v := v.PartitionStates
+				if isFlexible {
+					dst = kbin.AppendCompactArrayLen(dst, len(v))
+				} else {
+					dst = kbin.AppendArrayLen(dst, len(v))
+				}
+				for i := range v {
+					v := &v[i]
+					{
+						v := v.Partition
+						dst = kbin.AppendInt32(dst, v)
+					}
+					{
+						v := v.LeaderEpoch
+						dst = kbin.AppendInt32(dst, v)
+					}
+					{
+						v := v.Delete
+						dst = kbin.AppendBool(dst, v)
+					}
+					if isFlexible {
+						dst = append(dst, 0)
+					}
 				}
 			}
 			if isFlexible {
@@ -2652,6 +2690,7 @@ type StopReplicaResponse struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
+	// Version 3 returns FENCED_LEADER_EPOCH if the leader is stale (KIP-570).
 	ErrorCode int16
 
 	Partitions []StopReplicaResponsePartition
@@ -7002,10 +7041,11 @@ type DeleteRecordsRequest struct {
 }
 
 func (*DeleteRecordsRequest) Key() int16                 { return 21 }
-func (*DeleteRecordsRequest) MaxVersion() int16          { return 1 }
+func (*DeleteRecordsRequest) MaxVersion() int16          { return 2 }
 func (v *DeleteRecordsRequest) SetVersion(version int16) { v.Version = version }
 func (v *DeleteRecordsRequest) GetVersion() int16        { return v.Version }
-func (v *DeleteRecordsRequest) IsFlexible() bool         { return false }
+func (v *DeleteRecordsRequest) IsFlexible() bool         { return v.Version >= 2 }
+func (v *DeleteRecordsRequest) IsAdminRequest()          {}
 func (v *DeleteRecordsRequest) ResponseKind() Response {
 	return &DeleteRecordsResponse{Version: v.Version}
 }
@@ -7013,18 +7053,32 @@ func (v *DeleteRecordsRequest) ResponseKind() Response {
 func (v *DeleteRecordsRequest) AppendTo(dst []byte) []byte {
 	version := v.Version
 	_ = version
+	isFlexible := version >= 2
+	_ = isFlexible
 	{
 		v := v.Topics
-		dst = kbin.AppendArrayLen(dst, len(v))
+		if isFlexible {
+			dst = kbin.AppendCompactArrayLen(dst, len(v))
+		} else {
+			dst = kbin.AppendArrayLen(dst, len(v))
+		}
 		for i := range v {
 			v := &v[i]
 			{
 				v := v.Topic
-				dst = kbin.AppendString(dst, v)
+				if isFlexible {
+					dst = kbin.AppendCompactString(dst, v)
+				} else {
+					dst = kbin.AppendString(dst, v)
+				}
 			}
 			{
 				v := v.Partitions
-				dst = kbin.AppendArrayLen(dst, len(v))
+				if isFlexible {
+					dst = kbin.AppendCompactArrayLen(dst, len(v))
+				} else {
+					dst = kbin.AppendArrayLen(dst, len(v))
+				}
 				for i := range v {
 					v := &v[i]
 					{
@@ -7035,13 +7089,22 @@ func (v *DeleteRecordsRequest) AppendTo(dst []byte) []byte {
 						v := v.Offset
 						dst = kbin.AppendInt64(dst, v)
 					}
+					if isFlexible {
+						dst = append(dst, 0)
+					}
 				}
+			}
+			if isFlexible {
+				dst = append(dst, 0)
 			}
 		}
 	}
 	{
 		v := v.TimeoutMillis
 		dst = kbin.AppendInt32(dst, v)
+	}
+	if isFlexible {
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -7102,6 +7165,8 @@ type DeleteRecordsResponse struct {
 func (v *DeleteRecordsResponse) ReadFrom(src []byte) error {
 	version := v.Version
 	_ = version
+	isFlexible := version >= 2
+	_ = isFlexible
 	b := kbin.Reader{Src: src}
 	s := v
 	{
@@ -7112,7 +7177,11 @@ func (v *DeleteRecordsResponse) ReadFrom(src []byte) error {
 		v := s.Topics
 		a := v
 		var l int32
-		l = b.ArrayLen()
+		if isFlexible {
+			l = b.CompactArrayLen()
+		} else {
+			l = b.ArrayLen()
+		}
 		if !b.Ok() {
 			return b.Complete()
 		}
@@ -7123,14 +7192,23 @@ func (v *DeleteRecordsResponse) ReadFrom(src []byte) error {
 			v := &a[i]
 			s := v
 			{
-				v := b.String()
+				var v string
+				if isFlexible {
+					v = b.CompactString()
+				} else {
+					v = b.String()
+				}
 				s.Topic = v
 			}
 			{
 				v := s.Partitions
 				a := v
 				var l int32
-				l = b.ArrayLen()
+				if isFlexible {
+					l = b.CompactArrayLen()
+				} else {
+					l = b.ArrayLen()
+				}
 				if !b.Ok() {
 					return b.Complete()
 				}
@@ -7152,13 +7230,22 @@ func (v *DeleteRecordsResponse) ReadFrom(src []byte) error {
 						v := b.Int16()
 						s.ErrorCode = v
 					}
+					if isFlexible {
+						SkipTags(&b)
+					}
 				}
 				v = a
 				s.Partitions = v
 			}
+			if isFlexible {
+				SkipTags(&b)
+			}
 		}
 		v = a
 		s.Topics = v
+	}
+	if isFlexible {
+		SkipTags(&b)
 	}
 	return b.Complete()
 }
@@ -9908,10 +9995,10 @@ type DescribeLogDirsRequest struct {
 }
 
 func (*DescribeLogDirsRequest) Key() int16                 { return 35 }
-func (*DescribeLogDirsRequest) MaxVersion() int16          { return 1 }
+func (*DescribeLogDirsRequest) MaxVersion() int16          { return 2 }
 func (v *DescribeLogDirsRequest) SetVersion(version int16) { v.Version = version }
 func (v *DescribeLogDirsRequest) GetVersion() int16        { return v.Version }
-func (v *DescribeLogDirsRequest) IsFlexible() bool         { return false }
+func (v *DescribeLogDirsRequest) IsFlexible() bool         { return v.Version >= 2 }
 func (v *DescribeLogDirsRequest) IsAdminRequest()          {}
 func (v *DescribeLogDirsRequest) ResponseKind() Response {
 	return &DescribeLogDirsResponse{Version: v.Version}
@@ -9920,24 +10007,44 @@ func (v *DescribeLogDirsRequest) ResponseKind() Response {
 func (v *DescribeLogDirsRequest) AppendTo(dst []byte) []byte {
 	version := v.Version
 	_ = version
+	isFlexible := version >= 2
+	_ = isFlexible
 	{
 		v := v.Topics
-		dst = kbin.AppendNullableArrayLen(dst, len(v), v == nil)
+		if isFlexible {
+			dst = kbin.AppendCompactNullableArrayLen(dst, len(v), v == nil)
+		} else {
+			dst = kbin.AppendNullableArrayLen(dst, len(v), v == nil)
+		}
 		for i := range v {
 			v := &v[i]
 			{
 				v := v.Topic
-				dst = kbin.AppendString(dst, v)
+				if isFlexible {
+					dst = kbin.AppendCompactString(dst, v)
+				} else {
+					dst = kbin.AppendString(dst, v)
+				}
 			}
 			{
 				v := v.Partitions
-				dst = kbin.AppendArrayLen(dst, len(v))
+				if isFlexible {
+					dst = kbin.AppendCompactArrayLen(dst, len(v))
+				} else {
+					dst = kbin.AppendArrayLen(dst, len(v))
+				}
 				for i := range v {
 					v := v[i]
 					dst = kbin.AppendInt32(dst, v)
 				}
 			}
+			if isFlexible {
+				dst = append(dst, 0)
+			}
 		}
+	}
+	if isFlexible {
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -10006,6 +10113,8 @@ type DescribeLogDirsResponse struct {
 func (v *DescribeLogDirsResponse) ReadFrom(src []byte) error {
 	version := v.Version
 	_ = version
+	isFlexible := version >= 2
+	_ = isFlexible
 	b := kbin.Reader{Src: src}
 	s := v
 	{
@@ -10016,7 +10125,11 @@ func (v *DescribeLogDirsResponse) ReadFrom(src []byte) error {
 		v := s.Dirs
 		a := v
 		var l int32
-		l = b.ArrayLen()
+		if isFlexible {
+			l = b.CompactArrayLen()
+		} else {
+			l = b.ArrayLen()
+		}
 		if !b.Ok() {
 			return b.Complete()
 		}
@@ -10031,14 +10144,23 @@ func (v *DescribeLogDirsResponse) ReadFrom(src []byte) error {
 				s.ErrorCode = v
 			}
 			{
-				v := b.String()
+				var v string
+				if isFlexible {
+					v = b.CompactString()
+				} else {
+					v = b.String()
+				}
 				s.Dir = v
 			}
 			{
 				v := s.Topics
 				a := v
 				var l int32
-				l = b.ArrayLen()
+				if isFlexible {
+					l = b.CompactArrayLen()
+				} else {
+					l = b.ArrayLen()
+				}
 				if !b.Ok() {
 					return b.Complete()
 				}
@@ -10049,14 +10171,23 @@ func (v *DescribeLogDirsResponse) ReadFrom(src []byte) error {
 					v := &a[i]
 					s := v
 					{
-						v := b.String()
+						var v string
+						if isFlexible {
+							v = b.CompactString()
+						} else {
+							v = b.String()
+						}
 						s.Topic = v
 					}
 					{
 						v := s.Partitions
 						a := v
 						var l int32
-						l = b.ArrayLen()
+						if isFlexible {
+							l = b.CompactArrayLen()
+						} else {
+							l = b.ArrayLen()
+						}
 						if !b.Ok() {
 							return b.Complete()
 						}
@@ -10082,17 +10213,29 @@ func (v *DescribeLogDirsResponse) ReadFrom(src []byte) error {
 								v := b.Bool()
 								s.IsFuture = v
 							}
+							if isFlexible {
+								SkipTags(&b)
+							}
 						}
 						v = a
 						s.Partitions = v
+					}
+					if isFlexible {
+						SkipTags(&b)
 					}
 				}
 				v = a
 				s.Topics = v
 			}
+			if isFlexible {
+				SkipTags(&b)
+			}
 		}
 		v = a
 		s.Dirs = v
+	}
+	if isFlexible {
+		SkipTags(&b)
 	}
 	return b.Complete()
 }
@@ -12469,6 +12612,404 @@ func (v *OffsetDeleteResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+type DescribeClientQuotasRequestComponent struct {
+	// EntityType is the entity component type that this filter component
+	// applies to; some possible values are "user" or "client-id".
+	EntityType string
+
+	// MatchType specifies how to match an entity,
+	// with 0 meaning match on the name exactly,
+	// 1 meaning match on the default name,
+	// and 2 meaning any specified name.
+	MatchType int8
+
+	// Match is the string to match against, or null if unused for the given
+	// match type.
+	Match *string
+}
+
+// DescribeClientQuotasRequest, proposed in KIP-546 and introduced with Kafka 2.6.0,
+// provides a way to describe client quotas.
+type DescribeClientQuotasRequest struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	// Components is a list of match filters to apply for describing quota entities.
+	Components []DescribeClientQuotasRequestComponent
+
+	// Strict signifies whether matches are strict; if true, the response
+	// excludes entities with unspecified entity types.
+	Strict bool
+}
+
+func (*DescribeClientQuotasRequest) Key() int16                 { return 48 }
+func (*DescribeClientQuotasRequest) MaxVersion() int16          { return 0 }
+func (v *DescribeClientQuotasRequest) SetVersion(version int16) { v.Version = version }
+func (v *DescribeClientQuotasRequest) GetVersion() int16        { return v.Version }
+func (v *DescribeClientQuotasRequest) IsFlexible() bool         { return false }
+func (v *DescribeClientQuotasRequest) IsAdminRequest()          {}
+func (v *DescribeClientQuotasRequest) ResponseKind() Response {
+	return &DescribeClientQuotasResponse{Version: v.Version}
+}
+
+func (v *DescribeClientQuotasRequest) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	{
+		v := v.Components
+		dst = kbin.AppendArrayLen(dst, len(v))
+		for i := range v {
+			v := &v[i]
+			{
+				v := v.EntityType
+				dst = kbin.AppendString(dst, v)
+			}
+			{
+				v := v.MatchType
+				dst = kbin.AppendInt8(dst, v)
+			}
+			{
+				v := v.Match
+				dst = kbin.AppendNullableString(dst, v)
+			}
+		}
+	}
+	{
+		v := v.Strict
+		dst = kbin.AppendBool(dst, v)
+	}
+	return dst
+}
+
+type DescribeClientQuotasResponseEntryEntity struct {
+	// Type is the entity type.
+	Type string
+
+	// Name is the entity name, or null if the default.
+	Name *string
+}
+type DescribeClientQuotasResponseEntryValue struct {
+	// Key is the quota configuration key.
+	Key string
+
+	// Value is the quota configuration value.
+	Value float64
+}
+type DescribeClientQuotasResponseEntry struct {
+	// Entity contains the quota entity components being described.
+	Entity []DescribeClientQuotasResponseEntryEntity
+
+	// Values are quota values for the entity.
+	Values []DescribeClientQuotasResponseEntryValue
+}
+
+// DescribeClientQuotasResponse is a response for a DescribeClientQuotasRequest.
+type DescribeClientQuotasResponse struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	// ThrottleMillis is how long of a throttle Kafka will apply to the client
+	// after responding to this request.
+	ThrottleMillis int32
+
+	// ErrorCode is any error for the request.
+	ErrorCode int16
+
+	// ErrorMessage is an error message for the request, or null if the request succeeded.
+	ErrorMessage *string
+
+	// Entries contains entities that were matched.
+	Entries []DescribeClientQuotasResponseEntry
+}
+
+func (v *DescribeClientQuotasResponse) ReadFrom(src []byte) error {
+	version := v.Version
+	_ = version
+	b := kbin.Reader{Src: src}
+	s := v
+	{
+		v := b.Int32()
+		s.ThrottleMillis = v
+	}
+	{
+		v := b.Int16()
+		s.ErrorCode = v
+	}
+	{
+		v := b.NullableString()
+		s.ErrorMessage = v
+	}
+	{
+		v := s.Entries
+		a := v
+		var l int32
+		l = b.ArrayLen()
+		if version < 0 || l == 0 {
+			a = []DescribeClientQuotasResponseEntry{}
+		}
+		if !b.Ok() {
+			return b.Complete()
+		}
+		if l > 0 {
+			a = make([]DescribeClientQuotasResponseEntry, l)
+		}
+		for i := int32(0); i < l; i++ {
+			v := &a[i]
+			s := v
+			{
+				v := s.Entity
+				a := v
+				var l int32
+				l = b.ArrayLen()
+				if !b.Ok() {
+					return b.Complete()
+				}
+				if l > 0 {
+					a = make([]DescribeClientQuotasResponseEntryEntity, l)
+				}
+				for i := int32(0); i < l; i++ {
+					v := &a[i]
+					s := v
+					{
+						v := b.String()
+						s.Type = v
+					}
+					{
+						v := b.NullableString()
+						s.Name = v
+					}
+				}
+				v = a
+				s.Entity = v
+			}
+			{
+				v := s.Values
+				a := v
+				var l int32
+				l = b.ArrayLen()
+				if !b.Ok() {
+					return b.Complete()
+				}
+				if l > 0 {
+					a = make([]DescribeClientQuotasResponseEntryValue, l)
+				}
+				for i := int32(0); i < l; i++ {
+					v := &a[i]
+					s := v
+					{
+						v := b.String()
+						s.Key = v
+					}
+					{
+						v := b.Float64()
+						s.Value = v
+					}
+				}
+				v = a
+				s.Values = v
+			}
+		}
+		v = a
+		s.Entries = v
+	}
+	return b.Complete()
+}
+
+type AlterClientQuotasRequestEntryEntity struct {
+	// Type is the entity component's type; e.g. "client-id" or "user".
+	Type string
+
+	// Name is the name of the entity, or null for the default.
+	Name *string
+}
+type AlterClientQuotasRequestEntryOp struct {
+	// Key is the quota configuration key to alter.
+	Key string
+
+	// Value is the value to set; ignored if remove is true.
+	Value float64
+
+	// Remove is whether the quota configuration value should be removed or set.
+	Remove bool
+}
+type AlterClientQuotasRequestEntry struct {
+	// Entity contains the components of a quota entity to alter.
+	Entity []AlterClientQuotasRequestEntryEntity
+
+	// Ops contains quota configuration entries to alter.
+	Ops []AlterClientQuotasRequestEntryOp
+}
+
+// AlterClientQuotaRequest, proposed in KIP-546 and introduced with Kafka 2.6.0,
+// provides a way to alter client quotas.
+type AlterClientQuotasRequest struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	// Entries are quota configuration entries to alter.
+	Entries []AlterClientQuotasRequestEntry
+
+	// ValidateOnly is makes this request a dry-run; the alteration is validated
+	// but not performed.
+	ValidateOnly bool
+}
+
+func (*AlterClientQuotasRequest) Key() int16                 { return 49 }
+func (*AlterClientQuotasRequest) MaxVersion() int16          { return 0 }
+func (v *AlterClientQuotasRequest) SetVersion(version int16) { v.Version = version }
+func (v *AlterClientQuotasRequest) GetVersion() int16        { return v.Version }
+func (v *AlterClientQuotasRequest) IsFlexible() bool         { return false }
+func (v *AlterClientQuotasRequest) IsAdminRequest()          {}
+func (v *AlterClientQuotasRequest) ResponseKind() Response {
+	return &AlterClientQuotasResponse{Version: v.Version}
+}
+
+func (v *AlterClientQuotasRequest) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	{
+		v := v.Entries
+		dst = kbin.AppendArrayLen(dst, len(v))
+		for i := range v {
+			v := &v[i]
+			{
+				v := v.Entity
+				dst = kbin.AppendArrayLen(dst, len(v))
+				for i := range v {
+					v := &v[i]
+					{
+						v := v.Type
+						dst = kbin.AppendString(dst, v)
+					}
+					{
+						v := v.Name
+						dst = kbin.AppendNullableString(dst, v)
+					}
+				}
+			}
+			{
+				v := v.Ops
+				dst = kbin.AppendArrayLen(dst, len(v))
+				for i := range v {
+					v := &v[i]
+					{
+						v := v.Key
+						dst = kbin.AppendString(dst, v)
+					}
+					{
+						v := v.Value
+						dst = kbin.AppendFloat64(dst, v)
+					}
+					{
+						v := v.Remove
+						dst = kbin.AppendBool(dst, v)
+					}
+				}
+			}
+		}
+	}
+	{
+		v := v.ValidateOnly
+		dst = kbin.AppendBool(dst, v)
+	}
+	return dst
+}
+
+type AlterClientQuotasResponseEntryEntity struct {
+	// Type is the entity component's type; e.g. "client-id" or "user".
+	Type string
+
+	// Name is the name of the entity, or null for the default.
+	Name *string
+}
+type AlterClientQuotasResponseEntry struct {
+	// ErrorCode is the error code for an alter on a matched entity.
+	ErrorCode int16
+
+	// ErrorMessage is an informative message if the alter on this entity failed.
+	ErrorMessage *string
+
+	// Entity contains the components of a matched entity.
+	Entity []AlterClientQuotasResponseEntryEntity
+}
+
+// AlterClientQuotasResponse is a response to an AlterClientQuotasRequest.
+type AlterClientQuotasResponse struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	// ThrottleMillis is how long of a throttle Kafka will apply to the client
+	// after responding to this request.
+	ThrottleMillis int32
+
+	// Entries contains results for the alter request.
+	Entries []AlterClientQuotasResponseEntry
+}
+
+func (v *AlterClientQuotasResponse) ReadFrom(src []byte) error {
+	version := v.Version
+	_ = version
+	b := kbin.Reader{Src: src}
+	s := v
+	{
+		v := b.Int32()
+		s.ThrottleMillis = v
+	}
+	{
+		v := s.Entries
+		a := v
+		var l int32
+		l = b.ArrayLen()
+		if !b.Ok() {
+			return b.Complete()
+		}
+		if l > 0 {
+			a = make([]AlterClientQuotasResponseEntry, l)
+		}
+		for i := int32(0); i < l; i++ {
+			v := &a[i]
+			s := v
+			{
+				v := b.Int16()
+				s.ErrorCode = v
+			}
+			{
+				v := b.NullableString()
+				s.ErrorMessage = v
+			}
+			{
+				v := s.Entity
+				a := v
+				var l int32
+				l = b.ArrayLen()
+				if !b.Ok() {
+					return b.Complete()
+				}
+				if l > 0 {
+					a = make([]AlterClientQuotasResponseEntryEntity, l)
+				}
+				for i := int32(0); i < l; i++ {
+					v := &a[i]
+					s := v
+					{
+						v := b.String()
+						s.Type = v
+					}
+					{
+						v := b.NullableString()
+						s.Name = v
+					}
+				}
+				v = a
+				s.Entity = v
+			}
+		}
+		v = a
+		s.Entries = v
+	}
+	return b.Complete()
+}
+
 // RequestForKey returns the request corresponding to the given request key
 // or nil if the key is unknown.
 func RequestForKey(key int16) Request {
@@ -12571,6 +13112,10 @@ func RequestForKey(key int16) Request {
 		return new(ListPartitionReassignmentsRequest)
 	case 47:
 		return new(OffsetDeleteRequest)
+	case 48:
+		return new(DescribeClientQuotasRequest)
+	case 49:
+		return new(AlterClientQuotasRequest)
 	}
 }
 
@@ -12676,5 +13221,9 @@ func NameForKey(key int16) string {
 		return "ListPartitionReassignments"
 	case 47:
 		return "OffsetDelete"
+	case 48:
+		return "DescribeClientQuotas"
+	case 49:
+		return "AlterClientQuotas"
 	}
 }

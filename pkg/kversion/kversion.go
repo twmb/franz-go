@@ -336,8 +336,7 @@ func V2_4_0() Versions {
 	return v
 }
 
-// Tip is the latest defined Kafka key versions; this may be slightly out of date.
-func Tip() Versions {
+func V2_5_0() Versions {
 	v := V2_4_0()
 	v[22]++ // 3 init producer id KAFKA-8710 fecb977b25 KIP-360
 	v[9]++  // 7 offset fetch KAFKA-9346 6da70f9b95 KIP-447
@@ -358,6 +357,23 @@ func Tip() Versions {
 
 	v[11]++ // 7 join group KAFKA-9437 96c4ce480 KIP-559
 	v[14]++ // 5 sync group (same)
+
+	return v
+}
+
+// Tip is the latest defined Kafka key versions; this may be slightly out of date.
+func Tip() Versions {
+	v := V2_5_0()
+
+	v[21]++ // 2 delete records KAFKA-8768 f869e33ab KIP-482 (opportunistic bump for exlible versions)
+	v[35]++ // 2 describe log dirs KAFKA-9435 4f1e8331ff9 KIP-482 (same)
+
+	v = append(v,
+		0, // 48 describe client quotas KAFKA-7740 227a7322b KIP-546
+		0, // 49 alter client quotas (same)
+	)
+
+	v[5]++ // 3 stop replica KAFKA-9539 7c7d55dbd KIP-570
 
 	return v
 }

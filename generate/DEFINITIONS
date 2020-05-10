@@ -816,18 +816,26 @@ LeaderAndISRResponse =>
 //
 // Kafka 2.2.0 introduced version 1, proposed in KIP-380, which changed the
 // layout of the struct to be more memory efficient.
-StopReplicaRequest => key 5, max version 2, flexible v2+, admin
+//
+// Kafka 2.6.0 introduced version 3, proposed in KIP-570, reorganizes partitions
+// to be stored and adds the leader epoch and delete partition fields per partition.
+StopReplicaRequest => key 5, max version 3, flexible v2+, admin
   ControllerID: int32
   ControllerEpoch: int32
   BrokerEpoch: int64 // v1+
-  DeletePartitions: bool
+  DeletePartitions: bool // v0-v2
   Topics: [=>]
     Topic: string
     Partition: int32 // v0-v0
-    Partitions: [int32] // v1+
+    Partitions: [int32] // v1-v2
+    PartitionStates: [=>] // v3+
+      Partition: int32
+      LeaderEpoch: int32
+      Delete: bool
 
 // StopReplicasResponse is returned from a StopReplicasRequest.
 StopReplicaResponse =>
+  // Version 3 returns FENCED_LEADER_EPOCH if the leader is stale (KIP-570).
   ErrorCode: int16
   Partitions: [=>]
     Topic: string
@@ -1917,7 +1925,7 @@ DeleteTopicsResponse =>
 // the requested offset. All segments whose max partition is before the
 // requested offset are deleted, and any records within the segment before
 // the requested offset can no longer be read.
-DeleteRecordsRequest => key 21, max version 1
+DeleteRecordsRequest => key 21, max version 2, flexible v2+, admin
   // Topics contains topics for which to delete records from.
   Topics: [=>]
     // Topic is a topic to delete records from.
@@ -2782,7 +2790,7 @@ AlterReplicaLogDirsResponse =>
 
 // DescribeLogDirsRequest requests directory information for topic partitions.
 // This request was added in support of KIP-113.
-DescribeLogDirsRequest => key 35, max version 1, admin
+DescribeLogDirsRequest => key 35, max version 2, flexible v2+, admin
   // Topics is an array of topics to describe the log dirs of. If this is
   // null, the response includes all topics and all of their partitions.
   Topics: nullable[=>]
@@ -3411,3 +3419,88 @@ OffsetDeleteResponse =>
       //
       // GROUP_SUBSCRIBED_TO_TOPIC is returned if the topic is still subscribed to.
       ErrorCode: int16
+
+// DescribeClientQuotasRequest, proposed in KIP-546 and introduced with Kafka 2.6.0,
+// provides a way to describe client quotas.
+DescribeClientQuotasRequest => key 48, max version 0, admin
+  // Components is a list of match filters to apply for describing quota entities.
+  Components: [=>]
+    // EntityType is the entity component type that this filter component
+    // applies to; some possible values are "user" or "client-id".
+    EntityType: string
+    // MatchType specifies how to match an entity,
+    // with 0 meaning match on the name exactly,
+    // 1 meaning match on the default name,
+    // and 2 meaning any specified name.
+    MatchType: int8
+    // Match is the string to match against, or null if unused for the given
+    // match type.
+    Match: nullable-string
+  // Strict signifies whether matches are strict; if true, the response
+  // excludes entities with unspecified entity types.
+  Strict: bool
+
+// DescribeClientQuotasResponse is a response for a DescribeClientQuotasRequest.
+DescribeClientQuotasResponse =>
+  // ThrottleMillis is how long of a throttle Kafka will apply to the client
+  // after responding to this request.
+  ThrottleMillis: int32
+  // ErrorCode is any error for the request.
+  ErrorCode: int16
+  // ErrorMessage is an error message for the request, or null if the request succeeded.
+  ErrorMessage: nullable-string
+  // Entries contains entities that were matched.
+  Entries: nullable[=>Entry]
+    // Entity contains the quota entity components being described.
+    Entity: [=>]
+      // Type is the entity type.
+      Type: string
+      // Name is the entity name, or null if the default.
+      Name: nullable-string
+    // Values are quota values for the entity.
+    Values: [=>]
+      // Key is the quota configuration key.
+      Key: string
+      // Value is the quota configuration value.
+      Value: float64
+
+// AlterClientQuotaRequest, proposed in KIP-546 and introduced with Kafka 2.6.0,
+// provides a way to alter client quotas.
+AlterClientQuotasRequest => key 49, max version 0, admin
+  // Entries are quota configuration entries to alter.
+  Entries: [=>Entry]
+    // Entity contains the components of a quota entity to alter.
+    Entity: [=>]
+      // Type is the entity component's type; e.g. "client-id" or "user".
+      Type: string
+      // Name is the name of the entity, or null for the default.
+      Name: nullable-string
+    // Ops contains quota configuration entries to alter.
+    Ops: [=>]
+      // Key is the quota configuration key to alter.
+      Key: string
+      // Value is the value to set; ignored if remove is true.
+      Value: float64
+      // Remove is whether the quota configuration value should be removed or set.
+      Remove: bool
+  // ValidateOnly is makes this request a dry-run; the alteration is validated
+  // but not performed.
+  ValidateOnly: bool
+
+// AlterClientQuotasResponse is a response to an AlterClientQuotasRequest.
+AlterClientQuotasResponse =>
+  // ThrottleMillis is how long of a throttle Kafka will apply to the client
+  // after responding to this request.
+  ThrottleMillis: int32
+  // Entries contains results for the alter request.
+  Entries: [=>Entry]
+    // ErrorCode is the error code for an alter on a matched entity.
+    ErrorCode: int16
+    // ErrorMessage is an informative message if the alter on this entity failed.
+    ErrorMessage: nullable-string
+    // Entity contains the components of a matched entity.
+    Entity: [=>]
+      // Type is the entity component's type; e.g. "client-id" or "user".
+      Type: string
+      // Name is the name of the entity, or null for the default.
+      Name: nullable-string
