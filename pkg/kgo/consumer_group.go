@@ -112,11 +112,11 @@ func RequireStableFetchOffsets() GroupOpt {
 // OnAssigned sets the function to be called when a group is joined after
 // partitions are assigned before fetches begin.
 //
-// Note that this function combined with onRevoked should combined not exceed
-// the rebalance interval. It is possible for the group, immediately after
-// finishing a balance, to re-enter a new balancing session.
+// This function combined with OnAssigned should not exceed the rebalance
+// interval. It is possible for the group, immediately after finishing a
+// balance, to re-enter a new balancing session.
 //
-// The onAssigned function is passed the group's context, which is only
+// The OnAssigned function is passed the group's context, which is only
 // canceled if the group is left or the client is closed.
 func OnAssigned(onAssigned func(context.Context, map[string][]int32)) GroupOpt {
 	return groupOpt{func(cfg *groupConsumer) { cfg.onAssigned = onAssigned }}
@@ -125,27 +125,26 @@ func OnAssigned(onAssigned func(context.Context, map[string][]int32)) GroupOpt {
 // OnRevoked sets the function to be called once a group transitions from
 // stable to rebalancing.
 //
-// Note that this function combined with onAssigned should not exceed the
-// rebalance interval. It is possible for the group, immediately after
-// finishing a balance, to re-enter a new balancing session.
+// This function combined with OnAssigned should not exceed the rebalance
+// interval. It is possible for the group, immediately after finishing a
+// balance, to re-enter a new balancing session.
 //
-// If autocommit is enabled, the default onRevoked is a blocking commit all
+// If autocommit is enabled, the default OnRevoked is a blocking commit all
 // offsets. The reason for a blocking commit is so that no later commit cancels
-// the blocking commit. If the commit in onRevoked were canceled, then the
-// rebalance would proceed immediately and then a future commit would be out of
-// date (for the prior session).
+// the blocking commit. If the commit in OnRevoked were canceled, then the
+// rebalance would proceed immediately.
 //
-// The onRevoked function is passed the group's context, which is only canceled
+// The OnRevoked function is passed the group's context, which is only canceled
 // if the group is left or the client is closed.
 //
-// The onRevoked function is called at the end of a group session even if there
+// The OnRevoked function is called at the end of a group session even if there
 // are no partitions being revoked. As hinted at earlier in this documentation,
-// it is not safe to commit fetches polled before the revoke after the revoke
-// returns. That is, you should not poll, cancel an on-revoke commit, and then
-// later commit. If you do, a new join and sync session may have started, the
-// commit will fail, and you will doubly process records.
+// it is not safe to commit fetches that were polled before revoking after
+// revoking has returned. That is, you should not poll, cancel an on-revoke
+// commit, and then later commit. If you do, a new join and sync session may
+// have started, the commit will fail, and you will doubly process records.
 //
-// If you are committing offsets manually (have disabled autoommitting), it is
+// If you are committing offsets manually (have disabled autocommitting), it is
 // highly recommended to do a proper blocking commit in OnRevoked.
 func OnRevoked(onRevoked func(context.Context, map[string][]int32)) GroupOpt {
 	return groupOpt{func(cfg *groupConsumer) { cfg.onRevoked = onRevoked }}
@@ -156,6 +155,8 @@ func OnRevoked(onRevoked func(context.Context, map[string][]int32)) GroupOpt {
 // function differs from onRevoked in that it is unlikely that commits will
 // succeed when partitions are outright lost, whereas commits likely will
 // succeed when revoking partitions.
+//
+// If not set, OnRevoked is used.
 func OnLost(onLost func(context.Context, map[string][]int32)) GroupOpt {
 	return groupOpt{func(cfg *groupConsumer) { cfg.onLost = onLost }}
 }
@@ -347,6 +348,8 @@ loop:
 		if err != nil {
 			if g.onLost != nil {
 				g.onLost(g.ctx, g.nowAssigned)
+			} else if g.onRevoked != nil {
+				g.onRevoked(g.ctx, g.nowAssigned)
 			}
 			consecutiveErrors++
 			// Waiting for the backoff is a good time to update our
@@ -376,16 +379,20 @@ loop:
 func (g *groupConsumer) leave() {
 	g.cancel()
 	if g.instanceID == nil {
+		g.mu.Lock()
+		memberID := g.memberID
+		g.mu.Unlock()
+
 		g.cl.cfg.logger.Log(LogLevelInfo,
 			"leaving group",
 			"group", g.id,
-			"memberID", g.memberID,
+			"memberID", memberID,
 		)
 		g.cl.Request(g.cl.ctx, &kmsg.LeaveGroupRequest{
 			Group:    g.id,
-			MemberID: g.memberID,
+			MemberID: memberID,
 			Members: []kmsg.LeaveGroupRequestMember{{
-				MemberID: g.memberID,
+				MemberID: memberID,
 				// no instance ID
 			}},
 		})
@@ -567,7 +574,7 @@ func newAssignRevokeSession() *assignRevokeSession {
 func (s *assignRevokeSession) prerevoke(g *groupConsumer, lost map[string][]int32) <-chan struct{} {
 	go func() {
 		defer close(s.prerevokeDone)
-		if g.cooperative {
+		if g.cooperative && len(lost) > 0 {
 			g.revoke(revokeLastSession, lost)
 		}
 	}()
@@ -831,6 +838,8 @@ start:
 		return err // Request retries as necesary, so this must be a failure
 	}
 
+	// Concurrent committing, while erroneous to do at the moment, could
+	// race with this function. We need to lock setting these two fields.
 	g.mu.Lock()
 	g.memberID = resp.MemberID
 	g.generation = resp.Generation
@@ -1027,15 +1036,69 @@ start:
 	if g.cooperative {
 		assignHow = assignWithoutInvalidating
 	}
-	if !g.c.maybeAssignPartitions(&g.seq, offsets, assignHow) {
+
+	c := g.c
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.seq != g.seq {
 		return errors.New("stale group")
 	}
 
+	// Grab the group lock before potentially invalidating buffered
+	// fetches. We want to update the uncommitted map _before_ any new
+	// fetch can be buffered / returned. we want to update uncommitted
+	// before the fetch poll does, otherwise this function could
+	// accidentally rewind the uncommitted map.
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	c.assignPartitions(offsets, assignHow)
+	g.seq = c.seq
+
+	// For uncooperative consumers, we have just invalidated everything
+	// buffered and set the source cursors to what we just fetched.
+	//
+	// For cooperative consumers, we did not invalidate anything; we have
+	// only set source cursors for new partitions.
+	//
+	// In both cases, we need to update the uncommited map so that
+	// ResetToCommitted does not rewind before the committed offsets we
+	// just fetched. In the former case, we may be setting partitions that
+	// exist, which is fine. In the latter case, we are only setting new
+	// partitions and are not rewinding any fetch the consumer is working
+	// on.
+	if g.uncommitted == nil {
+		g.uncommitted = make(uncommitted, 10)
+	}
+	for topic, partitions := range offsets {
+		topicUncommitted := g.uncommitted[topic]
+		if topicUncommitted == nil {
+			topicUncommitted = make(map[int32]uncommit, 20)
+			g.uncommitted[topic] = topicUncommitted
+		}
+		for partition, offset := range partitions {
+			if offset.request < 0 {
+				continue // not yet committed
+			}
+			committed := EpochOffset{
+				Epoch:  offset.epoch,
+				Offset: offset.request,
+			}
+			topicUncommitted[partition] = uncommit{
+				head:      committed,
+				committed: committed,
+			}
+		}
+	}
+
 	g.cl.cfg.logger.Log(LogLevelInfo, "fetched committed offsets")
+
 	// If we can validate epochs, assigning partitions may set some
 	// partitions to wait for that validation. Thus, to ensure we continue
 	// the offset loading process, we must reset and load offsets here.
-	g.c.resetAndLoadOffsets()
+	c.resetAndLoadOffsets()
 	return nil
 }
 
@@ -1166,13 +1229,10 @@ func (g *groupConsumer) updateUncommitted(fetches Fetches) {
 						g.uncommitted[topic.Topic] = topicOffsets
 					}
 				}
-				uncommit, exists := topicOffsets[partition.Partition]
+				uncommit := topicOffsets[partition.Partition]
 				// Our new head points just past the final consumed offset,
 				// that is, if we rejoin, this is the offset to begin at.
 				newOffset := final.Offset + 1
-				if exists && uncommit.head.Offset > newOffset {
-					continue // odd
-				}
 				lastOffset := uncommit.head.Offset
 				uncommit.head = EpochOffset{
 					final.LeaderEpoch, // -1 if old message / unknown
@@ -1333,6 +1393,8 @@ func (cl *Client) ResetToCommitted() {
 		return
 	}
 
+	cl.cfg.logger.Log(LogLevelDebug, "resetting to committed", "offsets", offsets)
+
 	c.assignPartitions(offsets, assignSetMatching)
 	g.seq = c.seq // under consumer lock, so this is safe
 }
@@ -1479,7 +1541,7 @@ func (cl *Client) BlockingCommitOffsets(
 // canceling prior requests and ensuring they are done before executing a new
 // one. This means, for absolute control, you can use this function to
 // periodically commit async and then issue a final sync commit before quitting
-// (this is the behavior of autocomitting and using the default revoke). This
+// (this is the behavior of autocommiting and using the default revoke). This
 // differs from the Java async commit, which does not retry requests to avoid
 // trampling on future commits.
 //
