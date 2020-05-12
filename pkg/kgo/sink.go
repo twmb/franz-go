@@ -393,8 +393,15 @@ start:
 					return err
 				}
 				batch := topicBatches[partition.Partition]
+
+				// Lock before resetting the drain index, as
+				// buffering records reads it. We lock around
+				// addedToTxn as well just because.
+				batch.owner.mu.Lock()
 				batch.owner.addedToTxn = false
 				batch.owner.resetBatchDrainIdx()
+				batch.owner.mu.Unlock()
+
 				delete(topicBatches, partition.Partition)
 			}
 			if len(topicBatches) == 0 {
