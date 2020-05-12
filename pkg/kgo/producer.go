@@ -184,6 +184,12 @@ func (cl *Client) EndTransaction(ctx context.Context, commit bool) error {
 		return nil
 	}
 
+	cl.cfg.logger.Log(LogLevelInfo, "ending transaction",
+		"transactional_id", *cl.cfg.txnID,
+		"producer_id", id,
+		"epoch", epoch,
+		"commit", commit,
+	)
 	kresp, err := cl.Request(ctx, &kmsg.EndTxnRequest{
 		TransactionalID: *cl.cfg.txnID,
 		ProducerID:      id,
