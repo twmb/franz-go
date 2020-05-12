@@ -185,22 +185,24 @@ func (cl *Client) PollFetches(ctx context.Context) Fetches {
 
 	var fetches Fetches
 
-	defer func() {
-		if len(fetches) > 0 {
-			toppars := make(map[int32][2]int64)
-			for _, fetch := range fetches {
-				for _, topic := range fetch.Topics {
-					for _, partition := range topic.Partitions {
-						toppars[partition.Partition] = [2]int64{
-							partition.Records[0].Offset,
-							partition.Records[len(partition.Records)-1].Offset,
+	if cl.cfg.logger.Level() >= LogLevelDebug {
+		defer func() {
+			if len(fetches) > 0 {
+				toppars := make(map[int32][2]int64)
+				for _, fetch := range fetches {
+					for _, topic := range fetch.Topics {
+						for _, partition := range topic.Partitions {
+							toppars[partition.Partition] = [2]int64{
+								partition.Records[0].Offset,
+								partition.Records[len(partition.Records)-1].Offset,
+							}
 						}
 					}
 				}
+				cl.cfg.logger.Log(LogLevelDebug, "returning fetch", "part_stop_start", toppars)
 			}
-			cl.cfg.logger.Log(LogLevelDebug, "returning fetch", "part_stop_start", toppars)
-		}
-	}()
+		}()
+	}
 
 	fill := func() {
 		c.sourcesReadyMu.Lock()
