@@ -38,10 +38,11 @@ func (cl *Client) BeginTransaction() error {
 // while flushing.
 //
 // The intent of this function is to provide a way to clear the client's
-// production backlog before aborting a transaction and beginning a new one; it
-// would be erroneous to not wait for the backlog to clear before beginning a
-// new transaction, since anything not cleared may be a part of the new
-// transaction.
+// production backlog.
+//
+// For example, before aborting a transaction and beginning a new one; it would
+// be erroneous to not wait for the backlog to clear before beginning a new
+// transaction. anything not cleared may be a part of the new transaction.
 //
 // Records produced during or after a call to this function may not be failed,
 // thus it is incorrect to concurrently produce with this function.
@@ -59,6 +60,16 @@ func (cl *Client) AbortBufferedRecords(ctx context.Context) error {
 			partition.records.failAllRecords(ErrAborting)
 		}
 	}
+
+	cl.unknownTopicsMu.Lock() // we also have to clear anything waiting in unknown topics
+	for topic, unknown := range cl.unknownTopics {
+		delete(cl.unknownTopics, topic)
+		close(unknown.wait)
+		for _, pr := range unknown.buffered {
+			cl.finishRecordPromise(pr, ErrAborting)
+		}
+	}
+	cl.unknownTopicsMu.Unlock()
 
 	// Now, we wait for any active drain to stop. We must wait for all
 	// drains to stop otherwise we could end up with some exceptionally
