@@ -70,4 +70,7 @@ DONE
 - KIP-511 (add client name / version in apiversions req; 2.4.0)
 - KIP-525 (create topics v5 returns configs; 2.4.0)
 - KIP-526 (reduce metadata lookups; done minus part 2, which we wont do)
+- KIP-546 (client quota APIs; 2.5.0)
 - KIP-559 (protocol info in sync / join; 2.5.0)
+- KIP-570 (leader epoch in stop replica; 2.6.0)
+- KIP-580 (exponential backoff; 2.6.0)
