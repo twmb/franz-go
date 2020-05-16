@@ -186,6 +186,7 @@ func (cl *Client) fetchMetadata(ctx context.Context, all bool, topics []string) 
 		topics = []string{}
 	}
 	tries := 0
+	tryStart := time.Now()
 start:
 	tries++
 	broker := cl.broker()
@@ -194,10 +195,13 @@ start:
 		// DO NOT preallocate topics, since nil is significant
 	}
 	for _, topic := range topics {
-		req.Topics = append(req.Topics, kmsg.MetadataRequestTopic{topic})
+		req.Topics = append(req.Topics, kmsg.MetadataRequestTopic{Topic: topic})
 	}
 	kresp, err := broker.waitResp(ctx, req)
 	if err != nil {
+		if cl.cfg.retryTimeout > 0 && time.Since(tryStart) > cl.cfg.retryTimeout {
+			return nil, err
+		}
 		if kerr.IsRetriable(err) && tries < cl.cfg.retries || isRetriableBrokerErr(err) && tries < cl.cfg.brokerErrRetries {
 			if ok := cl.waitTries(ctx, tries); ok {
 				goto start
@@ -359,6 +363,7 @@ func (cl *Client) request(ctx context.Context, req kmsg.Request) (kmsg.Response,
 	var resp kmsg.Response
 	var err error
 	tries := 0
+	tryStart := time.Now()
 start:
 	tries++
 	if metaReq, isMetaReq := req.(*kmsg.MetadataRequest); isMetaReq {
@@ -384,11 +389,16 @@ start:
 		resp, err = cl.broker().waitResp(ctx, req)
 	}
 
-	if kerr.IsRetriable(err) && tries < cl.cfg.retries || isRetriableBrokerErr(err) && tries < cl.cfg.brokerErrRetries {
-		if ok := cl.waitTries(ctx, tries); ok {
-			goto start
+	if err != nil {
+		if cl.cfg.retryTimeout > 0 && time.Since(tryStart) > cl.cfg.retryTimeout {
+			return nil, err
 		}
-		return nil, err
+		if kerr.IsRetriable(err) && tries < cl.cfg.retries || isRetriableBrokerErr(err) && tries < cl.cfg.brokerErrRetries {
+			if ok := cl.waitTries(ctx, tries); ok {
+				goto start
+			}
+			return nil, err
+		}
 	}
 	return resp, err
 }
@@ -409,11 +419,15 @@ func (cl *Client) brokerOrErr(id int32, err error) (*broker, error) {
 // necessary.
 func (cl *Client) controller(ctx context.Context) (*broker, error) {
 	tries := 0
+	tryStart := time.Now()
 start:
 	var id int32
 	if id = atomic.LoadInt32(&cl.controllerID); id < 0 {
 		tries++
 		if err := cl.fetchBrokerMetadata(ctx); err != nil {
+			if cl.cfg.retryTimeout > 0 && time.Since(tryStart) > cl.cfg.retryTimeout {
+				return nil, err
+			}
 			if kerr.IsRetriable(err) && tries < cl.cfg.retries || isRetriableBrokerErr(err) && tries < cl.cfg.brokerErrRetries {
 				if ok := cl.waitTries(ctx, tries); ok {
 					goto start
@@ -453,6 +467,7 @@ func (cl *Client) loadCoordinator(ctx context.Context, key coordinatorKey) (*bro
 	}
 
 	tries := 0
+	tryStart := time.Now()
 start:
 	// This lock blocks other group lookups, but in general there should
 	// only be one group and one transaction ID per client.
@@ -478,6 +493,9 @@ start:
 
 	if err != nil {
 		cl.coordinatorsMu.Unlock()
+		if cl.cfg.retryTimeout > 0 && time.Since(tryStart) > cl.cfg.retryTimeout {
+			return nil, err
+		}
 		if kerr.IsRetriable(err) && tries < cl.cfg.retries || isRetriableBrokerErr(err) && tries < cl.cfg.brokerErrRetries {
 			if ok := cl.waitTries(ctx, tries); ok {
 				goto start

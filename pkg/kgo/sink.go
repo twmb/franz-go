@@ -87,7 +87,7 @@ func (s *sink) createReq() (*produceRequest, int, *kmsg.AddPartitionsToTxnReques
 	req := &produceRequest{
 		txnID:   s.cl.cfg.txnID,
 		acks:    s.cl.cfg.acks.val,
-		timeout: int32(s.cl.cfg.requestTimeout.Milliseconds()),
+		timeout: int32(s.cl.cfg.produceTimeout.Milliseconds()),
 		batches: make(seqRecBatches, 5),
 
 		compressor: s.cl.compressor,

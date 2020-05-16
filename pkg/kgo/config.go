@@ -53,6 +53,7 @@ type cfg struct {
 
 	retryBackoff     func(int) time.Duration
 	retries          int
+	retryTimeout     time.Duration
 	brokerErrRetries int
 
 	maxBrokerWriteBytes int32
@@ -72,7 +73,7 @@ type cfg struct {
 
 	maxRecordBatchBytes int32
 	maxBufferedRecords  int64
-	requestTimeout      time.Duration
+	produceTimeout      time.Duration
 	linger              time.Duration
 	recordTimeout       time.Duration
 
@@ -153,6 +154,7 @@ func defaultCfg() cfg {
 			}
 		}(),
 		retries:          math.MaxInt32, // effectively unbounded
+		retryTimeout:     time.Minute,
 		brokerErrRetries: 20,
 
 		maxBrokerWriteBytes: 100 << 20, // Kafka socket.request.max.bytes default is 100<<20
@@ -165,7 +167,7 @@ func defaultCfg() cfg {
 		compression:         []CompressionCodec{SnappyCompression(), NoCompression()},
 		maxRecordBatchBytes: 1000000, // Kafka max.message.bytes default is 1000012
 		maxBufferedRecords:  100000,
-		requestTimeout:      30 * time.Second,
+		produceTimeout:      30 * time.Second,
 		partitioner:         StickyKeyPartitioner(),
 
 		maxWait:        5000,
@@ -244,6 +246,21 @@ func RetryBackoff(backoff func(int) time.Duration) Opt {
 // This setting applies to all types of requests.
 func RequestRetries(n int) Opt {
 	return clientOpt{func(cfg *cfg) { cfg.retries = n }}
+}
+
+// RetryTimeout sets the upper limit on how long we allow requests to retry,
+// overriding the default 1m.
+//
+// This timeout applies to any request issued through a client's Request
+// function. It does not apply to fetches nor produces.
+//
+// If set to zero, there is no retry timeout.
+//
+// This timeout is evaluated after a request is issued. If a retry backoff
+// places the next request past the retry timeout deadline, the request
+// will still be tried once more once the backoff expires.
+func RetryTimeout(t time.Duration) Opt {
+	return clientOpt{func(cfg *cfg) { cfg.retryTimeout = t }}
 }
 
 // BrokerErrRetries sets the number of tries that are allowed for requests,
@@ -381,14 +398,14 @@ func RecordPartitioner(partitioner Partitioner) ProducerOpt {
 	return producerOpt{func(cfg *cfg) { cfg.partitioner = partitioner }}
 }
 
-// ProduceTimeout sets how long Kafka broker's are allowed to respond to
+// ProduceRequestTimeout sets how long Kafka broker's are allowed to respond to
 // produce requests, overriding the default 30s. If a broker exceeds this
 // duration, it will reply with a request timeout error.
 //
 // This corresponds to Kafka's request.timeout.ms setting, but only applies to
 // produce requests.
-func ProduceTimeout(limit time.Duration) ProducerOpt {
-	return producerOpt{func(cfg *cfg) { cfg.requestTimeout = limit }}
+func ProduceRequestTimeout(limit time.Duration) ProducerOpt {
+	return producerOpt{func(cfg *cfg) { cfg.produceTimeout = limit }}
 }
 
 // StopOnDataLoss sets the client to stop producing if data loss is
