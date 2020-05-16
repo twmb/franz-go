@@ -2,7 +2,21 @@
 // serialization and deserialization functions.
 //
 // This package reserves the right to add new fields to struct types as Kafka
-// adds new fields over time without bumping the major API version.
+// adds new fields over time without bumping the major version. New requests
+// will also be added without bumping the major version. The major version will
+// also NOT BE BUMPED if a field's type is changed. The major version of this
+// package is only bumped if it is required to be bumped per the kgo package.
+//
+// Kafka has only once in its history changed a non-array field's type,
+// changing a string to a pointer to a string. These types of changes are
+// expected to be uncommon, and this package is provided with the understanding
+// that it is advanced and may require some very minor maintenance if a field's
+// type changes.
+//
+// If you are using this package directly with kgo, it is HIGHLY recommended to
+// pin the max supported Kafka version! If you do not, you will automatically
+// opt in to new Kafka versions across new kmsg releases. This may lead to new
+// fields that you have not explicitly initialized, resulting in errors.
 package kmsg
 
 import (
