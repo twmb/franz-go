@@ -3,7 +3,9 @@ package kgo
 import (
 	"fmt"
 	"math"
+	"math/rand"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/twmb/kafka-go/pkg/kversion"
@@ -121,7 +123,35 @@ func defaultCfg() cfg {
 
 		seedBrokers: []string{"127.0.0.1"},
 
-		retryBackoff:     func(int) time.Duration { return 100 * time.Millisecond },
+		retryBackoff: func() func(int) time.Duration {
+			var rngMu sync.Mutex
+			rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+			return func(fails int) time.Duration {
+				const (
+					min = 100 * time.Millisecond
+					max = time.Second
+				)
+				if fails <= 0 {
+					return min
+				}
+				if fails > 10 {
+					return max
+				}
+
+				backoff := min * time.Duration(1<<fails)
+
+				rngMu.Lock()
+				jitter := 0.8 + 0.4*rng.Float64()
+				rngMu.Unlock()
+
+				backoff = time.Duration(float64(backoff) * jitter)
+
+				if backoff > max {
+					return max
+				}
+				return backoff
+			}
+		}(),
 		retries:          math.MaxInt32, // effectively unbounded
 		brokerErrRetries: 20,
 
@@ -195,13 +225,15 @@ func MaxVersions(versions kversion.Versions) Opt {
 	return clientOpt{func(cfg *cfg) { cfg.maxVersions = versions }}
 }
 
-// RetryBackoff sets the backoff strategy for how long to backoff for a
-// given amount of retries, overriding the default constant 100ms.
+// RetryBackoff sets the backoff strategy for how long to backoff for a given
+// amount of retries, overriding the default exponential backoff that ranges
+// from 100ms min to 1s max.
 //
 // The function is called with the number of failures that have occurred in a
-// row. This can be used to implement exponential backoff if desired.
+// row.
 //
-// This (roughly) corresponds to Kafka's retry.backoff.ms setting.
+// This (roughly) corresponds to Kafka's retry.backoff.ms setting and
+// retry.backoff.max.ms (which is being introduced with KIP-500).
 func RetryBackoff(backoff func(int) time.Duration) Opt {
 	return clientOpt{func(cfg *cfg) { cfg.retryBackoff = backoff }}
 }
