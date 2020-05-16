@@ -64,128 +64,32 @@ func AppendUint32(dst []byte, u uint32) []byte {
 
 // uvarintLens could only be length 65, but using 256 allows bounds check
 // elimination on lookup.
-var uvarintLens [256]byte
-
-func init() {
-	for i := 0; i < len(uvarintLens[:]); i++ {
-		uvarintLens[i] = byte((i-1)/7) + 1
-	}
+var uvarintLens = [256]byte{
+	1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 4, 4,
+	4, 4, 4, 4, 4, 5, 5, 5, 5, 5, 5, 5, 6, 6, 6, 6, 6, 6, 6, 7, 7, 7, 7, 7,
+	7, 7, 8, 8, 8, 8, 8, 8, 8, 9, 9, 9, 9, 9, 9, 9, 10, 10, 10, 10, 10, 10,
+	10, 11, 11, 11, 11, 11, 11, 11, 12, 12, 12, 12, 12, 12, 12, 13, 13, 13,
+	13, 13, 13, 13, 14, 14, 14, 14, 14, 14, 14, 15, 15, 15, 15, 15, 15, 15,
+	16, 16, 16, 16, 16, 16, 16, 17, 17, 17, 17, 17, 17, 17, 18, 18, 18, 18,
+	18, 18, 18, 19, 19, 19, 19, 19, 19, 19, 20, 20, 20, 20, 20, 20, 20, 21,
+	21, 21, 21, 21, 21, 21, 22, 22, 22, 22, 22, 22, 22, 23, 23, 23, 23, 23,
+	23, 23, 24, 24, 24, 24, 24, 24, 24, 25, 25, 25, 25, 25, 25, 25, 26, 26,
+	26, 26, 26, 26, 26, 27, 27, 27, 27, 27, 27, 27, 28, 28, 28, 28, 28, 28,
+	28, 29, 29, 29, 29, 29, 29, 29, 30, 30, 30, 30, 30, 30, 30, 31, 31, 31,
+	31, 31, 31, 31, 32, 32, 32, 32, 32, 32, 32, 33, 33, 33, 33, 33, 33, 33,
+	34, 34, 34, 34, 34, 34, 34, 35, 35, 35, 35, 35, 35, 35, 36, 36, 36, 36,
+	36, 36, 36, 37, 37, 37,
 }
 
 // VarintLen returns how long i would be if it were varint encoded.
-func VarintLen(i int64) int {
-	u := uint64(i)<<1 ^ uint64(i>>63)
+func VarintLen(i int32) int {
+	u := uint32(i)<<1 ^ uint32(i>>31)
 	return UvarintLen(u)
 }
 
 // UvarintLen returns how long u would be if it were uvarint encoded.
-func UvarintLen(u uint64) int {
-	return int(uvarintLens[byte(bits.Len64(u))])
-}
-
-// Varlong is a loop unrolled 64 bit varint decoder. The return semantics
-// are the same as binary.Varint.
-func Varlong(in []byte) (int64, int) {
-	var c byte
-	var x uint64
-	var n int
-
-	if len(in) < 1 {
-		goto fail
-	}
-
-	c = in[0]
-	x = uint64(c & 0x7f)
-	n = 1
-
-	if c&0x80 != 0 {
-		if len(in) < 2 {
-			goto fail
-		}
-		c = in[1]
-		x |= uint64(c&0x7f) << 7
-		n = 2
-
-		if c&0x80 != 0 {
-			if len(in) < 3 {
-				goto fail
-			}
-			c = in[2]
-			x |= uint64(c&0x7f) << 14
-			n = 3
-
-			if c&0x80 != 0 {
-				if len(in) < 4 {
-					goto fail
-				}
-				c = in[3]
-				x |= uint64(c&0x7f) << 21
-				n = 4
-
-				if c&0x80 != 0 {
-					if len(in) < 5 {
-						goto fail
-					}
-					c = in[4]
-					x |= uint64(c&0x7f) << 28
-					n = 5
-
-					if c&0x80 != 0 {
-						if len(in) < 6 {
-							goto fail
-						}
-						c = in[5]
-						x |= uint64(c&0x7f) << 35
-						n = 6
-
-						if c&0x80 != 0 {
-							if len(in) < 7 {
-								goto fail
-							}
-							c = in[6]
-							x |= uint64(c&0x7f) << 42
-							n = 7
-
-							if c&0x80 != 0 {
-								if len(in) < 8 {
-									goto fail
-								}
-								c = in[7]
-								x |= uint64(c&0x7f) << 49
-								n = 8
-
-								if c&0x80 != 0 {
-									if len(in) < 9 {
-										goto fail
-									}
-									c = in[8]
-									x |= uint64(c&0x7f) << 56
-									n = 9
-
-									if c&0x80 != 0 {
-										if len(in) < 10 {
-											goto fail
-										}
-										c = in[9]
-										if c > 1 {
-											return 0, -10
-										}
-										x |= uint64(c) << 63
-										n = 10
-
-									}
-								}
-							}
-						}
-					}
-				}
-			}
-		}
-	}
-
-	return int64((x >> 1) ^ -(x & 1)), n
-fail:
-	return 0, 0
+func UvarintLen(u uint32) int {
+	return int(uvarintLens[byte(bits.Len32(u))])
 }
 
 // Varint is a loop unrolled 32 bit varint decoder. The return semantics
@@ -200,61 +104,50 @@ func Varint(in []byte) (int32, int) {
 // are the same as binary.Uvarint, with the added benefit that overflows
 // in 5 byte encodings are handled rather than left to the user.
 func Uvarint(in []byte) (uint32, int) {
-	var c byte
 	var x uint32
-	var n int
+	var overflow int
 
 	if len(in) < 1 {
 		goto fail
 	}
 
-	c = in[0]
-	x = uint32(c & 0x7f)
-	n = 1
-
-	if c&0x80 != 0 {
-		if len(in) < 2 {
-			goto fail
-		}
-		c = in[1]
-		x |= uint32(c&0x7f) << 7
-		n = 2
-
-		if c&0x80 != 0 {
-			if len(in) < 3 {
-				goto fail
-			}
-			c = in[2]
-			x |= uint32(c&0x7f) << 14
-			n = 3
-
-			if c&0x80 != 0 {
-				if len(in) < 4 {
-					goto fail
-				}
-				c = in[3]
-				x |= uint32(c&0x7f) << 21
-				n = 4
-
-				if c&0x80 != 0 {
-					if len(in) < 5 {
-						goto fail
-					}
-					c = in[4]
-					if c > 0x0f {
-						return 0, -5
-					}
-					x |= uint32(c) << 28
-					n = 5
-
-				}
-			}
-		}
+	x = uint32(in[0] & 0x7f)
+	if in[0]&0x80 == 0 {
+		return x, 1
+	} else if len(in) < 2 {
+		goto fail
 	}
 
-	return x, n
+	x |= uint32(in[1]&0x7f) << 7
+	if in[1]&0x80 == 0 {
+		return x, 2
+	} else if len(in) < 3 {
+		goto fail
+	}
+
+	x |= uint32(in[2]&0x7f) << 14
+	if in[2]&0x80 == 0 {
+		return x, 3
+	} else if len(in) < 4 {
+		goto fail
+	}
+
+	x |= uint32(in[3]&0x7f) << 21
+	if in[3]&0x80 == 0 {
+		return x, 4
+	} else if len(in) < 5 {
+		goto fail
+	}
+
+	x |= uint32(in[4]&0x7f) << 28
+	if in[4] <= 0x0f {
+		return x, 5
+	}
+
+	overflow = -5
+
 fail:
-	return 0, 0
+	return 0, overflow
 }
 
 // AppendVarint appends a varint encoded i to dst.
@@ -264,7 +157,7 @@ func AppendVarint(dst []byte, i int32) []byte {
 
 // AppendUvarint appends a uvarint encoded u to dst.
 func AppendUvarint(dst []byte, u uint32) []byte {
-	switch UvarintLen(uint64(u)) {
+	switch UvarintLen(u) {
 	case 5:
 		return append(dst,
 			byte(u&0x7f|0x80),
@@ -291,16 +184,6 @@ func AppendUvarint(dst []byte, u uint32) []byte {
 		return append(dst, byte(u))
 	}
 	return dst
-}
-
-// AppendVarlong appends a varint encoded i to dst.
-func AppendVarlong(dst []byte, i int64) []byte {
-	u := uint64(i)<<1 ^ uint64(i>>63)
-	for u&0x7f != u {
-		dst = append(dst, byte(u&0x7f|0x80))
-		u >>= 7
-	}
-	return append(dst, byte(u))
 }
 
 // AppendString appends a string to dst prefixed with its int16 length.
@@ -540,18 +423,6 @@ func (b *Reader) Uvarint() uint32 {
 	}
 	b.Src = b.Src[n:]
 	return val
-}
-
-// Varlong returns a varlong int64 from the reader.
-func (b *Reader) Varlong() int64 {
-	val, n := Varlong(b.Src)
-	if n <= 0 {
-		b.bad = true
-		b.Src = nil
-		return 0
-	}
-	b.Src = b.Src[n:]
-	return int64(val)
 }
 
 // Span returns l bytes from the reader.

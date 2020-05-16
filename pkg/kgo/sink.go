@@ -1118,23 +1118,23 @@ func (b *recBatch) calculateRecordNumbers(r *Record) recordNumbers {
 	offsetDelta := int32(len(b.records)) // since called before adding record, delta is the current end
 
 	l := 1 + // attributes, int8 unused
-		kbin.VarintLen(int64(tsDelta)) +
-		kbin.VarintLen(int64(offsetDelta)) +
-		kbin.VarintLen(int64(len(r.Key))) +
+		kbin.VarintLen(tsDelta) +
+		kbin.VarintLen(offsetDelta) +
+		kbin.VarintLen(int32(len(r.Key))) +
 		len(r.Key) +
-		kbin.VarintLen(int64(len(r.Value))) +
+		kbin.VarintLen(int32(len(r.Value))) +
 		len(r.Value) +
-		kbin.VarintLen(int64(len(r.Headers))) // varint array len headers
+		kbin.VarintLen(int32(len(r.Headers))) // varint array len headers
 
 	for _, h := range r.Headers {
-		l += kbin.VarintLen(int64(len(h.Key))) +
+		l += kbin.VarintLen(int32(len(h.Key))) +
 			len(h.Key) +
-			kbin.VarintLen(int64(len(h.Value))) +
+			kbin.VarintLen(int32(len(h.Value))) +
 			len(h.Value)
 	}
 
 	return recordNumbers{
-		wireLength:     int32(kbin.VarintLen(int64(l)) + l),
+		wireLength:     int32(kbin.VarintLen(int32(l)) + l),
 		lengthField:    int32(l),
 		timestampDelta: tsDelta,
 	}
