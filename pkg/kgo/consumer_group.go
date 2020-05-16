@@ -2,6 +2,7 @@ package kgo
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"regexp"
 	"sort"
@@ -322,7 +323,7 @@ func (cl *Client) AssignGroup(group string, opts ...GroupOpt) {
 	}
 
 	if !g.autocommitDisable && g.autocommitInterval > 0 {
-		g.cl.cfg.logger.Log(LogLevelInfo, "beginning commit loop")
+		g.cl.cfg.logger.Log(LogLevelInfo, "beginning autocommit loop")
 		go g.loopCommit()
 	}
 
@@ -372,7 +373,6 @@ loop:
 			backoff := g.cl.cfg.retryBackoff(consecutiveErrors)
 			g.cl.cfg.logger.Log(LogLevelError, "join and sync loop errored",
 				"err", err,
-				"lost", g.nowAssigned,
 				"consecutive_errors", consecutiveErrors,
 				"backoff", backoff,
 			)
@@ -709,6 +709,7 @@ func (g *groupConsumer) heartbeat(fetchErrCh <-chan error, s *assignRevokeSessio
 		}
 
 		if heartbeat {
+			g.cl.cfg.logger.Log(LogLevelDebug, "heartbeating")
 			req := &kmsg.HeartbeatRequest{
 				Group:      g.id,
 				Generation: g.generation,
@@ -721,6 +722,7 @@ func (g *groupConsumer) heartbeat(fetchErrCh <-chan error, s *assignRevokeSessio
 				resp := kresp.(*kmsg.HeartbeatResponse)
 				err = kerr.ErrorForCode(resp.ErrorCode)
 			}
+			g.cl.cfg.logger.Log(LogLevelDebug, "heartbeat complete", "err", err)
 		}
 
 		if didMetadone && didRevoke {
@@ -842,7 +844,8 @@ start:
 			g.mu.Lock()
 			g.memberID = resp.MemberID // KIP-394
 			g.mu.Unlock()
-			g.cl.cfg.logger.Log(LogLevelInfo, "join returned MemberIDRequired, rejoining with response's MemberID")
+			g.cl.cfg.logger.Log(LogLevelInfo, "join returned MemberIDRequired, rejoining with response's MemberID",
+				"memberID", resp.MemberID)
 			goto start
 		case kerr.UnknownMemberID:
 			g.mu.Lock()
@@ -906,7 +909,6 @@ start:
 }
 
 func (g *groupConsumer) syncGroup(leader bool, plan balancePlan, protocol string) error {
-
 	req := kmsg.SyncGroupRequest{
 		Group:           g.id,
 		Generation:      g.generation,
@@ -942,6 +944,9 @@ func (g *groupConsumer) syncGroup(leader bool, plan balancePlan, protocol string
 	kassignment := new(kmsg.GroupMemberAssignment)
 	if err = kassignment.ReadFrom(resp.MemberAssignment); err != nil {
 		g.cl.cfg.logger.Log(LogLevelError, "sync assignment parse failed", "err", err)
+		if g.cl.cfg.logger.Level() >= LogLevelDebug {
+			g.cl.cfg.logger.Log(LogLevelDebug, "sync assignment raw", "hex", hex.EncodeToString(resp.MemberAssignment))
+		}
 		return err
 	}
 
@@ -1018,6 +1023,7 @@ start:
 				// pending transaction that should be committing soon.
 				// We sleep for 1s and retry fetching offsets.
 				if err == kerr.UnstableOffsetCommit {
+					g.cl.cfg.logger.Log(LogLevelInfo, "fetch offsets failed with UnstableOffsetCommit, waiting 1s and retrying")
 					select {
 					case <-ctx.Done():
 					case <-time.After(time.Second):
@@ -1259,7 +1265,7 @@ func (g *groupConsumer) updateUncommitted(fetches Fetches) {
 // verifies that the resp matches the req as it should and that the req does
 // not somehow contain more than what is in our uncommitted map.
 //
-// NOTE if editing this function, edit updateCommittedTxn below!
+// NOTE if editing this function, edit updateCommittedTxn.
 func (g *groupConsumer) updateCommitted(
 	req *kmsg.OffsetCommitRequest,
 	resp *kmsg.OffsetCommitResponse,
@@ -1624,7 +1630,7 @@ func (g *groupConsumer) defaultRevoke(_ context.Context, _ map[string][]int32) {
 		un := g.getUncommitted()
 		g.cl.BlockingCommitOffsets(g.ctx, un, func(_ *kmsg.OffsetCommitRequest, resp *kmsg.OffsetCommitResponse, err error) {
 			if err != nil {
-				g.cl.cfg.logger.Log(LogLevelError, "default revoke failed", "err", err)
+				g.cl.cfg.logger.Log(LogLevelError, "default revoke BlockingCommitOffsets failed", "err", err)
 				return
 			}
 			for _, topic := range resp.Topics {

@@ -673,7 +673,7 @@ func (o *offsetsWaitingLoad) setTopicPartForList(topic string, partition int32, 
 }
 
 func (c *consumer) tryBrokerOffsetLoadList(broker *broker, load *offsetsWaitingLoad) {
-	c.cl.cfg.logger.Log(LogLevelInfo, "issuing list offsets request")
+	c.cl.cfg.logger.Log(LogLevelInfo, "issuing list offsets request", "broker", broker.id, "addr", broker.addr)
 	kresp, err := broker.waitResp(c.cl.ctx,
 		load.buildListReq(c.cl.cfg.isolationLevel))
 	if err != nil {
@@ -818,6 +818,7 @@ func (o *offsetsWaitingLoad) setTopicPartForEpoch(topic string, partition int32,
 }
 
 func (c *consumer) tryBrokerOffsetLoadEpoch(broker *broker, load *offsetsWaitingLoad) {
+	c.cl.cfg.logger.Log(LogLevelInfo, "issuing offset for leader epoch request", "broker", broker.id, "addr", broker.addr)
 	kresp, err := broker.waitResp(c.cl.ctx, load.buildEpochReq())
 	if err != nil {
 		load.mergeInto(c)

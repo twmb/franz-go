@@ -79,6 +79,8 @@ func (cl *Client) AssignGroupTransactSession(group string, opts ...GroupOpt) *Gr
 		s.revokeMu.Lock()
 		defer s.revokeMu.Unlock()
 
+		cl.cfg.logger.Log(LogLevelInfo, "transact session in on_revoke; aborting next commit if we are currently in a transaction")
+
 		s.revoked = true
 
 		if userRevoked != nil {
@@ -97,6 +99,7 @@ func (s *GroupTransactSession) Begin() error {
 	s.revokeMu.Lock()
 	s.revoked = false
 	s.revokeMu.Unlock()
+	s.cl.cfg.logger.Log(LogLevelInfo, "beginning transact session")
 	return s.cl.BeginTransaction()
 }
 
@@ -153,9 +156,21 @@ func (s *GroupTransactSession) End(ctx context.Context, commit TransactionEndTry
 
 	tryCommit := !s.revoked && commitErr == nil
 	commit = TransactionEndTry(wantCommit && tryCommit)
+
+	s.cl.cfg.logger.Log(LogLevelInfo, "transaction session ending",
+		"was_revoked", s.revoked,
+		"want_commit", wantCommit,
+		"can_try_commit", tryCommit,
+		"will_try_commit", commit,
+	)
+
 	endTxnErr := s.cl.EndTransaction(ctx, commit)
 
-	if !tryCommit {
+	if !commit || endTxnErr != nil {
+		s.cl.cfg.logger.Log(LogLevelInfo, "transact session resetting to prior committed state",
+			"tried_commit", commit,
+			"commit_err", endTxnErr,
+		)
 		s.cl.ResetToCommitted()
 	}
 
@@ -190,6 +205,7 @@ func (cl *Client) BeginTransaction() error {
 	}
 	cl.producer.inTxn = true
 	atomic.StoreUint32(&cl.producer.producingTxn, 1) // allow produces for txns now
+	cl.cfg.logger.Log(LogLevelInfo, "beginning transaction", "transactional_id", *cl.cfg.txnID)
 	return nil
 }
 
@@ -216,6 +232,9 @@ func (cl *Client) AbortBufferedRecords(ctx context.Context) error {
 	// At this point, all drain loops that start will immediately stop,
 	// thus they will not begin any AddPartitionsToTxn request. We must
 	// now wait for any req currently built to be done being issued.
+
+	cl.cfg.logger.Log(LogLevelDebug, "aborting")
+	defer cl.cfg.logger.Log(LogLevelDebug, "done aborting")
 
 	for _, partitions := range cl.loadTopics() { // a good a time as any to fail all records
 		for _, partition := range partitions.load().all {

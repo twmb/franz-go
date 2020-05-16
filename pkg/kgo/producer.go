@@ -445,6 +445,9 @@ func (cl *Client) Flush(ctx context.Context) error {
 	atomic.AddInt32(&cl.producer.flushing, 1)
 	defer atomic.AddInt32(&cl.producer.flushing, -1)
 
+	cl.cfg.logger.Log(LogLevelDebug, "flushing")
+	defer cl.cfg.logger.Log(LogLevelDebug, "done flushing")
+
 	// At this point, if lingering is configured, nothing will _start_ a
 	// linger because the producer's flushing atomic int32 is nonzero. We
 	// must wake anything that could be lingering up, after which all sinks
