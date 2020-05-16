@@ -410,7 +410,7 @@ func (s *source) handleReqResp(req *fetchRequest, kresp kmsg.Response, err error
 			s.session.id = -1
 			s.session.epoch = -1
 			s.cl.cfg.logger.Log(LogLevelInfo,
-				"session failed with IDNotFound while trying to establish a session; broker likely maxed on sessions; continuing on without using sessions")
+				"session failed with SessionIDNotFound while trying to establish a session; broker likely maxed on sessions; continuing on without using sessions")
 		}
 		fallthrough
 	case kerr.InvalidFetchSessionEpoch:

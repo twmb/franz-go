@@ -374,7 +374,7 @@ func deserializeUserData(userdata []byte) (memberPlan []topicPartition, generati
 }
 
 // assignUnassignedAndInitGraph is a long function that assigns unassigned
-// functions to the least loaded members and initializes our steal graph.
+// partitions to the least loaded members and initializes our steal graph.
 //
 // Doing so requires a bunch of metadata, and in the process we want to remove
 // partitions from the plan that no longer exist in the client.
@@ -485,6 +485,16 @@ func (b *balancer) assignUnassignedAndInitGraph() {
 }
 
 const (
+	// deletedPart and unassignedPart are fake member numbers that we use
+	// to track if a partition is deleted or unassigned.
+	//
+	// deletedPart is technically unneeded; if no member wants a partition,
+	// no member will be seen as a potential for taking it, so tracking
+	// that it was deleted is unnecessary. We do though just to be
+	// explicit.
+	//
+	// unassignedPart is the default of partitions until we process what
+	// members say they were assigned prior.
 	deletedPart    = math.MaxUint16
 	unassignedPart = math.MaxUint16 - 1
 )

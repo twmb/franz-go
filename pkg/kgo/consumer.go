@@ -8,7 +8,7 @@ import (
 	"github.com/twmb/kafka-go/pkg/kmsg"
 )
 
-// Offset is a message offset into a partition.
+// Offset is a message offset in a partition.
 type Offset struct {
 	request      int64
 	relative     int64
