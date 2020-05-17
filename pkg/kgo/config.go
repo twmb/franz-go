@@ -173,7 +173,7 @@ func defaultCfg() cfg {
 		maxWait:        5000,
 		maxBytes:       50 << 20,
 		maxPartBytes:   10 << 20,
-		resetOffset:    NewOffset(AtStart()),
+		resetOffset:    NewOffset().AtStart(),
 		isolationLevel: 0,
 	}
 }
@@ -469,7 +469,7 @@ func RecordTimeout(timeout time.Duration) ProducerOpt {
 // consumed from a group, then you EndTransaction. All records prodcued outside
 // of a transaction will fail immediately with an error.
 //
-// After producing a batch, you must commit what you consumed. Autocommitting
+// After producing a batch, you must commit what you consumed. Auto committing
 // offsets is disabled during transactional consuming / producing.
 //
 // Note that, unless using Kafka 2.5.0, a consumer group rebalance may be

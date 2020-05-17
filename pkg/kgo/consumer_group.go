@@ -161,14 +161,14 @@ func OnLost(onLost func(context.Context, map[string][]int32)) GroupOpt {
 	return groupOpt{func(cfg *groupConsumer) { cfg.onLost = onLost }}
 }
 
-// DisableAutocommit disable auto committing.
-func DisableAutocommit() GroupOpt {
+// DisableAutoCommit disable auto committing.
+func DisableAutoCommit() GroupOpt {
 	return groupOpt{func(cfg *groupConsumer) { cfg.autocommitDisable = true }}
 }
 
-// AutocommitInterval sets how long to go between autocommits, overriding the
+// AutoCommitInterval sets how long to go between autocommits, overriding the
 // default 5s.
-func AutocommitInterval(interval time.Duration) GroupOpt {
+func AutoCommitInterval(interval time.Duration) GroupOpt {
 	return groupOpt{func(cfg *groupConsumer) { cfg.autocommitInterval = interval }}
 }
 

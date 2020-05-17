@@ -16,58 +16,57 @@ type Offset struct {
 	currentEpoch int32 // set by us
 }
 
-// OffsetOpt is an option for an offset.
-type OffsetOpt interface {
-	apply(*Offset)
-}
-
-type offsetOpt struct{ fn func(*Offset) }
-
-func (opt offsetOpt) apply(o *Offset) { opt.fn(o) }
-
-// NewOffset creates and returns an offset to use in AssignPartitions.
-func NewOffset(opts ...OffsetOpt) Offset {
-	o := Offset{
+// NewOffsetcreates and returns an offset to use in AssignPartitions.
+//
+// The default offset begins at the end.
+func NewOffset() Offset {
+	return Offset{
 		request: -1,
 		epoch:   -1,
 	}
-	for _, opt := range opts {
-		opt.apply(&o)
-	}
+}
+
+// AtStart returns a copy of the calling offset, changing the returned offset
+// to begin at the beginning of a partition.
+func (o Offset) AtStart() Offset {
+	o.request = -2
 	return o
 }
 
-// AtStart sets an offset to begin at the start of a partition.
-func AtStart() OffsetOpt {
-	return offsetOpt{func(o *Offset) { o.request = -2 }}
+// AtEnd returns a copy of the calling offset, changing the returned offset to
+// begin at the end of a partition.
+func (o Offset) AtEnd() Offset {
+	o.request = -1
+	return o
 }
 
-// AtEnd sets an offset to begin at the end of a partition.
-func AtEnd() OffsetOpt {
-	return offsetOpt{func(o *Offset) { o.request = -1 }}
+// Relative returns a copy of the calling offset, changing the returned offset
+// to be n relative to what it currently is. If the offset is beginning at the
+// end, Relative(-100) will begin 100 before the end.
+func (o Offset) Relative(n int64) Offset {
+	o.relative = n
+	return o
 }
 
-// Relative sets what to add to an offset after it is loaded. This allows you
-// to set, say, 100 before the end with AtEnd() and Relative(-100).
-func Relative(n int64) OffsetOpt {
-	return offsetOpt{func(o *Offset) { o.relative = n }}
-}
-
-// WithEpoch sets the known epoch to use for an offset.
-// This can be used for truncation detection.
-func WithEpoch(e int32) OffsetOpt {
+// WithEpoch returns a copy of the calling offset, changing the returned offset
+// to use the given epoch. This epoch is used for truncation detection; the
+// default of -1 implies no truncation detection.
+func (o Offset) WithEpoch(e int32) Offset {
 	if e < 0 {
 		e = -1
 	}
-	return offsetOpt{func(o *Offset) { o.epoch = e }}
+	o.epoch = e
+	return o
 }
 
-// At begins consuming at the given offset.
-func At(at int64) OffsetOpt {
+// At returns a copy of the calling offset, changing the returned offset
+// to begin at exactly the requested offset.
+func (o Offset) At(at int64) Offset {
 	if at < 0 {
 		at = -2
 	}
-	return offsetOpt{func(o *Offset) { o.request = at }}
+	o.request = at
+	return o
 }
 
 type consumerType int8
