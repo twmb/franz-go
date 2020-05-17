@@ -317,22 +317,21 @@ func (cl *Client) Close() {
 // If the fetch errors, this will return an unknown controller error.
 //
 // If the request is a group or transaction coordinator request, this will
-// issue the request to the appropriate group or transaction coordinator.  If
-// the request fails with a coordinator loading error, this internally retries
-// the request.
+// issue the request to the appropriate group or transaction coordinator.
 //
 // For group coordinator requests, if the request contains multiple groups
-// (delete groups, describe groups), the request will be split into one request
-// for each group (since they could have different coordinators), all requests
-// will be issued, and then all responses are merged. Only if all requests
-// error is an error returned.
+// (delete groups, describe groups), the request is split into one request per
+// broker containing the groups that broker can respond to. Thus, you do not
+// have to worry about maxing groups that different brokers are coordinators
+// for. All responses are merged. Only if all requests error is an error
+// returned.
 //
 // For transaction requests, the request is issued to the transaction
 // coordinator. However, if the request is an init producer ID request and the
-// request has no transactional ID, this goes to any broker.
+// request has no transactional ID, the request goes to any broker.
 //
-// In short, this tries to do the correct thing depending on what type of
-// request is being issued.
+// In short, this method tries to do the correct thing depending on what type
+// of request is being issued.
 //
 // The passed context can be used to cancel a request and return early. Note
 // that if the request is not canceled before it is written to Kafka, you may
@@ -382,9 +381,9 @@ start:
 			resp, err = controller.waitResp(ctx, req)
 		}
 	} else if groupReq, isGroupReq := req.(kmsg.GroupCoordinatorRequest); isGroupReq {
-		resp, err = cl.handleGroupReq(ctx, groupReq)
+		resp, err = cl.handleCoordinatorReq(ctx, groupReq, coordinatorTypeGroup)
 	} else if txnReq, isTxnReq := req.(kmsg.TxnCoordinatorRequest); isTxnReq {
-		resp, err = cl.handleTxnReq(ctx, txnReq)
+		resp, err = cl.handleCoordinatorReq(ctx, txnReq, coordinatorTypeTxn)
 	} else {
 		resp, err = cl.broker().waitResp(ctx, req)
 	}
@@ -508,25 +507,68 @@ start:
 	cl.coordinatorsMu.Unlock()
 
 	return cl.brokerOrErr(coordinator, &errUnknownCoordinator{coordinator, key})
-
 }
 
-// handleGroupReq issues a group request.
+// loadCoordinators does a concurrent load of many coordinators.
+func (cl *Client) loadCoordinators(typ int8, names ...string) (map[string]*broker, error) {
+	ctx, cancel := context.WithCancel(cl.ctx)
+	defer cancel()
+
+	var mu sync.Mutex
+	m := make(map[string]*broker)
+	var errQuit error
+
+	var wg sync.WaitGroup
+	for _, name := range names {
+		myName := name
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			coordinator, err := cl.loadCoordinator(ctx, coordinatorKey{
+				name: myName,
+				typ:  typ,
+			})
+
+			mu.Lock()
+			defer mu.Unlock()
+
+			if err != nil {
+				if errQuit != nil {
+					errQuit = err
+					cancel()
+				}
+				return
+			}
+			m[myName] = coordinator
+		}()
+	}
+	wg.Wait()
+
+	return m, errQuit
+}
+
+// handleCoordinatorEq issues group or txn requests.
 //
 // The logic for group requests is mildly convoluted; a single request can
 // contain multiple groups which could go to multiple brokers due to the group
 // coordinators being different.
 //
+// All transaction requests are simple.
+//
 // Most requests go to one coordinator; those are simple and we issue those
 // simply.
 //
-// Those that go to multiple have the groups split into individual requests
-// containing a single group. All requests are issued serially and then the
-// responses are merged. We only return err if all requests error.
-func (cl *Client) handleGroupReq(ctx context.Context, req kmsg.GroupCoordinatorRequest) (kmsg.Response, error) {
-	var group2req map[string]kmsg.Request
-	var kresp kmsg.Response
-	var merge func(kmsg.Response)
+// Requests that go to multiple have the groups split into individual requests
+// containing a single group. We only return err if all requests error.
+func (cl *Client) handleCoordinatorReq(ctx context.Context, req kmsg.Request, typ int8) (kmsg.Response, error) {
+	// If we have to split requests, the following four variables are
+	// used for splitting and then merging responses.
+	var (
+		broker2req map[*broker]kmsg.Request
+		names      []string
+		kresp      kmsg.Response
+		merge      func(kmsg.Response)
+	)
 
 	switch t := req.(type) {
 	default:
@@ -534,29 +576,67 @@ func (cl *Client) handleGroupReq(ctx context.Context, req kmsg.GroupCoordinatorR
 		// then we do not know what this request is.
 		return nil, ErrClientTooOld
 
+	/////////
+	// TXN // -- all txn reqs are simple
+	/////////
+
+	case *kmsg.InitProducerIDRequest:
+		if t.TransactionalID != nil {
+			return cl.handleCoordinatorReqSimple(ctx, coordinatorTypeTxn, *t.TransactionalID, req)
+		}
+		// InitProducerID can go to any broker if the transactional ID
+		// is nil. By using handleReqWithCoordinator, we get the
+		// retriable-error parsing, even though we are not actually
+		// using a defined txn coordinator. This is fine; by passing no
+		// names, we delete no coordinator.
+		return cl.handleReqWithCoordinator(ctx, cl.broker(), coordinatorTypeTxn, nil, req)
+	case *kmsg.AddPartitionsToTxnRequest:
+		return cl.handleCoordinatorReqSimple(ctx, coordinatorTypeTxn, t.TransactionalID, req)
+	case *kmsg.AddOffsetsToTxnRequest:
+		return cl.handleCoordinatorReqSimple(ctx, coordinatorTypeTxn, t.TransactionalID, req)
+	case *kmsg.EndTxnRequest:
+		return cl.handleCoordinatorReqSimple(ctx, coordinatorTypeTxn, t.TransactionalID, req)
+
+	///////////
+	// GROUP // -- most group reqs are simple
+	///////////
+
 	case *kmsg.OffsetCommitRequest:
-		return cl.handleGroupReqSimple(ctx, t.Group, req)
+		return cl.handleCoordinatorReqSimple(ctx, coordinatorTypeGroup, t.Group, req)
 	case *kmsg.TxnOffsetCommitRequest:
-		return cl.handleGroupReqSimple(ctx, t.Group, req)
+		return cl.handleCoordinatorReqSimple(ctx, coordinatorTypeGroup, t.Group, req)
 	case *kmsg.OffsetFetchRequest:
-		return cl.handleGroupReqSimple(ctx, t.Group, req)
+		return cl.handleCoordinatorReqSimple(ctx, coordinatorTypeGroup, t.Group, req)
 	case *kmsg.JoinGroupRequest:
-		return cl.handleGroupReqSimple(ctx, t.Group, req)
+		return cl.handleCoordinatorReqSimple(ctx, coordinatorTypeGroup, t.Group, req)
 	case *kmsg.HeartbeatRequest:
-		return cl.handleGroupReqSimple(ctx, t.Group, req)
+		return cl.handleCoordinatorReqSimple(ctx, coordinatorTypeGroup, t.Group, req)
 	case *kmsg.LeaveGroupRequest:
-		return cl.handleGroupReqSimple(ctx, t.Group, req)
+		return cl.handleCoordinatorReqSimple(ctx, coordinatorTypeGroup, t.Group, req)
 	case *kmsg.SyncGroupRequest:
-		return cl.handleGroupReqSimple(ctx, t.Group, req)
+		return cl.handleCoordinatorReqSimple(ctx, coordinatorTypeGroup, t.Group, req)
 
 	case *kmsg.DescribeGroupsRequest:
-		group2req = make(map[string]kmsg.Request)
-		for _, id := range t.Groups {
-			group2req[id] = &kmsg.DescribeGroupsRequest{
-				Groups:                      []string{id},
-				IncludeAuthorizedOperations: t.IncludeAuthorizedOperations,
-			}
+		for _, group := range t.Groups {
+			names = append(names, group)
 		}
+		coordinators, err := cl.loadCoordinators(coordinatorTypeGroup, names...)
+		if err != nil {
+			return nil, err
+		}
+		broker2req = make(map[*broker]kmsg.Request)
+
+		for _, group := range t.Groups {
+			broker := coordinators[group]
+			if broker2req[broker] == nil {
+				broker2req[broker] = &kmsg.DescribeGroupsRequest{
+					IncludeAuthorizedOperations: t.IncludeAuthorizedOperations,
+				}
+			}
+			req := broker2req[broker].(*kmsg.DescribeGroupsRequest)
+			req.Groups = append(req.Groups, group)
+		}
+
 		resp := new(kmsg.DescribeGroupsResponse)
 		kresp = resp
 		merge = func(newKResp kmsg.Response) {
@@ -567,12 +647,24 @@ func (cl *Client) handleGroupReq(ctx context.Context, req kmsg.GroupCoordinatorR
 		}
 
 	case *kmsg.DeleteGroupsRequest:
-		group2req = make(map[string]kmsg.Request)
-		for _, id := range t.Groups {
-			group2req[id] = &kmsg.DeleteGroupsRequest{
-				Groups: []string{id},
-			}
+		for _, group := range t.Groups {
+			names = append(names, group)
 		}
+		coordinators, err := cl.loadCoordinators(coordinatorTypeGroup, names...)
+		if err != nil {
+			return nil, err
+		}
+		broker2req = make(map[*broker]kmsg.Request)
+
+		for _, group := range t.Groups {
+			broker := coordinators[group]
+			if broker2req[broker] == nil {
+				broker2req[broker] = new(kmsg.DeleteGroupsRequest)
+			}
+			req := broker2req[broker].(*kmsg.DeleteGroupsRequest)
+			req.Groups = append(req.Groups, group)
+		}
+
 		resp := new(kmsg.DeleteGroupsResponse)
 		kresp = resp
 		merge = func(newKResp kmsg.Response) {
@@ -583,42 +675,68 @@ func (cl *Client) handleGroupReq(ctx context.Context, req kmsg.GroupCoordinatorR
 		}
 	}
 
-	var firstErr error
-	var errs int
-	for id, req := range group2req {
-		resp, err := cl.handleGroupReqSimple(ctx, id, req)
-		if err != nil {
-			errs++
-			if firstErr == nil {
-				firstErr = err
-			}
-		} else {
-			merge(resp)
-		}
-	}
+	var (
+		mergeMu  sync.Mutex
+		wg       sync.WaitGroup
+		firstErr error
+		errs     int
+	)
+	for broker, req := range broker2req {
+		wg.Add(1)
+		myBroker, myReq := broker, req
+		go func() {
+			defer wg.Done()
+			resp, err := cl.handleReqWithCoordinator(ctx, myBroker, typ, names, myReq)
 
-	if errs == len(group2req) {
+			mergeMu.Lock()
+			defer mergeMu.Unlock()
+
+			if err != nil {
+				errs++
+				if firstErr == nil {
+					firstErr = err
+				}
+				return
+			}
+			merge(resp)
+		}()
+	}
+	wg.Wait()
+
+	if errs == len(broker2req) {
 		return nil, firstErr
 	}
 	return kresp, nil
 }
 
-// handleReqGroupSimple issues a request that contains a single group ID to
-// the coordinator for the given group ID.
+// handleCoordinatorReqSimple issues a request that contains a single group or
+// txn to its coordinator.
 //
-// Response errors are inspected to see if they are retriable group errors;
-// that is, th group is loading or not available, not individual partition
-// errors. If so, the coordinator is deleted. Thus, if a response contains
-// many errors (one for each partition, say), then only one partition needs
-// to be investigated.
-func (cl *Client) handleGroupReqSimple(ctx context.Context, group string, req kmsg.Request) (kmsg.Response, error) {
+// The error is inspected to see if it is a retriable error and, if so, the
+// coordinator is deleted. That is, we only retry on coordinator errors, which
+// would be common on all partitions. Thus, if the response contains many
+// errors due to many partitions, only the first partition needs to be
+// investigated.
+func (cl *Client) handleCoordinatorReqSimple(ctx context.Context, typ int8, name string, req kmsg.Request) (kmsg.Response, error) {
 	coordinator, err := cl.loadCoordinator(ctx, coordinatorKey{
-		name: group,
-		typ:  coordinatorTypeGroup,
+		name: name,
+		typ:  typ,
 	})
 	if err != nil {
 		return nil, err
 	}
+	return cl.handleReqWithCoordinator(ctx, coordinator, typ, []string{name}, req)
+}
+
+// handleReqWithCoordinator actually issues a request to a coordinator and
+// does retry error parsing.
+func (cl *Client) handleReqWithCoordinator(
+	ctx context.Context,
+	coordinator *broker,
+	typ int8,
+	names []string, // group IDs or the transactional id
+	req kmsg.Request,
+) (kmsg.Response, error) {
 	kresp, err := coordinator.waitResp(ctx, req)
 	if err != nil {
 		return kresp, err
@@ -626,6 +744,28 @@ func (cl *Client) handleGroupReqSimple(ctx context.Context, group string, req km
 
 	var errCode int16
 	switch t := kresp.(type) {
+
+	/////////
+	// TXN //
+	/////////
+
+	case *kmsg.InitProducerIDResponse:
+		errCode = t.ErrorCode
+	case *kmsg.AddPartitionsToTxnResponse:
+		if len(t.Topics) > 0 {
+			if len(t.Topics[0].Partitions) > 0 {
+				errCode = t.Topics[0].Partitions[0].ErrorCode
+			}
+		}
+	case *kmsg.AddOffsetsToTxnResponse:
+		errCode = t.ErrorCode
+	case *kmsg.EndTxnResponse:
+		errCode = t.ErrorCode
+
+	///////////
+	// GROUP //
+	///////////
+
 	case *kmsg.OffsetCommitResponse:
 		if len(t.Topics) > 0 && len(t.Topics[0].Partitions) > 0 {
 			errCode = t.Topics[0].Partitions[0].ErrorCode
@@ -660,99 +800,19 @@ func (cl *Client) handleGroupReqSimple(ctx context.Context, group string, req km
 		}
 	}
 
-	switch groupErr := kerr.ErrorForCode(errCode); groupErr {
+	switch retriableErr := kerr.ErrorForCode(errCode); retriableErr {
 	case kerr.CoordinatorNotAvailable,
 		kerr.CoordinatorLoadInProgress,
 		kerr.NotCoordinator:
-		err = groupErr
+		err = retriableErr
 
 		cl.coordinatorsMu.Lock()
-		delete(cl.coordinators, coordinatorKey{
-			name: group,
-			typ:  coordinatorTypeGroup,
-		})
-		cl.coordinatorsMu.Unlock()
-	}
-
-	return kresp, err
-}
-
-// handleTxnReq issues a transaction request.
-//
-// Transaction requests are not as convoluted as group requests, but we do
-// still have to route the request to the proper coordinator. Doing so requires
-// looking into the actual request type and pulling out the txn id.
-func (cl *Client) handleTxnReq(ctx context.Context, req kmsg.TxnCoordinatorRequest) (kmsg.Response, error) {
-	switch t := req.(type) {
-	default:
-		// All txn requests should be listed below, so if it isn't,
-		// then we do not know what this request is.
-		return nil, ErrClientTooOld
-
-	case *kmsg.InitProducerIDRequest:
-		if t.TransactionalID != nil {
-			return cl.handleTxnRequest(ctx, *t.TransactionalID, req)
+		for _, name := range names {
+			delete(cl.coordinators, coordinatorKey{
+				name: name,
+				typ:  typ,
+			})
 		}
-		// InitProducerID can go to any broker if the transactional ID
-		// is nil.
-		return cl.broker().waitResp(ctx, req)
-	case *kmsg.AddPartitionsToTxnRequest:
-		return cl.handleTxnRequest(ctx, t.TransactionalID, req)
-	case *kmsg.AddOffsetsToTxnRequest:
-		return cl.handleTxnRequest(ctx, t.TransactionalID, req)
-	case *kmsg.EndTxnRequest:
-		return cl.handleTxnRequest(ctx, t.TransactionalID, req)
-	}
-}
-
-// handleTxnRequest issues a request for a transaction to the coordinator for
-// that transaction.
-//
-// The error is inspected to see if it is a retriable group error and, if so,
-// the coordinator is deleted. That is, we only retry on coordinator errors,
-// which would be common on all partitions. Thus, if the response contains many
-// errors due to many partitions, only the first partition needs to be
-// investigated.
-func (cl *Client) handleTxnRequest(ctx context.Context, txnID string, req kmsg.Request) (kmsg.Response, error) {
-	coordinator, err := cl.loadCoordinator(ctx, coordinatorKey{
-		name: txnID,
-		typ:  coordinatorTypeTxn,
-	})
-	if err != nil {
-		return nil, err
-	}
-	kresp, err := coordinator.waitResp(ctx, req)
-	if err != nil {
-		return kresp, err
-	}
-
-	var errCode int16
-	switch t := kresp.(type) {
-	case *kmsg.InitProducerIDResponse:
-		errCode = t.ErrorCode
-	case *kmsg.AddPartitionsToTxnResponse:
-		if len(t.Topics) > 0 {
-			if len(t.Topics[0].Partitions) > 0 {
-				errCode = t.Topics[0].Partitions[0].ErrorCode
-			}
-		}
-	case *kmsg.AddOffsetsToTxnResponse:
-		errCode = t.ErrorCode
-	case *kmsg.EndTxnResponse:
-		errCode = t.ErrorCode
-	}
-
-	switch txnErr := kerr.ErrorForCode(errCode); txnErr {
-	case kerr.CoordinatorNotAvailable,
-		kerr.CoordinatorLoadInProgress,
-		kerr.NotCoordinator:
-		err = txnErr
-
-		cl.coordinatorsMu.Lock()
-		delete(cl.coordinators, coordinatorKey{
-			name: txnID,
-			typ:  coordinatorTypeTxn,
-		})
 		cl.coordinatorsMu.Unlock()
 	}
 
