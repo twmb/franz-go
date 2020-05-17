@@ -712,7 +712,7 @@ func (cl *Client) handleCoordinatorReq(ctx context.Context, req kmsg.Request, ty
 	wg.Wait()
 
 	if errs == len(broker2req) {
-		return nil, firstErr
+		return kresp, firstErr
 	}
 	return kresp, nil
 }
@@ -1064,7 +1064,7 @@ func (cl *Client) handleListOrEpochReq(ctx context.Context, req kmsg.Request) (k
 	wg.Wait()
 
 	if errs == len(broker2req) {
-		return nil, firstErr
+		return kresp, firstErr
 	}
 
 	finalize()
