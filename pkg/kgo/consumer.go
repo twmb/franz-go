@@ -419,7 +419,8 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how
 			}
 
 			// If we are requesting an exact offset and have an
-			// epoch, we do truncation detection.
+			// epoch, we do truncation detection and then use the
+			// offset.
 			//
 			// Otherwise, an epoch is specified without an exact
 			// request which is useless for us, or a request is
@@ -431,6 +432,7 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how
 			// offsets to find out what to use.
 			if offset.request >= 0 && offset.epoch >= 0 {
 				waiting.setTopicPartForEpoch(topic, partition, offset)
+				delete(partitions, partition)
 			} else if offset.request >= 0 {
 				part.cursor.setOffset(part.leaderEpoch, true, offset.request, offset.epoch, seq)
 				c.usingPartitions = append(c.usingPartitions, part)
@@ -758,7 +760,7 @@ func (c *consumer) tryBrokerOffsetLoadList(broker *broker, load *offsetsWaitingL
 		return
 	}
 
-	c.cl.cfg.logger.Log(LogLevelInfo, "fetched offsets, setting")
+	c.cl.cfg.logger.Log(LogLevelInfo, "listed offsets, setting offsets")
 	for _, toSet := range toSets {
 		toSet.topicPartition.cursor.setOffset(toSet.currentEpoch, true, toSet.offset, toSet.leaderEpoch, c.seq)
 		c.usingPartitions = append(c.usingPartitions, toSet.topicPartition)
@@ -912,6 +914,7 @@ func (c *consumer) tryBrokerOffsetLoadEpoch(broker *broker, load *offsetsWaiting
 	if load.fromSeq < c.seq {
 		return
 	}
+	c.cl.cfg.logger.Log(LogLevelInfo, "found offset leader epoch, setting offsets")
 	for _, toSet := range toSets {
 		toSet.topicPartition.cursor.setOffset(toSet.currentEpoch, true, toSet.offset, toSet.leaderEpoch, c.seq)
 		c.usingPartitions = append(c.usingPartitions, toSet.topicPartition)

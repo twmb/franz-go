@@ -1120,7 +1120,11 @@ start:
 		}
 	}
 
-	g.cl.cfg.logger.Log(LogLevelInfo, "fetched committed offsets")
+	if g.cl.cfg.logger.Level() >= LogLevelDebug {
+		g.cl.cfg.logger.Log(LogLevelInfo, "fetched committed offsets", "fetched", offsets)
+	} else {
+		g.cl.cfg.logger.Log(LogLevelInfo, "fetched committed offsets")
+	}
 
 	// If we can validate epochs, assigning partitions may set some
 	// partitions to wait for that validation. Thus, to ensure we continue
@@ -1634,7 +1638,9 @@ func (g *groupConsumer) defaultRevoke(_ context.Context, _ map[string][]int32) {
 		un := g.getUncommitted()
 		g.cl.BlockingCommitOffsets(g.ctx, un, func(_ *kmsg.OffsetCommitRequest, resp *kmsg.OffsetCommitResponse, err error) {
 			if err != nil {
-				g.cl.cfg.logger.Log(LogLevelError, "default revoke BlockingCommitOffsets failed", "err", err)
+				if err != ErrNotGroup && err != context.Canceled {
+					g.cl.cfg.logger.Log(LogLevelError, "default revoke BlockingCommitOffsets failed", "err", err)
+				}
 				return
 			}
 			for _, topic := range resp.Topics {
