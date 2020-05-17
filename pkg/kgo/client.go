@@ -469,13 +469,11 @@ func (cl *Client) loadCoordinator(ctx context.Context, key coordinatorKey) (*bro
 	tries := 0
 	tryStart := time.Now()
 start:
-	// This lock blocks other group lookups, but in general there should
-	// only be one group and one transaction ID per client.
 	cl.coordinatorsMu.Lock()
-
 	coordinator, ok := cl.coordinators[key]
+	cl.coordinatorsMu.Unlock()
+
 	if ok {
-		cl.coordinatorsMu.Unlock()
 		return cl.brokerOrErr(coordinator, &errUnknownCoordinator{coordinator, key})
 	}
 
@@ -492,7 +490,6 @@ start:
 	}
 
 	if err != nil {
-		cl.coordinatorsMu.Unlock()
 		if cl.cfg.retryTimeout > 0 && time.Since(tryStart) > cl.cfg.retryTimeout {
 			return nil, err
 		}
@@ -506,6 +503,7 @@ start:
 	}
 
 	coordinator = resp.NodeID
+	cl.coordinatorsMu.Lock()
 	cl.coordinators[key] = coordinator
 	cl.coordinatorsMu.Unlock()
 
