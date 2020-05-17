@@ -13,6 +13,8 @@ import (
 	"github.com/twmb/kafka-go/pkg/kmsg"
 )
 
+var errLeftGroup = errors.New("left group or client closed")
+
 // GroupOpt is an option to configure group consuming.
 type GroupOpt interface {
 	apply(*groupConsumer)
@@ -371,11 +373,13 @@ loop:
 			// Waiting for the backoff is a good time to update our
 			// metadata; maybe the error is from stale metadata.
 			backoff := g.cl.cfg.retryBackoff(consecutiveErrors)
-			g.cl.cfg.logger.Log(LogLevelError, "join and sync loop errored",
-				"err", err,
-				"consecutive_errors", consecutiveErrors,
-				"backoff", backoff,
-			)
+			if err != errLeftGroup { // if we left the group we return below
+				g.cl.cfg.logger.Log(LogLevelError, "join and sync loop errored",
+					"err", err,
+					"consecutive_errors", consecutiveErrors,
+					"backoff", backoff,
+				)
+			}
 			deadline := time.Now().Add(backoff)
 			g.cl.waitmeta(g.ctx, backoff)
 			after := time.NewTimer(time.Until(deadline))
@@ -705,7 +709,7 @@ func (g *groupConsumer) heartbeat(fetchErrCh <-chan error, s *assignRevokeSessio
 			didRevoke = true
 		case <-g.ctx.Done():
 			<-s.assignDone // fall into onLost logic
-			return errors.New("left group or client closed")
+			return errLeftGroup
 		}
 
 		if heartbeat {
