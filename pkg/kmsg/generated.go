@@ -1497,7 +1497,6 @@ func (*ListOffsetsRequest) MaxVersion() int16          { return 5 }
 func (v *ListOffsetsRequest) SetVersion(version int16) { v.Version = version }
 func (v *ListOffsetsRequest) GetVersion() int16        { return v.Version }
 func (v *ListOffsetsRequest) IsFlexible() bool         { return false }
-func (v *ListOffsetsRequest) IsAdminRequest()          {}
 func (v *ListOffsetsRequest) ResponseKind() Response   { return &ListOffsetsResponse{Version: v.Version} }
 
 func (v *ListOffsetsRequest) AppendTo(dst []byte) []byte {
