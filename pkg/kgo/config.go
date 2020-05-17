@@ -139,7 +139,7 @@ func defaultCfg() cfg {
 					return max
 				}
 
-				backoff := min * time.Duration(1<<fails)
+				backoff := min * time.Duration(1<<(fails-1))
 
 				rngMu.Lock()
 				jitter := 0.8 + 0.4*rng.Float64()
