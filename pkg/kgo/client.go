@@ -330,6 +330,10 @@ func (cl *Client) Close() {
 // coordinator. However, if the request is an init producer ID request and the
 // request has no transactional ID, the request goes to any broker.
 //
+// If the request is a ListOffsets request or OffsetForLeaderEpoch request,
+// this will properly split the request to send partitions to the appropriate
+// broker.
+//
 // In short, this method tries to do the correct thing depending on what type
 // of request is being issued.
 //
@@ -384,6 +388,10 @@ start:
 		resp, err = cl.handleCoordinatorReq(ctx, groupReq, coordinatorTypeGroup)
 	} else if txnReq, isTxnReq := req.(kmsg.TxnCoordinatorRequest); isTxnReq {
 		resp, err = cl.handleCoordinatorReq(ctx, txnReq, coordinatorTypeTxn)
+	} else if listReq, ok := req.(*kmsg.ListOffsetsRequest); ok {
+		resp, err = cl.handleListOrEpochReq(ctx, listReq)
+	} else if offsetEpochReq, ok := req.(*kmsg.OffsetForLeaderEpochRequest); ok {
+		resp, err = cl.handleListOrEpochReq(ctx, offsetEpochReq)
 	} else {
 		resp, err = cl.broker().waitResp(ctx, req)
 	}
@@ -827,6 +835,241 @@ func (cl *Client) Broker(id int) *Broker {
 		id: int32(id),
 		cl: cl,
 	}
+}
+
+// handleListOrEpochReq is simple-in-theory function that is long due to types.
+// This simply sends all partitions of a list offset request or offset for
+// leader epoch request to the appropriate brokers and then merges the
+// response.
+func (cl *Client) handleListOrEpochReq(ctx context.Context, req kmsg.Request) (kmsg.Response, error) {
+	// First, pull out the topics from either request and set them as
+	// topics we need to load metadata for.
+	var needTopics []string
+	switch t := req.(type) {
+	case *kmsg.ListOffsetsRequest:
+		for _, topic := range t.Topics {
+			needTopics = append(needTopics, topic.Topic)
+		}
+	case *kmsg.OffsetForLeaderEpochRequest:
+		for _, topic := range t.Topics {
+			needTopics = append(needTopics, topic.Topic)
+		}
+	}
+	cl.topicsMu.Lock()
+	topics := cl.cloneTopics()
+	for _, topic := range needTopics {
+		if _, exists := topics[topic]; !exists {
+			topics[topic] = newTopicPartitions(topic)
+		}
+	}
+	cl.topics.Store(topics)
+	cl.topicsMu.Unlock()
+
+	// While we have not loaded metadata for *all* of the topics, force
+	// load metadata. Ideally, this will only wait for one metadata.
+	needLoad := true
+	for needLoad && ctx.Err() == nil {
+		cl.waitmeta(ctx, 5*time.Second)
+		needLoad = false
+		topics = cl.loadTopics()
+		for _, topic := range needTopics {
+			topicPartitions := topics[topic].load()
+			if len(topicPartitions.all) == 0 && topicPartitions.loadErr == nil {
+				needLoad = true
+			}
+		}
+	}
+
+	// Now, we split the incoming request by broker that handles the
+	// request's partitions.
+	broker2req := make(map[*broker]kmsg.Request)
+	var kresp kmsg.Response
+	var merge func(kmsg.Response) // serially called
+	var finalize func()
+
+	// We hold the brokers mu while determining what to split by
+	// so that we can look up leader partitions.
+	cl.brokersMu.RLock()
+	brokers := cl.brokers
+
+	switch t := req.(type) {
+	case *kmsg.ListOffsetsRequest:
+		resp := new(kmsg.ListOffsetsResponse)
+		kresp = resp
+
+		reqParts := make(map[*broker]map[string][]kmsg.ListOffsetsRequestTopicPartition)
+		respParts := make(map[string][]kmsg.ListOffsetsResponseTopicPartition)
+
+		for _, topic := range t.Topics {
+			topicPartitions := topics[topic.Topic].load()
+			for _, partition := range topic.Partitions {
+				topicPartition, exists := topicPartitions.all[partition.Partition]
+				if !exists {
+					respParts[topic.Topic] = append(respParts[topic.Topic], kmsg.ListOffsetsResponseTopicPartition{
+						Partition: partition.Partition,
+						ErrorCode: kerr.UnknownTopicOrPartition.Code,
+					})
+					continue
+				}
+
+				broker := brokers[topicPartition.leader]
+				if topicPartition.loadErr != nil || broker == nil {
+					respParts[topic.Topic] = append(respParts[topic.Topic], kmsg.ListOffsetsResponseTopicPartition{
+						Partition: partition.Partition,
+						ErrorCode: kerr.UnknownServerError.Code,
+					})
+					continue
+				}
+
+				brokerReqParts := reqParts[broker]
+				if brokerReqParts == nil {
+					brokerReqParts = make(map[string][]kmsg.ListOffsetsRequestTopicPartition)
+					reqParts[broker] = brokerReqParts
+				}
+				brokerReqParts[topic.Topic] = append(brokerReqParts[topic.Topic], partition)
+			}
+		}
+
+		for broker, brokerReqParts := range reqParts {
+			req := &kmsg.ListOffsetsRequest{
+				ReplicaID:      t.ReplicaID,
+				IsolationLevel: t.IsolationLevel,
+			}
+			for topic, parts := range brokerReqParts {
+				req.Topics = append(req.Topics, kmsg.ListOffsetsRequestTopic{
+					Topic:      topic,
+					Partitions: parts,
+				})
+			}
+			broker2req[broker] = req
+		}
+		merge = func(newKResp kmsg.Response) {
+			newResp := newKResp.(*kmsg.ListOffsetsResponse)
+			resp.Version = newResp.Version
+			resp.ThrottleMillis = newResp.ThrottleMillis
+
+			for _, topic := range newResp.Topics {
+				respParts[topic.Topic] = append(respParts[topic.Topic], topic.Partitions...)
+			}
+		}
+
+		finalize = func() {
+			for topic, parts := range respParts {
+				resp.Topics = append(resp.Topics, kmsg.ListOffsetsResponseTopic{
+					Topic:      topic,
+					Partitions: parts,
+				})
+			}
+		}
+
+	// Outside of type swapping, this case is the same as the last
+	case *kmsg.OffsetForLeaderEpochRequest:
+		resp := new(kmsg.OffsetForLeaderEpochResponse)
+		kresp = resp
+
+		reqParts := make(map[*broker]map[string][]kmsg.OffsetForLeaderEpochRequestTopicPartition)
+		respParts := make(map[string][]kmsg.OffsetForLeaderEpochResponseTopicPartition)
+
+		for _, topic := range t.Topics {
+			topicPartitions := topics[topic.Topic].load()
+			for _, partition := range topic.Partitions {
+				topicPartition, exists := topicPartitions.all[partition.Partition]
+				if !exists {
+					respParts[topic.Topic] = append(respParts[topic.Topic], kmsg.OffsetForLeaderEpochResponseTopicPartition{
+						Partition: partition.Partition,
+						ErrorCode: kerr.UnknownTopicOrPartition.Code,
+					})
+					continue
+				}
+
+				broker := brokers[topicPartition.leader]
+				if topicPartition.loadErr != nil || broker == nil {
+					respParts[topic.Topic] = append(respParts[topic.Topic], kmsg.OffsetForLeaderEpochResponseTopicPartition{
+						Partition: partition.Partition,
+						ErrorCode: kerr.UnknownServerError.Code,
+					})
+					continue
+				}
+
+				brokerReqParts := reqParts[broker]
+				if brokerReqParts == nil {
+					brokerReqParts = make(map[string][]kmsg.OffsetForLeaderEpochRequestTopicPartition)
+					reqParts[broker] = brokerReqParts
+				}
+				brokerReqParts[topic.Topic] = append(brokerReqParts[topic.Topic], partition)
+			}
+		}
+
+		for broker, brokerReqParts := range reqParts {
+			req := &kmsg.OffsetForLeaderEpochRequest{
+				ReplicaID: t.ReplicaID,
+			}
+			for topic, parts := range brokerReqParts {
+				req.Topics = append(req.Topics, kmsg.OffsetForLeaderEpochRequestTopic{
+					Topic:      topic,
+					Partitions: parts,
+				})
+			}
+			broker2req[broker] = req
+		}
+		merge = func(newKResp kmsg.Response) {
+			newResp := newKResp.(*kmsg.OffsetForLeaderEpochResponse)
+			resp.Version = newResp.Version
+			resp.ThrottleMillis = newResp.ThrottleMillis
+
+			for _, topic := range newResp.Topics {
+				respParts[topic.Topic] = append(respParts[topic.Topic], topic.Partitions...)
+			}
+		}
+
+		finalize = func() {
+			for topic, parts := range respParts {
+				resp.Topics = append(resp.Topics, kmsg.OffsetForLeaderEpochResponseTopic{
+					Topic:      topic,
+					Partitions: parts,
+				})
+			}
+		}
+	}
+
+	cl.brokersMu.RUnlock()
+
+	var (
+		mergeMu  sync.Mutex
+		wg       sync.WaitGroup
+		firstErr error
+		errs     int
+	)
+	for broker, req := range broker2req {
+		wg.Add(1)
+		myBroker, myReq := broker, req
+		go func() {
+			defer wg.Done()
+
+			resp, err := myBroker.waitResp(ctx, myReq)
+
+			mergeMu.Lock()
+			defer mergeMu.Unlock()
+
+			if err != nil {
+				errs++
+				if firstErr == nil {
+					firstErr = err
+				}
+				return
+			}
+			merge(resp)
+		}()
+	}
+	wg.Wait()
+
+	if errs == len(broker2req) {
+		return nil, firstErr
+	}
+
+	finalize()
+
+	return kresp, nil
 }
 
 // Broker pairs a broker ID with a client to directly issue requests to a
