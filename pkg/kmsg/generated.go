@@ -1597,7 +1597,7 @@ type ListOffsetsResponseTopicPartition struct {
 
 	// If the request was for the earliest or latest timestamp (-2 or -1), or
 	// if an offset could not be found after the requested one, this will be -1.
-	Timestamp int64
+	Timestamp int64 // v1+
 
 	// Offset is the offset corresponding to the record on or after the
 	// requested timestamp. If one could not be found, this will be -1.
@@ -1699,7 +1699,7 @@ func (v *ListOffsetsResponse) ReadFrom(src []byte) error {
 						v = a
 						s.OldStyleOffsets = v
 					}
-					{
+					if version >= 1 {
 						v := b.Int64()
 						s.Timestamp = v
 					}
