@@ -396,6 +396,21 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how
 		fromSeq: seq,
 	}
 	clientTopics := c.cl.loadTopics()
+
+	// We duplicate assignments so we can modify it below without the
+	// caller observing our changes.
+	assignments = func() map[string]map[int32]Offset {
+		ts := make(map[string]map[int32]Offset, len(assignments))
+		for topic, partitions := range assignments {
+			ps := make(map[int32]Offset, len(partitions))
+			for partition, offset := range partitions {
+				ps[partition] = offset
+			}
+			ts[topic] = ps
+		}
+		return ts
+	}()
+
 	for topic, partitions := range assignments {
 		topicParts := clientTopics[topic].load() // must be loadable; ensured above
 		if topicParts == nil {
@@ -444,10 +459,9 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how
 		}
 	}
 
-	c.cl.cfg.logger.Log(LogLevelInfo, "assign setting offsets to load", "to_load", assignments)
-
 	waiting.waitingList = assignments
 	if !waiting.isEmpty() {
+		c.cl.cfg.logger.Log(LogLevelInfo, "assign setting offsets to load", "to_load", assignments)
 		waiting.mergeIntoLocked(c)
 	}
 }

@@ -1370,12 +1370,14 @@ func (g *groupConsumer) loopCommit() {
 	}
 }
 
-// ResetToCommitted resets the client's fetch offsets to the last committed
-// offsets if the client is consuming as a group.
+// ResetOffsets sets any matching offsets in resetOffsets to the given
+// epoch/offset. Partitions that are not specified are not reset.
 //
 // The main use of this method is to effectively provide a way to reset
-// consumption after aborting a batch.
-func (cl *Client) ResetToCommitted() {
+// consumption after aborting a batch. It is safer and easier to just use a
+// group transaction session, though, and if you are using this directly, take
+// care to look at the source for GroupTransactSession.End.
+func (cl *Client) ResetOffsets(resetOffsets map[string]map[int32]EpochOffset) {
 	c := &cl.consumer
 
 	c.mu.Lock()
@@ -1393,9 +1395,8 @@ func (cl *Client) ResetToCommitted() {
 		return
 	}
 
-	committed := g.getUncommittedLocked(false)
-	offsets := make(map[string]map[int32]Offset, len(committed))
-	for topic, partitions := range committed {
+	offsets := make(map[string]map[int32]Offset, len(resetOffsets))
+	for topic, partitions := range resetOffsets {
 		topicOffsets := make(map[int32]Offset, len(partitions))
 		for partition, epochOffset := range partitions {
 			topicOffsets[partition] = Offset{
@@ -1415,14 +1416,14 @@ func (cl *Client) ResetToCommitted() {
 		return
 	}
 
-	cl.cfg.logger.Log(LogLevelDebug, "resetting to committed", "offsets", offsets)
+	cl.cfg.logger.Log(LogLevelDebug, "reset to", "offsets", offsets)
 
 	c.assignPartitions(offsets, assignSetMatching)
 	g.seq = c.seq // under consumer lock, so this is safe
 }
 
-// Uncommitted returns the latest uncommitted offsets. Uncommitted offsets are
-// always updated on calls to PollFetches.
+// UncommittedOffsets returns the latest uncommitted offsets. Uncommitted
+// offsets are always updated on calls to PollFetches.
 //
 // If there are no uncommitted offsets, this returns nil.
 //
@@ -1433,13 +1434,34 @@ func (cl *Client) ResetToCommitted() {
 // partitions that were revoked. You must ensure you commit before the group's
 // session timeout is reached, otherwise this client will be kicked from the
 // group and the commit will fail.
-func (cl *Client) Uncommitted() map[string]map[int32]EpochOffset {
+func (cl *Client) UncommittedOffsets() map[string]map[int32]EpochOffset {
 	cl.consumer.mu.Lock()
 	defer cl.consumer.mu.Unlock()
 	if cl.consumer.typ != consumerTypeGroup {
 		return nil
 	}
 	return cl.consumer.group.getUncommitted()
+}
+
+// CommittedOffsets returns the latest committed offsets. Committed offsets are
+// updated from commits or from joining a group and fetching offsets.
+//
+// If there are no committed offsets, this returns nil.
+func (cl *Client) CommittedOffsets() map[string]map[int32]EpochOffset {
+	c := &cl.consumer
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.typ != consumerTypeGroup {
+		return nil
+	}
+
+	g := c.group
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	return g.getUncommittedLocked(false)
 }
 
 func (g *groupConsumer) getUncommitted() map[string]map[int32]EpochOffset {

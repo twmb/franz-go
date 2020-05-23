@@ -122,12 +122,14 @@ func (s *GroupTransactSession) End(ctx context.Context, commit TransactionEndTry
 	revoked := s.revoked
 	s.revokeMu.Unlock()
 
+	precommit := s.cl.CommittedOffsets()
+
 	var commitErr error
 	if wantCommit && !revoked {
 		var commitErrs []string
 
 		committed := make(chan struct{})
-		s.cl.CommitTransactionOffsets(context.Background(), s.cl.Uncommitted(),
+		s.cl.CommitTransactionOffsets(context.Background(), s.cl.UncommittedOffsets(),
 			func(_ *kmsg.TxnOffsetCommitRequest, resp *kmsg.TxnOffsetCommitResponse, err error) {
 				defer close(committed)
 				if err != nil {
@@ -155,26 +157,25 @@ func (s *GroupTransactSession) End(ctx context.Context, commit TransactionEndTry
 	defer s.revokeMu.Unlock()
 
 	tryCommit := !s.revoked && commitErr == nil
-	commit = TransactionEndTry(wantCommit && tryCommit)
+	willTryCommit := wantCommit && tryCommit
 
 	s.cl.cfg.logger.Log(LogLevelInfo, "transaction session ending",
 		"was_revoked", s.revoked,
 		"want_commit", wantCommit,
 		"can_try_commit", tryCommit,
-		"will_try_commit", commit,
+		"will_try_commit", willTryCommit,
 	)
 
-	endTxnErr := s.cl.EndTransaction(ctx, commit)
+	endTxnErr := s.cl.EndTransaction(ctx, TransactionEndTry(willTryCommit))
 
-	if !commit || endTxnErr != nil {
+	if !willTryCommit || endTxnErr != nil {
 		s.cl.cfg.logger.Log(LogLevelInfo, "transact session resetting to prior committed state",
-			"tried_commit", commit,
+			"tried_commit", willTryCommit,
 			"commit_err", endTxnErr,
+			"precommit", precommit,
 		)
-		s.cl.ResetToCommitted()
+		s.cl.ResetOffsets(precommit)
 	}
-
-	committed := tryCommit && endTxnErr == nil
 
 	switch {
 	case commitErr != nil && endTxnErr == nil:
@@ -187,7 +188,7 @@ func (s *GroupTransactSession) End(ctx context.Context, commit TransactionEndTry
 		return false, endTxnErr
 
 	default: // both errs nil
-		return committed, nil
+		return willTryCommit, nil
 	}
 }
 
@@ -564,12 +565,12 @@ func (g *groupConsumer) commitTxn(
 			select {
 			case <-priorDone:
 			default:
-				g.cl.cfg.logger.Log(LogLevelDebug, "canceling prior txn commit to issue another")
+				g.cl.cfg.logger.Log(LogLevelDebug, "canceling prior txn offset commit to issue another")
 				priorCancel()
 				<-priorDone // wait for any prior request to finish
 			}
 		}
-		g.cl.cfg.logger.Log(LogLevelDebug, "issuing txn commit", "uncommitted", uncommitted)
+		g.cl.cfg.logger.Log(LogLevelDebug, "issuing txn offset commit", "uncommitted", uncommitted)
 
 		for topic, partitions := range uncommitted {
 			req.Topics = append(req.Topics, kmsg.TxnOffsetCommitRequestTopic{
