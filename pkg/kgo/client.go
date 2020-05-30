@@ -625,9 +625,7 @@ func (cl *Client) handleCoordinatorReq(ctx context.Context, req kmsg.Request, ty
 		return cl.handleCoordinatorReqSimple(ctx, coordinatorTypeGroup, t.Group, req)
 
 	case *kmsg.DescribeGroupsRequest:
-		for _, group := range t.Groups {
-			names = append(names, group)
-		}
+		names = append(names, t.Groups...)
 		coordinators, err := cl.loadCoordinators(coordinatorTypeGroup, names...)
 		if err != nil {
 			return nil, err
@@ -655,9 +653,7 @@ func (cl *Client) handleCoordinatorReq(ctx context.Context, req kmsg.Request, ty
 		}
 
 	case *kmsg.DeleteGroupsRequest:
-		for _, group := range t.Groups {
-			names = append(names, group)
-		}
+		names = append(names, t.Groups...)
 		coordinators, err := cl.loadCoordinators(coordinatorTypeGroup, names...)
 		if err != nil {
 			return nil, err
