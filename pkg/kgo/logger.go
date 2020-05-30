@@ -3,9 +3,7 @@ package kgo
 import (
 	"fmt"
 	"os"
-	"strconv"
 	"strings"
-	"sync/atomic"
 )
 
 // LogLevel designates which level the logger should log at.
@@ -58,26 +56,16 @@ type Logger interface {
 // BasicLogger returns a logger that will print to stderr in the following
 // format:
 //
-//     # [LEVEL] message; key: val, key: val
+//     prefix [LEVEL] message; key: val, key: val
 //
-// If withNum is true, logs are prefixed with a base36 formatted number that is
-// the logger's creation number among all BasicLoggers created from this
-// package ever. This can be used to differentiate loggers if using multiple
-// clients in the same program. Otherwise, the # prefix is left off.
-func BasicLogger(level LogLevel, withNum bool) Logger {
-	var num uint32
-	if withNum {
-		num = atomic.AddUint32(&loggerNum, 1)
-	}
-	return &basicLogger{num, level, withNum}
+// prefixFn is optional; if non-nil, it is called for a per-message prefix.
+func BasicLogger(level LogLevel, prefixFn func() string) Logger {
+	return &basicLogger{level, prefixFn}
 }
 
-var loggerNum uint32
-
 type basicLogger struct {
-	num     uint32
-	level   LogLevel
-	withNum bool
+	level LogLevel
+	pfxFn func() string
 }
 
 func (b *basicLogger) Level() LogLevel { return b.level }
@@ -86,12 +74,10 @@ func (b *basicLogger) Log(level LogLevel, msg string, keyvals ...interface{}) {
 	defer sliceWriters.Put(buf)
 
 	buf.inner = buf.inner[:0]
-	if b.withNum {
-		buf.inner = strconv.AppendUint(buf.inner, uint64(b.num), 36)
-		buf.inner = append(buf.inner, " ["...)
-	} else {
-		buf.inner = append(buf.inner, '[')
+	if b.pfxFn != nil {
+		buf.inner = append(buf.inner, b.pfxFn()...)
 	}
+	buf.inner = append(buf.inner, '[')
 	buf.inner = append(buf.inner, level.String()...)
 	buf.inner = append(buf.inner, "] "...)
 	buf.inner = append(buf.inner, msg...)
