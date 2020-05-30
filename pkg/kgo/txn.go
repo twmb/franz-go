@@ -3,7 +3,6 @@ package kgo
 import (
 	"context"
 	"fmt"
-	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -29,6 +28,8 @@ const (
 type GroupTransactSession struct {
 	cl *Client
 
+	cooperative bool
+
 	revokeMu sync.Mutex
 	revoked  bool
 }
@@ -47,9 +48,9 @@ type GroupTransactSession struct {
 // try to commit, and depending on the Kafka version, the commit may even be
 // erroneously successful (pre Kafka 2.5.0). This will lead to duplicates.
 //
-// Instead for safety, a GroupTransactSession favors (b). If a rebalance occurs
-// at any time before ending a transaction with a commit, this will abort the
-// transaction.
+// Instead, for safety, a GroupTransactSession favors (b). If a rebalance
+// occurs at any time before ending a transaction with a commit, this will
+// abort the transaction.
 //
 // This leaves the risk that ending the transaction itself exceeds the
 // rebalance timeout, but this is just one request with no cpu logic. With a
@@ -74,14 +75,18 @@ func (cl *Client) AssignGroupTransactSession(group string, opts ...GroupOpt) *Gr
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
+	s.cooperative = g.cooperative
+
 	userRevoked := g.onRevoked
 	g.onRevoked = func(ctx context.Context, rev map[string][]int32) {
 		s.revokeMu.Lock()
 		defer s.revokeMu.Unlock()
-
-		cl.cfg.logger.Log(LogLevelInfo, "transact session in on_revoke; aborting next commit if we are currently in a transaction")
-
-		s.revoked = true
+		if s.cooperative && len(rev) == 0 && !s.revoked {
+			cl.cfg.logger.Log(LogLevelInfo, "transact session in on_revoke with nothing to revoke; allowing next commit")
+		} else {
+			cl.cfg.logger.Log(LogLevelInfo, "transact session in on_revoke; aborting next commit if we are currently in a transaction")
+			s.revoked = true
+		}
 
 		if userRevoked != nil {
 			userRevoked(ctx, rev)
@@ -96,9 +101,6 @@ func (cl *Client) AssignGroupTransactSession(group string, opts ...GroupOpt) *Gr
 //
 // Begin must be called before producing records in a transaction.
 func (s *GroupTransactSession) Begin() error {
-	s.revokeMu.Lock()
-	s.revoked = false
-	s.revokeMu.Unlock()
 	s.cl.cfg.logger.Log(LogLevelInfo, "beginning transact session")
 	return s.cl.BeginTransaction()
 }
@@ -110,6 +112,11 @@ func (s *GroupTransactSession) Begin() error {
 //
 // This returns whether the transaction committed or any error that occurred.
 func (s *GroupTransactSession) End(ctx context.Context, commit TransactionEndTry) (bool, error) {
+	defer func() {
+		s.revokeMu.Lock()
+		s.revoked = false
+		s.revokeMu.Unlock()
+	}()
 	if err := s.cl.Flush(ctx); err != nil {
 		// We do not abort here, since any error is the context
 		// closing.
@@ -123,13 +130,14 @@ func (s *GroupTransactSession) End(ctx context.Context, commit TransactionEndTry
 	s.revokeMu.Unlock()
 
 	precommit := s.cl.CommittedOffsets()
+	postcommit := s.cl.UncommittedOffsets()
 
 	var commitErr error
 	if wantCommit && !revoked {
 		var commitErrs []string
 
 		committed := make(chan struct{})
-		s.cl.CommitTransactionOffsets(context.Background(), s.cl.UncommittedOffsets(),
+		s.cl.commitTransactionOffsets(context.Background(), postcommit,
 			func(_ *kmsg.TxnOffsetCommitRequest, resp *kmsg.TxnOffsetCommitResponse, err error) {
 				defer close(committed)
 				if err != nil {
@@ -174,7 +182,13 @@ func (s *GroupTransactSession) End(ctx context.Context, commit TransactionEndTry
 			"commit_err", endTxnErr,
 			"precommit", precommit,
 		)
-		s.cl.ResetOffsets(precommit)
+		s.cl.SetOffsets(precommit)
+	} else if willTryCommit && endTxnErr == nil {
+		s.cl.cfg.logger.Log(LogLevelInfo, "transact session successful, setting to newly committed state",
+			"tried_commit", willTryCommit,
+			"postcommit", postcommit,
+		)
+		s.cl.SetOffsets(postcommit)
 	}
 
 	switch {
@@ -233,9 +247,6 @@ func (cl *Client) AbortBufferedRecords(ctx context.Context) error {
 	// At this point, all drain loops that start will immediately stop,
 	// thus they will not begin any AddPartitionsToTxn request. We must
 	// now wait for any req currently built to be done being issued.
-
-	cl.cfg.logger.Log(LogLevelDebug, "aborting")
-	defer cl.cfg.logger.Log(LogLevelDebug, "done aborting")
 
 	for _, partitions := range cl.loadTopics() { // a good a time as any to fail all records
 		for _, partition := range partitions.load().all {
@@ -374,6 +385,7 @@ func (cl *Client) EndTransaction(ctx context.Context, commit TransactionEndTry) 
 
 	// If no partition was added to a transaction, then we have nothing to commit.
 	if !anyAdded {
+		cl.cfg.logger.Log(LogLevelInfo, "no records were produced during the commit; thus no transaction was began; ending without doing anything")
 		return nil
 	}
 
@@ -400,33 +412,22 @@ func (cl *Client) EndTransaction(ctx context.Context, commit TransactionEndTry) 
 // MOSTLY DUPLICATED CODE DUE TO NO GENERICS AND BECAUSE THE TYPES ARE SLIGHTLY DIFFERENT //
 ////////////////////////////////////////////////////////////////////////////////////////////
 
-// CommitTransactionOffsets is exactly like CommitOffsets, but specifically for
+// commitTransactionOffsets is exactly like CommitOffsets, but specifically for
 // use with transactional consuming and producing.
 //
-// Note that, like with CommitOffsets, this cancels prior unfinished commits.
-// In the unlikely event that you are committing offsets multiple times within
-// a single transaction, and your second commit does not include partitions
-// that were in the first commit, you need to wait for the first commit to
-// finish before executing the new commit.
+// Since this function is a gigantic footgun if not done properly, we hide this
+// and only allow transaction sessions to commit.
 //
-// It is invalid to use this function if the client does not have a
-// transactional ID. As well, it is invalid to use this function outside of a
-// transaction.
-//
-// Because transactions require much more care than non-transactional
-// consumers, there is no BlockingCommitTransactionOffsets api provided. It is
-// expected that you will properly manage blocking in OnRevoke as necessary.
-// It is highly recommended to check the response's partition errors.
-func (cl *Client) CommitTransactionOffsets(
+// Unlike CommitOffsets, we do not update the group's uncommitted map. We leave
+// that to the calling code to do properly with SetOffsets depending on whether
+// an eventual abort happens or not.
+func (cl *Client) commitTransactionOffsets(
 	ctx context.Context,
 	uncommitted map[string]map[int32]EpochOffset,
 	onDone func(*kmsg.TxnOffsetCommitRequest, *kmsg.TxnOffsetCommitResponse, error),
 ) {
-	cl.cfg.logger.Log(LogLevelDebug, "in CommitTransactionOffsets", "with", uncommitted)
-	defer cl.cfg.logger.Log(LogLevelDebug, "left CommitTransactionOffsets")
-	if onDone == nil {
-		onDone = func(_ *kmsg.TxnOffsetCommitRequest, _ *kmsg.TxnOffsetCommitResponse, _ error) {}
-	}
+	cl.cfg.logger.Log(LogLevelDebug, "in commitTransactionOffsets", "with", uncommitted)
+	defer cl.cfg.logger.Log(LogLevelDebug, "left commitTransactionOffsets")
 
 	if cl.cfg.txnID == nil {
 		onDone(nil, nil, ErrNotTransactional)
@@ -481,7 +482,7 @@ func (cl *Client) addOffsetsToTxn(ctx context.Context, group string) error {
 		return err
 	}
 
-	cl.cfg.logger.Log(LogLevelInfo, "adding offsets to txn",
+	cl.cfg.logger.Log(LogLevelInfo, "issuing AddOffsetsToTxn",
 		"txn", *cl.cfg.txnID,
 		"producerID", id,
 		"producerEpoch", epoch,
@@ -503,9 +504,8 @@ func (cl *Client) addOffsetsToTxn(ctx context.Context, group string) error {
 	return nil
 }
 
-// commitTxn is ALMOST EXACTLY THE SAME as commit, but changed for txn types.
-// We likely do not need to try to hard to invalidate old commits, since there
-// should only be one commit per transaction.
+// commitTxn is ALMOST EXACTLY THE SAME as commit, but changed for txn types
+// and we avoid updateCommitted.
 func (g *groupConsumer) commitTxn(
 	ctx context.Context,
 	uncommitted map[string]map[int32]EpochOffset,
@@ -597,66 +597,6 @@ func (g *groupConsumer) commitTxn(
 			return
 		}
 		resp := kresp.(*kmsg.TxnOffsetCommitResponse)
-		g.updateCommittedTxn(req, resp)
 		onDone(req, resp, nil)
 	}()
-}
-
-// updateCommittedTxn is EXACTLY THE SAME as updateCommitted.
-func (g *groupConsumer) updateCommittedTxn(
-	req *kmsg.TxnOffsetCommitRequest,
-	resp *kmsg.TxnOffsetCommitResponse,
-) {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-
-	if req.Generation != g.generation {
-		return
-	}
-	if g.uncommitted == nil || // just in case
-		len(req.Topics) != len(resp.Topics) { // bad kafka
-		return
-	}
-
-	sort.Slice(req.Topics, func(i, j int) bool {
-		return req.Topics[i].Topic < req.Topics[j].Topic
-	})
-	sort.Slice(resp.Topics, func(i, j int) bool {
-		return resp.Topics[i].Topic < resp.Topics[j].Topic
-	})
-
-	for i := range resp.Topics {
-		reqTopic := &req.Topics[i]
-		respTopic := &resp.Topics[i]
-		topic := g.uncommitted[respTopic.Topic]
-		if topic == nil || // just in case
-			reqTopic.Topic != respTopic.Topic || // bad kafka
-			len(reqTopic.Partitions) != len(respTopic.Partitions) { // same
-			continue
-		}
-
-		sort.Slice(reqTopic.Partitions, func(i, j int) bool {
-			return reqTopic.Partitions[i].Partition < reqTopic.Partitions[j].Partition
-		})
-		sort.Slice(respTopic.Partitions, func(i, j int) bool {
-			return respTopic.Partitions[i].Partition < respTopic.Partitions[j].Partition
-		})
-
-		for i := range respTopic.Partitions {
-			reqPart := &reqTopic.Partitions[i]
-			respPart := &respTopic.Partitions[i]
-			uncommit, exists := topic[respPart.Partition]
-			if !exists || // just in case
-				respPart.ErrorCode != 0 || // bad commit
-				reqPart.Partition != respPart.Partition { // bad kafka
-				continue
-			}
-
-			uncommit.committed = EpochOffset{
-				reqPart.LeaderEpoch,
-				reqPart.Offset,
-			}
-			topic[respPart.Partition] = uncommit
-		}
-	}
 }
