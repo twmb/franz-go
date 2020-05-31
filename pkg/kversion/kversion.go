@@ -376,6 +376,7 @@ func Tip() Versions {
 	v[5]++ // 3 stop replica KAFKA-9539 7c7d55dbd KIP-570
 
 	v[16]++ // 4 list group KAFKA-9130 fe948d39e KIP-518
+	v[32]++ // 3 describe configs KAFKA-9494 af3b8b50f2 KIP-569
 
 	return v
 }

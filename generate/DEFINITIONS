@@ -2578,7 +2578,7 @@ DeleteACLsResponse =>
 // DescribeConfigsRequest issues a request to describe configs that Kafka
 // currently has. These are the key/value pairs that one uses to configure
 // brokers and topics.
-DescribeConfigsRequest => key 32, max version 2, admin
+DescribeConfigsRequest => key 32, max version 3, admin
   // Resources is a list of resources to describe.
   Resources: [=>]
     // ResourceType is an enum corresponding to the type of config to describe.
@@ -2598,6 +2598,9 @@ DescribeConfigsRequest => key 32, max version 2, admin
   // IncludeSynonyms signifies whether to return config entry synonyms for
   // all config entries.
   IncludeSynonyms: bool // v1+
+  // IncludeDocumentation signifies whether to return documentation for
+  // config entries.
+  IncludeDocumentation: bool // v3+
 
 // DescribeConfigsResponse is returned from a DescribeConfigsRequest.
 DescribeConfigsResponse =>
@@ -2670,6 +2673,12 @@ DescribeConfigsResponse =>
         Name: string
         Value: nullable-string
         Source: int8
+      // ConfigType specifies the configuration data type. The values of this
+      // enum are as follows: UNKNOWN (0), BOOLEAN (1), STRING (2), INT (3),
+      // SHORT (4), LONG (5), DOUBLE (6), LIST (7), CLASS (8), PASSWORD (9).
+      ConfigType: int8 // v3+
+      // Documentation is optional documentation for the config entry.
+      Documentation: nullable-string // v3+
 
 // AlterConfigsRequest issues a request to alter either topic or broker
 // configs.

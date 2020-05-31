@@ -9376,10 +9376,14 @@ type DescribeConfigsRequest struct {
 	// IncludeSynonyms signifies whether to return config entry synonyms for
 	// all config entries.
 	IncludeSynonyms bool // v1+
+
+	// IncludeDocumentation signifies whether to return documentation for
+	// config entries.
+	IncludeDocumentation bool // v3+
 }
 
 func (*DescribeConfigsRequest) Key() int16                 { return 32 }
-func (*DescribeConfigsRequest) MaxVersion() int16          { return 2 }
+func (*DescribeConfigsRequest) MaxVersion() int16          { return 3 }
 func (v *DescribeConfigsRequest) SetVersion(version int16) { v.Version = version }
 func (v *DescribeConfigsRequest) GetVersion() int16        { return v.Version }
 func (v *DescribeConfigsRequest) IsFlexible() bool         { return false }
@@ -9416,6 +9420,10 @@ func (v *DescribeConfigsRequest) AppendTo(dst []byte) []byte {
 	}
 	if version >= 1 {
 		v := v.IncludeSynonyms
+		dst = kbin.AppendBool(dst, v)
+	}
+	if version >= 3 {
+		v := v.IncludeDocumentation
 		dst = kbin.AppendBool(dst, v)
 	}
 	return dst
@@ -9469,6 +9477,14 @@ type DescribeConfigsResponseResourceConfig struct {
 	// ConfigSynonyms contains config key/value pairs that can be used in
 	// place of this config entry, in order of preference.
 	ConfigSynonyms []DescribeConfigsResponseResourceConfigConfigSynonym // v1+
+
+	// ConfigType specifies the configuration data type. The values of this
+	// enum are as follows: UNKNOWN (0), BOOLEAN (1), STRING (2), INT (3),
+	// SHORT (4), LONG (5), DOUBLE (6), LIST (7), CLASS (8), PASSWORD (9).
+	ConfigType int8 // v3+
+
+	// Documentation is optional documentation for the config entry.
+	Documentation *string // v3+
 }
 type DescribeConfigsResponseResource struct {
 	// ErrorCode is the error code returned for describing configs.
@@ -9623,6 +9639,14 @@ func (v *DescribeConfigsResponse) ReadFrom(src []byte) error {
 						}
 						v = a
 						s.ConfigSynonyms = v
+					}
+					if version >= 3 {
+						v := b.Int8()
+						s.ConfigType = v
+					}
+					if version >= 3 {
+						v := b.NullableString()
+						s.Documentation = v
 					}
 				}
 				v = a
