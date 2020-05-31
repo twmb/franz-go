@@ -1673,7 +1673,12 @@ DescribeGroupsResponse =>
     AuthorizedOperations: int32 // v3+
 
 // ListGroupsRequest issues a request to list all groups.
-ListGroupsRequest => key 16, max version 3, flexible v3+, admin
+ListGroupsRequest => key 16, max version 4, flexible v3+, admin
+  // StatesFilter, proposed in KIP-518 and introduced in Kafka 2.6.0,
+  // allows filtering groups by state, where a state is any of
+  // "Preparing", "PreparingRebalance", "CompletingRebalance", "Stable",
+  // "Dead", or "Empty". If empty, all groups are returned.
+  StatesFilter: [string] // v4+
 
 // ListGroupsResponse is returned from a ListGroupsRequest.
 ListGroupsResponse =>
@@ -1694,6 +1699,8 @@ ListGroupsResponse =>
     Group: string
     // ProtocolType is the protocol type in use by the group.
     ProtocolType: string
+    // The group state.
+    GroupState: string // v4+
 
 // SASLHandshakeRequest begins the sasl authentication flow. Note that Kerberos
 // GSSAPI authentication has its own unique flow.
@@ -2314,7 +2321,7 @@ TxnOffsetCommitRequest => key 28, max version 3, flexible v3+, group coordinator
   // ProducerEpoch is the producer epoch of the client for this transactional ID
   // as received from InitProducerID.
   ProducerEpoch: int16
-  // Generation is the group generation this heartbeat is for.
+  // Generation is the group generation this transactional offset commit request is for.
   Generation: int32 // v3+
   // MemberID is the member ID this member is for.
   MemberID: string // v3+

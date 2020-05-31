@@ -6083,10 +6083,16 @@ func (v *DescribeGroupsResponse) ReadFrom(src []byte) error {
 type ListGroupsRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
+
+	// StatesFilter, proposed in KIP-518 and introduced in Kafka 2.6.0,
+	// allows filtering groups by state, where a state is any of
+	// "Preparing", "PreparingRebalance", "CompletingRebalance", "Stable",
+	// "Dead", or "Empty". If empty, all groups are returned.
+	StatesFilter []string // v4+
 }
 
 func (*ListGroupsRequest) Key() int16                 { return 16 }
-func (*ListGroupsRequest) MaxVersion() int16          { return 3 }
+func (*ListGroupsRequest) MaxVersion() int16          { return 4 }
 func (v *ListGroupsRequest) SetVersion(version int16) { v.Version = version }
 func (v *ListGroupsRequest) GetVersion() int16        { return v.Version }
 func (v *ListGroupsRequest) IsFlexible() bool         { return v.Version >= 3 }
@@ -6098,6 +6104,22 @@ func (v *ListGroupsRequest) AppendTo(dst []byte) []byte {
 	_ = version
 	isFlexible := version >= 3
 	_ = isFlexible
+	if version >= 4 {
+		v := v.StatesFilter
+		if isFlexible {
+			dst = kbin.AppendCompactArrayLen(dst, len(v))
+		} else {
+			dst = kbin.AppendArrayLen(dst, len(v))
+		}
+		for i := range v {
+			v := v[i]
+			if isFlexible {
+				dst = kbin.AppendCompactString(dst, v)
+			} else {
+				dst = kbin.AppendString(dst, v)
+			}
+		}
+	}
 	if isFlexible {
 		dst = append(dst, 0)
 	}
@@ -6110,6 +6132,9 @@ type ListGroupsResponseGroup struct {
 
 	// ProtocolType is the protocol type in use by the group.
 	ProtocolType string
+
+	// The group state.
+	GroupState string // v4+
 }
 
 // ListGroupsResponse is returned from a ListGroupsRequest.
@@ -6184,6 +6209,15 @@ func (v *ListGroupsResponse) ReadFrom(src []byte) error {
 					v = b.String()
 				}
 				s.ProtocolType = v
+			}
+			if version >= 4 {
+				var v string
+				if isFlexible {
+					v = b.CompactString()
+				} else {
+					v = b.String()
+				}
+				s.GroupState = v
 			}
 			if isFlexible {
 				SkipTags(&b)
@@ -8250,7 +8284,7 @@ type TxnOffsetCommitRequest struct {
 	// as received from InitProducerID.
 	ProducerEpoch int16
 
-	// Generation is the group generation this heartbeat is for.
+	// Generation is the group generation this transactional offset commit request is for.
 	Generation int32 // v3+
 
 	// MemberID is the member ID this member is for.

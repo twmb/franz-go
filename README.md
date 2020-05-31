@@ -68,6 +68,7 @@ DONE
 - KIP-482 (tagged fields; KAFKA-8885; 2.4.0)
 - KIP-496 (offset delete admin command; 2.4.0)
 - KIP-511 (add client name / version in apiversions req; 2.4.0)
+- KIP-518 (list groups by state; 2.6.0)
 - KIP-525 (create topics v5 returns configs; 2.4.0)
 - KIP-526 (reduce metadata lookups; done minus part 2, which we wont do)
 - KIP-546 (client quota APIs; 2.5.0)
