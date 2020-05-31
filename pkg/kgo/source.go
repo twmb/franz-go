@@ -358,10 +358,6 @@ func (s *source) fill() {
 			continue
 		}
 
-		s.cl.cfg.logger.Log(LogLevelDebug, "scheduling fetch request",
-			"broker_id", s.b.id,
-			"broker_addr", s.b.addr,
-		)
 		s.b.do(
 			s.cl.ctx,
 			req,
@@ -428,14 +424,9 @@ func (s *source) handleReqResp(req *fetchRequest, kresp kmsg.Response, err error
 		Topics: make([]FetchTopic, 0, len(resp.Topics)),
 	}
 
-	// We do not look at the overall ErrorCode; this should only be set if
-	// using sessions, which we are not.
-	//
 	// If any partition errors with OffsetOutOfRange, we reload the offset
 	// for that partition a per to the client's configured offset policy.
-	reloadOffsets := offsetsWaitingLoad{
-		fromSeq: req.maxSeq,
-	}
+	var reloadOffsets offsetsLoad
 	var needsMetaUpdate bool
 	for _, rTopic := range resp.Topics {
 		topic := rTopic.Topic
@@ -458,9 +449,7 @@ func (s *source) handleReqResp(req *fetchRequest, kresp kmsg.Response, err error
 			}
 
 			fetchPart, partNeedsMetaUpdate := partOffset.processRespPartition(topic, resp.Version, rPartition, s.cl.decompressor)
-			if len(fetchPart.Records) > 0 || fetchPart.Err != nil {
-				fetchTopic.Partitions = append(fetchTopic.Partitions, fetchPart)
-			}
+			fetchTopic.Partitions = append(fetchTopic.Partitions, fetchPart)
 			needsMetaUpdate = needsMetaUpdate || partNeedsMetaUpdate
 
 			// If we are out of range, we reset to what we can.
@@ -470,7 +459,7 @@ func (s *source) handleReqResp(req *fetchRequest, kresp kmsg.Response, err error
 			// the end. We respect that.
 			if fetchPart.Err == kerr.OffsetOutOfRange {
 				partOffset.from.setLoadingOffsets(partOffset.seq)
-				reloadOffsets.setTopicPartForList(topic, partition, s.cl.cfg.resetOffset)
+				reloadOffsets.list.setLoadOffset(topic, partition, s.cl.cfg.resetOffset, req.maxSeq)
 
 			} else if fetchPart.Err == kerr.FencedLeaderEpoch {
 				// With fenced leader epoch, we notify an error only if
@@ -481,11 +470,11 @@ func (s *source) handleReqResp(req *fetchRequest, kresp kmsg.Response, err error
 				// We just refresh metadata and try again.
 				if partOffset.lastConsumedEpoch >= 0 {
 					partOffset.from.setLoadingOffsets(partOffset.seq)
-					reloadOffsets.setTopicPartForEpoch(topic, partition, Offset{
+					reloadOffsets.epoch.setLoadOffset(topic, partition, Offset{
 						request:      partOffset.offset,
 						epoch:        partOffset.lastConsumedEpoch,
 						currentEpoch: partOffset.currentLeaderEpoch,
-					})
+					}, req.maxSeq)
 				}
 			}
 		}
@@ -496,10 +485,7 @@ func (s *source) handleReqResp(req *fetchRequest, kresp kmsg.Response, err error
 	}
 
 	if !reloadOffsets.isEmpty() {
-		consumer := &s.cl.consumer
-		consumer.mu.Lock()
-		reloadOffsets.mergeIntoLocked(consumer)
-		consumer.mu.Unlock()
+		reloadOffsets.mergeInto(&s.cl.consumer)
 	}
 
 	if needsMetaUpdate {
@@ -514,6 +500,7 @@ func (s *source) handleReqResp(req *fetchRequest, kresp kmsg.Response, err error
 			seq:        req.maxSeq,
 			reqOffsets: req.offsets,
 		}
+
 		s.cl.consumer.addSourceReadyForDraining(req.maxSeq, s)
 	} else {
 		s.updateOffsets(req.offsets)

@@ -92,7 +92,8 @@ type consumer struct {
 
 	usingPartitions []*topicPartition
 
-	offsetsWaitingLoad *offsetsWaitingLoad
+	offsetsWaitingLoad offsetsLoad
+	offsetsLoading     offsetsLoad
 
 	sourcesReadyMu          sync.Mutex
 	sourcesReadyCond        *sync.Cond
@@ -184,25 +185,6 @@ func (cl *Client) PollFetches(ctx context.Context) Fetches {
 
 	var fetches Fetches
 
-	if cl.cfg.logger.Level() >= LogLevelDebug {
-		defer func() {
-			if len(fetches) > 0 {
-				toppars := make(map[int32][2]int64)
-				for _, fetch := range fetches {
-					for _, topic := range fetch.Topics {
-						for _, partition := range topic.Partitions {
-							toppars[partition.Partition] = [2]int64{
-								partition.Records[0].Offset,
-								partition.Records[len(partition.Records)-1].Offset,
-							}
-						}
-					}
-				}
-				cl.cfg.logger.Log(LogLevelDebug, "returning fetch", "part_stop_start", toppars)
-			}
-		}()
-	}
-
 	fill := func() {
 		c.sourcesReadyMu.Lock()
 		for _, ready := range c.sourcesReadyForDraining {
@@ -290,6 +272,8 @@ type assignHow int8
 const (
 	// This option simply assigns new offsets, doing nothing with existing
 	// offsets / active fetches / buffered fetches.
+	//
+	// This does not change the seq. All other options below bump the seq.
 	assignWithoutInvalidating assignHow = iota
 
 	// This option invalidates active fetches so they will not buffer and
@@ -357,9 +341,11 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how
 						needsReset = false
 						if how == assignInvalidateMatching {
 							usedPartition.cursor.setOffset(usedPartition.leaderEpoch, true, -1, -1, seq) // case 1
+
 						} else { // how == assignSetMatching
 							usedPartition.cursor.setOffset(usedPartition.leaderEpoch, true, matchPartition.request, matchPartition.epoch, seq) // case 2
 							keep = append(keep, usedPartition)
+
 						}
 					}
 				}
@@ -382,49 +368,48 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how
 		c.usingPartitions = keep
 	}
 
+	isLoading := !c.offsetsWaitingLoad.isEmpty() // stash if we are loading before we bump, which moves loading to load
+
+	// If we are invalidating or setting matching offsets, then we need to
+	// bump the seq's for loads or waiting loads that we are keeping.
+	//
+	// Otherwise, they will eventually load but not set offsets because
+	// their seq's would be out of date.
+	if how == assignInvalidateMatching || how == assignSetMatching {
+		c.bumpLoadingFetches()
+	}
+
+	// Bumping loading could have moved stuff back to load, so if we
+	// were not loading and load is non-empty, we need to refresh
+	// metadata to trigger the eventual offset load.
+	if !isLoading && !c.offsetsWaitingLoad.isEmpty() {
+		c.cl.cfg.logger.Log(LogLevelInfo, "assign invalidated offsets that were loading and bumped some back to waiting load; triggering meta update")
+		c.cl.triggerUpdateMetadata()
+	}
+
 	// This assignment could contain nothing (for the purposes of
 	// invalidating active fetches), so we only do this if needed.
-	if len(assignments) == 0 || (how == assignInvalidateMatching || how == assignSetMatching) {
+	if len(assignments) == 0 || how == assignInvalidateMatching || how == assignSetMatching {
 		return
 	}
 
 	c.cl.cfg.logger.Log(LogLevelInfo, "assign requires loading offsets")
 
-	// If we have a topic and partition loaded and the assignments use
-	// exact offsets, we can avoid looking up offsets.
-	waiting := offsetsWaitingLoad{
-		fromSeq: seq,
-	}
 	clientTopics := c.cl.loadTopics()
 
-	// We duplicate assignments so we can modify it below without the
-	// caller observing our changes.
-	assignments = func() map[string]map[int32]Offset {
-		ts := make(map[string]map[int32]Offset, len(assignments))
-		for topic, partitions := range assignments {
-			ps := make(map[int32]Offset, len(partitions))
-			for partition, offset := range partitions {
-				ps[partition] = offset
-			}
-			ts[topic] = ps
-		}
-		return ts
-	}()
-
 	for topic, partitions := range assignments {
-		topicParts := clientTopics[topic].load() // must be loadable; ensured above
+		topicParts := clientTopics[topic].load()
+		// clientTopics should always have all topics we are interested
+		// in. This is ensured in AssignPartitions, or in AssignGroup,
+		// or in metadata updating if consuming regex topics.
 		if topicParts == nil {
 			continue
 		}
 
 		for partition, offset := range partitions {
-			part := topicParts.all[partition]
-			if part == nil {
-				continue
-			}
-
 			// First, if the request is exact, get rid of the relative
-			// portion.
+			// portion. We are modifying a copy of the offset, i.e. we
+			// are appropriately not modfying 'assignments' itself.
 			if offset.request >= 0 {
 				offset.request = offset.request + offset.relative
 				if offset.request < 0 {
@@ -433,91 +418,158 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how
 				offset.relative = 0
 			}
 
-			// If we are requesting an exact offset and have an
-			// epoch, we do truncation detection and then use the
-			// offset.
+			// If we are requesting an exact offset with an epoch,
+			// we do truncation detection and then use the offset.
 			//
 			// Otherwise, an epoch is specified without an exact
 			// request which is useless for us, or a request is
 			// specified without a known epoch.
-			//
-			// If an exact offset is specified, we use it. Without
-			// an epoch, if it is out of bounds, we just reset
-			// appropriately. If an offset is unspecified, we list
-			// offsets to find out what to use.
 			if offset.request >= 0 && offset.epoch >= 0 {
-				waiting.setTopicPartForEpoch(topic, partition, offset)
-				delete(partitions, partition)
-			} else if offset.request >= 0 {
+				c.offsetsWaitingLoad.epoch.setLoadOffset(topic, partition, offset, seq)
+				continue
+			}
+
+			// If an exact offset is specified and we have loaded
+			// the partition, we use it. Without an epoch, if it is
+			// out of bounds, we just reset appropriately.
+			//
+			// If an offset is unspecified or we have not loaded
+			// the partition, we list offsets to find out what to
+			// use.
+			part := topicParts.all[partition]
+			if offset.request >= 0 && part != nil {
 				part.cursor.setOffset(part.leaderEpoch, true, offset.request, offset.epoch, seq)
 				c.usingPartitions = append(c.usingPartitions, part)
-				delete(partitions, partition)
+				continue
+			}
+
+			c.offsetsWaitingLoad.list.setLoadOffset(topic, partition, offset, seq)
+		}
+	}
+
+	if !c.offsetsWaitingLoad.isEmpty() {
+		if !isLoading {
+			c.cl.cfg.logger.Log(LogLevelInfo, "assign offsets waiting load nonempty; triggering meta update",
+				"need_list", c.offsetsWaitingLoad.list, "need_epoch", c.offsetsWaitingLoad.epoch)
+		} else {
+			c.cl.cfg.logger.Log(LogLevelInfo, "assign offsets waiting load nonempty; load in progress, not triggering meta update",
+				"need_list", c.offsetsWaitingLoad.list, "need_epoch", c.offsetsWaitingLoad.epoch)
+		}
+		c.cl.triggerUpdateMetadata()
+	}
+
+}
+
+// bumpLoadingFetches, called from assignOffsets, bumps the seq's for any load
+// or loading requests. We do this so that once the request eventually is
+// issued and returns, we do not ignore the return due to out of date seq's.
+//
+// For simplicity, this moves everything loading back to load; their loading
+// fetches are per-broker and we don't bump those loading seq's.
+func (c *consumer) bumpLoadingFetches() {
+	newSeq := c.seq
+	oldSeq := newSeq - 1
+
+	var matching map[string][]int32
+	switch c.typ {
+	case consumerTypeGroup:
+		matching = c.group.nowAssigned
+	case consumerTypeDirect:
+		matching = make(map[string][]int32)
+		for topic, partitions := range c.direct.using {
+			for partition := range partitions {
+				matching[topic] = append(matching[topic], partition)
 			}
 		}
-		if len(partitions) == 0 {
-			delete(assignments, topic)
+	}
+
+	for topic, partitions := range matching {
+		for _, partition := range partitions {
+			for _, loads := range []struct {
+				src offsetLoadMap
+				dst *offsetLoadMap
+			}{
+				{c.offsetsWaitingLoad.list, &c.offsetsWaitingLoad.list},
+				{c.offsetsWaitingLoad.epoch, &c.offsetsWaitingLoad.epoch},
+				{c.offsetsLoading.list, &c.offsetsWaitingLoad.list},
+				{c.offsetsLoading.epoch, &c.offsetsWaitingLoad.epoch},
+			} {
+				if existing, exists := loads.src.removeLoad(topic, partition, oldSeq); exists {
+					loads.dst.setLoadOffset(topic, partition, existing, newSeq)
+				}
+			}
+		}
+	}
+}
+
+// mergeInto is used by a source itself if it detects it needs to reload some
+// offsets that it was working with.
+func (o *offsetsLoad) mergeInto(c *consumer) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	isLoading := !c.offsetsWaitingLoad.isEmpty()
+	var needLoad bool
+
+	for _, loads := range []struct {
+		src offsetLoadMap
+		dst *offsetLoadMap
+	}{
+		{o.list, &c.offsetsLoading.list},
+		{o.epoch, &c.offsetsLoading.epoch},
+	} {
+		for topic, partitions := range loads.src {
+			for partition, offset := range partitions {
+				if offset.seq == c.seq {
+					loads.dst.setLoad(topic, partition, offset)
+					needLoad = true
+				}
+			}
 		}
 	}
 
-	waiting.waitingList = assignments
-	if !waiting.isEmpty() {
-		c.cl.cfg.logger.Log(LogLevelInfo, "assign setting offsets to load", "to_load", assignments)
-		waiting.mergeIntoLocked(c)
+	if needLoad && !isLoading {
+		c.cl.triggerUpdateMetadata()
 	}
 }
 
-// mergeInto is used to merge waiting offsets into a consumer.
-//
-// When we load partition offsets, we send many requests to all brokers
-// responsible for topic partitions. All failing loads get merged back into the
-// consumer for a future load retry.
-func (o *offsetsWaitingLoad) mergeInto(c *consumer) {
+// loadingToWaitingLocked moves everything that is loading back to waiting
+// load. This is used for any failed load.
+func (o *offsetsLoad) loadingToWaiting(c *consumer) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	o.mergeIntoLocked(c)
-}
 
-// mergeIntoLocked is called directly from assignPartitions, which already
-// has the consumer locked.
-func (o *offsetsWaitingLoad) mergeIntoLocked(c *consumer) {
 	if o.isEmpty() {
 		return
 	}
 
-	if o.fromSeq < c.seq {
-		return
+	isLoading := !c.offsetsWaitingLoad.isEmpty()
+	var needLoad bool
+
+	// For all offsets, if the offset is the same offset that is in the
+	// load map (same seq), we remove it from the load map. Then, if the
+	// offset seq is the same as the consumer seq, we move it to the
+	// loading map.
+	for _, loads := range []struct {
+		src offsetLoadMap
+		chk offsetLoadMap
+		dst *offsetLoadMap
+	}{
+		{o.list, c.offsetsLoading.list, &c.offsetsWaitingLoad.list},
+		{o.epoch, c.offsetsLoading.epoch, &c.offsetsWaitingLoad.epoch},
+	} {
+		for topic, partitions := range loads.src {
+			for partition, offset := range partitions {
+				if _, exists := loads.chk.removeLoad(topic, partition, offset.seq); exists && offset.seq == c.seq {
+					loads.dst.setLoad(topic, partition, offset)
+					needLoad = true
+				}
+			}
+		}
 	}
 
-	// If this is the first reload, we trigger a metadata update.
-	// If this is non-nil, then a metadata update has not returned
-	// yet and we merge into the exisiting wait and avoid updating.
-	existing := c.offsetsWaitingLoad
-	if existing == nil {
-		c.offsetsWaitingLoad = o
+	if needLoad && !isLoading {
 		c.cl.triggerUpdateMetadata()
-		return
-	}
-
-	for topic, partitions := range o.waitingList {
-		curTopic, exists := existing.waitingList[topic]
-		if !exists {
-			existing.setTopicPartsForList(topic, partitions)
-			continue
-		}
-		for partition, offset := range partitions {
-			curTopic[partition] = offset
-		}
-	}
-
-	for topic, partitions := range o.waitingEpoch {
-		curTopic, exists := existing.waitingEpoch[topic]
-		if !exists {
-			existing.setTopicPartsForEpoch(topic, partitions)
-			continue
-		}
-		for partition, ask := range partitions {
-			curTopic[partition] = ask
-		}
 	}
 }
 
@@ -567,19 +619,56 @@ func (c *consumer) doOnMetadataUpdate() {
 
 // resetAndLoadOffsets empties offsetsWaitingLoad and tries loading them.
 func (c *consumer) resetAndLoadOffsets() {
-	toLoad := c.offsetsWaitingLoad
-	c.offsetsWaitingLoad = nil
+	// First, clear all stale (old seq) offsets.
+	for _, loads := range []offsetLoadMap{
+		c.offsetsWaitingLoad.list,
+		c.offsetsWaitingLoad.epoch,
+		c.offsetsLoading.list,
+		c.offsetsLoading.epoch,
+	} {
+		for topic, partitions := range loads {
+			for partition, offset := range partitions {
+				if offset.seq < c.seq {
+					delete(partitions, partition)
+				}
+			}
+			if len(partitions) == 0 {
+				delete(loads, topic)
+			}
+		}
+	}
+
+	c.cl.cfg.logger.Log(LogLevelDebug, "moving waiting load to loading", "waiting", c.offsetsWaitingLoad, "load", c.offsetsLoading)
+
+	// Now, move everything from the waiting load map to the loading map,
+	// clear the loading map, and load the load map.
+	for _, loads := range []struct {
+		src offsetLoadMap
+		dst *offsetLoadMap
+	}{
+		{c.offsetsWaitingLoad.list, &c.offsetsLoading.list},
+		{c.offsetsWaitingLoad.epoch, &c.offsetsLoading.epoch},
+	} {
+		for topic, partitions := range loads.src {
+			for partition, offset := range partitions {
+				// we do not remove because we clear below
+				loads.dst.setLoad(topic, partition, offset)
+			}
+		}
+	}
+
+	toLoad := c.offsetsWaitingLoad.clear()
 	if toLoad.isEmpty() {
 		return
 	}
-	go c.tryOffsetLoad(toLoad)
+	c.tryOffsetLoad(toLoad)
 }
 
-func (c *consumer) tryOffsetLoad(toLoad *offsetsWaitingLoad) {
+func (c *consumer) tryOffsetLoad(toLoad offsetsLoad) {
 	// If any partitions do not exist in the metadata, or we cannot find
 	// the broker leader for a partition, we reload the metadata.
-	toReload := &offsetsWaitingLoad{fromSeq: toLoad.fromSeq}
-	brokersToLoadFrom := make(map[*broker]*offsetsWaitingLoad)
+	var toReload offsetsLoad
+	brokersToLoadFrom := make(map[*broker]*offsetsLoad)
 
 	// For most of this function, we hold the broker mu so that we can
 	// check if topic partition leaders exist.
@@ -589,125 +678,132 @@ func (c *consumer) tryOffsetLoad(toLoad *offsetsWaitingLoad) {
 	// Map all waiting partition loads to the brokers that can load the
 	// offsets for those partitions.
 	topics := c.cl.loadTopics()
-	for topic, partitions := range toLoad.waitingList {
-		// The topicPartitions must exist, since assignPartitions
-		// creates the topic if the topic is new.
-		topicPartitions := topics[topic].load()
 
-		for partition, offset := range partitions {
-			topicPartition, exists := topicPartitions.all[partition]
-			if !exists {
-				toReload.setTopicPartForList(topic, partition, offset)
-				continue
-			}
+	for _, loads := range []struct {
+		src    offsetLoadMap
+		dst    *offsetLoadMap
+		isList bool
+	}{
+		{toLoad.list, &toReload.list, true},
+		{toLoad.epoch, &toReload.epoch, false},
+	} {
+		for topic, partitions := range loads.src {
+			topicPartitions := topics[topic].load()
 
-			broker := brokers[topicPartition.leader]
-			if broker == nil { // should not happen
-				toReload.setTopicPartForList(topic, partition, offset)
-				continue
-			}
+			for partition, offset := range partitions {
+				dst := loads.dst
 
-			addLoad := brokersToLoadFrom[broker]
-			if addLoad == nil {
-				addLoad = &offsetsWaitingLoad{fromSeq: toLoad.fromSeq}
-				brokersToLoadFrom[broker] = addLoad
-			}
-			// Before we set this offset to load from the broker,
-			// we must set what we understand to be the current
-			// epoch.
-			offset.currentEpoch = topicPartition.leaderEpoch
-			addLoad.setTopicPartForList(topic, partition, offset)
-		}
-	}
+				if topicPartition, exists := topicPartitions.all[partition]; exists {
+					if broker := brokers[topicPartition.leader]; broker != nil {
+						brokerLoad := brokersToLoadFrom[broker]
+						if brokerLoad == nil {
+							brokerLoad = new(offsetsLoad)
+							brokersToLoadFrom[broker] = brokerLoad
+						}
+						// We have to set the offset's currentEpoch
+						// for our load requests.
+						offset.currentEpoch = topicPartition.leaderEpoch
+						if loads.isList {
+							dst = &brokerLoad.list
+						} else {
+							dst = &brokerLoad.epoch
+						}
+					}
+				}
 
-	// Now we do that exact same logic for the waiting epoch stuff.
-	for topic, partitions := range toLoad.waitingEpoch {
-		topicPartitions := topics[topic].load()
-		for partition, offset := range partitions {
-			topicPartition, exists := topicPartitions.all[partition]
-			if !exists {
-				toReload.setTopicPartForEpoch(topic, partition, offset)
-				continue
+				dst.setLoad(topic, partition, offset)
 			}
-			broker := brokers[topicPartition.leader]
-			if broker == nil {
-				toReload.setTopicPartForEpoch(topic, partition, offset)
-				continue
-			}
-			addLoad := brokersToLoadFrom[broker]
-			if addLoad == nil {
-				addLoad = &offsetsWaitingLoad{fromSeq: toLoad.fromSeq}
-				brokersToLoadFrom[broker] = addLoad
-			}
-			offset.currentEpoch = topicPartition.leaderEpoch
-			addLoad.setTopicPartForEpoch(topic, partition, offset)
 		}
 	}
 
 	c.cl.brokersMu.RUnlock()
 
 	for broker, brokerLoad := range brokersToLoadFrom {
-		if len(brokerLoad.waitingList) > 0 {
-			go c.tryBrokerOffsetLoadList(broker, brokerLoad)
+		c.cl.cfg.logger.Log(LogLevelDebug, "offsets to load broker", "broker", broker.id, "load", brokerLoad)
+		if len(brokerLoad.list) > 0 {
+			go c.tryBrokerOffsetLoadList(broker, brokerLoad.list)
 		}
-		if len(brokerLoad.waitingEpoch) > 0 {
-			go c.tryBrokerOffsetLoadEpoch(broker, brokerLoad)
+		if len(brokerLoad.epoch) > 0 {
+			go c.tryBrokerOffsetLoadEpoch(broker, brokerLoad.epoch)
 		}
 	}
 
-	toReload.mergeInto(c)
-}
-
-type offsetsWaitingLoad struct {
-	fromSeq      uint64
-	waitingList  map[string]map[int32]Offset
-	waitingEpoch map[string]map[int32]Offset
-}
-
-func (o *offsetsWaitingLoad) isEmpty() bool {
-	return o == nil || len(o.waitingList) == 0 && len(o.waitingEpoch) == 0
-}
-
-func (o *offsetsWaitingLoad) maybeInitList() {
-	if o.waitingList == nil {
-		o.waitingList = make(map[string]map[int32]Offset)
+	if !toReload.isEmpty() {
+		c.cl.cfg.logger.Log(LogLevelDebug, "offsets to reload", "reload", toReload)
+		toReload.loadingToWaiting(c)
 	}
 }
-func (o *offsetsWaitingLoad) setTopicPartsForList(topic string, partitions map[int32]Offset) {
-	o.maybeInitList()
-	o.waitingList[topic] = partitions
-}
-func (o *offsetsWaitingLoad) setTopicPartForList(topic string, partition int32, offset Offset) {
-	o.maybeInitList()
-	parts := o.waitingList[topic]
-	if parts == nil {
-		parts = make(map[int32]Offset)
-		o.waitingList[topic] = parts
-	}
-	parts[partition] = offset
+
+type offsetLoad struct {
+	seq uint64
+	Offset
 }
 
-func (c *consumer) tryBrokerOffsetLoadList(broker *broker, load *offsetsWaitingLoad) {
-	c.cl.cfg.logger.Log(LogLevelInfo, "issuing list offsets request", "broker", broker.id, "addr", broker.addr)
+type offsetLoadMap map[string]map[int32]offsetLoad
+
+func (o *offsetLoadMap) setLoadOffset(t string, p int32, offset Offset, seq uint64) {
+	o.setLoad(t, p, offsetLoad{seq, offset})
+}
+func (o *offsetLoadMap) setLoad(t string, p int32, load offsetLoad) {
+	if *o == nil {
+		*o = make(offsetLoadMap)
+	}
+	if (*o)[t] == nil {
+		(*o)[t] = make(map[int32]offsetLoad)
+	}
+	(*o)[t][p] = load
+}
+func (o offsetLoadMap) removeLoad(t string, p int32, seq uint64) (Offset, bool) {
+	if o == nil {
+		return Offset{}, false
+	}
+	ps := o[t]
+	if ps == nil {
+		return Offset{}, false
+	}
+	existing, exists := ps[p]
+	if !exists {
+		return Offset{}, false
+	}
+	if seq < existing.seq {
+		return Offset{}, false
+	}
+	delete(ps, p)
+	return existing.Offset, true
+}
+
+type offsetsLoad struct {
+	list  offsetLoadMap
+	epoch offsetLoadMap
+}
+
+func (o *offsetsLoad) isEmpty() bool {
+	return o == nil || len(o.list) == 0 && len(o.epoch) == 0
+}
+func (o *offsetsLoad) clear() offsetsLoad { r := *o; *o = offsetsLoad{}; return r }
+
+func (c *consumer) tryBrokerOffsetLoadList(broker *broker, load offsetLoadMap) {
 	kresp, err := broker.waitResp(c.cl.ctx,
 		load.buildListReq(c.cl.cfg.isolationLevel))
 	if err != nil {
-		load.mergeInto(c)
+		(&offsetsLoad{list: load}).loadingToWaiting(c)
 		return
 	}
 	resp := kresp.(*kmsg.ListOffsetsResponse)
 
 	type toSet struct {
+		topic          string
+		partition      int32
 		topicPartition *topicPartition
 		offset         int64
 		leaderEpoch    int32
-		currentEpoch   int32
+		load           offsetLoad
 	}
 	var toSets []toSet
 
 	for _, rTopic := range resp.Topics {
 		topic := rTopic.Topic
-		waitingParts, ok := load.waitingList[topic]
+		waitingParts, ok := load[topic]
 		if !ok {
 			continue
 		}
@@ -722,7 +818,7 @@ func (c *consumer) tryBrokerOffsetLoadList(broker *broker, load *offsetsWaitingL
 			err := kerr.ErrorForCode(rPartition.ErrorCode)
 			if err != nil {
 				if !kerr.IsRetriable(err) {
-					c.addFakeReadyForDraining(topic, partition, err, load.fromSeq)
+					c.addFakeReadyForDraining(topic, partition, err, waitingPart.seq)
 					delete(waitingParts, partition)
 				}
 				continue
@@ -731,12 +827,12 @@ func (c *consumer) tryBrokerOffsetLoadList(broker *broker, load *offsetsWaitingL
 			topicPartitions := c.cl.loadTopics()[topic].load()
 			topicPartition, ok := topicPartitions.all[partition]
 			if !ok {
-				continue // very weird
+				continue // we have not yet loaded the partition
 			}
 
 			delete(waitingParts, partition)
-			if len(waitingParts) == 0 { // avoid reload
-				delete(load.waitingList, topic)
+			if len(waitingParts) == 0 {
+				delete(load, topic)
 			}
 
 			offset := rPartition.Offset + waitingPart.relative
@@ -752,16 +848,18 @@ func (c *consumer) tryBrokerOffsetLoadList(broker *broker, load *offsetsWaitingL
 			}
 
 			toSets = append(toSets, toSet{
+				topic,
+				partition,
 				topicPartition,
 				offset,
 				leaderEpoch,
-				waitingPart.currentEpoch,
+				waitingPart,
 			})
 		}
 	}
 
-	if len(load.waitingList) > 0 { // Kafka did not reply to everything (odd)
-		load.mergeInto(c)
+	if len(load) > 0 {
+		(&offsetsLoad{list: load}).loadingToWaiting(c)
 	}
 	if len(toSets) == 0 {
 		return
@@ -770,24 +868,23 @@ func (c *consumer) tryBrokerOffsetLoadList(broker *broker, load *offsetsWaitingL
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if load.fromSeq < c.seq {
-		return
-	}
-
-	c.cl.cfg.logger.Log(LogLevelInfo, "listed offsets, setting offsets")
 	for _, toSet := range toSets {
-		toSet.topicPartition.cursor.setOffset(toSet.currentEpoch, true, toSet.offset, toSet.leaderEpoch, c.seq)
-		c.usingPartitions = append(c.usingPartitions, toSet.topicPartition)
+		// Always try removing the load; only set the cursor to use the
+		// load if the load's seq is not stale.
+		if _, exists := c.offsetsLoading.list.removeLoad(toSet.topic, toSet.partition, toSet.load.seq); exists && toSet.load.seq == c.seq {
+			toSet.topicPartition.cursor.setOffset(toSet.load.currentEpoch, true, toSet.offset, toSet.leaderEpoch, c.seq)
+			c.usingPartitions = append(c.usingPartitions, toSet.topicPartition)
+		}
 	}
 }
 
-func (o *offsetsWaitingLoad) buildListReq(isolationLevel int8) *kmsg.ListOffsetsRequest {
+func (o offsetLoadMap) buildListReq(isolationLevel int8) *kmsg.ListOffsetsRequest {
 	req := &kmsg.ListOffsetsRequest{
 		ReplicaID:      -1,
 		IsolationLevel: isolationLevel,
-		Topics:         make([]kmsg.ListOffsetsRequestTopic, 0, len(o.waitingList)),
+		Topics:         make([]kmsg.ListOffsetsRequestTopic, 0, len(o)),
 	}
-	for topic, partitions := range o.waitingList {
+	for topic, partitions := range o {
 		parts := make([]kmsg.ListOffsetsRequestTopicPartition, 0, len(partitions))
 		for partition, offset := range partitions {
 			// If this partition is using an exact offset request,
@@ -812,31 +909,10 @@ func (o *offsetsWaitingLoad) buildListReq(isolationLevel int8) *kmsg.ListOffsets
 	return req
 }
 
-// the following functions are exactly the same, but on the epoch map
-func (o *offsetsWaitingLoad) maybeInitEpoch() {
-	if o.waitingEpoch == nil {
-		o.waitingEpoch = make(map[string]map[int32]Offset)
-	}
-}
-func (o *offsetsWaitingLoad) setTopicPartsForEpoch(topic string, partitions map[int32]Offset) {
-	o.maybeInitEpoch()
-	o.waitingEpoch[topic] = partitions
-}
-func (o *offsetsWaitingLoad) setTopicPartForEpoch(topic string, partition int32, offset Offset) {
-	o.maybeInitEpoch()
-	parts := o.waitingEpoch[topic]
-	if parts == nil {
-		parts = make(map[int32]Offset)
-		o.waitingEpoch[topic] = parts
-	}
-	parts[partition] = offset
-}
-
-func (c *consumer) tryBrokerOffsetLoadEpoch(broker *broker, load *offsetsWaitingLoad) {
-	c.cl.cfg.logger.Log(LogLevelInfo, "issuing offset for leader epoch request", "broker", broker.id, "addr", broker.addr)
+func (c *consumer) tryBrokerOffsetLoadEpoch(broker *broker, load offsetLoadMap) {
 	kresp, err := broker.waitResp(c.cl.ctx, load.buildEpochReq())
 	if err != nil {
-		load.mergeInto(c)
+		(&offsetsLoad{epoch: load}).loadingToWaiting(c)
 		return
 	}
 	resp := kresp.(*kmsg.OffsetForLeaderEpochResponse)
@@ -847,24 +923,27 @@ func (c *consumer) tryBrokerOffsetLoadEpoch(broker *broker, load *offsetsWaiting
 	// we talked to one new broker and now are talking to a different
 	// older one in the same cluster.
 	if resp.Version < 2 {
-		(&offsetsWaitingLoad{
-			fromSeq:     load.fromSeq,
-			waitingList: load.waitingEpoch,
-		}).mergeInto(c)
+		c.mu.Lock()
+		loading := offsetsLoad{list: c.offsetsLoading.epoch}
+		c.offsetsLoading.epoch = nil
+		c.mu.Unlock()
+		loading.loadingToWaiting(c)
 		return
 	}
 
 	type toSet struct {
+		topic          string
+		partition      int32
 		topicPartition *topicPartition
 		offset         int64
 		leaderEpoch    int32
-		currentEpoch   int32
+		load           offsetLoad
 	}
 	var toSets []toSet
 
 	for _, rTopic := range resp.Topics {
 		topic := rTopic.Topic
-		waitingParts, ok := load.waitingEpoch[topic]
+		waitingParts, ok := load[topic]
 		if !ok {
 			continue
 		}
@@ -879,7 +958,7 @@ func (c *consumer) tryBrokerOffsetLoadEpoch(broker *broker, load *offsetsWaiting
 			err := kerr.ErrorForCode(rPartition.ErrorCode)
 			if err != nil {
 				if !kerr.IsRetriable(err) {
-					c.addFakeReadyForDraining(topic, partition, err, load.fromSeq)
+					c.addFakeReadyForDraining(topic, partition, err, waitingPart.seq)
 					delete(waitingParts, partition)
 				}
 				continue
@@ -888,12 +967,12 @@ func (c *consumer) tryBrokerOffsetLoadEpoch(broker *broker, load *offsetsWaiting
 			topicPartitions := c.cl.loadTopics()[topic].load()
 			topicPartition, ok := topicPartitions.all[partition]
 			if !ok {
-				continue // very weird
+				continue // we have not yet loaded the partition
 			}
 
 			delete(waitingParts, partition)
-			if len(waitingParts) == 0 { // avoid reload
-				delete(load.waitingEpoch, topic)
+			if len(waitingParts) == 0 {
+				delete(load, topic)
 			}
 
 			if waitingPart.request < 0 {
@@ -903,20 +982,22 @@ func (c *consumer) tryBrokerOffsetLoadEpoch(broker *broker, load *offsetsWaiting
 			if rPartition.EndOffset < offset {
 				offset = rPartition.EndOffset
 				err = &ErrDataLoss{topic, partition, offset, rPartition.EndOffset}
-				c.addFakeReadyForDraining(topic, partition, err, load.fromSeq)
+				c.addFakeReadyForDraining(topic, partition, err, waitingPart.seq)
 			}
 
 			toSets = append(toSets, toSet{
+				topic,
+				partition,
 				topicPartition,
 				offset,
 				rPartition.LeaderEpoch,
-				waitingPart.currentEpoch,
+				waitingPart,
 			})
 		}
 	}
 
-	if len(load.waitingEpoch) > 0 { // Kafka did not reply to everything (odd)
-		load.mergeInto(c)
+	if len(load) > 0 {
+		(&offsetsLoad{epoch: load}).loadingToWaiting(c)
 	}
 	if len(toSets) == 0 {
 		return
@@ -925,22 +1006,22 @@ func (c *consumer) tryBrokerOffsetLoadEpoch(broker *broker, load *offsetsWaiting
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if load.fromSeq < c.seq {
-		return
-	}
-	c.cl.cfg.logger.Log(LogLevelInfo, "found offset leader epoch, setting offsets")
 	for _, toSet := range toSets {
-		toSet.topicPartition.cursor.setOffset(toSet.currentEpoch, true, toSet.offset, toSet.leaderEpoch, c.seq)
-		c.usingPartitions = append(c.usingPartitions, toSet.topicPartition)
+		// Always try removing the load; only set the cursor to use the
+		// load if the load's seq is not stale.
+		if _, exists := c.offsetsLoading.epoch.removeLoad(toSet.topic, toSet.partition, toSet.load.seq); exists && toSet.load.seq == c.seq {
+			toSet.topicPartition.cursor.setOffset(toSet.load.currentEpoch, true, toSet.offset, toSet.leaderEpoch, c.seq)
+			c.usingPartitions = append(c.usingPartitions, toSet.topicPartition)
+		}
 	}
 }
 
-func (o *offsetsWaitingLoad) buildEpochReq() *kmsg.OffsetForLeaderEpochRequest {
+func (o offsetLoadMap) buildEpochReq() *kmsg.OffsetForLeaderEpochRequest {
 	req := &kmsg.OffsetForLeaderEpochRequest{
 		ReplicaID: -1,
-		Topics:    make([]kmsg.OffsetForLeaderEpochRequestTopic, 0, len(o.waitingEpoch)),
+		Topics:    make([]kmsg.OffsetForLeaderEpochRequestTopic, 0, len(o)),
 	}
-	for topic, partitions := range o.waitingEpoch {
+	for topic, partitions := range o {
 		parts := make([]kmsg.OffsetForLeaderEpochRequestTopicPartition, 0, len(partitions))
 		for partition, offset := range partitions {
 			if offset.epoch < 0 {
