@@ -53,7 +53,7 @@ type cfg struct {
 
 	retryBackoff     func(int) time.Duration
 	retries          int
-	retryTimeout     time.Duration
+	retryTimeout     func(int16) time.Duration
 	brokerErrRetries int
 
 	maxBrokerWriteBytes int32
@@ -153,8 +153,13 @@ func defaultCfg() cfg {
 				return backoff
 			}
 		}(),
-		retries:          math.MaxInt32, // effectively unbounded
-		retryTimeout:     time.Minute,
+		retries: math.MaxInt32, // effectively unbounded
+		retryTimeout: func(key int16) time.Duration {
+			if key == 26 { // EndTxn key
+				return 5 * time.Minute
+			}
+			return time.Minute
+		},
 		brokerErrRetries: 20,
 
 		maxBrokerWriteBytes: 100 << 20, // Kafka socket.request.max.bytes default is 100<<20
@@ -231,9 +236,6 @@ func MaxVersions(versions kversion.Versions) Opt {
 // amount of retries, overriding the default exponential backoff that ranges
 // from 100ms min to 1s max.
 //
-// The function is called with the number of failures that have occurred in a
-// row.
-//
 // This (roughly) corresponds to Kafka's retry.backoff.ms setting and
 // retry.backoff.max.ms (which is being introduced with KIP-500).
 func RetryBackoff(backoff func(int) time.Duration) Opt {
@@ -249,22 +251,26 @@ func RequestRetries(n int) Opt {
 }
 
 // RetryTimeout sets the upper limit on how long we allow requests to retry,
-// overriding the default 1m.
+// overriding the default of 5m for EndTxn requests, 1m for all others.
 //
 // This timeout applies to any request issued through a client's Request
 // function. It does not apply to fetches nor produces.
 //
-// If set to zero, there is no retry timeout.
+// The function is called with the request key that is being retried. While it
+// is not expected that the request key will be used, including it gives users
+// the opportinuty to have different retry timeouts for different keys.
 //
-// This timeout is evaluated after a request is issued. If a retry backoff
-// places the next request past the retry timeout deadline, the request
-// will still be tried once more once the backoff expires.
-func RetryTimeout(t time.Duration) Opt {
+// If the function returns zero, there is no retry timeout.
+//
+// The timeout is evaluated after a request is issued. If a retry backoff
+// places the next request past the retry timeout deadline, the request will
+// still be tried once more once the backoff expires.
+func RetryTimeout(t func(int16) time.Duration) Opt {
 	return clientOpt{func(cfg *cfg) { cfg.retryTimeout = t }}
 }
 
-// BrokerErrRetries sets the number of tries that are allowed for requests,
-// overriding the default 20.
+// BrokerErrRetries sets the number of tries that are allowed for requests that
+// fail before a response is even received, overriding the default 20.
 //
 // These retries are for cases where a connection to a broker fails during a
 // request. Generally, you just must retry these requests anyway. However, if

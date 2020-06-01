@@ -190,7 +190,9 @@ func (cl *Client) fetchMetadata(ctx context.Context, all bool, topics []string) 
 		topics = []string{}
 	}
 	tries := 0
+	const key = 3 // metadata request key
 	tryStart := time.Now()
+	retryTimeout := cl.cfg.retryTimeout(key)
 start:
 	tries++
 	broker := cl.broker()
@@ -203,7 +205,7 @@ start:
 	}
 	kresp, err := broker.waitResp(ctx, req)
 	if err != nil {
-		if cl.cfg.retryTimeout > 0 && time.Since(tryStart) > cl.cfg.retryTimeout {
+		if retryTimeout > 0 && time.Since(tryStart) > retryTimeout {
 			return nil, err
 		}
 		if kerr.IsRetriable(err) && tries < cl.cfg.retries || isRetriableBrokerErr(err) && tries < cl.cfg.brokerErrRetries {
@@ -371,6 +373,8 @@ func (cl *Client) request(ctx context.Context, req kmsg.Request) (kmsg.Response,
 	var err error
 	tries := 0
 	tryStart := time.Now()
+	key := req.Key()
+	retryTimeout := cl.cfg.retryTimeout(key)
 start:
 	tries++
 	if metaReq, isMetaReq := req.(*kmsg.MetadataRequest); isMetaReq {
@@ -401,7 +405,7 @@ start:
 	}
 
 	if err != nil {
-		if cl.cfg.retryTimeout > 0 && time.Since(tryStart) > cl.cfg.retryTimeout {
+		if retryTimeout > 0 && time.Since(tryStart) > retryTimeout {
 			return nil, err
 		}
 		if kerr.IsRetriable(err) && tries < cl.cfg.retries || isRetriableBrokerErr(err) && tries < cl.cfg.brokerErrRetries {
@@ -429,22 +433,9 @@ func (cl *Client) brokerOrErr(id int32, err error) (*broker, error) {
 // controller returns the controller broker, forcing a broker load if
 // necessary.
 func (cl *Client) controller(ctx context.Context) (*broker, error) {
-	tries := 0
-	tryStart := time.Now()
-start:
 	var id int32
 	if id = atomic.LoadInt32(&cl.controllerID); id < 0 {
-		tries++
 		if err := cl.fetchBrokerMetadata(ctx); err != nil {
-			if cl.cfg.retryTimeout > 0 && time.Since(tryStart) > cl.cfg.retryTimeout {
-				return nil, err
-			}
-			if kerr.IsRetriable(err) && tries < cl.cfg.retries || isRetriableBrokerErr(err) && tries < cl.cfg.brokerErrRetries {
-				if ok := cl.waitTries(ctx, tries); ok {
-					goto start
-				}
-				return nil, err
-			}
 			return nil, err
 		}
 		if id = atomic.LoadInt32(&cl.controllerID); id < 0 {
@@ -477,8 +468,10 @@ func (cl *Client) loadCoordinator(ctx context.Context, key coordinatorKey) (*bro
 		}
 	}
 
+	const reqKey = 10
 	tries := 0
 	tryStart := time.Now()
+	retryTimeout := cl.cfg.retryTimeout(reqKey)
 start:
 	cl.coordinatorsMu.Lock()
 	coordinator, ok := cl.coordinators[key]
@@ -501,7 +494,7 @@ start:
 	}
 
 	if err != nil {
-		if cl.cfg.retryTimeout > 0 && time.Since(tryStart) > cl.cfg.retryTimeout {
+		if retryTimeout > 0 && time.Since(tryStart) > retryTimeout {
 			return nil, err
 		}
 		if kerr.IsRetriable(err) && tries < cl.cfg.retries || isRetriableBrokerErr(err) && tries < cl.cfg.brokerErrRetries {
