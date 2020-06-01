@@ -15,6 +15,9 @@ import (
 // This client reserves the right to add fields to this struct in the future
 // if Kafka adds more capabilities to Oauth.
 type Auth struct {
+	// Zid is an optional authorization ID to use in authenticating.
+	Zid string
+
 	// Token is the oauthbearer token to use for a single session's
 	// authentication.
 	Token string
@@ -54,7 +57,12 @@ func (fn oauth) Authenticate(ctx context.Context) (sasl.Session, []byte, error) 
 	sort.Slice(kvs, func(i, j int) bool { return kvs[i].k < kvs[j].k })
 
 	// https://tools.ietf.org/html/rfc7628#section-3.1
-	init := []byte("n,,\x01auth=Bearer ")
+	gs2Header := "n," // no channel binding
+	if auth.Zid != "" {
+		gs2Header += "a=" + auth.Zid
+	}
+	gs2Header += ","
+	init := []byte(gs2Header + "\x01auth=Bearer ")
 	init = append(init, auth.Token...)
 	init = append(init, '\x01')
 	for _, kv := range kvs {
