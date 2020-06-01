@@ -8,23 +8,35 @@ import (
 	"github.com/twmb/kafka-go/pkg/sasl"
 )
 
-// Plain returns a sasl mechanism that will call userpassFn whenever sasl
-// authentication is needed. The function must return the username and the
-// password to use for authentication. The username and password is used for a
-// single session.
-func Plain(userpassFn func(context.Context) (string, string, error)) sasl.Mechanism {
-	return plain(userpassFn)
+// Auth contains information for authentication.
+type Auth struct {
+	// Zid is an optional authorization ID to use in authenticating.
+	Zid string
+
+	// User is username to use for authentication.
+	User string
+
+	// Pass is the password to use for authentication.
+	Pass string
+
+	_internal struct{} // require explicit field initalization
 }
 
-type plain func(context.Context) (string, string, error)
+// Plain returns a sasl mechanism that will call authFn whenever sasl
+// authentication is needed. The returned Auth is used for a single session.
+func Plain(authFn func(context.Context) (Auth, error)) sasl.Mechanism {
+	return plain(authFn)
+}
+
+type plain func(context.Context) (Auth, error)
 
 func (plain) Name() string { return "PLAIN" }
 func (fn plain) Authenticate(ctx context.Context) (sasl.Session, []byte, error) {
-	user, pass, err := fn(ctx)
+	auth, err := fn(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
-	return session{}, []byte("\x00" + user + "\x00" + pass), nil
+	return session{}, []byte(auth.Zid + "\x00" + auth.User + "\x00" + auth.Pass), nil
 }
 
 type session struct{}
