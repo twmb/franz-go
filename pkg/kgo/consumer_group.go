@@ -46,7 +46,7 @@ func GroupTopicsRegex() GroupOpt {
 // Balancers sets the group balancers to use for dividing topic partitions
 // among group members, overriding the defaults.
 //
-// The current default is [sticky, roundrobin, range].
+// The current default is [cooperative-sticky].
 //
 // For balancing, Kafka chooses the first protocol that all group members agree
 // to support.
@@ -280,9 +280,7 @@ func (cl *Client) AssignGroup(group string, opts ...GroupOpt) {
 		id: group,
 
 		balancers: []GroupBalancer{
-			StickyBalancer(),
-			RoundRobinBalancer(),
-			RangeBalancer(),
+			CooperativeStickyBalancer(),
 		},
 		cooperative: true, // default yes, potentially canceled below by our balancers
 

@@ -2,9 +2,16 @@
 // support for transactions, regex topic consuming, the latest partition
 // strategies, and more. This client aims to support all KIPs.
 //
-// This client aims to be simple to use while still interacting with Kafka
-// in a near ideal way. If any of this client is confusing, please raise
-// GitHub issues so we can make this clearer.
+// This client aims to be simple to use while still interacting with Kafka in a
+// near ideal way. If any of this client is confusing, please raise GitHub
+// issues so we can make this clearer.
+//
+// Note that the default group consumer balancing strategy is
+// "cooperative-sticky", which is incompatible with the historical (pre 2.4.0)
+// balancers. If you are planning to work with an older Kafka or in an existing
+// consumer group that uses eager balancers, be sure to use the Balancers
+// option when assigning a group. See the documentation on balancers for more
+// information.
 package kgo
 
 import (
