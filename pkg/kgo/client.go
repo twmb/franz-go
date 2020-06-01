@@ -1,6 +1,10 @@
 // Package kgo provides a pure Go efficient Kafka client for Kafka 0.8.0+ with
 // support for transactions, regex topic consuming, the latest partition
-// strategies, and more. This client supports all client KIPs.
+// strategies, and more. This client aims to support all KIPs.
+//
+// This client aims to be simple to use while still interacting with Kafka
+// in a near ideal way. If any of this client is confusing, please raise
+// GitHub issues so we can make this clearer.
 package kgo
 
 import (
