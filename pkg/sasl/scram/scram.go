@@ -26,6 +26,9 @@ import (
 // This client reserves the right to add fields to this struct in the future
 // if Kafka adds more extensions to SCRAM.
 type Auth struct {
+	// Zid is an optional authorization ID to use in authenticating.
+	Zid string
+
 	// User is username to use for authentication.
 	//
 	// Note that this package does not attempt to "prepare" the username
@@ -99,7 +102,12 @@ func (s scram) Authenticate(ctx context.Context) (sasl.Session, []byte, error) {
 		clientFirstMsgBare = append(clientFirstMsgBare, ",tokenauth=true"...) // KIP-48
 	}
 
-	clientFirstMsg := append([]byte("n,,"), clientFirstMsgBare...)
+	gs2Header := "n," // no channel binding
+	if auth.Zid != "" {
+		gs2Header += "a=" + auth.Zid
+	}
+	gs2Header += ","
+	clientFirstMsg := append([]byte(gs2Header), clientFirstMsgBare...)
 	return &session{
 		step:    0,
 		auth:    auth,
