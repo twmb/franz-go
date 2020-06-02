@@ -398,6 +398,12 @@ func BatchMaxBytes(v int32) ProducerOpt {
 	return producerOpt{func(cfg *cfg) { cfg.maxRecordBatchBytes = v }}
 }
 
+// MaxBufferedRecords sets the max amount of records the client will buffer,
+// blocking produces until records are finished if this limit is reached.
+func MaxBufferedRecords(n int) ProducerOpt {
+	return producerOpt{func(cfg *cfg) { cfg.maxBufferedRecords = int64(n) }}
+}
+
 // RecordPartitioner uses the given partitioner to partition records, overriding
 // the default StickyKeyPartitioner.
 func RecordPartitioner(partitioner Partitioner) ProducerOpt {
