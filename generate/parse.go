@@ -344,8 +344,6 @@ func Parse(raw []byte) {
 				s.FlexibleAt = prior.FlexibleAt
 				s.FromFlexible = true
 			}
-			s.Key = prior.Key
-			s.MaxVersion = prior.MaxVersion
 			save()
 			continue
 		}
