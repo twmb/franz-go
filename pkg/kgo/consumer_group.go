@@ -375,7 +375,7 @@ loop:
 			// Waiting for the backoff is a good time to update our
 			// metadata; maybe the error is from stale metadata.
 			backoff := g.cl.cfg.retryBackoff(consecutiveErrors)
-			if err != errLeftGroup { // if we left the group we return below
+			if err != errLeftGroup && err != context.Canceled { // if we left the group we return below
 				g.cl.cfg.logger.Log(LogLevelError, "join and sync loop errored",
 					"err", err,
 					"consecutive_errors", consecutiveErrors,
