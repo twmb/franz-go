@@ -173,7 +173,7 @@ func defaultCfg() cfg {
 		maxRecordBatchBytes: 1000000, // Kafka max.message.bytes default is 1000012
 		maxBufferedRecords:  100000,
 		produceTimeout:      30 * time.Second,
-		partitioner:         StickyKeyPartitioner(),
+		partitioner:         StickyKeyPartitioner(nil), // default to how Kafka partitions
 
 		maxWait:        5000,
 		maxBytes:       50 << 20,

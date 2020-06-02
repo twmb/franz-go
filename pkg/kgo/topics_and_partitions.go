@@ -49,7 +49,7 @@ type topicPartitions struct {
 	v atomic.Value // *topicPartitionsData
 
 	partsMu     sync.Mutex
-	partitioner topicPartitioner
+	partitioner TopicPartitioner
 
 	topic string
 }

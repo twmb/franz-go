@@ -168,12 +168,12 @@ func (cl *Client) doPartitionRecord(parts *topicPartitions, partsData *topicPart
 	parts.partsMu.Lock()
 	defer parts.partsMu.Unlock()
 	if parts.partitioner == nil {
-		parts.partitioner = cl.cfg.partitioner.forTopic(pr.Topic)
+		parts.partitioner = cl.cfg.partitioner.ForTopic(pr.Topic)
 	}
 
 	mapping := partsData.writable
 	possibilities := partsData.writablePartitions
-	if parts.partitioner.requiresConsistency(pr.Record) {
+	if parts.partitioner.RequiresConsistency(pr.Record) {
 		mapping = partsData.all
 		possibilities = partsData.partitions
 	}
@@ -182,14 +182,14 @@ func (cl *Client) doPartitionRecord(parts *topicPartitions, partsData *topicPart
 		return
 	}
 
-	idIdx := parts.partitioner.partition(pr.Record, len(possibilities))
+	idIdx := parts.partitioner.Partition(pr.Record, len(possibilities))
 	id := possibilities[idIdx]
 	partition := mapping[id]
 
 	appended := partition.records.bufferRecord(pr, true) // KIP-480
 	if !appended {
-		parts.partitioner.onNewBatch()
-		idIdx = parts.partitioner.partition(pr.Record, len(possibilities))
+		parts.partitioner.OnNewBatch()
+		idIdx = parts.partitioner.Partition(pr.Record, len(possibilities))
 		id = possibilities[idIdx]
 		partition = mapping[id]
 		partition.records.bufferRecord(pr, false) // KIP-480
