@@ -52,7 +52,17 @@ func (VarintBytes) WriteAppend(l *LineWriter)  { primAppend("VarintBytes", l) }
 func (v String) WriteAppend(l *LineWriter) { compactAppend(v.FromFlexible, "String", l) }
 func (v NullableString) WriteAppend(l *LineWriter) {
 	if v.NullableVersion > 0 {
-		panic("unhandled non-nullable to nullable string")
+		l.Write("if version < %d {", v.NullableVersion)
+		l.Write("var vv string")
+		l.Write("if v != nil {")
+		l.Write("vv = *v")
+		l.Write("}")
+		l.Write("{")
+		l.Write("v := vv")
+		compactAppend(v.FromFlexible, "String", l)
+		l.Write("}")
+		l.Write("} else {")
+		defer l.Write("}")
 	}
 	compactAppend(v.FromFlexible, "NullableString", l)
 }
@@ -136,13 +146,36 @@ func (s Struct) WriteAppend(l *LineWriter) {
 		return
 	}
 
-	if len(tags) > 0 {
-		die("tagged fields in appending is unsupported! fix this!")
-	}
-
 	l.Write("if isFlexible {")
-	l.Write("dst = append(dst, 0)")
-	l.Write("}")
+	defer l.Write("}")
+
+	l.Write("kbin.AppendUvarint(dst, %d)", len(tags))
+	for i := 0; i < len(tags); i++ {
+		f, exists := tags[i]
+		if !exists {
+			die("saw %d tags, but did not see tag %d; expected monotonically increasing", len(tags), i)
+		}
+
+		l.Write("{")
+		l.Write("v := v.%s", f.FieldName)
+		l.Write("kbin.AppendUvarint(dst, %d)", i) // tag num
+		switch f.Type.(type) {
+		case Bool, Int8:
+			l.Write("kbin.AppendUvarint(dst, 1)") // size
+		case Int16:
+			l.Write("kbin.AppendUvarint(dst, 2)")
+		case Int32, Uint32:
+			l.Write("kbin.AppendUvarint(dst, 4)")
+		case Int64, Float64:
+			l.Write("kbin.AppendUvarint(dst, 8)")
+		case Varint:
+			l.Write("kbin.AppendUvarint(dst, kbin.VarintLen(v))")
+		default:
+			die("tag type %v unsupported in append! fix this!", f.Type)
+		}
+		f.Type.WriteAppend(l)
+		l.Write("}")
+	}
 }
 
 // writeBeginAndTag begins a struct field encode/decode and adds the field to

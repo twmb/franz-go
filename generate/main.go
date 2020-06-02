@@ -141,12 +141,15 @@ func main() {
 		if s.TopLevel {
 			if s.ResponseKind != "" {
 				keys2structs = append(keys2structs, s)
-				s.WriteKeyFunc(l)
-				s.WriteMaxVersionFunc(l)
-				s.WriteSetVersionFunc(l)
-				s.WriteGetVersionFunc(l)
-				s.WriteIsFlexibleFunc(l)
+			}
 
+			s.WriteKeyFunc(l)
+			s.WriteMaxVersionFunc(l)
+			s.WriteSetVersionFunc(l)
+			s.WriteGetVersionFunc(l)
+			s.WriteIsFlexibleFunc(l)
+
+			if s.ResponseKind != "" {
 				if s.Admin {
 					s.WriteAdminFunc(l)
 				} else if s.GroupCoordinator {
@@ -155,11 +158,11 @@ func main() {
 					s.WriteTxnCoordinatorFunc(l)
 				}
 				s.WriteResponseKindFunc(l)
-				l.Write("") // newline before append func
-				s.WriteAppendFunc(l)
-			} else {
-				s.WriteDecodeFunc(l)
 			}
+
+			l.Write("") // newline before append/decode func
+			s.WriteAppendFunc(l)
+			s.WriteDecodeFunc(l)
 		} else if !s.Anonymous && !s.WithNoEncoding {
 			s.WriteAppendFunc(l)
 			s.WriteDecodeFunc(l)
