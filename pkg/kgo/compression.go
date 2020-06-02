@@ -188,7 +188,7 @@ func (c *compressor) compress(dst *sliceWriter, src []byte, produceRequestVersio
 }
 
 func (c *compressor) close() {
-	if c.zstdEnc != nil {
+	if c != nil && c.zstdEnc != nil {
 		c.zstdEnc.Close()
 	}
 }
@@ -242,6 +242,9 @@ func (d *decompressor) decompress(src []byte, codec byte) ([]byte, error) {
 }
 
 func (d *decompressor) close() {
+	if d == nil {
+		return
+	}
 	// We must initialize zstdDec here, otherwise a concurrent decompress
 	// may see nil. Alternatively, we could nil check above, but we favor
 	// doing less in the hotter code path.
