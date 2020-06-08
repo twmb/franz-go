@@ -243,12 +243,6 @@ func (c *testConsumer) transact(txnsBeforeQuit int) {
 				}
 				c.partOffsets[po] = struct{}{}
 
-				offsetOrdering := c.part2offsets[part]
-				if len(offsetOrdering) > 0 && rec.offset < offsetOrdering[len(offsetOrdering)-1]+1 {
-					c.errCh <- fmt.Errorf("part %d last offset %d; this offset %d; expected increasing", part, offsetOrdering[len(offsetOrdering)-1], rec.offset)
-				}
-				c.part2offsets[part] = append(offsetOrdering, rec.offset)
-
 				if !rec.control {
 					c.part2key[part] = append(c.part2key[part], rec.num)
 					atomic.AddUint64(&c.consumed, 1)

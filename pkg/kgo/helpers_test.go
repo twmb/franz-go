@@ -120,10 +120,6 @@ type testConsumer struct {
 	// part2key tracks keys we have consumed from which partition
 	part2key map[int32][]int
 
-	// part2offssets tracks offsets we have consumed per partition; must be
-	// strictly increasing
-	part2offsets map[int32][]int64
-
 	// partOffsets tracks partition offsets we have consumed to ensure no
 	// duplicates
 	partOffsets map[partOffset]struct{}
@@ -153,9 +149,8 @@ func newTestConsumer(
 
 		expBody: expBody,
 
-		part2key:     make(map[int32][]int),
-		part2offsets: make(map[int32][]int64),
-		partOffsets:  make(map[partOffset]struct{}),
+		part2key:    make(map[int32][]int),
+		partOffsets: make(map[partOffset]struct{}),
 	}
 }
 
@@ -292,10 +287,7 @@ out:
 		consumers3.part2key,
 	} {
 		allKeys := make([]int, 0, testRecordLimit) // did we receive everything we sent?
-		for part, keys := range part2key {
-			if !sort.IsSorted(sort.IntSlice(keys)) { // did we consume every partition in order?
-				t.Errorf("consumers %d: partition %d does not have sorted keys", level, part)
-			}
+		for _, keys := range part2key {
 			allKeys = append(allKeys, keys...)
 		}
 

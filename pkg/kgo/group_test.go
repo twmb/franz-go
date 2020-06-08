@@ -73,6 +73,7 @@ func TestGroupETL(t *testing.T) {
 						errs <- fmt.Errorf("expected first produced record to partition to have offset 0, got %d", r.Offset)
 					}
 					offsets[r.Partition] = r.Offset
+
 					offsetsMu.Unlock()
 				},
 			)
@@ -120,15 +121,45 @@ func (c *testConsumer) etl(etlsBeforeQuit int) {
 		GroupTopics(c.consumeFrom),
 		Balancers(c.balancer))
 
-	netls := 0 // for if etlsBeforeQuit is non-negative
-
 	defer func() {
+		defer cl.AssignGroup("")
+
+		// If we quit before consuming to the end, the behavior we are
+		// triggering is to poll a batch and _not_ commit. Thus, if
+		// we have etlsBeforeQuit, we do _not_ commit on leave.
+		//
+		// However, we still want to flush to avoid an unnecessary
+		// ErrBrokerDead error for unfinished produces.
 		if err := cl.Flush(context.Background()); err != nil {
 			c.errCh <- fmt.Errorf("unable to flush: %v", err)
 		}
+
+		if etlsBeforeQuit >= 0 {
+			return
+		}
+		cl.BlockingCommitOffsets(
+			context.Background(),
+			cl.UncommittedOffsets(),
+			nil,
+		)
 	}()
 
+	netls := 0 // for if etlsBeforeQuit is non-negative
+
 	for {
+
+		// If we etl a few times before quitting, then we want to
+		// commit at least some of our work (except the last commit,
+		// see above). To do so, we commit every time _before_ we poll.
+		// Thus, the final poll will remain uncommitted.
+		if etlsBeforeQuit > 0 {
+			cl.BlockingCommitOffsets(
+				context.Background(),
+				cl.UncommittedOffsets(),
+				nil,
+			)
+		}
+
 		// We poll with a short timeout so that we do not hang waiting
 		// at the end if another consumer hit the limit.
 		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
@@ -168,15 +199,9 @@ func (c *testConsumer) etl(etlsBeforeQuit int) {
 			}
 			c.partOffsets[partOffset{r.Partition, r.Offset}] = struct{}{}
 
-			// check ordering
-			offsetOrdering := c.part2offsets[r.Partition]
-			if len(offsetOrdering) > 0 && r.Offset < offsetOrdering[len(offsetOrdering)-1]+1 {
-				c.errCh <- fmt.Errorf("part %d last offset %d; this offset %d; expected increasing", r.Partition, offsetOrdering[len(offsetOrdering)-1], r.Offset)
-			}
-			c.part2offsets[r.Partition] = append(offsetOrdering, r.Offset)
-
 			// save key for later for all-keys-consumed validation
 			c.part2key[r.Partition] = append(c.part2key[r.Partition], keyNum)
+
 			c.mu.Unlock()
 
 			atomic.AddUint64(&c.consumed, 1)
