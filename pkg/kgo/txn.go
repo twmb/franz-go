@@ -100,6 +100,11 @@ func (cl *Client) AssignGroupTransactSession(group string, opts ...GroupOpt) *Gr
 // transactional id or is already in a transaction.
 //
 // Begin must be called before producing records in a transaction.
+//
+// Note that a revoke of any partitions sets the session's revoked state, even
+// if the session has not begun. This state is only reset on EndTransaction.
+// Thus, it is safe to begin transactions after a poll (but still before you
+// produce).
 func (s *GroupTransactSession) Begin() error {
 	s.cl.cfg.logger.Log(LogLevelInfo, "beginning transact session")
 	return s.cl.BeginTransaction()
