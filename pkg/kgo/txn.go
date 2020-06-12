@@ -137,6 +137,7 @@ func (s *GroupTransactSession) End(ctx context.Context, commit TransactionEndTry
 	precommit := s.cl.CommittedOffsets()
 	postcommit := s.cl.UncommittedOffsets()
 
+	var oldGeneration bool
 	var commitErr error
 	if wantCommit && !revoked {
 		var commitErrs []string
@@ -153,7 +154,11 @@ func (s *GroupTransactSession) End(ctx context.Context, commit TransactionEndTry
 				for _, t := range resp.Topics {
 					for _, p := range t.Partitions {
 						if err := kerr.ErrorForCode(p.ErrorCode); err != nil {
-							commitErrs = append(commitErrs, fmt.Sprintf("topic %s partition %d: %v", t.Topic, p.Partition, err))
+							if err == kerr.IllegalGeneration {
+								oldGeneration = true
+							} else {
+								commitErrs = append(commitErrs, fmt.Sprintf("topic %s partition %d: %v", t.Topic, p.Partition, err))
+							}
 						}
 					}
 				}
@@ -169,7 +174,7 @@ func (s *GroupTransactSession) End(ctx context.Context, commit TransactionEndTry
 	s.revokeMu.Lock()
 	defer s.revokeMu.Unlock()
 
-	tryCommit := !s.revoked && commitErr == nil
+	tryCommit := !s.revoked && commitErr == nil && !oldGeneration
 	willTryCommit := wantCommit && tryCommit
 
 	s.cl.cfg.logger.Log(LogLevelInfo, "transaction session ending",
