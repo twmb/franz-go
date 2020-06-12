@@ -892,12 +892,12 @@ start:
 
 	var plan balancePlan
 	var protocol string
+	if resp.Protocol != nil {
+		protocol = *resp.Protocol
+	}
+
 	leader := resp.LeaderID == resp.MemberID
 	if leader {
-		if resp.Protocol != nil {
-			protocol = *resp.Protocol
-		}
-
 		g.cl.cfg.logger.Log(LogLevelInfo, "joined, balancing group",
 			"memberID", g.memberID,
 			"instanceID", g.instanceID,
@@ -940,21 +940,15 @@ func (g *groupConsumer) syncGroup(leader bool, plan balancePlan, protocol string
 		Generation:      g.generation,
 		MemberID:        g.memberID,
 		InstanceID:      g.instanceID,
-		ProtocolType:    nil,
-		Protocol:        nil,
+		ProtocolType:    &clientGroupProtocol,
+		Protocol:        &protocol,
 		GroupAssignment: plan.intoAssignment(), // nil unless we are the leader
 	}
 
-	if leader {
-		req.ProtocolType = &clientGroupProtocol
-		req.Protocol = &protocol
-		g.cl.cfg.logger.Log(LogLevelInfo, "syncing",
-			"protocol_type", clientGroupProtocol,
-			"protocol", protocol,
-		)
-	} else {
-		g.cl.cfg.logger.Log(LogLevelInfo, "syncing")
-	}
+	g.cl.cfg.logger.Log(LogLevelInfo, "syncing",
+		"protocol_type", clientGroupProtocol,
+		"protocol", protocol,
+	)
 
 	kresp, err := g.cl.Request(g.ctx, &req)
 	if err != nil {
