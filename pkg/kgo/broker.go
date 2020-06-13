@@ -27,6 +27,8 @@ type promisedReq struct {
 type promisedResp struct {
 	corrID int32
 
+	readTimeout time.Duration
+
 	// With flexible headers, we skip tags at the end of the response
 	// header for now because they're currently unused. However, the
 	// ApiVersions response uses v0 response header (no tags) even if the
@@ -296,8 +298,10 @@ func (b *broker) handleReqs() {
 			continue
 		}
 
+		rt, _ := cxn.timeouts(req)
 		cxn.waitResp(promisedResp{
 			corrID,
+			rt,
 			req.IsFlexible() && req.Key() != 18, // response header not flexible if ApiVersions; see promisedResp doc
 			req.ResponseKind(),
 			pr.promise,
@@ -339,6 +343,7 @@ func (b *broker) loadConnection(reqKey int16) (*brokerCxn, error) {
 	cxn := &brokerCxn{
 		bufPool:  b.cl.bufPool,
 		conn:     conn,
+		timeouts: b.cl.cfg.connTimeout,
 		clientID: b.cl.cfg.id,
 		saslCtx:  b.cl.ctx,
 		sasls:    b.cl.cfg.sasls,
@@ -369,6 +374,8 @@ func (b *broker) connect() (net.Conn, error) {
 type brokerCxn struct {
 	conn     net.Conn
 	versions [kmsg.MaxKey + 1]int16
+
+	timeouts func(kmsg.Request) (time.Duration, time.Duration)
 
 	saslCtx context.Context
 	sasls   []sasl.Mechanism
@@ -422,7 +429,8 @@ start:
 		return err
 	}
 
-	rawResp, err := readResponse(cxn.conn, corrID, false) // api versions does *not* use flexible response headers; see comment in promisedResp
+	rt, _ := cxn.timeouts(req)
+	rawResp, err := readResponse(cxn.conn, corrID, rt, false) // api versions does *not* use flexible response headers; see comment in promisedResp
 	if err != nil {
 		return err
 	}
@@ -484,7 +492,8 @@ start:
 			return err
 		}
 
-		rawResp, err := readResponse(cxn.conn, corrID, req.IsFlexible())
+		rt, _ := cxn.timeouts(req)
+		rawResp, err := readResponse(cxn.conn, corrID, rt, req.IsFlexible())
 		if err != nil {
 			return err
 		}
@@ -525,24 +534,30 @@ func (cxn *brokerCxn) doSasl(authenticate bool) error {
 
 	var lifetimeMillis int64
 
+	// Even if we do not wrap our reads/writes in SASLAuthenticate, we
+	// still use the SASLAuthenticate timeouts.
+	rt, wt := cxn.timeouts(new(kmsg.SASLAuthenticateRequest))
+
 	for done := false; !done; {
 		var challenge []byte
 
 		if !authenticate {
-
 			buf := cxn.bufPool.get()
 
 			buf = append(buf[:0], 0, 0, 0, 0)
 			binary.BigEndian.PutUint32(buf, uint32(len(clientWrite)))
 			buf = append(buf, clientWrite...)
+
+			cxn.conn.SetWriteDeadline(time.Now().Add(wt))
 			_, err = cxn.conn.Write(buf)
+			cxn.conn.SetWriteDeadline(time.Time{})
 
 			cxn.bufPool.put(buf)
 
 			if err != nil {
 				return ErrConnDead
 			}
-			if challenge, err = readConn(cxn.conn); err != nil {
+			if challenge, err = readConn(cxn.conn, rt); err != nil {
 				return err
 			}
 
@@ -556,7 +571,7 @@ func (cxn *brokerCxn) doSasl(authenticate bool) error {
 			if err != nil {
 				return err
 			}
-			rawResp, err := readResponse(cxn.conn, corrID, req.IsFlexible())
+			rawResp, err := readResponse(cxn.conn, corrID, rt, req.IsFlexible())
 			if err != nil {
 				return err
 			}
@@ -604,6 +619,9 @@ func (cxn *brokerCxn) writeRequest(req kmsg.Request) (int32, error) {
 		cxn.corrID,
 		cxn.clientID,
 	)
+	_, wt := cxn.timeouts(req)
+	cxn.conn.SetWriteDeadline(time.Now().Add(wt))
+	defer cxn.conn.SetWriteDeadline(time.Time{})
 	if _, err := cxn.conn.Write(buf); err != nil {
 		return 0, ErrConnDead
 	}
@@ -612,8 +630,10 @@ func (cxn *brokerCxn) writeRequest(req kmsg.Request) (int32, error) {
 	return id, nil
 }
 
-func readConn(conn io.ReadCloser) ([]byte, error) {
+func readConn(conn net.Conn, timeout time.Duration) ([]byte, error) {
 	sizeBuf := make([]byte, 4)
+	conn.SetReadDeadline(time.Now().Add(timeout))
+	defer conn.SetReadDeadline(time.Time{})
 	if _, err := io.ReadFull(conn, sizeBuf[:4]); err != nil {
 		return nil, ErrConnDead
 	}
@@ -631,8 +651,8 @@ func readConn(conn io.ReadCloser) ([]byte, error) {
 
 // readResponse reads a response from conn, ensures the correlation ID is
 // correct, and returns a newly allocated slice on success.
-func readResponse(conn io.ReadCloser, corrID int32, flexibleHeader bool) ([]byte, error) {
-	buf, err := readConn(conn)
+func readResponse(conn net.Conn, corrID int32, timeout time.Duration, flexibleHeader bool) ([]byte, error) {
+	buf, err := readConn(conn, timeout)
 	if err != nil {
 		return nil, err
 	}
@@ -701,7 +721,7 @@ func (cxn *brokerCxn) handleResps() {
 	defer cxn.die() // always track our death
 
 	for pr := range cxn.resps {
-		raw, err := readResponse(cxn.conn, pr.corrID, pr.flexibleHeader)
+		raw, err := readResponse(cxn.conn, pr.corrID, pr.readTimeout, pr.flexibleHeader)
 		if err != nil {
 			pr.promise(nil, err)
 			return

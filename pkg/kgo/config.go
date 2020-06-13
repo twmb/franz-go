@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/twmb/kafka-go/pkg/kmsg"
 	"github.com/twmb/kafka-go/pkg/kversion"
 	"github.com/twmb/kafka-go/pkg/sasl"
 )
@@ -43,8 +44,9 @@ func (consumerOpt) consumerOpt()       {}
 
 type cfg struct {
 	// ***GENERAL SECTION***
-	id     *string
-	dialFn func(string) (net.Conn, error)
+	id          *string
+	dialFn      func(string) (net.Conn, error)
+	connTimeout func(kmsg.Request) (time.Duration, time.Duration)
 
 	logger Logger
 
@@ -205,9 +207,31 @@ func WithLogger(l Logger) Opt {
 	return clientOpt{func(cfg *cfg) { cfg.logger = &wrappedLogger{l} }}
 }
 
-// Dial uses fn to dial addresses, overriding the default dialer that
-// uses a 10s timeout and no TLS.
-func Dial(fn func(string) (net.Conn, error)) Opt {
+// ConnTimeout uses fn to return read and write timeouts per request. The
+// timeouts are applied before reading or writing and cleared after a full
+// message is read or written.
+//
+// Requests usually write quickly, but different requests can take a different
+// amount of time to reply. The default conn timeout function uses a default of
+// 5s for reads and writes for all requests that do not have a timeout field.
+// For requests with a TimeoutMillis field, the default is 5s+TimeoutMillis for
+// the read timeout. For JoinGroup and SyncGroup, the default is
+// 5s+RebalanceTimeout for the read timeout. For SASL handshaking and
+// authenticating, the default is a 5s write timeout and 30s read timeout per
+// step of the process.
+//
+// To get this same behavior but with a different default timeout, you can
+// use the ConnTimeoutBuilder func.
+//
+// Returning 0 for the read or write timeout disables setting a timeout on that
+// side of the request.
+func ConnTimeout(fn func(kmsg.Request) (read, write time.Duration)) Opt {
+	return clientOpt{func(cfg *cfg) { cfg.connTimeout = fn }}
+}
+
+// Dialer uses fn to dial addresses, overriding the default dialer that
+// uses a 10s dial timeout and no TLS.
+func Dialer(fn func(string) (net.Conn, error)) Opt {
 	return clientOpt{func(cfg *cfg) { cfg.dialFn = fn }}
 }
 

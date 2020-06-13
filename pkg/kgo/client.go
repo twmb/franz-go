@@ -137,6 +137,10 @@ func NewClient(opts ...Opt) (*Client, error) {
 	cl.topics.Store(make(map[string]*topicPartitions))
 	cl.metawait.init()
 
+	if cl.cfg.connTimeout == nil {
+		cl.cfg.connTimeout = ConnTimeoutBuilder(5 * time.Second)
+	}
+
 	compressor, err := newCompressor(cl.cfg.compression...)
 	if err != nil {
 		return nil, err
@@ -151,6 +155,75 @@ func NewClient(opts ...Opt) (*Client, error) {
 	go cl.updateMetadataLoop()
 
 	return cl, nil
+}
+
+// ConnTimeoutBuilder returns a function for use in the ConnTimeout opt
+// with the given default timeout.
+func ConnTimeoutBuilder(defaultTimeout time.Duration) func(kmsg.Request) (time.Duration, time.Duration) {
+	var joinMu sync.Mutex
+	var lastRebalanceTimeout time.Duration
+
+	return func(req kmsg.Request) (read, write time.Duration) {
+		// We use a default of 5s for all write timeouts. Since we
+		// build requests in memory and flush in one go, we expect
+		// the process of writing to the connection to be quick.
+		const def = 5 * time.Second
+		millis := func(m int32) time.Duration { return time.Duration(m) * time.Millisecond }
+		switch t := req.(type) {
+		default:
+			return def, def
+
+		// SASL may interact with an external system; we give each step
+		// of the read process 30s by default.
+
+		case *kmsg.SASLHandshakeRequest,
+			*kmsg.SASLAuthenticateRequest:
+			return 30 * time.Second, def
+
+		// Join and sync can take a long time. Sync has no notion of
+		// timeouts, but since the flow of requests should be first
+		// join, then sync, we can stash the timeout from the join.
+
+		case *kmsg.JoinGroupRequest:
+			joinMu.Lock()
+			lastRebalanceTimeout = millis(t.RebalanceTimeoutMillis)
+			joinMu.Unlock()
+
+			return def + millis(t.RebalanceTimeoutMillis), def
+		case *kmsg.SyncGroupRequest:
+			read := def
+			joinMu.Lock()
+			if lastRebalanceTimeout != 0 {
+				read = lastRebalanceTimeout
+			}
+			joinMu.Unlock()
+
+			return read, def
+
+		// All requests below here use the request's TimeoutMillis
+		// field. We could use reflect.FieldByName, but we want to
+		// avoid reflect in this package if possible.
+
+		case *kmsg.ProduceRequest:
+			return def + millis(t.TimeoutMillis), def
+		case *kmsg.FetchRequest:
+			return def + millis(t.MaxWaitMillis), def
+		case *kmsg.CreateTopicsRequest:
+			return def + millis(t.TimeoutMillis), def
+		case *kmsg.DeleteTopicsRequest:
+			return def + millis(t.TimeoutMillis), def
+		case *kmsg.DeleteRecordsRequest:
+			return def + millis(t.TimeoutMillis), def
+		case *kmsg.CreatePartitionsRequest:
+			return def + millis(t.TimeoutMillis), def
+		case *kmsg.ElectLeadersRequest:
+			return def + millis(t.TimeoutMillis), def
+		case *kmsg.AlterPartitionAssignmentsRequest:
+			return def + millis(t.TimeoutMillis), def
+		case *kmsg.ListPartitionReassignmentsRequest:
+			return def + millis(t.TimeoutMillis), def
+		}
+	}
 }
 
 // broker returns a random broker from all brokers ever known.
