@@ -987,9 +987,15 @@ func (cl *Client) handleListOrEpochReq(ctx context.Context, req kmsg.Request) (k
 
 				broker := brokers[topicPartition.leader]
 				if topicPartition.loadErr != nil || broker == nil {
+					errCode := kerr.UnknownServerError.Code
+					if topicPartition.loadErr != nil {
+						if ke, ok := topicPartition.loadErr.(*kerr.Error); ok {
+							errCode = ke.Code
+						}
+					}
 					respParts[topic.Topic] = append(respParts[topic.Topic], kmsg.ListOffsetsResponseTopicPartition{
 						Partition: partition.Partition,
-						ErrorCode: kerr.UnknownServerError.Code,
+						ErrorCode: errCode,
 					})
 					continue
 				}
@@ -1057,9 +1063,15 @@ func (cl *Client) handleListOrEpochReq(ctx context.Context, req kmsg.Request) (k
 
 				broker := brokers[topicPartition.leader]
 				if topicPartition.loadErr != nil || broker == nil {
+					errCode := kerr.UnknownServerError.Code
+					if topicPartition.loadErr != nil {
+						if ke, ok := topicPartition.loadErr.(*kerr.Error); ok {
+							errCode = ke.Code
+						}
+					}
 					respParts[topic.Topic] = append(respParts[topic.Topic], kmsg.OffsetForLeaderEpochResponseTopicPartition{
 						Partition: partition.Partition,
-						ErrorCode: kerr.UnknownServerError.Code,
+						ErrorCode: errCode,
 					})
 					continue
 				}
