@@ -67,6 +67,10 @@ var (
 	// and they hit the configured record timeout limit.
 	ErrRecordTimeout = errors.New("records have timed out before they were able to be produced")
 
+	// ErrMaxBuffered is returned when producing with manual flushing
+	// enabled and the maximum amount of records are buffered.
+	ErrMaxBuffered = errors.New("manual flushing is enabled and the maximum amount of records are buffered, cannot buffer more")
+
 	// ErrNotGroup is returned when trying to call group functions when the
 	// client is not assigned a group.
 	ErrNotGroup = errors.New("invalid group function call when not assigned a group")

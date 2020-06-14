@@ -210,8 +210,12 @@ func (s *sink) createReq() (*produceRequest, *kmsg.AddPartitionsToTxnRequest, bo
 	return req, txnReq, moreToDrain
 }
 
-// maybeDrain begins a drain loop on the sink if the sink is not yet draining.
+// maybeDrain begins a drain loop on the sink if the sink is not yet draining
+// and we are not manually flushing.
 func (s *sink) maybeDrain() {
+	if s.cl.cfg.manualFlushing && atomic.LoadInt32(&s.cl.producer.flushing) == 0 {
+		return
+	}
 	if s.drainState.maybeBegin() {
 		go s.drain()
 	}
@@ -263,7 +267,7 @@ func (s *sink) drain() {
 	// helps when a high volume new sink began draining with no linger;
 	// rather than immediately eating just one record, we allow it to
 	// buffer a bit before we loop draining.
-	if s.cl.cfg.linger == 0 {
+	if s.cl.cfg.linger == 0 && !s.cl.cfg.manualFlushing {
 		time.Sleep(5 * time.Millisecond)
 	}
 
@@ -892,8 +896,8 @@ func (recBuf *recBuf) lockedStopLinger() {
 	}
 }
 
-// unlinger stops lingering if it is started and begins draining.
-func (recBuf *recBuf) unlinger() {
+// stops lingering if it is started and begins draining.
+func (recBuf *recBuf) unlingerAndManuallyDrain() {
 	recBuf.mu.Lock()
 	defer recBuf.mu.Unlock()
 	recBuf.lockedStopLinger()

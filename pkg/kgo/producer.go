@@ -87,6 +87,9 @@ func noPromise(*Record, error) {}
 // through once the topic loads, meaning the record may further wait once
 // buffered. This may be changed in the future if necessary, however, the only
 // reason for a topic to not load promptly is if it does not exist.
+//
+// If manually flushing and there are already MaxBufferedRecords buffered, this
+// will return ErrMaxBuffered.
 func (cl *Client) Produce(
 	ctx context.Context,
 	r *Record,
@@ -111,6 +114,10 @@ func (cl *Client) Produce(
 		drainBuffered := func() {
 			go func() { <-cl.producer.waitBuffer }()
 			cl.finishRecordPromise(promisedRec{noPromise, nil}, nil)
+		}
+		if cl.cfg.manualFlushing {
+			drainBuffered()
+			return ErrMaxBuffered
 		}
 		select {
 		case <-cl.producer.waitBuffer:
@@ -452,10 +459,10 @@ func (cl *Client) Flush(ctx context.Context) error {
 	// linger because the producer's flushing atomic int32 is nonzero. We
 	// must wake anything that could be lingering up, after which all sinks
 	// will loop draining.
-	if cl.cfg.linger > 0 {
+	if cl.cfg.linger > 0 || cl.cfg.manualFlushing {
 		for _, parts := range cl.loadTopics() {
 			for _, part := range parts.load().all {
-				part.records.unlinger()
+				part.records.unlingerAndManuallyDrain()
 			}
 		}
 	}

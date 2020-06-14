@@ -77,6 +77,7 @@ type cfg struct {
 	produceTimeout      time.Duration
 	linger              time.Duration
 	recordTimeout       time.Duration
+	manualFlushing      bool
 
 	partitioner Partitioner
 
@@ -470,6 +471,15 @@ func OnDataLoss(fn func(string, int32)) ProducerOpt {
 // timers running (and stopping and restarting) unnecessarily.
 func Linger(linger time.Duration) ProducerOpt {
 	return producerOpt{func(cfg *cfg) { cfg.linger = linger }}
+}
+
+// ManualFlushing disables auto-flushing when producing. While you can still
+// set lingering, it would be useless to do so.
+//
+// With manual flushing, producing while MaxBufferedRecords have already been
+// produced and not flushed will return ErrMaxBuffered.
+func ManualFlushing() ProducerOpt {
+	return producerOpt{func(cfg *cfg) { cfg.manualFlushing = true }}
 }
 
 // RecordTimeout sets a rough time of how long a record can sit
