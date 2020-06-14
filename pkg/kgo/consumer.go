@@ -538,7 +538,10 @@ func (o *offsetsLoad) mergeInto(c *consumer) {
 func (o *offsetsLoad) loadingToWaiting(c *consumer) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	o.loadingToWaitingLocked(c)
+}
 
+func (o *offsetsLoad) loadingToWaitingLocked(c *consumer) {
 	if o.isEmpty() {
 		return
 	}
@@ -730,7 +733,8 @@ func (c *consumer) tryOffsetLoad(toLoad offsetsLoad) {
 
 	if !toReload.isEmpty() {
 		c.cl.cfg.logger.Log(LogLevelDebug, "offsets to reload", "reload", toReload)
-		toReload.loadingToWaiting(c)
+		// We area already under consumer mu from doOnMetadataUpdate.
+		toReload.loadingToWaitingLocked(c)
 	}
 }
 
