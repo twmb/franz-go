@@ -393,9 +393,6 @@ func (cl *Client) Close() {
 			partition.records.failAllRecords(ErrBrokerDead)
 		}
 	}
-
-	cl.compressor.close()
-	cl.decompressor.close()
 }
 
 // Request issues a request to Kafka, waiting for and returning the response.

@@ -167,7 +167,6 @@ func TestRecBatchAppendTo(t *testing.T) {
 	// ***Compressed record batch check***
 
 	compressor, _ = newCompressor(CompressionCodec{codec: 2}) // snappy
-	defer compressor.close()
 	{
 		kbatch.Attributes |= 0x0002 // snappy
 		kbatch.Records, _ = compressor.compress(sliceWriters.Get().(*sliceWriter), kbatch.Records, 99)
@@ -254,7 +253,6 @@ func TestMessageSetAppendTo(t *testing.T) {
 		kset1raw      = append(kset11.AppendTo(nil), kset12.AppendTo(nil)...) // for comparing & compressing
 		compressor, _ = newCompressor(CompressionCodec{codec: 2})             // snappy
 	)
-	defer compressor.close()
 
 	// golden v0, compressed
 	kset0c := kmsg.MessageV0{
@@ -437,9 +435,6 @@ func BenchmarkAppendBatch(b *testing.B) {
 	} {
 		b.Run(pair.name, func(b *testing.B) {
 			compressor, _ := newCompressor(CompressionCodec{codec: pair.codec})
-			if compressor != nil {
-				defer compressor.close()
-			}
 			ourReq.compressor = compressor
 			for i := 0; i < b.N; i++ {
 				buf = ourReq.AppendTo(buf[:0])

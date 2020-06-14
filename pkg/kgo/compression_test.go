@@ -32,10 +32,7 @@ func TestNewCompressor(t *testing.T) {
 			{codec: 1, level: 1},
 		}},
 	} {
-		c, err := newCompressor(test.codecs...)
-		if c != nil {
-			c.close()
-		}
+		_, err := newCompressor(test.codecs...)
 		fail := err != nil
 		if fail != test.fail {
 			t.Errorf("#%d: ok? %v, exp ok? %v", i, !fail, !test.fail)
@@ -45,7 +42,6 @@ func TestNewCompressor(t *testing.T) {
 
 func TestCompressDecompress(t *testing.T) {
 	d := newDecompressor()
-	defer d.close()
 	in := []byte("foo")
 	for _, produceVersion := range []int16{
 		0, 7,
@@ -86,15 +82,12 @@ func TestCompressDecompress(t *testing.T) {
 				}()
 			}
 			wg.Wait()
-
-			c.close()
 		}
 	}
 }
 
 func BenchmarkCompress(b *testing.B) {
 	c, _ := newCompressor(CompressionCodec{codec: 2}) // snappy
-	defer c.close()
 	in := []byte("foo")
 	for i := 0; i < b.N; i++ {
 		w := sliceWriters.Get().(*sliceWriter)

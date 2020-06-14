@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"io/ioutil"
+	"runtime"
 	"sync"
 
 	"github.com/golang/snappy"
@@ -70,10 +71,10 @@ func (c CompressionCodec) WithLevel(level int) CompressionCodec {
 }
 
 type compressor struct {
-	options []int8
-	zstdEnc *zstd.Encoder
-	gzPool  sync.Pool
-	lz4Pool sync.Pool
+	options  []int8
+	gzPool   sync.Pool
+	lz4Pool  sync.Pool
+	zstdPool sync.Pool
 }
 
 func newCompressor(codecs ...CompressionCodec) (*compressor, error) {
@@ -121,11 +122,22 @@ out:
 			c.lz4Pool = sync.Pool{New: func() interface{} { w := new(lz4.Writer); w.Header.CompressionLevel = int(level); return w }}
 		case 4:
 			level := zstd.EncoderLevel(codec.level)
-			zstdEnc, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(level))
-			if err != nil {
-				zstdEnc, _ = zstd.NewWriter(nil)
+			c.zstdPool = sync.Pool{
+				New: func() interface{} {
+					zstdEnc, err := zstd.NewWriter(nil,
+						zstd.WithEncoderLevel(level),
+						zstd.WithEncoderConcurrency(1))
+					if err != nil {
+						zstdEnc, _ = zstd.NewWriter(nil,
+							zstd.WithEncoderConcurrency(1))
+					}
+					r := &zstdEncoder{zstdEnc}
+					runtime.SetFinalizer(r, func(r *zstdEncoder) {
+						r.inner.Close()
+					})
+					return r
+				},
 			}
-			c.zstdEnc = zstdEnc
 		}
 	}
 
@@ -134,6 +146,10 @@ out:
 	}
 
 	return c, nil
+}
+
+type zstdEncoder struct {
+	inner *zstd.Encoder
 }
 
 // Compress compresses src to buf, returning buf's inner slice once done or nil
@@ -181,23 +197,18 @@ func (c *compressor) compress(dst *sliceWriter, src []byte, produceRequestVersio
 			return nil, -1
 		}
 	case 4:
-		dst.inner = c.zstdEnc.EncodeAll(src, dst.inner)
+		zstdEnc := c.zstdPool.Get().(*zstdEncoder)
+		defer c.zstdPool.Put(zstdEnc)
+		dst.inner = zstdEnc.inner.EncodeAll(src, dst.inner)
 	}
 
 	return dst.inner, int8(use)
 }
 
-func (c *compressor) close() {
-	if c != nil && c.zstdEnc != nil {
-		c.zstdEnc.Close()
-	}
-}
-
 type decompressor struct {
-	zstdOnce  sync.Once
-	zstdDec   *zstd.Decoder
-	ungzPool  sync.Pool
-	unlz4Pool sync.Pool
+	ungzPool   sync.Pool
+	unlz4Pool  sync.Pool
+	unzstdPool sync.Pool
 }
 
 func newDecompressor() *decompressor {
@@ -208,8 +219,22 @@ func newDecompressor() *decompressor {
 		unlz4Pool: sync.Pool{
 			New: func() interface{} { return new(lz4.Reader) },
 		},
+		unzstdPool: sync.Pool{
+			New: func() interface{} {
+				zstdDec, _ := zstd.NewReader(nil, zstd.WithDecoderConcurrency(1))
+				r := &zstdDecoder{zstdDec}
+				runtime.SetFinalizer(r, func(r *zstdDecoder) {
+					r.inner.Close()
+				})
+				return r
+			},
+		},
 	}
 	return d
+}
+
+type zstdDecoder struct {
+	inner *zstd.Decoder
 }
 
 func (d *decompressor) decompress(src []byte, codec byte) ([]byte, error) {
@@ -234,22 +259,13 @@ func (d *decompressor) decompress(src []byte, codec byte) ([]byte, error) {
 		unlz4.Reset(bytes.NewReader(src))
 		return ioutil.ReadAll(unlz4)
 	case 4:
-		d.zstdOnce.Do(func() { d.zstdDec, _ = zstd.NewReader(nil) })
-		return d.zstdDec.DecodeAll(src, nil)
+		unzstd := d.unzstdPool.Get().(*zstdDecoder)
+		defer d.unzstdPool.Put(unzstd)
+		unzstd.inner.Reset(bytes.NewReader(src))
+		return unzstd.inner.DecodeAll(src, nil)
 	default:
 		return nil, errors.New("unknown compression codec")
 	}
-}
-
-func (d *decompressor) close() {
-	if d == nil {
-		return
-	}
-	// We must initialize zstdDec here, otherwise a concurrent decompress
-	// may see nil. Alternatively, we could nil check above, but we favor
-	// doing less in the hotter code path.
-	d.zstdOnce.Do(func() { d.zstdDec, _ = zstd.NewReader(nil) })
-	d.zstdDec.Close()
 }
 
 var xerialPfx = []byte{130, 83, 78, 65, 80, 80, 89, 0}
