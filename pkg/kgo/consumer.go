@@ -515,8 +515,8 @@ func (o *offsetsLoad) mergeInto(c *consumer) {
 		src offsetLoadMap
 		dst *offsetLoadMap
 	}{
-		{o.list, &c.offsetsLoading.list},
-		{o.epoch, &c.offsetsLoading.epoch},
+		{o.list, &c.offsetsWaitingLoad.list},
+		{o.epoch, &c.offsetsWaitingLoad.epoch},
 	} {
 		for topic, partitions := range loads.src {
 			for partition, offset := range partitions {
