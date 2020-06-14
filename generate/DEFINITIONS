@@ -1673,7 +1673,9 @@ DescribeGroupsResponse =>
     AuthorizedOperations: int32 // v3+
 
 // ListGroupsRequest issues a request to list all groups.
-ListGroupsRequest => key 16, max version 4, flexible v3+, admin
+//
+// To list all groups in a cluster, this must be issued to every broker.
+ListGroupsRequest => key 16, max version 4, flexible v3+
   // StatesFilter, proposed in KIP-518 and introduced in Kafka 2.6.0,
   // allows filtering groups by state, where a state is any of
   // "Preparing", "PreparingRebalance", "CompletingRebalance", "Stable",
@@ -1997,6 +1999,9 @@ DeleteRecordsResponse =>
 // InitProducerIDRequest initializes a producer ID for idempotent transactions,
 // and if using transactions, a producer epoch. This is the first request
 // necessary to begin idempotent producing or transactions.
+//
+// Note that you do not need to go to a txn coordinator if you are initializing
+// a producer id without a transactional id.
 InitProducerIDRequest => key 22, max version 3, flexible v2+, txn coordinator
   // TransactionalID is the ID to use for transactions if using transactions.
   TransactionalID: nullable-string

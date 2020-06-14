@@ -6080,6 +6080,8 @@ func (v *DescribeGroupsResponse) ReadFrom(src []byte) error {
 }
 
 // ListGroupsRequest issues a request to list all groups.
+//
+// To list all groups in a cluster, this must be issued to every broker.
 type ListGroupsRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
@@ -6096,7 +6098,6 @@ func (*ListGroupsRequest) MaxVersion() int16          { return 4 }
 func (v *ListGroupsRequest) SetVersion(version int16) { v.Version = version }
 func (v *ListGroupsRequest) GetVersion() int16        { return v.Version }
 func (v *ListGroupsRequest) IsFlexible() bool         { return v.Version >= 3 }
-func (v *ListGroupsRequest) IsAdminRequest()          {}
 func (v *ListGroupsRequest) ResponseKind() Response   { return &ListGroupsResponse{Version: v.Version} }
 
 func (v *ListGroupsRequest) AppendTo(dst []byte) []byte {
@@ -7286,6 +7287,9 @@ func (v *DeleteRecordsResponse) ReadFrom(src []byte) error {
 // InitProducerIDRequest initializes a producer ID for idempotent transactions,
 // and if using transactions, a producer epoch. This is the first request
 // necessary to begin idempotent producing or transactions.
+//
+// Note that you do not need to go to a txn coordinator if you are initializing
+// a producer id without a transactional id.
 type InitProducerIDRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16

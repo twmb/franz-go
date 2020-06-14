@@ -420,6 +420,10 @@ func (cl *Client) Close() {
 // this will properly split the request to send partitions to the appropriate
 // broker.
 //
+// If the request is a ListGroups request, this will send ListGroups to every
+// known broker after a broker metadata lookup. The first error code of any
+// response is kept, and all responded groups are merged.
+//
 // In short, this method tries to do the correct thing depending on what type
 // of request is being issued.
 //
@@ -480,6 +484,8 @@ start:
 		resp, err = cl.handleListOrEpochReq(ctx, listReq)
 	} else if offsetEpochReq, ok := req.(*kmsg.OffsetForLeaderEpochRequest); ok {
 		resp, err = cl.handleListOrEpochReq(ctx, offsetEpochReq)
+	} else if listGroupsReq, ok := req.(*kmsg.ListGroupsRequest); ok {
+		resp, err = cl.handleListGroupsReq(ctx, listGroupsReq)
 	} else {
 		resp, err = cl.broker().waitResp(ctx, req)
 	}
@@ -908,6 +914,62 @@ func (cl *Client) Broker(id int) *Broker {
 		id: int32(id),
 		cl: cl,
 	}
+}
+
+// handleListGroupsReq issues a list group request to every broker following a
+// metadata update. We do no retries unless everything fails, at which point
+// the calling function will retry.
+func (cl *Client) handleListGroupsReq(ctx context.Context, req *kmsg.ListGroupsRequest) (kmsg.Response, error) {
+	if err := cl.fetchBrokerMetadata(ctx); err != nil {
+		return nil, err
+	}
+
+	var wg sync.WaitGroup
+	type respErr struct {
+		resp kmsg.Response
+		err  error
+	}
+	cl.brokersMu.RLock()
+	respErrs := make(chan respErr, len(cl.brokers))
+	var numReqs int
+	for _, br := range cl.brokers {
+		if br.id < 0 {
+			continue // we skip seed brokers
+		}
+		wg.Add(1)
+		numReqs++
+		go func(br *broker) {
+			defer wg.Done()
+			resp, err := br.waitResp(ctx, req)
+			respErrs <- respErr{resp, err}
+		}(br)
+	}
+	cl.brokersMu.RUnlock()
+	wg.Wait()
+	close(respErrs)
+
+	var mergeResp kmsg.ListGroupsResponse
+	var firstErr error
+	var errs int
+	for re := range respErrs {
+		if re.err != nil {
+			if firstErr == nil {
+				firstErr = re.err
+				errs++
+			}
+			continue
+		}
+		resp := re.resp.(*kmsg.ListGroupsResponse)
+		if mergeResp.ErrorCode == 0 {
+			mergeResp.ErrorCode = resp.ErrorCode
+		}
+		mergeResp.Groups = append(mergeResp.Groups, resp.Groups...)
+	}
+
+	if errs == numReqs {
+		return nil, firstErr
+	}
+	return &mergeResp, nil
 }
 
 // handleListOrEpochReq is simple-in-theory function that is long due to types.
