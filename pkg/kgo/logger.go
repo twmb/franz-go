@@ -2,7 +2,7 @@ package kgo
 
 import (
 	"fmt"
-	"os"
+	"io"
 	"strings"
 )
 
@@ -53,17 +53,19 @@ type Logger interface {
 	Log(level LogLevel, msg string, keyvals ...interface{})
 }
 
-// BasicLogger returns a logger that will print to stderr in the following
-// format:
+// BasicLogger returns a logger that will print to dst in the following format:
 //
 //     prefix [LEVEL] message; key: val, key: val
 //
 // prefixFn is optional; if non-nil, it is called for a per-message prefix.
-func BasicLogger(level LogLevel, prefixFn func() string) Logger {
-	return &basicLogger{level, prefixFn}
+//
+// Writes to dst are not checked for errors.
+func BasicLogger(dst io.Writer, level LogLevel, prefixFn func() string) Logger {
+	return &basicLogger{dst, level, prefixFn}
 }
 
 type basicLogger struct {
+	dst   io.Writer
 	level LogLevel
 	pfxFn func() string
 }
@@ -91,7 +93,7 @@ func (b *basicLogger) Log(level LogLevel, msg string, keyvals ...interface{}) {
 
 	buf.inner = append(buf.inner, '\n')
 
-	os.Stderr.Write(buf.inner)
+	b.dst.Write(buf.inner)
 }
 
 // nopLogger, the default logger, drops everything.

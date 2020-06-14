@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"os"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -36,7 +37,7 @@ func TestGroupETL(t *testing.T) {
 	////////////////////
 
 	go func() {
-		cl, _ := NewClient(WithLogger(BasicLogger(testLogLevel, nil)))
+		cl, _ := NewClient(WithLogger(BasicLogger(os.Stderr, testLogLevel, nil)))
 		defer cl.Close()
 
 		var offsetsMu sync.Mutex
@@ -114,7 +115,7 @@ func (c *testConsumer) goGroupETL(etlsBeforeQuit int) {
 
 func (c *testConsumer) etl(etlsBeforeQuit int) {
 	defer c.wg.Done()
-	cl, _ := NewClient(WithLogger(BasicLogger(testLogLevel, nil)))
+	cl, _ := NewClient(WithLogger(BasicLogger(os.Stderr, testLogLevel, nil)))
 	defer cl.Close()
 
 	cl.AssignGroup(c.group,

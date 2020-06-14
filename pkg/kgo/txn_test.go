@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"os"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -27,7 +28,7 @@ func TestTxnEtl(t *testing.T) {
 
 	go func() {
 		cl, _ := NewClient(
-			WithLogger(BasicLogger(testLogLevel, nil)),
+			WithLogger(BasicLogger(os.Stderr, testLogLevel, nil)),
 			TransactionalID("p"+randsha()),
 		)
 
@@ -138,7 +139,7 @@ func (c *testConsumer) transact(txnsBeforeQuit int) {
 	defer c.wg.Done()
 	cl, _ := NewClient(
 		TransactionalID(randsha()),
-		WithLogger(BasicLogger(testLogLevel, nil)),
+		WithLogger(BasicLogger(os.Stderr, testLogLevel, nil)),
 		// Control records have their own unique offset, so for testing,
 		// we keep the record to ensure we do not doubly consume control
 		// records (unless aborting).
