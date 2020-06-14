@@ -44,6 +44,8 @@ type Client struct {
 	anyBrokerIdx int
 	stopBrokers  bool // set to true on close to stop updateBrokers
 
+	connTimeoutFn func(kmsg.Request) (time.Duration, time.Duration)
+
 	bufPool bufPool // for to brokers to share underlying reusable request buffers
 
 	controllerID int32 // atomic
@@ -120,6 +122,8 @@ func NewClient(opts ...Opt) (*Client, error) {
 		controllerID: unknownControllerID,
 		brokers:      make(map[int32]*broker),
 
+		connTimeoutFn: connTimeoutBuilder(cfg.connTimeoutOverhead),
+
 		bufPool: newBufPool(),
 
 		decompressor: newDecompressor(),
@@ -137,10 +141,6 @@ func NewClient(opts ...Opt) (*Client, error) {
 	cl.topics.Store(make(map[string]*topicPartitions))
 	cl.metawait.init()
 
-	if cl.cfg.connTimeout == nil {
-		cl.cfg.connTimeout = ConnTimeoutBuilder(5 * time.Second)
-	}
-
 	compressor, err := newCompressor(cl.cfg.compression...)
 	if err != nil {
 		return nil, err
@@ -157,9 +157,7 @@ func NewClient(opts ...Opt) (*Client, error) {
 	return cl, nil
 }
 
-// ConnTimeoutBuilder returns a function for use in the ConnTimeout opt
-// with the given default timeout.
-func ConnTimeoutBuilder(defaultTimeout time.Duration) func(kmsg.Request) (time.Duration, time.Duration) {
+func connTimeoutBuilder(defaultTimeout time.Duration) func(kmsg.Request) (time.Duration, time.Duration) {
 	var joinMu sync.Mutex
 	var lastRebalanceTimeout time.Duration
 
@@ -203,9 +201,16 @@ func ConnTimeoutBuilder(defaultTimeout time.Duration) func(kmsg.Request) (time.D
 		// All requests below here use the request's TimeoutMillis
 		// field. We could use reflect.FieldByName, but we want to
 		// avoid reflect in this package if possible.
+		//
+		// We also handle our own two internal package requests,
+		// produceRequest and fetchRequest.
 
+		case *produceRequest:
+			return def + millis(t.timeout), def
 		case *kmsg.ProduceRequest:
 			return def + millis(t.TimeoutMillis), def
+		case *fetchRequest:
+			return def + millis(t.maxWait), def
 		case *kmsg.FetchRequest:
 			return def + millis(t.MaxWaitMillis), def
 		case *kmsg.CreateTopicsRequest:

@@ -343,7 +343,7 @@ func (b *broker) loadConnection(reqKey int16) (*brokerCxn, error) {
 	cxn := &brokerCxn{
 		bufPool:  b.cl.bufPool,
 		conn:     conn,
-		timeouts: b.cl.cfg.connTimeout,
+		timeouts: b.cl.connTimeoutFn,
 		clientID: b.cl.cfg.id,
 		saslCtx:  b.cl.ctx,
 		sasls:    b.cl.cfg.sasls,
@@ -548,9 +548,13 @@ func (cxn *brokerCxn) doSasl(authenticate bool) error {
 			binary.BigEndian.PutUint32(buf, uint32(len(clientWrite)))
 			buf = append(buf, clientWrite...)
 
-			cxn.conn.SetWriteDeadline(time.Now().Add(wt))
+			if wt > 0 {
+				cxn.conn.SetWriteDeadline(time.Now().Add(wt))
+			}
 			_, err = cxn.conn.Write(buf)
-			cxn.conn.SetWriteDeadline(time.Time{})
+			if wt > 0 {
+				cxn.conn.SetWriteDeadline(time.Time{})
+			}
 
 			cxn.bufPool.put(buf)
 
@@ -620,8 +624,10 @@ func (cxn *brokerCxn) writeRequest(req kmsg.Request) (int32, error) {
 		cxn.clientID,
 	)
 	_, wt := cxn.timeouts(req)
-	cxn.conn.SetWriteDeadline(time.Now().Add(wt))
-	defer cxn.conn.SetWriteDeadline(time.Time{})
+	if wt > 0 {
+		cxn.conn.SetWriteDeadline(time.Now().Add(wt))
+		defer cxn.conn.SetWriteDeadline(time.Time{})
+	}
 	if _, err := cxn.conn.Write(buf); err != nil {
 		return 0, ErrConnDead
 	}
@@ -632,8 +638,10 @@ func (cxn *brokerCxn) writeRequest(req kmsg.Request) (int32, error) {
 
 func readConn(conn net.Conn, timeout time.Duration) ([]byte, error) {
 	sizeBuf := make([]byte, 4)
-	conn.SetReadDeadline(time.Now().Add(timeout))
-	defer conn.SetReadDeadline(time.Time{})
+	if timeout > 0 {
+		conn.SetReadDeadline(time.Now().Add(timeout))
+		defer conn.SetReadDeadline(time.Time{})
+	}
 	if _, err := io.ReadFull(conn, sizeBuf[:4]); err != nil {
 		return nil, ErrConnDead
 	}

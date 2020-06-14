@@ -8,7 +8,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/twmb/kafka-go/pkg/kmsg"
 	"github.com/twmb/kafka-go/pkg/kversion"
 	"github.com/twmb/kafka-go/pkg/sasl"
 )
@@ -44,9 +43,9 @@ func (consumerOpt) consumerOpt()       {}
 
 type cfg struct {
 	// ***GENERAL SECTION***
-	id          *string
-	dialFn      func(string) (net.Conn, error)
-	connTimeout func(kmsg.Request) (time.Duration, time.Duration)
+	id                  *string
+	dialFn              func(string) (net.Conn, error)
+	connTimeoutOverhead time.Duration
 
 	logger Logger
 
@@ -207,26 +206,21 @@ func WithLogger(l Logger) Opt {
 	return clientOpt{func(cfg *cfg) { cfg.logger = &wrappedLogger{l} }}
 }
 
-// ConnTimeout uses fn to return read and write timeouts per request. The
-// timeouts are applied before reading or writing and cleared after a full
-// message is read or written.
+// ConnTimeoutOverhead uses the given time as overhead while deadlining
+// requests, overriding the default overhead of 5s.
 //
-// Requests usually write quickly, but different requests can take a different
-// amount of time to reply. The default conn timeout function uses a default of
-// 5s for reads and writes for all requests that do not have a timeout field.
-// For requests with a TimeoutMillis field, the default is 5s+TimeoutMillis for
-// the read timeout. For JoinGroup and SyncGroup, the default is
-// 5s+RebalanceTimeout for the read timeout. For SASL handshaking and
-// authenticating, the default is a 5s write timeout and 30s read timeout per
-// step of the process.
+// For most requests, the overhead will simply be the timeout. However, for any
+// request with a TimeoutMillis field, the overhead is added on top of the
+// request's TimeoutMillis. This ensures that we give Kafka enough time to
+// actually process the request given the timeout, while still having a
+// deadline on the connection as a whole to ensure it does not hang.
 //
-// To get this same behavior but with a different default timeout, you can
-// use the ConnTimeoutBuilder func.
+// For writes, the timeout is always the overhead. We buffer writes in our
+// client before one quick flush, so we always expect the write to be fast.
 //
-// Returning 0 for the read or write timeout disables setting a timeout on that
-// side of the request.
-func ConnTimeout(fn func(kmsg.Request) (read, write time.Duration)) Opt {
-	return clientOpt{func(cfg *cfg) { cfg.connTimeout = fn }}
+// Using 0 has the overhead disables timeouts.
+func ConnTimeoutOverhead(overhead time.Duration) Opt {
+	return clientOpt{func(cfg *cfg) { cfg.connTimeoutOverhead = overhead }}
 }
 
 // Dialer uses fn to dial addresses, overriding the default dialer that
