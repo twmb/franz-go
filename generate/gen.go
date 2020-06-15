@@ -504,6 +504,9 @@ func (s Struct) WriteTxnCoordinatorFunc(l *LineWriter) {
 func (s Struct) WriteResponseKindFunc(l *LineWriter) {
 	l.Write("func (v *%s) ResponseKind() Response { return &%s{Version: v.Version }}", s.Name, s.ResponseKind)
 }
+func (s Struct) WriteRequestKindFunc(l *LineWriter) {
+	l.Write("func (v *%s) RequestKind() Request { return &%s{Version: v.Version }}", s.Name, s.RequestKind)
+}
 func (s Struct) WriteIsFlexibleFunc(l *LineWriter) {
 	if s.FlexibleAt >= 0 {
 		l.Write("func (v *%s) IsFlexible() bool { return v.Version >= %d }", s.Name, s.FlexibleAt)

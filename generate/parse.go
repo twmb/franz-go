@@ -340,6 +340,7 @@ func Parse(raw []byte) {
 			}
 			name = strings.TrimSuffix(name, " =>")
 			prior.ResponseKind = name
+			s.RequestKind = prior.Name
 			if prior.FromFlexible {
 				s.FlexibleAt = prior.FlexibleAt
 				s.FromFlexible = true

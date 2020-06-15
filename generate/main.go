@@ -97,7 +97,8 @@ type (
 		Key              int
 		MaxVersion       int
 		FlexibleAt       int
-		ResponseKind     string
+		ResponseKind     string // for requests
+		RequestKind      string // for responses
 	}
 )
 
@@ -134,13 +135,13 @@ func main() {
 	l.Write("// Note that this value will change as Kafka adds more messages.")
 	l.Write("const MaxKey = %d\n", maxKey)
 
-	var keys2structs []Struct
+	var name2structs []Struct
 
 	for _, s := range newStructs {
 		s.WriteDefn(l)
 		if s.TopLevel {
 			if s.ResponseKind != "" {
-				keys2structs = append(keys2structs, s)
+				name2structs = append(name2structs, s)
 			}
 
 			s.WriteKeyFunc(l)
@@ -159,6 +160,9 @@ func main() {
 				}
 				s.WriteResponseKindFunc(l)
 			}
+			if s.RequestKind != "" {
+				s.WriteRequestKindFunc(l)
+			}
 
 			l.Write("") // newline before append/decode func
 			s.WriteAppendFunc(l)
@@ -174,8 +178,19 @@ func main() {
 	l.Write("func RequestForKey(key int16) Request {")
 	l.Write("switch key {")
 	l.Write("default: return nil")
-	for _, key2struct := range keys2structs {
+	for _, key2struct := range name2structs {
 		l.Write("case %d: return new(%s)", key2struct.Key, key2struct.Name)
+	}
+	l.Write("}")
+	l.Write("}")
+
+	l.Write("// ResponseForKey returns the response corresponding to the given request key")
+	l.Write("// or nil if the key is unknown.")
+	l.Write("func ResponseForKey(key int16) Response {")
+	l.Write("switch key {")
+	l.Write("default: return nil")
+	for _, key2struct := range name2structs {
+		l.Write("case %d: return new(%s)", key2struct.Key, strings.TrimSuffix(key2struct.Name, "Request")+"Response")
 	}
 	l.Write("}")
 	l.Write("}")
@@ -185,7 +200,7 @@ func main() {
 	l.Write("func NameForKey(key int16) string {")
 	l.Write("switch key {")
 	l.Write("default: return \"\"")
-	for _, key2struct := range keys2structs {
+	for _, key2struct := range name2structs {
 		l.Write("case %d: return \"%s\"", key2struct.Key, strings.TrimSuffix(key2struct.Name, "Request"))
 	}
 	l.Write("}")
