@@ -54,40 +54,40 @@ func Test_stickyAdjustCooperative(t *testing.T) {
 	}
 
 	inPlan := map[groupMemberID]map[string][]int32{
-		id("a"): map[string][]int32{
+		id("a"): {
 			"t1":   {1, 4},
 			"t2":   {3},
 			"tnew": {1, 2},
 		},
-		id("b"): map[string][]int32{
+		id("b"): {
 			"t2":    {2},
 			"tnew":  {3, 4},
 			"tmove": {1},
 		},
-		id("c"): map[string][]int32{
+		id("c"): {
 			"t1":    {3},
 			"t2":    {1},
 			"tnew":  {5},
 			"tmove": {2},
 		},
-		id("d"): map[string][]int32{
+		id("d"): {
 			"t1": {2},
 		},
 	}
 
 	expPlan := map[groupMemberID]map[string][]int32{
-		id("a"): map[string][]int32{
+		id("a"): {
 			"t1":   {1, 4},
 			"tnew": {1, 2},
 		},
-		id("b"): map[string][]int32{
+		id("b"): {
 			"t2":   {2},
 			"tnew": {3, 4},
 		},
-		id("c"): map[string][]int32{
+		id("c"): {
 			"tnew": {5},
 		},
-		id("d"): map[string][]int32{
+		id("d"): {
 			"t1": {2},
 		},
 	}

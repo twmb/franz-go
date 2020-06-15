@@ -47,12 +47,12 @@ func TestCompressDecompress(t *testing.T) {
 		0, 7,
 	} {
 		for _, codecs := range [][]CompressionCodec{
-			[]CompressionCodec{{codec: 0}},
-			[]CompressionCodec{{codec: 1}},
-			[]CompressionCodec{{codec: 2}},
-			[]CompressionCodec{{codec: 3}},
-			[]CompressionCodec{{codec: 4}},
-			[]CompressionCodec{{codec: 4}, {codec: 3}},
+			{{codec: 0}},
+			{{codec: 1}},
+			{{codec: 2}},
+			{{codec: 3}},
+			{{codec: 4}},
+			{{codec: 4}, {codec: 3}},
 		} {
 			c, _ := newCompressor(codecs...)
 			if c == nil {
