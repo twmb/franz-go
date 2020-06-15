@@ -47,6 +47,10 @@ type Request interface {
 	// AppendTo appends this message in wire protocol form to a slice and
 	// returns the slice.
 	AppendTo([]byte) []byte
+	// ReadFrom parses all of the input slice into the response type.
+	//
+	// This should return an error if too little data is input.
+	ReadFrom([]byte) error
 	// ResponseKind returns an empty Response that is expected for
 	// this message request.
 	ResponseKind() Response
@@ -80,10 +84,29 @@ type TxnCoordinatorRequest interface {
 
 // Response represents a type that Kafka responds with.
 type Response interface {
+	// Key returns the protocol key for this message kind.
+	Key() int16
+	// MaxVersion returns the maximum protocol version this message
+	// supports.
+	MaxVersion() int16
+	// SetVersion sets the version to use for this request and response.
+	SetVersion(int16)
+	// GetVersion returns the version currently set to use for the request
+	// and response.
+	GetVersion() int16
+	// IsFlexible returns whether the request at its current version is
+	// "flexible" as per the KIP-482.
+	IsFlexible() bool
+	// AppendTo appends this message in wire protocol form to a slice and
+	// returns the slice.
+	AppendTo([]byte) []byte
 	// ReadFrom parses all of the input slice into the response type.
 	//
-	// This should return an error if too much or too little data is input.
+	// This should return an error if too little data is input.
 	ReadFrom([]byte) error
+	// RequestKind returns an empty Request that is expected for
+	// this message request.
+	RequestKind() Request
 }
 
 // AppendRequest appends a full message request to dst, returning the updated
