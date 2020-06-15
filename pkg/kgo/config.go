@@ -47,6 +47,9 @@ type cfg struct {
 	dialFn              func(string) (net.Conn, error)
 	connTimeoutOverhead time.Duration
 
+	softwareName    string // KIP-511
+	softwareVersion string // KIP-511
+
 	logger Logger
 
 	seedBrokers []string
@@ -121,6 +124,9 @@ func defaultCfg() cfg {
 	return cfg{
 		id:     &defaultID,
 		dialFn: stddial,
+
+		softwareName:    "kgo",
+		softwareVersion: "0.1.0",
 
 		logger: new(nopLogger),
 
@@ -197,6 +203,23 @@ func ClientID(id string) Opt {
 // brokers, overriding the default "kgo".
 func DisableClientID() Opt {
 	return clientOpt{func(cfg *cfg) { cfg.id = nil }}
+}
+
+// SoftwareNameAndVersion sets the client software name and version that will
+// be sent to Kafka as part of the ApiVersions request as of Kafka 2.4.0,
+// overriding the default "kgo" and internal version number.
+//
+// Kafka exposes this through metrics to help operators understand the impact
+// of clients.
+//
+// It is generally not recommended to set this. As well, if you do, the name
+// and version must match the following regular expression:
+//
+//     [a-zA-Z0-9](?:[a-zA-Z0-9\\-.]*[a-zA-Z0-9])?
+//
+// Note this means neither the name nor version can be empty.
+func SoftwareNameAndVersion(name, version string) Opt {
+	return clientOpt{func(cfg *cfg) { cfg.softwareName = name; cfg.softwareVersion = version }}
 }
 
 // WithLogger sets the client to use the given logger, overriding the default

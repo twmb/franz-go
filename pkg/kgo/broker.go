@@ -341,12 +341,14 @@ func (b *broker) loadConnection(reqKey int16) (*brokerCxn, error) {
 	}
 
 	cxn := &brokerCxn{
-		bufPool:  b.cl.bufPool,
-		conn:     conn,
-		timeouts: b.cl.connTimeoutFn,
-		clientID: b.cl.cfg.id,
-		saslCtx:  b.cl.ctx,
-		sasls:    b.cl.cfg.sasls,
+		bufPool:         b.cl.bufPool,
+		conn:            conn,
+		timeouts:        b.cl.connTimeoutFn,
+		clientID:        b.cl.cfg.id,
+		softwareName:    b.cl.cfg.softwareName,
+		softwareVersion: b.cl.cfg.softwareVersion,
+		saslCtx:         b.cl.ctx,
+		sasls:           b.cl.cfg.sasls,
 	}
 	if err = cxn.init(b.cl.cfg.maxVersions); err != nil {
 		conn.Close()
@@ -388,6 +390,9 @@ type brokerCxn struct {
 	corrID   int32
 	clientID *string
 
+	softwareName    string // for KIP-511
+	softwareVersion string // for KIP-511
+
 	// dieMu guards sending to resps in case the connection has died.
 	dieMu sync.RWMutex
 	// resps manages reading kafka responses.
@@ -421,8 +426,8 @@ func (cxn *brokerCxn) requestAPIVersions() error {
 start:
 	req := &kmsg.ApiVersionsRequest{
 		Version:               maxVersion,
-		ClientSoftwareName:    "kgo",
-		ClientSoftwareVersion: "0.0.1",
+		ClientSoftwareName:    cxn.softwareName,
+		ClientSoftwareVersion: cxn.softwareVersion,
 	}
 	corrID, err := cxn.writeRequest(req)
 	if err != nil {
