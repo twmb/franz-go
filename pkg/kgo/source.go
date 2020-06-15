@@ -987,6 +987,9 @@ func (f *fetchRequest) AppendTo(dst []byte) []byte {
 	}
 	return req.AppendTo(dst)
 }
+func (*fetchRequest) ReadFrom([]byte) error {
+	panic("unreachable -- the client never uses ReadFrom on its internal fetchRequest")
+}
 func (f *fetchRequest) ResponseKind() kmsg.Response {
 	return &kmsg.FetchResponse{Version: f.version}
 }
