@@ -974,10 +974,8 @@ func (recBuf *recBuf) clearFailing() {
 	recBuf.mu.Lock()
 	defer recBuf.mu.Unlock()
 
-	wasFailing := recBuf.failing
 	recBuf.failing = false
-
-	if wasFailing && len(recBuf.batches) != recBuf.batchDrainIdx {
+	if len(recBuf.batches) != recBuf.batchDrainIdx {
 		recBuf.sink.maybeDrain()
 	}
 }

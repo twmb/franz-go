@@ -438,7 +438,7 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how
 			// use.
 			part := topicParts.all[partition]
 			if offset.request >= 0 && part != nil {
-				part.cursor.setOffset(part.leaderEpoch, true, offset.request, offset.epoch, seq)
+				part.cursor.setOffset(part.leaderEpoch, true, offset.request, -1, seq)
 				c.usingPartitions = append(c.usingPartitions, part)
 				continue
 			}

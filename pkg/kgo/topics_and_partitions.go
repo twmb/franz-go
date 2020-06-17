@@ -194,6 +194,21 @@ func (old *topicPartition) migrateCursorTo(new *topicPartition) {
 	old.cursor.mu.Lock()
 	old.cursor.source = new.cursor.source
 	old.cursor.mu.Unlock()
+
+	// At this point, the old source could be fetching the cursor still
+	// from an in flight request, but new fetches will not begin.
+	//
+	// Before we add the cursor to the new source, if we can validate
+	// epochs, we need to set that the epoch needs validating. We do not
+	// set that we are validating the epoch ourself right now, since as
+	// mentioned, the cursor could still be in use which may ultimately
+	// update the final offset.
+	//
+	// The cursor's epoch will be validated once the new source can
+	// fetch for it.
+	if new.leaderEpoch != -1 && old.cursor.lastConsumedEpoch >= 0 {
+		old.cursor.setNeedLoadEpoch()
+	}
 	old.cursor.source.addCursor(old.cursor)
 	new.cursor = old.cursor
 }

@@ -115,6 +115,15 @@ type cursor struct {
 	// This is unconditionally reset whenever assigning partitions
 	// or when the requests mentioned in the prior sentence finish.
 	loadingOffsets bool
+
+	// needLoadEpoch is true when the cursor moved sources; if true in
+	// createReq, then the source sets the epoch to be checked (similar to
+	// what happens in FencedLeaderEpoch on response).
+	//
+	// We wait until createReq rather than checking immediately because the
+	// cursor could still be in use / in flight on the old source during
+	// the move.
+	needLoadEpoch bool
 }
 
 // seqOffset tracks offsets/epochs with a cursor's seq.
@@ -217,6 +226,18 @@ func (c *cursor) setUnused(fromSeq uint64) {
 	c.triggerConsume()
 }
 
+// setNeedLoadEpoch is set if we can validate leader epochs and the cursor just
+// moved.
+//
+// We do this regardless of the seq since epoch validation is strictly
+// beneficial; and worrying about the seq would make this unnecessarily
+// complicated.
+func (c *cursor) setNeedLoadEpoch() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.needLoadEpoch = true
+}
+
 // setFailing is called once a partition has an error response. The cursor is
 // not used until a metadata update clears the failing state.
 func (c *cursor) setFailing(fromSeq uint64) {
@@ -236,12 +257,6 @@ func (c *cursor) clearFailing() {
 	defer c.mu.Unlock()
 
 	c.failing = false
-
-	// If we are in use or loading offsets, no reason to try to start
-	// consuming again.
-	if c.inUse || c.loadingOffsets {
-		return
-	}
 	c.triggerConsume()
 }
 
@@ -303,6 +318,13 @@ func (s *source) createReq() (req *fetchRequest, again bool) {
 		session: &s.session,
 	}
 
+	var reloadOffsets offsetsLoad
+	defer func() {
+		if !reloadOffsets.isEmpty() {
+			reloadOffsets.mergeInto(&s.cl.consumer)
+		}
+	}()
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -320,6 +342,28 @@ func (s *source) createReq() (req *fetchRequest, again bool) {
 		if c.offset == -1 || c.inUse || c.failing || c.loadingOffsets {
 			c.mu.Unlock()
 			continue
+		}
+
+		// KIP-320: if we needLoadEpoch, we just migrated from one
+		// broker to another. We need to validate the leader epoch on
+		// the new broker to see if we experienced data loss before we
+		// can use this cursor.
+		//
+		// However, we only do this if our last consumed epoch is >= 0,
+		// otherwise we have not consumed anything at all and will just
+		// rely on out of range errors.
+		if c.needLoadEpoch {
+			c.needLoadEpoch = false
+			if c.lastConsumedEpoch >= 0 {
+				c.setLoadingOffsets(c.seq)
+				reloadOffsets.epoch.setLoadOffset(c.topic, c.partition, Offset{
+					request:      c.offset,
+					epoch:        c.lastConsumedEpoch,
+					currentEpoch: c.currentLeaderEpoch,
+				}, req.maxSeq)
+				c.mu.Unlock()
+				continue
+			}
 		}
 
 		again = true
@@ -394,7 +438,6 @@ func (s *source) handleReqResp(req *fetchRequest, kresp kmsg.Response, err error
 	// If our session errored, we reset the session and retry the request
 	// without delay.
 	switch err := kerr.ErrorForCode(resp.ErrorCode); err {
-	case nil:
 	case kerr.FetchSessionIDNotFound:
 		// If the session ID is not found, we may have had our session
 		// evicted or we may not be able to establish a session because

@@ -388,15 +388,17 @@ func (cl *Client) mergeTopicPartitions(l *topicPartitions, r *topicPartitionsDat
 		// If the new sink is the same as the old, we simply copy over
 		// the records pointer and maybe begin draining again.
 		// Same logic for the cursor.
+		//
+		// We always clear the failing state; migration does this itself.
 		if newTP.records.sink == oldTP.records.sink {
 			newTP.records = oldTP.records
 			newTP.cursor = oldTP.cursor
+			newTP.records.clearFailing()
+			newTP.cursor.clearFailing()
 		} else {
 			oldTP.migrateProductionTo(newTP)
 			oldTP.migrateCursorTo(newTP)
 		}
-		newTP.records.clearFailing()
-		newTP.cursor.clearFailing()
 	}
 
 	// Anything left with a negative recBufsIdx / cursorsIdx is a new topic
