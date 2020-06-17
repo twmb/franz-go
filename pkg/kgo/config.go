@@ -55,10 +55,10 @@ type cfg struct {
 	seedBrokers []string
 	maxVersions kversion.Versions
 
-	retryBackoff     func(int) time.Duration
-	retries          int
-	retryTimeout     func(int16) time.Duration
-	brokerErrRetries int
+	retryBackoff          func(int) time.Duration
+	retries               int
+	retryTimeout          func(int16) time.Duration
+	brokerConnDeadRetries int
 
 	maxBrokerWriteBytes int32
 
@@ -168,7 +168,7 @@ func defaultCfg() cfg {
 			}
 			return time.Minute
 		},
-		brokerErrRetries: 20,
+		brokerConnDeadRetries: 20,
 
 		maxBrokerWriteBytes: 100 << 20, // Kafka socket.request.max.bytes default is 100<<20
 
@@ -311,19 +311,24 @@ func RetryTimeout(t func(int16) time.Duration) Opt {
 	return clientOpt{func(cfg *cfg) { cfg.retryTimeout = t }}
 }
 
-// BrokerErrRetries sets the number of tries that are allowed for requests that
-// fail before a response is even received, overriding the default 20.
+// BrokerConnDeadRetries sets the number of tries that are allowed for requests
+// that fail before a response is even received, overriding the default 20.
 //
 // These retries are for cases where a connection to a broker fails during a
 // request. Generally, you just must retry these requests anyway. However, if
 // Kafka cannot understand our request, it closes a connection deliberately.
 // Since the client cannot differentiate this case, we upper bound the number
 // of times we allow a connection to be cut before we call it quits on the
-// request.
+// request, assuming that if a connection is cut *so many times* repeatedly,
+// then it is likely not the network but instead Kafka indicating a problem.
 //
-// This setting applies to all but fetch and produce requests.
-func BrokerErrRetries(n int) Opt {
-	return clientOpt{func(cfg *cfg) { cfg.brokerErrRetries = n }}
+// The only error to trigger this is ErrConnDead, indicating Kafka closed the
+// connection (or the connection actually just died).
+//
+// This setting applies to all but internally generated fetch and produce
+// requests.
+func BrokerConnDeadRetries(n int) Opt {
+	return clientOpt{func(cfg *cfg) { cfg.brokerConnDeadRetries = n }}
 }
 
 // AutoTopicCreation enables topics to be auto created if they do

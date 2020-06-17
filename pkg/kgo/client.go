@@ -293,7 +293,7 @@ start:
 		if retryTimeout > 0 && time.Since(tryStart) > retryTimeout {
 			return nil, err
 		}
-		if kerr.IsRetriable(err) && tries < cl.cfg.retries || isRetriableBrokerErr(err) && tries < cl.cfg.brokerErrRetries {
+		if err == ErrConnDead && tries < cl.cfg.brokerConnDeadRetries || (kerr.IsRetriable(err) || isRetriableBrokerErr(err)) && tries < cl.cfg.retries {
 			if ok := cl.waitTries(ctx, tries); ok {
 				goto start
 			}
@@ -496,7 +496,7 @@ start:
 		if retryTimeout > 0 && time.Since(tryStart) > retryTimeout {
 			return nil, err
 		}
-		if kerr.IsRetriable(err) && tries < cl.cfg.retries || isRetriableBrokerErr(err) && tries < cl.cfg.brokerErrRetries {
+		if err == ErrConnDead && tries < cl.cfg.brokerConnDeadRetries || (kerr.IsRetriable(err) || isRetriableBrokerErr(err)) && tries < cl.cfg.retries {
 			if ok := cl.waitTries(ctx, tries); ok {
 				goto start
 			}
@@ -585,7 +585,7 @@ start:
 		if retryTimeout > 0 && time.Since(tryStart) > retryTimeout {
 			return nil, err
 		}
-		if kerr.IsRetriable(err) && tries < cl.cfg.retries || isRetriableBrokerErr(err) && tries < cl.cfg.brokerErrRetries {
+		if err == ErrConnDead && tries < cl.cfg.brokerConnDeadRetries || (kerr.IsRetriable(err) || isRetriableBrokerErr(err)) && tries < cl.cfg.retries {
 			if ok := cl.waitTries(ctx, tries); ok {
 				goto start
 			}
