@@ -4,13 +4,6 @@ kgo
 KIPS
 ====
 
-TODO
-----
-
-- KIP-392 (fetch request from closest replica w/ rack; 2.2.0)
-
-DONE
-----
 - KIP-12 (sasl & ssl; 0.9.0)
 - KIP-13 (throttling; supported but not obeyed)
 - KIP-31 (relative offsets in message set; 0.10.0)
@@ -55,6 +48,7 @@ DONE
 - KIP-368 (periodically reauth sasl; 2.2.0)
 - KIP-369 (always round robin produce partitioner; 2.4.0)
 - KIP-380 (inter-broker command changes; 2.2.0)
+- KIP-392 (fetch request from closest replica w/ rack; 2.2.0)
 - KIP-394 (require member.id for initial join; 2.2.0)
 - KIP-412 (dynamic log levels with incremental alter configs; 2.4.0)
 - KIP-429 (incremental rebalance, see KAFKA-8179; 2.4.0)
