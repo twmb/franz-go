@@ -193,7 +193,6 @@ func (old *topicPartition) migrateCursorTo(new *topicPartition) {
 	}
 	old.cursor.mu.Lock()
 	old.cursor.source = new.cursor.source
-	old.cursor.mu.Unlock()
 
 	// At this point, the old source could be fetching the cursor still
 	// from an in flight request, but new fetches will not begin.
@@ -207,8 +206,10 @@ func (old *topicPartition) migrateCursorTo(new *topicPartition) {
 	// The cursor's epoch will be validated once the new source can
 	// fetch for it.
 	if new.leaderEpoch != -1 && old.cursor.lastConsumedEpoch >= 0 {
-		old.cursor.setNeedLoadEpoch()
+		old.cursor.needLoadEpoch = true
 	}
+	old.cursor.mu.Unlock()
+
 	old.cursor.source.addCursor(old.cursor)
 	new.cursor = old.cursor
 }

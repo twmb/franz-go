@@ -425,7 +425,7 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how
 			// request which is useless for us, or a request is
 			// specified without a known epoch.
 			if offset.request >= 0 && offset.epoch >= 0 {
-				c.offsetsWaitingLoad.epoch.setLoadOffset(topic, partition, offset, seq)
+				c.offsetsWaitingLoad.epoch.setLoadOffset(topic, partition, offset, -1, seq)
 				continue
 			}
 
@@ -443,7 +443,7 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how
 				continue
 			}
 
-			c.offsetsWaitingLoad.list.setLoadOffset(topic, partition, offset, seq)
+			c.offsetsWaitingLoad.list.setLoadOffset(topic, partition, offset, -1, seq)
 		}
 	}
 
@@ -495,7 +495,7 @@ func (c *consumer) bumpLoadingFetches() {
 				{c.offsetsLoading.epoch, &c.offsetsWaitingLoad.epoch},
 			} {
 				if existing, exists := loads.src.removeLoad(topic, partition, oldSeq); exists {
-					loads.dst.setLoadOffset(topic, partition, existing, newSeq)
+					loads.dst.setLoadOffset(topic, partition, existing.Offset, existing.replica, newSeq)
 				}
 			}
 		}
@@ -697,7 +697,13 @@ func (c *consumer) tryOffsetLoad(toLoad offsetsLoad) {
 				dst := loads.dst
 
 				if topicPartition, exists := topicPartitions.all[partition]; exists {
-					if broker := brokers[topicPartition.leader]; broker != nil {
+					brokerID := topicPartition.leader
+					if offset.replica != -1 {
+						// Fetching from followers can issue list offsets
+						// against the follower itself, not the leader.
+						brokerID = offset.replica
+					}
+					if broker := brokers[brokerID]; broker != nil {
 						brokerLoad := brokersToLoadFrom[broker]
 						if brokerLoad == nil {
 							brokerLoad = new(offsetsLoad)
@@ -739,14 +745,15 @@ func (c *consumer) tryOffsetLoad(toLoad offsetsLoad) {
 }
 
 type offsetLoad struct {
-	seq uint64
+	seq     uint64
+	replica int32 // -1 means leader
 	Offset
 }
 
 type offsetLoadMap map[string]map[int32]offsetLoad
 
-func (o *offsetLoadMap) setLoadOffset(t string, p int32, offset Offset, seq uint64) {
-	o.setLoad(t, p, offsetLoad{seq, offset})
+func (o *offsetLoadMap) setLoadOffset(t string, p int32, offset Offset, replica int32, seq uint64) {
+	o.setLoad(t, p, offsetLoad{seq, replica, offset})
 }
 func (o *offsetLoadMap) setLoad(t string, p int32, load offsetLoad) {
 	if *o == nil {
@@ -757,23 +764,23 @@ func (o *offsetLoadMap) setLoad(t string, p int32, load offsetLoad) {
 	}
 	(*o)[t][p] = load
 }
-func (o offsetLoadMap) removeLoad(t string, p int32, seq uint64) (Offset, bool) {
+func (o offsetLoadMap) removeLoad(t string, p int32, seq uint64) (offsetLoad, bool) {
 	if o == nil {
-		return Offset{}, false
+		return offsetLoad{}, false
 	}
 	ps := o[t]
 	if ps == nil {
-		return Offset{}, false
+		return offsetLoad{}, false
 	}
 	existing, exists := ps[p]
 	if !exists {
-		return Offset{}, false
+		return offsetLoad{}, false
 	}
 	if seq < existing.seq {
-		return Offset{}, false
+		return offsetLoad{}, false
 	}
 	delete(ps, p)
-	return existing.Offset, true
+	return existing, true
 }
 
 type offsetsLoad struct {

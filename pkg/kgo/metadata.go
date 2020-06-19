@@ -273,6 +273,9 @@ func (cl *Client) fetchTopicMetadata(reqTopics []string) (map[string]*topicParti
 					topic:     topicMeta.Topic,
 					partition: partMeta.Partition,
 
+					leader:           partMeta.Leader,
+					preferredReplica: -1,
+
 					keepControl: cl.cfg.keepControl,
 
 					cursorsIdx: -1,
@@ -387,16 +390,21 @@ func (cl *Client) mergeTopicPartitions(l *topicPartitions, r *topicPartitionsDat
 
 		// If the new sink is the same as the old, we simply copy over
 		// the records pointer and maybe begin draining again.
-		// Same logic for the cursor.
 		//
 		// We always clear the failing state; migration does this itself.
 		if newTP.records.sink == oldTP.records.sink {
 			newTP.records = oldTP.records
-			newTP.cursor = oldTP.cursor
 			newTP.records.clearFailing()
-			newTP.cursor.clearFailing()
 		} else {
 			oldTP.migrateProductionTo(newTP)
+		}
+
+		// The cursor source could be different because we could be
+		// fetching from a preferred replica.
+		if newTP.cursor.leader == oldTP.cursor.leader {
+			newTP.cursor = oldTP.cursor
+			newTP.cursor.clearFailing()
+		} else {
 			oldTP.migrateCursorTo(newTP)
 		}
 	}

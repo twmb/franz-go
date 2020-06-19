@@ -94,6 +94,7 @@ type cfg struct {
 	resetOffset    Offset
 	isolationLevel int8
 	keepControl    bool
+	rack           string
 }
 
 // TODO strengthen?
@@ -604,6 +605,16 @@ func FetchMaxPartitionBytes(b int32) ConsumerOpt {
 // OffsetOutOfRange error, overriding the default ConsumeStartOffset.
 func ConsumeResetOffset(offset Offset) ConsumerOpt {
 	return consumerOpt{func(cfg *cfg) { cfg.resetOffset = offset }}
+}
+
+// Rack specifies where the client is physically located and changes fetch
+// requests to consume from the closest replica as opposed to the leader
+// replica.
+//
+// Consuming from a preferred replica can increase latency but can decrease
+// cross datacenter costs. See KIP-392 for more information.
+func Rack(rack string) ConsumerOpt {
+	return consumerOpt{func(cfg *cfg) { cfg.rack = rack }}
 }
 
 // IsolationLevel controls whether uncommitted or only committed records are
