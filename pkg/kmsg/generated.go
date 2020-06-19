@@ -1146,7 +1146,7 @@ type FetchRequestTopic struct {
 	// Partitions contains partitions in a topic to try to fetch records for.
 	Partitions []FetchRequestTopicPartition
 }
-type FetchRequestForgottenTopicsData struct {
+type FetchRequestForgottenTopic struct {
 	// Topic is a topic to remove from being tracked (with the partitions below).
 	Topic string
 
@@ -1211,11 +1211,11 @@ type FetchRequest struct {
 	// Topic contains topics to try to fetch records for.
 	Topics []FetchRequestTopic
 
-	// ForgottenTopicsData contains topics and partitions that a fetch session
+	// ForgottenTopics contains topics and partitions that a fetch session
 	// wants to remove from its session.
 	//
 	// See KIP-227 for more details.
-	ForgottenTopicsData []FetchRequestForgottenTopicsData // v7+
+	ForgottenTopics []FetchRequestForgottenTopic // v7+
 
 	// Rack of the consumer making this request (see KIP-392; introduced in
 	// Kafka 2.2.0).
@@ -1299,7 +1299,7 @@ func (v *FetchRequest) AppendTo(dst []byte) []byte {
 		}
 	}
 	if version >= 7 {
-		v := v.ForgottenTopicsData
+		v := v.ForgottenTopics
 		dst = kbin.AppendArrayLen(dst, len(v))
 		for i := range v {
 			v := &v[i]
@@ -1417,7 +1417,7 @@ func (v *FetchRequest) ReadFrom(src []byte) error {
 		s.Topics = v
 	}
 	if version >= 7 {
-		v := s.ForgottenTopicsData
+		v := s.ForgottenTopics
 		a := v
 		var l int32
 		l = b.ArrayLen()
@@ -1425,7 +1425,7 @@ func (v *FetchRequest) ReadFrom(src []byte) error {
 			return b.Complete()
 		}
 		if l > 0 {
-			a = make([]FetchRequestForgottenTopicsData, l)
+			a = make([]FetchRequestForgottenTopic, l)
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
@@ -1454,7 +1454,7 @@ func (v *FetchRequest) ReadFrom(src []byte) error {
 			}
 		}
 		v = a
-		s.ForgottenTopicsData = v
+		s.ForgottenTopics = v
 	}
 	if version >= 11 {
 		v := b.String()

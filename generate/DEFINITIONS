@@ -426,11 +426,11 @@ FetchRequest => key 1, max version 11
       // This can be used to limit how many bytes an individual partition in
       // a request is allotted so that it does not dominate all of MaxBytes.
       PartitionMaxBytes: int32
-  // ForgottenTopicsData contains topics and partitions that a fetch session
+  // ForgottenTopics contains topics and partitions that a fetch session
   // wants to remove from its session.
   //
   // See KIP-227 for more details.
-  ForgottenTopicsData: [=>] // v7+
+  ForgottenTopics: [=>] // v7+
     // Topic is a topic to remove from being tracked (with the partitions below).
     Topic: string
     // Partitions are partitions to remove from tracking for a topic.
