@@ -426,7 +426,6 @@ func (s *source) backoff() {
 func (s *source) handleReqResp(req *fetchRequest, kresp kmsg.Response, err error) {
 	if err != nil {
 		s.backoff() // backoff before unuseAll to avoid inflight race
-		s.session.reset()
 		s.unuseAll(req.offsets)
 		s.cl.triggerUpdateMetadata()
 		return
@@ -573,6 +572,7 @@ func (o *seqOffsetFrom) processRespPartition(
 		Err:              kerr.ErrorForCode(rPartition.ErrorCode),
 		HighWatermark:    rPartition.HighWatermark,
 		LastStableOffset: rPartition.LastStableOffset,
+		LogStartOffset:   rPartition.LogStartOffset,
 	}
 
 	keepControl := o.from.keepControl
@@ -610,8 +610,8 @@ func (o *seqOffsetFrom) processRespPartition(
 		kerr.NotLeaderForPartition,
 		kerr.ReplicaNotAvailable,
 		kerr.KafkaStorageError,
-		kerr.UnknownLeaderEpoch,
-		kerr.OffsetNotAvailable:
+		kerr.UnknownLeaderEpoch, // our meta is newer than broker we fetched from
+		kerr.OffsetNotAvailable: // fetched from out of sync replica or a behind in-sync one (KIP-392: case 1 and case 2)
 
 		fetchPart.Err = nil // recoverable with client backoff; hide the error
 		fallthrough

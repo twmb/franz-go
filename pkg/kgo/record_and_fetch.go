@@ -135,6 +135,9 @@ type FetchPartition struct {
 	//
 	// The LastStableOffset will always be at or under the HighWatermark.
 	LastStableOffset int64
+	// LogStartOffset is the low watermark of this partition, otherwise
+	// known as the earliest offset in the partition.
+	LogStartOffset int64
 	// Records contains feched records for this partition.
 	Records []*Record
 }
