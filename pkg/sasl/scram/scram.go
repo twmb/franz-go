@@ -78,7 +78,7 @@ type scram struct {
 var escaper = strings.NewReplacer("=", "=3D", ",", "=2C")
 
 func (s scram) Name() string { return s.name }
-func (s scram) Authenticate(ctx context.Context) (sasl.Session, []byte, error) {
+func (s scram) Authenticate(ctx context.Context, _ string) (sasl.Session, []byte, error) {
 	auth, err := s.authFn(ctx)
 	if err != nil {
 		return nil, nil, err

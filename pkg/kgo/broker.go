@@ -342,6 +342,7 @@ func (b *broker) loadConnection(reqKey int16) (*brokerCxn, error) {
 
 	cxn := &brokerCxn{
 		bufPool:         b.cl.bufPool,
+		addr:            b.addr,
 		conn:            conn,
 		timeouts:        b.cl.connTimeoutFn,
 		clientID:        b.cl.cfg.id,
@@ -375,6 +376,7 @@ func (b *broker) connect() (net.Conn, error) {
 // the broker struct to allow lazy connection (re)creation.
 type brokerCxn struct {
 	conn     net.Conn
+	addr     string
 	versions [kmsg.MaxKey + 1]int16
 
 	timeouts func(kmsg.Request) (time.Duration, time.Duration)
@@ -529,7 +531,7 @@ start:
 }
 
 func (cxn *brokerCxn) doSasl(authenticate bool) error {
-	session, clientWrite, err := cxn.mechanism.Authenticate(cxn.saslCtx)
+	session, clientWrite, err := cxn.mechanism.Authenticate(cxn.saslCtx, cxn.addr)
 	if err != nil {
 		return err
 	}
@@ -543,7 +545,10 @@ func (cxn *brokerCxn) doSasl(authenticate bool) error {
 	// still use the SASLAuthenticate timeouts.
 	rt, wt := cxn.timeouts(new(kmsg.SASLAuthenticateRequest))
 
-	for done := false; !done; {
+	// We continue writing until both the challenging is done AND the
+	// responses are done. We can have an additional response once we
+	// are done with challenges.
+	for done := false; !done || len(clientWrite) > 0; {
 		var challenge []byte
 
 		if !authenticate {
@@ -566,8 +571,10 @@ func (cxn *brokerCxn) doSasl(authenticate bool) error {
 			if err != nil {
 				return ErrConnDead
 			}
-			if challenge, err = readConn(cxn.conn, rt); err != nil {
-				return err
+			if !done {
+				if challenge, err = readConn(cxn.conn, rt); err != nil {
+					return err
+				}
 			}
 
 		} else {
@@ -580,27 +587,33 @@ func (cxn *brokerCxn) doSasl(authenticate bool) error {
 			if err != nil {
 				return err
 			}
-			rawResp, err := readResponse(cxn.conn, corrID, rt, req.IsFlexible())
-			if err != nil {
-				return err
-			}
-			resp := req.ResponseKind().(*kmsg.SASLAuthenticateResponse)
-			if err = resp.ReadFrom(rawResp); err != nil {
-				return err
-			}
-
-			if err = kerr.ErrorForCode(resp.ErrorCode); err != nil {
-				if resp.ErrorMessage != nil {
-					return fmt.Errorf("%s: %v", *resp.ErrorMessage, err)
+			if !done {
+				rawResp, err := readResponse(cxn.conn, corrID, rt, req.IsFlexible())
+				if err != nil {
+					return err
 				}
-				return err
+				resp := req.ResponseKind().(*kmsg.SASLAuthenticateResponse)
+				if err = resp.ReadFrom(rawResp); err != nil {
+					return err
+				}
+
+				if err = kerr.ErrorForCode(resp.ErrorCode); err != nil {
+					if resp.ErrorMessage != nil {
+						return fmt.Errorf("%s: %v", *resp.ErrorMessage, err)
+					}
+					return err
+				}
+				challenge = resp.SASLAuthBytes
+				lifetimeMillis = resp.SessionLifetimeMillis
 			}
-			challenge = resp.SASLAuthBytes
-			lifetimeMillis = resp.SessionLifetimeMillis
 		}
 
-		if done, clientWrite, err = session.Challenge(challenge); err != nil {
-			return err
+		clientWrite = nil
+
+		if !done {
+			if done, clientWrite, err = session.Challenge(challenge); err != nil {
+				return err
+			}
 		}
 	}
 

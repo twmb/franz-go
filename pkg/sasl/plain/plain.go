@@ -31,7 +31,7 @@ func Plain(authFn func(context.Context) (Auth, error)) sasl.Mechanism {
 type plain func(context.Context) (Auth, error)
 
 func (plain) Name() string { return "PLAIN" }
-func (fn plain) Authenticate(ctx context.Context) (sasl.Session, []byte, error) {
+func (fn plain) Authenticate(ctx context.Context, _ string) (sasl.Session, []byte, error) {
 	auth, err := fn(ctx)
 	if err != nil {
 		return nil, nil, err

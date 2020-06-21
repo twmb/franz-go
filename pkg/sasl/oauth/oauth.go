@@ -36,7 +36,7 @@ func Oauth(authFn func(context.Context) (Auth, error)) sasl.Mechanism {
 type oauth func(context.Context) (Auth, error)
 
 func (oauth) Name() string { return "OAUTHBEARER" }
-func (fn oauth) Authenticate(ctx context.Context) (sasl.Session, []byte, error) {
+func (fn oauth) Authenticate(ctx context.Context, _ string) (sasl.Session, []byte, error) {
 	auth, err := fn(ctx)
 	if err != nil {
 		return nil, nil, err
