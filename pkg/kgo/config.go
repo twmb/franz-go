@@ -1,6 +1,7 @@
 package kgo
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"math/rand"
@@ -99,6 +100,9 @@ type cfg struct {
 
 // TODO strengthen?
 func (cfg *cfg) validate() error {
+	if len(cfg.seedBrokers) == 0 {
+		return errors.New("config erroneously has no seed brokers")
+	}
 	if cfg.maxBrokerWriteBytes < 1<<10 {
 		return fmt.Errorf("max broker write bytes %d is less than min acceptable %d", cfg.maxBrokerWriteBytes, 1<<10)
 	}

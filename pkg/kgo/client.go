@@ -918,6 +918,41 @@ func (cl *Client) Broker(id int) *Broker {
 	}
 }
 
+// DiscoveredBrokers returns all brokers that were discovered from prior
+// metadata responses. This does not actually issue a metadata request to load
+// brokers; if you wish to ensure this returns all brokers, be sure to manually
+// issue a metadata request before this. This also does not include seed
+// brokers, which are internally saved under special internal broker IDs (but,
+// it does include those brokers under their normal IDs as returned from a
+// metadata response).
+func (cl *Client) DiscoveredBrokers() []*Broker {
+	cl.brokersMu.Lock()
+	defer cl.brokersMu.Unlock()
+
+	var bs []*Broker
+	for _, broker := range cl.brokers {
+		if broker.id >= 0 {
+			bs = append(bs, &Broker{id: broker.id, cl: cl})
+		}
+	}
+	return bs
+}
+
+// SeedBrokers returns the all seed brokers.
+func (cl *Client) SeedBrokers() []*Broker {
+	cl.brokersMu.Lock()
+	defer cl.brokersMu.Unlock()
+
+	var bs []*Broker
+	for i := 0; ; i++ {
+		id := unknownSeedID(i)
+		if _, exists := cl.brokers[id]; !exists {
+			return bs
+		}
+		bs = append(bs, &Broker{id: id, cl: cl})
+	}
+}
+
 // handleListGroupsReq issues a list group request to every broker following a
 // metadata update. We do no retries unless everything fails, at which point
 // the calling function will retry.
