@@ -8,7 +8,6 @@ import (
 	"net"
 	"runtime"
 	"strings"
-	"sync"
 
 	"github.com/jcmturner/gokrb5/v8/client"
 	"github.com/jcmturner/gokrb5/v8/gssapi"
@@ -26,26 +25,27 @@ type Auth struct {
 
 	// Service is the service name we will get a ticket for.
 	Service string
+
+	// PersistAfterAuth specifies whether the client should persist after
+	// logging in or if it should be destroyed (the default).
+	//
+	// If persisting, we never call client.Destroy ourselves, and it is
+	// expected that you will return the same client in every authFn. The
+	// client itself spins up a goroutine to automatically renew sessions,
+	// thus if you return the same client, nothing leaks, but if you return
+	// a new client on every call and set PersistAfterAuth, goroutines will
+	// leak.
+	PersistAfterAuth bool
 }
 
 // Kerberos returns a sasl mechanism that will call authFn whenever sasl
 // authentication is needed. The returned Auth is used for a single session.
-//
-// Note that it is valid to reuse a Kerberos client in the returned Auth. This
-// package attaches a finalizer to the returned client that will call
-// client.Destroy once the client is no longer reachable (i.e. up for garbage
-// collection). Thus, if you always return a new client, this will always call
-// Destroy appropriately, but if you always return a forever cached client,
-// this may never call Destroy and will instead potentially be able to reuse
-// ticket granting tickets. Also note that because we are attaching our own
-// finalizer, this means if you attach your own, it will be removed.
 func Kerberos(authFn func(context.Context) (Auth, error)) sasl.Mechanism {
 	return k(authFn)
 }
 
 type k func(context.Context) (Auth, error)
-
-var finalizersMu sync.Mutex
+type wrapped struct{ *client.Client }
 
 func (k) Name() string { return "GSSAPI" }
 func (k k) Authenticate(ctx context.Context, host string) (sasl.Session, []byte, error) {
@@ -53,15 +53,14 @@ func (k k) Authenticate(ctx context.Context, host string) (sasl.Session, []byte,
 	if err != nil {
 		return nil, nil, err
 	}
-	c := auther.Client
+	c := &wrapped{auther.Client}
+	if !auther.PersistAfterAuth {
+		runtime.SetFinalizer(c, func(c *wrapped) { c.Destroy() })
+	}
+
 	if _, err := c.IsConfigured(); err != nil {
 		return nil, nil, err
 	}
-
-	finalizersMu.Lock()
-	runtime.SetFinalizer(c, nil) // first clear to avoid panic if already set
-	runtime.SetFinalizer(c, func(c *client.Client) { c.Destroy() })
-	finalizersMu.Unlock()
 
 	if err = c.AffirmLogin(); err != nil {
 		return nil, nil, err
@@ -116,7 +115,7 @@ func (k k) Authenticate(ctx context.Context, host string) (sasl.Session, []byte,
 
 type session struct {
 	step   int
-	client *client.Client
+	client *wrapped
 	encKey types.EncryptionKey
 }
 
