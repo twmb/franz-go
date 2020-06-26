@@ -368,6 +368,18 @@ func (cl *Client) mergeTopicPartitions(l *topicPartitions, r *topicPartitionsDat
 			// was deleted and recreated, which we do not handle
 			// yet (and cannot on most Kafka's), or the broker we
 			// fetched metadata from is out of date.
+			//
+			// TODO we should store a "first seen deleted" time
+			// and only delete after a given amount of time.
+			// It should be rare, but theoretically we can fetch
+			// from two brokers in quick succession where one
+			// has out of date metadata that will cause us to
+			// delete the partition.
+			//
+			// This is a minor harm (clients can re-publish any
+			// records failed due to ErrPartitionDeleted, and
+			// consumption will just pause for these partitions),
+			// so it is not critical.
 			deleted = append(deleted, oldTP)
 			continue
 		}
