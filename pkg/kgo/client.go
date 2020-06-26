@@ -6,6 +6,9 @@
 // near ideal way. If any of this client is confusing, please raise GitHub
 // issues so we can make this clearer.
 //
+// For more overview of the entire client itself, please see the package
+// source's README.
+//
 // Note that the default group consumer balancing strategy is
 // "cooperative-sticky", which is incompatible with the historical (pre 2.4.0)
 // balancers. If you are planning to work with an older Kafka or in an existing
