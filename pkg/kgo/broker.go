@@ -239,7 +239,7 @@ func (b *broker) handleReqs() {
 
 	for pr := range b.reqs {
 		req := pr.req
-		cxn, err := b.loadConnection(req.Key())
+		cxn, err := b.loadConnection(pr.ctx, req.Key())
 		if err != nil {
 			pr.promise(nil, err)
 			continue
@@ -323,7 +323,7 @@ func (p bufPool) put(b []byte) { p.p.Put(&b) }
 
 // loadConection returns the broker's connection, creating it if necessary
 // and returning an error of if that fails.
-func (b *broker) loadConnection(reqKey int16) (*brokerCxn, error) {
+func (b *broker) loadConnection(ctx context.Context, reqKey int16) (*brokerCxn, error) {
 	pcxn := &b.cxnNormal
 	if reqKey == 0 {
 		pcxn = &b.cxnProduce
@@ -335,7 +335,7 @@ func (b *broker) loadConnection(reqKey int16) (*brokerCxn, error) {
 		return *pcxn, nil
 	}
 
-	conn, err := b.connect()
+	conn, err := b.connect(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -361,8 +361,8 @@ func (b *broker) loadConnection(reqKey int16) (*brokerCxn, error) {
 }
 
 // connect connects to the broker's addr, returning the new connection.
-func (b *broker) connect() (net.Conn, error) {
-	conn, err := b.cl.cfg.dialFn(b.addr)
+func (b *broker) connect(ctx context.Context) (net.Conn, error) {
+	conn, err := b.cl.cfg.dialFn(ctx, b.addr)
 	if err != nil {
 		if _, ok := err.(net.Error); ok {
 			return nil, ErrNoDial

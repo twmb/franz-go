@@ -78,7 +78,8 @@ func noPromise(*Record, error) {}
 //
 // The context is used if the client currently has the max amount of buffered
 // records. If so, the client waits for some records to complete or for the
-// context or client to quit.
+// context or client to quit. If the context / client quits, this returns
+// an error.
 //
 // The first buffered record for an unknown topic begins a timeout for the
 // configured record timeout limit; all records buffered within the wait will
@@ -90,6 +91,13 @@ func noPromise(*Record, error) {}
 //
 // If manually flushing and there are already MaxBufferedRecords buffered, this
 // will return ErrMaxBuffered.
+//
+// If the client is transactional and a transaction has not been begun, this
+// returns ErrNotInTransaction.
+//
+//
+// Thus, there are only three possible errors: kerr.ErrMessageTooLarge,
+// ErrNotInTransaction, and then either a context error or ErrMaxBuffered.
 func (cl *Client) Produce(
 	ctx context.Context,
 	r *Record,

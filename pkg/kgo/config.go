@@ -1,6 +1,7 @@
 package kgo
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"math"
@@ -45,7 +46,7 @@ func (consumerOpt) consumerOpt()       {}
 type cfg struct {
 	// ***GENERAL SECTION***
 	id                  *string
-	dialFn              func(string) (net.Conn, error)
+	dialFn              func(context.Context, string) (net.Conn, error)
 	connTimeoutOverhead time.Duration
 
 	softwareName    string // KIP-511
@@ -184,7 +185,7 @@ func defaultCfg() cfg {
 		acks:                AllISRAcks(),
 		compression:         []CompressionCodec{SnappyCompression(), NoCompression()},
 		maxRecordBatchBytes: 1000000, // Kafka max.message.bytes default is 1000012
-		maxBufferedRecords:  100000,
+		maxBufferedRecords:  math.MaxInt64,
 		produceTimeout:      30 * time.Second,
 		partitioner:         StickyKeyPartitioner(nil), // default to how Kafka partitions
 
@@ -252,9 +253,14 @@ func ConnTimeoutOverhead(overhead time.Duration) Opt {
 	return clientOpt{func(cfg *cfg) { cfg.connTimeoutOverhead = overhead }}
 }
 
-// Dialer uses fn to dial addresses, overriding the default dialer that
-// uses a 10s dial timeout and no TLS.
-func Dialer(fn func(string) (net.Conn, error)) Opt {
+// Dialer uses fn to dial addresses, overriding the default dialer that uses a
+// 10s dial timeout and no TLS.
+//
+// The context passed to the dial function is the context used in the request
+// that caused the dial. If the request is a client-internal request, the
+// context is the context on the client itself (which is canceled when the
+// client is closed).
+func Dialer(fn func(context.Context, string) (net.Conn, error)) Opt {
 	return clientOpt{func(cfg *cfg) { cfg.dialFn = fn }}
 }
 
@@ -430,8 +436,8 @@ func BatchCompression(preference ...CompressionCodec) ProducerOpt {
 	return producerOpt{func(cfg *cfg) { cfg.compression = preference }}
 }
 
-// BatchMaxBytes upper bounds the size of a record batch,
-// overriding the default 1MB.
+// BatchMaxBytes upper bounds the size of a record batch, overriding the
+// default 1MB.
 //
 // This corresponds to Kafka's max.message.bytes, which defaults to 1,000,012
 // bytes (just over 1MB).
@@ -452,6 +458,7 @@ func BatchMaxBytes(v int32) ProducerOpt {
 
 // MaxBufferedRecords sets the max amount of records the client will buffer,
 // blocking produces until records are finished if this limit is reached.
+// This overrides the unbounded default.
 func MaxBufferedRecords(n int) ProducerOpt {
 	return producerOpt{func(cfg *cfg) { cfg.maxBufferedRecords = int64(n) }}
 }
