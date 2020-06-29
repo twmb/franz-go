@@ -233,6 +233,7 @@ func (c *cursor) setOffset(
 	c.offset = offset
 	c.lastConsumedEpoch = epoch
 	c.currentLeaderEpoch = currentEpoch
+
 	c.triggerConsume()
 }
 
@@ -293,7 +294,10 @@ func (c *cursor) clearFailing() {
 func (c *cursor) setLoadingOffsets(fromSeq uint64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.setLoadingOffsetsLocked(fromSeq)
+}
 
+func (c *cursor) setLoadingOffsetsLocked(fromSeq uint64) {
 	if fromSeq < c.seq {
 		return
 	}
@@ -394,7 +398,7 @@ func (s *source) createReq() (req *fetchRequest, again bool) {
 		if c.needLoadEpoch {
 			c.needLoadEpoch = false
 			if c.lastConsumedEpoch >= 0 {
-				c.setLoadingOffsets(c.seq)
+				c.setLoadingOffsetsLocked(c.seq)
 				reloadOffsets.epoch.setLoadOffset(c.topic, c.partition, Offset{
 					request:      c.offset,
 					epoch:        c.lastConsumedEpoch,
@@ -601,7 +605,7 @@ func (s *source) handleReqResp(req *fetchRequest, kresp kmsg.Response, err error
 	}
 
 	if needsMetaUpdate {
-		s.cl.triggerUpdateMetadata()
+		s.cl.triggerUpdateMetadataNow()
 		s.cl.cfg.logger.Log(LogLevelInfo, "fetch had a partition error; trigging metadata update and resetting the session")
 		s.session.reset()
 	}

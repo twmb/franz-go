@@ -208,6 +208,10 @@ func (old *topicPartition) migrateCursorTo(new *topicPartition) {
 	if new.leaderEpoch != -1 && old.cursor.lastConsumedEpoch >= 0 {
 		old.cursor.needLoadEpoch = true
 	}
+
+	old.cursor.leader = new.cursor.leader
+	old.cursor.preferredReplica = new.cursor.leader
+
 	old.cursor.mu.Unlock()
 
 	old.cursor.source.addCursor(old.cursor)
