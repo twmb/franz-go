@@ -14703,9 +14703,6 @@ func (v *DescribeConfigsResponse) ReadFrom(src []byte) error {
 
 type AlterConfigsRequestResourceConfig struct {
 	// Name is a key to set (e.g. segment.bytes).
-	//
-	// For broker loggers, see KIP-412 section "Request/Response Overview"
-	// for details on how to change per logger log levels.
 	Name string
 
 	// Value is a value to set for the key (e.g. 10).
@@ -14713,8 +14710,7 @@ type AlterConfigsRequestResourceConfig struct {
 }
 type AlterConfigsRequestResource struct {
 	// ResourceType is an enum corresponding to the type of config to alter.
-	// The possible valid values are 2 (for topic), 4 (for broker),
-	// and 8 (for broker logger).
+	// The only two valid values are 2 (for topic) and 4 (for broker).
 	ResourceType int8
 
 	// ResourceName is the name of config to alter.
@@ -17988,6 +17984,9 @@ func (v *ElectLeadersResponse) ReadFrom(src []byte) error {
 
 type IncrementalAlterConfigsRequestResourceConfig struct {
 	// Name is a key to modify (e.g. segment.bytes).
+	//
+	// For broker loggers, see KIP-412 section "Request/Response Overview"
+	// for details on how to change per logger log levels.
 	Name string
 
 	// Op is the type of operation to perform for this config name.
@@ -18008,7 +18007,8 @@ type IncrementalAlterConfigsRequestResourceConfig struct {
 }
 type IncrementalAlterConfigsRequestResource struct {
 	// ResourceType is an enum corresponding to the type of config to alter.
-	// The only two valid values are 2 (for topic) and 4 (for broker).
+	// The possible valid values are 2 (for topic), 4 (for broker),
+	// and 8 (for broker logger).
 	ResourceType int8
 
 	// ResourceName is the name of config to alter.
@@ -18021,6 +18021,8 @@ type IncrementalAlterConfigsRequestResource struct {
 	// broker. Using a specific ID also ensures that brokers reload config
 	// or secret files even if the file path has not changed. Lastly, password
 	// config options can only be defined on a per broker basis.
+	//
+	// If the type is broker logger, this must be a broker ID.
 	ResourceName string
 
 	// Configs contains key/value config pairs to set on the resource.
