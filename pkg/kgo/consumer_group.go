@@ -658,6 +658,7 @@ func (g *groupConsumer) setupAssignedAndHeartbeat() error {
 
 	s := newAssignRevokeSession()
 	added, lost := g.diffAssigned()
+	g.cl.cfg.logger.Log(LogLevelInfo, "new group session begun", "assigned", added, "lost", lost)
 	s.prerevoke(g, lost)
 
 	ctx, cancel := context.WithCancel(g.ctx)
@@ -713,6 +714,7 @@ func (g *groupConsumer) heartbeat(fetchErrCh <-chan error, s *assignRevokeSessio
 
 	for {
 		var err error
+		heartbeat = false
 		select {
 		case <-cooperativeFastCheck:
 			heartbeat = true
@@ -753,7 +755,7 @@ func (g *groupConsumer) heartbeat(fetchErrCh <-chan error, s *assignRevokeSessio
 		}
 
 		if didMetadone && didRevoke {
-			g.cl.cfg.logger.Log(LogLevelInfo, "heartbeat loop complete", "err", err)
+			g.cl.cfg.logger.Log(LogLevelInfo, "heartbeat loop complete", "err", lastErr)
 			return lastErr
 		}
 
@@ -1174,7 +1176,11 @@ func (g *groupConsumer) findNewAssignments(topics map[string]*topicPartitions) {
 			_, useTopic = g.topics[topic]
 		}
 
-		if useTopic {
+		// We only track using the topic if there are partitions for
+		// it; if there are none, then the topic was set by _us_ as "we
+		// want to load the metadata", but the topic was not returned
+		// in the metadata (or it was returned with an error).
+		if useTopic && numPartitions > 0 {
 			if g.regexTopics && topicPartitions.load().isInternal {
 				continue
 			}
