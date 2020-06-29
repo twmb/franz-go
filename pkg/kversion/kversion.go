@@ -276,7 +276,7 @@ func V2_2_0() Versions {
 func V2_3_0() Versions {
 	v := V2_2_0()
 	v[3]++  // 8 metadata KAFKA-7922 a42f16f980 KIP-430
-	v[15]++ // 3 describe group KAFKA-7922 f11fa5ef40 KIP-430
+	v[15]++ // 3 describe groups KAFKA-7922 f11fa5ef40 KIP-430
 
 	v[11]++ // 5 join group KAFKA-7862 0f995ba6be KIP-345
 	v[13]++ // 3 leave group KAFKA-8221 74c90f46c3 KIP-345
@@ -293,7 +293,7 @@ func V2_3_0() Versions {
 func V2_4_0() Versions {
 	v := V2_3_0()
 	v[4]++  // 3 leader and isr KAFKA-8345 81900d0ba0 KIP-455
-	v[15]++ // 4 describe group KAFKA-8538 f8db022b08 KIP-345
+	v[15]++ // 4 describe groups KAFKA-8538 f8db022b08 KIP-345
 	v[19]++ // 4 create topics KAFKA-8305 8e161580b8 KIP-464
 	v[43]++ // 1 elect preferred leaders KAFKA-8286 121308cc7a KIP-460
 	v = append(v,
