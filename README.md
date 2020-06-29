@@ -45,17 +45,18 @@ I plan to bump to a 1.x release. As much as possible, I personally consider
 the current API stable.
 
 Some features in this client only **theoretically** are implemented, but have
-not been tested. The main two features I would like to verify are nearest replica
-fetching and how the client handles a partition migrating brokers. I have tested
-a partition being paused and coming back later, and I have tested a partition
-migrating brokers in the past, but I would like to write an integration test for
-both of these cases. Same with nearest replica fetching, which will require more
-setup.
+not been tested. The main untested feature is nearest replica fetching.
+
+I have manually tested pausing and unpausing partitions (forcing a leader epoch
+bump) and manually moving partitions between brokers while producing and
+consuming (with alter partition assignments on Kafka 2.5.0). I aim to add
+partition migration to the integration test suite in the code soon.
 
 I have integration tested a chain of producing and consuming within groups
 with and without transactions for all balancers. These integration tests rely
-on my [`kcl`][2] tool. In the long term, I hope to have tests that spin up
-containers and trigger every relevant scenario as appropriate.
+on my [`kcl`][2] tool. In the long term, I plan to have tests that spin up
+containers and trigger every relevant scenario as appropriate, and I plan to
+remove the dependency on kcl.
 
 [2]: https://github.com/twmb/kcl
 
