@@ -1,6 +1,10 @@
 kgo
 ===
 
+[![GoDev](https://img.shields.io/static/v1?label=godev&message=reference&color=00add8)][godev]
+
+[godev]: https://pkg.go.dev/github.com/twmb/kafka-go/pkg/kgo
+
 ## Contents
 
 - [Introduction](#introduction)
@@ -160,7 +164,7 @@ begin a transact session. When you are ready to commit, end the session (you
 can also specify to abort here). The session will manage whether an abort needs
 to happen or not depending on whether partitions were revoked or anything else.
 
-#### The Cooperative Balancer
+### The Cooperative Balancer
 
 Kafka 2.4.0 introduced support for [KIP-429][3], the incremental rebalancing
 protocol. This allows consumers to continue fetching records **during** a
@@ -179,7 +183,7 @@ aborted if the cooperative consumer has some partitions revoked. For
 non-transactions with autocommitting enabled, a commit only happens if some
 transactions are being revoked.
 
-#### Static Members
+### Static Members
 
 Kafka 2.4.0 introduced support for [KIP-345][4], the "static" member concept
 for consumer group members. This is a relatively simple concept that basically
