@@ -279,7 +279,6 @@ func V2_3_0() Versions {
 	v[15]++ // 3 describe groups KAFKA-7922 f11fa5ef40 KIP-430
 
 	v[11]++ // 5 join group KAFKA-7862 0f995ba6be KIP-345
-	v[13]++ // 3 leave group KAFKA-8221 74c90f46c3 KIP-345
 	v[8]++  // 7 offset commit KAFKA-8225 9fa331b811 KIP-345
 	v[12]++ // 3 heartbeat (same)
 	v[14]++ // 3 sync group (same)
@@ -301,6 +300,8 @@ func V2_4_0() Versions {
 		0, // 46 list partition reassignments (same)
 		0, // 47 offset delete KAFKA-8730 e24d0e22ab KIP-496
 	)
+
+	v[13]++ // 3 leave group KAFKA-8221 74c90f46c3 KIP-345
 
 	// introducing flexible versions; 24 were bumped
 	v[3]++  // 9 metadata KAFKA-8885 apache/kafka#7325 KIP-482
