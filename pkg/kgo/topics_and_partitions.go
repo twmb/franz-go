@@ -96,7 +96,7 @@ func (cl *Client) storePartitionsUpdate(l *topicPartitions, lv *topicPartitionsD
 	// not require the send.
 	if len(lv.all) == 0 && kerr.IsRetriable(lv.loadErr) {
 		select {
-		case unknown.wait <- struct{}{}:
+		case unknown.wait <- lv.loadErr:
 		default:
 		}
 		return

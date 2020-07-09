@@ -34,7 +34,7 @@ type producer struct {
 
 type unknownTopicProduces struct {
 	buffered []promisedRec
-	wait     chan struct{}
+	wait     chan error
 }
 
 func (p *producer) init() {
@@ -286,8 +286,10 @@ func (cl *Client) doInitProducerID(lastID int64, lastEpoch int16) *producerID {
 	}
 	resp := kresp.(*kmsg.InitProducerIDResponse)
 	if err = kerr.ErrorForCode(resp.ErrorCode); err != nil {
+		cl.cfg.logger.Log(LogLevelInfo, "producer id initialization errored", "err", err)
 		return &producerID{-1, -1, err}
 	}
+	cl.cfg.logger.Log(LogLevelInfo, "producer id initialization success", "id", resp.ProducerID, "epoch", resp.ProducerEpoch)
 
 	// We track if this was v3. We do not need to gate this behind a mutex,
 	// since no request is issued before the ID is loaded, meaning nothing
@@ -382,7 +384,7 @@ func (cl *Client) addUnknownTopicRecord(pr promisedRec) {
 	if unknown == nil {
 		unknown = &unknownTopicProduces{
 			buffered: make([]promisedRec, 0, 100),
-			wait:     make(chan struct{}, 1),
+			wait:     make(chan error, 1),
 		}
 		cl.unknownTopics[pr.Topic] = unknown
 	}
@@ -397,7 +399,7 @@ func (cl *Client) waitUnknownTopic(
 	topic string,
 	unknown *unknownTopicProduces,
 ) {
-	cl.cfg.logger.Log(LogLevelDebug, "waiting for unknown topic", "topic", topic)
+	cl.cfg.logger.Log(LogLevelInfo, "waiting for metadata to produce to unknown topic", "topic", topic)
 	var after <-chan time.Time
 	if timeout := cl.cfg.recordTimeout; timeout > 0 {
 		timer := time.NewTimer(cl.cfg.recordTimeout)
@@ -412,12 +414,12 @@ func (cl *Client) waitUnknownTopic(
 			err = ErrBrokerDead
 		case <-after:
 			err = ErrRecordTimeout
-		case _, ok := <-unknown.wait:
+		case err, ok := <-unknown.wait:
 			if !ok {
-				cl.cfg.logger.Log(LogLevelDebug, "done waiting for unknown topic, metadata was successful", "topic", topic)
+				cl.cfg.logger.Log(LogLevelInfo, "done waiting for unknown topic, metadata was successful", "topic", topic)
 				return // metadata was successful!
 			}
-			cl.cfg.logger.Log(LogLevelDebug, "unknown topic wait failed, retrying wait", "topic", topic)
+			cl.cfg.logger.Log(LogLevelInfo, "unknown topic wait failed, retrying wait", "topic", topic, "err", err)
 			tries++
 			if tries >= cl.cfg.retries {
 				err = ErrNoPartitionsAvailable
@@ -425,7 +427,7 @@ func (cl *Client) waitUnknownTopic(
 		}
 	}
 
-	cl.cfg.logger.Log(LogLevelDebug, "unknown topic wait failed, done retrying, failing all records", "topic", topic)
+	cl.cfg.logger.Log(LogLevelInfo, "unknown topic wait failed, done retrying, failing all records", "topic", topic)
 
 	// If we errored above, we come down here to potentially clear the
 	// topic wait and fail all buffered records. However, we could have
