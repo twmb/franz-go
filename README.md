@@ -64,8 +64,10 @@ remove the dependency on kcl.
 
 [2]: https://github.com/twmb/kcl
 
-In effect, consider this **beta**. I would love confirmation that this client
-has been used succesfully, and would love to start a "Users" section below.
+I would love confirmation that this program has been used successfully, and
+would love to start a "Users" section below. With more confirmation of success,
+and confirmation that there are no knife edges, I will inch closer to a 1.x
+release.
 
 ## Performance
 
