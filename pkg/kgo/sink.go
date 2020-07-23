@@ -618,16 +618,19 @@ func (s *sink) handleReqResp(req *produceRequest, resp kmsg.Response, err error)
 				reqRetry.addSeqBatch(topic, partition, batch)
 
 			case err == kerr.DuplicateSequenceNumber: // ignorable, but we should not get
+				s.cl.cfg.logger.Log(LogLevelInfo, "received unexpected duplicate sequence number, ignoring and treating batch as successful")
 				err = nil
 				fallthrough
 			default:
-				s.cl.cfg.logger.Log(LogLevelInfo, "batch in a produce request failed",
-					"topic", topic,
-					"partition", partition,
-					"err", err,
-					"err_is_retriable", kerr.IsRetriable(err),
-					"max_retries_reached", batch.tries == s.cl.cfg.retries,
-				)
+				if err != nil {
+					s.cl.cfg.logger.Log(LogLevelInfo, "batch in a produce request failed",
+						"topic", topic,
+						"partition", partition,
+						"err", err,
+						"err_is_retriable", kerr.IsRetriable(err),
+						"max_retries_reached", batch.tries == s.cl.cfg.retries,
+					)
+				}
 				s.cl.finishBatch(batch.recBatch, partition, rPartition.BaseOffset, err)
 			}
 		}
