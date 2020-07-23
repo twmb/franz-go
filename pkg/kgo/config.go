@@ -479,8 +479,14 @@ func ProduceRequestTimeout(limit time.Duration) ProducerOpt {
 	return producerOpt{func(cfg *cfg) { cfg.produceTimeout = limit }}
 }
 
-// StopOnDataLoss sets the client to stop producing if data loss is
-// detected, overriding the default false.
+// StopOnDataLoss sets the client to stop producing if data loss is detected,
+// overriding the default false.
+//
+// Note that if using this option, it is strongly recommended to not have a
+// retry limit. Doing so may lead to errors where the client fails a batch on a
+// recoverable error, which internally bumps the idempotent sequence number
+// used for producing, which may then later cause an inadvertent out of order
+// sequence number and false "data loss" detection.
 func StopOnDataLoss() ProducerOpt {
 	return producerOpt{func(cfg *cfg) { cfg.stopOnDataLoss = true }}
 }

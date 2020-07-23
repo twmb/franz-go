@@ -243,6 +243,14 @@ func (cl *Client) failProducerID(id int64, epoch int16, err error) {
 
 	current := cl.producer.id.Load().(*producerID)
 	if current.id != id || current.epoch != epoch {
+		cl.cfg.logger.Log(LogLevelInfo, "ignoring a fail producer id request due to current id being different",
+			"current_id", current.id,
+			"current_epoch", current.epoch,
+			"current_err", current.err,
+			"fail_id", id,
+			"fail_epoch", epoch,
+			"fail_err", err,
+		)
 		return // failed an old id
 	}
 
@@ -263,6 +271,7 @@ func (cl *Client) failProducerID(id int64, epoch int16, err error) {
 // doInitProducerID inits the idempotent ID and potentially the transactional
 // producer epoch.
 func (cl *Client) doInitProducerID(lastID int64, lastEpoch int16) *producerID {
+	cl.cfg.logger.Log(LogLevelInfo, "initializing producer id")
 	req := &kmsg.InitProducerIDRequest{
 		TransactionalID: cl.cfg.txnID,
 		ProducerID:      lastID,
@@ -280,8 +289,10 @@ func (cl *Client) doInitProducerID(lastID int64, lastEpoch int16) *producerID {
 		// there are other areas in this client where we assume
 		// what we hit first is the default.
 		if err == ErrUnknownRequestKey {
+			cl.cfg.logger.Log(LogLevelInfo, "unable to initialize a producer id because the broker is too old, continuing without a producer id")
 			return &producerID{-1, -1, nil}
 		}
+		cl.cfg.logger.Log(LogLevelInfo, "producer id initialization failure", "err", err)
 		return &producerID{-1, -1, err}
 	}
 	resp := kresp.(*kmsg.InitProducerIDResponse)

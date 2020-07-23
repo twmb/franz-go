@@ -311,6 +311,9 @@ func (s *sink) drain() {
 		// We do not need to clear the addedToTxn flag for any recBuf
 		// it was set on, since producer id recovery resets the flag.
 		if err != nil {
+			s.cl.cfg.logger.Log(LogLevelInfo, "InitProducerID or AddPartitionsToTxn, failing producer id",
+				"err", err,
+			)
 			s.cl.failProducerID(req.producerID, req.producerEpoch, err)
 			for _, partitions := range req.batches {
 				for _, batch := range partitions {
@@ -576,6 +579,13 @@ func (s *sink) handleReqResp(req *produceRequest, resp kmsg.Response, err error)
 				// the user to continue (our stopOnDataLoss flag), so
 				// we do not try any logic in the idempotent case.
 				if s.cl.cfg.stopOnDataLoss || err == kerr.UnknownProducerID && s.cl.producer.idVersion >= 3 && s.cl.cfg.txnID != nil {
+					s.cl.cfg.logger.Log(LogLevelInfo, "batch errored with OutOfOrderSequenceNumber or UnknownProducerID, failing the producer ID",
+						"topic", topic,
+						"partition", partition,
+						"producer_id", req.producerID,
+						"producer_epoch", req.producerEpoch,
+						"err", err,
+					)
 					s.cl.failProducerID(req.producerID, req.producerEpoch, err)
 					s.cl.finishBatch(batch.recBatch, partition, rPartition.BaseOffset, err)
 					continue
@@ -583,6 +593,27 @@ func (s *sink) handleReqResp(req *produceRequest, resp kmsg.Response, err error)
 				if s.cl.cfg.onDataLoss != nil {
 					s.cl.cfg.onDataLoss(topic, partition)
 				}
+
+				// We could be here because we do not have unlimited
+				// retries and previously failed a retriable error.
+				// The broker could technically have been fine, but we
+				// locally failed a batch causing our sequence number to
+				// bump (this is why we should have unlimited retries, but
+				// sometimes that is not a perfect option).
+				//
+				// When we reset sequence numbers here, we need to also
+				// fail the producer ID to ensure we do not send to a
+				// broker that thinks we are still at a high seq when
+				// we are sending 0. If we did not fail, then we would
+				// loop with an OOOSN error.
+				s.cl.cfg.logger.Log(LogLevelInfo, "batch errored with OutOfOrderSequenceNumber or UnknownProducerID, failing the producer ID and resetting the partition sequence number",
+					"topic", topic,
+					"partition", partition,
+					"producer_id", req.producerID,
+					"producer_epoch", req.producerEpoch,
+					"err", err,
+				)
+				s.cl.failProducerID(req.producerID, req.producerEpoch, errReloadProducerID)
 				batch.owner.resetSeq()
 				reqRetry.addSeqBatch(topic, partition, batch)
 
@@ -590,6 +621,13 @@ func (s *sink) handleReqResp(req *produceRequest, resp kmsg.Response, err error)
 				err = nil
 				fallthrough
 			default:
+				s.cl.cfg.logger.Log(LogLevelInfo, "batch in a produce request failed",
+					"topic", topic,
+					"partition", partition,
+					"err", err,
+					"err_is_retriable", kerr.IsRetriable(err),
+					"max_retries_reached", batch.tries == s.cl.cfg.retries,
+				)
 				s.cl.finishBatch(batch.recBatch, partition, rPartition.BaseOffset, err)
 			}
 		}
