@@ -618,7 +618,10 @@ func (s *sink) handleReqResp(req *produceRequest, resp kmsg.Response, err error)
 				reqRetry.addSeqBatch(topic, partition, batch)
 
 			case err == kerr.DuplicateSequenceNumber: // ignorable, but we should not get
-				s.cl.cfg.logger.Log(LogLevelInfo, "received unexpected duplicate sequence number, ignoring and treating batch as successful")
+				s.cl.cfg.logger.Log(LogLevelInfo, "received unexpected duplicate sequence number, ignoring and treating batch as successful",
+					"topic", topic,
+					"partition", partition,
+				)
 				err = nil
 				fallthrough
 			default:
