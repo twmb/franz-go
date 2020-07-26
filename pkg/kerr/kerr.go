@@ -42,26 +42,6 @@ func IsRetriable(err error) bool {
 	return ok && kerr.Retriable
 }
 
-/*
-Vim sequence to generate the below based off of a blind c&p of the
-http://kafka.apache.org/protocol.html#protocol_error_codes table:
-
-qw
-^yWPxi=&Error{"
-<esc>Ea",
-<esc>Ea,
-<esc>W~Ea,
-<esc>Wi"
-<esc>$a"}
-<esc>^guaw~j
-q
-100@w
-:%s/_\([a-z]\)/\u\1/g
-:%s/id/ID/g
-
-Do not forget to add code2err for new codes.
-*/
-
 var (
 	UnknownServerError                 = &Error{"UNKNOWN_SERVER_ERROR", -1, false, "The server experienced an unexpected error when processing the request."}
 	OffsetOutOfRange                   = &Error{"OFFSET_OUT_OF_RANGE", 1, false, "The requested offset is not within the range of offsets maintained by the server."}
@@ -152,6 +132,7 @@ var (
 	GroupSubscribedToTopic             = &Error{"GROUP_SUBSCRIBED_TO_TOPIC", 86, false, "Deleting offsets of a topic is forbidden while the consumer group is actively subscribed to it."}
 	InvalidRecord                      = &Error{"INVALID_RECORD", 87, false, "This record has failed the validation on broker and hence be rejected."}
 	UnstableOffsetCommit               = &Error{"UNSTABLE_OFFSET_COMMIT", 88, true, "There are unstable offsets that need to be cleared."}
+	ThrottlingQuotaExceeded            = &Error{"THROTTLING_QUOTA_EXCEEDED", 89, true, "The throttling quota has been exceeded."}
 )
 
 var code2err = map[int16]error{
@@ -245,4 +226,5 @@ var code2err = map[int16]error{
 	86: GroupSubscribedToTopic,
 	87: InvalidRecord,
 	88: UnstableOffsetCommit,
+	89: ThrottlingQuotaExceeded,
 }

@@ -9711,7 +9711,7 @@ type CreateTopicsRequest struct {
 }
 
 func (*CreateTopicsRequest) Key() int16                 { return 19 }
-func (*CreateTopicsRequest) MaxVersion() int16          { return 5 }
+func (*CreateTopicsRequest) MaxVersion() int16          { return 6 }
 func (v *CreateTopicsRequest) SetVersion(version int16) { v.Version = version }
 func (v *CreateTopicsRequest) GetVersion() int16        { return v.Version }
 func (v *CreateTopicsRequest) IsFlexible() bool         { return v.Version >= 5 }
@@ -10076,7 +10076,7 @@ type CreateTopicsResponse struct {
 }
 
 func (*CreateTopicsResponse) Key() int16                 { return 19 }
-func (*CreateTopicsResponse) MaxVersion() int16          { return 5 }
+func (*CreateTopicsResponse) MaxVersion() int16          { return 6 }
 func (v *CreateTopicsResponse) SetVersion(version int16) { v.Version = version }
 func (v *CreateTopicsResponse) GetVersion() int16        { return v.Version }
 func (v *CreateTopicsResponse) IsFlexible() bool         { return v.Version >= 5 }
@@ -10342,7 +10342,7 @@ type DeleteTopicsRequest struct {
 }
 
 func (*DeleteTopicsRequest) Key() int16                 { return 20 }
-func (*DeleteTopicsRequest) MaxVersion() int16          { return 4 }
+func (*DeleteTopicsRequest) MaxVersion() int16          { return 5 }
 func (v *DeleteTopicsRequest) SetVersion(version int16) { v.Version = version }
 func (v *DeleteTopicsRequest) GetVersion() int16        { return v.Version }
 func (v *DeleteTopicsRequest) IsFlexible() bool         { return v.Version >= 4 }
@@ -10446,6 +10446,9 @@ type DeleteTopicsResponseTopic struct {
 	// 0-2 against brokers >= 2.1.0. Otherwise, the request hangs until it
 	// times out.
 	ErrorCode int16
+
+	// ErrorMessage is a message for an error.
+	ErrorMessage *string // v5+
 }
 
 // DeleteTopicsResponse is returned from a DeleteTopicsRequest.
@@ -10466,7 +10469,7 @@ type DeleteTopicsResponse struct {
 }
 
 func (*DeleteTopicsResponse) Key() int16                 { return 20 }
-func (*DeleteTopicsResponse) MaxVersion() int16          { return 4 }
+func (*DeleteTopicsResponse) MaxVersion() int16          { return 5 }
 func (v *DeleteTopicsResponse) SetVersion(version int16) { v.Version = version }
 func (v *DeleteTopicsResponse) GetVersion() int16        { return v.Version }
 func (v *DeleteTopicsResponse) IsFlexible() bool         { return v.Version >= 4 }
@@ -10501,6 +10504,14 @@ func (v *DeleteTopicsResponse) AppendTo(dst []byte) []byte {
 			{
 				v := v.ErrorCode
 				dst = kbin.AppendInt16(dst, v)
+			}
+			if version >= 5 {
+				v := v.ErrorMessage
+				if isFlexible {
+					dst = kbin.AppendCompactNullableString(dst, v)
+				} else {
+					dst = kbin.AppendNullableString(dst, v)
+				}
 			}
 			if isFlexible {
 				dst = kbin.AppendUvarint(dst, 0)
@@ -10553,6 +10564,15 @@ func (v *DeleteTopicsResponse) ReadFrom(src []byte) error {
 			{
 				v := b.Int16()
 				s.ErrorCode = v
+			}
+			if version >= 5 {
+				var v *string
+				if isFlexible {
+					v = b.CompactNullableString()
+				} else {
+					v = b.NullableString()
+				}
+				s.ErrorMessage = v
 			}
 			if isFlexible {
 				SkipTags(&b)
@@ -15931,7 +15951,7 @@ type CreatePartitionsRequest struct {
 }
 
 func (*CreatePartitionsRequest) Key() int16                 { return 37 }
-func (*CreatePartitionsRequest) MaxVersion() int16          { return 2 }
+func (*CreatePartitionsRequest) MaxVersion() int16          { return 3 }
 func (v *CreatePartitionsRequest) SetVersion(version int16) { v.Version = version }
 func (v *CreatePartitionsRequest) GetVersion() int16        { return v.Version }
 func (v *CreatePartitionsRequest) IsFlexible() bool         { return v.Version >= 2 }
@@ -16168,7 +16188,7 @@ type CreatePartitionsResponse struct {
 }
 
 func (*CreatePartitionsResponse) Key() int16                 { return 37 }
-func (*CreatePartitionsResponse) MaxVersion() int16          { return 2 }
+func (*CreatePartitionsResponse) MaxVersion() int16          { return 3 }
 func (v *CreatePartitionsResponse) SetVersion(version int16) { v.Version = version }
 func (v *CreatePartitionsResponse) GetVersion() int16        { return v.Version }
 func (v *CreatePartitionsResponse) IsFlexible() bool         { return v.Version >= 2 }

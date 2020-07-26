@@ -1785,7 +1785,7 @@ ApiVersionsResponse =>
 // creation defaults. See KIP-464.
 //
 // Version 5, also in 2.4.0, returns topic configs in the response (KIP-525).
-CreateTopicsRequest => key 19, max version 5, flexible v5+, admin
+CreateTopicsRequest => key 19, max version 6, flexible v5+, admin
   // Topics is an array of topics to attempt to create.
   Topics: [=>]
     // Topic is a topic to create.
@@ -1890,7 +1890,7 @@ CreateTopicsResponse =>
       IsSensitive: bool
 
 // DeleteTopicsRequest deletes Kafka topics.
-DeleteTopicsRequest => key 20, max version 4, flexible v4+, admin
+DeleteTopicsRequest => key 20, max version 5, flexible v4+, admin
   // Topics is an array of topics to delete.
   Topics: [string]
   // TimeoutMillis is the millisecond timeout of this request.
@@ -1926,6 +1926,8 @@ DeleteTopicsResponse =>
     // 0-2 against brokers >= 2.1.0. Otherwise, the request hangs until it
     // times out.
     ErrorCode: int16
+    // ErrorMessage is a message for an error.
+    ErrorMessage: nullable-string // v5+
 
 // DeleteRecordsRequest is an admin request to delete records from Kafka.
 // This was added for KIP-107.
@@ -2884,7 +2886,7 @@ SASLAuthenticateResponse =>
   SessionLifetimeMillis: int64 // v1+
 
 // CreatePartitionsRequest creates additional partitions for topics.
-CreatePartitionsRequest => key 37, max version 2, flexible v2+, admin
+CreatePartitionsRequest => key 37, max version 3, flexible v2+, admin
   // Topics contains topics to create partitions for.
   Topics: [=>]
     // Topic is a topic for which to create additional partitions for.

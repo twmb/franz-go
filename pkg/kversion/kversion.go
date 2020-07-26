@@ -362,8 +362,7 @@ func V2_5_0() Versions {
 	return v
 }
 
-// Tip is the latest defined Kafka key versions; this may be slightly out of date.
-func Tip() Versions {
+func V2_6_0() Versions {
 	v := V2_5_0()
 
 	v[21]++ // 2 delete records KAFKA-8768 f869e33ab KIP-482 (opportunistic bump for exlible versions)
@@ -378,6 +377,18 @@ func Tip() Versions {
 
 	v[16]++ // 4 list group KAFKA-9130 fe948d39e KIP-518
 	v[32]++ // 3 describe configs KAFKA-9494 af3b8b50f2 KIP-569
+
+	return v
+}
+
+// Tip is the latest defined Kafka key versions; this may be slightly out of date.
+func Tip() Versions {
+	v := V2_5_0()
+
+	// KAFKA-10163 a5ffd1ca44c KIP-599
+	v[37]++ // 3 create partitions
+	v[19]++ // 6 create topics (same)
+	v[20]++ // 5 delete topics (same)
 
 	return v
 }

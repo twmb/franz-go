@@ -315,7 +315,7 @@ a protocol is supported by code generation.
 - [KIP-447](https://cwiki.apache.org/confluence/display/KAFKA/KIP-447%3A+Producer+scalability+for+exactly+once+semantics) (transaction changes to better support group changes; 2.5.0)
 - [KIP-455](https://cwiki.apache.org/confluence/display/KAFKA/KIP-455%3A+Create+an+Administrative+API+for+Replica+Reassignment) (admin replica reassignment; 2.4.0)
 - [KIP-460](https://cwiki.apache.org/confluence/display/KAFKA/KIP-460%3A+Admin+Leader+Election+RPC) (admin leader election; 2.4.0)
-- [KIP-464](https://cwiki.apache.org/confluence/pages/viewpage.action?pageId=113708722) (defaults for create topic, [KIP-464](https://cwiki.apache.org/confluence/pages/viewpage.action?pageId=113708722); 2.4.0)
+- [KIP-464](https://cwiki.apache.org/confluence/pages/viewpage.action?pageId=113708722) (defaults for create topic; 2.4.0)
 - [KIP-467](https://cwiki.apache.org/confluence/display/KAFKA/KIP-467%3A+Augment+ProduceResponse+error+messaging+for+specific+culprit+records) (produce response error change for per-record errors; 2.4.0)
 - [KIP-480](https://cwiki.apache.org/confluence/display/KAFKA/KIP-480%3A+Sticky+Partitioner) (sticky partition producing; 2.4.0)
 - [KIP-482](https://cwiki.apache.org/confluence/display/KAFKA/KIP-482%3A+The+Kafka+Protocol+should+Support+Optional+Tagged+Fields) (tagged fields; KAFKA-8885; 2.4.0)
@@ -329,3 +329,4 @@ a protocol is supported by code generation.
 - [KIP-569](https://cwiki.apache.org/confluence/display/KAFKA/KIP-569%3A+DescribeConfigsResponse+-+Update+the+schema+to+include+additional+metadata+information+of+the+field) (doc/type in describe configs; 2.6.0)
 - [KIP-570](https://cwiki.apache.org/confluence/display/KAFKA/KIP-570%3A+Add+leader+epoch+in+StopReplicaRequest) (leader epoch in stop replica; 2.6.0)
 - [KIP-580](https://cwiki.apache.org/confluence/display/KAFKA/KIP-580%3A+Exponential+Backoff+for+Kafka+Clients) (exponential backoff; 2.6.0)
+- [KIP-599](https://cwiki.apache.org/confluence/display/KAFKA/KIP-599%3A+Throttle+Create+Topic%2C+Create+Partition+and+Delete+Topic+Operations) (throttle create/delete topic/partition; 2.7.0)
