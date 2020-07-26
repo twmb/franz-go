@@ -420,12 +420,13 @@ func (cl *Client) waitUnknownTopic(
 	var tries int
 	var err error
 	for err == nil {
+		var ok bool
 		select {
 		case <-cl.ctx.Done():
 			err = ErrBrokerDead
 		case <-after:
 			err = ErrRecordTimeout
-		case err, ok := <-unknown.wait:
+		case err, ok = <-unknown.wait:
 			if !ok {
 				cl.cfg.logger.Log(LogLevelInfo, "done waiting for unknown topic, metadata was successful", "topic", topic)
 				return // metadata was successful!
