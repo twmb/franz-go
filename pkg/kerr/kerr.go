@@ -90,7 +90,7 @@ var (
 	PolicyViolation                    = &Error{"POLICY_VIOLATION", 44, false, "Request parameters do not satisfy the configured policy."}
 	OutOfOrderSequenceNumber           = &Error{"OUT_OF_ORDER_SEQUENCE_NUMBER", 45, false, "The broker received an out of order sequence number."}
 	DuplicateSequenceNumber            = &Error{"DUPLICATE_SEQUENCE_NUMBER", 46, false, "The broker received a duplicate sequence number."}
-	InvalidProducerEpoch               = &Error{"INVALID_PRODUCER_EPOCH", 47, false, "Producer attempted an operation with an old epoch. Either there is a newer producer with the same transactionalID, or the producer's transaction has been expired by the broker."}
+	InvalidProducerEpoch               = &Error{"INVALID_PRODUCER_EPOCH", 47, false, "Producer attempted an operation with an old epoch."}
 	InvalidTxnState                    = &Error{"INVALID_TXN_STATE", 48, false, "The producer attempted a transactional operation in an invalid state."}
 	InvalidProducerIDMapping           = &Error{"INVALID_PRODUCER_ID_MAPPING", 49, false, "The producer attempted to use a producer id which is not currently assigned to its transactional id."}
 	InvalidTransactionTimeout          = &Error{"INVALID_TRANSACTION_TIMEOUT", 50, false, "The transaction timeout is larger than the maximum value allowed by the broker (as configured by transaction.max.timeout.ms)."}
@@ -133,6 +133,7 @@ var (
 	InvalidRecord                      = &Error{"INVALID_RECORD", 87, false, "This record has failed the validation on broker and hence be rejected."}
 	UnstableOffsetCommit               = &Error{"UNSTABLE_OFFSET_COMMIT", 88, true, "There are unstable offsets that need to be cleared."}
 	ThrottlingQuotaExceeded            = &Error{"THROTTLING_QUOTA_EXCEEDED", 89, true, "The throttling quota has been exceeded."}
+	ProducerFenced                     = &Error{"PRODUCER_FENCED", 90, true, "There is a newer producer with the same transactionalId which fences the current one."}
 )
 
 var code2err = map[int16]error{
@@ -227,4 +228,5 @@ var code2err = map[int16]error{
 	87: InvalidRecord,
 	88: UnstableOffsetCommit,
 	89: ThrottlingQuotaExceeded,
+	90: ProducerFenced,
 }

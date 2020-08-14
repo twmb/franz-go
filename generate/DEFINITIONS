@@ -2004,7 +2004,7 @@ DeleteRecordsResponse =>
 //
 // Note that you do not need to go to a txn coordinator if you are initializing
 // a producer id without a transactional id.
-InitProducerIDRequest => key 22, max version 3, flexible v2+, txn coordinator
+InitProducerIDRequest => key 22, max version 4, flexible v2+, txn coordinator
   // TransactionalID is the ID to use for transactions if using transactions.
   TransactionalID: nullable-string
   // TransactionTimeoutMillis is how long a transaction is allowed before
@@ -2142,7 +2142,7 @@ OffsetForLeaderEpochResponse =>
 // partitions in the request. Before producing any records to a partition in
 // the transaction, that partition must have been added to the transaction with
 // this request.
-AddPartitionsToTxnRequest => key 24, max version 1, txn coordinator
+AddPartitionsToTxnRequest => key 24, max version 2, txn coordinator
   // TransactionalID is the transactional ID to use for this request.
   TransactionalID: string
   // ProducerID is the producer ID of the client for this transactional ID
@@ -2216,7 +2216,7 @@ AddPartitionsToTxnResponse =>
 // Internally, this request simply adds the __consumer_offsets topic as a
 // partition for this transaction with AddPartitionsToTxn for the partition
 // in that topic that contains the group.
-AddOffsetsToTxnRequest => key 25, max version 1, txn coordinator
+AddOffsetsToTxnRequest => key 25, max version 2, txn coordinator
   // TransactionalID is the transactional ID to use for this request.
   TransactionalID: string
   // ProducerID is the producer ID of the client for this transactional ID
@@ -2249,7 +2249,7 @@ AddOffsetsToTxnResponse =>
 
 // EndTxnRequest ends a transaction. This should be called after
 // TxnOffsetCommitRequest.
-EndTxnRequest => key 26, max version 1, txn coordinator
+EndTxnRequest => key 26, max version 2, txn coordinator
   // TransactionalID is the transactional ID to use for this request.
   TransactionalID: string
   // ProducerID is the producer ID of the client for this transactional ID

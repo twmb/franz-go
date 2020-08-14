@@ -390,5 +390,11 @@ func Tip() Versions {
 	v[19]++ // 6 create topics (same)
 	v[20]++ // 5 delete topics (same)
 
+	// KAFKA-9911 b937ec7567 KIP-588
+	v[22]++ // 4 init producer id
+	v[24]++ // 2 add partitions to txn
+	v[25]++ // 2 add offsets to txn
+	v[26]++ // 2 end txn
+
 	return v
 }

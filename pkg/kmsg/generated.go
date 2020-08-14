@@ -11023,7 +11023,7 @@ type InitProducerIDRequest struct {
 }
 
 func (*InitProducerIDRequest) Key() int16                 { return 22 }
-func (*InitProducerIDRequest) MaxVersion() int16          { return 3 }
+func (*InitProducerIDRequest) MaxVersion() int16          { return 4 }
 func (v *InitProducerIDRequest) SetVersion(version int16) { v.Version = version }
 func (v *InitProducerIDRequest) GetVersion() int16        { return v.Version }
 func (v *InitProducerIDRequest) IsFlexible() bool         { return v.Version >= 2 }
@@ -11138,7 +11138,7 @@ type InitProducerIDResponse struct {
 }
 
 func (*InitProducerIDResponse) Key() int16                 { return 22 }
-func (*InitProducerIDResponse) MaxVersion() int16          { return 3 }
+func (*InitProducerIDResponse) MaxVersion() int16          { return 4 }
 func (v *InitProducerIDResponse) SetVersion(version int16) { v.Version = version }
 func (v *InitProducerIDResponse) GetVersion() int16        { return v.Version }
 func (v *InitProducerIDResponse) IsFlexible() bool         { return v.Version >= 2 }
@@ -11576,7 +11576,7 @@ type AddPartitionsToTxnRequest struct {
 }
 
 func (*AddPartitionsToTxnRequest) Key() int16                 { return 24 }
-func (*AddPartitionsToTxnRequest) MaxVersion() int16          { return 1 }
+func (*AddPartitionsToTxnRequest) MaxVersion() int16          { return 2 }
 func (v *AddPartitionsToTxnRequest) SetVersion(version int16) { v.Version = version }
 func (v *AddPartitionsToTxnRequest) GetVersion() int16        { return v.Version }
 func (v *AddPartitionsToTxnRequest) IsFlexible() bool         { return false }
@@ -11743,7 +11743,7 @@ type AddPartitionsToTxnResponse struct {
 }
 
 func (*AddPartitionsToTxnResponse) Key() int16                 { return 24 }
-func (*AddPartitionsToTxnResponse) MaxVersion() int16          { return 1 }
+func (*AddPartitionsToTxnResponse) MaxVersion() int16          { return 2 }
 func (v *AddPartitionsToTxnResponse) SetVersion(version int16) { v.Version = version }
 func (v *AddPartitionsToTxnResponse) GetVersion() int16        { return v.Version }
 func (v *AddPartitionsToTxnResponse) IsFlexible() bool         { return false }
@@ -11874,7 +11874,7 @@ type AddOffsetsToTxnRequest struct {
 }
 
 func (*AddOffsetsToTxnRequest) Key() int16                 { return 25 }
-func (*AddOffsetsToTxnRequest) MaxVersion() int16          { return 1 }
+func (*AddOffsetsToTxnRequest) MaxVersion() int16          { return 2 }
 func (v *AddOffsetsToTxnRequest) SetVersion(version int16) { v.Version = version }
 func (v *AddOffsetsToTxnRequest) GetVersion() int16        { return v.Version }
 func (v *AddOffsetsToTxnRequest) IsFlexible() bool         { return false }
@@ -11953,7 +11953,7 @@ type AddOffsetsToTxnResponse struct {
 }
 
 func (*AddOffsetsToTxnResponse) Key() int16                 { return 25 }
-func (*AddOffsetsToTxnResponse) MaxVersion() int16          { return 1 }
+func (*AddOffsetsToTxnResponse) MaxVersion() int16          { return 2 }
 func (v *AddOffsetsToTxnResponse) SetVersion(version int16) { v.Version = version }
 func (v *AddOffsetsToTxnResponse) GetVersion() int16        { return v.Version }
 func (v *AddOffsetsToTxnResponse) IsFlexible() bool         { return false }
@@ -12012,7 +12012,7 @@ type EndTxnRequest struct {
 }
 
 func (*EndTxnRequest) Key() int16                 { return 26 }
-func (*EndTxnRequest) MaxVersion() int16          { return 1 }
+func (*EndTxnRequest) MaxVersion() int16          { return 2 }
 func (v *EndTxnRequest) SetVersion(version int16) { v.Version = version }
 func (v *EndTxnRequest) GetVersion() int16        { return v.Version }
 func (v *EndTxnRequest) IsFlexible() bool         { return false }
@@ -12099,7 +12099,7 @@ type EndTxnResponse struct {
 }
 
 func (*EndTxnResponse) Key() int16                 { return 26 }
-func (*EndTxnResponse) MaxVersion() int16          { return 1 }
+func (*EndTxnResponse) MaxVersion() int16          { return 2 }
 func (v *EndTxnResponse) SetVersion(version int16) { v.Version = version }
 func (v *EndTxnResponse) GetVersion() int16        { return v.Version }
 func (v *EndTxnResponse) IsFlexible() bool         { return false }
