@@ -1,6 +1,7 @@
 package kgo
 
 import (
+	"errors"
 	"hash/crc32"
 	"sync"
 	"sync/atomic"
@@ -412,11 +413,16 @@ start:
 
 // requeueUnattemptedReq resets all drain indices to zero on all buffers
 // where the batch is the first in the buffer.
-func (s *sink) requeueUnattemptedReq(req *produceRequest) {
+func (s *sink) requeueUnattemptedReq(req *produceRequest, err error) {
 	var maybeDrain bool
 	req.batches.onEachFirstBatchWhileBatchOwnerLocked(func(batch seqRecBatch) {
+		// If we fail all records here, we likely will have out of
+		// order seq nums; hopefully the client user does not stop
+		// on data loss, since this is not truly data loss.
 		if batch.isTimedOut(s.cl.cfg.recordTimeout) {
 			batch.owner.lockedFailAllRecords(ErrRecordTimeout)
+		} else if batch.tries == s.cl.cfg.retries {
+			batch.owner.lockedFailAllRecords(err)
 		}
 		batch.owner.resetBatchDrainIdx()
 		maybeDrain = true
@@ -502,7 +508,7 @@ func (s *sink) handleReqClientErr(req *produceRequest, err error) {
 		s.handleRetryBatches(req.batches)
 
 	case isRetriableBrokerErr(err):
-		s.requeueUnattemptedReq(req)
+		s.requeueUnattemptedReq(req, err)
 
 	default:
 		s.errorAllRecordsInAllRecordBuffersInRequest(req, err)
@@ -702,8 +708,14 @@ func (cl *Client) finishBatch(batch *recBatch, partition int32, baseOffset int64
 func (s *sink) handleRetryBatches(retry seqRecBatches) {
 	var needsMetaUpdate bool
 	retry.onEachFirstBatchWhileBatchOwnerLocked(func(batch seqRecBatch) {
+		// If we fail all records here, we likely will have out of
+		// order seq nums; hopefully the client user does not stop
+		// on data loss, since this is not truly data loss.
 		if batch.isTimedOut(s.cl.cfg.recordTimeout) {
 			batch.owner.lockedFailAllRecords(ErrRecordTimeout)
+		} else if batch.tries == s.cl.cfg.retries {
+			err := errors.New("record failed after being retried too many times")
+			batch.owner.lockedFailAllRecords(err)
 		}
 		batch.owner.resetBatchDrainIdx()
 		batch.owner.failing = true
