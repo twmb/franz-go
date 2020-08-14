@@ -383,7 +383,7 @@ func V2_6_0() Versions {
 
 // Tip is the latest defined Kafka key versions; this may be slightly out of date.
 func Tip() Versions {
-	v := V2_5_0()
+	v := V2_6_0()
 
 	// KAFKA-10163 a5ffd1ca44c KIP-599
 	v[37]++ // 3 create partitions
