@@ -1011,6 +1011,8 @@ func (cl *Client) handleListGroupsReq(ctx context.Context, req *kmsg.ListGroupsR
 		if mergeResp.ErrorCode == 0 {
 			mergeResp.ErrorCode = resp.ErrorCode
 		}
+		mergeResp.Version = resp.Version
+		mergeResp.ThrottleMillis = resp.ThrottleMillis
 		mergeResp.Groups = append(mergeResp.Groups, resp.Groups...)
 	}
 
