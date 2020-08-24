@@ -47,6 +47,7 @@ type Client struct {
 	anyBrokerIdx int
 	stopBrokers  bool // set to true on close to stop updateBrokers
 
+	reqFormatter  *kmsg.RequestFormatter
 	connTimeoutFn func(kmsg.Request) (time.Duration, time.Duration)
 
 	bufPool bufPool // for to brokers to share underlying reusable request buffers
@@ -127,6 +128,7 @@ func NewClient(opts ...Opt) (*Client, error) {
 		controllerID: unknownControllerID,
 		brokers:      make(map[int32]*broker),
 
+		reqFormatter:  new(kmsg.RequestFormatter),
 		connTimeoutFn: connTimeoutBuilder(cfg.connTimeoutOverhead),
 
 		bufPool: newBufPool(),
@@ -145,6 +147,10 @@ func NewClient(opts ...Opt) (*Client, error) {
 	cl.consumer.sourcesReadyCond = sync.NewCond(&cl.consumer.sourcesReadyMu)
 	cl.topics.Store(make(map[string]*topicPartitions))
 	cl.metawait.init()
+
+	if cfg.id != nil {
+		cl.reqFormatter = kmsg.NewRequestFormatter(kmsg.FormatterClientID(*cfg.id))
+	}
 
 	compressor, err := newCompressor(cl.cfg.compression...)
 	if err != nil {

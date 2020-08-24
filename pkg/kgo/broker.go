@@ -345,7 +345,7 @@ func (b *broker) loadConnection(ctx context.Context, reqKey int16) (*brokerCxn, 
 		addr:            b.addr,
 		conn:            conn,
 		timeouts:        b.cl.connTimeoutFn,
-		clientID:        b.cl.cfg.id,
+		reqFormatter:    b.cl.reqFormatter,
 		softwareName:    b.cl.cfg.softwareName,
 		softwareVersion: b.cl.cfg.softwareVersion,
 		saslCtx:         b.cl.ctx,
@@ -387,10 +387,10 @@ type brokerCxn struct {
 	mechanism sasl.Mechanism
 	expiry    time.Time
 
-	// bufPool, corrID, and clientID are used in writing requests.
-	bufPool  bufPool
-	corrID   int32
-	clientID *string
+	// bufPool, corrID, and reqFormatter are used in writing requests.
+	bufPool      bufPool
+	corrID       int32
+	reqFormatter *kmsg.RequestFormatter
 
 	softwareName    string // for KIP-511
 	softwareVersion string // for KIP-511
@@ -635,11 +635,10 @@ func (cxn *brokerCxn) doSasl(authenticate bool) error {
 func (cxn *brokerCxn) writeRequest(req kmsg.Request) (int32, error) {
 	buf := cxn.bufPool.get()
 	defer cxn.bufPool.put(buf)
-	buf = kmsg.AppendRequest(
+	buf = cxn.reqFormatter.AppendRequest(
 		buf[:0],
 		req,
 		cxn.corrID,
-		cxn.clientID,
 	)
 	_, wt := cxn.timeouts(req)
 	if wt > 0 {

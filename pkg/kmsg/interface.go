@@ -109,19 +109,56 @@ type Response interface {
 	RequestKind() Request
 }
 
+// RequestFormatter formats requests.
+//
+// The default empty struct works correctly, but can be extended with the
+// NewRequestFormatter function.
+type RequestFormatter struct {
+	clientID *string
+
+	initPrincipalName *string
+	initClientID      *string
+}
+
+// RequestFormatterOpt applys options to a RequestFormatter.
+type RequestFormatterOpt interface {
+	apply(*RequestFormatter)
+}
+
+type formatterOpt struct{ fn func(*RequestFormatter) }
+
+func (opt formatterOpt) apply(f *RequestFormatter) { opt.fn(f) }
+
+// FormatterClientID attaches the given client ID to any issued request,
+// minus controlled shutdown v0, which uses its own special format.
+func FormatterClientID(id string) RequestFormatterOpt {
+	return formatterOpt{func(f *RequestFormatter) { f.clientID = &id }}
+}
+
+// FormatterInitialID sets the initial ID of the request.
+//
+// This function should be used by brokers only and is set when the broker
+// redirects a request. See KIP-590 for more detail.
+func FormatterInitialID(principalName, clientID string) RequestFormatterOpt {
+	return formatterOpt{func(f *RequestFormatter) { f.initPrincipalName, f.initClientID = &principalName, &clientID }}
+}
+
+// NewRequestFormatter returns a RequestFormatter with the opts applied.
+func NewRequestFormatter(opts ...RequestFormatterOpt) *RequestFormatter {
+	a := new(RequestFormatter)
+	for _, opt := range opts {
+		opt.apply(a)
+	}
+	return a
+}
+
 // AppendRequest appends a full message request to dst, returning the updated
 // slice. This message is the full body that needs to be written to issue a
 // Kafka request.
-//
-// clientID is optional; nil means to not send, whereas empty means the client
-// id is the empty string. If the request is controlled shutdown v0, this does
-// not include the client ID, as controlled shutdown used its own special
-// no-client-id encoding at that version.
-func AppendRequest(
+func (f *RequestFormatter) AppendRequest(
 	dst []byte,
 	r Request,
 	correlationID int32,
-	clientID *string,
 ) []byte {
 	dst = append(dst, 0, 0, 0, 0) // reserve length
 	k := r.Key()
@@ -137,12 +174,24 @@ func AppendRequest(
 	// Clients issue ApiVersions immediately before knowing the broker
 	// version, and old brokers will not be able to understand a compact
 	// client id.
-	dst = kbin.AppendNullableString(dst, clientID)
+	dst = kbin.AppendNullableString(dst, f.clientID)
 
 	// The flexible tags end the request header, and then begins the
 	// request body.
 	if r.IsFlexible() {
-		dst = append(dst, 0) // tagged section; TODO for when tags are added here
+		var numTags uint8
+		if f.initPrincipalName != nil {
+			numTags += 2
+		}
+		dst = append(dst, numTags)
+		if numTags != 0 {
+			if f.initPrincipalName != nil {
+				dst = kbin.AppendUvarint(dst, 0)
+				dst = kbin.AppendCompactString(dst, *f.initPrincipalName)
+				dst = kbin.AppendUvarint(dst, 1)
+				dst = kbin.AppendCompactString(dst, *f.initClientID)
+			}
+		}
 	}
 
 	// Now the request body.
