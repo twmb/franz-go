@@ -668,11 +668,22 @@ func (o *seqOffsetFrom) processRespPartition(
 
 	switch version {
 	case 0, 1:
-		o.processV0Messages(topic, &fetchPart, kmsg.ReadV0Messages(rPartition.RecordBatches), decompressor)
+		msgs, err := kmsg.ReadV0Messages(rPartition.RecordBatches)
+		if err != nil {
+			fetchPart.Err = err
+		}
+		o.processV0Messages(topic, &fetchPart, msgs, decompressor)
 	case 2, 3:
-		o.processV1Messages(topic, &fetchPart, kmsg.ReadV1Messages(rPartition.RecordBatches), decompressor)
+		msgs, err := kmsg.ReadV1Messages(rPartition.RecordBatches)
+		if err != nil {
+			fetchPart.Err = err
+		}
+		o.processV1Messages(topic, &fetchPart, msgs, decompressor)
 	default:
-		batches := kmsg.ReadRecordBatches(rPartition.RecordBatches)
+		batches, err := kmsg.ReadRecordBatches(rPartition.RecordBatches)
+		if err != nil {
+			fetchPart.Err = err
+		}
 		var numPartitionRecords int
 		for i := range batches {
 			numPartitionRecords += int(batches[i].NumRecords)
@@ -823,7 +834,10 @@ func (o *seqOffset) processV1Messages(
 			fetchPart.Err = fmt.Errorf("unable to decompress messages: %v", err)
 			return
 		}
-		innerMessages := kmsg.ReadV1Messages(rawMessages)
+		innerMessages, err := kmsg.ReadV1Messages(rawMessages)
+		if err != nil {
+			fetchPart.Err = err
+		}
 		if len(innerMessages) == 0 {
 			return
 		}
@@ -877,7 +891,10 @@ func (o *seqOffset) processV0Messages(
 			fetchPart.Err = fmt.Errorf("unable to decompress messages: %v", err)
 			return
 		}
-		innerMessages := kmsg.ReadV0Messages(rawMessages)
+		innerMessages, err := kmsg.ReadV0Messages(rawMessages)
+		if err != nil {
+			fetchPart.Err = err
+		}
 		if len(innerMessages) == 0 {
 			return
 		}

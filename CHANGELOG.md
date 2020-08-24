@@ -1,3 +1,8 @@
+v0.4.7
+======
+
+- [598261505](https://github.com/twmb/kcl/commit/598261505033d0255c37dc06b9b6c1112818a1be): Breaking API change in kmsg to add validating & erroring when reading records/messages
+
 v0.4.6
 ======
 

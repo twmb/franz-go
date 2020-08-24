@@ -21,6 +21,8 @@ package kmsg
 
 import (
 	"encoding/binary"
+	"errors"
+	"hash/crc32"
 
 	"github.com/twmb/kafka-go/pkg/kbin"
 )
@@ -224,70 +226,104 @@ func ReadRecords(n int, in []byte) ([]Record, error) {
 	return rs, nil
 }
 
+// ErrEncodedCRCMismatch is returned from reading record batches or message sets when
+// any batch or set has an encoded crc that does not match a calculated crc.
+var ErrEncodedCRCMismatch = errors.New("encoded crc does not match calculated crc")
+
+// ErrEncodedLengthMismatch is returned from reading record batches or message
+// sets when any batch or set has an encoded length that does not match the
+// earlier read length of the batch / set.
+var ErrEncodedLengthMismatch = errors.New("encoded length does not match read length")
+
+var crc32c = crc32.MakeTable(crc32.Castagnoli) // record crc's use Castagnoli table
+
 // ReadRecordBatches reads as many record batches as possible from in,
 // discarding any final trailing record batch. This is intended to be used
 // for processing RecordBatches from a FetchResponse, where Kafka, as an
 // internal optimization, may include a partial final RecordBatch.
-func ReadRecordBatches(in []byte) []RecordBatch {
+func ReadRecordBatches(in []byte) ([]RecordBatch, error) {
 	var bs []RecordBatch
 	for len(in) > 12 {
 		length := int32(binary.BigEndian.Uint32(in[8:]))
 		length += 12
 		if len(in) < int(length) {
-			return bs
+			return bs, nil
 		}
+
 		var b RecordBatch
 		if err := b.ReadFrom(in[:length]); err != nil {
-			return bs
+			return bs, nil
 		}
+
+		if int32(len(in[12:length])) != b.Length {
+			return bs, ErrEncodedLengthMismatch
+		}
+
+		// If we did not error, the length was at _least_ 21.
+		if int32(crc32.Checksum(in[21:length], crc32c)) != b.CRC {
+			return bs, ErrEncodedCRCMismatch
+		}
+
 		bs = append(bs, b)
 		in = in[length:]
 	}
-	return bs
+	return bs, nil
 }
 
 // ReadV1Messages reads as many v1 message sets as possible from
 // in, discarding any final trailing message set. This is intended to be used
 // for processing v1 MessageSets from a FetchResponse, where Kafka, as an
 // internal optimization, may include a partial final MessageSet.
-func ReadV1Messages(in []byte) []MessageV1 {
+func ReadV1Messages(in []byte) ([]MessageV1, error) {
 	var ms []MessageV1
 	for len(in) > 12 {
 		length := int32(binary.BigEndian.Uint32(in[8:]))
 		length += 12
 		if len(in) < int(length) {
-			return ms
+			return ms, nil
 		}
 		var m MessageV1
 		if err := m.ReadFrom(in[:length]); err != nil {
-			return ms
+			return ms, nil
+		}
+		if int32(len(in[12:length])) != m.MessageSize {
+			return ms, ErrEncodedLengthMismatch
+		}
+		if int32(crc32.ChecksumIEEE(in[16:length])) != m.CRC {
+			return ms, ErrEncodedCRCMismatch
 		}
 		ms = append(ms, m)
 		in = in[length:]
 	}
-	return ms
+	return ms, nil
 }
 
 // ReadV0Messages reads as many v0 message sets as possible from
 // in, discarding any final trailing message set. This is intended to be used
 // for processing v0 MessageSets from a FetchResponse, where Kafka, as an
 // internal optimization, may include a partial final MessageSet.
-func ReadV0Messages(in []byte) []MessageV0 {
+func ReadV0Messages(in []byte) ([]MessageV0, error) {
 	var ms []MessageV0
 	for len(in) > 12 {
 		length := int32(binary.BigEndian.Uint32(in[8:]))
 		length += 12
 		if len(in) < int(length) {
-			return ms
+			return ms, nil
 		}
 		var m MessageV0
 		if err := m.ReadFrom(in[:length]); err != nil {
-			return ms
+			return ms, nil
+		}
+		if int32(len(in[12:length])) != m.MessageSize {
+			return ms, ErrEncodedLengthMismatch
+		}
+		if int32(crc32.ChecksumIEEE(in[16:length])) != m.CRC {
+			return ms, ErrEncodedCRCMismatch
 		}
 		ms = append(ms, m)
 		in = in[length:]
 	}
-	return ms
+	return ms, nil
 }
 
 // ReadFrom provides decoding various versions of sticky member metadata. A key
