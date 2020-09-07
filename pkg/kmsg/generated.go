@@ -6,7 +6,7 @@ import "github.com/twmb/kafka-go/pkg/kbin"
 
 // MaxKey is the maximum key used for any messages in this package.
 // Note that this value will change as Kafka adds more messages.
-const MaxKey = 49
+const MaxKey = 51
 
 // MessageV0 is the message format Kafka used prior to 0.10.
 //
@@ -20262,6 +20262,750 @@ func (v *AlterClientQuotasResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+type DescribeUserSCRAMCredentialsRequestUser struct {
+	// The user name.
+	Name string
+}
+
+// DescribeUserSCRAMCredentialsRequest, proposed in KIP-554 and introduced
+// with Kafka 2.7.0, describes user SCRAM credentials.
+//
+// This request was introduced as part of the overarching KIP-500 initiative,
+// which is to remove Zookeeper as a dependency.
+//
+// This request requires DESCRIBE on CLUSTER.
+type DescribeUserSCRAMCredentialsRequest struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	// The users to describe, or null to describe all.
+	Users []DescribeUserSCRAMCredentialsRequestUser
+}
+
+func (*DescribeUserSCRAMCredentialsRequest) Key() int16                 { return 50 }
+func (*DescribeUserSCRAMCredentialsRequest) MaxVersion() int16          { return 0 }
+func (v *DescribeUserSCRAMCredentialsRequest) SetVersion(version int16) { v.Version = version }
+func (v *DescribeUserSCRAMCredentialsRequest) GetVersion() int16        { return v.Version }
+func (v *DescribeUserSCRAMCredentialsRequest) IsFlexible() bool         { return v.Version >= 0 }
+func (v *DescribeUserSCRAMCredentialsRequest) ResponseKind() Response {
+	return &DescribeUserSCRAMCredentialsResponse{Version: v.Version}
+}
+
+func (v *DescribeUserSCRAMCredentialsRequest) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	isFlexible := version >= 0
+	_ = isFlexible
+	{
+		v := v.Users
+		if isFlexible {
+			dst = kbin.AppendCompactArrayLen(dst, len(v))
+		} else {
+			dst = kbin.AppendArrayLen(dst, len(v))
+		}
+		for i := range v {
+			v := &v[i]
+			{
+				v := v.Name
+				if isFlexible {
+					dst = kbin.AppendCompactString(dst, v)
+				} else {
+					dst = kbin.AppendString(dst, v)
+				}
+			}
+			if isFlexible {
+				dst = kbin.AppendUvarint(dst, 0)
+			}
+		}
+	}
+	if isFlexible {
+		dst = kbin.AppendUvarint(dst, 0)
+	}
+	return dst
+}
+func (v *DescribeUserSCRAMCredentialsRequest) ReadFrom(src []byte) error {
+	version := v.Version
+	_ = version
+	isFlexible := version >= 0
+	_ = isFlexible
+	b := kbin.Reader{Src: src}
+	s := v
+	{
+		v := s.Users
+		a := v
+		var l int32
+		if isFlexible {
+			l = b.CompactArrayLen()
+		} else {
+			l = b.ArrayLen()
+		}
+		if !b.Ok() {
+			return b.Complete()
+		}
+		if l > 0 {
+			a = make([]DescribeUserSCRAMCredentialsRequestUser, l)
+		}
+		for i := int32(0); i < l; i++ {
+			v := &a[i]
+			s := v
+			{
+				var v string
+				if isFlexible {
+					v = b.CompactString()
+				} else {
+					v = b.String()
+				}
+				s.Name = v
+			}
+			if isFlexible {
+				SkipTags(&b)
+			}
+		}
+		v = a
+		s.Users = v
+	}
+	if isFlexible {
+		SkipTags(&b)
+	}
+	return b.Complete()
+}
+
+type DescribeUserSCRAMCredentialsResponseResultCredentialInfo struct {
+	// The SCRAM mechanism for this user, where 0 is UNKNOWN, 1 is SCRAM_SHA_256,
+	// and 2 is SCRAM_SHA_512.
+	Mechanism int8
+
+	// The number of iterations used in the SCRAM credential.
+	Iteractions int32
+}
+type DescribeUserSCRAMCredentialsResponseResult struct {
+	// The name this result corresponds to.
+	User string
+
+	// The user-level error code.
+	ErrorCode int16
+
+	// The user-level error message, if any.
+	ErrorMessage *string
+
+	// Information about the SCRAM credentials for this user.
+	CredentialInfos []DescribeUserSCRAMCredentialsResponseResultCredentialInfo
+}
+
+// DescribeUserSCRAMCredentialsResponse is a response for a
+// DescribeUserSCRAMCredentialsRequest.
+type DescribeUserSCRAMCredentialsResponse struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	// ThrottleMillis is how long of a throttle Kafka will apply to the client
+	// after responding to this request.
+	ThrottleMillis int32
+
+	// The request-level error code. This is 0 except for user or infra issues.
+	ErrorCode int16
+
+	// The request-level error message, if any.
+	ErrorMessage *string
+
+	// Results for descriptions, one per user.
+	Results []DescribeUserSCRAMCredentialsResponseResult
+}
+
+func (*DescribeUserSCRAMCredentialsResponse) Key() int16                 { return 50 }
+func (*DescribeUserSCRAMCredentialsResponse) MaxVersion() int16          { return 0 }
+func (v *DescribeUserSCRAMCredentialsResponse) SetVersion(version int16) { v.Version = version }
+func (v *DescribeUserSCRAMCredentialsResponse) GetVersion() int16        { return v.Version }
+func (v *DescribeUserSCRAMCredentialsResponse) IsFlexible() bool         { return v.Version >= 0 }
+func (v *DescribeUserSCRAMCredentialsResponse) RequestKind() Request {
+	return &DescribeUserSCRAMCredentialsRequest{Version: v.Version}
+}
+
+func (v *DescribeUserSCRAMCredentialsResponse) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	isFlexible := version >= 0
+	_ = isFlexible
+	{
+		v := v.ThrottleMillis
+		dst = kbin.AppendInt32(dst, v)
+	}
+	{
+		v := v.ErrorCode
+		dst = kbin.AppendInt16(dst, v)
+	}
+	{
+		v := v.ErrorMessage
+		if isFlexible {
+			dst = kbin.AppendCompactNullableString(dst, v)
+		} else {
+			dst = kbin.AppendNullableString(dst, v)
+		}
+	}
+	{
+		v := v.Results
+		if isFlexible {
+			dst = kbin.AppendCompactArrayLen(dst, len(v))
+		} else {
+			dst = kbin.AppendArrayLen(dst, len(v))
+		}
+		for i := range v {
+			v := &v[i]
+			{
+				v := v.User
+				if isFlexible {
+					dst = kbin.AppendCompactString(dst, v)
+				} else {
+					dst = kbin.AppendString(dst, v)
+				}
+			}
+			{
+				v := v.ErrorCode
+				dst = kbin.AppendInt16(dst, v)
+			}
+			{
+				v := v.ErrorMessage
+				if isFlexible {
+					dst = kbin.AppendCompactNullableString(dst, v)
+				} else {
+					dst = kbin.AppendNullableString(dst, v)
+				}
+			}
+			{
+				v := v.CredentialInfos
+				if isFlexible {
+					dst = kbin.AppendCompactArrayLen(dst, len(v))
+				} else {
+					dst = kbin.AppendArrayLen(dst, len(v))
+				}
+				for i := range v {
+					v := &v[i]
+					{
+						v := v.Mechanism
+						dst = kbin.AppendInt8(dst, v)
+					}
+					{
+						v := v.Iteractions
+						dst = kbin.AppendInt32(dst, v)
+					}
+					if isFlexible {
+						dst = kbin.AppendUvarint(dst, 0)
+					}
+				}
+			}
+			if isFlexible {
+				dst = kbin.AppendUvarint(dst, 0)
+			}
+		}
+	}
+	if isFlexible {
+		dst = kbin.AppendUvarint(dst, 0)
+	}
+	return dst
+}
+func (v *DescribeUserSCRAMCredentialsResponse) ReadFrom(src []byte) error {
+	version := v.Version
+	_ = version
+	isFlexible := version >= 0
+	_ = isFlexible
+	b := kbin.Reader{Src: src}
+	s := v
+	{
+		v := b.Int32()
+		s.ThrottleMillis = v
+	}
+	{
+		v := b.Int16()
+		s.ErrorCode = v
+	}
+	{
+		var v *string
+		if isFlexible {
+			v = b.CompactNullableString()
+		} else {
+			v = b.NullableString()
+		}
+		s.ErrorMessage = v
+	}
+	{
+		v := s.Results
+		a := v
+		var l int32
+		if isFlexible {
+			l = b.CompactArrayLen()
+		} else {
+			l = b.ArrayLen()
+		}
+		if !b.Ok() {
+			return b.Complete()
+		}
+		if l > 0 {
+			a = make([]DescribeUserSCRAMCredentialsResponseResult, l)
+		}
+		for i := int32(0); i < l; i++ {
+			v := &a[i]
+			s := v
+			{
+				var v string
+				if isFlexible {
+					v = b.CompactString()
+				} else {
+					v = b.String()
+				}
+				s.User = v
+			}
+			{
+				v := b.Int16()
+				s.ErrorCode = v
+			}
+			{
+				var v *string
+				if isFlexible {
+					v = b.CompactNullableString()
+				} else {
+					v = b.NullableString()
+				}
+				s.ErrorMessage = v
+			}
+			{
+				v := s.CredentialInfos
+				a := v
+				var l int32
+				if isFlexible {
+					l = b.CompactArrayLen()
+				} else {
+					l = b.ArrayLen()
+				}
+				if !b.Ok() {
+					return b.Complete()
+				}
+				if l > 0 {
+					a = make([]DescribeUserSCRAMCredentialsResponseResultCredentialInfo, l)
+				}
+				for i := int32(0); i < l; i++ {
+					v := &a[i]
+					s := v
+					{
+						v := b.Int8()
+						s.Mechanism = v
+					}
+					{
+						v := b.Int32()
+						s.Iteractions = v
+					}
+					if isFlexible {
+						SkipTags(&b)
+					}
+				}
+				v = a
+				s.CredentialInfos = v
+			}
+			if isFlexible {
+				SkipTags(&b)
+			}
+		}
+		v = a
+		s.Results = v
+	}
+	if isFlexible {
+		SkipTags(&b)
+	}
+	return b.Complete()
+}
+
+type AlterUserSCRAMCredentialsRequestDeletion struct {
+	// The user name to match for removal.
+	Name string
+
+	// The mechanism for the user name to remove.
+	Mechanism int8
+}
+type AlterUserSCRAMCredentialsRequestUpsertion struct {
+	// The user name to use.
+	Name string
+
+	// The mechanism to use for creating. See
+	// DescribeUserSCRAMCredentialsResponse for more information.
+	Mechanism int8
+
+	// The number of iterations to use. This must be more than the minimum for
+	// the mechanism and cannot be more than 16384.
+	Iterations int32
+
+	// A random salt generated by the client.
+	Salt []byte
+
+	// The salted password to use.
+	SaltedPassword []byte
+}
+
+// AlterUserSCRAMCredentialsRequest, proposed in KIP-554 and introduced
+// with Kafka 2.7.0, alters or deletes user SCRAM credentials.
+//
+// This request was introduced as part of the overarching KIP-500 initiative,
+// which is to remove Zookeeper as a dependency.
+//
+// This request requires ALTER on CLUSTER.
+type AlterUserSCRAMCredentialsRequest struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	// The SCRAM credentials to remove.
+	Deletions []AlterUserSCRAMCredentialsRequestDeletion
+
+	// The SCRAM credentials to update or insert.
+	Upsertions []AlterUserSCRAMCredentialsRequestUpsertion
+}
+
+func (*AlterUserSCRAMCredentialsRequest) Key() int16                 { return 51 }
+func (*AlterUserSCRAMCredentialsRequest) MaxVersion() int16          { return 0 }
+func (v *AlterUserSCRAMCredentialsRequest) SetVersion(version int16) { v.Version = version }
+func (v *AlterUserSCRAMCredentialsRequest) GetVersion() int16        { return v.Version }
+func (v *AlterUserSCRAMCredentialsRequest) IsFlexible() bool         { return v.Version >= 0 }
+func (v *AlterUserSCRAMCredentialsRequest) IsAdminRequest()          {}
+func (v *AlterUserSCRAMCredentialsRequest) ResponseKind() Response {
+	return &AlterUserSCRAMCredentialsResponse{Version: v.Version}
+}
+
+func (v *AlterUserSCRAMCredentialsRequest) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	isFlexible := version >= 0
+	_ = isFlexible
+	{
+		v := v.Deletions
+		if isFlexible {
+			dst = kbin.AppendCompactArrayLen(dst, len(v))
+		} else {
+			dst = kbin.AppendArrayLen(dst, len(v))
+		}
+		for i := range v {
+			v := &v[i]
+			{
+				v := v.Name
+				if isFlexible {
+					dst = kbin.AppendCompactString(dst, v)
+				} else {
+					dst = kbin.AppendString(dst, v)
+				}
+			}
+			{
+				v := v.Mechanism
+				dst = kbin.AppendInt8(dst, v)
+			}
+			if isFlexible {
+				dst = kbin.AppendUvarint(dst, 0)
+			}
+		}
+	}
+	{
+		v := v.Upsertions
+		if isFlexible {
+			dst = kbin.AppendCompactArrayLen(dst, len(v))
+		} else {
+			dst = kbin.AppendArrayLen(dst, len(v))
+		}
+		for i := range v {
+			v := &v[i]
+			{
+				v := v.Name
+				if isFlexible {
+					dst = kbin.AppendCompactString(dst, v)
+				} else {
+					dst = kbin.AppendString(dst, v)
+				}
+			}
+			{
+				v := v.Mechanism
+				dst = kbin.AppendInt8(dst, v)
+			}
+			{
+				v := v.Iterations
+				dst = kbin.AppendInt32(dst, v)
+			}
+			{
+				v := v.Salt
+				if isFlexible {
+					dst = kbin.AppendCompactBytes(dst, v)
+				} else {
+					dst = kbin.AppendBytes(dst, v)
+				}
+			}
+			{
+				v := v.SaltedPassword
+				if isFlexible {
+					dst = kbin.AppendCompactBytes(dst, v)
+				} else {
+					dst = kbin.AppendBytes(dst, v)
+				}
+			}
+			if isFlexible {
+				dst = kbin.AppendUvarint(dst, 0)
+			}
+		}
+	}
+	if isFlexible {
+		dst = kbin.AppendUvarint(dst, 0)
+	}
+	return dst
+}
+func (v *AlterUserSCRAMCredentialsRequest) ReadFrom(src []byte) error {
+	version := v.Version
+	_ = version
+	isFlexible := version >= 0
+	_ = isFlexible
+	b := kbin.Reader{Src: src}
+	s := v
+	{
+		v := s.Deletions
+		a := v
+		var l int32
+		if isFlexible {
+			l = b.CompactArrayLen()
+		} else {
+			l = b.ArrayLen()
+		}
+		if !b.Ok() {
+			return b.Complete()
+		}
+		if l > 0 {
+			a = make([]AlterUserSCRAMCredentialsRequestDeletion, l)
+		}
+		for i := int32(0); i < l; i++ {
+			v := &a[i]
+			s := v
+			{
+				var v string
+				if isFlexible {
+					v = b.CompactString()
+				} else {
+					v = b.String()
+				}
+				s.Name = v
+			}
+			{
+				v := b.Int8()
+				s.Mechanism = v
+			}
+			if isFlexible {
+				SkipTags(&b)
+			}
+		}
+		v = a
+		s.Deletions = v
+	}
+	{
+		v := s.Upsertions
+		a := v
+		var l int32
+		if isFlexible {
+			l = b.CompactArrayLen()
+		} else {
+			l = b.ArrayLen()
+		}
+		if !b.Ok() {
+			return b.Complete()
+		}
+		if l > 0 {
+			a = make([]AlterUserSCRAMCredentialsRequestUpsertion, l)
+		}
+		for i := int32(0); i < l; i++ {
+			v := &a[i]
+			s := v
+			{
+				var v string
+				if isFlexible {
+					v = b.CompactString()
+				} else {
+					v = b.String()
+				}
+				s.Name = v
+			}
+			{
+				v := b.Int8()
+				s.Mechanism = v
+			}
+			{
+				v := b.Int32()
+				s.Iterations = v
+			}
+			{
+				var v []byte
+				if isFlexible {
+					v = b.CompactBytes()
+				} else {
+					v = b.Bytes()
+				}
+				s.Salt = v
+			}
+			{
+				var v []byte
+				if isFlexible {
+					v = b.CompactBytes()
+				} else {
+					v = b.Bytes()
+				}
+				s.SaltedPassword = v
+			}
+			if isFlexible {
+				SkipTags(&b)
+			}
+		}
+		v = a
+		s.Upsertions = v
+	}
+	if isFlexible {
+		SkipTags(&b)
+	}
+	return b.Complete()
+}
+
+type AlterUserSCRAMCredentialsResponseResult struct {
+	// The name this result corresponds to.
+	User string
+
+	// The user-level error code.
+	ErrorCode int16
+
+	// The user-level error message, if any.
+	ErrorMessage *string
+}
+
+// AlterUserSCRAMCredentialsResponse is a response for an
+// AlterUserSCRAMCredentialsRequest.
+type AlterUserSCRAMCredentialsResponse struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	// ThrottleMillis is how long of a throttle Kafka will apply to the client
+	// after responding to this request.
+	ThrottleMillis int32
+
+	// The results for deletions and upsertions.
+	Results []AlterUserSCRAMCredentialsResponseResult
+}
+
+func (*AlterUserSCRAMCredentialsResponse) Key() int16                 { return 51 }
+func (*AlterUserSCRAMCredentialsResponse) MaxVersion() int16          { return 0 }
+func (v *AlterUserSCRAMCredentialsResponse) SetVersion(version int16) { v.Version = version }
+func (v *AlterUserSCRAMCredentialsResponse) GetVersion() int16        { return v.Version }
+func (v *AlterUserSCRAMCredentialsResponse) IsFlexible() bool         { return v.Version >= 0 }
+func (v *AlterUserSCRAMCredentialsResponse) RequestKind() Request {
+	return &AlterUserSCRAMCredentialsRequest{Version: v.Version}
+}
+
+func (v *AlterUserSCRAMCredentialsResponse) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	isFlexible := version >= 0
+	_ = isFlexible
+	{
+		v := v.ThrottleMillis
+		dst = kbin.AppendInt32(dst, v)
+	}
+	{
+		v := v.Results
+		if isFlexible {
+			dst = kbin.AppendCompactArrayLen(dst, len(v))
+		} else {
+			dst = kbin.AppendArrayLen(dst, len(v))
+		}
+		for i := range v {
+			v := &v[i]
+			{
+				v := v.User
+				if isFlexible {
+					dst = kbin.AppendCompactString(dst, v)
+				} else {
+					dst = kbin.AppendString(dst, v)
+				}
+			}
+			{
+				v := v.ErrorCode
+				dst = kbin.AppendInt16(dst, v)
+			}
+			{
+				v := v.ErrorMessage
+				if isFlexible {
+					dst = kbin.AppendCompactNullableString(dst, v)
+				} else {
+					dst = kbin.AppendNullableString(dst, v)
+				}
+			}
+			if isFlexible {
+				dst = kbin.AppendUvarint(dst, 0)
+			}
+		}
+	}
+	if isFlexible {
+		dst = kbin.AppendUvarint(dst, 0)
+	}
+	return dst
+}
+func (v *AlterUserSCRAMCredentialsResponse) ReadFrom(src []byte) error {
+	version := v.Version
+	_ = version
+	isFlexible := version >= 0
+	_ = isFlexible
+	b := kbin.Reader{Src: src}
+	s := v
+	{
+		v := b.Int32()
+		s.ThrottleMillis = v
+	}
+	{
+		v := s.Results
+		a := v
+		var l int32
+		if isFlexible {
+			l = b.CompactArrayLen()
+		} else {
+			l = b.ArrayLen()
+		}
+		if !b.Ok() {
+			return b.Complete()
+		}
+		if l > 0 {
+			a = make([]AlterUserSCRAMCredentialsResponseResult, l)
+		}
+		for i := int32(0); i < l; i++ {
+			v := &a[i]
+			s := v
+			{
+				var v string
+				if isFlexible {
+					v = b.CompactString()
+				} else {
+					v = b.String()
+				}
+				s.User = v
+			}
+			{
+				v := b.Int16()
+				s.ErrorCode = v
+			}
+			{
+				var v *string
+				if isFlexible {
+					v = b.CompactNullableString()
+				} else {
+					v = b.NullableString()
+				}
+				s.ErrorMessage = v
+			}
+			if isFlexible {
+				SkipTags(&b)
+			}
+		}
+		v = a
+		s.Results = v
+	}
+	if isFlexible {
+		SkipTags(&b)
+	}
+	return b.Complete()
+}
+
 // RequestForKey returns the request corresponding to the given request key
 // or nil if the key is unknown.
 func RequestForKey(key int16) Request {
@@ -20368,6 +21112,10 @@ func RequestForKey(key int16) Request {
 		return new(DescribeClientQuotasRequest)
 	case 49:
 		return new(AlterClientQuotasRequest)
+	case 50:
+		return new(DescribeUserSCRAMCredentialsRequest)
+	case 51:
+		return new(AlterUserSCRAMCredentialsRequest)
 	}
 }
 
@@ -20477,6 +21225,10 @@ func ResponseForKey(key int16) Response {
 		return new(DescribeClientQuotasResponse)
 	case 49:
 		return new(AlterClientQuotasResponse)
+	case 50:
+		return new(DescribeUserSCRAMCredentialsResponse)
+	case 51:
+		return new(AlterUserSCRAMCredentialsResponse)
 	}
 }
 
@@ -20586,5 +21338,9 @@ func NameForKey(key int16) string {
 		return "DescribeClientQuotas"
 	case 49:
 		return "AlterClientQuotas"
+	case 50:
+		return "DescribeUserSCRAMCredentials"
+	case 51:
+		return "AlterUserSCRAMCredentials"
 	}
 }

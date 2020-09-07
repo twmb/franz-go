@@ -134,6 +134,9 @@ var (
 	UnstableOffsetCommit               = &Error{"UNSTABLE_OFFSET_COMMIT", 88, true, "There are unstable offsets that need to be cleared."}
 	ThrottlingQuotaExceeded            = &Error{"THROTTLING_QUOTA_EXCEEDED", 89, true, "The throttling quota has been exceeded."}
 	ProducerFenced                     = &Error{"PRODUCER_FENCED", 90, true, "There is a newer producer with the same transactionalId which fences the current one."}
+	ResourceNotFound                   = &Error{"RESOURCE_NOT_FOUND", 91, false, "A request illegally referred to a resource that does not exist."}
+	DuplicateResource                  = &Error{"DUPLICATE_RESOURCE", 92, false, "A request illegally referred to the same resource twice."}
+	UnacceptableCredential             = &Error{"UNACCEPTABLE_CREDENTIAL", 91, false, "Requested credential would not meet criteria for acceptability."}
 )
 
 var code2err = map[int16]error{
@@ -229,4 +232,7 @@ var code2err = map[int16]error{
 	88: UnstableOffsetCommit,
 	89: ThrottlingQuotaExceeded,
 	90: ProducerFenced,
+	91: ResourceNotFound,
+	92: DuplicateResource,
+	93: UnacceptableCredential,
 }
