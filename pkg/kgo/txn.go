@@ -360,7 +360,9 @@ func (cl *Client) EndTransaction(ctx context.Context, commit TransactionEndTry) 
 
 		switch err.(type) {
 		case *kerr.Error:
-			if err != kerr.UnknownProducerID || cl.producer.idVersion <= 2 {
+			kip360 := cl.producer.idVersion >= 3 &&
+				(err == kerr.UnknownProducerID || err == kerr.InvalidProducerIDMapping)
+			if !kip360 {
 				return err // fatal, unrecoverable
 			}
 

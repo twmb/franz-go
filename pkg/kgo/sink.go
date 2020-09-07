@@ -567,7 +567,8 @@ func (s *sink) handleReqResp(req *produceRequest, resp kmsg.Response, err error)
 				reqRetry.addSeqBatch(topic, partition, batch)
 
 			case err == kerr.OutOfOrderSequenceNumber,
-				err == kerr.UnknownProducerID:
+				err == kerr.UnknownProducerID,
+				err == kerr.InvalidProducerIDMapping:
 				// OOOSN always means data loss 1.0.0+ and is ambiguous prior.
 				// We assume the worst and only continue if requested.
 				//
@@ -575,17 +576,26 @@ func (s *sink) handleReqResp(req *produceRequest, resp kmsg.Response, err error)
 				// handling, but KIP-360 demonstrated that resetting sequence
 				// numbers is fundamentally unsafe, so we treat it like OOOSN.
 				//
+				// InvalidMapping is similar to UnknownProducerID, but occurs
+				// when the txnal coordinator timed out our transaction.
+				//
+				// 2.5.0
+				// =====
 				// 2.5.0 introduced some behavior to potentially safely reset
 				// the sequence numbers by bumping an epoch (see KIP-360).
+				//
 				// For the idempotent producer, the solution is to fail all
 				// buffered records and then let the client user reset things
 				// with the understanding that they cannot guard against
 				// potential dups / reordering at that point. Realistically,
-				// that's no better than just a config knob that allows
-				// the user to continue (our stopOnDataLoss flag), so
-				// we do not try any logic in the idempotent case.
-				if s.cl.cfg.stopOnDataLoss || err == kerr.UnknownProducerID && s.cl.producer.idVersion >= 3 && s.cl.cfg.txnID != nil {
-					s.cl.cfg.logger.Log(LogLevelInfo, "batch errored with OutOfOrderSequenceNumber or UnknownProducerID, failing the producer ID",
+				// that's no better than a config knob that allows the user
+				// to continue (our stopOnDataLoss flag), so for the idempotent
+				// producer, if stopOnDataLoss is false, we just continue.
+				//
+				// For the transactional producer, we always fail the producerID.
+				// EndTransaction will trigger recovery if possible.
+				if s.cl.cfg.txnID != nil || s.cl.cfg.stopOnDataLoss {
+					s.cl.cfg.logger.Log(LogLevelInfo, "batch errored, failing the producer ID",
 						"topic", topic,
 						"partition", partition,
 						"producer_id", req.producerID,
@@ -600,6 +610,8 @@ func (s *sink) handleReqResp(req *produceRequest, resp kmsg.Response, err error)
 					s.cl.cfg.onDataLoss(topic, partition)
 				}
 
+				// For OOOSN,
+				//
 				// We could be here because we do not have unlimited
 				// retries and previously failed a retriable error.
 				// The broker could technically have been fine, but we
@@ -612,6 +624,19 @@ func (s *sink) handleReqResp(req *produceRequest, resp kmsg.Response, err error)
 				// broker that thinks we are still at a high seq when
 				// we are sending 0. If we did not fail, then we would
 				// loop with an OOOSN error.
+				//
+				// For UnknownProducerID,
+				//
+				// We could be here because we have an idempotent producer.
+				// If we were transactional, we would have failed above.
+				// We could just reset sequence numbers, but we may as well
+				// also fail the producer ID which triggers epoch bumping
+				// and simplifies logic for the OOSN thing described above.
+				//
+				// For InvalidProducerIDMapping,
+				//
+				// We should not be here, since this error occurs in the
+				// context of transactions, which would be caught above.
 				s.cl.cfg.logger.Log(LogLevelInfo, "batch errored with OutOfOrderSequenceNumber or UnknownProducerID, failing the producer ID and resetting the partition sequence number",
 					"topic", topic,
 					"partition", partition,

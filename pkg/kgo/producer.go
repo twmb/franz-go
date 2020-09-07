@@ -3,6 +3,7 @@ package kgo
 import (
 	"context"
 	"errors"
+	"math"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -229,8 +230,22 @@ func (cl *Client) producerID() (int64, int16, error) {
 		defer cl.producer.idMu.Unlock()
 
 		if id = cl.producer.id.Load().(*producerID); id.err == errReloadProducerID {
-			id = cl.doInitProducerID(id.id, id.epoch)
-			cl.producer.id.Store(id)
+			// For the idempotent producer, as specified in KIP-360,
+			// if we had an ID, we can bump the epoch locally.
+			// If we are at the max epoch, we will ask for a new ID.
+			if cl.cfg.txnID == nil && id.id >= 0 && id.epoch < math.MaxInt16-1 {
+				cl.producer.id.Store(&producerID{
+					id:    id.id,
+					epoch: id.epoch + 1,
+					err:   nil,
+				})
+			} else {
+				newID, keep := cl.doInitProducerID(id.id, id.epoch)
+				if keep {
+					id = newID
+					cl.producer.id.Store(id)
+				}
+			}
 		}
 	}
 
@@ -270,7 +285,10 @@ func (cl *Client) failProducerID(id int64, epoch int16, err error) {
 
 // doInitProducerID inits the idempotent ID and potentially the transactional
 // producer epoch.
-func (cl *Client) doInitProducerID(lastID int64, lastEpoch int16) *producerID {
+//
+// This returns false only if our request failed and not due to the key being
+// unknown to the broker.
+func (cl *Client) doInitProducerID(lastID int64, lastEpoch int16) (*producerID, bool) {
 	cl.cfg.logger.Log(LogLevelInfo, "initializing producer id")
 	req := &kmsg.InitProducerIDRequest{
 		TransactionalID: cl.cfg.txnID,
@@ -290,15 +308,15 @@ func (cl *Client) doInitProducerID(lastID int64, lastEpoch int16) *producerID {
 		// what we hit first is the default.
 		if err == ErrUnknownRequestKey {
 			cl.cfg.logger.Log(LogLevelInfo, "unable to initialize a producer id because the broker is too old, continuing without a producer id")
-			return &producerID{-1, -1, nil}
+			return &producerID{-1, -1, nil}, true
 		}
-		cl.cfg.logger.Log(LogLevelInfo, "producer id initialization failure", "err", err)
-		return &producerID{-1, -1, err}
+		cl.cfg.logger.Log(LogLevelInfo, "producer id initialization failure, discarding initialization attempt", "err", err)
+		return &producerID{lastID, lastEpoch, err}, false
 	}
 	resp := kresp.(*kmsg.InitProducerIDResponse)
 	if err = kerr.ErrorForCode(resp.ErrorCode); err != nil {
 		cl.cfg.logger.Log(LogLevelInfo, "producer id initialization errored", "err", err)
-		return &producerID{-1, -1, err}
+		return &producerID{lastID, lastEpoch, err}, true
 	}
 	cl.cfg.logger.Log(LogLevelInfo, "producer id initialization success", "id", resp.ProducerID, "epoch", resp.ProducerEpoch)
 
@@ -309,7 +327,7 @@ func (cl *Client) doInitProducerID(lastID int64, lastEpoch int16) *producerID {
 		cl.producer.idVersion = req.Version
 	}
 
-	return &producerID{resp.ProducerID, resp.ProducerEpoch, nil}
+	return &producerID{resp.ProducerID, resp.ProducerEpoch, nil}, true
 }
 
 // partitionsForTopicProduce returns the topic partitions for a record.
