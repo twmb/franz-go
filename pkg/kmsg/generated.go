@@ -2963,7 +2963,6 @@ func (*LeaderAndISRRequest) MaxVersion() int16          { return 4 }
 func (v *LeaderAndISRRequest) SetVersion(version int16) { v.Version = version }
 func (v *LeaderAndISRRequest) GetVersion() int16        { return v.Version }
 func (v *LeaderAndISRRequest) IsFlexible() bool         { return v.Version >= 4 }
-func (v *LeaderAndISRRequest) IsAdminRequest()          {}
 func (v *LeaderAndISRRequest) ResponseKind() Response {
 	return &LeaderAndISRResponse{Version: v.Version}
 }
@@ -3716,7 +3715,6 @@ func (*StopReplicaRequest) MaxVersion() int16          { return 3 }
 func (v *StopReplicaRequest) SetVersion(version int16) { v.Version = version }
 func (v *StopReplicaRequest) GetVersion() int16        { return v.Version }
 func (v *StopReplicaRequest) IsFlexible() bool         { return v.Version >= 2 }
-func (v *StopReplicaRequest) IsAdminRequest()          {}
 func (v *StopReplicaRequest) ResponseKind() Response   { return &StopReplicaResponse{Version: v.Version} }
 
 func (v *StopReplicaRequest) AppendTo(dst []byte) []byte {
@@ -4141,7 +4139,6 @@ func (*UpdateMetadataRequest) MaxVersion() int16          { return 6 }
 func (v *UpdateMetadataRequest) SetVersion(version int16) { v.Version = version }
 func (v *UpdateMetadataRequest) GetVersion() int16        { return v.Version }
 func (v *UpdateMetadataRequest) IsFlexible() bool         { return v.Version >= 6 }
-func (v *UpdateMetadataRequest) IsAdminRequest()          {}
 func (v *UpdateMetadataRequest) ResponseKind() Response {
 	return &UpdateMetadataResponse{Version: v.Version}
 }
@@ -4830,7 +4827,6 @@ func (*ControlledShutdownRequest) MaxVersion() int16          { return 3 }
 func (v *ControlledShutdownRequest) SetVersion(version int16) { v.Version = version }
 func (v *ControlledShutdownRequest) GetVersion() int16        { return v.Version }
 func (v *ControlledShutdownRequest) IsFlexible() bool         { return v.Version >= 3 }
-func (v *ControlledShutdownRequest) IsAdminRequest()          {}
 func (v *ControlledShutdownRequest) ResponseKind() Response {
 	return &ControlledShutdownResponse{Version: v.Version}
 }
@@ -10614,6 +10610,9 @@ type DeleteRecordsRequestTopic struct {
 // the requested offset. All segments whose max partition is before the
 // requested offset are deleted, and any records within the segment before
 // the requested offset can no longer be read.
+//
+// This request must be issued to the correct brokers that own the partitions
+// you intend to delete records for.
 type DeleteRecordsRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
@@ -10633,7 +10632,6 @@ func (*DeleteRecordsRequest) MaxVersion() int16          { return 2 }
 func (v *DeleteRecordsRequest) SetVersion(version int16) { v.Version = version }
 func (v *DeleteRecordsRequest) GetVersion() int16        { return v.Version }
 func (v *DeleteRecordsRequest) IsFlexible() bool         { return v.Version >= 2 }
-func (v *DeleteRecordsRequest) IsAdminRequest()          {}
 func (v *DeleteRecordsRequest) ResponseKind() Response {
 	return &DeleteRecordsResponse{Version: v.Version}
 }
@@ -13065,7 +13063,6 @@ func (*DescribeACLsRequest) MaxVersion() int16          { return 2 }
 func (v *DescribeACLsRequest) SetVersion(version int16) { v.Version = version }
 func (v *DescribeACLsRequest) GetVersion() int16        { return v.Version }
 func (v *DescribeACLsRequest) IsFlexible() bool         { return v.Version >= 2 }
-func (v *DescribeACLsRequest) IsAdminRequest()          {}
 func (v *DescribeACLsRequest) ResponseKind() Response {
 	return &DescribeACLsResponse{Version: v.Version}
 }
@@ -13500,7 +13497,6 @@ func (*CreateACLsRequest) MaxVersion() int16          { return 2 }
 func (v *CreateACLsRequest) SetVersion(version int16) { v.Version = version }
 func (v *CreateACLsRequest) GetVersion() int16        { return v.Version }
 func (v *CreateACLsRequest) IsFlexible() bool         { return v.Version >= 2 }
-func (v *CreateACLsRequest) IsAdminRequest()          {}
 func (v *CreateACLsRequest) ResponseKind() Response   { return &CreateACLsResponse{Version: v.Version} }
 
 func (v *CreateACLsRequest) AppendTo(dst []byte) []byte {
@@ -13803,7 +13799,6 @@ func (*DeleteACLsRequest) MaxVersion() int16          { return 2 }
 func (v *DeleteACLsRequest) SetVersion(version int16) { v.Version = version }
 func (v *DeleteACLsRequest) GetVersion() int16        { return v.Version }
 func (v *DeleteACLsRequest) IsFlexible() bool         { return v.Version >= 2 }
-func (v *DeleteACLsRequest) IsAdminRequest()          {}
 func (v *DeleteACLsRequest) ResponseKind() Response   { return &DeleteACLsResponse{Version: v.Version} }
 
 func (v *DeleteACLsRequest) AppendTo(dst []byte) []byte {
@@ -14288,7 +14283,6 @@ func (*DescribeConfigsRequest) MaxVersion() int16          { return 3 }
 func (v *DescribeConfigsRequest) SetVersion(version int16) { v.Version = version }
 func (v *DescribeConfigsRequest) GetVersion() int16        { return v.Version }
 func (v *DescribeConfigsRequest) IsFlexible() bool         { return false }
-func (v *DescribeConfigsRequest) IsAdminRequest()          {}
 func (v *DescribeConfigsRequest) ResponseKind() Response {
 	return &DescribeConfigsResponse{Version: v.Version}
 }
@@ -14780,7 +14774,6 @@ func (*AlterConfigsRequest) MaxVersion() int16          { return 1 }
 func (v *AlterConfigsRequest) SetVersion(version int16) { v.Version = version }
 func (v *AlterConfigsRequest) GetVersion() int16        { return v.Version }
 func (v *AlterConfigsRequest) IsFlexible() bool         { return false }
-func (v *AlterConfigsRequest) IsAdminRequest()          {}
 func (v *AlterConfigsRequest) ResponseKind() Response {
 	return &AlterConfigsResponse{Version: v.Version}
 }
@@ -15049,7 +15042,6 @@ func (*AlterReplicaLogDirsRequest) MaxVersion() int16          { return 1 }
 func (v *AlterReplicaLogDirsRequest) SetVersion(version int16) { v.Version = version }
 func (v *AlterReplicaLogDirsRequest) GetVersion() int16        { return v.Version }
 func (v *AlterReplicaLogDirsRequest) IsFlexible() bool         { return false }
-func (v *AlterReplicaLogDirsRequest) IsAdminRequest()          {}
 func (v *AlterReplicaLogDirsRequest) ResponseKind() Response {
 	return &AlterReplicaLogDirsResponse{Version: v.Version}
 }
@@ -15329,7 +15321,6 @@ func (*DescribeLogDirsRequest) MaxVersion() int16          { return 2 }
 func (v *DescribeLogDirsRequest) SetVersion(version int16) { v.Version = version }
 func (v *DescribeLogDirsRequest) GetVersion() int16        { return v.Version }
 func (v *DescribeLogDirsRequest) IsFlexible() bool         { return v.Version >= 2 }
-func (v *DescribeLogDirsRequest) IsAdminRequest()          {}
 func (v *DescribeLogDirsRequest) ResponseKind() Response {
 	return &DescribeLogDirsResponse{Version: v.Version}
 }
@@ -16347,7 +16338,6 @@ func (*CreateDelegationTokenRequest) MaxVersion() int16          { return 2 }
 func (v *CreateDelegationTokenRequest) SetVersion(version int16) { v.Version = version }
 func (v *CreateDelegationTokenRequest) GetVersion() int16        { return v.Version }
 func (v *CreateDelegationTokenRequest) IsFlexible() bool         { return v.Version >= 2 }
-func (v *CreateDelegationTokenRequest) IsAdminRequest()          {}
 func (v *CreateDelegationTokenRequest) ResponseKind() Response {
 	return &CreateDelegationTokenResponse{Version: v.Version}
 }
@@ -16660,7 +16650,6 @@ func (*RenewDelegationTokenRequest) MaxVersion() int16          { return 2 }
 func (v *RenewDelegationTokenRequest) SetVersion(version int16) { v.Version = version }
 func (v *RenewDelegationTokenRequest) GetVersion() int16        { return v.Version }
 func (v *RenewDelegationTokenRequest) IsFlexible() bool         { return v.Version >= 2 }
-func (v *RenewDelegationTokenRequest) IsAdminRequest()          {}
 func (v *RenewDelegationTokenRequest) ResponseKind() Response {
 	return &RenewDelegationTokenResponse{Version: v.Version}
 }
@@ -16815,7 +16804,6 @@ func (*ExpireDelegationTokenRequest) MaxVersion() int16          { return 2 }
 func (v *ExpireDelegationTokenRequest) SetVersion(version int16) { v.Version = version }
 func (v *ExpireDelegationTokenRequest) GetVersion() int16        { return v.Version }
 func (v *ExpireDelegationTokenRequest) IsFlexible() bool         { return v.Version >= 2 }
-func (v *ExpireDelegationTokenRequest) IsAdminRequest()          {}
 func (v *ExpireDelegationTokenRequest) ResponseKind() Response {
 	return &ExpireDelegationTokenResponse{Version: v.Version}
 }
@@ -16969,7 +16957,6 @@ func (*DescribeDelegationTokenRequest) MaxVersion() int16          { return 2 }
 func (v *DescribeDelegationTokenRequest) SetVersion(version int16) { v.Version = version }
 func (v *DescribeDelegationTokenRequest) GetVersion() int16        { return v.Version }
 func (v *DescribeDelegationTokenRequest) IsFlexible() bool         { return v.Version >= 2 }
-func (v *DescribeDelegationTokenRequest) IsAdminRequest()          {}
 func (v *DescribeDelegationTokenRequest) ResponseKind() Response {
 	return &DescribeDelegationTokenResponse{Version: v.Version}
 }
@@ -18071,7 +18058,6 @@ func (*IncrementalAlterConfigsRequest) MaxVersion() int16          { return 1 }
 func (v *IncrementalAlterConfigsRequest) SetVersion(version int16) { v.Version = version }
 func (v *IncrementalAlterConfigsRequest) GetVersion() int16        { return v.Version }
 func (v *IncrementalAlterConfigsRequest) IsFlexible() bool         { return v.Version >= 1 }
-func (v *IncrementalAlterConfigsRequest) IsAdminRequest()          {}
 func (v *IncrementalAlterConfigsRequest) ResponseKind() Response {
 	return &IncrementalAlterConfigsResponse{Version: v.Version}
 }
@@ -18254,9 +18240,6 @@ func (v *IncrementalAlterConfigsRequest) ReadFrom(src []byte) error {
 
 type IncrementalAlterConfigsResponseResource struct {
 	// ErrorCode is the error code returned for incrementally altering configs.
-	//
-	// NOT_CONTROLLER is returned if the request was not issued to a Kafka
-	// controller.
 	//
 	// CLUSTER_AUTHORIZATION_FAILED is returned if asking to alter broker
 	// configs but the client is not authorized to do so.
@@ -19386,12 +19369,12 @@ type OffsetDeleteRequest struct {
 	Topics []OffsetDeleteRequestTopic
 }
 
-func (*OffsetDeleteRequest) Key() int16                 { return 47 }
-func (*OffsetDeleteRequest) MaxVersion() int16          { return 0 }
-func (v *OffsetDeleteRequest) SetVersion(version int16) { v.Version = version }
-func (v *OffsetDeleteRequest) GetVersion() int16        { return v.Version }
-func (v *OffsetDeleteRequest) IsFlexible() bool         { return false }
-func (v *OffsetDeleteRequest) IsAdminRequest()          {}
+func (*OffsetDeleteRequest) Key() int16                   { return 47 }
+func (*OffsetDeleteRequest) MaxVersion() int16            { return 0 }
+func (v *OffsetDeleteRequest) SetVersion(version int16)   { v.Version = version }
+func (v *OffsetDeleteRequest) GetVersion() int16          { return v.Version }
+func (v *OffsetDeleteRequest) IsFlexible() bool           { return false }
+func (v *OffsetDeleteRequest) IsGroupCoordinatorRequest() {}
 func (v *OffsetDeleteRequest) ResponseKind() Response {
 	return &OffsetDeleteResponse{Version: v.Version}
 }
@@ -19681,7 +19664,6 @@ func (*DescribeClientQuotasRequest) MaxVersion() int16          { return 0 }
 func (v *DescribeClientQuotasRequest) SetVersion(version int16) { v.Version = version }
 func (v *DescribeClientQuotasRequest) GetVersion() int16        { return v.Version }
 func (v *DescribeClientQuotasRequest) IsFlexible() bool         { return false }
-func (v *DescribeClientQuotasRequest) IsAdminRequest()          {}
 func (v *DescribeClientQuotasRequest) ResponseKind() Response {
 	return &DescribeClientQuotasResponse{Version: v.Version}
 }
@@ -19997,7 +19979,6 @@ func (*AlterClientQuotasRequest) MaxVersion() int16          { return 0 }
 func (v *AlterClientQuotasRequest) SetVersion(version int16) { v.Version = version }
 func (v *AlterClientQuotasRequest) GetVersion() int16        { return v.Version }
 func (v *AlterClientQuotasRequest) IsFlexible() bool         { return false }
-func (v *AlterClientQuotasRequest) IsAdminRequest()          {}
 func (v *AlterClientQuotasRequest) ResponseKind() Response {
 	return &AlterClientQuotasResponse{Version: v.Version}
 }

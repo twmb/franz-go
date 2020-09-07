@@ -788,7 +788,7 @@ LeaderAndISRRequestTopicPartition => not top level, no encoding
 // Kafka 1.0.0 introduced version 1. Kafka 2.2.0 introduced version 2, proposed
 // in KIP-380, which changed the layout of the struct to be more memory
 // efficient. Kafka 2.4.0 introduced version 3 with KIP-455.
-LeaderAndISRRequest => key 4, max version 4, flexible v4+, admin
+LeaderAndISRRequest => key 4, max version 4, flexible v4+
   ControllerID: int32
   ControllerEpoch: int32
   BrokerEpoch: int64 // v2+
@@ -819,7 +819,7 @@ LeaderAndISRResponse =>
 //
 // Kafka 2.6.0 introduced version 3, proposed in KIP-570, reorganizes partitions
 // to be stored and adds the leader epoch and delete partition fields per partition.
-StopReplicaRequest => key 5, max version 3, flexible v2+, admin
+StopReplicaRequest => key 5, max version 3, flexible v2+
   ControllerID: int32
   ControllerEpoch: int32
   BrokerEpoch: int64 // v1+
@@ -863,7 +863,7 @@ UpdateMetadataRequestTopicPartition => not top level, no encoding
 //
 // Kafka 2.2.0 introduced version 5, proposed in KIP-380, which changed the
 // layout of the struct to be more memory efficient.
-UpdateMetadataRequest => key 6, max version 6, flexible v6+, admin
+UpdateMetadataRequest => key 6, max version 6, flexible v6+
   ControllerID: int32
   ControllerEpoch: int32
   BrokerEpoch: int64 // v5+
@@ -897,7 +897,7 @@ UpdateMetadataResponse =>
 //
 // Note that version 0 of this request uses a special encoding format
 // where the request does not include the client ID.
-ControlledShutdownRequest => key 7, max version 3, flexible v3+, admin
+ControlledShutdownRequest => key 7, max version 3, flexible v3+
   BrokerID: int32
   BrokerEpoch: int64 // v2+
 
@@ -1936,7 +1936,10 @@ DeleteTopicsResponse =>
 // the requested offset. All segments whose max partition is before the
 // requested offset are deleted, and any records within the segment before
 // the requested offset can no longer be read.
-DeleteRecordsRequest => key 21, max version 2, flexible v2+, admin
+//
+// This request must be issued to the correct brokers that own the partitions
+// you intend to delete records for.
+DeleteRecordsRequest => key 21, max version 2, flexible v2+
   // Topics contains topics for which to delete records from.
   Topics: [=>]
     // Topic is a topic to delete records from.
@@ -2417,7 +2420,7 @@ TxnOffsetCommitResponse =>
 // "types" of filters in this request: the resource filter and the entry
 // filter, with entries corresponding to users. The first three fields form the
 // resource filter, the last four the entry filter.
-DescribeACLsRequest => key 29, max version 2, flexible v2+, admin
+DescribeACLsRequest => key 29, max version 2, flexible v2+
   // ResourceType is the type of resource to describe.
   //
   // UNKNOWN, 0, is unknown; you do not describe unknown types. Kafka replies
@@ -2505,7 +2508,7 @@ DescribeACLsResponse =>
 //
 // See the DescribeACLsRequest documentation for more descriptions of what
 // valid values for the fields in this request are.
-CreateACLsRequest => key 30, max version 2, flexible v2+, admin
+CreateACLsRequest => key 30, max version 2, flexible v2+
   Creations: [=>]
     // ResourceType is the type of resource this acl entry will be on.
     // It is invalid to use UNKNOWN or ANY.
@@ -2546,7 +2549,7 @@ CreateACLsResponse =>
 // DeleteACLsRequest deletes acls. This request works on filters the same way
 // that DescribeACLsRequest does. See DescribeACLsRequest for documentation of
 // the fields.
-DeleteACLsRequest => key 31, max version 2, flexible v2+, admin
+DeleteACLsRequest => key 31, max version 2, flexible v2+
   // Filters are filters for acls to delete.
   Filters: [=>]
     ResourceType: int8
@@ -2585,7 +2588,7 @@ DeleteACLsResponse =>
 // DescribeConfigsRequest issues a request to describe configs that Kafka
 // currently has. These are the key/value pairs that one uses to configure
 // brokers and topics.
-DescribeConfigsRequest => key 32, max version 3, admin
+DescribeConfigsRequest => key 32, max version 3
   // Resources is a list of resources to describe.
   Resources: [=>]
     // ResourceType is an enum corresponding to the type of config to describe.
@@ -2700,7 +2703,7 @@ DescribeConfigsResponse =>
 // To fix this problem, the AlterConfigs request / response was deprecated
 // in Kafka 2.3.0 in favor of the new IncrementalAlterConfigs request / response.
 // See KIP-339 for more details.
-AlterConfigsRequest => key 33, max version 1, admin
+AlterConfigsRequest => key 33, max version 1
   // Resources is an array of configs to alter.
   Resources: [=>]
     // ResourceType is an enum corresponding to the type of config to alter.
@@ -2764,7 +2767,7 @@ AlterConfigsResponse =>
 // within Kafka.
 //
 // This is primarily useful for moving directories between disks.
-AlterReplicaLogDirsRequest => key 34, max version 1, admin
+AlterReplicaLogDirsRequest => key 34, max version 1
   // Dirs contains absolute paths of where you want things to end up.
   Dirs: [=>]
     // Dir is an absolute path where everything listed below should
@@ -2809,7 +2812,7 @@ AlterReplicaLogDirsResponse =>
 
 // DescribeLogDirsRequest requests directory information for topic partitions.
 // This request was added in support of KIP-113.
-DescribeLogDirsRequest => key 35, max version 2, flexible v2+, admin
+DescribeLogDirsRequest => key 35, max version 2, flexible v2+
   // Topics is an array of topics to describe the log dirs of. If this is
   // null, the response includes all topics and all of their partitions.
   Topics: nullable[=>]
@@ -2965,7 +2968,7 @@ CreatePartitionsResponse =>
 //
 // Delegation tokens live inside of Kafka and use SASL SCRAM-SHA-256 for
 // authorization.
-CreateDelegationTokenRequest => key 38, max version 2, flexible v2+, admin
+CreateDelegationTokenRequest => key 38, max version 2, flexible v2+
   // Renewers is a list of who can renew this delegation token. If empty, the
   // default is the principal (user) who created the token.
   Renewers: [=>]
@@ -3012,7 +3015,7 @@ CreateDelegationTokenResponse =>
 // RenewDelegationTokenRequest is a request to renew a delegation token that
 // has not yet hit its max timestamp. Note that a client using a token cannot
 // renew its own token.
-RenewDelegationTokenRequest => key 39, max version 2, flexible v2+, admin
+RenewDelegationTokenRequest => key 39, max version 2, flexible v2+
   // HMAC is the HMAC of the token to be renewed.
   HMAC: bytes
   // RenewTimeMillis is how long to renew the token for. If -1, Kafka uses its
@@ -3036,7 +3039,7 @@ RenewDelegationTokenResponse =>
 // ExpireDelegationTokenRequest is a request to change the expiry timestamp
 // of a delegation token. Note that a client using a token cannot expire its
 // own token.
-ExpireDelegationTokenRequest => key 40, max version 2, flexible v2+, admin
+ExpireDelegationTokenRequest => key 40, max version 2, flexible v2+
   // HMAC is the HMAC of the token to change the expiry timestamp of.
   HMAC: bytes
   // ExpiryPeriodMillis changes the delegation token's expiry timestamp to
@@ -3063,7 +3066,7 @@ ExpireDelegationTokenResponse =>
   ThrottleMillis: int32
 
 // DescribeDelegationTokenRequest is a request to describe delegation tokens.
-DescribeDelegationTokenRequest => key 41, max version 2, flexible v2+, admin
+DescribeDelegationTokenRequest => key 41, max version 2, flexible v2+
   // Owners contains owners to describe delegation tokens for, or null for all.
   // If non-null, only tokens created from a matching principal type, name
   // combination are printed.
@@ -3208,7 +3211,7 @@ ElectLeadersResponse =>
 // This API was added in Kafka 2.3.0 to replace AlterConfigs. The key benefit
 // of this API is that consumers do not need to know the full config state
 // to add or remove new config options. See KIP-339 for more details.
-IncrementalAlterConfigsRequest => key 44, max version 1, flexible v1+, admin
+IncrementalAlterConfigsRequest => key 44, max version 1, flexible v1+
   // Resources is an array of configs to alter.
   Resources: [=>]
     // ResourceType is an enum corresponding to the type of config to alter.
@@ -3260,9 +3263,6 @@ IncrementalAlterConfigsResponse =>
   // Resources are responses for each resources in the alter request.
   Resources: [=>]
     // ErrorCode is the error code returned for incrementally altering configs.
-    //
-    // NOT_CONTROLLER is returned if the request was not issued to a Kafka
-    // controller.
     //
     // CLUSTER_AUTHORIZATION_FAILED is returned if asking to alter broker
     // configs but the client is not authorized to do so.
@@ -3393,7 +3393,7 @@ ListPartitionReassignmentsResponse =>
 //
 // ACL wise, this requires DELETE on GROUP for the group and READ on TOPIC for
 // each topic.
-OffsetDeleteRequest => key 47, max version 0, admin
+OffsetDeleteRequest => key 47, max version 0, group coordinator
   // Group is the group to delete offsets in.
   Group: string
   // Topics are topics to delete offsets in.
@@ -3447,7 +3447,7 @@ OffsetDeleteResponse =>
 
 // DescribeClientQuotasRequest, proposed in KIP-546 and introduced with Kafka 2.6.0,
 // provides a way to describe client quotas.
-DescribeClientQuotasRequest => key 48, max version 0, admin
+DescribeClientQuotasRequest => key 48, max version 0
   // Components is a list of match filters to apply for describing quota entities.
   Components: [=>]
     // EntityType is the entity component type that this filter component
@@ -3491,7 +3491,7 @@ DescribeClientQuotasResponse =>
 
 // AlterClientQuotaRequest, proposed in KIP-546 and introduced with Kafka 2.6.0,
 // provides a way to alter client quotas.
-AlterClientQuotasRequest => key 49, max version 0, admin
+AlterClientQuotasRequest => key 49, max version 0
   // Entries are quota configuration entries to alter.
   Entries: [=>Entry]
     // Entity contains the components of a quota entity to alter.
