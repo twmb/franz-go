@@ -568,7 +568,9 @@ func (s *sink) handleReqResp(req *produceRequest, resp kmsg.Response, err error)
 
 			case err == kerr.OutOfOrderSequenceNumber,
 				err == kerr.UnknownProducerID,
-				err == kerr.InvalidProducerIDMapping:
+				err == kerr.InvalidProducerIDMapping,
+				err == kerr.InvalidProducerEpoch:
+
 				// OOOSN always means data loss 1.0.0+ and is ambiguous prior.
 				// We assume the worst and only continue if requested.
 				//
@@ -594,6 +596,17 @@ func (s *sink) handleReqResp(req *produceRequest, resp kmsg.Response, err error)
 				//
 				// For the transactional producer, we always fail the producerID.
 				// EndTransaction will trigger recovery if possible.
+				//
+				// 2.7.0
+				// =====
+				// InvalidProducerEpoch became retriable in 2.7.0. Prior, it
+				// was ambiguous (timeout? fenced?). In 2.7.0, InvalidProducerEpoch
+				// is only returned on produce, and then we can recover on other
+				// txn coordinator requests, which have PRODUCER_FENCED vs
+				// TRANSACTION_TIMED_OUT. Supposedly the InvalidProducerEpoch is
+				// now retriable, but it is actually removed entirely from the
+				// Kafka source.
+
 				if s.cl.cfg.txnID != nil || s.cl.cfg.stopOnDataLoss {
 					s.cl.cfg.logger.Log(LogLevelInfo, "batch errored, failing the producer ID",
 						"topic", topic,
@@ -633,7 +646,7 @@ func (s *sink) handleReqResp(req *produceRequest, resp kmsg.Response, err error)
 				// also fail the producer ID which triggers epoch bumping
 				// and simplifies logic for the OOSN thing described above.
 				//
-				// For InvalidProducerIDMapping,
+				// For InvalidProducerIDMapping && InvalidProducerEpoch,
 				//
 				// We should not be here, since this error occurs in the
 				// context of transactions, which would be caught above.
