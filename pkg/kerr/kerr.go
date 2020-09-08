@@ -136,7 +136,7 @@ var (
 	ProducerFenced                     = &Error{"PRODUCER_FENCED", 90, true, "There is a newer producer with the same transactionalId which fences the current one."}
 	ResourceNotFound                   = &Error{"RESOURCE_NOT_FOUND", 91, false, "A request illegally referred to a resource that does not exist."}
 	DuplicateResource                  = &Error{"DUPLICATE_RESOURCE", 92, false, "A request illegally referred to the same resource twice."}
-	UnacceptableCredential             = &Error{"UNACCEPTABLE_CREDENTIAL", 91, false, "Requested credential would not meet criteria for acceptability."}
+	UnacceptableCredential             = &Error{"UNACCEPTABLE_CREDENTIAL", 93, false, "Requested credential would not meet criteria for acceptability."}
 )
 
 var code2err = map[int16]error{

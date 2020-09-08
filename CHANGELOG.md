@@ -1,7 +1,7 @@
 v0.4.8
 ======
 
-- [`2d58c4fc0`](https://github.com/twmb/kafka-go/commit/2d58c4fc080720ead78d8734f9fa9e3d26a0780c): Further prepare for KIP-588 (recover on txn timed out)
+- [`2e235164d`](https://github.com/twmb/kafka-go/commit/2e235164daca64cafc715642582b13424e494e5c): Further prepare for KIP-588 (recover on txn timed out)
 - [`60de0dafb`](https://github.com/twmb/kafka-go/commit/60de0dafbeb7bf72996ad5f24690820962d2f584): Further audit for KIP-360 correctness (recoverable producer id)
 - [`2eb27c653`](https://github.com/twmb/kafka-go/commit/2eb27c653a4cdb815bf366894a2b87a3555ee50b): client.Request: shard DeleteRecords, {AlterReplica,Describe}LogDirs
 - [`ebadfdae1`](https://github.com/twmb/kafka-go/commit/ebadfdae1d975a5a937a1f1d67fd909b728c7386): Add support for KIP-554 (SCRAM APIs)
