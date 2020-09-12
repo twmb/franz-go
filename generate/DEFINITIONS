@@ -3563,11 +3563,11 @@ DescribeUserSCRAMCredentialsResponse =>
     ErrorMessage: nullable-string
     // Information about the SCRAM credentials for this user.
     CredentialInfos: [=>]
-      // The SCRAM mechanism for this user, where 0 is UNKNOWN, 1 is SCRAM_SHA_256,
-      // and 2 is SCRAM_SHA_512.
+      // The SCRAM mechanism for this user, where 0 is UNKNOWN, 1 is SCRAM-SHA-256,
+      // and 2 is SCRAM-SHA-512.
       Mechanism: int8
       // The number of iterations used in the SCRAM credential.
-      Iteractions: int32
+      Iterations: int32
 
 // AlterUserSCRAMCredentialsRequest, proposed in KIP-554 and introduced
 // with Kafka 2.7.0, alters or deletes user SCRAM credentials.
@@ -3587,8 +3587,8 @@ AlterUserSCRAMCredentialsRequest => key 51, max version 0, flexible v0+, admin
   Upsertions: [=>]
     // The user name to use.
     Name: string
-    // The mechanism to use for creating. See
-    // DescribeUserSCRAMCredentialsResponse for more information.
+    // The mechanism to use for creating, where 1 is SCRAM-SHA-256 and 2 is
+    // SCRAM-SHA-512.
     Mechanism: int8
     // The number of iterations to use. This must be more than the minimum for
     // the mechanism and cannot be more than 16384.

@@ -1,3 +1,8 @@
+v0.4.9
+======
+
+Typo fix for the prior release (in 2.7.0 APIs).
+
 v0.4.8
 ======
 

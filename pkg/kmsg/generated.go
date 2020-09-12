@@ -20371,12 +20371,12 @@ func (v *DescribeUserSCRAMCredentialsRequest) ReadFrom(src []byte) error {
 }
 
 type DescribeUserSCRAMCredentialsResponseResultCredentialInfo struct {
-	// The SCRAM mechanism for this user, where 0 is UNKNOWN, 1 is SCRAM_SHA_256,
-	// and 2 is SCRAM_SHA_512.
+	// The SCRAM mechanism for this user, where 0 is UNKNOWN, 1 is SCRAM-SHA-256,
+	// and 2 is SCRAM-SHA-512.
 	Mechanism int8
 
 	// The number of iterations used in the SCRAM credential.
-	Iteractions int32
+	Iterations int32
 }
 type DescribeUserSCRAMCredentialsResponseResult struct {
 	// The name this result corresponds to.
@@ -20485,7 +20485,7 @@ func (v *DescribeUserSCRAMCredentialsResponse) AppendTo(dst []byte) []byte {
 						dst = kbin.AppendInt8(dst, v)
 					}
 					{
-						v := v.Iteractions
+						v := v.Iterations
 						dst = kbin.AppendInt32(dst, v)
 					}
 					if isFlexible {
@@ -20591,7 +20591,7 @@ func (v *DescribeUserSCRAMCredentialsResponse) ReadFrom(src []byte) error {
 					}
 					{
 						v := b.Int32()
-						s.Iteractions = v
+						s.Iterations = v
 					}
 					if isFlexible {
 						SkipTags(&b)
@@ -20624,8 +20624,8 @@ type AlterUserSCRAMCredentialsRequestUpsertion struct {
 	// The user name to use.
 	Name string
 
-	// The mechanism to use for creating. See
-	// DescribeUserSCRAMCredentialsResponse for more information.
+	// The mechanism to use for creating, where 1 is SCRAM-SHA-256 and 2 is
+	// SCRAM-SHA-512.
 	Mechanism int8
 
 	// The number of iterations to use. This must be more than the minimum for
