@@ -1130,6 +1130,9 @@ type FetchRequestTopicPartition struct {
 	// return records at and after this offset.
 	FetchOffset int64
 
+	// The epoch of the last fetched record, or -1 if there is none.
+	LastFetchedEpoch int32
+
 	// LogStartOffset is a broker-follower only field added for KIP-107.
 	// This is the start offset of the partition in a follower.
 	LogStartOffset int64 // v5+
@@ -1166,6 +1169,10 @@ type FetchRequestForgottenTopic struct {
 type FetchRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
+
+	// The cluster ID, if known. This is used to validate metadata fetches
+	// prior to broker registration.
+	ClusterID *string // tag 0
 
 	// ReplicaID is the broker ID of performing the fetch request. Standard
 	// clients should use -1. To be a "debug" replica, use -2. The debug
@@ -1223,15 +1230,17 @@ type FetchRequest struct {
 }
 
 func (*FetchRequest) Key() int16                 { return 1 }
-func (*FetchRequest) MaxVersion() int16          { return 11 }
+func (*FetchRequest) MaxVersion() int16          { return 12 }
 func (v *FetchRequest) SetVersion(version int16) { v.Version = version }
 func (v *FetchRequest) GetVersion() int16        { return v.Version }
-func (v *FetchRequest) IsFlexible() bool         { return false }
+func (v *FetchRequest) IsFlexible() bool         { return v.Version >= 12 }
 func (v *FetchRequest) ResponseKind() Response   { return &FetchResponse{Version: v.Version} }
 
 func (v *FetchRequest) AppendTo(dst []byte) []byte {
 	version := v.Version
 	_ = version
+	isFlexible := version >= 12
+	_ = isFlexible
 	{
 		v := v.ReplicaID
 		dst = kbin.AppendInt32(dst, v)
@@ -1262,16 +1271,28 @@ func (v *FetchRequest) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Topics
-		dst = kbin.AppendArrayLen(dst, len(v))
+		if isFlexible {
+			dst = kbin.AppendCompactArrayLen(dst, len(v))
+		} else {
+			dst = kbin.AppendArrayLen(dst, len(v))
+		}
 		for i := range v {
 			v := &v[i]
 			{
 				v := v.Topic
-				dst = kbin.AppendString(dst, v)
+				if isFlexible {
+					dst = kbin.AppendCompactString(dst, v)
+				} else {
+					dst = kbin.AppendString(dst, v)
+				}
 			}
 			{
 				v := v.Partitions
-				dst = kbin.AppendArrayLen(dst, len(v))
+				if isFlexible {
+					dst = kbin.AppendCompactArrayLen(dst, len(v))
+				} else {
+					dst = kbin.AppendArrayLen(dst, len(v))
+				}
 				for i := range v {
 					v := &v[i]
 					{
@@ -1286,6 +1307,10 @@ func (v *FetchRequest) AppendTo(dst []byte) []byte {
 						v := v.FetchOffset
 						dst = kbin.AppendInt64(dst, v)
 					}
+					{
+						v := v.LastFetchedEpoch
+						dst = kbin.AppendInt32(dst, v)
+					}
 					if version >= 5 {
 						v := v.LogStartOffset
 						dst = kbin.AppendInt64(dst, v)
@@ -1294,38 +1319,73 @@ func (v *FetchRequest) AppendTo(dst []byte) []byte {
 						v := v.PartitionMaxBytes
 						dst = kbin.AppendInt32(dst, v)
 					}
+					if isFlexible {
+						dst = kbin.AppendUvarint(dst, 0)
+					}
 				}
+			}
+			if isFlexible {
+				dst = kbin.AppendUvarint(dst, 0)
 			}
 		}
 	}
 	if version >= 7 {
 		v := v.ForgottenTopics
-		dst = kbin.AppendArrayLen(dst, len(v))
+		if isFlexible {
+			dst = kbin.AppendCompactArrayLen(dst, len(v))
+		} else {
+			dst = kbin.AppendArrayLen(dst, len(v))
+		}
 		for i := range v {
 			v := &v[i]
 			{
 				v := v.Topic
-				dst = kbin.AppendString(dst, v)
+				if isFlexible {
+					dst = kbin.AppendCompactString(dst, v)
+				} else {
+					dst = kbin.AppendString(dst, v)
+				}
 			}
 			{
 				v := v.Partitions
-				dst = kbin.AppendArrayLen(dst, len(v))
+				if isFlexible {
+					dst = kbin.AppendCompactArrayLen(dst, len(v))
+				} else {
+					dst = kbin.AppendArrayLen(dst, len(v))
+				}
 				for i := range v {
 					v := v[i]
 					dst = kbin.AppendInt32(dst, v)
 				}
 			}
+			if isFlexible {
+				dst = kbin.AppendUvarint(dst, 0)
+			}
 		}
 	}
 	if version >= 11 {
 		v := v.Rack
-		dst = kbin.AppendString(dst, v)
+		if isFlexible {
+			dst = kbin.AppendCompactString(dst, v)
+		} else {
+			dst = kbin.AppendString(dst, v)
+		}
+	}
+	if isFlexible {
+		dst = kbin.AppendUvarint(dst, 1)
+		{
+			v := v.ClusterID
+			dst = kbin.AppendUvarint(dst, 0)
+			dst = kbin.AppendCompactNullableString(dst, v)
+		}
 	}
 	return dst
 }
 func (v *FetchRequest) ReadFrom(src []byte) error {
 	version := v.Version
 	_ = version
+	isFlexible := version >= 12
+	_ = isFlexible
 	b := kbin.Reader{Src: src}
 	s := v
 	{
@@ -1360,7 +1420,11 @@ func (v *FetchRequest) ReadFrom(src []byte) error {
 		v := s.Topics
 		a := v
 		var l int32
-		l = b.ArrayLen()
+		if isFlexible {
+			l = b.CompactArrayLen()
+		} else {
+			l = b.ArrayLen()
+		}
 		if !b.Ok() {
 			return b.Complete()
 		}
@@ -1371,14 +1435,23 @@ func (v *FetchRequest) ReadFrom(src []byte) error {
 			v := &a[i]
 			s := v
 			{
-				v := b.String()
+				var v string
+				if isFlexible {
+					v = b.CompactString()
+				} else {
+					v = b.String()
+				}
 				s.Topic = v
 			}
 			{
 				v := s.Partitions
 				a := v
 				var l int32
-				l = b.ArrayLen()
+				if isFlexible {
+					l = b.CompactArrayLen()
+				} else {
+					l = b.ArrayLen()
+				}
 				if !b.Ok() {
 					return b.Complete()
 				}
@@ -1400,6 +1473,10 @@ func (v *FetchRequest) ReadFrom(src []byte) error {
 						v := b.Int64()
 						s.FetchOffset = v
 					}
+					{
+						v := b.Int32()
+						s.LastFetchedEpoch = v
+					}
 					if version >= 5 {
 						v := b.Int64()
 						s.LogStartOffset = v
@@ -1408,9 +1485,15 @@ func (v *FetchRequest) ReadFrom(src []byte) error {
 						v := b.Int32()
 						s.PartitionMaxBytes = v
 					}
+					if isFlexible {
+						SkipTags(&b)
+					}
 				}
 				v = a
 				s.Partitions = v
+			}
+			if isFlexible {
+				SkipTags(&b)
 			}
 		}
 		v = a
@@ -1420,7 +1503,11 @@ func (v *FetchRequest) ReadFrom(src []byte) error {
 		v := s.ForgottenTopics
 		a := v
 		var l int32
-		l = b.ArrayLen()
+		if isFlexible {
+			l = b.CompactArrayLen()
+		} else {
+			l = b.ArrayLen()
+		}
 		if !b.Ok() {
 			return b.Complete()
 		}
@@ -1431,14 +1518,23 @@ func (v *FetchRequest) ReadFrom(src []byte) error {
 			v := &a[i]
 			s := v
 			{
-				v := b.String()
+				var v string
+				if isFlexible {
+					v = b.CompactString()
+				} else {
+					v = b.String()
+				}
 				s.Topic = v
 			}
 			{
 				v := s.Partitions
 				a := v
 				var l int32
-				l = b.ArrayLen()
+				if isFlexible {
+					l = b.CompactArrayLen()
+				} else {
+					l = b.ArrayLen()
+				}
 				if !b.Ok() {
 					return b.Complete()
 				}
@@ -1452,17 +1548,48 @@ func (v *FetchRequest) ReadFrom(src []byte) error {
 				v = a
 				s.Partitions = v
 			}
+			if isFlexible {
+				SkipTags(&b)
+			}
 		}
 		v = a
 		s.ForgottenTopics = v
 	}
 	if version >= 11 {
-		v := b.String()
+		var v string
+		if isFlexible {
+			v = b.CompactString()
+		} else {
+			v = b.String()
+		}
 		s.Rack = v
+	}
+	if isFlexible {
+		for i := b.Uvarint(); i > 0; i-- {
+			switch b.Uvarint() {
+			default:
+				b.Span(int(b.Uvarint()))
+			case 0:
+				var v *string
+				if isFlexible {
+					v = b.CompactNullableString()
+				} else {
+					v = b.NullableString()
+				}
+				s.ClusterID = v
+			}
+		}
 	}
 	return b.Complete()
 }
 
+type FetchResponseTopicPartitionCurrentLeader struct {
+	// The ID of the current leader, or -1 if unknown.
+	LeaderID int32
+
+	// The latest known leader epoch.
+	LeaderEpoch int32
+}
 type FetchResponseTopicPartitionAbortedTransaction struct {
 	// ProducerID is the producer ID that caused this aborted transaction.
 	ProducerID int64
@@ -1526,6 +1653,14 @@ type FetchResponseTopicPartition struct {
 	// LogStartOffset is the beginning offset for this partition.
 	// This field was added for KIP-107.
 	LogStartOffset int64 // v5+
+
+	// If set and not -1, the follower must truncate all offsets that are
+	// greater than or equal to this value.
+	TruncationOffset int64 // tag 0
+
+	// CurrentLeader is the currently known leader ID and epoch for this
+	// partition.
+	CurrentLeader FetchResponseTopicPartitionCurrentLeader // tag 1
 
 	// AbortedTransactions is an array of aborted transactions within the
 	// returned offset range. This is only returned if the requested
@@ -1592,15 +1727,17 @@ type FetchResponse struct {
 }
 
 func (*FetchResponse) Key() int16                 { return 1 }
-func (*FetchResponse) MaxVersion() int16          { return 11 }
+func (*FetchResponse) MaxVersion() int16          { return 12 }
 func (v *FetchResponse) SetVersion(version int16) { v.Version = version }
 func (v *FetchResponse) GetVersion() int16        { return v.Version }
-func (v *FetchResponse) IsFlexible() bool         { return false }
+func (v *FetchResponse) IsFlexible() bool         { return v.Version >= 12 }
 func (v *FetchResponse) RequestKind() Request     { return &FetchRequest{Version: v.Version} }
 
 func (v *FetchResponse) AppendTo(dst []byte) []byte {
 	version := v.Version
 	_ = version
+	isFlexible := version >= 12
+	_ = isFlexible
 	if version >= 1 {
 		v := v.ThrottleMillis
 		dst = kbin.AppendInt32(dst, v)
@@ -1615,16 +1752,28 @@ func (v *FetchResponse) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Topics
-		dst = kbin.AppendArrayLen(dst, len(v))
+		if isFlexible {
+			dst = kbin.AppendCompactArrayLen(dst, len(v))
+		} else {
+			dst = kbin.AppendArrayLen(dst, len(v))
+		}
 		for i := range v {
 			v := &v[i]
 			{
 				v := v.Topic
-				dst = kbin.AppendString(dst, v)
+				if isFlexible {
+					dst = kbin.AppendCompactString(dst, v)
+				} else {
+					dst = kbin.AppendString(dst, v)
+				}
 			}
 			{
 				v := v.Partitions
-				dst = kbin.AppendArrayLen(dst, len(v))
+				if isFlexible {
+					dst = kbin.AppendCompactArrayLen(dst, len(v))
+				} else {
+					dst = kbin.AppendArrayLen(dst, len(v))
+				}
 				for i := range v {
 					v := &v[i]
 					{
@@ -1649,7 +1798,11 @@ func (v *FetchResponse) AppendTo(dst []byte) []byte {
 					}
 					if version >= 4 {
 						v := v.AbortedTransactions
-						dst = kbin.AppendNullableArrayLen(dst, len(v), v == nil)
+						if isFlexible {
+							dst = kbin.AppendCompactNullableArrayLen(dst, len(v), v == nil)
+						} else {
+							dst = kbin.AppendNullableArrayLen(dst, len(v), v == nil)
+						}
 						for i := range v {
 							v := &v[i]
 							{
@@ -1660,6 +1813,9 @@ func (v *FetchResponse) AppendTo(dst []byte) []byte {
 								v := v.FirstOffset
 								dst = kbin.AppendInt64(dst, v)
 							}
+							if isFlexible {
+								dst = kbin.AppendUvarint(dst, 0)
+							}
 						}
 					}
 					if version >= 11 {
@@ -1668,17 +1824,61 @@ func (v *FetchResponse) AppendTo(dst []byte) []byte {
 					}
 					{
 						v := v.RecordBatches
-						dst = kbin.AppendNullableBytes(dst, v)
+						if isFlexible {
+							dst = kbin.AppendCompactNullableBytes(dst, v)
+						} else {
+							dst = kbin.AppendNullableBytes(dst, v)
+						}
+					}
+					if isFlexible {
+						dst = kbin.AppendUvarint(dst, 2)
+						{
+							v := v.TruncationOffset
+							dst = kbin.AppendUvarint(dst, 0)
+							dst = kbin.AppendUvarint(dst, 8)
+							dst = kbin.AppendInt64(dst, v)
+						}
+						{
+							v := v.CurrentLeader
+							dst = kbin.AppendUvarint(dst, 1)
+							sized := false
+							lenAt := len(dst)
+						l1484:
+							{
+								v := v.LeaderID
+								dst = kbin.AppendInt32(dst, v)
+							}
+							{
+								v := v.LeaderEpoch
+								dst = kbin.AppendInt32(dst, v)
+							}
+							if isFlexible {
+								dst = kbin.AppendUvarint(dst, 0)
+							}
+							if !sized {
+								dst = kbin.AppendUvarint(dst[:lenAt], uint32(len(dst[lenAt:])))
+								sized = true
+								goto l1484
+							}
+						}
 					}
 				}
 			}
+			if isFlexible {
+				dst = kbin.AppendUvarint(dst, 0)
+			}
 		}
+	}
+	if isFlexible {
+		dst = kbin.AppendUvarint(dst, 0)
 	}
 	return dst
 }
 func (v *FetchResponse) ReadFrom(src []byte) error {
 	version := v.Version
 	_ = version
+	isFlexible := version >= 12
+	_ = isFlexible
 	b := kbin.Reader{Src: src}
 	s := v
 	if version >= 1 {
@@ -1697,7 +1897,11 @@ func (v *FetchResponse) ReadFrom(src []byte) error {
 		v := s.Topics
 		a := v
 		var l int32
-		l = b.ArrayLen()
+		if isFlexible {
+			l = b.CompactArrayLen()
+		} else {
+			l = b.ArrayLen()
+		}
 		if !b.Ok() {
 			return b.Complete()
 		}
@@ -1708,14 +1912,23 @@ func (v *FetchResponse) ReadFrom(src []byte) error {
 			v := &a[i]
 			s := v
 			{
-				v := b.String()
+				var v string
+				if isFlexible {
+					v = b.CompactString()
+				} else {
+					v = b.String()
+				}
 				s.Topic = v
 			}
 			{
 				v := s.Partitions
 				a := v
 				var l int32
-				l = b.ArrayLen()
+				if isFlexible {
+					l = b.CompactArrayLen()
+				} else {
+					l = b.ArrayLen()
+				}
 				if !b.Ok() {
 					return b.Complete()
 				}
@@ -1749,7 +1962,11 @@ func (v *FetchResponse) ReadFrom(src []byte) error {
 						v := s.AbortedTransactions
 						a := v
 						var l int32
-						l = b.ArrayLen()
+						if isFlexible {
+							l = b.CompactArrayLen()
+						} else {
+							l = b.ArrayLen()
+						}
 						if version < 0 || l == 0 {
 							a = []FetchResponseTopicPartitionAbortedTransaction{}
 						}
@@ -1770,6 +1987,9 @@ func (v *FetchResponse) ReadFrom(src []byte) error {
 								v := b.Int64()
 								s.FirstOffset = v
 							}
+							if isFlexible {
+								SkipTags(&b)
+							}
 						}
 						v = a
 						s.AbortedTransactions = v
@@ -1779,16 +1999,60 @@ func (v *FetchResponse) ReadFrom(src []byte) error {
 						s.PreferredReadReplica = v
 					}
 					{
-						v := b.NullableBytes()
+						var v []byte
+						if isFlexible {
+							v = b.CompactNullableBytes()
+						} else {
+							v = b.NullableBytes()
+						}
 						s.RecordBatches = v
+					}
+					if isFlexible {
+						for i := b.Uvarint(); i > 0; i-- {
+							switch b.Uvarint() {
+							default:
+								b.Span(int(b.Uvarint()))
+							case 0:
+								b := kbin.Reader{Src: b.Span(int(b.Uvarint()))}
+								v := b.Int64()
+								s.TruncationOffset = v
+								if err := b.Complete(); err != nil {
+									return err
+								}
+							case 1:
+								b := kbin.Reader{Src: b.Span(int(b.Uvarint()))}
+								v := &s.CurrentLeader
+								s := v
+								{
+									v := b.Int32()
+									s.LeaderID = v
+								}
+								{
+									v := b.Int32()
+									s.LeaderEpoch = v
+								}
+								if isFlexible {
+									SkipTags(&b)
+								}
+								if err := b.Complete(); err != nil {
+									return err
+								}
+							}
+						}
 					}
 				}
 				v = a
 				s.Partitions = v
 			}
+			if isFlexible {
+				SkipTags(&b)
+			}
 		}
 		v = a
 		s.Topics = v
+	}
+	if isFlexible {
+		SkipTags(&b)
 	}
 	return b.Complete()
 }
@@ -10301,12 +10565,11 @@ func (v *CreateTopicsResponse) ReadFrom(src []byte) error {
 			}
 			if isFlexible {
 				for i := b.Uvarint(); i > 0; i-- {
-					tag, size := b.Uvarint(), int(b.Uvarint())
-					switch tag {
+					switch b.Uvarint() {
 					default:
-						b.Span(size)
+						b.Span(int(b.Uvarint()))
 					case 0:
-						b := kbin.Reader{Src: b.Span(size)}
+						b := kbin.Reader{Src: b.Span(int(b.Uvarint()))}
 						v := b.Int16()
 						s.ConfigErrorCode = v
 						if err := b.Complete(); err != nil {

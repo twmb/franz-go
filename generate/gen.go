@@ -162,18 +162,35 @@ func (s Struct) WriteAppend(l *LineWriter) {
 		switch f.Type.(type) {
 		case Bool, Int8:
 			l.Write("dst = kbin.AppendUvarint(dst, 1)") // size
+			f.Type.WriteAppend(l)
 		case Int16:
 			l.Write("dst = kbin.AppendUvarint(dst, 2)")
+			f.Type.WriteAppend(l)
 		case Int32, Uint32:
 			l.Write("dst = kbin.AppendUvarint(dst, 4)")
+			f.Type.WriteAppend(l)
 		case Int64, Float64:
 			l.Write("dst = kbin.AppendUvarint(dst, 8)")
+			f.Type.WriteAppend(l)
 		case Varint:
 			l.Write("dst = kbin.AppendUvarint(dst, kbin.VarintLen(v))")
+			f.Type.WriteAppend(l)
+		case NullableString:
+			primAppend("CompactNullableString", l) // all tags are compact
+		case Struct:
+			l.Write("sized := false")
+			l.Write("lenAt := len(dst)")
+			line := l.line
+			l.Write("l%d:", line)
+			f.Type.WriteAppend(l)
+			l.Write("if !sized {")
+			l.Write("dst = kbin.AppendUvarint(dst[:lenAt], uint32(len(dst[lenAt:])))")
+			l.Write("sized = true")
+			l.Write("goto l%d", line)
+			l.Write("}")
 		default:
-			die("tag type %v unsupported in append! fix this!", f.Type)
+			die("tag type %v unsupported in append! fix this!", f.Type.TypeName())
 		}
-		f.Type.WriteAppend(l)
 		l.Write("}")
 	}
 }
@@ -411,18 +428,16 @@ func (s Struct) WriteDecode(l *LineWriter) {
 		l.Write("}")
 		return
 	}
+	defer l.Write("}")
 
 	l.Write("for i := b.Uvarint(); i > 0; i-- {")
 	defer l.Write("}")
 
-	l.Write("tag, size := b.Uvarint(), int(b.Uvarint())")
-	defer l.Write("}")
-
-	l.Write("switch tag {")
+	l.Write("switch b.Uvarint() {")
 	defer l.Write("}")
 
 	l.Write("default:")
-	l.Write("b.Span(size)") // unknown tag
+	l.Write("b.Span(int(b.Uvarint()))") // unknown tag
 
 	for i := 0; i < len(tags); i++ {
 		f, exists := tags[i]
@@ -430,18 +445,28 @@ func (s Struct) WriteDecode(l *LineWriter) {
 			die("saw %d tags, but did not see tag %d; expected monotonically increasing", len(tags), i)
 		}
 
+		l.Write("case %d:", i)
+		end := func() {}
+
 		switch f.Type.(type) {
-		case Bool, Int8, Int16, Int32, Int64, Float64, Uint32, Varint:
+		case Bool, Int8, Int16, Int32, Int64, Float64, Uint32, Varint,
+			Struct:
+
+			l.Write("b := kbin.Reader{Src: b.Span(int(b.Uvarint()))}")
+			end = func() {
+				l.Write("if err := b.Complete(); err != nil {")
+				l.Write("return err")
+				l.Write("}")
+			}
+
+		case NullableString:
+
 		default:
 			die("type %v unsupported in decode! fix this!", f.Type)
 		}
 
-		l.Write("case %d:", i)
-		l.Write("b := kbin.Reader{Src: b.Span(size)}")
 		f.WriteDecode(l)
-		l.Write("if err := b.Complete(); err != nil {")
-		l.Write("return err")
-		l.Write("}")
+		end()
 	}
 }
 

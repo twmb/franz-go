@@ -366,7 +366,10 @@ ProduceResponse =>
 // Note that starting in v3, Kafka began processing partitions in order,
 // meaning the order of partitions in the fetch request is important due to
 // potential size constraints.
-FetchRequest => key 1, max version 11
+FetchRequest => key 1, max version 12, flexible v12+
+  // The cluster ID, if known. This is used to validate metadata fetches
+  // prior to broker registration.
+  ClusterID: nullable-string // tag 0
   // ReplicaID is the broker ID of performing the fetch request. Standard
   // clients should use -1. To be a "debug" replica, use -2. The debug
   // replica can be used to fetch messages from non-leaders.
@@ -419,6 +422,8 @@ FetchRequest => key 1, max version 11
       // FetchOffset is the offset to begin the fetch from. Kafka will
       // return records at and after this offset.
       FetchOffset: int64
+      // The epoch of the last fetched record, or -1 if there is none.
+      LastFetchedEpoch: int32
       // LogStartOffset is a broker-follower only field added for KIP-107.
       // This is the start offset of the partition in a follower.
       LogStartOffset: int64 // v5+
@@ -519,6 +524,16 @@ FetchResponse =>
       // LogStartOffset is the beginning offset for this partition.
       // This field was added for KIP-107.
       LogStartOffset: int64 // v5+
+      // If set and not -1, the follower must truncate all offsets that are
+      // greater than or equal to this value.
+      TruncationOffset: int64 // tag 0
+      // CurrentLeader is the currently known leader ID and epoch for this
+      // partition.
+      CurrentLeader: => // tag 1
+        // The ID of the current leader, or -1 if unknown.
+        LeaderID: int32
+        // The latest known leader epoch.
+        LeaderEpoch: int32
       // AbortedTransactions is an array of aborted transactions within the
       // returned offset range. This is only returned if the requested
       // isolation level was READ_COMMITTED.

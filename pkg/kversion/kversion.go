@@ -401,5 +401,9 @@ func Tip() Versions {
 		0, // 51 alter user scram creds, same
 	)
 
+	// KAFKA-10435 634c9175054cc69d10b6da22ea1e95edff6a4747 KIP-595
+	// This opted in fetch request to flexible versions.
+	v[1]++ // 12 fetch
+
 	return v
 }
