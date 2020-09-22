@@ -158,10 +158,8 @@ func (s Struct) WriteAppend(l *LineWriter) {
 		if !exists {
 			die("saw %d tags, but did not see tag %d; expected monotonically increasing", len(tags), i)
 		}
-		if d, ok := f.Type.(Defaulter); ok {
-			if _, tagsCanDefault = d.GetDefault(); tagsCanDefault {
-				break
-			}
+		if _, tagsCanDefault = f.Type.(Defaulter); tagsCanDefault {
+			break
 		}
 	}
 
@@ -169,15 +167,17 @@ func (s Struct) WriteAppend(l *LineWriter) {
 		l.Write("var toEncode []uint32")
 		for i := 0; i < len(tags); i++ {
 			f := tags[i]
-			nonDefault := false
+			canDefault := false
 			if d, ok := f.Type.(Defaulter); ok {
-				if def, has := d.GetDefault(); has {
-					l.Write("if v.%s != %v {", f.FieldName, def)
-					nonDefault = true
+				canDefault = true
+				def, has := d.GetDefault()
+				if !has {
+					def = d.GetTypeDefault()
 				}
+				l.Write("if v.%s != %v {", f.FieldName, def)
 			}
 			l.Write("toEncode = append(toEncode, %d)", i)
-			if nonDefault {
+			if canDefault {
 				l.Write("}")
 			}
 		}

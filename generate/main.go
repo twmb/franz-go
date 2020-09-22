@@ -142,6 +142,7 @@ type (
 type Defaulter interface {
 	SetDefault(string) Type
 	GetDefault() (interface{}, bool)
+	GetTypeDefault() interface{}
 }
 
 func (b Bool) SetDefault(s string) Type {
@@ -154,6 +155,7 @@ func (b Bool) SetDefault(s string) Type {
 	return b
 }
 func (b Bool) GetDefault() (interface{}, bool) { return b.Default, b.HasDefault }
+func (b Bool) GetTypeDefault() interface{}     { return false }
 
 func (i Int8) SetDefault(s string) Type {
 	v, err := strconv.ParseInt(s, 10, 8)
@@ -165,6 +167,7 @@ func (i Int8) SetDefault(s string) Type {
 	return i
 }
 func (i Int8) GetDefault() (interface{}, bool) { return i.Default, i.HasDefault }
+func (i Int8) GetTypeDefault() interface{}     { return 0 }
 
 func (i Int16) SetDefault(s string) Type {
 	v, err := strconv.ParseInt(s, 10, 16)
@@ -176,6 +179,7 @@ func (i Int16) SetDefault(s string) Type {
 	return i
 }
 func (i Int16) GetDefault() (interface{}, bool) { return i.Default, i.HasDefault }
+func (i Int16) GetTypeDefault() interface{}     { return 0 }
 
 func (i Int32) SetDefault(s string) Type {
 	v, err := strconv.ParseInt(s, 10, 32)
@@ -187,6 +191,7 @@ func (i Int32) SetDefault(s string) Type {
 	return i
 }
 func (i Int32) GetDefault() (interface{}, bool) { return i.Default, i.HasDefault }
+func (i Int32) GetTypeDefault() interface{}     { return 0 }
 
 func (i Int64) SetDefault(s string) Type {
 	v, err := strconv.ParseInt(s, 10, 64)
@@ -198,6 +203,7 @@ func (i Int64) SetDefault(s string) Type {
 	return i
 }
 func (i Int64) GetDefault() (interface{}, bool) { return i.Default, i.HasDefault }
+func (i Int64) GetTypeDefault() interface{}     { return 0 }
 
 func (f Float64) SetDefault(s string) Type {
 	v, err := strconv.ParseFloat(s, 64)
@@ -209,6 +215,7 @@ func (f Float64) SetDefault(s string) Type {
 	return f
 }
 func (f Float64) GetDefault() (interface{}, bool) { return f.Default, f.HasDefault }
+func (f Float64) GetTypeDefault() interface{}     { return 0 }
 
 func (u Uint32) SetDefault(s string) Type {
 	v, err := strconv.ParseUint(s, 10, 32)
@@ -220,6 +227,7 @@ func (u Uint32) SetDefault(s string) Type {
 	return u
 }
 func (u Uint32) GetDefault() (interface{}, bool) { return u.Default, u.HasDefault }
+func (u Uint32) GetTypeDefault() interface{}     { return 0 }
 
 func (i Varint) SetDefault(s string) Type {
 	v, err := strconv.ParseInt(s, 10, 32)
@@ -231,6 +239,7 @@ func (i Varint) SetDefault(s string) Type {
 	return i
 }
 func (i Varint) GetDefault() (interface{}, bool) { return i.Default, i.HasDefault }
+func (i Varint) GetTypeDefault() interface{}     { return 0 }
 
 func (s NullableString) SetDefault(v string) Type {
 	if v != "null" {
@@ -242,6 +251,7 @@ func (s NullableString) SetDefault(v string) Type {
 func (s NullableString) GetDefault() (interface{}, bool) {
 	return "nil", s.HasDefault // we return the string so it is rendered correctly
 }
+func (s NullableString) GetTypeDefault() interface{} { return nil }
 
 func (b NullableBytes) SetDefault(v string) Type {
 	if v != "null" {
@@ -253,6 +263,7 @@ func (b NullableBytes) SetDefault(v string) Type {
 func (b NullableBytes) GetDefault() (interface{}, bool) {
 	return "nil", b.HasDefault
 }
+func (b NullableBytes) GetTypeDefault() interface{} { return nil }
 
 type FlexibleSetter interface {
 	AsFromFlexible() Type

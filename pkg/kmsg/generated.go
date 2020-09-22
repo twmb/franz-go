@@ -11203,12 +11203,21 @@ func (v *CreateTopicsResponse) AppendTo(dst []byte) []byte {
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 1)
-				{
-					v := v.ConfigErrorCode
-					dst = kbin.AppendUvarint(dst, 0)
-					dst = kbin.AppendUvarint(dst, 2)
-					dst = kbin.AppendInt16(dst, v)
+				var toEncode []uint32
+				if v.ConfigErrorCode != 0 {
+					toEncode = append(toEncode, 0)
+				}
+				dst = kbin.AppendUvarint(dst, uint32(len(toEncode)))
+				for _, tag := range toEncode {
+					switch tag {
+					case 0:
+						{
+							v := v.ConfigErrorCode
+							dst = kbin.AppendUvarint(dst, 0)
+							dst = kbin.AppendUvarint(dst, 2)
+							dst = kbin.AppendInt16(dst, v)
+						}
+					}
 				}
 			}
 		}
