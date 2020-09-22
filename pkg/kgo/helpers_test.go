@@ -53,7 +53,7 @@ func tmpTopic(tb testing.TB) (string, func()) {
 
 	topic := randsha()
 
-	cmd := exec.Command(path, "topic", "create", topic, "-p", "20")
+	cmd := exec.Command(path, "admin", "topic", "create", topic, "-p", "20")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		tb.Fatalf("unable to run kcl topic create command: %v", err)
@@ -65,7 +65,7 @@ func tmpTopic(tb testing.TB) (string, func()) {
 	return topic, func() {
 		tb.Helper()
 		tb.Logf("deleting topic %s", topic)
-		cmd := exec.Command(path, "topic", "delete", topic)
+		cmd := exec.Command(path, "admin", "topic", "delete", topic)
 		output, err := cmd.CombinedOutput()
 		if err != nil {
 			tb.Fatalf("unable to run kcl topic delete command: %v", err)
@@ -88,7 +88,7 @@ func tmpGroup(tb testing.TB) (string, func()) {
 	return group, func() {
 		tb.Helper()
 		tb.Logf("deleting group %s", group)
-		cmd := exec.Command(path, "group", "delete", group)
+		cmd := exec.Command(path, "admin", "group", "delete", group)
 		output, err := cmd.CombinedOutput()
 		if err != nil {
 			tb.Fatalf("unable to run kcl group delete command: %v", err)
