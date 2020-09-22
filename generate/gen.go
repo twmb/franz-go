@@ -10,7 +10,6 @@ func (Int64) TypeName() string                 { return "int64" }
 func (Float64) TypeName() string               { return "float64" }
 func (Uint32) TypeName() string                { return "uint32" }
 func (Varint) TypeName() string                { return "int32" }
-func (Varlong) TypeName() string               { return "int64" }
 func (String) TypeName() string                { return "string" }
 func (NullableString) TypeName() string        { return "*string" }
 func (Bytes) TypeName() string                 { return "[]byte" }
@@ -45,7 +44,6 @@ func (Int64) WriteAppend(l *LineWriter)        { primAppend("Int64", l) }
 func (Float64) WriteAppend(l *LineWriter)      { primAppend("Float64", l) }
 func (Uint32) WriteAppend(l *LineWriter)       { primAppend("Uint32", l) }
 func (Varint) WriteAppend(l *LineWriter)       { primAppend("Varint", l) }
-func (Varlong) WriteAppend(l *LineWriter)      { primAppend("Varlong", l) }
 func (VarintString) WriteAppend(l *LineWriter) { primAppend("VarintString", l) }
 func (VarintBytes) WriteAppend(l *LineWriter)  { primAppend("VarintBytes", l) }
 
@@ -249,7 +247,6 @@ func (Int64) WriteDecode(l *LineWriter)        { primDecode("Int64", l) }
 func (Float64) WriteDecode(l *LineWriter)      { primDecode("Float64", l) }
 func (Uint32) WriteDecode(l *LineWriter)       { primDecode("Uint32", l) }
 func (Varint) WriteDecode(l *LineWriter)       { primDecode("Varint", l) }
-func (Varlong) WriteDecode(l *LineWriter)      { primDecode("Varlong", l) }
 func (VarintString) WriteDecode(l *LineWriter) { primDecode("VarintString", l) }
 func (VarintBytes) WriteDecode(l *LineWriter)  { primDecode("VarintBytes", l) }
 
@@ -343,6 +340,7 @@ func (a Array) WriteDecode(l *LineWriter) {
 	l.Write("for i := int32(0); i < l; i++ {")
 	if _, isStruct := a.Inner.(Struct); isStruct {
 		l.Write("v := &a[i]")
+		l.Write("v.Default()") // set defaults first
 	} else if _, isArray := a.Inner.(Array); isArray {
 		// With nested arrays, we declare a new v and introduce scope
 		// so that the next level will not collide with our current "a".
@@ -372,6 +370,7 @@ func (f StructField) WriteDecode(l *LineWriter) {
 		// For decoding a nested struct, we copy a pointer out.
 		// The nested version will then set the fields directly.
 		l.Write("v := &s.%s", f.FieldName)
+		l.Write("v.Default()")
 	case Array:
 		// For arrays, we need to copy the array into a v
 		// field so that the array function can use it.
@@ -470,6 +469,43 @@ func (s Struct) WriteDecode(l *LineWriter) {
 	}
 }
 
+func (s Struct) WriteDefault(l *LineWriter) {
+	if len(s.Fields) == 0 {
+		return
+	}
+
+	// Like decoding above, we skip the version field.
+	rangeFrom := s.Fields
+	if s.WithVersionField {
+		f := s.Fields[0]
+		if f.FieldName != "Version" {
+			die("expected first field in 'with version field' type to be version, is %s", f.FieldName)
+		}
+		if f.Type != (Int16{}) {
+			die("expected field version type to be int16, was %v", f.Type)
+		}
+		rangeFrom = s.Fields[1:]
+	}
+
+	for _, f := range rangeFrom {
+		switch inner := f.Type.(type) {
+		case Struct:
+			l.Write("{")
+			l.Write("v := &v.%s", f.FieldName)
+			l.Write("_ = v")
+			inner.WriteDefault(l)
+			l.Write("}")
+		default:
+			if d, ok := f.Type.(Defaulter); ok {
+				def, has := d.GetDefault()
+				if has {
+					l.Write("v.%s = %v", f.FieldName, def)
+				}
+			}
+		}
+	}
+}
+
 func (s Struct) WriteDefn(l *LineWriter) {
 	if s.Comment != "" {
 		l.Write(s.Comment)
@@ -557,6 +593,7 @@ func (s Struct) WriteAppendFunc(l *LineWriter) {
 
 func (s Struct) WriteDecodeFunc(l *LineWriter) {
 	l.Write("func (v *%s) ReadFrom(src []byte) error {", s.Name)
+	l.Write("v.Default()")
 	if s.TopLevel {
 		l.Write("version := v.Version")
 		l.Write("_ = version")
@@ -568,5 +605,11 @@ func (s Struct) WriteDecodeFunc(l *LineWriter) {
 	l.Write("b := kbin.Reader{Src: src}")
 	s.WriteDecode(l)
 	l.Write("return b.Complete()")
+	l.Write("}")
+}
+
+func (s Struct) WriteDefaultFunc(l *LineWriter) {
+	l.Write("func (v *%s) Default() {", s.Name)
+	s.WriteDefault(l)
 	l.Write("}")
 }

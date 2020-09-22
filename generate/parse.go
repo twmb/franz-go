@@ -22,7 +22,6 @@ var types = map[string]Type{
 	"float64":         Float64{},
 	"uint32":          Uint32{},
 	"varint":          Varint{},
-	"varlong":         Varlong{},
 	"string":          String{},
 	"nullable-string": NullableString{},
 	"bytes":           Bytes{},
@@ -104,6 +103,8 @@ func (s *Struct) BuildFrom(scanner *LineScanner, level int) (done bool) {
 
 		typ := fields[1]
 
+		// We parse field comments first; this is everything following
+		// a // after the field.
 		if idx := strings.Index(typ, " // "); idx >= 0 {
 			f.MinVersion, f.MaxVersion, f.Tag, err = parseFieldComment(typ[idx:])
 			if err != nil {
@@ -112,7 +113,9 @@ func (s *Struct) BuildFrom(scanner *LineScanner, level int) (done bool) {
 			typ = typ[:idx]
 		}
 
-		// First, some array processing. Arrays can be nested.
+		// Now we do some array processing. Arrays can be nested
+		// (although they are not nested in our definitions since
+		// the flexible tag support).
 		// We count the array depth here, check if it is encoded
 		// specially, and remove any array decoration.
 		//
@@ -147,6 +150,19 @@ func (s *Struct) BuildFrom(scanner *LineScanner, level int) (done bool) {
 			}
 			typ = typ[arrayLevel : len(typ)-arrayLevel]
 			isArray = true
+		}
+
+		// Now we check for defaults.
+		var hasDefault bool
+		var def string
+		if start := strings.IndexByte(typ, '('); start >= 0 {
+			end := strings.IndexByte(typ[start:], ')')
+			if end <= 0 {
+				die("invalid default: start %d, end %d", start, end)
+			}
+			hasDefault = true
+			def = typ[start+1 : start+end]
+			typ = typ[:start]
 		}
 
 		switch {
@@ -193,6 +209,11 @@ func (s *Struct) BuildFrom(scanner *LineScanner, level int) (done bool) {
 				die("unknown type %q on line %q", typ, line)
 			}
 			f.Type = types[typ]
+
+			if hasDefault {
+				f.Type = f.Type.(Defaulter).SetDefault(def)
+			}
+
 			if s.FromFlexible {
 				if setter, ok := f.Type.(FlexibleSetter); ok {
 					f.Type = setter.AsFromFlexible()

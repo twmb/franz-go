@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -28,15 +29,38 @@ type (
 		TypeName() string
 	}
 
-	Bool         struct{}
-	Int8         struct{}
-	Int16        struct{}
-	Int32        struct{}
-	Int64        struct{}
-	Float64      struct{}
-	Uint32       struct{}
-	Varint       struct{}
-	Varlong      struct{}
+	Bool struct {
+		HasDefault bool
+		Default    bool
+	}
+	Int8 struct {
+		HasDefault bool
+		Default    int8
+	}
+	Int16 struct {
+		HasDefault bool
+		Default    int16
+	}
+	Int32 struct {
+		HasDefault bool
+		Default    int32
+	}
+	Int64 struct {
+		HasDefault bool
+		Default    int64
+	}
+	Float64 struct {
+		HasDefault bool
+		Default    float64
+	}
+	Uint32 struct {
+		HasDefault bool
+		Default    uint32
+	}
+	Varint struct {
+		HasDefault bool
+		Default    int32
+	}
 	VarintString struct{}
 	VarintBytes  struct{}
 
@@ -48,13 +72,21 @@ type (
 	// The following types can be encoded "compact"; this happens on
 	// flexible versions. If adding types here, be sure to add the
 	// AsFromFlexible method below.
-	String         struct{ FromFlexible bool }
+	String struct {
+		FromFlexible bool
+	}
 	NullableString struct {
+		HasDefault      bool
 		FromFlexible    bool
 		NullableVersion int
 	}
-	Bytes         struct{ FromFlexible bool }
-	NullableBytes struct{ FromFlexible bool }
+	Bytes struct {
+		FromFlexible bool
+	}
+	NullableBytes struct {
+		HasDefault   bool
+		FromFlexible bool
+	}
 
 	Array struct {
 		Inner           Type
@@ -102,6 +134,125 @@ type (
 		RequestKind      string // for responses
 	}
 )
+
+/////////////////////
+// DEFUALT SETTING //
+/////////////////////
+
+type Defaulter interface {
+	SetDefault(string) Type
+	GetDefault() (interface{}, bool)
+}
+
+func (b Bool) SetDefault(s string) Type {
+	v, err := strconv.ParseBool(s)
+	if err != nil {
+		die("invalid bool default: %v", err)
+	}
+	b.Default = v
+	b.HasDefault = true
+	return b
+}
+func (b Bool) GetDefault() (interface{}, bool) { return b.Default, b.HasDefault }
+
+func (i Int8) SetDefault(s string) Type {
+	v, err := strconv.ParseInt(s, 10, 8)
+	if err != nil {
+		die("invalid int8 default: %v", err)
+	}
+	i.Default = int8(v)
+	i.HasDefault = true
+	return i
+}
+func (i Int8) GetDefault() (interface{}, bool) { return i.Default, i.HasDefault }
+
+func (i Int16) SetDefault(s string) Type {
+	v, err := strconv.ParseInt(s, 10, 16)
+	if err != nil {
+		die("invalid int16 default: %v", err)
+	}
+	i.Default = int16(v)
+	i.HasDefault = true
+	return i
+}
+func (i Int16) GetDefault() (interface{}, bool) { return i.Default, i.HasDefault }
+
+func (i Int32) SetDefault(s string) Type {
+	v, err := strconv.ParseInt(s, 10, 32)
+	if err != nil {
+		die("invalid int32 default: %v", err)
+	}
+	i.Default = int32(v)
+	i.HasDefault = true
+	return i
+}
+func (i Int32) GetDefault() (interface{}, bool) { return i.Default, i.HasDefault }
+
+func (i Int64) SetDefault(s string) Type {
+	v, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		die("invalid int64 default: %v", err)
+	}
+	i.Default = int64(v)
+	i.HasDefault = true
+	return i
+}
+func (i Int64) GetDefault() (interface{}, bool) { return i.Default, i.HasDefault }
+
+func (f Float64) SetDefault(s string) Type {
+	v, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		die("invalid float64 default: %v", err)
+	}
+	f.Default = v
+	f.HasDefault = true
+	return f
+}
+func (f Float64) GetDefault() (interface{}, bool) { return f.Default, f.HasDefault }
+
+func (u Uint32) SetDefault(s string) Type {
+	v, err := strconv.ParseUint(s, 10, 32)
+	if err != nil {
+		die("invalid uint32 default: %v", err)
+	}
+	u.Default = uint32(v)
+	u.HasDefault = true
+	return u
+}
+func (u Uint32) GetDefault() (interface{}, bool) { return u.Default, u.HasDefault }
+
+func (i Varint) SetDefault(s string) Type {
+	v, err := strconv.ParseInt(s, 10, 32)
+	if err != nil {
+		die("invalid varint default: %v", err)
+	}
+	i.Default = int32(v)
+	i.HasDefault = true
+	return i
+}
+func (i Varint) GetDefault() (interface{}, bool) { return i.Default, i.HasDefault }
+
+func (s NullableString) SetDefault(v string) Type {
+	if v != "null" {
+		die("unknown non-null default for nullable string")
+	}
+	s.HasDefault = true
+	return s
+}
+func (s NullableString) GetDefault() (interface{}, bool) {
+	return "nil", s.HasDefault // we return the string so it is rendered correctly
+}
+
+func (b NullableBytes) SetDefault(v string) Type {
+	if v != "null" {
+		die("unknown non-null default for nullable string")
+	}
+	b.HasDefault = true
+	return b
+}
+func (b NullableBytes) GetDefault() (interface{}, bool) {
+	return "nil", b.HasDefault
+}
 
 type FlexibleSetter interface {
 	AsFromFlexible() Type
@@ -173,6 +324,9 @@ func main() {
 			s.WriteAppendFunc(l)
 			s.WriteDecodeFunc(l)
 		}
+
+		// everything gets a default function
+		s.WriteDefaultFunc(l)
 	}
 
 	l.Write("// RequestForKey returns the request corresponding to the given request key")
