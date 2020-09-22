@@ -82,6 +82,7 @@ func (v *MessageV0) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *MessageV0) ReadFrom(src []byte) error {
+	v.Default()
 	b := kbin.Reader{Src: src}
 	s := v
 	{
@@ -113,6 +114,8 @@ func (v *MessageV0) ReadFrom(src []byte) error {
 		s.Value = v
 	}
 	return b.Complete()
+}
+func (v *MessageV0) Default() {
 }
 
 // MessageV1 is the message format Kafka used prior to 0.11.
@@ -205,6 +208,7 @@ func (v *MessageV1) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *MessageV1) ReadFrom(src []byte) error {
+	v.Default()
 	b := kbin.Reader{Src: src}
 	s := v
 	{
@@ -241,6 +245,8 @@ func (v *MessageV1) ReadFrom(src []byte) error {
 	}
 	return b.Complete()
 }
+func (v *MessageV1) Default() {
+}
 
 // Header is user provided metadata for a record. Kafka does not look at
 // headers at all; they are solely for producers and consumers.
@@ -262,6 +268,7 @@ func (v *Header) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *Header) ReadFrom(src []byte) error {
+	v.Default()
 	b := kbin.Reader{Src: src}
 	s := v
 	{
@@ -273,6 +280,8 @@ func (v *Header) ReadFrom(src []byte) error {
 		s.Value = v
 	}
 	return b.Complete()
+}
+func (v *Header) Default() {
 }
 
 // A Record is a Kafka v0.11.0.0 record. It corresponds to an individual
@@ -353,6 +362,7 @@ func (v *Record) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *Record) ReadFrom(src []byte) error {
+	v.Default()
 	b := kbin.Reader{Src: src}
 	s := v
 	{
@@ -392,6 +402,7 @@ func (v *Record) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				v := b.VarintString()
@@ -406,6 +417,8 @@ func (v *Record) ReadFrom(src []byte) error {
 		s.Headers = v
 	}
 	return b.Complete()
+}
+func (v *Record) Default() {
 }
 
 // RecordBatch is a Kafka concept that groups many individual records together
@@ -572,6 +585,7 @@ func (v *RecordBatch) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *RecordBatch) ReadFrom(src []byte) error {
+	v.Default()
 	b := kbin.Reader{Src: src}
 	s := v
 	{
@@ -632,6 +646,8 @@ func (v *RecordBatch) ReadFrom(src []byte) error {
 	}
 	return b.Complete()
 }
+func (v *RecordBatch) Default() {
+}
 
 type ProduceRequestTopicPartition struct {
 	// Partition is a partition to send a record batch to.
@@ -644,12 +660,19 @@ type ProduceRequestTopicPartition struct {
 	// serialized RecordBatch.
 	Records []byte
 }
+
+func (v *ProduceRequestTopicPartition) Default() {
+}
+
 type ProduceRequestTopic struct {
 	// Topic is a topic to send record batches to.
 	Topic string
 
 	// Partitions is an array of partitions to send record batches to.
 	Partitions []ProduceRequestTopicPartition
+}
+
+func (v *ProduceRequestTopic) Default() {
 }
 
 // ProduceRequest issues records to be created to Kafka.
@@ -735,6 +758,7 @@ func (v *ProduceRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *ProduceRequest) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	b := kbin.Reader{Src: src}
@@ -764,6 +788,7 @@ func (v *ProduceRequest) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				v := b.String()
@@ -782,6 +807,7 @@ func (v *ProduceRequest) ReadFrom(src []byte) error {
 				}
 				for i := int32(0); i < l; i++ {
 					v := &a[i]
+					v.Default()
 					s := v
 					{
 						v := b.Int32()
@@ -801,6 +827,8 @@ func (v *ProduceRequest) ReadFrom(src []byte) error {
 	}
 	return b.Complete()
 }
+func (v *ProduceRequest) Default() {
+}
 
 type ProduceResponseTopicPartitionErrorRecord struct {
 	// RelativeOffset is the offset of the record that caused problems.
@@ -809,6 +837,10 @@ type ProduceResponseTopicPartitionErrorRecord struct {
 	// ErrorMessage is the error of this record.
 	ErrorMessage *string
 }
+
+func (v *ProduceResponseTopicPartitionErrorRecord) Default() {
+}
+
 type ProduceResponseTopicPartition struct {
 	// Partition is the partition this response pertains to.
 	Partition int32
@@ -914,6 +946,12 @@ type ProduceResponseTopicPartition struct {
 	// to error.
 	ErrorMessage *string // v8+
 }
+
+func (v *ProduceResponseTopicPartition) Default() {
+	v.LogAppendTime = -1
+	v.LogStartOffset = -1
+}
+
 type ProduceResponseTopic struct {
 	// Topic is the topic this response pertains to.
 	Topic string
@@ -921,6 +959,9 @@ type ProduceResponseTopic struct {
 	// Partitions is an array of responses for the partition's that
 	// batches were sent to.
 	Partitions []ProduceResponseTopicPartition
+}
+
+func (v *ProduceResponseTopic) Default() {
 }
 
 // ProduceResponse is returned from a ProduceRequest.
@@ -1013,6 +1054,7 @@ func (v *ProduceResponse) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *ProduceResponse) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	b := kbin.Reader{Src: src}
@@ -1030,6 +1072,7 @@ func (v *ProduceResponse) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				v := b.String()
@@ -1048,6 +1091,7 @@ func (v *ProduceResponse) ReadFrom(src []byte) error {
 				}
 				for i := int32(0); i < l; i++ {
 					v := &a[i]
+					v.Default()
 					s := v
 					{
 						v := b.Int32()
@@ -1082,6 +1126,7 @@ func (v *ProduceResponse) ReadFrom(src []byte) error {
 						}
 						for i := int32(0); i < l; i++ {
 							v := &a[i]
+							v.Default()
 							s := v
 							{
 								v := b.Int32()
@@ -1113,6 +1158,8 @@ func (v *ProduceResponse) ReadFrom(src []byte) error {
 	}
 	return b.Complete()
 }
+func (v *ProduceResponse) Default() {
+}
 
 type FetchRequestTopicPartition struct {
 	// Partition is a partition in a topic to try to fetch records for.
@@ -1142,6 +1189,13 @@ type FetchRequestTopicPartition struct {
 	// a request is allotted so that it does not dominate all of MaxBytes.
 	PartitionMaxBytes int32
 }
+
+func (v *FetchRequestTopicPartition) Default() {
+	v.CurrentLeaderEpoch = -1
+	v.LastFetchedEpoch = -1
+	v.LogStartOffset = -1
+}
+
 type FetchRequestTopic struct {
 	// Topic is a topic to try to fetch records for.
 	Topic string
@@ -1149,12 +1203,19 @@ type FetchRequestTopic struct {
 	// Partitions contains partitions in a topic to try to fetch records for.
 	Partitions []FetchRequestTopicPartition
 }
+
+func (v *FetchRequestTopic) Default() {
+}
+
 type FetchRequestForgottenTopic struct {
 	// Topic is a topic to remove from being tracked (with the partitions below).
 	Topic string
 
 	// Partitions are partitions to remove from tracking for a topic.
 	Partitions []int32
+}
+
+func (v *FetchRequestForgottenTopic) Default() {
 }
 
 // FetchRequest is a long-poll request of records from Kafka.
@@ -1382,6 +1443,7 @@ func (v *FetchRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *FetchRequest) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	isFlexible := version >= 12
@@ -1433,6 +1495,7 @@ func (v *FetchRequest) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				var v string
@@ -1460,6 +1523,7 @@ func (v *FetchRequest) ReadFrom(src []byte) error {
 				}
 				for i := int32(0); i < l; i++ {
 					v := &a[i]
+					v.Default()
 					s := v
 					{
 						v := b.Int32()
@@ -1516,6 +1580,7 @@ func (v *FetchRequest) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				var v string
@@ -1582,6 +1647,22 @@ func (v *FetchRequest) ReadFrom(src []byte) error {
 	}
 	return b.Complete()
 }
+func (v *FetchRequest) Default() {
+	v.ClusterID = nil
+	v.MaxBytes = 2147483647
+	v.SessionEpoch = -1
+}
+
+type FetchResponseTopicPartitionDivergingEpoch struct {
+	Epoch int32
+
+	EndOffset int32
+}
+
+func (v *FetchResponseTopicPartitionDivergingEpoch) Default() {
+	v.Epoch = -1
+	v.EndOffset = -1
+}
 
 type FetchResponseTopicPartitionCurrentLeader struct {
 	// The ID of the current leader, or -1 if unknown.
@@ -1590,6 +1671,12 @@ type FetchResponseTopicPartitionCurrentLeader struct {
 	// The latest known leader epoch.
 	LeaderEpoch int32
 }
+
+func (v *FetchResponseTopicPartitionCurrentLeader) Default() {
+	v.LeaderID = -1
+	v.LeaderEpoch = -1
+}
+
 type FetchResponseTopicPartitionAbortedTransaction struct {
 	// ProducerID is the producer ID that caused this aborted transaction.
 	ProducerID int64
@@ -1597,6 +1684,10 @@ type FetchResponseTopicPartitionAbortedTransaction struct {
 	// FirstOffset is the offset where this aborted transaction began.
 	FirstOffset int64
 }
+
+func (v *FetchResponseTopicPartitionAbortedTransaction) Default() {
+}
+
 type FetchResponseTopicPartition struct {
 	// Partition is a partition in a topic that records may have been
 	// received for.
@@ -1654,9 +1745,10 @@ type FetchResponseTopicPartition struct {
 	// This field was added for KIP-107.
 	LogStartOffset int64 // v5+
 
-	// If set and not -1, the follower must truncate all offsets that are
-	// greater than or equal to this value.
-	TruncationOffset int64 // tag 0
+	// In case divergence is detected based on the LastFetchedEpoch and
+	// FetchOffset in the request, this field indicates the largest epoch and
+	// its end offset such that subsequent records are known to diverge.
+	DivergingEpoch FetchResponseTopicPartitionDivergingEpoch // tag 0
 
 	// CurrentLeader is the currently known leader ID and epoch for this
 	// partition.
@@ -1685,6 +1777,25 @@ type FetchResponseTopicPartition struct {
 	// contains many RecordBatch structs).
 	RecordBatches []byte
 }
+
+func (v *FetchResponseTopicPartition) Default() {
+	v.LastStableOffset = -1
+	v.LogStartOffset = -1
+	{
+		v := &v.DivergingEpoch
+		_ = v
+		v.Epoch = -1
+		v.EndOffset = -1
+	}
+	{
+		v := &v.CurrentLeader
+		_ = v
+		v.LeaderID = -1
+		v.LeaderEpoch = -1
+	}
+	v.PreferredReadReplica = -1
+}
+
 type FetchResponseTopic struct {
 	// Topic is a topic that records may have been received for.
 	Topic string
@@ -1692,6 +1803,9 @@ type FetchResponseTopic struct {
 	// Partitions contains partitions in a topic that records may have
 	// been received for.
 	Partitions []FetchResponseTopicPartition
+}
+
+func (v *FetchResponseTopic) Default() {
 }
 
 // FetchResponse is returned from a FetchRequest.
@@ -1833,17 +1947,34 @@ func (v *FetchResponse) AppendTo(dst []byte) []byte {
 					if isFlexible {
 						dst = kbin.AppendUvarint(dst, 2)
 						{
-							v := v.TruncationOffset
+							v := v.DivergingEpoch
 							dst = kbin.AppendUvarint(dst, 0)
-							dst = kbin.AppendUvarint(dst, 8)
-							dst = kbin.AppendInt64(dst, v)
+							sized := false
+							lenAt := len(dst)
+						l1569:
+							{
+								v := v.Epoch
+								dst = kbin.AppendInt32(dst, v)
+							}
+							{
+								v := v.EndOffset
+								dst = kbin.AppendInt32(dst, v)
+							}
+							if isFlexible {
+								dst = kbin.AppendUvarint(dst, 0)
+							}
+							if !sized {
+								dst = kbin.AppendUvarint(dst[:lenAt], uint32(len(dst[lenAt:])))
+								sized = true
+								goto l1569
+							}
 						}
 						{
 							v := v.CurrentLeader
 							dst = kbin.AppendUvarint(dst, 1)
 							sized := false
 							lenAt := len(dst)
-						l1484:
+						l1592:
 							{
 								v := v.LeaderID
 								dst = kbin.AppendInt32(dst, v)
@@ -1858,7 +1989,7 @@ func (v *FetchResponse) AppendTo(dst []byte) []byte {
 							if !sized {
 								dst = kbin.AppendUvarint(dst[:lenAt], uint32(len(dst[lenAt:])))
 								sized = true
-								goto l1484
+								goto l1592
 							}
 						}
 					}
@@ -1875,6 +2006,7 @@ func (v *FetchResponse) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *FetchResponse) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	isFlexible := version >= 12
@@ -1910,6 +2042,7 @@ func (v *FetchResponse) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				var v string
@@ -1937,6 +2070,7 @@ func (v *FetchResponse) ReadFrom(src []byte) error {
 				}
 				for i := int32(0); i < l; i++ {
 					v := &a[i]
+					v.Default()
 					s := v
 					{
 						v := b.Int32()
@@ -1978,6 +2112,7 @@ func (v *FetchResponse) ReadFrom(src []byte) error {
 						}
 						for i := int32(0); i < l; i++ {
 							v := &a[i]
+							v.Default()
 							s := v
 							{
 								v := b.Int64()
@@ -2014,14 +2149,27 @@ func (v *FetchResponse) ReadFrom(src []byte) error {
 								b.Span(int(b.Uvarint()))
 							case 0:
 								b := kbin.Reader{Src: b.Span(int(b.Uvarint()))}
-								v := b.Int64()
-								s.TruncationOffset = v
+								v := &s.DivergingEpoch
+								v.Default()
+								s := v
+								{
+									v := b.Int32()
+									s.Epoch = v
+								}
+								{
+									v := b.Int32()
+									s.EndOffset = v
+								}
+								if isFlexible {
+									SkipTags(&b)
+								}
 								if err := b.Complete(); err != nil {
 									return err
 								}
 							case 1:
 								b := kbin.Reader{Src: b.Span(int(b.Uvarint()))}
 								v := &s.CurrentLeader
+								v.Default()
 								s := v
 								{
 									v := b.Int32()
@@ -2056,6 +2204,8 @@ func (v *FetchResponse) ReadFrom(src []byte) error {
 	}
 	return b.Complete()
 }
+func (v *FetchResponse) Default() {
+}
 
 type ListOffsetsRequestTopicPartition struct {
 	// Partition is a partition of a topic to get offsets for.
@@ -2085,12 +2235,19 @@ type ListOffsetsRequestTopicPartition struct {
 	// This was removed after v0.
 	MaxNumOffsets int32
 }
+
+func (v *ListOffsetsRequestTopicPartition) Default() {
+}
+
 type ListOffsetsRequestTopic struct {
 	// Topic is a topic to get offsets for.
 	Topic string
 
 	// Partitions is an array of partitions in a topic to get offsets for.
 	Partitions []ListOffsetsRequestTopicPartition
+}
+
+func (v *ListOffsetsRequestTopic) Default() {
 }
 
 // ListOffsetsRequest requests partition offsets from Kafka for use in
@@ -2175,6 +2332,7 @@ func (v *ListOffsetsRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *ListOffsetsRequest) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	b := kbin.Reader{Src: src}
@@ -2200,6 +2358,7 @@ func (v *ListOffsetsRequest) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				v := b.String()
@@ -2218,6 +2377,7 @@ func (v *ListOffsetsRequest) ReadFrom(src []byte) error {
 				}
 				for i := int32(0); i < l; i++ {
 					v := &a[i]
+					v.Default()
 					s := v
 					{
 						v := b.Int32()
@@ -2244,6 +2404,8 @@ func (v *ListOffsetsRequest) ReadFrom(src []byte) error {
 		s.Topics = v
 	}
 	return b.Complete()
+}
+func (v *ListOffsetsRequest) Default() {
 }
 
 type ListOffsetsResponseTopicPartition struct {
@@ -2306,6 +2468,12 @@ type ListOffsetsResponseTopicPartition struct {
 	// or -1 if there was no leader epoch.
 	LeaderEpoch int32 // v4+
 }
+
+func (v *ListOffsetsResponseTopicPartition) Default() {
+	v.Timestamp = -1
+	v.Offset = -1
+}
+
 type ListOffsetsResponseTopic struct {
 	// Topic is the topic this array slot is for.
 	Topic string
@@ -2313,6 +2481,9 @@ type ListOffsetsResponseTopic struct {
 	// Partitions is an array of partition responses corresponding to
 	// the requested partitions for a topic.
 	Partitions []ListOffsetsResponseTopicPartition
+}
+
+func (v *ListOffsetsResponseTopic) Default() {
 }
 
 // ListOffsetsResponse is returned from a ListOffsetsRequest.
@@ -2394,6 +2565,7 @@ func (v *ListOffsetsResponse) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *ListOffsetsResponse) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	b := kbin.Reader{Src: src}
@@ -2415,6 +2587,7 @@ func (v *ListOffsetsResponse) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				v := b.String()
@@ -2433,6 +2606,7 @@ func (v *ListOffsetsResponse) ReadFrom(src []byte) error {
 				}
 				for i := int32(0); i < l; i++ {
 					v := &a[i]
+					v.Default()
 					s := v
 					{
 						v := b.Int32()
@@ -2482,10 +2656,15 @@ func (v *ListOffsetsResponse) ReadFrom(src []byte) error {
 	}
 	return b.Complete()
 }
+func (v *ListOffsetsResponse) Default() {
+}
 
 type MetadataRequestTopic struct {
 	// Topic is the topic to request metadata for.
 	Topic string
+}
+
+func (v *MetadataRequestTopic) Default() {
 }
 
 // MetadataRequest requests metadata from Kafka.
@@ -2573,6 +2752,7 @@ func (v *MetadataRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *MetadataRequest) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	isFlexible := version >= 9
@@ -2599,6 +2779,7 @@ func (v *MetadataRequest) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				var v string
@@ -2633,6 +2814,8 @@ func (v *MetadataRequest) ReadFrom(src []byte) error {
 	}
 	return b.Complete()
 }
+func (v *MetadataRequest) Default() {
+}
 
 type MetadataResponseBroker struct {
 	// NodeID is the node ID of a Kafka broker.
@@ -2647,6 +2830,10 @@ type MetadataResponseBroker struct {
 	// Rack is the rack this Kafka broker is in.
 	Rack *string // v1+
 }
+
+func (v *MetadataResponseBroker) Default() {
+}
+
 type MetadataResponseTopicPartition struct {
 	// ErrorCode is any error for a partition in topic metadata.
 	//
@@ -2682,6 +2869,11 @@ type MetadataResponseTopicPartition struct {
 	// returns all offline broker IDs that should be replicating this partition.
 	OfflineReplicas []int32 // v5+
 }
+
+func (v *MetadataResponseTopicPartition) Default() {
+	v.LeaderEpoch = -1
+}
+
 type MetadataResponseTopic struct {
 	// ErrorCode is any error for a topic in a metadata request.
 	//
@@ -2712,6 +2904,10 @@ type MetadataResponseTopic struct {
 	// the client is allowed to perform on this topic.
 	// This is only returned if requested.
 	AuthorizedOperations int32 // v8+
+}
+
+func (v *MetadataResponseTopic) Default() {
+	v.AuthorizedOperations = -2147483648
 }
 
 // MetadataResponse is returned from a MetdataRequest.
@@ -2920,6 +3116,7 @@ func (v *MetadataResponse) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *MetadataResponse) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	isFlexible := version >= 9
@@ -2947,6 +3144,7 @@ func (v *MetadataResponse) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				v := b.Int32()
@@ -3011,6 +3209,7 @@ func (v *MetadataResponse) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				v := b.Int16()
@@ -3046,6 +3245,7 @@ func (v *MetadataResponse) ReadFrom(src []byte) error {
 				}
 				for i := int32(0); i < l; i++ {
 					v := &a[i]
+					v.Default()
 					s := v
 					{
 						v := b.Int16()
@@ -3156,6 +3356,10 @@ func (v *MetadataResponse) ReadFrom(src []byte) error {
 	}
 	return b.Complete()
 }
+func (v *MetadataResponse) Default() {
+	v.ControllerID = -1
+	v.AuthorizedOperations = -2147483648
+}
 
 // LeaderAndISRRequestTopicPartition is a common struct that is used across
 // different versions of LeaderAndISRRequest.
@@ -3182,17 +3386,28 @@ type LeaderAndISRRequestTopicPartition struct {
 
 	IsNew bool // v1+
 }
+
+func (v *LeaderAndISRRequestTopicPartition) Default() {
+}
+
 type LeaderAndISRRequestTopicState struct {
 	Topic string
 
 	PartitionStates []LeaderAndISRRequestTopicPartition
 }
+
+func (v *LeaderAndISRRequestTopicState) Default() {
+}
+
 type LeaderAndISRRequestLiveLeader struct {
 	BrokerID int32
 
 	Host string
 
 	Port int32
+}
+
+func (v *LeaderAndISRRequestLiveLeader) Default() {
 }
 
 // LeaderAndISRRequest is an advanced request that controller brokers use
@@ -3454,6 +3669,7 @@ func (v *LeaderAndISRRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *LeaderAndISRRequest) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	isFlexible := version >= 4
@@ -3489,6 +3705,7 @@ func (v *LeaderAndISRRequest) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			if version >= 0 && version <= 1 {
 				v := b.String()
@@ -3614,6 +3831,7 @@ func (v *LeaderAndISRRequest) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				var v string
@@ -3641,6 +3859,7 @@ func (v *LeaderAndISRRequest) ReadFrom(src []byte) error {
 				}
 				for i := int32(0); i < l; i++ {
 					v := &a[i]
+					v.Default()
 					s := v
 					if version >= 0 && version <= 1 {
 						v := b.String()
@@ -3773,6 +3992,7 @@ func (v *LeaderAndISRRequest) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				v := b.Int32()
@@ -3803,6 +4023,9 @@ func (v *LeaderAndISRRequest) ReadFrom(src []byte) error {
 	}
 	return b.Complete()
 }
+func (v *LeaderAndISRRequest) Default() {
+	v.BrokerEpoch = -1
+}
 
 type LeaderAndISRResponsePartition struct {
 	Topic string
@@ -3810,6 +4033,9 @@ type LeaderAndISRResponsePartition struct {
 	Partition int32
 
 	ErrorCode int16
+}
+
+func (v *LeaderAndISRResponsePartition) Default() {
 }
 
 // LeaderAndISRResponse is returned from a LeaderAndISRRequest.
@@ -3874,6 +4100,7 @@ func (v *LeaderAndISRResponse) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *LeaderAndISRResponse) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	isFlexible := version >= 4
@@ -3901,6 +4128,7 @@ func (v *LeaderAndISRResponse) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				var v string
@@ -3931,6 +4159,8 @@ func (v *LeaderAndISRResponse) ReadFrom(src []byte) error {
 	}
 	return b.Complete()
 }
+func (v *LeaderAndISRResponse) Default() {
+}
 
 type StopReplicaRequestTopicPartitionState struct {
 	Partition int32
@@ -3939,6 +4169,11 @@ type StopReplicaRequestTopicPartitionState struct {
 
 	Delete bool
 }
+
+func (v *StopReplicaRequestTopicPartitionState) Default() {
+	v.LeaderEpoch = -1
+}
+
 type StopReplicaRequestTopic struct {
 	Topic string
 
@@ -3947,6 +4182,9 @@ type StopReplicaRequestTopic struct {
 	Partitions []int32 // v1+
 
 	PartitionStates []StopReplicaRequestTopicPartitionState // v3+
+}
+
+func (v *StopReplicaRequestTopic) Default() {
 }
 
 // StopReplicaRequest is an advanced request that brokers use to stop replicas.
@@ -4072,6 +4310,7 @@ func (v *StopReplicaRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *StopReplicaRequest) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	isFlexible := version >= 2
@@ -4111,6 +4350,7 @@ func (v *StopReplicaRequest) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				var v string
@@ -4164,6 +4404,7 @@ func (v *StopReplicaRequest) ReadFrom(src []byte) error {
 				}
 				for i := int32(0); i < l; i++ {
 					v := &a[i]
+					v.Default()
 					s := v
 					{
 						v := b.Int32()
@@ -4196,6 +4437,9 @@ func (v *StopReplicaRequest) ReadFrom(src []byte) error {
 	}
 	return b.Complete()
 }
+func (v *StopReplicaRequest) Default() {
+	v.BrokerEpoch = -1
+}
 
 type StopReplicaResponsePartition struct {
 	Topic string
@@ -4203,6 +4447,9 @@ type StopReplicaResponsePartition struct {
 	Partition int32
 
 	ErrorCode int16
+}
+
+func (v *StopReplicaResponsePartition) Default() {
 }
 
 // StopReplicasResponse is returned from a StopReplicasRequest.
@@ -4268,6 +4515,7 @@ func (v *StopReplicaResponse) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *StopReplicaResponse) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	isFlexible := version >= 2
@@ -4295,6 +4543,7 @@ func (v *StopReplicaResponse) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				var v string
@@ -4325,6 +4574,8 @@ func (v *StopReplicaResponse) ReadFrom(src []byte) error {
 	}
 	return b.Complete()
 }
+func (v *StopReplicaResponse) Default() {
+}
 
 type UpdateMetadataRequestTopicPartition struct {
 	Topic string
@@ -4345,11 +4596,19 @@ type UpdateMetadataRequestTopicPartition struct {
 
 	OfflineReplicas []int32
 }
+
+func (v *UpdateMetadataRequestTopicPartition) Default() {
+}
+
 type UpdateMetadataRequestTopicState struct {
 	Topic string
 
 	PartitionStates []UpdateMetadataRequestTopicPartition
 }
+
+func (v *UpdateMetadataRequestTopicState) Default() {
+}
+
 type UpdateMetadataRequestLiveBrokerEndpoint struct {
 	Port int32
 
@@ -4359,6 +4618,10 @@ type UpdateMetadataRequestLiveBrokerEndpoint struct {
 
 	SecurityProtocol int16
 }
+
+func (v *UpdateMetadataRequestLiveBrokerEndpoint) Default() {
+}
+
 type UpdateMetadataRequestLiveBroker struct {
 	ID int32
 
@@ -4369,6 +4632,9 @@ type UpdateMetadataRequestLiveBroker struct {
 	Endpoints []UpdateMetadataRequestLiveBrokerEndpoint // v1+
 
 	Rack *string // v2+
+}
+
+func (v *UpdateMetadataRequestLiveBroker) Default() {
 }
 
 // UpdateMetadataRequest is an advanced request that brokers use to
@@ -4652,6 +4918,7 @@ func (v *UpdateMetadataRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *UpdateMetadataRequest) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	isFlexible := version >= 6
@@ -4687,6 +4954,7 @@ func (v *UpdateMetadataRequest) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			if version >= 0 && version <= 4 {
 				v := b.String()
@@ -4790,6 +5058,7 @@ func (v *UpdateMetadataRequest) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				var v string
@@ -4817,6 +5086,7 @@ func (v *UpdateMetadataRequest) ReadFrom(src []byte) error {
 				}
 				for i := int32(0); i < l; i++ {
 					v := &a[i]
+					v.Default()
 					s := v
 					if version >= 0 && version <= 4 {
 						v := b.String()
@@ -4927,6 +5197,7 @@ func (v *UpdateMetadataRequest) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				v := b.Int32()
@@ -4962,6 +5233,7 @@ func (v *UpdateMetadataRequest) ReadFrom(src []byte) error {
 				}
 				for i := int32(0); i < l; i++ {
 					v := &a[i]
+					v.Default()
 					s := v
 					{
 						v := b.Int32()
@@ -5017,6 +5289,9 @@ func (v *UpdateMetadataRequest) ReadFrom(src []byte) error {
 	}
 	return b.Complete()
 }
+func (v *UpdateMetadataRequest) Default() {
+	v.BrokerEpoch = -1
+}
 
 // UpdateMetadataResponses is returned from an UpdateMetadataRequest.
 type UpdateMetadataResponse struct {
@@ -5050,6 +5325,7 @@ func (v *UpdateMetadataResponse) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *UpdateMetadataResponse) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	isFlexible := version >= 6
@@ -5064,6 +5340,8 @@ func (v *UpdateMetadataResponse) ReadFrom(src []byte) error {
 		SkipTags(&b)
 	}
 	return b.Complete()
+}
+func (v *UpdateMetadataResponse) Default() {
 }
 
 // ControlledShutdownRequest is an advanced request that can be used to
@@ -5114,6 +5392,7 @@ func (v *ControlledShutdownRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *ControlledShutdownRequest) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	isFlexible := version >= 3
@@ -5133,11 +5412,17 @@ func (v *ControlledShutdownRequest) ReadFrom(src []byte) error {
 	}
 	return b.Complete()
 }
+func (v *ControlledShutdownRequest) Default() {
+	v.BrokerEpoch = -1
+}
 
 type ControlledShutdownResponsePartitionsRemaining struct {
 	Topic string
 
 	Partition int32
+}
+
+func (v *ControlledShutdownResponsePartitionsRemaining) Default() {
 }
 
 // ControlledShutdownResponse is returned from a ControlledShutdownRequest.
@@ -5200,6 +5485,7 @@ func (v *ControlledShutdownResponse) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *ControlledShutdownResponse) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	isFlexible := version >= 3
@@ -5227,6 +5513,7 @@ func (v *ControlledShutdownResponse) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				var v string
@@ -5252,6 +5539,8 @@ func (v *ControlledShutdownResponse) ReadFrom(src []byte) error {
 		SkipTags(&b)
 	}
 	return b.Complete()
+}
+func (v *ControlledShutdownResponse) Default() {
 }
 
 // OffsetCommitKey is the key for the Kafka internal __consumer_offsets topic
@@ -5295,6 +5584,7 @@ func (v *OffsetCommitKey) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *OffsetCommitKey) ReadFrom(src []byte) error {
+	v.Default()
 	b := kbin.Reader{Src: src}
 	version := b.Int16()
 	v.Version = version
@@ -5312,6 +5602,8 @@ func (v *OffsetCommitKey) ReadFrom(src []byte) error {
 		s.Partition = v
 	}
 	return b.Complete()
+}
+func (v *OffsetCommitKey) Default() {
 }
 
 // OffsetCommitValue is the value for the Kafka internal __consumer_offsets
@@ -5377,6 +5669,7 @@ func (v *OffsetCommitValue) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *OffsetCommitValue) ReadFrom(src []byte) error {
+	v.Default()
 	b := kbin.Reader{Src: src}
 	version := b.Int16()
 	v.Version = version
@@ -5402,6 +5695,8 @@ func (v *OffsetCommitValue) ReadFrom(src []byte) error {
 		s.ExpireTimestamp = v
 	}
 	return b.Complete()
+}
+func (v *OffsetCommitValue) Default() {
 }
 
 // GroupMetadataKey is the key for the Kafka internal __consumer_offsets topic
@@ -5431,6 +5726,7 @@ func (v *GroupMetadataKey) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *GroupMetadataKey) ReadFrom(src []byte) error {
+	v.Default()
 	b := kbin.Reader{Src: src}
 	version := b.Int16()
 	v.Version = version
@@ -5440,6 +5736,8 @@ func (v *GroupMetadataKey) ReadFrom(src []byte) error {
 		s.Group = v
 	}
 	return b.Complete()
+}
+func (v *GroupMetadataKey) Default() {
 }
 
 type GroupMetadataValueMember struct {
@@ -5466,6 +5764,9 @@ type GroupMetadataValueMember struct {
 
 	// Assignment is what the leader assigned this group member.
 	Assignment []byte
+}
+
+func (v *GroupMetadataValueMember) Default() {
 }
 
 // GroupMetadataValue is the value for the Kafka internal __consumer_offsets
@@ -5576,6 +5877,7 @@ func (v *GroupMetadataValue) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *GroupMetadataValue) ReadFrom(src []byte) error {
+	v.Default()
 	b := kbin.Reader{Src: src}
 	version := b.Int16()
 	v.Version = version
@@ -5613,6 +5915,7 @@ func (v *GroupMetadataValue) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				v := b.String()
@@ -5652,6 +5955,8 @@ func (v *GroupMetadataValue) ReadFrom(src []byte) error {
 	}
 	return b.Complete()
 }
+func (v *GroupMetadataValue) Default() {
+}
 
 // TxnMetadataKey is the key for the Kafka internal __transaction_state topic
 // if the key starts with an int16 with a value of 0.
@@ -5677,6 +5982,7 @@ func (v *TxnMetadataKey) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *TxnMetadataKey) ReadFrom(src []byte) error {
+	v.Default()
 	b := kbin.Reader{Src: src}
 	version := b.Int16()
 	v.Version = version
@@ -5687,6 +5993,8 @@ func (v *TxnMetadataKey) ReadFrom(src []byte) error {
 	}
 	return b.Complete()
 }
+func (v *TxnMetadataKey) Default() {
+}
 
 type TxnMetadataValueTopic struct {
 	// Topic is a topic involved in this transaction.
@@ -5694,6 +6002,9 @@ type TxnMetadataValueTopic struct {
 
 	// Partitions are partitions in this topic involved in the transaction.
 	Partitions []int32
+}
+
+func (v *TxnMetadataValueTopic) Default() {
 }
 
 // TxnMetadataValue is the value for the Kafka internal __transaction_state
@@ -5794,6 +6105,7 @@ func (v *TxnMetadataValue) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *TxnMetadataValue) ReadFrom(src []byte) error {
+	v.Default()
 	b := kbin.Reader{Src: src}
 	version := b.Int16()
 	v.Version = version
@@ -5835,6 +6147,7 @@ func (v *TxnMetadataValue) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				v := b.String()
@@ -5872,6 +6185,8 @@ func (v *TxnMetadataValue) ReadFrom(src []byte) error {
 	}
 	return b.Complete()
 }
+func (v *TxnMetadataValue) Default() {
+}
 
 type OffsetCommitRequestTopicPartition struct {
 	// Partition if a partition to commit offsets for.
@@ -5897,12 +6212,21 @@ type OffsetCommitRequestTopicPartition struct {
 	// can contain information such as which node is doing the committing, etc.
 	Metadata *string
 }
+
+func (v *OffsetCommitRequestTopicPartition) Default() {
+	v.Timestamp = -1
+	v.LeaderEpoch = -1
+}
+
 type OffsetCommitRequestTopic struct {
 	// Topic is a topic to commit offsets for.
 	Topic string
 
 	// Partitions contains partitions in a topic for which to commit offsets.
 	Partitions []OffsetCommitRequestTopicPartition
+}
+
+func (v *OffsetCommitRequestTopic) Default() {
 }
 
 // OffsetCommitRequest commits offsets for consumed topics / partitions in
@@ -6056,6 +6380,7 @@ func (v *OffsetCommitRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *OffsetCommitRequest) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	isFlexible := version >= 8
@@ -6114,6 +6439,7 @@ func (v *OffsetCommitRequest) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				var v string
@@ -6141,6 +6467,7 @@ func (v *OffsetCommitRequest) ReadFrom(src []byte) error {
 				}
 				for i := int32(0); i < l; i++ {
 					v := &a[i]
+					v.Default()
 					s := v
 					{
 						v := b.Int32()
@@ -6186,6 +6513,10 @@ func (v *OffsetCommitRequest) ReadFrom(src []byte) error {
 	}
 	return b.Complete()
 }
+func (v *OffsetCommitRequest) Default() {
+	v.Generation = -1
+	v.RetentionTimeMillis = -1
+}
 
 type OffsetCommitResponseTopicPartition struct {
 	// Partition is the partition in a topic this array slot corresponds to.
@@ -6226,6 +6557,10 @@ type OffsetCommitResponseTopicPartition struct {
 	// a record batch that is too large (likely due to large metadata).
 	ErrorCode int16
 }
+
+func (v *OffsetCommitResponseTopicPartition) Default() {
+}
+
 type OffsetCommitResponseTopic struct {
 	// Topic is the topic this offset commit response corresponds to.
 	Topic string
@@ -6233,6 +6568,9 @@ type OffsetCommitResponseTopic struct {
 	// Partitions contains responses for each requested partition in
 	// a topic.
 	Partitions []OffsetCommitResponseTopicPartition
+}
+
+func (v *OffsetCommitResponseTopic) Default() {
 }
 
 // OffsetCommitResponse is returned from an OffsetCommitRequest.
@@ -6316,6 +6654,7 @@ func (v *OffsetCommitResponse) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *OffsetCommitResponse) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	isFlexible := version >= 8
@@ -6343,6 +6682,7 @@ func (v *OffsetCommitResponse) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				var v string
@@ -6370,6 +6710,7 @@ func (v *OffsetCommitResponse) ReadFrom(src []byte) error {
 				}
 				for i := int32(0); i < l; i++ {
 					v := &a[i]
+					v.Default()
 					s := v
 					{
 						v := b.Int32()
@@ -6398,6 +6739,8 @@ func (v *OffsetCommitResponse) ReadFrom(src []byte) error {
 	}
 	return b.Complete()
 }
+func (v *OffsetCommitResponse) Default() {
+}
 
 type OffsetFetchRequestTopic struct {
 	// Topic is a topic to fetch offsets for.
@@ -6405,6 +6748,9 @@ type OffsetFetchRequestTopic struct {
 
 	// Partitions in a list of partitions in a group to fetch offsets for.
 	Partitions []int32
+}
+
+func (v *OffsetFetchRequestTopic) Default() {
 }
 
 // OffsetFetchRequest requests the most recent committed offsets for topic
@@ -6500,6 +6846,7 @@ func (v *OffsetFetchRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *OffsetFetchRequest) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	isFlexible := version >= 6
@@ -6535,6 +6882,7 @@ func (v *OffsetFetchRequest) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				var v string
@@ -6583,6 +6931,8 @@ func (v *OffsetFetchRequest) ReadFrom(src []byte) error {
 	}
 	return b.Complete()
 }
+func (v *OffsetFetchRequest) Default() {
+}
 
 type OffsetFetchResponseTopicPartition struct {
 	// Partition is the partition in a topic this array slot corresponds to.
@@ -6624,6 +6974,11 @@ type OffsetFetchResponseTopicPartition struct {
 	// See KIP-447 for more details.
 	ErrorCode int16
 }
+
+func (v *OffsetFetchResponseTopicPartition) Default() {
+	v.LeaderEpoch = -1
+}
+
 type OffsetFetchResponseTopic struct {
 	// Topic is the topic this offset fetch response corresponds to.
 	Topic string
@@ -6631,6 +6986,9 @@ type OffsetFetchResponseTopic struct {
 	// Partitions contains responses for each requested partition in
 	// a topic.
 	Partitions []OffsetFetchResponseTopicPartition
+}
+
+func (v *OffsetFetchResponseTopic) Default() {
 }
 
 // OffsetFetchResponse is returned from an OffsetFetchRequest.
@@ -6738,6 +7096,7 @@ func (v *OffsetFetchResponse) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *OffsetFetchResponse) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	isFlexible := version >= 6
@@ -6765,6 +7124,7 @@ func (v *OffsetFetchResponse) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				var v string
@@ -6792,6 +7152,7 @@ func (v *OffsetFetchResponse) ReadFrom(src []byte) error {
 				}
 				for i := int32(0); i < l; i++ {
 					v := &a[i]
+					v.Default()
 					s := v
 					{
 						v := b.Int32()
@@ -6840,6 +7201,8 @@ func (v *OffsetFetchResponse) ReadFrom(src []byte) error {
 		SkipTags(&b)
 	}
 	return b.Complete()
+}
+func (v *OffsetFetchResponse) Default() {
 }
 
 // FindCoordinatorRequest requests the coordinator for a group or transaction.
@@ -6893,6 +7256,7 @@ func (v *FindCoordinatorRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *FindCoordinatorRequest) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	isFlexible := version >= 3
@@ -6916,6 +7280,8 @@ func (v *FindCoordinatorRequest) ReadFrom(src []byte) error {
 		SkipTags(&b)
 	}
 	return b.Complete()
+}
+func (v *FindCoordinatorRequest) Default() {
 }
 
 // FindCoordinatorResponse is returned from a FindCoordinatorRequest.
@@ -7009,6 +7375,7 @@ func (v *FindCoordinatorResponse) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *FindCoordinatorResponse) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	isFlexible := version >= 3
@@ -7054,6 +7421,8 @@ func (v *FindCoordinatorResponse) ReadFrom(src []byte) error {
 	}
 	return b.Complete()
 }
+func (v *FindCoordinatorResponse) Default() {
+}
 
 type StickyMemberMetadataCurrentAssignment struct {
 	// Topic is a topic the group member is currently assigned.
@@ -7062,6 +7431,9 @@ type StickyMemberMetadataCurrentAssignment struct {
 	// Partitions are the partitions within a topic that a group member is
 	// currently assigned.
 	Partitions []int32
+}
+
+func (v *StickyMemberMetadataCurrentAssignment) Default() {
 }
 
 // StickyMemberMetadata is is what is encoded in UserData for
@@ -7082,10 +7454,17 @@ type StickyMemberMetadata struct {
 	// Generation is the generation of this join. This is incremented every join.
 	Generation int32 // v1+
 }
+
+func (v *StickyMemberMetadata) Default() {
+}
+
 type GroupMemberMetadataOwnedPartition struct {
 	Topic string
 
 	Partitions []int32
+}
+
+func (v *GroupMemberMetadataOwnedPartition) Default() {
 }
 
 // GroupMemberMetadata is the metadata that is usually sent with a join group
@@ -7148,6 +7527,7 @@ func (v *GroupMemberMetadata) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *GroupMemberMetadata) ReadFrom(src []byte) error {
+	v.Default()
 	b := kbin.Reader{Src: src}
 	version := b.Int16()
 	v.Version = version
@@ -7187,6 +7567,7 @@ func (v *GroupMemberMetadata) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				v := b.String()
@@ -7216,6 +7597,8 @@ func (v *GroupMemberMetadata) ReadFrom(src []byte) error {
 	}
 	return b.Complete()
 }
+func (v *GroupMemberMetadata) Default() {
+}
 
 type GroupMemberAssignmentTopic struct {
 	// Topic is a topic in the assignment.
@@ -7223,6 +7606,9 @@ type GroupMemberAssignmentTopic struct {
 
 	// Partitions contains partitions in the assignment.
 	Partitions []int32
+}
+
+func (v *GroupMemberAssignmentTopic) Default() {
 }
 
 // GroupMemberAssignment is the assignment data that is usually sent with a
@@ -7269,6 +7655,7 @@ func (v *GroupMemberAssignment) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *GroupMemberAssignment) ReadFrom(src []byte) error {
+	v.Default()
 	b := kbin.Reader{Src: src}
 	s := v
 	{
@@ -7288,6 +7675,7 @@ func (v *GroupMemberAssignment) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				v := b.String()
@@ -7321,6 +7709,8 @@ func (v *GroupMemberAssignment) ReadFrom(src []byte) error {
 	}
 	return b.Complete()
 }
+func (v *GroupMemberAssignment) Default() {
+}
 
 type JoinGroupRequestProtocol struct {
 	// Name is a name of a protocol. This is arbitrary, but is used
@@ -7340,6 +7730,9 @@ type JoinGroupRequestProtocol struct {
 	// The protocol metadata is where group members will communicate which
 	// topics they collectively as a group want to consume.
 	Metadata []byte
+}
+
+func (v *JoinGroupRequestProtocol) Default() {
 }
 
 // JoinGroupRequest issues a request to join a Kafka group. This will create a
@@ -7493,6 +7886,7 @@ func (v *JoinGroupRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *JoinGroupRequest) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	isFlexible := version >= 6
@@ -7560,6 +7954,7 @@ func (v *JoinGroupRequest) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				var v string
@@ -7591,6 +7986,9 @@ func (v *JoinGroupRequest) ReadFrom(src []byte) error {
 	}
 	return b.Complete()
 }
+func (v *JoinGroupRequest) Default() {
+	v.RebalanceTimeoutMillis = -1
+}
 
 type JoinGroupResponseMember struct {
 	// MemberID is a member in this group.
@@ -7602,6 +8000,9 @@ type JoinGroupResponseMember struct {
 	// ProtocolMetadata is the metadata for this member for this protocol.
 	// This is usually of type GroupMemberMetadata.
 	ProtocolMetadata []byte
+}
+
+func (v *JoinGroupResponseMember) Default() {
 }
 
 // JoinGroupResponse is returned from a JoinGroupRequest.
@@ -7794,6 +8195,7 @@ func (v *JoinGroupResponse) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *JoinGroupResponse) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	isFlexible := version >= 6
@@ -7875,6 +8277,7 @@ func (v *JoinGroupResponse) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				var v string
@@ -7914,6 +8317,9 @@ func (v *JoinGroupResponse) ReadFrom(src []byte) error {
 		SkipTags(&b)
 	}
 	return b.Complete()
+}
+func (v *JoinGroupResponse) Default() {
+	v.Generation = -1
 }
 
 // HeartbeatRequest issues a heartbeat for a member in a group, ensuring that
@@ -7982,6 +8388,7 @@ func (v *HeartbeatRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *HeartbeatRequest) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	isFlexible := version >= 4
@@ -8023,6 +8430,8 @@ func (v *HeartbeatRequest) ReadFrom(src []byte) error {
 		SkipTags(&b)
 	}
 	return b.Complete()
+}
+func (v *HeartbeatRequest) Default() {
 }
 
 // HeartbeatResponse is returned from a HeartbeatRequest.
@@ -8084,6 +8493,7 @@ func (v *HeartbeatResponse) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *HeartbeatResponse) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	isFlexible := version >= 4
@@ -8103,11 +8513,16 @@ func (v *HeartbeatResponse) ReadFrom(src []byte) error {
 	}
 	return b.Complete()
 }
+func (v *HeartbeatResponse) Default() {
+}
 
 type LeaveGroupRequestMember struct {
 	MemberID string
 
 	InstanceID *string
+}
+
+func (v *LeaveGroupRequestMember) Default() {
 }
 
 // LeaveGroupRequest issues a request for a group member to leave the group,
@@ -8194,6 +8609,7 @@ func (v *LeaveGroupRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *LeaveGroupRequest) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	isFlexible := version >= 4
@@ -8235,6 +8651,7 @@ func (v *LeaveGroupRequest) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				var v string
@@ -8266,6 +8683,8 @@ func (v *LeaveGroupRequest) ReadFrom(src []byte) error {
 	}
 	return b.Complete()
 }
+func (v *LeaveGroupRequest) Default() {
+}
 
 type LeaveGroupResponseMember struct {
 	MemberID string
@@ -8274,6 +8693,9 @@ type LeaveGroupResponseMember struct {
 
 	// An individual member's leave error code.
 	ErrorCode int16
+}
+
+func (v *LeaveGroupResponseMember) Default() {
 }
 
 // LeaveGroupResponse is returned from a LeaveGroupRequest.
@@ -8370,6 +8792,7 @@ func (v *LeaveGroupResponse) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *LeaveGroupResponse) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	isFlexible := version >= 4
@@ -8401,6 +8824,7 @@ func (v *LeaveGroupResponse) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				var v string
@@ -8436,6 +8860,8 @@ func (v *LeaveGroupResponse) ReadFrom(src []byte) error {
 	}
 	return b.Complete()
 }
+func (v *LeaveGroupResponse) Default() {
+}
 
 type SyncGroupRequestGroupAssignment struct {
 	// MemberID is the member this assignment is for.
@@ -8444,6 +8870,9 @@ type SyncGroupRequestGroupAssignment struct {
 	// MemberAssignment is the assignment for this member. This is typically
 	// of type GroupMemberAssignment.
 	MemberAssignment []byte
+}
+
+func (v *SyncGroupRequestGroupAssignment) Default() {
 }
 
 // SyncGroupRequest is issued by all group members after they receive a a
@@ -8571,6 +9000,7 @@ func (v *SyncGroupRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *SyncGroupRequest) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	isFlexible := version >= 4
@@ -8643,6 +9073,7 @@ func (v *SyncGroupRequest) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				var v string
@@ -8673,6 +9104,8 @@ func (v *SyncGroupRequest) ReadFrom(src []byte) error {
 		SkipTags(&b)
 	}
 	return b.Complete()
+}
+func (v *SyncGroupRequest) Default() {
 }
 
 // SyncGroupResponse is returned from a SyncGroupRequest.
@@ -8770,6 +9203,7 @@ func (v *SyncGroupResponse) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *SyncGroupResponse) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	isFlexible := version >= 4
@@ -8815,6 +9249,8 @@ func (v *SyncGroupResponse) ReadFrom(src []byte) error {
 		SkipTags(&b)
 	}
 	return b.Complete()
+}
+func (v *SyncGroupResponse) Default() {
 }
 
 // DescribeGroupsRequest requests metadata for group IDs.
@@ -8873,6 +9309,7 @@ func (v *DescribeGroupsRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *DescribeGroupsRequest) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	isFlexible := version >= 5
@@ -8915,6 +9352,8 @@ func (v *DescribeGroupsRequest) ReadFrom(src []byte) error {
 	}
 	return b.Complete()
 }
+func (v *DescribeGroupsRequest) Default() {
+}
 
 type DescribeGroupsResponseGroupMember struct {
 	// MemberID is the member ID of a member in this group.
@@ -8939,6 +9378,10 @@ type DescribeGroupsResponseGroupMember struct {
 	// GroupMemberAssignment.
 	MemberAssignment []byte
 }
+
+func (v *DescribeGroupsResponseGroupMember) Default() {
+}
+
 type DescribeGroupsResponseGroup struct {
 	// ErrorCode is the error code for an individual group in a request.
 	//
@@ -8975,6 +9418,10 @@ type DescribeGroupsResponseGroup struct {
 	// the client is allowed to perform on this group.
 	// This is only returned if requested.
 	AuthorizedOperations int32 // v3+
+}
+
+func (v *DescribeGroupsResponseGroup) Default() {
+	v.AuthorizedOperations = -2147483648
 }
 
 // DescribeGroupsResponse is returned from a DescribeGroupsRequest.
@@ -9132,6 +9579,7 @@ func (v *DescribeGroupsResponse) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *DescribeGroupsResponse) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	isFlexible := version >= 5
@@ -9159,6 +9607,7 @@ func (v *DescribeGroupsResponse) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				v := b.Int16()
@@ -9217,6 +9666,7 @@ func (v *DescribeGroupsResponse) ReadFrom(src []byte) error {
 				}
 				for i := int32(0); i < l; i++ {
 					v := &a[i]
+					v.Default()
 					s := v
 					{
 						var v string
@@ -9295,6 +9745,8 @@ func (v *DescribeGroupsResponse) ReadFrom(src []byte) error {
 	}
 	return b.Complete()
 }
+func (v *DescribeGroupsResponse) Default() {
+}
 
 // ListGroupsRequest issues a request to list all groups.
 //
@@ -9344,6 +9796,7 @@ func (v *ListGroupsRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *ListGroupsRequest) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	isFlexible := version >= 3
@@ -9382,6 +9835,8 @@ func (v *ListGroupsRequest) ReadFrom(src []byte) error {
 	}
 	return b.Complete()
 }
+func (v *ListGroupsRequest) Default() {
+}
 
 type ListGroupsResponseGroup struct {
 	// Group is a Kafka group.
@@ -9392,6 +9847,9 @@ type ListGroupsResponseGroup struct {
 
 	// The group state.
 	GroupState string // v4+
+}
+
+func (v *ListGroupsResponseGroup) Default() {
 }
 
 // ListGroupsResponse is returned from a ListGroupsRequest.
@@ -9480,6 +9938,7 @@ func (v *ListGroupsResponse) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *ListGroupsResponse) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	isFlexible := version >= 3
@@ -9511,6 +9970,7 @@ func (v *ListGroupsResponse) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				var v string
@@ -9551,6 +10011,8 @@ func (v *ListGroupsResponse) ReadFrom(src []byte) error {
 	}
 	return b.Complete()
 }
+func (v *ListGroupsResponse) Default() {
+}
 
 // SASLHandshakeRequest begins the sasl authentication flow. Note that Kerberos
 // GSSAPI authentication has its own unique flow.
@@ -9588,6 +10050,7 @@ func (v *SASLHandshakeRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *SASLHandshakeRequest) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	b := kbin.Reader{Src: src}
@@ -9597,6 +10060,8 @@ func (v *SASLHandshakeRequest) ReadFrom(src []byte) error {
 		s.Mechanism = v
 	}
 	return b.Complete()
+}
+func (v *SASLHandshakeRequest) Default() {
 }
 
 // SASLHandshakeResponse is returned for a SASLHandshakeRequest.
@@ -9641,6 +10106,7 @@ func (v *SASLHandshakeResponse) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *SASLHandshakeResponse) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	b := kbin.Reader{Src: src}
@@ -9668,6 +10134,8 @@ func (v *SASLHandshakeResponse) ReadFrom(src []byte) error {
 		s.SupportedMechanisms = v
 	}
 	return b.Complete()
+}
+func (v *SASLHandshakeResponse) Default() {
 }
 
 // ApiVersionsRequest requests what API versions a Kafka broker supports.
@@ -9737,6 +10205,7 @@ func (v *ApiVersionsRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *ApiVersionsRequest) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	isFlexible := version >= 3
@@ -9766,6 +10235,8 @@ func (v *ApiVersionsRequest) ReadFrom(src []byte) error {
 	}
 	return b.Complete()
 }
+func (v *ApiVersionsRequest) Default() {
+}
 
 type ApiVersionsResponseApiKey struct {
 	// ApiKey is the key of a message request.
@@ -9776,6 +10247,37 @@ type ApiVersionsResponseApiKey struct {
 
 	// MaxVersion is the max version a broker supports for an API key.
 	MaxVersion int16
+}
+
+func (v *ApiVersionsResponseApiKey) Default() {
+}
+
+type ApiVersionsResponseSupportedFeature struct {
+	// The name of the feature.
+	Name string
+
+	// The minimum supported version for the feature.
+	MinVersion int16
+
+	// The maximum supported version for the feature.
+	MaxVersion int16
+}
+
+func (v *ApiVersionsResponseSupportedFeature) Default() {
+}
+
+type ApiVersionsResponseFinalizedFeature struct {
+	// The name of the feature.
+	Name string
+
+	// The cluster-wide finalized max version level for the feature.
+	MaxVersionLevel int16
+
+	// The cluster-wide finalized min version level for the feature.
+	MinVersionLevel int16
+}
+
+func (v *ApiVersionsResponseFinalizedFeature) Default() {
 }
 
 // ApiVersionsResponse is returned from an ApiVersionsRequest.
@@ -9800,6 +10302,17 @@ type ApiVersionsResponse struct {
 	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
 	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
 	ThrottleMillis int32 // v1+
+
+	// Features supported by the broker (see KIP-584).
+	SupportedFeatures []ApiVersionsResponseSupportedFeature // tag 0
+
+	// The monotonically increasing epoch for the finalized features information,
+	// where -1 indicates an unknown epoch.
+	FinalizedFeaturesEpoch int32 // tag 1
+
+	// The list of cluster-wide finalized features (only valid if
+	// FinalizedFeaturesEpoch is >= 0).
+	FinalizedFeatures []ApiVersionsResponseFinalizedFeature // tag 2
 }
 
 func (*ApiVersionsResponse) Key() int16                 { return 18 }
@@ -9849,11 +10362,96 @@ func (v *ApiVersionsResponse) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendInt32(dst, v)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0)
+		dst = kbin.AppendUvarint(dst, 3)
+		{
+			v := v.SupportedFeatures
+			dst = kbin.AppendUvarint(dst, 0)
+			sized := false
+			lenAt := len(dst)
+		l9220:
+			if isFlexible {
+				dst = kbin.AppendCompactArrayLen(dst, len(v))
+			} else {
+				dst = kbin.AppendArrayLen(dst, len(v))
+			}
+			for i := range v {
+				v := &v[i]
+				{
+					v := v.Name
+					if isFlexible {
+						dst = kbin.AppendCompactString(dst, v)
+					} else {
+						dst = kbin.AppendString(dst, v)
+					}
+				}
+				{
+					v := v.MinVersion
+					dst = kbin.AppendInt16(dst, v)
+				}
+				{
+					v := v.MaxVersion
+					dst = kbin.AppendInt16(dst, v)
+				}
+				if isFlexible {
+					dst = kbin.AppendUvarint(dst, 0)
+				}
+			}
+			if !sized {
+				dst = kbin.AppendUvarint(dst[:lenAt], uint32(len(dst[lenAt:])))
+				sized = true
+				goto l9220
+			}
+		}
+		{
+			v := v.FinalizedFeaturesEpoch
+			dst = kbin.AppendUvarint(dst, 1)
+			dst = kbin.AppendUvarint(dst, 4)
+			dst = kbin.AppendInt32(dst, v)
+		}
+		{
+			v := v.FinalizedFeatures
+			dst = kbin.AppendUvarint(dst, 2)
+			sized := false
+			lenAt := len(dst)
+		l9265:
+			if isFlexible {
+				dst = kbin.AppendCompactArrayLen(dst, len(v))
+			} else {
+				dst = kbin.AppendArrayLen(dst, len(v))
+			}
+			for i := range v {
+				v := &v[i]
+				{
+					v := v.Name
+					if isFlexible {
+						dst = kbin.AppendCompactString(dst, v)
+					} else {
+						dst = kbin.AppendString(dst, v)
+					}
+				}
+				{
+					v := v.MaxVersionLevel
+					dst = kbin.AppendInt16(dst, v)
+				}
+				{
+					v := v.MinVersionLevel
+					dst = kbin.AppendInt16(dst, v)
+				}
+				if isFlexible {
+					dst = kbin.AppendUvarint(dst, 0)
+				}
+			}
+			if !sized {
+				dst = kbin.AppendUvarint(dst[:lenAt], uint32(len(dst[lenAt:])))
+				sized = true
+				goto l9265
+			}
+		}
 	}
 	return dst
 }
 func (v *ApiVersionsResponse) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	isFlexible := version >= 3
@@ -9881,6 +10479,7 @@ func (v *ApiVersionsResponse) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				v := b.Int16()
@@ -9906,9 +10505,108 @@ func (v *ApiVersionsResponse) ReadFrom(src []byte) error {
 		s.ThrottleMillis = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		for i := b.Uvarint(); i > 0; i-- {
+			switch b.Uvarint() {
+			default:
+				b.Span(int(b.Uvarint()))
+			case 0:
+				v := s.SupportedFeatures
+				a := v
+				var l int32
+				if isFlexible {
+					l = b.CompactArrayLen()
+				} else {
+					l = b.ArrayLen()
+				}
+				if !b.Ok() {
+					return b.Complete()
+				}
+				if l > 0 {
+					a = make([]ApiVersionsResponseSupportedFeature, l)
+				}
+				for i := int32(0); i < l; i++ {
+					v := &a[i]
+					v.Default()
+					s := v
+					{
+						var v string
+						if isFlexible {
+							v = b.CompactString()
+						} else {
+							v = b.String()
+						}
+						s.Name = v
+					}
+					{
+						v := b.Int16()
+						s.MinVersion = v
+					}
+					{
+						v := b.Int16()
+						s.MaxVersion = v
+					}
+					if isFlexible {
+						SkipTags(&b)
+					}
+				}
+				v = a
+				s.SupportedFeatures = v
+			case 1:
+				b := kbin.Reader{Src: b.Span(int(b.Uvarint()))}
+				v := b.Int32()
+				s.FinalizedFeaturesEpoch = v
+				if err := b.Complete(); err != nil {
+					return err
+				}
+			case 2:
+				v := s.FinalizedFeatures
+				a := v
+				var l int32
+				if isFlexible {
+					l = b.CompactArrayLen()
+				} else {
+					l = b.ArrayLen()
+				}
+				if !b.Ok() {
+					return b.Complete()
+				}
+				if l > 0 {
+					a = make([]ApiVersionsResponseFinalizedFeature, l)
+				}
+				for i := int32(0); i < l; i++ {
+					v := &a[i]
+					v.Default()
+					s := v
+					{
+						var v string
+						if isFlexible {
+							v = b.CompactString()
+						} else {
+							v = b.String()
+						}
+						s.Name = v
+					}
+					{
+						v := b.Int16()
+						s.MaxVersionLevel = v
+					}
+					{
+						v := b.Int16()
+						s.MinVersionLevel = v
+					}
+					if isFlexible {
+						SkipTags(&b)
+					}
+				}
+				v = a
+				s.FinalizedFeatures = v
+			}
+		}
 	}
 	return b.Complete()
+}
+func (v *ApiVersionsResponse) Default() {
+	v.FinalizedFeaturesEpoch = -1
 }
 
 type CreateTopicsRequestTopicReplicaAssignment struct {
@@ -9918,6 +10616,10 @@ type CreateTopicsRequestTopicReplicaAssignment struct {
 	// Replicas are broker IDs the partition must exist on.
 	Replicas []int32
 }
+
+func (v *CreateTopicsRequestTopicReplicaAssignment) Default() {
+}
+
 type CreateTopicsRequestTopicConfig struct {
 	// Name is a topic level config key (e.g. segment.bytes).
 	Name string
@@ -9925,6 +10627,10 @@ type CreateTopicsRequestTopicConfig struct {
 	// Value is a topic level config value (e.g. 1073741824)
 	Value *string
 }
+
+func (v *CreateTopicsRequestTopicConfig) Default() {
+}
+
 type CreateTopicsRequestTopic struct {
 	// Topic is a topic to create.
 	Topic string
@@ -9947,6 +10653,9 @@ type CreateTopicsRequestTopic struct {
 	// Configs is an array of key value config pairs for a topic.
 	// These correspond to Kafka Topic-Level Configs: http://kafka.apache.org/documentation/#topicconfigs.
 	Configs []CreateTopicsRequestTopicConfig
+}
+
+func (v *CreateTopicsRequestTopic) Default() {
 }
 
 // CreateTopicsRequest creates Kafka topics.
@@ -10089,6 +10798,7 @@ func (v *CreateTopicsRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *CreateTopicsRequest) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	isFlexible := version >= 5
@@ -10112,6 +10822,7 @@ func (v *CreateTopicsRequest) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				var v string
@@ -10147,6 +10858,7 @@ func (v *CreateTopicsRequest) ReadFrom(src []byte) error {
 				}
 				for i := int32(0); i < l; i++ {
 					v := &a[i]
+					v.Default()
 					s := v
 					{
 						v := b.Int32()
@@ -10198,6 +10910,7 @@ func (v *CreateTopicsRequest) ReadFrom(src []byte) error {
 				}
 				for i := int32(0); i < l; i++ {
 					v := &a[i]
+					v.Default()
 					s := v
 					{
 						var v string
@@ -10244,6 +10957,9 @@ func (v *CreateTopicsRequest) ReadFrom(src []byte) error {
 	}
 	return b.Complete()
 }
+func (v *CreateTopicsRequest) Default() {
+	v.TimeoutMillis = 60000
+}
 
 type CreateTopicsResponseTopicConfig struct {
 	// Name is the configuration name (e.g. segment.bytes).
@@ -10264,6 +10980,11 @@ type CreateTopicsResponseTopicConfig struct {
 	// is either a password or an unknown type.
 	IsSensitive bool
 }
+
+func (v *CreateTopicsResponseTopicConfig) Default() {
+	v.Source = -1
+}
+
 type CreateTopicsResponseTopic struct {
 	// Topic is the topic this response corresponds to.
 	Topic string
@@ -10318,6 +11039,11 @@ type CreateTopicsResponseTopic struct {
 
 	// Configs contains this topic's configuration.
 	Configs []CreateTopicsResponseTopicConfig // v5+
+}
+
+func (v *CreateTopicsResponseTopic) Default() {
+	v.NumPartitions = -1
+	v.ReplicationFactor = -1
 }
 
 // CreateTopicsResponse is returned from a CreateTopicsRequest.
@@ -10447,6 +11173,7 @@ func (v *CreateTopicsResponse) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *CreateTopicsResponse) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	isFlexible := version >= 5
@@ -10474,6 +11201,7 @@ func (v *CreateTopicsResponse) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				var v string
@@ -10525,6 +11253,7 @@ func (v *CreateTopicsResponse) ReadFrom(src []byte) error {
 				}
 				for i := int32(0); i < l; i++ {
 					v := &a[i]
+					v.Default()
 					s := v
 					{
 						var v string
@@ -10587,6 +11316,8 @@ func (v *CreateTopicsResponse) ReadFrom(src []byte) error {
 	}
 	return b.Complete()
 }
+func (v *CreateTopicsResponse) Default() {
+}
 
 // DeleteTopicsRequest deletes Kafka topics.
 type DeleteTopicsRequest struct {
@@ -10641,6 +11372,7 @@ func (v *DeleteTopicsRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *DeleteTopicsRequest) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	isFlexible := version >= 4
@@ -10683,6 +11415,8 @@ func (v *DeleteTopicsRequest) ReadFrom(src []byte) error {
 	}
 	return b.Complete()
 }
+func (v *DeleteTopicsRequest) Default() {
+}
 
 type DeleteTopicsResponseTopic struct {
 	// Topic is the topic requested for deletion.
@@ -10708,6 +11442,9 @@ type DeleteTopicsResponseTopic struct {
 
 	// ErrorMessage is a message for an error.
 	ErrorMessage *string // v5+
+}
+
+func (v *DeleteTopicsResponseTopic) Default() {
 }
 
 // DeleteTopicsResponse is returned from a DeleteTopicsRequest.
@@ -10783,6 +11520,7 @@ func (v *DeleteTopicsResponse) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *DeleteTopicsResponse) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	isFlexible := version >= 4
@@ -10810,6 +11548,7 @@ func (v *DeleteTopicsResponse) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				var v string
@@ -10845,6 +11584,8 @@ func (v *DeleteTopicsResponse) ReadFrom(src []byte) error {
 	}
 	return b.Complete()
 }
+func (v *DeleteTopicsResponse) Default() {
+}
 
 type DeleteRecordsRequestTopicPartition struct {
 	// Partition is a partition to delete records from.
@@ -10858,12 +11599,19 @@ type DeleteRecordsRequestTopicPartition struct {
 	// current high watermark.
 	Offset int64
 }
+
+func (v *DeleteRecordsRequestTopicPartition) Default() {
+}
+
 type DeleteRecordsRequestTopic struct {
 	// Topic is a topic to delete records from.
 	Topic string
 
 	// Partitions contains partitions to delete records from.
 	Partitions []DeleteRecordsRequestTopicPartition
+}
+
+func (v *DeleteRecordsRequestTopic) Default() {
 }
 
 // DeleteRecordsRequest is an admin request to delete records from Kafka.
@@ -10958,6 +11706,7 @@ func (v *DeleteRecordsRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *DeleteRecordsRequest) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	isFlexible := version >= 2
@@ -10981,6 +11730,7 @@ func (v *DeleteRecordsRequest) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				var v string
@@ -11008,6 +11758,7 @@ func (v *DeleteRecordsRequest) ReadFrom(src []byte) error {
 				}
 				for i := int32(0); i < l; i++ {
 					v := &a[i]
+					v.Default()
 					s := v
 					{
 						v := b.Int32()
@@ -11040,6 +11791,8 @@ func (v *DeleteRecordsRequest) ReadFrom(src []byte) error {
 	}
 	return b.Complete()
 }
+func (v *DeleteRecordsRequest) Default() {
+}
 
 type DeleteRecordsResponseTopicPartition struct {
 	// Partition is the partition this response corresponds to.
@@ -11070,6 +11823,10 @@ type DeleteRecordsResponseTopicPartition struct {
 	// offline log directory.
 	ErrorCode int16
 }
+
+func (v *DeleteRecordsResponseTopicPartition) Default() {
+}
+
 type DeleteRecordsResponseTopic struct {
 	// Topic is the topic this response corresponds to.
 	Topic string
@@ -11077,6 +11834,9 @@ type DeleteRecordsResponseTopic struct {
 	// Partitions contains responses for each partition in a requested topic
 	// in the delete records request.
 	Partitions []DeleteRecordsResponseTopicPartition
+}
+
+func (v *DeleteRecordsResponseTopic) Default() {
 }
 
 // DeleteRecordsResponse is returned from a DeleteRecordsRequest.
@@ -11166,6 +11926,7 @@ func (v *DeleteRecordsResponse) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *DeleteRecordsResponse) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	isFlexible := version >= 2
@@ -11193,6 +11954,7 @@ func (v *DeleteRecordsResponse) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				var v string
@@ -11220,6 +11982,7 @@ func (v *DeleteRecordsResponse) ReadFrom(src []byte) error {
 				}
 				for i := int32(0); i < l; i++ {
 					v := &a[i]
+					v.Default()
 					s := v
 					{
 						v := b.Int32()
@@ -11251,6 +12014,8 @@ func (v *DeleteRecordsResponse) ReadFrom(src []byte) error {
 		SkipTags(&b)
 	}
 	return b.Complete()
+}
+func (v *DeleteRecordsResponse) Default() {
 }
 
 // InitProducerIDRequest initializes a producer ID for idempotent transactions,
@@ -11324,6 +12089,7 @@ func (v *InitProducerIDRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *InitProducerIDRequest) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	isFlexible := version >= 2
@@ -11355,6 +12121,10 @@ func (v *InitProducerIDRequest) ReadFrom(src []byte) error {
 		SkipTags(&b)
 	}
 	return b.Complete()
+}
+func (v *InitProducerIDRequest) Default() {
+	v.ProducerID = -1
+	v.ProducerEpoch = -1
 }
 
 // InitProducerIDResponse is returned for an InitProducerIDRequest.
@@ -11434,6 +12204,7 @@ func (v *InitProducerIDResponse) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *InitProducerIDResponse) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	isFlexible := version >= 2
@@ -11461,6 +12232,9 @@ func (v *InitProducerIDResponse) ReadFrom(src []byte) error {
 	}
 	return b.Complete()
 }
+func (v *InitProducerIDResponse) Default() {
+	v.ProducerID = -1
+}
 
 type OffsetForLeaderEpochRequestTopicPartition struct {
 	// Partition is the number of a partition.
@@ -11476,12 +12250,20 @@ type OffsetForLeaderEpochRequestTopicPartition struct {
 	// LeaderEpoch is the epoch to fetch the end offset for.
 	LeaderEpoch int32
 }
+
+func (v *OffsetForLeaderEpochRequestTopicPartition) Default() {
+	v.CurrentLeaderEpoch = -1
+}
+
 type OffsetForLeaderEpochRequestTopic struct {
 	// Topic is the name of a topic.
 	Topic string
 
 	// Partitions are partitions within a topic to fetch leader epoch offsets for.
 	Partitions []OffsetForLeaderEpochRequestTopicPartition
+}
+
+func (v *OffsetForLeaderEpochRequestTopic) Default() {
 }
 
 // OffsetForLeaderEpochRequest requests log end offsets for partitions.
@@ -11551,6 +12333,7 @@ func (v *OffsetForLeaderEpochRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *OffsetForLeaderEpochRequest) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	b := kbin.Reader{Src: src}
@@ -11572,6 +12355,7 @@ func (v *OffsetForLeaderEpochRequest) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				v := b.String()
@@ -11590,6 +12374,7 @@ func (v *OffsetForLeaderEpochRequest) ReadFrom(src []byte) error {
 				}
 				for i := int32(0); i < l; i++ {
 					v := &a[i]
+					v.Default()
 					s := v
 					{
 						v := b.Int32()
@@ -11612,6 +12397,9 @@ func (v *OffsetForLeaderEpochRequest) ReadFrom(src []byte) error {
 		s.Topics = v
 	}
 	return b.Complete()
+}
+func (v *OffsetForLeaderEpochRequest) Default() {
+	v.ReplicaID = -2
 }
 
 type OffsetForLeaderEpochResponseTopicPartition struct {
@@ -11663,12 +12451,20 @@ type OffsetForLeaderEpochResponseTopicPartition struct {
 	// transitioned to a new epoch.
 	EndOffset int64
 }
+
+func (v *OffsetForLeaderEpochResponseTopicPartition) Default() {
+	v.LeaderEpoch = -1
+}
+
 type OffsetForLeaderEpochResponseTopic struct {
 	// Topic is the topic this response corresponds to.
 	Topic string
 
 	// Partitions are responses to partitions in a topic in the request.
 	Partitions []OffsetForLeaderEpochResponseTopicPartition
+}
+
+func (v *OffsetForLeaderEpochResponseTopic) Default() {
 }
 
 // OffsetForLeaderEpochResponse is returned from an OffsetForLeaderEpochRequest.
@@ -11737,6 +12533,7 @@ func (v *OffsetForLeaderEpochResponse) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *OffsetForLeaderEpochResponse) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	b := kbin.Reader{Src: src}
@@ -11758,6 +12555,7 @@ func (v *OffsetForLeaderEpochResponse) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				v := b.String()
@@ -11776,6 +12574,7 @@ func (v *OffsetForLeaderEpochResponse) ReadFrom(src []byte) error {
 				}
 				for i := int32(0); i < l; i++ {
 					v := &a[i]
+					v.Default()
 					s := v
 					{
 						v := b.Int16()
@@ -11803,6 +12602,8 @@ func (v *OffsetForLeaderEpochResponse) ReadFrom(src []byte) error {
 	}
 	return b.Complete()
 }
+func (v *OffsetForLeaderEpochResponse) Default() {
+}
 
 type AddPartitionsToTxnRequestTopic struct {
 	// Topic is a topic name.
@@ -11811,6 +12612,9 @@ type AddPartitionsToTxnRequestTopic struct {
 	// Partitions are partitions within a topic to add as part of the producer
 	// side of a transaction.
 	Partitions []int32
+}
+
+func (v *AddPartitionsToTxnRequestTopic) Default() {
 }
 
 // AddPartitionsToTxnRequest begins the producer side of a transaction for all
@@ -11883,6 +12687,7 @@ func (v *AddPartitionsToTxnRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *AddPartitionsToTxnRequest) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	b := kbin.Reader{Src: src}
@@ -11912,6 +12717,7 @@ func (v *AddPartitionsToTxnRequest) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				v := b.String()
@@ -11940,6 +12746,8 @@ func (v *AddPartitionsToTxnRequest) ReadFrom(src []byte) error {
 		s.Topics = v
 	}
 	return b.Complete()
+}
+func (v *AddPartitionsToTxnRequest) Default() {
 }
 
 type AddPartitionsToTxnResponseTopicPartition struct {
@@ -11980,12 +12788,19 @@ type AddPartitionsToTxnResponseTopicPartition struct {
 	// this transactional ID, if the producer ID and epoch matches the broker's.
 	ErrorCode int16
 }
+
+func (v *AddPartitionsToTxnResponseTopicPartition) Default() {
+}
+
 type AddPartitionsToTxnResponseTopic struct {
 	// Topic is a topic being responded to.
 	Topic string
 
 	// Partitions are responses to partitions in the request.
 	Partitions []AddPartitionsToTxnResponseTopicPartition
+}
+
+func (v *AddPartitionsToTxnResponseTopic) Default() {
 }
 
 // AddPartitionsToTxnResponse is a response to an AddPartitionsToTxnRequest.
@@ -12048,6 +12863,7 @@ func (v *AddPartitionsToTxnResponse) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *AddPartitionsToTxnResponse) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	b := kbin.Reader{Src: src}
@@ -12069,6 +12885,7 @@ func (v *AddPartitionsToTxnResponse) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				v := b.String()
@@ -12087,6 +12904,7 @@ func (v *AddPartitionsToTxnResponse) ReadFrom(src []byte) error {
 				}
 				for i := int32(0); i < l; i++ {
 					v := &a[i]
+					v.Default()
 					s := v
 					{
 						v := b.Int32()
@@ -12105,6 +12923,8 @@ func (v *AddPartitionsToTxnResponse) ReadFrom(src []byte) error {
 		s.Topics = v
 	}
 	return b.Complete()
+}
+func (v *AddPartitionsToTxnResponse) Default() {
 }
 
 // AddOffsetsToTxnRequest is a request that ties produced records to what group
@@ -12166,6 +12986,7 @@ func (v *AddOffsetsToTxnRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *AddOffsetsToTxnRequest) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	b := kbin.Reader{Src: src}
@@ -12187,6 +13008,8 @@ func (v *AddOffsetsToTxnRequest) ReadFrom(src []byte) error {
 		s.Group = v
 	}
 	return b.Complete()
+}
+func (v *AddOffsetsToTxnRequest) Default() {
 }
 
 // AddOffsetsToTxnResponse is a response to an AddOffsetsToTxnRequest.
@@ -12236,6 +13059,7 @@ func (v *AddOffsetsToTxnResponse) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *AddOffsetsToTxnResponse) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	b := kbin.Reader{Src: src}
@@ -12249,6 +13073,8 @@ func (v *AddOffsetsToTxnResponse) ReadFrom(src []byte) error {
 		s.ErrorCode = v
 	}
 	return b.Complete()
+}
+func (v *AddOffsetsToTxnResponse) Default() {
 }
 
 // EndTxnRequest ends a transaction. This should be called after
@@ -12302,6 +13128,7 @@ func (v *EndTxnRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *EndTxnRequest) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	b := kbin.Reader{Src: src}
@@ -12323,6 +13150,8 @@ func (v *EndTxnRequest) ReadFrom(src []byte) error {
 		s.Commit = v
 	}
 	return b.Complete()
+}
+func (v *EndTxnRequest) Default() {
 }
 
 // EndTxnResponse is a response for an EndTxnRequest.
@@ -12380,6 +13209,7 @@ func (v *EndTxnResponse) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *EndTxnResponse) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	b := kbin.Reader{Src: src}
@@ -12394,12 +13224,18 @@ func (v *EndTxnResponse) ReadFrom(src []byte) error {
 	}
 	return b.Complete()
 }
+func (v *EndTxnResponse) Default() {
+}
 
 type WriteTxnMarkersRequestMarkerTopic struct {
 	Topic string
 
 	Partitions []int32
 }
+
+func (v *WriteTxnMarkersRequestMarkerTopic) Default() {
+}
+
 type WriteTxnMarkersRequestMarker struct {
 	ProducerID int64
 
@@ -12410,6 +13246,9 @@ type WriteTxnMarkersRequestMarker struct {
 	Topics []WriteTxnMarkersRequestMarkerTopic
 
 	CoordinatorEpoch int32
+}
+
+func (v *WriteTxnMarkersRequestMarker) Default() {
 }
 
 // WriteTxnMarkersRequest is a broker-to-broker request that Kafka uses to
@@ -12479,6 +13318,7 @@ func (v *WriteTxnMarkersRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *WriteTxnMarkersRequest) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	b := kbin.Reader{Src: src}
@@ -12496,6 +13336,7 @@ func (v *WriteTxnMarkersRequest) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				v := b.Int64()
@@ -12522,6 +13363,7 @@ func (v *WriteTxnMarkersRequest) ReadFrom(src []byte) error {
 				}
 				for i := int32(0); i < l; i++ {
 					v := &a[i]
+					v.Default()
 					s := v
 					{
 						v := b.String()
@@ -12559,21 +13401,34 @@ func (v *WriteTxnMarkersRequest) ReadFrom(src []byte) error {
 	}
 	return b.Complete()
 }
+func (v *WriteTxnMarkersRequest) Default() {
+}
 
 type WriteTxnMarkersResponseMarkerTopicPartition struct {
 	Partition int32
 
 	ErrorCode int16
 }
+
+func (v *WriteTxnMarkersResponseMarkerTopicPartition) Default() {
+}
+
 type WriteTxnMarkersResponseMarkerTopic struct {
 	Topic string
 
 	Partitions []WriteTxnMarkersResponseMarkerTopicPartition
 }
+
+func (v *WriteTxnMarkersResponseMarkerTopic) Default() {
+}
+
 type WriteTxnMarkersResponseMarker struct {
 	ProducerID int64
 
 	Topics []WriteTxnMarkersResponseMarkerTopic
+}
+
+func (v *WriteTxnMarkersResponseMarker) Default() {
 }
 
 // WriteTxnMarkersResponse is a response to a WriteTxnMarkersRequest.
@@ -12636,6 +13491,7 @@ func (v *WriteTxnMarkersResponse) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *WriteTxnMarkersResponse) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	b := kbin.Reader{Src: src}
@@ -12653,6 +13509,7 @@ func (v *WriteTxnMarkersResponse) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				v := b.Int64()
@@ -12671,6 +13528,7 @@ func (v *WriteTxnMarkersResponse) ReadFrom(src []byte) error {
 				}
 				for i := int32(0); i < l; i++ {
 					v := &a[i]
+					v.Default()
 					s := v
 					{
 						v := b.String()
@@ -12689,6 +13547,7 @@ func (v *WriteTxnMarkersResponse) ReadFrom(src []byte) error {
 						}
 						for i := int32(0); i < l; i++ {
 							v := &a[i]
+							v.Default()
 							s := v
 							{
 								v := b.Int32()
@@ -12712,6 +13571,8 @@ func (v *WriteTxnMarkersResponse) ReadFrom(src []byte) error {
 	}
 	return b.Complete()
 }
+func (v *WriteTxnMarkersResponse) Default() {
+}
 
 type TxnOffsetCommitRequestTopicPartition struct {
 	// Partition is a partition to add for a pending commit.
@@ -12733,12 +13594,20 @@ type TxnOffsetCommitRequestTopicPartition struct {
 	// commit.
 	Metadata *string
 }
+
+func (v *TxnOffsetCommitRequestTopicPartition) Default() {
+	v.LeaderEpoch = -1
+}
+
 type TxnOffsetCommitRequestTopic struct {
 	// Topic is a topic to add for a pending commit.
 	Topic string
 
 	// Partitions are partitions to add for pending commits.
 	Partitions []TxnOffsetCommitRequestTopicPartition
+}
+
+func (v *TxnOffsetCommitRequestTopic) Default() {
 }
 
 // TxnOffsetCommitRequest sends offsets that are a part of this transaction
@@ -12897,6 +13766,7 @@ func (v *TxnOffsetCommitRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *TxnOffsetCommitRequest) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	isFlexible := version >= 3
@@ -12968,6 +13838,7 @@ func (v *TxnOffsetCommitRequest) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				var v string
@@ -12995,6 +13866,7 @@ func (v *TxnOffsetCommitRequest) ReadFrom(src []byte) error {
 				}
 				for i := int32(0); i < l; i++ {
 					v := &a[i]
+					v.Default()
 					s := v
 					{
 						v := b.Int32()
@@ -13035,6 +13907,9 @@ func (v *TxnOffsetCommitRequest) ReadFrom(src []byte) error {
 		SkipTags(&b)
 	}
 	return b.Complete()
+}
+func (v *TxnOffsetCommitRequest) Default() {
+	v.Generation = -1
 }
 
 type TxnOffsetCommitResponseTopicPartition struct {
@@ -13082,12 +13957,19 @@ type TxnOffsetCommitResponseTopicPartition struct {
 	// REBALANCE_IN_PROGRESS is returned if the group is completing a rebalance.
 	ErrorCode int16
 }
+
+func (v *TxnOffsetCommitResponseTopicPartition) Default() {
+}
+
 type TxnOffsetCommitResponseTopic struct {
 	// Topic is the topic this response is for.
 	Topic string
 
 	// Partitions contains responses to the partitions in this topic.
 	Partitions []TxnOffsetCommitResponseTopicPartition
+}
+
+func (v *TxnOffsetCommitResponseTopic) Default() {
 }
 
 // TxnOffsetCommitResponse is a response to a TxnOffsetCommitRequest.
@@ -13173,6 +14055,7 @@ func (v *TxnOffsetCommitResponse) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *TxnOffsetCommitResponse) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	isFlexible := version >= 3
@@ -13200,6 +14083,7 @@ func (v *TxnOffsetCommitResponse) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				var v string
@@ -13227,6 +14111,7 @@ func (v *TxnOffsetCommitResponse) ReadFrom(src []byte) error {
 				}
 				for i := int32(0); i < l; i++ {
 					v := &a[i]
+					v.Default()
 					s := v
 					{
 						v := b.Int32()
@@ -13254,6 +14139,8 @@ func (v *TxnOffsetCommitResponse) ReadFrom(src []byte) error {
 		SkipTags(&b)
 	}
 	return b.Complete()
+}
+func (v *TxnOffsetCommitResponse) Default() {
 }
 
 // DescribeACLsRequest describes ACLs. Describing ACLs works on a filter basis:
@@ -13290,8 +14177,7 @@ type DescribeACLsRequest struct {
 	// PREFIXED is 3, meaning a resource name must have our requested resource
 	// name as a prefix. That is, topic "foobar" will match "foo".
 	//
-	// This field was added with Kafka 2.0.0 for KIP-290; the default during
-	// creating is 2.
+	// This field was added with Kafka 2.0.0 for KIP-290.
 	ResourcePatternType int8 // v1+
 
 	// Principal is the user to filter for. In Kafka with the simple authorizor,
@@ -13381,6 +14267,7 @@ func (v *DescribeACLsRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *DescribeACLsRequest) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	isFlexible := version >= 2
@@ -13435,6 +14322,9 @@ func (v *DescribeACLsRequest) ReadFrom(src []byte) error {
 	}
 	return b.Complete()
 }
+func (v *DescribeACLsRequest) Default() {
+	v.ResourcePatternType = 3
+}
 
 type DescribeACLsResponseResourceACL struct {
 	// Principal is who this ACL applies to.
@@ -13449,6 +14339,10 @@ type DescribeACLsResponseResourceACL struct {
 	// PermissionType is the permission being described.
 	PermissionType int8
 }
+
+func (v *DescribeACLsResponseResourceACL) Default() {
+}
+
 type DescribeACLsResponseResource struct {
 	// ResourceType is the resource type being described.
 	ResourceType int8
@@ -13461,6 +14355,10 @@ type DescribeACLsResponseResource struct {
 
 	// ACLs contains users / entries being described.
 	ACLs []DescribeACLsResponseResourceACL
+}
+
+func (v *DescribeACLsResponseResource) Default() {
+	v.ResourcePatternType = 3
 }
 
 // DescribeACLsResponse is a response to a describe acls request.
@@ -13589,6 +14487,7 @@ func (v *DescribeACLsResponse) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *DescribeACLsResponse) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	isFlexible := version >= 2
@@ -13629,6 +14528,7 @@ func (v *DescribeACLsResponse) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				v := b.Int8()
@@ -13664,6 +14564,7 @@ func (v *DescribeACLsResponse) ReadFrom(src []byte) error {
 				}
 				for i := int32(0); i < l; i++ {
 					v := &a[i]
+					v.Default()
 					s := v
 					{
 						var v string
@@ -13710,6 +14611,8 @@ func (v *DescribeACLsResponse) ReadFrom(src []byte) error {
 	}
 	return b.Complete()
 }
+func (v *DescribeACLsResponse) Default() {
+}
 
 type CreateACLsRequestCreation struct {
 	// ResourceType is the type of resource this acl entry will be on.
@@ -13741,6 +14644,10 @@ type CreateACLsRequestCreation struct {
 	// PermissionType is the permission of this acl. This must be either ALLOW
 	// or DENY.
 	PermissionType int8
+}
+
+func (v *CreateACLsRequestCreation) Default() {
+	v.ResourcePatternType = 3
 }
 
 // CreateACLsRequest creates acls. Creating acls can be done as a batch; each
@@ -13827,6 +14734,7 @@ func (v *CreateACLsRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *CreateACLsRequest) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	isFlexible := version >= 2
@@ -13850,6 +14758,7 @@ func (v *CreateACLsRequest) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				v := b.Int8()
@@ -13906,6 +14815,8 @@ func (v *CreateACLsRequest) ReadFrom(src []byte) error {
 	}
 	return b.Complete()
 }
+func (v *CreateACLsRequest) Default() {
+}
 
 type CreateACLsResponseResult struct {
 	// ErrorCode is an error for this particular creation (index wise).
@@ -13913,6 +14824,9 @@ type CreateACLsResponseResult struct {
 
 	// ErrorMessage is a message for this error.
 	ErrorMessage *string
+}
+
+func (v *CreateACLsResponseResult) Default() {
 }
 
 // CreateACLsResponse is a response for a CreateACLsRequest.
@@ -13976,6 +14890,7 @@ func (v *CreateACLsResponse) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *CreateACLsResponse) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	isFlexible := version >= 2
@@ -14003,6 +14918,7 @@ func (v *CreateACLsResponse) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				v := b.Int16()
@@ -14029,6 +14945,8 @@ func (v *CreateACLsResponse) ReadFrom(src []byte) error {
 	}
 	return b.Complete()
 }
+func (v *CreateACLsResponse) Default() {
+}
 
 type DeleteACLsRequestFilter struct {
 	ResourceType int8
@@ -14044,6 +14962,10 @@ type DeleteACLsRequestFilter struct {
 	Operation int8
 
 	PermissionType int8
+}
+
+func (v *DeleteACLsRequestFilter) Default() {
+	v.ResourcePatternType = 3
 }
 
 // DeleteACLsRequest deletes acls. This request works on filters the same way
@@ -14129,6 +15051,7 @@ func (v *DeleteACLsRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *DeleteACLsRequest) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	isFlexible := version >= 2
@@ -14152,6 +15075,7 @@ func (v *DeleteACLsRequest) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				v := b.Int8()
@@ -14208,6 +15132,8 @@ func (v *DeleteACLsRequest) ReadFrom(src []byte) error {
 	}
 	return b.Complete()
 }
+func (v *DeleteACLsRequest) Default() {
+}
 
 type DeleteACLsResponseResultMatchingACL struct {
 	// ErrorCode contains an error for this individual acl for this filter.
@@ -14230,6 +15156,11 @@ type DeleteACLsResponseResultMatchingACL struct {
 
 	PermissionType int8
 }
+
+func (v *DeleteACLsResponseResultMatchingACL) Default() {
+	v.ResourcePatternType = 3
+}
+
 type DeleteACLsResponseResult struct {
 	// ErrorCode is the overall error code for this individual filter.
 	ErrorCode int16
@@ -14239,6 +15170,9 @@ type DeleteACLsResponseResult struct {
 
 	// MatchingACLs contains all acls that were matched for this filter.
 	MatchingACLs []DeleteACLsResponseResultMatchingACL
+}
+
+func (v *DeleteACLsResponseResult) Default() {
 }
 
 // DeleteACLsResponse is a response for a DeleteACLsRequest.
@@ -14368,6 +15302,7 @@ func (v *DeleteACLsResponse) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *DeleteACLsResponse) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	isFlexible := version >= 2
@@ -14395,6 +15330,7 @@ func (v *DeleteACLsResponse) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				v := b.Int16()
@@ -14426,6 +15362,7 @@ func (v *DeleteACLsResponse) ReadFrom(src []byte) error {
 				}
 				for i := int32(0); i < l; i++ {
 					v := &a[i]
+					v.Default()
 					s := v
 					{
 						v := b.Int16()
@@ -14502,6 +15439,8 @@ func (v *DeleteACLsResponse) ReadFrom(src []byte) error {
 	}
 	return b.Complete()
 }
+func (v *DeleteACLsResponse) Default() {
+}
 
 type DescribeConfigsRequestResource struct {
 	// ResourceType is an enum corresponding to the type of config to describe.
@@ -14520,6 +15459,9 @@ type DescribeConfigsRequestResource struct {
 
 	// ConfigNames is a list of config entries to return. Null requests all.
 	ConfigNames []string
+}
+
+func (v *DescribeConfigsRequestResource) Default() {
 }
 
 // DescribeConfigsRequest issues a request to describe configs that Kafka
@@ -14587,6 +15529,7 @@ func (v *DescribeConfigsRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *DescribeConfigsRequest) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	b := kbin.Reader{Src: src}
@@ -14604,6 +15547,7 @@ func (v *DescribeConfigsRequest) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				v := b.Int8()
@@ -14648,6 +15592,8 @@ func (v *DescribeConfigsRequest) ReadFrom(src []byte) error {
 	}
 	return b.Complete()
 }
+func (v *DescribeConfigsRequest) Default() {
+}
 
 type DescribeConfigsResponseResourceConfigConfigSynonym struct {
 	Name string
@@ -14656,6 +15602,10 @@ type DescribeConfigsResponseResourceConfigConfigSynonym struct {
 
 	Source int8
 }
+
+func (v *DescribeConfigsResponseResourceConfigConfigSynonym) Default() {
+}
+
 type DescribeConfigsResponseResourceConfig struct {
 	// Name is a key this entry corresponds to (e.g. segment.bytes).
 	Name string
@@ -14706,6 +15656,11 @@ type DescribeConfigsResponseResourceConfig struct {
 	// Documentation is optional documentation for the config entry.
 	Documentation *string // v3+
 }
+
+func (v *DescribeConfigsResponseResourceConfig) Default() {
+	v.Source = -1
+}
+
 type DescribeConfigsResponseResource struct {
 	// ErrorCode is the error code returned for describing configs.
 	//
@@ -14736,6 +15691,9 @@ type DescribeConfigsResponseResource struct {
 	// Configs contains information about key/value config pairs for
 	// the requested resource.
 	Configs []DescribeConfigsResponseResourceConfig
+}
+
+func (v *DescribeConfigsResponseResource) Default() {
 }
 
 // DescribeConfigsResponse is returned from a DescribeConfigsRequest.
@@ -14853,6 +15811,7 @@ func (v *DescribeConfigsResponse) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *DescribeConfigsResponse) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	b := kbin.Reader{Src: src}
@@ -14874,6 +15833,7 @@ func (v *DescribeConfigsResponse) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				v := b.Int16()
@@ -14904,6 +15864,7 @@ func (v *DescribeConfigsResponse) ReadFrom(src []byte) error {
 				}
 				for i := int32(0); i < l; i++ {
 					v := &a[i]
+					v.Default()
 					s := v
 					{
 						v := b.String()
@@ -14942,6 +15903,7 @@ func (v *DescribeConfigsResponse) ReadFrom(src []byte) error {
 						}
 						for i := int32(0); i < l; i++ {
 							v := &a[i]
+							v.Default()
 							s := v
 							{
 								v := b.String()
@@ -14977,6 +15939,8 @@ func (v *DescribeConfigsResponse) ReadFrom(src []byte) error {
 	}
 	return b.Complete()
 }
+func (v *DescribeConfigsResponse) Default() {
+}
 
 type AlterConfigsRequestResourceConfig struct {
 	// Name is a key to set (e.g. segment.bytes).
@@ -14985,6 +15949,10 @@ type AlterConfigsRequestResourceConfig struct {
 	// Value is a value to set for the key (e.g. 10).
 	Value *string
 }
+
+func (v *AlterConfigsRequestResourceConfig) Default() {
+}
+
 type AlterConfigsRequestResource struct {
 	// ResourceType is an enum corresponding to the type of config to alter.
 	// The only two valid values are 2 (for topic) and 4 (for broker).
@@ -15006,6 +15974,9 @@ type AlterConfigsRequestResource struct {
 
 	// Configs contains key/value config pairs to set on the resource.
 	Configs []AlterConfigsRequestResourceConfig
+}
+
+func (v *AlterConfigsRequestResource) Default() {
 }
 
 // AlterConfigsRequest issues a request to alter either topic or broker
@@ -15081,6 +16052,7 @@ func (v *AlterConfigsRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *AlterConfigsRequest) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	b := kbin.Reader{Src: src}
@@ -15098,6 +16070,7 @@ func (v *AlterConfigsRequest) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				v := b.Int8()
@@ -15120,6 +16093,7 @@ func (v *AlterConfigsRequest) ReadFrom(src []byte) error {
 				}
 				for i := int32(0); i < l; i++ {
 					v := &a[i]
+					v.Default()
 					s := v
 					{
 						v := b.String()
@@ -15142,6 +16116,8 @@ func (v *AlterConfigsRequest) ReadFrom(src []byte) error {
 		s.ValidateOnly = v
 	}
 	return b.Complete()
+}
+func (v *AlterConfigsRequest) Default() {
 }
 
 type AlterConfigsResponseResource struct {
@@ -15170,6 +16146,9 @@ type AlterConfigsResponseResource struct {
 
 	// ResourceName is the name corresponding to the alter config request.
 	ResourceName string
+}
+
+func (v *AlterConfigsResponseResource) Default() {
 }
 
 // AlterConfigsResponse is returned from an AlterConfigsRequest.
@@ -15227,6 +16206,7 @@ func (v *AlterConfigsResponse) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *AlterConfigsResponse) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	b := kbin.Reader{Src: src}
@@ -15248,6 +16228,7 @@ func (v *AlterConfigsResponse) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				v := b.Int16()
@@ -15271,6 +16252,8 @@ func (v *AlterConfigsResponse) ReadFrom(src []byte) error {
 	}
 	return b.Complete()
 }
+func (v *AlterConfigsResponse) Default() {
+}
 
 type AlterReplicaLogDirsRequestDirTopic struct {
 	// Topic is a topic to move.
@@ -15279,6 +16262,10 @@ type AlterReplicaLogDirsRequestDirTopic struct {
 	// Partitions contains partitions for the topic to move.
 	Partitions []int32
 }
+
+func (v *AlterReplicaLogDirsRequestDirTopic) Default() {
+}
+
 type AlterReplicaLogDirsRequestDir struct {
 	// Dir is an absolute path where everything listed below should
 	// end up.
@@ -15286,6 +16273,9 @@ type AlterReplicaLogDirsRequestDir struct {
 
 	// Topics contains topics to move to the above log directory.
 	Topics []AlterReplicaLogDirsRequestDirTopic
+}
+
+func (v *AlterReplicaLogDirsRequestDir) Default() {
 }
 
 // AlterReplicaLogDirsRequest requests for log directories to be moved
@@ -15345,6 +16335,7 @@ func (v *AlterReplicaLogDirsRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *AlterReplicaLogDirsRequest) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	b := kbin.Reader{Src: src}
@@ -15362,6 +16353,7 @@ func (v *AlterReplicaLogDirsRequest) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				v := b.String()
@@ -15380,6 +16372,7 @@ func (v *AlterReplicaLogDirsRequest) ReadFrom(src []byte) error {
 				}
 				for i := int32(0); i < l; i++ {
 					v := &a[i]
+					v.Default()
 					s := v
 					{
 						v := b.String()
@@ -15413,6 +16406,8 @@ func (v *AlterReplicaLogDirsRequest) ReadFrom(src []byte) error {
 	}
 	return b.Complete()
 }
+func (v *AlterReplicaLogDirsRequest) Default() {
+}
 
 type AlterReplicaLogDirsResponseTopicPartition struct {
 	// Partition is the partition this array slot corresponds to.
@@ -15431,6 +16426,10 @@ type AlterReplicaLogDirsResponseTopicPartition struct {
 	// yet.
 	ErrorCode int16
 }
+
+func (v *AlterReplicaLogDirsResponseTopicPartition) Default() {
+}
+
 type AlterReplicaLogDirsResponseTopic struct {
 	// Topic is the topic this array slot corresponds to.
 	Topic string
@@ -15438,6 +16437,9 @@ type AlterReplicaLogDirsResponseTopic struct {
 	// Partitions contains responses to each partition that was requested
 	// to move.
 	Partitions []AlterReplicaLogDirsResponseTopicPartition
+}
+
+func (v *AlterReplicaLogDirsResponseTopic) Default() {
 }
 
 // AlterReplicaLogDirsResponse is returned from an AlterReplicaLogDirsRequest.
@@ -15501,6 +16503,7 @@ func (v *AlterReplicaLogDirsResponse) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *AlterReplicaLogDirsResponse) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	b := kbin.Reader{Src: src}
@@ -15522,6 +16525,7 @@ func (v *AlterReplicaLogDirsResponse) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				v := b.String()
@@ -15540,6 +16544,7 @@ func (v *AlterReplicaLogDirsResponse) ReadFrom(src []byte) error {
 				}
 				for i := int32(0); i < l; i++ {
 					v := &a[i]
+					v.Default()
 					s := v
 					{
 						v := b.Int32()
@@ -15559,6 +16564,8 @@ func (v *AlterReplicaLogDirsResponse) ReadFrom(src []byte) error {
 	}
 	return b.Complete()
 }
+func (v *AlterReplicaLogDirsResponse) Default() {
+}
 
 type DescribeLogDirsRequestTopic struct {
 	// Topic is a topic to describe the log dir of.
@@ -15566,6 +16573,9 @@ type DescribeLogDirsRequestTopic struct {
 
 	// Partitions contains topic partitions to describe the log dirs of.
 	Partitions []int32
+}
+
+func (v *DescribeLogDirsRequestTopic) Default() {
 }
 
 // DescribeLogDirsRequest requests directory information for topic partitions.
@@ -15633,6 +16643,7 @@ func (v *DescribeLogDirsRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *DescribeLogDirsRequest) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	isFlexible := version >= 2
@@ -15659,6 +16670,7 @@ func (v *DescribeLogDirsRequest) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				var v string
@@ -15703,6 +16715,8 @@ func (v *DescribeLogDirsRequest) ReadFrom(src []byte) error {
 	}
 	return b.Complete()
 }
+func (v *DescribeLogDirsRequest) Default() {
+}
 
 type DescribeLogDirsResponseDirTopicPartition struct {
 	// Partition is a partition ID.
@@ -15728,6 +16742,10 @@ type DescribeLogDirsResponseDirTopicPartition struct {
 	// replica in the future.
 	IsFuture bool
 }
+
+func (v *DescribeLogDirsResponseDirTopicPartition) Default() {
+}
+
 type DescribeLogDirsResponseDirTopic struct {
 	// Topic is the name of a Kafka topic.
 	Topic string
@@ -15736,6 +16754,10 @@ type DescribeLogDirsResponseDirTopic struct {
 	// within a log directory.
 	Partitions []DescribeLogDirsResponseDirTopicPartition
 }
+
+func (v *DescribeLogDirsResponseDirTopic) Default() {
+}
+
 type DescribeLogDirsResponseDir struct {
 	// ErrorCode is the error code returned for descrbing log dirs.
 	//
@@ -15747,6 +16769,9 @@ type DescribeLogDirsResponseDir struct {
 
 	// Topics is an array of topics within a log directory.
 	Topics []DescribeLogDirsResponseDirTopic
+}
+
+func (v *DescribeLogDirsResponseDir) Default() {
 }
 
 // DescribeLogDirsResponse is returned from a DescribeLogDirsRequest.
@@ -15867,6 +16892,7 @@ func (v *DescribeLogDirsResponse) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *DescribeLogDirsResponse) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	isFlexible := version >= 2
@@ -15894,6 +16920,7 @@ func (v *DescribeLogDirsResponse) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				v := b.Int16()
@@ -15925,6 +16952,7 @@ func (v *DescribeLogDirsResponse) ReadFrom(src []byte) error {
 				}
 				for i := int32(0); i < l; i++ {
 					v := &a[i]
+					v.Default()
 					s := v
 					{
 						var v string
@@ -15952,6 +16980,7 @@ func (v *DescribeLogDirsResponse) ReadFrom(src []byte) error {
 						}
 						for i := int32(0); i < l; i++ {
 							v := &a[i]
+							v.Default()
 							s := v
 							{
 								v := b.Int32()
@@ -15994,6 +17023,8 @@ func (v *DescribeLogDirsResponse) ReadFrom(src []byte) error {
 		SkipTags(&b)
 	}
 	return b.Complete()
+}
+func (v *DescribeLogDirsResponse) Default() {
 }
 
 // SASLAuthenticate continues a sasl authentication flow. Prior to Kafka 1.0.0,
@@ -16038,6 +17069,7 @@ func (v *SASLAuthenticateRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *SASLAuthenticateRequest) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	isFlexible := version >= 2
@@ -16057,6 +17089,8 @@ func (v *SASLAuthenticateRequest) ReadFrom(src []byte) error {
 		SkipTags(&b)
 	}
 	return b.Complete()
+}
+func (v *SASLAuthenticateRequest) Default() {
 }
 
 // SASLAuthenticateResponse is returned for a SASLAuthenticateRequest.
@@ -16124,6 +17158,7 @@ func (v *SASLAuthenticateResponse) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *SASLAuthenticateResponse) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	isFlexible := version >= 2
@@ -16161,11 +17196,17 @@ func (v *SASLAuthenticateResponse) ReadFrom(src []byte) error {
 	}
 	return b.Complete()
 }
+func (v *SASLAuthenticateResponse) Default() {
+}
 
 type CreatePartitionsRequestTopicAssignment struct {
 	// Replicas are replicas to assign a new partition to.
 	Replicas []int32
 }
+
+func (v *CreatePartitionsRequestTopicAssignment) Default() {
+}
+
 type CreatePartitionsRequestTopic struct {
 	// Topic is a topic for which to create additional partitions for.
 	Topic string
@@ -16186,6 +17227,9 @@ type CreatePartitionsRequestTopic struct {
 	// The first level's length must be equal to the delta of Count and the
 	// current number of partitions.
 	Assignment []CreatePartitionsRequestTopicAssignment
+}
+
+func (v *CreatePartitionsRequestTopic) Default() {
 }
 
 // CreatePartitionsRequest creates additional partitions for topics.
@@ -16285,6 +17329,7 @@ func (v *CreatePartitionsRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *CreatePartitionsRequest) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	isFlexible := version >= 2
@@ -16308,6 +17353,7 @@ func (v *CreatePartitionsRequest) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				var v string
@@ -16342,6 +17388,7 @@ func (v *CreatePartitionsRequest) ReadFrom(src []byte) error {
 				}
 				for i := int32(0); i < l; i++ {
 					v := &a[i]
+					v.Default()
 					s := v
 					{
 						v := s.Replicas
@@ -16392,6 +17439,8 @@ func (v *CreatePartitionsRequest) ReadFrom(src []byte) error {
 	}
 	return b.Complete()
 }
+func (v *CreatePartitionsRequest) Default() {
+}
 
 type CreatePartitionsResponseTopic struct {
 	// Topic is the topic that partitions were requested to be made for.
@@ -16424,6 +17473,9 @@ type CreatePartitionsResponseTopic struct {
 
 	// ErrorMessage is an informative message if the topic creation failed.
 	ErrorMessage *string
+}
+
+func (v *CreatePartitionsResponseTopic) Default() {
 }
 
 // CreatePartitionsResponse is returned from a CreatePartitionsRequest.
@@ -16499,6 +17551,7 @@ func (v *CreatePartitionsResponse) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *CreatePartitionsResponse) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	isFlexible := version >= 2
@@ -16526,6 +17579,7 @@ func (v *CreatePartitionsResponse) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				var v string
@@ -16561,6 +17615,8 @@ func (v *CreatePartitionsResponse) ReadFrom(src []byte) error {
 	}
 	return b.Complete()
 }
+func (v *CreatePartitionsResponse) Default() {
+}
 
 type CreateDelegationTokenRequestRenewer struct {
 	// PrincipalType is the "type" this principal is. This must be "User".
@@ -16568,6 +17624,9 @@ type CreateDelegationTokenRequestRenewer struct {
 
 	// PrincipalName is the user name allowed to renew the returned token.
 	PrincipalName string
+}
+
+func (v *CreateDelegationTokenRequestRenewer) Default() {
 }
 
 // CreateDelegationTokenRequest issues a request to create a delegation token.
@@ -16650,6 +17709,7 @@ func (v *CreateDelegationTokenRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *CreateDelegationTokenRequest) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	isFlexible := version >= 2
@@ -16673,6 +17733,7 @@ func (v *CreateDelegationTokenRequest) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				var v string
@@ -16707,6 +17768,8 @@ func (v *CreateDelegationTokenRequest) ReadFrom(src []byte) error {
 		SkipTags(&b)
 	}
 	return b.Complete()
+}
+func (v *CreateDelegationTokenRequest) Default() {
 }
 
 // CreateDelegationTokenResponse is a response to a CreateDelegationTokenRequest.
@@ -16825,6 +17888,7 @@ func (v *CreateDelegationTokenResponse) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *CreateDelegationTokenResponse) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	isFlexible := version >= 2
@@ -16892,6 +17956,8 @@ func (v *CreateDelegationTokenResponse) ReadFrom(src []byte) error {
 	}
 	return b.Complete()
 }
+func (v *CreateDelegationTokenResponse) Default() {
+}
 
 // RenewDelegationTokenRequest is a request to renew a delegation token that
 // has not yet hit its max timestamp. Note that a client using a token cannot
@@ -16940,6 +18006,7 @@ func (v *RenewDelegationTokenRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *RenewDelegationTokenRequest) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	isFlexible := version >= 2
@@ -16963,6 +18030,8 @@ func (v *RenewDelegationTokenRequest) ReadFrom(src []byte) error {
 		SkipTags(&b)
 	}
 	return b.Complete()
+}
+func (v *RenewDelegationTokenRequest) Default() {
 }
 
 // RenewDelegationTokenResponse is a response to a RenewDelegationTokenRequest.
@@ -17017,6 +18086,7 @@ func (v *RenewDelegationTokenResponse) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *RenewDelegationTokenResponse) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	isFlexible := version >= 2
@@ -17039,6 +18109,8 @@ func (v *RenewDelegationTokenResponse) ReadFrom(src []byte) error {
 		SkipTags(&b)
 	}
 	return b.Complete()
+}
+func (v *RenewDelegationTokenResponse) Default() {
 }
 
 // ExpireDelegationTokenRequest is a request to change the expiry timestamp
@@ -17094,6 +18166,7 @@ func (v *ExpireDelegationTokenRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *ExpireDelegationTokenRequest) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	isFlexible := version >= 2
@@ -17117,6 +18190,8 @@ func (v *ExpireDelegationTokenRequest) ReadFrom(src []byte) error {
 		SkipTags(&b)
 	}
 	return b.Complete()
+}
+func (v *ExpireDelegationTokenRequest) Default() {
 }
 
 // ExpireDelegationTokenResponse is a response to an ExpireDelegationTokenRequest.
@@ -17170,6 +18245,7 @@ func (v *ExpireDelegationTokenResponse) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *ExpireDelegationTokenResponse) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	isFlexible := version >= 2
@@ -17193,6 +18269,8 @@ func (v *ExpireDelegationTokenResponse) ReadFrom(src []byte) error {
 	}
 	return b.Complete()
 }
+func (v *ExpireDelegationTokenResponse) Default() {
+}
 
 type DescribeDelegationTokenRequestOwner struct {
 	// PrincipalType is a type to match to describe delegation tokens created
@@ -17202,6 +18280,9 @@ type DescribeDelegationTokenRequestOwner struct {
 	// PrincipalName is the name to match to describe delegation tokens created
 	// with this principal.
 	PrincipalName string
+}
+
+func (v *DescribeDelegationTokenRequestOwner) Default() {
 }
 
 // DescribeDelegationTokenRequest is a request to describe delegation tokens.
@@ -17265,6 +18346,7 @@ func (v *DescribeDelegationTokenRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *DescribeDelegationTokenRequest) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	isFlexible := version >= 2
@@ -17291,6 +18373,7 @@ func (v *DescribeDelegationTokenRequest) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				var v string
@@ -17322,12 +18405,18 @@ func (v *DescribeDelegationTokenRequest) ReadFrom(src []byte) error {
 	}
 	return b.Complete()
 }
+func (v *DescribeDelegationTokenRequest) Default() {
+}
 
 type DescribeDelegationTokenResponseTokenDetailRenewer struct {
 	PrincipalType string
 
 	PrincipalName string
 }
+
+func (v *DescribeDelegationTokenResponseTokenDetailRenewer) Default() {
+}
+
 type DescribeDelegationTokenResponseTokenDetail struct {
 	// PrincipalType is the principal type of who created this token.
 	PrincipalType string
@@ -17353,6 +18442,9 @@ type DescribeDelegationTokenResponseTokenDetail struct {
 
 	// Renewers is a list of users that can renew this token.
 	Renewers []DescribeDelegationTokenResponseTokenDetailRenewer
+}
+
+func (v *DescribeDelegationTokenResponseTokenDetail) Default() {
 }
 
 // DescribeDelegationTokenResponsee is a response to a DescribeDelegationTokenRequest.
@@ -17490,6 +18582,7 @@ func (v *DescribeDelegationTokenResponse) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *DescribeDelegationTokenResponse) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	isFlexible := version >= 2
@@ -17517,6 +18610,7 @@ func (v *DescribeDelegationTokenResponse) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				var v string
@@ -17583,6 +18677,7 @@ func (v *DescribeDelegationTokenResponse) ReadFrom(src []byte) error {
 				}
 				for i := int32(0); i < l; i++ {
 					v := &a[i]
+					v.Default()
 					s := v
 					{
 						var v string
@@ -17624,6 +18719,8 @@ func (v *DescribeDelegationTokenResponse) ReadFrom(src []byte) error {
 		SkipTags(&b)
 	}
 	return b.Complete()
+}
+func (v *DescribeDelegationTokenResponse) Default() {
 }
 
 // DeleteGroupsRequest deletes consumer groups. This request was added for
@@ -17674,6 +18771,7 @@ func (v *DeleteGroupsRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *DeleteGroupsRequest) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	isFlexible := version >= 2
@@ -17712,6 +18810,8 @@ func (v *DeleteGroupsRequest) ReadFrom(src []byte) error {
 	}
 	return b.Complete()
 }
+func (v *DeleteGroupsRequest) Default() {
+}
 
 type DeleteGroupsResponseGroup struct {
 	// Group is a group ID requested for deletion.
@@ -17732,6 +18832,9 @@ type DeleteGroupsResponseGroup struct {
 	// NON_EMPTY_GROUP is returned if attempting to delete a group that is
 	// not in the empty state.
 	ErrorCode int16
+}
+
+func (v *DeleteGroupsResponseGroup) Default() {
 }
 
 // DeleteGroupsResponse is returned from a DeleteGroupsRequest.
@@ -17797,6 +18900,7 @@ func (v *DeleteGroupsResponse) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *DeleteGroupsResponse) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	isFlexible := version >= 2
@@ -17824,6 +18928,7 @@ func (v *DeleteGroupsResponse) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				var v string
@@ -17850,6 +18955,8 @@ func (v *DeleteGroupsResponse) ReadFrom(src []byte) error {
 	}
 	return b.Complete()
 }
+func (v *DeleteGroupsResponse) Default() {
+}
 
 type ElectLeadersRequestTopic struct {
 	// Topic is a topic to trigger leader elections for (but only for the
@@ -17859,6 +18966,9 @@ type ElectLeadersRequestTopic struct {
 	// Partitions is an array of partitions in a topic to trigger leader
 	// elections for.
 	Partitions []int32
+}
+
+func (v *ElectLeadersRequestTopic) Default() {
 }
 
 // ElectLeadersRequest begins a leader election for all given topic
@@ -17946,6 +19056,7 @@ func (v *ElectLeadersRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *ElectLeadersRequest) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	isFlexible := version >= 2
@@ -17976,6 +19087,7 @@ func (v *ElectLeadersRequest) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				var v string
@@ -18024,6 +19136,9 @@ func (v *ElectLeadersRequest) ReadFrom(src []byte) error {
 	}
 	return b.Complete()
 }
+func (v *ElectLeadersRequest) Default() {
+	v.TimeoutMillis = 60000
+}
 
 type ElectLeadersResponseTopicPartition struct {
 	// Partition is the partition for this result.
@@ -18051,12 +19166,19 @@ type ElectLeadersResponseTopicPartition struct {
 	// ErrorMessage is an informative message if the leader election failed.
 	ErrorMessage *string
 }
+
+func (v *ElectLeadersResponseTopicPartition) Default() {
+}
+
 type ElectLeadersResponseTopic struct {
 	// Topic is topic for the given partition results below.
 	Topic string
 
 	// Partitions contains election results for a topic's partitions.
 	Partitions []ElectLeadersResponseTopicPartition
+}
+
+func (v *ElectLeadersResponseTopic) Default() {
 }
 
 // ElectLeadersResponse is a response for an ElectLeadersRequest.
@@ -18156,6 +19278,7 @@ func (v *ElectLeadersResponse) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *ElectLeadersResponse) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	isFlexible := version >= 2
@@ -18187,6 +19310,7 @@ func (v *ElectLeadersResponse) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				var v string
@@ -18214,6 +19338,7 @@ func (v *ElectLeadersResponse) ReadFrom(src []byte) error {
 				}
 				for i := int32(0); i < l; i++ {
 					v := &a[i]
+					v.Default()
 					s := v
 					{
 						v := b.Int32()
@@ -18251,6 +19376,8 @@ func (v *ElectLeadersResponse) ReadFrom(src []byte) error {
 	}
 	return b.Complete()
 }
+func (v *ElectLeadersResponse) Default() {
+}
 
 type IncrementalAlterConfigsRequestResourceConfig struct {
 	// Name is a key to modify (e.g. segment.bytes).
@@ -18275,6 +19402,10 @@ type IncrementalAlterConfigsRequestResourceConfig struct {
 	// Value is a value to set for the key (e.g. 10).
 	Value *string
 }
+
+func (v *IncrementalAlterConfigsRequestResourceConfig) Default() {
+}
+
 type IncrementalAlterConfigsRequestResource struct {
 	// ResourceType is an enum corresponding to the type of config to alter.
 	// The possible valid values are 2 (for topic), 4 (for broker),
@@ -18297,6 +19428,9 @@ type IncrementalAlterConfigsRequestResource struct {
 
 	// Configs contains key/value config pairs to set on the resource.
 	Configs []IncrementalAlterConfigsRequestResourceConfig
+}
+
+func (v *IncrementalAlterConfigsRequestResource) Default() {
 }
 
 // IncrementalAlterConfigsRequest issues ar equest to alter either topic or
@@ -18400,6 +19534,7 @@ func (v *IncrementalAlterConfigsRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *IncrementalAlterConfigsRequest) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	isFlexible := version >= 1
@@ -18423,6 +19558,7 @@ func (v *IncrementalAlterConfigsRequest) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				v := b.Int8()
@@ -18454,6 +19590,7 @@ func (v *IncrementalAlterConfigsRequest) ReadFrom(src []byte) error {
 				}
 				for i := int32(0); i < l; i++ {
 					v := &a[i]
+					v.Default()
 					s := v
 					{
 						var v string
@@ -18500,6 +19637,8 @@ func (v *IncrementalAlterConfigsRequest) ReadFrom(src []byte) error {
 	}
 	return b.Complete()
 }
+func (v *IncrementalAlterConfigsRequest) Default() {
+}
 
 type IncrementalAlterConfigsResponseResource struct {
 	// ErrorCode is the error code returned for incrementally altering configs.
@@ -18528,6 +19667,9 @@ type IncrementalAlterConfigsResponseResource struct {
 	// ResourceName is the name corresponding to the incremental alter config
 	// request.
 	ResourceName string
+}
+
+func (v *IncrementalAlterConfigsResponseResource) Default() {
 }
 
 // IncrementalAlterConfigsResponse is returned from an IncrementalAlterConfigsRequest.
@@ -18605,6 +19747,7 @@ func (v *IncrementalAlterConfigsResponse) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *IncrementalAlterConfigsResponse) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	isFlexible := version >= 1
@@ -18632,6 +19775,7 @@ func (v *IncrementalAlterConfigsResponse) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				v := b.Int16()
@@ -18671,6 +19815,8 @@ func (v *IncrementalAlterConfigsResponse) ReadFrom(src []byte) error {
 	}
 	return b.Complete()
 }
+func (v *IncrementalAlterConfigsResponse) Default() {
+}
 
 type AlterPartitionAssignmentsRequestTopicPartition struct {
 	// Partition is a partition to reassign.
@@ -18680,12 +19826,19 @@ type AlterPartitionAssignmentsRequestTopicPartition struct {
 	// cancel a pending reassignment of this partition.
 	Replicas []int32
 }
+
+func (v *AlterPartitionAssignmentsRequestTopicPartition) Default() {
+}
+
 type AlterPartitionAssignmentsRequestTopic struct {
 	// Topic is a topic to reassign the partitions of.
 	Topic string
 
 	// Partitions contains partitions to reassign.
 	Partitions []AlterPartitionAssignmentsRequestTopicPartition
+}
+
+func (v *AlterPartitionAssignmentsRequestTopic) Default() {
 }
 
 // AlterPartitionAssignmentsRequest, proposed in KIP-455 and implemented in
@@ -18780,6 +19933,7 @@ func (v *AlterPartitionAssignmentsRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *AlterPartitionAssignmentsRequest) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	isFlexible := version >= 0
@@ -18807,6 +19961,7 @@ func (v *AlterPartitionAssignmentsRequest) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				var v string
@@ -18834,6 +19989,7 @@ func (v *AlterPartitionAssignmentsRequest) ReadFrom(src []byte) error {
 				}
 				for i := int32(0); i < l; i++ {
 					v := &a[i]
+					v.Default()
 					s := v
 					{
 						v := b.Int32()
@@ -18883,6 +20039,9 @@ func (v *AlterPartitionAssignmentsRequest) ReadFrom(src []byte) error {
 	}
 	return b.Complete()
 }
+func (v *AlterPartitionAssignmentsRequest) Default() {
+	v.TimeoutMillis = 60000
+}
 
 type AlterPartitionAssignmentsResponseTopicPartition struct {
 	// Partition is the partition being responded to.
@@ -18908,12 +20067,19 @@ type AlterPartitionAssignmentsResponseTopicPartition struct {
 	// ErrorMessage is an informative message if the partition reassignment failed.
 	ErrorMessage *string
 }
+
+func (v *AlterPartitionAssignmentsResponseTopicPartition) Default() {
+}
+
 type AlterPartitionAssignmentsResponseTopic struct {
 	// Topic is the topic being responded to.
 	Topic string
 
 	// Partitions contains responses for partitions.
 	Partitions []AlterPartitionAssignmentsResponseTopicPartition
+}
+
+func (v *AlterPartitionAssignmentsResponseTopic) Default() {
 }
 
 // AlterPartitionAssignmentsResponse is returned for an AlterPartitionAssignmentsRequest.
@@ -19023,6 +20189,7 @@ func (v *AlterPartitionAssignmentsResponse) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *AlterPartitionAssignmentsResponse) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	isFlexible := version >= 0
@@ -19063,6 +20230,7 @@ func (v *AlterPartitionAssignmentsResponse) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				var v string
@@ -19090,6 +20258,7 @@ func (v *AlterPartitionAssignmentsResponse) ReadFrom(src []byte) error {
 				}
 				for i := int32(0); i < l; i++ {
 					v := &a[i]
+					v.Default()
 					s := v
 					{
 						v := b.Int32()
@@ -19127,6 +20296,8 @@ func (v *AlterPartitionAssignmentsResponse) ReadFrom(src []byte) error {
 	}
 	return b.Complete()
 }
+func (v *AlterPartitionAssignmentsResponse) Default() {
+}
 
 type ListPartitionReassignmentsRequestTopic struct {
 	// Topic is a topic to list in progress partition reassingments of.
@@ -19134,6 +20305,9 @@ type ListPartitionReassignmentsRequestTopic struct {
 
 	// Partitions are partitions to list in progress reassignments of.
 	Partitions []int32
+}
+
+func (v *ListPartitionReassignmentsRequestTopic) Default() {
 }
 
 // ListPartitionReassignmentsRequest, proposed in KIP-455 and implemented in
@@ -19211,6 +20385,7 @@ func (v *ListPartitionReassignmentsRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *ListPartitionReassignmentsRequest) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	isFlexible := version >= 0
@@ -19241,6 +20416,7 @@ func (v *ListPartitionReassignmentsRequest) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				var v string
@@ -19285,6 +20461,9 @@ func (v *ListPartitionReassignmentsRequest) ReadFrom(src []byte) error {
 	}
 	return b.Complete()
 }
+func (v *ListPartitionReassignmentsRequest) Default() {
+	v.TimeoutMillis = 60000
+}
 
 type ListPartitionReassignmentsResponseTopicPartition struct {
 	// Partition is the partition being responded to.
@@ -19299,12 +20478,19 @@ type ListPartitionReassignmentsResponseTopicPartition struct {
 	// RemovingReplicas are replicas currently being removed from the partition.
 	RemovingReplicas []int32
 }
+
+func (v *ListPartitionReassignmentsResponseTopicPartition) Default() {
+}
+
 type ListPartitionReassignmentsResponseTopic struct {
 	// Topic is the topic being responded to.
 	Topic string
 
 	// Partitions contains responses for partitions.
 	Partitions []ListPartitionReassignmentsResponseTopicPartition
+}
+
+func (v *ListPartitionReassignmentsResponseTopic) Default() {
 }
 
 // ListPartitionReassignmentsResponse is returned for a ListPartitionReassignmentsRequest.
@@ -19446,6 +20632,7 @@ func (v *ListPartitionReassignmentsResponse) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *ListPartitionReassignmentsResponse) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	isFlexible := version >= 0
@@ -19486,6 +20673,7 @@ func (v *ListPartitionReassignmentsResponse) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				var v string
@@ -19513,6 +20701,7 @@ func (v *ListPartitionReassignmentsResponse) ReadFrom(src []byte) error {
 				}
 				for i := int32(0); i < l; i++ {
 					v := &a[i]
+					v.Default()
 					s := v
 					{
 						v := b.Int32()
@@ -19603,17 +20792,26 @@ func (v *ListPartitionReassignmentsResponse) ReadFrom(src []byte) error {
 	}
 	return b.Complete()
 }
+func (v *ListPartitionReassignmentsResponse) Default() {
+}
 
 type OffsetDeleteRequestTopicPartition struct {
 	// Partition is a partition to delete offsets for.
 	Partition int32
 }
+
+func (v *OffsetDeleteRequestTopicPartition) Default() {
+}
+
 type OffsetDeleteRequestTopic struct {
 	// Topic is a topic to delete offsets in.
 	Topic string
 
 	// Partitions are partitions to delete offsets for.
 	Partitions []OffsetDeleteRequestTopicPartition
+}
+
+func (v *OffsetDeleteRequestTopic) Default() {
 }
 
 // OffsetDeleteRequest, proposed in KIP-496 and implemented in Kafka 2.4.0, is
@@ -19674,6 +20872,7 @@ func (v *OffsetDeleteRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *OffsetDeleteRequest) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	b := kbin.Reader{Src: src}
@@ -19695,6 +20894,7 @@ func (v *OffsetDeleteRequest) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				v := b.String()
@@ -19713,6 +20913,7 @@ func (v *OffsetDeleteRequest) ReadFrom(src []byte) error {
 				}
 				for i := int32(0); i < l; i++ {
 					v := &a[i]
+					v.Default()
 					s := v
 					{
 						v := b.Int32()
@@ -19727,6 +20928,8 @@ func (v *OffsetDeleteRequest) ReadFrom(src []byte) error {
 		s.Topics = v
 	}
 	return b.Complete()
+}
+func (v *OffsetDeleteRequest) Default() {
 }
 
 type OffsetDeleteResponseTopicPartition struct {
@@ -19744,12 +20947,19 @@ type OffsetDeleteResponseTopicPartition struct {
 	// GROUP_SUBSCRIBED_TO_TOPIC is returned if the topic is still subscribed to.
 	ErrorCode int16
 }
+
+func (v *OffsetDeleteResponseTopicPartition) Default() {
+}
+
 type OffsetDeleteResponseTopic struct {
 	// Topic is the topic being responded to.
 	Topic string
 
 	// Partitions are partitions being responded to.
 	Partitions []OffsetDeleteResponseTopicPartition
+}
+
+func (v *OffsetDeleteResponseTopic) Default() {
 }
 
 // OffsetDeleteResponse is a response to an offset delete request.
@@ -19829,6 +21039,7 @@ func (v *OffsetDeleteResponse) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *OffsetDeleteResponse) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	b := kbin.Reader{Src: src}
@@ -19854,6 +21065,7 @@ func (v *OffsetDeleteResponse) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				v := b.String()
@@ -19872,6 +21084,7 @@ func (v *OffsetDeleteResponse) ReadFrom(src []byte) error {
 				}
 				for i := int32(0); i < l; i++ {
 					v := &a[i]
+					v.Default()
 					s := v
 					{
 						v := b.Int32()
@@ -19891,6 +21104,8 @@ func (v *OffsetDeleteResponse) ReadFrom(src []byte) error {
 	}
 	return b.Complete()
 }
+func (v *OffsetDeleteResponse) Default() {
+}
 
 type DescribeClientQuotasRequestComponent struct {
 	// EntityType is the entity component type that this filter component
@@ -19906,6 +21121,9 @@ type DescribeClientQuotasRequestComponent struct {
 	// Match is the string to match against, or null if unused for the given
 	// match type.
 	Match *string
+}
+
+func (v *DescribeClientQuotasRequestComponent) Default() {
 }
 
 // DescribeClientQuotasRequest, proposed in KIP-546 and introduced with Kafka 2.6.0,
@@ -19960,6 +21178,7 @@ func (v *DescribeClientQuotasRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *DescribeClientQuotasRequest) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	b := kbin.Reader{Src: src}
@@ -19977,6 +21196,7 @@ func (v *DescribeClientQuotasRequest) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				v := b.String()
@@ -20000,6 +21220,8 @@ func (v *DescribeClientQuotasRequest) ReadFrom(src []byte) error {
 	}
 	return b.Complete()
 }
+func (v *DescribeClientQuotasRequest) Default() {
+}
 
 type DescribeClientQuotasResponseEntryEntity struct {
 	// Type is the entity type.
@@ -20008,6 +21230,10 @@ type DescribeClientQuotasResponseEntryEntity struct {
 	// Name is the entity name, or null if the default.
 	Name *string
 }
+
+func (v *DescribeClientQuotasResponseEntryEntity) Default() {
+}
+
 type DescribeClientQuotasResponseEntryValue struct {
 	// Key is the quota configuration key.
 	Key string
@@ -20015,12 +21241,19 @@ type DescribeClientQuotasResponseEntryValue struct {
 	// Value is the quota configuration value.
 	Value float64
 }
+
+func (v *DescribeClientQuotasResponseEntryValue) Default() {
+}
+
 type DescribeClientQuotasResponseEntry struct {
 	// Entity contains the quota entity components being described.
 	Entity []DescribeClientQuotasResponseEntryEntity
 
 	// Values are quota values for the entity.
 	Values []DescribeClientQuotasResponseEntryValue
+}
+
+func (v *DescribeClientQuotasResponseEntry) Default() {
 }
 
 // DescribeClientQuotasResponse is a response for a DescribeClientQuotasRequest.
@@ -20106,6 +21339,7 @@ func (v *DescribeClientQuotasResponse) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *DescribeClientQuotasResponse) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	b := kbin.Reader{Src: src}
@@ -20138,6 +21372,7 @@ func (v *DescribeClientQuotasResponse) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				v := s.Entity
@@ -20152,6 +21387,7 @@ func (v *DescribeClientQuotasResponse) ReadFrom(src []byte) error {
 				}
 				for i := int32(0); i < l; i++ {
 					v := &a[i]
+					v.Default()
 					s := v
 					{
 						v := b.String()
@@ -20178,6 +21414,7 @@ func (v *DescribeClientQuotasResponse) ReadFrom(src []byte) error {
 				}
 				for i := int32(0); i < l; i++ {
 					v := &a[i]
+					v.Default()
 					s := v
 					{
 						v := b.String()
@@ -20197,6 +21434,8 @@ func (v *DescribeClientQuotasResponse) ReadFrom(src []byte) error {
 	}
 	return b.Complete()
 }
+func (v *DescribeClientQuotasResponse) Default() {
+}
 
 type AlterClientQuotasRequestEntryEntity struct {
 	// Type is the entity component's type; e.g. "client-id" or "user".
@@ -20205,6 +21444,10 @@ type AlterClientQuotasRequestEntryEntity struct {
 	// Name is the name of the entity, or null for the default.
 	Name *string
 }
+
+func (v *AlterClientQuotasRequestEntryEntity) Default() {
+}
+
 type AlterClientQuotasRequestEntryOp struct {
 	// Key is the quota configuration key to alter.
 	Key string
@@ -20215,12 +21458,19 @@ type AlterClientQuotasRequestEntryOp struct {
 	// Remove is whether the quota configuration value should be removed or set.
 	Remove bool
 }
+
+func (v *AlterClientQuotasRequestEntryOp) Default() {
+}
+
 type AlterClientQuotasRequestEntry struct {
 	// Entity contains the components of a quota entity to alter.
 	Entity []AlterClientQuotasRequestEntryEntity
 
 	// Ops contains quota configuration entries to alter.
 	Ops []AlterClientQuotasRequestEntryOp
+}
+
+func (v *AlterClientQuotasRequestEntry) Default() {
 }
 
 // AlterClientQuotaRequest, proposed in KIP-546 and introduced with Kafka 2.6.0,
@@ -20297,6 +21547,7 @@ func (v *AlterClientQuotasRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *AlterClientQuotasRequest) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	b := kbin.Reader{Src: src}
@@ -20314,6 +21565,7 @@ func (v *AlterClientQuotasRequest) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				v := s.Entity
@@ -20328,6 +21580,7 @@ func (v *AlterClientQuotasRequest) ReadFrom(src []byte) error {
 				}
 				for i := int32(0); i < l; i++ {
 					v := &a[i]
+					v.Default()
 					s := v
 					{
 						v := b.String()
@@ -20354,6 +21607,7 @@ func (v *AlterClientQuotasRequest) ReadFrom(src []byte) error {
 				}
 				for i := int32(0); i < l; i++ {
 					v := &a[i]
+					v.Default()
 					s := v
 					{
 						v := b.String()
@@ -20381,6 +21635,8 @@ func (v *AlterClientQuotasRequest) ReadFrom(src []byte) error {
 	}
 	return b.Complete()
 }
+func (v *AlterClientQuotasRequest) Default() {
+}
 
 type AlterClientQuotasResponseEntryEntity struct {
 	// Type is the entity component's type; e.g. "client-id" or "user".
@@ -20389,6 +21645,10 @@ type AlterClientQuotasResponseEntryEntity struct {
 	// Name is the name of the entity, or null for the default.
 	Name *string
 }
+
+func (v *AlterClientQuotasResponseEntryEntity) Default() {
+}
+
 type AlterClientQuotasResponseEntry struct {
 	// ErrorCode is the error code for an alter on a matched entity.
 	ErrorCode int16
@@ -20398,6 +21658,9 @@ type AlterClientQuotasResponseEntry struct {
 
 	// Entity contains the components of a matched entity.
 	Entity []AlterClientQuotasResponseEntryEntity
+}
+
+func (v *AlterClientQuotasResponseEntry) Default() {
 }
 
 // AlterClientQuotasResponse is a response to an AlterClientQuotasRequest.
@@ -20462,6 +21725,7 @@ func (v *AlterClientQuotasResponse) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *AlterClientQuotasResponse) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	b := kbin.Reader{Src: src}
@@ -20483,6 +21747,7 @@ func (v *AlterClientQuotasResponse) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				v := b.Int16()
@@ -20505,6 +21770,7 @@ func (v *AlterClientQuotasResponse) ReadFrom(src []byte) error {
 				}
 				for i := int32(0); i < l; i++ {
 					v := &a[i]
+					v.Default()
 					s := v
 					{
 						v := b.String()
@@ -20524,10 +21790,15 @@ func (v *AlterClientQuotasResponse) ReadFrom(src []byte) error {
 	}
 	return b.Complete()
 }
+func (v *AlterClientQuotasResponse) Default() {
+}
 
 type DescribeUserSCRAMCredentialsRequestUser struct {
 	// The user name.
 	Name string
+}
+
+func (v *DescribeUserSCRAMCredentialsRequestUser) Default() {
 }
 
 // DescribeUserSCRAMCredentialsRequest, proposed in KIP-554 and introduced
@@ -20587,6 +21858,7 @@ func (v *DescribeUserSCRAMCredentialsRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *DescribeUserSCRAMCredentialsRequest) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	isFlexible := version >= 0
@@ -20610,6 +21882,7 @@ func (v *DescribeUserSCRAMCredentialsRequest) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				var v string
@@ -20632,6 +21905,8 @@ func (v *DescribeUserSCRAMCredentialsRequest) ReadFrom(src []byte) error {
 	}
 	return b.Complete()
 }
+func (v *DescribeUserSCRAMCredentialsRequest) Default() {
+}
 
 type DescribeUserSCRAMCredentialsResponseResultCredentialInfo struct {
 	// The SCRAM mechanism for this user, where 0 is UNKNOWN, 1 is SCRAM-SHA-256,
@@ -20641,6 +21916,10 @@ type DescribeUserSCRAMCredentialsResponseResultCredentialInfo struct {
 	// The number of iterations used in the SCRAM credential.
 	Iterations int32
 }
+
+func (v *DescribeUserSCRAMCredentialsResponseResultCredentialInfo) Default() {
+}
+
 type DescribeUserSCRAMCredentialsResponseResult struct {
 	// The name this result corresponds to.
 	User string
@@ -20653,6 +21932,9 @@ type DescribeUserSCRAMCredentialsResponseResult struct {
 
 	// Information about the SCRAM credentials for this user.
 	CredentialInfos []DescribeUserSCRAMCredentialsResponseResultCredentialInfo
+}
+
+func (v *DescribeUserSCRAMCredentialsResponseResult) Default() {
 }
 
 // DescribeUserSCRAMCredentialsResponse is a response for a
@@ -20767,6 +22049,7 @@ func (v *DescribeUserSCRAMCredentialsResponse) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *DescribeUserSCRAMCredentialsResponse) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	isFlexible := version >= 0
@@ -20807,6 +22090,7 @@ func (v *DescribeUserSCRAMCredentialsResponse) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				var v string
@@ -20847,6 +22131,7 @@ func (v *DescribeUserSCRAMCredentialsResponse) ReadFrom(src []byte) error {
 				}
 				for i := int32(0); i < l; i++ {
 					v := &a[i]
+					v.Default()
 					s := v
 					{
 						v := b.Int8()
@@ -20875,6 +22160,8 @@ func (v *DescribeUserSCRAMCredentialsResponse) ReadFrom(src []byte) error {
 	}
 	return b.Complete()
 }
+func (v *DescribeUserSCRAMCredentialsResponse) Default() {
+}
 
 type AlterUserSCRAMCredentialsRequestDeletion struct {
 	// The user name to match for removal.
@@ -20883,6 +22170,10 @@ type AlterUserSCRAMCredentialsRequestDeletion struct {
 	// The mechanism for the user name to remove.
 	Mechanism int8
 }
+
+func (v *AlterUserSCRAMCredentialsRequestDeletion) Default() {
+}
+
 type AlterUserSCRAMCredentialsRequestUpsertion struct {
 	// The user name to use.
 	Name string
@@ -20900,6 +22191,9 @@ type AlterUserSCRAMCredentialsRequestUpsertion struct {
 
 	// The salted password to use.
 	SaltedPassword []byte
+}
+
+func (v *AlterUserSCRAMCredentialsRequestUpsertion) Default() {
 }
 
 // AlterUserSCRAMCredentialsRequest, proposed in KIP-554 and introduced
@@ -21013,6 +22307,7 @@ func (v *AlterUserSCRAMCredentialsRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *AlterUserSCRAMCredentialsRequest) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	isFlexible := version >= 0
@@ -21036,6 +22331,7 @@ func (v *AlterUserSCRAMCredentialsRequest) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				var v string
@@ -21074,6 +22370,7 @@ func (v *AlterUserSCRAMCredentialsRequest) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				var v string
@@ -21122,6 +22419,8 @@ func (v *AlterUserSCRAMCredentialsRequest) ReadFrom(src []byte) error {
 	}
 	return b.Complete()
 }
+func (v *AlterUserSCRAMCredentialsRequest) Default() {
+}
 
 type AlterUserSCRAMCredentialsResponseResult struct {
 	// The name this result corresponds to.
@@ -21132,6 +22431,9 @@ type AlterUserSCRAMCredentialsResponseResult struct {
 
 	// The user-level error message, if any.
 	ErrorMessage *string
+}
+
+func (v *AlterUserSCRAMCredentialsResponseResult) Default() {
 }
 
 // AlterUserSCRAMCredentialsResponse is a response for an
@@ -21206,6 +22508,7 @@ func (v *AlterUserSCRAMCredentialsResponse) AppendTo(dst []byte) []byte {
 	return dst
 }
 func (v *AlterUserSCRAMCredentialsResponse) ReadFrom(src []byte) error {
+	v.Default()
 	version := v.Version
 	_ = version
 	isFlexible := version >= 0
@@ -21233,6 +22536,7 @@ func (v *AlterUserSCRAMCredentialsResponse) ReadFrom(src []byte) error {
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
+			v.Default()
 			s := v
 			{
 				var v string
@@ -21267,6 +22571,8 @@ func (v *AlterUserSCRAMCredentialsResponse) ReadFrom(src []byte) error {
 		SkipTags(&b)
 	}
 	return b.Complete()
+}
+func (v *AlterUserSCRAMCredentialsResponse) Default() {
 }
 
 // RequestForKey returns the request corresponding to the given request key
