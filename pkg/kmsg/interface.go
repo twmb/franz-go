@@ -17,6 +17,10 @@
 // pin the max supported Kafka version! If you do not, you will automatically
 // opt in to new Kafka versions across new kmsg releases. This may lead to new
 // fields that you have not explicitly initialized, resulting in errors.
+//
+// All "Default" functions set non-Go-default field defaults. They do not set
+// any fields whose default value is a Go default. Thus, Default functions will
+// set -1, but not 0 nor nil.
 package kmsg
 
 import (
