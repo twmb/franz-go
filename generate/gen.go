@@ -147,12 +147,55 @@ func (s Struct) WriteAppend(l *LineWriter) {
 	l.Write("if isFlexible {")
 	defer l.Write("}")
 
-	l.Write("dst = kbin.AppendUvarint(dst, %d)", len(tags))
+	if len(tags) == 0 {
+		l.Write("dst = append(dst, 0)")
+		return
+	}
+
+	var tagsCanDefault bool
 	for i := 0; i < len(tags); i++ {
 		f, exists := tags[i]
 		if !exists {
 			die("saw %d tags, but did not see tag %d; expected monotonically increasing", len(tags), i)
 		}
+		if d, ok := f.Type.(Defaulter); ok {
+			if _, tagsCanDefault = d.GetDefault(); tagsCanDefault {
+				break
+			}
+		}
+	}
+
+	if tagsCanDefault {
+		l.Write("var toEncode []uint32")
+		for i := 0; i < len(tags); i++ {
+			f := tags[i]
+			nonDefault := false
+			if d, ok := f.Type.(Defaulter); ok {
+				if def, has := d.GetDefault(); has {
+					l.Write("if v.%s != %v {", f.FieldName, def)
+					nonDefault = true
+				}
+			}
+			l.Write("toEncode = append(toEncode, %d)", i)
+			if nonDefault {
+				l.Write("}")
+			}
+		}
+
+		l.Write("dst = kbin.AppendUvarint(dst, uint32(len(toEncode)))")
+		l.Write("for _, tag := range toEncode {")
+		l.Write("switch tag {")
+		defer l.Write("}")
+		defer l.Write("}")
+	} else {
+		l.Write("dst = kbin.AppendUvarint(dst, %d)", len(tags))
+	}
+
+	for i := 0; i < len(tags); i++ {
+		if tagsCanDefault {
+			l.Write("case %d:", i)
+		}
+		f := tags[i]
 
 		l.Write("{")
 		l.Write("v := v.%s", f.FieldName)

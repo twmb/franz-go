@@ -1381,12 +1381,12 @@ func (v *FetchRequest) AppendTo(dst []byte) []byte {
 						dst = kbin.AppendInt32(dst, v)
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0)
+						dst = append(dst, 0)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0)
+				dst = append(dst, 0)
 			}
 		}
 	}
@@ -1420,7 +1420,7 @@ func (v *FetchRequest) AppendTo(dst []byte) []byte {
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0)
+				dst = append(dst, 0)
 			}
 		}
 	}
@@ -1433,22 +1433,31 @@ func (v *FetchRequest) AppendTo(dst []byte) []byte {
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 1)
-		{
-			v := v.ClusterID
-			dst = kbin.AppendUvarint(dst, 0)
-			sized := false
-			lenAt := len(dst)
-		l1142:
-			if isFlexible {
-				dst = kbin.AppendCompactNullableString(dst, v)
-			} else {
-				dst = kbin.AppendNullableString(dst, v)
-			}
-			if !sized {
-				dst = kbin.AppendUvarint(dst[:lenAt], uint32(len(dst[lenAt:])))
-				sized = true
-				goto l1142
+		var toEncode []uint32
+		if v.ClusterID != nil {
+			toEncode = append(toEncode, 0)
+		}
+		dst = kbin.AppendUvarint(dst, uint32(len(toEncode)))
+		for _, tag := range toEncode {
+			switch tag {
+			case 0:
+				{
+					v := v.ClusterID
+					dst = kbin.AppendUvarint(dst, 0)
+					sized := false
+					lenAt := len(dst)
+				l1149:
+					if isFlexible {
+						dst = kbin.AppendCompactNullableString(dst, v)
+					} else {
+						dst = kbin.AppendNullableString(dst, v)
+					}
+					if !sized {
+						dst = kbin.AppendUvarint(dst[:lenAt], uint32(len(dst[lenAt:])))
+						sized = true
+						goto l1149
+					}
+				}
 			}
 		}
 	}
@@ -1944,7 +1953,7 @@ func (v *FetchResponse) AppendTo(dst []byte) []byte {
 								dst = kbin.AppendInt64(dst, v)
 							}
 							if isFlexible {
-								dst = kbin.AppendUvarint(dst, 0)
+								dst = append(dst, 0)
 							}
 						}
 					}
@@ -1967,7 +1976,7 @@ func (v *FetchResponse) AppendTo(dst []byte) []byte {
 							dst = kbin.AppendUvarint(dst, 0)
 							sized := false
 							lenAt := len(dst)
-						l1585:
+						l1594:
 							{
 								v := v.Epoch
 								dst = kbin.AppendInt32(dst, v)
@@ -1977,12 +1986,12 @@ func (v *FetchResponse) AppendTo(dst []byte) []byte {
 								dst = kbin.AppendInt32(dst, v)
 							}
 							if isFlexible {
-								dst = kbin.AppendUvarint(dst, 0)
+								dst = append(dst, 0)
 							}
 							if !sized {
 								dst = kbin.AppendUvarint(dst[:lenAt], uint32(len(dst[lenAt:])))
 								sized = true
-								goto l1585
+								goto l1594
 							}
 						}
 						{
@@ -1990,7 +1999,7 @@ func (v *FetchResponse) AppendTo(dst []byte) []byte {
 							dst = kbin.AppendUvarint(dst, 1)
 							sized := false
 							lenAt := len(dst)
-						l1608:
+						l1617:
 							{
 								v := v.LeaderID
 								dst = kbin.AppendInt32(dst, v)
@@ -2000,24 +2009,24 @@ func (v *FetchResponse) AppendTo(dst []byte) []byte {
 								dst = kbin.AppendInt32(dst, v)
 							}
 							if isFlexible {
-								dst = kbin.AppendUvarint(dst, 0)
+								dst = append(dst, 0)
 							}
 							if !sized {
 								dst = kbin.AppendUvarint(dst[:lenAt], uint32(len(dst[lenAt:])))
 								sized = true
-								goto l1608
+								goto l1617
 							}
 						}
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0)
+				dst = append(dst, 0)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0)
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -2746,7 +2755,7 @@ func (v *MetadataRequest) AppendTo(dst []byte) []byte {
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0)
+				dst = append(dst, 0)
 			}
 		}
 	}
@@ -2763,7 +2772,7 @@ func (v *MetadataRequest) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendBool(dst, v)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0)
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -3006,7 +3015,7 @@ func (v *MetadataResponse) AppendTo(dst []byte) []byte {
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0)
+				dst = append(dst, 0)
 			}
 		}
 	}
@@ -3109,7 +3118,7 @@ func (v *MetadataResponse) AppendTo(dst []byte) []byte {
 						}
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0)
+						dst = append(dst, 0)
 					}
 				}
 			}
@@ -3118,7 +3127,7 @@ func (v *MetadataResponse) AppendTo(dst []byte) []byte {
 				dst = kbin.AppendInt32(dst, v)
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0)
+				dst = append(dst, 0)
 			}
 		}
 	}
@@ -3127,7 +3136,7 @@ func (v *MetadataResponse) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendInt32(dst, v)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0)
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -3549,7 +3558,7 @@ func (v *LeaderAndISRRequest) AppendTo(dst []byte) []byte {
 				dst = kbin.AppendBool(dst, v)
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0)
+				dst = append(dst, 0)
 			}
 		}
 	}
@@ -3640,12 +3649,12 @@ func (v *LeaderAndISRRequest) AppendTo(dst []byte) []byte {
 						dst = kbin.AppendBool(dst, v)
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0)
+						dst = append(dst, 0)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0)
+				dst = append(dst, 0)
 			}
 		}
 	}
@@ -3675,12 +3684,12 @@ func (v *LeaderAndISRRequest) AppendTo(dst []byte) []byte {
 				dst = kbin.AppendInt32(dst, v)
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0)
+				dst = append(dst, 0)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0)
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -4106,12 +4115,12 @@ func (v *LeaderAndISRResponse) AppendTo(dst []byte) []byte {
 				dst = kbin.AppendInt16(dst, v)
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0)
+				dst = append(dst, 0)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0)
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -4311,17 +4320,17 @@ func (v *StopReplicaRequest) AppendTo(dst []byte) []byte {
 						dst = kbin.AppendBool(dst, v)
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0)
+						dst = append(dst, 0)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0)
+				dst = append(dst, 0)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0)
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -4521,12 +4530,12 @@ func (v *StopReplicaResponse) AppendTo(dst []byte) []byte {
 				dst = kbin.AppendInt16(dst, v)
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0)
+				dst = append(dst, 0)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0)
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -4764,7 +4773,7 @@ func (v *UpdateMetadataRequest) AppendTo(dst []byte) []byte {
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0)
+				dst = append(dst, 0)
 			}
 		}
 	}
@@ -4843,12 +4852,12 @@ func (v *UpdateMetadataRequest) AppendTo(dst []byte) []byte {
 						}
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0)
+						dst = append(dst, 0)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0)
+				dst = append(dst, 0)
 			}
 		}
 	}
@@ -4911,7 +4920,7 @@ func (v *UpdateMetadataRequest) AppendTo(dst []byte) []byte {
 						dst = kbin.AppendInt16(dst, v)
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0)
+						dst = append(dst, 0)
 					}
 				}
 			}
@@ -4924,12 +4933,12 @@ func (v *UpdateMetadataRequest) AppendTo(dst []byte) []byte {
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0)
+				dst = append(dst, 0)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0)
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -5336,7 +5345,7 @@ func (v *UpdateMetadataResponse) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendInt16(dst, v)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0)
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -5403,7 +5412,7 @@ func (v *ControlledShutdownRequest) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendInt64(dst, v)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0)
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -5491,12 +5500,12 @@ func (v *ControlledShutdownResponse) AppendTo(dst []byte) []byte {
 				dst = kbin.AppendInt32(dst, v)
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0)
+				dst = append(dst, 0)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0)
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -6381,17 +6390,17 @@ func (v *OffsetCommitRequest) AppendTo(dst []byte) []byte {
 						}
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0)
+						dst = append(dst, 0)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0)
+				dst = append(dst, 0)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0)
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -6655,17 +6664,17 @@ func (v *OffsetCommitResponse) AppendTo(dst []byte) []byte {
 						dst = kbin.AppendInt16(dst, v)
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0)
+						dst = append(dst, 0)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0)
+				dst = append(dst, 0)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0)
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -6848,7 +6857,7 @@ func (v *OffsetFetchRequest) AppendTo(dst []byte) []byte {
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0)
+				dst = append(dst, 0)
 			}
 		}
 	}
@@ -6857,7 +6866,7 @@ func (v *OffsetFetchRequest) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendBool(dst, v)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0)
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -7093,12 +7102,12 @@ func (v *OffsetFetchResponse) AppendTo(dst []byte) []byte {
 						dst = kbin.AppendInt16(dst, v)
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0)
+						dst = append(dst, 0)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0)
+				dst = append(dst, 0)
 			}
 		}
 	}
@@ -7107,7 +7116,7 @@ func (v *OffsetFetchResponse) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendInt16(dst, v)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0)
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -7267,7 +7276,7 @@ func (v *FindCoordinatorRequest) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendInt8(dst, v)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0)
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -7386,7 +7395,7 @@ func (v *FindCoordinatorResponse) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendInt32(dst, v)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0)
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -7892,12 +7901,12 @@ func (v *JoinGroupRequest) AppendTo(dst []byte) []byte {
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0)
+				dst = append(dst, 0)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0)
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -8201,12 +8210,12 @@ func (v *JoinGroupResponse) AppendTo(dst []byte) []byte {
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0)
+				dst = append(dst, 0)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0)
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -8399,7 +8408,7 @@ func (v *HeartbeatRequest) AppendTo(dst []byte) []byte {
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0)
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -8504,7 +8513,7 @@ func (v *HeartbeatResponse) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendInt16(dst, v)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0)
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -8615,12 +8624,12 @@ func (v *LeaveGroupRequest) AppendTo(dst []byte) []byte {
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0)
+				dst = append(dst, 0)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0)
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -8798,12 +8807,12 @@ func (v *LeaveGroupResponse) AppendTo(dst []byte) []byte {
 				dst = kbin.AppendInt16(dst, v)
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0)
+				dst = append(dst, 0)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0)
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -9006,12 +9015,12 @@ func (v *SyncGroupRequest) AppendTo(dst []byte) []byte {
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0)
+				dst = append(dst, 0)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0)
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -9214,7 +9223,7 @@ func (v *SyncGroupResponse) AppendTo(dst []byte) []byte {
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0)
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -9320,7 +9329,7 @@ func (v *DescribeGroupsRequest) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendBool(dst, v)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0)
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -9576,7 +9585,7 @@ func (v *DescribeGroupsResponse) AppendTo(dst []byte) []byte {
 						}
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0)
+						dst = append(dst, 0)
 					}
 				}
 			}
@@ -9585,12 +9594,12 @@ func (v *DescribeGroupsResponse) AppendTo(dst []byte) []byte {
 				dst = kbin.AppendInt32(dst, v)
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0)
+				dst = append(dst, 0)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0)
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -9807,7 +9816,7 @@ func (v *ListGroupsRequest) AppendTo(dst []byte) []byte {
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0)
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -9944,12 +9953,12 @@ func (v *ListGroupsResponse) AppendTo(dst []byte) []byte {
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0)
+				dst = append(dst, 0)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0)
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -10216,7 +10225,7 @@ func (v *ApiVersionsRequest) AppendTo(dst []byte) []byte {
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0)
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -10369,7 +10378,7 @@ func (v *ApiVersionsResponse) AppendTo(dst []byte) []byte {
 				dst = kbin.AppendInt16(dst, v)
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0)
+				dst = append(dst, 0)
 			}
 		}
 	}
@@ -10378,89 +10387,102 @@ func (v *ApiVersionsResponse) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendInt32(dst, v)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 3)
-		{
-			v := v.SupportedFeatures
-			dst = kbin.AppendUvarint(dst, 0)
-			sized := false
-			lenAt := len(dst)
-		l9236:
-			if isFlexible {
-				dst = kbin.AppendCompactArrayLen(dst, len(v))
-			} else {
-				dst = kbin.AppendArrayLen(dst, len(v))
-			}
-			for i := range v {
-				v := &v[i]
+		var toEncode []uint32
+		toEncode = append(toEncode, 0)
+		if v.FinalizedFeaturesEpoch != -1 {
+			toEncode = append(toEncode, 1)
+		}
+		toEncode = append(toEncode, 2)
+		dst = kbin.AppendUvarint(dst, uint32(len(toEncode)))
+		for _, tag := range toEncode {
+			switch tag {
+			case 0:
 				{
-					v := v.Name
+					v := v.SupportedFeatures
+					dst = kbin.AppendUvarint(dst, 0)
+					sized := false
+					lenAt := len(dst)
+				l9254:
 					if isFlexible {
-						dst = kbin.AppendCompactString(dst, v)
+						dst = kbin.AppendCompactArrayLen(dst, len(v))
 					} else {
-						dst = kbin.AppendString(dst, v)
+						dst = kbin.AppendArrayLen(dst, len(v))
+					}
+					for i := range v {
+						v := &v[i]
+						{
+							v := v.Name
+							if isFlexible {
+								dst = kbin.AppendCompactString(dst, v)
+							} else {
+								dst = kbin.AppendString(dst, v)
+							}
+						}
+						{
+							v := v.MinVersion
+							dst = kbin.AppendInt16(dst, v)
+						}
+						{
+							v := v.MaxVersion
+							dst = kbin.AppendInt16(dst, v)
+						}
+						if isFlexible {
+							dst = append(dst, 0)
+						}
+					}
+					if !sized {
+						dst = kbin.AppendUvarint(dst[:lenAt], uint32(len(dst[lenAt:])))
+						sized = true
+						goto l9254
 					}
 				}
+			case 1:
 				{
-					v := v.MinVersion
-					dst = kbin.AppendInt16(dst, v)
+					v := v.FinalizedFeaturesEpoch
+					dst = kbin.AppendUvarint(dst, 1)
+					dst = kbin.AppendUvarint(dst, 4)
+					dst = kbin.AppendInt32(dst, v)
 				}
+			case 2:
 				{
-					v := v.MaxVersion
-					dst = kbin.AppendInt16(dst, v)
-				}
-				if isFlexible {
-					dst = kbin.AppendUvarint(dst, 0)
-				}
-			}
-			if !sized {
-				dst = kbin.AppendUvarint(dst[:lenAt], uint32(len(dst[lenAt:])))
-				sized = true
-				goto l9236
-			}
-		}
-		{
-			v := v.FinalizedFeaturesEpoch
-			dst = kbin.AppendUvarint(dst, 1)
-			dst = kbin.AppendUvarint(dst, 4)
-			dst = kbin.AppendInt32(dst, v)
-		}
-		{
-			v := v.FinalizedFeatures
-			dst = kbin.AppendUvarint(dst, 2)
-			sized := false
-			lenAt := len(dst)
-		l9281:
-			if isFlexible {
-				dst = kbin.AppendCompactArrayLen(dst, len(v))
-			} else {
-				dst = kbin.AppendArrayLen(dst, len(v))
-			}
-			for i := range v {
-				v := &v[i]
-				{
-					v := v.Name
+					v := v.FinalizedFeatures
+					dst = kbin.AppendUvarint(dst, 2)
+					sized := false
+					lenAt := len(dst)
+				l9301:
 					if isFlexible {
-						dst = kbin.AppendCompactString(dst, v)
+						dst = kbin.AppendCompactArrayLen(dst, len(v))
 					} else {
-						dst = kbin.AppendString(dst, v)
+						dst = kbin.AppendArrayLen(dst, len(v))
+					}
+					for i := range v {
+						v := &v[i]
+						{
+							v := v.Name
+							if isFlexible {
+								dst = kbin.AppendCompactString(dst, v)
+							} else {
+								dst = kbin.AppendString(dst, v)
+							}
+						}
+						{
+							v := v.MaxVersionLevel
+							dst = kbin.AppendInt16(dst, v)
+						}
+						{
+							v := v.MinVersionLevel
+							dst = kbin.AppendInt16(dst, v)
+						}
+						if isFlexible {
+							dst = append(dst, 0)
+						}
+					}
+					if !sized {
+						dst = kbin.AppendUvarint(dst[:lenAt], uint32(len(dst[lenAt:])))
+						sized = true
+						goto l9301
 					}
 				}
-				{
-					v := v.MaxVersionLevel
-					dst = kbin.AppendInt16(dst, v)
-				}
-				{
-					v := v.MinVersionLevel
-					dst = kbin.AppendInt16(dst, v)
-				}
-				if isFlexible {
-					dst = kbin.AppendUvarint(dst, 0)
-				}
-			}
-			if !sized {
-				dst = kbin.AppendUvarint(dst[:lenAt], uint32(len(dst[lenAt:])))
-				sized = true
-				goto l9281
 			}
 		}
 	}
@@ -10769,7 +10791,7 @@ func (v *CreateTopicsRequest) AppendTo(dst []byte) []byte {
 						}
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0)
+						dst = append(dst, 0)
 					}
 				}
 			}
@@ -10799,12 +10821,12 @@ func (v *CreateTopicsRequest) AppendTo(dst []byte) []byte {
 						}
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0)
+						dst = append(dst, 0)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0)
+				dst = append(dst, 0)
 			}
 		}
 	}
@@ -10817,7 +10839,7 @@ func (v *CreateTopicsRequest) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendBool(dst, v)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0)
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -11176,7 +11198,7 @@ func (v *CreateTopicsResponse) AppendTo(dst []byte) []byte {
 						dst = kbin.AppendBool(dst, v)
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0)
+						dst = append(dst, 0)
 					}
 				}
 			}
@@ -11192,7 +11214,7 @@ func (v *CreateTopicsResponse) AppendTo(dst []byte) []byte {
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0)
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -11391,7 +11413,7 @@ func (v *DeleteTopicsRequest) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendInt32(dst, v)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0)
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -11534,12 +11556,12 @@ func (v *DeleteTopicsResponse) AppendTo(dst []byte) []byte {
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0)
+				dst = append(dst, 0)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0)
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -11711,12 +11733,12 @@ func (v *DeleteRecordsRequest) AppendTo(dst []byte) []byte {
 						dst = kbin.AppendInt64(dst, v)
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0)
+						dst = append(dst, 0)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0)
+				dst = append(dst, 0)
 			}
 		}
 	}
@@ -11725,7 +11747,7 @@ func (v *DeleteRecordsRequest) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendInt32(dst, v)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0)
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -11935,17 +11957,17 @@ func (v *DeleteRecordsResponse) AppendTo(dst []byte) []byte {
 						dst = kbin.AppendInt16(dst, v)
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0)
+						dst = append(dst, 0)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0)
+				dst = append(dst, 0)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0)
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -12108,7 +12130,7 @@ func (v *InitProducerIDRequest) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendInt16(dst, v)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0)
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -12223,7 +12245,7 @@ func (v *InitProducerIDResponse) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendInt16(dst, v)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0)
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -13775,17 +13797,17 @@ func (v *TxnOffsetCommitRequest) AppendTo(dst []byte) []byte {
 						}
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0)
+						dst = append(dst, 0)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0)
+				dst = append(dst, 0)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0)
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -14064,17 +14086,17 @@ func (v *TxnOffsetCommitResponse) AppendTo(dst []byte) []byte {
 						dst = kbin.AppendInt16(dst, v)
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0)
+						dst = append(dst, 0)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0)
+				dst = append(dst, 0)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0)
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -14286,7 +14308,7 @@ func (v *DescribeACLsRequest) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendInt8(dst, v)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0)
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -14496,17 +14518,17 @@ func (v *DescribeACLsResponse) AppendTo(dst []byte) []byte {
 						dst = kbin.AppendInt8(dst, v)
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0)
+						dst = append(dst, 0)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0)
+				dst = append(dst, 0)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0)
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -14748,12 +14770,12 @@ func (v *CreateACLsRequest) AppendTo(dst []byte) []byte {
 				dst = kbin.AppendInt8(dst, v)
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0)
+				dst = append(dst, 0)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0)
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -14904,12 +14926,12 @@ func (v *CreateACLsResponse) AppendTo(dst []byte) []byte {
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0)
+				dst = append(dst, 0)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0)
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -15065,12 +15087,12 @@ func (v *DeleteACLsRequest) AppendTo(dst []byte) []byte {
 				dst = kbin.AppendInt8(dst, v)
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0)
+				dst = append(dst, 0)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0)
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -15311,17 +15333,17 @@ func (v *DeleteACLsResponse) AppendTo(dst []byte) []byte {
 						dst = kbin.AppendInt8(dst, v)
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0)
+						dst = append(dst, 0)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0)
+				dst = append(dst, 0)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0)
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -16657,12 +16679,12 @@ func (v *DescribeLogDirsRequest) AppendTo(dst []byte) []byte {
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0)
+				dst = append(dst, 0)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0)
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -16896,22 +16918,22 @@ func (v *DescribeLogDirsResponse) AppendTo(dst []byte) []byte {
 								dst = kbin.AppendBool(dst, v)
 							}
 							if isFlexible {
-								dst = kbin.AppendUvarint(dst, 0)
+								dst = append(dst, 0)
 							}
 						}
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0)
+						dst = append(dst, 0)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0)
+				dst = append(dst, 0)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0)
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -17088,7 +17110,7 @@ func (v *SASLAuthenticateRequest) AppendTo(dst []byte) []byte {
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0)
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -17177,7 +17199,7 @@ func (v *SASLAuthenticateResponse) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendInt64(dst, v)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0)
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -17330,12 +17352,12 @@ func (v *CreatePartitionsRequest) AppendTo(dst []byte) []byte {
 						}
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0)
+						dst = append(dst, 0)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0)
+				dst = append(dst, 0)
 			}
 		}
 	}
@@ -17348,7 +17370,7 @@ func (v *CreatePartitionsRequest) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendBool(dst, v)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0)
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -17565,12 +17587,12 @@ func (v *CreatePartitionsResponse) AppendTo(dst []byte) []byte {
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0)
+				dst = append(dst, 0)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0)
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -17719,7 +17741,7 @@ func (v *CreateDelegationTokenRequest) AppendTo(dst []byte) []byte {
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0)
+				dst = append(dst, 0)
 			}
 		}
 	}
@@ -17728,7 +17750,7 @@ func (v *CreateDelegationTokenRequest) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendInt64(dst, v)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0)
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -17907,7 +17929,7 @@ func (v *CreateDelegationTokenResponse) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendInt32(dst, v)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0)
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -18025,7 +18047,7 @@ func (v *RenewDelegationTokenRequest) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendInt64(dst, v)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0)
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -18105,7 +18127,7 @@ func (v *RenewDelegationTokenResponse) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendInt32(dst, v)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0)
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -18185,7 +18207,7 @@ func (v *ExpireDelegationTokenRequest) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendInt64(dst, v)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0)
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -18264,7 +18286,7 @@ func (v *ExpireDelegationTokenResponse) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendInt32(dst, v)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0)
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -18360,12 +18382,12 @@ func (v *DescribeDelegationTokenRequest) AppendTo(dst []byte) []byte {
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0)
+				dst = append(dst, 0)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0)
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -18587,12 +18609,12 @@ func (v *DescribeDelegationTokenResponse) AppendTo(dst []byte) []byte {
 						}
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0)
+						dst = append(dst, 0)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0)
+				dst = append(dst, 0)
 			}
 		}
 	}
@@ -18601,7 +18623,7 @@ func (v *DescribeDelegationTokenResponse) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendInt32(dst, v)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0)
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -18790,7 +18812,7 @@ func (v *DeleteGroupsRequest) AppendTo(dst []byte) []byte {
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0)
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -18914,12 +18936,12 @@ func (v *DeleteGroupsResponse) AppendTo(dst []byte) []byte {
 				dst = kbin.AppendInt16(dst, v)
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0)
+				dst = append(dst, 0)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0)
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -19066,7 +19088,7 @@ func (v *ElectLeadersRequest) AppendTo(dst []byte) []byte {
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0)
+				dst = append(dst, 0)
 			}
 		}
 	}
@@ -19075,7 +19097,7 @@ func (v *ElectLeadersRequest) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendInt32(dst, v)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0)
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -19287,17 +19309,17 @@ func (v *ElectLeadersResponse) AppendTo(dst []byte) []byte {
 						}
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0)
+						dst = append(dst, 0)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0)
+				dst = append(dst, 0)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0)
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -19539,12 +19561,12 @@ func (v *IncrementalAlterConfigsRequest) AppendTo(dst []byte) []byte {
 						}
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0)
+						dst = append(dst, 0)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0)
+				dst = append(dst, 0)
 			}
 		}
 	}
@@ -19553,7 +19575,7 @@ func (v *IncrementalAlterConfigsRequest) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendBool(dst, v)
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0)
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -19761,12 +19783,12 @@ func (v *IncrementalAlterConfigsResponse) AppendTo(dst []byte) []byte {
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0)
+				dst = append(dst, 0)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0)
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -19942,17 +19964,17 @@ func (v *AlterPartitionAssignmentsRequest) AppendTo(dst []byte) []byte {
 						}
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0)
+						dst = append(dst, 0)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0)
+				dst = append(dst, 0)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0)
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -20198,17 +20220,17 @@ func (v *AlterPartitionAssignmentsResponse) AppendTo(dst []byte) []byte {
 						}
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0)
+						dst = append(dst, 0)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0)
+				dst = append(dst, 0)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0)
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -20399,12 +20421,12 @@ func (v *ListPartitionReassignmentsRequest) AppendTo(dst []byte) []byte {
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0)
+				dst = append(dst, 0)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0)
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -20641,17 +20663,17 @@ func (v *ListPartitionReassignmentsResponse) AppendTo(dst []byte) []byte {
 						}
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0)
+						dst = append(dst, 0)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0)
+				dst = append(dst, 0)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0)
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -21872,12 +21894,12 @@ func (v *DescribeUserSCRAMCredentialsRequest) AppendTo(dst []byte) []byte {
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0)
+				dst = append(dst, 0)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0)
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -22058,17 +22080,17 @@ func (v *DescribeUserSCRAMCredentialsResponse) AppendTo(dst []byte) []byte {
 						dst = kbin.AppendInt32(dst, v)
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 0)
+						dst = append(dst, 0)
 					}
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0)
+				dst = append(dst, 0)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0)
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -22275,7 +22297,7 @@ func (v *AlterUserSCRAMCredentialsRequest) AppendTo(dst []byte) []byte {
 				dst = kbin.AppendInt8(dst, v)
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0)
+				dst = append(dst, 0)
 			}
 		}
 	}
@@ -22321,12 +22343,12 @@ func (v *AlterUserSCRAMCredentialsRequest) AppendTo(dst []byte) []byte {
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0)
+				dst = append(dst, 0)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0)
+		dst = append(dst, 0)
 	}
 	return dst
 }
@@ -22522,12 +22544,12 @@ func (v *AlterUserSCRAMCredentialsResponse) AppendTo(dst []byte) []byte {
 				}
 			}
 			if isFlexible {
-				dst = kbin.AppendUvarint(dst, 0)
+				dst = append(dst, 0)
 			}
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0)
+		dst = append(dst, 0)
 	}
 	return dst
 }
