@@ -336,11 +336,11 @@ ProduceResponse =>
       // LogAppendTime is the millisecond that records were appended to the
       // partition inside Kafka. This is only not -1 if records were written
       // with the log append time flag (which producers cannot do).
-      LogAppendTime: int64 // v2+
+      LogAppendTime: int64(-1) // v2+
       // LogStartOffset, introduced in Kafka 1.0.0, can be used to see if an
       // UNKNOWN_PRODUCER_ID means Kafka rotated records containing the used
       // producer ID out of existence, or if Kafka lost data.
-      LogStartOffset: int64 // v5+
+      LogStartOffset: int64(-1) // v5+
       // ErrorRecords are indices of individual records that caused a batch
       // to error. This was added for KIP-467.
       ErrorRecords: [=>] // v8+
@@ -369,7 +369,7 @@ ProduceResponse =>
 FetchRequest => key 1, max version 12, flexible v12+
   // The cluster ID, if known. This is used to validate metadata fetches
   // prior to broker registration.
-  ClusterID: nullable-string // tag 0
+  ClusterID: nullable-string(null) // tag 0
   // ReplicaID is the broker ID of performing the fetch request. Standard
   // clients should use -1. To be a "debug" replica, use -2. The debug
   // replica can be used to fetch messages from non-leaders.
@@ -383,7 +383,7 @@ FetchRequest => key 1, max version 12, flexible v12+
   // MaxBytes is the maximum amount of bytes to read in a fetch request. The
   // response can exceed MaxBytes if the first record in the first non-empty
   // partition is larger than MaxBytes.
-  MaxBytes: int32 // v3+
+  MaxBytes: int32(2147483647) // v3+
   // IsolationLevel changes which messages are fetched. Follower replica ID's
   // (non-negative, non-standard-client) fetch from the end.
   //
@@ -403,7 +403,7 @@ FetchRequest => key 1, max version 12, flexible v12+
   // SessionEpoch is the session epoch for this request if using sessions.
   //
   // Read KIP-227 for more details. Use -1 if you are not using sessions.
-  SessionEpoch: int32 // v7+
+  SessionEpoch: int32(-1) // v7+
   // Topic contains topics to try to fetch records for.
   Topics: [=>]
     // Topic is a topic to try to fetch records for.
@@ -418,15 +418,15 @@ FetchRequest => key 1, max version 12, flexible v12+
       //
       // The initial leader epoch can be determined from a MetadataResponse.
       // To skip log truncation checking, use -1.
-      CurrentLeaderEpoch: int32 // v9+
+      CurrentLeaderEpoch: int32(-1) // v9+
       // FetchOffset is the offset to begin the fetch from. Kafka will
       // return records at and after this offset.
       FetchOffset: int64
       // The epoch of the last fetched record, or -1 if there is none.
-      LastFetchedEpoch: int32 // v12+
+      LastFetchedEpoch: int32(-1) // v12+
       // LogStartOffset is a broker-follower only field added for KIP-107.
       // This is the start offset of the partition in a follower.
-      LogStartOffset: int64 // v5+
+      LogStartOffset: int64(-1) // v5+
       // PartitionMaxBytes is the maximum bytes to return for this partition.
       // This can be used to limit how many bytes an individual partition in
       // a request is allotted so that it does not dominate all of MaxBytes.
@@ -520,23 +520,23 @@ FetchResponse =>
       // they are commited or aborted.
       //
       // The LastStableOffset will always be at or under the HighWatermark.
-      LastStableOffset: int64 // v4+
+      LastStableOffset: int64(-1) // v4+
       // LogStartOffset is the beginning offset for this partition.
       // This field was added for KIP-107.
-      LogStartOffset: int64 // v5+
+      LogStartOffset: int64(-1) // v5+
       // In case divergence is detected based on the LastFetchedEpoch and
       // FetchOffset in the request, this field indicates the largest epoch and
       // its end offset such that subsequent records are known to diverge.
       DivergingEpoch: => // tag 0
-        Epoch: int32
-        EndOffset: int32
+        Epoch: int32(-1)
+        EndOffset: int32(-1)
       // CurrentLeader is the currently known leader ID and epoch for this
       // partition.
       CurrentLeader: => // tag 1
         // The ID of the current leader, or -1 if unknown.
-        LeaderID: int32
+        LeaderID: int32(-1)
         // The latest known leader epoch.
-        LeaderEpoch: int32
+        LeaderEpoch: int32(-1)
       // AbortedTransactions is an array of aborted transactions within the
       // returned offset range. This is only returned if the requested
       // isolation level was READ_COMMITTED.
@@ -547,7 +547,7 @@ FetchResponse =>
         FirstOffset: int64
       // PreferredReadReplica is the preferred replica for the consumer
       // to use on its next fetch request. See KIP-392.
-      PreferredReadReplica: int32 // v11+
+      PreferredReadReplica: int32(-1) // v11+
       // RecordBatches is an array of record batches for a topic partition.
       //
       // This is encoded as a raw byte array, with the standard int32 size
@@ -671,10 +671,10 @@ ListOffsetsResponse =>
       OldStyleOffsets: [int64] // v0-v0
       // If the request was for the earliest or latest timestamp (-2 or -1), or
       // if an offset could not be found after the requested one, this will be -1.
-      Timestamp: int64 // v1+
+      Timestamp: int64(-1) // v1+
       // Offset is the offset corresponding to the record on or after the
       // requested timestamp. If one could not be found, this will be -1.
-      Offset: int64 // v1+
+      Offset: int64(-1) // v1+
       // LeaderEpoch is the leader epoch of the record at this offset,
       // or -1 if there was no leader epoch.
       LeaderEpoch: int32 // v4+
@@ -720,7 +720,7 @@ MetadataResponse =>
   // unique string specifying the cluster that the replying Kafka belongs to.
   ClusterID: nullable-string // v2+
   // ControllerID is the ID of the controller broker (the admin broker).
-  ControllerID: int32 // v1+
+  ControllerID: int32(-1) // v1+
   // Topics contains metadata about each topic requested in the
   // MetadataRequest.
   Topics: [=>]
@@ -763,7 +763,7 @@ MetadataResponse =>
       Leader: int32
       // LeaderEpoch, proposed in KIP-320 and introduced in Kafka 2.1.0 is the
       // epoch of the broker leader.
-      LeaderEpoch: int32 // v7+
+      LeaderEpoch: int32(-1) // v7+
       // Replicas returns all broker IDs containing replicas of this partition.
       Replicas: [int32]
       // ISR returns all broker IDs of in-sync replicas of this partition.
@@ -775,10 +775,10 @@ MetadataResponse =>
     // is a bitfield (corresponding to AclOperation) containing which operations
     // the client is allowed to perform on this topic.
     // This is only returned if requested.
-    AuthorizedOperations: int32 // v8+
+    AuthorizedOperations: int32(-2147483648) // v8+
   // AuthorizedOperations is a bitfield containing which operations the client
   // is allowed to perform on this cluster.
-  AuthorizedOperations: int32 // v8+
+  AuthorizedOperations: int32(-2147483648) // v8+
 
 // LeaderAndISRRequestTopicPartition is a common struct that is used across
 // different versions of LeaderAndISRRequest.
@@ -809,7 +809,7 @@ LeaderAndISRRequestTopicPartition => not top level, no encoding
 LeaderAndISRRequest => key 4, max version 4, flexible v4+
   ControllerID: int32
   ControllerEpoch: int32
-  BrokerEpoch: int64 // v2+
+  BrokerEpoch: int64(-1) // v2+
   PartitionStates: [LeaderAndISRRequestTopicPartition] // v0-v1
   TopicStates: [=>] // v2+
     Topic: string
@@ -840,7 +840,7 @@ LeaderAndISRResponse =>
 StopReplicaRequest => key 5, max version 3, flexible v2+
   ControllerID: int32
   ControllerEpoch: int32
-  BrokerEpoch: int64 // v1+
+  BrokerEpoch: int64(-1) // v1+
   DeletePartitions: bool // v0-v2
   Topics: [=>]
     Topic: string
@@ -848,7 +848,7 @@ StopReplicaRequest => key 5, max version 3, flexible v2+
     Partitions: [int32] // v1-v2
     PartitionStates: [=>] // v3+
       Partition: int32
-      LeaderEpoch: int32
+      LeaderEpoch: int32(-1)
       Delete: bool
 
 // StopReplicasResponse is returned from a StopReplicasRequest.
@@ -884,7 +884,7 @@ UpdateMetadataRequestTopicPartition => not top level, no encoding
 UpdateMetadataRequest => key 6, max version 6, flexible v6+
   ControllerID: int32
   ControllerEpoch: int32
-  BrokerEpoch: int64 // v5+
+  BrokerEpoch: int64(-1) // v5+
   PartitionStates: [UpdateMetadataRequestTopicPartition] // v0-v4
   TopicStates: [=>] // v5+
     Topic: string
@@ -917,7 +917,7 @@ UpdateMetadataResponse =>
 // where the request does not include the client ID.
 ControlledShutdownRequest => key 7, max version 3, flexible v3+
   BrokerID: int32
-  BrokerEpoch: int64 // v2+
+  BrokerEpoch: int64(-1) // v2+
 
 // ControlledShutdownResponse is returned from a ControlledShutdownRequest.
 ControlledShutdownResponse =>
@@ -1073,7 +1073,7 @@ OffsetCommitRequest => key 8, max version 8, flexible v8+, group coordinator
   Group: string
   // Generation being -1 and group being empty means the group is being used
   // to store offsets only. No generation validation, no rebalancing.
-  Generation: int32 // v1+
+  Generation: int32(-1) // v1+
   // MemberID is the ID of the client issuing this request in the group.
   MemberID: string // v1+
   // InstanceID is the instance ID of this member in the group (KIP-345).
@@ -1091,7 +1091,7 @@ OffsetCommitRequest => key 8, max version 8, flexible v8+, group coordinator
   //
   // Post 2.1.0, if this field is empty, offsets are only deleted once the
   // group is empty. Read KIP-211 for more details.
-  RetentionTimeMillis: int64 // v2-v4
+  RetentionTimeMillis: int64(-1) // v2-v4
   // Topics is contains topics and partitions for which to commit offsets.
   Topics: [=>]
     // Topic is a topic to commit offsets for.
@@ -1106,13 +1106,13 @@ OffsetCommitRequest => key 8, max version 8, flexible v8+, group coordinator
       // should persist in Kafka. This field only existed for v1.
       // The expiration would be timestamp + offset.retention.minutes, or, if
       // timestamp was zero, current time + offset.retention.minutes.
-      Timestamp: int64 // v1-v1
+      Timestamp: int64(-1) // v1-v1
       // LeaderEpoch, proposed in KIP-320 and introduced in Kafka 2.1.0,
       // is the leader epoch of the record this request is committing.
       //
       // The initial leader epoch can be determined from a MetadataResponse.
       // To skip log truncation checking, use -1.
-      LeaderEpoch: int32 // v6+
+      LeaderEpoch: int32(-1) // v6+
       // Metadata is optional data to include with committing the offset. This
       // can contain information such as which node is doing the committing, etc.
       Metadata: nullable-string
@@ -1209,7 +1209,7 @@ OffsetFetchResponse =>
       //
       // This was proposed in KIP-320 and introduced in Kafka 2.1.0 and allows
       // clients to detect log truncation. See the KIP for more details.
-      LeaderEpoch: int32 // v5+
+      LeaderEpoch: int32(-1) // v5+
       // Metadata is client provided metadata corresponding to the offset commit.
       // This can be useful for adding who made the commit, etc.
       Metadata: nullable-string
@@ -1367,7 +1367,7 @@ JoinGroupRequest => key 11, max version 7, flexible v6+, group coordinator
   // The first join for a new group has a 3 second grace period for other
   // members to join; this grace period is extended until the RebalanceTimeoutMillis
   // is up or until 3 seconds lapse with no new members.
-  RebalanceTimeoutMillis: int32 // v1+
+  RebalanceTimeoutMillis: int32(-1) // v1+
   // MemberID is the member ID to join the group with. When joining a group for
   // the first time, use the empty string. The response will contain the member
   // ID that should be used going forward.
@@ -1451,7 +1451,7 @@ JoinGroupResponse =>
   // reached a broker's group.max.size.
   ErrorCode: int16
   // Generation is the current "generation" of this group.
-  Generation: int32
+  Generation: int32(-1)
   // ProtocolType is the "type" of protocol being used for this group.
   ProtocolType: nullable-string // v7+
   // Protocol is the agreed upon protocol name (i.e. "sticky", "range").
@@ -1688,7 +1688,7 @@ DescribeGroupsResponse =>
     // AuthorizedOperations is a bitfield containing which operations the
     // the client is allowed to perform on this group.
     // This is only returned if requested.
-    AuthorizedOperations: int32 // v3+
+    AuthorizedOperations: int32(-2147483648) // v3+
 
 // ListGroupsRequest issues a request to list all groups.
 //
@@ -1806,7 +1806,7 @@ ApiVersionsResponse =>
     MaxVersion: int16
   // The monotonically increasing epoch for the finalized features information,
   // where -1 indicates an unknown epoch.
-  FinalizedFeaturesEpoch: int32 // tag 1
+  FinalizedFeaturesEpoch: int32(-1) // tag 1
   // The list of cluster-wide finalized features (only valid if
   // FinalizedFeaturesEpoch is >= 0).
   FinalizedFeatures: [=>] // tag 2
@@ -1852,7 +1852,7 @@ CreateTopicsRequest => key 19, max version 6, flexible v5+, admin
       // Value is a topic level config value (e.g. 1073741824)
       Value: nullable-string
   // TimeoutMillis is how long to allow for this request.
-  TimeoutMillis: int32
+  TimeoutMillis: int32(60000)
   // ValidateOnly is makes this request a dry-run; everything is validated but
   // no topics are actually created.
   ValidateOnly: bool // v1+
@@ -1908,9 +1908,9 @@ CreateTopicsResponse =>
     // only possible to be present in v5+.
     ConfigErrorCode: int16 // tag 0
     // NumPartitions is how many partitions were created for this topic.
-    NumPartitions: int32 // v5+
+    NumPartitions: int32(-1) // v5+
     // ReplicationFactor is how many replicas every partition has for this topic.
-    ReplicationFactor: int16 // v5+
+    ReplicationFactor: int16(-1) // v5+
     // Configs contains this topic's configuration.
     Configs: nullable[=>] // v5+
       // Name is the configuration name (e.g. segment.bytes).
@@ -1922,7 +1922,7 @@ CreateTopicsResponse =>
       ReadOnly: bool
       // Source is where this config entry is from. See the documentation
       // on DescribeConfigsRequest's Source for more details.
-      Source: int8
+      Source: int8(-1)
       // IsSensitive signifies whether this is a sensitive config key, which
       // is either a password or an unknown type.
       IsSensitive: bool
@@ -2056,11 +2056,11 @@ InitProducerIDRequest => key 22, max version 4, flexible v2+, txn coordinator
   TransactionTimeoutMillis: int32
   // ProducerID, added for KIP-360, is the current producer ID. This allows
   // the client to potentially recover on UNKNOWN_PRODUCER_ID errors.
-  ProducerID: int64 // v3+
+  ProducerID: int64(-1) // v3+
   // The producer's current epoch. This will be checked against the producer
   // epoch on the broker, and the request will return an error if they do not
   // match. Also added for KIP-360.
-  ProducerEpoch: int16 // v3+
+  ProducerEpoch: int16(-1) // v3+
 
 // InitProducerIDResponse is returned for an InitProducerIDRequest.
 InitProducerIDResponse =>
@@ -2092,7 +2092,7 @@ InitProducerIDResponse =>
   ErrorCode: int16
   // ProducerID is the next producer ID that Kafka generated. This ID is used
   // to ensure repeated produce requests do not result in duplicate records.
-  ProducerID: int64
+  ProducerID: int64(-1)
   // ProducerEpoch is the producer epoch to use for transactions.
   ProducerEpoch: int16
 
@@ -2105,7 +2105,7 @@ InitProducerIDResponse =>
 OffsetForLeaderEpochRequest => key 23, max version 3
   // ReplicaID, added in support of KIP-392, is the broker ID of the follower,
   // or -1 if this request is from a consumer.
-  ReplicaID: int32 // v3+
+  ReplicaID: int32(-2) // v3+
   // Topics are topics to fetch leader epoch offsets for.
   Topics: [=>]
     // Topic is the name of a topic.
@@ -2119,7 +2119,7 @@ OffsetForLeaderEpochRequest => key 23, max version 3
       // leader) or if the client is ahead of the broker.
       //
       // The initial leader epoch can be determined from a MetadataResponse.
-      CurrentLeaderEpoch: int32 // v2+
+      CurrentLeaderEpoch: int32(-1) // v2+
       // LeaderEpoch is the epoch to fetch the end offset for.
       LeaderEpoch: int32
 
@@ -2161,7 +2161,7 @@ OffsetForLeaderEpochResponse =>
       // next field. If the requested leader epoch is unknown, this is -1. If the
       // requested epoch had no records produced during the requested epoch, this
       // is the first prior epoch that had records.
-      LeaderEpoch: int32
+      LeaderEpoch: int32(-1)
       // EndOffset is either (1) just past the last recorded offset in the
       // current partition if the broker leader has the same epoch as the
       // leader epoch in the request, or (2) the beginning offset of the next
@@ -2370,7 +2370,7 @@ TxnOffsetCommitRequest => key 28, max version 3, flexible v3+, group coordinator
   // as received from InitProducerID.
   ProducerEpoch: int16
   // Generation is the group generation this transactional offset commit request is for.
-  Generation: int32 // v3+
+  Generation: int32(-1) // v3+
   // MemberID is the member ID this member is for.
   MemberID: string // v3+
   // InstanceID is the instance ID of this member in the group (KIP-345, KIP-447).
@@ -2392,7 +2392,7 @@ TxnOffsetCommitRequest => key 28, max version 3, flexible v3+, group coordinator
       //
       // The initial leader epoch can be determined from a MetadataResponse.
       // To skip log truncation checking, use -1.
-      LeaderEpoch: int32 // v2+
+      LeaderEpoch: int32(-1) // v2+
       // Metadata is optional metadata the client wants to include with this
       // commit.
       Metadata: nullable-string
@@ -2482,9 +2482,8 @@ DescribeACLsRequest => key 29, max version 2, flexible v2+
   // PREFIXED is 3, meaning a resource name must have our requested resource
   // name as a prefix. That is, topic "foobar" will match "foo".
   //
-  // This field was added with Kafka 2.0.0 for KIP-290; the default during
-  // creating is 2.
-  ResourcePatternType: int8 // v1+
+  // This field was added with Kafka 2.0.0 for KIP-290.
+  ResourcePatternType: int8(3) // v1+
   // Principal is the user to filter for. In Kafka with the simple authorizor,
   // all principals begin with "User:". Pluggable authorizors are allowed, but
   // Kafka still expects principals to lead with a principal type ("User") and
@@ -2529,7 +2528,7 @@ DescribeACLsResponse =>
     // ResourceName is the resource name being described.
     ResourceName: string
     // ResourcePatternType is the pattern type being described.
-    ResourcePatternType: int8 // v1+
+    ResourcePatternType: int8(3) // v1+
     // ACLs contains users / entries being described.
     ACLs: [=>]
       // Principal is who this ACL applies to.
@@ -2557,7 +2556,7 @@ CreateACLsRequest => key 30, max version 2, flexible v2+
     // ResourcePatternType is the pattern type to use for the resource name.
     // This cannot be UNKNOWN or MATCH (i.e. this must be LITERAL or PREFIXED).
     // The default for pre-Kafka 2.0.0 is effectively LITERAL.
-    ResourcePatternType: int8 // v1+
+    ResourcePatternType: int8(3) // v1+
     // Principal is the user to apply this acl for. With the Kafka simple
     // authorizer, this must begin with "User:".
     Principal: string
@@ -2592,7 +2591,7 @@ DeleteACLsRequest => key 31, max version 2, flexible v2+
   Filters: [=>]
     ResourceType: int8
     ResourceName: nullable-string
-    ResourcePatternType: int8 // v1+
+    ResourcePatternType: int8(3) // v1+
     Principal: nullable-string
     Host: nullable-string
     Operation: int8
@@ -2617,7 +2616,7 @@ DeleteACLsResponse =>
       ErrorMessage: nullable-string
       ResourceType: int8
       ResourceName: string
-      ResourcePatternType: int8 // v1+
+      ResourcePatternType: int8(3) // v1+
       Principal: string
       Host: string
       Operation: int8
@@ -2711,7 +2710,7 @@ DescribeConfigsResponse =>
       // DEFAULT_CONFIG (5): built-in default configuration for those that have defaults
       //
       // DYNAMIC_BROKER_LOGGER_CONFIG (6): broker logger; see KIP 412.
-      Source: int8 // v1+
+      Source: int8(-1) // v1+
       // IsSensitive signifies whether this is a sensitive config key, which
       // is either a password or an unknown type.
       IsSensitive: bool
@@ -3202,7 +3201,7 @@ ElectLeadersRequest => key 43, max version 2, flexible v2+, admin
     Partitions: [int32]
   // TimeoutMillis is how long to wait for the response. This limits how long to
   // wait since responses are not sent until election results are complete.
-  TimeoutMillis: int32
+  TimeoutMillis: int32(60000)
 
 // ElectLeadersResponse is a response for an ElectLeadersRequest.
 ElectLeadersResponse =>
@@ -3330,7 +3329,7 @@ IncrementalAlterConfigsResponse =>
 // ACL wise, this requires ALTER on CLUSTER.
 AlterPartitionAssignmentsRequest => key 45, max version 0, flexible v0+, admin
   // TimeoutMillis is how long to wait for the response.
-  TimeoutMillis: int32
+  TimeoutMillis: int32(60000)
   // Topics are topics for which to reassign partitions of.
   Topics: [=>]
     // Topic is a topic to reassign the partitions of.
@@ -3385,7 +3384,7 @@ AlterPartitionAssignmentsResponse =>
 // ACL wise, this requires DESCRIBE on CLUSTER.
 ListPartitionReassignmentsRequest => key 46, max version 0, flexible v0+, admin
   // TimeoutMillis is how long to wait for the response.
-  TimeoutMillis: int32
+  TimeoutMillis: int32(60000)
   // Topics are topics to list in progress partition reassignments of, or null
   // to list everything.
   Topics: nullable[=>]
