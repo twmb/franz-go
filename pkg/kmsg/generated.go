@@ -1970,51 +1970,72 @@ func (v *FetchResponse) AppendTo(dst []byte) []byte {
 						}
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 2)
-						{
-							v := v.DivergingEpoch
-							dst = kbin.AppendUvarint(dst, 0)
-							sized := false
-							lenAt := len(dst)
-						l1594:
-							{
-								v := v.Epoch
-								dst = kbin.AppendInt32(dst, v)
-							}
-							{
-								v := v.EndOffset
-								dst = kbin.AppendInt32(dst, v)
-							}
-							if isFlexible {
-								dst = append(dst, 0)
-							}
-							if !sized {
-								dst = kbin.AppendUvarint(dst[:lenAt], uint32(len(dst[lenAt:])))
-								sized = true
-								goto l1594
-							}
+						var toEncode []uint32
+						if v.DivergingEpoch != (func() FetchResponseTopicPartitionDivergingEpoch {
+							var v FetchResponseTopicPartitionDivergingEpoch
+							v.Default()
+							return v
+						})() {
+							toEncode = append(toEncode, 0)
 						}
-						{
-							v := v.CurrentLeader
-							dst = kbin.AppendUvarint(dst, 1)
-							sized := false
-							lenAt := len(dst)
-						l1617:
-							{
-								v := v.LeaderID
-								dst = kbin.AppendInt32(dst, v)
-							}
-							{
-								v := v.LeaderEpoch
-								dst = kbin.AppendInt32(dst, v)
-							}
-							if isFlexible {
-								dst = append(dst, 0)
-							}
-							if !sized {
-								dst = kbin.AppendUvarint(dst[:lenAt], uint32(len(dst[lenAt:])))
-								sized = true
-								goto l1617
+						if v.CurrentLeader != (func() FetchResponseTopicPartitionCurrentLeader {
+							var v FetchResponseTopicPartitionCurrentLeader
+							v.Default()
+							return v
+						})() {
+							toEncode = append(toEncode, 1)
+						}
+						dst = kbin.AppendUvarint(dst, uint32(len(toEncode)))
+						for _, tag := range toEncode {
+							switch tag {
+							case 0:
+								{
+									v := v.DivergingEpoch
+									dst = kbin.AppendUvarint(dst, 0)
+									sized := false
+									lenAt := len(dst)
+								l1604:
+									{
+										v := v.Epoch
+										dst = kbin.AppendInt32(dst, v)
+									}
+									{
+										v := v.EndOffset
+										dst = kbin.AppendInt32(dst, v)
+									}
+									if isFlexible {
+										dst = append(dst, 0)
+									}
+									if !sized {
+										dst = kbin.AppendUvarint(dst[:lenAt], uint32(len(dst[lenAt:])))
+										sized = true
+										goto l1604
+									}
+								}
+							case 1:
+								{
+									v := v.CurrentLeader
+									dst = kbin.AppendUvarint(dst, 1)
+									sized := false
+									lenAt := len(dst)
+								l1628:
+									{
+										v := v.LeaderID
+										dst = kbin.AppendInt32(dst, v)
+									}
+									{
+										v := v.LeaderEpoch
+										dst = kbin.AppendInt32(dst, v)
+									}
+									if isFlexible {
+										dst = append(dst, 0)
+									}
+									if !sized {
+										dst = kbin.AppendUvarint(dst[:lenAt], uint32(len(dst[lenAt:])))
+										sized = true
+										goto l1628
+									}
+								}
 							}
 						}
 					}
@@ -10388,11 +10409,15 @@ func (v *ApiVersionsResponse) AppendTo(dst []byte) []byte {
 	}
 	if isFlexible {
 		var toEncode []uint32
-		toEncode = append(toEncode, 0)
+		if v.SupportedFeatures != nil {
+			toEncode = append(toEncode, 0)
+		}
 		if v.FinalizedFeaturesEpoch != -1 {
 			toEncode = append(toEncode, 1)
 		}
-		toEncode = append(toEncode, 2)
+		if v.FinalizedFeatures != nil {
+			toEncode = append(toEncode, 2)
+		}
 		dst = kbin.AppendUvarint(dst, uint32(len(toEncode)))
 		for _, tag := range toEncode {
 			switch tag {
@@ -10402,7 +10427,7 @@ func (v *ApiVersionsResponse) AppendTo(dst []byte) []byte {
 					dst = kbin.AppendUvarint(dst, 0)
 					sized := false
 					lenAt := len(dst)
-				l9254:
+				l9271:
 					if isFlexible {
 						dst = kbin.AppendCompactArrayLen(dst, len(v))
 					} else {
@@ -10433,7 +10458,7 @@ func (v *ApiVersionsResponse) AppendTo(dst []byte) []byte {
 					if !sized {
 						dst = kbin.AppendUvarint(dst[:lenAt], uint32(len(dst[lenAt:])))
 						sized = true
-						goto l9254
+						goto l9271
 					}
 				}
 			case 1:
@@ -10449,7 +10474,7 @@ func (v *ApiVersionsResponse) AppendTo(dst []byte) []byte {
 					dst = kbin.AppendUvarint(dst, 2)
 					sized := false
 					lenAt := len(dst)
-				l9301:
+				l9318:
 					if isFlexible {
 						dst = kbin.AppendCompactArrayLen(dst, len(v))
 					} else {
@@ -10480,7 +10505,7 @@ func (v *ApiVersionsResponse) AppendTo(dst []byte) []byte {
 					if !sized {
 						dst = kbin.AppendUvarint(dst[:lenAt], uint32(len(dst[lenAt:])))
 						sized = true
-						goto l9301
+						goto l9318
 					}
 				}
 			}

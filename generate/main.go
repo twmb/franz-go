@@ -94,6 +94,8 @@ type (
 		IsNullableArray bool
 		NullableVersion int
 
+		HasDefault bool
+
 		// FromFlexible is true if this is inside a struct that has
 		// flexible versions.
 		FromFlexible bool
@@ -115,6 +117,8 @@ type (
 		Anonymous        bool // if inner struct
 		Comment          string
 		Name             string
+
+		HasDefault bool
 
 		// FromFlexible tracks if this struct is either
 		// (a) top level and has flexible versions, or
@@ -264,6 +268,31 @@ func (b NullableBytes) GetDefault() (interface{}, bool) {
 	return "nil", b.HasDefault
 }
 func (b NullableBytes) GetTypeDefault() interface{} { return nil }
+
+func (a Array) SetDefault(v string) Type {
+	if v != "null" {
+		die("unknown non-null default for array")
+	}
+	a.HasDefault = true
+	return a
+}
+func (a Array) GetDefault() (interface{}, bool) {
+	return "nil", a.HasDefault
+}
+func (a Array) GetTypeDefault() interface{} { return "nil" }
+
+func (s Struct) SetDefault(v string) Type {
+	die("cannot set default on a struct; we already have a default")
+	return s
+}
+func (s Struct) GetDefault() (interface{}, bool) {
+	return "", false // no GetDefault
+}
+func (s Struct) GetTypeDefault() interface{} {
+	// This will not work if a tagged type has its own arrays, but for now
+	// nothing has that.
+	return fmt.Sprintf("(func() %[1]s { var v %[1]s; v.Default(); return v })() ", s.Name)
+}
 
 type FlexibleSetter interface {
 	AsFromFlexible() Type
