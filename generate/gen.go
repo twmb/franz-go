@@ -173,9 +173,7 @@ func (s Struct) WriteAppend(l *LineWriter) {
 		case Varint:
 			l.Write("dst = kbin.AppendUvarint(dst, kbin.VarintLen(v))")
 			f.Type.WriteAppend(l)
-		case NullableString:
-			primAppend("CompactNullableString", l) // all tags are compact
-		case Array, Struct:
+		case Array, Struct, String, NullableString, Bytes, NullableBytes:
 			l.Write("sized := false")
 			l.Write("lenAt := len(dst)")
 			line := l.line
@@ -445,27 +443,11 @@ func (s Struct) WriteDecode(l *LineWriter) {
 		}
 
 		l.Write("case %d:", i)
-		end := func() {}
-
-		switch f.Type.(type) {
-		case Bool, Int8, Int16, Int32, Int64, Float64, Uint32, Varint,
-			Struct:
-
-			l.Write("b := kbin.Reader{Src: b.Span(int(b.Uvarint()))}")
-			end = func() {
-				l.Write("if err := b.Complete(); err != nil {")
-				l.Write("return err")
-				l.Write("}")
-			}
-
-		case NullableString, Array:
-
-		default:
-			die("type %v unsupported in decode! fix this!", f.Type)
-		}
-
+		l.Write("b := kbin.Reader{Src: b.Span(int(b.Uvarint()))}")
 		f.WriteDecode(l)
-		end()
+		l.Write("if err := b.Complete(); err != nil {")
+		l.Write("return err")
+		l.Write("}")
 	}
 }
 

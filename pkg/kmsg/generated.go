@@ -1437,7 +1437,19 @@ func (v *FetchRequest) AppendTo(dst []byte) []byte {
 		{
 			v := v.ClusterID
 			dst = kbin.AppendUvarint(dst, 0)
-			dst = kbin.AppendCompactNullableString(dst, v)
+			sized := false
+			lenAt := len(dst)
+		l1142:
+			if isFlexible {
+				dst = kbin.AppendCompactNullableString(dst, v)
+			} else {
+				dst = kbin.AppendNullableString(dst, v)
+			}
+			if !sized {
+				dst = kbin.AppendUvarint(dst[:lenAt], uint32(len(dst[lenAt:])))
+				sized = true
+				goto l1142
+			}
 		}
 	}
 	return dst
@@ -1635,6 +1647,7 @@ func (v *FetchRequest) ReadFrom(src []byte) error {
 			default:
 				b.Span(int(b.Uvarint()))
 			case 0:
+				b := kbin.Reader{Src: b.Span(int(b.Uvarint()))}
 				var v *string
 				if isFlexible {
 					v = b.CompactNullableString()
@@ -1642,6 +1655,9 @@ func (v *FetchRequest) ReadFrom(src []byte) error {
 					v = b.NullableString()
 				}
 				s.ClusterID = v
+				if err := b.Complete(); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -1951,7 +1967,7 @@ func (v *FetchResponse) AppendTo(dst []byte) []byte {
 							dst = kbin.AppendUvarint(dst, 0)
 							sized := false
 							lenAt := len(dst)
-						l1569:
+						l1585:
 							{
 								v := v.Epoch
 								dst = kbin.AppendInt32(dst, v)
@@ -1966,7 +1982,7 @@ func (v *FetchResponse) AppendTo(dst []byte) []byte {
 							if !sized {
 								dst = kbin.AppendUvarint(dst[:lenAt], uint32(len(dst[lenAt:])))
 								sized = true
-								goto l1569
+								goto l1585
 							}
 						}
 						{
@@ -1974,7 +1990,7 @@ func (v *FetchResponse) AppendTo(dst []byte) []byte {
 							dst = kbin.AppendUvarint(dst, 1)
 							sized := false
 							lenAt := len(dst)
-						l1592:
+						l1608:
 							{
 								v := v.LeaderID
 								dst = kbin.AppendInt32(dst, v)
@@ -1989,7 +2005,7 @@ func (v *FetchResponse) AppendTo(dst []byte) []byte {
 							if !sized {
 								dst = kbin.AppendUvarint(dst[:lenAt], uint32(len(dst[lenAt:])))
 								sized = true
-								goto l1592
+								goto l1608
 							}
 						}
 					}
@@ -10368,7 +10384,7 @@ func (v *ApiVersionsResponse) AppendTo(dst []byte) []byte {
 			dst = kbin.AppendUvarint(dst, 0)
 			sized := false
 			lenAt := len(dst)
-		l9220:
+		l9236:
 			if isFlexible {
 				dst = kbin.AppendCompactArrayLen(dst, len(v))
 			} else {
@@ -10399,7 +10415,7 @@ func (v *ApiVersionsResponse) AppendTo(dst []byte) []byte {
 			if !sized {
 				dst = kbin.AppendUvarint(dst[:lenAt], uint32(len(dst[lenAt:])))
 				sized = true
-				goto l9220
+				goto l9236
 			}
 		}
 		{
@@ -10413,7 +10429,7 @@ func (v *ApiVersionsResponse) AppendTo(dst []byte) []byte {
 			dst = kbin.AppendUvarint(dst, 2)
 			sized := false
 			lenAt := len(dst)
-		l9265:
+		l9281:
 			if isFlexible {
 				dst = kbin.AppendCompactArrayLen(dst, len(v))
 			} else {
@@ -10444,7 +10460,7 @@ func (v *ApiVersionsResponse) AppendTo(dst []byte) []byte {
 			if !sized {
 				dst = kbin.AppendUvarint(dst[:lenAt], uint32(len(dst[lenAt:])))
 				sized = true
-				goto l9265
+				goto l9281
 			}
 		}
 	}
@@ -10510,6 +10526,7 @@ func (v *ApiVersionsResponse) ReadFrom(src []byte) error {
 			default:
 				b.Span(int(b.Uvarint()))
 			case 0:
+				b := kbin.Reader{Src: b.Span(int(b.Uvarint()))}
 				v := s.SupportedFeatures
 				a := v
 				var l int32
@@ -10551,6 +10568,9 @@ func (v *ApiVersionsResponse) ReadFrom(src []byte) error {
 				}
 				v = a
 				s.SupportedFeatures = v
+				if err := b.Complete(); err != nil {
+					return err
+				}
 			case 1:
 				b := kbin.Reader{Src: b.Span(int(b.Uvarint()))}
 				v := b.Int32()
@@ -10559,6 +10579,7 @@ func (v *ApiVersionsResponse) ReadFrom(src []byte) error {
 					return err
 				}
 			case 2:
+				b := kbin.Reader{Src: b.Span(int(b.Uvarint()))}
 				v := s.FinalizedFeatures
 				a := v
 				var l int32
@@ -10600,6 +10621,9 @@ func (v *ApiVersionsResponse) ReadFrom(src []byte) error {
 				}
 				v = a
 				s.FinalizedFeatures = v
+				if err := b.Complete(); err != nil {
+					return err
+				}
 			}
 		}
 	}
