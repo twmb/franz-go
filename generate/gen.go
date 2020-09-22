@@ -177,7 +177,7 @@ func (s Struct) WriteAppend(l *LineWriter) {
 			f.Type.WriteAppend(l)
 		case NullableString:
 			primAppend("CompactNullableString", l) // all tags are compact
-		case Struct:
+		case Array, Struct:
 			l.Write("sized := false")
 			l.Write("lenAt := len(dst)")
 			line := l.line
@@ -459,7 +459,7 @@ func (s Struct) WriteDecode(l *LineWriter) {
 				l.Write("}")
 			}
 
-		case NullableString:
+		case NullableString, Array:
 
 		default:
 			die("type %v unsupported in decode! fix this!", f.Type)

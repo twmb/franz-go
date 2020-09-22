@@ -1793,6 +1793,26 @@ ApiVersionsResponse =>
   // For Kafka < 2.0.0, the throttle is applied before issuing a response.
   // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
   ThrottleMillis: int32 // v1+
+  // Features supported by the broker (see KIP-584).
+  SupportedFeatures: [=>] // tag 0
+    // The name of the feature.
+    Name: string
+    // The minimum supported version for the feature.
+    MinVersion: int16
+    // The maximum supported version for the feature.
+    MaxVersion: int16
+  // The monotonically increasing epoch for the finalized features information,
+  // where -1 indicates an unknown epoch.
+  FinalizedFeaturesEpoch: int32 // tag 1
+  // The list of cluster-wide finalized features (only valid if
+  // FinalizedFeaturesEpoch is >= 0).
+  FinalizedFeatures: [=>] // tag 2
+    // The name of the feature.
+    Name: string
+    // The cluster-wide finalized max version level for the feature.
+    MaxVersionLevel: int16
+    // The cluster-wide finalized min version level for the feature.
+    MinVersionLevel: int16
 
 // CreateTopicsRequest creates Kafka topics.
 //

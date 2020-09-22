@@ -396,6 +396,8 @@ func Tip() Versions {
 	v[25]++ // 2 add offsets to txn
 	v[26]++ // 2 end txn
 
+	v[18]++ // KAFKA-10027 4f96c5b424956355339dd3216c426c1c0388fe9e KIP-584
+
 	v = append(v,
 		0, // 50 describe user scram creds, KAFKA-10259 e8524ccd8fca0caac79b844d87e98e9c055f76fb KIP-554
 		0, // 51 alter user scram creds, same
