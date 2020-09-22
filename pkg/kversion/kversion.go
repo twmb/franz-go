@@ -405,6 +405,8 @@ func Tip() Versions {
 
 	// KAFKA-10435 634c9175054cc69d10b6da22ea1e95edff6a4747 KIP-595
 	// This opted in fetch request to flexible versions.
+	//
+	// KAFKA-10487: further change in aa5263fba903c85812c0c31443f7d49ee371e9db
 	v[1]++ // 12 fetch
 
 	return v

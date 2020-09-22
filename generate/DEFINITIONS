@@ -423,7 +423,7 @@ FetchRequest => key 1, max version 12, flexible v12+
       // return records at and after this offset.
       FetchOffset: int64
       // The epoch of the last fetched record, or -1 if there is none.
-      LastFetchedEpoch: int32
+      LastFetchedEpoch: int32 // v12+
       // LogStartOffset is a broker-follower only field added for KIP-107.
       // This is the start offset of the partition in a follower.
       LogStartOffset: int64 // v5+
@@ -524,9 +524,12 @@ FetchResponse =>
       // LogStartOffset is the beginning offset for this partition.
       // This field was added for KIP-107.
       LogStartOffset: int64 // v5+
-      // If set and not -1, the follower must truncate all offsets that are
-      // greater than or equal to this value.
-      TruncationOffset: int64 // tag 0
+      // In case divergence is detected based on the LastFetchedEpoch and
+      // FetchOffset in the request, this field indicates the largest epoch and
+      // its end offset such that subsequent records are known to diverge.
+      DivergingEpoch: => // tag 0
+        Epoch: int32
+        EndOffset: int32
       // CurrentLeader is the currently known leader ID and epoch for this
       // partition.
       CurrentLeader: => // tag 1

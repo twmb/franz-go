@@ -1131,7 +1131,7 @@ type FetchRequestTopicPartition struct {
 	FetchOffset int64
 
 	// The epoch of the last fetched record, or -1 if there is none.
-	LastFetchedEpoch int32
+	LastFetchedEpoch int32 // v12+
 
 	// LogStartOffset is a broker-follower only field added for KIP-107.
 	// This is the start offset of the partition in a follower.
@@ -1307,7 +1307,7 @@ func (v *FetchRequest) AppendTo(dst []byte) []byte {
 						v := v.FetchOffset
 						dst = kbin.AppendInt64(dst, v)
 					}
-					{
+					if version >= 12 {
 						v := v.LastFetchedEpoch
 						dst = kbin.AppendInt32(dst, v)
 					}
@@ -1473,7 +1473,7 @@ func (v *FetchRequest) ReadFrom(src []byte) error {
 						v := b.Int64()
 						s.FetchOffset = v
 					}
-					{
+					if version >= 12 {
 						v := b.Int32()
 						s.LastFetchedEpoch = v
 					}
