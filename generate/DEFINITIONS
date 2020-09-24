@@ -3649,3 +3649,128 @@ AlterUserSCRAMCredentialsResponse =>
     ErrorCode: int16
     // The user-level error message, if any.
     ErrorMessage: nullable-string
+
+// Part of KIP-595 to replace Kafka's dependence on Zookeeper with a
+// Kafka-only raft protocol,
+// VoteRequest is used by voters to hold a leader election.
+//
+// Since this is relatively Kafka internal, most fields are left undocumented.
+VoteRequest => key 52, max version 0, flexible v0+, admin
+  ClusterID: nullable-string
+  Topics: [=>]
+    Topic: string
+    Partitions: [=>]
+      Partition: int32
+      // The bumped epoch of the candidate sending the request.
+      CandidateEpoch: int32
+      // The ID of the voter sending the request.
+      CandidateID: int32
+      // The epoch of the last record written to the metadata log.
+      LastOffsetEpoch: int32
+      // The offset of the last record written to the metadata log.
+      LastOffset: int64
+
+VoteResponse =>
+  ErrorCode: int16
+  Topics: [=>]
+    Topic: string
+    Partitions: [=>]
+      Partition: int32
+      ErrorCode: int16
+      // The ID of the current leader, or -1 if the leader is unknown.
+      LeaderID: int32
+      // Whether the vote was granted.
+      VoteGranted: bool
+
+// Part of KIP-595 to replace Kafka's dependence on Zookeeper with a
+// Kafka-only raft protocol,
+// BeginQuorumEpochRequest is sent by a leader (once it has enough votes)
+// to all voters in the election.
+//
+// Since this is relatively Kafka internal, most fields are left undocumented.
+BeginQuorumEpochRequest => key 53, max version 0, admin
+  ClusterID: nullable-string
+  Topics: [=>]
+    Topic: string
+    Partitions: [=>]
+      Partition: int32
+      // The ID of the newly elected leader.
+      LeaderID: int32
+      // The epoch of the newly elected leader.
+      LeaderEpoch: int32
+
+BeginQuorumEpochResponse =>
+  ErrorCode: int16
+  Topics: [=>]
+    Topic: string
+    Partitions: [=>]
+      Partition: int32
+      ErrorCode: int16
+      // The ID of the current leader, or -1 if the leader is unknown.
+      LeaderID: int32
+      // The latest known leader epoch.
+      LeaderEpoch: int32
+
+// Part of KIP-595 to replace Kafka's dependence on Zookeeper with a
+// Kafka-only raft protocol,
+// EndQuorumEpochRequest is sent by a leader to gracefully step down as leader
+// (i.e. on shutdown). Stepping down begins a new election.
+//
+// Since this is relatively Kafka internal, most fields are left undocumented.
+EndQuorumEpochRequest => key 54, max version 0, admin
+  ClusterID: nullable-string
+  Topics: [=>]
+    Topic: string
+    Partitions: [=>]
+      Partition: int32
+      // The ID of the replica sending this request.
+      ReplicaID: int32
+      // The current leader ID, or -1 if there is a vote in progress.
+      LeaderID: int32
+      // The current epoch.
+      LeaderEpoch: int32
+      // A sorted list of preferred successors to start the election.
+      PreferredSuccessors: [int32]
+
+EndQuorumEpochResponse =>
+  ErrorCode: int16
+  Topics: [=>]
+    Topic: string
+    Partitions: [=>]
+      Partition: int32
+      ErrorCode: int16
+      // The ID of the current leader, or -1 if the leader is unknown.
+      LeaderID: int32
+      // The latest known leader epoch.
+      LeaderEpoch: int32
+
+// A common struct used in DescribeQuorumResponse.
+DescribeQuorumResponseTopicPartitionReplicaState => not top level, no encoding
+  ReplicaID: int32
+  // The last known log end offset of the follower, or -1 if it is unknown.
+  LogEndOffset: int64
+
+// Part of KIP-642 (and KIP-595) to replace Kafka's dependence on Zookeeper with a
+// Kafka-only raft protocol,
+// DescribeQuorumRequest is sent by a leader to describe the quorum.
+DescribeQuorumRequest => key 55, max version 0, flexible v0+, admin
+  Topics: [=>]
+    Topic: string
+    Partitions: [=>]
+      Partition: int32
+
+DescribeQuorumResponse =>
+  ErrorCode: int16
+  Topics: [=>]
+    Topic: string
+    Partitions: [=>]
+      Partition: int32
+      ErrorCode: int16
+      // The ID of the current leader, or -1 if the leader is unknown.
+      LeaderID: int32
+      // The latest known leader epoch.
+      LeaderEpoch: int32
+      HighWatermark: int64
+      CurrentVoters: [DescribeQuorumResponseTopicPartitionReplicaState]
+      TargetVoters: [DescribeQuorumResponseTopicPartitionReplicaState]
+      Observers: [DescribeQuorumResponseTopicPartitionReplicaState]

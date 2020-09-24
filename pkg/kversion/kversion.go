@@ -409,5 +409,13 @@ func Tip() Versions {
 	// KAFKA-10487: further change in aa5263fba903c85812c0c31443f7d49ee371e9db
 	v[1]++ // 12 fetch
 
+	// KAFKA-10492 b7c8490cf47b0c18253d6a776b2b35c76c71c65d KIP-595
+	v = append(v,
+		0, // 52 vote
+		0, // 53 begin quorum epoch
+		0, // 54 end quorum epoch
+		0, // 55 describe quorum
+	)
+
 	return v
 }
