@@ -137,6 +137,7 @@ var (
 	ResourceNotFound                   = &Error{"RESOURCE_NOT_FOUND", 91, false, "A request illegally referred to a resource that does not exist."}
 	DuplicateResource                  = &Error{"DUPLICATE_RESOURCE", 92, false, "A request illegally referred to the same resource twice."}
 	UnacceptableCredential             = &Error{"UNACCEPTABLE_CREDENTIAL", 93, false, "Requested credential would not meet criteria for acceptability."}
+	InconsistentVoterSet               = &Error{"INCONSISTENT_VOTER_SET", 94, false, "Indicates that either the sender or recipient of a voter-only request is not one of the expected voters."}
 )
 
 var code2err = map[int16]error{
@@ -235,4 +236,5 @@ var code2err = map[int16]error{
 	91: ResourceNotFound,
 	92: DuplicateResource,
 	93: UnacceptableCredential,
+	94: InconsistentVoterSet,
 }
