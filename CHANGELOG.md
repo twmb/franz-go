@@ -1,3 +1,13 @@
+TBD
+===
+
+- [`a5f66899f`](https://github.com/twmb/kafka-go/commit/a5f66899f6b492de37d689566d34869f50744717): New APIs for KIP-595 (raft)
+- [`cd499f4ea`](https://github.com/twmb/kafka-go/commit/cd499f4eaceaa0bd73452b5737c7713fe2b60ca9): Fetch request changes for KIP-595 (raft)
+- [`7fd87da1c`](https://github.com/twmb/kafka-go/commit/7fd87da1c8562943b095a54b5bc6258e2d2bdc6c): Support defaults in generated code (and a few commits after adding defaults).
+- [`74c7f57e8`](https://github.com/twmb/kafka-go/commit/74c7f57e81dd45033e9eec3bacbc4dca75fef83d): Support for KIP-584 (ApiVersions changes for min/max features)
+
+Other changes were made for better handling of tags in generated code (to support all types).
+
 v0.4.9
 ======
 
