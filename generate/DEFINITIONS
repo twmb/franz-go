@@ -594,7 +594,7 @@ ListOffsetsRequest => key 2, max version 5
       //
       // The initial leader epoch can be determined from a MetadataResponse.
       // To skip log truncation checking, use -1.
-      CurrentLeaderEpoch: int32 // v4+
+      CurrentLeaderEpoch: int32(-1) // v4+
       // Timestamp controls which offset to return in a response for this
       // partition.
       //
@@ -677,7 +677,7 @@ ListOffsetsResponse =>
       Offset: int64(-1) // v1+
       // LeaderEpoch is the leader epoch of the record at this offset,
       // or -1 if there was no leader epoch.
-      LeaderEpoch: int32 // v4+
+      LeaderEpoch: int32(-1) // v4+
 
 // MetadataRequest requests metadata from Kafka.
 MetadataRequest => key 3, max version 9, flexible v9+

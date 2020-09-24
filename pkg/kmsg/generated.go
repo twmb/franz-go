@@ -2283,6 +2283,7 @@ type ListOffsetsRequestTopicPartition struct {
 }
 
 func (v *ListOffsetsRequestTopicPartition) Default() {
+	v.CurrentLeaderEpoch = -1
 }
 
 type ListOffsetsRequestTopic struct {
@@ -2518,6 +2519,7 @@ type ListOffsetsResponseTopicPartition struct {
 func (v *ListOffsetsResponseTopicPartition) Default() {
 	v.Timestamp = -1
 	v.Offset = -1
+	v.LeaderEpoch = -1
 }
 
 type ListOffsetsResponseTopic struct {
