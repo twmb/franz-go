@@ -417,5 +417,10 @@ func Tip() Versions {
 		0, // 55 describe quorum
 	)
 
+	// KAFKA-8836 57de67db22eb373f92ec5dd449d317ed2bc8b8d1 KIP-497
+	v = append(v,
+		0, // 56 alter isr
+	)
+
 	return v
 }
