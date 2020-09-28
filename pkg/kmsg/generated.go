@@ -1446,7 +1446,7 @@ func (v *FetchRequest) AppendTo(dst []byte) []byte {
 					dst = kbin.AppendUvarint(dst, 0)
 					sized := false
 					lenAt := len(dst)
-				l1149:
+				fClusterID:
 					if isFlexible {
 						dst = kbin.AppendCompactNullableString(dst, v)
 					} else {
@@ -1455,7 +1455,7 @@ func (v *FetchRequest) AppendTo(dst []byte) []byte {
 					if !sized {
 						dst = kbin.AppendUvarint(dst[:lenAt], uint32(len(dst[lenAt:])))
 						sized = true
-						goto l1149
+						goto fClusterID
 					}
 				}
 			}
@@ -1994,7 +1994,7 @@ func (v *FetchResponse) AppendTo(dst []byte) []byte {
 									dst = kbin.AppendUvarint(dst, 0)
 									sized := false
 									lenAt := len(dst)
-								l1604:
+								fDivergingEpoch:
 									{
 										v := v.Epoch
 										dst = kbin.AppendInt32(dst, v)
@@ -2009,7 +2009,7 @@ func (v *FetchResponse) AppendTo(dst []byte) []byte {
 									if !sized {
 										dst = kbin.AppendUvarint(dst[:lenAt], uint32(len(dst[lenAt:])))
 										sized = true
-										goto l1604
+										goto fDivergingEpoch
 									}
 								}
 							case 1:
@@ -2018,7 +2018,7 @@ func (v *FetchResponse) AppendTo(dst []byte) []byte {
 									dst = kbin.AppendUvarint(dst, 1)
 									sized := false
 									lenAt := len(dst)
-								l1628:
+								fCurrentLeader:
 									{
 										v := v.LeaderID
 										dst = kbin.AppendInt32(dst, v)
@@ -2033,7 +2033,7 @@ func (v *FetchResponse) AppendTo(dst []byte) []byte {
 									if !sized {
 										dst = kbin.AppendUvarint(dst[:lenAt], uint32(len(dst[lenAt:])))
 										sized = true
-										goto l1628
+										goto fCurrentLeader
 									}
 								}
 							}
@@ -10429,7 +10429,7 @@ func (v *ApiVersionsResponse) AppendTo(dst []byte) []byte {
 					dst = kbin.AppendUvarint(dst, 0)
 					sized := false
 					lenAt := len(dst)
-				l9273:
+				fSupportedFeatures:
 					if isFlexible {
 						dst = kbin.AppendCompactArrayLen(dst, len(v))
 					} else {
@@ -10460,7 +10460,7 @@ func (v *ApiVersionsResponse) AppendTo(dst []byte) []byte {
 					if !sized {
 						dst = kbin.AppendUvarint(dst[:lenAt], uint32(len(dst[lenAt:])))
 						sized = true
-						goto l9273
+						goto fSupportedFeatures
 					}
 				}
 			case 1:
@@ -10476,7 +10476,7 @@ func (v *ApiVersionsResponse) AppendTo(dst []byte) []byte {
 					dst = kbin.AppendUvarint(dst, 2)
 					sized := false
 					lenAt := len(dst)
-				l9320:
+				fFinalizedFeatures:
 					if isFlexible {
 						dst = kbin.AppendCompactArrayLen(dst, len(v))
 					} else {
@@ -10507,7 +10507,7 @@ func (v *ApiVersionsResponse) AppendTo(dst []byte) []byte {
 					if !sized {
 						dst = kbin.AppendUvarint(dst[:lenAt], uint32(len(dst[lenAt:])))
 						sized = true
-						goto l9320
+						goto fFinalizedFeatures
 					}
 				}
 			}

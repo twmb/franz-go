@@ -219,13 +219,12 @@ func (s Struct) WriteAppend(l *LineWriter) {
 		case Array, Struct, String, NullableString, Bytes, NullableBytes:
 			l.Write("sized := false")
 			l.Write("lenAt := len(dst)")
-			line := l.line
-			l.Write("l%d:", line)
+			l.Write("f%s:", f.FieldName)
 			f.Type.WriteAppend(l)
 			l.Write("if !sized {")
 			l.Write("dst = kbin.AppendUvarint(dst[:lenAt], uint32(len(dst[lenAt:])))")
 			l.Write("sized = true")
-			l.Write("goto l%d", line)
+			l.Write("goto f%s", f.FieldName)
 			l.Write("}")
 		default:
 			die("tag type %v unsupported in append! fix this!", f.Type.TypeName())
