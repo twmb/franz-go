@@ -11,7 +11,7 @@ import (
 	"github.com/twmb/kafka-go/pkg/sasl/plain"
 )
 
-func connectSaslPlainSSL() {
+func connectSaslSslPlain() {
 	fmt.Println("starting...")
 
 	seeds := []string{"localhost:9092"}
