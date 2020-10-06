@@ -90,8 +90,7 @@ func stddial(ctx context.Context, addr string) (net.Conn, error) {
 // requests are written to them.
 //
 // NewClient also launches a goroutine which periodically updates the cached
-// topic metadata. It ensures that the cached metadata won't be older than
-// MetadataMaxAge (5min by default).
+// topic metadata.
 func NewClient(opts ...Opt) (*Client, error) {
 	cfg := defaultCfg()
 	for _, opt := range opts {
