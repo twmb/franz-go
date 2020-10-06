@@ -31,10 +31,10 @@ func connectSaslSslPlain() {
 		})),
 
 		// Configure TLS. Uses SystemCertPool for RootCAs by default.
+		dialer := &tls.Dialer{
+			NetDialer: &net.Dialer{Timeout: 10 * time.Second},
+		}
 		kgo.Dialer(func(ctx context.Context, host string) (net.Conn, error) {
-			dialer := &tls.Dialer{
-				NetDialer: &net.Dialer{Timeout: 10 * time.Second},
-			}
 			return dialer.DialContext(ctx, "tcp", host)
 		}),
 	}
