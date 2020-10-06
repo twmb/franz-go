@@ -362,7 +362,7 @@ func (b *broker) loadConnection(ctx context.Context, reqKey int16) (*brokerCxn, 
 
 // connect connects to the broker's addr, returning the new connection.
 func (b *broker) connect(ctx context.Context) (net.Conn, error) {
-	conn, err := b.cl.cfg.dialFn(ctx, b.addr)
+	conn, err := b.cl.cfg.dialFn(ctx, "tcp", b.addr)
 	if err != nil {
 		if _, ok := err.(net.Error); ok {
 			return nil, ErrNoDial
