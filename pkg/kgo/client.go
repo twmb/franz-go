@@ -86,9 +86,9 @@ func stddial(ctx context.Context, addr string) (net.Conn, error) {
 }
 
 // NewClient returns a new Kafka client with the given options or an error if
-// the options are invalid. The connection is initiated lazily. Upon the first
-// request sent to a broker the client will initiate a connection to
-// Kafka (if needed).
+// the options are invalid. Connections to brokers are lazily created only when
+// requests are written to them.
+//
 // NewClient also launches a goroutine which periodically updates the cached
 // topic metadata. It ensures that the cached metadata won't be older than
 // MetadataMaxAge (5min by default).
