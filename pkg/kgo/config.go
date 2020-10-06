@@ -46,7 +46,7 @@ func (consumerOpt) consumerOpt()       {}
 type cfg struct {
 	// ***GENERAL SECTION***
 	id                  *string
-	dialFn              func(context.Context, string) (net.Conn, error)
+	dialFn              func(context.Context, string, string) (net.Conn, error)
 	connTimeoutOverhead time.Duration
 
 	softwareName    string // KIP-511
@@ -129,7 +129,7 @@ func defaultCfg() cfg {
 	defaultID := "kgo"
 	return cfg{
 		id:     &defaultID,
-		dialFn: stddial,
+		dialFn: (&net.Dialer{Timeout: 10 * time.Second}).DialContext,
 
 		softwareName:    "kgo",
 		softwareVersion: "0.1.0",
@@ -260,7 +260,17 @@ func ConnTimeoutOverhead(overhead time.Duration) Opt {
 // that caused the dial. If the request is a client-internal request, the
 // context is the context on the client itself (which is canceled when the
 // client is closed).
-func Dialer(fn func(context.Context, string) (net.Conn, error)) Opt {
+//
+// This function has the same signature as net.Dialer's DialContext and
+// tls.Dialer's DialContext, meaning you can use this function like so:
+//
+//     kgo.Dialer((&net.Dialer{Timeout: 10*time.Second}).DialContext)
+//
+// or
+//
+//     kgo.Dialer((&tls.Dialer{...})}.DialContext)
+//
+func Dialer(fn func(ctx context.Context, network, host string) (net.Conn, error)) Opt {
 	return clientOpt{func(cfg *cfg) { cfg.dialFn = fn }}
 }
 

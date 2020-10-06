@@ -78,13 +78,6 @@ type Client struct {
 	metadone            chan struct{}
 }
 
-// stddialer is the default dialer for dialing connections.
-var stddialer = net.Dialer{Timeout: 10 * time.Second}
-
-func stddial(ctx context.Context, addr string) (net.Conn, error) {
-	return stddialer.DialContext(ctx, "tcp", addr)
-}
-
 // NewClient returns a new Kafka client with the given options or an error if
 // the options are invalid.
 func NewClient(opts ...Opt) (*Client, error) {
