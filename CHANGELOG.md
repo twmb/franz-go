@@ -1,6 +1,7 @@
 TBD
 ===
 
+- [`9687df7ad`](https://github.com/twmb/kafka-go/commit/9687df7ad71c552c61eea86376ebf3a9f6bff09e): Breaking API change for kgo.Dialer
 - [`aca99bcf1`](https://github.com/twmb/kafka-go/commit/aca99bcf19e741850378adbfe64c62b009340d7d): New APIs for KIP-497 (alter isr)
 - [`a5f66899f`](https://github.com/twmb/kafka-go/commit/a5f66899f6b492de37d689566d34869f50744717): New APIs for KIP-595 (raft)
 - [`cd499f4ea`](https://github.com/twmb/kafka-go/commit/cd499f4eaceaa0bd73452b5737c7713fe2b60ca9): Fetch request changes for KIP-595 (raft)
