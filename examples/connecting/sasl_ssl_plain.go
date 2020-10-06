@@ -19,6 +19,7 @@ func connectSaslSslPlain() {
 	user := ""
 	password := ""
 
+	tlsDialer := &tls.Dialer{NetDialer: &net.Dialer{Timeout: 10 * time.Second}}
 	opts := []kgo.Opt{
 		kgo.SeedBrokers(seeds...),
 
@@ -31,12 +32,7 @@ func connectSaslSslPlain() {
 		})),
 
 		// Configure TLS. Uses SystemCertPool for RootCAs by default.
-		dialer := &tls.Dialer{
-			NetDialer: &net.Dialer{Timeout: 10 * time.Second},
-		}
-		kgo.Dialer(func(ctx context.Context, host string) (net.Conn, error) {
-			return dialer.DialContext(ctx, "tcp", host)
-		}),
+		kgo.Dialer(tlsDialer.DialContext),
 	}
 
 	client, err := kgo.NewClient(opts...)
