@@ -34,7 +34,7 @@ func connectSaslSslPlain() {
 		kgo.Dialer(func(ctx context.Context, host string) (net.Conn, error) {
 			return (tls.Dialer{
 				NetDialer: &net.Dialer{Timeout: 10 * time.Second},
-			}).NetDialer.DialContext(ctx, "tcp", host)
+			}).DialContext(ctx, "tcp", host)
 		}),
 	}
 
