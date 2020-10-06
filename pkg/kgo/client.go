@@ -79,7 +79,11 @@ type Client struct {
 }
 
 // NewClient returns a new Kafka client with the given options or an error if
-// the options are invalid.
+// the options are invalid. Connections to brokers are lazily created only when
+// requests are written to them.
+//
+// NewClient also launches a goroutine which periodically updates the cached
+// topic metadata.
 func NewClient(opts ...Opt) (*Client, error) {
 	cfg := defaultCfg()
 	for _, opt := range opts {
