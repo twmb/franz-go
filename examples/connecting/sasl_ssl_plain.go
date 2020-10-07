@@ -24,12 +24,10 @@ func connectSaslSslPlain() {
 		kgo.SeedBrokers(seeds...),
 
 		// SASL Options
-		kgo.SASL(plain.Plain(func(context.Context) (plain.Auth, error) {
-			return plain.Auth{
-				User: user,
-				Pass: password,
-			}, nil
-		})),
+		kgo.SASL(plain.Auth{
+			User: user,
+			Pass: password,
+		}.AsMechanism()),
 
 		// Configure TLS. Uses SystemCertPool for RootCAs by default.
 		kgo.Dialer(tlsDialer.DialContext),
