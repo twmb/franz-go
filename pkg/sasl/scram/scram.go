@@ -55,6 +55,28 @@ type Auth struct {
 	_internal struct{} // require explicit field initalization
 }
 
+// AsSha256Mechanism returns a sasl mechanism that will use a as credentials for
+// all sasl sessions.
+//
+// This is a shortcut for using the Sha256 function and is useful when you do
+// not need to live-rotate credentials.
+func (a Auth) AsSha256Mechanism() sasl.Mechanism {
+	return Sha256(func(context.Context) (Auth, error) {
+		return a, nil
+	})
+}
+
+// AsSha512Mechanism returns a sasl mechanism that will use a as credentials for
+// all sasl sessions.
+//
+// This is a shortcut for using the Sha512 function and is useful when you do
+// not need to live-rotate credentials.
+func (a Auth) AsSha512Mechanism() sasl.Mechanism {
+	return Sha512(func(context.Context) (Auth, error) {
+		return a, nil
+	})
+}
+
 // Sha256 returns a SCRAM-SHA-256 sasl mechanism that will call authFn
 // whenever authentication is needed. The returned Auth is used for a single
 // session.

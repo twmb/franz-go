@@ -27,6 +27,17 @@ type Auth struct {
 	_internal struct{} // require explicit field initalization
 }
 
+// AsMechanism returns a sasl mechanism that will use a as credentials for all
+// sasl sessions.
+//
+// This is a shortcut for using the Oauth function and is useful when you do
+// not need to live-rotate credentials.
+func (a Auth) AsMechanism() sasl.Mechanism {
+	return Oauth(func(context.Context) (Auth, error) {
+		return a, nil
+	})
+}
+
 // Oauth returns an OAUTHBEARER sasl mechanism that will call authFn whenever
 // authentication is needed. The returned Auth is used for a single session.
 func Oauth(authFn func(context.Context) (Auth, error)) sasl.Mechanism {
