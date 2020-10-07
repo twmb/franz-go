@@ -23949,8 +23949,6 @@ type DescribeQuorumResponseTopicPartition struct {
 
 	CurrentVoters []DescribeQuorumResponseTopicPartitionReplicaState
 
-	TargetVoters []DescribeQuorumResponseTopicPartitionReplicaState
-
 	Observers []DescribeQuorumResponseTopicPartitionReplicaState
 }
 
@@ -24041,28 +24039,6 @@ func (v *DescribeQuorumResponse) AppendTo(dst []byte) []byte {
 					}
 					{
 						v := v.CurrentVoters
-						if isFlexible {
-							dst = kbin.AppendCompactArrayLen(dst, len(v))
-						} else {
-							dst = kbin.AppendArrayLen(dst, len(v))
-						}
-						for i := range v {
-							v := &v[i]
-							{
-								v := v.ReplicaID
-								dst = kbin.AppendInt32(dst, v)
-							}
-							{
-								v := v.LogEndOffset
-								dst = kbin.AppendInt64(dst, v)
-							}
-							if isFlexible {
-								dst = append(dst, 0)
-							}
-						}
-					}
-					{
-						v := v.TargetVoters
 						if isFlexible {
 							dst = kbin.AppendCompactArrayLen(dst, len(v))
 						} else {
@@ -24232,40 +24208,6 @@ func (v *DescribeQuorumResponse) ReadFrom(src []byte) error {
 						}
 						v = a
 						s.CurrentVoters = v
-					}
-					{
-						v := s.TargetVoters
-						a := v
-						var l int32
-						if isFlexible {
-							l = b.CompactArrayLen()
-						} else {
-							l = b.ArrayLen()
-						}
-						if !b.Ok() {
-							return b.Complete()
-						}
-						if l > 0 {
-							a = make([]DescribeQuorumResponseTopicPartitionReplicaState, l)
-						}
-						for i := int32(0); i < l; i++ {
-							v := &a[i]
-							v.Default()
-							s := v
-							{
-								v := b.Int32()
-								s.ReplicaID = v
-							}
-							{
-								v := b.Int64()
-								s.LogEndOffset = v
-							}
-							if isFlexible {
-								SkipTags(&b)
-							}
-						}
-						v = a
-						s.TargetVoters = v
 					}
 					{
 						v := s.Observers
