@@ -1,6 +1,9 @@
 TBD
 ===
 
+- [`7fc3a701e`](https://github.com/twmb/kafka-go/commit/7fc3a701ec2155417cc02d2535510fcb5c9cdb6d): Add UpdateFeatures for 2.7.0 (KIP-584)
+- [`f09690186`](https://github.com/twmb/kafka-go/commit/f09690186ce2697f78626ba06e7ccfb586f1c7ee): Add shortcuts to get sasl.Mechanisms from sasl structs
+- [PR #12](https://github.com/twmb/kafka-go/pull/12): Add clarifying wording on NewClient
 - [`9687df7ad`](https://github.com/twmb/kafka-go/commit/9687df7ad71c552c61eea86376ebf3a9f6bff09e): Breaking API change for kgo.Dialer
 - [`aca99bcf1`](https://github.com/twmb/kafka-go/commit/aca99bcf19e741850378adbfe64c62b009340d7d): New APIs for KIP-497 (alter isr)
 - [`a5f66899f`](https://github.com/twmb/kafka-go/commit/a5f66899f6b492de37d689566d34869f50744717): New APIs for KIP-595 (raft)
