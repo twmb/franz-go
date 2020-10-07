@@ -422,5 +422,10 @@ func Tip() Versions {
 		0, // 56 alter isr
 	)
 
+	// KAFKA-10028 fb4f297207ef62f71e4a6d2d0dac75752933043d KIP-584
+	v = append(v,
+		0, // 57 update features
+	)
+
 	return v
 }

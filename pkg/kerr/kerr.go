@@ -139,6 +139,7 @@ var (
 	UnacceptableCredential             = &Error{"UNACCEPTABLE_CREDENTIAL", 93, false, "Requested credential would not meet criteria for acceptability."}
 	InconsistentVoterSet               = &Error{"INCONSISTENT_VOTER_SET", 94, false, "Indicates that either the sender or recipient of a voter-only request is not one of the expected voters."}
 	InvalidUpdateVersion               = &Error{"INVALID_UPDATE_VERSION", 95, false, "The given update version was invalid."}
+	FeatureUpdateFailed                = &Error{"FEATURE_UPDATE_FAILED", 96, false, "Unable to update finalized features due to an unexpected server error."}
 )
 
 var code2err = map[int16]error{
@@ -239,4 +240,5 @@ var code2err = map[int16]error{
 	93: UnacceptableCredential,
 	94: InconsistentVoterSet,
 	95: InvalidUpdateVersion,
+	96: FeatureUpdateFailed,
 }

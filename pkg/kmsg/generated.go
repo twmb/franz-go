@@ -6,7 +6,7 @@ import "github.com/twmb/kafka-go/pkg/kbin"
 
 // MaxKey is the maximum key used for any messages in this package.
 // Note that this value will change as Kafka adds more messages.
-const MaxKey = 56
+const MaxKey = 57
 
 // MessageV0 is the message format Kafka used prior to 0.10.
 //
@@ -10356,7 +10356,7 @@ type ApiVersionsResponse struct {
 
 	// The monotonically increasing epoch for the finalized features information,
 	// where -1 indicates an unknown epoch.
-	FinalizedFeaturesEpoch int32 // tag 1
+	FinalizedFeaturesEpoch int64 // tag 1
 
 	// The list of cluster-wide finalized features (only valid if
 	// FinalizedFeaturesEpoch is >= 0).
@@ -10467,8 +10467,8 @@ func (v *ApiVersionsResponse) AppendTo(dst []byte) []byte {
 				{
 					v := v.FinalizedFeaturesEpoch
 					dst = kbin.AppendUvarint(dst, 1)
-					dst = kbin.AppendUvarint(dst, 4)
-					dst = kbin.AppendInt32(dst, v)
+					dst = kbin.AppendUvarint(dst, 8)
+					dst = kbin.AppendInt64(dst, v)
 				}
 			case 2:
 				{
@@ -10622,7 +10622,7 @@ func (v *ApiVersionsResponse) ReadFrom(src []byte) error {
 				}
 			case 1:
 				b := kbin.Reader{Src: b.Span(int(b.Uvarint()))}
-				v := b.Int32()
+				v := b.Int64()
 				s.FinalizedFeaturesEpoch = v
 				if err := b.Complete(); err != nil {
 					return err
@@ -24774,6 +24774,337 @@ func (v *AlterISRResponse) ReadFrom(src []byte) error {
 func (v *AlterISRResponse) Default() {
 }
 
+type UpdateFeaturesRequestFeatureUpdate struct {
+	// The name of the finalized feature to update.
+	Feature string
+
+	// The new maximum version level for the finalized feature. A value >= 1 is
+	// valid. A value < 1, is special, and can be used to request the deletion
+	// of the finalized feature.
+	MaxVersionLevel int16
+
+	// When set to true, the finalized feature version level is allowed to be
+	// downgraded/deleted. The downgrade request will fail if the new maximum
+	// version level is a value that's not lower than the existing maximum
+	// finalized version level.
+	AllowDowngrade bool
+}
+
+func (v *UpdateFeaturesRequestFeatureUpdate) Default() {
+}
+
+// From KIP-584 and introduced in 2.7.0, this request updates broker-wide features.
+type UpdateFeaturesRequest struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	// TimeoutMillis is the millisecond timeout of this request.
+	TimeoutMillis int32
+
+	// The list of updates to finalized features.
+	FeatureUpdates []UpdateFeaturesRequestFeatureUpdate
+}
+
+func (*UpdateFeaturesRequest) Key() int16                 { return 57 }
+func (*UpdateFeaturesRequest) MaxVersion() int16          { return 0 }
+func (v *UpdateFeaturesRequest) SetVersion(version int16) { v.Version = version }
+func (v *UpdateFeaturesRequest) GetVersion() int16        { return v.Version }
+func (v *UpdateFeaturesRequest) IsFlexible() bool         { return v.Version >= 0 }
+func (v *UpdateFeaturesRequest) IsAdminRequest()          {}
+func (v *UpdateFeaturesRequest) ResponseKind() Response {
+	return &UpdateFeaturesResponse{Version: v.Version}
+}
+
+func (v *UpdateFeaturesRequest) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	isFlexible := version >= 0
+	_ = isFlexible
+	{
+		v := v.TimeoutMillis
+		dst = kbin.AppendInt32(dst, v)
+	}
+	{
+		v := v.FeatureUpdates
+		if isFlexible {
+			dst = kbin.AppendCompactArrayLen(dst, len(v))
+		} else {
+			dst = kbin.AppendArrayLen(dst, len(v))
+		}
+		for i := range v {
+			v := &v[i]
+			{
+				v := v.Feature
+				if isFlexible {
+					dst = kbin.AppendCompactString(dst, v)
+				} else {
+					dst = kbin.AppendString(dst, v)
+				}
+			}
+			{
+				v := v.MaxVersionLevel
+				dst = kbin.AppendInt16(dst, v)
+			}
+			{
+				v := v.AllowDowngrade
+				dst = kbin.AppendBool(dst, v)
+			}
+			if isFlexible {
+				dst = append(dst, 0)
+			}
+		}
+	}
+	if isFlexible {
+		dst = append(dst, 0)
+	}
+	return dst
+}
+func (v *UpdateFeaturesRequest) ReadFrom(src []byte) error {
+	v.Default()
+	version := v.Version
+	_ = version
+	isFlexible := version >= 0
+	_ = isFlexible
+	b := kbin.Reader{Src: src}
+	s := v
+	{
+		v := b.Int32()
+		s.TimeoutMillis = v
+	}
+	{
+		v := s.FeatureUpdates
+		a := v
+		var l int32
+		if isFlexible {
+			l = b.CompactArrayLen()
+		} else {
+			l = b.ArrayLen()
+		}
+		if !b.Ok() {
+			return b.Complete()
+		}
+		if l > 0 {
+			a = make([]UpdateFeaturesRequestFeatureUpdate, l)
+		}
+		for i := int32(0); i < l; i++ {
+			v := &a[i]
+			v.Default()
+			s := v
+			{
+				var v string
+				if isFlexible {
+					v = b.CompactString()
+				} else {
+					v = b.String()
+				}
+				s.Feature = v
+			}
+			{
+				v := b.Int16()
+				s.MaxVersionLevel = v
+			}
+			{
+				v := b.Bool()
+				s.AllowDowngrade = v
+			}
+			if isFlexible {
+				SkipTags(&b)
+			}
+		}
+		v = a
+		s.FeatureUpdates = v
+	}
+	if isFlexible {
+		SkipTags(&b)
+	}
+	return b.Complete()
+}
+func (v *UpdateFeaturesRequest) Default() {
+	v.TimeoutMillis = 60000
+}
+
+type UpdateFeaturesResponseResult struct {
+	// The name of the finalized feature.
+	Feature string
+
+	// The feature update error code, if any.
+	ErrorCode int16
+
+	// The feature update error, if any.
+	ErrorMessage *string
+}
+
+func (v *UpdateFeaturesResponseResult) Default() {
+}
+
+type UpdateFeaturesResponse struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	// ThrottleMillis is how long of a throttle Kafka will apply to the client
+	// after responding to this request.
+	ThrottleMillis int32
+
+	// The top level error code, if any.
+	ErrorCode int16
+
+	// An informative message if the request errored, if any.
+	ErrorMessage *string
+
+	// The results for each feature update request.
+	Results []UpdateFeaturesResponseResult
+}
+
+func (*UpdateFeaturesResponse) Key() int16                 { return 57 }
+func (*UpdateFeaturesResponse) MaxVersion() int16          { return 0 }
+func (v *UpdateFeaturesResponse) SetVersion(version int16) { v.Version = version }
+func (v *UpdateFeaturesResponse) GetVersion() int16        { return v.Version }
+func (v *UpdateFeaturesResponse) IsFlexible() bool         { return v.Version >= 0 }
+func (v *UpdateFeaturesResponse) RequestKind() Request {
+	return &UpdateFeaturesRequest{Version: v.Version}
+}
+
+func (v *UpdateFeaturesResponse) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	isFlexible := version >= 0
+	_ = isFlexible
+	{
+		v := v.ThrottleMillis
+		dst = kbin.AppendInt32(dst, v)
+	}
+	{
+		v := v.ErrorCode
+		dst = kbin.AppendInt16(dst, v)
+	}
+	{
+		v := v.ErrorMessage
+		if isFlexible {
+			dst = kbin.AppendCompactNullableString(dst, v)
+		} else {
+			dst = kbin.AppendNullableString(dst, v)
+		}
+	}
+	{
+		v := v.Results
+		if isFlexible {
+			dst = kbin.AppendCompactArrayLen(dst, len(v))
+		} else {
+			dst = kbin.AppendArrayLen(dst, len(v))
+		}
+		for i := range v {
+			v := &v[i]
+			{
+				v := v.Feature
+				if isFlexible {
+					dst = kbin.AppendCompactString(dst, v)
+				} else {
+					dst = kbin.AppendString(dst, v)
+				}
+			}
+			{
+				v := v.ErrorCode
+				dst = kbin.AppendInt16(dst, v)
+			}
+			{
+				v := v.ErrorMessage
+				if isFlexible {
+					dst = kbin.AppendCompactNullableString(dst, v)
+				} else {
+					dst = kbin.AppendNullableString(dst, v)
+				}
+			}
+			if isFlexible {
+				dst = append(dst, 0)
+			}
+		}
+	}
+	if isFlexible {
+		dst = append(dst, 0)
+	}
+	return dst
+}
+func (v *UpdateFeaturesResponse) ReadFrom(src []byte) error {
+	v.Default()
+	version := v.Version
+	_ = version
+	isFlexible := version >= 0
+	_ = isFlexible
+	b := kbin.Reader{Src: src}
+	s := v
+	{
+		v := b.Int32()
+		s.ThrottleMillis = v
+	}
+	{
+		v := b.Int16()
+		s.ErrorCode = v
+	}
+	{
+		var v *string
+		if isFlexible {
+			v = b.CompactNullableString()
+		} else {
+			v = b.NullableString()
+		}
+		s.ErrorMessage = v
+	}
+	{
+		v := s.Results
+		a := v
+		var l int32
+		if isFlexible {
+			l = b.CompactArrayLen()
+		} else {
+			l = b.ArrayLen()
+		}
+		if !b.Ok() {
+			return b.Complete()
+		}
+		if l > 0 {
+			a = make([]UpdateFeaturesResponseResult, l)
+		}
+		for i := int32(0); i < l; i++ {
+			v := &a[i]
+			v.Default()
+			s := v
+			{
+				var v string
+				if isFlexible {
+					v = b.CompactString()
+				} else {
+					v = b.String()
+				}
+				s.Feature = v
+			}
+			{
+				v := b.Int16()
+				s.ErrorCode = v
+			}
+			{
+				var v *string
+				if isFlexible {
+					v = b.CompactNullableString()
+				} else {
+					v = b.NullableString()
+				}
+				s.ErrorMessage = v
+			}
+			if isFlexible {
+				SkipTags(&b)
+			}
+		}
+		v = a
+		s.Results = v
+	}
+	if isFlexible {
+		SkipTags(&b)
+	}
+	return b.Complete()
+}
+func (v *UpdateFeaturesResponse) Default() {
+}
+
 // RequestForKey returns the request corresponding to the given request key
 // or nil if the key is unknown.
 func RequestForKey(key int16) Request {
@@ -24894,6 +25225,8 @@ func RequestForKey(key int16) Request {
 		return new(DescribeQuorumRequest)
 	case 56:
 		return new(AlterISRRequest)
+	case 57:
+		return new(UpdateFeaturesRequest)
 	}
 }
 
@@ -25017,6 +25350,8 @@ func ResponseForKey(key int16) Response {
 		return new(DescribeQuorumResponse)
 	case 56:
 		return new(AlterISRResponse)
+	case 57:
+		return new(UpdateFeaturesResponse)
 	}
 }
 
@@ -25140,5 +25475,7 @@ func NameForKey(key int16) string {
 		return "DescribeQuorum"
 	case 56:
 		return "AlterISR"
+	case 57:
+		return "UpdateFeatures"
 	}
 }
