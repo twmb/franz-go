@@ -1,0 +1,138 @@
+// JoinGroupRequest issues a request to join a Kafka group. This will create a
+// group if one does not exist. If joining an existing group, this may trigger
+// a group rebalance.
+//
+// This will trigger a group rebalance if the request is from the group leader,
+// or if the request is from a group member with different metadata, or if the
+// request is with a new group member.
+//
+// Version 4 introduced replying to joins of existing groups with
+// MEMBER_ID_REQUIRED, which requires re-issuing the join group with the
+// returned member ID. See KIP-394 for more details.
+//
+// Version 5 introduced InstanceID, allowing for more "static" membership.
+// See KIP-345 for more details.
+JoinGroupRequest => key 11, max version 7, flexible v6+, group coordinator
+  // Group is the group to join.
+  Group: string
+  // SessionTimeoutMillis is how long a member in the group can go between
+  // heartbeats. If a member does not send a heartbeat within this timeout,
+  // the broker will remove the member from the group and initiate a rebalance.
+  SessionTimeoutMillis: int32
+  // RebalanceTimeoutMillis is how long the broker waits for members to join a group
+  // once a rebalance begins. Kafka waits for the longest rebalance of all
+  // members in the group. Member sessions are still alive; heartbeats will be
+  // replied to with REBALANCE_IN_PROGRESS. Those members must transition to
+  // joining within this rebalance timeout. Members that do not rejoin within
+  // this timeout will be removed from the group. Members must commit offsets
+  // within this timeout.
+  //
+  // The first join for a new group has a 3 second grace period for other
+  // members to join; this grace period is extended until the RebalanceTimeoutMillis
+  // is up or until 3 seconds lapse with no new members.
+  RebalanceTimeoutMillis: int32(-1) // v1+
+  // MemberID is the member ID to join the group with. When joining a group for
+  // the first time, use the empty string. The response will contain the member
+  // ID that should be used going forward.
+  MemberID: string
+  // InstanceID is a user configured ID that is used for making a group
+  // member "static", allowing many rebalances to be avoided.
+  InstanceID: nullable-string // v5+
+  // ProtocolType is the "type" of protocol being used for the join group.
+  // The initial group creation sets the type; all additional members must
+  // have the same type or they will be rejected.
+  //
+  // This is completely arbitrary, but the Java client and everything else
+  // uses "consumer" as the protocol type.
+  ProtocolType: string
+  // Protocols contains arbitrary information that group members use
+  // for rebalancing. All group members must agree on at least one protocol
+  // name.
+  Protocols: [=>]
+    // Name is a name of a protocol. This is arbitrary, but is used
+    // in the official client to agree on a partition balancing strategy.
+    //
+    // The official client uses range, roundrobin, or sticky (which was
+    // introduced in KIP-54).
+    Name: string
+    // Metadata is arbitrary information to pass along with this
+    // protocol name for this member.
+    //
+    // Note that while this is not documented in any protocol page,
+    // this is usually a serialized GroupMemberMetadata as described in
+    // https://cwiki.apache.org/confluence/display/KAFKA/Kafka+Client-side+Assignment+Proposal.
+    //
+    // The protocol metadata is where group members will communicate which
+    // topics they collectively as a group want to consume.
+    Metadata: bytes
+
+// JoinGroupResponse is returned from a JoinGroupRequest.
+JoinGroupResponse =>
+  // ThrottleMillis is how long of a throttle Kafka will apply to the client
+  // after this request.
+  // For Kafka < 2.0.0, the throttle is applied before issuing a response.
+  // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
+  ThrottleMillis: int32 // v2+
+  // ErrorCode is the error for the join group request.
+  //
+  // GROUP_AUTHORIZATION_FAILED is returned if the client is not authorized
+  // to the group (no read perms).
+  //
+  // INVALID_GROUP_ID is returned in the requested group ID is invalid.
+  //
+  // COORDINATOR_NOT_AVAILABLE is returned if the coordinator is not available
+  // (due to the requested broker shutting down or it has not completed startup).
+  //
+  // COORDINATOR_LOAD_IN_PROGRESS is returned if the group is loading.
+  //
+  // NOT_COORDINATOR is returned if the requested broker is not the coordinator
+  // for the requested group.
+  //
+  // INVALID_SESSION_TIMEOUT is returned if the requested SessionTimeout is
+  // not within the broker's group.{min,max}.session.timeout.ms.
+  //
+  // INCONSISTENT_GROUP_PROTOCOL is returned if the requested protocols are
+  // incompatible with the existing group member's protocols, or if the join
+  // was for a new group but contained no protocols.
+  //
+  // UNKNOWN_MEMBER_ID is returned is the requested group is dead (likely
+  // just migrated to another coordinator or the group is temporarily unstable),
+  // or if the request was for a new group but contained a non-empty member ID,
+  // or if the group does not have the requested member ID (and the client must
+  // do the new-join-group dance).
+  //
+  // MEMBER_ID_REQUIRED is returned on the initial join of an existing group.
+  // This error was proposed in KIP-394 and introduced in Kafka 2.2.0 to
+  // prevent flaky clients from continually triggering rebalances and prevent
+  // these clients from consuming RAM with metadata. If a client sees
+  // this error, it should re-issue the join with the MemberID in the response.
+  // Non-flaky clients will join with this new member ID, but flaky clients
+  // will not join quickly enough before the pending member ID is rotated out
+  // due to hitting the session.timeout.ms.
+  //
+  // GROUP_MAX_SIZE_REACHED is returned as of Kafka 2.2.0 if the group has
+  // reached a broker's group.max.size.
+  ErrorCode: int16
+  // Generation is the current "generation" of this group.
+  Generation: int32(-1)
+  // ProtocolType is the "type" of protocol being used for this group.
+  ProtocolType: nullable-string // v7+
+  // Protocol is the agreed upon protocol name (i.e. "sticky", "range").
+  //
+  // v7 of this response changed this field to be nullable.
+  Protocol: nullable-string-v7+
+  // LeaderID is the leader member.
+  LeaderID: string
+  // MemberID is the member of the receiving client.
+  MemberID: string
+  // Members contains all other members of this group. Only the group leader
+  // receives the members. The leader is responsible for balancing subscribed
+  // topic partitions and replying appropriately in a SyncGroup request.
+  Members: [=>]
+    // MemberID is a member in this group.
+    MemberID: string
+    // InstanceID is an instance ID of a member in this group (KIP-345).
+    InstanceID: nullable-string // v5+
+    // ProtocolMetadata is the metadata for this member for this protocol.
+    // This is usually of type GroupMemberMetadata.
+    ProtocolMetadata: bytes

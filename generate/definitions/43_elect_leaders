@@ -1,0 +1,60 @@
+// ElectLeadersRequest begins a leader election for all given topic
+// partitions. This request was added in Kafka 2.2.0 to replace the zookeeper
+// only option of triggering leader elections before. See KIP-183 for more
+// details. KIP-460 introduced the ElectionType field with Kafka 2.4.0.
+ElectLeadersRequest => key 43, max version 2, flexible v2+, admin
+  // ElectionType is the type of election to conduct. 0 elects the preferred
+  // replica, 1 elects the first live replica if there are no in-sync replicas
+  // (i.e., unclean leader election).
+  ElectionType: int8 // v1+
+  // Topics is an array of topics and corresponding partitions to
+  // trigger leader elections for, or null for all.
+  Topics: nullable[=>]
+    // Topic is a topic to trigger leader elections for (but only for the
+    // partitions below).
+    Topic: string
+    // Partitions is an array of partitions in a topic to trigger leader
+    // elections for.
+    Partitions: [int32]
+  // TimeoutMillis is how long to wait for the response. This limits how long to
+  // wait since responses are not sent until election results are complete.
+  TimeoutMillis: int32(60000)
+
+// ElectLeadersResponse is a response for an ElectLeadersRequest.
+ElectLeadersResponse =>
+  // ThrottleMillis is how long of a throttle Kafka will apply to the client
+  // after responding to this request.
+  ThrottleMillis: int32
+  // ErrorCode is any error that applies to all partitions.
+  //
+  // CLUSTER_AUTHORIZATION_FAILED is returned if the client is not
+  // authorized to reassign partitions.
+  ErrorCode: int16 // v1+
+  // Topics contains leader election results for each requested topic.
+  Topics: [=>]
+    // Topic is topic for the given partition results below.
+    Topic: string
+    // Partitions contains election results for a topic's partitions.
+    Partitions: [=>]
+      // Partition is the partition for this result.
+      Partition: int32
+      // ErrorCode is the error code returned for this topic/partition leader
+      // election.
+      //
+      // CLUSTER_AUTHORIZATION_FAILED is returned if the client is not
+      // authorized to trigger leader elections.
+      //
+      // NOT_CONTROLLER is returned if the request was not issued to a Kafka
+      // controller.
+      //
+      // UNKNOWN_TOPIC_OR_PARTITION is returned if the topic/partition does
+      // not exist on any broker in the cluster (this is slightly different
+      // from the usual meaning of a single broker not knowing of the topic
+      // partition).
+      //
+      // PREFERRED_LEADER_NOT_AVAILABLE is returned if the preferred leader
+      // could not be elected (for example, the preferred leader was not in
+      // the ISR).
+      ErrorCode: int16
+      // ErrorMessage is an informative message if the leader election failed.
+      ErrorMessage: nullable-string

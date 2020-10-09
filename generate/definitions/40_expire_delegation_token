@@ -1,0 +1,28 @@
+// ExpireDelegationTokenRequest is a request to change the expiry timestamp
+// of a delegation token. Note that a client using a token cannot expire its
+// own token.
+ExpireDelegationTokenRequest => key 40, max version 2, flexible v2+
+  // HMAC is the HMAC of the token to change the expiry timestamp of.
+  HMAC: bytes
+  // ExpiryPeriodMillis changes the delegation token's expiry timestamp to
+  // now + expiry time millis. This can be used to force tokens to expiry
+  // quickly, or to allow tokens a grace period before expiry. This can only
+  // change the final expiry timestamp down; you cannot add enough time that
+  // would increase the expiry timestamp.
+  //
+  // Note that you can change the expiry timestamp down and then back up, so
+  // long as you change it back up before the timestamp expires.
+  ExpiryPeriodMillis: int64
+
+// ExpireDelegationTokenResponse is a response to an ExpireDelegationTokenRequest.
+ExpireDelegationTokenResponse =>
+  // ErrorCode is any error that caused the request to fail.
+  ErrorCode: int16
+  // ExpiryTimestamp is the new timestamp at which the delegation token will
+  // expire.
+  ExpiryTimestamp: int64
+  // ThrottleMillis is how long of a throttle Kafka will apply to the client
+  // after this request.
+  // For Kafka < 2.0.0, the throttle is applied before issuing a response.
+  // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
+  ThrottleMillis: int32

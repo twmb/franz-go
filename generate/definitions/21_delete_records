@@ -1,0 +1,71 @@
+// DeleteRecordsRequest is an admin request to delete records from Kafka.
+// This was added for KIP-107.
+//
+// To delete records, Kafka sets the LastStableOffset for partitions to
+// the requested offset. All segments whose max partition is before the
+// requested offset are deleted, and any records within the segment before
+// the requested offset can no longer be read.
+//
+// This request must be issued to the correct brokers that own the partitions
+// you intend to delete records for.
+DeleteRecordsRequest => key 21, max version 2, flexible v2+
+  // Topics contains topics for which to delete records from.
+  Topics: [=>]
+    // Topic is a topic to delete records from.
+    Topic: string
+    // Partitions contains partitions to delete records from.
+    Partitions: [=>]
+      // Partition is a partition to delete records from.
+      Partition: int32
+      // Offset is the offset to set the partition's low watermark (start
+      // offset) to. After a successful response, all records before this
+      // offset are considered deleted and are no longer readable.
+      //
+      // To delete all records, use -1, which is mapped to the partition's
+      // current high watermark.
+      Offset: int64
+  // TimeoutMillis is how long to wait for a response before Kafka will return.
+  // Kafka waits for all replicas to respond to the delete reords request;
+  // any partition that all replicas do not reply to within this limit will
+  // have a timeout error.
+  TimeoutMillis: int32
+
+// DeleteRecordsResponse is returned from a DeleteRecordsRequest.
+DeleteRecordsResponse =>
+  // ThrottleMillis is how long of a throttle Kafka will apply to the client
+  // after this request.
+  // For Kafka < 2.0.0, the throttle is applied before issuing a response.
+  // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
+  ThrottleMillis: int32
+  // Topics contains responses for each topic in the delete records request.
+  Topics: [=>]
+    // Topic is the topic this response corresponds to.
+    Topic: string
+    // Partitions contains responses for each partition in a requested topic
+    // in the delete records request.
+    Partitions: [=>]
+      // Partition is the partition this response corresponds to.
+      Partition: int32
+      // LowWatermark is the new earliest offset for this partition.
+      LowWatermark: int64
+      // ErrorCode is the error code returned for a given partition in
+      // the delete request.
+      //
+      // TOPIC_AUTHORIZATION_FAILED is returned for all partitions if the
+      // client is not authorized to delete records.
+      //
+      // UNKNOWN_TOPIC_OR_PARTITION is returned for all partitions that
+      // the requested broker does not know of.
+      //
+      // NOT_LEADER_FOR_PARTITION is returned for partitions that the
+      // requested broker is not a leader of.
+      //
+      // OFFSET_OUT_OF_RANGE is returned if the requested offset is
+      // negative or higher than the current high watermark.
+      //
+      // POLICY_VIOLATION is returned if records cannot be deleted due to
+      // broker configuration.
+      //
+      // KAFKA_STORAGE_EXCEPTION is returned if the partition is in an
+      // offline log directory.
+      ErrorCode: int16

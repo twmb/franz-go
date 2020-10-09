@@ -1,0 +1,86 @@
+// DescribeACLsRequest describes ACLs. Describing ACLs works on a filter basis:
+// anything that matches the filter is described. Note that there are two
+// "types" of filters in this request: the resource filter and the entry
+// filter, with entries corresponding to users. The first three fields form the
+// resource filter, the last four the entry filter.
+DescribeACLsRequest => key 29, max version 2, flexible v2+
+  // ResourceType is the type of resource to describe.
+  //
+  // UNKNOWN, 0, is unknown; you do not describe unknown types. Kafka replies
+  // with unknown if it does not understand your type. ANY, 1 will match any
+  // other type.
+  //
+  // Past these two, the following types filter for an individual type:
+  // TOPIC is 2, GROUP is 3, CLUSTER is 4, TRANSACTIONAL_ID is 5, and
+  // DELEGATION_TOKEN is 6.
+  ResourceType: int8
+  // ResourceName is the name to filter out. For the CLUSTER resource type,
+  // this must be "kafka-cluster".
+  ResourceName: nullable-string
+  // ResourcePatternType is how ResourceName is understood. UNKNOWN is 0 and is
+  // meaningless in the request.
+  //
+  // MATCH is 1, which will match anything.
+  //
+  // LITERAL is 2, meaning the name must be an exact match.
+  //
+  // PREFIXED is 3, meaning a resource name must have our requested resource
+  // name as a prefix. That is, topic "foobar" will match "foo".
+  //
+  // This field was added with Kafka 2.0.0 for KIP-290.
+  ResourcePatternType: int8(3) // v1+
+  // Principal is the user to filter for. In Kafka with the simple authorizor,
+  // all principals begin with "User:". Pluggable authorizors are allowed, but
+  // Kafka still expects principals to lead with a principal type ("User") and
+  // have a colon separating the principal name ("bob" in "User:bob").
+  Principal: nullable-string
+  // Host is a host to filter for.
+  Host: nullable-string
+  // Operation is an operation to filter for. UNKNOWN is 0.
+  //
+  // ANY is 1 and matches anything, otherwise... ALL is 2 and matches anything
+  // granted ALL permissions, READ is 3, WRITE is 4, CREATE is 5, DELETE is 6,
+  // ALTER is 7 DESCRIBE is 8, CLUSTER_ACTION is 9, DESCRIBE_CONFIGS is 10,
+  // ALTER_CONFIGS is 11, and IDEMPOTENT_WRITE is 12.
+  //
+  // Note that READ, WRITE, DELETE, and ALTER imply DESCRIBE, and ALTER_CONFIGS
+  // implies DESCRIBE_CONFIGS.
+  Operation: int8
+  // PermissionType is the permission type to filter for. UNKNOWN is 0.
+  //
+  // ANY is 1 and matches anything, otherwise DENY (2) matches all deny
+  // permissions and ALLOW (3) matches all allow permissions.
+  PermissionType: int8
+
+// DescribeACLsResponse is a response to a describe acls request.
+DescribeACLsResponse =>
+  // ThrottleMillis is how long of a throttle Kafka will apply to the client
+  // after responding to this request.
+  ThrottleMillis: int32
+  // ErrorCode is the error code returned on request failure.
+  //
+  // SECURITY_DISABLED is returned if there is no authorizer configured on the
+  // broker.
+  //
+  // There can be other authorization failures.
+  ErrorCode: int16
+  // ErrorMessage is a message for an error.
+  ErrorMessage: nullable-string
+  // Resources are the describe resources.
+  Resources: [=>]
+    // ResourceType is the resource type being described.
+    ResourceType: int8
+    // ResourceName is the resource name being described.
+    ResourceName: string
+    // ResourcePatternType is the pattern type being described.
+    ResourcePatternType: int8(3) // v1+
+    // ACLs contains users / entries being described.
+    ACLs: [=>]
+      // Principal is who this ACL applies to.
+      Principal: string
+      // Host is on which host this ACL applies.
+      Host: string
+      // Operation is the operation being described.
+      Operation: int8
+      // PermissionType is the permission being described.
+      PermissionType: int8

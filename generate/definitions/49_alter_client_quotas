@@ -1,0 +1,40 @@
+// AlterClientQuotaRequest, proposed in KIP-546 and introduced with Kafka 2.6.0,
+// provides a way to alter client quotas.
+AlterClientQuotasRequest => key 49, max version 0
+  // Entries are quota configuration entries to alter.
+  Entries: [=>Entry]
+    // Entity contains the components of a quota entity to alter.
+    Entity: [=>]
+      // Type is the entity component's type; e.g. "client-id" or "user".
+      Type: string
+      // Name is the name of the entity, or null for the default.
+      Name: nullable-string
+    // Ops contains quota configuration entries to alter.
+    Ops: [=>]
+      // Key is the quota configuration key to alter.
+      Key: string
+      // Value is the value to set; ignored if remove is true.
+      Value: float64
+      // Remove is whether the quota configuration value should be removed or set.
+      Remove: bool
+  // ValidateOnly is makes this request a dry-run; the alteration is validated
+  // but not performed.
+  ValidateOnly: bool
+
+// AlterClientQuotasResponse is a response to an AlterClientQuotasRequest.
+AlterClientQuotasResponse =>
+  // ThrottleMillis is how long of a throttle Kafka will apply to the client
+  // after responding to this request.
+  ThrottleMillis: int32
+  // Entries contains results for the alter request.
+  Entries: [=>Entry]
+    // ErrorCode is the error code for an alter on a matched entity.
+    ErrorCode: int16
+    // ErrorMessage is an informative message if the alter on this entity failed.
+    ErrorMessage: nullable-string
+    // Entity contains the components of a matched entity.
+    Entity: [=>]
+      // Type is the entity component's type; e.g. "client-id" or "user".
+      Type: string
+      // Name is the name of the entity, or null for the default.
+      Name: nullable-string

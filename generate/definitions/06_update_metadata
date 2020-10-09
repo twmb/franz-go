@@ -1,0 +1,43 @@
+UpdateMetadataRequestTopicPartition => not top level, no encoding
+  Topic: string // v0-v4
+  Partition: int32
+  ControllerEpoch: int32
+  Leader: int32
+  LeaderEpoch: int32
+  ISR: [int32]
+  ZKVersion: int32
+  Replicas: [int32]
+  OfflineReplicas: [int32]
+
+// UpdateMetadataRequest is an advanced request that brokers use to
+// issue metadata updates to each other.
+//
+// As this is an advanced request and there is little reason to issue it as a
+// client, this request is undocumented.
+//
+// Version 1 changed the layout of the live brokers.
+//
+// Kafka 2.2.0 introduced version 5, proposed in KIP-380, which changed the
+// layout of the struct to be more memory efficient.
+UpdateMetadataRequest => key 6, max version 6, flexible v6+
+  ControllerID: int32
+  ControllerEpoch: int32
+  BrokerEpoch: int64(-1) // v5+
+  PartitionStates: [UpdateMetadataRequestTopicPartition] // v0-v4
+  TopicStates: [=>] // v5+
+    Topic: string
+    PartitionStates: [UpdateMetadataRequestTopicPartition]
+  LiveBrokers: [=>]
+    ID: int32
+    Host: string // v0-v0
+    Port: int32 // v0-v0
+    Endpoints: [=>] // v1+
+      Port: int32
+      Host: string
+      ListenerName: string // v3+
+      SecurityProtocol: int16
+    Rack: nullable-string // v2+
+
+// UpdateMetadataResponses is returned from an UpdateMetadataRequest.
+UpdateMetadataResponse =>
+  ErrorCode: int16

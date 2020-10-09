@@ -1,0 +1,69 @@
+// AddPartitionsToTxnRequest begins the producer side of a transaction for all
+// partitions in the request. Before producing any records to a partition in
+// the transaction, that partition must have been added to the transaction with
+// this request.
+AddPartitionsToTxnRequest => key 24, max version 2, txn coordinator
+  // TransactionalID is the transactional ID to use for this request.
+  TransactionalID: string
+  // ProducerID is the producer ID of the client for this transactional ID
+  // as received from InitProducerID.
+  ProducerID: int64
+  // ProducerEpoch is the producer epoch of the client for this transactional ID
+  // as received from InitProducerID.
+  ProducerEpoch: int16
+  // Topics are topics to add as part of the producer side of a transaction.
+  Topics: [=>]
+    // Topic is a topic name.
+    Topic: string
+    // Partitions are partitions within a topic to add as part of the producer
+    // side of a transaction.
+    Partitions: [int32]
+
+// AddPartitionsToTxnResponse is a response to an AddPartitionsToTxnRequest.
+AddPartitionsToTxnResponse =>
+  // ThrottleMillis is how long of a throttle Kafka will apply to the client
+  // after this request.
+  // For Kafka < 2.0.0, the throttle is applied before issuing a response.
+  // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
+  ThrottleMillis: int32
+  // Topics are responses to topics in the request.
+  Topics: [=>]
+    // Topic is a topic being responded to.
+    Topic: string
+    // Partitions are responses to partitions in the request.
+    Partitions: [=>]
+      // Partition is a partition being responded to.
+      Partition: int32
+      // ErrorCode is any error for this topic/partition commit.
+      //
+      // TRANSACTIONAL_ID_AUTHORIZATION_FAILED is returned if the client is
+      // not authorized for write with transactional IDs with the requested
+      // transactional ID.
+      //
+      // TOPIC_AUTHORIZATION_FAILED is returned for all topics that the client
+      // is not authorized to write to.
+      //
+      // UNKNOWN_TOPIC_OR_PARTITION is returned for all topics or partitions
+      // that the broker does not know of.
+      //
+      // OPERATION_NOT_ATTEMPTED is returned if any of the above errors occur
+      // for all partitions that did not have the above errors.
+      //
+      // INVALID_REQUEST is returned if the transactional ID is invalid.
+      //
+      // COORDINATOR_LOAD_IN_PROGRESS is returned if the coordinator for this
+      // transactional ID is still loading.
+      //
+      // NOT_COORDINATOR is returned if the broker is not the coordinator for
+      // this transactional ID.
+      //
+      // INVALID_PRODUCER_ID_MAPPING is returned if the produce request used
+      // a producer ID that is not tied to the transactional ID (i.e., mismatch
+      // from what was returned from InitProducerID).
+      //
+      // INVALID_PRODUCER_EPOCH is returned if the requested epoch does not match
+      // the broker epoch for this transactional ID.
+      //
+      // CONCURRENT_TRANSACTIONS is returned if there is an ongoing transaction for
+      // this transactional ID, if the producer ID and epoch matches the broker's.
+      ErrorCode: int16

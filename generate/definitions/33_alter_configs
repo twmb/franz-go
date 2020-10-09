@@ -1,0 +1,72 @@
+// AlterConfigsRequest issues a request to alter either topic or broker
+// configs.
+//
+// Note that to alter configs, you must specify the whole config on every
+// request. All existing non-static values will be removed. This means that
+// to add one key/value to a config, you must describe the config and then
+// issue an alter request with the current config with the new key value.
+// This also means that dynamic sensitive values, which are not returned
+// in describe configs, will be lost.
+//
+// To fix this problem, the AlterConfigs request / response was deprecated
+// in Kafka 2.3.0 in favor of the new IncrementalAlterConfigs request / response.
+// See KIP-339 for more details.
+AlterConfigsRequest => key 33, max version 1
+  // Resources is an array of configs to alter.
+  Resources: [=>]
+    // ResourceType is an enum corresponding to the type of config to alter.
+    // The only two valid values are 2 (for topic) and 4 (for broker).
+    ResourceType: int8
+    // ResourceName is the name of config to alter.
+    //
+    // If the requested type is a topic, this corresponds to a topic name.
+    //
+    // If the requested type if a broker, this should either be empty or be
+    // the ID of the broker this request is issued to. If it is empty, this
+    // updates all broker configs. If a specific ID, this updates just the
+    // broker. Using a specific ID also ensures that brokers reload config
+    // or secret files even if the file path has not changed. Lastly, password
+    // config options can only be defined on a per broker basis.
+    //
+    // If the type is broker logger, this must be a broker ID.
+    ResourceName: string
+    // Configs contains key/value config pairs to set on the resource.
+    Configs: [=>]
+      // Name is a key to set (e.g. segment.bytes).
+      Name: string
+      // Value is a value to set for the key (e.g. 10).
+      Value: nullable-string
+  // ValidateOnly validates the request but does not apply it.
+  ValidateOnly: bool
+
+// AlterConfigsResponse is returned from an AlterConfigsRequest.
+AlterConfigsResponse =>
+  // ThrottleMillis is how long of a throttle Kafka will apply to the client
+  // after this request.
+  // For Kafka < 2.0.0, the throttle is applied before issuing a response.
+  // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
+  ThrottleMillis: int32
+  // Resources are responses for each resource in the alter request.
+  Resources: [=>]
+    // ErrorCode is the error code returned for altering configs.
+    //
+    // CLUSTER_AUTHORIZATION_FAILED is returned if asking to alter broker
+    // configs but the client is not authorized to do so.
+    //
+    // TOPIC_AUTHORIZATION_FAILED is returned if asking to alter topic
+    // configs but the client is not authorized to do so.
+    //
+    // INVALID_TOPIC_EXCEPTION is returned if the requested topic was invalid.
+    //
+    // UNKNOWN_TOPIC_OR_PARTITION is returned if the broker does not know of
+    // the requested topic.
+    //
+    // INVALID_REQUEST is returned if the requested config is invalid or if
+    // asking Kafka to alter an invalid resource.
+    ErrorCode: int16
+    // ErrorMessage is an informative message if the alter config failed.
+    ErrorMessage: nullable-string
+    // ResourceType is the enum corresponding to the type of altered config.
+    ResourceType: int8
+    // ResourceName is the name corresponding to the alter config request.
+    ResourceName: string

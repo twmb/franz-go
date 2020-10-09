@@ -1,0 +1,39 @@
+// DeleteTopicsRequest deletes Kafka topics.
+DeleteTopicsRequest => key 20, max version 5, flexible v4+, admin
+  // Topics is an array of topics to delete.
+  Topics: [string]
+  // TimeoutMillis is the millisecond timeout of this request.
+  TimeoutMillis: int32
+
+// DeleteTopicsResponse is returned from a DeleteTopicsRequest.
+// Version 3 added the TOPIC_DELETION_DISABLED error proposed in KIP-322
+// and introduced in Kafka 2.1.0. Prior, the request timed out.
+DeleteTopicsResponse =>
+  // ThrottleMillis is how long of a throttle Kafka will apply to the client
+  // after this request.
+  // For Kafka < 2.0.0, the throttle is applied before issuing a response.
+  // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
+  ThrottleMillis: int32 // v1+
+  // Topics contains responses for each topic requested for deletion.
+  Topics: [=>]
+    // Topic is the topic requested for deletion.
+    Topic: string
+    // ErrorCode is the error code returned for an individual topic in
+    // deletion request.
+    //
+    // TOPIC_AUTHORIZATION_FAILED is returned if the client is not authorized
+    // to delete a topic.
+    //
+    // UNKNOWN_TOPIC_OR_PARTITION is returned if the broker does not know of
+    // the topic.
+    //
+    // NOT_CONTROLLER is returned if the request was not issued to a Kafka
+    // controller.
+    //
+    // TOPIC_DELETION_DISABLED is returned for deletion requests version 3+
+    // and brokers >= 2.1.0. INVALID_REQUEST is issued for request versions
+    // 0-2 against brokers >= 2.1.0. Otherwise, the request hangs until it
+    // times out.
+    ErrorCode: int16
+    // ErrorMessage is a message for an error.
+    ErrorMessage: nullable-string // v5+

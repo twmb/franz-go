@@ -1,0 +1,56 @@
+// InitProducerIDRequest initializes a producer ID for idempotent transactions,
+// and if using transactions, a producer epoch. This is the first request
+// necessary to begin idempotent producing or transactions.
+//
+// Note that you do not need to go to a txn coordinator if you are initializing
+// a producer id without a transactional id.
+InitProducerIDRequest => key 22, max version 4, flexible v2+, txn coordinator
+  // TransactionalID is the ID to use for transactions if using transactions.
+  TransactionalID: nullable-string
+  // TransactionTimeoutMillis is how long a transaction is allowed before
+  // EndTxn is required.
+  //
+  // Note that this timeout only begins on the first AddPartitionsToTxn
+  // request.
+  TransactionTimeoutMillis: int32
+  // ProducerID, added for KIP-360, is the current producer ID. This allows
+  // the client to potentially recover on UNKNOWN_PRODUCER_ID errors.
+  ProducerID: int64(-1) // v3+
+  // The producer's current epoch. This will be checked against the producer
+  // epoch on the broker, and the request will return an error if they do not
+  // match. Also added for KIP-360.
+  ProducerEpoch: int16(-1) // v3+
+
+// InitProducerIDResponse is returned for an InitProducerIDRequest.
+InitProducerIDResponse =>
+  // ThrottleMillis is how long of a throttle Kafka will apply to the client
+  // after this request.
+  // For Kafka < 2.0.0, the throttle is applied before issuing a response.
+  // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
+  ThrottleMillis: int32
+  // CLUSTER_AUTHORIZATION_FAILED is returned when not using transactions if
+  // the client is not authorized for idempotent_write on cluster.
+  //
+  // TRANSACTIONAL_ID_AUTHORIZATION_FAILED is returned when using transactions
+  // if the client is not authorized to write on transactional_id.
+  //
+  // INVALID_REQUEST is returned if using transactions and the transactional id
+  // is an empty, non-null string
+  //
+  // COORDINATOR_LOAD_IN_PROGRESS is returned if the coordinator for this
+  // transactional ID is still loading.
+  //
+  // NOT_COORDINATOR is returned if the broker is not the coordinator for
+  // this transactional ID.
+  //
+  // INVALID_TRANSACTION_TIMEOUT is returned if using transactions and the timeout
+  // is equal to over over transaction.max.timeout.ms or under 0.
+  //
+  // CONCURRENT_TRANSACTIONS is returned if there is an ongoing transaction
+  // that is completing at the time this init is called.
+  ErrorCode: int16
+  // ProducerID is the next producer ID that Kafka generated. This ID is used
+  // to ensure repeated produce requests do not result in duplicate records.
+  ProducerID: int64(-1)
+  // ProducerEpoch is the producer epoch to use for transactions.
+  ProducerEpoch: int16

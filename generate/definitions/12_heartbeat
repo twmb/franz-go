@@ -1,0 +1,39 @@
+// HeartbeatRequest issues a heartbeat for a member in a group, ensuring that
+// Kafka does not expire the member from the group.
+HeartbeatRequest => key 12, max version 4, flexible v4+, group coordinator
+  // Group is the group ID this heartbeat is for.
+  Group: string
+  // Generation is the group generation this heartbeat is for.
+  Generation: int32
+  // MemberID is the member ID this member is for.
+  MemberID: string
+  // InstanceID is the instance ID of this member in the group (KIP-345).
+  InstanceID: nullable-string // v3+
+
+// HeartbeatResponse is returned from a HeartbeatRequest.
+HeartbeatResponse =>
+  // ThrottleMillis is how long of a throttle Kafka will apply to the client
+  // after this request.
+  // For Kafka < 2.0.0, the throttle is applied before issuing a response.
+  // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
+  ThrottleMillis: int32 // v1+
+  // ErrorCode is the error for the heartbeat request.
+  //
+  // GROUP_AUTHORIZATION_FAILED is returned if the client is not authorized
+  // to the group (no read perms).
+  //
+  // INVALID_GROUP_ID is returned in the requested group ID is invalid.
+  //
+  // COORDINATOR_NOT_AVAILABLE is returned if the coordinator is not available
+  // (due to the requested broker shutting down or it has not completed startup).
+  //
+  // NOT_COORDINATOR is returned if the requested broker is not the coordinator
+  // for the requested group.
+  //
+  // UNKNOWN_MEMBER_ID is returned if the member ID is not a part of the group,
+  // or if the group is empty or dead.
+  //
+  // ILLEGAL_GENERATION is returned if the request's generation ID is invalid.
+  //
+  // REBALANCE_IN_PROGRESS is returned if the group is currently rebalancing.
+  ErrorCode: int16

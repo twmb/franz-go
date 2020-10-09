@@ -1,0 +1,42 @@
+// EndTxnRequest ends a transaction. This should be called after
+// TxnOffsetCommitRequest.
+EndTxnRequest => key 26, max version 2, txn coordinator
+  // TransactionalID is the transactional ID to use for this request.
+  TransactionalID: string
+  // ProducerID is the producer ID of the client for this transactional ID
+  // as received from InitProducerID.
+  ProducerID: int64
+  // ProducerEpoch is the producer epoch of the client for this transactional ID
+  // as received from InitProducerID.
+  ProducerEpoch: int16
+  // Commit is whether to commit this transaction: true for yes, false for abort.
+  Commit: bool
+
+// EndTxnResponse is a response for an EndTxnRequest.
+EndTxnResponse =>
+  // ThrottleMillis is how long of a throttle Kafka will apply to the client
+  // after this request.
+  // For Kafka < 2.0.0, the throttle is applied before issuing a response.
+  // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
+  ThrottleMillis: int32
+  // ErrorCode is any error for this topic/partition commit.
+  //
+  // TRANSACTIONAL_ID_AUTHORIZATION_FAILED is returned if the client is
+  // not authorized for write with transactional IDs with the requested
+  // transactional ID.
+  //
+  // INVALID_REQUEST is returned if the transactional ID is invalid.
+  //
+  // INVALID_PRODUCER_ID_MAPPING is returned if the produce request used
+  // a producer ID that is not tied to the transactional ID (i.e., mismatch
+  // from what was returned from InitProducerID).
+  //
+  // INVALID_PRODUCER_EPOCH is returned if the requested epoch does not match
+  // the broker epoch for this transactional ID.
+  //
+  // CONCURRENT_TRANSACTIONS is returned if there is an ongoing transaction for
+  // this transactional ID, if the producer ID and epoch matches the broker's.
+  //
+  // INVALID_TXN_STATE is returned if this request is attempted at the wrong
+  // time (given the order of how transaction requests should go).
+  ErrorCode: int16

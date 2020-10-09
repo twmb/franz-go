@@ -1,0 +1,46 @@
+// LeaderAndISRRequestTopicPartition is a common struct that is used across
+// different versions of LeaderAndISRRequest.
+LeaderAndISRRequestTopicPartition => not top level, no encoding
+  Topic: string // v0-v1
+  Partition: int32
+  ControllerEpoch: int32
+  Leader: int32
+  LeaderEpoch: int32
+  ISR: [int32]
+  ZKVersion: int32
+  Replicas: [int32]
+  AddingReplicas: [int32] // v3+
+  RemovingReplicas: [int32] // v3+
+  IsNew: bool // v1+
+
+
+// LeaderAndISRRequest is an advanced request that controller brokers use
+// to broadcast state to other brokers. Manually using this request is a
+// great way to break your cluster.
+//
+// As this is an advanced request and there is little reason to issue it as a
+// client, this request is undocumented.
+//
+// Kafka 1.0.0 introduced version 1. Kafka 2.2.0 introduced version 2, proposed
+// in KIP-380, which changed the layout of the struct to be more memory
+// efficient. Kafka 2.4.0 introduced version 3 with KIP-455.
+LeaderAndISRRequest => key 4, max version 4, flexible v4+
+  ControllerID: int32
+  ControllerEpoch: int32
+  BrokerEpoch: int64(-1) // v2+
+  PartitionStates: [LeaderAndISRRequestTopicPartition] // v0-v1
+  TopicStates: [=>] // v2+
+    Topic: string
+    PartitionStates: [LeaderAndISRRequestTopicPartition]
+  LiveLeaders: [=>]
+    BrokerID: int32
+    Host: string
+    Port: int32
+
+// LeaderAndISRResponse is returned from a LeaderAndISRRequest.
+LeaderAndISRResponse =>
+  ErrorCode: int16
+  Partitions: [=>]
+    Topic: string
+    Partition: int32
+    ErrorCode: int16

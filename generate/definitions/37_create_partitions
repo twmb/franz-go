@@ -1,0 +1,66 @@
+// CreatePartitionsRequest creates additional partitions for topics.
+CreatePartitionsRequest => key 37, max version 3, flexible v2+, admin
+  // Topics contains topics to create partitions for.
+  Topics: [=>]
+    // Topic is a topic for which to create additional partitions for.
+    Topic: string
+    // Count is the final count of partitions this topic must have after this
+    // request. This must be greater than the current number of partitions.
+    Count: int32
+    // Assignment is a two-level array, the first corresponding to new
+    // partitions, the second contining broker IDs for where new partition
+    // replicas should live.
+    //
+    // The second level, the replicas, cannot have duplicate broker IDs (i.e.
+    // you cannot replicate a single partition twice on the same broker).
+    // Additionally, the number of replicas must match the current number of
+    // replicas per partition on the topic.
+    //
+    // The first level's length must be equal to the delta of Count and the
+    // current number of partitions.
+    Assignment: nullable[=>]
+      // Replicas are replicas to assign a new partition to.
+      Replicas: [int32]
+  // TimeoutMillis is how long to allow for this request.
+  TimeoutMillis: int32
+  // ValidateOnly is makes this request a dry-run; everything is validated but
+  // no partitions are actually created.
+  ValidateOnly: bool
+
+// CreatePartitionsResponse is returned from a CreatePartitionsRequest.
+CreatePartitionsResponse =>
+  // ThrottleMillis is how long of a throttle Kafka will apply to the client
+  // after this request.
+  // For Kafka < 2.0.0, the throttle is applied before issuing a response.
+  // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
+  ThrottleMillis: int32
+  // Topics is a response to each topic in the creation request.
+  Topics: [=>]
+    // Topic is the topic that partitions were requested to be made for.
+    Topic: string
+    // ErrorCode is the error code returned for each topic in the request.
+    //
+    // NOT_CONTROLLER is returned if the request was not issued to a Kafka
+    // controller.
+    //
+    // TOPIC_AUTHORIZATION_FAILED is returned if the client is not authorized
+    // to create partitions for a topic.
+    //
+    // INVALID_REQUEST is returned for duplicate topics in the request.
+    //
+    // INVALID_TOPIC_EXCEPTION is returned if the topic is queued for deletion.
+    //
+    // REASSIGNMENT_IN_PROGRESS is returned if the request was issued while
+    // partitions were being reassigned.
+    //
+    // UNKNOWN_TOPIC_OR_PARTITION is returned if the broker does not know of
+    // the topic for which to create partitions.
+    //
+    // INVALID_PARTITIONS is returned if the request would drop the total
+    // count of partitions down, or if the request would not add any more
+    // partitions, or if the request uses unknown brokers, or if the request
+    // assigns a different number of brokers than the increase in the
+    // partition count.
+    ErrorCode: int16
+    // ErrorMessage is an informative message if the topic creation failed.
+    ErrorMessage: nullable-string

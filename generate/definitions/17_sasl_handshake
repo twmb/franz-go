@@ -1,0 +1,22 @@
+// SASLHandshakeRequest begins the sasl authentication flow. Note that Kerberos
+// GSSAPI authentication has its own unique flow.
+SASLHandshakeRequest => key 17, max version 1
+  // Mechanism is the mechanism to use for the sasl handshake (e.g., "PLAIN").
+  //
+  // For version 0, if this mechanism is supported, it is expected that the
+  // client immediately authenticates using this mechanism. Note that the
+  // only mechanism exclusive to v0 is PLAIN.
+  //
+  // For version 1, if the mechanism is supported, the next request to issue
+  // is SASLHandshakeRequest.
+  Mechanism: string
+
+// SASLHandshakeResponse is returned for a SASLHandshakeRequest.
+SASLHandshakeResponse =>
+  // ErrorCode is non-zero for ILLEGAL_SASL_STATE, meaning a sasl handshake
+  // is not expected at this point in the connection, or UNSUPPORTED_SASL_MECHANISM,
+  // meaning the requested mechanism is not supported.
+  ErrorCode: int16
+  // SupportedMechanisms is the list of mechanisms supported if this request
+  // errored.
+  SupportedMechanisms: [string]

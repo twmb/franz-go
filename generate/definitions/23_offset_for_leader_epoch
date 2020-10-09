@@ -1,0 +1,82 @@
+// OffsetForLeaderEpochRequest requests log end offsets for partitions.
+//
+// Version 2, proposed in KIP-320 and introduced in Kafka 2.1.0, can be used by
+// consumers to perform more accurate offset resetting in the case of data loss.
+//
+// In support of version 2, this requires DESCRIBE on TOPIC.
+OffsetForLeaderEpochRequest => key 23, max version 3
+  // ReplicaID, added in support of KIP-392, is the broker ID of the follower,
+  // or -1 if this request is from a consumer.
+  ReplicaID: int32(-2) // v3+
+  // Topics are topics to fetch leader epoch offsets for.
+  Topics: [=>]
+    // Topic is the name of a topic.
+    Topic: string
+    // Partitions are partitions within a topic to fetch leader epoch offsets for.
+    Partitions: [=>]
+      // Partition is the number of a partition.
+      Partition: int32
+      // CurrentLeaderEpoch, proposed in KIP-320 and introduced in Kafka 2.1.0,
+      // allows brokers to check if the client is fenced (has an out of date
+      // leader) or if the client is ahead of the broker.
+      //
+      // The initial leader epoch can be determined from a MetadataResponse.
+      CurrentLeaderEpoch: int32(-1) // v2+
+      // LeaderEpoch is the epoch to fetch the end offset for.
+      LeaderEpoch: int32
+
+// OffsetForLeaderEpochResponse is returned from an OffsetForLeaderEpochRequest.
+OffsetForLeaderEpochResponse =>
+  // ThrottleMillis is how long of a throttle Kafka will apply to the client
+  // after this request.
+  ThrottleMillis: int32 // v2+
+  // Topics are responses to topics in the request.
+  Topics: [=>]
+    // Topic is the topic this response corresponds to.
+    Topic: string
+    // Partitions are responses to partitions in a topic in the request.
+    Partitions: [=>]
+      // ErrorCode is the error code returned on request failure.
+      //
+      // TOPIC_AUTHORIZATION_FAILED is returned if the client does not have
+      // the necessary permissions to issue this request.
+      //
+      // KAFKA_STORAGE_ERROR is returned if the partition is offline.
+      //
+      // NOT_LEADER_FOR_PARTITION is returned if the broker knows of the partition
+      // but does not own it.
+      //
+      // UNKNOWN_TOPIC_OR_PARTITION is returned if the broker does not know of the
+      // partition.
+      //
+      // FENCED_LEADER_EPOCH is returned if the client is using a current leader epoch
+      // older than the actual leader epoch.
+      //
+      // UNKNOWN_LEADER_EPOCH if returned if the client is using a current leader epoch
+      // that the actual leader does not know of. This could occur when the client
+      // has newer metadata than the broker when the broker just became the leader for
+      //  a replica.
+      ErrorCode: int16
+      // Partition is the partition this response is for.
+      Partition: int32
+      // LeaderEpoch is similar to the requested leader epoch, but pairs with the
+      // next field. If the requested leader epoch is unknown, this is -1. If the
+      // requested epoch had no records produced during the requested epoch, this
+      // is the first prior epoch that had records.
+      LeaderEpoch: int32(-1)
+      // EndOffset is either (1) just past the last recorded offset in the
+      // current partition if the broker leader has the same epoch as the
+      // leader epoch in the request, or (2) the beginning offset of the next
+      // epoch if the leader is past the requested epoch. The second scenario
+      // can be seen as equivalent to the first: the beginning offset of the
+      // next epoch is just past the final offset of the prior epoch.
+      //
+      // (2) allows consumers to detect data loss: if the consumer consumed
+      // past the end offset that is returned, then the consumer should reset
+      // to the returned offset and the consumer knows everything past the end
+      // offset was lost.
+      //
+      // With the prior field, consumers know that at this offset, the broker
+      // either has no more records (consumer is caught up), or the broker
+      // transitioned to a new epoch.
+      EndOffset: int64

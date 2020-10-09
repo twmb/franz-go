@@ -1,0 +1,28 @@
+// Part of KIP-595 to replace Kafka's dependence on Zookeeper with a
+// Kafka-only raft protocol,
+// BeginQuorumEpochRequest is sent by a leader (once it has enough votes)
+// to all voters in the election.
+//
+// Since this is relatively Kafka internal, most fields are left undocumented.
+BeginQuorumEpochRequest => key 53, max version 0, admin
+  ClusterID: nullable-string
+  Topics: [=>]
+    Topic: string
+    Partitions: [=>]
+      Partition: int32
+      // The ID of the newly elected leader.
+      LeaderID: int32
+      // The epoch of the newly elected leader.
+      LeaderEpoch: int32
+
+BeginQuorumEpochResponse =>
+  ErrorCode: int16
+  Topics: [=>]
+    Topic: string
+    Partitions: [=>]
+      Partition: int32
+      ErrorCode: int16
+      // The ID of the current leader, or -1 if the leader is unknown.
+      LeaderID: int32
+      // The latest known leader epoch.
+      LeaderEpoch: int32

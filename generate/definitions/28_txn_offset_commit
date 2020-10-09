@@ -1,0 +1,98 @@
+// TxnOffsetCommitRequest sends offsets that are a part of this transaction
+// to be committed once the transaction itself finishes. This effectively
+// replaces OffsetCommitRequest for when using transactions.
+TxnOffsetCommitRequest => key 28, max version 3, flexible v3+, group coordinator
+  // TransactionalID is the transactional ID to use for this request.
+  TransactionalID: string
+  // Group is the group consumed in this transaction and to be used for
+  // committing.
+  Group: string
+  // ProducerID is the producer ID of the client for this transactional ID
+  // as received from InitProducerID.
+  ProducerID: int64
+  // ProducerEpoch is the producer epoch of the client for this transactional ID
+  // as received from InitProducerID.
+  ProducerEpoch: int16
+  // Generation is the group generation this transactional offset commit request is for.
+  Generation: int32(-1) // v3+
+  // MemberID is the member ID this member is for.
+  MemberID: string // v3+
+  // InstanceID is the instance ID of this member in the group (KIP-345, KIP-447).
+  InstanceID: nullable-string // v3+
+  // Topics are topics to add for pending commits.
+  Topics: [=>]
+    // Topic is a topic to add for a pending commit.
+    Topic: string
+    // Partitions are partitions to add for pending commits.
+    Partitions: [=>]
+      // Partition is a partition to add for a pending commit.
+      Partition: int32
+      // Offset is the offset within partition to commit once EndTxnRequest is
+      // called (with commit; abort obviously aborts).
+      Offset: int64
+      // LeaderEpoch, proposed in KIP-320 and introduced in Kafka 2.1.0,
+      // allows brokers to check if the client is fenced (has an out of date
+      // leader) or is using an unknown leader.
+      //
+      // The initial leader epoch can be determined from a MetadataResponse.
+      // To skip log truncation checking, use -1.
+      LeaderEpoch: int32(-1) // v2+
+      // Metadata is optional metadata the client wants to include with this
+      // commit.
+      Metadata: nullable-string
+
+// TxnOffsetCommitResponse is a response to a TxnOffsetCommitRequest.
+TxnOffsetCommitResponse =>
+  // ThrottleMillis is how long of a throttle Kafka will apply to the client
+  // after this request.
+  // For Kafka < 2.0.0, the throttle is applied before issuing a response.
+  // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
+  ThrottleMillis: int32
+  // Topics contains responses to the topics in the request.
+  Topics: [=>]
+    // Topic is the topic this response is for.
+    Topic: string
+    // Partitions contains responses to the partitions in this topic.
+    Partitions: [=>]
+      // Partition is the partition this response is for.
+      Partition: int32
+      // ErrorCode is any error for this topic/partition commit.
+      //
+      // TRANSACTIONAL_ID_AUTHORIZATION_FAILED is returned if the client is
+      // not authorized for write with transactional IDs with the requested
+      // transactional ID.
+      //
+      // GROUP_AUTHORIZATION_FAILED is returned if the client is not authorized
+      // to read group with the requested group id.
+      //
+      // TOPIC_AUTHORIZATION_FAILED is returned for all topics that the client
+      // is not authorized to read.
+      //
+      // UNKNOWN_TOPIC_OR_PARTITION is returned for all topics or partitions
+      // that the broker does not know of.
+      //
+      // INVALID_GROUP_ID is returned if the requested group does not exist.
+      //
+      // COORDINATOR_NOT_AVAILABLE is returned if the broker is not yet fully
+      // started or is shutting down, or if the group was just deleted or is
+      // migrating to another broker.
+      //
+      // COORDINATOR_LOAD_IN_PROGRESS is returned if the group is still loading.
+      //
+      // NOT_COORDINATOR is returned if the broker is not the coordinator for
+      // the group.
+      //
+      // FENCED_INSTANCE_ID is returned if the member is fenced (another newer
+      // transactional member is using the same instance ID).
+      //
+      // UNKNOWN_MEMBER_ID is returned if the consumer group does not know of
+      // this member.
+      //
+      // ILLEGAL_GENERATION is returned if the consumer group's generation is
+      // different than the requested generation.
+      //
+      // OFFSET_METADATA_TOO_LARGE is returned if the commit metadata is too
+      // large.
+      //
+      // REBALANCE_IN_PROGRESS is returned if the group is completing a rebalance.
+      ErrorCode: int16

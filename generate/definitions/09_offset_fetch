@@ -1,0 +1,69 @@
+// OffsetFetchRequest requests the most recent committed offsets for topic
+// partitions in a group.
+OffsetFetchRequest => key 9, max version 7, flexible v6+, group coordinator
+  // Group is the group to fetch offsets for.
+  Group: string
+  // Topics contains topics to fetch offets for. Version 2+ allows this to be
+  // null to return all topics the client is authorized to describe in the group.
+  Topics: nullable-v2+[=>]
+    // Topic is a topic to fetch offsets for.
+    Topic: string
+    // Partitions in a list of partitions in a group to fetch offsets for.
+    Partitions: [int32]
+  // RequireStable signifies whether the broker should wait on returning
+  // unstable offsets, instead setting a retriable error on the relevant
+  // unstable partitions (UNSTABLE_OFFSET_COMMIT). See KIP-447 for more
+  // details.
+  RequireStable: bool // v7+
+
+// OffsetFetchResponse is returned from an OffsetFetchRequest.
+OffsetFetchResponse =>
+  // ThrottleMillis is how long of a throttle Kafka will apply to the client
+  // after this request.
+  // For Kafka < 2.0.0, the throttle is applied before issuing a response.
+  // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
+  ThrottleMillis: int32 // v3+
+  // Topics contains responses for each requested topic/partition.
+  Topics: [=>]
+    // Topic is the topic this offset fetch response corresponds to.
+    Topic: string
+    // Partitions contains responses for each requested partition in
+    // a topic.
+    Partitions: [=>]
+      // Partition is the partition in a topic this array slot corresponds to.
+      Partition: int32
+      // Offset is the most recently committed offset for this topic partition
+      // in a group.
+      Offset: int64
+      // LeaderEpoch is the leader epoch of the last consumed record.
+      //
+      // This was proposed in KIP-320 and introduced in Kafka 2.1.0 and allows
+      // clients to detect log truncation. See the KIP for more details.
+      LeaderEpoch: int32(-1) // v5+
+      // Metadata is client provided metadata corresponding to the offset commit.
+      // This can be useful for adding who made the commit, etc.
+      Metadata: nullable-string
+      // ErrorCode is the error for this partition response.
+      //
+      // GROUP_AUTHORIZATION_FAILED is returned if the client is not authorized
+      // to the group.
+      //
+      // INVALID_GROUP_ID is returned in the requested group ID is invalid.
+      //
+      // COORDINATOR_NOT_AVAILABLE is returned if the coordinator is not available
+      // (due to the requested broker shutting down or it has not completed startup).
+      //
+      // COORDINATOR_LOAD_IN_PROGRESS is returned if the group is loading.
+      //
+      // NOT_COORDINATOR is returned if the requested broker is not the coordinator
+      // for the requested group.
+      //
+      // UNKNOWN_TOPIC_OR_PARTITION is returned if the requested topic or partition
+      // is unknown.
+      //
+      // UNSTABLE_OFFSET_COMMIT is returned for v7+ if the request set RequireStable.
+      // See KIP-447 for more details.
+      ErrorCode: int16
+  // ErrorCode is a top level error code that applies to all topic/partitions.
+  // This will be any group error.
+  ErrorCode: int16 // v2+

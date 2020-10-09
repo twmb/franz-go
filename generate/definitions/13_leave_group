@@ -1,0 +1,46 @@
+// LeaveGroupRequest issues a request for a group member to leave the group,
+// triggering a group rebalance.
+//
+// Version 3 changed removed MemberID and added a batch instance+member ID
+// way of leaving a group.
+LeaveGroupRequest => key 13, max version 4, flexible v4+, group coordinator
+  // Group is the group to leave.
+  Group: string
+  // MemberID is the member that is leaving.
+  MemberID: string // v0-v2
+  // Members are member and group instance IDs to cause to leave a group.
+  Members: [=>] // v3+
+    MemberID: string
+    InstanceID: nullable-string
+
+// LeaveGroupResponse is returned from a LeaveGroupRequest.
+LeaveGroupResponse =>
+  // ThrottleMillis is how long of a throttle Kafka will apply to the client
+  // after this request.
+  // For Kafka < 2.0.0, the throttle is applied before issuing a response.
+  // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
+  ThrottleMillis: int32 // v1+
+  // ErrorCode is the error for the leave group request.
+  //
+  // GROUP_AUTHORIZATION_FAILED is returned if the client is not authorized
+  // to the group (no read perms).
+  //
+  // INVALID_GROUP_ID is returned in the requested group ID is invalid.
+  //
+  // COORDINATOR_NOT_AVAILABLE is returned if the coordinator is not available
+  // (due to the requested broker shutting down or it has not completed startup).
+  //
+  // COORDINATOR_LOAD_IN_PROGRESS is returned if the group is loading.
+  //
+  // NOT_COORDINATOR is returned if the requested broker is not the coordinator
+  // for the requested group.
+  //
+  // UNKNOWN_MEMBER_ID is returned if the member ID is not a part of the group,
+  // or if the group is empty or dead.
+  ErrorCode: int16
+  // Members are the list of members and group instance IDs that left the group.
+  Members: [=>] // v3+
+    MemberID: string
+    InstanceID: nullable-string
+    // An individual member's leave error code.
+    ErrorCode: int16

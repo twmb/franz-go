@@ -1,0 +1,397 @@
+// MessageV0 is the message format Kafka used prior to 0.10.
+//
+// To produce or fetch messages, Kafka would write many messages contiguously
+// as an array without specifying the array length.
+MessageV0 => not top level
+  // Offset is the offset of this record.
+  //
+  // If this is the outer message of a recursive message set (i.e. a
+  // message set has been compressed and this is the outer message),
+  // then the offset should be the offset of the last inner value.
+  Offset: int64
+  // MessageSize is the size of everything that follows in this message.
+  MessageSize: int32
+  // CRC is the crc of everything that follows this field (NOT using the
+  // Castagnoli polynomial, as is the case in the 0.11+ RecordBatch).
+  CRC: int32
+  // Magic is 0.
+  Magic: int8
+  // Attributes describe the attributes of this message.
+  //
+  // Bits 0 thru 2 correspond to compression:
+  //   - 00 is no compression
+  //   - 01 is gzip compression
+  //   - 10 is snappy compression
+  //
+  // The remaining bits are unused and must be 0.
+  Attributes: int8
+  // Key is an blob of data for a record.
+  //
+  // Key's are usually used for hashing the record to specific Kafka partitions.
+  Key: nullable-bytes
+  // Value is  a blob of data. This field is the main "message" portion of a
+  // record.
+  Value: nullable-bytes
+
+// MessageV1 is the message format Kafka used prior to 0.11.
+//
+// To produce or fetch messages, Kafka would write many messages contiguously
+// as an array without specifying the array length.
+//
+// To support compression, an entire message set would be compressed and used
+// as the Value in another message set (thus being "recursive"). The key for
+// this outer message set must be null.
+MessageV1 => not top level
+  // Offset is the offset of this record.
+  //
+  // Different from v0, if this message set is a recursive message set
+  // (that is, compressed and inside another message set), the offset
+  // on the inner set is relative to the offset of the outer set.
+  Offset: int64
+  // MessageSize is the size of everything that follows in this message.
+  MessageSize: int32
+  // CRC is the crc of everything that follows this field (NOT using the
+  // Castagnoli polynomial, as is the case in the 0.11+ RecordBatch).
+  CRC: int32
+  // Magic is 1.
+  Magic: int8
+  // Attributes describe the attributes of this message.
+  //
+  // Bits 0 thru 2 correspond to compression:
+  //   - 00 is no compression
+  //   - 01 is gzip compression
+  //   - 10 is snappy compression
+  //
+  // Bit 3 is the timestamp type, with 0 meaning CreateTime corresponding
+  // to the timestamp being from the producer, and 1 meaning LogAppendTime
+  // corresponding to the timestamp being from the broker.
+  // Setting this to LogAppendTime will cause batches to be rejected.
+  //
+  // The remaining bits are unused and must be 0.
+  Attributes: int8
+  // Timestamp is the millisecond timestamp of this message.
+  Timestamp: int64
+  // Key is an blob of data for a record.
+  //
+  // Key's are usually used for hashing the record to specific Kafka partitions.
+  Key: nullable-bytes
+  // Value is  a blob of data. This field is the main "message" portion of a
+  // record.
+  Value: nullable-bytes
+
+// Header is user provided metadata for a record. Kafka does not look at
+// headers at all; they are solely for producers and consumers.
+Header => not top level
+  Key: varint-string
+  Value: varint-bytes
+
+// A Record is a Kafka v0.11.0.0 record. It corresponds to an individual
+// message as it is written on the wire.
+Record => not top level
+  // Length is the length of this record on the wire of everything that
+  // follows this field. It is an int32 encoded as a varint.
+  Length: varint
+  // Attributes are record level attributes. This field currently is unused.
+  Attributes: int8
+  // TimestampDelta is the millisecond delta of this record's timestamp
+  // from the record's RecordBatch's FirstTimestamp.
+  TimestampDelta: varint
+  // OffsetDelta is the delta of this record's offset from the record's
+  // RecordBatch's FirstOffset.
+  //
+  // For producing, this is usually equal to the index of the record in
+  // the record batch.
+  OffsetDelta: varint
+  // Key is an blob of data for a record.
+  //
+  // Key's are usually used for hashing the record to specific Kafka partitions.
+  Key: varint-bytes
+  // Value is  a blob of data. This field is the main "message" portion of a
+  // record.
+  Value: varint-bytes
+  // Headers are optional user provided metadata for records. Unlike normal
+  // arrays, the number of headers is encoded as a varint.
+  Headers: varint[Header]
+
+// RecordBatch is a Kafka concept that groups many individual records together
+// in a more optimized format.
+RecordBatch => not top level
+  // FirstOffset is the first offset in a record batch.
+  //
+  // For producing, this is usually 0.
+  FirstOffset: int64
+  // Length is the wire length of everything that follows this field.
+  Length: int32
+  // PartitionLeaderEpoch is the leader epoch of the broker at the time
+  // this batch was written. Kafka uses this for cluster communication,
+  // but clients can also use this to better aid truncation detection.
+  // See KIP-320. Producers should set this to -1.
+  PartitionLeaderEpoch: int32
+  // Magic is the current "magic" number of this message format.
+  // The current magic number is 2.
+  Magic: int8
+  // CRC is the crc of everything that follows this field using the
+  // Castagnoli polynomial.
+  CRC: int32
+  // Attributes describe the records array of this batch.
+  //
+  // Bits 0 thru 3 correspond to compression:
+  //   - 000 is no compression
+  //   - 001 is gzip compression
+  //   - 010 is snappy compression
+  //   - 011 is lz4 compression
+  //   - 100 is zstd compression (produce request version 7+)
+  //
+  // Bit 4 is the timestamp type, with 0 meaning CreateTime corresponding
+  // to the timestamp being from the producer, and 1 meaning LogAppendTime
+  // corresponding to the timestamp being from the broker.
+  // Setting this to LogAppendTime will cause batches to be rejected.
+  //
+  // Bit 5 indicates whether the batch is part of a transaction (1 is yes).
+  //
+  // Bit 6 indicates if the batch includes a control message (1 is yes).
+  // Control messages are used to enable transactions and are generated from
+  // the broker. Clients should not return control batches to applications.
+  Attributes: int16
+  // LastOffsetDelta is the offset of the last message in a batch. This is used
+  // by the broker to ensure correct behavior even with batch compaction.
+  LastOffsetDelta: int32
+  // FirstTimestamp is the timestamp (in milliseconds) of the first record
+  // in a batch.
+  FirstTimestamp: int64
+  // MaxTimestamp is the timestamp (in milliseconds) of the last record
+  // in a batch. Similar to LastOffsetDelta, this is used to ensure correct
+  // behavior with compacting.
+  MaxTimestamp: int64
+  // ProducerID is the broker assigned producerID from an InitProducerID
+  // request.
+  //
+  // Clients that wish to support idempotent messages and transactions must
+  // set this field.
+  //
+  // Note that when not using transactions, any producer here is always
+  // accepted (and the epoch is always zero). Outside transactions, the ID
+  // is used only to deduplicate requests (and there must be at max 5
+  // concurrent requests).
+  ProducerID: int64
+  // ProducerEpoch is the broker assigned producerEpoch from an InitProducerID
+  // request.
+  //
+  // Clients that wish to support idempotent messages and transactions must
+  // set this field.
+  ProducerEpoch: int16
+  // FirstSequence is the producer assigned sequence number used by the
+  // broker to deduplicate messages.
+  //
+  // Clients that wish to support idempotent messages and transactions must
+  // set this field.
+  //
+  // The sequence number for each record in a batch is OffsetDelta + FirstSequence.
+  FirstSequence: int32
+  // NumRecords is the number of records in the array below.
+  //
+  // This is separate from Records due to the potential for records to be
+  // compressed.
+  NumRecords: int32
+  // Records contains records, either compressed or uncompressed.
+  //
+  // For uncompressed records, this is an array of records ([Record]).
+  //
+  // For compressed records, the length of the uncompressed array is kept
+  // but everything that follows is compressed.
+  //
+  // The number of bytes is expected to be the Length field minus 49.
+  Records: length-field-minus => Length - 49
+
+// OffsetCommitKey is the key for the Kafka internal __consumer_offsets topic
+// if the key starts with an int16 with a value of 0 or 1.
+//
+// This type was introduced in KAFKA-1012 commit a670537aa3 with release 0.8.2
+// and has been in use ever since.
+OffsetCommitKey => not top level, with version field
+  // Version is which encoding version this value is using.
+  Version: int16
+  // Group is the group being committed.
+  Group: string
+  // Topic is the topic being committed.
+  Topic: string
+  // Partition is the partition being committed.
+  Partition: int32
+
+// OffsetCommitValue is the value for the Kafka internal __consumer_offsets
+// topic if the key is of OffsetCommitKey type.
+//
+// Version 0 was introduced with the key version 0.
+//
+// KAFKA-1634 commit c5df2a8e3a in 0.9.0 released version 1.
+//
+// KAFKA-4682 commit 418a91b5d4, proposed in KIP-211 and included in 2.1.0
+// released version 2.
+//
+// KAFKA-7437 commit 9f7267dd2f, proposed in KIP-320 and included in 2.1.0
+// released version 3.
+OffsetCommitValue => not top level, with version field
+  // Version is which encoding version this value is using.
+  Version: int16
+  // Offset is the committed offset.
+  Offset: int64
+  // LeaderEpoch is the epoch of the leader committing this message.
+  LeaderEpoch: int32 // v3+
+  // Metadata is the metadata included in the commit.
+  Metadata: string
+  // CommitTimestamp is when this commit occurred.
+  CommitTimestamp: int64
+  // ExpireTimestamp, introduced in v1 and dropped in v2 with KIP-111,
+  // is when this commit expires.
+  ExpireTimestamp: int64 // v1-v1
+
+// GroupMetadataKey is the key for the Kafka internal __consumer_offsets topic
+// if the key starts with an int16 with a value of 2.
+//
+// This type was introduced in KAFKA-2017 commit 7c33475274 with release 0.9.0
+// and has been in use ever since.
+GroupMetadataKey => not top level, with version field
+  // Version is which encoding version this value is using.
+  Version: int16
+  // Group is the group this metadata is for.
+  Group: string
+
+// GroupMetadataValue is the value for the Kafka internal __consumer_offsets
+// topic if the key is of GroupMetadataKey type.
+//
+// Version 0 was introduced with the key version 0.
+//
+// KAFKA-3888 commit 40b1dd3f49, proposed in KIP-62 and included in 0.10.1
+// released version 1.
+//
+// KAFKA-4682 commit 418a91b5d4, proposed in KIP-211 and included in 2.1.0
+// released version 2.
+//
+// KAFKA-7862 commit 0f995ba6be, proposed in KIP-345 and included in 2.3.0
+// released version 3.
+GroupMetadataValue => not top level, with version field
+  // Version is the version of this value.
+  Version: int16
+  // ProtocolType is the type of protocol being used for the group
+  // (i.e., "consumer").
+  ProtocolType: string
+  // Generation is the generation of this group.
+  Generation: int32
+  // Protocol is the agreed upon protocol all members are using to partition
+  // (i.e., "sticky").
+  Protocol: nullable-string
+  // Leader is the group leader.
+  Leader: nullable-string
+  // CurrentStateTimestamp is the timestamp for this state of the group
+  // (stable, etc.).
+  CurrentStateTimestamp: int64 // v2+
+  // Members are the group members.
+  Members: [=>]
+    // MemberID is a group member.
+    MemberID: string
+    // InstanceID is the instance ID of this member in the group (KIP-345).
+    InstanceID: nullable-string // v3+
+    // ClientID is the client ID of this group member.
+    ClientID: string
+    // ClientHost is the hostname of this group member.
+    ClientHost: string
+    // RebalanceTimeoutMillis is the rebalance timeout of this group member.
+    RebalanceTimeoutMillis: int32 // v1+
+    // SessionTimeoutMillis is the session timeout of this group member.
+    SessionTimeoutMillis: int32
+    // Subscription is the subscription of this group member.
+    Subscription: bytes
+    // Assignment is what the leader assigned this group member.
+    Assignment: bytes
+
+// TxnMetadataKey is the key for the Kafka internal __transaction_state topic
+// if the key starts with an int16 with a value of 0.
+TxnMetadataKey => not top level, with version field
+  // Version is the version of this type.
+  Version: int16
+  // TransactionalID is the transactional ID this record is for.
+  TransactionalID: string
+
+// TxnMetadataValue is the value for the Kafka internal __transaction_state
+// topic if the key is of TxnMetadataKey type.
+TxnMetadataValue => not top level, with version field
+  // Version is the version of this value.
+  Version: int16
+  // ProducerID is the ID in use by the transactional ID.
+  ProducerID: int64
+  // LastProducerID is the last ID in use for a producer; see KIP-360.
+  LastProducerID: int64 // v1+
+  // ProducerEpoch is the epoch associated with the producer ID.
+  ProducerEpoch: int16
+  // LastProducerEpoch is the last epoch in use for a producer; see KIP-360.
+  LastProducerEpoch: int16 // v1+
+  // TimeoutMillis is the timeout of this transaction in milliseconds.
+  TimeoutMillis: int32
+  // State is the state this transaction is in,
+  // 0 is Empty, 1 is Ongoing, 2 is PrepareCommit, 3 is PrepareAbort, 4 is
+  // CompleteCommit, 5 is CompleteAbort, 6 is Dead, and 7 is PrepareEpochFence.
+  State: int8
+  // Topics are topics that are involved in this transaction.
+  Topics: [=>]
+    // Topic is a topic involved in this transaction.
+    Topic: string
+    // Partitions are partitions in this topic involved in the transaction.
+    Partitions: [int32]
+  // LastUpdateTimestamp is the timestamp in millis of when this transaction
+  // was last updated.
+  LastUpdateTimestamp: int64
+  // StartTimestamp is the timestamp in millis of when this transaction started.
+  StartTimestamp: int64
+
+// StickyMemberMetadata is is what is encoded in UserData for
+// GroupMemberMetadata in group join requests with the sticky partitioning
+// strategy.
+//
+// V1 added generation, which fixed a bug with flaky group members joining
+// repeatedly. See KIP-341 for more details.
+//
+// Note that clients should always try decoding as v1 and, if that fails,
+// fall back to v0. This is necessary due to there being no version number
+// anywhere in this type.
+StickyMemberMetadata => not top level, no encoding
+  // CurrentAssignment is the assignment that a group member has when
+  // issuing a join.
+  CurrentAssignment: [=>]
+    // Topic is a topic the group member is currently assigned.
+    Topic: string
+    // Partitions are the partitions within a topic that a group member is
+    // currently assigned.
+    Partitions: [int32]
+  // Generation is the generation of this join. This is incremented every join.
+  Generation: int32 // v1+
+
+// GroupMemberMetadata is the metadata that is usually sent with a join group
+// request.
+GroupMemberMetadata => not top level, with version field
+  // Version is either version 0 or version 1.
+  Version: int16
+  // Topics is the list of topics in the group that this member is interested
+  // in consuming.
+  Topics: [string]
+  // UserData is arbitrary client data for a given client in the group.
+  // For sticky assignment, this is StickyMemberMetadata.
+  UserData: bytes
+  // OwnedPartitions, introduced for KIP-429, are the partitions that this
+  // member currently owns.
+  OwnedPartitions: [=>] // v1+
+    Topic: string
+    Partitions: [int32]
+
+// GroupMemberAssignment is the assignment data that is usually sent with a
+// sync group request.
+GroupMemberAssignment => not top level
+  // Verson is currently version 0.
+  Version: int16
+  // Topics contains topics in the assignment.
+  Topics: [=>]
+    // Topic is a topic in the assignment.
+    Topic: string
+    // Partitions contains partitions in the assignment.
+    Partitions: [int32]
+  // UserData is arbitrary client data for a given client in the group.
+  UserData: bytes

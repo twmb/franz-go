@@ -1,0 +1,53 @@
+// DescribeLogDirsRequest requests directory information for topic partitions.
+// This request was added in support of KIP-113.
+DescribeLogDirsRequest => key 35, max version 2, flexible v2+
+  // Topics is an array of topics to describe the log dirs of. If this is
+  // null, the response includes all topics and all of their partitions.
+  Topics: nullable[=>]
+    // Topic is a topic to describe the log dir of.
+    Topic: string
+    // Partitions contains topic partitions to describe the log dirs of.
+    Partitions: [int32]
+
+// DescribeLogDirsResponse is returned from a DescribeLogDirsRequest.
+DescribeLogDirsResponse =>
+  // ThrottleMillis is how long of a throttle Kafka will apply to the client
+  // after this request.
+  // For Kafka < 2.0.0, the throttle is applied before issuing a response.
+  // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
+  ThrottleMillis: int32
+  // Dirs pairs log directories with the topics and partitions that are
+  // stored in those directores.
+  Dirs: [=>]
+    // ErrorCode is the error code returned for descrbing log dirs.
+    //
+    // KAFKA_STORAGE_ERROR is returned if the log directoy is offline.
+    ErrorCode: int16
+    // Dir is the absolute path of a log directory.
+    Dir: string
+    // Topics is an array of topics within a log directory.
+    Topics: [=>]
+      // Topic is the name of a Kafka topic.
+      Topic: string
+      // Partitions is the set of queried partitions for a topic that are
+      // within a log directory.
+      Partitions: [=>]
+        // Partition is a partition ID.
+        Partition: int32
+        // Size is the total size of the log sements of this partition, in bytes.
+        Size: int64
+        // OffsetLag is how far behind the log end offset is compared to
+        // the partition's high watermark (if this is the current log for
+        // the partition) or compared to the current replica's log end
+        // offset (if this is the future log for the patition).
+        //
+        // The math is,
+        //
+        // if IsFuture, localLogEndOffset - futurelogEndOffset.
+        //
+        // otherwise, max(localHighWatermark - logEndOffset, 0).
+        OffsetLag: int64
+        // IsFuture is true if this replica was created by an
+        // AlterReplicaLogDirsRequest and will replace the current log of the
+        // replica in the future.
+        IsFuture: bool

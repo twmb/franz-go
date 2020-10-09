@@ -1,0 +1,23 @@
+// RenewDelegationTokenRequest is a request to renew a delegation token that
+// has not yet hit its max timestamp. Note that a client using a token cannot
+// renew its own token.
+RenewDelegationTokenRequest => key 39, max version 2, flexible v2+
+  // HMAC is the HMAC of the token to be renewed.
+  HMAC: bytes
+  // RenewTimeMillis is how long to renew the token for. If -1, Kafka uses its
+  // delegation.token.max.lifetime.ms.
+  RenewTimeMillis: int64
+
+// RenewDelegationTokenResponse is a response to a RenewDelegationTokenRequest.
+RenewDelegationTokenResponse =>
+  // ErrorCode is any error that caused the request to fail.
+  ErrorCode: int16
+  // ExpiryTimestamp is the millisecond timestamp this token will expire. The
+  // token can be renewed up to MaxTimestamp, past which point, it will be
+  // invalid. The Kafka default is 24h.
+  ExpiryTimestamp: int64
+  // ThrottleMillis is how long of a throttle Kafka will apply to the client
+  // after this request.
+  // For Kafka < 2.0.0, the throttle is applied before issuing a response.
+  // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
+  ThrottleMillis: int32

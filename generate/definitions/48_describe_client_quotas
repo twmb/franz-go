@@ -1,0 +1,43 @@
+// DescribeClientQuotasRequest, proposed in KIP-546 and introduced with Kafka 2.6.0,
+// provides a way to describe client quotas.
+DescribeClientQuotasRequest => key 48, max version 0
+  // Components is a list of match filters to apply for describing quota entities.
+  Components: [=>]
+    // EntityType is the entity component type that this filter component
+    // applies to; some possible values are "user" or "client-id".
+    EntityType: string
+    // MatchType specifies how to match an entity,
+    // with 0 meaning match on the name exactly,
+    // 1 meaning match on the default name,
+    // and 2 meaning any specified name.
+    MatchType: int8
+    // Match is the string to match against, or null if unused for the given
+    // match type.
+    Match: nullable-string
+  // Strict signifies whether matches are strict; if true, the response
+  // excludes entities with unspecified entity types.
+  Strict: bool
+
+// DescribeClientQuotasResponse is a response for a DescribeClientQuotasRequest.
+DescribeClientQuotasResponse =>
+  // ThrottleMillis is how long of a throttle Kafka will apply to the client
+  // after responding to this request.
+  ThrottleMillis: int32
+  // ErrorCode is any error for the request.
+  ErrorCode: int16
+  // ErrorMessage is an error message for the request, or null if the request succeeded.
+  ErrorMessage: nullable-string
+  // Entries contains entities that were matched.
+  Entries: nullable[=>Entry]
+    // Entity contains the quota entity components being described.
+    Entity: [=>]
+      // Type is the entity type.
+      Type: string
+      // Name is the entity name, or null if the default.
+      Name: nullable-string
+    // Values are quota values for the entity.
+    Values: [=>]
+      // Key is the quota configuration key.
+      Key: string
+      // Value is the quota configuration value.
+      Value: float64

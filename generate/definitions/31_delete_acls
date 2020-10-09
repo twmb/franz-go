@@ -1,0 +1,38 @@
+// DeleteACLsRequest deletes acls. This request works on filters the same way
+// that DescribeACLsRequest does. See DescribeACLsRequest for documentation of
+// the fields.
+DeleteACLsRequest => key 31, max version 2, flexible v2+
+  // Filters are filters for acls to delete.
+  Filters: [=>]
+    ResourceType: int8
+    ResourceName: nullable-string
+    ResourcePatternType: int8(3) // v1+
+    Principal: nullable-string
+    Host: nullable-string
+    Operation: int8
+    PermissionType: int8
+
+// DeleteACLsResponse is a response for a DeleteACLsRequest.
+DeleteACLsResponse =>
+  // ThrottleMillis is how long of a throttle Kafka will apply to the client
+  // after responding to this request.
+  ThrottleMillis: int32
+  // Results contains a response to each requested filter.
+  Results: [=>]
+    // ErrorCode is the overall error code for this individual filter.
+    ErrorCode: int16
+    // ErrorMessage is a message for this error.
+    ErrorMessage: nullable-string
+    // MatchingACLs contains all acls that were matched for this filter.
+    MatchingACLs: [=>]
+      // ErrorCode contains an error for this individual acl for this filter.
+      ErrorCode: int16
+      // ErrorMessage is a message for this error.
+      ErrorMessage: nullable-string
+      ResourceType: int8
+      ResourceName: string
+      ResourcePatternType: int8(3) // v1+
+      Principal: string
+      Host: string
+      Operation: int8
+      PermissionType: int8

@@ -1,0 +1,71 @@
+// ApiVersionsRequest requests what API versions a Kafka broker supports.
+//
+// Note that the client does not know the version a broker supports before
+// sending this request.
+//
+// Before Kafka 2.4.0, if the client used a version larger than the broker
+// understands, the broker would reply with an UNSUPPORTED_VERSION error using
+// the version 0 message format (i.e., 6 bytes long!). The client should retry
+// with a lower version.
+//
+// After Kafka 2.4.0, if the client uses a version larger than the broker
+// understands, the broker replies with UNSUPPORTED_VERSIONS using the version
+// 0 message format but additionally includes the api versions the broker does
+// support.
+ApiVersionsRequest => key 18, max version 3, flexible v3+
+  // ClientSoftwareName, added for KIP-511 with Kafka 2.4.0, is the name of the
+  // client issuing this request. The broker can use this to enrich its own
+  // debugging information of which version of what clients are connected.
+  //
+  // If using v3, this field is required and must match the following pattern:
+  //
+  //     [a-zA-Z0-9](?:[a-zA-Z0-9\\-.]*[a-zA-Z0-9])?
+  //
+  ClientSoftwareName: string // v3+
+  // ClientSoftwareVersion is the version of the software name in the prior
+  // field. It must match the same regex (thus, this is also required).
+  ClientSoftwareVersion: string // v3+
+
+// ApiVersionsResponse is returned from an ApiVersionsRequest.
+ApiVersionsResponse =>
+  // ErrorCode is UNSUPPORTED_VERSION if the request was issued with a higher
+  // version than the broker supports. Before Kafka 2.4.0, if this error is
+  // returned, the rest of this struct will be empty.
+  //
+  // Starting in Kafka 2.4.0 (with version 3), even with an UNSUPPORTED_VERSION
+  // error, the broker still replies with the ApiKeys it supports.
+  ErrorCode: int16
+  // ApiKeys is an array corresponding to API keys the broker supports
+  // and the range of supported versions for each key.
+  ApiKeys: [=>]
+    // ApiKey is the key of a message request.
+    ApiKey: int16
+    // MinVersion is the min version a broker supports for an API key.
+    MinVersion: int16
+    // MaxVersion is the max version a broker supports for an API key.
+    MaxVersion: int16
+  // ThrottleMillis is how long of a throttle Kafka will apply to the client
+  // after this request.
+  // For Kafka < 2.0.0, the throttle is applied before issuing a response.
+  // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
+  ThrottleMillis: int32 // v1+
+  // Features supported by the broker (see KIP-584).
+  SupportedFeatures: [=>] // tag 0
+    // The name of the feature.
+    Name: string
+    // The minimum supported version for the feature.
+    MinVersion: int16
+    // The maximum supported version for the feature.
+    MaxVersion: int16
+  // The monotonically increasing epoch for the finalized features information,
+  // where -1 indicates an unknown epoch.
+  FinalizedFeaturesEpoch: int64(-1) // tag 1
+  // The list of cluster-wide finalized features (only valid if
+  // FinalizedFeaturesEpoch is >= 0).
+  FinalizedFeatures: [=>] // tag 2
+    // The name of the feature.
+    Name: string
+    // The cluster-wide finalized max version level for the feature.
+    MaxVersionLevel: int16
+    // The cluster-wide finalized min version level for the feature.
+    MinVersionLevel: int16

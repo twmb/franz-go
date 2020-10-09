@@ -1,0 +1,34 @@
+// From KIP-584 and introduced in 2.7.0, this request updates broker-wide features.
+UpdateFeaturesRequest => key 57, max version 0, flexible v0+, admin
+  // TimeoutMillis is the millisecond timeout of this request.
+  TimeoutMillis: int32(60000)
+  // The list of updates to finalized features.
+  FeatureUpdates: [=>]
+    // The name of the finalized feature to update.
+    Feature: string
+    // The new maximum version level for the finalized feature. A value >= 1 is
+    // valid. A value < 1, is special, and can be used to request the deletion
+    // of the finalized feature.
+    MaxVersionLevel: int16
+    // When set to true, the finalized feature version level is allowed to be
+    // downgraded/deleted. The downgrade request will fail if the new maximum
+    // version level is a value that's not lower than the existing maximum
+    // finalized version level.
+    AllowDowngrade: bool
+
+UpdateFeaturesResponse =>
+  // ThrottleMillis is how long of a throttle Kafka will apply to the client
+  // after responding to this request.
+  ThrottleMillis: int32
+  // The top level error code, if any.
+  ErrorCode: int16
+  // An informative message if the request errored, if any.
+  ErrorMessage: nullable-string
+  // The results for each feature update request.
+  Results: [=>]
+    // The name of the finalized feature.
+    Feature: string
+    // The feature update error code, if any.
+    ErrorCode: int16
+    // The feature update error, if any.
+    ErrorMessage: nullable-string

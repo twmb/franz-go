@@ -1,0 +1,38 @@
+// AddOffsetsToTxnRequest is a request that ties produced records to what group
+// is being consumed for the transaction.
+//
+// This request must be called before TxnOffsetCommitRequest.
+//
+// Internally, this request simply adds the __consumer_offsets topic as a
+// partition for this transaction with AddPartitionsToTxn for the partition
+// in that topic that contains the group.
+AddOffsetsToTxnRequest => key 25, max version 2, txn coordinator
+  // TransactionalID is the transactional ID to use for this request.
+  TransactionalID: string
+  // ProducerID is the producer ID of the client for this transactional ID
+  // as received from InitProducerID.
+  ProducerID: int64
+  // ProducerEpoch is the producer epoch of the client for this transactional ID
+  // as received from InitProducerID.
+  ProducerEpoch: int16
+  // Group is the group to tie this transaction to.
+  Group: string
+
+// AddOffsetsToTxnResponse is a response to an AddOffsetsToTxnRequest.
+AddOffsetsToTxnResponse =>
+  // ThrottleMillis is how long of a throttle Kafka will apply to the client
+  // after this request.
+  // For Kafka < 2.0.0, the throttle is applied before issuing a response.
+  // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
+  ThrottleMillis: int32
+  // ErrorCode is any error for this topic/partition commit.
+  //
+  // TRANSACTIONAL_ID_AUTHORIZATION_FAILED is returned if the client is
+  // not authorized for write with transactional IDs with the requested
+  // transactional ID.
+  //
+  // GROUP_AUTHORIZATION_FAILED is returned if the client is not authorized
+  // to read group with the requested group id.
+  //
+  // This also can return any error that AddPartitionsToTxn returns.
+  ErrorCode: int16

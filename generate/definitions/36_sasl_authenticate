@@ -1,0 +1,23 @@
+// SASLAuthenticate continues a sasl authentication flow. Prior to Kafka 1.0.0,
+// authenticating with sasl involved sending raw blobs of data back and forth.
+// After, those blobs are wrapped in a SASLAuthenticateRequest The benefit of
+// this wrapping is that Kafka can indicate errors in the response, rather than
+// just closing the connection. Additionally, the response allows for further
+// extension fields.
+SASLAuthenticateRequest => key 36, max version 2, flexible v2+
+  // SASLAuthBytes contains bytes for a SASL client request.
+  SASLAuthBytes: bytes
+
+// SASLAuthenticateResponse is returned for a SASLAuthenticateRequest.
+SASLAuthenticateResponse =>
+  // ErrorCode is a potential error.
+  ErrorCode: int16
+  // ErrorMessage can contain a message for an error.
+  ErrorMessage: nullable-string
+  // SASLAuthBytes is the server challenge continuing SASL flow.
+  SASLAuthBytes: bytes
+  // SessionLifetimeMillis, added in Kafka 2.2.0, is how long the SASL
+  // authentication is valid for. This timeout is only enforced if the request
+  // was v1. After this timeout, Kafka expects the next bytes on the wire to
+  // begin reauthentication. Otherwise, Kafka closes the connection.
+  SessionLifetimeMillis: int64 // v1+

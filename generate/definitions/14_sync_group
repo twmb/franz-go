@@ -1,0 +1,63 @@
+// SyncGroupRequest is issued by all group members after they receive a a
+// response for JoinGroup. The group leader is responsible for sending member
+// assignments with the request; all other members do not.
+//
+// Once the leader sends the group assignment, all members will be replied to.
+SyncGroupRequest => key 14, max version 5, flexible v4+, group coordinator
+  // Group is the group ID this sync group is for.
+  Group: string
+  // Generation is the group generation this sync is for.
+  Generation: int32
+  // MemberID is the member ID this member is.
+  MemberID: string
+  // InstanceID is the instance ID of this member in the group (KIP-345).
+  InstanceID: nullable-string // v3+
+  // ProtocolType is the "type" of protocol being used for this group.
+  ProtocolType: nullable-string // v5+
+  // Protocol is the agreed upon protocol name (i.e. "sticky", "range").
+  Protocol: nullable-string // v5+
+  // GroupAssignment, sent only from the group leader, is the topic partition
+  // assignment it has decided on for all members.
+  GroupAssignment: [=>]
+    // MemberID is the member this assignment is for.
+    MemberID: string
+    // MemberAssignment is the assignment for this member. This is typically
+    // of type GroupMemberAssignment.
+    MemberAssignment: bytes
+
+// SyncGroupResponse is returned from a SyncGroupRequest.
+SyncGroupResponse =>
+  // ThrottleMillis is how long of a throttle Kafka will apply to the client
+  // after this request.
+  // For Kafka < 2.0.0, the throttle is applied before issuing a response.
+  // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
+  ThrottleMillis: int32 // v1+
+  // ErrorCode is the error for the sync group request.
+  //
+  // GROUP_AUTHORIZATION_FAILED is returned if the client is not authorized
+  // to the group (no read perms).
+  //
+  // INVALID_GROUP_ID is returned in the requested group ID is invalid.
+  //
+  // COORDINATOR_NOT_AVAILABLE is returned if the coordinator is not available.
+  //
+  // NOT_COORDINATOR is returned if the requested broker is not the coordinator
+  // for the requested group.
+  //
+  // UNKNOWN_MEMBER_ID is returned if the member ID is not a part of the group,
+  // or if the group is empty or dead.
+  //
+  // ILLEGAL_GENERATION is returned if the request's generation ID is invalid.
+  //
+  // REBALANCE_IN_PROGRESS is returned if the group switched back to rebalancing.
+  //
+  // UNKNOWN_SERVER_ERROR is returned if the store of the group assignment
+  // resulted in a too large message.
+  ErrorCode: int16
+  // ProtocolType is the "type" of protocol being used for this group.
+  ProtocolType: nullable-string // v5+
+  // Protocol is the agreed upon protocol name (i.e. "sticky", "range").
+  Protocol: nullable-string // v5+
+  // MemberAssignment is the assignment for this member that the leader
+  // determined.
+  MemberAssignment: bytes

@@ -1,0 +1,31 @@
+// ListGroupsRequest issues a request to list all groups.
+//
+// To list all groups in a cluster, this must be issued to every broker.
+ListGroupsRequest => key 16, max version 4, flexible v3+
+  // StatesFilter, proposed in KIP-518 and introduced in Kafka 2.6.0,
+  // allows filtering groups by state, where a state is any of
+  // "Preparing", "PreparingRebalance", "CompletingRebalance", "Stable",
+  // "Dead", or "Empty". If empty, all groups are returned.
+  StatesFilter: [string] // v4+
+
+// ListGroupsResponse is returned from a ListGroupsRequest.
+ListGroupsResponse =>
+  // ThrottleMillis is how long of a throttle Kafka will apply to the client
+  // after this request.
+  // For Kafka < 2.0.0, the throttle is applied before issuing a response.
+  // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
+  ThrottleMillis: int32 // v1+
+  // ErrorCode is the error returned for the list groups request.
+  //
+  // COORDINATOR_NOT_AVAILABLE is returned if the coordinator is not yet active.
+  //
+  // COORDINATOR_LOAD_IN_PROGRESS is returned if the group manager is loading.
+  ErrorCode: int16
+  // Groups is the list of groups Kafka knows of.
+  Groups: [=>]
+    // Group is a Kafka group.
+    Group: string
+    // ProtocolType is the protocol type in use by the group.
+    ProtocolType: string
+    // The group state.
+    GroupState: string // v4+

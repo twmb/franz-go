@@ -1,0 +1,42 @@
+// CreateACLsRequest creates acls. Creating acls can be done as a batch; each
+// "creation" will be an acl entry.
+//
+// See the DescribeACLsRequest documentation for more descriptions of what
+// valid values for the fields in this request are.
+CreateACLsRequest => key 30, max version 2, flexible v2+
+  Creations: [=>]
+    // ResourceType is the type of resource this acl entry will be on.
+    // It is invalid to use UNKNOWN or ANY.
+    ResourceType: int8
+    // ResourceName is the name of the resource this acl entry will be on.
+    // For CLUSTER, this must be "kafka-cluster".
+    ResourceName: string
+    // ResourcePatternType is the pattern type to use for the resource name.
+    // This cannot be UNKNOWN or MATCH (i.e. this must be LITERAL or PREFIXED).
+    // The default for pre-Kafka 2.0.0 is effectively LITERAL.
+    ResourcePatternType: int8(3) // v1+
+    // Principal is the user to apply this acl for. With the Kafka simple
+    // authorizer, this must begin with "User:".
+    Principal: string
+    // Host is the host address to use for this acl. Yes, each host to allow
+    // the principal access from must be specified as a new creation. KIP-252
+    // might solve this someday. The special wildcard host "*" allows all hosts.
+    Host: string
+    // Operation is the operation this acl is for. This must not be UNKNOWN or
+    // ANY.
+    Operation: int8
+    // PermissionType is the permission of this acl. This must be either ALLOW
+    // or DENY.
+    PermissionType: int8
+
+// CreateACLsResponse is a response for a CreateACLsRequest.
+CreateACLsResponse =>
+  // ThrottleMillis is how long of a throttle Kafka will apply to the client
+  // after responding to this request.
+  ThrottleMillis: int32
+  // Results contains responses to each creation request.
+  Results: [=>]
+    // ErrorCode is an error for this particular creation (index wise).
+    ErrorCode: int16
+    // ErrorMessage is a message for this error.
+    ErrorMessage: nullable-string

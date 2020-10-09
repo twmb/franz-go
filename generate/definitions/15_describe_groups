@@ -1,0 +1,64 @@
+// DescribeGroupsRequest requests metadata for group IDs.
+DescribeGroupsRequest => key 15, max version 5, flexible v5+, group coordinator
+  // Groups is an array of group IDs to request metadata for.
+  // If this is empty, the response will include all groups.
+  Groups: [string]
+  // IncludeAuthorizedOperations, introduced in Kafka 2.3.0, specifies
+  // whether to include a bitfield of AclOperations this client can perform
+  // on the groups. See KIP-430 for more details.
+  IncludeAuthorizedOperations: bool
+
+// DescribeGroupsResponse is returned from a DescribeGroupsRequest.
+DescribeGroupsResponse =>
+  // ThrottleMillis is how long of a throttle Kafka will apply to the client
+  // after this request.
+  // For Kafka < 2.0.0, the throttle is applied before issuing a response.
+  // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
+  ThrottleMillis: int32
+  // Groups is an array of group metadata.
+  Groups: [=>]
+    // ErrorCode is the error code for an individual group in a request.
+    //
+    // GROUP_AUTHORIZATION_FAILED is returned if the client is not authorized
+    // to describe a group.
+    //
+    // INVALID_GROUP_ID is returned if the requested group ID is invalid.
+    //
+    // COORDINATOR_NOT_AVAILABLE is returned if the coordinator for this
+    // group is not yet active.
+    //
+    // COORDINATOR_LOAD_IN_PROGRESS is returned if the group is loading.
+    //
+    // NOT_COORDINATOR is returned if the requested broker is not the
+    // coordinator for this group.
+    ErrorCode: int16
+    // Group is the id of this group.
+    Group: string
+    // State is the state this group is in.
+    State: string
+    // ProtocolType is the "type" of protocol being used for this group.
+    ProtocolType: string
+    // Protocol is the agreed upon protocol for all members in this group.
+    Protocol: string
+    // Members contains members in this group.
+    Members: [=>]
+      // MemberID is the member ID of a member in this group.
+      MemberID: string
+      // InstanceID is the instance ID of this member in the group (KIP-345).
+      InstanceID: nullable-string // v4+
+      // ClientID is the client ID used by this member.
+      ClientID: string
+      // ClientHost is the host this client is running on.
+      ClientHost: string
+      // ProtocolMetadata is the metadata this member included when joining
+      // the group. If using normal (Java-like) consumers, this will be of
+      // type GroupMemberMetadata.
+      ProtocolMetadata: bytes
+      // MemberAssignment is the assignment for this member in the group.
+      // If using normal (Java-like) consumers, this will be of type
+      // GroupMemberAssignment.
+      MemberAssignment: bytes
+    // AuthorizedOperations is a bitfield containing which operations the
+    // the client is allowed to perform on this group.
+    // This is only returned if requested.
+    AuthorizedOperations: int32(-2147483648) // v3+

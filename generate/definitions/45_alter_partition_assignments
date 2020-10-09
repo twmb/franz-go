@@ -1,0 +1,54 @@
+// AlterPartitionAssignmentsRequest, proposed in KIP-455 and implemented in
+// Kafka 2.4.0, is a request to reassign partitions to certain brokers.
+//
+// ACL wise, this requires ALTER on CLUSTER.
+AlterPartitionAssignmentsRequest => key 45, max version 0, flexible v0+, admin
+  // TimeoutMillis is how long to wait for the response.
+  TimeoutMillis: int32(60000)
+  // Topics are topics for which to reassign partitions of.
+  Topics: [=>]
+    // Topic is a topic to reassign the partitions of.
+    Topic: string
+    // Partitions contains partitions to reassign.
+    Partitions: [=>]
+      // Partition is a partition to reassign.
+      Partition: int32
+      // Replicas are replicas to place the partition on, or null to
+      // cancel a pending reassignment of this partition.
+      Replicas: nullable[int32]
+
+// AlterPartitionAssignmentsResponse is returned for an AlterPartitionAssignmentsRequest.
+AlterPartitionAssignmentsResponse =>
+  // ThrottleMillis is how long of a throttle Kafka will apply to the client
+  // after responding to this request.
+  ThrottleMillis: int32
+  // ErrorCode is any global (applied to all partitions) error code.
+  ErrorCode: int16
+  // ErrorMessage is any global (applied to all partitions) error message.
+  ErrorMessage: nullable-string
+  // Topics contains responses for each topic requested.
+  Topics: [=>]
+    // Topic is the topic being responded to.
+    Topic: string
+    // Partitions contains responses for partitions.
+    Partitions: [=>]
+      // Partition is the partition being responded to.
+      Partition: int32
+      // ErrorCode is the error code returned for partition reassignments.
+      //
+      // REQUEST_TIMED_OUT is returned if the request timed out.
+      //
+      // NOT_CONTROLLER is returned if the request was not issued to a Kafka
+      // controller.
+      //
+      // CLUSTER_AUTHORIZATION_FAILED is returned if the client is not
+      // authorized to reassign partitions.
+      //
+      // NO_REASSIGNMENT_IN_PROGRESS is returned for partition reassignment
+      // cancellations when the partition was not being reassigned.
+      //
+      // UNKNOWN_TOPIC_OR_PARTITION is returned if the broker does not know of
+      // the requested topic or the topic is being deleted.
+      ErrorCode: int16
+      // ErrorMessage is an informative message if the partition reassignment failed.
+      ErrorMessage: nullable-string

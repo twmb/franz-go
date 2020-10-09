@@ -1,0 +1,109 @@
+// CreateTopicsRequest creates Kafka topics.
+//
+// Version 4, introduced in Kafka 2.4.0, implies client support for
+// creation defaults. See KIP-464.
+//
+// Version 5, also in 2.4.0, returns topic configs in the response (KIP-525).
+CreateTopicsRequest => key 19, max version 6, flexible v5+, admin
+  // Topics is an array of topics to attempt to create.
+  Topics: [=>]
+    // Topic is a topic to create.
+    Topic: string
+    // NumPartitions is how many partitions to give a topic. This must
+    // be -1 if specifying partitions manually (see ReplicaAssignment)
+    // or, starting v4+, to use the broker default partitions.
+    NumPartitions: int32
+    // ReplicationFactor is how many replicas every partition must have.
+    // This must be -1 if specifying partitions manually (see ReplicaAssignment)
+    // or, starting v4+, to use the broker default replication factor.
+    ReplicationFactor: int16
+    // ReplicaAssignment is an array to manually dicate replicas and their
+    // partitions for a topic. If using this, both ReplicationFactor and
+    // NumPartitions must be -1.
+    ReplicaAssignment: [=>]
+      // Partition is a partition to create.
+      Partition: int32
+      // Replicas are broker IDs the partition must exist on.
+      Replicas: [int32]
+    // Configs is an array of key value config pairs for a topic.
+    // These correspond to Kafka Topic-Level Configs: http://kafka.apache.org/documentation/#topicconfigs.
+    Configs: [=>]
+      // Name is a topic level config key (e.g. segment.bytes).
+      Name: string
+      // Value is a topic level config value (e.g. 1073741824)
+      Value: nullable-string
+  // TimeoutMillis is how long to allow for this request.
+  TimeoutMillis: int32(60000)
+  // ValidateOnly is makes this request a dry-run; everything is validated but
+  // no topics are actually created.
+  ValidateOnly: bool // v1+
+
+// CreateTopicsResponse is returned from a CreateTopicsRequest.
+CreateTopicsResponse =>
+  // ThrottleMillis is how long of a throttle Kafka will apply to the client
+  // after this request.
+  // For Kafka < 2.0.0, the throttle is applied before issuing a response.
+  // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
+  ThrottleMillis: int32 // v2+
+  // Topics contains responses to the requested topic creations.
+  Topics: [=>]
+    // Topic is the topic this response corresponds to.
+    Topic: string
+    // ErrorCode is the error code for an individual topic creation.
+    //
+    // NOT_CONTROLLER is returned if the request was not issued to a Kafka
+    // controller.
+    //
+    // TOPIC_AUTHORIZATION_FAILED is returned if the client is not authorized
+    //
+    // INVALID_REQUEST is returned if the same topic occurred multiple times
+    // in the request.
+    //
+    // POLICY_VIOLATION is returned if the broker is using a
+    // create.topic.policy.class.name that returns a policy violation.
+    //
+    // INVALID_TOPIC_EXCEPTION if the topic collides with another topic when
+    // both topic's names' periods are replaced with underscores (e.g.
+    // topic.foo and topic_foo collide).
+    //
+    // TOPIC_ALREADY_EXISTS is returned if the topic already exists.
+    //
+    // INVALID_PARTITIONS is returned if the requested number of partitions is
+    // <= 0.
+    //
+    // INVALID_REPLICATION_FACTOR is returned if the requested replication
+    // factor is <= 0.
+    //
+    // INVALID_REPLICA_ASSIGNMENT is returned if not all partitions have the same
+    // number of replicas, or duplica replicas are assigned, or the partitions
+    // are not consecutive starting from 0.
+    //
+    // INVALID_CONFIG is returned if the requested topic config is invalid.
+    // to create a topic.
+    ErrorCode: int16
+    // ErrorMessage is an informative message if the topic creation failed.
+    ErrorMessage: nullable-string // v1+
+    // ConfigErrorCode is non-zero if configs are unable to be returned.
+    //
+    // This is the first tagged field, introduced in version 5. As such, it is
+    // only possible to be present in v5+.
+    ConfigErrorCode: int16 // tag 0
+    // NumPartitions is how many partitions were created for this topic.
+    NumPartitions: int32(-1) // v5+
+    // ReplicationFactor is how many replicas every partition has for this topic.
+    ReplicationFactor: int16(-1) // v5+
+    // Configs contains this topic's configuration.
+    Configs: nullable[=>] // v5+
+      // Name is the configuration name (e.g. segment.bytes).
+      Name: string
+      // Value is the value for this config key. If the key is sensitive,
+      // the value will be null.
+      Value: nullable-string
+      // ReadOnly signifies whether this is not a dynamic config option.
+      ReadOnly: bool
+      // Source is where this config entry is from. See the documentation
+      // on DescribeConfigsRequest's Source for more details.
+      Source: int8(-1)
+      // IsSensitive signifies whether this is a sensitive config key, which
+      // is either a password or an unknown type.
+      IsSensitive: bool

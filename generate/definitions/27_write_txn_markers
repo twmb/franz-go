@@ -1,0 +1,22 @@
+// WriteTxnMarkersRequest is a broker-to-broker request that Kafka uses to
+// finish transactions. Since this is specifically for inter-broker
+// communication, this is left undocumented.
+WriteTxnMarkersRequest => key 27, max version 0
+  Markers: [=>]
+    ProducerID: int64
+    ProducerEpoch: int16
+    Committed: bool
+    Topics: [=>]
+      Topic: string
+      Partitions: [int32]
+    CoordinatorEpoch: int32
+
+// WriteTxnMarkersResponse is a response to a WriteTxnMarkersRequest.
+WriteTxnMarkersResponse =>
+  Markers: [=>]
+    ProducerID: int64
+    Topics: [=>]
+      Topic: string
+      Partitions: [=>]
+        Partition: int32
+        ErrorCode: int16

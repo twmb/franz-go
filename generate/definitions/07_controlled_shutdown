@@ -1,0 +1,21 @@
+// ControlledShutdownRequest is an advanced request that can be used to
+// sthudown a broker in a controlled manner.
+//
+// As this is an advanced request and there is little reason to issue it as a
+// client, this request is undocumented. However, the minimal amount of fields
+// here makes the usage rather obvious.
+//
+// Kafka 2.2.0 introduced version 2, proposed in KIP-380.
+//
+// Note that version 0 of this request uses a special encoding format
+// where the request does not include the client ID.
+ControlledShutdownRequest => key 7, max version 3, flexible v3+
+  BrokerID: int32
+  BrokerEpoch: int64(-1) // v2+
+
+// ControlledShutdownResponse is returned from a ControlledShutdownRequest.
+ControlledShutdownResponse =>
+  ErrorCode: int16
+  PartitionsRemaining: [=>]
+    Topic: string
+    Partition: int32

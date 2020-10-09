@@ -1,0 +1,32 @@
+// Part of KIP-595 to replace Kafka's dependence on Zookeeper with a
+// Kafka-only raft protocol,
+// EndQuorumEpochRequest is sent by a leader to gracefully step down as leader
+// (i.e. on shutdown). Stepping down begins a new election.
+//
+// Since this is relatively Kafka internal, most fields are left undocumented.
+EndQuorumEpochRequest => key 54, max version 0, admin
+  ClusterID: nullable-string
+  Topics: [=>]
+    Topic: string
+    Partitions: [=>]
+      Partition: int32
+      // The ID of the replica sending this request.
+      ReplicaID: int32
+      // The current leader ID, or -1 if there is a vote in progress.
+      LeaderID: int32
+      // The current epoch.
+      LeaderEpoch: int32
+      // A sorted list of preferred successors to start the election.
+      PreferredSuccessors: [int32]
+
+EndQuorumEpochResponse =>
+  ErrorCode: int16
+  Topics: [=>]
+    Topic: string
+    Partitions: [=>]
+      Partition: int32
+      ErrorCode: int16
+      // The ID of the current leader, or -1 if the leader is unknown.
+      LeaderID: int32
+      // The latest known leader epoch.
+      LeaderEpoch: int32

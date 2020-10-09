@@ -1,0 +1,43 @@
+// FindCoordinatorRequest requests the coordinator for a group or transaction.
+//
+// This coordinator is different from the broker leader coordinator. This
+// coordinator is the partition leader for the partition that is storing
+// the group or transaction ID.
+FindCoordinatorRequest => key 10, max version 3, flexible v3+
+  // CoordinatorKey is the ID to use for finding the coordinator. For groups,
+  // this is the group name, for transactional producer, this is the
+  // transactional ID.
+  CoordinatorKey: string // v0+
+  // CoordinatorType is the type that key is. Groups are type 0,
+  // transactional IDs are type 1.
+  CoordinatorType: int8 // v1+
+
+// FindCoordinatorResponse is returned from a FindCoordinatorRequest.
+FindCoordinatorResponse =>
+  // ThrottleMillis is how long of a throttle Kafka will apply to the client
+  // after this request.
+  // For Kafka < 2.0.0, the throttle is applied before issuing a response.
+  // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
+  ThrottleMillis: int32 // v1+
+  // ErrorCode is the error returned for the request.
+  //
+  // GROUP_AUTHORIZATION_FAILED is returned if for a group ID request and the
+  // client is not authorized to describe groups.
+  //
+  // TRANSACTIONAL_ID_AUTHORIZATION_FAILED is returned for a transactional ID
+  // request and the client is not authorized to describe transactional IDs.
+  //
+  // INVALID_REQUEST is returned if not asking for a known type (group,
+  // or transaction).
+  //
+  // COORDINATOR_NOT_AVAILABLE is returned if the coordinator is not available
+  // for the requested ID, or if the requested ID does not exist.
+  ErrorCode: int16
+  // ErrorMessage is an informative message if the request errored.
+  ErrorMessage: nullable-string // v1+
+  // NodeID is the broker ID of the coordinator.
+  NodeID: int32
+  // Host is the host of the coordinator.
+  Host: string
+  // Port is the port of the coordinator.
+  Port: int32
