@@ -20,6 +20,22 @@ func (a Array) TypeName() string               { return "[]" + a.Inner.TypeName(
 func (s Struct) TypeName() string              { return s.Name }
 func (FieldLengthMinusBytes) TypeName() string { return "[]byte" }
 
+func (e Enum) TypeName() string { return e.Name }
+func (e Enum) WriteAppend(l *LineWriter) {
+	l.Write("{")
+	l.Write("v := %s(v)", e.Type.TypeName())
+	e.Type.WriteAppend(l)
+	l.Write("}")
+}
+func (e Enum) WriteDecode(l *LineWriter) {
+	l.Write("var t %s", e.Name)
+	l.Write("{")
+	e.Type.WriteDecode(l)
+	l.Write("t = %s(v)", e.Name)
+	l.Write("}")
+	l.Write("v := t")
+}
+
 // primAppend corresponds to the primitive append functions in
 // kmsg/primitives.go.
 func primAppend(name string, l *LineWriter) {
@@ -668,5 +684,35 @@ func (s Struct) WriteNewPtrFunc(l *LineWriter) {
 	l.Write("var v %s", s.Name)
 	l.Write("v.Default()")
 	l.Write("return &v")
+	l.Write("}")
+}
+
+func (e Enum) WriteDefn(l *LineWriter) {
+	if e.Comment != "" {
+		l.Write(e.Comment)
+		l.Write("// ")
+	}
+	l.Write("// Possible values and their meanings:")
+	l.Write("// ")
+	for _, v := range e.Values {
+		l.Write("// * %d (%s)", v.Value, v.Word)
+		if len(v.Comment) > 0 {
+			l.Write(v.Comment)
+		}
+		l.Write("//")
+	}
+	l.Write("type %s %s", e.Name, e.Type.TypeName())
+}
+
+func (e Enum) WriteStringFunc(l *LineWriter) {
+	l.Write("func (v %s) String() string {", e.Name)
+	l.Write("switch v {")
+	l.Write("default:")
+	l.Write(`return "UNKNOWN"`)
+	for _, v := range e.Values {
+		l.Write("case %d:", v.Value)
+		l.Write(`return "%s"`, v.Word)
+	}
+	l.Write("}")
 	l.Write("}")
 }

@@ -140,6 +140,20 @@ type (
 		ResponseKind     string // for requests
 		RequestKind      string // for responses
 	}
+
+	EnumValue struct {
+		Comment string
+		Value   int
+		Word    string
+	}
+
+	Enum struct {
+		Comment string
+		Name    string
+		Type
+
+		Values []EnumValue
+	}
 )
 
 /////////////////////
@@ -151,6 +165,13 @@ type Defaulter interface {
 	GetDefault() (interface{}, bool)
 	GetTypeDefault() interface{}
 }
+
+func (e Enum) SetDefault(s string) Type {
+	e.Type = e.Type.(Defaulter).SetDefault(s)
+	return e
+}
+func (e Enum) GetDefault() (interface{}, bool) { return e.Type.(Defaulter).GetDefault() }
+func (e Enum) GetTypeDefault() interface{}     { return e.Type.(Defaulter).GetTypeDefault() }
 
 func (b Bool) SetDefault(s string) Type {
 	v, err := strconv.ParseBool(s)
@@ -317,12 +338,22 @@ func (l *LineWriter) Write(line string, args ...interface{}) {
 //go:generate sh -c "go run . | gofmt > ../pkg/kmsg/generated.go"
 func main() {
 	const dir = "definitions"
+	const enums = "enums"
 	dirents, err := ioutil.ReadDir(dir)
 	if err != nil {
 		die("unable to read definitions dir %s: %v", dir, err)
 	}
+
+	{ // first parse all enums for use in definitions
+		f, err := ioutil.ReadFile(filepath.Join(dir, enums))
+		if err != nil {
+			die("unable to read %s/%s: %v", dir, enums, err)
+		}
+		ParseEnums(f)
+	}
+
 	for _, ent := range dirents {
-		if strings.HasPrefix(ent.Name(), ".") {
+		if ent.Name() == enums || strings.HasPrefix(ent.Name(), ".") {
 			continue
 		}
 		f, err := ioutil.ReadFile(filepath.Join(dir, ent.Name()))
@@ -422,6 +453,11 @@ func main() {
 	}
 	l.Write("}")
 	l.Write("}")
+
+	for _, e := range newEnums {
+		e.WriteDefn(l)
+		e.WriteStringFunc(l)
+	}
 
 	fmt.Println(l.buf.String())
 }

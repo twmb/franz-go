@@ -9,8 +9,11 @@ import (
 
 // If you are looking here, yes this is a shoddy parser, but it does the job.
 
-// newStructs are top level structs that we print at the end.
+// newStructs and newEnums are top level structs that we print at the end.
 var newStructs []Struct
+var newEnums []Enum
+
+var enums = make(map[string]Enum)
 
 var types = map[string]Type{
 	"bool":            Bool{},
@@ -202,6 +205,17 @@ func (s *Struct) BuildFrom(scanner *LineScanner, key int, level int) (done bool)
 			f.Type = NullableString{
 				FromFlexible:    s.FromFlexible,
 				NullableVersion: nullableVersion,
+			}
+
+		case strings.HasPrefix(typ, "enum-"):
+			typ = strings.TrimPrefix(typ, "enum-")
+			if _, ok := enums[typ]; !ok {
+				die("unknown enum %q on line %q", typ, line)
+			}
+			f.Type = enums[typ]
+
+			if hasDefault {
+				f.Type = f.Type.(Defaulter).SetDefault(def)
 			}
 
 		default: // type is known, lookup and set
@@ -463,5 +477,107 @@ func Parse(raw []byte) {
 		}
 
 		save()
+	}
+}
+
+func ParseEnums(raw []byte) {
+	scanner := &LineScanner{
+		buf:  string(raw),
+		nlat: -1,
+	}
+
+	var nextComment strings.Builder
+	resetComment := func() {
+		l := nextComment.Len()
+		nextComment.Reset()
+		nextComment.Grow(l)
+	}
+
+	writeComment := func(line string) {
+		if nextComment.Len() > 0 {
+			nextComment.WriteByte('\n')
+		}
+		nextComment.WriteString(line)
+	}
+
+	getComment := func() string {
+		r := nextComment.String()
+		resetComment()
+		return r
+	}
+
+	// 1: name
+	// 2: type
+	var enumNameRe = regexp.MustCompile(`^([A-Za-z]+) ([^ ]+) \($`)
+	// 1: value (number)
+	// 2: word (meaning)
+	var enumFieldRe = regexp.MustCompile(`^  (\d+): ([A-Z_]+)$`)
+
+	for scanner.Ok() {
+		line := scanner.Peek()
+		scanner.Next()
+		if len(line) == 0 { // allow for arbitrary empty lines
+			resetComment()
+			continue
+		}
+
+		if strings.HasPrefix(line, "//") { // comment? keep and continue
+			writeComment(line)
+			continue
+		}
+		nameMatch := enumNameRe.FindStringSubmatch(line)
+		if len(nameMatch) == 0 {
+			die("invalid enum name, unable to match `Name type (`")
+		}
+
+		e := Enum{
+			Comment: getComment(),
+
+			Name: nameMatch[1],
+			Type: types[nameMatch[2]],
+		}
+
+		var ev EnumValue
+		canStop := true
+		saveValue := func() {
+			ev.Comment = getComment()
+			e.Values = append(e.Values, ev)
+			ev = EnumValue{}
+			canStop = true
+		}
+
+	out:
+		for scanner.Ok() {
+			line := scanner.Peek()
+			scanner.Next()
+
+			fieldMatch := enumFieldRe.FindStringSubmatch(line)
+
+			switch {
+			default:
+				die("unable to determine line %s", line)
+			case strings.HasPrefix(line, "  //"):
+				canStop = false
+				writeComment(line)
+			case len(fieldMatch) > 0:
+				num, err := strconv.Atoi(fieldMatch[1])
+				if err != nil {
+					die("unable to convert to number on line %s", line)
+				}
+				ev.Value = num
+				ev.Word = fieldMatch[2]
+
+				saveValue()
+
+			case line == ")":
+				break out
+			}
+		}
+		if !canStop {
+			die("invalid enum ending with a comment")
+		}
+
+		enums[e.Name] = e
+		newEnums = append(newEnums, e)
 	}
 }
