@@ -8,9 +8,7 @@ IncrementalAlterConfigsRequest => key 44, max version 1, flexible v1+
   // Resources is an array of configs to alter.
   Resources: [=>]
     // ResourceType is an enum corresponding to the type of config to alter.
-    // The possible valid values are 2 (for topic), 4 (for broker),
-    // and 8 (for broker logger).
-    ResourceType: int8
+    ResourceType: enum-ConfigResourceType
     // ResourceName is the name of config to alter.
     //
     // If the requested type is a topic, this corresponds to a topic name.
@@ -74,7 +72,7 @@ IncrementalAlterConfigsResponse =>
     // ErrorMessage is an informative message if the incremental alter config failed.
     ErrorMessage: nullable-string
     // ResourceType is the enum corresponding to the type of altered config.
-    ResourceType: int8
+    ResourceType: enum-ConfigResourceType
     // ResourceName is the name corresponding to the incremental alter config
     // request.
     ResourceName: string

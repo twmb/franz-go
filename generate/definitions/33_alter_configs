@@ -16,7 +16,7 @@ AlterConfigsRequest => key 33, max version 1
   Resources: [=>]
     // ResourceType is an enum corresponding to the type of config to alter.
     // The only two valid values are 2 (for topic) and 4 (for broker).
-    ResourceType: int8
+    ResourceType: enum-ConfigResourceType
     // ResourceName is the name of config to alter.
     //
     // If the requested type is a topic, this corresponds to a topic name.
@@ -67,6 +67,6 @@ AlterConfigsResponse =>
     // ErrorMessage is an informative message if the alter config failed.
     ErrorMessage: nullable-string
     // ResourceType is the enum corresponding to the type of altered config.
-    ResourceType: int8
+    ResourceType: enum-ConfigResourceType
     // ResourceName is the name corresponding to the alter config request.
     ResourceName: string
