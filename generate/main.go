@@ -365,8 +365,9 @@ func main() {
 			s.WriteDecodeFunc(l)
 		}
 
-		// everything gets a default function
+		// everything gets a default and new function
 		s.WriteDefaultFunc(l)
+		s.WriteNewFunc(l)
 	}
 
 	l.Write("// RequestForKey returns the request corresponding to the given request key")

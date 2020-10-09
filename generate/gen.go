@@ -633,7 +633,19 @@ func (s Struct) WriteDecodeFunc(l *LineWriter) {
 }
 
 func (s Struct) WriteDefaultFunc(l *LineWriter) {
+	l.Write("// Default sets any default fields. Calling this allows for future compatibility")
+	l.Write("// if new fields are added to %s.", s.Name)
 	l.Write("func (v *%s) Default() {", s.Name)
 	s.WriteDefault(l)
+	l.Write("}")
+}
+
+func (s Struct) WriteNewFunc(l *LineWriter) {
+	l.Write("// New%[1]s returns a default %[1]s", s.Name)
+	l.Write("// This is a shortcut for creating a struct and calling Default yourself.")
+	l.Write("func New%[1]s() %[1]s {", s.Name)
+	l.Write("var v %s", s.Name)
+	l.Write("v.Default()")
+	l.Write("return v")
 	l.Write("}")
 }
