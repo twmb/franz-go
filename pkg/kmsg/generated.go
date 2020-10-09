@@ -708,6 +708,1087 @@ func NewRecordBatch() RecordBatch {
 	return v
 }
 
+// OffsetCommitKey is the key for the Kafka internal __consumer_offsets topic
+// if the key starts with an int16 with a value of 0 or 1.
+//
+// This type was introduced in KAFKA-1012 commit a670537aa3 with release 0.8.2
+// and has been in use ever since.
+type OffsetCommitKey struct {
+	// Version is which encoding version this value is using.
+	Version int16
+
+	// Group is the group being committed.
+	Group string
+
+	// Topic is the topic being committed.
+	Topic string
+
+	// Partition is the partition being committed.
+	Partition int32
+}
+
+func (v *OffsetCommitKey) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	{
+		v := v.Version
+		dst = kbin.AppendInt16(dst, v)
+	}
+	{
+		v := v.Group
+		dst = kbin.AppendString(dst, v)
+	}
+	{
+		v := v.Topic
+		dst = kbin.AppendString(dst, v)
+	}
+	{
+		v := v.Partition
+		dst = kbin.AppendInt32(dst, v)
+	}
+	return dst
+}
+func (v *OffsetCommitKey) ReadFrom(src []byte) error {
+	v.Default()
+	b := kbin.Reader{Src: src}
+	version := b.Int16()
+	v.Version = version
+	s := v
+	{
+		v := b.String()
+		s.Group = v
+	}
+	{
+		v := b.String()
+		s.Topic = v
+	}
+	{
+		v := b.Int32()
+		s.Partition = v
+	}
+	return b.Complete()
+}
+
+// Default sets any default fields. Calling this allows for future compatibility
+// if new fields are added to OffsetCommitKey.
+func (v *OffsetCommitKey) Default() {
+}
+
+// NewOffsetCommitKey returns a default OffsetCommitKey
+// This is a shortcut for creating a struct and calling Default yourself.
+func NewOffsetCommitKey() OffsetCommitKey {
+	var v OffsetCommitKey
+	v.Default()
+	return v
+}
+
+// OffsetCommitValue is the value for the Kafka internal __consumer_offsets
+// topic if the key is of OffsetCommitKey type.
+//
+// Version 0 was introduced with the key version 0.
+//
+// KAFKA-1634 commit c5df2a8e3a in 0.9.0 released version 1.
+//
+// KAFKA-4682 commit 418a91b5d4, proposed in KIP-211 and included in 2.1.0
+// released version 2.
+//
+// KAFKA-7437 commit 9f7267dd2f, proposed in KIP-320 and included in 2.1.0
+// released version 3.
+type OffsetCommitValue struct {
+	// Version is which encoding version this value is using.
+	Version int16
+
+	// Offset is the committed offset.
+	Offset int64
+
+	// LeaderEpoch is the epoch of the leader committing this message.
+	LeaderEpoch int32 // v3+
+
+	// Metadata is the metadata included in the commit.
+	Metadata string
+
+	// CommitTimestamp is when this commit occurred.
+	CommitTimestamp int64
+
+	// ExpireTimestamp, introduced in v1 and dropped in v2 with KIP-111,
+	// is when this commit expires.
+	ExpireTimestamp int64 // v1+
+}
+
+func (v *OffsetCommitValue) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	{
+		v := v.Version
+		dst = kbin.AppendInt16(dst, v)
+	}
+	{
+		v := v.Offset
+		dst = kbin.AppendInt64(dst, v)
+	}
+	if version >= 3 {
+		v := v.LeaderEpoch
+		dst = kbin.AppendInt32(dst, v)
+	}
+	{
+		v := v.Metadata
+		dst = kbin.AppendString(dst, v)
+	}
+	{
+		v := v.CommitTimestamp
+		dst = kbin.AppendInt64(dst, v)
+	}
+	if version >= 1 && version <= 1 {
+		v := v.ExpireTimestamp
+		dst = kbin.AppendInt64(dst, v)
+	}
+	return dst
+}
+func (v *OffsetCommitValue) ReadFrom(src []byte) error {
+	v.Default()
+	b := kbin.Reader{Src: src}
+	version := b.Int16()
+	v.Version = version
+	s := v
+	{
+		v := b.Int64()
+		s.Offset = v
+	}
+	if version >= 3 {
+		v := b.Int32()
+		s.LeaderEpoch = v
+	}
+	{
+		v := b.String()
+		s.Metadata = v
+	}
+	{
+		v := b.Int64()
+		s.CommitTimestamp = v
+	}
+	if version >= 1 && version <= 1 {
+		v := b.Int64()
+		s.ExpireTimestamp = v
+	}
+	return b.Complete()
+}
+
+// Default sets any default fields. Calling this allows for future compatibility
+// if new fields are added to OffsetCommitValue.
+func (v *OffsetCommitValue) Default() {
+}
+
+// NewOffsetCommitValue returns a default OffsetCommitValue
+// This is a shortcut for creating a struct and calling Default yourself.
+func NewOffsetCommitValue() OffsetCommitValue {
+	var v OffsetCommitValue
+	v.Default()
+	return v
+}
+
+// GroupMetadataKey is the key for the Kafka internal __consumer_offsets topic
+// if the key starts with an int16 with a value of 2.
+//
+// This type was introduced in KAFKA-2017 commit 7c33475274 with release 0.9.0
+// and has been in use ever since.
+type GroupMetadataKey struct {
+	// Version is which encoding version this value is using.
+	Version int16
+
+	// Group is the group this metadata is for.
+	Group string
+}
+
+func (v *GroupMetadataKey) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	{
+		v := v.Version
+		dst = kbin.AppendInt16(dst, v)
+	}
+	{
+		v := v.Group
+		dst = kbin.AppendString(dst, v)
+	}
+	return dst
+}
+func (v *GroupMetadataKey) ReadFrom(src []byte) error {
+	v.Default()
+	b := kbin.Reader{Src: src}
+	version := b.Int16()
+	v.Version = version
+	s := v
+	{
+		v := b.String()
+		s.Group = v
+	}
+	return b.Complete()
+}
+
+// Default sets any default fields. Calling this allows for future compatibility
+// if new fields are added to GroupMetadataKey.
+func (v *GroupMetadataKey) Default() {
+}
+
+// NewGroupMetadataKey returns a default GroupMetadataKey
+// This is a shortcut for creating a struct and calling Default yourself.
+func NewGroupMetadataKey() GroupMetadataKey {
+	var v GroupMetadataKey
+	v.Default()
+	return v
+}
+
+type GroupMetadataValueMember struct {
+	// MemberID is a group member.
+	MemberID string
+
+	// InstanceID is the instance ID of this member in the group (KIP-345).
+	InstanceID *string // v3+
+
+	// ClientID is the client ID of this group member.
+	ClientID string
+
+	// ClientHost is the hostname of this group member.
+	ClientHost string
+
+	// RebalanceTimeoutMillis is the rebalance timeout of this group member.
+	RebalanceTimeoutMillis int32 // v1+
+
+	// SessionTimeoutMillis is the session timeout of this group member.
+	SessionTimeoutMillis int32
+
+	// Subscription is the subscription of this group member.
+	Subscription []byte
+
+	// Assignment is what the leader assigned this group member.
+	Assignment []byte
+}
+
+// Default sets any default fields. Calling this allows for future compatibility
+// if new fields are added to GroupMetadataValueMember.
+func (v *GroupMetadataValueMember) Default() {
+}
+
+// NewGroupMetadataValueMember returns a default GroupMetadataValueMember
+// This is a shortcut for creating a struct and calling Default yourself.
+func NewGroupMetadataValueMember() GroupMetadataValueMember {
+	var v GroupMetadataValueMember
+	v.Default()
+	return v
+}
+
+// GroupMetadataValue is the value for the Kafka internal __consumer_offsets
+// topic if the key is of GroupMetadataKey type.
+//
+// Version 0 was introduced with the key version 0.
+//
+// KAFKA-3888 commit 40b1dd3f49, proposed in KIP-62 and included in 0.10.1
+// released version 1.
+//
+// KAFKA-4682 commit 418a91b5d4, proposed in KIP-211 and included in 2.1.0
+// released version 2.
+//
+// KAFKA-7862 commit 0f995ba6be, proposed in KIP-345 and included in 2.3.0
+// released version 3.
+type GroupMetadataValue struct {
+	// Version is the version of this value.
+	Version int16
+
+	// ProtocolType is the type of protocol being used for the group
+	// (i.e., "consumer").
+	ProtocolType string
+
+	// Generation is the generation of this group.
+	Generation int32
+
+	// Protocol is the agreed upon protocol all members are using to partition
+	// (i.e., "sticky").
+	Protocol *string
+
+	// Leader is the group leader.
+	Leader *string
+
+	// CurrentStateTimestamp is the timestamp for this state of the group
+	// (stable, etc.).
+	CurrentStateTimestamp int64 // v2+
+
+	// Members are the group members.
+	Members []GroupMetadataValueMember
+}
+
+func (v *GroupMetadataValue) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	{
+		v := v.Version
+		dst = kbin.AppendInt16(dst, v)
+	}
+	{
+		v := v.ProtocolType
+		dst = kbin.AppendString(dst, v)
+	}
+	{
+		v := v.Generation
+		dst = kbin.AppendInt32(dst, v)
+	}
+	{
+		v := v.Protocol
+		dst = kbin.AppendNullableString(dst, v)
+	}
+	{
+		v := v.Leader
+		dst = kbin.AppendNullableString(dst, v)
+	}
+	if version >= 2 {
+		v := v.CurrentStateTimestamp
+		dst = kbin.AppendInt64(dst, v)
+	}
+	{
+		v := v.Members
+		dst = kbin.AppendArrayLen(dst, len(v))
+		for i := range v {
+			v := &v[i]
+			{
+				v := v.MemberID
+				dst = kbin.AppendString(dst, v)
+			}
+			if version >= 3 {
+				v := v.InstanceID
+				dst = kbin.AppendNullableString(dst, v)
+			}
+			{
+				v := v.ClientID
+				dst = kbin.AppendString(dst, v)
+			}
+			{
+				v := v.ClientHost
+				dst = kbin.AppendString(dst, v)
+			}
+			if version >= 1 {
+				v := v.RebalanceTimeoutMillis
+				dst = kbin.AppendInt32(dst, v)
+			}
+			{
+				v := v.SessionTimeoutMillis
+				dst = kbin.AppendInt32(dst, v)
+			}
+			{
+				v := v.Subscription
+				dst = kbin.AppendBytes(dst, v)
+			}
+			{
+				v := v.Assignment
+				dst = kbin.AppendBytes(dst, v)
+			}
+		}
+	}
+	return dst
+}
+func (v *GroupMetadataValue) ReadFrom(src []byte) error {
+	v.Default()
+	b := kbin.Reader{Src: src}
+	version := b.Int16()
+	v.Version = version
+	s := v
+	{
+		v := b.String()
+		s.ProtocolType = v
+	}
+	{
+		v := b.Int32()
+		s.Generation = v
+	}
+	{
+		v := b.NullableString()
+		s.Protocol = v
+	}
+	{
+		v := b.NullableString()
+		s.Leader = v
+	}
+	if version >= 2 {
+		v := b.Int64()
+		s.CurrentStateTimestamp = v
+	}
+	{
+		v := s.Members
+		a := v
+		var l int32
+		l = b.ArrayLen()
+		if !b.Ok() {
+			return b.Complete()
+		}
+		if l > 0 {
+			a = make([]GroupMetadataValueMember, l)
+		}
+		for i := int32(0); i < l; i++ {
+			v := &a[i]
+			v.Default()
+			s := v
+			{
+				v := b.String()
+				s.MemberID = v
+			}
+			if version >= 3 {
+				v := b.NullableString()
+				s.InstanceID = v
+			}
+			{
+				v := b.String()
+				s.ClientID = v
+			}
+			{
+				v := b.String()
+				s.ClientHost = v
+			}
+			if version >= 1 {
+				v := b.Int32()
+				s.RebalanceTimeoutMillis = v
+			}
+			{
+				v := b.Int32()
+				s.SessionTimeoutMillis = v
+			}
+			{
+				v := b.Bytes()
+				s.Subscription = v
+			}
+			{
+				v := b.Bytes()
+				s.Assignment = v
+			}
+		}
+		v = a
+		s.Members = v
+	}
+	return b.Complete()
+}
+
+// Default sets any default fields. Calling this allows for future compatibility
+// if new fields are added to GroupMetadataValue.
+func (v *GroupMetadataValue) Default() {
+}
+
+// NewGroupMetadataValue returns a default GroupMetadataValue
+// This is a shortcut for creating a struct and calling Default yourself.
+func NewGroupMetadataValue() GroupMetadataValue {
+	var v GroupMetadataValue
+	v.Default()
+	return v
+}
+
+// TxnMetadataKey is the key for the Kafka internal __transaction_state topic
+// if the key starts with an int16 with a value of 0.
+type TxnMetadataKey struct {
+	// Version is the version of this type.
+	Version int16
+
+	// TransactionalID is the transactional ID this record is for.
+	TransactionalID string
+}
+
+func (v *TxnMetadataKey) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	{
+		v := v.Version
+		dst = kbin.AppendInt16(dst, v)
+	}
+	{
+		v := v.TransactionalID
+		dst = kbin.AppendString(dst, v)
+	}
+	return dst
+}
+func (v *TxnMetadataKey) ReadFrom(src []byte) error {
+	v.Default()
+	b := kbin.Reader{Src: src}
+	version := b.Int16()
+	v.Version = version
+	s := v
+	{
+		v := b.String()
+		s.TransactionalID = v
+	}
+	return b.Complete()
+}
+
+// Default sets any default fields. Calling this allows for future compatibility
+// if new fields are added to TxnMetadataKey.
+func (v *TxnMetadataKey) Default() {
+}
+
+// NewTxnMetadataKey returns a default TxnMetadataKey
+// This is a shortcut for creating a struct and calling Default yourself.
+func NewTxnMetadataKey() TxnMetadataKey {
+	var v TxnMetadataKey
+	v.Default()
+	return v
+}
+
+type TxnMetadataValueTopic struct {
+	// Topic is a topic involved in this transaction.
+	Topic string
+
+	// Partitions are partitions in this topic involved in the transaction.
+	Partitions []int32
+}
+
+// Default sets any default fields. Calling this allows for future compatibility
+// if new fields are added to TxnMetadataValueTopic.
+func (v *TxnMetadataValueTopic) Default() {
+}
+
+// NewTxnMetadataValueTopic returns a default TxnMetadataValueTopic
+// This is a shortcut for creating a struct and calling Default yourself.
+func NewTxnMetadataValueTopic() TxnMetadataValueTopic {
+	var v TxnMetadataValueTopic
+	v.Default()
+	return v
+}
+
+// TxnMetadataValue is the value for the Kafka internal __transaction_state
+// topic if the key is of TxnMetadataKey type.
+type TxnMetadataValue struct {
+	// Version is the version of this value.
+	Version int16
+
+	// ProducerID is the ID in use by the transactional ID.
+	ProducerID int64
+
+	// LastProducerID is the last ID in use for a producer; see KIP-360.
+	LastProducerID int64 // v1+
+
+	// ProducerEpoch is the epoch associated with the producer ID.
+	ProducerEpoch int16
+
+	// LastProducerEpoch is the last epoch in use for a producer; see KIP-360.
+	LastProducerEpoch int16 // v1+
+
+	// TimeoutMillis is the timeout of this transaction in milliseconds.
+	TimeoutMillis int32
+
+	// State is the state this transaction is in,
+	// 0 is Empty, 1 is Ongoing, 2 is PrepareCommit, 3 is PrepareAbort, 4 is
+	// CompleteCommit, 5 is CompleteAbort, 6 is Dead, and 7 is PrepareEpochFence.
+	State int8
+
+	// Topics are topics that are involved in this transaction.
+	Topics []TxnMetadataValueTopic
+
+	// LastUpdateTimestamp is the timestamp in millis of when this transaction
+	// was last updated.
+	LastUpdateTimestamp int64
+
+	// StartTimestamp is the timestamp in millis of when this transaction started.
+	StartTimestamp int64
+}
+
+func (v *TxnMetadataValue) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	{
+		v := v.Version
+		dst = kbin.AppendInt16(dst, v)
+	}
+	{
+		v := v.ProducerID
+		dst = kbin.AppendInt64(dst, v)
+	}
+	if version >= 1 {
+		v := v.LastProducerID
+		dst = kbin.AppendInt64(dst, v)
+	}
+	{
+		v := v.ProducerEpoch
+		dst = kbin.AppendInt16(dst, v)
+	}
+	if version >= 1 {
+		v := v.LastProducerEpoch
+		dst = kbin.AppendInt16(dst, v)
+	}
+	{
+		v := v.TimeoutMillis
+		dst = kbin.AppendInt32(dst, v)
+	}
+	{
+		v := v.State
+		dst = kbin.AppendInt8(dst, v)
+	}
+	{
+		v := v.Topics
+		dst = kbin.AppendArrayLen(dst, len(v))
+		for i := range v {
+			v := &v[i]
+			{
+				v := v.Topic
+				dst = kbin.AppendString(dst, v)
+			}
+			{
+				v := v.Partitions
+				dst = kbin.AppendArrayLen(dst, len(v))
+				for i := range v {
+					v := v[i]
+					dst = kbin.AppendInt32(dst, v)
+				}
+			}
+		}
+	}
+	{
+		v := v.LastUpdateTimestamp
+		dst = kbin.AppendInt64(dst, v)
+	}
+	{
+		v := v.StartTimestamp
+		dst = kbin.AppendInt64(dst, v)
+	}
+	return dst
+}
+func (v *TxnMetadataValue) ReadFrom(src []byte) error {
+	v.Default()
+	b := kbin.Reader{Src: src}
+	version := b.Int16()
+	v.Version = version
+	s := v
+	{
+		v := b.Int64()
+		s.ProducerID = v
+	}
+	if version >= 1 {
+		v := b.Int64()
+		s.LastProducerID = v
+	}
+	{
+		v := b.Int16()
+		s.ProducerEpoch = v
+	}
+	if version >= 1 {
+		v := b.Int16()
+		s.LastProducerEpoch = v
+	}
+	{
+		v := b.Int32()
+		s.TimeoutMillis = v
+	}
+	{
+		v := b.Int8()
+		s.State = v
+	}
+	{
+		v := s.Topics
+		a := v
+		var l int32
+		l = b.ArrayLen()
+		if !b.Ok() {
+			return b.Complete()
+		}
+		if l > 0 {
+			a = make([]TxnMetadataValueTopic, l)
+		}
+		for i := int32(0); i < l; i++ {
+			v := &a[i]
+			v.Default()
+			s := v
+			{
+				v := b.String()
+				s.Topic = v
+			}
+			{
+				v := s.Partitions
+				a := v
+				var l int32
+				l = b.ArrayLen()
+				if !b.Ok() {
+					return b.Complete()
+				}
+				if l > 0 {
+					a = make([]int32, l)
+				}
+				for i := int32(0); i < l; i++ {
+					v := b.Int32()
+					a[i] = v
+				}
+				v = a
+				s.Partitions = v
+			}
+		}
+		v = a
+		s.Topics = v
+	}
+	{
+		v := b.Int64()
+		s.LastUpdateTimestamp = v
+	}
+	{
+		v := b.Int64()
+		s.StartTimestamp = v
+	}
+	return b.Complete()
+}
+
+// Default sets any default fields. Calling this allows for future compatibility
+// if new fields are added to TxnMetadataValue.
+func (v *TxnMetadataValue) Default() {
+}
+
+// NewTxnMetadataValue returns a default TxnMetadataValue
+// This is a shortcut for creating a struct and calling Default yourself.
+func NewTxnMetadataValue() TxnMetadataValue {
+	var v TxnMetadataValue
+	v.Default()
+	return v
+}
+
+type StickyMemberMetadataCurrentAssignment struct {
+	// Topic is a topic the group member is currently assigned.
+	Topic string
+
+	// Partitions are the partitions within a topic that a group member is
+	// currently assigned.
+	Partitions []int32
+}
+
+// Default sets any default fields. Calling this allows for future compatibility
+// if new fields are added to StickyMemberMetadataCurrentAssignment.
+func (v *StickyMemberMetadataCurrentAssignment) Default() {
+}
+
+// NewStickyMemberMetadataCurrentAssignment returns a default StickyMemberMetadataCurrentAssignment
+// This is a shortcut for creating a struct and calling Default yourself.
+func NewStickyMemberMetadataCurrentAssignment() StickyMemberMetadataCurrentAssignment {
+	var v StickyMemberMetadataCurrentAssignment
+	v.Default()
+	return v
+}
+
+// StickyMemberMetadata is is what is encoded in UserData for
+// GroupMemberMetadata in group join requests with the sticky partitioning
+// strategy.
+//
+// V1 added generation, which fixed a bug with flaky group members joining
+// repeatedly. See KIP-341 for more details.
+//
+// Note that clients should always try decoding as v1 and, if that fails,
+// fall back to v0. This is necessary due to there being no version number
+// anywhere in this type.
+type StickyMemberMetadata struct {
+	// CurrentAssignment is the assignment that a group member has when
+	// issuing a join.
+	CurrentAssignment []StickyMemberMetadataCurrentAssignment
+
+	// Generation is the generation of this join. This is incremented every join.
+	Generation int32 // v1+
+}
+
+// Default sets any default fields. Calling this allows for future compatibility
+// if new fields are added to StickyMemberMetadata.
+func (v *StickyMemberMetadata) Default() {
+}
+
+// NewStickyMemberMetadata returns a default StickyMemberMetadata
+// This is a shortcut for creating a struct and calling Default yourself.
+func NewStickyMemberMetadata() StickyMemberMetadata {
+	var v StickyMemberMetadata
+	v.Default()
+	return v
+}
+
+type GroupMemberMetadataOwnedPartition struct {
+	Topic string
+
+	Partitions []int32
+}
+
+// Default sets any default fields. Calling this allows for future compatibility
+// if new fields are added to GroupMemberMetadataOwnedPartition.
+func (v *GroupMemberMetadataOwnedPartition) Default() {
+}
+
+// NewGroupMemberMetadataOwnedPartition returns a default GroupMemberMetadataOwnedPartition
+// This is a shortcut for creating a struct and calling Default yourself.
+func NewGroupMemberMetadataOwnedPartition() GroupMemberMetadataOwnedPartition {
+	var v GroupMemberMetadataOwnedPartition
+	v.Default()
+	return v
+}
+
+// GroupMemberMetadata is the metadata that is usually sent with a join group
+// request.
+type GroupMemberMetadata struct {
+	// Version is either version 0 or version 1.
+	Version int16
+
+	// Topics is the list of topics in the group that this member is interested
+	// in consuming.
+	Topics []string
+
+	// UserData is arbitrary client data for a given client in the group.
+	// For sticky assignment, this is StickyMemberMetadata.
+	UserData []byte
+
+	// OwnedPartitions, introduced for KIP-429, are the partitions that this
+	// member currently owns.
+	OwnedPartitions []GroupMemberMetadataOwnedPartition // v1+
+}
+
+func (v *GroupMemberMetadata) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	{
+		v := v.Version
+		dst = kbin.AppendInt16(dst, v)
+	}
+	{
+		v := v.Topics
+		dst = kbin.AppendArrayLen(dst, len(v))
+		for i := range v {
+			v := v[i]
+			dst = kbin.AppendString(dst, v)
+		}
+	}
+	{
+		v := v.UserData
+		dst = kbin.AppendBytes(dst, v)
+	}
+	if version >= 1 {
+		v := v.OwnedPartitions
+		dst = kbin.AppendArrayLen(dst, len(v))
+		for i := range v {
+			v := &v[i]
+			{
+				v := v.Topic
+				dst = kbin.AppendString(dst, v)
+			}
+			{
+				v := v.Partitions
+				dst = kbin.AppendArrayLen(dst, len(v))
+				for i := range v {
+					v := v[i]
+					dst = kbin.AppendInt32(dst, v)
+				}
+			}
+		}
+	}
+	return dst
+}
+func (v *GroupMemberMetadata) ReadFrom(src []byte) error {
+	v.Default()
+	b := kbin.Reader{Src: src}
+	version := b.Int16()
+	v.Version = version
+	s := v
+	{
+		v := s.Topics
+		a := v
+		var l int32
+		l = b.ArrayLen()
+		if !b.Ok() {
+			return b.Complete()
+		}
+		if l > 0 {
+			a = make([]string, l)
+		}
+		for i := int32(0); i < l; i++ {
+			v := b.String()
+			a[i] = v
+		}
+		v = a
+		s.Topics = v
+	}
+	{
+		v := b.Bytes()
+		s.UserData = v
+	}
+	if version >= 1 {
+		v := s.OwnedPartitions
+		a := v
+		var l int32
+		l = b.ArrayLen()
+		if !b.Ok() {
+			return b.Complete()
+		}
+		if l > 0 {
+			a = make([]GroupMemberMetadataOwnedPartition, l)
+		}
+		for i := int32(0); i < l; i++ {
+			v := &a[i]
+			v.Default()
+			s := v
+			{
+				v := b.String()
+				s.Topic = v
+			}
+			{
+				v := s.Partitions
+				a := v
+				var l int32
+				l = b.ArrayLen()
+				if !b.Ok() {
+					return b.Complete()
+				}
+				if l > 0 {
+					a = make([]int32, l)
+				}
+				for i := int32(0); i < l; i++ {
+					v := b.Int32()
+					a[i] = v
+				}
+				v = a
+				s.Partitions = v
+			}
+		}
+		v = a
+		s.OwnedPartitions = v
+	}
+	return b.Complete()
+}
+
+// Default sets any default fields. Calling this allows for future compatibility
+// if new fields are added to GroupMemberMetadata.
+func (v *GroupMemberMetadata) Default() {
+}
+
+// NewGroupMemberMetadata returns a default GroupMemberMetadata
+// This is a shortcut for creating a struct and calling Default yourself.
+func NewGroupMemberMetadata() GroupMemberMetadata {
+	var v GroupMemberMetadata
+	v.Default()
+	return v
+}
+
+type GroupMemberAssignmentTopic struct {
+	// Topic is a topic in the assignment.
+	Topic string
+
+	// Partitions contains partitions in the assignment.
+	Partitions []int32
+}
+
+// Default sets any default fields. Calling this allows for future compatibility
+// if new fields are added to GroupMemberAssignmentTopic.
+func (v *GroupMemberAssignmentTopic) Default() {
+}
+
+// NewGroupMemberAssignmentTopic returns a default GroupMemberAssignmentTopic
+// This is a shortcut for creating a struct and calling Default yourself.
+func NewGroupMemberAssignmentTopic() GroupMemberAssignmentTopic {
+	var v GroupMemberAssignmentTopic
+	v.Default()
+	return v
+}
+
+// GroupMemberAssignment is the assignment data that is usually sent with a
+// sync group request.
+type GroupMemberAssignment struct {
+	// Verson is currently version 0.
+	Version int16
+
+	// Topics contains topics in the assignment.
+	Topics []GroupMemberAssignmentTopic
+
+	// UserData is arbitrary client data for a given client in the group.
+	UserData []byte
+}
+
+func (v *GroupMemberAssignment) AppendTo(dst []byte) []byte {
+	{
+		v := v.Version
+		dst = kbin.AppendInt16(dst, v)
+	}
+	{
+		v := v.Topics
+		dst = kbin.AppendArrayLen(dst, len(v))
+		for i := range v {
+			v := &v[i]
+			{
+				v := v.Topic
+				dst = kbin.AppendString(dst, v)
+			}
+			{
+				v := v.Partitions
+				dst = kbin.AppendArrayLen(dst, len(v))
+				for i := range v {
+					v := v[i]
+					dst = kbin.AppendInt32(dst, v)
+				}
+			}
+		}
+	}
+	{
+		v := v.UserData
+		dst = kbin.AppendBytes(dst, v)
+	}
+	return dst
+}
+func (v *GroupMemberAssignment) ReadFrom(src []byte) error {
+	v.Default()
+	b := kbin.Reader{Src: src}
+	s := v
+	{
+		v := b.Int16()
+		s.Version = v
+	}
+	{
+		v := s.Topics
+		a := v
+		var l int32
+		l = b.ArrayLen()
+		if !b.Ok() {
+			return b.Complete()
+		}
+		if l > 0 {
+			a = make([]GroupMemberAssignmentTopic, l)
+		}
+		for i := int32(0); i < l; i++ {
+			v := &a[i]
+			v.Default()
+			s := v
+			{
+				v := b.String()
+				s.Topic = v
+			}
+			{
+				v := s.Partitions
+				a := v
+				var l int32
+				l = b.ArrayLen()
+				if !b.Ok() {
+					return b.Complete()
+				}
+				if l > 0 {
+					a = make([]int32, l)
+				}
+				for i := int32(0); i < l; i++ {
+					v := b.Int32()
+					a[i] = v
+				}
+				v = a
+				s.Partitions = v
+			}
+		}
+		v = a
+		s.Topics = v
+	}
+	{
+		v := b.Bytes()
+		s.UserData = v
+	}
+	return b.Complete()
+}
+
+// Default sets any default fields. Calling this allows for future compatibility
+// if new fields are added to GroupMemberAssignment.
+func (v *GroupMemberAssignment) Default() {
+}
+
+// NewGroupMemberAssignment returns a default GroupMemberAssignment
+// This is a shortcut for creating a struct and calling Default yourself.
+func NewGroupMemberAssignment() GroupMemberAssignment {
+	var v GroupMemberAssignment
+	v.Default()
+	return v
+}
+
 type ProduceRequestTopicPartition struct {
 	// Partition is a partition to send a record batch to.
 	Partition int32
@@ -6356,737 +7437,6 @@ func NewControlledShutdownResponse() ControlledShutdownResponse {
 	return v
 }
 
-// OffsetCommitKey is the key for the Kafka internal __consumer_offsets topic
-// if the key starts with an int16 with a value of 0 or 1.
-//
-// This type was introduced in KAFKA-1012 commit a670537aa3 with release 0.8.2
-// and has been in use ever since.
-type OffsetCommitKey struct {
-	// Version is which encoding version this value is using.
-	Version int16
-
-	// Group is the group being committed.
-	Group string
-
-	// Topic is the topic being committed.
-	Topic string
-
-	// Partition is the partition being committed.
-	Partition int32
-}
-
-func (v *OffsetCommitKey) AppendTo(dst []byte) []byte {
-	version := v.Version
-	_ = version
-	{
-		v := v.Version
-		dst = kbin.AppendInt16(dst, v)
-	}
-	{
-		v := v.Group
-		dst = kbin.AppendString(dst, v)
-	}
-	{
-		v := v.Topic
-		dst = kbin.AppendString(dst, v)
-	}
-	{
-		v := v.Partition
-		dst = kbin.AppendInt32(dst, v)
-	}
-	return dst
-}
-func (v *OffsetCommitKey) ReadFrom(src []byte) error {
-	v.Default()
-	b := kbin.Reader{Src: src}
-	version := b.Int16()
-	v.Version = version
-	s := v
-	{
-		v := b.String()
-		s.Group = v
-	}
-	{
-		v := b.String()
-		s.Topic = v
-	}
-	{
-		v := b.Int32()
-		s.Partition = v
-	}
-	return b.Complete()
-}
-
-// Default sets any default fields. Calling this allows for future compatibility
-// if new fields are added to OffsetCommitKey.
-func (v *OffsetCommitKey) Default() {
-}
-
-// NewOffsetCommitKey returns a default OffsetCommitKey
-// This is a shortcut for creating a struct and calling Default yourself.
-func NewOffsetCommitKey() OffsetCommitKey {
-	var v OffsetCommitKey
-	v.Default()
-	return v
-}
-
-// OffsetCommitValue is the value for the Kafka internal __consumer_offsets
-// topic if the key is of OffsetCommitKey type.
-//
-// Version 0 was introduced with the key version 0.
-//
-// KAFKA-1634 commit c5df2a8e3a in 0.9.0 released version 1.
-//
-// KAFKA-4682 commit 418a91b5d4, proposed in KIP-211 and included in 2.1.0
-// released version 2.
-//
-// KAFKA-7437 commit 9f7267dd2f, proposed in KIP-320 and included in 2.1.0
-// released version 3.
-type OffsetCommitValue struct {
-	// Version is which encoding version this value is using.
-	Version int16
-
-	// Offset is the committed offset.
-	Offset int64
-
-	// LeaderEpoch is the epoch of the leader committing this message.
-	LeaderEpoch int32 // v3+
-
-	// Metadata is the metadata included in the commit.
-	Metadata string
-
-	// CommitTimestamp is when this commit occurred.
-	CommitTimestamp int64
-
-	// ExpireTimestamp, introduced in v1 and dropped in v2 with KIP-111,
-	// is when this commit expires.
-	ExpireTimestamp int64 // v1+
-}
-
-func (v *OffsetCommitValue) AppendTo(dst []byte) []byte {
-	version := v.Version
-	_ = version
-	{
-		v := v.Version
-		dst = kbin.AppendInt16(dst, v)
-	}
-	{
-		v := v.Offset
-		dst = kbin.AppendInt64(dst, v)
-	}
-	if version >= 3 {
-		v := v.LeaderEpoch
-		dst = kbin.AppendInt32(dst, v)
-	}
-	{
-		v := v.Metadata
-		dst = kbin.AppendString(dst, v)
-	}
-	{
-		v := v.CommitTimestamp
-		dst = kbin.AppendInt64(dst, v)
-	}
-	if version >= 1 && version <= 1 {
-		v := v.ExpireTimestamp
-		dst = kbin.AppendInt64(dst, v)
-	}
-	return dst
-}
-func (v *OffsetCommitValue) ReadFrom(src []byte) error {
-	v.Default()
-	b := kbin.Reader{Src: src}
-	version := b.Int16()
-	v.Version = version
-	s := v
-	{
-		v := b.Int64()
-		s.Offset = v
-	}
-	if version >= 3 {
-		v := b.Int32()
-		s.LeaderEpoch = v
-	}
-	{
-		v := b.String()
-		s.Metadata = v
-	}
-	{
-		v := b.Int64()
-		s.CommitTimestamp = v
-	}
-	if version >= 1 && version <= 1 {
-		v := b.Int64()
-		s.ExpireTimestamp = v
-	}
-	return b.Complete()
-}
-
-// Default sets any default fields. Calling this allows for future compatibility
-// if new fields are added to OffsetCommitValue.
-func (v *OffsetCommitValue) Default() {
-}
-
-// NewOffsetCommitValue returns a default OffsetCommitValue
-// This is a shortcut for creating a struct and calling Default yourself.
-func NewOffsetCommitValue() OffsetCommitValue {
-	var v OffsetCommitValue
-	v.Default()
-	return v
-}
-
-// GroupMetadataKey is the key for the Kafka internal __consumer_offsets topic
-// if the key starts with an int16 with a value of 2.
-//
-// This type was introduced in KAFKA-2017 commit 7c33475274 with release 0.9.0
-// and has been in use ever since.
-type GroupMetadataKey struct {
-	// Version is which encoding version this value is using.
-	Version int16
-
-	// Group is the group this metadata is for.
-	Group string
-}
-
-func (v *GroupMetadataKey) AppendTo(dst []byte) []byte {
-	version := v.Version
-	_ = version
-	{
-		v := v.Version
-		dst = kbin.AppendInt16(dst, v)
-	}
-	{
-		v := v.Group
-		dst = kbin.AppendString(dst, v)
-	}
-	return dst
-}
-func (v *GroupMetadataKey) ReadFrom(src []byte) error {
-	v.Default()
-	b := kbin.Reader{Src: src}
-	version := b.Int16()
-	v.Version = version
-	s := v
-	{
-		v := b.String()
-		s.Group = v
-	}
-	return b.Complete()
-}
-
-// Default sets any default fields. Calling this allows for future compatibility
-// if new fields are added to GroupMetadataKey.
-func (v *GroupMetadataKey) Default() {
-}
-
-// NewGroupMetadataKey returns a default GroupMetadataKey
-// This is a shortcut for creating a struct and calling Default yourself.
-func NewGroupMetadataKey() GroupMetadataKey {
-	var v GroupMetadataKey
-	v.Default()
-	return v
-}
-
-type GroupMetadataValueMember struct {
-	// MemberID is a group member.
-	MemberID string
-
-	// InstanceID is the instance ID of this member in the group (KIP-345).
-	InstanceID *string // v3+
-
-	// ClientID is the client ID of this group member.
-	ClientID string
-
-	// ClientHost is the hostname of this group member.
-	ClientHost string
-
-	// RebalanceTimeoutMillis is the rebalance timeout of this group member.
-	RebalanceTimeoutMillis int32 // v1+
-
-	// SessionTimeoutMillis is the session timeout of this group member.
-	SessionTimeoutMillis int32
-
-	// Subscription is the subscription of this group member.
-	Subscription []byte
-
-	// Assignment is what the leader assigned this group member.
-	Assignment []byte
-}
-
-// Default sets any default fields. Calling this allows for future compatibility
-// if new fields are added to GroupMetadataValueMember.
-func (v *GroupMetadataValueMember) Default() {
-}
-
-// NewGroupMetadataValueMember returns a default GroupMetadataValueMember
-// This is a shortcut for creating a struct and calling Default yourself.
-func NewGroupMetadataValueMember() GroupMetadataValueMember {
-	var v GroupMetadataValueMember
-	v.Default()
-	return v
-}
-
-// GroupMetadataValue is the value for the Kafka internal __consumer_offsets
-// topic if the key is of GroupMetadataKey type.
-//
-// Version 0 was introduced with the key version 0.
-//
-// KAFKA-3888 commit 40b1dd3f49, proposed in KIP-62 and included in 0.10.1
-// released version 1.
-//
-// KAFKA-4682 commit 418a91b5d4, proposed in KIP-211 and included in 2.1.0
-// released version 2.
-//
-// KAFKA-7862 commit 0f995ba6be, proposed in KIP-345 and included in 2.3.0
-// released version 3.
-type GroupMetadataValue struct {
-	// Version is the version of this value.
-	Version int16
-
-	// ProtocolType is the type of protocol being used for the group
-	// (i.e., "consumer").
-	ProtocolType string
-
-	// Generation is the generation of this group.
-	Generation int32
-
-	// Protocol is the agreed upon protocol all members are using to partition
-	// (i.e., "sticky").
-	Protocol *string
-
-	// Leader is the group leader.
-	Leader *string
-
-	// CurrentStateTimestamp is the timestamp for this state of the group
-	// (stable, etc.).
-	CurrentStateTimestamp int64 // v2+
-
-	// Members are the group members.
-	Members []GroupMetadataValueMember
-}
-
-func (v *GroupMetadataValue) AppendTo(dst []byte) []byte {
-	version := v.Version
-	_ = version
-	{
-		v := v.Version
-		dst = kbin.AppendInt16(dst, v)
-	}
-	{
-		v := v.ProtocolType
-		dst = kbin.AppendString(dst, v)
-	}
-	{
-		v := v.Generation
-		dst = kbin.AppendInt32(dst, v)
-	}
-	{
-		v := v.Protocol
-		dst = kbin.AppendNullableString(dst, v)
-	}
-	{
-		v := v.Leader
-		dst = kbin.AppendNullableString(dst, v)
-	}
-	if version >= 2 {
-		v := v.CurrentStateTimestamp
-		dst = kbin.AppendInt64(dst, v)
-	}
-	{
-		v := v.Members
-		dst = kbin.AppendArrayLen(dst, len(v))
-		for i := range v {
-			v := &v[i]
-			{
-				v := v.MemberID
-				dst = kbin.AppendString(dst, v)
-			}
-			if version >= 3 {
-				v := v.InstanceID
-				dst = kbin.AppendNullableString(dst, v)
-			}
-			{
-				v := v.ClientID
-				dst = kbin.AppendString(dst, v)
-			}
-			{
-				v := v.ClientHost
-				dst = kbin.AppendString(dst, v)
-			}
-			if version >= 1 {
-				v := v.RebalanceTimeoutMillis
-				dst = kbin.AppendInt32(dst, v)
-			}
-			{
-				v := v.SessionTimeoutMillis
-				dst = kbin.AppendInt32(dst, v)
-			}
-			{
-				v := v.Subscription
-				dst = kbin.AppendBytes(dst, v)
-			}
-			{
-				v := v.Assignment
-				dst = kbin.AppendBytes(dst, v)
-			}
-		}
-	}
-	return dst
-}
-func (v *GroupMetadataValue) ReadFrom(src []byte) error {
-	v.Default()
-	b := kbin.Reader{Src: src}
-	version := b.Int16()
-	v.Version = version
-	s := v
-	{
-		v := b.String()
-		s.ProtocolType = v
-	}
-	{
-		v := b.Int32()
-		s.Generation = v
-	}
-	{
-		v := b.NullableString()
-		s.Protocol = v
-	}
-	{
-		v := b.NullableString()
-		s.Leader = v
-	}
-	if version >= 2 {
-		v := b.Int64()
-		s.CurrentStateTimestamp = v
-	}
-	{
-		v := s.Members
-		a := v
-		var l int32
-		l = b.ArrayLen()
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if l > 0 {
-			a = make([]GroupMetadataValueMember, l)
-		}
-		for i := int32(0); i < l; i++ {
-			v := &a[i]
-			v.Default()
-			s := v
-			{
-				v := b.String()
-				s.MemberID = v
-			}
-			if version >= 3 {
-				v := b.NullableString()
-				s.InstanceID = v
-			}
-			{
-				v := b.String()
-				s.ClientID = v
-			}
-			{
-				v := b.String()
-				s.ClientHost = v
-			}
-			if version >= 1 {
-				v := b.Int32()
-				s.RebalanceTimeoutMillis = v
-			}
-			{
-				v := b.Int32()
-				s.SessionTimeoutMillis = v
-			}
-			{
-				v := b.Bytes()
-				s.Subscription = v
-			}
-			{
-				v := b.Bytes()
-				s.Assignment = v
-			}
-		}
-		v = a
-		s.Members = v
-	}
-	return b.Complete()
-}
-
-// Default sets any default fields. Calling this allows for future compatibility
-// if new fields are added to GroupMetadataValue.
-func (v *GroupMetadataValue) Default() {
-}
-
-// NewGroupMetadataValue returns a default GroupMetadataValue
-// This is a shortcut for creating a struct and calling Default yourself.
-func NewGroupMetadataValue() GroupMetadataValue {
-	var v GroupMetadataValue
-	v.Default()
-	return v
-}
-
-// TxnMetadataKey is the key for the Kafka internal __transaction_state topic
-// if the key starts with an int16 with a value of 0.
-type TxnMetadataKey struct {
-	// Version is the version of this type.
-	Version int16
-
-	// TransactionalID is the transactional ID this record is for.
-	TransactionalID string
-}
-
-func (v *TxnMetadataKey) AppendTo(dst []byte) []byte {
-	version := v.Version
-	_ = version
-	{
-		v := v.Version
-		dst = kbin.AppendInt16(dst, v)
-	}
-	{
-		v := v.TransactionalID
-		dst = kbin.AppendString(dst, v)
-	}
-	return dst
-}
-func (v *TxnMetadataKey) ReadFrom(src []byte) error {
-	v.Default()
-	b := kbin.Reader{Src: src}
-	version := b.Int16()
-	v.Version = version
-	s := v
-	{
-		v := b.String()
-		s.TransactionalID = v
-	}
-	return b.Complete()
-}
-
-// Default sets any default fields. Calling this allows for future compatibility
-// if new fields are added to TxnMetadataKey.
-func (v *TxnMetadataKey) Default() {
-}
-
-// NewTxnMetadataKey returns a default TxnMetadataKey
-// This is a shortcut for creating a struct and calling Default yourself.
-func NewTxnMetadataKey() TxnMetadataKey {
-	var v TxnMetadataKey
-	v.Default()
-	return v
-}
-
-type TxnMetadataValueTopic struct {
-	// Topic is a topic involved in this transaction.
-	Topic string
-
-	// Partitions are partitions in this topic involved in the transaction.
-	Partitions []int32
-}
-
-// Default sets any default fields. Calling this allows for future compatibility
-// if new fields are added to TxnMetadataValueTopic.
-func (v *TxnMetadataValueTopic) Default() {
-}
-
-// NewTxnMetadataValueTopic returns a default TxnMetadataValueTopic
-// This is a shortcut for creating a struct and calling Default yourself.
-func NewTxnMetadataValueTopic() TxnMetadataValueTopic {
-	var v TxnMetadataValueTopic
-	v.Default()
-	return v
-}
-
-// TxnMetadataValue is the value for the Kafka internal __transaction_state
-// topic if the key is of TxnMetadataKey type.
-type TxnMetadataValue struct {
-	// Version is the version of this value.
-	Version int16
-
-	// ProducerID is the ID in use by the transactional ID.
-	ProducerID int64
-
-	// LastProducerID is the last ID in use for a producer; see KIP-360.
-	LastProducerID int64 // v1+
-
-	// ProducerEpoch is the epoch associated with the producer ID.
-	ProducerEpoch int16
-
-	// LastProducerEpoch is the last epoch in use for a producer; see KIP-360.
-	LastProducerEpoch int16 // v1+
-
-	// TimeoutMillis is the timeout of this transaction in milliseconds.
-	TimeoutMillis int32
-
-	// State is the state this transaction is in,
-	// 0 is Empty, 1 is Ongoing, 2 is PrepareCommit, 3 is PrepareAbort, 4 is
-	// CompleteCommit, 5 is CompleteAbort, 6 is Dead, and 7 is PrepareEpochFence.
-	State int8
-
-	// Topics are topics that are involved in this transaction.
-	Topics []TxnMetadataValueTopic
-
-	// LastUpdateTimestamp is the timestamp in millis of when this transaction
-	// was last updated.
-	LastUpdateTimestamp int64
-
-	// StartTimestamp is the timestamp in millis of when this transaction started.
-	StartTimestamp int64
-}
-
-func (v *TxnMetadataValue) AppendTo(dst []byte) []byte {
-	version := v.Version
-	_ = version
-	{
-		v := v.Version
-		dst = kbin.AppendInt16(dst, v)
-	}
-	{
-		v := v.ProducerID
-		dst = kbin.AppendInt64(dst, v)
-	}
-	if version >= 1 {
-		v := v.LastProducerID
-		dst = kbin.AppendInt64(dst, v)
-	}
-	{
-		v := v.ProducerEpoch
-		dst = kbin.AppendInt16(dst, v)
-	}
-	if version >= 1 {
-		v := v.LastProducerEpoch
-		dst = kbin.AppendInt16(dst, v)
-	}
-	{
-		v := v.TimeoutMillis
-		dst = kbin.AppendInt32(dst, v)
-	}
-	{
-		v := v.State
-		dst = kbin.AppendInt8(dst, v)
-	}
-	{
-		v := v.Topics
-		dst = kbin.AppendArrayLen(dst, len(v))
-		for i := range v {
-			v := &v[i]
-			{
-				v := v.Topic
-				dst = kbin.AppendString(dst, v)
-			}
-			{
-				v := v.Partitions
-				dst = kbin.AppendArrayLen(dst, len(v))
-				for i := range v {
-					v := v[i]
-					dst = kbin.AppendInt32(dst, v)
-				}
-			}
-		}
-	}
-	{
-		v := v.LastUpdateTimestamp
-		dst = kbin.AppendInt64(dst, v)
-	}
-	{
-		v := v.StartTimestamp
-		dst = kbin.AppendInt64(dst, v)
-	}
-	return dst
-}
-func (v *TxnMetadataValue) ReadFrom(src []byte) error {
-	v.Default()
-	b := kbin.Reader{Src: src}
-	version := b.Int16()
-	v.Version = version
-	s := v
-	{
-		v := b.Int64()
-		s.ProducerID = v
-	}
-	if version >= 1 {
-		v := b.Int64()
-		s.LastProducerID = v
-	}
-	{
-		v := b.Int16()
-		s.ProducerEpoch = v
-	}
-	if version >= 1 {
-		v := b.Int16()
-		s.LastProducerEpoch = v
-	}
-	{
-		v := b.Int32()
-		s.TimeoutMillis = v
-	}
-	{
-		v := b.Int8()
-		s.State = v
-	}
-	{
-		v := s.Topics
-		a := v
-		var l int32
-		l = b.ArrayLen()
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if l > 0 {
-			a = make([]TxnMetadataValueTopic, l)
-		}
-		for i := int32(0); i < l; i++ {
-			v := &a[i]
-			v.Default()
-			s := v
-			{
-				v := b.String()
-				s.Topic = v
-			}
-			{
-				v := s.Partitions
-				a := v
-				var l int32
-				l = b.ArrayLen()
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if l > 0 {
-					a = make([]int32, l)
-				}
-				for i := int32(0); i < l; i++ {
-					v := b.Int32()
-					a[i] = v
-				}
-				v = a
-				s.Partitions = v
-			}
-		}
-		v = a
-		s.Topics = v
-	}
-	{
-		v := b.Int64()
-		s.LastUpdateTimestamp = v
-	}
-	{
-		v := b.Int64()
-		s.StartTimestamp = v
-	}
-	return b.Complete()
-}
-
-// Default sets any default fields. Calling this allows for future compatibility
-// if new fields are added to TxnMetadataValue.
-func (v *TxnMetadataValue) Default() {
-}
-
-// NewTxnMetadataValue returns a default TxnMetadataValue
-// This is a shortcut for creating a struct and calling Default yourself.
-func NewTxnMetadataValue() TxnMetadataValue {
-	var v TxnMetadataValue
-	v.Default()
-	return v
-}
-
 type OffsetCommitRequestTopicPartition struct {
 	// Partition if a partition to commit offsets for.
 	Partition int32
@@ -8530,356 +8880,6 @@ func (v *FindCoordinatorResponse) Default() {
 // This is a shortcut for creating a struct and calling Default yourself.
 func NewFindCoordinatorResponse() FindCoordinatorResponse {
 	var v FindCoordinatorResponse
-	v.Default()
-	return v
-}
-
-type StickyMemberMetadataCurrentAssignment struct {
-	// Topic is a topic the group member is currently assigned.
-	Topic string
-
-	// Partitions are the partitions within a topic that a group member is
-	// currently assigned.
-	Partitions []int32
-}
-
-// Default sets any default fields. Calling this allows for future compatibility
-// if new fields are added to StickyMemberMetadataCurrentAssignment.
-func (v *StickyMemberMetadataCurrentAssignment) Default() {
-}
-
-// NewStickyMemberMetadataCurrentAssignment returns a default StickyMemberMetadataCurrentAssignment
-// This is a shortcut for creating a struct and calling Default yourself.
-func NewStickyMemberMetadataCurrentAssignment() StickyMemberMetadataCurrentAssignment {
-	var v StickyMemberMetadataCurrentAssignment
-	v.Default()
-	return v
-}
-
-// StickyMemberMetadata is is what is encoded in UserData for
-// GroupMemberMetadata in group join requests with the sticky partitioning
-// strategy.
-//
-// V1 added generation, which fixed a bug with flaky group members joining
-// repeatedly. See KIP-341 for more details.
-//
-// Note that clients should always try decoding as v1 and, if that fails,
-// fall back to v0. This is necessary due to there being no version number
-// anywhere in this type.
-type StickyMemberMetadata struct {
-	// CurrentAssignment is the assignment that a group member has when
-	// issuing a join.
-	CurrentAssignment []StickyMemberMetadataCurrentAssignment
-
-	// Generation is the generation of this join. This is incremented every join.
-	Generation int32 // v1+
-}
-
-// Default sets any default fields. Calling this allows for future compatibility
-// if new fields are added to StickyMemberMetadata.
-func (v *StickyMemberMetadata) Default() {
-}
-
-// NewStickyMemberMetadata returns a default StickyMemberMetadata
-// This is a shortcut for creating a struct and calling Default yourself.
-func NewStickyMemberMetadata() StickyMemberMetadata {
-	var v StickyMemberMetadata
-	v.Default()
-	return v
-}
-
-type GroupMemberMetadataOwnedPartition struct {
-	Topic string
-
-	Partitions []int32
-}
-
-// Default sets any default fields. Calling this allows for future compatibility
-// if new fields are added to GroupMemberMetadataOwnedPartition.
-func (v *GroupMemberMetadataOwnedPartition) Default() {
-}
-
-// NewGroupMemberMetadataOwnedPartition returns a default GroupMemberMetadataOwnedPartition
-// This is a shortcut for creating a struct and calling Default yourself.
-func NewGroupMemberMetadataOwnedPartition() GroupMemberMetadataOwnedPartition {
-	var v GroupMemberMetadataOwnedPartition
-	v.Default()
-	return v
-}
-
-// GroupMemberMetadata is the metadata that is usually sent with a join group
-// request.
-type GroupMemberMetadata struct {
-	// Version is either version 0 or version 1.
-	Version int16
-
-	// Topics is the list of topics in the group that this member is interested
-	// in consuming.
-	Topics []string
-
-	// UserData is arbitrary client data for a given client in the group.
-	// For sticky assignment, this is StickyMemberMetadata.
-	UserData []byte
-
-	// OwnedPartitions, introduced for KIP-429, are the partitions that this
-	// member currently owns.
-	OwnedPartitions []GroupMemberMetadataOwnedPartition // v1+
-}
-
-func (v *GroupMemberMetadata) AppendTo(dst []byte) []byte {
-	version := v.Version
-	_ = version
-	{
-		v := v.Version
-		dst = kbin.AppendInt16(dst, v)
-	}
-	{
-		v := v.Topics
-		dst = kbin.AppendArrayLen(dst, len(v))
-		for i := range v {
-			v := v[i]
-			dst = kbin.AppendString(dst, v)
-		}
-	}
-	{
-		v := v.UserData
-		dst = kbin.AppendBytes(dst, v)
-	}
-	if version >= 1 {
-		v := v.OwnedPartitions
-		dst = kbin.AppendArrayLen(dst, len(v))
-		for i := range v {
-			v := &v[i]
-			{
-				v := v.Topic
-				dst = kbin.AppendString(dst, v)
-			}
-			{
-				v := v.Partitions
-				dst = kbin.AppendArrayLen(dst, len(v))
-				for i := range v {
-					v := v[i]
-					dst = kbin.AppendInt32(dst, v)
-				}
-			}
-		}
-	}
-	return dst
-}
-func (v *GroupMemberMetadata) ReadFrom(src []byte) error {
-	v.Default()
-	b := kbin.Reader{Src: src}
-	version := b.Int16()
-	v.Version = version
-	s := v
-	{
-		v := s.Topics
-		a := v
-		var l int32
-		l = b.ArrayLen()
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if l > 0 {
-			a = make([]string, l)
-		}
-		for i := int32(0); i < l; i++ {
-			v := b.String()
-			a[i] = v
-		}
-		v = a
-		s.Topics = v
-	}
-	{
-		v := b.Bytes()
-		s.UserData = v
-	}
-	if version >= 1 {
-		v := s.OwnedPartitions
-		a := v
-		var l int32
-		l = b.ArrayLen()
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if l > 0 {
-			a = make([]GroupMemberMetadataOwnedPartition, l)
-		}
-		for i := int32(0); i < l; i++ {
-			v := &a[i]
-			v.Default()
-			s := v
-			{
-				v := b.String()
-				s.Topic = v
-			}
-			{
-				v := s.Partitions
-				a := v
-				var l int32
-				l = b.ArrayLen()
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if l > 0 {
-					a = make([]int32, l)
-				}
-				for i := int32(0); i < l; i++ {
-					v := b.Int32()
-					a[i] = v
-				}
-				v = a
-				s.Partitions = v
-			}
-		}
-		v = a
-		s.OwnedPartitions = v
-	}
-	return b.Complete()
-}
-
-// Default sets any default fields. Calling this allows for future compatibility
-// if new fields are added to GroupMemberMetadata.
-func (v *GroupMemberMetadata) Default() {
-}
-
-// NewGroupMemberMetadata returns a default GroupMemberMetadata
-// This is a shortcut for creating a struct and calling Default yourself.
-func NewGroupMemberMetadata() GroupMemberMetadata {
-	var v GroupMemberMetadata
-	v.Default()
-	return v
-}
-
-type GroupMemberAssignmentTopic struct {
-	// Topic is a topic in the assignment.
-	Topic string
-
-	// Partitions contains partitions in the assignment.
-	Partitions []int32
-}
-
-// Default sets any default fields. Calling this allows for future compatibility
-// if new fields are added to GroupMemberAssignmentTopic.
-func (v *GroupMemberAssignmentTopic) Default() {
-}
-
-// NewGroupMemberAssignmentTopic returns a default GroupMemberAssignmentTopic
-// This is a shortcut for creating a struct and calling Default yourself.
-func NewGroupMemberAssignmentTopic() GroupMemberAssignmentTopic {
-	var v GroupMemberAssignmentTopic
-	v.Default()
-	return v
-}
-
-// GroupMemberAssignment is the assignment data that is usually sent with a
-// sync group request.
-type GroupMemberAssignment struct {
-	// Verson is currently version 0.
-	Version int16
-
-	// Topics contains topics in the assignment.
-	Topics []GroupMemberAssignmentTopic
-
-	// UserData is arbitrary client data for a given client in the group.
-	UserData []byte
-}
-
-func (v *GroupMemberAssignment) AppendTo(dst []byte) []byte {
-	{
-		v := v.Version
-		dst = kbin.AppendInt16(dst, v)
-	}
-	{
-		v := v.Topics
-		dst = kbin.AppendArrayLen(dst, len(v))
-		for i := range v {
-			v := &v[i]
-			{
-				v := v.Topic
-				dst = kbin.AppendString(dst, v)
-			}
-			{
-				v := v.Partitions
-				dst = kbin.AppendArrayLen(dst, len(v))
-				for i := range v {
-					v := v[i]
-					dst = kbin.AppendInt32(dst, v)
-				}
-			}
-		}
-	}
-	{
-		v := v.UserData
-		dst = kbin.AppendBytes(dst, v)
-	}
-	return dst
-}
-func (v *GroupMemberAssignment) ReadFrom(src []byte) error {
-	v.Default()
-	b := kbin.Reader{Src: src}
-	s := v
-	{
-		v := b.Int16()
-		s.Version = v
-	}
-	{
-		v := s.Topics
-		a := v
-		var l int32
-		l = b.ArrayLen()
-		if !b.Ok() {
-			return b.Complete()
-		}
-		if l > 0 {
-			a = make([]GroupMemberAssignmentTopic, l)
-		}
-		for i := int32(0); i < l; i++ {
-			v := &a[i]
-			v.Default()
-			s := v
-			{
-				v := b.String()
-				s.Topic = v
-			}
-			{
-				v := s.Partitions
-				a := v
-				var l int32
-				l = b.ArrayLen()
-				if !b.Ok() {
-					return b.Complete()
-				}
-				if l > 0 {
-					a = make([]int32, l)
-				}
-				for i := int32(0); i < l; i++ {
-					v := b.Int32()
-					a[i] = v
-				}
-				v = a
-				s.Partitions = v
-			}
-		}
-		v = a
-		s.Topics = v
-	}
-	{
-		v := b.Bytes()
-		s.UserData = v
-	}
-	return b.Complete()
-}
-
-// Default sets any default fields. Calling this allows for future compatibility
-// if new fields are added to GroupMemberAssignment.
-func (v *GroupMemberAssignment) Default() {
-}
-
-// NewGroupMemberAssignment returns a default GroupMemberAssignment
-// This is a shortcut for creating a struct and calling Default yourself.
-func NewGroupMemberAssignment() GroupMemberAssignment {
-	var v GroupMemberAssignment
 	v.Default()
 	return v
 }
