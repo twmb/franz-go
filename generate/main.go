@@ -365,6 +365,7 @@ func main() {
 			l.Write("") // newline before append/decode func
 			s.WriteAppendFunc(l)
 			s.WriteDecodeFunc(l)
+			s.WriteNewPtrFunc(l)
 		} else if !s.Anonymous && !s.WithNoEncoding {
 			s.WriteAppendFunc(l)
 			s.WriteDecodeFunc(l)

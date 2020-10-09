@@ -660,3 +660,13 @@ func (s Struct) WriteNewFunc(l *LineWriter) {
 	l.Write("return v")
 	l.Write("}")
 }
+
+func (s Struct) WriteNewPtrFunc(l *LineWriter) {
+	l.Write("// NewPtr%[1]s returns a pointer to a default %[1]s", s.Name)
+	l.Write("// This is a shortcut for creating a new(struct) and calling Default yourself.")
+	l.Write("func NewPtr%[1]s() *%[1]s {", s.Name)
+	l.Write("var v %s", s.Name)
+	l.Write("v.Default()")
+	l.Write("return &v")
+	l.Write("}")
+}
