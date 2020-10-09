@@ -418,14 +418,14 @@ func (g *groupConsumer) leave() {
 			"group", g.id,
 			"memberID", g.memberID, // lock not needed now since nothing can change it (manageDone)
 		)
-		g.cl.Request(g.cl.ctx, &kmsg.LeaveGroupRequest{
+		(&kmsg.LeaveGroupRequest{
 			Group:    g.id,
 			MemberID: g.memberID,
 			Members: []kmsg.LeaveGroupRequestMember{{
 				MemberID: g.memberID,
 				// no instance ID
 			}},
-		})
+		}).RequestWith(g.cl.ctx, g.cl)
 	}
 }
 
@@ -745,10 +745,8 @@ func (g *groupConsumer) heartbeat(fetchErrCh <-chan error, s *assignRevokeSessio
 				MemberID:   g.memberID,
 				InstanceID: g.instanceID,
 			}
-			var kresp kmsg.Response
-			kresp, err = g.cl.Request(g.ctx, req)
-			if err == nil {
-				resp := kresp.(*kmsg.HeartbeatResponse)
+			var resp *kmsg.HeartbeatResponse
+			if resp, err = req.RequestWith(g.ctx, g.cl); err == nil {
 				err = kerr.ErrorForCode(resp.ErrorCode)
 			}
 			g.cl.cfg.logger.Log(LogLevelDebug, "heartbeat complete", "err", err)
@@ -851,7 +849,7 @@ func (g *groupConsumer) joinAndSync() error {
 	g.prejoin()
 
 start:
-	req := kmsg.JoinGroupRequest{
+	resp, err := (&kmsg.JoinGroupRequest{
 		Group:                  g.id,
 		SessionTimeoutMillis:   int32(g.sessionTimeout.Milliseconds()),
 		RebalanceTimeoutMillis: int32(g.rebalanceTimeout.Milliseconds()),
@@ -859,13 +857,11 @@ start:
 		MemberID:               g.memberID,
 		InstanceID:             g.instanceID,
 		Protocols:              g.joinGroupProtocols(),
-	}
-	kresp, err := g.cl.Request(g.ctx, &req)
+	}).RequestWith(g.ctx, g.cl)
 	if err != nil {
 		g.cl.cfg.logger.Log(LogLevelWarn, "join group failed", "err", err)
 		return err
 	}
-	resp := kresp.(*kmsg.JoinGroupResponse)
 
 	if err = kerr.ErrorForCode(resp.ErrorCode); err != nil {
 		switch err {
@@ -937,7 +933,12 @@ start:
 }
 
 func (g *groupConsumer) syncGroup(leader bool, plan balancePlan, protocol string) error {
-	req := kmsg.SyncGroupRequest{
+	g.cl.cfg.logger.Log(LogLevelInfo, "syncing",
+		"protocol_type", clientGroupProtocol,
+		"protocol", protocol,
+	)
+
+	resp, err := (&kmsg.SyncGroupRequest{
 		Group:           g.id,
 		Generation:      g.generation,
 		MemberID:        g.memberID,
@@ -945,19 +946,12 @@ func (g *groupConsumer) syncGroup(leader bool, plan balancePlan, protocol string
 		ProtocolType:    &clientGroupProtocol,
 		Protocol:        &protocol,
 		GroupAssignment: plan.intoAssignment(), // nil unless we are the leader
-	}
-
-	g.cl.cfg.logger.Log(LogLevelInfo, "syncing",
-		"protocol_type", clientGroupProtocol,
-		"protocol", protocol,
-	)
-
-	kresp, err := g.cl.Request(g.ctx, &req)
+	}).RequestWith(g.ctx, g.cl)
 	if err != nil {
 		g.cl.cfg.logger.Log(LogLevelWarn, "sync failed", "err", err)
 		return err // Request retries as necesary, so this must be a failure
 	}
-	resp := kresp.(*kmsg.SyncGroupResponse)
+
 	if err = kerr.ErrorForCode(resp.ErrorCode); err != nil {
 		g.cl.cfg.logger.Log(LogLevelWarn, "sync failed", "err", err)
 		return err
@@ -1020,12 +1014,11 @@ start:
 			Partitions: partitions,
 		})
 	}
-	kresp, err := g.cl.Request(ctx, &req)
+	resp, err := req.RequestWith(ctx, g.cl)
 	if err != nil {
 		g.cl.cfg.logger.Log(LogLevelWarn, "fetch offsets failed", "err", err)
 		return err
 	}
-	resp := kresp.(*kmsg.OffsetFetchResponse)
 	if err != nil {
 		g.cl.cfg.logger.Log(LogLevelError, "fetch offsets failed with non-retriable error", "err", err)
 		return err
@@ -1782,16 +1775,15 @@ func (g *groupConsumer) commit(
 			}
 		}
 
-		var kresp kmsg.Response
+		var resp *kmsg.OffsetCommitResponse
 		var err error
 		if len(req.Topics) > 0 {
-			kresp, err = g.cl.Request(commitCtx, req)
+			resp, err = req.RequestWith(commitCtx, g.cl)
 		}
 		if err != nil {
 			onDone(req, nil, err)
 			return
 		}
-		resp := kresp.(*kmsg.OffsetCommitResponse)
 		g.updateCommitted(req, resp)
 		onDone(req, resp, nil)
 	}()

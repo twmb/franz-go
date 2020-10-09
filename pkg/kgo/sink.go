@@ -362,13 +362,11 @@ func (s *sink) doTxnReq(
 	start := time.Now()
 	tries := 0
 start:
-	kresp, err := s.cl.Request(s.cl.ctx, txnReq)
-
+	resp, err := txnReq.RequestWith(s.cl.ctx, s.cl)
 	if err != nil { // if we could not even complete the request, this is fatal.
 		return err
 	}
 
-	resp := kresp.(*kmsg.AddPartitionsToTxnResponse)
 	for _, topic := range resp.Topics {
 		topicBatches := req.batches[topic.Topic]
 		for _, partition := range topic.Partitions {

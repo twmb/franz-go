@@ -299,7 +299,7 @@ func (cl *Client) doInitProducerID(lastID int64, lastEpoch int16) (*producerID, 
 		req.TransactionTimeoutMillis = int32(cl.cfg.txnTimeout.Milliseconds())
 	}
 
-	kresp, err := cl.Request(cl.ctx, req)
+	resp, err := req.RequestWith(cl.ctx, cl)
 	if err != nil {
 		// If our broker is too old, then well...
 		//
@@ -313,7 +313,6 @@ func (cl *Client) doInitProducerID(lastID int64, lastEpoch int16) (*producerID, 
 		cl.cfg.logger.Log(LogLevelInfo, "producer id initialization failure, discarding initialization attempt", "err", err)
 		return &producerID{lastID, lastEpoch, err}, false
 	}
-	resp := kresp.(*kmsg.InitProducerIDResponse)
 	if err = kerr.ErrorForCode(resp.ErrorCode); err != nil {
 		cl.cfg.logger.Log(LogLevelInfo, "producer id initialization errored", "err", err)
 		return &producerID{lastID, lastEpoch, err}, true

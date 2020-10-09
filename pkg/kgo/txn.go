@@ -409,16 +409,16 @@ func (cl *Client) EndTransaction(ctx context.Context, commit TransactionEndTry) 
 		"epoch", epoch,
 		"commit", commit,
 	)
-	kresp, err := cl.Request(ctx, &kmsg.EndTxnRequest{
+	resp, err := (&kmsg.EndTxnRequest{
 		TransactionalID: *cl.cfg.txnID,
 		ProducerID:      id,
 		ProducerEpoch:   epoch,
 		Commit:          bool(commit),
-	})
+	}).RequestWith(ctx, cl)
 	if err != nil {
 		return err
 	}
-	return kerr.ErrorForCode(kresp.(*kmsg.EndTxnResponse).ErrorCode)
+	return kerr.ErrorForCode(resp.ErrorCode)
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////
@@ -502,20 +502,16 @@ func (cl *Client) addOffsetsToTxn(ctx context.Context, group string) error {
 		"producerEpoch", epoch,
 		"group", group,
 	)
-	kresp, err := cl.Request(ctx, &kmsg.AddOffsetsToTxnRequest{
+	resp, err := (&kmsg.AddOffsetsToTxnRequest{
 		TransactionalID: *cl.cfg.txnID,
 		ProducerID:      id,
 		ProducerEpoch:   epoch,
 		Group:           group,
-	})
+	}).RequestWith(ctx, cl)
 	if err != nil {
 		return err
 	}
-	resp := kresp.(*kmsg.AddOffsetsToTxnResponse)
-	if err = kerr.ErrorForCode(resp.ErrorCode); err != nil {
-		return err
-	}
-	return nil
+	return kerr.ErrorForCode(resp.ErrorCode)
 }
 
 // commitTxn is ALMOST EXACTLY THE SAME as commit, but changed for txn types
@@ -601,16 +597,15 @@ func (g *groupConsumer) commitTxn(
 			}
 		}
 
-		var kresp kmsg.Response
+		var resp *kmsg.TxnOffsetCommitResponse
 		var err error
 		if len(req.Topics) > 0 {
-			kresp, err = g.cl.Request(commitCtx, req)
+			resp, err = req.RequestWith(commitCtx, g.cl)
 		}
 		if err != nil {
 			onDone(req, nil, err)
 			return
 		}
-		resp := kresp.(*kmsg.TxnOffsetCommitResponse)
 		onDone(req, resp, nil)
 	}()
 }
