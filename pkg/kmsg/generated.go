@@ -916,6 +916,14 @@ func (v *ProduceRequest) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+// NewPtrProduceRequest returns a pointer to a default ProduceRequest
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrProduceRequest() *ProduceRequest {
+	var v ProduceRequest
+	v.Default()
+	return &v
+}
+
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to ProduceRequest.
 func (v *ProduceRequest) Default() {
@@ -1286,6 +1294,14 @@ func (v *ProduceResponse) ReadFrom(src []byte) error {
 		s.ThrottleMillis = v
 	}
 	return b.Complete()
+}
+
+// NewPtrProduceResponse returns a pointer to a default ProduceResponse
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrProduceResponse() *ProduceResponse {
+	var v ProduceResponse
+	v.Default()
+	return &v
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -1850,6 +1866,14 @@ func (v *FetchRequest) ReadFrom(src []byte) error {
 		}
 	}
 	return b.Complete()
+}
+
+// NewPtrFetchRequest returns a pointer to a default FetchRequest
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrFetchRequest() *FetchRequest {
+	var v FetchRequest
+	v.Default()
+	return &v
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -2491,6 +2515,14 @@ func (v *FetchResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+// NewPtrFetchResponse returns a pointer to a default FetchResponse
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrFetchResponse() *FetchResponse {
+	var v FetchResponse
+	v.Default()
+	return &v
+}
+
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to FetchResponse.
 func (v *FetchResponse) Default() {
@@ -2731,6 +2763,14 @@ func (v *ListOffsetsRequest) ReadFrom(src []byte) error {
 		s.Topics = v
 	}
 	return b.Complete()
+}
+
+// NewPtrListOffsetsRequest returns a pointer to a default ListOffsetsRequest
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrListOffsetsRequest() *ListOffsetsRequest {
+	var v ListOffsetsRequest
+	v.Default()
+	return &v
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -3016,6 +3056,14 @@ func (v *ListOffsetsResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+// NewPtrListOffsetsResponse returns a pointer to a default ListOffsetsResponse
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrListOffsetsResponse() *ListOffsetsResponse {
+	var v ListOffsetsResponse
+	v.Default()
+	return &v
+}
+
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to ListOffsetsResponse.
 func (v *ListOffsetsResponse) Default() {
@@ -3202,6 +3250,14 @@ func (v *MetadataRequest) ReadFrom(src []byte) error {
 		SkipTags(&b)
 	}
 	return b.Complete()
+}
+
+// NewPtrMetadataRequest returns a pointer to a default MetadataRequest
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrMetadataRequest() *MetadataRequest {
+	var v MetadataRequest
+	v.Default()
+	return &v
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -3785,6 +3841,14 @@ func (v *MetadataResponse) ReadFrom(src []byte) error {
 		SkipTags(&b)
 	}
 	return b.Complete()
+}
+
+// NewPtrMetadataResponse returns a pointer to a default MetadataResponse
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrMetadataResponse() *MetadataResponse {
+	var v MetadataResponse
+	v.Default()
+	return &v
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -4504,6 +4568,14 @@ func (v *LeaderAndISRRequest) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+// NewPtrLeaderAndISRRequest returns a pointer to a default LeaderAndISRRequest
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrLeaderAndISRRequest() *LeaderAndISRRequest {
+	var v LeaderAndISRRequest
+	v.Default()
+	return &v
+}
+
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to LeaderAndISRRequest.
 func (v *LeaderAndISRRequest) Default() {
@@ -4659,6 +4731,14 @@ func (v *LeaderAndISRResponse) ReadFrom(src []byte) error {
 		SkipTags(&b)
 	}
 	return b.Complete()
+}
+
+// NewPtrLeaderAndISRResponse returns a pointer to a default LeaderAndISRResponse
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrLeaderAndISRResponse() *LeaderAndISRResponse {
+	var v LeaderAndISRResponse
+	v.Default()
+	return &v
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -4979,6 +5059,14 @@ func (v *StopReplicaRequest) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+// NewPtrStopReplicaRequest returns a pointer to a default StopReplicaRequest
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrStopReplicaRequest() *StopReplicaRequest {
+	var v StopReplicaRequest
+	v.Default()
+	return &v
+}
+
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to StopReplicaRequest.
 func (v *StopReplicaRequest) Default() {
@@ -5135,6 +5223,14 @@ func (v *StopReplicaResponse) ReadFrom(src []byte) error {
 		SkipTags(&b)
 	}
 	return b.Complete()
+}
+
+// NewPtrStopReplicaResponse returns a pointer to a default StopReplicaResponse
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrStopReplicaResponse() *StopReplicaResponse {
+	var v StopReplicaResponse
+	v.Default()
+	return &v
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -5912,6 +6008,14 @@ func (v *UpdateMetadataRequest) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+// NewPtrUpdateMetadataRequest returns a pointer to a default UpdateMetadataRequest
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrUpdateMetadataRequest() *UpdateMetadataRequest {
+	var v UpdateMetadataRequest
+	v.Default()
+	return &v
+}
+
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to UpdateMetadataRequest.
 func (v *UpdateMetadataRequest) Default() {
@@ -5973,6 +6077,14 @@ func (v *UpdateMetadataResponse) ReadFrom(src []byte) error {
 		SkipTags(&b)
 	}
 	return b.Complete()
+}
+
+// NewPtrUpdateMetadataResponse returns a pointer to a default UpdateMetadataResponse
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrUpdateMetadataResponse() *UpdateMetadataResponse {
+	var v UpdateMetadataResponse
+	v.Default()
+	return &v
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -6064,6 +6176,14 @@ func (v *ControlledShutdownRequest) ReadFrom(src []byte) error {
 		SkipTags(&b)
 	}
 	return b.Complete()
+}
+
+// NewPtrControlledShutdownRequest returns a pointer to a default ControlledShutdownRequest
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrControlledShutdownRequest() *ControlledShutdownRequest {
+	var v ControlledShutdownRequest
+	v.Default()
+	return &v
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -6213,6 +6333,14 @@ func (v *ControlledShutdownResponse) ReadFrom(src []byte) error {
 		SkipTags(&b)
 	}
 	return b.Complete()
+}
+
+// NewPtrControlledShutdownResponse returns a pointer to a default ControlledShutdownResponse
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrControlledShutdownResponse() *ControlledShutdownResponse {
+	var v ControlledShutdownResponse
+	v.Default()
+	return &v
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -7314,6 +7442,14 @@ func (v *OffsetCommitRequest) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+// NewPtrOffsetCommitRequest returns a pointer to a default OffsetCommitRequest
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrOffsetCommitRequest() *OffsetCommitRequest {
+	var v OffsetCommitRequest
+	v.Default()
+	return &v
+}
+
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to OffsetCommitRequest.
 func (v *OffsetCommitRequest) Default() {
@@ -7571,6 +7707,14 @@ func (v *OffsetCommitResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+// NewPtrOffsetCommitResponse returns a pointer to a default OffsetCommitResponse
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrOffsetCommitResponse() *OffsetCommitResponse {
+	var v OffsetCommitResponse
+	v.Default()
+	return &v
+}
+
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to OffsetCommitResponse.
 func (v *OffsetCommitResponse) Default() {
@@ -7791,6 +7935,14 @@ func (v *OffsetFetchRequest) ReadFrom(src []byte) error {
 		SkipTags(&b)
 	}
 	return b.Complete()
+}
+
+// NewPtrOffsetFetchRequest returns a pointer to a default OffsetFetchRequest
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrOffsetFetchRequest() *OffsetFetchRequest {
+	var v OffsetFetchRequest
+	v.Default()
+	return &v
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -8095,6 +8247,14 @@ func (v *OffsetFetchResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+// NewPtrOffsetFetchResponse returns a pointer to a default OffsetFetchResponse
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrOffsetFetchResponse() *OffsetFetchResponse {
+	var v OffsetFetchResponse
+	v.Default()
+	return &v
+}
+
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to OffsetFetchResponse.
 func (v *OffsetFetchResponse) Default() {
@@ -8192,6 +8352,14 @@ func (v *FindCoordinatorRequest) ReadFrom(src []byte) error {
 		SkipTags(&b)
 	}
 	return b.Complete()
+}
+
+// NewPtrFindCoordinatorRequest returns a pointer to a default FindCoordinatorRequest
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrFindCoordinatorRequest() *FindCoordinatorRequest {
+	var v FindCoordinatorRequest
+	v.Default()
+	return &v
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -8343,6 +8511,14 @@ func (v *FindCoordinatorResponse) ReadFrom(src []byte) error {
 		SkipTags(&b)
 	}
 	return b.Complete()
+}
+
+// NewPtrFindCoordinatorResponse returns a pointer to a default FindCoordinatorResponse
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrFindCoordinatorResponse() *FindCoordinatorResponse {
+	var v FindCoordinatorResponse
+	v.Default()
+	return &v
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -9002,6 +9178,14 @@ func (v *JoinGroupRequest) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+// NewPtrJoinGroupRequest returns a pointer to a default JoinGroupRequest
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrJoinGroupRequest() *JoinGroupRequest {
+	var v JoinGroupRequest
+	v.Default()
+	return &v
+}
+
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to JoinGroupRequest.
 func (v *JoinGroupRequest) Default() {
@@ -9355,6 +9539,14 @@ func (v *JoinGroupResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+// NewPtrJoinGroupResponse returns a pointer to a default JoinGroupResponse
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrJoinGroupResponse() *JoinGroupResponse {
+	var v JoinGroupResponse
+	v.Default()
+	return &v
+}
+
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to JoinGroupResponse.
 func (v *JoinGroupResponse) Default() {
@@ -9488,6 +9680,14 @@ func (v *HeartbeatRequest) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+// NewPtrHeartbeatRequest returns a pointer to a default HeartbeatRequest
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrHeartbeatRequest() *HeartbeatRequest {
+	var v HeartbeatRequest
+	v.Default()
+	return &v
+}
+
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to HeartbeatRequest.
 func (v *HeartbeatRequest) Default() {
@@ -9579,6 +9779,14 @@ func (v *HeartbeatResponse) ReadFrom(src []byte) error {
 		SkipTags(&b)
 	}
 	return b.Complete()
+}
+
+// NewPtrHeartbeatResponse returns a pointer to a default HeartbeatResponse
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrHeartbeatResponse() *HeartbeatResponse {
+	var v HeartbeatResponse
+	v.Default()
+	return &v
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -9781,6 +9989,14 @@ func (v *LeaveGroupRequest) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+// NewPtrLeaveGroupRequest returns a pointer to a default LeaveGroupRequest
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrLeaveGroupRequest() *LeaveGroupRequest {
+	var v LeaveGroupRequest
+	v.Default()
+	return &v
+}
+
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to LeaveGroupRequest.
 func (v *LeaveGroupRequest) Default() {
@@ -9977,6 +10193,14 @@ func (v *LeaveGroupResponse) ReadFrom(src []byte) error {
 		SkipTags(&b)
 	}
 	return b.Complete()
+}
+
+// NewPtrLeaveGroupResponse returns a pointer to a default LeaveGroupResponse
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrLeaveGroupResponse() *LeaveGroupResponse {
+	var v LeaveGroupResponse
+	v.Default()
+	return &v
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -10254,6 +10478,14 @@ func (v *SyncGroupRequest) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+// NewPtrSyncGroupRequest returns a pointer to a default SyncGroupRequest
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrSyncGroupRequest() *SyncGroupRequest {
+	var v SyncGroupRequest
+	v.Default()
+	return &v
+}
+
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to SyncGroupRequest.
 func (v *SyncGroupRequest) Default() {
@@ -10410,6 +10642,14 @@ func (v *SyncGroupResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+// NewPtrSyncGroupResponse returns a pointer to a default SyncGroupResponse
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrSyncGroupResponse() *SyncGroupResponse {
+	var v SyncGroupResponse
+	v.Default()
+	return &v
+}
+
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to SyncGroupResponse.
 func (v *SyncGroupResponse) Default() {
@@ -10530,6 +10770,14 @@ func (v *DescribeGroupsRequest) ReadFrom(src []byte) error {
 		SkipTags(&b)
 	}
 	return b.Complete()
+}
+
+// NewPtrDescribeGroupsRequest returns a pointer to a default DescribeGroupsRequest
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrDescribeGroupsRequest() *DescribeGroupsRequest {
+	var v DescribeGroupsRequest
+	v.Default()
+	return &v
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -10956,6 +11204,14 @@ func (v *DescribeGroupsResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+// NewPtrDescribeGroupsResponse returns a pointer to a default DescribeGroupsResponse
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrDescribeGroupsResponse() *DescribeGroupsResponse {
+	var v DescribeGroupsResponse
+	v.Default()
+	return &v
+}
+
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to DescribeGroupsResponse.
 func (v *DescribeGroupsResponse) Default() {
@@ -11064,6 +11320,14 @@ func (v *ListGroupsRequest) ReadFrom(src []byte) error {
 		SkipTags(&b)
 	}
 	return b.Complete()
+}
+
+// NewPtrListGroupsRequest returns a pointer to a default ListGroupsRequest
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrListGroupsRequest() *ListGroupsRequest {
+	var v ListGroupsRequest
+	v.Default()
+	return &v
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -11263,6 +11527,14 @@ func (v *ListGroupsResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+// NewPtrListGroupsResponse returns a pointer to a default ListGroupsResponse
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrListGroupsResponse() *ListGroupsResponse {
+	var v ListGroupsResponse
+	v.Default()
+	return &v
+}
+
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to ListGroupsResponse.
 func (v *ListGroupsResponse) Default() {
@@ -11331,6 +11603,14 @@ func (v *SASLHandshakeRequest) ReadFrom(src []byte) error {
 		s.Mechanism = v
 	}
 	return b.Complete()
+}
+
+// NewPtrSASLHandshakeRequest returns a pointer to a default SASLHandshakeRequest
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrSASLHandshakeRequest() *SASLHandshakeRequest {
+	var v SASLHandshakeRequest
+	v.Default()
+	return &v
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -11416,6 +11696,14 @@ func (v *SASLHandshakeResponse) ReadFrom(src []byte) error {
 		s.SupportedMechanisms = v
 	}
 	return b.Complete()
+}
+
+// NewPtrSASLHandshakeResponse returns a pointer to a default SASLHandshakeResponse
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrSASLHandshakeResponse() *SASLHandshakeResponse {
+	var v SASLHandshakeResponse
+	v.Default()
+	return &v
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -11536,6 +11824,14 @@ func (v *ApiVersionsRequest) ReadFrom(src []byte) error {
 		SkipTags(&b)
 	}
 	return b.Complete()
+}
+
+// NewPtrApiVersionsRequest returns a pointer to a default ApiVersionsRequest
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrApiVersionsRequest() *ApiVersionsRequest {
+	var v ApiVersionsRequest
+	v.Default()
+	return &v
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -11974,6 +12270,14 @@ func (v *ApiVersionsResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+// NewPtrApiVersionsResponse returns a pointer to a default ApiVersionsResponse
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrApiVersionsResponse() *ApiVersionsResponse {
+	var v ApiVersionsResponse
+	v.Default()
+	return &v
+}
+
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to ApiVersionsResponse.
 func (v *ApiVersionsResponse) Default() {
@@ -12376,6 +12680,14 @@ func (v *CreateTopicsRequest) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+// NewPtrCreateTopicsRequest returns a pointer to a default CreateTopicsRequest
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrCreateTopicsRequest() *CreateTopicsRequest {
+	var v CreateTopicsRequest
+	v.Default()
+	return &v
+}
+
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to CreateTopicsRequest.
 func (v *CreateTopicsRequest) Default() {
@@ -12775,6 +13087,14 @@ func (v *CreateTopicsResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+// NewPtrCreateTopicsResponse returns a pointer to a default CreateTopicsResponse
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrCreateTopicsResponse() *CreateTopicsResponse {
+	var v CreateTopicsResponse
+	v.Default()
+	return &v
+}
+
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to CreateTopicsResponse.
 func (v *CreateTopicsResponse) Default() {
@@ -12892,6 +13212,14 @@ func (v *DeleteTopicsRequest) ReadFrom(src []byte) error {
 		SkipTags(&b)
 	}
 	return b.Complete()
+}
+
+// NewPtrDeleteTopicsRequest returns a pointer to a default DeleteTopicsRequest
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrDeleteTopicsRequest() *DeleteTopicsRequest {
+	var v DeleteTopicsRequest
+	v.Default()
+	return &v
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -13082,6 +13410,14 @@ func (v *DeleteTopicsResponse) ReadFrom(src []byte) error {
 		SkipTags(&b)
 	}
 	return b.Complete()
+}
+
+// NewPtrDeleteTopicsResponse returns a pointer to a default DeleteTopicsResponse
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrDeleteTopicsResponse() *DeleteTopicsResponse {
+	var v DeleteTopicsResponse
+	v.Default()
+	return &v
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -13329,6 +13665,14 @@ func (v *DeleteRecordsRequest) ReadFrom(src []byte) error {
 		SkipTags(&b)
 	}
 	return b.Complete()
+}
+
+// NewPtrDeleteRecordsRequest returns a pointer to a default DeleteRecordsRequest
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrDeleteRecordsRequest() *DeleteRecordsRequest {
+	var v DeleteRecordsRequest
+	v.Default()
+	return &v
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -13586,6 +13930,14 @@ func (v *DeleteRecordsResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+// NewPtrDeleteRecordsResponse returns a pointer to a default DeleteRecordsResponse
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrDeleteRecordsResponse() *DeleteRecordsResponse {
+	var v DeleteRecordsResponse
+	v.Default()
+	return &v
+}
+
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to DeleteRecordsResponse.
 func (v *DeleteRecordsResponse) Default() {
@@ -13713,6 +14065,14 @@ func (v *InitProducerIDRequest) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+// NewPtrInitProducerIDRequest returns a pointer to a default InitProducerIDRequest
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrInitProducerIDRequest() *InitProducerIDRequest {
+	var v InitProducerIDRequest
+	v.Default()
+	return &v
+}
+
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to InitProducerIDRequest.
 func (v *InitProducerIDRequest) Default() {
@@ -13832,6 +14192,14 @@ func (v *InitProducerIDResponse) ReadFrom(src []byte) error {
 		SkipTags(&b)
 	}
 	return b.Complete()
+}
+
+// NewPtrInitProducerIDResponse returns a pointer to a default InitProducerIDResponse
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrInitProducerIDResponse() *InitProducerIDResponse {
+	var v InitProducerIDResponse
+	v.Default()
+	return &v
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -14038,6 +14406,14 @@ func (v *OffsetForLeaderEpochRequest) ReadFrom(src []byte) error {
 		s.Topics = v
 	}
 	return b.Complete()
+}
+
+// NewPtrOffsetForLeaderEpochRequest returns a pointer to a default OffsetForLeaderEpochRequest
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrOffsetForLeaderEpochRequest() *OffsetForLeaderEpochRequest {
+	var v OffsetForLeaderEpochRequest
+	v.Default()
+	return &v
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -14275,6 +14651,14 @@ func (v *OffsetForLeaderEpochResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+// NewPtrOffsetForLeaderEpochResponse returns a pointer to a default OffsetForLeaderEpochResponse
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrOffsetForLeaderEpochResponse() *OffsetForLeaderEpochResponse {
+	var v OffsetForLeaderEpochResponse
+	v.Default()
+	return &v
+}
+
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to OffsetForLeaderEpochResponse.
 func (v *OffsetForLeaderEpochResponse) Default() {
@@ -14448,6 +14832,14 @@ func (v *AddPartitionsToTxnRequest) ReadFrom(src []byte) error {
 		s.Topics = v
 	}
 	return b.Complete()
+}
+
+// NewPtrAddPartitionsToTxnRequest returns a pointer to a default AddPartitionsToTxnRequest
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrAddPartitionsToTxnRequest() *AddPartitionsToTxnRequest {
+	var v AddPartitionsToTxnRequest
+	v.Default()
+	return &v
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -14658,6 +15050,14 @@ func (v *AddPartitionsToTxnResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+// NewPtrAddPartitionsToTxnResponse returns a pointer to a default AddPartitionsToTxnResponse
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrAddPartitionsToTxnResponse() *AddPartitionsToTxnResponse {
+	var v AddPartitionsToTxnResponse
+	v.Default()
+	return &v
+}
+
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to AddPartitionsToTxnResponse.
 func (v *AddPartitionsToTxnResponse) Default() {
@@ -14763,6 +15163,14 @@ func (v *AddOffsetsToTxnRequest) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+// NewPtrAddOffsetsToTxnRequest returns a pointer to a default AddOffsetsToTxnRequest
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrAddOffsetsToTxnRequest() *AddOffsetsToTxnRequest {
+	var v AddOffsetsToTxnRequest
+	v.Default()
+	return &v
+}
+
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to AddOffsetsToTxnRequest.
 func (v *AddOffsetsToTxnRequest) Default() {
@@ -14837,6 +15245,14 @@ func (v *AddOffsetsToTxnResponse) ReadFrom(src []byte) error {
 		s.ErrorCode = v
 	}
 	return b.Complete()
+}
+
+// NewPtrAddOffsetsToTxnResponse returns a pointer to a default AddOffsetsToTxnResponse
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrAddOffsetsToTxnResponse() *AddOffsetsToTxnResponse {
+	var v AddOffsetsToTxnResponse
+	v.Default()
+	return &v
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -14936,6 +15352,14 @@ func (v *EndTxnRequest) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+// NewPtrEndTxnRequest returns a pointer to a default EndTxnRequest
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrEndTxnRequest() *EndTxnRequest {
+	var v EndTxnRequest
+	v.Default()
+	return &v
+}
+
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to EndTxnRequest.
 func (v *EndTxnRequest) Default() {
@@ -15018,6 +15442,14 @@ func (v *EndTxnResponse) ReadFrom(src []byte) error {
 		s.ErrorCode = v
 	}
 	return b.Complete()
+}
+
+// NewPtrEndTxnResponse returns a pointer to a default EndTxnResponse
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrEndTxnResponse() *EndTxnResponse {
+	var v EndTxnResponse
+	v.Default()
+	return &v
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -15237,6 +15669,14 @@ func (v *WriteTxnMarkersRequest) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+// NewPtrWriteTxnMarkersRequest returns a pointer to a default WriteTxnMarkersRequest
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrWriteTxnMarkersRequest() *WriteTxnMarkersRequest {
+	var v WriteTxnMarkersRequest
+	v.Default()
+	return &v
+}
+
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to WriteTxnMarkersRequest.
 func (v *WriteTxnMarkersRequest) Default() {
@@ -15446,6 +15886,14 @@ func (v *WriteTxnMarkersResponse) ReadFrom(src []byte) error {
 		s.Markers = v
 	}
 	return b.Complete()
+}
+
+// NewPtrWriteTxnMarkersResponse returns a pointer to a default WriteTxnMarkersResponse
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrWriteTxnMarkersResponse() *WriteTxnMarkersResponse {
+	var v WriteTxnMarkersResponse
+	v.Default()
+	return &v
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -15825,6 +16273,14 @@ func (v *TxnOffsetCommitRequest) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+// NewPtrTxnOffsetCommitRequest returns a pointer to a default TxnOffsetCommitRequest
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrTxnOffsetCommitRequest() *TxnOffsetCommitRequest {
+	var v TxnOffsetCommitRequest
+	v.Default()
+	return &v
+}
+
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to TxnOffsetCommitRequest.
 func (v *TxnOffsetCommitRequest) Default() {
@@ -16088,6 +16544,14 @@ func (v *TxnOffsetCommitResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+// NewPtrTxnOffsetCommitResponse returns a pointer to a default TxnOffsetCommitResponse
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrTxnOffsetCommitResponse() *TxnOffsetCommitResponse {
+	var v TxnOffsetCommitResponse
+	v.Default()
+	return &v
+}
+
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to TxnOffsetCommitResponse.
 func (v *TxnOffsetCommitResponse) Default() {
@@ -16288,6 +16752,14 @@ func (v *DescribeACLsRequest) ReadFrom(src []byte) error {
 		SkipTags(&b)
 	}
 	return b.Complete()
+}
+
+// NewPtrDescribeACLsRequest returns a pointer to a default DescribeACLsRequest
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrDescribeACLsRequest() *DescribeACLsRequest {
+	var v DescribeACLsRequest
+	v.Default()
+	return &v
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -16610,6 +17082,14 @@ func (v *DescribeACLsResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+// NewPtrDescribeACLsResponse returns a pointer to a default DescribeACLsResponse
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrDescribeACLsResponse() *DescribeACLsResponse {
+	var v DescribeACLsResponse
+	v.Default()
+	return &v
+}
+
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to DescribeACLsResponse.
 func (v *DescribeACLsResponse) Default() {
@@ -16844,6 +17324,14 @@ func (v *CreateACLsRequest) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+// NewPtrCreateACLsRequest returns a pointer to a default CreateACLsRequest
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrCreateACLsRequest() *CreateACLsRequest {
+	var v CreateACLsRequest
+	v.Default()
+	return &v
+}
+
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to CreateACLsRequest.
 func (v *CreateACLsRequest) Default() {
@@ -16993,6 +17481,14 @@ func (v *CreateACLsResponse) ReadFrom(src []byte) error {
 		SkipTags(&b)
 	}
 	return b.Complete()
+}
+
+// NewPtrCreateACLsResponse returns a pointer to a default CreateACLsResponse
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrCreateACLsResponse() *CreateACLsResponse {
+	var v CreateACLsResponse
+	v.Default()
+	return &v
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -17210,6 +17706,14 @@ func (v *DeleteACLsRequest) ReadFrom(src []byte) error {
 		SkipTags(&b)
 	}
 	return b.Complete()
+}
+
+// NewPtrDeleteACLsRequest returns a pointer to a default DeleteACLsRequest
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrDeleteACLsRequest() *DeleteACLsRequest {
+	var v DeleteACLsRequest
+	v.Default()
+	return &v
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -17550,6 +18054,14 @@ func (v *DeleteACLsResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+// NewPtrDeleteACLsResponse returns a pointer to a default DeleteACLsResponse
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrDeleteACLsResponse() *DeleteACLsResponse {
+	var v DeleteACLsResponse
+	v.Default()
+	return &v
+}
+
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to DeleteACLsResponse.
 func (v *DeleteACLsResponse) Default() {
@@ -17731,6 +18243,14 @@ func (v *DescribeConfigsRequest) ReadFrom(src []byte) error {
 		s.IncludeDocumentation = v
 	}
 	return b.Complete()
+}
+
+// NewPtrDescribeConfigsRequest returns a pointer to a default DescribeConfigsRequest
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrDescribeConfigsRequest() *DescribeConfigsRequest {
+	var v DescribeConfigsRequest
+	v.Default()
+	return &v
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -18121,6 +18641,14 @@ func (v *DescribeConfigsResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+// NewPtrDescribeConfigsResponse returns a pointer to a default DescribeConfigsResponse
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrDescribeConfigsResponse() *DescribeConfigsResponse {
+	var v DescribeConfigsResponse
+	v.Default()
+	return &v
+}
+
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to DescribeConfigsResponse.
 func (v *DescribeConfigsResponse) Default() {
@@ -18339,6 +18867,14 @@ func (v *AlterConfigsRequest) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+// NewPtrAlterConfigsRequest returns a pointer to a default AlterConfigsRequest
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrAlterConfigsRequest() *AlterConfigsRequest {
+	var v AlterConfigsRequest
+	v.Default()
+	return &v
+}
+
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to AlterConfigsRequest.
 func (v *AlterConfigsRequest) Default() {
@@ -18493,6 +19029,14 @@ func (v *AlterConfigsResponse) ReadFrom(src []byte) error {
 		s.Resources = v
 	}
 	return b.Complete()
+}
+
+// NewPtrAlterConfigsResponse returns a pointer to a default AlterConfigsResponse
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrAlterConfigsResponse() *AlterConfigsResponse {
+	var v AlterConfigsResponse
+	v.Default()
+	return &v
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -18689,6 +19233,14 @@ func (v *AlterReplicaLogDirsRequest) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+// NewPtrAlterReplicaLogDirsRequest returns a pointer to a default AlterReplicaLogDirsRequest
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrAlterReplicaLogDirsRequest() *AlterReplicaLogDirsRequest {
+	var v AlterReplicaLogDirsRequest
+	v.Default()
+	return &v
+}
+
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to AlterReplicaLogDirsRequest.
 func (v *AlterReplicaLogDirsRequest) Default() {
@@ -18878,6 +19430,14 @@ func (v *AlterReplicaLogDirsResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+// NewPtrAlterReplicaLogDirsResponse returns a pointer to a default AlterReplicaLogDirsResponse
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrAlterReplicaLogDirsResponse() *AlterReplicaLogDirsResponse {
+	var v AlterReplicaLogDirsResponse
+	v.Default()
+	return &v
+}
+
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to AlterReplicaLogDirsResponse.
 func (v *AlterReplicaLogDirsResponse) Default() {
@@ -19057,6 +19617,14 @@ func (v *DescribeLogDirsRequest) ReadFrom(src []byte) error {
 		SkipTags(&b)
 	}
 	return b.Complete()
+}
+
+// NewPtrDescribeLogDirsRequest returns a pointer to a default DescribeLogDirsRequest
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrDescribeLogDirsRequest() *DescribeLogDirsRequest {
+	var v DescribeLogDirsRequest
+	v.Default()
+	return &v
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -19409,6 +19977,14 @@ func (v *DescribeLogDirsResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+// NewPtrDescribeLogDirsResponse returns a pointer to a default DescribeLogDirsResponse
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrDescribeLogDirsResponse() *DescribeLogDirsResponse {
+	var v DescribeLogDirsResponse
+	v.Default()
+	return &v
+}
+
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to DescribeLogDirsResponse.
 func (v *DescribeLogDirsResponse) Default() {
@@ -19493,6 +20069,14 @@ func (v *SASLAuthenticateRequest) ReadFrom(src []byte) error {
 		SkipTags(&b)
 	}
 	return b.Complete()
+}
+
+// NewPtrSASLAuthenticateRequest returns a pointer to a default SASLAuthenticateRequest
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrSASLAuthenticateRequest() *SASLAuthenticateRequest {
+	var v SASLAuthenticateRequest
+	v.Default()
+	return &v
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -19610,6 +20194,14 @@ func (v *SASLAuthenticateResponse) ReadFrom(src []byte) error {
 		SkipTags(&b)
 	}
 	return b.Complete()
+}
+
+// NewPtrSASLAuthenticateResponse returns a pointer to a default SASLAuthenticateResponse
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrSASLAuthenticateResponse() *SASLAuthenticateResponse {
+	var v SASLAuthenticateResponse
+	v.Default()
+	return &v
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -19895,6 +20487,14 @@ func (v *CreatePartitionsRequest) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+// NewPtrCreatePartitionsRequest returns a pointer to a default CreatePartitionsRequest
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrCreatePartitionsRequest() *CreatePartitionsRequest {
+	var v CreatePartitionsRequest
+	v.Default()
+	return &v
+}
+
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to CreatePartitionsRequest.
 func (v *CreatePartitionsRequest) Default() {
@@ -20092,6 +20692,14 @@ func (v *CreatePartitionsResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+// NewPtrCreatePartitionsResponse returns a pointer to a default CreatePartitionsResponse
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrCreatePartitionsResponse() *CreatePartitionsResponse {
+	var v CreatePartitionsResponse
+	v.Default()
+	return &v
+}
+
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to CreatePartitionsResponse.
 func (v *CreatePartitionsResponse) Default() {
@@ -20274,6 +20882,14 @@ func (v *CreateDelegationTokenRequest) ReadFrom(src []byte) error {
 		SkipTags(&b)
 	}
 	return b.Complete()
+}
+
+// NewPtrCreateDelegationTokenRequest returns a pointer to a default CreateDelegationTokenRequest
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrCreateDelegationTokenRequest() *CreateDelegationTokenRequest {
+	var v CreateDelegationTokenRequest
+	v.Default()
+	return &v
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -20474,6 +21090,14 @@ func (v *CreateDelegationTokenResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+// NewPtrCreateDelegationTokenResponse returns a pointer to a default CreateDelegationTokenResponse
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrCreateDelegationTokenResponse() *CreateDelegationTokenResponse {
+	var v CreateDelegationTokenResponse
+	v.Default()
+	return &v
+}
+
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to CreateDelegationTokenResponse.
 func (v *CreateDelegationTokenResponse) Default() {
@@ -20569,6 +21193,14 @@ func (v *RenewDelegationTokenRequest) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+// NewPtrRenewDelegationTokenRequest returns a pointer to a default RenewDelegationTokenRequest
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrRenewDelegationTokenRequest() *RenewDelegationTokenRequest {
+	var v RenewDelegationTokenRequest
+	v.Default()
+	return &v
+}
+
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to RenewDelegationTokenRequest.
 func (v *RenewDelegationTokenRequest) Default() {
@@ -20657,6 +21289,14 @@ func (v *RenewDelegationTokenResponse) ReadFrom(src []byte) error {
 		SkipTags(&b)
 	}
 	return b.Complete()
+}
+
+// NewPtrRenewDelegationTokenResponse returns a pointer to a default RenewDelegationTokenResponse
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrRenewDelegationTokenResponse() *RenewDelegationTokenResponse {
+	var v RenewDelegationTokenResponse
+	v.Default()
+	return &v
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -20760,6 +21400,14 @@ func (v *ExpireDelegationTokenRequest) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+// NewPtrExpireDelegationTokenRequest returns a pointer to a default ExpireDelegationTokenRequest
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrExpireDelegationTokenRequest() *ExpireDelegationTokenRequest {
+	var v ExpireDelegationTokenRequest
+	v.Default()
+	return &v
+}
+
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to ExpireDelegationTokenRequest.
 func (v *ExpireDelegationTokenRequest) Default() {
@@ -20847,6 +21495,14 @@ func (v *ExpireDelegationTokenResponse) ReadFrom(src []byte) error {
 		SkipTags(&b)
 	}
 	return b.Complete()
+}
+
+// NewPtrExpireDelegationTokenResponse returns a pointer to a default ExpireDelegationTokenResponse
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrExpireDelegationTokenResponse() *ExpireDelegationTokenResponse {
+	var v ExpireDelegationTokenResponse
+	v.Default()
+	return &v
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -21013,6 +21669,14 @@ func (v *DescribeDelegationTokenRequest) ReadFrom(src []byte) error {
 		SkipTags(&b)
 	}
 	return b.Complete()
+}
+
+// NewPtrDescribeDelegationTokenRequest returns a pointer to a default DescribeDelegationTokenRequest
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrDescribeDelegationTokenRequest() *DescribeDelegationTokenRequest {
+	var v DescribeDelegationTokenRequest
+	v.Default()
+	return &v
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -21361,6 +22025,14 @@ func (v *DescribeDelegationTokenResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+// NewPtrDescribeDelegationTokenResponse returns a pointer to a default DescribeDelegationTokenResponse
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrDescribeDelegationTokenResponse() *DescribeDelegationTokenResponse {
+	var v DescribeDelegationTokenResponse
+	v.Default()
+	return &v
+}
+
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to DescribeDelegationTokenResponse.
 func (v *DescribeDelegationTokenResponse) Default() {
@@ -21469,6 +22141,14 @@ func (v *DeleteGroupsRequest) ReadFrom(src []byte) error {
 		SkipTags(&b)
 	}
 	return b.Complete()
+}
+
+// NewPtrDeleteGroupsRequest returns a pointer to a default DeleteGroupsRequest
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrDeleteGroupsRequest() *DeleteGroupsRequest {
+	var v DeleteGroupsRequest
+	v.Default()
+	return &v
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -21635,6 +22315,14 @@ func (v *DeleteGroupsResponse) ReadFrom(src []byte) error {
 		SkipTags(&b)
 	}
 	return b.Complete()
+}
+
+// NewPtrDeleteGroupsResponse returns a pointer to a default DeleteGroupsResponse
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrDeleteGroupsResponse() *DeleteGroupsResponse {
+	var v DeleteGroupsResponse
+	v.Default()
+	return &v
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -21846,6 +22534,14 @@ func (v *ElectLeadersRequest) ReadFrom(src []byte) error {
 		SkipTags(&b)
 	}
 	return b.Complete()
+}
+
+// NewPtrElectLeadersRequest returns a pointer to a default ElectLeadersRequest
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrElectLeadersRequest() *ElectLeadersRequest {
+	var v ElectLeadersRequest
+	v.Default()
+	return &v
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -22117,6 +22813,14 @@ func (v *ElectLeadersResponse) ReadFrom(src []byte) error {
 		SkipTags(&b)
 	}
 	return b.Complete()
+}
+
+// NewPtrElectLeadersResponse returns a pointer to a default ElectLeadersResponse
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrElectLeadersResponse() *ElectLeadersResponse {
+	var v ElectLeadersResponse
+	v.Default()
+	return &v
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -22420,6 +23124,14 @@ func (v *IncrementalAlterConfigsRequest) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+// NewPtrIncrementalAlterConfigsRequest returns a pointer to a default IncrementalAlterConfigsRequest
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrIncrementalAlterConfigsRequest() *IncrementalAlterConfigsRequest {
+	var v IncrementalAlterConfigsRequest
+	v.Default()
+	return &v
+}
+
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to IncrementalAlterConfigsRequest.
 func (v *IncrementalAlterConfigsRequest) Default() {
@@ -22617,6 +23329,14 @@ func (v *IncrementalAlterConfigsResponse) ReadFrom(src []byte) error {
 		SkipTags(&b)
 	}
 	return b.Complete()
+}
+
+// NewPtrIncrementalAlterConfigsResponse returns a pointer to a default IncrementalAlterConfigsResponse
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrIncrementalAlterConfigsResponse() *IncrementalAlterConfigsResponse {
+	var v IncrementalAlterConfigsResponse
+	v.Default()
+	return &v
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -22881,6 +23601,14 @@ func (v *AlterPartitionAssignmentsRequest) ReadFrom(src []byte) error {
 		SkipTags(&b)
 	}
 	return b.Complete()
+}
+
+// NewPtrAlterPartitionAssignmentsRequest returns a pointer to a default AlterPartitionAssignmentsRequest
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrAlterPartitionAssignmentsRequest() *AlterPartitionAssignmentsRequest {
+	var v AlterPartitionAssignmentsRequest
+	v.Default()
+	return &v
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -23171,6 +23899,14 @@ func (v *AlterPartitionAssignmentsResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+// NewPtrAlterPartitionAssignmentsResponse returns a pointer to a default AlterPartitionAssignmentsResponse
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrAlterPartitionAssignmentsResponse() *AlterPartitionAssignmentsResponse {
+	var v AlterPartitionAssignmentsResponse
+	v.Default()
+	return &v
+}
+
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to AlterPartitionAssignmentsResponse.
 func (v *AlterPartitionAssignmentsResponse) Default() {
@@ -23364,6 +24100,14 @@ func (v *ListPartitionReassignmentsRequest) ReadFrom(src []byte) error {
 		SkipTags(&b)
 	}
 	return b.Complete()
+}
+
+// NewPtrListPartitionReassignmentsRequest returns a pointer to a default ListPartitionReassignmentsRequest
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrListPartitionReassignmentsRequest() *ListPartitionReassignmentsRequest {
+	var v ListPartitionReassignmentsRequest
+	v.Default()
+	return &v
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -23728,6 +24472,14 @@ func (v *ListPartitionReassignmentsResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+// NewPtrListPartitionReassignmentsResponse returns a pointer to a default ListPartitionReassignmentsResponse
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrListPartitionReassignmentsResponse() *ListPartitionReassignmentsResponse {
+	var v ListPartitionReassignmentsResponse
+	v.Default()
+	return &v
+}
+
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to ListPartitionReassignmentsResponse.
 func (v *ListPartitionReassignmentsResponse) Default() {
@@ -23903,6 +24655,14 @@ func (v *OffsetDeleteRequest) ReadFrom(src []byte) error {
 		s.Topics = v
 	}
 	return b.Complete()
+}
+
+// NewPtrOffsetDeleteRequest returns a pointer to a default OffsetDeleteRequest
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrOffsetDeleteRequest() *OffsetDeleteRequest {
+	var v OffsetDeleteRequest
+	v.Default()
+	return &v
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -24111,6 +24871,14 @@ func (v *OffsetDeleteResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+// NewPtrOffsetDeleteResponse returns a pointer to a default OffsetDeleteResponse
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrOffsetDeleteResponse() *OffsetDeleteResponse {
+	var v OffsetDeleteResponse
+	v.Default()
+	return &v
+}
+
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to OffsetDeleteResponse.
 func (v *OffsetDeleteResponse) Default() {
@@ -24255,6 +25023,14 @@ func (v *DescribeClientQuotasRequest) ReadFrom(src []byte) error {
 		s.Strict = v
 	}
 	return b.Complete()
+}
+
+// NewPtrDescribeClientQuotasRequest returns a pointer to a default DescribeClientQuotasRequest
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrDescribeClientQuotasRequest() *DescribeClientQuotasRequest {
+	var v DescribeClientQuotasRequest
+	v.Default()
+	return &v
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -24512,6 +25288,14 @@ func (v *DescribeClientQuotasResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+// NewPtrDescribeClientQuotasResponse returns a pointer to a default DescribeClientQuotasResponse
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrDescribeClientQuotasResponse() *DescribeClientQuotasResponse {
+	var v DescribeClientQuotasResponse
+	v.Default()
+	return &v
+}
+
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to DescribeClientQuotasResponse.
 func (v *DescribeClientQuotasResponse) Default() {
@@ -24763,6 +25547,14 @@ func (v *AlterClientQuotasRequest) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+// NewPtrAlterClientQuotasRequest returns a pointer to a default AlterClientQuotasRequest
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrAlterClientQuotasRequest() *AlterClientQuotasRequest {
+	var v AlterClientQuotasRequest
+	v.Default()
+	return &v
+}
+
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to AlterClientQuotasRequest.
 func (v *AlterClientQuotasRequest) Default() {
@@ -24949,6 +25741,14 @@ func (v *AlterClientQuotasResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+// NewPtrAlterClientQuotasResponse returns a pointer to a default AlterClientQuotasResponse
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrAlterClientQuotasResponse() *AlterClientQuotasResponse {
+	var v AlterClientQuotasResponse
+	v.Default()
+	return &v
+}
+
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to AlterClientQuotasResponse.
 func (v *AlterClientQuotasResponse) Default() {
@@ -25092,6 +25892,14 @@ func (v *DescribeUserSCRAMCredentialsRequest) ReadFrom(src []byte) error {
 		SkipTags(&b)
 	}
 	return b.Complete()
+}
+
+// NewPtrDescribeUserSCRAMCredentialsRequest returns a pointer to a default DescribeUserSCRAMCredentialsRequest
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrDescribeUserSCRAMCredentialsRequest() *DescribeUserSCRAMCredentialsRequest {
+	var v DescribeUserSCRAMCredentialsRequest
+	v.Default()
+	return &v
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -25378,6 +26186,14 @@ func (v *DescribeUserSCRAMCredentialsResponse) ReadFrom(src []byte) error {
 		SkipTags(&b)
 	}
 	return b.Complete()
+}
+
+// NewPtrDescribeUserSCRAMCredentialsResponse returns a pointer to a default DescribeUserSCRAMCredentialsResponse
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrDescribeUserSCRAMCredentialsResponse() *DescribeUserSCRAMCredentialsResponse {
+	var v DescribeUserSCRAMCredentialsResponse
+	v.Default()
+	return &v
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -25679,6 +26495,14 @@ func (v *AlterUserSCRAMCredentialsRequest) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+// NewPtrAlterUserSCRAMCredentialsRequest returns a pointer to a default AlterUserSCRAMCredentialsRequest
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrAlterUserSCRAMCredentialsRequest() *AlterUserSCRAMCredentialsRequest {
+	var v AlterUserSCRAMCredentialsRequest
+	v.Default()
+	return &v
+}
+
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to AlterUserSCRAMCredentialsRequest.
 func (v *AlterUserSCRAMCredentialsRequest) Default() {
@@ -25851,6 +26675,14 @@ func (v *AlterUserSCRAMCredentialsResponse) ReadFrom(src []byte) error {
 		SkipTags(&b)
 	}
 	return b.Complete()
+}
+
+// NewPtrAlterUserSCRAMCredentialsResponse returns a pointer to a default AlterUserSCRAMCredentialsResponse
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrAlterUserSCRAMCredentialsResponse() *AlterUserSCRAMCredentialsResponse {
+	var v AlterUserSCRAMCredentialsResponse
+	v.Default()
+	return &v
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -26123,6 +26955,14 @@ func (v *VoteRequest) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+// NewPtrVoteRequest returns a pointer to a default VoteRequest
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrVoteRequest() *VoteRequest {
+	var v VoteRequest
+	v.Default()
+	return &v
+}
+
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to VoteRequest.
 func (v *VoteRequest) Default() {
@@ -26357,6 +27197,14 @@ func (v *VoteResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+// NewPtrVoteResponse returns a pointer to a default VoteResponse
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrVoteResponse() *VoteResponse {
+	var v VoteResponse
+	v.Default()
+	return &v
+}
+
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to VoteResponse.
 func (v *VoteResponse) Default() {
@@ -26552,6 +27400,14 @@ func (v *BeginQuorumEpochRequest) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+// NewPtrBeginQuorumEpochRequest returns a pointer to a default BeginQuorumEpochRequest
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrBeginQuorumEpochRequest() *BeginQuorumEpochRequest {
+	var v BeginQuorumEpochRequest
+	v.Default()
+	return &v
+}
+
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to BeginQuorumEpochRequest.
 func (v *BeginQuorumEpochRequest) Default() {
@@ -26739,6 +27595,14 @@ func (v *BeginQuorumEpochResponse) ReadFrom(src []byte) error {
 		s.Topics = v
 	}
 	return b.Complete()
+}
+
+// NewPtrBeginQuorumEpochResponse returns a pointer to a default BeginQuorumEpochResponse
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrBeginQuorumEpochResponse() *BeginQuorumEpochResponse {
+	var v BeginQuorumEpochResponse
+	v.Default()
+	return &v
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -26976,6 +27840,14 @@ func (v *EndQuorumEpochRequest) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+// NewPtrEndQuorumEpochRequest returns a pointer to a default EndQuorumEpochRequest
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrEndQuorumEpochRequest() *EndQuorumEpochRequest {
+	var v EndQuorumEpochRequest
+	v.Default()
+	return &v
+}
+
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to EndQuorumEpochRequest.
 func (v *EndQuorumEpochRequest) Default() {
@@ -27163,6 +28035,14 @@ func (v *EndQuorumEpochResponse) ReadFrom(src []byte) error {
 		s.Topics = v
 	}
 	return b.Complete()
+}
+
+// NewPtrEndQuorumEpochResponse returns a pointer to a default EndQuorumEpochResponse
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrEndQuorumEpochResponse() *EndQuorumEpochResponse {
+	var v EndQuorumEpochResponse
+	v.Default()
+	return &v
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -27391,6 +28271,14 @@ func (v *DescribeQuorumRequest) ReadFrom(src []byte) error {
 		SkipTags(&b)
 	}
 	return b.Complete()
+}
+
+// NewPtrDescribeQuorumRequest returns a pointer to a default DescribeQuorumRequest
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrDescribeQuorumRequest() *DescribeQuorumRequest {
+	var v DescribeQuorumRequest
+	v.Default()
+	return &v
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -27755,6 +28643,14 @@ func (v *DescribeQuorumResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+// NewPtrDescribeQuorumResponse returns a pointer to a default DescribeQuorumResponse
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrDescribeQuorumResponse() *DescribeQuorumResponse {
+	var v DescribeQuorumResponse
+	v.Default()
+	return &v
+}
+
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to DescribeQuorumResponse.
 func (v *DescribeQuorumResponse) Default() {
@@ -28038,6 +28934,14 @@ func (v *AlterISRRequest) ReadFrom(src []byte) error {
 		SkipTags(&b)
 	}
 	return b.Complete()
+}
+
+// NewPtrAlterISRRequest returns a pointer to a default AlterISRRequest
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrAlterISRRequest() *AlterISRRequest {
+	var v AlterISRRequest
+	v.Default()
+	return &v
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -28335,6 +29239,14 @@ func (v *AlterISRResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
+// NewPtrAlterISRResponse returns a pointer to a default AlterISRResponse
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrAlterISRResponse() *AlterISRResponse {
+	var v AlterISRResponse
+	v.Default()
+	return &v
+}
+
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to AlterISRResponse.
 func (v *AlterISRResponse) Default() {
@@ -28511,6 +29423,14 @@ func (v *UpdateFeaturesRequest) ReadFrom(src []byte) error {
 		SkipTags(&b)
 	}
 	return b.Complete()
+}
+
+// NewPtrUpdateFeaturesRequest returns a pointer to a default UpdateFeaturesRequest
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrUpdateFeaturesRequest() *UpdateFeaturesRequest {
+	var v UpdateFeaturesRequest
+	v.Default()
+	return &v
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -28715,6 +29635,14 @@ func (v *UpdateFeaturesResponse) ReadFrom(src []byte) error {
 		SkipTags(&b)
 	}
 	return b.Complete()
+}
+
+// NewPtrUpdateFeaturesResponse returns a pointer to a default UpdateFeaturesResponse
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrUpdateFeaturesResponse() *UpdateFeaturesResponse {
+	var v UpdateFeaturesResponse
+	v.Default()
+	return &v
 }
 
 // Default sets any default fields. Calling this allows for future compatibility

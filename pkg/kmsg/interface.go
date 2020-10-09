@@ -24,7 +24,8 @@
 // All "Default" functions set non-Go-default field defaults. They do not set
 // any fields whose default value is a Go default. Thus, Default functions will
 // set -1, but not 0 nor nil. All "New" functions also set non-Go-default
-// fields.
+// fields. Requests and Responses also have a "NewPtr" function that is the
+// same as "New," but returns a pointer to the type.
 //
 // Most of this package is generated, but a few things are manual. What is
 // manual: all interfaces, the RequestFormatter, record / message / record
