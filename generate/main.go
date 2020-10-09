@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
+	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -127,11 +129,12 @@ type (
 
 		Fields []StructField
 
+		Key int // -1 if not top level
+
 		// Only TopLevel relevant fields:
 		Admin            bool
 		GroupCoordinator bool
 		TxnCoordinator   bool
-		Key              int
 		MaxVersion       int
 		FlexibleAt       int
 		ResponseKind     string // for requests
@@ -313,11 +316,21 @@ func (l *LineWriter) Write(line string, args ...interface{}) {
 
 //go:generate sh -c "go run . | gofmt > ../pkg/kmsg/generated.go"
 func main() {
-	f, err := ioutil.ReadFile("DEFINITIONS")
+	const dir = "definitions"
+	dirents, err := ioutil.ReadDir(dir)
 	if err != nil {
-		die("unable to read DEFINITIONS file: %v", err)
+		die("unable to read definitions dir %s: %v", dir, err)
 	}
-	Parse(f)
+	for _, ent := range dirents {
+		if strings.HasPrefix(ent.Name(), ".") {
+			continue
+		}
+		f, err := ioutil.ReadFile(filepath.Join(dir, ent.Name()))
+		if err != nil {
+			die("unable to read %s/%s: %v", dir, ent.Name(), err)
+		}
+		Parse(f)
+	}
 
 	l := &LineWriter{buf: bytes.NewBuffer(make([]byte, 0, 300<<10))}
 	l.Write("package kmsg")
@@ -334,6 +347,7 @@ func main() {
 
 	var name2structs []Struct
 
+	sort.SliceStable(newStructs, func(i, j int) bool { return newStructs[i].Key < newStructs[j].Key })
 	for _, s := range newStructs {
 		s.WriteDefn(l)
 		if s.TopLevel {

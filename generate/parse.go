@@ -10,7 +10,6 @@ import (
 // If you are looking here, yes this is a shoddy parser, but it does the job.
 
 // newStructs are top level structs that we print at the end.
-// We keep these in order to generate types in order.
 var newStructs []Struct
 
 var types = map[string]Type{
@@ -60,7 +59,7 @@ func (l *LineScanner) Next() {
 //
 // If a blank line is ever encountered, the struct is done being built and
 // the done status is bubbled up through all recursion levels.
-func (s *Struct) BuildFrom(scanner *LineScanner, level int) (done bool) {
+func (s *Struct) BuildFrom(scanner *LineScanner, key int, level int) (done bool) {
 	fieldSpaces := strings.Repeat(" ", 2*(level+1))
 
 	var nextComment string
@@ -169,6 +168,7 @@ func (s *Struct) BuildFrom(scanner *LineScanner, level int) (done bool) {
 		case strings.HasPrefix(typ, "=>"): // nested struct; recurse
 			newS := Struct{FromFlexible: s.FromFlexible}
 			newS.Name = s.Name + f.FieldName
+			newS.Key = key // for kmsg generating ordering purposes
 			newS.Anonymous = true
 			if isArray {
 				if rename := typ[2:]; rename != "" { // allow rename hint after `=>`; braces were stripped above
@@ -177,7 +177,7 @@ func (s *Struct) BuildFrom(scanner *LineScanner, level int) (done bool) {
 					newS.Name = strings.TrimSuffix(newS.Name, "s") // make plural singular
 				}
 			}
-			done = newS.BuildFrom(scanner, level+1)
+			done = newS.BuildFrom(scanner, key, level+1)
 			f.Type = newS
 			newStructs = append(newStructs, newS)
 
@@ -205,10 +205,28 @@ func (s *Struct) BuildFrom(scanner *LineScanner, level int) (done bool) {
 			}
 
 		default: // type is known, lookup and set
-			if types[typ] == nil {
+			got := types[typ]
+			if got == nil {
 				die("unknown type %q on line %q", typ, line)
 			}
-			f.Type = types[typ]
+			if s, ok := got.(Struct); ok {
+				// If this field's struct type specified no encoding, then it
+				// is not anonymous, but it is tied to a request and should be
+				// ordered by that request when generating code.
+				//
+				// The default key is -1, so if we still have they key, we fix
+				// it and also fix the key in the newStructs slice.
+				if s.WithNoEncoding && s.Key == -1 {
+					for i := range newStructs {
+						if newStructs[i].Name == s.Name {
+							newStructs[i].Key = key
+						}
+					}
+					s.Key = key
+					types[typ] = s
+				}
+			}
+			f.Type = got
 
 			if hasDefault {
 				f.Type = f.Type.(Defaulter).SetDefault(def)
@@ -337,12 +355,15 @@ func Parse(raw []byte) {
 			name = noEncoding
 			withNoEncoding = true
 		}
+
+		key := -1
 		save := func() {
 			s.Name = name
 			s.TopLevel = topLevel
 			s.WithVersionField = withVersionField
 			s.WithNoEncoding = withNoEncoding
-			s.BuildFrom(scanner, 0)
+			s.Key = key
+			s.BuildFrom(scanner, key, 0)
 			types[name] = s
 			newStructs = append(newStructs, s)
 		}
@@ -366,7 +387,7 @@ func Parse(raw []byte) {
 				s.FlexibleAt = prior.FlexibleAt
 				s.FromFlexible = true
 			}
-			s.Key = prior.Key
+			key = prior.Key
 			s.MaxVersion = prior.MaxVersion
 			save()
 			continue
@@ -432,11 +453,10 @@ func Parse(raw []byte) {
 		if idx := strings.Index(rem, keyStr); idx == -1 {
 			die("missing key on line %q", line)
 		} else {
-			key, err := strconv.Atoi(rem[idx+len(keyStr):])
-			if err != nil {
+			var err error
+			if key, err = strconv.Atoi(rem[idx+len(keyStr):]); err != nil {
 				die("key on line %q pare err: %v", line, err)
 			}
-			s.Key = key
 			if key > maxKey {
 				maxKey = key
 			}
