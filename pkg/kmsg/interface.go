@@ -9,27 +9,44 @@
 //
 // Kafka has only once in its history changed a non-array field's type,
 // changing a string to a pointer to a string. These types of changes are
-// expected to be uncommon, and this package is provided with the understanding
-// that it is advanced and may require some very minor maintenance if a field's
-// type changes.
+// expected to be very uncommon, and this package is provided with the
+// understanding that it is advanced and may require some very minor
+// maintenance if a field's type changes.
 //
-// If you are using this package directly with kgo, it is HIGHLY recommended to
-// pin the max supported Kafka version! If you do not, you will automatically
-// opt in to new Kafka versions across new kmsg releases. This may lead to new
-// fields that you have not explicitly initialized, resulting in errors.
+// If you are using this package directly with kgo, you should either ALWAYS
+// use New functions (or Default functions after creating structs, you should
+// pin the max supported version. If you use New functions, you should have
+// safe defaults as new fields are added. If you pin versions, you will avoid
+// new fields being used. If you do neither of these, you may opt in to new
+// fields that do not have safe zero value defaults, and this may lead to
+// errors or unexpected results.
 //
 // All "Default" functions set non-Go-default field defaults. They do not set
 // any fields whose default value is a Go default. Thus, Default functions will
-// set -1, but not 0 nor nil.
+// set -1, but not 0 nor nil. All "New" functions also set non-Go-default
+// fields.
+//
+// Most of this package is generated, but a few things are manual. What is
+// manual: all interfaces, the RequestFormatter, record / message / record
+// batch reading, and sticky member metadata serialization.
 package kmsg
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
 	"hash/crc32"
 
 	"github.com/twmb/kafka-go/pkg/kbin"
 )
+
+// Requestor issues requests. Notably, the kgo.Client and kgo.Broker implements
+// Requestor. All Requests in this package have a RequestWith function to have
+// type-safe requests.
+type Requestor interface {
+	// Request issues a Request and returns either a Response or an error.
+	Request(context.Context, Request) (Response, error)
+}
 
 // Request represents a type that can be requested to Kafka.
 type Request interface {
@@ -366,4 +383,12 @@ func (s *StickyMemberMetadata) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendInt32(dst, s.Generation)
 	}
 	return dst
+}
+
+// SkipTags skips tags in a reader.
+func SkipTags(b *kbin.Reader) {
+	for num := b.Uvarint(); num > 0; num-- {
+		_, size := b.Uvarint(), b.Uvarint()
+		b.Span(int(size))
+	}
 }
