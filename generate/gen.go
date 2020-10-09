@@ -632,6 +632,17 @@ func (s Struct) WriteDecodeFunc(l *LineWriter) {
 	l.Write("}")
 }
 
+func (s Struct) WriteRequestWithFunc(l *LineWriter) {
+	l.Write("// RequestWith is requests v on r and returns the response or an error.")
+	l.Write("func (v *%s) RequestWith(ctx context.Context, r Requestor) (*%s, error) {", s.Name, s.ResponseKind)
+	l.Write("kresp, err := r.Request(ctx, v)")
+	l.Write("if err != nil {")
+	l.Write("return nil, err")
+	l.Write("}")
+	l.Write("return kresp.(*%s), nil", s.ResponseKind)
+	l.Write("}")
+}
+
 func (s Struct) WriteDefaultFunc(l *LineWriter) {
 	l.Write("// Default sets any default fields. Calling this allows for future compatibility")
 	l.Write("// if new fields are added to %s.", s.Name)
