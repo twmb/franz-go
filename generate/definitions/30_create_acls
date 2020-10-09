@@ -7,14 +7,14 @@ CreateACLsRequest => key 30, max version 2, flexible v2+
   Creations: [=>]
     // ResourceType is the type of resource this acl entry will be on.
     // It is invalid to use UNKNOWN or ANY.
-    ResourceType: int8
+    ResourceType: enum-ACLResourceType
     // ResourceName is the name of the resource this acl entry will be on.
     // For CLUSTER, this must be "kafka-cluster".
     ResourceName: string
     // ResourcePatternType is the pattern type to use for the resource name.
     // This cannot be UNKNOWN or MATCH (i.e. this must be LITERAL or PREFIXED).
     // The default for pre-Kafka 2.0.0 is effectively LITERAL.
-    ResourcePatternType: int8(3) // v1+
+    ResourcePatternType: enum-ACLResourcePatternType(3) // v1+
     // Principal is the user to apply this acl for. With the Kafka simple
     // authorizer, this must begin with "User:".
     Principal: string
@@ -24,10 +24,10 @@ CreateACLsRequest => key 30, max version 2, flexible v2+
     Host: string
     // Operation is the operation this acl is for. This must not be UNKNOWN or
     // ANY.
-    Operation: int8
+    Operation: enum-ACLOperation
     // PermissionType is the permission of this acl. This must be either ALLOW
     // or DENY.
-    PermissionType: int8
+    PermissionType: enum-ACLPermissionType
 
 // CreateACLsResponse is a response for a CreateACLsRequest.
 CreateACLsResponse =>

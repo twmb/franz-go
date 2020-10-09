@@ -1,0 +1,53 @@
+//////////
+// ACLS //
+//////////
+
+// ACLResourceType is a type of resource to use for ACLs.
+ACLResourceType int8 (
+  1: ANY
+  2: TOPIC
+  3: GROUP
+  4: CLUSTER
+  5: TRANSACTIONAL_ID
+  6: DELEGATION_TOKEN
+)
+
+// ACLResourcePatternType is how an acl's ResourceName is understood.
+//
+// This field was added with Kafka 2.0.0 for KIP-290.
+ACLResourcePatternType int8 (
+  // Matches anything.
+  1: MATCH
+  // The name must be an exact match.
+  2: LITERAL
+  // The name must have our requested name as a prefix (that is, "foo" will match on "foobar").
+  3: PREFIXED
+)
+
+// An ACL permission type.
+ACLPermissionType int8 (
+  // Any permission.
+  1: ANY
+  // Any deny permission.
+  2: DENY
+  // Any allow permission.
+  3: ALLOW
+)
+
+// An ACL operation.
+ACLOperation int8 (
+  // Matches anything.
+  1: ANY
+  // Matches anything granted all permissions.
+  2: ALL
+  3: READ
+  4: WRITE
+  5: CREATE
+  6: DELETE
+  7: ALTER
+  8: DESCRIBE
+  9: CLUSTER_ACTION
+  10: DESCRIBE_CONFIGS
+  11: ALTER_CONFIGS
+  12: IDEMPOTENT_WRITE
+)
