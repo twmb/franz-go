@@ -16575,32 +16575,14 @@ type DescribeACLsRequest struct {
 	Version int16
 
 	// ResourceType is the type of resource to describe.
-	//
-	// UNKNOWN, 0, is unknown; you do not describe unknown types. Kafka replies
-	// with unknown if it does not understand your type. ANY, 1 will match any
-	// other type.
-	//
-	// Past these two, the following types filter for an individual type:
-	// TOPIC is 2, GROUP is 3, CLUSTER is 4, TRANSACTIONAL_ID is 5, and
-	// DELEGATION_TOKEN is 6.
-	ResourceType int8
+	ResourceType ACLResourceType
 
 	// ResourceName is the name to filter out. For the CLUSTER resource type,
 	// this must be "kafka-cluster".
 	ResourceName *string
 
-	// ResourcePatternType is how ResourceName is understood. UNKNOWN is 0 and is
-	// meaningless in the request.
-	//
-	// MATCH is 1, which will match anything.
-	//
-	// LITERAL is 2, meaning the name must be an exact match.
-	//
-	// PREFIXED is 3, meaning a resource name must have our requested resource
-	// name as a prefix. That is, topic "foobar" will match "foo".
-	//
-	// This field was added with Kafka 2.0.0 for KIP-290.
-	ResourcePatternType int8 // v1+
+	// ResourcePatternType is how ResourceName is understood.
+	ResourcePatternType ACLResourcePatternType // v1+
 
 	// Principal is the user to filter for. In Kafka with the simple authorizor,
 	// all principals begin with "User:". Pluggable authorizors are allowed, but
@@ -16611,22 +16593,14 @@ type DescribeACLsRequest struct {
 	// Host is a host to filter for.
 	Host *string
 
-	// Operation is an operation to filter for. UNKNOWN is 0.
-	//
-	// ANY is 1 and matches anything, otherwise... ALL is 2 and matches anything
-	// granted ALL permissions, READ is 3, WRITE is 4, CREATE is 5, DELETE is 6,
-	// ALTER is 7 DESCRIBE is 8, CLUSTER_ACTION is 9, DESCRIBE_CONFIGS is 10,
-	// ALTER_CONFIGS is 11, and IDEMPOTENT_WRITE is 12.
+	// Operation is an operation to filter for.
 	//
 	// Note that READ, WRITE, DELETE, and ALTER imply DESCRIBE, and ALTER_CONFIGS
 	// implies DESCRIBE_CONFIGS.
-	Operation int8
+	Operation ACLOperation
 
 	// PermissionType is the permission type to filter for. UNKNOWN is 0.
-	//
-	// ANY is 1 and matches anything, otherwise DENY (2) matches all deny
-	// permissions and ALLOW (3) matches all allow permissions.
-	PermissionType int8
+	PermissionType ACLPermissionType
 }
 
 func (*DescribeACLsRequest) Key() int16                 { return 29 }
@@ -16654,7 +16628,10 @@ func (v *DescribeACLsRequest) AppendTo(dst []byte) []byte {
 	_ = isFlexible
 	{
 		v := v.ResourceType
-		dst = kbin.AppendInt8(dst, v)
+		{
+			v := int8(v)
+			dst = kbin.AppendInt8(dst, v)
+		}
 	}
 	{
 		v := v.ResourceName
@@ -16666,7 +16643,10 @@ func (v *DescribeACLsRequest) AppendTo(dst []byte) []byte {
 	}
 	if version >= 1 {
 		v := v.ResourcePatternType
-		dst = kbin.AppendInt8(dst, v)
+		{
+			v := int8(v)
+			dst = kbin.AppendInt8(dst, v)
+		}
 	}
 	{
 		v := v.Principal
@@ -16686,11 +16666,17 @@ func (v *DescribeACLsRequest) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Operation
-		dst = kbin.AppendInt8(dst, v)
+		{
+			v := int8(v)
+			dst = kbin.AppendInt8(dst, v)
+		}
 	}
 	{
 		v := v.PermissionType
-		dst = kbin.AppendInt8(dst, v)
+		{
+			v := int8(v)
+			dst = kbin.AppendInt8(dst, v)
+		}
 	}
 	if isFlexible {
 		dst = append(dst, 0)
@@ -16706,7 +16692,12 @@ func (v *DescribeACLsRequest) ReadFrom(src []byte) error {
 	b := kbin.Reader{Src: src}
 	s := v
 	{
-		v := b.Int8()
+		var t ACLResourceType
+		{
+			v := b.Int8()
+			t = ACLResourceType(v)
+		}
+		v := t
 		s.ResourceType = v
 	}
 	{
@@ -16719,7 +16710,12 @@ func (v *DescribeACLsRequest) ReadFrom(src []byte) error {
 		s.ResourceName = v
 	}
 	if version >= 1 {
-		v := b.Int8()
+		var t ACLResourcePatternType
+		{
+			v := b.Int8()
+			t = ACLResourcePatternType(v)
+		}
+		v := t
 		s.ResourcePatternType = v
 	}
 	{
@@ -16741,11 +16737,21 @@ func (v *DescribeACLsRequest) ReadFrom(src []byte) error {
 		s.Host = v
 	}
 	{
-		v := b.Int8()
+		var t ACLOperation
+		{
+			v := b.Int8()
+			t = ACLOperation(v)
+		}
+		v := t
 		s.Operation = v
 	}
 	{
-		v := b.Int8()
+		var t ACLPermissionType
+		{
+			v := b.Int8()
+			t = ACLPermissionType(v)
+		}
+		v := t
 		s.PermissionType = v
 	}
 	if isFlexible {
@@ -16784,10 +16790,10 @@ type DescribeACLsResponseResourceACL struct {
 	Host string
 
 	// Operation is the operation being described.
-	Operation int8
+	Operation ACLOperation
 
 	// PermissionType is the permission being described.
-	PermissionType int8
+	PermissionType ACLPermissionType
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -16805,13 +16811,13 @@ func NewDescribeACLsResponseResourceACL() DescribeACLsResponseResourceACL {
 
 type DescribeACLsResponseResource struct {
 	// ResourceType is the resource type being described.
-	ResourceType int8
+	ResourceType ACLResourceType
 
 	// ResourceName is the resource name being described.
 	ResourceName string
 
 	// ResourcePatternType is the pattern type being described.
-	ResourcePatternType int8 // v1+
+	ResourcePatternType ACLResourcePatternType // v1+
 
 	// ACLs contains users / entries being described.
 	ACLs []DescribeACLsResponseResourceACL
@@ -16894,7 +16900,10 @@ func (v *DescribeACLsResponse) AppendTo(dst []byte) []byte {
 			v := &v[i]
 			{
 				v := v.ResourceType
-				dst = kbin.AppendInt8(dst, v)
+				{
+					v := int8(v)
+					dst = kbin.AppendInt8(dst, v)
+				}
 			}
 			{
 				v := v.ResourceName
@@ -16906,7 +16915,10 @@ func (v *DescribeACLsResponse) AppendTo(dst []byte) []byte {
 			}
 			if version >= 1 {
 				v := v.ResourcePatternType
-				dst = kbin.AppendInt8(dst, v)
+				{
+					v := int8(v)
+					dst = kbin.AppendInt8(dst, v)
+				}
 			}
 			{
 				v := v.ACLs
@@ -16935,11 +16947,17 @@ func (v *DescribeACLsResponse) AppendTo(dst []byte) []byte {
 					}
 					{
 						v := v.Operation
-						dst = kbin.AppendInt8(dst, v)
+						{
+							v := int8(v)
+							dst = kbin.AppendInt8(dst, v)
+						}
 					}
 					{
 						v := v.PermissionType
-						dst = kbin.AppendInt8(dst, v)
+						{
+							v := int8(v)
+							dst = kbin.AppendInt8(dst, v)
+						}
 					}
 					if isFlexible {
 						dst = append(dst, 0)
@@ -17001,7 +17019,12 @@ func (v *DescribeACLsResponse) ReadFrom(src []byte) error {
 			v.Default()
 			s := v
 			{
-				v := b.Int8()
+				var t ACLResourceType
+				{
+					v := b.Int8()
+					t = ACLResourceType(v)
+				}
+				v := t
 				s.ResourceType = v
 			}
 			{
@@ -17014,7 +17037,12 @@ func (v *DescribeACLsResponse) ReadFrom(src []byte) error {
 				s.ResourceName = v
 			}
 			if version >= 1 {
-				v := b.Int8()
+				var t ACLResourcePatternType
+				{
+					v := b.Int8()
+					t = ACLResourcePatternType(v)
+				}
+				v := t
 				s.ResourcePatternType = v
 			}
 			{
@@ -17055,11 +17083,21 @@ func (v *DescribeACLsResponse) ReadFrom(src []byte) error {
 						s.Host = v
 					}
 					{
-						v := b.Int8()
+						var t ACLOperation
+						{
+							v := b.Int8()
+							t = ACLOperation(v)
+						}
+						v := t
 						s.Operation = v
 					}
 					{
-						v := b.Int8()
+						var t ACLPermissionType
+						{
+							v := b.Int8()
+							t = ACLPermissionType(v)
+						}
+						v := t
 						s.PermissionType = v
 					}
 					if isFlexible {
@@ -17106,7 +17144,7 @@ func NewDescribeACLsResponse() DescribeACLsResponse {
 type CreateACLsRequestCreation struct {
 	// ResourceType is the type of resource this acl entry will be on.
 	// It is invalid to use UNKNOWN or ANY.
-	ResourceType int8
+	ResourceType ACLResourceType
 
 	// ResourceName is the name of the resource this acl entry will be on.
 	// For CLUSTER, this must be "kafka-cluster".
@@ -17115,7 +17153,7 @@ type CreateACLsRequestCreation struct {
 	// ResourcePatternType is the pattern type to use for the resource name.
 	// This cannot be UNKNOWN or MATCH (i.e. this must be LITERAL or PREFIXED).
 	// The default for pre-Kafka 2.0.0 is effectively LITERAL.
-	ResourcePatternType int8 // v1+
+	ResourcePatternType ACLResourcePatternType // v1+
 
 	// Principal is the user to apply this acl for. With the Kafka simple
 	// authorizer, this must begin with "User:".
@@ -17128,11 +17166,11 @@ type CreateACLsRequestCreation struct {
 
 	// Operation is the operation this acl is for. This must not be UNKNOWN or
 	// ANY.
-	Operation int8
+	Operation ACLOperation
 
 	// PermissionType is the permission of this acl. This must be either ALLOW
 	// or DENY.
-	PermissionType int8
+	PermissionType ACLPermissionType
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -17193,7 +17231,10 @@ func (v *CreateACLsRequest) AppendTo(dst []byte) []byte {
 			v := &v[i]
 			{
 				v := v.ResourceType
-				dst = kbin.AppendInt8(dst, v)
+				{
+					v := int8(v)
+					dst = kbin.AppendInt8(dst, v)
+				}
 			}
 			{
 				v := v.ResourceName
@@ -17205,7 +17246,10 @@ func (v *CreateACLsRequest) AppendTo(dst []byte) []byte {
 			}
 			if version >= 1 {
 				v := v.ResourcePatternType
-				dst = kbin.AppendInt8(dst, v)
+				{
+					v := int8(v)
+					dst = kbin.AppendInt8(dst, v)
+				}
 			}
 			{
 				v := v.Principal
@@ -17225,11 +17269,17 @@ func (v *CreateACLsRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Operation
-				dst = kbin.AppendInt8(dst, v)
+				{
+					v := int8(v)
+					dst = kbin.AppendInt8(dst, v)
+				}
 			}
 			{
 				v := v.PermissionType
-				dst = kbin.AppendInt8(dst, v)
+				{
+					v := int8(v)
+					dst = kbin.AppendInt8(dst, v)
+				}
 			}
 			if isFlexible {
 				dst = append(dst, 0)
@@ -17269,7 +17319,12 @@ func (v *CreateACLsRequest) ReadFrom(src []byte) error {
 			v.Default()
 			s := v
 			{
-				v := b.Int8()
+				var t ACLResourceType
+				{
+					v := b.Int8()
+					t = ACLResourceType(v)
+				}
+				v := t
 				s.ResourceType = v
 			}
 			{
@@ -17282,7 +17337,12 @@ func (v *CreateACLsRequest) ReadFrom(src []byte) error {
 				s.ResourceName = v
 			}
 			if version >= 1 {
-				v := b.Int8()
+				var t ACLResourcePatternType
+				{
+					v := b.Int8()
+					t = ACLResourcePatternType(v)
+				}
+				v := t
 				s.ResourcePatternType = v
 			}
 			{
@@ -17304,11 +17364,21 @@ func (v *CreateACLsRequest) ReadFrom(src []byte) error {
 				s.Host = v
 			}
 			{
-				v := b.Int8()
+				var t ACLOperation
+				{
+					v := b.Int8()
+					t = ACLOperation(v)
+				}
+				v := t
 				s.Operation = v
 			}
 			{
-				v := b.Int8()
+				var t ACLPermissionType
+				{
+					v := b.Int8()
+					t = ACLPermissionType(v)
+				}
+				v := t
 				s.PermissionType = v
 			}
 			if isFlexible {
@@ -17505,19 +17575,19 @@ func NewCreateACLsResponse() CreateACLsResponse {
 }
 
 type DeleteACLsRequestFilter struct {
-	ResourceType int8
+	ResourceType ACLResourceType
 
 	ResourceName *string
 
-	ResourcePatternType int8 // v1+
+	ResourcePatternType ACLResourcePatternType // v1+
 
 	Principal *string
 
 	Host *string
 
-	Operation int8
+	Operation ACLOperation
 
-	PermissionType int8
+	PermissionType ACLPermissionType
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -17577,7 +17647,10 @@ func (v *DeleteACLsRequest) AppendTo(dst []byte) []byte {
 			v := &v[i]
 			{
 				v := v.ResourceType
-				dst = kbin.AppendInt8(dst, v)
+				{
+					v := int8(v)
+					dst = kbin.AppendInt8(dst, v)
+				}
 			}
 			{
 				v := v.ResourceName
@@ -17589,7 +17662,10 @@ func (v *DeleteACLsRequest) AppendTo(dst []byte) []byte {
 			}
 			if version >= 1 {
 				v := v.ResourcePatternType
-				dst = kbin.AppendInt8(dst, v)
+				{
+					v := int8(v)
+					dst = kbin.AppendInt8(dst, v)
+				}
 			}
 			{
 				v := v.Principal
@@ -17609,11 +17685,17 @@ func (v *DeleteACLsRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Operation
-				dst = kbin.AppendInt8(dst, v)
+				{
+					v := int8(v)
+					dst = kbin.AppendInt8(dst, v)
+				}
 			}
 			{
 				v := v.PermissionType
-				dst = kbin.AppendInt8(dst, v)
+				{
+					v := int8(v)
+					dst = kbin.AppendInt8(dst, v)
+				}
 			}
 			if isFlexible {
 				dst = append(dst, 0)
@@ -17653,7 +17735,12 @@ func (v *DeleteACLsRequest) ReadFrom(src []byte) error {
 			v.Default()
 			s := v
 			{
-				v := b.Int8()
+				var t ACLResourceType
+				{
+					v := b.Int8()
+					t = ACLResourceType(v)
+				}
+				v := t
 				s.ResourceType = v
 			}
 			{
@@ -17666,7 +17753,12 @@ func (v *DeleteACLsRequest) ReadFrom(src []byte) error {
 				s.ResourceName = v
 			}
 			if version >= 1 {
-				v := b.Int8()
+				var t ACLResourcePatternType
+				{
+					v := b.Int8()
+					t = ACLResourcePatternType(v)
+				}
+				v := t
 				s.ResourcePatternType = v
 			}
 			{
@@ -17688,11 +17780,21 @@ func (v *DeleteACLsRequest) ReadFrom(src []byte) error {
 				s.Host = v
 			}
 			{
-				v := b.Int8()
+				var t ACLOperation
+				{
+					v := b.Int8()
+					t = ACLOperation(v)
+				}
+				v := t
 				s.Operation = v
 			}
 			{
-				v := b.Int8()
+				var t ACLPermissionType
+				{
+					v := b.Int8()
+					t = ACLPermissionType(v)
+				}
+				v := t
 				s.PermissionType = v
 			}
 			if isFlexible {
@@ -17736,19 +17838,19 @@ type DeleteACLsResponseResultMatchingACL struct {
 	// ErrorMessage is a message for this error.
 	ErrorMessage *string
 
-	ResourceType int8
+	ResourceType ACLResourceType
 
 	ResourceName string
 
-	ResourcePatternType int8 // v1+
+	ResourcePatternType ACLResourcePatternType // v1+
 
 	Principal string
 
 	Host string
 
-	Operation int8
+	Operation ACLOperation
 
-	PermissionType int8
+	PermissionType ACLPermissionType
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -17862,7 +17964,10 @@ func (v *DeleteACLsResponse) AppendTo(dst []byte) []byte {
 					}
 					{
 						v := v.ResourceType
-						dst = kbin.AppendInt8(dst, v)
+						{
+							v := int8(v)
+							dst = kbin.AppendInt8(dst, v)
+						}
 					}
 					{
 						v := v.ResourceName
@@ -17874,7 +17979,10 @@ func (v *DeleteACLsResponse) AppendTo(dst []byte) []byte {
 					}
 					if version >= 1 {
 						v := v.ResourcePatternType
-						dst = kbin.AppendInt8(dst, v)
+						{
+							v := int8(v)
+							dst = kbin.AppendInt8(dst, v)
+						}
 					}
 					{
 						v := v.Principal
@@ -17894,11 +18002,17 @@ func (v *DeleteACLsResponse) AppendTo(dst []byte) []byte {
 					}
 					{
 						v := v.Operation
-						dst = kbin.AppendInt8(dst, v)
+						{
+							v := int8(v)
+							dst = kbin.AppendInt8(dst, v)
+						}
 					}
 					{
 						v := v.PermissionType
-						dst = kbin.AppendInt8(dst, v)
+						{
+							v := int8(v)
+							dst = kbin.AppendInt8(dst, v)
+						}
 					}
 					if isFlexible {
 						dst = append(dst, 0)
@@ -17992,7 +18106,12 @@ func (v *DeleteACLsResponse) ReadFrom(src []byte) error {
 						s.ErrorMessage = v
 					}
 					{
-						v := b.Int8()
+						var t ACLResourceType
+						{
+							v := b.Int8()
+							t = ACLResourceType(v)
+						}
+						v := t
 						s.ResourceType = v
 					}
 					{
@@ -18005,7 +18124,12 @@ func (v *DeleteACLsResponse) ReadFrom(src []byte) error {
 						s.ResourceName = v
 					}
 					if version >= 1 {
-						v := b.Int8()
+						var t ACLResourcePatternType
+						{
+							v := b.Int8()
+							t = ACLResourcePatternType(v)
+						}
+						v := t
 						s.ResourcePatternType = v
 					}
 					{
@@ -18027,11 +18151,21 @@ func (v *DeleteACLsResponse) ReadFrom(src []byte) error {
 						s.Host = v
 					}
 					{
-						v := b.Int8()
+						var t ACLOperation
+						{
+							v := b.Int8()
+							t = ACLOperation(v)
+						}
+						v := t
 						s.Operation = v
 					}
 					{
-						v := b.Int8()
+						var t ACLPermissionType
+						{
+							v := b.Int8()
+							t = ACLPermissionType(v)
+						}
+						v := t
 						s.PermissionType = v
 					}
 					if isFlexible {
@@ -18077,8 +18211,7 @@ func NewDeleteACLsResponse() DeleteACLsResponse {
 
 type DescribeConfigsRequestResource struct {
 	// ResourceType is an enum corresponding to the type of config to describe.
-	// Valid values are 2 (topic), 4 (broker), or 8 (broker logger).
-	ResourceType int8
+	ResourceType ConfigResourceType
 
 	// ResourceName is the name of config to describe.
 	//
@@ -18154,7 +18287,10 @@ func (v *DescribeConfigsRequest) AppendTo(dst []byte) []byte {
 			v := &v[i]
 			{
 				v := v.ResourceType
-				dst = kbin.AppendInt8(dst, v)
+				{
+					v := int8(v)
+					dst = kbin.AppendInt8(dst, v)
+				}
 			}
 			{
 				v := v.ResourceName
@@ -18202,7 +18338,12 @@ func (v *DescribeConfigsRequest) ReadFrom(src []byte) error {
 			v.Default()
 			s := v
 			{
-				v := b.Int8()
+				var t ConfigResourceType
+				{
+					v := b.Int8()
+					t = ConfigResourceType(v)
+				}
+				v := t
 				s.ResourceType = v
 			}
 			{
@@ -18271,7 +18412,7 @@ type DescribeConfigsResponseResourceConfigConfigSynonym struct {
 
 	Value *string
 
-	Source int8
+	Source ConfigSource
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -18302,24 +18443,8 @@ type DescribeConfigsResponseResourceConfig struct {
 	// replaced in favor of Source.
 	IsDefault bool
 
-	// Source is where this config entry is from. Note that if there
-	// are no config synonyms, the source is DEFAULT_CONFIG. The values of
-	// this enum are as follows.
-	//
-	// UNKNOWN (0): unknown; e.g. an altar request was issued with no source set
-	//
-	// DYNAMIC_TOPIC_CONFIG (1): dynamic topic config for a specific topic
-	//
-	// DYNAMIC_BROKER_CONFIG (2): dynamic broker config for a specific broker
-	//
-	// DYNAMIC_DEFAULT_BROKER_CONFIG (3): dynamic broker config used as the default for all brokers in a cluster
-	//
-	// STATIC_BROKER_CONFIG (4): static broker config provided at start up
-	//
-	// DEFAULT_CONFIG (5): built-in default configuration for those that have defaults
-	//
-	// DYNAMIC_BROKER_LOGGER_CONFIG (6): broker logger; see KIP 412.
-	Source int8 // v1+
+	// Source is where this config entry is from.
+	Source ConfigSource // v1+
 
 	// IsSensitive signifies whether this is a sensitive config key, which
 	// is either a password or an unknown type.
@@ -18329,10 +18454,8 @@ type DescribeConfigsResponseResourceConfig struct {
 	// place of this config entry, in order of preference.
 	ConfigSynonyms []DescribeConfigsResponseResourceConfigConfigSynonym // v1+
 
-	// ConfigType specifies the configuration data type. The values of this
-	// enum are as follows: UNKNOWN (0), BOOLEAN (1), STRING (2), INT (3),
-	// SHORT (4), LONG (5), DOUBLE (6), LIST (7), CLASS (8), PASSWORD (9).
-	ConfigType int8 // v3+
+	// ConfigType specifies the configuration data type.
+	ConfigType ConfigType // v3+
 
 	// Documentation is optional documentation for the config entry.
 	Documentation *string // v3+
@@ -18374,7 +18497,7 @@ type DescribeConfigsResponseResource struct {
 	ErrorMessage *string
 
 	// ResourceType is the enum corresponding to the type of described config.
-	ResourceType int8
+	ResourceType ConfigResourceType
 
 	// ResourceName is the name corresponding to the describe config request.
 	ResourceName string
@@ -18443,7 +18566,10 @@ func (v *DescribeConfigsResponse) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.ResourceType
-				dst = kbin.AppendInt8(dst, v)
+				{
+					v := int8(v)
+					dst = kbin.AppendInt8(dst, v)
+				}
 			}
 			{
 				v := v.ResourceName
@@ -18472,7 +18598,10 @@ func (v *DescribeConfigsResponse) AppendTo(dst []byte) []byte {
 					}
 					if version >= 1 {
 						v := v.Source
-						dst = kbin.AppendInt8(dst, v)
+						{
+							v := int8(v)
+							dst = kbin.AppendInt8(dst, v)
+						}
 					}
 					{
 						v := v.IsSensitive
@@ -18493,13 +18622,19 @@ func (v *DescribeConfigsResponse) AppendTo(dst []byte) []byte {
 							}
 							{
 								v := v.Source
-								dst = kbin.AppendInt8(dst, v)
+								{
+									v := int8(v)
+									dst = kbin.AppendInt8(dst, v)
+								}
 							}
 						}
 					}
 					if version >= 3 {
 						v := v.ConfigType
-						dst = kbin.AppendInt8(dst, v)
+						{
+							v := int8(v)
+							dst = kbin.AppendInt8(dst, v)
+						}
 					}
 					if version >= 3 {
 						v := v.Documentation
@@ -18545,7 +18680,12 @@ func (v *DescribeConfigsResponse) ReadFrom(src []byte) error {
 				s.ErrorMessage = v
 			}
 			{
-				v := b.Int8()
+				var t ConfigResourceType
+				{
+					v := b.Int8()
+					t = ConfigResourceType(v)
+				}
+				v := t
 				s.ResourceType = v
 			}
 			{
@@ -18584,7 +18724,12 @@ func (v *DescribeConfigsResponse) ReadFrom(src []byte) error {
 						s.IsDefault = v
 					}
 					if version >= 1 {
-						v := b.Int8()
+						var t ConfigSource
+						{
+							v := b.Int8()
+							t = ConfigSource(v)
+						}
+						v := t
 						s.Source = v
 					}
 					{
@@ -18615,7 +18760,12 @@ func (v *DescribeConfigsResponse) ReadFrom(src []byte) error {
 								s.Value = v
 							}
 							{
-								v := b.Int8()
+								var t ConfigSource
+								{
+									v := b.Int8()
+									t = ConfigSource(v)
+								}
+								v := t
 								s.Source = v
 							}
 						}
@@ -18623,7 +18773,12 @@ func (v *DescribeConfigsResponse) ReadFrom(src []byte) error {
 						s.ConfigSynonyms = v
 					}
 					if version >= 3 {
-						v := b.Int8()
+						var t ConfigType
+						{
+							v := b.Int8()
+							t = ConfigType(v)
+						}
+						v := t
 						s.ConfigType = v
 					}
 					if version >= 3 {
@@ -18686,7 +18841,7 @@ func NewAlterConfigsRequestResourceConfig() AlterConfigsRequestResourceConfig {
 type AlterConfigsRequestResource struct {
 	// ResourceType is an enum corresponding to the type of config to alter.
 	// The only two valid values are 2 (for topic) and 4 (for broker).
-	ResourceType int8
+	ResourceType ConfigResourceType
 
 	// ResourceName is the name of config to alter.
 	//
@@ -18771,7 +18926,10 @@ func (v *AlterConfigsRequest) AppendTo(dst []byte) []byte {
 			v := &v[i]
 			{
 				v := v.ResourceType
-				dst = kbin.AppendInt8(dst, v)
+				{
+					v := int8(v)
+					dst = kbin.AppendInt8(dst, v)
+				}
 			}
 			{
 				v := v.ResourceName
@@ -18822,7 +18980,12 @@ func (v *AlterConfigsRequest) ReadFrom(src []byte) error {
 			v.Default()
 			s := v
 			{
-				v := b.Int8()
+				var t ConfigResourceType
+				{
+					v := b.Int8()
+					t = ConfigResourceType(v)
+				}
+				v := t
 				s.ResourceType = v
 			}
 			{
@@ -18910,7 +19073,7 @@ type AlterConfigsResponseResource struct {
 	ErrorMessage *string
 
 	// ResourceType is the enum corresponding to the type of altered config.
-	ResourceType int8
+	ResourceType ConfigResourceType
 
 	// ResourceName is the name corresponding to the alter config request.
 	ResourceName string
@@ -18973,7 +19136,10 @@ func (v *AlterConfigsResponse) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.ResourceType
-				dst = kbin.AppendInt8(dst, v)
+				{
+					v := int8(v)
+					dst = kbin.AppendInt8(dst, v)
+				}
 			}
 			{
 				v := v.ResourceName
@@ -19017,7 +19183,12 @@ func (v *AlterConfigsResponse) ReadFrom(src []byte) error {
 				s.ErrorMessage = v
 			}
 			{
-				v := b.Int8()
+				var t ConfigResourceType
+				{
+					v := b.Int8()
+					t = ConfigResourceType(v)
+				}
+				v := t
 				s.ResourceType = v
 			}
 			{
@@ -22875,9 +23046,7 @@ func NewIncrementalAlterConfigsRequestResourceConfig() IncrementalAlterConfigsRe
 
 type IncrementalAlterConfigsRequestResource struct {
 	// ResourceType is an enum corresponding to the type of config to alter.
-	// The possible valid values are 2 (for topic), 4 (for broker),
-	// and 8 (for broker logger).
-	ResourceType int8
+	ResourceType ConfigResourceType
 
 	// ResourceName is the name of config to alter.
 	//
@@ -22961,7 +23130,10 @@ func (v *IncrementalAlterConfigsRequest) AppendTo(dst []byte) []byte {
 			v := &v[i]
 			{
 				v := v.ResourceType
-				dst = kbin.AppendInt8(dst, v)
+				{
+					v := int8(v)
+					dst = kbin.AppendInt8(dst, v)
+				}
 			}
 			{
 				v := v.ResourceName
@@ -23047,7 +23219,12 @@ func (v *IncrementalAlterConfigsRequest) ReadFrom(src []byte) error {
 			v.Default()
 			s := v
 			{
-				v := b.Int8()
+				var t ConfigResourceType
+				{
+					v := b.Int8()
+					t = ConfigResourceType(v)
+				}
+				v := t
 				s.ResourceType = v
 			}
 			{
@@ -23167,7 +23344,7 @@ type IncrementalAlterConfigsResponseResource struct {
 	ErrorMessage *string
 
 	// ResourceType is the enum corresponding to the type of altered config.
-	ResourceType int8
+	ResourceType ConfigResourceType
 
 	// ResourceName is the name corresponding to the incremental alter config
 	// request.
@@ -23241,7 +23418,10 @@ func (v *IncrementalAlterConfigsResponse) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.ResourceType
-				dst = kbin.AppendInt8(dst, v)
+				{
+					v := int8(v)
+					dst = kbin.AppendInt8(dst, v)
+				}
 			}
 			{
 				v := v.ResourceName
@@ -23306,7 +23486,12 @@ func (v *IncrementalAlterConfigsResponse) ReadFrom(src []byte) error {
 				s.ErrorMessage = v
 			}
 			{
-				v := b.Int8()
+				var t ConfigResourceType
+				{
+					v := b.Int8()
+					t = ConfigResourceType(v)
+				}
+				v := t
 				s.ResourceType = v
 			}
 			{
@@ -30030,5 +30215,281 @@ func NameForKey(key int16) string {
 		return "AlterISR"
 	case 57:
 		return "UpdateFeatures"
+	}
+}
+
+// A type of config.
+//
+// Possible values and their meanings:
+//
+// * 2 (TOPIC)
+//
+// * 4 (BROKER)
+//
+// * 8 (BROKER_LOGGER)
+//
+type ConfigResourceType int8
+
+func (v ConfigResourceType) String() string {
+	switch v {
+	default:
+		return "UNKNOWN"
+	case 2:
+		return "TOPIC"
+	case 4:
+		return "BROKER"
+	case 8:
+		return "BROKER_LOGGER"
+	}
+}
+
+// Where a config entry is from. If there are no config synonyms,
+// the source is DEFAULT_CONFIG.
+//
+// Possible values and their meanings:
+//
+// * 1 (DYNAMIC_TOPIC_CONFIG)
+// Dynamic topic config for a specific topic.
+//
+// * 2 (DYNAMIC_BROKER_CONFIG)
+// Dynamic broker config for a specific broker.
+//
+// * 3 (DYNAMIC_DEFAULT_BROKER_CONFIG)
+// Dynamic broker config used as the default for all brokers in a cluster.
+//
+// * 4 (STATIC_BROKER_CONFIG)
+// Static broker config provided at start up.
+//
+// * 5 (DEFAULT_CONFIG)
+// Build-in default configuration for those that have defaults.
+//
+// * 6 (DYNAMIC_BROKER_LOGGER_CONFIG)
+// Broker logger; see KIP-412.
+//
+type ConfigSource int8
+
+func (v ConfigSource) String() string {
+	switch v {
+	default:
+		return "UNKNOWN"
+	case 1:
+		return "DYNAMIC_TOPIC_CONFIG"
+	case 2:
+		return "DYNAMIC_BROKER_CONFIG"
+	case 3:
+		return "DYNAMIC_DEFAULT_BROKER_CONFIG"
+	case 4:
+		return "STATIC_BROKER_CONFIG"
+	case 5:
+		return "DEFAULT_CONFIG"
+	case 6:
+		return "DYNAMIC_BROKER_LOGGER_CONFIG"
+	}
+}
+
+// A configuration data type.
+//
+// Possible values and their meanings:
+//
+// * 1 (BOOLEAN)
+//
+// * 2 (STRING)
+//
+// * 3 (INT)
+//
+// * 4 (SHORT)
+//
+// * 5 (LONG)
+//
+// * 6 (DOUBLE)
+//
+// * 7 (LIST)
+//
+// * 8 (CLASS)
+//
+// * 9 (PASSWORD)
+//
+type ConfigType int8
+
+func (v ConfigType) String() string {
+	switch v {
+	default:
+		return "UNKNOWN"
+	case 1:
+		return "BOOLEAN"
+	case 2:
+		return "STRING"
+	case 3:
+		return "INT"
+	case 4:
+		return "SHORT"
+	case 5:
+		return "LONG"
+	case 6:
+		return "DOUBLE"
+	case 7:
+		return "LIST"
+	case 8:
+		return "CLASS"
+	case 9:
+		return "PASSWORD"
+	}
+}
+
+// ACLResourceType is a type of resource to use for ACLs.
+//
+// Possible values and their meanings:
+//
+// * 1 (ANY)
+//
+// * 2 (TOPIC)
+//
+// * 3 (GROUP)
+//
+// * 4 (CLUSTER)
+//
+// * 5 (TRANSACTIONAL_ID)
+//
+// * 6 (DELEGATION_TOKEN)
+//
+type ACLResourceType int8
+
+func (v ACLResourceType) String() string {
+	switch v {
+	default:
+		return "UNKNOWN"
+	case 1:
+		return "ANY"
+	case 2:
+		return "TOPIC"
+	case 3:
+		return "GROUP"
+	case 4:
+		return "CLUSTER"
+	case 5:
+		return "TRANSACTIONAL_ID"
+	case 6:
+		return "DELEGATION_TOKEN"
+	}
+}
+
+// ACLResourcePatternType is how an acl's ResourceName is understood.
+//
+// This field was added with Kafka 2.0.0 for KIP-290.
+//
+// Possible values and their meanings:
+//
+// * 1 (MATCH)
+// Matches anything.
+//
+// * 2 (LITERAL)
+// The name must be an exact match.
+//
+// * 3 (PREFIXED)
+// The name must have our requested name as a prefix (that is, "foo" will match on "foobar").
+//
+type ACLResourcePatternType int8
+
+func (v ACLResourcePatternType) String() string {
+	switch v {
+	default:
+		return "UNKNOWN"
+	case 1:
+		return "MATCH"
+	case 2:
+		return "LITERAL"
+	case 3:
+		return "PREFIXED"
+	}
+}
+
+// An ACL permission type.
+//
+// Possible values and their meanings:
+//
+// * 1 (ANY)
+// Any permission.
+//
+// * 2 (DENY)
+// Any deny permission.
+//
+// * 3 (ALLOW)
+// Any allow permission.
+//
+type ACLPermissionType int8
+
+func (v ACLPermissionType) String() string {
+	switch v {
+	default:
+		return "UNKNOWN"
+	case 1:
+		return "ANY"
+	case 2:
+		return "DENY"
+	case 3:
+		return "ALLOW"
+	}
+}
+
+// An ACL operation.
+//
+// Possible values and their meanings:
+//
+// * 1 (ANY)
+// Matches anything.
+//
+// * 2 (ALL)
+// Matches anything granted all permissions.
+//
+// * 3 (READ)
+//
+// * 4 (WRITE)
+//
+// * 5 (CREATE)
+//
+// * 6 (DELETE)
+//
+// * 7 (ALTER)
+//
+// * 8 (DESCRIBE)
+//
+// * 9 (CLUSTER_ACTION)
+//
+// * 10 (DESCRIBE_CONFIGS)
+//
+// * 11 (ALTER_CONFIGS)
+//
+// * 12 (IDEMPOTENT_WRITE)
+//
+type ACLOperation int8
+
+func (v ACLOperation) String() string {
+	switch v {
+	default:
+		return "UNKNOWN"
+	case 1:
+		return "ANY"
+	case 2:
+		return "ALL"
+	case 3:
+		return "READ"
+	case 4:
+		return "WRITE"
+	case 5:
+		return "CREATE"
+	case 6:
+		return "DELETE"
+	case 7:
+		return "ALTER"
+	case 8:
+		return "DESCRIBE"
+	case 9:
+		return "CLUSTER_ACTION"
+	case 10:
+		return "DESCRIBE_CONFIGS"
+	case 11:
+		return "ALTER_CONFIGS"
+	case 12:
+		return "IDEMPOTENT_WRITE"
 	}
 }
