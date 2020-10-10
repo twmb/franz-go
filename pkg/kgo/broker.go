@@ -345,6 +345,7 @@ func (b *broker) loadConnection(ctx context.Context, reqKey int16) (*brokerCxn, 
 		addr:            b.addr,
 		conn:            conn,
 		timeouts:        b.cl.connTimeoutFn,
+		l:               b.cl.cfg.logger,
 		reqFormatter:    b.cl.reqFormatter,
 		softwareName:    b.cl.cfg.softwareName,
 		softwareVersion: b.cl.cfg.softwareVersion,
@@ -362,12 +363,16 @@ func (b *broker) loadConnection(ctx context.Context, reqKey int16) (*brokerCxn, 
 
 // connect connects to the broker's addr, returning the new connection.
 func (b *broker) connect(ctx context.Context) (net.Conn, error) {
+	b.cl.cfg.logger.Log(LogLevelDebug, "opening connection to broker", "addr", b.addr, "id", b.id)
 	conn, err := b.cl.cfg.dialFn(ctx, "tcp", b.addr)
 	if err != nil {
+		b.cl.cfg.logger.Log(LogLevelWarn, "unable to open connection to broker", "addr", b.addr, "id", b.id, "err", err)
 		if _, ok := err.(net.Error); ok {
 			return nil, ErrNoDial
 		}
 		return nil, err
+	} else {
+		b.cl.cfg.logger.Log(LogLevelDebug, "connection opened to broker", "addr", b.addr, "id", b.id)
 	}
 	return conn, nil
 }
@@ -383,6 +388,8 @@ type brokerCxn struct {
 
 	saslCtx context.Context
 	sasls   []sasl.Mechanism
+
+	l Logger
 
 	mechanism sasl.Mechanism
 	expiry    time.Time
@@ -410,16 +417,19 @@ func (cxn *brokerCxn) init(maxVersions kversion.Versions) error {
 
 	if maxVersions == nil || len(maxVersions) >= 19 {
 		if err := cxn.requestAPIVersions(); err != nil {
+			cxn.l.Log(LogLevelError, "unable to request api versions", "err", err)
 			return err
 		}
 	}
 
 	if err := cxn.sasl(); err != nil {
+		cxn.l.Log(LogLevelError, "unable to initialize sasl", "err", err)
 		return err
 	}
 
 	cxn.resps = make(chan promisedResp, 10)
 	go cxn.handleResps()
+	cxn.l.Log(LogLevelDebug, "connection initialized successfully")
 	return nil
 }
 
@@ -431,6 +441,7 @@ start:
 		ClientSoftwareName:    cxn.softwareName,
 		ClientSoftwareVersion: cxn.softwareVersion,
 	}
+	cxn.l.Log(LogLevelDebug, "issuing api versions request", "version", maxVersion)
 	corrID, err := cxn.writeRequest(req)
 	if err != nil {
 		return err
@@ -457,6 +468,7 @@ start:
 			return ErrConnDead
 		}
 		if string(rawResp) == "\x00\x23\x00\x00\x00\x00" {
+			cxn.l.Log(LogLevelDebug, "kafka does not know our ApiVersions version, downgrading to version 0 and retrying")
 			maxVersion = 0
 			goto start
 		}
@@ -476,6 +488,7 @@ start:
 		}
 		cxn.versions[key.ApiKey] = key.MaxVersion
 	}
+	cxn.l.Log(LogLevelDebug, "initialized api versions", "versions", cxn.versions)
 	return nil
 }
 
@@ -494,6 +507,7 @@ start:
 			Version:   cxn.versions[handshakeKey],
 			Mechanism: mechanism.Name(),
 		}
+		cxn.l.Log(LogLevelDebug, "writing SASLHandshakeRequest")
 		corrID, err := cxn.writeRequest(req)
 		if err != nil {
 			return err
@@ -526,6 +540,7 @@ start:
 		}
 		authenticate = req.Version == 1
 	}
+	cxn.l.Log(LogLevelDebug, "beginning sasl authentication", "mechanism", mechanism.Name())
 	cxn.mechanism = mechanism
 	return cxn.doSasl(authenticate)
 }
@@ -548,9 +563,12 @@ func (cxn *brokerCxn) doSasl(authenticate bool) error {
 	// We continue writing until both the challenging is done AND the
 	// responses are done. We can have an additional response once we
 	// are done with challenges.
+	step := 0
 	for done := false; !done || len(clientWrite) > 0; {
 		var challenge []byte
 
+		cxn.l.Log(LogLevelDebug, "issuing authentication step", "sasl_authenticate_request_envelope", authenticate, "step", step)
+		step++
 		if !authenticate {
 			buf := cxn.bufPool.get()
 
@@ -626,6 +644,7 @@ func (cxn *brokerCxn) doSasl(authenticate bool) error {
 			return fmt.Errorf("invalid short sasl lifetime millis %d", lifetimeMillis)
 		}
 		cxn.expiry = time.Now().Add(time.Duration(lifetimeMillis)*time.Millisecond - time.Second)
+		cxn.l.Log(LogLevelDebug, "connection has a limited lifetime", "reauthenticate_at", cxn.expiry)
 	}
 	return nil
 }
