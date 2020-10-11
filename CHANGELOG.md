@@ -1,6 +1,7 @@
 TBD
 ===
 
+- [`5fb0a3831`](https://github.com/twmb/kafka-go/commit/5fb0a3831f56e444497131674b582113344704db): Fix SASL Authenticate
 - [`85243c5c5`](https://github.com/twmb/kafka-go/commit/85243c5c5aee1e23f6d360efdc82480fd83fcfc3): Breaking API change for enums in ACL & config managing request / response types
 - [`4bc453bc2`](https://github.com/twmb/kafka-go/commit/4bc453bc237bd534947cebdc5bc72f8bd7e855d9): Add NewPtr functions for generated structs in kmsg
 - [`dcaf32daa`](https://github.com/twmb/kafka-go/commit/dcaf32daa16fdc20e1c9cf91847b74342d13e36f): Generate RequestWith function for all requests in kmsg
@@ -18,7 +19,8 @@ TBD
 
 Multiple generator changes were made to better handle tags, add support for
 enums, and parse many files in a `definitions` directory. Minor changes were
-made in kgo to use the new `RequestWith` function.
+made in kgo to use the new `RequestWith` function. More debug & warn log lines
+were added around opening a connection and initializing sasl.
 
 v0.4.9
 ======
