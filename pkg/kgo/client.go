@@ -500,6 +500,16 @@ start:
 			resp, err = cl.handleShardedReq(ctx, req)
 		case *kmsg.ListGroupsRequest:
 			resp, err = cl.handleListGroupsReq(ctx, t)
+		case *kmsg.ApiVersionsRequest:
+			// As of v3, software name and version are required.
+			// If they are missing, we use the config options.
+			if t.ClientSoftwareName == "" && t.ClientSoftwareVersion == "" {
+				dup := *t
+				dup.ClientSoftwareName = cl.cfg.softwareName
+				dup.ClientSoftwareVersion = cl.cfg.softwareVersion
+				req = &dup
+			}
+			resp, err = cl.broker().waitResp(ctx, req)
 		default:
 			resp, err = cl.broker().waitResp(ctx, req)
 		}
