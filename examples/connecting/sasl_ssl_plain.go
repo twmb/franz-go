@@ -1,7 +1,6 @@
-package connect
+package connecting
 
 import (
-	"context"
 	"crypto/tls"
 	"fmt"
 	"net"
