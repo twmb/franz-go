@@ -6,8 +6,8 @@ import (
 	"net"
 	"time"
 
-	"github.com/twmb/kafka-go/pkg/kgo"
-	"github.com/twmb/kafka-go/pkg/sasl/plain"
+	"github.com/twmb/frang/pkg/kgo"
+	"github.com/twmb/frang/pkg/sasl/plain"
 )
 
 func connectSaslSslPlain() {

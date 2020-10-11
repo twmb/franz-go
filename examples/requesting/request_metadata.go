@@ -3,11 +3,12 @@ package requesting
 import (
 	"context"
 	"fmt"
-	"github.com/twmb/kafka-go/pkg/kerr"
-	"github.com/twmb/kafka-go/pkg/kgo"
-	"github.com/twmb/kafka-go/pkg/kmsg"
-	"github.com/twmb/kafka-go/pkg/kversion"
 	"time"
+
+	"github.com/twmb/frang/pkg/kerr"
+	"github.com/twmb/frang/pkg/kgo"
+	"github.com/twmb/frang/pkg/kmsg"
+	"github.com/twmb/frang/pkg/kversion"
 )
 
 func requestMetadata() {

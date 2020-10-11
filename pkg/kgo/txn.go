@@ -7,8 +7,8 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/twmb/kafka-go/pkg/kerr"
-	"github.com/twmb/kafka-go/pkg/kmsg"
+	"github.com/twmb/frang/pkg/kerr"
+	"github.com/twmb/frang/pkg/kmsg"
 )
 
 // TransactionEndTry is simply a named bool.

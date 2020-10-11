@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/twmb/kafka-go/pkg/kerr"
+	"github.com/twmb/frang/pkg/kerr"
 )
 
 type metawait struct {

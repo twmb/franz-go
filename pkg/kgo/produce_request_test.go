@@ -5,8 +5,8 @@ import (
 	"hash/crc32"
 	"testing"
 
-	"github.com/twmb/kafka-go/pkg/kbin"
-	"github.com/twmb/kafka-go/pkg/kmsg"
+	"github.com/twmb/frang/pkg/kbin"
+	"github.com/twmb/frang/pkg/kmsg"
 )
 
 // This file contains golden tests against kmsg AppendTo's to ensure our custom

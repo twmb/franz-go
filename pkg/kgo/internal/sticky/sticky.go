@@ -11,7 +11,7 @@ import (
 
 	"github.com/twmb/go-rbtree"
 
-	"github.com/twmb/kafka-go/pkg/kmsg"
+	"github.com/twmb/frang/pkg/kmsg"
 )
 
 // Sticky partitioning has two versions, the latter from KIP-341 preventing a

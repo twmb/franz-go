@@ -1,4 +1,4 @@
-module github.com/twmb/kafka-go
+module github.com/twmb/frang
 
 go 1.13
 

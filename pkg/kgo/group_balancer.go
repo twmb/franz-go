@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/twmb/kafka-go/pkg/kgo/internal/sticky"
-	"github.com/twmb/kafka-go/pkg/kmsg"
+	"github.com/twmb/frang/pkg/kgo/internal/sticky"
+	"github.com/twmb/frang/pkg/kmsg"
 )
 
 // GroupBalancer balances topics and partitions among group members.

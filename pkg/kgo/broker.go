@@ -11,11 +11,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/twmb/kafka-go/pkg/kbin"
-	"github.com/twmb/kafka-go/pkg/kerr"
-	"github.com/twmb/kafka-go/pkg/kmsg"
-	"github.com/twmb/kafka-go/pkg/kversion"
-	"github.com/twmb/kafka-go/pkg/sasl"
+	"github.com/twmb/frang/pkg/kbin"
+	"github.com/twmb/frang/pkg/kerr"
+	"github.com/twmb/frang/pkg/kmsg"
+	"github.com/twmb/frang/pkg/kversion"
+	"github.com/twmb/frang/pkg/sasl"
 )
 
 type promisedReq struct {

@@ -3,7 +3,7 @@ package connecting
 import (
 	"fmt"
 
-	"github.com/twmb/kafka-go/pkg/kgo"
+	"github.com/twmb/frang/pkg/kgo"
 )
 
 func connectPlaintext() {

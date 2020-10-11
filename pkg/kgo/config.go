@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/twmb/kafka-go/pkg/kversion"
-	"github.com/twmb/kafka-go/pkg/sasl"
+	"github.com/twmb/frang/pkg/kversion"
+	"github.com/twmb/frang/pkg/sasl"
 )
 
 // Opt is an option to configure a client.

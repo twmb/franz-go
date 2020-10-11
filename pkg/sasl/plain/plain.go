@@ -5,7 +5,7 @@ import (
 	"context"
 	"errors"
 
-	"github.com/twmb/kafka-go/pkg/sasl"
+	"github.com/twmb/frang/pkg/sasl"
 )
 
 // Auth contains information for authentication.
