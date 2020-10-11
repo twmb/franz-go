@@ -283,9 +283,8 @@ func (cl *Client) fetchMetadata(ctx context.Context, all bool, topics []string) 
 		topics = []string{}
 	}
 	tries := 0
-	const key = 3 // metadata request key
 	tryStart := time.Now()
-	retryTimeout := cl.cfg.retryTimeout(key)
+	retryTimeout := cl.cfg.retryTimeout(3) // 3 is metadata request key
 start:
 	tries++
 	broker := cl.broker()
@@ -469,8 +468,7 @@ func (cl *Client) request(ctx context.Context, req kmsg.Request) (kmsg.Response,
 	var err error
 	tries := 0
 	tryStart := time.Now()
-	key := req.Key()
-	retryTimeout := cl.cfg.retryTimeout(key)
+	retryTimeout := cl.cfg.retryTimeout(req.Key())
 start:
 	tries++
 	if metaReq, isMetaReq := req.(*kmsg.MetadataRequest); isMetaReq {
@@ -571,10 +569,9 @@ func (cl *Client) loadCoordinator(ctx context.Context, key coordinatorKey) (*bro
 		}
 	}
 
-	const reqKey = 10
 	tries := 0
 	tryStart := time.Now()
-	retryTimeout := cl.cfg.retryTimeout(reqKey)
+	retryTimeout := cl.cfg.retryTimeout(10) // 10 is find coordinator key
 start:
 	cl.coordinatorsMu.Lock()
 	coordinator, ok := cl.coordinators[key]

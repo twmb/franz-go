@@ -272,7 +272,7 @@ func (b *broker) handleReqs() {
 			// can only have an expiry if we went the authenticate
 			// flow, so we know we are authenticating again.
 			// For KIP-368.
-			if err = cxn.doSasl(true); err != nil {
+			if err = cxn.sasl(); err != nil {
 				pr.promise(nil, err)
 				cxn.die()
 				continue
@@ -353,9 +353,11 @@ func (b *broker) loadConnection(ctx context.Context, reqKey int16) (*brokerCxn, 
 		sasls:           b.cl.cfg.sasls,
 	}
 	if err = cxn.init(b.cl.cfg.maxVersions); err != nil {
+		b.cl.cfg.logger.Log(LogLevelDebug, "connection initialization failed", "addr", b.addr, "id", b.id, "err", err)
 		conn.Close()
 		return nil, err
 	}
+	b.cl.cfg.logger.Log(LogLevelDebug, "connection initialized successfully", "addr", b.addr, "id", b.id)
 
 	*pcxn = cxn
 	return cxn, nil
@@ -429,7 +431,6 @@ func (cxn *brokerCxn) init(maxVersions kversion.Versions) error {
 
 	cxn.resps = make(chan promisedResp, 10)
 	go cxn.handleResps()
-	cxn.l.Log(LogLevelDebug, "connection initialized successfully")
 	return nil
 }
 
@@ -499,15 +500,13 @@ func (cxn *brokerCxn) sasl() error {
 	mechanism := cxn.sasls[0]
 	retried := false
 	authenticate := false
-	const handshakeKey = 17
 
+	req := new(kmsg.SASLHandshakeRequest)
 start:
-	if mechanism.Name() != "GSSAPI" && cxn.versions[handshakeKey] >= 0 {
-		req := &kmsg.SASLHandshakeRequest{
-			Version:   cxn.versions[handshakeKey],
-			Mechanism: mechanism.Name(),
-		}
-		cxn.l.Log(LogLevelDebug, "writing SASLHandshakeRequest")
+	if mechanism.Name() != "GSSAPI" && cxn.versions[req.Key()] >= 0 {
+		req.Mechanism = mechanism.Name()
+		req.Version = cxn.versions[req.Key()]
+		cxn.l.Log(LogLevelDebug, "issuing SASLHandshakeRequest")
 		corrID, err := cxn.writeRequest(req)
 		if err != nil {
 			return err
@@ -563,12 +562,11 @@ func (cxn *brokerCxn) doSasl(authenticate bool) error {
 	// We continue writing until both the challenging is done AND the
 	// responses are done. We can have an additional response once we
 	// are done with challenges.
-	step := 0
+	step := -1
 	for done := false; !done || len(clientWrite) > 0; {
+		step++
 		var challenge []byte
 
-		cxn.l.Log(LogLevelDebug, "issuing authentication step", "sasl_authenticate_request_envelope", authenticate, "step", step)
-		step++
 		if !authenticate {
 			buf := cxn.bufPool.get()
 
@@ -579,6 +577,7 @@ func (cxn *brokerCxn) doSasl(authenticate bool) error {
 			if wt > 0 {
 				cxn.conn.SetWriteDeadline(time.Now().Add(wt))
 			}
+			cxn.l.Log(LogLevelDebug, "issuing raw sasl authenticate", "step", step)
 			_, err = cxn.conn.Write(buf)
 			if wt > 0 {
 				cxn.conn.SetWriteDeadline(time.Time{})
@@ -596,11 +595,12 @@ func (cxn *brokerCxn) doSasl(authenticate bool) error {
 			}
 
 		} else {
-			const authenticateKey = 37
 			req := &kmsg.SASLAuthenticateRequest{
-				Version:       cxn.versions[authenticateKey],
 				SASLAuthBytes: clientWrite,
 			}
+			req.Version = cxn.versions[req.Key()]
+			cxn.l.Log(LogLevelDebug, "issuing SASLAuthenticate", "version", req.Version, "step", step)
+
 			corrID, err := cxn.writeRequest(req)
 			if err != nil {
 				return err
