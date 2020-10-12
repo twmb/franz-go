@@ -71,6 +71,8 @@ type cfg struct {
 
 	sasls []sasl.Mechanism
 
+	hooks hooks
+
 	// ***PRODUCER SECTION***
 	txnID       *string
 	txnTimeout  time.Duration
@@ -398,6 +400,17 @@ func MetadataMinAge(age time.Duration) Opt {
 // support any client mechanisms, connections will fail.
 func SASL(sasls ...sasl.Mechanism) Opt {
 	return clientOpt{func(cfg *cfg) { cfg.sasls = append(cfg.sasls, sasls...) }}
+}
+
+// WithHooks sets hooks to call whenever relevant.
+//
+// Hooks can be used to layer in metrics (such as prometheus hooks) or anything
+// else. The client will call all hooks in order. See the Hooks interface for
+// more information, as well as any interface that contains "Hook" in the name
+// to know the available hooks. A single hook can implement zero or all hook
+// interfaces, and only the hooks that it implements will be called.
+func WithHooks(hooks ...Hook) Opt {
+	return clientOpt{func(cfg *cfg) { cfg.hooks = append(cfg.hooks, hooks...) }}
 }
 
 // ********** PRODUCER CONFIGURATION **********

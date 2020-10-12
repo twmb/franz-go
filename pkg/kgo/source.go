@@ -568,7 +568,7 @@ func (s *source) handleReqResp(req *fetchRequest, kresp kmsg.Response, err error
 				if partOffset.currentPreferredReplica == -1 {
 					reloadOffsets.list.setLoadOffset(topic, partition, s.cl.cfg.resetOffset, -1, req.maxSeq)
 				} else if partOffset.offset < fetchPart.LogStartOffset {
-					reloadOffsets.list.setLoadOffset(topic, partition, s.cl.cfg.resetOffset, s.b.id, req.maxSeq)
+					reloadOffsets.list.setLoadOffset(topic, partition, s.cl.cfg.resetOffset, s.b.meta.NodeID, req.maxSeq)
 				} else { // partOffset.offset > fetchPart.HighWatermark
 					reloadOffsets.epoch.setLoadOffset(topic, partition, Offset{
 						request:      partOffset.offset,

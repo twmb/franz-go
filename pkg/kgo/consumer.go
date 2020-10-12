@@ -728,7 +728,7 @@ func (c *consumer) tryOffsetLoad(toLoad offsetsLoad) {
 	c.cl.brokersMu.RUnlock()
 
 	for broker, brokerLoad := range brokersToLoadFrom {
-		c.cl.cfg.logger.Log(LogLevelDebug, "offsets to load broker", "broker", broker.id, "load", brokerLoad)
+		c.cl.cfg.logger.Log(LogLevelDebug, "offsets to load broker", "broker", broker.meta.NodeID, "load", brokerLoad)
 		if len(brokerLoad.list) > 0 {
 			go c.tryBrokerOffsetLoadList(broker, brokerLoad.list)
 		}

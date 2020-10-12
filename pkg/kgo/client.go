@@ -21,7 +21,6 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
-	"net"
 	"strconv"
 	"strings"
 	"sync"
@@ -94,24 +93,28 @@ func NewClient(opts ...Opt) (*Client, error) {
 		return nil, err
 	}
 
-	seedAddrs := make([]string, 0, len(cfg.seedBrokers))
+	type hostport struct {
+		host string
+		port int32
+	}
+	seeds := make([]hostport, 0, len(cfg.seedBrokers))
 	for _, seedBroker := range cfg.seedBrokers {
 		addr := seedBroker
-		port := 9092 // default kafka port
-		var err error
+		port := int32(9092) // default kafka port
 		if colon := strings.IndexByte(addr, ':'); colon > 0 {
-			port, err = strconv.Atoi(addr[colon+1:])
+			port64, err := strconv.ParseInt(addr[colon+1:], 10, 64)
 			if err != nil {
 				return nil, fmt.Errorf("unable to parse addr:port in %q", seedBroker)
 			}
 			addr = addr[:colon]
+			port = int32(port64)
 		}
 
 		if addr == "localhost" {
 			addr = "127.0.0.1"
 		}
 
-		seedAddrs = append(seedAddrs, net.JoinHostPort(addr, strconv.Itoa(port)))
+		seeds = append(seeds, hostport{addr, port})
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -155,9 +158,9 @@ func NewClient(opts ...Opt) (*Client, error) {
 	}
 	cl.compressor = compressor
 
-	for i, seedAddr := range seedAddrs {
-		b := cl.newBroker(seedAddr, unknownSeedID(i))
-		cl.brokers[b.id] = b
+	for i, seed := range seeds {
+		b := cl.newBroker(unknownSeedID(i), seed.host, seed.port, nil)
+		cl.brokers[b.meta.NodeID] = b
 		cl.anyBroker = append(cl.anyBroker, b)
 	}
 	go cl.updateMetadataLoop()
@@ -331,20 +334,17 @@ func (cl *Client) updateBrokers(brokers []kmsg.MetadataResponseBroker) {
 	}
 
 	for _, broker := range brokers {
-		addr := net.JoinHostPort(broker.Host, strconv.Itoa(int(broker.Port)))
-
 		b, exists := cl.brokers[broker.NodeID]
 		if exists {
-			delete(cl.brokers, b.id)
-			if b.addr != addr {
+			if !b.meta.equals(broker) {
 				b.stopForever()
-				b = cl.newBroker(addr, b.id)
+				b = cl.newBroker(broker.NodeID, broker.Host, broker.Port, broker.Rack)
 			}
 		} else {
-			b = cl.newBroker(addr, broker.NodeID)
+			b = cl.newBroker(broker.NodeID, broker.Host, broker.Port, broker.Rack)
 		}
 
-		newBrokers[b.id] = b
+		newBrokers[broker.NodeID] = b
 		newAnyBroker = append(newAnyBroker, b)
 	}
 
@@ -953,8 +953,8 @@ func (cl *Client) DiscoveredBrokers() []*Broker {
 
 	var bs []*Broker
 	for _, broker := range cl.brokers {
-		if broker.id >= 0 {
-			bs = append(bs, &Broker{id: broker.id, cl: cl})
+		if broker.meta.NodeID >= 0 {
+			bs = append(bs, &Broker{id: broker.meta.NodeID, cl: cl})
 		}
 	}
 	return bs
@@ -992,7 +992,7 @@ func (cl *Client) handleListGroupsReq(ctx context.Context, req *kmsg.ListGroupsR
 	respErrs := make(chan respErr, len(cl.brokers))
 	var numReqs int
 	for _, br := range cl.brokers {
-		if br.id < 0 {
+		if br.meta.NodeID < 0 {
 			continue // we skip seed brokers
 		}
 		wg.Add(1)
@@ -1483,7 +1483,7 @@ func (cl *Client) handleShardedReq(ctx context.Context, req kmsg.Request) (kmsg.
 		// We need to fan that out.
 		if t.Topics == nil {
 			for _, broker := range brokers {
-				if broker.id < 0 { // do not use seed brokers
+				if broker.meta.NodeID < 0 { // do not use seed brokers
 					continue
 				}
 				broker2req[broker] = new(kmsg.DescribeLogDirsRequest)
