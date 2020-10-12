@@ -1,6 +1,8 @@
-TBD
+v0.5.0
 ===
 
+- [`9dc80fd29`](https://github.com/twmb/frang/commit/9dc80fd2978e8fb792f669ec6595cc5dadfc9fa5): Add hooks, which enable metrics to be layered in.
+- [`a68d13bcb`](https://github.com/twmb/frang/commit/a68d13bcb4931870c9ca57abc085aa937b47373a): Set SoftwareName & SoftwareVersion on ApiVersions request if missing
 - [`5fb0a3831`](https://github.com/twmb/frang/commit/5fb0a3831f56e444497131674b582113344704db): Fix SASL Authenticate
 - [`85243c5c5`](https://github.com/twmb/frang/commit/85243c5c5aee1e23f6d360efdc82480fd83fcfc3): Breaking API change for enums in ACL & config managing request / response types
 - [`4bc453bc2`](https://github.com/twmb/frang/commit/4bc453bc237bd534947cebdc5bc72f8bd7e855d9): Add NewPtr functions for generated structs in kmsg
@@ -21,6 +23,9 @@ Multiple generator changes were made to better handle tags, add support for
 enums, and parse many files in a `definitions` directory. Minor changes were
 made in kgo to use the new `RequestWith` function. More debug & warn log lines
 were added around opening a connection and initializing sasl.
+
+This release also changed the name of the repo from "kafka-go" to "frang" to
+avoid potential trademark issues down the road.
 
 v0.4.9
 ======
