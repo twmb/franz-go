@@ -1,3 +1,12 @@
+v0.6.0
+===
+
+- [`0024a93a4`](https://github.com/twmb/franz-go/commit/0024a93a4d386318869fe029260f3e23a602c03e): Fix bug introduced in pkg/kgo/source.go
+
+This release also changes the name to franz-go. After sitting on frang for a
+week, ultimately I was missing the fact that the name related to Kafka. `franz`
+is an easy enough mental map, and then this brings back the `-go` suffix.
+
 v0.5.0
 ===
 
