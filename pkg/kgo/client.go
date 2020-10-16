@@ -336,6 +336,8 @@ func (cl *Client) updateBrokers(brokers []kmsg.MetadataResponseBroker) {
 	for _, broker := range brokers {
 		b, exists := cl.brokers[broker.NodeID]
 		if exists {
+			// delete the broker to avoid stopping it below in goneBrokers
+			delete(cl.brokers, broker.NodeID)
 			if !b.meta.equals(broker) {
 				b.stopForever()
 				b = cl.newBroker(broker.NodeID, broker.Host, broker.Port, broker.Rack)
