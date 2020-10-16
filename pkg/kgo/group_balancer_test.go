@@ -5,7 +5,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 
-	"github.com/twmb/frang/pkg/kmsg"
+	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
 // This simple test hits every branch of cooperative-sticky's adjustCooperative

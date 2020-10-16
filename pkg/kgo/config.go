@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/twmb/frang/pkg/kversion"
-	"github.com/twmb/frang/pkg/sasl"
+	"github.com/twmb/franz-go/pkg/kversion"
+	"github.com/twmb/franz-go/pkg/sasl"
 )
 
 // Opt is an option to configure a client.

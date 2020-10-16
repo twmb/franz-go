@@ -11,7 +11,7 @@ import (
 
 	"github.com/twmb/go-rbtree"
 
-	"github.com/twmb/frang/pkg/kmsg"
+	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
 // Sticky partitioning has two versions, the latter from KIP-341 preventing a

@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/twmb/frang/pkg/kerr"
+	"github.com/twmb/franz-go/pkg/kerr"
 )
 
 type metawait struct {

@@ -6,8 +6,8 @@ import (
 	"net"
 	"time"
 
-	"github.com/twmb/frang/pkg/kgo"
-	"github.com/twmb/frang/pkg/sasl/plain"
+	"github.com/twmb/franz-go/pkg/kgo"
+	"github.com/twmb/franz-go/pkg/sasl/plain"
 )
 
 func connectSaslSslPlain() {

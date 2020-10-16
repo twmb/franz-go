@@ -3,7 +3,7 @@ package connecting
 import (
 	"fmt"
 
-	"github.com/twmb/frang/pkg/kgo"
+	"github.com/twmb/franz-go/pkg/kgo"
 )
 
 func connectPlaintext() {

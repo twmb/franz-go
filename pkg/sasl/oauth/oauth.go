@@ -7,7 +7,7 @@ import (
 	"errors"
 	"sort"
 
-	"github.com/twmb/frang/pkg/sasl"
+	"github.com/twmb/franz-go/pkg/sasl"
 )
 
 // Auth contains information for authentication.

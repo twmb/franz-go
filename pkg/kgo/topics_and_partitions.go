@@ -4,7 +4,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/twmb/frang/pkg/kerr"
+	"github.com/twmb/franz-go/pkg/kerr"
 )
 
 // loadTopics returns the client's current topics and their partitions.

@@ -38,7 +38,7 @@ import (
 	"errors"
 	"hash/crc32"
 
-	"github.com/twmb/frang/pkg/kbin"
+	"github.com/twmb/franz-go/pkg/kbin"
 )
 
 // Requestor issues requests. Notably, the kgo.Client and kgo.Broker implements

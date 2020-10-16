@@ -18,7 +18,7 @@ import (
 
 	"golang.org/x/crypto/pbkdf2"
 
-	"github.com/twmb/frang/pkg/sasl"
+	"github.com/twmb/franz-go/pkg/sasl"
 )
 
 // Auth contains information for authentication.
