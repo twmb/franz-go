@@ -381,6 +381,13 @@ func V2_6_0() Versions {
 	return v
 }
 
+// Stable is a shortcut for the latest _released_ Kafka versions.
+//
+// This is the default version used in kgo to avoid breaking tip changes.
+func Stable() Versions {
+	return V2_6_0()
+}
+
 // Tip is the latest defined Kafka key versions; this may be slightly out of date.
 func Tip() Versions {
 	v := V2_6_0()

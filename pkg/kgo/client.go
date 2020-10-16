@@ -81,6 +81,12 @@ type Client struct {
 // the options are invalid. Connections to brokers are lazily created only when
 // requests are written to them.
 //
+// By default, the client uses the latest stable request versions when talking
+// to Kafka. If you use a broker older than 0.10.0, then you need to manually
+// set a MaxVersions option. Otherwise, there is usually no harm in defaulting
+// to the latest API versions, although occasionally Kafka introduces new
+// required parameters that do not have zero value defaults.
+//
 // NewClient also launches a goroutine which periodically updates the cached
 // topic metadata.
 func NewClient(opts ...Opt) (*Client, error) {

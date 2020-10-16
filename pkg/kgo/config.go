@@ -139,6 +139,7 @@ func defaultCfg() cfg {
 		logger: new(nopLogger),
 
 		seedBrokers: []string{"127.0.0.1"},
+		maxVersions: kversion.Stable(),
 
 		retryBackoff: func() func(int) time.Duration {
 			var rngMu sync.Mutex
