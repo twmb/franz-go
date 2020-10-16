@@ -265,7 +265,9 @@ func (cl *Client) AssignGroup(group string, opts ...GroupOpt) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	c.unassignPrior()
+	if c.typ != consumerTypeUnset {
+		c.unassignPrior()
+	}
 
 	ctx, cancel := context.WithCancel(cl.ctx)
 	g := &groupConsumer{

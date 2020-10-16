@@ -65,7 +65,9 @@ func (cl *Client) AssignPartitions(opts ...DirectConsumeOpt) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	c.unassignPrior()
+	if c.typ != consumerTypeUnset {
+		c.unassignPrior()
+	}
 
 	d := &directConsumer{
 		topics:     make(map[string]Offset),
