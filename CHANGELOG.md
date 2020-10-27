@@ -1,3 +1,10 @@
+v0.6.1
+===
+
+- [`0ddc468b2`](https://github.com/twmb/franz-go/commit/0ddc468b2ceca4fc0e42206c397f6d7ccd74bc4b): Workaround for two minor EventHubs issues.
+
+This is a small release to patch around two minor EventHubs protocol serializing issues.
+
 v0.6.0
 ===
 
