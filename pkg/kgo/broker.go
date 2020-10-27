@@ -15,7 +15,6 @@ import (
 	"github.com/twmb/franz-go/pkg/kbin"
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kmsg"
-	"github.com/twmb/franz-go/pkg/kversion"
 	"github.com/twmb/franz-go/pkg/sasl"
 )
 
@@ -392,7 +391,7 @@ func (b *broker) loadConnection(ctx context.Context, reqKey int16) (*brokerCxn, 
 		addr: b.addr,
 		conn: conn,
 	}
-	if err = cxn.init(b.cl.cfg.maxVersions); err != nil {
+	if err = cxn.init(); err != nil {
 		b.cl.cfg.logger.Log(LogLevelDebug, "connection initialization failed", "addr", b.addr, "id", b.meta.NodeID, "err", err)
 		cxn.closeConn()
 		return nil, err
@@ -450,12 +449,12 @@ type brokerCxn struct {
 	dead int32
 }
 
-func (cxn *brokerCxn) init(maxVersions kversion.Versions) error {
+func (cxn *brokerCxn) init() error {
 	for i := 0; i < len(cxn.versions[:]); i++ {
 		cxn.versions[i] = -1
 	}
 
-	if maxVersions == nil || len(maxVersions) >= 19 {
+	if cxn.b.cl.cfg.maxVersions == nil || len(cxn.b.cl.cfg.maxVersions) >= 19 {
 		if err := cxn.requestAPIVersions(); err != nil {
 			cxn.cl.cfg.logger.Log(LogLevelError, "unable to request api versions", "err", err)
 			return err
@@ -506,7 +505,11 @@ start:
 		if maxVersion == 0 {
 			return ErrConnDead
 		}
-		if string(rawResp) == "\x00\x23\x00\x00\x00\x00" {
+		srawResp := string(rawResp)
+		if srawResp == "\x00\x23\x00\x00\x00\x00" ||
+			// EventHubs erroneously replies with v1, so we check
+			// for that as well.
+			srawResp == "\x00\x23\x00\x00\x00\x00\x00\x00\x00\x00" {
 			cxn.cl.cfg.logger.Log(LogLevelDebug, "kafka does not know our ApiVersions version, downgrading to version 0 and retrying")
 			maxVersion = 0
 			goto start
@@ -577,7 +580,7 @@ start:
 		}
 		authenticate = req.Version == 1
 	}
-	cxn.cl.cfg.logger.Log(LogLevelDebug, "beginning sasl authentication", "mechanism", mechanism.Name())
+	cxn.cl.cfg.logger.Log(LogLevelDebug, "beginning sasl authentication", "mechanism", mechanism.Name(), "authenticate", authenticate)
 	cxn.mechanism = mechanism
 	return cxn.doSasl(authenticate)
 }

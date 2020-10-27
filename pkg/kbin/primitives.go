@@ -475,6 +475,15 @@ func (b *Reader) CompactNullableString() *string {
 // This never returns nil.
 func (b *Reader) Bytes() []byte {
 	l := b.Int32()
+	// This is not to spec, but it is not clearly documented and Microsoft
+	// EventHubs fails here. -1 means null, which should throw an
+	// exception. EventHubs uses -1 to mean "does not exist" on some
+	// non-nullable fields.
+	//
+	// Until EventHubs is fixed, we return an empty byte slice for null.
+	if l == -1 {
+		return []byte{}
+	}
 	return b.Span(int(l))
 }
 
@@ -483,6 +492,9 @@ func (b *Reader) Bytes() []byte {
 // This never returns nil.
 func (b *Reader) CompactBytes() []byte {
 	l := int(b.Uvarint()) - 1
+	if l == -1 { // same as above: -1 should not be allowed here
+		return []byte{}
+	}
 	return b.Span(int(l))
 }
 
