@@ -21,6 +21,7 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -179,14 +180,37 @@ func connTimeoutBuilder(defaultTimeout time.Duration) func(kmsg.Request) (time.D
 	var lastRebalanceTimeout time.Duration
 
 	return func(req kmsg.Request) (read, write time.Duration) {
-		// We use a default of 5s for all write timeouts. Since we
+		// We use a default of 15s for all write timeouts. Since we
 		// build requests in memory and flush in one go, we expect
 		// the process of writing to the connection to be quick.
-		const def = 5 * time.Second
+		// 15s is mighty generous.
+		const def = 15 * time.Second
 		millis := func(m int32) time.Duration { return time.Duration(m) * time.Millisecond }
 		switch t := req.(type) {
 		default:
+			// Many fields in the definitions have a common field
+			// "TimeoutMillis". If that exists and is an int32,
+			// we use it, otherwise we fallback to our default
+			// for both read and write.
+			v := reflect.Indirect(reflect.ValueOf(req))
+			if v.Kind() == reflect.Struct { // should be but just in case
+				v = v.FieldByName("TimeoutMillis")
+				var zero reflect.Value
+				if v != zero {
+					v := v.Interface()
+					if timeoutMillis, ok := v.(int32); ok {
+						return def + millis(timeoutMillis), def
+					}
+				}
+			}
 			return def, def
+
+		case *produceRequest:
+			return def + millis(t.timeout), def
+		case *fetchRequest:
+			return def + millis(t.maxWait), def
+		case *kmsg.FetchRequest:
+			return def + millis(t.MaxWaitMillis), def
 
 		// SASL may interact with an external system; we give each step
 		// of the read process 30s by default.
@@ -215,35 +239,6 @@ func connTimeoutBuilder(defaultTimeout time.Duration) func(kmsg.Request) (time.D
 
 			return read, def
 
-		// All requests below here use the request's TimeoutMillis
-		// field. We could use reflect.FieldByName, but we want to
-		// avoid reflect in this package if possible.
-		//
-		// We also handle our own two internal package requests,
-		// produceRequest and fetchRequest.
-
-		case *produceRequest:
-			return def + millis(t.timeout), def
-		case *kmsg.ProduceRequest:
-			return def + millis(t.TimeoutMillis), def
-		case *fetchRequest:
-			return def + millis(t.maxWait), def
-		case *kmsg.FetchRequest:
-			return def + millis(t.MaxWaitMillis), def
-		case *kmsg.CreateTopicsRequest:
-			return def + millis(t.TimeoutMillis), def
-		case *kmsg.DeleteTopicsRequest:
-			return def + millis(t.TimeoutMillis), def
-		case *kmsg.DeleteRecordsRequest:
-			return def + millis(t.TimeoutMillis), def
-		case *kmsg.CreatePartitionsRequest:
-			return def + millis(t.TimeoutMillis), def
-		case *kmsg.ElectLeadersRequest:
-			return def + millis(t.TimeoutMillis), def
-		case *kmsg.AlterPartitionAssignmentsRequest:
-			return def + millis(t.TimeoutMillis), def
-		case *kmsg.ListPartitionReassignmentsRequest:
-			return def + millis(t.TimeoutMillis), def
 		}
 	}
 }

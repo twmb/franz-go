@@ -7,6 +7,7 @@ import (
 	"io"
 	"math"
 	"net"
+	"reflect"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -332,7 +333,7 @@ func (b *broker) handleReqs() {
 		default:
 		}
 
-		corrID, err := cxn.writeRequest(time.Since(pr.enqueue), req)
+		corrID, err := cxn.writeRequest(pr.ctx, time.Since(pr.enqueue), req)
 
 		if err != nil {
 			pr.promise(nil, err)
@@ -439,6 +440,8 @@ type brokerCxn struct {
 	mechanism sasl.Mechanism
 	expiry    time.Time
 
+	throttleUntil int64 // atomic nanosec
+
 	corrID int32
 
 	// dieMu guards sending to resps in case the connection has died.
@@ -480,7 +483,7 @@ start:
 		ClientSoftwareVersion: cxn.cl.cfg.softwareVersion,
 	}
 	cxn.cl.cfg.logger.Log(LogLevelDebug, "issuing api versions request", "version", maxVersion)
-	corrID, err := cxn.writeRequest(0, req)
+	corrID, err := cxn.writeRequest(nil, 0, req)
 	if err != nil {
 		return err
 	}
@@ -548,7 +551,7 @@ start:
 		req.Mechanism = mechanism.Name()
 		req.Version = cxn.versions[req.Key()]
 		cxn.cl.cfg.logger.Log(LogLevelDebug, "issuing SASLHandshakeRequest")
-		corrID, err := cxn.writeRequest(0, req)
+		corrID, err := cxn.writeRequest(nil, 0, req)
 		if err != nil {
 			return err
 		}
@@ -642,7 +645,7 @@ func (cxn *brokerCxn) doSasl(authenticate bool) error {
 			req.Version = cxn.versions[req.Key()]
 			cxn.cl.cfg.logger.Log(LogLevelDebug, "issuing SASLAuthenticate", "version", req.Version, "step", step)
 
-			corrID, err := cxn.writeRequest(0, req)
+			corrID, err := cxn.writeRequest(nil, 0, req)
 			if err != nil {
 				return err
 			}
@@ -692,7 +695,20 @@ func (cxn *brokerCxn) doSasl(authenticate bool) error {
 
 // writeRequest writes a message request to the broker connection, bumping the
 // connection's correlation ID as appropriate for the next write.
-func (cxn *brokerCxn) writeRequest(writeWait time.Duration, req kmsg.Request) (int32, error) {
+func (cxn *brokerCxn) writeRequest(ctx context.Context, writeWait time.Duration, req kmsg.Request) (int32, error) {
+	// A nil ctx means we cannot be throttled.
+	if ctx != nil {
+		throttleUntil := time.Unix(0, atomic.LoadInt64(&cxn.throttleUntil))
+		if sleep := throttleUntil.Sub(time.Now()); sleep > 0 {
+			after := time.NewTimer(sleep)
+			select {
+			case <-after.C:
+			case <-ctx.Done():
+				after.Stop()
+			}
+		}
+	}
+
 	buf := cxn.cl.bufPool.get()
 	defer cxn.cl.bufPool.put(buf)
 	buf = cxn.cl.reqFormatter.AppendRequest(
@@ -700,6 +716,7 @@ func (cxn *brokerCxn) writeRequest(writeWait time.Duration, req kmsg.Request) (i
 		req,
 		cxn.corrID,
 	)
+
 	_, wt := cxn.cl.connTimeoutFn(req)
 	if wt > 0 {
 		cxn.conn.SetWriteDeadline(time.Now().Add(wt))
@@ -843,6 +860,36 @@ func (cxn *brokerCxn) handleResps() {
 			pr.promise(nil, err)
 			return
 		}
-		pr.promise(pr.resp, pr.resp.ReadFrom(raw))
+		readErr := pr.resp.ReadFrom(raw)
+
+		// If we had no error, we read the response successfully.
+		//
+		// Any response that can cause throttling has a
+		// "ThrottleMillis" field. We check for that here.
+		//
+		// This is a bit magical by its usage of reflect, but is is
+		// thankfully generic (and benchmarks to be ~200ns).
+		//
+		// If the field exists and is non-zero, we save that we are
+		// being throttled, which will cause the next write to wait
+		// before writing.
+		if readErr == nil {
+			v := reflect.Indirect(reflect.ValueOf(pr.resp))
+			if v.Kind() == reflect.Struct { // should be yes, but just to be sure
+				v = v.FieldByName("ThrottleMillis")
+				var zero reflect.Value
+				if v != zero {
+					v := v.Interface()
+					if millis, ok := v.(int32); ok && millis > 0 {
+						throttleUntil := time.Now().Add(time.Millisecond * time.Duration(millis)).UnixNano()
+						if throttleUntil > cxn.throttleUntil {
+							atomic.StoreInt64(&cxn.throttleUntil, throttleUntil)
+						}
+					}
+				}
+			}
+		}
+
+		pr.promise(pr.resp, readErr)
 	}
 }
