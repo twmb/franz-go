@@ -633,7 +633,7 @@ func (cxn *brokerCxn) doSasl(authenticate bool) error {
 				return ErrConnDead
 			}
 			if !done {
-				if challenge, err = readConn(cxn.conn, rt); err != nil {
+				if challenge, err = readConn(cxn.conn, cxn.b.cl.cfg.maxBrokerReadBytes, rt); err != nil {
 					return err
 				}
 			}
@@ -741,18 +741,21 @@ func (cxn *brokerCxn) writeRequest(ctx context.Context, writeWait time.Duration,
 	return id, nil
 }
 
-func readConn(conn net.Conn, timeout time.Duration) ([]byte, error) {
+func readConn(conn net.Conn, maxSize int32, timeout time.Duration) ([]byte, error) {
 	sizeBuf := make([]byte, 4)
 	if timeout > 0 {
 		conn.SetReadDeadline(time.Now().Add(timeout))
 		defer conn.SetReadDeadline(time.Time{})
 	}
-	if _, err := io.ReadFull(conn, sizeBuf[:4]); err != nil {
+	if _, err := io.ReadFull(conn, sizeBuf); err != nil {
 		return nil, ErrConnDead
 	}
-	size := int32(binary.BigEndian.Uint32(sizeBuf[:4]))
+	size := int32(binary.BigEndian.Uint32(sizeBuf))
 	if size < 0 {
 		return nil, ErrInvalidRespSize
+	}
+	if size > maxSize {
+		return nil, &ErrLargeRespSize{Size: size, Limit: maxSize}
 	}
 
 	buf := make([]byte, size)
@@ -766,7 +769,7 @@ func readConn(conn net.Conn, timeout time.Duration) ([]byte, error) {
 // correct, and returns a newly allocated slice on success.
 func (cxn *brokerCxn) readResponse(readWait time.Duration, key int16, corrID int32, timeout time.Duration, flexibleHeader bool) ([]byte, error) {
 	readStart := time.Now()
-	buf, err := readConn(cxn.conn, timeout)
+	buf, err := readConn(cxn.conn, cxn.b.cl.cfg.maxBrokerReadBytes, timeout)
 	timeToRead := time.Since(readStart)
 
 	cxn.cl.cfg.hooks.each(func(h Hook) {

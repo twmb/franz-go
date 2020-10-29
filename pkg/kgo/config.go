@@ -63,6 +63,7 @@ type cfg struct {
 	brokerConnDeadRetries int
 
 	maxBrokerWriteBytes int32
+	maxBrokerReadBytes  int32
 
 	allowAutoTopicCreation bool
 
@@ -180,6 +181,7 @@ func defaultCfg() cfg {
 		brokerConnDeadRetries: 20,
 
 		maxBrokerWriteBytes: 100 << 20, // Kafka socket.request.max.bytes default is 100<<20
+		maxBrokerReadBytes:  100 << 20,
 
 		metadataMaxAge: 5 * time.Minute,
 		metadataMinAge: 10 * time.Second,
@@ -371,6 +373,16 @@ func AutoTopicCreation() Opt {
 // limit should be produce requests.
 func BrokerMaxWriteBytes(v int32) Opt {
 	return clientOpt{func(cfg *cfg) { cfg.maxBrokerWriteBytes = v }}
+}
+
+// BrokerMaxReadBytes sets the maximum response size that can be read from
+// Kafka, overriding the default 100MiB.
+//
+// This is a safety measure to avoid OOMing on invalid responses. This is
+// slightly double FetchMaxBytes; if bumping that, consider bump this. No other
+// response should run the risk of hitting this limit.
+func BrokerMaxReadBytes(v int32) Opt {
+	return clientOpt{func(cfg *cfg) { cfg.maxBrokerReadBytes = v }}
 }
 
 // MetadataMaxAge sets the maximum age for the client's cached metadata,
@@ -627,6 +639,8 @@ func FetchMaxWait(wait time.Duration) ConsumerOpt {
 // will buffer up to <brokers * max bytes> worth of memory.
 //
 // This corresponds to the Java fetch.max.bytes setting.
+//
+// If bumping this, consider bumping BrokerMaxReadBytes.
 func FetchMaxBytes(b int32) ConsumerOpt {
 	return consumerOpt{func(cfg *cfg) { cfg.maxBytes = b }}
 }

@@ -38,6 +38,8 @@ var (
 	// the client reads an invalid message response size from Kafka.
 	//
 	// If this error happens, the client closes the broker connection.
+	// This error is potentially retriable; maybe the broker will send
+	// less data next time, but it is unlikely.
 	ErrInvalidRespSize = errors.New("invalid response size less than zero")
 
 	// ErrInvalidResp is a generic error used when Kafka responded
@@ -109,6 +111,22 @@ type ErrDataLoss struct {
 	// ResetTo is what the client reset the partition to; everything from
 	// ResetTo to ConsumedTo was lost.
 	ResetTo int64
+}
+
+// ErrLargeRespSize is return when Kafka replies that a response will be more
+// bytes than this client allows (see the BrokerMaxReadBytes option).
+//
+// If this error happens, the client closes the broker connection.
+type ErrLargeRespSize struct {
+	// The size that was replied.
+	Size int32
+	// The limit that the size exceeded.
+	Limit int32
+}
+
+func (e *ErrLargeRespSize) Error() string {
+	return fmt.Sprintf("invalid large response size %d > limit %d",
+		e.Size, e.Limit)
 }
 
 func (e *ErrDataLoss) Error() string {
