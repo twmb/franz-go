@@ -13,6 +13,7 @@ import (
 // encoding is correct.
 
 func TestPromisedNumberedRecordAppendTo(t *testing.T) {
+	t.Parallel()
 	// golden
 	kmsgRec := kmsg.Record{
 		Length:         1,
@@ -55,6 +56,7 @@ func TestPromisedNumberedRecordAppendTo(t *testing.T) {
 }
 
 func TestRecBatchAppendTo(t *testing.T) {
+	t.Parallel()
 	// golden, uncompressed
 	kbatch := kmsg.RecordBatch{
 		FirstOffset:          0,
@@ -210,6 +212,7 @@ func TestRecBatchAppendTo(t *testing.T) {
 }
 
 func TestMessageSetAppendTo(t *testing.T) {
+	t.Parallel()
 	// golden v0, uncompressed
 	kset01 := kmsg.MessageV0{
 		Offset: 0,

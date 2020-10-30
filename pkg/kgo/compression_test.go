@@ -7,6 +7,7 @@ import (
 )
 
 func TestNewCompressor(t *testing.T) {
+	t.Parallel()
 	for i, test := range []struct {
 		codecs []CompressionCodec
 		fail   bool
@@ -41,49 +42,54 @@ func TestNewCompressor(t *testing.T) {
 }
 
 func TestCompressDecompress(t *testing.T) {
+	t.Parallel()
 	d := newDecompressor()
 	in := []byte("foo")
+	var wg sync.WaitGroup
 	for _, produceVersion := range []int16{
 		0, 7,
 	} {
-		for _, codecs := range [][]CompressionCodec{
-			{{codec: 0}},
-			{{codec: 1}},
-			{{codec: 2}},
-			{{codec: 3}},
-			{{codec: 4}},
-			{{codec: 4}, {codec: 3}},
-		} {
-			c, _ := newCompressor(codecs...)
-			if c == nil {
-				if codecs[0].codec == 0 {
-					continue
+		wg.Add(1)
+		go func(produceVersion int16) {
+			defer wg.Done()
+			for _, codecs := range [][]CompressionCodec{
+				{{codec: 0}},
+				{{codec: 1}},
+				{{codec: 2}},
+				{{codec: 3}},
+				{{codec: 4}},
+				{{codec: 4}, {codec: 3}},
+			} {
+				c, _ := newCompressor(codecs...)
+				if c == nil {
+					if codecs[0].codec == 0 {
+						continue
+					}
+					t.Errorf("unexpected nil compressor from codecs %v", codecs)
 				}
-				t.Errorf("unexpected nil compressor from codecs %v", codecs)
-			}
-			var wg sync.WaitGroup
-			for i := 0; i < 5; i++ {
-				wg.Add(1)
-				go func() {
-					defer wg.Done()
-					w := sliceWriters.Get().(*sliceWriter)
-					defer sliceWriters.Put(w)
-					got, used := c.compress(w, in, produceVersion)
+				for i := 0; i < 3; i++ {
+					wg.Add(1)
+					go func() {
+						defer wg.Done()
+						w := sliceWriters.Get().(*sliceWriter)
+						defer sliceWriters.Put(w)
+						got, used := c.compress(w, in, produceVersion)
 
-					got, err := d.decompress(got, byte(used))
-					if err != nil {
-						t.Errorf("unexpected decompress err: %v", err)
-						return
-					}
-					if !bytes.Equal(got, in) {
-						t.Errorf("got decompress %s != exp compress in %s", got, in)
-					}
+						got, err := d.decompress(got, byte(used))
+						if err != nil {
+							t.Errorf("unexpected decompress err: %v", err)
+							return
+						}
+						if !bytes.Equal(got, in) {
+							t.Errorf("got decompress %s != exp compress in %s", got, in)
+						}
 
-				}()
+					}()
+				}
 			}
-			wg.Wait()
-		}
+		}(produceVersion)
 	}
+	wg.Wait()
 }
 
 func BenchmarkCompress(b *testing.B) {

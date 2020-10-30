@@ -7,6 +7,7 @@ import (
 )
 
 func Test_stickyBalanceStrategy_Plan(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name         string
 		members      []GroupMember
@@ -488,6 +489,7 @@ type resultOptions struct {
 }
 
 func TestImbalanced(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name    string
 		members []GroupMember
@@ -890,6 +892,7 @@ func TestImbalanced(t *testing.T) {
 }
 
 func TestMultiGenerational(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name    string
 		members []GroupMember
@@ -957,6 +960,7 @@ func TestMultiGenerational(t *testing.T) {
 }
 
 func Test_stickyBalanceStrategy_Plan_KIP54_ExampleOne(t *testing.T) {
+	t.Parallel()
 	// PLAN 1
 	members := []GroupMember{
 		{ID: "A", Topics: []string{"1", "2", "3", "4"}},
@@ -984,6 +988,7 @@ func Test_stickyBalanceStrategy_Plan_KIP54_ExampleOne(t *testing.T) {
 }
 
 func Test_stickyBalanceStrategy_Plan_KIP54_ExampleTwo(t *testing.T) {
+	t.Parallel()
 	// PLAN 1
 	members := []GroupMember{
 		{ID: "1", Topics: []string{"1"}},
@@ -1023,6 +1028,7 @@ func Test_stickyBalanceStrategy_Plan_KIP54_ExampleTwo(t *testing.T) {
 }
 
 func Test_stickyBalanceStrategy_Plan_KIP54_ExampleThree(t *testing.T) {
+	t.Parallel()
 	// PLAN 1
 	members := []GroupMember{
 		{ID: "1", Topics: []string{"1", "2"}},
@@ -1054,6 +1060,7 @@ func Test_stickyBalanceStrategy_Plan_KIP54_ExampleThree(t *testing.T) {
 }
 
 func Test_stickyBalanceStrategy_Plan_AddRemoveConsumerOneTopic(t *testing.T) {
+	t.Parallel()
 	// PLAN 1
 	members := []GroupMember{
 		{ID: "1", Topics: []string{"T"}},
@@ -1093,6 +1100,7 @@ func Test_stickyBalanceStrategy_Plan_AddRemoveConsumerOneTopic(t *testing.T) {
 }
 
 func Test_stickyBalanceStrategy_Plan_AssignmentWithMultipleGenerations1(t *testing.T) {
+	t.Parallel()
 	topics := map[string][]int32{"1": {0, 1, 2, 3, 4, 5}}
 	members := []GroupMember{
 		{ID: "1", Topics: []string{"1"}},
@@ -1127,6 +1135,7 @@ func Test_stickyBalanceStrategy_Plan_AssignmentWithMultipleGenerations1(t *testi
 }
 
 func Test_stickyBalanceStrategy_Plan_AssignmentWithMultipleGenerations2(t *testing.T) {
+	t.Parallel()
 	topics := map[string][]int32{"1": {0, 1, 2, 3, 4, 5}}
 	members := []GroupMember{
 		{ID: "1", Topics: []string{"1"}},
@@ -1158,6 +1167,7 @@ func Test_stickyBalanceStrategy_Plan_AssignmentWithMultipleGenerations2(t *testi
 }
 
 func Test_stickyBalanceStrategy_Plan_AssignmentWithConflictingPreviousGenerations(t *testing.T) {
+	t.Parallel()
 
 	topics := map[string][]int32{"1": {0, 1, 2, 3, 4, 5}}
 	members := []GroupMember{
@@ -1185,6 +1195,7 @@ func Test_stickyBalanceStrategy_Plan_AssignmentWithConflictingPreviousGeneration
 }
 
 func Test_stickyBalanceStrategy_Plan_SchemaBackwardCompatibility(t *testing.T) {
+	t.Parallel()
 	topics := map[string][]int32{"1": {0, 1, 2}}
 	members := []GroupMember{
 		{ID: "1", Topics: []string{"1"},
@@ -1205,6 +1216,7 @@ func Test_stickyBalanceStrategy_Plan_SchemaBackwardCompatibility(t *testing.T) {
 }
 
 func Test_stickyBalanceStrategy_Plan_ConflictingPreviousAssignments(t *testing.T) {
+	t.Parallel()
 	topics := map[string][]int32{"1": {0, 1}}
 	members := []GroupMember{
 		{ID: "1", Topics: []string{"1"},
@@ -1222,6 +1234,7 @@ func Test_stickyBalanceStrategy_Plan_ConflictingPreviousAssignments(t *testing.T
 }
 
 func TestLarge(t *testing.T) {
+	t.Parallel()
 	{
 		members, topics := makeLargeBalance(t, false)
 		plan := Balance(members, topics)
