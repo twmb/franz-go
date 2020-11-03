@@ -457,6 +457,7 @@ func main() {
 	for _, e := range newEnums {
 		e.WriteDefn(l)
 		e.WriteStringFunc(l)
+		e.WriteConsts(l)
 	}
 
 	fmt.Println(l.buf.String())

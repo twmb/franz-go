@@ -1,6 +1,9 @@
 package main
 
-import "strconv"
+import (
+	"strconv"
+	"strings"
+)
 
 func (Bool) TypeName() string                  { return "bool" }
 func (Int8) TypeName() string                  { return "int8" }
@@ -715,4 +718,30 @@ func (e Enum) WriteStringFunc(l *LineWriter) {
 	}
 	l.Write("}")
 	l.Write("}")
+}
+
+func (e Enum) WriteConsts(l *LineWriter) {
+	l.Write("const (")
+	l.Write("%[1]sUnknown %[1]s = 0", e.Name)
+	defer l.Write(")")
+	for _, v := range e.Values {
+		var sb strings.Builder
+		upper := true
+		for _, c := range v.Word {
+			switch c {
+			case '_':
+				upper = true
+			default:
+				s := string([]rune{c})
+				if upper {
+					sb.WriteString(strings.ToUpper(s))
+				} else {
+					sb.WriteString(strings.ToLower(s))
+				}
+				upper = false
+			}
+		}
+
+		l.Write("%s%s = %d", e.Name, sb.String(), v.Value)
+	}
 }

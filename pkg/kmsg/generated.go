@@ -30243,6 +30243,13 @@ func (v ConfigResourceType) String() string {
 	}
 }
 
+const (
+	ConfigResourceTypeUnknown      ConfigResourceType = 0
+	ConfigResourceTypeTopic                           = 2
+	ConfigResourceTypeBroker                          = 4
+	ConfigResourceTypeBrokerLogger                    = 8
+)
+
 // Where a config entry is from. If there are no config synonyms,
 // the source is DEFAULT_CONFIG.
 //
@@ -30286,6 +30293,16 @@ func (v ConfigSource) String() string {
 		return "DYNAMIC_BROKER_LOGGER_CONFIG"
 	}
 }
+
+const (
+	ConfigSourceUnknown                    ConfigSource = 0
+	ConfigSourceDynamicTopicConfig                      = 1
+	ConfigSourceDynamicBrokerConfig                     = 2
+	ConfigSourceDynamicDefaultBrokerConfig              = 3
+	ConfigSourceStaticBrokerConfig                      = 4
+	ConfigSourceDefaultConfig                           = 5
+	ConfigSourceDynamicBrokerLoggerConfig               = 6
+)
 
 // A configuration data type.
 //
@@ -30336,6 +30353,19 @@ func (v ConfigType) String() string {
 	}
 }
 
+const (
+	ConfigTypeUnknown  ConfigType = 0
+	ConfigTypeBoolean             = 1
+	ConfigTypeString              = 2
+	ConfigTypeInt                 = 3
+	ConfigTypeShort               = 4
+	ConfigTypeLong                = 5
+	ConfigTypeDouble              = 6
+	ConfigTypeList                = 7
+	ConfigTypeClass               = 8
+	ConfigTypePassword            = 9
+)
+
 // ACLResourceType is a type of resource to use for ACLs.
 //
 // Possible values and their meanings:
@@ -30373,6 +30403,16 @@ func (v ACLResourceType) String() string {
 	}
 }
 
+const (
+	ACLResourceTypeUnknown         ACLResourceType = 0
+	ACLResourceTypeAny                             = 1
+	ACLResourceTypeTopic                           = 2
+	ACLResourceTypeGroup                           = 3
+	ACLResourceTypeCluster                         = 4
+	ACLResourceTypeTransactionalId                 = 5
+	ACLResourceTypeDelegationToken                 = 6
+)
+
 // ACLResourcePatternType is how an acl's ResourceName is understood.
 //
 // This field was added with Kafka 2.0.0 for KIP-290.
@@ -30403,6 +30443,13 @@ func (v ACLResourcePatternType) String() string {
 	}
 }
 
+const (
+	ACLResourcePatternTypeUnknown  ACLResourcePatternType = 0
+	ACLResourcePatternTypeMatch                           = 1
+	ACLResourcePatternTypeLiteral                         = 2
+	ACLResourcePatternTypePrefixed                        = 3
+)
+
 // An ACL permission type.
 //
 // Possible values and their meanings:
@@ -30430,6 +30477,13 @@ func (v ACLPermissionType) String() string {
 		return "ALLOW"
 	}
 }
+
+const (
+	ACLPermissionTypeUnknown ACLPermissionType = 0
+	ACLPermissionTypeAny                       = 1
+	ACLPermissionTypeDeny                      = 2
+	ACLPermissionTypeAllow                     = 3
+)
 
 // An ACL operation.
 //
@@ -30493,3 +30547,19 @@ func (v ACLOperation) String() string {
 		return "IDEMPOTENT_WRITE"
 	}
 }
+
+const (
+	ACLOperationUnknown         ACLOperation = 0
+	ACLOperationAny                          = 1
+	ACLOperationAll                          = 2
+	ACLOperationRead                         = 3
+	ACLOperationWrite                        = 4
+	ACLOperationCreate                       = 5
+	ACLOperationDelete                       = 6
+	ACLOperationAlter                        = 7
+	ACLOperationDescribe                     = 8
+	ACLOperationClusterAction                = 9
+	ACLOperationDescribeConfigs              = 10
+	ACLOperationAlterConfigs                 = 11
+	ACLOperationIdempotentWrite              = 12
+)
