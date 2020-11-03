@@ -56,6 +56,7 @@ type cfg struct {
 
 	seedBrokers []string
 	maxVersions kversion.Versions
+	minVersions kversion.Versions
 
 	retryBackoff          func(int) time.Duration
 	retries               int
@@ -288,7 +289,7 @@ func SeedBrokers(seeds ...string) Opt {
 }
 
 // MaxVersions sets the maximum Kafka version to try, overriding the
-// internal unbounded (latest) versions.
+// internal unbounded (latest stable) versions.
 //
 // Note that specific max version pinning is required if trying to interact
 // with versions pre 0.10.0. Otherwise, unless using more complicated requests
@@ -298,6 +299,22 @@ func SeedBrokers(seeds ...string) Opt {
 // do not get invalid default zero values before you update your usage.
 func MaxVersions(versions kversion.Versions) Opt {
 	return clientOpt{func(cfg *cfg) { cfg.maxVersions = versions }}
+}
+
+// MinVersions sets the minimum Kafka version a request can be downgraded to,
+// overriding the default of the lowest version.
+//
+// This option is useful if you are issuing requests that you absolutely do not
+// want to be downgraded; that is, if you are relying on features in newer
+// requests, and you are not sure if your brokers can handle those features.
+// By setting a min version, if the client detects it needs to downgrade past
+// the version, it will instead avoid issuing the request.
+//
+// Unlike MaxVersions, if a request is issued that is unknown to the min
+// versions, the request is allowed. It is assumed that there is no lower bound
+// for that request.
+func MinVersions(versions kversion.Versions) Opt {
+	return clientOpt{func(cfg *cfg) { cfg.minVersions = versions }}
 }
 
 // RetryBackoff sets the backoff strategy for how long to backoff for a given

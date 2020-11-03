@@ -12,7 +12,12 @@ var (
 
 	// ErrClientTooOld is returned when issuing request that are unknown or
 	// use an unknown version.
-	ErrClientTooOld = errors.New("client is too old; this client does not know what to do with this")
+	ErrClientTooOld = errors.New("client is too old; this client does not know what to do with this request")
+
+	// ErrBrokerTooOld is returned if a connection has loaded broker
+	// ApiVersions and knows that a broker cannot handle the request that
+	// is attempting to be issued.
+	ErrBrokerTooOld = errors.New("broker is too old; the broker has already indicated it will not know how to handle the request")
 
 	// ErrNoResp is the error used if Kafka does not reply to a topic or
 	// partition in a produce request. This error should never be seen.

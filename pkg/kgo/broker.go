@@ -293,6 +293,15 @@ func (b *broker) handleReqs() {
 			pr.promise(nil, ErrUnknownRequestKey)
 			continue
 		}
+
+		// If cxn.versions[0] is non-negative, then we loaded API
+		// versions. If the version for this request is negative, we
+		// know the broker cannot handle this request.
+		if cxn.versions[0] >= 0 && cxn.versions[req.Key()] < 0 {
+			pr.promise(nil, ErrBrokerTooOld)
+			continue
+		}
+
 		ourMax := req.MaxVersion()
 		if b.cl.cfg.maxVersions != nil {
 			userMax := b.cl.cfg.maxVersions[req.Key()]
@@ -301,12 +310,24 @@ func (b *broker) handleReqs() {
 			}
 		}
 
-		// If brokerMax is negative, we have no api versions because
-		// the client is pinned pre 0.10.0 and we stick with our max.
+		// If brokerMax is negative at this point, we have no api
+		// versions because the client is pinned pre 0.10.0 and we
+		// stick with our max.
 		version := ourMax
 		if brokerMax := cxn.versions[req.Key()]; brokerMax >= 0 && brokerMax < ourMax {
 			version = brokerMax
 		}
+
+		// If the version now (after potential broker downgrading) is
+		// lower than we desire, we fail the request for the broker is
+		// too old.
+		if b.cl.cfg.minVersions != nil &&
+			int(req.Key()) < len(b.cl.cfg.minVersions) &&
+			version < b.cl.cfg.minVersions[req.Key()] {
+			pr.promise(nil, ErrBrokerTooOld)
+			continue
+		}
+
 		req.SetVersion(version) // always go for highest version
 
 		if !cxn.expiry.IsZero() && time.Now().After(cxn.expiry) {
@@ -661,7 +682,7 @@ func (cxn *brokerCxn) doSasl(authenticate bool) error {
 
 				if err = kerr.ErrorForCode(resp.ErrorCode); err != nil {
 					if resp.ErrorMessage != nil {
-						return fmt.Errorf("%s: %v", *resp.ErrorMessage, err)
+						return fmt.Errorf("%s: %w", *resp.ErrorMessage, err)
 					}
 					return err
 				}
