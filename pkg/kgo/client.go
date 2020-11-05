@@ -1000,9 +1000,10 @@ func (cl *Client) handleListGroupsReq(ctx context.Context, req *kmsg.ListGroupsR
 		}
 		wg.Add(1)
 		numReqs++
+		myReq := *req
 		go func(br *broker) {
 			defer wg.Done()
-			resp, err := br.waitResp(ctx, req)
+			resp, err := br.waitResp(ctx, &myReq)
 			respErrs <- respErr{resp, err}
 		}(br)
 	}
