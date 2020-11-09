@@ -482,10 +482,15 @@ func (cl *Client) shouldRetry(tries int, err error) bool {
 }
 
 type retriable struct {
-	cl       *Client
-	br       func() (*broker, error)
-	last     *broker
-	parseErr func(kmsg.Response) error
+	cl   *Client
+	br   func() (*broker, error)
+	last *broker
+
+	// parseRetryErr, if non-nil, can parse a retriable error out of the
+	// response and return it. This error is *not* returned from the
+	// request if the req cannot be retried due to timeout or retry limits,
+	// but it *can* allow a retry if neither limit is hit yet.
+	parseRetryErr func(kmsg.Response) error
 }
 
 func (r *retriable) Request(ctx context.Context, req kmsg.Request) (kmsg.Response, error) {
@@ -500,17 +505,16 @@ start:
 		return nil, err
 	}
 	resp, err := r.last.waitResp(ctx, req)
-	if err == nil && r.parseErr != nil {
-		err = r.parseErr(resp)
+	var retryErr error
+	if err == nil && r.parseRetryErr != nil {
+		retryErr = r.parseRetryErr(resp)
 	}
-	if err != nil {
-		if retryTimeout > 0 && time.Since(tryStart) > retryTimeout {
-			return nil, err
+	if err != nil || retryErr != nil {
+		if retryTimeout == 0 || time.Since(tryStart) <= retryTimeout {
+			if (r.cl.shouldRetry(tries, err) || r.cl.shouldRetry(tries, retryErr)) && r.cl.waitTries(ctx, tries) {
+				goto start
+			}
 		}
-		if r.cl.shouldRetry(tries, err) && r.cl.waitTries(ctx, tries) {
-			goto start
-		}
-		return nil, err
 	}
 	return resp, err
 }
@@ -795,7 +799,7 @@ func (cl *Client) handleAdminReq(ctx context.Context, req kmsg.Request) ShardedR
 		return cl.controller(ctx)
 	})
 
-	r.parseErr = func(resp kmsg.Response) error {
+	r.parseRetryErr = func(resp kmsg.Response) error {
 		var code int16
 		switch t := resp.(type) {
 		case *kmsg.CreateTopicsResponse:
@@ -835,13 +839,13 @@ func (cl *Client) handleAdminReq(ctx context.Context, req kmsg.Request) ShardedR
 		case *kmsg.UpdateFeaturesResponse:
 			code = t.ErrorCode
 		}
-		err := kerr.ErrorForCode(code)
-		if err == kerr.NotController {
+		if err := kerr.ErrorForCode(code); err == kerr.NotController {
 			// There must be a last broker if we were able to issue
 			// the request and get a response.
 			cl.forgetControllerID(r.last.meta.NodeID)
+			return err
 		}
-		return err
+		return nil
 	}
 
 	resp, err := r.Request(ctx, req)
@@ -927,7 +931,7 @@ func (cl *Client) handleReqWithCoordinator(
 ) (*broker, kmsg.Response, error) {
 
 	r := cl.retriableBrokerFn(coordinator)
-	r.parseErr = func(resp kmsg.Response) error {
+	r.parseRetryErr = func(resp kmsg.Response) error {
 		var code int16
 		switch t := resp.(type) {
 
@@ -970,9 +974,10 @@ func (cl *Client) handleReqWithCoordinator(
 		}
 		// Describe and Delete handled in sharding.
 
-		err := kerr.ErrorForCode(code)
-		cl.maybeDeleteStaleCoordinator(name, typ, err)
-		return err
+		if err := kerr.ErrorForCode(code); cl.maybeDeleteStaleCoordinator(name, typ, err) {
+			return err
+		}
+		return nil
 	}
 
 	resp, err := r.Request(ctx, req)
