@@ -63,6 +63,10 @@ type waitingResp struct {
 	err     error
 }
 
+var unknownMetadata = BrokerMetadata{
+	NodeID: -1,
+}
+
 // BrokerMetadata is metadata for a broker.
 //
 // This struct mirrors kmsg.MetadataResponseBroker.
