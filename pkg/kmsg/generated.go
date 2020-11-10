@@ -3757,6 +3757,7 @@ type ListOffsetsRequestTopicPartition struct {
 // if new fields are added to ListOffsetsRequestTopicPartition.
 func (v *ListOffsetsRequestTopicPartition) Default() {
 	v.CurrentLeaderEpoch = -1
+	v.MaxNumOffsets = 1
 }
 
 // NewListOffsetsRequestTopicPartition returns a default ListOffsetsRequestTopicPartition
@@ -27913,10 +27914,7 @@ func NewBeginQuorumEpochResponse() BeginQuorumEpochResponse {
 type EndQuorumEpochRequestTopicPartition struct {
 	Partition int32
 
-	// The ID of the replica sending this request.
-	ReplicaID int32
-
-	// The current leader ID, or -1 if there is a vote in progress.
+	// The current leader ID that is resigning.
 	LeaderID int32
 
 	// The current epoch.
@@ -28018,10 +28016,6 @@ func (v *EndQuorumEpochRequest) AppendTo(dst []byte) []byte {
 						dst = kbin.AppendInt32(dst, v)
 					}
 					{
-						v := v.ReplicaID
-						dst = kbin.AppendInt32(dst, v)
-					}
-					{
 						v := v.LeaderID
 						dst = kbin.AppendInt32(dst, v)
 					}
@@ -28090,10 +28084,6 @@ func (v *EndQuorumEpochRequest) ReadFrom(src []byte) error {
 					{
 						v := b.Int32()
 						s.Partition = v
-					}
-					{
-						v := b.Int32()
-						s.ReplicaID = v
 					}
 					{
 						v := b.Int32()
