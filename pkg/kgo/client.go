@@ -838,6 +838,8 @@ func (cl *Client) handleAdminReq(ctx context.Context, req kmsg.Request) Response
 			code = t.ErrorCode
 		case *kmsg.UpdateFeaturesResponse:
 			code = t.ErrorCode
+		case *kmsg.EnvelopeResponse:
+			code = t.ErrorCode
 		}
 		if err := kerr.ErrorForCode(code); err == kerr.NotController {
 			// There must be a last broker if we were able to issue

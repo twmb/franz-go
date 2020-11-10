@@ -434,5 +434,10 @@ func Tip() Versions {
 		0, // 57 update features
 	)
 
+	// KAFKA-10181 KAFKA-10181 KIP-590
+	v = append(v,
+		0, // 58 envelope
+	)
+
 	return v
 }

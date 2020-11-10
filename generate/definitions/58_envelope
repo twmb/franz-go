@@ -1,0 +1,19 @@
+// Introduced for KIP-590, EnvelopeRequest is what brokers use to wrap an
+// incoming request before forwarding it to another broker.
+EnvelopeRequest => key 58, max version 0, flexible v0+, admin
+  // The embedded request header and data.
+  RequestData: bytes
+  // Value of the initial client principal when the request is redirected by a broker.
+  RequestPrincipal: nullable-bytes
+  // The original client's address in bytes.
+  ClientHostAddress: bytes
+
+EnvelopeResponse =>
+  // The embedded response header and data.
+  ResponseData: nullable-bytes
+  // The error code, or 0 if there was no error.
+  //
+  // NOT_CONTROLLER is returned when the request is not sent to the controller.
+  //
+  // CLUSTER_AUTHORIZATION_FAILED is returned if inter-broker authorization failed.
+  ErrorCode: int16

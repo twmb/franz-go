@@ -395,3 +395,14 @@ GroupMemberAssignment => not top level
     Partitions: [int32]
   // UserData is arbitrary client data for a given client in the group.
   UserData: bytes
+
+// DefaultPrincipalData is the encoded princpal data. This is used in an
+// envelope request from broker to broker.
+DefaultPrincipalData => not top level, with version field, flexible v0+
+  Version: int16
+  // The principal type.
+  Type: string
+  // The principal name.
+  Name: string
+  // Whether the principal was authenticated by a delegation token on the forwarding broker.
+  TokenAuthenticated: bool
