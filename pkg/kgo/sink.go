@@ -614,7 +614,7 @@ func (s *sink) handleReqResp(req *produceRequest, resp kmsg.Response, err error)
 						"err", err,
 					)
 					s.cl.failProducerID(req.producerID, req.producerEpoch, err)
-					s.cl.finishBatch(batch.recBatch, partition, rPartition.BaseOffset, err)
+					s.cl.finishBatch(batch.recBatch, req.producerID, req.producerEpoch, partition, rPartition.BaseOffset, err)
 					continue
 				}
 				if s.cl.cfg.onDataLoss != nil {
@@ -676,7 +676,7 @@ func (s *sink) handleReqResp(req *produceRequest, resp kmsg.Response, err error)
 						"max_retries_reached", batch.tries == s.cl.cfg.retries,
 					)
 				}
-				s.cl.finishBatch(batch.recBatch, partition, rPartition.BaseOffset, err)
+				s.cl.finishBatch(batch.recBatch, req.producerID, req.producerEpoch, partition, rPartition.BaseOffset, err)
 			}
 		}
 
@@ -704,7 +704,7 @@ func (s *sink) handleReqResp(req *produceRequest, resp kmsg.Response, err error)
 //
 // This is safe even if the owning recBuf migrated sinks, since we are
 // finishing based off the status of an inflight req from the original sink.
-func (cl *Client) finishBatch(batch *recBatch, partition int32, baseOffset int64, err error) {
+func (cl *Client) finishBatch(batch *recBatch, producerID int64, producerEpoch int16, partition int32, baseOffset int64, err error) {
 	recBuf := batch.owner
 	recBuf.mu.Lock()
 	defer recBuf.mu.Unlock()
@@ -733,6 +733,8 @@ func (cl *Client) finishBatch(batch *recBatch, partition int32, baseOffset int64
 	for i, pnr := range batch.records {
 		pnr.Offset = baseOffset + int64(i)
 		pnr.Partition = partition
+		pnr.ProducerID = producerID
+		pnr.ProducerEpoch = producerEpoch
 		cl.finishRecordPromise(pnr.promisedRec, err)
 		batch.records[i] = noPNR
 	}

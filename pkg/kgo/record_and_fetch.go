@@ -88,9 +88,6 @@ type Record struct {
 	// This field is always set in Produce.
 	Timestamp time.Time
 
-	// Attrs specifies what attributes were on this record.
-	Attrs RecordAttrs
-
 	// Topic is the topic that a record is written to.
 	//
 	// This must be set for producing.
@@ -98,10 +95,26 @@ type Record struct {
 
 	// Partition is the partition that a record is written to.
 	//
-	// For producing, this is left unset. If acks are required, this field
-	// will be filled in before the produce callback if the produce is
-	// successful.
+	// For producing, this is left unset. This will be set by the client
+	// as appropriate.
 	Partition int32
+
+	// Attrs specifies what attributes were on this record.
+	Attrs RecordAttrs
+
+	// ProducerEpoch is the producer epoch of this message if it was
+	// produced with a producer ID. An epoch and ID of 0 means it was not.
+	//
+	// For producing, this is left unset. This will be set by the client
+	// as appropriate.
+	ProducerEpoch int16
+
+	// ProducerEpoch is the producer ID of this message if it was produced
+	// with a producer ID. An epoch and ID of 0 means it was not.
+	//
+	// For producing, this is left unset. This will be set by the client
+	// as appropriate.
+	ProducerID int64
 
 	// LeaderEpoch is the leader epoch of the broker at the time this
 	// record was written, or -1 if on message sets.
@@ -109,9 +122,8 @@ type Record struct {
 
 	// Offset is the offset that a record is written as.
 	//
-	// For producing, this is left unset. If acks are required, this field
-	// will be filled in before the produce callback if the produce is
-	// successful.
+	// For producing, this is left unset. This will be set by the client
+	// as appropriate.
 	Offset int64
 }
 
