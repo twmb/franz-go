@@ -434,7 +434,7 @@ func (cl *Client) Close() {
 // request has no transactional ID, the request goes to any broker.
 //
 // Some requests need to be split and sent to many brokers. For these requests,
-// it is *highly* recommended to use ShardedRequest. Not all responses from
+// it is *highly* recommended to use RequestSharded. Not all responses from
 // many brokers can be cleanly merged. However, for the requests that are
 // split, this does attempt to merge them in a sane way.
 //
@@ -519,9 +519,9 @@ start:
 	return resp, err
 }
 
-// ShardedResponse ties together a request with either the response it received
+// ResponseShard ties together a request with either the response it received
 // or an error that prevented a response from being received.
-type ShardedResponse struct {
+type ResponseShard struct {
 	// Meta contains the broker that this request was issued to, or an
 	// unknown (node ID -1) metadata if the request could not be issued.
 	//
@@ -540,12 +540,12 @@ type ShardedResponse struct {
 	Err error
 }
 
-// ShardedRequest performs the same logic as Request, but returns all responses
+// RequestSharded performs the same logic as Request, but returns all responses
 // from any broker that the request was split to. This always returns at least
 // one shard.
 //
 // There are only a few requests that are strongly recommended to explicitly
-// use ShardedRequest; the rest can by default use Request. These few requests
+// use RequestSharded; the rest can by default use Request. These few requests
 // are mentioned in the documentation for Request.
 //
 // If, in the process of splitting a request, some topics or partitions are
@@ -553,14 +553,14 @@ type ShardedResponse struct {
 // that does not exist, all those non-existent pieces are grouped into one
 // request to the first seed broker. This will show up as a seed broker node ID
 // (min int32) and the response will likely contain purely errors.
-func (cl *Client) ShardedRequest(ctx context.Context, req kmsg.Request) []ShardedResponse {
+func (cl *Client) RequestSharded(ctx context.Context, req kmsg.Request) []ResponseShard {
 	resps, _ := cl.shardedRequest(ctx, req)
 	return resps
 }
 
-type shardMerge func([]ShardedResponse) (kmsg.Response, error)
+type shardMerge func([]ResponseShard) (kmsg.Response, error)
 
-func (cl *Client) shardedRequest(ctx context.Context, req kmsg.Request) ([]ShardedResponse, shardMerge) {
+func (cl *Client) shardedRequest(ctx context.Context, req kmsg.Request) ([]ResponseShard, shardMerge) {
 	ctx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
 	defer close(done)
@@ -630,14 +630,14 @@ func (cl *Client) shardedRequest(ctx context.Context, req kmsg.Request) ([]Shard
 	return shards(shard(r.last, req, resp, err)), nil
 }
 
-func shard(br *broker, req kmsg.Request, resp kmsg.Response, err error) ShardedResponse {
+func shard(br *broker, req kmsg.Request, resp kmsg.Response, err error) ResponseShard {
 	if br == nil { // the broker could be nil if loading the broker failed.
-		return ShardedResponse{unknownMetadata, req, resp, err}
+		return ResponseShard{unknownMetadata, req, resp, err}
 	}
-	return ShardedResponse{br.meta, req, resp, err}
+	return ResponseShard{br.meta, req, resp, err}
 }
 
-func shards(shard ...ShardedResponse) []ShardedResponse {
+func shards(shard ...ResponseShard) []ResponseShard {
 	return shard
 }
 
@@ -791,7 +791,7 @@ func (cl *Client) loadCoordinators(reload bool, typ int8, names ...string) (map[
 	return m, errQuit
 }
 
-func (cl *Client) handleAdminReq(ctx context.Context, req kmsg.Request) ShardedResponse {
+func (cl *Client) handleAdminReq(ctx context.Context, req kmsg.Request) ResponseShard {
 	// Loading a controller can perform some wait; we accept that and do
 	// not account for the retries or the time to load the controller as
 	// part of the retries / time to issue the req.
@@ -853,7 +853,7 @@ func (cl *Client) handleAdminReq(ctx context.Context, req kmsg.Request) ShardedR
 }
 
 // handleCoordinatorEq issues simple (non-shardable) group or txn requests.
-func (cl *Client) handleCoordinatorReq(ctx context.Context, req kmsg.Request, typ int8) ShardedResponse {
+func (cl *Client) handleCoordinatorReq(ctx context.Context, req kmsg.Request, typ int8) ResponseShard {
 	switch t := req.(type) {
 	default:
 		// All group requests should be listed below, so if it isn't,
@@ -908,7 +908,7 @@ func (cl *Client) handleCoordinatorReq(ctx context.Context, req kmsg.Request, ty
 //
 // The error is inspected to see if it is a retriable error and, if so, the
 // coordinator is deleted.
-func (cl *Client) handleCoordinatorReqSimple(ctx context.Context, typ int8, name string, req kmsg.Request) ShardedResponse {
+func (cl *Client) handleCoordinatorReqSimple(ctx context.Context, typ int8, name string, req kmsg.Request) ResponseShard {
 	coordinator, resp, err := cl.handleReqWithCoordinator(ctx, func() (*broker, error) {
 		return cl.loadCoordinator(false, ctx, coordinatorKey{
 			name: name,
@@ -1143,12 +1143,12 @@ type sharder interface {
 
 	// merge is a function that can be used to merge sharded responses into
 	// one response. This is used by the client.Request method.
-	merge([]ShardedResponse) (kmsg.Response, error)
+	merge([]ResponseShard) (kmsg.Response, error)
 }
 
 // handleShardedReq splits and issues requests to brokers, recursively
 // splitting as necessary if requests fail and need remapping.
-func (cl *Client) handleShardedReq(ctx context.Context, req kmsg.Request) ([]ShardedResponse, shardMerge) {
+func (cl *Client) handleShardedReq(ctx context.Context, req kmsg.Request) ([]ResponseShard, shardMerge) {
 
 	// First, determine our sharder.
 	var sharder sharder
@@ -1187,9 +1187,9 @@ func (cl *Client) handleShardedReq(ctx context.Context, req kmsg.Request) ([]Sha
 
 	var (
 		shardsMu sync.Mutex
-		shards   []ShardedResponse
+		shards   []ResponseShard
 
-		addShard = func(shard ShardedResponse) {
+		addShard = func(shard ResponseShard) {
 			shardsMu.Lock()
 			defer shardsMu.Unlock()
 			shards = append(shards, shard)
@@ -1281,8 +1281,8 @@ func (cl *Client) handleShardedReq(ctx context.Context, req kmsg.Request) ([]Sha
 	return shards, sharder.merge
 }
 
-// a convenience function for saving the first ShardedResponse error.
-func firstErrMerger(sresps []ShardedResponse, merge func(kresp kmsg.Response)) error {
+// a convenience function for saving the first ResponseShard error.
+func firstErrMerger(sresps []ResponseShard, merge func(kresp kmsg.Response)) error {
 	var firstErr error
 	for _, sresp := range sresps {
 		if sresp.Err != nil {
@@ -1401,7 +1401,7 @@ func (cl *listOffsetsSharder) shard(ctx context.Context, kreq kmsg.Request) ([]i
 
 func (cl *listOffsetsSharder) onResp(kreq kmsg.Response) {} // metadata could be stale, but no cleanup we can do
 
-func (cl *listOffsetsSharder) merge(sresps []ShardedResponse) (kmsg.Response, error) {
+func (cl *listOffsetsSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
 	merged := new(kmsg.ListOffsetsResponse)
 	topics := make(map[string][]kmsg.ListOffsetsResponseTopicPartition)
 
@@ -1467,7 +1467,7 @@ func (cl *describeGroupsSharder) onResp(kresp kmsg.Response) { // cleanup any st
 	}
 }
 
-func (cl *describeGroupsSharder) merge(sresps []ShardedResponse) (kmsg.Response, error) {
+func (cl *describeGroupsSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
 	merged := new(kmsg.DescribeGroupsResponse)
 
 	return merged, firstErrMerger(sresps, func(kresp kmsg.Response) {
@@ -1507,7 +1507,7 @@ func (cl *listGroupsSharder) shard(ctx context.Context, kreq kmsg.Request) ([]is
 
 func (cl *listGroupsSharder) onResp(kresp kmsg.Response) {} // nothing to be done here
 
-func (cl *listGroupsSharder) merge(sresps []ShardedResponse) (kmsg.Response, error) {
+func (cl *listGroupsSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
 	merged := new(kmsg.ListGroupsResponse)
 
 	return merged, firstErrMerger(sresps, func(kresp kmsg.Response) {
@@ -1590,7 +1590,7 @@ func (cl *deleteRecordsSharder) shard(ctx context.Context, kreq kmsg.Request) ([
 
 func (cl *deleteRecordsSharder) onResp(kmsg.Response) {} // nothing to be done here
 
-func (cl *deleteRecordsSharder) merge(sresps []ShardedResponse) (kmsg.Response, error) {
+func (cl *deleteRecordsSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
 	merged := new(kmsg.DeleteRecordsResponse)
 	topics := make(map[string][]kmsg.DeleteRecordsResponseTopicPartition)
 
@@ -1681,7 +1681,7 @@ func (cl *offsetForLeaderEpochSharder) shard(ctx context.Context, kreq kmsg.Requ
 
 func (cl *offsetForLeaderEpochSharder) onResp(kmsg.Response) {}
 
-func (cl *offsetForLeaderEpochSharder) merge(sresps []ShardedResponse) (kmsg.Response, error) {
+func (cl *offsetForLeaderEpochSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
 	merged := new(kmsg.OffsetForLeaderEpochResponse)
 	topics := make(map[string][]kmsg.OffsetForLeaderEpochResponseTopicPartition)
 
@@ -1759,7 +1759,7 @@ func (cl *describeConfigsSharder) shard(ctx context.Context, kreq kmsg.Request) 
 
 func (cl *describeConfigsSharder) onResp(kmsg.Response) {}
 
-func (cl *describeConfigsSharder) merge(sresps []ShardedResponse) (kmsg.Response, error) {
+func (cl *describeConfigsSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
 	merged := new(kmsg.DescribeConfigsResponse)
 
 	return merged, firstErrMerger(sresps, func(kresp kmsg.Response) {
@@ -1824,7 +1824,7 @@ func (cl *alterConfigsSharder) shard(ctx context.Context, kreq kmsg.Request) ([]
 
 func (cl *alterConfigsSharder) onResp(kmsg.Response) {}
 
-func (cl *alterConfigsSharder) merge(sresps []ShardedResponse) (kmsg.Response, error) {
+func (cl *alterConfigsSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
 	merged := new(kmsg.AlterConfigsResponse)
 
 	return merged, firstErrMerger(sresps, func(kresp kmsg.Response) {
@@ -1937,7 +1937,7 @@ func (cl *alterReplicaLogDirsSharder) shard(ctx context.Context, kreq kmsg.Reque
 func (cl *alterReplicaLogDirsSharder) onResp(kmsg.Response) {}
 
 // merge does not make sense for this function, but we provide a one anyway.
-func (cl *alterReplicaLogDirsSharder) merge(sresps []ShardedResponse) (kmsg.Response, error) {
+func (cl *alterReplicaLogDirsSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
 	merged := new(kmsg.AlterReplicaLogDirsResponse)
 	topics := make(map[string][]kmsg.AlterReplicaLogDirsResponseTopicPartition)
 
@@ -2030,7 +2030,7 @@ func (cl *describeLogDirsSharder) onResp(kmsg.Response) {}
 
 // merge does not make sense for this function, but we provide one anyway.
 // We lose the error code for directories.
-func (cl *describeLogDirsSharder) merge(sresps []ShardedResponse) (kmsg.Response, error) {
+func (cl *describeLogDirsSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
 	merged := new(kmsg.DescribeLogDirsResponse)
 	dirs := make(map[string]map[string][]kmsg.DescribeLogDirsResponseDirTopicPartition)
 
@@ -2107,7 +2107,7 @@ func (cl *deleteGroupsSharder) onResp(kresp kmsg.Response) {
 	}
 }
 
-func (cl *deleteGroupsSharder) merge(sresps []ShardedResponse) (kmsg.Response, error) {
+func (cl *deleteGroupsSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
 	merged := new(kmsg.DeleteGroupsResponse)
 
 	return merged, firstErrMerger(sresps, func(kresp kmsg.Response) {
@@ -2172,7 +2172,7 @@ func (cl *incrementalAlterConfigsSharder) shard(ctx context.Context, kreq kmsg.R
 
 func (cl *incrementalAlterConfigsSharder) onResp(kmsg.Response) {}
 
-func (cl *incrementalAlterConfigsSharder) merge(sresps []ShardedResponse) (kmsg.Response, error) {
+func (cl *incrementalAlterConfigsSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
 	merged := new(kmsg.IncrementalAlterConfigsResponse)
 
 	return merged, firstErrMerger(sresps, func(kresp kmsg.Response) {
