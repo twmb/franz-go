@@ -414,6 +414,9 @@ func main() {
 		} else if !s.Anonymous && !s.WithNoEncoding {
 			s.WriteAppendFunc(l)
 			s.WriteDecodeFunc(l)
+			if s.FromFlexible {
+				s.WriteIsFlexibleFunc(l)
+			}
 		}
 
 		// everything gets a default and new function
