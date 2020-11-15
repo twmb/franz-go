@@ -49,10 +49,9 @@ fmt.Println(len(res.Topics))
 ## Why franz-go?
 
 - Only Kafka client available for Go that supports all Kafka features (also easy to maintain thanks to code generation)
-- Provides access to low level features such as issuing specific Kafka requests
+- Provides low level functionality (such as sending API requests) as well as high level functionality (e.g. consuming in groups)
 - Utilizes modern & idiomatic Go (support for contexts, variadic configuration options, ...)
 - Highly performant (benchmarks will be added)
-- Provides low level functionality (such as sending API requests) as well as high level functionality (e.g. consuming in groups)
 
 ## Stability Status
 
