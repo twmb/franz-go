@@ -2,11 +2,14 @@ franz-go
 ===
 
 [![GoDev](https://img.shields.io/static/v1?label=godev&message=reference&color=00add8)][godev]
+![GitHub](https://img.shields.io/github/license/twmb/franz-go)
+![GitHub tag (latest SemVer)](https://img.shields.io/github/v/tag/twmb/franz-go)
+[![Discord Chat](https://img.shields.io/badge/discord-online-brightgreen.svg)](https://discord.gg/K4R5c8zsMS)
 
 [godev]: https://pkg.go.dev/github.com/twmb/franz-go/pkg/kgo
 
-Franz-go is an all-encompassing Kafka client fully written Go. This library aims to provide **every Kafka feature** from version
-0.8.0+.
+Franz-go is an all-encompassing Kafka client fully written Go. This library aims to provide **every Kafka feature** from 
+Apache Kafka v0.8.0 onward.
 
 ## Getting started
 
@@ -36,14 +39,9 @@ if err != nil {
 fmt.Println(len(res.Topics))
 ```
 
-**General:**
-
 - Take a look at [more examples](./examples) 
 - [Architecture documentation](./docs/architecture.md) describing all Franz-go package purposes
 - Reference docs [https://pkg.go.dev/github.com/twmb/franz-go/pkg/kgo](https://pkg.go.dev/github.com/twmb/franz-go/pkg/kgo)
-
-**By Usecase:**
-
 - Consuming in [Consumer Groups](./docs/consumer-groups.md)
 - [Producing](./docs/producer.md)
 - Sending [admin requests](./docs/admin-requests.md)
@@ -53,6 +51,8 @@ fmt.Println(len(res.Topics))
 - Only Kafka client available for Go that supports all Kafka features (also easy to maintain thanks to code generation)
 - Provides access to low level features such as issuing specific Kafka requests
 - Utilizes modern & idiomatic Go (support for contexts, variadic configuration options, ...)
+- Highly performant (benchmarks will be added)
+- Provides low level functionality (such as sending API requests) as well as high level functionality (e.g. consuming in groups)
 
 ## Stability Status
 
