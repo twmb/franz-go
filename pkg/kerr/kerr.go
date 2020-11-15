@@ -140,6 +140,7 @@ var (
 	InconsistentVoterSet               = &Error{"INCONSISTENT_VOTER_SET", 94, false, "Indicates that either the sender or recipient of a voter-only request is not one of the expected voters."}
 	InvalidUpdateVersion               = &Error{"INVALID_UPDATE_VERSION", 95, false, "The given update version was invalid."}
 	FeatureUpdateFailed                = &Error{"FEATURE_UPDATE_FAILED", 96, false, "Unable to update finalized features due to an unexpected server error."}
+	PrincipalDeserializationFailure    = &Error{"PRINCIPAL_DESERIALIZATION_FAILURE", 97, false, "Request principal deserialization failed during forwarding. This indicates an internal error on the broker cluster security setup."}
 )
 
 var code2err = map[int16]error{
@@ -241,4 +242,5 @@ var code2err = map[int16]error{
 	94: InconsistentVoterSet,
 	95: InvalidUpdateVersion,
 	96: FeatureUpdateFailed,
+	97: PrincipalDeserializationFailure,
 }

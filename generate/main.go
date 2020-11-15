@@ -414,6 +414,9 @@ func main() {
 		} else if !s.Anonymous && !s.WithNoEncoding {
 			s.WriteAppendFunc(l)
 			s.WriteDecodeFunc(l)
+			if s.FromFlexible {
+				s.WriteIsFlexibleFunc(l)
+			}
 		}
 
 		// everything gets a default and new function
@@ -457,6 +460,7 @@ func main() {
 	for _, e := range newEnums {
 		e.WriteDefn(l)
 		e.WriteStringFunc(l)
+		e.WriteConsts(l)
 	}
 
 	fmt.Println(l.buf.String())

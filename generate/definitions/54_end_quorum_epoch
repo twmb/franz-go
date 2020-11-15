@@ -10,9 +10,7 @@ EndQuorumEpochRequest => key 54, max version 0, admin
     Topic: string
     Partitions: [=>]
       Partition: int32
-      // The ID of the replica sending this request.
-      ReplicaID: int32
-      // The current leader ID, or -1 if there is a vote in progress.
+      // The current leader ID that is resigning.
       LeaderID: int32
       // The current epoch.
       LeaderEpoch: int32

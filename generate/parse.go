@@ -319,6 +319,13 @@ func parseFieldLength(in string) (string, int, error) {
 	return lr[0], length, nil
 }
 
+// 0: entire thing
+// 1: name
+// 2: "no encoding" if present
+// 3: "with (encoded )? version field" if present
+// 5: flexible version, if 2 is present
+var notTopLevelRe = regexp.MustCompile(`^([A-Za-z0-9]+) => not top level(?:, (?:(no encoding)|(with version field)(?:, flexible v(\d+)\+)?))?$`)
+
 // Parse parses the raw contents of a messages file and adds all newly
 // parsed structs to newStructs.
 func Parse(raw []byte) {
@@ -360,14 +367,30 @@ func Parse(raw []byte) {
 		topLevel := true
 		withVersionField, withNoEncoding := false, false
 
-		name := strings.TrimSuffix(line, " => not top level")
-		if withVersion := strings.TrimSuffix(name, " => not top level, with version field"); withVersion != name {
-			name = withVersion
-			withVersionField = true
-		}
-		if noEncoding := strings.TrimSuffix(name, " => not top level, no encoding"); noEncoding != name {
-			name = noEncoding
+		flexibleAt := -1
+		fromFlexible := false
+
+		nameMatch := notTopLevelRe.FindStringSubmatch(line)
+
+		name := line
+		switch {
+		case len(nameMatch) == 0:
+		case nameMatch[2] != "":
+			name = nameMatch[1]
 			withNoEncoding = true
+		case nameMatch[3] != "":
+			name = nameMatch[1]
+			withVersionField = true
+			if nameMatch[4] != "" {
+				flexible, err := strconv.Atoi(nameMatch[4])
+				if err != nil || flexible < 0 {
+					die("flexible version on line %q parse err: %v", line, err)
+				}
+				flexibleAt = flexible
+				fromFlexible = true
+			}
+		default: // simply "not top level"
+			name = nameMatch[1]
 		}
 
 		key := -1
@@ -377,6 +400,11 @@ func Parse(raw []byte) {
 			s.WithVersionField = withVersionField
 			s.WithNoEncoding = withNoEncoding
 			s.Key = key
+			if !topLevel && fromFlexible {
+				s.FromFlexible = fromFlexible
+				s.FlexibleAt = flexibleAt
+			}
+
 			s.BuildFrom(scanner, key, 0)
 			types[name] = s
 			newStructs = append(newStructs, s)
@@ -443,7 +471,7 @@ func Parse(raw []byte) {
 				die("missing flexible text on string ending with + in %q", rem)
 			} else {
 				flexible, err := strconv.Atoi(rem[idx+len(flexibleStr) : len(rem)-1])
-				if err != nil {
+				if err != nil || flexible < 0 {
 					die("flexible version on line %q parse err: %v", line, err)
 				}
 				s.FlexibleAt = flexible

@@ -10,7 +10,7 @@ import (
 
 // MaxKey is the maximum key used for any messages in this package.
 // Note that this value will change as Kafka adds more messages.
-const MaxKey = 57
+const MaxKey = 58
 
 // MessageV0 is the message format Kafka used prior to 0.10.
 //
@@ -751,8 +751,9 @@ func (v *OffsetCommitKey) AppendTo(dst []byte) []byte {
 func (v *OffsetCommitKey) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
-	version := b.Int16()
-	v.Version = version
+	v.Version = b.Int16()
+	version := v.Version
+	_ = version
 	s := v
 	{
 		v := b.String()
@@ -847,8 +848,9 @@ func (v *OffsetCommitValue) AppendTo(dst []byte) []byte {
 func (v *OffsetCommitValue) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
-	version := b.Int16()
-	v.Version = version
+	v.Version = b.Int16()
+	version := v.Version
+	_ = version
 	s := v
 	{
 		v := b.Int64()
@@ -915,8 +917,9 @@ func (v *GroupMetadataKey) AppendTo(dst []byte) []byte {
 func (v *GroupMetadataKey) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
-	version := b.Int16()
-	v.Version = version
+	v.Version = b.Int16()
+	version := v.Version
+	_ = version
 	s := v
 	{
 		v := b.String()
@@ -1087,8 +1090,9 @@ func (v *GroupMetadataValue) AppendTo(dst []byte) []byte {
 func (v *GroupMetadataValue) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
-	version := b.Int16()
-	v.Version = version
+	v.Version = b.Int16()
+	version := v.Version
+	_ = version
 	s := v
 	{
 		v := b.String()
@@ -1203,8 +1207,9 @@ func (v *TxnMetadataKey) AppendTo(dst []byte) []byte {
 func (v *TxnMetadataKey) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
-	version := b.Int16()
-	v.Version = version
+	v.Version = b.Int16()
+	version := v.Version
+	_ = version
 	s := v
 	{
 		v := b.String()
@@ -1347,8 +1352,9 @@ func (v *TxnMetadataValue) AppendTo(dst []byte) []byte {
 func (v *TxnMetadataValue) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
-	version := b.Int16()
-	v.Version = version
+	v.Version = b.Int16()
+	version := v.Version
+	_ = version
 	s := v
 	{
 		v := b.Int64()
@@ -1574,8 +1580,9 @@ func (v *GroupMemberMetadata) AppendTo(dst []byte) []byte {
 func (v *GroupMemberMetadata) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
-	version := b.Int16()
-	v.Version = version
+	v.Version = b.Int16()
+	version := v.Version
+	_ = version
 	s := v
 	{
 		v := s.Topics
@@ -1789,6 +1796,106 @@ func NewGroupMemberAssignment() GroupMemberAssignment {
 	return v
 }
 
+// DefaultPrincipalData is the encoded princpal data. This is used in an
+// envelope request from broker to broker.
+type DefaultPrincipalData struct {
+	Version int16
+
+	// The principal type.
+	Type string
+
+	// The principal name.
+	Name string
+
+	// Whether the principal was authenticated by a delegation token on the forwarding broker.
+	TokenAuthenticated bool
+}
+
+func (v *DefaultPrincipalData) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	isFlexible := version >= 0
+	_ = isFlexible
+	{
+		v := v.Version
+		dst = kbin.AppendInt16(dst, v)
+	}
+	{
+		v := v.Type
+		if isFlexible {
+			dst = kbin.AppendCompactString(dst, v)
+		} else {
+			dst = kbin.AppendString(dst, v)
+		}
+	}
+	{
+		v := v.Name
+		if isFlexible {
+			dst = kbin.AppendCompactString(dst, v)
+		} else {
+			dst = kbin.AppendString(dst, v)
+		}
+	}
+	{
+		v := v.TokenAuthenticated
+		dst = kbin.AppendBool(dst, v)
+	}
+	if isFlexible {
+		dst = append(dst, 0)
+	}
+	return dst
+}
+func (v *DefaultPrincipalData) ReadFrom(src []byte) error {
+	v.Default()
+	b := kbin.Reader{Src: src}
+	v.Version = b.Int16()
+	version := v.Version
+	_ = version
+	isFlexible := version >= 0
+	_ = isFlexible
+	s := v
+	{
+		var v string
+		if isFlexible {
+			v = b.CompactString()
+		} else {
+			v = b.String()
+		}
+		s.Type = v
+	}
+	{
+		var v string
+		if isFlexible {
+			v = b.CompactString()
+		} else {
+			v = b.String()
+		}
+		s.Name = v
+	}
+	{
+		v := b.Bool()
+		s.TokenAuthenticated = v
+	}
+	if isFlexible {
+		SkipTags(&b)
+	}
+	return b.Complete()
+}
+func (v *DefaultPrincipalData) IsFlexible() bool { return v.Version >= 0 }
+
+// Default sets any default fields. Calling this allows for future compatibility
+// if new fields are added to DefaultPrincipalData.
+func (v *DefaultPrincipalData) Default() {
+}
+
+// NewDefaultPrincipalData returns a default DefaultPrincipalData
+// This is a shortcut for creating a struct and calling Default yourself.
+func NewDefaultPrincipalData() DefaultPrincipalData {
+	var v DefaultPrincipalData
+	v.Default()
+	return v
+}
+
 type ProduceRequestTopicPartition struct {
 	// Partition is a partition to send a record batch to.
 	Partition int32
@@ -1928,9 +2035,9 @@ func (v *ProduceRequest) AppendTo(dst []byte) []byte {
 }
 func (v *ProduceRequest) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
-	b := kbin.Reader{Src: src}
 	s := v
 	if version >= 3 {
 		v := b.NullableString()
@@ -2273,9 +2380,9 @@ func (v *ProduceResponse) AppendTo(dst []byte) []byte {
 }
 func (v *ProduceResponse) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := s.Topics
@@ -2741,11 +2848,11 @@ func (v *FetchRequest) AppendTo(dst []byte) []byte {
 }
 func (v *FetchRequest) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 12
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := b.Int32()
@@ -3398,11 +3505,11 @@ func (v *FetchResponse) AppendTo(dst []byte) []byte {
 }
 func (v *FetchResponse) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 12
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	if version >= 1 {
 		v := b.Int32()
@@ -3650,6 +3757,7 @@ type ListOffsetsRequestTopicPartition struct {
 // if new fields are added to ListOffsetsRequestTopicPartition.
 func (v *ListOffsetsRequestTopicPartition) Default() {
 	v.CurrentLeaderEpoch = -1
+	v.MaxNumOffsets = 1
 }
 
 // NewListOffsetsRequestTopicPartition returns a default ListOffsetsRequestTopicPartition
@@ -3773,9 +3881,9 @@ func (v *ListOffsetsRequest) AppendTo(dst []byte) []byte {
 }
 func (v *ListOffsetsRequest) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := b.Int32()
@@ -4046,9 +4154,9 @@ func (v *ListOffsetsResponse) AppendTo(dst []byte) []byte {
 }
 func (v *ListOffsetsResponse) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
-	b := kbin.Reader{Src: src}
 	s := v
 	if version >= 2 {
 		v := b.Int32()
@@ -4271,11 +4379,11 @@ func (v *MetadataRequest) AppendTo(dst []byte) []byte {
 }
 func (v *MetadataRequest) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 9
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := s.Topics
@@ -4684,11 +4792,11 @@ func (v *MetadataResponse) AppendTo(dst []byte) []byte {
 }
 func (v *MetadataResponse) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 9
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	if version >= 3 {
 		v := b.Int32()
@@ -5295,11 +5403,11 @@ func (v *LeaderAndISRRequest) AppendTo(dst []byte) []byte {
 }
 func (v *LeaderAndISRRequest) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 4
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := b.Int32()
@@ -5755,11 +5863,11 @@ func (v *LeaderAndISRResponse) AppendTo(dst []byte) []byte {
 }
 func (v *LeaderAndISRResponse) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 4
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := b.Int16()
@@ -6013,11 +6121,11 @@ func (v *StopReplicaRequest) AppendTo(dst []byte) []byte {
 }
 func (v *StopReplicaRequest) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 2
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := b.Int32()
@@ -6247,11 +6355,11 @@ func (v *StopReplicaResponse) AppendTo(dst []byte) []byte {
 }
 func (v *StopReplicaResponse) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 2
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := b.Int16()
@@ -6718,11 +6826,11 @@ func (v *UpdateMetadataRequest) AppendTo(dst []byte) []byte {
 }
 func (v *UpdateMetadataRequest) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 6
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := b.Int32()
@@ -7144,11 +7252,11 @@ func (v *UpdateMetadataResponse) AppendTo(dst []byte) []byte {
 }
 func (v *UpdateMetadataResponse) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 6
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := b.Int16()
@@ -7239,11 +7347,11 @@ func (v *ControlledShutdownRequest) AppendTo(dst []byte) []byte {
 }
 func (v *ControlledShutdownRequest) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 3
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := b.Int32()
@@ -7361,11 +7469,11 @@ func (v *ControlledShutdownResponse) AppendTo(dst []byte) []byte {
 }
 func (v *ControlledShutdownResponse) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 3
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := b.Int16()
@@ -7659,11 +7767,11 @@ func (v *OffsetCommitRequest) AppendTo(dst []byte) []byte {
 }
 func (v *OffsetCommitRequest) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 8
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		var v string
@@ -7972,11 +8080,11 @@ func (v *OffsetCommitResponse) AppendTo(dst []byte) []byte {
 }
 func (v *OffsetCommitResponse) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 8
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	if version >= 3 {
 		v := b.Int32()
@@ -8202,11 +8310,11 @@ func (v *OffsetFetchRequest) AppendTo(dst []byte) []byte {
 }
 func (v *OffsetFetchRequest) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 6
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		var v string
@@ -8491,11 +8599,11 @@ func (v *OffsetFetchResponse) AppendTo(dst []byte) []byte {
 }
 func (v *OffsetFetchResponse) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 6
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	if version >= 3 {
 		v := b.Int32()
@@ -8679,11 +8787,11 @@ func (v *FindCoordinatorRequest) AppendTo(dst []byte) []byte {
 }
 func (v *FindCoordinatorRequest) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 3
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		var v string
@@ -8817,11 +8925,11 @@ func (v *FindCoordinatorResponse) AppendTo(dst []byte) []byte {
 }
 func (v *FindCoordinatorResponse) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 3
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	if version >= 1 {
 		v := b.Int32()
@@ -9078,11 +9186,11 @@ func (v *JoinGroupRequest) AppendTo(dst []byte) []byte {
 }
 func (v *JoinGroupRequest) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 6
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		var v string
@@ -9416,11 +9524,11 @@ func (v *JoinGroupResponse) AppendTo(dst []byte) []byte {
 }
 func (v *JoinGroupResponse) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 6
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	if version >= 2 {
 		v := b.Int32()
@@ -9637,11 +9745,11 @@ func (v *HeartbeatRequest) AppendTo(dst []byte) []byte {
 }
 func (v *HeartbeatRequest) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 4
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		var v string
@@ -9761,11 +9869,11 @@ func (v *HeartbeatResponse) AppendTo(dst []byte) []byte {
 }
 func (v *HeartbeatResponse) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 4
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	if version >= 1 {
 		v := b.Int32()
@@ -9915,11 +10023,11 @@ func (v *LeaveGroupRequest) AppendTo(dst []byte) []byte {
 }
 func (v *LeaveGroupRequest) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 4
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		var v string
@@ -10127,11 +10235,11 @@ func (v *LeaveGroupResponse) AppendTo(dst []byte) []byte {
 }
 func (v *LeaveGroupResponse) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 4
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	if version >= 1 {
 		v := b.Int32()
@@ -10373,11 +10481,11 @@ func (v *SyncGroupRequest) AppendTo(dst []byte) []byte {
 }
 func (v *SyncGroupRequest) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 4
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		var v string
@@ -10595,11 +10703,11 @@ func (v *SyncGroupResponse) AppendTo(dst []byte) []byte {
 }
 func (v *SyncGroupResponse) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 4
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	if version >= 1 {
 		v := b.Int32()
@@ -10729,11 +10837,11 @@ func (v *DescribeGroupsRequest) AppendTo(dst []byte) []byte {
 }
 func (v *DescribeGroupsRequest) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 5
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := s.Groups
@@ -11038,11 +11146,11 @@ func (v *DescribeGroupsResponse) AppendTo(dst []byte) []byte {
 }
 func (v *DescribeGroupsResponse) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 5
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := b.Int32()
@@ -11283,11 +11391,11 @@ func (v *ListGroupsRequest) AppendTo(dst []byte) []byte {
 }
 func (v *ListGroupsRequest) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 3
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	if version >= 4 {
 		v := s.StatesFilter
@@ -11454,11 +11562,11 @@ func (v *ListGroupsResponse) AppendTo(dst []byte) []byte {
 }
 func (v *ListGroupsResponse) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 3
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	if version >= 1 {
 		v := b.Int32()
@@ -11594,9 +11702,9 @@ func (v *SASLHandshakeRequest) AppendTo(dst []byte) []byte {
 }
 func (v *SASLHandshakeRequest) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := b.String()
@@ -11669,9 +11777,9 @@ func (v *SASLHandshakeResponse) AppendTo(dst []byte) []byte {
 }
 func (v *SASLHandshakeResponse) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := b.Int16()
@@ -11796,11 +11904,11 @@ func (v *ApiVersionsRequest) AppendTo(dst []byte) []byte {
 }
 func (v *ApiVersionsRequest) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 3
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	if version >= 3 {
 		var v string
@@ -12108,11 +12216,11 @@ func (v *ApiVersionsResponse) AppendTo(dst []byte) []byte {
 }
 func (v *ApiVersionsResponse) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 3
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := b.Int16()
@@ -12521,11 +12629,11 @@ func (v *CreateTopicsRequest) AppendTo(dst []byte) []byte {
 }
 func (v *CreateTopicsRequest) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 5
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := s.Topics
@@ -12944,11 +13052,11 @@ func (v *CreateTopicsResponse) AppendTo(dst []byte) []byte {
 }
 func (v *CreateTopicsResponse) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 5
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	if version >= 2 {
 		v := b.Int32()
@@ -13171,11 +13279,11 @@ func (v *DeleteTopicsRequest) AppendTo(dst []byte) []byte {
 }
 func (v *DeleteTopicsRequest) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 4
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := s.Topics
@@ -13348,11 +13456,11 @@ func (v *DeleteTopicsResponse) AppendTo(dst []byte) []byte {
 }
 func (v *DeleteTopicsResponse) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 4
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	if version >= 1 {
 		v := b.Int32()
@@ -13582,11 +13690,11 @@ func (v *DeleteRecordsRequest) AppendTo(dst []byte) []byte {
 }
 func (v *DeleteRecordsRequest) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 2
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := s.Topics
@@ -13841,11 +13949,11 @@ func (v *DeleteRecordsResponse) AppendTo(dst []byte) []byte {
 }
 func (v *DeleteRecordsResponse) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 2
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := b.Int32()
@@ -14032,11 +14140,11 @@ func (v *InitProducerIDRequest) AppendTo(dst []byte) []byte {
 }
 func (v *InitProducerIDRequest) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 2
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		var v *string
@@ -14166,11 +14274,11 @@ func (v *InitProducerIDResponse) AppendTo(dst []byte) []byte {
 }
 func (v *InitProducerIDResponse) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 2
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := b.Int32()
@@ -14343,9 +14451,9 @@ func (v *OffsetForLeaderEpochRequest) AppendTo(dst []byte) []byte {
 }
 func (v *OffsetForLeaderEpochRequest) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
-	b := kbin.Reader{Src: src}
 	s := v
 	if version >= 3 {
 		v := b.Int32()
@@ -14582,9 +14690,9 @@ func (v *OffsetForLeaderEpochResponse) AppendTo(dst []byte) []byte {
 }
 func (v *OffsetForLeaderEpochResponse) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
-	b := kbin.Reader{Src: src}
 	s := v
 	if version >= 2 {
 		v := b.Int32()
@@ -14774,9 +14882,9 @@ func (v *AddPartitionsToTxnRequest) AppendTo(dst []byte) []byte {
 }
 func (v *AddPartitionsToTxnRequest) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := b.String()
@@ -14989,9 +15097,9 @@ func (v *AddPartitionsToTxnResponse) AppendTo(dst []byte) []byte {
 }
 func (v *AddPartitionsToTxnResponse) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := b.Int32()
@@ -15140,9 +15248,9 @@ func (v *AddOffsetsToTxnRequest) AppendTo(dst []byte) []byte {
 }
 func (v *AddOffsetsToTxnRequest) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := b.String()
@@ -15232,9 +15340,9 @@ func (v *AddOffsetsToTxnResponse) AppendTo(dst []byte) []byte {
 }
 func (v *AddOffsetsToTxnResponse) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := b.Int32()
@@ -15329,9 +15437,9 @@ func (v *EndTxnRequest) AppendTo(dst []byte) []byte {
 }
 func (v *EndTxnRequest) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := b.String()
@@ -15429,9 +15537,9 @@ func (v *EndTxnResponse) AppendTo(dst []byte) []byte {
 }
 func (v *EndTxnResponse) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := b.Int32()
@@ -15586,9 +15694,9 @@ func (v *WriteTxnMarkersRequest) AppendTo(dst []byte) []byte {
 }
 func (v *WriteTxnMarkersRequest) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := s.Markers
@@ -15808,9 +15916,9 @@ func (v *WriteTxnMarkersResponse) AppendTo(dst []byte) []byte {
 }
 func (v *WriteTxnMarkersResponse) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := s.Markers
@@ -16131,11 +16239,11 @@ func (v *TxnOffsetCommitRequest) AppendTo(dst []byte) []byte {
 }
 func (v *TxnOffsetCommitRequest) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 3
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		var v string
@@ -16459,11 +16567,11 @@ func (v *TxnOffsetCommitResponse) AppendTo(dst []byte) []byte {
 }
 func (v *TxnOffsetCommitResponse) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 3
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := b.Int32()
@@ -16685,11 +16793,11 @@ func (v *DescribeACLsRequest) AppendTo(dst []byte) []byte {
 }
 func (v *DescribeACLsRequest) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 2
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		var t ACLResourceType
@@ -16976,11 +17084,11 @@ func (v *DescribeACLsResponse) AppendTo(dst []byte) []byte {
 }
 func (v *DescribeACLsResponse) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 2
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := b.Int32()
@@ -17293,11 +17401,11 @@ func (v *CreateACLsRequest) AppendTo(dst []byte) []byte {
 }
 func (v *CreateACLsRequest) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 2
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := s.Creations
@@ -17498,11 +17606,11 @@ func (v *CreateACLsResponse) AppendTo(dst []byte) []byte {
 }
 func (v *CreateACLsResponse) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 2
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := b.Int32()
@@ -17709,11 +17817,11 @@ func (v *DeleteACLsRequest) AppendTo(dst []byte) []byte {
 }
 func (v *DeleteACLsRequest) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 2
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := s.Filters
@@ -18031,11 +18139,11 @@ func (v *DeleteACLsResponse) AppendTo(dst []byte) []byte {
 }
 func (v *DeleteACLsResponse) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 2
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := b.Int32()
@@ -18318,9 +18426,9 @@ func (v *DescribeConfigsRequest) AppendTo(dst []byte) []byte {
 }
 func (v *DescribeConfigsRequest) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := s.Resources
@@ -18648,9 +18756,9 @@ func (v *DescribeConfigsResponse) AppendTo(dst []byte) []byte {
 }
 func (v *DescribeConfigsResponse) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := b.Int32()
@@ -18960,9 +19068,9 @@ func (v *AlterConfigsRequest) AppendTo(dst []byte) []byte {
 }
 func (v *AlterConfigsRequest) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := s.Resources
@@ -19151,9 +19259,9 @@ func (v *AlterConfigsResponse) AppendTo(dst []byte) []byte {
 }
 func (v *AlterConfigsResponse) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := b.Int32()
@@ -19333,9 +19441,9 @@ func (v *AlterReplicaLogDirsRequest) AppendTo(dst []byte) []byte {
 }
 func (v *AlterReplicaLogDirsRequest) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := s.Dirs
@@ -19540,9 +19648,9 @@ func (v *AlterReplicaLogDirsResponse) AppendTo(dst []byte) []byte {
 }
 func (v *AlterReplicaLogDirsResponse) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := b.Int32()
@@ -19718,11 +19826,11 @@ func (v *DescribeLogDirsRequest) AppendTo(dst []byte) []byte {
 }
 func (v *DescribeLogDirsRequest) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 2
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := s.Topics
@@ -20016,11 +20124,11 @@ func (v *DescribeLogDirsResponse) AppendTo(dst []byte) []byte {
 }
 func (v *DescribeLogDirsResponse) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 2
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := b.Int32()
@@ -20221,11 +20329,11 @@ func (v *SASLAuthenticateRequest) AppendTo(dst []byte) []byte {
 }
 func (v *SASLAuthenticateRequest) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 2
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		var v []byte
@@ -20329,11 +20437,11 @@ func (v *SASLAuthenticateResponse) AppendTo(dst []byte) []byte {
 }
 func (v *SASLAuthenticateResponse) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 2
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := b.Int16()
@@ -20548,11 +20656,11 @@ func (v *CreatePartitionsRequest) AppendTo(dst []byte) []byte {
 }
 func (v *CreatePartitionsRequest) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 2
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := s.Topics
@@ -20799,11 +20907,11 @@ func (v *CreatePartitionsResponse) AppendTo(dst []byte) []byte {
 }
 func (v *CreatePartitionsResponse) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 2
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := b.Int32()
@@ -20995,11 +21103,11 @@ func (v *CreateDelegationTokenRequest) AppendTo(dst []byte) []byte {
 }
 func (v *CreateDelegationTokenRequest) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 2
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := s.Renewers
@@ -21193,11 +21301,11 @@ func (v *CreateDelegationTokenResponse) AppendTo(dst []byte) []byte {
 }
 func (v *CreateDelegationTokenResponse) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 2
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := b.Int16()
@@ -21339,11 +21447,11 @@ func (v *RenewDelegationTokenRequest) AppendTo(dst []byte) []byte {
 }
 func (v *RenewDelegationTokenRequest) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 2
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		var v []byte
@@ -21438,11 +21546,11 @@ func (v *RenewDelegationTokenResponse) AppendTo(dst []byte) []byte {
 }
 func (v *RenewDelegationTokenResponse) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 2
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := b.Int16()
@@ -21546,11 +21654,11 @@ func (v *ExpireDelegationTokenRequest) AppendTo(dst []byte) []byte {
 }
 func (v *ExpireDelegationTokenRequest) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 2
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		var v []byte
@@ -21644,11 +21752,11 @@ func (v *ExpireDelegationTokenResponse) AppendTo(dst []byte) []byte {
 }
 func (v *ExpireDelegationTokenResponse) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 2
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := b.Int16()
@@ -21783,11 +21891,11 @@ func (v *DescribeDelegationTokenRequest) AppendTo(dst []byte) []byte {
 }
 func (v *DescribeDelegationTokenRequest) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 2
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := s.Owners
@@ -22058,11 +22166,11 @@ func (v *DescribeDelegationTokenResponse) AppendTo(dst []byte) []byte {
 }
 func (v *DescribeDelegationTokenResponse) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 2
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := b.Int16()
@@ -22275,11 +22383,11 @@ func (v *DeleteGroupsRequest) AppendTo(dst []byte) []byte {
 }
 func (v *DeleteGroupsRequest) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 2
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := s.Groups
@@ -22433,11 +22541,11 @@ func (v *DeleteGroupsResponse) AppendTo(dst []byte) []byte {
 }
 func (v *DeleteGroupsResponse) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 2
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := b.Int32()
@@ -22627,11 +22735,11 @@ func (v *ElectLeadersRequest) AppendTo(dst []byte) []byte {
 }
 func (v *ElectLeadersRequest) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 2
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	if version >= 1 {
 		v := b.Int8()
@@ -22888,11 +22996,11 @@ func (v *ElectLeadersResponse) AppendTo(dst []byte) []byte {
 }
 func (v *ElectLeadersResponse) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 2
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := b.Int32()
@@ -23193,11 +23301,11 @@ func (v *IncrementalAlterConfigsRequest) AppendTo(dst []byte) []byte {
 }
 func (v *IncrementalAlterConfigsRequest) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 1
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := s.Resources
@@ -23443,11 +23551,11 @@ func (v *IncrementalAlterConfigsResponse) AppendTo(dst []byte) []byte {
 }
 func (v *IncrementalAlterConfigsResponse) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 1
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := b.Int32()
@@ -23682,11 +23790,11 @@ func (v *AlterPartitionAssignmentsRequest) AppendTo(dst []byte) []byte {
 }
 func (v *AlterPartitionAssignmentsRequest) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 0
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := b.Int32()
@@ -23977,11 +24085,11 @@ func (v *AlterPartitionAssignmentsResponse) AppendTo(dst []byte) []byte {
 }
 func (v *AlterPartitionAssignmentsResponse) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 0
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := b.Int32()
@@ -24211,11 +24319,11 @@ func (v *ListPartitionReassignmentsRequest) AppendTo(dst []byte) []byte {
 }
 func (v *ListPartitionReassignmentsRequest) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 0
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := b.Int32()
@@ -24497,11 +24605,11 @@ func (v *ListPartitionReassignmentsResponse) AppendTo(dst []byte) []byte {
 }
 func (v *ListPartitionReassignmentsResponse) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 0
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := b.Int32()
@@ -24785,9 +24893,9 @@ func (v *OffsetDeleteRequest) AppendTo(dst []byte) []byte {
 }
 func (v *OffsetDeleteRequest) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := b.String()
@@ -24991,9 +25099,9 @@ func (v *OffsetDeleteResponse) AppendTo(dst []byte) []byte {
 }
 func (v *OffsetDeleteResponse) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := b.Int16()
@@ -25168,9 +25276,9 @@ func (v *DescribeClientQuotasRequest) AppendTo(dst []byte) []byte {
 }
 func (v *DescribeClientQuotasRequest) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := s.Components
@@ -25378,9 +25486,9 @@ func (v *DescribeClientQuotasResponse) AppendTo(dst []byte) []byte {
 }
 func (v *DescribeClientQuotasResponse) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := b.Int32()
@@ -25644,9 +25752,9 @@ func (v *AlterClientQuotasRequest) AppendTo(dst []byte) []byte {
 }
 func (v *AlterClientQuotasRequest) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := s.Entries
@@ -25861,9 +25969,9 @@ func (v *AlterClientQuotasResponse) AppendTo(dst []byte) []byte {
 }
 func (v *AlterClientQuotasResponse) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := b.Int32()
@@ -26032,11 +26140,11 @@ func (v *DescribeUserSCRAMCredentialsRequest) AppendTo(dst []byte) []byte {
 }
 func (v *DescribeUserSCRAMCredentialsRequest) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 0
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := s.Users
@@ -26262,11 +26370,11 @@ func (v *DescribeUserSCRAMCredentialsResponse) AppendTo(dst []byte) []byte {
 }
 func (v *DescribeUserSCRAMCredentialsResponse) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 0
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := b.Int32()
@@ -26568,11 +26676,11 @@ func (v *AlterUserSCRAMCredentialsRequest) AppendTo(dst []byte) []byte {
 }
 func (v *AlterUserSCRAMCredentialsRequest) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 0
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := s.Deletions
@@ -26798,11 +26906,11 @@ func (v *AlterUserSCRAMCredentialsResponse) AppendTo(dst []byte) []byte {
 }
 func (v *AlterUserSCRAMCredentialsResponse) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 0
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := b.Int32()
@@ -27038,11 +27146,11 @@ func (v *VoteRequest) AppendTo(dst []byte) []byte {
 }
 func (v *VoteRequest) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 0
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		var v *string
@@ -27289,11 +27397,11 @@ func (v *VoteResponse) AppendTo(dst []byte) []byte {
 }
 func (v *VoteResponse) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 0
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := b.Int16()
@@ -27520,9 +27628,9 @@ func (v *BeginQuorumEpochRequest) AppendTo(dst []byte) []byte {
 }
 func (v *BeginQuorumEpochRequest) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := b.NullableString()
@@ -27713,9 +27821,9 @@ func (v *BeginQuorumEpochResponse) AppendTo(dst []byte) []byte {
 }
 func (v *BeginQuorumEpochResponse) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := b.Int16()
@@ -27806,10 +27914,7 @@ func NewBeginQuorumEpochResponse() BeginQuorumEpochResponse {
 type EndQuorumEpochRequestTopicPartition struct {
 	Partition int32
 
-	// The ID of the replica sending this request.
-	ReplicaID int32
-
-	// The current leader ID, or -1 if there is a vote in progress.
+	// The current leader ID that is resigning.
 	LeaderID int32
 
 	// The current epoch.
@@ -27911,10 +28016,6 @@ func (v *EndQuorumEpochRequest) AppendTo(dst []byte) []byte {
 						dst = kbin.AppendInt32(dst, v)
 					}
 					{
-						v := v.ReplicaID
-						dst = kbin.AppendInt32(dst, v)
-					}
-					{
 						v := v.LeaderID
 						dst = kbin.AppendInt32(dst, v)
 					}
@@ -27938,9 +28039,9 @@ func (v *EndQuorumEpochRequest) AppendTo(dst []byte) []byte {
 }
 func (v *EndQuorumEpochRequest) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := b.NullableString()
@@ -27983,10 +28084,6 @@ func (v *EndQuorumEpochRequest) ReadFrom(src []byte) error {
 					{
 						v := b.Int32()
 						s.Partition = v
-					}
-					{
-						v := b.Int32()
-						s.ReplicaID = v
 					}
 					{
 						v := b.Int32()
@@ -28153,9 +28250,9 @@ func (v *EndQuorumEpochResponse) AppendTo(dst []byte) []byte {
 }
 func (v *EndQuorumEpochResponse) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := b.Int16()
@@ -28381,11 +28478,11 @@ func (v *DescribeQuorumRequest) AppendTo(dst []byte) []byte {
 }
 func (v *DescribeQuorumRequest) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 0
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := s.Topics
@@ -28663,11 +28760,11 @@ func (v *DescribeQuorumResponse) AppendTo(dst []byte) []byte {
 }
 func (v *DescribeQuorumResponse) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 0
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := b.Int16()
@@ -29006,11 +29103,11 @@ func (v *AlterISRRequest) AppendTo(dst []byte) []byte {
 }
 func (v *AlterISRRequest) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 0
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := b.Int32()
@@ -29301,11 +29398,11 @@ func (v *AlterISRResponse) AppendTo(dst []byte) []byte {
 }
 func (v *AlterISRResponse) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 0
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := b.Int32()
@@ -29551,11 +29648,11 @@ func (v *UpdateFeaturesRequest) AppendTo(dst []byte) []byte {
 }
 func (v *UpdateFeaturesRequest) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 0
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := b.Int32()
@@ -29745,11 +29842,11 @@ func (v *UpdateFeaturesResponse) AppendTo(dst []byte) []byte {
 }
 func (v *UpdateFeaturesResponse) ReadFrom(src []byte) error {
 	v.Default()
+	b := kbin.Reader{Src: src}
 	version := v.Version
 	_ = version
 	isFlexible := version >= 0
 	_ = isFlexible
-	b := kbin.Reader{Src: src}
 	s := v
 	{
 		v := b.Int32()
@@ -29839,6 +29936,227 @@ func (v *UpdateFeaturesResponse) Default() {
 // This is a shortcut for creating a struct and calling Default yourself.
 func NewUpdateFeaturesResponse() UpdateFeaturesResponse {
 	var v UpdateFeaturesResponse
+	v.Default()
+	return v
+}
+
+// Introduced for KIP-590, EnvelopeRequest is what brokers use to wrap an
+// incoming request before forwarding it to another broker.
+type EnvelopeRequest struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	// The embedded request header and data.
+	RequestData []byte
+
+	// Value of the initial client principal when the request is redirected by a broker.
+	RequestPrincipal []byte
+
+	// The original client's address in bytes.
+	ClientHostAddress []byte
+}
+
+func (*EnvelopeRequest) Key() int16                 { return 58 }
+func (*EnvelopeRequest) MaxVersion() int16          { return 0 }
+func (v *EnvelopeRequest) SetVersion(version int16) { v.Version = version }
+func (v *EnvelopeRequest) GetVersion() int16        { return v.Version }
+func (v *EnvelopeRequest) IsFlexible() bool         { return v.Version >= 0 }
+func (v *EnvelopeRequest) IsAdminRequest()          {}
+func (v *EnvelopeRequest) ResponseKind() Response   { return &EnvelopeResponse{Version: v.Version} }
+
+// RequestWith is requests v on r and returns the response or an error.
+func (v *EnvelopeRequest) RequestWith(ctx context.Context, r Requestor) (*EnvelopeResponse, error) {
+	kresp, err := r.Request(ctx, v)
+	if err != nil {
+		return nil, err
+	}
+	return kresp.(*EnvelopeResponse), nil
+}
+
+func (v *EnvelopeRequest) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	isFlexible := version >= 0
+	_ = isFlexible
+	{
+		v := v.RequestData
+		if isFlexible {
+			dst = kbin.AppendCompactBytes(dst, v)
+		} else {
+			dst = kbin.AppendBytes(dst, v)
+		}
+	}
+	{
+		v := v.RequestPrincipal
+		if isFlexible {
+			dst = kbin.AppendCompactNullableBytes(dst, v)
+		} else {
+			dst = kbin.AppendNullableBytes(dst, v)
+		}
+	}
+	{
+		v := v.ClientHostAddress
+		if isFlexible {
+			dst = kbin.AppendCompactBytes(dst, v)
+		} else {
+			dst = kbin.AppendBytes(dst, v)
+		}
+	}
+	if isFlexible {
+		dst = append(dst, 0)
+	}
+	return dst
+}
+func (v *EnvelopeRequest) ReadFrom(src []byte) error {
+	v.Default()
+	b := kbin.Reader{Src: src}
+	version := v.Version
+	_ = version
+	isFlexible := version >= 0
+	_ = isFlexible
+	s := v
+	{
+		var v []byte
+		if isFlexible {
+			v = b.CompactBytes()
+		} else {
+			v = b.Bytes()
+		}
+		s.RequestData = v
+	}
+	{
+		var v []byte
+		if isFlexible {
+			v = b.CompactNullableBytes()
+		} else {
+			v = b.NullableBytes()
+		}
+		s.RequestPrincipal = v
+	}
+	{
+		var v []byte
+		if isFlexible {
+			v = b.CompactBytes()
+		} else {
+			v = b.Bytes()
+		}
+		s.ClientHostAddress = v
+	}
+	if isFlexible {
+		SkipTags(&b)
+	}
+	return b.Complete()
+}
+
+// NewPtrEnvelopeRequest returns a pointer to a default EnvelopeRequest
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrEnvelopeRequest() *EnvelopeRequest {
+	var v EnvelopeRequest
+	v.Default()
+	return &v
+}
+
+// Default sets any default fields. Calling this allows for future compatibility
+// if new fields are added to EnvelopeRequest.
+func (v *EnvelopeRequest) Default() {
+}
+
+// NewEnvelopeRequest returns a default EnvelopeRequest
+// This is a shortcut for creating a struct and calling Default yourself.
+func NewEnvelopeRequest() EnvelopeRequest {
+	var v EnvelopeRequest
+	v.Default()
+	return v
+}
+
+type EnvelopeResponse struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	// The embedded response header and data.
+	ResponseData []byte
+
+	// The error code, or 0 if there was no error.
+	//
+	// NOT_CONTROLLER is returned when the request is not sent to the controller.
+	//
+	// CLUSTER_AUTHORIZATION_FAILED is returned if inter-broker authorization failed.
+	ErrorCode int16
+}
+
+func (*EnvelopeResponse) Key() int16                 { return 58 }
+func (*EnvelopeResponse) MaxVersion() int16          { return 0 }
+func (v *EnvelopeResponse) SetVersion(version int16) { v.Version = version }
+func (v *EnvelopeResponse) GetVersion() int16        { return v.Version }
+func (v *EnvelopeResponse) IsFlexible() bool         { return v.Version >= 0 }
+func (v *EnvelopeResponse) RequestKind() Request     { return &EnvelopeRequest{Version: v.Version} }
+
+func (v *EnvelopeResponse) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	isFlexible := version >= 0
+	_ = isFlexible
+	{
+		v := v.ResponseData
+		if isFlexible {
+			dst = kbin.AppendCompactNullableBytes(dst, v)
+		} else {
+			dst = kbin.AppendNullableBytes(dst, v)
+		}
+	}
+	{
+		v := v.ErrorCode
+		dst = kbin.AppendInt16(dst, v)
+	}
+	if isFlexible {
+		dst = append(dst, 0)
+	}
+	return dst
+}
+func (v *EnvelopeResponse) ReadFrom(src []byte) error {
+	v.Default()
+	b := kbin.Reader{Src: src}
+	version := v.Version
+	_ = version
+	isFlexible := version >= 0
+	_ = isFlexible
+	s := v
+	{
+		var v []byte
+		if isFlexible {
+			v = b.CompactNullableBytes()
+		} else {
+			v = b.NullableBytes()
+		}
+		s.ResponseData = v
+	}
+	{
+		v := b.Int16()
+		s.ErrorCode = v
+	}
+	if isFlexible {
+		SkipTags(&b)
+	}
+	return b.Complete()
+}
+
+// NewPtrEnvelopeResponse returns a pointer to a default EnvelopeResponse
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrEnvelopeResponse() *EnvelopeResponse {
+	var v EnvelopeResponse
+	v.Default()
+	return &v
+}
+
+// Default sets any default fields. Calling this allows for future compatibility
+// if new fields are added to EnvelopeResponse.
+func (v *EnvelopeResponse) Default() {
+}
+
+// NewEnvelopeResponse returns a default EnvelopeResponse
+// This is a shortcut for creating a struct and calling Default yourself.
+func NewEnvelopeResponse() EnvelopeResponse {
+	var v EnvelopeResponse
 	v.Default()
 	return v
 }
@@ -29965,6 +30283,8 @@ func RequestForKey(key int16) Request {
 		return new(AlterISRRequest)
 	case 57:
 		return new(UpdateFeaturesRequest)
+	case 58:
+		return new(EnvelopeRequest)
 	}
 }
 
@@ -30090,6 +30410,8 @@ func ResponseForKey(key int16) Response {
 		return new(AlterISRResponse)
 	case 57:
 		return new(UpdateFeaturesResponse)
+	case 58:
+		return new(EnvelopeResponse)
 	}
 }
 
@@ -30215,6 +30537,8 @@ func NameForKey(key int16) string {
 		return "AlterISR"
 	case 57:
 		return "UpdateFeatures"
+	case 58:
+		return "Envelope"
 	}
 }
 
@@ -30242,6 +30566,13 @@ func (v ConfigResourceType) String() string {
 		return "BROKER_LOGGER"
 	}
 }
+
+const (
+	ConfigResourceTypeUnknown      ConfigResourceType = 0
+	ConfigResourceTypeTopic                           = 2
+	ConfigResourceTypeBroker                          = 4
+	ConfigResourceTypeBrokerLogger                    = 8
+)
 
 // Where a config entry is from. If there are no config synonyms,
 // the source is DEFAULT_CONFIG.
@@ -30286,6 +30617,16 @@ func (v ConfigSource) String() string {
 		return "DYNAMIC_BROKER_LOGGER_CONFIG"
 	}
 }
+
+const (
+	ConfigSourceUnknown                    ConfigSource = 0
+	ConfigSourceDynamicTopicConfig                      = 1
+	ConfigSourceDynamicBrokerConfig                     = 2
+	ConfigSourceDynamicDefaultBrokerConfig              = 3
+	ConfigSourceStaticBrokerConfig                      = 4
+	ConfigSourceDefaultConfig                           = 5
+	ConfigSourceDynamicBrokerLoggerConfig               = 6
+)
 
 // A configuration data type.
 //
@@ -30336,6 +30677,19 @@ func (v ConfigType) String() string {
 	}
 }
 
+const (
+	ConfigTypeUnknown  ConfigType = 0
+	ConfigTypeBoolean             = 1
+	ConfigTypeString              = 2
+	ConfigTypeInt                 = 3
+	ConfigTypeShort               = 4
+	ConfigTypeLong                = 5
+	ConfigTypeDouble              = 6
+	ConfigTypeList                = 7
+	ConfigTypeClass               = 8
+	ConfigTypePassword            = 9
+)
+
 // ACLResourceType is a type of resource to use for ACLs.
 //
 // Possible values and their meanings:
@@ -30373,6 +30727,16 @@ func (v ACLResourceType) String() string {
 	}
 }
 
+const (
+	ACLResourceTypeUnknown         ACLResourceType = 0
+	ACLResourceTypeAny                             = 1
+	ACLResourceTypeTopic                           = 2
+	ACLResourceTypeGroup                           = 3
+	ACLResourceTypeCluster                         = 4
+	ACLResourceTypeTransactionalId                 = 5
+	ACLResourceTypeDelegationToken                 = 6
+)
+
 // ACLResourcePatternType is how an acl's ResourceName is understood.
 //
 // This field was added with Kafka 2.0.0 for KIP-290.
@@ -30403,6 +30767,13 @@ func (v ACLResourcePatternType) String() string {
 	}
 }
 
+const (
+	ACLResourcePatternTypeUnknown  ACLResourcePatternType = 0
+	ACLResourcePatternTypeMatch                           = 1
+	ACLResourcePatternTypeLiteral                         = 2
+	ACLResourcePatternTypePrefixed                        = 3
+)
+
 // An ACL permission type.
 //
 // Possible values and their meanings:
@@ -30430,6 +30801,13 @@ func (v ACLPermissionType) String() string {
 		return "ALLOW"
 	}
 }
+
+const (
+	ACLPermissionTypeUnknown ACLPermissionType = 0
+	ACLPermissionTypeAny                       = 1
+	ACLPermissionTypeDeny                      = 2
+	ACLPermissionTypeAllow                     = 3
+)
 
 // An ACL operation.
 //
@@ -30493,3 +30871,19 @@ func (v ACLOperation) String() string {
 		return "IDEMPOTENT_WRITE"
 	}
 }
+
+const (
+	ACLOperationUnknown         ACLOperation = 0
+	ACLOperationAny                          = 1
+	ACLOperationAll                          = 2
+	ACLOperationRead                         = 3
+	ACLOperationWrite                        = 4
+	ACLOperationCreate                       = 5
+	ACLOperationDelete                       = 6
+	ACLOperationAlter                        = 7
+	ACLOperationDescribe                     = 8
+	ACLOperationClusterAction                = 9
+	ACLOperationDescribeConfigs              = 10
+	ACLOperationAlterConfigs                 = 11
+	ACLOperationIdempotentWrite              = 12
+)

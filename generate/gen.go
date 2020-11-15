@@ -1,6 +1,9 @@
 package main
 
-import "strconv"
+import (
+	"strconv"
+	"strings"
+)
 
 func (Bool) TypeName() string                  { return "bool" }
 func (Int8) TypeName() string                  { return "int8" }
@@ -458,8 +461,6 @@ func (s Struct) WriteDecode(l *LineWriter) {
 			die("expected field version type to be int16, was %v", f.Type)
 		}
 		rangeFrom = s.Fields[1:]
-		l.Write("version := b.Int16()")
-		l.Write("v.Version = version")
 	}
 	l.Write("s := v")
 
@@ -622,7 +623,7 @@ func (s Struct) WriteAppendFunc(l *LineWriter) {
 		l.Write("version := v.Version")
 		l.Write("_ = version")
 	}
-	if s.TopLevel && s.FlexibleAt >= 0 {
+	if s.FlexibleAt >= 0 {
 		l.Write("isFlexible := version >= %d", s.FlexibleAt)
 		l.Write("_ = isFlexible")
 	}
@@ -634,15 +635,18 @@ func (s Struct) WriteAppendFunc(l *LineWriter) {
 func (s Struct) WriteDecodeFunc(l *LineWriter) {
 	l.Write("func (v *%s) ReadFrom(src []byte) error {", s.Name)
 	l.Write("v.Default()")
-	if s.TopLevel {
+	l.Write("b := kbin.Reader{Src: src}")
+	if s.WithVersionField {
+		l.Write("v.Version = b.Int16()")
+	}
+	if s.TopLevel || s.WithVersionField {
 		l.Write("version := v.Version")
 		l.Write("_ = version")
 	}
-	if s.TopLevel && s.FlexibleAt >= 0 {
+	if s.FlexibleAt >= 0 {
 		l.Write("isFlexible := version >= %d", s.FlexibleAt)
 		l.Write("_ = isFlexible")
 	}
-	l.Write("b := kbin.Reader{Src: src}")
 	s.WriteDecode(l)
 	l.Write("return b.Complete()")
 	l.Write("}")
@@ -715,4 +719,30 @@ func (e Enum) WriteStringFunc(l *LineWriter) {
 	}
 	l.Write("}")
 	l.Write("}")
+}
+
+func (e Enum) WriteConsts(l *LineWriter) {
+	l.Write("const (")
+	l.Write("%[1]sUnknown %[1]s = 0", e.Name)
+	defer l.Write(")")
+	for _, v := range e.Values {
+		var sb strings.Builder
+		upper := true
+		for _, c := range v.Word {
+			switch c {
+			case '_':
+				upper = true
+			default:
+				s := string([]rune{c})
+				if upper {
+					sb.WriteString(strings.ToUpper(s))
+				} else {
+					sb.WriteString(strings.ToLower(s))
+				}
+				upper = false
+			}
+		}
+
+		l.Write("%s%s = %d", e.Name, sb.String(), v.Value)
+	}
 }

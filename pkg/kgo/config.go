@@ -56,6 +56,7 @@ type cfg struct {
 
 	seedBrokers []string
 	maxVersions kversion.Versions
+	minVersions kversion.Versions
 
 	retryBackoff          func(int) time.Duration
 	retries               int
@@ -63,6 +64,7 @@ type cfg struct {
 	brokerConnDeadRetries int
 
 	maxBrokerWriteBytes int32
+	maxBrokerReadBytes  int32
 
 	allowAutoTopicCreation bool
 
@@ -180,6 +182,7 @@ func defaultCfg() cfg {
 		brokerConnDeadRetries: 20,
 
 		maxBrokerWriteBytes: 100 << 20, // Kafka socket.request.max.bytes default is 100<<20
+		maxBrokerReadBytes:  100 << 20,
 
 		metadataMaxAge: 5 * time.Minute,
 		metadataMinAge: 10 * time.Second,
@@ -286,7 +289,7 @@ func SeedBrokers(seeds ...string) Opt {
 }
 
 // MaxVersions sets the maximum Kafka version to try, overriding the
-// internal unbounded (latest) versions.
+// internal unbounded (latest stable) versions.
 //
 // Note that specific max version pinning is required if trying to interact
 // with versions pre 0.10.0. Otherwise, unless using more complicated requests
@@ -296,6 +299,22 @@ func SeedBrokers(seeds ...string) Opt {
 // do not get invalid default zero values before you update your usage.
 func MaxVersions(versions kversion.Versions) Opt {
 	return clientOpt{func(cfg *cfg) { cfg.maxVersions = versions }}
+}
+
+// MinVersions sets the minimum Kafka version a request can be downgraded to,
+// overriding the default of the lowest version.
+//
+// This option is useful if you are issuing requests that you absolutely do not
+// want to be downgraded; that is, if you are relying on features in newer
+// requests, and you are not sure if your brokers can handle those features.
+// By setting a min version, if the client detects it needs to downgrade past
+// the version, it will instead avoid issuing the request.
+//
+// Unlike MaxVersions, if a request is issued that is unknown to the min
+// versions, the request is allowed. It is assumed that there is no lower bound
+// for that request.
+func MinVersions(versions kversion.Versions) Opt {
+	return clientOpt{func(cfg *cfg) { cfg.minVersions = versions }}
 }
 
 // RetryBackoff sets the backoff strategy for how long to backoff for a given
@@ -371,6 +390,16 @@ func AutoTopicCreation() Opt {
 // limit should be produce requests.
 func BrokerMaxWriteBytes(v int32) Opt {
 	return clientOpt{func(cfg *cfg) { cfg.maxBrokerWriteBytes = v }}
+}
+
+// BrokerMaxReadBytes sets the maximum response size that can be read from
+// Kafka, overriding the default 100MiB.
+//
+// This is a safety measure to avoid OOMing on invalid responses. This is
+// slightly double FetchMaxBytes; if bumping that, consider bump this. No other
+// response should run the risk of hitting this limit.
+func BrokerMaxReadBytes(v int32) Opt {
+	return clientOpt{func(cfg *cfg) { cfg.maxBrokerReadBytes = v }}
 }
 
 // MetadataMaxAge sets the maximum age for the client's cached metadata,
@@ -627,6 +656,8 @@ func FetchMaxWait(wait time.Duration) ConsumerOpt {
 // will buffer up to <brokers * max bytes> worth of memory.
 //
 // This corresponds to the Java fetch.max.bytes setting.
+//
+// If bumping this, consider bumping BrokerMaxReadBytes.
 func FetchMaxBytes(b int32) ConsumerOpt {
 	return consumerOpt{func(cfg *cfg) { cfg.maxBytes = b }}
 }

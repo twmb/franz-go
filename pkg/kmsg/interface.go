@@ -159,14 +159,6 @@ func FormatterClientID(id string) RequestFormatterOpt {
 	return formatterOpt{func(f *RequestFormatter) { f.clientID = &id }}
 }
 
-// FormatterInitialID sets the initial ID of the request.
-//
-// This function should be used by brokers only and is set when the broker
-// redirects a request. See KIP-590 for more detail.
-func FormatterInitialID(principalName, clientID string) RequestFormatterOpt {
-	return formatterOpt{func(f *RequestFormatter) { f.initPrincipalName, f.initClientID = &principalName, &clientID }}
-}
-
 // NewRequestFormatter returns a RequestFormatter with the opts applied.
 func NewRequestFormatter(opts ...RequestFormatterOpt) *RequestFormatter {
 	a := new(RequestFormatter)
@@ -204,17 +196,8 @@ func (f *RequestFormatter) AppendRequest(
 	// request body.
 	if r.IsFlexible() {
 		var numTags uint8
-		if f.initPrincipalName != nil {
-			numTags += 2
-		}
 		dst = append(dst, numTags)
 		if numTags != 0 {
-			if f.initPrincipalName != nil {
-				dst = kbin.AppendUvarint(dst, 0)
-				dst = kbin.AppendCompactString(dst, *f.initPrincipalName)
-				dst = kbin.AppendUvarint(dst, 1)
-				dst = kbin.AppendCompactString(dst, *f.initClientID)
-			}
 		}
 	}
 

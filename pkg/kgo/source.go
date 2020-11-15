@@ -977,15 +977,17 @@ func recordToRecord(
 	}
 
 	return &Record{
-		Key:         record.Key,
-		Value:       record.Value,
-		Headers:     h,
-		Timestamp:   timeFromMillis(batch.FirstTimestamp + int64(record.TimestampDelta)),
-		Attrs:       RecordAttrs{uint8(batch.Attributes)},
-		Topic:       topic,
-		Partition:   partition,
-		LeaderEpoch: batch.PartitionLeaderEpoch,
-		Offset:      batch.FirstOffset + int64(record.OffsetDelta),
+		Key:           record.Key,
+		Value:         record.Value,
+		Headers:       h,
+		Timestamp:     timeFromMillis(batch.FirstTimestamp + int64(record.TimestampDelta)),
+		Topic:         topic,
+		Partition:     partition,
+		Attrs:         RecordAttrs{uint8(batch.Attributes)},
+		ProducerID:    batch.ProducerID,
+		ProducerEpoch: batch.ProducerEpoch,
+		LeaderEpoch:   batch.PartitionLeaderEpoch,
+		Offset:        batch.FirstOffset + int64(record.OffsetDelta),
 	}
 }
 
@@ -1005,13 +1007,15 @@ func v0MessageToRecord(
 	message *kmsg.MessageV0,
 ) *Record {
 	return &Record{
-		Key:         message.Key,
-		Value:       message.Value,
-		Attrs:       messageAttrsToRecordAttrs(message.Attributes, true),
-		Topic:       topic,
-		Partition:   partition,
-		LeaderEpoch: -1,
-		Offset:      message.Offset,
+		Key:           message.Key,
+		Value:         message.Value,
+		Topic:         topic,
+		Partition:     partition,
+		Attrs:         messageAttrsToRecordAttrs(message.Attributes, true),
+		ProducerID:    -1,
+		ProducerEpoch: -1,
+		LeaderEpoch:   -1,
+		Offset:        message.Offset,
 	}
 }
 
@@ -1021,14 +1025,16 @@ func v1MessageToRecord(
 	message *kmsg.MessageV1,
 ) *Record {
 	return &Record{
-		Key:         message.Key,
-		Value:       message.Value,
-		Timestamp:   timeFromMillis(message.Timestamp),
-		Attrs:       messageAttrsToRecordAttrs(message.Attributes, false),
-		Topic:       topic,
-		Partition:   partition,
-		LeaderEpoch: -1,
-		Offset:      message.Offset,
+		Key:           message.Key,
+		Value:         message.Value,
+		Timestamp:     timeFromMillis(message.Timestamp),
+		Topic:         topic,
+		Partition:     partition,
+		Attrs:         messageAttrsToRecordAttrs(message.Attributes, false),
+		ProducerID:    -1,
+		ProducerEpoch: -1,
+		LeaderEpoch:   -1,
+		Offset:        message.Offset,
 	}
 }
 

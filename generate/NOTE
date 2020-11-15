@@ -1,0 +1,44 @@
+When adding new commands or modifying commands,
+
+Metadata or ApiVersions
+=======================
+
+Metadata modifications may need some new field copying in fetchMetadata.
+
+ApiVersions is slightly special cased in shardedRequest, and thus may need some
+modifying as well (but this is unlikely).
+
+Admin Requests
+===============
+
+Audit if the parseErr in handleAdminReq needs to be modified.
+
+
+Group / Txn Requests
+====================
+
+If the request is shardable, continue below.
+
+Otherwise, audit if the parseErr in handleCoordinatorReq needs to be modified.
+
+Shardable Requests
+==================
+
+If the request is an existing request, audit if any struct copying portion
+needs to have new fields copied. This is especially relevant while sharding and
+merging.
+
+As well, audit if any onResp needs to do any additional cleanup.
+
+Current shardable requests:
+ - *kmsg.ListOffsetsRequest,             // key 2
+ - *kmsg.DescribeGroupsRequest,          // key 15
+ - *kmsg.ListGroupsRequest,              // key 16
+ - *kmsg.DeleteRecordsRequest,           // key 21
+ - *kmsg.OffsetForLeaderEpochRequest,    // key 23
+ - *kmsg.DescribeConfigsRequest,         // key 32
+ - *kmsg.AlterConfigsRequest,            // key 33
+ - *kmsg.AlterReplicaLogDirsRequest,     // key 34
+ - *kmsg.DescribeLogDirsRequest,         // key 35
+ - *kmsg.DeleteGroupsRequest,            // key 42
+ - *kmsg.IncrementalAlterConfigsRequest: // key 44
