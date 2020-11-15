@@ -51,7 +51,7 @@ fmt.Println(len(res.Topics))
 - Only Kafka client available for Go that supports all Kafka features (also easy to maintain thanks to code generation)
 - Provides low level functionality (such as sending API requests) as well as high level functionality (e.g. consuming in groups)
 - Utilizes modern & idiomatic Go (support for contexts, variadic configuration options, ...)
-- Highly performant (benchmarks will be added)
+- Highly performant, see [Performance](./docs/performance.md) (benchmarks will be added)
 
 ## Stability Status
 
@@ -80,24 +80,6 @@ I would love confirmation that this program has been used successfully, and
 would love to start a "Users" section below. With more confirmation of success,
 and confirmation that there are no knife edges, I will inch closer to a 1.x
 release.
-
-## Performance
-
-This client avoids spinning up more goroutines than necessary and avoids
-lock contention as much as possible.
-
-For simplicity, this client **does** buffer records before writing to Kafka.
-The assumption here is that modern software is fast, and buffering will be of
-minimal concern.
-
-Producer latency can be tuned by adding a linger. By default, there is no
-linger and records are sent as soon as they are published. In a high
-throughput scenario, this is fine and will not lead to single-record batches,
-but in a low throughput scenario it may be worth it to add lingering.
-As well, it is possible to completely disable auto-flushing and instead
-only have manual flushes. This allows you to buffer as much as you want
-before flushing in one go (however, with this option, you must consider
-the max buffered records option).
 
 ## Version Pinning
 
