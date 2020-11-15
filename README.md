@@ -87,9 +87,9 @@ By default, the client issues an ApiVersions request on connect to brokers
 and defaults to using the maximum supported version for requests that each
 broker supports.
 
-The ApiVersions request was introduced in Kafka 0.10.0; if you are working
-with brokers older than that, you must use the kversions package so explicitly
-set the MaxVersions option for the client to support.
+Kafka 0.10.0 introduced the ApiVersions request; if you are working
+with brokers older than that, you must use the kversions package. Use the 
+MaxVersions option for the client if you do so.
 
 As well, it is recommended to set the MaxVersions to the version of your
 broker cluster. Until [KIP-584][5] is implemented, it is possible that
@@ -99,30 +99,14 @@ update roll.
 
 [5]: https://cwiki.apache.org/confluence/display/KAFKA/KIP-584%3A+Versioning+scheme+for+features
 
-## TLS
-
-This client does not provide any TLS on its own, however it does provide
-a Dialer option to set how connections should be dialed to brokers. You
-can use the dialer to dial TLS as necessary, with any specific custom
-TLS configuration you desire.
-
-## Logging
-
-The client supports some relatively primitive logging currently that will
-be enhanced and improved as requests for improvement come in.
-
-Do not expect the logging messages to be stable across library versions.
-
 ## Metrics
 
-This client does not currently have metrics, but aims to support metrics
-through function callbacks in the future. I would like some input on
-what metrics are desired. The usage of callbacks will ensure that users
-can plug in which metric libraries they would like to use as desired.
+Using hooks you can attach to any events happening within franz-go. This allows you to use your favorite metric library
+and collect the metrics you are interested in.
 
 ## Supported KIPs
 
-Theoretically, every (non-Java-specific) client facing KIP is supported.
+Theoretically, this library supports every (non-Java-specific) client facing KIP.
 Most are tested, some need testing. Any KIP that simply adds or modifies
 a protocol is supported by code generation.
 
