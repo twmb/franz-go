@@ -9,7 +9,10 @@ franz-go
 [godev]: https://pkg.go.dev/github.com/twmb/franz-go/pkg/kgo
 
 Franz-go is an all-encompassing Kafka client fully written Go. This library aims to provide **every Kafka feature** from 
-Apache Kafka v0.8.0 onward.
+Apache Kafka v0.8.0 onward. It has support for transactions, regex topic consuming, the latest partitioning strategies,
+data loss detection, closest replica fetching, and more. If a client KIP exists, this library aims to support it.
+
+This library attempts to provide an intuitive API while interacting with Kafka the way Kafka expects (timeouts, etc.).
 
 ## Getting started
 
