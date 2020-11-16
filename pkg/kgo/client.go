@@ -1201,83 +1201,69 @@ func (cl *Client) handleShardedReq(ctx context.Context, req kmsg.Request) ([]Res
 		retryTimeout = cl.cfg.retryTimeout(req.Key())
 
 		wg    sync.WaitGroup
-		issue func(reqs []reqTry)
+		issue func(reqTry)
 	)
 
 	// issue is called to progressively split and issue requests.
 	//
 	// This recursively calls itself if a request fails and can be retried.
-	issue = func(reqTries []reqTry) {
-		defer wg.Done()
+	issue = func(try reqTry) {
+		issues, reshardable, err := sharder.shard(ctx, try.req)
+		if err != nil {
+			addShard(shard(nil, try.req, nil, err)) // failure to shard means data loading failed; this request is failed
+			return
+		}
 
-		var rereqs []reqTry
-		defer func() {
-			if len(rereqs) > 0 {
-				wg.Add(1)
-				issue(rereqs)
-			}
-		}()
+		for i := range issues {
+			tries := try.tries
+			myIssue := issues[i]
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+			start:
+				tries++
 
-		for i := range reqTries {
-			try := reqTries[i]
-			issues, reshardable, err := sharder.shard(ctx, try.req)
-			if err != nil {
-				addShard(shard(nil, try.req, nil, err)) // failure to shard means data loading failed; this request is failed
-				continue
-			}
+				broker := cl.broker()
+				var err error
+				if !myIssue.any {
+					broker, err = cl.brokerOrErr(ctx, myIssue.broker, ErrUnknownBroker)
+				}
+				if err != nil {
+					addShard(shard(nil, myIssue.req, nil, err)) // failure to load a broker is a failure to issue a request
+					return
+				}
 
-			for i := range issues {
-				wg.Add(1)
-				tries := try.tries
-				issue := issues[i]
-				go func() {
-					defer wg.Done()
-				start:
-					tries++
+				resp, err := broker.waitResp(ctx, myIssue.req)
+				if err == nil {
+					// Successful responses may need to perform some
+					// response internal error checking cleanup.
+					// So, we call onResp, then keep the response.
+					sharder.onResp(resp)
+					addShard(shard(broker, myIssue.req, resp, nil))
+					return
+				}
 
-					broker := cl.broker()
-					var err error
-					if !issue.any {
-						broker, err = cl.brokerOrErr(ctx, issue.broker, ErrUnknownBroker)
+				// If we failed to issue the request, we *maybe* will retry.
+				// We could have failed to even issue the request or receive
+				// a response, which is retriable.
+				if err != nil && (retryTimeout == 0 || time.Since(start) < retryTimeout) && cl.shouldRetry(tries, err) && cl.waitTries(ctx, tries) {
+					// Non-reshardable re-requests just jump back to the
+					// top where the broker is loaded. This is the case on
+					// requests where the original request is split to
+					// dedicated brokers; we do not want to re-shard that.
+					if !reshardable {
+						goto start
 					}
-					if err != nil {
-						addShard(shard(nil, issue.req, nil, err)) // failure to load a broker is a failure to issue a request
-						return
-					}
+					issue(reqTry{tries, myIssue.req})
+					return
+				}
 
-					resp, err := broker.waitResp(ctx, issue.req)
-					if err == nil {
-						// Successful responses may need to perform some
-						// response internal error checking cleanup.
-						// So, we call onResp, then keep the response.
-						sharder.onResp(resp)
-						addShard(shard(broker, issue.req, resp, nil))
-						return
-					}
-
-					// If we failed to issue the request, we *maybe* will retry.
-					// We could have failed to even issue the request or receive
-					// a response, which is retriable.
-					if err != nil && (retryTimeout == 0 || time.Since(start) < retryTimeout) && cl.shouldRetry(tries, err) && cl.waitTries(ctx, tries) {
-						// Non-reshardable re-requests just jump back to the
-						// top where the broker is loaded. This is the case on
-						// requests where the original request is split to
-						// dedicated brokers; we do not want to re-shard that.
-						if !reshardable {
-							goto start
-						}
-						rereqs = append(rereqs, reqTry{tries, issue.req})
-						return
-					}
-
-					addShard(shard(broker, issue.req, nil, err)) // the error was not retriable
-				}()
-			}
+				addShard(shard(broker, myIssue.req, nil, err)) // the error was not retriable
+			}()
 		}
 	}
 
-	wg.Add(1)
-	issue([]reqTry{{0, req}})
+	issue(reqTry{0, req})
 	wg.Wait()
 
 	return shards, sharder.merge
