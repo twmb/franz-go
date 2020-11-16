@@ -345,6 +345,7 @@ func (s *source) unuseAll(reqOffsets map[string]map[int32]*seqOffsetFrom) {
 func (s *source) createReq() (req *fetchRequest, again bool) {
 	req = &fetchRequest{
 		maxWait:        s.cl.cfg.maxWait,
+		minBytes:       s.cl.cfg.minBytes,
 		maxBytes:       s.cl.cfg.maxBytes,
 		maxPartBytes:   s.cl.cfg.maxPartBytes,
 		rack:           s.cl.cfg.rack,
@@ -1045,6 +1046,7 @@ func v1MessageToRecord(
 type fetchRequest struct {
 	version      int16
 	maxWait      int32
+	minBytes     int32
 	maxBytes     int32
 	maxPartBytes int32
 	rack         string
@@ -1094,7 +1096,7 @@ func (f *fetchRequest) AppendTo(dst []byte) []byte {
 		Version:        f.version,
 		ReplicaID:      -1,
 		MaxWaitMillis:  f.maxWait,
-		MinBytes:       1,
+		MinBytes:       f.minBytes,
 		MaxBytes:       f.maxBytes,
 		IsolationLevel: f.isolationLevel,
 		SessionID:      f.session.id,

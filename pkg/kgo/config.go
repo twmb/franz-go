@@ -95,6 +95,7 @@ type cfg struct {
 
 	// ***CONSUMER SECTION***
 	maxWait        int32
+	minBytes       int32
 	maxBytes       int32
 	maxPartBytes   int32
 	resetOffset    Offset
@@ -196,6 +197,7 @@ func defaultCfg() cfg {
 		partitioner:         StickyKeyPartitioner(nil), // default to how Kafka partitions
 
 		maxWait:        5000,
+		minBytes:       1,
 		maxBytes:       50 << 20,
 		maxPartBytes:   10 << 20,
 		resetOffset:    NewOffset().AtStart(),
@@ -660,6 +662,18 @@ func FetchMaxWait(wait time.Duration) ConsumerOpt {
 // If bumping this, consider bumping BrokerMaxReadBytes.
 func FetchMaxBytes(b int32) ConsumerOpt {
 	return consumerOpt{func(cfg *cfg) { cfg.maxBytes = b }}
+}
+
+// FetchMinBYtes sets the minimum amount of bytes a broker will try to send
+// during a fetch, overriding the default 1 byte.
+//
+// With the default of 1, data is sent as soon as it is available. By bumping
+// this, the broker will try to wait for more data, which may improve server
+// throughput at the expense of added latency.
+//
+// This corresponds to the Java fetch.min.bytes setting.
+func FetchMinBytes(b int32) ConsumerOpt {
+	return consumerOpt{func(cfg *cfg) { cfg.minBytes = b }}
 }
 
 // FetchMaxPartitionBytes sets the maximum amount of bytes that will be
