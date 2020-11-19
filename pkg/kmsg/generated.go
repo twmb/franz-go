@@ -8856,7 +8856,8 @@ type FindCoordinatorResponse struct {
 	// or transaction).
 	//
 	// COORDINATOR_NOT_AVAILABLE is returned if the coordinator is not available
-	// for the requested ID, or if the requested ID does not exist.
+	// for the requested ID, which would be if the group or transactional topic
+	// does not exist or the partition the requested key maps to is not available.
 	ErrorCode int16
 
 	// ErrorMessage is an informative message if the request errored.
