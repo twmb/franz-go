@@ -542,7 +542,9 @@ type ResponseShard struct {
 
 // RequestSharded performs the same logic as Request, but returns all responses
 // from any broker that the request was split to. This always returns at least
-// one shard.
+// one shard. If the request does not need to be issued (describing no groups),
+// this issues the request to a random broker just to ensure that one shard
+// exists.
 //
 // There are only a few requests that are strongly recommended to explicitly
 // use RequestSharded; the rest can by default use Request. These few requests
@@ -1212,6 +1214,17 @@ func (cl *Client) handleShardedReq(ctx context.Context, req kmsg.Request) ([]Res
 		if err != nil {
 			addShard(shard(nil, try.req, nil, err)) // failure to shard means data loading failed; this request is failed
 			return
+		}
+
+		// If the request actually does not need to be issued, we issue
+		// it to a random broker. There is no benefit to this, but at
+		// least we will return one shard.
+		if len(issues) == 0 {
+			issues = []issueShard{{
+				req: try.req,
+				any: true,
+			}}
+			reshardable = true
 		}
 
 		for i := range issues {
