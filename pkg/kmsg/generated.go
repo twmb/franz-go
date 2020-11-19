@@ -10777,7 +10777,6 @@ type DescribeGroupsRequest struct {
 	Version int16
 
 	// Groups is an array of group IDs to request metadata for.
-	// If this is empty, the response will include all groups.
 	Groups []string
 
 	// IncludeAuthorizedOperations, introduced in Kafka 2.3.0, specifies

@@ -1,7 +1,6 @@
 // DescribeGroupsRequest requests metadata for group IDs.
 DescribeGroupsRequest => key 15, max version 5, flexible v5+, group coordinator
   // Groups is an array of group IDs to request metadata for.
-  // If this is empty, the response will include all groups.
   Groups: [string]
   // IncludeAuthorizedOperations, introduced in Kafka 2.3.0, specifies
   // whether to include a bitfield of AclOperations this client can perform
