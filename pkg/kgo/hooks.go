@@ -58,15 +58,15 @@ type BrokerWriteHook interface {
 
 // BrokerReadHook is called after a read from a broker.
 //
-// Kerberos SASL does not cause write hooks, since it directly writes to the
+// Kerberos SASL does not cause read hooks, since it directly reads from the
 // connection. This may change in the future such that the sasl authenticate
 // key is used (even though sasl authenticate requests are not being issued).
 type BrokerReadHook interface {
 	// OnRead is passed the broker metadata, the key for the response that
 	// was read, the number of bytes read, how long the client waited
-	// before reading the respeonse, how long it took to read the response,
+	// before reading the response, how long it took to read the response,
 	// and any error.
 	//
-	// The bytes written does not count any tls overhead.
+	// The bytes read does not count any tls overhead.
 	OnRead(meta BrokerMetadata, key int16, bytesRead int, readWait, timeToRead time.Duration, err error)
 }

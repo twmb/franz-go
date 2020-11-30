@@ -436,7 +436,7 @@ func SASL(sasls ...sasl.Mechanism) Opt {
 
 // WithHooks sets hooks to call whenever relevant.
 //
-// Hooks can be used to layer in metrics (such as prometheus hooks) or anything
+// Hooks can be used to layer in metrics (such as Prometheus hooks) or anything
 // else. The client will call all hooks in order. See the Hooks interface for
 // more information, as well as any interface that contains "Hook" in the name
 // to know the available hooks. A single hook can implement zero or all hook
