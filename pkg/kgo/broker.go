@@ -882,12 +882,19 @@ func (cxn *brokerCxn) waitResp(pr promisedResp) {
 func (cxn *brokerCxn) handleResps() {
 	defer cxn.die() // always track our death
 
+	var successes uint64
 	for pr := range cxn.resps {
 		raw, err := cxn.readResponse(time.Since(pr.enqueue), pr.resp.Key(), pr.corrID, pr.readTimeout, pr.flexibleHeader)
 		if err != nil {
+			if successes > 0 || len(cxn.b.cl.cfg.sasls) > 0 {
+				cxn.b.cl.cfg.logger.Log(LogLevelDebug, "read from broker errored, killing connection", "addr", cxn.b.addr, "id", cxn.b.meta.NodeID, "successful_reads", successes, "err", err)
+			} else {
+				cxn.b.cl.cfg.logger.Log(LogLevelWarn, "read from broker errored, killing connection after 0 successful responses (is sasl missing?)", "addr", cxn.b.addr, "id", cxn.b.meta.NodeID, "err", err)
+			}
 			pr.promise(nil, err)
 			return
 		}
+		successes++
 		readErr := pr.resp.ReadFrom(raw)
 
 		// If we had no error, we read the response successfully.
