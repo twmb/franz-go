@@ -70,3 +70,19 @@ type BrokerReadHook interface {
 	// The bytes read does not count any tls overhead.
 	OnRead(meta BrokerMetadata, key int16, bytesRead int, readWait, timeToRead time.Duration, err error)
 }
+
+// BrokerThrottleHook is called after a response to a request is read
+// from a broker, and the response identifies throttling in effect.
+type BrokerThrottleHook interface {
+	// OnThrottle is passed the broker metadata, the imposed throttling
+	// interval, and whether the throttle was applied before Kafka
+	// responded to them request or after.
+	//
+	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
+	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
+	//
+	// If throttledAfterResponse is false, then Kafka already applied the
+	// throttle. If it is true, the client internally will not send another
+	// request until the throttle deadline has passed.
+	OnThrottle(meta BrokerMetadata, throttleInterval time.Duration, throttledAfterResponse bool)
+}

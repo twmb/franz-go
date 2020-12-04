@@ -850,6 +850,11 @@ func (cxn *brokerCxn) handleResps() {
 					if throttleUntil > cxn.throttleUntil {
 						atomic.StoreInt64(&cxn.throttleUntil, throttleUntil)
 					}
+					cxn.cl.cfg.hooks.each(func(h Hook) {
+						if h, ok := h.(BrokerThrottleHook); ok {
+							h.OnThrottle(cxn.b.meta, time.Duration(millis)*time.Millisecond, throttlesAfterResp)
+						}
+					})
 				}
 			}
 		}
