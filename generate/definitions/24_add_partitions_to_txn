@@ -2,7 +2,7 @@
 // partitions in the request. Before producing any records to a partition in
 // the transaction, that partition must have been added to the transaction with
 // this request.
-AddPartitionsToTxnRequest => key 24, max version 2, txn coordinator
+AddPartitionsToTxnRequest => key 24, max version 3, flexible v3+, txn coordinator
   // TransactionalID is the transactional ID to use for this request.
   TransactionalID: string
   // ProducerID is the producer ID of the client for this transactional ID

@@ -1,7 +1,7 @@
 // DescribeConfigsRequest issues a request to describe configs that Kafka
 // currently has. These are the key/value pairs that one uses to configure
 // brokers and topics.
-DescribeConfigsRequest => key 32, max version 3
+DescribeConfigsRequest => key 32, max version 4, flexible v4+
   // Resources is a list of resources to describe.
   Resources: [=>]
     // ResourceType is an enum corresponding to the type of config to describe.

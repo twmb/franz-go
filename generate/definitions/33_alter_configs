@@ -11,7 +11,7 @@
 // To fix this problem, the AlterConfigs request / response was deprecated
 // in Kafka 2.3.0 in favor of the new IncrementalAlterConfigs request / response.
 // See KIP-339 for more details.
-AlterConfigsRequest => key 33, max version 1
+AlterConfigsRequest => key 33, max version 2, flexible v2+
   // Resources is an array of configs to alter.
   Resources: [=>]
     // ResourceType is an enum corresponding to the type of config to alter.

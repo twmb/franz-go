@@ -2,7 +2,7 @@
 // within Kafka.
 //
 // This is primarily useful for moving directories between disks.
-AlterReplicaLogDirsRequest => key 34, max version 1
+AlterReplicaLogDirsRequest => key 34, max version 2, flexible v2+
   // Dirs contains absolute paths of where you want things to end up.
   Dirs: [=>]
     // Dir is an absolute path where everything listed below should

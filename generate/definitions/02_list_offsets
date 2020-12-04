@@ -4,7 +4,7 @@
 // Version 5, introduced in Kafka 2.2.0, is the same as version 4. Using
 // version 5 implies you support Kafka's OffsetNotAvailableException
 // See KIP-207 for details.
-ListOffsetsRequest => key 2, max version 5
+ListOffsetsRequest => key 2, max version 6, flexible v6+
   // ReplicaID is the broker ID to get offsets from. As a Kafka client, use -1.
   // The consumer replica ID (-1) causes requests to only succeed if issued
   // against the leader broker.

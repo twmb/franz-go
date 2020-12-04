@@ -1,6 +1,6 @@
 // DescribeClientQuotasRequest, proposed in KIP-546 and introduced with Kafka 2.6.0,
 // provides a way to describe client quotas.
-DescribeClientQuotasRequest => key 48, max version 0
+DescribeClientQuotasRequest => key 48, max version 1, flexible v1+
   // Components is a list of match filters to apply for describing quota entities.
   Components: [=>]
     // EntityType is the entity component type that this filter component

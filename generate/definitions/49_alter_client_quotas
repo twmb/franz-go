@@ -1,6 +1,6 @@
 // AlterClientQuotaRequest, proposed in KIP-546 and introduced with Kafka 2.6.0,
 // provides a way to alter client quotas.
-AlterClientQuotasRequest => key 49, max version 0
+AlterClientQuotasRequest => key 49, max version 1, flexible v1+
   // Entries are quota configuration entries to alter.
   Entries: [=>Entry]
     // Entity contains the components of a quota entity to alter.

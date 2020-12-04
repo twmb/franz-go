@@ -127,7 +127,7 @@ func V0_11_0() Versions {
 		0, // 24 add partitions to txn KAFKA-4990 865d82af2c KIP-98
 		0, // 25 add offsets to txn (same)
 		0, // 26 end txn (same)
-		0, // 27 write txn (same)
+		0, // 27 write txn markers (same)
 		0, // 28 txn offset commit (same)
 		0, // 29 describe acls KAFKA-3266 9815e18fef KIP-140
 		0, // 30 create acls (same)
@@ -438,6 +438,21 @@ func Tip() Versions {
 	v = append(v,
 		0, // 58 envelope
 	)
+
+	// KAFKA-10729 85f94d50271c952c3e9ee49c4fc814c0da411618 KIP-482
+	// (flexible bumps)
+	v[0]++  // 9 produce
+	v[2]++  // 6 list offsets
+	v[23]++ // 4 offsets for leader epoch
+	v[24]++ // 3 add partitions to txn
+	v[25]++ // 3 add offsets to txn
+	v[26]++ // 3 end txn
+	v[27]++ // 1 write txn markers
+	v[32]++ // 4 describe configs
+	v[33]++ // 2 alter configs
+	v[34]++ // 2 alter replica log dirs
+	v[48]++ // 1 describe client quotas
+	v[49]++ // 1 alter client quotas
 
 	return v
 }

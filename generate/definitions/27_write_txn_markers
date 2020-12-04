@@ -1,7 +1,7 @@
 // WriteTxnMarkersRequest is a broker-to-broker request that Kafka uses to
 // finish transactions. Since this is specifically for inter-broker
 // communication, this is left undocumented.
-WriteTxnMarkersRequest => key 27, max version 0
+WriteTxnMarkersRequest => key 27, max version 1, flexible v1+
   Markers: [=>]
     ProducerID: int64
     ProducerEpoch: int16

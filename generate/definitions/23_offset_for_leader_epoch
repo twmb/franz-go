@@ -4,7 +4,7 @@
 // consumers to perform more accurate offset resetting in the case of data loss.
 //
 // In support of version 2, this requires DESCRIBE on TOPIC.
-OffsetForLeaderEpochRequest => key 23, max version 3
+OffsetForLeaderEpochRequest => key 23, max version 4, flexible v4+
   // ReplicaID, added in support of KIP-392, is the broker ID of the follower,
   // or -1 if this request is from a consumer.
   ReplicaID: int32(-2) // v3+
@@ -79,4 +79,4 @@ OffsetForLeaderEpochResponse =>
       // With the prior field, consumers know that at this offset, the broker
       // either has no more records (consumer is caught up), or the broker
       // transitioned to a new epoch.
-      EndOffset: int64
+      EndOffset: int64(-1)
