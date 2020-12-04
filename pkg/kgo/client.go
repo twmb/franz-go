@@ -1282,6 +1282,29 @@ func (cl *Client) handleShardedReq(ctx context.Context, req kmsg.Request) ([]Res
 	return shards, sharder.merge
 }
 
+// a convenience function for when a request needs to be issued identically to
+// all brokers.
+func (cl *Client) allBrokersShardedReq(ctx context.Context, fn func() kmsg.Request) ([]issueShard, bool, error) {
+	if err := cl.fetchBrokerMetadata(ctx); err != nil {
+		return nil, false, err
+	}
+
+	var issues []issueShard
+	cl.brokersMu.RLock()
+	for _, broker := range cl.brokers {
+		if broker.meta.NodeID < 0 {
+			continue // we skip seed brokers
+		}
+		issues = append(issues, issueShard{
+			req:    fn(),
+			broker: broker.meta.NodeID,
+		})
+	}
+	cl.brokersMu.RUnlock()
+
+	return issues, false, nil // we do NOT re-shard these requests request
+}
+
 // a convenience function for saving the first ResponseShard error.
 func firstErrMerger(sresps []ResponseShard, merge func(kresp kmsg.Response)) error {
 	var firstErr error
@@ -1483,27 +1506,11 @@ func (cl *describeGroupsSharder) merge(sresps []ResponseShard) (kmsg.Response, e
 type listGroupsSharder struct{ *Client }
 
 func (cl *listGroupsSharder) shard(ctx context.Context, kreq kmsg.Request) ([]issueShard, bool, error) {
-	if err := cl.fetchBrokerMetadata(ctx); err != nil {
-		return nil, false, err
-	}
-
 	req := kreq.(*kmsg.ListGroupsRequest)
-
-	var issues []issueShard
-	cl.brokersMu.RLock()
-	for _, broker := range cl.brokers {
-		if broker.meta.NodeID < 0 {
-			continue // we skip seed brokers
-		}
-		myReq := *req
-		issues = append(issues, issueShard{
-			req:    &myReq,
-			broker: broker.meta.NodeID,
-		})
-	}
-	cl.brokersMu.RUnlock()
-
-	return issues, false, nil // we do NOT re-shard this request
+	return cl.allBrokersShardedReq(ctx, func() kmsg.Request {
+		dup := *req
+		return &dup
+	})
 }
 
 func (cl *listGroupsSharder) onResp(kresp kmsg.Response) {} // nothing to be done here
@@ -1966,6 +1973,15 @@ type describeLogDirsSharder struct{ *Client }
 func (cl *describeLogDirsSharder) shard(ctx context.Context, kreq kmsg.Request) ([]issueShard, bool, error) {
 	req := kreq.(*kmsg.DescribeLogDirsRequest)
 
+	// If req.Topics is nil, the request is to describe all logdirs. Thus,
+	// we will issue the request to all brokers (similar to ListGroups).
+	if req.Topics == nil {
+		return cl.allBrokersShardedReq(ctx, func() kmsg.Request {
+			dup := *req
+			return &dup
+		})
+	}
+
 	var need []string
 	for _, topic := range req.Topics {
 		need = append(need, topic.Topic)
@@ -1980,7 +1996,7 @@ func (cl *describeLogDirsSharder) shard(ctx context.Context, kreq kmsg.Request) 
 
 	for _, topic := range req.Topics {
 		tmapping, exists := mapping[topic.Topic]
-		if err := kerr.ErrorForCode(tmapping.topic.ErrorCode); err != nil || !exists {
+		if !exists || kerr.ErrorForCode(tmapping.topic.ErrorCode) != nil {
 			for _, partition := range topic.Partitions {
 				unknowns[topic.Topic] = append(unknowns[topic.Topic], partition)
 			}
