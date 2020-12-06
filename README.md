@@ -30,9 +30,8 @@ ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 defer cancel()
 
 // Construct message request and send it to Kafka
-req := kmsg.MetadataRequest{
-    Topics: []kmsg.MetadataRequestTopic{},
-}
+req := kmsg.NewMetadataRequest()
+req.Topics = nil // Requests all topics
 
 res, err := req.RequestWith(ctx, client)
 if err != nil {
