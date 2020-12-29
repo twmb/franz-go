@@ -13,8 +13,8 @@ import (
 )
 
 type sink struct {
-	cl *Client // our owning client, for cfg, metadata triggering, context, etc.
-	b  *broker // the broker this sink belongs to
+	cl     *Client // our owning client, for cfg, metadata triggering, context, etc.
+	nodeID int32   // the node ID of the broker this sink belongs to
 
 	// inflightSem controls the number of concurrent produce requests.  We
 	// start with a limit of 1, which covers Kafka v0.11.0.0. On the first
@@ -34,6 +34,12 @@ type sink struct {
 
 	drainState workLoop
 
+	// seqReqResps, guarded by seqReqRespsMu, contains responses that must
+	// be handled sequentially. These responses are handled asyncronously,
+	// but sequentially.
+	seqReqRespsMu sync.Mutex
+	seqReqResps   []seqSinkReqResp
+
 	backoffMu   sync.Mutex // guards the following
 	needBackoff bool
 	backoffSeq  uint32 // prevents pile on failures
@@ -50,10 +56,12 @@ type sink struct {
 	recBufsStart int       // incremented every req to avoid large batch starvation
 }
 
-func newSink(
-	cl *Client,
-	b *broker,
-) *sink {
+type seqSinkReqResp struct {
+	req     kmsg.Request
+	promise func(kmsg.Response, error)
+}
+
+func (cl *Client) newSink(nodeID int32) *sink {
 	const messageRequestOverhead int32 = 4 + // full length
 		2 + // key
 		2 + // version
@@ -65,8 +73,8 @@ func newSink(
 		4 // topics array length
 
 	s := &sink{
-		cl: cl,
-		b:  b,
+		cl:     cl,
+		nodeID: nodeID,
 
 		baseWireLength: messageRequestOverhead + produceRequestOverhead,
 	}
@@ -340,17 +348,51 @@ func (s *sink) drain() {
 		req.producerEpoch = epoch
 		req.backoffSeq = s.backoffSeq // safe to read outside mu since we are in drain loop
 
-		s.b.doSequencedAsyncPromise(
-			s.cl.ctx,
-			req,
-			func(resp kmsg.Response, err error) {
-				s.handleReqResp(req, resp, err)
-				<-sem
-			},
-		)
+		s.doSequenced(req, func(resp kmsg.Response, err error) {
+			s.handleReqResp(req, resp, err)
+			<-sem
+		})
 
 		again = s.drainState.maybeFinish(again)
 	}
+}
+
+// With handleseqReqResps below, this function ensures that all request responses
+// are handled in order. We use this guarantee while in handleReqResp below.
+//
+// Note that some request may finish while a later concurrently issued one
+// is successful; this is fine.
+func (s *sink) doSequenced(
+	req kmsg.Request,
+	promise func(kmsg.Response, error),
+) {
+	s.seqReqRespsMu.Lock()
+	defer s.seqReqRespsMu.Unlock()
+
+	s.seqReqResps = append(s.seqReqResps, seqSinkReqResp{req, promise})
+	if len(s.seqReqResps) == 1 {
+		go s.handleSeqReqResps(s.seqReqResps[0])
+	}
+}
+
+// Ensures that all request responses are processed in order.
+func (s *sink) handleSeqReqResps(reqResp seqSinkReqResp) {
+more:
+	br, err := s.cl.brokerOrErr(s.cl.ctx, s.nodeID, ErrUnknownBroker)
+	if err != nil {
+		reqResp.promise(nil, err)
+	}
+	resp, err := br.waitResp(s.cl.ctx, reqResp.req)
+	reqResp.promise(resp, err)
+
+	s.seqReqRespsMu.Lock()
+	s.seqReqResps = s.seqReqResps[1:]
+	if len(s.seqReqResps) > 0 {
+		reqResp = s.seqReqResps[0]
+		s.seqReqRespsMu.Unlock()
+		goto more
+	}
+	s.seqReqRespsMu.Unlock()
 }
 
 // doTxnReq issues an AddPartitionsToTxnRequest for a produce request for all
@@ -796,8 +838,16 @@ func (s *sink) removeRecBuf(rm *recBuf) {
 }
 
 // recBuf is a buffer of records being produced to a partition and (usually)
-// being drained by a sink. This is only not drained if the partition has
-// a load error and thus does not a have a sink to be drained into.
+// being drained by a sink. This is only not drained if the partition has a
+// load error and thus does not a have a sink to be drained into.
+//
+// NOTE if we add leaderEpoch / leader to this eventually (per one of the
+// KIPs), we will need to update it when migrating a recBuf on metadata update.
+// Unlike a cursor, we update record buffers live (no session stopping), thus
+// we will likely need an atomic. Once this happens, like in a cursor, we may
+// as well just add a topicPartition pointer field, and when this happens, we
+// can remove the topic and partition fields themselves back into
+// topicPartition (and do the same in the cursor).
 type recBuf struct {
 	cl *Client // for cfg, record finishing
 
@@ -912,7 +962,7 @@ func (recBuf *recBuf) bufferRecord(pr promisedRec, abortOnNewBatch bool) bool {
 		// to <0.11.0 and be using message sets. Until we know the
 		// broker version, we pessimisitically cut our batch off using
 		// the largest record length numbers.
-		produceVersionKnown := recBuf.sink != nil && atomic.LoadUint32(&recBuf.sink.produceVersionKnown) == 1
+		produceVersionKnown := atomic.LoadUint32(&recBuf.sink.produceVersionKnown) == 1
 		if !produceVersionKnown {
 			v1newBatchLength := batch.v1wireLength + messageSet1Length(pr.Record)
 			if v1newBatchLength > newBatchLength { // we only check v1 since it is larger than v0
@@ -929,6 +979,22 @@ func (recBuf *recBuf) bufferRecord(pr promisedRec, abortOnNewBatch bool) bool {
 			}
 		}
 
+		// TODO this can spin loop, because max record batch bytes is
+		// per batch, which does not take into account the max broker
+		// write bytes.
+		//
+		// If the limits are too close, the overhead baseWireLength of
+		// the request, as well as the topic and partition overhead
+		// (and 6 bytes of size beforehand) can, combined with the
+		// batch size, exceed the max broker write bytes. Thus, the
+		// batch will be fine according to maxRecordBatchBytes, but
+		// will be too large when put into a request and the batch will
+		// not be used.
+		//
+		// maxRecordBatchBytes needs to be per recBuf, such that each
+		// recBuf takes into account baseWireLength, its topic, its
+		// partition, and 6 size bytes over overhead.
+
 		if batch.tries == 0 && newBatchLength <= recBuf.cl.cfg.maxRecordBatchBytes {
 			newBatch = false
 			batch.appendRecord(pr, recordNumbers)
@@ -940,12 +1006,6 @@ func (recBuf *recBuf) bufferRecord(pr promisedRec, abortOnNewBatch bool) bool {
 			return false
 		}
 		recBuf.batches = append(recBuf.batches, recBuf.newRecordBatch(pr))
-	}
-
-	// Our sink could be nil if our metadata loaded a partition that is
-	// erroring.
-	if recBuf.sink == nil {
-		return true
 	}
 
 	if recBuf.cl.cfg.linger == 0 {
@@ -995,9 +1055,7 @@ func (recBuf *recBuf) unlingerAndManuallyDrain() {
 	recBuf.mu.Lock()
 	defer recBuf.mu.Unlock()
 	recBuf.lockedStopLinger()
-	if recBuf.sink != nil {
-		recBuf.sink.maybeDrain()
-	}
+	recBuf.sink.maybeDrain()
 }
 
 // bumpRepeatedLoadErr is provided to bump a buffer's number of consecutive
@@ -1061,9 +1119,6 @@ func (recBuf *recBuf) lockedFailAllRecords(err error) {
 // This is called when a buffer is added to a sink (to clear a failing state
 // from migrating buffers between sinks) or when a metadata update sees the
 // sink is still on the same source.
-//
-// Note the sink cannot be nil here, since nil sinks correspond to load errors,
-// and partitions with load errors do not call clearFailing.
 func (recBuf *recBuf) clearFailing() {
 	recBuf.mu.Lock()
 	defer recBuf.mu.Unlock()

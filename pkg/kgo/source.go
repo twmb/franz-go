@@ -1,75 +1,74 @@
 package kgo
 
 import (
+	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
+// A source consumes from an individual broker.
+//
+// As long as there is at least one active cursor, a source aims to have *one*
+// buffered fetch at all times. As soon as the fetch is taken, a source issues
+// another fetch in the background.
 type source struct {
-	cl *Client // our owning client, for cfg, metadata triggering, context, etc.
-	b  *broker // the broker this sink belongs to
+	cl     *Client // our owning client, for cfg, metadata triggering, context, etc.
+	nodeID int32   // the node ID of the broker this sink belongs to
 
-	inflightSem chan struct{} // capacity of 1
-	fillState   workLoop
-
+	// Tracks how many _failed_ fetch requests we have in a row (unable to
+	// receive a response). Any response, even responses with an ErrorCode
+	// set, are successful. This field is used for backoff purposes.
 	consecutiveFailures int
 
-	// session supports fetch sessions as per KIP-227. This is updated
-	// serially when creating a request and when handling a req response.
-	// As such, modifications to it do not need to be under a lock.
-	session fetchSession
+	fetchState workLoop
+	sem        chan struct{} // closed when fetchable, recreated when a buffered fetch exists
+	buffered   bufferedFetch // contains a fetch the source has buffered for polling
 
-	mu sync.Mutex // guards all below
+	session fetchSession // supports fetch sessions as per KIP-227
 
+	cursorsMu    sync.Mutex
 	cursors      []*cursor // contains all partitions being consumed on this source
 	cursorsStart int       // incremented every fetch req to ensure all partitions are fetched
-
-	clearSessionBeforeNextFetch bool // set whenever a cursor is removed
-
-	// buffered contains a fetch that the sink has received but that the
-	// client user has not yet polled. On poll, partitions that actually
-	// are not owned by the client anymore are removed before being
-	// returned.
-	buffered bufferedFetch
 }
 
-func newSource(
-	cl *Client,
-	b *broker,
-) *source {
-	return &source{
-		cl: cl,
-		b:  b,
-
-		inflightSem: make(chan struct{}, 1),
+func (cl *Client) newSource(nodeID int32) *source {
+	s := &source{
+		cl:     cl,
+		nodeID: nodeID,
+		sem:    make(chan struct{}),
 	}
+	close(s.sem)
+	return s
 }
 
 func (s *source) addCursor(add *cursor) {
-	s.mu.Lock()
+	s.cursorsMu.Lock()
 	add.cursorsIdx = len(s.cursors)
 	s.cursors = append(s.cursors, add)
-	s.mu.Unlock()
+	s.cursorsMu.Unlock()
 
-	// We always clear the failing, since this could have been from moving
-	// a failing partition from one source to another (clearing the fail).
-	add.clearFailing()
+	// Adding a new cursor may allow a new partition to be fetched.
+	// We do not need to cancel any current fetch nor kill the session,
+	// since adding a cursor is non-destructive to work in progress.
+	// If the session is currently stopped, this is a no-op.
+	s.maybeConsume()
 }
 
+// Removes a cursor from the source.
+//
+// The caller should do this with a stopped session if necessary, which
+// should clear any buffered fetch and reset the source's session.
 func (s *source) removeCursor(rm *cursor) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	s.clearSessionBeforeNextFetch = true
+	s.cursorsMu.Lock()
+	defer s.cursorsMu.Unlock()
 
 	if rm.cursorsIdx != len(s.cursors)-1 {
-		s.cursors[rm.cursorsIdx], s.cursors[len(s.cursors)-1] =
-			s.cursors[len(s.cursors)-1], nil
-
+		s.cursors[rm.cursorsIdx], s.cursors[len(s.cursors)-1] = s.cursors[len(s.cursors)-1], nil
 		s.cursors[rm.cursorsIdx].cursorsIdx = rm.cursorsIdx
 	} else {
 		s.cursors[rm.cursorsIdx] = nil // do not let the memory hang around
@@ -83,267 +82,255 @@ func (s *source) removeCursor(rm *cursor) {
 
 // cursor is where we are consuming from for an individual partition.
 //
-// All code on cursors takes special care to only work for the _current_
-// assignment; this means that outdated requests that return cannot return old
-// data. See the seqOffset field for more info.
+// NOTE if adding fields here, check if they need to be handled when migrating
+// the cursor between sources on a metadata update. This would be the case for
+// any field that belongs in a topicPartition but is copied to the cursor; if
+// enough fields like this exist, we can just use a topicPartition pointer
+// directly, which would only be modified with the session stopped.
 type cursor struct {
 	topic     string
 	partition int32
 
 	keepControl bool // whether to keep control records
 
-	mu sync.Mutex
+	cursorsIdx int // updated under source mutex
 
-	source     *source
-	cursorsIdx int
-
-	leader           int32
-	preferredReplica int32
-
-	// seqOffset is our epoch/offset that we are consuming, with a
-	// corresponding "seq" from group assignments / manual assignments.
-	// When a fetch request is issued, we "freeze" a view of the offset
-	// and only actually use the response (and update the cursor's
-	// offset) if the consumer seq has yet changed.
-	seqOffset
-
-	// inUse is true whenever the cursor is chosen for an in flight
-	// fetch request and reset to false if the fetch response has no usable
-	// records or when the buffered usable records are taken.
-	inUse bool
-
-	// failing is true when we encounter a partition error.
-	// It is always cleared on metadata update.
-	failing bool
-
-	// loadingOffsets is true when we are resetting offsets with
-	// ListOffsets or with OffsetsForLeaderEpoch.
+	// The source we are currently on. This is modified in two scenarios:
 	//
-	// This is unconditionally reset whenever assigning partitions
-	// or when the requests mentioned in the prior sentence finish.
-	loadingOffsets bool
+	//  * by metadata when the consumer session is completely stopped
+	//
+	//  * by a fetch when handling a fetch response that returned preferred
+	//  replicas
+	//
+	// This is additionally read within a session when cursor is
+	// transitioning from used to usable.
+	source *source
 
-	// needLoadEpoch is true when the cursor moved sources; if true in
-	// createReq, then the source sets the epoch to be checked (similar to
-	// what happens in FencedLeaderEpoch on response).
+	// useState is an atomic that has three states: unset, usable, and
+	// used. A cursor can be used in a fetch request if it is in the usable
+	// state. Once used, the cursor will be set back to usable once the
+	// request lifecycle is complete (a usable fetch response, or once
+	// listing offsets or loading epochs completes).
 	//
-	// We wait until createReq rather than checking immediately because the
-	// cursor could still be in use / in flight on the old source during
-	// the move.
+	// A cursor can be set back to unset when sources are stopped. This can
+	// be done if a group loses a partition, for example.
 	//
-	// We do this regardless of the seq since epoch validation is strictly
-	// beneficial; and worrying about the seq would make this unnecessarily
-	// complicated.
-	needLoadEpoch bool
+	// Updates to cursorOffset are done when the sources are stopped and
+	// the cursor is in the unset state, or when the cursor is in the used
+	// state before switching back to usable.
+	//
+	// The used state is exclusively updated by either building a fetch
+	// request or when the source is stopped.
+	useState uint32
+
+	// Our leader; if metadata sees this change, the metadata update
+	// migrates us to a different source and updates this with the session
+	// stopped.
+	leader int32
+
+	// What our cursor believes to be the epoch of the leader for this
+	// partition. For KIP-320, if a broker receives a fetch request where
+	// the current leader epoch does not match the brokers, either the
+	// broker is behind and returns UnknownLeaderEpoch, or we are behind
+	// and the broker returns FencedLeaderEpoch. For the former, we back
+	// off and retry. For the latter, we update our metadata.
+	leaderEpoch int32
+
+	// NOTE if adding new fields, see the note preceeding the struct.
+
+	// cursorOffset is our epoch/offset that we are consuming. When a fetch
+	// request is issued, we "freeze" a view of the offset and of the
+	// leader epoch (see cursorOffsetNext for why the leader epoch). When a
+	// buffered fetch is taken, we update the cursor.
+	cursorOffset
 }
 
-func (c *cursor) maybeSetPreferredReplica(preferredReplica, currentLeader int32) bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+// cursorOffset tracks offsets/epochs for a cursor.
+type cursorOffset struct {
+	// What the cursor is at: we request this offset next.
+	offset int64
 
-	if c.leader != currentLeader {
-		return false
+	// The epoch of the last record we consumed. Also used for KIP-320, if
+	// we are fenced or we have an offset out of range error, we go into
+	// the OffsetForLeaderEpoch recovery. The last consumed epoch tells the
+	// broker which offset we want: either (a) the next offset if the last
+	// consumed epoch is the current epoch, or (b) the offset of the first
+	// record in the next epoch. This allows for exact offset resetting and
+	// data loss detection.
+	//
+	// See kmsg.OffsetForLeaderEpochResponseTopicPartition for more
+	// details.
+	lastConsumedEpoch int32
+}
+
+// use, for fetch requests, freezes a view of the cursorOffset.
+func (c *cursor) use() *cursorOffsetNext {
+	// A source using a cursor has exclusive access to the use field by
+	// virtue of that source building a request during a live session,
+	// or by virtue of the session being stopped.
+	c.useState = 2
+	return &cursorOffsetNext{
+		cursorOffset:       c.cursorOffset,
+		from:               c,
+		currentLeaderEpoch: c.leaderEpoch,
 	}
+}
 
-	c.source.cl.brokersMu.RLock()
-	broker, exists := c.source.cl.brokers[preferredReplica]
-	c.source.cl.brokersMu.RUnlock()
+// unset transitions a cursor to an unusable state when the cursor is no longer
+// to be consumed. This is called exclusively after sources are stopped.
+// This also unsets the cursor offset, which is assumed to be unused now.
+func (c *cursor) unset() {
+	c.useState = 0
+	c.setOffset(cursorOffset{
+		offset:            -1,
+		lastConsumedEpoch: -1,
+	})
+}
+
+// usable returns whether a cursor can be used for building a fetch request.
+func (c *cursor) usable() bool {
+	return atomic.LoadUint32(&c.useState) == 1
+}
+
+// allowUsable is called after setting the cursor's offset to allow a cursor to
+// be used. This is done either when the session is completely stopped (most
+// commonly), or when allowing a cursor to be newly usable within the context
+// of a live session (while guarding against a concurrent stopSession).
+//
+// The former case needs no atomic because the source is stopped, but the
+// latter does.
+func (c *cursor) allowUsable() {
+	c.source.maybeConsume()
+}
+
+// finishUsing allows a cursor to be used again. This is an atomic because a
+// cursor could finish listing offsets or loading epochs (and thus, finish
+// using) while fetch request is being built concurrently.
+//
+// The cursor could have been unset if the assignment directly came from
+// listing offsets.
+func (c *cursor) finishUsing() {
+	atomic.SwapUint32(&c.useState, 1)
+	// When finishing using a cursor, we have exclusive access to the
+	// cursor's source. The source only changes when a consumer session is
+	// stopped, meaning no cursors are being read.
+	c.source.maybeConsume()
+}
+
+// setOffset sets the cursors offset which will be used the next time a fetch
+// request is built. This function is called under the source mutex while the
+// source is stopped, and the caller is responsible for calling maybeConsume
+// after.
+func (c *cursor) setOffset(o cursorOffset) {
+	c.cursorOffset = o
+}
+
+// cursorOffsetNext is updated while processing a fetch response.
+//
+// When a buffered fetch is taken, we update a cursor with the final values in
+// the modified cursor offset.
+type cursorOffsetNext struct {
+	cursorOffset
+	from *cursor
+
+	// The leader epoch at the time we took this cursor offset snapshot. We
+	// need to copy this rather than accessing it through `from` because a
+	// fetch request can be canceled while it is being written (and reading
+	// the epoch).
+	//
+	// The leader field itself is only read within the context of a session
+	// while the session is alive, thus it needs no such guard.
+	//
+	// Basically, any field read in AppendTo needs to be copied into
+	// cursorOffsetNext.
+	currentLeaderEpoch int32
+}
+
+type cursorOffsetPreferred struct {
+	cursorOffsetNext
+	preferredReplica int32
+}
+
+// Moves a cursor from one source to another. This is done while handling
+// a fetch response, which means within the context of a live session.
+func (p *cursorOffsetPreferred) move() {
+	c := p.from
+	defer c.finishUsing()
+
+	// Before we migrate the cursor, we check if the destination source
+	// exists. If not, we do not migrate and instead force a metadata.
+
+	c.source.cl.sinksAndSourcesMu.Lock()
+	sns, exists := c.source.cl.sinksAndSources[p.preferredReplica]
+	c.source.cl.sinksAndSourcesMu.Unlock()
 
 	if !exists {
 		c.source.cl.triggerUpdateMetadataNow()
-		return false
+		return
 	}
 
-	c.preferredReplica = preferredReplica
+	// This remove clears the source's session and buffered fetch, although
+	// we will not have a buffered fetch since moving replicas is called
+	// before buffering a fetch.
 	c.source.removeCursor(c)
-	c.source = broker.source
+	c.source = sns.source
 	c.source.addCursor(c)
-
-	return true
 }
 
-// seqOffset tracks offsets/epochs with a cursor's seq.
-type seqOffset struct {
-	offset             int64
-	lastConsumedEpoch  int32
-	currentLeaderEpoch int32
-	seq                uint64
-}
+type cursorPreferreds []cursorOffsetPreferred
 
-// seqOffsetFrom is updated while processing a fetch response. Once the response
-// is taken, we update the cursor's offset only if the seq is the same.
-type seqOffsetFrom struct {
-	seqOffset
-	from *cursor
-
-	currentLeader           int32
-	currentPreferredReplica int32
-}
-
-// use, for fetch requests, freezes a view of the offset/epoch for the cursor's
-// current seq. When the resulting fetch response is finally taken, we update
-// the cursor's offset/epoch only if the cursor's seq is still the same.
-func (c *cursor) use() *seqOffsetFrom {
-	c.inUse = true
-	return &seqOffsetFrom{
-		seqOffset: c.seqOffset,
-		from:      c,
-
-		currentLeader:           c.leader,
-		currentPreferredReplica: c.preferredReplica,
+func (cs cursorPreferreds) eachPreferred(fn func(cursorOffsetPreferred)) {
+	for _, c := range cs {
+		fn(c)
 	}
 }
 
-// triggerConsume is called under the cursor's lock whenever the cursor maybe
-// needs to be consumed.
-func (c *cursor) triggerConsume() {
-	if c.offset != -1 && c.source != nil { // source could be nil if we loaded a failing partition
-		c.source.maybeConsume()
+type usedOffsets map[string]map[int32]*cursorOffsetNext
+
+func (os usedOffsets) eachOffset(fn func(*cursorOffsetNext)) {
+	for _, ps := range os {
+		for _, o := range ps {
+			fn(o)
+		}
 	}
 }
 
-// setOffset sets the cursors offset and seq, doing nothing if the seq is
-// out of date.
-func (c *cursor) setOffset(
-	currentEpoch int32,
-	clearLoading bool,
-	offset int64,
-	epoch int32,
-	fromSeq uint64,
-) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if fromSeq < c.seq {
-		return
-	}
-	if fromSeq > c.seq {
-		c.failing = false
-		c.seq = fromSeq
-	} else if currentEpoch < c.currentLeaderEpoch {
-		// If the seq is the same but the current epoch is stale, this set
-		// is from something out of date and a prior set bumped the epoch.
-		return
-	}
-	c.inUse = false
-	if clearLoading {
-		c.loadingOffsets = false
-	}
-
-	c.offset = offset
-	c.lastConsumedEpoch = epoch
-	c.currentLeaderEpoch = currentEpoch
-
-	c.triggerConsume()
+func (os usedOffsets) finishUsingAllWith(fn func(*cursorOffsetNext)) {
+	os.eachOffset(func(o *cursorOffsetNext) { fn(o); o.from.finishUsing() })
 }
 
-// resetOffset is like setOffset, but strictly for bumping the cursor's seq.
-func (c *cursor) resetOffset(fromSeq uint64) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if fromSeq < c.seq {
-		return
-	}
-	c.seq = fromSeq
-	c.failing = false
-	c.inUse = false
-	c.loadingOffsets = false
-	c.triggerConsume()
+func (os usedOffsets) finishUsingAll() {
+	os.eachOffset(func(o *cursorOffsetNext) { o.from.finishUsing() })
 }
 
-// restartOffset resets a cursor to usable and triggers the source to
-// begin consuming again. This is only called in unuseAll, where a cursor
-// was used in a fetch that ultimately returned no new data.
-func (c *cursor) setUnused(fromSeq uint64) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	// fromSeq could be less than seq if this setOffset is from a
-	// takeBuffered after assignment invalidation.
-	if fromSeq < c.seq {
-		return
-	}
-
-	c.inUse = false
-	c.triggerConsume()
-}
-
-// setFailing is called once a partition has an error response. The cursor is
-// not used until a metadata update clears the failing state.
-func (c *cursor) setFailing(fromSeq uint64) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if fromSeq < c.seq {
-		return
-	}
-	c.failing = true
-}
-
-// clearFailing, called on metadata update or when a cursor is added to a source,
-// clears any failing state.
-func (c *cursor) clearFailing() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	c.failing = false
-	c.triggerConsume()
-}
-
-func (c *cursor) setLoadingOffsets(fromSeq uint64) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.setLoadingOffsetsLocked(fromSeq)
-}
-
-func (c *cursor) setLoadingOffsetsLocked(fromSeq uint64) {
-	if fromSeq < c.seq {
-		return
-	}
-	c.loadingOffsets = true
-}
-
-// bufferedFetch is a fetch response waiting to be consumed by the client, as
-// well as offsets to update cursors to once the fetch is taken.
+// bufferedFetch is a fetch response waiting to be consumed by the client.
 type bufferedFetch struct {
-	fetch      Fetch
-	seq        uint64
-	reqOffsets map[string]map[int32]*seqOffsetFrom
+	fetch Fetch
+
+	usedOffsets usedOffsets // what the offsets will be next if this fetch is used
 }
 
 // takeBuffered drains a buffered fetch and updates offsets.
-func (s *source) takeBuffered() (Fetch, uint64) {
+func (s *source) takeBuffered() Fetch {
 	r := s.buffered
 	s.buffered = bufferedFetch{}
-	s.updateOffsets(r.reqOffsets)
-	return r.fetch, r.seq
+	r.usedOffsets.finishUsingAllWith(func(o *cursorOffsetNext) {
+		o.from.setOffset(o.cursorOffset)
+	})
+	close(s.sem)
+	return r.fetch
 }
 
-// updateOffsets is called when a buffered fetch is taken; we update all
-// cursor offsets and set them usable for new fetches.
-func (s *source) updateOffsets(reqOffsets map[string]map[int32]*seqOffsetFrom) {
-	for _, partitions := range reqOffsets {
-		for _, o := range partitions {
-			o.from.setOffset(o.currentLeaderEpoch, false, o.offset, o.lastConsumedEpoch, o.seq)
-		}
-	}
-	<-s.inflightSem
+func (s *source) discardBuffered() {
+	r := s.buffered
+	s.buffered = bufferedFetch{}
+	r.usedOffsets.finishUsingAll()
+	close(s.sem)
 }
 
-// unuseAll is called when a fetch returns no data; we set all the
-// cursors to usable again so we can reissue a new fetch.
-func (s *source) unuseAll(reqOffsets map[string]map[int32]*seqOffsetFrom) {
-	for _, partitions := range reqOffsets {
-		for _, o := range partitions {
-			o.from.setUnused(o.seq)
-		}
-	}
-	<-s.inflightSem
-}
-
-func (s *source) createReq() (req *fetchRequest, again bool) {
-	req = &fetchRequest{
+// createReq actually creates a fetch request.
+func (s *source) createReq() *fetchRequest {
+	req := &fetchRequest{
 		maxWait:        s.cl.cfg.maxWait,
 		minBytes:       s.cl.cfg.minBytes,
 		maxBytes:       s.cl.cfg.maxBytes,
@@ -351,391 +338,450 @@ func (s *source) createReq() (req *fetchRequest, again bool) {
 		rack:           s.cl.cfg.rack,
 		isolationLevel: s.cl.cfg.isolationLevel,
 
-		session: &s.session,
+		// We copy a view of the session for the request, which allows
+		// us to reset the source (resetting only its fields without
+		// modifying the prior map) while the request may be reading
+		// its copy of the original fields.
+		session: s.session,
 	}
 
-	var reloadOffsets offsetsLoad
-	defer func() {
-		if !reloadOffsets.isEmpty() {
-			reloadOffsets.mergeInto(&s.cl.consumer)
-		}
-	}()
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if s.clearSessionBeforeNextFetch {
-		s.session.reset()
-		s.clearSessionBeforeNextFetch = false
-	}
+	s.cursorsMu.Lock()
+	defer s.cursorsMu.Unlock()
 
 	cursorIdx := s.cursorsStart
 	for i := 0; i < len(s.cursors); i++ {
 		c := s.cursors[cursorIdx]
 		cursorIdx = (cursorIdx + 1) % len(s.cursors)
-
-		// Ensure this cursor cannot be moved across topicPartitions
-		// while we using its fields.
-		c.mu.Lock()
-
-		// If the offset is -1, a metadata update added a cursor to
-		// this s, but it is not yet in use.
-		//
-		// If we are in use or failing or loading, then we do not want
-		// to use the cursor.
-		if c.offset == -1 || c.inUse || c.failing || c.loadingOffsets {
-			c.mu.Unlock()
+		if !c.usable() {
 			continue
 		}
-
-		// KIP-320: if we needLoadEpoch, we just migrated from one
-		// broker to another. We need to validate the leader epoch on
-		// the new broker to see if we experienced data loss before we
-		// can use this cursor.
-		//
-		// However, we only do this if our last consumed epoch is >= 0,
-		// otherwise we have not consumed anything at all and will just
-		// rely on out of range errors.
-		if c.needLoadEpoch {
-			c.needLoadEpoch = false
-			if c.lastConsumedEpoch >= 0 {
-				c.setLoadingOffsetsLocked(c.seq)
-				reloadOffsets.epoch.setLoadOffset(c.topic, c.partition, Offset{
-					request:      c.offset,
-					epoch:        c.lastConsumedEpoch,
-					currentEpoch: c.currentLeaderEpoch,
-				}, -1, req.maxSeq)
-				c.mu.Unlock()
-				continue
-			}
-		}
-
-		again = true
-		req.fetchCursorLocked(c)
-		c.mu.Unlock()
+		req.addCursor(c)
 	}
 
 	// We could have lost our only record buffer just before we grabbed the
-	// lock above.
+	// source lock above.
 	if len(s.cursors) > 0 {
 		s.cursorsStart = (s.cursorsStart + 1) % len(s.cursors)
 	}
 
-	return req, again
+	return req
 }
 
 func (s *source) maybeConsume() {
-	if s.fillState.maybeBegin() {
-		go s.fill()
+	if s.fetchState.maybeBegin() {
+		go s.loopFetch()
 	}
 }
 
-func (s *source) fill() {
-	time.Sleep(time.Millisecond)
+func (s *source) loopFetch() {
+	consumer := &s.cl.consumer
+	session := consumer.loadSession()
+
+	if session == noConsumerSession {
+		s.fetchState.hardFinish()
+		return
+	}
+
+	session.incWorker()
+	defer session.decWorker()
+
+	// After our add, check quickly **without** another select case to
+	// determine if this context was truly canceled. Any other select that
+	// has another select case could theoretically race with the other case
+	// also being selected.
+	select {
+	case <-session.ctx.Done():
+		s.fetchState.hardFinish()
+		return
+	default:
+	}
 
 	again := true
 	for again {
-		s.inflightSem <- struct{}{}
-
-		var req *fetchRequest
-		req, again = s.createReq()
-
-		if req.numOffsets == 0 { // must be at least one if a cursor was usable
-			again = s.fillState.maybeFinish(again)
-			<-s.inflightSem
-			continue
+		select {
+		case <-session.ctx.Done():
+			s.fetchState.hardFinish()
+			return
+		case <-s.sem:
 		}
-
-		s.b.do(
-			s.cl.ctx,
-			req,
-			func(resp kmsg.Response, err error) {
-				s.handleReqResp(req, resp, err)
-			},
-		)
-		again = s.fillState.maybeFinish(again)
+		again = s.fetchState.maybeFinish(s.fetch(session))
 	}
+
 }
 
-func (s *source) backoff() {
-	s.consecutiveFailures++
-	after := time.NewTimer(s.cl.cfg.retryBackoff(s.consecutiveFailures))
-	defer after.Stop()
-	select {
-	case <-after.C:
-	case <-s.cl.ctx.Done():
+// fetch is the main logic center of fetching messages.
+//
+// This is a long function, made much longer by winded documentation, that
+// contains a lot of the side effects of fetching and updating. The function
+// consists of two main bulks of logic:
+//
+//   * First, issue a request that can be killed if the source needs to be
+//   stopped. Processing the response modifies no state on the source.
+//
+//   * Second, we keep the fetch response and update everything relevant
+//   (session, trigger some list or epoch updates, buffer the fetch).
+//
+// One small part between the first and second step is to update preferred
+// replicas. We always keep the preferred replicas from the fetch response
+// *even if* the source needs to be stopped. The knowledge of which preferred
+// replica to use would not be out of date even if the consumer session is
+// changing.
+func (s *source) fetch(consumerSession *consumerSession) (fetched bool) {
+	req := s.createReq()
+	if req.numOffsets == 0 { // cursors could have been set unusable
+		return
 	}
-}
 
-func (s *source) handleReqResp(req *fetchRequest, kresp kmsg.Response, err error) {
+	// If our fetch is killed, we want to cancel waiting for the response.
+	var (
+		kresp       kmsg.Response
+		requested   = make(chan struct{})
+		ctx, cancel = context.WithCancel(consumerSession.ctx)
+	)
+	defer cancel()
+
+	br, err := s.cl.brokerOrErr(ctx, s.nodeID, ErrUnknownBroker)
 	if err != nil {
-		s.backoff() // backoff before unuseAll to avoid inflight race
-		s.unuseAll(req.offsets)
+		close(requested)
+	} else {
+		br.do(ctx, req, func(k kmsg.Response, e error) {
+			kresp, err = k, e
+			close(requested)
+		})
+	}
+
+	select {
+	case <-requested:
+		fetched = true
+	case <-ctx.Done():
+		req.usedOffsets.finishUsingAll()
+		return
+	}
+
+	// If we had an error, we backoff. Killing a fetch quits the backoff,
+	// but that is fine; we may just re-request too early and fall into
+	// another backoff.
+	if err != nil {
 		s.cl.triggerUpdateMetadata()
+		s.consecutiveFailures++
+		after := time.NewTimer(s.cl.cfg.retryBackoff(s.consecutiveFailures))
+		defer after.Stop()
+		select {
+		case <-after.C:
+		case <-ctx.Done():
+		}
+		req.usedOffsets.finishUsingAll()
 		return
 	}
 	s.consecutiveFailures = 0
 
 	resp := kresp.(*kmsg.FetchResponse)
 
-	// If our session errored, we reset the session and retry the request
-	// without delay.
+	var (
+		fetch         Fetch
+		reloadOffsets listOrEpochLoads
+		preferreds    cursorPreferreds
+		updateMeta    bool
+		handled       = make(chan struct{})
+	)
+
+	// Theoretically, handleReqResp could take a bit of CPU time due to
+	// decompressing and processing the response. We do this in a goroutine
+	// to allow the session to be canceled at any moment.
+	//
+	// Processing the response only needs the source's nodeID and client.
+	go func() {
+		defer close(handled)
+		fetch, reloadOffsets, preferreds, updateMeta = s.handleReqResp(req, resp)
+	}()
+
+	select {
+	case <-handled:
+	case <-ctx.Done():
+		req.usedOffsets.finishUsingAll()
+		return
+	}
+
+	// The logic below here should be relatively quick.
+
+	deleteReqUsedOffset := func(topic string, partition int32) {
+		t := req.usedOffsets[topic]
+		delete(t, partition)
+		if len(t) == 0 {
+			delete(req.usedOffsets, topic)
+		}
+	}
+
+	// Before updating the source, we move all cursors that have new
+	// preferred replicas and remove them from being tracked in our req
+	// offsets. We also remove the reload offsets from our req offsets.
+	//
+	// These two removals transition responsibility for finishing using the
+	// cursor from the request's used offsets to the new source or the
+	// reloading.
+	preferreds.eachPreferred(func(c cursorOffsetPreferred) {
+		c.move()
+		deleteReqUsedOffset(c.from.topic, c.from.partition)
+	})
+	reloadOffsets.each(deleteReqUsedOffset)
+
+	// The session on the request was updated; we keep those updates.
+	s.session = req.session
+
+	// handleReqResp only parses the body of the response, not the top
+	// level error code.
+	//
+	// The top level error code is related to fetch sessions only, and if
+	// there was an error, the body was empty (so processing is basically a
+	// no-op). We process the fetch session error now.
 	switch err := kerr.ErrorForCode(resp.ErrorCode); err {
 	case kerr.FetchSessionIDNotFound:
-		// If the session ID is not found, we may have had our session
-		// evicted or we may not be able to establish a session because
-		// the broker is maxed out and our session would be worse than
-		// existing ones.
-		//
-		// We never try to establish a session again.
 		if s.session.epoch == 0 {
-			s.session.id = -1
-			s.session.epoch = -1
+			// If the epoch was zero, the broker did not even
+			// establish a session for us (and thus is maxed on
+			// sessions). We stop trying.
+			s.session.kill()
 			s.cl.cfg.logger.Log(LogLevelInfo,
 				"session failed with SessionIDNotFound while trying to establish a session; broker likely maxed on sessions; continuing on without using sessions")
 		}
 		fallthrough
 	case kerr.InvalidFetchSessionEpoch:
-		if s.session.id != -1 {
+		if s.session.id != -1 { // if -1, the session was killed just above
 			s.cl.cfg.logger.Log(LogLevelInfo, "resetting fetch session", "err", err)
 			s.session.reset()
 		}
-		s.unuseAll(req.offsets)
+		req.usedOffsets.finishUsingAll()
 		return
 	}
 
 	s.session.bumpEpoch(resp.SessionID)
 
-	newFetch := Fetch{
-		Topics: make([]FetchTopic, 0, len(resp.Topics)),
+	// If we moved any partitions to preferred replicas, we reset the
+	// session. We do this after bumping the epoch just to ensure that we
+	// have truly reset the session.
+	if len(preferreds) > 0 {
+		s.session.reset()
 	}
 
-	// If any partition errors with OffsetOutOfRange, we reload the offset
-	// for that partition a per to the client's configured offset policy.
-	var reloadOffsets offsetsLoad
-	var needsMetaUpdate bool
-	for _, rTopic := range resp.Topics {
-		topic := rTopic.Topic
-		topicOffsets, ok := req.offsets[topic]
+	if updateMeta {
+		s.cl.triggerUpdateMetadataNow()
+	}
+
+	reloadOffsets.loadWithSessionNow(consumerSession)
+
+	if len(fetch.Topics) > 0 {
+		s.buffered = bufferedFetch{
+			fetch:       fetch,
+			usedOffsets: req.usedOffsets,
+		}
+		s.sem = make(chan struct{})
+		s.cl.consumer.addSourceReadyForDraining(s)
+	} else {
+		req.usedOffsets.finishUsingAll()
+	}
+	return
+}
+
+// Parses a fetch response into a Fetch, offsets to reload, and whether
+// metadata needs updating.
+//
+// This only uses a source's broker and client, and thus does not need
+// the source mutex.
+//
+// This function, and everything it calls, is side effect free.
+func (s *source) handleReqResp(req *fetchRequest, resp *kmsg.FetchResponse) (Fetch, listOrEpochLoads, cursorPreferreds, bool) {
+	var (
+		f = Fetch{
+			Topics: make([]FetchTopic, 0, len(resp.Topics)),
+		}
+		reloadOffsets listOrEpochLoads
+		preferreds    []cursorOffsetPreferred
+		updateMeta    bool
+	)
+	for _, rt := range resp.Topics {
+		topic := rt.Topic
+		// We always include all cursors on this source in the fetch;
+		// we should not receive any topics or partitions we do not
+		// expect.
+		topicOffsets, ok := req.usedOffsets[topic]
 		if !ok {
 			continue
 		}
 
 		fetchTopic := FetchTopic{
 			Topic:      topic,
-			Partitions: make([]FetchPartition, 0, len(rTopic.Partitions)),
+			Partitions: make([]FetchPartition, 0, len(rt.Partitions)),
 		}
 
-		for i := range rTopic.Partitions {
-			rPartition := &rTopic.Partitions[i]
-			partition := rPartition.Partition
+		for i := range rt.Partitions {
+			rp := &rt.Partitions[i]
+			partition := rp.Partition
 			partOffset, ok := topicOffsets[partition]
 			if !ok {
 				continue
 			}
 
-			fetchPart, partNeedsMetaUpdate, migrating := partOffset.processRespPartition(topic, resp.Version, rPartition, s.cl.decompressor, &s.session)
-			if migrating {
+			// If we are fetching from the replica already, Kafka replies with a -1
+			// preferred read replica. If Kafka replies with a preferred replica,
+			// it sends no records.
+			if preferred := rp.PreferredReadReplica; resp.Version >= 11 && preferred >= 0 {
+				preferreds = append(preferreds, cursorOffsetPreferred{
+					*partOffset,
+					preferred,
+				})
 				continue
 			}
 
-			fetchTopic.Partitions = append(fetchTopic.Partitions, fetchPart)
-			needsMetaUpdate = needsMetaUpdate || partNeedsMetaUpdate
+			fetchTopic.Partitions = append(fetchTopic.Partitions, partOffset.processRespPartition(resp.Version, rp, s.cl.decompressor))
+			fp := &fetchTopic.Partitions[len(fetchTopic.Partitions)-1]
+			updateMeta = updateMeta || fp.Err != nil
 
-			// If we are out of range, we reset to what we can.
-			// With Kafka >= 2.1.0, we should only get offset out
-			// of range if we fetch before the start, but a user
-			// user could start past the end and want to reset to
-			// the end. We respect that.
-			//
-			// KIP-392 (case 3) specifies that if we are consuming
-			// from a follower, then if our offset request is
-			// before the low watermark, we list offsets from the
-			// follower.
-			//
-			// KIP-392 (case 4) specifies that if we are consuming
-			// a follower and our request is larger than the high
-			// watermark, then we should first check for truncation
-			// from the leader and then if we still get out of
-			// range, reset with list offsets.
-			//
-			// It further goes on to say that "out of range errors
-			// due to ISR propagation delays should be extremely
-			// rare". Rather than falling back to listing offsets,
-			// we will set in a cycle of validating the leader
-			// epoch until the follower has caught up.
-			if fetchPart.Err == kerr.OffsetOutOfRange {
-				partOffset.from.setLoadingOffsets(partOffset.seq)
-				if partOffset.currentPreferredReplica == -1 {
-					reloadOffsets.list.setLoadOffset(topic, partition, s.cl.cfg.resetOffset, -1, req.maxSeq)
-				} else if partOffset.offset < fetchPart.LogStartOffset {
-					reloadOffsets.list.setLoadOffset(topic, partition, s.cl.cfg.resetOffset, s.b.meta.NodeID, req.maxSeq)
-				} else { // partOffset.offset > fetchPart.HighWatermark
-					reloadOffsets.epoch.setLoadOffset(topic, partition, Offset{
-						request:      partOffset.offset,
-						epoch:        partOffset.lastConsumedEpoch,
-						currentEpoch: partOffset.currentLeaderEpoch,
-					}, -1, req.maxSeq)
+			switch fp.Err {
+			default:
+				// - bad auth
+				// - unsupported compression
+				// - unsupported message version
+				// - unknown error
+				// - or, no error
+
+			case kerr.UnknownTopicOrPartition,
+				kerr.NotLeaderForPartition,
+				kerr.ReplicaNotAvailable,
+				kerr.KafkaStorageError,
+				kerr.UnknownLeaderEpoch, // our meta is newer than broker we fetched from
+				kerr.OffsetNotAvailable: // fetched from out of sync replica or a behind in-sync one (KIP-392: case 1 and case 2)
+
+				fp.Err = nil // recoverable with client backoff; hide the error
+
+			case kerr.OffsetOutOfRange:
+				fp.Err = nil
+
+				// If we are out of range, we reset to what we can.
+				// With Kafka >= 2.1.0, we should only get offset out
+				// of range if we fetch before the start, but a user
+				// could start past the end and want to reset to
+				// the end. We respect that.
+				//
+				// KIP-392 (case 3) specifies that if we are consuming
+				// from a follower, then if our offset request is before
+				// the low watermark, we list offsets from the follower.
+				//
+				// KIP-392 (case 4) specifies that if we are consuming
+				// a follower and our request is larger than the high
+				// watermark, then we should first check for truncation
+				// from the leader and then if we still get out of
+				// range, reset with list offsets.
+				//
+				// It further goes on to say that "out of range errors
+				// due to ISR propagation delays should be extremely
+				// rare". Rather than falling back to listing offsets,
+				// we stay in a cycle of validating the leader epoch
+				// until the follower has caught up.
+
+				if s.nodeID == partOffset.from.leader { // non KIP-392 case
+					reloadOffsets.addLoad(topic, partition, loadTypeList, offsetLoad{
+						replica: -1,
+						Offset:  s.cl.cfg.resetOffset,
+					})
+				} else if partOffset.offset < fp.LogStartOffset { // KIP-392 case 3
+					reloadOffsets.addLoad(topic, partition, loadTypeList, offsetLoad{
+						replica: s.nodeID,
+						Offset:  s.cl.cfg.resetOffset,
+					})
+				} else { // partOffset.offset > fp.HighWatermark, KIP-392 case 4
+					reloadOffsets.addLoad(topic, partition, loadTypeEpoch, offsetLoad{
+						replica: -1,
+						Offset: Offset{
+							at:    partOffset.offset,
+							epoch: partOffset.lastConsumedEpoch,
+						},
+					})
 				}
 
-			} else if fetchPart.Err == kerr.FencedLeaderEpoch {
-				// With fenced leader epoch, we notify an error only if
-				// necessary after we find out if loss occurred.
-				fetchPart.Err = nil
+			case kerr.FencedLeaderEpoch:
+				fp.Err = nil
+
+				// With fenced leader epoch, we notify an error only
+				// if necessary after we find out if loss occurred.
 				// If we have consumed nothing, then we got unlucky
 				// by being fenced right after we grabbed metadata.
 				// We just refresh metadata and try again.
 				if partOffset.lastConsumedEpoch >= 0 {
-					partOffset.from.setLoadingOffsets(partOffset.seq)
-					reloadOffsets.epoch.setLoadOffset(topic, partition, Offset{
-						request:      partOffset.offset,
-						epoch:        partOffset.lastConsumedEpoch,
-						currentEpoch: partOffset.currentLeaderEpoch,
-					}, -1, req.maxSeq)
+					reloadOffsets.addLoad(topic, partition, loadTypeEpoch, offsetLoad{
+						replica: -1,
+						Offset: Offset{
+							at:    partOffset.offset,
+							epoch: partOffset.lastConsumedEpoch,
+						},
+					})
 				}
 			}
 		}
 
 		if len(fetchTopic.Partitions) > 0 {
-			newFetch.Topics = append(newFetch.Topics, fetchTopic)
+			f.Topics = append(f.Topics, fetchTopic)
 		}
 	}
 
-	if !reloadOffsets.isEmpty() {
-		reloadOffsets.mergeInto(&s.cl.consumer)
-	}
-
-	if needsMetaUpdate {
-		s.cl.triggerUpdateMetadataNow()
-		s.cl.cfg.logger.Log(LogLevelInfo, "fetch had a partition error; trigging metadata update and resetting the session")
-		s.session.reset()
-	}
-
-	if len(newFetch.Topics) > 0 {
-		s.buffered = bufferedFetch{
-			fetch:      newFetch,
-			seq:        req.maxSeq,
-			reqOffsets: req.offsets,
-		}
-
-		s.cl.consumer.addSourceReadyForDraining(req.maxSeq, s)
-	} else {
-		s.updateOffsets(req.offsets)
-	}
+	return f, reloadOffsets, preferreds, updateMeta
 }
 
 // processRespPartition processes all records in all potentially compressed
-// batches (or message sets) and returns a fetch partition containing those
-// records.
-//
-// This returns that a metadata update is needed if any part has a recoverable
-// error.
-//
-// Recoverable errors are stripped; if a partition has a recoverable error
-// with no records, it should be discarded.
-func (o *seqOffsetFrom) processRespPartition(
-	topic string,
-	version int16,
-	rPartition *kmsg.FetchResponseTopicPartition,
-	decompressor *decompressor,
-	session *fetchSession,
-) (
-	fetchPart FetchPartition,
-	needsMetaUpdate bool,
-	migrating bool,
-) {
-	fetchPart = FetchPartition{
-		Partition:        rPartition.Partition,
-		Err:              kerr.ErrorForCode(rPartition.ErrorCode),
-		HighWatermark:    rPartition.HighWatermark,
-		LastStableOffset: rPartition.LastStableOffset,
-		LogStartOffset:   rPartition.LogStartOffset,
+// batches (or message sets).
+func (o *cursorOffsetNext) processRespPartition(version int16, rp *kmsg.FetchResponseTopicPartition, decompressor *decompressor) FetchPartition {
+	fp := FetchPartition{
+		Partition:        rp.Partition,
+		Err:              kerr.ErrorForCode(rp.ErrorCode),
+		HighWatermark:    rp.HighWatermark,
+		LastStableOffset: rp.LastStableOffset,
+		LogStartOffset:   rp.LogStartOffset,
 	}
-
-	// If we are fetching from the replica already, Kafka replies with a -1
-	// preferred read replica. If Kafka replies with a preferred replica,
-	// it sends no records.
-	preferredReplica := rPartition.PreferredReadReplica
-	if version >= 11 && preferredReplica >= 0 {
-		if o.currentPreferredReplica != preferredReplica {
-			o.from.setUnused(o.seq)
-			if didSet := o.from.maybeSetPreferredReplica(preferredReplica, o.currentLeader); didSet {
-				return FetchPartition{}, false, true
-			}
-		}
-	}
-
-	keepControl := o.from.keepControl
 
 	switch version {
 	case 0, 1:
-		msgs, err := kmsg.ReadV0Messages(rPartition.RecordBatches)
+		msgs, err := kmsg.ReadV0Messages(rp.RecordBatches)
 		if err != nil {
-			fetchPart.Err = err
+			fp.Err = err
 		}
-		o.processV0Messages(topic, &fetchPart, msgs, decompressor)
+		o.processV0Messages(&fp, msgs, decompressor)
+
 	case 2, 3:
-		msgs, err := kmsg.ReadV1Messages(rPartition.RecordBatches)
+		msgs, err := kmsg.ReadV1Messages(rp.RecordBatches)
 		if err != nil {
-			fetchPart.Err = err
+			fp.Err = err
 		}
-		o.processV1Messages(topic, &fetchPart, msgs, decompressor)
+		o.processV1Messages(&fp, msgs, decompressor)
+
 	default:
-		batches, err := kmsg.ReadRecordBatches(rPartition.RecordBatches)
+		batches, err := kmsg.ReadRecordBatches(rp.RecordBatches)
 		if err != nil {
-			fetchPart.Err = err
+			fp.Err = err
 		}
 		var numPartitionRecords int
 		for i := range batches {
 			numPartitionRecords += int(batches[i].NumRecords)
 		}
-		fetchPart.Records = make([]*Record, 0, numPartitionRecords)
-		aborter := buildAborter(rPartition)
+		fp.Records = make([]*Record, 0, numPartitionRecords)
+		aborter := buildAborter(rp)
 		for i := range batches {
-			o.processRecordBatch(topic, &fetchPart, &batches[i], keepControl, aborter, decompressor)
-			if fetchPart.Err != nil {
+			o.processRecordBatch(&fp, &batches[i], aborter, decompressor)
+			if fp.Err != nil {
 				break
 			}
 		}
 	}
 
-	if fetchPart.Err != nil {
-		needsMetaUpdate = true
-	}
-
-	switch fetchPart.Err {
-	case nil:
-		// do nothing
-
-	case kerr.UnknownTopicOrPartition,
-		kerr.NotLeaderForPartition,
-		kerr.ReplicaNotAvailable,
-		kerr.KafkaStorageError,
-		kerr.UnknownLeaderEpoch, // our meta is newer than broker we fetched from
-		kerr.OffsetNotAvailable: // fetched from out of sync replica or a behind in-sync one (KIP-392: case 1 and case 2)
-
-		fetchPart.Err = nil // recoverable with client backoff; hide the error
-		fallthrough
-
-	default:
-		// - bad auth
-		// - unsupported compression
-		// - unsupported message version
-		// - unknown error
-		o.from.setFailing(o.seq)
-	}
-
-	return fetchPart, needsMetaUpdate, false
+	return fp
 }
 
 type aborter map[int64][]int64
 
-func buildAborter(rPartition *kmsg.FetchResponseTopicPartition) aborter {
-	if len(rPartition.AbortedTransactions) == 0 {
+func buildAborter(rp *kmsg.FetchResponseTopicPartition) aborter {
+	if len(rp.AbortedTransactions) == 0 {
 		return nil
 	}
 	a := make(aborter)
-	for _, abort := range rPartition.AbortedTransactions {
+	for _, abort := range rp.AbortedTransactions {
 		a[abort.ProducerID] = append(a[abort.ProducerID], abort.FirstOffset)
 	}
 	return a
@@ -770,29 +816,27 @@ func (a aborter) trackAbortedPID(producerID int64) {
 // processing records to fetch part //
 //////////////////////////////////////
 
-func (o *seqOffset) processRecordBatch(
-	topic string,
-	fetchPart *FetchPartition,
+func (o *cursorOffsetNext) processRecordBatch(
+	fp *FetchPartition,
 	batch *kmsg.RecordBatch,
-	keepControl bool,
 	aborter aborter,
 	decompressor *decompressor,
 ) {
 	if batch.Magic != 2 {
-		fetchPart.Err = fmt.Errorf("unknown batch magic %d", batch.Magic)
+		fp.Err = fmt.Errorf("unknown batch magic %d", batch.Magic)
 		return
 	}
 	rawRecords := batch.Records
 	if compression := byte(batch.Attributes & 0x0007); compression != 0 {
 		var err error
 		if rawRecords, err = decompressor.decompress(rawRecords, compression); err != nil {
-			fetchPart.Err = fmt.Errorf("unable to decompress batch: %v", err)
+			fp.Err = fmt.Errorf("unable to decompress batch: %v", err)
 			return
 		}
 	}
 	krecords, err := kmsg.ReadRecords(int(batch.NumRecords), rawRecords)
 	if err != nil {
-		fetchPart.Err = fmt.Errorf("invalid record batch: %v", err)
+		fp.Err = fmt.Errorf("invalid record batch: %v", err)
 		return
 	}
 
@@ -800,13 +844,13 @@ func (o *seqOffset) processRecordBatch(
 	var lastRecord *Record
 	for i := range krecords {
 		record := recordToRecord(
-			topic,
-			fetchPart.Partition,
+			o.from.topic,
+			fp.Partition,
 			batch,
 			&krecords[i],
 		)
 		lastRecord = record
-		o.maybeAddRecord(fetchPart, record, keepControl, abortBatch)
+		o.maybeKeepRecord(fp, record, abortBatch)
 	}
 
 	if abortBatch && lastRecord != nil && lastRecord.Attrs.IsControl() {
@@ -814,9 +858,8 @@ func (o *seqOffset) processRecordBatch(
 	}
 }
 
-func (o *seqOffset) processV1Messages(
-	topic string,
-	fetchPart *FetchPartition,
+func (o *cursorOffsetNext) processV1Messages(
+	fp *FetchPartition,
 	messages []kmsg.MessageV1,
 	decompressor *decompressor,
 ) {
@@ -824,7 +867,7 @@ func (o *seqOffset) processV1Messages(
 		message := &messages[i]
 		compression := byte(message.Attributes & 0x0003)
 		if compression == 0 {
-			if !o.processV1Message(topic, fetchPart, message) {
+			if !o.processV1Message(fp, message) {
 				return
 			}
 			continue
@@ -832,12 +875,12 @@ func (o *seqOffset) processV1Messages(
 
 		rawMessages, err := decompressor.decompress(message.Value, compression)
 		if err != nil {
-			fetchPart.Err = fmt.Errorf("unable to decompress messages: %v", err)
+			fp.Err = fmt.Errorf("unable to decompress messages: %v", err)
 			return
 		}
 		innerMessages, err := kmsg.ReadV1Messages(rawMessages)
 		if err != nil {
-			fetchPart.Err = err
+			fp.Err = err
 		}
 		if len(innerMessages) == 0 {
 			return
@@ -846,34 +889,32 @@ func (o *seqOffset) processV1Messages(
 		for i := range innerMessages {
 			innerMessage := &innerMessages[i]
 			innerMessage.Offset = firstOffset + int64(i)
-			if !o.processV1Message(topic, fetchPart, innerMessage) {
+			if !o.processV1Message(fp, innerMessage) {
 				return
 			}
 		}
 	}
 }
 
-func (o *seqOffset) processV1Message(
-	topic string,
-	fetchPart *FetchPartition,
+func (o *cursorOffsetNext) processV1Message(
+	fp *FetchPartition,
 	message *kmsg.MessageV1,
 ) bool {
 	if message.Magic != 1 {
-		fetchPart.Err = fmt.Errorf("unknown message magic %d", message.Magic)
+		fp.Err = fmt.Errorf("unknown message magic %d", message.Magic)
 		return false
 	}
 	if message.Attributes != 0 {
-		fetchPart.Err = fmt.Errorf("unknown attributes on uncompressed message %d", message.Attributes)
+		fp.Err = fmt.Errorf("unknown attributes on uncompressed message %d", message.Attributes)
 		return false
 	}
-	record := v1MessageToRecord(topic, fetchPart.Partition, message)
-	o.maybeAddRecord(fetchPart, record, false, false)
+	record := v1MessageToRecord(o.from.topic, fp.Partition, message)
+	o.maybeKeepRecord(fp, record, false)
 	return true
 }
 
-func (o *seqOffset) processV0Messages(
-	topic string,
-	fetchPart *FetchPartition,
+func (o *cursorOffsetNext) processV0Messages(
+	fp *FetchPartition,
 	messages []kmsg.MessageV0,
 	decompressor *decompressor,
 ) {
@@ -881,7 +922,7 @@ func (o *seqOffset) processV0Messages(
 		message := &messages[i]
 		compression := byte(message.Attributes & 0x0003)
 		if compression == 0 {
-			if !o.processV0Message(topic, fetchPart, message) {
+			if !o.processV0Message(fp, message) {
 				return
 			}
 			continue
@@ -889,12 +930,12 @@ func (o *seqOffset) processV0Messages(
 
 		rawMessages, err := decompressor.decompress(message.Value, compression)
 		if err != nil {
-			fetchPart.Err = fmt.Errorf("unable to decompress messages: %v", err)
+			fp.Err = fmt.Errorf("unable to decompress messages: %v", err)
 			return
 		}
 		innerMessages, err := kmsg.ReadV0Messages(rawMessages)
 		if err != nil {
-			fetchPart.Err = err
+			fp.Err = err
 		}
 		if len(innerMessages) == 0 {
 			return
@@ -903,36 +944,35 @@ func (o *seqOffset) processV0Messages(
 		for i := range innerMessages {
 			innerMessage := &innerMessages[i]
 			innerMessage.Offset = firstOffset + int64(i)
-			if !o.processV0Message(topic, fetchPart, innerMessage) {
+			if !o.processV0Message(fp, innerMessage) {
 				return
 			}
 		}
 	}
 }
 
-func (o *seqOffset) processV0Message(
-	topic string,
-	fetchPart *FetchPartition,
+func (o *cursorOffsetNext) processV0Message(
+	fp *FetchPartition,
 	message *kmsg.MessageV0,
 ) bool {
 	if message.Magic != 0 {
-		fetchPart.Err = fmt.Errorf("unknown message magic %d", message.Magic)
+		fp.Err = fmt.Errorf("unknown message magic %d", message.Magic)
 		return false
 	}
 	if message.Attributes != 0 {
-		fetchPart.Err = fmt.Errorf("unknown attributes on uncompressed message %d", message.Attributes)
+		fp.Err = fmt.Errorf("unknown attributes on uncompressed message %d", message.Attributes)
 		return false
 	}
-	record := v0MessageToRecord(topic, fetchPart.Partition, message)
-	o.maybeAddRecord(fetchPart, record, false, false)
+	record := v0MessageToRecord(o.from.topic, fp.Partition, message)
+	o.maybeKeepRecord(fp, record, false)
 	return true
 }
 
-// maybeAddRecord keeps a record if it is within our range of offsets to keep.
-// However, if the record is being aborted, or the record is a control record
-// and the client does not want to keep control records, this does not keep
-// the record and instead only updates the seqOffset metadata.
-func (o *seqOffset) maybeAddRecord(fetchPart *FetchPartition, record *Record, keepControl bool, abort bool) {
+// maybeKeepRecord keeps a record if it is within our range of offsets to keep.
+//
+// If the record is being aborted or the record is a control record and the
+// client does not want to keep control records, this does not keep the record.
+func (o *cursorOffsetNext) maybeKeepRecord(fp *FetchPartition, record *Record, abort bool) {
 	if record.Offset < o.offset {
 		// We asked for offset 5, but that was in the middle of a
 		// batch; we got offsets 0 thru 4 that we need to skip.
@@ -940,16 +980,15 @@ func (o *seqOffset) maybeAddRecord(fetchPart *FetchPartition, record *Record, ke
 	}
 
 	// We only keep control records if specifically requested.
-	if record.Attrs.IsControl() && !keepControl {
+	if record.Attrs.IsControl() && !o.from.keepControl {
 		abort = true
 	}
 	if !abort {
-		fetchPart.Records = append(fetchPart.Records, record)
+		fp.Records = append(fp.Records, record)
 	}
 
 	// The record offset may be much larger than our expected offset if the
-	// topic is compacted. That is fine; we ensure increasing offsets and
-	// only keep the resulting offset if the seq is the same.
+	// topic is compacted.
 	o.offset = record.Offset + 1
 	o.lastConsumedEpoch = record.LeaderEpoch
 }
@@ -1053,44 +1092,33 @@ type fetchRequest struct {
 
 	isolationLevel int8
 
-	maxSeq     uint64
-	numOffsets int
-	offsets    map[string]map[int32]*seqOffsetFrom
+	numOffsets  int
+	usedOffsets usedOffsets
 
-	session *fetchSession
+	// Session is a copy of the source session at the time a request is
+	// built. If the source is reset, the session it has is reset at the
+	// field level only. Our view of the original session is still valid.
+	session fetchSession
 }
 
-func (f *fetchRequest) fetchCursorLocked(c *cursor) {
-	if f.offsets == nil {
-		f.offsets = make(map[string]map[int32]*seqOffsetFrom)
+func (f *fetchRequest) addCursor(c *cursor) {
+	if f.usedOffsets == nil {
+		f.usedOffsets = make(usedOffsets)
 	}
-	partitions := f.offsets[c.topic]
+	partitions := f.usedOffsets[c.topic]
 	if partitions == nil {
-		partitions = make(map[int32]*seqOffsetFrom)
-		f.offsets[c.topic] = partitions
+		partitions = make(map[int32]*cursorOffsetNext)
+		f.usedOffsets[c.topic] = partitions
 	}
-	o := c.use()
-
-	// AssignPartitions or AssignGroup could have been called in the middle
-	// of our req being built, invalidating part of the req. We invalidate
-	// by only tracking the latest seq.
-	if o.seq > f.maxSeq {
-		f.maxSeq = o.seq
-		f.numOffsets = 0
-	}
+	partitions[c.partition] = c.use()
 	f.numOffsets++
-	partitions[c.partition] = o
-
-	if o.seq > f.session.seq {
-		f.session.resetWithSeq(o.seq)
-	}
 }
 
 func (*fetchRequest) Key() int16           { return 1 }
-func (*fetchRequest) MaxVersion() int16    { return 11 }
+func (*fetchRequest) MaxVersion() int16    { return 11 } // stick on 11 until we validate 12 on 2.7.0 release (TODO)
 func (f *fetchRequest) SetVersion(v int16) { f.version = v }
 func (f *fetchRequest) GetVersion() int16  { return f.version }
-func (f *fetchRequest) IsFlexible() bool   { return false } // version 11 is not flexible
+func (f *fetchRequest) IsFlexible() bool   { return f.version >= 12 } // version 12+ is flexible
 func (f *fetchRequest) AppendTo(dst []byte) []byte {
 	req := kmsg.FetchRequest{
 		Version:        f.version,
@@ -1101,46 +1129,36 @@ func (f *fetchRequest) AppendTo(dst []byte) []byte {
 		IsolationLevel: f.isolationLevel,
 		SessionID:      f.session.id,
 		SessionEpoch:   f.session.epoch,
-		Topics:         make([]kmsg.FetchRequestTopic, 0, len(f.offsets)),
 		Rack:           f.rack,
 	}
 
-	for topic, partitions := range f.offsets {
-		req.Topics = append(req.Topics, kmsg.FetchRequestTopic{
-			Topic:      topic,
-			Partitions: make([]kmsg.FetchRequestTopicPartition, 0, len(partitions)),
-		})
-		reqTopic := &req.Topics[len(req.Topics)-1]
+	for topic, partitions := range f.usedOffsets {
 
-		if f.session.used == nil {
-			f.session.used = make(map[string]map[int32]EpochOffset)
-		}
-		partsInSession := f.session.used[topic]
-		if partsInSession == nil {
-			partsInSession = make(map[int32]EpochOffset)
-			f.session.used[topic] = partsInSession
-		}
+		var reqTopic *kmsg.FetchRequestTopic
+		sessionTopic := f.session.lookupTopic(topic)
 
-		for partition, seqOffset := range partitions {
-			if seqOffset.seq < f.maxSeq {
-				continue // all offsets in the fetch must come from the same seq
-			}
+		for partition, cursorOffsetNext := range partitions {
+			if !sessionTopic.hasPartitionAt(
+				partition,
+				cursorOffsetNext.offset,
+				cursorOffsetNext.currentLeaderEpoch,
+			) {
 
-			sessionOffset, partInSession := partsInSession[partition]
-			epochOffset := EpochOffset{
-				Epoch:  seqOffset.currentLeaderEpoch,
-				Offset: seqOffset.offset,
-			}
+				if reqTopic == nil {
+					req.Topics = append(req.Topics, kmsg.FetchRequestTopic{
+						Topic: topic,
+					})
+					reqTopic = &req.Topics[len(req.Topics)-1]
+				}
 
-			if !partInSession || sessionOffset != epochOffset {
 				reqTopic.Partitions = append(reqTopic.Partitions, kmsg.FetchRequestTopicPartition{
 					Partition:          partition,
-					CurrentLeaderEpoch: seqOffset.currentLeaderEpoch,
-					FetchOffset:        seqOffset.offset,
+					CurrentLeaderEpoch: cursorOffsetNext.currentLeaderEpoch,
+					FetchOffset:        cursorOffsetNext.offset,
+					LastFetchedEpoch:   -1,
 					LogStartOffset:     -1,
 					PartitionMaxBytes:  f.maxPartBytes,
 				})
-				partsInSession[partition] = epochOffset
 			}
 		}
 	}
@@ -1158,26 +1176,24 @@ func (f *fetchRequest) ResponseKind() kmsg.Response {
 // and forth to a Kafka broker. Rather than relying on forgotten topics to
 // remove partitions from a session, we just simply reset the session.
 type fetchSession struct {
-	// seq corresponds to the max seq in the last fetch request.
-	// Whenever this is bumped, we reset the session.
-	seq uint64
-
 	id    int32
 	epoch int32
 
-	// used is what we used last in the session. If we issue a fetch
-	// request and the partition we want to fetch is for the same
-	// offset/epoch as the last fetch, we elide writing the partition.
-	used map[string]map[int32]EpochOffset
+	used map[string]map[int32]fetchSessionOffsetEpoch // what we have in the session so far
+
+	killed bool // if we cannot use a session anymore
 }
 
-// resetWithSeq bumps the fetchSession's seq and resets the session.
-func (s *fetchSession) resetWithSeq(seq uint64) {
-	s.seq = seq
-	s.reset()
+func (s *fetchSession) kill() {
+	s.id = -1
+	s.epoch = -1
+	s.used = nil
+	s.killed = true
 }
 
 // reset resets the session by setting the next request to use epoch 0.
+// We do not reset the ID; using epoch 0 for an existing ID unregisters the
+// prior session.
 func (s *fetchSession) reset() {
 	s.epoch = 0
 	s.used = nil
@@ -1185,9 +1201,44 @@ func (s *fetchSession) reset() {
 
 // bumpEpoch bumps the epoch and saves the session id.
 func (s *fetchSession) bumpEpoch(id int32) {
+	if id != s.id {
+		s.epoch = 0
+	}
 	s.epoch++
 	if s.epoch < 0 {
 		s.epoch = 1
 	}
 	s.id = id
+}
+
+func (s *fetchSession) lookupTopic(topic string) fetchSessionTopic {
+	if s.killed {
+		return nil
+	}
+	if s.used == nil {
+		s.used = make(map[string]map[int32]fetchSessionOffsetEpoch)
+	}
+	t := s.used[topic]
+	if t == nil {
+		t = make(map[int32]fetchSessionOffsetEpoch)
+		s.used[topic] = t
+	}
+	return t
+}
+
+type fetchSessionOffsetEpoch struct {
+	offset int64
+	epoch  int32
+}
+
+type fetchSessionTopic map[int32]fetchSessionOffsetEpoch
+
+func (s fetchSessionTopic) hasPartitionAt(partition int32, offset int64, epoch int32) bool {
+	if s == nil { // if we are nil, the session was killed
+		return false
+	}
+	at, exists := s[partition]
+	now := fetchSessionOffsetEpoch{offset, epoch}
+	s[partition] = now
+	return exists && at == now
 }

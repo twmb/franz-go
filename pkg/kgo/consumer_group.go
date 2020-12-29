@@ -2,7 +2,6 @@ package kgo
 
 import (
 	"context"
-	"encoding/hex"
 	"errors"
 	"regexp"
 	"sort"
@@ -203,30 +202,61 @@ type groupConsumer struct {
 	c  *consumer // used to change consumer state; generally c.mu is grabbed on access
 	cl *Client   // used for running requests / adding to topics map
 
-	// seq is the consumer's seq at the time of AssignGroup.
-	//
-	// This number can change, but all changes are under the consumer lock.
-	// As such, it is unsafe to read this without holding that lock.
-	seq uint64
-
 	ctx        context.Context
 	cancel     func()
 	manageDone chan struct{}
 	dying      bool
 
-	id          string
-	topics      map[string]struct{}
-	balancers   []GroupBalancer
-	cooperative bool
+	id          string              // group we are in
+	topics      map[string]struct{} // topics we are interested in
+	balancers   []GroupBalancer     // balancers we can use
+	cooperative bool                // whether all balancers are cooperative
 
-	mu           sync.Mutex     // guards this block
-	leader       bool           // whether we are the leader right now
-	using        map[string]int // topics we are currently using => # partitions known in that topic
-	uncommitted  uncommitted
+	//////////////
+	// mu block //
+	//////////////
+	mu sync.Mutex
+
+	// leader is whether we are the leader right now. This is set to false
+	// at the beginning of a join group session, and updated if we are
+	// chosen to be the leader. This is read on metadata updates when
+	// finding new assignments.
+	leader bool
+
+	// using is updated when finding new assignments, we always add to this
+	// if we want to consume a topic (or see there are more potential
+	// partitions). Only the leader can trigger a new group session if there
+	// are simply more partitions for existing topics.
+	//
+	// This is read when joining a group or leaving a group.
+	using map[string]int // topics we are currently using => # partitions known in that topic
+
+	// uncommitted is read and updated all over:
+	// - updated before PollFetches returns
+	// - updated when directly setting offsets (to rewind, for transactions)
+	// - emptied when leaving a group
+	// - updated when revoking
+	// - updated after fetching offsets once we receive our group assignment
+	// - updated after we commit
+	// - read when getting uncommitted or committed
+	uncommitted uncommitted
+
+	// memberID and generation are written to in the join and sync loop,
+	// and mostly read within that loop. The reason these two are under the
+	// mutex is because they are read during commits, which can happen at
+	// any arbitrary moment. It is **recommended** to be done within the
+	// context of a group session, but (a) users may have some unique use
+	// cases, and (b) the onRevoke hook may take longer than a user
+	// expects, which would rotate a session.
+	memberID   string
+	generation int32
+
+	////////////
+	// mu end //
+	////////////
+
 	commitCancel func()
 	commitDone   chan struct{}
-	memberID     string // written in join&sync loop; lock not held during reads within that loop
-	generation   int32  // same
 
 	blockingCommitMu sync.RWMutex
 
@@ -259,21 +289,16 @@ type groupConsumer struct {
 // assignment. To leave a group, you can AssignGroup with an empty group.
 // It is recommended to do one final blocking commit before leaving a group.
 func (cl *Client) AssignGroup(group string, opts ...GroupOpt) {
-	// TODO rejoin existing group: revoke old partitions without leaving
-	// and rejoining (also see comments in g.revoke).
 	c := &cl.consumer
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if c.typ != consumerTypeUnset {
-		c.unassignPrior()
-	}
+	c.unset()
 
 	ctx, cancel := context.WithCancel(cl.ctx)
 	g := &groupConsumer{
-		c:   c,
-		cl:  cl,
-		seq: c.seq,
+		c:  c,
+		cl: cl,
 
 		ctx:        ctx,
 		cancel:     cancel,
@@ -305,7 +330,6 @@ func (cl *Client) AssignGroup(group string, opts ...GroupOpt) {
 		opt.apply(g)
 	}
 	if len(group) == 0 || len(g.topics) == 0 || c.dead {
-		c.typ = consumerTypeUnset
 		return
 	}
 	for _, balancer := range g.balancers {
@@ -316,15 +340,11 @@ func (cl *Client) AssignGroup(group string, opts ...GroupOpt) {
 
 	// Ensure all topics exist so that we will fetch their metadata.
 	if !g.regexTopics {
-		cl.topicsMu.Lock()
-		clientTopics := cl.cloneTopics()
+		topics := make([]string, 0, len(g.topics))
 		for topic := range g.topics {
-			if _, exists := clientTopics[topic]; !exists {
-				clientTopics[topic] = newTopicPartitions(topic)
-			}
+			topics = append(topics, topic)
 		}
-		cl.topics.Store(clientTopics)
-		cl.topicsMu.Unlock()
+		cl.storeTopics(topics)
 	}
 
 	if !g.autocommitDisable && g.autocommitInterval > 0 {
@@ -340,7 +360,6 @@ func (g *groupConsumer) manage() {
 	g.cl.cfg.logger.Log(LogLevelInfo, "beginning to manage the group lifecycle")
 
 	var consecutiveErrors int
-loop:
 	for {
 		err := g.joinAndSync()
 		if err == nil {
@@ -350,52 +369,54 @@ loop:
 				}
 			}
 		}
-
-		if err != nil {
-			if g.onLost != nil {
-				g.onLost(g.ctx, g.nowAssigned)
-			} else if g.onRevoked != nil {
-				g.onRevoked(g.ctx, g.nowAssigned)
-			}
-
-			// If we are eager, we should have invalidated
-			// everything before getting here, but we do so doubly
-			// just in case.
-			//
-			// If we are cooperative, the join and sync could have
-			// failed during the cooperative rebalance where we
-			// were still consuming.
-			//
-			// We need to invalidate everything.
-			g.c.maybeAssignPartitions(&g.seq, nil, assignInvalidateAll)
-			g.nowAssigned = nil
-			g.mu.Lock()
-			g.uncommitted = nil
-			g.mu.Unlock()
-
-			consecutiveErrors++
-			// Waiting for the backoff is a good time to update our
-			// metadata; maybe the error is from stale metadata.
-			backoff := g.cl.cfg.retryBackoff(consecutiveErrors)
-			if err != errLeftGroup && err != context.Canceled { // if we left the group we return below
-				g.cl.cfg.logger.Log(LogLevelError, "join and sync loop errored",
-					"err", err,
-					"consecutive_errors", consecutiveErrors,
-					"backoff", backoff,
-				)
-			}
-			deadline := time.Now().Add(backoff)
-			g.cl.waitmeta(g.ctx, backoff)
-			after := time.NewTimer(time.Until(deadline))
-			select {
-			case <-g.ctx.Done():
-				after.Stop()
-				return
-			case <-after.C:
-				continue loop
-			}
+		if err == nil {
+			consecutiveErrors = 0
+			continue
 		}
-		consecutiveErrors = 0
+
+		if g.onLost != nil {
+			g.onLost(g.ctx, g.nowAssigned)
+		} else if g.onRevoked != nil {
+			g.onRevoked(g.ctx, g.nowAssigned)
+		}
+
+		// If we are eager, we should have invalidated
+		// everything before getting here, but we do so doubly
+		// just in case.
+		//
+		// If we are cooperative, the join and sync could have
+		// failed during the cooperative rebalance where we
+		// were still consuming.
+		//
+		// We need to invalidate everything.
+		g.c.assignPartitions(nil, assignInvalidateAll)
+		g.nowAssigned = nil
+
+		// TODO check if this lock && assign is necessary.
+		g.mu.Lock()
+		g.uncommitted = nil
+		g.mu.Unlock()
+
+		// Waiting for the backoff is a good time to update our
+		// metadata; maybe the error is from stale metadata.
+		consecutiveErrors++
+		backoff := g.cl.cfg.retryBackoff(consecutiveErrors)
+		if err != errLeftGroup && err != context.Canceled { // if we left the group we return below
+			g.cl.cfg.logger.Log(LogLevelError, "join and sync loop errored",
+				"err", err,
+				"consecutive_errors", consecutiveErrors,
+				"backoff", backoff,
+			)
+		}
+		deadline := time.Now().Add(backoff)
+		g.cl.waitmeta(g.ctx, backoff)
+		after := time.NewTimer(time.Until(deadline))
+		select {
+		case <-g.ctx.Done():
+			after.Stop()
+			return
+		case <-after.C:
+		}
 	}
 }
 
@@ -409,6 +430,16 @@ func (g *groupConsumer) leave() {
 	wasManaging := len(g.using) > 0
 	g.mu.Unlock()
 	if wasManaging {
+		// Leaving a group waits for the managing goroutine to be done,
+		// which can block in a users onAssign/onRevoke/onLost.  This
+		// can block a metadata update from completing, so we unlock
+		// the consumer mu to ensure that does not happen.
+		//
+		// TODO: fix this, since unlocking the consumer mu means
+		// another asignment can happen. This is a low risk vector,
+		// since it is unlikely that multiple assignments will be
+		// happening for a client, instead we expect one assignment to
+		// consume and one to leave.
 		g.c.mu.Unlock()
 		<-g.manageDone
 		g.c.mu.Lock()
@@ -558,7 +589,7 @@ func (g *groupConsumer) revoke(stage revokeStage, lost map[string][]int32) {
 		// to allow commits in onRevoke to be the FINAL offsets; we do
 		// not want to allow new fetches for revoked partitions after a
 		// call to revoke before we invalidate those partitions.
-		g.c.maybeAssignPartitions(&g.seq, lostOffsets, assignInvalidateMatching)
+		g.c.assignPartitions(lostOffsets, assignInvalidateMatching)
 	}
 
 	if len(lost) != 0 || stage == revokeThisSession {
@@ -576,11 +607,18 @@ func (g *groupConsumer) revoke(stage revokeStage, lost map[string][]int32) {
 		return
 	}
 
+	// cooperative consumers need to rejoin after they revoke what they
+	// lost.
 	defer g.rejoin()
 
 	// If committing, users should be waiting for the commit to finish in
-	// onRevoke, which would complete updating the uncommitted map. But,
-	// if they are not, we avoid racing on g.uncommitted.
+	// onRevoke, which would complete updating the uncommitted map. But, if
+	// they are not, we avoid racing on g.uncommitted.
+	//
+	// The block below deletes everything lost from our uncommitted map.
+	// All commits should be **completed** by the time this runs. An async
+	// commit can undo what we do below. The default revoke runs a blocking
+	// commit.
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if g.uncommitted == nil {
@@ -663,6 +701,9 @@ func (g *groupConsumer) setupAssignedAndHeartbeat() error {
 	g.cl.cfg.logger.Log(LogLevelInfo, "new group session begun", "assigned", added, "lost", lost)
 	s.prerevoke(g, lost)
 
+	// Since we have joined the group, we immediately begin heartbeating.
+	// This will continue until the heartbeat errors, the group is killed,
+	// or the fetch offsets below errors.
 	ctx, cancel := context.WithCancel(g.ctx)
 	go func() {
 		defer cancel() // potentially kill offset fetching
@@ -670,24 +711,43 @@ func (g *groupConsumer) setupAssignedAndHeartbeat() error {
 		hbErrCh <- g.heartbeat(fetchErrCh, s)
 	}()
 
-	defer func() { <-fetchErrCh }() // ensure fetching is done before we return
-
-	select {
-	case err := <-hbErrCh:
-		return err
-	case <-s.assign(g, added):
-	}
-
+	// We immediately begin fetching offsets. We want to wait until the
+	// fetch function returns, since it assumes within it that another
+	// assign has not happened (it assigns partitions itself). Returning
+	// before the fetch completes would be not good.
+	//
+	// The difference between fetchDone and fetchErrCh is that fetchErrCh
+	// can kill heartbeating, or signal it to continue, while fetchDone
+	// is specifically used for this function's return.
+	fetchDone := make(chan struct{})
+	defer func() { <-fetchDone }()
 	if len(added) > 0 {
 		go func() {
+			defer close(fetchDone)
+			defer close(fetchErrCh)
 			g.cl.cfg.logger.Log(LogLevelInfo, "fetching offsets for added partitions", "added", added)
 			fetchErrCh <- g.fetchOffsets(ctx, added)
-			close(fetchErrCh)
 		}()
 	} else {
+		close(fetchDone)
 		close(fetchErrCh)
 	}
 
+	// Before we return, we also want to ensure that the user's onAssign is
+	// done.
+	//
+	// Ensuring assigning is done ensures two things:
+	//
+	// * that we wait for for prerevoking to be done, which updates the
+	// uncommitted field.  Waiting for that ensures that a rejoin and poll
+	// doesn't have weird concurrent interaction.
+	//
+	// * that our onLost will not be concurrent with onAssign
+	s.assign(g, added)
+	defer func() { <-s.assignDone }()
+
+	// Finally, we simply return whatever the heartbeat error is. This will
+	// be the fetch offset error if that function is what killed this.
 	return <-hbErrCh
 }
 
@@ -697,7 +757,7 @@ func (g *groupConsumer) setupAssignedAndHeartbeat() error {
 // This function begins before fetching offsets to allow the consumer's
 // onAssigned to be called before fetching. If the eventual offset fetch
 // errors, we continue heartbeating until onRevoked finishes and our metadata
-// is updated.
+// is updated. If the error is not RebalanceInProgress, we return immediately.
 //
 // If the offset fetch is successful, then we basically sit in this function
 // until a heartbeat errors or we, being the leader, decide to re-join.
@@ -735,7 +795,6 @@ func (g *groupConsumer) heartbeat(fetchErrCh <-chan error, s *assignRevokeSessio
 			revoked = nil
 			didRevoke = true
 		case <-g.ctx.Done():
-			<-s.assignDone // fall into onLost logic
 			return errLeftGroup
 		}
 
@@ -772,7 +831,7 @@ func (g *groupConsumer) heartbeat(fetchErrCh <-chan error, s *assignRevokeSessio
 			// If we are an eager consumer, we stop fetching all of
 			// our current partitions as we will be revoking them.
 			if !g.cooperative {
-				g.c.maybeAssignPartitions(&g.seq, nil, assignInvalidateAll)
+				g.c.assignPartitions(nil, assignInvalidateAll)
 			}
 
 			// If our error is not from rebalancing, then we
@@ -783,10 +842,10 @@ func (g *groupConsumer) heartbeat(fetchErrCh <-chan error, s *assignRevokeSessio
 			// metadata; the groupConsumer's manage function will
 			// call onLost with all partitions.
 			//
-			// We still wait for the session's onAssigned to be
-			// done so that we avoid calling onLost concurrently.
+			// The caller still wait for the session's onAssigned
+			// to be done so that we avoid calling onLost
+			// concurrently.
 			if err != kerr.RebalanceInProgress {
-				<-s.assignDone
 				return err
 			}
 
@@ -844,27 +903,97 @@ func (g *groupConsumer) rejoin() {
 	}
 }
 
-var clientGroupProtocol = "consumer" // in the Java API, the standard client is the "consumer" protocol; `var` so we can take the address
+var clientGroupProtocol = "consumer" // in the Java API, the standard client is the "consumer" protocol; `var` so we can take the address TODO make client configurable?
 
+// Joins and then syncs, issuing the two slow requests in goroutines to allow
+// for group cancelation to return early.
 func (g *groupConsumer) joinAndSync() error {
 	g.cl.cfg.logger.Log(LogLevelInfo, "joining group")
 	g.prejoin()
 
 start:
-	resp, err := (&kmsg.JoinGroupRequest{
-		Group:                  g.id,
-		SessionTimeoutMillis:   int32(g.sessionTimeout.Milliseconds()),
-		RebalanceTimeoutMillis: int32(g.rebalanceTimeout.Milliseconds()),
-		ProtocolType:           clientGroupProtocol,
-		MemberID:               g.memberID,
-		InstanceID:             g.instanceID,
-		Protocols:              g.joinGroupProtocols(),
-	}).RequestWith(g.ctx, g.cl)
+	var (
+		joinReq = &kmsg.JoinGroupRequest{
+			Group:                  g.id,
+			SessionTimeoutMillis:   int32(g.sessionTimeout.Milliseconds()),
+			RebalanceTimeoutMillis: int32(g.rebalanceTimeout.Milliseconds()),
+			ProtocolType:           clientGroupProtocol,
+			MemberID:               g.memberID,
+			InstanceID:             g.instanceID,
+			Protocols:              g.joinGroupProtocols(),
+		}
+
+		joinResp *kmsg.JoinGroupResponse
+		err      error
+		joined   = make(chan struct{})
+	)
+
+	go func() {
+		defer close(joined)
+		joinResp, err = joinReq.RequestWith(g.ctx, g.cl)
+	}()
+
+	select {
+	case <-joined:
+	case <-g.ctx.Done():
+		return g.ctx.Err() // group killed
+	}
 	if err != nil {
-		g.cl.cfg.logger.Log(LogLevelWarn, "join group failed", "err", err)
 		return err
 	}
 
+	restart, protocol, plan, err := g.handleJoinResp(joinResp)
+	if restart {
+		goto start
+	}
+	if err != nil {
+		g.cl.cfg.logger.Log(LogLevelWarn, "join group failed", err)
+		return err
+	}
+
+	var (
+		syncReq = &kmsg.SyncGroupRequest{
+			Group:           g.id,
+			Generation:      g.generation,
+			MemberID:        g.memberID,
+			InstanceID:      g.instanceID,
+			ProtocolType:    &clientGroupProtocol,
+			Protocol:        &protocol,
+			GroupAssignment: plan.intoAssignment(), // nil unless we are the leader
+		}
+
+		syncResp *kmsg.SyncGroupResponse
+		synced   = make(chan struct{})
+	)
+
+	g.cl.cfg.logger.Log(LogLevelInfo, "syncing", "protocol_type", clientGroupProtocol, "protocol", protocol)
+	go func() {
+		defer close(synced)
+		syncResp, err = syncReq.RequestWith(g.ctx, g.cl)
+	}()
+
+	select {
+	case <-synced:
+	case <-g.ctx.Done():
+		return g.ctx.Err()
+	}
+	if err != nil {
+		return err
+	}
+
+	if err = g.handleSyncResp(syncResp, plan); err != nil {
+		if err == kerr.RebalanceInProgress {
+			g.cl.cfg.logger.Log(LogLevelInfo, "sync failed with RebalanceInProgress, rejoining")
+			goto start
+		}
+		g.cl.cfg.logger.Log(LogLevelWarn, "sync group failed", err)
+		return err
+	}
+
+	return nil
+}
+
+func (g *groupConsumer) handleJoinResp(resp *kmsg.JoinGroupResponse) (restart bool, protocol string, plan balancePlan, err error) {
 	if err = kerr.ErrorForCode(resp.ErrorCode); err != nil {
 		switch err {
 		case kerr.MemberIDRequired:
@@ -872,15 +1001,15 @@ start:
 			g.memberID = resp.MemberID // KIP-394
 			g.mu.Unlock()
 			g.cl.cfg.logger.Log(LogLevelInfo, "join returned MemberIDRequired, rejoining with response's MemberID", "memberID", resp.MemberID)
-			goto start
+			return true, "", nil, nil
 		case kerr.UnknownMemberID:
 			g.mu.Lock()
 			g.memberID = ""
 			g.mu.Unlock()
 			g.cl.cfg.logger.Log(LogLevelInfo, "join returned UnknownMemberID, rejoining without a member id")
-			goto start
+			return true, "", nil, nil
 		}
-		return err // Request retries as necesary, so this must be a failure
+		return // Request retries as necesary, so this must be a failure
 	}
 
 	// Concurrent committing, while erroneous to do at the moment, could
@@ -890,8 +1019,6 @@ start:
 	g.generation = resp.Generation
 	g.mu.Unlock()
 
-	var plan balancePlan
-	var protocol string
 	if resp.Protocol != nil {
 		protocol = *resp.Protocol
 	}
@@ -907,10 +1034,8 @@ start:
 		)
 
 		plan, err = g.balanceGroup(protocol, resp.Members)
-
 		if err != nil {
-			g.cl.cfg.logger.Log(LogLevelError, "unable to balance", "err", err)
-			return err
+			return
 		}
 		g.setLeader()
 
@@ -922,49 +1047,17 @@ start:
 			"leader", false,
 		)
 	}
-
-	if err = g.syncGroup(leader, plan, protocol); err != nil {
-		if err == kerr.RebalanceInProgress {
-			g.cl.cfg.logger.Log(LogLevelInfo, "sync failed with RebalanceInProgress, rejoining")
-			goto start
-		}
-		return err
-	}
-
-	return nil
+	return
 }
 
-func (g *groupConsumer) syncGroup(leader bool, plan balancePlan, protocol string) error {
-	g.cl.cfg.logger.Log(LogLevelInfo, "syncing",
-		"protocol_type", clientGroupProtocol,
-		"protocol", protocol,
-	)
-
-	resp, err := (&kmsg.SyncGroupRequest{
-		Group:           g.id,
-		Generation:      g.generation,
-		MemberID:        g.memberID,
-		InstanceID:      g.instanceID,
-		ProtocolType:    &clientGroupProtocol,
-		Protocol:        &protocol,
-		GroupAssignment: plan.intoAssignment(), // nil unless we are the leader
-	}).RequestWith(g.ctx, g.cl)
-	if err != nil {
-		g.cl.cfg.logger.Log(LogLevelWarn, "sync failed", "err", err)
-		return err // Request retries as necesary, so this must be a failure
-	}
-
-	if err = kerr.ErrorForCode(resp.ErrorCode); err != nil {
-		g.cl.cfg.logger.Log(LogLevelWarn, "sync failed", "err", err)
+func (g *groupConsumer) handleSyncResp(resp *kmsg.SyncGroupResponse, plan balancePlan) error {
+	if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
 		return err
 	}
 
 	kassignment := new(kmsg.GroupMemberAssignment)
-	if err = kassignment.ReadFrom(resp.MemberAssignment); err != nil {
+	if err := kassignment.ReadFrom(resp.MemberAssignment); err != nil {
 		g.cl.cfg.logger.Log(LogLevelError, "sync assignment parse failed", "err", err)
-		if g.cl.cfg.logger.Level() >= LogLevelDebug {
-			g.cl.cfg.logger.Log(LogLevelDebug, "sync assignment raw", "hex", hex.EncodeToString(resp.MemberAssignment))
-		}
 		return err
 	}
 
@@ -1016,10 +1109,21 @@ start:
 			Partitions: partitions,
 		})
 	}
-	resp, err := req.RequestWith(ctx, g.cl)
-	if err != nil {
-		g.cl.cfg.logger.Log(LogLevelWarn, "fetch offsets failed", "err", err)
-		return err
+
+	var (
+		resp *kmsg.OffsetFetchResponse
+		err  error
+	)
+
+	fetchDone := make(chan struct{})
+	go func() {
+		defer close(fetchDone)
+		resp, err = req.RequestWith(ctx, g.cl)
+	}()
+	select {
+	case <-fetchDone:
+	case <-ctx.Done():
+		err = ctx.Err()
 	}
 	if err != nil {
 		g.cl.cfg.logger.Log(LogLevelError, "fetch offsets failed with non-retriable error", "err", err)
@@ -1046,8 +1150,8 @@ start:
 				return err
 			}
 			offset := Offset{
-				request: rPartition.Offset,
-				epoch:   -1,
+				at:    rPartition.Offset,
+				epoch: -1,
 			}
 			if resp.Version >= 5 { // KIP-320
 				offset.epoch = rPartition.LeaderEpoch
@@ -1059,14 +1163,6 @@ start:
 		}
 	}
 
-	c := g.c
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if c.seq != g.seq {
-		return errors.New("stale group")
-	}
-
 	// Grab the group lock before assigning so that we can update the
 	// uncommitted map before a Poll/Commit by the user.
 	g.mu.Lock()
@@ -1074,8 +1170,7 @@ start:
 
 	// Eager: we already invalidated everything; nothing to re-invalidate.
 	// Cooperative: assign without invalidating what we are consuming.
-	c.assignPartitions(offsets, assignWithoutInvalidating)
-	g.seq = c.seq
+	g.c.assignPartitions(offsets, assignWithoutInvalidating)
 
 	// We need to update the uncommited map so that SetOffsets(Committed)
 	// does not rewind before the committed offsets we just fetched.
@@ -1089,12 +1184,12 @@ start:
 			g.uncommitted[topic] = topicUncommitted
 		}
 		for partition, offset := range partitions {
-			if offset.request < 0 {
+			if offset.at < 0 {
 				continue // not yet committed
 			}
 			committed := EpochOffset{
 				Epoch:  offset.epoch,
-				Offset: offset.request,
+				Offset: offset.at,
 			}
 			topicUncommitted[partition] = uncommit{
 				head:      committed,
@@ -1104,15 +1199,10 @@ start:
 	}
 
 	if g.cl.cfg.logger.Level() >= LogLevelDebug {
-		g.cl.cfg.logger.Log(LogLevelDebug, "fetched committed offsets", "fetched", offsets, "seq", c.seq)
+		g.cl.cfg.logger.Log(LogLevelDebug, "fetched committed offsets", "fetched", offsets)
 	} else {
 		g.cl.cfg.logger.Log(LogLevelInfo, "fetched committed offsets")
 	}
-
-	// If we can validate epochs, assigning partitions may set some
-	// partitions to wait for that validation, so we ensure the offset
-	// loading process here.
-	c.resetAndLoadOffsets()
 	return nil
 }
 
@@ -1379,10 +1469,6 @@ func (cl *Client) SetOffsets(setOffsets map[string]map[int32]EpochOffset) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
-	if c.seq != g.seq {
-		return
-	}
-
 	clientTopics := cl.loadTopics()
 
 	// The gist of what follows:
@@ -1421,8 +1507,8 @@ func (cl *Client) SetOffsets(setOffsets map[string]map[int32]EpochOffset) {
 				topicAssigns = make(map[int32]Offset, len(partitions))
 			}
 			topicAssigns[partition] = Offset{
-				request: epochOffset.Offset,
-				epoch:   epochOffset.Epoch,
+				at:    epochOffset.Offset,
+				epoch: epochOffset.Epoch,
 			}
 			topicUncommitted[partition] = uncommit{
 				head:      epochOffset,
@@ -1442,8 +1528,6 @@ func (cl *Client) SetOffsets(setOffsets map[string]map[int32]EpochOffset) {
 	}
 
 	c.assignPartitions(assigns, assignSetMatching)
-	g.seq = c.seq
-	c.resetAndLoadOffsets()
 }
 
 // UncommittedOffsets returns the latest uncommitted offsets. Uncommitted
@@ -1730,11 +1814,10 @@ func (g *groupConsumer) commit(
 	g.commitCancel = commitCancel
 	g.commitDone = commitDone
 
-	memberID := g.memberID
 	req := &kmsg.OffsetCommitRequest{
 		Group:      g.id,
 		Generation: g.generation,
-		MemberID:   memberID,
+		MemberID:   g.memberID,
 		InstanceID: g.instanceID,
 	}
 
@@ -1772,16 +1855,12 @@ func (g *groupConsumer) commit(
 					Partition:   partition,
 					Offset:      eo.Offset,
 					LeaderEpoch: eo.Epoch, // KIP-320
-					Metadata:    &memberID,
+					Metadata:    &req.MemberID,
 				})
 			}
 		}
 
-		var resp *kmsg.OffsetCommitResponse
-		var err error
-		if len(req.Topics) > 0 {
-			resp, err = req.RequestWith(commitCtx, g.cl)
-		}
+		resp, err := req.RequestWith(commitCtx, g.cl)
 		if err != nil {
 			onDone(req, nil, err)
 			return

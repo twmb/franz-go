@@ -389,7 +389,8 @@ func AutoTopicCreation() Opt {
 // defaults to 100MiB.
 //
 // The only Kafka request that could come reasonable close to hitting this
-// limit should be produce requests.
+// limit should be produce requests, and thus this limit is only enforced for
+// produce requests.
 func BrokerMaxWriteBytes(v int32) Opt {
 	return clientOpt{func(cfg *cfg) { cfg.maxBrokerWriteBytes = v }}
 }

@@ -57,12 +57,6 @@ type promisedResp struct {
 	enqueue time.Time // used to calculate readWait
 }
 
-type waitingResp struct {
-	resp    kmsg.Response
-	promise func(kmsg.Response, error)
-	err     error
-}
-
 var unknownMetadata = BrokerMetadata{
 	NodeID: -1,
 }
@@ -119,21 +113,6 @@ type broker struct {
 	cxnProduce *brokerCxn
 	cxnFetch   *brokerCxn
 
-	// sink and source exist so that metadata updates can copy these
-	// pointers to a topicPartition's record's sink field and consumption's
-	// source field.
-	//
-	// Brokers are created with these two fields initialized; when a topic
-	// partition wants to use the broker, it copies these pointers.
-	sink   *sink
-	source *source
-
-	// seqResps, guarded by seqRespsMu, contains responses that must be
-	// handled sequentially. These responses are handled asyncronously,
-	// but sequentially.
-	seqRespsMu sync.Mutex
-	seqResps   []waitingResp
-
 	// dieMu guards sending to reqs in case the broker has been
 	// permanently stopped.
 	dieMu sync.RWMutex
@@ -166,8 +145,6 @@ func (cl *Client) newBroker(nodeID int32, host string, port int32, rack *string)
 
 		reqs: make(chan promisedReq, 10),
 	}
-	br.sink = newSink(cl, br)
-	br.source = newSource(cl, br)
 	go br.handleReqs()
 
 	return br
@@ -217,43 +194,6 @@ func (b *broker) do(
 	if dead {
 		promise(nil, ErrBrokerDead)
 	}
-}
-
-// doSequencedAsyncPromise is the same as do, but all requests using this
-// function have their responses handled sequentially.
-//
-// This is important for example for ordering of produce requests.
-//
-// Note that the requests may finish out of order (e.g. dead connection kills
-// latter request); this is handled appropriately in producing.
-func (b *broker) doSequencedAsyncPromise(
-	ctx context.Context,
-	req kmsg.Request,
-	promise func(kmsg.Response, error),
-) {
-	b.do(ctx, req, func(resp kmsg.Response, err error) {
-		b.seqRespsMu.Lock()
-		b.seqResps = append(b.seqResps, waitingResp{resp, promise, err})
-		if len(b.seqResps) == 1 {
-			go b.handleSeqResp(b.seqResps[0])
-		}
-		b.seqRespsMu.Unlock()
-	})
-}
-
-// handleSeqResp handles a sequenced response while there is one.
-func (b *broker) handleSeqResp(wr waitingResp) {
-more:
-	wr.promise(wr.resp, wr.err)
-
-	b.seqRespsMu.Lock()
-	b.seqResps = b.seqResps[1:]
-	if len(b.seqResps) > 0 {
-		wr = b.seqResps[0]
-		b.seqRespsMu.Unlock()
-		goto more
-	}
-	b.seqRespsMu.Unlock()
 }
 
 // waitResp runs a req, waits for the resp and returns the resp and err.
@@ -733,6 +673,8 @@ func (cxn *brokerCxn) writeRequest(ctx context.Context, writeWait time.Duration,
 			}
 		}
 	}
+
+	// TODO: write in a goroutine, use ctx to allow for early cancel.
 
 	buf := cxn.cl.bufPool.get()
 	defer cxn.cl.bufPool.put(buf)
