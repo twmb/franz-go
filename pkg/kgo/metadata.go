@@ -2,6 +2,8 @@ package kgo
 
 import (
 	"context"
+	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -183,34 +185,31 @@ func (cl *Client) updateMetadata() (needsRetry bool, err error) {
 	// We have to add those topics to our topics map so that we can
 	// save their information in the merge just below.
 	if all {
-		var cloned bool
-		cl.topicsMu.Lock()
-		topics = cl.loadTopics()
+		allTopics := make([]string, 0, len(meta))
 		for topic := range meta {
-			if _, exists := topics[topic]; !exists {
-				if !cloned {
-					topics = cl.cloneTopics()
-					cloned = true
-				}
-				topics[topic] = newTopicPartitions(topic)
-			}
+			allTopics = append(allTopics, topic)
 		}
-		if cloned {
-			cl.topics.Store(topics)
-		}
-		cl.topicsMu.Unlock()
+		cl.storeTopics(allTopics)
+		topics = cl.loadTopics()
 	}
 
-	// Merge the producer side of the update.
+	var consumerSessionStopped bool
+	var reloadOffsets listOrEpochLoads
 	for topic, oldParts := range topics {
 		newParts, exists := meta[topic]
 		if !exists {
 			continue
 		}
-		needsRetry = cl.mergeTopicPartitions(oldParts, newParts) || needsRetry
+		needsRetry = cl.mergeTopicPartitions(oldParts, newParts, &consumerSessionStopped, &reloadOffsets) || needsRetry
 	}
 
-	// Trigger any consumer updates.
+	if consumerSessionStopped {
+		reloadOffsets.loadWithSession(cl.consumer.startNewSession())
+	}
+
+	// Finally, trigger the consumer to process any updated metadata, which
+	// can look for new partitions to consume or something or signal a
+	// waiting list or epoch load to continue.
 	cl.consumer.doOnMetadataUpdate()
 
 	return needsRetry, nil
@@ -230,9 +229,6 @@ func (cl *Client) fetchTopicMetadata(reqTopics []string) (map[string]*topicParti
 
 	topics := make(map[string]*topicPartitionsData, len(reqTopics))
 
-	cl.brokersMu.RLock()
-	defer cl.brokersMu.RUnlock()
-
 	for i := range meta.Topics {
 		topicMeta := &meta.Topics[i]
 
@@ -243,6 +239,26 @@ func (cl *Client) fetchTopicMetadata(reqTopics []string) (map[string]*topicParti
 			writable:   make(map[int32]*topicPartition, len(topicMeta.Partitions)),
 		}
 		topics[topicMeta.Topic] = parts
+
+		if parts.loadErr != nil {
+			continue
+		}
+
+		// We eventually will switch topicPartitionsData to removing
+		// slices where possible. Kafka partitions are strictly
+		// increasing. We enforce that here; if any partition is
+		// missing, we consider this topic a load failure.
+		//
+		// TODO remove "eventually" when the above is done
+		sort.Slice(topicMeta.Partitions, func(i, j int) bool {
+			return topicMeta.Partitions[i].Partition < topicMeta.Partitions[j].Partition
+		})
+		for i := range topicMeta.Partitions {
+			if got := topicMeta.Partitions[i].Partition; got != int32(i) {
+				parts.loadErr = fmt.Errorf("kafka did not reply with a comprensive set of partitions for a topic; we expected partition %d but saw %d", i, got)
+				break
+			}
+		}
 
 		if parts.loadErr != nil {
 			continue
@@ -270,33 +286,41 @@ func (cl *Client) fetchTopicMetadata(reqTopics []string) (map[string]*topicParti
 				},
 
 				cursor: &cursor{
-					topic:     topicMeta.Topic,
-					partition: partMeta.Partition,
-
-					leader:           partMeta.Leader,
-					preferredReplica: -1,
-
+					topic:       topicMeta.Topic,
+					partition:   partMeta.Partition,
 					keepControl: cl.cfg.keepControl,
+					cursorsIdx:  -1,
 
-					cursorsIdx: -1,
-					seqOffset: seqOffset{
-						offset:             -1, // required to not consume until needed
-						currentLeaderEpoch: leaderEpoch,
-						lastConsumedEpoch:  -1, // required sentinel
+					leader:      partMeta.Leader,
+					leaderEpoch: leaderEpoch,
+
+					cursorOffset: cursorOffset{
+						offset:            -1, // required to not consume until needed
+						lastConsumedEpoch: -1, // required sentinel
 					},
 				},
 			}
 
-			broker, exists := cl.brokers[p.leader]
-			if !exists {
-				if p.loadErr == nil {
-					p.loadErr = &errUnknownBrokerForPartition{topicMeta.Topic, partMeta.Partition, p.leader}
-				}
-
-			} else {
-				p.records.sink = broker.sink
-				p.cursor.source = broker.source
+			// Any partition that has a load error uses the first
+			// seed broker as a leader. This ensures that every
+			// record buffer and every cursor can use a sink or
+			// source.
+			if p.loadErr != nil {
+				p.leader = unknownSeedID(0)
 			}
+
+			cl.sinksAndSourcesMu.Lock()
+			sns, exists := cl.sinksAndSources[p.leader]
+			if !exists {
+				sns = sinkAndSource{
+					sink:   cl.newSink(p.leader),
+					source: cl.newSource(p.leader),
+				}
+				cl.sinksAndSources[p.leader] = sns
+			}
+			cl.sinksAndSourcesMu.Unlock()
+			p.records.sink = sns.sink
+			p.cursor.source = sns.source
 
 			parts.partitions = append(parts.partitions, partMeta.Partition)
 			parts.all[partMeta.Partition] = p
@@ -314,13 +338,23 @@ func (cl *Client) fetchTopicMetadata(reqTopics []string) (map[string]*topicParti
 // whether the metadata update that caused this merge needs to be retried.
 //
 // Retries are necessary if the topic or any partition has a retriable error.
-func (cl *Client) mergeTopicPartitions(l *topicPartitions, r *topicPartitionsData) (needsRetry bool) {
+func (cl *Client) mergeTopicPartitions(
+	l *topicPartitions,
+	r *topicPartitionsData,
+	consumerSessionStopped *bool,
+	reloadOffsets *listOrEpochLoads,
+) (needsRetry bool) {
 	lv := *l.load() // copy so our field writes do not collide with reads
 	hadPartitions := len(lv.all) != 0
 	defer func() { cl.storePartitionsUpdate(l, &lv, hadPartitions) }()
 
 	lv.loadErr = r.loadErr
 	lv.isInternal = r.isInternal
+
+	// If the load had an error for the entire topic, we set the load error
+	// but keep our stale partition information. For anything being
+	// produced, we bump the respective error or fail everything. There is
+	// nothing to be done in a consumer.
 	if r.loadErr != nil {
 		retriable := kerr.IsRetriable(r.loadErr)
 		if retriable {
@@ -342,17 +376,19 @@ func (cl *Client) mergeTopicPartitions(l *topicPartitions, r *topicPartitionsDat
 	// we could.
 	//
 	// 1) an admin added partitions, we saw, then we re-fetched metadata
-	//    from an out of date broker that did not have the new partitions
+	// from an out of date broker that did not have the new partitions
+	//
 	// 2) a topic was deleted and recreated with fewer partitions
 	//
-	// Both of these scenarios should be rare to non-existent. If we see a
-	// delete partition, we remove it from sinks / sources and error all
-	// buffered records for it. This isn't the best behavior in the first
-	// scenario, but it isn't showstopping. The new broker will eventually
-	// see the new partitions and we will eventually pick them up. In the
-	// latter, we avoid trying to forever produce to a partition that truly
-	// does no longer exist.
-	var deleted []*topicPartition
+	// Both of these scenarios should be rare to non-existent, and we do
+	// nothing if we encounter them.
+	//
+	// NOTE: we previously removed deleted partitions, but this was
+	// removed. Deleting partitions really should not happen, and not
+	// doing so simplifies the code.
+	//
+	// See commit 385cecb928e9ec3d9610c7beb223fcd1ed303fd0 for the last
+	// commit that contained deleting partitions.
 
 	// Migrating topicPartitions is a little tricky because we have to
 	// worry about map contents.
@@ -363,28 +399,16 @@ func (cl *Client) mergeTopicPartitions(l *topicPartitions, r *topicPartitionsDat
 	for part, oldTP := range lv.all {
 		newTP, exists := r.all[part]
 		if !exists {
-			// Individual partitions cannot be deleted, so if this
-			// partition does not exist anymore, either the topic
-			// was deleted and recreated, which we do not handle
-			// yet (and cannot on most Kafka's), or the broker we
-			// fetched metadata from is out of date.
-			//
-			// TODO we should store a "first seen deleted" time
-			// and only delete after a given amount of time.
-			// It should be rare, but theoretically we can fetch
-			// from two brokers in quick succession where one
-			// has out of date metadata that will cause us to
-			// delete the partition.
-			//
-			// This is a minor harm (clients can re-publish any
-			// records failed due to ErrPartitionDeleted, and
-			// consumption will just pause for these partitions),
-			// so it is not critical.
-			deleted = append(deleted, oldTP)
+			// This is the "deleted" case; see the comment above.
+			// We will just keep our old information.
+			*newTP = *oldTP
 			continue
 		}
 
-		if newTP.loadErr != nil { // partition errors should generally be temporary
+		// Like above for the entire topic, an individual partittion
+		// can have a load error. Unlike for the topic, individual
+		// partition errors are always retriable.
+		if newTP.loadErr != nil {
 			err := newTP.loadErr
 			*newTP = *oldTP
 			newTP.loadErr = err
@@ -393,15 +417,16 @@ func (cl *Client) mergeTopicPartitions(l *topicPartitions, r *topicPartitionsDat
 			continue
 		}
 
-		// Update the old's leader epoch before we do any pointer
-		// copying. Our epoch should not go backwards, but just in
-		// case, we can guard against it.
+		// If the new partition has an older leader epoch, then we
+		// fetched from an out of date broker. We just keep the old
+		// information.
 		if newTP.leaderEpoch < oldTP.leaderEpoch {
+			*newTP = *oldTP
 			continue
 		}
 
 		// If the new sink is the same as the old, we simply copy over
-		// the records pointer and maybe begin draining again.
+		// the records pointer and maybe begin producing again.
 		//
 		// We always clear the failing state; migration does this itself.
 		if newTP.records.sink == oldTP.records.sink {
@@ -413,11 +438,23 @@ func (cl *Client) mergeTopicPartitions(l *topicPartitions, r *topicPartitionsDat
 
 		// The cursor source could be different because we could be
 		// fetching from a preferred replica.
-		if newTP.cursor.leader == oldTP.cursor.leader {
+		if newTP.cursor.leader == oldTP.cursor.leader &&
+			newTP.cursor.leaderEpoch == oldTP.cursor.leaderEpoch {
+
 			newTP.cursor = oldTP.cursor
-			newTP.cursor.clearFailing()
+
+			// Unlike above, there is no failing state for a
+			// cursor. If a cursor has a fetch error, we buffer
+			// that information for a poll, and then we continue to
+			// re-fetch that error.
+
 		} else {
-			oldTP.migrateCursorTo(newTP)
+			oldTP.migrateCursorTo(
+				newTP,
+				&cl.consumer,
+				consumerSessionStopped,
+				reloadOffsets,
+			)
 		}
 	}
 
@@ -425,12 +462,6 @@ func (cl *Client) mergeTopicPartitions(l *topicPartitions, r *topicPartitionsDat
 	// partition. We use this to add the new tp's records to its sink.
 	// Same reasoning applies to the cursor offset.
 	for _, newTP := range r.all {
-		// If the partition has a load error, even if it is new, we
-		// can't do anything with it now. Its record sink and source
-		// cursor will be nil.
-		if newTP.loadErr != nil {
-			continue
-		}
 		if newTP.records.recBufsIdx == -1 {
 			newTP.records.sink.addRecBuf(newTP.records)
 			newTP.cursor.source.addCursor(newTP.cursor)
@@ -440,31 +471,9 @@ func (cl *Client) mergeTopicPartitions(l *topicPartitions, r *topicPartitionsDat
 	lv.all = r.all
 	lv.writable = r.writable
 
-	// Handle anything deleted. We do this serially so that something can't
-	// re-trigger a metadata update and have some logic collide with our
-	// deletion cleanup.
-	if len(deleted) > 0 {
-		cl.handleDeletedPartitions(deleted)
-	}
-
 	// The left writable map needs no further updates: all changes above
 	// happened to r.all, of which r.writable contains a subset of.
 	// Modifications to r.all are seen in r.writable.
-	return needsRetry
-}
 
-// handleDeletedPartitions calls all promises in all records in all partitions
-// in deleted with ErrPartitionDeleted, as well as removes topic partition
-// cursors from their sources.
-//
-// We can encounter a deleted partition if a topic is deleted and recreated
-// with fewer partitions. We have to clear the cursors so that if more
-// partitions are reencountered in the future, they will be used.
-func (cl *Client) handleDeletedPartitions(deleted []*topicPartition) {
-	for _, d := range deleted {
-		d.records.sink.removeRecBuf(d.records)
-		d.records.failAllRecords(ErrPartitionDeleted)
-		d.cursor.source.removeCursor(d.cursor)
-		cl.consumer.deletePartition(d)
-	}
+	return needsRetry
 }

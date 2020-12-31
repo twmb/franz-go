@@ -33,6 +33,28 @@ func (cl *Client) loadShortTopics() map[string][]int32 {
 	return short
 }
 
+// updates the stored list of topics if any in the list is not yet stored in
+// the client. The input is allowed to have duplicates.
+func (cl *Client) storeTopics(topics []string) {
+	cl.topicsMu.Lock()
+	defer cl.topicsMu.Unlock()
+
+	var cloned bool
+	loaded := cl.loadTopics()
+	for _, topic := range topics {
+		if _, exists := loaded[topic]; !exists {
+			if !cloned {
+				loaded = cl.cloneTopics()
+				cloned = true
+			}
+			loaded[topic] = newTopicPartitions(topic)
+		}
+	}
+	if cloned {
+		cl.topics.Store(loaded)
+	}
+}
+
 func newTopicPartitions(topic string) *topicPartitions {
 	parts := &topicPartitions{
 		topic: topic,
@@ -51,13 +73,14 @@ type topicPartitions struct {
 	partsMu     sync.Mutex
 	partitioner TopicPartitioner
 
-	topic string
+	topic string // TODO delete?
 }
 
 func (t *topicPartitions) load() *topicPartitionsData {
 	return t.v.Load().(*topicPartitionsData)
 }
 
+// TODO better name; besides the store, all logic is specific to producing.
 func (cl *Client) storePartitionsUpdate(l *topicPartitions, lv *topicPartitionsData, hadPartitions bool) {
 	// If the topic already had partitions, then there would be no
 	// unknown topic waiting and we do not need to notify anything.
@@ -130,19 +153,21 @@ type topicPartitionsData struct {
 	// NOTE if adding anything to this struct, be sure to fix meta merge.
 	loadErr            error // could be auth, unknown, leader not avail, or creation err
 	isInternal         bool
-	partitions         []int32
+	partitions         []int32 // TODO does not need to be a slice
 	writablePartitions []int32
-	all                map[int32]*topicPartition // partition num => partition
+	all                map[int32]*topicPartition // partition num => partition TODO does not need to be a map, can be slice
 	writable           map[int32]*topicPartition // partition num => partition, eliding partitions with no leader / listener
 }
 
 // topicPartition contains all information from Kafka for a topic's partition,
 // as well as what a client is producing to it or info about consuming from it.
 type topicPartition struct {
-	loadErr error // could be leader/listener/replica not avail
-
+	// NOTE all of these fields are copied when updating metadata;
+	// we copy all fields and keep the new topicPartition pointer.
 	leader      int32 // our broker leader
 	leaderEpoch int32 // the broker leader's epoch
+
+	loadErr error // could be leader/listener/replica not avail
 
 	records *recBuf
 	cursor  *cursor
@@ -153,12 +178,8 @@ type topicPartition struct {
 // must be done such that records produced during migration follow those
 // already buffered.
 func (old *topicPartition) migrateProductionTo(new *topicPartition) {
-	// We could be migrating _from_ a nil sink if the original sink had a
-	// load error. The new sink will not be nil, since we do not migrate
-	// to failing sinks.
-	if old.records.sink != nil {
-		old.records.sink.removeRecBuf(old.records) // first, remove our record source from the old sink
-	}
+	// First, remove our record buffer from the old sink.
+	old.records.sink.removeRecBuf(old.records)
 
 	// Before this next lock, record producing will buffer to the
 	// in-migration-progress records and may trigger draining to
@@ -176,43 +197,57 @@ func (old *topicPartition) migrateProductionTo(new *topicPartition) {
 	old.records.sink.addRecBuf(old.records) // add our record source to the new sink
 
 	// At this point, the new sink will be draining our records. We lastly
-	// need to copy the records pointer to our new topicPartition and clear
-	// its failing state.
+	// need to copy the records pointer to our new topicPartition.
 	new.records = old.records
 }
 
-// migrateCursorTo is called on metadata update if a topic partition's
-// source has changed. This happens whenever the sink changes, since a source
-// is just the counterpart to a sink for the same topic partition.
+// migrateCursorTo is called on metadata update if a topic partition's leader
+// or leader epoch has changed.
 //
-// The pattern is the same as above, albeit no concurrent-produce issues to
-// worry about.
-func (old *topicPartition) migrateCursorTo(new *topicPartition) {
-	if old.cursor.source != nil {
-		old.cursor.source.removeCursor(old.cursor)
+// This is a little bit different from above, in that we do this logic only
+// after stopping a consumer session. With the consumer session stopped, we
+// have fewer concurrency issues to worry about.
+func (old *topicPartition) migrateCursorTo(
+	new *topicPartition,
+	consumer *consumer,
+	consumerSessionStopped *bool,
+	reloadOffsets *listOrEpochLoads,
+) {
+	// Migrating a cursor requires stopping any consumer session. If we
+	// stop a session, we need to eventually re-start any offset listing or
+	// epoch loading that was stopped. Thus, we simply merge what we
+	// stopped into what we will reload.
+	if !*consumerSessionStopped {
+		stoppedListOrEpochLoads := consumer.stopSession()
+		reloadOffsets.mergeFrom(stoppedListOrEpochLoads)
+		*consumerSessionStopped = true
 	}
-	old.cursor.mu.Lock()
+
+	old.cursor.source.removeCursor(old.cursor)
+
+	// With the session stopped, we can update fields on the old cursor
+	// with no concurrency issue.
 	old.cursor.source = new.cursor.source
 
-	// At this point, the old source could be fetching the cursor still
-	// from an in flight request, but new fetches will not begin.
-	//
-	// Before we add the cursor to the new source, if we can validate
-	// epochs, we need to set that the epoch needs validating. We do not
-	// set that we are validating the epoch ourself right now, since as
-	// mentioned, the cursor could still be in use which may ultimately
-	// update the final offset.
-	//
-	// The cursor's epoch will be validated once the new source can
-	// fetch for it.
+	// KIP-320: if we had consumed some messages, we need to validate the
+	// leader epoch on the new broker to see if we experienced data loss
+	// before we can use this cursor.
 	if new.leaderEpoch != -1 && old.cursor.lastConsumedEpoch >= 0 {
-		old.cursor.needLoadEpoch = true
+		// Since the cursor consumed messages, it is definitely usable.
+		// We use it so that the epoch load can finish using it
+		// properly.
+		old.cursor.use()
+		reloadOffsets.addLoad(old.cursor.topic, old.cursor.partition, loadTypeEpoch, offsetLoad{
+			replica: -1,
+			Offset: Offset{
+				at:    old.cursor.offset,
+				epoch: old.cursor.lastConsumedEpoch,
+			},
+		})
 	}
 
 	old.cursor.leader = new.cursor.leader
-	old.cursor.preferredReplica = new.cursor.leader
-
-	old.cursor.mu.Unlock()
+	old.cursor.leaderEpoch = new.cursor.leaderEpoch
 
 	old.cursor.source.addCursor(old.cursor)
 	new.cursor = old.cursor

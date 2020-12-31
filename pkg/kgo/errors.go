@@ -152,18 +152,6 @@ func isRetriableBrokerErr(err error) bool {
 	return false
 }
 
-type errUnknownBrokerForPartition struct {
-	topic     string
-	partition int32
-	broker    int32
-}
-
-func (e *errUnknownBrokerForPartition) Error() string {
-	return fmt.Sprintf("Kafka replied that topic %s partition %d has broker leader %d,"+
-		" but did not reply with that broker in the broker list",
-		e.topic, e.partition, e.broker)
-}
-
 type errUnknownController struct {
 	id int32
 }

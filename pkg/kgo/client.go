@@ -47,6 +47,15 @@ type Client struct {
 	anyBrokerIdx int
 	stopBrokers  bool // set to true on close to stop updateBrokers
 
+	// A sink and a source is created once per node ID and persists
+	// forever. We expect the list to be small.
+	//
+	// The mutex only exists to allow consumer session stopping to read
+	// sources to notify when starting a session; all writes happen in the
+	// metadata loop.
+	sinksAndSourcesMu sync.Mutex
+	sinksAndSources   map[int32]sinkAndSource
+
 	reqFormatter  *kmsg.RequestFormatter
 	connTimeoutFn func(kmsg.Request) (time.Duration, time.Duration)
 
@@ -86,6 +95,11 @@ type Client struct {
 	updateMetadataNowCh chan struct{} // like above, but with high priority
 	metawait            metawait
 	metadone            chan struct{}
+}
+
+type sinkAndSource struct {
+	sink   *sink
+	source *source
 }
 
 // NewClient returns a new Kafka client with the given options or an error if
@@ -144,6 +158,8 @@ func NewClient(opts ...Opt) (*Client, error) {
 
 		controllerID: unknownControllerID,
 		brokers:      make(map[int32]*broker),
+
+		sinksAndSources: make(map[int32]sinkAndSource),
 
 		reqFormatter:  new(kmsg.RequestFormatter),
 		connTimeoutFn: connTimeoutBuilder(cfg.connTimeoutOverhead),
@@ -255,7 +271,7 @@ func connTimeoutBuilder(defaultTimeout time.Duration) func(kmsg.Request) (time.D
 
 // broker returns a random broker from all brokers ever known.
 func (cl *Client) broker() *broker {
-	cl.brokersMu.Lock()
+	cl.brokersMu.Lock() // full lock needed for anyBrokerIdx below
 	defer cl.brokersMu.Unlock()
 
 	if cl.anyBrokerIdx >= len(cl.anyBroker) { // metadata update lost us brokers
@@ -400,14 +416,18 @@ func (cl *Client) Close() {
 	cl.stopBrokers = true
 	for _, broker := range cl.brokers {
 		broker.stopForever()
-		broker.sink.maybeDrain()     // awaken anything in backoff
-		broker.source.maybeConsume() // same
 	}
 	cl.brokersMu.Unlock()
 
 	// Wait for metadata to quit so we know no more erroring topic
-	// partitions will be created.
+	// partitions will be created. After metadata has quit, we can
+	// safely stop sinks and sources, as no more will be made.
 	<-cl.metadone
+
+	for _, sns := range cl.sinksAndSources {
+		sns.sink.maybeDrain()     // awaken anything in backoff
+		sns.source.maybeConsume() // same
+	}
 
 	// We must manually fail all partitions that never had a sink.
 	for _, partitions := range cl.loadTopics() {
@@ -602,6 +622,7 @@ func (cl *Client) shardedRequest(ctx context.Context, req kmsg.Request) ([]Respo
 		}
 		// fetchMetadata does its own retrying, so we do not do
 		// retrying here.
+		// TODO also needs auto topic create
 		br, resp, err := cl.fetchMetadata(ctx, metaReq.Topics == nil, topics)
 		return shards(shard(br, req, resp, err)), nil
 

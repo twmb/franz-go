@@ -65,9 +65,7 @@ func (cl *Client) AssignPartitions(opts ...DirectConsumeOpt) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if c.typ != consumerTypeUnset {
-		c.unassignPrior()
-	}
+	c.unset()
 
 	d := &directConsumer{
 		topics:     make(map[string]Offset),
@@ -80,7 +78,6 @@ func (cl *Client) AssignPartitions(opts ...DirectConsumeOpt) {
 		opt.apply(d)
 	}
 	if len(d.topics) == 0 && len(d.partitions) == 0 || c.dead {
-		c.typ = consumerTypeUnset
 		return
 	}
 	c.typ = consumerTypeDirect
@@ -92,21 +89,14 @@ func (cl *Client) AssignPartitions(opts ...DirectConsumeOpt) {
 		return
 	}
 
-	cl.topicsMu.Lock()
-	defer cl.topicsMu.Unlock()
-
-	clientTopics := cl.cloneTopics()
+	var topics []string
 	for topic := range d.topics {
-		if _, exists := clientTopics[topic]; !exists {
-			clientTopics[topic] = newTopicPartitions(topic)
-		}
+		topics = append(topics, topic)
 	}
 	for topic := range d.partitions {
-		if _, exists := clientTopics[topic]; !exists {
-			clientTopics[topic] = newTopicPartitions(topic)
-		}
+		topics = append(topics, topic)
 	}
-	cl.topics.Store(clientTopics)
+	cl.storeTopics(topics)
 }
 
 // findNewAssignments returns new partitions to consume at given offsets
@@ -181,12 +171,11 @@ func (d *directConsumer) findNewAssignments(
 		if !exists {
 			continue // forgotten topic
 		}
-		if len(partitions) == len(toUseTopic) {
-			delete(toUse, topic)
-			continue
-		}
 		for partition := range partitions {
 			delete(toUseTopic, partition)
+		}
+		if len(toUseTopic) == 0 {
+			delete(toUse, topic)
 		}
 	}
 
@@ -208,17 +197,4 @@ func (d *directConsumer) findNewAssignments(
 	}
 
 	return toUse
-}
-
-// deleteUsing is for deleting a specific partition from the consumer; this
-// is called sequentially at the end of a metadata update.
-func (d *directConsumer) deleteUsing(topic string, partition int32) {
-	if d.using == nil {
-		return
-	}
-	partitions := d.using[topic]
-	if partitions == nil {
-		return
-	}
-	delete(partitions, partition)
 }

@@ -180,7 +180,7 @@ func TestRecBatchAppendTo(t *testing.T) {
 	// ***As a produce request***
 	txid := "tx"
 	kmsgReq := kmsg.ProduceRequest{
-		Version:       99,
+		Version:       8, // TODO bump to 99
 		TransactionID: &txid,
 		Acks:          -1,
 		TimeoutMillis: 1000,
@@ -193,7 +193,7 @@ func TestRecBatchAppendTo(t *testing.T) {
 		}},
 	}
 	ourReq := produceRequest{
-		version:       99,
+		version:       8,
 		txnID:         &txid,
 		acks:          -1,
 		timeout:       1000,
