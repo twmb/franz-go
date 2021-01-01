@@ -17,8 +17,12 @@ import (
 const testRecordLimit = 1000000
 
 var testLogLevel = func() LogLevel {
-	if strings.ToLower(os.Getenv("KGO_LOG_LEVEL")) == "debug" {
+	level := strings.ToLower(os.Getenv("KGO_LOG_LEVEL"))
+	switch level {
+	case "debug":
 		return LogLevelDebug
+	case "none":
+		return LogLevelNone
 	}
 	return LogLevelInfo
 }()

@@ -845,7 +845,7 @@ func (g *groupConsumer) heartbeat(fetchErrCh <-chan error, s *assignRevokeSessio
 			// The caller still wait for the session's onAssigned
 			// to be done so that we avoid calling onLost
 			// concurrently.
-			if err != kerr.RebalanceInProgress {
+			if err != kerr.RebalanceInProgress && revoked == nil {
 				return err
 			}
 
