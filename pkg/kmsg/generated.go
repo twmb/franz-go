@@ -10,7 +10,7 @@ import (
 
 // MaxKey is the maximum key used for any messages in this package.
 // Note that this value will change as Kafka adds more messages.
-const MaxKey = 58
+const MaxKey = 59
 
 // MessageV0 is the message format Kafka used prior to 0.10.
 //
@@ -3268,6 +3268,27 @@ func NewFetchResponseTopicPartitionCurrentLeader() FetchResponseTopicPartitionCu
 	return v
 }
 
+type FetchResponseTopicPartitionSnapshotID struct {
+	EndOffset int64
+
+	Epoch int32
+}
+
+// Default sets any default fields. Calling this allows for future compatibility
+// if new fields are added to FetchResponseTopicPartitionSnapshotID.
+func (v *FetchResponseTopicPartitionSnapshotID) Default() {
+	v.EndOffset = -1
+	v.Epoch = -1
+}
+
+// NewFetchResponseTopicPartitionSnapshotID returns a default FetchResponseTopicPartitionSnapshotID
+// This is a shortcut for creating a struct and calling Default yourself.
+func NewFetchResponseTopicPartitionSnapshotID() FetchResponseTopicPartitionSnapshotID {
+	var v FetchResponseTopicPartitionSnapshotID
+	v.Default()
+	return v
+}
+
 type FetchResponseTopicPartitionAbortedTransaction struct {
 	// ProducerID is the producer ID that caused this aborted transaction.
 	ProducerID int64
@@ -3355,6 +3376,11 @@ type FetchResponseTopicPartition struct {
 	// partition.
 	CurrentLeader FetchResponseTopicPartitionCurrentLeader // tag 1
 
+	// In the case of fetching an offset less than the LogStartOffset, this
+	// is the end offset and epoch that should be used in the FetchSnapshot
+	// request.
+	SnapshotID FetchResponseTopicPartitionSnapshotID // tag 2
+
 	// AbortedTransactions is an array of aborted transactions within the
 	// returned offset range. This is only returned if the requested
 	// isolation level was READ_COMMITTED.
@@ -3395,6 +3421,12 @@ func (v *FetchResponseTopicPartition) Default() {
 		_ = v
 		v.LeaderID = -1
 		v.LeaderEpoch = -1
+	}
+	{
+		v := &v.SnapshotID
+		_ = v
+		v.EndOffset = -1
+		v.Epoch = -1
 	}
 	v.PreferredReadReplica = -1
 }
@@ -3581,6 +3613,13 @@ func (v *FetchResponse) AppendTo(dst []byte) []byte {
 						})() {
 							toEncode = append(toEncode, 1)
 						}
+						if v.SnapshotID != (func() FetchResponseTopicPartitionSnapshotID {
+							var v FetchResponseTopicPartitionSnapshotID
+							v.Default()
+							return v
+						})() {
+							toEncode = append(toEncode, 2)
+						}
 						dst = kbin.AppendUvarint(dst, uint32(len(toEncode)))
 						for _, tag := range toEncode {
 							switch tag {
@@ -3630,6 +3669,30 @@ func (v *FetchResponse) AppendTo(dst []byte) []byte {
 										dst = kbin.AppendUvarint(dst[:lenAt], uint32(len(dst[lenAt:])))
 										sized = true
 										goto fCurrentLeader
+									}
+								}
+							case 2:
+								{
+									v := v.SnapshotID
+									dst = kbin.AppendUvarint(dst, 2)
+									sized := false
+									lenAt := len(dst)
+								fSnapshotID:
+									{
+										v := v.EndOffset
+										dst = kbin.AppendInt64(dst, v)
+									}
+									{
+										v := v.Epoch
+										dst = kbin.AppendInt32(dst, v)
+									}
+									if isFlexible {
+										dst = append(dst, 0)
+									}
+									if !sized {
+										dst = kbin.AppendUvarint(dst[:lenAt], uint32(len(dst[lenAt:])))
+										sized = true
+										goto fSnapshotID
 									}
 								}
 							}
@@ -3820,6 +3883,25 @@ func (v *FetchResponse) ReadFrom(src []byte) error {
 								{
 									v := b.Int32()
 									s.LeaderEpoch = v
+								}
+								if isFlexible {
+									SkipTags(&b)
+								}
+								if err := b.Complete(); err != nil {
+									return err
+								}
+							case 2:
+								b := kbin.Reader{Src: b.Span(int(b.Uvarint()))}
+								v := &s.SnapshotID
+								v.Default()
+								s := v
+								{
+									v := b.Int64()
+									s.EndOffset = v
+								}
+								{
+									v := b.Int32()
+									s.Epoch = v
 								}
 								if isFlexible {
 									SkipTags(&b)
@@ -4513,8 +4595,14 @@ func NewListOffsetsResponse() ListOffsetsResponse {
 }
 
 type MetadataRequestTopic struct {
-	// Topic is the topic to request metadata for.
-	Topic string
+	// The topic ID. Only one of either topic ID or topic name should be used.
+	// If using the topic name, this should just be the default empty value.
+	TopicID [2]uint64 // v10+
+
+	// Topic is the topic to request metadata for. Version 10 switched this
+	// from a string to a nullable string; if using a topic ID, this field
+	// should be null.
+	Topic *string
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -4556,7 +4644,7 @@ type MetadataRequest struct {
 }
 
 func (*MetadataRequest) Key() int16                 { return 3 }
-func (*MetadataRequest) MaxVersion() int16          { return 9 }
+func (*MetadataRequest) MaxVersion() int16          { return 10 }
 func (v *MetadataRequest) SetVersion(version int16) { v.Version = version }
 func (v *MetadataRequest) GetVersion() int16        { return v.Version }
 func (v *MetadataRequest) IsFlexible() bool         { return v.Version >= 9 }
@@ -4593,12 +4681,31 @@ func (v *MetadataRequest) AppendTo(dst []byte) []byte {
 		}
 		for i := range v {
 			v := &v[i]
+			if version >= 10 {
+				v := v.TopicID
+				dst = kbin.AppendUuid(dst, v)
+			}
 			{
 				v := v.Topic
-				if isFlexible {
-					dst = kbin.AppendCompactString(dst, v)
+				if version < 10 {
+					var vv string
+					if v != nil {
+						vv = *v
+					}
+					{
+						v := vv
+						if isFlexible {
+							dst = kbin.AppendCompactString(dst, v)
+						} else {
+							dst = kbin.AppendString(dst, v)
+						}
+					}
 				} else {
-					dst = kbin.AppendString(dst, v)
+					if isFlexible {
+						dst = kbin.AppendCompactNullableString(dst, v)
+					} else {
+						dst = kbin.AppendNullableString(dst, v)
+					}
 				}
 			}
 			if isFlexible {
@@ -4653,12 +4760,26 @@ func (v *MetadataRequest) ReadFrom(src []byte) error {
 			v := &a[i]
 			v.Default()
 			s := v
+			if version >= 10 {
+				v := b.Uuid()
+				s.TopicID = v
+			}
 			{
-				var v string
-				if isFlexible {
-					v = b.CompactString()
+				var v *string
+				if version < 10 {
+					var vv string
+					if isFlexible {
+						vv = b.CompactString()
+					} else {
+						vv = b.String()
+					}
+					v = &vv
 				} else {
-					v = b.String()
+					if isFlexible {
+						v = b.CompactNullableString()
+					} else {
+						v = b.NullableString()
+					}
 				}
 				s.Topic = v
 			}
@@ -4747,6 +4868,9 @@ type MetadataResponseTopicPartition struct {
 	//
 	// REPLICA_NOT_AVAILABLE is returned in v0 responses if any replica is
 	// unavailable.
+	//
+	// UNKNOWN_TOPIC_ID is returned if using a topic ID and the ID does not
+	// exist.
 	ErrorCode int16
 
 	// Partition is a partition number for a topic.
@@ -4803,6 +4927,9 @@ type MetadataResponseTopic struct {
 
 	// Topic is the topic this metadata corresponds to.
 	Topic string
+
+	// The topic ID.
+	TopicID [2]uint64 // v10+
 
 	// IsInternal signifies whether this topic is a Kafka internal topic.
 	IsInternal bool // v1+
@@ -4862,7 +4989,7 @@ type MetadataResponse struct {
 }
 
 func (*MetadataResponse) Key() int16                 { return 3 }
-func (*MetadataResponse) MaxVersion() int16          { return 9 }
+func (*MetadataResponse) MaxVersion() int16          { return 10 }
 func (v *MetadataResponse) SetVersion(version int16) { v.Version = version }
 func (v *MetadataResponse) GetVersion() int16        { return v.Version }
 func (v *MetadataResponse) IsFlexible() bool         { return v.Version >= 9 }
@@ -4947,6 +5074,10 @@ func (v *MetadataResponse) AppendTo(dst []byte) []byte {
 				} else {
 					dst = kbin.AppendString(dst, v)
 				}
+			}
+			if version >= 10 {
+				v := v.TopicID
+				dst = kbin.AppendUuid(dst, v)
 			}
 			if version >= 1 {
 				v := v.IsInternal
@@ -5145,6 +5276,10 @@ func (v *MetadataResponse) ReadFrom(src []byte) error {
 				}
 				s.Topic = v
 			}
+			if version >= 10 {
+				v := b.Uuid()
+				s.TopicID = v
+			}
 			if version >= 1 {
 				v := b.Bool()
 				s.IsInternal = v
@@ -5340,8 +5475,33 @@ func NewLeaderAndISRRequestTopicPartition() LeaderAndISRRequestTopicPartition {
 	return v
 }
 
+// LeaderAndISRResponseTopicPartition is a common struct that is used across
+// different versions of LeaderAndISRResponse.
+type LeaderAndISRResponseTopicPartition struct {
+	Topic string
+
+	Partition int32
+
+	ErrorCode int16
+}
+
+// Default sets any default fields. Calling this allows for future compatibility
+// if new fields are added to LeaderAndISRResponseTopicPartition.
+func (v *LeaderAndISRResponseTopicPartition) Default() {
+}
+
+// NewLeaderAndISRResponseTopicPartition returns a default LeaderAndISRResponseTopicPartition
+// This is a shortcut for creating a struct and calling Default yourself.
+func NewLeaderAndISRResponseTopicPartition() LeaderAndISRResponseTopicPartition {
+	var v LeaderAndISRResponseTopicPartition
+	v.Default()
+	return v
+}
+
 type LeaderAndISRRequestTopicState struct {
 	Topic string
+
+	TopicID [2]uint64 // v5+
 
 	PartitionStates []LeaderAndISRRequestTopicPartition
 }
@@ -5400,6 +5560,8 @@ type LeaderAndISRRequest struct {
 
 	BrokerEpoch int64 // v2+
 
+	Type int8 // v5+
+
 	PartitionStates []LeaderAndISRRequestTopicPartition
 
 	TopicStates []LeaderAndISRRequestTopicState // v2+
@@ -5408,7 +5570,7 @@ type LeaderAndISRRequest struct {
 }
 
 func (*LeaderAndISRRequest) Key() int16                 { return 4 }
-func (*LeaderAndISRRequest) MaxVersion() int16          { return 4 }
+func (*LeaderAndISRRequest) MaxVersion() int16          { return 5 }
 func (v *LeaderAndISRRequest) SetVersion(version int16) { v.Version = version }
 func (v *LeaderAndISRRequest) GetVersion() int16        { return v.Version }
 func (v *LeaderAndISRRequest) IsFlexible() bool         { return v.Version >= 4 }
@@ -5442,6 +5604,10 @@ func (v *LeaderAndISRRequest) AppendTo(dst []byte) []byte {
 		v := v.BrokerEpoch
 		dst = kbin.AppendInt64(dst, v)
 	}
+	if version >= 5 {
+		v := v.Type
+		dst = kbin.AppendInt8(dst, v)
+	}
 	if version >= 0 && version <= 1 {
 		v := v.PartitionStates
 		if isFlexible {
@@ -5453,7 +5619,11 @@ func (v *LeaderAndISRRequest) AppendTo(dst []byte) []byte {
 			v := &v[i]
 			if version >= 0 && version <= 1 {
 				v := v.Topic
-				dst = kbin.AppendString(dst, v)
+				if isFlexible {
+					dst = kbin.AppendCompactString(dst, v)
+				} else {
+					dst = kbin.AppendString(dst, v)
+				}
 			}
 			{
 				v := v.Partition
@@ -5473,7 +5643,11 @@ func (v *LeaderAndISRRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.ISR
-				dst = kbin.AppendArrayLen(dst, len(v))
+				if isFlexible {
+					dst = kbin.AppendCompactArrayLen(dst, len(v))
+				} else {
+					dst = kbin.AppendArrayLen(dst, len(v))
+				}
 				for i := range v {
 					v := v[i]
 					dst = kbin.AppendInt32(dst, v)
@@ -5485,7 +5659,11 @@ func (v *LeaderAndISRRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Replicas
-				dst = kbin.AppendArrayLen(dst, len(v))
+				if isFlexible {
+					dst = kbin.AppendCompactArrayLen(dst, len(v))
+				} else {
+					dst = kbin.AppendArrayLen(dst, len(v))
+				}
 				for i := range v {
 					v := v[i]
 					dst = kbin.AppendInt32(dst, v)
@@ -5493,7 +5671,11 @@ func (v *LeaderAndISRRequest) AppendTo(dst []byte) []byte {
 			}
 			if version >= 3 {
 				v := v.AddingReplicas
-				dst = kbin.AppendArrayLen(dst, len(v))
+				if isFlexible {
+					dst = kbin.AppendCompactArrayLen(dst, len(v))
+				} else {
+					dst = kbin.AppendArrayLen(dst, len(v))
+				}
 				for i := range v {
 					v := v[i]
 					dst = kbin.AppendInt32(dst, v)
@@ -5501,7 +5683,11 @@ func (v *LeaderAndISRRequest) AppendTo(dst []byte) []byte {
 			}
 			if version >= 3 {
 				v := v.RemovingReplicas
-				dst = kbin.AppendArrayLen(dst, len(v))
+				if isFlexible {
+					dst = kbin.AppendCompactArrayLen(dst, len(v))
+				} else {
+					dst = kbin.AppendArrayLen(dst, len(v))
+				}
 				for i := range v {
 					v := v[i]
 					dst = kbin.AppendInt32(dst, v)
@@ -5533,6 +5719,10 @@ func (v *LeaderAndISRRequest) AppendTo(dst []byte) []byte {
 					dst = kbin.AppendString(dst, v)
 				}
 			}
+			if version >= 5 {
+				v := v.TopicID
+				dst = kbin.AppendUuid(dst, v)
+			}
 			{
 				v := v.PartitionStates
 				if isFlexible {
@@ -5544,7 +5734,11 @@ func (v *LeaderAndISRRequest) AppendTo(dst []byte) []byte {
 					v := &v[i]
 					if version >= 0 && version <= 1 {
 						v := v.Topic
-						dst = kbin.AppendString(dst, v)
+						if isFlexible {
+							dst = kbin.AppendCompactString(dst, v)
+						} else {
+							dst = kbin.AppendString(dst, v)
+						}
 					}
 					{
 						v := v.Partition
@@ -5564,7 +5758,11 @@ func (v *LeaderAndISRRequest) AppendTo(dst []byte) []byte {
 					}
 					{
 						v := v.ISR
-						dst = kbin.AppendArrayLen(dst, len(v))
+						if isFlexible {
+							dst = kbin.AppendCompactArrayLen(dst, len(v))
+						} else {
+							dst = kbin.AppendArrayLen(dst, len(v))
+						}
 						for i := range v {
 							v := v[i]
 							dst = kbin.AppendInt32(dst, v)
@@ -5576,7 +5774,11 @@ func (v *LeaderAndISRRequest) AppendTo(dst []byte) []byte {
 					}
 					{
 						v := v.Replicas
-						dst = kbin.AppendArrayLen(dst, len(v))
+						if isFlexible {
+							dst = kbin.AppendCompactArrayLen(dst, len(v))
+						} else {
+							dst = kbin.AppendArrayLen(dst, len(v))
+						}
 						for i := range v {
 							v := v[i]
 							dst = kbin.AppendInt32(dst, v)
@@ -5584,7 +5786,11 @@ func (v *LeaderAndISRRequest) AppendTo(dst []byte) []byte {
 					}
 					if version >= 3 {
 						v := v.AddingReplicas
-						dst = kbin.AppendArrayLen(dst, len(v))
+						if isFlexible {
+							dst = kbin.AppendCompactArrayLen(dst, len(v))
+						} else {
+							dst = kbin.AppendArrayLen(dst, len(v))
+						}
 						for i := range v {
 							v := v[i]
 							dst = kbin.AppendInt32(dst, v)
@@ -5592,7 +5798,11 @@ func (v *LeaderAndISRRequest) AppendTo(dst []byte) []byte {
 					}
 					if version >= 3 {
 						v := v.RemovingReplicas
-						dst = kbin.AppendArrayLen(dst, len(v))
+						if isFlexible {
+							dst = kbin.AppendCompactArrayLen(dst, len(v))
+						} else {
+							dst = kbin.AppendArrayLen(dst, len(v))
+						}
 						for i := range v {
 							v := v[i]
 							dst = kbin.AppendInt32(dst, v)
@@ -5667,6 +5877,10 @@ func (v *LeaderAndISRRequest) ReadFrom(src []byte) error {
 		v := b.Int64()
 		s.BrokerEpoch = v
 	}
+	if version >= 5 {
+		v := b.Int8()
+		s.Type = v
+	}
 	if version >= 0 && version <= 1 {
 		v := s.PartitionStates
 		a := v
@@ -5687,7 +5901,12 @@ func (v *LeaderAndISRRequest) ReadFrom(src []byte) error {
 			v.Default()
 			s := v
 			if version >= 0 && version <= 1 {
-				v := b.String()
+				var v string
+				if isFlexible {
+					v = b.CompactString()
+				} else {
+					v = b.String()
+				}
 				s.Topic = v
 			}
 			{
@@ -5710,7 +5929,11 @@ func (v *LeaderAndISRRequest) ReadFrom(src []byte) error {
 				v := s.ISR
 				a := v
 				var l int32
-				l = b.ArrayLen()
+				if isFlexible {
+					l = b.CompactArrayLen()
+				} else {
+					l = b.ArrayLen()
+				}
 				if !b.Ok() {
 					return b.Complete()
 				}
@@ -5732,7 +5955,11 @@ func (v *LeaderAndISRRequest) ReadFrom(src []byte) error {
 				v := s.Replicas
 				a := v
 				var l int32
-				l = b.ArrayLen()
+				if isFlexible {
+					l = b.CompactArrayLen()
+				} else {
+					l = b.ArrayLen()
+				}
 				if !b.Ok() {
 					return b.Complete()
 				}
@@ -5750,7 +5977,11 @@ func (v *LeaderAndISRRequest) ReadFrom(src []byte) error {
 				v := s.AddingReplicas
 				a := v
 				var l int32
-				l = b.ArrayLen()
+				if isFlexible {
+					l = b.CompactArrayLen()
+				} else {
+					l = b.ArrayLen()
+				}
 				if !b.Ok() {
 					return b.Complete()
 				}
@@ -5768,7 +5999,11 @@ func (v *LeaderAndISRRequest) ReadFrom(src []byte) error {
 				v := s.RemovingReplicas
 				a := v
 				var l int32
-				l = b.ArrayLen()
+				if isFlexible {
+					l = b.CompactArrayLen()
+				} else {
+					l = b.ArrayLen()
+				}
 				if !b.Ok() {
 					return b.Complete()
 				}
@@ -5821,6 +6056,10 @@ func (v *LeaderAndISRRequest) ReadFrom(src []byte) error {
 				}
 				s.Topic = v
 			}
+			if version >= 5 {
+				v := b.Uuid()
+				s.TopicID = v
+			}
 			{
 				v := s.PartitionStates
 				a := v
@@ -5841,7 +6080,12 @@ func (v *LeaderAndISRRequest) ReadFrom(src []byte) error {
 					v.Default()
 					s := v
 					if version >= 0 && version <= 1 {
-						v := b.String()
+						var v string
+						if isFlexible {
+							v = b.CompactString()
+						} else {
+							v = b.String()
+						}
 						s.Topic = v
 					}
 					{
@@ -5864,7 +6108,11 @@ func (v *LeaderAndISRRequest) ReadFrom(src []byte) error {
 						v := s.ISR
 						a := v
 						var l int32
-						l = b.ArrayLen()
+						if isFlexible {
+							l = b.CompactArrayLen()
+						} else {
+							l = b.ArrayLen()
+						}
 						if !b.Ok() {
 							return b.Complete()
 						}
@@ -5886,7 +6134,11 @@ func (v *LeaderAndISRRequest) ReadFrom(src []byte) error {
 						v := s.Replicas
 						a := v
 						var l int32
-						l = b.ArrayLen()
+						if isFlexible {
+							l = b.CompactArrayLen()
+						} else {
+							l = b.ArrayLen()
+						}
 						if !b.Ok() {
 							return b.Complete()
 						}
@@ -5904,7 +6156,11 @@ func (v *LeaderAndISRRequest) ReadFrom(src []byte) error {
 						v := s.AddingReplicas
 						a := v
 						var l int32
-						l = b.ArrayLen()
+						if isFlexible {
+							l = b.CompactArrayLen()
+						} else {
+							l = b.ArrayLen()
+						}
 						if !b.Ok() {
 							return b.Complete()
 						}
@@ -5922,7 +6178,11 @@ func (v *LeaderAndISRRequest) ReadFrom(src []byte) error {
 						v := s.RemovingReplicas
 						a := v
 						var l int32
-						l = b.ArrayLen()
+						if isFlexible {
+							l = b.CompactArrayLen()
+						} else {
+							l = b.ArrayLen()
+						}
 						if !b.Ok() {
 							return b.Complete()
 						}
@@ -6025,23 +6285,21 @@ func NewLeaderAndISRRequest() LeaderAndISRRequest {
 	return v
 }
 
-type LeaderAndISRResponsePartition struct {
-	Topic string
+type LeaderAndISRResponseTopic struct {
+	TopicID [2]uint64
 
-	Partition int32
-
-	ErrorCode int16
+	Partitions []LeaderAndISRResponseTopicPartition
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
-// if new fields are added to LeaderAndISRResponsePartition.
-func (v *LeaderAndISRResponsePartition) Default() {
+// if new fields are added to LeaderAndISRResponseTopic.
+func (v *LeaderAndISRResponseTopic) Default() {
 }
 
-// NewLeaderAndISRResponsePartition returns a default LeaderAndISRResponsePartition
+// NewLeaderAndISRResponseTopic returns a default LeaderAndISRResponseTopic
 // This is a shortcut for creating a struct and calling Default yourself.
-func NewLeaderAndISRResponsePartition() LeaderAndISRResponsePartition {
-	var v LeaderAndISRResponsePartition
+func NewLeaderAndISRResponseTopic() LeaderAndISRResponseTopic {
+	var v LeaderAndISRResponseTopic
 	v.Default()
 	return v
 }
@@ -6053,11 +6311,13 @@ type LeaderAndISRResponse struct {
 
 	ErrorCode int16
 
-	Partitions []LeaderAndISRResponsePartition
+	Partitions []LeaderAndISRResponseTopicPartition
+
+	Topics []LeaderAndISRResponseTopic // v5+
 }
 
 func (*LeaderAndISRResponse) Key() int16                 { return 4 }
-func (*LeaderAndISRResponse) MaxVersion() int16          { return 4 }
+func (*LeaderAndISRResponse) MaxVersion() int16          { return 5 }
 func (v *LeaderAndISRResponse) SetVersion(version int16) { v.Version = version }
 func (v *LeaderAndISRResponse) GetVersion() int16        { return v.Version }
 func (v *LeaderAndISRResponse) IsFlexible() bool         { return v.Version >= 4 }
@@ -6072,7 +6332,7 @@ func (v *LeaderAndISRResponse) AppendTo(dst []byte) []byte {
 		v := v.ErrorCode
 		dst = kbin.AppendInt16(dst, v)
 	}
-	{
+	if version >= 0 && version <= 4 {
 		v := v.Partitions
 		if isFlexible {
 			dst = kbin.AppendCompactArrayLen(dst, len(v))
@@ -6081,7 +6341,7 @@ func (v *LeaderAndISRResponse) AppendTo(dst []byte) []byte {
 		}
 		for i := range v {
 			v := &v[i]
-			{
+			if version >= 0 && version <= 4 {
 				v := v.Topic
 				if isFlexible {
 					dst = kbin.AppendCompactString(dst, v)
@@ -6096,6 +6356,54 @@ func (v *LeaderAndISRResponse) AppendTo(dst []byte) []byte {
 			{
 				v := v.ErrorCode
 				dst = kbin.AppendInt16(dst, v)
+			}
+			if isFlexible {
+				dst = append(dst, 0)
+			}
+		}
+	}
+	if version >= 5 {
+		v := v.Topics
+		if isFlexible {
+			dst = kbin.AppendCompactArrayLen(dst, len(v))
+		} else {
+			dst = kbin.AppendArrayLen(dst, len(v))
+		}
+		for i := range v {
+			v := &v[i]
+			{
+				v := v.TopicID
+				dst = kbin.AppendUuid(dst, v)
+			}
+			{
+				v := v.Partitions
+				if isFlexible {
+					dst = kbin.AppendCompactArrayLen(dst, len(v))
+				} else {
+					dst = kbin.AppendArrayLen(dst, len(v))
+				}
+				for i := range v {
+					v := &v[i]
+					if version >= 0 && version <= 4 {
+						v := v.Topic
+						if isFlexible {
+							dst = kbin.AppendCompactString(dst, v)
+						} else {
+							dst = kbin.AppendString(dst, v)
+						}
+					}
+					{
+						v := v.Partition
+						dst = kbin.AppendInt32(dst, v)
+					}
+					{
+						v := v.ErrorCode
+						dst = kbin.AppendInt16(dst, v)
+					}
+					if isFlexible {
+						dst = append(dst, 0)
+					}
+				}
 			}
 			if isFlexible {
 				dst = append(dst, 0)
@@ -6119,7 +6427,7 @@ func (v *LeaderAndISRResponse) ReadFrom(src []byte) error {
 		v := b.Int16()
 		s.ErrorCode = v
 	}
-	{
+	if version >= 0 && version <= 4 {
 		v := s.Partitions
 		a := v
 		var l int32
@@ -6132,13 +6440,13 @@ func (v *LeaderAndISRResponse) ReadFrom(src []byte) error {
 			return b.Complete()
 		}
 		if l > 0 {
-			a = make([]LeaderAndISRResponsePartition, l)
+			a = make([]LeaderAndISRResponseTopicPartition, l)
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
 			v.Default()
 			s := v
-			{
+			if version >= 0 && version <= 4 {
 				var v string
 				if isFlexible {
 					v = b.CompactString()
@@ -6161,6 +6469,79 @@ func (v *LeaderAndISRResponse) ReadFrom(src []byte) error {
 		}
 		v = a
 		s.Partitions = v
+	}
+	if version >= 5 {
+		v := s.Topics
+		a := v
+		var l int32
+		if isFlexible {
+			l = b.CompactArrayLen()
+		} else {
+			l = b.ArrayLen()
+		}
+		if !b.Ok() {
+			return b.Complete()
+		}
+		if l > 0 {
+			a = make([]LeaderAndISRResponseTopic, l)
+		}
+		for i := int32(0); i < l; i++ {
+			v := &a[i]
+			v.Default()
+			s := v
+			{
+				v := b.Uuid()
+				s.TopicID = v
+			}
+			{
+				v := s.Partitions
+				a := v
+				var l int32
+				if isFlexible {
+					l = b.CompactArrayLen()
+				} else {
+					l = b.ArrayLen()
+				}
+				if !b.Ok() {
+					return b.Complete()
+				}
+				if l > 0 {
+					a = make([]LeaderAndISRResponseTopicPartition, l)
+				}
+				for i := int32(0); i < l; i++ {
+					v := &a[i]
+					v.Default()
+					s := v
+					if version >= 0 && version <= 4 {
+						var v string
+						if isFlexible {
+							v = b.CompactString()
+						} else {
+							v = b.String()
+						}
+						s.Topic = v
+					}
+					{
+						v := b.Int32()
+						s.Partition = v
+					}
+					{
+						v := b.Int16()
+						s.ErrorCode = v
+					}
+					if isFlexible {
+						SkipTags(&b)
+					}
+				}
+				v = a
+				s.Partitions = v
+			}
+			if isFlexible {
+				SkipTags(&b)
+			}
+		}
+		v = a
+		s.Topics = v
 	}
 	if isFlexible {
 		SkipTags(&b)
@@ -6717,6 +7098,8 @@ func NewUpdateMetadataRequestTopicPartition() UpdateMetadataRequestTopicPartitio
 type UpdateMetadataRequestTopicState struct {
 	Topic string
 
+	TopicID [2]uint64 // v7+
+
 	PartitionStates []UpdateMetadataRequestTopicPartition
 }
 
@@ -6809,7 +7192,7 @@ type UpdateMetadataRequest struct {
 }
 
 func (*UpdateMetadataRequest) Key() int16                 { return 6 }
-func (*UpdateMetadataRequest) MaxVersion() int16          { return 6 }
+func (*UpdateMetadataRequest) MaxVersion() int16          { return 7 }
 func (v *UpdateMetadataRequest) SetVersion(version int16) { v.Version = version }
 func (v *UpdateMetadataRequest) GetVersion() int16        { return v.Version }
 func (v *UpdateMetadataRequest) IsFlexible() bool         { return v.Version >= 6 }
@@ -6854,7 +7237,11 @@ func (v *UpdateMetadataRequest) AppendTo(dst []byte) []byte {
 			v := &v[i]
 			if version >= 0 && version <= 4 {
 				v := v.Topic
-				dst = kbin.AppendString(dst, v)
+				if isFlexible {
+					dst = kbin.AppendCompactString(dst, v)
+				} else {
+					dst = kbin.AppendString(dst, v)
+				}
 			}
 			{
 				v := v.Partition
@@ -6874,7 +7261,11 @@ func (v *UpdateMetadataRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.ISR
-				dst = kbin.AppendArrayLen(dst, len(v))
+				if isFlexible {
+					dst = kbin.AppendCompactArrayLen(dst, len(v))
+				} else {
+					dst = kbin.AppendArrayLen(dst, len(v))
+				}
 				for i := range v {
 					v := v[i]
 					dst = kbin.AppendInt32(dst, v)
@@ -6886,7 +7277,11 @@ func (v *UpdateMetadataRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Replicas
-				dst = kbin.AppendArrayLen(dst, len(v))
+				if isFlexible {
+					dst = kbin.AppendCompactArrayLen(dst, len(v))
+				} else {
+					dst = kbin.AppendArrayLen(dst, len(v))
+				}
 				for i := range v {
 					v := v[i]
 					dst = kbin.AppendInt32(dst, v)
@@ -6894,7 +7289,11 @@ func (v *UpdateMetadataRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.OfflineReplicas
-				dst = kbin.AppendArrayLen(dst, len(v))
+				if isFlexible {
+					dst = kbin.AppendCompactArrayLen(dst, len(v))
+				} else {
+					dst = kbin.AppendArrayLen(dst, len(v))
+				}
 				for i := range v {
 					v := v[i]
 					dst = kbin.AppendInt32(dst, v)
@@ -6922,6 +7321,10 @@ func (v *UpdateMetadataRequest) AppendTo(dst []byte) []byte {
 					dst = kbin.AppendString(dst, v)
 				}
 			}
+			if version >= 7 {
+				v := v.TopicID
+				dst = kbin.AppendUuid(dst, v)
+			}
 			{
 				v := v.PartitionStates
 				if isFlexible {
@@ -6933,7 +7336,11 @@ func (v *UpdateMetadataRequest) AppendTo(dst []byte) []byte {
 					v := &v[i]
 					if version >= 0 && version <= 4 {
 						v := v.Topic
-						dst = kbin.AppendString(dst, v)
+						if isFlexible {
+							dst = kbin.AppendCompactString(dst, v)
+						} else {
+							dst = kbin.AppendString(dst, v)
+						}
 					}
 					{
 						v := v.Partition
@@ -6953,7 +7360,11 @@ func (v *UpdateMetadataRequest) AppendTo(dst []byte) []byte {
 					}
 					{
 						v := v.ISR
-						dst = kbin.AppendArrayLen(dst, len(v))
+						if isFlexible {
+							dst = kbin.AppendCompactArrayLen(dst, len(v))
+						} else {
+							dst = kbin.AppendArrayLen(dst, len(v))
+						}
 						for i := range v {
 							v := v[i]
 							dst = kbin.AppendInt32(dst, v)
@@ -6965,7 +7376,11 @@ func (v *UpdateMetadataRequest) AppendTo(dst []byte) []byte {
 					}
 					{
 						v := v.Replicas
-						dst = kbin.AppendArrayLen(dst, len(v))
+						if isFlexible {
+							dst = kbin.AppendCompactArrayLen(dst, len(v))
+						} else {
+							dst = kbin.AppendArrayLen(dst, len(v))
+						}
 						for i := range v {
 							v := v[i]
 							dst = kbin.AppendInt32(dst, v)
@@ -6973,7 +7388,11 @@ func (v *UpdateMetadataRequest) AppendTo(dst []byte) []byte {
 					}
 					{
 						v := v.OfflineReplicas
-						dst = kbin.AppendArrayLen(dst, len(v))
+						if isFlexible {
+							dst = kbin.AppendCompactArrayLen(dst, len(v))
+						} else {
+							dst = kbin.AppendArrayLen(dst, len(v))
+						}
 						for i := range v {
 							v := v[i]
 							dst = kbin.AppendInt32(dst, v)
@@ -7110,7 +7529,12 @@ func (v *UpdateMetadataRequest) ReadFrom(src []byte) error {
 			v.Default()
 			s := v
 			if version >= 0 && version <= 4 {
-				v := b.String()
+				var v string
+				if isFlexible {
+					v = b.CompactString()
+				} else {
+					v = b.String()
+				}
 				s.Topic = v
 			}
 			{
@@ -7133,7 +7557,11 @@ func (v *UpdateMetadataRequest) ReadFrom(src []byte) error {
 				v := s.ISR
 				a := v
 				var l int32
-				l = b.ArrayLen()
+				if isFlexible {
+					l = b.CompactArrayLen()
+				} else {
+					l = b.ArrayLen()
+				}
 				if !b.Ok() {
 					return b.Complete()
 				}
@@ -7155,7 +7583,11 @@ func (v *UpdateMetadataRequest) ReadFrom(src []byte) error {
 				v := s.Replicas
 				a := v
 				var l int32
-				l = b.ArrayLen()
+				if isFlexible {
+					l = b.CompactArrayLen()
+				} else {
+					l = b.ArrayLen()
+				}
 				if !b.Ok() {
 					return b.Complete()
 				}
@@ -7173,7 +7605,11 @@ func (v *UpdateMetadataRequest) ReadFrom(src []byte) error {
 				v := s.OfflineReplicas
 				a := v
 				var l int32
-				l = b.ArrayLen()
+				if isFlexible {
+					l = b.CompactArrayLen()
+				} else {
+					l = b.ArrayLen()
+				}
 				if !b.Ok() {
 					return b.Complete()
 				}
@@ -7222,6 +7658,10 @@ func (v *UpdateMetadataRequest) ReadFrom(src []byte) error {
 				}
 				s.Topic = v
 			}
+			if version >= 7 {
+				v := b.Uuid()
+				s.TopicID = v
+			}
 			{
 				v := s.PartitionStates
 				a := v
@@ -7242,7 +7682,12 @@ func (v *UpdateMetadataRequest) ReadFrom(src []byte) error {
 					v.Default()
 					s := v
 					if version >= 0 && version <= 4 {
-						v := b.String()
+						var v string
+						if isFlexible {
+							v = b.CompactString()
+						} else {
+							v = b.String()
+						}
 						s.Topic = v
 					}
 					{
@@ -7265,7 +7710,11 @@ func (v *UpdateMetadataRequest) ReadFrom(src []byte) error {
 						v := s.ISR
 						a := v
 						var l int32
-						l = b.ArrayLen()
+						if isFlexible {
+							l = b.CompactArrayLen()
+						} else {
+							l = b.ArrayLen()
+						}
 						if !b.Ok() {
 							return b.Complete()
 						}
@@ -7287,7 +7736,11 @@ func (v *UpdateMetadataRequest) ReadFrom(src []byte) error {
 						v := s.Replicas
 						a := v
 						var l int32
-						l = b.ArrayLen()
+						if isFlexible {
+							l = b.CompactArrayLen()
+						} else {
+							l = b.ArrayLen()
+						}
 						if !b.Ok() {
 							return b.Complete()
 						}
@@ -7305,7 +7758,11 @@ func (v *UpdateMetadataRequest) ReadFrom(src []byte) error {
 						v := s.OfflineReplicas
 						a := v
 						var l int32
-						l = b.ArrayLen()
+						if isFlexible {
+							l = b.CompactArrayLen()
+						} else {
+							l = b.ArrayLen()
+						}
 						if !b.Ok() {
 							return b.Complete()
 						}
@@ -7474,7 +7931,7 @@ type UpdateMetadataResponse struct {
 }
 
 func (*UpdateMetadataResponse) Key() int16                 { return 6 }
-func (*UpdateMetadataResponse) MaxVersion() int16          { return 6 }
+func (*UpdateMetadataResponse) MaxVersion() int16          { return 7 }
 func (v *UpdateMetadataResponse) SetVersion(version int16) { v.Version = version }
 func (v *UpdateMetadataResponse) GetVersion() int16        { return v.Version }
 func (v *UpdateMetadataResponse) IsFlexible() bool         { return v.Version >= 6 }
@@ -31439,6 +31896,797 @@ func NewEnvelopeResponse() EnvelopeResponse {
 	return v
 }
 
+type FetchSnapshotRequestTopicPartitionSnapshotID struct {
+	EndOffset int64
+
+	Epoch int32
+}
+
+// Default sets any default fields. Calling this allows for future compatibility
+// if new fields are added to FetchSnapshotRequestTopicPartitionSnapshotID.
+func (v *FetchSnapshotRequestTopicPartitionSnapshotID) Default() {
+}
+
+// NewFetchSnapshotRequestTopicPartitionSnapshotID returns a default FetchSnapshotRequestTopicPartitionSnapshotID
+// This is a shortcut for creating a struct and calling Default yourself.
+func NewFetchSnapshotRequestTopicPartitionSnapshotID() FetchSnapshotRequestTopicPartitionSnapshotID {
+	var v FetchSnapshotRequestTopicPartitionSnapshotID
+	v.Default()
+	return v
+}
+
+type FetchSnapshotRequestTopicPartition struct {
+	// The partition to fetch.
+	Partition int32
+
+	// The current leader epoch of the partition, or -1 for an unknown leader epoch.
+	CurrentLeaderEpoch int32
+
+	// The snapshot end offset and epoch to fetch.
+	SnapshotID FetchSnapshotRequestTopicPartitionSnapshotID
+
+	// The byte position within the snapshot to start fetching from.
+	Position int64
+}
+
+// Default sets any default fields. Calling this allows for future compatibility
+// if new fields are added to FetchSnapshotRequestTopicPartition.
+func (v *FetchSnapshotRequestTopicPartition) Default() {
+	{
+		v := &v.SnapshotID
+		_ = v
+	}
+}
+
+// NewFetchSnapshotRequestTopicPartition returns a default FetchSnapshotRequestTopicPartition
+// This is a shortcut for creating a struct and calling Default yourself.
+func NewFetchSnapshotRequestTopicPartition() FetchSnapshotRequestTopicPartition {
+	var v FetchSnapshotRequestTopicPartition
+	v.Default()
+	return v
+}
+
+type FetchSnapshotRequestTopic struct {
+	// The name of the topic to fetch.
+	Topic string
+
+	// The partitions to fetch.
+	Partitions []FetchSnapshotRequestTopicPartition
+}
+
+// Default sets any default fields. Calling this allows for future compatibility
+// if new fields are added to FetchSnapshotRequestTopic.
+func (v *FetchSnapshotRequestTopic) Default() {
+}
+
+// NewFetchSnapshotRequestTopic returns a default FetchSnapshotRequestTopic
+// This is a shortcut for creating a struct and calling Default yourself.
+func NewFetchSnapshotRequestTopic() FetchSnapshotRequestTopic {
+	var v FetchSnapshotRequestTopic
+	v.Default()
+	return v
+}
+
+// Introduced for KIP-630, FetchSnapshotRequest is a part of the inter-Kafka
+// raft protocol to remove the dependency on Zookeeper.
+type FetchSnapshotRequest struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	// The ClusterID if known, this is used to validate metadata fetches prior to
+	// broker registration.
+	ClusterID *string // tag 0
+
+	// The broker ID of the follower.
+	ReplicaID int32
+
+	// The maximum bytes to fetch from all of the snapshots.
+	MaxBytes int32
+
+	// The topics to fetch.
+	Topics []FetchSnapshotRequestTopic
+}
+
+func (*FetchSnapshotRequest) Key() int16                 { return 59 }
+func (*FetchSnapshotRequest) MaxVersion() int16          { return 0 }
+func (v *FetchSnapshotRequest) SetVersion(version int16) { v.Version = version }
+func (v *FetchSnapshotRequest) GetVersion() int16        { return v.Version }
+func (v *FetchSnapshotRequest) IsFlexible() bool         { return v.Version >= 0 }
+func (v *FetchSnapshotRequest) ResponseKind() Response {
+	return &FetchSnapshotResponse{Version: v.Version}
+}
+
+// RequestWith is requests v on r and returns the response or an error.
+func (v *FetchSnapshotRequest) RequestWith(ctx context.Context, r Requestor) (*FetchSnapshotResponse, error) {
+	kresp, err := r.Request(ctx, v)
+	if err != nil {
+		return nil, err
+	}
+	return kresp.(*FetchSnapshotResponse), nil
+}
+
+func (v *FetchSnapshotRequest) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	isFlexible := version >= 0
+	_ = isFlexible
+	{
+		v := v.ReplicaID
+		dst = kbin.AppendInt32(dst, v)
+	}
+	{
+		v := v.MaxBytes
+		dst = kbin.AppendInt32(dst, v)
+	}
+	{
+		v := v.Topics
+		if isFlexible {
+			dst = kbin.AppendCompactArrayLen(dst, len(v))
+		} else {
+			dst = kbin.AppendArrayLen(dst, len(v))
+		}
+		for i := range v {
+			v := &v[i]
+			{
+				v := v.Topic
+				if isFlexible {
+					dst = kbin.AppendCompactString(dst, v)
+				} else {
+					dst = kbin.AppendString(dst, v)
+				}
+			}
+			{
+				v := v.Partitions
+				if isFlexible {
+					dst = kbin.AppendCompactArrayLen(dst, len(v))
+				} else {
+					dst = kbin.AppendArrayLen(dst, len(v))
+				}
+				for i := range v {
+					v := &v[i]
+					{
+						v := v.Partition
+						dst = kbin.AppendInt32(dst, v)
+					}
+					{
+						v := v.CurrentLeaderEpoch
+						dst = kbin.AppendInt32(dst, v)
+					}
+					{
+						v := &v.SnapshotID
+						{
+							v := v.EndOffset
+							dst = kbin.AppendInt64(dst, v)
+						}
+						{
+							v := v.Epoch
+							dst = kbin.AppendInt32(dst, v)
+						}
+						if isFlexible {
+							dst = append(dst, 0)
+						}
+					}
+					{
+						v := v.Position
+						dst = kbin.AppendInt64(dst, v)
+					}
+					if isFlexible {
+						dst = append(dst, 0)
+					}
+				}
+			}
+			if isFlexible {
+				dst = append(dst, 0)
+			}
+		}
+	}
+	if isFlexible {
+		var toEncode []uint32
+		if v.ClusterID != nil {
+			toEncode = append(toEncode, 0)
+		}
+		dst = kbin.AppendUvarint(dst, uint32(len(toEncode)))
+		for _, tag := range toEncode {
+			switch tag {
+			case 0:
+				{
+					v := v.ClusterID
+					dst = kbin.AppendUvarint(dst, 0)
+					sized := false
+					lenAt := len(dst)
+				fClusterID:
+					if isFlexible {
+						dst = kbin.AppendCompactNullableString(dst, v)
+					} else {
+						dst = kbin.AppendNullableString(dst, v)
+					}
+					if !sized {
+						dst = kbin.AppendUvarint(dst[:lenAt], uint32(len(dst[lenAt:])))
+						sized = true
+						goto fClusterID
+					}
+				}
+			}
+		}
+	}
+	return dst
+}
+func (v *FetchSnapshotRequest) ReadFrom(src []byte) error {
+	v.Default()
+	b := kbin.Reader{Src: src}
+	version := v.Version
+	_ = version
+	isFlexible := version >= 0
+	_ = isFlexible
+	s := v
+	{
+		v := b.Int32()
+		s.ReplicaID = v
+	}
+	{
+		v := b.Int32()
+		s.MaxBytes = v
+	}
+	{
+		v := s.Topics
+		a := v
+		var l int32
+		if isFlexible {
+			l = b.CompactArrayLen()
+		} else {
+			l = b.ArrayLen()
+		}
+		if !b.Ok() {
+			return b.Complete()
+		}
+		if l > 0 {
+			a = make([]FetchSnapshotRequestTopic, l)
+		}
+		for i := int32(0); i < l; i++ {
+			v := &a[i]
+			v.Default()
+			s := v
+			{
+				var v string
+				if isFlexible {
+					v = b.CompactString()
+				} else {
+					v = b.String()
+				}
+				s.Topic = v
+			}
+			{
+				v := s.Partitions
+				a := v
+				var l int32
+				if isFlexible {
+					l = b.CompactArrayLen()
+				} else {
+					l = b.ArrayLen()
+				}
+				if !b.Ok() {
+					return b.Complete()
+				}
+				if l > 0 {
+					a = make([]FetchSnapshotRequestTopicPartition, l)
+				}
+				for i := int32(0); i < l; i++ {
+					v := &a[i]
+					v.Default()
+					s := v
+					{
+						v := b.Int32()
+						s.Partition = v
+					}
+					{
+						v := b.Int32()
+						s.CurrentLeaderEpoch = v
+					}
+					{
+						v := &s.SnapshotID
+						v.Default()
+						s := v
+						{
+							v := b.Int64()
+							s.EndOffset = v
+						}
+						{
+							v := b.Int32()
+							s.Epoch = v
+						}
+						if isFlexible {
+							SkipTags(&b)
+						}
+					}
+					{
+						v := b.Int64()
+						s.Position = v
+					}
+					if isFlexible {
+						SkipTags(&b)
+					}
+				}
+				v = a
+				s.Partitions = v
+			}
+			if isFlexible {
+				SkipTags(&b)
+			}
+		}
+		v = a
+		s.Topics = v
+	}
+	if isFlexible {
+		for i := b.Uvarint(); i > 0; i-- {
+			switch b.Uvarint() {
+			default:
+				b.Span(int(b.Uvarint()))
+			case 0:
+				b := kbin.Reader{Src: b.Span(int(b.Uvarint()))}
+				var v *string
+				if isFlexible {
+					v = b.CompactNullableString()
+				} else {
+					v = b.NullableString()
+				}
+				s.ClusterID = v
+				if err := b.Complete(); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return b.Complete()
+}
+
+// NewPtrFetchSnapshotRequest returns a pointer to a default FetchSnapshotRequest
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrFetchSnapshotRequest() *FetchSnapshotRequest {
+	var v FetchSnapshotRequest
+	v.Default()
+	return &v
+}
+
+// Default sets any default fields. Calling this allows for future compatibility
+// if new fields are added to FetchSnapshotRequest.
+func (v *FetchSnapshotRequest) Default() {
+	v.ReplicaID = -1
+	v.MaxBytes = 2147483647
+}
+
+// NewFetchSnapshotRequest returns a default FetchSnapshotRequest
+// This is a shortcut for creating a struct and calling Default yourself.
+func NewFetchSnapshotRequest() FetchSnapshotRequest {
+	var v FetchSnapshotRequest
+	v.Default()
+	return v
+}
+
+type FetchSnapshotResponseTopicPartitionSnapshotID struct {
+	EndOffset int64
+
+	Epoch int32
+}
+
+// Default sets any default fields. Calling this allows for future compatibility
+// if new fields are added to FetchSnapshotResponseTopicPartitionSnapshotID.
+func (v *FetchSnapshotResponseTopicPartitionSnapshotID) Default() {
+}
+
+// NewFetchSnapshotResponseTopicPartitionSnapshotID returns a default FetchSnapshotResponseTopicPartitionSnapshotID
+// This is a shortcut for creating a struct and calling Default yourself.
+func NewFetchSnapshotResponseTopicPartitionSnapshotID() FetchSnapshotResponseTopicPartitionSnapshotID {
+	var v FetchSnapshotResponseTopicPartitionSnapshotID
+	v.Default()
+	return v
+}
+
+type FetchSnapshotResponseTopicPartitionCurrentLeader struct {
+	LeaderID int32
+
+	LeaderEpoch int32
+}
+
+// Default sets any default fields. Calling this allows for future compatibility
+// if new fields are added to FetchSnapshotResponseTopicPartitionCurrentLeader.
+func (v *FetchSnapshotResponseTopicPartitionCurrentLeader) Default() {
+}
+
+// NewFetchSnapshotResponseTopicPartitionCurrentLeader returns a default FetchSnapshotResponseTopicPartitionCurrentLeader
+// This is a shortcut for creating a struct and calling Default yourself.
+func NewFetchSnapshotResponseTopicPartitionCurrentLeader() FetchSnapshotResponseTopicPartitionCurrentLeader {
+	var v FetchSnapshotResponseTopicPartitionCurrentLeader
+	v.Default()
+	return v
+}
+
+type FetchSnapshotResponseTopicPartition struct {
+	// The partition.
+	Partition int32
+
+	// An error code, or 0 if there was no fetch error.
+	ErrorCode int16
+
+	// The snapshot end offset and epoch to fetch.
+	SnapshotID FetchSnapshotResponseTopicPartitionSnapshotID
+
+	// The ID of the current leader (or -1 if unknown) and the latest known
+	// leader epoch.
+	CurrentLeader FetchSnapshotResponseTopicPartitionCurrentLeader // tag 0
+
+	// The total size of the snapshot.
+	Size int64
+
+	// The starting byte position within the snapshot included in the Bytes
+	// field.
+	Position int64
+
+	// Snapshot data.
+	Bytes []byte
+}
+
+// Default sets any default fields. Calling this allows for future compatibility
+// if new fields are added to FetchSnapshotResponseTopicPartition.
+func (v *FetchSnapshotResponseTopicPartition) Default() {
+	{
+		v := &v.SnapshotID
+		_ = v
+	}
+	{
+		v := &v.CurrentLeader
+		_ = v
+	}
+}
+
+// NewFetchSnapshotResponseTopicPartition returns a default FetchSnapshotResponseTopicPartition
+// This is a shortcut for creating a struct and calling Default yourself.
+func NewFetchSnapshotResponseTopicPartition() FetchSnapshotResponseTopicPartition {
+	var v FetchSnapshotResponseTopicPartition
+	v.Default()
+	return v
+}
+
+type FetchSnapshotResponseTopic struct {
+	// The name of the topic to fetch.
+	Topic string
+
+	// The partitions to fetch.
+	Partitions []FetchSnapshotResponseTopicPartition
+}
+
+// Default sets any default fields. Calling this allows for future compatibility
+// if new fields are added to FetchSnapshotResponseTopic.
+func (v *FetchSnapshotResponseTopic) Default() {
+}
+
+// NewFetchSnapshotResponseTopic returns a default FetchSnapshotResponseTopic
+// This is a shortcut for creating a struct and calling Default yourself.
+func NewFetchSnapshotResponseTopic() FetchSnapshotResponseTopic {
+	var v FetchSnapshotResponseTopic
+	v.Default()
+	return v
+}
+
+// FetchSnapshotResponse is a response for a FetchSnapshotRequest.
+type FetchSnapshotResponse struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	ThrottleMillis int32
+
+	// The top level response error code.
+	ErrorCode int16
+
+	// The topics to fetch.
+	Topics []FetchSnapshotResponseTopic
+}
+
+func (*FetchSnapshotResponse) Key() int16                 { return 59 }
+func (*FetchSnapshotResponse) MaxVersion() int16          { return 0 }
+func (v *FetchSnapshotResponse) SetVersion(version int16) { v.Version = version }
+func (v *FetchSnapshotResponse) GetVersion() int16        { return v.Version }
+func (v *FetchSnapshotResponse) IsFlexible() bool         { return v.Version >= 0 }
+func (v *FetchSnapshotResponse) RequestKind() Request {
+	return &FetchSnapshotRequest{Version: v.Version}
+}
+
+func (v *FetchSnapshotResponse) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	isFlexible := version >= 0
+	_ = isFlexible
+	{
+		v := v.ThrottleMillis
+		dst = kbin.AppendInt32(dst, v)
+	}
+	{
+		v := v.ErrorCode
+		dst = kbin.AppendInt16(dst, v)
+	}
+	{
+		v := v.Topics
+		if isFlexible {
+			dst = kbin.AppendCompactArrayLen(dst, len(v))
+		} else {
+			dst = kbin.AppendArrayLen(dst, len(v))
+		}
+		for i := range v {
+			v := &v[i]
+			{
+				v := v.Topic
+				if isFlexible {
+					dst = kbin.AppendCompactString(dst, v)
+				} else {
+					dst = kbin.AppendString(dst, v)
+				}
+			}
+			{
+				v := v.Partitions
+				if isFlexible {
+					dst = kbin.AppendCompactArrayLen(dst, len(v))
+				} else {
+					dst = kbin.AppendArrayLen(dst, len(v))
+				}
+				for i := range v {
+					v := &v[i]
+					{
+						v := v.Partition
+						dst = kbin.AppendInt32(dst, v)
+					}
+					{
+						v := v.ErrorCode
+						dst = kbin.AppendInt16(dst, v)
+					}
+					{
+						v := &v.SnapshotID
+						{
+							v := v.EndOffset
+							dst = kbin.AppendInt64(dst, v)
+						}
+						{
+							v := v.Epoch
+							dst = kbin.AppendInt32(dst, v)
+						}
+						if isFlexible {
+							dst = append(dst, 0)
+						}
+					}
+					{
+						v := v.Size
+						dst = kbin.AppendInt64(dst, v)
+					}
+					{
+						v := v.Position
+						dst = kbin.AppendInt64(dst, v)
+					}
+					{
+						v := v.Bytes
+						if isFlexible {
+							dst = kbin.AppendCompactBytes(dst, v)
+						} else {
+							dst = kbin.AppendBytes(dst, v)
+						}
+					}
+					if isFlexible {
+						var toEncode []uint32
+						if v.CurrentLeader != (func() FetchSnapshotResponseTopicPartitionCurrentLeader {
+							var v FetchSnapshotResponseTopicPartitionCurrentLeader
+							v.Default()
+							return v
+						})() {
+							toEncode = append(toEncode, 0)
+						}
+						dst = kbin.AppendUvarint(dst, uint32(len(toEncode)))
+						for _, tag := range toEncode {
+							switch tag {
+							case 0:
+								{
+									v := v.CurrentLeader
+									dst = kbin.AppendUvarint(dst, 0)
+									sized := false
+									lenAt := len(dst)
+								fCurrentLeader:
+									{
+										v := v.LeaderID
+										dst = kbin.AppendInt32(dst, v)
+									}
+									{
+										v := v.LeaderEpoch
+										dst = kbin.AppendInt32(dst, v)
+									}
+									if isFlexible {
+										dst = append(dst, 0)
+									}
+									if !sized {
+										dst = kbin.AppendUvarint(dst[:lenAt], uint32(len(dst[lenAt:])))
+										sized = true
+										goto fCurrentLeader
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+			if isFlexible {
+				dst = append(dst, 0)
+			}
+		}
+	}
+	if isFlexible {
+		dst = append(dst, 0)
+	}
+	return dst
+}
+func (v *FetchSnapshotResponse) ReadFrom(src []byte) error {
+	v.Default()
+	b := kbin.Reader{Src: src}
+	version := v.Version
+	_ = version
+	isFlexible := version >= 0
+	_ = isFlexible
+	s := v
+	{
+		v := b.Int32()
+		s.ThrottleMillis = v
+	}
+	{
+		v := b.Int16()
+		s.ErrorCode = v
+	}
+	{
+		v := s.Topics
+		a := v
+		var l int32
+		if isFlexible {
+			l = b.CompactArrayLen()
+		} else {
+			l = b.ArrayLen()
+		}
+		if !b.Ok() {
+			return b.Complete()
+		}
+		if l > 0 {
+			a = make([]FetchSnapshotResponseTopic, l)
+		}
+		for i := int32(0); i < l; i++ {
+			v := &a[i]
+			v.Default()
+			s := v
+			{
+				var v string
+				if isFlexible {
+					v = b.CompactString()
+				} else {
+					v = b.String()
+				}
+				s.Topic = v
+			}
+			{
+				v := s.Partitions
+				a := v
+				var l int32
+				if isFlexible {
+					l = b.CompactArrayLen()
+				} else {
+					l = b.ArrayLen()
+				}
+				if !b.Ok() {
+					return b.Complete()
+				}
+				if l > 0 {
+					a = make([]FetchSnapshotResponseTopicPartition, l)
+				}
+				for i := int32(0); i < l; i++ {
+					v := &a[i]
+					v.Default()
+					s := v
+					{
+						v := b.Int32()
+						s.Partition = v
+					}
+					{
+						v := b.Int16()
+						s.ErrorCode = v
+					}
+					{
+						v := &s.SnapshotID
+						v.Default()
+						s := v
+						{
+							v := b.Int64()
+							s.EndOffset = v
+						}
+						{
+							v := b.Int32()
+							s.Epoch = v
+						}
+						if isFlexible {
+							SkipTags(&b)
+						}
+					}
+					{
+						v := b.Int64()
+						s.Size = v
+					}
+					{
+						v := b.Int64()
+						s.Position = v
+					}
+					{
+						var v []byte
+						if isFlexible {
+							v = b.CompactBytes()
+						} else {
+							v = b.Bytes()
+						}
+						s.Bytes = v
+					}
+					if isFlexible {
+						for i := b.Uvarint(); i > 0; i-- {
+							switch b.Uvarint() {
+							default:
+								b.Span(int(b.Uvarint()))
+							case 0:
+								b := kbin.Reader{Src: b.Span(int(b.Uvarint()))}
+								v := &s.CurrentLeader
+								v.Default()
+								s := v
+								{
+									v := b.Int32()
+									s.LeaderID = v
+								}
+								{
+									v := b.Int32()
+									s.LeaderEpoch = v
+								}
+								if isFlexible {
+									SkipTags(&b)
+								}
+								if err := b.Complete(); err != nil {
+									return err
+								}
+							}
+						}
+					}
+				}
+				v = a
+				s.Partitions = v
+			}
+			if isFlexible {
+				SkipTags(&b)
+			}
+		}
+		v = a
+		s.Topics = v
+	}
+	if isFlexible {
+		SkipTags(&b)
+	}
+	return b.Complete()
+}
+
+// NewPtrFetchSnapshotResponse returns a pointer to a default FetchSnapshotResponse
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrFetchSnapshotResponse() *FetchSnapshotResponse {
+	var v FetchSnapshotResponse
+	v.Default()
+	return &v
+}
+
+// Default sets any default fields. Calling this allows for future compatibility
+// if new fields are added to FetchSnapshotResponse.
+func (v *FetchSnapshotResponse) Default() {
+}
+
+// NewFetchSnapshotResponse returns a default FetchSnapshotResponse
+// This is a shortcut for creating a struct and calling Default yourself.
+func NewFetchSnapshotResponse() FetchSnapshotResponse {
+	var v FetchSnapshotResponse
+	v.Default()
+	return v
+}
+
 // RequestForKey returns the request corresponding to the given request key
 // or nil if the key is unknown.
 func RequestForKey(key int16) Request {
@@ -31563,6 +32811,8 @@ func RequestForKey(key int16) Request {
 		return new(UpdateFeaturesRequest)
 	case 58:
 		return new(EnvelopeRequest)
+	case 59:
+		return new(FetchSnapshotRequest)
 	}
 }
 
@@ -31690,6 +32940,8 @@ func ResponseForKey(key int16) Response {
 		return new(UpdateFeaturesResponse)
 	case 58:
 		return new(EnvelopeResponse)
+	case 59:
+		return new(FetchSnapshotResponse)
 	}
 }
 
@@ -31817,6 +33069,8 @@ func NameForKey(key int16) string {
 		return "UpdateFeatures"
 	case 58:
 		return "Envelope"
+	case 59:
+		return "FetchSnapshot"
 	}
 }
 
