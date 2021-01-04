@@ -106,18 +106,14 @@ type cursor struct {
 	// transitioning from used to usable.
 	source *source
 
-	// useState is an atomic that has three states: unset, usable, and
-	// used. A cursor can be used in a fetch request if it is in the usable
-	// state. Once used, the cursor will be set back to usable once the
-	// request lifecycle is complete (a usable fetch response, or once
-	// listing offsets or loading epochs completes).
+	// useState is an atomic that has two states: unusable and usable.  A
+	// cursor can be used in a fetch request if it is in the usable state.
+	// Once used, the cursor is unusable, and will be set back to usable
+	// one the request lifecycle is complete (a usable fetch response, or
+	// once listing offsets or loading epochs completes).
 	//
-	// A cursor can be set back to unset when sources are stopped. This can
-	// be done if a group loses a partition, for example.
-	//
-	// Updates to cursorOffset are done when the sources are stopped and
-	// the cursor is in the unset state, or when the cursor is in the used
-	// state before switching back to usable.
+	// A cursor can be set back to unusable when sources are stopped. This
+	// can be done if a group loses a partition, for example.
 	//
 	// The used state is exclusively updated by either building a fetch
 	// request or when the source is stopped.
@@ -168,7 +164,7 @@ func (c *cursor) use() *cursorOffsetNext {
 	// A source using a cursor has exclusive access to the use field by
 	// virtue of that source building a request during a live session,
 	// or by virtue of the session being stopped.
-	c.useState = 2
+	c.useState = 0
 	return &cursorOffsetNext{
 		cursorOffset:       c.cursorOffset,
 		from:               c,
@@ -192,28 +188,11 @@ func (c *cursor) usable() bool {
 	return atomic.LoadUint32(&c.useState) == 1
 }
 
-// allowUsable is called after setting the cursor's offset to allow a cursor to
-// be used. This is done either when the session is completely stopped (most
-// commonly), or when allowing a cursor to be newly usable within the context
-// of a live session (while guarding against a concurrent stopSession).
-//
-// The former case needs no atomic because the source is stopped, but the
-// latter does.
+// allowUsable allows a cursor to be fetched, and is called either in assigning
+// offsets, or when a buffered fetch is taken or discarded,  or when listing /
+// epoch loading finishes.
 func (c *cursor) allowUsable() {
-	c.source.maybeConsume()
-}
-
-// finishUsing allows a cursor to be used again. This is an atomic because a
-// cursor could finish listing offsets or loading epochs (and thus, finish
-// using) while fetch request is being built concurrently.
-//
-// The cursor could have been unset if the assignment directly came from
-// listing offsets.
-func (c *cursor) finishUsing() {
 	atomic.SwapUint32(&c.useState, 1)
-	// When finishing using a cursor, we have exclusive access to the
-	// cursor's source. The source only changes when a consumer session is
-	// stopped, meaning no cursors are being read.
 	c.source.maybeConsume()
 }
 
@@ -255,7 +234,7 @@ type cursorOffsetPreferred struct {
 // a fetch response, which means within the context of a live session.
 func (p *cursorOffsetPreferred) move() {
 	c := p.from
-	defer c.finishUsing()
+	defer c.allowUsable()
 
 	// Before we migrate the cursor, we check if the destination source
 	// exists. If not, we do not migrate and instead force a metadata.
@@ -296,11 +275,11 @@ func (os usedOffsets) eachOffset(fn func(*cursorOffsetNext)) {
 }
 
 func (os usedOffsets) finishUsingAllWith(fn func(*cursorOffsetNext)) {
-	os.eachOffset(func(o *cursorOffsetNext) { fn(o); o.from.finishUsing() })
+	os.eachOffset(func(o *cursorOffsetNext) { fn(o); o.from.allowUsable() })
 }
 
 func (os usedOffsets) finishUsingAll() {
-	os.eachOffset(func(o *cursorOffsetNext) { o.from.finishUsing() })
+	os.eachOffset(func(o *cursorOffsetNext) { o.from.allowUsable() })
 }
 
 // bufferedFetch is a fetch response waiting to be consumed by the client.

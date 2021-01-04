@@ -265,7 +265,6 @@ func (h assignHow) String() string {
 // assignPartitions, called under the consumer's mu, is used to set new
 // cursors or add to the existing cursors.
 func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how assignHow) {
-
 	var session *consumerSession
 	var loadOffsets listOrEpochLoads
 	defer func() {
@@ -343,7 +342,7 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how
 		return
 	}
 
-	c.cl.cfg.logger.Log(LogLevelInfo, "assign requires loading offsets")
+	c.cl.cfg.logger.Log(LogLevelDebug, "assign requires loading offsets")
 
 	clientTopics := c.cl.loadTopics()
 	for topic, partitions := range assignments {
@@ -820,7 +819,7 @@ func (s *consumerSession) handleListOrEpochResults(loaded loadedOffsets) {
 				offset:            load.offset,
 				lastConsumedEpoch: load.leaderEpoch,
 			})
-			load.cursor.finishUsing()
+			load.cursor.allowUsable()
 			s.c.usingCursors.use(load.cursor)
 		}
 
