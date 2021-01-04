@@ -232,8 +232,7 @@ func (b *broker) handleReqs() {
 		}
 
 		if int(req.Key()) > len(cxn.versions[:]) ||
-			b.cl.cfg.maxVersions != nil &&
-				int(req.Key()) >= len(b.cl.cfg.maxVersions) {
+			b.cl.cfg.maxVersions != nil && !b.cl.cfg.maxVersions.HasKey(req.Key()) {
 			pr.promise(nil, ErrUnknownRequestKey)
 			continue
 		}
@@ -248,7 +247,7 @@ func (b *broker) handleReqs() {
 
 		ourMax := req.MaxVersion()
 		if b.cl.cfg.maxVersions != nil {
-			userMax := b.cl.cfg.maxVersions[req.Key()]
+			userMax, _ := b.cl.cfg.maxVersions.LookupVersion(req.Key()) // we validated HasKey above
 			if userMax < ourMax {
 				ourMax = userMax
 			}
@@ -265,11 +264,12 @@ func (b *broker) handleReqs() {
 		// If the version now (after potential broker downgrading) is
 		// lower than we desire, we fail the request for the broker is
 		// too old.
-		if b.cl.cfg.minVersions != nil &&
-			int(req.Key()) < len(b.cl.cfg.minVersions) &&
-			version < b.cl.cfg.minVersions[req.Key()] {
-			pr.promise(nil, ErrBrokerTooOld)
-			continue
+		if b.cl.cfg.minVersions != nil {
+			minVersion, minVersionExists := b.cl.cfg.minVersions.LookupVersion(req.Key())
+			if minVersionExists && version < minVersion {
+				pr.promise(nil, ErrBrokerTooOld)
+				continue
+			}
 		}
 
 		req.SetVersion(version) // always go for highest version
@@ -422,7 +422,7 @@ func (cxn *brokerCxn) init() error {
 		cxn.versions[i] = -1
 	}
 
-	if cxn.b.cl.cfg.maxVersions == nil || len(cxn.b.cl.cfg.maxVersions) >= 19 {
+	if cxn.b.cl.cfg.maxVersions == nil || cxn.b.cl.cfg.maxVersions.HasKey(18) {
 		if err := cxn.requestAPIVersions(); err != nil {
 			cxn.cl.cfg.logger.Log(LogLevelError, "unable to request api versions", "err", err)
 			return err
