@@ -1,5 +1,5 @@
 // A common struct used in DescribeQuorumResponse.
-DescribeQuorumResponseTopicPartitionReplicaState => not top level, no encoding
+DescribeQuorumResponseTopicPartitionReplicaState => not top level, no encoding, flexible v0+
   ReplicaID: int32
   // The last known log end offset of the follower, or -1 if it is unknown.
   LogEndOffset: int64

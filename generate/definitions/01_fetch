@@ -24,7 +24,7 @@ FetchRequest => key 1, max version 12, flexible v12+
   // MaxBytes is the maximum amount of bytes to read in a fetch request. The
   // response can exceed MaxBytes if the first record in the first non-empty
   // partition is larger than MaxBytes.
-  MaxBytes: int32(2147483647) // v3+
+  MaxBytes: int32(0x7fffffff) // v3+
   // IsolationLevel changes which messages are fetched. Follower replica ID's
   // (non-negative, non-standard-client) fetch from the end.
   //
