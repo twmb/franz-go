@@ -52,6 +52,15 @@ func AppendFloat64(dst []byte, f float64) []byte {
 	return appendUint64(dst, math.Float64bits(f))
 }
 
+// AppendUuid appends first the high (0) bytes and then the low (1) bytes to
+// dst.
+//
+// If Go ever introduces u128, this will be replaced with that.
+func AppendUuid(dst []byte, uuid [2]uint64) []byte {
+	dst = appendUint64(dst, uuid[0])
+	return appendUint64(dst, uuid[1])
+}
+
 func appendUint64(dst []byte, u uint64) []byte {
 	return append(dst, byte(u>>56), byte(u>>48), byte(u>>40), byte(u>>32),
 		byte(u>>24), byte(u>>16), byte(u>>8), byte(u))
@@ -371,6 +380,14 @@ func (b *Reader) Int32() int32 {
 // Int64 returns an int64 from the reader.
 func (b *Reader) Int64() int64 {
 	return int64(b.readUint64())
+}
+
+// Uuid returns a uuid from the reader.
+func (b *Reader) Uuid() [2]uint64 {
+	return [2]uint64{
+		b.readUint64(), // hi
+		b.readUint64(), // lo
+	}
 }
 
 // Float64 returns a float64 from the reader.
