@@ -63,6 +63,7 @@ type (
 		HasDefault bool
 		Default    int32
 	}
+	Uuid         struct{}
 	VarintString struct{}
 	VarintBytes  struct{}
 
@@ -186,7 +187,7 @@ func (b Bool) GetDefault() (interface{}, bool) { return b.Default, b.HasDefault 
 func (b Bool) GetTypeDefault() interface{}     { return false }
 
 func (i Int8) SetDefault(s string) Type {
-	v, err := strconv.ParseInt(s, 10, 8)
+	v, err := strconv.ParseInt(s, 0, 8)
 	if err != nil {
 		die("invalid int8 default: %v", err)
 	}
@@ -198,7 +199,7 @@ func (i Int8) GetDefault() (interface{}, bool) { return i.Default, i.HasDefault 
 func (i Int8) GetTypeDefault() interface{}     { return 0 }
 
 func (i Int16) SetDefault(s string) Type {
-	v, err := strconv.ParseInt(s, 10, 16)
+	v, err := strconv.ParseInt(s, 0, 16)
 	if err != nil {
 		die("invalid int16 default: %v", err)
 	}
@@ -210,7 +211,7 @@ func (i Int16) GetDefault() (interface{}, bool) { return i.Default, i.HasDefault
 func (i Int16) GetTypeDefault() interface{}     { return 0 }
 
 func (i Int32) SetDefault(s string) Type {
-	v, err := strconv.ParseInt(s, 10, 32)
+	v, err := strconv.ParseInt(s, 0, 32)
 	if err != nil {
 		die("invalid int32 default: %v", err)
 	}
@@ -222,7 +223,7 @@ func (i Int32) GetDefault() (interface{}, bool) { return i.Default, i.HasDefault
 func (i Int32) GetTypeDefault() interface{}     { return 0 }
 
 func (i Int64) SetDefault(s string) Type {
-	v, err := strconv.ParseInt(s, 10, 64)
+	v, err := strconv.ParseInt(s, 0, 64)
 	if err != nil {
 		die("invalid int64 default: %v", err)
 	}
@@ -258,7 +259,7 @@ func (u Uint32) GetDefault() (interface{}, bool) { return u.Default, u.HasDefaul
 func (u Uint32) GetTypeDefault() interface{}     { return 0 }
 
 func (i Varint) SetDefault(s string) Type {
-	v, err := strconv.ParseInt(s, 10, 32)
+	v, err := strconv.ParseInt(s, 0, 32)
 	if err != nil {
 		die("invalid varint default: %v", err)
 	}
@@ -279,7 +280,7 @@ func (s NullableString) SetDefault(v string) Type {
 func (s NullableString) GetDefault() (interface{}, bool) {
 	return "nil", s.HasDefault // we return the string so it is rendered correctly
 }
-func (s NullableString) GetTypeDefault() interface{} { return nil }
+func (s NullableString) GetTypeDefault() interface{} { return "nil" }
 
 func (b NullableBytes) SetDefault(v string) Type {
 	if v != "null" {
@@ -291,7 +292,7 @@ func (b NullableBytes) SetDefault(v string) Type {
 func (b NullableBytes) GetDefault() (interface{}, bool) {
 	return "nil", b.HasDefault
 }
-func (b NullableBytes) GetTypeDefault() interface{} { return nil }
+func (b NullableBytes) GetTypeDefault() interface{} { return "nil" }
 
 func (a Array) SetDefault(v string) Type {
 	if v != "null" {

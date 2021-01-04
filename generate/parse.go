@@ -24,6 +24,7 @@ var types = map[string]Type{
 	"float64":         Float64{},
 	"uint32":          Uint32{},
 	"varint":          Varint{},
+	"uuid":            Uuid{},
 	"string":          String{},
 	"nullable-string": NullableString{},
 	"bytes":           Bytes{},
@@ -322,9 +323,9 @@ func parseFieldLength(in string) (string, int, error) {
 // 0: entire thing
 // 1: name
 // 2: "no encoding" if present
-// 3: "with (encoded )? version field" if present
-// 5: flexible version, if 2 is present
-var notTopLevelRe = regexp.MustCompile(`^([A-Za-z0-9]+) => not top level(?:, (?:(no encoding)|(with version field)(?:, flexible v(\d+)\+)?))?$`)
+// 3: "with version field" if present
+// 4: flexible version if present
+var notTopLevelRe = regexp.MustCompile(`^([A-Za-z0-9]+) => not top level(?:, (?:(no encoding)|(with version field))(?:, flexible v(\d+)\+)?)?$`)
 
 // Parse parses the raw contents of a messages file and adds all newly
 // parsed structs to newStructs.
@@ -371,16 +372,9 @@ func Parse(raw []byte) {
 		fromFlexible := false
 
 		nameMatch := notTopLevelRe.FindStringSubmatch(line)
-
 		name := line
-		switch {
-		case len(nameMatch) == 0:
-		case nameMatch[2] != "":
+		parseNoEncodingFlexible := func() {
 			name = nameMatch[1]
-			withNoEncoding = true
-		case nameMatch[3] != "":
-			name = nameMatch[1]
-			withVersionField = true
 			if nameMatch[4] != "" {
 				flexible, err := strconv.Atoi(nameMatch[4])
 				if err != nil || flexible < 0 {
@@ -389,6 +383,15 @@ func Parse(raw []byte) {
 				flexibleAt = flexible
 				fromFlexible = true
 			}
+		}
+		switch {
+		case len(nameMatch) == 0:
+		case nameMatch[2] != "":
+			withNoEncoding = true
+			parseNoEncodingFlexible()
+		case nameMatch[3] != "":
+			withVersionField = true
+			parseNoEncodingFlexible()
 		default: // simply "not top level"
 			name = nameMatch[1]
 		}

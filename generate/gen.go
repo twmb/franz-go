@@ -13,6 +13,7 @@ func (Int64) TypeName() string                 { return "int64" }
 func (Float64) TypeName() string               { return "float64" }
 func (Uint32) TypeName() string                { return "uint32" }
 func (Varint) TypeName() string                { return "int32" }
+func (Uuid) TypeName() string                  { return "[2]uint64" }
 func (String) TypeName() string                { return "string" }
 func (NullableString) TypeName() string        { return "*string" }
 func (Bytes) TypeName() string                 { return "[]byte" }
@@ -63,6 +64,7 @@ func (Int64) WriteAppend(l *LineWriter)        { primAppend("Int64", l) }
 func (Float64) WriteAppend(l *LineWriter)      { primAppend("Float64", l) }
 func (Uint32) WriteAppend(l *LineWriter)       { primAppend("Uint32", l) }
 func (Varint) WriteAppend(l *LineWriter)       { primAppend("Varint", l) }
+func (Uuid) WriteAppend(l *LineWriter)         { primAppend("Uuid", l) }
 func (VarintString) WriteAppend(l *LineWriter) { primAppend("VarintString", l) }
 func (VarintBytes) WriteAppend(l *LineWriter)  { primAppend("VarintBytes", l) }
 
@@ -235,6 +237,9 @@ func (s Struct) WriteAppend(l *LineWriter) {
 		case Varint:
 			l.Write("dst = kbin.AppendUvarint(dst, kbin.VarintLen(v))")
 			f.Type.WriteAppend(l)
+		case Uuid:
+			l.Write("dst = kbin.AppendUvarint(dst, 16)")
+			f.Type.WriteAppend(l)
 		case Array, Struct, String, NullableString, Bytes, NullableBytes:
 			l.Write("sized := false")
 			l.Write("lenAt := len(dst)")
@@ -306,6 +311,7 @@ func (Int64) WriteDecode(l *LineWriter)        { primDecode("Int64", l) }
 func (Float64) WriteDecode(l *LineWriter)      { primDecode("Float64", l) }
 func (Uint32) WriteDecode(l *LineWriter)       { primDecode("Uint32", l) }
 func (Varint) WriteDecode(l *LineWriter)       { primDecode("Varint", l) }
+func (Uuid) WriteDecode(l *LineWriter)         { primDecode("Uuid", l) }
 func (VarintString) WriteDecode(l *LineWriter) { primDecode("VarintString", l) }
 func (VarintBytes) WriteDecode(l *LineWriter)  { primDecode("VarintBytes", l) }
 
