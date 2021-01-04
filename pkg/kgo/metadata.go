@@ -222,7 +222,7 @@ func (cl *Client) fetchTopicMetadata(reqTopics []string) (map[string]*topicParti
 	all := cl.consumer.typ == consumerTypeDirect && cl.consumer.direct.regexTopics ||
 		cl.consumer.typ == consumerTypeGroup && cl.consumer.group.regexTopics
 	cl.consumer.mu.Unlock()
-	_, meta, err := cl.fetchMetadata(cl.ctx, all, reqTopics)
+	_, meta, err := cl.fetchMetadataForTopics(cl.ctx, all, reqTopics)
 	if err != nil {
 		return nil, all, err
 	}

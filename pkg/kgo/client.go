@@ -318,23 +318,27 @@ func (cl *Client) fetchBrokerMetadata(ctx context.Context) error {
 
 	defer close(wait.done)
 
-	_, _, wait.err = cl.fetchMetadata(ctx, false, nil)
+	_, _, wait.err = cl.fetchMetadata(ctx, kmsg.NewPtrMetadataRequest())
 	return wait.err
 }
 
-func (cl *Client) fetchMetadata(ctx context.Context, all bool, topics []string) (*broker, *kmsg.MetadataResponse, error) {
+func (cl *Client) fetchMetadataForTopics(ctx context.Context, all bool, topics []string) (*broker, *kmsg.MetadataResponse, error) {
 	req := &kmsg.MetadataRequest{
 		AllowAutoTopicCreation: cl.cfg.allowAutoTopicCreation,
 	}
 	for _, topic := range topics {
-		req.Topics = append(req.Topics, kmsg.MetadataRequestTopic{Topic: topic})
+		t := topic
+		req.Topics = append(req.Topics, kmsg.MetadataRequestTopic{Topic: &t})
 	}
 	if all {
 		req.Topics = nil
 	} else if len(topics) == 0 {
 		req.Topics = []kmsg.MetadataRequestTopic{}
 	}
+	return cl.fetchMetadata(ctx, req)
+}
 
+func (cl *Client) fetchMetadata(ctx context.Context, req *kmsg.MetadataRequest) (*broker, *kmsg.MetadataResponse, error) {
 	r := cl.retriable()
 	meta, err := req.RequestWith(ctx, r)
 	if err == nil {
@@ -616,14 +620,7 @@ func (cl *Client) shardedRequest(ctx context.Context, req kmsg.Request) ([]Respo
 	if metaReq, isMetaReq := req.(*kmsg.MetadataRequest); isMetaReq {
 		// We hijack any metadata request so as to populate our
 		// own brokers and controller ID.
-		topics := make([]string, 0, len(metaReq.Topics))
-		for _, topic := range metaReq.Topics {
-			topics = append(topics, topic.Topic)
-		}
-		// fetchMetadata does its own retrying, so we do not do
-		// retrying here.
-		// TODO also needs auto topic create
-		br, resp, err := cl.fetchMetadata(ctx, metaReq.Topics == nil, topics)
+		br, resp, err := cl.fetchMetadata(ctx, metaReq)
 		return shards(shard(br, req, resp, err)), nil
 
 	} else if adminReq, admin := req.(kmsg.AdminRequest); admin {
@@ -1350,7 +1347,7 @@ type mappedMetadataTopic struct {
 // this is garbage heavy, so it is only used in one off requests in this
 // package.
 func (cl *Client) fetchMappedMetadata(ctx context.Context, topics []string) (map[string]mappedMetadataTopic, error) {
-	_, meta, err := cl.fetchMetadata(ctx, false, topics)
+	_, meta, err := cl.fetchMetadataForTopics(ctx, false, topics)
 	if err != nil {
 		return nil, err
 	}
