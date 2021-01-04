@@ -1094,7 +1094,7 @@ func (f *fetchRequest) addCursor(c *cursor) {
 }
 
 func (*fetchRequest) Key() int16           { return 1 }
-func (*fetchRequest) MaxVersion() int16    { return 11 } // stick on 11 until we validate 12 on 2.7.0 release (TODO)
+func (*fetchRequest) MaxVersion() int16    { return 12 }
 func (f *fetchRequest) SetVersion(v int16) { f.version = v }
 func (f *fetchRequest) GetVersion() int16  { return f.version }
 func (f *fetchRequest) IsFlexible() bool   { return f.version >= 12 } // version 12+ is flexible
