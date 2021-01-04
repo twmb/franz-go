@@ -1,0 +1,58 @@
+// Introduced for KIP-630, FetchSnapshotRequest is a part of the inter-Kafka
+// raft protocol to remove the dependency on Zookeeper.
+FetchSnapshotRequest => key 59, max version 0, flexible v0+
+  // The ClusterID if known, this is used to validate metadata fetches prior to
+  // broker registration.
+  ClusterID: nullable-string // tag 0
+  // The broker ID of the follower.
+  ReplicaID: int32(-1)
+  // The maximum bytes to fetch from all of the snapshots.
+  MaxBytes: int32(0x7fffffff)
+  // The topics to fetch.
+  Topics: [=>]
+    // The name of the topic to fetch.
+    Topic: string
+    // The partitions to fetch.
+    Partitions: [=>]
+      // The partition to fetch.
+      Partition: int32
+      // The current leader epoch of the partition, or -1 for an unknown leader epoch.
+      CurrentLeaderEpoch: int32
+      // The snapshot end offset and epoch to fetch.
+      SnapshotID: =>
+        EndOffset: int64
+        Epoch: int32
+      // The byte position within the snapshot to start fetching from.
+      Position: int64
+
+// FetchSnapshotResponse is a response for a FetchSnapshotRequest.
+FetchSnapshotResponse =>
+  ThrottleMillis: int32
+  // The top level response error code.
+  ErrorCode: int16
+  // The topics to fetch.
+  Topics: [=>]
+    // The name of the topic to fetch.
+    Topic: string
+    // The partitions to fetch.
+    Partitions: [=>]
+      // The partition.
+      Partition: int32
+      // An error code, or 0 if there was no fetch error.
+      ErrorCode: int16
+      // The snapshot end offset and epoch to fetch.
+      SnapshotID: =>
+        EndOffset: int64
+        Epoch: int32
+      // The ID of the current leader (or -1 if unknown) and the latest known
+      // leader epoch.
+      CurrentLeader: => // tag 0
+        LeaderID: int32
+        LeaderEpoch: int32
+      // The total size of the snapshot.
+      Size: int64
+      // The starting byte position within the snapshot included in the Bytes
+      // field.
+      Position: int64
+      // Snapshot data.
+      Bytes: bytes

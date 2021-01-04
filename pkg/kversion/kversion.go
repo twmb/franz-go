@@ -461,5 +461,10 @@ func Tip() Versions {
 	// KAFKA-10545 1dd1e7f945d7a8c1dc177223cd88800680f1ff46 KIP-516
 	v[4]++ // 5 leader and isr
 
+	// KAFKA-10427 2023aed59d863278a6302e03066d387f994f085c KIP-630
+	v = append(v,
+		0, // 59 fetch snapshot
+	)
+
 	return v
 }

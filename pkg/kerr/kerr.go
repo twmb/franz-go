@@ -141,6 +141,8 @@ var (
 	InvalidUpdateVersion               = &Error{"INVALID_UPDATE_VERSION", 95, false, "The given update version was invalid."}
 	FeatureUpdateFailed                = &Error{"FEATURE_UPDATE_FAILED", 96, false, "Unable to update finalized features due to an unexpected server error."}
 	PrincipalDeserializationFailure    = &Error{"PRINCIPAL_DESERIALIZATION_FAILURE", 97, false, "Request principal deserialization failed during forwarding. This indicates an internal error on the broker cluster security setup."}
+	SnapshotNotFound                   = &Error{"SNAPSHOT_NOT_FOUND", 98, false, "Requested snapshot was not found."}
+	PositionOutOfRange                 = &Error{"POSITION_OUT_OF_RANGE", 99, false, "Requested position is not greater than or equal to zero, and less than the size of the snapshot."}
 )
 
 var code2err = map[int16]error{
@@ -243,4 +245,6 @@ var code2err = map[int16]error{
 	95: InvalidUpdateVersion,
 	96: FeatureUpdateFailed,
 	97: PrincipalDeserializationFailure,
+	98: SnapshotNotFound,
+	99: PositionOutOfRange,
 }

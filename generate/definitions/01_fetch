@@ -178,6 +178,12 @@ FetchResponse =>
         LeaderID: int32(-1)
         // The latest known leader epoch.
         LeaderEpoch: int32(-1)
+      // In the case of fetching an offset less than the LogStartOffset, this
+      // is the end offset and epoch that should be used in the FetchSnapshot
+      // request.
+      SnapshotID: => // tag 2
+        EndOffset: int64(-1)
+        Epoch: int32(-1)
       // AbortedTransactions is an array of aborted transactions within the
       // returned offset range. This is only returned if the requested
       // isolation level was READ_COMMITTED.
