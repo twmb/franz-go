@@ -1,11 +1,16 @@
 // MetadataRequest requests metadata from Kafka.
-MetadataRequest => key 3, max version 9, flexible v9+
+MetadataRequest => key 3, max version 10, flexible v9+
   // Topics is a list of topics to return metadata about. If this is null
   // in v1+, all topics are included. If this is empty, no topics are.
   // For v0 (<Kafka 0.10.0.0), if this is empty, all topics are included.
   Topics: nullable-v1+[=>]
-    // Topic is the topic to request metadata for.
-    Topic: string
+    // The topic ID. Only one of either topic ID or topic name should be used.
+    // If using the topic name, this should just be the default empty value.
+    TopicID: uuid // v10+
+    // Topic is the topic to request metadata for. Version 10 switched this
+    // from a string to a nullable string; if using a topic ID, this field
+    // should be null.
+    Topic: nullable-string-v10+
   // AllowAutoTopicCreation, introduced in Kafka 0.11.0.0, allows topic
   // auto creation of the topics in this request if they do not exist.
   AllowAutoTopicCreation: bool // v4+
@@ -59,6 +64,8 @@ MetadataResponse =>
     ErrorCode: int16
     // Topic is the topic this metadata corresponds to.
     Topic: string
+    // The topic ID.
+    TopicID: uuid // v10+
     // IsInternal signifies whether this topic is a Kafka internal topic.
     IsInternal: bool // v1+
     // Partitions contains metadata about partitions for a topic.
@@ -74,6 +81,9 @@ MetadataResponse =>
       //
       // REPLICA_NOT_AVAILABLE is returned in v0 responses if any replica is
       // unavailable.
+      //
+      // UNKNOWN_TOPIC_ID is returned if using a topic ID and the ID does not
+      // exist.
       ErrorCode: int16
       // Partition is a partition number for a topic.
       Partition: int32

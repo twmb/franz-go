@@ -1,4 +1,4 @@
-UpdateMetadataRequestTopicPartition => not top level, no encoding
+UpdateMetadataRequestTopicPartition => not top level, no encoding, flexible v6+
   Topic: string // v0-v4
   Partition: int32
   ControllerEpoch: int32
@@ -19,13 +19,14 @@ UpdateMetadataRequestTopicPartition => not top level, no encoding
 //
 // Kafka 2.2.0 introduced version 5, proposed in KIP-380, which changed the
 // layout of the struct to be more memory efficient.
-UpdateMetadataRequest => key 6, max version 6, flexible v6+
+UpdateMetadataRequest => key 6, max version 7, flexible v6+
   ControllerID: int32
   ControllerEpoch: int32
   BrokerEpoch: int64(-1) // v5+
   PartitionStates: [UpdateMetadataRequestTopicPartition] // v0-v4
   TopicStates: [=>] // v5+
     Topic: string
+    TopicID: uuid // v7+
     PartitionStates: [UpdateMetadataRequestTopicPartition]
   LiveBrokers: [=>]
     ID: int32

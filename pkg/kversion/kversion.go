@@ -454,5 +454,12 @@ func Tip() Versions {
 	v[48]++ // 1 describe client quotas
 	v[49]++ // 1 alter client quotas
 
+	// KAFKA-10547 5c921afa4a593478f7d1c49e5db9d787558d0d5e KIP-516
+	v[3]++ // 10 metadata
+	v[6]++ // 7 update metadata
+
+	// KAFKA-10545 1dd1e7f945d7a8c1dc177223cd88800680f1ff46 KIP-516
+	v[4]++ // 5 leader and isr
+
 	return v
 }
