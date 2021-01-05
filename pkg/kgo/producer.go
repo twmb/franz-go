@@ -354,7 +354,7 @@ func (cl *Client) partitionsForTopicProduce(pr promisedRec) (*topicPartitions, *
 			// store partitions for it before we are waiting from
 			// the addUnknownTopicRecord func. Otherwise, we would
 			// fall into the wait and never be re-notified.
-			parts = newTopicPartitions(topic)
+			parts = newTopicPartitions()
 			newTopics := cl.cloneTopics()
 			newTopics[topic] = parts
 

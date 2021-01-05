@@ -200,7 +200,7 @@ func (cl *Client) updateMetadata() (needsRetry bool, err error) {
 		if !exists {
 			continue
 		}
-		needsRetry = cl.mergeTopicPartitions(oldParts, newParts, &consumerSessionStopped, &reloadOffsets) || needsRetry
+		needsRetry = cl.mergeTopicPartitions(topic, oldParts, newParts, &consumerSessionStopped, &reloadOffsets) || needsRetry
 	}
 
 	if consumerSessionStopped {
@@ -341,6 +341,7 @@ func (cl *Client) fetchTopicMetadata(reqTopics []string) (map[string]*topicParti
 //
 // Retries are necessary if the topic or any partition has a retriable error.
 func (cl *Client) mergeTopicPartitions(
+	topic string,
 	l *topicPartitions,
 	r *topicPartitionsData,
 	consumerSessionStopped *bool,
@@ -348,7 +349,7 @@ func (cl *Client) mergeTopicPartitions(
 ) (needsRetry bool) {
 	lv := *l.load() // copy so our field writes do not collide with reads
 	hadPartitions := len(lv.all) != 0
-	defer func() { cl.storePartitionsUpdate(l, &lv, hadPartitions) }()
+	defer func() { cl.storePartitionsUpdate(topic, l, &lv, hadPartitions) }()
 
 	lv.loadErr = r.loadErr
 	lv.isInternal = r.isInternal

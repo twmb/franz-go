@@ -47,7 +47,7 @@ func (cl *Client) storeTopics(topics []string) {
 				loaded = cl.cloneTopics()
 				cloned = true
 			}
-			loaded[topic] = newTopicPartitions(topic)
+			loaded[topic] = newTopicPartitions()
 		}
 	}
 	if cloned {
@@ -55,10 +55,8 @@ func (cl *Client) storeTopics(topics []string) {
 	}
 }
 
-func newTopicPartitions(topic string) *topicPartitions {
-	parts := &topicPartitions{
-		topic: topic,
-	}
+func newTopicPartitions() *topicPartitions {
+	parts := new(topicPartitions)
 	parts.v.Store(&topicPartitionsData{
 		all:      make(map[int32]*topicPartition),
 		writable: make(map[int32]*topicPartition),
@@ -72,8 +70,6 @@ type topicPartitions struct {
 
 	partsMu     sync.Mutex
 	partitioner TopicPartitioner
-
-	topic string // TODO delete?
 }
 
 func (t *topicPartitions) load() *topicPartitionsData {
@@ -84,7 +80,7 @@ func (t *topicPartitions) load() *topicPartitionsData {
 //
 // If this is the first time seeing partitions, we do processing of unknown
 // partitions that may be buffered for producing.
-func (cl *Client) storePartitionsUpdate(l *topicPartitions, lv *topicPartitionsData, hadPartitions bool) {
+func (cl *Client) storePartitionsUpdate(topic string, l *topicPartitions, lv *topicPartitionsData, hadPartitions bool) {
 	// If the topic already had partitions, then there would be no
 	// unknown topic waiting and we do not need to notify anything.
 	if hadPartitions {
@@ -111,7 +107,7 @@ func (cl *Client) storePartitionsUpdate(l *topicPartitions, lv *topicPartitionsD
 	if len(cl.unknownTopics) == 0 {
 		return
 	}
-	unknown, exists := cl.unknownTopics[l.topic]
+	unknown, exists := cl.unknownTopics[topic]
 	if !exists {
 		return
 	}
@@ -134,7 +130,7 @@ func (cl *Client) storePartitionsUpdate(l *topicPartitions, lv *topicPartitionsD
 	//
 	// Note that we have to partition records _or_ finish with error now
 	// while under the unknown topics mu to ensure ordering.
-	delete(cl.unknownTopics, l.topic)
+	delete(cl.unknownTopics, topic)
 	close(unknown.wait)
 
 	if lv.loadErr != nil {
