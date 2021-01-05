@@ -80,7 +80,10 @@ func (t *topicPartitions) load() *topicPartitionsData {
 	return t.v.Load().(*topicPartitionsData)
 }
 
-// TODO better name; besides the store, all logic is specific to producing.
+// Updates the topic partitions data atomic value.
+//
+// If this is the first time seeing partitions, we do processing of unknown
+// partitions that may be buffered for producing.
 func (cl *Client) storePartitionsUpdate(l *topicPartitions, lv *topicPartitionsData, hadPartitions bool) {
 	// If the topic already had partitions, then there would be no
 	// unknown topic waiting and we do not need to notify anything.
