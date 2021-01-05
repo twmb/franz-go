@@ -284,6 +284,7 @@ func V2_0_0() Versions {
 	v.k2v[25]++ // 1 add offsets to txn (same)
 	v.k2v[26]++ // 1 end txn (same)
 	v.k2v[28]++ // 1 txn offset commit (same)
+	// 29, 30, 31 bumped below, but also had throttle changes
 	v.k2v[32]++ // 2 describe configs (same)
 	v.k2v[33]++ // 1 alter configs (same)
 	v.k2v[34]++ // 1 alter replica log dirs (same)
