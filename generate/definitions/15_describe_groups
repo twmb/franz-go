@@ -9,11 +9,7 @@ DescribeGroupsRequest => key 15, max version 5, flexible v5+, group coordinator
 
 // DescribeGroupsResponse is returned from a DescribeGroupsRequest.
 DescribeGroupsResponse =>
-  // ThrottleMillis is how long of a throttle Kafka will apply to the client
-  // after this request.
-  // For Kafka < 2.0.0, the throttle is applied before issuing a response.
-  // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
-  ThrottleMillis: int32
+  ThrottleMillis(2)
   // Groups is an array of group metadata.
   Groups: [=>]
     // ErrorCode is the error code for an individual group in a request.

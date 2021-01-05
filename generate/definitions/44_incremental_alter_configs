@@ -48,9 +48,7 @@ IncrementalAlterConfigsRequest => key 44, max version 1, flexible v1+
 
 // IncrementalAlterConfigsResponse is returned from an IncrementalAlterConfigsRequest.
 IncrementalAlterConfigsResponse =>
-  // ThrottleMillis is how long of a throttle Kafka will apply to the client
-  // after responding to this request.
-  ThrottleMillis: int32
+  ThrottleMillis
   // Resources are responses for each resources in the alter request.
   Resources: [=>]
     // ErrorCode is the error code returned for incrementally altering configs.

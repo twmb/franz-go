@@ -11,11 +11,7 @@ DescribeLogDirsRequest => key 35, max version 2, flexible v2+
 
 // DescribeLogDirsResponse is returned from a DescribeLogDirsRequest.
 DescribeLogDirsResponse =>
-  // ThrottleMillis is how long of a throttle Kafka will apply to the client
-  // after this request.
-  // For Kafka < 2.0.0, the throttle is applied before issuing a response.
-  // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
-  ThrottleMillis: int32
+  ThrottleMillis(1)
   // Dirs pairs log directories with the topics and partitions that are
   // stored in those directores.
   Dirs: [=>]

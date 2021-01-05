@@ -23,9 +23,7 @@ AlterClientQuotasRequest => key 49, max version 1, flexible v1+
 
 // AlterClientQuotasResponse is a response to an AlterClientQuotasRequest.
 AlterClientQuotasResponse =>
-  // ThrottleMillis is how long of a throttle Kafka will apply to the client
-  // after responding to this request.
-  ThrottleMillis: int32
+  ThrottleMillis
   // Entries contains results for the alter request.
   Entries: [=>Entry]
     // ErrorCode is the error code for an alter on a matched entity.

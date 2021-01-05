@@ -17,9 +17,7 @@ AlterISRRequest => key 56, max version 0, flexible v0+, admin
       CurrentISRVersion: int32
 
 AlterISRResponse =>
-  // ThrottleMillis is how long of a throttle Kafka will apply to the client
-  // after responding to this request.
-  ThrottleMillis: int32
+  ThrottleMillis
   ErrorCode: int16
   Topics: [=>]
     Topic: string

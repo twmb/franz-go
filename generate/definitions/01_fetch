@@ -87,11 +87,7 @@ FetchRequest => key 1, max version 12, flexible v12+
 
 // FetchResponse is returned from a FetchRequest.
 FetchResponse =>
-  // ThrottleMillis is how long of a throttle Kafka will apply to the client
-  // after this request.
-  // For Kafka < 2.0.0, the throttle is applied before issuing a response.
-  // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
-  ThrottleMillis: int32 // v1+
+  ThrottleMillis(8) // v1+
   // ErrorCode is a full-response error code for a fetch request. This was
   // added in support of KIP-227. This error is only non-zero if using fetch
   // sessions.

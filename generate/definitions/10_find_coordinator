@@ -14,11 +14,7 @@ FindCoordinatorRequest => key 10, max version 3, flexible v3+
 
 // FindCoordinatorResponse is returned from a FindCoordinatorRequest.
 FindCoordinatorResponse =>
-  // ThrottleMillis is how long of a throttle Kafka will apply to the client
-  // after this request.
-  // For Kafka < 2.0.0, the throttle is applied before issuing a response.
-  // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
-  ThrottleMillis: int32 // v1+
+  ThrottleMillis(2) // v1+
   // ErrorCode is the error returned for the request.
   //
   // GROUP_AUTHORIZATION_FAILED is returned if for a group ID request and the

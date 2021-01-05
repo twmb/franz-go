@@ -51,11 +51,7 @@ OffsetCommitRequest => key 8, max version 8, flexible v8+, group coordinator
 
 // OffsetCommitResponse is returned from an OffsetCommitRequest.
 OffsetCommitResponse =>
-  // ThrottleMillis is how long of a throttle Kafka will apply to the client
-  // after this request.
-  // For Kafka < 2.0.0, the throttle is applied before issuing a response.
-  // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
-  ThrottleMillis: int32 // v3+
+  ThrottleMillis(4) // v3+
   // Topics contains responses for each topic / partition in the commit request.
   Topics: [=>]
     // Topic is the topic this offset commit response corresponds to.

@@ -22,9 +22,7 @@ ElectLeadersRequest => key 43, max version 2, flexible v2+, admin
 
 // ElectLeadersResponse is a response for an ElectLeadersRequest.
 ElectLeadersResponse =>
-  // ThrottleMillis is how long of a throttle Kafka will apply to the client
-  // after responding to this request.
-  ThrottleMillis: int32
+  ThrottleMillis
   // ErrorCode is any error that applies to all partitions.
   //
   // CLUSTER_AUTHORIZATION_FAILED is returned if the client is not

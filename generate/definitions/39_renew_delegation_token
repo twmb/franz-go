@@ -16,8 +16,4 @@ RenewDelegationTokenResponse =>
   // token can be renewed up to MaxTimestamp, past which point, it will be
   // invalid. The Kafka default is 24h.
   ExpiryTimestamp: int64
-  // ThrottleMillis is how long of a throttle Kafka will apply to the client
-  // after this request.
-  // For Kafka < 2.0.0, the throttle is applied before issuing a response.
-  // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
-  ThrottleMillis: int32
+  ThrottleMillis(1)

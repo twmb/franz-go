@@ -44,11 +44,7 @@ ApiVersionsResponse =>
     MinVersion: int16
     // MaxVersion is the max version a broker supports for an API key.
     MaxVersion: int16
-  // ThrottleMillis is how long of a throttle Kafka will apply to the client
-  // after this request.
-  // For Kafka < 2.0.0, the throttle is applied before issuing a response.
-  // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
-  ThrottleMillis: int32 // v1+
+  ThrottleMillis(2) // v1+
   // Features supported by the broker (see KIP-584).
   SupportedFeatures: [=>] // tag 0
     // The name of the feature.

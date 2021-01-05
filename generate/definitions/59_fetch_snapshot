@@ -27,7 +27,7 @@ FetchSnapshotRequest => key 59, max version 0, flexible v0+
 
 // FetchSnapshotResponse is a response for a FetchSnapshotRequest.
 FetchSnapshotResponse =>
-  ThrottleMillis: int32
+  ThrottleMillis
   // The top level response error code.
   ErrorCode: int16
   // The topics to fetch.

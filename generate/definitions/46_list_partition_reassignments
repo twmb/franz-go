@@ -15,9 +15,7 @@ ListPartitionReassignmentsRequest => key 46, max version 0, flexible v0+, admin
 
 // ListPartitionReassignmentsResponse is returned for a ListPartitionReassignmentsRequest.
 ListPartitionReassignmentsResponse =>
-  // ThrottleMillis is how long of a throttle Kafka will apply to the client
-  // after responding to this request.
-  ThrottleMillis: int32
+  ThrottleMillis
   // ErrorCode is the error code returned for listing reassignments.
   //
   // REQUEST_TIMED_OUT is returned if the request timed out.

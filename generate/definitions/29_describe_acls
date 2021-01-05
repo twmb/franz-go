@@ -28,9 +28,7 @@ DescribeACLsRequest => key 29, max version 2, flexible v2+
 
 // DescribeACLsResponse is a response to a describe acls request.
 DescribeACLsResponse =>
-  // ThrottleMillis is how long of a throttle Kafka will apply to the client
-  // after responding to this request.
-  ThrottleMillis: int32
+  ThrottleMillis(1)
   // ErrorCode is the error code returned on request failure.
   //
   // SECURITY_DISABLED is returned if there is no authorizer configured on the

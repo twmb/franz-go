@@ -18,11 +18,7 @@ OffsetFetchRequest => key 9, max version 7, flexible v6+, group coordinator
 
 // OffsetFetchResponse is returned from an OffsetFetchRequest.
 OffsetFetchResponse =>
-  // ThrottleMillis is how long of a throttle Kafka will apply to the client
-  // after this request.
-  // For Kafka < 2.0.0, the throttle is applied before issuing a response.
-  // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
-  ThrottleMillis: int32 // v3+
+  ThrottleMillis(4) // v3+
   // Topics contains responses for each requested topic/partition.
   Topics: [=>]
     // Topic is the topic this offset fetch response corresponds to.

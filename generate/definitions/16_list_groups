@@ -10,11 +10,7 @@ ListGroupsRequest => key 16, max version 4, flexible v3+
 
 // ListGroupsResponse is returned from a ListGroupsRequest.
 ListGroupsResponse =>
-  // ThrottleMillis is how long of a throttle Kafka will apply to the client
-  // after this request.
-  // For Kafka < 2.0.0, the throttle is applied before issuing a response.
-  // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
-  ThrottleMillis: int32 // v1+
+  ThrottleMillis(2) // v1+
   // ErrorCode is the error returned for the list groups request.
   //
   // COORDINATOR_NOT_AVAILABLE is returned if the coordinator is not yet active.

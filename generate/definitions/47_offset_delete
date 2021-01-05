@@ -33,9 +33,7 @@ OffsetDeleteResponse =>
   //
   // GROUP_ID_NOT_FOUND is returned if the group ID does not exist.
   ErrorCode: int16
-  // ThrottleMillis is how long of a throttle Kafka will apply to the client
-  // after responding to this request.
-  ThrottleMillis: int32
+  ThrottleMillis
   // Topics are responses to requested topics.
   Topics: [=>]
     // Topic is the topic being responded to.

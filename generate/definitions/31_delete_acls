@@ -14,9 +14,7 @@ DeleteACLsRequest => key 31, max version 2, flexible v2+
 
 // DeleteACLsResponse is a response for a DeleteACLsRequest.
 DeleteACLsResponse =>
-  // ThrottleMillis is how long of a throttle Kafka will apply to the client
-  // after responding to this request.
-  ThrottleMillis: int32
+  ThrottleMillis(1)
   // Results contains a response to each requested filter.
   Results: [=>]
     // ErrorCode is the overall error code for this individual filter.

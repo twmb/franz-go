@@ -19,9 +19,7 @@ AlterPartitionAssignmentsRequest => key 45, max version 0, flexible v0+, admin
 
 // AlterPartitionAssignmentsResponse is returned for an AlterPartitionAssignmentsRequest.
 AlterPartitionAssignmentsResponse =>
-  // ThrottleMillis is how long of a throttle Kafka will apply to the client
-  // after responding to this request.
-  ThrottleMillis: int32
+  ThrottleMillis
   // ErrorCode is any global (applied to all partitions) error code.
   ErrorCode: int16
   // ErrorMessage is any global (applied to all partitions) error message.

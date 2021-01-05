@@ -25,11 +25,7 @@ MetadataRequest => key 3, max version 10, flexible v9+
 
 // MetadataResponse is returned from a MetdataRequest.
 MetadataResponse =>
-  // ThrottleMillis is how long of a throttle Kafka will apply to the client
-  // after this request.
-  // For Kafka < 2.0.0, the throttle is applied before issuing a response.
-  // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
-  ThrottleMillis: int32 // v3+
+  ThrottleMillis(6) // v3+
   // Brokers is a set of alive Kafka brokers.
   Brokers: [=>]
     // NodeID is the node ID of a Kafka broker.

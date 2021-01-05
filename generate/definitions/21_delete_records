@@ -32,11 +32,7 @@ DeleteRecordsRequest => key 21, max version 2, flexible v2+
 
 // DeleteRecordsResponse is returned from a DeleteRecordsRequest.
 DeleteRecordsResponse =>
-  // ThrottleMillis is how long of a throttle Kafka will apply to the client
-  // after this request.
-  // For Kafka < 2.0.0, the throttle is applied before issuing a response.
-  // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
-  ThrottleMillis: int32
+  ThrottleMillis(1)
   // Topics contains responses for each topic in the delete records request.
   Topics: [=>]
     // Topic is the topic this response corresponds to.

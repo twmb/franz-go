@@ -49,8 +49,4 @@ CreateDelegationTokenResponse =>
   // HMAC is the password of this token; this will be used as the password for
   // scram authentication.
   HMAC: bytes
-  // ThrottleMillis is how long of a throttle Kafka will apply to the client
-  // after this request.
-  // For Kafka < 2.0.0, the throttle is applied before issuing a response.
-  // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
-  ThrottleMillis: int32
+  ThrottleMillis(1)

@@ -27,9 +27,7 @@ OffsetForLeaderEpochRequest => key 23, max version 4, flexible v4+
 
 // OffsetForLeaderEpochResponse is returned from an OffsetForLeaderEpochRequest.
 OffsetForLeaderEpochResponse =>
-  // ThrottleMillis is how long of a throttle Kafka will apply to the client
-  // after this request.
-  ThrottleMillis: int32 // v2+
+  ThrottleMillis // v2+
   // Topics are responses to topics in the request.
   Topics: [=>]
     // Topic is the topic this response corresponds to.

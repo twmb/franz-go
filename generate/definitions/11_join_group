@@ -68,11 +68,7 @@ JoinGroupRequest => key 11, max version 7, flexible v6+, group coordinator
 
 // JoinGroupResponse is returned from a JoinGroupRequest.
 JoinGroupResponse =>
-  // ThrottleMillis is how long of a throttle Kafka will apply to the client
-  // after this request.
-  // For Kafka < 2.0.0, the throttle is applied before issuing a response.
-  // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
-  ThrottleMillis: int32 // v2+
+  ThrottleMillis(3) // v2+
   // ErrorCode is the error for the join group request.
   //
   // GROUP_AUTHORIZATION_FAILED is returned if the client is not authorized

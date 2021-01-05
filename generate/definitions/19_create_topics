@@ -40,11 +40,7 @@ CreateTopicsRequest => key 19, max version 6, flexible v5+, admin
 
 // CreateTopicsResponse is returned from a CreateTopicsRequest.
 CreateTopicsResponse =>
-  // ThrottleMillis is how long of a throttle Kafka will apply to the client
-  // after this request.
-  // For Kafka < 2.0.0, the throttle is applied before issuing a response.
-  // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
-  ThrottleMillis: int32 // v2+
+  ThrottleMillis(3) // v2+
   // Topics contains responses to the requested topic creations.
   Topics: [=>]
     // Topic is the topic this response corresponds to.

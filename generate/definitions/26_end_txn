@@ -14,11 +14,7 @@ EndTxnRequest => key 26, max version 3, flexible v3+, txn coordinator
 
 // EndTxnResponse is a response for an EndTxnRequest.
 EndTxnResponse =>
-  // ThrottleMillis is how long of a throttle Kafka will apply to the client
-  // after this request.
-  // For Kafka < 2.0.0, the throttle is applied before issuing a response.
-  // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
-  ThrottleMillis: int32
+  ThrottleMillis(1)
   // ErrorCode is any error for this topic/partition commit.
   //
   // TRANSACTIONAL_ID_AUTHORIZATION_FAILED is returned if the client is

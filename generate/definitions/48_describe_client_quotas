@@ -20,9 +20,7 @@ DescribeClientQuotasRequest => key 48, max version 1, flexible v1+
 
 // DescribeClientQuotasResponse is a response for a DescribeClientQuotasRequest.
 DescribeClientQuotasResponse =>
-  // ThrottleMillis is how long of a throttle Kafka will apply to the client
-  // after responding to this request.
-  ThrottleMillis: int32
+  ThrottleMillis
   // ErrorCode is any error for the request.
   ErrorCode: int16
   // ErrorMessage is an error message for the request, or null if the request succeeded.

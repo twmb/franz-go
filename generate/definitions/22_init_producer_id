@@ -23,11 +23,7 @@ InitProducerIDRequest => key 22, max version 4, flexible v2+, txn coordinator
 
 // InitProducerIDResponse is returned for an InitProducerIDRequest.
 InitProducerIDResponse =>
-  // ThrottleMillis is how long of a throttle Kafka will apply to the client
-  // after this request.
-  // For Kafka < 2.0.0, the throttle is applied before issuing a response.
-  // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
-  ThrottleMillis: int32
+  ThrottleMillis(1)
   // CLUSTER_AUTHORIZATION_FAILED is returned when not using transactions if
   // the client is not authorized for idempotent_write on cluster.
   //

@@ -48,11 +48,7 @@ ListOffsetsRequest => key 2, max version 6, flexible v6+
 
 // ListOffsetsResponse is returned from a ListOffsetsRequest.
 ListOffsetsResponse =>
-  // ThrottleMillis is how long of a throttle Kafka will apply to the client
-  // after this request.
-  // For Kafka < 2.0.0, the throttle is applied before issuing a response.
-  // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
-  ThrottleMillis: int32 // v2+
+  ThrottleMillis(3) // v2+
   // Topics is an array of topic / partition responses corresponding to
   // the requested topics and partitions.
   Topics: [=>]

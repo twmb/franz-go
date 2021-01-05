@@ -43,11 +43,7 @@ TxnOffsetCommitRequest => key 28, max version 3, flexible v3+, group coordinator
 
 // TxnOffsetCommitResponse is a response to a TxnOffsetCommitRequest.
 TxnOffsetCommitResponse =>
-  // ThrottleMillis is how long of a throttle Kafka will apply to the client
-  // after this request.
-  // For Kafka < 2.0.0, the throttle is applied before issuing a response.
-  // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
-  ThrottleMillis: int32
+  ThrottleMillis(1)
   // Topics contains responses to the topics in the request.
   Topics: [=>]
     // Topic is the topic this response is for.

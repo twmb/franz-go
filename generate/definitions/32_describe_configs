@@ -26,11 +26,7 @@ DescribeConfigsRequest => key 32, max version 4, flexible v4+
 
 // DescribeConfigsResponse is returned from a DescribeConfigsRequest.
 DescribeConfigsResponse =>
-  // ThrottleMillis is how long of a throttle Kafka will apply to the client
-  // after this request.
-  // For Kafka < 2.0.0, the throttle is applied before issuing a response.
-  // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
-  ThrottleMillis: int32
+  ThrottleMillis(2)
   // Resources are responses for each resource in the describe config request.
   Resources: [=>]
     // ErrorCode is the error code returned for describing configs.

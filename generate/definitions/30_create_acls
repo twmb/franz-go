@@ -31,9 +31,7 @@ CreateACLsRequest => key 30, max version 2, flexible v2+
 
 // CreateACLsResponse is a response for a CreateACLsRequest.
 CreateACLsResponse =>
-  // ThrottleMillis is how long of a throttle Kafka will apply to the client
-  // after responding to this request.
-  ThrottleMillis: int32
+  ThrottleMillis(1)
   // Results contains responses to each creation request.
   Results: [=>]
     // ErrorCode is an error for this particular creation (index wise).

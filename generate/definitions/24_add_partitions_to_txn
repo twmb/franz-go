@@ -21,11 +21,7 @@ AddPartitionsToTxnRequest => key 24, max version 3, flexible v3+, txn coordinato
 
 // AddPartitionsToTxnResponse is a response to an AddPartitionsToTxnRequest.
 AddPartitionsToTxnResponse =>
-  // ThrottleMillis is how long of a throttle Kafka will apply to the client
-  // after this request.
-  // For Kafka < 2.0.0, the throttle is applied before issuing a response.
-  // For Kafka >= 2.0.0, the throttle is applied after issuing a response.
-  ThrottleMillis: int32
+  ThrottleMillis(1)
   // Topics are responses to topics in the request.
   Topics: [=>]
     // Topic is a topic being responded to.
