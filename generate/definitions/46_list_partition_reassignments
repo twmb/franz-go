@@ -3,8 +3,7 @@
 //
 // ACL wise, this requires DESCRIBE on CLUSTER.
 ListPartitionReassignmentsRequest => key 46, max version 0, flexible v0+, admin
-  // TimeoutMillis is how long to wait for the response.
-  TimeoutMillis: int32(60000)
+  TimeoutMillis(60000)
   // Topics are topics to list in progress partition reassignments of, or null
   // to list everything.
   Topics: nullable[=>]

@@ -18,8 +18,7 @@ ProduceRequest => key 0, max version 9, flexible v9+
   // Note that if no acks are requested, Kafka will close the connection
   // if any topic or partition errors to trigger a client metadata refresh.
   Acks: int16
-  // TimeoutMillis is the millisecond timeout of this request.
-  TimeoutMillis: int32
+  TimeoutMillis
   // Topics is an array of topics to send record batches to.
   Topics: [=>]
     // Topic is a topic to send record batches to.

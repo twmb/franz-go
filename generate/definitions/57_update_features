@@ -1,7 +1,6 @@
 // From KIP-584 and introduced in 2.7.0, this request updates broker-wide features.
 UpdateFeaturesRequest => key 57, max version 0, flexible v0+, admin
-  // TimeoutMillis is the millisecond timeout of this request.
-  TimeoutMillis: int32(60000)
+  TimeoutMillis(60000)
   // The list of updates to finalized features.
   FeatureUpdates: [=>]
     // The name of the finalized feature to update.

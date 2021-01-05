@@ -2256,7 +2256,9 @@ type ProduceRequest struct {
 	// if any topic or partition errors to trigger a client metadata refresh.
 	Acks int16
 
-	// TimeoutMillis is the millisecond timeout of this request.
+	// TimeoutMillis is how long Kafka will allow this request to process before
+	// sending a response. The request may not be completed within this time, and
+	// Kafka may still continue processing the request.
 	TimeoutMillis int32
 
 	// Topics is an array of topics to send record batches to.
@@ -2272,6 +2274,7 @@ func (*ProduceRequest) MaxVersion() int16          { return 9 }
 func (v *ProduceRequest) SetVersion(version int16) { v.Version = version }
 func (v *ProduceRequest) GetVersion() int16        { return v.Version }
 func (v *ProduceRequest) IsFlexible() bool         { return v.Version >= 9 }
+func (v *ProduceRequest) Timeout() int32           { return v.TimeoutMillis }
 func (v *ProduceRequest) ResponseKind() Response   { return &ProduceResponse{Version: v.Version} }
 
 // RequestWith is requests v on r and returns the response or an error.
@@ -2476,6 +2479,7 @@ func NewPtrProduceRequest() *ProduceRequest {
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to ProduceRequest.
 func (v *ProduceRequest) Default() {
+	v.TimeoutMillis = 15000
 }
 
 // NewProduceRequest returns a default ProduceRequest
@@ -13982,7 +13986,9 @@ type CreateTopicsRequest struct {
 	// Topics is an array of topics to attempt to create.
 	Topics []CreateTopicsRequestTopic
 
-	// TimeoutMillis is how long to allow for this request.
+	// TimeoutMillis is how long Kafka will allow this request to process before
+	// sending a response. The request may not be completed within this time, and
+	// Kafka may still continue processing the request.
 	TimeoutMillis int32
 
 	// ValidateOnly is makes this request a dry-run; everything is validated but
@@ -13999,6 +14005,7 @@ func (*CreateTopicsRequest) MaxVersion() int16          { return 7 }
 func (v *CreateTopicsRequest) SetVersion(version int16) { v.Version = version }
 func (v *CreateTopicsRequest) GetVersion() int16        { return v.Version }
 func (v *CreateTopicsRequest) IsFlexible() bool         { return v.Version >= 5 }
+func (v *CreateTopicsRequest) Timeout() int32           { return v.TimeoutMillis }
 func (v *CreateTopicsRequest) IsAdminRequest()          {}
 func (v *CreateTopicsRequest) ResponseKind() Response {
 	return &CreateTopicsResponse{Version: v.Version}
@@ -14777,7 +14784,9 @@ type DeleteTopicsRequest struct {
 	// The name or topic ID of topics to delete.
 	Topics []DeleteTopicsRequestTopic // v6+
 
-	// TimeoutMillis is the millisecond timeout of this request.
+	// TimeoutMillis is how long Kafka will allow this request to process before
+	// sending a response. The request may not be completed within this time, and
+	// Kafka may still continue processing the request.
 	TimeoutMillis int32
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
@@ -14790,6 +14799,7 @@ func (*DeleteTopicsRequest) MaxVersion() int16          { return 6 }
 func (v *DeleteTopicsRequest) SetVersion(version int16) { v.Version = version }
 func (v *DeleteTopicsRequest) GetVersion() int16        { return v.Version }
 func (v *DeleteTopicsRequest) IsFlexible() bool         { return v.Version >= 4 }
+func (v *DeleteTopicsRequest) Timeout() int32           { return v.TimeoutMillis }
 func (v *DeleteTopicsRequest) IsAdminRequest()          {}
 func (v *DeleteTopicsRequest) ResponseKind() Response {
 	return &DeleteTopicsResponse{Version: v.Version}
@@ -14957,6 +14967,7 @@ func NewPtrDeleteTopicsRequest() *DeleteTopicsRequest {
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to DeleteTopicsRequest.
 func (v *DeleteTopicsRequest) Default() {
+	v.TimeoutMillis = 15000
 }
 
 // NewDeleteTopicsRequest returns a default DeleteTopicsRequest
@@ -15292,10 +15303,9 @@ type DeleteRecordsRequest struct {
 	// Topics contains topics for which to delete records from.
 	Topics []DeleteRecordsRequestTopic
 
-	// TimeoutMillis is how long to wait for a response before Kafka will return.
-	// Kafka waits for all replicas to respond to the delete reords request;
-	// any partition that all replicas do not reply to within this limit will
-	// have a timeout error.
+	// TimeoutMillis is how long Kafka will allow this request to process before
+	// sending a response. The request may not be completed within this time, and
+	// Kafka may still continue processing the request.
 	TimeoutMillis int32
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
@@ -15308,6 +15318,7 @@ func (*DeleteRecordsRequest) MaxVersion() int16          { return 2 }
 func (v *DeleteRecordsRequest) SetVersion(version int16) { v.Version = version }
 func (v *DeleteRecordsRequest) GetVersion() int16        { return v.Version }
 func (v *DeleteRecordsRequest) IsFlexible() bool         { return v.Version >= 2 }
+func (v *DeleteRecordsRequest) Timeout() int32           { return v.TimeoutMillis }
 func (v *DeleteRecordsRequest) ResponseKind() Response {
 	return &DeleteRecordsResponse{Version: v.Version}
 }
@@ -15480,6 +15491,7 @@ func NewPtrDeleteRecordsRequest() *DeleteRecordsRequest {
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to DeleteRecordsRequest.
 func (v *DeleteRecordsRequest) Default() {
+	v.TimeoutMillis = 15000
 }
 
 // NewDeleteRecordsRequest returns a default DeleteRecordsRequest
@@ -23426,7 +23438,9 @@ type CreatePartitionsRequest struct {
 	// Topics contains topics to create partitions for.
 	Topics []CreatePartitionsRequestTopic
 
-	// TimeoutMillis is how long to allow for this request.
+	// TimeoutMillis is how long Kafka will allow this request to process before
+	// sending a response. The request may not be completed within this time, and
+	// Kafka may still continue processing the request.
 	TimeoutMillis int32
 
 	// ValidateOnly is makes this request a dry-run; everything is validated but
@@ -23443,6 +23457,7 @@ func (*CreatePartitionsRequest) MaxVersion() int16          { return 3 }
 func (v *CreatePartitionsRequest) SetVersion(version int16) { v.Version = version }
 func (v *CreatePartitionsRequest) GetVersion() int16        { return v.Version }
 func (v *CreatePartitionsRequest) IsFlexible() bool         { return v.Version >= 2 }
+func (v *CreatePartitionsRequest) Timeout() int32           { return v.TimeoutMillis }
 func (v *CreatePartitionsRequest) IsAdminRequest()          {}
 func (v *CreatePartitionsRequest) ResponseKind() Response {
 	return &CreatePartitionsResponse{Version: v.Version}
@@ -23653,6 +23668,7 @@ func NewPtrCreatePartitionsRequest() *CreatePartitionsRequest {
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to CreatePartitionsRequest.
 func (v *CreatePartitionsRequest) Default() {
+	v.TimeoutMillis = 15000
 }
 
 // NewCreatePartitionsRequest returns a default CreatePartitionsRequest
@@ -25648,8 +25664,9 @@ type ElectLeadersRequest struct {
 	// trigger leader elections for, or null for all.
 	Topics []ElectLeadersRequestTopic
 
-	// TimeoutMillis is how long to wait for the response. This limits how long to
-	// wait since responses are not sent until election results are complete.
+	// TimeoutMillis is how long Kafka will allow this request to process before
+	// sending a response. The request may not be completed within this time, and
+	// Kafka may still continue processing the request.
 	TimeoutMillis int32
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
@@ -25662,6 +25679,7 @@ func (*ElectLeadersRequest) MaxVersion() int16          { return 2 }
 func (v *ElectLeadersRequest) SetVersion(version int16) { v.Version = version }
 func (v *ElectLeadersRequest) GetVersion() int16        { return v.Version }
 func (v *ElectLeadersRequest) IsFlexible() bool         { return v.Version >= 2 }
+func (v *ElectLeadersRequest) Timeout() int32           { return v.TimeoutMillis }
 func (v *ElectLeadersRequest) IsAdminRequest()          {}
 func (v *ElectLeadersRequest) ResponseKind() Response {
 	return &ElectLeadersResponse{Version: v.Version}
@@ -26743,7 +26761,9 @@ type AlterPartitionAssignmentsRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
-	// TimeoutMillis is how long to wait for the response.
+	// TimeoutMillis is how long Kafka will allow this request to process before
+	// sending a response. The request may not be completed within this time, and
+	// Kafka may still continue processing the request.
 	TimeoutMillis int32
 
 	// Topics are topics for which to reassign partitions of.
@@ -26758,6 +26778,7 @@ func (*AlterPartitionAssignmentsRequest) MaxVersion() int16          { return 0 
 func (v *AlterPartitionAssignmentsRequest) SetVersion(version int16) { v.Version = version }
 func (v *AlterPartitionAssignmentsRequest) GetVersion() int16        { return v.Version }
 func (v *AlterPartitionAssignmentsRequest) IsFlexible() bool         { return v.Version >= 0 }
+func (v *AlterPartitionAssignmentsRequest) Timeout() int32           { return v.TimeoutMillis }
 func (v *AlterPartitionAssignmentsRequest) IsAdminRequest()          {}
 func (v *AlterPartitionAssignmentsRequest) ResponseKind() Response {
 	return &AlterPartitionAssignmentsResponse{Version: v.Version}
@@ -27313,7 +27334,9 @@ type ListPartitionReassignmentsRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
-	// TimeoutMillis is how long to wait for the response.
+	// TimeoutMillis is how long Kafka will allow this request to process before
+	// sending a response. The request may not be completed within this time, and
+	// Kafka may still continue processing the request.
 	TimeoutMillis int32
 
 	// Topics are topics to list in progress partition reassignments of, or null
@@ -27329,6 +27352,7 @@ func (*ListPartitionReassignmentsRequest) MaxVersion() int16          { return 0
 func (v *ListPartitionReassignmentsRequest) SetVersion(version int16) { v.Version = version }
 func (v *ListPartitionReassignmentsRequest) GetVersion() int16        { return v.Version }
 func (v *ListPartitionReassignmentsRequest) IsFlexible() bool         { return v.Version >= 0 }
+func (v *ListPartitionReassignmentsRequest) Timeout() int32           { return v.TimeoutMillis }
 func (v *ListPartitionReassignmentsRequest) IsAdminRequest()          {}
 func (v *ListPartitionReassignmentsRequest) ResponseKind() Response {
 	return &ListPartitionReassignmentsResponse{Version: v.Version}
@@ -33138,7 +33162,9 @@ type UpdateFeaturesRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
-	// TimeoutMillis is the millisecond timeout of this request.
+	// TimeoutMillis is how long Kafka will allow this request to process before
+	// sending a response. The request may not be completed within this time, and
+	// Kafka may still continue processing the request.
 	TimeoutMillis int32
 
 	// The list of updates to finalized features.
@@ -33153,6 +33179,7 @@ func (*UpdateFeaturesRequest) MaxVersion() int16          { return 0 }
 func (v *UpdateFeaturesRequest) SetVersion(version int16) { v.Version = version }
 func (v *UpdateFeaturesRequest) GetVersion() int16        { return v.Version }
 func (v *UpdateFeaturesRequest) IsFlexible() bool         { return v.Version >= 0 }
+func (v *UpdateFeaturesRequest) Timeout() int32           { return v.TimeoutMillis }
 func (v *UpdateFeaturesRequest) IsAdminRequest()          {}
 func (v *UpdateFeaturesRequest) ResponseKind() Response {
 	return &UpdateFeaturesResponse{Version: v.Version}

@@ -136,9 +136,15 @@ type Response interface {
 // Kafka 2.0.0 switched throttles from being applied before responses to being
 // applied after responses.
 type ThrottleResponse interface {
-	// Throttle returns the response's throttle millis value and whether
-	// Kafka applies the throttle after the response.
+	// Throttle returns the response's throttle millis value and
+	// whether Kafka applies the throttle after the response.
 	Throttle() (int32, bool)
+}
+
+// TimeoutRequest represents a request that can have a TimeoutMillis field.
+type TimeoutRequest interface {
+	// Timeout returns the request's timeout millis value.
+	Timeout() int32
 }
 
 // RequestFormatter formats requests.

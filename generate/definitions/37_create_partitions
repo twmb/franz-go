@@ -21,8 +21,7 @@ CreatePartitionsRequest => key 37, max version 3, flexible v2+, admin
     Assignment: nullable[=>]
       // Replicas are replicas to assign a new partition to.
       Replicas: [int32]
-  // TimeoutMillis is how long to allow for this request.
-  TimeoutMillis: int32
+  TimeoutMillis
   // ValidateOnly is makes this request a dry-run; everything is validated but
   // no partitions are actually created.
   ValidateOnly: bool

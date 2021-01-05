@@ -103,6 +103,16 @@ func (s *Struct) BuildFrom(scanner *LineScanner, key int, level int) (done bool)
 			continue
 		}
 
+		// TimeoutMillis can be a special field, or it can be standard
+		// (for misc).
+		if strings.Contains(line, "TimeoutMillis") && !strings.Contains(line, ":") {
+			if nextComment != "" {
+				die("unexpected comment on TimeoutMillis: %s", nextComment)
+			}
+			s.Fields = append(s.Fields, parseTimeoutMillis(line))
+			continue
+		}
+
 		// Fields are name on left, type on right.
 		fields := strings.Split(line, ": ")
 		if len(fields) != 2 || len(fields[0]) == 0 || len(fields[1]) == 0 {
@@ -368,6 +378,36 @@ func parseThrottleMillis(in string) StructField {
 	s.Comment = static
 	if typ.Switchup > 0 {
 		s.Comment = fmt.Sprintf(switchupFmt, typ.Switchup)
+	}
+
+	return s
+}
+
+// 0: entire thing
+// 1: optional default
+// 2: optional version introduced
+var timeoutRe = regexp.MustCompile(`^TimeoutMillis(?:\((\d+)\))?(?: // v(\d+)\+)?$`)
+
+func parseTimeoutMillis(in string) StructField {
+	match := timeoutRe.FindStringSubmatch(in)
+	if len(match) == 0 {
+		die("timeout line does not match: %s", in)
+	}
+
+	s := StructField{
+		Comment: `// TimeoutMillis is how long Kafka will allow this request to process before
+// sending a response. The request may not be completed within this time, and
+// Kafka may still continue processing the request.`,
+		MaxVersion: -1,
+		Tag:        -1,
+		FieldName:  "TimeoutMillis",
+		Type:       Timeout{},
+	}
+	s.MinVersion, _ = strconv.Atoi(match[2])
+	if match[1] != "" {
+		s.Type = s.Type.(Defaulter).SetDefault(match[1])
+	} else {
+		s.Type = s.Type.(Defaulter).SetDefault("15000") // default to 15s for all timeouts
 	}
 
 	return s

@@ -32,8 +32,7 @@ CreateTopicsRequest => key 19, max version 7, flexible v5+, admin
       Name: string
       // Value is a topic level config value (e.g. 1073741824)
       Value: nullable-string
-  // TimeoutMillis is how long to allow for this request.
-  TimeoutMillis: int32(60000)
+  TimeoutMillis(60000)
   // ValidateOnly is makes this request a dry-run; everything is validated but
   // no topics are actually created.
   ValidateOnly: bool // v1+

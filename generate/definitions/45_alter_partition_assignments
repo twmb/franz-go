@@ -3,8 +3,7 @@
 //
 // ACL wise, this requires ALTER on CLUSTER.
 AlterPartitionAssignmentsRequest => key 45, max version 0, flexible v0+, admin
-  // TimeoutMillis is how long to wait for the response.
-  TimeoutMillis: int32(60000)
+  TimeoutMillis(60000)
   // Topics are topics for which to reassign partitions of.
   Topics: [=>]
     // Topic is a topic to reassign the partitions of.

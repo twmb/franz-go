@@ -120,6 +120,9 @@ type (
 	Throttle struct {
 		Switchup int
 	}
+	Timeout struct {
+		Int32
+	}
 
 	Struct struct {
 		TopLevel         bool
@@ -244,6 +247,11 @@ func (i Int32) SetDefault(s string) Type {
 }
 func (i Int32) GetDefault() (interface{}, bool) { return i.Default, i.HasDefault }
 func (i Int32) GetTypeDefault() interface{}     { return 0 }
+
+func (t Timeout) SetDefault(s string) Type {
+	t.Int32 = t.Int32.SetDefault(s).(Int32)
+	return t
+}
 
 func (i Int64) SetDefault(s string) Type {
 	v, err := strconv.ParseInt(s, 0, 64)
@@ -418,9 +426,11 @@ func main() {
 			s.WriteIsFlexibleFunc(l)
 
 			for _, f := range s.Fields {
-				if f.FieldName == "ThrottleMillis" {
+				switch f.Type.(type) {
+				case Throttle:
 					s.WriteThrottleMillisFunc(f, l)
-					break
+				case Timeout:
+					s.WriteTimeoutMillisFuncs(l)
 				}
 			}
 

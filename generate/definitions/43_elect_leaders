@@ -16,9 +16,7 @@ ElectLeadersRequest => key 43, max version 2, flexible v2+, admin
     // Partitions is an array of partitions in a topic to trigger leader
     // elections for.
     Partitions: [int32]
-  // TimeoutMillis is how long to wait for the response. This limits how long to
-  // wait since responses are not sent until election results are complete.
-  TimeoutMillis: int32(60000)
+  TimeoutMillis(60000)
 
 // ElectLeadersResponse is a response for an ElectLeadersRequest.
 ElectLeadersResponse =>

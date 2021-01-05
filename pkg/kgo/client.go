@@ -23,7 +23,6 @@ import (
 	"fmt"
 	"hash/crc32"
 	"math/rand"
-	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -205,20 +204,9 @@ func connTimeoutBuilder(def time.Duration) func(kmsg.Request) (time.Duration, ti
 		millis := func(m int32) time.Duration { return time.Duration(m) * time.Millisecond }
 		switch t := req.(type) {
 		default:
-			// Many fields in the definitions have a common field
-			// "TimeoutMillis". If that exists and is an int32,
-			// we use it, otherwise we fallback to our default
-			// for both read and write.
-			v := reflect.Indirect(reflect.ValueOf(req))
-			if v.Kind() == reflect.Struct { // should be but just in case
-				v = v.FieldByName("TimeoutMillis")
-				var zero reflect.Value
-				if v != zero {
-					v := v.Interface()
-					if timeoutMillis, ok := v.(int32); ok {
-						return def + millis(timeoutMillis), def
-					}
-				}
+			if timeoutRequest, ok := req.(kmsg.TimeoutRequest); ok {
+				timeoutMillis := timeoutRequest.Timeout()
+				return def + millis(timeoutMillis), def
 			}
 			return def, def
 
