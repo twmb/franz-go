@@ -133,6 +133,17 @@ type Response interface {
 	RequestKind() Request
 }
 
+// ThrottleResponse represents a response that could have a throttle applied by
+// Kafka.
+//
+// Kafka 2.0.0 switched throttles from being applied before responses to being
+// applied after responses.
+type ThrottleResponse interface {
+	// Throttle returns the response's throttle millis value and whether
+	// Kafka applies the throttle after the response.
+	Throttle() (int32, bool)
+}
+
 // RequestFormatter formats requests.
 //
 // The default empty struct works correctly, but can be extended with the
