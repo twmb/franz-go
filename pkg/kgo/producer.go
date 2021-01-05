@@ -72,15 +72,14 @@ func noPromise(*Record, error) {}
 // The promise is optional, but not using it means you will not know if Kafka
 // recorded a record properly.
 //
-// If the record is too large, this will return an error. For simplicity, this
-// function considers messages too large if they are within 512 bytes of the
-// record batch byte limit. This may be made more precise in the future if
-// necessary.
+// If the record is too large to fit in a batch on its own in a produce
+// request, the promise is called immediately before this function returns
+// with kerr.MessageToLarge.
 //
 // The context is used if the client currently has the max amount of buffered
 // records. If so, the client waits for some records to complete or for the
-// context or client to quit. If the context / client quits, this returns
-// an error.
+// context or client to quit. If the context / client quits, this returns an
+// error.
 //
 // The first buffered record for an unknown topic begins a timeout for the
 // configured record timeout limit; all records buffered within the wait will
@@ -96,18 +95,13 @@ func noPromise(*Record, error) {}
 // If the client is transactional and a transaction has not been begun, this
 // returns ErrNotInTransaction.
 //
-//
-// Thus, there are only three possible errors: kerr.ErrMessageTooLarge,
-// ErrNotInTransaction, and then either a context error or ErrMaxBuffered.
+// Thus, there are only three possible errors: ErrNotInTransaction, and then
+// either a context error or ErrMaxBuffered.
 func (cl *Client) Produce(
 	ctx context.Context,
 	r *Record,
 	promise func(*Record, error),
 ) error {
-	if len(r.Key)+len(r.Value) > int(cl.cfg.maxRecordBatchBytes)-512 {
-		return kerr.MessageTooLarge
-	}
-
 	if cl.cfg.txnID != nil && atomic.LoadUint32(&cl.producer.producingTxn) != 1 {
 		return ErrNotInTransaction
 	}
@@ -202,8 +196,8 @@ func (cl *Client) doPartitionRecord(parts *topicPartitions, partsData *topicPart
 	id := possibilities[idIdx]
 	partition := mapping[id]
 
-	appended := partition.records.bufferRecord(pr, true) // KIP-480
-	if !appended {
+	processed := partition.records.bufferRecord(pr, true) // KIP-480
+	if !processed {
 		parts.partitioner.OnNewBatch()
 		idIdx = parts.partitioner.Partition(pr.Record, len(possibilities))
 		id = possibilities[idIdx]

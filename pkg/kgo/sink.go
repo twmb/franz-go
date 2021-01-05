@@ -24,14 +24,6 @@ type sink struct {
 	produceVersionKnown uint32 // atomic bool; 1 is true
 	produceVersion      int16  // is set before produceVersionKnown
 
-	// baseWireLength is the minimum wire length of a produce request for a
-	// client.
-	//
-	// This may be a slight overshoot for versions before 3, which do not
-	// include the txn id. We do not bother updating the size if we know we
-	// are <v3; the length is only used to cutoff creating a request.
-	baseWireLength int32
-
 	drainState workLoop
 
 	// seqReqResps, guarded by seqReqRespsMu, contains responses that must
@@ -62,31 +54,11 @@ type seqSinkReqResp struct {
 }
 
 func (cl *Client) newSink(nodeID int32) *sink {
-	const messageRequestOverhead int32 = 4 + // full length
-		2 + // key
-		2 + // version
-		4 + // correlation ID
-		2 // client ID len
-	const produceRequestOverhead int32 = 2 + // transactional ID len
-		2 + // acks
-		4 + // timeout
-		4 // topics array length
-
 	s := &sink{
 		cl:     cl,
 		nodeID: nodeID,
-
-		baseWireLength: messageRequestOverhead + produceRequestOverhead,
 	}
 	s.inflightSem.Store(make(chan struct{}, 1))
-
-	if cl.cfg.txnID != nil {
-		s.baseWireLength += int32(len(*cl.cfg.txnID))
-	}
-	if cl.cfg.id != nil {
-		s.baseWireLength += int32(len(*cl.cfg.id))
-	}
-
 	return s
 }
 
@@ -103,7 +75,11 @@ func (s *sink) createReq() (*produceRequest, *kmsg.AddPartitionsToTxnRequest, bo
 	}
 
 	var (
-		wireLength      = s.baseWireLength
+		// We use non-flexible lengths for what follows. These will be
+		// strictly larger (unless we are creating a produce request
+		// with >16K partitions for a single topic...), so using
+		// non-flexible makes calculations simpler.
+		wireLength      = s.cl.baseProduceRequestLength()
 		wireLengthLimit = s.cl.cfg.maxBrokerWriteBytes
 
 		moreToDrain bool
@@ -837,6 +813,74 @@ func (s *sink) removeRecBuf(rm *recBuf) {
 	}
 }
 
+// Returns the base produce length for non-flexible versions of a produce
+// request, including the topic array length. See the large comment in
+// maxRecordBatchBytesForTopic for why we always use non-flexible lengths (in
+// short: it's strictly larger than flexible).
+func (cl *Client) baseProduceRequestLength() int32 {
+	const messageRequestOverhead int32 = 4 + // full length
+		2 + // key
+		2 + // version
+		4 + // correlation ID
+		2 // client ID len (always non flexible)
+		// empty tag section skipped due to below description
+
+	const produceRequestBaseOverhead int32 = 2 + // transactional ID len (flexible or not, since we cap at 16382)
+		2 + // acks
+		4 + // timeout
+		4 // topics array length
+		// empty tag section skipped due to below description
+
+	baseLength := messageRequestOverhead + produceRequestBaseOverhead
+	if cl.cfg.id != nil {
+		baseLength += int32(len(*cl.cfg.id))
+	}
+	if cl.cfg.txnID != nil {
+		baseLength += int32(len(*cl.cfg.txnID))
+	}
+	return baseLength
+}
+
+// Returns the maximum size a record batch can be for this given topic.
+func (cl *Client) maxRecordBatchBytesForTopic(topic string) int32 {
+	// At a minimum, we will have a produce request containing this one
+	// topic with one partition and its record batch.
+	//
+	// The maximum topic length is 249, which has a 2 byte prefix for
+	// flexible or non-flexible.
+	//
+	// Non-flexible versions will have a 4 byte length topic array prefix
+	// and a 4 byte length partition array prefix.
+	//
+	// Flexible versions would have a 1 byte length topic array prefix and
+	// a 1 byte length partition array prefix, and would also have 3 empty
+	// tag sections resulting in 3 extra bytes.
+	//
+	// Non-flexible versions would have a 4 byte length record bytes
+	// prefix. Flexible versions could have up to 5.
+	//
+	// For the message header itself, with flexible versions, we have one
+	// extra byte for an empty tag section.
+	//
+	// Thus in the worst case, the flexible encoding would still be two
+	// bytes short of the non-flexible encoding. We will use the
+	// non-flexible encoding for our max size calculations.
+	minOnePartitionBatchLength := cl.baseProduceRequestLength() +
+		2 + // topic string length prefix length
+		int32(len(topic)) +
+		4 + // partitions array length
+		4 + // partition int32 encoding length
+		4 // record bytes array length
+
+	wireLengthLimit := cl.cfg.maxBrokerWriteBytes
+
+	recordBatchLimit := wireLengthLimit - minOnePartitionBatchLength
+	if cfgLimit := cl.cfg.maxRecordBatchBytes; cfgLimit < recordBatchLimit {
+		recordBatchLimit = cfgLimit
+	}
+	return recordBatchLimit
+}
+
 // recBuf is a buffer of records being produced to a partition and (usually)
 // being drained by a sink. This is only not drained if the partition has a
 // load error and thus does not a have a sink to be drained into.
@@ -853,6 +897,11 @@ type recBuf struct {
 
 	topic     string
 	partition int32
+
+	// The number of bytes we can buffer in a batch for this particular
+	// topic/partition. This may be less than the configured
+	// maxRecordBatchBytes because of produce request overhead.
+	maxRecordBatchBytes int32
 
 	// addedToTxn, for transactions only, signifies whether this partition
 	// has been added to the transaction yet or not.
@@ -937,9 +986,8 @@ func messageSet1Length(r *Record) int32 {
 // bufferRecord usually buffers a record, but does not if abortOnNewBatch is
 // true and if this function would create a new batch.
 //
-// This function is careful not to touch the record sink if the sink is nil,
-// which it could be on metadata load err. Note that if the sink is ever not
-// nil, then the sink will forever not be nil.
+// This returns whether the promised record was processed or not (buffered or
+// immediately errored).
 func (recBuf *recBuf) bufferRecord(pr promisedRec, abortOnNewBatch bool) bool {
 	recBuf.mu.Lock()
 	defer recBuf.mu.Unlock()
@@ -952,6 +1000,7 @@ func (recBuf *recBuf) bufferRecord(pr promisedRec, abortOnNewBatch bool) bool {
 	newBatch := true
 	drainBatch := recBuf.batchDrainIdx == len(recBuf.batches)
 
+	produceVersionKnown := atomic.LoadUint32(&recBuf.sink.produceVersionKnown) == 1
 	if !drainBatch {
 		batch := recBuf.batches[len(recBuf.batches)-1]
 		recordNumbers := batch.calculateRecordNumbers(pr.Record)
@@ -962,7 +1011,6 @@ func (recBuf *recBuf) bufferRecord(pr promisedRec, abortOnNewBatch bool) bool {
 		// to <0.11.0 and be using message sets. Until we know the
 		// broker version, we pessimisitically cut our batch off using
 		// the largest record length numbers.
-		produceVersionKnown := atomic.LoadUint32(&recBuf.sink.produceVersionKnown) == 1
 		if !produceVersionKnown {
 			v1newBatchLength := batch.v1wireLength + messageSet1Length(pr.Record)
 			if v1newBatchLength > newBatchLength { // we only check v1 since it is larger than v0
@@ -979,33 +1027,37 @@ func (recBuf *recBuf) bufferRecord(pr promisedRec, abortOnNewBatch bool) bool {
 			}
 		}
 
-		// TODO this can spin loop, because max record batch bytes is
-		// per batch, which does not take into account the max broker
-		// write bytes.
-		//
-		// If the limits are too close, the overhead baseWireLength of
-		// the request, as well as the topic and partition overhead
-		// (and 6 bytes of size beforehand) can, combined with the
-		// batch size, exceed the max broker write bytes. Thus, the
-		// batch will be fine according to maxRecordBatchBytes, but
-		// will be too large when put into a request and the batch will
-		// not be used.
-		//
-		// maxRecordBatchBytes needs to be per recBuf, such that each
-		// recBuf takes into account baseWireLength, its topic, its
-		// partition, and 6 size bytes over overhead.
-
-		if batch.tries == 0 && newBatchLength <= recBuf.cl.cfg.maxRecordBatchBytes {
+		if batch.tries == 0 && newBatchLength <= recBuf.maxRecordBatchBytes {
 			newBatch = false
 			batch.appendRecord(pr, recordNumbers)
 		}
 	}
 
 	if newBatch {
+		newBatch := recBuf.newRecordBatch(pr)
+
+		// Before we decide to keep this new batch, if this single record is too
+		// large for a batch, then we immediately fail it.
+		newBatchLength := newBatch.wireLength
+		if !produceVersionKnown && newBatch.v1wireLength > newBatchLength {
+			newBatchLength = newBatch.v1wireLength
+		} else {
+			switch recBuf.sink.produceVersion {
+			case 0, 1:
+				newBatchLength = newBatch.v0wireLength()
+			case 2:
+				newBatchLength = newBatch.v1wireLength
+			}
+		}
+		if newBatchLength > recBuf.maxRecordBatchBytes {
+			recBuf.cl.finishRecordPromise(pr, kerr.MessageTooLarge)
+			return true
+		}
+
 		if abortOnNewBatch {
 			return false
 		}
-		recBuf.batches = append(recBuf.batches, recBuf.newRecordBatch(pr))
+		recBuf.batches = append(recBuf.batches, newBatch)
 	}
 
 	if recBuf.cl.cfg.linger == 0 {
@@ -1368,6 +1420,7 @@ func (rbs seqRecBatches) onEachFirstBatchWhileBatchOwnerLocked(fn func(seqRecBat
 	}
 }
 
+// NOTE: if bumping max version, check for new fields in producer.init.
 func (*produceRequest) Key() int16           { return 0 }
 func (*produceRequest) MaxVersion() int16    { return 8 }
 func (p *produceRequest) SetVersion(v int16) { p.version = v }

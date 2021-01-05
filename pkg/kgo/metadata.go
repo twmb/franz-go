@@ -282,6 +282,8 @@ func (cl *Client) fetchTopicMetadata(reqTopics []string) (map[string]*topicParti
 					topic:     topicMeta.Topic,
 					partition: partMeta.Partition,
 
+					maxRecordBatchBytes: cl.maxRecordBatchBytesForTopic(topicMeta.Topic),
+
 					recBufsIdx: -1,
 				},
 
