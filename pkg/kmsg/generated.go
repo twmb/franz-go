@@ -2367,6 +2367,8 @@ type ProduceResponse struct {
 	// after this request.
 	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
 	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
+	//
+	// This request switched at version 6.
 	ThrottleMillis int32 // v1+
 }
 
@@ -2375,6 +2377,7 @@ func (*ProduceResponse) MaxVersion() int16          { return 9 }
 func (v *ProduceResponse) SetVersion(version int16) { v.Version = version }
 func (v *ProduceResponse) GetVersion() int16        { return v.Version }
 func (v *ProduceResponse) IsFlexible() bool         { return v.Version >= 9 }
+func (v *ProduceResponse) Throttle() (int32, bool)  { return v.ThrottleMillis, v.Version >= 6 }
 func (v *ProduceResponse) RequestKind() Request     { return &ProduceRequest{Version: v.Version} }
 
 func (v *ProduceResponse) AppendTo(dst []byte) []byte {
@@ -3470,6 +3473,8 @@ type FetchResponse struct {
 	// after this request.
 	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
 	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
+	//
+	// This request switched at version 8.
 	ThrottleMillis int32 // v1+
 
 	// ErrorCode is a full-response error code for a fetch request. This was
@@ -3498,6 +3503,7 @@ func (*FetchResponse) MaxVersion() int16          { return 12 }
 func (v *FetchResponse) SetVersion(version int16) { v.Version = version }
 func (v *FetchResponse) GetVersion() int16        { return v.Version }
 func (v *FetchResponse) IsFlexible() bool         { return v.Version >= 12 }
+func (v *FetchResponse) Throttle() (int32, bool)  { return v.ThrottleMillis, v.Version >= 8 }
 func (v *FetchResponse) RequestKind() Request     { return &FetchRequest{Version: v.Version} }
 
 func (v *FetchResponse) AppendTo(dst []byte) []byte {
@@ -4356,6 +4362,8 @@ type ListOffsetsResponse struct {
 	// after this request.
 	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
 	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
+	//
+	// This request switched at version 3.
 	ThrottleMillis int32 // v2+
 
 	// Topics is an array of topic / partition responses corresponding to
@@ -4368,6 +4376,7 @@ func (*ListOffsetsResponse) MaxVersion() int16          { return 6 }
 func (v *ListOffsetsResponse) SetVersion(version int16) { v.Version = version }
 func (v *ListOffsetsResponse) GetVersion() int16        { return v.Version }
 func (v *ListOffsetsResponse) IsFlexible() bool         { return v.Version >= 6 }
+func (v *ListOffsetsResponse) Throttle() (int32, bool)  { return v.ThrottleMillis, v.Version >= 3 }
 func (v *ListOffsetsResponse) RequestKind() Request     { return &ListOffsetsRequest{Version: v.Version} }
 
 func (v *ListOffsetsResponse) AppendTo(dst []byte) []byte {
@@ -4967,6 +4976,8 @@ type MetadataResponse struct {
 	// after this request.
 	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
 	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
+	//
+	// This request switched at version 6.
 	ThrottleMillis int32 // v3+
 
 	// Brokers is a set of alive Kafka brokers.
@@ -4993,6 +5004,7 @@ func (*MetadataResponse) MaxVersion() int16          { return 10 }
 func (v *MetadataResponse) SetVersion(version int16) { v.Version = version }
 func (v *MetadataResponse) GetVersion() int16        { return v.Version }
 func (v *MetadataResponse) IsFlexible() bool         { return v.Version >= 9 }
+func (v *MetadataResponse) Throttle() (int32, bool)  { return v.ThrottleMillis, v.Version >= 6 }
 func (v *MetadataResponse) RequestKind() Request     { return &MetadataRequest{Version: v.Version} }
 
 func (v *MetadataResponse) AppendTo(dst []byte) []byte {
@@ -8710,6 +8722,8 @@ type OffsetCommitResponse struct {
 	// after this request.
 	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
 	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
+	//
+	// This request switched at version 4.
 	ThrottleMillis int32 // v3+
 
 	// Topics contains responses for each topic / partition in the commit request.
@@ -8721,6 +8735,7 @@ func (*OffsetCommitResponse) MaxVersion() int16          { return 8 }
 func (v *OffsetCommitResponse) SetVersion(version int16) { v.Version = version }
 func (v *OffsetCommitResponse) GetVersion() int16        { return v.Version }
 func (v *OffsetCommitResponse) IsFlexible() bool         { return v.Version >= 8 }
+func (v *OffsetCommitResponse) Throttle() (int32, bool)  { return v.ThrottleMillis, v.Version >= 4 }
 func (v *OffsetCommitResponse) RequestKind() Request     { return &OffsetCommitRequest{Version: v.Version} }
 
 func (v *OffsetCommitResponse) AppendTo(dst []byte) []byte {
@@ -9205,6 +9220,8 @@ type OffsetFetchResponse struct {
 	// after this request.
 	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
 	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
+	//
+	// This request switched at version 4.
 	ThrottleMillis int32 // v3+
 
 	// Topics contains responses for each requested topic/partition.
@@ -9220,6 +9237,7 @@ func (*OffsetFetchResponse) MaxVersion() int16          { return 7 }
 func (v *OffsetFetchResponse) SetVersion(version int16) { v.Version = version }
 func (v *OffsetFetchResponse) GetVersion() int16        { return v.Version }
 func (v *OffsetFetchResponse) IsFlexible() bool         { return v.Version >= 6 }
+func (v *OffsetFetchResponse) Throttle() (int32, bool)  { return v.ThrottleMillis, v.Version >= 4 }
 func (v *OffsetFetchResponse) RequestKind() Request     { return &OffsetFetchRequest{Version: v.Version} }
 
 func (v *OffsetFetchResponse) AppendTo(dst []byte) []byte {
@@ -9545,6 +9563,8 @@ type FindCoordinatorResponse struct {
 	// after this request.
 	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
 	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
+	//
+	// This request switched at version 2.
 	ThrottleMillis int32 // v1+
 
 	// ErrorCode is the error returned for the request.
@@ -9581,6 +9601,7 @@ func (*FindCoordinatorResponse) MaxVersion() int16          { return 3 }
 func (v *FindCoordinatorResponse) SetVersion(version int16) { v.Version = version }
 func (v *FindCoordinatorResponse) GetVersion() int16        { return v.Version }
 func (v *FindCoordinatorResponse) IsFlexible() bool         { return v.Version >= 3 }
+func (v *FindCoordinatorResponse) Throttle() (int32, bool)  { return v.ThrottleMillis, v.Version >= 2 }
 func (v *FindCoordinatorResponse) RequestKind() Request {
 	return &FindCoordinatorRequest{Version: v.Version}
 }
@@ -10046,6 +10067,8 @@ type JoinGroupResponse struct {
 	// after this request.
 	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
 	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
+	//
+	// This request switched at version 3.
 	ThrottleMillis int32 // v2+
 
 	// ErrorCode is the error for the join group request.
@@ -10117,6 +10140,7 @@ func (*JoinGroupResponse) MaxVersion() int16          { return 7 }
 func (v *JoinGroupResponse) SetVersion(version int16) { v.Version = version }
 func (v *JoinGroupResponse) GetVersion() int16        { return v.Version }
 func (v *JoinGroupResponse) IsFlexible() bool         { return v.Version >= 6 }
+func (v *JoinGroupResponse) Throttle() (int32, bool)  { return v.ThrottleMillis, v.Version >= 3 }
 func (v *JoinGroupResponse) RequestKind() Request     { return &JoinGroupRequest{Version: v.Version} }
 
 func (v *JoinGroupResponse) AppendTo(dst []byte) []byte {
@@ -10522,6 +10546,8 @@ type HeartbeatResponse struct {
 	// after this request.
 	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
 	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
+	//
+	// This request switched at version 2.
 	ThrottleMillis int32 // v1+
 
 	// ErrorCode is the error for the heartbeat request.
@@ -10551,6 +10577,7 @@ func (*HeartbeatResponse) MaxVersion() int16          { return 4 }
 func (v *HeartbeatResponse) SetVersion(version int16) { v.Version = version }
 func (v *HeartbeatResponse) GetVersion() int16        { return v.Version }
 func (v *HeartbeatResponse) IsFlexible() bool         { return v.Version >= 4 }
+func (v *HeartbeatResponse) Throttle() (int32, bool)  { return v.ThrottleMillis, v.Version >= 2 }
 func (v *HeartbeatResponse) RequestKind() Request     { return &HeartbeatRequest{Version: v.Version} }
 
 func (v *HeartbeatResponse) AppendTo(dst []byte) []byte {
@@ -10853,6 +10880,8 @@ type LeaveGroupResponse struct {
 	// after this request.
 	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
 	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
+	//
+	// This request switched at version 2.
 	ThrottleMillis int32 // v1+
 
 	// ErrorCode is the error for the leave group request.
@@ -10883,6 +10912,7 @@ func (*LeaveGroupResponse) MaxVersion() int16          { return 4 }
 func (v *LeaveGroupResponse) SetVersion(version int16) { v.Version = version }
 func (v *LeaveGroupResponse) GetVersion() int16        { return v.Version }
 func (v *LeaveGroupResponse) IsFlexible() bool         { return v.Version >= 4 }
+func (v *LeaveGroupResponse) Throttle() (int32, bool)  { return v.ThrottleMillis, v.Version >= 2 }
 func (v *LeaveGroupResponse) RequestKind() Request     { return &LeaveGroupRequest{Version: v.Version} }
 
 func (v *LeaveGroupResponse) AppendTo(dst []byte) []byte {
@@ -11320,6 +11350,8 @@ type SyncGroupResponse struct {
 	// after this request.
 	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
 	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
+	//
+	// This request switched at version 2.
 	ThrottleMillis int32 // v1+
 
 	// ErrorCode is the error for the sync group request.
@@ -11361,6 +11393,7 @@ func (*SyncGroupResponse) MaxVersion() int16          { return 5 }
 func (v *SyncGroupResponse) SetVersion(version int16) { v.Version = version }
 func (v *SyncGroupResponse) GetVersion() int16        { return v.Version }
 func (v *SyncGroupResponse) IsFlexible() bool         { return v.Version >= 4 }
+func (v *SyncGroupResponse) Throttle() (int32, bool)  { return v.ThrottleMillis, v.Version >= 2 }
 func (v *SyncGroupResponse) RequestKind() Request     { return &SyncGroupRequest{Version: v.Version} }
 
 func (v *SyncGroupResponse) AppendTo(dst []byte) []byte {
@@ -11702,6 +11735,8 @@ type DescribeGroupsResponse struct {
 	// after this request.
 	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
 	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
+	//
+	// This request switched at version 2.
 	ThrottleMillis int32
 
 	// Groups is an array of group metadata.
@@ -11713,6 +11748,7 @@ func (*DescribeGroupsResponse) MaxVersion() int16          { return 5 }
 func (v *DescribeGroupsResponse) SetVersion(version int16) { v.Version = version }
 func (v *DescribeGroupsResponse) GetVersion() int16        { return v.Version }
 func (v *DescribeGroupsResponse) IsFlexible() bool         { return v.Version >= 5 }
+func (v *DescribeGroupsResponse) Throttle() (int32, bool)  { return v.ThrottleMillis, v.Version >= 2 }
 func (v *DescribeGroupsResponse) RequestKind() Request {
 	return &DescribeGroupsRequest{Version: v.Version}
 }
@@ -12187,6 +12223,8 @@ type ListGroupsResponse struct {
 	// after this request.
 	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
 	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
+	//
+	// This request switched at version 2.
 	ThrottleMillis int32 // v1+
 
 	// ErrorCode is the error returned for the list groups request.
@@ -12205,6 +12243,7 @@ func (*ListGroupsResponse) MaxVersion() int16          { return 4 }
 func (v *ListGroupsResponse) SetVersion(version int16) { v.Version = version }
 func (v *ListGroupsResponse) GetVersion() int16        { return v.Version }
 func (v *ListGroupsResponse) IsFlexible() bool         { return v.Version >= 3 }
+func (v *ListGroupsResponse) Throttle() (int32, bool)  { return v.ThrottleMillis, v.Version >= 2 }
 func (v *ListGroupsResponse) RequestKind() Request     { return &ListGroupsRequest{Version: v.Version} }
 
 func (v *ListGroupsResponse) AppendTo(dst []byte) []byte {
@@ -12751,6 +12790,8 @@ type ApiVersionsResponse struct {
 	// after this request.
 	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
 	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
+	//
+	// This request switched at version 2.
 	ThrottleMillis int32 // v1+
 
 	// Features supported by the broker (see KIP-584).
@@ -12770,6 +12811,7 @@ func (*ApiVersionsResponse) MaxVersion() int16          { return 3 }
 func (v *ApiVersionsResponse) SetVersion(version int16) { v.Version = version }
 func (v *ApiVersionsResponse) GetVersion() int16        { return v.Version }
 func (v *ApiVersionsResponse) IsFlexible() bool         { return v.Version >= 3 }
+func (v *ApiVersionsResponse) Throttle() (int32, bool)  { return v.ThrottleMillis, v.Version >= 2 }
 func (v *ApiVersionsResponse) RequestKind() Request     { return &ApiVersionsRequest{Version: v.Version} }
 
 func (v *ApiVersionsResponse) AppendTo(dst []byte) []byte {
@@ -13627,6 +13669,8 @@ type CreateTopicsResponse struct {
 	// after this request.
 	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
 	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
+	//
+	// This request switched at version 3.
 	ThrottleMillis int32 // v2+
 
 	// Topics contains responses to the requested topic creations.
@@ -13638,6 +13682,7 @@ func (*CreateTopicsResponse) MaxVersion() int16          { return 6 }
 func (v *CreateTopicsResponse) SetVersion(version int16) { v.Version = version }
 func (v *CreateTopicsResponse) GetVersion() int16        { return v.Version }
 func (v *CreateTopicsResponse) IsFlexible() bool         { return v.Version >= 5 }
+func (v *CreateTopicsResponse) Throttle() (int32, bool)  { return v.ThrottleMillis, v.Version >= 3 }
 func (v *CreateTopicsResponse) RequestKind() Request     { return &CreateTopicsRequest{Version: v.Version} }
 
 func (v *CreateTopicsResponse) AppendTo(dst []byte) []byte {
@@ -14096,6 +14141,8 @@ type DeleteTopicsResponse struct {
 	// after this request.
 	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
 	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
+	//
+	// This request switched at version 2.
 	ThrottleMillis int32 // v1+
 
 	// Topics contains responses for each topic requested for deletion.
@@ -14107,6 +14154,7 @@ func (*DeleteTopicsResponse) MaxVersion() int16          { return 5 }
 func (v *DeleteTopicsResponse) SetVersion(version int16) { v.Version = version }
 func (v *DeleteTopicsResponse) GetVersion() int16        { return v.Version }
 func (v *DeleteTopicsResponse) IsFlexible() bool         { return v.Version >= 4 }
+func (v *DeleteTopicsResponse) Throttle() (int32, bool)  { return v.ThrottleMillis, v.Version >= 2 }
 func (v *DeleteTopicsResponse) RequestKind() Request     { return &DeleteTopicsRequest{Version: v.Version} }
 
 func (v *DeleteTopicsResponse) AppendTo(dst []byte) []byte {
@@ -14573,6 +14621,8 @@ type DeleteRecordsResponse struct {
 	// after this request.
 	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
 	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
+	//
+	// This request switched at version 1.
 	ThrottleMillis int32
 
 	// Topics contains responses for each topic in the delete records request.
@@ -14584,6 +14634,7 @@ func (*DeleteRecordsResponse) MaxVersion() int16          { return 2 }
 func (v *DeleteRecordsResponse) SetVersion(version int16) { v.Version = version }
 func (v *DeleteRecordsResponse) GetVersion() int16        { return v.Version }
 func (v *DeleteRecordsResponse) IsFlexible() bool         { return v.Version >= 2 }
+func (v *DeleteRecordsResponse) Throttle() (int32, bool)  { return v.ThrottleMillis, v.Version >= 1 }
 func (v *DeleteRecordsResponse) RequestKind() Request {
 	return &DeleteRecordsRequest{Version: v.Version}
 }
@@ -14908,6 +14959,8 @@ type InitProducerIDResponse struct {
 	// after this request.
 	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
 	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
+	//
+	// This request switched at version 1.
 	ThrottleMillis int32
 
 	// CLUSTER_AUTHORIZATION_FAILED is returned when not using transactions if
@@ -14945,6 +14998,7 @@ func (*InitProducerIDResponse) MaxVersion() int16          { return 4 }
 func (v *InitProducerIDResponse) SetVersion(version int16) { v.Version = version }
 func (v *InitProducerIDResponse) GetVersion() int16        { return v.Version }
 func (v *InitProducerIDResponse) IsFlexible() bool         { return v.Version >= 2 }
+func (v *InitProducerIDResponse) Throttle() (int32, bool)  { return v.ThrottleMillis, v.Version >= 1 }
 func (v *InitProducerIDResponse) RequestKind() Request {
 	return &InitProducerIDRequest{Version: v.Version}
 }
@@ -15380,7 +15434,7 @@ type OffsetForLeaderEpochResponse struct {
 	Version int16
 
 	// ThrottleMillis is how long of a throttle Kafka will apply to the client
-	// after this request.
+	// after responding to this request.
 	ThrottleMillis int32 // v2+
 
 	// Topics are responses to topics in the request.
@@ -15392,6 +15446,9 @@ func (*OffsetForLeaderEpochResponse) MaxVersion() int16          { return 4 }
 func (v *OffsetForLeaderEpochResponse) SetVersion(version int16) { v.Version = version }
 func (v *OffsetForLeaderEpochResponse) GetVersion() int16        { return v.Version }
 func (v *OffsetForLeaderEpochResponse) IsFlexible() bool         { return v.Version >= 4 }
+func (v *OffsetForLeaderEpochResponse) Throttle() (int32, bool) {
+	return v.ThrottleMillis, v.Version >= 0
+}
 func (v *OffsetForLeaderEpochResponse) RequestKind() Request {
 	return &OffsetForLeaderEpochRequest{Version: v.Version}
 }
@@ -15893,6 +15950,8 @@ type AddPartitionsToTxnResponse struct {
 	// after this request.
 	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
 	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
+	//
+	// This request switched at version 1.
 	ThrottleMillis int32
 
 	// Topics are responses to topics in the request.
@@ -15904,6 +15963,9 @@ func (*AddPartitionsToTxnResponse) MaxVersion() int16          { return 3 }
 func (v *AddPartitionsToTxnResponse) SetVersion(version int16) { v.Version = version }
 func (v *AddPartitionsToTxnResponse) GetVersion() int16        { return v.Version }
 func (v *AddPartitionsToTxnResponse) IsFlexible() bool         { return v.Version >= 3 }
+func (v *AddPartitionsToTxnResponse) Throttle() (int32, bool) {
+	return v.ThrottleMillis, v.Version >= 1
+}
 func (v *AddPartitionsToTxnResponse) RequestKind() Request {
 	return &AddPartitionsToTxnRequest{Version: v.Version}
 }
@@ -16224,6 +16286,8 @@ type AddOffsetsToTxnResponse struct {
 	// after this request.
 	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
 	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
+	//
+	// This request switched at version 1.
 	ThrottleMillis int32
 
 	// ErrorCode is any error for this topic/partition commit.
@@ -16244,6 +16308,7 @@ func (*AddOffsetsToTxnResponse) MaxVersion() int16          { return 3 }
 func (v *AddOffsetsToTxnResponse) SetVersion(version int16) { v.Version = version }
 func (v *AddOffsetsToTxnResponse) GetVersion() int16        { return v.Version }
 func (v *AddOffsetsToTxnResponse) IsFlexible() bool         { return v.Version >= 3 }
+func (v *AddOffsetsToTxnResponse) Throttle() (int32, bool)  { return v.ThrottleMillis, v.Version >= 1 }
 func (v *AddOffsetsToTxnResponse) RequestKind() Request {
 	return &AddOffsetsToTxnRequest{Version: v.Version}
 }
@@ -16442,6 +16507,8 @@ type EndTxnResponse struct {
 	// after this request.
 	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
 	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
+	//
+	// This request switched at version 1.
 	ThrottleMillis int32
 
 	// ErrorCode is any error for this topic/partition commit.
@@ -16472,6 +16539,7 @@ func (*EndTxnResponse) MaxVersion() int16          { return 3 }
 func (v *EndTxnResponse) SetVersion(version int16) { v.Version = version }
 func (v *EndTxnResponse) GetVersion() int16        { return v.Version }
 func (v *EndTxnResponse) IsFlexible() bool         { return v.Version >= 3 }
+func (v *EndTxnResponse) Throttle() (int32, bool)  { return v.ThrottleMillis, v.Version >= 1 }
 func (v *EndTxnResponse) RequestKind() Request     { return &EndTxnRequest{Version: v.Version} }
 
 func (v *EndTxnResponse) AppendTo(dst []byte) []byte {
@@ -17570,6 +17638,8 @@ type TxnOffsetCommitResponse struct {
 	// after this request.
 	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
 	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
+	//
+	// This request switched at version 1.
 	ThrottleMillis int32
 
 	// Topics contains responses to the topics in the request.
@@ -17581,6 +17651,7 @@ func (*TxnOffsetCommitResponse) MaxVersion() int16          { return 3 }
 func (v *TxnOffsetCommitResponse) SetVersion(version int16) { v.Version = version }
 func (v *TxnOffsetCommitResponse) GetVersion() int16        { return v.Version }
 func (v *TxnOffsetCommitResponse) IsFlexible() bool         { return v.Version >= 3 }
+func (v *TxnOffsetCommitResponse) Throttle() (int32, bool)  { return v.ThrottleMillis, v.Version >= 1 }
 func (v *TxnOffsetCommitResponse) RequestKind() Request {
 	return &TxnOffsetCommitRequest{Version: v.Version}
 }
@@ -18029,7 +18100,11 @@ type DescribeACLsResponse struct {
 	Version int16
 
 	// ThrottleMillis is how long of a throttle Kafka will apply to the client
-	// after responding to this request.
+	// after this request.
+	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
+	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
+	//
+	// This request switched at version 1.
 	ThrottleMillis int32
 
 	// ErrorCode is the error code returned on request failure.
@@ -18052,6 +18127,7 @@ func (*DescribeACLsResponse) MaxVersion() int16          { return 2 }
 func (v *DescribeACLsResponse) SetVersion(version int16) { v.Version = version }
 func (v *DescribeACLsResponse) GetVersion() int16        { return v.Version }
 func (v *DescribeACLsResponse) IsFlexible() bool         { return v.Version >= 2 }
+func (v *DescribeACLsResponse) Throttle() (int32, bool)  { return v.ThrottleMillis, v.Version >= 1 }
 func (v *DescribeACLsResponse) RequestKind() Request     { return &DescribeACLsRequest{Version: v.Version} }
 
 func (v *DescribeACLsResponse) AppendTo(dst []byte) []byte {
@@ -18628,7 +18704,11 @@ type CreateACLsResponse struct {
 	Version int16
 
 	// ThrottleMillis is how long of a throttle Kafka will apply to the client
-	// after responding to this request.
+	// after this request.
+	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
+	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
+	//
+	// This request switched at version 1.
 	ThrottleMillis int32
 
 	// Results contains responses to each creation request.
@@ -18640,6 +18720,7 @@ func (*CreateACLsResponse) MaxVersion() int16          { return 2 }
 func (v *CreateACLsResponse) SetVersion(version int16) { v.Version = version }
 func (v *CreateACLsResponse) GetVersion() int16        { return v.Version }
 func (v *CreateACLsResponse) IsFlexible() bool         { return v.Version >= 2 }
+func (v *CreateACLsResponse) Throttle() (int32, bool)  { return v.ThrottleMillis, v.Version >= 1 }
 func (v *CreateACLsResponse) RequestKind() Request     { return &CreateACLsRequest{Version: v.Version} }
 
 func (v *CreateACLsResponse) AppendTo(dst []byte) []byte {
@@ -19083,7 +19164,11 @@ type DeleteACLsResponse struct {
 	Version int16
 
 	// ThrottleMillis is how long of a throttle Kafka will apply to the client
-	// after responding to this request.
+	// after this request.
+	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
+	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
+	//
+	// This request switched at version 1.
 	ThrottleMillis int32
 
 	// Results contains a response to each requested filter.
@@ -19095,6 +19180,7 @@ func (*DeleteACLsResponse) MaxVersion() int16          { return 2 }
 func (v *DeleteACLsResponse) SetVersion(version int16) { v.Version = version }
 func (v *DeleteACLsResponse) GetVersion() int16        { return v.Version }
 func (v *DeleteACLsResponse) IsFlexible() bool         { return v.Version >= 2 }
+func (v *DeleteACLsResponse) Throttle() (int32, bool)  { return v.ThrottleMillis, v.Version >= 1 }
 func (v *DeleteACLsResponse) RequestKind() Request     { return &DeleteACLsRequest{Version: v.Version} }
 
 func (v *DeleteACLsResponse) AppendTo(dst []byte) []byte {
@@ -19765,6 +19851,8 @@ type DescribeConfigsResponse struct {
 	// after this request.
 	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
 	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
+	//
+	// This request switched at version 2.
 	ThrottleMillis int32
 
 	// Resources are responses for each resource in the describe config request.
@@ -19776,6 +19864,7 @@ func (*DescribeConfigsResponse) MaxVersion() int16          { return 4 }
 func (v *DescribeConfigsResponse) SetVersion(version int16) { v.Version = version }
 func (v *DescribeConfigsResponse) GetVersion() int16        { return v.Version }
 func (v *DescribeConfigsResponse) IsFlexible() bool         { return v.Version >= 4 }
+func (v *DescribeConfigsResponse) Throttle() (int32, bool)  { return v.ThrottleMillis, v.Version >= 2 }
 func (v *DescribeConfigsResponse) RequestKind() Request {
 	return &DescribeConfigsRequest{Version: v.Version}
 }
@@ -20517,6 +20606,8 @@ type AlterConfigsResponse struct {
 	// after this request.
 	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
 	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
+	//
+	// This request switched at version 1.
 	ThrottleMillis int32
 
 	// Resources are responses for each resource in the alter request.
@@ -20528,6 +20619,7 @@ func (*AlterConfigsResponse) MaxVersion() int16          { return 2 }
 func (v *AlterConfigsResponse) SetVersion(version int16) { v.Version = version }
 func (v *AlterConfigsResponse) GetVersion() int16        { return v.Version }
 func (v *AlterConfigsResponse) IsFlexible() bool         { return v.Version >= 2 }
+func (v *AlterConfigsResponse) Throttle() (int32, bool)  { return v.ThrottleMillis, v.Version >= 1 }
 func (v *AlterConfigsResponse) RequestKind() Request     { return &AlterConfigsRequest{Version: v.Version} }
 
 func (v *AlterConfigsResponse) AppendTo(dst []byte) []byte {
@@ -21009,6 +21101,8 @@ type AlterReplicaLogDirsResponse struct {
 	// after this request.
 	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
 	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
+	//
+	// This request switched at version 1.
 	ThrottleMillis int32
 
 	// Topics contains responses to each topic that had partitions requested
@@ -21021,6 +21115,9 @@ func (*AlterReplicaLogDirsResponse) MaxVersion() int16          { return 2 }
 func (v *AlterReplicaLogDirsResponse) SetVersion(version int16) { v.Version = version }
 func (v *AlterReplicaLogDirsResponse) GetVersion() int16        { return v.Version }
 func (v *AlterReplicaLogDirsResponse) IsFlexible() bool         { return v.Version >= 2 }
+func (v *AlterReplicaLogDirsResponse) Throttle() (int32, bool) {
+	return v.ThrottleMillis, v.Version >= 1
+}
 func (v *AlterReplicaLogDirsResponse) RequestKind() Request {
 	return &AlterReplicaLogDirsRequest{Version: v.Version}
 }
@@ -21475,6 +21572,8 @@ type DescribeLogDirsResponse struct {
 	// after this request.
 	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
 	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
+	//
+	// This request switched at version 1.
 	ThrottleMillis int32
 
 	// Dirs pairs log directories with the topics and partitions that are
@@ -21487,6 +21586,7 @@ func (*DescribeLogDirsResponse) MaxVersion() int16          { return 2 }
 func (v *DescribeLogDirsResponse) SetVersion(version int16) { v.Version = version }
 func (v *DescribeLogDirsResponse) GetVersion() int16        { return v.Version }
 func (v *DescribeLogDirsResponse) IsFlexible() bool         { return v.Version >= 2 }
+func (v *DescribeLogDirsResponse) Throttle() (int32, bool)  { return v.ThrottleMillis, v.Version >= 1 }
 func (v *DescribeLogDirsResponse) RequestKind() Request {
 	return &DescribeLogDirsRequest{Version: v.Version}
 }
@@ -22303,6 +22403,8 @@ type CreatePartitionsResponse struct {
 	// after this request.
 	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
 	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
+	//
+	// This request switched at version 1.
 	ThrottleMillis int32
 
 	// Topics is a response to each topic in the creation request.
@@ -22314,6 +22416,7 @@ func (*CreatePartitionsResponse) MaxVersion() int16          { return 3 }
 func (v *CreatePartitionsResponse) SetVersion(version int16) { v.Version = version }
 func (v *CreatePartitionsResponse) GetVersion() int16        { return v.Version }
 func (v *CreatePartitionsResponse) IsFlexible() bool         { return v.Version >= 2 }
+func (v *CreatePartitionsResponse) Throttle() (int32, bool)  { return v.ThrottleMillis, v.Version >= 1 }
 func (v *CreatePartitionsResponse) RequestKind() Request {
 	return &CreatePartitionsRequest{Version: v.Version}
 }
@@ -22686,6 +22789,8 @@ type CreateDelegationTokenResponse struct {
 	// after this request.
 	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
 	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
+	//
+	// This request switched at version 1.
 	ThrottleMillis int32
 }
 
@@ -22694,6 +22799,9 @@ func (*CreateDelegationTokenResponse) MaxVersion() int16          { return 2 }
 func (v *CreateDelegationTokenResponse) SetVersion(version int16) { v.Version = version }
 func (v *CreateDelegationTokenResponse) GetVersion() int16        { return v.Version }
 func (v *CreateDelegationTokenResponse) IsFlexible() bool         { return v.Version >= 2 }
+func (v *CreateDelegationTokenResponse) Throttle() (int32, bool) {
+	return v.ThrottleMillis, v.Version >= 1
+}
 func (v *CreateDelegationTokenResponse) RequestKind() Request {
 	return &CreateDelegationTokenRequest{Version: v.Version}
 }
@@ -22971,6 +23079,8 @@ type RenewDelegationTokenResponse struct {
 	// after this request.
 	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
 	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
+	//
+	// This request switched at version 1.
 	ThrottleMillis int32
 }
 
@@ -22979,6 +23089,9 @@ func (*RenewDelegationTokenResponse) MaxVersion() int16          { return 2 }
 func (v *RenewDelegationTokenResponse) SetVersion(version int16) { v.Version = version }
 func (v *RenewDelegationTokenResponse) GetVersion() int16        { return v.Version }
 func (v *RenewDelegationTokenResponse) IsFlexible() bool         { return v.Version >= 2 }
+func (v *RenewDelegationTokenResponse) Throttle() (int32, bool) {
+	return v.ThrottleMillis, v.Version >= 1
+}
 func (v *RenewDelegationTokenResponse) RequestKind() Request {
 	return &RenewDelegationTokenRequest{Version: v.Version}
 }
@@ -23177,6 +23290,8 @@ type ExpireDelegationTokenResponse struct {
 	// after this request.
 	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
 	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
+	//
+	// This request switched at version 1.
 	ThrottleMillis int32
 }
 
@@ -23185,6 +23300,9 @@ func (*ExpireDelegationTokenResponse) MaxVersion() int16          { return 2 }
 func (v *ExpireDelegationTokenResponse) SetVersion(version int16) { v.Version = version }
 func (v *ExpireDelegationTokenResponse) GetVersion() int16        { return v.Version }
 func (v *ExpireDelegationTokenResponse) IsFlexible() bool         { return v.Version >= 2 }
+func (v *ExpireDelegationTokenResponse) Throttle() (int32, bool) {
+	return v.ThrottleMillis, v.Version >= 1
+}
 func (v *ExpireDelegationTokenResponse) RequestKind() Request {
 	return &ExpireDelegationTokenRequest{Version: v.Version}
 }
@@ -23507,6 +23625,8 @@ type DescribeDelegationTokenResponse struct {
 	// after this request.
 	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
 	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
+	//
+	// This request switched at version 1.
 	ThrottleMillis int32
 }
 
@@ -23515,6 +23635,9 @@ func (*DescribeDelegationTokenResponse) MaxVersion() int16          { return 2 }
 func (v *DescribeDelegationTokenResponse) SetVersion(version int16) { v.Version = version }
 func (v *DescribeDelegationTokenResponse) GetVersion() int16        { return v.Version }
 func (v *DescribeDelegationTokenResponse) IsFlexible() bool         { return v.Version >= 2 }
+func (v *DescribeDelegationTokenResponse) Throttle() (int32, bool) {
+	return v.ThrottleMillis, v.Version >= 1
+}
 func (v *DescribeDelegationTokenResponse) RequestKind() Request {
 	return &DescribeDelegationTokenRequest{Version: v.Version}
 }
@@ -23947,6 +24070,8 @@ type DeleteGroupsResponse struct {
 	// after this request.
 	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
 	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
+	//
+	// This request switched at version 1.
 	ThrottleMillis int32
 
 	// Groups are the responses to each group requested for deletion.
@@ -23958,6 +24083,7 @@ func (*DeleteGroupsResponse) MaxVersion() int16          { return 2 }
 func (v *DeleteGroupsResponse) SetVersion(version int16) { v.Version = version }
 func (v *DeleteGroupsResponse) GetVersion() int16        { return v.Version }
 func (v *DeleteGroupsResponse) IsFlexible() bool         { return v.Version >= 2 }
+func (v *DeleteGroupsResponse) Throttle() (int32, bool)  { return v.ThrottleMillis, v.Version >= 1 }
 func (v *DeleteGroupsResponse) RequestKind() Request     { return &DeleteGroupsRequest{Version: v.Version} }
 
 func (v *DeleteGroupsResponse) AppendTo(dst []byte) []byte {
@@ -24383,6 +24509,7 @@ func (*ElectLeadersResponse) MaxVersion() int16          { return 2 }
 func (v *ElectLeadersResponse) SetVersion(version int16) { v.Version = version }
 func (v *ElectLeadersResponse) GetVersion() int16        { return v.Version }
 func (v *ElectLeadersResponse) IsFlexible() bool         { return v.Version >= 2 }
+func (v *ElectLeadersResponse) Throttle() (int32, bool)  { return v.ThrottleMillis, v.Version >= 0 }
 func (v *ElectLeadersResponse) RequestKind() Request     { return &ElectLeadersRequest{Version: v.Version} }
 
 func (v *ElectLeadersResponse) AppendTo(dst []byte) []byte {
@@ -24951,6 +25078,9 @@ func (*IncrementalAlterConfigsResponse) MaxVersion() int16          { return 1 }
 func (v *IncrementalAlterConfigsResponse) SetVersion(version int16) { v.Version = version }
 func (v *IncrementalAlterConfigsResponse) GetVersion() int16        { return v.Version }
 func (v *IncrementalAlterConfigsResponse) IsFlexible() bool         { return v.Version >= 1 }
+func (v *IncrementalAlterConfigsResponse) Throttle() (int32, bool) {
+	return v.ThrottleMillis, v.Version >= 0
+}
 func (v *IncrementalAlterConfigsResponse) RequestKind() Request {
 	return &IncrementalAlterConfigsRequest{Version: v.Version}
 }
@@ -25462,6 +25592,9 @@ func (*AlterPartitionAssignmentsResponse) MaxVersion() int16          { return 0
 func (v *AlterPartitionAssignmentsResponse) SetVersion(version int16) { v.Version = version }
 func (v *AlterPartitionAssignmentsResponse) GetVersion() int16        { return v.Version }
 func (v *AlterPartitionAssignmentsResponse) IsFlexible() bool         { return v.Version >= 0 }
+func (v *AlterPartitionAssignmentsResponse) Throttle() (int32, bool) {
+	return v.ThrottleMillis, v.Version >= 0
+}
 func (v *AlterPartitionAssignmentsResponse) RequestKind() Request {
 	return &AlterPartitionAssignmentsRequest{Version: v.Version}
 }
@@ -25958,6 +26091,9 @@ func (*ListPartitionReassignmentsResponse) MaxVersion() int16          { return 
 func (v *ListPartitionReassignmentsResponse) SetVersion(version int16) { v.Version = version }
 func (v *ListPartitionReassignmentsResponse) GetVersion() int16        { return v.Version }
 func (v *ListPartitionReassignmentsResponse) IsFlexible() bool         { return v.Version >= 0 }
+func (v *ListPartitionReassignmentsResponse) Throttle() (int32, bool) {
+	return v.ThrottleMillis, v.Version >= 0
+}
 func (v *ListPartitionReassignmentsResponse) RequestKind() Request {
 	return &ListPartitionReassignmentsRequest{Version: v.Version}
 }
@@ -26517,6 +26653,7 @@ func (*OffsetDeleteResponse) MaxVersion() int16          { return 0 }
 func (v *OffsetDeleteResponse) SetVersion(version int16) { v.Version = version }
 func (v *OffsetDeleteResponse) GetVersion() int16        { return v.Version }
 func (v *OffsetDeleteResponse) IsFlexible() bool         { return false }
+func (v *OffsetDeleteResponse) Throttle() (int32, bool)  { return v.ThrottleMillis, v.Version >= 0 }
 func (v *OffsetDeleteResponse) RequestKind() Request     { return &OffsetDeleteRequest{Version: v.Version} }
 
 func (v *OffsetDeleteResponse) AppendTo(dst []byte) []byte {
@@ -26929,6 +27066,9 @@ func (*DescribeClientQuotasResponse) MaxVersion() int16          { return 1 }
 func (v *DescribeClientQuotasResponse) SetVersion(version int16) { v.Version = version }
 func (v *DescribeClientQuotasResponse) GetVersion() int16        { return v.Version }
 func (v *DescribeClientQuotasResponse) IsFlexible() bool         { return v.Version >= 1 }
+func (v *DescribeClientQuotasResponse) Throttle() (int32, bool) {
+	return v.ThrottleMillis, v.Version >= 0
+}
 func (v *DescribeClientQuotasResponse) RequestKind() Request {
 	return &DescribeClientQuotasRequest{Version: v.Version}
 }
@@ -27594,6 +27734,7 @@ func (*AlterClientQuotasResponse) MaxVersion() int16          { return 1 }
 func (v *AlterClientQuotasResponse) SetVersion(version int16) { v.Version = version }
 func (v *AlterClientQuotasResponse) GetVersion() int16        { return v.Version }
 func (v *AlterClientQuotasResponse) IsFlexible() bool         { return v.Version >= 1 }
+func (v *AlterClientQuotasResponse) Throttle() (int32, bool)  { return v.ThrottleMillis, v.Version >= 0 }
 func (v *AlterClientQuotasResponse) RequestKind() Request {
 	return &AlterClientQuotasRequest{Version: v.Version}
 }
@@ -28017,6 +28158,9 @@ func (*DescribeUserSCRAMCredentialsResponse) MaxVersion() int16          { retur
 func (v *DescribeUserSCRAMCredentialsResponse) SetVersion(version int16) { v.Version = version }
 func (v *DescribeUserSCRAMCredentialsResponse) GetVersion() int16        { return v.Version }
 func (v *DescribeUserSCRAMCredentialsResponse) IsFlexible() bool         { return v.Version >= 0 }
+func (v *DescribeUserSCRAMCredentialsResponse) Throttle() (int32, bool) {
+	return v.ThrottleMillis, v.Version >= 0
+}
 func (v *DescribeUserSCRAMCredentialsResponse) RequestKind() Request {
 	return &DescribeUserSCRAMCredentialsRequest{Version: v.Version}
 }
@@ -28587,6 +28731,9 @@ func (*AlterUserSCRAMCredentialsResponse) MaxVersion() int16          { return 0
 func (v *AlterUserSCRAMCredentialsResponse) SetVersion(version int16) { v.Version = version }
 func (v *AlterUserSCRAMCredentialsResponse) GetVersion() int16        { return v.Version }
 func (v *AlterUserSCRAMCredentialsResponse) IsFlexible() bool         { return v.Version >= 0 }
+func (v *AlterUserSCRAMCredentialsResponse) Throttle() (int32, bool) {
+	return v.ThrottleMillis, v.Version >= 0
+}
 func (v *AlterUserSCRAMCredentialsResponse) RequestKind() Request {
 	return &AlterUserSCRAMCredentialsRequest{Version: v.Version}
 }
@@ -31043,6 +31190,7 @@ func (*AlterISRResponse) MaxVersion() int16          { return 0 }
 func (v *AlterISRResponse) SetVersion(version int16) { v.Version = version }
 func (v *AlterISRResponse) GetVersion() int16        { return v.Version }
 func (v *AlterISRResponse) IsFlexible() bool         { return v.Version >= 0 }
+func (v *AlterISRResponse) Throttle() (int32, bool)  { return v.ThrottleMillis, v.Version >= 0 }
 func (v *AlterISRResponse) RequestKind() Request     { return &AlterISRRequest{Version: v.Version} }
 
 func (v *AlterISRResponse) AppendTo(dst []byte) []byte {
@@ -31511,6 +31659,7 @@ func (*UpdateFeaturesResponse) MaxVersion() int16          { return 0 }
 func (v *UpdateFeaturesResponse) SetVersion(version int16) { v.Version = version }
 func (v *UpdateFeaturesResponse) GetVersion() int16        { return v.Version }
 func (v *UpdateFeaturesResponse) IsFlexible() bool         { return v.Version >= 0 }
+func (v *UpdateFeaturesResponse) Throttle() (int32, bool)  { return v.ThrottleMillis, v.Version >= 0 }
 func (v *UpdateFeaturesResponse) RequestKind() Request {
 	return &UpdateFeaturesRequest{Version: v.Version}
 }
@@ -32372,6 +32521,8 @@ type FetchSnapshotResponse struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
+	// ThrottleMillis is how long of a throttle Kafka will apply to the client
+	// after responding to this request.
 	ThrottleMillis int32
 
 	// The top level response error code.
@@ -32386,6 +32537,7 @@ func (*FetchSnapshotResponse) MaxVersion() int16          { return 0 }
 func (v *FetchSnapshotResponse) SetVersion(version int16) { v.Version = version }
 func (v *FetchSnapshotResponse) GetVersion() int16        { return v.Version }
 func (v *FetchSnapshotResponse) IsFlexible() bool         { return v.Version >= 0 }
+func (v *FetchSnapshotResponse) Throttle() (int32, bool)  { return v.ThrottleMillis, v.Version >= 0 }
 func (v *FetchSnapshotResponse) RequestKind() Request {
 	return &FetchSnapshotRequest{Version: v.Version}
 }
