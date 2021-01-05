@@ -382,8 +382,8 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how
 			// If an offset is unspecified or we have not loaded
 			// the partition, we list offsets to find out what to
 			// use.
-			part := topicParts.all[partition]
-			if offset.at >= 0 && part != nil {
+			if offset.at >= 0 && partition >= 0 && partition < int32(len(topicParts.partitions)) {
+				part := topicParts.partitions[partition]
 				cursor := part.cursor
 				cursor.setOffset(cursorOffset{
 					offset:            offset.at,
@@ -869,7 +869,8 @@ func (s *consumerSession) mapLoadsToBrokers(loads listOrEpochLoads) map[*broker]
 				// the broker leader for this partition (we should have).
 				// Worst case, we get an error for the partition and retry.
 				broker := seed
-				if topicPartition, exists := topicPartitions.all[partition]; exists {
+				if partition >= 0 && partition < int32(len(topicPartitions.partitions)) {
+					topicPartition := topicPartitions.partitions[partition]
 					brokerID := topicPartition.leader
 					if offset.replica != -1 {
 						// If we are fetching from a follower, we can list
@@ -962,10 +963,10 @@ func (cl *Client) listOffsetsForBrokerLoad(ctx context.Context, broker *broker, 
 			}
 
 			topicPartitions := cl.loadTopics()[topic].load()
-			topicPartition, ok := topicPartitions.all[partition]
-			if !ok {
+			if partition < 0 || partition >= int32(len(topicPartitions.partitions)) {
 				continue // should not happen: we have not seen this partition from a metadata response
 			}
+			topicPartition := topicPartitions.partitions[partition]
 
 			delete(loadParts, partition)
 			if len(loadParts) == 0 {
@@ -1034,10 +1035,10 @@ func (cl *Client) loadEpochsForBrokerLoad(ctx context.Context, broker *broker, l
 			}
 
 			topicPartitions := cl.loadTopics()[topic].load()
-			topicPartition, ok := topicPartitions.all[partition]
-			if !ok {
+			if partition < 0 || partition >= int32(len(topicPartitions.partitions)) {
 				continue // should not happen: we have not seen this partition from a metadata response
 			}
+			topicPartition := topicPartitions.partitions[partition]
 
 			delete(loadParts, partition)
 			if len(loadParts) == 0 {

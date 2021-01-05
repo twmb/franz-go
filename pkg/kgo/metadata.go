@@ -233,10 +233,10 @@ func (cl *Client) fetchTopicMetadata(reqTopics []string) (map[string]*topicParti
 		topicMeta := &meta.Topics[i]
 
 		parts := &topicPartitionsData{
-			loadErr:    kerr.ErrorForCode(topicMeta.ErrorCode),
-			isInternal: topicMeta.IsInternal,
-			all:        make(map[int32]*topicPartition, len(topicMeta.Partitions)),
-			writable:   make(map[int32]*topicPartition, len(topicMeta.Partitions)),
+			loadErr:            kerr.ErrorForCode(topicMeta.ErrorCode),
+			isInternal:         topicMeta.IsInternal,
+			partitions:         make([]*topicPartition, 0, len(topicMeta.Partitions)),
+			writablePartitions: make([]*topicPartition, 0, len(topicMeta.Partitions)),
 		}
 		topics[topicMeta.Topic] = parts
 
@@ -244,12 +244,9 @@ func (cl *Client) fetchTopicMetadata(reqTopics []string) (map[string]*topicParti
 			continue
 		}
 
-		// We eventually will switch topicPartitionsData to removing
-		// slices where possible. Kafka partitions are strictly
-		// increasing. We enforce that here; if any partition is
-		// missing, we consider this topic a load failure.
-		//
-		// TODO remove "eventually" when the above is done
+		// Kafka partitions are strictly increasing from 0. We enforce
+		// that here; if any partition is missing, we consider this
+		// topic a load failure.
 		sort.Slice(topicMeta.Partitions, func(i, j int) bool {
 			return topicMeta.Partitions[i].Partition < topicMeta.Partitions[j].Partition
 		})
@@ -302,7 +299,6 @@ func (cl *Client) fetchTopicMetadata(reqTopics []string) (map[string]*topicParti
 					},
 				},
 			}
-
 			// Any partition that has a load error uses the first
 			// seed broker as a leader. This ensures that every
 			// record buffer and every cursor can use a sink or
@@ -324,11 +320,9 @@ func (cl *Client) fetchTopicMetadata(reqTopics []string) (map[string]*topicParti
 			p.records.sink = sns.sink
 			p.cursor.source = sns.source
 
-			parts.partitions = append(parts.partitions, partMeta.Partition)
-			parts.all[partMeta.Partition] = p
+			parts.partitions = append(parts.partitions, p)
 			if p.loadErr == nil {
-				parts.writablePartitions = append(parts.writablePartitions, partMeta.Partition)
-				parts.writable[partMeta.Partition] = p
+				parts.writablePartitions = append(parts.writablePartitions, p)
 			}
 		}
 	}
@@ -348,7 +342,7 @@ func (cl *Client) mergeTopicPartitions(
 	reloadOffsets *listOrEpochLoads,
 ) (needsRetry bool) {
 	lv := *l.load() // copy so our field writes do not collide with reads
-	hadPartitions := len(lv.all) != 0
+	hadPartitions := len(lv.partitions) != 0
 	defer func() { cl.storePartitionsUpdate(topic, l, &lv, hadPartitions) }()
 
 	lv.loadErr = r.loadErr
@@ -361,19 +355,24 @@ func (cl *Client) mergeTopicPartitions(
 	if r.loadErr != nil {
 		retriable := kerr.IsRetriable(r.loadErr)
 		if retriable {
-			for _, topicPartition := range lv.all {
+			for _, topicPartition := range lv.partitions {
 				topicPartition.records.bumpRepeatedLoadErr(lv.loadErr)
 			}
 		} else {
-			for _, topicPartition := range lv.all {
+			for _, topicPartition := range lv.partitions {
 				topicPartition.records.failAllRecords(lv.loadErr)
 			}
 		}
 		return retriable
 	}
 
-	lv.partitions = r.partitions
-	lv.writablePartitions = r.writablePartitions
+	// Before the atomic update, we keep the latest partitions / writable
+	// partitions. All updates happen in r's slices, and we keep the
+	// results and store them in lv.
+	defer func() {
+		lv.partitions = r.partitions
+		lv.writablePartitions = r.writablePartitions
+	}()
 
 	// We should have no deleted partitions, but there are two cases where
 	// we could.
@@ -394,23 +393,26 @@ func (cl *Client) mergeTopicPartitions(
 	// commit that contained deleting partitions.
 
 	// Migrating topicPartitions is a little tricky because we have to
-	// worry about map contents.
-	//
-	// We update everything appropriately in the new r.all, and after
-	// this loop we copy the updated map to lv.all (which is stored
-	// atomically after the defer above).
-	for part, oldTP := range lv.all {
-		newTP, exists := r.all[part]
+	// worry about underlying pointers that may currently be loaded.
+	for part, oldTP := range lv.partitions {
+		exists := part < len(r.partitions)
 		if !exists {
 			// This is the "deleted" case; see the comment above.
 			// We will just keep our old information.
-			*newTP = *oldTP
+			r.partitions = append(r.partitions, oldTP)
+			if oldTP.loadErr == nil {
+				r.writablePartitions = append(r.writablePartitions, oldTP)
+			}
 			continue
 		}
+		newTP := r.partitions[part]
 
 		// Like above for the entire topic, an individual partittion
 		// can have a load error. Unlike for the topic, individual
 		// partition errors are always retriable.
+		//
+		// If the load errored, we keep all old information minus the
+		// load error itself (the new load will have no information).
 		if newTP.loadErr != nil {
 			err := newTP.loadErr
 			*newTP = *oldTP
@@ -464,19 +466,12 @@ func (cl *Client) mergeTopicPartitions(
 	// Anything left with a negative recBufsIdx / cursorsIdx is a new topic
 	// partition. We use this to add the new tp's records to its sink.
 	// Same reasoning applies to the cursor offset.
-	for _, newTP := range r.all {
+	for _, newTP := range r.partitions {
 		if newTP.records.recBufsIdx == -1 {
 			newTP.records.sink.addRecBuf(newTP.records)
 			newTP.cursor.source.addCursor(newTP.cursor)
 		}
 	}
-
-	lv.all = r.all
-	lv.writable = r.writable
-
-	// The left writable map needs no further updates: all changes above
-	// happened to r.all, of which r.writable contains a subset of.
-	// Modifications to r.all are seen in r.writable.
 
 	return needsRetry
 }

@@ -45,7 +45,7 @@ type balancer struct {
 
 	// topics are the topic names and partitions that the client knows of
 	// and passed to be used for assigning unassigned partitions.
-	topics map[string][]int32
+	topics map[string]int32
 
 	// Similar to memberNums and memberNames above, partNums and partNums
 	// map topic partitions to numbers and back. This provides significant
@@ -84,10 +84,10 @@ type topicPartition struct {
 	partition int32
 }
 
-func newBalancer(members []GroupMember, topics map[string][]int32) *balancer {
+func newBalancer(members []GroupMember, topics map[string]int32) *balancer {
 	var nparts int
 	for _, partitions := range topics {
-		nparts += len(partitions)
+		nparts += int(partitions)
 	}
 
 	b := &balancer{
@@ -261,7 +261,7 @@ func (b *balancer) initPlanByNumPartitions() {
 
 // Balance performs sticky partitioning for the given group members and topics,
 // returning the determined plan.
-func Balance(members []GroupMember, topics map[string][]int32) Plan {
+func Balance(members []GroupMember, topics map[string]int32) Plan {
 	if len(members) == 0 {
 		return make(Plan)
 	}
@@ -406,7 +406,7 @@ func (b *balancer) assignUnassignedAndInitGraph() {
 	partitionPotentials := make([][]uint16, cap(b.partNames)) // for each partition, who can consume it?
 	var firstTopicMembers []uint16
 	for topic, topicMembers := range topics2memberNums {
-		for _, partition := range b.topics[topic] {
+		for partition := int32(0); partition < b.topics[topic]; partition++ {
 			tp := topicPartition{topic, partition}
 			partNum := b.partNum(tp)
 			partitionPotentials[partNum] = topicMembers

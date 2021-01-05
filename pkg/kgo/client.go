@@ -435,7 +435,7 @@ func (cl *Client) Close() {
 
 	// We must manually fail all partitions that never had a sink.
 	for _, partitions := range cl.loadTopics() {
-		for _, partition := range partitions.load().all {
+		for _, partition := range partitions.load().partitions {
 			partition.records.failAllRecords(ErrBrokerDead)
 		}
 	}

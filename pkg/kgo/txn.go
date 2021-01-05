@@ -259,7 +259,7 @@ func (cl *Client) AbortBufferedRecords(ctx context.Context) error {
 	// now wait for any req currently built to be done being issued.
 
 	for _, partitions := range cl.loadTopics() { // a good a time as any to fail all records
-		for _, partition := range partitions.load().all {
+		for _, partition := range partitions.load().partitions {
 			partition.records.failAllRecords(ErrAborting)
 		}
 	}
@@ -344,7 +344,7 @@ func (cl *Client) EndTransaction(ctx context.Context, commit TransactionEndTry) 
 	// addedToTxn to false outside of any mutex.
 	var anyAdded bool
 	for _, parts := range cl.loadTopics() {
-		for _, part := range parts.load().all {
+		for _, part := range parts.load().partitions {
 			if part.records.addedToTxn {
 				part.records.addedToTxn = false
 				anyAdded = true
@@ -375,7 +375,7 @@ func (cl *Client) EndTransaction(ctx context.Context, commit TransactionEndTry) 
 			// id / epoch appropriately and everything will work as
 			// per KIP-360.
 			for _, tp := range cl.loadTopics() {
-				for _, tpd := range tp.load().all {
+				for _, tpd := range tp.load().partitions {
 					tpd.records.resetSeq()
 				}
 			}

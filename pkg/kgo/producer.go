@@ -181,27 +181,32 @@ func (cl *Client) doPartitionRecord(parts *topicPartitions, partsData *topicPart
 		parts.partitioner = cl.cfg.partitioner.ForTopic(pr.Topic)
 	}
 
-	mapping := partsData.writable
-	possibilities := partsData.writablePartitions
+	mapping := partsData.writablePartitions
 	if parts.partitioner.RequiresConsistency(pr.Record) {
-		mapping = partsData.all
-		possibilities = partsData.partitions
+		mapping = partsData.partitions
 	}
-	if len(possibilities) == 0 {
+	if len(mapping) == 0 {
 		cl.finishRecordPromise(pr, ErrNoPartitionsAvailable)
 		return
 	}
 
-	idIdx := parts.partitioner.Partition(pr.Record, len(possibilities))
-	id := possibilities[idIdx]
-	partition := mapping[id]
+	pick := parts.partitioner.Partition(pr.Record, len(mapping))
+	if pick < 0 || pick >= len(mapping) {
+		cl.finishRecordPromise(pr, ErrInvalidPartition)
+		return
+	}
+
+	partition := mapping[pick]
 
 	processed := partition.records.bufferRecord(pr, true) // KIP-480
 	if !processed {
 		parts.partitioner.OnNewBatch()
-		idIdx = parts.partitioner.Partition(pr.Record, len(possibilities))
-		id = possibilities[idIdx]
-		partition = mapping[id]
+		pick = parts.partitioner.Partition(pr.Record, len(mapping))
+		if pick < 0 || pick >= len(mapping) {
+			cl.finishRecordPromise(pr, ErrInvalidPartition)
+			return
+		}
+		partition = mapping[pick]
 		partition.records.bufferRecord(pr, false) // KIP-480
 	}
 }
@@ -494,7 +499,7 @@ func (cl *Client) Flush(ctx context.Context) error {
 	// will loop draining.
 	if cl.cfg.linger > 0 || cl.cfg.manualFlushing {
 		for _, parts := range cl.loadTopics() {
-			for _, part := range parts.load().all {
+			for _, part := range parts.load().partitions {
 				part.records.unlingerAndManuallyDrain()
 			}
 		}

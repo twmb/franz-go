@@ -165,7 +165,7 @@ func getStickiness(member string, memberPlan map[string][]int32, input []GroupMe
 	return stickiness
 }
 
-func testPlanUsage(t *testing.T, plan Plan, topics map[string][]int32, unused []string) {
+func testPlanUsage(t *testing.T, plan Plan, topics map[string]int32, unused []string) {
 	t.Helper()
 
 	all := make(map[topicPartition]int)
@@ -174,8 +174,8 @@ func testPlanUsage(t *testing.T, plan Plan, topics map[string][]int32, unused []
 	}
 
 	for topic, partitions := range topics {
-		for _, partition := range partitions {
-			all[topicPartition{topic, int32(partition)}] = 0
+		for partition := int32(0); partition < partitions; partition++ {
+			all[topicPartition{topic, partition}] = 0
 		}
 	}
 

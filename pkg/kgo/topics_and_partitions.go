@@ -24,11 +24,11 @@ func (cl *Client) cloneTopics() map[string]*topicPartitions {
 }
 
 // loadShortTopics returns topic names and a copy of their partition numbers.
-func (cl *Client) loadShortTopics() map[string][]int32 {
+func (cl *Client) loadShortTopics() map[string]int32 {
 	topics := cl.loadTopics()
-	short := make(map[string][]int32, len(topics))
+	short := make(map[string]int32, len(topics))
 	for topic, partitions := range topics {
-		short[topic] = append([]int32(nil), partitions.load().partitions...)
+		short[topic] = int32(len(partitions.load().partitions))
 	}
 	return short
 }
@@ -57,10 +57,7 @@ func (cl *Client) storeTopics(topics []string) {
 
 func newTopicPartitions() *topicPartitions {
 	parts := new(topicPartitions)
-	parts.v.Store(&topicPartitionsData{
-		all:      make(map[int32]*topicPartition),
-		writable: make(map[int32]*topicPartition),
-	})
+	parts.v.Store(new(topicPartitionsData))
 	return parts
 }
 
@@ -116,7 +113,7 @@ func (cl *Client) storePartitionsUpdate(topic string, l *topicPartitions, lv *to
 	// the waiting goroutine that a try happened. It is possible the
 	// goroutine is quitting and will not be draining unknownWait, so we do
 	// not require the send.
-	if len(lv.all) == 0 && kerr.IsRetriable(lv.loadErr) {
+	if len(lv.partitions) == 0 && kerr.IsRetriable(lv.loadErr) {
 		select {
 		case unknown.wait <- lv.loadErr:
 		default:
@@ -152,10 +149,8 @@ type topicPartitionsData struct {
 	// NOTE if adding anything to this struct, be sure to fix meta merge.
 	loadErr            error // could be auth, unknown, leader not avail, or creation err
 	isInternal         bool
-	partitions         []int32 // TODO does not need to be a slice
-	writablePartitions []int32
-	all                map[int32]*topicPartition // partition num => partition TODO does not need to be a map, can be slice
-	writable           map[int32]*topicPartition // partition num => partition, eliding partitions with no leader / listener
+	partitions         []*topicPartition // partition num => partition
+	writablePartitions []*topicPartition // subset of above
 }
 
 // topicPartition contains all information from Kafka for a topic's partition,

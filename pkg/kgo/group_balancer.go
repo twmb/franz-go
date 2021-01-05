@@ -26,7 +26,7 @@ type GroupBalancer interface {
 	//
 	// The input members are guaranteed to be sorted by member ID, and
 	// each member's topics are guaranteed to be sorted.
-	balance(members []groupMember, topics map[string][]int32) balancePlan
+	balance(members []groupMember, topics map[string]int32) balancePlan
 
 	// isCooperative returns if this is a cooperative balance strategy.
 	isCooperative() bool
@@ -190,7 +190,7 @@ func (*roundRobinBalancer) isCooperative() bool  { return false }
 func (*roundRobinBalancer) metaFor(interests []string, _ map[string][]int32, _ int32) []byte {
 	return basicMetaFor(interests)
 }
-func (*roundRobinBalancer) balance(members []groupMember, topics map[string][]int32) balancePlan {
+func (*roundRobinBalancer) balance(members []groupMember, topics map[string]int32) balancePlan {
 	// Get all the topics all members are subscribed to.
 	memberTopics := make(map[string]struct{}, len(topics))
 	for i := range members {
@@ -205,13 +205,13 @@ func (*roundRobinBalancer) balance(members []groupMember, topics map[string][]in
 	}
 	var nparts int
 	for _, partitions := range topics {
-		nparts += len(partitions)
+		nparts += int(partitions)
 	}
 	// Order all partitions available to balance, filtering out those that
 	// no members are subscribed to.
 	allParts := make([]topicPartition, 0, nparts)
 	for topic := range memberTopics {
-		for _, partition := range topics[topic] {
+		for partition := int32(0); partition < topics[topic]; partition++ {
 			allParts = append(allParts, topicPartition{
 				topic,
 				partition,
@@ -272,7 +272,7 @@ func (*rangeBalancer) isCooperative() bool  { return false }
 func (*rangeBalancer) metaFor(interests []string, _ map[string][]int32, _ int32) []byte {
 	return basicMetaFor(interests)
 }
-func (*rangeBalancer) balance(members []groupMember, topics map[string][]int32) balancePlan {
+func (*rangeBalancer) balance(members []groupMember, topics map[string]int32) balancePlan {
 	topics2PotentialConsumers := make(map[string][]groupMemberID)
 	for i := range members {
 		member := &members[i]
@@ -287,7 +287,11 @@ func (*rangeBalancer) balance(members []groupMember, topics map[string][]int32) 
 			return potentialConsumers[i].less(potentialConsumers[j])
 		})
 
-		partitions := topics[topic]
+		numPartitions := topics[topic]
+		partitions := make([]int32, numPartitions)
+		for i := range partitions {
+			partitions[i] = int32(i)
+		}
 		numParts := len(partitions)
 		div, rem := numParts/len(members), numParts%len(members)
 
@@ -414,7 +418,7 @@ func (s *stickyBalancer) metaFor(interests []string, currentAssignment map[strin
 	return meta.AppendTo(nil)
 
 }
-func (s *stickyBalancer) balance(members []groupMember, topics map[string][]int32) balancePlan {
+func (s *stickyBalancer) balance(members []groupMember, topics map[string]int32) balancePlan {
 	stickyMembers := make([]sticky.GroupMember, 0, len(members))
 	for i := range members {
 		member := &members[i]

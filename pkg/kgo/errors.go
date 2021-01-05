@@ -70,6 +70,11 @@ var (
 	// is deleted and recreated with fewer partitions.
 	ErrPartitionDeleted = errors.New("partition no longer exists")
 
+	// ErrInvalidPartition is returned if the partitioner chooses a
+	// partition that does not exist (returns a partition larger than what
+	// was available).
+	ErrInvalidPartition = errors.New("invalid partition chosen from partitioner")
+
 	// ErrRecordTimeout is returned when records are unable to be produced
 	// and they hit the configured record timeout limit.
 	ErrRecordTimeout = errors.New("records have timed out before they were able to be produced")

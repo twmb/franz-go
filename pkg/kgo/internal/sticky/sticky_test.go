@@ -11,15 +11,15 @@ func Test_stickyBalanceStrategy_Plan(t *testing.T) {
 	for _, test := range []struct {
 		name         string
 		members      []GroupMember
-		topics       map[string][]int32
+		topics       map[string]int32
 		unusedTopics []string
 		nsticky      int
 	}{
 		{
 			name:    "no members, no plan",
 			members: []GroupMember{},
-			topics: map[string][]int32{
-				"a": {0},
+			topics: map[string]int32{
+				"a": 1,
 			},
 		},
 
@@ -42,8 +42,8 @@ func Test_stickyBalanceStrategy_Plan(t *testing.T) {
 			members: []GroupMember{
 				{ID: "A", Topics: []string{"t1"}},
 			},
-			topics: map[string][]int32{
-				"t1": {0, 1, 2},
+			topics: map[string]int32{
+				"t1": 3,
 			},
 		},
 
@@ -52,9 +52,9 @@ func Test_stickyBalanceStrategy_Plan(t *testing.T) {
 			members: []GroupMember{
 				{ID: "A", Topics: []string{"t1"}},
 			},
-			topics: map[string][]int32{
-				"t1": {0, 1, 2},
-				"t2": {0, 1, 2},
+			topics: map[string]int32{
+				"t1": 3,
+				"t2": 3,
 			},
 			unusedTopics: []string{"t2"},
 		},
@@ -64,9 +64,9 @@ func Test_stickyBalanceStrategy_Plan(t *testing.T) {
 			members: []GroupMember{
 				{ID: "A", Topics: []string{"t1", "t2"}},
 			},
-			topics: map[string][]int32{
-				"t1": {0},
-				"t2": {0, 1},
+			topics: map[string]int32{
+				"t1": 1,
+				"t2": 2,
 			},
 		},
 
@@ -76,8 +76,8 @@ func Test_stickyBalanceStrategy_Plan(t *testing.T) {
 				{ID: "A", Topics: []string{"t1"}},
 				{ID: "B", Topics: []string{"t1"}},
 			},
-			topics: map[string][]int32{
-				"t1": {0},
+			topics: map[string]int32{
+				"t1": 1,
 			},
 		},
 
@@ -87,8 +87,8 @@ func Test_stickyBalanceStrategy_Plan(t *testing.T) {
 				{ID: "A", Topics: []string{"t1"}},
 				{ID: "B", Topics: []string{"t1"}},
 			},
-			topics: map[string][]int32{
-				"t1": {0, 1},
+			topics: map[string]int32{
+				"t1": 2,
 			},
 		},
 
@@ -99,9 +99,9 @@ func Test_stickyBalanceStrategy_Plan(t *testing.T) {
 				{ID: "B", Topics: []string{"t1", "t2"}},
 				{ID: "C", Topics: []string{"t1"}},
 			},
-			topics: map[string][]int32{
-				"t1": {0, 1, 2},
-				"t2": {0, 1},
+			topics: map[string]int32{
+				"t1": 3,
+				"t2": 2,
 			},
 		},
 
@@ -111,9 +111,9 @@ func Test_stickyBalanceStrategy_Plan(t *testing.T) {
 				{ID: "A", Topics: []string{"t1", "t2"}},
 				{ID: "B", Topics: []string{"t1", "t2"}},
 			},
-			topics: map[string][]int32{
-				"t1": {0, 1, 2},
-				"t2": {0, 1, 2},
+			topics: map[string]int32{
+				"t1": 3,
+				"t2": 3,
 			},
 		},
 
@@ -130,8 +130,8 @@ func Test_stickyBalanceStrategy_Plan(t *testing.T) {
 						encode()},
 				{ID: "C", Topics: []string{"t1"}},
 			},
-			topics: map[string][]int32{
-				"t1": {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11},
+			topics: map[string]int32{
+				"t1": 12,
 			},
 			nsticky: 8,
 		},
@@ -149,9 +149,9 @@ func Test_stickyBalanceStrategy_Plan(t *testing.T) {
 						encode()},
 				{ID: "C", Topics: []string{"t1"}},
 			},
-			topics: map[string][]int32{
-				"t1":     {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12},
-				"unused": {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12},
+			topics: map[string]int32{
+				"t1":     13,
+				"unused": 13,
 			},
 			unusedTopics: []string{"unused"},
 			nsticky:      9,
@@ -165,9 +165,9 @@ func Test_stickyBalanceStrategy_Plan(t *testing.T) {
 						assign("t1", 0).
 						encode()},
 			},
-			topics: map[string][]int32{
-				"t1": {0},
-				"t2": {0},
+			topics: map[string]int32{
+				"t1": 1,
+				"t2": 1,
 			},
 			unusedTopics: []string{"t1"},
 		},
@@ -184,9 +184,9 @@ func Test_stickyBalanceStrategy_Plan(t *testing.T) {
 						assign("t1", 1).
 						encode()},
 			},
-			topics: map[string][]int32{
-				"t1": {0, 1},
-				"t2": {0, 1},
+			topics: map[string]int32{
+				"t1": 2,
+				"t2": 2,
 			},
 			nsticky: 1,
 		},
@@ -226,16 +226,16 @@ func Test_stickyBalanceStrategy_Plan(t *testing.T) {
 						assign("9", 0).
 						encode()},
 			},
-			topics: map[string][]int32{
-				"1": {0},
-				"2": {0},
-				"3": {0},
-				"4": {0},
-				"5": {0},
-				"6": {0},
-				"7": {0},
-				"8": {0},
-				"9": {0},
+			topics: map[string]int32{
+				"1": 1,
+				"2": 1,
+				"3": 1,
+				"4": 1,
+				"5": 1,
+				"6": 1,
+				"7": 1,
+				"8": 1,
+				"9": 1,
 			},
 			nsticky: 7,
 		},
@@ -278,16 +278,16 @@ func Test_stickyBalanceStrategy_Plan(t *testing.T) {
 						assign("9", 0).
 						encode()},
 			},
-			topics: map[string][]int32{
-				"1": {0},
-				"2": {0},
-				"3": {0},
-				"4": {0},
-				"5": {0},
-				"6": {0},
-				"7": {0},
-				"8": {0},
-				"9": {0},
+			topics: map[string]int32{
+				"1": 1,
+				"2": 1,
+				"3": 1,
+				"4": 1,
+				"5": 1,
+				"6": 1,
+				"7": 1,
+				"8": 1,
+				"9": 1,
 			},
 			nsticky: 5,
 		},
@@ -322,16 +322,16 @@ func Test_stickyBalanceStrategy_Plan(t *testing.T) {
 						assign("9", 0).
 						encode()},
 			},
-			topics: map[string][]int32{
-				"1": {0},
-				"2": {0},
-				"3": {0},
-				"4": {0},
-				"5": {0},
-				"6": {0},
-				"7": {0},
-				"8": {0},
-				"9": {0},
+			topics: map[string]int32{
+				"1": 1,
+				"2": 1,
+				"3": 1,
+				"4": 1,
+				"5": 1,
+				"6": 1,
+				"7": 1,
+				"8": 1,
+				"9": 1,
 			},
 			nsticky: 5,
 		},
@@ -378,21 +378,21 @@ func Test_stickyBalanceStrategy_Plan(t *testing.T) {
 					UserData: newUD().
 						encode()},
 			},
-			topics: map[string][]int32{
-				"1": {0},
-				"2": {0},
-				"3": {0},
-				"4": {0},
-				"5": {0},
-				"6": {0},
-				"7": {0},
-				"8": {0},
-				"9": {0},
-				"a": {0},
-				"b": {0},
-				"c": {0},
-				"d": {0},
-				"e": {0},
+			topics: map[string]int32{
+				"1": 1,
+				"2": 1,
+				"3": 1,
+				"4": 1,
+				"5": 1,
+				"6": 1,
+				"7": 1,
+				"8": 1,
+				"9": 1,
+				"a": 1,
+				"b": 1,
+				"c": 1,
+				"d": 1,
+				"e": 1,
 			},
 			nsticky: 5,
 		},
@@ -450,22 +450,22 @@ func Test_stickyBalanceStrategy_Plan(t *testing.T) {
 						assign("f", 0).
 						encode()},
 			},
-			topics: map[string][]int32{
-				"1": {0},
-				"2": {0},
-				"3": {0},
-				"4": {0},
-				"5": {0},
-				"6": {0},
-				"7": {0},
-				"8": {0},
-				"9": {0},
-				"a": {0},
-				"b": {0},
-				"c": {0},
-				"d": {0},
-				"e": {0},
-				"f": {0},
+			topics: map[string]int32{
+				"1": 1,
+				"2": 1,
+				"3": 1,
+				"4": 1,
+				"5": 1,
+				"6": 1,
+				"7": 1,
+				"8": 1,
+				"9": 1,
+				"a": 1,
+				"b": 1,
+				"c": 1,
+				"d": 1,
+				"e": 1,
+				"f": 1,
 			},
 			nsticky: 5,
 		},
@@ -493,7 +493,7 @@ func TestImbalanced(t *testing.T) {
 	for _, test := range []struct {
 		name    string
 		members []GroupMember
-		topics  map[string][]int32
+		topics  map[string]int32
 		nsticky int
 		balance map[int]resultOptions
 	}{
@@ -533,16 +533,16 @@ func TestImbalanced(t *testing.T) {
 					UserData: newUD().
 						encode()},
 			},
-			topics: map[string][]int32{
-				"1": {0},
-				"2": {0},
-				"3": {0},
-				"4": {0},
-				"5": {0},
-				"6": {0},
-				"7": {0},
-				"8": {0},
-				"9": {0},
+			topics: map[string]int32{
+				"1": 1,
+				"2": 1,
+				"3": 1,
+				"4": 1,
+				"5": 1,
+				"6": 1,
+				"7": 1,
+				"8": 1,
+				"9": 1,
 			},
 			nsticky: 2 + 3,
 			balance: map[int]resultOptions{
@@ -595,18 +595,18 @@ func TestImbalanced(t *testing.T) {
 					UserData: newUD().
 						encode()},
 			},
-			topics: map[string][]int32{
-				"1": {0},
-				"2": {0},
-				"3": {0},
-				"4": {0},
-				"5": {0},
-				"6": {0},
-				"7": {0},
-				"8": {0},
-				"9": {0},
-				"a": {0},
-				"b": {0},
+			topics: map[string]int32{
+				"1": 1,
+				"2": 1,
+				"3": 1,
+				"4": 1,
+				"5": 1,
+				"6": 1,
+				"7": 1,
+				"8": 1,
+				"9": 1,
+				"a": 1,
+				"b": 1,
 			},
 			nsticky: 2 + 1 + 3,
 			balance: map[int]resultOptions{ // B and C could alternate
@@ -673,21 +673,21 @@ func TestImbalanced(t *testing.T) {
 					UserData: newUD().
 						encode()},
 			},
-			topics: map[string][]int32{
-				"1": {0},
-				"2": {0},
-				"3": {0},
-				"4": {0},
-				"5": {0},
-				"6": {0},
-				"7": {0},
-				"8": {0},
-				"9": {0},
-				"a": {0},
-				"b": {0},
-				"c": {0},
-				"d": {0},
-				"e": {0},
+			topics: map[string]int32{
+				"1": 1,
+				"2": 1,
+				"3": 1,
+				"4": 1,
+				"5": 1,
+				"6": 1,
+				"7": 1,
+				"8": 1,
+				"9": 1,
+				"a": 1,
+				"b": 1,
+				"c": 1,
+				"d": 1,
+				"e": 1,
 			},
 			nsticky: 12,
 			balance: map[int]resultOptions{
@@ -784,26 +784,26 @@ func TestImbalanced(t *testing.T) {
 					UserData: newUD().
 						encode()},
 			},
-			topics: map[string][]int32{
-				"1": {0},
-				"2": {0},
-				"3": {0},
-				"4": {0},
-				"5": {0},
-				"6": {0},
-				"7": {0},
-				"8": {0},
-				"9": {0},
-				"a": {0},
-				"b": {0},
-				"c": {0},
-				"d": {0},
-				"e": {0},
-				"f": {0},
-				"g": {0},
-				"h": {0},
-				"i": {0},
-				"j": {0},
+			topics: map[string]int32{
+				"1": 1,
+				"2": 1,
+				"3": 1,
+				"4": 1,
+				"5": 1,
+				"6": 1,
+				"7": 1,
+				"8": 1,
+				"9": 1,
+				"a": 1,
+				"b": 1,
+				"c": 1,
+				"d": 1,
+				"e": 1,
+				"f": 1,
+				"g": 1,
+				"h": 1,
+				"i": 1,
+				"j": 1,
 			},
 			nsticky: 1 + 4,
 			balance: map[int]resultOptions{
@@ -859,19 +859,19 @@ func TestImbalanced(t *testing.T) {
 						assign("z", 0). // no longer exists; dropped in parseMemberMetadata
 						encode()},
 			},
-			topics: map[string][]int32{
-				"1": {0},
-				"2": {0},
-				"3": {0},
-				"4": {0},
-				"5": {0},
-				"6": {0},
-				"7": {0},
-				"8": {0},
-				"9": {0},
-				"a": {0},
-				"b": {0},
-				"c": {0},
+			topics: map[string]int32{
+				"1": 1,
+				"2": 1,
+				"3": 1,
+				"4": 1,
+				"5": 1,
+				"6": 1,
+				"7": 1,
+				"8": 1,
+				"9": 1,
+				"a": 1,
+				"b": 1,
+				"c": 1,
 			},
 			nsticky: 2 + 4,
 			balance: map[int]resultOptions{
@@ -896,7 +896,7 @@ func TestMultiGenerational(t *testing.T) {
 	for _, test := range []struct {
 		name    string
 		members []GroupMember
-		topics  map[string][]int32
+		topics  map[string]int32
 		nsticky int
 		balance map[int]resultOptions
 	}{
@@ -935,12 +935,12 @@ func TestMultiGenerational(t *testing.T) {
 						setGeneration(2).
 						encode()},
 			},
-			topics: map[string][]int32{
-				"1": {0},
-				"2": {0},
-				"3": {0},
-				"4": {0},
-				"5": {0},
+			topics: map[string]int32{
+				"1": 1,
+				"2": 1,
+				"3": 1,
+				"4": 1,
+				"5": 1,
 			},
 			nsticky: 4,
 			balance: map[int]resultOptions{
@@ -967,11 +967,11 @@ func Test_stickyBalanceStrategy_Plan_KIP54_ExampleOne(t *testing.T) {
 		{ID: "B", Topics: []string{"1", "2", "3", "4"}},
 		{ID: "C", Topics: []string{"1", "2", "3", "4"}},
 	}
-	topics := map[string][]int32{
-		"1": {0, 1},
-		"2": {0, 1},
-		"3": {0, 1},
-		"4": {0, 1},
+	topics := map[string]int32{
+		"1": 2,
+		"2": 2,
+		"3": 2,
+		"4": 2,
 	}
 	plan1 := Balance(members, topics)
 	testEqualDivvy(t, plan1, 0, members)
@@ -995,10 +995,10 @@ func Test_stickyBalanceStrategy_Plan_KIP54_ExampleTwo(t *testing.T) {
 		{ID: "2", Topics: []string{"1", "2"}},
 		{ID: "3", Topics: []string{"1", "2", "3"}},
 	}
-	topics := map[string][]int32{
-		"1": {0},
-		"2": {0, 1},
-		"3": {0, 1, 2},
+	topics := map[string]int32{
+		"1": 1,
+		"2": 2,
+		"3": 3,
 	}
 	plan1 := Balance(members, topics)
 	balance1 := map[int]resultOptions{
@@ -1034,9 +1034,9 @@ func Test_stickyBalanceStrategy_Plan_KIP54_ExampleThree(t *testing.T) {
 		{ID: "1", Topics: []string{"1", "2"}},
 		{ID: "2", Topics: []string{"1", "2"}},
 	}
-	topics := map[string][]int32{
-		"1": {0, 1},
-		"2": {0, 1},
+	topics := map[string]int32{
+		"1": 2,
+		"2": 2,
 	}
 	plan1 := Balance(members, topics)
 	balance1 := map[int]resultOptions{
@@ -1065,8 +1065,8 @@ func Test_stickyBalanceStrategy_Plan_AddRemoveConsumerOneTopic(t *testing.T) {
 	members := []GroupMember{
 		{ID: "1", Topics: []string{"T"}},
 	}
-	topics := map[string][]int32{
-		"T": {0, 1, 2},
+	topics := map[string]int32{
+		"T": 3,
 	}
 	plan1 := Balance(members, topics)
 	balance1 := map[int]resultOptions{
@@ -1101,7 +1101,7 @@ func Test_stickyBalanceStrategy_Plan_AddRemoveConsumerOneTopic(t *testing.T) {
 
 func Test_stickyBalanceStrategy_Plan_AssignmentWithMultipleGenerations1(t *testing.T) {
 	t.Parallel()
-	topics := map[string][]int32{"1": {0, 1, 2, 3, 4, 5}}
+	topics := map[string]int32{"1": 6}
 	members := []GroupMember{
 		{ID: "1", Topics: []string{"1"}},
 		{ID: "2", Topics: []string{"1"}},
@@ -1136,7 +1136,7 @@ func Test_stickyBalanceStrategy_Plan_AssignmentWithMultipleGenerations1(t *testi
 
 func Test_stickyBalanceStrategy_Plan_AssignmentWithMultipleGenerations2(t *testing.T) {
 	t.Parallel()
-	topics := map[string][]int32{"1": {0, 1, 2, 3, 4, 5}}
+	topics := map[string]int32{"1": 6}
 	members := []GroupMember{
 		{ID: "1", Topics: []string{"1"}},
 		{ID: "2", Topics: []string{"1"}},
@@ -1169,7 +1169,7 @@ func Test_stickyBalanceStrategy_Plan_AssignmentWithMultipleGenerations2(t *testi
 func Test_stickyBalanceStrategy_Plan_AssignmentWithConflictingPreviousGenerations(t *testing.T) {
 	t.Parallel()
 
-	topics := map[string][]int32{"1": {0, 1, 2, 3, 4, 5}}
+	topics := map[string]int32{"1": 6}
 	members := []GroupMember{
 		{ID: "1", Topics: []string{"1"},
 			UserData: newUD().
@@ -1196,7 +1196,7 @@ func Test_stickyBalanceStrategy_Plan_AssignmentWithConflictingPreviousGeneration
 
 func Test_stickyBalanceStrategy_Plan_SchemaBackwardCompatibility(t *testing.T) {
 	t.Parallel()
-	topics := map[string][]int32{"1": {0, 1, 2}}
+	topics := map[string]int32{"1": 3}
 	members := []GroupMember{
 		{ID: "1", Topics: []string{"1"},
 			UserData: newUD().
@@ -1217,7 +1217,7 @@ func Test_stickyBalanceStrategy_Plan_SchemaBackwardCompatibility(t *testing.T) {
 
 func Test_stickyBalanceStrategy_Plan_ConflictingPreviousAssignments(t *testing.T) {
 	t.Parallel()
-	topics := map[string][]int32{"1": {0, 1}}
+	topics := map[string]int32{"1": 2}
 	members := []GroupMember{
 		{ID: "1", Topics: []string{"1"},
 			UserData: newUD().
@@ -1250,7 +1250,7 @@ func TestLarge(t *testing.T) {
 const topicNum = 100
 const partitionNum = 200
 
-func makeLargeBalance(tb testing.TB, withImbalance bool) ([]GroupMember, map[string][]int32) {
+func makeLargeBalance(tb testing.TB, withImbalance bool) ([]GroupMember, map[string]int32) {
 	rng := rand.New(rand.NewSource(0))
 	var members []GroupMember
 	for i := 0; i < topicNum; i++ {
@@ -1271,22 +1271,18 @@ func makeLargeBalance(tb testing.TB, withImbalance bool) ([]GroupMember, map[str
 	}
 
 	// now we make topicNum topics
-	topics := make(map[string][]int32)
+	topics := make(map[string]int32)
 	var totalPartitions int
 	for i := 0; i < topicNum; i++ {
 		n := rng.Intn(partitionNum * 5 / 2)
 		totalPartitions += n
-		partitions := make([]int32, n)
-		for j := range partitions {
-			partitions[j] = int32(j)
-		}
-		topics[fmt.Sprintf("topic%d", i)] = partitions
+		topics[fmt.Sprintf("topic%d", i)] = int32(n)
 	}
 	tb.Logf("%d total partitions; %d total members", totalPartitions, len(members))
 	return members, topics
 }
 
-func makeLargeBalanceWithExisting(tb testing.TB, withImbalance bool) ([]GroupMember, map[string][]int32) {
+func makeLargeBalanceWithExisting(tb testing.TB, withImbalance bool) ([]GroupMember, map[string]int32) {
 	members, topics := makeLargeBalance(tb, withImbalance)
 	plan := Balance(members, topics)
 
