@@ -397,6 +397,13 @@ func main() {
 			s.WriteGetVersionFunc(l)
 			s.WriteIsFlexibleFunc(l)
 
+			for _, f := range s.Fields {
+				if f.FieldName == "ThrottleMillis" {
+					s.WriteThrottleMillisFunc(f, l)
+					break
+				}
+			}
+
 			if s.ResponseKind != "" {
 				if s.Admin {
 					s.WriteAdminFunc(l)

@@ -626,6 +626,11 @@ func (s Struct) WriteIsFlexibleFunc(l *LineWriter) {
 	}
 }
 
+func (s Struct) WriteThrottleMillisFunc(f StructField, l *LineWriter) {
+	t := f.Type.(Throttle)
+	l.Write("func (v *%s) Throttle() (int32, bool) { return v.ThrottleMillis, v.Version >= %d }", s.Name, t.Switchup)
+}
+
 func (s Struct) WriteAppendFunc(l *LineWriter) {
 	l.Write("func (v *%s) AppendTo(dst []byte) []byte {", s.Name)
 	if s.TopLevel || s.WithVersionField {
