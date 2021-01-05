@@ -21,6 +21,7 @@ func (NullableBytes) TypeName() string         { return "[]byte" }
 func (VarintString) TypeName() string          { return "string" }
 func (VarintBytes) TypeName() string           { return "[]byte" }
 func (a Array) TypeName() string               { return "[]" + a.Inner.TypeName() }
+func (Throttle) TypeName() string              { return "int32" }
 func (s Struct) TypeName() string              { return s.Name }
 func (FieldLengthMinusBytes) TypeName() string { return "[]byte" }
 
@@ -67,6 +68,7 @@ func (Varint) WriteAppend(l *LineWriter)       { primAppend("Varint", l) }
 func (Uuid) WriteAppend(l *LineWriter)         { primAppend("Uuid", l) }
 func (VarintString) WriteAppend(l *LineWriter) { primAppend("VarintString", l) }
 func (VarintBytes) WriteAppend(l *LineWriter)  { primAppend("VarintBytes", l) }
+func (Throttle) WriteAppend(l *LineWriter)     { primAppend("Int32", l) }
 
 func (v String) WriteAppend(l *LineWriter) { compactAppend(v.FromFlexible, "String", l) }
 func (v NullableString) WriteAppend(l *LineWriter) {
@@ -314,6 +316,7 @@ func (Varint) WriteDecode(l *LineWriter)       { primDecode("Varint", l) }
 func (Uuid) WriteDecode(l *LineWriter)         { primDecode("Uuid", l) }
 func (VarintString) WriteDecode(l *LineWriter) { primDecode("VarintString", l) }
 func (VarintBytes) WriteDecode(l *LineWriter)  { primDecode("VarintBytes", l) }
+func (Throttle) WriteDecode(l *LineWriter)     { primDecode("Int32", l) }
 
 func (v String) WriteDecode(l *LineWriter) { compactDecode(v.FromFlexible, "String", "string", l) }
 func (v Bytes) WriteDecode(l *LineWriter)  { compactDecode(v.FromFlexible, "Bytes", "[]byte", l) }

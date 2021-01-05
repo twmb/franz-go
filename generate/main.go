@@ -113,6 +113,10 @@ type (
 		Type       Type
 	}
 
+	Throttle struct {
+		Switchup int
+	}
+
 	Struct struct {
 		TopLevel         bool
 		WithVersionField bool // if not top level

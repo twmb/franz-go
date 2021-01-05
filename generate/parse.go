@@ -90,6 +90,18 @@ func (s *Struct) BuildFrom(scanner *LineScanner, key int, level int) (done bool)
 			continue
 		}
 
+		// ThrottleMillis is a special field:
+		// - we die if there is preceeding documentation
+		// - there can only be a minimum version, no max
+		// - no tags
+		if strings.Contains(line, "ThrottleMillis") {
+			if nextComment != "" {
+				die("unexpected comment on ThrottleMillis: %s", nextComment)
+			}
+			s.Fields = append(s.Fields, parseThrottleMillis(line))
+			continue
+		}
+
 		// Fields are name on left, type on right.
 		fields := strings.Split(line, ": ")
 		if len(fields) != 2 || len(fields[0]) == 0 || len(fields[1]) == 0 {
@@ -318,6 +330,46 @@ func parseFieldLength(in string) (string, int, error) {
 		return "", 0, fmt.Errorf("unable to parse length sub in %q", lr[1])
 	}
 	return lr[0], length, nil
+}
+
+// 0: entire thing
+// 1: optional version switched to post-reply throttling
+// 2: optional version introduced
+var throttleRe = regexp.MustCompile(`^ThrottleMillis(?:\((\d+)\))?(?: // v(\d+)\+)?$`)
+
+func parseThrottleMillis(in string) StructField {
+	match := throttleRe.FindStringSubmatch(in)
+	if len(match) == 0 {
+		die("throttle line does not match: %s", in)
+	}
+
+	typ := Throttle{}
+	typ.Switchup, _ = strconv.Atoi(match[1])
+
+	s := StructField{
+		MaxVersion: -1,
+		Tag:        -1,
+		FieldName:  "ThrottleMillis",
+		Type:       typ,
+	}
+	s.MinVersion, _ = strconv.Atoi(match[2])
+
+	const switchupFmt = `// ThrottleMillis is how long of a throttle Kafka will apply to the client
+// after this request.
+// For Kafka < 2.0.0, the throttle is applied before issuing a response.
+// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
+//
+// This request switched at version %d.`
+
+	const static = `// ThrottleMillis is how long of a throttle Kafka will apply to the client
+// after responding to this request.`
+
+	s.Comment = static
+	if typ.Switchup > 0 {
+		s.Comment = fmt.Sprintf(switchupFmt, typ.Switchup)
+	}
+
+	return s
 }
 
 // 0: entire thing
