@@ -104,27 +104,108 @@ type cfg struct {
 	rack           string
 }
 
-// TODO strengthen?
 func (cfg *cfg) validate() error {
 	if len(cfg.seedBrokers) == 0 {
 		return errors.New("config erroneously has no seed brokers")
 	}
-	if cfg.maxBrokerWriteBytes < 1<<10 {
-		return fmt.Errorf("max broker write bytes %d is less than min acceptable %d", cfg.maxBrokerWriteBytes, 1<<10)
-	}
-	// upper bound broker write bytes to avoid any problems with
-	// overflowing numbers in calculations.
-	if cfg.maxBrokerWriteBytes > 1<<30 {
-		return fmt.Errorf("max broker write bytes %d is greater than max acceptable %d", cfg.maxBrokerWriteBytes, 1<<30)
+
+	for _, limit := range []struct {
+		name    string
+		sp      **string // if field is a *string, we take addr to it
+		s       string
+		allowed int
+	}{
+		// A 256 byte ID / software name & version is good enough and
+		// fits with our max broker write byte min of 1K.
+		{name: "client id", sp: &cfg.id, allowed: 256},
+		{name: "software name", s: cfg.softwareName, allowed: 256},
+		{name: "software version", s: cfg.softwareVersion, allowed: 256},
+
+		// The following is the limit transitioning from two byte
+		// prefix for flexible stuff to three bytes; as with above, it
+		// is more than reasonable.
+		{name: "transactional id", sp: &cfg.txnID, allowed: 16382},
+
+		{name: "rack", s: cfg.rack, allowed: 512},
+	} {
+		s := limit.s
+		if limit.sp != nil && *limit.sp != nil {
+			s = **limit.sp
+		}
+		if len(s) > limit.allowed {
+			return fmt.Errorf("%s length %d is larger than max allowed %d", limit.name, len(s), limit.allowed)
+		}
 	}
 
-	if cfg.maxRecordBatchBytes < 1<<10 {
-		return fmt.Errorf("max record batch bytes %d is less than min acceptable %d", cfg.maxRecordBatchBytes, 1<<10)
-	}
+	i64lt := func(l, r int64) (bool, string) { return l < r, "less" }
+	i64gt := func(l, r int64) (bool, string) { return l > r, "larger" }
+	for _, limit := range []struct {
+		name    string
+		v       int64
+		allowed int64
+		badcmp  func(int64, int64) (bool, string)
 
-	if cfg.maxBrokerWriteBytes < cfg.maxRecordBatchBytes {
-		return fmt.Errorf("max broker write bytes %d is erroneously less than max record batch bytes %d",
-			cfg.maxBrokerWriteBytes, cfg.maxRecordBatchBytes)
+		fmt  string
+		durs bool
+	}{
+		// Min write of 1K and max of 1G is reasonable.
+		{name: "max broker write bytes", v: int64(cfg.maxBrokerWriteBytes), allowed: 1 << 10, badcmp: i64lt},
+		{name: "max broker write bytes", v: int64(cfg.maxBrokerWriteBytes), allowed: 1 << 30, badcmp: i64gt},
+
+		// Same for read bytes.
+		{name: "max broker read bytes", v: int64(cfg.maxBrokerReadBytes), allowed: 1 << 10, badcmp: i64lt},
+		{name: "max broker read bytes", v: int64(cfg.maxBrokerReadBytes), allowed: 1 << 30, badcmp: i64gt},
+
+		// For batches, we want at least 512 (reasonable), and the
+		// upper limit is the max num when a uvarint transitions from 4
+		// to 5 bytes. The upper limit is also more than reasoanble
+		// (268M).
+		{name: "max record batch bytes", v: int64(cfg.maxRecordBatchBytes), allowed: 512, badcmp: i64lt},
+		{name: "max record batch bytes", v: int64(cfg.maxRecordBatchBytes), allowed: 268435454, badcmp: i64gt},
+
+		// We do not want the broker write bytes to be less than the
+		// record batch bytes, nor the read bytes to be less than what
+		// we indicate to fetch.
+		//
+		// We cannot enforce if a single batch is larger than the max
+		// fetch bytes limit, but hopefully we do not run into that.
+		{v: int64(cfg.maxBrokerWriteBytes), allowed: int64(cfg.maxRecordBatchBytes), badcmp: i64lt, fmt: "max broker write bytes %v is erroneously less than max record batch bytes %v"},
+		{v: int64(cfg.maxBrokerReadBytes), allowed: int64(cfg.maxBytes), badcmp: i64lt, fmt: "max broker read bytes %v is erroneously less than max fetch bytes %v"},
+
+		// 10ms <= metadata <= 1hr
+		{name: "metadata max age", v: int64(cfg.metadataMaxAge), allowed: int64(time.Hour), badcmp: i64gt, durs: true},
+		{name: "metadata min age", v: int64(cfg.metadataMinAge), allowed: int64(10 * time.Millisecond), badcmp: i64lt, durs: true},
+		{v: int64(cfg.metadataMaxAge), allowed: int64(cfg.metadataMinAge), badcmp: i64lt, fmt: "metadata max age %v is erroneously less than metadata min age %v", durs: true},
+
+		// Some random producer settings.
+		{name: "max buffered records", v: int64(cfg.maxBufferedRecords), allowed: 1, badcmp: i64lt},
+		{name: "linger", v: int64(cfg.linger), allowed: int64(time.Minute), badcmp: i64gt, durs: true},
+		{name: "produce timeout", v: int64(cfg.produceTimeout), allowed: int64(time.Second), badcmp: i64lt, durs: true},
+		{name: "record timeout", v: int64(cfg.recordTimeout), allowed: int64(time.Second), badcmp: func(l, r int64) (bool, string) {
+			if l == 0 {
+				return false, "" // we print nothing when things are good
+			}
+			return l < r, "less"
+		}, durs: true},
+
+		// And finally, consumer settings. maxWait is stored as int32
+		// milliseconds, but we want the error message to be in the
+		// nice time.Duration string format.
+		{name: "max fetch wait", v: int64(cfg.maxWait) * int64(time.Millisecond), allowed: int64(10 * time.Millisecond), badcmp: i64lt, durs: true},
+	} {
+		bad, cmp := limit.badcmp(limit.v, limit.allowed)
+		if bad {
+			if limit.fmt != "" {
+				if limit.durs {
+					return fmt.Errorf(limit.fmt, time.Duration(limit.v), time.Duration(limit.allowed))
+				}
+				return fmt.Errorf(limit.fmt, limit.v, limit.allowed)
+			}
+			if limit.durs {
+				return fmt.Errorf("%s %v is %s than allowed %v", limit.name, time.Duration(limit.v), cmp, time.Duration(limit.allowed))
+			}
+			return fmt.Errorf("%s %v is %s than allowed %v", limit.name, limit.v, cmp, limit.allowed)
+		}
 	}
 
 	return nil
