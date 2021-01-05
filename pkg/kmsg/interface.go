@@ -139,9 +139,6 @@ type Response interface {
 // NewRequestFormatter function.
 type RequestFormatter struct {
 	clientID *string
-
-	initPrincipalName *string
-	initClientID      *string
 }
 
 // RequestFormatterOpt applys options to a RequestFormatter.

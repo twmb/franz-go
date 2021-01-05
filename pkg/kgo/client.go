@@ -1394,9 +1394,7 @@ func (cl *listOffsetsSharder) shard(ctx context.Context, kreq kmsg.Request) ([]i
 	for _, topic := range req.Topics {
 		tmapping, exists := mapping[topic.Topic]
 		if err := kerr.ErrorForCode(tmapping.topic.ErrorCode); err != nil || !exists {
-			for _, partition := range topic.Partitions {
-				unknowns[topic.Topic] = append(unknowns[topic.Topic], partition)
-			}
+			unknowns[topic.Topic] = append(unknowns[topic.Topic], topic.Partitions...)
 			continue
 		}
 		for _, partition := range topic.Partitions {
@@ -1568,9 +1566,7 @@ func (cl *deleteRecordsSharder) shard(ctx context.Context, kreq kmsg.Request) ([
 	for _, topic := range req.Topics {
 		tmapping, exists := mapping[topic.Topic]
 		if err := kerr.ErrorForCode(tmapping.topic.ErrorCode); err != nil || !exists {
-			for _, partition := range topic.Partitions {
-				unknowns[topic.Topic] = append(unknowns[topic.Topic], partition)
-			}
+			unknowns[topic.Topic] = append(unknowns[topic.Topic], topic.Partitions...)
 			continue
 		}
 		for _, partition := range topic.Partitions {
@@ -1659,9 +1655,7 @@ func (cl *offsetForLeaderEpochSharder) shard(ctx context.Context, kreq kmsg.Requ
 	for _, topic := range req.Topics {
 		tmapping, exists := mapping[topic.Topic]
 		if err := kerr.ErrorForCode(tmapping.topic.ErrorCode); err != nil || !exists {
-			for _, partition := range topic.Partitions {
-				unknowns[topic.Topic] = append(unknowns[topic.Topic], partition)
-			}
+			unknowns[topic.Topic] = append(unknowns[topic.Topic], topic.Partitions...)
 			continue
 		}
 		for _, partition := range topic.Partitions {
@@ -2015,9 +2009,7 @@ func (cl *describeLogDirsSharder) shard(ctx context.Context, kreq kmsg.Request) 
 	for _, topic := range req.Topics {
 		tmapping, exists := mapping[topic.Topic]
 		if !exists || kerr.ErrorForCode(tmapping.topic.ErrorCode) != nil {
-			for _, partition := range topic.Partitions {
-				unknowns[topic.Topic] = append(unknowns[topic.Topic], partition)
-			}
+			unknowns[topic.Topic] = append(unknowns[topic.Topic], topic.Partitions...)
 			continue
 		}
 		for _, partition := range topic.Partitions {

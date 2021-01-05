@@ -749,6 +749,6 @@ func (e Enum) WriteConsts(l *LineWriter) {
 			}
 		}
 
-		l.Write("%s%s = %d", e.Name, sb.String(), v.Value)
+		l.Write("%s%s %s = %d", e.Name, sb.String(), e.Name, v.Value)
 	}
 }

@@ -33101,9 +33101,9 @@ func (v ConfigResourceType) String() string {
 
 const (
 	ConfigResourceTypeUnknown      ConfigResourceType = 0
-	ConfigResourceTypeTopic                           = 2
-	ConfigResourceTypeBroker                          = 4
-	ConfigResourceTypeBrokerLogger                    = 8
+	ConfigResourceTypeTopic        ConfigResourceType = 2
+	ConfigResourceTypeBroker       ConfigResourceType = 4
+	ConfigResourceTypeBrokerLogger ConfigResourceType = 8
 )
 
 // Where a config entry is from. If there are no config synonyms,
@@ -33152,12 +33152,12 @@ func (v ConfigSource) String() string {
 
 const (
 	ConfigSourceUnknown                    ConfigSource = 0
-	ConfigSourceDynamicTopicConfig                      = 1
-	ConfigSourceDynamicBrokerConfig                     = 2
-	ConfigSourceDynamicDefaultBrokerConfig              = 3
-	ConfigSourceStaticBrokerConfig                      = 4
-	ConfigSourceDefaultConfig                           = 5
-	ConfigSourceDynamicBrokerLoggerConfig               = 6
+	ConfigSourceDynamicTopicConfig         ConfigSource = 1
+	ConfigSourceDynamicBrokerConfig        ConfigSource = 2
+	ConfigSourceDynamicDefaultBrokerConfig ConfigSource = 3
+	ConfigSourceStaticBrokerConfig         ConfigSource = 4
+	ConfigSourceDefaultConfig              ConfigSource = 5
+	ConfigSourceDynamicBrokerLoggerConfig  ConfigSource = 6
 )
 
 // A configuration data type.
@@ -33211,15 +33211,15 @@ func (v ConfigType) String() string {
 
 const (
 	ConfigTypeUnknown  ConfigType = 0
-	ConfigTypeBoolean             = 1
-	ConfigTypeString              = 2
-	ConfigTypeInt                 = 3
-	ConfigTypeShort               = 4
-	ConfigTypeLong                = 5
-	ConfigTypeDouble              = 6
-	ConfigTypeList                = 7
-	ConfigTypeClass               = 8
-	ConfigTypePassword            = 9
+	ConfigTypeBoolean  ConfigType = 1
+	ConfigTypeString   ConfigType = 2
+	ConfigTypeInt      ConfigType = 3
+	ConfigTypeShort    ConfigType = 4
+	ConfigTypeLong     ConfigType = 5
+	ConfigTypeDouble   ConfigType = 6
+	ConfigTypeList     ConfigType = 7
+	ConfigTypeClass    ConfigType = 8
+	ConfigTypePassword ConfigType = 9
 )
 
 // ACLResourceType is a type of resource to use for ACLs.
@@ -33261,12 +33261,12 @@ func (v ACLResourceType) String() string {
 
 const (
 	ACLResourceTypeUnknown         ACLResourceType = 0
-	ACLResourceTypeAny                             = 1
-	ACLResourceTypeTopic                           = 2
-	ACLResourceTypeGroup                           = 3
-	ACLResourceTypeCluster                         = 4
-	ACLResourceTypeTransactionalId                 = 5
-	ACLResourceTypeDelegationToken                 = 6
+	ACLResourceTypeAny             ACLResourceType = 1
+	ACLResourceTypeTopic           ACLResourceType = 2
+	ACLResourceTypeGroup           ACLResourceType = 3
+	ACLResourceTypeCluster         ACLResourceType = 4
+	ACLResourceTypeTransactionalId ACLResourceType = 5
+	ACLResourceTypeDelegationToken ACLResourceType = 6
 )
 
 // ACLResourcePatternType is how an acl's ResourceName is understood.
@@ -33301,9 +33301,9 @@ func (v ACLResourcePatternType) String() string {
 
 const (
 	ACLResourcePatternTypeUnknown  ACLResourcePatternType = 0
-	ACLResourcePatternTypeMatch                           = 1
-	ACLResourcePatternTypeLiteral                         = 2
-	ACLResourcePatternTypePrefixed                        = 3
+	ACLResourcePatternTypeMatch    ACLResourcePatternType = 1
+	ACLResourcePatternTypeLiteral  ACLResourcePatternType = 2
+	ACLResourcePatternTypePrefixed ACLResourcePatternType = 3
 )
 
 // An ACL permission type.
@@ -33336,9 +33336,9 @@ func (v ACLPermissionType) String() string {
 
 const (
 	ACLPermissionTypeUnknown ACLPermissionType = 0
-	ACLPermissionTypeAny                       = 1
-	ACLPermissionTypeDeny                      = 2
-	ACLPermissionTypeAllow                     = 3
+	ACLPermissionTypeAny     ACLPermissionType = 1
+	ACLPermissionTypeDeny    ACLPermissionType = 2
+	ACLPermissionTypeAllow   ACLPermissionType = 3
 )
 
 // An ACL operation.
@@ -33406,16 +33406,16 @@ func (v ACLOperation) String() string {
 
 const (
 	ACLOperationUnknown         ACLOperation = 0
-	ACLOperationAny                          = 1
-	ACLOperationAll                          = 2
-	ACLOperationRead                         = 3
-	ACLOperationWrite                        = 4
-	ACLOperationCreate                       = 5
-	ACLOperationDelete                       = 6
-	ACLOperationAlter                        = 7
-	ACLOperationDescribe                     = 8
-	ACLOperationClusterAction                = 9
-	ACLOperationDescribeConfigs              = 10
-	ACLOperationAlterConfigs                 = 11
-	ACLOperationIdempotentWrite              = 12
+	ACLOperationAny             ACLOperation = 1
+	ACLOperationAll             ACLOperation = 2
+	ACLOperationRead            ACLOperation = 3
+	ACLOperationWrite           ACLOperation = 4
+	ACLOperationCreate          ACLOperation = 5
+	ACLOperationDelete          ACLOperation = 6
+	ACLOperationAlter           ACLOperation = 7
+	ACLOperationDescribe        ACLOperation = 8
+	ACLOperationClusterAction   ACLOperation = 9
+	ACLOperationDescribeConfigs ACLOperation = 10
+	ACLOperationAlterConfigs    ACLOperation = 11
+	ACLOperationIdempotentWrite ACLOperation = 12
 )
