@@ -7,6 +7,8 @@
 // all errors elide the standard "Err" prefix.
 package kerr
 
+import "fmt"
+
 // Error is a Kafka error.
 type Error struct {
 	// Message is the string form of a Kafka error code
@@ -21,7 +23,7 @@ type Error struct {
 }
 
 func (e *Error) Error() string {
-	return e.Message
+	return fmt.Sprintf("%s: %s", e.Message, e.Description)
 }
 
 // ErrorForCode returns the error corresponding to the given error code.
