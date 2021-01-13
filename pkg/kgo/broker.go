@@ -732,7 +732,7 @@ func (cxn *brokerCxn) writeConn(ctx context.Context, buf []byte, timeout time.Du
 	return
 }
 
-func (cxn *brokerCxn) readConn(ctx context.Context, timeout time.Duration, enqueuedForReadingAt time.Time) (nread int, read []byte, err error, readWait, timeToRead time.Duration) {
+func (cxn *brokerCxn) readConn(ctx context.Context, timeout time.Duration, enqueuedForReadingAt time.Time) (nread int, buf []byte, err error, readWait, timeToRead time.Duration) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -762,9 +762,11 @@ func (cxn *brokerCxn) readConn(ctx context.Context, timeout time.Duration, enque
 			err = &ErrLargeRespSize{Size: size, Limit: maxSize}
 			return
 		}
-		nread2, buf := 0, make([]byte, size)
+		buf = make([]byte, size)
+		var nread2 int
 		nread2, err = io.ReadFull(cxn.conn, buf)
 		nread += nread2
+		buf = buf[:nread2]
 		if err != nil {
 			err = ErrConnDead
 			return
