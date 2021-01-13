@@ -1,18 +1,55 @@
 tip
 ===
 
+
+
+v0.6.2
+===
+
+- [`9761889`](https://github.com/twmb/franz-go/commit/9761889): bump dependencies
+- [`d07538d`](https://github.com/twmb/franz-go/commit/d07538d) Allow clients to cancel requests with the passed context; fix potential hanging requests
+- [`303186a`](https://github.com/twmb/franz-go/commit/303186a) Add BrokerThrottleHook (thanks @akesle)
+- [`63d3a60`](https://github.com/twmb/franz-go/commit/63d3a60) and previous commits: Use new & better kmsg.ThrottleResponse; this removes the usage of reflect to check for a ThrottleMillis field
+- [`b68f112`](https://github.com/twmb/franz-go/commit/b68f112) kerr: add description to error string
+- [`7cef63c`](https://github.com/twmb/franz-go/commit/7cef63c) config: strengthen validation
+- [`faac3cc`](https://github.com/twmb/franz-go/commit/faac3cc) producing: fail large messages more correctly (bugfix)
+- [`bc1f2d1`](https://github.com/twmb/franz-go/commit/bc1f2d1) and [`2493ae7`](https://github.com/twmb/franz-go/commit/2493ae7): kversion: switchup Versions API, finalize 2.7.0
+- [`991e7f3`](https://github.com/twmb/franz-go/commit/991e7f3): Add support for KIP-630's new FetchSnapshot API
+- [`de22e10`](https://github.com/twmb/franz-go/commit/de22e10): and [`9805d36`](https://github.com/twmb/franz-go/commit/9805d36) and [`c1d9ff4`](https://github.com/twmb/franz-go/commit/c1d9ff4): Add Uuid support and some definitions for KIP-516 (topic IDs)
+- [`539b06c`](https://github.com/twmb/franz-go/commit/539b06c): Completely rewrite the consumer.go & source.go logic and fix sink & source broker pointer issues
+- [`385cecb`](https://github.com/twmb/franz-go/commit/385cecb): Adds a warning hint if the connection dies on the first read without sasl
+- [`71cda7b`](https://github.com/twmb/franz-go/commit/71cda7b): Bump another batch of requests to be flexible (per KAFKA-10729 / 85f94d50271)
 - [`9d1238b8e`](https://github.com/twmb/franz-go/commit/9d1238b8ee28ad032e0bc9aa4891e0fbcdd27a63) and [`8a75a8091`](https://github.com/twmb/franz-go/commit/8a75a80914500a7f9c9e0edc4e5aefde327adf45): Fix misleading doc comments on DescribeGroupsRequest and FindCoordinatorResponse
 - [`7f30228b8`](https://github.com/twmb/franz-go/commit/7f30228b87d4f883ba5c344048201dfb4d90336e): Adds FetchMinBytes option
 - [`56ab90c72`](https://github.com/twmb/franz-go/commit/56ab90c7273be5ccc40dc38ff669b36995c505ce): Support EnvelopeRequest & DefaultPrincipalBuilder for KIP-590
 - [`37d6868fc`](https://github.com/twmb/franz-go/commit/37d6868fc474813a6fb1e814b1a7fd87cc34d8ee): Add producer ID and epoch to the Record struct
-- [`9467a951d`](https://github.com/twmb/franz-go/commit/9467a951d71e511c28180239336093225082896c): Add explicit sharded requests and retriable broker specific requests (followup commit settles API naming)
+- [`9467a951d`](https://github.com/twmb/franz-go/commit/9467a951d71e511c28180239336093225082896c): Add explicit sharded requests and retriable broker specific requests (followup commit settles API naming; later commits fix small problems in initial implementation)
 - [`b94b15549`](https://github.com/twmb/franz-go/commit/b94b155497b4216808236aa393f06e7dccd772ed): Add kmsg constants for enums
 - [`7ac5aaff8`](https://github.com/twmb/franz-go/commit/7ac5aaff8cea693e6a57533c8e18cca75c17ecc0): Add a MinVersions option
 - [`3b06d558b`](https://github.com/twmb/franz-go/commit/3b06d558ba7453a191f434ce5654853322742859): Add a max broker read bytes option
 - [`4c5cf8422`](https://github.com/twmb/franz-go/commit/4c5cf84223401eb1f5f6a78671dc04ff51407bd3): Account for throttling in responses
 
-Also includes minor changes. The above commits do not track every change to new (tip) requests, such as
-fields being modified or removed in followup commits.
+The primary commit of this release is `539b06c`, which completely rewrites the
+consumer.go and source.go files to be more easily understandable. This commit
+also fixes a bug related to the `sink` and `source` broker pointers; if the
+broker changed but kept the same node ID, the `sink` and `source` would not
+have their old pointers (to the old broker) updated.
+
+There were some small breaking API changes in the `kmsg` package, most notably,
+the metadata request changed one field from a `string` to a `*string` due to
+Kafka switching the field from non-nullable to nullable. As specified in the
+`kmsg` docs, API compatibility is not guaranteed due to Kafka being able to
+switch things like this (and I favor small breakages like this rather than
+wrapping every type into a struct with a `null` field).
+
+The `kversion` package has had its `Versions` type completely changed. The new
+format should be future compatible for new changes. The current change was
+required due to Kafka's `ApiVersions` having a gap in keys that it responds
+with in 2.7.0.
+
+Config validation has been strengthened quite a bit.
+
+Includes a few other minor, not too noteworthy changes.
 
 v0.6.1
 ===
