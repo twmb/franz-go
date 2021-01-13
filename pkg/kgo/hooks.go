@@ -48,9 +48,10 @@ type BrokerDisconnectHook interface {
 // key is used (even though sasl authenticate requests are not being issued).
 type BrokerWriteHook interface {
 	// OnWrite is passed the broker metadata, the key for the request that
-	// was written, the number of bytes written, how long the request
-	// waited before being written, how long it took to write the request,
-	// and any error.
+	// was written, the number of bytes that were written (may not be the
+	// whole request if there was an error), how long the request waited
+	// before being written (including throttling waiting), how long it
+	// took to write the request, and any error.
 	//
 	// The bytes written does not count any tls overhead.
 	OnWrite(meta BrokerMetadata, key int16, bytesWritten int, writeWait, timeToWrite time.Duration, err error)
@@ -63,9 +64,9 @@ type BrokerWriteHook interface {
 // key is used (even though sasl authenticate requests are not being issued).
 type BrokerReadHook interface {
 	// OnRead is passed the broker metadata, the key for the response that
-	// was read, the number of bytes read, how long the client waited
-	// before reading the response, how long it took to read the response,
-	// and any error.
+	// was read, the number of bytes read (may not be the whole read if
+	// there was an error), how long the client waited before reading the
+	// response, how long it took to read the response, and any error.
 	//
 	// The bytes read does not count any tls overhead.
 	OnRead(meta BrokerMetadata, key int16, bytesRead int, readWait, timeToRead time.Duration, err error)

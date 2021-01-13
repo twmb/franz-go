@@ -480,9 +480,8 @@ func (cl *Client) Close() {
 // of request is being issued.
 //
 // The passed context can be used to cancel a request and return early. Note
-// that if the request is not canceled before it is written to Kafka, you may
-// just end up canceling and not receiving the response to what Kafka
-// inevitably does.
+// that if the request was written to Kafka but the context canceled before a
+// response is received, Kafka may still operate on the received request.
 func (cl *Client) Request(ctx context.Context, req kmsg.Request) (kmsg.Response, error) {
 	resps, merge := cl.shardedRequest(ctx, req)
 	// If there is no merge function, only one request was issued directly
