@@ -246,7 +246,7 @@ func (b *broker) handleReqs() {
 
 		ourMax := req.MaxVersion()
 		if b.cl.cfg.maxVersions != nil {
-			userMax, _ := b.cl.cfg.maxVersions.LookupVersion(req.Key()) // we validated HasKey above
+			userMax, _ := b.cl.cfg.maxVersions.LookupMaxKeyVersion(req.Key()) // we validated HasKey above
 			if userMax < ourMax {
 				ourMax = userMax
 			}
@@ -264,7 +264,7 @@ func (b *broker) handleReqs() {
 		// lower than we desire, we fail the request for the broker is
 		// too old.
 		if b.cl.cfg.minVersions != nil {
-			minVersion, minVersionExists := b.cl.cfg.minVersions.LookupVersion(req.Key())
+			minVersion, minVersionExists := b.cl.cfg.minVersions.LookupMaxKeyVersion(req.Key())
 			if minVersionExists && version < minVersion {
 				pr.promise(nil, ErrBrokerTooOld)
 				continue
