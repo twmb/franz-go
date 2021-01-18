@@ -49,10 +49,19 @@ func TestVersionGuess(t *testing.T) {
 	{
 		v := V2_7_0()
 		v.SetMaxKeyVersion(int16(len(v.k2v)+1), -1)
-		if got, exp := v.VersionGuess(), "v2.7.0"; got != exp {
+		if got, exp := v.VersionGuess(), "v2.7"; got != exp {
 			t.Errorf("got %s != exp %s without modifications", got, exp)
 		}
 	}
+
+	{
+		v := Tip()
+		v.SetMaxKeyVersion(0, 999)
+		if got, exp := v.VersionGuess(), "at least v2.7"; got != exp {
+			t.Errorf("got %s != exp %s without modifications", got, exp)
+		}
+	}
+
 }
 
 func TestEqual(t *testing.T) {

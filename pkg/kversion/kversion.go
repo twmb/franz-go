@@ -119,6 +119,7 @@ func (vs *Versions) Equal(other *Versions) bool {
 // more verbose strings.
 func (vs *Versions) VersionGuess() string {
 	var last string
+	cmp := make(map[int16]int16, len(maxTip))
 	for _, comparison := range []struct {
 		cmp  []int16
 		name string
@@ -131,25 +132,23 @@ func (vs *Versions) VersionGuess() string {
 		{max0101, "v0.10.1"},
 		{max0102, "v0.10.2"},
 		{max0110, "v0.11.0"},
-		{max100, "v1.0.0"},
-		{max110, "v1.1.0"},
-		{max200, "v2.0.0"},
-		{max210, "v2.1.0"},
-		{max220, "v2.2.0"},
-		{max230, "v2.3.0"},
-		{max240, "v2.4.0"},
-		{max250, "v2.5.0"},
-		{max260, "v2.6.0"},
-		{max270, "v2.7.0"},
-		{maxTip, "tip"},
+		{max100, "v1.0"},
+		{max110, "v1.1"},
+		{max200, "v2.0"},
+		{max210, "v2.1"},
+		{max220, "v2.2"},
+		{max230, "v2.3"},
+		{max240, "v2.4"},
+		{max250, "v2.5"},
+		{max260, "v2.6"},
+		{max270, "v2.7"},
 	} {
 
-		var under, equal, over bool
-
-		cmp := make(map[int16]int16, len(comparison.cmp))
 		for k, v := range comparison.cmp {
 			cmp[int16(k)] = v
 		}
+
+		var under, equal, over bool
 
 		for k, v := range vs.k2v {
 			cmpv, has := cmp[int16(k)]
@@ -215,7 +214,7 @@ func (vs *Versions) VersionGuess() string {
 		// is no default case.
 	}
 
-	return last // we never reach this because we always return above
+	return "at least " + last
 }
 
 // Returns a string representation of the versions; the format may change.
