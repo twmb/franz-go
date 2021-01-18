@@ -223,7 +223,7 @@ func defaultCfg() cfg {
 		logger: new(nopLogger),
 
 		seedBrokers: []string{"127.0.0.1"},
-		maxVersions: func() *kversion.Versions { s := kversion.Stable(); return &s }(),
+		maxVersions: kversion.Stable(),
 
 		retryBackoff: func() func(int) time.Duration {
 			var rngMu sync.Mutex
@@ -380,8 +380,8 @@ func SeedBrokers(seeds ...string) Opt {
 // for the latest version. If using the kmsg package directly to issue
 // requests, it is recommended to pin versions so that new fields on requests
 // do not get invalid default zero values before you update your usage.
-func MaxVersions(versions kversion.Versions) Opt {
-	return clientOpt{func(cfg *cfg) { cfg.maxVersions = &versions }}
+func MaxVersions(versions *kversion.Versions) Opt {
+	return clientOpt{func(cfg *cfg) { cfg.maxVersions = versions }}
 }
 
 // MinVersions sets the minimum Kafka version a request can be downgraded to,
@@ -396,8 +396,8 @@ func MaxVersions(versions kversion.Versions) Opt {
 // Unlike MaxVersions, if a request is issued that is unknown to the min
 // versions, the request is allowed. It is assumed that there is no lower bound
 // for that request.
-func MinVersions(versions kversion.Versions) Opt {
-	return clientOpt{func(cfg *cfg) { cfg.minVersions = &versions }}
+func MinVersions(versions *kversion.Versions) Opt {
+	return clientOpt{func(cfg *cfg) { cfg.minVersions = versions }}
 }
 
 // RetryBackoff sets the backoff strategy for how long to backoff for a given
