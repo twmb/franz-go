@@ -1944,7 +1944,7 @@ func NewProduceRequestTopic() ProduceRequestTopic {
 
 // ProduceRequest issues records to be created to Kafka.
 //
-// Kafka 0.9.0 (v1) changed Records from MessageSet v0 to MessageSet v1.
+// Kafka 0.10.0 (v2) changed Records from MessageSet v0 to MessageSet v1.
 // Kafka 0.11.0 (v3) again changed Records to RecordBatch.
 //
 // Note that the special client ID "__admin_client" will allow you to produce
