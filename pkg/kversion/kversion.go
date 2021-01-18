@@ -108,12 +108,14 @@ func (vs *Versions) Equal(other *Versions) bool {
 
 // VersionGuess attempts to guess which version of Kafka these versions belong
 // to. If an exact match can be determined, this returns a string in the format
+// v0.#.# or v#.# (depending on whether Kafka is pre-1.0.0 or post). For
+// example, v0.8.0 or v2.7.
 //
-//     v#.#.#
+// Patch numbers are not included in the guess as it is not possible to
+// determine the Kafka patch version being used as a client.
 //
-// For example, v0.8.0 or v2.7.0. If the version is determined to be tip (which
-// this package, or your pinned version of it, may be out of date with), this
-// simply returns "tip".
+// If the version is determined to be higher than kversion knows of or is tip,
+// this package returns "at least v#.#".
 //
 // Custom versions, or in-between versions, are detected and return slightly
 // more verbose strings.
