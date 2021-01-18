@@ -60,10 +60,17 @@ func (o Offset) WithEpoch(e int32) Offset {
 	return o
 }
 
-// At returns a copy of the calling offset, changing the returned offset
-// to begin at exactly the requested offset.
+// At returns a copy of the calling offset, changing the returned offset to
+// begin at exactly the requested offset.
+//
+// There are two potential special offsets to use: -2 allows for consuming at
+// the start, and -1 allows for consuming at the end. These two offsets are
+// equivalent to calling AtStart or AtEnd.
+//
+// If the offset is less than -2, the client bounds it to -2 to consume at the
+// start.
 func (o Offset) At(at int64) Offset {
-	if at < 0 {
+	if at < -2 {
 		at = -2
 	}
 	o.at = at
