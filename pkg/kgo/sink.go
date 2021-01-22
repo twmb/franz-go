@@ -1200,6 +1200,11 @@ func (recBuf *recBuf) resetSeq() {
 	defer recBuf.mu.Unlock()
 	recBuf.seq = 0
 	recBuf.batch0Seq = 0
+
+	// Since we are resetting the sequence numbers, we want to **be sure**
+	// that the next batch chosen will be the first. Otherwise, we will use
+	// seq 0 for a later batch.
+	recBuf.resetBatchDrainIdx()
 }
 
 // promisedRec ties a record with the callback that will be called once

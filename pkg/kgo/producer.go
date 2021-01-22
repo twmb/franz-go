@@ -233,6 +233,16 @@ func (cl *Client) producerID() (int64, int16, error) {
 			// if we had an ID, we can bump the epoch locally.
 			// If we are at the max epoch, we will ask for a new ID.
 			if cl.cfg.txnID == nil && id.id >= 0 && id.epoch < math.MaxInt16-1 {
+				// As seen in KAFKA-12152, if we are simply bumping the
+				// epoch for the idempotent producer, we actually need to
+				// reset the sequence number for **all** partitions.
+				// Otherwise, we will use a new epoch and a partition
+				// that did not reset will have OOOSN.
+				for _, tp := range cl.loadTopics() {
+					for _, tpd := range tp.load().partitions {
+						tpd.records.resetSeq()
+					}
+				}
 				cl.producer.id.Store(&producerID{
 					id:    id.id,
 					epoch: id.epoch + 1,
