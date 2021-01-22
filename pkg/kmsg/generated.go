@@ -4644,16 +4644,20 @@ type MetadataRequest struct {
 	// IncludeClusterAuthorizedOperations, introduced in Kakfa 2.3.0, specifies
 	// whether to return a bitfield of AclOperations that this client can perform
 	// on the cluster. See KIP-430 for more details.
+	//
+	// This field was removed in Kafka 2.8.0 in favor of the new DescribeClusterRequest.
 	IncludeClusterAuthorizedOperations bool // v8+
 
 	// IncludeTopicAuthorizedOperations, introduced in Kakfa 2.3.0, specifies
 	// whether to return a bitfield of AclOperations that this client can perform
 	// on individual topics. See KIP-430 for more details.
+	//
+	// This field was removed in Kafka 2.8.0 in favor of the new DescribeClusterRequest.
 	IncludeTopicAuthorizedOperations bool // v8+
 }
 
 func (*MetadataRequest) Key() int16                 { return 3 }
-func (*MetadataRequest) MaxVersion() int16          { return 10 }
+func (*MetadataRequest) MaxVersion() int16          { return 11 }
 func (v *MetadataRequest) SetVersion(version int16) { v.Version = version }
 func (v *MetadataRequest) GetVersion() int16        { return v.Version }
 func (v *MetadataRequest) IsFlexible() bool         { return v.Version >= 9 }
@@ -4726,11 +4730,11 @@ func (v *MetadataRequest) AppendTo(dst []byte) []byte {
 		v := v.AllowAutoTopicCreation
 		dst = kbin.AppendBool(dst, v)
 	}
-	if version >= 8 {
+	if version >= 8 && version <= 10 {
 		v := v.IncludeClusterAuthorizedOperations
 		dst = kbin.AppendBool(dst, v)
 	}
-	if version >= 8 {
+	if version >= 8 && version <= 10 {
 		v := v.IncludeTopicAuthorizedOperations
 		dst = kbin.AppendBool(dst, v)
 	}
@@ -4803,11 +4807,11 @@ func (v *MetadataRequest) ReadFrom(src []byte) error {
 		v := b.Bool()
 		s.AllowAutoTopicCreation = v
 	}
-	if version >= 8 {
+	if version >= 8 && version <= 10 {
 		v := b.Bool()
 		s.IncludeClusterAuthorizedOperations = v
 	}
-	if version >= 8 {
+	if version >= 8 && version <= 10 {
 		v := b.Bool()
 		s.IncludeTopicAuthorizedOperations = v
 	}
@@ -5000,7 +5004,7 @@ type MetadataResponse struct {
 }
 
 func (*MetadataResponse) Key() int16                 { return 3 }
-func (*MetadataResponse) MaxVersion() int16          { return 10 }
+func (*MetadataResponse) MaxVersion() int16          { return 11 }
 func (v *MetadataResponse) SetVersion(version int16) { v.Version = version }
 func (v *MetadataResponse) GetVersion() int16        { return v.Version }
 func (v *MetadataResponse) IsFlexible() bool         { return v.Version >= 9 }

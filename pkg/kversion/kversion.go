@@ -680,5 +680,8 @@ var maxTip = nextMax(max270, func(v []int16) []int16 {
 		0, // 60 describe cluster
 	)
 
+	// KAFKA-12212 7a1d1d9a69a241efd68e572badee999229b3942f KIP-700
+	v[4]++ // 11 metadata
+
 	return v
 })

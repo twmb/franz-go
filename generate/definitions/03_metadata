@@ -1,5 +1,5 @@
 // MetadataRequest requests metadata from Kafka.
-MetadataRequest => key 3, max version 10, flexible v9+
+MetadataRequest => key 3, max version 11, flexible v9+
   // Topics is a list of topics to return metadata about. If this is null
   // in v1+, all topics are included. If this is empty, no topics are.
   // For v0 (<Kafka 0.10.0.0), if this is empty, all topics are included.
@@ -17,11 +17,15 @@ MetadataRequest => key 3, max version 10, flexible v9+
   // IncludeClusterAuthorizedOperations, introduced in Kakfa 2.3.0, specifies
   // whether to return a bitfield of AclOperations that this client can perform
   // on the cluster. See KIP-430 for more details.
-  IncludeClusterAuthorizedOperations: bool // v8+
+  //
+  // This field was removed in Kafka 2.8.0 in favor of the new DescribeClusterRequest.
+  IncludeClusterAuthorizedOperations: bool // v8-v10
   // IncludeTopicAuthorizedOperations, introduced in Kakfa 2.3.0, specifies
   // whether to return a bitfield of AclOperations that this client can perform
   // on individual topics. See KIP-430 for more details.
-  IncludeTopicAuthorizedOperations: bool // v8+
+  //
+  // This field was removed in Kafka 2.8.0 in favor of the new DescribeClusterRequest.
+  IncludeTopicAuthorizedOperations: bool // v8-v10
 
 // MetadataResponse is returned from a MetdataRequest.
 MetadataResponse =>
