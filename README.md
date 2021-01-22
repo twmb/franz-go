@@ -14,6 +14,21 @@ data loss detection, closest replica fetching, and more. If a client KIP exists,
 
 This library attempts to provide an intuitive API while interacting with Kafka the way Kafka expects (timeouts, etc.).
 
+## Features
+
+- Feature complete client (up to Kafka v2.7.0+)
+- Supported compression types: snappy, gzip, lz4 and zstd
+- SSL/TLS Support
+- Exactly once semantics / idempotent producing
+- Transactions support
+- All SASL mechanisms are supported (OAuthBearer, GSSAPI/Kerberos, SCRAM-SHA-256/512 and plain)
+- Supported Kafka versions >=0.8
+- Provides low level functionality (such as sending API requests) as well as high level functionality (e.g. consuming in groups)
+- Utilizes modern & idiomatic Go (support for contexts, variadic configuration options, ...)
+- Highly performant, see [Performance](./docs/performance.md) (benchmarks will be added)
+- Written in pure Go (no wrapper lib for a C library or other bindings)
+- Ability to add detailed log messages or metrics using hooks
+
 ## Getting started
 
 Basic usage for producing and consuming Kafka messages looks like this:
@@ -66,41 +81,6 @@ for {
 - Consuming in [Consumer Groups](./docs/consumer-groups.md)
 - [Producing](./docs/producer.md)
 - Sending [admin requests](./docs/admin-requests.md)
-
-## Why franz-go?
-
-- Only Kafka client available for Go that supports all Kafka features (also easy to maintain thanks to code generation)
-- Provides low level functionality (such as sending API requests) as well as high level functionality (e.g. consuming in groups)
-- Utilizes modern & idiomatic Go (support for contexts, variadic configuration options, ...)
-- Highly performant, see [Performance](./docs/performance.md) (benchmarks will be added)
-
-## Stability Status
-
-The current release is a 0.x version, meaning I am not guaranteeing API
-stability. Once I have some feedback on whether things need changing or not,
-I plan to bump to a 1.x release. As much as possible, I personally consider
-the current API stable.
-
-Some features in this client only **theoretically** are implemented, but have
-not been tested. The main untested feature is nearest replica fetching.
-
-I have manually tested pausing and unpausing partitions (forcing a leader epoch
-bump) and manually moving partitions between brokers while producing and
-consuming (with alter partition assignments on Kafka 2.5.0). I aim to add
-partition migration to the integration test suite in the code soon.
-
-I have integration tested a chain of producing and consuming within groups
-with and without transactions for all balancers. These integration tests rely
-on my [`kcl`][2] tool. In the long term, I plan to have tests that spin up
-containers and trigger every relevant scenario as appropriate, and I plan to
-remove the dependency on kcl.
-
-[2]: https://github.com/twmb/kcl
-
-I would love confirmation that this program has been used successfully, and
-would love to start a "Users" section below. With more confirmation of success,
-and confirmation that there are no knife edges, I will inch closer to a 1.x
-release.
 
 ## Version Pinning
 
