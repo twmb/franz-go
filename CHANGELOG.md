@@ -1,6 +1,21 @@
 tip
 ===
 
+- [`db09137`](https://github.com/twmb/franz-go/commit/db09137): Add support for new DescribeCluster API (KIP-700)
+- [`3866e0c`](https://github.com/twmb/franz-go/commit/3866e0c): Set Record.Attrs properly before calling Produce callback hook.
+- [`05346db`](https://github.com/twmb/franz-go/commit/05346db) and [`3d3787e`](https://github.com/twmb/franz-go/commit/3d3787e): kgo: breaking change for kversions breaking change two commits ago (see two lines below)
+- [`b921c14`](https://github.com/twmb/franz-go/commit/b921c14): doc fix: v0.10.0 changed produce from MessageSet v0 to MessageSet v1
+- [`33a8b26`](https://github.com/twmb/franz-go/commit/33a8b26): Breaking pointerification change to kversions.Versions; introduce VersionGuess
+
+Two small breaking changes related to kversions.Versions in this; switching to
+pointers now makes the struct future compatible; if it grows, we avoid the
+concern of passing around a large struct on the stack.
+
+Contains one small fix related to KIP-360 w.r.t. the idempotent producer: when
+we encounter OutOfOrderSequenceNumber, we need to reset _all_ partition's
+sequence numbers, not just the failing one. This is now done by resetting
+everything the next time the producer ID is loaded. The related Kafka ticket is
+KAFKA-12152.
 
 
 v0.6.2
