@@ -1,0 +1,31 @@
+// Introduced for KIP-700, DescribeClusterRequest is effectively an "admin"
+// type metadata request for information that producers or consumers do not
+// need to care about.
+DescribeClusterRequest => key 60, max version 0, flexible v0+
+  // Whether to include cluster authorized operations. This requires DESCRIBE
+  // on CLUSTER.
+  IncludeClusterAuthorizedOperations: bool
+
+// DescribeClusterResponse is a response to a DescribeClusterRequest.
+DescribeClusterResponse =>
+  ThrottleMillis
+  // The top level response error code.
+  ErrorCode: int16
+  // The top level error message, if any.
+  ErrorMessage: nullable-string
+  // The cluster ID that responding broker belongs to.
+  ClusterID: string
+  // The ID of the controller broker.
+  ControllerID: int32(-1)
+  // Brokers is a set of alive Kafka brokers (this mirrors MetadataResponse.Brokers).
+  Brokers: [=>]
+    // NodeID is the node ID of a Kafka broker.
+    NodeID: int32
+    // Host is the hostname of a Kafka broker.
+    Host: string
+    // Port is the port of a Kafka broker.
+    Port: int32
+    // Rack is the rack this Kafka broker is in, if any.
+    Rack: nullable-string
+  // 32-bit bitfield to represent authorized operations for this cluster.
+  ClusterAuthorizedOperations: int32(-2147483648)

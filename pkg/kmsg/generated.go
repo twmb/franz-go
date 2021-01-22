@@ -10,7 +10,7 @@ import (
 
 // MaxKey is the maximum key used for any messages in this package.
 // Note that this value will change as Kafka adds more messages.
-const MaxKey = 59
+const MaxKey = 60
 
 // MessageV0 is the message format Kafka used prior to 0.10.
 //
@@ -32839,6 +32839,357 @@ func NewFetchSnapshotResponse() FetchSnapshotResponse {
 	return v
 }
 
+// Introduced for KIP-700, DescribeClusterRequest is effectively an "admin"
+// type metadata request for information that producers or consumers do not
+// need to care about.
+type DescribeClusterRequest struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	// Whether to include cluster authorized operations. This requires DESCRIBE
+	// on CLUSTER.
+	IncludeClusterAuthorizedOperations bool
+}
+
+func (*DescribeClusterRequest) Key() int16                 { return 60 }
+func (*DescribeClusterRequest) MaxVersion() int16          { return 0 }
+func (v *DescribeClusterRequest) SetVersion(version int16) { v.Version = version }
+func (v *DescribeClusterRequest) GetVersion() int16        { return v.Version }
+func (v *DescribeClusterRequest) IsFlexible() bool         { return v.Version >= 0 }
+func (v *DescribeClusterRequest) ResponseKind() Response {
+	return &DescribeClusterResponse{Version: v.Version}
+}
+
+// RequestWith is requests v on r and returns the response or an error.
+func (v *DescribeClusterRequest) RequestWith(ctx context.Context, r Requestor) (*DescribeClusterResponse, error) {
+	kresp, err := r.Request(ctx, v)
+	if err != nil {
+		return nil, err
+	}
+	return kresp.(*DescribeClusterResponse), nil
+}
+
+func (v *DescribeClusterRequest) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	isFlexible := version >= 0
+	_ = isFlexible
+	{
+		v := v.IncludeClusterAuthorizedOperations
+		dst = kbin.AppendBool(dst, v)
+	}
+	if isFlexible {
+		dst = append(dst, 0)
+	}
+	return dst
+}
+func (v *DescribeClusterRequest) ReadFrom(src []byte) error {
+	v.Default()
+	b := kbin.Reader{Src: src}
+	version := v.Version
+	_ = version
+	isFlexible := version >= 0
+	_ = isFlexible
+	s := v
+	{
+		v := b.Bool()
+		s.IncludeClusterAuthorizedOperations = v
+	}
+	if isFlexible {
+		SkipTags(&b)
+	}
+	return b.Complete()
+}
+
+// NewPtrDescribeClusterRequest returns a pointer to a default DescribeClusterRequest
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrDescribeClusterRequest() *DescribeClusterRequest {
+	var v DescribeClusterRequest
+	v.Default()
+	return &v
+}
+
+// Default sets any default fields. Calling this allows for future compatibility
+// if new fields are added to DescribeClusterRequest.
+func (v *DescribeClusterRequest) Default() {
+}
+
+// NewDescribeClusterRequest returns a default DescribeClusterRequest
+// This is a shortcut for creating a struct and calling Default yourself.
+func NewDescribeClusterRequest() DescribeClusterRequest {
+	var v DescribeClusterRequest
+	v.Default()
+	return v
+}
+
+type DescribeClusterResponseBroker struct {
+	// NodeID is the node ID of a Kafka broker.
+	NodeID int32
+
+	// Host is the hostname of a Kafka broker.
+	Host string
+
+	// Port is the port of a Kafka broker.
+	Port int32
+
+	// Rack is the rack this Kafka broker is in, if any.
+	Rack *string
+}
+
+// Default sets any default fields. Calling this allows for future compatibility
+// if new fields are added to DescribeClusterResponseBroker.
+func (v *DescribeClusterResponseBroker) Default() {
+}
+
+// NewDescribeClusterResponseBroker returns a default DescribeClusterResponseBroker
+// This is a shortcut for creating a struct and calling Default yourself.
+func NewDescribeClusterResponseBroker() DescribeClusterResponseBroker {
+	var v DescribeClusterResponseBroker
+	v.Default()
+	return v
+}
+
+// DescribeClusterResponse is a response to a DescribeClusterRequest.
+type DescribeClusterResponse struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	// ThrottleMillis is how long of a throttle Kafka will apply to the client
+	// after responding to this request.
+	ThrottleMillis int32
+
+	// The top level response error code.
+	ErrorCode int16
+
+	// The top level error message, if any.
+	ErrorMessage *string
+
+	// The cluster ID that responding broker belongs to.
+	ClusterID string
+
+	// The ID of the controller broker.
+	ControllerID int32
+
+	// Brokers is a set of alive Kafka brokers (this mirrors MetadataResponse.Brokers).
+	Brokers []DescribeClusterResponseBroker
+
+	// 32-bit bitfield to represent authorized operations for this cluster.
+	ClusterAuthorizedOperations int32
+}
+
+func (*DescribeClusterResponse) Key() int16                 { return 60 }
+func (*DescribeClusterResponse) MaxVersion() int16          { return 0 }
+func (v *DescribeClusterResponse) SetVersion(version int16) { v.Version = version }
+func (v *DescribeClusterResponse) GetVersion() int16        { return v.Version }
+func (v *DescribeClusterResponse) IsFlexible() bool         { return v.Version >= 0 }
+func (v *DescribeClusterResponse) Throttle() (int32, bool)  { return v.ThrottleMillis, v.Version >= 0 }
+func (v *DescribeClusterResponse) RequestKind() Request {
+	return &DescribeClusterRequest{Version: v.Version}
+}
+
+func (v *DescribeClusterResponse) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	isFlexible := version >= 0
+	_ = isFlexible
+	{
+		v := v.ThrottleMillis
+		dst = kbin.AppendInt32(dst, v)
+	}
+	{
+		v := v.ErrorCode
+		dst = kbin.AppendInt16(dst, v)
+	}
+	{
+		v := v.ErrorMessage
+		if isFlexible {
+			dst = kbin.AppendCompactNullableString(dst, v)
+		} else {
+			dst = kbin.AppendNullableString(dst, v)
+		}
+	}
+	{
+		v := v.ClusterID
+		if isFlexible {
+			dst = kbin.AppendCompactString(dst, v)
+		} else {
+			dst = kbin.AppendString(dst, v)
+		}
+	}
+	{
+		v := v.ControllerID
+		dst = kbin.AppendInt32(dst, v)
+	}
+	{
+		v := v.Brokers
+		if isFlexible {
+			dst = kbin.AppendCompactArrayLen(dst, len(v))
+		} else {
+			dst = kbin.AppendArrayLen(dst, len(v))
+		}
+		for i := range v {
+			v := &v[i]
+			{
+				v := v.NodeID
+				dst = kbin.AppendInt32(dst, v)
+			}
+			{
+				v := v.Host
+				if isFlexible {
+					dst = kbin.AppendCompactString(dst, v)
+				} else {
+					dst = kbin.AppendString(dst, v)
+				}
+			}
+			{
+				v := v.Port
+				dst = kbin.AppendInt32(dst, v)
+			}
+			{
+				v := v.Rack
+				if isFlexible {
+					dst = kbin.AppendCompactNullableString(dst, v)
+				} else {
+					dst = kbin.AppendNullableString(dst, v)
+				}
+			}
+			if isFlexible {
+				dst = append(dst, 0)
+			}
+		}
+	}
+	{
+		v := v.ClusterAuthorizedOperations
+		dst = kbin.AppendInt32(dst, v)
+	}
+	if isFlexible {
+		dst = append(dst, 0)
+	}
+	return dst
+}
+func (v *DescribeClusterResponse) ReadFrom(src []byte) error {
+	v.Default()
+	b := kbin.Reader{Src: src}
+	version := v.Version
+	_ = version
+	isFlexible := version >= 0
+	_ = isFlexible
+	s := v
+	{
+		v := b.Int32()
+		s.ThrottleMillis = v
+	}
+	{
+		v := b.Int16()
+		s.ErrorCode = v
+	}
+	{
+		var v *string
+		if isFlexible {
+			v = b.CompactNullableString()
+		} else {
+			v = b.NullableString()
+		}
+		s.ErrorMessage = v
+	}
+	{
+		var v string
+		if isFlexible {
+			v = b.CompactString()
+		} else {
+			v = b.String()
+		}
+		s.ClusterID = v
+	}
+	{
+		v := b.Int32()
+		s.ControllerID = v
+	}
+	{
+		v := s.Brokers
+		a := v
+		var l int32
+		if isFlexible {
+			l = b.CompactArrayLen()
+		} else {
+			l = b.ArrayLen()
+		}
+		if !b.Ok() {
+			return b.Complete()
+		}
+		if l > 0 {
+			a = make([]DescribeClusterResponseBroker, l)
+		}
+		for i := int32(0); i < l; i++ {
+			v := &a[i]
+			v.Default()
+			s := v
+			{
+				v := b.Int32()
+				s.NodeID = v
+			}
+			{
+				var v string
+				if isFlexible {
+					v = b.CompactString()
+				} else {
+					v = b.String()
+				}
+				s.Host = v
+			}
+			{
+				v := b.Int32()
+				s.Port = v
+			}
+			{
+				var v *string
+				if isFlexible {
+					v = b.CompactNullableString()
+				} else {
+					v = b.NullableString()
+				}
+				s.Rack = v
+			}
+			if isFlexible {
+				SkipTags(&b)
+			}
+		}
+		v = a
+		s.Brokers = v
+	}
+	{
+		v := b.Int32()
+		s.ClusterAuthorizedOperations = v
+	}
+	if isFlexible {
+		SkipTags(&b)
+	}
+	return b.Complete()
+}
+
+// NewPtrDescribeClusterResponse returns a pointer to a default DescribeClusterResponse
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrDescribeClusterResponse() *DescribeClusterResponse {
+	var v DescribeClusterResponse
+	v.Default()
+	return &v
+}
+
+// Default sets any default fields. Calling this allows for future compatibility
+// if new fields are added to DescribeClusterResponse.
+func (v *DescribeClusterResponse) Default() {
+	v.ControllerID = -1
+	v.ClusterAuthorizedOperations = -2147483648
+}
+
+// NewDescribeClusterResponse returns a default DescribeClusterResponse
+// This is a shortcut for creating a struct and calling Default yourself.
+func NewDescribeClusterResponse() DescribeClusterResponse {
+	var v DescribeClusterResponse
+	v.Default()
+	return v
+}
+
 // RequestForKey returns the request corresponding to the given request key
 // or nil if the key is unknown.
 func RequestForKey(key int16) Request {
@@ -32965,6 +33316,8 @@ func RequestForKey(key int16) Request {
 		return new(EnvelopeRequest)
 	case 59:
 		return new(FetchSnapshotRequest)
+	case 60:
+		return new(DescribeClusterRequest)
 	}
 }
 
@@ -33094,6 +33447,8 @@ func ResponseForKey(key int16) Response {
 		return new(EnvelopeResponse)
 	case 59:
 		return new(FetchSnapshotResponse)
+	case 60:
+		return new(DescribeClusterResponse)
 	}
 }
 
@@ -33223,6 +33578,8 @@ func NameForKey(key int16) string {
 		return "Envelope"
 	case 59:
 		return "FetchSnapshot"
+	case 60:
+		return "DescribeCluster"
 	}
 }
 
