@@ -1,4 +1,4 @@
-franz-go
+franz-go - Apache Kafka client written in Go
 ===
 
 [![GoDev](https://img.shields.io/static/v1?label=godev&message=reference&color=00add8)][godev]
@@ -8,7 +8,7 @@ franz-go
 
 [godev]: https://pkg.go.dev/github.com/twmb/franz-go/pkg/kgo
 
-Franz-go is an all-encompassing Kafka client fully written Go. This library aims to provide **every Kafka feature** from 
+Franz-go is an all-encompassing Apache Kafka client fully written Go. This library aims to provide **every Kafka feature** from 
 Apache Kafka v0.8.0 onward. It has support for transactions, regex topic consuming, the latest partitioning strategies,
 data loss detection, closest replica fetching, and more. If a client KIP exists, this library aims to support it.
 
@@ -16,7 +16,7 @@ This library attempts to provide an intuitive API while interacting with Kafka t
 
 ## Getting started
 
-Basic usage looks like this:
+Basic usage for producing and consuming Kafka messages looks like this:
 
 ```go
 seeds := []string{"localhost:9092"}
@@ -26,19 +26,38 @@ if err != nil {
 }
 defer client.Close()
 
-ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-defer cancel()
+ctx := context.Background()
 
-// Construct message request and send it to Kafka
-req := kmsg.NewMetadataRequest()
-req.Topics = nil // Requests all topics
+// 1.) Producing a message
+// All record production goes through Produce, and the callback can be used
+// to allow for syncronous or asyncronous production.
+var wg sync.WaitGroup
+wg.Add(1)
+record := &kgo.Record{Topic: "foo", Value: []byte("bar")}
+err := client.Produce(ctx, record, func(_ *Record, err error) {
+        defer wg.Done()
+        if err != nil {
+                fmt.Printf("record had a produce error: %v\n", err)
+        }
 
-res, err := req.RequestWith(ctx, client)
-if err != nil {
-    // Error during request has happened (e. g. context cancelled)
-    panic(err)
 }
-fmt.Println(len(res.Topics))
+if err != nil {
+        panic("we are unable to produce if the context is canceled, we have hit max buffered," +
+                "or if we are transactional and not in a transaction")
+}
+wg.Wait()
+
+// 2.) Consuming messages from a topic
+// Consuming can either be direct (no consumer group), or through a group. Below, we use a group.
+// client.AssignGroup("my-group-identifier", kgo.GroupTopics("foo"))
+for {
+        fetches := client.PollFetches(ctx)
+        iter := fetches.RecordIter()
+        for !iter.Done() {
+            record := iter.Next()
+            fmt.Println(string(record.Value))
+        }
+}
 ```
 
 - Take a look at [more examples](./examples) 
