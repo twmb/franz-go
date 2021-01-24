@@ -43,8 +43,8 @@ type Client struct {
 
 	brokersMu    sync.RWMutex
 	brokers      map[int32]*broker // broker id => broker
-	anyBroker    []*broker
-	anyBrokerIdx int
+	anyBrokerIdx int32
+	anySeedIdx   int32
 	stopBrokers  bool // set to true on close to stop updateBrokers
 
 	// A sink and a source is created once per node ID and persists
@@ -194,7 +194,6 @@ func NewClient(opts ...Opt) (*Client, error) {
 	for i, seed := range seeds {
 		b := cl.newBroker(unknownSeedID(i), seed.host, seed.port, nil)
 		cl.brokers[b.meta.NodeID] = b
-		cl.anyBroker = append(cl.anyBroker, b)
 	}
 	go cl.updateMetadataLoop()
 
@@ -269,16 +268,23 @@ func (cl *Client) broker() *broker {
 	cl.brokersMu.Lock() // full lock needed for anyBrokerIdx below
 	defer cl.brokersMu.Unlock()
 
-	if cl.anyBrokerIdx >= len(cl.anyBroker) { // metadata update lost us brokers
+	b, exists := cl.brokers[cl.anyBrokerIdx]
+	if !exists && cl.anyBrokerIdx != 0 {
 		cl.anyBrokerIdx = 0
+		b, exists = cl.brokers[cl.anyBrokerIdx]
+	}
+	cl.anyBrokerIdx++
+
+	// Maybe we have not loaded brokers yet--fallback to seeds.
+	if !exists {
+		b, exists = cl.brokers[unknownSeedID(int(cl.anySeedIdx))]
+		if !exists {
+			cl.anySeedIdx = 0 // seed 0 **must** exists.
+			b = cl.brokers[unknownSeedID(int(cl.anySeedIdx))]
+		}
+		cl.anySeedIdx++
 	}
 
-	b := cl.anyBroker[cl.anyBrokerIdx]
-	cl.anyBrokerIdx++
-	if cl.anyBrokerIdx == len(cl.anyBroker) {
-		cl.anyBrokerIdx = 0
-		cl.rng.Shuffle(len(cl.anyBroker), func(i, j int) { cl.anyBroker[i], cl.anyBroker[j] = cl.anyBroker[j], cl.anyBroker[i] })
-	}
 	return b
 }
 
@@ -388,7 +394,6 @@ func (cl *Client) updateBrokers(brokers []kmsg.MetadataResponseBroker) {
 	}
 
 	cl.brokers = newBrokers
-	cl.anyBroker = newAnyBroker
 }
 
 // Close leaves any group and closes all connections and goroutines.
