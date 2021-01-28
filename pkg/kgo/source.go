@@ -1164,7 +1164,7 @@ type fetchSession struct {
 }
 
 func (s *fetchSession) kill() {
-	s.id = -1
+	s.id = 0
 	s.epoch = -1
 	s.used = nil
 	s.killed = true
@@ -1174,18 +1174,27 @@ func (s *fetchSession) kill() {
 // We do not reset the ID; using epoch 0 for an existing ID unregisters the
 // prior session.
 func (s *fetchSession) reset() {
+	if s.killed {
+		return
+	}
 	s.epoch = 0
 	s.used = nil
 }
 
 // bumpEpoch bumps the epoch and saves the session id.
+//
+// Kafka replies with the session ID of the session to use. When it does, we
+// start from epoch 1, wrapping back to 1 if we go negative.
 func (s *fetchSession) bumpEpoch(id int32) {
+	if s.killed {
+		return
+	}
 	if id != s.id {
-		s.epoch = 0
+		s.epoch = 0 // new session: reset to 0 for the increment below
 	}
 	s.epoch++
 	if s.epoch < 0 {
-		s.epoch = 1
+		s.epoch = 1 // we wrapped: reset back to 1 to continue this session
 	}
 	s.id = id
 }
