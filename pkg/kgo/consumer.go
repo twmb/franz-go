@@ -990,6 +990,9 @@ func (cl *Client) listOffsetsForBrokerLoad(ctx context.Context, broker *broker, 
 			}
 
 			offset := rPartition.Offset + loadPart.relative
+			if len(rPartition.OldStyleOffsets) > 0 { // if we have any, we used list offsets v0
+				offset = rPartition.OldStyleOffsets[0] + loadPart.relative
+			}
 			if loadPart.at >= 0 {
 				offset = loadPart.at + loadPart.relative // we obey exact requests, even if they end up past the end
 			}
@@ -1104,6 +1107,7 @@ func (o offsetLoadMap) buildListReq(isolationLevel int8) *kmsg.ListOffsetsReques
 				Partition:          partition,
 				CurrentLeaderEpoch: offset.currentEpoch, // KIP-320
 				Timestamp:          offset.at,
+				MaxNumOffsets:      1,
 			})
 		}
 		req.Topics = append(req.Topics, kmsg.ListOffsetsRequestTopic{
