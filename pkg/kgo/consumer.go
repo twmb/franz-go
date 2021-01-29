@@ -700,6 +700,15 @@ func (c *consumer) stopSession() listOrEpochLoads {
 
 	// At this point, all fetches, lists, and loads are dead.
 
+	c.cl.sinksAndSourcesMu.Lock()
+	for _, sns := range c.cl.sinksAndSources {
+		sns.source.session.reset()
+	}
+	c.cl.sinksAndSourcesMu.Unlock()
+
+	// At this point, if we begin fetching anew, then the sources will not
+	// be using stale sessions.
+
 	c.sourcesReadyMu.Lock()
 	defer c.sourcesReadyMu.Unlock()
 	for _, ready := range c.sourcesReadyForDraining {
