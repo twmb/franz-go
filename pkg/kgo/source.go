@@ -433,6 +433,7 @@ func (s *source) fetch(consumerSession *consumerSession) (fetched bool) {
 	case <-requested:
 		fetched = true
 	case <-ctx.Done():
+		s.session.reset()
 		req.usedOffsets.finishUsingAll()
 		return
 	}
@@ -449,6 +450,7 @@ func (s *source) fetch(consumerSession *consumerSession) (fetched bool) {
 		case <-after.C:
 		case <-ctx.Done():
 		}
+		s.session.reset()
 		req.usedOffsets.finishUsingAll()
 		return
 	}
@@ -478,6 +480,7 @@ func (s *source) fetch(consumerSession *consumerSession) (fetched bool) {
 	case <-handled:
 	case <-ctx.Done():
 		req.usedOffsets.finishUsingAll()
+		s.session.reset()
 		return
 	}
 
@@ -519,21 +522,24 @@ func (s *source) fetch(consumerSession *consumerSession) (fetched bool) {
 			// If the epoch was zero, the broker did not even
 			// establish a session for us (and thus is maxed on
 			// sessions). We stop trying.
+			s.cl.cfg.logger.Log(LogLevelInfo, "session failed with SessionIDNotFound while trying to establish a session; broker likely maxed on sessions; continuing on without using sessions")
 			s.session.kill()
-			s.cl.cfg.logger.Log(LogLevelInfo,
-				"session failed with SessionIDNotFound while trying to establish a session; broker likely maxed on sessions; continuing on without using sessions")
-		}
-		fallthrough
-	case kerr.InvalidFetchSessionEpoch:
-		if s.session.id != -1 { // if -1, the session was killed just above
-			s.cl.cfg.logger.Log(LogLevelInfo, "resetting fetch session", "err", err)
+		} else {
+			s.cl.cfg.logger.Log(LogLevelInfo, "received SessionIDNotFound from our in use session, our session was likely evicted; resetting session")
 			s.session.reset()
 		}
 		req.usedOffsets.finishUsingAll()
 		return
+	case kerr.InvalidFetchSessionEpoch:
+		s.cl.cfg.logger.Log(LogLevelInfo, "resetting fetch session", "err", err)
+		s.session.reset()
+		req.usedOffsets.finishUsingAll()
+		return
 	}
 
-	s.session.bumpEpoch(resp.SessionID)
+	if resp.SessionID > 0 {
+		s.session.bumpEpoch(resp.SessionID)
+	}
 
 	// If we moved any partitions to preferred replicas, we reset the
 	// session. We do this after bumping the epoch just to ensure that we

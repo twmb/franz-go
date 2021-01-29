@@ -700,6 +700,15 @@ func (c *consumer) stopSession() listOrEpochLoads {
 
 	// At this point, all fetches, lists, and loads are dead.
 
+	c.cl.sinksAndSourcesMu.Lock()
+	for _, sns := range c.cl.sinksAndSources {
+		sns.source.session.reset()
+	}
+	c.cl.sinksAndSourcesMu.Unlock()
+
+	// At this point, if we begin fetching anew, then the sources will not
+	// be using stale sessions.
+
 	c.sourcesReadyMu.Lock()
 	defer c.sourcesReadyMu.Unlock()
 	for _, ready := range c.sourcesReadyForDraining {
@@ -981,6 +990,9 @@ func (cl *Client) listOffsetsForBrokerLoad(ctx context.Context, broker *broker, 
 			}
 
 			offset := rPartition.Offset + loadPart.relative
+			if len(rPartition.OldStyleOffsets) > 0 { // if we have any, we used list offsets v0
+				offset = rPartition.OldStyleOffsets[0] + loadPart.relative
+			}
 			if loadPart.at >= 0 {
 				offset = loadPart.at + loadPart.relative // we obey exact requests, even if they end up past the end
 			}
@@ -1095,6 +1107,7 @@ func (o offsetLoadMap) buildListReq(isolationLevel int8) *kmsg.ListOffsetsReques
 				Partition:          partition,
 				CurrentLeaderEpoch: offset.currentEpoch, // KIP-320
 				Timestamp:          offset.at,
+				MaxNumOffsets:      1,
 			})
 		}
 		req.Topics = append(req.Topics, kmsg.ListOffsetsRequestTopic{

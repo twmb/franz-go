@@ -201,16 +201,11 @@ func NewClient(opts ...Opt) (*Client, error) {
 	return cl, nil
 }
 
-func connTimeoutBuilder(defaultTimeout time.Duration) func(kmsg.Request) (time.Duration, time.Duration) {
+func connTimeoutBuilder(def time.Duration) func(kmsg.Request) (time.Duration, time.Duration) {
 	var joinMu sync.Mutex
 	var lastRebalanceTimeout time.Duration
 
 	return func(req kmsg.Request) (read, write time.Duration) {
-		// We use a default of 15s for all write timeouts. Since we
-		// build requests in memory and flush in one go, we expect
-		// the process of writing to the connection to be quick.
-		// 15s is mighty generous.
-		const def = 15 * time.Second
 		millis := func(m int32) time.Duration { return time.Duration(m) * time.Millisecond }
 		switch t := req.(type) {
 		default:
