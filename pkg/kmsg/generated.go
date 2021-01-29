@@ -33201,127 +33201,127 @@ func RequestForKey(key int16) Request {
 	default:
 		return nil
 	case 0:
-		return new(ProduceRequest)
+		return NewPtrProduceRequest()
 	case 1:
-		return new(FetchRequest)
+		return NewPtrFetchRequest()
 	case 2:
-		return new(ListOffsetsRequest)
+		return NewPtrListOffsetsRequest()
 	case 3:
-		return new(MetadataRequest)
+		return NewPtrMetadataRequest()
 	case 4:
-		return new(LeaderAndISRRequest)
+		return NewPtrLeaderAndISRRequest()
 	case 5:
-		return new(StopReplicaRequest)
+		return NewPtrStopReplicaRequest()
 	case 6:
-		return new(UpdateMetadataRequest)
+		return NewPtrUpdateMetadataRequest()
 	case 7:
-		return new(ControlledShutdownRequest)
+		return NewPtrControlledShutdownRequest()
 	case 8:
-		return new(OffsetCommitRequest)
+		return NewPtrOffsetCommitRequest()
 	case 9:
-		return new(OffsetFetchRequest)
+		return NewPtrOffsetFetchRequest()
 	case 10:
-		return new(FindCoordinatorRequest)
+		return NewPtrFindCoordinatorRequest()
 	case 11:
-		return new(JoinGroupRequest)
+		return NewPtrJoinGroupRequest()
 	case 12:
-		return new(HeartbeatRequest)
+		return NewPtrHeartbeatRequest()
 	case 13:
-		return new(LeaveGroupRequest)
+		return NewPtrLeaveGroupRequest()
 	case 14:
-		return new(SyncGroupRequest)
+		return NewPtrSyncGroupRequest()
 	case 15:
-		return new(DescribeGroupsRequest)
+		return NewPtrDescribeGroupsRequest()
 	case 16:
-		return new(ListGroupsRequest)
+		return NewPtrListGroupsRequest()
 	case 17:
-		return new(SASLHandshakeRequest)
+		return NewPtrSASLHandshakeRequest()
 	case 18:
-		return new(ApiVersionsRequest)
+		return NewPtrApiVersionsRequest()
 	case 19:
-		return new(CreateTopicsRequest)
+		return NewPtrCreateTopicsRequest()
 	case 20:
-		return new(DeleteTopicsRequest)
+		return NewPtrDeleteTopicsRequest()
 	case 21:
-		return new(DeleteRecordsRequest)
+		return NewPtrDeleteRecordsRequest()
 	case 22:
-		return new(InitProducerIDRequest)
+		return NewPtrInitProducerIDRequest()
 	case 23:
-		return new(OffsetForLeaderEpochRequest)
+		return NewPtrOffsetForLeaderEpochRequest()
 	case 24:
-		return new(AddPartitionsToTxnRequest)
+		return NewPtrAddPartitionsToTxnRequest()
 	case 25:
-		return new(AddOffsetsToTxnRequest)
+		return NewPtrAddOffsetsToTxnRequest()
 	case 26:
-		return new(EndTxnRequest)
+		return NewPtrEndTxnRequest()
 	case 27:
-		return new(WriteTxnMarkersRequest)
+		return NewPtrWriteTxnMarkersRequest()
 	case 28:
-		return new(TxnOffsetCommitRequest)
+		return NewPtrTxnOffsetCommitRequest()
 	case 29:
-		return new(DescribeACLsRequest)
+		return NewPtrDescribeACLsRequest()
 	case 30:
-		return new(CreateACLsRequest)
+		return NewPtrCreateACLsRequest()
 	case 31:
-		return new(DeleteACLsRequest)
+		return NewPtrDeleteACLsRequest()
 	case 32:
-		return new(DescribeConfigsRequest)
+		return NewPtrDescribeConfigsRequest()
 	case 33:
-		return new(AlterConfigsRequest)
+		return NewPtrAlterConfigsRequest()
 	case 34:
-		return new(AlterReplicaLogDirsRequest)
+		return NewPtrAlterReplicaLogDirsRequest()
 	case 35:
-		return new(DescribeLogDirsRequest)
+		return NewPtrDescribeLogDirsRequest()
 	case 36:
-		return new(SASLAuthenticateRequest)
+		return NewPtrSASLAuthenticateRequest()
 	case 37:
-		return new(CreatePartitionsRequest)
+		return NewPtrCreatePartitionsRequest()
 	case 38:
-		return new(CreateDelegationTokenRequest)
+		return NewPtrCreateDelegationTokenRequest()
 	case 39:
-		return new(RenewDelegationTokenRequest)
+		return NewPtrRenewDelegationTokenRequest()
 	case 40:
-		return new(ExpireDelegationTokenRequest)
+		return NewPtrExpireDelegationTokenRequest()
 	case 41:
-		return new(DescribeDelegationTokenRequest)
+		return NewPtrDescribeDelegationTokenRequest()
 	case 42:
-		return new(DeleteGroupsRequest)
+		return NewPtrDeleteGroupsRequest()
 	case 43:
-		return new(ElectLeadersRequest)
+		return NewPtrElectLeadersRequest()
 	case 44:
-		return new(IncrementalAlterConfigsRequest)
+		return NewPtrIncrementalAlterConfigsRequest()
 	case 45:
-		return new(AlterPartitionAssignmentsRequest)
+		return NewPtrAlterPartitionAssignmentsRequest()
 	case 46:
-		return new(ListPartitionReassignmentsRequest)
+		return NewPtrListPartitionReassignmentsRequest()
 	case 47:
-		return new(OffsetDeleteRequest)
+		return NewPtrOffsetDeleteRequest()
 	case 48:
-		return new(DescribeClientQuotasRequest)
+		return NewPtrDescribeClientQuotasRequest()
 	case 49:
-		return new(AlterClientQuotasRequest)
+		return NewPtrAlterClientQuotasRequest()
 	case 50:
-		return new(DescribeUserSCRAMCredentialsRequest)
+		return NewPtrDescribeUserSCRAMCredentialsRequest()
 	case 51:
-		return new(AlterUserSCRAMCredentialsRequest)
+		return NewPtrAlterUserSCRAMCredentialsRequest()
 	case 52:
-		return new(VoteRequest)
+		return NewPtrVoteRequest()
 	case 53:
-		return new(BeginQuorumEpochRequest)
+		return NewPtrBeginQuorumEpochRequest()
 	case 54:
-		return new(EndQuorumEpochRequest)
+		return NewPtrEndQuorumEpochRequest()
 	case 55:
-		return new(DescribeQuorumRequest)
+		return NewPtrDescribeQuorumRequest()
 	case 56:
-		return new(AlterISRRequest)
+		return NewPtrAlterISRRequest()
 	case 57:
-		return new(UpdateFeaturesRequest)
+		return NewPtrUpdateFeaturesRequest()
 	case 58:
-		return new(EnvelopeRequest)
+		return NewPtrEnvelopeRequest()
 	case 59:
-		return new(FetchSnapshotRequest)
+		return NewPtrFetchSnapshotRequest()
 	case 60:
-		return new(DescribeClusterRequest)
+		return NewPtrDescribeClusterRequest()
 	}
 }
 
@@ -33332,127 +33332,127 @@ func ResponseForKey(key int16) Response {
 	default:
 		return nil
 	case 0:
-		return new(ProduceResponse)
+		return NewPtrProduceResponse()
 	case 1:
-		return new(FetchResponse)
+		return NewPtrFetchResponse()
 	case 2:
-		return new(ListOffsetsResponse)
+		return NewPtrListOffsetsResponse()
 	case 3:
-		return new(MetadataResponse)
+		return NewPtrMetadataResponse()
 	case 4:
-		return new(LeaderAndISRResponse)
+		return NewPtrLeaderAndISRResponse()
 	case 5:
-		return new(StopReplicaResponse)
+		return NewPtrStopReplicaResponse()
 	case 6:
-		return new(UpdateMetadataResponse)
+		return NewPtrUpdateMetadataResponse()
 	case 7:
-		return new(ControlledShutdownResponse)
+		return NewPtrControlledShutdownResponse()
 	case 8:
-		return new(OffsetCommitResponse)
+		return NewPtrOffsetCommitResponse()
 	case 9:
-		return new(OffsetFetchResponse)
+		return NewPtrOffsetFetchResponse()
 	case 10:
-		return new(FindCoordinatorResponse)
+		return NewPtrFindCoordinatorResponse()
 	case 11:
-		return new(JoinGroupResponse)
+		return NewPtrJoinGroupResponse()
 	case 12:
-		return new(HeartbeatResponse)
+		return NewPtrHeartbeatResponse()
 	case 13:
-		return new(LeaveGroupResponse)
+		return NewPtrLeaveGroupResponse()
 	case 14:
-		return new(SyncGroupResponse)
+		return NewPtrSyncGroupResponse()
 	case 15:
-		return new(DescribeGroupsResponse)
+		return NewPtrDescribeGroupsResponse()
 	case 16:
-		return new(ListGroupsResponse)
+		return NewPtrListGroupsResponse()
 	case 17:
-		return new(SASLHandshakeResponse)
+		return NewPtrSASLHandshakeResponse()
 	case 18:
-		return new(ApiVersionsResponse)
+		return NewPtrApiVersionsResponse()
 	case 19:
-		return new(CreateTopicsResponse)
+		return NewPtrCreateTopicsResponse()
 	case 20:
-		return new(DeleteTopicsResponse)
+		return NewPtrDeleteTopicsResponse()
 	case 21:
-		return new(DeleteRecordsResponse)
+		return NewPtrDeleteRecordsResponse()
 	case 22:
-		return new(InitProducerIDResponse)
+		return NewPtrInitProducerIDResponse()
 	case 23:
-		return new(OffsetForLeaderEpochResponse)
+		return NewPtrOffsetForLeaderEpochResponse()
 	case 24:
-		return new(AddPartitionsToTxnResponse)
+		return NewPtrAddPartitionsToTxnResponse()
 	case 25:
-		return new(AddOffsetsToTxnResponse)
+		return NewPtrAddOffsetsToTxnResponse()
 	case 26:
-		return new(EndTxnResponse)
+		return NewPtrEndTxnResponse()
 	case 27:
-		return new(WriteTxnMarkersResponse)
+		return NewPtrWriteTxnMarkersResponse()
 	case 28:
-		return new(TxnOffsetCommitResponse)
+		return NewPtrTxnOffsetCommitResponse()
 	case 29:
-		return new(DescribeACLsResponse)
+		return NewPtrDescribeACLsResponse()
 	case 30:
-		return new(CreateACLsResponse)
+		return NewPtrCreateACLsResponse()
 	case 31:
-		return new(DeleteACLsResponse)
+		return NewPtrDeleteACLsResponse()
 	case 32:
-		return new(DescribeConfigsResponse)
+		return NewPtrDescribeConfigsResponse()
 	case 33:
-		return new(AlterConfigsResponse)
+		return NewPtrAlterConfigsResponse()
 	case 34:
-		return new(AlterReplicaLogDirsResponse)
+		return NewPtrAlterReplicaLogDirsResponse()
 	case 35:
-		return new(DescribeLogDirsResponse)
+		return NewPtrDescribeLogDirsResponse()
 	case 36:
-		return new(SASLAuthenticateResponse)
+		return NewPtrSASLAuthenticateResponse()
 	case 37:
-		return new(CreatePartitionsResponse)
+		return NewPtrCreatePartitionsResponse()
 	case 38:
-		return new(CreateDelegationTokenResponse)
+		return NewPtrCreateDelegationTokenResponse()
 	case 39:
-		return new(RenewDelegationTokenResponse)
+		return NewPtrRenewDelegationTokenResponse()
 	case 40:
-		return new(ExpireDelegationTokenResponse)
+		return NewPtrExpireDelegationTokenResponse()
 	case 41:
-		return new(DescribeDelegationTokenResponse)
+		return NewPtrDescribeDelegationTokenResponse()
 	case 42:
-		return new(DeleteGroupsResponse)
+		return NewPtrDeleteGroupsResponse()
 	case 43:
-		return new(ElectLeadersResponse)
+		return NewPtrElectLeadersResponse()
 	case 44:
-		return new(IncrementalAlterConfigsResponse)
+		return NewPtrIncrementalAlterConfigsResponse()
 	case 45:
-		return new(AlterPartitionAssignmentsResponse)
+		return NewPtrAlterPartitionAssignmentsResponse()
 	case 46:
-		return new(ListPartitionReassignmentsResponse)
+		return NewPtrListPartitionReassignmentsResponse()
 	case 47:
-		return new(OffsetDeleteResponse)
+		return NewPtrOffsetDeleteResponse()
 	case 48:
-		return new(DescribeClientQuotasResponse)
+		return NewPtrDescribeClientQuotasResponse()
 	case 49:
-		return new(AlterClientQuotasResponse)
+		return NewPtrAlterClientQuotasResponse()
 	case 50:
-		return new(DescribeUserSCRAMCredentialsResponse)
+		return NewPtrDescribeUserSCRAMCredentialsResponse()
 	case 51:
-		return new(AlterUserSCRAMCredentialsResponse)
+		return NewPtrAlterUserSCRAMCredentialsResponse()
 	case 52:
-		return new(VoteResponse)
+		return NewPtrVoteResponse()
 	case 53:
-		return new(BeginQuorumEpochResponse)
+		return NewPtrBeginQuorumEpochResponse()
 	case 54:
-		return new(EndQuorumEpochResponse)
+		return NewPtrEndQuorumEpochResponse()
 	case 55:
-		return new(DescribeQuorumResponse)
+		return NewPtrDescribeQuorumResponse()
 	case 56:
-		return new(AlterISRResponse)
+		return NewPtrAlterISRResponse()
 	case 57:
-		return new(UpdateFeaturesResponse)
+		return NewPtrUpdateFeaturesResponse()
 	case 58:
-		return new(EnvelopeResponse)
+		return NewPtrEnvelopeResponse()
 	case 59:
-		return new(FetchSnapshotResponse)
+		return NewPtrFetchSnapshotResponse()
 	case 60:
-		return new(DescribeClusterResponse)
+		return NewPtrDescribeClusterResponse()
 	}
 }
 

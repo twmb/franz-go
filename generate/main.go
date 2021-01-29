@@ -442,7 +442,7 @@ func main() {
 	l.Write("switch key {")
 	l.Write("default: return nil")
 	for _, key2struct := range name2structs {
-		l.Write("case %d: return new(%s)", key2struct.Key, key2struct.Name)
+		l.Write("case %d: return NewPtr%s()", key2struct.Key, key2struct.Name)
 	}
 	l.Write("}")
 	l.Write("}")
@@ -453,7 +453,7 @@ func main() {
 	l.Write("switch key {")
 	l.Write("default: return nil")
 	for _, key2struct := range name2structs {
-		l.Write("case %d: return new(%s)", key2struct.Key, strings.TrimSuffix(key2struct.Name, "Request")+"Response")
+		l.Write("case %d: return NewPtr%s()", key2struct.Key, strings.TrimSuffix(key2struct.Name, "Request")+"Response")
 	}
 	l.Write("}")
 	l.Write("}")
