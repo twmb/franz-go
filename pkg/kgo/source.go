@@ -537,7 +537,9 @@ func (s *source) fetch(consumerSession *consumerSession) (fetched bool) {
 		return
 	}
 
-	s.session.bumpEpoch(resp.SessionID)
+	if resp.SessionID > 0 {
+		s.session.bumpEpoch(resp.SessionID)
+	}
 
 	// If we moved any partitions to preferred replicas, we reset the
 	// session. We do this after bumping the epoch just to ensure that we
