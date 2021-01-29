@@ -172,6 +172,10 @@ func (cfg *cfg) validate() error {
 		{v: int64(cfg.maxBrokerWriteBytes), allowed: int64(cfg.maxRecordBatchBytes), badcmp: i64lt, fmt: "max broker write bytes %v is erroneously less than max record batch bytes %v"},
 		{v: int64(cfg.maxBrokerReadBytes), allowed: int64(cfg.maxBytes), badcmp: i64lt, fmt: "max broker read bytes %v is erroneously less than max fetch bytes %v"},
 
+		// 1s <= conn timeout overhead <= 15m
+		{name: "conn timeout max overhead", v: int64(cfg.connTimeoutOverhead), allowed: int64(15 * time.Minute), badcmp: i64gt, durs: true},
+		{name: "conn timeout min overhead", v: int64(cfg.connTimeoutOverhead), allowed: int64(time.Second), badcmp: i64lt, durs: true},
+
 		// 10ms <= metadata <= 1hr
 		{name: "metadata max age", v: int64(cfg.metadataMaxAge), allowed: int64(time.Hour), badcmp: i64gt, durs: true},
 		{name: "metadata min age", v: int64(cfg.metadataMinAge), allowed: int64(10 * time.Millisecond), badcmp: i64lt, durs: true},
@@ -216,6 +220,8 @@ func defaultCfg() cfg {
 	return cfg{
 		id:     &defaultID,
 		dialFn: (&net.Dialer{Timeout: 10 * time.Second}).DialContext,
+
+		connTimeoutOverhead: 20 * time.Second,
 
 		softwareName:    "kgo",
 		softwareVersion: "0.1.0",
@@ -326,9 +332,9 @@ func WithLogger(l Logger) Opt {
 }
 
 // ConnTimeoutOverhead uses the given time as overhead while deadlining
-// requests, overriding the default overhead of 5s.
+// requests, overriding the default overhead of 20s.
 //
-// For most requests, the overhead will simply be the timeout. However, for any
+// For most requests, the overhead will simply be this timeout. However, for any
 // request with a TimeoutMillis field, the overhead is added on top of the
 // request's TimeoutMillis. This ensures that we give Kafka enough time to
 // actually process the request given the timeout, while still having a
