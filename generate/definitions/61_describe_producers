@@ -1,0 +1,47 @@
+// Introduced for KIP-664, DescribeProducersRequest allows for introspecting
+// the state of the transaction coordinator. This request can be used to detect
+// hanging transactions or other EOS-related problems.
+//
+// This request allows for describing the state of the active
+// idempotent/transactional producers.
+DescribeProducersRequest => key 61, max version 0, flexible v0+
+  // The topics to describe producers for.
+  Topics: [=>]
+    Topic: string
+    // The partitions to list producers for for the given topic.
+    Partitions: [int32]
+
+// DescribeProducersResponse is a response to a DescribeProducersRequest.
+DescribeProducersResponse =>
+  ThrottleMillis
+  Topics: [=>]
+    Topic: string
+    Partitions: [=>]
+      Partition: int32
+      // The partition error code, or 0 if there was no error.
+      //
+      // NOT_LEADER_OR_FOLLOWER is returned if the broker receiving this request
+      // is not the leader of the partition.
+      //
+      // TOPIC_AUTHORIZATION_FAILED is returned if the user does not have Describe
+      // permissions on the topic.
+      //
+      // UNKNOWN_TOPIC_OR_PARTITION is returned if the partition is not known to exist.
+      //
+      // Other errors may be returned corresponding to the partition being offline, etc.
+      ErrorCode: int16
+      // The partition error message, which may be null if no additional details are available.
+      ErrorMessage: nullable-string
+      // The current idempotent or transactional producers producing to this partition,
+      // and the metadata related to their produce requests.
+      ActiveProducers: [=>]
+        ProducerID: int64
+        ProducerEpoch: int32
+        // The last sequence produced.
+        LastSequence: int32(-1)
+        // The last timestamp produced.
+        LastTimestamp: int64(-1)
+        // The epoch of the transactional coordinator for this last produce.
+        CoordinatorEpoch: int32
+        // The first offset of the transaction.
+        CurrentTxnStartOffset: int64(-1)
