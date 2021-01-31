@@ -1,10 +1,34 @@
 tip
 ===
 
+- [`31b1df7`](https://github.com/twmb/franz-go/commit/31b1df7): KIP-664: add support for DescribeProducers
+- [`368bb21`](https://github.com/twmb/franz-go/commit/368bb21): **breaking kmsg protocol changes**: add support for KIP-516 CreateTopics and DeleteTopics bumps
+- [`b50282e`](https://github.com/twmb/franz-go/commit/b50282e): kerr: ReplicaNotAvailable is retriable; add UnknownTopicID
+- [`c05572d`](https://github.com/twmb/franz-go/commit/c05572d): kmsg: change (Request|Response)ForKey to use proper NewPtr functions
+- [`360a4dc`](https://github.com/twmb/franz-go/commit/360a4dc): client: actually use ConnTimeoutOverhead properly; bump base to 20s
+- [`0ff08da`](https://github.com/twmb/franz-go/commit/0ff08da): Allow list offsets v0 to work (for Kafka v0.10.0 and before)
+- [`59c935c` through `c7caea1`](https://github.com/twmb/franz-go/compare/59c935c..c7caea1): fix fetch session bugs
+- [pr #4]: redesign readme (thanks @weeco!)
+
+Of note, this fixes fetch session bugs and has small breaking protocol changes
+in kmsg.
+
+For fetch sessions, sessions were not reset properly in the face of context
+cancelations or across consumer topic reassignments. It was possible for fetch
+sessions to get out of sync and never recover. This is fixed by resetting fetch
+sessions in all appropriate places.
+
+For kmsg protocol changes, DeleteTopics changed Topics from a list of strings
+(topics to delete) to a list of structs where you could delete by topic or by
+topic uuid. The Java code coincidentally historically used TopicNames, so it
+did not need to break the protocol to add this new struct under the Topics
+name. For lack of confusion, we change Topics to TopicNames and introduce the
+struct under Topics.
+
 v0.6.3
 ===
 
-- [`db09137`](https://github.com/twmb/franz-go/commit/db09137): Add support for new DescribeCluster API (KIP-700); followup commit deprecates `Include<*>AuthorizedOperations` in the metadata request.
+- [`db09137`](https://github.com/twmb/franz-go/commit/db09137): Add support for new DescribeCluster API (KIP-700); followup commit (`ab5bdd3`) deprecates `Include<*>AuthorizedOperations` in the metadata request.
 - [`3866e0c`](https://github.com/twmb/franz-go/commit/3866e0c): Set Record.Attrs properly before calling Produce callback hook.
 - [`05346db`](https://github.com/twmb/franz-go/commit/05346db) and [`3d3787e`](https://github.com/twmb/franz-go/commit/3d3787e): kgo: breaking change for kversions breaking change two commits ago (see two lines below)
 - [`b921c14`](https://github.com/twmb/franz-go/commit/b921c14): doc fix: v0.10.0 changed produce from MessageSet v0 to MessageSet v1
