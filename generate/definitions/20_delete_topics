@@ -1,7 +1,11 @@
 // DeleteTopicsRequest deletes Kafka topics.
-DeleteTopicsRequest => key 20, max version 5, flexible v4+, admin
+DeleteTopicsRequest => key 20, max version 6, flexible v4+, admin
   // Topics is an array of topics to delete.
-  Topics: [string]
+  TopicNames: [string] // v0-v5
+  // The name or topic ID of topics to delete.
+  Topics: [=>] // v6+
+    Topic: nullable-string
+    TopicID: uuid
   // TimeoutMillis is the millisecond timeout of this request.
   TimeoutMillis: int32
 
@@ -13,7 +17,9 @@ DeleteTopicsResponse =>
   // Topics contains responses for each topic requested for deletion.
   Topics: [=>]
     // Topic is the topic requested for deletion.
-    Topic: string
+    Topic: nullable-string-v6+
+    // The topic ID requested for deletion.
+    TopicID: uuid // v6+
     // ErrorCode is the error code returned for an individual topic in
     // deletion request.
     //
@@ -30,6 +36,12 @@ DeleteTopicsResponse =>
     // and brokers >= 2.1.0. INVALID_REQUEST is issued for request versions
     // 0-2 against brokers >= 2.1.0. Otherwise, the request hangs until it
     // times out.
+    //
+    // UNSUPPORTED_VERSION is returned when using topic IDs with a cluster
+    // that is not yet Kafka v2.8+.
+    //
+    // UNKNOWN_TOPIC_ID is returned when using topic IDs to a Kafka cluster
+    // v2.8+ and the topic ID is not found.
     ErrorCode: int16
     // ErrorMessage is a message for an error.
     ErrorMessage: nullable-string // v5+

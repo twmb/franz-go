@@ -4,7 +4,7 @@
 // creation defaults. See KIP-464.
 //
 // Version 5, also in 2.4.0, returns topic configs in the response (KIP-525).
-CreateTopicsRequest => key 19, max version 6, flexible v5+, admin
+CreateTopicsRequest => key 19, max version 7, flexible v5+, admin
   // Topics is an array of topics to attempt to create.
   Topics: [=>]
     // Topic is a topic to create.
@@ -45,6 +45,8 @@ CreateTopicsResponse =>
   Topics: [=>]
     // Topic is the topic this response corresponds to.
     Topic: string
+    // The unique topic ID.
+    TopicID: uuid // v7+
     // ErrorCode is the error code for an individual topic creation.
     //
     // NOT_CONTROLLER is returned if the request was not issued to a Kafka

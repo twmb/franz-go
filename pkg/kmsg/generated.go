@@ -13250,7 +13250,7 @@ type CreateTopicsRequest struct {
 }
 
 func (*CreateTopicsRequest) Key() int16                 { return 19 }
-func (*CreateTopicsRequest) MaxVersion() int16          { return 6 }
+func (*CreateTopicsRequest) MaxVersion() int16          { return 7 }
 func (v *CreateTopicsRequest) SetVersion(version int16) { v.Version = version }
 func (v *CreateTopicsRequest) GetVersion() int16        { return v.Version }
 func (v *CreateTopicsRequest) IsFlexible() bool         { return v.Version >= 5 }
@@ -13597,6 +13597,9 @@ type CreateTopicsResponseTopic struct {
 	// Topic is the topic this response corresponds to.
 	Topic string
 
+	// The unique topic ID.
+	TopicID [2]uint64 // v7+
+
 	// ErrorCode is the error code for an individual topic creation.
 	//
 	// NOT_CONTROLLER is returned if the request was not issued to a Kafka
@@ -13682,7 +13685,7 @@ type CreateTopicsResponse struct {
 }
 
 func (*CreateTopicsResponse) Key() int16                 { return 19 }
-func (*CreateTopicsResponse) MaxVersion() int16          { return 6 }
+func (*CreateTopicsResponse) MaxVersion() int16          { return 7 }
 func (v *CreateTopicsResponse) SetVersion(version int16) { v.Version = version }
 func (v *CreateTopicsResponse) GetVersion() int16        { return v.Version }
 func (v *CreateTopicsResponse) IsFlexible() bool         { return v.Version >= 5 }
@@ -13714,6 +13717,10 @@ func (v *CreateTopicsResponse) AppendTo(dst []byte) []byte {
 				} else {
 					dst = kbin.AppendString(dst, v)
 				}
+			}
+			if version >= 7 {
+				v := v.TopicID
+				dst = kbin.AppendUuid(dst, v)
 			}
 			{
 				v := v.ErrorCode
@@ -13842,6 +13849,10 @@ func (v *CreateTopicsResponse) ReadFrom(src []byte) error {
 				}
 				s.Topic = v
 			}
+			if version >= 7 {
+				v := b.Uuid()
+				s.TopicID = v
+			}
 			{
 				v := b.Int16()
 				s.ErrorCode = v
@@ -13968,20 +13979,42 @@ func NewCreateTopicsResponse() CreateTopicsResponse {
 	return v
 }
 
+type DeleteTopicsRequestTopic struct {
+	Topic *string
+
+	TopicID [2]uint64
+}
+
+// Default sets any default fields. Calling this allows for future compatibility
+// if new fields are added to DeleteTopicsRequestTopic.
+func (v *DeleteTopicsRequestTopic) Default() {
+}
+
+// NewDeleteTopicsRequestTopic returns a default DeleteTopicsRequestTopic
+// This is a shortcut for creating a struct and calling Default yourself.
+func NewDeleteTopicsRequestTopic() DeleteTopicsRequestTopic {
+	var v DeleteTopicsRequestTopic
+	v.Default()
+	return v
+}
+
 // DeleteTopicsRequest deletes Kafka topics.
 type DeleteTopicsRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
 	// Topics is an array of topics to delete.
-	Topics []string
+	TopicNames []string
+
+	// The name or topic ID of topics to delete.
+	Topics []DeleteTopicsRequestTopic // v6+
 
 	// TimeoutMillis is the millisecond timeout of this request.
 	TimeoutMillis int32
 }
 
 func (*DeleteTopicsRequest) Key() int16                 { return 20 }
-func (*DeleteTopicsRequest) MaxVersion() int16          { return 5 }
+func (*DeleteTopicsRequest) MaxVersion() int16          { return 6 }
 func (v *DeleteTopicsRequest) SetVersion(version int16) { v.Version = version }
 func (v *DeleteTopicsRequest) GetVersion() int16        { return v.Version }
 func (v *DeleteTopicsRequest) IsFlexible() bool         { return v.Version >= 4 }
@@ -14004,8 +14037,8 @@ func (v *DeleteTopicsRequest) AppendTo(dst []byte) []byte {
 	_ = version
 	isFlexible := version >= 4
 	_ = isFlexible
-	{
-		v := v.Topics
+	if version >= 0 && version <= 5 {
+		v := v.TopicNames
 		if isFlexible {
 			dst = kbin.AppendCompactArrayLen(dst, len(v))
 		} else {
@@ -14017,6 +14050,32 @@ func (v *DeleteTopicsRequest) AppendTo(dst []byte) []byte {
 				dst = kbin.AppendCompactString(dst, v)
 			} else {
 				dst = kbin.AppendString(dst, v)
+			}
+		}
+	}
+	if version >= 6 {
+		v := v.Topics
+		if isFlexible {
+			dst = kbin.AppendCompactArrayLen(dst, len(v))
+		} else {
+			dst = kbin.AppendArrayLen(dst, len(v))
+		}
+		for i := range v {
+			v := &v[i]
+			{
+				v := v.Topic
+				if isFlexible {
+					dst = kbin.AppendCompactNullableString(dst, v)
+				} else {
+					dst = kbin.AppendNullableString(dst, v)
+				}
+			}
+			{
+				v := v.TopicID
+				dst = kbin.AppendUuid(dst, v)
+			}
+			if isFlexible {
+				dst = append(dst, 0)
 			}
 		}
 	}
@@ -14037,8 +14096,8 @@ func (v *DeleteTopicsRequest) ReadFrom(src []byte) error {
 	isFlexible := version >= 4
 	_ = isFlexible
 	s := v
-	{
-		v := s.Topics
+	if version >= 0 && version <= 5 {
+		v := s.TopicNames
 		a := v
 		var l int32
 		if isFlexible {
@@ -14060,6 +14119,45 @@ func (v *DeleteTopicsRequest) ReadFrom(src []byte) error {
 				v = b.String()
 			}
 			a[i] = v
+		}
+		v = a
+		s.TopicNames = v
+	}
+	if version >= 6 {
+		v := s.Topics
+		a := v
+		var l int32
+		if isFlexible {
+			l = b.CompactArrayLen()
+		} else {
+			l = b.ArrayLen()
+		}
+		if !b.Ok() {
+			return b.Complete()
+		}
+		if l > 0 {
+			a = make([]DeleteTopicsRequestTopic, l)
+		}
+		for i := int32(0); i < l; i++ {
+			v := &a[i]
+			v.Default()
+			s := v
+			{
+				var v *string
+				if isFlexible {
+					v = b.CompactNullableString()
+				} else {
+					v = b.NullableString()
+				}
+				s.Topic = v
+			}
+			{
+				v := b.Uuid()
+				s.TopicID = v
+			}
+			if isFlexible {
+				SkipTags(&b)
+			}
 		}
 		v = a
 		s.Topics = v
@@ -14097,7 +14195,10 @@ func NewDeleteTopicsRequest() DeleteTopicsRequest {
 
 type DeleteTopicsResponseTopic struct {
 	// Topic is the topic requested for deletion.
-	Topic string
+	Topic *string
+
+	// The topic ID requested for deletion.
+	TopicID [2]uint64 // v6+
 
 	// ErrorCode is the error code returned for an individual topic in
 	// deletion request.
@@ -14115,6 +14216,12 @@ type DeleteTopicsResponseTopic struct {
 	// and brokers >= 2.1.0. INVALID_REQUEST is issued for request versions
 	// 0-2 against brokers >= 2.1.0. Otherwise, the request hangs until it
 	// times out.
+	//
+	// UNSUPPORTED_VERSION is returned when using topic IDs with a cluster
+	// that is not yet Kafka v2.8+.
+	//
+	// UNKNOWN_TOPIC_ID is returned when using topic IDs to a Kafka cluster
+	// v2.8+ and the topic ID is not found.
 	ErrorCode int16
 
 	// ErrorMessage is a message for an error.
@@ -14154,7 +14261,7 @@ type DeleteTopicsResponse struct {
 }
 
 func (*DeleteTopicsResponse) Key() int16                 { return 20 }
-func (*DeleteTopicsResponse) MaxVersion() int16          { return 5 }
+func (*DeleteTopicsResponse) MaxVersion() int16          { return 6 }
 func (v *DeleteTopicsResponse) SetVersion(version int16) { v.Version = version }
 func (v *DeleteTopicsResponse) GetVersion() int16        { return v.Version }
 func (v *DeleteTopicsResponse) IsFlexible() bool         { return v.Version >= 4 }
@@ -14181,11 +14288,30 @@ func (v *DeleteTopicsResponse) AppendTo(dst []byte) []byte {
 			v := &v[i]
 			{
 				v := v.Topic
-				if isFlexible {
-					dst = kbin.AppendCompactString(dst, v)
+				if version < 6 {
+					var vv string
+					if v != nil {
+						vv = *v
+					}
+					{
+						v := vv
+						if isFlexible {
+							dst = kbin.AppendCompactString(dst, v)
+						} else {
+							dst = kbin.AppendString(dst, v)
+						}
+					}
 				} else {
-					dst = kbin.AppendString(dst, v)
+					if isFlexible {
+						dst = kbin.AppendCompactNullableString(dst, v)
+					} else {
+						dst = kbin.AppendNullableString(dst, v)
+					}
 				}
+			}
+			if version >= 6 {
+				v := v.TopicID
+				dst = kbin.AppendUuid(dst, v)
 			}
 			{
 				v := v.ErrorCode
@@ -14241,13 +14367,27 @@ func (v *DeleteTopicsResponse) ReadFrom(src []byte) error {
 			v.Default()
 			s := v
 			{
-				var v string
-				if isFlexible {
-					v = b.CompactString()
+				var v *string
+				if version < 6 {
+					var vv string
+					if isFlexible {
+						vv = b.CompactString()
+					} else {
+						vv = b.String()
+					}
+					v = &vv
 				} else {
-					v = b.String()
+					if isFlexible {
+						v = b.CompactNullableString()
+					} else {
+						v = b.NullableString()
+					}
 				}
 				s.Topic = v
+			}
+			if version >= 6 {
+				v := b.Uuid()
+				s.TopicID = v
 			}
 			{
 				v := b.Int16()
