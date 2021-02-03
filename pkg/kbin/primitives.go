@@ -33,7 +33,11 @@ func AppendInt8(dst []byte, i int8) []byte {
 
 // AppendInt16 appends a big endian int16 to dst.
 func AppendInt16(dst []byte, i int16) []byte {
-	u := uint16(i)
+	return AppendUint16(dst, uint16(i))
+}
+
+// AppendUint16 appends a big endian uint16 to dst.
+func AppendUint16(dst []byte, u uint16) []byte {
 	return append(dst, byte(u>>8), byte(u))
 }
 
@@ -361,6 +365,18 @@ func (b *Reader) Int16() int16 {
 		return 0
 	}
 	r := int16(binary.BigEndian.Uint16(b.Src))
+	b.Src = b.Src[2:]
+	return r
+}
+
+// Uint16 returns an uint16 from the reader.
+func (b *Reader) Uint16() uint16 {
+	if len(b.Src) < 2 {
+		b.bad = true
+		b.Src = nil
+		return 0
+	}
+	r := binary.BigEndian.Uint16(b.Src)
 	b.Src = b.Src[2:]
 	return r
 }
