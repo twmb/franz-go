@@ -8,6 +8,7 @@ import (
 func (Bool) TypeName() string                  { return "bool" }
 func (Int8) TypeName() string                  { return "int8" }
 func (Int16) TypeName() string                 { return "int16" }
+func (Uint16) TypeName() string                { return "uint16" }
 func (Int32) TypeName() string                 { return "int32" }
 func (Int64) TypeName() string                 { return "int64" }
 func (Float64) TypeName() string               { return "float64" }
@@ -60,6 +61,7 @@ func compactAppend(fromFlexible bool, name string, l *LineWriter) {
 func (Bool) WriteAppend(l *LineWriter)         { primAppend("Bool", l) }
 func (Int8) WriteAppend(l *LineWriter)         { primAppend("Int8", l) }
 func (Int16) WriteAppend(l *LineWriter)        { primAppend("Int16", l) }
+func (Uint16) WriteAppend(l *LineWriter)       { primAppend("Uint16", l) }
 func (Int32) WriteAppend(l *LineWriter)        { primAppend("Int32", l) }
 func (Int64) WriteAppend(l *LineWriter)        { primAppend("Int64", l) }
 func (Float64) WriteAppend(l *LineWriter)      { primAppend("Float64", l) }
@@ -227,7 +229,7 @@ func (s Struct) WriteAppend(l *LineWriter) {
 		case Bool, Int8:
 			l.Write("dst = kbin.AppendUvarint(dst, 1)") // size
 			f.Type.WriteAppend(l)
-		case Int16:
+		case Int16, Uint16:
 			l.Write("dst = kbin.AppendUvarint(dst, 2)")
 			f.Type.WriteAppend(l)
 		case Int32, Uint32:
@@ -308,6 +310,7 @@ func compactDecode(fromFlexible bool, name, typ string, l *LineWriter) {
 func (Bool) WriteDecode(l *LineWriter)         { primDecode("Bool", l) }
 func (Int8) WriteDecode(l *LineWriter)         { primDecode("Int8", l) }
 func (Int16) WriteDecode(l *LineWriter)        { primDecode("Int16", l) }
+func (Uint16) WriteDecode(l *LineWriter)       { primDecode("Uint16", l) }
 func (Int32) WriteDecode(l *LineWriter)        { primDecode("Int32", l) }
 func (Int64) WriteDecode(l *LineWriter)        { primDecode("Int64", l) }
 func (Float64) WriteDecode(l *LineWriter)      { primDecode("Float64", l) }

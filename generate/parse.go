@@ -19,6 +19,7 @@ var types = map[string]Type{
 	"bool":            Bool{},
 	"int8":            Int8{},
 	"int16":           Int16{},
+	"uint16":          Uint16{},
 	"int32":           Int32{},
 	"int64":           Int64{},
 	"float64":         Float64{},

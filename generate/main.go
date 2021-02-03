@@ -43,6 +43,10 @@ type (
 		HasDefault bool
 		Default    int16
 	}
+	Uint16 struct {
+		HasDefault bool
+		Default    uint16
+	}
 	Int32 struct {
 		HasDefault bool
 		Default    int32
@@ -213,6 +217,18 @@ func (i Int16) SetDefault(s string) Type {
 }
 func (i Int16) GetDefault() (interface{}, bool) { return i.Default, i.HasDefault }
 func (i Int16) GetTypeDefault() interface{}     { return 0 }
+
+func (u Uint16) SetDefault(s string) Type {
+	v, err := strconv.ParseUint(s, 0, 16)
+	if err != nil {
+		die("invalid uint16 default: %v", err)
+	}
+	u.Default = uint16(v)
+	u.HasDefault = true
+	return u
+}
+func (u Uint16) GetDefault() (interface{}, bool) { return u.Default, u.HasDefault }
+func (u Uint16) GetTypeDefault() interface{}     { return 0 }
 
 func (i Int32) SetDefault(s string) Type {
 	v, err := strconv.ParseInt(s, 0, 32)
