@@ -1,0 +1,37 @@
+// For KIP-500, BrokerRegistrationRequest is an internal broker-to-broker only
+// request.
+BrokerRegistrationRequest => key 62, max version 0, flexible v0+
+  // The broker ID.
+  BrokerID: int32
+  // The cluster ID of the broker process.
+  ClusterID: uuid
+  // The incarnation ID of the broker process.
+  IncarnationID: uuid
+  // The listeners for this broker.
+  Listeners: [=>]
+    // The name of this endpoint.
+    Name: string
+    // The hostname.
+    Host: string
+    // The port.
+    Port: uint16
+    // The security protocol.
+    SecurityProtocol: int16
+  // Features on this broker.
+  Features: [=>]
+    // The name of the feature.
+    Name: string
+    // The minimum supported feature level.
+    MinSupportedVersion: int16
+    // The maximum supported feature level.
+    MaxSupportedVersion: int16
+  // The rack that this broker is in, if any.
+  Rack: nullable-string
+
+// BrokerRegistrationResponse is a response to a BrokerRegistrationRequest.
+BrokerRegistrationResponse =>
+  ThrottleMillis
+  // Any error code, or 0.
+  ErrorCode: int16
+  // The broker's assigned epoch, or -1 if none was assigned.
+  BrokerEpoch: int64(-1)

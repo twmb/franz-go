@@ -692,5 +692,12 @@ var maxTip = nextMax(max270, func(v []int16) []int16 {
 		0, // 61 describe producers
 	)
 
+	// KAFKA-12248 a022072df3c8175950c03263d2bbf2e3ea7a7a5d KIP-500
+	// (commit mentions KIP-500, these are actually described in KIP-631)
+	v = append(v,
+		0, // 62 broker registration
+		0, // 63 broker heartbeat
+	)
+
 	return v
 })

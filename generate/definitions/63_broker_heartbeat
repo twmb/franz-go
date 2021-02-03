@@ -1,0 +1,25 @@
+// For KIP-500, BrokerHeartbeatRequest is an internal broker-to-broker only
+// request.
+BrokerHeartbeatRequest => key 63, max version 0, flexible v0+
+  // The broker ID.
+  BrokerID: int32
+  // The broker's epoch.
+  BrokerEpoch: int64(-1)
+  // The highest metadata offset that the broker has reached.
+  CurrentMetadataOffset: int64
+  // True if the broker wants to be fenced.
+  WantFence: bool
+  // True if the broker wants to be shutdown.
+  WantShutdown: bool
+
+// BrokerHeartbeatResponse is a response to a BrokerHeartbeatRequest.
+BrokerHeartbeatResponse =>
+  ThrottleMillis
+  // Any error code, or 0.
+  ErrorCode: int16
+  // True if the broker has approximately caught up with the latest metadata.
+  IsCaughtUp: bool
+  // True if the broker is fenced.
+  IsFenced: bool(true)
+  // True if the broker should proceed with its shutdown.
+  ShouldShutdown: bool
