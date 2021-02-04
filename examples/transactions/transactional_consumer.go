@@ -20,8 +20,7 @@ func startConsuming(ctx context.Context, kafkaBrokers string, topic string) {
 	}
 
 	client.AssignGroup("my-consumer-group", kgo.GroupTopics(topic))
-	// Leave the consumer group when the consumer exits.
-	defer client.AssignGroup("")
+	defer client.Close()
 
 consumerLoop:
 	for {

@@ -67,6 +67,9 @@ func startProducing(ctx context.Context, kafkaBrokers string, topic string) {
 func produceRecords(ctx context.Context, client *kgo.Client, topic string, batch int) error {
 	errChan := make(chan error)
 
+	// Records are produced sequentially in order to demonstrate that a consumer
+	// using the ReadCommitted isolation level will not consume any records until
+	// the transaction is committed.
 	for i := 0; i < 10; i++ {
 		message := fmt.Sprintf("batch %d record %d\n", batch, i)
 		r := &kgo.Record{
