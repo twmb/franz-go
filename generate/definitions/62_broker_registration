@@ -1,5 +1,5 @@
-// For KIP-500, BrokerRegistrationRequest is an internal broker-to-broker only
-// request.
+// For KIP-500 / KIP-631, BrokerRegistrationRequest is an internal
+// broker-to-broker only request.
 BrokerRegistrationRequest => key 62, max version 0, flexible v0+
   // The broker ID.
   BrokerID: int32

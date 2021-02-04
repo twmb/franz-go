@@ -10,7 +10,7 @@ import (
 
 // MaxKey is the maximum key used for any messages in this package.
 // Note that this value will change as Kafka adds more messages.
-const MaxKey = 63
+const MaxKey = 64
 
 // MessageV0 is the message format Kafka used prior to 0.10.
 //
@@ -33956,8 +33956,8 @@ func NewBrokerRegistrationRequestFeature() BrokerRegistrationRequestFeature {
 	return v
 }
 
-// For KIP-500, BrokerRegistrationRequest is an internal broker-to-broker only
-// request.
+// For KIP-500 / KIP-631, BrokerRegistrationRequest is an internal
+// broker-to-broker only request.
 type BrokerRegistrationRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
@@ -34346,8 +34346,8 @@ func NewBrokerRegistrationResponse() BrokerRegistrationResponse {
 	return v
 }
 
-// For KIP-500, BrokerHeartbeatRequest is an internal broker-to-broker only
-// request.
+// For KIP-500 / KIP-631, BrokerHeartbeatRequest is an internal
+// broker-to-broker only request.
 type BrokerHeartbeatRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
@@ -34590,6 +34590,194 @@ func NewBrokerHeartbeatResponse() BrokerHeartbeatResponse {
 	return v
 }
 
+// For KIP-500 / KIP-631, DecommissionBrokerRequest is an admin request to
+// remove registration of a broker from the cluster.
+type DecommissionBrokerRequest struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	// The broker ID to decommission.
+	BrokerID int32
+}
+
+func (*DecommissionBrokerRequest) Key() int16                 { return 64 }
+func (*DecommissionBrokerRequest) MaxVersion() int16          { return 0 }
+func (v *DecommissionBrokerRequest) SetVersion(version int16) { v.Version = version }
+func (v *DecommissionBrokerRequest) GetVersion() int16        { return v.Version }
+func (v *DecommissionBrokerRequest) IsFlexible() bool         { return v.Version >= 0 }
+func (v *DecommissionBrokerRequest) IsAdminRequest()          {}
+func (v *DecommissionBrokerRequest) ResponseKind() Response {
+	return &DecommissionBrokerResponse{Version: v.Version}
+}
+
+// RequestWith is requests v on r and returns the response or an error.
+func (v *DecommissionBrokerRequest) RequestWith(ctx context.Context, r Requestor) (*DecommissionBrokerResponse, error) {
+	kresp, err := r.Request(ctx, v)
+	if err != nil {
+		return nil, err
+	}
+	return kresp.(*DecommissionBrokerResponse), nil
+}
+
+func (v *DecommissionBrokerRequest) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	isFlexible := version >= 0
+	_ = isFlexible
+	{
+		v := v.BrokerID
+		dst = kbin.AppendInt32(dst, v)
+	}
+	if isFlexible {
+		dst = append(dst, 0)
+	}
+	return dst
+}
+func (v *DecommissionBrokerRequest) ReadFrom(src []byte) error {
+	v.Default()
+	b := kbin.Reader{Src: src}
+	version := v.Version
+	_ = version
+	isFlexible := version >= 0
+	_ = isFlexible
+	s := v
+	{
+		v := b.Int32()
+		s.BrokerID = v
+	}
+	if isFlexible {
+		SkipTags(&b)
+	}
+	return b.Complete()
+}
+
+// NewPtrDecommissionBrokerRequest returns a pointer to a default DecommissionBrokerRequest
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrDecommissionBrokerRequest() *DecommissionBrokerRequest {
+	var v DecommissionBrokerRequest
+	v.Default()
+	return &v
+}
+
+// Default sets any default fields. Calling this allows for future compatibility
+// if new fields are added to DecommissionBrokerRequest.
+func (v *DecommissionBrokerRequest) Default() {
+}
+
+// NewDecommissionBrokerRequest returns a default DecommissionBrokerRequest
+// This is a shortcut for creating a struct and calling Default yourself.
+func NewDecommissionBrokerRequest() DecommissionBrokerRequest {
+	var v DecommissionBrokerRequest
+	v.Default()
+	return v
+}
+
+// DecommissionBrokerResponse is a response to a DecommissionBrokerRequest.
+type DecommissionBrokerResponse struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	// ThrottleMillis is how long of a throttle Kafka will apply to the client
+	// after responding to this request.
+	ThrottleMillis int32
+
+	// Any error code, or 0.
+	ErrorCode int16
+
+	// The error message, if any.
+	ErrorMessage *string
+}
+
+func (*DecommissionBrokerResponse) Key() int16                 { return 64 }
+func (*DecommissionBrokerResponse) MaxVersion() int16          { return 0 }
+func (v *DecommissionBrokerResponse) SetVersion(version int16) { v.Version = version }
+func (v *DecommissionBrokerResponse) GetVersion() int16        { return v.Version }
+func (v *DecommissionBrokerResponse) IsFlexible() bool         { return v.Version >= 0 }
+func (v *DecommissionBrokerResponse) Throttle() (int32, bool) {
+	return v.ThrottleMillis, v.Version >= 0
+}
+func (v *DecommissionBrokerResponse) RequestKind() Request {
+	return &DecommissionBrokerRequest{Version: v.Version}
+}
+
+func (v *DecommissionBrokerResponse) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	isFlexible := version >= 0
+	_ = isFlexible
+	{
+		v := v.ThrottleMillis
+		dst = kbin.AppendInt32(dst, v)
+	}
+	{
+		v := v.ErrorCode
+		dst = kbin.AppendInt16(dst, v)
+	}
+	{
+		v := v.ErrorMessage
+		if isFlexible {
+			dst = kbin.AppendCompactNullableString(dst, v)
+		} else {
+			dst = kbin.AppendNullableString(dst, v)
+		}
+	}
+	if isFlexible {
+		dst = append(dst, 0)
+	}
+	return dst
+}
+func (v *DecommissionBrokerResponse) ReadFrom(src []byte) error {
+	v.Default()
+	b := kbin.Reader{Src: src}
+	version := v.Version
+	_ = version
+	isFlexible := version >= 0
+	_ = isFlexible
+	s := v
+	{
+		v := b.Int32()
+		s.ThrottleMillis = v
+	}
+	{
+		v := b.Int16()
+		s.ErrorCode = v
+	}
+	{
+		var v *string
+		if isFlexible {
+			v = b.CompactNullableString()
+		} else {
+			v = b.NullableString()
+		}
+		s.ErrorMessage = v
+	}
+	if isFlexible {
+		SkipTags(&b)
+	}
+	return b.Complete()
+}
+
+// NewPtrDecommissionBrokerResponse returns a pointer to a default DecommissionBrokerResponse
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrDecommissionBrokerResponse() *DecommissionBrokerResponse {
+	var v DecommissionBrokerResponse
+	v.Default()
+	return &v
+}
+
+// Default sets any default fields. Calling this allows for future compatibility
+// if new fields are added to DecommissionBrokerResponse.
+func (v *DecommissionBrokerResponse) Default() {
+}
+
+// NewDecommissionBrokerResponse returns a default DecommissionBrokerResponse
+// This is a shortcut for creating a struct and calling Default yourself.
+func NewDecommissionBrokerResponse() DecommissionBrokerResponse {
+	var v DecommissionBrokerResponse
+	v.Default()
+	return v
+}
+
 // RequestForKey returns the request corresponding to the given request key
 // or nil if the key is unknown.
 func RequestForKey(key int16) Request {
@@ -34724,6 +34912,8 @@ func RequestForKey(key int16) Request {
 		return NewPtrBrokerRegistrationRequest()
 	case 63:
 		return NewPtrBrokerHeartbeatRequest()
+	case 64:
+		return NewPtrDecommissionBrokerRequest()
 	}
 }
 
@@ -34861,6 +35051,8 @@ func ResponseForKey(key int16) Response {
 		return NewPtrBrokerRegistrationResponse()
 	case 63:
 		return NewPtrBrokerHeartbeatResponse()
+	case 64:
+		return NewPtrDecommissionBrokerResponse()
 	}
 }
 
@@ -34998,6 +35190,8 @@ func NameForKey(key int16) string {
 		return "BrokerRegistration"
 	case 63:
 		return "BrokerHeartbeat"
+	case 64:
+		return "DecommissionBroker"
 	}
 }
 

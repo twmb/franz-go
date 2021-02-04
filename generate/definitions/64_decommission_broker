@@ -1,0 +1,13 @@
+// For KIP-500 / KIP-631, DecommissionBrokerRequest is an admin request to
+// remove registration of a broker from the cluster.
+DecommissionBrokerRequest => key 64, max version 0, flexible v0+, admin
+  // The broker ID to decommission.
+  BrokerID: int32
+
+// DecommissionBrokerResponse is a response to a DecommissionBrokerRequest.
+DecommissionBrokerResponse =>
+  ThrottleMillis
+  // Any error code, or 0.
+  ErrorCode: int16
+  // The error message, if any.
+  ErrorMessage: nullable-string
