@@ -19,10 +19,9 @@ func startConsuming(ctx context.Context, kafkaBrokers string, topic string) {
 		return
 	}
 
-	client.AssignGroupTransactSession(
-		"my-consumer-group",
-		kgo.GroupTopics(topic),
-	)
+	client.AssignGroup("my-consumer-group", kgo.GroupTopics(topic))
+	// Leave the consumer group when the consumer exits.
+	defer client.AssignGroup("")
 
 consumerLoop:
 	for {

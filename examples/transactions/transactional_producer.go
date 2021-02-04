@@ -98,6 +98,7 @@ func produceRecords(ctx context.Context, client *kgo.Client, topic string, batch
 func rollback(ctx context.Context, client *kgo.Client) {
 	if err := client.EndTransaction(ctx, kgo.TryAbort); err != nil {
 		fmt.Printf("error rolling back transaction: %v\n", err)
+		return
 	}
 	fmt.Println("transaction rolled back")
 }
