@@ -286,7 +286,13 @@ type groupConsumer struct {
 }
 
 // AssignGroup assigns a group to consume from, overriding any prior
-// assignment. To leave a group, you can AssignGroup with an empty group.
+// assignment.
+//
+// To leave a group, you can AssignGroup with an empty group, or just close the
+// client. If you are using instance IDs, the client does not explicitly leave
+// the group and instead you must issue a `kmsg.LeaveGroupRequest` manually (as
+// expected when using instance IDs).
+//
 // It is recommended to do one final blocking commit before leaving a group.
 func (cl *Client) AssignGroup(group string, opts ...GroupOpt) {
 	c := &cl.consumer
