@@ -194,6 +194,8 @@ func AutoCommitInterval(interval time.Duration) GroupOpt {
 // To actually leave the group, you must use an external admin command that
 // issues a leave group request on behalf of this instance ID (see kcl), or you
 // can manually use the kmsg package with a proper LeaveGroupRequest.
+//
+// NOTE: Leaving a group with an instance ID is only supported in Kafka 2.4.0+.
 func InstanceID(id string) GroupOpt {
 	return groupOpt{func(cfg *groupConsumer) { cfg.instanceID = &id }}
 }
@@ -283,6 +285,19 @@ type groupConsumer struct {
 	autocommitInterval time.Duration
 
 	offsetsAddedToTxn bool
+}
+
+// LeaveGroup leaves a group if in one. Calling the client's Close function
+// also leaves a group, so this is only necessary to call if you plan to leave
+// the group and continue using the client.
+//
+// If you have configured the group with an InstanceID, this does not leave the
+// group. With instance IDs, it is expected that clients will restart and
+// re-use the same instance ID. To leave a group using an instance ID, you must
+// manually issue a kmsg.LeaveGroupRequest or use an external tool (kafka
+// scripts or kcl).
+func (cl *Client) LeaveGroup() {
+	cl.AssignPartitions()
 }
 
 // AssignGroup assigns a group to consume from, overriding any prior
