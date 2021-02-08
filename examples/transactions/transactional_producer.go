@@ -85,13 +85,8 @@ func produceRecords(ctx context.Context, client *kgo.Client, topic string, batch
 			return err
 		}
 
-		select {
-		case err := <-errChan:
-			if err != nil {
-				return err
-			}
-		case <-ctx.Done():
-			return ctx.Err()
+		if err := <-errChan; err != nil {
+			return err
 		}
 	}
 
