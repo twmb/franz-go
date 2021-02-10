@@ -1,6 +1,9 @@
 tip
 ===
 
+- [`4509d41`](https://github.com/twmb/franz-go/commit/4509d41): kgo: add `AllowedConcurrentFetches` option to allow bounding the maximum possible memory consumed by the client
+- [pr #22](https://github.com/twmb/franz-go/pull/22): Add transactional producer / consumer example (thanks @dcrodman!)
+- [`6a041a8`](https://github.com/twmb/franz-go/commit/6a041a8): Add explicit Client.LeaveGroup method
 - [`fe7d976`](https://github.com/twmb/franz-go/commit/fe7d976): KIP-500 / KIP-631: add support for admin-level request DecommissionBroker
 - [`ab66776`](https://github.com/twmb/franz-go/commit/ab66776): KIP-500 / KIP-631: add support for broker-only requests BrokerRegistration and BrokerHeartbeat
 - [`31b1df7`](https://github.com/twmb/franz-go/commit/31b1df7): KIP-664: add support for DescribeProducers
@@ -10,7 +13,7 @@ tip
 - [`360a4dc`](https://github.com/twmb/franz-go/commit/360a4dc): client: actually use ConnTimeoutOverhead properly; bump base to 20s
 - [`0ff08da`](https://github.com/twmb/franz-go/commit/0ff08da): Allow list offsets v0 to work (for Kafka v0.10.0 and before)
 - [`59c935c` through `c7caea1`](https://github.com/twmb/franz-go/compare/59c935c..c7caea1): fix fetch session bugs
-- [pr #4]: redesign readme (thanks @weeco!)
+- [pr #4](https://github.com/twmb/franz-go/pull/4): Redesign readme (thanks @weeco!)
 
 Of note, this fixes fetch session bugs and has small breaking protocol changes
 in kmsg.
