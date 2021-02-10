@@ -434,8 +434,9 @@ func (s *source) fetch(consumerSession *consumerSession, doneFetch chan<- struct
 	// For all returns, if we do not buffer our fetch, then we want to
 	// ensure our used offsets are usable again.
 	var alreadySentToDoneFetch bool
+	var buffered bool
 	defer func() {
-		if len(s.buffered.fetch.Topics) == 0 {
+		if !buffered {
 			if req.numOffsets > 0 {
 				req.usedOffsets.finishUsingAll()
 			}
@@ -592,6 +593,7 @@ func (s *source) fetch(consumerSession *consumerSession, doneFetch chan<- struct
 	reloadOffsets.loadWithSessionNow(consumerSession)
 
 	if len(fetch.Topics) > 0 {
+		buffered = true
 		s.buffered = bufferedFetch{
 			fetch:       fetch,
 			doneFetch:   doneFetch,

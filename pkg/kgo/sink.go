@@ -1047,8 +1047,10 @@ func (recBuf *recBuf) bufferRecord(pr promisedRec, abortOnNewBatch bool) bool {
 		// Before we decide to keep this new batch, if this single record is too
 		// large for a batch, then we immediately fail it.
 		newBatchLength := newBatch.wireLength
-		if !produceVersionKnown && newBatch.v1wireLength > newBatchLength {
-			newBatchLength = newBatch.v1wireLength
+		if !produceVersionKnown {
+			if newBatch.v1wireLength > newBatchLength {
+				newBatchLength = newBatch.v1wireLength
+			}
 		} else {
 			switch recBuf.sink.produceVersion {
 			case 0, 1:

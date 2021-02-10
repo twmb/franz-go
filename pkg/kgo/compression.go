@@ -261,7 +261,6 @@ func (d *decompressor) decompress(src []byte, codec byte) ([]byte, error) {
 	case 4:
 		unzstd := d.unzstdPool.Get().(*zstdDecoder)
 		defer d.unzstdPool.Put(unzstd)
-		unzstd.inner.Reset(bytes.NewReader(src))
 		return unzstd.inner.DecodeAll(src, nil)
 	default:
 		return nil, errors.New("unknown compression codec")
