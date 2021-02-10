@@ -286,25 +286,30 @@ func (os usedOffsets) finishUsingAll() {
 type bufferedFetch struct {
 	fetch Fetch
 
-	usedOffsets usedOffsets // what the offsets will be next if this fetch is used
+	doneFetch   chan<- struct{} // when unbuffered, we send down this
+	usedOffsets usedOffsets     // what the offsets will be next if this fetch is used
 }
 
 // takeBuffered drains a buffered fetch and updates offsets.
 func (s *source) takeBuffered() Fetch {
-	r := s.buffered
-	s.buffered = bufferedFetch{}
-	r.usedOffsets.finishUsingAllWith(func(o *cursorOffsetNext) {
-		o.from.setOffset(o.cursorOffset)
+	return s.takeBufferedFn(func(usedOffsets usedOffsets) {
+		usedOffsets.finishUsingAllWith(func(o *cursorOffsetNext) {
+			o.from.setOffset(o.cursorOffset)
+		})
 	})
-	close(s.sem)
-	return r.fetch
 }
 
 func (s *source) discardBuffered() {
+	s.takeBufferedFn(usedOffsets.finishUsingAll)
+}
+
+func (s *source) takeBufferedFn(offsetFn func(usedOffsets)) Fetch {
 	r := s.buffered
 	s.buffered = bufferedFetch{}
-	r.usedOffsets.finishUsingAll()
+	offsetFn(r.usedOffsets)
+	r.doneFetch <- struct{}{}
 	close(s.sem)
+	return r.fetch
 }
 
 // createReq actually creates a fetch request.
@@ -375,6 +380,10 @@ func (s *source) loopFetch() {
 	default:
 	}
 
+	// We receive on canFetch when we can fetch, and we send back when we
+	// are done fetching.
+	canFetch := make(chan chan<- struct{}, 1)
+
 	again := true
 	for again {
 		select {
@@ -383,7 +392,21 @@ func (s *source) loopFetch() {
 			return
 		case <-s.sem:
 		}
-		again = s.fetchState.maybeFinish(s.fetch(session))
+
+		select {
+		case <-session.ctx.Done():
+			s.fetchState.hardFinish()
+			return
+		case session.desireFetch() <- canFetch:
+		}
+
+		select {
+		case <-session.ctx.Done():
+			s.fetchState.hardFinish()
+			return
+		case doneFetch := <-canFetch:
+			again = s.fetchState.maybeFinish(s.fetch(session, doneFetch))
+		}
 	}
 
 }
@@ -405,8 +428,23 @@ func (s *source) loopFetch() {
 // *even if* the source needs to be stopped. The knowledge of which preferred
 // replica to use would not be out of date even if the consumer session is
 // changing.
-func (s *source) fetch(consumerSession *consumerSession) (fetched bool) {
+func (s *source) fetch(consumerSession *consumerSession, doneFetch chan<- struct{}) (fetched bool) {
 	req := s.createReq()
+
+	// For all returns, if we do not buffer our fetch, then we want to
+	// ensure our used offsets are usable again.
+	var alreadySentToDoneFetch bool
+	defer func() {
+		if len(s.buffered.fetch.Topics) == 0 {
+			if req.numOffsets > 0 {
+				req.usedOffsets.finishUsingAll()
+			}
+			if !alreadySentToDoneFetch {
+				doneFetch <- struct{}{}
+			}
+		}
+	}()
+
 	if req.numOffsets == 0 { // cursors could have been set unusable
 		return
 	}
@@ -433,8 +471,6 @@ func (s *source) fetch(consumerSession *consumerSession) (fetched bool) {
 	case <-requested:
 		fetched = true
 	case <-ctx.Done():
-		s.session.reset()
-		req.usedOffsets.finishUsingAll()
 		return
 	}
 
@@ -442,6 +478,13 @@ func (s *source) fetch(consumerSession *consumerSession) (fetched bool) {
 	// but that is fine; we may just re-request too early and fall into
 	// another backoff.
 	if err != nil {
+		// We preemptively allow more fetches (since we are not buffering)
+		// and reset our session because of the error (who knows if kafka
+		// processed the request but the client failed to receive it).
+		doneFetch <- struct{}{}
+		alreadySentToDoneFetch = true
+		s.session.reset()
+
 		s.cl.triggerUpdateMetadata()
 		s.consecutiveFailures++
 		after := time.NewTimer(s.cl.cfg.retryBackoff(s.consecutiveFailures))
@@ -450,8 +493,6 @@ func (s *source) fetch(consumerSession *consumerSession) (fetched bool) {
 		case <-after.C:
 		case <-ctx.Done():
 		}
-		s.session.reset()
-		req.usedOffsets.finishUsingAll()
 		return
 	}
 	s.consecutiveFailures = 0
@@ -479,8 +520,6 @@ func (s *source) fetch(consumerSession *consumerSession) (fetched bool) {
 	select {
 	case <-handled:
 	case <-ctx.Done():
-		req.usedOffsets.finishUsingAll()
-		s.session.reset()
 		return
 	}
 
@@ -528,12 +567,10 @@ func (s *source) fetch(consumerSession *consumerSession) (fetched bool) {
 			s.cl.cfg.logger.Log(LogLevelInfo, "received SessionIDNotFound from our in use session, our session was likely evicted; resetting session")
 			s.session.reset()
 		}
-		req.usedOffsets.finishUsingAll()
 		return
 	case kerr.InvalidFetchSessionEpoch:
 		s.cl.cfg.logger.Log(LogLevelInfo, "resetting fetch session", "err", err)
 		s.session.reset()
-		req.usedOffsets.finishUsingAll()
 		return
 	}
 
@@ -543,7 +580,7 @@ func (s *source) fetch(consumerSession *consumerSession) (fetched bool) {
 
 	// If we moved any partitions to preferred replicas, we reset the
 	// session. We do this after bumping the epoch just to ensure that we
-	// have truly reset the session.
+	// have truly reset the session. (TODO switch to usingForgottenTopics)
 	if len(preferreds) > 0 {
 		s.session.reset()
 	}
@@ -557,12 +594,11 @@ func (s *source) fetch(consumerSession *consumerSession) (fetched bool) {
 	if len(fetch.Topics) > 0 {
 		s.buffered = bufferedFetch{
 			fetch:       fetch,
+			doneFetch:   doneFetch,
 			usedOffsets: req.usedOffsets,
 		}
 		s.sem = make(chan struct{})
 		s.cl.consumer.addSourceReadyForDraining(s)
-	} else {
-		req.usedOffsets.finishUsingAll()
 	}
 	return
 }

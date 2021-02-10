@@ -592,6 +592,15 @@ type consumerSession struct {
 	ctx    context.Context
 	cancel func()
 
+	// desireFetchCh is sized to the number of concurrent fetches we are
+	// configured to be able to send.
+	//
+	// We receive desires from sources, we reply when they can fetch, and
+	// they send back when they are done. Thus, three level chan.
+	desireFetchCh       chan chan chan<- struct{}
+	allowedConcurrency  int
+	fetchManagerStarted uint32 // atomic, once 1, we start the fetch manager
+
 	// Workers signify the number of fetch and list / epoch goroutines that
 	// are currently running within the context of this consumer session.
 	// Stopping a session only returns once workers hits zero.
@@ -610,11 +619,51 @@ func (c *consumer) newConsumerSession() *consumerSession {
 	session := &consumerSession{
 		c: c,
 
+		desireFetchCh:      make(chan chan chan<- struct{}, 8),
+		allowedConcurrency: c.cl.cfg.allowedConcurrentFetches,
+
 		ctx:    ctx,
 		cancel: cancel,
 	}
 	session.workersCond = sync.NewCond(&session.workersMu)
 	return session
+}
+
+func (c *consumerSession) desireFetch() chan<- chan chan<- struct{} {
+	if atomic.SwapUint32(&c.fetchManagerStarted, 1) == 0 {
+		go c.manageFetchConcurrency()
+	}
+	return c.desireFetchCh
+}
+
+func (c *consumerSession) manageFetchConcurrency() {
+	var (
+		activeFetches int
+		doneFetch     = make(chan struct{}, 20)
+		wantFetch     []chan chan<- struct{}
+	)
+	for {
+		select {
+		case register := <-c.desireFetchCh:
+			wantFetch = append(wantFetch, register)
+		case <-doneFetch:
+			activeFetches--
+
+			if activeFetches == 0 {
+				select {
+				case <-c.ctx.Done():
+					return // we are dead
+				default:
+				}
+			}
+		}
+
+		if len(wantFetch) > 0 && (activeFetches < c.allowedConcurrency || c.allowedConcurrency == 0) { // 0 means unbounded
+			wantFetch[0] <- doneFetch
+			wantFetch = wantFetch[1:]
+			activeFetches++
+		}
+	}
 }
 
 func (c *consumerSession) incWorker() {
@@ -698,7 +747,9 @@ func (c *consumer) stopSession() listOrEpochLoads {
 	}
 	session.workersMu.Unlock()
 
-	// At this point, all fetches, lists, and loads are dead.
+	// At this point, all fetches, lists, and loads are dead. We can close
+	// our num-fetches manager without worrying about a source trying to
+	// register itself.
 
 	c.cl.sinksAndSourcesMu.Lock()
 	for _, sns := range c.cl.sinksAndSources {
@@ -707,7 +758,7 @@ func (c *consumer) stopSession() listOrEpochLoads {
 	c.cl.sinksAndSourcesMu.Unlock()
 
 	// At this point, if we begin fetching anew, then the sources will not
-	// be using stale sessions.
+	// be using stale fetch sessions.
 
 	c.sourcesReadyMu.Lock()
 	defer c.sourcesReadyMu.Unlock()

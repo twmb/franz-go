@@ -102,6 +102,8 @@ type cfg struct {
 	isolationLevel int8
 	keepControl    bool
 	rack           string
+
+	allowedConcurrentFetches int
 }
 
 func (cfg *cfg) validate() error {
@@ -171,6 +173,9 @@ func (cfg *cfg) validate() error {
 		// fetch bytes limit, but hopefully we do not run into that.
 		{v: int64(cfg.maxBrokerWriteBytes), allowed: int64(cfg.maxRecordBatchBytes), badcmp: i64lt, fmt: "max broker write bytes %v is erroneously less than max record batch bytes %v"},
 		{v: int64(cfg.maxBrokerReadBytes), allowed: int64(cfg.maxBytes), badcmp: i64lt, fmt: "max broker read bytes %v is erroneously less than max fetch bytes %v"},
+
+		// 0 <= allowed concurrency
+		{name: "allowed concurrency", v: int64(cfg.allowedConcurrentFetches), allowed: 0, badcmp: i64lt},
 
 		// 1s <= conn timeout overhead <= 15m
 		{name: "conn timeout max overhead", v: int64(cfg.connTimeoutOverhead), allowed: int64(15 * time.Minute), badcmp: i64gt, durs: true},
@@ -289,6 +294,8 @@ func defaultCfg() cfg {
 		maxPartBytes:   10 << 20,
 		resetOffset:    NewOffset().AtStart(),
 		isolationLevel: 0,
+
+		allowedConcurrentFetches: 0, // unbounded default
 	}
 }
 
@@ -772,6 +779,34 @@ func FetchMinBytes(b int32) ConsumerOpt {
 // This corresponds to the Java max.partition.fetch.bytes setting.
 func FetchMaxPartitionBytes(b int32) ConsumerOpt {
 	return consumerOpt{func(cfg *cfg) { cfg.maxPartBytes = b }}
+}
+
+// AllowedConcurrentFetches sets the maximum number of fetch requests to allow
+// in flight or buffered at once, overriding the unbounded (i.e. number of
+// brokers) default.
+//
+// This setting, paired with FetchMaxBytes, can upper bound the maximum amount
+// of memory that the client can use for consuming.
+//
+// Requests are issued to brokers in a FIFO order: once the client is ready to
+// issue a request to a broker, it registers that request and issues it in
+// order with other registrations.
+//
+// If Kafka replies with any data, the client does not track the fetch as
+// completed until the user has polled the buffered fetch. Thus, a concurrent
+// fetch is not considered complete until all data from it is done being
+// processed and out of the client itself.
+//
+// Note that brokers are allowed to hang for up to FetchMaxWait before replying
+// to a request, so if this option is too constrained and you are consuming a
+// low throughput topic, the client may take a long time before requesting a
+// broker that has new data. For high throughput topics, or if the allowed
+// concurrent fetches is large enough, this should not be a concern.
+//
+// A value of 0 implies the allowed concurrency is unbounded and will be
+// limited only by the number of brokers in the cluster.
+func AllowedConcurrentFetches(n int) ConsumerOpt {
+	return consumerOpt{func(cfg *cfg) { cfg.allowedConcurrentFetches = n }}
 }
 
 // ConsumeResetOffset sets the offset to restart consuming from when a
