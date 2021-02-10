@@ -1,0 +1,13 @@
+// For KIP-500 / KIP-631, UnregisterBrokerRequest is an admin request to
+// remove registration of a broker from the cluster.
+UnregisterBrokerRequest => key 64, max version 0, flexible v0+
+  // The broker ID to unregister.
+  BrokerID: int32
+
+// UnregisterBrokerResponse is a response to a UnregisterBrokerRequest.
+UnregisterBrokerResponse =>
+  ThrottleMillis
+  // Any error code, or 0.
+  ErrorCode: int16
+  // The error message, if any.
+  ErrorMessage: nullable-string

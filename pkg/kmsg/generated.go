@@ -34590,36 +34590,35 @@ func NewBrokerHeartbeatResponse() BrokerHeartbeatResponse {
 	return v
 }
 
-// For KIP-500 / KIP-631, DecommissionBrokerRequest is an admin request to
+// For KIP-500 / KIP-631, UnregisterBrokerRequest is an admin request to
 // remove registration of a broker from the cluster.
-type DecommissionBrokerRequest struct {
+type UnregisterBrokerRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
-	// The broker ID to decommission.
+	// The broker ID to unregister.
 	BrokerID int32
 }
 
-func (*DecommissionBrokerRequest) Key() int16                 { return 64 }
-func (*DecommissionBrokerRequest) MaxVersion() int16          { return 0 }
-func (v *DecommissionBrokerRequest) SetVersion(version int16) { v.Version = version }
-func (v *DecommissionBrokerRequest) GetVersion() int16        { return v.Version }
-func (v *DecommissionBrokerRequest) IsFlexible() bool         { return v.Version >= 0 }
-func (v *DecommissionBrokerRequest) IsAdminRequest()          {}
-func (v *DecommissionBrokerRequest) ResponseKind() Response {
-	return &DecommissionBrokerResponse{Version: v.Version}
+func (*UnregisterBrokerRequest) Key() int16                 { return 64 }
+func (*UnregisterBrokerRequest) MaxVersion() int16          { return 0 }
+func (v *UnregisterBrokerRequest) SetVersion(version int16) { v.Version = version }
+func (v *UnregisterBrokerRequest) GetVersion() int16        { return v.Version }
+func (v *UnregisterBrokerRequest) IsFlexible() bool         { return v.Version >= 0 }
+func (v *UnregisterBrokerRequest) ResponseKind() Response {
+	return &UnregisterBrokerResponse{Version: v.Version}
 }
 
 // RequestWith is requests v on r and returns the response or an error.
-func (v *DecommissionBrokerRequest) RequestWith(ctx context.Context, r Requestor) (*DecommissionBrokerResponse, error) {
+func (v *UnregisterBrokerRequest) RequestWith(ctx context.Context, r Requestor) (*UnregisterBrokerResponse, error) {
 	kresp, err := r.Request(ctx, v)
 	if err != nil {
 		return nil, err
 	}
-	return kresp.(*DecommissionBrokerResponse), nil
+	return kresp.(*UnregisterBrokerResponse), nil
 }
 
-func (v *DecommissionBrokerRequest) AppendTo(dst []byte) []byte {
+func (v *UnregisterBrokerRequest) AppendTo(dst []byte) []byte {
 	version := v.Version
 	_ = version
 	isFlexible := version >= 0
@@ -34633,7 +34632,7 @@ func (v *DecommissionBrokerRequest) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
-func (v *DecommissionBrokerRequest) ReadFrom(src []byte) error {
+func (v *UnregisterBrokerRequest) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
 	version := v.Version
@@ -34651,29 +34650,29 @@ func (v *DecommissionBrokerRequest) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
-// NewPtrDecommissionBrokerRequest returns a pointer to a default DecommissionBrokerRequest
+// NewPtrUnregisterBrokerRequest returns a pointer to a default UnregisterBrokerRequest
 // This is a shortcut for creating a new(struct) and calling Default yourself.
-func NewPtrDecommissionBrokerRequest() *DecommissionBrokerRequest {
-	var v DecommissionBrokerRequest
+func NewPtrUnregisterBrokerRequest() *UnregisterBrokerRequest {
+	var v UnregisterBrokerRequest
 	v.Default()
 	return &v
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
-// if new fields are added to DecommissionBrokerRequest.
-func (v *DecommissionBrokerRequest) Default() {
+// if new fields are added to UnregisterBrokerRequest.
+func (v *UnregisterBrokerRequest) Default() {
 }
 
-// NewDecommissionBrokerRequest returns a default DecommissionBrokerRequest
+// NewUnregisterBrokerRequest returns a default UnregisterBrokerRequest
 // This is a shortcut for creating a struct and calling Default yourself.
-func NewDecommissionBrokerRequest() DecommissionBrokerRequest {
-	var v DecommissionBrokerRequest
+func NewUnregisterBrokerRequest() UnregisterBrokerRequest {
+	var v UnregisterBrokerRequest
 	v.Default()
 	return v
 }
 
-// DecommissionBrokerResponse is a response to a DecommissionBrokerRequest.
-type DecommissionBrokerResponse struct {
+// UnregisterBrokerResponse is a response to a UnregisterBrokerRequest.
+type UnregisterBrokerResponse struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
@@ -34688,19 +34687,17 @@ type DecommissionBrokerResponse struct {
 	ErrorMessage *string
 }
 
-func (*DecommissionBrokerResponse) Key() int16                 { return 64 }
-func (*DecommissionBrokerResponse) MaxVersion() int16          { return 0 }
-func (v *DecommissionBrokerResponse) SetVersion(version int16) { v.Version = version }
-func (v *DecommissionBrokerResponse) GetVersion() int16        { return v.Version }
-func (v *DecommissionBrokerResponse) IsFlexible() bool         { return v.Version >= 0 }
-func (v *DecommissionBrokerResponse) Throttle() (int32, bool) {
-	return v.ThrottleMillis, v.Version >= 0
-}
-func (v *DecommissionBrokerResponse) RequestKind() Request {
-	return &DecommissionBrokerRequest{Version: v.Version}
+func (*UnregisterBrokerResponse) Key() int16                 { return 64 }
+func (*UnregisterBrokerResponse) MaxVersion() int16          { return 0 }
+func (v *UnregisterBrokerResponse) SetVersion(version int16) { v.Version = version }
+func (v *UnregisterBrokerResponse) GetVersion() int16        { return v.Version }
+func (v *UnregisterBrokerResponse) IsFlexible() bool         { return v.Version >= 0 }
+func (v *UnregisterBrokerResponse) Throttle() (int32, bool)  { return v.ThrottleMillis, v.Version >= 0 }
+func (v *UnregisterBrokerResponse) RequestKind() Request {
+	return &UnregisterBrokerRequest{Version: v.Version}
 }
 
-func (v *DecommissionBrokerResponse) AppendTo(dst []byte) []byte {
+func (v *UnregisterBrokerResponse) AppendTo(dst []byte) []byte {
 	version := v.Version
 	_ = version
 	isFlexible := version >= 0
@@ -34726,7 +34723,7 @@ func (v *DecommissionBrokerResponse) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
-func (v *DecommissionBrokerResponse) ReadFrom(src []byte) error {
+func (v *UnregisterBrokerResponse) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
 	version := v.Version
@@ -34757,23 +34754,23 @@ func (v *DecommissionBrokerResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
-// NewPtrDecommissionBrokerResponse returns a pointer to a default DecommissionBrokerResponse
+// NewPtrUnregisterBrokerResponse returns a pointer to a default UnregisterBrokerResponse
 // This is a shortcut for creating a new(struct) and calling Default yourself.
-func NewPtrDecommissionBrokerResponse() *DecommissionBrokerResponse {
-	var v DecommissionBrokerResponse
+func NewPtrUnregisterBrokerResponse() *UnregisterBrokerResponse {
+	var v UnregisterBrokerResponse
 	v.Default()
 	return &v
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
-// if new fields are added to DecommissionBrokerResponse.
-func (v *DecommissionBrokerResponse) Default() {
+// if new fields are added to UnregisterBrokerResponse.
+func (v *UnregisterBrokerResponse) Default() {
 }
 
-// NewDecommissionBrokerResponse returns a default DecommissionBrokerResponse
+// NewUnregisterBrokerResponse returns a default UnregisterBrokerResponse
 // This is a shortcut for creating a struct and calling Default yourself.
-func NewDecommissionBrokerResponse() DecommissionBrokerResponse {
-	var v DecommissionBrokerResponse
+func NewUnregisterBrokerResponse() UnregisterBrokerResponse {
+	var v UnregisterBrokerResponse
 	v.Default()
 	return v
 }
@@ -34913,7 +34910,7 @@ func RequestForKey(key int16) Request {
 	case 63:
 		return NewPtrBrokerHeartbeatRequest()
 	case 64:
-		return NewPtrDecommissionBrokerRequest()
+		return NewPtrUnregisterBrokerRequest()
 	}
 }
 
@@ -35052,7 +35049,7 @@ func ResponseForKey(key int16) Response {
 	case 63:
 		return NewPtrBrokerHeartbeatResponse()
 	case 64:
-		return NewPtrDecommissionBrokerResponse()
+		return NewPtrUnregisterBrokerResponse()
 	}
 }
 
@@ -35191,7 +35188,7 @@ func NameForKey(key int16) string {
 	case 63:
 		return "BrokerHeartbeat"
 	case 64:
-		return "DecommissionBroker"
+		return "UnregisterBroker"
 	}
 }
 
