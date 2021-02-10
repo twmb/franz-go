@@ -1,6 +1,9 @@
 tip
 ===
 
+v0.6.4
+===
+
 - [`802bf74`](https://github.com/twmb/franz-go/commit/1e5c11d): **bugfix** kgo: fix three races
 - [`1e5c11d`](https://github.com/twmb/franz-go/commit/1e5c11d): kgo: Favor non-seeds when selecting brokers for requests that go to a random broker
 - [`4509d41`](https://github.com/twmb/franz-go/commit/4509d41): kgo: Add `AllowedConcurrentFetches` option to allow bounding the maximum possible memory consumed by the client
