@@ -1,7 +1,9 @@
 tip
 ===
 
-- [`4509d41`](https://github.com/twmb/franz-go/commit/4509d41): kgo: add `AllowedConcurrentFetches` option to allow bounding the maximum possible memory consumed by the client
+- [`802bf74`](https://github.com/twmb/franz-go/commit/1e5c11d): **bugfix** kgo: fix three races
+- [`1e5c11d`](https://github.com/twmb/franz-go/commit/1e5c11d): kgo: Favor non-seeds when selecting brokers for requests that go to a random broker
+- [`4509d41`](https://github.com/twmb/franz-go/commit/4509d41): kgo: Add `AllowedConcurrentFetches` option to allow bounding the maximum possible memory consumed by the client
 - [pr #22](https://github.com/twmb/franz-go/pull/22): Add transactional producer / consumer example (thanks @dcrodman!)
 - [`6a041a8`](https://github.com/twmb/franz-go/commit/6a041a8): Add explicit Client.LeaveGroup method
 - [`fe7d976`](https://github.com/twmb/franz-go/commit/fe7d976): KIP-500 / KIP-631: add support for admin-level request DecommissionBroker
@@ -15,8 +17,12 @@ tip
 - [`59c935c` through `c7caea1`](https://github.com/twmb/franz-go/compare/59c935c..c7caea1): fix fetch session bugs
 - [pr #4](https://github.com/twmb/franz-go/pull/4): Redesign readme (thanks @weeco!)
 
-Of note, this fixes fetch session bugs and has small breaking protocol changes
-in kmsg.
+Of note, this fixes three races, fixes fetch session bugs and has small
+breaking protocol changes in kmsg.
+
+For the three races, two of them are obvious in hindsight, but one makes no
+sense and may not belong in franz-go itself. The fix for the third is to remove
+a line that we do not need to do anyway.
 
 For fetch sessions, sessions were not reset properly in the face of context
 cancelations or across consumer topic reassignments. It was possible for fetch
