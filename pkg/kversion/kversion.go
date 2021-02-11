@@ -347,7 +347,7 @@ var max0110 = nextMax(max0102, func(v []int16) []int16 {
 	v[1]++  // 4 fetch (same)
 	v[1]++  // 5 fetch KAFKA-4586 8b05ad406d KIP-107
 	v[3]++  // 4 metadata KAFKA-5291 7311dcbc53 (3 below)
-	v[9]++  // 3 offset fetch KAFKA-3853 c2d9b95f36 KIP-98
+	v[9]++  // 2 offset fetch KAFKA-3853 c2d9b95f36 KIP-98
 	v[10]++ // 1 find coordinator KAFKA-5043 d0e7c6b930 KIP-98
 	v = append(v,
 		0, // 21 delete records KAFKA-4586 see above
