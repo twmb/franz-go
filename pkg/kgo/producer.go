@@ -310,12 +310,13 @@ func (cl *Client) doInitProducerID(lastID int64, lastEpoch int16) (*producerID, 
 
 	resp, err := req.RequestWith(cl.ctx, cl)
 	if err != nil {
-		// If our broker is too old, then well...
+		// If our broker is too old, or our client is pinned to an old
+		// version, then well...
 		//
-		// Note this is dependent on the first broker we hit;
-		// there are other areas in this client where we assume
-		// what we hit first is the default.
-		if err == ErrUnknownRequestKey {
+		// Note this is dependent on the first broker we hit; there are
+		// other areas in this client where we assume what we hit first
+		// is the default.
+		if err == ErrUnknownRequestKey || err == BrokerTooOld {
 			cl.cfg.logger.Log(LogLevelInfo, "unable to initialize a producer id because the broker is too old, continuing without a producer id")
 			return &producerID{-1, -1, nil}, true
 		}
