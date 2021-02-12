@@ -111,6 +111,12 @@ func (cfg *cfg) validate() error {
 		return errors.New("config erroneously has no seed brokers")
 	}
 
+	// We clamp maxPartBytes to maxBytes because some fake Kafka endpoints
+	// (Oracle) cannot handle the mismatch correctly.
+	if cfg.maxPartBytes > cfg.maxBytes {
+		cfg.maxPartBytes = cfg.maxBytes
+	}
+
 	for _, limit := range []struct {
 		name    string
 		sp      **string // if field is a *string, we take addr to it
