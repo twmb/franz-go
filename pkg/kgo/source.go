@@ -861,6 +861,15 @@ func (o *cursorOffsetNext) processRecordBatch(
 			return
 		}
 	}
+
+	lastOffset := batch.FirstOffset + int64(batch.LastOffsetDelta)
+	if lastOffset < o.offset {
+		// If the last offset in this batch is less than what we asked
+		// for, we got a batch that we entirely do not need. We can
+		// avoid all work (although we should not get this batch).
+		return
+	}
+
 	krecords, err := kmsg.ReadRecords(int(batch.NumRecords), rawRecords)
 	if err != nil {
 		fp.Err = fmt.Errorf("invalid record batch: %v", err)
@@ -878,6 +887,15 @@ func (o *cursorOffsetNext) processRecordBatch(
 		)
 		lastRecord = record
 		o.maybeKeepRecord(fp, record, abortBatch)
+	}
+
+	nextAskOffset := lastOffset + 1
+	if o.offset < nextAskOffset {
+		// KAFKA-5443: compacted topics preserve the last offset in a
+		// batch, even if the last record is removed, meaning that
+		// using offsets from records alone may not get us to the next
+		// offset we need to ask for.
+		o.offset = nextAskOffset
 	}
 
 	if abortBatch && lastRecord != nil && lastRecord.Attrs.IsControl() {
