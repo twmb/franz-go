@@ -1,12 +1,18 @@
 tip
 ===
 
+- [`4979b52`](https://github.com/twmb/franz-go/commit/4979b52): **bugfix** consumer: ensure we advance when consuming compacted topics
+
 v0.6.5
 ===
 
 - [`d5b9365`](https://github.com/twmb/franz-go/commit/d5b9365): configuration: clamp max partition bytes to max bytes to work around faulty providers
 - [`c7dbafb`](https://github.com/twmb/franz-go/commit/c7dbafb): **bugfix** consumer: kill the session if the response is less than version 7
 - [`f57fc76`](https://github.com/twmb/franz-go/commit/f57fc76): **bugfix** producer: handle ErrBrokerTooOld in doInitProducerID, allowing the producer to work for 0.10.0 through 0.11.0
+
+This is a small release to ensure that we can make progress when producing to
+Kafka clusters v0.10.0 through v0.11.0 (as well as that we can consume from
+them if the consume has a partition error).
 
 v0.6.4
 ===
