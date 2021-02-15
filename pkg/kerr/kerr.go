@@ -9,7 +9,7 @@ package kerr
 
 import "fmt"
 
-// Error is a Kafka error that implements the error interface.
+// Error is a Kafka error.
 type Error struct {
 	// Message is the string form of a Kafka error code
 	// (UNKNOWN_SERVER_ERROR, etc).
@@ -30,9 +30,7 @@ func (e *Error) Error() string {
 //
 // If the code is unknown, this returns UnknownServerError.
 // If the code is 0, this returns nil.
-//
-// The returned error implements the error interface.
-func ErrorForCode(code int16) *Error {
+func ErrorForCode(code int16) error {
 	err, exists := code2err[code]
 	if !exists {
 		return UnknownServerError
@@ -150,7 +148,7 @@ var (
 	UnknownTopicID                     = &Error{"UNKNOWN_TOPIC_ID", 100, true, "This server does not host this topic ID."}
 )
 
-var code2err = map[int16]*Error{
+var code2err = map[int16]error{
 	-1:  UnknownServerError,
 	0:   nil,
 	1:   OffsetOutOfRange,
