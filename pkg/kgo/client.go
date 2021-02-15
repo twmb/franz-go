@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"math/rand"
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -578,8 +579,40 @@ type ResponseShard struct {
 // that does not exist, all those non-existent pieces are grouped into one
 // request to the first seed broker. This will show up as a seed broker node ID
 // (min int32) and the response will likely contain purely errors.
+//
+// The response shards are ordered by broker metadata.
 func (cl *Client) RequestSharded(ctx context.Context, req kmsg.Request) []ResponseShard {
 	resps, _ := cl.shardedRequest(ctx, req)
+	sort.Slice(resps, func(i, j int) bool {
+		l := &resps[i].Meta
+		r := &resps[j].Meta
+
+		if l.NodeID < r.NodeID {
+			return true
+		}
+		if r.NodeID < l.NodeID {
+			return false
+		}
+		if l.Host < r.Host {
+			return true
+		}
+		if r.Host < l.Host {
+			return false
+		}
+		if l.Port < r.Port {
+			return true
+		}
+		if r.Port < l.Port {
+			return false
+		}
+		if l.Rack == nil {
+			return true
+		}
+		if r.Rack == nil {
+			return false
+		}
+		return *l.Rack < *r.Rack
+	})
 	return resps
 }
 
