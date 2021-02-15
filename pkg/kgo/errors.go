@@ -123,22 +123,6 @@ type ErrDataLoss struct {
 	ResetTo int64
 }
 
-// ErrLargeRespSize is return when Kafka replies that a response will be more
-// bytes than this client allows (see the BrokerMaxReadBytes option).
-//
-// If this error happens, the client closes the broker connection.
-type ErrLargeRespSize struct {
-	// The size that was replied.
-	Size int32
-	// The limit that the size exceeded.
-	Limit int32
-}
-
-func (e *ErrLargeRespSize) Error() string {
-	return fmt.Sprintf("invalid large response size %d > limit %d",
-		e.Size, e.Limit)
-}
-
 func (e *ErrDataLoss) Error() string {
 	return fmt.Sprintf("topic %s partition %d lost records;"+
 		" the client consumed to offset %d but was reset to offset %d",

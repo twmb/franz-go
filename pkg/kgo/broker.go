@@ -2,6 +2,7 @@ package kgo
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -759,7 +760,31 @@ func (cxn *brokerCxn) readConn(ctx context.Context, timeout time.Duration, enque
 			return
 		}
 		if maxSize := cxn.b.cl.cfg.maxBrokerReadBytes; size > maxSize {
-			err = &ErrLargeRespSize{Size: size, Limit: maxSize}
+			// A TLS alert is 21, and a TLS alert has the version
+			// following, where all major versions are 03xx. We
+			// look for an alert and major version byte to suspect
+			// if this we received a TLS alert.
+			tlsVersion := uint16(sizeBuf[1]) | uint16(sizeBuf[2])
+			if sizeBuf[0] == 21 && tlsVersion&0x0300 != 0 {
+				versionGuess := fmt.Sprintf("unknown TLS version (hex %x)", tlsVersion)
+				for _, guess := range []struct {
+					num  uint16
+					text string
+				}{
+					{tls.VersionSSL30, "SSL v3"},
+					{tls.VersionTLS10, "TLS v1.0"},
+					{tls.VersionTLS11, "TLS v1.1"},
+					{tls.VersionTLS12, "TLS v1.2"},
+					{tls.VersionTLS13, "TLS v1.3"},
+				} {
+					if tlsVersion == guess.num {
+						versionGuess = guess.text
+					}
+				}
+				err = fmt.Errorf("invalid large response size %d > limit %d; the first three bytes recieved appear to be a tls alert record for %s; is this a plaintext connection speaking to a tls endpoint?", size, maxSize, versionGuess)
+			} else {
+				err = fmt.Errorf("invalid large response size %d > limit %d", size, maxSize)
+			}
 			return
 		}
 		buf = make([]byte, size)
