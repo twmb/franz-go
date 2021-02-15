@@ -581,7 +581,7 @@ var max250 = nextMax(max240, func(v []int16) []int16 {
 })
 
 var max260 = nextMax(max250, func(v []int16) []int16 {
-	v[21]++ // 2 delete records KAFKA-8768 f869e33ab KIP-482 (opportunistic bump for exlible versions)
+	v[21]++ // 2 delete records KAFKA-8768 f869e33ab KIP-482 (opportunistic bump for flexible versions)
 	v[35]++ // 2 describe log dirs KAFKA-9435 4f1e8331ff9 KIP-482 (same)
 
 	v = append(v,
