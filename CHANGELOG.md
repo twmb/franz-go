@@ -1,8 +1,13 @@
 tip
 ===
 
+v0.6.6
+===
+
 - [`21ddc56`](https://github.com/twmb/franz-go/commit/21ddc56): kgo: sort `RequestSharded` by broker metadata before returning
 - [`4979b52`](https://github.com/twmb/franz-go/commit/4979b52): **bugfix** consumer: ensure we advance when consuming compacted topics
+
+This is a small bugfix release to fix a stuck-consumer bug on compacted topics.
 
 v0.6.5
 ===
