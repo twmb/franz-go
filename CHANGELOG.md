@@ -1,7 +1,7 @@
 tip
 ===
 
-- [`1018e9d`](https://github.com/twmb/franz-go/commit/1018e9d): kerr: return `*kerr.Error` from `ErrorForCode` instead of error
+- [`21ddc56`](https://github.com/twmb/franz-go/commit/21ddc56): kgo: sort `RequestSharded` by broker metadata before returning
 - [`4979b52`](https://github.com/twmb/franz-go/commit/4979b52): **bugfix** consumer: ensure we advance when consuming compacted topics
 
 v0.6.5
