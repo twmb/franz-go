@@ -541,6 +541,22 @@ func (s *sink) handleReqResp(req *produceRequest, resp kmsg.Response, err error)
 	s.firstRespCheck(req.version)
 	atomic.StoreUint32(&s.consecutiveFailures, 0)
 
+	// If we have no acks, we will have no response. The following block is
+	// basically an extremely condensed version of everything that follows.
+	// We *do* retry on error even with no acks, because an error would
+	// mean the write itself failed.
+	if req.acks == 0 {
+		for _, partitions := range req.batches {
+			for partition, batch := range partitions {
+				if !batch.isFirstBatchInRecordBuf() {
+					continue
+				}
+				s.cl.finishBatch(batch.recBatch, req.producerID, req.producerEpoch, partition, 0, nil)
+			}
+		}
+		return
+	}
+
 	var reqRetry seqRecBatches // handled at the end
 
 	pr := resp.(*kmsg.ProduceResponse)

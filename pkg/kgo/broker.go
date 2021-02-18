@@ -307,6 +307,27 @@ func (b *broker) handleReqs() {
 			continue
 		}
 
+		// Produce requests (and only produce requests) can be written
+		// without receiving a reply. If we see required acks is 0,
+		// then we immediately call the promise with no response.
+		//
+		// We provide a non-nil *kmsg.FetchResponse for
+		// *kmsg.FetchRequest just to ensure we do not return with no
+		// error and no kmsg.Response, per the client contract.
+		var isNoResp bool
+		var noResp kmsg.Response
+		switch r := req.(type) {
+		case *produceRequest:
+			isNoResp = r.acks == 0
+		case *kmsg.ProduceRequest:
+			isNoResp = r.Acks == 0
+			noResp = &kmsg.ProduceResponse{Version: req.GetVersion()}
+		}
+		if isNoResp {
+			pr.promise(noResp, nil)
+			continue
+		}
+
 		rt, _ := cxn.cl.connTimeoutFn(req)
 
 		cxn.waitResp(promisedResp{
