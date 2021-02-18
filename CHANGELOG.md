@@ -1,6 +1,21 @@
 tip
 ===
 
+v0.6.7
+===
+
+- [`2bea568`](https://github.com/twmb/franz-go/commit/2bea568): **bugfix** producer: fix producing with NoAck
+- [`d1ecc7b`](https://github.com/twmb/franz-go/commit/d1ecc7b): On invalidly broker large reads, guess if the problem is a tls alert on a plaintext connection
+
+This is a small bugfix release to fix producing with no acks. As it turns out,
+Kafka truly sends _no_ response when producing with no acks. Previously, we
+would produce, then hang until the read timeout, and then think the entire
+request failed. We would retry in perpetuity until the request retry limit hit,
+and then we would fail all records in a batch.
+
+This fixes that by immediately finishing all promises for produce requests if
+we wrote successfully.
+
 v0.6.6
 ===
 
