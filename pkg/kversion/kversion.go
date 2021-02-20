@@ -76,7 +76,7 @@ func (vs *Versions) SetMaxKeyVersion(k, v int16) {
 	if k < 0 || v < 0 && int(k) >= len(vs.k2v)+1 {
 		return
 	}
-	needLen := int(k + 1)
+	needLen := int(k) + 1
 	for len(vs.k2v) < needLen {
 		vs.k2v = append(vs.k2v, -1)
 	}

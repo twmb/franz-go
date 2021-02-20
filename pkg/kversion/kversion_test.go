@@ -1,8 +1,21 @@
 package kversion
 
 import (
+	"math"
 	"testing"
 )
+
+func TestSetMaxKeyVersion(t *testing.T) {
+	var vs Versions
+	for i := int16(0); i < math.MaxInt16; i++ {
+		vs.SetMaxKeyVersion(i, i)
+	}
+	for i, v := range vs.k2v {
+		if int16(i) != v {
+			t.Errorf("set incorrect: at %d got %d != exp %d", i, v, i)
+		}
+	}
+}
 
 func TestVersionGuess(t *testing.T) {
 	// Cases where last can be empty.
