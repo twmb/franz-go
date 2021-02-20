@@ -227,7 +227,11 @@ func (vs *Versions) String() string {
 		if v < 0 {
 			continue
 		}
-		fmt.Fprintf(w, "%s\t%d\n", kmsg.NameForKey(int16(k)), v)
+		name := kmsg.NameForKey(int16(k))
+		if name == "" {
+			name = "Unknown"
+		}
+		fmt.Fprintf(w, "%s\t%d\n", name, v)
 	}
 	w.Flush()
 	return buf.String()
