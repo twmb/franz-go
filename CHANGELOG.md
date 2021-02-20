@@ -1,6 +1,18 @@
 tip
 ===
 
+v0.6.8
+===
+
+- [`8a42602`](https://github.com/twmb/franz-go/commit/8a42602): **bugfix** kversion: avoid panic on a key with value of max int16 (32767)
+
+This is a small bugfix release; Confluent replies with odd keys sometimes,
+turns out this time it was max int16. That showed that the parentheses was in
+the wrong place for SetMaxKeyVersions.
+
+This also has one more commit that change the String output a little bit to use
+"Unknown" instead of an empty string on unknown keys.
+
 v0.6.7
 ===
 
