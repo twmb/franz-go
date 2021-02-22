@@ -166,7 +166,7 @@ FetchResponse =>
       // its end offset such that subsequent records are known to diverge.
       DivergingEpoch: => // tag 0
         Epoch: int32(-1)
-        EndOffset: int32(-1)
+        EndOffset: int64(-1)
       // CurrentLeader is the currently known leader ID and epoch for this
       // partition.
       CurrentLeader: => // tag 1

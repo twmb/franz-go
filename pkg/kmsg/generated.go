@@ -3230,7 +3230,7 @@ func NewFetchRequest() FetchRequest {
 type FetchResponseTopicPartitionDivergingEpoch struct {
 	Epoch int32
 
-	EndOffset int32
+	EndOffset int64
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -3642,7 +3642,7 @@ func (v *FetchResponse) AppendTo(dst []byte) []byte {
 									}
 									{
 										v := v.EndOffset
-										dst = kbin.AppendInt32(dst, v)
+										dst = kbin.AppendInt64(dst, v)
 									}
 									if isFlexible {
 										dst = append(dst, 0)
@@ -3868,7 +3868,7 @@ func (v *FetchResponse) ReadFrom(src []byte) error {
 									s.Epoch = v
 								}
 								{
-									v := b.Int32()
+									v := b.Int64()
 									s.EndOffset = v
 								}
 								if isFlexible {
