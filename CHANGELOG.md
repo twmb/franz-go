@@ -1,6 +1,32 @@
 tip
 ===
 
+v0.6.9
+===
+
+- [`0ca274c`](https://github.com/twmb/franz-go/commit/bcb330b): **bugfix** consumer group: fix race where we did not wait for a revoke to finish if the group closed
+- [`0cdc2b6`](https://github.com/twmb/franz-go/commit/bcb330b): **bugfix** consumer: process FetchResponse's RecordBatches correctly (versions after v0.11.0 can use message sets)
+- [`bcb330b`](https://github.com/twmb/franz-go/commit/bcb330b): kerr: add TypedErrorForCode and four new errors
+- [`31a9bbc`](https://github.com/twmb/franz-go/commit/31a9bbc): **bugfix** (that is not hit by general consumers): FetchResponse's DivergingEpoch.EndOffset is an int64, not int32
+
+This release fixes some problems with consuming. As it turns out, message sets,
+which are unused after v0.11.0, are indeed returned with higher FetchResponse
+versions. Thus, we cannot rely on the FetchResponse version alone to decide
+whether to decode as a message set or a record batch, instead we must check the
+magic field.
+
+The `DivergingEpoch.EndOffset` bug likely would not be noticed by general
+consumers, as this is a field set by leaders to followers and is not useful to
+nor set for clients. As well, it's only used for the not-yet-finalized raft work.
+
+I noticed a race while looping through integration tests in `-race` mode, this
+was an easy fix. Practically, the race can only be encountered when leaving a
+group if your revoke is slow and the timing races exactly with the manage loop
+also revoking. This would mean your onRevoke could be called twice. Now, that
+will not happen. This bug itself is basically a reminder to go through and
+audit the consumer group code, one of the last chunks of code I intend to
+potentially redux internally.
+
 v0.6.8
 ===
 
