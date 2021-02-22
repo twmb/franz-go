@@ -1581,8 +1581,6 @@ func (r seqRecBatch) appendTo(
 	return dst
 }
 
-var crc32c = crc32.MakeTable(crc32.Castagnoli) // record crc's use Castagnoli table
-
 func (pnr promisedNumberedRecord) appendTo(dst []byte, offsetDelta int32) []byte {
 	dst = kbin.AppendVarint(dst, pnr.lengthField)
 	dst = kbin.AppendInt8(dst, 0) // attributes, currently unused
