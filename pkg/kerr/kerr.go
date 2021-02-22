@@ -38,6 +38,29 @@ func ErrorForCode(code int16) error {
 	return err
 }
 
+// TypedErrorForCode returns the kerr.Error corresponding to the given error
+// code.
+//
+// If the code is unknown, this returns UnknownServerError.
+// If the code is 0, this returns nil.
+//
+// Note that this function is provided as a simplicity function for code that
+// needs to work with the *Error only, but this function comes with caveats.
+// Because this can return a typed nil, passing the return of this to a
+// function that accepts an error (the Go error interface), the return from
+// this will never be considered a nil error. Instead, it will be an error with
+// a nil internal value.
+func TypedErrorForCode(code int16) *Error {
+	err, exists := code2err[code]
+	if !exists {
+		return UnknownServerError
+	}
+	if err == nil {
+		return nil
+	}
+	return err.(*Error)
+}
+
 // IsRetriable returns whether a Kafka error is considered retriable.
 func IsRetriable(err error) bool {
 	kerr, ok := err.(*Error)
@@ -146,6 +169,10 @@ var (
 	SnapshotNotFound                   = &Error{"SNAPSHOT_NOT_FOUND", 98, false, "Requested snapshot was not found."}
 	PositionOutOfRange                 = &Error{"POSITION_OUT_OF_RANGE", 99, false, "Requested position is not greater than or equal to zero, and less than the size of the snapshot."}
 	UnknownTopicID                     = &Error{"UNKNOWN_TOPIC_ID", 100, true, "This server does not host this topic ID."}
+	DuplicateBrokerRegistration        = &Error{"DUPLICATE_BROKER_REGISTRATION", 101, false, "This broker ID is already in use."}
+	BrokerIDNotRegistered              = &Error{"BROKER_ID_NOT_REGISTERED", 102, false, "The given broker ID was not registered."}
+	InconsistentTopicID                = &Error{"INCONSISTENT_TOPIC_ID", 103, true, "The log's topic ID did not match the topic ID in the request."}
+	InconsistentClusterID              = &Error{"INCONSISTENT_CLUSTER_ID", 104, false, "The clusterId in the request does not match that found on the server"}
 )
 
 var code2err = map[int16]error{
@@ -251,4 +278,8 @@ var code2err = map[int16]error{
 	98:  SnapshotNotFound,
 	99:  PositionOutOfRange,
 	100: UnknownTopicID,
+	101: DuplicateBrokerRegistration,
+	102: BrokerIDNotRegistered,
+	103: InconsistentTopicID,
+	104: InconsistentClusterID,
 }
