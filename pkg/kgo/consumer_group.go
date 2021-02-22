@@ -795,6 +795,8 @@ func (g *groupConsumer) heartbeat(fetchErrCh <-chan error, s *assignRevokeSessio
 	var heartbeat, didMetadone, didRevoke bool
 	var lastErr error
 
+	ctxCh := g.ctx.Done()
+
 	for {
 		var err error
 		heartbeat = false
@@ -815,8 +817,13 @@ func (g *groupConsumer) heartbeat(fetchErrCh <-chan error, s *assignRevokeSessio
 		case <-revoked:
 			revoked = nil
 			didRevoke = true
-		case <-g.ctx.Done():
-			return errLeftGroup
+		case <-ctxCh:
+			// Even if the group is left, we need to wait for our
+			// revoke to finish before returning, otherwise the
+			// manage goroutine will race with us setting
+			// nowAssigned.
+			ctxCh = nil
+			err = errLeftGroup
 		}
 
 		if heartbeat {
