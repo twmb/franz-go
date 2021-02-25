@@ -172,7 +172,8 @@ var (
 	DuplicateBrokerRegistration        = &Error{"DUPLICATE_BROKER_REGISTRATION", 101, false, "This broker ID is already in use."}
 	BrokerIDNotRegistered              = &Error{"BROKER_ID_NOT_REGISTERED", 102, false, "The given broker ID was not registered."}
 	InconsistentTopicID                = &Error{"INCONSISTENT_TOPIC_ID", 103, true, "The log's topic ID did not match the topic ID in the request."}
-	InconsistentClusterID              = &Error{"INCONSISTENT_CLUSTER_ID", 104, false, "The clusterId in the request does not match that found on the server"}
+	InconsistentClusterID              = &Error{"INCONSISTENT_CLUSTER_ID", 104, false, "The clusterId in the request does not match that found on the server."}
+	TransactionalIDNotFound            = &Error{"TRANSACTIONAL_ID_NOT_FOUND", 105, false, "The transactionalId could not be found."}
 )
 
 var code2err = map[int16]error{
@@ -282,4 +283,5 @@ var code2err = map[int16]error{
 	102: BrokerIDNotRegistered,
 	103: InconsistentTopicID,
 	104: InconsistentClusterID,
+	105: TransactionalIDNotFound,
 }

@@ -10,7 +10,7 @@ import (
 
 // MaxKey is the maximum key used for any messages in this package.
 // Note that this value will change as Kafka adds more messages.
-const MaxKey = 64
+const MaxKey = 65
 
 // MessageV0 is the message format Kafka used prior to 0.10.
 //
@@ -34783,6 +34783,478 @@ func NewUnregisterBrokerResponse() UnregisterBrokerResponse {
 	return v
 }
 
+// For KIP-664, DescribeTransactionsRequest describes the state of transactions.
+type DescribeTransactionsRequest struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	// Array of transactionalIds to include in describe results. If empty, then
+	// no results will be returned.
+	TransactionalIDs []string
+}
+
+func (*DescribeTransactionsRequest) Key() int16                 { return 65 }
+func (*DescribeTransactionsRequest) MaxVersion() int16          { return 0 }
+func (v *DescribeTransactionsRequest) SetVersion(version int16) { v.Version = version }
+func (v *DescribeTransactionsRequest) GetVersion() int16        { return v.Version }
+func (v *DescribeTransactionsRequest) IsFlexible() bool         { return v.Version >= 0 }
+func (v *DescribeTransactionsRequest) ResponseKind() Response {
+	return &DescribeTransactionsResponse{Version: v.Version}
+}
+
+// RequestWith is requests v on r and returns the response or an error.
+func (v *DescribeTransactionsRequest) RequestWith(ctx context.Context, r Requestor) (*DescribeTransactionsResponse, error) {
+	kresp, err := r.Request(ctx, v)
+	if err != nil {
+		return nil, err
+	}
+	return kresp.(*DescribeTransactionsResponse), nil
+}
+
+func (v *DescribeTransactionsRequest) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	isFlexible := version >= 0
+	_ = isFlexible
+	{
+		v := v.TransactionalIDs
+		if isFlexible {
+			dst = kbin.AppendCompactArrayLen(dst, len(v))
+		} else {
+			dst = kbin.AppendArrayLen(dst, len(v))
+		}
+		for i := range v {
+			v := v[i]
+			if isFlexible {
+				dst = kbin.AppendCompactString(dst, v)
+			} else {
+				dst = kbin.AppendString(dst, v)
+			}
+		}
+	}
+	if isFlexible {
+		dst = append(dst, 0)
+	}
+	return dst
+}
+func (v *DescribeTransactionsRequest) ReadFrom(src []byte) error {
+	v.Default()
+	b := kbin.Reader{Src: src}
+	version := v.Version
+	_ = version
+	isFlexible := version >= 0
+	_ = isFlexible
+	s := v
+	{
+		v := s.TransactionalIDs
+		a := v
+		var l int32
+		if isFlexible {
+			l = b.CompactArrayLen()
+		} else {
+			l = b.ArrayLen()
+		}
+		if !b.Ok() {
+			return b.Complete()
+		}
+		if l > 0 {
+			a = make([]string, l)
+		}
+		for i := int32(0); i < l; i++ {
+			var v string
+			if isFlexible {
+				v = b.CompactString()
+			} else {
+				v = b.String()
+			}
+			a[i] = v
+		}
+		v = a
+		s.TransactionalIDs = v
+	}
+	if isFlexible {
+		SkipTags(&b)
+	}
+	return b.Complete()
+}
+
+// NewPtrDescribeTransactionsRequest returns a pointer to a default DescribeTransactionsRequest
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrDescribeTransactionsRequest() *DescribeTransactionsRequest {
+	var v DescribeTransactionsRequest
+	v.Default()
+	return &v
+}
+
+// Default sets any default fields. Calling this allows for future compatibility
+// if new fields are added to DescribeTransactionsRequest.
+func (v *DescribeTransactionsRequest) Default() {
+}
+
+// NewDescribeTransactionsRequest returns a default DescribeTransactionsRequest
+// This is a shortcut for creating a struct and calling Default yourself.
+func NewDescribeTransactionsRequest() DescribeTransactionsRequest {
+	var v DescribeTransactionsRequest
+	v.Default()
+	return v
+}
+
+type DescribeTransactionsResponseTransactionalStateTopic struct {
+	Topic string
+
+	Partitions []int32
+}
+
+// Default sets any default fields. Calling this allows for future compatibility
+// if new fields are added to DescribeTransactionsResponseTransactionalStateTopic.
+func (v *DescribeTransactionsResponseTransactionalStateTopic) Default() {
+}
+
+// NewDescribeTransactionsResponseTransactionalStateTopic returns a default DescribeTransactionsResponseTransactionalStateTopic
+// This is a shortcut for creating a struct and calling Default yourself.
+func NewDescribeTransactionsResponseTransactionalStateTopic() DescribeTransactionsResponseTransactionalStateTopic {
+	var v DescribeTransactionsResponseTransactionalStateTopic
+	v.Default()
+	return v
+}
+
+type DescribeTransactionsResponseTransactionalState struct {
+	// A potential error code for describing this transaction.
+	//
+	// NOT_COORDINATOR is returned if the broker receiving this transactional
+	// ID does not own the ID.
+	//
+	// COORDINATOR_LOAD_IN_PROGRESS is returned if the coordiantor is laoding.
+	//
+	// COORDINATOR_NOT_AVAILABLE is returned if the coordinator is being shutdown.
+	//
+	// TRANSACTIONAL_ID_NOT_FOUND is returned if the transactional ID could not be found.
+	//
+	// TRANSACTIONAL_ID_AUTHORIZATION_FAILED is returned if the user does not have
+	// Describe permissions on the transactional ID.
+	ErrorCode int16
+
+	// TransactionalID is the transactional ID this record is for.
+	TransactionalID string
+
+	// State is the state the transaction is in.
+	State string
+
+	// TimeoutMillis is the timeout of this transaction in milliseconds.
+	TimeoutMillis int32
+
+	// StartTimestamp is the timestamp in millis of when this transaction started.
+	StartTimestamp int64
+
+	// ProducerID is the ID in use by the transactional ID.
+	ProducerID int64
+
+	// ProducerEpoch is the epoch associated with the producer ID.
+	ProducerEpoch int16
+
+	// The set of partitions included in the current transaction (if active).
+	// When a transaction is preparing to commit or abort, this will include
+	// only partitions which do not have markers.
+	//
+	// This does not include topics the user is not authorized to describe.
+	Topics []DescribeTransactionsResponseTransactionalStateTopic
+}
+
+// Default sets any default fields. Calling this allows for future compatibility
+// if new fields are added to DescribeTransactionsResponseTransactionalState.
+func (v *DescribeTransactionsResponseTransactionalState) Default() {
+}
+
+// NewDescribeTransactionsResponseTransactionalState returns a default DescribeTransactionsResponseTransactionalState
+// This is a shortcut for creating a struct and calling Default yourself.
+func NewDescribeTransactionsResponseTransactionalState() DescribeTransactionsResponseTransactionalState {
+	var v DescribeTransactionsResponseTransactionalState
+	v.Default()
+	return v
+}
+
+// DescribeTransactionsResponse is a response to a DescribeTransactionsRequest.
+type DescribeTransactionsResponse struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	// ThrottleMillis is how long of a throttle Kafka will apply to the client
+	// after responding to this request.
+	ThrottleMillis int32
+
+	TransactionalStates []DescribeTransactionsResponseTransactionalState
+}
+
+func (*DescribeTransactionsResponse) Key() int16                 { return 65 }
+func (*DescribeTransactionsResponse) MaxVersion() int16          { return 0 }
+func (v *DescribeTransactionsResponse) SetVersion(version int16) { v.Version = version }
+func (v *DescribeTransactionsResponse) GetVersion() int16        { return v.Version }
+func (v *DescribeTransactionsResponse) IsFlexible() bool         { return v.Version >= 0 }
+func (v *DescribeTransactionsResponse) Throttle() (int32, bool) {
+	return v.ThrottleMillis, v.Version >= 0
+}
+func (v *DescribeTransactionsResponse) RequestKind() Request {
+	return &DescribeTransactionsRequest{Version: v.Version}
+}
+
+func (v *DescribeTransactionsResponse) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	isFlexible := version >= 0
+	_ = isFlexible
+	{
+		v := v.ThrottleMillis
+		dst = kbin.AppendInt32(dst, v)
+	}
+	{
+		v := v.TransactionalStates
+		if isFlexible {
+			dst = kbin.AppendCompactArrayLen(dst, len(v))
+		} else {
+			dst = kbin.AppendArrayLen(dst, len(v))
+		}
+		for i := range v {
+			v := &v[i]
+			{
+				v := v.ErrorCode
+				dst = kbin.AppendInt16(dst, v)
+			}
+			{
+				v := v.TransactionalID
+				if isFlexible {
+					dst = kbin.AppendCompactString(dst, v)
+				} else {
+					dst = kbin.AppendString(dst, v)
+				}
+			}
+			{
+				v := v.State
+				if isFlexible {
+					dst = kbin.AppendCompactString(dst, v)
+				} else {
+					dst = kbin.AppendString(dst, v)
+				}
+			}
+			{
+				v := v.TimeoutMillis
+				dst = kbin.AppendInt32(dst, v)
+			}
+			{
+				v := v.StartTimestamp
+				dst = kbin.AppendInt64(dst, v)
+			}
+			{
+				v := v.ProducerID
+				dst = kbin.AppendInt64(dst, v)
+			}
+			{
+				v := v.ProducerEpoch
+				dst = kbin.AppendInt16(dst, v)
+			}
+			{
+				v := v.Topics
+				if isFlexible {
+					dst = kbin.AppendCompactArrayLen(dst, len(v))
+				} else {
+					dst = kbin.AppendArrayLen(dst, len(v))
+				}
+				for i := range v {
+					v := &v[i]
+					{
+						v := v.Topic
+						if isFlexible {
+							dst = kbin.AppendCompactString(dst, v)
+						} else {
+							dst = kbin.AppendString(dst, v)
+						}
+					}
+					{
+						v := v.Partitions
+						if isFlexible {
+							dst = kbin.AppendCompactArrayLen(dst, len(v))
+						} else {
+							dst = kbin.AppendArrayLen(dst, len(v))
+						}
+						for i := range v {
+							v := v[i]
+							dst = kbin.AppendInt32(dst, v)
+						}
+					}
+					if isFlexible {
+						dst = append(dst, 0)
+					}
+				}
+			}
+			if isFlexible {
+				dst = append(dst, 0)
+			}
+		}
+	}
+	if isFlexible {
+		dst = append(dst, 0)
+	}
+	return dst
+}
+func (v *DescribeTransactionsResponse) ReadFrom(src []byte) error {
+	v.Default()
+	b := kbin.Reader{Src: src}
+	version := v.Version
+	_ = version
+	isFlexible := version >= 0
+	_ = isFlexible
+	s := v
+	{
+		v := b.Int32()
+		s.ThrottleMillis = v
+	}
+	{
+		v := s.TransactionalStates
+		a := v
+		var l int32
+		if isFlexible {
+			l = b.CompactArrayLen()
+		} else {
+			l = b.ArrayLen()
+		}
+		if !b.Ok() {
+			return b.Complete()
+		}
+		if l > 0 {
+			a = make([]DescribeTransactionsResponseTransactionalState, l)
+		}
+		for i := int32(0); i < l; i++ {
+			v := &a[i]
+			v.Default()
+			s := v
+			{
+				v := b.Int16()
+				s.ErrorCode = v
+			}
+			{
+				var v string
+				if isFlexible {
+					v = b.CompactString()
+				} else {
+					v = b.String()
+				}
+				s.TransactionalID = v
+			}
+			{
+				var v string
+				if isFlexible {
+					v = b.CompactString()
+				} else {
+					v = b.String()
+				}
+				s.State = v
+			}
+			{
+				v := b.Int32()
+				s.TimeoutMillis = v
+			}
+			{
+				v := b.Int64()
+				s.StartTimestamp = v
+			}
+			{
+				v := b.Int64()
+				s.ProducerID = v
+			}
+			{
+				v := b.Int16()
+				s.ProducerEpoch = v
+			}
+			{
+				v := s.Topics
+				a := v
+				var l int32
+				if isFlexible {
+					l = b.CompactArrayLen()
+				} else {
+					l = b.ArrayLen()
+				}
+				if !b.Ok() {
+					return b.Complete()
+				}
+				if l > 0 {
+					a = make([]DescribeTransactionsResponseTransactionalStateTopic, l)
+				}
+				for i := int32(0); i < l; i++ {
+					v := &a[i]
+					v.Default()
+					s := v
+					{
+						var v string
+						if isFlexible {
+							v = b.CompactString()
+						} else {
+							v = b.String()
+						}
+						s.Topic = v
+					}
+					{
+						v := s.Partitions
+						a := v
+						var l int32
+						if isFlexible {
+							l = b.CompactArrayLen()
+						} else {
+							l = b.ArrayLen()
+						}
+						if !b.Ok() {
+							return b.Complete()
+						}
+						if l > 0 {
+							a = make([]int32, l)
+						}
+						for i := int32(0); i < l; i++ {
+							v := b.Int32()
+							a[i] = v
+						}
+						v = a
+						s.Partitions = v
+					}
+					if isFlexible {
+						SkipTags(&b)
+					}
+				}
+				v = a
+				s.Topics = v
+			}
+			if isFlexible {
+				SkipTags(&b)
+			}
+		}
+		v = a
+		s.TransactionalStates = v
+	}
+	if isFlexible {
+		SkipTags(&b)
+	}
+	return b.Complete()
+}
+
+// NewPtrDescribeTransactionsResponse returns a pointer to a default DescribeTransactionsResponse
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrDescribeTransactionsResponse() *DescribeTransactionsResponse {
+	var v DescribeTransactionsResponse
+	v.Default()
+	return &v
+}
+
+// Default sets any default fields. Calling this allows for future compatibility
+// if new fields are added to DescribeTransactionsResponse.
+func (v *DescribeTransactionsResponse) Default() {
+}
+
+// NewDescribeTransactionsResponse returns a default DescribeTransactionsResponse
+// This is a shortcut for creating a struct and calling Default yourself.
+func NewDescribeTransactionsResponse() DescribeTransactionsResponse {
+	var v DescribeTransactionsResponse
+	v.Default()
+	return v
+}
+
 // RequestForKey returns the request corresponding to the given request key
 // or nil if the key is unknown.
 func RequestForKey(key int16) Request {
@@ -34919,6 +35391,8 @@ func RequestForKey(key int16) Request {
 		return NewPtrBrokerHeartbeatRequest()
 	case 64:
 		return NewPtrUnregisterBrokerRequest()
+	case 65:
+		return NewPtrDescribeTransactionsRequest()
 	}
 }
 
@@ -35058,6 +35532,8 @@ func ResponseForKey(key int16) Response {
 		return NewPtrBrokerHeartbeatResponse()
 	case 64:
 		return NewPtrUnregisterBrokerResponse()
+	case 65:
+		return NewPtrDescribeTransactionsResponse()
 	}
 }
 
@@ -35197,6 +35673,8 @@ func NameForKey(key int16) string {
 		return "BrokerHeartbeat"
 	case 64:
 		return "UnregisterBroker"
+	case 65:
+		return "DescribeTransactions"
 	}
 }
 

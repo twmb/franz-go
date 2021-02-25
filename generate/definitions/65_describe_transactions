@@ -1,0 +1,44 @@
+// For KIP-664, DescribeTransactionsRequest describes the state of transactions.
+DescribeTransactionsRequest => key 65, max version 0, flexible v0+
+  // Array of transactionalIds to include in describe results. If empty, then
+  // no results will be returned.
+  TransactionalIDs: [string]
+
+// DescribeTransactionsResponse is a response to a DescribeTransactionsRequest.
+DescribeTransactionsResponse =>
+  ThrottleMillis
+  TransactionalStates: [=>]
+    // A potential error code for describing this transaction.
+    //
+    // NOT_COORDINATOR is returned if the broker receiving this transactional
+    // ID does not own the ID.
+    //
+    // COORDINATOR_LOAD_IN_PROGRESS is returned if the coordiantor is laoding.
+    //
+    // COORDINATOR_NOT_AVAILABLE is returned if the coordinator is being shutdown.
+    //
+    // TRANSACTIONAL_ID_NOT_FOUND is returned if the transactional ID could not be found.
+    //
+    // TRANSACTIONAL_ID_AUTHORIZATION_FAILED is returned if the user does not have
+    // Describe permissions on the transactional ID.
+    ErrorCode: int16
+    // TransactionalID is the transactional ID this record is for.
+    TransactionalID: string
+    // State is the state the transaction is in.
+    State: string
+    // TimeoutMillis is the timeout of this transaction in milliseconds.
+    TimeoutMillis: int32
+    // StartTimestamp is the timestamp in millis of when this transaction started.
+    StartTimestamp: int64
+    // ProducerID is the ID in use by the transactional ID.
+    ProducerID: int64
+    // ProducerEpoch is the epoch associated with the producer ID.
+    ProducerEpoch: int16
+    // The set of partitions included in the current transaction (if active).
+    // When a transaction is preparing to commit or abort, this will include
+    // only partitions which do not have markers.
+    //
+    // This does not include topics the user is not authorized to describe.
+    Topics: [=>]
+      Topic: string
+      Partitions: [int32]
