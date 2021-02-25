@@ -479,6 +479,8 @@ func (cl *Client) Close() {
 //     DescribeLogDirs
 //     DeleteGroups
 //     IncrementalAlterConfigs
+//     DescribeProducers
+//     DescribeTransactions
 //
 // In short, this method tries to do the correct thing depending on what type
 // of request is being issued.
@@ -648,7 +650,9 @@ func (cl *Client) shardedRequest(ctx context.Context, req kmsg.Request) ([]Respo
 		*kmsg.AlterReplicaLogDirsRequest,     // key 34
 		*kmsg.DescribeLogDirsRequest,         // key 35
 		*kmsg.DeleteGroupsRequest,            // key 42
-		*kmsg.IncrementalAlterConfigsRequest: // key 44
+		*kmsg.IncrementalAlterConfigsRequest, // key 44
+		*kmsg.DescribeProducersRequest,       // key 61
+		*kmsg.DescribeTransactionsRequest:    // key 65
 		return cl.handleShardedReq(ctx, req)
 	}
 
@@ -1232,6 +1236,10 @@ func (cl *Client) handleShardedReq(ctx context.Context, req kmsg.Request) ([]Res
 		sharder = &deleteGroupsSharder{cl}
 	case *kmsg.IncrementalAlterConfigsRequest:
 		sharder = &incrementalAlterConfigsSharder{cl}
+	case *kmsg.DescribeProducersRequest:
+		sharder = &describeProducersSharder{cl}
+	case *kmsg.DescribeTransactionsRequest:
+		sharder = &describeTransactionsSharder{cl}
 	}
 
 	// If a request fails, we re-shard it (in case it needs to be split
@@ -2242,5 +2250,145 @@ func (cl *incrementalAlterConfigsSharder) merge(sresps []ResponseShard) (kmsg.Re
 		merged.Version = resp.Version
 		merged.ThrottleMillis = resp.ThrottleMillis
 		merged.Resources = append(merged.Resources, resp.Resources...)
+	})
+}
+
+// handle sharding DescribeProducersRequest
+type describeProducersSharder struct{ *Client }
+
+func (cl *describeProducersSharder) shard(ctx context.Context, kreq kmsg.Request) ([]issueShard, bool, error) {
+	req := kreq.(*kmsg.DescribeProducersRequest)
+
+	var need []string
+	for _, topic := range req.Topics {
+		need = append(need, topic.Topic)
+	}
+	mapping, err := cl.fetchMappedMetadata(ctx, need)
+	if err != nil {
+		return nil, false, err
+	}
+
+	brokerReqs := make(map[int32]map[string][]int32) // broker => topic => partitions
+	unknowns := make(map[string][]int32)             // topic => partitions
+
+	for _, topic := range req.Topics {
+		tmapping, exists := mapping[topic.Topic]
+		if err := kerr.ErrorForCode(tmapping.topic.ErrorCode); err != nil || !exists {
+			unknowns[topic.Topic] = append(unknowns[topic.Topic], topic.Partitions...)
+			continue
+		}
+		for _, partition := range topic.Partitions {
+			p, exists := tmapping.mapping[partition]
+			if !exists || kerr.ErrorForCode(p.ErrorCode) != nil {
+				unknowns[topic.Topic] = append(unknowns[topic.Topic], partition)
+				continue
+			}
+
+			brokerReq := brokerReqs[p.Leader]
+			if brokerReq == nil {
+				brokerReq = make(map[string][]int32)
+				brokerReqs[p.Leader] = brokerReq
+			}
+			brokerReq[topic.Topic] = append(brokerReq[topic.Topic], partition)
+		}
+	}
+
+	if len(unknowns) > 0 {
+		brokerReqs[unknownSeedID(0)] = unknowns
+	}
+
+	var issues []issueShard
+	for brokerID, brokerReq := range brokerReqs {
+		req := &kmsg.DescribeProducersRequest{}
+		for topic, parts := range brokerReq {
+			req.Topics = append(req.Topics, kmsg.DescribeProducersRequestTopic{
+				Topic:      topic,
+				Partitions: parts,
+			})
+		}
+
+		issues = append(issues, issueShard{
+			req:    req,
+			broker: brokerID,
+		})
+	}
+
+	return issues, true, nil // this is reshardable
+}
+
+func (cl *describeProducersSharder) onResp(kmsg.Response) {}
+
+func (cl *describeProducersSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
+	merged := new(kmsg.DescribeProducersResponse)
+	topics := make(map[string][]kmsg.DescribeProducersResponseTopicPartition)
+
+	firstErr := firstErrMerger(sresps, func(kresp kmsg.Response) {
+		resp := kresp.(*kmsg.DescribeProducersResponse)
+		merged.Version = resp.Version
+		merged.ThrottleMillis = resp.ThrottleMillis
+
+		for _, topic := range resp.Topics {
+			topics[topic.Topic] = append(topics[topic.Topic], topic.Partitions...)
+		}
+	})
+	for topic, partitions := range topics {
+		merged.Topics = append(merged.Topics, kmsg.DescribeProducersResponseTopic{
+			Topic:      topic,
+			Partitions: partitions,
+		})
+	}
+	return merged, firstErr
+}
+
+// handles sharding DescribeTransactionsRequest
+type describeTransactionsSharder struct{ *Client }
+
+func (cl *describeTransactionsSharder) shard(ctx context.Context, kreq kmsg.Request) ([]issueShard, bool, error) {
+	req := kreq.(*kmsg.DescribeTransactionsRequest)
+
+	coordinators, err := cl.loadCoordinators(true, coordinatorTypeTxn, req.TransactionalIDs...)
+	if err != nil {
+		return nil, false, err
+	}
+
+	brokerReqs := make(map[int32]*kmsg.DescribeTransactionsRequest)
+
+	for _, txnID := range req.TransactionalIDs {
+		broker := coordinators[txnID]
+		brokerReq := brokerReqs[broker.meta.NodeID]
+		if brokerReq == nil {
+			brokerReq = &kmsg.DescribeTransactionsRequest{}
+			brokerReqs[broker.meta.NodeID] = brokerReq
+		}
+		brokerReq.TransactionalIDs = append(brokerReq.TransactionalIDs, txnID)
+	}
+
+	var issues []issueShard
+	for id, req := range brokerReqs {
+		issues = append(issues, issueShard{
+			req:    req,
+			broker: id,
+		})
+	}
+	return issues, true, nil // this is reshardable
+}
+
+func (cl *describeTransactionsSharder) onResp(kresp kmsg.Response) { // cleanup any stale coordinators
+	resp := kresp.(*kmsg.DescribeTransactionsResponse)
+	for i := range resp.TransactionalStates {
+		txnState := &resp.TransactionalStates[i]
+		err := kerr.ErrorForCode(txnState.ErrorCode)
+		cl.maybeDeleteStaleCoordinator(txnState.TransactionalID, coordinatorTypeTxn, err)
+	}
+}
+
+func (cl *describeTransactionsSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
+	merged := new(kmsg.DescribeTransactionsResponse)
+
+	return merged, firstErrMerger(sresps, func(kresp kmsg.Response) {
+		resp := kresp.(*kmsg.DescribeTransactionsResponse)
+		merged.Version = resp.Version
+		merged.ThrottleMillis = resp.ThrottleMillis
+		merged.TransactionalStates = append(merged.TransactionalStates, resp.TransactionalStates...)
 	})
 }
