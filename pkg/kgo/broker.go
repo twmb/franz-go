@@ -467,6 +467,18 @@ func (cxn *brokerCxn) init() error {
 
 func (cxn *brokerCxn) requestAPIVersions() error {
 	maxVersion := int16(3)
+
+	// If the user configured a max versions, we check that the key exists
+	// before entering this function. Thus, we expect exists to be true,
+	// but we still doubly check it for sanity (as well as userMax, which
+	// can only be non-negative based off of LookupMaxKeyVersion's API).
+	if cxn.cl.cfg.maxVersions != nil {
+		userMax, exists := cxn.cl.cfg.maxVersions.LookupMaxKeyVersion(18) // 18 == api versions
+		if exists && userMax >= 0 {
+			maxVersion = userMax
+		}
+	}
+
 start:
 	req := &kmsg.ApiVersionsRequest{
 		Version:               maxVersion,
