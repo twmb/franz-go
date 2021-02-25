@@ -92,3 +92,19 @@ ACLOperation int8 (
   11: ALTER_CONFIGS
   12: IDEMPOTENT_WRITE
 )
+
+//////////
+// TXNS //
+//////////
+
+// TransactionState is the state of a transaction.
+TransactionState int8 camelcase (
+  0: Empty
+  1: Ongoing
+  2: PrepareCommit
+  3: PrepareAbort
+  4: CompleteCommit
+  5: CompleteAbort
+  6: Dead
+  7: PrepareEpochFence
+)

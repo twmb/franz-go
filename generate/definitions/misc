@@ -330,7 +330,7 @@ TxnMetadataValue => not top level, with version field
   // State is the state this transaction is in,
   // 0 is Empty, 1 is Ongoing, 2 is PrepareCommit, 3 is PrepareAbort, 4 is
   // CompleteCommit, 5 is CompleteAbort, 6 is Dead, and 7 is PrepareEpochFence.
-  State: int8
+  State: enum-TransactionState
   // Topics are topics that are involved in this transaction.
   Topics: [=>]
     // Topic is a topic involved in this transaction.

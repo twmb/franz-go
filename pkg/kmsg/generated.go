@@ -1276,7 +1276,7 @@ type TxnMetadataValue struct {
 	// State is the state this transaction is in,
 	// 0 is Empty, 1 is Ongoing, 2 is PrepareCommit, 3 is PrepareAbort, 4 is
 	// CompleteCommit, 5 is CompleteAbort, 6 is Dead, and 7 is PrepareEpochFence.
-	State int8
+	State TransactionState
 
 	// Topics are topics that are involved in this transaction.
 	Topics []TxnMetadataValueTopic
@@ -1318,7 +1318,10 @@ func (v *TxnMetadataValue) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.State
-		dst = kbin.AppendInt8(dst, v)
+		{
+			v := int8(v)
+			dst = kbin.AppendInt8(dst, v)
+		}
 	}
 	{
 		v := v.Topics
@@ -1377,7 +1380,12 @@ func (v *TxnMetadataValue) ReadFrom(src []byte) error {
 		s.TimeoutMillis = v
 	}
 	{
-		v := b.Int8()
+		var t TransactionState
+		{
+			v := b.Int8()
+			t = TransactionState(v)
+		}
+		v := t
 		s.State = v
 	}
 	{
@@ -35536,4 +35544,60 @@ const (
 	ACLOperationDescribeConfigs ACLOperation = 10
 	ACLOperationAlterConfigs    ACLOperation = 11
 	ACLOperationIdempotentWrite ACLOperation = 12
+)
+
+// TransactionState is the state of a transaction.
+//
+// Possible values and their meanings:
+//
+// * 0 (Empty)
+//
+// * 1 (Ongoing)
+//
+// * 2 (PrepareCommit)
+//
+// * 3 (PrepareAbort)
+//
+// * 4 (CompleteCommit)
+//
+// * 5 (CompleteAbort)
+//
+// * 6 (Dead)
+//
+// * 7 (PrepareEpochFence)
+//
+type TransactionState int8
+
+func (v TransactionState) String() string {
+	switch v {
+	default:
+		return "Unknown"
+	case 0:
+		return "Empty"
+	case 1:
+		return "Ongoing"
+	case 2:
+		return "PrepareCommit"
+	case 3:
+		return "PrepareAbort"
+	case 4:
+		return "CompleteCommit"
+	case 5:
+		return "CompleteAbort"
+	case 6:
+		return "Dead"
+	case 7:
+		return "PrepareEpochFence"
+	}
+}
+
+const (
+	TransactionStateEmpty             TransactionState = 0
+	TransactionStateOngoing           TransactionState = 1
+	TransactionStatePrepareCommit     TransactionState = 2
+	TransactionStatePrepareAbort      TransactionState = 3
+	TransactionStateCompleteCommit    TransactionState = 4
+	TransactionStateCompleteAbort     TransactionState = 5
+	TransactionStateDead              TransactionState = 6
+	TransactionStatePrepareEpochFence TransactionState = 7
 )
