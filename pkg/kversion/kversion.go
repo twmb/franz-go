@@ -716,3 +716,6 @@ var maxTip = nextMax(max270, func(v []int16) []int16 {
 
 	return v
 })
+
+// NOTE when adding to this, be sure to update any raw usages of requests in
+// kgo (because we do not go through NewXyzRequest() to set fields).
