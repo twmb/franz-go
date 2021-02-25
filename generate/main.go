@@ -161,6 +161,9 @@ type (
 		Name    string
 		Type
 
+		HasZero   bool
+		CamelCase bool
+
 		Values []EnumValue
 	}
 )

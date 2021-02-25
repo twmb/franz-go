@@ -729,7 +729,11 @@ func (e Enum) WriteStringFunc(l *LineWriter) {
 	l.Write("func (v %s) String() string {", e.Name)
 	l.Write("switch v {")
 	l.Write("default:")
-	l.Write(`return "UNKNOWN"`)
+	if e.CamelCase {
+		l.Write(`return "Unknown"`)
+	} else {
+		l.Write(`return "UNKNOWN"`)
+	}
 	for _, v := range e.Values {
 		l.Write("case %d:", v.Value)
 		l.Write(`return "%s"`, v.Word)
@@ -740,23 +744,29 @@ func (e Enum) WriteStringFunc(l *LineWriter) {
 
 func (e Enum) WriteConsts(l *LineWriter) {
 	l.Write("const (")
-	l.Write("%[1]sUnknown %[1]s = 0", e.Name)
+	if !e.HasZero {
+		l.Write("%[1]sUnknown %[1]s = 0", e.Name)
+	}
 	defer l.Write(")")
 	for _, v := range e.Values {
 		var sb strings.Builder
-		upper := true
-		for _, c := range v.Word {
-			switch c {
-			case '_':
-				upper = true
-			default:
-				s := string([]rune{c})
-				if upper {
-					sb.WriteString(strings.ToUpper(s))
-				} else {
-					sb.WriteString(strings.ToLower(s))
+		if e.CamelCase {
+			sb.WriteString(v.Word)
+		} else {
+			upper := true
+			for _, c := range v.Word {
+				switch c {
+				case '_':
+					upper = true
+				default:
+					s := string([]rune{c})
+					if upper {
+						sb.WriteString(strings.ToUpper(s))
+					} else {
+						sb.WriteString(strings.ToLower(s))
+					}
+					upper = false
 				}
-				upper = false
 			}
 		}
 

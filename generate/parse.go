@@ -592,10 +592,11 @@ func ParseEnums(raw []byte) {
 
 	// 1: name
 	// 2: type
-	var enumNameRe = regexp.MustCompile(`^([A-Za-z]+) ([^ ]+) \($`)
+	// 3: if camel case (optional)
+	var enumNameRe = regexp.MustCompile(`^([A-Za-z]+) ([^ ]+) (camelcase )?\($`)
 	// 1: value (number)
 	// 2: word (meaning)
-	var enumFieldRe = regexp.MustCompile(`^  (\d+): ([A-Z_]+)$`)
+	var enumFieldRe = regexp.MustCompile(`^  (\d+): ([A-Z_a-z]+)$`)
 
 	for scanner.Ok() {
 		line := scanner.Peek()
@@ -617,8 +618,9 @@ func ParseEnums(raw []byte) {
 		e := Enum{
 			Comment: getComment(),
 
-			Name: nameMatch[1],
-			Type: types[nameMatch[2]],
+			Name:      nameMatch[1],
+			Type:      types[nameMatch[2]],
+			CamelCase: nameMatch[3] != "",
 		}
 
 		var ev EnumValue
@@ -626,6 +628,9 @@ func ParseEnums(raw []byte) {
 		saveValue := func() {
 			ev.Comment = getComment()
 			e.Values = append(e.Values, ev)
+			if ev.Value == 0 {
+				e.HasZero = true
+			}
 			ev = EnumValue{}
 			canStop = true
 		}
