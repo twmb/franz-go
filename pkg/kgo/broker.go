@@ -844,7 +844,7 @@ func (cxn *brokerCxn) parseReadSize(sizeBuf []byte) (int32, error) {
 		// following, where all major versions are 03xx. We
 		// look for an alert and major version byte to suspect
 		// if this we received a TLS alert.
-		tlsVersion := uint16(sizeBuf[1]) | uint16(sizeBuf[2])
+		tlsVersion := uint16(sizeBuf[1])<<8 | uint16(sizeBuf[2])
 		if sizeBuf[0] == 21 && tlsVersion&0x0300 != 0 {
 			versionGuess := fmt.Sprintf("unknown TLS version (hex %x)", tlsVersion)
 			for _, guess := range []struct {
