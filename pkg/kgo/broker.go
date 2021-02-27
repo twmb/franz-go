@@ -299,6 +299,35 @@ func (b *broker) handleReqs() {
 		default:
 		}
 
+		// Produce requests (and only produce requests) can be written
+		// without receiving a reply. If we see required acks is 0,
+		// then we immediately call the promise with no response.
+		//
+		// We provide a non-nil *kmsg.ProduceResponse for
+		// *kmsg.ProduceRequest just to ensure we do not return with no
+		// error and no kmsg.Response, per the client contract.
+		//
+		// As documented on the client's Request function, if this is a
+		// *kmsg.ProduceRequest, we rewrite the acks to match the
+		// client configured acks, and we rewrite the timeout millis if
+		// acks is 0. We do this to ensure that our discard goroutine
+		// is used correctly, and so that we do not write a request
+		// with 0 acks and then send it to handleResps where it will
+		// not get a response.
+		var isNoResp bool
+		var noResp kmsg.Response
+		switch r := req.(type) {
+		case *produceRequest:
+			isNoResp = r.acks == 0
+		case *kmsg.ProduceRequest:
+			r.Acks = b.cl.cfg.acks.val
+			if r.Acks == 0 {
+				isNoResp = true
+				r.TimeoutMillis = int32(b.cl.cfg.produceTimeout.Milliseconds())
+			}
+			noResp = &kmsg.ProduceResponse{Version: req.GetVersion()}
+		}
+
 		corrID, err := cxn.writeRequest(pr.ctx, pr.enqueue, req)
 
 		if err != nil {
@@ -307,22 +336,6 @@ func (b *broker) handleReqs() {
 			continue
 		}
 
-		// Produce requests (and only produce requests) can be written
-		// without receiving a reply. If we see required acks is 0,
-		// then we immediately call the promise with no response.
-		//
-		// We provide a non-nil *kmsg.FetchResponse for
-		// *kmsg.FetchRequest just to ensure we do not return with no
-		// error and no kmsg.Response, per the client contract.
-		var isNoResp bool
-		var noResp kmsg.Response
-		switch r := req.(type) {
-		case *produceRequest:
-			isNoResp = r.acks == 0
-		case *kmsg.ProduceRequest:
-			isNoResp = r.Acks == 0
-			noResp = &kmsg.ProduceResponse{Version: req.GetVersion()}
-		}
 		if isNoResp {
 			pr.promise(noResp, nil)
 			continue
@@ -949,7 +962,7 @@ func (cxn *brokerCxn) waitResp(pr promisedResp) {
 //
 // Thus, we just simply discard everything.
 //
-// Since we still want to support hooks, read still read the size of a response
+// Since we still want to support hooks, we still read the size of a response
 // and then read that entire size before calling a hook. There are a few
 // differences:
 //
