@@ -1062,6 +1062,7 @@ func (g *groupConsumer) handleJoinResp(resp *kmsg.JoinGroupResponse) (restart bo
 		)
 
 		plan, err = g.balanceGroup(protocol, resp.Members)
+		g.cl.cfg.logger.Log(LogLevelDebug, "balanced", "plan", plan)
 		if err != nil {
 			return
 		}
@@ -1088,6 +1089,8 @@ func (g *groupConsumer) handleSyncResp(resp *kmsg.SyncGroupResponse, plan balanc
 		g.cl.cfg.logger.Log(LogLevelError, "sync assignment parse failed", "err", err)
 		return err
 	}
+
+	g.cl.cfg.logger.Log(LogLevelDebug, "synced", "assigned", kassignment.Topics)
 
 	// Past this point, we will fall into the setupAssigned prerevoke code,
 	// meaning for cooperative, we will revoke what we need to.

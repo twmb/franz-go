@@ -115,6 +115,8 @@ func (g *groupConsumer) balanceGroup(proto string, kmembers []kmsg.JoinGroupResp
 	})
 	for i := range members {
 		sort.Strings(members[i].topics) // guarantee sorted topics
+		m := &members[i]
+		g.cl.cfg.logger.Log(LogLevelDebug, "member interests", "id", m.id, "topics", m.topics, "previously_owned", m.owned)
 	}
 
 	for _, balancer := range g.balancers {
