@@ -293,7 +293,7 @@ func (*rangeBalancer) balance(members []groupMember, topics map[string]int32) ba
 			partitions[i] = int32(i)
 		}
 		numParts := len(partitions)
-		div, rem := numParts/len(members), numParts%len(members)
+		div, rem := numParts/len(potentialConsumers), numParts%len(potentialConsumers)
 
 		var consumerIdx int
 		for len(partitions) > 0 {
