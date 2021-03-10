@@ -975,7 +975,7 @@ start:
 		goto start
 	}
 	if err != nil {
-		g.cl.cfg.logger.Log(LogLevelWarn, "join group failed", err)
+		g.cl.cfg.logger.Log(LogLevelWarn, "join group failed", "err", err)
 		return err
 	}
 
