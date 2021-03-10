@@ -296,7 +296,7 @@ func (s *sink) drain() {
 		// We do not need to clear the addedToTxn flag for any recBuf
 		// it was set on, since producer id recovery resets the flag.
 		if err != nil {
-			s.cl.cfg.logger.Log(LogLevelInfo, "InitProducerID or AddPartitionsToTxn, failing producer id",
+			s.cl.cfg.logger.Log(LogLevelInfo, "InitProducerID or AddPartitionsToTxn error, failing producer id",
 				"err", err,
 			)
 			s.cl.failProducerID(req.producerID, req.producerEpoch, err)
