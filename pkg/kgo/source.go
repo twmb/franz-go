@@ -777,7 +777,7 @@ func (o *cursorOffsetNext) processRespPartition(version int16, rp *kmsg.FetchRes
 	// batches, and this is solely dictated by the magic byte (not the
 	// fetch response version). The magic byte is located at byte 17.
 	//
-	// 0 thru 8: int64 offset / first offset
+	// 1 thru 8: int64 offset / first offset
 	// 9 thru 12: int32 length
 	// 13 thru 16: crc (magic 0 or 1), or partition leader epoch (magic 2)
 	// 17: magic
