@@ -331,14 +331,15 @@ func (cl *Client) fetchMetadataForTopics(ctx context.Context, all bool, topics [
 	req := &kmsg.MetadataRequest{
 		AllowAutoTopicCreation: cl.cfg.allowAutoTopicCreation,
 	}
-	for _, topic := range topics {
-		t := topic
-		req.Topics = append(req.Topics, kmsg.MetadataRequestTopic{Topic: &t})
-	}
 	if all {
 		req.Topics = nil
 	} else if len(topics) == 0 {
 		req.Topics = []kmsg.MetadataRequestTopic{}
+	} else {
+		for _, topic := range topics {
+			t := topic
+			req.Topics = append(req.Topics, kmsg.MetadataRequestTopic{Topic: &t})
+		}
 	}
 	return cl.fetchMetadata(ctx, req)
 }
