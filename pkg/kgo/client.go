@@ -180,8 +180,7 @@ func NewClient(opts ...Opt) (*Client, error) {
 		metadone:            make(chan struct{}),
 	}
 	cl.producer.init()
-	cl.consumer.cl = cl
-	cl.consumer.sourcesReadyCond = sync.NewCond(&cl.consumer.sourcesReadyMu)
+	cl.consumer.init(cl)
 	cl.topics.Store(make(map[string]*topicPartitions))
 	cl.metawait.init()
 
@@ -403,19 +402,12 @@ func (cl *Client) updateBrokers(brokers []kmsg.MetadataResponseBroker) {
 
 // Close leaves any group and closes all connections and goroutines.
 func (cl *Client) Close() {
-	// First, kill the consumer. Setting dead to true and then assigning
-	// nothing will
-	// 1) invalidate active fetches
-	// 2) ensure consumptions are unassigned, stopping all source filling
-	// 3) ensures no more assigns can happen
-	cl.consumer.mu.Lock()
-	if cl.consumer.dead { // client already closed
-		cl.consumer.mu.Unlock()
-		return
+	// First, kill the consumer. This waits for the consumer to unset
+	// gracefully, ensuring we leave groups properly, and then stores the
+	// dead consumer, meaning no more assigns can happen.
+	if wasDead := cl.consumer.kill(); wasDead {
+		return // client was already closed
 	}
-	cl.consumer.dead = true
-	cl.consumer.mu.Unlock()
-	cl.AssignPartitions()
 
 	// Now we kill the client context and all brokers, ensuring all
 	// requests fail. This will finish all producer callbacks and

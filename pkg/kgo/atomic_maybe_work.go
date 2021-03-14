@@ -2,6 +2,25 @@ package kgo
 
 import "sync/atomic"
 
+// a helper type for some places
+type atomicBool uint32
+
+func (b *atomicBool) set(v bool) {
+	if v {
+		atomic.StoreUint32((*uint32)(b), 1)
+	} else {
+		atomic.StoreUint32((*uint32)(b), 0)
+	}
+}
+
+func (b *atomicBool) get() bool {
+	v := atomic.LoadUint32((*uint32)(b))
+	if v == 1 {
+		return true
+	}
+	return false
+}
+
 const (
 	stateUnstarted = iota
 	stateWorking

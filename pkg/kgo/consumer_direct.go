@@ -62,10 +62,13 @@ type directConsumer struct {
 // This takes ownership of any assignments.
 func (cl *Client) AssignPartitions(opts ...DirectConsumeOpt) {
 	c := &cl.consumer
-	c.mu.Lock()
-	defer c.mu.Unlock()
 
-	c.unset()
+	c.assignMu.Lock()
+	defer c.assignMu.Unlock()
+
+	if wasDead := c.unsetAndWait(); wasDead {
+		return
+	}
 
 	d := &directConsumer{
 		topics:     make(map[string]Offset),
@@ -80,8 +83,8 @@ func (cl *Client) AssignPartitions(opts ...DirectConsumeOpt) {
 	if len(d.topics) == 0 && len(d.partitions) == 0 || c.dead {
 		return
 	}
-	c.typ = consumerTypeDirect
-	c.direct = d
+
+	c.storeDirect(d)
 
 	defer cl.triggerUpdateMetadata()
 

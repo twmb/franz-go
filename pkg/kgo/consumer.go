@@ -77,22 +77,33 @@ func (o Offset) At(at int64) Offset {
 	return o
 }
 
-type consumerType uint8
-
-const (
-	consumerTypeUnset consumerType = iota
-	consumerTypeDirect
-	consumerTypeGroup
-)
-
 type consumer struct {
 	cl *Client
 
-	// mu guards this block specifically
-	mu     sync.Mutex
-	group  *groupConsumer
-	direct *directConsumer
-	typ    consumerType
+	// assignMu is grabbed when setting v (AssignGroup, AssignDirect, or Close)
+	// mu is grabbed when
+	//  - polling fetches, for quickly draining sources / updating group uncommitted
+	//  - calling assignPartitions (group / direct updates)
+	//
+	// v is atomic for non-locking reads in a few instances where that
+	// is preferrable / allowed.
+	assignMu sync.Mutex
+	mu       sync.Mutex
+	v        atomic.Value // *consumerValue
+
+	// On metadata update, if the consumer is set (direct or group), the
+	// client begins a goroutine that updates the consumer kind's
+	// assignments.
+	//
+	// This is done in a goroutine to not block the metadata loop, because
+	// the update **could** wait on a group consumer leaving if a
+	// concurrent AssignGroup is called (very low risk vector).
+	//
+	// The update realistically should be instantaneous, but if it is slow,
+	// some metadata updates could pile up. We loop with our atomic work
+	// loop, which collapses repeated updates into one extra update, so we
+	// loop as little as necessary.
+	outstandingMetadataUpdates workLoop
 
 	// sessionChangeMu is grabbed when a session is stopped and held through
 	// when a session can be started again. The sole purpose is to block an
@@ -122,16 +133,79 @@ func (u *usedCursors) use(c *cursor) {
 	(*u)[c] = struct{}{}
 }
 
-// unset, called under the consumer mu, transitions the group to the unset
+var consumerUnsetSentinel = new(consumerValue)
+var consumerDeadSentinel = new(consumerValue)
+
+func init() {
+	consumerUnsetSentinel.v = &consumerUnsetSentinel
+	consumerDeadSentinel.v = &consumerDeadSentinel
+}
+
+type consumerValue struct {
+	// Options:
+	//  - consumerUnsetSentinel
+	//  - *directConsumer
+	//  - *groupConsumer
+	//  - consumerDeadSentinel
+	v interface{}
+}
+
+func (c *consumer) init(cl *Client) {
+	c.cl = cl
+	c.sourcesReadyCond = sync.NewCond(&c.sourcesReadyMu)
+	c.v.Store(consumerUnsetSentinel)
+}
+
+func (c *consumer) loadKind() interface{} { return c.v.Load().(*consumerValue).v }
+func (c *consumer) loadGroup() (*groupConsumer, bool) {
+	g, ok := c.loadKind().(*groupConsumer)
+	return g, ok
+}
+func (c *consumer) loadDirect() (*directConsumer, bool) {
+	d, ok := c.loadKind().(*directConsumer)
+	return d, ok
+}
+
+func (c *consumer) storeDirect(d *directConsumer) { c.v.Store(&consumerValue{v: d}) } // while locked
+func (c *consumer) storeGroup(g *groupConsumer)   { c.v.Store(&consumerValue{v: g}) } // while locked
+
+func (c *consumer) kill() (wasDead bool) {
+	c.assignMu.Lock()
+	wasDead, wait := c.unset()
+	c.v.Store(consumerDeadSentinel)
+	c.assignMu.Unlock()
+
+	wait()
+	return wasDead
+}
+
+func (c *consumer) unsetAndWait() (wasDead bool) {
+	wasDead, wait := c.unset()
+	wait()
+	return wasDead
+}
+
+// unset, called under the assign mu, transitions the group to the unset
 // state, invalidating old assignments and leaving a group if it was in one.
-func (c *consumer) unset() {
+//
+// This returns a function to wait for a group to be left, if in one.
+func (c *consumer) unset() (wasDead bool, wait func()) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	c.assignPartitions(nil, assignInvalidateAll)
-	if c.typ == consumerTypeGroup {
-		c.group.leave()
+
+	prior := c.loadKind()
+	wasDead = prior == consumerDeadSentinel
+	if !wasDead {
+		c.v.Store(consumerUnsetSentinel)
 	}
-	c.typ = consumerTypeUnset
-	c.direct = nil
-	c.group = nil
+
+	wait = func() {}
+	if g, ok := prior.(*groupConsumer); ok {
+		wait = g.leave()
+	}
+	return wasDead, wait
 }
 
 // addSourceReadyForDraining tracks that a source needs its buffered fetch
@@ -171,12 +245,34 @@ func (cl *Client) PollFetches(ctx context.Context) Fetches {
 
 	var fetches Fetches
 	fill := func() {
+		// A group can grab the consumer lock then the group mu and
+		// assign partitions. The group mu is grabbed to update its
+		// uncommitted map. Assigning partitions clears sources ready
+		// for draining.
+		//
+		// We need to grab the consumer mu to ensure proper lock
+		// ordering and prevent lock inversion. Polling fetches also
+		// updates the group's uncommitted map; if we do not grab the
+		// consumer mu at the top, we have a problem: without the lock,
+		// we could have grabbed some sources, then a group assigned,
+		// and after the assign, we update uncommitted with fetches
+		// from the old assignment
+		c.mu.Lock()
+		defer c.mu.Unlock()
+
 		c.sourcesReadyMu.Lock()
-		defer c.sourcesReadyMu.Unlock()
 		for _, ready := range c.sourcesReadyForDraining {
 			fetches = append(fetches, ready.takeBuffered())
 		}
 		c.sourcesReadyForDraining = nil
+		realFetches := fetches
+		fetches = append(fetches, c.fakeReadyForDraining...)
+		c.fakeReadyForDraining = nil
+		c.sourcesReadyMu.Unlock()
+
+		if len(realFetches) == 0 {
+			return
+		}
 
 		// Before returning, we want to update our uncommitted. If we
 		// updated after, then we could end up with weird interactions
@@ -187,17 +283,9 @@ func (cl *Client) PollFetches(ctx context.Context) Fetches {
 		// session to start. If we returned stale fetches that did not
 		// have their uncommitted offset tracked, then we would allow
 		// duplicates.
-		//
-		// We grab the consumer mu because a concurrent client close
-		// could happen.
-		c.mu.Lock()
-		if c.typ == consumerTypeGroup && len(fetches) > 0 {
-			c.group.updateUncommitted(fetches)
+		if g, ok := c.loadGroup(); ok {
+			g.updateUncommitted(realFetches)
 		}
-		c.mu.Unlock()
-
-		fetches = append(fetches, c.fakeReadyForDraining...)
-		c.fakeReadyForDraining = nil
 	}
 
 	fill()
@@ -354,7 +442,12 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how
 	clientTopics := c.cl.loadTopics()
 	for topic, partitions := range assignments {
 
-		topicParts := clientTopics[topic].load() // must be non-nil, which is ensured in Assign<> or in metadata when consuming as regex
+		topicPartitions := clientTopics[topic] // should be non-nil
+		if topicPartitions == nil {
+			c.cl.cfg.logger.Log(LogLevelError, "BUG! consumer was assigned topic that we did not ask for in AssignGroup nor AssignDirect, skipping!", "topic", topic)
+			continue
+		}
+		topicParts := topicPartitions.load()
 
 		for partition, offset := range partitions {
 			// First, if the request is exact, get rid of the relative
@@ -410,23 +503,44 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how
 }
 
 func (c *consumer) doOnMetadataUpdate() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	switch c.typ {
-	case consumerTypeUnset:
+	switch c.loadKind().(type) {
+	case *directConsumer:
+	case *groupConsumer:
+	default:
 		return
-	case consumerTypeDirect:
-		c.assignPartitions(c.direct.findNewAssignments(c.cl.loadTopics()), assignWithoutInvalidating)
-	case consumerTypeGroup:
-		c.group.findNewAssignments(c.cl.loadTopics())
 	}
 
-	go c.loadSession().doOnMetadataUpdate()
+	// See the comment on the outstandingMetadataUpdates field for why this
+	// block below.
+	if c.outstandingMetadataUpdates.maybeBegin() {
+		doUpdate := func() {
+			switch t := c.loadKind().(type) {
+			case *directConsumer:
+				if new := t.findNewAssignments(c.cl.loadTopics()); len(new) > 0 {
+					c.mu.Lock()
+					c.assignPartitions(new, assignWithoutInvalidating)
+					c.mu.Unlock()
+				}
+			case *groupConsumer:
+				t.findNewAssignments(c.cl.loadTopics())
+			}
+
+			go c.loadSession().doOnMetadataUpdate()
+		}
+
+		go func() {
+			again := true
+			for again {
+				doUpdate()
+				again = c.outstandingMetadataUpdates.maybeFinish(false)
+			}
+		}()
+	}
+
 }
 
 func (s *consumerSession) doOnMetadataUpdate() {
-	if s == nil { // no session started yet
+	if s == nil || s == noConsumerSession { // no session started yet
 		return
 	}
 

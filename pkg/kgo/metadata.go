@@ -218,10 +218,13 @@ func (cl *Client) updateMetadata() (needsRetry bool, err error) {
 // fetchTopicMetadata fetches metadata for all reqTopics and returns new
 // topicPartitionsData for each topic.
 func (cl *Client) fetchTopicMetadata(reqTopics []string) (map[string]*topicPartitionsData, bool, error) {
-	cl.consumer.mu.Lock()
-	all := cl.consumer.typ == consumerTypeDirect && cl.consumer.direct.regexTopics ||
-		cl.consumer.typ == consumerTypeGroup && cl.consumer.group.regexTopics
-	cl.consumer.mu.Unlock()
+	var all bool
+	switch v := cl.consumer.loadKind().(type) {
+	case *groupConsumer:
+		all = v.regexTopics
+	case *directConsumer:
+		all = v.regexTopics
+	}
 	_, meta, err := cl.fetchMetadataForTopics(cl.ctx, all, reqTopics)
 	if err != nil {
 		return nil, all, err

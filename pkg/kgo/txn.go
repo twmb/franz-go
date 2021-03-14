@@ -63,15 +63,10 @@ func (cl *Client) AssignGroupTransactSession(group string, opts ...GroupOpt) *Gr
 		cl: cl,
 	}
 
-	c := &cl.consumer
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if c.typ != consumerTypeGroup {
-		return nil // invalid, but we will let the caller handle this
+	g, ok := cl.consumer.loadGroup()
+	if !ok {
+		return nil // concurrent Assign; users should not do this
 	}
-
-	g := c.group
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
@@ -328,10 +323,8 @@ func (cl *Client) EndTransaction(ctx context.Context, commit TransactionEndTry) 
 	atomic.StoreUint32(&cl.producer.producingTxn, 0) // forbid any new produces while ending txn
 
 	defer func() {
-		cl.consumer.mu.Lock()
-		defer cl.consumer.mu.Unlock()
-		if cl.consumer.typ == consumerTypeGroup {
-			cl.consumer.group.offsetsAddedToTxn = false
+		if g, ok := cl.consumer.loadGroup(); ok {
+			g.offsetsAddedToTxn = false
 		}
 	}()
 
@@ -457,11 +450,10 @@ func (cl *Client) commitTransactionOffsets(
 		cl.producer.txnMu.Unlock()
 		return
 	}
-	cl.consumer.mu.Lock()
 	cl.producer.txnMu.Unlock()
 
-	defer cl.consumer.mu.Unlock()
-	if cl.consumer.typ != consumerTypeGroup {
+	g, ok := cl.consumer.loadGroup()
+	if !ok {
 		onDone(new(kmsg.TxnOffsetCommitRequest), new(kmsg.TxnOffsetCommitResponse), ErrNotGroup)
 		return
 	}
@@ -470,7 +462,6 @@ func (cl *Client) commitTransactionOffsets(
 		return
 	}
 
-	g := cl.consumer.group
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
@@ -515,7 +506,8 @@ func (cl *Client) addOffsetsToTxn(ctx context.Context, group string) error {
 }
 
 // commitTxn is ALMOST EXACTLY THE SAME as commit, but changed for txn types
-// and we avoid updateCommitted.
+// and we avoid updateCommitted. We avoid updating because we manually
+// SetOffsets when ending the transaction.
 func (g *groupConsumer) commitTxn(
 	ctx context.Context,
 	uncommitted map[string]map[int32]EpochOffset,
@@ -547,14 +539,13 @@ func (g *groupConsumer) commitTxn(
 	// The id must have been set at least once by this point because of
 	// addOffsetsToTxn.
 	id, epoch, _ := g.cl.producerID()
-	memberID := g.memberID
 	req := &kmsg.TxnOffsetCommitRequest{
 		TransactionalID: *g.cl.cfg.txnID,
 		Group:           g.id,
 		ProducerID:      id,
 		ProducerEpoch:   epoch,
 		Generation:      g.generation,
-		MemberID:        memberID,
+		MemberID:        g.memberID,
 		InstanceID:      g.instanceID,
 	}
 
@@ -592,7 +583,7 @@ func (g *groupConsumer) commitTxn(
 					Partition:   partition,
 					Offset:      eo.Offset,
 					LeaderEpoch: eo.Epoch,
-					Metadata:    &memberID,
+					Metadata:    &req.MemberID,
 				})
 			}
 		}
