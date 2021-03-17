@@ -76,10 +76,11 @@ type cfg struct {
 	hooks hooks
 
 	// ***PRODUCER SECTION***
-	txnID       *string
-	txnTimeout  time.Duration
-	acks        Acks
-	compression []CompressionCodec // order of preference
+	txnID              *string
+	txnTimeout         time.Duration
+	acks               Acks
+	disableIdempotency bool
+	compression        []CompressionCodec // order of preference
 
 	maxRecordBatchBytes int32
 	maxBufferedRecords  int64
@@ -115,6 +116,10 @@ func (cfg *cfg) validate() error {
 	// (Oracle) cannot handle the mismatch correctly.
 	if cfg.maxPartBytes > cfg.maxBytes {
 		cfg.maxPartBytes = cfg.maxBytes
+	}
+
+	if cfg.disableIdempotency && cfg.txnID != nil {
+		return errors.New("cannot both disable idempotent writes and use transactional IDs")
 	}
 
 	for _, limit := range []struct {
@@ -576,6 +581,19 @@ func AllISRAcks() Acks { return Acks{-1} }
 // overriding the default RequireAllISRAcks.
 func RequiredAcks(acks Acks) ProducerOpt {
 	return producerOpt{func(cfg *cfg) { cfg.acks = acks }}
+}
+
+// DisableIdempotentWrite disables idempotent produce requests, opting out of
+// Kafka server-side deduplication in the face of reissued requests due to
+// transient network problems.
+//
+// Idempotent production is strictly a win, but does require the
+// IDEMPOTENT_WRITE permission on CLUSTER, and not all clients can have that
+// permission.
+//
+// This option is incompatible with specifying a transactional id.
+func DisableIdempotentWrite() ProducerOpt {
+	return producerOpt{func(cfg *cfg) { cfg.disableIdempotency = true }}
 }
 
 // BatchCompression sets the compression codec to use for producing records.

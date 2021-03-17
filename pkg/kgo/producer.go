@@ -229,10 +229,20 @@ func (cl *Client) producerID() (int64, int16, error) {
 		defer cl.producer.idMu.Unlock()
 
 		if id = cl.producer.id.Load().(*producerID); id.err == errReloadProducerID {
-			// For the idempotent producer, as specified in KIP-360,
-			// if we had an ID, we can bump the epoch locally.
-			// If we are at the max epoch, we will ask for a new ID.
-			if cl.cfg.txnID == nil && id.id >= 0 && id.epoch < math.MaxInt16-1 {
+
+			if cl.cfg.disableIdempotency {
+				cl.cfg.logger.Log(LogLevelInfo, "skipping producer id initialization because the client was configured to disable idempotent writes")
+				id = &producerID{
+					id:    -1,
+					epoch: -1,
+					err:   nil,
+				}
+				cl.producer.id.Store(id)
+
+				// For the idempotent producer, as specified in KIP-360,
+				// if we had an ID, we can bump the epoch locally.
+				// If we are at the max epoch, we will ask for a new ID.
+			} else if cl.cfg.txnID == nil && id.id >= 0 && id.epoch < math.MaxInt16-1 {
 				// As seen in KAFKA-12152, if we are simply bumping the
 				// epoch for the idempotent producer, we actually need to
 				// reset the sequence number for **all** partitions.
@@ -248,6 +258,7 @@ func (cl *Client) producerID() (int64, int16, error) {
 					epoch: id.epoch + 1,
 					err:   nil,
 				})
+
 			} else {
 				newID, keep := cl.doInitProducerID(id.id, id.epoch)
 				if keep {
