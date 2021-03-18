@@ -714,6 +714,11 @@ var maxTip = nextMax(max270, func(v []int16) []int16 {
 		0, // 65 describe transactions
 	)
 
+	// KAFKA-12369 3708a7c6c1ecf1304f091dda1e79ae53ba2df489 KIP-664
+	v = append(v,
+		0, // 66 list transactions
+	)
+
 	return v
 })
 

@@ -1,0 +1,36 @@
+// For KIP-664, ListTransactionsRequest lists transactions.
+ListTransactionsRequest => key 66, max version 0, flexible v0+
+  // The transaction states to filter by: if empty, all transactions are
+  // returned; if non-empty, then only transactions matching one of the
+  // filtered states will be returned.
+  //
+  // For a list of valid states, see the TransactionState enum.
+  StateFilters: [string]
+  // The producer IDs to filter by: if empty, all transactions will be
+  // returned; if non-empty, only transactions which match one of the filtered
+  // producer IDs will be returned
+  ProducerIDFilters: [int64]
+
+// ListTransactionsResponse is a response to a ListTransactionsRequest.
+ListTransactionsResponse =>
+  ThrottleMillis
+  // A potential error code for the listing,
+  //
+  // COORDINATOR_LOAD_IN_PROGRESS is returned if the coordinator is loading.
+  //
+  // COORDINATOR_NOT_AVAILABLE is returned if the coordinator receiving this
+  // request is shutting down.
+  ErrorCode: int16
+  // Set of state filters provided in the request which were unknown to the
+  // transaction coordinator.
+  UnknownStateFilters: [string]
+  // TransactionStates contains all transactions that were matched for listing
+  // in the request. The response elides transactions that the user does not have
+  // permission to describe (DESCRIBE on TRANSACTIONAL_ID for the transaction).
+  TransactionStates: [=>]
+    // The transactional ID being used.
+    TransactionalID: string
+    // The producer ID of the producer.
+    ProducerID: int64
+    // The current transaction state of the producer.
+    TransactionState: string
