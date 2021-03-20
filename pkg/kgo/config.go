@@ -121,6 +121,14 @@ func (cfg *cfg) validate() error {
 	if cfg.disableIdempotency && cfg.txnID != nil {
 		return errors.New("cannot both disable idempotent writes and use transactional IDs")
 	}
+	if !cfg.disableIdempotency {
+		if cfg.acks.val != -1 {
+			return errors.New("idempotency requires acks=all")
+		}
+		if cfg.retries == 0 {
+			return errors.New("idempotency requires RequestRetries to be greater than 0")
+		}
+	}
 
 	for _, limit := range []struct {
 		name    string
