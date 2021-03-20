@@ -112,6 +112,12 @@ func (s *GroupTransactSession) Begin() error {
 // in committing offsets fails, this aborts.
 //
 // This returns whether the transaction committed or any error that occurred.
+//
+// Note that canceling the context will likely leave the client in an
+// undesirable state, because canceling the context cancels in flight requests
+// and prevents new requests (multiple requests are issued at the end of a
+// transact session). Thus, while a context is allowed, it is strongly
+// recommended to not cancel it.
 func (s *GroupTransactSession) End(ctx context.Context, commit TransactionEndTry) (bool, error) {
 	defer func() {
 		s.revokeMu.Lock()
@@ -315,6 +321,11 @@ func (cl *Client) AbortBufferedRecords(ctx context.Context) error {
 // If records failed with UnknownProducerID and your Kafka version is at least
 // 2.5.0, then aborting here will potentially allow the client to recover for
 // more production.
+//
+// Note that canceling the context will likely leave the client in an
+// undesirable state, because canceling the context may cancel the in-flight
+// EndTransaction request, making it impossible to know whether the commit or
+// abort was successful. It is recommended to not cancel the context.
 func (cl *Client) EndTransaction(ctx context.Context, commit TransactionEndTry) error {
 	cl.producer.txnMu.Lock()
 	defer cl.producer.txnMu.Unlock()
