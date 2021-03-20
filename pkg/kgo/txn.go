@@ -148,10 +148,10 @@ func (s *GroupTransactSession) End(ctx context.Context, commit TransactionEndTry
 
 	s.revokeMu.Lock()
 	revoked := s.revoked
-	s.revokeMu.Unlock()
 
 	precommit := s.cl.CommittedOffsets()
 	postcommit := s.cl.UncommittedOffsets()
+	s.revokeMu.Unlock()
 
 	var oldGeneration bool
 	var commitErr error
@@ -203,12 +203,14 @@ func (s *GroupTransactSession) End(ctx context.Context, commit TransactionEndTry
 	endTxnErr := s.cl.EndTransaction(ctx, TransactionEndTry(willTryCommit))
 
 	if !willTryCommit || endTxnErr != nil {
-		s.cl.cfg.logger.Log(LogLevelInfo, "transact session resetting to prior committed state",
+		currentCommit := s.cl.CommittedOffsets()
+		s.cl.cfg.logger.Log(LogLevelInfo, "transact session resetting to current committed state (potentially after a rejoin)",
 			"tried_commit", willTryCommit,
 			"commit_err", endTxnErr,
-			"precommit", precommit,
+			"state_precommit", precommit,
+			"state_current_commit", currentCommit,
 		)
-		s.cl.SetOffsets(precommit)
+		s.cl.SetOffsets(currentCommit)
 	} else if willTryCommit && endTxnErr == nil {
 		s.cl.cfg.logger.Log(LogLevelInfo, "transact session successful, setting to newly committed state",
 			"tried_commit", willTryCommit,
