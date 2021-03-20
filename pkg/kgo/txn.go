@@ -92,6 +92,22 @@ func (cl *Client) AssignGroupTransactSession(group string, opts ...GroupOpt) *Gr
 	return s
 }
 
+// PollFetches is a wrapper around Client.PollFetches, with the exact same
+// semantics. Please refer to that function's documentation.
+//
+// It is invalid to call PollFetches concurrently with Begin or End.
+func (s *GroupTransactSession) PollFetches(ctx context.Context) Fetches {
+	return s.cl.PollFetches(ctx)
+}
+
+// Produce is a wrapper around Client.Produce, with the exact same semantics.
+// Please refer to that function's documentation.
+//
+// It is invalid to call Produce concurrently with Begin or End.
+func (s *GroupTransactSession) Produce(ctx context.Context, r *Record, promise func(*Record, error)) error {
+	return s.cl.Produce(ctx, r, promise)
+}
+
 // Begin begins a transaction, returning an error if the client has no
 // transactional id or is already in a transaction.
 //
