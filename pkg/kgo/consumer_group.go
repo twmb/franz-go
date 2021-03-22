@@ -1226,7 +1226,8 @@ start:
 	select {
 	case <-fetchDone:
 	case <-ctx.Done():
-		err = ctx.Err()
+		g.cl.cfg.logger.Log(LogLevelError, "fetch offsets failed due to context cancelation")
+		return ctx.Err()
 	}
 	if err != nil {
 		g.cl.cfg.logger.Log(LogLevelError, "fetch offsets failed with non-retriable error", "err", err)
