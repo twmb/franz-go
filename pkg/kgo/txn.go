@@ -100,6 +100,14 @@ func (s *GroupTransactSession) PollFetches(ctx context.Context) Fetches {
 	return s.cl.PollFetches(ctx)
 }
 
+// PollRecords is a wrapper around Client.PollRecords, with the exact same
+// semantics. Please refer to that function's documentation.
+//
+// It is invalid to call PollRecords concurrently with Begin or End.
+func (s *GroupTransactSession) PollRecords(ctx context.Context, maxPollRecords int) Fetches {
+	return s.cl.PollRecords(ctx, maxPollRecords)
+}
+
 // Produce is a wrapper around Client.Produce, with the exact same semantics.
 // Please refer to that function's documentation.
 //

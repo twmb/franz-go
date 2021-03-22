@@ -238,9 +238,22 @@ func (c *consumer) addFakeReadyForDraining(topic string, partition int32, err er
 // It is important to check all partition errors in the returned fetches. If
 // any partition has a fatal error and actually had no records, fake fetch will
 // be injected with the error.
-//
-// It is invalid to call this multiple times concurrently.
 func (cl *Client) PollFetches(ctx context.Context) Fetches {
+	return cl.PollRecords(ctx, 0)
+}
+
+// PollRecords waits for records to be available, returning as soon as any
+// broker returns a record in a fetch. If the ctx quits, this function quits.
+// This returns a maximum of maxPollRecords total across all fetches, or
+// returns all buffered records if maxPollRecords is <= 0.
+//
+// It is important to check all partition errors in the returned fetches. If
+// any partition has a fatal error and actually had no records, fake fetch will
+// be injected with the error.
+func (cl *Client) PollRecords(ctx context.Context, maxPollRecords int) Fetches {
+	if maxPollRecords == 0 {
+		maxPollRecords = -1
+	}
 	c := &cl.consumer
 
 	var fetches Fetches
@@ -261,13 +274,28 @@ func (cl *Client) PollFetches(ctx context.Context) Fetches {
 		defer c.mu.Unlock()
 
 		c.sourcesReadyMu.Lock()
-		for _, ready := range c.sourcesReadyForDraining {
-			fetches = append(fetches, ready.takeBuffered())
+		if maxPollRecords < 0 {
+			for _, ready := range c.sourcesReadyForDraining {
+				fetches = append(fetches, ready.takeBuffered())
+			}
+			c.sourcesReadyForDraining = nil
+		} else {
+			for len(c.sourcesReadyForDraining) > 0 && maxPollRecords > 0 {
+				source := c.sourcesReadyForDraining[0]
+				fetch, taken, drained := source.takeNBuffered(maxPollRecords)
+				if drained {
+					c.sourcesReadyForDraining = c.sourcesReadyForDraining[1:]
+				}
+				maxPollRecords -= taken
+				fetches = append(fetches, fetch)
+			}
 		}
-		c.sourcesReadyForDraining = nil
+
 		realFetches := fetches
+
 		fetches = append(fetches, c.fakeReadyForDraining...)
 		c.fakeReadyForDraining = nil
+
 		c.sourcesReadyMu.Unlock()
 
 		if len(realFetches) == 0 {

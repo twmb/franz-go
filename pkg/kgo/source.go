@@ -310,6 +310,79 @@ func (s *source) discardBuffered() {
 	s.takeBufferedFn(usedOffsets.finishUsingAll)
 }
 
+// takeNBuffered takes a limited amount of records from a buffered fetch,
+// updating offsets in each partition per records taken.
+//
+// This only allows a new fetch once every buffered record has been taken.
+//
+// This returns the number of records taken and whether the source has been
+// completely drained.
+func (s *source) takeNBuffered(n int) (Fetch, int, bool) {
+	var r Fetch
+	var taken int
+
+	b := &s.buffered
+	bf := &b.fetch
+	for len(bf.Topics) > 0 && n > 0 {
+		t := &bf.Topics[0]
+
+		r.Topics = append(r.Topics, *t)
+		rt := &r.Topics[len(r.Topics)-1]
+		rt.Partitions = nil
+
+		tCursors := b.usedOffsets[t.Topic]
+
+		for len(t.Partitions) > 0 && n > 0 {
+			p := &t.Partitions[0]
+
+			rt.Partitions = append(rt.Partitions, *p)
+			rp := &rt.Partitions[len(rt.Partitions)-1]
+			rp.Records = nil
+
+			take := n
+			if take > len(p.Records) {
+				take = len(p.Records)
+			}
+
+			rp.Records = p.Records[:take]
+			p.Records = p.Records[take:]
+
+			n -= take
+			taken += take
+
+			pCursor := tCursors[p.Partition]
+
+			if len(p.Records) == 0 {
+				t.Partitions = t.Partitions[1:]
+
+				pCursor.from.setOffset(pCursor.cursorOffset)
+				pCursor.from.allowUsable()
+				delete(tCursors, p.Partition)
+				if len(tCursors) == 0 {
+					delete(b.usedOffsets, t.Topic)
+				}
+				break
+			}
+
+			lastReturnedRecord := rp.Records[len(rp.Records)-1]
+			pCursor.from.setOffset(cursorOffset{
+				offset:            lastReturnedRecord.Offset + 1,
+				lastConsumedEpoch: lastReturnedRecord.LeaderEpoch,
+			})
+		}
+
+		if len(t.Partitions) == 0 {
+			bf.Topics = bf.Topics[1:]
+		}
+	}
+
+	drained := len(bf.Topics) == 0
+	if drained {
+		s.takeBuffered()
+	}
+	return r, taken, drained
+}
+
 func (s *source) takeBufferedFn(offsetFn func(usedOffsets)) Fetch {
 	r := s.buffered
 	s.buffered = bufferedFetch{}
