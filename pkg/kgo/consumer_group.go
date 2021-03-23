@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -259,8 +260,6 @@ type groupConsumer struct {
 	// The following two are only updated in the manager / join&sync loop
 	lastAssigned map[string][]int32 // only updated in join&sync loop
 	nowAssigned  map[string][]int32 // only updated in join&sync loop
-
-	groupExtraTopics map[string]struct{} // TODO TODO TODO
 
 	// leader is whether we are the leader right now. This is set to false
 	//
@@ -1135,7 +1134,6 @@ func (g *groupConsumer) handleJoinResp(resp *kmsg.JoinGroupResponse) (restart bo
 		)
 
 		plan, err = g.balanceGroup(protocol, resp.Members)
-		g.cl.cfg.logger.Log(LogLevelDebug, "balanced", "plan", plan)
 		if err != nil {
 			return
 		}
@@ -1162,7 +1160,14 @@ func (g *groupConsumer) handleSyncResp(resp *kmsg.SyncGroupResponse, plan balanc
 		return err
 	}
 
-	g.cl.cfg.logger.Log(LogLevelDebug, "synced", "assigned", kassignment.Topics)
+	var sb strings.Builder
+	for i, topic := range kassignment.Topics {
+		fmt.Fprintf(&sb, "%s%v", topic.Topic, topic.Partitions)
+		if i < len(kassignment.Topics)-1 {
+			sb.WriteString(", ")
+		}
+	}
+	g.cl.cfg.logger.Log(LogLevelInfo, "synced", "assigned", sb.String())
 
 	// Past this point, we will fall into the setupAssigned prerevoke code,
 	// meaning for cooperative, we will revoke what we need to.
