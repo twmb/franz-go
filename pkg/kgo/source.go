@@ -462,7 +462,7 @@ func (s *source) loopFetch() {
 
 	// We receive on canFetch when we can fetch, and we send back when we
 	// are done fetching.
-	canFetch := make(chan chan<- struct{}, 1)
+	canFetch := make(chan chan struct{}, 1)
 
 	again := true
 	for again {
@@ -482,6 +482,7 @@ func (s *source) loopFetch() {
 
 		select {
 		case <-session.ctx.Done():
+			session.cancelFetchCh <- canFetch
 			s.fetchState.hardFinish()
 			return
 		case doneFetch := <-canFetch:

@@ -739,7 +739,8 @@ type consumerSession struct {
 	//
 	// We receive desires from sources, we reply when they can fetch, and
 	// they send back when they are done. Thus, three level chan.
-	desireFetchCh       chan chan chan<- struct{}
+	desireFetchCh       chan chan chan struct{}
+	cancelFetchCh       chan chan chan struct{}
 	allowedConcurrency  int
 	fetchManagerStarted uint32 // atomic, once 1, we start the fetch manager
 
@@ -761,7 +762,8 @@ func (c *consumer) newConsumerSession() *consumerSession {
 	session := &consumerSession{
 		c: c,
 
-		desireFetchCh:      make(chan chan chan<- struct{}, 8),
+		desireFetchCh:      make(chan chan chan struct{}, 8),
+		cancelFetchCh:      make(chan chan chan struct{}, 4),
 		allowedConcurrency: c.cl.cfg.allowedConcurrentFetches,
 
 		ctx:    ctx,
@@ -771,7 +773,7 @@ func (c *consumer) newConsumerSession() *consumerSession {
 	return session
 }
 
-func (c *consumerSession) desireFetch() chan<- chan chan<- struct{} {
+func (c *consumerSession) desireFetch() chan chan chan struct{} {
 	if atomic.SwapUint32(&c.fetchManagerStarted, 1) == 0 {
 		go c.manageFetchConcurrency()
 	}
@@ -782,28 +784,47 @@ func (c *consumerSession) manageFetchConcurrency() {
 	var (
 		activeFetches int
 		doneFetch     = make(chan struct{}, 20)
-		wantFetch     []chan chan<- struct{}
+		wantFetch     []chan chan struct{}
+
+		ctxCh    = c.ctx.Done()
+		wantQuit bool
 	)
 	for {
 		select {
 		case register := <-c.desireFetchCh:
 			wantFetch = append(wantFetch, register)
-		case <-doneFetch:
-			activeFetches--
-
-			if activeFetches == 0 {
-				select {
-				case <-c.ctx.Done():
-					return // we are dead
-				default:
+		case cancel := <-c.cancelFetchCh:
+			var found bool
+			for i, want := range wantFetch {
+				if want == cancel {
+					_ = append(wantFetch[i:], wantFetch[i+1:]...)
+					wantFetch = wantFetch[:len(wantFetch)-1]
+					found = true
 				}
 			}
+			// If we did not find the channel, then we have already
+			// sent to it, removed it from our wantFetch list, and
+			// bumped activeFetches.
+			if !found {
+				activeFetches--
+			}
+
+		case <-doneFetch:
+			activeFetches--
+		case <-ctxCh:
+			wantQuit = true
+			ctxCh = nil
 		}
 
 		if len(wantFetch) > 0 && (activeFetches < c.allowedConcurrency || c.allowedConcurrency == 0) { // 0 means unbounded
 			wantFetch[0] <- doneFetch
 			wantFetch = wantFetch[1:]
 			activeFetches++
+			continue
+		}
+
+		if wantQuit && activeFetches == 0 {
+			return
 		}
 	}
 }
