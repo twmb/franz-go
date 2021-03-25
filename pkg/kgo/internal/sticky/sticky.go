@@ -404,7 +404,6 @@ func (b *balancer) assignUnassignedAndInitGraph() {
 	}
 
 	partitionPotentials := make([][]uint16, cap(b.partNames)) // for each partition, who can consume it?
-	var firstTopicMembers []uint16
 	for topic, topicMembers := range topics2memberNums {
 		for partition := int32(0); partition < b.topics[topic]; partition++ {
 			tp := topicPartition{topic, partition}
@@ -412,21 +411,16 @@ func (b *balancer) assignUnassignedAndInitGraph() {
 			partitionPotentials[partNum] = topicMembers
 		}
 
-		// While building partition potentials, we can check whether
-		// all topics are consumed the same.
-		if firstTopicMembers == nil {
-			firstTopicMembers = topicMembers
-			continue
-		}
-		if b.isComplex || len(topicMembers) != len(firstTopicMembers) {
+		// If the number of members interested in this topic is not the
+		// same as the number of members in this group, then **other**
+		// members are interested in other topics and not this one, and
+		// we must go to complex balancing.
+		//
+		// We could accidentally fall into isComplex if any member is
+		// not interested in anything, but realistically we do not
+		// expect members to join with no interests.
+		if len(topicMembers) != len(b.members) {
 			b.isComplex = true
-			continue
-		}
-		for i, memberNum := range topicMembers {
-			if memberNum != firstTopicMembers[i] {
-				b.isComplex = true
-				break
-			}
 		}
 	}
 

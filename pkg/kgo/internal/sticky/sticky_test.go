@@ -881,6 +881,22 @@ func TestImbalanced(t *testing.T) {
 			},
 		},
 
+		{
+			name: "unequal",
+			members: []GroupMember{
+				{ID: "0", Topics: []string{"0"}},
+				{ID: "1", Topics: []string{"1"}},
+			},
+			topics: map[string]int32{
+				"1": 2,
+			},
+			nsticky: 0,
+			balance: map[int]resultOptions{
+				0: {[]string{"0"}, 1},
+				2: {[]string{"1"}, 1},
+			},
+		},
+
 		//
 	} {
 		t.Run(test.name, func(t *testing.T) {
