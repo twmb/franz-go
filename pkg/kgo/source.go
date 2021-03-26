@@ -1041,7 +1041,6 @@ func (o *cursorOffsetNext) processRecordBatch(
 	}
 
 	abortBatch := aborter.shouldAbortBatch(batch)
-	var lastRecord *Record
 	for i := range krecords {
 		record := recordToRecord(
 			o.from.topic,
@@ -1049,13 +1048,18 @@ func (o *cursorOffsetNext) processRecordBatch(
 			batch,
 			&krecords[i],
 		)
-		lastRecord = record
 		o.maybeKeepRecord(fp, record, abortBatch)
+
+		if abortBatch && record.Attrs.IsControl() {
+			// A control record has a key and a value where the key
+			// is int16 version and int16 type. Aborted records
+			// have a type of 0.
+			if key := record.Key; len(key) >= 4 && key[2] == 0 && key[3] == 0 {
+				aborter.trackAbortedPID(batch.ProducerID)
+			}
+		}
 	}
 
-	if abortBatch && lastRecord != nil && lastRecord.Attrs.IsControl() {
-		aborter.trackAbortedPID(batch.ProducerID)
-	}
 }
 
 // Processes an outer v1 message. There could be no inner message, which makes
@@ -1249,8 +1253,8 @@ func (o *cursorOffsetNext) maybeKeepRecord(fp *FetchPartition, record *Record, a
 	}
 
 	// We only keep control records if specifically requested.
-	if record.Attrs.IsControl() && !o.from.keepControl {
-		abort = true
+	if record.Attrs.IsControl() {
+		abort = !o.from.keepControl
 	}
 	if !abort {
 		fp.Records = append(fp.Records, record)
