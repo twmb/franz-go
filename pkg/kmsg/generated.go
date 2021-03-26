@@ -1261,14 +1261,8 @@ type TxnMetadataValue struct {
 	// ProducerID is the ID in use by the transactional ID.
 	ProducerID int64
 
-	// LastProducerID is the last ID in use for a producer; see KIP-360.
-	LastProducerID int64 // v1+
-
 	// ProducerEpoch is the epoch associated with the producer ID.
 	ProducerEpoch int16
-
-	// LastProducerEpoch is the last epoch in use for a producer; see KIP-360.
-	LastProducerEpoch int16 // v1+
 
 	// TimeoutMillis is the timeout of this transaction in milliseconds.
 	TimeoutMillis int32
@@ -1300,16 +1294,8 @@ func (v *TxnMetadataValue) AppendTo(dst []byte) []byte {
 		v := v.ProducerID
 		dst = kbin.AppendInt64(dst, v)
 	}
-	if version >= 1 {
-		v := v.LastProducerID
-		dst = kbin.AppendInt64(dst, v)
-	}
 	{
 		v := v.ProducerEpoch
-		dst = kbin.AppendInt16(dst, v)
-	}
-	if version >= 1 {
-		v := v.LastProducerEpoch
 		dst = kbin.AppendInt16(dst, v)
 	}
 	{
@@ -1363,17 +1349,9 @@ func (v *TxnMetadataValue) ReadFrom(src []byte) error {
 		v := b.Int64()
 		s.ProducerID = v
 	}
-	if version >= 1 {
-		v := b.Int64()
-		s.LastProducerID = v
-	}
 	{
 		v := b.Int16()
 		s.ProducerEpoch = v
-	}
-	if version >= 1 {
-		v := b.Int16()
-		s.LastProducerEpoch = v
 	}
 	{
 		v := b.Int32()
@@ -1527,7 +1505,7 @@ func NewGroupMemberMetadataOwnedPartition() GroupMemberMetadataOwnedPartition {
 }
 
 // GroupMemberMetadata is the metadata that is usually sent with a join group
-// request.
+// request with the "consumer" protocol.
 type GroupMemberMetadata struct {
 	// Version is either version 0 or version 1.
 	Version int16
@@ -1562,7 +1540,7 @@ func (v *GroupMemberMetadata) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.UserData
-		dst = kbin.AppendBytes(dst, v)
+		dst = kbin.AppendNullableBytes(dst, v)
 	}
 	if version >= 1 {
 		v := v.OwnedPartitions
@@ -1611,7 +1589,7 @@ func (v *GroupMemberMetadata) ReadFrom(src []byte) error {
 		s.Topics = v
 	}
 	{
-		v := b.Bytes()
+		v := b.NullableBytes()
 		s.UserData = v
 	}
 	if version >= 1 {
@@ -1693,7 +1671,7 @@ func NewGroupMemberAssignmentTopic() GroupMemberAssignmentTopic {
 }
 
 // GroupMemberAssignment is the assignment data that is usually sent with a
-// sync group request.
+// sync group request with the "consumer" protocol.
 type GroupMemberAssignment struct {
 	// Verson is currently version 0.
 	Version int16
@@ -1731,7 +1709,7 @@ func (v *GroupMemberAssignment) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.UserData
-		dst = kbin.AppendBytes(dst, v)
+		dst = kbin.AppendNullableBytes(dst, v)
 	}
 	return dst
 }
@@ -1785,7 +1763,7 @@ func (v *GroupMemberAssignment) ReadFrom(src []byte) error {
 		s.Topics = v
 	}
 	{
-		v := b.Bytes()
+		v := b.NullableBytes()
 		s.UserData = v
 	}
 	return b.Complete()
@@ -1804,7 +1782,7 @@ func NewGroupMemberAssignment() GroupMemberAssignment {
 	return v
 }
 
-// DefaultPrincipalData is the encoded princpal data. This is used in an
+// DefaultPrincipalData is the encoded principal data. This is used in an
 // envelope request from broker to broker.
 type DefaultPrincipalData struct {
 	Version int16
@@ -1900,6 +1878,286 @@ func (v *DefaultPrincipalData) Default() {
 // This is a shortcut for creating a struct and calling Default yourself.
 func NewDefaultPrincipalData() DefaultPrincipalData {
 	var v DefaultPrincipalData
+	v.Default()
+	return v
+}
+
+// ControlRecordKey is the key in a control record.
+type ControlRecordKey struct {
+	Version int16
+
+	Type ControlRecordKeyType
+}
+
+func (v *ControlRecordKey) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	{
+		v := v.Version
+		dst = kbin.AppendInt16(dst, v)
+	}
+	{
+		v := v.Type
+		{
+			v := int8(v)
+			dst = kbin.AppendInt8(dst, v)
+		}
+	}
+	return dst
+}
+func (v *ControlRecordKey) ReadFrom(src []byte) error {
+	v.Default()
+	b := kbin.Reader{Src: src}
+	v.Version = b.Int16()
+	version := v.Version
+	_ = version
+	s := v
+	{
+		var t ControlRecordKeyType
+		{
+			v := b.Int8()
+			t = ControlRecordKeyType(v)
+		}
+		v := t
+		s.Type = v
+	}
+	return b.Complete()
+}
+
+// Default sets any default fields. Calling this allows for future compatibility
+// if new fields are added to ControlRecordKey.
+func (v *ControlRecordKey) Default() {
+}
+
+// NewControlRecordKey returns a default ControlRecordKey
+// This is a shortcut for creating a struct and calling Default yourself.
+func NewControlRecordKey() ControlRecordKey {
+	var v ControlRecordKey
+	v.Default()
+	return v
+}
+
+// EndTxnMarker is the value for a control record when the key is type 0 or 1.
+type EndTxnMarker struct {
+	Version int16
+
+	CoordinatorEpoch int32
+}
+
+func (v *EndTxnMarker) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	{
+		v := v.Version
+		dst = kbin.AppendInt16(dst, v)
+	}
+	{
+		v := v.CoordinatorEpoch
+		dst = kbin.AppendInt32(dst, v)
+	}
+	return dst
+}
+func (v *EndTxnMarker) ReadFrom(src []byte) error {
+	v.Default()
+	b := kbin.Reader{Src: src}
+	v.Version = b.Int16()
+	version := v.Version
+	_ = version
+	s := v
+	{
+		v := b.Int32()
+		s.CoordinatorEpoch = v
+	}
+	return b.Complete()
+}
+
+// Default sets any default fields. Calling this allows for future compatibility
+// if new fields are added to EndTxnMarker.
+func (v *EndTxnMarker) Default() {
+}
+
+// NewEndTxnMarker returns a default EndTxnMarker
+// This is a shortcut for creating a struct and calling Default yourself.
+func NewEndTxnMarker() EndTxnMarker {
+	var v EndTxnMarker
+	v.Default()
+	return v
+}
+
+type LeaderChangeMessageVoter struct {
+	VoterID int32
+}
+
+// Default sets any default fields. Calling this allows for future compatibility
+// if new fields are added to LeaderChangeMessageVoter.
+func (v *LeaderChangeMessageVoter) Default() {
+}
+
+// NewLeaderChangeMessageVoter returns a default LeaderChangeMessageVoter
+// This is a shortcut for creating a struct and calling Default yourself.
+func NewLeaderChangeMessageVoter() LeaderChangeMessageVoter {
+	var v LeaderChangeMessageVoter
+	v.Default()
+	return v
+}
+
+// LeaderChangeMessage is the value for a control record when the key is type 3.
+type LeaderChangeMessage struct {
+	Version int16
+
+	// The ID of the newly elected leader.
+	LeaderID int32
+
+	// The set of voters in the quorum for this epoch.
+	Voters []LeaderChangeMessageVoter
+
+	// The voters who voted for the leader at the time of election.
+	GrantingVoters []LeaderChangeMessageVoter
+}
+
+func (v *LeaderChangeMessage) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	isFlexible := version >= 0
+	_ = isFlexible
+	{
+		v := v.Version
+		dst = kbin.AppendInt16(dst, v)
+	}
+	{
+		v := v.LeaderID
+		dst = kbin.AppendInt32(dst, v)
+	}
+	{
+		v := v.Voters
+		if isFlexible {
+			dst = kbin.AppendCompactArrayLen(dst, len(v))
+		} else {
+			dst = kbin.AppendArrayLen(dst, len(v))
+		}
+		for i := range v {
+			v := &v[i]
+			{
+				v := v.VoterID
+				dst = kbin.AppendInt32(dst, v)
+			}
+			if isFlexible {
+				dst = append(dst, 0)
+			}
+		}
+	}
+	{
+		v := v.GrantingVoters
+		if isFlexible {
+			dst = kbin.AppendCompactArrayLen(dst, len(v))
+		} else {
+			dst = kbin.AppendArrayLen(dst, len(v))
+		}
+		for i := range v {
+			v := &v[i]
+			{
+				v := v.VoterID
+				dst = kbin.AppendInt32(dst, v)
+			}
+			if isFlexible {
+				dst = append(dst, 0)
+			}
+		}
+	}
+	if isFlexible {
+		dst = append(dst, 0)
+	}
+	return dst
+}
+func (v *LeaderChangeMessage) ReadFrom(src []byte) error {
+	v.Default()
+	b := kbin.Reader{Src: src}
+	v.Version = b.Int16()
+	version := v.Version
+	_ = version
+	isFlexible := version >= 0
+	_ = isFlexible
+	s := v
+	{
+		v := b.Int32()
+		s.LeaderID = v
+	}
+	{
+		v := s.Voters
+		a := v
+		var l int32
+		if isFlexible {
+			l = b.CompactArrayLen()
+		} else {
+			l = b.ArrayLen()
+		}
+		if !b.Ok() {
+			return b.Complete()
+		}
+		if l > 0 {
+			a = make([]LeaderChangeMessageVoter, l)
+		}
+		for i := int32(0); i < l; i++ {
+			v := &a[i]
+			v.Default()
+			s := v
+			{
+				v := b.Int32()
+				s.VoterID = v
+			}
+			if isFlexible {
+				SkipTags(&b)
+			}
+		}
+		v = a
+		s.Voters = v
+	}
+	{
+		v := s.GrantingVoters
+		a := v
+		var l int32
+		if isFlexible {
+			l = b.CompactArrayLen()
+		} else {
+			l = b.ArrayLen()
+		}
+		if !b.Ok() {
+			return b.Complete()
+		}
+		if l > 0 {
+			a = make([]LeaderChangeMessageVoter, l)
+		}
+		for i := int32(0); i < l; i++ {
+			v := &a[i]
+			v.Default()
+			s := v
+			{
+				v := b.Int32()
+				s.VoterID = v
+			}
+			if isFlexible {
+				SkipTags(&b)
+			}
+		}
+		v = a
+		s.GrantingVoters = v
+	}
+	if isFlexible {
+		SkipTags(&b)
+	}
+	return b.Complete()
+}
+func (v *LeaderChangeMessage) IsFlexible() bool { return v.Version >= 0 }
+
+// Default sets any default fields. Calling this allows for future compatibility
+// if new fields are added to LeaderChangeMessage.
+func (v *LeaderChangeMessage) Default() {
+}
+
+// NewLeaderChangeMessage returns a default LeaderChangeMessage
+// This is a shortcut for creating a struct and calling Default yourself.
+func NewLeaderChangeMessage() LeaderChangeMessage {
+	var v LeaderChangeMessage
 	v.Default()
 	return v
 }
@@ -35449,6 +35707,9 @@ type ListTransactionsResponse struct {
 	// A potential error code for the listing,
 	//
 	// COORDINATOR_LOAD_IN_PROGRESS is returned if the coordinator is loading.
+	//
+	// COORDINATOR_NOT_AVAILABLE is returned if the coordinator receiving this
+	// request is shutting down.
 	ErrorCode int16
 
 	// Set of state filters provided in the request which were unknown to the
@@ -36486,4 +36747,38 @@ const (
 	TransactionStateCompleteAbort     TransactionState = 5
 	TransactionStateDead              TransactionState = 6
 	TransactionStatePrepareEpochFence TransactionState = 7
+)
+
+// Possible values and their meanings:
+//
+// * 0 (ABORT)
+//
+// * 1 (COMMIT)
+//
+// * 2 (QUORUM_REASSIGNMENT)
+//
+// * 3 (LEADER_CHANGE)
+//
+type ControlRecordKeyType int8
+
+func (v ControlRecordKeyType) String() string {
+	switch v {
+	default:
+		return "UNKNOWN"
+	case 0:
+		return "ABORT"
+	case 1:
+		return "COMMIT"
+	case 2:
+		return "QUORUM_REASSIGNMENT"
+	case 3:
+		return "LEADER_CHANGE"
+	}
+}
+
+const (
+	ControlRecordKeyTypeAbort              ControlRecordKeyType = 0
+	ControlRecordKeyTypeCommit             ControlRecordKeyType = 1
+	ControlRecordKeyTypeQuorumReassignment ControlRecordKeyType = 2
+	ControlRecordKeyTypeLeaderChange       ControlRecordKeyType = 3
 )

@@ -108,3 +108,14 @@ TransactionState int8 camelcase (
   6: Dead
   7: PrepareEpochFence
 )
+
+//////////
+// MISC //
+//////////
+
+ControlRecordKeyType int8 (
+  0: ABORT
+  1: COMMIT
+  2: QUORUM_REASSIGNMENT
+  3: LEADER_CHANGE
+)
