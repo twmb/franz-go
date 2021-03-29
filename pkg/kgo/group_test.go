@@ -115,7 +115,7 @@ func (c *testConsumer) goGroupETL(etlsBeforeQuit int) {
 
 func (c *testConsumer) etl(etlsBeforeQuit int) {
 	defer c.wg.Done()
-	cl, _ := NewClient(WithLogger(BasicLogger(os.Stderr, testLogLevel, nil)))
+	cl, _ := NewClient(WithLogger(testLogger()))
 	defer cl.Close()
 
 	cl.AssignGroup(c.group,
@@ -164,7 +164,7 @@ func (c *testConsumer) etl(etlsBeforeQuit int) {
 		// We poll with a short timeout so that we do not hang waiting
 		// at the end if another consumer hit the limit.
 		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-		fetches := cl.PollFetches(ctx)
+		fetches := cl.PollRecords(ctx, 100)
 		cancel()
 		if len(fetches) == 0 {
 			if consumed := atomic.LoadUint64(&c.consumed); consumed == testRecordLimit {

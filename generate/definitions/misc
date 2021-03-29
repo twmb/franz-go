@@ -319,12 +319,8 @@ TxnMetadataValue => not top level, with version field
   Version: int16
   // ProducerID is the ID in use by the transactional ID.
   ProducerID: int64
-  // LastProducerID is the last ID in use for a producer; see KIP-360.
-  LastProducerID: int64 // v1+
   // ProducerEpoch is the epoch associated with the producer ID.
   ProducerEpoch: int16
-  // LastProducerEpoch is the last epoch in use for a producer; see KIP-360.
-  LastProducerEpoch: int16 // v1+
   // TimeoutMillis is the timeout of this transaction in milliseconds.
   TimeoutMillis: int32
   // State is the state this transaction is in,
@@ -366,7 +362,7 @@ StickyMemberMetadata => not top level, no encoding
   Generation: int32 // v1+
 
 // GroupMemberMetadata is the metadata that is usually sent with a join group
-// request.
+// request with the "consumer" protocol.
 GroupMemberMetadata => not top level, with version field
   // Version is either version 0 or version 1.
   Version: int16
@@ -375,7 +371,7 @@ GroupMemberMetadata => not top level, with version field
   Topics: [string]
   // UserData is arbitrary client data for a given client in the group.
   // For sticky assignment, this is StickyMemberMetadata.
-  UserData: bytes
+  UserData: nullable-bytes
   // OwnedPartitions, introduced for KIP-429, are the partitions that this
   // member currently owns.
   OwnedPartitions: [=>] // v1+
@@ -383,7 +379,7 @@ GroupMemberMetadata => not top level, with version field
     Partitions: [int32]
 
 // GroupMemberAssignment is the assignment data that is usually sent with a
-// sync group request.
+// sync group request with the "consumer" protocol.
 GroupMemberAssignment => not top level
   // Verson is currently version 0.
   Version: int16
@@ -394,9 +390,9 @@ GroupMemberAssignment => not top level
     // Partitions contains partitions in the assignment.
     Partitions: [int32]
   // UserData is arbitrary client data for a given client in the group.
-  UserData: bytes
+  UserData: nullable-bytes
 
-// DefaultPrincipalData is the encoded princpal data. This is used in an
+// DefaultPrincipalData is the encoded principal data. This is used in an
 // envelope request from broker to broker.
 DefaultPrincipalData => not top level, with version field, flexible v0+
   Version: int16
@@ -406,3 +402,30 @@ DefaultPrincipalData => not top level, with version field, flexible v0+
   Name: string
   // Whether the principal was authenticated by a delegation token on the forwarding broker.
   TokenAuthenticated: bool
+
+/////////////////////
+// CONTROL RECORDS //
+/////////////////////
+
+// ControlRecordKey is the key in a control record.
+ControlRecordKey => not top level, with version field
+  Version: int16
+  Type: enum-ControlRecordKeyType
+
+// EndTxnMarker is the value for a control record when the key is type 0 or 1.
+EndTxnMarker => not top level, with version field
+  Version: int16
+  CoordinatorEpoch: int32
+
+LeaderChangeMessageVoter => not top level, no encoding, flexible v0+
+  VoterID: int32
+
+// LeaderChangeMessage is the value for a control record when the key is type 3.
+LeaderChangeMessage => not top level, with version field, flexible v0+
+  Version: int16
+  // The ID of the newly elected leader.
+  LeaderID: int32
+  // The set of voters in the quorum for this epoch.
+  Voters: [LeaderChangeMessageVoter]
+  // The voters who voted for the leader at the time of election.
+  GrantingVoters: [LeaderChangeMessageVoter]

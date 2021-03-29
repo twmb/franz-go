@@ -256,3 +256,36 @@ beforePartition0:
 		goto beforePartition0
 	}
 }
+
+// EachPartition calls fn for each partition in Fetches.
+//
+// Partitions are not visited in any specific order, and a topic may be visited
+// multiple times if it is spread across fetches.
+func (fs Fetches) EachPartition(fn func(FetchTopicPartition)) {
+	for _, fetch := range fs {
+		for _, topic := range fetch.Topics {
+			for i := range topic.Partitions {
+				fn(FetchTopicPartition{
+					Topic:     topic.Topic,
+					Partition: topic.Partitions[i],
+				})
+			}
+		}
+	}
+}
+
+// FetchTopicPartition is similar to FetchTopic, but for an individual
+// partition.
+type FetchTopicPartition struct {
+	// Topic is the topic this is for.
+	Topic string
+	// Partition is an individual partition within this topic.
+	Partition FetchPartition
+}
+
+// EachRecord calls fn for each record in the topic's partition.
+func (r *FetchTopicPartition) EachRecord(fn func(*Record)) {
+	for _, r := range r.Partition.Records {
+		fn(r)
+	}
+}

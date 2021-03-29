@@ -180,8 +180,7 @@ func NewClient(opts ...Opt) (*Client, error) {
 		metadone:            make(chan struct{}),
 	}
 	cl.producer.init()
-	cl.consumer.cl = cl
-	cl.consumer.sourcesReadyCond = sync.NewCond(&cl.consumer.sourcesReadyMu)
+	cl.consumer.init(cl)
 	cl.topics.Store(make(map[string]*topicPartitions))
 	cl.metawait.init()
 
@@ -331,14 +330,15 @@ func (cl *Client) fetchMetadataForTopics(ctx context.Context, all bool, topics [
 	req := &kmsg.MetadataRequest{
 		AllowAutoTopicCreation: cl.cfg.allowAutoTopicCreation,
 	}
-	for _, topic := range topics {
-		t := topic
-		req.Topics = append(req.Topics, kmsg.MetadataRequestTopic{Topic: &t})
-	}
 	if all {
 		req.Topics = nil
 	} else if len(topics) == 0 {
 		req.Topics = []kmsg.MetadataRequestTopic{}
+	} else {
+		for _, topic := range topics {
+			t := topic
+			req.Topics = append(req.Topics, kmsg.MetadataRequestTopic{Topic: &t})
+		}
 	}
 	return cl.fetchMetadata(ctx, req)
 }
@@ -402,19 +402,12 @@ func (cl *Client) updateBrokers(brokers []kmsg.MetadataResponseBroker) {
 
 // Close leaves any group and closes all connections and goroutines.
 func (cl *Client) Close() {
-	// First, kill the consumer. Setting dead to true and then assigning
-	// nothing will
-	// 1) invalidate active fetches
-	// 2) ensure consumptions are unassigned, stopping all source filling
-	// 3) ensures no more assigns can happen
-	cl.consumer.mu.Lock()
-	if cl.consumer.dead { // client already closed
-		cl.consumer.mu.Unlock()
-		return
+	// First, kill the consumer. This waits for the consumer to unset
+	// gracefully, ensuring we leave groups properly, and then stores the
+	// dead consumer, meaning no more assigns can happen.
+	if wasDead := cl.consumer.kill(); wasDead {
+		return // client was already closed
 	}
-	cl.consumer.dead = true
-	cl.consumer.mu.Unlock()
-	cl.AssignPartitions()
 
 	// Now we kill the client context and all brokers, ensuring all
 	// requests fail. This will finish all producer callbacks and
@@ -481,6 +474,7 @@ func (cl *Client) Close() {
 //     IncrementalAlterConfigs
 //     DescribeProducers
 //     DescribeTransactions
+//     ListTransactions
 //
 // In short, this method tries to do the correct thing depending on what type
 // of request is being issued.
@@ -660,7 +654,8 @@ func (cl *Client) shardedRequest(ctx context.Context, req kmsg.Request) ([]Respo
 		*kmsg.DeleteGroupsRequest,            // key 42
 		*kmsg.IncrementalAlterConfigsRequest, // key 44
 		*kmsg.DescribeProducersRequest,       // key 61
-		*kmsg.DescribeTransactionsRequest:    // key 65
+		*kmsg.DescribeTransactionsRequest,    // key 65
+		*kmsg.ListTransactionsRequest:        // key 66
 		return cl.handleShardedReq(ctx, req)
 	}
 
@@ -1248,6 +1243,8 @@ func (cl *Client) handleShardedReq(ctx context.Context, req kmsg.Request) ([]Res
 		sharder = &describeProducersSharder{cl}
 	case *kmsg.DescribeTransactionsRequest:
 		sharder = &describeTransactionsSharder{cl}
+	case *kmsg.ListTransactionsRequest:
+		sharder = &listTransactionsSharder{cl}
 	}
 
 	// If a request fails, we re-shard it (in case it needs to be split
@@ -2383,8 +2380,8 @@ func (cl *describeTransactionsSharder) shard(ctx context.Context, kreq kmsg.Requ
 
 func (cl *describeTransactionsSharder) onResp(kresp kmsg.Response) { // cleanup any stale coordinators
 	resp := kresp.(*kmsg.DescribeTransactionsResponse)
-	for i := range resp.TransactionalStates {
-		txnState := &resp.TransactionalStates[i]
+	for i := range resp.TransactionStates {
+		txnState := &resp.TransactionStates[i]
 		err := kerr.ErrorForCode(txnState.ErrorCode)
 		cl.maybeDeleteStaleCoordinator(txnState.TransactionalID, coordinatorTypeTxn, err)
 	}
@@ -2397,6 +2394,44 @@ func (cl *describeTransactionsSharder) merge(sresps []ResponseShard) (kmsg.Respo
 		resp := kresp.(*kmsg.DescribeTransactionsResponse)
 		merged.Version = resp.Version
 		merged.ThrottleMillis = resp.ThrottleMillis
-		merged.TransactionalStates = append(merged.TransactionalStates, resp.TransactionalStates...)
+		merged.TransactionStates = append(merged.TransactionStates, resp.TransactionStates...)
 	})
+}
+
+// handles sharding ListTransactionsRequest
+type listTransactionsSharder struct{ *Client }
+
+func (cl *listTransactionsSharder) shard(ctx context.Context, kreq kmsg.Request) ([]issueShard, bool, error) {
+	req := kreq.(*kmsg.ListTransactionsRequest)
+	return cl.allBrokersShardedReq(ctx, func() kmsg.Request {
+		dup := *req
+		return &dup
+	})
+}
+
+func (cl *listTransactionsSharder) onResp(kresp kmsg.Response) {} // nothing to do
+
+func (cl *listTransactionsSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
+	merged := new(kmsg.ListTransactionsResponse)
+
+	unknownStates := make(map[string]struct{})
+
+	firstErr := firstErrMerger(sresps, func(kresp kmsg.Response) {
+		resp := kresp.(*kmsg.ListTransactionsResponse)
+		merged.Version = resp.Version
+		merged.ThrottleMillis = resp.ThrottleMillis
+		if merged.ErrorCode == 0 {
+			merged.ErrorCode = resp.ErrorCode
+		}
+		for _, state := range resp.UnknownStateFilters {
+			unknownStates[state] = struct{}{}
+		}
+		merged.TransactionStates = append(merged.TransactionStates, resp.TransactionStates...)
+	})
+	for unknownState := range unknownStates {
+		merged.UnknownStateFilters = append(merged.UnknownStateFilters, unknownState)
+	}
+
+	return merged, firstErr
+
 }

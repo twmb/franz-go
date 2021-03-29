@@ -10,7 +10,7 @@ import (
 
 // MaxKey is the maximum key used for any messages in this package.
 // Note that this value will change as Kafka adds more messages.
-const MaxKey = 65
+const MaxKey = 66
 
 // MessageV0 is the message format Kafka used prior to 0.10.
 //
@@ -1261,14 +1261,8 @@ type TxnMetadataValue struct {
 	// ProducerID is the ID in use by the transactional ID.
 	ProducerID int64
 
-	// LastProducerID is the last ID in use for a producer; see KIP-360.
-	LastProducerID int64 // v1+
-
 	// ProducerEpoch is the epoch associated with the producer ID.
 	ProducerEpoch int16
-
-	// LastProducerEpoch is the last epoch in use for a producer; see KIP-360.
-	LastProducerEpoch int16 // v1+
 
 	// TimeoutMillis is the timeout of this transaction in milliseconds.
 	TimeoutMillis int32
@@ -1300,16 +1294,8 @@ func (v *TxnMetadataValue) AppendTo(dst []byte) []byte {
 		v := v.ProducerID
 		dst = kbin.AppendInt64(dst, v)
 	}
-	if version >= 1 {
-		v := v.LastProducerID
-		dst = kbin.AppendInt64(dst, v)
-	}
 	{
 		v := v.ProducerEpoch
-		dst = kbin.AppendInt16(dst, v)
-	}
-	if version >= 1 {
-		v := v.LastProducerEpoch
 		dst = kbin.AppendInt16(dst, v)
 	}
 	{
@@ -1363,17 +1349,9 @@ func (v *TxnMetadataValue) ReadFrom(src []byte) error {
 		v := b.Int64()
 		s.ProducerID = v
 	}
-	if version >= 1 {
-		v := b.Int64()
-		s.LastProducerID = v
-	}
 	{
 		v := b.Int16()
 		s.ProducerEpoch = v
-	}
-	if version >= 1 {
-		v := b.Int16()
-		s.LastProducerEpoch = v
 	}
 	{
 		v := b.Int32()
@@ -1527,7 +1505,7 @@ func NewGroupMemberMetadataOwnedPartition() GroupMemberMetadataOwnedPartition {
 }
 
 // GroupMemberMetadata is the metadata that is usually sent with a join group
-// request.
+// request with the "consumer" protocol.
 type GroupMemberMetadata struct {
 	// Version is either version 0 or version 1.
 	Version int16
@@ -1562,7 +1540,7 @@ func (v *GroupMemberMetadata) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.UserData
-		dst = kbin.AppendBytes(dst, v)
+		dst = kbin.AppendNullableBytes(dst, v)
 	}
 	if version >= 1 {
 		v := v.OwnedPartitions
@@ -1611,7 +1589,7 @@ func (v *GroupMemberMetadata) ReadFrom(src []byte) error {
 		s.Topics = v
 	}
 	{
-		v := b.Bytes()
+		v := b.NullableBytes()
 		s.UserData = v
 	}
 	if version >= 1 {
@@ -1693,7 +1671,7 @@ func NewGroupMemberAssignmentTopic() GroupMemberAssignmentTopic {
 }
 
 // GroupMemberAssignment is the assignment data that is usually sent with a
-// sync group request.
+// sync group request with the "consumer" protocol.
 type GroupMemberAssignment struct {
 	// Verson is currently version 0.
 	Version int16
@@ -1731,7 +1709,7 @@ func (v *GroupMemberAssignment) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.UserData
-		dst = kbin.AppendBytes(dst, v)
+		dst = kbin.AppendNullableBytes(dst, v)
 	}
 	return dst
 }
@@ -1785,7 +1763,7 @@ func (v *GroupMemberAssignment) ReadFrom(src []byte) error {
 		s.Topics = v
 	}
 	{
-		v := b.Bytes()
+		v := b.NullableBytes()
 		s.UserData = v
 	}
 	return b.Complete()
@@ -1804,7 +1782,7 @@ func NewGroupMemberAssignment() GroupMemberAssignment {
 	return v
 }
 
-// DefaultPrincipalData is the encoded princpal data. This is used in an
+// DefaultPrincipalData is the encoded principal data. This is used in an
 // envelope request from broker to broker.
 type DefaultPrincipalData struct {
 	Version int16
@@ -1900,6 +1878,286 @@ func (v *DefaultPrincipalData) Default() {
 // This is a shortcut for creating a struct and calling Default yourself.
 func NewDefaultPrincipalData() DefaultPrincipalData {
 	var v DefaultPrincipalData
+	v.Default()
+	return v
+}
+
+// ControlRecordKey is the key in a control record.
+type ControlRecordKey struct {
+	Version int16
+
+	Type ControlRecordKeyType
+}
+
+func (v *ControlRecordKey) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	{
+		v := v.Version
+		dst = kbin.AppendInt16(dst, v)
+	}
+	{
+		v := v.Type
+		{
+			v := int8(v)
+			dst = kbin.AppendInt8(dst, v)
+		}
+	}
+	return dst
+}
+func (v *ControlRecordKey) ReadFrom(src []byte) error {
+	v.Default()
+	b := kbin.Reader{Src: src}
+	v.Version = b.Int16()
+	version := v.Version
+	_ = version
+	s := v
+	{
+		var t ControlRecordKeyType
+		{
+			v := b.Int8()
+			t = ControlRecordKeyType(v)
+		}
+		v := t
+		s.Type = v
+	}
+	return b.Complete()
+}
+
+// Default sets any default fields. Calling this allows for future compatibility
+// if new fields are added to ControlRecordKey.
+func (v *ControlRecordKey) Default() {
+}
+
+// NewControlRecordKey returns a default ControlRecordKey
+// This is a shortcut for creating a struct and calling Default yourself.
+func NewControlRecordKey() ControlRecordKey {
+	var v ControlRecordKey
+	v.Default()
+	return v
+}
+
+// EndTxnMarker is the value for a control record when the key is type 0 or 1.
+type EndTxnMarker struct {
+	Version int16
+
+	CoordinatorEpoch int32
+}
+
+func (v *EndTxnMarker) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	{
+		v := v.Version
+		dst = kbin.AppendInt16(dst, v)
+	}
+	{
+		v := v.CoordinatorEpoch
+		dst = kbin.AppendInt32(dst, v)
+	}
+	return dst
+}
+func (v *EndTxnMarker) ReadFrom(src []byte) error {
+	v.Default()
+	b := kbin.Reader{Src: src}
+	v.Version = b.Int16()
+	version := v.Version
+	_ = version
+	s := v
+	{
+		v := b.Int32()
+		s.CoordinatorEpoch = v
+	}
+	return b.Complete()
+}
+
+// Default sets any default fields. Calling this allows for future compatibility
+// if new fields are added to EndTxnMarker.
+func (v *EndTxnMarker) Default() {
+}
+
+// NewEndTxnMarker returns a default EndTxnMarker
+// This is a shortcut for creating a struct and calling Default yourself.
+func NewEndTxnMarker() EndTxnMarker {
+	var v EndTxnMarker
+	v.Default()
+	return v
+}
+
+type LeaderChangeMessageVoter struct {
+	VoterID int32
+}
+
+// Default sets any default fields. Calling this allows for future compatibility
+// if new fields are added to LeaderChangeMessageVoter.
+func (v *LeaderChangeMessageVoter) Default() {
+}
+
+// NewLeaderChangeMessageVoter returns a default LeaderChangeMessageVoter
+// This is a shortcut for creating a struct and calling Default yourself.
+func NewLeaderChangeMessageVoter() LeaderChangeMessageVoter {
+	var v LeaderChangeMessageVoter
+	v.Default()
+	return v
+}
+
+// LeaderChangeMessage is the value for a control record when the key is type 3.
+type LeaderChangeMessage struct {
+	Version int16
+
+	// The ID of the newly elected leader.
+	LeaderID int32
+
+	// The set of voters in the quorum for this epoch.
+	Voters []LeaderChangeMessageVoter
+
+	// The voters who voted for the leader at the time of election.
+	GrantingVoters []LeaderChangeMessageVoter
+}
+
+func (v *LeaderChangeMessage) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	isFlexible := version >= 0
+	_ = isFlexible
+	{
+		v := v.Version
+		dst = kbin.AppendInt16(dst, v)
+	}
+	{
+		v := v.LeaderID
+		dst = kbin.AppendInt32(dst, v)
+	}
+	{
+		v := v.Voters
+		if isFlexible {
+			dst = kbin.AppendCompactArrayLen(dst, len(v))
+		} else {
+			dst = kbin.AppendArrayLen(dst, len(v))
+		}
+		for i := range v {
+			v := &v[i]
+			{
+				v := v.VoterID
+				dst = kbin.AppendInt32(dst, v)
+			}
+			if isFlexible {
+				dst = append(dst, 0)
+			}
+		}
+	}
+	{
+		v := v.GrantingVoters
+		if isFlexible {
+			dst = kbin.AppendCompactArrayLen(dst, len(v))
+		} else {
+			dst = kbin.AppendArrayLen(dst, len(v))
+		}
+		for i := range v {
+			v := &v[i]
+			{
+				v := v.VoterID
+				dst = kbin.AppendInt32(dst, v)
+			}
+			if isFlexible {
+				dst = append(dst, 0)
+			}
+		}
+	}
+	if isFlexible {
+		dst = append(dst, 0)
+	}
+	return dst
+}
+func (v *LeaderChangeMessage) ReadFrom(src []byte) error {
+	v.Default()
+	b := kbin.Reader{Src: src}
+	v.Version = b.Int16()
+	version := v.Version
+	_ = version
+	isFlexible := version >= 0
+	_ = isFlexible
+	s := v
+	{
+		v := b.Int32()
+		s.LeaderID = v
+	}
+	{
+		v := s.Voters
+		a := v
+		var l int32
+		if isFlexible {
+			l = b.CompactArrayLen()
+		} else {
+			l = b.ArrayLen()
+		}
+		if !b.Ok() {
+			return b.Complete()
+		}
+		if l > 0 {
+			a = make([]LeaderChangeMessageVoter, l)
+		}
+		for i := int32(0); i < l; i++ {
+			v := &a[i]
+			v.Default()
+			s := v
+			{
+				v := b.Int32()
+				s.VoterID = v
+			}
+			if isFlexible {
+				SkipTags(&b)
+			}
+		}
+		v = a
+		s.Voters = v
+	}
+	{
+		v := s.GrantingVoters
+		a := v
+		var l int32
+		if isFlexible {
+			l = b.CompactArrayLen()
+		} else {
+			l = b.ArrayLen()
+		}
+		if !b.Ok() {
+			return b.Complete()
+		}
+		if l > 0 {
+			a = make([]LeaderChangeMessageVoter, l)
+		}
+		for i := int32(0); i < l; i++ {
+			v := &a[i]
+			v.Default()
+			s := v
+			{
+				v := b.Int32()
+				s.VoterID = v
+			}
+			if isFlexible {
+				SkipTags(&b)
+			}
+		}
+		v = a
+		s.GrantingVoters = v
+	}
+	if isFlexible {
+		SkipTags(&b)
+	}
+	return b.Complete()
+}
+func (v *LeaderChangeMessage) IsFlexible() bool { return v.Version >= 0 }
+
+// Default sets any default fields. Calling this allows for future compatibility
+// if new fields are added to LeaderChangeMessage.
+func (v *LeaderChangeMessage) Default() {
+}
+
+// NewLeaderChangeMessage returns a default LeaderChangeMessage
+// This is a shortcut for creating a struct and calling Default yourself.
+func NewLeaderChangeMessage() LeaderChangeMessage {
+	var v LeaderChangeMessage
 	v.Default()
 	return v
 }
@@ -34899,26 +35157,26 @@ func NewDescribeTransactionsRequest() DescribeTransactionsRequest {
 	return v
 }
 
-type DescribeTransactionsResponseTransactionalStateTopic struct {
+type DescribeTransactionsResponseTransactionStateTopic struct {
 	Topic string
 
 	Partitions []int32
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
-// if new fields are added to DescribeTransactionsResponseTransactionalStateTopic.
-func (v *DescribeTransactionsResponseTransactionalStateTopic) Default() {
+// if new fields are added to DescribeTransactionsResponseTransactionStateTopic.
+func (v *DescribeTransactionsResponseTransactionStateTopic) Default() {
 }
 
-// NewDescribeTransactionsResponseTransactionalStateTopic returns a default DescribeTransactionsResponseTransactionalStateTopic
+// NewDescribeTransactionsResponseTransactionStateTopic returns a default DescribeTransactionsResponseTransactionStateTopic
 // This is a shortcut for creating a struct and calling Default yourself.
-func NewDescribeTransactionsResponseTransactionalStateTopic() DescribeTransactionsResponseTransactionalStateTopic {
-	var v DescribeTransactionsResponseTransactionalStateTopic
+func NewDescribeTransactionsResponseTransactionStateTopic() DescribeTransactionsResponseTransactionStateTopic {
+	var v DescribeTransactionsResponseTransactionStateTopic
 	v.Default()
 	return v
 }
 
-type DescribeTransactionsResponseTransactionalState struct {
+type DescribeTransactionsResponseTransactionState struct {
 	// A potential error code for describing this transaction.
 	//
 	// NOT_COORDINATOR is returned if the broker receiving this transactional
@@ -34957,18 +35215,18 @@ type DescribeTransactionsResponseTransactionalState struct {
 	// only partitions which do not have markers.
 	//
 	// This does not include topics the user is not authorized to describe.
-	Topics []DescribeTransactionsResponseTransactionalStateTopic
+	Topics []DescribeTransactionsResponseTransactionStateTopic
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
-// if new fields are added to DescribeTransactionsResponseTransactionalState.
-func (v *DescribeTransactionsResponseTransactionalState) Default() {
+// if new fields are added to DescribeTransactionsResponseTransactionState.
+func (v *DescribeTransactionsResponseTransactionState) Default() {
 }
 
-// NewDescribeTransactionsResponseTransactionalState returns a default DescribeTransactionsResponseTransactionalState
+// NewDescribeTransactionsResponseTransactionState returns a default DescribeTransactionsResponseTransactionState
 // This is a shortcut for creating a struct and calling Default yourself.
-func NewDescribeTransactionsResponseTransactionalState() DescribeTransactionsResponseTransactionalState {
-	var v DescribeTransactionsResponseTransactionalState
+func NewDescribeTransactionsResponseTransactionState() DescribeTransactionsResponseTransactionState {
+	var v DescribeTransactionsResponseTransactionState
 	v.Default()
 	return v
 }
@@ -34982,7 +35240,7 @@ type DescribeTransactionsResponse struct {
 	// after responding to this request.
 	ThrottleMillis int32
 
-	TransactionalStates []DescribeTransactionsResponseTransactionalState
+	TransactionStates []DescribeTransactionsResponseTransactionState
 }
 
 func (*DescribeTransactionsResponse) Key() int16                 { return 65 }
@@ -35007,7 +35265,7 @@ func (v *DescribeTransactionsResponse) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendInt32(dst, v)
 	}
 	{
-		v := v.TransactionalStates
+		v := v.TransactionStates
 		if isFlexible {
 			dst = kbin.AppendCompactArrayLen(dst, len(v))
 		} else {
@@ -35108,7 +35366,7 @@ func (v *DescribeTransactionsResponse) ReadFrom(src []byte) error {
 		s.ThrottleMillis = v
 	}
 	{
-		v := s.TransactionalStates
+		v := s.TransactionStates
 		a := v
 		var l int32
 		if isFlexible {
@@ -35120,7 +35378,7 @@ func (v *DescribeTransactionsResponse) ReadFrom(src []byte) error {
 			return b.Complete()
 		}
 		if l > 0 {
-			a = make([]DescribeTransactionsResponseTransactionalState, l)
+			a = make([]DescribeTransactionsResponseTransactionState, l)
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
@@ -35177,7 +35435,7 @@ func (v *DescribeTransactionsResponse) ReadFrom(src []byte) error {
 					return b.Complete()
 				}
 				if l > 0 {
-					a = make([]DescribeTransactionsResponseTransactionalStateTopic, l)
+					a = make([]DescribeTransactionsResponseTransactionStateTopic, l)
 				}
 				for i := int32(0); i < l; i++ {
 					v := &a[i]
@@ -35226,7 +35484,7 @@ func (v *DescribeTransactionsResponse) ReadFrom(src []byte) error {
 			}
 		}
 		v = a
-		s.TransactionalStates = v
+		s.TransactionStates = v
 	}
 	if isFlexible {
 		SkipTags(&b)
@@ -35251,6 +35509,411 @@ func (v *DescribeTransactionsResponse) Default() {
 // This is a shortcut for creating a struct and calling Default yourself.
 func NewDescribeTransactionsResponse() DescribeTransactionsResponse {
 	var v DescribeTransactionsResponse
+	v.Default()
+	return v
+}
+
+// For KIP-664, ListTransactionsRequest lists transactions.
+type ListTransactionsRequest struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	// The transaction states to filter by: if empty, all transactions are
+	// returned; if non-empty, then only transactions matching one of the
+	// filtered states will be returned.
+	//
+	// For a list of valid states, see the TransactionState enum.
+	StateFilters []string
+
+	// The producer IDs to filter by: if empty, all transactions will be
+	// returned; if non-empty, only transactions which match one of the filtered
+	// producer IDs will be returned
+	ProducerIDFilters []int64
+}
+
+func (*ListTransactionsRequest) Key() int16                 { return 66 }
+func (*ListTransactionsRequest) MaxVersion() int16          { return 0 }
+func (v *ListTransactionsRequest) SetVersion(version int16) { v.Version = version }
+func (v *ListTransactionsRequest) GetVersion() int16        { return v.Version }
+func (v *ListTransactionsRequest) IsFlexible() bool         { return v.Version >= 0 }
+func (v *ListTransactionsRequest) ResponseKind() Response {
+	return &ListTransactionsResponse{Version: v.Version}
+}
+
+// RequestWith is requests v on r and returns the response or an error.
+func (v *ListTransactionsRequest) RequestWith(ctx context.Context, r Requestor) (*ListTransactionsResponse, error) {
+	kresp, err := r.Request(ctx, v)
+	if err != nil {
+		return nil, err
+	}
+	return kresp.(*ListTransactionsResponse), nil
+}
+
+func (v *ListTransactionsRequest) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	isFlexible := version >= 0
+	_ = isFlexible
+	{
+		v := v.StateFilters
+		if isFlexible {
+			dst = kbin.AppendCompactArrayLen(dst, len(v))
+		} else {
+			dst = kbin.AppendArrayLen(dst, len(v))
+		}
+		for i := range v {
+			v := v[i]
+			if isFlexible {
+				dst = kbin.AppendCompactString(dst, v)
+			} else {
+				dst = kbin.AppendString(dst, v)
+			}
+		}
+	}
+	{
+		v := v.ProducerIDFilters
+		if isFlexible {
+			dst = kbin.AppendCompactArrayLen(dst, len(v))
+		} else {
+			dst = kbin.AppendArrayLen(dst, len(v))
+		}
+		for i := range v {
+			v := v[i]
+			dst = kbin.AppendInt64(dst, v)
+		}
+	}
+	if isFlexible {
+		dst = append(dst, 0)
+	}
+	return dst
+}
+func (v *ListTransactionsRequest) ReadFrom(src []byte) error {
+	v.Default()
+	b := kbin.Reader{Src: src}
+	version := v.Version
+	_ = version
+	isFlexible := version >= 0
+	_ = isFlexible
+	s := v
+	{
+		v := s.StateFilters
+		a := v
+		var l int32
+		if isFlexible {
+			l = b.CompactArrayLen()
+		} else {
+			l = b.ArrayLen()
+		}
+		if !b.Ok() {
+			return b.Complete()
+		}
+		if l > 0 {
+			a = make([]string, l)
+		}
+		for i := int32(0); i < l; i++ {
+			var v string
+			if isFlexible {
+				v = b.CompactString()
+			} else {
+				v = b.String()
+			}
+			a[i] = v
+		}
+		v = a
+		s.StateFilters = v
+	}
+	{
+		v := s.ProducerIDFilters
+		a := v
+		var l int32
+		if isFlexible {
+			l = b.CompactArrayLen()
+		} else {
+			l = b.ArrayLen()
+		}
+		if !b.Ok() {
+			return b.Complete()
+		}
+		if l > 0 {
+			a = make([]int64, l)
+		}
+		for i := int32(0); i < l; i++ {
+			v := b.Int64()
+			a[i] = v
+		}
+		v = a
+		s.ProducerIDFilters = v
+	}
+	if isFlexible {
+		SkipTags(&b)
+	}
+	return b.Complete()
+}
+
+// NewPtrListTransactionsRequest returns a pointer to a default ListTransactionsRequest
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrListTransactionsRequest() *ListTransactionsRequest {
+	var v ListTransactionsRequest
+	v.Default()
+	return &v
+}
+
+// Default sets any default fields. Calling this allows for future compatibility
+// if new fields are added to ListTransactionsRequest.
+func (v *ListTransactionsRequest) Default() {
+}
+
+// NewListTransactionsRequest returns a default ListTransactionsRequest
+// This is a shortcut for creating a struct and calling Default yourself.
+func NewListTransactionsRequest() ListTransactionsRequest {
+	var v ListTransactionsRequest
+	v.Default()
+	return v
+}
+
+type ListTransactionsResponseTransactionState struct {
+	// The transactional ID being used.
+	TransactionalID string
+
+	// The producer ID of the producer.
+	ProducerID int64
+
+	// The current transaction state of the producer.
+	TransactionState string
+}
+
+// Default sets any default fields. Calling this allows for future compatibility
+// if new fields are added to ListTransactionsResponseTransactionState.
+func (v *ListTransactionsResponseTransactionState) Default() {
+}
+
+// NewListTransactionsResponseTransactionState returns a default ListTransactionsResponseTransactionState
+// This is a shortcut for creating a struct and calling Default yourself.
+func NewListTransactionsResponseTransactionState() ListTransactionsResponseTransactionState {
+	var v ListTransactionsResponseTransactionState
+	v.Default()
+	return v
+}
+
+// ListTransactionsResponse is a response to a ListTransactionsRequest.
+type ListTransactionsResponse struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	// ThrottleMillis is how long of a throttle Kafka will apply to the client
+	// after responding to this request.
+	ThrottleMillis int32
+
+	// A potential error code for the listing,
+	//
+	// COORDINATOR_LOAD_IN_PROGRESS is returned if the coordinator is loading.
+	//
+	// COORDINATOR_NOT_AVAILABLE is returned if the coordinator receiving this
+	// request is shutting down.
+	ErrorCode int16
+
+	// Set of state filters provided in the request which were unknown to the
+	// transaction coordinator.
+	UnknownStateFilters []string
+
+	// TransactionStates contains all transactions that were matched for listing
+	// in the request. The response elides transactions that the user does not have
+	// permission to describe (DESCRIBE on TRANSACTIONAL_ID for the transaction).
+	TransactionStates []ListTransactionsResponseTransactionState
+}
+
+func (*ListTransactionsResponse) Key() int16                 { return 66 }
+func (*ListTransactionsResponse) MaxVersion() int16          { return 0 }
+func (v *ListTransactionsResponse) SetVersion(version int16) { v.Version = version }
+func (v *ListTransactionsResponse) GetVersion() int16        { return v.Version }
+func (v *ListTransactionsResponse) IsFlexible() bool         { return v.Version >= 0 }
+func (v *ListTransactionsResponse) Throttle() (int32, bool)  { return v.ThrottleMillis, v.Version >= 0 }
+func (v *ListTransactionsResponse) RequestKind() Request {
+	return &ListTransactionsRequest{Version: v.Version}
+}
+
+func (v *ListTransactionsResponse) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	isFlexible := version >= 0
+	_ = isFlexible
+	{
+		v := v.ThrottleMillis
+		dst = kbin.AppendInt32(dst, v)
+	}
+	{
+		v := v.ErrorCode
+		dst = kbin.AppendInt16(dst, v)
+	}
+	{
+		v := v.UnknownStateFilters
+		if isFlexible {
+			dst = kbin.AppendCompactArrayLen(dst, len(v))
+		} else {
+			dst = kbin.AppendArrayLen(dst, len(v))
+		}
+		for i := range v {
+			v := v[i]
+			if isFlexible {
+				dst = kbin.AppendCompactString(dst, v)
+			} else {
+				dst = kbin.AppendString(dst, v)
+			}
+		}
+	}
+	{
+		v := v.TransactionStates
+		if isFlexible {
+			dst = kbin.AppendCompactArrayLen(dst, len(v))
+		} else {
+			dst = kbin.AppendArrayLen(dst, len(v))
+		}
+		for i := range v {
+			v := &v[i]
+			{
+				v := v.TransactionalID
+				if isFlexible {
+					dst = kbin.AppendCompactString(dst, v)
+				} else {
+					dst = kbin.AppendString(dst, v)
+				}
+			}
+			{
+				v := v.ProducerID
+				dst = kbin.AppendInt64(dst, v)
+			}
+			{
+				v := v.TransactionState
+				if isFlexible {
+					dst = kbin.AppendCompactString(dst, v)
+				} else {
+					dst = kbin.AppendString(dst, v)
+				}
+			}
+			if isFlexible {
+				dst = append(dst, 0)
+			}
+		}
+	}
+	if isFlexible {
+		dst = append(dst, 0)
+	}
+	return dst
+}
+func (v *ListTransactionsResponse) ReadFrom(src []byte) error {
+	v.Default()
+	b := kbin.Reader{Src: src}
+	version := v.Version
+	_ = version
+	isFlexible := version >= 0
+	_ = isFlexible
+	s := v
+	{
+		v := b.Int32()
+		s.ThrottleMillis = v
+	}
+	{
+		v := b.Int16()
+		s.ErrorCode = v
+	}
+	{
+		v := s.UnknownStateFilters
+		a := v
+		var l int32
+		if isFlexible {
+			l = b.CompactArrayLen()
+		} else {
+			l = b.ArrayLen()
+		}
+		if !b.Ok() {
+			return b.Complete()
+		}
+		if l > 0 {
+			a = make([]string, l)
+		}
+		for i := int32(0); i < l; i++ {
+			var v string
+			if isFlexible {
+				v = b.CompactString()
+			} else {
+				v = b.String()
+			}
+			a[i] = v
+		}
+		v = a
+		s.UnknownStateFilters = v
+	}
+	{
+		v := s.TransactionStates
+		a := v
+		var l int32
+		if isFlexible {
+			l = b.CompactArrayLen()
+		} else {
+			l = b.ArrayLen()
+		}
+		if !b.Ok() {
+			return b.Complete()
+		}
+		if l > 0 {
+			a = make([]ListTransactionsResponseTransactionState, l)
+		}
+		for i := int32(0); i < l; i++ {
+			v := &a[i]
+			v.Default()
+			s := v
+			{
+				var v string
+				if isFlexible {
+					v = b.CompactString()
+				} else {
+					v = b.String()
+				}
+				s.TransactionalID = v
+			}
+			{
+				v := b.Int64()
+				s.ProducerID = v
+			}
+			{
+				var v string
+				if isFlexible {
+					v = b.CompactString()
+				} else {
+					v = b.String()
+				}
+				s.TransactionState = v
+			}
+			if isFlexible {
+				SkipTags(&b)
+			}
+		}
+		v = a
+		s.TransactionStates = v
+	}
+	if isFlexible {
+		SkipTags(&b)
+	}
+	return b.Complete()
+}
+
+// NewPtrListTransactionsResponse returns a pointer to a default ListTransactionsResponse
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrListTransactionsResponse() *ListTransactionsResponse {
+	var v ListTransactionsResponse
+	v.Default()
+	return &v
+}
+
+// Default sets any default fields. Calling this allows for future compatibility
+// if new fields are added to ListTransactionsResponse.
+func (v *ListTransactionsResponse) Default() {
+}
+
+// NewListTransactionsResponse returns a default ListTransactionsResponse
+// This is a shortcut for creating a struct and calling Default yourself.
+func NewListTransactionsResponse() ListTransactionsResponse {
+	var v ListTransactionsResponse
 	v.Default()
 	return v
 }
@@ -35393,6 +36056,8 @@ func RequestForKey(key int16) Request {
 		return NewPtrUnregisterBrokerRequest()
 	case 65:
 		return NewPtrDescribeTransactionsRequest()
+	case 66:
+		return NewPtrListTransactionsRequest()
 	}
 }
 
@@ -35534,6 +36199,8 @@ func ResponseForKey(key int16) Response {
 		return NewPtrUnregisterBrokerResponse()
 	case 65:
 		return NewPtrDescribeTransactionsResponse()
+	case 66:
+		return NewPtrListTransactionsResponse()
 	}
 }
 
@@ -35675,6 +36342,8 @@ func NameForKey(key int16) string {
 		return "UnregisterBroker"
 	case 65:
 		return "DescribeTransactions"
+	case 66:
+		return "ListTransactions"
 	}
 }
 
@@ -36078,4 +36747,38 @@ const (
 	TransactionStateCompleteAbort     TransactionState = 5
 	TransactionStateDead              TransactionState = 6
 	TransactionStatePrepareEpochFence TransactionState = 7
+)
+
+// Possible values and their meanings:
+//
+// * 0 (ABORT)
+//
+// * 1 (COMMIT)
+//
+// * 2 (QUORUM_REASSIGNMENT)
+//
+// * 3 (LEADER_CHANGE)
+//
+type ControlRecordKeyType int8
+
+func (v ControlRecordKeyType) String() string {
+	switch v {
+	default:
+		return "UNKNOWN"
+	case 0:
+		return "ABORT"
+	case 1:
+		return "COMMIT"
+	case 2:
+		return "QUORUM_REASSIGNMENT"
+	case 3:
+		return "LEADER_CHANGE"
+	}
+}
+
+const (
+	ControlRecordKeyTypeAbort              ControlRecordKeyType = 0
+	ControlRecordKeyTypeCommit             ControlRecordKeyType = 1
+	ControlRecordKeyTypeQuorumReassignment ControlRecordKeyType = 2
+	ControlRecordKeyTypeLeaderChange       ControlRecordKeyType = 3
 )

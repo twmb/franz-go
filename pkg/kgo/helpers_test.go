@@ -3,6 +3,7 @@ package kgo
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"os"
 	"os/exec"
 	"regexp"
@@ -10,11 +11,22 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
 
 const testRecordLimit = 1000000
+
+var loggerNum int64
+
+func testLogger() Logger {
+	num := atomic.AddInt64(&loggerNum, 1)
+	pfx := fmt.Sprintf("[%d] ", num)
+	return BasicLogger(os.Stderr, testLogLevel, func() string {
+		return pfx
+	})
+}
 
 var testLogLevel = func() LogLevel {
 	level := strings.ToLower(os.Getenv("KGO_LOG_LEVEL"))

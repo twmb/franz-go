@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kmsg"
@@ -63,15 +64,10 @@ func (cl *Client) AssignGroupTransactSession(group string, opts ...GroupOpt) *Gr
 		cl: cl,
 	}
 
-	c := &cl.consumer
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if c.typ != consumerTypeGroup {
-		return nil // invalid, but we will let the caller handle this
+	g, ok := cl.consumer.loadGroup()
+	if !ok {
+		return nil // concurrent Assign; users should not do this
 	}
-
-	g := c.group
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
@@ -96,6 +92,30 @@ func (cl *Client) AssignGroupTransactSession(group string, opts ...GroupOpt) *Gr
 	return s
 }
 
+// PollFetches is a wrapper around Client.PollFetches, with the exact same
+// semantics. Please refer to that function's documentation.
+//
+// It is invalid to call PollFetches concurrently with Begin or End.
+func (s *GroupTransactSession) PollFetches(ctx context.Context) Fetches {
+	return s.cl.PollFetches(ctx)
+}
+
+// PollRecords is a wrapper around Client.PollRecords, with the exact same
+// semantics. Please refer to that function's documentation.
+//
+// It is invalid to call PollRecords concurrently with Begin or End.
+func (s *GroupTransactSession) PollRecords(ctx context.Context, maxPollRecords int) Fetches {
+	return s.cl.PollRecords(ctx, maxPollRecords)
+}
+
+// Produce is a wrapper around Client.Produce, with the exact same semantics.
+// Please refer to that function's documentation.
+//
+// It is invalid to call Produce concurrently with Begin or End.
+func (s *GroupTransactSession) Produce(ctx context.Context, r *Record, promise func(*Record, error)) error {
+	return s.cl.Produce(ctx, r, promise)
+}
+
 // Begin begins a transaction, returning an error if the client has no
 // transactional id or is already in a transaction.
 //
@@ -116,6 +136,12 @@ func (s *GroupTransactSession) Begin() error {
 // in committing offsets fails, this aborts.
 //
 // This returns whether the transaction committed or any error that occurred.
+//
+// Note that canceling the context will likely leave the client in an
+// undesirable state, because canceling the context cancels in flight requests
+// and prevents new requests (multiple requests are issued at the end of a
+// transact session). Thus, while a context is allowed, it is strongly
+// recommended to not cancel it.
 func (s *GroupTransactSession) End(ctx context.Context, commit TransactionEndTry) (bool, error) {
 	defer func() {
 		s.revokeMu.Lock()
@@ -123,19 +149,17 @@ func (s *GroupTransactSession) End(ctx context.Context, commit TransactionEndTry
 		s.revokeMu.Unlock()
 	}()
 	if err := s.cl.Flush(ctx); err != nil {
-		// We do not abort here, since any error is the context
-		// closing.
-		return false, err
+		return false, err // we do not abort below, because an error here is ctx closing
 	}
 
 	wantCommit := bool(commit)
 
 	s.revokeMu.Lock()
 	revoked := s.revoked
-	s.revokeMu.Unlock()
 
 	precommit := s.cl.CommittedOffsets()
 	postcommit := s.cl.UncommittedOffsets()
+	s.revokeMu.Unlock()
 
 	var oldGeneration bool
 	var commitErr error
@@ -187,12 +211,14 @@ func (s *GroupTransactSession) End(ctx context.Context, commit TransactionEndTry
 	endTxnErr := s.cl.EndTransaction(ctx, TransactionEndTry(willTryCommit))
 
 	if !willTryCommit || endTxnErr != nil {
-		s.cl.cfg.logger.Log(LogLevelInfo, "transact session resetting to prior committed state",
+		currentCommit := s.cl.CommittedOffsets()
+		s.cl.cfg.logger.Log(LogLevelInfo, "transact session resetting to current committed state (potentially after a rejoin)",
 			"tried_commit", willTryCommit,
 			"commit_err", endTxnErr,
-			"precommit", precommit,
+			"state_precommit", precommit,
+			"state_current_commit", currentCommit,
 		)
-		s.cl.SetOffsets(precommit)
+		s.cl.SetOffsets(currentCommit)
 	} else if willTryCommit && endTxnErr == nil {
 		s.cl.cfg.logger.Log(LogLevelInfo, "transact session successful, setting to newly committed state",
 			"tried_commit", willTryCommit,
@@ -321,19 +347,35 @@ func (cl *Client) AbortBufferedRecords(ctx context.Context) error {
 // If records failed with UnknownProducerID and your Kafka version is at least
 // 2.5.0, then aborting here will potentially allow the client to recover for
 // more production.
+//
+// Note that canceling the context will likely leave the client in an
+// undesirable state, because canceling the context may cancel the in-flight
+// EndTransaction request, making it impossible to know whether the commit or
+// abort was successful. It is recommended to not cancel the context.
 func (cl *Client) EndTransaction(ctx context.Context, commit TransactionEndTry) error {
 	cl.producer.txnMu.Lock()
 	defer cl.producer.txnMu.Unlock()
 
 	atomic.StoreUint32(&cl.producer.producingTxn, 0) // forbid any new produces while ending txn
 
-	defer func() {
-		cl.consumer.mu.Lock()
-		defer cl.consumer.mu.Unlock()
-		if cl.consumer.typ == consumerTypeGroup {
-			cl.consumer.group.offsetsAddedToTxn = false
+	// anyAdded tracks if any partitions were added to this txn, because
+	// any partitions written to triggers AddPartitionToTxn, which triggers
+	// the txn to actually begin within Kafka.
+	//
+	// If we consumed at all but did not produce, the transaction ending
+	// issues AddOffsetsToTxn, which internally adds a __consumer_offsets
+	// partition to the transaction. Thus, if we added offsets, then we
+	// also produced.
+	var anyAdded bool
+	g, ok := cl.consumer.loadGroup()
+	if ok {
+		if g.offsetsAddedToTxn {
+			g.offsetsAddedToTxn = false
+			anyAdded = true
 		}
-	}()
+	} else {
+		cl.cfg.logger.Log(LogLevelDebug, "transaction ending, no group loaded; this must be a producer-only transaction, not consume-modify-produce EOS")
+	}
 
 	if !cl.producer.inTxn {
 		return ErrNotInTransaction
@@ -342,7 +384,6 @@ func (cl *Client) EndTransaction(ctx context.Context, commit TransactionEndTry) 
 
 	// After the flush, no records are being produced to, and we can set
 	// addedToTxn to false outside of any mutex.
-	var anyAdded bool
 	for _, parts := range cl.loadTopics() {
 		for _, part := range parts.load().partitions {
 			if part.records.addedToTxn {
@@ -457,11 +498,10 @@ func (cl *Client) commitTransactionOffsets(
 		cl.producer.txnMu.Unlock()
 		return
 	}
-	cl.consumer.mu.Lock()
 	cl.producer.txnMu.Unlock()
 
-	defer cl.consumer.mu.Unlock()
-	if cl.consumer.typ != consumerTypeGroup {
+	g, ok := cl.consumer.loadGroup()
+	if !ok {
 		onDone(new(kmsg.TxnOffsetCommitRequest), new(kmsg.TxnOffsetCommitResponse), ErrNotGroup)
 		return
 	}
@@ -470,7 +510,6 @@ func (cl *Client) commitTransactionOffsets(
 		return
 	}
 
-	g := cl.consumer.group
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
@@ -481,6 +520,7 @@ func (cl *Client) commitTransactionOffsets(
 			}
 			return
 		}
+		g.offsetsAddedToTxn = true
 	}
 
 	g.commitTxn(ctx, uncommitted, onDone)
@@ -496,6 +536,9 @@ func (cl *Client) addOffsetsToTxn(ctx context.Context, group string) error {
 		return err
 	}
 
+	start := time.Now()
+	tries := 0
+start:
 	cl.cfg.logger.Log(LogLevelInfo, "issuing AddOffsetsToTxn",
 		"txn", *cl.cfg.txnID,
 		"producerID", id,
@@ -511,11 +554,33 @@ func (cl *Client) addOffsetsToTxn(ctx context.Context, group string) error {
 	if err != nil {
 		return err
 	}
-	return kerr.ErrorForCode(resp.ErrorCode)
+	err = kerr.ErrorForCode(resp.ErrorCode)
+
+	// Similar to our ConcurrentTransactions retries in sink.go, we may
+	// commit offsets without producing, and the commit causes the
+	// transaction to begin. If we commit too quickly, Kafka may not have
+	// completely finalized the prior transaction. We have to retry.
+	if err == kerr.ConcurrentTransactions && time.Since(start) < 10*time.Second {
+		tries++
+		cl.cfg.logger.Log(LogLevelInfo, "AddOffsetsToTxn failed with CONCURRENT_TRANSACTIONS, which may be because we ended a txn and began producing in a new txn too quickly; backing off and retrying",
+			"backoff", 100*time.Millisecond,
+			"since_request_tries_start", time.Since(start),
+			"tries", tries,
+		)
+		select {
+		case <-time.After(100 * time.Millisecond):
+		case <-cl.ctx.Done():
+			cl.cfg.logger.Log(LogLevelError, "abandoning AddOffsetsToTxn retry due to client ctx quitting")
+			return err
+		}
+		goto start
+	}
+	return err
 }
 
 // commitTxn is ALMOST EXACTLY THE SAME as commit, but changed for txn types
-// and we avoid updateCommitted.
+// and we avoid updateCommitted. We avoid updating because we manually
+// SetOffsets when ending the transaction.
 func (g *groupConsumer) commitTxn(
 	ctx context.Context,
 	uncommitted map[string]map[int32]EpochOffset,
@@ -547,14 +612,13 @@ func (g *groupConsumer) commitTxn(
 	// The id must have been set at least once by this point because of
 	// addOffsetsToTxn.
 	id, epoch, _ := g.cl.producerID()
-	memberID := g.memberID
 	req := &kmsg.TxnOffsetCommitRequest{
 		TransactionalID: *g.cl.cfg.txnID,
 		Group:           g.id,
 		ProducerID:      id,
 		ProducerEpoch:   epoch,
 		Generation:      g.generation,
-		MemberID:        memberID,
+		MemberID:        g.memberID,
 		InstanceID:      g.instanceID,
 	}
 
@@ -592,7 +656,7 @@ func (g *groupConsumer) commitTxn(
 					Partition:   partition,
 					Offset:      eo.Offset,
 					LeaderEpoch: eo.Epoch,
-					Metadata:    &memberID,
+					Metadata:    &req.MemberID,
 				})
 			}
 		}

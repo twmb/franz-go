@@ -84,6 +84,8 @@ func (s *sink) createReq() (*produceRequest, *kmsg.AddPartitionsToTxnRequest, bo
 
 		moreToDrain bool
 
+		noIdempotency = s.cl.cfg.disableIdempotency
+
 		transactional  = req.txnID != nil
 		txnReq         *kmsg.AddPartitionsToTxnRequest
 		txnAddedTopics map[string]int // topic => index in txnReq
@@ -176,6 +178,10 @@ func (s *sink) createReq() (*produceRequest, *kmsg.AddPartitionsToTxnRequest, bo
 				})
 			}
 			txnReq.Topics[idx].Partitions = append(txnReq.Topics[idx].Partitions, recBuf.partition)
+		}
+
+		if noIdempotency {
+			seq = 0
 		}
 
 		wireLength += batchWireLength
@@ -952,6 +958,9 @@ type recBuf struct {
 
 	// seq is used for the seq in each record batch. It is incremented when
 	// produce requests are made and can be reset on errors to batch0Seq.
+	//
+	// If idempotency is disabled, we just use "0" for the first sequence
+	// when encoding our payload (see noIdempotency).
 	seq int32
 	// batch0Seq is the seq of the batch at batchDrainIdx 0. If we reset
 	// the drain index, we reset seq with this number. If we successfully
@@ -1286,7 +1295,7 @@ func (b *recBatch) v0wireLength() int32 { return b.v1wireLength - 8 }
 // seqRecBatch is a recBatch with a sequence number ready to be written
 // into a request.
 type seqRecBatch struct {
-	seq int32
+	seq int32 // 0 in addBatch if idempotency is disabled
 	*recBatch
 }
 

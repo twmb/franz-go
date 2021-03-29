@@ -139,7 +139,7 @@ func (c *testConsumer) transact(txnsBeforeQuit int) {
 	defer c.wg.Done()
 	cl, _ := NewClient(
 		TransactionalID(randsha()),
-		WithLogger(BasicLogger(os.Stderr, testLogLevel, nil)),
+		WithLogger(testLogger()),
 		// Control records have their own unique offset, so for testing,
 		// we keep the record to ensure we do not doubly consume control
 		// records (unless aborting).

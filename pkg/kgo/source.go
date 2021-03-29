@@ -310,6 +310,79 @@ func (s *source) discardBuffered() {
 	s.takeBufferedFn(usedOffsets.finishUsingAll)
 }
 
+// takeNBuffered takes a limited amount of records from a buffered fetch,
+// updating offsets in each partition per records taken.
+//
+// This only allows a new fetch once every buffered record has been taken.
+//
+// This returns the number of records taken and whether the source has been
+// completely drained.
+func (s *source) takeNBuffered(n int) (Fetch, int, bool) {
+	var r Fetch
+	var taken int
+
+	b := &s.buffered
+	bf := &b.fetch
+	for len(bf.Topics) > 0 && n > 0 {
+		t := &bf.Topics[0]
+
+		r.Topics = append(r.Topics, *t)
+		rt := &r.Topics[len(r.Topics)-1]
+		rt.Partitions = nil
+
+		tCursors := b.usedOffsets[t.Topic]
+
+		for len(t.Partitions) > 0 && n > 0 {
+			p := &t.Partitions[0]
+
+			rt.Partitions = append(rt.Partitions, *p)
+			rp := &rt.Partitions[len(rt.Partitions)-1]
+			rp.Records = nil
+
+			take := n
+			if take > len(p.Records) {
+				take = len(p.Records)
+			}
+
+			rp.Records = p.Records[:take]
+			p.Records = p.Records[take:]
+
+			n -= take
+			taken += take
+
+			pCursor := tCursors[p.Partition]
+
+			if len(p.Records) == 0 {
+				t.Partitions = t.Partitions[1:]
+
+				pCursor.from.setOffset(pCursor.cursorOffset)
+				pCursor.from.allowUsable()
+				delete(tCursors, p.Partition)
+				if len(tCursors) == 0 {
+					delete(b.usedOffsets, t.Topic)
+				}
+				break
+			}
+
+			lastReturnedRecord := rp.Records[len(rp.Records)-1]
+			pCursor.from.setOffset(cursorOffset{
+				offset:            lastReturnedRecord.Offset + 1,
+				lastConsumedEpoch: lastReturnedRecord.LeaderEpoch,
+			})
+		}
+
+		if len(t.Partitions) == 0 {
+			bf.Topics = bf.Topics[1:]
+		}
+	}
+
+	drained := len(bf.Topics) == 0
+	if drained {
+		s.takeBuffered()
+	}
+	return r, taken, drained
+}
+
 func (s *source) takeBufferedFn(offsetFn func(usedOffsets)) Fetch {
 	r := s.buffered
 	s.buffered = bufferedFetch{}
@@ -389,7 +462,7 @@ func (s *source) loopFetch() {
 
 	// We receive on canFetch when we can fetch, and we send back when we
 	// are done fetching.
-	canFetch := make(chan chan<- struct{}, 1)
+	canFetch := make(chan chan struct{}, 1)
 
 	again := true
 	for again {
@@ -409,6 +482,7 @@ func (s *source) loopFetch() {
 
 		select {
 		case <-session.ctx.Done():
+			session.cancelFetchCh <- canFetch
 			s.fetchState.hardFinish()
 			return
 		case doneFetch := <-canFetch:
@@ -777,7 +851,7 @@ func (o *cursorOffsetNext) processRespPartition(version int16, rp *kmsg.FetchRes
 	// batches, and this is solely dictated by the magic byte (not the
 	// fetch response version). The magic byte is located at byte 17.
 	//
-	// 0 thru 8: int64 offset / first offset
+	// 1 thru 8: int64 offset / first offset
 	// 9 thru 12: int32 length
 	// 13 thru 16: crc (magic 0 or 1), or partition leader epoch (magic 2)
 	// 17: magic
@@ -967,7 +1041,6 @@ func (o *cursorOffsetNext) processRecordBatch(
 	}
 
 	abortBatch := aborter.shouldAbortBatch(batch)
-	var lastRecord *Record
 	for i := range krecords {
 		record := recordToRecord(
 			o.from.topic,
@@ -975,13 +1048,18 @@ func (o *cursorOffsetNext) processRecordBatch(
 			batch,
 			&krecords[i],
 		)
-		lastRecord = record
 		o.maybeKeepRecord(fp, record, abortBatch)
+
+		if abortBatch && record.Attrs.IsControl() {
+			// A control record has a key and a value where the key
+			// is int16 version and int16 type. Aborted records
+			// have a type of 0.
+			if key := record.Key; len(key) >= 4 && key[2] == 0 && key[3] == 0 {
+				aborter.trackAbortedPID(batch.ProducerID)
+			}
+		}
 	}
 
-	if abortBatch && lastRecord != nil && lastRecord.Attrs.IsControl() {
-		aborter.trackAbortedPID(batch.ProducerID)
-	}
 }
 
 // Processes an outer v1 message. There could be no inner message, which makes
@@ -1175,8 +1253,8 @@ func (o *cursorOffsetNext) maybeKeepRecord(fp *FetchPartition, record *Record, a
 	}
 
 	// We only keep control records if specifically requested.
-	if record.Attrs.IsControl() && !o.from.keepControl {
-		abort = true
+	if record.Attrs.IsControl() {
+		abort = !o.from.keepControl
 	}
 	if !abort {
 		fp.Records = append(fp.Records, record)

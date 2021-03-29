@@ -7,7 +7,7 @@ DescribeTransactionsRequest => key 65, max version 0, flexible v0+
 // DescribeTransactionsResponse is a response to a DescribeTransactionsRequest.
 DescribeTransactionsResponse =>
   ThrottleMillis
-  TransactionalStates: [=>]
+  TransactionStates: [=>]
     // A potential error code for describing this transaction.
     //
     // NOT_COORDINATOR is returned if the broker receiving this transactional

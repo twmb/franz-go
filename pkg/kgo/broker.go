@@ -555,7 +555,6 @@ start:
 		}
 		cxn.versions[key.ApiKey] = key.MaxVersion
 	}
-	cxn.cl.cfg.logger.Log(LogLevelDebug, "initialized api versions", "versions", cxn.versions)
 	return nil
 }
 
