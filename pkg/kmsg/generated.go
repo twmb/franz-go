@@ -20182,8 +20182,10 @@ type DescribeConfigsResponseResourceConfig struct {
 	// is either a password or an unknown type.
 	IsSensitive bool
 
-	// ConfigSynonyms contains config key/value pairs that can be used in
-	// place of this config entry, in order of preference.
+	// ConfigSynonyms contains fallback key/value pairs for this config
+	// entry, in order of preference. That is, if a config entry is both
+	// dynamically configured and has a default, the top level return will be
+	// the dynamic configuration, while its "synonym" will be the default.
 	ConfigSynonyms []DescribeConfigsResponseResourceConfigConfigSynonym // v1+
 
 	// ConfigType specifies the configuration data type.
