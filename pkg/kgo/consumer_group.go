@@ -450,12 +450,7 @@ func (g *groupConsumer) manage() {
 			g.onRevoked(g.ctx, g.nowAssigned)
 		}
 
-		// If we are eager, we should have invalidated everything
-		// before getting here, but we do so doubly just in case.
-		//
-		// If we are cooperative, the join and sync could have failed
-		// during the cooperative rebalance where we were still
-		// consuming. We need to invalidate everything.
+		// We need to invalidate everything from an error return.
 		{
 			g.c.mu.Lock()
 			g.c.assignPartitions(nil, assignInvalidateAll)
@@ -612,14 +607,18 @@ const (
 // lost from the uncommitted map.
 func (g *groupConsumer) revoke(stage revokeStage, lost map[string][]int32) {
 	if !g.cooperative { // stage == revokeThisSession if not cooperative
+		// If we are an eager consumer, we stop fetching all of our
+		// current partitions as we will be revoking them.
+		g.c.mu.Lock()
+		g.c.assignPartitions(nil, assignInvalidateAll)
+		g.c.mu.Unlock()
+
 		g.cl.cfg.logger.Log(LogLevelInfo, "eager consumer revoking prior assigned partitions", "revoking", g.nowAssigned)
 		if g.onRevoked != nil {
 			g.onRevoked(g.ctx, g.nowAssigned)
 		}
 		g.nowAssigned = nil
 
-		// We are setting uncommitted to nil _after_ the heartbeat loop
-		// already called assignPartitions(nil, assignInvalidateAll).
 		// After nilling uncommitted here, nothing should recreate
 		// uncommitted until a future fetch after the group is
 		// rejoined. This _can_ be broken with a manual SetOffsets or
@@ -942,14 +941,6 @@ func (g *groupConsumer) heartbeat(fetchErrCh <-chan error, s *assignRevokeSessio
 
 		// Since we errored, we must revoke.
 		if !didRevoke && revoked == nil {
-			// If we are an eager consumer, we stop fetching all of
-			// our current partitions as we will be revoking them.
-			if !g.cooperative {
-				g.c.mu.Lock()
-				g.c.assignPartitions(nil, assignInvalidateAll)
-				g.c.mu.Unlock()
-			}
-
 			// If our error is not from rebalancing, then we
 			// encountered IllegalGeneration or UnknownMemberID or
 			// our context closed all of which are unexpected and
@@ -1599,7 +1590,7 @@ func (g *groupConsumer) loopCommit() {
 		g.mu.Lock()
 		if !g.blockAuto {
 			g.cl.cfg.logger.Log(LogLevelDebug, "autocommitting")
-			g.commit(context.Background(), g.getUncommittedLocked(true), func(_ *kmsg.OffsetCommitRequest, resp *kmsg.OffsetCommitResponse, err error) {
+			g.commit(g.ctx, g.getUncommittedLocked(true), func(_ *kmsg.OffsetCommitRequest, resp *kmsg.OffsetCommitResponse, err error) {
 				if err != nil {
 					if err != context.Canceled {
 						g.cl.cfg.logger.Log(LogLevelError, "autocommit failed", "err", err)
@@ -1807,11 +1798,11 @@ func (cl *Client) BlockingCommitOffsets(
 	uncommitted map[string]map[int32]EpochOffset,
 	onDone func(*kmsg.OffsetCommitRequest, *kmsg.OffsetCommitResponse, error),
 ) {
-	done := make(chan struct{})
-	defer func() { <-done }()
-
 	cl.cfg.logger.Log(LogLevelDebug, "in BlockingCommitOffsets", "with", uncommitted)
 	defer cl.cfg.logger.Log(LogLevelDebug, "left BlockingCommitOffsets")
+
+	done := make(chan struct{})
+	defer func() { <-done }()
 
 	if onDone == nil {
 		onDone = func(_ *kmsg.OffsetCommitRequest, _ *kmsg.OffsetCommitResponse, _ error) {}
