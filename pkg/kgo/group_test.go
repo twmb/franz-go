@@ -115,7 +115,7 @@ func (c *testConsumer) goGroupETL(etlsBeforeQuit int) {
 
 func (c *testConsumer) etl(etlsBeforeQuit int) {
 	defer c.wg.Done()
-	cl, _ := NewClient(WithLogger(BasicLogger(os.Stderr, testLogLevel, nil)))
+	cl, _ := NewClient(WithLogger(testLogger()))
 	defer cl.Close()
 
 	cl.AssignGroup(c.group,
