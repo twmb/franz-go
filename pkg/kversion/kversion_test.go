@@ -75,6 +75,51 @@ func TestVersionGuess(t *testing.T) {
 		}
 	}
 
+	{ // This is a very specific test to trigger the Raft controller on v2.7.
+		v := new(Versions)
+		v.SetMaxKeyVersion(1, 12)
+		v.SetMaxKeyVersion(3, 9)
+		v.SetMaxKeyVersion(7, 3)
+		v.SetMaxKeyVersion(17, 1)
+		v.SetMaxKeyVersion(18, 3)
+		v.SetMaxKeyVersion(19, 6)
+		v.SetMaxKeyVersion(20, 5)
+		v.SetMaxKeyVersion(36, 2)
+		v.SetMaxKeyVersion(44, 1)
+		v.SetMaxKeyVersion(49, 0)
+		v.SetMaxKeyVersion(52, 0)
+		v.SetMaxKeyVersion(53, 0)
+		v.SetMaxKeyVersion(54, 0)
+		v.SetMaxKeyVersion(55, 0)
+		v.SetMaxKeyVersion(56, 0)
+
+		if got, exp := v.VersionGuess(), "unknown custom version"; got != exp {
+			t.Errorf("got %s != exp %s for raft controller v2.7", got, exp)
+		}
+
+		if got, exp := v.VersionGuess(TryRaftController()), "v2.7"; got != exp {
+			t.Errorf("got %s != exp %s for trying as raft controller v2.7", got, exp)
+		}
+
+	}
+
+	{ // Here, we ensure we skip 4, 5, 6, and 7 by default.
+		v := V2_7_0()
+		v.SetMaxKeyVersion(4, -1)
+		v.SetMaxKeyVersion(5, -1)
+		v.SetMaxKeyVersion(6, -1)
+		v.SetMaxKeyVersion(7, -1)
+
+		if got, exp := v.VersionGuess(), "v2.7"; got != exp {
+			t.Errorf("got %s != exp %s for v2.7 with 4,5,6,7 unset", got, exp)
+		}
+
+		if got, exp := v.VersionGuess(SkipKeys()), "unknown custom version"; got != exp {
+			t.Errorf("got %s != exp %s for v2.7 with 4,5,6,7 unset without skipping them", got, exp)
+		}
+
+	}
+
 }
 
 func TestEqual(t *testing.T) {
