@@ -362,7 +362,6 @@ func (cl *Client) fetchMetadata(ctx context.Context, req *kmsg.MetadataRequest) 
 // use the response.
 func (cl *Client) updateBrokers(brokers []kmsg.MetadataResponseBroker) {
 	newBrokers := make(map[int32]*broker, len(brokers))
-	newAnyBroker := make([]*broker, 0, len(brokers))
 
 	cl.brokersMu.Lock()
 	defer cl.brokersMu.Unlock()
@@ -385,13 +384,11 @@ func (cl *Client) updateBrokers(brokers []kmsg.MetadataResponseBroker) {
 		}
 
 		newBrokers[broker.NodeID] = b
-		newAnyBroker = append(newAnyBroker, b)
 	}
 
 	for goneID, goneBroker := range cl.brokers {
 		if goneID < -1 { // seed broker, unknown ID, always keep
 			newBrokers[goneID] = goneBroker
-			newAnyBroker = append(newAnyBroker, goneBroker)
 		} else {
 			goneBroker.stopForever()
 		}
