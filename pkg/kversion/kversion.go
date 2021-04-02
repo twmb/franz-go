@@ -593,9 +593,6 @@ var max220 = nextMax(max210, func(v listenerKeys) listenerKeys {
 	v[11].inc() // 4 join group KAFKA-7824 9a9310d074 KIP-394
 	v[36].inc() // 1 sasl authenticate KAFKA-7352 e8a3bc7425 KIP-368
 
-	v[1].inc()  // 11 fetch KAFKA-8365 e2847e8603 KIP-392
-	v[23].inc() // 3 offsets for leader epoch (same)
-
 	v[4].inc() // 2 leader and isr KAFKA-7235 2155c6d54b KIP-380
 	v[5].inc() // 1 stop replica (same)
 	v[6].inc() // 5 update metadata (same)
@@ -609,6 +606,9 @@ var max220 = nextMax(max210, func(v listenerKeys) listenerKeys {
 var max230 = nextMax(max220, func(v listenerKeys) listenerKeys {
 	v[3].inc()  // 8 metadata KAFKA-7922 a42f16f980 KIP-430
 	v[15].inc() // 3 describe groups KAFKA-7922 f11fa5ef40 KIP-430
+
+	v[1].inc()  // 11 fetch KAFKA-8365 e2847e8603 KIP-392
+	v[23].inc() // 3 offsets for leader epoch (same)
 
 	v[11].inc() // 5 join group KAFKA-7862 0f995ba6be KIP-345
 	v[8].inc()  // 7 offset commit KAFKA-8225 9fa331b811 KIP-345
