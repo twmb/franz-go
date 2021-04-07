@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kmsg"
@@ -160,10 +161,6 @@ func (c *consumer) loadKind() interface{} { return c.v.Load().(*consumerValue).v
 func (c *consumer) loadGroup() (*groupConsumer, bool) {
 	g, ok := c.loadKind().(*groupConsumer)
 	return g, ok
-}
-func (c *consumer) loadDirect() (*directConsumer, bool) {
-	d, ok := c.loadKind().(*directConsumer)
-	return d, ok
 }
 
 func (c *consumer) storeDirect(d *directConsumer) { c.v.Store(&consumerValue{v: d}) } // while locked
@@ -1029,7 +1026,16 @@ func (s *consumerSession) listOrEpoch(waiting listOrEpochLoads, immediate bool) 
 // Called within a consumer session, this function handles results from list
 // offsets or epoch loads.
 func (s *consumerSession) handleListOrEpochResults(loaded loadedOffsets) {
-	var reloads listOrEpochLoads
+	var (
+		// Retriable errors are retried immediately, while
+		// non-retriable errors are retried after a 1s backoff. It is
+		// unlikely that the client will be able to recover, but we may
+		// as well fetch every second to (a) force the user to notice
+		// errors, and (b) allow the user to auth the client at
+		// runtime.
+		reloads     listOrEpochLoads
+		slowReloads listOrEpochLoads
+	)
 	defer func() {
 		// When we are done handling results, we have finished loading
 		// all the topics and partitions. We remove them from tracking
@@ -1041,6 +1047,18 @@ func (s *consumerSession) handleListOrEpochResults(loaded loadedOffsets) {
 		s.listOrEpochMu.Unlock()
 
 		reloads.loadWithSession(s)
+		if !slowReloads.isEmpty() {
+			go func() {
+				after := time.NewTimer(time.Second)
+				defer after.Stop()
+				select {
+				case <-after.C:
+				case <-s.ctx.Done():
+					return
+				}
+				slowReloads.loadWithSession(s)
+			}()
+		}
 	}()
 
 	for _, load := range loaded.loaded {
@@ -1064,6 +1082,7 @@ func (s *consumerSession) handleListOrEpochResults(loaded loadedOffsets) {
 		default: // from ErrorCode in a response
 			if !kerr.IsRetriable(load.err) { // non-retriable response error; signal such in a response
 				s.c.addFakeReadyForDraining(load.topic, load.partition, load.err)
+				slowReloads.addLoad(load.topic, load.partition, loaded.loadType, load.request)
 				continue
 			}
 			reloads.addLoad(load.topic, load.partition, loaded.loadType, load.request)
