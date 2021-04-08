@@ -1610,7 +1610,8 @@ func (g *groupConsumer) loopCommit() {
 						if err := kerr.ErrorForCode(partition.ErrorCode); err != nil {
 							g.cl.cfg.logger.Log(LogLevelError, "in autocommit: unable to commit offsets for topic partition",
 								"topic", topic.Topic,
-								"partition", partition.Partition)
+								"partition", partition.Partition,
+								"error", err)
 						}
 					}
 				}
@@ -1951,7 +1952,8 @@ func (g *groupConsumer) defaultRevoke(_ context.Context, _ map[string][]int32) {
 					if err := kerr.ErrorForCode(partition.ErrorCode); err != nil {
 						g.cl.cfg.logger.Log(LogLevelError, "in revoke: unable to commit offsets for topic partition",
 							"topic", topic.Topic,
-							"partition", partition.Partition)
+							"partition", partition.Partition,
+					                "error", err)
 					}
 				}
 			}
