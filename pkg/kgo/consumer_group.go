@@ -1433,13 +1433,13 @@ func (g *groupConsumer) updateUncommitted(fetches Fetches) {
 	defer g.mu.Unlock()
 
 	for _, fetch := range fetches {
-		var topicOffsets map[int32]uncommit
 		for _, topic := range fetch.Topics {
 
 			if g.cl.cfg.logger.Level() >= LogLevelDebug {
 				fmt.Fprintf(&b, "%s[", topic.Topic)
 			}
 
+			var topicOffsets map[int32]uncommit
 			for _, partition := range topic.Partitions {
 				if len(partition.Records) == 0 {
 					continue
