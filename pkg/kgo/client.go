@@ -819,7 +819,7 @@ func (cl *Client) loadCoordinators(reload bool, typ int8, names ...string) (map[
 
 	var mu sync.Mutex
 	m := make(map[string]*broker)
-	var errQuit error
+	var firstErr error
 
 	var wg sync.WaitGroup
 	for _, name := range names {
@@ -836,8 +836,8 @@ func (cl *Client) loadCoordinators(reload bool, typ int8, names ...string) (map[
 			defer mu.Unlock()
 
 			if err != nil {
-				if errQuit != nil {
-					errQuit = err
+				if firstErr == nil {
+					firstErr = err
 					cancel()
 				}
 				return
@@ -847,7 +847,7 @@ func (cl *Client) loadCoordinators(reload bool, typ int8, names ...string) (map[
 	}
 	wg.Wait()
 
-	return m, errQuit
+	return m, firstErr
 }
 
 func (cl *Client) handleAdminReq(ctx context.Context, req kmsg.Request) ResponseShard {
