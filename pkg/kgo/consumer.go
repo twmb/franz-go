@@ -330,12 +330,18 @@ func (cl *Client) PollRecords(ctx context.Context, maxPollRecords int) Fetches {
 		}
 	}()
 
-	select {
-	case <-ctx.Done():
+	exit := func() {
 		c.sourcesReadyMu.Lock()
 		quit = true
 		c.sourcesReadyMu.Unlock()
 		c.sourcesReadyCond.Broadcast()
+	}
+
+	select {
+	case <-cl.ctx.Done():
+		exit()
+	case <-ctx.Done():
+		exit()
 	case <-done:
 	}
 
