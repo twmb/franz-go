@@ -101,6 +101,8 @@ type Client struct {
 	metadone            chan struct{}
 }
 
+func (cl *Client) idempotent() bool { return !cl.cfg.disableIdempotency }
+
 type sinkAndSource struct {
 	sink   *sink
 	source *source
@@ -427,12 +429,7 @@ func (cl *Client) Close() {
 		sns.source.maybeConsume() // same
 	}
 
-	// We must manually fail all partitions that never had a sink.
-	for _, partitions := range cl.loadTopics() {
-		for _, partition := range partitions.load().partitions {
-			partition.records.failAllRecords(ErrBrokerDead)
-		}
-	}
+	cl.failBufferedRecords(errClientClosing)
 }
 
 // Request issues a request to Kafka, waiting for and returning the response.
@@ -506,7 +503,7 @@ func (cl *Client) retriableBrokerFn(fn func() (*broker, error)) *retriable {
 }
 
 func (cl *Client) shouldRetry(tries int, err error) bool {
-	return err == ErrConnDead && tries < cl.cfg.brokerConnDeadRetries || (kerr.IsRetriable(err) || isRetriableBrokerErr(err)) && tries < cl.cfg.retries
+	return err == ErrConnDead && tries < cl.cfg.brokerConnDeadRetries || (kerr.IsRetriable(err) || isRetriableBrokerErr(err)) && int64(tries) < cl.cfg.retries
 }
 
 type retriable struct {

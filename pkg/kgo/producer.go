@@ -17,9 +17,14 @@ type producer struct {
 
 	id           atomic.Value
 	producingTxn uint32 // 1 if in txn
-	flushing     int32  // >0 if flushing, can Flush many times concurrently
-	aborting     uint32 // 1 means yes
-	drains       int32  // number of sinks draining
+
+	// We must have a producer field for flushing; we cannot just have a
+	// field on recBufs that is toggled on flush. If we did, then a new
+	// recBuf could be created and records sent to while we are flushing.
+	flushing int32 // >0 if flushing, can Flush many times concurrently
+
+	aborting uint32 // 1 means yes
+	drains   int32  // number of sinks draining
 
 	idMu       sync.Mutex
 	idVersion  int16
@@ -243,21 +248,14 @@ func (cl *Client) producerID() (int64, int16, error) {
 				// if we had an ID, we can bump the epoch locally.
 				// If we are at the max epoch, we will ask for a new ID.
 			} else if cl.cfg.txnID == nil && id.id >= 0 && id.epoch < math.MaxInt16-1 {
-				// As seen in KAFKA-12152, if we are simply bumping the
-				// epoch for the idempotent producer, we actually need to
-				// reset the sequence number for **all** partitions.
-				// Otherwise, we will use a new epoch and a partition
-				// that did not reset will have OOOSN.
-				for _, tp := range cl.loadTopics() {
-					for _, tpd := range tp.load().partitions {
-						tpd.records.resetSeq()
-					}
-				}
-				cl.producer.id.Store(&producerID{
+				cl.resetAllProducerSequences()
+
+				id = &producerID{
 					id:    id.id,
 					epoch: id.epoch + 1,
 					err:   nil,
-				})
+				}
+				cl.producer.id.Store(id)
 
 			} else {
 				newID, keep := cl.doInitProducerID(id.id, id.epoch)
@@ -270,6 +268,25 @@ func (cl *Client) producerID() (int64, int16, error) {
 	}
 
 	return id.id, id.epoch, id.err
+}
+
+// As seen in KAFKA-12152, if we bump an epoch, we have to reset sequence nums
+// for every partition. Otherwise, we will use a new id/epoch for a partition
+// and trigger OOOSN errors.
+//
+// Pre 2.5.0, this function is only be called if it is acceptable to continue
+// on data loss (idempotent producer with no StopOnDataLoss option).
+//
+// 2.5.0+, it is safe to call this if the producer ID can be reset (KIP-360),
+// in EndTransaction.
+func (cl *Client) resetAllProducerSequences() {
+	for _, tp := range cl.loadTopics() {
+		for _, p := range tp.load().partitions {
+			p.records.mu.Lock()
+			p.records.needSeqReset = true
+			p.records.mu.Unlock()
+		}
+	}
 }
 
 func (cl *Client) failProducerID(id int64, epoch int16, err error) {
@@ -304,10 +321,7 @@ func (cl *Client) failProducerID(id int64, epoch int16, err error) {
 }
 
 // doInitProducerID inits the idempotent ID and potentially the transactional
-// producer epoch.
-//
-// This returns false only if our request failed and not due to the key being
-// unknown to the broker.
+// producer epoch, returning whether to keep the result.
 func (cl *Client) doInitProducerID(lastID int64, lastEpoch int16) (*producerID, bool) {
 	cl.cfg.logger.Log(LogLevelInfo, "initializing producer id")
 	req := &kmsg.InitProducerIDRequest{
@@ -321,28 +335,36 @@ func (cl *Client) doInitProducerID(lastID int64, lastEpoch int16) (*producerID, 
 
 	resp, err := req.RequestWith(cl.ctx, cl)
 	if err != nil {
-		// If our broker is too old, or our client is pinned to an old
-		// version, then well...
-		//
-		// Note this is dependent on the first broker we hit; there are
-		// other areas in this client where we assume what we hit first
-		// is the default.
 		if err == ErrUnknownRequestKey || err == ErrBrokerTooOld {
-			cl.cfg.logger.Log(LogLevelInfo, "unable to initialize a producer id because the broker is too old, continuing without a producer id")
+			cl.cfg.logger.Log(LogLevelInfo, "unable to initialize a producer id because the broker is too old or the client is pinned to an old version, continuing without a producer id")
 			return &producerID{-1, -1, nil}, true
+		}
+		if err == ErrBrokerDead {
+			select {
+			case <-cl.ctx.Done():
+				cl.cfg.logger.Log(LogLevelInfo, "producer id initialization failure due to dying client", "err", err)
+				return &producerID{lastID, lastEpoch, errClientClosing}, true
+			default:
+			}
 		}
 		cl.cfg.logger.Log(LogLevelInfo, "producer id initialization failure, discarding initialization attempt", "err", err)
 		return &producerID{lastID, lastEpoch, err}, false
 	}
+
 	if err = kerr.ErrorForCode(resp.ErrorCode); err != nil {
+		if kerr.IsRetriable(err) { // TODO handle ConcurrentTransactions collision?
+			cl.cfg.logger.Log(LogLevelInfo, "producer id initialization resulted in retriable error, discarding initialization attempt", "err", err)
+			return &producerID{lastID, lastEpoch, err}, false
+		}
 		cl.cfg.logger.Log(LogLevelInfo, "producer id initialization errored", "err", err)
 		return &producerID{lastID, lastEpoch, err}, true
 	}
+
 	cl.cfg.logger.Log(LogLevelInfo, "producer id initialization success", "id", resp.ProducerID, "epoch", resp.ProducerEpoch)
 
 	// We track if this was v3. We do not need to gate this behind a mutex,
-	// since no request is issued before the ID is loaded, meaning nothing
-	// checks this value in a racy way.
+	// because the only other use is EndTransaction's read, which is
+	// documented to only be called sequentially after producing.
 	if cl.producer.idVersion == -1 {
 		cl.producer.idVersion = req.Version
 	}
@@ -471,7 +493,7 @@ func (cl *Client) waitUnknownTopic(
 			}
 			cl.cfg.logger.Log(LogLevelInfo, "unknown topic wait failed, retrying wait", "topic", topic, "err", err)
 			tries++
-			if tries >= cl.cfg.retries {
+			if int64(tries) >= cl.cfg.retries {
 				err = ErrNoPartitionsAvailable
 			}
 		}
@@ -548,5 +570,26 @@ func (cl *Client) Flush(ctx context.Context) error {
 		cl.producer.notifyMu.Unlock()
 		cl.producer.notifyCond.Broadcast()
 		return ctx.Err()
+	}
+}
+
+// Clears all buffered records in the client with the given error.
+func (cl *Client) failBufferedRecords(err error) {
+	for _, partitions := range cl.loadTopics() {
+		for _, partition := range partitions.load().partitions {
+			recBuf := partition.records
+			recBuf.mu.Lock()
+			recBuf.failAllRecords(err)
+			recBuf.mu.Unlock()
+		}
+	}
+	cl.unknownTopicsMu.Lock()
+	defer cl.unknownTopicsMu.Unlock()
+	for topic, unknown := range cl.unknownTopics {
+		delete(cl.unknownTopics, topic)
+		close(unknown.wait)
+		for _, pr := range unknown.buffered {
+			cl.finishRecordPromise(pr, err)
+		}
 	}
 }

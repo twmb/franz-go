@@ -213,7 +213,7 @@ func (c *testConsumer) transact(txnsBeforeQuit int) {
 					Value: r.Value,
 				},
 				func(_ *Record, err error) {
-					if err != nil {
+					if err != nil && err != ErrAborting {
 						c.errCh <- fmt.Errorf("unexpected transactional produce err: %v", err)
 					}
 				},

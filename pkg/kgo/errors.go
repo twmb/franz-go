@@ -106,6 +106,8 @@ var (
 	// ErrCommitWithFatalID is returned when trying to commit in
 	// EndTransaction with a producer ID that has failed.
 	ErrCommitWithFatalID = errors.New("cannot commit with a fatal producer id; retry with an abort")
+
+	errClientClosing = errors.New("client closing")
 )
 
 // ErrDataLoss is returned for Kafka >=2.1.0 when data loss is detected and the

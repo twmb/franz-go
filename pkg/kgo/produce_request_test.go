@@ -131,26 +131,29 @@ func TestRecBatchAppendTo(t *testing.T) {
 		},
 	}
 
-	// Define field-fixing functions.
+	version := int16(99)
+	ourBatch.wireLength = 4 + int32(len(kbatch.AppendTo(nil))) // length prefix; required for flexible versioning
 
-	version := int16(2)
-
+	// After compression, we fix the length & crc on kbatch.
 	fixFields := func() {
 		rawBatch := kbatch.AppendTo(nil)
 		kbatch.Length = int32(len(rawBatch[8+4:]))                       // skip first offset (int64) and length
 		kbatch.CRC = int32(crc32.Checksum(rawBatch[8+4+4+1+4:], crc32c)) // skip thru crc
-
-		rawBatch = ourBatch.appendTo(nil, version, 12, 11, true, nil)
-		ourBatch.wireLength = int32(len(rawBatch)) // fix length PRE compression
 	}
 
 	var compressor *compressor
 	var checkNum int
 	check := func() {
 		exp := kbatch.AppendTo(nil)
-		gotFull := ourBatch.appendTo(nil, version, 12, 11, true, compressor)
+		gotFull := ourBatch.appendTo(nil, version, 12, 11, true, true, compressor)
+		lengthPrefix := 4
 		ourBatchSize := (&kbin.Reader{Src: gotFull}).Int32()
-		got := gotFull[4:]
+		if version >= 9 {
+			r := &kbin.Reader{Src: gotFull}
+			ourBatchSize = int32(r.Uvarint()) - 1
+			lengthPrefix = len(gotFull) - len(r.Src)
+		}
+		got := gotFull[lengthPrefix:]
 		if ourBatchSize != int32(len(got)) {
 			t.Errorf("check %d: incorrect record prefixing written length %d != actual %d", checkNum, ourBatchSize, len(got))
 		}
@@ -171,7 +174,7 @@ func TestRecBatchAppendTo(t *testing.T) {
 	compressor, _ = newCompressor(CompressionCodec{codec: 2}) // snappy
 	{
 		kbatch.Attributes |= 0x0002 // snappy
-		kbatch.Records, _ = compressor.compress(sliceWriters.Get().(*sliceWriter), kbatch.Records, 99)
+		kbatch.Records, _ = compressor.compress(sliceWriters.Get().(*sliceWriter), kbatch.Records, version)
 	}
 
 	fixFields()
@@ -180,7 +183,7 @@ func TestRecBatchAppendTo(t *testing.T) {
 	// ***As a produce request***
 	txid := "tx"
 	kmsgReq := kmsg.ProduceRequest{
-		Version:       8, // TODO bump to 99
+		Version:       version,
 		TransactionID: &txid,
 		Acks:          -1,
 		TimeoutMillis: 1000,
@@ -193,12 +196,13 @@ func TestRecBatchAppendTo(t *testing.T) {
 		}},
 	}
 	ourReq := produceRequest{
-		version:       8,
+		version:       version,
 		txnID:         &txid,
 		acks:          -1,
 		timeout:       1000,
 		producerID:    12,
 		producerEpoch: 11,
+		idempotent:    true,
 		compressor:    compressor,
 	}
 	ourReq.batches.addSeqBatch("topic", 1, ourBatch)

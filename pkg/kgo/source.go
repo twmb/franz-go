@@ -88,12 +88,6 @@ func (s *source) removeCursor(rm *cursor) {
 }
 
 // cursor is where we are consuming from for an individual partition.
-//
-// NOTE if adding fields here, check if they need to be handled when migrating
-// the cursor between sources on a metadata update. This would be the case for
-// any field that belongs in a topicPartition but is copied to the cursor; if
-// enough fields like this exist, we can just use a topicPartition pointer
-// directly, which would only be modified with the session stopped.
 type cursor struct {
 	topic     string
 	partition int32
@@ -126,20 +120,7 @@ type cursor struct {
 	// request or when the source is stopped.
 	useState uint32
 
-	// Our leader; if metadata sees this change, the metadata update
-	// migrates us to a different source and updates this with the session
-	// stopped.
-	leader int32
-
-	// What our cursor believes to be the epoch of the leader for this
-	// partition. For KIP-320, if a broker receives a fetch request where
-	// the current leader epoch does not match the brokers, either the
-	// broker is behind and returns UnknownLeaderEpoch, or we are behind
-	// and the broker returns FencedLeaderEpoch. For the former, we back
-	// off and retry. For the latter, we update our metadata.
-	leaderEpoch int32
-
-	// NOTE if adding new fields, see the note preceeding the struct.
+	topicPartitionData // updated in metadata when session is stopped
 
 	// cursorOffset is our epoch/offset that we are consuming. When a fetch
 	// request is issued, we "freeze" a view of the offset and of the

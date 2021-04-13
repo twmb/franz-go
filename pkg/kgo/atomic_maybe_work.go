@@ -13,13 +13,7 @@ func (b *atomicBool) set(v bool) {
 	}
 }
 
-func (b *atomicBool) get() bool {
-	v := atomic.LoadUint32((*uint32)(b))
-	if v == 1 {
-		return true
-	}
-	return false
-}
+func (b *atomicBool) get() bool { return atomic.LoadUint32((*uint32)(b)) == 1 }
 
 const (
 	stateUnstarted = iota

@@ -156,15 +156,38 @@ type topicPartitionsData struct {
 // topicPartition contains all information from Kafka for a topic's partition,
 // as well as what a client is producing to it or info about consuming from it.
 type topicPartition struct {
-	// NOTE all of these fields are copied when updating metadata;
-	// we copy all fields and keep the new topicPartition pointer.
-	leader      int32 // our broker leader
-	leaderEpoch int32 // the broker leader's epoch
+	// If we have a load error (leader/listener/replica not available), we
+	// keep the old topicPartition data and the new error.
+	loadErr error
 
-	loadErr error // could be leader/listener/replica not avail
+	// If we do not have a load error, we determine if the new
+	// topicPartition is the same or different from the old based on
+	// whether the data changed (leader or leader epoch, etc.).
+	topicPartitionData
 
+	// If we do not have a load error, we copy the records and cursor
+	// pointers from the old after updating any necessary fields in them
+	// (see migrate functions below).
 	records *recBuf
 	cursor  *cursor
+}
+
+// Contains stuff that changes on metadata update that we copy into a cursor or
+// recBuf.
+type topicPartitionData struct {
+	// Our leader; if metadata sees this change, the metadata update
+	// migrates the cursor to a different source with the session stopped,
+	// and the recBuf to a different sink under a tight mutex.
+	leader int32
+
+	// What we believe to be the epoch of the leader for this partition.
+	//
+	// For cursors, for KIP-320, if a broker receives a fetch request where
+	// the current leader epoch does not match the brokers, either the
+	// broker is behind and returns UnknownLeaderEpoch, or we are behind
+	// and the broker returns FencedLeaderEpoch. For the former, we back
+	// off and retry. For the latter, we update our metadata.
+	leaderEpoch int32
 }
 
 // migrateProductionTo is called on metadata update if a topic partition's sink
@@ -180,8 +203,9 @@ func (old *topicPartition) migrateProductionTo(new *topicPartition) {
 	// the old sink. That is fine, the old sink no longer consumes
 	// from these records. We just have wasted drain triggers.
 
-	old.records.mu.Lock() // guard setting sink
+	old.records.mu.Lock() // guard setting sink and topic partition data
 	old.records.sink = new.records.sink
+	old.records.topicPartitionData = new.topicPartitionData
 	old.records.mu.Unlock()
 
 	// After the unlock above, record buffering can trigger drains
@@ -240,8 +264,7 @@ func (old *topicPartition) migrateCursorTo(
 		})
 	}
 
-	old.cursor.leader = new.cursor.leader
-	old.cursor.leaderEpoch = new.cursor.leaderEpoch
+	old.cursor.topicPartitionData = new.topicPartitionData
 
 	old.cursor.source.addCursor(old.cursor)
 	new.cursor = old.cursor

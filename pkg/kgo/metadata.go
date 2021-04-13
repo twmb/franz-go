@@ -247,6 +247,12 @@ func (cl *Client) fetchTopicMetadata(reqTopics []string) (map[string]*topicParti
 			continue
 		}
 
+		// This 249 limit is in Kafka itself, we copy it here to rely on it while producing.
+		if len(topicMeta.Topic) > 249 {
+			parts.loadErr = fmt.Errorf("invalid long topic name of (len %d) greater than max allowed 249", len(topicMeta.Topic))
+			continue
+		}
+
 		// Kafka partitions are strictly increasing from 0. We enforce
 		// that here; if any partition is missing, we consider this
 		// topic a load failure.
@@ -272,9 +278,11 @@ func (cl *Client) fetchTopicMetadata(reqTopics []string) (map[string]*topicParti
 			}
 
 			p := &topicPartition{
-				loadErr:     kerr.ErrorForCode(partMeta.ErrorCode),
-				leader:      partMeta.Leader,
-				leaderEpoch: leaderEpoch,
+				loadErr: kerr.ErrorForCode(partMeta.ErrorCode),
+				topicPartitionData: topicPartitionData{
+					leader:      partMeta.Leader,
+					leaderEpoch: leaderEpoch,
+				},
 
 				records: &recBuf{
 					cl: cl,
@@ -293,15 +301,13 @@ func (cl *Client) fetchTopicMetadata(reqTopics []string) (map[string]*topicParti
 					keepControl: cl.cfg.keepControl,
 					cursorsIdx:  -1,
 
-					leader:      partMeta.Leader,
-					leaderEpoch: leaderEpoch,
-
 					cursorOffset: cursorOffset{
 						offset:            -1, // required to not consume until needed
 						lastConsumedEpoch: -1, // required sentinel
 					},
 				},
 			}
+
 			// Any partition that has a load error uses the first
 			// seed broker as a leader. This ensures that every
 			// record buffer and every cursor can use a sink or
@@ -309,6 +315,9 @@ func (cl *Client) fetchTopicMetadata(reqTopics []string) (map[string]*topicParti
 			if p.loadErr != nil {
 				p.leader = unknownSeedID(0)
 			}
+
+			p.cursor.topicPartitionData = p.topicPartitionData
+			p.records.topicPartitionData = p.topicPartitionData
 
 			cl.sinksAndSourcesMu.Lock()
 			sns, exists := cl.sinksAndSources[p.leader]
@@ -356,17 +365,10 @@ func (cl *Client) mergeTopicPartitions(
 	// produced, we bump the respective error or fail everything. There is
 	// nothing to be done in a consumer.
 	if r.loadErr != nil {
-		retriable := kerr.IsRetriable(r.loadErr)
-		if retriable {
-			for _, topicPartition := range lv.partitions {
-				topicPartition.records.bumpRepeatedLoadErr(lv.loadErr)
-			}
-		} else {
-			for _, topicPartition := range lv.partitions {
-				topicPartition.records.failAllRecords(lv.loadErr)
-			}
+		for _, topicPartition := range lv.partitions {
+			topicPartition.records.bumpRepeatedLoadErr(lv.loadErr)
 		}
-		return retriable
+		return true
 	}
 
 	// Before the atomic update, we keep the latest partitions / writable
@@ -433,30 +435,18 @@ func (cl *Client) mergeTopicPartitions(
 			continue
 		}
 
-		// If the new sink is the same as the old, we simply copy over
-		// the records pointer and maybe begin producing again.
+		// If the tp data is the same, we simply copy over the records
+		// and cursor pointers.
 		//
-		// We always clear the failing state; migration does this itself.
-		if newTP.records.sink == oldTP.records.sink {
+		// If the tp data equals the old, then the sink / source is the
+		// same, because the sink/source is from the tp leader.
+		if newTP.topicPartitionData == oldTP.topicPartitionData {
 			newTP.records = oldTP.records
-			newTP.records.clearFailing()
-		} else {
-			oldTP.migrateProductionTo(newTP)
-		}
-
-		// The cursor source could be different because we could be
-		// fetching from a preferred replica.
-		if newTP.cursor.leader == oldTP.cursor.leader &&
-			newTP.cursor.leaderEpoch == oldTP.cursor.leaderEpoch {
-
-			newTP.cursor = oldTP.cursor
-
-			// Unlike above, there is no failing state for a
-			// cursor. If a cursor has a fetch error, we buffer
-			// that information for a poll, and then we continue to
-			// re-fetch that error.
+			newTP.records.clearFailing() // always clear failing state for producing after meta update
+			newTP.cursor = oldTP.cursor  // unlike records, there is no failing state for a cursor
 
 		} else {
+			oldTP.migrateProductionTo(newTP) // migration clears failing state
 			oldTP.migrateCursorTo(
 				newTP,
 				&cl.consumer,

@@ -59,7 +59,7 @@ type cfg struct {
 	minVersions *kversion.Versions
 
 	retryBackoff          func(int) time.Duration
-	retries               int
+	retries               int64
 	retryTimeout          func(int16) time.Duration
 	brokerConnDeadRetries int
 
@@ -85,6 +85,7 @@ type cfg struct {
 	maxRecordBatchBytes int32
 	maxBufferedRecords  int64
 	produceTimeout      time.Duration
+	produceRetries      int64
 	linger              time.Duration
 	recordTimeout       time.Duration
 	manualFlushing      bool
@@ -125,8 +126,11 @@ func (cfg *cfg) validate() error {
 		if cfg.acks.val != -1 {
 			return errors.New("idempotency requires acks=all")
 		}
-		if cfg.retries == 0 {
-			return errors.New("idempotency requires RequestRetries to be greater than 0")
+		if cfg.produceRetries != math.MaxInt64 {
+			return errors.New("idempotency requires ProduceRetries to be unlimited")
+		}
+		if cfg.recordTimeout != 0 {
+			return errors.New("idempotency requires RecordTimeout to be unlimited")
 		}
 	}
 
@@ -284,7 +288,7 @@ func defaultCfg() cfg {
 				return backoff
 			}
 		}(),
-		retries: math.MaxInt32, // effectively unbounded
+		retries: math.MaxInt64, // effectively unbounded
 		retryTimeout: func(key int16) time.Duration {
 			if key == 26 { // EndTxn key
 				return 5 * time.Minute
@@ -305,6 +309,7 @@ func defaultCfg() cfg {
 		maxRecordBatchBytes: 1000000, // Kafka max.message.bytes default is 1000012
 		maxBufferedRecords:  math.MaxInt64,
 		produceTimeout:      30 * time.Second,
+		produceRetries:      math.MaxInt64,             // effectively unbounded
 		partitioner:         StickyKeyPartitioner(nil), // default to how Kafka partitions
 
 		maxWait:        5000,
@@ -443,11 +448,10 @@ func RetryBackoff(backoff func(int) time.Duration) Opt {
 }
 
 // RequestRetries sets the number of tries that retriable requests are allowed,
-// overriding the unlimited default.
-//
-// This setting applies to all types of requests.
+// overriding the unlimited default. This option does not apply to produce
+// requests.
 func RequestRetries(n int) Opt {
-	return clientOpt{func(cfg *cfg) { cfg.retries = n }}
+	return clientOpt{func(cfg *cfg) { cfg.retries = int64(n) }}
 }
 
 // RetryTimeout sets the upper limit on how long we allow requests to retry,
@@ -661,6 +665,13 @@ func ProduceRequestTimeout(limit time.Duration) ProducerOpt {
 	return producerOpt{func(cfg *cfg) { cfg.produceTimeout = limit }}
 }
 
+// ProduceRetries sets the number of tries for producing records, overriding
+// the unlimited default. This option can only be set if DisableIdempotency is
+// also set.
+func ProduceRetries(n int) Opt {
+	return clientOpt{func(cfg *cfg) { cfg.produceRetries = int64(n) }}
+}
+
 // StopOnDataLoss sets the client to stop producing if data loss is detected,
 // overriding the default false.
 //
@@ -710,19 +721,19 @@ func ManualFlushing() ProducerOpt {
 	return producerOpt{func(cfg *cfg) { cfg.manualFlushing = true }}
 }
 
-// RecordTimeout sets a rough time of how long a record can sit
-// around in a batch before timing out.
+// RecordTimeout sets a rough time of how long a record can sit around in a
+// batch before timing out, overriding the ulimited default. This option can
+// only be set if DisableIdempotency is also set.
 //
-// Note that the timeout for all records in a batch inherit the timeout of the
-// first record in that batch. That is, once the first record's timeout
-// expires, all records in the batch are expired. This generally is a non-issue
-// unless using this option with lingering. In that case, simply add the linger
-// to the record timeout to avoid problems.
+// The timeout for all records in a batch inherit the timeout of the first
+// record in that batch. That is, once the first record's timeout expires, all
+// records in the batch are expired. This generally is a non-issue unless using
+// this option with lingering. In that case, simply add the linger to the
+// record timeout to avoid problems.
 //
-// Also note that the timeout is only evaluated after a produce response, and
-// only for batches that need to be retried. Thus, a sink backoff may delay
-// record timeout slightly. As with lingering, this also should generally be a
-// non-issue.
+// The timeout is only evaluated after a produce response, and only for batches
+// that need to be retried. Thus, a sink backoff may delay record timeout
+// slightly. As with lingering, this also should generally be a non-issue.
 func RecordTimeout(timeout time.Duration) ProducerOpt {
 	return producerOpt{func(cfg *cfg) { cfg.recordTimeout = timeout }}
 }
@@ -780,7 +791,7 @@ func FetchMaxWait(wait time.Duration) ConsumerOpt {
 
 // FetchMaxBytes sets the maximum amount of bytes a broker will try to
 // send during a fetch, overriding the default 50MiB. Note that brokers may not
-// obey this limit if it has messages larger than this limit. Also note that
+// obey this limit if it has records larger than this limit. Also note that
 // this client sends a fetch to each broker concurrently, meaning the client
 // will buffer up to <brokers * max bytes> worth of memory.
 //
