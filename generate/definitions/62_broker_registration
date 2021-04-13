@@ -4,7 +4,7 @@ BrokerRegistrationRequest => key 62, max version 0, flexible v0+
   // The broker ID.
   BrokerID: int32
   // The cluster ID of the broker process.
-  ClusterID: uuid
+  ClusterID: string
   // The incarnation ID of the broker process.
   IncarnationID: uuid
   // The listeners for this broker.

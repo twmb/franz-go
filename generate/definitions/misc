@@ -29,7 +29,7 @@ MessageV0 => not top level
   //
   // Key's are usually used for hashing the record to specific Kafka partitions.
   Key: nullable-bytes
-  // Value is  a blob of data. This field is the main "message" portion of a
+  // Value is a blob of data. This field is the main "message" portion of a
   // record.
   Value: nullable-bytes
 
@@ -106,7 +106,7 @@ Record => not top level
   //
   // Key's are usually used for hashing the record to specific Kafka partitions.
   Key: varint-bytes
-  // Value is  a blob of data. This field is the main "message" portion of a
+  // Value is a blob of data. This field is the main "message" portion of a
   // record.
   Value: varint-bytes
   // Headers are optional user provided metadata for records. Unlike normal

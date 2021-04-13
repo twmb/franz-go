@@ -49,7 +49,7 @@ type MessageV0 struct {
 	// Key's are usually used for hashing the record to specific Kafka partitions.
 	Key []byte
 
-	// Value is  a blob of data. This field is the main "message" portion of a
+	// Value is a blob of data. This field is the main "message" portion of a
 	// record.
 	Value []byte
 }
@@ -347,7 +347,7 @@ type Record struct {
 	// Key's are usually used for hashing the record to specific Kafka partitions.
 	Key []byte
 
-	// Value is  a blob of data. This field is the main "message" portion of a
+	// Value is a blob of data. This field is the main "message" portion of a
 	// record.
 	Value []byte
 
@@ -34234,7 +34234,7 @@ type BrokerRegistrationRequest struct {
 	BrokerID int32
 
 	// The cluster ID of the broker process.
-	ClusterID [2]uint64
+	ClusterID string
 
 	// The incarnation ID of the broker process.
 	IncarnationID [2]uint64
@@ -34278,7 +34278,11 @@ func (v *BrokerRegistrationRequest) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.ClusterID
-		dst = kbin.AppendUuid(dst, v)
+		if isFlexible {
+			dst = kbin.AppendCompactString(dst, v)
+		} else {
+			dst = kbin.AppendString(dst, v)
+		}
 	}
 	{
 		v := v.IncarnationID
@@ -34378,7 +34382,12 @@ func (v *BrokerRegistrationRequest) ReadFrom(src []byte) error {
 		s.BrokerID = v
 	}
 	{
-		v := b.Uuid()
+		var v string
+		if isFlexible {
+			v = b.CompactString()
+		} else {
+			v = b.String()
+		}
 		s.ClusterID = v
 	}
 	{

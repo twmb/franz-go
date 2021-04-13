@@ -696,7 +696,7 @@ var max260 = nextMax(max250, func(v listenerKeys) listenerKeys {
 	v[35].inc() // 2 describe log dirs KAFKA-9435 4f1e8331ff9 KIP-482 (same)
 
 	v = append(v,
-		k(zkBroker),                       // 48 describe client quotas KAFKA-7740 227a7322b KIP-546
+		k(zkBroker, rBroker),              // 48 describe client quotas KAFKA-7740 227a7322b KIP-546
 		k(zkBroker, rBroker, rController), // 49 alter client quotas (same)
 	)
 
@@ -804,6 +804,7 @@ var maxTip = nextMax(max270, func(v listenerKeys) listenerKeys {
 
 	// KAFKA-12248 a022072df3c8175950c03263d2bbf2e3ea7a7a5d KIP-500
 	// (commit mentions KIP-500, these are actually described in KIP-631)
+	// Broker registration was later updated in d9bb2ef596343da9402bff4903b129cff1f7c22b
 	v = append(v,
 		k(rController), // 62 broker registration
 		k(rController), // 63 broker heartbeat
