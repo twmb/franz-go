@@ -645,19 +645,19 @@ func (l *listOrEpochLoads) addLoad(t string, p int32, loadType listOrEpochLoadTy
 
 func (l *listOrEpochLoads) removeLoad(t string, p int32) {
 	for _, m := range []*offsetLoadMap{
-		&l.list,
-		&l.epoch,
+		l.list,
+		l.epoch,
 	} {
-		if *m == nil {
+		if m == nil {
 			continue
 		}
-		ps := (*m)[t]
+		ps := m[t]
 		if ps == nil {
 			continue
 		}
 		delete(ps, p)
 		if len(ps) == 0 {
-			delete(*m, t)
+			delete(m, t)
 		}
 	}
 }
@@ -1052,9 +1052,21 @@ func (s *consumerSession) handleListOrEpochResults(loaded loadedOffsets) {
 		}
 		s.listOrEpochMu.Unlock()
 
+		// We now add our immediate reloads back to the session. We are
+		// still in the context of the live session itself because this
+		// handling function is run with a session worker.
 		reloads.loadWithSession(s)
 		if !slowReloads.isEmpty() {
+			s.incWorker()
 			go func() {
+				// Before we dec our worker, we must add the slow
+				// reloads back into the session's waiting loads.
+				// Doing so allows a concurrent stopSession to
+				// track the waiting loads, whereas if we did not
+				// add things back to the session, we could abandon
+				// loading these offsets and have a stuck cursor.
+				defer s.decWorker()
+				defer slowReloads.loadWithSession(s)
 				after := time.NewTimer(time.Second)
 				defer after.Stop()
 				select {
@@ -1062,7 +1074,6 @@ func (s *consumerSession) handleListOrEpochResults(loaded loadedOffsets) {
 				case <-s.ctx.Done():
 					return
 				}
-				slowReloads.loadWithSession(s)
 			}()
 		}
 	}()
