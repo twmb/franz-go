@@ -724,14 +724,14 @@ start:
 
 	if broker == nil {
 		if tryLoad {
-			tries++
 			if loadErr := cl.fetchBrokerMetadata(ctx); loadErr != nil {
 				return nil, loadErr
 			}
 			// We will retry loading up to two times, if we load broker
 			// metadata twice successfully but neither load has the broker
 			// we are looking for, then we say our broker does not exist.
-			if tries <= 2 {
+			tries++
+			if tries < 2 {
 				goto start
 			}
 		}
