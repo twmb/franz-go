@@ -3,6 +3,7 @@ package kgo
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
 	"sync"
 	"sync/atomic"
@@ -78,8 +79,8 @@ func noPromise(*Record, error) {}
 // recorded a record properly.
 //
 // If the record is too large to fit in a batch on its own in a produce
-// request, the promise is called immediately before this function returns
-// with kerr.MessageToLarge.
+// request, the promise is called immediately before this function returns with
+// kerr.MessageToLarge.
 //
 // The context is used if the client currently has the max amount of buffered
 // records. If so, the client waits for some records to complete or for the
@@ -98,17 +99,17 @@ func noPromise(*Record, error) {}
 // will return ErrMaxBuffered.
 //
 // If the client is transactional and a transaction has not been begun, this
-// returns ErrNotInTransaction.
+// returns an error corresponding to not being in a transaction.
 //
-// Thus, there are only three possible errors: ErrNotInTransaction, and then
-// either a context error or ErrMaxBuffered.
+// Thus, there are only three possible errors: the non-transaction error, and
+// then either a context error or ErrMaxBuffered.
 func (cl *Client) Produce(
 	ctx context.Context,
 	r *Record,
 	promise func(*Record, error),
 ) error {
 	if cl.cfg.txnID != nil && atomic.LoadUint32(&cl.producer.producingTxn) != 1 {
-		return ErrNotInTransaction
+		return errNotInTransaction
 	}
 
 	if atomic.AddInt64(&cl.producer.bufferedRecords, 1) > cl.cfg.maxBufferedRecords {
@@ -191,13 +192,13 @@ func (cl *Client) doPartitionRecord(parts *topicPartitions, partsData *topicPart
 		mapping = partsData.partitions
 	}
 	if len(mapping) == 0 {
-		cl.finishRecordPromise(pr, ErrNoPartitionsAvailable)
+		cl.finishRecordPromise(pr, errors.New("unable to partition record due to no usable partitions"))
 		return
 	}
 
 	pick := parts.partitioner.Partition(pr.Record, len(mapping))
 	if pick < 0 || pick >= len(mapping) {
-		cl.finishRecordPromise(pr, ErrInvalidPartition)
+		cl.finishRecordPromise(pr, fmt.Errorf("invalid record partitioning choice of %d from %d available", pick, len(mapping)))
 		return
 	}
 
@@ -208,7 +209,7 @@ func (cl *Client) doPartitionRecord(parts *topicPartitions, partsData *topicPart
 		parts.partitioner.OnNewBatch()
 		pick = parts.partitioner.Partition(pr.Record, len(mapping))
 		if pick < 0 || pick >= len(mapping) {
-			cl.finishRecordPromise(pr, ErrInvalidPartition)
+			cl.finishRecordPromise(pr, fmt.Errorf("invalid record partitioning choice of %d from %d available", pick, len(mapping)))
 			return
 		}
 		partition = mapping[pick]
@@ -335,11 +336,11 @@ func (cl *Client) doInitProducerID(lastID int64, lastEpoch int16) (*producerID, 
 
 	resp, err := req.RequestWith(cl.ctx, cl)
 	if err != nil {
-		if err == ErrUnknownRequestKey || err == ErrBrokerTooOld {
+		if err == errUnknownRequestKey || err == errBrokerTooOld {
 			cl.cfg.logger.Log(LogLevelInfo, "unable to initialize a producer id because the broker is too old or the client is pinned to an old version, continuing without a producer id")
 			return &producerID{-1, -1, nil}, true
 		}
-		if err == ErrBrokerDead {
+		if err == errChosenBrokerDead {
 			select {
 			case <-cl.ctx.Done():
 				cl.cfg.logger.Log(LogLevelInfo, "producer id initialization failure due to dying client", "err", err)
@@ -483,9 +484,9 @@ func (cl *Client) waitUnknownTopic(
 		var ok bool
 		select {
 		case <-cl.ctx.Done():
-			err = ErrBrokerDead
+			err = errClientClosing
 		case <-after:
-			err = ErrRecordTimeout
+			err = errRecordTimeout
 		case err, ok = <-unknown.wait:
 			if !ok {
 				cl.cfg.logger.Log(LogLevelInfo, "done waiting for unknown topic, metadata was successful", "topic", topic)
@@ -494,7 +495,7 @@ func (cl *Client) waitUnknownTopic(
 			cl.cfg.logger.Log(LogLevelInfo, "unknown topic wait failed, retrying wait", "topic", topic, "err", err)
 			tries++
 			if int64(tries) >= cl.cfg.retries {
-				err = ErrNoPartitionsAvailable
+				err = fmt.Errorf("no partitions available after refreshing metadata %d times, last err: %w", tries, err)
 			}
 		}
 	}

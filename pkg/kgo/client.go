@@ -19,6 +19,7 @@ package kgo
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"hash/crc32"
 	"math/rand"
@@ -503,7 +504,12 @@ func (cl *Client) retriableBrokerFn(fn func() (*broker, error)) *retriable {
 }
 
 func (cl *Client) shouldRetry(tries int, err error) bool {
-	return err == ErrConnDead && tries < cl.cfg.brokerConnDeadRetries || (kerr.IsRetriable(err) || isRetriableBrokerErr(err)) && int64(tries) < cl.cfg.retries
+	switch err.(type) {
+	case *errDeadConn:
+		return tries < cl.cfg.brokerConnDeadRetries
+	default:
+		return (kerr.IsRetriable(err) || isRetriableBrokerErr(err)) && int64(tries) < cl.cfg.retries
+	}
 }
 
 type retriable struct {
@@ -916,7 +922,7 @@ func (cl *Client) handleCoordinatorReq(ctx context.Context, req kmsg.Request, ty
 	default:
 		// All group requests should be listed below, so if it isn't,
 		// then we do not know what this request is.
-		return shard(nil, req, nil, ErrClientTooOld)
+		return shard(nil, req, nil, errors.New("client is too old; this client does not know what to do with this request"))
 
 	/////////
 	// TXN // -- all txn reqs are simple
@@ -1044,7 +1050,7 @@ func (cl *Client) handleReqWithCoordinator(
 
 // Broker returns a handle to a specific broker to directly issue requests to.
 // Note that there is no guarantee that this broker exists; if it does not,
-// requests will fail with ErrUnknownBroker.
+// requests will fail with with an unknown broker error.
 func (cl *Client) Broker(id int) *Broker {
 	return &Broker{
 		id: int32(id),
@@ -1095,7 +1101,7 @@ type Broker struct {
 }
 
 // Request issues a request to a broker. If the broker does not exist in the
-// client, this returns ErrUnknownBroker. Requests are not retried.
+// client, this returns an unknown broker error. Requests are not retried.
 //
 // The passed context can be used to cancel a request and return early.
 // Note that if the request is not canceled before it is written to Kafka,
@@ -1126,13 +1132,13 @@ func (b *Broker) request(retry bool, ctx context.Context, req kmsg.Request) (kms
 
 		if !retry {
 			var br *broker
-			br, err = b.cl.brokerOrErr(ctx, b.id, ErrUnknownBroker)
+			br, err = b.cl.brokerOrErr(ctx, b.id, errUnknownBroker)
 			if err == nil {
 				resp, err = br.waitResp(ctx, req)
 			}
 		} else {
 			resp, err = b.cl.retriableBrokerFn(func() (*broker, error) {
-				return b.cl.brokerOrErr(ctx, b.id, ErrUnknownBroker)
+				return b.cl.brokerOrErr(ctx, b.id, errUnknownBroker)
 			}).Request(ctx, req)
 		}
 	}()
@@ -1299,7 +1305,7 @@ func (cl *Client) handleShardedReq(ctx context.Context, req kmsg.Request) ([]Res
 				broker := cl.broker()
 				var err error
 				if !myIssue.any {
-					broker, err = cl.brokerOrErr(ctx, myIssue.broker, ErrUnknownBroker)
+					broker, err = cl.brokerOrErr(ctx, myIssue.broker, errUnknownBroker)
 				}
 				if err != nil {
 					addShard(shard(nil, myIssue.req, nil, err)) // failure to load a broker is a failure to issue a request

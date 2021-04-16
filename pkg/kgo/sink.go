@@ -316,7 +316,7 @@ func (s *sink) doSequenced(
 		promise: promise,
 	}
 
-	br, err := s.cl.brokerOrErr(s.cl.ctx, s.nodeID, ErrUnknownBroker)
+	br, err := s.cl.brokerOrErr(s.cl.ctx, s.nodeID, errUnknownBroker)
 	if err != nil {
 		wait.err = err
 		close(wait.done)
@@ -461,7 +461,7 @@ func (s *sink) firstRespCheck(version int16) {
 // produce response.
 func (s *sink) handleReqClientErr(req *produceRequest, err error) {
 	switch {
-	case err == ErrBrokerDead:
+	case err == errChosenBrokerDead:
 		// A dead broker means the broker may have migrated, so we
 		// retry to force a metadata reload.
 		s.handleRetryBatches(req.batches)
@@ -1318,7 +1318,7 @@ func (rbs seqRecBatches) tryResetFailingBatchesWith(cfg *cfg, fn func(seqRecBatc
 				if cfg.disableIdempotency {
 					var err error
 					if batch.isTimedOut(cfg.recordTimeout) {
-						err = ErrRecordTimeout
+						err = errRecordTimeout
 					} else if batch.tries >= cfg.produceRetries {
 						err = errors.New("record failed after being retried too many times")
 					}

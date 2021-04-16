@@ -484,8 +484,8 @@ func RetryTimeout(t func(int16) time.Duration) Opt {
 // request, assuming that if a connection is cut *so many times* repeatedly,
 // then it is likely not the network but instead Kafka indicating a problem.
 //
-// The only error to trigger this is ErrConnDead, indicating Kafka closed the
-// connection (or the connection actually just died).
+// This can only be triggered by connection read or write failures, indicating
+// Kafka closed the connection (or the connection actually just died).
 //
 // This setting applies to all but internally generated fetch and produce
 // requests.

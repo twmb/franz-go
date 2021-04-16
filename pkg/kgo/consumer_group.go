@@ -1819,7 +1819,7 @@ func (cl *Client) BlockingCommitOffsets(
 
 	g, ok := cl.consumer.loadGroup()
 	if !ok {
-		onDone(new(kmsg.OffsetCommitRequest), new(kmsg.OffsetCommitResponse), ErrNotGroup)
+		onDone(new(kmsg.OffsetCommitRequest), new(kmsg.OffsetCommitResponse), errNotGroup)
 		close(done)
 		return
 	}
@@ -1899,7 +1899,7 @@ func (cl *Client) CommitOffsets(
 
 	g, ok := cl.consumer.loadGroup()
 	if !ok {
-		onDone(new(kmsg.OffsetCommitRequest), new(kmsg.OffsetCommitResponse), ErrNotGroup)
+		onDone(new(kmsg.OffsetCommitRequest), new(kmsg.OffsetCommitResponse), errNotGroup)
 		return
 	}
 	if len(uncommitted) == 0 {
@@ -1944,7 +1944,7 @@ func (g *groupConsumer) defaultRevoke(_ context.Context, _ map[string][]int32) {
 		// context will already be canceled.
 		g.cl.BlockingCommitOffsets(g.cl.ctx, un, func(_ *kmsg.OffsetCommitRequest, resp *kmsg.OffsetCommitResponse, err error) {
 			if err != nil {
-				if err != ErrNotGroup && err != context.Canceled {
+				if err != errNotGroup && err != context.Canceled {
 					g.cl.cfg.logger.Log(LogLevelError, "default revoke BlockingCommitOffsets failed", "err", err)
 				}
 				return

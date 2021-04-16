@@ -2,6 +2,7 @@ package kgo
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -255,13 +256,13 @@ func (s *GroupTransactSession) End(ctx context.Context, commit TransactionEndTry
 // is no transactional ID or if the client is already in a transaction.
 func (cl *Client) BeginTransaction() error {
 	if cl.cfg.txnID == nil {
-		return ErrNotTransactional
+		return errNotTransactional
 	}
 
 	cl.producer.txnMu.Lock()
 	defer cl.producer.txnMu.Unlock()
 	if cl.producer.inTxn {
-		return ErrAlreadyInTransaction
+		return errors.New("invalid attempt to begin a transaction while already in a transaction")
 	}
 	cl.producer.inTxn = true
 	atomic.StoreUint32(&cl.producer.producingTxn, 1) // allow produces for txns now
@@ -399,7 +400,7 @@ func (cl *Client) EndTransaction(ctx context.Context, commit TransactionEndTry) 
 	}
 
 	if !cl.producer.inTxn {
-		return ErrNotInTransaction
+		return errNotInTransaction
 	}
 	cl.producer.inTxn = false
 
@@ -417,7 +418,7 @@ func (cl *Client) EndTransaction(ctx context.Context, commit TransactionEndTry) 
 	id, epoch, err := cl.producerID()
 	if err != nil {
 		if commit {
-			return ErrCommitWithFatalID
+			return errors.New("cannot commit with a fatal producer id; retry with an abort")
 		}
 
 		switch err.(type) {
@@ -528,7 +529,7 @@ func (cl *Client) commitTransactionOffsets(
 	defer cl.cfg.logger.Log(LogLevelDebug, "left commitTransactionOffsets")
 
 	if cl.cfg.txnID == nil {
-		onDone(nil, nil, ErrNotTransactional)
+		onDone(nil, nil, errNotTransactional)
 		return
 	}
 
@@ -537,7 +538,7 @@ func (cl *Client) commitTransactionOffsets(
 	// to go through, even though that could cut off our commit.
 	cl.producer.txnMu.Lock()
 	if !cl.producer.inTxn {
-		onDone(nil, nil, ErrNotInTransaction)
+		onDone(nil, nil, errNotInTransaction)
 		cl.producer.txnMu.Unlock()
 		return
 	}
@@ -545,7 +546,7 @@ func (cl *Client) commitTransactionOffsets(
 
 	g, ok := cl.consumer.loadGroup()
 	if !ok {
-		onDone(new(kmsg.TxnOffsetCommitRequest), new(kmsg.TxnOffsetCommitResponse), ErrNotGroup)
+		onDone(new(kmsg.TxnOffsetCommitRequest), new(kmsg.TxnOffsetCommitResponse), errNotGroup)
 		return
 	}
 	if len(uncommitted) == 0 {

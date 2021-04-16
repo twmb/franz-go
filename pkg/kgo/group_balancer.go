@@ -1,6 +1,7 @@
 package kgo
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -158,7 +159,7 @@ func (g *groupConsumer) balanceGroup(proto string, kmembers []kmsg.JoinGroupResp
 		return nil, err
 	}
 	if len(members) == 0 {
-		return nil, ErrInvalidResp
+		return nil, errors.New("invalidly empty balance members")
 	}
 	sort.Slice(members, func(i, j int) bool {
 		return members[i].id.less(members[j].id) // guarantee sorted members
@@ -211,7 +212,7 @@ func (g *groupConsumer) balanceGroup(proto string, kmembers []kmsg.JoinGroupResp
 			return plan, nil
 		}
 	}
-	return nil, ErrInvalidResp
+	return nil, errors.New("unable to balance: none of our balances have a name equal to the balancer chosen for balancing")
 }
 
 // parseGroupMembers takes the raw data in from a join group response and

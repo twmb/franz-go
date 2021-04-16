@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -161,7 +162,7 @@ func (b *broker) stopForever() {
 	// sitting on the rlock will block our lock
 	go func() {
 		for pr := range b.reqs {
-			pr.promise(nil, ErrBrokerDead)
+			pr.promise(nil, errChosenBrokerDead)
 		}
 	}()
 
@@ -193,7 +194,7 @@ func (b *broker) do(
 	b.dieMu.RUnlock()
 
 	if dead {
-		promise(nil, ErrBrokerDead)
+		promise(nil, errChosenBrokerDead)
 	}
 }
 
@@ -234,7 +235,7 @@ func (b *broker) handleReqs() {
 
 		if int(req.Key()) > len(cxn.versions[:]) ||
 			b.cl.cfg.maxVersions != nil && !b.cl.cfg.maxVersions.HasKey(req.Key()) {
-			pr.promise(nil, ErrUnknownRequestKey)
+			pr.promise(nil, errUnknownRequestKey)
 			continue
 		}
 
@@ -242,7 +243,7 @@ func (b *broker) handleReqs() {
 		// versions. If the version for this request is negative, we
 		// know the broker cannot handle this request.
 		if cxn.versions[0] >= 0 && cxn.versions[req.Key()] < 0 {
-			pr.promise(nil, ErrBrokerTooOld)
+			pr.promise(nil, errBrokerTooOld)
 			continue
 		}
 
@@ -268,7 +269,7 @@ func (b *broker) handleReqs() {
 		if b.cl.cfg.minVersions != nil {
 			minVersion, minVersionExists := b.cl.cfg.minVersions.LookupMaxKeyVersion(req.Key())
 			if minVersionExists && version < minVersion {
-				pr.promise(nil, ErrBrokerTooOld)
+				pr.promise(nil, errBrokerTooOld)
 				continue
 			}
 		}
@@ -289,7 +290,7 @@ func (b *broker) handleReqs() {
 
 		// Juuuust before we issue the request, we check if it was
 		// canceled. We could have previously tried this request, which
-		// then failed and retried due to the error being ErrConnDead.
+		// then failed and retried due to the error being errDeadConn.
 		// Checking the context was canceled here ensures we do not
 		// loop. We could be more precise with error tracking, though.
 		select {
@@ -420,10 +421,7 @@ func (b *broker) connect(ctx context.Context) (net.Conn, error) {
 	})
 	if err != nil {
 		b.cl.cfg.logger.Log(LogLevelWarn, "unable to open connection to broker", "addr", b.addr, "broker", b.meta.NodeID, "err", err)
-		if _, ok := err.(net.Error); ok {
-			return nil, ErrNoDial
-		}
-		return nil, err
+		return nil, fmt.Errorf("unable to dial: %w", err)
 	} else {
 		b.cl.cfg.logger.Log(LogLevelDebug, "connection opened to broker", "addr", b.addr, "broker", b.meta.NodeID)
 	}
@@ -516,7 +514,7 @@ start:
 		return err
 	}
 	if len(rawResp) < 2 {
-		return ErrConnDead
+		return fmt.Errorf("invalid length %d short response from ApiVersions request", len(rawResp))
 	}
 
 	resp := req.ResponseKind().(*kmsg.ApiVersionsResponse)
@@ -528,7 +526,7 @@ start:
 	// Post, Kafka replies with all versions.
 	if rawResp[1] == 35 {
 		if maxVersion == 0 {
-			return ErrConnDead
+			return errors.New("Kafka replied with UNSUPPORTED_VERSION to an ApiVersions request of version 0")
 		}
 		srawResp := string(rawResp)
 		if srawResp == "\x00\x23\x00\x00\x00\x00" ||
@@ -543,10 +541,10 @@ start:
 	}
 
 	if err = resp.ReadFrom(rawResp); err != nil {
-		return ErrConnDead
+		return fmt.Errorf("unable to read ApiVersions response: %w", err)
 	}
 	if len(resp.ApiKeys) == 0 {
-		return ErrConnDead
+		return errors.New("ApiVersions response invalidly contained no ApiKeys")
 	}
 
 	for _, key := range resp.ApiKeys {
@@ -645,7 +643,7 @@ func (cxn *brokerCxn) doSasl(authenticate bool) error {
 			cxn.cl.bufPool.put(buf)
 
 			if err != nil {
-				return ErrConnDead
+				return err
 			}
 			if !done {
 				if _, challenge, err, _, _ = cxn.readConn(context.Background(), rt, time.Now()); err != nil {
@@ -726,7 +724,7 @@ func (cxn *brokerCxn) writeRequest(ctx context.Context, enqueuedForWritingAt tim
 				return 0, errClientClosing
 			case <-cxn.deadCh:
 				after.Stop()
-				return 0, ErrConnDead
+				return 0, errChosenBrokerDead
 			}
 		}
 	}
@@ -752,7 +750,7 @@ func (cxn *brokerCxn) writeRequest(ctx context.Context, enqueuedForWritingAt tim
 	}
 
 	if writeErr != nil {
-		return 0, ErrConnDead
+		return 0, writeErr
 	}
 	id := cxn.corrID
 	cxn.corrID++
@@ -777,6 +775,9 @@ func (cxn *brokerCxn) writeConn(ctx context.Context, buf []byte, timeout time.Du
 	}()
 	select {
 	case <-writeDone:
+		if writeErr != nil {
+			writeErr = &errDeadConn{writeErr}
+		}
 	case <-cxn.cl.ctx.Done():
 		cxn.conn.SetWriteDeadline(time.Now())
 		<-writeDone
@@ -811,7 +812,7 @@ func (cxn *brokerCxn) readConn(ctx context.Context, timeout time.Duration, enque
 			readWait = readStart.Sub(enqueuedForReadingAt)
 		}()
 		if nread, err = io.ReadFull(cxn.conn, sizeBuf); err != nil {
-			err = ErrConnDead
+			err = &errDeadConn{err}
 			return
 		}
 		var size int32
@@ -824,7 +825,7 @@ func (cxn *brokerCxn) readConn(ctx context.Context, timeout time.Duration, enque
 		nread += nread2
 		buf = buf[:nread2]
 		if err != nil {
-			err = ErrConnDead
+			err = &errDeadConn{err}
 			return
 		}
 	}()
@@ -851,7 +852,7 @@ func (cxn *brokerCxn) readConn(ctx context.Context, timeout time.Duration, enque
 func (cxn *brokerCxn) parseReadSize(sizeBuf []byte) (int32, error) {
 	size := int32(binary.BigEndian.Uint32(sizeBuf))
 	if size < 0 {
-		return 0, ErrInvalidRespSize
+		return 0, fmt.Errorf("invalid negative response size %d", size)
 	}
 	if maxSize := cxn.b.cl.cfg.maxBrokerReadBytes; size > maxSize {
 		// A TLS alert is 21, and a TLS alert has the version
@@ -904,7 +905,7 @@ func (cxn *brokerCxn) readResponse(ctx context.Context, timeout time.Duration, e
 	}
 	gotID := int32(binary.BigEndian.Uint32(buf))
 	if gotID != corrID {
-		return nil, ErrCorrelationIDMismatch
+		return nil, errCorrelationIDMismatch
 	}
 	// If the response header is flexible, we skip the tags at the end of
 	// it. They are currently unused.
@@ -943,7 +944,7 @@ func (cxn *brokerCxn) die() {
 
 	go func() {
 		for pr := range cxn.resps {
-			pr.promise(nil, ErrConnDead)
+			pr.promise(nil, errChosenBrokerDead)
 		}
 	}()
 
@@ -967,7 +968,7 @@ func (cxn *brokerCxn) waitResp(pr promisedResp) {
 	cxn.dieMu.RUnlock()
 
 	if dead {
-		pr.promise(nil, ErrConnDead)
+		pr.promise(nil, errChosenBrokerDead)
 	}
 }
 
@@ -1019,7 +1020,7 @@ func (cxn *brokerCxn) discard() {
 		go func() {
 			defer close(readDone)
 			if nread, err = io.ReadFull(cxn.conn, discardBuf[:4]); err != nil {
-				err = ErrConnDead
+				err = &errDeadConn{err}
 				return
 			}
 			deadlineMu.Lock()
@@ -1046,7 +1047,7 @@ func (cxn *brokerCxn) discard() {
 				size -= int32(nread2) // nread2 max is 128
 			}
 			if err != nil {
-				err = ErrConnDead
+				err = &errDeadConn{err}
 			}
 		}()
 

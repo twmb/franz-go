@@ -520,7 +520,7 @@ func (s *source) fetch(consumerSession *consumerSession, doneFetch chan<- struct
 	)
 	defer cancel()
 
-	br, err := s.cl.brokerOrErr(ctx, s.nodeID, ErrUnknownBroker)
+	br, err := s.cl.brokerOrErr(ctx, s.nodeID, errUnknownBroker)
 	if err != nil {
 		close(requested)
 	} else {

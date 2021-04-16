@@ -130,7 +130,7 @@ func (c *testConsumer) etl(etlsBeforeQuit int) {
 		// we have etlsBeforeQuit, we do _not_ commit on leave.
 		//
 		// However, we still want to flush to avoid an unnecessary
-		// ErrBrokerDead error for unfinished produces.
+		// dead broker errors for unfinished produces.
 		if err := cl.Flush(context.Background()); err != nil {
 			c.errCh <- fmt.Errorf("unable to flush: %v", err)
 		}
