@@ -1086,7 +1086,7 @@ func (s *consumerSession) handleListOrEpochResults(loaded loadedOffsets) {
 			use()
 
 		default: // from ErrorCode in a response
-			if !kerr.IsRetriable(load.err) { // non-retriable response error; signal such in a response
+			if !kerr.IsRetriable(load.err) && !isRetriableBrokerErr(load.err) { // non-retriable response error; signal such in a response
 				s.c.addFakeReadyForDraining(load.topic, load.partition, load.err)
 				slowReloads.addLoad(load.topic, load.partition, loaded.loadType, load.request)
 				continue
