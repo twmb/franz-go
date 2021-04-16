@@ -225,7 +225,7 @@ func (s *GroupTransactSession) End(ctx context.Context, commit TransactionEndTry
 			"tried_commit", willTryCommit,
 			"commit_err", endTxnErr,
 			"state_precommit", precommit,
-			"state_current_commit", currentCommit,
+			"state_currently_committed", currentCommit,
 		)
 		s.cl.SetOffsets(currentCommit)
 	} else if willTryCommit && endTxnErr == nil {
@@ -296,6 +296,9 @@ func (cl *Client) AbortBufferedRecords(ctx context.Context) error {
 	// thus they will not begin any AddPartitionsToTxn request. We must
 	// now wait for any req currently built to be done being issued.
 
+	cl.cfg.logger.Log(LogLevelInfo, "aborting buffered records")
+	defer cl.cfg.logger.Log(LogLevelDebug, "aborted buffered records")
+
 	cl.failBufferedRecords(ErrAborting)
 
 	// Now, we wait for any active drain to stop. We must wait for all
@@ -342,6 +345,7 @@ func (cl *Client) AbortBufferedRecords(ctx context.Context) error {
 // fatal error, meaning it is likely that if the client was fenced, then this
 // reset will do nothing.
 func (cl *Client) ResetProducerID() bool {
+	cl.cfg.logger.Log(LogLevelInfo, "resetting producer id")
 	id, epoch, err := cl.producerID()
 	if err == nil {
 		cl.failProducerID(id, epoch, errReloadProducerID)

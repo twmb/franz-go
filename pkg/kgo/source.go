@@ -624,15 +624,15 @@ func (s *source) fetch(consumerSession *consumerSession, doneFetch chan<- struct
 			// If the epoch was zero, the broker did not even
 			// establish a session for us (and thus is maxed on
 			// sessions). We stop trying.
-			s.cl.cfg.logger.Log(LogLevelInfo, "session failed with SessionIDNotFound while trying to establish a session; broker likely maxed on sessions; continuing on without using sessions")
+			s.cl.cfg.logger.Log(LogLevelInfo, "session failed with SessionIDNotFound while trying to establish a session; broker likely maxed on sessions; continuing on without using sessions", "broker", s.nodeID)
 			s.session.kill()
 		} else {
-			s.cl.cfg.logger.Log(LogLevelInfo, "received SessionIDNotFound from our in use session, our session was likely evicted; resetting session")
+			s.cl.cfg.logger.Log(LogLevelInfo, "received SessionIDNotFound from our in use session, our session was likely evicted; resetting session", "broker", s.nodeID)
 			s.session.reset()
 		}
 		return
 	case kerr.InvalidFetchSessionEpoch:
-		s.cl.cfg.logger.Log(LogLevelInfo, "resetting fetch session", "err", err)
+		s.cl.cfg.logger.Log(LogLevelInfo, "resetting fetch session", "broker", s.nodeID, "err", err)
 		s.session.reset()
 		return
 	}

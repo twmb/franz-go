@@ -1,9 +1,11 @@
 package kgo
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"hash/crc32"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -260,7 +262,7 @@ func (s *sink) produce(sem <-chan struct{}) bool {
 	id, epoch, err := s.cl.producerID()
 	if err != nil {
 		if err != errClientClosing {
-			s.cl.cfg.logger.Log(LogLevelError, "fatal InitProducerID error, failing all buffered records", "err", err)
+			s.cl.cfg.logger.Log(LogLevelError, "fatal InitProducerID error, failing all buffered records", "broker", s.nodeID, "err", err)
 		}
 		s.cl.failBufferedRecords(err)
 		return false
@@ -283,7 +285,7 @@ func (s *sink) produce(sem <-chan struct{}) bool {
 		// it was set on, since producer id recovery resets the flag.
 		if err := s.doTxnReq(req, txnReq); err != nil {
 			s.cl.failProducerID(id, epoch, err)
-			s.cl.cfg.logger.Log(LogLevelError, "fatal AddPartitionsToTxn error, failing all buffered records (it is possible the client can recover after EndTransaction)", "err", err)
+			s.cl.cfg.logger.Log(LogLevelError, "fatal AddPartitionsToTxn error, failing all buffered records (it is possible the client can recover after EndTransaction)", "broker", s.nodeID, "err", err)
 			s.cl.failBufferedRecords(err)
 			return false
 		}
@@ -359,20 +361,20 @@ func (s *sink) doTxnReq(
 ) error {
 start:
 	err := s.cl.doWithConcurrentTransactions("AddPartitionsToTxn", func() error {
-		return s.cl.issueTxnReq(req, txnReq)
+		return s.issueTxnReq(req, txnReq)
 	})
 	if isRetriableBrokerErr(err) {
-		s.cl.cfg.logger.Log(LogLevelWarn, "AddPartitionsToTxn repeatedly failed, last failure is retriable broker err, retrying issue", "err", err)
+		s.cl.cfg.logger.Log(LogLevelWarn, "AddPartitionsToTxn repeatedly failed, last failure is retriable broker err, retrying issue", "broker", s.nodeID, "err", err)
 		goto start
 	}
 	return err
 }
 
-func (cl *Client) issueTxnReq(
+func (s *sink) issueTxnReq(
 	req *produceRequest,
 	txnReq *kmsg.AddPartitionsToTxnRequest,
 ) error {
-	resp, err := txnReq.RequestWith(cl.ctx, cl)
+	resp, err := txnReq.RequestWith(s.cl.ctx, s.cl)
 	if err != nil {
 		return err
 	}
@@ -380,7 +382,7 @@ func (cl *Client) issueTxnReq(
 	for _, topic := range resp.Topics {
 		topicBatches, ok := req.batches[topic.Topic]
 		if !ok {
-			cl.cfg.logger.Log(LogLevelError, "Kafka replied with topic in AddPartitionsToTxnResponse that was not in request", "topic", topic.Topic)
+			s.cl.cfg.logger.Log(LogLevelError, "Kafka replied with topic in AddPartitionsToTxnResponse that was not in request", "broker", s.nodeID, "topic", topic.Topic)
 			continue
 		}
 		for _, partition := range topic.Partitions {
@@ -394,7 +396,7 @@ func (cl *Client) issueTxnReq(
 
 				batch, ok := topicBatches[partition.Partition]
 				if !ok {
-					cl.cfg.logger.Log(LogLevelError, "Kafka replied with partition in AddPartitionsToTxnResponse that was not in request", "topic", topic.Topic, "partition", partition.Partition)
+					s.cl.cfg.logger.Log(LogLevelError, "Kafka replied with partition in AddPartitionsToTxnResponse that was not in request", "broker", s.nodeID, "topic", topic.Topic, "partition", partition.Partition)
 					continue
 				}
 
@@ -468,7 +470,7 @@ func (s *sink) handleReqClientErr(req *produceRequest, err error) {
 		s.cl.failBufferedRecords(errClientClosing)
 
 	default:
-		s.cl.cfg.logger.Log(LogLevelWarn, "random error while producing, requeueing unattempted request", "err", err)
+		s.cl.cfg.logger.Log(LogLevelWarn, "random error while producing, requeueing unattempted request", "broker", s.nodeID, "err", err)
 		fallthrough
 
 	case isRetriableBrokerErr(err):
@@ -484,17 +486,45 @@ func (s *sink) handleReqResp(req *produceRequest, resp kmsg.Response, err error)
 	s.firstRespCheck(req.version)
 	atomic.StoreUint32(&s.consecutiveFailures, 0)
 
+	var b *bytes.Buffer
+	debug := s.cl.cfg.logger.Level() >= LogLevelDebug
+
+	if debug {
+		b = bytes.NewBuffer(make([]byte, 0, 128))
+		defer func() {
+			update := b.String()
+			update = strings.TrimSuffix(update, ", ")
+			s.cl.cfg.logger.Log(LogLevelDebug, "produced", "broker", s.nodeID, "to", update)
+		}()
+	}
+
 	// If we have no acks, we will have no response. The following block is
 	// basically an extremely condensed version of everything that follows.
 	// We *do* retry on error even with no acks, because an error would
 	// mean the write itself failed.
 	if req.acks == 0 {
-		for _, partitions := range req.batches {
+		if debug {
+			fmt.Fprintf(b, "noack ")
+		}
+		for topic, partitions := range req.batches {
+			if debug {
+				fmt.Fprintf(b, "%s[", topic)
+			}
 			for partition, batch := range partitions {
-				if !batch.isFirstBatchInRecordBuf() {
-					continue
+				batch.owner.mu.Lock()
+				if batch.isOwnersFirstBatch() {
+					s.cl.finishBatch(batch.recBatch, req.producerID, req.producerEpoch, partition, 0, nil)
+					fmt.Fprintf(b, "%d{%d=>%d}, ", partition, 0, len(batch.records))
+				} else {
+					fmt.Fprintf(b, "%d{skipped}, ", partition)
 				}
-				s.cl.finishBatch(batch.recBatch, req.producerID, req.producerEpoch, partition, 0, nil)
+				batch.owner.mu.Unlock()
+			}
+			if debug {
+				if bytes.HasSuffix(b.Bytes(), []byte(", ")) {
+					b.Truncate(b.Len() - 2)
+				}
+				b.WriteString("], ")
 			}
 		}
 		return
@@ -507,138 +537,43 @@ func (s *sink) handleReqResp(req *produceRequest, resp kmsg.Response, err error)
 		topic := rTopic.Topic
 		partitions, ok := req.batches[topic]
 		if !ok {
+			s.cl.cfg.logger.Log(LogLevelError, "Kafka erroneously replied with topic in produce request that we did not produce to", "broker", s.nodeID, "topic", topic)
 			continue // should not hit this
+		}
+
+		if debug {
+			fmt.Fprintf(b, "%s[", topic)
 		}
 
 		for _, rPartition := range rTopic.Partitions {
 			partition := rPartition.Partition
 			batch, ok := partitions[partition]
 			if !ok {
+				s.cl.cfg.logger.Log(LogLevelError, "Kafka erroneously replied with partition in produce request that we did not produce to", "broker", s.nodeID, "topic", rTopic.Topic, "partition", partition)
 				continue // should not hit this
 			}
 			delete(partitions, partition)
 
-			// We only ever operate on the first batch in a record
-			// buf. Batches work sequentially; if this is not the
-			// first batch then an error happened and this later
-			// batch is no longer a part of the sequential chain.
-			//
-			// If the batch is a success, everything is golden and
-			// we do not need to worry about the buffer migrating
-			// sinks.
-			//
-			// If the batch is a failure and needs retrying, the
-			// retry function checks for migration problems.
-			if !batch.isFirstBatchInRecordBuf() {
-				continue
-			}
-
-			err := kerr.ErrorForCode(rPartition.ErrorCode)
-			switch {
-			case kerr.IsRetriable(err) &&
-				err != kerr.CorruptMessage &&
-				batch.tries < s.cl.cfg.produceRetries:
+			retry := s.handleReqRespBatch(
+				b,
+				topic,
+				partition,
+				batch,
+				req.producerID,
+				req.producerEpoch,
+				rPartition.BaseOffset,
+				rPartition.ErrorCode,
+			)
+			if retry {
 				reqRetry.addSeqBatch(topic, partition, batch)
-
-			case err == kerr.OutOfOrderSequenceNumber,
-				err == kerr.UnknownProducerID,
-				err == kerr.InvalidProducerIDMapping,
-				err == kerr.InvalidProducerEpoch:
-
-				// OOOSN always means data loss 1.0.0+ and is ambiguous prior.
-				// We assume the worst and only continue if requested.
-				//
-				// UnknownProducerID was introduced to allow some form of safe
-				// handling, but KIP-360 demonstrated that resetting sequence
-				// numbers is fundamentally unsafe, so we treat it like OOOSN.
-				//
-				// InvalidMapping is similar to UnknownProducerID, but occurs
-				// when the txnal coordinator timed out our transaction.
-				//
-				// 2.5.0
-				// =====
-				// 2.5.0 introduced some behavior to potentially safely reset
-				// the sequence numbers by bumping an epoch (see KIP-360).
-				//
-				// For the idempotent producer, the solution is to fail all
-				// buffered records and then let the client user reset things
-				// with the understanding that they cannot guard against
-				// potential dups / reordering at that point. Realistically,
-				// that's no better than a config knob that allows the user
-				// to continue (our stopOnDataLoss flag), so for the idempotent
-				// producer, if stopOnDataLoss is false, we just continue.
-				//
-				// For the transactional producer, we always fail the producerID.
-				// EndTransaction will trigger recovery if possible.
-				//
-				// 2.7.0
-				// =====
-				// InvalidProducerEpoch became retriable in 2.7.0. Prior, it
-				// was ambiguous (timeout? fenced?). In 2.7.0, InvalidProducerEpoch
-				// is only returned on produce, and then we can recover on other
-				// txn coordinator requests, which have PRODUCER_FENCED vs
-				// TRANSACTION_TIMED_OUT.
-
-				if s.cl.cfg.txnID != nil || s.cl.cfg.stopOnDataLoss {
-					s.cl.cfg.logger.Log(LogLevelInfo, "batch errored, failing the producer ID",
-						"topic", topic,
-						"partition", partition,
-						"producer_id", req.producerID,
-						"producer_epoch", req.producerEpoch,
-						"err", err,
-					)
-					s.cl.failProducerID(req.producerID, req.producerEpoch, err)
-					s.cl.finishBatch(batch.recBatch, req.producerID, req.producerEpoch, partition, rPartition.BaseOffset, err)
-					continue
-				}
-				if s.cl.cfg.onDataLoss != nil {
-					s.cl.cfg.onDataLoss(topic, partition)
-				}
-
-				// For OOOSN, and UnknownProducerID
-				//
-				// The only recovery is to fail the producer ID, which ensures
-				// that all batches reset sequence numbers and use a new producer
-				// ID on the next batch.
-				//
-				// For InvalidProducerIDMapping && InvalidProducerEpoch,
-				//
-				// We should not be here, since this error occurs in the
-				// context of transactions, which are caught above.
-				s.cl.cfg.logger.Log(LogLevelInfo, fmt.Sprintf("batch errored with %s, failing the producer ID and resetting all sequence numbers", err.(*kerr.Error).Message),
-					"topic", topic,
-					"partition", partition,
-					"producer_id", req.producerID,
-					"producer_epoch", req.producerEpoch,
-					"err", err,
-				)
-
-				// After we fail here, any new produce (even new ones
-				// happening concurrent with this function) will load
-				// a new epoch-bumped producer ID and all first-batches
-				// will reset sequence numbers appropriately.
-				s.cl.failProducerID(req.producerID, req.producerEpoch, errReloadProducerID)
-				reqRetry.addSeqBatch(topic, partition, batch)
-
-			case err == kerr.DuplicateSequenceNumber: // ignorable, but we should not get
-				s.cl.cfg.logger.Log(LogLevelInfo, "received unexpected duplicate sequence number, ignoring and treating batch as successful",
-					"topic", topic,
-					"partition", partition,
-				)
-				err = nil
-				fallthrough
-			default:
-				if err != nil {
-					s.cl.cfg.logger.Log(LogLevelInfo, "batch in a produce request failed",
-						"topic", topic,
-						"partition", partition,
-						"err", err,
-						"err_is_retriable", kerr.IsRetriable(err),
-						"max_retries_reached", batch.tries == s.cl.cfg.produceRetries,
-					)
-				}
-				s.cl.finishBatch(batch.recBatch, req.producerID, req.producerEpoch, partition, rPartition.BaseOffset, err)
 			}
+		}
+
+		if debug {
+			if bytes.HasSuffix(b.Bytes(), []byte(", ")) {
+				b.Truncate(b.Len() - 2)
+			}
+			b.WriteString("], ")
 		}
 
 		if len(partitions) == 0 {
@@ -647,12 +582,186 @@ func (s *sink) handleReqResp(req *produceRequest, resp kmsg.Response, err error)
 	}
 
 	if len(req.batches) > 0 {
-		s.cl.cfg.logger.Log(LogLevelError, "Kafka did not reply to all topics / partitions in the produce request! reenqueuing missing partitions")
+		s.cl.cfg.logger.Log(LogLevelError, "Kafka did not reply to all topics / partitions in the produce request! reenqueuing missing partitions", "broker", s.nodeID)
 		s.handleRetryBatches(req.batches)
 	}
 	if len(reqRetry) > 0 {
 		s.handleRetryBatches(reqRetry)
 	}
+}
+
+func (s *sink) handleReqRespBatch(
+	b *bytes.Buffer,
+	topic string,
+	partition int32,
+	batch seqRecBatch,
+	producerID int64,
+	producerEpoch int16,
+	baseOffset int64,
+	errorCode int16,
+) (retry bool) {
+	batch.owner.mu.Lock()
+	defer batch.owner.mu.Unlock()
+
+	nrec := len(batch.records)
+
+	debug := b != nil
+	if debug {
+		fmt.Fprintf(b, "%d{", partition)
+	}
+
+	// We only ever operate on the first batch in a record buf. Batches
+	// work sequentially; if this is not the first batch then an error
+	// happened and this later batch is no longer a part of a seq chain.
+	if !batch.isOwnersFirstBatch() {
+		if debug {
+			if err := kerr.ErrorForCode(errorCode); err == nil {
+				if len(batch.records) > 0 {
+					fmt.Fprintf(b, "skipped@%d=>%d}, ", baseOffset, baseOffset+int64(nrec))
+				} else {
+					fmt.Fprintf(b, "skipped@%d}, ", baseOffset)
+				}
+			} else {
+				if len(batch.records) > 0 {
+					fmt.Fprintf(b, "skipped@%d,%d(%s)}, ", baseOffset, nrec, err)
+				} else {
+					fmt.Fprintf(b, "skipped@%d(%s)}, ", baseOffset, err)
+				}
+			}
+		}
+		return false
+	}
+
+	err := kerr.ErrorForCode(errorCode)
+	switch {
+	case kerr.IsRetriable(err) &&
+		err != kerr.CorruptMessage &&
+		batch.tries < s.cl.cfg.produceRetries:
+
+		if debug {
+			fmt.Fprintf(b, "retrying@%d,%d(%s)}, ", baseOffset, nrec, err)
+		}
+		return true
+
+	case err == kerr.OutOfOrderSequenceNumber,
+		err == kerr.UnknownProducerID,
+		err == kerr.InvalidProducerIDMapping,
+		err == kerr.InvalidProducerEpoch:
+
+		// OOOSN always means data loss 1.0.0+ and is ambiguous prior.
+		// We assume the worst and only continue if requested.
+		//
+		// UnknownProducerID was introduced to allow some form of safe
+		// handling, but KIP-360 demonstrated that resetting sequence
+		// numbers is fundamentally unsafe, so we treat it like OOOSN.
+		//
+		// InvalidMapping is similar to UnknownProducerID, but occurs
+		// when the txnal coordinator timed out our transaction.
+		//
+		// 2.5.0
+		// =====
+		// 2.5.0 introduced some behavior to potentially safely reset
+		// the sequence numbers by bumping an epoch (see KIP-360).
+		//
+		// For the idempotent producer, the solution is to fail all
+		// buffered records and then let the client user reset things
+		// with the understanding that they cannot guard against
+		// potential dups / reordering at that point. Realistically,
+		// that's no better than a config knob that allows the user
+		// to continue (our stopOnDataLoss flag), so for the idempotent
+		// producer, if stopOnDataLoss is false, we just continue.
+		//
+		// For the transactional producer, we always fail the producerID.
+		// EndTransaction will trigger recovery if possible.
+		//
+		// 2.7.0
+		// =====
+		// InvalidProducerEpoch became retriable in 2.7.0. Prior, it
+		// was ambiguous (timeout? fenced?). Now, InvalidProducerEpoch
+		// is only returned on produce, and then we can recover on other
+		// txn coordinator requests, which have PRODUCER_FENCED vs
+		// TRANSACTION_TIMED_OUT.
+
+		if s.cl.cfg.txnID != nil || s.cl.cfg.stopOnDataLoss {
+			s.cl.cfg.logger.Log(LogLevelInfo, "batch errored, failing the producer ID",
+				"broker", s.nodeID,
+				"topic", topic,
+				"partition", partition,
+				"producer_id", producerID,
+				"producer_epoch", producerEpoch,
+				"err", err,
+			)
+			s.cl.failProducerID(producerID, producerEpoch, err)
+
+			s.cl.finishBatch(batch.recBatch, producerID, producerEpoch, partition, baseOffset, err)
+			if debug {
+				fmt.Fprintf(b, "fatal@%d,%d(%s)}, ", baseOffset, len(batch.records), err)
+			}
+			return false
+		}
+		if s.cl.cfg.onDataLoss != nil {
+			s.cl.cfg.onDataLoss(topic, partition)
+		}
+
+		// For OOOSN, and UnknownProducerID
+		//
+		// The only recovery is to fail the producer ID, which ensures
+		// that all batches reset sequence numbers and use a new producer
+		// ID on the next batch.
+		//
+		// For InvalidProducerIDMapping && InvalidProducerEpoch,
+		//
+		// We should not be here, since this error occurs in the
+		// context of transactions, which are caught above.
+		s.cl.cfg.logger.Log(LogLevelInfo, fmt.Sprintf("batch errored with %s, failing the producer ID and resetting all sequence numbers", err.(*kerr.Error).Message),
+			"broker", s.nodeID,
+			"topic", topic,
+			"partition", partition,
+			"producer_id", producerID,
+			"producer_epoch", producerEpoch,
+			"err", err,
+		)
+
+		// After we fail here, any new produce (even new ones
+		// happening concurrent with this function) will load
+		// a new epoch-bumped producer ID and all first-batches
+		// will reset sequence numbers appropriately.
+		s.cl.failProducerID(producerID, producerEpoch, errReloadProducerID)
+		if debug {
+			fmt.Fprintf(b, "resetting@%d,%d(%s)}, ", baseOffset, len(batch.records), err)
+		}
+		return true
+
+	case err == kerr.DuplicateSequenceNumber: // ignorable, but we should not get
+		s.cl.cfg.logger.Log(LogLevelInfo, "received unexpected duplicate sequence number, ignoring and treating batch as successful",
+			"broker", s.nodeID,
+			"topic", topic,
+			"partition", partition,
+		)
+		err = nil
+		fallthrough
+	default:
+		if err != nil {
+			s.cl.cfg.logger.Log(LogLevelInfo, "batch in a produce request failed",
+				"broker", s.nodeID,
+				"topic", topic,
+				"partition", partition,
+				"err", err,
+				"err_is_retriable", kerr.IsRetriable(err),
+				"max_retries_reached", batch.tries == s.cl.cfg.produceRetries,
+			)
+		} else {
+		}
+		s.cl.finishBatch(batch.recBatch, producerID, producerEpoch, partition, baseOffset, err)
+		if debug {
+			if err != nil {
+				fmt.Fprintf(b, "err@%d,%d(%s)}, ", baseOffset, len(batch.records), err)
+			} else {
+				fmt.Fprintf(b, "%d=>%d}, ", baseOffset, baseOffset+int64(len(batch.records)))
+			}
+		}
+	}
+	return false // no retry
 }
 
 // finishBatch removes a batch from its owning record buffer and finishes all
@@ -662,12 +771,6 @@ func (s *sink) handleReqResp(req *produceRequest, resp kmsg.Response, err error)
 // finishing based off the status of an inflight req from the original sink.
 func (cl *Client) finishBatch(batch *recBatch, producerID int64, producerEpoch int16, partition int32, baseOffset int64, err error) {
 	recBuf := batch.owner
-	recBuf.mu.Lock()
-	defer recBuf.mu.Unlock()
-
-	if !batch.lockedIsFirstBatch() { // batch could have been aborted/failed before we got here
-		return
-	}
 
 	if err != nil {
 		// We know that Kafka replied this batch is a failure. We can
@@ -684,7 +787,12 @@ func (cl *Client) finishBatch(batch *recBatch, producerID int64, producerEpoch i
 	recBuf.batches = recBuf.batches[1:]
 	recBuf.batchDrainIdx--
 
-	for i, pnr := range batch.records {
+	batch.mu.Lock()
+	records, attrs := batch.records, batch.attrs
+	batch.records = nil
+	batch.mu.Unlock()
+
+	for i, pnr := range records {
 		pnr.Offset = baseOffset + int64(i)
 		pnr.Partition = partition
 		pnr.ProducerID = producerID
@@ -695,7 +803,7 @@ func (cl *Client) finishBatch(batch *recBatch, producerID int64, producerEpoch i
 		// corresponding to our own RecordAttr's bit 8 being no
 		// timestamp type. Thus, we can directly convert the batch
 		// attrs to our own RecordAttrs.
-		pnr.Attrs = RecordAttrs{uint8(batch.attrs)}
+		pnr.Attrs = RecordAttrs{uint8(attrs)}
 
 		cl.finishRecordPromise(pnr.promisedRec, err)
 	}
@@ -949,7 +1057,7 @@ func (recBuf *recBuf) bumpRepeatedLoadErr(err error) {
 	if !recBuf.cl.idempotent() && (batch0.tries > recBuf.cl.cfg.produceRetries || !kerr.IsRetriable(err)) {
 		recBuf.failAllRecords(err)
 	}
-	recBuf.cl.cfg.logger.Log(LogLevelWarn, "produce partition load error, unable to produce on this partition", "topic", recBuf.topic, "partition", recBuf.partition, "err", err)
+	recBuf.cl.cfg.logger.Log(LogLevelWarn, "produce partition load error, unable to produce on this partition", "broker", recBuf.sink.nodeID, "topic", recBuf.topic, "partition", recBuf.partition, "err", err)
 }
 
 // failAllRecords fails all buffered records in this recBuf.
@@ -1076,21 +1184,11 @@ func (recBuf *recBuf) newRecordBatch() *recBatch {
 	}
 }
 
-// lockedIsFirstBatch returns if the batch in a recBatch is the first batch in
+// isOwnersFirstBatch returns if the batch in a recBatch is the first batch in
 // a records. We only ever want to update batch / buffer logic if the batch is
 // the first in the buffer.
-func (b *recBatch) lockedIsFirstBatch() bool {
+func (b *recBatch) isOwnersFirstBatch() bool {
 	return len(b.owner.batches) > 0 && b.owner.batches[0] == b
-}
-
-// The above, but inside the owning recBuf mutex. We only call this in
-// handleReqResp, which avoids TOCTOU by checking lockedIsFirstBatch again
-// later if necessary.
-func (b *recBatch) isFirstBatchInRecordBuf() bool {
-	b.owner.mu.Lock()
-	defer b.owner.mu.Unlock()
-
-	return b.lockedIsFirstBatch()
 }
 
 // Returns whether the first record in a batch is past the limit.
@@ -1216,8 +1314,7 @@ func (rbs seqRecBatches) tryResetFailingBatchesWith(cfg *cfg, fn func(seqRecBatc
 	for _, partitions := range rbs {
 		for _, batch := range partitions {
 			batch.owner.mu.Lock()
-			if batch.lockedIsFirstBatch() {
-
+			if batch.isOwnersFirstBatch() {
 				if cfg.disableIdempotency {
 					var err error
 					if batch.isTimedOut(cfg.recordTimeout) {
@@ -1231,7 +1328,6 @@ func (rbs seqRecBatches) tryResetFailingBatchesWith(cfg *cfg, fn func(seqRecBatc
 						continue
 					}
 				}
-
 				batch.owner.resetBatchDrainIdx()
 				fn(batch)
 			}

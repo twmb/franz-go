@@ -1428,6 +1428,7 @@ type uncommitted map[string]map[int32]uncommit
 // updateUncommitted sets the latest uncommitted offset.
 func (g *groupConsumer) updateUncommitted(fetches Fetches) {
 	var b bytes.Buffer
+	debug := g.cl.cfg.logger.Level() >= LogLevelDebug
 
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -1435,7 +1436,7 @@ func (g *groupConsumer) updateUncommitted(fetches Fetches) {
 	for _, fetch := range fetches {
 		for _, topic := range fetch.Topics {
 
-			if g.cl.cfg.logger.Level() >= LogLevelDebug {
+			if debug {
 				fmt.Fprintf(&b, "%s[", topic.Topic)
 			}
 
@@ -1462,7 +1463,7 @@ func (g *groupConsumer) updateUncommitted(fetches Fetches) {
 				// Our new head points just past the final consumed offset,
 				// that is, if we rejoin, this is the offset to begin at.
 				newOffset := final.Offset + 1
-				if g.cl.cfg.logger.Level() >= LogLevelDebug {
+				if debug {
 					fmt.Fprintf(&b, "%d{%d=>%d}, ", partition.Partition, uncommit.head.Offset, newOffset)
 				}
 				uncommit.head = EpochOffset{
@@ -1472,7 +1473,7 @@ func (g *groupConsumer) updateUncommitted(fetches Fetches) {
 				topicOffsets[partition.Partition] = uncommit
 			}
 
-			if g.cl.cfg.logger.Level() >= LogLevelDebug {
+			if debug {
 				if bytes.HasSuffix(b.Bytes(), []byte(", ")) {
 					b.Truncate(b.Len() - 2)
 				}
@@ -1481,7 +1482,7 @@ func (g *groupConsumer) updateUncommitted(fetches Fetches) {
 		}
 	}
 
-	if g.cl.cfg.logger.Level() >= LogLevelDebug {
+	if debug {
 		update := b.String()
 		update = strings.TrimSuffix(update, ", ") // trim trailing comma and space after final topic
 		g.cl.cfg.logger.Log(LogLevelDebug, "updated uncommitted", "to", update)
@@ -1516,6 +1517,7 @@ func (g *groupConsumer) updateCommitted(
 	})
 
 	var b bytes.Buffer
+	debug := g.cl.cfg.logger.Level() >= LogLevelDebug
 
 	for i := range resp.Topics {
 		reqTopic := &req.Topics[i]
@@ -1535,7 +1537,7 @@ func (g *groupConsumer) updateCommitted(
 			return respTopic.Partitions[i].Partition < respTopic.Partitions[j].Partition
 		})
 
-		if g.cl.cfg.logger.Level() >= LogLevelDebug {
+		if debug {
 			fmt.Fprintf(&b, "%s[", respTopic.Topic)
 		}
 		for i := range respTopic.Partitions {
@@ -1554,7 +1556,7 @@ func (g *groupConsumer) updateCommitted(
 				continue
 			}
 
-			if g.cl.cfg.logger.Level() >= LogLevelDebug {
+			if debug {
 				fmt.Fprintf(&b, "%d{%d=>%d}, ", reqPart.Partition, uncommit.committed.Offset, reqPart.Offset)
 			}
 
@@ -1565,7 +1567,7 @@ func (g *groupConsumer) updateCommitted(
 			topic[respPart.Partition] = uncommit
 		}
 
-		if g.cl.cfg.logger.Level() >= LogLevelDebug {
+		if debug {
 			if bytes.HasSuffix(b.Bytes(), []byte(", ")) {
 				b.Truncate(b.Len() - 2)
 			}
@@ -1574,7 +1576,7 @@ func (g *groupConsumer) updateCommitted(
 
 	}
 
-	if g.cl.cfg.logger.Level() >= LogLevelDebug {
+	if debug {
 		update := b.String()
 		update = strings.TrimSuffix(update, ", ") // trim trailing comma and space after final topic
 		g.cl.cfg.logger.Log(LogLevelDebug, "updated committed", "to", update)
@@ -1953,7 +1955,7 @@ func (g *groupConsumer) defaultRevoke(_ context.Context, _ map[string][]int32) {
 						g.cl.cfg.logger.Log(LogLevelError, "in revoke: unable to commit offsets for topic partition",
 							"topic", topic.Topic,
 							"partition", partition.Partition,
-					                "error", err)
+							"error", err)
 					}
 				}
 			}
