@@ -3,7 +3,9 @@ package sticky
 import (
 	"fmt"
 	"math/rand"
+	"runtime"
 	"testing"
+	"time"
 )
 
 func Test_stickyBalanceStrategy_Plan(t *testing.T) {
@@ -1265,18 +1267,26 @@ func TestLarge(t *testing.T) {
 
 const topicNum = 100
 const partitionNum = 200
+const memberNum = 100
 
 func makeLargeBalance(tb testing.TB, withImbalance bool) ([]GroupMember, map[string]int32) {
 	rng := rand.New(rand.NewSource(0))
-	var members []GroupMember
+	var allTopics []string
+	topics := make(map[string]int32)
+	var totalPartitions int
 	for i := 0; i < topicNum; i++ {
-		topics := make([]string, topicNum)
-		for j := range topics {
-			topics[j] = fmt.Sprintf("topic%d", j)
-		}
+		n := rng.Intn(partitionNum * 5 / 2)
+		totalPartitions += n
+		topic := fmt.Sprintf("topic%d", i)
+		topics[topic] = int32(n)
+		allTopics = append(allTopics, topic)
+	}
+
+	var members []GroupMember
+	for i := 0; i < memberNum; i++ {
 		members = append(members, GroupMember{
 			ID:     fmt.Sprintf("consumer%d", i),
-			Topics: topics,
+			Topics: allTopics,
 		})
 	}
 	if withImbalance {
@@ -1286,14 +1296,6 @@ func makeLargeBalance(tb testing.TB, withImbalance bool) ([]GroupMember, map[str
 		})
 	}
 
-	// now we make topicNum topics
-	topics := make(map[string]int32)
-	var totalPartitions int
-	for i := 0; i < topicNum; i++ {
-		n := rng.Intn(partitionNum * 5 / 2)
-		totalPartitions += n
-		topics[fmt.Sprintf("topic%d", i)] = int32(n)
-	}
 	tb.Logf("%d total partitions; %d total members", totalPartitions, len(members))
 	return members, topics
 }
@@ -1346,5 +1348,80 @@ func BenchmarkLargeWithExistingImbalanced(b *testing.B) {
 	b.ResetTimer()
 	for n := 0; n < b.N; n++ {
 		Balance(members, topics)
+	}
+}
+
+type javaPlan struct {
+	members []GroupMember
+	topics  map[string]int32
+
+	totalPartitions int
+}
+
+func makeJavaPlan(topicCount, partitionCount, consumerCount int, imbalanced bool) javaPlan {
+	p := javaPlan{topics: make(map[string]int32)}
+	var allTopics []string
+
+	for i := 0; i < topicCount; i++ {
+		topic := fmt.Sprintf("t%d", i)
+		allTopics = append(allTopics, topic)
+		p.topics[topic] = int32(partitionCount)
+		p.totalPartitions += partitionCount
+	}
+
+	for i := 0; i < consumerCount; i++ {
+		p.members = append(p.members, GroupMember{
+			ID:     fmt.Sprintf("c%d", i),
+			Topics: allTopics,
+		})
+	}
+
+	if imbalanced {
+		p.members = append(p.members, GroupMember{
+			ID:     fmt.Sprintf("c%d", consumerCount),
+			Topics: allTopics[:0],
+		})
+	}
+
+	return p
+}
+
+var (
+	javaLarge          = makeJavaPlan(500, 2000, 2000, false)
+	javaLargeImbalance = makeJavaPlan(500, 2000, 2000, true)
+
+	javaMedium          = makeJavaPlan(50, 1000, 1000, false)
+	javaMediumImbalance = makeJavaPlan(50, 1000, 1000, true)
+
+	javaSmall          = makeJavaPlan(50, 800, 800, false)
+	javaSmallImbalance = makeJavaPlan(50, 800, 800, true)
+)
+
+func BenchmarkJava(b *testing.B) {
+	for _, bench := range []struct {
+		name string
+		plan javaPlan
+	}{
+		{"large", javaLarge},
+		{"large_imbalance", javaLargeImbalance},
+		{"medium", javaMedium},
+		{"medium_imbalance", javaMediumImbalance},
+		{"small", javaSmall},
+		{"small_imbalance", javaSmallImbalance},
+	} {
+		b.Run(bench.name, func(b *testing.B) {
+			start := time.Now()
+			for n := 0; n < b.N; n++ {
+				Balance(bench.plan.members, bench.plan.topics)
+				runtime.GC()
+				runtime.GC()
+			}
+			b.Logf("avg %v per %d balances of %d members and %d total partitions",
+				time.Since(start)/time.Duration(b.N),
+				b.N,
+				len(bench.plan.members),
+				bench.plan.totalPartitions,
+			)
+		})
 	}
 }
