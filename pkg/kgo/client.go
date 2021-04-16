@@ -716,6 +716,7 @@ func shards(shard ...ResponseShard) []ResponseShard {
 // that error.
 func (cl *Client) brokerOrErr(ctx context.Context, id int32, err error) (*broker, error) {
 	tryLoad := ctx != nil
+	tries := 0
 start:
 	cl.brokersMu.RLock()
 	broker := cl.brokers[id]
@@ -723,10 +724,16 @@ start:
 
 	if broker == nil {
 		if tryLoad {
+			tries++
 			if loadErr := cl.fetchBrokerMetadata(ctx); loadErr != nil {
 				return nil, loadErr
 			}
-			goto start
+			// We will retry loading up to two times, if we load broker
+			// metadata twice successfully but neither load has the broker
+			// we are looking for, then we say our broker does not exist.
+			if tries <= 2 {
+				goto start
+			}
 		}
 		return nil, err
 	}
