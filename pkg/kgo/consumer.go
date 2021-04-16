@@ -644,7 +644,7 @@ func (l *listOrEpochLoads) addLoad(t string, p int32, loadType listOrEpochLoadTy
 }
 
 func (l *listOrEpochLoads) removeLoad(t string, p int32) {
-	for _, m := range []*offsetLoadMap{
+	for _, m := range []offsetLoadMap{
 		l.list,
 		l.epoch,
 	} {
