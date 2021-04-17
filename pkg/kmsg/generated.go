@@ -1475,6 +1475,7 @@ type StickyMemberMetadata struct {
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to StickyMemberMetadata.
 func (v *StickyMemberMetadata) Default() {
+	v.Generation = -1
 }
 
 // NewStickyMemberMetadata returns a default StickyMemberMetadata

@@ -359,7 +359,7 @@ StickyMemberMetadata => not top level, no encoding
     // currently assigned.
     Partitions: [int32]
   // Generation is the generation of this join. This is incremented every join.
-  Generation: int32 // v1+
+  Generation: int32(-1) // v1+
 
 // GroupMemberMetadata is the metadata that is usually sent with a join group
 // request with the "consumer" protocol.
