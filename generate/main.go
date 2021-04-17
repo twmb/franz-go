@@ -481,7 +481,7 @@ func main() {
 	l.Write("// or \"\" if the key is unknown.")
 	l.Write("func NameForKey(key int16) string {")
 	l.Write("switch key {")
-	l.Write("default: return \"\"")
+	l.Write("default: return \"Unknown\"")
 	for _, key2struct := range name2structs {
 		l.Write("case %d: return \"%s\"", key2struct.Key, strings.TrimSuffix(key2struct.Name, "Request"))
 	}

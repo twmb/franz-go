@@ -36220,7 +36220,7 @@ func ResponseForKey(key int16) Response {
 func NameForKey(key int16) string {
 	switch key {
 	default:
-		return ""
+		return "Unknown"
 	case 0:
 		return "Produce"
 	case 1:
