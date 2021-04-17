@@ -62,6 +62,9 @@ type BrokerWriteHook interface {
 // Kerberos SASL does not cause read hooks, since it directly reads from the
 // connection. This may change in the future such that the sasl authenticate
 // key is used (even though sasl authenticate requests are not being issued).
+//
+// If Kafka wrote to the client when the client was not expecting a read, this
+// hook will be called with a -1 key.
 type BrokerReadHook interface {
 	// OnRead is passed the broker metadata, the key for the response that
 	// was read, the number of bytes read (may not be the whole read if

@@ -56,7 +56,8 @@ type promisedResp struct {
 	resp    kmsg.Response
 	promise func(kmsg.Response, error)
 
-	enqueue time.Time // used to calculate readWait
+	enqueuedToReadAt time.Time // used to calculate readWait
+	readStart        time.Time // when we are next in line for reading, this is set
 }
 
 var unknownMetadata = BrokerMetadata{
@@ -352,6 +353,7 @@ func (b *broker) handleReqs() {
 			req.ResponseKind(),
 			pr.promise,
 			time.Now(),
+			time.Time{},
 		})
 	}
 }
@@ -446,10 +448,10 @@ type brokerCxn struct {
 
 	corrID int32
 
-	// dieMu guards sending to resps in case the connection has died.
-	dieMu sync.RWMutex
+	// dieMu guards appending to resps.
+	dieMu sync.Mutex
 	// resps manages reading kafka responses.
-	resps chan promisedResp
+	resps []promisedResp
 	// dead is an atomic so that a backed up resps cannot block cxn death.
 	dead int32
 	// closed in cloneConn; allows throttle waiting to quit
@@ -472,8 +474,6 @@ func (cxn *brokerCxn) init(isProduceCxn bool) error {
 		cxn.cl.cfg.logger.Log(LogLevelError, "unable to initialize sasl", "broker", cxn.b.meta.NodeID, "err", err)
 		return err
 	}
-
-	cxn.resps = make(chan promisedResp, 10)
 	if isProduceCxn && cxn.cl.cfg.acks.val == 0 {
 		go cxn.discard() // see docs on discard for why we do this
 	} else {
@@ -794,6 +794,70 @@ func (cxn *brokerCxn) writeConn(ctx context.Context, buf []byte, timeout time.Du
 	return
 }
 
+type readResult struct {
+	nread      int
+	buf        []byte
+	err        error
+	readWait   time.Duration
+	timeToRead time.Duration
+
+	pr   *promisedResp
+	done chan struct{}
+}
+
+// readConnAsync is similar to readConn below, but we do not know of any
+// expected response when we call into this function. Instead, we read for a
+// size, and when we get a size, we then expect to have a response.
+func (cxn *brokerCxn) readConnAsync(prFn func() (*promisedResp, error)) <-chan *readResult {
+	readDone := make(chan *readResult, 1)
+	go func() {
+		rr := &readResult{done: make(chan struct{})}
+		var sent bool
+		defer func() {
+			if !sent {
+				readDone <- rr
+			}
+			close(rr.done)
+			close(readDone)
+		}()
+
+		sizeBuf := make([]byte, 4)
+		if rr.nread, rr.err = io.ReadFull(cxn.conn, sizeBuf); rr.err != nil {
+			rr.err = &errDeadConn{rr.err}
+			return
+		}
+
+		var size int32
+		if size, rr.err = cxn.parseReadSize(sizeBuf); rr.err != nil {
+			return
+		}
+
+		if rr.pr, rr.err = prFn(); rr.err != nil {
+			return
+		}
+		readDone <- rr
+		sent = true
+
+		defer func() {
+			rr.timeToRead = time.Since(rr.pr.readStart)
+			rr.readWait = rr.pr.readStart.Sub(rr.pr.enqueuedToReadAt)
+		}()
+
+		rr.buf = make([]byte, size)
+		var nread2 int
+		nread2, rr.err = io.ReadFull(cxn.conn, rr.buf)
+		rr.nread += nread2
+		rr.buf = rr.buf[:nread2]
+		if rr.err != nil {
+			rr.err = &errDeadConn{rr.err}
+		}
+	}()
+	return readDone
+}
+
+// readConn is the "I expect a response" form of reading a response.  This
+// differs from readConnAsync above because here, we have written a request
+// already and know what we want.
 func (cxn *brokerCxn) readConn(ctx context.Context, timeout time.Duration, enqueuedForReadingAt time.Time) (nread int, buf []byte, err error, readWait, timeToRead time.Duration) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -883,38 +947,21 @@ func (cxn *brokerCxn) parseReadSize(sizeBuf []byte) (int32, error) {
 	return size, nil
 }
 
-// readResponse reads a response from conn, ensures the correlation ID is
-// correct, and returns a newly allocated slice on success.
+// readResponse reads a response from conn and then handles the header aspect
+// of it, returning the body or an error.
 func (cxn *brokerCxn) readResponse(ctx context.Context, timeout time.Duration, enqueuedForReadingAt time.Time, key, version int16, corrID int32, flexibleHeader bool) ([]byte, error) {
 	nread, buf, err, readWait, timeToRead := cxn.readConn(ctx, timeout, enqueuedForReadingAt)
-
-	cxn.cl.cfg.hooks.each(func(h Hook) {
-		if h, ok := h.(BrokerReadHook); ok {
-			h.OnRead(cxn.b.meta, key, nread, readWait, timeToRead, err)
-		}
-	})
-	if logger := cxn.cl.cfg.logger; logger.Level() >= LogLevelDebug {
-		logger.Log(LogLevelDebug, fmt.Sprintf("read %s v%d", kmsg.NameForKey(key), version), "broker", cxn.b.meta.NodeID, "bytes_read", nread, "read_wait", readWait, "time_to_read", timeToRead, "err", err)
-	}
-
-	if err != nil {
-		return nil, err
-	}
-	if len(buf) < 4 {
-		return nil, kbin.ErrNotEnoughData
-	}
-	gotID := int32(binary.BigEndian.Uint32(buf))
-	if gotID != corrID {
-		return nil, errCorrelationIDMismatch
-	}
-	// If the response header is flexible, we skip the tags at the end of
-	// it. They are currently unused.
-	if flexibleHeader {
-		b := kbin.Reader{Src: buf[4:]}
-		kmsg.SkipTags(&b)
-		return b.Src, b.Complete()
-	}
-	return buf[4:], nil
+	return cxn.handleReadResultHeader(
+		key,
+		version,
+		nread,
+		readWait,
+		timeToRead,
+		err,
+		buf,
+		corrID,
+		flexibleHeader,
+	)
 }
 
 // closeConn is the one place we close broker connections. This is always done
@@ -942,16 +989,18 @@ func (cxn *brokerCxn) die() {
 
 	cxn.closeConn()
 
-	go func() {
-		for pr := range cxn.resps {
-			pr.promise(nil, errChosenBrokerDead)
-		}
-	}()
-
-	cxn.dieMu.Lock()
+	cxn.dieMu.Lock() // once we lock, nothing can append to resps
+	resps := cxn.resps
+	cxn.resps = nil
 	cxn.dieMu.Unlock()
 
-	close(cxn.resps) // after lock, nothing sends down resps
+	if len(resps) > 0 {
+		go func() {
+			for _, pr := range resps {
+				pr.promise(nil, errChosenBrokerDead)
+			}
+		}()
+	}
 }
 
 // waitResp, called serially by a broker's handleReqs, manages handling a
@@ -959,13 +1008,19 @@ func (cxn *brokerCxn) die() {
 func (cxn *brokerCxn) waitResp(pr promisedResp) {
 	dead := false
 
-	cxn.dieMu.RLock()
+	cxn.dieMu.Lock()
 	if atomic.LoadInt32(&cxn.dead) == 1 {
 		dead = true
 	} else {
-		cxn.resps <- pr
+		if len(cxn.resps) == 0 {
+			pr.readStart = time.Now()
+		}
+		cxn.resps = append(cxn.resps, pr)
+		if len(cxn.resps) > 20 { // we should never have 20 outstanding requests on one cxn...
+			defer cxn.die()
+		}
 	}
-	cxn.dieMu.RUnlock()
+	cxn.dieMu.Unlock()
 
 	if dead {
 		pr.promise(nil, errChosenBrokerDead)
@@ -1002,6 +1057,8 @@ func (cxn *brokerCxn) waitResp(pr promisedResp) {
 //
 // (5) we set a read deadline *after* the size bytes are read, and only if the
 // client has not yet closed.
+//
+// This is similar to handleResps below, but a bit reduced for simplicity.
 func (cxn *brokerCxn) discard() {
 	defer cxn.die()
 
@@ -1074,48 +1131,176 @@ func (cxn *brokerCxn) discard() {
 	}
 }
 
-// handleResps serially handles all broker responses for an single connection.
 func (cxn *brokerCxn) handleResps() {
-	defer cxn.die() // always track our death
+	defer cxn.die()
 
 	var successes uint64
-	for pr := range cxn.resps {
-		raw, err := cxn.readResponse(pr.ctx, pr.readTimeout, pr.enqueue, pr.resp.Key(), pr.resp.GetVersion(), pr.corrID, pr.flexibleHeader)
-		if err != nil {
+	for {
+		var deadlineMu sync.Mutex
+		var deadlineSet bool
+
+		read := cxn.readConnAsync(func() (*promisedResp, error) {
+			cxn.dieMu.Lock()
+			defer cxn.dieMu.Unlock()
+			if len(cxn.resps) == 0 {
+				return nil, errors.New("invalid response from Kafka when we have not written any requests")
+			}
+
+			pr := cxn.resps[0]
+			cxn.resps = cxn.resps[1:]
+
+			if pr.readTimeout > 0 {
+				deadlineMu.Lock()
+				defer deadlineMu.Unlock()
+				if !deadlineSet {
+					cxn.conn.SetReadDeadline(time.Now().Add(pr.readTimeout))
+				}
+			}
+
+			return &pr, nil
+		})
+
+		deadline := func() {
+			deadlineMu.Lock()
+			deadlineSet = true
+			deadlineMu.Unlock()
+			cxn.conn.SetReadDeadline(time.Now())
+		}
+
+		var rr *readResult
+		select {
+		case rr = <-read:
+			if rr.pr != nil { // if nil, we had an error
+				select {
+				case <-rr.done:
+				case <-rr.pr.ctx.Done():
+					deadline()
+					<-rr.done
+				case <-cxn.cl.ctx.Done():
+					deadline()
+					<-rr.done
+				}
+			}
+		case <-cxn.cl.ctx.Done():
+			deadline()
+			rr = <-read
+			<-rr.done
+		}
+		cxn.conn.SetReadDeadline(time.Time{})
+
+		// Now that we have finished reading the first promised resp, we can update
+		// when we expect the next one's readStart.
+		cxn.dieMu.Lock()
+		if len(cxn.resps) > 0 {
+			cxn.resps[0].readStart = time.Now()
+		}
+		cxn.dieMu.Unlock()
+
+		if err := cxn.handleReadResult(rr); err != nil {
 			if successes > 0 || len(cxn.b.cl.cfg.sasls) > 0 {
 				cxn.b.cl.cfg.logger.Log(LogLevelDebug, "read from broker errored, killing connection", "addr", cxn.b.addr, "id", cxn.b.meta.NodeID, "successful_reads", successes, "err", err)
 			} else {
 				cxn.b.cl.cfg.logger.Log(LogLevelWarn, "read from broker errored, killing connection after 0 successful responses (is sasl missing?)", "addr", cxn.b.addr, "id", cxn.b.meta.NodeID, "err", err)
 			}
-			pr.promise(nil, err)
 			return
 		}
 		successes++
-		readErr := pr.resp.ReadFrom(raw)
+	}
+}
 
-		// If we had no error, we read the response successfully.
-		//
-		// Any response that can cause throttling satisfies the
-		// kmsg.ThrottleResponse interface. We check that here.
-		if readErr == nil {
-			if throttleResponse, ok := pr.resp.(kmsg.ThrottleResponse); ok {
-				millis, throttlesAfterResp := throttleResponse.Throttle()
-				if millis > 0 {
-					if throttlesAfterResp {
-						throttleUntil := time.Now().Add(time.Millisecond * time.Duration(millis)).UnixNano()
-						if throttleUntil > cxn.throttleUntil {
-							atomic.StoreInt64(&cxn.throttleUntil, throttleUntil)
-						}
-					}
-					cxn.cl.cfg.hooks.each(func(h Hook) {
-						if h, ok := h.(BrokerThrottleHook); ok {
-							h.OnThrottle(cxn.b.meta, time.Duration(millis)*time.Millisecond, throttlesAfterResp)
-						}
-					})
+// handleReadResult does what the name says; for the most part this passes a
+// bunch of args into handleReadResultHeader.
+func (cxn *brokerCxn) handleReadResult(rr *readResult) (err error) {
+	key, version, corrID, flexible := int16(-1), int16(0), int32(-1), false
+	pr := rr.pr
+	if pr != nil {
+		key, version, corrID, flexible = pr.resp.Key(), pr.resp.GetVersion(), pr.corrID, pr.resp.IsFlexible()
+	}
+	body, err := cxn.handleReadResultHeader(
+		key,
+		version,
+		rr.nread,
+		rr.readWait,
+		rr.timeToRead,
+		rr.err,
+		rr.buf,
+		corrID,
+		flexible,
+	)
+	if err != nil {
+		if pr != nil {
+			pr.promise(nil, err)
+		}
+		return err
+	}
+	if err = pr.resp.ReadFrom(body); err != nil {
+		pr.promise(nil, err)
+		return err
+	}
+	cxn.maybeThrottle(pr.resp)
+	pr.promise(pr.resp, nil)
+	return nil
+}
+
+// Handles calling hooks and debug logs after a response was read, and then
+// validates and strips off the request header.
+func (cxn *brokerCxn) handleReadResultHeader(
+	key int16,
+	version int16,
+	nread int,
+	readWait time.Duration,
+	timeToRead time.Duration,
+	readErr error,
+	buf []byte,
+	corrID int32,
+	flexible bool,
+) ([]byte, error) {
+	cxn.cl.cfg.hooks.each(func(h Hook) {
+		if h, ok := h.(BrokerReadHook); ok {
+			h.OnRead(cxn.b.meta, key, nread, readWait, timeToRead, readErr)
+		}
+	})
+	if logger := cxn.cl.cfg.logger; logger.Level() >= LogLevelDebug {
+		logger.Log(LogLevelDebug, fmt.Sprintf("read %s v%d", kmsg.NameForKey(key), version), "broker", cxn.b.meta.NodeID, "bytes_read", nread, "read_wait", readWait, "time_to_read", timeToRead, "err", readErr)
+	}
+	if readErr != nil {
+		return nil, readErr
+	}
+	if len(buf) < 4 {
+		return nil, kbin.ErrNotEnoughData
+	}
+	gotID := int32(binary.BigEndian.Uint32(buf))
+	if gotID != corrID {
+		return nil, errCorrelationIDMismatch
+	}
+	body, err := buf[4:], error(nil)
+	if flexible { // skip tags at the end of the header
+		b := kbin.Reader{Src: body}
+		kmsg.SkipTags(&b)
+		if body, err = b.Src, b.Complete(); err != nil {
+			return nil, err
+		}
+	}
+	return body, nil
+}
+
+// Any response that can cause throttling satisfies the kmsg.ThrottleResponse
+// interface. We check that here.
+func (cxn *brokerCxn) maybeThrottle(resp kmsg.Response) {
+	if throttleResponse, ok := resp.(kmsg.ThrottleResponse); ok {
+		millis, throttlesAfterResp := throttleResponse.Throttle()
+		if millis > 0 {
+			if throttlesAfterResp {
+				throttleUntil := time.Now().Add(time.Millisecond * time.Duration(millis)).UnixNano()
+				if throttleUntil > cxn.throttleUntil {
+					atomic.StoreInt64(&cxn.throttleUntil, throttleUntil)
 				}
 			}
+			cxn.cl.cfg.hooks.each(func(h Hook) {
+				if h, ok := h.(BrokerThrottleHook); ok {
+					h.OnThrottle(cxn.b.meta, time.Duration(millis)*time.Millisecond, throttlesAfterResp)
+				}
+			})
 		}
-
-		pr.promise(pr.resp, readErr)
 	}
 }
