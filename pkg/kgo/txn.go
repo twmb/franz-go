@@ -160,6 +160,27 @@ func (s *GroupTransactSession) End(ctx context.Context, commit TransactionEndTry
 			return false, err // same
 		}
 		defer s.cl.ResetProducerID()
+
+		allOk := true
+		s.cl.sinksAndSourcesMu.Lock()
+		for _, sns := range s.cl.sinksAndSources {
+			allOk = allOk && sns.sink.lastRespSuccessful
+		}
+		s.cl.sinksAndSourcesMu.Unlock()
+
+		if !allOk {
+			s.cl.cfg.logger.Log(LogLevelWarn, "Buffered records were aborted, but some sink(s) did not have a final handled produce response. Kafka could still be handling these produce requests or have yet to handle them. We do not want to issue EndTxn before these produce requests are handled, because that would risk beginning a new transaction that we may not finish. Waiting 1s to give Kafka some time... (See KAFKA-12671)")
+			timer := time.NewTimer(time.Second)
+			select {
+			case <-timer.C:
+			case <-s.cl.ctx.Done():
+				timer.Stop()
+				return false, s.cl.ctx.Err()
+			case <-ctx.Done():
+				timer.Stop()
+				return false, ctx.Err()
+			}
+		}
 	}
 
 	wantCommit := bool(commit)
@@ -293,6 +314,8 @@ func (cl *Client) BeginTransaction() error {
 func (cl *Client) AbortBufferedRecords(ctx context.Context) error {
 	atomic.StoreUint32(&cl.producer.aborting, 1)
 	defer atomic.StoreUint32(&cl.producer.aborting, 0)
+	atomic.AddInt32(&cl.producer.flushing, 1) // disallow lingering to start
+	defer atomic.AddInt32(&cl.producer.flushing, -1)
 	// At this point, all drain loops that start will immediately stop,
 	// thus they will not begin any AddPartitionsToTxn request. We must
 	// now wait for any req currently built to be done being issued.
@@ -316,7 +339,7 @@ func (cl *Client) AbortBufferedRecords(ctx context.Context) error {
 		defer cl.producer.notifyMu.Unlock()
 		defer close(done)
 
-		for !quit && atomic.LoadInt32(&cl.producer.drains) > 0 {
+		for !quit && (atomic.LoadInt32(&cl.producer.drains) > 0 || atomic.LoadInt32(&cl.producer.issues) > 0) {
 			cl.producer.notifyCond.Wait()
 		}
 	}()

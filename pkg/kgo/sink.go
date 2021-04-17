@@ -38,6 +38,13 @@ type sink struct {
 	needBackoff bool
 	backoffSeq  uint32 // prevents pile on failures
 
+	// To work around KAFKA-12671, before we issue EndTxn, we check to see
+	// that all sinks had a final successful response. If not, then we risk
+	// running into KAFKA-12671 (out of order processing leading to
+	// orphaned begun "transaction" in ProducerStateManager), so rather
+	// than issuing EndTxn immediately, we wait a little bit.
+	lastRespSuccessful bool
+
 	// consecutiveFailures is incremented every backoff and cleared every
 	// successful response. For simplicity, if we have a good response
 	// following an error response before the error response's backoff
@@ -58,9 +65,10 @@ type seqResp struct {
 
 func (cl *Client) newSink(nodeID int32) *sink {
 	s := &sink{
-		cl:             cl,
-		nodeID:         nodeID,
-		produceVersion: -1,
+		cl:                 cl,
+		nodeID:             nodeID,
+		produceVersion:     -1,
+		lastRespSuccessful: true,
 	}
 	s.inflightSem.Store(make(chan struct{}, 1))
 	return s
@@ -236,7 +244,12 @@ func (s *sink) drain() {
 		s.maybeBackoff()
 
 		sem := s.inflightSem.Load().(chan struct{})
-		sem <- struct{}{}
+		select {
+		case sem <- struct{}{}:
+		case <-s.cl.ctx.Done():
+			s.drainState.hardFinish()
+			return
+		}
 
 		again = s.drainState.maybeFinish(s.produce(sem))
 	}
@@ -297,9 +310,18 @@ func (s *sink) produce(sem <-chan struct{}) bool {
 
 	req.backoffSeq = s.backoffSeq // safe to read outside mu since we are in drain loop
 
+	// Add that we are issuing and then check if we are aborting: this
+	// order ensures that we will do not produce after aborting is set.
+	s.cl.producer.incDrains()
+	if s.cl.producer.isAborting() {
+		s.cl.producer.decDrains()
+		return false
+	}
+
 	produced = true
 	s.doSequenced(req, func(resp kmsg.Response, err error) {
 		s.handleReqResp(req, resp, err)
+		s.cl.producer.decDrains()
 		<-sem
 	})
 	return moreToDrain
@@ -376,8 +398,10 @@ func (s *sink) issueTxnReq(
 ) error {
 	resp, err := txnReq.RequestWith(s.cl.ctx, s.cl)
 	if err != nil {
+		s.lastRespSuccessful = false
 		return err
 	}
+	s.lastRespSuccessful = true
 
 	for _, topic := range resp.Topics {
 		topicBatches, ok := req.batches[topic.Topic]
