@@ -1254,14 +1254,12 @@ func Test_stickyBalanceStrategy_Plan_ConflictingPreviousAssignments(t *testing.T
 func TestLarge(t *testing.T) {
 	t.Parallel()
 	{
-		members, topics := makeLargeBalance(t, false)
-		plan := Balance(members, topics)
-		testPlanUsage(t, plan, topics, nil)
+		plan := Balance(large.members, large.topics)
+		testPlanUsage(t, plan, large.topics, nil)
 	}
 	{
-		members, topics := makeLargeBalance(t, true)
-		plan := Balance(members, topics)
-		testPlanUsage(t, plan, topics, nil)
+		plan := Balance(largeImbalanced.members, largeImbalanced.topics)
+		testPlanUsage(t, plan, largeImbalanced.topics, nil)
 	}
 }
 
@@ -1269,7 +1267,7 @@ const topicNum = 100
 const partitionNum = 200
 const memberNum = 100
 
-func makeLargeBalance(tb testing.TB, withImbalance bool) ([]GroupMember, map[string]int32) {
+func makeLargeBalance(withImbalance bool) generatedInput {
 	rng := rand.New(rand.NewSource(0))
 	var allTopics []string
 	topics := make(map[string]int32)
@@ -1295,71 +1293,75 @@ func makeLargeBalance(tb testing.TB, withImbalance bool) ([]GroupMember, map[str
 			Topics: []string{"topic0"},
 		})
 	}
-
-	tb.Logf("%d total partitions; %d total members", totalPartitions, len(members))
-	return members, topics
+	return generatedInput{
+		members,
+		topics,
+		totalPartitions,
+	}
 }
 
-func makeLargeBalanceWithExisting(tb testing.TB, withImbalance bool) ([]GroupMember, map[string]int32) {
-	members, topics := makeLargeBalance(tb, withImbalance)
-	plan := Balance(members, topics)
+func makeLargeBalanceWithExisting(withImbalance bool) generatedInput {
+	input := makeLargeBalance(withImbalance)
+	plan := Balance(input.members, input.topics)
 
-	oldMembers := members
-	members = members[:0]
+	oldMembers := input.members
+	input.members = input.members[:0]
 	for i := 0; i < topicNum; i++ {
 		consumer := fmt.Sprintf("consumer%d", i)
-		members = append(members, GroupMember{
+		input.members = append(input.members, GroupMember{
 			ID:       consumer,
 			Topics:   oldMembers[i].Topics, // evaluated before overwrite
 			UserData: udEncode(1, 1, plan[consumer]),
 		})
 	}
-	return members, topics
+	return input
 }
 
+var (
+	large           = makeLargeBalance(false)
+	largeImbalanced = makeLargeBalance(true)
+
+	largeWithExisting           = makeLargeBalanceWithExisting(false)
+	largeWithExistingImbalanced = makeLargeBalanceWithExisting(true)
+)
+
 func BenchmarkLarge(b *testing.B) {
-	members, topics := makeLargeBalance(b, false)
 	b.ResetTimer()
 	for n := 0; n < b.N; n++ {
-		Balance(members, topics)
+		Balance(large.members, large.topics)
 	}
 }
 
 func BenchmarkLargeWithExisting(b *testing.B) {
-	members, topics := makeLargeBalanceWithExisting(b, false)
-	members = members[1:]
 	b.ResetTimer()
 	for n := 0; n < b.N; n++ {
-		Balance(members, topics)
+		Balance(largeWithExisting.members[1:], largeWithExisting.topics)
 	}
 }
 
 func BenchmarkLargeImbalanced(b *testing.B) {
-	members, topics := makeLargeBalance(b, true)
 	b.ResetTimer()
 	for n := 0; n < b.N; n++ {
-		Balance(members, topics)
+		Balance(largeImbalanced.members, largeImbalanced.topics)
 	}
 }
 
 func BenchmarkLargeWithExistingImbalanced(b *testing.B) {
-	members, topics := makeLargeBalanceWithExisting(b, true)
-	members = members[1:]
 	b.ResetTimer()
 	for n := 0; n < b.N; n++ {
-		Balance(members, topics)
+		Balance(largeWithExistingImbalanced.members[1:], largeWithExistingImbalanced.topics)
 	}
 }
 
-type javaPlan struct {
+type generatedInput struct {
 	members []GroupMember
 	topics  map[string]int32
 
 	totalPartitions int
 }
 
-func makeJavaPlan(topicCount, partitionCount, consumerCount int, imbalanced bool) javaPlan {
-	p := javaPlan{topics: make(map[string]int32)}
+func makeJavaPlan(topicCount, partitionCount, consumerCount int, imbalanced bool) generatedInput {
+	p := generatedInput{topics: make(map[string]int32)}
 	var allTopics []string
 
 	for i := 0; i < topicCount; i++ {
@@ -1379,7 +1381,7 @@ func makeJavaPlan(topicCount, partitionCount, consumerCount int, imbalanced bool
 	if imbalanced {
 		p.members = append(p.members, GroupMember{
 			ID:     fmt.Sprintf("c%d", consumerCount),
-			Topics: allTopics[:0],
+			Topics: allTopics[:1],
 		})
 	}
 
@@ -1399,8 +1401,8 @@ var (
 
 func BenchmarkJava(b *testing.B) {
 	for _, bench := range []struct {
-		name string
-		plan javaPlan
+		name  string
+		input generatedInput
 	}{
 		{"large", javaLarge},
 		{"large_imbalance", javaLargeImbalance},
@@ -1412,15 +1414,15 @@ func BenchmarkJava(b *testing.B) {
 		b.Run(bench.name, func(b *testing.B) {
 			start := time.Now()
 			for n := 0; n < b.N; n++ {
-				Balance(bench.plan.members, bench.plan.topics)
+				Balance(bench.input.members, bench.input.topics)
 				runtime.GC()
 				runtime.GC()
 			}
 			b.Logf("avg %v per %d balances of %d members and %d total partitions",
 				time.Since(start)/time.Duration(b.N),
 				b.N,
-				len(bench.plan.members),
-				bench.plan.totalPartitions,
+				len(bench.input.members),
+				bench.input.totalPartitions,
 			)
 		})
 	}

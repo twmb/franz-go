@@ -7,12 +7,11 @@ import "container/heap"
 // The representation was chosen so as to avoid updating all members on any
 // partition move; move updates are one map update.
 type graph struct {
+	b *balancer
+
 	// node => edges out
 	// "from a node, which partitions could we steal?"
-	out []memberPartitions
-
-	// reference to balancer plan for determining node levels
-	plan membersPartitions
+	out [][]string
 
 	// edge => who owns this edge; built in balancer's assignUnassigned
 	cxns []uint16
@@ -28,30 +27,29 @@ type graph struct {
 	pathBuf []stealSegment
 }
 
-func newGraph(
-	plan membersPartitions,
+func (b *balancer) newGraph(
 	partitionConsumers []uint16,
-	partitionPotentials [][]uint16,
+	topicPotentials map[string][]uint16,
 ) graph {
 	g := graph{
-		out:     make([]memberPartitions, len(plan)),
-		plan:    plan,
+		b:       b,
+		out:     make([][]string, len(b.plan)),
 		cxns:    partitionConsumers,
-		scores:  make([]pathScore, len(plan)),
-		heapBuf: make([]*pathScore, len(plan)/2),
+		scores:  make([]pathScore, len(b.plan)),
+		heapBuf: make([]*pathScore, len(b.plan)/2),
 	}
-	memberPartsBufs := make([]uint32, len(plan)*len(partitionConsumers))
-	for memberNum := range plan {
-		memberPartsBuf := memberPartsBufs[:0:len(partitionConsumers)]
-		memberPartsBufs = memberPartsBufs[len(partitionConsumers):]
+	outBufs := make([]string, len(b.plan)*len(b.plan))
+	for memberNum := range b.plan {
+		out := outBufs[:0:len(b.plan)]
+		outBufs = outBufs[len(b.plan):]
 		// In the worst case, if every node is linked to each other,
 		// each node will have nparts edges. We preallocate the worst
 		// case. It is common for the graph to be highly connected.
-		g.out[memberNum] = memberPartsBuf
+		g.out[memberNum] = out
 	}
-	for partNum, potentials := range partitionPotentials {
+	for topic, potentials := range topicPotentials {
 		for _, potential := range potentials {
-			g.out[potential].add(uint32(partNum))
+			g.out[potential] = append(g.out[potential], topic)
 		}
 	}
 	return g
@@ -110,24 +108,28 @@ func (g *graph) findSteal(from uint16) ([]stealSegment, bool) {
 
 		current.done = true
 
-		for _, edge := range g.out[current.node] { // O(P) worst case, should be less
-			neighborNode := g.cxns[edge]
-			neighbor, isNew := g.getScore(neighborNode)
-			if neighbor.done {
-				continue
-			}
-
-			gscore := current.gscore + 1
-			if gscore < neighbor.gscore {
-				neighbor.parent = current
-				neighbor.srcEdge = edge
-				neighbor.gscore = gscore
-				neighbor.fscore = gscore + h(neighbor)
-				if isNew {
-					heap.Push(rem, neighbor)
+		for _, topic := range g.out[current.node] { // O(P) worst case, should be less
+			firstPartNum, partitions := g.b.partNum(topic, 0)
+			lastPartNum := firstPartNum + uint32(partitions)
+			for edge := firstPartNum; edge < lastPartNum; edge++ {
+				neighborNode := g.cxns[edge]
+				neighbor, isNew := g.getScore(neighborNode)
+				if neighbor.done {
+					continue
 				}
-				// We never need to fix the heap position; it is
-				// not possible for us to find a lower score.
+
+				gscore := current.gscore + 1
+				if gscore < neighbor.gscore {
+					neighbor.parent = current
+					neighbor.srcEdge = edge
+					neighbor.gscore = gscore
+					neighbor.fscore = gscore + h(neighbor)
+					if isNew {
+						heap.Push(rem, neighbor)
+					}
+					// We never need to fix the heap position; it is
+					// not possible for us to find a lower score.
+				}
 			}
 		}
 	}
@@ -164,7 +166,7 @@ func (g *graph) getScore(node uint16) (*pathScore, bool) {
 			node:    node,
 			parent:  nil,
 			srcEdge: 0,
-			level:   len(g.plan[node]),
+			level:   len(g.b.plan[node]),
 			gscore:  infinityScore,
 			fscore:  infinityScore,
 			done:    false,

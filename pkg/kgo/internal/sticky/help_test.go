@@ -43,7 +43,9 @@ func (b *udBuilder) encode() []byte {
 }
 
 func udEncode(version, generation int, assignments map[string][]int32) []byte {
-	var s kmsg.StickyMemberMetadata
+	s := kmsg.StickyMemberMetadata{
+		Generation: int32(generation),
+	}
 	for topic, partitions := range assignments {
 		s.CurrentAssignment = append(s.CurrentAssignment, kmsg.StickyMemberMetadataCurrentAssignment{
 			topic,
