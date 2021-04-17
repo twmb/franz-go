@@ -11,7 +11,7 @@ import (
 
 	"github.com/golang/snappy"
 	"github.com/klauspost/compress/zstd"
-	"github.com/pierrec/lz4"
+	"github.com/pierrec/lz4/v4"
 )
 
 // NOTE: level configuration was removed at some point due to it likely being
@@ -119,7 +119,16 @@ out:
 			if level < 0 {
 				level = 0
 			}
-			c.lz4Pool = sync.Pool{New: func() interface{} { w := new(lz4.Writer); w.Header.CompressionLevel = int(level); return w }}
+			c.lz4Pool = sync.Pool{
+				New: func() interface{} {
+					w := lz4.NewWriter(new(bytes.Buffer))
+					if err := w.Apply(lz4.CompressionLevelOption(lz4.CompressionLevel(level))); err != nil {
+						w.Close()
+						w = lz4.NewWriter(nil)
+					}
+					return w
+				},
+			}
 		case 4:
 			level := zstd.EncoderLevel(codec.level)
 			c.zstdPool = sync.Pool{
@@ -217,7 +226,7 @@ func newDecompressor() *decompressor {
 			New: func() interface{} { return new(gzip.Reader) },
 		},
 		unlz4Pool: sync.Pool{
-			New: func() interface{} { return new(lz4.Reader) },
+			New: func() interface{} { return lz4.NewReader(nil) },
 		},
 		unzstdPool: sync.Pool{
 			New: func() interface{} {

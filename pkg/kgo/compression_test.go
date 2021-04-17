@@ -23,6 +23,7 @@ func TestNewCompressor(t *testing.T) {
 		{codecs: []CompressionCodec{{codec: 4}, {codec: 3}}},
 
 		{codecs: []CompressionCodec{{codec: 1, level: 127}}}, // bad gzip level is defaulted fine
+		{codecs: []CompressionCodec{{codec: 3, level: 127}}}, // bad lz4 level, same
 		{codecs: []CompressionCodec{{codec: 4, level: 127}}}, // bad zstd level, same
 
 		{codecs: []CompressionCodec{
