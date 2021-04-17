@@ -116,6 +116,8 @@ type broker struct {
 	cxnProduce *brokerCxn
 	cxnFetch   *brokerCxn
 
+	reapMu sync.Mutex // held when modifying a brokerCxn
+
 	// dieMu guards sending to reqs in case the broker has been
 	// permanently stopped.
 	dieMu sync.RWMutex
@@ -406,8 +408,60 @@ func (b *broker) loadConnection(ctx context.Context, reqKey int16) (*brokerCxn, 
 	}
 	b.cl.cfg.logger.Log(LogLevelDebug, "connection initialized successfully", "addr", b.addr, "broker", b.meta.NodeID)
 
+	b.reapMu.Lock()
+	defer b.reapMu.Unlock()
 	*pcxn = cxn
 	return cxn, nil
+}
+
+func (cl *Client) reapConnectionsLoop() {
+	idleTimeout := cl.cfg.connIdleTimeout
+	if idleTimeout < 0 { // impossible due to cfg.validate, but just in case
+		return
+	}
+
+	ticker := time.NewTicker(idleTimeout)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-cl.ctx.Done():
+		case <-ticker.C:
+			cl.reapConnections(idleTimeout)
+		}
+	}
+}
+
+func (cl *Client) reapConnections(idleTimeout time.Duration) {
+	cl.brokersMu.Lock()
+	defer cl.brokersMu.Unlock()
+
+	for _, broker := range cl.brokers {
+		broker.reapConnections(idleTimeout)
+	}
+}
+
+func (b *broker) reapConnections(idleTimeout time.Duration) {
+	b.reapMu.Lock()
+	defer b.reapMu.Unlock()
+
+	for _, cxn := range []*brokerCxn{
+		b.cxnNormal,
+		b.cxnProduce,
+		b.cxnFetch,
+	} {
+		if cxn == nil || atomic.LoadInt32(&cxn.dead) == 1 {
+			continue
+		}
+		lastWrite := time.Unix(0, atomic.LoadInt64(&cxn.lastWrite))
+		if time.Since(lastWrite) > idleTimeout && atomic.LoadUint32(&cxn.writing) == 0 {
+			cxn.die()
+			continue
+		}
+		lastRead := time.Unix(0, atomic.LoadInt64(&cxn.lastRead))
+		if time.Since(lastRead) > idleTimeout && atomic.LoadUint32(&cxn.reading) == 0 {
+			cxn.die()
+		}
+	}
 }
 
 // connect connects to the broker's addr, returning the new connection.
@@ -447,6 +501,14 @@ type brokerCxn struct {
 	throttleUntil int64 // atomic nanosec
 
 	corrID int32
+
+	// The following four fields are used for connection reaping.
+	// Write is only updated in one location; read is updated in three
+	// due to readConn, readConnAsync, and discard.
+	lastWrite int64
+	lastRead  int64
+	writing   uint32
+	reading   uint32
 
 	// dieMu guards appending to resps.
 	dieMu sync.Mutex
@@ -758,6 +820,12 @@ func (cxn *brokerCxn) writeRequest(ctx context.Context, enqueuedForWritingAt tim
 }
 
 func (cxn *brokerCxn) writeConn(ctx context.Context, buf []byte, timeout time.Duration, enqueuedForWritingAt time.Time) (bytesWritten int, writeErr error, writeWait, timeToWrite time.Duration) {
+	atomic.SwapUint32(&cxn.writing, 1)
+	defer func() {
+		atomic.StoreInt64(&cxn.lastWrite, time.Now().UnixNano())
+		atomic.SwapUint32(&cxn.writing, 0)
+	}()
+
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -827,6 +895,14 @@ func (cxn *brokerCxn) readConnAsync(prFn func() (*promisedResp, error)) <-chan *
 			return
 		}
 
+		// Once we have read a size, we officially track that we are
+		// reading for the purposes of connection reaping.
+		atomic.SwapUint32(&cxn.reading, 1)
+		defer func() {
+			atomic.StoreInt64(&cxn.lastRead, time.Now().UnixNano())
+			atomic.SwapUint32(&cxn.reading, 0)
+		}()
+
 		var size int32
 		if size, rr.err = cxn.parseReadSize(sizeBuf); rr.err != nil {
 			return
@@ -859,6 +935,12 @@ func (cxn *brokerCxn) readConnAsync(prFn func() (*promisedResp, error)) <-chan *
 // differs from readConnAsync above because here, we have written a request
 // already and know what we want.
 func (cxn *brokerCxn) readConn(ctx context.Context, timeout time.Duration, enqueuedForReadingAt time.Time) (nread int, buf []byte, err error, readWait, timeToRead time.Duration) {
+	atomic.SwapUint32(&cxn.reading, 1)
+	defer func() {
+		atomic.StoreInt64(&cxn.lastRead, time.Now().UnixNano())
+		atomic.SwapUint32(&cxn.reading, 0)
+	}()
+
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -1086,6 +1168,12 @@ func (cxn *brokerCxn) discard() {
 			}
 			deadlineMu.Unlock()
 
+			atomic.SwapUint32(&cxn.reading, 1)
+			defer func() {
+				atomic.StoreInt64(&cxn.lastRead, time.Now().UnixNano())
+				atomic.SwapUint32(&cxn.reading, 0)
+			}()
+
 			readStart := time.Now()
 			defer func() { timeToRead = time.Since(readStart) }()
 			var size int32
@@ -1196,7 +1284,10 @@ func (cxn *brokerCxn) handleResps() {
 		}
 		cxn.dieMu.Unlock()
 
-		if err := cxn.handleReadResult(rr); err != nil {
+		// We only log on error if we read any bytes or if our
+		// connection is still alive. If our connection is dead, odds
+		// are we killed ourself and readConnAsync then errored.
+		if err := cxn.handleReadResult(rr); err != nil && (rr.nread > 0 || atomic.LoadInt32(&cxn.dead) == 0) {
 			if successes > 0 || len(cxn.b.cl.cfg.sasls) > 0 {
 				cxn.b.cl.cfg.logger.Log(LogLevelDebug, "read from broker errored, killing connection", "addr", cxn.b.addr, "id", cxn.b.meta.NodeID, "successful_reads", successes, "err", err)
 			} else {
@@ -1255,13 +1346,19 @@ func (cxn *brokerCxn) handleReadResultHeader(
 	corrID int32,
 	flexible bool,
 ) ([]byte, error) {
-	cxn.cl.cfg.hooks.each(func(h Hook) {
-		if h, ok := h.(BrokerReadHook); ok {
-			h.OnRead(cxn.b.meta, key, nread, readWait, timeToRead, readErr)
+	// If we have a key, then we always hook / debug log.
+	// If we have no key, if we read any bytes, same.
+	// If we have no key and read nothing, then this is from readConnAsync
+	// quitting due to us killing our own connection.
+	if key >= 0 || nread > 0 {
+		cxn.cl.cfg.hooks.each(func(h Hook) {
+			if h, ok := h.(BrokerReadHook); ok {
+				h.OnRead(cxn.b.meta, key, nread, readWait, timeToRead, readErr)
+			}
+		})
+		if logger := cxn.cl.cfg.logger; logger.Level() >= LogLevelDebug {
+			logger.Log(LogLevelDebug, fmt.Sprintf("read %s v%d", kmsg.NameForKey(key), version), "broker", cxn.b.meta.NodeID, "bytes_read", nread, "read_wait", readWait, "time_to_read", timeToRead, "err", readErr)
 		}
-	})
-	if logger := cxn.cl.cfg.logger; logger.Level() >= LogLevelDebug {
-		logger.Log(LogLevelDebug, fmt.Sprintf("read %s v%d", kmsg.NameForKey(key), version), "broker", cxn.b.meta.NodeID, "bytes_read", nread, "read_wait", readWait, "time_to_read", timeToRead, "err", readErr)
 	}
 	if readErr != nil {
 		return nil, readErr

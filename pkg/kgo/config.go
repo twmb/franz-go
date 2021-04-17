@@ -48,6 +48,7 @@ type cfg struct {
 	id                  *string
 	dialFn              func(context.Context, string, string) (net.Conn, error)
 	connTimeoutOverhead time.Duration
+	connIdleTimeout     time.Duration
 
 	softwareName    string // KIP-511
 	softwareVersion string // KIP-511
@@ -204,6 +205,10 @@ func (cfg *cfg) validate() error {
 		{name: "conn timeout max overhead", v: int64(cfg.connTimeoutOverhead), allowed: int64(15 * time.Minute), badcmp: i64gt, durs: true},
 		{name: "conn timeout min overhead", v: int64(cfg.connTimeoutOverhead), allowed: int64(time.Second), badcmp: i64lt, durs: true},
 
+		// 1s <= conn idle <= 15m
+		{name: "conn min idle timeout", v: int64(cfg.connIdleTimeout), allowed: int64(time.Second), badcmp: i64lt, durs: true},
+		{name: "conn max idle timeout", v: int64(cfg.connIdleTimeout), allowed: int64(15 * time.Minute), badcmp: i64gt, durs: true},
+
 		// 10ms <= metadata <= 1hr
 		{name: "metadata max age", v: int64(cfg.metadataMaxAge), allowed: int64(time.Hour), badcmp: i64gt, durs: true},
 		{name: "metadata min age", v: int64(cfg.metadataMinAge), allowed: int64(10 * time.Millisecond), badcmp: i64lt, durs: true},
@@ -250,6 +255,7 @@ func defaultCfg() cfg {
 		dialFn: (&net.Dialer{Timeout: 10 * time.Second}).DialContext,
 
 		connTimeoutOverhead: 20 * time.Second,
+		connIdleTimeout:     20 * time.Second,
 
 		softwareName:    "kgo",
 		softwareVersion: "0.1.0",
@@ -373,10 +379,25 @@ func WithLogger(l Logger) Opt {
 //
 // For writes, the timeout is always the overhead. We buffer writes in our
 // client before one quick flush, so we always expect the write to be fast.
-//
-// Using 0 has the overhead disables timeouts.
 func ConnTimeoutOverhead(overhead time.Duration) Opt {
 	return clientOpt{func(cfg *cfg) { cfg.connTimeoutOverhead = overhead }}
+}
+
+// ConnIdleTimeout is a rough amount of time to allow connections to idle
+// before they are closed, overriding the default 20.
+//
+// In the worst case, a connection can be allowed to idle for up to 2x this
+// time, while the average is expected to be 1.5x (essentially, a uniform
+// distribution from this interval to 2x the interval).
+//
+// It is possible that a connection can be reaped just as it is about to be
+// written to, but the client internally retries in these cases.
+//
+// Connections are not reaped if they are actively being written to or read
+// from; thus, a request can take a really long time itself and not be reaped
+// (however, this may lead to the ConnTimeoutOverhead).
+func ConnIdleTimeout(timeout time.Duration) Opt {
+	return clientOpt{func(cfg *cfg) { cfg.connIdleTimeout = timeout }}
 }
 
 // Dialer uses fn to dial addresses, overriding the default dialer that uses a

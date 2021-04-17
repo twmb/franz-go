@@ -202,6 +202,7 @@ func NewClient(opts ...Opt) (*Client, error) {
 		cl.brokers[b.meta.NodeID] = b
 	}
 	go cl.updateMetadataLoop()
+	go cl.reapConnectionsLoop()
 
 	return cl, nil
 }
@@ -1078,8 +1079,8 @@ func (cl *Client) Broker(id int) *Broker {
 // it does include those brokers under their normal IDs as returned from a
 // metadata response).
 func (cl *Client) DiscoveredBrokers() []*Broker {
-	cl.brokersMu.Lock()
-	defer cl.brokersMu.Unlock()
+	cl.brokersMu.RLock()
+	defer cl.brokersMu.RUnlock()
 
 	var bs []*Broker
 	for _, broker := range cl.brokers {
@@ -1092,8 +1093,8 @@ func (cl *Client) DiscoveredBrokers() []*Broker {
 
 // SeedBrokers returns the all seed brokers.
 func (cl *Client) SeedBrokers() []*Broker {
-	cl.brokersMu.Lock()
-	defer cl.brokersMu.Unlock()
+	cl.brokersMu.RLock()
+	defer cl.brokersMu.RUnlock()
 
 	var bs []*Broker
 	for i := 0; ; i++ {
