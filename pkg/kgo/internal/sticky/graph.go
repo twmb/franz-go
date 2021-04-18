@@ -9,10 +9,6 @@ import "container/heap"
 type graph struct {
 	b *balancer
 
-	// node => edges out
-	// "from a node, which partitions could we steal?"
-	out [][]string
-
 	// edge => who owns this edge; built in balancer's assignUnassigned
 	cxns []uint16
 
@@ -27,32 +23,13 @@ type graph struct {
 	pathBuf []stealSegment
 }
 
-func (b *balancer) newGraph(
-	partitionConsumers []uint16,
-	topicPotentials map[string][]uint16,
-) graph {
-	g := graph{
+func (b *balancer) newGraph(partitionConsumers []uint16) graph {
+	return graph{
 		b:       b,
-		out:     make([][]string, len(b.plan)),
 		cxns:    partitionConsumers,
 		scores:  make([]pathScore, len(b.plan)),
-		heapBuf: make([]*pathScore, len(b.plan)/2),
+		heapBuf: make([]*pathScore, len(b.plan)),
 	}
-	outBufs := make([]string, len(b.plan)*len(b.plan))
-	for memberNum := range b.plan {
-		out := outBufs[:0:len(b.plan)]
-		outBufs = outBufs[len(b.plan):]
-		// In the worst case, if every node is linked to each other,
-		// each node will have nparts edges. We preallocate the worst
-		// case. It is common for the graph to be highly connected.
-		g.out[memberNum] = out
-	}
-	for topic, potentials := range topicPotentials {
-		for _, potential := range potentials {
-			g.out[potential] = append(g.out[potential], topic)
-		}
-	}
-	return g
 }
 
 func (g *graph) changeOwnership(edge uint32, newDst uint16) {
@@ -108,7 +85,10 @@ func (g *graph) findSteal(from uint16) ([]stealSegment, bool) {
 
 		current.done = true
 
-		for _, topic := range g.out[current.node] { // O(P) worst case, should be less
+		for _, topic := range g.b.members[current.node].Topics {
+			// Even if we create a partition here for a topic that
+			// no longer exists, it does not matter because we will
+			// not loop at all below.
 			firstPartNum, partitions := g.b.partNum(topic, 0)
 			lastPartNum := firstPartNum + uint32(partitions)
 			for edge := firstPartNum; edge < lastPartNum; edge++ {

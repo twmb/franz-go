@@ -417,10 +417,7 @@ func (b *balancer) assignUnassignedAndInitGraph() {
 	}
 
 	for topic, topicMembers := range topicPotentials {
-		last := b.topics[topic]
-		for partition := int32(0); partition < last; partition++ {
-			b.partNum(topic, partition)
-		}
+		b.partNum(topic, 0) // initialize the partitions
 
 		// If the number of members interested in this topic is not the
 		// same as the number of members in this group, then **other**
@@ -490,7 +487,7 @@ func (b *balancer) assignUnassignedAndInitGraph() {
 	// Lastly, with everything assigned, we build our steal graph for
 	// balancing if needed.
 	if b.isComplex {
-		b.stealGraph = b.newGraph(partitionConsumers, topicPotentials)
+		b.stealGraph = b.newGraph(partitionConsumers)
 	}
 }
 
