@@ -33,26 +33,6 @@ type promisedResp struct {
 
 	readTimeout time.Duration
 
-	// With flexible headers, we skip tags at the end of the response
-	// header for now because they're currently unused. However, the
-	// ApiVersions response uses v0 response header (no tags) even if the
-	// response body has flexible versions. This is done in support of the
-	// v0 fallback logic that allows for indexing into an exact offset.
-	// Thus, for ApiVersions specifically, this is false even if the
-	// request is flexible.
-	//
-	// As a side note, this note was not mentioned in KIP-482 which
-	// introduced flexible versions, and was mentioned in passing in
-	// KIP-511 which made ApiVersion flexible, so discovering what was
-	// wrong was not too fun ("Note that ApiVersionsResponse is flexible
-	// version but the response header is not flexible" is *it* in the
-	// entire KIP.)
-	//
-	// To see the version pinning, look at the code generator function
-	// generateHeaderVersion in
-	// generator/src/main/java/org/apache/kafka/message/ApiMessageTypeGenerator.java
-	flexibleHeader bool
-
 	resp    kmsg.Response
 	promise func(kmsg.Response, error)
 
@@ -223,9 +203,9 @@ func (b *broker) waitResp(ctx context.Context, req kmsg.Request) (kmsg.Response,
 // If any of these steps fail, the promise is called with the relevant error.
 func (b *broker) handleReqs() {
 	defer func() {
-		b.cxnNormal.die()
-		b.cxnProduce.die()
-		b.cxnFetch.die()
+		b.cxnNormal.die(nil)
+		b.cxnProduce.die(nil)
+		b.cxnFetch.die(nil)
 	}()
 
 	for pr := range b.reqs {
@@ -286,7 +266,7 @@ func (b *broker) handleReqs() {
 			// For KIP-368.
 			if err = cxn.sasl(); err != nil {
 				pr.promise(nil, err)
-				cxn.die()
+				cxn.die(err)
 				continue
 			}
 		}
@@ -318,45 +298,44 @@ func (b *broker) handleReqs() {
 		// is used correctly, and so that we do not write a request
 		// with 0 acks and then send it to handleResps where it will
 		// not get a response.
-		var isNoResp bool
+		hasResp := true
 		var noResp kmsg.Response
 		switch r := req.(type) {
 		case *produceRequest:
-			isNoResp = r.acks == 0
+			hasResp = r.acks != 0
 		case *kmsg.ProduceRequest:
 			r.Acks = b.cl.cfg.acks.val
 			if r.Acks == 0 {
-				isNoResp = true
+				hasResp = false
 				r.TimeoutMillis = int32(b.cl.cfg.produceTimeout.Milliseconds())
 			}
 			noResp = &kmsg.ProduceResponse{Version: req.GetVersion()}
 		}
 
-		corrID, err := cxn.writeRequest(pr.ctx, pr.enqueue, req)
+		// Before we write the request, we need to track that we will
+		// be reading for it. This ensures we do not miss Kafka
+		// replying before we are ready.
+		if hasResp {
+			rt, _ := cxn.cl.connTimeoutFn(req)
+			cxn.waitResp(promisedResp{
+				pr.ctx,
+				cxn.corrID,
+				rt,
+				req.ResponseKind(),
+				pr.promise,
+				time.Now(),
+				time.Time{},
+			})
+		}
 
-		if err != nil {
-			pr.promise(nil, err)
-			cxn.die()
+		if _, err := cxn.writeRequest(pr.ctx, pr.enqueue, req); err != nil {
+			cxn.die(err)
 			continue
 		}
 
-		if isNoResp {
+		if !hasResp {
 			pr.promise(noResp, nil)
-			continue
 		}
-
-		rt, _ := cxn.cl.connTimeoutFn(req)
-
-		cxn.waitResp(promisedResp{
-			pr.ctx,
-			corrID,
-			rt,
-			req.IsFlexible() && req.Key() != 18, // response header not flexible if ApiVersions; see promisedResp doc
-			req.ResponseKind(),
-			pr.promise,
-			time.Now(),
-			time.Time{},
-		})
 	}
 }
 
@@ -454,12 +433,12 @@ func (b *broker) reapConnections(idleTimeout time.Duration) {
 		}
 		lastWrite := time.Unix(0, atomic.LoadInt64(&cxn.lastWrite))
 		if time.Since(lastWrite) > idleTimeout && atomic.LoadUint32(&cxn.writing) == 0 {
-			cxn.die()
+			cxn.die(nil)
 			continue
 		}
 		lastRead := time.Unix(0, atomic.LoadInt64(&cxn.lastRead))
 		if time.Since(lastRead) > idleTimeout && atomic.LoadUint32(&cxn.reading) == 0 {
-			cxn.die()
+			cxn.die(nil)
 		}
 	}
 }
@@ -886,7 +865,6 @@ func (cxn *brokerCxn) readConnAsync(prFn func() (*promisedResp, error)) <-chan *
 				readDone <- rr
 			}
 			close(rr.done)
-			close(readDone)
 		}()
 
 		sizeBuf := make([]byte, 4)
@@ -1061,7 +1039,7 @@ func (cxn *brokerCxn) closeConn() {
 
 // die kills a broker connection (which could be dead already) and replies to
 // all requests awaiting responses appropriately.
-func (cxn *brokerCxn) die() {
+func (cxn *brokerCxn) die(err error) {
 	if cxn == nil {
 		return
 	}
@@ -1076,10 +1054,14 @@ func (cxn *brokerCxn) die() {
 	cxn.resps = nil
 	cxn.dieMu.Unlock()
 
+	if err == nil {
+		err = errChosenBrokerDead
+	}
+
 	if len(resps) > 0 {
 		go func() {
 			for _, pr := range resps {
-				pr.promise(nil, errChosenBrokerDead)
+				pr.promise(nil, err)
 			}
 		}()
 	}
@@ -1098,8 +1080,8 @@ func (cxn *brokerCxn) waitResp(pr promisedResp) {
 			pr.readStart = time.Now()
 		}
 		cxn.resps = append(cxn.resps, pr)
-		if len(cxn.resps) > 20 { // we should never have 20 outstanding requests on one cxn...
-			defer cxn.die()
+		if len(cxn.resps) > 40 { // we should never have 40 outstanding requests on one cxn...
+			defer cxn.die(nil)
 		}
 	}
 	cxn.dieMu.Unlock()
@@ -1142,7 +1124,7 @@ func (cxn *brokerCxn) waitResp(pr promisedResp) {
 //
 // This is similar to handleResps below, but a bit reduced for simplicity.
 func (cxn *brokerCxn) discard() {
-	defer cxn.die()
+	defer cxn.die(nil)
 
 	discardBuf := make([]byte, 256)
 	for {
@@ -1220,13 +1202,22 @@ func (cxn *brokerCxn) discard() {
 }
 
 func (cxn *brokerCxn) handleResps() {
-	defer cxn.die()
+	defer cxn.die(nil)
 
-	var successes uint64
+	var (
+		successes   uint64
+		deadlineMu  sync.Mutex
+		deadlineSet bool
+		deadline    = func() {
+			deadlineMu.Lock()
+			deadlineSet = true
+			deadlineMu.Unlock()
+			cxn.conn.SetReadDeadline(time.Now())
+		}
+	)
+
 	for {
-		var deadlineMu sync.Mutex
-		var deadlineSet bool
-
+		deadlineSet = false
 		read := cxn.readConnAsync(func() (*promisedResp, error) {
 			cxn.dieMu.Lock()
 			defer cxn.dieMu.Unlock()
@@ -1247,13 +1238,6 @@ func (cxn *brokerCxn) handleResps() {
 
 			return &pr, nil
 		})
-
-		deadline := func() {
-			deadlineMu.Lock()
-			deadlineSet = true
-			deadlineMu.Unlock()
-			cxn.conn.SetReadDeadline(time.Now())
-		}
 
 		var rr *readResult
 		select {
@@ -1276,14 +1260,6 @@ func (cxn *brokerCxn) handleResps() {
 		}
 		cxn.conn.SetReadDeadline(time.Time{})
 
-		// Now that we have finished reading the first promised resp, we can update
-		// when we expect the next one's readStart.
-		cxn.dieMu.Lock()
-		if len(cxn.resps) > 0 {
-			cxn.resps[0].readStart = time.Now()
-		}
-		cxn.dieMu.Unlock()
-
 		// We only log on error if we read any bytes or if our
 		// connection is still alive. If our connection is dead, odds
 		// are we killed ourself and readConnAsync then errored.
@@ -1296,16 +1272,43 @@ func (cxn *brokerCxn) handleResps() {
 			return
 		}
 		successes++
+
+		// Now that we have finished reading the first promised resp, we can update
+		// when we expect the next one's readStart.
+		cxn.dieMu.Lock()
+		if len(cxn.resps) > 0 {
+			cxn.resps[0].readStart = time.Now()
+		}
+		cxn.dieMu.Unlock()
 	}
 }
 
 // handleReadResult does what the name says; for the most part this passes a
 // bunch of args into handleReadResultHeader.
-func (cxn *brokerCxn) handleReadResult(rr *readResult) (err error) {
+func (cxn *brokerCxn) handleReadResult(rr *readResult) error {
 	key, version, corrID, flexible := int16(-1), int16(0), int32(-1), false
 	pr := rr.pr
 	if pr != nil {
-		key, version, corrID, flexible = pr.resp.Key(), pr.resp.GetVersion(), pr.corrID, pr.resp.IsFlexible()
+		key, version, corrID = pr.resp.Key(), pr.resp.GetVersion(), pr.corrID
+		// With flexible headers, we skip tags at the end of the response
+		// header for now because they're currently unused. However, the
+		// ApiVersions response uses v0 response header (no tags) even if the
+		// response body has flexible versions. This is done in support of the
+		// v0 fallback logic that allows for indexing into an exact offset.
+		// Thus, for ApiVersions specifically, this is false even if the
+		// request is flexible.
+		//
+		// As a side note, this note was not mentioned in KIP-482 which
+		// introduced flexible versions, and was mentioned in passing in
+		// KIP-511 which made ApiVersion flexible, so discovering what was
+		// wrong was not too fun ("Note that ApiVersionsResponse is flexible
+		// version but the response header is not flexible" is *it* in the
+		// entire KIP.)
+		//
+		// To see the version pinning, look at the code generator function
+		// generateHeaderVersion in
+		// generator/src/main/java/org/apache/kafka/message/ApiMessageTypeGenerator.java
+		flexible = pr.resp.IsFlexible() && key != 18
 	}
 	body, err := cxn.handleReadResultHeader(
 		key,
@@ -1319,7 +1322,7 @@ func (cxn *brokerCxn) handleReadResult(rr *readResult) (err error) {
 		flexible,
 	)
 	if err != nil {
-		if pr != nil {
+		if pr != nil { // can have no promised resp if we had a read error on the size in readConnAsync
 			pr.promise(nil, err)
 		}
 		return err
