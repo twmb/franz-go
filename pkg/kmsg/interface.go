@@ -203,6 +203,7 @@ func (f *RequestFormatter) AppendRequest(
 		var numTags uint8
 		dst = append(dst, numTags)
 		if numTags != 0 {
+			// TODO when tags are added
 		}
 	}
 
@@ -274,4 +275,50 @@ func SkipTags(b *kbin.Reader) {
 		_, size := b.Uvarint(), b.Uvarint()
 		b.Span(int(size))
 	}
+}
+
+// ReadTags reads tags in a reader and returns the tags.
+func ReadTags(b *kbin.Reader) Tags {
+	var t Tags
+	for num := b.Uvarint(); num > 0; num-- {
+		key, size := b.Uvarint(), b.Uvarint()
+		t.Set(key, b.Span(int(size)))
+	}
+	return t
+}
+
+// Tags is an opaque structure capturing unparsed tags.
+type Tags struct {
+	keyvals map[uint32][]byte
+}
+
+// Len returns the number of keyvals in Tags.
+func (t *Tags) Len() int { return len(t.keyvals) }
+
+// Each calls fn for each key and val in the tags.
+func (t *Tags) Each(fn func(uint32, []byte)) {
+	for key, val := range t.keyvals {
+		fn(key, val)
+	}
+}
+
+// Set sets a tag's key and val.
+//
+// Note that serializing tags does NOT check if the set key overlaps with an
+// existing used key. It is invalid to set a key used by Kafka itself.
+func (t *Tags) Set(key uint32, val []byte) {
+	if t.keyvals == nil {
+		t.keyvals = make(map[uint32][]byte)
+	}
+	t.keyvals[key] = val
+}
+
+// AppendEach appends each keyval in tags to dst and returns the updated dst.
+func (t *Tags) AppendEach(dst []byte) []byte {
+	t.Each(func(key uint32, val []byte) {
+		dst = kbin.AppendUvarint(dst, key)
+		dst = kbin.AppendUvarint(dst, uint32(len(val)))
+		dst = append(dst, val...)
+	})
+	return dst
 }
