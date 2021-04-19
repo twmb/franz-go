@@ -391,6 +391,7 @@ func main() {
 	l.Write("package kmsg")
 	l.Write("import (")
 	l.Write(`"context"`)
+	l.Write(`"reflect"`)
 	l.Write("")
 	l.Write(`"github.com/twmb/franz-go/pkg/kbin"`)
 	l.Write(")")
