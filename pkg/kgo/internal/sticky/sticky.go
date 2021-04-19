@@ -122,18 +122,45 @@ func newBalancer(members []GroupMember, topics map[string]int32) *balancer {
 func (b *balancer) into() Plan {
 	plan := make(Plan, len(b.plan))
 	ntopics := 5 * len(b.topicNums) / 4
+	allParts := make([]int32, 0, len(b.partOwners))
 	for memberNum, partNums := range b.plan {
 		member := b.members[memberNum].ID
-		topics, exists := plan[member]
-		if !exists {
-			topics = make(map[string][]int32, ntopics)
-			plan[member] = topics
+		if len(partNums) == 0 {
+			plan[member] = make(map[string][]int32, 0)
+			continue
 		}
+		topics := make(map[string][]int32, ntopics)
+		plan[member] = topics
+
+		sort.Slice(partNums, func(i, j int) bool {
+			partNumI := partNums[i]
+			partNumJ := partNums[j]
+
+			topicNumI := b.partOwners[partNumI]
+			topicNumJ := b.partOwners[partNumJ]
+
+			return topicNumI < topicNumJ || topicNumI == topicNumJ && partNumI < partNumJ
+		})
+
+		lastTopicNum := b.partOwners[partNums[0]]
+		lastTopicInfo := b.topicInfos[lastTopicNum]
 		for _, partNum := range partNums {
-			info := b.topicInfos[b.partOwners[partNum]]
+			topicNum := b.partOwners[partNum]
+			info := b.topicInfos[topicNum]
+
+			if topicNum != lastTopicNum {
+				topics[lastTopicInfo.topic] = allParts[:len(allParts):len(allParts)]
+				allParts = allParts[len(allParts):]
+
+				lastTopicNum = topicNum
+				lastTopicInfo = info
+			}
+
 			partition := partNum - info.partNum
-			topics[info.topic] = append(topics[info.topic], int32(partition))
+			allParts = append(allParts, int32(partition))
 		}
+		topics[lastTopicInfo.topic] = allParts[:len(allParts):len(allParts)]
+		allParts = allParts[len(allParts):]
 	}
 	return plan
 }
@@ -266,13 +293,13 @@ func (b *balancer) parseMemberMetadata() {
 	// Each partition should only have one consumer, but a flaky member
 	// could rejoin with an old generation (stale user data) and say it
 	// is consuming something a different member is. See KIP-341.
-	partitionConsumersByGeneration := make([][]memberGeneration, cap(b.partOwners))
 	partitionConsumersBuf := make([]memberGeneration, cap(b.partOwners))
+	partitionConsumersByGeneration := make([][]memberGeneration, cap(b.partOwners))
 
 	for _, member := range b.members {
 		memberPlan, generation := deserializeUserData(member.UserData)
 		memberGeneration := memberGeneration{
-			member.ID,
+			b.memberNums[member.ID],
 			generation,
 		}
 		for _, topicPartition := range memberPlan {
@@ -309,18 +336,17 @@ func (b *balancer) parseMemberMetadata() {
 			continue
 		}
 
-		memberNum := b.memberNums[partitionConsumers[0].member]
-		partNums := &b.plan[memberNum]
+		partNums := &b.plan[partitionConsumers[0].memberNum]
 		partNums.add(uint32(partNum))
 
 		if len(partitionConsumers) > 1 {
-			b.stales[uint32(partNum)] = b.memberNums[partitionConsumers[1].member]
+			b.stales[uint32(partNum)] = partitionConsumers[1].memberNum
 		}
 	}
 }
 
 type memberGeneration struct {
-	member     string
+	memberNum  uint16
 	generation int32
 }
 
@@ -533,38 +559,36 @@ type membersByPartitions struct {
 	partitions membersPartitions
 }
 
-func (m *membersByPartitions) len() int { return len(m.members) }
-func (m *membersByPartitions) swap(i, j int) {
-	m.members[i], m.members[j] = m.members[j], m.members[i]
-}
-func (m *membersByPartitions) less(i, j int) bool {
-	return m.partitions[m.members[i]].len() < m.partitions[m.members[j]].len()
-}
 func (m *membersByPartitions) init() {
-	n := m.len()
+	n := len(m.members)
 	for i := n/2 - 1; i >= 0; i-- {
 		m.down(i, n)
 	}
 }
 func (m *membersByPartitions) fix0() {
-	m.down(0, m.len())
+	m.down(0, len(m.members))
 }
 func (m *membersByPartitions) down(i0, n int) {
-	i := i0
+	node := i0
 	for {
-		j1 := 2*i + 1
-		if j1 >= n || j1 < 0 { // j1 < 0 after int overflow
+		left := 2*node + 1
+		if left >= n || left < 0 { // left < 0 after int overflow
 			break
 		}
-		j := j1 // left child
-		if j2 := j1 + 1; j2 < n && m.less(j2, j1) {
-			j = j2 // = 2*i + 2  // right child
+		swap := left // left child
+		swapLen := len(m.partitions[m.members[left]])
+		if right := left + 1; right < n {
+			if rightLen := len(m.partitions[m.members[right]]); rightLen < swapLen {
+				swapLen = rightLen
+				swap = right
+			}
 		}
-		if !m.less(j, i) {
+		nodeLen := len(m.partitions[m.members[node]])
+		if nodeLen <= swapLen {
 			break
 		}
-		m.swap(i, j)
-		i = j
+		m.members[node], m.members[swap] = m.members[swap], m.members[node]
+		node = swap
 	}
 }
 

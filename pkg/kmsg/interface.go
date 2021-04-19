@@ -223,10 +223,22 @@ func StringPtr(in string) *string {
 // but it is versioned: if decoding v1 fails, this falls back to v0.
 func (s *StickyMemberMetadata) ReadFrom(src []byte) error {
 	b := kbin.Reader{Src: src}
-	for i := b.ArrayLen(); i > 0; i-- {
-		var assignment StickyMemberMetadataCurrentAssignment
-		assignment.Topic = b.String()
-		for i := b.ArrayLen(); i > 0; i-- {
+	numAssignments := b.ArrayLen()
+	if numAssignments < 0 {
+		numAssignments = 0
+	}
+	s.CurrentAssignment = make([]StickyMemberMetadataCurrentAssignment, 0, numAssignments)
+	for i := numAssignments; i > 0; i-- {
+		topic := b.String()
+		numPartitions := b.ArrayLen()
+		if numPartitions < 0 {
+			numPartitions = 0
+		}
+		assignment := StickyMemberMetadataCurrentAssignment{
+			Topic:      topic,
+			Partitions: make([]int32, 0, numPartitions),
+		}
+		for i := numPartitions; i > 0; i-- {
 			assignment.Partitions = append(assignment.Partitions, b.Int32())
 		}
 		s.CurrentAssignment = append(s.CurrentAssignment, assignment)
