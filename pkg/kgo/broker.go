@@ -420,25 +420,34 @@ func (cl *Client) reapConnectionsLoop() {
 
 	ticker := time.NewTicker(idleTimeout)
 	defer ticker.Stop()
+	last := time.Now()
 	for {
 		select {
 		case <-cl.ctx.Done():
-		case <-ticker.C:
-			cl.reapConnections(idleTimeout)
+			return
+		case tick := <-ticker.C:
+			start := time.Now()
+			reaped := cl.reapConnections(idleTimeout)
+			dur := time.Since(start)
+			if reaped > 0 {
+				cl.cfg.logger.Log(LogLevelDebug, "reaped connections", "time_since_last_reap", tick.Sub(last), "reap_dur", dur, "num_reaped", reaped)
+			}
+			last = tick
 		}
 	}
 }
 
-func (cl *Client) reapConnections(idleTimeout time.Duration) {
+func (cl *Client) reapConnections(idleTimeout time.Duration) (total int) {
 	cl.brokersMu.Lock()
 	defer cl.brokersMu.Unlock()
 
 	for _, broker := range cl.brokers {
-		broker.reapConnections(idleTimeout)
+		total += broker.reapConnections(idleTimeout)
 	}
+	return total
 }
 
-func (b *broker) reapConnections(idleTimeout time.Duration) {
+func (b *broker) reapConnections(idleTimeout time.Duration) (total int) {
 	b.reapMu.Lock()
 	defer b.reapMu.Unlock()
 
@@ -453,13 +462,16 @@ func (b *broker) reapConnections(idleTimeout time.Duration) {
 		lastWrite := time.Unix(0, atomic.LoadInt64(&cxn.lastWrite))
 		if time.Since(lastWrite) > idleTimeout && atomic.LoadUint32(&cxn.writing) == 0 {
 			cxn.die()
+			total++
 			continue
 		}
 		lastRead := time.Unix(0, atomic.LoadInt64(&cxn.lastRead))
 		if time.Since(lastRead) > idleTimeout && atomic.LoadUint32(&cxn.reading) == 0 {
 			cxn.die()
+			total++
 		}
 	}
+	return total
 }
 
 // connect connects to the broker's addr, returning the new connection.
