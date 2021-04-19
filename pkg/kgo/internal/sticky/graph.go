@@ -9,6 +9,10 @@ import "container/heap"
 type graph struct {
 	b *balancer
 
+	// node => edges out
+	// "from a node (member), which topicNum could we steal?"
+	out [][]uint32
+
 	// edge => who owns this edge; built in balancer's assignUnassigned
 	cxns []uint16
 
@@ -23,13 +27,32 @@ type graph struct {
 	pathBuf []stealSegment
 }
 
-func (b *balancer) newGraph(partitionConsumers []uint16) graph {
-	return graph{
+func (b *balancer) newGraph(
+	partitionConsumers []uint16,
+	topicPotentials [][]uint16,
+) graph {
+	g := graph{
 		b:       b,
+		out:     make([][]uint32, len(b.members)),
 		cxns:    partitionConsumers,
-		scores:  make([]pathScore, len(b.plan)),
-		heapBuf: make([]*pathScore, len(b.plan)),
+		scores:  make([]pathScore, len(b.members)),
+		heapBuf: make([]*pathScore, len(b.members)),
 	}
+	outBufs := make([]uint32, len(b.members)*len(topicPotentials))
+	for memberNum := range b.plan {
+		out := outBufs[:0:len(topicPotentials)]
+		outBufs = outBufs[len(topicPotentials):]
+		// In the worst case, if every node is linked to each other,
+		// each node will have nparts edges. We preallocate the worst
+		// case. It is common for the graph to be highly connected.
+		g.out[memberNum] = out
+	}
+	for topicNum, potentials := range topicPotentials {
+		for _, potential := range potentials {
+			g.out[potential] = append(g.out[potential], uint32(topicNum))
+		}
+	}
+	return g
 }
 
 func (g *graph) changeOwnership(edge uint32, newDst uint16) {
@@ -85,12 +108,12 @@ func (g *graph) findSteal(from uint16) ([]stealSegment, bool) {
 
 		current.done = true
 
-		for _, topic := range g.b.members[current.node].Topics {
+		for _, topicNum := range g.out[current.node] {
 			// Even if we create a partition here for a topic that
 			// no longer exists, it does not matter because we will
 			// not loop at all below.
-			firstPartNum, partitions := g.b.partNum(topic, 0)
-			lastPartNum := firstPartNum + uint32(partitions)
+			info := g.b.topicInfos[topicNum]
+			firstPartNum, lastPartNum := info.partNum, info.partNum+uint32(info.partitions)
 			for edge := firstPartNum; edge < lastPartNum; edge++ {
 				neighborNode := g.cxns[edge]
 				neighbor, isNew := g.getScore(neighborNode)

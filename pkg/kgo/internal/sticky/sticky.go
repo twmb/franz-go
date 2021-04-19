@@ -37,22 +37,11 @@ type balancer struct {
 	// This is built in newBalancer mapping member IDs to the GroupMember.
 	members []GroupMember
 
-	// memberNums and memberNames map member names to numbers (and back).
-	// We use numbers throughout balancing for a significant speed boost.
-	memberNames   []string
-	memberNums    map[string]uint16
-	nextMemberNum uint16
+	memberNums map[string]uint16 // member id => index into members
 
-	// topics are the topic names and partitions that the client knows of
-	// and passed to be used for assigning unassigned partitions.
-	topics map[string]int32
-
-	// Similar to memberNums and memberNames above, partNums and partNums
-	// map topic partitions to numbers and back. This provides significant
-	// speed boosts.
-	partNames   []topicPartition
-	partNums    map[string]partNumStart
-	nextPartNum uint32
+	topicNums  map[string]uint32 // topic name => index into topicInfos
+	topicInfos []topicInfo
+	partInfos  []partitionInfo
 
 	// Stales tracks partNums that are doubly subscribed in this join
 	// where one of the subscribers is on an old generation.
@@ -61,8 +50,7 @@ type balancer struct {
 	// stuffed here.
 	stales map[uint32]uint16 // partNum => stale memberNum
 
-	// plan is what we are building and balancing.
-	plan membersPartitions
+	plan membersPartitions // what we are building and balancing
 
 	// planByNumPartitions orders plan members into partition count levels.
 	//
@@ -79,98 +67,91 @@ type balancer struct {
 	stealGraph graph
 }
 
-type topicPartition struct {
-	topic     string
-	partition int32
+type topicInfo struct {
+	partNum    uint32 // base part num
+	partitions int32  // number of partitions in the topic
+	topic      string
+}
+
+type partitionInfo struct {
+	topicNum uint32
+	partNum  uint32
 }
 
 func newBalancer(members []GroupMember, topics map[string]int32) *balancer {
-	var nparts int
-	for _, partitions := range topics {
+	var (
+		nparts     int
+		topicNums  = make(map[string]uint32, len(topics))
+		topicInfos = make([]topicInfo, len(topics))
+	)
+	for topic, partitions := range topics {
+		topicNum := uint32(len(topicNums))
+		topicNums[topic] = topicNum
+		topicInfos[topicNum] = topicInfo{
+			partNum:    uint32(nparts),
+			partitions: partitions,
+			topic:      topic,
+		}
 		nparts += int(partitions)
+	}
+	partInfos := make([]partitionInfo, 0, nparts)
+	for topicNum, info := range topicInfos {
+		for i := int32(0); i < info.partitions; i++ {
+			partInfos = append(partInfos, partitionInfo{
+				topicNum: uint32(topicNum),
+				partNum:  info.partNum + uint32(i),
+			})
+		}
+	}
+	memberNums := make(map[string]uint16, len(members))
+	for num, member := range members {
+		memberNums[member.ID] = uint16(num)
 	}
 
 	b := &balancer{
-		members:     make([]GroupMember, len(members)),
-		memberNums:  make(map[string]uint16, len(members)),
-		memberNames: make([]string, len(members)),
-		plan:        make(membersPartitions, len(members)),
-		topics:      topics,
-		partNames:   make([]topicPartition, nparts),
-		partNums:    make(map[string]partNumStart, len(topics)),
-		stales:      make(map[uint32]uint16),
+		members:    members,
+		memberNums: memberNums,
+		topicNums:  topicNums,
+		topicInfos: topicInfos,
+		partInfos:  partInfos,
+		stales:     make(map[uint32]uint16),
+		plan:       make(membersPartitions, len(members)),
 	}
 
 	evenDivvy := nparts/len(members) + 1
-	for _, member := range members {
-		num := b.memberNum(member.ID)
-		b.members[num] = member
-		b.plan[num] = make(memberPartitions, 0, evenDivvy)
+	planBuf := make(memberPartitions, evenDivvy*len(members))
+	for num := range members {
+		b.plan[num] = planBuf[:0:evenDivvy]
+		planBuf = planBuf[evenDivvy:]
 	}
 	return b
 }
 
 func (b *balancer) into() Plan {
 	plan := make(Plan, len(b.plan))
+	ntopics := 5 * len(b.topicNums) / 4
 	for memberNum, partNums := range b.plan {
-		name := b.memberName(uint16(memberNum))
-		topics, exists := plan[name]
+		member := b.members[memberNum].ID
+		topics, exists := plan[member]
 		if !exists {
-			topics = make(map[string][]int32, 20)
-			plan[name] = topics
+			topics = make(map[string][]int32, ntopics)
+			plan[member] = topics
 		}
 		for _, partNum := range partNums {
-			partition := b.partName(partNum)
-			topicPartitions := topics[partition.topic]
-			if len(topicPartitions) == 0 {
-				topicPartitions = make([]int32, 0, 40)
-			}
-			topicPartitions = append(topicPartitions, partition.partition)
-			topics[partition.topic] = topicPartitions
+			info := b.topicInfos[b.partInfos[partNum].topicNum]
+			partition := partNum - info.partNum
+			topics[info.topic] = append(topics[info.topic], int32(partition))
 		}
 	}
 	return plan
 }
 
-type partNumStart struct {
-	num   uint32
-	total int32
-}
-
-func (b *balancer) partNum(topic string, partition int32) (uint32, int) {
-	start, exists := b.partNums[topic]
+func (b *balancer) partNumByTopic(topic string, partition int32) (uint32, bool) {
+	topicNum, exists := b.topicNums[topic]
 	if !exists {
-		start = partNumStart{
-			num:   b.nextPartNum,
-			total: b.topics[topic],
-		}
-		b.partNums[topic] = start
-		b.nextPartNum += uint32(start.total)
-		for partition, num := int32(0), start.num; partition < start.total; partition, num = partition+1, num+1 {
-			b.partNames[num] = topicPartition{topic, partition}
-		}
+		return 0, false
 	}
-	num := start.num + uint32(partition)
-	return num, int(start.total)
-}
-
-func (b *balancer) partName(num uint32) topicPartition {
-	return b.partNames[num]
-}
-
-func (b *balancer) memberNum(name string) uint16 {
-	num, exists := b.memberNums[name]
-	if !exists {
-		num = b.nextMemberNum
-		b.nextMemberNum++
-		b.memberNums[name] = num
-		b.memberNames[num] = name
-	}
-	return num
-}
-
-func (b *balancer) memberName(num uint16) string {
-	return b.memberNames[num]
+	return b.topicInfos[topicNum].partNum + uint32(partition), true
 }
 
 func (m *memberPartitions) remove(needle uint32) {
@@ -277,7 +258,7 @@ func Balance(members []GroupMember, topics map[string]int32) Plan {
 		return make(Plan)
 	}
 	b := newBalancer(members, topics)
-	if cap(b.partNames) == 0 {
+	if cap(b.partInfos) == 0 {
 		return b.into()
 	}
 	b.parseMemberMetadata()
@@ -293,8 +274,8 @@ func (b *balancer) parseMemberMetadata() {
 	// Each partition should only have one consumer, but a flaky member
 	// could rejoin with an old generation (stale user data) and say it
 	// is consuming something a different member is. See KIP-341.
-	partitionConsumersByGeneration := make([][]memberGeneration, cap(b.partNames))
-	partitionConsumersBuf := make([]memberGeneration, cap(b.partNames))
+	partitionConsumersByGeneration := make([][]memberGeneration, cap(b.partInfos))
+	partitionConsumersBuf := make([]memberGeneration, cap(b.partInfos))
 
 	for _, member := range b.members {
 		memberPlan, generation := deserializeUserData(member.UserData)
@@ -303,12 +284,10 @@ func (b *balancer) parseMemberMetadata() {
 			generation,
 		}
 		for _, topicPartition := range memberPlan {
-			// If the topic no longer exists in our topics, no sense keeping
-			// it around here only to be deleted later.
-			if _, exists := b.topics[topicPartition.topic]; !exists {
+			partNum, exists := b.partNumByTopic(topicPartition.topic, topicPartition.partition)
+			if !exists {
 				continue
 			}
-			partNum, _ := b.partNum(topicPartition.topic, topicPartition.partition)
 			partitionConsumers := partitionConsumersByGeneration[partNum]
 			var doublyConsumed bool
 			for _, otherConsumer := range partitionConsumers { // expected to be very few if any others
@@ -338,12 +317,12 @@ func (b *balancer) parseMemberMetadata() {
 			continue
 		}
 
-		memberNum := b.memberNum(partitionConsumers[0].member)
+		memberNum := b.memberNums[partitionConsumers[0].member]
 		partNums := &b.plan[memberNum]
 		partNums.add(uint32(partNum))
 
 		if len(partitionConsumers) > 1 {
-			b.stales[uint32(partNum)] = b.memberNum(partitionConsumers[1].member)
+			b.stales[uint32(partNum)] = b.memberNums[partitionConsumers[1].member]
 		}
 	}
 }
@@ -359,6 +338,11 @@ type memberGenerations []memberGeneration
 func (m *memberGenerations) Len() int           { return len(*m) }
 func (m *memberGenerations) Less(i, j int) bool { s := *m; return s[i].generation > s[j].generation }
 func (m *memberGenerations) Swap(i, j int)      { s := *m; s[i], s[j] = s[j], s[i] }
+
+type topicPartition struct {
+	topic     string
+	partition int32
+}
 
 // deserializeUserData returns the topic partitions a member was consuming and
 // the join generation it was consuming from.
@@ -400,25 +384,24 @@ func (b *balancer) assignUnassignedAndInitGraph() {
 	// below in the partition mapping. Doing this two step process allows
 	// for a 10x speed boost rather than ranging over all partitions many
 	// times.
-	membersBufs := make([]uint16, len(b.topics)*len(b.members))
-	topicPotentials := make(map[string][]uint16, len(b.topics))
+	membersBufs := make([]uint16, len(b.topicNums)*len(b.members))
+	topicPotentials := make([][]uint16, len(b.topicNums))
 	for memberNum, member := range b.members {
 		for _, topic := range member.Topics {
-			if _, exists := b.topics[topic]; !exists {
+			topicNum, exists := b.topicNums[topic]
+			if !exists {
 				continue
 			}
-			memberNums := topicPotentials[topic]
+			memberNums := topicPotentials[topicNum]
 			if cap(memberNums) == 0 {
-				memberNums = membersBufs[:0:len(b.memberNums)]
-				membersBufs = membersBufs[len(b.memberNums):]
+				memberNums = membersBufs[:0:len(b.members)]
+				membersBufs = membersBufs[len(b.members):]
 			}
-			topicPotentials[topic] = append(memberNums, uint16(memberNum))
+			topicPotentials[topicNum] = append(memberNums, uint16(memberNum))
 		}
 	}
 
-	for topic, topicMembers := range topicPotentials {
-		b.partNum(topic, 0) // initialize the partitions
-
+	for _, topicMembers := range topicPotentials {
 		// If the number of members interested in this topic is not the
 		// same as the number of members in this group, then **other**
 		// members are interested in other topics and not this one, and
@@ -435,23 +418,23 @@ func (b *balancer) assignUnassignedAndInitGraph() {
 	// Next, over the prior plan, un-map deleted topics or topics that
 	// members no longer want. This is where we determine what is now
 	// unassigned.
-	partitionConsumers := make([]uint16, cap(b.partNames)) // partNum => consuming member
+	partitionConsumers := make([]uint16, cap(b.partInfos)) // partNum => consuming member
 	for i := range partitionConsumers {
 		partitionConsumers[i] = unassignedPart
 	}
 	for memberNum := range b.plan {
 		partNums := &b.plan[memberNum]
 		for _, partNum := range *partNums {
-			if len(topicPotentials[b.partName(partNum).topic]) == 0 { // all prior subscriptions stopped wanting this partition
+			info := b.partInfos[partNum]
+			if len(topicPotentials[info.topicNum]) == 0 { // all prior subscriptions stopped wanting this partition
 				partitionConsumers[partNum] = deletedPart
 				partNums.remove(partNum)
 				continue
 			}
 			memberTopics := b.members[memberNum].Topics
 			var memberStillWantsTopic bool
-			partition := b.partName(partNum)
 			for _, memberTopic := range memberTopics {
-				if memberTopic == partition.topic {
+				if memberTopic == b.topicInfos[info.topicNum].topic {
 					memberStillWantsTopic = true
 					break
 				}
@@ -474,7 +457,7 @@ func (b *balancer) assignUnassignedAndInitGraph() {
 		if owner != unassignedPart {
 			continue
 		}
-		potentials := topicPotentials[b.partName(uint32(partNum)).topic]
+		potentials := topicPotentials[b.partInfos[partNum].topicNum]
 		if len(potentials) == 0 {
 			continue
 		}
@@ -487,7 +470,10 @@ func (b *balancer) assignUnassignedAndInitGraph() {
 	// Lastly, with everything assigned, we build our steal graph for
 	// balancing if needed.
 	if b.isComplex {
-		b.stealGraph = b.newGraph(partitionConsumers)
+		b.stealGraph = b.newGraph(
+			partitionConsumers,
+			topicPotentials,
+		)
 	}
 }
 
@@ -512,11 +498,11 @@ const (
 //
 // This effectively re-stickies members before we balance further.
 func (b *balancer) tryRestickyStales(
-	topicPotentials map[string][]uint16,
+	topicPotentials [][]uint16,
 	partitionConsumers []uint16,
 ) {
 	for staleNum, lastOwnerNum := range b.stales {
-		potentials := topicPotentials[b.partName(staleNum).topic] // there must be a potential consumer if we are here
+		potentials := topicPotentials[b.partInfos[staleNum].topicNum] // there must be a potential consumer if we are here
 		var canTake bool
 		for _, potentialNum := range potentials {
 			if potentialNum == lastOwnerNum {
@@ -571,7 +557,7 @@ func (m *membersByPartitions) init() {
 func (m *membersByPartitions) fix0() {
 	m.down(0, m.len())
 }
-func (m *membersByPartitions) down(i0, n int) bool {
+func (m *membersByPartitions) down(i0, n int) {
 	i := i0
 	for {
 		j1 := 2*i + 1
@@ -588,7 +574,6 @@ func (m *membersByPartitions) down(i0, n int) bool {
 		m.swap(i, j)
 		i = j
 	}
-	return i > i0
 }
 
 // balance loops trying to move partitions until the plan is as balanced
