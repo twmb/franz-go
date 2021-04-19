@@ -590,25 +590,28 @@ func CooperativeStickyBalancer() GroupBalancer {
 // partitions as a single "topic partition" type. Ideally, our much better
 // sticky balancing implementation more than makes up for the speed difference.
 func (*stickyBalancer) adjustCooperative(members []groupMember, plan balancePlan) {
-	type tp struct {
-		topic     string
-		partition int32
-	}
-	allAdded := make(map[tp]groupMemberID, 100)
-	allRevoked := make(map[tp]struct{}, 100)
+	allAdded := make(map[string]map[int32]groupMemberID, 100)
+	allRevoked := make(map[string]map[int32]struct{}, 100)
 
-	var pmaps []map[int32]struct{}
-	var pmapsAt int
-	maps := make(map[string]map[int32]struct{})
-
-	nextMap := func(base int) map[int32]struct{} {
-		if pmapsAt == len(pmaps) {
-			pmaps = append(pmaps, make(map[int32]struct{}, base))
+	addT := func(t string) map[int32]groupMemberID {
+		addT := allAdded[t]
+		if addT == nil {
+			addT = make(map[int32]groupMemberID, 20)
+			allAdded[t] = addT
 		}
-		r := pmaps[pmapsAt]
-		pmapsAt++
-		return r
+		return addT
 	}
+	revokeT := func(t string) map[int32]struct{} {
+		revokeT := allRevoked[t]
+		if revokeT == nil {
+			revokeT = make(map[int32]struct{}, 20)
+			allRevoked[t] = revokeT
+		}
+		return revokeT
+	}
+
+	tmap := make(map[string]struct{}) // reusable topic existence map
+	pmap := make(map[int32]struct{})  // reusable partitions existence map
 
 	// First, on all members, we find what was added and what was removed
 	// to and from that member.
@@ -620,78 +623,87 @@ func (*stickyBalancer) adjustCooperative(members []groupMember, plan balancePlan
 		// added   := planned - current
 		// revoked := current - planned
 
-		// First we move everything planned into a "planned" map,
-		pmapsAt = 0
-		for ptopic, ppartitions := range planned {
-			ppartitionsMap := nextMap(len(ppartitions))
-			maps[ptopic] = ppartitionsMap
-			for _, ppartition := range ppartitions {
-				ppartitionsMap[ppartition] = struct{}{}
-			}
+		for ptopic := range planned { // set existence for all planned topics
+			tmap[ptopic] = struct{}{}
 		}
-		// then we delete everything previously owned for this member,
-		for _, otopic := range member.owned {
-			ppartitions, exists := maps[otopic.Topic]
-			if !exists {
-				continue
-			}
-			for _, opartition := range otopic.Partitions {
-				delete(ppartitions, opartition)
-			}
-		}
-		// all that remains is added.
-		for ptopic, ppartitions := range maps {
-			delete(maps, ptopic)
-			for ppartition := range ppartitions {
-				delete(ppartitions, ppartition)
-				allAdded[tp{ptopic, ppartition}] = member.id
-			}
-		}
-
-		// Next, over everything that the member owned, if it is
-		// no longer planned, then it was revoked.
-		for _, otopic := range member.owned {
+		for _, otopic := range member.owned { // over all prior owned topics,
 			topic := otopic.Topic
+			delete(tmap, topic)
 			ppartitions, exists := planned[topic]
-			if !exists {
+			if !exists { // any topic that is no longer planned was entirely revoked,
+				allRevokedT := revokeT(topic)
 				for _, opartition := range otopic.Partitions {
-					allRevoked[tp{topic, opartition}] = struct{}{}
+					allRevokedT[opartition] = struct{}{}
 				}
 				continue
 			}
-
-			pmapsAt = 0
-			opartitions := nextMap(len(otopic.Partitions))
+			// calculate what was added by creating a planned existence map,
+			// then removing what was owned, and anything that remains is new,
+			for _, ppartition := range ppartitions {
+				pmap[ppartition] = struct{}{}
+			}
 			for _, opartition := range otopic.Partitions {
-				opartitions[opartition] = struct{}{}
+				delete(pmap, opartition)
+			}
+			if len(pmap) > 0 {
+				allAddedT := addT(topic)
+				for ppartition := range pmap {
+					delete(pmap, ppartition)
+					allAddedT[ppartition] = member.id
+				}
+			}
+			// then calculate removal by creating owned existence map,
+			// then removing what was planned, anything remaining was revoked.
+			for _, opartition := range otopic.Partitions {
+				pmap[opartition] = struct{}{}
 			}
 			for _, ppartition := range ppartitions {
-				delete(opartitions, ppartition)
+				delete(pmap, ppartition)
 			}
-			for opartition := range opartitions {
-				delete(opartitions, opartition)
-				allRevoked[tp{topic, opartition}] = struct{}{}
+			if len(pmap) > 0 {
+				allRevokedT := revokeT(topic)
+				for opartition := range pmap {
+					delete(pmap, opartition)
+					allRevokedT[opartition] = struct{}{}
+				}
 			}
 		}
+		for ptopic := range tmap { // finally, anything remaining in tmap is a new planned topic.
+			delete(tmap, ptopic)
+			allAddedT := addT(ptopic)
+			for _, ppartition := range planned[ptopic] {
+				allAddedT[ppartition] = member.id
+			}
+		}
+
 	}
 
 	// Over all revoked, if the revoked partition was added to a different
 	// member, we remove that partition from the new member.
-	for tp := range allRevoked {
-		if newMember, exists := allAdded[tp]; exists {
-			ptopics := plan[newMember]
-			ppartitions := ptopics[tp.topic]
+	for topic, rpartitions := range allRevoked {
+		atopic, exists := allAdded[topic]
+		if !exists {
+			continue
+		}
+		for rpartition := range rpartitions {
+			amember, exists := atopic[rpartition]
+			if !exists {
+				continue
+			}
+
+			ptopics := plan[amember]
+			ppartitions := ptopics[topic]
 			for i, ppartition := range ppartitions {
-				if ppartition == tp.partition {
+				if ppartition == rpartition {
 					ppartitions[i] = ppartitions[len(ppartitions)-1]
 					ppartitions = ppartitions[:len(ppartitions)-1]
 					break
 				}
 			}
 			if len(ppartitions) > 0 {
-				ptopics[tp.topic] = ppartitions
+				ptopics[topic] = ppartitions
 			} else {
-				delete(ptopics, tp.topic)
+				delete(ptopics, topic)
 			}
 		}
 	}
