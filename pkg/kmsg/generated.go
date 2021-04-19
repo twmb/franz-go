@@ -2,6 +2,7 @@ package kmsg
 
 import (
 	"context"
+	"reflect"
 
 	"github.com/twmb/franz-go/pkg/kbin"
 )
@@ -965,6 +966,9 @@ type GroupMetadataValueMember struct {
 
 	// Assignment is what the leader assigned this group member.
 	Assignment []byte
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -1237,6 +1241,9 @@ type TxnMetadataValueTopic struct {
 
 	// Partitions are partitions in this topic involved in the transaction.
 	Partitions []int32
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -1438,6 +1445,9 @@ type StickyMemberMetadataCurrentAssignment struct {
 	// Partitions are the partitions within a topic that a group member is
 	// currently assigned.
 	Partitions []int32
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -1490,6 +1500,9 @@ type GroupMemberMetadataOwnedPartition struct {
 	Topic string
 
 	Partitions []int32
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -1656,6 +1669,9 @@ type GroupMemberAssignmentTopic struct {
 
 	// Partitions contains partitions in the assignment.
 	Partitions []int32
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -1796,6 +1812,9 @@ type DefaultPrincipalData struct {
 
 	// Whether the principal was authenticated by a delegation token on the forwarding broker.
 	TokenAuthenticated bool
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 func (v *DefaultPrincipalData) AppendTo(dst []byte) []byte {
@@ -1828,7 +1847,8 @@ func (v *DefaultPrincipalData) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendBool(dst, v)
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -1864,7 +1884,7 @@ func (v *DefaultPrincipalData) ReadFrom(src []byte) error {
 		s.TokenAuthenticated = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -1987,6 +2007,9 @@ func NewEndTxnMarker() EndTxnMarker {
 
 type LeaderChangeMessageVoter struct {
 	VoterID int32
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -2014,6 +2037,9 @@ type LeaderChangeMessage struct {
 
 	// The voters who voted for the leader at the time of election.
 	GrantingVoters []LeaderChangeMessageVoter
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 func (v *LeaderChangeMessage) AppendTo(dst []byte) []byte {
@@ -2043,7 +2069,8 @@ func (v *LeaderChangeMessage) AppendTo(dst []byte) []byte {
 				dst = kbin.AppendInt32(dst, v)
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
@@ -2061,12 +2088,14 @@ func (v *LeaderChangeMessage) AppendTo(dst []byte) []byte {
 				dst = kbin.AppendInt32(dst, v)
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -2107,7 +2136,7 @@ func (v *LeaderChangeMessage) ReadFrom(src []byte) error {
 				s.VoterID = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
@@ -2137,14 +2166,14 @@ func (v *LeaderChangeMessage) ReadFrom(src []byte) error {
 				s.VoterID = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
 		s.GrantingVoters = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -2173,6 +2202,9 @@ type ProduceRequestTopicPartition struct {
 	// message set. At or after 0.11.0, the contents of the byte array is a
 	// serialized RecordBatch.
 	Records []byte
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -2194,6 +2226,9 @@ type ProduceRequestTopic struct {
 
 	// Partitions is an array of partitions to send record batches to.
 	Partitions []ProduceRequestTopicPartition
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -2239,6 +2274,10 @@ type ProduceRequest struct {
 
 	// Topics is an array of topics to send record batches to.
 	Topics []ProduceRequestTopic
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v9+
+
 }
 
 func (*ProduceRequest) Key() int16                 { return 0 }
@@ -2317,17 +2356,20 @@ func (v *ProduceRequest) AppendTo(dst []byte) []byte {
 						}
 					}
 					if isFlexible {
-						dst = append(dst, 0)
+						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+						dst = v.UnknownTags.AppendEach(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -2417,21 +2459,21 @@ func (v *ProduceRequest) ReadFrom(src []byte) error {
 						s.Records = v
 					}
 					if isFlexible {
-						SkipTags(&b)
+						s.UnknownTags = ReadTags(&b)
 					}
 				}
 				v = a
 				s.Partitions = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
 		s.Topics = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -2463,6 +2505,9 @@ type ProduceResponseTopicPartitionErrorRecord struct {
 
 	// ErrorMessage is the error of this record.
 	ErrorMessage *string
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -2582,6 +2627,9 @@ type ProduceResponseTopicPartition struct {
 	// ErrorMessage is the global error message of of what caused this batch
 	// to error.
 	ErrorMessage *string // v8+
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -2606,6 +2654,9 @@ type ProduceResponseTopic struct {
 	// Partitions is an array of responses for the partition's that
 	// batches were sent to.
 	Partitions []ProduceResponseTopicPartition
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -2637,6 +2688,10 @@ type ProduceResponse struct {
 	//
 	// This request switched at version 6.
 	ThrottleMillis int32 // v1+
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v9+
+
 }
 
 func (*ProduceResponse) Key() int16                 { return 0 }
@@ -2720,7 +2775,8 @@ func (v *ProduceResponse) AppendTo(dst []byte) []byte {
 								}
 							}
 							if isFlexible {
-								dst = append(dst, 0)
+								dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+								dst = v.UnknownTags.AppendEach(dst)
 							}
 						}
 					}
@@ -2733,12 +2789,14 @@ func (v *ProduceResponse) AppendTo(dst []byte) []byte {
 						}
 					}
 					if isFlexible {
-						dst = append(dst, 0)
+						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+						dst = v.UnknownTags.AppendEach(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
@@ -2747,7 +2805,8 @@ func (v *ProduceResponse) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendInt32(dst, v)
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -2859,7 +2918,7 @@ func (v *ProduceResponse) ReadFrom(src []byte) error {
 								s.ErrorMessage = v
 							}
 							if isFlexible {
-								SkipTags(&b)
+								s.UnknownTags = ReadTags(&b)
 							}
 						}
 						v = a
@@ -2875,14 +2934,14 @@ func (v *ProduceResponse) ReadFrom(src []byte) error {
 						s.ErrorMessage = v
 					}
 					if isFlexible {
-						SkipTags(&b)
+						s.UnknownTags = ReadTags(&b)
 					}
 				}
 				v = a
 				s.Partitions = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
@@ -2893,7 +2952,7 @@ func (v *ProduceResponse) ReadFrom(src []byte) error {
 		s.ThrottleMillis = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -2946,6 +3005,9 @@ type FetchRequestTopicPartition struct {
 	// This can be used to limit how many bytes an individual partition in
 	// a request is allotted so that it does not dominate all of MaxBytes.
 	PartitionMaxBytes int32
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -2970,6 +3032,9 @@ type FetchRequestTopic struct {
 
 	// Partitions contains partitions in a topic to try to fetch records for.
 	Partitions []FetchRequestTopicPartition
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -2991,6 +3056,9 @@ type FetchRequestForgottenTopic struct {
 
 	// Partitions are partitions to remove from tracking for a topic.
 	Partitions []int32
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -3076,6 +3144,10 @@ type FetchRequest struct {
 	// Rack of the consumer making this request (see KIP-392; introduced in
 	// Kafka 2.2.0).
 	Rack string // v11+
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v12+
+
 }
 
 func (*FetchRequest) Key() int16                 { return 1 }
@@ -3178,12 +3250,14 @@ func (v *FetchRequest) AppendTo(dst []byte) []byte {
 						dst = kbin.AppendInt32(dst, v)
 					}
 					if isFlexible {
-						dst = append(dst, 0)
+						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+						dst = v.UnknownTags.AppendEach(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
@@ -3217,7 +3291,8 @@ func (v *FetchRequest) AppendTo(dst []byte) []byte {
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
@@ -3234,7 +3309,7 @@ func (v *FetchRequest) AppendTo(dst []byte) []byte {
 		if v.ClusterID != nil {
 			toEncode = append(toEncode, 0)
 		}
-		dst = kbin.AppendUvarint(dst, uint32(len(toEncode)))
+		dst = kbin.AppendUvarint(dst, uint32(len(toEncode)+v.UnknownTags.Len()))
 		for _, tag := range toEncode {
 			switch tag {
 			case 0:
@@ -3257,6 +3332,7 @@ func (v *FetchRequest) AppendTo(dst []byte) []byte {
 				}
 			}
 		}
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -3368,14 +3444,14 @@ func (v *FetchRequest) ReadFrom(src []byte) error {
 						s.PartitionMaxBytes = v
 					}
 					if isFlexible {
-						SkipTags(&b)
+						s.UnknownTags = ReadTags(&b)
 					}
 				}
 				v = a
 				s.Partitions = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
@@ -3432,7 +3508,7 @@ func (v *FetchRequest) ReadFrom(src []byte) error {
 				s.Partitions = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
@@ -3449,9 +3525,9 @@ func (v *FetchRequest) ReadFrom(src []byte) error {
 	}
 	if isFlexible {
 		for i := b.Uvarint(); i > 0; i-- {
-			switch b.Uvarint() {
+			switch key := b.Uvarint(); key {
 			default:
-				b.Span(int(b.Uvarint()))
+				s.UnknownTags.Set(key, b.Span(int(b.Uvarint())))
 			case 0:
 				b := kbin.Reader{Src: b.Span(int(b.Uvarint()))}
 				var v *string
@@ -3498,6 +3574,9 @@ type FetchResponseTopicPartitionDivergingEpoch struct {
 	Epoch int32
 
 	EndOffset int64
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -3521,6 +3600,9 @@ type FetchResponseTopicPartitionCurrentLeader struct {
 
 	// The latest known leader epoch.
 	LeaderEpoch int32
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -3542,6 +3624,9 @@ type FetchResponseTopicPartitionSnapshotID struct {
 	EndOffset int64
 
 	Epoch int32
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -3565,6 +3650,9 @@ type FetchResponseTopicPartitionAbortedTransaction struct {
 
 	// FirstOffset is the offset where this aborted transaction began.
 	FirstOffset int64
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -3673,6 +3761,9 @@ type FetchResponseTopicPartition struct {
 	// Starting v4, this transitioned to the RecordBatch format (thus this
 	// contains many RecordBatch structs).
 	RecordBatches []byte
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -3716,6 +3807,9 @@ type FetchResponseTopic struct {
 	// Partitions contains partitions in a topic that records may have
 	// been received for.
 	Partitions []FetchResponseTopicPartition
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -3763,6 +3857,10 @@ type FetchResponse struct {
 	// Topics contains an array of topic partitions and the records received
 	// for them.
 	Topics []FetchResponseTopic
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v12+
+
 }
 
 func (*FetchResponse) Key() int16                 { return 1 }
@@ -3854,7 +3952,8 @@ func (v *FetchResponse) AppendTo(dst []byte) []byte {
 								dst = kbin.AppendInt64(dst, v)
 							}
 							if isFlexible {
-								dst = append(dst, 0)
+								dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+								dst = v.UnknownTags.AppendEach(dst)
 							}
 						}
 					}
@@ -3872,28 +3971,28 @@ func (v *FetchResponse) AppendTo(dst []byte) []byte {
 					}
 					if isFlexible {
 						var toEncode []uint32
-						if v.DivergingEpoch != (func() FetchResponseTopicPartitionDivergingEpoch {
+						if !reflect.DeepEqual(v.DivergingEpoch, (func() FetchResponseTopicPartitionDivergingEpoch {
 							var v FetchResponseTopicPartitionDivergingEpoch
 							v.Default()
 							return v
-						})() {
+						})()) {
 							toEncode = append(toEncode, 0)
 						}
-						if v.CurrentLeader != (func() FetchResponseTopicPartitionCurrentLeader {
+						if !reflect.DeepEqual(v.CurrentLeader, (func() FetchResponseTopicPartitionCurrentLeader {
 							var v FetchResponseTopicPartitionCurrentLeader
 							v.Default()
 							return v
-						})() {
+						})()) {
 							toEncode = append(toEncode, 1)
 						}
-						if v.SnapshotID != (func() FetchResponseTopicPartitionSnapshotID {
+						if !reflect.DeepEqual(v.SnapshotID, (func() FetchResponseTopicPartitionSnapshotID {
 							var v FetchResponseTopicPartitionSnapshotID
 							v.Default()
 							return v
-						})() {
+						})()) {
 							toEncode = append(toEncode, 2)
 						}
-						dst = kbin.AppendUvarint(dst, uint32(len(toEncode)))
+						dst = kbin.AppendUvarint(dst, uint32(len(toEncode)+v.UnknownTags.Len()))
 						for _, tag := range toEncode {
 							switch tag {
 							case 0:
@@ -3912,7 +4011,8 @@ func (v *FetchResponse) AppendTo(dst []byte) []byte {
 										dst = kbin.AppendInt64(dst, v)
 									}
 									if isFlexible {
-										dst = append(dst, 0)
+										dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+										dst = v.UnknownTags.AppendEach(dst)
 									}
 									if !sized {
 										dst = kbin.AppendUvarint(dst[:lenAt], uint32(len(dst[lenAt:])))
@@ -3936,7 +4036,8 @@ func (v *FetchResponse) AppendTo(dst []byte) []byte {
 										dst = kbin.AppendInt32(dst, v)
 									}
 									if isFlexible {
-										dst = append(dst, 0)
+										dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+										dst = v.UnknownTags.AppendEach(dst)
 									}
 									if !sized {
 										dst = kbin.AppendUvarint(dst[:lenAt], uint32(len(dst[lenAt:])))
@@ -3960,7 +4061,8 @@ func (v *FetchResponse) AppendTo(dst []byte) []byte {
 										dst = kbin.AppendInt32(dst, v)
 									}
 									if isFlexible {
-										dst = append(dst, 0)
+										dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+										dst = v.UnknownTags.AppendEach(dst)
 									}
 									if !sized {
 										dst = kbin.AppendUvarint(dst[:lenAt], uint32(len(dst[lenAt:])))
@@ -3970,16 +4072,19 @@ func (v *FetchResponse) AppendTo(dst []byte) []byte {
 								}
 							}
 						}
+						dst = v.UnknownTags.AppendEach(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -4101,7 +4206,7 @@ func (v *FetchResponse) ReadFrom(src []byte) error {
 								s.FirstOffset = v
 							}
 							if isFlexible {
-								SkipTags(&b)
+								s.UnknownTags = ReadTags(&b)
 							}
 						}
 						v = a
@@ -4122,9 +4227,9 @@ func (v *FetchResponse) ReadFrom(src []byte) error {
 					}
 					if isFlexible {
 						for i := b.Uvarint(); i > 0; i-- {
-							switch b.Uvarint() {
+							switch key := b.Uvarint(); key {
 							default:
-								b.Span(int(b.Uvarint()))
+								s.UnknownTags.Set(key, b.Span(int(b.Uvarint())))
 							case 0:
 								b := kbin.Reader{Src: b.Span(int(b.Uvarint()))}
 								v := &s.DivergingEpoch
@@ -4139,7 +4244,7 @@ func (v *FetchResponse) ReadFrom(src []byte) error {
 									s.EndOffset = v
 								}
 								if isFlexible {
-									SkipTags(&b)
+									s.UnknownTags = ReadTags(&b)
 								}
 								if err := b.Complete(); err != nil {
 									return err
@@ -4158,7 +4263,7 @@ func (v *FetchResponse) ReadFrom(src []byte) error {
 									s.LeaderEpoch = v
 								}
 								if isFlexible {
-									SkipTags(&b)
+									s.UnknownTags = ReadTags(&b)
 								}
 								if err := b.Complete(); err != nil {
 									return err
@@ -4177,7 +4282,7 @@ func (v *FetchResponse) ReadFrom(src []byte) error {
 									s.Epoch = v
 								}
 								if isFlexible {
-									SkipTags(&b)
+									s.UnknownTags = ReadTags(&b)
 								}
 								if err := b.Complete(); err != nil {
 									return err
@@ -4190,14 +4295,14 @@ func (v *FetchResponse) ReadFrom(src []byte) error {
 				s.Partitions = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
 		s.Topics = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -4250,6 +4355,9 @@ type ListOffsetsRequestTopicPartition struct {
 	// MaxNumOffsets is the maximum number of offsets to report.
 	// This was removed after v0.
 	MaxNumOffsets int32
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -4273,6 +4381,9 @@ type ListOffsetsRequestTopic struct {
 
 	// Partitions is an array of partitions in a topic to get offsets for.
 	Partitions []ListOffsetsRequestTopicPartition
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -4313,6 +4424,10 @@ type ListOffsetsRequest struct {
 
 	// Topics is an array of topics to get offsets for.
 	Topics []ListOffsetsRequestTopic
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v6+
+
 }
 
 func (*ListOffsetsRequest) Key() int16                 { return 2 }
@@ -4387,17 +4502,20 @@ func (v *ListOffsetsRequest) AppendTo(dst []byte) []byte {
 						dst = kbin.AppendInt32(dst, v)
 					}
 					if isFlexible {
-						dst = append(dst, 0)
+						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+						dst = v.UnknownTags.AppendEach(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -4481,21 +4599,21 @@ func (v *ListOffsetsRequest) ReadFrom(src []byte) error {
 						s.MaxNumOffsets = v
 					}
 					if isFlexible {
-						SkipTags(&b)
+						s.UnknownTags = ReadTags(&b)
 					}
 				}
 				v = a
 				s.Partitions = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
 		s.Topics = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -4580,6 +4698,9 @@ type ListOffsetsResponseTopicPartition struct {
 	// LeaderEpoch is the leader epoch of the record at this offset,
 	// or -1 if there was no leader epoch.
 	LeaderEpoch int32 // v4+
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -4605,6 +4726,9 @@ type ListOffsetsResponseTopic struct {
 	// Partitions is an array of partition responses corresponding to
 	// the requested partitions for a topic.
 	Partitions []ListOffsetsResponseTopicPartition
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -4636,6 +4760,10 @@ type ListOffsetsResponse struct {
 	// Topics is an array of topic / partition responses corresponding to
 	// the requested topics and partitions.
 	Topics []ListOffsetsResponseTopic
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v6+
+
 }
 
 func (*ListOffsetsResponse) Key() int16                 { return 2 }
@@ -4714,17 +4842,20 @@ func (v *ListOffsetsResponse) AppendTo(dst []byte) []byte {
 						dst = kbin.AppendInt32(dst, v)
 					}
 					if isFlexible {
-						dst = append(dst, 0)
+						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+						dst = v.UnknownTags.AppendEach(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -4830,21 +4961,21 @@ func (v *ListOffsetsResponse) ReadFrom(src []byte) error {
 						s.LeaderEpoch = v
 					}
 					if isFlexible {
-						SkipTags(&b)
+						s.UnknownTags = ReadTags(&b)
 					}
 				}
 				v = a
 				s.Partitions = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
 		s.Topics = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -4879,6 +5010,9 @@ type MetadataRequestTopic struct {
 	// from a string to a nullable string; if using a topic ID, this field
 	// should be null.
 	Topic *string
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -4921,6 +5055,10 @@ type MetadataRequest struct {
 	//
 	// This field was removed in Kafka 2.8.0 in favor of the new DescribeClusterRequest.
 	IncludeTopicAuthorizedOperations bool // v8+
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v9+
+
 }
 
 func (*MetadataRequest) Key() int16                 { return 3 }
@@ -4989,7 +5127,8 @@ func (v *MetadataRequest) AppendTo(dst []byte) []byte {
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
@@ -5006,7 +5145,8 @@ func (v *MetadataRequest) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendBool(dst, v)
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -5064,7 +5204,7 @@ func (v *MetadataRequest) ReadFrom(src []byte) error {
 				s.Topic = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
@@ -5083,7 +5223,7 @@ func (v *MetadataRequest) ReadFrom(src []byte) error {
 		s.IncludeTopicAuthorizedOperations = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -5121,6 +5261,9 @@ type MetadataResponseBroker struct {
 
 	// Rack is the rack this Kafka broker is in.
 	Rack *string // v1+
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -5173,6 +5316,9 @@ type MetadataResponseTopicPartition struct {
 	// OfflineReplicas, proposed in KIP-112 and introduced in Kafka 1.0,
 	// returns all offline broker IDs that should be replicating this partition.
 	OfflineReplicas []int32 // v5+
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -5222,6 +5368,9 @@ type MetadataResponseTopic struct {
 	// the client is allowed to perform on this topic.
 	// This is only returned if requested.
 	AuthorizedOperations int32 // v8+
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -5268,6 +5417,10 @@ type MetadataResponse struct {
 	// AuthorizedOperations is a bitfield containing which operations the client
 	// is allowed to perform on this cluster.
 	AuthorizedOperations int32 // v8+
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v9+
+
 }
 
 func (*MetadataResponse) Key() int16                 { return 3 }
@@ -5321,7 +5474,8 @@ func (v *MetadataResponse) AppendTo(dst []byte) []byte {
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
@@ -5428,7 +5582,8 @@ func (v *MetadataResponse) AppendTo(dst []byte) []byte {
 						}
 					}
 					if isFlexible {
-						dst = append(dst, 0)
+						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+						dst = v.UnknownTags.AppendEach(dst)
 					}
 				}
 			}
@@ -5437,7 +5592,8 @@ func (v *MetadataResponse) AppendTo(dst []byte) []byte {
 				dst = kbin.AppendInt32(dst, v)
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
@@ -5446,7 +5602,8 @@ func (v *MetadataResponse) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendInt32(dst, v)
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -5508,7 +5665,7 @@ func (v *MetadataResponse) ReadFrom(src []byte) error {
 				s.Rack = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
@@ -5669,7 +5826,7 @@ func (v *MetadataResponse) ReadFrom(src []byte) error {
 						s.OfflineReplicas = v
 					}
 					if isFlexible {
-						SkipTags(&b)
+						s.UnknownTags = ReadTags(&b)
 					}
 				}
 				v = a
@@ -5680,7 +5837,7 @@ func (v *MetadataResponse) ReadFrom(src []byte) error {
 				s.AuthorizedOperations = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
@@ -5691,7 +5848,7 @@ func (v *MetadataResponse) ReadFrom(src []byte) error {
 		s.AuthorizedOperations = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -5743,6 +5900,10 @@ type LeaderAndISRRequestTopicPartition struct {
 	RemovingReplicas []int32 // v3+
 
 	IsNew bool // v1+
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v4+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -5766,6 +5927,10 @@ type LeaderAndISRResponseTopicPartition struct {
 	Partition int32
 
 	ErrorCode int16
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v4+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -5787,6 +5952,9 @@ type LeaderAndISRRequestTopicState struct {
 	TopicID [16]byte // v5+
 
 	PartitionStates []LeaderAndISRRequestTopicPartition
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -5808,6 +5976,9 @@ type LeaderAndISRRequestLiveLeader struct {
 	Host string
 
 	Port int32
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -5850,6 +6021,10 @@ type LeaderAndISRRequest struct {
 	TopicStates []LeaderAndISRRequestTopicState // v2+
 
 	LiveLeaders []LeaderAndISRRequestLiveLeader
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v4+
+
 }
 
 func (*LeaderAndISRRequest) Key() int16                 { return 4 }
@@ -5981,7 +6156,8 @@ func (v *LeaderAndISRRequest) AppendTo(dst []byte) []byte {
 				dst = kbin.AppendBool(dst, v)
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
@@ -6096,12 +6272,14 @@ func (v *LeaderAndISRRequest) AppendTo(dst []byte) []byte {
 						dst = kbin.AppendBool(dst, v)
 					}
 					if isFlexible {
-						dst = append(dst, 0)
+						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+						dst = v.UnknownTags.AppendEach(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
@@ -6131,12 +6309,14 @@ func (v *LeaderAndISRRequest) AppendTo(dst []byte) []byte {
 				dst = kbin.AppendInt32(dst, v)
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -6305,7 +6485,7 @@ func (v *LeaderAndISRRequest) ReadFrom(src []byte) error {
 				s.IsNew = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
@@ -6484,14 +6664,14 @@ func (v *LeaderAndISRRequest) ReadFrom(src []byte) error {
 						s.IsNew = v
 					}
 					if isFlexible {
-						SkipTags(&b)
+						s.UnknownTags = ReadTags(&b)
 					}
 				}
 				v = a
 				s.PartitionStates = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
@@ -6534,14 +6714,14 @@ func (v *LeaderAndISRRequest) ReadFrom(src []byte) error {
 				s.Port = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
 		s.LiveLeaders = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -6572,6 +6752,9 @@ type LeaderAndISRResponseTopic struct {
 	TopicID [16]byte
 
 	Partitions []LeaderAndISRResponseTopicPartition
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -6597,6 +6780,10 @@ type LeaderAndISRResponse struct {
 	Partitions []LeaderAndISRResponseTopicPartition
 
 	Topics []LeaderAndISRResponseTopic // v5+
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v4+
+
 }
 
 func (*LeaderAndISRResponse) Key() int16                 { return 4 }
@@ -6641,7 +6828,8 @@ func (v *LeaderAndISRResponse) AppendTo(dst []byte) []byte {
 				dst = kbin.AppendInt16(dst, v)
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
@@ -6684,17 +6872,20 @@ func (v *LeaderAndISRResponse) AppendTo(dst []byte) []byte {
 						dst = kbin.AppendInt16(dst, v)
 					}
 					if isFlexible {
-						dst = append(dst, 0)
+						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+						dst = v.UnknownTags.AppendEach(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -6747,7 +6938,7 @@ func (v *LeaderAndISRResponse) ReadFrom(src []byte) error {
 				s.ErrorCode = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
@@ -6813,21 +7004,21 @@ func (v *LeaderAndISRResponse) ReadFrom(src []byte) error {
 						s.ErrorCode = v
 					}
 					if isFlexible {
-						SkipTags(&b)
+						s.UnknownTags = ReadTags(&b)
 					}
 				}
 				v = a
 				s.Partitions = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
 		s.Topics = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -6859,6 +7050,9 @@ type StopReplicaRequestTopicPartitionState struct {
 	LeaderEpoch int32
 
 	Delete bool
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -6883,6 +7077,9 @@ type StopReplicaRequestTopic struct {
 	Partitions []int32 // v1+
 
 	PartitionStates []StopReplicaRequestTopicPartitionState // v3+
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -6921,6 +7118,10 @@ type StopReplicaRequest struct {
 	DeletePartitions bool
 
 	Topics []StopReplicaRequestTopic
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v2+
+
 }
 
 func (*StopReplicaRequest) Key() int16                 { return 5 }
@@ -7015,17 +7216,20 @@ func (v *StopReplicaRequest) AppendTo(dst []byte) []byte {
 						dst = kbin.AppendBool(dst, v)
 					}
 					if isFlexible {
-						dst = append(dst, 0)
+						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+						dst = v.UnknownTags.AppendEach(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -7139,21 +7343,21 @@ func (v *StopReplicaRequest) ReadFrom(src []byte) error {
 						s.Delete = v
 					}
 					if isFlexible {
-						SkipTags(&b)
+						s.UnknownTags = ReadTags(&b)
 					}
 				}
 				v = a
 				s.PartitionStates = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
 		s.Topics = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -7186,6 +7390,9 @@ type StopReplicaResponsePartition struct {
 	Partition int32
 
 	ErrorCode int16
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -7210,6 +7417,10 @@ type StopReplicaResponse struct {
 	ErrorCode int16
 
 	Partitions []StopReplicaResponsePartition
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v2+
+
 }
 
 func (*StopReplicaResponse) Key() int16                 { return 5 }
@@ -7254,12 +7465,14 @@ func (v *StopReplicaResponse) AppendTo(dst []byte) []byte {
 				dst = kbin.AppendInt16(dst, v)
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -7312,14 +7525,14 @@ func (v *StopReplicaResponse) ReadFrom(src []byte) error {
 				s.ErrorCode = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
 		s.Partitions = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -7363,6 +7576,10 @@ type UpdateMetadataRequestTopicPartition struct {
 	Replicas []int32
 
 	OfflineReplicas []int32
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v6+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -7384,6 +7601,9 @@ type UpdateMetadataRequestTopicState struct {
 	TopicID [16]byte // v7+
 
 	PartitionStates []UpdateMetadataRequestTopicPartition
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -7407,6 +7627,9 @@ type UpdateMetadataRequestLiveBrokerEndpoint struct {
 	ListenerName string // v3+
 
 	SecurityProtocol int16
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -7432,6 +7655,9 @@ type UpdateMetadataRequestLiveBroker struct {
 	Endpoints []UpdateMetadataRequestLiveBrokerEndpoint // v1+
 
 	Rack *string // v2+
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -7472,6 +7698,10 @@ type UpdateMetadataRequest struct {
 	TopicStates []UpdateMetadataRequestTopicState // v5+
 
 	LiveBrokers []UpdateMetadataRequestLiveBroker
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v6+
+
 }
 
 func (*UpdateMetadataRequest) Key() int16                 { return 6 }
@@ -7583,7 +7813,8 @@ func (v *UpdateMetadataRequest) AppendTo(dst []byte) []byte {
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
@@ -7682,12 +7913,14 @@ func (v *UpdateMetadataRequest) AppendTo(dst []byte) []byte {
 						}
 					}
 					if isFlexible {
-						dst = append(dst, 0)
+						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+						dst = v.UnknownTags.AppendEach(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
@@ -7750,7 +7983,8 @@ func (v *UpdateMetadataRequest) AppendTo(dst []byte) []byte {
 						dst = kbin.AppendInt16(dst, v)
 					}
 					if isFlexible {
-						dst = append(dst, 0)
+						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+						dst = v.UnknownTags.AppendEach(dst)
 					}
 				}
 			}
@@ -7763,12 +7997,14 @@ func (v *UpdateMetadataRequest) AppendTo(dst []byte) []byte {
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -7907,7 +8143,7 @@ func (v *UpdateMetadataRequest) ReadFrom(src []byte) error {
 				s.OfflineReplicas = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
@@ -8060,14 +8296,14 @@ func (v *UpdateMetadataRequest) ReadFrom(src []byte) error {
 						s.OfflineReplicas = v
 					}
 					if isFlexible {
-						SkipTags(&b)
+						s.UnknownTags = ReadTags(&b)
 					}
 				}
 				v = a
 				s.PartitionStates = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
@@ -8155,7 +8391,7 @@ func (v *UpdateMetadataRequest) ReadFrom(src []byte) error {
 						s.SecurityProtocol = v
 					}
 					if isFlexible {
-						SkipTags(&b)
+						s.UnknownTags = ReadTags(&b)
 					}
 				}
 				v = a
@@ -8171,14 +8407,14 @@ func (v *UpdateMetadataRequest) ReadFrom(src []byte) error {
 				s.Rack = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
 		s.LiveBrokers = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -8211,6 +8447,10 @@ type UpdateMetadataResponse struct {
 	Version int16
 
 	ErrorCode int16
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v6+
+
 }
 
 func (*UpdateMetadataResponse) Key() int16                 { return 6 }
@@ -8232,7 +8472,8 @@ func (v *UpdateMetadataResponse) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendInt16(dst, v)
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -8249,7 +8490,7 @@ func (v *UpdateMetadataResponse) ReadFrom(src []byte) error {
 		s.ErrorCode = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -8293,6 +8534,10 @@ type ControlledShutdownRequest struct {
 	BrokerID int32
 
 	BrokerEpoch int64 // v2+
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v3+
+
 }
 
 func (*ControlledShutdownRequest) Key() int16                 { return 7 }
@@ -8327,7 +8572,8 @@ func (v *ControlledShutdownRequest) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendInt64(dst, v)
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -8348,7 +8594,7 @@ func (v *ControlledShutdownRequest) ReadFrom(src []byte) error {
 		s.BrokerEpoch = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -8379,6 +8625,9 @@ type ControlledShutdownResponsePartitionsRemaining struct {
 	Topic string
 
 	Partition int32
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -8402,6 +8651,10 @@ type ControlledShutdownResponse struct {
 	ErrorCode int16
 
 	PartitionsRemaining []ControlledShutdownResponsePartitionsRemaining
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v3+
+
 }
 
 func (*ControlledShutdownResponse) Key() int16                 { return 7 }
@@ -8444,12 +8697,14 @@ func (v *ControlledShutdownResponse) AppendTo(dst []byte) []byte {
 				dst = kbin.AppendInt32(dst, v)
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -8498,14 +8753,14 @@ func (v *ControlledShutdownResponse) ReadFrom(src []byte) error {
 				s.Partition = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
 		s.PartitionsRemaining = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -8554,6 +8809,9 @@ type OffsetCommitRequestTopicPartition struct {
 	// Metadata is optional data to include with committing the offset. This
 	// can contain information such as which node is doing the committing, etc.
 	Metadata *string
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -8577,6 +8835,9 @@ type OffsetCommitRequestTopic struct {
 
 	// Partitions contains partitions in a topic for which to commit offsets.
 	Partitions []OffsetCommitRequestTopicPartition
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -8628,6 +8889,10 @@ type OffsetCommitRequest struct {
 
 	// Topics is contains topics and partitions for which to commit offsets.
 	Topics []OffsetCommitRequestTopic
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v8+
+
 }
 
 func (*OffsetCommitRequest) Key() int16                   { return 8 }
@@ -8737,17 +9002,20 @@ func (v *OffsetCommitRequest) AppendTo(dst []byte) []byte {
 						}
 					}
 					if isFlexible {
-						dst = append(dst, 0)
+						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+						dst = v.UnknownTags.AppendEach(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -8867,21 +9135,21 @@ func (v *OffsetCommitRequest) ReadFrom(src []byte) error {
 						s.Metadata = v
 					}
 					if isFlexible {
-						SkipTags(&b)
+						s.UnknownTags = ReadTags(&b)
 					}
 				}
 				v = a
 				s.Partitions = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
 		s.Topics = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -8947,6 +9215,9 @@ type OffsetCommitResponseTopicPartition struct {
 	// INVALID_COMMIT_OFFSET_SIZE is returned if the offset commit results in
 	// a record batch that is too large (likely due to large metadata).
 	ErrorCode int16
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -8969,6 +9240,9 @@ type OffsetCommitResponseTopic struct {
 	// Partitions contains responses for each requested partition in
 	// a topic.
 	Partitions []OffsetCommitResponseTopicPartition
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -8999,6 +9273,10 @@ type OffsetCommitResponse struct {
 
 	// Topics contains responses for each topic / partition in the commit request.
 	Topics []OffsetCommitResponseTopic
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v8+
+
 }
 
 func (*OffsetCommitResponse) Key() int16                 { return 8 }
@@ -9053,17 +9331,20 @@ func (v *OffsetCommitResponse) AppendTo(dst []byte) []byte {
 						dst = kbin.AppendInt16(dst, v)
 					}
 					if isFlexible {
-						dst = append(dst, 0)
+						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+						dst = v.UnknownTags.AppendEach(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -9135,21 +9416,21 @@ func (v *OffsetCommitResponse) ReadFrom(src []byte) error {
 						s.ErrorCode = v
 					}
 					if isFlexible {
-						SkipTags(&b)
+						s.UnknownTags = ReadTags(&b)
 					}
 				}
 				v = a
 				s.Partitions = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
 		s.Topics = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -9181,6 +9462,9 @@ type OffsetFetchRequestTopic struct {
 
 	// Partitions in a list of partitions in a group to fetch offsets for.
 	Partitions []int32
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -9214,6 +9498,10 @@ type OffsetFetchRequest struct {
 	// unstable partitions (UNSTABLE_OFFSET_COMMIT). See KIP-447 for more
 	// details.
 	RequireStable bool // v7+
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v6+
+
 }
 
 func (*OffsetFetchRequest) Key() int16                   { return 9 }
@@ -9284,7 +9572,8 @@ func (v *OffsetFetchRequest) AppendTo(dst []byte) []byte {
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
@@ -9293,7 +9582,8 @@ func (v *OffsetFetchRequest) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendBool(dst, v)
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -9368,7 +9658,7 @@ func (v *OffsetFetchRequest) ReadFrom(src []byte) error {
 				s.Partitions = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
@@ -9379,7 +9669,7 @@ func (v *OffsetFetchRequest) ReadFrom(src []byte) error {
 		s.RequireStable = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -9444,6 +9734,9 @@ type OffsetFetchResponseTopicPartition struct {
 	// UNSTABLE_OFFSET_COMMIT is returned for v7+ if the request set RequireStable.
 	// See KIP-447 for more details.
 	ErrorCode int16
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -9467,6 +9760,9 @@ type OffsetFetchResponseTopic struct {
 	// Partitions contains responses for each requested partition in
 	// a topic.
 	Partitions []OffsetFetchResponseTopicPartition
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -9501,6 +9797,10 @@ type OffsetFetchResponse struct {
 	// ErrorCode is a top level error code that applies to all topic/partitions.
 	// This will be any group error.
 	ErrorCode int16 // v2+
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v6+
+
 }
 
 func (*OffsetFetchResponse) Key() int16                 { return 9 }
@@ -9571,12 +9871,14 @@ func (v *OffsetFetchResponse) AppendTo(dst []byte) []byte {
 						dst = kbin.AppendInt16(dst, v)
 					}
 					if isFlexible {
-						dst = append(dst, 0)
+						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+						dst = v.UnknownTags.AppendEach(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
@@ -9585,7 +9887,8 @@ func (v *OffsetFetchResponse) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendInt16(dst, v)
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -9674,14 +9977,14 @@ func (v *OffsetFetchResponse) ReadFrom(src []byte) error {
 						s.ErrorCode = v
 					}
 					if isFlexible {
-						SkipTags(&b)
+						s.UnknownTags = ReadTags(&b)
 					}
 				}
 				v = a
 				s.Partitions = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
@@ -9692,7 +9995,7 @@ func (v *OffsetFetchResponse) ReadFrom(src []byte) error {
 		s.ErrorCode = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -9735,6 +10038,10 @@ type FindCoordinatorRequest struct {
 	// CoordinatorType is the type that key is. Groups are type 0,
 	// transactional IDs are type 1.
 	CoordinatorType int8 // v1+
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v3+
+
 }
 
 func (*FindCoordinatorRequest) Key() int16                 { return 10 }
@@ -9773,7 +10080,8 @@ func (v *FindCoordinatorRequest) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendInt8(dst, v)
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -9799,7 +10107,7 @@ func (v *FindCoordinatorRequest) ReadFrom(src []byte) error {
 		s.CoordinatorType = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -9865,6 +10173,10 @@ type FindCoordinatorResponse struct {
 
 	// Port is the port of the coordinator.
 	Port int32
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v3+
+
 }
 
 func (*FindCoordinatorResponse) Key() int16                 { return 10 }
@@ -9915,7 +10227,8 @@ func (v *FindCoordinatorResponse) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendInt32(dst, v)
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -9962,7 +10275,7 @@ func (v *FindCoordinatorResponse) ReadFrom(src []byte) error {
 		s.Port = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -10006,6 +10319,9 @@ type JoinGroupRequestProtocol struct {
 	// The protocol metadata is where group members will communicate which
 	// topics they collectively as a group want to consume.
 	Metadata []byte
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -10081,6 +10397,10 @@ type JoinGroupRequest struct {
 	// for rebalancing. All group members must agree on at least one protocol
 	// name.
 	Protocols []JoinGroupRequestProtocol
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v6+
+
 }
 
 func (*JoinGroupRequest) Key() int16                   { return 11 }
@@ -10171,12 +10491,14 @@ func (v *JoinGroupRequest) AppendTo(dst []byte) []byte {
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -10270,14 +10592,14 @@ func (v *JoinGroupRequest) ReadFrom(src []byte) error {
 				s.Metadata = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
 		s.Protocols = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -10314,6 +10636,9 @@ type JoinGroupResponseMember struct {
 	// ProtocolMetadata is the metadata for this member for this protocol.
 	// This is usually of type GroupMemberMetadata.
 	ProtocolMetadata []byte
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -10404,6 +10729,10 @@ type JoinGroupResponse struct {
 	// receives the members. The leader is responsible for balancing subscribed
 	// topic partitions and replying appropriately in a SyncGroup request.
 	Members []JoinGroupResponseMember
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v6+
+
 }
 
 func (*JoinGroupResponse) Key() int16                 { return 11 }
@@ -10512,12 +10841,14 @@ func (v *JoinGroupResponse) AppendTo(dst []byte) []byte {
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -10634,14 +10965,14 @@ func (v *JoinGroupResponse) ReadFrom(src []byte) error {
 				s.ProtocolMetadata = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
 		s.Members = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -10685,6 +11016,10 @@ type HeartbeatRequest struct {
 
 	// InstanceID is the instance ID of this member in the group (KIP-345).
 	InstanceID *string // v3+
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v4+
+
 }
 
 func (*HeartbeatRequest) Key() int16                   { return 12 }
@@ -10738,7 +11073,8 @@ func (v *HeartbeatRequest) AppendTo(dst []byte) []byte {
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -10782,7 +11118,7 @@ func (v *HeartbeatRequest) ReadFrom(src []byte) error {
 		s.InstanceID = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -10841,6 +11177,10 @@ type HeartbeatResponse struct {
 	//
 	// REBALANCE_IN_PROGRESS is returned if the group is currently rebalancing.
 	ErrorCode int16
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v4+
+
 }
 
 func (*HeartbeatResponse) Key() int16                 { return 12 }
@@ -10865,7 +11205,8 @@ func (v *HeartbeatResponse) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendInt16(dst, v)
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -10886,7 +11227,7 @@ func (v *HeartbeatResponse) ReadFrom(src []byte) error {
 		s.ErrorCode = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -10916,6 +11257,9 @@ type LeaveGroupRequestMember struct {
 	MemberID string
 
 	InstanceID *string
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -10948,6 +11292,10 @@ type LeaveGroupRequest struct {
 
 	// Members are member and group instance IDs to cause to leave a group.
 	Members []LeaveGroupRequestMember // v3+
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v4+
+
 }
 
 func (*LeaveGroupRequest) Key() int16                   { return 13 }
@@ -11014,12 +11362,14 @@ func (v *LeaveGroupRequest) AppendTo(dst []byte) []byte {
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -11087,14 +11437,14 @@ func (v *LeaveGroupRequest) ReadFrom(src []byte) error {
 				s.InstanceID = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
 		s.Members = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -11127,6 +11477,9 @@ type LeaveGroupResponseMember struct {
 
 	// An individual member's leave error code.
 	ErrorCode int16
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -11176,6 +11529,10 @@ type LeaveGroupResponse struct {
 
 	// Members are the list of members and group instance IDs that left the group.
 	Members []LeaveGroupResponseMember // v3+
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v4+
+
 }
 
 func (*LeaveGroupResponse) Key() int16                 { return 13 }
@@ -11229,12 +11586,14 @@ func (v *LeaveGroupResponse) AppendTo(dst []byte) []byte {
 				dst = kbin.AppendInt16(dst, v)
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -11296,14 +11655,14 @@ func (v *LeaveGroupResponse) ReadFrom(src []byte) error {
 				s.ErrorCode = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
 		s.Members = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -11336,6 +11695,9 @@ type SyncGroupRequestGroupAssignment struct {
 	// MemberAssignment is the assignment for this member. This is typically
 	// of type GroupMemberAssignment.
 	MemberAssignment []byte
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -11381,6 +11743,10 @@ type SyncGroupRequest struct {
 	// GroupAssignment, sent only from the group leader, is the topic partition
 	// assignment it has decided on for all members.
 	GroupAssignment []SyncGroupRequestGroupAssignment
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v4+
+
 }
 
 func (*SyncGroupRequest) Key() int16                   { return 14 }
@@ -11475,12 +11841,14 @@ func (v *SyncGroupRequest) AppendTo(dst []byte) []byte {
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -11579,14 +11947,14 @@ func (v *SyncGroupRequest) ReadFrom(src []byte) error {
 				s.MemberAssignment = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
 		s.GroupAssignment = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -11657,6 +12025,10 @@ type SyncGroupResponse struct {
 	// MemberAssignment is the assignment for this member that the leader
 	// determined.
 	MemberAssignment []byte
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v4+
+
 }
 
 func (*SyncGroupResponse) Key() int16                 { return 14 }
@@ -11705,7 +12077,8 @@ func (v *SyncGroupResponse) AppendTo(dst []byte) []byte {
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -11753,7 +12126,7 @@ func (v *SyncGroupResponse) ReadFrom(src []byte) error {
 		s.MemberAssignment = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -11791,6 +12164,10 @@ type DescribeGroupsRequest struct {
 	// whether to include a bitfield of AclOperations this client can perform
 	// on the groups. See KIP-430 for more details.
 	IncludeAuthorizedOperations bool
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v5+
+
 }
 
 func (*DescribeGroupsRequest) Key() int16                   { return 15 }
@@ -11838,7 +12215,8 @@ func (v *DescribeGroupsRequest) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendBool(dst, v)
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -11882,7 +12260,7 @@ func (v *DescribeGroupsRequest) ReadFrom(src []byte) error {
 		s.IncludeAuthorizedOperations = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -11930,6 +12308,9 @@ type DescribeGroupsResponseGroupMember struct {
 	// If using normal (Java-like) consumers, this will be of type
 	// GroupMemberAssignment.
 	MemberAssignment []byte
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -11981,6 +12362,9 @@ type DescribeGroupsResponseGroup struct {
 	// the client is allowed to perform on this group.
 	// This is only returned if requested.
 	AuthorizedOperations int32 // v3+
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -12012,6 +12396,10 @@ type DescribeGroupsResponse struct {
 
 	// Groups is an array of group metadata.
 	Groups []DescribeGroupsResponseGroup
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v5+
+
 }
 
 func (*DescribeGroupsResponse) Key() int16                 { return 15 }
@@ -12136,7 +12524,8 @@ func (v *DescribeGroupsResponse) AppendTo(dst []byte) []byte {
 						}
 					}
 					if isFlexible {
-						dst = append(dst, 0)
+						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+						dst = v.UnknownTags.AppendEach(dst)
 					}
 				}
 			}
@@ -12145,12 +12534,14 @@ func (v *DescribeGroupsResponse) AppendTo(dst []byte) []byte {
 				dst = kbin.AppendInt32(dst, v)
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -12299,7 +12690,7 @@ func (v *DescribeGroupsResponse) ReadFrom(src []byte) error {
 						s.MemberAssignment = v
 					}
 					if isFlexible {
-						SkipTags(&b)
+						s.UnknownTags = ReadTags(&b)
 					}
 				}
 				v = a
@@ -12310,14 +12701,14 @@ func (v *DescribeGroupsResponse) ReadFrom(src []byte) error {
 				s.AuthorizedOperations = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
 		s.Groups = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -12355,6 +12746,10 @@ type ListGroupsRequest struct {
 	// "Preparing", "PreparingRebalance", "CompletingRebalance", "Stable",
 	// "Dead", or "Empty". If empty, all groups are returned.
 	StatesFilter []string // v4+
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v3+
+
 }
 
 func (*ListGroupsRequest) Key() int16                 { return 16 }
@@ -12395,7 +12790,8 @@ func (v *ListGroupsRequest) AppendTo(dst []byte) []byte {
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -12435,7 +12831,7 @@ func (v *ListGroupsRequest) ReadFrom(src []byte) error {
 		s.StatesFilter = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -12470,6 +12866,9 @@ type ListGroupsResponseGroup struct {
 
 	// The group state.
 	GroupState string // v4+
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -12507,6 +12906,10 @@ type ListGroupsResponse struct {
 
 	// Groups is the list of groups Kafka knows of.
 	Groups []ListGroupsResponseGroup
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v3+
+
 }
 
 func (*ListGroupsResponse) Key() int16                 { return 16 }
@@ -12564,12 +12967,14 @@ func (v *ListGroupsResponse) AppendTo(dst []byte) []byte {
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -12636,14 +13041,14 @@ func (v *ListGroupsResponse) ReadFrom(src []byte) error {
 				s.GroupState = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
 		s.Groups = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -12871,6 +13276,10 @@ type ApiVersionsRequest struct {
 	// ClientSoftwareVersion is the version of the software name in the prior
 	// field. It must match the same regex (thus, this is also required).
 	ClientSoftwareVersion string // v3+
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v3+
+
 }
 
 func (*ApiVersionsRequest) Key() int16                 { return 18 }
@@ -12911,7 +13320,8 @@ func (v *ApiVersionsRequest) AppendTo(dst []byte) []byte {
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -12942,7 +13352,7 @@ func (v *ApiVersionsRequest) ReadFrom(src []byte) error {
 		s.ClientSoftwareVersion = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -12977,6 +13387,9 @@ type ApiVersionsResponseApiKey struct {
 
 	// MaxVersion is the max version a broker supports for an API key.
 	MaxVersion int16
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -13001,6 +13414,9 @@ type ApiVersionsResponseSupportedFeature struct {
 
 	// The maximum supported version for the feature.
 	MaxVersion int16
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -13025,6 +13441,9 @@ type ApiVersionsResponseFinalizedFeature struct {
 
 	// The cluster-wide finalized min version level for the feature.
 	MinVersionLevel int16
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -13075,6 +13494,10 @@ type ApiVersionsResponse struct {
 	// The list of cluster-wide finalized features (only valid if
 	// FinalizedFeaturesEpoch is >= 0).
 	FinalizedFeatures []ApiVersionsResponseFinalizedFeature // tag 2
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v3+
+
 }
 
 func (*ApiVersionsResponse) Key() int16                 { return 18 }
@@ -13116,7 +13539,8 @@ func (v *ApiVersionsResponse) AppendTo(dst []byte) []byte {
 				dst = kbin.AppendInt16(dst, v)
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
@@ -13135,7 +13559,7 @@ func (v *ApiVersionsResponse) AppendTo(dst []byte) []byte {
 		if v.FinalizedFeatures != nil {
 			toEncode = append(toEncode, 2)
 		}
-		dst = kbin.AppendUvarint(dst, uint32(len(toEncode)))
+		dst = kbin.AppendUvarint(dst, uint32(len(toEncode)+v.UnknownTags.Len()))
 		for _, tag := range toEncode {
 			switch tag {
 			case 0:
@@ -13169,7 +13593,8 @@ func (v *ApiVersionsResponse) AppendTo(dst []byte) []byte {
 							dst = kbin.AppendInt16(dst, v)
 						}
 						if isFlexible {
-							dst = append(dst, 0)
+							dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+							dst = v.UnknownTags.AppendEach(dst)
 						}
 					}
 					if !sized {
@@ -13216,7 +13641,8 @@ func (v *ApiVersionsResponse) AppendTo(dst []byte) []byte {
 							dst = kbin.AppendInt16(dst, v)
 						}
 						if isFlexible {
-							dst = append(dst, 0)
+							dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+							dst = v.UnknownTags.AppendEach(dst)
 						}
 					}
 					if !sized {
@@ -13227,6 +13653,7 @@ func (v *ApiVersionsResponse) AppendTo(dst []byte) []byte {
 				}
 			}
 		}
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -13274,7 +13701,7 @@ func (v *ApiVersionsResponse) ReadFrom(src []byte) error {
 				s.MaxVersion = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
@@ -13286,9 +13713,9 @@ func (v *ApiVersionsResponse) ReadFrom(src []byte) error {
 	}
 	if isFlexible {
 		for i := b.Uvarint(); i > 0; i-- {
-			switch b.Uvarint() {
+			switch key := b.Uvarint(); key {
 			default:
-				b.Span(int(b.Uvarint()))
+				s.UnknownTags.Set(key, b.Span(int(b.Uvarint())))
 			case 0:
 				b := kbin.Reader{Src: b.Span(int(b.Uvarint()))}
 				v := s.SupportedFeatures
@@ -13327,7 +13754,7 @@ func (v *ApiVersionsResponse) ReadFrom(src []byte) error {
 						s.MaxVersion = v
 					}
 					if isFlexible {
-						SkipTags(&b)
+						s.UnknownTags = ReadTags(&b)
 					}
 				}
 				v = a
@@ -13380,7 +13807,7 @@ func (v *ApiVersionsResponse) ReadFrom(src []byte) error {
 						s.MinVersionLevel = v
 					}
 					if isFlexible {
-						SkipTags(&b)
+						s.UnknownTags = ReadTags(&b)
 					}
 				}
 				v = a
@@ -13422,6 +13849,9 @@ type CreateTopicsRequestTopicReplicaAssignment struct {
 
 	// Replicas are broker IDs the partition must exist on.
 	Replicas []int32
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -13443,6 +13873,9 @@ type CreateTopicsRequestTopicConfig struct {
 
 	// Value is a topic level config value (e.g. 1073741824)
 	Value *string
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -13480,6 +13913,9 @@ type CreateTopicsRequestTopic struct {
 	// Configs is an array of key value config pairs for a topic.
 	// These correspond to Kafka Topic-Level Configs: http://kafka.apache.org/documentation/#topicconfigs.
 	Configs []CreateTopicsRequestTopicConfig
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -13514,6 +13950,10 @@ type CreateTopicsRequest struct {
 	// ValidateOnly is makes this request a dry-run; everything is validated but
 	// no topics are actually created.
 	ValidateOnly bool // v1+
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v5+
+
 }
 
 func (*CreateTopicsRequest) Key() int16                 { return 19 }
@@ -13591,7 +14031,8 @@ func (v *CreateTopicsRequest) AppendTo(dst []byte) []byte {
 						}
 					}
 					if isFlexible {
-						dst = append(dst, 0)
+						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+						dst = v.UnknownTags.AppendEach(dst)
 					}
 				}
 			}
@@ -13621,12 +14062,14 @@ func (v *CreateTopicsRequest) AppendTo(dst []byte) []byte {
 						}
 					}
 					if isFlexible {
-						dst = append(dst, 0)
+						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+						dst = v.UnknownTags.AppendEach(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
@@ -13639,7 +14082,8 @@ func (v *CreateTopicsRequest) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendBool(dst, v)
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -13733,7 +14177,7 @@ func (v *CreateTopicsRequest) ReadFrom(src []byte) error {
 						s.Replicas = v
 					}
 					if isFlexible {
-						SkipTags(&b)
+						s.UnknownTags = ReadTags(&b)
 					}
 				}
 				v = a
@@ -13777,14 +14221,14 @@ func (v *CreateTopicsRequest) ReadFrom(src []byte) error {
 						s.Value = v
 					}
 					if isFlexible {
-						SkipTags(&b)
+						s.UnknownTags = ReadTags(&b)
 					}
 				}
 				v = a
 				s.Configs = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
@@ -13799,7 +14243,7 @@ func (v *CreateTopicsRequest) ReadFrom(src []byte) error {
 		s.ValidateOnly = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -13844,6 +14288,9 @@ type CreateTopicsResponseTopicConfig struct {
 	// IsSensitive signifies whether this is a sensitive config key, which
 	// is either a password or an unknown type.
 	IsSensitive bool
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -13917,6 +14364,9 @@ type CreateTopicsResponseTopic struct {
 
 	// Configs contains this topic's configuration.
 	Configs []CreateTopicsResponseTopicConfig // v5+
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -13949,6 +14399,10 @@ type CreateTopicsResponse struct {
 
 	// Topics contains responses to the requested topic creations.
 	Topics []CreateTopicsResponseTopic
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v5+
+
 }
 
 func (*CreateTopicsResponse) Key() int16                 { return 19 }
@@ -14047,7 +14501,8 @@ func (v *CreateTopicsResponse) AppendTo(dst []byte) []byte {
 						dst = kbin.AppendBool(dst, v)
 					}
 					if isFlexible {
-						dst = append(dst, 0)
+						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+						dst = v.UnknownTags.AppendEach(dst)
 					}
 				}
 			}
@@ -14056,7 +14511,7 @@ func (v *CreateTopicsResponse) AppendTo(dst []byte) []byte {
 				if v.ConfigErrorCode != 0 {
 					toEncode = append(toEncode, 0)
 				}
-				dst = kbin.AppendUvarint(dst, uint32(len(toEncode)))
+				dst = kbin.AppendUvarint(dst, uint32(len(toEncode)+v.UnknownTags.Len()))
 				for _, tag := range toEncode {
 					switch tag {
 					case 0:
@@ -14068,11 +14523,13 @@ func (v *CreateTopicsResponse) AppendTo(dst []byte) []byte {
 						}
 					}
 				}
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -14194,7 +14651,7 @@ func (v *CreateTopicsResponse) ReadFrom(src []byte) error {
 						s.IsSensitive = v
 					}
 					if isFlexible {
-						SkipTags(&b)
+						s.UnknownTags = ReadTags(&b)
 					}
 				}
 				v = a
@@ -14202,9 +14659,9 @@ func (v *CreateTopicsResponse) ReadFrom(src []byte) error {
 			}
 			if isFlexible {
 				for i := b.Uvarint(); i > 0; i-- {
-					switch b.Uvarint() {
+					switch key := b.Uvarint(); key {
 					default:
-						b.Span(int(b.Uvarint()))
+						s.UnknownTags.Set(key, b.Span(int(b.Uvarint())))
 					case 0:
 						b := kbin.Reader{Src: b.Span(int(b.Uvarint()))}
 						v := b.Int16()
@@ -14220,7 +14677,7 @@ func (v *CreateTopicsResponse) ReadFrom(src []byte) error {
 		s.Topics = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -14250,6 +14707,9 @@ type DeleteTopicsRequestTopic struct {
 	Topic *string
 
 	TopicID [16]byte
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -14278,6 +14738,10 @@ type DeleteTopicsRequest struct {
 
 	// TimeoutMillis is the millisecond timeout of this request.
 	TimeoutMillis int32
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v4+
+
 }
 
 func (*DeleteTopicsRequest) Key() int16                 { return 20 }
@@ -14342,7 +14806,8 @@ func (v *DeleteTopicsRequest) AppendTo(dst []byte) []byte {
 				dst = kbin.AppendUuid(dst, v)
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
@@ -14351,7 +14816,8 @@ func (v *DeleteTopicsRequest) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendInt32(dst, v)
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -14423,7 +14889,7 @@ func (v *DeleteTopicsRequest) ReadFrom(src []byte) error {
 				s.TopicID = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
@@ -14434,7 +14900,7 @@ func (v *DeleteTopicsRequest) ReadFrom(src []byte) error {
 		s.TimeoutMillis = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -14493,6 +14959,9 @@ type DeleteTopicsResponseTopic struct {
 
 	// ErrorMessage is a message for an error.
 	ErrorMessage *string // v5+
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -14525,6 +14994,10 @@ type DeleteTopicsResponse struct {
 
 	// Topics contains responses for each topic requested for deletion.
 	Topics []DeleteTopicsResponseTopic
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v4+
+
 }
 
 func (*DeleteTopicsResponse) Key() int16                 { return 20 }
@@ -14593,12 +15066,14 @@ func (v *DeleteTopicsResponse) AppendTo(dst []byte) []byte {
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -14670,14 +15145,14 @@ func (v *DeleteTopicsResponse) ReadFrom(src []byte) error {
 				s.ErrorMessage = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
 		s.Topics = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -14714,6 +15189,9 @@ type DeleteRecordsRequestTopicPartition struct {
 	// To delete all records, use -1, which is mapped to the partition's
 	// current high watermark.
 	Offset int64
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -14735,6 +15213,9 @@ type DeleteRecordsRequestTopic struct {
 
 	// Partitions contains partitions to delete records from.
 	Partitions []DeleteRecordsRequestTopicPartition
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -14772,6 +15253,10 @@ type DeleteRecordsRequest struct {
 	// any partition that all replicas do not reply to within this limit will
 	// have a timeout error.
 	TimeoutMillis int32
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v2+
+
 }
 
 func (*DeleteRecordsRequest) Key() int16                 { return 21 }
@@ -14832,12 +15317,14 @@ func (v *DeleteRecordsRequest) AppendTo(dst []byte) []byte {
 						dst = kbin.AppendInt64(dst, v)
 					}
 					if isFlexible {
-						dst = append(dst, 0)
+						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+						dst = v.UnknownTags.AppendEach(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
@@ -14846,7 +15333,8 @@ func (v *DeleteRecordsRequest) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendInt32(dst, v)
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -14914,14 +15402,14 @@ func (v *DeleteRecordsRequest) ReadFrom(src []byte) error {
 						s.Offset = v
 					}
 					if isFlexible {
-						SkipTags(&b)
+						s.UnknownTags = ReadTags(&b)
 					}
 				}
 				v = a
 				s.Partitions = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
@@ -14932,7 +15420,7 @@ func (v *DeleteRecordsRequest) ReadFrom(src []byte) error {
 		s.TimeoutMillis = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -14986,6 +15474,9 @@ type DeleteRecordsResponseTopicPartition struct {
 	// KAFKA_STORAGE_EXCEPTION is returned if the partition is in an
 	// offline log directory.
 	ErrorCode int16
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -15008,6 +15499,9 @@ type DeleteRecordsResponseTopic struct {
 	// Partitions contains responses for each partition in a requested topic
 	// in the delete records request.
 	Partitions []DeleteRecordsResponseTopicPartition
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -15038,6 +15532,10 @@ type DeleteRecordsResponse struct {
 
 	// Topics contains responses for each topic in the delete records request.
 	Topics []DeleteRecordsResponseTopic
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v2+
+
 }
 
 func (*DeleteRecordsResponse) Key() int16                 { return 21 }
@@ -15098,17 +15596,20 @@ func (v *DeleteRecordsResponse) AppendTo(dst []byte) []byte {
 						dst = kbin.AppendInt16(dst, v)
 					}
 					if isFlexible {
-						dst = append(dst, 0)
+						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+						dst = v.UnknownTags.AppendEach(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -15184,21 +15685,21 @@ func (v *DeleteRecordsResponse) ReadFrom(src []byte) error {
 						s.ErrorCode = v
 					}
 					if isFlexible {
-						SkipTags(&b)
+						s.UnknownTags = ReadTags(&b)
 					}
 				}
 				v = a
 				s.Partitions = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
 		s.Topics = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -15252,6 +15753,10 @@ type InitProducerIDRequest struct {
 	// epoch on the broker, and the request will return an error if they do not
 	// match. Also added for KIP-360.
 	ProducerEpoch int16 // v3+
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v2+
+
 }
 
 func (*InitProducerIDRequest) Key() int16                 { return 22 }
@@ -15299,7 +15804,8 @@ func (v *InitProducerIDRequest) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendInt16(dst, v)
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -15333,7 +15839,7 @@ func (v *InitProducerIDRequest) ReadFrom(src []byte) error {
 		s.ProducerEpoch = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -15402,6 +15908,10 @@ type InitProducerIDResponse struct {
 
 	// ProducerEpoch is the producer epoch to use for transactions.
 	ProducerEpoch int16
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v2+
+
 }
 
 func (*InitProducerIDResponse) Key() int16                 { return 22 }
@@ -15436,7 +15946,8 @@ func (v *InitProducerIDResponse) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendInt16(dst, v)
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -15465,7 +15976,7 @@ func (v *InitProducerIDResponse) ReadFrom(src []byte) error {
 		s.ProducerEpoch = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -15505,6 +16016,9 @@ type OffsetForLeaderEpochRequestTopicPartition struct {
 
 	// LeaderEpoch is the epoch to fetch the end offset for.
 	LeaderEpoch int32
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -15527,6 +16041,9 @@ type OffsetForLeaderEpochRequestTopic struct {
 
 	// Partitions are partitions within a topic to fetch leader epoch offsets for.
 	Partitions []OffsetForLeaderEpochRequestTopicPartition
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -15558,6 +16075,10 @@ type OffsetForLeaderEpochRequest struct {
 
 	// Topics are topics to fetch leader epoch offsets for.
 	Topics []OffsetForLeaderEpochRequestTopic
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v4+
+
 }
 
 func (*OffsetForLeaderEpochRequest) Key() int16                 { return 23 }
@@ -15626,17 +16147,20 @@ func (v *OffsetForLeaderEpochRequest) AppendTo(dst []byte) []byte {
 						dst = kbin.AppendInt32(dst, v)
 					}
 					if isFlexible {
-						dst = append(dst, 0)
+						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+						dst = v.UnknownTags.AppendEach(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -15712,21 +16236,21 @@ func (v *OffsetForLeaderEpochRequest) ReadFrom(src []byte) error {
 						s.LeaderEpoch = v
 					}
 					if isFlexible {
-						SkipTags(&b)
+						s.UnknownTags = ReadTags(&b)
 					}
 				}
 				v = a
 				s.Partitions = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
 		s.Topics = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -15801,6 +16325,9 @@ type OffsetForLeaderEpochResponseTopicPartition struct {
 	// either has no more records (consumer is caught up), or the broker
 	// transitioned to a new epoch.
 	EndOffset int64
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -15824,6 +16351,9 @@ type OffsetForLeaderEpochResponseTopic struct {
 
 	// Partitions are responses to partitions in a topic in the request.
 	Partitions []OffsetForLeaderEpochResponseTopicPartition
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -15850,6 +16380,10 @@ type OffsetForLeaderEpochResponse struct {
 
 	// Topics are responses to topics in the request.
 	Topics []OffsetForLeaderEpochResponseTopic
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v4+
+
 }
 
 func (*OffsetForLeaderEpochResponse) Key() int16                 { return 23 }
@@ -15916,17 +16450,20 @@ func (v *OffsetForLeaderEpochResponse) AppendTo(dst []byte) []byte {
 						dst = kbin.AppendInt64(dst, v)
 					}
 					if isFlexible {
-						dst = append(dst, 0)
+						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+						dst = v.UnknownTags.AppendEach(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -16006,21 +16543,21 @@ func (v *OffsetForLeaderEpochResponse) ReadFrom(src []byte) error {
 						s.EndOffset = v
 					}
 					if isFlexible {
-						SkipTags(&b)
+						s.UnknownTags = ReadTags(&b)
 					}
 				}
 				v = a
 				s.Partitions = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
 		s.Topics = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -16053,6 +16590,9 @@ type AddPartitionsToTxnRequestTopic struct {
 	// Partitions are partitions within a topic to add as part of the producer
 	// side of a transaction.
 	Partitions []int32
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -16089,6 +16629,10 @@ type AddPartitionsToTxnRequest struct {
 
 	// Topics are topics to add as part of the producer side of a transaction.
 	Topics []AddPartitionsToTxnRequestTopic
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v3+
+
 }
 
 func (*AddPartitionsToTxnRequest) Key() int16                 { return 24 }
@@ -16161,12 +16705,14 @@ func (v *AddPartitionsToTxnRequest) AppendTo(dst []byte) []byte {
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -16246,14 +16792,14 @@ func (v *AddPartitionsToTxnRequest) ReadFrom(src []byte) error {
 				s.Partitions = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
 		s.Topics = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -16316,6 +16862,9 @@ type AddPartitionsToTxnResponseTopicPartition struct {
 	// CONCURRENT_TRANSACTIONS is returned if there is an ongoing transaction for
 	// this transactional ID, if the producer ID and epoch matches the broker's.
 	ErrorCode int16
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -16337,6 +16886,9 @@ type AddPartitionsToTxnResponseTopic struct {
 
 	// Partitions are responses to partitions in the request.
 	Partitions []AddPartitionsToTxnResponseTopicPartition
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -16367,6 +16919,10 @@ type AddPartitionsToTxnResponse struct {
 
 	// Topics are responses to topics in the request.
 	Topics []AddPartitionsToTxnResponseTopic
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v3+
+
 }
 
 func (*AddPartitionsToTxnResponse) Key() int16                 { return 24 }
@@ -16425,17 +16981,20 @@ func (v *AddPartitionsToTxnResponse) AppendTo(dst []byte) []byte {
 						dst = kbin.AppendInt16(dst, v)
 					}
 					if isFlexible {
-						dst = append(dst, 0)
+						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+						dst = v.UnknownTags.AppendEach(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -16507,21 +17066,21 @@ func (v *AddPartitionsToTxnResponse) ReadFrom(src []byte) error {
 						s.ErrorCode = v
 					}
 					if isFlexible {
-						SkipTags(&b)
+						s.UnknownTags = ReadTags(&b)
 					}
 				}
 				v = a
 				s.Partitions = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
 		s.Topics = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -16572,6 +17131,10 @@ type AddOffsetsToTxnRequest struct {
 
 	// Group is the group to tie this transaction to.
 	Group string
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v3+
+
 }
 
 func (*AddOffsetsToTxnRequest) Key() int16                 { return 25 }
@@ -16623,7 +17186,8 @@ func (v *AddOffsetsToTxnRequest) AppendTo(dst []byte) []byte {
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -16662,7 +17226,7 @@ func (v *AddOffsetsToTxnRequest) ReadFrom(src []byte) error {
 		s.Group = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -16712,6 +17276,10 @@ type AddOffsetsToTxnResponse struct {
 	//
 	// This also can return any error that AddPartitionsToTxn returns.
 	ErrorCode int16
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v3+
+
 }
 
 func (*AddOffsetsToTxnResponse) Key() int16                 { return 25 }
@@ -16738,7 +17306,8 @@ func (v *AddOffsetsToTxnResponse) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendInt16(dst, v)
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -16759,7 +17328,7 @@ func (v *AddOffsetsToTxnResponse) ReadFrom(src []byte) error {
 		s.ErrorCode = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -16804,6 +17373,10 @@ type EndTxnRequest struct {
 
 	// Commit is whether to commit this transaction: true for yes, false for abort.
 	Commit bool
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v3+
+
 }
 
 func (*EndTxnRequest) Key() int16                 { return 26 }
@@ -16849,7 +17422,8 @@ func (v *EndTxnRequest) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendBool(dst, v)
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -16883,7 +17457,7 @@ func (v *EndTxnRequest) ReadFrom(src []byte) error {
 		s.Commit = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -16943,6 +17517,10 @@ type EndTxnResponse struct {
 	// INVALID_TXN_STATE is returned if this request is attempted at the wrong
 	// time (given the order of how transaction requests should go).
 	ErrorCode int16
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v3+
+
 }
 
 func (*EndTxnResponse) Key() int16                 { return 26 }
@@ -16967,7 +17545,8 @@ func (v *EndTxnResponse) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendInt16(dst, v)
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -16988,7 +17567,7 @@ func (v *EndTxnResponse) ReadFrom(src []byte) error {
 		s.ErrorCode = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -17018,6 +17597,9 @@ type WriteTxnMarkersRequestMarkerTopic struct {
 	Topic string
 
 	Partitions []int32
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -17043,6 +17625,9 @@ type WriteTxnMarkersRequestMarker struct {
 	Topics []WriteTxnMarkersRequestMarkerTopic
 
 	CoordinatorEpoch int32
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -17066,6 +17651,10 @@ type WriteTxnMarkersRequest struct {
 	Version int16
 
 	Markers []WriteTxnMarkersRequestMarker
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v1+
+
 }
 
 func (*WriteTxnMarkersRequest) Key() int16                 { return 27 }
@@ -17142,7 +17731,8 @@ func (v *WriteTxnMarkersRequest) AppendTo(dst []byte) []byte {
 						}
 					}
 					if isFlexible {
-						dst = append(dst, 0)
+						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+						dst = v.UnknownTags.AppendEach(dst)
 					}
 				}
 			}
@@ -17151,12 +17741,14 @@ func (v *WriteTxnMarkersRequest) AppendTo(dst []byte) []byte {
 				dst = kbin.AppendInt32(dst, v)
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -17250,7 +17842,7 @@ func (v *WriteTxnMarkersRequest) ReadFrom(src []byte) error {
 						s.Partitions = v
 					}
 					if isFlexible {
-						SkipTags(&b)
+						s.UnknownTags = ReadTags(&b)
 					}
 				}
 				v = a
@@ -17261,14 +17853,14 @@ func (v *WriteTxnMarkersRequest) ReadFrom(src []byte) error {
 				s.CoordinatorEpoch = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
 		s.Markers = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -17298,6 +17890,9 @@ type WriteTxnMarkersResponseMarkerTopicPartition struct {
 	Partition int32
 
 	ErrorCode int16
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -17317,6 +17912,9 @@ type WriteTxnMarkersResponseMarkerTopic struct {
 	Topic string
 
 	Partitions []WriteTxnMarkersResponseMarkerTopicPartition
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -17336,6 +17934,9 @@ type WriteTxnMarkersResponseMarker struct {
 	ProducerID int64
 
 	Topics []WriteTxnMarkersResponseMarkerTopic
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -17357,6 +17958,10 @@ type WriteTxnMarkersResponse struct {
 	Version int16
 
 	Markers []WriteTxnMarkersResponseMarker
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v1+
+
 }
 
 func (*WriteTxnMarkersResponse) Key() int16                 { return 27 }
@@ -17421,22 +18026,26 @@ func (v *WriteTxnMarkersResponse) AppendTo(dst []byte) []byte {
 								dst = kbin.AppendInt16(dst, v)
 							}
 							if isFlexible {
-								dst = append(dst, 0)
+								dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+								dst = v.UnknownTags.AppendEach(dst)
 							}
 						}
 					}
 					if isFlexible {
-						dst = append(dst, 0)
+						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+						dst = v.UnknownTags.AppendEach(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -17527,28 +18136,28 @@ func (v *WriteTxnMarkersResponse) ReadFrom(src []byte) error {
 								s.ErrorCode = v
 							}
 							if isFlexible {
-								SkipTags(&b)
+								s.UnknownTags = ReadTags(&b)
 							}
 						}
 						v = a
 						s.Partitions = v
 					}
 					if isFlexible {
-						SkipTags(&b)
+						s.UnknownTags = ReadTags(&b)
 					}
 				}
 				v = a
 				s.Topics = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
 		s.Markers = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -17593,6 +18202,9 @@ type TxnOffsetCommitRequestTopicPartition struct {
 	// Metadata is optional metadata the client wants to include with this
 	// commit.
 	Metadata *string
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -17615,6 +18227,9 @@ type TxnOffsetCommitRequestTopic struct {
 
 	// Partitions are partitions to add for pending commits.
 	Partitions []TxnOffsetCommitRequestTopicPartition
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -17663,6 +18278,10 @@ type TxnOffsetCommitRequest struct {
 
 	// Topics are topics to add for pending commits.
 	Topics []TxnOffsetCommitRequestTopic
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v3+
+
 }
 
 func (*TxnOffsetCommitRequest) Key() int16                   { return 28 }
@@ -17780,17 +18399,20 @@ func (v *TxnOffsetCommitRequest) AppendTo(dst []byte) []byte {
 						}
 					}
 					if isFlexible {
-						dst = append(dst, 0)
+						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+						dst = v.UnknownTags.AppendEach(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -17919,21 +18541,21 @@ func (v *TxnOffsetCommitRequest) ReadFrom(src []byte) error {
 						s.Metadata = v
 					}
 					if isFlexible {
-						SkipTags(&b)
+						s.UnknownTags = ReadTags(&b)
 					}
 				}
 				v = a
 				s.Partitions = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
 		s.Topics = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -18004,6 +18626,9 @@ type TxnOffsetCommitResponseTopicPartition struct {
 	//
 	// REBALANCE_IN_PROGRESS is returned if the group is completing a rebalance.
 	ErrorCode int16
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -18025,6 +18650,9 @@ type TxnOffsetCommitResponseTopic struct {
 
 	// Partitions contains responses to the partitions in this topic.
 	Partitions []TxnOffsetCommitResponseTopicPartition
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -18055,6 +18683,10 @@ type TxnOffsetCommitResponse struct {
 
 	// Topics contains responses to the topics in the request.
 	Topics []TxnOffsetCommitResponseTopic
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v3+
+
 }
 
 func (*TxnOffsetCommitResponse) Key() int16                 { return 28 }
@@ -18111,17 +18743,20 @@ func (v *TxnOffsetCommitResponse) AppendTo(dst []byte) []byte {
 						dst = kbin.AppendInt16(dst, v)
 					}
 					if isFlexible {
-						dst = append(dst, 0)
+						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+						dst = v.UnknownTags.AppendEach(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -18193,21 +18828,21 @@ func (v *TxnOffsetCommitResponse) ReadFrom(src []byte) error {
 						s.ErrorCode = v
 					}
 					if isFlexible {
-						SkipTags(&b)
+						s.UnknownTags = ReadTags(&b)
 					}
 				}
 				v = a
 				s.Partitions = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
 		s.Topics = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -18269,6 +18904,10 @@ type DescribeACLsRequest struct {
 
 	// PermissionType is the permission type to filter for. UNKNOWN is 0.
 	PermissionType ACLPermissionType
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v2+
+
 }
 
 func (*DescribeACLsRequest) Key() int16                 { return 29 }
@@ -18347,7 +18986,8 @@ func (v *DescribeACLsRequest) AppendTo(dst []byte) []byte {
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -18423,7 +19063,7 @@ func (v *DescribeACLsRequest) ReadFrom(src []byte) error {
 		s.PermissionType = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -18462,6 +19102,9 @@ type DescribeACLsResponseResourceACL struct {
 
 	// PermissionType is the permission being described.
 	PermissionType ACLPermissionType
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -18489,6 +19132,9 @@ type DescribeACLsResponseResource struct {
 
 	// ACLs contains users / entries being described.
 	ACLs []DescribeACLsResponseResourceACL
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -18531,6 +19177,10 @@ type DescribeACLsResponse struct {
 
 	// Resources are the describe resources.
 	Resources []DescribeACLsResponseResource
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v2+
+
 }
 
 func (*DescribeACLsResponse) Key() int16                 { return 29 }
@@ -18633,17 +19283,20 @@ func (v *DescribeACLsResponse) AppendTo(dst []byte) []byte {
 						}
 					}
 					if isFlexible {
-						dst = append(dst, 0)
+						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+						dst = v.UnknownTags.AppendEach(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -18774,21 +19427,21 @@ func (v *DescribeACLsResponse) ReadFrom(src []byte) error {
 						s.PermissionType = v
 					}
 					if isFlexible {
-						SkipTags(&b)
+						s.UnknownTags = ReadTags(&b)
 					}
 				}
 				v = a
 				s.ACLs = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
 		s.Resources = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -18844,6 +19497,9 @@ type CreateACLsRequestCreation struct {
 	// PermissionType is the permission of this acl. This must be either ALLOW
 	// or DENY.
 	PermissionType ACLPermissionType
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -18870,6 +19526,10 @@ type CreateACLsRequest struct {
 	Version int16
 
 	Creations []CreateACLsRequestCreation
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v2+
+
 }
 
 func (*CreateACLsRequest) Key() int16                 { return 30 }
@@ -18955,12 +19615,14 @@ func (v *CreateACLsRequest) AppendTo(dst []byte) []byte {
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -19055,14 +19717,14 @@ func (v *CreateACLsRequest) ReadFrom(src []byte) error {
 				s.PermissionType = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
 		s.Creations = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -19094,6 +19756,9 @@ type CreateACLsResponseResult struct {
 
 	// ErrorMessage is a message for this error.
 	ErrorMessage *string
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -19124,6 +19789,10 @@ type CreateACLsResponse struct {
 
 	// Results contains responses to each creation request.
 	Results []CreateACLsResponseResult
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v2+
+
 }
 
 func (*CreateACLsResponse) Key() int16                 { return 30 }
@@ -19165,12 +19834,14 @@ func (v *CreateACLsResponse) AppendTo(dst []byte) []byte {
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -19219,14 +19890,14 @@ func (v *CreateACLsResponse) ReadFrom(src []byte) error {
 				s.ErrorMessage = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
 		s.Results = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -19266,6 +19937,9 @@ type DeleteACLsRequestFilter struct {
 	Operation ACLOperation
 
 	PermissionType ACLPermissionType
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -19291,6 +19965,10 @@ type DeleteACLsRequest struct {
 
 	// Filters are filters for acls to delete.
 	Filters []DeleteACLsRequestFilter
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v2+
+
 }
 
 func (*DeleteACLsRequest) Key() int16                 { return 31 }
@@ -19376,12 +20054,14 @@ func (v *DeleteACLsRequest) AppendTo(dst []byte) []byte {
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -19476,14 +20156,14 @@ func (v *DeleteACLsRequest) ReadFrom(src []byte) error {
 				s.PermissionType = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
 		s.Filters = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -19529,6 +20209,9 @@ type DeleteACLsResponseResultMatchingACL struct {
 	Operation ACLOperation
 
 	PermissionType ACLPermissionType
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -19554,6 +20237,9 @@ type DeleteACLsResponseResult struct {
 
 	// MatchingACLs contains all acls that were matched for this filter.
 	MatchingACLs []DeleteACLsResponseResultMatchingACL
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -19584,6 +20270,10 @@ type DeleteACLsResponse struct {
 
 	// Results contains a response to each requested filter.
 	Results []DeleteACLsResponseResult
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v2+
+
 }
 
 func (*DeleteACLsResponse) Key() int16                 { return 31 }
@@ -19698,17 +20388,20 @@ func (v *DeleteACLsResponse) AppendTo(dst []byte) []byte {
 						}
 					}
 					if isFlexible {
-						dst = append(dst, 0)
+						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+						dst = v.UnknownTags.AppendEach(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -19852,21 +20545,21 @@ func (v *DeleteACLsResponse) ReadFrom(src []byte) error {
 						s.PermissionType = v
 					}
 					if isFlexible {
-						SkipTags(&b)
+						s.UnknownTags = ReadTags(&b)
 					}
 				}
 				v = a
 				s.MatchingACLs = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
 		s.Results = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -19908,6 +20601,9 @@ type DescribeConfigsRequestResource struct {
 
 	// ConfigNames is a list of config entries to return. Null requests all.
 	ConfigNames []string
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -19940,6 +20636,10 @@ type DescribeConfigsRequest struct {
 	// IncludeDocumentation signifies whether to return documentation for
 	// config entries.
 	IncludeDocumentation bool // v3+
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v4+
+
 }
 
 func (*DescribeConfigsRequest) Key() int16                 { return 32 }
@@ -20006,7 +20706,8 @@ func (v *DescribeConfigsRequest) AppendTo(dst []byte) []byte {
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
@@ -20019,7 +20720,8 @@ func (v *DescribeConfigsRequest) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendBool(dst, v)
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -20099,7 +20801,7 @@ func (v *DescribeConfigsRequest) ReadFrom(src []byte) error {
 				s.ConfigNames = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
@@ -20114,7 +20816,7 @@ func (v *DescribeConfigsRequest) ReadFrom(src []byte) error {
 		s.IncludeDocumentation = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -20146,6 +20848,9 @@ type DescribeConfigsResponseResourceConfigConfigSynonym struct {
 	Value *string
 
 	Source ConfigSource
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -20194,6 +20899,9 @@ type DescribeConfigsResponseResourceConfig struct {
 
 	// Documentation is optional documentation for the config entry.
 	Documentation *string // v3+
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -20240,6 +20948,9 @@ type DescribeConfigsResponseResource struct {
 	// Configs contains information about key/value config pairs for
 	// the requested resource.
 	Configs []DescribeConfigsResponseResourceConfig
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -20270,6 +20981,10 @@ type DescribeConfigsResponse struct {
 
 	// Resources are responses for each resource in the describe config request.
 	Resources []DescribeConfigsResponseResource
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v4+
+
 }
 
 func (*DescribeConfigsResponse) Key() int16                 { return 32 }
@@ -20404,7 +21119,8 @@ func (v *DescribeConfigsResponse) AppendTo(dst []byte) []byte {
 								}
 							}
 							if isFlexible {
-								dst = append(dst, 0)
+								dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+								dst = v.UnknownTags.AppendEach(dst)
 							}
 						}
 					}
@@ -20424,17 +21140,20 @@ func (v *DescribeConfigsResponse) AppendTo(dst []byte) []byte {
 						}
 					}
 					if isFlexible {
-						dst = append(dst, 0)
+						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+						dst = v.UnknownTags.AppendEach(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -20605,7 +21324,7 @@ func (v *DescribeConfigsResponse) ReadFrom(src []byte) error {
 								s.Source = v
 							}
 							if isFlexible {
-								SkipTags(&b)
+								s.UnknownTags = ReadTags(&b)
 							}
 						}
 						v = a
@@ -20630,21 +21349,21 @@ func (v *DescribeConfigsResponse) ReadFrom(src []byte) error {
 						s.Documentation = v
 					}
 					if isFlexible {
-						SkipTags(&b)
+						s.UnknownTags = ReadTags(&b)
 					}
 				}
 				v = a
 				s.Configs = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
 		s.Resources = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -20676,6 +21395,9 @@ type AlterConfigsRequestResourceConfig struct {
 
 	// Value is a value to set for the key (e.g. 10).
 	Value *string
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -20712,6 +21434,9 @@ type AlterConfigsRequestResource struct {
 
 	// Configs contains key/value config pairs to set on the resource.
 	Configs []AlterConfigsRequestResourceConfig
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -20749,6 +21474,10 @@ type AlterConfigsRequest struct {
 
 	// ValidateOnly validates the request but does not apply it.
 	ValidateOnly bool
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v2+
+
 }
 
 func (*AlterConfigsRequest) Key() int16                 { return 33 }
@@ -20824,12 +21553,14 @@ func (v *AlterConfigsRequest) AppendTo(dst []byte) []byte {
 						}
 					}
 					if isFlexible {
-						dst = append(dst, 0)
+						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+						dst = v.UnknownTags.AppendEach(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
@@ -20838,7 +21569,8 @@ func (v *AlterConfigsRequest) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendBool(dst, v)
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -20925,14 +21657,14 @@ func (v *AlterConfigsRequest) ReadFrom(src []byte) error {
 						s.Value = v
 					}
 					if isFlexible {
-						SkipTags(&b)
+						s.UnknownTags = ReadTags(&b)
 					}
 				}
 				v = a
 				s.Configs = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
@@ -20943,7 +21675,7 @@ func (v *AlterConfigsRequest) ReadFrom(src []byte) error {
 		s.ValidateOnly = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -20995,6 +21727,9 @@ type AlterConfigsResponseResource struct {
 
 	// ResourceName is the name corresponding to the alter config request.
 	ResourceName string
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -21025,6 +21760,10 @@ type AlterConfigsResponse struct {
 
 	// Resources are responses for each resource in the alter request.
 	Resources []AlterConfigsResponseResource
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v2+
+
 }
 
 func (*AlterConfigsResponse) Key() int16                 { return 33 }
@@ -21081,12 +21820,14 @@ func (v *AlterConfigsResponse) AppendTo(dst []byte) []byte {
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -21153,14 +21894,14 @@ func (v *AlterConfigsResponse) ReadFrom(src []byte) error {
 				s.ResourceName = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
 		s.Resources = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -21192,6 +21933,9 @@ type AlterReplicaLogDirsRequestDirTopic struct {
 
 	// Partitions contains partitions for the topic to move.
 	Partitions []int32
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -21214,6 +21958,9 @@ type AlterReplicaLogDirsRequestDir struct {
 
 	// Topics contains topics to move to the above log directory.
 	Topics []AlterReplicaLogDirsRequestDirTopic
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -21239,6 +21986,10 @@ type AlterReplicaLogDirsRequest struct {
 
 	// Dirs contains absolute paths of where you want things to end up.
 	Dirs []AlterReplicaLogDirsRequestDir
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v2+
+
 }
 
 func (*AlterReplicaLogDirsRequest) Key() int16                 { return 34 }
@@ -21311,17 +22062,20 @@ func (v *AlterReplicaLogDirsRequest) AppendTo(dst []byte) []byte {
 						}
 					}
 					if isFlexible {
-						dst = append(dst, 0)
+						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+						dst = v.UnknownTags.AppendEach(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -21412,21 +22166,21 @@ func (v *AlterReplicaLogDirsRequest) ReadFrom(src []byte) error {
 						s.Partitions = v
 					}
 					if isFlexible {
-						SkipTags(&b)
+						s.UnknownTags = ReadTags(&b)
 					}
 				}
 				v = a
 				s.Topics = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
 		s.Dirs = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -21468,6 +22222,9 @@ type AlterReplicaLogDirsResponseTopicPartition struct {
 	// REPLICA_NOT_AVAILABLE is returned if the replica does not exist
 	// yet.
 	ErrorCode int16
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -21490,6 +22247,9 @@ type AlterReplicaLogDirsResponseTopic struct {
 	// Partitions contains responses to each partition that was requested
 	// to move.
 	Partitions []AlterReplicaLogDirsResponseTopicPartition
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -21521,6 +22281,10 @@ type AlterReplicaLogDirsResponse struct {
 	// Topics contains responses to each topic that had partitions requested
 	// for moving.
 	Topics []AlterReplicaLogDirsResponseTopic
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v2+
+
 }
 
 func (*AlterReplicaLogDirsResponse) Key() int16                 { return 34 }
@@ -21579,17 +22343,20 @@ func (v *AlterReplicaLogDirsResponse) AppendTo(dst []byte) []byte {
 						dst = kbin.AppendInt16(dst, v)
 					}
 					if isFlexible {
-						dst = append(dst, 0)
+						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+						dst = v.UnknownTags.AppendEach(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -21661,21 +22428,21 @@ func (v *AlterReplicaLogDirsResponse) ReadFrom(src []byte) error {
 						s.ErrorCode = v
 					}
 					if isFlexible {
-						SkipTags(&b)
+						s.UnknownTags = ReadTags(&b)
 					}
 				}
 				v = a
 				s.Partitions = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
 		s.Topics = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -21707,6 +22474,9 @@ type DescribeLogDirsRequestTopic struct {
 
 	// Partitions contains topic partitions to describe the log dirs of.
 	Partitions []int32
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -21731,6 +22501,10 @@ type DescribeLogDirsRequest struct {
 	// Topics is an array of topics to describe the log dirs of. If this is
 	// null, the response includes all topics and all of their partitions.
 	Topics []DescribeLogDirsRequestTopic
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v2+
+
 }
 
 func (*DescribeLogDirsRequest) Key() int16                 { return 35 }
@@ -21786,12 +22560,14 @@ func (v *DescribeLogDirsRequest) AppendTo(dst []byte) []byte {
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -21857,14 +22633,14 @@ func (v *DescribeLogDirsRequest) ReadFrom(src []byte) error {
 				s.Partitions = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
 		s.Topics = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -21913,6 +22689,9 @@ type DescribeLogDirsResponseDirTopicPartition struct {
 	// AlterReplicaLogDirsRequest and will replace the current log of the
 	// replica in the future.
 	IsFuture bool
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -21935,6 +22714,9 @@ type DescribeLogDirsResponseDirTopic struct {
 	// Partitions is the set of queried partitions for a topic that are
 	// within a log directory.
 	Partitions []DescribeLogDirsResponseDirTopicPartition
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -21961,6 +22743,9 @@ type DescribeLogDirsResponseDir struct {
 
 	// Topics is an array of topics within a log directory.
 	Topics []DescribeLogDirsResponseDirTopic
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -21992,6 +22777,10 @@ type DescribeLogDirsResponse struct {
 	// Dirs pairs log directories with the topics and partitions that are
 	// stored in those directores.
 	Dirs []DescribeLogDirsResponseDir
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v2+
+
 }
 
 func (*DescribeLogDirsResponse) Key() int16                 { return 35 }
@@ -22077,22 +22866,26 @@ func (v *DescribeLogDirsResponse) AppendTo(dst []byte) []byte {
 								dst = kbin.AppendBool(dst, v)
 							}
 							if isFlexible {
-								dst = append(dst, 0)
+								dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+								dst = v.UnknownTags.AppendEach(dst)
 							}
 						}
 					}
 					if isFlexible {
-						dst = append(dst, 0)
+						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+						dst = v.UnknownTags.AppendEach(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -22204,28 +22997,28 @@ func (v *DescribeLogDirsResponse) ReadFrom(src []byte) error {
 								s.IsFuture = v
 							}
 							if isFlexible {
-								SkipTags(&b)
+								s.UnknownTags = ReadTags(&b)
 							}
 						}
 						v = a
 						s.Partitions = v
 					}
 					if isFlexible {
-						SkipTags(&b)
+						s.UnknownTags = ReadTags(&b)
 					}
 				}
 				v = a
 				s.Topics = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
 		s.Dirs = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -22263,6 +23056,10 @@ type SASLAuthenticateRequest struct {
 
 	// SASLAuthBytes contains bytes for a SASL client request.
 	SASLAuthBytes []byte
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v2+
+
 }
 
 func (*SASLAuthenticateRequest) Key() int16                 { return 36 }
@@ -22297,7 +23094,8 @@ func (v *SASLAuthenticateRequest) AppendTo(dst []byte) []byte {
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -22319,7 +23117,7 @@ func (v *SASLAuthenticateRequest) ReadFrom(src []byte) error {
 		s.SASLAuthBytes = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -22364,6 +23162,10 @@ type SASLAuthenticateResponse struct {
 	// was v1. After this timeout, Kafka expects the next bytes on the wire to
 	// begin reauthentication. Otherwise, Kafka closes the connection.
 	SessionLifetimeMillis int64 // v1+
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v2+
+
 }
 
 func (*SASLAuthenticateResponse) Key() int16                 { return 36 }
@@ -22405,7 +23207,8 @@ func (v *SASLAuthenticateResponse) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendInt64(dst, v)
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -22444,7 +23247,7 @@ func (v *SASLAuthenticateResponse) ReadFrom(src []byte) error {
 		s.SessionLifetimeMillis = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -22473,6 +23276,9 @@ func NewSASLAuthenticateResponse() SASLAuthenticateResponse {
 type CreatePartitionsRequestTopicAssignment struct {
 	// Replicas are replicas to assign a new partition to.
 	Replicas []int32
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -22508,6 +23314,9 @@ type CreatePartitionsRequestTopic struct {
 	// The first level's length must be equal to the delta of Count and the
 	// current number of partitions.
 	Assignment []CreatePartitionsRequestTopicAssignment
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -22537,6 +23346,10 @@ type CreatePartitionsRequest struct {
 	// ValidateOnly is makes this request a dry-run; everything is validated but
 	// no partitions are actually created.
 	ValidateOnly bool
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v2+
+
 }
 
 func (*CreatePartitionsRequest) Key() int16                 { return 37 }
@@ -22606,12 +23419,14 @@ func (v *CreatePartitionsRequest) AppendTo(dst []byte) []byte {
 						}
 					}
 					if isFlexible {
-						dst = append(dst, 0)
+						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+						dst = v.UnknownTags.AppendEach(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
@@ -22624,7 +23439,8 @@ func (v *CreatePartitionsRequest) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendBool(dst, v)
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -22713,14 +23529,14 @@ func (v *CreatePartitionsRequest) ReadFrom(src []byte) error {
 						s.Replicas = v
 					}
 					if isFlexible {
-						SkipTags(&b)
+						s.UnknownTags = ReadTags(&b)
 					}
 				}
 				v = a
 				s.Assignment = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
@@ -22735,7 +23551,7 @@ func (v *CreatePartitionsRequest) ReadFrom(src []byte) error {
 		s.ValidateOnly = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -22792,6 +23608,9 @@ type CreatePartitionsResponseTopic struct {
 
 	// ErrorMessage is an informative message if the topic creation failed.
 	ErrorMessage *string
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -22822,6 +23641,10 @@ type CreatePartitionsResponse struct {
 
 	// Topics is a response to each topic in the creation request.
 	Topics []CreatePartitionsResponseTopic
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v2+
+
 }
 
 func (*CreatePartitionsResponse) Key() int16                 { return 37 }
@@ -22873,12 +23696,14 @@ func (v *CreatePartitionsResponse) AppendTo(dst []byte) []byte {
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -22936,14 +23761,14 @@ func (v *CreatePartitionsResponse) ReadFrom(src []byte) error {
 				s.ErrorMessage = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
 		s.Topics = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -22975,6 +23800,9 @@ type CreateDelegationTokenRequestRenewer struct {
 
 	// PrincipalName is the user name allowed to renew the returned token.
 	PrincipalName string
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -23014,6 +23842,10 @@ type CreateDelegationTokenRequest struct {
 	// MaxLifetimeMillis is how long this delegation token will be valid for.
 	// If -1, the default will be the server's delegation.token.max.lifetime.ms.
 	MaxLifetimeMillis int64
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v2+
+
 }
 
 func (*CreateDelegationTokenRequest) Key() int16                 { return 38 }
@@ -23065,7 +23897,8 @@ func (v *CreateDelegationTokenRequest) AppendTo(dst []byte) []byte {
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
@@ -23074,7 +23907,8 @@ func (v *CreateDelegationTokenRequest) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendInt64(dst, v)
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -23124,7 +23958,7 @@ func (v *CreateDelegationTokenRequest) ReadFrom(src []byte) error {
 				s.PrincipalName = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
@@ -23135,7 +23969,7 @@ func (v *CreateDelegationTokenRequest) ReadFrom(src []byte) error {
 		s.MaxLifetimeMillis = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -23205,6 +24039,10 @@ type CreateDelegationTokenResponse struct {
 	//
 	// This request switched at version 1.
 	ThrottleMillis int32
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v2+
+
 }
 
 func (*CreateDelegationTokenResponse) Key() int16                 { return 38 }
@@ -23277,7 +24115,8 @@ func (v *CreateDelegationTokenResponse) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendInt32(dst, v)
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -23346,7 +24185,7 @@ func (v *CreateDelegationTokenResponse) ReadFrom(src []byte) error {
 		s.ThrottleMillis = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -23385,6 +24224,10 @@ type RenewDelegationTokenRequest struct {
 	// RenewTimeMillis is how long to renew the token for. If -1, Kafka uses its
 	// delegation.token.max.lifetime.ms.
 	RenewTimeMillis int64
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v2+
+
 }
 
 func (*RenewDelegationTokenRequest) Key() int16                 { return 39 }
@@ -23423,7 +24266,8 @@ func (v *RenewDelegationTokenRequest) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendInt64(dst, v)
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -23449,7 +24293,7 @@ func (v *RenewDelegationTokenRequest) ReadFrom(src []byte) error {
 		s.RenewTimeMillis = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -23495,6 +24339,10 @@ type RenewDelegationTokenResponse struct {
 	//
 	// This request switched at version 1.
 	ThrottleMillis int32
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v2+
+
 }
 
 func (*RenewDelegationTokenResponse) Key() int16                 { return 39 }
@@ -23527,7 +24375,8 @@ func (v *RenewDelegationTokenResponse) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendInt32(dst, v)
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -23552,7 +24401,7 @@ func (v *RenewDelegationTokenResponse) ReadFrom(src []byte) error {
 		s.ThrottleMillis = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -23597,6 +24446,10 @@ type ExpireDelegationTokenRequest struct {
 	// Note that you can change the expiry timestamp down and then back up, so
 	// long as you change it back up before the timestamp expires.
 	ExpiryPeriodMillis int64
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v2+
+
 }
 
 func (*ExpireDelegationTokenRequest) Key() int16                 { return 40 }
@@ -23635,7 +24488,8 @@ func (v *ExpireDelegationTokenRequest) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendInt64(dst, v)
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -23661,7 +24515,7 @@ func (v *ExpireDelegationTokenRequest) ReadFrom(src []byte) error {
 		s.ExpiryPeriodMillis = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -23706,6 +24560,10 @@ type ExpireDelegationTokenResponse struct {
 	//
 	// This request switched at version 1.
 	ThrottleMillis int32
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v2+
+
 }
 
 func (*ExpireDelegationTokenResponse) Key() int16                 { return 40 }
@@ -23738,7 +24596,8 @@ func (v *ExpireDelegationTokenResponse) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendInt32(dst, v)
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -23763,7 +24622,7 @@ func (v *ExpireDelegationTokenResponse) ReadFrom(src []byte) error {
 		s.ThrottleMillis = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -23797,6 +24656,9 @@ type DescribeDelegationTokenRequestOwner struct {
 	// PrincipalName is the name to match to describe delegation tokens created
 	// with this principal.
 	PrincipalName string
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -23821,6 +24683,10 @@ type DescribeDelegationTokenRequest struct {
 	// If non-null, only tokens created from a matching principal type, name
 	// combination are printed.
 	Owners []DescribeDelegationTokenRequestOwner
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v2+
+
 }
 
 func (*DescribeDelegationTokenRequest) Key() int16                 { return 41 }
@@ -23872,12 +24738,14 @@ func (v *DescribeDelegationTokenRequest) AppendTo(dst []byte) []byte {
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -23930,14 +24798,14 @@ func (v *DescribeDelegationTokenRequest) ReadFrom(src []byte) error {
 				s.PrincipalName = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
 		s.Owners = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -23967,6 +24835,9 @@ type DescribeDelegationTokenResponseTokenDetailRenewer struct {
 	PrincipalType string
 
 	PrincipalName string
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -24007,6 +24878,9 @@ type DescribeDelegationTokenResponseTokenDetail struct {
 
 	// Renewers is a list of users that can renew this token.
 	Renewers []DescribeDelegationTokenResponseTokenDetailRenewer
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -24041,6 +24915,10 @@ type DescribeDelegationTokenResponse struct {
 	//
 	// This request switched at version 1.
 	ThrottleMillis int32
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v2+
+
 }
 
 func (*DescribeDelegationTokenResponse) Key() int16                 { return 41 }
@@ -24143,12 +25021,14 @@ func (v *DescribeDelegationTokenResponse) AppendTo(dst []byte) []byte {
 						}
 					}
 					if isFlexible {
-						dst = append(dst, 0)
+						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+						dst = v.UnknownTags.AppendEach(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
@@ -24157,7 +25037,8 @@ func (v *DescribeDelegationTokenResponse) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendInt32(dst, v)
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -24278,14 +25159,14 @@ func (v *DescribeDelegationTokenResponse) ReadFrom(src []byte) error {
 						s.PrincipalName = v
 					}
 					if isFlexible {
-						SkipTags(&b)
+						s.UnknownTags = ReadTags(&b)
 					}
 				}
 				v = a
 				s.Renewers = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
@@ -24296,7 +25177,7 @@ func (v *DescribeDelegationTokenResponse) ReadFrom(src []byte) error {
 		s.ThrottleMillis = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -24331,6 +25212,10 @@ type DeleteGroupsRequest struct {
 
 	// Groups is a list of groups to delete.
 	Groups []string
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v2+
+
 }
 
 func (*DeleteGroupsRequest) Key() int16                   { return 42 }
@@ -24374,7 +25259,8 @@ func (v *DeleteGroupsRequest) AppendTo(dst []byte) []byte {
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -24414,7 +25300,7 @@ func (v *DeleteGroupsRequest) ReadFrom(src []byte) error {
 		s.Groups = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -24459,6 +25345,9 @@ type DeleteGroupsResponseGroup struct {
 	// NON_EMPTY_GROUP is returned if attempting to delete a group that is
 	// not in the empty state.
 	ErrorCode int16
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -24489,6 +25378,10 @@ type DeleteGroupsResponse struct {
 
 	// Groups are the responses to each group requested for deletion.
 	Groups []DeleteGroupsResponseGroup
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v2+
+
 }
 
 func (*DeleteGroupsResponse) Key() int16                 { return 42 }
@@ -24530,12 +25423,14 @@ func (v *DeleteGroupsResponse) AppendTo(dst []byte) []byte {
 				dst = kbin.AppendInt16(dst, v)
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -24584,14 +25479,14 @@ func (v *DeleteGroupsResponse) ReadFrom(src []byte) error {
 				s.ErrorCode = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
 		s.Groups = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -24625,6 +25520,9 @@ type ElectLeadersRequestTopic struct {
 	// Partitions is an array of partitions in a topic to trigger leader
 	// elections for.
 	Partitions []int32
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -24660,6 +25558,10 @@ type ElectLeadersRequest struct {
 	// TimeoutMillis is how long to wait for the response. This limits how long to
 	// wait since responses are not sent until election results are complete.
 	TimeoutMillis int32
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v2+
+
 }
 
 func (*ElectLeadersRequest) Key() int16                 { return 43 }
@@ -24720,7 +25622,8 @@ func (v *ElectLeadersRequest) AppendTo(dst []byte) []byte {
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
@@ -24729,7 +25632,8 @@ func (v *ElectLeadersRequest) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendInt32(dst, v)
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -24799,7 +25703,7 @@ func (v *ElectLeadersRequest) ReadFrom(src []byte) error {
 				s.Partitions = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
@@ -24810,7 +25714,7 @@ func (v *ElectLeadersRequest) ReadFrom(src []byte) error {
 		s.TimeoutMillis = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -24862,6 +25766,9 @@ type ElectLeadersResponseTopicPartition struct {
 
 	// ErrorMessage is an informative message if the leader election failed.
 	ErrorMessage *string
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -24883,6 +25790,9 @@ type ElectLeadersResponseTopic struct {
 
 	// Partitions contains election results for a topic's partitions.
 	Partitions []ElectLeadersResponseTopicPartition
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -24915,6 +25825,10 @@ type ElectLeadersResponse struct {
 
 	// Topics contains leader election results for each requested topic.
 	Topics []ElectLeadersResponseTopic
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v2+
+
 }
 
 func (*ElectLeadersResponse) Key() int16                 { return 43 }
@@ -24981,17 +25895,20 @@ func (v *ElectLeadersResponse) AppendTo(dst []byte) []byte {
 						}
 					}
 					if isFlexible {
-						dst = append(dst, 0)
+						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+						dst = v.UnknownTags.AppendEach(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -25076,21 +25993,21 @@ func (v *ElectLeadersResponse) ReadFrom(src []byte) error {
 						s.ErrorMessage = v
 					}
 					if isFlexible {
-						SkipTags(&b)
+						s.UnknownTags = ReadTags(&b)
 					}
 				}
 				v = a
 				s.Partitions = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
 		s.Topics = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -25138,6 +26055,9 @@ type IncrementalAlterConfigsRequestResourceConfig struct {
 
 	// Value is a value to set for the key (e.g. 10).
 	Value *string
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -25173,6 +26093,9 @@ type IncrementalAlterConfigsRequestResource struct {
 
 	// Configs contains key/value config pairs to set on the resource.
 	Configs []IncrementalAlterConfigsRequestResourceConfig
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -25203,6 +26126,10 @@ type IncrementalAlterConfigsRequest struct {
 
 	// ValidateOnly validates the request but does not apply it.
 	ValidateOnly bool
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v1+
+
 }
 
 func (*IncrementalAlterConfigsRequest) Key() int16                 { return 44 }
@@ -25282,12 +26209,14 @@ func (v *IncrementalAlterConfigsRequest) AppendTo(dst []byte) []byte {
 						}
 					}
 					if isFlexible {
-						dst = append(dst, 0)
+						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+						dst = v.UnknownTags.AppendEach(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
@@ -25296,7 +26225,8 @@ func (v *IncrementalAlterConfigsRequest) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendBool(dst, v)
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -25387,14 +26317,14 @@ func (v *IncrementalAlterConfigsRequest) ReadFrom(src []byte) error {
 						s.Value = v
 					}
 					if isFlexible {
-						SkipTags(&b)
+						s.UnknownTags = ReadTags(&b)
 					}
 				}
 				v = a
 				s.Configs = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
@@ -25405,7 +26335,7 @@ func (v *IncrementalAlterConfigsRequest) ReadFrom(src []byte) error {
 		s.ValidateOnly = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -25458,6 +26388,9 @@ type IncrementalAlterConfigsResponseResource struct {
 	// ResourceName is the name corresponding to the incremental alter config
 	// request.
 	ResourceName string
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -25484,6 +26417,10 @@ type IncrementalAlterConfigsResponse struct {
 
 	// Resources are responses for each resources in the alter request.
 	Resources []IncrementalAlterConfigsResponseResource
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v1+
+
 }
 
 func (*IncrementalAlterConfigsResponse) Key() int16                 { return 44 }
@@ -25544,12 +26481,14 @@ func (v *IncrementalAlterConfigsResponse) AppendTo(dst []byte) []byte {
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -25616,14 +26555,14 @@ func (v *IncrementalAlterConfigsResponse) ReadFrom(src []byte) error {
 				s.ResourceName = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
 		s.Resources = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -25656,6 +26595,9 @@ type AlterPartitionAssignmentsRequestTopicPartition struct {
 	// Replicas are replicas to place the partition on, or null to
 	// cancel a pending reassignment of this partition.
 	Replicas []int32
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -25677,6 +26619,9 @@ type AlterPartitionAssignmentsRequestTopic struct {
 
 	// Partitions contains partitions to reassign.
 	Partitions []AlterPartitionAssignmentsRequestTopicPartition
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -25705,6 +26650,9 @@ type AlterPartitionAssignmentsRequest struct {
 
 	// Topics are topics for which to reassign partitions of.
 	Topics []AlterPartitionAssignmentsRequestTopic
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 func (*AlterPartitionAssignmentsRequest) Key() int16                 { return 45 }
@@ -25778,17 +26726,20 @@ func (v *AlterPartitionAssignmentsRequest) AppendTo(dst []byte) []byte {
 						}
 					}
 					if isFlexible {
-						dst = append(dst, 0)
+						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+						dst = v.UnknownTags.AppendEach(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -25881,21 +26832,21 @@ func (v *AlterPartitionAssignmentsRequest) ReadFrom(src []byte) error {
 						s.Replicas = v
 					}
 					if isFlexible {
-						SkipTags(&b)
+						s.UnknownTags = ReadTags(&b)
 					}
 				}
 				v = a
 				s.Partitions = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
 		s.Topics = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -25945,6 +26896,9 @@ type AlterPartitionAssignmentsResponseTopicPartition struct {
 
 	// ErrorMessage is an informative message if the partition reassignment failed.
 	ErrorMessage *string
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -25966,6 +26920,9 @@ type AlterPartitionAssignmentsResponseTopic struct {
 
 	// Partitions contains responses for partitions.
 	Partitions []AlterPartitionAssignmentsResponseTopicPartition
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -25998,6 +26955,9 @@ type AlterPartitionAssignmentsResponse struct {
 
 	// Topics contains responses for each topic requested.
 	Topics []AlterPartitionAssignmentsResponseTopic
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 func (*AlterPartitionAssignmentsResponse) Key() int16                 { return 45 }
@@ -26076,17 +27036,20 @@ func (v *AlterPartitionAssignmentsResponse) AppendTo(dst []byte) []byte {
 						}
 					}
 					if isFlexible {
-						dst = append(dst, 0)
+						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+						dst = v.UnknownTags.AppendEach(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -26180,21 +27143,21 @@ func (v *AlterPartitionAssignmentsResponse) ReadFrom(src []byte) error {
 						s.ErrorMessage = v
 					}
 					if isFlexible {
-						SkipTags(&b)
+						s.UnknownTags = ReadTags(&b)
 					}
 				}
 				v = a
 				s.Partitions = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
 		s.Topics = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -26226,6 +27189,9 @@ type ListPartitionReassignmentsRequestTopic struct {
 
 	// Partitions are partitions to list in progress reassignments of.
 	Partitions []int32
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -26255,6 +27221,9 @@ type ListPartitionReassignmentsRequest struct {
 	// Topics are topics to list in progress partition reassignments of, or null
 	// to list everything.
 	Topics []ListPartitionReassignmentsRequestTopic
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 func (*ListPartitionReassignmentsRequest) Key() int16                 { return 46 }
@@ -26315,12 +27284,14 @@ func (v *ListPartitionReassignmentsRequest) AppendTo(dst []byte) []byte {
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -26390,14 +27361,14 @@ func (v *ListPartitionReassignmentsRequest) ReadFrom(src []byte) error {
 				s.Partitions = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
 		s.Topics = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -26436,6 +27407,9 @@ type ListPartitionReassignmentsResponseTopicPartition struct {
 
 	// RemovingReplicas are replicas currently being removed from the partition.
 	RemovingReplicas []int32
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -26457,6 +27431,9 @@ type ListPartitionReassignmentsResponseTopic struct {
 
 	// Partitions contains responses for partitions.
 	Partitions []ListPartitionReassignmentsResponseTopicPartition
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -26497,6 +27474,9 @@ type ListPartitionReassignmentsResponse struct {
 
 	// Topics contains responses for each topic requested.
 	Topics []ListPartitionReassignmentsResponseTopic
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 func (*ListPartitionReassignmentsResponse) Key() int16                 { return 46 }
@@ -26599,17 +27579,20 @@ func (v *ListPartitionReassignmentsResponse) AppendTo(dst []byte) []byte {
 						}
 					}
 					if isFlexible {
-						dst = append(dst, 0)
+						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+						dst = v.UnknownTags.AppendEach(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -26756,21 +27739,21 @@ func (v *ListPartitionReassignmentsResponse) ReadFrom(src []byte) error {
 						s.RemovingReplicas = v
 					}
 					if isFlexible {
-						SkipTags(&b)
+						s.UnknownTags = ReadTags(&b)
 					}
 				}
 				v = a
 				s.Partitions = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
 		s.Topics = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -26799,6 +27782,9 @@ func NewListPartitionReassignmentsResponse() ListPartitionReassignmentsResponse 
 type OffsetDeleteRequestTopicPartition struct {
 	// Partition is a partition to delete offsets for.
 	Partition int32
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -26820,6 +27806,9 @@ type OffsetDeleteRequestTopic struct {
 
 	// Partitions are partitions to delete offsets for.
 	Partitions []OffsetDeleteRequestTopicPartition
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -26995,6 +27984,9 @@ type OffsetDeleteResponseTopicPartition struct {
 	//
 	// GROUP_SUBSCRIBED_TO_TOPIC is returned if the topic is still subscribed to.
 	ErrorCode int16
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -27016,6 +28008,9 @@ type OffsetDeleteResponseTopic struct {
 
 	// Partitions are partitions being responded to.
 	Partitions []OffsetDeleteResponseTopicPartition
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -27210,6 +28205,9 @@ type DescribeClientQuotasRequestComponent struct {
 	// Match is the string to match against, or null if unused for the given
 	// match type.
 	Match *string
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -27237,6 +28235,10 @@ type DescribeClientQuotasRequest struct {
 	// Strict signifies whether matches are strict; if true, the response
 	// excludes entities with unspecified entity types.
 	Strict bool
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v1+
+
 }
 
 func (*DescribeClientQuotasRequest) Key() int16                 { return 48 }
@@ -27292,7 +28294,8 @@ func (v *DescribeClientQuotasRequest) AppendTo(dst []byte) []byte {
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
@@ -27301,7 +28304,8 @@ func (v *DescribeClientQuotasRequest) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendBool(dst, v)
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -27355,7 +28359,7 @@ func (v *DescribeClientQuotasRequest) ReadFrom(src []byte) error {
 				s.Match = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
@@ -27366,7 +28370,7 @@ func (v *DescribeClientQuotasRequest) ReadFrom(src []byte) error {
 		s.Strict = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -27398,6 +28402,9 @@ type DescribeClientQuotasResponseEntryEntity struct {
 
 	// Name is the entity name, or null if the default.
 	Name *string
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -27419,6 +28426,9 @@ type DescribeClientQuotasResponseEntryValue struct {
 
 	// Value is the quota configuration value.
 	Value float64
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -27440,6 +28450,9 @@ type DescribeClientQuotasResponseEntry struct {
 
 	// Values are quota values for the entity.
 	Values []DescribeClientQuotasResponseEntryValue
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -27472,6 +28485,10 @@ type DescribeClientQuotasResponse struct {
 
 	// Entries contains entities that were matched.
 	Entries []DescribeClientQuotasResponseEntry
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v1+
+
 }
 
 func (*DescribeClientQuotasResponse) Key() int16                 { return 48 }
@@ -27542,7 +28559,8 @@ func (v *DescribeClientQuotasResponse) AppendTo(dst []byte) []byte {
 						}
 					}
 					if isFlexible {
-						dst = append(dst, 0)
+						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+						dst = v.UnknownTags.AppendEach(dst)
 					}
 				}
 			}
@@ -27568,17 +28586,20 @@ func (v *DescribeClientQuotasResponse) AppendTo(dst []byte) []byte {
 						dst = kbin.AppendFloat64(dst, v)
 					}
 					if isFlexible {
-						dst = append(dst, 0)
+						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+						dst = v.UnknownTags.AppendEach(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -27667,7 +28688,7 @@ func (v *DescribeClientQuotasResponse) ReadFrom(src []byte) error {
 						s.Name = v
 					}
 					if isFlexible {
-						SkipTags(&b)
+						s.UnknownTags = ReadTags(&b)
 					}
 				}
 				v = a
@@ -27706,21 +28727,21 @@ func (v *DescribeClientQuotasResponse) ReadFrom(src []byte) error {
 						s.Value = v
 					}
 					if isFlexible {
-						SkipTags(&b)
+						s.UnknownTags = ReadTags(&b)
 					}
 				}
 				v = a
 				s.Values = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
 		s.Entries = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -27752,6 +28773,9 @@ type AlterClientQuotasRequestEntryEntity struct {
 
 	// Name is the name of the entity, or null for the default.
 	Name *string
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -27776,6 +28800,9 @@ type AlterClientQuotasRequestEntryOp struct {
 
 	// Remove is whether the quota configuration value should be removed or set.
 	Remove bool
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -27797,6 +28824,9 @@ type AlterClientQuotasRequestEntry struct {
 
 	// Ops contains quota configuration entries to alter.
 	Ops []AlterClientQuotasRequestEntryOp
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -27824,6 +28854,10 @@ type AlterClientQuotasRequest struct {
 	// ValidateOnly is makes this request a dry-run; the alteration is validated
 	// but not performed.
 	ValidateOnly bool
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v1+
+
 }
 
 func (*AlterClientQuotasRequest) Key() int16                 { return 49 }
@@ -27884,7 +28918,8 @@ func (v *AlterClientQuotasRequest) AppendTo(dst []byte) []byte {
 						}
 					}
 					if isFlexible {
-						dst = append(dst, 0)
+						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+						dst = v.UnknownTags.AppendEach(dst)
 					}
 				}
 			}
@@ -27914,12 +28949,14 @@ func (v *AlterClientQuotasRequest) AppendTo(dst []byte) []byte {
 						dst = kbin.AppendBool(dst, v)
 					}
 					if isFlexible {
-						dst = append(dst, 0)
+						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+						dst = v.UnknownTags.AppendEach(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
@@ -27928,7 +28965,8 @@ func (v *AlterClientQuotasRequest) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendBool(dst, v)
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -27997,7 +29035,7 @@ func (v *AlterClientQuotasRequest) ReadFrom(src []byte) error {
 						s.Name = v
 					}
 					if isFlexible {
-						SkipTags(&b)
+						s.UnknownTags = ReadTags(&b)
 					}
 				}
 				v = a
@@ -28040,14 +29078,14 @@ func (v *AlterClientQuotasRequest) ReadFrom(src []byte) error {
 						s.Remove = v
 					}
 					if isFlexible {
-						SkipTags(&b)
+						s.UnknownTags = ReadTags(&b)
 					}
 				}
 				v = a
 				s.Ops = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
@@ -28058,7 +29096,7 @@ func (v *AlterClientQuotasRequest) ReadFrom(src []byte) error {
 		s.ValidateOnly = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -28090,6 +29128,9 @@ type AlterClientQuotasResponseEntryEntity struct {
 
 	// Name is the name of the entity, or null for the default.
 	Name *string
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -28114,6 +29155,9 @@ type AlterClientQuotasResponseEntry struct {
 
 	// Entity contains the components of a matched entity.
 	Entity []AlterClientQuotasResponseEntryEntity
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -28140,6 +29184,10 @@ type AlterClientQuotasResponse struct {
 
 	// Entries contains results for the alter request.
 	Entries []AlterClientQuotasResponseEntry
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v1+
+
 }
 
 func (*AlterClientQuotasResponse) Key() int16                 { return 49 }
@@ -28208,17 +29256,20 @@ func (v *AlterClientQuotasResponse) AppendTo(dst []byte) []byte {
 						}
 					}
 					if isFlexible {
-						dst = append(dst, 0)
+						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+						dst = v.UnknownTags.AppendEach(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -28304,21 +29355,21 @@ func (v *AlterClientQuotasResponse) ReadFrom(src []byte) error {
 						s.Name = v
 					}
 					if isFlexible {
-						SkipTags(&b)
+						s.UnknownTags = ReadTags(&b)
 					}
 				}
 				v = a
 				s.Entity = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
 		s.Entries = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -28347,6 +29398,9 @@ func NewAlterClientQuotasResponse() AlterClientQuotasResponse {
 type DescribeUserSCRAMCredentialsRequestUser struct {
 	// The user name.
 	Name string
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -28375,6 +29429,9 @@ type DescribeUserSCRAMCredentialsRequest struct {
 
 	// The users to describe, or null to describe all.
 	Users []DescribeUserSCRAMCredentialsRequestUser
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 func (*DescribeUserSCRAMCredentialsRequest) Key() int16                 { return 50 }
@@ -28418,12 +29475,14 @@ func (v *DescribeUserSCRAMCredentialsRequest) AppendTo(dst []byte) []byte {
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -28464,14 +29523,14 @@ func (v *DescribeUserSCRAMCredentialsRequest) ReadFrom(src []byte) error {
 				s.Name = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
 		s.Users = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -28504,6 +29563,9 @@ type DescribeUserSCRAMCredentialsResponseResultCredentialInfo struct {
 
 	// The number of iterations used in the SCRAM credential.
 	Iterations int32
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -28531,6 +29593,9 @@ type DescribeUserSCRAMCredentialsResponseResult struct {
 
 	// Information about the SCRAM credentials for this user.
 	CredentialInfos []DescribeUserSCRAMCredentialsResponseResultCredentialInfo
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -28564,6 +29629,9 @@ type DescribeUserSCRAMCredentialsResponse struct {
 
 	// Results for descriptions, one per user.
 	Results []DescribeUserSCRAMCredentialsResponseResult
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 func (*DescribeUserSCRAMCredentialsResponse) Key() int16                 { return 50 }
@@ -28646,17 +29714,20 @@ func (v *DescribeUserSCRAMCredentialsResponse) AppendTo(dst []byte) []byte {
 						dst = kbin.AppendInt32(dst, v)
 					}
 					if isFlexible {
-						dst = append(dst, 0)
+						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+						dst = v.UnknownTags.AppendEach(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -28754,21 +29825,21 @@ func (v *DescribeUserSCRAMCredentialsResponse) ReadFrom(src []byte) error {
 						s.Iterations = v
 					}
 					if isFlexible {
-						SkipTags(&b)
+						s.UnknownTags = ReadTags(&b)
 					}
 				}
 				v = a
 				s.CredentialInfos = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
 		s.Results = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -28800,6 +29871,9 @@ type AlterUserSCRAMCredentialsRequestDeletion struct {
 
 	// The mechanism for the user name to remove.
 	Mechanism int8
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -28832,6 +29906,9 @@ type AlterUserSCRAMCredentialsRequestUpsertion struct {
 
 	// The salted password to use.
 	SaltedPassword []byte
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -28863,6 +29940,9 @@ type AlterUserSCRAMCredentialsRequest struct {
 
 	// The SCRAM credentials to update or insert.
 	Upsertions []AlterUserSCRAMCredentialsRequestUpsertion
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 func (*AlterUserSCRAMCredentialsRequest) Key() int16                 { return 51 }
@@ -28911,7 +29991,8 @@ func (v *AlterUserSCRAMCredentialsRequest) AppendTo(dst []byte) []byte {
 				dst = kbin.AppendInt8(dst, v)
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
@@ -28957,12 +30038,14 @@ func (v *AlterUserSCRAMCredentialsRequest) AppendTo(dst []byte) []byte {
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -29007,7 +30090,7 @@ func (v *AlterUserSCRAMCredentialsRequest) ReadFrom(src []byte) error {
 				s.Mechanism = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
@@ -29068,14 +30151,14 @@ func (v *AlterUserSCRAMCredentialsRequest) ReadFrom(src []byte) error {
 				s.SaltedPassword = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
 		s.Upsertions = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -29110,6 +30193,9 @@ type AlterUserSCRAMCredentialsResponseResult struct {
 
 	// The user-level error message, if any.
 	ErrorMessage *string
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -29137,6 +30223,9 @@ type AlterUserSCRAMCredentialsResponse struct {
 
 	// The results for deletions and upsertions.
 	Results []AlterUserSCRAMCredentialsResponseResult
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 func (*AlterUserSCRAMCredentialsResponse) Key() int16                 { return 51 }
@@ -29190,12 +30279,14 @@ func (v *AlterUserSCRAMCredentialsResponse) AppendTo(dst []byte) []byte {
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -29253,14 +30344,14 @@ func (v *AlterUserSCRAMCredentialsResponse) ReadFrom(src []byte) error {
 				s.ErrorMessage = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
 		s.Results = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -29300,6 +30391,9 @@ type VoteRequestTopicPartition struct {
 
 	// The offset of the last record written to the metadata log.
 	LastOffset int64
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -29319,6 +30413,9 @@ type VoteRequestTopic struct {
 	Topic string
 
 	Partitions []VoteRequestTopicPartition
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -29346,6 +30443,9 @@ type VoteRequest struct {
 	ClusterID *string
 
 	Topics []VoteRequestTopic
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 func (*VoteRequest) Key() int16                 { return 52 }
@@ -29425,17 +30525,20 @@ func (v *VoteRequest) AppendTo(dst []byte) []byte {
 						dst = kbin.AppendInt64(dst, v)
 					}
 					if isFlexible {
-						dst = append(dst, 0)
+						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+						dst = v.UnknownTags.AppendEach(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -29524,21 +30627,21 @@ func (v *VoteRequest) ReadFrom(src []byte) error {
 						s.LastOffset = v
 					}
 					if isFlexible {
-						SkipTags(&b)
+						s.UnknownTags = ReadTags(&b)
 					}
 				}
 				v = a
 				s.Partitions = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
 		s.Topics = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -29574,6 +30677,9 @@ type VoteResponseTopicPartition struct {
 
 	// Whether the vote was granted.
 	VoteGranted bool
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -29593,6 +30699,9 @@ type VoteResponseTopic struct {
 	Topic string
 
 	Partitions []VoteResponseTopicPartition
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -29615,6 +30724,9 @@ type VoteResponse struct {
 	ErrorCode int16
 
 	Topics []VoteResponseTopic
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 func (*VoteResponse) Key() int16                 { return 52 }
@@ -29676,17 +30788,20 @@ func (v *VoteResponse) AppendTo(dst []byte) []byte {
 						dst = kbin.AppendBool(dst, v)
 					}
 					if isFlexible {
-						dst = append(dst, 0)
+						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+						dst = v.UnknownTags.AppendEach(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -29766,21 +30881,21 @@ func (v *VoteResponse) ReadFrom(src []byte) error {
 						s.VoteGranted = v
 					}
 					if isFlexible {
-						SkipTags(&b)
+						s.UnknownTags = ReadTags(&b)
 					}
 				}
 				v = a
 				s.Partitions = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
 		s.Topics = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -29814,6 +30929,9 @@ type BeginQuorumEpochRequestTopicPartition struct {
 
 	// The epoch of the newly elected leader.
 	LeaderEpoch int32
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -29833,6 +30951,9 @@ type BeginQuorumEpochRequestTopic struct {
 	Topic string
 
 	Partitions []BeginQuorumEpochRequestTopicPartition
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -30019,6 +31140,9 @@ type BeginQuorumEpochResponseTopicPartition struct {
 
 	// The latest known leader epoch.
 	LeaderEpoch int32
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -30038,6 +31162,9 @@ type BeginQuorumEpochResponseTopic struct {
 	Topic string
 
 	Partitions []BeginQuorumEpochResponseTopicPartition
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -30217,6 +31344,9 @@ type EndQuorumEpochRequestTopicPartition struct {
 
 	// A sorted list of preferred successors to start the election.
 	PreferredSuccessors []int32
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -30236,6 +31366,9 @@ type EndQuorumEpochRequestTopic struct {
 	Topic string
 
 	Partitions []EndQuorumEpochRequestTopicPartition
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -30448,6 +31581,9 @@ type EndQuorumEpochResponseTopicPartition struct {
 
 	// The latest known leader epoch.
 	LeaderEpoch int32
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -30467,6 +31603,9 @@ type EndQuorumEpochResponseTopic struct {
 	Topic string
 
 	Partitions []EndQuorumEpochResponseTopicPartition
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -30641,6 +31780,9 @@ type DescribeQuorumResponseTopicPartitionReplicaState struct {
 
 	// The last known log end offset of the follower, or -1 if it is unknown.
 	LogEndOffset int64
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -30658,6 +31800,9 @@ func NewDescribeQuorumResponseTopicPartitionReplicaState() DescribeQuorumRespons
 
 type DescribeQuorumRequestTopicPartition struct {
 	Partition int32
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -30677,6 +31822,9 @@ type DescribeQuorumRequestTopic struct {
 	Topic string
 
 	Partitions []DescribeQuorumRequestTopicPartition
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -30700,6 +31848,9 @@ type DescribeQuorumRequest struct {
 	Version int16
 
 	Topics []DescribeQuorumRequestTopic
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 func (*DescribeQuorumRequest) Key() int16                 { return 55 }
@@ -30757,17 +31908,20 @@ func (v *DescribeQuorumRequest) AppendTo(dst []byte) []byte {
 						dst = kbin.AppendInt32(dst, v)
 					}
 					if isFlexible {
-						dst = append(dst, 0)
+						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+						dst = v.UnknownTags.AppendEach(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -30831,21 +31985,21 @@ func (v *DescribeQuorumRequest) ReadFrom(src []byte) error {
 						s.Partition = v
 					}
 					if isFlexible {
-						SkipTags(&b)
+						s.UnknownTags = ReadTags(&b)
 					}
 				}
 				v = a
 				s.Partitions = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
 		s.Topics = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -30887,6 +32041,9 @@ type DescribeQuorumResponseTopicPartition struct {
 	CurrentVoters []DescribeQuorumResponseTopicPartitionReplicaState
 
 	Observers []DescribeQuorumResponseTopicPartitionReplicaState
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -30906,6 +32063,9 @@ type DescribeQuorumResponseTopic struct {
 	Topic string
 
 	Partitions []DescribeQuorumResponseTopicPartition
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -30928,6 +32088,9 @@ type DescribeQuorumResponse struct {
 	ErrorCode int16
 
 	Topics []DescribeQuorumResponseTopic
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 func (*DescribeQuorumResponse) Key() int16                 { return 55 }
@@ -31012,7 +32175,8 @@ func (v *DescribeQuorumResponse) AppendTo(dst []byte) []byte {
 								dst = kbin.AppendInt64(dst, v)
 							}
 							if isFlexible {
-								dst = append(dst, 0)
+								dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+								dst = v.UnknownTags.AppendEach(dst)
 							}
 						}
 					}
@@ -31034,22 +32198,26 @@ func (v *DescribeQuorumResponse) AppendTo(dst []byte) []byte {
 								dst = kbin.AppendInt64(dst, v)
 							}
 							if isFlexible {
-								dst = append(dst, 0)
+								dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+								dst = v.UnknownTags.AppendEach(dst)
 							}
 						}
 					}
 					if isFlexible {
-						dst = append(dst, 0)
+						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+						dst = v.UnknownTags.AppendEach(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -31160,7 +32328,7 @@ func (v *DescribeQuorumResponse) ReadFrom(src []byte) error {
 								s.LogEndOffset = v
 							}
 							if isFlexible {
-								SkipTags(&b)
+								s.UnknownTags = ReadTags(&b)
 							}
 						}
 						v = a
@@ -31194,28 +32362,28 @@ func (v *DescribeQuorumResponse) ReadFrom(src []byte) error {
 								s.LogEndOffset = v
 							}
 							if isFlexible {
-								SkipTags(&b)
+								s.UnknownTags = ReadTags(&b)
 							}
 						}
 						v = a
 						s.Observers = v
 					}
 					if isFlexible {
-						SkipTags(&b)
+						s.UnknownTags = ReadTags(&b)
 					}
 				}
 				v = a
 				s.Partitions = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
 		s.Topics = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -31252,6 +32420,9 @@ type AlterISRRequestTopicPartition struct {
 
 	// The expected version of ISR which is being updated.
 	CurrentISRVersion int32
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -31271,6 +32442,9 @@ type AlterISRRequestTopic struct {
 	Topic string
 
 	Partitions []AlterISRRequestTopicPartition
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -31299,6 +32473,9 @@ type AlterISRRequest struct {
 	BrokerEpoch int64
 
 	Topics []AlterISRRequestTopic
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 func (*AlterISRRequest) Key() int16                 { return 56 }
@@ -31382,17 +32559,20 @@ func (v *AlterISRRequest) AppendTo(dst []byte) []byte {
 						dst = kbin.AppendInt32(dst, v)
 					}
 					if isFlexible {
-						dst = append(dst, 0)
+						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+						dst = v.UnknownTags.AppendEach(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -31494,21 +32674,21 @@ func (v *AlterISRRequest) ReadFrom(src []byte) error {
 						s.CurrentISRVersion = v
 					}
 					if isFlexible {
-						SkipTags(&b)
+						s.UnknownTags = ReadTags(&b)
 					}
 				}
 				v = a
 				s.Partitions = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
 		s.Topics = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -31551,6 +32731,9 @@ type AlterISRResponseTopicPartition struct {
 
 	// The current ISR version.
 	CurrentISRVersion int32
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -31570,6 +32753,9 @@ type AlterISRResponseTopic struct {
 	Topic string
 
 	Partitions []AlterISRResponseTopicPartition
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -31596,6 +32782,9 @@ type AlterISRResponse struct {
 	ErrorCode int16
 
 	Topics []AlterISRResponseTopic
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 func (*AlterISRResponse) Key() int16                 { return 56 }
@@ -31678,17 +32867,20 @@ func (v *AlterISRResponse) AppendTo(dst []byte) []byte {
 						dst = kbin.AppendInt32(dst, v)
 					}
 					if isFlexible {
-						dst = append(dst, 0)
+						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+						dst = v.UnknownTags.AppendEach(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -31798,21 +32990,21 @@ func (v *AlterISRResponse) ReadFrom(src []byte) error {
 						s.CurrentISRVersion = v
 					}
 					if isFlexible {
-						SkipTags(&b)
+						s.UnknownTags = ReadTags(&b)
 					}
 				}
 				v = a
 				s.Partitions = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
 		s.Topics = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -31852,6 +33044,9 @@ type UpdateFeaturesRequestFeatureUpdate struct {
 	// version level is a value that's not lower than the existing maximum
 	// finalized version level.
 	AllowDowngrade bool
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -31877,6 +33072,9 @@ type UpdateFeaturesRequest struct {
 
 	// The list of updates to finalized features.
 	FeatureUpdates []UpdateFeaturesRequestFeatureUpdate
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 func (*UpdateFeaturesRequest) Key() int16                 { return 57 }
@@ -31933,12 +33131,14 @@ func (v *UpdateFeaturesRequest) AppendTo(dst []byte) []byte {
 				dst = kbin.AppendBool(dst, v)
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -31991,14 +33191,14 @@ func (v *UpdateFeaturesRequest) ReadFrom(src []byte) error {
 				s.AllowDowngrade = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
 		s.FeatureUpdates = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -32034,6 +33234,9 @@ type UpdateFeaturesResponseResult struct {
 
 	// The feature update error, if any.
 	ErrorMessage *string
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -32065,6 +33268,9 @@ type UpdateFeaturesResponse struct {
 
 	// The results for each feature update request.
 	Results []UpdateFeaturesResponseResult
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 func (*UpdateFeaturesResponse) Key() int16                 { return 57 }
@@ -32128,12 +33334,14 @@ func (v *UpdateFeaturesResponse) AppendTo(dst []byte) []byte {
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -32204,14 +33412,14 @@ func (v *UpdateFeaturesResponse) ReadFrom(src []byte) error {
 				s.ErrorMessage = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
 		s.Results = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -32251,6 +33459,9 @@ type EnvelopeRequest struct {
 
 	// The original client's address in bytes.
 	ClientHostAddress []byte
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 func (*EnvelopeRequest) Key() int16                 { return 58 }
@@ -32300,7 +33511,8 @@ func (v *EnvelopeRequest) AppendTo(dst []byte) []byte {
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -32340,7 +33552,7 @@ func (v *EnvelopeRequest) ReadFrom(src []byte) error {
 		s.ClientHostAddress = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -32379,6 +33591,9 @@ type EnvelopeResponse struct {
 	//
 	// CLUSTER_AUTHORIZATION_FAILED is returned if inter-broker authorization failed.
 	ErrorCode int16
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 func (*EnvelopeResponse) Key() int16                 { return 58 }
@@ -32406,7 +33621,8 @@ func (v *EnvelopeResponse) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendInt16(dst, v)
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -32432,7 +33648,7 @@ func (v *EnvelopeResponse) ReadFrom(src []byte) error {
 		s.ErrorCode = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -32462,6 +33678,9 @@ type FetchSnapshotRequestTopicPartitionSnapshotID struct {
 	EndOffset int64
 
 	Epoch int32
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -32489,6 +33708,9 @@ type FetchSnapshotRequestTopicPartition struct {
 
 	// The byte position within the snapshot to start fetching from.
 	Position int64
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -32514,6 +33736,9 @@ type FetchSnapshotRequestTopic struct {
 
 	// The partitions to fetch.
 	Partitions []FetchSnapshotRequestTopicPartition
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -32547,6 +33772,9 @@ type FetchSnapshotRequest struct {
 
 	// The topics to fetch.
 	Topics []FetchSnapshotRequestTopic
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 func (*FetchSnapshotRequest) Key() int16                 { return 59 }
@@ -32625,7 +33853,8 @@ func (v *FetchSnapshotRequest) AppendTo(dst []byte) []byte {
 							dst = kbin.AppendInt32(dst, v)
 						}
 						if isFlexible {
-							dst = append(dst, 0)
+							dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+							dst = v.UnknownTags.AppendEach(dst)
 						}
 					}
 					{
@@ -32633,12 +33862,14 @@ func (v *FetchSnapshotRequest) AppendTo(dst []byte) []byte {
 						dst = kbin.AppendInt64(dst, v)
 					}
 					if isFlexible {
-						dst = append(dst, 0)
+						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+						dst = v.UnknownTags.AppendEach(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
@@ -32647,7 +33878,7 @@ func (v *FetchSnapshotRequest) AppendTo(dst []byte) []byte {
 		if v.ClusterID != nil {
 			toEncode = append(toEncode, 0)
 		}
-		dst = kbin.AppendUvarint(dst, uint32(len(toEncode)))
+		dst = kbin.AppendUvarint(dst, uint32(len(toEncode)+v.UnknownTags.Len()))
 		for _, tag := range toEncode {
 			switch tag {
 			case 0:
@@ -32670,6 +33901,7 @@ func (v *FetchSnapshotRequest) AppendTo(dst []byte) []byte {
 				}
 			}
 		}
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -32757,7 +33989,7 @@ func (v *FetchSnapshotRequest) ReadFrom(src []byte) error {
 							s.Epoch = v
 						}
 						if isFlexible {
-							SkipTags(&b)
+							s.UnknownTags = ReadTags(&b)
 						}
 					}
 					{
@@ -32765,14 +33997,14 @@ func (v *FetchSnapshotRequest) ReadFrom(src []byte) error {
 						s.Position = v
 					}
 					if isFlexible {
-						SkipTags(&b)
+						s.UnknownTags = ReadTags(&b)
 					}
 				}
 				v = a
 				s.Partitions = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
@@ -32780,9 +34012,9 @@ func (v *FetchSnapshotRequest) ReadFrom(src []byte) error {
 	}
 	if isFlexible {
 		for i := b.Uvarint(); i > 0; i-- {
-			switch b.Uvarint() {
+			switch key := b.Uvarint(); key {
 			default:
-				b.Span(int(b.Uvarint()))
+				s.UnknownTags.Set(key, b.Span(int(b.Uvarint())))
 			case 0:
 				b := kbin.Reader{Src: b.Span(int(b.Uvarint()))}
 				var v *string
@@ -32828,6 +34060,9 @@ type FetchSnapshotResponseTopicPartitionSnapshotID struct {
 	EndOffset int64
 
 	Epoch int32
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -32847,6 +34082,9 @@ type FetchSnapshotResponseTopicPartitionCurrentLeader struct {
 	LeaderID int32
 
 	LeaderEpoch int32
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -32885,6 +34123,9 @@ type FetchSnapshotResponseTopicPartition struct {
 
 	// Snapshot data.
 	Bytes []byte
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -32914,6 +34155,9 @@ type FetchSnapshotResponseTopic struct {
 
 	// The partitions to fetch.
 	Partitions []FetchSnapshotResponseTopicPartition
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -32943,6 +34187,9 @@ type FetchSnapshotResponse struct {
 
 	// The topics to fetch.
 	Topics []FetchSnapshotResponseTopic
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 func (*FetchSnapshotResponse) Key() int16                 { return 59 }
@@ -33013,7 +34260,8 @@ func (v *FetchSnapshotResponse) AppendTo(dst []byte) []byte {
 							dst = kbin.AppendInt32(dst, v)
 						}
 						if isFlexible {
-							dst = append(dst, 0)
+							dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+							dst = v.UnknownTags.AppendEach(dst)
 						}
 					}
 					{
@@ -33034,14 +34282,14 @@ func (v *FetchSnapshotResponse) AppendTo(dst []byte) []byte {
 					}
 					if isFlexible {
 						var toEncode []uint32
-						if v.CurrentLeader != (func() FetchSnapshotResponseTopicPartitionCurrentLeader {
+						if !reflect.DeepEqual(v.CurrentLeader, (func() FetchSnapshotResponseTopicPartitionCurrentLeader {
 							var v FetchSnapshotResponseTopicPartitionCurrentLeader
 							v.Default()
 							return v
-						})() {
+						})()) {
 							toEncode = append(toEncode, 0)
 						}
-						dst = kbin.AppendUvarint(dst, uint32(len(toEncode)))
+						dst = kbin.AppendUvarint(dst, uint32(len(toEncode)+v.UnknownTags.Len()))
 						for _, tag := range toEncode {
 							switch tag {
 							case 0:
@@ -33060,7 +34308,8 @@ func (v *FetchSnapshotResponse) AppendTo(dst []byte) []byte {
 										dst = kbin.AppendInt32(dst, v)
 									}
 									if isFlexible {
-										dst = append(dst, 0)
+										dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+										dst = v.UnknownTags.AppendEach(dst)
 									}
 									if !sized {
 										dst = kbin.AppendUvarint(dst[:lenAt], uint32(len(dst[lenAt:])))
@@ -33070,16 +34319,19 @@ func (v *FetchSnapshotResponse) AppendTo(dst []byte) []byte {
 								}
 							}
 						}
+						dst = v.UnknownTags.AppendEach(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -33167,7 +34419,7 @@ func (v *FetchSnapshotResponse) ReadFrom(src []byte) error {
 							s.Epoch = v
 						}
 						if isFlexible {
-							SkipTags(&b)
+							s.UnknownTags = ReadTags(&b)
 						}
 					}
 					{
@@ -33189,9 +34441,9 @@ func (v *FetchSnapshotResponse) ReadFrom(src []byte) error {
 					}
 					if isFlexible {
 						for i := b.Uvarint(); i > 0; i-- {
-							switch b.Uvarint() {
+							switch key := b.Uvarint(); key {
 							default:
-								b.Span(int(b.Uvarint()))
+								s.UnknownTags.Set(key, b.Span(int(b.Uvarint())))
 							case 0:
 								b := kbin.Reader{Src: b.Span(int(b.Uvarint()))}
 								v := &s.CurrentLeader
@@ -33206,7 +34458,7 @@ func (v *FetchSnapshotResponse) ReadFrom(src []byte) error {
 									s.LeaderEpoch = v
 								}
 								if isFlexible {
-									SkipTags(&b)
+									s.UnknownTags = ReadTags(&b)
 								}
 								if err := b.Complete(); err != nil {
 									return err
@@ -33219,14 +34471,14 @@ func (v *FetchSnapshotResponse) ReadFrom(src []byte) error {
 				s.Partitions = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
 		s.Topics = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -33262,6 +34514,9 @@ type DescribeClusterRequest struct {
 	// Whether to include cluster authorized operations. This requires DESCRIBE
 	// on CLUSTER.
 	IncludeClusterAuthorizedOperations bool
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 func (*DescribeClusterRequest) Key() int16                 { return 60 }
@@ -33292,7 +34547,8 @@ func (v *DescribeClusterRequest) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendBool(dst, v)
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -33309,7 +34565,7 @@ func (v *DescribeClusterRequest) ReadFrom(src []byte) error {
 		s.IncludeClusterAuthorizedOperations = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -33347,6 +34603,9 @@ type DescribeClusterResponseBroker struct {
 
 	// Rack is the rack this Kafka broker is in, if any.
 	Rack *string
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -33388,6 +34647,9 @@ type DescribeClusterResponse struct {
 
 	// 32-bit bitfield to represent authorized operations for this cluster.
 	ClusterAuthorizedOperations int32
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 func (*DescribeClusterResponse) Key() int16                 { return 60 }
@@ -33467,7 +34729,8 @@ func (v *DescribeClusterResponse) AppendTo(dst []byte) []byte {
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
@@ -33476,7 +34739,8 @@ func (v *DescribeClusterResponse) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendInt32(dst, v)
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -33564,7 +34828,7 @@ func (v *DescribeClusterResponse) ReadFrom(src []byte) error {
 				s.Rack = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
@@ -33575,7 +34839,7 @@ func (v *DescribeClusterResponse) ReadFrom(src []byte) error {
 		s.ClusterAuthorizedOperations = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -33608,6 +34872,9 @@ type DescribeProducersRequestTopic struct {
 
 	// The partitions to list producers for for the given topic.
 	Partitions []int32
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -33635,6 +34902,9 @@ type DescribeProducersRequest struct {
 
 	// The topics to describe producers for.
 	Topics []DescribeProducersRequestTopic
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 func (*DescribeProducersRequest) Key() int16                 { return 61 }
@@ -33690,12 +34960,14 @@ func (v *DescribeProducersRequest) AppendTo(dst []byte) []byte {
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -33758,14 +35030,14 @@ func (v *DescribeProducersRequest) ReadFrom(src []byte) error {
 				s.Partitions = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
 		s.Topics = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -33807,6 +35079,9 @@ type DescribeProducersResponseTopicPartitionActiveProducer struct {
 
 	// The first offset of the transaction.
 	CurrentTxnStartOffset int64
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -33847,6 +35122,9 @@ type DescribeProducersResponseTopicPartition struct {
 	// The current idempotent or transactional producers producing to this partition,
 	// and the metadata related to their produce requests.
 	ActiveProducers []DescribeProducersResponseTopicPartitionActiveProducer
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -33866,6 +35144,9 @@ type DescribeProducersResponseTopic struct {
 	Topic string
 
 	Partitions []DescribeProducersResponseTopicPartition
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -33891,6 +35172,9 @@ type DescribeProducersResponse struct {
 	ThrottleMillis int32
 
 	Topics []DescribeProducersResponseTopic
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 func (*DescribeProducersResponse) Key() int16                 { return 61 }
@@ -33988,22 +35272,26 @@ func (v *DescribeProducersResponse) AppendTo(dst []byte) []byte {
 								dst = kbin.AppendInt64(dst, v)
 							}
 							if isFlexible {
-								dst = append(dst, 0)
+								dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+								dst = v.UnknownTags.AppendEach(dst)
 							}
 						}
 					}
 					if isFlexible {
-						dst = append(dst, 0)
+						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+						dst = v.UnknownTags.AppendEach(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -34127,28 +35415,28 @@ func (v *DescribeProducersResponse) ReadFrom(src []byte) error {
 								s.CurrentTxnStartOffset = v
 							}
 							if isFlexible {
-								SkipTags(&b)
+								s.UnknownTags = ReadTags(&b)
 							}
 						}
 						v = a
 						s.ActiveProducers = v
 					}
 					if isFlexible {
-						SkipTags(&b)
+						s.UnknownTags = ReadTags(&b)
 					}
 				}
 				v = a
 				s.Partitions = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
 		s.Topics = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -34186,6 +35474,9 @@ type BrokerRegistrationRequestListener struct {
 
 	// The security protocol.
 	SecurityProtocol int16
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -34210,6 +35501,9 @@ type BrokerRegistrationRequestFeature struct {
 
 	// The maximum supported feature level.
 	MaxSupportedVersion int16
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -34248,6 +35542,9 @@ type BrokerRegistrationRequest struct {
 
 	// The rack that this broker is in, if any.
 	Rack *string
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 func (*BrokerRegistrationRequest) Key() int16                 { return 62 }
@@ -34323,7 +35620,8 @@ func (v *BrokerRegistrationRequest) AppendTo(dst []byte) []byte {
 				dst = kbin.AppendInt16(dst, v)
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
@@ -34353,7 +35651,8 @@ func (v *BrokerRegistrationRequest) AppendTo(dst []byte) []byte {
 				dst = kbin.AppendInt16(dst, v)
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
@@ -34366,7 +35665,8 @@ func (v *BrokerRegistrationRequest) AppendTo(dst []byte) []byte {
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -34441,7 +35741,7 @@ func (v *BrokerRegistrationRequest) ReadFrom(src []byte) error {
 				s.SecurityProtocol = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
@@ -34484,7 +35784,7 @@ func (v *BrokerRegistrationRequest) ReadFrom(src []byte) error {
 				s.MaxSupportedVersion = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
@@ -34500,7 +35800,7 @@ func (v *BrokerRegistrationRequest) ReadFrom(src []byte) error {
 		s.Rack = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -34540,6 +35840,9 @@ type BrokerRegistrationResponse struct {
 
 	// The broker's assigned epoch, or -1 if none was assigned.
 	BrokerEpoch int64
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 func (*BrokerRegistrationResponse) Key() int16                 { return 62 }
@@ -34572,7 +35875,8 @@ func (v *BrokerRegistrationResponse) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendInt64(dst, v)
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -34597,7 +35901,7 @@ func (v *BrokerRegistrationResponse) ReadFrom(src []byte) error {
 		s.BrokerEpoch = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -34644,6 +35948,9 @@ type BrokerHeartbeatRequest struct {
 
 	// True if the broker wants to be shutdown.
 	WantShutdown bool
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 func (*BrokerHeartbeatRequest) Key() int16                 { return 63 }
@@ -34690,7 +35997,8 @@ func (v *BrokerHeartbeatRequest) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendBool(dst, v)
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -34723,7 +36031,7 @@ func (v *BrokerHeartbeatRequest) ReadFrom(src []byte) error {
 		s.WantShutdown = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -34770,6 +36078,9 @@ type BrokerHeartbeatResponse struct {
 
 	// True if the broker should proceed with its shutdown.
 	ShouldShutdown bool
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 func (*BrokerHeartbeatResponse) Key() int16                 { return 63 }
@@ -34808,7 +36119,8 @@ func (v *BrokerHeartbeatResponse) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendBool(dst, v)
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -34841,7 +36153,7 @@ func (v *BrokerHeartbeatResponse) ReadFrom(src []byte) error {
 		s.ShouldShutdown = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -34876,6 +36188,9 @@ type UnregisterBrokerRequest struct {
 
 	// The broker ID to unregister.
 	BrokerID int32
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 func (*UnregisterBrokerRequest) Key() int16                 { return 64 }
@@ -34906,7 +36221,8 @@ func (v *UnregisterBrokerRequest) AppendTo(dst []byte) []byte {
 		dst = kbin.AppendInt32(dst, v)
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -34923,7 +36239,7 @@ func (v *UnregisterBrokerRequest) ReadFrom(src []byte) error {
 		s.BrokerID = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -34963,6 +36279,9 @@ type UnregisterBrokerResponse struct {
 
 	// The error message, if any.
 	ErrorMessage *string
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 func (*UnregisterBrokerResponse) Key() int16                 { return 64 }
@@ -34997,7 +36316,8 @@ func (v *UnregisterBrokerResponse) AppendTo(dst []byte) []byte {
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -35027,7 +36347,7 @@ func (v *UnregisterBrokerResponse) ReadFrom(src []byte) error {
 		s.ErrorMessage = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -35061,6 +36381,9 @@ type DescribeTransactionsRequest struct {
 	// Array of transactionalIds to include in describe results. If empty, then
 	// no results will be returned.
 	TransactionalIDs []string
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 func (*DescribeTransactionsRequest) Key() int16                 { return 65 }
@@ -35103,7 +36426,8 @@ func (v *DescribeTransactionsRequest) AppendTo(dst []byte) []byte {
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -35143,7 +36467,7 @@ func (v *DescribeTransactionsRequest) ReadFrom(src []byte) error {
 		s.TransactionalIDs = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -35173,6 +36497,9 @@ type DescribeTransactionsResponseTransactionStateTopic struct {
 	Topic string
 
 	Partitions []int32
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -35228,6 +36555,9 @@ type DescribeTransactionsResponseTransactionState struct {
 	//
 	// This does not include topics the user is not authorized to describe.
 	Topics []DescribeTransactionsResponseTransactionStateTopic
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -35253,6 +36583,9 @@ type DescribeTransactionsResponse struct {
 	ThrottleMillis int32
 
 	TransactionStates []DescribeTransactionsResponseTransactionState
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 func (*DescribeTransactionsResponse) Key() int16                 { return 65 }
@@ -35351,17 +36684,20 @@ func (v *DescribeTransactionsResponse) AppendTo(dst []byte) []byte {
 						}
 					}
 					if isFlexible {
-						dst = append(dst, 0)
+						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+						dst = v.UnknownTags.AppendEach(dst)
 					}
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -35485,21 +36821,21 @@ func (v *DescribeTransactionsResponse) ReadFrom(src []byte) error {
 						s.Partitions = v
 					}
 					if isFlexible {
-						SkipTags(&b)
+						s.UnknownTags = ReadTags(&b)
 					}
 				}
 				v = a
 				s.Topics = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
 		s.TransactionStates = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -35541,6 +36877,9 @@ type ListTransactionsRequest struct {
 	// returned; if non-empty, only transactions which match one of the filtered
 	// producer IDs will be returned
 	ProducerIDFilters []int64
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 func (*ListTransactionsRequest) Key() int16                 { return 66 }
@@ -35595,7 +36934,8 @@ func (v *ListTransactionsRequest) AppendTo(dst []byte) []byte {
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -35657,7 +36997,7 @@ func (v *ListTransactionsRequest) ReadFrom(src []byte) error {
 		s.ProducerIDFilters = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -35692,6 +37032,9 @@ type ListTransactionsResponseTransactionState struct {
 
 	// The current transaction state of the producer.
 	TransactionState string
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -35732,6 +37075,9 @@ type ListTransactionsResponse struct {
 	// in the request. The response elides transactions that the user does not have
 	// permission to describe (DESCRIBE on TRANSACTIONAL_ID for the transaction).
 	TransactionStates []ListTransactionsResponseTransactionState
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
 }
 
 func (*ListTransactionsResponse) Key() int16                 { return 66 }
@@ -35803,12 +37149,14 @@ func (v *ListTransactionsResponse) AppendTo(dst []byte) []byte {
 				}
 			}
 			if isFlexible {
-				dst = append(dst, 0)
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
 	}
 	if isFlexible {
-		dst = append(dst, 0)
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -35897,14 +37245,14 @@ func (v *ListTransactionsResponse) ReadFrom(src []byte) error {
 				s.TransactionState = v
 			}
 			if isFlexible {
-				SkipTags(&b)
+				s.UnknownTags = ReadTags(&b)
 			}
 		}
 		v = a
 		s.TransactionStates = v
 	}
 	if isFlexible {
-		SkipTags(&b)
+		s.UnknownTags = ReadTags(&b)
 	}
 	return b.Complete()
 }
