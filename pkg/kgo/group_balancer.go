@@ -597,6 +597,19 @@ func (*stickyBalancer) adjustCooperative(members []groupMember, plan balancePlan
 	allAdded := make(map[tp]groupMemberID, 100)
 	allRevoked := make(map[tp]struct{}, 100)
 
+	var pmaps []map[int32]struct{}
+	var pmapsAt int
+	maps := make(map[string]map[int32]struct{})
+
+	nextMap := func(base int) map[int32]struct{} {
+		if pmapsAt == len(pmaps) {
+			pmaps = append(pmaps, make(map[int32]struct{}, base))
+		}
+		r := pmaps[pmapsAt]
+		pmapsAt++
+		return r
+	}
+
 	// First, on all members, we find what was added and what was removed
 	// to and from that member.
 	for i := range members {
@@ -607,54 +620,57 @@ func (*stickyBalancer) adjustCooperative(members []groupMember, plan balancePlan
 		// added   := planned - current
 		// revoked := current - planned
 
-		// This loop is banking on repeatedly ranging over []string and
-		// then []int32 to be faster than building a map and then doing
-		// O(1) lookups.
+		// First we move everything planned into a "planned" map,
+		pmapsAt = 0
 		for ptopic, ppartitions := range planned {
+			ppartitionsMap := nextMap(len(ppartitions))
+			maps[ptopic] = ppartitionsMap
 			for _, ppartition := range ppartitions {
-
-				var foundExisting bool
-			findExisting:
-				for _, ctopic := range member.owned {
-					if ctopic.Topic != ptopic {
-						continue
-					}
-					for _, cpartition := range ctopic.Partitions {
-						if cpartition != ppartition {
-							continue
-						}
-						foundExisting = true
-						break findExisting
-					}
-				}
-				if !foundExisting {
-					allAdded[tp{ptopic, ppartition}] = member.id
-				}
-
+				ppartitionsMap[ppartition] = struct{}{}
+			}
+		}
+		// then we delete everything previously owned for this member,
+		for _, otopic := range member.owned {
+			ppartitions, exists := maps[otopic.Topic]
+			if !exists {
+				continue
+			}
+			for _, opartition := range otopic.Partitions {
+				delete(ppartitions, opartition)
+			}
+		}
+		// all that remains is added.
+		for ptopic, ppartitions := range maps {
+			delete(maps, ptopic)
+			for ppartition := range ppartitions {
+				delete(ppartitions, ppartition)
+				allAdded[tp{ptopic, ppartition}] = member.id
 			}
 		}
 
-		for _, ctopic := range member.owned {
-			topic := ctopic.Topic
+		// Next, over everything that the member owned, if it is
+		// no longer planned, then it was revoked.
+		for _, otopic := range member.owned {
+			topic := otopic.Topic
 			ppartitions, exists := planned[topic]
 			if !exists {
-				for _, cpartition := range ctopic.Partitions {
-					allRevoked[tp{topic, cpartition}] = struct{}{}
+				for _, opartition := range otopic.Partitions {
+					allRevoked[tp{topic, opartition}] = struct{}{}
 				}
 				continue
 			}
 
-			for _, cpartition := range ctopic.Partitions {
-				var found bool
-				for _, ppartition := range ppartitions {
-					if ppartition == cpartition {
-						found = true
-						break
-					}
-				}
-				if !found {
-					allRevoked[tp{topic, cpartition}] = struct{}{}
-				}
+			pmapsAt = 0
+			opartitions := nextMap(len(otopic.Partitions))
+			for _, opartition := range otopic.Partitions {
+				opartitions[opartition] = struct{}{}
+			}
+			for _, ppartition := range ppartitions {
+				delete(opartitions, ppartition)
+			}
+			for opartition := range opartitions {
+				delete(opartitions, opartition)
+				allRevoked[tp{topic, opartition}] = struct{}{}
 			}
 		}
 	}
