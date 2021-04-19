@@ -502,6 +502,11 @@ func TestImbalanced(t *testing.T) {
 
 		{
 			// Start:
+			// A -> [1 2 3]
+			// B -> [1 2 3]
+			// C -> [5 6 7 8 9]
+			// D -> [5 6 7 8 9]
+			//
 			// A -> 1 2 3
 			// B ->
 			// C -> 5 6 7 8 9
@@ -896,6 +901,79 @@ func TestImbalanced(t *testing.T) {
 			balance: map[int]resultOptions{
 				0: {[]string{"0"}, 1},
 				2: {[]string{"1"}, 1},
+			},
+		},
+
+		{
+			// Start:
+			// A: [1 2 3 4]
+			// B: [1 2 3 4 5 6 7 8 9 a b c d e f g]
+			// C: [5 6 7 8 9 a]
+			// D: [b c d e f g]
+			//
+			// A ->
+			// B -> 1 2 3 4
+			// C -> 5 6 7 8 9 a
+			// D -> b c d e f g
+			//
+			//
+			// Ideal:
+			// A -> 1 2 3 4
+			// B -> 5 6 b c
+			// C -> 7 8 9 a
+			// D -> d e f g
+			name: "graph reachy",
+			members: []GroupMember{
+				{ID: "A", Topics: []string{"1", "2", "3", "4"},
+					UserData: newUD().
+						encode()},
+				{ID: "B", Topics: []string{"1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "c", "d", "e", "f", "g"},
+					UserData: newUD().
+						assign("1", 0).
+						assign("2", 0).
+						assign("3", 0).
+						assign("4", 0).
+						encode()},
+				{ID: "C", Topics: []string{"5", "6", "7", "8", "9", "a"},
+					UserData: newUD().
+						assign("5", 0).
+						assign("6", 0).
+						assign("7", 0).
+						assign("8", 0).
+						assign("9", 0).
+						assign("a", 0).
+						encode()},
+				{ID: "D", Topics: []string{"b", "c", "d", "e", "f", "g"},
+					UserData: newUD().
+						assign("b", 0).
+						assign("c", 0).
+						assign("d", 0).
+						assign("e", 0).
+						assign("f", 0).
+						assign("g", 0).
+						encode()},
+			},
+			topics: map[string]int32{
+				"1": 1,
+				"2": 1,
+				"3": 1,
+				"4": 1,
+				"5": 1,
+				"6": 1,
+				"7": 1,
+				"8": 1,
+				"9": 1,
+				"a": 1,
+				"b": 1,
+				"c": 1,
+				"d": 1,
+				"e": 1,
+				"f": 1,
+				"g": 1,
+			},
+			nsticky: 8,
+			balance: map[int]resultOptions{
+				4: {[]string{"A", "B", "C", "D"}, 4},
 			},
 		},
 
