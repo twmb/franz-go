@@ -65,27 +65,13 @@ func (g *graph) findSteal(from uint16) ([]stealSegment, bool) {
 	// but is fast and faster than making a map and extending it a lot.
 	for i := range g.scores {
 		g.scores[i].gscore = noScore
+		g.scores[i].done = false
 	}
 
 	first, _ := g.getScore(from)
 
-	// For A*, if we never overestimate (with h), then the path we find is
-	// optimal. A true estimation of our distance to any node is the node's
-	// level minus ours. However, we do not actually know what we want to
-	// steal; we do not know what we are searching for.
-	//
-	// If we have a neighbor 10 levels up, it makes more sense to steal
-	// from that neighbor than one 5 levels up.
-	//
-	// At worst, our target must be +2 levels from us. So, our estimation
-	// any node can be our level, +2, minus theirs. This allows neighbor
-	// nodes that _are_ 10 levels higher to flood out any bad path and to
-	// jump to the top of the priority queue. If there is no high level
-	// to steal from, our estimator works normally.
-	h := func(p *pathScore) int64 { return int64(first.level + 2 - p.level) }
-
 	first.gscore = 0
-	first.fscore = h(first)
+	first.fscore = h(first, first)
 	first.done = true
 
 	g.heapBuf = append(g.heapBuf[:0], first)
@@ -126,7 +112,7 @@ func (g *graph) findSteal(from uint16) ([]stealSegment, bool) {
 					neighbor.parent = current
 					neighbor.srcEdge = edge
 					neighbor.gscore = gscore
-					neighbor.fscore = gscore + h(neighbor)
+					neighbor.fscore = gscore + h(first, neighbor)
 					if isNew {
 						heap.Push(rem, neighbor)
 					}
@@ -143,36 +129,50 @@ func (g *graph) findSteal(from uint16) ([]stealSegment, bool) {
 type stealSegment struct {
 	src  uint16 // member num
 	dst  uint16 // member num
-	part uint32 // topicPartition; partNum
+	part uint32 // partNum
 }
 
 type pathScore struct {
+	done    bool
 	node    uint16 // member num
 	parent  *pathScore
-	srcEdge uint32 // topicPartition; partNum
-	level   int
-	gscore  int64
-	fscore  int64
-	done    bool
+	srcEdge uint32 // partNum
+	level   int32  // partitions owned on this segment
+	gscore  int32
+	fscore  int32
 }
 
 type pathScores []pathScore
 
-const infinityScore = 1 << 31
+const infinityScore = 1<<31 - 1
 const noScore = 1<<31 - 1
+
+// For A*, if we never overestimate (with h), then the path we find is
+// optimal. A true estimation of our distance to any node is the node's
+// level minus ours. However, we do not actually know what we want to
+// steal; we do not know what we are searching for.
+//
+// If we have a neighbor 10 levels up, it makes more sense to steal
+// from that neighbor than one 5 levels up.
+//
+// At worst, our target must be +2 levels from us. So, our estimation
+// any node can be our level, +2, minus theirs. This allows neighbor
+// nodes that _are_ 10 levels higher to flood out any bad path and to
+// jump to the top of the priority queue. If there is no high level
+// to steal from, our estimator works normally.
+func h(first, target *pathScore) int32 {
+	return first.level + 2 - target.level
+}
 
 func (g *graph) getScore(node uint16) (*pathScore, bool) {
 	r := &g.scores[node]
 	exists := r.gscore != noScore
 	if !exists {
 		*r = pathScore{
-			node:    node,
-			parent:  nil,
-			srcEdge: 0,
-			level:   len(g.b.plan[node]),
-			gscore:  infinityScore,
-			fscore:  infinityScore,
-			done:    false,
+			node:   node,
+			level:  int32(len(g.b.plan[node])),
+			gscore: infinityScore,
+			fscore: infinityScore,
 		}
 	}
 	return r, !exists

@@ -73,10 +73,6 @@ type topicInfo struct {
 	topic      string
 }
 
-type partitionInfo struct {
-	topicNum uint32
-}
-
 func newBalancer(members []GroupMember, topics map[string]int32) *balancer {
 	var (
 		nparts     int
