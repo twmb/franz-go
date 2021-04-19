@@ -41,7 +41,7 @@ type balancer struct {
 
 	topicNums  map[string]uint32 // topic name => index into topicInfos
 	topicInfos []topicInfo
-	partInfos  []partitionInfo
+	partOwners []uint32 // partition => owning topicNum
 
 	// Stales tracks partNums that are doubly subscribed in this join
 	// where one of the subscribers is on an old generation.
@@ -75,7 +75,6 @@ type topicInfo struct {
 
 type partitionInfo struct {
 	topicNum uint32
-	partNum  uint32
 }
 
 func newBalancer(members []GroupMember, topics map[string]int32) *balancer {
@@ -94,13 +93,10 @@ func newBalancer(members []GroupMember, topics map[string]int32) *balancer {
 		}
 		nparts += int(partitions)
 	}
-	partInfos := make([]partitionInfo, 0, nparts)
+	partOwners := make([]uint32, 0, nparts)
 	for topicNum, info := range topicInfos {
 		for i := int32(0); i < info.partitions; i++ {
-			partInfos = append(partInfos, partitionInfo{
-				topicNum: uint32(topicNum),
-				partNum:  info.partNum + uint32(i),
-			})
+			partOwners = append(partOwners, uint32(topicNum))
 		}
 	}
 	memberNums := make(map[string]uint16, len(members))
@@ -113,7 +109,7 @@ func newBalancer(members []GroupMember, topics map[string]int32) *balancer {
 		memberNums: memberNums,
 		topicNums:  topicNums,
 		topicInfos: topicInfos,
-		partInfos:  partInfos,
+		partOwners: partOwners,
 		stales:     make(map[uint32]uint16),
 		plan:       make(membersPartitions, len(members)),
 	}
@@ -138,7 +134,7 @@ func (b *balancer) into() Plan {
 			plan[member] = topics
 		}
 		for _, partNum := range partNums {
-			info := b.topicInfos[b.partInfos[partNum].topicNum]
+			info := b.topicInfos[b.partOwners[partNum]]
 			partition := partNum - info.partNum
 			topics[info.topic] = append(topics[info.topic], int32(partition))
 		}
@@ -258,7 +254,7 @@ func Balance(members []GroupMember, topics map[string]int32) Plan {
 		return make(Plan)
 	}
 	b := newBalancer(members, topics)
-	if cap(b.partInfos) == 0 {
+	if cap(b.partOwners) == 0 {
 		return b.into()
 	}
 	b.parseMemberMetadata()
@@ -274,8 +270,8 @@ func (b *balancer) parseMemberMetadata() {
 	// Each partition should only have one consumer, but a flaky member
 	// could rejoin with an old generation (stale user data) and say it
 	// is consuming something a different member is. See KIP-341.
-	partitionConsumersByGeneration := make([][]memberGeneration, cap(b.partInfos))
-	partitionConsumersBuf := make([]memberGeneration, cap(b.partInfos))
+	partitionConsumersByGeneration := make([][]memberGeneration, cap(b.partOwners))
+	partitionConsumersBuf := make([]memberGeneration, cap(b.partOwners))
 
 	for _, member := range b.members {
 		memberPlan, generation := deserializeUserData(member.UserData)
@@ -418,15 +414,15 @@ func (b *balancer) assignUnassignedAndInitGraph() {
 	// Next, over the prior plan, un-map deleted topics or topics that
 	// members no longer want. This is where we determine what is now
 	// unassigned.
-	partitionConsumers := make([]uint16, cap(b.partInfos)) // partNum => consuming member
+	partitionConsumers := make([]uint16, cap(b.partOwners)) // partNum => consuming member
 	for i := range partitionConsumers {
 		partitionConsumers[i] = unassignedPart
 	}
 	for memberNum := range b.plan {
 		partNums := &b.plan[memberNum]
 		for _, partNum := range *partNums {
-			info := b.partInfos[partNum]
-			if len(topicPotentials[info.topicNum]) == 0 { // all prior subscriptions stopped wanting this partition
+			topicNum := b.partOwners[partNum]
+			if len(topicPotentials[topicNum]) == 0 { // all prior subscriptions stopped wanting this partition
 				partitionConsumers[partNum] = deletedPart
 				partNums.remove(partNum)
 				continue
@@ -434,7 +430,7 @@ func (b *balancer) assignUnassignedAndInitGraph() {
 			memberTopics := b.members[memberNum].Topics
 			var memberStillWantsTopic bool
 			for _, memberTopic := range memberTopics {
-				if memberTopic == b.topicInfos[info.topicNum].topic {
+				if memberTopic == b.topicInfos[topicNum].topic {
 					memberStillWantsTopic = true
 					break
 				}
@@ -457,7 +453,7 @@ func (b *balancer) assignUnassignedAndInitGraph() {
 		if owner != unassignedPart {
 			continue
 		}
-		potentials := topicPotentials[b.partInfos[partNum].topicNum]
+		potentials := topicPotentials[b.partOwners[partNum]]
 		if len(potentials) == 0 {
 			continue
 		}
@@ -502,7 +498,7 @@ func (b *balancer) tryRestickyStales(
 	partitionConsumers []uint16,
 ) {
 	for staleNum, lastOwnerNum := range b.stales {
-		potentials := topicPotentials[b.partInfos[staleNum].topicNum] // there must be a potential consumer if we are here
+		potentials := topicPotentials[b.partOwners[staleNum]] // there must be a potential consumer if we are here
 		var canTake bool
 		for _, potentialNum := range potentials {
 			if potentialNum == lastOwnerNum {
