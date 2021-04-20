@@ -1,6 +1,68 @@
 tip
 ===
 
+v0.6.11
+===
+- [`46138f7`](https://github.com/twmb/franz-go/commit/46138f7): **feature** client: add ConnIdleTimeout option && connection reaping (further fix to this in later commit)
+- [`26c1ea2`](https://github.com/twmb/franz-go/commit/26c1ea2): generate: return "Unknown" for unknown NameForKey
+- [`557e15f`](https://github.com/twmb/franz-go/commit/557e15f): **module change** update module deps; bump lz4 to v4. This dep update will require go-getting the new v4 module.
+- [`10b743e`](https://github.com/twmb/franz-go/commit/10b743e): producer: work around KAFKA-12671
+- [`89bee85`](https://github.com/twmb/franz-go/commit/89bee85): **bugfix** consumer: fix potential slowReloads problem
+- [`111f922`](https://github.com/twmb/franz-go/commit/111f922): consumer: avoid bubbling up retriable broker errors
+- [`fea3195`](https://github.com/twmb/franz-go/commit/fea3195): **bugfix** client: fix fetchBrokerMetadata
+- [`6b64728`](https://github.com/twmb/franz-go/commit/6b64728): **breaking API**: error redux -- this makes private many named errors; realistically this is a minor breaking change
+- [`b2a0578`](https://github.com/twmb/franz-go/commit/b2a0578): sink: allow concurrent produces (this was lost in a prior release; we now again allow 5 concurrent produce requests per broker!)
+- [`ebc8ee2`](https://github.com/twmb/franz-go/commit/ebc8ee2): **bugfix / improvements** producer: guts overhaul, fixing sequence number issues, and allowing aborting records when aborting transactions
+- [`39caca6`](https://github.com/twmb/franz-go/commit/39caca6): Poll{Records,Fetches}: quit if client is closed
+- [`56b8308`](https://github.com/twmb/franz-go/commit/56b8308): **bugfix** client: fix loadCoordinators
+- [`d4fe91d`](https://github.com/twmb/franz-go/commit/d4fe91d): **bugfix** source: more properly ignore truncated partitions
+- [`71c6109`](https://github.com/twmb/franz-go/commit/71c6109): **bugfix** consumer group: map needs to be one block lower
+- [`009e1ba`](https://github.com/twmb/franz-go/commit/009e1ba): consumer: retry reloading offsets on non-retriable errors
+- [`6318b15`](https://github.com/twmb/franz-go/commit/6318b15): **bugfix** group consumer: revoke all on LeaveGroup, properly blocking commit
+- [`b876c09`](https://github.com/twmb/franz-go/commit/b876c09): **bugfix** kversion: KIP-392 landed in Kafka 2.3, not 2.2
+- [`1c5af12`](https://github.com/twmb/franz-go/commit/1c5af12): kversion: support guessing with skipped keys, guessing raft
+
+This is an important release with multiple bug fixes. All important commits
+are noted above; less important ones are elided.
+
+The producer code has been overhauled to more accurately manage sequence
+numbers. Particularly, we cannot just reset sequence numbers whenever. A
+sequence number reset is a really big deal, and so we should avoid it at all
+costs unless absolutely necessary.
+
+By more accurately tracking sequence numbers, we are able to abort buffered
+records when aborting a transact session. The simple approach we take here is
+to reset the producer ID after the abort is completed.
+
+The most major consumer bug was one that incorrectly tracked uncommitted
+offsets when multiple topics were consumed in a single group member. The other
+bugs would be infrequently hit through some more niche edge cases / timing
+issues.
+
+The lz4 module was updated, which will require a go mod edit. This was done
+because major-version-bumping is pretty undiscoverable with mod updates, and it
+turns out I had always used v1 instead of v4.
+
+Sometime in the past, a broker/producer bugfix accidentally lost the ability to
+send 5 concurrent produce request at once. That ability is readded in this
+release, but this can occasionally trigger a subtle problem within Kafka while
+transactionally producing. For more details, see [KAFKA-12671](https://issues.apache.org/jira/browse/KAFKA-12671).
+The client attempts to work around this problem by sleeping for 1s if it detects
+the problem has a potential of happening when aborting buffered records. Realistically,
+this problem should not happen, but the one way to easily detect it is to look
+for a stuck LastStableOffset.
+
+A `ConnIdleTimeout` option was added that allows for reaping idle connections.
+The logic takes a relatively easy approach, meaning idle connections may take
+up to 2x the idle timeout to be noticed, but that should not be problematic.
+This will help prevent the problem of Kafka closing connections and the client
+only noticing when it goes to eventually write on the connection again. This
+will also help avoid sockets in the kernel being stuck in `CLOSE_WAIT`.
+
+Finally, after being inspired from [KAFKA-12675](https://issues.apache.org/jira/browse/KAFKA-12671),
+I have significantly optimized the sticky assignor, as well as added other
+improvements for the cooperative adjusting of group balancer plans.
+
 v0.6.10
 ===
 
