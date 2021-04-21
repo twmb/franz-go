@@ -4873,7 +4873,7 @@ func NewListOffsetsResponse() ListOffsetsResponse {
 type MetadataRequestTopic struct {
 	// The topic ID. Only one of either topic ID or topic name should be used.
 	// If using the topic name, this should just be the default empty value.
-	TopicID [2]uint64 // v10+
+	TopicID [16]byte // v10+
 
 	// Topic is the topic to request metadata for. Version 10 switched this
 	// from a string to a nullable string; if using a topic ID, this field
@@ -5001,7 +5001,7 @@ func (v *MetadataRequest) AppendTo(dst []byte) []byte {
 		v := v.IncludeClusterAuthorizedOperations
 		dst = kbin.AppendBool(dst, v)
 	}
-	if version >= 8 && version <= 10 {
+	if version >= 8 {
 		v := v.IncludeTopicAuthorizedOperations
 		dst = kbin.AppendBool(dst, v)
 	}
@@ -5078,7 +5078,7 @@ func (v *MetadataRequest) ReadFrom(src []byte) error {
 		v := b.Bool()
 		s.IncludeClusterAuthorizedOperations = v
 	}
-	if version >= 8 && version <= 10 {
+	if version >= 8 {
 		v := b.Bool()
 		s.IncludeTopicAuthorizedOperations = v
 	}
@@ -5209,7 +5209,7 @@ type MetadataResponseTopic struct {
 	Topic string
 
 	// The topic ID.
-	TopicID [2]uint64 // v10+
+	TopicID [16]byte // v10+
 
 	// IsInternal signifies whether this topic is a Kafka internal topic.
 	IsInternal bool // v1+
@@ -5441,7 +5441,7 @@ func (v *MetadataResponse) AppendTo(dst []byte) []byte {
 			}
 		}
 	}
-	if version >= 8 {
+	if version >= 8 && version <= 10 {
 		v := v.AuthorizedOperations
 		dst = kbin.AppendInt32(dst, v)
 	}
@@ -5686,7 +5686,7 @@ func (v *MetadataResponse) ReadFrom(src []byte) error {
 		v = a
 		s.Topics = v
 	}
-	if version >= 8 {
+	if version >= 8 && version <= 10 {
 		v := b.Int32()
 		s.AuthorizedOperations = v
 	}
@@ -5784,7 +5784,7 @@ func NewLeaderAndISRResponseTopicPartition() LeaderAndISRResponseTopicPartition 
 type LeaderAndISRRequestTopicState struct {
 	Topic string
 
-	TopicID [2]uint64 // v5+
+	TopicID [16]byte // v5+
 
 	PartitionStates []LeaderAndISRRequestTopicPartition
 }
@@ -6569,7 +6569,7 @@ func NewLeaderAndISRRequest() LeaderAndISRRequest {
 }
 
 type LeaderAndISRResponseTopic struct {
-	TopicID [2]uint64
+	TopicID [16]byte
 
 	Partitions []LeaderAndISRResponseTopicPartition
 }
@@ -7381,7 +7381,7 @@ func NewUpdateMetadataRequestTopicPartition() UpdateMetadataRequestTopicPartitio
 type UpdateMetadataRequestTopicState struct {
 	Topic string
 
-	TopicID [2]uint64 // v7+
+	TopicID [16]byte // v7+
 
 	PartitionStates []UpdateMetadataRequestTopicPartition
 }
@@ -13865,7 +13865,7 @@ type CreateTopicsResponseTopic struct {
 	Topic string
 
 	// The unique topic ID.
-	TopicID [2]uint64 // v7+
+	TopicID [16]byte // v7+
 
 	// ErrorCode is the error code for an individual topic creation.
 	//
@@ -14249,7 +14249,7 @@ func NewCreateTopicsResponse() CreateTopicsResponse {
 type DeleteTopicsRequestTopic struct {
 	Topic *string
 
-	TopicID [2]uint64
+	TopicID [16]byte
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -14465,7 +14465,7 @@ type DeleteTopicsResponseTopic struct {
 	Topic *string
 
 	// The topic ID requested for deletion.
-	TopicID [2]uint64 // v6+
+	TopicID [16]byte // v6+
 
 	// ErrorCode is the error code returned for an individual topic in
 	// deletion request.
@@ -34238,7 +34238,7 @@ type BrokerRegistrationRequest struct {
 	ClusterID string
 
 	// The incarnation ID of the broker process.
-	IncarnationID [2]uint64
+	IncarnationID [16]byte
 
 	// The listeners for this broker.
 	Listeners []BrokerRegistrationRequestListener
