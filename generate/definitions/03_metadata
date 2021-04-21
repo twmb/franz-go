@@ -25,7 +25,7 @@ MetadataRequest => key 3, max version 11, flexible v9+
   // on individual topics. See KIP-430 for more details.
   //
   // This field was removed in Kafka 2.8.0 in favor of the new DescribeClusterRequest.
-  IncludeTopicAuthorizedOperations: bool // v8-v10
+  IncludeTopicAuthorizedOperations: bool // v8+
 
 // MetadataResponse is returned from a MetdataRequest.
 MetadataResponse =>
@@ -107,4 +107,4 @@ MetadataResponse =>
     AuthorizedOperations: int32(-2147483648) // v8+
   // AuthorizedOperations is a bitfield containing which operations the client
   // is allowed to perform on this cluster.
-  AuthorizedOperations: int32(-2147483648) // v8+
+  AuthorizedOperations: int32(-2147483648) // v8-v10
