@@ -14,7 +14,7 @@ func (Int64) TypeName() string                 { return "int64" }
 func (Float64) TypeName() string               { return "float64" }
 func (Uint32) TypeName() string                { return "uint32" }
 func (Varint) TypeName() string                { return "int32" }
-func (Uuid) TypeName() string                  { return "[2]uint64" }
+func (Uuid) TypeName() string                  { return "[16]byte" }
 func (String) TypeName() string                { return "string" }
 func (NullableString) TypeName() string        { return "*string" }
 func (Bytes) TypeName() string                 { return "[]byte" }
