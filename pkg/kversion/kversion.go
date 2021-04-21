@@ -106,6 +106,15 @@ func (vs *Versions) Equal(other *Versions) bool {
 	return true
 }
 
+// EachMaxKey calls fn for each key and max version
+func (vs *Versions) EachMaxKeyVersion(fn func(k, v int16)) {
+	for k, v := range vs.k2v {
+		if v >= 0 {
+			fn(int16(k), v)
+		}
+	}
+}
+
 // VersionGuessOpt is an option to change how version guessing is done.
 type VersionGuessOpt interface {
 	apply(*guessCfg)
@@ -202,6 +211,7 @@ func (vs *Versions) VersionGuess(opts ...VersionGuessOpt) string {
 		{max250, "v2.5"},
 		{max260, "v2.6"},
 		{max270, "v2.7"},
+		{max280, "v2.8"},
 	} {
 		for k, v := range comparison.cmp.filter(cfg.listener) {
 			if !skip[int16(k)] && v != -1 {
@@ -303,7 +313,7 @@ func (vs *Versions) String() string {
 // Stable is a shortcut for the latest _released_ Kafka versions.
 //
 // This is the default version used in kgo to avoid breaking tip changes.
-func Stable() *Versions { return zkBrokerOf(max270) }
+func Stable() *Versions { return zkBrokerOf(max280) }
 
 // Tip is the latest defined Kafka key versions; this may be slightly out of date.
 func Tip() *Versions { return zkBrokerOf(maxTip) }
@@ -326,6 +336,7 @@ func V2_4_0() *Versions  { return zkBrokerOf(max240) }
 func V2_5_0() *Versions  { return zkBrokerOf(max250) }
 func V2_6_0() *Versions  { return zkBrokerOf(max260) }
 func V2_7_0() *Versions  { return zkBrokerOf(max270) }
+func V2_8_0() *Versions  { return zkBrokerOf(max280) }
 
 func zkBrokerOf(lks listenerKeys) *Versions {
 	return &Versions{lks.filter(zkBroker)}
@@ -752,7 +763,7 @@ var max270 = nextMax(max260, func(v listenerKeys) listenerKeys {
 	)
 })
 
-var maxTip = nextMax(max270, func(v listenerKeys) listenerKeys {
+var max280 = nextMax(max270, func(v listenerKeys) listenerKeys {
 	// KAFKA-10181 KAFKA-10181 KIP-590
 	v = append(v,
 		k(rController), // 58 envelope
@@ -791,7 +802,7 @@ var maxTip = nextMax(max270, func(v listenerKeys) listenerKeys {
 	)
 
 	// KAFKA-12212 7a1d1d9a69a241efd68e572badee999229b3942f KIP-700
-	v[4].inc() // 11 metadata
+	v[3].inc() // 11 metadata
 
 	// KAFKA-10764 4f588f7ca2a1c5e8dd845863da81425ac69bac92 KIP-516
 	v[19].inc() // 7 create topics
@@ -815,7 +826,10 @@ var maxTip = nextMax(max270, func(v listenerKeys) listenerKeys {
 	v = append(v,
 		k(rBroker, rController), // 64 unregister broker
 	)
+	return v
+})
 
+var maxTip = nextMax(max280, func(v listenerKeys) listenerKeys {
 	// KAFKA-12267 3f09fb97b6943c0612488dfa8e5eab8078fd7ca0 KIP-664
 	v = append(v,
 		k(zkBroker, rBroker), // 65 describe transactions
