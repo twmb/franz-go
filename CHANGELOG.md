@@ -1,6 +1,18 @@
 tip
 ===
 
+v0.6.12
+===
+
+This is a small release corresponding with Kafka's 2.8.0 release.
+A few small things were fixed when trying out `kcl misc probe-versions`
+with the new code, and with that, we are able to determine exactly
+where to cut 2.8.0 from tip in the kversion package.
+
+Lastly, this also converts topic IDs that are introduced in this release
+from `[2]uint64` to `[16]byte`. A raw blob of bytes is easier to reason
+about and affords us avoiding worrying about endianness.
+
 v0.6.11
 ===
 - [`46138f7`](https://github.com/twmb/franz-go/commit/46138f7): **feature** client: add ConnIdleTimeout option && connection reaping (further fix to this in later commit)
