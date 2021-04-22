@@ -165,7 +165,7 @@ func (g *groupConsumer) balanceGroup(proto string, kmembers []kmsg.JoinGroupResp
 		return members[i].id.less(members[j].id) // guarantee sorted members
 	})
 
-	myTopics := g.cl.loadTopics()
+	myTopics := g.tps.load()
 	allTopics := make(map[string]struct{})
 	var needMeta bool
 
@@ -183,7 +183,10 @@ func (g *groupConsumer) balanceGroup(proto string, kmembers []kmsg.JoinGroupResp
 		}
 	}
 
-	shortTopics := g.cl.loadShortTopics()
+	topicPartitionCount := make(map[string]int32, len(myTopics))
+	for topic, data := range myTopics {
+		topicPartitionCount[topic] = int32(len(data.load().partitions))
+	}
 	if needMeta {
 		g.cl.cfg.logger.Log(LogLevelInfo, "group members indicated interest in topics the leader is not assigned, fetching metadata for all group topics")
 		var metaTopics []string
@@ -201,13 +204,13 @@ func (g *groupConsumer) balanceGroup(proto string, kmembers []kmsg.JoinGroupResp
 				g.cl.cfg.logger.Log(LogLevelWarn, "metadata resp in balance for topic has error, skipping...", "topic", t.Topic, "err", kerr.ErrorForCode(t.ErrorCode))
 				continue
 			}
-			shortTopics[t.Topic] = int32(len(t.Partitions))
+			topicPartitionCount[t.Topic] = int32(len(t.Partitions))
 		}
 	}
 
 	for _, balancer := range g.balancers {
 		if balancer.protocolName() == proto {
-			plan := balancer.balance(members, shortTopics)
+			plan := balancer.balance(members, topicPartitionCount)
 			g.cl.cfg.logger.Log(LogLevelInfo, "balanced", "plan", plan.String())
 			return plan, nil
 		}

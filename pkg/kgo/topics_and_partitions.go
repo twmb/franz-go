@@ -23,45 +23,13 @@ func (cl *Client) cloneTopics() map[string]*topicPartitions {
 	return new
 }
 
-// loadShortTopics returns topic names and a copy of their partition numbers.
-func (cl *Client) loadShortTopics() map[string]int32 {
-	topics := cl.loadTopics()
-	short := make(map[string]int32, len(topics))
-	for topic, partitions := range topics {
-		short[topic] = int32(len(partitions.load().partitions))
-	}
-	return short
-}
-
-// updates the stored list of topics if any in the list is not yet stored in
-// the client. The input is allowed to have duplicates.
-func (cl *Client) storeTopics(topics []string) {
-	cl.topicsMu.Lock()
-	defer cl.topicsMu.Unlock()
-
-	var cloned bool
-	loaded := cl.loadTopics()
-	for _, topic := range topics {
-		if _, exists := loaded[topic]; !exists {
-			if !cloned {
-				loaded = cl.cloneTopics()
-				cloned = true
-			}
-			loaded[topic] = newTopicPartitions()
-		}
-	}
-	if cloned {
-		cl.topics.Store(loaded)
-	}
-}
-
 func newTopicPartitions() *topicPartitions {
 	parts := new(topicPartitions)
 	parts.v.Store(new(topicPartitionsData))
 	return parts
 }
 
-// topicPartitions contains all information about a topic's partitions.
+// Contains all information about a topic's partitions.
 type topicPartitions struct {
 	v atomic.Value // *topicPartitionsData
 
@@ -69,8 +37,64 @@ type topicPartitions struct {
 	partitioner TopicPartitioner
 }
 
-func (t *topicPartitions) load() *topicPartitionsData {
-	return t.v.Load().(*topicPartitionsData)
+func (t *topicPartitions) load() *topicPartitionsData { return t.v.Load().(*topicPartitionsData) }
+
+var noTopicsPartitions = newTopicsPartitions()
+
+func newTopicsPartitions() *topicsPartitions {
+	var t topicsPartitions
+	t.v.Store(make(topicsPartitionsData))
+	return &t
+}
+
+// A helper type mapping topics to their partitions;
+// this is the inner value of topicPartitions.v.
+type topicsPartitionsData map[string]*topicPartitions
+
+func (d topicsPartitionsData) hasTopic(t string) bool { _, exists := d[t]; return exists }
+func (d topicsPartitionsData) loadTopic(t string) *topicPartitionsData {
+	tp, exists := d[t]
+	if !exists {
+		return nil
+	}
+	return tp.load()
+}
+
+// A helper type mapping topics to their partitions that can be updated
+// atomically.
+type topicsPartitions struct {
+	v atomic.Value // topicsPartitionsData (map[string]*topicPartitions)
+}
+
+func (t *topicsPartitions) load() topicsPartitionsData {
+	if t == nil {
+		return nil
+	}
+	return t.v.Load().(topicsPartitionsData)
+}
+func (t *topicsPartitions) storeData(d topicsPartitionsData) { t.v.Store(d) }
+func (t *topicsPartitions) storeTopics(topics []string)      { t.v.Store(t.ensureTopics(topics)) }
+
+// Ensures that the topics exist in the returned map, but does not store the
+// update. This can be used to update the data and store later, rather than
+// storing immediately.
+func (t *topicsPartitions) ensureTopics(topics []string) topicsPartitionsData {
+	var cloned bool
+	current := t.load()
+	for _, topic := range topics {
+		if _, exists := current[topic]; !exists {
+			if !cloned {
+				new := make(map[string]*topicPartitions, len(current)+5)
+				for k, v := range current {
+					new[k] = v
+				}
+				current = new
+				cloned = true
+			}
+			current[topic] = newTopicPartitions()
+		}
+	}
+	return current
 }
 
 // Updates the topic partitions data atomic value.
@@ -168,6 +192,8 @@ type topicPartition struct {
 	// If we do not have a load error, we copy the records and cursor
 	// pointers from the old after updating any necessary fields in them
 	// (see migrate functions below).
+	//
+	// Only one of records or cursor is non-nil.
 	records *recBuf
 	cursor  *cursor
 }
@@ -230,14 +256,16 @@ func (old *topicPartition) migrateCursorTo(
 	consumer *consumer,
 	consumerSessionStopped *bool,
 	reloadOffsets *listOrEpochLoads,
+	tpsPrior **topicsPartitions,
 ) {
 	// Migrating a cursor requires stopping any consumer session. If we
 	// stop a session, we need to eventually re-start any offset listing or
 	// epoch loading that was stopped. Thus, we simply merge what we
 	// stopped into what we will reload.
 	if !*consumerSessionStopped {
-		stoppedListOrEpochLoads := consumer.stopSession()
-		reloadOffsets.mergeFrom(stoppedListOrEpochLoads)
+		loads, tps := consumer.stopSession()
+		reloadOffsets.mergeFrom(loads)
+		*tpsPrior = tps
 		*consumerSessionStopped = true
 	}
 

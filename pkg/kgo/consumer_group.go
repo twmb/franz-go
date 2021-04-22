@@ -242,6 +242,11 @@ type groupConsumer struct {
 	// configuration end //
 	///////////////////////
 
+	// The data for topics that the user assigned. Metadata updates the
+	// atomic.Value in each pointer atomically. If we are consuming via
+	// regex, metadata grabs the lock to add new topics.
+	tps *topicsPartitions
+
 	// regexTopics is configuration, but used exclusively with reSeen,
 	// which is updated in findNewAssignments. If our assignment is for
 	// regular expressions, then we put every topic that we have passed
@@ -375,6 +380,8 @@ func (cl *Client) AssignGroup(group string, opts ...GroupOpt) {
 		protocol:    "consumer",
 		cooperative: true, // default yes, potentially canceled below by our balancers
 
+		tps: newTopicsPartitions(),
+
 		using:    make(map[string]int),
 		rejoinCh: make(chan struct{}, 1),
 		reSeen:   make(map[string]struct{}),
@@ -397,11 +404,13 @@ func (cl *Client) AssignGroup(group string, opts ...GroupOpt) {
 	if len(group) == 0 || len(g.topics) == 0 || c.dead {
 		return
 	}
+
+	defer c.storeGroup(g)
+	defer cl.triggerUpdateMetadata()
+
 	for _, balancer := range g.balancers {
 		g.cooperative = g.cooperative && balancer.isCooperative()
 	}
-
-	c.storeGroup(g)
 
 	// Ensure all topics exist so that we will fetch their metadata.
 	if !g.regexTopics {
@@ -409,15 +418,13 @@ func (cl *Client) AssignGroup(group string, opts ...GroupOpt) {
 		for topic := range g.topics {
 			topics = append(topics, topic)
 		}
-		cl.storeTopics(topics)
+		g.tps.storeTopics(topics)
 	}
 
 	if !g.autocommitDisable && g.autocommitInterval > 0 {
 		g.cl.cfg.logger.Log(LogLevelInfo, "beginning autocommit loop")
 		go g.loopCommit()
 	}
-
-	cl.triggerUpdateMetadata()
 }
 
 // Manages the group consumer's join / sync / heartbeat / fetch offset flow.
@@ -454,7 +461,7 @@ func (g *groupConsumer) manage() {
 		// We need to invalidate everything from an error return.
 		{
 			g.c.mu.Lock()
-			g.c.assignPartitions(nil, assignInvalidateAll)
+			g.c.assignPartitions(nil, assignInvalidateAll, nil)
 			g.mu.Lock()     // before allowing poll to touch uncommitted, lock the group
 			g.c.mu.Unlock() // now part of poll can continue
 			g.uncommitted = nil
@@ -613,7 +620,7 @@ func (g *groupConsumer) revoke(stage revokeStage, lost map[string][]int32, leavi
 		// If we are an eager consumer, we stop fetching all of our
 		// current partitions as we will be revoking them.
 		g.c.mu.Lock()
-		g.c.assignPartitions(nil, assignInvalidateAll)
+		g.c.assignPartitions(nil, assignInvalidateAll, nil)
 		g.c.mu.Unlock()
 
 		if !g.cooperative {
@@ -673,7 +680,7 @@ func (g *groupConsumer) revoke(stage revokeStage, lost map[string][]int32, leavi
 		// logical race of allowing fetches for revoked partitions
 		// after a revoke but before an invalidation.
 		g.c.mu.Lock()
-		g.c.assignPartitions(lostOffsets, assignInvalidateMatching)
+		g.c.assignPartitions(lostOffsets, assignInvalidateMatching, g.tps)
 		g.c.mu.Unlock()
 	}
 
@@ -1272,11 +1279,11 @@ start:
 		}
 	}
 
-	clientTopics := g.c.cl.loadTopics()
+	groupTopics := g.tps.load()
 	for fetchedTopic := range offsets {
-		if _, exists := clientTopics[fetchedTopic]; !exists {
+		if !groupTopics.hasTopic(fetchedTopic) {
 			delete(offsets, fetchedTopic)
-			g.cl.cfg.logger.Log(LogLevelError, "BUG! member was assigned topic that we did not ask for in AssignGroup! skipping assigning this topic!", "topic", fetchedTopic)
+			g.cl.cfg.logger.Log(LogLevelWarn, "member was assigned topic that we did not ask for in AssignGroup! skipping assigning this topic!", "topic", fetchedTopic)
 		}
 	}
 
@@ -1288,7 +1295,7 @@ start:
 
 	// Eager: we already invalidated everything; nothing to re-invalidate.
 	// Cooperative: assign without invalidating what we are consuming.
-	g.c.assignPartitions(offsets, assignWithoutInvalidating)
+	g.c.assignPartitions(offsets, assignWithoutInvalidating, g.tps)
 
 	// We need to update the uncommited map so that SetOffsets(Committed)
 	// does not rewind before the committed offsets we just fetched.
@@ -1336,7 +1343,9 @@ start:
 //
 // This does not rejoin if the leader notices a partition is lost, which is
 // finicky.
-func (g *groupConsumer) findNewAssignments(topics map[string]*topicPartitions) {
+func (g *groupConsumer) findNewAssignments() {
+	topics := g.tps.load()
+
 	type change struct {
 		isNew bool
 		delta int
@@ -1654,7 +1663,7 @@ func (cl *Client) SetOffsets(setOffsets map[string]map[int32]EpochOffset) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
-	clientTopics := cl.loadTopics()
+	groupTopics := g.tps.load()
 
 	// The gist of what follows:
 	//
@@ -1669,7 +1678,7 @@ func (cl *Client) SetOffsets(setOffsets map[string]map[int32]EpochOffset) {
 		g.uncommitted = make(uncommitted)
 	}
 	for topic, partitions := range setOffsets {
-		if clientTopics[topic].load() == nil {
+		if !groupTopics.hasTopic(topic) {
 			continue // trying to set a topic that was not assigned...
 		}
 		topicUncommitted := g.uncommitted[topic]
@@ -1712,7 +1721,7 @@ func (cl *Client) SetOffsets(setOffsets map[string]map[int32]EpochOffset) {
 		return
 	}
 
-	c.assignPartitions(assigns, assignSetMatching)
+	c.assignPartitions(assigns, assignSetMatching, g.tps)
 }
 
 // UncommittedOffsets returns the latest uncommitted offsets. Uncommitted
