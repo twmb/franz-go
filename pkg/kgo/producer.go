@@ -494,21 +494,20 @@ func (cl *Client) waitUnknownTopic(
 	var tries int
 	var err error
 	for err == nil {
-		var ok bool
 		select {
 		case <-cl.ctx.Done():
 			err = errClientClosing
 		case <-after:
 			err = errRecordTimeout
-		case err, ok = <-unknown.wait:
+		case retriableErr, ok := <-unknown.wait:
 			if !ok {
 				cl.cfg.logger.Log(LogLevelInfo, "done waiting for unknown topic, metadata was successful", "topic", topic)
 				return // metadata was successful!
 			}
-			cl.cfg.logger.Log(LogLevelInfo, "unknown topic wait failed, retrying wait", "topic", topic, "err", err)
+			cl.cfg.logger.Log(LogLevelInfo, "unknown topic wait failed, retrying wait", "topic", topic, "err", retriableErr)
 			tries++
 			if int64(tries) >= cl.cfg.retries {
-				err = fmt.Errorf("no partitions available after refreshing metadata %d times, last err: %w", tries, err)
+				err = fmt.Errorf("no partitions available after refreshing metadata %d times, last err: %w", tries, retriableErr)
 			}
 		}
 	}
