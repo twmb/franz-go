@@ -517,6 +517,8 @@ func (g *groupConsumer) leave() (wait func()) {
 				"group", g.id,
 				"memberID", g.memberID, // lock not needed now since nothing can change it (manageDone)
 			)
+			// If we error when leaving, there is not much
+			// we can do. We may as well just return.
 			(&kmsg.LeaveGroupRequest{
 				Group:    g.id,
 				MemberID: g.memberID,
