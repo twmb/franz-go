@@ -264,20 +264,30 @@ func (s *sink) produce(sem <-chan struct{}) bool {
 	}()
 
 	// producerID can fail from:
+	// - retry failure
 	// - auth failure
 	// - transactional: a produce failure that failed the producer ID
 	// - AddPartitionsToTxn failure (see just below)
-	// All of these are fatal. Recovery may be possible with EndTransaction
-	// in specific cases, but regardless, all buffered records must fail.
+	//
+	// All but the first error is fatal. Recovery may be possible with
+	// EndTransaction in specific cases, but regardless, all buffered
+	// records must fail.
 	//
 	// We init the producer ID before creating a request to ensure we are
 	// always using the latest id/epoch with the proper sequence numbers.
 	id, epoch, err := s.cl.producerID()
 	if err != nil {
-		if err != errClientClosing {
+		switch err {
+		case errProducerIDLoadFail:
+			s.cl.bumpRepeatedLoadErr(err)
+			s.cl.cfg.logger.Log(LogLevelWarn, "unable to load producer ID, bumping client's buffered record load errors by 1 and retrying")
+			return true // whatever caused our produce, we did nothing, so keep going
+		default:
 			s.cl.cfg.logger.Log(LogLevelError, "fatal InitProducerID error, failing all buffered records", "broker", s.nodeID, "err", err)
+			fallthrough
+		case errClientClosing:
+			s.cl.failBufferedRecords(err)
 		}
-		s.cl.failBufferedRecords(err)
 		return false
 	}
 
@@ -289,6 +299,7 @@ func (s *sink) produce(sem <-chan struct{}) bool {
 
 	if txnReq != nil {
 		// txnReq can fail from:
+		// - retry failure
 		// - auth failure
 		// - producer id mapping / epoch errors
 		// The latter case can potentially recover with the kip logic
@@ -297,9 +308,16 @@ func (s *sink) produce(sem <-chan struct{}) bool {
 		// We do not need to clear the addedToTxn flag for any recBuf
 		// it was set on, since producer id recovery resets the flag.
 		if err := s.doTxnReq(req, txnReq); err != nil {
-			s.cl.failProducerID(id, epoch, err)
-			s.cl.cfg.logger.Log(LogLevelError, "fatal AddPartitionsToTxn error, failing all buffered records (it is possible the client can recover after EndTransaction)", "broker", s.nodeID, "err", err)
-			s.cl.failBufferedRecords(err)
+			switch {
+			case isRetriableBrokerErr(err):
+				s.cl.bumpRepeatedLoadErr(err)
+				s.cl.cfg.logger.Log(LogLevelWarn, "unable to AddPartitionsToTxn due to retriable broker err, bumping client's buffered record load errors by 1 and retrying", "err", err)
+				return moreToDrain || len(req.batches) > 0
+			default:
+				s.cl.failProducerID(id, epoch, err)
+				s.cl.cfg.logger.Log(LogLevelError, "fatal AddPartitionsToTxn error, failing all buffered records (it is possible the client can recover after EndTransaction)", "broker", s.nodeID, "err", err)
+				s.cl.failBufferedRecords(err)
+			}
 			return false
 		}
 	}
@@ -312,16 +330,17 @@ func (s *sink) produce(sem <-chan struct{}) bool {
 
 	// Add that we are issuing and then check if we are aborting: this
 	// order ensures that we will do not produce after aborting is set.
-	s.cl.producer.incDrains()
+	s.cl.producer.incIssues()
 	if s.cl.producer.isAborting() {
-		s.cl.producer.decDrains()
+		s.cl.producer.decIssues()
 		return false
 	}
 
 	produced = true
 	s.doSequenced(req, func(resp kmsg.Response, err error) {
+		s.lastRespSuccessful = err == nil
 		s.handleReqResp(req, resp, err)
-		s.cl.producer.decDrains()
+		s.cl.producer.decIssues()
 		<-sem
 	})
 	return moreToDrain
@@ -381,15 +400,9 @@ func (s *sink) doTxnReq(
 	req *produceRequest,
 	txnReq *kmsg.AddPartitionsToTxnRequest,
 ) error {
-start:
-	err := s.cl.doWithConcurrentTransactions("AddPartitionsToTxn", func() error {
+	return s.cl.doWithConcurrentTransactions("AddPartitionsToTxn", func() error {
 		return s.issueTxnReq(req, txnReq)
 	})
-	if isRetriableBrokerErr(err) {
-		s.cl.cfg.logger.Log(LogLevelWarn, "AddPartitionsToTxn repeatedly failed, last failure is retriable broker err, retrying issue", "broker", s.nodeID, "err", err)
-		goto start
-	}
-	return err
 }
 
 func (s *sink) issueTxnReq(
@@ -398,10 +411,8 @@ func (s *sink) issueTxnReq(
 ) error {
 	resp, err := txnReq.RequestWith(s.cl.ctx, s.cl)
 	if err != nil {
-		s.lastRespSuccessful = false
 		return err
 	}
-	s.lastRespSuccessful = true
 
 	for _, topic := range resp.Topics {
 		topicBatches, ok := req.batches[topic.Topic]

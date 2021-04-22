@@ -266,6 +266,16 @@ func (cl *Client) producerID() (int64, int16, error) {
 				if keep {
 					id = newID
 					cl.producer.id.Store(id)
+				} else {
+					// If we are not keeping the producer ID,
+					// we will return our old ID but with a
+					// static error that we can check or bubble
+					// up where needed.
+					id = &producerID{
+						id:    id.id,
+						epoch: id.epoch,
+						err:   errProducerIDLoadFail,
+					}
 				}
 			}
 		}
@@ -459,7 +469,7 @@ func (cl *Client) addUnknownTopicRecord(pr promisedRec) {
 	if unknown == nil {
 		unknown = &unknownTopicProduces{
 			buffered: make([]promisedRec, 0, 100),
-			wait:     make(chan error, 1),
+			wait:     make(chan error, 5),
 		}
 		cl.unknownTopics[pr.Topic] = unknown
 	}
@@ -574,6 +584,33 @@ func (cl *Client) Flush(ctx context.Context) error {
 		cl.producer.notifyMu.Unlock()
 		cl.producer.notifyCond.Broadcast()
 		return ctx.Err()
+	}
+}
+
+// Bumps the tries for all buffered records in the client.
+//
+// This is called whenever there is a problematic error that would affect the
+// state of all buffered records as a whole:
+//
+//   - if we cannot init a producer ID due to RequestWith errors, producing is useless
+//   - if we cannot add partitions to a txn due to RequestWith errors, producing is useless
+//
+// Note that these are specifically due to RequestWith errors, not due to
+// receiving a response that has a retriable error code. That is, if our
+// request keeps dying.
+func (cl *Client) bumpRepeatedLoadErr(err error) {
+	for _, partitions := range cl.loadTopics() {
+		for _, partition := range partitions.load().partitions {
+			partition.records.bumpRepeatedLoadErr(err)
+		}
+	}
+	cl.unknownTopicsMu.Lock()
+	defer cl.unknownTopicsMu.Unlock()
+	for _, unknown := range cl.unknownTopics {
+		select {
+		case unknown.wait <- err:
+		default:
+		}
 	}
 }
 

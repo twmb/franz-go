@@ -293,6 +293,7 @@ func (cl *Client) fetchTopicMetadata(reqTopics []string) (map[string]*topicParti
 					maxRecordBatchBytes: cl.maxRecordBatchBytesForTopic(topicMeta.Topic),
 
 					recBufsIdx: -1,
+					failing:    partMeta.ErrorCode != 0,
 				},
 
 				cursor: &cursor{
