@@ -135,7 +135,10 @@ out:
 				New: func() interface{} {
 					zstdEnc, err := zstd.NewWriter(nil,
 						zstd.WithEncoderLevel(level),
-						zstd.WithEncoderConcurrency(1))
+						zstd.WithWindowSize(64<<10),
+						zstd.WithEncoderConcurrency(1),
+						zstd.WithZeroFrames(true),
+					)
 					if err != nil {
 						zstdEnc, _ = zstd.NewWriter(nil,
 							zstd.WithEncoderConcurrency(1))
@@ -230,7 +233,10 @@ func newDecompressor() *decompressor {
 		},
 		unzstdPool: sync.Pool{
 			New: func() interface{} {
-				zstdDec, _ := zstd.NewReader(nil, zstd.WithDecoderConcurrency(1))
+				zstdDec, _ := zstd.NewReader(nil,
+					zstd.WithDecoderLowmem(true),
+					zstd.WithDecoderConcurrency(1),
+				)
 				r := &zstdDecoder{zstdDec}
 				runtime.SetFinalizer(r, func(r *zstdDecoder) {
 					r.inner.Close()
