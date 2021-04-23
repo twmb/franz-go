@@ -184,7 +184,7 @@ func (cl *Client) updateMetadata() (needsRetry bool, err error) {
 	defer cl.consumer.doOnMetadataUpdate()
 
 	var (
-		tpsProducerLoad = cl.loadTopics()
+		tpsProducerLoad = cl.producer.topics.load()
 		tpsConsumer     *topicsPartitions
 		all             bool
 		reqTopics       []string

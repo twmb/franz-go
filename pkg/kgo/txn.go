@@ -429,7 +429,7 @@ func (cl *Client) EndTransaction(ctx context.Context, commit TransactionEndTry) 
 
 	// After the flush, no records are being produced to, and we can set
 	// addedToTxn to false outside of any mutex.
-	for _, parts := range cl.loadTopics() {
+	for _, parts := range cl.producer.topics.load() {
 		for _, part := range parts.load().partitions {
 			if part.records.addedToTxn {
 				part.records.addedToTxn = false

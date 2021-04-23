@@ -7,22 +7,6 @@ import (
 	"github.com/twmb/franz-go/pkg/kerr"
 )
 
-// loadTopics returns the client's current topics and their partitions.
-func (cl *Client) loadTopics() map[string]*topicPartitions {
-	return cl.topics.Load().(map[string]*topicPartitions)
-}
-
-// cloneTopics returns a copy of the client's current topics and partitions.
-// This is a shallow copy; only the map is copied.
-func (cl *Client) cloneTopics() map[string]*topicPartitions {
-	old := cl.loadTopics()
-	new := make(map[string]*topicPartitions, len(old)+5)
-	for topic, partitions := range old {
-		new[topic] = partitions
-	}
-	return new
-}
-
 func newTopicPartitions() *topicPartitions {
 	parts := new(topicPartitions)
 	parts.v.Store(new(topicPartitionsData))
@@ -109,8 +93,10 @@ func (cl *Client) storePartitionsUpdate(topic string, l *topicPartitions, lv *to
 		return
 	}
 
-	cl.unknownTopicsMu.Lock()
-	defer cl.unknownTopicsMu.Unlock()
+	p := &cl.producer
+
+	p.unknownTopicsMu.Lock()
+	defer p.unknownTopicsMu.Unlock()
 
 	// If the topic did not have partitions, then we need to store the
 	// partition update BEFORE unlocking the mutex.
@@ -125,10 +111,10 @@ func (cl *Client) storePartitionsUpdate(topic string, l *topicPartitions, lv *to
 
 	// If there are no unknown topics or this topic is not unknown, then we
 	// have nothing to do.
-	if len(cl.unknownTopics) == 0 {
+	if len(p.unknownTopics) == 0 {
 		return
 	}
-	unknown, exists := cl.unknownTopics[topic]
+	unknown, exists := p.unknownTopics[topic]
 	if !exists {
 		return
 	}
@@ -151,7 +137,7 @@ func (cl *Client) storePartitionsUpdate(topic string, l *topicPartitions, lv *to
 	//
 	// Note that we have to partition records _or_ finish with error now
 	// while under the unknown topics mu to ensure ordering.
-	delete(cl.unknownTopics, topic)
+	delete(p.unknownTopics, topic)
 	close(unknown.wait)
 
 	if lv.loadErr != nil {
