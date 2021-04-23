@@ -86,10 +86,11 @@ type Client struct {
 	coordinatorsMu sync.Mutex
 	coordinators   map[coordinatorKey]int32
 
-	updateMetadataCh    chan struct{}
-	updateMetadataNowCh chan struct{} // like above, but with high priority
-	metawait            metawait
-	metadone            chan struct{}
+	updateMetadataCh     chan struct{}
+	updateMetadataNowCh  chan struct{} // like above, but with high priority
+	blockingMetadataFnCh chan func()
+	metawait             metawait
+	metadone             chan struct{}
 }
 
 func (cl *Client) idempotent() bool { return !cl.cfg.disableIdempotency }
@@ -167,9 +168,10 @@ func NewClient(opts ...Opt) (*Client, error) {
 
 		coordinators: make(map[coordinatorKey]int32),
 
-		updateMetadataCh:    make(chan struct{}, 1),
-		updateMetadataNowCh: make(chan struct{}, 1),
-		metadone:            make(chan struct{}),
+		updateMetadataCh:     make(chan struct{}, 1),
+		updateMetadataNowCh:  make(chan struct{}, 1),
+		blockingMetadataFnCh: make(chan func()),
+		metadone:             make(chan struct{}),
 	}
 	cl.producer.init()
 	cl.consumer.init(cl)

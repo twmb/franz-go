@@ -97,6 +97,13 @@ func (cl *Client) triggerUpdateMetadataNow() {
 	}
 }
 
+func (cl *Client) blockingMetadataFn(fn func()) {
+	select {
+	case cl.blockingMetadataFnCh <- fn:
+	case <-cl.ctx.Done():
+	}
+}
+
 // updateMetadataLoop updates metadata whenever the update ticker ticks,
 // or whenever deliberately triggered.
 func (cl *Client) updateMetadataLoop() {
@@ -106,6 +113,7 @@ func (cl *Client) updateMetadataLoop() {
 
 	ticker := time.NewTicker(cl.cfg.metadataMaxAge)
 	defer ticker.Stop()
+loop:
 	for {
 		var now bool
 		select {
@@ -115,6 +123,9 @@ func (cl *Client) updateMetadataLoop() {
 		case <-cl.updateMetadataCh:
 		case <-cl.updateMetadataNowCh:
 			now = true
+		case fn := <-cl.blockingMetadataFnCh:
+			fn()
+			continue loop
 		}
 
 		var nowTries int
@@ -123,6 +134,7 @@ func (cl *Client) updateMetadataLoop() {
 		if !now {
 			if wait := cl.cfg.metadataMinAge - time.Since(lastAt); wait > 0 {
 				timer := time.NewTimer(wait)
+			prewait:
 				select {
 				case <-cl.ctx.Done():
 					timer.Stop()
@@ -130,27 +142,33 @@ func (cl *Client) updateMetadataLoop() {
 				case <-cl.updateMetadataNowCh:
 					timer.Stop()
 				case <-timer.C:
+				case fn := <-cl.blockingMetadataFnCh:
+					fn()
+					goto prewait
 				}
 			}
 		} else {
 			// Even with an "update now", we sleep just a bit to allow some
 			// potential pile on now triggers.
-			time.Sleep(50 * time.Millisecond)
+			time.Sleep(10 * time.Millisecond)
 		}
 
 		// Drain any refires that occured during our waiting.
-		select {
-		case <-cl.updateMetadataCh:
-		default:
-		}
-		select {
-		case <-cl.updateMetadataNowCh:
-		default:
+	out:
+		for {
+			select {
+			case <-cl.updateMetadataCh:
+			case <-cl.updateMetadataNowCh:
+			case fn := <-cl.blockingMetadataFnCh:
+				fn()
+			default:
+				break out
+			}
 		}
 
 		again, err := cl.updateMetadata()
 		if again || err != nil {
-			if now && nowTries < 10 {
+			if now && nowTries < 3 {
 				goto start
 			}
 			cl.triggerUpdateMetadata()
@@ -163,11 +181,15 @@ func (cl *Client) updateMetadataLoop() {
 
 		consecutiveErrors++
 		after := time.NewTimer(cl.cfg.retryBackoff(consecutiveErrors))
+	backoff:
 		select {
 		case <-cl.ctx.Done():
 			after.Stop()
 			return
 		case <-after.C:
+		case fn := <-cl.blockingMetadataFnCh:
+			fn()
+			goto backoff
 		}
 
 	}
