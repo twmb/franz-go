@@ -231,8 +231,8 @@ func (s *sink) drain() {
 		time.Sleep(5 * time.Millisecond)
 	}
 
-	s.cl.producer.incDrains()
-	defer s.cl.producer.decDrains()
+	s.cl.producer.incWorkers()
+	defer s.cl.producer.decWorkers()
 
 	again := true
 	for again {
@@ -328,11 +328,12 @@ func (s *sink) produce(sem <-chan struct{}) bool {
 
 	req.backoffSeq = s.backoffSeq // safe to read outside mu since we are in drain loop
 
-	// Add that we are issuing and then check if we are aborting: this
+	// Add that we are working and then check if we are aborting: this
 	// order ensures that we will do not produce after aborting is set.
-	s.cl.producer.incIssues()
-	if s.cl.producer.isAborting() {
-		s.cl.producer.decIssues()
+	p := &s.cl.producer
+	p.incWorkers()
+	if p.isAborting() {
+		p.decWorkers()
 		return false
 	}
 
@@ -340,7 +341,7 @@ func (s *sink) produce(sem <-chan struct{}) bool {
 	s.doSequenced(req, func(resp kmsg.Response, err error) {
 		s.lastRespSuccessful = err == nil
 		s.handleReqResp(req, resp, err)
-		s.cl.producer.decIssues()
+		p.decWorkers()
 		<-sem
 	})
 	return moreToDrain

@@ -326,11 +326,11 @@ func (cl *Client) AbortBufferedRecords(ctx context.Context) error {
 	cl.failBufferedRecords(ErrAborting)
 
 	// Now, we wait for any active drain to stop. We must wait for all
-	// drains to stop otherwise we could end up with some exceptionally
+	// workers to stop otherwise we could end up with some exceptionally
 	// weird scenario where we end a txn and begin a new one before a
 	// prior AddPartitionsToTxn request that was built is issued.
 	//
-	// By waiting for our drains count to hit 0, we know that at that
+	// By waiting for our workers count to hit 0, we know that at that
 	// point, no new AddPartitionsToTxn request will be sent.
 	quit := false
 	done := make(chan struct{})
@@ -339,14 +339,14 @@ func (cl *Client) AbortBufferedRecords(ctx context.Context) error {
 		defer cl.producer.notifyMu.Unlock()
 		defer close(done)
 
-		for !quit && (atomic.LoadInt32(&cl.producer.drains) > 0 || atomic.LoadInt32(&cl.producer.issues) > 0) {
+		for !quit && atomic.LoadInt32(&cl.producer.workers) > 0 {
 			cl.producer.notifyCond.Wait()
 		}
 	}()
 
 	select {
 	case <-done:
-		// All records were failed above, and all drains are stopped.
+		// All records were failed above, and all workers are stopped.
 		// We are safe to return.
 		return nil
 	case <-ctx.Done():
