@@ -418,40 +418,35 @@ func (cl *Client) partitionsForTopicProduce(pr promisedRec) (*topicPartitions, *
 
 	if !exists { // topic did not exist: check again under mu and potentially create it
 		p.topicsMu.Lock()
-		if exists = p.topics.load().hasTopic(topic); !exists { // update exists for below
+		defer p.topicsMu.Unlock()
+
+		if parts, exists = p.topics.load()[topic]; !exists { // update parts for below
 			// Before we store the new topic, we lock unknown
 			// topics to prevent a concurrent metadata update
 			// seeing our new topic before we are waiting from the
 			// addUnknownTopicRecord fn. Otherwise, we would wait
 			// and never be re-notified.
 			p.unknownTopicsMu.Lock()
+			defer p.unknownTopicsMu.Unlock()
+
 			p.topics.storeTopics([]string{topic})
-			p.topicsMu.Unlock()
 			cl.addUnknownTopicRecord(pr)
-			p.unknownTopicsMu.Unlock()
-		} else {
-			p.topicsMu.Unlock() // topic existed: fall into logic below
+			cl.triggerUpdateMetadataNow()
+			return nil, nil
 		}
 	}
 
-	if exists {
-		// The topic existed, but maybe has not loaded partitions yet.
-		// We have to lock unknown topics first to ensure ordering
-		// just in case a load has not happened.
-		p.unknownTopicsMu.Lock()
-		defer p.unknownTopicsMu.Unlock()
+	// Here, The topic existed, but maybe has not loaded partitions yet. We
+	// have to lock unknown topics first to ensure ordering just in case a
+	// load has not happened.
+	p.unknownTopicsMu.Lock()
+	defer p.unknownTopicsMu.Unlock()
 
-		topics = p.topics.load()
-		parts, exists = topics[topic]
-		if exists {
-			if v := parts.load(); len(v.partitions) > 0 {
-				return parts, v
-			}
-		}
-		cl.addUnknownTopicRecord(pr)
+	if v := parts.load(); len(v.partitions) > 0 {
+		return parts, v
 	}
-
-	cl.triggerUpdateMetadataNow()
+	cl.addUnknownTopicRecord(pr)
+	cl.triggerUpdateMetadata()
 
 	return nil, nil // our record is buffered waiting for metadata update; nothing to return
 }
