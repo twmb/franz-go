@@ -55,7 +55,7 @@ func (b *balancer) newGraph(
 	return g
 }
 
-func (g *graph) changeOwnership(edge uint32, newDst uint16) {
+func (g *graph) changeOwnership(edge int32, newDst uint16) {
 	g.cxns[edge] = newDst
 }
 
@@ -96,7 +96,7 @@ func (g *graph) findSteal(from uint16) ([]stealSegment, bool) {
 
 		for _, topicNum := range g.out[current.node] {
 			info := g.b.topicInfos[topicNum]
-			firstPartNum, lastPartNum := info.partNum, info.partNum+uint32(info.partitions)
+			firstPartNum, lastPartNum := info.partNum, info.partNum+info.partitions
 			for edge := firstPartNum; edge < lastPartNum; edge++ {
 				neighborNode := g.cxns[edge]
 				neighbor, isNew := g.getScore(neighborNode)
@@ -131,16 +131,16 @@ func (g *graph) findSteal(from uint16) ([]stealSegment, bool) {
 type stealSegment struct {
 	src  uint16 // member num
 	dst  uint16 // member num
-	part uint32 // partNum
+	part int32  // partNum
 }
 
 type pathScore struct {
 	done    bool
 	node    uint16 // member num
 	parent  *pathScore
-	srcEdge uint32 // partNum
-	level   int32  // partitions owned on this segment
-	gscore  int32  // how many steals it would take to get here
+	srcEdge int32 // partNum
+	level   int32 // partitions owned on this segment
+	gscore  int32 // how many steals it would take to get here
 	fscore  int32
 }
 
