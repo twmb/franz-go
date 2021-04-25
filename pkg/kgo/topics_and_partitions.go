@@ -58,6 +58,14 @@ func (t *topicsPartitions) load() topicsPartitionsData {
 }
 func (t *topicsPartitions) storeData(d topicsPartitionsData) { t.v.Store(d) }
 func (t *topicsPartitions) storeTopics(topics []string)      { t.v.Store(t.ensureTopics(topics)) }
+func (t *topicsPartitions) clone() topicsPartitionsData {
+	current := t.load()
+	clone := make(map[string]*topicPartitions, len(current))
+	for k, v := range current {
+		clone[k] = v
+	}
+	return clone
+}
 
 // Ensures that the topics exist in the returned map, but does not store the
 // update. This can be used to update the data and store later, rather than
@@ -68,11 +76,7 @@ func (t *topicsPartitions) ensureTopics(topics []string) topicsPartitionsData {
 	for _, topic := range topics {
 		if _, exists := current[topic]; !exists {
 			if !cloned {
-				new := make(map[string]*topicPartitions, len(current)+5)
-				for k, v := range current {
-					new[k] = v
-				}
-				current = new
+				current = t.clone()
 				cloned = true
 			}
 			current[topic] = newTopicPartitions()
@@ -95,18 +99,23 @@ func (cl *Client) storePartitionsUpdate(topic string, l *topicPartitions, lv *to
 
 	p := &cl.producer
 
+	p.topicsMu.Lock()
+	defer p.topicsMu.Unlock()
 	p.unknownTopicsMu.Lock()
 	defer p.unknownTopicsMu.Unlock()
 
 	// If the topic did not have partitions, then we need to store the
-	// partition update BEFORE unlocking the mutex.
+	// partition update BEFORE unlocking the mutex to guard against this
+	// sequence of events:
 	//
-	// Otherwise, this function would do all the "unwait the waiters"
-	// logic, then a produce could see "oh, no partitions, I will wait",
-	// then this would store the update and never notify that new waiter.
+	//   - unlock waiters
+	//   - delete waiter
+	//   - new produce recreates waiter
+	//   - we store update
+	//   - we never notify the recreated waiter
 	//
-	// By storing before releasing the lock, we ensure that later partition
-	// loads for this topic under the unknownTopicsMu will see our update.
+	// By storing before releasing the locks, we ensure that later
+	// partition loads for this topic under the mu will see our update.
 	defer l.v.Store(lv)
 
 	// If there are no unknown topics or this topic is not unknown, then we
@@ -131,24 +140,24 @@ func (cl *Client) storePartitionsUpdate(topic string, l *topicPartitions, lv *to
 		return
 	}
 
-	// We loaded partitions and there are waiting topics. We delete the
-	// topic from the unknown maps, close the unknown wait to kill the
-	// waiting goroutine, and partition all records.
+	// Either we have a fatal error or we can successfully partition.
 	//
-	// Note that we have to partition records _or_ finish with error now
-	// while under the unknown topics mu to ensure ordering.
+	// Even with a fatal error, if we loaded any partitions, we partition.
+	// If we only had a fatal error, we can finish promises in a goroutine.
+	// If we are partitioning, we have to do it under the unknownMu to
+	// ensure prior buffered records are produced in order before we
+	// release the mu.
 	delete(p.unknownTopics, topic)
-	close(unknown.wait)
+	close(unknown.wait) // allow waiting goroutine to quit
 
-	if lv.loadErr != nil {
+	if len(lv.partitions) == 0 {
+		cl.deleteUnknownTopic(topic, unknown, lv.loadErr)
+	} else {
 		for _, pr := range unknown.buffered {
-			cl.finishRecordPromise(pr, lv.loadErr)
+			cl.doPartitionRecord(l, lv, pr)
 		}
-		return
 	}
-	for _, pr := range unknown.buffered {
-		cl.doPartitionRecord(l, lv, pr)
-	}
+
 }
 
 // topicPartitionsData is the data behind a topicPartitions' v.

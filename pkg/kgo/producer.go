@@ -436,7 +436,7 @@ func (cl *Client) partitionsForTopicProduce(pr promisedRec) (*topicPartitions, *
 		}
 	}
 
-	// Here, The topic existed, but maybe has not loaded partitions yet. We
+	// Here, the topic existed, but maybe has not loaded partitions yet. We
 	// have to lock unknown topics first to ensure ordering just in case a
 	// load has not happened.
 	p.unknownTopicsMu.Lock()
@@ -490,7 +490,7 @@ func (cl *Client) waitUnknownTopic(
 			err = errRecordTimeout
 		case retriableErr, ok := <-unknown.wait:
 			if !ok {
-				cl.cfg.logger.Log(LogLevelInfo, "done waiting for unknown topic, metadata was successful", "topic", topic)
+				cl.cfg.logger.Log(LogLevelInfo, "done waiting for unknown topic", "topic", topic)
 				return // metadata was successful!
 			}
 			cl.cfg.logger.Log(LogLevelInfo, "unknown topic wait failed, retrying wait", "topic", topic, "err", retriableErr)
@@ -501,30 +501,45 @@ func (cl *Client) waitUnknownTopic(
 		}
 	}
 
-	cl.cfg.logger.Log(LogLevelInfo, "unknown topic wait failed, done retrying, failing all records", "topic", topic)
-
 	// If we errored above, we come down here to potentially clear the
-	// topic wait and fail all buffered records. However, we could have
-	// some weird racy interactions with storePartitionsUpdate.
-	//
-	// If the pointer in the unknownTopics map is different than the one
-	// that started this goroutine, then we raced. A partitions update
-	// cleared the unknownTopics, and then a new produce went and set a
-	// completely new pointer-to-slice in unknownTopics. We do not want to
-	// fail everything in that new slice.
+	// topic wait and fail all buffered records. However, under some
+	// extreme conditions, a quickly following metadata update could delete
+	// our unknown topic, and then a produce could recreate a new unknown
+	// topic. We only delete and finish promises if the pointer in the
+	// unknown topic map is still the same.
 	p := &cl.producer
+
+	p.topicsMu.Lock()
+	defer p.topicsMu.Unlock()
 	p.unknownTopicsMu.Lock()
+	defer p.unknownTopicsMu.Unlock()
+
 	nowUnknown := p.unknownTopics[topic]
 	if nowUnknown != unknown {
-		p.unknownTopicsMu.Unlock()
 		return
 	}
-	delete(p.unknownTopics, topic)
-	p.unknownTopicsMu.Unlock()
+	cl.cfg.logger.Log(LogLevelInfo, "unknown topic wait failed, done retrying, failing all records", "topic", topic)
 
-	for _, pr := range unknown.buffered {
-		cl.finishRecordPromise(pr, err)
-	}
+	delete(p.unknownTopics, topic)
+	cl.deleteUnknownTopic(topic, unknown, err)
+}
+
+// Called under both topic and unknown mu's, this clears the topic from the
+// producer and finishes all buffered promises.
+//
+// We do not need to clear recBufs in sinks when deleting unknown topics
+// because unknown topics implies that partitions were never loaded, thus no
+// recBufs in sinks.
+func (cl *Client) deleteUnknownTopic(topic string, unknown *unknownTopicProduces, err error) {
+	topics := cl.producer.topics.clone()
+	delete(topics, topic)
+	cl.producer.topics.storeData(topics)
+
+	go func() {
+		for _, pr := range unknown.buffered {
+			cl.finishRecordPromise(pr, err)
+		}
+	}()
 }
 
 // Flush hangs waiting for all buffered records to be flushed, stopping all
@@ -608,6 +623,13 @@ func (cl *Client) bumpRepeatedLoadErr(err error) {
 }
 
 // Clears all buffered records in the client with the given error.
+//
+// - closing client
+// - aborting transaction
+// - fatal AddPartitionsToTxn
+//
+// Because the error fails everything, we also empty our unknown topics and
+// delete any topics that were still unknown from the producer's topics.
 func (cl *Client) failBufferedRecords(err error) {
 	p := &cl.producer
 
@@ -619,13 +641,28 @@ func (cl *Client) failBufferedRecords(err error) {
 			recBuf.mu.Unlock()
 		}
 	}
+
+	p.topicsMu.Lock()
+	defer p.topicsMu.Unlock()
 	p.unknownTopicsMu.Lock()
 	defer p.unknownTopicsMu.Unlock()
+
+	toStore := p.topics.clone()
+	defer p.topics.storeData(toStore)
+
+	var toFail [][]promisedRec
 	for topic, unknown := range p.unknownTopics {
+		delete(toStore, topic)
 		delete(p.unknownTopics, topic)
 		close(unknown.wait)
-		for _, pr := range unknown.buffered {
-			cl.finishRecordPromise(pr, err)
-		}
+		toFail = append(toFail, unknown.buffered)
 	}
+
+	go func() {
+		for _, fail := range toFail {
+			for _, pr := range fail {
+				cl.finishRecordPromise(pr, err)
+			}
+		}
+	}()
 }
