@@ -88,7 +88,7 @@ func (cl *Client) AssignPartitions(opts ...DirectConsumeOpt) {
 	}
 
 	defer c.storeDirect(d)
-	defer cl.triggerUpdateMetadata()
+	defer cl.triggerUpdateMetadata(true) // we definitely want to trigger a metadata update
 
 	if d.regexTopics {
 		return

@@ -14,6 +14,10 @@ import (
 // forcing a refresh when calling `waitmeta` or `triggerUpdateMetadata`. If
 // either function is called within the refresh window, then we just return
 // immediately / avoid triggering a refresh.
+//
+// This is similar to the client configurable metadata min age, the difference
+// being is that that limit kicks in when a trigger actually does happen and
+// causes a sleep before proceeding into a metadata request.
 const minRefreshTrigger = 5 * time.Second / 2
 
 type metawait struct {
@@ -76,11 +80,13 @@ func (cl *Client) waitmeta(ctx context.Context, wait time.Duration) {
 	cl.metawait.c.Broadcast()
 }
 
-func (cl *Client) triggerUpdateMetadata() bool {
-	cl.metawait.mu.Lock()
-	defer cl.metawait.mu.Unlock()
-	if time.Since(cl.metawait.lastUpdate) < minRefreshTrigger {
-		return false
+func (cl *Client) triggerUpdateMetadata(must bool) bool {
+	if !must {
+		cl.metawait.mu.Lock()
+		defer cl.metawait.mu.Unlock()
+		if time.Since(cl.metawait.lastUpdate) < minRefreshTrigger {
+			return false
+		}
 	}
 
 	select {
@@ -171,7 +177,7 @@ loop:
 			if now && nowTries < 3 {
 				goto start
 			}
-			cl.triggerUpdateMetadata()
+			cl.triggerUpdateMetadata(true)
 		}
 		if err == nil {
 			lastAt = time.Now()

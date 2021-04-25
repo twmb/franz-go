@@ -548,7 +548,7 @@ func (s *source) fetch(consumerSession *consumerSession, doneFetch chan<- struct
 		alreadySentToDoneFetch = true
 		s.session.reset()
 
-		s.cl.triggerUpdateMetadata() // as good a time as any
+		s.cl.triggerUpdateMetadata(false) // as good a time as any
 		s.consecutiveFailures++
 		after := time.NewTimer(s.cl.cfg.retryBackoff(s.consecutiveFailures))
 		defer after.Stop()

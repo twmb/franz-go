@@ -1013,7 +1013,7 @@ func (s *consumerSession) listOrEpoch(waiting listOrEpochLoads, immediate bool) 
 	if immediate {
 		s.c.cl.triggerUpdateMetadataNow()
 	} else {
-		wait = s.c.cl.triggerUpdateMetadata()
+		wait = s.c.cl.triggerUpdateMetadata(false) // avoid trigger if within refresh interval
 	}
 
 	s.listOrEpochMu.Lock() // collapse any listOrEpochs that occur during meta update into one

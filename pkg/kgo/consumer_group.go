@@ -406,7 +406,7 @@ func (cl *Client) AssignGroup(group string, opts ...GroupOpt) {
 	}
 
 	defer c.storeGroup(g)
-	defer cl.triggerUpdateMetadata()
+	defer cl.triggerUpdateMetadata(true) // we definitely want to trigger a metadata update
 
 	for _, balancer := range g.balancers {
 		g.cooperative = g.cooperative && balancer.isCooperative()

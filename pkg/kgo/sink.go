@@ -191,7 +191,7 @@ func (s *sink) maybeBackoff() {
 	}
 	defer s.clearBackoff()
 
-	s.cl.triggerUpdateMetadata() // as good a time as any
+	s.cl.triggerUpdateMetadata(false) // as good a time as any
 
 	tries := int(atomic.AddUint32(&s.consecutiveFailures, 1))
 	after := time.NewTimer(s.cl.cfg.retryBackoff(tries))
@@ -854,7 +854,7 @@ func (s *sink) handleRetryBatches(retry seqRecBatches) {
 		needsMetaUpdate = true
 	})
 	if needsMetaUpdate {
-		s.cl.triggerUpdateMetadata()
+		s.cl.triggerUpdateMetadata(false)
 	}
 }
 

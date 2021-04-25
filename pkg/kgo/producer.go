@@ -446,7 +446,7 @@ func (cl *Client) partitionsForTopicProduce(pr promisedRec) (*topicPartitions, *
 		return parts, v
 	}
 	cl.addUnknownTopicRecord(pr)
-	cl.triggerUpdateMetadata()
+	cl.triggerUpdateMetadata(false)
 
 	return nil, nil // our record is buffered waiting for metadata update; nothing to return
 }
