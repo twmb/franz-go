@@ -102,8 +102,8 @@ func noPromise(*Record, error) {}
 // records (to avoid invalid sequence numbers), all buffered records for a
 // partition are aborted. The context checked for doneness is always the first
 // buffered record's context. If that record is successfully produced, the
-// context will then be the next first buffered record. The context is only
-// evaluated before writing a produce request.
+// context will then be the next first buffered record. The context is
+// evaluated before or after writing a request.
 //
 // The first buffered record for an unknown topic begins a timeout for the
 // configured record timeout limit; all records buffered within the wait will

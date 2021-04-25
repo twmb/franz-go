@@ -73,6 +73,8 @@ var (
 	// configured record timeout limit.
 	errRecordTimeout = errors.New("records have timed out before they were able to be produced")
 
+	errRecordRetries = errors.New("record failed after being retried too many times")
+
 	errClientClosing = errors.New("client closing")
 
 	//////////////

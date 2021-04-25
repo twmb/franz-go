@@ -755,9 +755,8 @@ func ManualFlushing() ProducerOpt {
 // this option with lingering. In that case, simply add the linger to the
 // record timeout to avoid problems.
 //
-// The timeout is only evaluated after a produce response, and only for batches
-// that need to be retried. Thus, a sink backoff may delay record timeout
-// slightly. As with lingering, this also should generally be a non-issue.
+// The timeout is only evaluated evaluated before writing a request or after a
+// produce response. Thus, a sink backoff may delay record timeout slightly.
 func RecordTimeout(timeout time.Duration) ProducerOpt {
 	return producerOpt{func(cfg *cfg) { cfg.recordTimeout = timeout }}
 }
