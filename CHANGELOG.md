@@ -1,5 +1,34 @@
-tip
+v0.6.13
 ===
+
+- [`6ae76d0`](https://github.com/twmb/franz-go/commit/6ae76d0): **feature** producer: allow using the passed in context to cancel records
+- [`2b9b8ca`](https://github.com/twmb/franz-go/commit/2b9b8ca): **bugfix** sink: reset needSeqReset
+- [`314de8e`](https://github.com/twmb/franz-go/commit/314de8e): **feature** producer: allow records to fail when idempotency is enabled
+- [`bf956f4`](https://github.com/twmb/franz-go/commit/bf956f4): **feature** producer: delete knowledge of a topic if we never load it
+- [`83ecd8a`](https://github.com/twmb/franz-go/commit/83ecd8a): **bugfix** producer unknown wait: retry on retriable errors
+- [`a3c2a5c`](https://github.com/twmb/franz-go/commit/a3c2a5c): consumer: backoff when list offsets or load epoch has any err (avoid spinloop)
+- [`9c27589`](https://github.com/twmb/franz-go/commit/9c27589): zstd compression: add more options (switch to minimal memory usage)
+- [`0554ad5`](https://github.com/twmb/franz-go/commit/0554ad5): producer: retry logic changes
+
+This release focuses on restructing some code to allow deleting topics from the
+client and, most importantly, to allow records to fail even with idempotency.
+
+For deleting records, this is a minimal gain that will really only benefit a
+user reassigning consuming topics, or for producers to a topic that does not
+exist. Still, nifty, and for an EOS user, produce and consume topics will no
+longer be next to each other (which may make scanning partitions to produce or
+consume quicker).
+
+For allowing records to have limited retries / be canceled with a context, this
+is an important feature that gives users more control of aborting the work they
+tried. As noted in the config docs, we cannot always safely abort records, but
+for the most part, we can. The only real unsafe time is when we have written a
+produce request but have not received a response. If we ever get a response for
+the first batch in a record buffer (or if we do not write the batch ever), then
+we can safely fail the records. We do not need to worry about the other
+concurrent requests because if the first batch errors, the others will error
+and we know we can fail records based off the first's status, and if the first
+batch does not error, we will just finish the records (and not error them).
 
 v0.6.12
 ===
