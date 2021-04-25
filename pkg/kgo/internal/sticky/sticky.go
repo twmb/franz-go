@@ -19,7 +19,7 @@ import (
 // from the first generation's consumers defaulting to -1.
 
 // We can support up to 65533 members; two slots are reserved.
-// We can support up to 4,294,967,295 partitions.
+// We can support up to 2,147,483,647 partitions.
 // I expect a server to fall over before reaching either of these numbers.
 
 // GroupMember is a Kafka group member.
@@ -48,7 +48,7 @@ type balancer struct {
 	//
 	// The newer generation goes into plan directly, the older gets
 	// stuffed here.
-	stales map[uint32]uint16 // partNum => stale memberNum
+	stales map[int32]uint16 // partNum => stale memberNum
 
 	plan membersPartitions // what we are building and balancing
 
@@ -68,8 +68,8 @@ type balancer struct {
 }
 
 type topicInfo struct {
-	partNum    uint32 // base part num
-	partitions int32  // number of partitions in the topic
+	partNum    int32 // base part num
+	partitions int32 // number of partitions in the topic
 	topic      string
 }
 
@@ -83,7 +83,7 @@ func newBalancer(members []GroupMember, topics map[string]int32) *balancer {
 		topicNum := uint32(len(topicNums))
 		topicNums[topic] = topicNum
 		topicInfos[topicNum] = topicInfo{
-			partNum:    uint32(nparts),
+			partNum:    int32(nparts),
 			partitions: partitions,
 			topic:      topic,
 		}
@@ -106,7 +106,7 @@ func newBalancer(members []GroupMember, topics map[string]int32) *balancer {
 		topicNums:  topicNums,
 		topicInfos: topicInfos,
 		partOwners: partOwners,
-		stales:     make(map[uint32]uint16),
+		stales:     make(map[int32]uint16),
 		plan:       make(membersPartitions, len(members)),
 	}
 
@@ -122,7 +122,7 @@ func newBalancer(members []GroupMember, topics map[string]int32) *balancer {
 func (b *balancer) into() Plan {
 	plan := make(Plan, len(b.plan))
 	ntopics := 5 * len(b.topicNums) / 4
-	allParts := make([]int32, 0, len(b.partOwners))
+
 	for memberNum, partNums := range b.plan {
 		member := b.members[memberNum].ID
 		if len(partNums) == 0 {
@@ -132,15 +132,13 @@ func (b *balancer) into() Plan {
 		topics := make(map[string][]int32, ntopics)
 		plan[member] = topics
 
-		sort.Slice(partNums, func(i, j int) bool {
-			partNumI := partNums[i]
-			partNumJ := partNums[j]
+		// partInfos is created by topic, and partNums refers to
+		// indices in partInfos. If we sort by partNum, we have sorted
+		// topics and partitions.
+		sort.Sort(&partNums)
 
-			topicNumI := b.partOwners[partNumI]
-			topicNumJ := b.partOwners[partNumJ]
-
-			return topicNumI < topicNumJ || topicNumI == topicNumJ && partNumI < partNumJ
-		})
+		// We can reuse partNums for our topic partitions.
+		topicParts := partNums[:0]
 
 		lastTopicNum := b.partOwners[partNums[0]]
 		lastTopicInfo := b.topicInfos[lastTopicNum]
@@ -149,31 +147,35 @@ func (b *balancer) into() Plan {
 			info := b.topicInfos[topicNum]
 
 			if topicNum != lastTopicNum {
-				topics[lastTopicInfo.topic] = allParts[:len(allParts):len(allParts)]
-				allParts = allParts[len(allParts):]
+				topics[lastTopicInfo.topic] = topicParts[:len(topicParts):len(topicParts)]
+				topicParts = topicParts[len(topicParts):]
 
 				lastTopicNum = topicNum
 				lastTopicInfo = info
 			}
 
 			partition := partNum - info.partNum
-			allParts = append(allParts, int32(partition))
+			topicParts = append(topicParts, int32(partition))
 		}
-		topics[lastTopicInfo.topic] = allParts[:len(allParts):len(allParts)]
-		allParts = allParts[len(allParts):]
+		topics[lastTopicInfo.topic] = topicParts[:len(topicParts):len(topicParts)]
+		topicParts = topicParts[len(topicParts):]
 	}
 	return plan
 }
 
-func (b *balancer) partNumByTopic(topic string, partition int32) (uint32, bool) {
+func (b *balancer) partNumByTopic(topic string, partition int32) (int32, bool) {
 	topicNum, exists := b.topicNums[topic]
 	if !exists {
 		return 0, false
 	}
-	return b.topicInfos[topicNum].partNum + uint32(partition), true
+	topicInfo := b.topicInfos[topicNum]
+	if partition >= topicInfo.partitions {
+		return 0, false
+	}
+	return topicInfo.partNum + partition, true
 }
 
-func (m *memberPartitions) remove(needle uint32) {
+func (m *memberPartitions) remove(needle int32) {
 	s := *m
 	var d int
 	for i, check := range s {
@@ -186,14 +188,14 @@ func (m *memberPartitions) remove(needle uint32) {
 	*m = s[:len(s)-1]
 }
 
-func (m *memberPartitions) takeEnd() uint32 {
+func (m *memberPartitions) takeEnd() int32 {
 	s := *m
 	r := s[len(s)-1]
 	*m = s[:len(s)-1]
 	return r
 }
 
-func (m *memberPartitions) add(partNum uint32) {
+func (m *memberPartitions) add(partNum int32) {
 	*m = append(*m, partNum)
 }
 
@@ -202,7 +204,11 @@ func (m *memberPartitions) len() int {
 }
 
 // memberPartitions contains partitions for a member.
-type memberPartitions []uint32
+type memberPartitions []int32
+
+func (m *memberPartitions) Len() int           { return len(*m) }
+func (m *memberPartitions) Less(i, j int) bool { return (*m)[i] < (*m)[j] }
+func (m *memberPartitions) Swap(i, j int)      { (*m)[i], (*m)[j] = (*m)[j], (*m)[i] }
 
 // membersPartitions maps members to their partitions.
 type membersPartitions []memberPartitions
@@ -293,12 +299,12 @@ func (b *balancer) parseMemberMetadata() {
 	// Each partition should only have one consumer, but a flaky member
 	// could rejoin with an old generation (stale user data) and say it
 	// is consuming something a different member is. See KIP-341.
-	partitionConsumersBuf := make([]memberGeneration, cap(b.partOwners))
-	partitionConsumersByGeneration := make([][]memberGeneration, cap(b.partOwners))
+	partitionConsumersByGeneration := make([][2]memberGeneration, cap(b.partOwners))
 
 	for _, member := range b.members {
 		memberPlan, generation := deserializeUserData(member.UserData)
-		memberGeneration := memberGeneration{
+		n := memberGeneration{ // new
+			true,
 			b.memberNums[member.ID],
 			generation,
 		}
@@ -307,45 +313,35 @@ func (b *balancer) parseMemberMetadata() {
 			if !exists {
 				continue
 			}
-			partitionConsumers := partitionConsumersByGeneration[partNum]
-			var doublyConsumed bool
-			for _, otherConsumer := range partitionConsumers { // expected to be very few if any others
-				if otherConsumer.generation == generation {
-					doublyConsumed = true
-					break
-				}
+
+			// We keep the highest generation, and at most two generations.
+			// If something is doubly consumed, we skip it.
+			pcs := &partitionConsumersByGeneration[partNum]
+			switch {
+			case !pcs[0].set: // no consumers yet for this partition
+				pcs[0] = n
+
+			case n.generation > pcs[0].generation: // one consumer already, but new member has higher generation
+				pcs[0], pcs[1] = n, pcs[0]
+
+			case !pcs[1].set || n.generation > pcs[1].generation: // one consumer already, we could be second, or if there is a second, we have higher generation
+				pcs[1] = n
 			}
-			// Two members should not be consuming the same topic and partition
-			// within the same generation. If see this, we drop the second.
-			if doublyConsumed {
-				continue
-			}
-			if len(partitionConsumers) == 0 {
-				partitionConsumers = partitionConsumersBuf[:0:1]
-				partitionConsumersBuf = partitionConsumersBuf[1:]
-			}
-			partitionConsumersByGeneration[partNum] = append(partitionConsumers, memberGeneration)
 		}
 	}
 
-	var mgs memberGenerations
-	for partNum, partitionConsumers := range partitionConsumersByGeneration {
-		mgs = memberGenerations(partitionConsumers)
-		sort.Sort(&mgs)
-		if len(partitionConsumers) == 0 {
-			continue
-		}
-
-		partNums := &b.plan[partitionConsumers[0].memberNum]
-		partNums.add(uint32(partNum))
-
-		if len(partitionConsumers) > 1 {
-			b.stales[uint32(partNum)] = partitionConsumers[1].memberNum
+	for partNum, pcs := range partitionConsumersByGeneration {
+		if pcs[0].set {
+			b.plan[pcs[0].memberNum].add(int32(partNum))
+			if pcs[1].set {
+				b.stales[int32(partNum)] = pcs[1].memberNum
+			}
 		}
 	}
 }
 
 type memberGeneration struct {
+	set        bool
 	memberNum  uint16
 	generation int32
 }
@@ -470,7 +466,6 @@ func (b *balancer) assignUnassignedAndInitGraph() {
 		(&membersByPartitions{potentials, b.plan}).init()
 	}
 
-	// We now assign everything we know is not currently assigned.
 	for partNum, owner := range partitionConsumers {
 		if owner != unassignedPart {
 			continue
@@ -480,7 +475,7 @@ func (b *balancer) assignUnassignedAndInitGraph() {
 			continue
 		}
 		assigned := potentials[0]
-		b.plan[assigned].add(uint32(partNum))
+		b.plan[assigned].add(int32(partNum))
 		(&membersByPartitions{potentials, b.plan}).fix0()
 		partitionConsumers[partNum] = assigned
 	}
@@ -555,8 +550,8 @@ func (b *balancer) tryRestickyStales(
 // Our process is to init the heap and then always fix the 0th index after
 // making it larger, so we only ever need to sift down.
 type membersByPartitions struct {
-	members    []uint16
-	partitions membersPartitions
+	members []uint16
+	plan    membersPartitions
 }
 
 func (m *membersByPartitions) init() {
@@ -576,14 +571,14 @@ func (m *membersByPartitions) down(i0, n int) {
 			break
 		}
 		swap := left // left child
-		swapLen := len(m.partitions[m.members[left]])
+		swapLen := len(m.plan[m.members[left]])
 		if right := left + 1; right < n {
-			if rightLen := len(m.partitions[m.members[right]]); rightLen < swapLen {
+			if rightLen := len(m.plan[m.members[right]]); rightLen < swapLen {
 				swapLen = rightLen
 				swap = right
 			}
 		}
-		nodeLen := len(m.partitions[m.members[node]])
+		nodeLen := len(m.plan[m.members[node]])
 		if nodeLen <= swapLen {
 			break
 		}
@@ -649,11 +644,13 @@ func (b *balancer) balance() {
 }
 
 func (b *balancer) balanceComplex() {
+out:
 	for min := b.planByNumPartitions.Min(); b.planByNumPartitions.Len() > 1; min = b.planByNumPartitions.Min() {
 		level := min.Item.(*partitionLevel)
 		// If this max level is within one of this level, then nothing
 		// can steal down so we return early.
-		if b.planByNumPartitions.Max().Item.(*partitionLevel).level <= level.level+1 {
+		max := b.planByNumPartitions.Max().Item.(*partitionLevel)
+		if max.level <= level.level+1 {
 			return
 		}
 		// We continually loop over this level until every member is
@@ -663,6 +660,9 @@ func (b *balancer) balanceComplex() {
 			if stealPath, found := b.stealGraph.findSteal(memberNum); found {
 				for _, segment := range stealPath {
 					b.reassignPartition(segment.src, segment.dst, segment.part)
+				}
+				if len(max.members) == 0 {
+					continue out
 				}
 				continue
 			}
@@ -677,7 +677,7 @@ func (b *balancer) balanceComplex() {
 	}
 }
 
-func (b *balancer) reassignPartition(src, dst uint16, partNum uint32) {
+func (b *balancer) reassignPartition(src, dst uint16, partNum int32) {
 	srcPartitions := &b.plan[src]
 	dstPartitions := &b.plan[dst]
 

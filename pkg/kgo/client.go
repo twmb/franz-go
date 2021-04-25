@@ -28,7 +28,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kerr"
@@ -87,19 +86,11 @@ type Client struct {
 	coordinatorsMu sync.Mutex
 	coordinators   map[coordinatorKey]int32
 
-	topicsMu sync.Mutex   // locked to prevent concurrent updates; reads are always atomic
-	topics   atomic.Value // map[string]*topicPartitions
-
-	// unknownTopics buffers all records for topics that are not loaded.
-	// The map is to a pointer to a slice for reasons documented in
-	// waitUnknownTopic.
-	unknownTopicsMu sync.Mutex
-	unknownTopics   map[string]*unknownTopicProduces
-
-	updateMetadataCh    chan struct{}
-	updateMetadataNowCh chan struct{} // like above, but with high priority
-	metawait            metawait
-	metadone            chan struct{}
+	updateMetadataCh     chan struct{}
+	updateMetadataNowCh  chan struct{} // like above, but with high priority
+	blockingMetadataFnCh chan func()
+	metawait             metawait
+	metadone             chan struct{}
 }
 
 func (cl *Client) idempotent() bool { return !cl.cfg.disableIdempotency }
@@ -175,16 +166,15 @@ func NewClient(opts ...Opt) (*Client, error) {
 
 		decompressor: newDecompressor(),
 
-		coordinators:  make(map[coordinatorKey]int32),
-		unknownTopics: make(map[string]*unknownTopicProduces),
+		coordinators: make(map[coordinatorKey]int32),
 
-		updateMetadataCh:    make(chan struct{}, 1),
-		updateMetadataNowCh: make(chan struct{}, 1),
-		metadone:            make(chan struct{}),
+		updateMetadataCh:     make(chan struct{}, 1),
+		updateMetadataNowCh:  make(chan struct{}, 1),
+		blockingMetadataFnCh: make(chan func()),
+		metadone:             make(chan struct{}),
 	}
 	cl.producer.init()
 	cl.consumer.init(cl)
-	cl.topics.Store(make(map[string]*topicPartitions))
 	cl.metawait.init()
 
 	if cfg.id != nil {

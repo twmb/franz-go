@@ -55,7 +55,7 @@ func (b *balancer) newGraph(
 	return g
 }
 
-func (g *graph) changeOwnership(edge uint32, newDst uint16) {
+func (g *graph) changeOwnership(edge int32, newDst uint16) {
 	g.cxns[edge] = newDst
 }
 
@@ -95,11 +95,8 @@ func (g *graph) findSteal(from uint16) ([]stealSegment, bool) {
 		current.done = true
 
 		for _, topicNum := range g.out[current.node] {
-			// Even if we create a partition here for a topic that
-			// no longer exists, it does not matter because we will
-			// not loop at all below.
 			info := g.b.topicInfos[topicNum]
-			firstPartNum, lastPartNum := info.partNum, info.partNum+uint32(info.partitions)
+			firstPartNum, lastPartNum := info.partNum, info.partNum+info.partitions
 			for edge := firstPartNum; edge < lastPartNum; edge++ {
 				neighborNode := g.cxns[edge]
 				neighbor, isNew := g.getScore(neighborNode)
@@ -108,6 +105,9 @@ func (g *graph) findSteal(from uint16) ([]stealSegment, bool) {
 				}
 
 				gscore := current.gscore + 1
+				// If our neghbor gscore is less or equal, then we can
+				// reach the neighbor through a previous route we have
+				// tried and should not try again.
 				if gscore < neighbor.gscore {
 					neighbor.parent = current
 					neighbor.srcEdge = edge
@@ -116,8 +116,10 @@ func (g *graph) findSteal(from uint16) ([]stealSegment, bool) {
 					if isNew {
 						heap.Push(rem, neighbor)
 					}
-					// We never need to fix the heap position; it is
-					// not possible for us to find a lower score.
+					// We never need to fix the heap position.
+					// Our level and fscore is static, and once
+					// we set gscore, it is the minumum it will be
+					// and we never revisit this neighbor.
 				}
 			}
 		}
@@ -129,39 +131,36 @@ func (g *graph) findSteal(from uint16) ([]stealSegment, bool) {
 type stealSegment struct {
 	src  uint16 // member num
 	dst  uint16 // member num
-	part uint32 // partNum
+	part int32  // partNum
 }
 
 type pathScore struct {
 	done    bool
 	node    uint16 // member num
 	parent  *pathScore
-	srcEdge uint32 // partNum
-	level   int32  // partitions owned on this segment
-	gscore  int32
+	srcEdge int32 // partNum
+	level   int32 // partitions owned on this segment
+	gscore  int32 // how many steals it would take to get here
 	fscore  int32
 }
 
 type pathScores []pathScore
 
 const infinityScore = 1<<31 - 1
-const noScore = 1<<31 - 1
+const noScore = -1
 
 // For A*, if we never overestimate (with h), then the path we find is
 // optimal. A true estimation of our distance to any node is the node's
-// level minus ours. However, we do not actually know what we want to
-// steal; we do not know what we are searching for.
-//
-// If we have a neighbor 10 levels up, it makes more sense to steal
-// from that neighbor than one 5 levels up.
+// level minus ours.
 //
 // At worst, our target must be +2 levels from us. So, our estimation
-// any node can be our level, +2, minus theirs. This allows neighbor
-// nodes that _are_ 10 levels higher to flood out any bad path and to
-// jump to the top of the priority queue. If there is no high level
-// to steal from, our estimator works normally.
+// any node can be our level, +2, minus theirs.
 func h(first, target *pathScore) int32 {
-	return first.level + 2 - target.level
+	r := first.level + 2 - target.level
+	if r < 0 {
+		return 0
+	}
+	return r
 }
 
 func (g *graph) getScore(node uint16) (*pathScore, bool) {
@@ -184,14 +183,14 @@ func (p *pathHeap) Len() int { return len(*p) }
 func (p *pathHeap) Swap(i, j int) {
 	h := *p
 	h[i], h[j] = h[j], h[i]
-
 }
 
 func (p *pathHeap) Less(i, j int) bool {
 	l, r := (*p)[i], (*p)[j]
-	return l.fscore < r.fscore ||
-		l.fscore == r.fscore &&
-			l.node < r.node
+	return l.level > r.level || l.level == r.level &&
+		(l.fscore < r.fscore || l.fscore == r.fscore &&
+			(l.gscore < r.gscore || l.gscore == r.gscore &&
+				l.node < r.node))
 }
 
 func (p *pathHeap) Push(x interface{}) { *p = append(*p, x.(*pathScore)) }

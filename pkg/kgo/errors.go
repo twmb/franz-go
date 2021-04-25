@@ -38,6 +38,8 @@ var (
 	// stopped due to a concurrent metadata response.
 	errChosenBrokerDead = errors.New("the internal broker struct chosen to issue this requesthas died--either the broker id is migrating or no longer exists")
 
+	errProducerIDLoadFail = errors.New("unable to initialize a producer ID due to request retry limits")
+
 	// A temporary error returned when Kafka replies with a different
 	// correlation ID than we were expecting for the request the client
 	// issued.

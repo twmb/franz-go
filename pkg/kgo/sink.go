@@ -2,6 +2,7 @@ package kgo
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"hash/crc32"
@@ -85,7 +86,7 @@ func (s *sink) createReq(producerID int64, producerEpoch int16) (*produceRequest
 
 		producerID:    producerID,
 		producerEpoch: producerEpoch,
-		idempotent:    !s.cl.cfg.disableIdempotency,
+		idempotent:    s.cl.idempotent(),
 
 		compressor: s.cl.compressor,
 
@@ -191,7 +192,7 @@ func (s *sink) maybeBackoff() {
 	}
 	defer s.clearBackoff()
 
-	s.cl.triggerUpdateMetadata() // as good a time as any
+	s.cl.triggerUpdateMetadata(false) // as good a time as any
 
 	tries := int(atomic.AddUint32(&s.consecutiveFailures, 1))
 	after := time.NewTimer(s.cl.cfg.retryBackoff(tries))
@@ -231,8 +232,8 @@ func (s *sink) drain() {
 		time.Sleep(5 * time.Millisecond)
 	}
 
-	s.cl.producer.incDrains()
-	defer s.cl.producer.decDrains()
+	s.cl.producer.incWorkers()
+	defer s.cl.producer.decWorkers()
 
 	again := true
 	for again {
@@ -264,20 +265,30 @@ func (s *sink) produce(sem <-chan struct{}) bool {
 	}()
 
 	// producerID can fail from:
+	// - retry failure
 	// - auth failure
 	// - transactional: a produce failure that failed the producer ID
 	// - AddPartitionsToTxn failure (see just below)
-	// All of these are fatal. Recovery may be possible with EndTransaction
-	// in specific cases, but regardless, all buffered records must fail.
+	//
+	// All but the first error is fatal. Recovery may be possible with
+	// EndTransaction in specific cases, but regardless, all buffered
+	// records must fail.
 	//
 	// We init the producer ID before creating a request to ensure we are
 	// always using the latest id/epoch with the proper sequence numbers.
 	id, epoch, err := s.cl.producerID()
 	if err != nil {
-		if err != errClientClosing {
+		switch err {
+		case errProducerIDLoadFail:
+			s.cl.bumpRepeatedLoadErr(err)
+			s.cl.cfg.logger.Log(LogLevelWarn, "unable to load producer ID, bumping client's buffered record load errors by 1 and retrying")
+			return true // whatever caused our produce, we did nothing, so keep going
+		default:
 			s.cl.cfg.logger.Log(LogLevelError, "fatal InitProducerID error, failing all buffered records", "broker", s.nodeID, "err", err)
+			fallthrough
+		case errClientClosing:
+			s.cl.failBufferedRecords(err)
 		}
-		s.cl.failBufferedRecords(err)
 		return false
 	}
 
@@ -289,6 +300,7 @@ func (s *sink) produce(sem <-chan struct{}) bool {
 
 	if txnReq != nil {
 		// txnReq can fail from:
+		// - retry failure
 		// - auth failure
 		// - producer id mapping / epoch errors
 		// The latter case can potentially recover with the kip logic
@@ -297,9 +309,16 @@ func (s *sink) produce(sem <-chan struct{}) bool {
 		// We do not need to clear the addedToTxn flag for any recBuf
 		// it was set on, since producer id recovery resets the flag.
 		if err := s.doTxnReq(req, txnReq); err != nil {
-			s.cl.failProducerID(id, epoch, err)
-			s.cl.cfg.logger.Log(LogLevelError, "fatal AddPartitionsToTxn error, failing all buffered records (it is possible the client can recover after EndTransaction)", "broker", s.nodeID, "err", err)
-			s.cl.failBufferedRecords(err)
+			switch {
+			case isRetriableBrokerErr(err):
+				s.cl.bumpRepeatedLoadErr(err)
+				s.cl.cfg.logger.Log(LogLevelWarn, "unable to AddPartitionsToTxn due to retriable broker err, bumping client's buffered record load errors by 1 and retrying", "err", err)
+				return moreToDrain || len(req.batches) > 0
+			default:
+				s.cl.failProducerID(id, epoch, err)
+				s.cl.cfg.logger.Log(LogLevelError, "fatal AddPartitionsToTxn error, failing all buffered records (it is possible the client can recover after EndTransaction)", "broker", s.nodeID, "err", err)
+				s.cl.failBufferedRecords(err)
+			}
 			return false
 		}
 	}
@@ -310,18 +329,20 @@ func (s *sink) produce(sem <-chan struct{}) bool {
 
 	req.backoffSeq = s.backoffSeq // safe to read outside mu since we are in drain loop
 
-	// Add that we are issuing and then check if we are aborting: this
+	// Add that we are working and then check if we are aborting: this
 	// order ensures that we will do not produce after aborting is set.
-	s.cl.producer.incDrains()
-	if s.cl.producer.isAborting() {
-		s.cl.producer.decDrains()
+	p := &s.cl.producer
+	p.incWorkers()
+	if p.isAborting() {
+		p.decWorkers()
 		return false
 	}
 
 	produced = true
 	s.doSequenced(req, func(resp kmsg.Response, err error) {
+		s.lastRespSuccessful = err == nil
 		s.handleReqResp(req, resp, err)
-		s.cl.producer.decDrains()
+		p.decWorkers()
 		<-sem
 	})
 	return moreToDrain
@@ -381,15 +402,9 @@ func (s *sink) doTxnReq(
 	req *produceRequest,
 	txnReq *kmsg.AddPartitionsToTxnRequest,
 ) error {
-start:
-	err := s.cl.doWithConcurrentTransactions("AddPartitionsToTxn", func() error {
+	return s.cl.doWithConcurrentTransactions("AddPartitionsToTxn", func() error {
 		return s.issueTxnReq(req, txnReq)
 	})
-	if isRetriableBrokerErr(err) {
-		s.cl.cfg.logger.Log(LogLevelWarn, "AddPartitionsToTxn repeatedly failed, last failure is retriable broker err, retrying issue", "broker", s.nodeID, "err", err)
-		goto start
-	}
-	return err
 }
 
 func (s *sink) issueTxnReq(
@@ -398,10 +413,8 @@ func (s *sink) issueTxnReq(
 ) error {
 	resp, err := txnReq.RequestWith(s.cl.ctx, s.cl)
 	if err != nil {
-		s.lastRespSuccessful = false
 		return err
 	}
-	s.lastRespSuccessful = true
 
 	for _, topic := range resp.Topics {
 		topicBatches, ok := req.batches[topic.Topic]
@@ -449,7 +462,7 @@ func (s *sink) issueTxnReq(
 // Resets the drain indices for any first-batch.
 func (s *sink) requeueUnattemptedReq(req *produceRequest, err error) {
 	var maybeDrain bool
-	req.batches.tryResetFailingBatchesWith(&s.cl.cfg, func(seqRecBatch) {
+	req.batches.tryResetFailingBatchesWith(&s.cl.cfg, false, func(seqRecBatch) {
 		maybeDrain = true
 	})
 	if maybeDrain {
@@ -488,7 +501,7 @@ func (s *sink) handleReqClientErr(req *produceRequest, err error) {
 	case err == errChosenBrokerDead:
 		// A dead broker means the broker may have migrated, so we
 		// retry to force a metadata reload.
-		s.handleRetryBatches(req.batches)
+		s.handleRetryBatches(req.batches, req.backoffSeq, false, false)
 
 	case err == errClientClosing:
 		s.cl.failBufferedRecords(errClientClosing)
@@ -607,10 +620,10 @@ func (s *sink) handleReqResp(req *produceRequest, resp kmsg.Response, err error)
 
 	if len(req.batches) > 0 {
 		s.cl.cfg.logger.Log(LogLevelError, "Kafka did not reply to all topics / partitions in the produce request! reenqueuing missing partitions", "broker", s.nodeID)
-		s.handleRetryBatches(req.batches)
+		s.handleRetryBatches(req.batches, 0, true, false)
 	}
 	if len(reqRetry) > 0 {
-		s.handleRetryBatches(reqRetry)
+		s.handleRetryBatches(reqRetry, 0, true, true)
 	}
 }
 
@@ -655,6 +668,10 @@ func (s *sink) handleReqRespBatch(
 		}
 		return false
 	}
+
+	// Since we have received a response and we are the first batch, we can
+	// at this point re-enable failing from load errors.
+	batch.canFailFromLoadErrs = true
 
 	err := kerr.ErrorForCode(errorCode)
 	switch {
@@ -772,7 +789,7 @@ func (s *sink) handleReqRespBatch(
 				"partition", partition,
 				"err", err,
 				"err_is_retriable", kerr.IsRetriable(err),
-				"max_retries_reached", batch.tries == s.cl.cfg.produceRetries,
+				"max_retries_reached", batch.tries >= s.cl.cfg.produceRetries,
 			)
 		} else {
 		}
@@ -835,14 +852,31 @@ func (cl *Client) finishBatch(batch *recBatch, producerID int64, producerEpoch i
 
 // handleRetryBatches sets any first-buf-batch to failing and triggers a
 // metadata that will eventually clear the failing state and re-drain.
-func (s *sink) handleRetryBatches(retry seqRecBatches) {
+func (s *sink) handleRetryBatches(
+	retry seqRecBatches,
+	backoffSeq uint32,
+	updateMeta bool, // if we should maybe update the metadata
+	canFail bool, // if records can fail if they are at limits
+) {
 	var needsMetaUpdate bool
-	retry.tryResetFailingBatchesWith(&s.cl.cfg, func(batch seqRecBatch) {
-		batch.owner.failing = true
-		needsMetaUpdate = true
+	retry.tryResetFailingBatchesWith(&s.cl.cfg, canFail, func(batch seqRecBatch) {
+		if updateMeta {
+			batch.owner.failing = true
+			needsMetaUpdate = true
+		}
 	})
+
+	// If we are retrying without a metadata update, then we definitely
+	// want to backoff a little bit: our chosen broker died, let's not
+	// spin-loop re-requesting.
+	//
+	// If we do want to metadata update, we only do so if any batch was the
+	// first batch in its buf / not concurrently failed.
 	if needsMetaUpdate {
-		s.cl.triggerUpdateMetadata()
+		s.cl.triggerUpdateMetadata(true)
+	} else if !updateMeta {
+		s.maybeTriggerBackoff(backoffSeq)
+		s.maybeDrain()
 	}
 }
 
@@ -1076,12 +1110,13 @@ func (recBuf *recBuf) bumpRepeatedLoadErr(err error) {
 	if len(recBuf.batches) == 0 {
 		return
 	}
+	recBuf.cl.cfg.logger.Log(LogLevelWarn, "produce partition load error, unable to produce on this partition", "broker", recBuf.sink.nodeID, "topic", recBuf.topic, "partition", recBuf.partition, "err", err)
 	batch0 := recBuf.batches[0]
 	batch0.tries++
-	if !recBuf.cl.idempotent() && (batch0.tries > recBuf.cl.cfg.produceRetries || !kerr.IsRetriable(err)) {
+	if (!recBuf.cl.idempotent() || batch0.canFailFromLoadErrs) &&
+		(batch0.isTimedOut(recBuf.cl.cfg.recordTimeout) || batch0.tries > recBuf.cl.cfg.produceRetries || !kerr.IsRetriable(err)) {
 		recBuf.failAllRecords(err)
 	}
-	recBuf.cl.cfg.logger.Log(LogLevelWarn, "produce partition load error, unable to produce on this partition", "broker", recBuf.sink.nodeID, "topic", recBuf.topic, "partition", recBuf.partition, "err", err)
 }
 
 // failAllRecords fails all buffered records in this recBuf.
@@ -1136,6 +1171,7 @@ func (recBuf *recBuf) resetBatchDrainIdx() {
 // promisedRec ties a record with the callback that will be called once
 // a batch is finally written and receives a response.
 type promisedRec struct {
+	ctx     context.Context
 	promise func(*Record, error)
 	*Record
 }
@@ -1151,6 +1187,14 @@ type recBatch struct {
 	owner *recBuf // who owns us
 
 	tries int64 // if this was sent before and is thus now immutable
+
+	// We can only fail a batch if we have never issued it, or we have
+	// issued it and have received a response. If we do not receive a
+	// response, we cannot know whether we actually wrote bytes that Kafka
+	// processed or not. So, we set this to false every time we issue a
+	// request with this batch, and then reset it to true whenever we
+	// process a response.
+	canFailFromLoadErrs bool
 
 	wireLength   int32 // tracks total size this batch would currently encode as, including length prefix
 	v1wireLength int32 // same as wireLength, but for message set v1
@@ -1205,6 +1249,8 @@ func (recBuf *recBuf) newRecordBatch() *recBatch {
 		owner:      recBuf,
 		records:    make([]promisedNumberedRecord, 0, 10),
 		wireLength: recordBatchOverhead,
+
+		canFailFromLoadErrs: true, // until we send this batch, we can fail it
 	}
 }
 
@@ -1282,12 +1328,25 @@ func (r *produceRequest) tryAddBatch(produceVersion int32, recBuf *recBuf, batch
 		return false
 	}
 
-	if recBuf.needSeqReset && recBuf.batches[0] == batch {
-		recBuf.seq = 0
-		recBuf.batch0Seq = 0
+	if recBuf.batches[0] == batch {
+		if batch.canFailFromLoadErrs {
+			ctx := batch.records[0].ctx
+			select {
+			case <-ctx.Done():
+				recBuf.failAllRecords(ctx.Err())
+				return false
+			default:
+			}
+		}
+		if recBuf.needSeqReset {
+			recBuf.needSeqReset = false
+			recBuf.seq = 0
+			recBuf.batch0Seq = 0
+		}
 	}
 
 	batch.tries++
+	batch.canFailFromLoadErrs = false
 	r.wireLength += batchWireLength
 	r.batches.addBatch(
 		recBuf.topic,
@@ -1334,12 +1393,12 @@ func (rbs *seqRecBatches) addSeqBatch(topic string, part int32, batch seqRecBatc
 //
 // If idempotency is disabled, if a batch is timed out or hit the retry limit,
 // we fail it and anything after it.
-func (rbs seqRecBatches) tryResetFailingBatchesWith(cfg *cfg, fn func(seqRecBatch)) {
+func (rbs seqRecBatches) tryResetFailingBatchesWith(cfg *cfg, canFail bool, fn func(seqRecBatch)) {
 	for _, partitions := range rbs {
 		for _, batch := range partitions {
 			batch.owner.mu.Lock()
 			if batch.isOwnersFirstBatch() {
-				if cfg.disableIdempotency {
+				if canFail || cfg.disableIdempotency {
 					var err error
 					if batch.isTimedOut(cfg.recordTimeout) {
 						err = errRecordTimeout

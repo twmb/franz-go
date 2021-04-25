@@ -45,6 +45,8 @@ func ConsumeTopicsRegex() DirectConsumeOpt {
 }
 
 type directConsumer struct {
+	tps *topicsPartitions // data for topics that the user assigned
+
 	topics     map[string]Offset
 	partitions map[string]map[int32]Offset
 
@@ -71,6 +73,7 @@ func (cl *Client) AssignPartitions(opts ...DirectConsumeOpt) {
 	}
 
 	d := &directConsumer{
+		tps:        newTopicsPartitions(),
 		topics:     make(map[string]Offset),
 		partitions: make(map[string]map[int32]Offset),
 		reTopics:   make(map[string]Offset),
@@ -84,9 +87,8 @@ func (cl *Client) AssignPartitions(opts ...DirectConsumeOpt) {
 		return
 	}
 
-	c.storeDirect(d)
-
-	defer cl.triggerUpdateMetadata()
+	defer c.storeDirect(d)
+	defer cl.triggerUpdateMetadata(true) // we definitely want to trigger a metadata update
 
 	if d.regexTopics {
 		return
@@ -99,14 +101,13 @@ func (cl *Client) AssignPartitions(opts ...DirectConsumeOpt) {
 	for topic := range d.partitions {
 		topics = append(topics, topic)
 	}
-	cl.storeTopics(topics)
+	d.tps.storeTopics(topics)
 }
 
 // findNewAssignments returns new partitions to consume at given offsets
 // based off the current topics.
-func (d *directConsumer) findNewAssignments(
-	topics map[string]*topicPartitions,
-) map[string]map[int32]Offset {
+func (d *directConsumer) findNewAssignments() map[string]map[int32]Offset {
+	topics := d.tps.load()
 	// First, we build everything we could theoretically want to consume.
 	toUse := make(map[string]map[int32]Offset, 10)
 	for topic, topicPartitions := range topics {

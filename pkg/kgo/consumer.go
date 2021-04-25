@@ -182,15 +182,36 @@ func (c *consumer) unsetAndWait() (wasDead bool) {
 	return wasDead
 }
 
-// unset, called under the assign mu, transitions the group to the unset
+// unset, called under the assign mu, transitions the consumer to the unset
 // state, invalidating old assignments and leaving a group if it was in one.
 //
 // This returns a function to wait for a group to be left, if in one.
 func (c *consumer) unset() (wasDead bool, wait func()) {
+	// Unsetting means all old cursors are useless. Before we return, we
+	// delete all old cursors. This is especially important in the context
+	// of a new assignment, which will create new cursors that may
+	// duplicate our old.
+	//
+	// Note that this is happening outside of the context of a valid
+	// consumer session, so we do not need to worry about much else.
+	//
+	// Since we are blocking metadata, sinksAndSources cannot be modified
+	// concurrently and we do not need a lock.
+	cl := c.cl
+	defer cl.blockingMetadataFn(func() {
+		for _, sns := range cl.sinksAndSources {
+			s := sns.source
+			s.cursorsMu.Lock()
+			s.cursors = nil
+			s.cursorsStart = 0
+			s.cursorsMu.Unlock()
+		}
+	})
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	c.assignPartitions(nil, assignInvalidateAll)
+	c.assignPartitions(nil, assignInvalidateAll, noTopicsPartitions)
 
 	prior := c.loadKind()
 	wasDead = prior == consumerDeadSentinel
@@ -390,22 +411,28 @@ func (h assignHow) String() string {
 
 // assignPartitions, called under the consumer's mu, is used to set new
 // cursors or add to the existing cursors.
-func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how assignHow) {
+func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how assignHow, tps *topicsPartitions) {
 	var session *consumerSession
 	var loadOffsets listOrEpochLoads
+	if how == assignInvalidateAll {
+		tps = nil
+	}
 	defer func() {
 		if session == nil { // if nil, we stopped the session
-			session = c.startNewSession()
+			session = c.startNewSession(tps)
 		}
-		loadOffsets.loadWithSessionNow(session)
+		loadOffsets.loadWithSession(session) // odds are this assign came from a metadata update, so no reason to force a refresh with loadWithSessionNow
 	}()
 
 	if how == assignWithoutInvalidating {
-		session = c.guardSessionChange()
+		// Guarding a session change can actually create a new session
+		// if we had no session before, which is why we need to pass in
+		// our topicPartitions.
+		session = c.guardSessionChange(tps)
 		defer c.unguardSessionChange()
 
 	} else {
-		loadOffsets = c.stopSession()
+		loadOffsets, _ = c.stopSession()
 
 		// First, over all cursors currently in use, we unset them or set them
 		// directly as appropriate. Anything we do not unset, we keep.
@@ -470,15 +497,13 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how
 
 	c.cl.cfg.logger.Log(LogLevelDebug, "assign requires loading offsets")
 
-	clientTopics := c.cl.loadTopics()
+	topics := tps.load()
 	for topic, partitions := range assignments {
-
-		topicPartitions := clientTopics[topic] // should be non-nil
+		topicPartitions := topics.loadTopic(topic) // should be non-nil
 		if topicPartitions == nil {
 			c.cl.cfg.logger.Log(LogLevelError, "BUG! consumer was assigned topic that we did not ask for in AssignGroup nor AssignDirect, skipping!", "topic", topic)
 			continue
 		}
-		topicParts := topicPartitions.load()
 
 		for partition, offset := range partitions {
 			// First, if the request is exact, get rid of the relative
@@ -513,8 +538,8 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how
 			// If an offset is unspecified or we have not loaded
 			// the partition, we list offsets to find out what to
 			// use.
-			if offset.at >= 0 && partition >= 0 && partition < int32(len(topicParts.partitions)) {
-				part := topicParts.partitions[partition]
+			if offset.at >= 0 && partition >= 0 && partition < int32(len(topicPartitions.partitions)) {
+				part := topicPartitions.partitions[partition]
 				cursor := part.cursor
 				cursor.setOffset(cursorOffset{
 					offset:            offset.at,
@@ -545,15 +570,19 @@ func (c *consumer) doOnMetadataUpdate() {
 	// block below.
 	if c.outstandingMetadataUpdates.maybeBegin() {
 		doUpdate := func() {
+			// We forbid reassignments while we do a quick check for
+			// new assignments--for the direct consumer particularly,
+			// this prevents TOCTOU.
+			c.mu.Lock()
+			defer c.mu.Unlock()
+
 			switch t := c.loadKind().(type) {
 			case *directConsumer:
-				if new := t.findNewAssignments(c.cl.loadTopics()); len(new) > 0 {
-					c.mu.Lock()
-					c.assignPartitions(new, assignWithoutInvalidating)
-					c.mu.Unlock()
+				if new := t.findNewAssignments(); len(new) > 0 {
+					c.assignPartitions(new, assignWithoutInvalidating, t.tps)
 				}
 			case *groupConsumer:
-				t.findNewAssignments(c.cl.loadTopics())
+				t.findNewAssignments()
 			}
 
 			go c.loadSession().doOnMetadataUpdate()
@@ -720,11 +749,13 @@ func (l listOrEpochLoads) loadWithSession(s *consumerSession) {
 	}
 }
 
-func (l listOrEpochLoads) loadWithSessionNow(s *consumerSession) {
+func (l listOrEpochLoads) loadWithSessionNow(s *consumerSession) bool {
 	if !l.isEmpty() {
 		s.incWorker()
 		go s.listOrEpoch(l, true)
+		return true
 	}
+	return false
 }
 
 // A consumer session is responsible for an era of fetching records for a set
@@ -736,6 +767,10 @@ type consumerSession struct {
 
 	ctx    context.Context
 	cancel func()
+
+	// tps tracks the topics that were assigned in this session. We use
+	// this field to build and handle list offset / load epoch requests.
+	tps *topicsPartitions
 
 	// desireFetchCh is sized to the number of concurrent fetches we are
 	// configured to be able to send.
@@ -760,17 +795,22 @@ type consumerSession struct {
 	listOrEpochLoadsLoading listOrEpochLoads
 }
 
-func (c *consumer) newConsumerSession() *consumerSession {
+func (c *consumer) newConsumerSession(tps *topicsPartitions) *consumerSession {
+	if tps == nil || len(tps.load()) == 0 {
+		return noConsumerSession
+	}
 	ctx, cancel := context.WithCancel(c.cl.ctx)
 	session := &consumerSession{
 		c: c,
 
+		ctx:    ctx,
+		cancel: cancel,
+
+		tps: tps,
+
 		desireFetchCh:      make(chan chan chan struct{}, 8),
 		cancelFetchCh:      make(chan chan chan struct{}, 4),
 		allowedConcurrency: c.cl.cfg.allowedConcurrentFetches,
-
-		ctx:    ctx,
-		cancel: cancel,
 	}
 	session.workersCond = sync.NewCond(&session.workersMu)
 	return session
@@ -863,7 +903,7 @@ func (c *consumer) loadSession() *consumerSession {
 // The purpose of this function is when performing additive-only changes to an
 // existing session, because additive-only changes can avoid killing a running
 // session.
-func (c *consumer) guardSessionChange() *consumerSession {
+func (c *consumer) guardSessionChange(tps *topicsPartitions) *consumerSession {
 	c.sessionChangeMu.Lock()
 
 	session := c.loadSession()
@@ -871,7 +911,7 @@ func (c *consumer) guardSessionChange() *consumerSession {
 		// If there is no session, we simply store one. This is fine;
 		// sources will be able to begin a fetch loop, but they will
 		// have no cursors to consume yet.
-		session = c.newConsumerSession()
+		session = c.newConsumerSession(tps)
 		c.session.Store(session)
 	}
 
@@ -885,13 +925,13 @@ func (c *consumer) unguardSessionChange() {
 // all fetching, listing, offset for leader epoching is complete. This
 // invalidates any buffered fetches for the previous session and returns any
 // partitions that were listing offsets or loading epochs.
-func (c *consumer) stopSession() listOrEpochLoads {
+func (c *consumer) stopSession() (listOrEpochLoads, *topicsPartitions) {
 	c.sessionChangeMu.Lock()
 
 	session := c.loadSession()
 
 	if session == noConsumerSession {
-		return listOrEpochLoads{} // we had no session
+		return listOrEpochLoads{}, noTopicsPartitions // we had no session
 	}
 
 	// Before storing noConsumerSession, cancel our old. This pairs
@@ -938,12 +978,12 @@ func (c *consumer) stopSession() listOrEpochLoads {
 	// can act on errors. The session is dead.
 
 	session.listOrEpochLoadsWaiting.mergeFrom(session.listOrEpochLoadsLoading)
-	return session.listOrEpochLoadsWaiting
+	return session.listOrEpochLoadsWaiting, session.tps
 }
 
 // Starts a new consumer session, allowing fetches to happen.
-func (c *consumer) startNewSession() *consumerSession {
-	session := c.newConsumerSession()
+func (c *consumer) startNewSession(tps *topicsPartitions) *consumerSession {
+	session := c.newConsumerSession(tps)
 	c.session.Store(session)
 
 	// At this point, sources can start consuming.
@@ -969,10 +1009,11 @@ func (c *consumer) startNewSession() *consumerSession {
 func (s *consumerSession) listOrEpoch(waiting listOrEpochLoads, immediate bool) {
 	defer s.decWorker()
 
+	wait := true
 	if immediate {
 		s.c.cl.triggerUpdateMetadataNow()
 	} else {
-		s.c.cl.triggerUpdateMetadata()
+		wait = s.c.cl.triggerUpdateMetadata(false) // avoid trigger if within refresh interval
 	}
 
 	s.listOrEpochMu.Lock() // collapse any listOrEpochs that occur during meta update into one
@@ -985,10 +1026,12 @@ func (s *consumerSession) listOrEpoch(waiting listOrEpochLoads, immediate bool) 
 	s.listOrEpochMetaCh = make(chan struct{}, 1)
 	s.listOrEpochMu.Unlock()
 
-	select {
-	case <-s.ctx.Done():
-		return
-	case <-s.listOrEpochMetaCh:
+	if wait {
+		select {
+		case <-s.ctx.Done():
+			return
+		case <-s.listOrEpochMetaCh:
+		}
 	}
 
 	s.listOrEpochMu.Lock()
@@ -1007,11 +1050,11 @@ func (s *consumerSession) listOrEpoch(waiting listOrEpochLoads, immediate bool) 
 		s.c.cl.cfg.logger.Log(LogLevelDebug, "offsets to load broker", "broker", broker.meta.NodeID, "load", brokerLoad)
 		if len(brokerLoad.list) > 0 {
 			issued++
-			go s.c.cl.listOffsetsForBrokerLoad(s.ctx, broker, brokerLoad.list, results)
+			go s.c.cl.listOffsetsForBrokerLoad(s.ctx, broker, brokerLoad.list, s.tps, results)
 		}
 		if len(brokerLoad.epoch) > 0 {
 			issued++
-			go s.c.cl.loadEpochsForBrokerLoad(s.ctx, broker, brokerLoad.epoch, results)
+			go s.c.cl.loadEpochsForBrokerLoad(s.ctx, broker, brokerLoad.epoch, s.tps, results)
 		}
 	}
 
@@ -1032,16 +1075,24 @@ func (s *consumerSession) listOrEpoch(waiting listOrEpochLoads, immediate bool) 
 // Called within a consumer session, this function handles results from list
 // offsets or epoch loads.
 func (s *consumerSession) handleListOrEpochResults(loaded loadedOffsets) {
-	var (
-		// Retriable errors are retried immediately, while
-		// non-retriable errors are retried after a 1s backoff. It is
-		// unlikely that the client will be able to recover, but we may
-		// as well fetch every second to (a) force the user to notice
-		// errors, and (b) allow the user to auth the client at
-		// runtime.
-		reloads     listOrEpochLoads
-		slowReloads listOrEpochLoads
-	)
+	// All errors are retried after a 1s backoff. We either have request
+	// level retriable errors (unknown partition, etc) or non-retriable
+	// errors (auth), or we have request issuing errors (no dial,
+	// connection cut repeatedly).
+	//
+	// For retriable request errors, we may as well back off a little bit
+	// to allow Kafka to harmonize if the topic exists / etc.
+	//
+	// For non-retriable request errors, we may as well retry to both (a)
+	// allow the user more signals about a problem that they can maybe fix
+	// within Kafka (i.e. the auth), and (b) force the user to notice
+	// errors.
+	//
+	// For request issuing errors, we may as well continue to retry because
+	// there is not much else we can do. RequestWith already retries, but
+	// returns when the retry limit is hit. We will backoff 1s and then
+	// allow RequestWith to continue requesting and backing off.
+	var reloads listOrEpochLoads
 	defer func() {
 		// When we are done handling results, we have finished loading
 		// all the topics and partitions. We remove them from tracking
@@ -1052,21 +1103,17 @@ func (s *consumerSession) handleListOrEpochResults(loaded loadedOffsets) {
 		}
 		s.listOrEpochMu.Unlock()
 
-		// We now add our immediate reloads back to the session. We are
-		// still in the context of the live session itself because this
-		// handling function is run with a session worker.
-		reloads.loadWithSession(s)
-		if !slowReloads.isEmpty() {
+		if !reloads.isEmpty() {
 			s.incWorker()
 			go func() {
-				// Before we dec our worker, we must add the slow
+				// Before we dec our worker, we must add the
 				// reloads back into the session's waiting loads.
 				// Doing so allows a concurrent stopSession to
 				// track the waiting loads, whereas if we did not
 				// add things back to the session, we could abandon
 				// loading these offsets and have a stuck cursor.
 				defer s.decWorker()
-				defer slowReloads.loadWithSession(s)
+				defer reloads.loadWithSession(s)
 				after := time.NewTimer(time.Second)
 				defer after.Stop()
 				select {
@@ -1097,12 +1144,10 @@ func (s *consumerSession) handleListOrEpochResults(loaded loadedOffsets) {
 			use()
 
 		default: // from ErrorCode in a response
+			reloads.addLoad(load.topic, load.partition, loaded.loadType, load.request)
 			if !kerr.IsRetriable(load.err) && !isRetriableBrokerErr(load.err) { // non-retriable response error; signal such in a response
 				s.c.addFakeReadyForDraining(load.topic, load.partition, load.err)
-				slowReloads.addLoad(load.topic, load.partition, loaded.loadType, load.request)
-				continue
 			}
-			reloads.addLoad(load.topic, load.partition, loaded.loadType, load.request)
 		}
 	}
 }
@@ -1118,8 +1163,7 @@ func (s *consumerSession) mapLoadsToBrokers(loads listOrEpochLoads) map[*broker]
 	brokers := s.c.cl.brokers
 	seed := brokers[unknownSeedID(0)] // must be non-nil
 
-	topics := s.c.cl.loadTopics()
-
+	topics := s.tps.load()
 	for _, loads := range []struct {
 		m        offsetLoadMap
 		loadType listOrEpochLoadType
@@ -1128,7 +1172,7 @@ func (s *consumerSession) mapLoadsToBrokers(loads listOrEpochLoads) map[*broker]
 		{loads.epoch, loadTypeEpoch},
 	} {
 		for topic, partitions := range loads.m {
-			topicPartitions := topics[topic].load()
+			topicPartitions := topics.loadTopic(topic) // this must exist, it not existing would be a bug
 			for partition, offset := range partitions {
 
 				// We default to the first seed broker if we have no loaded
@@ -1194,7 +1238,7 @@ func (l *loadedOffsets) addAll(as []loadedOffset) loadedOffsets {
 	return *l
 }
 
-func (cl *Client) listOffsetsForBrokerLoad(ctx context.Context, broker *broker, load offsetLoadMap, results chan<- loadedOffsets) {
+func (cl *Client) listOffsetsForBrokerLoad(ctx context.Context, broker *broker, load offsetLoadMap, tps *topicsPartitions, results chan<- loadedOffsets) {
 	loaded := loadedOffsets{loadType: loadTypeList}
 
 	kresp, err := broker.waitResp(ctx, load.buildListReq(cl.cfg.isolationLevel))
@@ -1203,6 +1247,7 @@ func (cl *Client) listOffsetsForBrokerLoad(ctx context.Context, broker *broker, 
 		return
 	}
 
+	topics := tps.load()
 	resp := kresp.(*kmsg.ListOffsetsResponse)
 	for _, rTopic := range resp.Topics {
 		topic := rTopic.Topic
@@ -1211,6 +1256,7 @@ func (cl *Client) listOffsetsForBrokerLoad(ctx context.Context, broker *broker, 
 			continue // should not happen: kafka replied with something we did not ask for
 		}
 
+		topicPartitions := topics.loadTopic(topic) // must be non-nil at this point
 		for _, rPartition := range rTopic.Partitions {
 			partition := rPartition.Partition
 			loadPart, ok := loadParts[partition]
@@ -1228,7 +1274,6 @@ func (cl *Client) listOffsetsForBrokerLoad(ctx context.Context, broker *broker, 
 				continue // partition err: handled in results
 			}
 
-			topicPartitions := cl.loadTopics()[topic].load()
 			if partition < 0 || partition >= int32(len(topicPartitions.partitions)) {
 				continue // should not happen: we have not seen this partition from a metadata response
 			}
@@ -1264,7 +1309,7 @@ func (cl *Client) listOffsetsForBrokerLoad(ctx context.Context, broker *broker, 
 	results <- loaded.addAll(load.errToLoaded(kerr.UnknownTopicOrPartition))
 }
 
-func (cl *Client) loadEpochsForBrokerLoad(ctx context.Context, broker *broker, load offsetLoadMap, results chan<- loadedOffsets) {
+func (cl *Client) loadEpochsForBrokerLoad(ctx context.Context, broker *broker, load offsetLoadMap, tps *topicsPartitions, results chan<- loadedOffsets) {
 	loaded := loadedOffsets{loadType: loadTypeEpoch}
 
 	kresp, err := broker.waitResp(ctx, load.buildEpochReq())
@@ -1278,6 +1323,7 @@ func (cl *Client) loadEpochsForBrokerLoad(ctx context.Context, broker *broker, l
 	// first then an old broker in the middle of a broker roll. For now, we
 	// will just loop retrying until the broker is upgraded.
 
+	topics := tps.load()
 	resp := kresp.(*kmsg.OffsetForLeaderEpochResponse)
 	for _, rTopic := range resp.Topics {
 		topic := rTopic.Topic
@@ -1286,6 +1332,7 @@ func (cl *Client) loadEpochsForBrokerLoad(ctx context.Context, broker *broker, l
 			continue // should not happen: kafka replied with something we did not ask for
 		}
 
+		topicPartitions := topics.loadTopic(topic) // must be non-nil at this point
 		for _, rPartition := range rTopic.Partitions {
 			partition := rPartition.Partition
 			loadPart, ok := loadParts[partition]
@@ -1303,7 +1350,6 @@ func (cl *Client) loadEpochsForBrokerLoad(ctx context.Context, broker *broker, l
 				continue // partition err: handled in results
 			}
 
-			topicPartitions := cl.loadTopics()[topic].load()
 			if partition < 0 || partition >= int32(len(topicPartitions.partitions)) {
 				continue // should not happen: we have not seen this partition from a metadata response
 			}

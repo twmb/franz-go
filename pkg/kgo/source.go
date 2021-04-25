@@ -548,7 +548,7 @@ func (s *source) fetch(consumerSession *consumerSession, doneFetch chan<- struct
 		alreadySentToDoneFetch = true
 		s.session.reset()
 
-		s.cl.triggerUpdateMetadata()
+		s.cl.triggerUpdateMetadata(false) // as good a time as any
 		s.consecutiveFailures++
 		after := time.NewTimer(s.cl.cfg.retryBackoff(s.consecutiveFailures))
 		defer after.Stop()
@@ -652,11 +652,9 @@ func (s *source) fetch(consumerSession *consumerSession, doneFetch chan<- struct
 		s.session.reset()
 	}
 
-	if updateMeta {
+	if updateMeta && !reloadOffsets.loadWithSessionNow(consumerSession) {
 		s.cl.triggerUpdateMetadataNow()
 	}
-
-	reloadOffsets.loadWithSessionNow(consumerSession)
 
 	if len(fetch.Topics) > 0 {
 		buffered = true

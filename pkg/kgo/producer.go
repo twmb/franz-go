@@ -14,6 +14,15 @@ import (
 )
 
 type producer struct {
+	topicsMu sync.Mutex // locked to prevent concurrent updates; reads are always atomic
+	topics   *topicsPartitions
+
+	// unknownTopics buffers all records for topics that are not loaded.
+	// The map is to a pointer to a slice for reasons documented in
+	// waitUnknownTopic.
+	unknownTopicsMu sync.Mutex
+	unknownTopics   map[string]*unknownTopicProduces
+
 	bufferedRecords int64
 
 	id           atomic.Value
@@ -25,8 +34,7 @@ type producer struct {
 	flushing int32 // >0 if flushing, can Flush many times concurrently
 
 	aborting uint32 // 1 means yes
-	drains   int32  // number of sinks draining
-	issues   int32  // number of in flight produce requests
+	workers  int32  // number of sinks draining / number of in flight produce requests
 
 	idMu       sync.Mutex
 	idVersion  int16
@@ -46,6 +54,8 @@ type unknownTopicProduces struct {
 }
 
 func (p *producer) init() {
+	p.topics = newTopicsPartitions()
+	p.unknownTopics = make(map[string]*unknownTopicProduces)
 	p.waitBuffer = make(chan struct{}, 100)
 	p.idVersion = -1
 	p.id.Store(&producerID{
@@ -56,11 +66,8 @@ func (p *producer) init() {
 	p.notifyCond = sync.NewCond(&p.notifyMu)
 }
 
-func (p *producer) incDrains() { atomic.AddInt32(&p.drains, 1) }
-func (p *producer) incIssues() { atomic.AddInt32(&p.issues, 1) }
-
-func (p *producer) decDrains() { p.decAbortNotify(&p.drains) }
-func (p *producer) decIssues() { p.decAbortNotify(&p.issues) }
+func (p *producer) incWorkers() { atomic.AddInt32(&p.workers, 1) }
+func (p *producer) decWorkers() { p.decAbortNotify(&p.workers) }
 
 func (p *producer) decAbortNotify(v *int32) {
 	if atomic.AddInt32(v, -1) != 0 || atomic.LoadUint32(&p.aborting) == 0 {
@@ -90,6 +97,14 @@ func noPromise(*Record, error) {}
 // context or client to quit. If the context / client quits, this returns an
 // error.
 //
+// The context is also used on a per-partition basis. If the context is done
+// for the first record buffered in a partition, and if it is valid to abort
+// records (to avoid invalid sequence numbers), all buffered records for a
+// partition are aborted. The context checked for doneness is always the first
+// buffered record's context. If that record is successfully produced, the
+// context will then be the next first buffered record. The context is only
+// evaluated before writing a produce request.
+//
 // The first buffered record for an unknown topic begins a timeout for the
 // configured record timeout limit; all records buffered within the wait will
 // expire with the same timeout if the topic does not load in time. For
@@ -111,11 +126,13 @@ func (cl *Client) Produce(
 	r *Record,
 	promise func(*Record, error),
 ) error {
-	if cl.cfg.txnID != nil && atomic.LoadUint32(&cl.producer.producingTxn) != 1 {
+	p := &cl.producer
+
+	if cl.cfg.txnID != nil && atomic.LoadUint32(&p.producingTxn) != 1 {
 		return errNotInTransaction
 	}
 
-	if atomic.AddInt64(&cl.producer.bufferedRecords, 1) > cl.cfg.maxBufferedRecords {
+	if atomic.AddInt64(&p.bufferedRecords, 1) > cl.cfg.maxBufferedRecords {
 		// If the client ctx cancels or the produce ctx cancels, we
 		// need to un-count our buffering of this record. As well, to
 		// be safe, we need to drain a slot from the waitBuffer chan,
@@ -124,15 +141,15 @@ func (cl *Client) Produce(
 		// (i.e., pretending we finished this record) and drain the
 		// waitBuffer as normal.
 		drainBuffered := func() {
-			go func() { <-cl.producer.waitBuffer }()
-			cl.finishRecordPromise(promisedRec{noPromise, nil}, nil)
+			go func() { <-p.waitBuffer }()
+			cl.finishRecordPromise(promisedRec{ctx, noPromise, nil}, nil)
 		}
 		if cl.cfg.manualFlushing {
 			drainBuffered()
 			return ErrMaxBuffered
 		}
 		select {
-		case <-cl.producer.waitBuffer:
+		case <-p.waitBuffer:
 		case <-cl.ctx.Done():
 			drainBuffered()
 			return cl.ctx.Err()
@@ -145,23 +162,25 @@ func (cl *Client) Produce(
 	if promise == nil {
 		promise = noPromise
 	}
-	cl.partitionRecord(promisedRec{promise, r})
+	cl.partitionRecord(promisedRec{ctx, promise, r})
 	return nil
 }
 
 func (cl *Client) finishRecordPromise(pr promisedRec, err error) {
+	p := &cl.producer
+
 	// We call the promise before finishing the record; this allows users
 	// of Flush to know that all buffered records are completely done
 	// before Flush returns.
 	pr.promise(pr.Record, err)
 
-	buffered := atomic.AddInt64(&cl.producer.bufferedRecords, -1)
+	buffered := atomic.AddInt64(&p.bufferedRecords, -1)
 	if buffered >= cl.cfg.maxBufferedRecords {
-		go func() { cl.producer.waitBuffer <- struct{}{} }()
-	} else if buffered == 0 && atomic.LoadInt32(&cl.producer.flushing) > 0 {
-		cl.producer.notifyMu.Lock()
-		cl.producer.notifyMu.Unlock()
-		cl.producer.notifyCond.Broadcast()
+		go func() { p.waitBuffer <- struct{}{} }()
+	} else if buffered == 0 && atomic.LoadInt32(&p.flushing) > 0 {
+		p.notifyMu.Lock()
+		p.notifyMu.Unlock()
+		p.notifyCond.Broadcast()
 	}
 }
 
@@ -232,12 +251,14 @@ var errReloadProducerID = errors.New("producer id needs reloading")
 // producing only (no transactions, which are more special). After the first
 // load, this clears all buffered unknown topics.
 func (cl *Client) producerID() (int64, int16, error) {
-	id := cl.producer.id.Load().(*producerID)
-	if id.err == errReloadProducerID {
-		cl.producer.idMu.Lock()
-		defer cl.producer.idMu.Unlock()
+	p := &cl.producer
 
-		if id = cl.producer.id.Load().(*producerID); id.err == errReloadProducerID {
+	id := p.id.Load().(*producerID)
+	if id.err == errReloadProducerID {
+		p.idMu.Lock()
+		defer p.idMu.Unlock()
+
+		if id = p.id.Load().(*producerID); id.err == errReloadProducerID {
 
 			if cl.cfg.disableIdempotency {
 				cl.cfg.logger.Log(LogLevelInfo, "skipping producer id initialization because the client was configured to disable idempotent writes")
@@ -246,7 +267,7 @@ func (cl *Client) producerID() (int64, int16, error) {
 					epoch: -1,
 					err:   nil,
 				}
-				cl.producer.id.Store(id)
+				p.id.Store(id)
 
 				// For the idempotent producer, as specified in KIP-360,
 				// if we had an ID, we can bump the epoch locally.
@@ -259,13 +280,23 @@ func (cl *Client) producerID() (int64, int16, error) {
 					epoch: id.epoch + 1,
 					err:   nil,
 				}
-				cl.producer.id.Store(id)
+				p.id.Store(id)
 
 			} else {
 				newID, keep := cl.doInitProducerID(id.id, id.epoch)
 				if keep {
 					id = newID
-					cl.producer.id.Store(id)
+					p.id.Store(id)
+				} else {
+					// If we are not keeping the producer ID,
+					// we will return our old ID but with a
+					// static error that we can check or bubble
+					// up where needed.
+					id = &producerID{
+						id:    id.id,
+						epoch: id.epoch,
+						err:   errProducerIDLoadFail,
+					}
 				}
 			}
 		}
@@ -284,7 +315,7 @@ func (cl *Client) producerID() (int64, int16, error) {
 // 2.5.0+, it is safe to call this if the producer ID can be reset (KIP-360),
 // in EndTransaction.
 func (cl *Client) resetAllProducerSequences() {
-	for _, tp := range cl.loadTopics() {
+	for _, tp := range cl.producer.topics.load() {
 		for _, p := range tp.load().partitions {
 			p.records.mu.Lock()
 			p.records.needSeqReset = true
@@ -294,10 +325,12 @@ func (cl *Client) resetAllProducerSequences() {
 }
 
 func (cl *Client) failProducerID(id int64, epoch int16, err error) {
-	cl.producer.idMu.Lock()
-	defer cl.producer.idMu.Unlock()
+	p := &cl.producer
 
-	current := cl.producer.id.Load().(*producerID)
+	p.idMu.Lock()
+	defer p.idMu.Unlock()
+
+	current := p.id.Load().(*producerID)
 	if current.id != id || current.epoch != epoch {
 		cl.cfg.logger.Log(LogLevelInfo, "ignoring a fail producer id request due to current id being different",
 			"current_id", current.id,
@@ -317,7 +350,7 @@ func (cl *Client) failProducerID(id int64, epoch int16, err error) {
 	//
 	// If this is UnknownProducerID with a txnID, then EndTransaction will
 	// recover us.
-	cl.producer.id.Store(&producerID{
+	p.id.Store(&producerID{
 		id:    id,
 		epoch: epoch,
 		err:   err,
@@ -380,88 +413,62 @@ func (cl *Client) doInitProducerID(lastID int64, lastEpoch int16) (*producerID, 
 // If the topic is not loaded yet, this buffers the record and returns
 // nil, nil.
 func (cl *Client) partitionsForTopicProduce(pr promisedRec) (*topicPartitions, *topicPartitionsData) {
+	p := &cl.producer
 	topic := pr.Topic
 
-	// If the topic exists and there are partitions, then we can simply
-	// return the parts.
-	topics := cl.loadTopics()
+	topics := p.topics.load()
 	parts, exists := topics[topic]
 	if exists {
-		v := parts.load()
-		if len(v.partitions) > 0 {
+		if v := parts.load(); len(v.partitions) > 0 {
 			return parts, v
 		}
 	}
 
-	if !exists {
-		// If the topic does not exist, we check again under the topics
-		// mu.
-		cl.topicsMu.Lock()
-		topics = cl.loadTopics()
-		if _, exists = topics[topic]; !exists {
-			// The topic definitely does not exist; we create it.
-			//
-			// Before we store the new topics and release the topic
-			// mu, we lock unknownTopicsMu. We cannot allow a
-			// concurrent metadata update to see our new topic and
-			// store partitions for it before we are waiting from
-			// the addUnknownTopicRecord func. Otherwise, we would
-			// fall into the wait and never be re-notified.
-			parts = newTopicPartitions()
-			newTopics := cl.cloneTopics()
-			newTopics[topic] = parts
+	if !exists { // topic did not exist: check again under mu and potentially create it
+		p.topicsMu.Lock()
+		defer p.topicsMu.Unlock()
 
-			cl.unknownTopicsMu.Lock() // lock before store and topicsMu release
-			cl.topics.Store(newTopics)
-			cl.topicsMu.Unlock()
+		if parts, exists = p.topics.load()[topic]; !exists { // update parts for below
+			// Before we store the new topic, we lock unknown
+			// topics to prevent a concurrent metadata update
+			// seeing our new topic before we are waiting from the
+			// addUnknownTopicRecord fn. Otherwise, we would wait
+			// and never be re-notified.
+			p.unknownTopicsMu.Lock()
+			defer p.unknownTopicsMu.Unlock()
 
+			p.topics.storeTopics([]string{topic})
 			cl.addUnknownTopicRecord(pr)
-			cl.unknownTopicsMu.Unlock()
-
-		} else {
-			// Topic existed: fall into the logic below.
-			cl.topicsMu.Unlock()
+			cl.triggerUpdateMetadataNow()
+			return nil, nil
 		}
 	}
 
-	if exists {
-		// If the topic does exist, either partitions were loaded,
-		// meaning we can just return the load since we are guaranteed
-		// sequential now (if producing to this topic in a single
-		// goroutine), or they were not loaded and we must add our
-		// record in order under unknownTopicsMu.
-		//
-		// See comment in storePartitionsUpdate to the ordering
-		// of our lock then load, or the comment above.
-		cl.unknownTopicsMu.Lock()
-		topics = cl.loadTopics()
-		parts = topics[topic]
-		v := parts.load()
-		if len(v.partitions) > 0 {
-			cl.unknownTopicsMu.Unlock()
-			return parts, v
-		}
-		cl.addUnknownTopicRecord(pr)
-		cl.unknownTopicsMu.Unlock()
+	// Here, the topic existed, but maybe has not loaded partitions yet. We
+	// have to lock unknown topics first to ensure ordering just in case a
+	// load has not happened.
+	p.unknownTopicsMu.Lock()
+	defer p.unknownTopicsMu.Unlock()
+
+	if v := parts.load(); len(v.partitions) > 0 {
+		return parts, v
 	}
+	cl.addUnknownTopicRecord(pr)
+	cl.triggerUpdateMetadata(false)
 
-	cl.triggerUpdateMetadataNow()
-
-	// Our record is buffered waiting for a metadata update to discover
-	// the topic. We return nil here.
-	return nil, nil
+	return nil, nil // our record is buffered waiting for metadata update; nothing to return
 }
 
 // addUnknownTopicRecord adds a record to a topic whose partitions are
 // currently unknown. This is always called with the unknownTopicsMu held.
 func (cl *Client) addUnknownTopicRecord(pr promisedRec) {
-	unknown := cl.unknownTopics[pr.Topic]
+	unknown := cl.producer.unknownTopics[pr.Topic]
 	if unknown == nil {
 		unknown = &unknownTopicProduces{
 			buffered: make([]promisedRec, 0, 100),
-			wait:     make(chan error, 1),
+			wait:     make(chan error, 5),
 		}
-		cl.unknownTopics[pr.Topic] = unknown
+		cl.producer.unknownTopics[pr.Topic] = unknown
 	}
 	unknown.buffered = append(unknown.buffered, pr)
 	if len(unknown.buffered) == 1 {
@@ -484,48 +491,63 @@ func (cl *Client) waitUnknownTopic(
 	var tries int
 	var err error
 	for err == nil {
-		var ok bool
 		select {
 		case <-cl.ctx.Done():
 			err = errClientClosing
 		case <-after:
 			err = errRecordTimeout
-		case err, ok = <-unknown.wait:
+		case retriableErr, ok := <-unknown.wait:
 			if !ok {
-				cl.cfg.logger.Log(LogLevelInfo, "done waiting for unknown topic, metadata was successful", "topic", topic)
+				cl.cfg.logger.Log(LogLevelInfo, "done waiting for unknown topic", "topic", topic)
 				return // metadata was successful!
 			}
-			cl.cfg.logger.Log(LogLevelInfo, "unknown topic wait failed, retrying wait", "topic", topic, "err", err)
+			cl.cfg.logger.Log(LogLevelInfo, "unknown topic wait failed, retrying wait", "topic", topic, "err", retriableErr)
 			tries++
 			if int64(tries) >= cl.cfg.retries {
-				err = fmt.Errorf("no partitions available after refreshing metadata %d times, last err: %w", tries, err)
+				err = fmt.Errorf("no partitions available after refreshing metadata %d times, last err: %w", tries, retriableErr)
 			}
 		}
 	}
 
-	cl.cfg.logger.Log(LogLevelInfo, "unknown topic wait failed, done retrying, failing all records", "topic", topic)
-
 	// If we errored above, we come down here to potentially clear the
-	// topic wait and fail all buffered records. However, we could have
-	// some weird racy interactions with storePartitionsUpdate.
-	//
-	// If the pointer in the unknownTopics map is different than the one
-	// that started this goroutine, then we raced. A partitions update
-	// cleared the unknownTopics, and then a new produce went and set a
-	// completely new pointer-to-slice in unknownTopics. We do not want to
-	// fail everything in that new slice.
-	cl.unknownTopicsMu.Lock()
-	nowUnknown := cl.unknownTopics[topic]
+	// topic wait and fail all buffered records. However, under some
+	// extreme conditions, a quickly following metadata update could delete
+	// our unknown topic, and then a produce could recreate a new unknown
+	// topic. We only delete and finish promises if the pointer in the
+	// unknown topic map is still the same.
+	p := &cl.producer
+
+	p.topicsMu.Lock()
+	defer p.topicsMu.Unlock()
+	p.unknownTopicsMu.Lock()
+	defer p.unknownTopicsMu.Unlock()
+
+	nowUnknown := p.unknownTopics[topic]
 	if nowUnknown != unknown {
-		cl.unknownTopicsMu.Unlock()
 		return
 	}
-	delete(cl.unknownTopics, topic)
-	cl.unknownTopicsMu.Unlock()
+	cl.cfg.logger.Log(LogLevelInfo, "unknown topic wait failed, done retrying, failing all records", "topic", topic)
 
-	for _, pr := range unknown.buffered {
-		cl.finishRecordPromise(pr, err)
-	}
+	delete(p.unknownTopics, topic)
+	cl.deleteUnknownTopic(topic, unknown, err)
+}
+
+// Called under both topic and unknown mu's, this clears the topic from the
+// producer and finishes all buffered promises.
+//
+// We do not need to clear recBufs in sinks when deleting unknown topics
+// because unknown topics implies that partitions were never loaded, thus no
+// recBufs in sinks.
+func (cl *Client) deleteUnknownTopic(topic string, unknown *unknownTopicProduces, err error) {
+	topics := cl.producer.topics.clone()
+	delete(topics, topic)
+	cl.producer.topics.storeData(topics)
+
+	go func() {
+		for _, pr := range unknown.buffered {
+			cl.finishRecordPromise(pr, err)
+		}
+	}()
 }
 
 // Flush hangs waiting for all buffered records to be flushed, stopping all
@@ -533,10 +555,12 @@ func (cl *Client) waitUnknownTopic(
 //
 // If the context finishes (Done), this returns the context's error.
 func (cl *Client) Flush(ctx context.Context) error {
+	p := &cl.producer
+
 	// Signal to finishRecord that we want to be notified once buffered hits 0.
 	// Also forbid any new producing to start a linger.
-	atomic.AddInt32(&cl.producer.flushing, 1)
-	defer atomic.AddInt32(&cl.producer.flushing, -1)
+	atomic.AddInt32(&p.flushing, 1)
+	defer atomic.AddInt32(&p.flushing, -1)
 
 	cl.cfg.logger.Log(LogLevelInfo, "flushing")
 	defer cl.cfg.logger.Log(LogLevelDebug, "flushed")
@@ -546,7 +570,7 @@ func (cl *Client) Flush(ctx context.Context) error {
 	// must wake anything that could be lingering up, after which all sinks
 	// will loop draining.
 	if cl.cfg.linger > 0 || cl.cfg.manualFlushing {
-		for _, parts := range cl.loadTopics() {
+		for _, parts := range p.topics.load() {
 			for _, part := range parts.load().partitions {
 				part.records.unlingerAndManuallyDrain()
 			}
@@ -556,12 +580,12 @@ func (cl *Client) Flush(ctx context.Context) error {
 	quit := false
 	done := make(chan struct{})
 	go func() {
-		cl.producer.notifyMu.Lock()
-		defer cl.producer.notifyMu.Unlock()
+		p.notifyMu.Lock()
+		defer p.notifyMu.Unlock()
 		defer close(done)
 
-		for !quit && atomic.LoadInt64(&cl.producer.bufferedRecords) > 0 {
-			cl.producer.notifyCond.Wait()
+		for !quit && atomic.LoadInt64(&p.bufferedRecords) > 0 {
+			p.notifyCond.Wait()
 		}
 	}()
 
@@ -569,17 +593,55 @@ func (cl *Client) Flush(ctx context.Context) error {
 	case <-done:
 		return nil
 	case <-ctx.Done():
-		cl.producer.notifyMu.Lock()
+		p.notifyMu.Lock()
 		quit = true
-		cl.producer.notifyMu.Unlock()
-		cl.producer.notifyCond.Broadcast()
+		p.notifyMu.Unlock()
+		p.notifyCond.Broadcast()
 		return ctx.Err()
 	}
 }
 
+// Bumps the tries for all buffered records in the client.
+//
+// This is called whenever there is a problematic error that would affect the
+// state of all buffered records as a whole:
+//
+//   - if we cannot init a producer ID due to RequestWith errors, producing is useless
+//   - if we cannot add partitions to a txn due to RequestWith errors, producing is useless
+//
+// Note that these are specifically due to RequestWith errors, not due to
+// receiving a response that has a retriable error code. That is, if our
+// request keeps dying.
+func (cl *Client) bumpRepeatedLoadErr(err error) {
+	p := &cl.producer
+
+	for _, partitions := range p.topics.load() {
+		for _, partition := range partitions.load().partitions {
+			partition.records.bumpRepeatedLoadErr(err)
+		}
+	}
+	p.unknownTopicsMu.Lock()
+	defer p.unknownTopicsMu.Unlock()
+	for _, unknown := range p.unknownTopics {
+		select {
+		case unknown.wait <- err:
+		default:
+		}
+	}
+}
+
 // Clears all buffered records in the client with the given error.
+//
+// - closing client
+// - aborting transaction
+// - fatal AddPartitionsToTxn
+//
+// Because the error fails everything, we also empty our unknown topics and
+// delete any topics that were still unknown from the producer's topics.
 func (cl *Client) failBufferedRecords(err error) {
-	for _, partitions := range cl.loadTopics() {
+	p := &cl.producer
+
+	for _, partitions := range p.topics.load() {
 		for _, partition := range partitions.load().partitions {
 			recBuf := partition.records
 			recBuf.mu.Lock()
@@ -587,13 +649,28 @@ func (cl *Client) failBufferedRecords(err error) {
 			recBuf.mu.Unlock()
 		}
 	}
-	cl.unknownTopicsMu.Lock()
-	defer cl.unknownTopicsMu.Unlock()
-	for topic, unknown := range cl.unknownTopics {
-		delete(cl.unknownTopics, topic)
+
+	p.topicsMu.Lock()
+	defer p.topicsMu.Unlock()
+	p.unknownTopicsMu.Lock()
+	defer p.unknownTopicsMu.Unlock()
+
+	toStore := p.topics.clone()
+	defer p.topics.storeData(toStore)
+
+	var toFail [][]promisedRec
+	for topic, unknown := range p.unknownTopics {
+		delete(toStore, topic)
+		delete(p.unknownTopics, topic)
 		close(unknown.wait)
-		for _, pr := range unknown.buffered {
-			cl.finishRecordPromise(pr, err)
-		}
+		toFail = append(toFail, unknown.buffered)
 	}
+
+	go func() {
+		for _, fail := range toFail {
+			for _, pr := range fail {
+				cl.finishRecordPromise(pr, err)
+			}
+		}
+	}()
 }
