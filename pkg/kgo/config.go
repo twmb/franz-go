@@ -123,16 +123,8 @@ func (cfg *cfg) validate() error {
 	if cfg.disableIdempotency && cfg.txnID != nil {
 		return errors.New("cannot both disable idempotent writes and use transactional IDs")
 	}
-	if !cfg.disableIdempotency {
-		if cfg.acks.val != -1 {
-			return errors.New("idempotency requires acks=all")
-		}
-		if cfg.produceRetries != math.MaxInt64 {
-			return errors.New("idempotency requires ProduceRetries to be unlimited")
-		}
-		if cfg.recordTimeout != 0 {
-			return errors.New("idempotency requires RecordTimeout to be unlimited")
-		}
+	if !cfg.disableIdempotency && cfg.acks.val != -1 {
+		return errors.New("idempotency requires acks=all")
 	}
 
 	for _, limit := range []struct {
@@ -687,8 +679,15 @@ func ProduceRequestTimeout(limit time.Duration) ProducerOpt {
 }
 
 // ProduceRetries sets the number of tries for producing records, overriding
-// the unlimited default. This option can only be set if DisableIdempotency is
-// also set.
+// the unlimited default.
+//
+// If idempotency is enabled (as it is by default), this option is only
+// enforced if it is safe to do so without messing up sequence numbers. It is
+// safe to enforce if a record was never issued in a request to Kafka, or if it
+// was requested and received a response.
+//
+// This option is different from RequestRetries to allow finer grained control
+// of when to fail when producing records.
 func ProduceRetries(n int) Opt {
 	return clientOpt{func(cfg *cfg) { cfg.produceRetries = int64(n) }}
 }
@@ -743,8 +742,12 @@ func ManualFlushing() ProducerOpt {
 }
 
 // RecordTimeout sets a rough time of how long a record can sit around in a
-// batch before timing out, overriding the ulimited default. This option can
-// only be set if DisableIdempotency is also set.
+// batch before timing out, overriding the ulimited default.
+//
+// If idempotency is enabled (as it is by default), this option is only
+// enforced if it is safe to do so without messing up sequence numbers.  It is
+// safe to enforce if a record was never issued in a request to Kafka, or if it
+// was requested and received a response.
 //
 // The timeout for all records in a batch inherit the timeout of the first
 // record in that batch. That is, once the first record's timeout expires, all
