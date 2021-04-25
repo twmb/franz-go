@@ -1327,6 +1327,7 @@ func (r *produceRequest) tryAddBatch(produceVersion int32, recBuf *recBuf, batch
 	}
 
 	if recBuf.needSeqReset && recBuf.batches[0] == batch {
+		recBuf.needSeqReset = false
 		recBuf.seq = 0
 		recBuf.batch0Seq = 0
 	}
