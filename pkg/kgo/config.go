@@ -462,7 +462,7 @@ func RetryBackoff(backoff func(int) time.Duration) Opt {
 
 // RequestRetries sets the number of tries that retriable requests are allowed,
 // overriding the unlimited default. This option does not apply to produce
-// requests.
+// requests; to limit produce request retries, see ProduceRetries.
 func RequestRetries(n int) Opt {
 	return clientOpt{func(cfg *cfg) { cfg.retries = int64(n) }}
 }
@@ -682,9 +682,9 @@ func ProduceRequestTimeout(limit time.Duration) ProducerOpt {
 // the unlimited default.
 //
 // If idempotency is enabled (as it is by default), this option is only
-// enforced if it is safe to do so without messing up sequence numbers. It is
-// safe to enforce if a record was never issued in a request to Kafka, or if it
-// was requested and received a response.
+// enforced if it is safe to do so without creating invalid sequence numbers.
+// It is safe to enforce if a record was never issued in a request to Kafka, or
+// if it was requested and received a response.
 //
 // This option is different from RequestRetries to allow finer grained control
 // of when to fail when producing records.
@@ -745,9 +745,9 @@ func ManualFlushing() ProducerOpt {
 // batch before timing out, overriding the ulimited default.
 //
 // If idempotency is enabled (as it is by default), this option is only
-// enforced if it is safe to do so without messing up sequence numbers.  It is
-// safe to enforce if a record was never issued in a request to Kafka, or if it
-// was requested and received a response.
+// enforced if it is safe to do so without creating invalid sequence numbers.
+// It is safe to enforce if a record was never issued in a request to Kafka, or
+// if it was requested and received a response.
 //
 // The timeout for all records in a batch inherit the timeout of the first
 // record in that batch. That is, once the first record's timeout expires, all

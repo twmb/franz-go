@@ -2,6 +2,7 @@ package kgo
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"hash/crc32"
@@ -1170,6 +1171,7 @@ func (recBuf *recBuf) resetBatchDrainIdx() {
 // promisedRec ties a record with the callback that will be called once
 // a batch is finally written and receives a response.
 type promisedRec struct {
+	ctx     context.Context
 	promise func(*Record, error)
 	*Record
 }
@@ -1326,10 +1328,21 @@ func (r *produceRequest) tryAddBatch(produceVersion int32, recBuf *recBuf, batch
 		return false
 	}
 
-	if recBuf.needSeqReset && recBuf.batches[0] == batch {
-		recBuf.needSeqReset = false
-		recBuf.seq = 0
-		recBuf.batch0Seq = 0
+	if recBuf.batches[0] == batch {
+		if batch.canFailFromLoadErrs {
+			ctx := batch.records[0].ctx
+			select {
+			case <-ctx.Done():
+				recBuf.failAllRecords(ctx.Err())
+				return false
+			default:
+			}
+		}
+		if recBuf.needSeqReset {
+			recBuf.needSeqReset = false
+			recBuf.seq = 0
+			recBuf.batch0Seq = 0
+		}
 	}
 
 	batch.tries++

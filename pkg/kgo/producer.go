@@ -97,6 +97,14 @@ func noPromise(*Record, error) {}
 // context or client to quit. If the context / client quits, this returns an
 // error.
 //
+// The context is also used on a per-partition basis. If the context is done
+// for the first record buffered in a partition, and if it is valid to abort
+// records (to avoid invalid sequence numbers), all buffered records for a
+// partition are aborted. The context checked for doneness is always the first
+// buffered record's context. If that record is successfully produced, the
+// context will then be the next first buffered record. The context is only
+// evaluated before writing a produce request.
+//
 // The first buffered record for an unknown topic begins a timeout for the
 // configured record timeout limit; all records buffered within the wait will
 // expire with the same timeout if the topic does not load in time. For
@@ -134,7 +142,7 @@ func (cl *Client) Produce(
 		// waitBuffer as normal.
 		drainBuffered := func() {
 			go func() { <-p.waitBuffer }()
-			cl.finishRecordPromise(promisedRec{noPromise, nil}, nil)
+			cl.finishRecordPromise(promisedRec{ctx, noPromise, nil}, nil)
 		}
 		if cl.cfg.manualFlushing {
 			drainBuffered()
@@ -154,7 +162,7 @@ func (cl *Client) Produce(
 	if promise == nil {
 		promise = noPromise
 	}
-	cl.partitionRecord(promisedRec{promise, r})
+	cl.partitionRecord(promisedRec{ctx, promise, r})
 	return nil
 }
 
