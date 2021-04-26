@@ -99,8 +99,6 @@ func (cl *Client) storePartitionsUpdate(topic string, l *topicPartitions, lv *to
 
 	p := &cl.producer
 
-	p.topicsMu.Lock()
-	defer p.topicsMu.Unlock()
 	p.unknownTopicsMu.Lock()
 	defer p.unknownTopicsMu.Unlock()
 
@@ -151,7 +149,7 @@ func (cl *Client) storePartitionsUpdate(topic string, l *topicPartitions, lv *to
 	close(unknown.wait) // allow waiting goroutine to quit
 
 	if len(lv.partitions) == 0 {
-		cl.deleteUnknownTopic(topic, unknown, lv.loadErr)
+		cl.failUnknownTopicRecords(topic, unknown, lv.loadErr)
 	} else {
 		for _, pr := range unknown.buffered {
 			cl.doPartitionRecord(l, lv, pr)
