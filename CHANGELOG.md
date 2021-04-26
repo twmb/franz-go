@@ -1,6 +1,7 @@
 v0.6.14
 ===
 
+- [`dc44d10`](https://github.com/twmb/franz-go/commit/dc44d10) sink: call producerID after creating the produce request
 - [`ce113d5`](https://github.com/twmb/franz-go/commit/ce113d5) **bugfix** producer: fix potential lingering recBuf issue
 - [`19d57dc`](https://github.com/twmb/franz-go/commit/19d57dc) **bugfix** metadata: do not nil cursors/records pointers ever
 - [`e324b56`](https://github.com/twmb/franz-go/commit/e324b56) producing: evaluate whether a batch should fail before and after
@@ -11,6 +12,16 @@ producing to and consuming from the same topic within a single client.
 At the same time, there was a highly-unlikely-to-be-experienced bug where
 orphaned recBuf pointers could linger in a sink through a certain sequence
 of events (see the producer bugfix commit for more details).
+
+This also now avoids initializing a producer ID when consuming only. For code
+terseness during the producer redux, I moved the createReq portion in sink to
+below the producerID call. We actually call createReq when there are no records
+ever produced: a metadata update adding a recBuf to a sink triggers a drain,
+which then evaluates the recBuf and sees there is nothing to produce. This
+triggered drain was initializing a producer ID unnecessesarily. We now create
+the request and see if there is anything to flush before initializing the
+producer ID, and we now document the reason for having producerID after
+createReq so that I do not switch the order in the future again.
 
 Lastly, as a feature enhancement, this unifies the logic that fails buffered
 records before producing or after producing. The context can now be used to
