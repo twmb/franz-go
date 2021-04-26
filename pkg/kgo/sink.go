@@ -76,16 +76,14 @@ func (cl *Client) newSink(nodeID int32) *sink {
 
 // createReq returns a produceRequest from currently buffered records
 // and whether there are more records to create more requests immediately.
-func (s *sink) createReq(producerID int64, producerEpoch int16) (*produceRequest, *kmsg.AddPartitionsToTxnRequest, bool) {
+func (s *sink) createReq() (*produceRequest, *kmsg.AddPartitionsToTxnRequest, bool) {
 	req := &produceRequest{
 		txnID:   s.cl.cfg.txnID,
 		acks:    s.cl.cfg.acks.val,
 		timeout: int32(s.cl.cfg.produceTimeout.Milliseconds()),
 		batches: make(seqRecBatches, 5),
 
-		producerID:    producerID,
-		producerEpoch: producerEpoch,
-		idempotent:    s.cl.idempotent(),
+		idempotent: s.cl.idempotent(),
 
 		compressor: s.cl.compressor,
 
@@ -93,9 +91,7 @@ func (s *sink) createReq(producerID int64, producerEpoch int16) (*produceRequest
 		wireLengthLimit: s.cl.cfg.maxBrokerWriteBytes,
 	}
 	txnBuilder := txnReqBuilder{
-		txnID:         req.txnID,
-		producerID:    producerID,
-		producerEpoch: producerEpoch,
+		txnID: req.txnID,
 	}
 
 	var moreToDrain bool
@@ -138,11 +134,9 @@ func (s *sink) createReq(producerID int64, producerEpoch int16) (*produceRequest
 }
 
 type txnReqBuilder struct {
-	txnID         *string
-	req           *kmsg.AddPartitionsToTxnRequest
-	addedTopics   map[string]int // topic => index into req
-	producerID    int64
-	producerEpoch int16
+	txnID       *string
+	req         *kmsg.AddPartitionsToTxnRequest
+	addedTopics map[string]int // topic => index into req
 }
 
 func (t *txnReqBuilder) add(rb *recBuf) {
@@ -156,8 +150,6 @@ func (t *txnReqBuilder) add(rb *recBuf) {
 	if t.req == nil {
 		t.req = &kmsg.AddPartitionsToTxnRequest{
 			TransactionalID: *t.txnID,
-			ProducerID:      t.producerID,
-			ProducerEpoch:   t.producerEpoch,
 		}
 		t.addedTopics = make(map[string]int, 10)
 	}
@@ -263,6 +255,14 @@ func (s *sink) produce(sem <-chan struct{}) bool {
 		}
 	}()
 
+	// We create the req before getting our producer ID. It is possible we
+	// were triggered to produce by a metadata update adding a recBuf to a
+	// sink, when in reality no records are actually on that recBuf.
+	req, txnReq, moreToDrain := s.createReq()
+	if len(req.batches) == 0 { // everything was failing or lingering
+		return moreToDrain
+	}
+
 	// producerID can fail from:
 	// - retry failure
 	// - auth failure
@@ -291,13 +291,13 @@ func (s *sink) produce(sem <-chan struct{}) bool {
 		return false
 	}
 
-	req, txnReq, moreToDrain := s.createReq(id, epoch)
-
-	if len(req.batches) == 0 { // everything was failing or lingering
-		return moreToDrain
-	}
+	req.producerID = id
+	req.producerEpoch = epoch
 
 	if txnReq != nil {
+		txnReq.ProducerID = id
+		txnReq.ProducerEpoch = epoch
+
 		// txnReq can fail from:
 		// - retry failure
 		// - auth failure
