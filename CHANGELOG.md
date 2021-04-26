@@ -1,3 +1,23 @@
+v0.6.14
+===
+
+- [`ce113d5`](https://github.com/twmb/franz-go/commit/ce113d5) **bugfix** producer: fix potential lingering recBuf issue
+- [`19d57dc`](https://github.com/twmb/franz-go/commit/19d57dc) **bugfix** metadata: do not nil cursors/records pointers ever
+- [`e324b56`](https://github.com/twmb/franz-go/commit/e324b56) producing: evaluate whether a batch should fail before and after
+
+This is a small bugfix release for v0.6.13, which would panic if a user was
+producing to and consuming from the same topic within a single client.
+
+At the same time, there was a highly-unlikely-to-be-experienced bug where
+orphaned recBuf pointers could linger in a sink through a certain sequence
+of events (see the producer bugfix commit for more details).
+
+Lastly, as a feature enhancement, this unifies the logic that fails buffered
+records before producing or after producing. The context can now be used to
+cancel records after producing, and record timeouts / retries can be evaluated
+before producing. The order of evaluation is first the context, then the record
+timeout, and lastly the number of tries.
+
 v0.6.13
 ===
 
