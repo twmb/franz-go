@@ -561,10 +561,8 @@ func (cl *Client) mergeTopicPartitions(
 	// partition and must be added to the sink / source.
 	for _, newTP := range r.partitions {
 		if isProduce && newTP.records.recBufsIdx == -1 {
-			newTP.cursor = nil
 			newTP.records.sink.addRecBuf(newTP.records)
 		} else if !isProduce && newTP.cursor.cursorsIdx == -1 {
-			newTP.records = nil
 			newTP.cursor.source.addCursor(newTP.cursor)
 		}
 	}
