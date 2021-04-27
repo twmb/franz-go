@@ -156,6 +156,12 @@ func (s *GroupTransactSession) End(ctx context.Context, commit TransactionEndTry
 			return false, err // we do not abort below, because an error here is ctx closing
 		}
 	case TryAbort:
+		// If we have no buffered records, there is no need to abort
+		// buffered records and we can avoid resetting our producer ID.
+		if atomic.LoadInt64(&s.cl.producer.bufferedRecords) == 0 {
+			break
+		}
+
 		if err := s.cl.AbortBufferedRecords(ctx); err != nil {
 			return false, err // same
 		}
