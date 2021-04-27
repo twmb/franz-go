@@ -1,7 +1,7 @@
 tip
 ===
 
-- [`db983d63`](https://github.com/twmb/franz-go/commit/db983d63) **feature** producer: add ProduceSync
+- [`fb315873`](https://github.com/twmb/franz-go/commit/fb315873) **feature** producer: add ProduceSync
 
 v0.6.14
 ===
