@@ -29,7 +29,7 @@ type sink struct {
 	drainState workLoop
 
 	// seqRespsMu, guarded by seqRespsMu, contains responses that must
-	// be handled sequentially. These responses are handled asyncronously,
+	// be handled sequentially. These responses are handled asynchronously,
 	// but sequentially.
 	seqRespsMu sync.Mutex
 	seqResps   []*seqResp
@@ -1753,9 +1753,7 @@ func (r seqRecBatch) appendTo(
 	dst = kbin.AppendInt64(dst, r.firstTimestamp+int64(lastRecord.timestampDelta))
 
 	seq := r.seq
-	if !idempotent {
-		producerID = -1
-		producerEpoch = -1
+	if !idempotent { // producerID and producerEpoch are already -1 if idempotent (due to producerID() itself returning -1)
 		seq = 0
 	}
 	dst = kbin.AppendInt64(dst, producerID)

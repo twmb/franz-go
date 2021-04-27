@@ -82,11 +82,44 @@ func (p *producer) isAborting() bool { return atomic.LoadUint32(&p.aborting) == 
 
 func noPromise(*Record, error) {}
 
+// ProduceSync is a synchronous produce. Please see the Produce documentation
+// for an in depth description of how producing works.
+//
+// Note that it is heavily recommended to not use ProduceSync. Producing
+// buffers multiple records into a single request issued to Kafka. A
+// synchronous produce implies you may be producing one record per request,
+// which is inefficient, slower, and puts more load on Kafka itself.
+//
+// This function should only be used when producing infrequently enough that
+// waiting for a single record to be produced is what would happen anyway with
+// Produce.
+//
+// If the produce is successful, the record's attrs / offset / etc. fields are
+// updated appropriately.
+func (cl *Client) ProduceSync(ctx context.Context, r *Record) error {
+	var (
+		wg      sync.WaitGroup
+		err     error
+		promise = func(_ *Record, perr error) {
+			err = perr
+			wg.Done()
+		}
+	)
+	wg.Add(1)
+	if perr := cl.Produce(ctx, r, promise); perr != nil {
+		return perr
+	}
+	wg.Wait()
+	return err
+}
+
 // Produce sends a Kafka record to the topic in the record's Topic field,
-// calling promise with the record or an error when Kafka replies.
+// calling promise with the record or an error when Kafka replies. For a
+// synchronous produce (which is not recommended), see ProduceSync.
 //
 // The promise is optional, but not using it means you will not know if Kafka
-// recorded a record properly.
+// recorded a record properly. If there was no produce error, the record's
+// attrs / offset / etc. fields are updated appropriately.
 //
 // If the record is too large to fit in a batch on its own in a produce
 // request, the promise is called immediately before this function returns with

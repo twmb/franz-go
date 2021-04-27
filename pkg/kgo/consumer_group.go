@@ -1874,7 +1874,7 @@ func (cl *Client) BlockingCommitOffsets(
 // function is complete and the onDone has returned.
 //
 // This function itself does not wait for the commit to finish. By default,
-// this function is an asyncronous commit. You can use onDone to make it sync.
+// this function is an asynchronous commit. You can use onDone to make it sync.
 //
 // Note that this function ensures absolute ordering of commit requests by
 // canceling prior requests and ensuring they are done before executing a new
@@ -1893,7 +1893,7 @@ func (cl *Client) BlockingCommitOffsets(
 // This is most likely to happen if a commit occurs too late in a rebalance
 // event.
 //
-// If manually committing, you want to set OnRevoked to commit syncronously
+// If manually committing, you want to set OnRevoked to commit synchronously
 // using BlockingCommitOffsets. Otherwise if committing async OnRevoked may
 // return and a new group session may start before the commit is issued,
 // leading to the commit being ignored and leading to duplicate messages.
