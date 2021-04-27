@@ -1,3 +1,8 @@
+tip
+===
+
+- [`db983d63`](https://github.com/twmb/franz-go/commit/db983d63) **feature** producer: add ProduceSync
+
 v0.6.14
 ===
 
