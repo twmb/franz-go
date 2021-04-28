@@ -214,6 +214,9 @@ func (fs Fetches) RecordIter() *FetchesRecordIter {
 // FetchesRecordIter iterates over records in a fetch.
 type FetchesRecordIter struct {
 	fetches []Fetch
+	ti      int // index to current topic in fetches[0]
+	pi      int // index to current partition in current topic
+	ri      int // index to current record in current partition
 }
 
 // Done returns whether there are any more records to iterate over.
@@ -223,9 +226,8 @@ func (i *FetchesRecordIter) Done() bool {
 
 // Next returns the next record from a fetch.
 func (i *FetchesRecordIter) Next() *Record {
-	records := &i.fetches[0].Topics[0].Partitions[0].Records
-	next := (*records)[0]
-	*records = (*records)[1:]
+	next := i.fetches[0].Topics[i.ti].Partitions[i.pi].Records[i.ri]
+	i.ri++
 	i.prepareNext()
 	return next
 }
@@ -236,24 +238,27 @@ beforeFetch0:
 		return
 	}
 
-beforeTopic0:
 	fetch0 := &i.fetches[0]
-	if len(fetch0.Topics) == 0 {
+beforeTopic:
+	if i.ti >= len(fetch0.Topics) {
 		i.fetches = i.fetches[1:]
+		i.ti = 0
 		goto beforeFetch0
 	}
 
-beforePartition0:
-	topic0 := &fetch0.Topics[0]
-	if len(topic0.Partitions) == 0 {
-		fetch0.Topics = fetch0.Topics[1:]
-		goto beforeTopic0
+	topic := &fetch0.Topics[i.ti]
+beforePartition:
+	if i.pi >= len(topic.Partitions) {
+		i.ti++
+		i.pi = 0
+		goto beforeTopic
 	}
 
-	partition0 := &topic0.Partitions[0]
-	if len(partition0.Records) == 0 {
-		topic0.Partitions = topic0.Partitions[1:]
-		goto beforePartition0
+	partition := &topic.Partitions[i.pi]
+	if i.ri >= len(partition.Records) {
+		i.pi++
+		i.ri = 0
+		goto beforePartition
 	}
 }
 
