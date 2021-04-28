@@ -451,35 +451,30 @@ func (b *broker) reapConnections(idleTimeout time.Duration) (total int) {
 	b.reapMu.Lock()
 	defer b.reapMu.Unlock()
 
-	for _, reap := range []struct {
-		cxn       *brokerCxn
-		isProduce bool
-	}{
-		{b.cxnNormal, false},
-		{b.cxnProduce, true},
-		{b.cxnFetch, false},
+	for _, cxn := range []*brokerCxn{
+		b.cxnNormal,
+		b.cxnProduce,
+		b.cxnFetch,
 	} {
-		if reap.cxn == nil || atomic.LoadInt32(&reap.cxn.dead) == 1 {
-			continue
-		}
-		lastWrite := time.Unix(0, atomic.LoadInt64(&reap.cxn.lastWrite))
-		if time.Since(lastWrite) > idleTimeout && atomic.LoadUint32(&reap.cxn.writing) == 0 {
-			reap.cxn.die()
-			total++
+		if cxn == nil || atomic.LoadInt32(&cxn.dead) == 1 {
 			continue
 		}
 
-		// If our connection is a produce connection and our client is
-		// configured with acks == 0, we never try reaping it due to no
-		// reads. We are not supposed to have any reads past the
-		// initial api version negotiation. If we do, the broker
-		// implemented the Kafka protocol incorrectly, but that's fine.
-		if b.cl.cfg.acks.val == 0 && reap.isProduce {
-			continue
-		}
-		lastRead := time.Unix(0, atomic.LoadInt64(&reap.cxn.lastRead))
-		if time.Since(lastRead) > idleTimeout && atomic.LoadUint32(&reap.cxn.reading) == 0 {
-			reap.cxn.die()
+		// If we have not written nor read in a long time, the
+		// connection can be reaped. If only one is idle, the other may
+		// be busy (or may not happen):
+		//
+		// - produce can write but never read
+		// - fetch can hang for a while reading (infrequent writes)
+
+		lastWrite := time.Unix(0, atomic.LoadInt64(&cxn.lastWrite))
+		lastRead := time.Unix(0, atomic.LoadInt64(&cxn.lastRead))
+
+		writeIdle := time.Since(lastWrite) > idleTimeout && atomic.LoadUint32(&cxn.writing) == 0
+		readIdle := time.Since(lastRead) > idleTimeout && atomic.LoadUint32(&cxn.reading) == 0
+
+		if writeIdle && readIdle {
+			cxn.die()
 			total++
 		}
 	}
