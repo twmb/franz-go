@@ -549,10 +549,10 @@ func (s *sink) handleReqResp(req *produceRequest, resp kmsg.Response, err error)
 			for partition, batch := range partitions {
 				batch.owner.mu.Lock()
 				if batch.isOwnersFirstBatch() {
-					s.cl.finishBatch(batch.recBatch, req.producerID, req.producerEpoch, partition, 0, nil)
 					if debug {
-						fmt.Fprintf(b, "%d{%d=>%d}, ", partition, 0, len(batch.records))
+						fmt.Fprintf(b, "%d{0=>%d}, ", partition, len(batch.records))
 					}
+					s.cl.finishBatch(batch.recBatch, req.producerID, req.producerEpoch, partition, 0, nil)
 				} else if debug {
 					fmt.Fprintf(b, "%d{skipped}, ", partition)
 				}
