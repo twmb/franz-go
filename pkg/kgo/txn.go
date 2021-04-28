@@ -109,6 +109,14 @@ func (s *GroupTransactSession) PollRecords(ctx context.Context, maxPollRecords i
 	return s.cl.PollRecords(ctx, maxPollRecords)
 }
 
+// ProduceSync is a wrapper around Client.ProduceSync, with the exact same
+// semantics. Please refer to that function's documentation.
+//
+// It is invalid to call ProduceSync concurrently with Begin or End.
+func (s *GroupTransactSession) ProduceSync(ctx context.Context, rs ...*Record) ProduceResults {
+	return s.cl.ProduceSync(ctx, rs...)
+}
+
 // Produce is a wrapper around Client.Produce, with the exact same semantics.
 // Please refer to that function's documentation.
 //
