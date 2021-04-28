@@ -1,4 +1,4 @@
-franz-go - Apache Kafka client written in Go
+franz-go - A complete Apache Kafka client written in Go
 ===
 
 [![GoDev](https://img.shields.io/static/v1?label=godev&message=reference&color=00add8)][godev]
@@ -16,14 +16,15 @@ This library attempts to provide an intuitive API while interacting with Kafka t
 
 ## Features
 
-- Feature complete client (up to Kafka v2.7.0+)
-- Supported compression types: snappy, gzip, lz4 and zstd
-- SSL/TLS Support
-- Exactly once semantics / idempotent producing
-- Transactions support
-- All SASL mechanisms are supported (OAuthBearer, GSSAPI/Kerberos, SCRAM-SHA-256/512 and plain)
-- Supported Kafka versions >=0.8
-- Provides low level functionality (such as sending API requests) as well as high level functionality (e.g. consuming in groups)
+- Feature complete client (Kafka >= 0.8.0 through v2.8.0+)
+- Full Exactly-Once-Semantics (EOS)
+- Idempotent & transactional producers
+- Simple (legacy) consumer
+- Group consumers with eager (roundrobin, range, sticky) and cooperative (cooperative-sticky) balancers
+- All compression types supported: gzip, snappy, lz4, zstd
+- SSL/TLS provided through custom dialer options
+- All SASL mechanisms supported (GSSAPI/Kerberos, PLAIN, SCRAM, and OAUTHBEARER)
+- Low-level admin functionality supported through a simple `Request` function
 - Utilizes modern & idiomatic Go (support for contexts, variadic configuration options, ...)
 - Highly performant, see [Performance](./docs/performance.md) (benchmarks will be added)
 - Written in pure Go (no wrapper lib for a C library or other bindings)
@@ -31,13 +32,13 @@ This library attempts to provide an intuitive API while interacting with Kafka t
 
 ## Getting started
 
-Basic usage for producing and consuming Kafka messages looks like this:
+Here's a basic overview of producing and consuming:
 
 ```go
 seeds := []string{"localhost:9092"}
 client, err := kgo.NewClient(kgo.SeedBrokers(seeds...))
 if err != nil {
-    panic(err)
+	panic(err)
 }
 defer client.Close()
 
@@ -45,42 +46,71 @@ ctx := context.Background()
 
 // 1.) Producing a message
 // All record production goes through Produce, and the callback can be used
-// to allow for syncronous or asyncronous production.
+// to allow for synchronous or asynchronous production. ProduceSync exists if
+// you always want to produce synchronously.
 var wg sync.WaitGroup
 wg.Add(1)
 record := &kgo.Record{Topic: "foo", Value: []byte("bar")}
 err := client.Produce(ctx, record, func(_ *Record, err error) {
-        defer wg.Done()
-        if err != nil {
-                fmt.Printf("record had a produce error: %v\n", err)
-        }
+	defer wg.Done()
+	if err != nil {
+		fmt.Printf("record had a produce error: %v\n", err)
+	}
 
-}
+})
 if err != nil {
-        panic("we are unable to produce if the context is canceled, we have hit max buffered," +
-                "or if we are transactional and not in a transaction")
+	panic("we are unable to produce if the context is canceled, we have hit max buffered, " +
+		"or if we are transactional and not in a transaction")
 }
 wg.Wait()
 
 // 2.) Consuming messages from a topic
 // Consuming can either be direct (no consumer group), or through a group. Below, we use a group.
-// client.AssignGroup("my-group-identifier", kgo.GroupTopics("foo"))
+client.AssignGroup("my-group-identifier", kgo.GroupTopics("foo"))
 for {
-        fetches := client.PollFetches(ctx)
-        iter := fetches.RecordIter()
-        for !iter.Done() {
-            record := iter.Next()
-            fmt.Println(string(record.Value))
-        }
+	fetches := client.PollFetches(ctx)
+	if errs := fetches.Errors(); len(errs) > 0 {
+		// All errors are retried internally when fetching, but non-retriable errors are
+		// returned from polls so that users can notice and take action.
+		panic(fmt.Sprint(errs))
+	}
+
+	// We can iterate through a record iterator...
+	iter := fetches.RecordIter()
+	for !iter.Done() {
+		record := iter.Next()
+		fmt.Println(string(record.Value), "from an iterator!")
+	}
+
+	// or a callback function.
+	fetches.EachPartition(func(p kgo.FetchTopicPartition) {
+		for _, record := range p.Partition.Records {
+			fmt.Println(string(record.Value), "from range inside a callback!")
+		}
+
+		// We can even use a second callback!
+		p.EachRecord(func(record *Record) {
+			fmt.Println(string(record.Value), "from a second callback!")
+		})
+	})
 }
 ```
 
-- Take a look at [more examples](./examples) 
-- [Architecture documentation](./docs/architecture.md) describing all Franz-go package purposes
-- Reference docs [https://pkg.go.dev/github.com/twmb/franz-go/pkg/kgo](https://pkg.go.dev/github.com/twmb/franz-go/pkg/kgo)
-- Consuming in [Consumer Groups](./docs/consumer-groups.md)
-- [Producing](./docs/producer.md)
-- Sending [admin requests](./docs/admin-requests.md)
+This only shows producing and consuming in the most basic sense, and does not
+show the full list of options to customize how the client runs, nor does it
+show transactional producing / consuming. Check out the [examples](./examples)
+directory for more!
+
+API reference documentation can be found on
+[![GoDev](https://img.shields.io/static/v1?label=godev&message=reference&color=00add8)][godev].
+Supplementary information can be found in the docs directory:
+
+[docs](./docs)  
++-- [admin requests](./docs/admin-requests.md) for an overview of how to issue admin requests  
++-- [architecture](./docs/architecture.md) for descrbing the packages in franz-go and some internals  
++-- [consuming](./docs/consuming.md) for a description of consuming in a group (and a short section on the simple consumer)  
++-- [producing](./docs/producing.md) for a description of producing and producing guarantees  
++-- [performance](./docs/performance.md) for some notes about performance  
 
 ## Version Pinning
 
@@ -100,10 +130,26 @@ update roll.
 
 [5]: https://cwiki.apache.org/confluence/display/KAFKA/KIP-584%3A+Versioning+scheme+for+features
 
-## Metrics
+## Metrics & logging
 
-Using hooks you can attach to any events happening within franz-go. This allows you to use your favorite metric library
-and collect the metrics you are interested in.
+The franz-go client takes a neutral approach to metrics by providing hooks
+that you can use to plug in your own metrics.
+
+All connections, disconnections, reads, writes, and throttles can be hooked
+into.  If there is an aspect of the library that you wish you could have
+insight into, please open an issue and we can discuss adding another hook.
+
+Hooks allow you to log in the event of specific errors, or to trace latencies,
+count bytes, etc., all with your favorite monitoring systems.
+
+In addition to hooks, logging can be plugged in with a general `Logger`
+interface.  A basic logger is provided if you just want to write to a given
+file in a simple format. All logs have a message and then key/value pairs of
+supplementary information. It is recommended to always use a logger and to use
+`LogLevelInfo`.
+
+See [this example](./examples/hooks_and_logging/prometheus) for an example of
+integrating with prometheus!
 
 ## Supported KIPs
 
