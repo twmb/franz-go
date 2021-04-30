@@ -279,6 +279,37 @@ func (fs Fetches) EachPartition(fn func(FetchTopicPartition)) {
 	}
 }
 
+// EachTopic calls fn for each topic in Fetches.
+//
+// This is a convenience function that groups all partitions for the same topic
+// from many fetches into one FetchTopic. A map is internally allocated to
+// group partitions per topic before calling fn.
+func (fs Fetches) EachTopic(fn func(FetchTopic)) {
+	switch len(fs) {
+	case 0:
+		return
+	case 1:
+		for _, topic := range fs[0].Topics {
+			fn(topic)
+		}
+		return
+	}
+
+	topics := make(map[string][]FetchPartition)
+	for _, fetch := range fs {
+		for _, topic := range fetch.Topics {
+			topics[topic.Topic] = append(topics[topic.Topic], topic.Partitions...)
+		}
+	}
+
+	for topic, partitions := range topics {
+		fn(FetchTopic{
+			topic,
+			partitions,
+		})
+	}
+}
+
 // FetchTopicPartition is similar to FetchTopic, but for an individual
 // partition.
 type FetchTopicPartition struct {
