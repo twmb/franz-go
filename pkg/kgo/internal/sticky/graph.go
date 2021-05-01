@@ -16,7 +16,7 @@ type graph struct {
 	// edge => who owns this edge; built in balancer's assignUnassigned
 	cxns []uint16
 
-	// scores are all node scores from a seach node. The gscore field
+	// scores are all node scores from a seach node. The distance field
 	// is reset on findSteal to noScore.
 	scores pathScores
 
@@ -59,19 +59,18 @@ func (g *graph) changeOwnership(edge int32, newDst uint16) {
 	g.cxns[edge] = newDst
 }
 
-// findSteal uses A* search to find a path from the best node it can reach.
+// findSteal uses Dijkstra search to find a path from the best node it can reach.
 func (g *graph) findSteal(from uint16) ([]stealSegment, bool) {
 	// First, we must reset our scores from any prior run. This is O(M),
 	// but is fast and faster than making a map and extending it a lot.
 	for i := range g.scores {
-		g.scores[i].gscore = noScore
+		g.scores[i].distance = noScore
 		g.scores[i].done = false
 	}
 
 	first, _ := g.getScore(from)
 
-	first.gscore = 0
-	first.fscore = h(first, first)
+	first.distance = 0
 	first.done = true
 
 	g.heapBuf = append(g.heapBuf[:0], first)
@@ -104,22 +103,22 @@ func (g *graph) findSteal(from uint16) ([]stealSegment, bool) {
 					continue
 				}
 
-				gscore := current.gscore + 1
-				// If our neghbor gscore is less or equal, then we can
+				distance := current.distance + 1
+				// If our neghbor distance is less or equal, then we can
 				// reach the neighbor through a previous route we have
 				// tried and should not try again.
-				if gscore < neighbor.gscore {
+				if distance < neighbor.distance {
 					neighbor.parent = current
 					neighbor.srcEdge = edge
-					neighbor.gscore = gscore
-					neighbor.fscore = gscore + h(first, neighbor)
+					neighbor.distance = distance
 					if isNew {
 						heap.Push(rem, neighbor)
 					}
+
 					// We never need to fix the heap position.
-					// Our level and fscore is static, and once
-					// we set gscore, it is the minumum it will be
-					// and we never revisit this neighbor.
+					// Our level is static, and once we set
+					// distance, it is the minimum it will be
+					// and we never revisit the neighbor.
 				}
 			}
 		}
@@ -135,13 +134,12 @@ type stealSegment struct {
 }
 
 type pathScore struct {
-	done    bool
-	node    uint16 // member num
-	parent  *pathScore
-	srcEdge int32 // partNum
-	level   int32 // partitions owned on this segment
-	gscore  int32 // how many steals it would take to get here
-	fscore  int32
+	done     bool
+	node     uint16 // member num
+	distance int32  // how many steals it would take to get here
+	srcEdge  int32  // partNum
+	level    int32  // partitions owned on this segment
+	parent   *pathScore
 }
 
 type pathScores []pathScore
@@ -149,29 +147,14 @@ type pathScores []pathScore
 const infinityScore = 1<<31 - 1
 const noScore = -1
 
-// For A*, if we never overestimate (with h), then the path we find is
-// optimal. A true estimation of our distance to any node is the node's
-// level minus ours.
-//
-// At worst, our target must be +2 levels from us. So, our estimation
-// any node can be our level, +2, minus theirs.
-func h(first, target *pathScore) int32 {
-	r := first.level + 2 - target.level
-	if r < 0 {
-		return 0
-	}
-	return r
-}
-
 func (g *graph) getScore(node uint16) (*pathScore, bool) {
 	r := &g.scores[node]
-	exists := r.gscore != noScore
+	exists := r.distance != noScore
 	if !exists {
 		*r = pathScore{
-			node:   node,
-			level:  int32(len(g.b.plan[node])),
-			gscore: infinityScore,
-			fscore: infinityScore,
+			node:     node,
+			level:    int32(len(g.b.plan[node])),
+			distance: infinityScore,
 		}
 	}
 	return r, !exists
@@ -188,9 +171,8 @@ func (p *pathHeap) Swap(i, j int) {
 func (p *pathHeap) Less(i, j int) bool {
 	l, r := (*p)[i], (*p)[j]
 	return l.level > r.level || l.level == r.level &&
-		(l.fscore < r.fscore || l.fscore == r.fscore &&
-			(l.gscore < r.gscore || l.gscore == r.gscore &&
-				l.node < r.node))
+		(l.distance < r.distance || l.distance == r.distance &&
+			l.node < r.node)
 }
 
 func (p *pathHeap) Push(x interface{}) { *p = append(*p, x.(*pathScore)) }
