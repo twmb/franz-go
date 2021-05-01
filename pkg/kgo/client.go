@@ -919,7 +919,7 @@ func (cl *Client) handleAdminReq(ctx context.Context, req kmsg.Request) Response
 	return shard(r.last, req, resp, err)
 }
 
-// handleCoordinatorEq issues simple (non-shardable) group or txn requests.
+// handleCoordinatorReq issues simple (non-shardable) group or txn requests.
 func (cl *Client) handleCoordinatorReq(ctx context.Context, req kmsg.Request, typ int8) ResponseShard {
 	switch t := req.(type) {
 	default:
@@ -966,6 +966,8 @@ func (cl *Client) handleCoordinatorReq(ctx context.Context, req kmsg.Request, ty
 	case *kmsg.LeaveGroupRequest:
 		return cl.handleCoordinatorReqSimple(ctx, coordinatorTypeGroup, t.Group, req)
 	case *kmsg.SyncGroupRequest:
+		return cl.handleCoordinatorReqSimple(ctx, coordinatorTypeGroup, t.Group, req)
+	case *kmsg.OffsetDeleteRequest:
 		return cl.handleCoordinatorReqSimple(ctx, coordinatorTypeGroup, t.Group, req)
 	}
 }
