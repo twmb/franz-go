@@ -1519,6 +1519,13 @@ func messageSet1Length(r *Record) int32 {
 func (b *recBatch) calculateRecordNumbers(r *Record) recordNumbers {
 	tsMillis := r.Timestamp.UnixNano() / 1e6
 	tsDelta := int32(tsMillis - b.firstTimestamp)
+
+	// If this is to be the first record in the batch, then our timestamp
+	// delta is actually 0.
+	if len(b.records) == 0 {
+		tsDelta = 0
+	}
+
 	offsetDelta := int32(len(b.records)) // since called before adding record, delta is the current end
 
 	l := 1 + // attributes, int8 unused
