@@ -132,8 +132,8 @@ func (b *balancer) into() Plan {
 		topics := make(map[string][]int32, ntopics)
 		plan[member] = topics
 
-		// partInfos is created by topic, and partNums refers to
-		// indices in partInfos. If we sort by partNum, we have sorted
+		// partOwners is created by topic, and partNums refers to
+		// indices in partOwners. If we sort by partNum, we have sorted
 		// topics and partitions.
 		sort.Sort(&partNums)
 
@@ -158,7 +158,6 @@ func (b *balancer) into() Plan {
 			topicParts = append(topicParts, int32(partition))
 		}
 		topics[lastTopicInfo.topic] = topicParts[:len(topicParts):len(topicParts)]
-		topicParts = topicParts[len(topicParts):]
 	}
 	return plan
 }
@@ -346,13 +345,6 @@ type memberGeneration struct {
 	generation int32
 }
 
-// for alloc avoidance since it is easy enough.
-type memberGenerations []memberGeneration
-
-func (m *memberGenerations) Len() int           { return len(*m) }
-func (m *memberGenerations) Less(i, j int) bool { s := *m; return s[i].generation > s[j].generation }
-func (m *memberGenerations) Swap(i, j int)      { s := *m; s[i], s[j] = s[j], s[i] }
-
 type topicPartition struct {
 	topic     string
 	partition int32
@@ -398,7 +390,7 @@ func (b *balancer) assignUnassignedAndInitGraph() {
 	// below in the partition mapping. Doing this two step process allows
 	// for a 10x speed boost rather than ranging over all partitions many
 	// times.
-	membersBufs := make([]uint16, len(b.topicNums)*len(b.members))
+	topicPotentialsBuf := make([]uint16, len(b.topicNums)*len(b.members))
 	topicPotentials := make([][]uint16, len(b.topicNums))
 	for memberNum, member := range b.members {
 		for _, topic := range member.Topics {
@@ -408,8 +400,8 @@ func (b *balancer) assignUnassignedAndInitGraph() {
 			}
 			memberNums := topicPotentials[topicNum]
 			if cap(memberNums) == 0 {
-				memberNums = membersBufs[:0:len(b.members)]
-				membersBufs = membersBufs[len(b.members):]
+				memberNums = topicPotentialsBuf[:0:len(b.members)]
+				topicPotentialsBuf = topicPotentialsBuf[len(b.members):]
 			}
 			topicPotentials[topicNum] = append(memberNums, uint16(memberNum))
 		}
@@ -432,16 +424,15 @@ func (b *balancer) assignUnassignedAndInitGraph() {
 	// Next, over the prior plan, un-map deleted topics or topics that
 	// members no longer want. This is where we determine what is now
 	// unassigned.
-	partitionConsumers := make([]uint16, cap(b.partOwners)) // partNum => consuming member
+	partitionConsumers := make([]partitionConsumer, cap(b.partOwners)) // partNum => consuming member
 	for i := range partitionConsumers {
-		partitionConsumers[i] = unassignedPart
+		partitionConsumers[i] = partitionConsumer{unassignedPart, unassignedPart}
 	}
 	for memberNum := range b.plan {
 		partNums := &b.plan[memberNum]
 		for _, partNum := range *partNums {
 			topicNum := b.partOwners[partNum]
 			if len(topicPotentials[topicNum]) == 0 { // all prior subscriptions stopped wanting this partition
-				partitionConsumers[partNum] = deletedPart
 				partNums.remove(partNum)
 				continue
 			}
@@ -457,7 +448,7 @@ func (b *balancer) assignUnassignedAndInitGraph() {
 				partNums.remove(partNum)
 				continue
 			}
-			partitionConsumers[partNum] = uint16(memberNum)
+			partitionConsumers[partNum] = partitionConsumer{uint16(memberNum), uint16(memberNum)}
 		}
 	}
 
@@ -467,7 +458,7 @@ func (b *balancer) assignUnassignedAndInitGraph() {
 	}
 
 	for partNum, owner := range partitionConsumers {
-		if owner != unassignedPart {
+		if owner.memberNum != unassignedPart {
 			continue
 		}
 		potentials := topicPotentials[b.partOwners[partNum]]
@@ -477,7 +468,7 @@ func (b *balancer) assignUnassignedAndInitGraph() {
 		assigned := potentials[0]
 		b.plan[assigned].add(int32(partNum))
 		(&membersByPartitions{potentials, b.plan}).fix0()
-		partitionConsumers[partNum] = assigned
+		partitionConsumers[partNum].memberNum = assigned
 	}
 
 	// Lastly, with everything assigned, we build our steal graph for
@@ -490,20 +481,9 @@ func (b *balancer) assignUnassignedAndInitGraph() {
 	}
 }
 
-const (
-	// deletedPart and unassignedPart are fake member numbers that we use
-	// to track if a partition is deleted or unassigned.
-	//
-	// deletedPart is technically unneeded; if no member wants a partition,
-	// no member will be seen as a potential for taking it, so tracking
-	// that it was deleted is unnecessary. We do though just to be
-	// explicit.
-	//
-	// unassignedPart is the default of partitions until we process what
-	// members say they were assigned prior.
-	deletedPart    = math.MaxUint16
-	unassignedPart = math.MaxUint16 - 1
-)
+// unassignedPart is a fake member number that we use to track if a partition
+// is deleted or unassigned.
+const unassignedPart = math.MaxUint16 - 1
 
 // tryRestickyStales is a pre-assigning step where, for all stale members,
 // we give partitions back to them if the partition is currently on an
@@ -512,7 +492,7 @@ const (
 // This effectively re-stickies members before we balance further.
 func (b *balancer) tryRestickyStales(
 	topicPotentials [][]uint16,
-	partitionConsumers []uint16,
+	partitionConsumers []partitionConsumer,
 ) {
 	for staleNum, lastOwnerNum := range b.stales {
 		potentials := topicPotentials[b.partOwners[staleNum]] // there must be a potential consumer if we are here
@@ -533,7 +513,7 @@ func (b *balancer) tryRestickyStales(
 		// must be on a different owner (cannot be lastOwner),
 		// otherwise it would not be a lastOwner in the stales
 		// map; it would just be the current owner.
-		currentOwner := partitionConsumers[staleNum]
+		currentOwner := partitionConsumers[staleNum].memberNum
 		lastOwnerPartitions := &b.plan[lastOwnerNum]
 		currentOwnerPartitions := &b.plan[currentOwner]
 		if lastOwnerPartitions.len()+1 < currentOwnerPartitions.len() {
@@ -541,6 +521,11 @@ func (b *balancer) tryRestickyStales(
 			lastOwnerPartitions.add(staleNum)
 		}
 	}
+}
+
+type partitionConsumer struct {
+	memberNum   uint16
+	originalNum uint16
 }
 
 // While assigning, we keep members per topic heap sorted by the number of
@@ -605,14 +590,14 @@ func (b *balancer) balance() {
 			return
 		}
 
-		minRem := min.members
-		maxRem := max.members
-		for len(minRem) > 0 && len(maxRem) > 0 {
-			dst := minRem[0]
-			src := maxRem[0]
+		minMems := min.members
+		maxMems := max.members
+		for len(minMems) > 0 && len(maxMems) > 0 {
+			dst := minMems[0]
+			src := maxMems[0]
 
-			minRem = minRem[1:]
-			maxRem = maxRem[1:]
+			minMems = minMems[1:]
+			maxMems = maxMems[1:]
 
 			srcPartitions := &b.plan[src]
 			dstPartitions := &b.plan[dst]
@@ -623,14 +608,14 @@ func (b *balancer) balance() {
 		nextUp := b.findLevel(min.level + 1)
 		nextDown := b.findLevel(max.level - 1)
 
-		upEnd := len(min.members) - len(minRem)
-		downEnd := len(max.members) - len(maxRem)
+		endOfUps := len(min.members) - len(minMems)
+		endOfDowns := len(max.members) - len(maxMems)
 
-		nextUp.members = append(nextUp.members, min.members[:upEnd]...)
-		nextDown.members = append(nextDown.members, max.members[:downEnd]...)
+		nextUp.members = append(nextUp.members, min.members[:endOfUps]...)
+		nextDown.members = append(nextDown.members, max.members[:endOfDowns]...)
 
-		min.members = min.members[upEnd:]
-		max.members = max.members[downEnd:]
+		min.members = min.members[endOfUps:]
+		max.members = max.members[endOfDowns:]
 
 		if len(min.members) == 0 {
 			b.planByNumPartitions.Delete(b.planByNumPartitions.Min())

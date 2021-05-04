@@ -14,10 +14,10 @@ type graph struct {
 	out [][]uint32
 
 	// edge => who owns this edge; built in balancer's assignUnassigned
-	cxns []uint16
+	cxns []partitionConsumer
 
 	// scores are all node scores from a seach node. The distance field
-	// is reset on findSteal to noScore.
+	// is reset on findSteal to infinityScore..
 	scores pathScores
 
 	// heapBuf and pathBuf are backing buffers that are reused every
@@ -28,7 +28,7 @@ type graph struct {
 }
 
 func (b *balancer) newGraph(
-	partitionConsumers []uint16,
+	partitionConsumers []partitionConsumer,
 	topicPotentials [][]uint16,
 ) graph {
 	g := graph{
@@ -56,7 +56,7 @@ func (b *balancer) newGraph(
 }
 
 func (g *graph) changeOwnership(edge int32, newDst uint16) {
-	g.cxns[edge] = newDst
+	g.cxns[edge].memberNum = newDst
 }
 
 // findSteal uses Dijkstra search to find a path from the best node it can reach.
@@ -64,7 +64,7 @@ func (g *graph) findSteal(from uint16) ([]stealSegment, bool) {
 	// First, we must reset our scores from any prior run. This is O(M),
 	// but is fast and faster than making a map and extending it a lot.
 	for i := range g.scores {
-		g.scores[i].distance = noScore
+		g.scores[i].distance = infinityScore
 		g.scores[i].done = false
 	}
 
@@ -97,28 +97,40 @@ func (g *graph) findSteal(from uint16) ([]stealSegment, bool) {
 			info := g.b.topicInfos[topicNum]
 			firstPartNum, lastPartNum := info.partNum, info.partNum+info.partitions
 			for edge := firstPartNum; edge < lastPartNum; edge++ {
-				neighborNode := g.cxns[edge]
+				neighborNode := g.cxns[edge].memberNum
 				neighbor, isNew := g.getScore(neighborNode)
 				if neighbor.done {
 					continue
 				}
 
 				distance := current.distance + 1
-				// If our neghbor distance is less or equal, then we can
-				// reach the neighbor through a previous route we have
-				// tried and should not try again.
-				if distance < neighbor.distance {
+
+				// The neighbor is the current node that owns this edge.
+				// If our node originally owned this partition, then it
+				// would be preferable to steal edge back.
+				srcIsOriginal := g.cxns[edge].originalNum == current.node
+
+				// If this is a new neighbor (our first time seeing the neighbor
+				// in our search), this is also the shortest path to reach them,
+				// where shortest defers preference to original sources THEN distance.
+				if isNew {
 					neighbor.parent = current
+					neighbor.srcIsOriginal = srcIsOriginal
 					neighbor.srcEdge = edge
 					neighbor.distance = distance
-					if isNew {
-						heap.Push(rem, neighbor)
-					}
+					neighbor.heapIdx = len(*rem)
+					heap.Push(rem, neighbor)
 
-					// We never need to fix the heap position.
-					// Our level is static, and once we set
-					// distance, it is the minimum it will be
-					// and we never revisit the neighbor.
+				} else if !neighbor.srcIsOriginal && srcIsOriginal {
+					// If the search path has seen this neighbor before, but
+					// we now are evaluating a partition that would increase
+					// stickiness if stolen, then fixup the neighbor's parent
+					// and srcEdge.
+					neighbor.parent = current
+					neighbor.srcIsOriginal = true
+					neighbor.srcEdge = edge
+					neighbor.distance = distance
+					heap.Fix(rem, neighbor.heapIdx)
 				}
 			}
 		}
@@ -133,23 +145,39 @@ type stealSegment struct {
 	part int32  // partNum
 }
 
+// As we traverse a graph, we assign each node a path score, which tracks a few
+// numbers for what it would take to reach this node from our first node.
 type pathScore struct {
-	done     bool
-	node     uint16 // member num
+	// Done is set to true when we pop a node off of the graph. Once we
+	// pop a node, it means we have found a best path to that node and
+	// we do not want to revisit it for processing if any other future
+	// nodes reach back to this one.
+	done bool
+
+	// srcIsOriginal is true if, were our parent to steal srcEdge, would
+	// that put srcEdge back on the original member. That is, if we are B
+	// and our parent is A, does our srcEdge originally belong do A?
+	//
+	// This field exists to work around a very slim edge case where a
+	// partition is stolen by B and then needs to be stolen back by A
+	// later.
+	srcIsOriginal bool
+
+	node     uint16 // our member num
 	distance int32  // how many steals it would take to get here
-	srcEdge  int32  // partNum
+	srcEdge  int32  // the partition used to reach us
 	level    int32  // partitions owned on this segment
 	parent   *pathScore
+	heapIdx  int
 }
 
 type pathScores []pathScore
 
 const infinityScore = 1<<31 - 1
-const noScore = -1
 
 func (g *graph) getScore(node uint16) (*pathScore, bool) {
 	r := &g.scores[node]
-	exists := r.distance != noScore
+	exists := r.distance != infinityScore
 	if !exists {
 		*r = pathScore{
 			node:     node,
@@ -165,14 +193,28 @@ type pathHeap []*pathScore
 func (p *pathHeap) Len() int { return len(*p) }
 func (p *pathHeap) Swap(i, j int) {
 	h := *p
-	h[i], h[j] = h[j], h[i]
+	l, r := h[i], h[j]
+	l.heapIdx, r.heapIdx = r.heapIdx, l.heapIdx
+	h[i], h[j] = r, l
 }
 
+// For our path, we always want to prioritize stealing a partition we
+// originally owned. This may result in a longer steal path, but it will
+// increase stickiness.
+//
+// Next, our real goal, which is to find a node we can steal from. Because of
+// this, we always want to sort by the highest level. The pathHeap stores
+// reachable paths, so by sorting by the highest level, we terminate quicker:
+// we always check the most likely candidates to quit our search.
+//
+// Finally, we simply prefer searching through shorter paths and, barring that,
+// just sort by node.
 func (p *pathHeap) Less(i, j int) bool {
 	l, r := (*p)[i], (*p)[j]
-	return l.level > r.level || l.level == r.level &&
-		(l.distance < r.distance || l.distance == r.distance &&
-			l.node < r.node)
+	return l.srcIsOriginal && !r.srcIsOriginal || !l.srcIsOriginal && !r.srcIsOriginal &&
+		(l.level > r.level || l.level == r.level &&
+			(l.distance < r.distance || l.distance == r.distance &&
+				l.node < r.node))
 }
 
 func (p *pathHeap) Push(x interface{}) { *p = append(*p, x.(*pathScore)) }

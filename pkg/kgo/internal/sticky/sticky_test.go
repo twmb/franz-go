@@ -977,6 +977,128 @@ func TestImbalanced(t *testing.T) {
 			},
 		},
 
+		{
+
+			// This test specifically triggers a condition where B
+			// will still from A and then A will steal back from B.
+			// The problem is that we want A to re-steal its
+			// partition, rather than lose stickiness.
+
+			// Start:
+			// A: [1 2 3 4 5 6]
+			// B: [1 2 3 4 5 6]
+			// C: [5 6 7 8]
+			// D: [7 8 9 a b c]
+			// E: [9 a b c d e f g h i]
+			// F: [7 8 9 a b c d e f g h i]
+			//
+			// A -> 0 1 2 3 4 5 6
+			// B -> 7 8 9 a b
+			// C ->
+			// D -> c d
+			// E -> e f
+			// F -> g h i j k l m n o p q r s t
+			//
+			// Ideal:
+			//
+			// A => [1 2 3 4 6]
+			// B => [0 5 7 a b]
+			// C => [8 9 c e f]
+			// D => [d h j p s]
+			// E => [g i l n q]
+			// F => [k m o r t]
+
+			// Less ideal is the same balance, but with lost stickiness.
+
+			name: "imbalance hard",
+			members: []GroupMember{
+				{ID: "A", Topics: []string{"0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b"},
+					UserData: newUD().
+						assign("0", 0).
+						assign("1", 0).
+						assign("2", 0).
+						assign("3", 0).
+						assign("4", 0).
+						assign("5", 0).
+						assign("6", 0).
+						encode()},
+				{ID: "B", Topics: []string{"0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b"},
+					UserData: newUD().
+						assign("7", 0).
+						assign("8", 0).
+						assign("9", 0).
+						assign("a", 0).
+						assign("b", 0).
+						encode()},
+				{ID: "C", Topics: []string{"7", "8", "9", "a", "b", "c", "d", "e", "f"},
+					UserData: newUD().
+						encode()},
+				{ID: "D", Topics: []string{"c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r", "s", "t"},
+					UserData: newUD().
+						assign("c", 0).
+						assign("d", 0).
+						encode()},
+				{ID: "E", Topics: []string{"c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r", "s", "t"},
+					UserData: newUD().
+						assign("e", 0).
+						assign("f", 0).
+						encode()},
+				{ID: "F", Topics: []string{"c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r", "s", "t"},
+					UserData: newUD().
+						assign("g", 0).
+						assign("h", 0).
+						assign("i", 0).
+						assign("j", 0).
+						assign("k", 0).
+						assign("l", 0).
+						assign("m", 0).
+						assign("n", 0).
+						assign("o", 0).
+						assign("p", 0).
+						assign("q", 0).
+						assign("r", 0).
+						assign("s", 0).
+						assign("t", 0).
+						encode()},
+			},
+			topics: map[string]int32{
+				"0": 1,
+				"1": 1,
+				"2": 1,
+				"3": 1,
+				"4": 1,
+				"5": 1,
+				"6": 1,
+				"7": 1,
+				"8": 1,
+				"9": 1,
+				"a": 1,
+				"b": 1,
+				"c": 1,
+				"d": 1,
+				"e": 1,
+				"f": 1,
+				"g": 1,
+				"h": 1,
+				"i": 1,
+				"j": 1,
+				"k": 1,
+				"l": 1,
+				"m": 1,
+				"n": 1,
+				"o": 1,
+				"p": 1,
+				"q": 1,
+				"r": 1,
+				"s": 1,
+				"t": 1,
+			},
+			nsticky: 14,
+			balance: map[int]resultOptions{
+				5: {[]string{"A", "B", "C", "D", "E", "F"}, 6},
+			},
+		},
+
 		//
 	} {
 		t.Run(test.name, func(t *testing.T) {
