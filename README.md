@@ -51,17 +51,13 @@ ctx := context.Background()
 var wg sync.WaitGroup
 wg.Add(1)
 record := &kgo.Record{Topic: "foo", Value: []byte("bar")}
-err := client.Produce(ctx, record, func(_ *Record, err error) {
+client.Produce(ctx, record, func(_ *Record, err error) {
 	defer wg.Done()
 	if err != nil {
 		fmt.Printf("record had a produce error: %v\n", err)
 	}
 
 })
-if err != nil {
-	panic("we are unable to produce if the context is canceled, we have hit max buffered, " +
-		"or if we are transactional and not in a transaction")
-}
 wg.Wait()
 
 // 2.) Consuming messages from a topic

@@ -56,7 +56,7 @@ type unknownTopicProduces struct {
 func (p *producer) init() {
 	p.topics = newTopicsPartitions()
 	p.unknownTopics = make(map[string]*unknownTopicProduces)
-	p.waitBuffer = make(chan struct{}, 100)
+	p.waitBuffer = make(chan struct{}, 32)
 	p.idVersion = -1
 	p.id.Store(&producerID{
 		id:    -1,
@@ -129,9 +129,7 @@ func (cl *Client) ProduceSync(ctx context.Context, rs ...*Record) ProduceResults
 
 	wg.Add(len(rs))
 	for _, r := range rs {
-		if err := cl.Produce(ctx, r, promise); err != nil {
-			promise(r, err)
-		}
+		cl.Produce(ctx, r, promise)
 	}
 	wg.Wait()
 
@@ -143,29 +141,29 @@ func (cl *Client) ProduceSync(ctx context.Context, rs ...*Record) ProduceResults
 // synchronous produce, see ProduceSync.
 //
 // The promise is optional, but not using it means you will not know if Kafka
-// recorded a record properly. Promises are called in order if the record is
-// buffered to a topic that has loaded successfully. Topics that fail loading,
-// or records that cannot be buffered, may not have their promises called in
-// order. Promises may be called concurrently.
+// recorded a record properly. Records are produced in per-partition order and
+// promises are called in per-partition order if the record is buffered to a
+// topic that has loaded successfully. Topics that fail loading, or records
+// that cannot be buffered, may not have their promises called in order.
+// Promises may be called concurrently.
 //
-// If there was no produce error, the record's attrs / offset / etc. fields are
-// updated appropriately before a promise is called.
+// If a record is produced successfully, the record's attrs / offset / etc.
+// fields are updated appropriately before a promise is called.
 //
 // If the record is too large to fit in a batch on its own in a produce
-// request, the promise is called immediately before this function returns with
-// kerr.MessageToLarge.
+// request, the promise will be called with kerr.MessageTooLarge and there will
+// be no attempt to produce the record.
 //
 // The context is used if the client currently has the max amount of buffered
 // records. If so, the client waits for some records to complete or for the
-// context or client to quit. If the context / client quits, this returns an
-// error.
+// context or client to quit. If the context / client quits, the promise is
+// called with ctx.Err().
 //
-// The context is also used on a per-partition basis. If the context is done
-// for the first record buffered in a partition, and if it is valid to abort
-// records (to avoid invalid sequence numbers), all buffered records for a
-// partition are aborted. The context checked for doneness is always the first
-// buffered record's context. If that record is successfully produced, the
-// context will then be the next first buffered record. The context is
+// The context is also used on a per-partition basis to abort buffered records.
+// If the context is done for the first record buffered in a partition, and if
+// it is valid to abort records (i.e., we can avoid invalid sequence numbers),
+// then all buffered records for a partition are aborted. The context checked
+// for doneness is always the first buffered record's context. The context is
 // evaluated before or after writing a request.
 //
 // The first buffered record for an unknown topic begins a timeout for the
@@ -176,57 +174,62 @@ func (cl *Client) ProduceSync(ctx context.Context, rs ...*Record) ProduceResults
 // buffered. This may be changed in the future if necessary, however, the only
 // reason for a topic to not load promptly is if it does not exist.
 //
-// If manually flushing and there are already MaxBufferedRecords buffered, this
-// will return ErrMaxBuffered.
+// If manual flushing is configured and there are already MaxBufferedRecords
+// buffered, the promise is immediately called with ErrMaxBuffered.
 //
-// If the client is transactional and a transaction has not been begun, this
-// returns an error corresponding to not being in a transaction.
-//
-// Thus, there are only three possible errors: the non-transaction error, and
-// then either a context error or ErrMaxBuffered.
+// If the client is transactional and a transaction has not been begun, the
+// promise is immediately called with an error corresponding to not being in
+// a transaction.
 func (cl *Client) Produce(
 	ctx context.Context,
 	r *Record,
 	promise func(*Record, error),
-) error {
+) {
+	if promise == nil {
+		promise = noPromise
+	}
+
 	p := &cl.producer
 
 	if cl.cfg.txnID != nil && atomic.LoadUint32(&p.producingTxn) != 1 {
-		return errNotInTransaction
+		go promise(r, errNotInTransaction) // see comment just below for why we 'go' this
+		return
 	}
 
 	if atomic.AddInt64(&p.bufferedRecords, 1) > cl.cfg.maxBufferedRecords {
 		// If the client ctx cancels or the produce ctx cancels, we
-		// need to un-count our buffering of this record. As well, to
-		// be safe, we need to drain a slot from the waitBuffer chan,
-		// which will be sent to. Thus, for easiness, if either ctx is
-		// canceled, we just finish a fake promise with no record
-		// (i.e., pretending we finished this record) and drain the
-		// waitBuffer as normal.
-		drainBuffered := func() {
+		// need to un-count our buffering of this record. We also need
+		// to drain a slot from the waitBuffer chan, which could be
+		// sent to right when we are erroring.
+		//
+		// We issue the waitBuffer drain in a goroutine because we do
+		// not want to block sending to it.
+		//
+		// We issue the promise finishing in a goroutine because we do
+		// not want to block Produce on executing the promise. The user
+		// could be consuming from a channel that is sent to in the
+		// promise only *after* Produce returns; not executing the
+		// promise in a goroutine would lead to a deadlock.
+		drainBuffered := func(err error) {
 			go func() { <-p.waitBuffer }()
-			cl.finishRecordPromise(promisedRec{ctx, noPromise, nil}, nil)
+			go cl.finishRecordPromise(promisedRec{ctx, promise, r}, err)
 		}
 		if cl.cfg.manualFlushing {
-			drainBuffered()
-			return ErrMaxBuffered
+			drainBuffered(ErrMaxBuffered)
+			return
 		}
 		select {
 		case <-p.waitBuffer:
 		case <-cl.ctx.Done():
-			drainBuffered()
-			return cl.ctx.Err()
+			drainBuffered(cl.ctx.Err())
+			return
 		case <-ctx.Done():
-			drainBuffered()
-			return ctx.Err()
+			drainBuffered(ctx.Err())
+			return
 		}
 	}
 
-	if promise == nil {
-		promise = noPromise
-	}
 	cl.partitionRecord(promisedRec{ctx, promise, r})
-	return nil
 }
 
 func (cl *Client) finishRecordPromise(pr promisedRec, err error) {

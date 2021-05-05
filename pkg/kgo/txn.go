@@ -121,8 +121,8 @@ func (s *GroupTransactSession) ProduceSync(ctx context.Context, rs ...*Record) P
 // Please refer to that function's documentation.
 //
 // It is invalid to call Produce concurrently with Begin or End.
-func (s *GroupTransactSession) Produce(ctx context.Context, r *Record, promise func(*Record, error)) error {
-	return s.cl.Produce(ctx, r, promise)
+func (s *GroupTransactSession) Produce(ctx context.Context, r *Record, promise func(*Record, error)) {
+	s.cl.Produce(ctx, r, promise)
 }
 
 // Begin begins a transaction, returning an error if the client has no

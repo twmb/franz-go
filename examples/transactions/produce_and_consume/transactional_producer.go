@@ -77,13 +77,12 @@ func produceRecords(ctx context.Context, client *kgo.Client, topic string, batch
 			Topic: topic,
 		}
 
-		err := client.Produce(ctx, r, func(r *kgo.Record, e error) {
-			fmt.Printf("produced message: %s", message)
+		client.Produce(ctx, r, func(r *kgo.Record, e error) {
+			if e != nil {
+				fmt.Printf("produced message: %s", message)
+			}
 			errChan <- e
 		})
-		if err != nil {
-			return err
-		}
 
 		if err := <-errChan; err != nil {
 			return err
