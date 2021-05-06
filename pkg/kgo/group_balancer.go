@@ -1,6 +1,7 @@
 package kgo
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"sort"
@@ -13,89 +14,158 @@ import (
 
 // GroupBalancer balances topics and partitions among group members.
 type GroupBalancer interface {
-	// protocolName returns the name of the protocol, e.g. roundrobin,
+	// ProtocolName returns the name of the protocol, e.g. roundrobin,
 	// range, sticky.
-	protocolName() string // "sticky"
+	ProtocolName() string
 
-	// metaFor returns the userdata to use in JoinGroup, given the topic
-	// interests and the current assignment.
-	metaFor(
-		interests []string,
+	// JoinGroupMetadata returns the metadata to use in JoinGroup, given the topic
+	// interests and the current assignment and group generation.
+	JoinGroupMetadata(
+		topicInterests []string,
 		currentAssignment map[string][]int32,
 		generation int32,
 	) []byte
 
-	// balance balances topics and partitions among group members.
+	// MemberBalancer returns a GroupMemberBalancer for the given group
+	// members, as well as the topics that all the members are interested
+	// in. If the client does not have some topics in the returned topics,
+	// the client issues a metadata request to load the number of
+	// partitions in those topics before calling the GroupMemberBalancer's
+	// Balance function.
 	//
-	// The input members are guaranteed to be sorted by member ID, and
-	// each member's topics are guaranteed to be sorted.
-	balance(members []groupMember, topics map[string]int32) balancePlan
+	// The input group members are guaranteed to be sorted first by
+	// instance ID, if non-nil, and then by member ID.
+	//
+	// It is up to the user to decide how to decode each member's
+	// ProtocolMetadata field. The default client group protocol of
+	// "consumer" by default uses join group metadata's of type
+	// kmsg.GroupMemberMetadata. If this is the case for you, it may be
+	// useful to use the ConsumerBalancer type to help parse the metadata
+	// and balance.
+	//
+	// If the member metadata cannot be deserialized correctly, this should
+	// return a relevant error.
+	MemberBalancer(members []kmsg.JoinGroupResponseMember) (b GroupMemberBalancer, topics map[string]struct{}, err error)
 
-	// isCooperative returns if this is a cooperative balance strategy.
-	isCooperative() bool
+	// IsCooperative returns if this is a cooperative balance strategy.
+	IsCooperative() bool
 }
 
-// groupMember is a member id and the topics that member is interested in.
-type groupMember struct {
-	id       groupMemberID
-	version  int16
-	topics   []string
-	userdata []byte
-
-	owned []kmsg.GroupMemberMetadataOwnedPartition
+// GroupMemberBalancer balances topics amongst group members.
+type GroupMemberBalancer interface {
+	// Balance balances topics and partitions among group members, where
+	// the int32 in the topics map corresponds to the number of partitions
+	// known to be in each topic.
+	Balance(topics map[string]int32) IntoSyncAssignment
 }
 
-func (m *groupMember) balanceInterests() string {
-	var sb strings.Builder
-	sb.WriteString("interested topics: ")
-	fmt.Fprintf(&sb, "%v", m.topics)
-	sb.WriteString(", previously owned: ")
-	for i, owned := range m.owned {
-		fmt.Fprintf(&sb, "%s%v", owned.Topic, owned.Partitions)
-		if i < len(m.owned) {
-			sb.WriteString(", ")
-		}
+// IntoSyncAssignment takes a balance plan and returns a list of assignments
+// to use in a kmsg.SyncGroupRequest.
+type IntoSyncAssignment interface {
+	IntoSyncAssignment() []kmsg.SyncGroupRequestGroupAssignment
+}
+
+// ConsumerBalancer is a helper type for writing balance plans that use the
+// "consumer" protocol, such that each member uses a kmsg.GroupMemberMetadata
+// in its join group request.
+type ConsumerBalancer struct {
+	b         ConsumerBalancerBalance
+	members   []kmsg.JoinGroupResponseMember
+	metadatas []kmsg.GroupMemberMetadata
+	topics    map[string]struct{}
+}
+
+// Balance satisfies the GroupMemberBalancer interface.
+func (b *ConsumerBalancer) Balance(topics map[string]int32) IntoSyncAssignment {
+	return b.b.Balance(b, topics)
+}
+
+// Member returns the list of input members for this group balancer.
+func (b *ConsumerBalancer) Members() []kmsg.JoinGroupResponseMember {
+	return b.members
+}
+
+// EachMember calls fn for each member and its corresponding metadata in the
+// consumer group being balanced.
+func (b *ConsumerBalancer) EachMember(fn func(member *kmsg.JoinGroupResponseMember, meta *kmsg.GroupMemberMetadata)) {
+	for i := range b.members {
+		fn(&b.members[i], &b.metadatas[i])
 	}
-	return sb.String()
 }
 
-type groupMemberID struct {
-	memberID    string
-	instanceID  string
-	hasInstance bool
+// MemberAt returns the nth member and its corresponding metadata.
+func (b *ConsumerBalancer) MemberAt(n int) (*kmsg.JoinGroupResponseMember, *kmsg.GroupMemberMetadata) {
+	return &b.members[n], &b.metadatas[n]
 }
 
-func (id *groupMemberID) String() string {
-	if id.hasInstance {
-		return id.memberID + "(" + id.instanceID + ")"
-	}
-	return id.memberID
-}
-
-func (me groupMemberID) less(other groupMemberID) bool {
-	if me.hasInstance && other.hasInstance {
-		return me.instanceID < other.instanceID
-	} else if me.hasInstance {
-		return true
-	} else if other.hasInstance {
-		return false
-	} else {
-		return me.memberID < other.memberID
-	}
-}
-
-// balancePlan is the result of balancing topic partitions among members.
+// MemberTopics returns the unique set of topics that all members are
+// interested in.
 //
-// member id => topic => partitions
-type balancePlan map[groupMemberID]map[string][]int32
+// This can safely be called if the balancer is nil; if so, this will return
+// nil.
+func (b *ConsumerBalancer) MemberTopics() map[string]struct{} {
+	if b == nil {
+		return nil
+	}
+	return b.topics
+}
 
-func (p balancePlan) String() string {
+// NewPlan returns a type that can be used to build a balance plan. The return
+// satisfies the IntoSyncAssignment interface.
+func (b *ConsumerBalancer) NewPlan() *BalancePlan {
+	plan := make(map[string]map[string][]int32, len(b.members))
+	for i := range b.members {
+		plan[b.members[i].MemberID] = make(map[string][]int32)
+	}
+	return &BalancePlan{plan}
+}
+
+// ConsumerBalancerBalance is what the ConsumerBalancer invokes to balance a
+// group.
+type ConsumerBalancerBalance interface {
+	Balance(*ConsumerBalancer, map[string]int32) IntoSyncAssignment
+}
+
+// NewConsumerBalancer parses the each member's metadata as a
+// kmsg.GroupMemberMetadata and returns a ConsumerBalancer to use in balancing.
+//
+// If any metadata parsing fails, this returns an error.
+func NewConsumerBalancer(balance ConsumerBalancerBalance, members []kmsg.JoinGroupResponseMember) (*ConsumerBalancer, error) {
+	b := &ConsumerBalancer{
+		b:         balance,
+		members:   members,
+		metadatas: make([]kmsg.GroupMemberMetadata, len(members)),
+		topics:    make(map[string]struct{}),
+	}
+
+	for i, member := range members {
+		meta := &b.metadatas[i]
+		meta.Default()
+		if err := meta.ReadFrom(member.ProtocolMetadata); err != nil {
+			return nil, fmt.Errorf("unable to read member metadata: %v", err)
+		}
+		for _, topic := range meta.Topics {
+			b.topics[topic] = struct{}{}
+		}
+		sort.Strings(meta.Topics)
+	}
+
+	return b, nil
+}
+
+// BalancePlan is a helper type to build the result of balancing topics
+// and partitions among group members.
+type BalancePlan struct {
+	plan map[string]map[string][]int32 // member => topic => partitions
+}
+
+func (p *BalancePlan) String() string {
 	var sb strings.Builder
 
 	var membersWritten int
-	for member, topics := range p {
+	for member, topics := range p.plan {
 		membersWritten++
-		sb.WriteString(member.String())
+		sb.WriteString(member)
 		sb.WriteString("{")
 
 		var topicsWritten int
@@ -108,7 +178,7 @@ func (p balancePlan) String() string {
 		}
 
 		sb.WriteString("}")
-		if membersWritten < len(p) {
+		if membersWritten < len(p.plan) {
 			sb.WriteString(", ")
 		}
 	}
@@ -116,27 +186,22 @@ func (p balancePlan) String() string {
 	return sb.String()
 }
 
-func newBalancePlan(members []groupMember) balancePlan {
-	plan := make(map[groupMemberID]map[string][]int32, len(members))
-	for i := range members {
-		plan[members[i].id] = make(map[string][]int32)
-	}
-	return plan
-}
-
-func (plan balancePlan) addPartition(member groupMemberID, topic string, partition int32) {
-	memberPlan := plan[member]
+// AddPartition assigns a partition for the topic to a given member.
+func (p *BalancePlan) AddPartition(member *kmsg.JoinGroupResponseMember, topic string, partition int32) {
+	memberPlan := p.plan[member.MemberID]
 	memberPlan[topic] = append(memberPlan[topic], partition)
 }
-func (plan balancePlan) addPartitions(member groupMemberID, topic string, partitions []int32) {
-	memberPlan := plan[member]
+
+// AddPartitions assigns many partitions for a topic to a given member.
+func (p *BalancePlan) AddPartitions(member *kmsg.JoinGroupResponseMember, topic string, partitions []int32) {
+	memberPlan := p.plan[member.MemberID]
 	memberPlan[topic] = append(memberPlan[topic], partitions...)
 }
 
-// intoAssignment translates a balance plan to the kmsg equivalent type.
-func (plan balancePlan) intoAssignment() []kmsg.SyncGroupRequestGroupAssignment {
-	kassignments := make([]kmsg.SyncGroupRequestGroupAssignment, 0, len(plan))
-	for member, assignment := range plan {
+// IntoSyncAssignment satisfies the IntoSyncAssignment interface.
+func (p *BalancePlan) IntoSyncAssignment() []kmsg.SyncGroupRequestGroupAssignment {
+	kassignments := make([]kmsg.SyncGroupRequestGroupAssignment, 0, len(p.plan))
+	for member, assignment := range p.plan {
 		var kassignment kmsg.GroupMemberAssignment
 		for topic, partitions := range assignment {
 			kassignment.Topics = append(kassignment.Topics, kmsg.GroupMemberAssignmentTopic{
@@ -145,52 +210,70 @@ func (plan balancePlan) intoAssignment() []kmsg.SyncGroupRequestGroupAssignment 
 			})
 		}
 		kassignments = append(kassignments, kmsg.SyncGroupRequestGroupAssignment{
-			MemberID:         member.memberID,
+			MemberID:         member,
 			MemberAssignment: kassignment.AppendTo(nil),
 		})
 	}
 	return kassignments
 }
 
+func joinMemberLess(l, r *kmsg.JoinGroupResponseMember) bool {
+	if l.InstanceID != nil {
+		if r.InstanceID == nil {
+			return true
+		}
+		return *l.InstanceID < *r.InstanceID
+	}
+	if r.InstanceID != nil {
+		return false
+	}
+	return l.MemberID < r.MemberID
+}
+func sortJoinMembers(members []kmsg.JoinGroupResponseMember) {
+	sort.Slice(members, func(i, j int) bool { return joinMemberLess(&members[i], &members[j]) })
+}
+func sortJoinMemberPtrs(members []*kmsg.JoinGroupResponseMember) {
+	sort.Slice(members, func(i, j int) bool { return joinMemberLess(members[i], members[j]) })
+}
+
 // balanceGroup returns a balancePlan from a join group response.
-func (g *groupConsumer) balanceGroup(proto string, kmembers []kmsg.JoinGroupResponseMember) (balancePlan, error) {
-	members, err := parseGroupMembers(kmembers)
-	if err != nil {
-		return nil, err
-	}
-	if len(members) == 0 {
-		return nil, errors.New("invalidly empty balance members")
-	}
-	sort.Slice(members, func(i, j int) bool {
-		return members[i].id.less(members[j].id) // guarantee sorted members
-	})
-
-	myTopics := g.tps.load()
-	allTopics := make(map[string]struct{})
-	var needMeta bool
-
+func (g *groupConsumer) balanceGroup(proto string, members []kmsg.JoinGroupResponseMember) ([]kmsg.SyncGroupRequestGroupAssignment, error) {
 	g.cl.cfg.logger.Log(LogLevelInfo, "balancing group as leader")
-	for i := range members {
-		m := &members[i]
-		sort.Strings(m.topics) // guarantee sorted topics
-		g.cl.cfg.logger.Log(LogLevelInfo, "balance group member", "id", m.id.String(), "interests", m.balanceInterests())
 
-		for _, topic := range m.topics {
-			allTopics[topic] = struct{}{}
-			if _, exists := myTopics[topic]; !exists {
-				needMeta = true
-			}
+	var b GroupBalancer
+	for _, balancer := range g.balancers {
+		if balancer.ProtocolName() == proto {
+			b = balancer
 		}
 	}
+	if b == nil {
+		return nil, errors.New("unable to balance: none of our balances have a name equal to the balancer chosen for balancing")
+	}
 
-	topicPartitionCount := make(map[string]int32, len(myTopics))
-	for topic, data := range myTopics {
+	sortJoinMembers(members)
+
+	memberBalancer, topics, err := b.MemberBalancer(members)
+
+	if err != nil {
+		return nil, fmt.Errorf("unable to create group member balancer: %v", err)
+	}
+
+	myTopics := g.tps.load()
+	var needMeta bool
+	topicPartitionCount := make(map[string]int32, len(topics))
+	for topic := range topics {
+		data, exists := myTopics[topic]
+		if !exists {
+			needMeta = true
+			continue
+		}
 		topicPartitionCount[topic] = int32(len(data.load().partitions))
 	}
+
 	if needMeta {
 		g.cl.cfg.logger.Log(LogLevelInfo, "group members indicated interest in topics the leader is not assigned, fetching metadata for all group topics")
 		var metaTopics []string
-		for topic := range allTopics {
+		for topic := range topics {
 			metaTopics = append(metaTopics, topic)
 		}
 
@@ -208,44 +291,46 @@ func (g *groupConsumer) balanceGroup(proto string, kmembers []kmsg.JoinGroupResp
 		}
 	}
 
-	for _, balancer := range g.balancers {
-		if balancer.protocolName() == proto {
-			plan := balancer.balance(members, topicPartitionCount)
-			g.cl.cfg.logger.Log(LogLevelInfo, "balanced", "plan", plan.String())
-			return plan, nil
-		}
-	}
-	return nil, errors.New("unable to balance: none of our balances have a name equal to the balancer chosen for balancing")
-}
+	// If the returned balancer is a ConsumerBalancer (which it likely
+	// always will be), then we can print some useful debugging information
+	// about what member interests are.
+	if b, ok := memberBalancer.(*ConsumerBalancer); ok {
+		interests := new(bytes.Buffer)
+		b.EachMember(func(member *kmsg.JoinGroupResponseMember, meta *kmsg.GroupMemberMetadata) {
+			interests.Reset()
+			fmt.Fprintf(interests, "interested topics: %v, previously owned: ", meta.Topics)
+			for _, owned := range meta.OwnedPartitions {
+				sort.Slice(owned.Partitions, func(i, j int) bool { return owned.Partitions[i] < owned.Partitions[j] })
+				fmt.Fprintf(interests, "%s%v, ", owned.Topic, owned.Partitions)
+			}
+			strInterests := interests.String()
+			strings.TrimSuffix(strInterests, ", ")
 
-// parseGroupMembers takes the raw data in from a join group response and
-// returns the parsed group members.
-func parseGroupMembers(kmembers []kmsg.JoinGroupResponseMember) ([]groupMember, error) {
-	members := make([]groupMember, 0, len(kmembers))
-	for _, kmember := range kmembers {
-		var meta kmsg.GroupMemberMetadata
-		if err := meta.ReadFrom(kmember.ProtocolMetadata); err != nil {
-			return nil, fmt.Errorf("unable to read member metadata: %v", err)
-		}
-		id := groupMemberID{
-			memberID: kmember.MemberID,
-		}
-		if kmember.InstanceID != nil {
-			id.instanceID = *kmember.InstanceID
-			id.hasInstance = true
-		}
-		members = append(members, groupMember{
-			id:       id,
-			version:  meta.Version,
-			topics:   meta.Topics,
-			userdata: meta.UserData,
-			owned:    meta.OwnedPartitions,
+			if member.InstanceID == nil {
+				g.cl.cfg.logger.Log(LogLevelInfo, "balance group member", "id", member.MemberID, "interests", strInterests)
+			} else {
+				g.cl.cfg.logger.Log(LogLevelInfo, "balance group member", "id", member.MemberID, "instance_id", *member.InstanceID, "interests", strInterests)
+			}
 		})
+	} else {
+		g.cl.cfg.logger.Log(LogLevelInfo, "unable to log information about group member interests: the user has defined a custom balancer (not a *ConsumerBalancer)")
 	}
-	return members, nil
+
+	// If the returned IntoSyncAssignment is a BalancePlan, which it likely
+	// is if the balancer is a ConsumerBalancer, then we can again print
+	// more useful debugging information.
+	into := memberBalancer.Balance(topicPartitionCount)
+	if p, ok := into.(*BalancePlan); ok {
+		g.cl.cfg.logger.Log(LogLevelInfo, "balanced", "plan", p.String())
+	} else {
+		g.cl.cfg.logger.Log(LogLevelInfo, "unable to log balance plan: the user has returned a custom IntoSyncAssignment (not a *BalancePlan)")
+	}
+
+	return into.IntoSyncAssignment(), nil
 }
 
-func basicMetaFor(interests []string) []byte {
+// helper func; range and roundrobin use v0
+func memberMetadataV0(interests []string) []byte {
 	return (&kmsg.GroupMemberMetadata{
 		Version: 0,
 		Topics:  interests,
@@ -278,20 +363,17 @@ func RoundRobinBalancer() GroupBalancer {
 
 type roundRobinBalancer struct{}
 
-func (*roundRobinBalancer) protocolName() string { return "roundrobin" }
-func (*roundRobinBalancer) isCooperative() bool  { return false }
-func (*roundRobinBalancer) metaFor(interests []string, _ map[string][]int32, _ int32) []byte {
-	return basicMetaFor(interests)
+func (*roundRobinBalancer) ProtocolName() string { return "roundrobin" }
+func (*roundRobinBalancer) IsCooperative() bool  { return false }
+func (*roundRobinBalancer) JoinGroupMetadata(interests []string, _ map[string][]int32, _ int32) []byte {
+	return memberMetadataV0(interests)
 }
-func (*roundRobinBalancer) balance(members []groupMember, topics map[string]int32) balancePlan {
-	// Get all the topics all members are subscribed to.
-	memberTopics := make(map[string]struct{}, len(topics))
-	for i := range members {
-		for _, topic := range members[i].topics {
-			memberTopics[topic] = struct{}{}
-		}
-	}
+func (r *roundRobinBalancer) MemberBalancer(members []kmsg.JoinGroupResponseMember) (GroupMemberBalancer, map[string]struct{}, error) {
+	b, err := NewConsumerBalancer(r, members)
+	return b, b.MemberTopics(), err
+}
 
+func (*roundRobinBalancer) Balance(b *ConsumerBalancer, topics map[string]int32) IntoSyncAssignment {
 	type topicPartition struct {
 		topic     string
 		partition int32
@@ -303,7 +385,7 @@ func (*roundRobinBalancer) balance(members []groupMember, topics map[string]int3
 	// Order all partitions available to balance, filtering out those that
 	// no members are subscribed to.
 	allParts := make([]topicPartition, 0, nparts)
-	for topic := range memberTopics {
+	for topic := range b.MemberTopics() {
 		for partition := int32(0); partition < topics[topic]; partition++ {
 			allParts = append(allParts, topicPartition{
 				topic,
@@ -316,7 +398,7 @@ func (*roundRobinBalancer) balance(members []groupMember, topics map[string]int3
 		return l.topic < r.topic || l.topic == r.topic && l.partition < r.partition
 	})
 
-	plan := newBalancePlan(members)
+	plan := b.NewPlan()
 	// While parts are unassigned, assign them.
 	var memberIdx int
 	for len(allParts) > 0 {
@@ -328,11 +410,11 @@ func (*roundRobinBalancer) balance(members []groupMember, topics map[string]int3
 		// partition where the circular iterator left off.
 	assigned:
 		for {
-			member := members[memberIdx]
-			memberIdx = (memberIdx + 1) % len(members)
-			for _, topic := range member.topics {
+			member, meta := b.MemberAt(memberIdx)
+			memberIdx = (memberIdx + 1) % len(b.Members())
+			for _, topic := range meta.Topics {
 				if topic == next.topic {
-					plan.addPartition(member.id, next.topic, next.partition)
+					plan.AddPartition(member, next.topic, next.partition)
 					break assigned
 				}
 			}
@@ -360,25 +442,26 @@ func RangeBalancer() GroupBalancer {
 
 type rangeBalancer struct{}
 
-func (*rangeBalancer) protocolName() string { return "range" }
-func (*rangeBalancer) isCooperative() bool  { return false }
-func (*rangeBalancer) metaFor(interests []string, _ map[string][]int32, _ int32) []byte {
-	return basicMetaFor(interests)
+func (*rangeBalancer) ProtocolName() string { return "range" }
+func (*rangeBalancer) IsCooperative() bool  { return false }
+func (*rangeBalancer) JoinGroupMetadata(interests []string, _ map[string][]int32, _ int32) []byte {
+	return memberMetadataV0(interests)
 }
-func (*rangeBalancer) balance(members []groupMember, topics map[string]int32) balancePlan {
-	topics2PotentialConsumers := make(map[string][]groupMemberID)
-	for i := range members {
-		member := &members[i]
-		for _, topic := range member.topics {
-			topics2PotentialConsumers[topic] = append(topics2PotentialConsumers[topic], member.id)
+func (r *rangeBalancer) MemberBalancer(members []kmsg.JoinGroupResponseMember) (GroupMemberBalancer, map[string]struct{}, error) {
+	b, err := NewConsumerBalancer(r, members)
+	return b, b.MemberTopics(), err
+}
+func (*rangeBalancer) Balance(b *ConsumerBalancer, topics map[string]int32) IntoSyncAssignment {
+	topics2PotentialConsumers := make(map[string][]*kmsg.JoinGroupResponseMember)
+	b.EachMember(func(member *kmsg.JoinGroupResponseMember, meta *kmsg.GroupMemberMetadata) {
+		for _, topic := range meta.Topics {
+			topics2PotentialConsumers[topic] = append(topics2PotentialConsumers[topic], member)
 		}
-	}
+	})
 
-	plan := newBalancePlan(members)
+	plan := b.NewPlan()
 	for topic, potentialConsumers := range topics2PotentialConsumers {
-		sort.Slice(potentialConsumers, func(i, j int) bool {
-			return potentialConsumers[i].less(potentialConsumers[j])
-		})
+		sortJoinMemberPtrs(potentialConsumers)
 
 		numPartitions := topics[topic]
 		partitions := make([]int32, numPartitions)
@@ -397,7 +480,7 @@ func (*rangeBalancer) balance(members []groupMember, topics map[string]int32) ba
 			}
 
 			member := potentialConsumers[consumerIdx]
-			plan.addPartitions(member, topic, partitions[:num])
+			plan.AddPartitions(member, topic, partitions[:num])
 
 			consumerIdx++
 			partitions = partitions[num:]
@@ -456,7 +539,7 @@ func (*rangeBalancer) balance(members []groupMember, topics map[string]int32) ba
 // the Java implementation. The Java implementaiton is difficult to reason
 // about and has many edge cases that result in non-optimal balancing (albeit,
 // you likely have to be trying to hit those edge cases). This API uses a
-// different algorithm (A*) to ensure optimal balancing while being an order of
+// different algorithm to ensure optimal balancing while being an order of
 // magnitude faster.
 //
 // Since the new strategy is a strict improvement over the Java strategy, it is
@@ -476,14 +559,14 @@ type stickyBalancer struct {
 	cooperative bool
 }
 
-func (s *stickyBalancer) protocolName() string {
+func (s *stickyBalancer) ProtocolName() string {
 	if s.cooperative {
 		return "cooperative-sticky"
 	}
 	return "sticky"
 }
-func (s *stickyBalancer) isCooperative() bool { return s.cooperative }
-func (s *stickyBalancer) metaFor(interests []string, currentAssignment map[string][]int32, generation int32) []byte {
+func (s *stickyBalancer) IsCooperative() bool { return s.cooperative }
+func (s *stickyBalancer) JoinGroupMetadata(interests []string, currentAssignment map[string][]int32, generation int32) []byte {
 	meta := kmsg.GroupMemberMetadata{
 		Version: 0,
 		Topics:  interests,
@@ -511,39 +594,28 @@ func (s *stickyBalancer) metaFor(interests []string, currentAssignment map[strin
 	return meta.AppendTo(nil)
 
 }
-func (s *stickyBalancer) balance(members []groupMember, topics map[string]int32) balancePlan {
-	stickyMembers := make([]sticky.GroupMember, 0, len(members))
-	for i := range members {
-		member := &members[i]
-		stickyMembers = append(stickyMembers, sticky.GroupMember{
-			ID:       member.id.memberID,
-			Topics:   member.topics,
-			UserData: member.userdata,
-		})
-	}
-
+func (s *stickyBalancer) MemberBalancer(members []kmsg.JoinGroupResponseMember) (GroupMemberBalancer, map[string]struct{}, error) {
+	b, err := NewConsumerBalancer(s, members)
+	return b, b.MemberTopics(), err
+}
+func (s *stickyBalancer) Balance(b *ConsumerBalancer, topics map[string]int32) IntoSyncAssignment {
 	// Since our input into balancing is already sorted by instance ID,
 	// the sticky strategy does not need to worry about instance IDs at all.
 	// See my (slightly rambling) comment on KAFKA-8432.
-	stickyPlan := sticky.Balance(stickyMembers, topics)
+	stickyMembers := make([]sticky.GroupMember, 0, len(b.Members()))
+	b.EachMember(func(member *kmsg.JoinGroupResponseMember, meta *kmsg.GroupMemberMetadata) {
+		stickyMembers = append(stickyMembers, sticky.GroupMember{
+			ID:       member.MemberID,
+			Topics:   meta.Topics,
+			UserData: meta.UserData,
+		})
+	})
 
-	// Annoyingly though, we do have to map the members given by the sticky
-	// plan back into our memberID+instanceID, even though the instance ID
-	// is not needed past this point.
-	plan := balancePlan(make(map[groupMemberID]map[string][]int32, len(members)))
-	for memberID, topics := range stickyPlan {
-		for i := range members {
-			member := &members[i]
-			if member.id.memberID == memberID {
-				plan[member.id] = topics
-				break
-			}
-		}
-	}
+	p := &BalancePlan{sticky.Balance(stickyMembers, topics)}
 	if s.cooperative {
-		s.adjustCooperative(members, plan)
+		p.AdjustCooperative(b)
 	}
-	return plan
+	return p
 }
 
 // CooperativeStickyBalancer performs the sticky balancing strategy, but
@@ -578,28 +650,23 @@ func CooperativeStickyBalancer() GroupBalancer {
 	return &stickyBalancer{cooperative: true}
 }
 
-// adjustCooperative performs the final adjustment to the plan for cooperative
-// sticky assigning.
+// AdjustCooperative performs the final adjustment to a plan for cooperative
+// balancing.
 //
-// Over the plan, remove all partitions that migrated from one member (where it
-// was assigned) to a new member (where it is now planned).
+// Over the plan, we remove all partitions that migrated from one member (where
+// it was assigned) to a new member (where it is now planned).
 //
-// This allows the assigned members to revoke and rejoin, which will then do
-// another rebalance where the partitions will now be on the free list to be
-// assigned.
-//
-// The implementation below is likely a bit slower than the Java version, due
-// to the Java version having the input members as maps and the input
-// partitions as a single "topic partition" type. Ideally, our much better
-// sticky balancing implementation more than makes up for the speed difference.
-func (*stickyBalancer) adjustCooperative(members []groupMember, plan balancePlan) {
-	allAdded := make(map[string]map[int32]groupMemberID, 100)
+// This allows members that had partitions removed to revoke and rejoin, which
+// will then do another rebalance, and in that new rebalance, the planned
+// partitions are now on the free list to be assigned.
+func (p *BalancePlan) AdjustCooperative(b *ConsumerBalancer) {
+	allAdded := make(map[string]map[int32]string, 100) // topic => partition => member
 	allRevoked := make(map[string]map[int32]struct{}, 100)
 
-	addT := func(t string) map[int32]groupMemberID {
+	addT := func(t string) map[int32]string {
 		addT := allAdded[t]
 		if addT == nil {
-			addT = make(map[int32]groupMemberID, 20)
+			addT = make(map[int32]string, 20)
 			allAdded[t] = addT
 		}
 		return addT
@@ -616,12 +683,12 @@ func (*stickyBalancer) adjustCooperative(members []groupMember, plan balancePlan
 	tmap := make(map[string]struct{}) // reusable topic existence map
 	pmap := make(map[int32]struct{})  // reusable partitions existence map
 
+	plan := p.plan
+
 	// First, on all members, we find what was added and what was removed
 	// to and from that member.
-	for i := range members {
-		member := &members[i]
-
-		planned := plan[member.id]
+	b.EachMember(func(member *kmsg.JoinGroupResponseMember, meta *kmsg.GroupMemberMetadata) {
+		planned := plan[member.MemberID]
 
 		// added   := planned - current
 		// revoked := current - planned
@@ -629,7 +696,7 @@ func (*stickyBalancer) adjustCooperative(members []groupMember, plan balancePlan
 		for ptopic := range planned { // set existence for all planned topics
 			tmap[ptopic] = struct{}{}
 		}
-		for _, otopic := range member.owned { // over all prior owned topics,
+		for _, otopic := range meta.OwnedPartitions { // over all prior owned topics,
 			topic := otopic.Topic
 			delete(tmap, topic)
 			ppartitions, exists := planned[topic]
@@ -652,7 +719,7 @@ func (*stickyBalancer) adjustCooperative(members []groupMember, plan balancePlan
 				allAddedT := addT(topic)
 				for ppartition := range pmap {
 					delete(pmap, ppartition)
-					allAddedT[ppartition] = member.id
+					allAddedT[ppartition] = member.MemberID
 				}
 			}
 			// then calculate removal by creating owned existence map,
@@ -675,11 +742,11 @@ func (*stickyBalancer) adjustCooperative(members []groupMember, plan balancePlan
 			delete(tmap, ptopic)
 			allAddedT := addT(ptopic)
 			for _, ppartition := range planned[ptopic] {
-				allAddedT[ppartition] = member.id
+				allAddedT[ppartition] = member.MemberID
 			}
 		}
 
-	}
+	})
 
 	// Over all revoked, if the revoked partition was added to a different
 	// member, we remove that partition from the new member.
