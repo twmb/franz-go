@@ -150,6 +150,10 @@ func (cl *Client) ProduceSync(ctx context.Context, rs ...*Record) ProduceResults
 // If a record is produced successfully, the record's attrs / offset / etc.
 // fields are updated appropriately before a promise is called.
 //
+// If the record has an empty Topic field, the client will use a default topic
+// if the client was configured with one via ProduceTopic, otherwise the record
+// will be failed immediately.
+//
 // If the record is too large to fit in a batch on its own in a produce
 // request, the promise will be called with kerr.MessageTooLarge and there will
 // be no attempt to produce the record.
@@ -187,6 +191,15 @@ func (cl *Client) Produce(
 ) {
 	if promise == nil {
 		promise = noPromise
+	}
+
+	if r.Topic == "" {
+		if def := cl.cfg.defaultProduceTopic; def != "" {
+			r.Topic = def
+		} else {
+			go promise(r, errors.New("cannot produce to a record that does not have a topic set"))
+			return
+		}
 	}
 
 	p := &cl.producer

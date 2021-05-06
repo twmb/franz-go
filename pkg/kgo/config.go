@@ -83,6 +83,7 @@ type cfg struct {
 	disableIdempotency bool
 	compression        []CompressionCodec // order of preference
 
+	defaultProduceTopic string
 	maxRecordBatchBytes int32
 	maxBufferedRecords  int64
 	produceTimeout      time.Duration
@@ -577,6 +578,15 @@ func WithHooks(hooks ...Hook) Opt {
 }
 
 // ********** PRODUCER CONFIGURATION **********
+
+// ProduceTopic sets the default topic to produce to if the topic field is
+// empty in a kgo.Record.
+//
+// If this option is not used, if a record has an empty topic, the record
+// cannot be produced and will be failed immediately.
+func ProduceTopic(t string) ProducerOpt {
+	return producerOpt{func(cfg *cfg) { cfg.defaultProduceTopic = t }}
+}
 
 // Acks represents the number of acks a broker leader must have before
 // a produce request is considered complete.
