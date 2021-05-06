@@ -20,7 +20,6 @@ import (
 //
 // Thus while it is an ugly test, it is effective.
 func Test_stickyAdjustCooperative(t *testing.T) {
-	id := func(name string) groupMemberID { return groupMemberID{memberID: name} }
 	assn := func(in map[string][]int32) []kmsg.GroupMemberMetadataOwnedPartition {
 		var ks []kmsg.GroupMemberMetadataOwnedPartition
 		for topic, partitions := range in {
@@ -32,67 +31,69 @@ func Test_stickyAdjustCooperative(t *testing.T) {
 		return ks
 	}
 
-	members := []groupMember{
-		{id: id("a"),
-			owned: assn(map[string][]int32{
+	b := &ConsumerBalancer{
+		members: []kmsg.JoinGroupResponseMember{
+			{MemberID: "a"},
+			{MemberID: "b"},
+			{MemberID: "c"},
+			{MemberID: "d"},
+		},
+		metadatas: []kmsg.GroupMemberMetadata{
+			{OwnedPartitions: assn(map[string][]int32{
 				"t1":      {1, 2, 3, 4},
 				"tmove":   {1, 2},
 				"tdelete": {1, 2},
 			})},
-
-		{id: id("b"),
-			owned: assn(map[string][]int32{
+			{OwnedPartitions: assn(map[string][]int32{
 				"t2": {1, 2, 3},
 			})},
-
-		{id: id("c")}, // eager member: nothing owned
-
-		{id: id("d"), // also thinks it owned t1 (similar to KIP-341)
-			owned: assn(map[string][]int32{
+			{}, // eager member, nothing owned
+			{OwnedPartitions: assn(map[string][]int32{
 				"t1": {1, 2, 3, 4},
 			})},
+		},
 	}
 
-	inPlan := map[groupMemberID]map[string][]int32{
-		id("a"): {
+	inPlan := map[string]map[string][]int32{
+		"a": {
 			"t1":   {1, 4},
 			"t2":   {3},
 			"tnew": {1, 2},
 		},
-		id("b"): {
+		"b": {
 			"t2":    {2},
 			"tnew":  {3, 4},
 			"tmove": {1},
 		},
-		id("c"): {
+		"c": {
 			"t1":    {3},
 			"t2":    {1},
 			"tnew":  {5},
 			"tmove": {2},
 		},
-		id("d"): {
+		"d": {
 			"t1": {2},
 		},
 	}
 
-	expPlan := map[groupMemberID]map[string][]int32{
-		id("a"): {
+	expPlan := map[string]map[string][]int32{
+		"a": {
 			"t1":   {1, 4},
 			"tnew": {1, 2},
 		},
-		id("b"): {
+		"b": {
 			"t2":   {2},
 			"tnew": {3, 4},
 		},
-		id("c"): {
+		"c": {
 			"tnew": {5},
 		},
-		id("d"): {
+		"d": {
 			"t1": {2},
 		},
 	}
 
-	(new(stickyBalancer)).adjustCooperative(members, inPlan)
+	(&BalancePlan{inPlan}).AdjustCooperative(b)
 
 	if diff := cmp.Diff(inPlan, expPlan, cmp.AllowUnexported()); diff != "" {
 		t.Error(diff)
