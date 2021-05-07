@@ -484,7 +484,7 @@ func (cl *Client) EndTransaction(ctx context.Context, commit TransactionEndTry) 
 
 	// If the returned error is still a Kafka error, this is fatal and we
 	// need to fail our producer ID we loaded above.
-	var ke kerr.Error
+	var ke *kerr.Error
 	if err != nil && errors.As(err, &ke) && !ke.Retriable {
 		cl.failProducerID(id, epoch, err)
 	}
@@ -612,7 +612,7 @@ func (cl *Client) addOffsetsToTxn(ctx context.Context, group string) error {
 
 	// If the returned error is still a Kafka error, this is fatal and we
 	// need to fail our producer ID we created just above.
-	var ke kerr.Error
+	var ke *kerr.Error
 	if err != nil && errors.As(err, &ke) && !ke.Retriable {
 		cl.failProducerID(id, epoch, err)
 	}
