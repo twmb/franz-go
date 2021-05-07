@@ -293,7 +293,7 @@ func (cl *Client) BeginTransaction() error {
 //
 // For example, before aborting a transaction and beginning a new one, it would
 // be erroneous to not wait for the backlog to clear before beginning a new
-// transaction. anything not cleared may be a part of the new transaction.
+// transaction. Anything not cleared may be a part of the new transaction.
 //
 // Records produced during or after a call to this function may not be failed,
 // thus it is incorrect to concurrently produce with this function.
@@ -358,6 +358,11 @@ func (cl *Client) AbortBufferedRecords(ctx context.Context) error {
 // ensure that any buffered records not yet flushed will not be a part of a new
 // transaction.
 //
+// If the producer ID has an error and you are trying to commit, this will
+// return with kerr.OperationNotAttempted. If this happend, retry
+// EndTransaction with TryAbort. Not other error is retriable, and you should
+// not retry with TryAbort.
+//
 // If records failed with UnknownProducerID and your Kafka version is at least
 // 2.5.0, then aborting here will potentially allow the client to recover for
 // more production.
@@ -408,6 +413,9 @@ func (cl *Client) EndTransaction(ctx context.Context, commit TransactionEndTry) 
 	}
 
 	// If no partition was added to a transaction, then we have nothing to commit.
+	//
+	// Note that anyAdded is true if the producer ID was failed, meaning we will
+	// get to the potential recovery logic below if necessary.
 	if !anyAdded {
 		cl.cfg.logger.Log(LogLevelInfo, "no records were produced during the commit; thus no transaction was began; ending without doing anything")
 		return nil
@@ -416,7 +424,7 @@ func (cl *Client) EndTransaction(ctx context.Context, commit TransactionEndTry) 
 	id, epoch, err := cl.producerID()
 	if err != nil {
 		if commit {
-			return errors.New("cannot commit with a fatal producer id; retry with an abort")
+			return kerr.OperationNotAttempted
 		}
 
 		switch err.(type) {
@@ -460,16 +468,28 @@ func (cl *Client) EndTransaction(ctx context.Context, commit TransactionEndTry) 
 		"epoch", epoch,
 		"commit", commit,
 	)
-	resp, err := (&kmsg.EndTxnRequest{
-		TransactionalID: *cl.cfg.txnID,
-		ProducerID:      id,
-		ProducerEpoch:   epoch,
-		Commit:          bool(commit),
-	}).RequestWith(ctx, cl)
-	if err != nil {
-		return err
+
+	err = cl.doWithConcurrentTransactions("EndTxn", func() error {
+		resp, err := (&kmsg.EndTxnRequest{
+			TransactionalID: *cl.cfg.txnID,
+			ProducerID:      id,
+			ProducerEpoch:   epoch,
+			Commit:          bool(commit),
+		}).RequestWith(ctx, cl)
+		if err != nil {
+			return err
+		}
+		return kerr.ErrorForCode(resp.ErrorCode)
+	})
+
+	// If the returned error is still a Kafka error, this is fatal and we
+	// need to fail our producer ID we loaded above.
+	var ke kerr.Error
+	if err != nil && errors.As(err, &ke) && !ke.Retriable {
+		cl.failProducerID(id, epoch, err)
 	}
-	return kerr.ErrorForCode(resp.ErrorCode)
+
+	return err
 }
 
 // If a transaction is begun too quickly after finishing an old transaction,
@@ -571,7 +591,7 @@ func (cl *Client) addOffsetsToTxn(ctx context.Context, group string) error {
 		return err
 	}
 
-	return cl.doWithConcurrentTransactions("AddOffsetsToTxn", func() error { // committing offsets without producing causes a transaction to begin within Kafka
+	err = cl.doWithConcurrentTransactions("AddOffsetsToTxn", func() error { // committing offsets without producing causes a transaction to begin within Kafka
 		cl.cfg.logger.Log(LogLevelInfo, "issuing AddOffsetsToTxn",
 			"txn", *cl.cfg.txnID,
 			"producerID", id,
@@ -589,6 +609,15 @@ func (cl *Client) addOffsetsToTxn(ctx context.Context, group string) error {
 		}
 		return kerr.ErrorForCode(resp.ErrorCode)
 	})
+
+	// If the returned error is still a Kafka error, this is fatal and we
+	// need to fail our producer ID we created just above.
+	var ke kerr.Error
+	if err != nil && errors.As(err, &ke) && !ke.Retriable {
+		cl.failProducerID(id, epoch, err)
+	}
+
+	return err
 }
 
 // commitTxn is ALMOST EXACTLY THE SAME as commit, but changed for txn types

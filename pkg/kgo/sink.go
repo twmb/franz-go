@@ -313,9 +313,14 @@ func (s *sink) produce(sem <-chan struct{}) bool {
 				s.cl.cfg.logger.Log(LogLevelWarn, "unable to AddPartitionsToTxn due to retriable broker err, bumping client's buffered record load errors by 1 and retrying", "err", err)
 				return moreToDrain || len(req.batches) > 0
 			default:
+				// Note that err can be InvalidProducerEpoch, which is
+				// potentially recoverable in EndTransaction.
+				//
+				// We do not fail all buffered records here,
+				// because that can lead to undesirable behavior
+				// with produce request vs. end txn (KAFKA-12671)
 				s.cl.failProducerID(id, epoch, err)
 				s.cl.cfg.logger.Log(LogLevelError, "fatal AddPartitionsToTxn error, failing all buffered records (it is possible the client can recover after EndTransaction)", "broker", s.nodeID, "err", err)
-				s.cl.failBufferedRecords(err)
 			}
 			return false
 		}
