@@ -34,7 +34,6 @@ type producer struct {
 	flushing int32 // >0 if flushing, can Flush many times concurrently
 
 	aborting uint32 // 1 means yes
-	workers  int32  // number of sinks draining / number of in flight produce requests
 
 	idMu       sync.Mutex
 	idVersion  int16
@@ -65,9 +64,6 @@ func (p *producer) init() {
 	})
 	p.notifyCond = sync.NewCond(&p.notifyMu)
 }
-
-func (p *producer) incWorkers() { atomic.AddInt32(&p.workers, 1) }
-func (p *producer) decWorkers() { p.decAbortNotify(&p.workers) }
 
 func (p *producer) decAbortNotify(v *int32) {
 	if atomic.AddInt32(v, -1) != 0 || atomic.LoadUint32(&p.aborting) == 0 {

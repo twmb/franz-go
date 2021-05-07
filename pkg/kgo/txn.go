@@ -164,36 +164,8 @@ func (s *GroupTransactSession) End(ctx context.Context, commit TransactionEndTry
 			return false, err // we do not abort below, because an error here is ctx closing
 		}
 	case TryAbort:
-		// If we have no buffered records, there is no need to abort
-		// buffered records and we can avoid resetting our producer ID.
-		if atomic.LoadInt64(&s.cl.producer.bufferedRecords) == 0 {
-			break
-		}
-
 		if err := s.cl.AbortBufferedRecords(ctx); err != nil {
 			return false, err // same
-		}
-		defer s.cl.ResetProducerID()
-
-		allOk := true
-		s.cl.sinksAndSourcesMu.Lock()
-		for _, sns := range s.cl.sinksAndSources {
-			allOk = allOk && sns.sink.lastRespSuccessful
-		}
-		s.cl.sinksAndSourcesMu.Unlock()
-
-		if !allOk {
-			s.cl.cfg.logger.Log(LogLevelWarn, "Buffered records were aborted, but some sink(s) did not have a final handled produce response. Kafka could still be handling these produce requests or have yet to handle them. We do not want to issue EndTxn before these produce requests are handled, because that would risk beginning a new transaction that we may not finish. Waiting 1s to give Kafka some time... (See KAFKA-12671)")
-			timer := time.NewTimer(time.Second)
-			select {
-			case <-timer.C:
-			case <-s.cl.ctx.Done():
-				timer.Stop()
-				return false, s.cl.ctx.Err()
-			case <-ctx.Done():
-				timer.Stop()
-				return false, ctx.Err()
-			}
 		}
 	}
 
@@ -326,10 +298,12 @@ func (cl *Client) BeginTransaction() error {
 // Records produced during or after a call to this function may not be failed,
 // thus it is incorrect to concurrently produce with this function.
 func (cl *Client) AbortBufferedRecords(ctx context.Context) error {
-	atomic.StoreUint32(&cl.producer.aborting, 1)
-	defer atomic.StoreUint32(&cl.producer.aborting, 0)
-	atomic.AddInt32(&cl.producer.flushing, 1) // disallow lingering to start
-	defer atomic.AddInt32(&cl.producer.flushing, -1)
+	p := &cl.producer
+
+	atomic.StoreUint32(&p.aborting, 1)
+	defer atomic.StoreUint32(&p.aborting, 0)
+	atomic.AddInt32(&p.flushing, 1) // disallow lingering to start
+	defer atomic.AddInt32(&p.flushing, -1)
 	// At this point, all drain loops that start will immediately stop,
 	// thus they will not begin any AddPartitionsToTxn request. We must
 	// now wait for any req currently built to be done being issued.
@@ -337,37 +311,38 @@ func (cl *Client) AbortBufferedRecords(ctx context.Context) error {
 	cl.cfg.logger.Log(LogLevelInfo, "aborting buffered records")
 	defer cl.cfg.logger.Log(LogLevelDebug, "aborted buffered records")
 
-	cl.failBufferedRecords(ErrAborting)
+	// Similar to flushing, we unlinger; nothing will start a linger because
+	// the flushing atomic is non-zero.
+	if cl.cfg.linger > 0 || cl.cfg.manualFlushing {
+		for _, parts := range p.topics.load() {
+			for _, part := range parts.load().partitions {
+				part.records.unlingerAndManuallyDrain()
+			}
+		}
+	}
 
-	// Now, we wait for any active drain to stop. We must wait for all
-	// workers to stop otherwise we could end up with some exceptionally
-	// weird scenario where we end a txn and begin a new one before a
-	// prior AddPartitionsToTxn request that was built is issued.
-	//
-	// By waiting for our workers count to hit 0, we know that at that
-	// point, no new AddPartitionsToTxn request will be sent.
+	// We have to wait for all buffered records to either be flushed
+	// or to safely abort themselves.
 	quit := false
 	done := make(chan struct{})
 	go func() {
-		cl.producer.notifyMu.Lock()
-		defer cl.producer.notifyMu.Unlock()
+		p.notifyMu.Lock()
+		defer p.notifyMu.Unlock()
 		defer close(done)
 
-		for !quit && atomic.LoadInt32(&cl.producer.workers) > 0 {
-			cl.producer.notifyCond.Wait()
+		for !quit && atomic.LoadInt64(&p.bufferedRecords) > 0 {
+			p.notifyCond.Wait()
 		}
 	}()
 
 	select {
 	case <-done:
-		// All records were failed above, and all workers are stopped.
-		// We are safe to return.
 		return nil
 	case <-ctx.Done():
-		cl.producer.notifyMu.Lock()
+		p.notifyMu.Lock()
 		quit = true
-		cl.producer.notifyMu.Unlock()
-		cl.producer.notifyCond.Broadcast()
+		p.notifyMu.Unlock()
+		p.notifyCond.Broadcast()
 		return ctx.Err()
 	}
 }

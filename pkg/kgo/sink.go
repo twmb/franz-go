@@ -38,13 +38,6 @@ type sink struct {
 	needBackoff bool
 	backoffSeq  uint32 // prevents pile on failures
 
-	// To work around KAFKA-12671, before we issue EndTxn, we check to see
-	// that all sinks had a final successful response. If not, then we risk
-	// running into KAFKA-12671 (out of order processing leading to
-	// orphaned begun "transaction" in ProducerStateManager), so rather
-	// than issuing EndTxn immediately, we wait a little bit.
-	lastRespSuccessful bool
-
 	// consecutiveFailures is incremented every backoff and cleared every
 	// successful response. For simplicity, if we have a good response
 	// following an error response before the error response's backoff
@@ -65,10 +58,9 @@ type seqResp struct {
 
 func (cl *Client) newSink(nodeID int32) *sink {
 	s := &sink{
-		cl:                 cl,
-		nodeID:             nodeID,
-		produceVersion:     -1,
-		lastRespSuccessful: true,
+		cl:             cl,
+		nodeID:         nodeID,
+		produceVersion: -1,
 	}
 	s.inflightSem.Store(make(chan struct{}, 1))
 	return s
@@ -231,16 +223,8 @@ func (s *sink) drain() {
 		time.Sleep(5 * time.Millisecond)
 	}
 
-	s.cl.producer.incWorkers()
-	defer s.cl.producer.decWorkers()
-
 	again := true
 	for again {
-		if s.cl.producer.isAborting() {
-			s.drainState.hardFinish()
-			return
-		}
-
 		s.maybeBackoff()
 
 		sem := s.inflightSem.Load().(chan struct{})
@@ -343,20 +327,9 @@ func (s *sink) produce(sem <-chan struct{}) bool {
 
 	req.backoffSeq = s.backoffSeq // safe to read outside mu since we are in drain loop
 
-	// Add that we are working and then check if we are aborting: this
-	// order ensures that we will do not produce after aborting is set.
-	p := &s.cl.producer
-	p.incWorkers()
-	if p.isAborting() {
-		p.decWorkers()
-		return false
-	}
-
 	produced = true
 	s.doSequenced(req, func(resp kmsg.Response, err error) {
-		s.lastRespSuccessful = err == nil
 		s.handleReqResp(req, resp, err)
-		p.decWorkers()
 		<-sem
 	})
 	return moreToDrain
@@ -1236,6 +1209,8 @@ func (b *recBatch) maybeFailErr(cfg *cfg) error {
 		return errRecordTimeout
 	} else if b.tries >= cfg.produceRetries {
 		return errRecordRetries
+	} else if b.owner.cl.producer.isAborting() {
+		return ErrAborting
 	}
 	return nil
 }
