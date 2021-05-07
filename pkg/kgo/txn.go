@@ -427,6 +427,12 @@ func (cl *Client) EndTransaction(ctx context.Context, commit TransactionEndTry) 
 		}
 	}
 
+	// If no partition was added to a transaction, then we have nothing to commit.
+	if !anyAdded {
+		cl.cfg.logger.Log(LogLevelInfo, "no records were produced during the commit; thus no transaction was began; ending without doing anything")
+		return nil
+	}
+
 	id, epoch, err := cl.producerID()
 	if err != nil {
 		if commit {
@@ -466,12 +472,6 @@ func (cl *Client) EndTransaction(ctx context.Context, commit TransactionEndTry) 
 			// that our id / epoch is valid, but the id / epoch may
 			// have never loaded (and thus will be -1 / -1).
 		}
-	}
-
-	// If no partition was added to a transaction, then we have nothing to commit.
-	if !anyAdded {
-		cl.cfg.logger.Log(LogLevelInfo, "no records were produced during the commit; thus no transaction was began; ending without doing anything")
-		return nil
 	}
 
 	cl.cfg.logger.Log(LogLevelInfo, "ending transaction",
