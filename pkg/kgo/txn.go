@@ -347,26 +347,6 @@ func (cl *Client) AbortBufferedRecords(ctx context.Context) error {
 	}
 }
 
-// ResetProducerID resets the client's producer ID if it is not currently in a
-// failing state. This call is usually paired with AbortBufferedRecords.
-//
-// For idempotent producers, this is a local-only internal epoch bump. For
-// transactional producers, we re-initialize the producer ID by talking to
-// Kafka. Note that this fences any other producer that may have fenced us.
-//
-// Again, this reset only proceeds if the ID was not already failed with a
-// fatal error, meaning it is likely that if the client was fenced, then this
-// reset will do nothing.
-func (cl *Client) ResetProducerID() bool {
-	cl.cfg.logger.Log(LogLevelInfo, "resetting producer id")
-	id, epoch, err := cl.producerID()
-	if err == nil {
-		cl.failProducerID(id, epoch, errReloadProducerID)
-		return true
-	}
-	return false
-}
-
 // EndTransaction ends a transaction and resets the client's internal state to
 // not be in a transaction.
 //
