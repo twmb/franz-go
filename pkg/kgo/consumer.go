@@ -1058,60 +1058,8 @@ func (s *consumerSession) listOrEpoch(waiting listOrEpochLoads, immediate bool) 
 		}
 	}
 
-	for received != issued {
-		select {
-		case <-s.ctx.Done():
-			// If we return early, our session was canceled. We do
-			// not move loading list or epoch loads back to
-			// waiting; the session stopping manages that.
-			return
-		case loaded := <-results:
-			received++
-			s.handleListOrEpochResults(loaded)
-		}
-	}
-}
-
-// Called within a consumer session, this function handles results from list
-// offsets or epoch loads.
-func (s *consumerSession) handleListOrEpochResults(loaded loadedOffsets) {
-	// All errors are retried after a 1s backoff. We either have request
-	// level retriable errors (unknown partition, etc) or non-retriable
-	// errors (auth), or we have request issuing errors (no dial,
-	// connection cut repeatedly).
-	//
-	// For retriable request errors, we may as well back off a little bit
-	// to allow Kafka to harmonize if the topic exists / etc.
-	//
-	// For non-retriable request errors, we may as well retry to both (a)
-	// allow the user more signals about a problem that they can maybe fix
-	// within Kafka (i.e. the auth), and (b) force the user to notice
-	// errors.
-	//
-	// For request issuing errors, we may as well continue to retry because
-	// there is not much else we can do. RequestWith already retries, but
-	// returns when the retry limit is hit. We will backoff 1s and then
-	// allow RequestWith to continue requesting and backing off.
 	var reloads listOrEpochLoads
-
-	// In the defer below, we need to guard listOrEpochLoadsLoading, which
-	// can be modified with a concurent listOrEpoch.
-	//
-	// In the use closure below, we need to guard usingCursors to prevent
-	// it from a concurrent handleListOrEpochResults.
-	//
-	// So, we just guard this entire function, which executes quickly.
-	s.listOrEpochMu.Lock()
-	defer s.listOrEpochMu.Unlock()
-
 	defer func() {
-		// When we are done handling results, we have finished loading
-		// all the topics and partitions. We remove them from tracking
-		// in our session.
-		for _, load := range loaded.loaded {
-			s.listOrEpochLoadsLoading.removeLoad(load.topic, load.partition)
-		}
-
 		if !reloads.isEmpty() {
 			s.incWorker()
 			go func() {
@@ -1134,7 +1082,48 @@ func (s *consumerSession) handleListOrEpochResults(loaded loadedOffsets) {
 		}
 	}()
 
+	for received != issued {
+		select {
+		case <-s.ctx.Done():
+			// If we return early, our session was canceled. We do
+			// not move loading list or epoch loads back to
+			// waiting; the session stopping manages that.
+			return
+		case loaded := <-results:
+			received++
+			reloads.mergeFrom(s.handleListOrEpochResults(loaded))
+		}
+	}
+}
+
+// Called within a consumer session, this function handles results from list
+// offsets or epoch loads and returns any loads that should be retried.
+//
+// To us, all errors are reloadable. We either have request level retriable
+// errors (unknown partition, etc) or non-retriable errors (auth), or we have
+// request issuing errors (no dial, connection cut repeatedly).
+//
+// For retriable request errors, we may as well back off a little bit to allow
+// Kafka to harmonize if the topic exists / etc.
+//
+// For non-retriable request errors, we may as well retry to both (a) allow the
+// user more signals about a problem that they can maybe fix within Kafka (i.e.
+// the auth), and (b) force the user to notice errors.
+//
+// For request issuing errors, we may as well continue to retry because there
+// is not much else we can do. RequestWith already retries, but returns when
+// the retry limit is hit. We will backoff 1s and then allow RequestWith to
+// continue requesting and backing off.
+func (s *consumerSession) handleListOrEpochResults(loaded loadedOffsets) (reloads listOrEpochLoads) {
+	// This function can be running twice concurrently, so we need to guard
+	// listOrEpochLoadsLoading and usingCursors. For simplicity, we just
+	// guard this entire function.
+	s.listOrEpochMu.Lock()
+	defer s.listOrEpochMu.Unlock()
+
 	for _, load := range loaded.loaded {
+		s.listOrEpochLoadsLoading.removeLoad(load.topic, load.partition) // remove the tracking of this load from our session
+
 		use := func() {
 			load.cursor.setOffset(cursorOffset{
 				offset:            load.offset,
@@ -1159,6 +1148,8 @@ func (s *consumerSession) handleListOrEpochResults(loaded loadedOffsets) {
 			}
 		}
 	}
+
+	return reloads
 }
 
 // Splits the loads into per-broker loads, mapping each partition to the broker
