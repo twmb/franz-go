@@ -1093,15 +1093,24 @@ func (s *consumerSession) handleListOrEpochResults(loaded loadedOffsets) {
 	// returns when the retry limit is hit. We will backoff 1s and then
 	// allow RequestWith to continue requesting and backing off.
 	var reloads listOrEpochLoads
+
+	// In the defer below, we need to guard listOrEpochLoadsLoading, which
+	// can be modified with a concurent listOrEpoch.
+	//
+	// In the use closure below, we need to guard usingCursors to prevent
+	// it from a concurrent handleListOrEpochResults.
+	//
+	// So, we just guard this entire function, which executes quickly.
+	s.listOrEpochMu.Lock()
+	defer s.listOrEpochMu.Unlock()
+
 	defer func() {
 		// When we are done handling results, we have finished loading
 		// all the topics and partitions. We remove them from tracking
 		// in our session.
-		s.listOrEpochMu.Lock()
 		for _, load := range loaded.loaded {
 			s.listOrEpochLoadsLoading.removeLoad(load.topic, load.partition)
 		}
-		s.listOrEpochMu.Unlock()
 
 		if !reloads.isEmpty() {
 			s.incWorker()
