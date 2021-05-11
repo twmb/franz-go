@@ -145,6 +145,9 @@ func (s *GroupTransactSession) Begin() error {
 // in committing offsets fails, this aborts.
 //
 // This returns whether the transaction committed or any error that occurred.
+// No returned error is retriable. Either the transactional ID has entered a
+// failed state, or the client retried so much that the retry limit was hit,
+// and odds are you should not continue.
 //
 // Note that canceling the context will likely leave the client in an
 // undesirable state, because canceling the context cancels in flight requests
