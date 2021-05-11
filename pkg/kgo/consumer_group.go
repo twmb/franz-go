@@ -207,6 +207,24 @@ func GroupProtocol(protocol string) GroupOpt {
 	return groupOpt{func(cfg *groupConsumer) { cfg.protocol = protocol }}
 }
 
+// BlockingCommitOnLeave sets the group to issue a blocking commit of any
+// outstanding uncommitted offsets before leaving a group.
+//
+// This can be used if you do not particularly care about recovering from
+// commit errors when leaving a group / if there are no good options.
+// Alternatively, this can be used in tandem with CommitCallback to provide
+// your own custom commit callback that can handle errors.
+func BlockingCommitOnLeave() GroupOpt {
+	return groupOpt{func(cfg *groupConsumer) { cfg.commitOnLeave = true }}
+}
+
+// CommitCallback sets the callback to use if autocommitting is enabled, or if
+// BlockingCommitOnLeave is used. This overrides the default callback that logs
+// errors and continues.
+func CommitCallback(fn func(*kmsg.OffsetCommitRequest, *kmsg.OffsetCommitResponse, error)) GroupOpt {
+	return groupOpt{func(cfg *groupConsumer) { cfg.commitCallback = fn }}
+}
+
 type groupConsumer struct {
 	c  *consumer // used to change consumer state; generally c.mu is grabbed on access
 	cl *Client   // used for running requests / adding to topics map
@@ -237,6 +255,8 @@ type groupConsumer struct {
 
 	autocommitDisable  bool // true if autocommit was disabled or we are transactional
 	autocommitInterval time.Duration
+	commitOnLeave      bool
+	commitCallback     func(*kmsg.OffsetCommitRequest, *kmsg.OffsetCommitResponse, error)
 
 	///////////////////////
 	// configuration end //
@@ -405,6 +425,10 @@ func (cl *Client) AssignGroup(group string, opts ...GroupOpt) {
 		return
 	}
 
+	if g.commitCallback == nil {
+		g.commitCallback = g.defaultCommitCallback
+	}
+
 	defer c.storeGroup(g)
 	defer cl.triggerUpdateMetadata(true) // we definitely want to trigger a metadata update
 
@@ -499,8 +523,6 @@ func (g *groupConsumer) manage() {
 }
 
 func (g *groupConsumer) leave() (wait func()) {
-	g.cancel()
-
 	// If g.using is nonzero before this check, then a manage goroutine has
 	// started. If not, it will never start because we set dying.
 	g.mu.Lock()
@@ -509,8 +531,15 @@ func (g *groupConsumer) leave() (wait func()) {
 	g.mu.Unlock()
 
 	done := make(chan struct{})
+
 	go func() {
 		defer close(done)
+
+		if g.commitOnLeave {
+			g.defaultBlockingCommit()
+		}
+
+		g.cancel() // make sure to cancel **after** the blocking commit
 
 		if wasManaging {
 			// We want to wait for the manage goroutine to be done
@@ -1595,6 +1624,33 @@ func (g *groupConsumer) updateCommitted(
 
 }
 
+func (g *groupConsumer) defaultCommitCallback(_ *kmsg.OffsetCommitRequest, resp *kmsg.OffsetCommitResponse, err error) {
+	if err != nil {
+		if err != context.Canceled {
+			g.cl.cfg.logger.Log(LogLevelError, "default commit failed", "err", err)
+		} else {
+			g.cl.cfg.logger.Log(LogLevelDebug, "default commit canceled")
+		}
+		return
+	}
+	for _, topic := range resp.Topics {
+		for _, partition := range topic.Partitions {
+			if err := kerr.ErrorForCode(partition.ErrorCode); err != nil {
+				g.cl.cfg.logger.Log(LogLevelError, "in default commit: unable to commit offsets for topic partition",
+					"topic", topic.Topic,
+					"partition", partition.Partition,
+					"error", err)
+			}
+		}
+	}
+}
+
+func (g *groupConsumer) defaultBlockingCommit() {
+	cl := g.cl
+	g.cl.cfg.logger.Log(LogLevelInfo, "issuing blocking commit due to leaving group")
+	cl.BlockingCommitOffsets(g.ctx, cl.UncommittedOffsets(), g.commitCallback)
+}
+
 func (g *groupConsumer) loopCommit() {
 	ticker := time.NewTicker(g.autocommitInterval)
 	defer ticker.Stop()
@@ -1609,26 +1665,7 @@ func (g *groupConsumer) loopCommit() {
 		g.mu.Lock()
 		if !g.blockAuto {
 			g.cl.cfg.logger.Log(LogLevelDebug, "autocommitting")
-			g.commit(g.ctx, g.getUncommittedLocked(true), func(_ *kmsg.OffsetCommitRequest, resp *kmsg.OffsetCommitResponse, err error) {
-				if err != nil {
-					if err != context.Canceled {
-						g.cl.cfg.logger.Log(LogLevelError, "autocommit failed", "err", err)
-					} else {
-						g.cl.cfg.logger.Log(LogLevelDebug, "autocommit canceled")
-					}
-					return
-				}
-				for _, topic := range resp.Topics {
-					for _, partition := range topic.Partitions {
-						if err := kerr.ErrorForCode(partition.ErrorCode); err != nil {
-							g.cl.cfg.logger.Log(LogLevelError, "in autocommit: unable to commit offsets for topic partition",
-								"topic", topic.Topic,
-								"partition", partition.Partition,
-								"error", err)
-						}
-					}
-				}
-			})
+			g.commit(g.ctx, g.getUncommittedLocked(true), g.commitCallback)
 		}
 		g.mu.Unlock()
 	}
