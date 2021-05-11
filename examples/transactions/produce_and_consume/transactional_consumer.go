@@ -19,6 +19,11 @@ func startConsuming(ctx context.Context, brokers []string, group, topic string) 
 
 	client.AssignGroup(group, kgo.GroupTopics(topic))
 	defer client.Close()
+	// The following commit will not run because the only way to kill this
+	// program is to interrupt it, but, usually you should commit the final
+	// consumed offsets before quitting, as well as check any commit
+	// errors.
+	defer func() { client.BlockingCommitOffsets(ctx, client.UncommittedOffsets(), nil) }()
 
 consumerLoop:
 	for {
@@ -33,7 +38,7 @@ consumerLoop:
 
 		for !iter.Done() {
 			record := iter.Next()
-			fmt.Printf("consumed record with message: %v", string(record.Value))
+			fmt.Printf("consumed record from partition %d with message: %v", record.Partition, string(record.Value))
 		}
 	}
 
