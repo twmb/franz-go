@@ -27,26 +27,26 @@ func (hs hooks) each(fn func(Hook)) {
 	}
 }
 
-// BrokerConnectHook is called after a connection to a broker is opened.
-type BrokerConnectHook interface {
+// HookBrokerConnect is called after a connection to a broker is opened.
+type HookBrokerConnect interface {
 	// OnConnect is passed the broker metadata, how long it took to dial,
 	// and either the dial's resulting net.Conn or error.
 	OnConnect(meta BrokerMetadata, dialDur time.Duration, conn net.Conn, err error)
 }
 
-// BrokerDisconnectHook is called when a connection to a broker is closed.
-type BrokerDisconnectHook interface {
+// HookBrokerDisconnect is called when a connection to a broker is closed.
+type HookBrokerDisconnect interface {
 	// OnDisconnect is passed the broker metadata and the connection that
 	// is closing.
 	OnDisconnect(meta BrokerMetadata, conn net.Conn)
 }
 
-// BrokerWriteHook is called after a write to a broker.
+// HookBrokerWrite is called after a write to a broker.
 //
 // Kerberos SASL does not cause write hooks, since it directly writes to the
 // connection. This may change in the future such that the sasl authenticate
 // key is used (even though sasl authenticate requests are not being issued).
-type BrokerWriteHook interface {
+type HookBrokerWrite interface {
 	// OnWrite is passed the broker metadata, the key for the request that
 	// was written, the number of bytes that were written (may not be the
 	// whole request if there was an error), how long the request waited
@@ -57,12 +57,12 @@ type BrokerWriteHook interface {
 	OnWrite(meta BrokerMetadata, key int16, bytesWritten int, writeWait, timeToWrite time.Duration, err error)
 }
 
-// BrokerReadHook is called after a read from a broker.
+// HookBrokerRead is called after a read from a broker.
 //
 // Kerberos SASL does not cause read hooks, since it directly reads from the
 // connection. This may change in the future such that the sasl authenticate
 // key is used (even though sasl authenticate requests are not being issued).
-type BrokerReadHook interface {
+type HookBrokerRead interface {
 	// OnRead is passed the broker metadata, the key for the response that
 	// was read, the number of bytes read (may not be the whole read if
 	// there was an error), how long the client waited before reading the
@@ -72,9 +72,9 @@ type BrokerReadHook interface {
 	OnRead(meta BrokerMetadata, key int16, bytesRead int, readWait, timeToRead time.Duration, err error)
 }
 
-// BrokerThrottleHook is called after a response to a request is read
+// HookBrokerThrottle is called after a response to a request is read
 // from a broker, and the response identifies throttling in effect.
-type BrokerThrottleHook interface {
+type HookBrokerThrottle interface {
 	// OnThrottle is passed the broker metadata, the imposed throttling
 	// interval, and whether the throttle was applied before Kafka
 	// responded to them request or after.

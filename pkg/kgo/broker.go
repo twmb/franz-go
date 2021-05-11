@@ -492,7 +492,7 @@ func (b *broker) connect(ctx context.Context) (net.Conn, error) {
 	conn, err := b.cl.cfg.dialFn(ctx, "tcp", b.addr)
 	since := time.Since(start)
 	b.cl.cfg.hooks.each(func(h Hook) {
-		if h, ok := h.(BrokerConnectHook); ok {
+		if h, ok := h.(HookBrokerConnect); ok {
 			h.OnConnect(b.meta, since, conn, err)
 		}
 	})
@@ -826,7 +826,7 @@ func (cxn *brokerCxn) writeRequest(ctx context.Context, enqueuedForWritingAt tim
 	bytesWritten, writeErr, writeWait, timeToWrite := cxn.writeConn(ctx, buf, wt, enqueuedForWritingAt)
 
 	cxn.cl.cfg.hooks.each(func(h Hook) {
-		if h, ok := h.(BrokerWriteHook); ok {
+		if h, ok := h.(HookBrokerWrite); ok {
 			h.OnWrite(cxn.b.meta, req.Key(), bytesWritten, writeWait, timeToWrite, writeErr)
 		}
 	})
@@ -986,7 +986,7 @@ func (cxn *brokerCxn) readResponse(ctx context.Context, timeout time.Duration, e
 	nread, buf, err, readWait, timeToRead := cxn.readConn(ctx, timeout, enqueuedForReadingAt)
 
 	cxn.cl.cfg.hooks.each(func(h Hook) {
-		if h, ok := h.(BrokerReadHook); ok {
+		if h, ok := h.(HookBrokerRead); ok {
 			h.OnRead(cxn.b.meta, key, nread, readWait, timeToRead, err)
 		}
 	})
@@ -1019,7 +1019,7 @@ func (cxn *brokerCxn) readResponse(ctx context.Context, timeout time.Duration, e
 // which means we did not succeed enough to start handleResps.
 func (cxn *brokerCxn) closeConn() {
 	cxn.cl.cfg.hooks.each(func(h Hook) {
-		if h, ok := h.(BrokerDisconnectHook); ok {
+		if h, ok := h.(HookBrokerDisconnect); ok {
 			h.OnDisconnect(cxn.b.meta, cxn.conn)
 		}
 	})
@@ -1167,7 +1167,7 @@ func (cxn *brokerCxn) discard() {
 		}
 
 		cxn.cl.cfg.hooks.each(func(h Hook) {
-			if h, ok := h.(BrokerReadHook); ok {
+			if h, ok := h.(HookBrokerRead); ok {
 				h.OnRead(cxn.b.meta, 0, nread, 0, timeToRead, err)
 			}
 		})
@@ -1211,7 +1211,7 @@ func (cxn *brokerCxn) handleResps() {
 						}
 					}
 					cxn.cl.cfg.hooks.each(func(h Hook) {
-						if h, ok := h.(BrokerThrottleHook); ok {
+						if h, ok := h.(HookBrokerThrottle); ok {
 							h.OnThrottle(cxn.b.meta, time.Duration(millis)*time.Millisecond, throttlesAfterResp)
 						}
 					})
