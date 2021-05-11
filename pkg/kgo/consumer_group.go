@@ -58,7 +58,7 @@ func Balancers(balancers ...GroupBalancer) GroupOpt {
 }
 
 // SessionTimeout sets how long a member the group can go between heartbeats,
-// overriding the default 10,000ms. If a member does not heartbeat in this
+// overriding the default 45,000ms. If a member does not heartbeat in this
 // timeout, the broker will remove the member from the group and initiate a
 // rebalance.
 //
@@ -386,7 +386,7 @@ func (cl *Client) AssignGroup(group string, opts ...GroupOpt) {
 		rejoinCh: make(chan struct{}, 1),
 		reSeen:   make(map[string]struct{}),
 
-		sessionTimeout:    10000 * time.Millisecond,
+		sessionTimeout:    45000 * time.Millisecond,
 		rebalanceTimeout:  60000 * time.Millisecond,
 		heartbeatInterval: 3000 * time.Millisecond,
 
