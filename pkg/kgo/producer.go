@@ -130,6 +130,49 @@ func (cl *Client) ProduceSync(ctx context.Context, rs ...*Record) ProduceResults
 	return results
 }
 
+// FirstErrPromise is a helper type to capture only the first failing error
+// when producing a batch of records with this type's promise function.
+//
+// This is useful for when you only care about any record failing, and can use
+// that as a signal (i.e., to abort a batch).
+//
+// This is similar to using ProduceResult's FirstErr function.
+type FirstErrPromise struct {
+	once uint32
+	mu   sync.Mutex
+	err  error
+}
+
+// Promise is a promise for producing that will store the first error
+// encountered.
+func (f *FirstErrPromise) Promise(_ *Record, err error) {
+	if err != nil && atomic.SwapUint32(&f.once, 1) == 0 {
+		f.mu.Lock()
+		f.err = err
+		f.mu.Unlock()
+	}
+}
+
+// PromiseFn returns a promise for producing that will store the first error
+// encountered.
+//
+// This is provided as an alternative to just Promise for people less familiar
+// with passing a type's method as an argument.
+func (f *FirstErrPromise) PromiseFn() func(*Record, error) {
+	return f.Promise
+}
+
+// Err returns the stored error, if any.
+//
+// This is safe to use at any time, but for the purpose of this type, this This
+// should only be used after any records using this promise have finished (i.e.,
+// the client has been flushed or records have been aborted).
+func (f *FirstErrPromise) Err() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.err
+}
+
 // Produce sends a Kafka record to the topic in the record's Topic field,
 // calling promise with the record or an error when Kafka replies. For a
 // synchronous produce, see ProduceSync.
