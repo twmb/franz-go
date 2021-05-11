@@ -16,7 +16,7 @@ import (
 
 var (
 	debugPort   = flag.Int("debug-port", 9999, "localhost port that metrics can be curled from")
-	seedBrokers = flag.String("brokers", "localhost:9999", "comma delimited list of seed brokers")
+	seedBrokers = flag.String("brokers", "localhost:9092", "comma delimited list of seed brokers")
 	topic       = flag.String("topic", "test", "topic to consume for metric incrementing")
 )
 
