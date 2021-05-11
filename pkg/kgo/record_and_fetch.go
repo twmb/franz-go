@@ -1,6 +1,10 @@
 package kgo
 
-import "time"
+import (
+	"reflect"
+	"time"
+	"unsafe"
+)
 
 // RecordHeader contains extra information that can be sent with Records.
 type RecordHeader struct {
@@ -127,6 +131,59 @@ type Record struct {
 	// the offset used in the produce request and does not mirror the
 	// offset actually stored within Kafka.
 	Offset int64
+}
+
+// StringRecord returns a Record with the Value field set to the input value
+// string. For producing, this function is useful in tandem with the
+// client-level ProduceTopic option.
+//
+// This function uses the 'unsafe' package to avoid copying value into a slice.
+//
+// NOTE: It is NOT SAFE to modify the record's value. This function should only
+// be used if you only ever read record fields. This function can safely be used
+// for producing; the client never modifies a record's key nor value fields.
+func StringRecord(value string) *Record {
+	var slice []byte
+	slicehdr := (*reflect.SliceHeader)(unsafe.Pointer(&slice))
+	slicehdr.Data = ((*reflect.StringHeader)(unsafe.Pointer(&value))).Data
+	slicehdr.Len = len(value)
+	slicehdr.Cap = len(value)
+
+	return &Record{Value: slice}
+}
+
+// KeyStringRecord returns a Record with the Key and Value fields set to the
+// input key and value strings. For producing, this function is useful in
+// tandem with the client-level ProduceTopic option.
+//
+// This function uses the 'unsafe' package to avoid copying value into a slice.
+//
+// NOTE: It is NOT SAFE to modify the record's value. This function should only
+// be used if you only ever read record fields. This function can safely be used
+// for producing; the client never modifies a record's key nor value fields.
+func KeyStringRecord(key, value string) *Record {
+	r := StringRecord(value)
+
+	keyhdr := (*reflect.SliceHeader)(unsafe.Pointer(&r.Key))
+	keyhdr.Data = ((*reflect.StringHeader)(unsafe.Pointer(&key))).Data
+	keyhdr.Len = len(key)
+	keyhdr.Cap = len(key)
+
+	return r
+}
+
+// SliceRecord returns a Record with the Value field set to the input value
+// slice. For producing, this function is useful in tandem with the
+// client-level ProduceTopic option.
+func SliceRecord(value []byte) *Record {
+	return &Record{Value: value}
+}
+
+// KeySliceRecord returns a Record with the Key and Value fields set to the
+// input key and value slices. For producing, this function is useful in
+// tandem with the client-level ProduceTopic option.
+func KeySliceRecord(key, value []byte) *Record {
+	return &Record{Key: key, Value: value}
 }
 
 // FetchPartition is a response for a partition in a fetched topic from a
