@@ -304,7 +304,7 @@ func (g *groupConsumer) balanceGroup(proto string, members []kmsg.JoinGroupRespo
 				fmt.Fprintf(interests, "%s%v, ", owned.Topic, owned.Partitions)
 			}
 			strInterests := interests.String()
-			strings.TrimSuffix(strInterests, ", ")
+			strInterests = strings.TrimSuffix(strInterests, ", ")
 
 			if member.InstanceID == nil {
 				g.cl.cfg.logger.Log(LogLevelInfo, "balance group member", "id", member.MemberID, "interests", strInterests)
