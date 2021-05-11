@@ -5,20 +5,21 @@ import (
 	"fmt"
 	"os"
 	"strconv"
-	"strings"
 	"time"
 
+	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
-func startProducing(ctx context.Context, kafkaBrokers string, topic string) {
+func startProducing(ctx context.Context, brokers []string, topic string) {
 	producerId := strconv.FormatInt(int64(os.Getpid()), 10)
 	client, err := kgo.NewClient(
-		kgo.SeedBrokers(strings.Split(kafkaBrokers, ",")...),
+		kgo.SeedBrokers(brokers...),
 		kgo.TransactionalID(producerId),
+		kgo.ProduceTopic(topic),
 	)
 	if err != nil {
-		fmt.Printf("error initializing Kafka producer client: %v", err)
+		fmt.Printf("error initializing Kafka producer client: %v\n", err)
 		return
 	}
 
@@ -32,29 +33,29 @@ func startProducing(ctx context.Context, kafkaBrokers string, topic string) {
 		}
 
 		// Write some messages in the transaction.
-		if err := produceRecords(ctx, client, topic, batch); err != nil {
+		if err := produceRecords(ctx, client, batch); err != nil {
 			fmt.Printf("error producing message: %v\n", err)
 			rollback(ctx, client)
 			continue
 		}
 
 		// Flush all of the buffered messages.
+		//
+		// Flush only returns an error if the context was canceled, and
+		// it is highly not recommended to cancel the context.
 		if err := client.Flush(ctx); err != nil {
-			if err != context.Canceled {
-				fmt.Printf("error flushing messages: %v\n", err)
-			}
-
-			rollback(ctx, client)
-			continue
+			fmt.Printf("flush was killed due to context cancelation\n")
+			break // nothing to do here, since error means context was canceled
 		}
 
-		// Attempt to commit the transaction and explicitly abort if it fails.
-		if err := client.EndTransaction(ctx, kgo.TryCommit); err != nil {
+		// Attempt to commit the transaction and explicitly abort if the
+		// commit was not attempted.
+		switch err := client.EndTransaction(ctx, kgo.TryCommit); err {
+		case nil:
+		case kerr.OperationNotAttempted:
+			rollback(ctx, client)
+		default:
 			fmt.Printf("error committing transaction: %v\n", err)
-
-			if rollbackErr := client.AbortBufferedRecords(ctx); err != nil {
-				fmt.Printf("error rolling back transaction after commit failure: %v\n", rollbackErr)
-			}
 		}
 
 		batch += 1
@@ -64,35 +65,24 @@ func startProducing(ctx context.Context, kafkaBrokers string, topic string) {
 	fmt.Println("producer exited")
 }
 
-func produceRecords(ctx context.Context, client *kgo.Client, topic string, batch int) error {
-	errChan := make(chan error)
-
-	// Records are produced sequentially in order to demonstrate that a consumer
-	// using the ReadCommitted isolation level will not consume any records until
-	// the transaction is committed.
+// Records are produced synchronously in order to demonstrate that a consumer
+// using the ReadCommitted isolation level will not consume any records until
+// the transaction is committed.
+func produceRecords(ctx context.Context, client *kgo.Client, batch int) error {
 	for i := 0; i < 10; i++ {
 		message := fmt.Sprintf("batch %d record %d\n", batch, i)
-		r := &kgo.Record{
-			Value: []byte(message),
-			Topic: topic,
-		}
-
-		client.Produce(ctx, r, func(r *kgo.Record, e error) {
-			if e != nil {
-				fmt.Printf("produced message: %s", message)
-			}
-			errChan <- e
-		})
-
-		if err := <-errChan; err != nil {
+		if err := client.ProduceSync(ctx, kgo.StringRecord(message)).FirstErr(); err != nil {
 			return err
 		}
 	}
-
 	return nil
 }
 
 func rollback(ctx context.Context, client *kgo.Client) {
+	if err := client.AbortBufferedRecords(ctx); err != nil {
+		fmt.Printf("error aborting buffered records: %v\n", err) // this only happens if ctx is canceled
+		return
+	}
 	if err := client.EndTransaction(ctx, kgo.TryAbort); err != nil {
 		fmt.Printf("error rolling back transaction: %v\n", err)
 		return
