@@ -367,6 +367,16 @@ func (fs Fetches) EachTopic(fn func(FetchTopic)) {
 	}
 }
 
+// EachRecord calls fn for each record in Fetches.
+//
+// This is very similar to using a record iter, and is solely a convenience
+// function depending on which style you prefer.
+func (fs Fetches) EachRecord(fn func(*Record)) {
+	for iter := fs.RecordIter(); !iter.Done(); {
+		fn(iter.Next())
+	}
+}
+
 // FetchTopicPartition is similar to FetchTopic, but for an individual
 // partition.
 type FetchTopicPartition struct {
