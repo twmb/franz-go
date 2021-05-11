@@ -96,6 +96,13 @@ func (rs ProduceResults) FirstErr() error {
 	return nil
 }
 
+// First the first record and error in the produce results.
+//
+// This function is useful if you only passed one record to ProduceSync.
+func (rs ProduceResults) First() (*Record, error) {
+	return rs[0].Record, rs[0].Err
+}
+
 // ProduceSync is a synchronous produce. Please see the Produce documentation
 // for an in depth description of how producing works.
 //
