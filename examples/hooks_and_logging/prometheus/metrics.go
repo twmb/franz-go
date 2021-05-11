@@ -42,11 +42,11 @@ func (m *Metrics) Handler() http.Handler {
 // this writing for demonstration.
 
 var ( // interface checks to ensure we implement the hooks properly
-	_ kgo.BrokerConnectHook    = new(Metrics)
-	_ kgo.BrokerDisconnectHook = new(Metrics)
-	_ kgo.BrokerWriteHook      = new(Metrics)
-	_ kgo.BrokerReadHook       = new(Metrics)
-	_ kgo.BrokerThrottleHook   = new(Metrics)
+	_ kgo.HookBrokerConnect    = new(Metrics)
+	_ kgo.HookBrokerDisconnect = new(Metrics)
+	_ kgo.HookBrokerWrite      = new(Metrics)
+	_ kgo.HookBrokerRead       = new(Metrics)
+	_ kgo.HookBrokerThrottle   = new(Metrics)
 )
 
 func (m *Metrics) OnConnect(meta kgo.BrokerMetadata, _ time.Duration, _ net.Conn, err error) {
