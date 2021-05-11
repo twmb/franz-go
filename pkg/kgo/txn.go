@@ -225,7 +225,15 @@ func (s *GroupTransactSession) End(ctx context.Context, commit TransactionEndTry
 		"will_try_commit", willTryCommit,
 	)
 
+	retried := false // just in case, we use this to avoid looping
+retryUnattempted:
 	endTxnErr := s.cl.EndTransaction(ctx, TransactionEndTry(willTryCommit))
+	if endTxnErr == kerr.OperationNotAttempted && !retried {
+		willTryCommit = false
+		retried = true
+		s.cl.cfg.logger.Log(LogLevelInfo, "end transaction with commit not attempted; retrying as abort")
+		goto retryUnattempted
+	}
 
 	if !willTryCommit || endTxnErr != nil {
 		currentCommit := s.cl.CommittedOffsets()
