@@ -65,15 +65,6 @@ func (p *producer) init() {
 	p.notifyCond = sync.NewCond(&p.notifyMu)
 }
 
-func (p *producer) decAbortNotify(v *int32) {
-	if atomic.AddInt32(v, -1) != 0 || atomic.LoadUint32(&p.aborting) == 0 {
-		return
-	}
-	p.notifyMu.Lock()
-	p.notifyMu.Unlock()
-	p.notifyCond.Broadcast()
-}
-
 func (p *producer) isAborting() bool { return atomic.LoadUint32(&p.aborting) == 1 }
 
 func noPromise(*Record, error) {}

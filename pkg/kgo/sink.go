@@ -785,7 +785,6 @@ func (s *sink) handleReqRespBatch(
 				"err_is_retriable", kerr.IsRetriable(err),
 				"max_retries_reached", batch.tries >= s.cl.cfg.produceRetries,
 			)
-		} else {
 		}
 		s.cl.finishBatch(batch.recBatch, producerID, producerEpoch, partition, baseOffset, err)
 		if debug {
