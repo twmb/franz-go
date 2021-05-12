@@ -8,6 +8,6 @@ Please refer to the directory tree below for what the pages mean!
 <a href="./">docs</a> — you are here
 ├── <a href="./admin-requests.md">admin requests</a> - an overview of how to issue admin requests
 ├── <a href="./package-layout.md">package layout</a> - describes the packages in franz-go
-├── <a href="./producing-and-consuming.md">producing and consuming</a> - a description of producing and and its guarantees & consuming in and out of a group
-└── <a href="./transactions.md">transactions</a> - a description of transactions and how the client works even in a pre-KIP-447 world
+├── <a href="./producing-and-consuming.md">producing and consuming</a> - descriptions of producing & consuming & the guarantees
+└── <a href="./transactions.md">transactions</a> - a description of transactions and the safety even in a pre-KIP-447 world
 </pre>

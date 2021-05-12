@@ -56,11 +56,11 @@ if you want to produce with no ack required or with only leader acks required.
 [10]: https://pkg.go.dev/github.com/twmb/franz-go/pkg/kgo#DisableIdempotentWrite
 
 The default is to always retry records forever, but this can be dropped with
-the [`ProduceRetries`][11] and [`RecordTimeout`] options, as well as with the
-context that you use for producing a record. A record will only be aborted if
-it is safe to do so without messing up the client's sequence numbers. Thus, a
-record can only be aborted if it has never been produced or if it knows that it
-received a successful response from its last produce attempt (even if that
+the [`ProduceRetries`][11] and [`RecordTimeout`][12] options, as well as with
+the context that you use for producing a record. A record will only be aborted
+if it is safe to do so without messing up the client's sequence numbers. Thus,
+a record can only be aborted if it has never been produced or if it knows that
+it received a successful response from its last produce attempt (even if that
 response indicated an error on that partition). If a record is ever failed, all
 records buffered on the same partition are failed.
 
