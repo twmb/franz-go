@@ -67,6 +67,9 @@ func (cl *Client) AssignGroupTransactSession(group string, opts ...GroupOpt) *Gr
 
 	s := &GroupTransactSession{
 		cl: cl,
+
+		revokedCh: make(chan struct{}),
+		lostCh:    make(chan struct{}),
 	}
 
 	g, ok := cl.consumer.loadGroup()
