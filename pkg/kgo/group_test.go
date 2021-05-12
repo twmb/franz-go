@@ -118,31 +118,44 @@ func (c *testConsumer) etl(etlsBeforeQuit int) {
 	cl, _ := NewClient(WithLogger(testLogger()))
 	defer cl.Close()
 
-	cl.AssignGroup(c.group,
+	opts := []GroupOpt{
 		GroupTopics(c.consumeFrom),
-		Balancers(c.balancer))
+		Balancers(c.balancer),
+	}
 
-	defer func() {
-		defer cl.AssignGroup("")
+	if etlsBeforeQuit >= 0 {
 
 		// If we quit before consuming to the end, the behavior we are
-		// triggering is to poll a batch and _not_ commit. Thus, if
-		// we have etlsBeforeQuit, we do _not_ commit on leave.
+		// triggering is to poll a batch and _not_ commit. Thus, if we
+		// have etlsBeforeQuit, we do _not_ commit on leave, and so we
+		// disable autocommitting.
 		//
-		// However, we still want to flush to avoid an unnecessary
-		// dead broker errors for unfinished produces.
+		// However, we still want to commit on valid rebalances, so we
+		// set that option, BUT we do not want to commit on lost, which
+		// triggers when we leave,when want to flush to avoid an unnecessary dead
+		// broker errors for unfinished produces.
+
+		opts = append(opts,
+			DisableAutoCommit(),
+			OnRevoked(func(ctx context.Context, _ map[string][]int32) {
+				cl.BlockingCommitOffsets(
+					ctx,
+					cl.UncommittedOffsets(),
+					nil,
+				)
+			}),
+			OnLost(func(context.Context, map[string][]int32) {}),
+		)
+	}
+
+	cl.AssignGroup(c.group, opts...)
+
+	defer func() {
+		defer cl.LeaveGroup()
+
 		if err := cl.Flush(context.Background()); err != nil {
 			c.errCh <- fmt.Errorf("unable to flush: %v", err)
 		}
-
-		if etlsBeforeQuit >= 0 {
-			return
-		}
-		cl.BlockingCommitOffsets(
-			context.Background(),
-			cl.UncommittedOffsets(),
-			nil,
-		)
 	}()
 
 	netls := 0 // for if etlsBeforeQuit is non-negative

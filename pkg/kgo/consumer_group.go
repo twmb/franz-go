@@ -215,15 +215,6 @@ func GroupProtocol(protocol string) GroupOpt {
 	return groupOpt{func(cfg *groupConsumer) { cfg.protocol = protocol }}
 }
 
-// DisableBlockingCommitOnLeave disables issuing a blocking commit when leaving
-// a group. If autocommitting is disabled, this is automatically disabled.
-//
-// This can be used if you want to have quick shutdowns and do not care about
-// committing the latest offsets.
-func DisableBlockingCommitOnLeave() GroupOpt {
-	return groupOpt{func(cfg *groupConsumer) { cfg.noCommitOnLeave = true }}
-}
-
 // CommitCallback sets the callback to use if autocommitting is enabled. This
 // overrides the default callback that logs errors and continues.
 func CommitCallback(fn func(*kmsg.OffsetCommitRequest, *kmsg.OffsetCommitResponse, error)) GroupOpt {
@@ -260,7 +251,6 @@ type groupConsumer struct {
 
 	autocommitDisable  bool // true if autocommit was disabled or we are transactional
 	autocommitInterval time.Duration
-	noCommitOnLeave    bool
 	commitCallback     func(*kmsg.OffsetCommitRequest, *kmsg.OffsetCommitResponse, error)
 
 	///////////////////////
@@ -364,6 +354,9 @@ type groupConsumer struct {
 // also leaves a group, so this is only necessary to call if you plan to leave
 // the group and continue using the client.
 //
+// If you have overridden the default revoke, you must manually commit offsets
+// before leaving the group.
+//
 // If you have configured the group with an InstanceID, this does not leave the
 // group. With instance IDs, it is expected that clients will restart and
 // re-use the same instance ID. To leave a group using an instance ID, you must
@@ -428,7 +421,10 @@ func (cl *Client) AssignGroup(group string, opts ...GroupOpt) {
 	}
 	if c.cl.cfg.txnID == nil {
 		g.onRevoked = g.defaultRevoke
-		g.onLost = g.defaultRevoke
+		// We do not want to commit in onLost, so we explicitly set
+		// onLost to an empty function to avoid the fallback to
+		// onRevoked.
+		g.onLost = func(context.Context, map[string][]int32) {}
 	} else {
 		g.autocommitDisable = true
 	}
@@ -490,9 +486,27 @@ func (g *groupConsumer) manage() {
 			continue
 		}
 
-		if g.onLost != nil {
+		if g.cooperative && err == context.Canceled && g.onRevoked != nil {
+			// The cooperative consumer does not revoke everything
+			// while rebalancing, meaning if our context is
+			// canceled, we may have uncommitted data. Rather than
+			// diving into OnLost, we should go into OnRevoked,
+			// because for the most part, a context cancelation
+			// means we are leaving the group. Going into OnRevoked
+			// gives us an opportunity to commit outstanding
+			// offsets. For the eager consumer, since we always
+			// revoke before exiting the heartbeat loop, we do not
+			// really care to differentiate and can fall into
+			// OnLost just fine.
+			g.onRevoked(g.ctx, g.nowAssigned)
+
+		} else if g.onLost != nil {
+			// Any other error is perceived as a fatal error,
+			// and we go into OnLost as appropriate.
 			g.onLost(g.ctx, g.nowAssigned)
+
 		} else if g.onRevoked != nil {
+			// If OnLost is not specified, we fallback to OnRevoked.
 			g.onRevoked(g.ctx, g.nowAssigned)
 		}
 
@@ -549,12 +563,7 @@ func (g *groupConsumer) leave() (wait func()) {
 	go func() {
 		defer close(done)
 
-		if !(g.noCommitOnLeave || g.autocommitDisable) {
-			g.cl.cfg.logger.Log(LogLevelInfo, "issuing blocking commit due to leaving group")
-			g.cl.BlockingCommitOffsets(g.ctx, g.cl.UncommittedOffsets(), g.commitCallback)
-		}
-
-		g.cancel() // make sure to cancel **after** the blocking commit
+		g.cancel()
 
 		if wasManaging {
 			// We want to wait for the manage goroutine to be done
@@ -1681,6 +1690,11 @@ func (g *groupConsumer) loopCommit() {
 			return
 		}
 
+		// We use the group context for the default autocommit; revokes
+		// use the client context so that we can be sure we commit even
+		// after the group context is canceled (which is the first
+		// thing that happens so as to quit the manage loop before
+		// leaving a group).
 		g.mu.Lock()
 		if !g.blockAuto {
 			g.cl.cfg.logger.Log(LogLevelDebug, "autocommitting")
@@ -1874,12 +1888,6 @@ func (cl *Client) BlockingCommitOffsets(
 	uncommitted map[string]map[int32]EpochOffset,
 	onDone func(*kmsg.OffsetCommitRequest, *kmsg.OffsetCommitResponse, error),
 ) {
-	cl.cfg.logger.Log(LogLevelDebug, "in BlockingCommitOffsets", "with", uncommitted)
-	defer cl.cfg.logger.Log(LogLevelDebug, "left BlockingCommitOffsets")
-
-	done := make(chan struct{})
-	defer func() { <-done }()
-
 	if onDone == nil {
 		onDone = func(_ *kmsg.OffsetCommitRequest, _ *kmsg.OffsetCommitResponse, _ error) {}
 	}
@@ -1887,13 +1895,28 @@ func (cl *Client) BlockingCommitOffsets(
 	g, ok := cl.consumer.loadGroup()
 	if !ok {
 		onDone(new(kmsg.OffsetCommitRequest), new(kmsg.OffsetCommitResponse), errNotGroup)
-		close(done)
 		return
 	}
 	if len(uncommitted) == 0 {
 		onDone(new(kmsg.OffsetCommitRequest), new(kmsg.OffsetCommitResponse), nil)
-		close(done)
 		return
+	}
+	g.blockingCommitOffsets(ctx, uncommitted, onDone)
+}
+
+func (g *groupConsumer) blockingCommitOffsets(
+	ctx context.Context,
+	uncommitted map[string]map[int32]EpochOffset,
+	onDone func(*kmsg.OffsetCommitRequest, *kmsg.OffsetCommitResponse, error),
+) {
+	done := make(chan struct{})
+	defer func() { <-done }()
+
+	g.cl.cfg.logger.Log(LogLevelDebug, "in BlockingCommitOffsets", "with", uncommitted)
+	defer g.cl.cfg.logger.Log(LogLevelDebug, "left BlockingCommitOffsets")
+
+	if onDone == nil {
+		onDone = func(_ *kmsg.OffsetCommitRequest, _ *kmsg.OffsetCommitResponse, _ error) {}
 	}
 
 	g.blockingCommitMu.Lock() // block all other concurrent commits until our OnDone is done.
@@ -2005,28 +2028,10 @@ func (cl *Client) CommitOffsets(
 // before revoking, meaning this truly will commit all polled fetches.
 func (g *groupConsumer) defaultRevoke(_ context.Context, _ map[string][]int32) {
 	if !g.autocommitDisable {
-		un := g.getUncommitted()
 		// We use the client's context rather than the group context,
 		// because this could come from the group being left. The group
 		// context will already be canceled.
-		g.cl.BlockingCommitOffsets(g.cl.ctx, un, func(_ *kmsg.OffsetCommitRequest, resp *kmsg.OffsetCommitResponse, err error) {
-			if err != nil {
-				if err != errNotGroup && err != context.Canceled {
-					g.cl.cfg.logger.Log(LogLevelError, "default revoke BlockingCommitOffsets failed", "err", err)
-				}
-				return
-			}
-			for _, topic := range resp.Topics {
-				for _, partition := range topic.Partitions {
-					if err := kerr.ErrorForCode(partition.ErrorCode); err != nil {
-						g.cl.cfg.logger.Log(LogLevelError, "in revoke: unable to commit offsets for topic partition",
-							"topic", topic.Topic,
-							"partition", partition.Partition,
-							"error", err)
-					}
-				}
-			}
-		})
+		g.blockingCommitOffsets(g.cl.ctx, g.getUncommitted(), g.commitCallback)
 	}
 }
 
@@ -2042,14 +2047,16 @@ func (g *groupConsumer) commit(
 		onDone = func(_ *kmsg.OffsetCommitRequest, _ *kmsg.OffsetCommitResponse, _ error) {}
 	}
 	if len(uncommitted) == 0 { // only empty if called thru autocommit / default revoke
-		onDone(new(kmsg.OffsetCommitRequest), new(kmsg.OffsetCommitResponse), nil)
+		// We have to do this concurrently because the expectation is
+		// that commit itself does not block.
+		go onDone(new(kmsg.OffsetCommitRequest), new(kmsg.OffsetCommitResponse), nil)
 		return
 	}
 
 	priorCancel := g.commitCancel
 	priorDone := g.commitDone
 
-	commitCtx, commitCancel := context.WithCancel(g.ctx) // enable ours to be canceled and waited for
+	commitCtx, commitCancel := context.WithCancel(ctx) // enable ours to be canceled and waited for
 	commitDone := make(chan struct{})
 
 	g.commitCancel = commitCancel

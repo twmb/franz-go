@@ -397,6 +397,9 @@ func (cl *Client) updateBrokers(brokers []kmsg.MetadataResponseBroker) {
 }
 
 // Close leaves any group and closes all connections and goroutines.
+//
+// If you are group consuming and have overridden the default OnRevoked, you
+// must manually commit offsets before closing the client.
 func (cl *Client) Close() {
 	// First, kill the consumer. This waits for the consumer to unset
 	// gracefully, ensuring we leave groups properly, and then stores the

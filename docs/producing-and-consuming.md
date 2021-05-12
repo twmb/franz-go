@@ -155,12 +155,9 @@ First and the most recommended option, you can just rely on the default
 autocommiting behavior and the default blocking commit on leave. At most, you
 may want to use your own custom commit callback.
 
-Alternatively, you can either disable just the blocking commit on leave with
-[`DisableBlockingCommitOnLeave`][18] or disable autocommitting entirely with
-[`DisableAutoCommit`][19]. With either of these options, you will need a custom
-`OnRevoked`.
+Alternatively, you can disable autocommitting with [`DisableAutoCommit`][19]
+and instead use a custom `OnRevoked`.
 
-[18]: https://pkg.go.dev/github.com/twmb/franz-go/pkg/kgo#DisableBlockingCommitOnLeave
 [19]: https://pkg.go.dev/github.com/twmb/franz-go/pkg/kgo#DisableAutoCommit
 
 In your custom revoke, you can guard a revoked variable with a mutex. Before
