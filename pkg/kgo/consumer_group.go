@@ -1067,6 +1067,25 @@ func (g *groupConsumer) heartbeat(fetchErrCh <-chan error, s *assignRevokeSessio
 	}
 }
 
+// ForceRebalance quits a group member's heartbeat loop so that the member
+// rejoins with a JoinGroupRequest.
+//
+// This function is only useful if you either (a) know that the group member is
+// a leader, and want to force a rebalance for any particular reason, or (b)
+// are using a custom group balancer, and have changed the metadata that will
+// be returned from its JoinGroupMetadata method. This function has no other
+// use; see KIP-568 for more details around this function's motivation.
+//
+// If neither of the cases above are true (this member is not a leader, and the
+// join group metadata has not changed), then Kafka will not actually trigger a
+// rebalance and will instead reply to the member with its current assignment.
+func (cl *Client) ForceRebalance() {
+	g, ok := cl.consumer.loadGroup()
+	if ok {
+		g.rejoin()
+	}
+}
+
 // rejoin is called after a cooperative member revokes what it lost at the
 // beginning of a session, or if we are leader and detect new partitions to
 // consume.
