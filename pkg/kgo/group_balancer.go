@@ -2,7 +2,6 @@ package kgo
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -25,6 +24,10 @@ type GroupBalancer interface {
 		currentAssignment map[string][]int32,
 		generation int32,
 	) []byte
+
+	// ParseSyncAssignment returns assigned topics and partitions from an
+	// encoded SyncGroupResponse's MemberAssignment.
+	ParseSyncAssignment(assignment []byte) (map[string][]int32, error)
 
 	// MemberBalancer returns a GroupMemberBalancer for the given group
 	// members, as well as the topics that all the members are interested
@@ -124,6 +127,22 @@ func (b *ConsumerBalancer) NewPlan() *BalancePlan {
 // group.
 type ConsumerBalancerBalance interface {
 	Balance(*ConsumerBalancer, map[string]int32) IntoSyncAssignment
+}
+
+// ParseConsumerSyncAssignment returns an assignment as specified a
+// kmsg.GroupMemberAssignment, that is, the type encoded in metadata for the
+// consumer protocol.
+func ParseConsumerSyncAssignment(assignment []byte) (map[string][]int32, error) {
+	var kassignment kmsg.GroupMemberAssignment
+	if err := kassignment.ReadFrom(assignment); err != nil {
+		return nil, fmt.Errorf("sync assignment parse failed: %v", err)
+	}
+
+	m := make(map[string][]int32, len(kassignment.Topics))
+	for _, topic := range kassignment.Topics {
+		m[topic.Topic] = topic.Partitions
+	}
+	return m, nil
 }
 
 // NewConsumerBalancer parses the each member's metadata as a
@@ -236,18 +255,22 @@ func sortJoinMemberPtrs(members []*kmsg.JoinGroupResponseMember) {
 	sort.Slice(members, func(i, j int) bool { return joinMemberLess(members[i], members[j]) })
 }
 
+func (g groupConsumer) findBalancer(proto string) (GroupBalancer, error) {
+	for _, balancer := range g.balancers {
+		if balancer.ProtocolName() == proto {
+			return balancer, nil
+		}
+	}
+	return nil, fmt.Errorf("unable to balance: none of our balancers have a name equal to the balancer chosen for balancing (%s)", proto)
+}
+
 // balanceGroup returns a balancePlan from a join group response.
 func (g *groupConsumer) balanceGroup(proto string, members []kmsg.JoinGroupResponseMember) ([]kmsg.SyncGroupRequestGroupAssignment, error) {
 	g.cl.cfg.logger.Log(LogLevelInfo, "balancing group as leader")
 
-	var b GroupBalancer
-	for _, balancer := range g.balancers {
-		if balancer.ProtocolName() == proto {
-			b = balancer
-		}
-	}
-	if b == nil {
-		return nil, errors.New("unable to balance: none of our balances have a name equal to the balancer chosen for balancing")
+	b, err := g.findBalancer(proto)
+	if err != nil {
+		return nil, err
 	}
 
 	sortJoinMembers(members)
@@ -368,6 +391,9 @@ func (*roundRobinBalancer) IsCooperative() bool  { return false }
 func (*roundRobinBalancer) JoinGroupMetadata(interests []string, _ map[string][]int32, _ int32) []byte {
 	return memberMetadataV0(interests)
 }
+func (*roundRobinBalancer) ParseSyncAssignment(assignment []byte) (map[string][]int32, error) {
+	return ParseConsumerSyncAssignment(assignment)
+}
 func (r *roundRobinBalancer) MemberBalancer(members []kmsg.JoinGroupResponseMember) (GroupMemberBalancer, map[string]struct{}, error) {
 	b, err := NewConsumerBalancer(r, members)
 	return b, b.MemberTopics(), err
@@ -446,6 +472,9 @@ func (*rangeBalancer) ProtocolName() string { return "range" }
 func (*rangeBalancer) IsCooperative() bool  { return false }
 func (*rangeBalancer) JoinGroupMetadata(interests []string, _ map[string][]int32, _ int32) []byte {
 	return memberMetadataV0(interests)
+}
+func (*rangeBalancer) ParseSyncAssignment(assignment []byte) (map[string][]int32, error) {
+	return ParseConsumerSyncAssignment(assignment)
 }
 func (r *rangeBalancer) MemberBalancer(members []kmsg.JoinGroupResponseMember) (GroupMemberBalancer, map[string]struct{}, error) {
 	b, err := NewConsumerBalancer(r, members)
@@ -592,7 +621,9 @@ func (s *stickyBalancer) JoinGroupMetadata(interests []string, currentAssignment
 	}
 	meta.UserData = stickyMeta.AppendTo(nil)
 	return meta.AppendTo(nil)
-
+}
+func (*stickyBalancer) ParseSyncAssignment(assignment []byte) (map[string][]int32, error) {
+	return ParseConsumerSyncAssignment(assignment)
 }
 func (s *stickyBalancer) MemberBalancer(members []kmsg.JoinGroupResponseMember) (GroupMemberBalancer, map[string]struct{}, error) {
 	b, err := NewConsumerBalancer(s, members)

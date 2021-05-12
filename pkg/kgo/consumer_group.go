@@ -1211,30 +1211,35 @@ func (g *groupConsumer) handleSyncResp(resp *kmsg.SyncGroupResponse) error {
 		return err
 	}
 
-	kassignment := new(kmsg.GroupMemberAssignment)
-	if err := kassignment.ReadFrom(resp.MemberAssignment); err != nil {
+	var protocol string
+	if resp.Protocol != nil {
+		protocol = *resp.Protocol
+	}
+	b, err := g.findBalancer(protocol)
+	if err != nil {
+		g.cl.cfg.logger.Log(LogLevelError, "sync assignment could not find chosen balancer", "err", err)
+		return err
+	}
+
+	assigned, err := b.ParseSyncAssignment(resp.MemberAssignment)
+	if err != nil {
 		g.cl.cfg.logger.Log(LogLevelError, "sync assignment parse failed", "err", err)
 		return err
 	}
 
 	var sb strings.Builder
-	for i, topic := range kassignment.Topics {
-		fmt.Fprintf(&sb, "%s%v", topic.Topic, topic.Partitions)
-		if i < len(kassignment.Topics)-1 {
-			sb.WriteString(", ")
-		}
+	for topic, partitions := range assigned {
+		fmt.Fprintf(&sb, "%s%v", topic, partitions)
+		sb.WriteString(", ")
 	}
-	g.cl.cfg.logger.Log(LogLevelInfo, "synced", "assigned", sb.String())
+	g.cl.cfg.logger.Log(LogLevelInfo, "synced", "assigned", strings.TrimSuffix(sb.String(), ", "))
 
 	// Past this point, we will fall into the setupAssigned prerevoke code,
 	// meaning for cooperative, we will revoke what we need to.
 	if g.cooperative {
 		g.lastAssigned = g.nowAssigned
 	}
-	g.nowAssigned = make(map[string][]int32)
-	for _, topic := range kassignment.Topics {
-		g.nowAssigned[topic.Topic] = topic.Partitions
-	}
+	g.nowAssigned = assigned
 	g.cl.cfg.logger.Log(LogLevelInfo, "synced successfully", "assigned", g.nowAssigned)
 	return nil
 }
