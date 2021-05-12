@@ -7,8 +7,7 @@ Please refer to the directory tree below for what the pages mean!
 <pre>
 <a href="./">docs</a> — you are here
 ├── <a href="./admin-requests.md">admin requests</a> - an overview of how to issue admin requests
-├── <a href="./architecture.md">architecture</a> - a description of the packages in franz-go and some internals
-├── <a href="./consuming.md">consuming</a> - a description of consuming in a group (and a short section on the simple consumer)
-├── <a href="./producing.md">producing</a> - a description of producing and producing guarantees
-└── <a href="./performance.md">performance</a> - some notes about performance
+├── <a href="./package-layout.md">package layout</a> - describes the packages in franz-go
+├── <a href="./producing-and-consuming.md">producing and consuming</a> - a description of producing and and its guarantees & consuming in and out of a group
+└── <a href="./transactions.md">transactions</a> - a description of transactions and how the client works even in a pre-KIP-447 world
 </pre>

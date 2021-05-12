@@ -1,0 +1,59 @@
+GENERAL
+===
+
+-- ClientOpt is all other opts
+-- ProducerOpt / GroupConsumerOpt are both EosOpt
+
+NewClient(...ClientOpt)
+  Request(ctx context.Context, req kmsg.Request) (kmsg.Response, error)
+  RequestSharded(ctx context.Context, req kmsg.Request) []ResponseShard
+  DiscoveredBrokers() []*Broker
+  SeedBrokers() []*Broker
+  Broker(id int) *Broker
+  Close()
+
+NewProducer(...ProducerOpt)
+  Produce(ctx context.Context, r *Record, promise func(*Record, error)) error
+  AbortBufferedRecords(ctx context.Context) error
+  Flush(ctx context.Context) error
+  Close()
+
+NewTransactionalProducer(txnID string, ...ProducerOpt)
+  BeginTransaction() error
+  Produce(ctx context.Context, r *Record, promise func(*Record, error)) error
+  EndTransaction(ctx context.Context, commit TransactionEndTry) error
+  Close()
+
+NewPartitionConsumer(...PartitionConsumerOpt)
+  PollFetches(ctx context.Context) Fetches
+  SetPartitions(map[string]map[int32]Offset)
+  Close()
+
+NewGroupConsumer(group string, ...GroupConsumerOpt)
+  PollFetches(ctx context.Context) Fetches
+  LeaveGroup()
+  BlockingCommitOffsets(ctx context.Context, uncommitted map[string]map[int32]EpochOffset, ...)
+  CommitOffsets(ctx context.Context, uncommitted map[string]map[int32]EpochOffset, ...)
+  CommittedOffsets() map[string]map[int32]EpochOffset
+  SetOffsets(setOffsets map[string]map[int32]EpochOffset)
+  UncommittedOffsets() map[string]map[int32]EpochOffset
+  
+NewEos(group, txnID string, ...EosOpt)
+  Begin() error
+  PollFetches(ctx context.Context) Fetches
+  Produce(ctx context.Context, r *Record, promise func(*Record, error)) error
+  End(context.Context, TransactionEndTry) (bool, error)
+  Close()
+
+
+CONSUMING TXNAL
+===
+func (cl *Client) AssignGroupTransactSession(group string, opts ...GroupOpt) *GroupTransactSession
+func (cl *Client) Produce(ctx context.Context, r *Record, promise func(*Record, error)) error
+
+----------------
+================
+----------------
+
+metadata manager:
+

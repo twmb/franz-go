@@ -26,7 +26,7 @@ This library attempts to provide an intuitive API while interacting with Kafka t
 - All SASL mechanisms supported (GSSAPI/Kerberos, PLAIN, SCRAM, and OAUTHBEARER)
 - Low-level admin functionality supported through a simple `Request` function
 - Utilizes modern & idiomatic Go (support for contexts, variadic configuration options, ...)
-- Highly performant, see [Performance](./docs/performance.md) (benchmarks will be added)
+- Highly performant by avoiding channels and goroutines where not necessary
 - Written in pure Go (no wrapper lib for a C library or other bindings)
 - Ability to add detailed log messages or metrics using hooks
 
@@ -101,12 +101,13 @@ API reference documentation can be found on
 [![GoDev](https://img.shields.io/static/v1?label=godev&message=reference&color=00add8)][godev].
 Supplementary information can be found in the docs directory:
 
-[docs](./docs)  
-+-- [admin requests](./docs/admin-requests.md) for an overview of how to issue admin requests  
-+-- [architecture](./docs/architecture.md) for descrbing the packages in franz-go and some internals  
-+-- [consuming](./docs/consuming.md) for a description of consuming in a group (and a short section on the simple consumer)  
-+-- [producing](./docs/producing.md) for a description of producing and producing guarantees  
-+-- [performance](./docs/performance.md) for some notes about performance  
+<pre>
+<a href="./docs">docs</a>
+├── <a href="./docs/admin-requests.md">admin requests</a> - an overview of how to issue admin requests
+├── <a href="./docs/package-layout.md">package layout</a> - describes the packages in franz-go
+├── <a href="./docs/producing-and-consuming.md">producing and consuming</a> - a description of producing and and its guarantees & consuming in and out of a group
+└── <a href="./docs/transactions.md">transactions</a> - a description of transactions and how the client works even in a pre-KIP-447 world
+</pre>
 
 ## Version Pinning
 
@@ -228,3 +229,4 @@ a protocol is supported by code generation.
 - [KIP-599](https://cwiki.apache.org/confluence/display/KAFKA/KIP-599%3A+Throttle+Create+Topic%2C+Create+Partition+and+Delete+Topic+Operations) (throttle create/delete topic/partition; 2.7.0)
 - [KIP-664](https://cwiki.apache.org/confluence/display/KAFKA/KIP-664%3A+Provide+tooling+to+detect+and+abort+hanging+transactions) (describe producers, describe / list transactions; mostly 2.8.0 [write txn markers missing])
 - [KIP-700](https://cwiki.apache.org/confluence/display/KAFKA/KIP-700%3A+Add+Describe+Cluster+API) (describe cluster; 2.8.0)
+- [KIP-735](https://cwiki.apache.org/confluence/display/KAFKA/KIP-735%3A+Increase+default+consumer+session+timeout) (bump session timeout; 3.0.0?)
