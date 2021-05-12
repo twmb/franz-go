@@ -215,20 +215,17 @@ func GroupProtocol(protocol string) GroupOpt {
 	return groupOpt{func(cfg *groupConsumer) { cfg.protocol = protocol }}
 }
 
-// BlockingCommitOnLeave sets the group to issue a blocking commit of any
-// outstanding uncommitted offsets before leaving a group.
+// DisableBlockingCommitOnLeave disables issuing a blocking commit when leaving
+// a group. If autocommitting is disabled, this is automatically disabled.
 //
-// This can be used if you do not particularly care about recovering from
-// commit errors when leaving a group / if there are no good options.
-// Alternatively, this can be used in tandem with CommitCallback to provide
-// your own custom commit callback that can handle errors.
-func BlockingCommitOnLeave() GroupOpt {
-	return groupOpt{func(cfg *groupConsumer) { cfg.commitOnLeave = true }}
+// This can be used if you want to have quick shutdowns and do not care about
+// committing the latest offsets.
+func DisableBlockingCommitOnLeave() GroupOpt {
+	return groupOpt{func(cfg *groupConsumer) { cfg.noCommitOnLeave = true }}
 }
 
-// CommitCallback sets the callback to use if autocommitting is enabled, or if
-// BlockingCommitOnLeave is used. This overrides the default callback that logs
-// errors and continues.
+// CommitCallback sets the callback to use if autocommitting is enabled. This
+// overrides the default callback that logs errors and continues.
 func CommitCallback(fn func(*kmsg.OffsetCommitRequest, *kmsg.OffsetCommitResponse, error)) GroupOpt {
 	return groupOpt{func(cfg *groupConsumer) { cfg.commitCallback = fn }}
 }
@@ -263,7 +260,7 @@ type groupConsumer struct {
 
 	autocommitDisable  bool // true if autocommit was disabled or we are transactional
 	autocommitInterval time.Duration
-	commitOnLeave      bool
+	noCommitOnLeave    bool
 	commitCallback     func(*kmsg.OffsetCommitRequest, *kmsg.OffsetCommitResponse, error)
 
 	///////////////////////
@@ -552,8 +549,9 @@ func (g *groupConsumer) leave() (wait func()) {
 	go func() {
 		defer close(done)
 
-		if g.commitOnLeave {
-			g.defaultBlockingCommit()
+		if !(g.noCommitOnLeave || g.autocommitDisable) {
+			g.cl.cfg.logger.Log(LogLevelInfo, "issuing blocking commit due to leaving group")
+			g.cl.BlockingCommitOffsets(g.ctx, g.cl.UncommittedOffsets(), g.commitCallback)
 		}
 
 		g.cancel() // make sure to cancel **after** the blocking commit
@@ -1666,12 +1664,6 @@ func (g *groupConsumer) defaultCommitCallback(_ *kmsg.OffsetCommitRequest, resp 
 			}
 		}
 	}
-}
-
-func (g *groupConsumer) defaultBlockingCommit() {
-	cl := g.cl
-	g.cl.cfg.logger.Log(LogLevelInfo, "issuing blocking commit due to leaving group")
-	cl.BlockingCommitOffsets(g.ctx, cl.UncommittedOffsets(), g.commitCallback)
 }
 
 func (g *groupConsumer) loopCommit() {

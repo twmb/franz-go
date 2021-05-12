@@ -17,16 +17,12 @@ func startConsuming(ctx context.Context, brokers []string, group, topic string) 
 		return
 	}
 
-	client.AssignGroup(group,
-		kgo.GroupTopics(topic),
-
-		// The blocking commit will not run because the only way to
-		// kill this program is to interrupt it, but, usually you will
-		// close the client and wait for it to close before quitting,
-		// and if you want to perform an action on commit errors, you
-		// can use the CommitCallback option.
-		kgo.BlockingCommitOnLeave(),
-	)
+	// The default blocking commit on leave will not run because the only
+	// way to kill this program is to interrupt it, but, usually you will
+	// close the client and wait for it to close before quitting. If you
+	// want to perform an action on commit errors, you can use the
+	// CommitCallback option.
+	client.AssignGroup(group, kgo.GroupTopics(topic))
 	defer client.Close()
 
 consumerLoop:
