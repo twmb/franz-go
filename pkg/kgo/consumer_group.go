@@ -1215,9 +1215,8 @@ func (g *groupConsumer) handleSyncResp(resp *kmsg.SyncGroupResponse) error {
 	if resp.Protocol != nil {
 		protocol = *resp.Protocol
 	}
-	b, err := g.findBalancer(protocol)
+	b, err := g.findBalancer("sync assignment", protocol)
 	if err != nil {
-		g.cl.cfg.logger.Log(LogLevelError, "sync assignment could not find chosen balancer", "err", err)
 		return err
 	}
 

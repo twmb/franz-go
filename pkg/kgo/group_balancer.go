@@ -255,12 +255,17 @@ func sortJoinMemberPtrs(members []*kmsg.JoinGroupResponseMember) {
 	sort.Slice(members, func(i, j int) bool { return joinMemberLess(members[i], members[j]) })
 }
 
-func (g groupConsumer) findBalancer(proto string) (GroupBalancer, error) {
-	for _, balancer := range g.balancers {
-		if balancer.ProtocolName() == proto {
-			return balancer, nil
+func (g *groupConsumer) findBalancer(from, proto string) (GroupBalancer, error) {
+	for _, b := range g.balancers {
+		if b.ProtocolName() == proto {
+			return b, nil
 		}
 	}
+	var ours []string
+	for _, b := range g.balancers {
+		ours = append(ours, b.ProtocolName())
+	}
+	g.cl.cfg.logger.Log(LogLevelError, fmt.Sprintf("%s could not find Kafka-chosen balancer", from), "err", err, "kafka_choice", proto, "our_set", strings.Join(ours, ", "))
 	return nil, fmt.Errorf("unable to balance: none of our balancers have a name equal to the balancer chosen for balancing (%s)", proto)
 }
 
@@ -268,7 +273,7 @@ func (g groupConsumer) findBalancer(proto string) (GroupBalancer, error) {
 func (g *groupConsumer) balanceGroup(proto string, members []kmsg.JoinGroupResponseMember) ([]kmsg.SyncGroupRequestGroupAssignment, error) {
 	g.cl.cfg.logger.Log(LogLevelInfo, "balancing group as leader")
 
-	b, err := g.findBalancer(proto)
+	b, err := g.findBalancer("balance group", proto)
 	if err != nil {
 		return nil, err
 	}
