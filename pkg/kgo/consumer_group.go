@@ -486,7 +486,15 @@ func (g *groupConsumer) manage() {
 			continue
 		}
 
-		if g.cooperative && err == context.Canceled && g.onRevoked != nil {
+		hook := func() {
+			g.cl.cfg.hooks.each(func(h Hook) {
+				if h, ok := h.(HookGroupManageError); ok {
+					h.OnGroupManageError(err)
+				}
+			})
+		}
+
+		if err == context.Canceled && g.onRevoked != nil {
 			// The cooperative consumer does not revoke everything
 			// while rebalancing, meaning if our context is
 			// canceled, we may have uncommitted data. Rather than
@@ -496,18 +504,22 @@ func (g *groupConsumer) manage() {
 			// gives us an opportunity to commit outstanding
 			// offsets. For the eager consumer, since we always
 			// revoke before exiting the heartbeat loop, we do not
-			// really care to differentiate and can fall into
-			// OnLost just fine.
+			// really care so much about *needing* to call
+			// onRevoked, but since we are handling this case for
+			// the cooperative consumer we may as well just also
+			// include the eager consumer.
 			g.onRevoked(g.ctx, g.nowAssigned)
 
 		} else if g.onLost != nil {
 			// Any other error is perceived as a fatal error,
 			// and we go into OnLost as appropriate.
 			g.onLost(g.ctx, g.nowAssigned)
+			hook()
 
 		} else if g.onRevoked != nil {
 			// If OnLost is not specified, we fallback to OnRevoked.
 			g.onRevoked(g.ctx, g.nowAssigned)
+			hook()
 		}
 
 		// We need to invalidate everything from an error return.

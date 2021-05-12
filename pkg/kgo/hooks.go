@@ -87,3 +87,17 @@ type HookBrokerThrottle interface {
 	// request until the throttle deadline has passed.
 	OnThrottle(meta BrokerMetadata, throttleInterval time.Duration, throttledAfterResponse bool)
 }
+
+// HookGroupManageError is called after every error that causes the client,
+// operating as a group member, to break out of the group managing loop and
+// backoff temporarily.
+//
+// Specifically, any error that would result in OnLost being called will result
+// in this hook being called.
+type HookGroupManageError interface {
+	// OnGroupManageError is passed the error that killed a group session.
+	// This can be used to detect potentially fatal errors and act on them
+	// at runtime to recover (such as group auth errors, or group max size
+	// reached).
+	OnGroupManageError(error)
+}
