@@ -32,8 +32,12 @@ type GroupTransactSession struct {
 
 	cooperative bool
 
-	revokeMu sync.Mutex
-	revoked  bool
+	failMu sync.Mutex
+
+	revoked   bool
+	revokedCh chan struct{} // closed once when revoked is set; reset after End
+	lost      bool
+	lostCh    chan struct{} // closed once when lost is set; reset after End
 }
 
 // AssignGroupTransactSession is exactly the same as AssignGroup, but wraps the
@@ -76,17 +80,41 @@ func (cl *Client) AssignGroupTransactSession(group string, opts ...GroupOpt) *Gr
 
 	userRevoked := g.onRevoked
 	g.onRevoked = func(ctx context.Context, rev map[string][]int32) {
-		s.revokeMu.Lock()
-		defer s.revokeMu.Unlock()
+		s.failMu.Lock()
+		defer s.failMu.Unlock()
+		if s.revoked {
+			return
+		}
+
 		if s.cooperative && len(rev) == 0 && !s.revoked {
 			cl.cfg.logger.Log(LogLevelInfo, "transact session in on_revoke with nothing to revoke; allowing next commit")
 		} else {
 			cl.cfg.logger.Log(LogLevelInfo, "transact session in on_revoke; aborting next commit if we are currently in a transaction")
 			s.revoked = true
+			close(s.revokedCh)
 		}
 
 		if userRevoked != nil {
 			userRevoked(ctx, rev)
+		}
+	}
+
+	userLost := g.onLost
+	g.onLost = func(ctx context.Context, lost map[string][]int32) {
+		s.failMu.Lock()
+		defer s.failMu.Unlock()
+		if s.lost {
+			return
+		}
+
+		cl.cfg.logger.Log(LogLevelInfo, "transact session in on_lost; aborting next commit if we are currently in a transaction")
+		s.lost = true
+		close(s.lostCh)
+
+		if userLost != nil {
+			userLost(ctx, lost)
+		} else if userRevoked != nil {
+			userRevoked(ctx, lost)
 		}
 	}
 
@@ -139,6 +167,10 @@ func (s *GroupTransactSession) Begin() error {
 	return s.cl.BeginTransaction()
 }
 
+func (s *GroupTransactSession) failed() bool {
+	return s.revoked || s.lost
+}
+
 // End ends a transaction, committing if commit is true, if the group did not
 // rebalance since the transaction began, and if committing offsets is
 // successful. If commit is false, the group has rebalanced, or any partition
@@ -156,9 +188,12 @@ func (s *GroupTransactSession) Begin() error {
 // recommended to not cancel it.
 func (s *GroupTransactSession) End(ctx context.Context, commit TransactionEndTry) (bool, error) {
 	defer func() {
-		s.revokeMu.Lock()
+		s.failMu.Lock()
 		s.revoked = false
-		s.revokeMu.Unlock()
+		s.revokedCh = make(chan struct{})
+		s.lost = false
+		s.lostCh = make(chan struct{})
+		s.failMu.Unlock()
 	}()
 
 	switch commit {
@@ -174,20 +209,22 @@ func (s *GroupTransactSession) End(ctx context.Context, commit TransactionEndTry
 
 	wantCommit := bool(commit)
 
-	s.revokeMu.Lock()
-	revoked := s.revoked
+	s.failMu.Lock()
+	failed := s.failed()
 
 	precommit := s.cl.CommittedOffsets()
 	postcommit := s.cl.UncommittedOffsets()
-	s.revokeMu.Unlock()
+	s.failMu.Unlock()
 
 	var oldGeneration bool
 	var commitErr error
-	if wantCommit && !revoked {
+	var g *groupConsumer
+
+	if wantCommit && !failed {
 		var commitErrs []string
 
 		committed := make(chan struct{})
-		s.cl.commitTransactionOffsets(context.Background(), postcommit,
+		g = s.cl.commitTransactionOffsets(context.Background(), postcommit,
 			func(_ *kmsg.TxnOffsetCommitRequest, resp *kmsg.TxnOffsetCommitResponse, err error) {
 				defer close(committed)
 				if err != nil {
@@ -215,14 +252,42 @@ func (s *GroupTransactSession) End(ctx context.Context, commit TransactionEndTry
 		}
 	}
 
-	s.revokeMu.Lock()
-	defer s.revokeMu.Unlock()
+	// Now that we have committed our offsets, before we allow them to be
+	// used, we force a heartbeat. By forcing a heartbeat, if there is no
+	// error, then we know we have up to RebalanceTimeout to write our
+	// EndTxnRequest without a problem.
+	//
+	// We should not be booted from the group if we receive an ok
+	// heartbeat, meaning that, as mentioned, we should be able to end the
+	// transaction safely.
+	var okHeartbeat bool
+	if g != nil && commitErr == nil {
+		waitHeartbeat := make(chan struct{})
+		var heartbeatErr error
+		select {
+		case g.heartbeatForceCh <- func(err error) {
+			defer close(waitHeartbeat)
+			heartbeatErr = err
+		}:
+			select {
+			case <-waitHeartbeat:
+				okHeartbeat = heartbeatErr == nil
+			case <-s.revokedCh:
+			case <-s.lostCh:
+			}
+		case <-s.revokedCh:
+		case <-s.lostCh:
+		}
+	}
 
-	tryCommit := !s.revoked && commitErr == nil && !oldGeneration
+	s.failMu.Lock()
+	defer s.failMu.Unlock()
+
+	tryCommit := !s.failed() && commitErr == nil && !oldGeneration && okHeartbeat
 	willTryCommit := wantCommit && tryCommit
 
 	s.cl.cfg.logger.Log(LogLevelInfo, "transaction session ending",
-		"was_revoked", s.revoked,
+		"was_failed", s.failed(),
 		"want_commit", wantCommit,
 		"can_try_commit", tryCommit,
 		"will_try_commit", willTryCommit,
@@ -547,13 +612,13 @@ func (cl *Client) commitTransactionOffsets(
 	ctx context.Context,
 	uncommitted map[string]map[int32]EpochOffset,
 	onDone func(*kmsg.TxnOffsetCommitRequest, *kmsg.TxnOffsetCommitResponse, error),
-) {
+) *groupConsumer {
 	cl.cfg.logger.Log(LogLevelDebug, "in commitTransactionOffsets", "with", uncommitted)
 	defer cl.cfg.logger.Log(LogLevelDebug, "left commitTransactionOffsets")
 
 	if cl.cfg.txnID == nil {
 		onDone(nil, nil, errNotTransactional)
-		return
+		return nil
 	}
 
 	// Before committing, ensure we are at least in a transaction. We
@@ -563,18 +628,18 @@ func (cl *Client) commitTransactionOffsets(
 	if !cl.producer.inTxn {
 		onDone(nil, nil, errNotInTransaction)
 		cl.producer.txnMu.Unlock()
-		return
+		return nil
 	}
 	cl.producer.txnMu.Unlock()
 
 	g, ok := cl.consumer.loadGroup()
 	if !ok {
 		onDone(new(kmsg.TxnOffsetCommitRequest), new(kmsg.TxnOffsetCommitResponse), errNotGroup)
-		return
+		return nil
 	}
 	if len(uncommitted) == 0 {
 		onDone(new(kmsg.TxnOffsetCommitRequest), new(kmsg.TxnOffsetCommitResponse), nil)
-		return
+		return g
 	}
 
 	g.mu.Lock()
@@ -585,12 +650,13 @@ func (cl *Client) commitTransactionOffsets(
 			if onDone != nil {
 				onDone(nil, nil, err)
 			}
-			return
+			return g
 		}
 		g.offsetsAddedToTxn = true
 	}
 
 	g.commitTxn(ctx, uncommitted, onDone)
+	return g
 }
 
 // Ties a transactional producer to a group. Since this requires a producer ID,

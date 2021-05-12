@@ -302,7 +302,7 @@ func defaultCfg() cfg {
 		metadataMaxAge: 5 * time.Minute,
 		metadataMinAge: 10 * time.Second,
 
-		txnTimeout:          60 * time.Second,
+		txnTimeout:          40 * time.Second,
 		acks:                AllISRAcks(),
 		compression:         []CompressionCodec{SnappyCompression(), NoCompression()},
 		maxRecordBatchBytes: 1000000, // Kafka max.message.bytes default is 1000012
@@ -800,10 +800,12 @@ func TransactionalID(id string) ProducerOpt {
 }
 
 // TransactionTimeout sets the allowed for a transaction, overriding the
-// default 60s. It may be a good idea to set this under the rebalance timeout
-// for a group, so that a produce will not complete successfully after the
-// consumer group has already moved the partitions the consumer/producer is
-// working on from one group member to another.
+// default 40s. It is a good idea to keep this less than a group's session
+// timeout, so that a group member will always be alive for the duration of a
+// transaction even if connectivity dies. This helps prevent a transaction
+// finishing after a rebalance, which is problematic pre-Kafka 2.5.0. If you
+// are on Kafka 2.5.0+, then you can use the RequireStableFetchOffsets option
+// when assigning the group, and you can set this to whatever you would like.
 //
 // Transaction timeouts begin when the first record is produced within a
 // transaction, not when a transaction begins.

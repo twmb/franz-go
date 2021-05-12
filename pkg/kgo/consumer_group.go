@@ -62,8 +62,16 @@ func Balancers(balancers ...GroupBalancer) GroupOpt {
 // timeout, the broker will remove the member from the group and initiate a
 // rebalance.
 //
-// This corresponds to Kafka's session.timeout.ms setting and must be within
-// the broker's group.min.session.timeout.ms and group.max.session.timeout.ms.
+// If you are using a GroupTransactSession for EOS, wish to lower this, and are
+// talking to a Kafka cluster pre 2.5.0, consider lowering the
+// TransactionTimeout. If you do not, you risk a transaction finishing after a
+// group has rebalanced, which could lead to duplicate processing. If you are
+// talking to a Kafka 2.5.0+ cluster, you can safely use the
+// RequireStableFetchOffsets group option and prevent any problems.
+//
+// This option corresponds to Kafka's session.timeout.ms setting and must be
+// within the broker's group.min.session.timeout.ms and
+// group.max.session.timeout.ms.
 func SessionTimeout(timeout time.Duration) GroupOpt {
 	return groupOpt{func(cfg *groupConsumer) { cfg.sessionTimeout = timeout }}
 }
@@ -283,6 +291,14 @@ type groupConsumer struct {
 
 	rejoinCh chan struct{} // cap 1; sent to if subscription changes (regex)
 
+	// For EOS, before we commit, we force a heartbeat. If the client and
+	// group member are both configured properly, then the transactional
+	// timeout will be less than the session timeout. By forcing a
+	// heartbeat before the commit, if the heartbeat was successful, then
+	// we ensure that we will complete the transaction within the group
+	// session, meaning we will not commit after the group has rebalanced.
+	heartbeatForceCh chan func(error)
+
 	// The following two are only updated in the manager / join&sync loop
 	lastAssigned map[string][]int32 // only updated in join&sync loop
 	nowAssigned  map[string][]int32 // only updated in join&sync loop
@@ -402,9 +418,10 @@ func (cl *Client) AssignGroup(group string, opts ...GroupOpt) {
 
 		tps: newTopicsPartitions(),
 
-		using:    make(map[string]int),
-		rejoinCh: make(chan struct{}, 1),
-		reSeen:   make(map[string]struct{}),
+		using:            make(map[string]int),
+		rejoinCh:         make(chan struct{}, 1),
+		heartbeatForceCh: make(chan func(error)),
+		reSeen:           make(map[string]struct{}),
 
 		sessionTimeout:    45000 * time.Millisecond,
 		rebalanceTimeout:  60000 * time.Millisecond,
@@ -919,11 +936,14 @@ func (g *groupConsumer) heartbeat(fetchErrCh <-chan error, s *assignRevokeSessio
 
 	for {
 		var err error
+		var force func(error)
 		heartbeat = false
 		select {
 		case <-cooperativeFastCheck:
 			heartbeat = true
 		case <-ticker.C:
+			heartbeat = true
+		case force = <-g.heartbeatForceCh:
 			heartbeat = true
 		case <-g.rejoinCh:
 			// If a metadata update changes our subscription,
@@ -959,6 +979,9 @@ func (g *groupConsumer) heartbeat(fetchErrCh <-chan error, s *assignRevokeSessio
 				err = kerr.ErrorForCode(resp.ErrorCode)
 			}
 			g.cl.cfg.logger.Log(LogLevelDebug, "heartbeat complete", "err", err)
+			if force != nil {
+				force(err)
+			}
 		}
 
 		// The first error either triggers a clean revoke and metadata
