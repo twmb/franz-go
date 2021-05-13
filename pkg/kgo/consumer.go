@@ -473,18 +473,20 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how
 		// usedCursors. We only do not have used cursors if an
 		// assignment went straight to listing / epoch loading, and
 		// that list/epoch never finished.
-		if how == assignInvalidateAll {
+		switch how {
+		case assignInvalidateAll:
 			loadOffsets = listOrEpochLoads{}
-		} else {
-			loadOffsets.filter(func(t string, p int32) bool {
-				var wasLoading bool
+		case assignSetMatching:
+			// We had not yet loaded this partition, so there is
+			// nothing to set, and we keep everything.
+		case assignInvalidateMatching:
+			loadOffsets.keepFilter(func(t string, p int32) bool {
 				if assignTopic, ok := assignments[t]; ok {
 					if _, ok := assignTopic[p]; ok {
-						wasLoading = true
+						return false
 					}
 				}
-				return how == assignInvalidateMatching && !wasLoading ||
-					how == assignSetMatching && wasLoading
+				return true
 			})
 		}
 	}
@@ -704,7 +706,7 @@ func (l listOrEpochLoads) each(fn func(string, int32)) {
 	}
 }
 
-func (l *listOrEpochLoads) filter(keep func(string, int32) bool) {
+func (l *listOrEpochLoads) keepFilter(keep func(string, int32) bool) {
 	for _, m := range []offsetLoadMap{
 		l.list,
 		l.epoch,

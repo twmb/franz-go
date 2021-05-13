@@ -722,6 +722,11 @@ func (g *groupConsumer) commitTxn(
 	priorCancel := g.commitCancel
 	priorDone := g.commitDone
 
+	// Unlike the non-txn consumer, we use the group context for
+	// transaction offset committing. We want to quit when the group is
+	// left, and we are not committing when leaving. We rely on proper
+	// usage of the GroupTransactSession API to issue commits, so there is
+	// no reason not to use the group context here.
 	commitCtx, commitCancel := context.WithCancel(g.ctx) // enable ours to be canceled and waited for
 	commitDone := make(chan struct{})
 

@@ -1769,11 +1769,10 @@ func (cl *Client) SetOffsets(setOffsets map[string]map[int32]EpochOffset) {
 	// The gist of what follows:
 	//
 	// We need to set uncommitted.committed; that is the guarantee of this
-	// function. However, if, for everything we are setting, the head equals
-	// the commit, then we do not need to actually invalidate our current
-	// assignments or buffered fetches.
-	//
-	// We only initialize the assigns map if we need to invalidate.
+	// function. However, if, for everything we are setting, the head
+	// equals the commit, then we do not need to actually invalidate our
+	// current assignments. This is a great optimization for transactions
+	// that are resetting their state on abort.
 	var assigns map[string]map[int32]Offset
 	if g.uncommitted == nil {
 		g.uncommitted = make(uncommitted)
@@ -1789,9 +1788,6 @@ func (cl *Client) SetOffsets(setOffsets map[string]map[int32]EpochOffset) {
 		}
 		var topicAssigns map[int32]Offset
 		for partition, epochOffset := range partitions {
-			// If we are setting the offset to the head, then we do
-			// not need to invalidate anything we have buffered.
-			// Ideal optimization for transactions.
 			current, exists := topicUncommitted[partition]
 			if exists && current.head == epochOffset {
 				current.committed = epochOffset

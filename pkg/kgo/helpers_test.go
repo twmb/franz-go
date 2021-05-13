@@ -104,20 +104,10 @@ func tmpGroup(tb testing.TB) (string, func()) {
 	return group, func() {
 		tb.Helper()
 		tb.Logf("deleting group %s", group)
-		for i := 0; i < 5; i++ {
-			cmd := exec.Command(path, "admin", "group", "delete", group)
-			output, err := cmd.CombinedOutput()
-			if err != nil {
-				tb.Fatalf("unable to run kcl group delete command: %v", err)
-			}
-			if !okRe.Match(output) && !strings.Contains(string(output), "The group id does not exist.") {
-				if i == 4 {
-					tb.Fatalf("group delete failed\n%s", output)
-				}
-				time.Sleep(time.Second)
-			} else {
-				return
-			}
+		cmd := exec.Command(path, "admin", "group", "delete", group)
+		_, err := cmd.CombinedOutput()
+		if err != nil {
+			tb.Fatalf("unable to run kcl group delete command: %v", err)
 		}
 	}
 }
