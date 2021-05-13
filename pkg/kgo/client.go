@@ -792,9 +792,15 @@ func (cl *Client) loadCoordinator(reload bool, ctx context.Context, key coordina
 			done: make(chan struct{}), // all requests for the same coordinator get collapsed into one
 		}
 		defer func() {
-			if c.err != nil { // if our load fails, we avoid caching the coordinator
+			// If our load fails, we avoid caching the coordinator,
+			// but only if something else has not already replaced
+			// our pointer. We could be overwritten by a function
+			// setting reload to true.
+			if c.err != nil {
 				cl.coordinatorsMu.Lock()
-				delete(cl.coordinators, key)
+				if existing, ok := cl.coordinators[key]; ok && c == existing {
+					delete(cl.coordinators, key)
+				}
 				cl.coordinatorsMu.Unlock()
 			}
 			close(c.done)
