@@ -966,9 +966,6 @@ type GroupMetadataValueMember struct {
 
 	// Assignment is what the leader assigned this group member.
 	Assignment []byte
-
-	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -1241,9 +1238,6 @@ type TxnMetadataValueTopic struct {
 
 	// Partitions are partitions in this topic involved in the transaction.
 	Partitions []int32
-
-	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -1445,9 +1439,6 @@ type StickyMemberMetadataCurrentAssignment struct {
 	// Partitions are the partitions within a topic that a group member is
 	// currently assigned.
 	Partitions []int32
-
-	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -1500,9 +1491,6 @@ type GroupMemberMetadataOwnedPartition struct {
 	Topic string
 
 	Partitions []int32
-
-	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -1669,9 +1657,6 @@ type GroupMemberAssignmentTopic struct {
 
 	// Partitions contains partitions in the assignment.
 	Partitions []int32
-
-	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -2204,7 +2189,8 @@ type ProduceRequestTopicPartition struct {
 	Records []byte
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v9+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -2228,7 +2214,8 @@ type ProduceRequestTopic struct {
 	Partitions []ProduceRequestTopicPartition
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v9+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -2507,7 +2494,8 @@ type ProduceResponseTopicPartitionErrorRecord struct {
 	ErrorMessage *string
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v9+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -2629,7 +2617,8 @@ type ProduceResponseTopicPartition struct {
 	ErrorMessage *string // v8+
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v9+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -2656,7 +2645,8 @@ type ProduceResponseTopic struct {
 	Partitions []ProduceResponseTopicPartition
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v9+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -3007,7 +2997,8 @@ type FetchRequestTopicPartition struct {
 	PartitionMaxBytes int32
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v12+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -3034,7 +3025,8 @@ type FetchRequestTopic struct {
 	Partitions []FetchRequestTopicPartition
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v12+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -3058,7 +3050,8 @@ type FetchRequestForgottenTopic struct {
 	Partitions []int32
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v12+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -3576,7 +3569,8 @@ type FetchResponseTopicPartitionDivergingEpoch struct {
 	EndOffset int64
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v12+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -3602,7 +3596,8 @@ type FetchResponseTopicPartitionCurrentLeader struct {
 	LeaderEpoch int32
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v12+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -3626,7 +3621,8 @@ type FetchResponseTopicPartitionSnapshotID struct {
 	Epoch int32
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v12+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -3652,7 +3648,8 @@ type FetchResponseTopicPartitionAbortedTransaction struct {
 	FirstOffset int64
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v12+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -3763,7 +3760,8 @@ type FetchResponseTopicPartition struct {
 	RecordBatches []byte
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v12+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -3809,7 +3807,8 @@ type FetchResponseTopic struct {
 	Partitions []FetchResponseTopicPartition
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v12+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -4357,7 +4356,8 @@ type ListOffsetsRequestTopicPartition struct {
 	MaxNumOffsets int32
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v6+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -4383,7 +4383,8 @@ type ListOffsetsRequestTopic struct {
 	Partitions []ListOffsetsRequestTopicPartition
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v6+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -4700,7 +4701,8 @@ type ListOffsetsResponseTopicPartition struct {
 	LeaderEpoch int32 // v4+
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v6+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -4728,7 +4730,8 @@ type ListOffsetsResponseTopic struct {
 	Partitions []ListOffsetsResponseTopicPartition
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v6+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -5012,7 +5015,8 @@ type MetadataRequestTopic struct {
 	Topic *string
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v9+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -5263,7 +5267,8 @@ type MetadataResponseBroker struct {
 	Rack *string // v1+
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v9+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -5318,7 +5323,8 @@ type MetadataResponseTopicPartition struct {
 	OfflineReplicas []int32 // v5+
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v9+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -5370,7 +5376,8 @@ type MetadataResponseTopic struct {
 	AuthorizedOperations int32 // v8+
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v9+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -5954,7 +5961,8 @@ type LeaderAndISRRequestTopicState struct {
 	PartitionStates []LeaderAndISRRequestTopicPartition
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v4+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -5978,7 +5986,8 @@ type LeaderAndISRRequestLiveLeader struct {
 	Port int32
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v4+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -6754,7 +6763,8 @@ type LeaderAndISRResponseTopic struct {
 	Partitions []LeaderAndISRResponseTopicPartition
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v4+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -7052,7 +7062,8 @@ type StopReplicaRequestTopicPartitionState struct {
 	Delete bool
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v2+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -7079,7 +7090,8 @@ type StopReplicaRequestTopic struct {
 	PartitionStates []StopReplicaRequestTopicPartitionState // v3+
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v2+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -7392,7 +7404,8 @@ type StopReplicaResponsePartition struct {
 	ErrorCode int16
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v2+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -7603,7 +7616,8 @@ type UpdateMetadataRequestTopicState struct {
 	PartitionStates []UpdateMetadataRequestTopicPartition
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v6+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -7629,7 +7643,8 @@ type UpdateMetadataRequestLiveBrokerEndpoint struct {
 	SecurityProtocol int16
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v6+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -7657,7 +7672,8 @@ type UpdateMetadataRequestLiveBroker struct {
 	Rack *string // v2+
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v6+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -8627,7 +8643,8 @@ type ControlledShutdownResponsePartitionsRemaining struct {
 	Partition int32
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v3+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -8811,7 +8828,8 @@ type OffsetCommitRequestTopicPartition struct {
 	Metadata *string
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v8+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -8837,7 +8855,8 @@ type OffsetCommitRequestTopic struct {
 	Partitions []OffsetCommitRequestTopicPartition
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v8+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -9217,7 +9236,8 @@ type OffsetCommitResponseTopicPartition struct {
 	ErrorCode int16
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v8+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -9242,7 +9262,8 @@ type OffsetCommitResponseTopic struct {
 	Partitions []OffsetCommitResponseTopicPartition
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v8+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -9464,7 +9485,8 @@ type OffsetFetchRequestTopic struct {
 	Partitions []int32
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v6+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -9736,7 +9758,8 @@ type OffsetFetchResponseTopicPartition struct {
 	ErrorCode int16
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v6+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -9762,7 +9785,8 @@ type OffsetFetchResponseTopic struct {
 	Partitions []OffsetFetchResponseTopicPartition
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v6+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -10321,7 +10345,8 @@ type JoinGroupRequestProtocol struct {
 	Metadata []byte
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v6+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -10638,7 +10663,8 @@ type JoinGroupResponseMember struct {
 	ProtocolMetadata []byte
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v6+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -11259,7 +11285,8 @@ type LeaveGroupRequestMember struct {
 	InstanceID *string
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v4+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -11479,7 +11506,8 @@ type LeaveGroupResponseMember struct {
 	ErrorCode int16
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v4+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -11697,7 +11725,8 @@ type SyncGroupRequestGroupAssignment struct {
 	MemberAssignment []byte
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v4+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -12310,7 +12339,8 @@ type DescribeGroupsResponseGroupMember struct {
 	MemberAssignment []byte
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v5+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -12364,7 +12394,8 @@ type DescribeGroupsResponseGroup struct {
 	AuthorizedOperations int32 // v3+
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v5+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -12868,7 +12899,8 @@ type ListGroupsResponseGroup struct {
 	GroupState string // v4+
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v3+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -13389,7 +13421,8 @@ type ApiVersionsResponseApiKey struct {
 	MaxVersion int16
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v3+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -13416,7 +13449,8 @@ type ApiVersionsResponseSupportedFeature struct {
 	MaxVersion int16
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v3+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -13443,7 +13477,8 @@ type ApiVersionsResponseFinalizedFeature struct {
 	MinVersionLevel int16
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v3+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -13851,7 +13886,8 @@ type CreateTopicsRequestTopicReplicaAssignment struct {
 	Replicas []int32
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v5+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -13875,7 +13911,8 @@ type CreateTopicsRequestTopicConfig struct {
 	Value *string
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v5+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -13915,7 +13952,8 @@ type CreateTopicsRequestTopic struct {
 	Configs []CreateTopicsRequestTopicConfig
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v5+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -14290,7 +14328,8 @@ type CreateTopicsResponseTopicConfig struct {
 	IsSensitive bool
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v5+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -14366,7 +14405,8 @@ type CreateTopicsResponseTopic struct {
 	Configs []CreateTopicsResponseTopicConfig // v5+
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v5+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -14709,7 +14749,8 @@ type DeleteTopicsRequestTopic struct {
 	TopicID [16]byte
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v4+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -14961,7 +15002,8 @@ type DeleteTopicsResponseTopic struct {
 	ErrorMessage *string // v5+
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v4+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -15191,7 +15233,8 @@ type DeleteRecordsRequestTopicPartition struct {
 	Offset int64
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v2+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -15215,7 +15258,8 @@ type DeleteRecordsRequestTopic struct {
 	Partitions []DeleteRecordsRequestTopicPartition
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v2+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -15476,7 +15520,8 @@ type DeleteRecordsResponseTopicPartition struct {
 	ErrorCode int16
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v2+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -15501,7 +15546,8 @@ type DeleteRecordsResponseTopic struct {
 	Partitions []DeleteRecordsResponseTopicPartition
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v2+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -16018,7 +16064,8 @@ type OffsetForLeaderEpochRequestTopicPartition struct {
 	LeaderEpoch int32
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v4+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -16043,7 +16090,8 @@ type OffsetForLeaderEpochRequestTopic struct {
 	Partitions []OffsetForLeaderEpochRequestTopicPartition
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v4+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -16327,7 +16375,8 @@ type OffsetForLeaderEpochResponseTopicPartition struct {
 	EndOffset int64
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v4+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -16353,7 +16402,8 @@ type OffsetForLeaderEpochResponseTopic struct {
 	Partitions []OffsetForLeaderEpochResponseTopicPartition
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v4+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -16592,7 +16642,8 @@ type AddPartitionsToTxnRequestTopic struct {
 	Partitions []int32
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v3+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -16864,7 +16915,8 @@ type AddPartitionsToTxnResponseTopicPartition struct {
 	ErrorCode int16
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v3+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -16888,7 +16940,8 @@ type AddPartitionsToTxnResponseTopic struct {
 	Partitions []AddPartitionsToTxnResponseTopicPartition
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v3+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -17599,7 +17652,8 @@ type WriteTxnMarkersRequestMarkerTopic struct {
 	Partitions []int32
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v1+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -17627,7 +17681,8 @@ type WriteTxnMarkersRequestMarker struct {
 	CoordinatorEpoch int32
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v1+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -17892,7 +17947,8 @@ type WriteTxnMarkersResponseMarkerTopicPartition struct {
 	ErrorCode int16
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v1+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -17914,7 +17970,8 @@ type WriteTxnMarkersResponseMarkerTopic struct {
 	Partitions []WriteTxnMarkersResponseMarkerTopicPartition
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v1+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -17936,7 +17993,8 @@ type WriteTxnMarkersResponseMarker struct {
 	Topics []WriteTxnMarkersResponseMarkerTopic
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v1+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -18204,7 +18262,8 @@ type TxnOffsetCommitRequestTopicPartition struct {
 	Metadata *string
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v3+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -18229,7 +18288,8 @@ type TxnOffsetCommitRequestTopic struct {
 	Partitions []TxnOffsetCommitRequestTopicPartition
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v3+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -18628,7 +18688,8 @@ type TxnOffsetCommitResponseTopicPartition struct {
 	ErrorCode int16
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v3+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -18652,7 +18713,8 @@ type TxnOffsetCommitResponseTopic struct {
 	Partitions []TxnOffsetCommitResponseTopicPartition
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v3+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -19104,7 +19166,8 @@ type DescribeACLsResponseResourceACL struct {
 	PermissionType ACLPermissionType
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v2+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -19134,7 +19197,8 @@ type DescribeACLsResponseResource struct {
 	ACLs []DescribeACLsResponseResourceACL
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v2+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -19499,7 +19563,8 @@ type CreateACLsRequestCreation struct {
 	PermissionType ACLPermissionType
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v2+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -19758,7 +19823,8 @@ type CreateACLsResponseResult struct {
 	ErrorMessage *string
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v2+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -19939,7 +20005,8 @@ type DeleteACLsRequestFilter struct {
 	PermissionType ACLPermissionType
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v2+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -20211,7 +20278,8 @@ type DeleteACLsResponseResultMatchingACL struct {
 	PermissionType ACLPermissionType
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v2+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -20239,7 +20307,8 @@ type DeleteACLsResponseResult struct {
 	MatchingACLs []DeleteACLsResponseResultMatchingACL
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v2+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -20603,7 +20672,8 @@ type DescribeConfigsRequestResource struct {
 	ConfigNames []string
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v4+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -20850,7 +20920,8 @@ type DescribeConfigsResponseResourceConfigConfigSynonym struct {
 	Source ConfigSource
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v4+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -20901,7 +20972,8 @@ type DescribeConfigsResponseResourceConfig struct {
 	Documentation *string // v3+
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v4+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -20950,7 +21022,8 @@ type DescribeConfigsResponseResource struct {
 	Configs []DescribeConfigsResponseResourceConfig
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v4+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -21397,7 +21470,8 @@ type AlterConfigsRequestResourceConfig struct {
 	Value *string
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v2+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -21436,7 +21510,8 @@ type AlterConfigsRequestResource struct {
 	Configs []AlterConfigsRequestResourceConfig
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v2+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -21729,7 +21804,8 @@ type AlterConfigsResponseResource struct {
 	ResourceName string
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v2+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -21935,7 +22011,8 @@ type AlterReplicaLogDirsRequestDirTopic struct {
 	Partitions []int32
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v2+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -21960,7 +22037,8 @@ type AlterReplicaLogDirsRequestDir struct {
 	Topics []AlterReplicaLogDirsRequestDirTopic
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v2+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -22224,7 +22302,8 @@ type AlterReplicaLogDirsResponseTopicPartition struct {
 	ErrorCode int16
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v2+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -22249,7 +22328,8 @@ type AlterReplicaLogDirsResponseTopic struct {
 	Partitions []AlterReplicaLogDirsResponseTopicPartition
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v2+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -22476,7 +22556,8 @@ type DescribeLogDirsRequestTopic struct {
 	Partitions []int32
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v2+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -22691,7 +22772,8 @@ type DescribeLogDirsResponseDirTopicPartition struct {
 	IsFuture bool
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v2+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -22716,7 +22798,8 @@ type DescribeLogDirsResponseDirTopic struct {
 	Partitions []DescribeLogDirsResponseDirTopicPartition
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v2+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -22745,7 +22828,8 @@ type DescribeLogDirsResponseDir struct {
 	Topics []DescribeLogDirsResponseDirTopic
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v2+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -23278,7 +23362,8 @@ type CreatePartitionsRequestTopicAssignment struct {
 	Replicas []int32
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v2+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -23316,7 +23401,8 @@ type CreatePartitionsRequestTopic struct {
 	Assignment []CreatePartitionsRequestTopicAssignment
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v2+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -23610,7 +23696,8 @@ type CreatePartitionsResponseTopic struct {
 	ErrorMessage *string
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v2+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -23802,7 +23889,8 @@ type CreateDelegationTokenRequestRenewer struct {
 	PrincipalName string
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v2+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -24658,7 +24746,8 @@ type DescribeDelegationTokenRequestOwner struct {
 	PrincipalName string
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v2+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -24837,7 +24926,8 @@ type DescribeDelegationTokenResponseTokenDetailRenewer struct {
 	PrincipalName string
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v2+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -24880,7 +24970,8 @@ type DescribeDelegationTokenResponseTokenDetail struct {
 	Renewers []DescribeDelegationTokenResponseTokenDetailRenewer
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v2+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -25347,7 +25438,8 @@ type DeleteGroupsResponseGroup struct {
 	ErrorCode int16
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v2+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -25522,7 +25614,8 @@ type ElectLeadersRequestTopic struct {
 	Partitions []int32
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v2+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -25768,7 +25861,8 @@ type ElectLeadersResponseTopicPartition struct {
 	ErrorMessage *string
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v2+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -25792,7 +25886,8 @@ type ElectLeadersResponseTopic struct {
 	Partitions []ElectLeadersResponseTopicPartition
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v2+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -26057,7 +26152,8 @@ type IncrementalAlterConfigsRequestResourceConfig struct {
 	Value *string
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v1+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -26095,7 +26191,8 @@ type IncrementalAlterConfigsRequestResource struct {
 	Configs []IncrementalAlterConfigsRequestResourceConfig
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v1+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -26390,7 +26487,8 @@ type IncrementalAlterConfigsResponseResource struct {
 	ResourceName string
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v1+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -27782,9 +27880,6 @@ func NewListPartitionReassignmentsResponse() ListPartitionReassignmentsResponse 
 type OffsetDeleteRequestTopicPartition struct {
 	// Partition is a partition to delete offsets for.
 	Partition int32
-
-	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -27806,9 +27901,6 @@ type OffsetDeleteRequestTopic struct {
 
 	// Partitions are partitions to delete offsets for.
 	Partitions []OffsetDeleteRequestTopicPartition
-
-	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -27984,9 +28076,6 @@ type OffsetDeleteResponseTopicPartition struct {
 	//
 	// GROUP_SUBSCRIBED_TO_TOPIC is returned if the topic is still subscribed to.
 	ErrorCode int16
-
-	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -28008,9 +28097,6 @@ type OffsetDeleteResponseTopic struct {
 
 	// Partitions are partitions being responded to.
 	Partitions []OffsetDeleteResponseTopicPartition
-
-	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -28207,7 +28293,8 @@ type DescribeClientQuotasRequestComponent struct {
 	Match *string
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v1+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -28404,7 +28491,8 @@ type DescribeClientQuotasResponseEntryEntity struct {
 	Name *string
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v1+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -28428,7 +28516,8 @@ type DescribeClientQuotasResponseEntryValue struct {
 	Value float64
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v1+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -28452,7 +28541,8 @@ type DescribeClientQuotasResponseEntry struct {
 	Values []DescribeClientQuotasResponseEntryValue
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v1+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -28775,7 +28865,8 @@ type AlterClientQuotasRequestEntryEntity struct {
 	Name *string
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v1+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -28802,7 +28893,8 @@ type AlterClientQuotasRequestEntryOp struct {
 	Remove bool
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v1+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -28826,7 +28918,8 @@ type AlterClientQuotasRequestEntry struct {
 	Ops []AlterClientQuotasRequestEntryOp
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v1+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -29130,7 +29223,8 @@ type AlterClientQuotasResponseEntryEntity struct {
 	Name *string
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v1+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -29157,7 +29251,8 @@ type AlterClientQuotasResponseEntry struct {
 	Entity []AlterClientQuotasResponseEntryEntity
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
+	UnknownTags Tags // v1+
+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -30929,9 +31024,6 @@ type BeginQuorumEpochRequestTopicPartition struct {
 
 	// The epoch of the newly elected leader.
 	LeaderEpoch int32
-
-	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -30951,9 +31043,6 @@ type BeginQuorumEpochRequestTopic struct {
 	Topic string
 
 	Partitions []BeginQuorumEpochRequestTopicPartition
-
-	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -31140,9 +31229,6 @@ type BeginQuorumEpochResponseTopicPartition struct {
 
 	// The latest known leader epoch.
 	LeaderEpoch int32
-
-	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -31162,9 +31248,6 @@ type BeginQuorumEpochResponseTopic struct {
 	Topic string
 
 	Partitions []BeginQuorumEpochResponseTopicPartition
-
-	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -31344,9 +31427,6 @@ type EndQuorumEpochRequestTopicPartition struct {
 
 	// A sorted list of preferred successors to start the election.
 	PreferredSuccessors []int32
-
-	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -31366,9 +31446,6 @@ type EndQuorumEpochRequestTopic struct {
 	Topic string
 
 	Partitions []EndQuorumEpochRequestTopicPartition
-
-	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -31581,9 +31658,6 @@ type EndQuorumEpochResponseTopicPartition struct {
 
 	// The latest known leader epoch.
 	LeaderEpoch int32
-
-	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -31603,9 +31677,6 @@ type EndQuorumEpochResponseTopic struct {
 	Topic string
 
 	Partitions []EndQuorumEpochResponseTopicPartition
-
-	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
