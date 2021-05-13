@@ -258,7 +258,7 @@ generation.
 | [KIP-519](https://cwiki.apache.org/confluence/pages/viewpage.action?pageId=128650952) — Configurable SSL "engine" | 2.6.0 | Supported (via dialer) |
 | [KIP-525](https://cwiki.apache.org/confluence/display/KAFKA/KIP-525+-+Return+topic+metadata+and+configs+in+CreateTopics+response) — CreateTopics v5 returns configs | 2.4.0 | Supported |
 | [KIP-526](https://cwiki.apache.org/confluence/display/KAFKA/KIP-526%3A+Reduce+Producer+Metadata+Lookups+for+Large+Number+of+Topics) — Reduce metadata lookups | 2.5.0 | Supported |
-| [KIP-533](https://cwiki.apache.org/confluence/display/KAFKA/KIP-533%3A+Add+default+api+timeout+to+AdminClient) — Default API timeout (total time, not per request) | 2.5.0 | Not supported |
+| [KIP-533](https://cwiki.apache.org/confluence/display/KAFKA/KIP-533%3A+Add+default+api+timeout+to+AdminClient) — Default API timeout (total time, not per request) | 2.5.0 | Supported (via RetryTimeout) |
 | [KIP-546](https://cwiki.apache.org/confluence/display/KAFKA/KIP-546%3A+Add+Client+Quota+APIs+to+the+Admin+Client) — Client Quota APIs | 2.5.0 | Supported |
 | [KIP-554](https://cwiki.apache.org/confluence/display/KAFKA/KIP-554%3A+Add+Broker-side+SCRAM+Config+API) — Broker side SCRAM APIs | 2.7.0 | Supported |
 | [KIP-559](https://cwiki.apache.org/confluence/display/KAFKA/KIP-559%3A+Make+the+Kafka+Protocol+Friendlier+with+L7+Proxies) — Protocol info in sync/join | 2.5.0 | Supported |
