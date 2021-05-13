@@ -1,7 +1,76 @@
-tip
+v0.7.0
 ===
 
-- [`fb315873`](https://github.com/twmb/franz-go/commit/fb315873) **feature** producer: add ProduceSync
+This is a big release, and it warrants finally switching to 0.7.0. There are a
+few small breaking changes in this release, a lot of new features, a good few
+bug fixes, and some other general changes. The documentation has been
+overhauled, and there now exists an example of hooking in to prometheus metrics
+as well as an example for EOS.
+
+Most of the new features are quality of life improvements; I recommend taking a
+look at them to see where they might simplify your code.
+
+## Upgrade considerations
+
+Besides the two breaking changes just below, one bug fix may affect how you if
+you are using a group consumer with autocommitting. If autocommitting, the
+consumer should always have been issuing a blocking commit when leaving the
+group to commit the final consumed records. A bug existed such that this commit
+would never actually be issued. That bug has been fixed, so now, if you rely on
+autocommitting, the client closing may take a bit longer due to the blocking
+commit.
+
+## Breaking changes
+
+There are two breaking changes in this release, one of which likely will go
+unnoticed. First, to allow all hooks to display next to each other in godoc,
+the interfaces have had their trailing "Hook" moved to a leading "Hook".
+Second and definitely noticeable, record producing no longer returns an error.
+The original error return was not really that intuitive and could lead to bugs
+if not understood entirely, so it is much simpler to just always call the
+promise.
+
+- [`215f76f`](https://github.com/twmb/franz-go/commit/215f76f) small breaking API: prefix hook interfaces with "Hook"
+- [`c045366`](https://github.com/twmb/franz-go/commit/c045366) producer: drop error return from Produce (breaking API change)
+
+## Features
+
+- [`c83d5ba`](https://github.com/twmb/franz-go/commit/c83d5ba) generate: support parsing and encoding unknown tags
+- [`6a9eb0b`](https://github.com/twmb/franz-go/commit/6a9eb0b) kmsg: add Tags opaque type; ReadTags helper
+- [`9de3959`](https://github.com/twmb/franz-go/commit/9de3959) add support for KIP-568 (force rebalance)
+- [`d38ac84`](https://github.com/twmb/franz-go/commit/d38ac84) add HookGroupManageError
+- [`1b69836`](https://github.com/twmb/franz-go/commit/1b69836) group balancers: require one more method
+- [`0bfa547`](https://github.com/twmb/franz-go/commit/0bfa547) consumer group: add CommitCallback option
+- [`231d0e4`](https://github.com/twmb/franz-go/commit/231d0e4) fetches: add EachRecord
+- [`aea185e`](https://github.com/twmb/franz-go/commit/aea185e) add FirstErrPromise
+- [`780d168`](https://github.com/twmb/franz-go/commit/780d168) Record: add helper constructors; allocation avoiders w/ unsafe
+- [`55be413`](https://github.com/twmb/franz-go/commit/55be413) producer feature: allow a default Topic to produce to
+- [`e05002b`](https://github.com/twmb/franz-go/commit/e05002b) consumer group: export APIs allow custom balancers
+- [`6db1c39`](https://github.com/twmb/franz-go/commit/6db1c39) Fetches: add EachTopic helper
+- [`b983d63`](https://github.com/twmb/franz-go/commit/b983d6), [`7c9f591`](https://github.com/twmb/franz-go/commit/7c9f59), [`3ad8fc7`](https://github.com/twmb/franz-go/commit/3ad8fc), and [`3ad8fc7`](https://github.com/twmb/franz-go/commit/3ad8fc7) producer: add ProduceSync
+
+## Bug fixes
+
+- [`45cb9df`](https://github.com/twmb/franz-go/commit/45cb9df) consumer: fix SetOffsets bug
+- [`46cfcb7`](https://github.com/twmb/franz-go/commit/46cfcb7) group: fix blocking commit on leave; potential deadlock
+- [`1aaa1ef`](https://github.com/twmb/franz-go/commit/1aaa1ef) consumer: fix data race in handleListOrEpochResults
+- [`d1341ae`](https://github.com/twmb/franz-go/commit/d1341ae) sticky: fix extreme edge case for complex balancing
+- [`9ada82d`](https://github.com/twmb/franz-go/commit/9ada82d) sink: create producerID *BEFORE* produce request (partial revert of dc44d10b)
+- [`5475f6b`](https://github.com/twmb/franz-go/commit/5475f6b) sink: bugfix firstTimestamp
+- [`2c473c4`](https://github.com/twmb/franz-go/commit/2c473c4) client: add OffsetDeleteRequest to handleCoordinatorReq
+- [`bf5b74c`](https://github.com/twmb/franz-go/commit/bf5b74c) and 3ad8fc7 broker: avoid reaping produce cxn on no reads when acks == 0
+- [`43a0009`](https://github.com/twmb/franz-go/commit/43a0009) sink w/ no acks: debug log needs to be before finishBatch
+- [`8cf9eb9`](https://github.com/twmb/franz-go/commit/8cf9eb9) sink: bugfix panic on acks=0
+
+## General
+
+- [`939cba2`](https://github.com/twmb/franz-go/commit/939cba2) txns: make even safer (& drop default txn timeout to 40s)
+- [`faaecd2`](https://github.com/twmb/franz-go/commit/faaecd2) implement KIP-735 (bump session timeout to 45s)
+- [`3a95ec8`](https://github.com/twmb/franz-go/commit/3a95ec8) GroupTxnSession.End: document no error is worth retrying
+- [`c5a47ea`](https://github.com/twmb/franz-go/commit/c5a47ea) GroupTransactSession.End: retry with abort on OperationNotAttempted
+- [`6398677`](https://github.com/twmb/franz-go/commit/6398677) EndTxn: avoid creating a producer ID if nothing was produced
+- [`c7c08fb`](https://github.com/twmb/franz-go/commit/c7c08fb) txnal producer: work around KAFKA-12671, take 2
+- [`9585e1d`](https://github.com/twmb/franz-go/commit/9585e1d) FetchesRecordIter: avoid mutating input fetches
 
 v0.6.14
 ===
