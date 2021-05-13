@@ -39,13 +39,12 @@ promise.
 - [`6a9eb0b`](https://github.com/twmb/franz-go/commit/6a9eb0b) kmsg: add Tags opaque type; ReadTags helper
 - [`9de3959`](https://github.com/twmb/franz-go/commit/9de3959) add support for KIP-568 (force rebalance)
 - [`d38ac84`](https://github.com/twmb/franz-go/commit/d38ac84) add HookGroupManageError
-- [`1b69836`](https://github.com/twmb/franz-go/commit/1b69836) group balancers: require one more method
 - [`0bfa547`](https://github.com/twmb/franz-go/commit/0bfa547) consumer group: add CommitCallback option
 - [`231d0e4`](https://github.com/twmb/franz-go/commit/231d0e4) fetches: add EachRecord
 - [`aea185e`](https://github.com/twmb/franz-go/commit/aea185e) add FirstErrPromise
 - [`780d168`](https://github.com/twmb/franz-go/commit/780d168) Record: add helper constructors; allocation avoiders w/ unsafe
 - [`55be413`](https://github.com/twmb/franz-go/commit/55be413) producer feature: allow a default Topic to produce to
-- [`e05002b`](https://github.com/twmb/franz-go/commit/e05002b) consumer group: export APIs allow custom balancers
+- [`e05002b`](https://github.com/twmb/franz-go/commit/e05002b) and [`1b69836`](https://github.com/twmb/franz-go/commit/1b69836) consumer group: export APIs allow custom balancers
 - [`6db1c39`](https://github.com/twmb/franz-go/commit/6db1c39) Fetches: add EachTopic helper
 - [`b983d63`](https://github.com/twmb/franz-go/commit/b983d6), [`7c9f591`](https://github.com/twmb/franz-go/commit/7c9f59), [`3ad8fc7`](https://github.com/twmb/franz-go/commit/3ad8fc), and [`3ad8fc7`](https://github.com/twmb/franz-go/commit/3ad8fc7) producer: add ProduceSync
 
