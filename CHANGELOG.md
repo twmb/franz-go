@@ -1,3 +1,20 @@
+v0.7.1
+===
+
+- [`98f74d1`](https://github.com/twmb/franz-go/commit/98f74d1) README: note that we actually do support KIP-533
+- [`528f007`](https://github.com/twmb/franz-go/commit/528f007) and [`ef9a16a`](https://github.com/twmb/franz-go/commit/ef9a16a) and [`d0cc729`](https://github.com/twmb/franz-go/commit/d0cc729) **bugfix** client: avoid caching invalid coordinators; allow retries
+
+This is a small bugfix release: previously, if FindCoordinator returned a node
+ID of -1, we would permanently cache that. -1 is returned when the load has an
+error, which we were not checking, but even still, we should not cache the
+response if we do not know of the broker.
+
+Now, we will only cache successful loads.
+
+(Also, I noticed that I _do_ have an existing configuration knob for the retry
+timeout, so that is now "Supported" in the KIP section, making all KIPs
+supported).
+
 v0.7.0
 ===
 
