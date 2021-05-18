@@ -1177,7 +1177,7 @@ start:
 		return err
 	}
 
-	if err = g.handleSyncResp(syncResp); err != nil {
+	if err = g.handleSyncResp(protocol, syncResp); err != nil {
 		if err == kerr.RebalanceInProgress {
 			g.cl.cfg.logger.Log(LogLevelInfo, "sync failed with RebalanceInProgress, rejoining")
 			goto start
@@ -1246,15 +1246,11 @@ func (g *groupConsumer) handleJoinResp(resp *kmsg.JoinGroupResponse) (restart bo
 	return
 }
 
-func (g *groupConsumer) handleSyncResp(resp *kmsg.SyncGroupResponse) error {
+func (g *groupConsumer) handleSyncResp(protocol string, resp *kmsg.SyncGroupResponse) error {
 	if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
 		return err
 	}
 
-	var protocol string
-	if resp.Protocol != nil {
-		protocol = *resp.Protocol
-	}
 	b, err := g.findBalancer("sync assignment", protocol)
 	if err != nil {
 		return err
