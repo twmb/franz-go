@@ -1,3 +1,13 @@
+v0.7.2
+===
+
+- [`522c9e2`](https://github.com/twmb/franz-go/commit/522c9e2) **bugfix** consumer group: use `JoinGroupResponse.Protocol`, not `SyncGroupResponse.Protocol`
+
+This is a small bugfix release; the `Protocol` field in `SyncGroupResponse` was
+added in 2.5.0, and my integration tests did not catch this because I usually
+test against the latest releases. All `JoinGroupResponse` versions have the
+protocol that was chosen, so we use that field.
+
 v0.7.1
 ===
 
