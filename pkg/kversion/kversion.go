@@ -373,6 +373,9 @@ func (lks listenerKeys) filter(listener listener) []int16 {
 	return r
 }
 
+// All requests before KRaft started being introduced support the zkBroker, but
+// KRaft changed that. Kafka commit 698319b8e2c1f6cb574f339eede6f2a5b1919b55
+// added which listeners support which API keys.
 func k(listeners ...listener) listenerKey {
 	var k listenerKey
 	for _, listener := range listeners {
@@ -480,9 +483,12 @@ var max0110 = nextMax(max0102, func(v listenerKeys) listenerKeys {
 		k(zkBroker),          // 26 end txn (same)
 		k(zkBroker, rBroker), // 27 write txn markers (same)
 		k(zkBroker),          // 28 txn offset commit (same)
-		k(zkBroker),          // 29 describe acls KAFKA-3266 9815e18fef KIP-140
-		k(zkBroker),          // 30 create acls (same)
-		k(zkBroker),          // 31 delete acls (same)
+
+		// raft broker / controller added in 5b0c58ed53c420e93957369516f34346580dac95
+		k(zkBroker, rBroker, rController), // 29 describe acls KAFKA-3266 9815e18fef KIP-140
+		k(zkBroker, rBroker, rController), // 30 create acls (same)
+		k(zkBroker, rBroker, rController), // 31 delete acls (same)
+
 		k(zkBroker, rBroker), // 32 describe configs KAFKA-3267 972b754536 KIP-133
 		k(zkBroker),          // 33 alter configs (same)
 	)
@@ -707,7 +713,7 @@ var max260 = nextMax(max250, func(v listenerKeys) listenerKeys {
 	v[35].inc() // 2 describe log dirs KAFKA-9435 4f1e8331ff9 KIP-482 (same)
 
 	v = append(v,
-		k(zkBroker, rBroker),              // 48 describe client quotas KAFKA-7740 227a7322b KIP-546
+		k(zkBroker, rBroker),              // 48 describe client quotas KAFKA-7740 227a7322b KIP-546 (raft in 5964401bf9aab611bd4a072941bd1c927e044258)
 		k(zkBroker, rBroker, rController), // 49 alter client quotas (same)
 	)
 
