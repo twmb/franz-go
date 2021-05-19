@@ -1,3 +1,10 @@
+v0.7.3
+===
+
+- [`30c4ba3`](https://github.com/twmb/franz-go/commit/30c4ba3) **feature** sasl: add support for `AWS_MSK_IAM`
+
+This is a small release dedicated to adding support for `AWS_MSK_IAM` sasl.
+
 v0.7.2
 ===
 
