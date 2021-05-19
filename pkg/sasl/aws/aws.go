@@ -102,7 +102,7 @@ func challenge(auth Auth, host string) ([]byte, error) {
 	v.Set("X-Amz-Algorithm", "AWS4-HMAC-SHA256")
 	v.Set("X-Amz-Credential", auth.AccessKey+"/"+scope)
 	v.Set("X-Amz-Date", timestamp)
-	v.Set("X-Amz-Expires", "900") // 1 min
+	v.Set("X-Amz-Expires", "900") // 15 min
 	v.Set("X-Amz-SignedHeaders", "host")
 
 	qps := strings.Replace(v.Encode(), "+", "%20", -1)
