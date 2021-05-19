@@ -12,8 +12,8 @@ import (
 
 // Auth contains information for authentication.
 //
-// This client reserves the right to add fields to this struct in the future
-// if Kafka adds more capabilities to Oauth.
+// This client may add fields to this struct in the future if Kafka adds more
+// capabilities to Oauth.
 type Auth struct {
 	// Zid is an optional authorization ID to use in authenticating.
 	Zid string
@@ -27,8 +27,8 @@ type Auth struct {
 	_internal struct{} // require explicit field initalization
 }
 
-// AsMechanism returns a sasl mechanism that will use a as credentials for all
-// sasl sessions.
+// AsMechanism returns a sasl mechanism that will use 'a' as credentials for
+// all sasl sessions.
 //
 // This is a shortcut for using the Oauth function and is useful when you do
 // not need to live-rotate credentials.

@@ -23,8 +23,8 @@ import (
 
 // Auth contains information for authentication.
 //
-// This client reserves the right to add fields to this struct in the future
-// if Kafka adds more extensions to SCRAM.
+// This client may add fields to this struct in the future if Kafka adds more
+// extensions to SCRAM.
 type Auth struct {
 	// Zid is an optional authorization ID to use in authenticating.
 	Zid string
@@ -55,8 +55,8 @@ type Auth struct {
 	_internal struct{} // require explicit field initalization
 }
 
-// AsSha256Mechanism returns a sasl mechanism that will use a as credentials for
-// all sasl sessions.
+// AsSha256Mechanism returns a sasl mechanism that will use 'a' as credentials
+// for all sasl sessions.
 //
 // This is a shortcut for using the Sha256 function and is useful when you do
 // not need to live-rotate credentials.
@@ -66,8 +66,8 @@ func (a Auth) AsSha256Mechanism() sasl.Mechanism {
 	})
 }
 
-// AsSha512Mechanism returns a sasl mechanism that will use a as credentials for
-// all sasl sessions.
+// AsSha512Mechanism returns a sasl mechanism that will use 'a' as credentials
+// for all sasl sessions.
 //
 // This is a shortcut for using the Sha512 function and is useful when you do
 // not need to live-rotate credentials.
