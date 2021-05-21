@@ -179,6 +179,10 @@ func (s *GroupTransactSession) failed() bool {
 // successful. If commit is false, the group has rebalanced, or any partition
 // in committing offsets fails, this aborts.
 //
+// This function calls Flush or AbortBufferedRecords depending on the commit
+// status. If you are flushing, it is strongly recommended to Flush yourself
+// before calling this, so that you can then determine if you need to abort.
+//
 // This returns whether the transaction committed or any error that occurred.
 // No returned error is retriable. Either the transactional ID has entered a
 // failed state, or the client retried so much that the retry limit was hit,
@@ -357,10 +361,7 @@ func (cl *Client) BeginTransaction() error {
 }
 
 // AbortBufferedRecords fails all unflushed records with ErrAborted and waits
-// for there to be no buffered records. It is likely necessary to call
-// ResetProducerID after this function; these two functions should only be
-// called when not concurrently producing and only if you know what you are
-// doing.
+// for there to be no buffered records.
 //
 // This accepts a context to quit the wait early, but it is strongly
 // recommended to always wait for all records to be flushed. Waits should not
@@ -368,62 +369,26 @@ func (cl *Client) BeginTransaction() error {
 // is canceled while flushing.
 //
 // The intent of this function is to provide a way to clear the client's
-// production backlog.
-//
-// For example, before aborting a transaction and beginning a new one, it would
-// be erroneous to not wait for the backlog to clear before beginning a new
-// transaction. Anything not cleared may be a part of the new transaction.
+// production backlog. For example, before aborting a transaction and
+// beginning a new one, it would be erroneous to not wait for the backlog to
+// clear before beginning a new transaction. Anything not cleared may be a part
+// of the new transaction.
 //
 // Records produced during or after a call to this function may not be failed,
 // thus it is incorrect to concurrently produce with this function.
+//
+// This function is safe to call multiple times concurrently, and safe to call
+// concurrent with Flush.
 func (cl *Client) AbortBufferedRecords(ctx context.Context) error {
-	p := &cl.producer
+	atomic.AddInt32(&cl.producer.aborting, 1)
+	defer atomic.AddInt32(&cl.producer.aborting, -1)
 
-	atomic.StoreUint32(&p.aborting, 1)
-	defer atomic.StoreUint32(&p.aborting, 0)
-	atomic.AddInt32(&p.flushing, 1) // disallow lingering to start
-	defer atomic.AddInt32(&p.flushing, -1)
-	// At this point, all drain loops that start will immediately stop,
-	// thus they will not begin any AddPartitionsToTxn request. We must
-	// now wait for any req currently built to be done being issued.
-
-	cl.cfg.logger.Log(LogLevelInfo, "aborting buffered records")
+	cl.cfg.logger.Log(LogLevelInfo, "producer state set to aborting; continuing to wait via flushing")
 	defer cl.cfg.logger.Log(LogLevelDebug, "aborted buffered records")
 
-	// Similar to flushing, we unlinger; nothing will start a linger because
-	// the flushing atomic is non-zero.
-	if cl.cfg.linger > 0 || cl.cfg.manualFlushing {
-		for _, parts := range p.topics.load() {
-			for _, part := range parts.load().partitions {
-				part.records.unlingerAndManuallyDrain()
-			}
-		}
-	}
-
-	// We have to wait for all buffered records to either be flushed
-	// or to safely abort themselves.
-	quit := false
-	done := make(chan struct{})
-	go func() {
-		p.notifyMu.Lock()
-		defer p.notifyMu.Unlock()
-		defer close(done)
-
-		for !quit && atomic.LoadInt64(&p.bufferedRecords) > 0 {
-			p.notifyCond.Wait()
-		}
-	}()
-
-	select {
-	case <-done:
-		return nil
-	case <-ctx.Done():
-		p.notifyMu.Lock()
-		quit = true
-		p.notifyMu.Unlock()
-		p.notifyCond.Broadcast()
-		return ctx.Err()
-	}
+	// Setting the aborting state allows records to fail before
+	// or after produce requests; thus, now we just flush.
+	return cl.Flush(ctx)
 }
 
 // EndTransaction ends a transaction and resets the client's internal state to

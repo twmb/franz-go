@@ -71,14 +71,10 @@ func inputProducer() {
 			msg = "abort "
 		}
 
-		var e kgo.FirstErrPromise
+		e := kgo.AbortingFirstErrPromise(cl)
 		for i := 0; i < 10; i++ {
-			cl.Produce(ctx, kgo.StringRecord(msg+strconv.Itoa(i)), e.Promise)
+			cl.Produce(ctx, kgo.StringRecord(msg+strconv.Itoa(i)), e.Promise())
 		}
-		if err := cl.Flush(ctx); err != nil {
-			die("Flush only returns error if the context is canceled: %v", err)
-		}
-
 		commit := kgo.TransactionEndTry(doCommit && e.Err() == nil)
 
 		switch err := cl.EndTransaction(ctx, commit); err {
@@ -139,7 +135,7 @@ func eosConsumer() {
 			die("unable to start transaction: %v", err)
 		}
 
-		var e kgo.FirstErrPromise
+		e := kgo.AbortingFirstErrPromise(cl)
 		fetches.EachRecord(func(r *kgo.Record) {
 			sess.Produce(ctx, kgo.StringRecord("eos "+string(r.Value)), e.Promise)
 		})

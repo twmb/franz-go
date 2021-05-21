@@ -33,7 +33,7 @@ type producer struct {
 	// recBuf could be created and records sent to while we are flushing.
 	flushing int32 // >0 if flushing, can Flush many times concurrently
 
-	aborting uint32 // 1 means yes
+	aborting int32 // >0 if aborting, can abort many times concurrently
 
 	idMu       sync.Mutex
 	idVersion  int16
@@ -65,7 +65,7 @@ func (p *producer) init() {
 	p.notifyCond = sync.NewCond(&p.notifyMu)
 }
 
-func (p *producer) isAborting() bool { return atomic.LoadUint32(&p.aborting) == 1 }
+func (p *producer) isAborting() bool { return atomic.LoadInt32(&p.aborting) > 0 }
 
 func noPromise(*Record, error) {}
 
@@ -131,45 +131,62 @@ func (cl *Client) ProduceSync(ctx context.Context, rs ...*Record) ProduceResults
 }
 
 // FirstErrPromise is a helper type to capture only the first failing error
-// when producing a batch of records with this type's promise function.
+// when producing a batch of records with this type's Promise function.
 //
 // This is useful for when you only care about any record failing, and can use
-// that as a signal (i.e., to abort a batch).
+// that as a signal (i.e., to abort a batch). The AbortingFirstErrPromise
+// function can be used to abort all records as soon as the first error is
+// encountered. If you do not need to abort, you can use this type with no
+// constructor.
 //
 // This is similar to using ProduceResult's FirstErr function.
 type FirstErrPromise struct {
+	wg   sync.WaitGroup
 	once uint32
-	mu   sync.Mutex
 	err  error
+	cl   *Client
+}
+
+// AbortingFirstErrPromise returns a FirstErrPromise that will call the
+// client's AbortBufferedRecords function if an error is encountered.
+//
+// This can be used to quickly exit when any error is encountered, rather than
+// waiting while flushing only to discover things errored.
+func AbortingFirstErrPromise(cl *Client) *FirstErrPromise {
+	return &FirstErrPromise{
+		cl: cl,
+	}
 }
 
 // Promise is a promise for producing that will store the first error
 // encountered.
-func (f *FirstErrPromise) Promise(_ *Record, err error) {
+func (f *FirstErrPromise) promise(_ *Record, err error) {
+	defer f.wg.Done()
 	if err != nil && atomic.SwapUint32(&f.once, 1) == 0 {
-		f.mu.Lock()
 		f.err = err
-		f.mu.Unlock()
+		if f.cl != nil {
+			f.wg.Add(1)
+			go func() {
+				defer f.wg.Done()
+				f.cl.AbortBufferedRecords(context.Background())
+			}()
+		}
 	}
 }
 
-// PromiseFn returns a promise for producing that will store the first error
+// Promise returns a promise for producing that will store the first error
 // encountered.
 //
-// This is provided as an alternative to just Promise for people less familiar
-// with passing a type's method as an argument.
-func (f *FirstErrPromise) PromiseFn() func(*Record, error) {
-	return f.Promise
+// The returned promise must eventually be called, because a FirstErrPromise
+// does not return from 'Err' until all promises are completed.
+func (f *FirstErrPromise) Promise() func(*Record, error) {
+	f.wg.Add(1)
+	return f.promise
 }
 
-// Err returns the stored error, if any.
-//
-// This is safe to use at any time, but for the purpose of this type, this This
-// should only be used after any records using this promise have finished (i.e.,
-// the client has been flushed or records have been aborted).
+// Err waits for all promises to complete and then returns any stored error.
 func (f *FirstErrPromise) Err() error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
+	f.wg.Wait()
 	return f.err
 }
 
@@ -673,6 +690,9 @@ func (cl *Client) failUnknownTopicRecords(topic string, unknown *unknownTopicPro
 // lingers if necessary.
 //
 // If the context finishes (Done), this returns the context's error.
+//
+// This function is safe to call multiple times concurrently, and safe to call
+// concurrent with Flush.
 func (cl *Client) Flush(ctx context.Context) error {
 	p := &cl.producer
 
