@@ -1,3 +1,14 @@
+v0.7.4
+===
+
+- [`467e739`](https://github.com/twmb/franz-go/commit/467e739) FirstErrPromise: change semantics
+
+This is a small release to change the semantics of `FirstErrPromise`: now, it
+uses a `sync.WaitGroup` on every `Promise` and will wait until all records have
+been published / aborted before returning from `Err`. This also adds an
+`AbortingFirstErrPromise` that automatically aborts all records if any promise
+finishes with an error.
+
 v0.7.3
 ===
 
