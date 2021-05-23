@@ -14,6 +14,8 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"os"
+	"runtime"
 	"strings"
 	"time"
 
@@ -31,7 +33,34 @@ type Auth struct {
 	// AccessKey is an AWS SecretKey.
 	SecretKey string
 
+	// SessionToken, if non-empty, is a session / security token to use for
+	// authentication.
+	//
+	// See the following link for more details:
+	//
+	//     https://docs.aws.amazon.com/STS/latest/APIReference/welcome.html
+	//
+	SessionToken string
+
+	// UserAgent is the user agent to for the client to use when connecting
+	// to Kafka, overriding the default "franz-go/<runtime.Version()>/<hostname>".
+	//
+	// Setting a UserAgent allows authorizing based on the aws:UserAgent
+	// condition key; see the following link for more details:
+	//
+	//     https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_condition-keys.html#condition-keys-useragent
+	//
+	UserAgent string
+
 	_internal struct{} // require explicit field initalization
+}
+
+var hostname, _ = os.Hostname()
+
+func init() {
+	if hostname == "" {
+		hostname = "unknown"
+	}
 }
 
 // AsManagedStreamingIAMMechanism returns a sasl mechanism that will use 'a' as
@@ -102,8 +131,11 @@ func challenge(auth Auth, host string) ([]byte, error) {
 	v.Set("X-Amz-Algorithm", "AWS4-HMAC-SHA256")
 	v.Set("X-Amz-Credential", auth.AccessKey+"/"+scope)
 	v.Set("X-Amz-Date", timestamp)
-	v.Set("X-Amz-Expires", "900") // 15 min
+	v.Set("X-Amz-Expires", "300") // 5 min
 	v.Set("X-Amz-SignedHeaders", "host")
+	if auth.SessionToken != "" {
+		v.Set("X-Amz-Security-Token", auth.SessionToken)
+	}
 
 	qps := strings.Replace(v.Encode(), "+", "%20", -1)
 
@@ -122,6 +154,11 @@ func challenge(auth Auth, host string) ([]byte, error) {
 	}
 	keyvals["host"] = host
 	keyvals["version"] = "2020_10_22"
+	ua := auth.UserAgent
+	if ua == "" {
+		ua = strings.Join([]string{"franz-go", runtime.Version(), hostname}, "/")
+	}
+	keyvals["user-agent"] = ua
 
 	marshaled, err := json.Marshal(keyvals)
 	if err != nil {
