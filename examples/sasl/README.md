@@ -1,4 +1,4 @@
-# Connecting to a Kafka cluster
+# SASL & connecting to a Kafka cluster
 
 In this directory you'll find some examples demonstrating how to create a client for the various supported Kafka authentication options.
 
@@ -6,10 +6,11 @@ In this directory you'll find some examples demonstrating how to create a client
 
 Supported SASL mechanisms are:
 
-- Kerberos / GSSAPI
-- OAuth
-- Plain
-- SCRAM (SHA256 + SHA512)
+- `GSSAPI` / (Kerberos)
+- `OAUTHBEARER`
+- `PLAIN`
+- `SCRAM-SHA-256` / `SCRAM-SHA_512`
+- `AWS_MSK_IAM`
 
 ## TLS Support
 

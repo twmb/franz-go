@@ -1,31 +1,37 @@
-package connecting
+package main
 
 import (
 	"crypto/tls"
+	"flag"
 	"fmt"
 	"net"
+	"strings"
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/sasl/plain"
 )
 
-func connectSaslSslPlain() {
-	fmt.Println("starting...")
+var (
+	seedBrokers = flag.String("brokers", "localhost:9092", "comma delimited list of seed brokers")
 
-	seeds := []string{"localhost:9092"}
-	// SASL Plain credentials
-	user := ""
-	password := ""
+	user = flag.String("user", "", "username for PLAIN sasl auth")
+	pass = flag.String("pass", "", "password for PLAIN sasl auth")
+)
+
+func main() {
+	flag.Parse()
+
+	fmt.Println("starting...")
 
 	tlsDialer := &tls.Dialer{NetDialer: &net.Dialer{Timeout: 10 * time.Second}}
 	opts := []kgo.Opt{
-		kgo.SeedBrokers(seeds...),
+		kgo.SeedBrokers(strings.Split(*seedBrokers, ",")...),
 
 		// SASL Options
 		kgo.SASL(plain.Auth{
-			User: user,
-			Pass: password,
+			User: *user,
+			Pass: *pass,
 		}.AsMechanism()),
 
 		// Configure TLS. Uses SystemCertPool for RootCAs by default.

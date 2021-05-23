@@ -1,4 +1,4 @@
-package connecting
+package main
 
 import (
 	"fmt"
@@ -6,7 +6,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
-func connectPlaintext() {
+func main() {
 	fmt.Println("starting...")
 
 	seeds := []string{"localhost:9092"}
