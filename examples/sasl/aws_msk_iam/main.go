@@ -12,19 +12,14 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/aws/aws-sdk-go/aws/credentials"
+	"github.com/aws/aws-sdk-go/aws/session"
 
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kmsg"
 	"github.com/twmb/franz-go/pkg/sasl/aws"
 )
 
-var (
-	seedBrokers = flag.String("brokers", "localhost:9092", "comma delimited list of seed brokers")
-
-	credsFile    = flag.String("creds-file", "", "optional filepath to an AWS credentials file, overriding the default search")
-	credsProfile = flag.String("creds-profile", "", "optional profile to use for extracting AWS credentials, overriding the default")
-)
+var seedBrokers = flag.String("brokers", "localhost:9092", "comma delimited list of seed brokers")
 
 func die(msg string, args ...interface{}) {
 	fmt.Printf(msg+"\n", args...)
@@ -34,13 +29,16 @@ func die(msg string, args ...interface{}) {
 func main() {
 	flag.Parse()
 
-	creds := credentials.NewSharedCredentials(*credsFile, *credsProfile)
+	sess, err := session.NewSession()
+	if err != nil {
+		die("unable to initialize aws session: %v", err)
+	}
 
 	cl, err := kgo.NewClient(
 		kgo.SeedBrokers(strings.Split(*seedBrokers, ",")...),
 
 		kgo.SASL(aws.ManagedStreamingIAM(func(ctx context.Context) (aws.Auth, error) {
-			val, err := creds.GetWithContext(ctx)
+			val, err := sess.Config.Credentials.GetWithContext(ctx)
 			if err != nil {
 				return aws.Auth{}, err
 			}

@@ -6,7 +6,8 @@ information about your MSK cluster.
 
 By default, this will use a credential file at either
 `AWS_SHARED_CREDENTIALS_FILE`, if the environment variable exists, or at
-`$HOME/.aws/credentials`.
+`$HOME/.aws/credentials`. Alternatively, keys can be provided with the
+`AWS_ACCESS_KEY` and `AWS_SECRET_KEY` environment variables.
 
 As well, this will default to the profile specified by the `AWS_PROFILE`
 environment variable if it exists, otherwise to `default`.
@@ -20,7 +21,3 @@ which is fine if you run this with `go run . -brokers <paste>`.
 ## Flags
 
 `-brokers` specifies the seed brokers of your MSK cluster
-
-`-creds-file` overrides the default credentials file
-
-`-creds-profile` overrides the default credentials profile
