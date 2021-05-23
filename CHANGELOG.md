@@ -1,3 +1,10 @@
+v0.7.5
+===
+
+This commit adds support for session tokens and user agents in `AWS_MSK_IAM`,
+as well as adds an [example](./examples/sasl/aws_msk_iam) for how to use
+`AWS_MSK_IAM`.
+
 v0.7.4
 ===
 
