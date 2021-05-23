@@ -11,7 +11,7 @@ import (
 
 // MaxKey is the maximum key used for any messages in this package.
 // Note that this value will change as Kafka adds more messages.
-const MaxKey = 66
+const MaxKey = 67
 
 // MessageV0 is the message format Kafka used prior to 0.10.
 //
@@ -37349,6 +37349,217 @@ func NewListTransactionsResponse() ListTransactionsResponse {
 	return v
 }
 
+// For KIP-730, AllocateProducerIDsRequest is a broker-to-broker request that
+// requests a block of producer IDs from the controller broker. This is more
+// specifically introduced for raft, but allows for one more request to avoid
+// zookeeper in the non-raft world as well.
+type AllocateProducerIDsRequest struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	// The ID of the requesting broker.
+	BrokerID int32
+
+	// The epoch of the requesting broker.
+	BrokerEpoch int64
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
+}
+
+func (*AllocateProducerIDsRequest) Key() int16                 { return 67 }
+func (*AllocateProducerIDsRequest) MaxVersion() int16          { return 0 }
+func (v *AllocateProducerIDsRequest) SetVersion(version int16) { v.Version = version }
+func (v *AllocateProducerIDsRequest) GetVersion() int16        { return v.Version }
+func (v *AllocateProducerIDsRequest) IsFlexible() bool         { return v.Version >= 0 }
+func (v *AllocateProducerIDsRequest) ResponseKind() Response {
+	return &AllocateProducerIDsResponse{Version: v.Version}
+}
+
+// RequestWith is requests v on r and returns the response or an error.
+func (v *AllocateProducerIDsRequest) RequestWith(ctx context.Context, r Requestor) (*AllocateProducerIDsResponse, error) {
+	kresp, err := r.Request(ctx, v)
+	if err != nil {
+		return nil, err
+	}
+	return kresp.(*AllocateProducerIDsResponse), nil
+}
+
+func (v *AllocateProducerIDsRequest) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	isFlexible := version >= 0
+	_ = isFlexible
+	{
+		v := v.BrokerID
+		dst = kbin.AppendInt32(dst, v)
+	}
+	{
+		v := v.BrokerEpoch
+		dst = kbin.AppendInt64(dst, v)
+	}
+	if isFlexible {
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
+	}
+	return dst
+}
+func (v *AllocateProducerIDsRequest) ReadFrom(src []byte) error {
+	v.Default()
+	b := kbin.Reader{Src: src}
+	version := v.Version
+	_ = version
+	isFlexible := version >= 0
+	_ = isFlexible
+	s := v
+	{
+		v := b.Int32()
+		s.BrokerID = v
+	}
+	{
+		v := b.Int64()
+		s.BrokerEpoch = v
+	}
+	if isFlexible {
+		s.UnknownTags = ReadTags(&b)
+	}
+	return b.Complete()
+}
+
+// NewPtrAllocateProducerIDsRequest returns a pointer to a default AllocateProducerIDsRequest
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrAllocateProducerIDsRequest() *AllocateProducerIDsRequest {
+	var v AllocateProducerIDsRequest
+	v.Default()
+	return &v
+}
+
+// Default sets any default fields. Calling this allows for future compatibility
+// if new fields are added to AllocateProducerIDsRequest.
+func (v *AllocateProducerIDsRequest) Default() {
+	v.BrokerEpoch = -1
+}
+
+// NewAllocateProducerIDsRequest returns a default AllocateProducerIDsRequest
+// This is a shortcut for creating a struct and calling Default yourself.
+func NewAllocateProducerIDsRequest() AllocateProducerIDsRequest {
+	var v AllocateProducerIDsRequest
+	v.Default()
+	return v
+}
+
+// AllocateProducerIDsResponse is a response to an AllocateProducerIDsRequest.
+type AllocateProducerIDsResponse struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	// ThrottleMillis is how long of a throttle Kafka will apply to the client
+	// after responding to this request.
+	ThrottleMillis int32
+
+	// An error code, if any.
+	ErrorCode int16
+
+	// The first producer ID in this range, inclusive.
+	ProducerIDStart int64
+
+	// The number of producer IDs in this range.
+	ProducerIDLen int32
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
+}
+
+func (*AllocateProducerIDsResponse) Key() int16                 { return 67 }
+func (*AllocateProducerIDsResponse) MaxVersion() int16          { return 0 }
+func (v *AllocateProducerIDsResponse) SetVersion(version int16) { v.Version = version }
+func (v *AllocateProducerIDsResponse) GetVersion() int16        { return v.Version }
+func (v *AllocateProducerIDsResponse) IsFlexible() bool         { return v.Version >= 0 }
+func (v *AllocateProducerIDsResponse) Throttle() (int32, bool) {
+	return v.ThrottleMillis, v.Version >= 0
+}
+func (v *AllocateProducerIDsResponse) RequestKind() Request {
+	return &AllocateProducerIDsRequest{Version: v.Version}
+}
+
+func (v *AllocateProducerIDsResponse) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	isFlexible := version >= 0
+	_ = isFlexible
+	{
+		v := v.ThrottleMillis
+		dst = kbin.AppendInt32(dst, v)
+	}
+	{
+		v := v.ErrorCode
+		dst = kbin.AppendInt16(dst, v)
+	}
+	{
+		v := v.ProducerIDStart
+		dst = kbin.AppendInt64(dst, v)
+	}
+	{
+		v := v.ProducerIDLen
+		dst = kbin.AppendInt32(dst, v)
+	}
+	if isFlexible {
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
+	}
+	return dst
+}
+func (v *AllocateProducerIDsResponse) ReadFrom(src []byte) error {
+	v.Default()
+	b := kbin.Reader{Src: src}
+	version := v.Version
+	_ = version
+	isFlexible := version >= 0
+	_ = isFlexible
+	s := v
+	{
+		v := b.Int32()
+		s.ThrottleMillis = v
+	}
+	{
+		v := b.Int16()
+		s.ErrorCode = v
+	}
+	{
+		v := b.Int64()
+		s.ProducerIDStart = v
+	}
+	{
+		v := b.Int32()
+		s.ProducerIDLen = v
+	}
+	if isFlexible {
+		s.UnknownTags = ReadTags(&b)
+	}
+	return b.Complete()
+}
+
+// NewPtrAllocateProducerIDsResponse returns a pointer to a default AllocateProducerIDsResponse
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrAllocateProducerIDsResponse() *AllocateProducerIDsResponse {
+	var v AllocateProducerIDsResponse
+	v.Default()
+	return &v
+}
+
+// Default sets any default fields. Calling this allows for future compatibility
+// if new fields are added to AllocateProducerIDsResponse.
+func (v *AllocateProducerIDsResponse) Default() {
+}
+
+// NewAllocateProducerIDsResponse returns a default AllocateProducerIDsResponse
+// This is a shortcut for creating a struct and calling Default yourself.
+func NewAllocateProducerIDsResponse() AllocateProducerIDsResponse {
+	var v AllocateProducerIDsResponse
+	v.Default()
+	return v
+}
+
 // RequestForKey returns the request corresponding to the given request key
 // or nil if the key is unknown.
 func RequestForKey(key int16) Request {
@@ -37489,6 +37700,8 @@ func RequestForKey(key int16) Request {
 		return NewPtrDescribeTransactionsRequest()
 	case 66:
 		return NewPtrListTransactionsRequest()
+	case 67:
+		return NewPtrAllocateProducerIDsRequest()
 	}
 }
 
@@ -37632,6 +37845,8 @@ func ResponseForKey(key int16) Response {
 		return NewPtrDescribeTransactionsResponse()
 	case 66:
 		return NewPtrListTransactionsResponse()
+	case 67:
+		return NewPtrAllocateProducerIDsResponse()
 	}
 }
 
@@ -37775,6 +37990,8 @@ func NameForKey(key int16) string {
 		return "DescribeTransactions"
 	case 66:
 		return "ListTransactions"
+	case 67:
+		return "AllocateProducerIDs"
 	}
 }
 

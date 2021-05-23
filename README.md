@@ -276,6 +276,7 @@ generation.
 | [KIP-654](https://cwiki.apache.org/confluence/display/KAFKA/KIP-654%3A+Aborted+transaction+with+non-flushed+data+should+throw+a+non-fatal+exception) — Aborted txns with unflushed data is not fatal | 2.7.0 | Supported (default behavior) |
 | [KIP-664](https://cwiki.apache.org/confluence/display/KAFKA/KIP-664%3A+Provide+tooling+to+detect+and+abort+hanging+transactions) — Describe producers / etc. | 2.8.0 (mostly) | Supported |
 | [KIP-700](https://cwiki.apache.org/confluence/display/KAFKA/KIP-700%3A+Add+Describe+Cluster+API) — DescribeCluster | 2.8.0 | Supported |
+| [KIP-730](https://cwiki.apache.org/confluence/display/KAFKA/KIP-730%3A+Producer+ID+generation+in+KRaft+mode) - AllocateProducerIDs | 3.0.0 | Supported |
 | [KIP-735](https://cwiki.apache.org/confluence/display/KAFKA/KIP-735%3A+Increase+default+consumer+session+timeout) — Bump default session timeout | ? | Supported |
 
 Missing from above but included in librdkafka is:

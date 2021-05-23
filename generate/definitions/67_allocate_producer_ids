@@ -1,0 +1,19 @@
+// For KIP-730, AllocateProducerIDsRequest is a broker-to-broker request that
+// requests a block of producer IDs from the controller broker. This is more
+// specifically introduced for raft, but allows for one more request to avoid
+// zookeeper in the non-raft world as well.
+AllocateProducerIDsRequest => key 67, max version 0, flexible v0+
+  // The ID of the requesting broker.
+  BrokerID: int32
+  // The epoch of the requesting broker.
+  BrokerEpoch: int64(-1)
+
+// AllocateProducerIDsResponse is a response to an AllocateProducerIDsRequest.
+AllocateProducerIDsResponse =>
+  ThrottleMillis
+  // An error code, if any.
+  ErrorCode: int16
+  // The first producer ID in this range, inclusive.
+  ProducerIDStart: int64
+  // The number of producer IDs in this range.
+  ProducerIDLen: int32
