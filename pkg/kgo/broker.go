@@ -283,7 +283,7 @@ func (b *broker) handleReqs() {
 			// can only have an expiry if we went the authenticate
 			// flow, so we know we are authenticating again.
 			// For KIP-368.
-			cxn.cl.cfg.logger.Log(LogLevelInfo, "sasl expiry limit reached, reauthenticating", "broker", cxn.b.meta.NodeID)
+			cxn.cl.cfg.logger.Log(LogLevelDebug, "sasl expiry limit reached, reauthenticating", "broker", cxn.b.meta.NodeID)
 			if err = cxn.sasl(); err != nil {
 				pr.promise(nil, err)
 				cxn.die()
@@ -788,7 +788,7 @@ func (cxn *brokerCxn) doSasl(authenticate bool) error {
 		}
 		now := time.Now()
 		cxn.expiry = now.Add(time.Duration(lifetimeMillis)*time.Millisecond - time.Second)
-		cxn.cl.cfg.logger.Log(LogLevelInfo, "sasl has a limited lifetime", "broker", cxn.b.meta.NodeID, "reauthenticate_in", cxn.expiry.Sub(now))
+		cxn.cl.cfg.logger.Log(LogLevelDebug, "sasl has a limited lifetime", "broker", cxn.b.meta.NodeID, "reauthenticate_in", cxn.expiry.Sub(now))
 	}
 	return nil
 }
