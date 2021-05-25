@@ -1470,6 +1470,8 @@ type StickyMemberMetadata struct {
 	CurrentAssignment []StickyMemberMetadataCurrentAssignment
 
 	// Generation is the generation of this join. This is incremented every join.
+	//
+	// This field has a default of -1.
 	Generation int32 // v1+
 }
 
@@ -2256,9 +2258,12 @@ type ProduceRequest struct {
 	// if any topic or partition errors to trigger a client metadata refresh.
 	Acks int16
 
-	// TimeoutMillis is how long Kafka will allow this request to process before
-	// sending a response. The request may not be completed within this time, and
-	// Kafka may still continue processing the request.
+	// TimeoutMillis is how long Kafka can wait before responding to this request.
+	// This field has no effect on Kafka's processing of the request; the request
+	// will continue to be processed if the timeout is reached. If the timeout is
+	// reached, Kafka will reply with a REQUEST_TIMED_OUT error.
+	//
+	// This field has a default of 15000.
 	TimeoutMillis int32
 
 	// Topics is an array of topics to send record batches to.
@@ -2605,11 +2610,15 @@ type ProduceResponseTopicPartition struct {
 	// LogAppendTime is the millisecond that records were appended to the
 	// partition inside Kafka. This is only not -1 if records were written
 	// with the log append time flag (which producers cannot do).
+	//
+	// This field has a default of -1.
 	LogAppendTime int64 // v2+
 
 	// LogStartOffset, introduced in Kafka 1.0.0, can be used to see if an
 	// UNKNOWN_PRODUCER_ID means Kafka rotated records containing the used
 	// producer ID out of existence, or if Kafka lost data.
+	//
+	// This field has a default of -1.
 	LogStartOffset int64 // v5+
 
 	// ErrorRecords are indices of individual records that caused a batch
@@ -2982,6 +2991,8 @@ type FetchRequestTopicPartition struct {
 	//
 	// The initial leader epoch can be determined from a MetadataResponse.
 	// To skip log truncation checking, use -1.
+	//
+	// This field has a default of -1.
 	CurrentLeaderEpoch int32 // v9+
 
 	// FetchOffset is the offset to begin the fetch from. Kafka will
@@ -2989,10 +3000,14 @@ type FetchRequestTopicPartition struct {
 	FetchOffset int64
 
 	// The epoch of the last fetched record, or -1 if there is none.
+	//
+	// This field has a default of -1.
 	LastFetchedEpoch int32 // v12+
 
 	// LogStartOffset is a broker-follower only field added for KIP-107.
 	// This is the start offset of the partition in a follower.
+	//
+	// This field has a default of -1.
 	LogStartOffset int64 // v5+
 
 	// PartitionMaxBytes is the maximum bytes to return for this partition.
@@ -3086,6 +3101,8 @@ type FetchRequest struct {
 
 	// The cluster ID, if known. This is used to validate metadata fetches
 	// prior to broker registration.
+	//
+	// This field has a default of null.
 	ClusterID *string // tag 0
 
 	// ReplicaID is the broker ID of performing the fetch request. Standard
@@ -3104,6 +3121,8 @@ type FetchRequest struct {
 	// MaxBytes is the maximum amount of bytes to read in a fetch request. The
 	// response can exceed MaxBytes if the first record in the first non-empty
 	// partition is larger than MaxBytes.
+	//
+	// This field has a default of 0x7fffffff.
 	MaxBytes int32 // v3+
 
 	// IsolationLevel changes which messages are fetched. Follower replica ID's
@@ -3127,6 +3146,8 @@ type FetchRequest struct {
 	// SessionEpoch is the session epoch for this request if using sessions.
 	//
 	// Read KIP-227 for more details. Use -1 if you are not using sessions.
+	//
+	// This field has a default of -1.
 	SessionEpoch int32 // v7+
 
 	// Topic contains topics to try to fetch records for.
@@ -3568,8 +3589,10 @@ func NewFetchRequest() FetchRequest {
 }
 
 type FetchResponseTopicPartitionDivergingEpoch struct {
+	// This field has a default of -1.
 	Epoch int32
 
+	// This field has a default of -1.
 	EndOffset int64
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
@@ -3594,9 +3617,13 @@ func NewFetchResponseTopicPartitionDivergingEpoch() FetchResponseTopicPartitionD
 
 type FetchResponseTopicPartitionCurrentLeader struct {
 	// The ID of the current leader, or -1 if unknown.
+	//
+	// This field has a default of -1.
 	LeaderID int32
 
 	// The latest known leader epoch.
+	//
+	// This field has a default of -1.
 	LeaderEpoch int32
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
@@ -3620,8 +3647,10 @@ func NewFetchResponseTopicPartitionCurrentLeader() FetchResponseTopicPartitionCu
 }
 
 type FetchResponseTopicPartitionSnapshotID struct {
+	// This field has a default of -1.
 	EndOffset int64
 
+	// This field has a default of -1.
 	Epoch int32
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
@@ -3720,10 +3749,14 @@ type FetchResponseTopicPartition struct {
 	// they are commited or aborted.
 	//
 	// The LastStableOffset will always be at or under the HighWatermark.
+	//
+	// This field has a default of -1.
 	LastStableOffset int64 // v4+
 
 	// LogStartOffset is the beginning offset for this partition.
 	// This field was added for KIP-107.
+	//
+	// This field has a default of -1.
 	LogStartOffset int64 // v5+
 
 	// In case divergence is detected based on the LastFetchedEpoch and
@@ -3747,6 +3780,8 @@ type FetchResponseTopicPartition struct {
 
 	// PreferredReadReplica is the preferred replica for the consumer
 	// to use on its next fetch request. See KIP-392.
+	//
+	// This field has a default of -1.
 	PreferredReadReplica int32 // v11+
 
 	// RecordBatches is an array of record batches for a topic partition.
@@ -4341,6 +4376,8 @@ type ListOffsetsRequestTopicPartition struct {
 	//
 	// The initial leader epoch can be determined from a MetadataResponse.
 	// To skip log truncation checking, use -1.
+	//
+	// This field has a default of -1.
 	CurrentLeaderEpoch int32 // v4+
 
 	// Timestamp controls which offset to return in a response for this
@@ -4357,6 +4394,8 @@ type ListOffsetsRequestTopicPartition struct {
 
 	// MaxNumOffsets is the maximum number of offsets to report.
 	// This was removed after v0.
+	//
+	// This field has a default of 1.
 	MaxNumOffsets int32
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
@@ -4694,14 +4733,20 @@ type ListOffsetsResponseTopicPartition struct {
 
 	// If the request was for the earliest or latest timestamp (-2 or -1), or
 	// if an offset could not be found after the requested one, this will be -1.
+	//
+	// This field has a default of -1.
 	Timestamp int64 // v1+
 
 	// Offset is the offset corresponding to the record on or after the
 	// requested timestamp. If one could not be found, this will be -1.
+	//
+	// This field has a default of -1.
 	Offset int64 // v1+
 
 	// LeaderEpoch is the leader epoch of the record at this offset,
 	// or -1 if there was no leader epoch.
+	//
+	// This field has a default of -1.
 	LeaderEpoch int32 // v4+
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
@@ -5314,6 +5359,8 @@ type MetadataResponseTopicPartition struct {
 
 	// LeaderEpoch, proposed in KIP-320 and introduced in Kafka 2.1.0 is the
 	// epoch of the broker leader.
+	//
+	// This field has a default of -1.
 	LeaderEpoch int32 // v7+
 
 	// Replicas returns all broker IDs containing replicas of this partition.
@@ -5377,6 +5424,8 @@ type MetadataResponseTopic struct {
 	// is a bitfield (corresponding to AclOperation) containing which operations
 	// the client is allowed to perform on this topic.
 	// This is only returned if requested.
+	//
+	// This field has a default of -2147483648.
 	AuthorizedOperations int32 // v8+
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
@@ -5419,6 +5468,8 @@ type MetadataResponse struct {
 	ClusterID *string // v2+
 
 	// ControllerID is the ID of the controller broker (the admin broker).
+	//
+	// This field has a default of -1.
 	ControllerID int32 // v1+
 
 	// Topics contains metadata about each topic requested in the
@@ -5427,6 +5478,8 @@ type MetadataResponse struct {
 
 	// AuthorizedOperations is a bitfield containing which operations the client
 	// is allowed to perform on this cluster.
+	//
+	// This field has a default of -2147483648.
 	AuthorizedOperations int32 // v8+
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
@@ -6025,6 +6078,7 @@ type LeaderAndISRRequest struct {
 
 	ControllerEpoch int32
 
+	// This field has a default of -1.
 	BrokerEpoch int64 // v2+
 
 	Type int8 // v5+
@@ -7061,6 +7115,7 @@ func NewLeaderAndISRResponse() LeaderAndISRResponse {
 type StopReplicaRequestTopicPartitionState struct {
 	Partition int32
 
+	// This field has a default of -1.
 	LeaderEpoch int32
 
 	Delete bool
@@ -7129,6 +7184,7 @@ type StopReplicaRequest struct {
 
 	ControllerEpoch int32
 
+	// This field has a default of -1.
 	BrokerEpoch int64 // v1+
 
 	DeletePartitions bool
@@ -7711,6 +7767,7 @@ type UpdateMetadataRequest struct {
 
 	ControllerEpoch int32
 
+	// This field has a default of -1.
 	BrokerEpoch int64 // v5+
 
 	PartitionStates []UpdateMetadataRequestTopicPartition
@@ -8553,6 +8610,7 @@ type ControlledShutdownRequest struct {
 
 	BrokerID int32
 
+	// This field has a default of -1.
 	BrokerEpoch int64 // v2+
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
@@ -8818,6 +8876,8 @@ type OffsetCommitRequestTopicPartition struct {
 	// should persist in Kafka. This field only existed for v1.
 	// The expiration would be timestamp + offset.retention.minutes, or, if
 	// timestamp was zero, current time + offset.retention.minutes.
+	//
+	// This field has a default of -1.
 	Timestamp int64 // v1+
 
 	// LeaderEpoch, proposed in KIP-320 and introduced in Kafka 2.1.0,
@@ -8825,6 +8885,8 @@ type OffsetCommitRequestTopicPartition struct {
 	//
 	// The initial leader epoch can be determined from a MetadataResponse.
 	// To skip log truncation checking, use -1.
+	//
+	// This field has a default of -1.
 	LeaderEpoch int32 // v6+
 
 	// Metadata is optional data to include with committing the offset. This
@@ -8887,6 +8949,8 @@ type OffsetCommitRequest struct {
 
 	// Generation being -1 and group being empty means the group is being used
 	// to store offsets only. No generation validation, no rebalancing.
+	//
+	// This field has a default of -1.
 	Generation int32 // v1+
 
 	// MemberID is the ID of the client issuing this request in the group.
@@ -8908,6 +8972,8 @@ type OffsetCommitRequest struct {
 	//
 	// Post 2.1.0, if this field is empty, offsets are only deleted once the
 	// group is empty. Read KIP-211 for more details.
+	//
+	// This field has a default of -1.
 	RetentionTimeMillis int64 // v2+
 
 	// Topics is contains topics and partitions for which to commit offsets.
@@ -9733,6 +9799,8 @@ type OffsetFetchResponseTopicPartition struct {
 	//
 	// This was proposed in KIP-320 and introduced in Kafka 2.1.0 and allows
 	// clients to detect log truncation. See the KIP for more details.
+	//
+	// This field has a default of -1.
 	LeaderEpoch int32 // v5+
 
 	// Metadata is client provided metadata corresponding to the offset commit.
@@ -10403,6 +10471,8 @@ type JoinGroupRequest struct {
 	// The first join for a new group has a 3 second grace period for other
 	// members to join; this grace period is extended until the RebalanceTimeoutMillis
 	// is up or until 3 seconds lapse with no new members.
+	//
+	// This field has a default of -1.
 	RebalanceTimeoutMillis int32 // v1+
 
 	// MemberID is the member ID to join the group with. When joining a group for
@@ -10739,6 +10809,8 @@ type JoinGroupResponse struct {
 	ErrorCode int16
 
 	// Generation is the current "generation" of this group.
+	//
+	// This field has a default of -1.
 	Generation int32
 
 	// ProtocolType is the "type" of protocol being used for this group.
@@ -12395,6 +12467,8 @@ type DescribeGroupsResponseGroup struct {
 	// AuthorizedOperations is a bitfield containing which operations the
 	// the client is allowed to perform on this group.
 	// This is only returned if requested.
+	//
+	// This field has a default of -2147483648.
 	AuthorizedOperations int32 // v3+
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
@@ -13528,6 +13602,8 @@ type ApiVersionsResponse struct {
 
 	// The monotonically increasing epoch for the finalized features information,
 	// where -1 indicates an unknown epoch.
+	//
+	// This field has a default of -1.
 	FinalizedFeaturesEpoch int64 // tag 1
 
 	// The list of cluster-wide finalized features (only valid if
@@ -13986,9 +14062,12 @@ type CreateTopicsRequest struct {
 	// Topics is an array of topics to attempt to create.
 	Topics []CreateTopicsRequestTopic
 
-	// TimeoutMillis is how long Kafka will allow this request to process before
-	// sending a response. The request may not be completed within this time, and
-	// Kafka may still continue processing the request.
+	// TimeoutMillis is how long Kafka can wait before responding to this request.
+	// This field has no effect on Kafka's processing of the request; the request
+	// will continue to be processed if the timeout is reached. If the timeout is
+	// reached, Kafka will reply with a REQUEST_TIMED_OUT error.
+	//
+	// This field has a default of 60000.
 	TimeoutMillis int32
 
 	// ValidateOnly is makes this request a dry-run; everything is validated but
@@ -14328,6 +14407,8 @@ type CreateTopicsResponseTopicConfig struct {
 
 	// Source is where this config entry is from. See the documentation
 	// on DescribeConfigsRequest's Source for more details.
+	//
+	// This field has a default of -1.
 	Source int8
 
 	// IsSensitive signifies whether this is a sensitive config key, which
@@ -14403,9 +14484,13 @@ type CreateTopicsResponseTopic struct {
 	ConfigErrorCode int16 // tag 0
 
 	// NumPartitions is how many partitions were created for this topic.
+	//
+	// This field has a default of -1.
 	NumPartitions int32 // v5+
 
 	// ReplicationFactor is how many replicas every partition has for this topic.
+	//
+	// This field has a default of -1.
 	ReplicationFactor int16 // v5+
 
 	// Configs contains this topic's configuration.
@@ -14784,9 +14869,12 @@ type DeleteTopicsRequest struct {
 	// The name or topic ID of topics to delete.
 	Topics []DeleteTopicsRequestTopic // v6+
 
-	// TimeoutMillis is how long Kafka will allow this request to process before
-	// sending a response. The request may not be completed within this time, and
-	// Kafka may still continue processing the request.
+	// TimeoutMillis is how long Kafka can wait before responding to this request.
+	// This field has no effect on Kafka's processing of the request; the request
+	// will continue to be processed if the timeout is reached. If the timeout is
+	// reached, Kafka will reply with a REQUEST_TIMED_OUT error.
+	//
+	// This field has a default of 15000.
 	TimeoutMillis int32
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
@@ -15303,9 +15391,12 @@ type DeleteRecordsRequest struct {
 	// Topics contains topics for which to delete records from.
 	Topics []DeleteRecordsRequestTopic
 
-	// TimeoutMillis is how long Kafka will allow this request to process before
-	// sending a response. The request may not be completed within this time, and
-	// Kafka may still continue processing the request.
+	// TimeoutMillis is how long Kafka can wait before responding to this request.
+	// This field has no effect on Kafka's processing of the request; the request
+	// will continue to be processed if the timeout is reached. If the timeout is
+	// reached, Kafka will reply with a REQUEST_TIMED_OUT error.
+	//
+	// This field has a default of 15000.
 	TimeoutMillis int32
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
@@ -15805,11 +15896,15 @@ type InitProducerIDRequest struct {
 
 	// ProducerID, added for KIP-360, is the current producer ID. This allows
 	// the client to potentially recover on UNKNOWN_PRODUCER_ID errors.
+	//
+	// This field has a default of -1.
 	ProducerID int64 // v3+
 
 	// The producer's current epoch. This will be checked against the producer
 	// epoch on the broker, and the request will return an error if they do not
 	// match. Also added for KIP-360.
+	//
+	// This field has a default of -1.
 	ProducerEpoch int16 // v3+
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
@@ -15962,6 +16057,8 @@ type InitProducerIDResponse struct {
 
 	// ProducerID is the next producer ID that Kafka generated. This ID is used
 	// to ensure repeated produce requests do not result in duplicate records.
+	//
+	// This field has a default of -1.
 	ProducerID int64
 
 	// ProducerEpoch is the producer epoch to use for transactions.
@@ -16070,6 +16167,8 @@ type OffsetForLeaderEpochRequestTopicPartition struct {
 	// leader) or if the client is ahead of the broker.
 	//
 	// The initial leader epoch can be determined from a MetadataResponse.
+	//
+	// This field has a default of -1.
 	CurrentLeaderEpoch int32 // v2+
 
 	// LeaderEpoch is the epoch to fetch the end offset for.
@@ -16131,6 +16230,8 @@ type OffsetForLeaderEpochRequest struct {
 
 	// ReplicaID, added in support of KIP-392, is the broker ID of the follower,
 	// or -1 if this request is from a consumer.
+	//
+	// This field has a default of -2.
 	ReplicaID int32 // v3+
 
 	// Topics are topics to fetch leader epoch offsets for.
@@ -16367,6 +16468,8 @@ type OffsetForLeaderEpochResponseTopicPartition struct {
 	// next field. If the requested leader epoch is unknown, this is -1. If the
 	// requested epoch had no records produced during the requested epoch, this
 	// is the first prior epoch that had records.
+	//
+	// This field has a default of -1.
 	LeaderEpoch int32
 
 	// EndOffset is either (1) just past the last recorded offset in the
@@ -16384,6 +16487,8 @@ type OffsetForLeaderEpochResponseTopicPartition struct {
 	// With the prior field, consumers know that at this offset, the broker
 	// either has no more records (consumer is caught up), or the broker
 	// transitioned to a new epoch.
+	//
+	// This field has a default of -1.
 	EndOffset int64
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
@@ -18267,6 +18372,8 @@ type TxnOffsetCommitRequestTopicPartition struct {
 	//
 	// The initial leader epoch can be determined from a MetadataResponse.
 	// To skip log truncation checking, use -1.
+	//
+	// This field has a default of -1.
 	LeaderEpoch int32 // v2+
 
 	// Metadata is optional metadata the client wants to include with this
@@ -18340,6 +18447,8 @@ type TxnOffsetCommitRequest struct {
 	ProducerEpoch int16
 
 	// Generation is the group generation this transactional offset commit request is for.
+	//
+	// This field has a default of -1.
 	Generation int32 // v3+
 
 	// MemberID is the member ID this member is for.
@@ -18959,6 +19068,8 @@ type DescribeACLsRequest struct {
 	ResourceName *string
 
 	// ResourcePatternType is how ResourceName is understood.
+	//
+	// This field has a default of 3.
 	ResourcePatternType ACLResourcePatternType // v1+
 
 	// Principal is the user to filter for. In Kafka with the simple authorizor,
@@ -19203,6 +19314,8 @@ type DescribeACLsResponseResource struct {
 	ResourceName string
 
 	// ResourcePatternType is the pattern type being described.
+	//
+	// This field has a default of 3.
 	ResourcePatternType ACLResourcePatternType // v1+
 
 	// ACLs contains users / entries being described.
@@ -19555,6 +19668,8 @@ type CreateACLsRequestCreation struct {
 	// ResourcePatternType is the pattern type to use for the resource name.
 	// This cannot be UNKNOWN or MATCH (i.e. this must be LITERAL or PREFIXED).
 	// The default for pre-Kafka 2.0.0 is effectively LITERAL.
+	//
+	// This field has a default of 3.
 	ResourcePatternType ACLResourcePatternType // v1+
 
 	// Principal is the user to apply this acl for. With the Kafka simple
@@ -20006,6 +20121,7 @@ type DeleteACLsRequestFilter struct {
 
 	ResourceName *string
 
+	// This field has a default of 3.
 	ResourcePatternType ACLResourcePatternType // v1+
 
 	Principal *string
@@ -20279,6 +20395,7 @@ type DeleteACLsResponseResultMatchingACL struct {
 
 	ResourceName string
 
+	// This field has a default of 3.
 	ResourcePatternType ACLResourcePatternType // v1+
 
 	Principal string
@@ -20965,6 +21082,8 @@ type DescribeConfigsResponseResourceConfig struct {
 	IsDefault bool
 
 	// Source is where this config entry is from.
+	//
+	// This field has a default of -1.
 	Source ConfigSource // v1+
 
 	// IsSensitive signifies whether this is a sensitive config key, which
@@ -23438,9 +23557,12 @@ type CreatePartitionsRequest struct {
 	// Topics contains topics to create partitions for.
 	Topics []CreatePartitionsRequestTopic
 
-	// TimeoutMillis is how long Kafka will allow this request to process before
-	// sending a response. The request may not be completed within this time, and
-	// Kafka may still continue processing the request.
+	// TimeoutMillis is how long Kafka can wait before responding to this request.
+	// This field has no effect on Kafka's processing of the request; the request
+	// will continue to be processed if the timeout is reached. If the timeout is
+	// reached, Kafka will reply with a REQUEST_TIMED_OUT error.
+	//
+	// This field has a default of 15000.
 	TimeoutMillis int32
 
 	// ValidateOnly is makes this request a dry-run; everything is validated but
@@ -25664,9 +25786,12 @@ type ElectLeadersRequest struct {
 	// trigger leader elections for, or null for all.
 	Topics []ElectLeadersRequestTopic
 
-	// TimeoutMillis is how long Kafka will allow this request to process before
-	// sending a response. The request may not be completed within this time, and
-	// Kafka may still continue processing the request.
+	// TimeoutMillis is how long Kafka can wait before responding to this request.
+	// This field has no effect on Kafka's processing of the request; the request
+	// will continue to be processed if the timeout is reached. If the timeout is
+	// reached, Kafka will reply with a REQUEST_TIMED_OUT error.
+	//
+	// This field has a default of 60000.
 	TimeoutMillis int32
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
@@ -26761,9 +26886,12 @@ type AlterPartitionAssignmentsRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
-	// TimeoutMillis is how long Kafka will allow this request to process before
-	// sending a response. The request may not be completed within this time, and
-	// Kafka may still continue processing the request.
+	// TimeoutMillis is how long Kafka can wait before responding to this request.
+	// This field has no effect on Kafka's processing of the request; the request
+	// will continue to be processed if the timeout is reached. If the timeout is
+	// reached, Kafka will reply with a REQUEST_TIMED_OUT error.
+	//
+	// This field has a default of 60000.
 	TimeoutMillis int32
 
 	// Topics are topics for which to reassign partitions of.
@@ -27334,9 +27462,12 @@ type ListPartitionReassignmentsRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
-	// TimeoutMillis is how long Kafka will allow this request to process before
-	// sending a response. The request may not be completed within this time, and
-	// Kafka may still continue processing the request.
+	// TimeoutMillis is how long Kafka can wait before responding to this request.
+	// This field has no effect on Kafka's processing of the request; the request
+	// will continue to be processed if the timeout is reached. If the timeout is
+	// reached, Kafka will reply with a REQUEST_TIMED_OUT error.
+	//
+	// This field has a default of 60000.
 	TimeoutMillis int32
 
 	// Topics are topics to list in progress partition reassignments of, or null
@@ -32565,6 +32696,8 @@ type AlterISRRequest struct {
 	BrokerID int32
 
 	// The epoch of the requesting broker.
+	//
+	// This field has a default of -1.
 	BrokerEpoch int64
 
 	Topics []AlterISRRequestTopic
@@ -33162,9 +33295,12 @@ type UpdateFeaturesRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
-	// TimeoutMillis is how long Kafka will allow this request to process before
-	// sending a response. The request may not be completed within this time, and
-	// Kafka may still continue processing the request.
+	// TimeoutMillis is how long Kafka can wait before responding to this request.
+	// This field has no effect on Kafka's processing of the request; the request
+	// will continue to be processed if the timeout is reached. If the timeout is
+	// reached, Kafka will reply with a REQUEST_TIMED_OUT error.
+	//
+	// This field has a default of 60000.
 	TimeoutMillis int32
 
 	// The list of updates to finalized features.
@@ -33863,9 +33999,13 @@ type FetchSnapshotRequest struct {
 	ClusterID *string // tag 0
 
 	// The broker ID of the follower.
+	//
+	// This field has a default of -1.
 	ReplicaID int32
 
 	// The maximum bytes to fetch from all of the snapshots.
+	//
+	// This field has a default of 0x7fffffff.
 	MaxBytes int32
 
 	// The topics to fetch.
@@ -34738,12 +34878,16 @@ type DescribeClusterResponse struct {
 	ClusterID string
 
 	// The ID of the controller broker.
+	//
+	// This field has a default of -1.
 	ControllerID int32
 
 	// Brokers is a set of alive Kafka brokers (this mirrors MetadataResponse.Brokers).
 	Brokers []DescribeClusterResponseBroker
 
 	// 32-bit bitfield to represent authorized operations for this cluster.
+	//
+	// This field has a default of -2147483648.
 	ClusterAuthorizedOperations int32
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
@@ -35167,15 +35311,21 @@ type DescribeProducersResponseTopicPartitionActiveProducer struct {
 	ProducerEpoch int32
 
 	// The last sequence produced.
+	//
+	// This field has a default of -1.
 	LastSequence int32
 
 	// The last timestamp produced.
+	//
+	// This field has a default of -1.
 	LastTimestamp int64
 
 	// The epoch of the transactional coordinator for this last produce.
 	CoordinatorEpoch int32
 
 	// The first offset of the transaction.
+	//
+	// This field has a default of -1.
 	CurrentTxnStartOffset int64
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
@@ -35937,6 +36087,8 @@ type BrokerRegistrationResponse struct {
 	ErrorCode int16
 
 	// The broker's assigned epoch, or -1 if none was assigned.
+	//
+	// This field has a default of -1.
 	BrokerEpoch int64
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
@@ -36036,6 +36188,8 @@ type BrokerHeartbeatRequest struct {
 	BrokerID int32
 
 	// The broker's epoch.
+	//
+	// This field has a default of -1.
 	BrokerEpoch int64
 
 	// The highest metadata offset that the broker has reached.
@@ -36172,6 +36326,8 @@ type BrokerHeartbeatResponse struct {
 	IsCaughtUp bool
 
 	// True if the broker is fenced.
+	//
+	// This field has a default of true.
 	IsFenced bool
 
 	// True if the broker should proceed with its shutdown.
@@ -37388,6 +37544,8 @@ type AllocateProducerIDsRequest struct {
 	BrokerID int32
 
 	// The epoch of the requesting broker.
+	//
+	// This field has a default of -1.
 	BrokerEpoch int64
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.

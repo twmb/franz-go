@@ -189,6 +189,10 @@ func (s *Struct) BuildFrom(scanner *LineScanner, key int, level int) (done bool)
 			hasDefault = true
 			def = typ[start+1 : start+end]
 			typ = typ[:start]
+			if len(f.Comment) > 0 {
+				f.Comment += "\n//\n"
+			}
+			f.Comment += "// This field has a default of " + def + "."
 		}
 
 		switch {
@@ -395,20 +399,22 @@ func parseTimeoutMillis(in string) StructField {
 	}
 
 	s := StructField{
-		Comment: `// TimeoutMillis is how long Kafka will allow this request to process before
-// sending a response. The request may not be completed within this time, and
-// Kafka may still continue processing the request.`,
+		Comment: `// TimeoutMillis is how long Kafka can wait before responding to this request.
+// This field has no effect on Kafka's processing of the request; the request
+// will continue to be processed if the timeout is reached. If the timeout is
+// reached, Kafka will reply with a REQUEST_TIMED_OUT error.`,
 		MaxVersion: -1,
 		Tag:        -1,
 		FieldName:  "TimeoutMillis",
 		Type:       Timeout{},
 	}
 	s.MinVersion, _ = strconv.Atoi(match[2])
+	def := "15000" // default to 15s for all timeouts
 	if match[1] != "" {
-		s.Type = s.Type.(Defaulter).SetDefault(match[1])
-	} else {
-		s.Type = s.Type.(Defaulter).SetDefault("15000") // default to 15s for all timeouts
+		def = match[1]
 	}
+	s.Comment += "\n//\n// This field has a default of " + def + "."
+	s.Type = s.Type.(Defaulter).SetDefault(def)
 
 	return s
 }
