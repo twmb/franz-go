@@ -1,3 +1,14 @@
+v0.7.6
+===
+
+This is a small release that adds defaults for any `kmsg.Request` that has a
+`TimeoutMillis` field that previously did not have a default.
+
+This also changes how the `TimeoutMillis` field is specified for generating,
+and now all documentation around it is consistent.
+
+Lastly, any field that has a default now has that default documented.
+
 v0.7.5
 ===
 
