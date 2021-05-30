@@ -35,9 +35,9 @@ is a KIP to add a bit more safety to EOS, and is mostly tailored for the Java
 client due to how it is implemented.
 
 Before KIP-447, Kafka Streams was implemented to consume from only one
-partition, modify records it consumes, and produce back. Streams _could not_
-consume from multiple partitions as a part of a consumer group, because a
-rebalance could cause input partitions to move around unsafely.
+partition, modify records it consumed, and produce back to a new topic. Streams
+_could not_ consume from multiple partitions as a part of a consumer group,
+because a rebalance could cause input partitions to move around unsafely.
 
 As an example of the problem, let's say we have two EOS consumers, A and B,
 both of which can consume partitions 1 and 2. Both partitions are currently
@@ -46,8 +46,8 @@ its EOS flow. A rebalance happens, and partition 2 moves to consumer B. At this
 point, A may have processed some records and not yet issued a `TxnOffsetCommit`
 request. B will see the old commit and begin consuming, which will reprocess
 records. B will produce and eventually commit, and there will be duplicates.
-At any point, A may eventually commit, but at that point, it is already too
-late. Duplicates have been processed, and A never knew.
+At any point, A may eventually commit, but it is already too late. Duplicates
+have been processed, and A never knew
 
 Confluent released a [blog
 post](https://www.confluent.io/blog/simplified-robust-exactly-one-semantics-in-kafka-2-5/#client-api-simplification)
@@ -81,11 +81,11 @@ duplicate processing.
 ```
 
 Fundamentally, this example is missing one hidden detail: P2 did not complete
-its transaction, so there actually is no duplicate records _at the end_ once P1
-reprocesses offsets 5 to 10. Duplicates would only arise if P1 came back alive
-and finished its commit before the transactional timeout. It's tough to imagine
-this scenario truly happening; more realistic is if P1 loses connectivity for
-a blip of time and then later reconnects to commit.
+its transaction, so there actually are no duplicate records _at the end_ once
+P1 reprocesses offsets 5 to 10. Duplicates only arise if P2 comes back alive
+and finishes its commit before the transactional timeout. It's tough to imagine
+this scenario truly happening; more realistic is if P1 loses connectivity for a
+blip of time and then later reconnects to commit.
 
 ## The franz-go approach
 
@@ -112,7 +112,7 @@ timeout**. Only a little bit more remains.
 
 Even if we commit immediately before ending a transaction, it is possible that
 our commit will take so long that a rebalance happens before the commit
-finishes.  For example, say `EndTxn` is about to happen, and then every request
+finishes. For example, say `EndTxn` is about to happen, and then every request
 gets stuck in limbo. The consumer is booted, and then `EndTxn` completes. This
 again recreates our problematic scenario. To work around this, the franz-go
 client defaults the transactional timeout to be less than the group session
