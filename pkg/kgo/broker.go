@@ -850,16 +850,16 @@ func (cxn *brokerCxn) writeRequest(ctx context.Context, enqueuedForWritingAt tim
 		}
 	}
 
-	buf := cxn.cl.bufPool.get()
-	defer cxn.cl.bufPool.put(buf)
-	buf = cxn.cl.reqFormatter.AppendRequest(
-		buf[:0],
+	buf := cxn.cl.reqFormatter.AppendRequest(
+		cxn.cl.bufPool.get()[:0],
 		req,
 		cxn.corrID,
 	)
 
 	_, wt := cxn.cl.connTimeoutFn(req)
 	bytesWritten, writeErr, writeWait, timeToWrite, readEnqueue = cxn.writeConn(ctx, buf, wt, enqueuedForWritingAt)
+
+	cxn.cl.bufPool.put(buf)
 
 	cxn.cl.cfg.hooks.each(func(h Hook) {
 		if h, ok := h.(HookBrokerWrite); ok {

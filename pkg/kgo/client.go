@@ -63,6 +63,7 @@ type Client struct {
 	connTimeoutFn func(kmsg.Request) (time.Duration, time.Duration)
 
 	bufPool bufPool // for to brokers to share underlying reusable request buffers
+	pnrPool pnrPool // for sinks to reuse []promisedNumberedRecord
 
 	controllerIDMu sync.Mutex
 	controllerID   int32
@@ -162,6 +163,7 @@ func NewClient(opts ...Opt) (*Client, error) {
 		connTimeoutFn: connTimeoutBuilder(cfg.connTimeoutOverhead),
 
 		bufPool: newBufPool(),
+		pnrPool: newPnrPool(),
 
 		decompressor: newDecompressor(),
 

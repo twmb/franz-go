@@ -840,7 +840,9 @@ func (cl *Client) finishBatch(batch *recBatch, producerID int64, producerEpoch i
 		pnr.Attrs = RecordAttrs{uint8(attrs)}
 
 		cl.finishRecordPromise(pnr.promisedRec, err)
+		records[i] = noPNR
 	}
+	cl.pnrPool.put(records)
 }
 
 // handleRetryBatches sets any first-buf-batch to failing and triggers a
@@ -1131,11 +1133,15 @@ func (recBuf *recBuf) failAllRecords(err error) {
 		// modifications to this batch because the recBuf is already
 		// locked.
 		batch.mu.Lock()
-		for _, pnr := range batch.records {
-			recBuf.cl.finishRecordPromise(pnr.promisedRec, err)
-		}
+		records := batch.records
 		batch.records = nil
 		batch.mu.Unlock()
+
+		for i, pnr := range records {
+			recBuf.cl.finishRecordPromise(pnr.promisedRec, err)
+			records[i] = noPNR
+		}
+		recBuf.cl.pnrPool.put(records)
 	}
 	recBuf.resetBatchDrainIdx()
 	recBuf.batches = nil
@@ -1174,6 +1180,8 @@ type promisedNumberedRecord struct {
 	recordNumbers
 	promisedRec
 }
+
+var noPNR = promisedNumberedRecord{}
 
 // recBatch is the type used for buffering records before they are written.
 type recBatch struct {
@@ -1261,12 +1269,23 @@ func (recBuf *recBuf) newRecordBatch() *recBatch {
 		4 // record array length
 	return &recBatch{
 		owner:      recBuf,
-		records:    make([]promisedNumberedRecord, 0, 10),
+		records:    recBuf.cl.pnrPool.get()[:0],
 		wireLength: recordBatchOverhead,
 
 		canFailFromLoadErrs: true, // until we send this batch, we can fail it
 	}
 }
+
+type pnrPool struct{ p *sync.Pool }
+
+func newPnrPool() pnrPool {
+	return pnrPool{
+		p: &sync.Pool{New: func() interface{} { r := make([]promisedNumberedRecord, 10); return &r }},
+	}
+}
+
+func (p pnrPool) get() []promisedNumberedRecord  { return (*p.p.Get().(*[]promisedNumberedRecord))[:0] }
+func (p pnrPool) put(s []promisedNumberedRecord) { p.p.Put(&s) }
 
 // isOwnersFirstBatch returns if the batch in a recBatch is the first batch in
 // a records. We only ever want to update batch / buffer logic if the batch is
