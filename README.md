@@ -152,6 +152,15 @@ supplementary information. It is recommended to always use a logger and to use
 See [this example](./examples/hooks_and_logging/prometheus) for an example of
 integrating with prometheus!
 
+## Benchmarks
+
+This client is quite fast; it is the fastest and most cpu and memory efficient
+client in Go (and may even beat out librdkafka).
+
+To check benchmarks yourself, see the [bench](./examples/bench) example. This
+example lets you produce or consume to a cluster and see the byte / record
+rate.
+
 ## Supported KIPs
 
 Theoretically, this library supports every (non-Java-specific) client facing
