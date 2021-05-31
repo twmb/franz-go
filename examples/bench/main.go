@@ -75,6 +75,9 @@ func main() {
 		kgo.ProduceTopic(*topic),
 		kgo.MaxBufferedRecords(250<<20 / *recordBytes + 1),
 		kgo.AllowedConcurrentFetches(3),
+		// We have good compression, so we want to limit what we read
+		// back because snappy deflation will balloon our memory usage.
+		kgo.FetchMaxBytes(5 << 20),
 	}
 	if *noCompression {
 		opts = append(opts, kgo.BatchCompression(kgo.NoCompression()))
@@ -110,6 +113,8 @@ func main() {
 				AccessKey: *saslUser,
 				SecretKey: *saslPass,
 			}.AsManagedStreamingIAMMechanism()))
+		default:
+			die("unrecognized sasl option %s", *saslMethod)
 		}
 	}
 
@@ -129,13 +134,13 @@ func main() {
 	case false:
 		var num int64
 		for {
-			atomic.AddInt64(&rateRecs, 1)
-			atomic.AddInt64(&rateBytes, int64(*recordBytes))
 			cl.Produce(context.Background(), newRecord(num), func(r *kgo.Record, err error) {
 				if *poolProduce {
 					p.Put(r)
 				}
 				chk(err, "produce error: %v", err)
+				atomic.AddInt64(&rateRecs, 1)
+				atomic.AddInt64(&rateBytes, int64(*recordBytes))
 			})
 			num++
 		}

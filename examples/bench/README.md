@@ -17,6 +17,16 @@ go run . -topic foo -no-compression
 go run . -tls -sasl-method scram-sha-256 -sasl-user user -sasl-pass pass -consume -group group -topic foo
 ```
 
+## Comparisons
+
+The [compare](./compare) directory has comparisons to other clients. For
+simplicity, not every aspect that is supported in this benchmark is ported to
+comparisons: tls support and sasl support may be missing, and for the
+confluent-kafka-go comparison, it does not seem possible to consume outside of
+a group.
+
+All flags that _can_ be easily supported in comparisons are the same.
+
 ## Flags
 
 `-brokers` can be specified to override the default localhost:9092 broker to

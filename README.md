@@ -155,11 +155,20 @@ integrating with prometheus!
 ## Benchmarks
 
 This client is quite fast; it is the fastest and most cpu and memory efficient
-client in Go (and may even beat out librdkafka).
+client in Go.
+
+For 100 byte messages,
+
+- This client is 4x faster at producing than confluent-kafka-go, and up to
+  10x-20x faster (at the expense of more memory usage) at consuming.
+
+- This client is 2.5x faster at producing than sarama, and 1.5x faster at
+  consuming.
 
 To check benchmarks yourself, see the [bench](./examples/bench) example. This
 example lets you produce or consume to a cluster and see the byte / record
-rate.
+rate. The [compare](./examples/bench/compare) subdirectory shows comparison
+code.
 
 ## Supported KIPs
 
