@@ -232,10 +232,13 @@ func (b *broker) handleReqs() {
 
 	for pr := range b.reqs {
 		req := pr.req
-		cxn, err := b.loadConnection(pr.ctx, req.Key())
-		if err != nil {
-			pr.promise(nil, err)
-			continue
+		var cxn *brokerCxn
+		{
+			var err error
+			if cxn, err = b.loadConnection(pr.ctx, req.Key()); err != nil {
+				pr.promise(nil, err)
+				continue
+			}
 		}
 
 		if int(req.Key()) > len(cxn.versions[:]) ||
@@ -287,7 +290,7 @@ func (b *broker) handleReqs() {
 			// flow, so we know we are authenticating again.
 			// For KIP-368.
 			cxn.cl.cfg.logger.Log(LogLevelDebug, "sasl expiry limit reached, reauthenticating", "broker", cxn.b.meta.NodeID)
-			if err = cxn.sasl(); err != nil {
+			if err := cxn.sasl(); err != nil {
 				pr.promise(nil, err)
 				cxn.die()
 				continue
@@ -338,7 +341,7 @@ func (b *broker) handleReqs() {
 		corrID, bytesWritten, writeErr, writeWait, timeToWrite, readEnqueue := cxn.writeRequest(pr.ctx, pr.enqueue, req)
 
 		if writeErr != nil {
-			pr.promise(nil, err)
+			pr.promise(nil, writeErr)
 			cxn.die()
 			cxn.hookWriteE2E(req.Key(), bytesWritten, writeWait, timeToWrite, writeErr)
 			continue
