@@ -1,3 +1,31 @@
+v0.7.7
+===
+
+- [`afa1209`](https://github.com/twmb/franz-go/commit/afa1209) txn: detect a fatal txnal client when beginning transactions
+- [`5576dce`](https://github.com/twmb/franz-go/commit/5576dce) benchmarks: add comparisons to confluent-kafka-go & sarama
+- [`d848174`](https://github.com/twmb/franz-go/commit/d848174) examples: add benchmarking example
+- [`fec2a18`](https://github.com/twmb/franz-go/commit/fec2a18) client: fix request buffer pool, add promisedNumberedRecord pool
+- [`a0d712e`](https://github.com/twmb/franz-go/commit/a0d712e) transactions: small wording changes in docs
+- [`bad47ba`](https://github.com/twmb/franz-go/commit/bad47ba) and [`a9691bd`](https://github.com/twmb/franz-go/commit/a9691bd) **feature** hooks: add HookBrokerE2E
+
+This is a small release with one useful new hook, a few minor updates /
+internal fixes, and no bug fixes.
+
+This now properly pools request buffers, which will reduce garbage when
+producing, and re-adds pooling slices that records are appended to before
+flushing. This latter pool is less important, but can help.
+
+This now adds one more chance to recover a transactional client, which also
+gives the user a chance to things are fatally failed when beginning
+transactions.
+
+Finally, this adds a benchmarking example and comparisons to sarama /
+confluent-kafka-go. To say the least, the numbers are favorable.
+
+This is likely the last release of the v0.7 series, the next change will be a
+few breaking API changes that should hopefully simplify initializing a
+consumer.
+
 v0.7.6
 ===
 
