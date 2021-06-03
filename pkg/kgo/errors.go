@@ -3,6 +3,7 @@ package kgo
 import (
 	"errors"
 	"fmt"
+	"os"
 )
 
 type errDeadConn struct {
@@ -17,9 +18,31 @@ func (e *errDeadConn) Temporary() bool {
 }
 
 func isRetriableBrokerErr(err error) bool {
+	// https://github.com/golang/go/issues/45729
+	//
+	// Temporary is relatively useless. We will still check for the
+	// temporary interface, and in all cases, even with timeouts, we want
+	// to retry.
+	//
+	// More generally, we will retry for any error that unwraps into an
+	// os.SyscallError. Looking at Go's net package, the error we care
+	// about is net.OpError. Looking into that further, any error that
+	// reaches into the operating system return a syscall error, which is
+	// then put in net.OpError's Err field as an os.SyscallError. There are
+	// a few non-os.SyscallError errors, these are where Go itself detects
+	// a hard failure. We do not retry those.
+	//
+	// We blanket retry os.SyscallError because a lot of the times, what
+	// appears as a hard failure can actually be retried. For example, a
+	// failed dial can be retried, maybe the resolver temporarily had a
+	// problem.
 	var tempErr interface{ Temporary() bool }
 	if errors.As(err, &tempErr) {
 		return tempErr.Temporary()
+	}
+	var se *os.SyscallError
+	if errors.As(err, &se) {
+		return true
 	}
 	switch err {
 	case errChosenBrokerDead,
