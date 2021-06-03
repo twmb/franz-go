@@ -1,3 +1,10 @@
+v0.7.9
+===
+
+- [`5231902`](https://github.com/twmb/franz-go/commit/5231902) **bugfix** patch on prior commit
+
+If I could yank tags, I would. Nice 10 minutes between them though! 🙃
+
 v0.7.8
 ===
 
