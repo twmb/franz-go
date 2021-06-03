@@ -1,3 +1,12 @@
+v0.7.8
+===
+
+- [`b7cb533`](https://github.com/twmb/franz-go/commit/b7cb533) **bugfix** allow any `*os.SyscallError` to be retriable
+
+_This_ should be the last v0.7 release. This is a small bugfix to allow much
+more retrying of failing requests, particularly around failed dials, which is
+much more resilient to restarting brokers.
+
 v0.7.7
 ===
 
