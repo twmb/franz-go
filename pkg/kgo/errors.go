@@ -36,13 +36,17 @@ func isRetriableBrokerErr(err error) bool {
 	// appears as a hard failure can actually be retried. For example, a
 	// failed dial can be retried, maybe the resolver temporarily had a
 	// problem.
-	var tempErr interface{ Temporary() bool }
-	if errors.As(err, &tempErr) {
-		return tempErr.Temporary()
-	}
+	//
+	// We favor testing os.SyscallError first, because net.OpError _always_
+	// implements Temporary, so if we test that first, it'll return false
+	// in many cases when we want to return true from os.SyscallError.
 	var se *os.SyscallError
 	if errors.As(err, &se) {
 		return true
+	}
+	var tempErr interface{ Temporary() bool }
+	if errors.As(err, &tempErr) {
+		return tempErr.Temporary()
 	}
 	switch err {
 	case errChosenBrokerDead,
