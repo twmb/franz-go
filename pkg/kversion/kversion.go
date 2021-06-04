@@ -476,7 +476,7 @@ var max0110 = nextMax(max0102, func(v listenerKeys) listenerKeys {
 	v[10].inc() // 1 find coordinator KAFKA-5043 d0e7c6b930 KIP-98
 	v = append(v,
 		k(zkBroker, rBroker), // 21 delete records KAFKA-4586 see above
-		k(zkBroker),          // 22 init producer id KAFKA-4817 bdf4cba047 KIP-98
+		k(zkBroker, rBroker), // 22 init producer id KAFKA-4817 bdf4cba047 KIP-98 (raft added in KAFKA-12620 e97cff2702b6ba836c7925caa36ab18066a7c95d KIP-730)
 		k(zkBroker, rBroker), // 23 offsets for leader epoch KAFKA-1211 0baea2ac13 KIP-101
 		k(zkBroker),          // 24 add partitions to txn KAFKA-4990 865d82af2c KIP-98
 		k(zkBroker),          // 25 add offsets to txn (same)
@@ -847,8 +847,9 @@ var maxTip = nextMax(max280, func(v listenerKeys) listenerKeys {
 	)
 
 	// KAFKA-12620 72d108274c98dca44514007254552481c731c958 KIP-730
+	// raft broker added in  e97cff2702b6ba836c7925caa36ab18066a7c95d
 	v = append(v,
-		k(zkBroker, rController), // 67 allocate producer ids
+		k(zkBroker, rBroker, rController), // 67 allocate producer ids
 	)
 
 	return v
