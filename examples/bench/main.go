@@ -153,6 +153,9 @@ func main() {
 
 		for {
 			fetches := cl.PollFetches(context.Background())
+			fetches.EachError(func(t string, p int32, err error) {
+				chk(err, "topic %s partition %d had error: %v", t, p, err)
+			})
 			var recs int64
 			var bytes int64
 			fetches.EachRecord(func(r *kgo.Record) {
