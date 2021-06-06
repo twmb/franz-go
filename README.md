@@ -165,6 +165,10 @@ For 100 byte messages,
 - This client is 2.5x faster at producing than sarama, and 1.5x faster at
   consuming.
 
+- This client is 2.4x faster at producing than segment's kafka-go, and so
+  much faster at consuming that I'm not sure I wrote the consuming comparison
+  correctly here.
+
 To check benchmarks yourself, see the [bench](./examples/bench) example. This
 example lets you produce or consume to a cluster and see the byte / record
 rate. The [compare](./examples/bench/compare) subdirectory shows comparison
