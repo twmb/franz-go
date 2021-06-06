@@ -78,9 +78,12 @@ func main() {
 		cfg.Net.SASL.User = *saslUser
 		cfg.Net.SASL.Password = *saslPass
 		switch method {
-		case "plain",
-			"scramsha256",
-			"scramsha512":
+		case "plain":
+			cfg.Net.SASL.Mechanism = sarama.SASLTypePlaintext
+		case "scramsha256":
+			cfg.Net.SASL.Mechanism = sarama.SASLTypeSCRAMSHA256
+		case "scramsha512":
+			cfg.Net.SASL.Mechanism = sarama.SASLTypeSCRAMSHA512
 		default:
 			die("unrecognized sasl option %s", *saslMethod)
 		}
