@@ -311,7 +311,7 @@ func (cl *Client) fetchBrokerMetadata(ctx context.Context) error {
 		close(wait.done)
 	}()
 
-	_, _, wait.err = cl.fetchMetadata(ctx, kmsg.NewPtrMetadataRequest())
+	_, _, wait.err = cl.fetchMetadata(ctx, kmsg.NewPtrMetadataRequest(), true)
 	return wait.err
 }
 
@@ -329,11 +329,25 @@ func (cl *Client) fetchMetadataForTopics(ctx context.Context, all bool, topics [
 			req.Topics = append(req.Topics, kmsg.MetadataRequestTopic{Topic: &t})
 		}
 	}
-	return cl.fetchMetadata(ctx, req)
+	return cl.fetchMetadata(ctx, req, true)
 }
 
-func (cl *Client) fetchMetadata(ctx context.Context, req *kmsg.MetadataRequest) (*broker, *kmsg.MetadataResponse, error) {
+func (cl *Client) fetchMetadata(ctx context.Context, req *kmsg.MetadataRequest, limitRetries bool) (*broker, *kmsg.MetadataResponse, error) {
 	r := cl.retriable()
+
+	// We limit retries for internal metadata refreshes, because these do
+	// not need to retry forever and are usually blocking *other* requests.
+	// e.g., producing bumps load errors when metadata returns, so 3
+	// failures here will correspond to 1 bumped error count. To make the
+	// number more accurate, we should *never* retry here, but this is
+	// pretty intolerant of immediately-temporary network issues. Rather,
+	// we use a small count of 3 retries, which with the default backoff,
+	// will be <500ms of retrying. This is still intolerant of temporary
+	// failures, but it does allow recovery from a dns issue / bad path.
+	if limitRetries {
+		r.limitRetries = 3
+	}
+
 	meta, err := req.RequestWith(ctx, r)
 	if err == nil {
 		if meta.ControllerID >= 0 {
@@ -506,6 +520,11 @@ type retriable struct {
 	br   func() (*broker, error)
 	last *broker
 
+	// If non-zero, limitRetries may specify a smaller # of retries than
+	// the client RequestRetries number. This is used for internal requests
+	// that can fail / do not need to retry forever.
+	limitRetries int
+
 	// parseRetryErr, if non-nil, can parse a retriable error out of the
 	// response and return it. This error is *not* returned from the
 	// request if the req cannot be retried due to timeout or retry limits,
@@ -531,7 +550,10 @@ start:
 	}
 	if err != nil || retryErr != nil {
 		if retryTimeout == 0 || time.Since(tryStart) <= retryTimeout {
-			if (r.cl.shouldRetry(tries, err) || r.cl.shouldRetry(tries, retryErr)) && r.cl.waitTries(ctx, tries) {
+			if (r.cl.shouldRetry(tries, err) || r.cl.shouldRetry(tries, retryErr)) &&
+				(r.limitRetries == 0 || tries < r.limitRetries) &&
+				r.cl.waitTries(ctx, tries) {
+
 				goto start
 			}
 		}
@@ -651,7 +673,7 @@ func (cl *Client) shardedRequest(ctx context.Context, req kmsg.Request) ([]Respo
 	if metaReq, isMetaReq := req.(*kmsg.MetadataRequest); isMetaReq {
 		// We hijack any metadata request so as to populate our
 		// own brokers and controller ID.
-		br, resp, err := cl.fetchMetadata(ctx, metaReq)
+		br, resp, err := cl.fetchMetadata(ctx, metaReq, false)
 		return shards(shard(br, req, resp, err)), nil
 
 	} else if adminReq, admin := req.(kmsg.AdminRequest); admin {

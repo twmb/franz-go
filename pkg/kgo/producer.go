@@ -636,8 +636,8 @@ func (cl *Client) waitUnknownTopic(
 			}
 			cl.cfg.logger.Log(LogLevelInfo, "unknown topic wait failed, retrying wait", "topic", topic, "err", retriableErr)
 			tries++
-			if int64(tries) >= cl.cfg.retries {
-				err = fmt.Errorf("no partitions available after refreshing metadata %d times, last err: %w", tries, retriableErr)
+			if int64(tries) >= cl.cfg.produceRetries {
+				err = fmt.Errorf("no partitions available after attempting to refresh metadata %d times, last err: %w", tries, retriableErr)
 			}
 		}
 	}

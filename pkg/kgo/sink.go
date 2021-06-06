@@ -1105,7 +1105,7 @@ func (recBuf *recBuf) bumpRepeatedLoadErr(err error) {
 	if len(recBuf.batches) == 0 {
 		return
 	}
-	recBuf.cl.cfg.logger.Log(LogLevelWarn, "produce partition load error, unable to produce on this partition", "broker", recBuf.sink.nodeID, "topic", recBuf.topic, "partition", recBuf.partition, "err", err)
+	recBuf.cl.cfg.logger.Log(LogLevelWarn, "produce partition load error, bumping error count on first stored batch", "broker", recBuf.sink.nodeID, "topic", recBuf.topic, "partition", recBuf.partition, "err", err)
 	batch0 := recBuf.batches[0]
 	batch0.tries++
 	failErr := batch0.maybeFailErr(&recBuf.cl.cfg)

@@ -2,6 +2,7 @@ package kgo
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"sync"
@@ -242,6 +243,10 @@ func (cl *Client) updateMetadata() (needsRetry bool, err error) {
 
 	latest, err := cl.fetchTopicMetadata(all, reqTopics)
 	if err != nil {
+		cl.bumpMetadataFailForTopics( // bump load failures for all topics
+			tpsProducerLoad,
+			err,
+		)
 		return true, err
 	}
 
@@ -249,7 +254,7 @@ func (cl *Client) updateMetadata() (needsRetry bool, err error) {
 	// may have returned topics the consumer is not yet tracking. We ensure
 	// that we will store the topics at the end of our metadata update.
 	tpsConsumerLoad := tpsConsumer.load()
-	if all {
+	if all && len(latest) > 0 {
 		allTopics := make([]string, 0, len(latest))
 		for topic := range latest {
 			allTopics = append(allTopics, topic)
@@ -274,6 +279,7 @@ func (cl *Client) updateMetadata() (needsRetry bool, err error) {
 		}
 	}()
 
+	var missingProduceTopics []string
 	for _, m := range []struct {
 		priors    map[string]*topicPartitions
 		isProduce bool
@@ -284,6 +290,9 @@ func (cl *Client) updateMetadata() (needsRetry bool, err error) {
 		for topic, priorParts := range m.priors {
 			newParts, exists := latest[topic]
 			if !exists {
+				if m.isProduce {
+					missingProduceTopics = append(missingProduceTopics, topic)
+				}
 				continue
 			}
 			needsRetry = needsRetry || cl.mergeTopicPartitions(
@@ -296,6 +305,13 @@ func (cl *Client) updateMetadata() (needsRetry bool, err error) {
 				&tpsPrior,
 			)
 		}
+	}
+	if len(missingProduceTopics) > 0 {
+		cl.bumpMetadataFailForTopics(
+			tpsProducerLoad,
+			errors.New("metadata request did not return this topic"),
+			missingProduceTopics...,
+		)
 	}
 
 	return needsRetry, nil

@@ -158,6 +158,63 @@ func (cl *Client) storePartitionsUpdate(topic string, l *topicPartitions, lv *to
 
 }
 
+// If a metadata request fails after retrying (internally retrying, so only a
+// few times), or the metadata request does not return topics that we requested
+// (which may also happen additionally consuming via regex), then we need to
+// bump errors for topics that were previously loaded, and bump errors for
+// topics awaiting load.
+//
+// This has two modes of operation:
+//
+//   1) if no topics were missing, then the metadata request failed outright,
+//      and we need to bump errors on all stored topics and unknown topics.
+//
+//   2) if topics were missing, then the metadata request was successful but
+//      had missing data, and we need to bump errors on only what was mising.
+//
+func (cl *Client) bumpMetadataFailForTopics(requested map[string]*topicPartitions, err error, missingTopics ...string) {
+	p := &cl.producer
+
+	// mode 1
+	if len(missingTopics) == 0 {
+		for _, topic := range requested {
+			for _, topicPartition := range topic.load().partitions {
+				topicPartition.records.bumpRepeatedLoadErr(err)
+			}
+		}
+	}
+
+	// mode 2
+	var missing map[string]bool
+	for _, failTopic := range missingTopics {
+		if missing == nil {
+			missing = make(map[string]bool, len(missingTopics))
+		}
+		missing[failTopic] = true
+
+		if topic, exists := requested[failTopic]; exists {
+			for _, topicPartition := range topic.load().partitions {
+				topicPartition.records.bumpRepeatedLoadErr(err)
+			}
+		}
+	}
+
+	p.unknownTopicsMu.Lock()
+	defer p.unknownTopicsMu.Unlock()
+
+	for topic, unknown := range p.unknownTopics {
+		// if nil, mode 1, else mode 2
+		if missing != nil && !missing[topic] {
+			continue
+		}
+
+		select {
+		case unknown.wait <- err:
+		default:
+		}
+	}
+}
+
 // topicPartitionsData is the data behind a topicPartitions' v.
 //
 // We keep this in an atomic because it is expected to be extremely read heavy,
