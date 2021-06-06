@@ -76,6 +76,7 @@ func (k k) Authenticate(ctx context.Context, host string) (sasl.Session, []byte,
 	if err = c.AffirmLogin(); err != nil {
 		return nil, nil, err
 	}
+
 	if strings.IndexByte(host, ':') != 0 {
 		if host, _, err = net.SplitHostPort(host); err != nil {
 			return nil, nil, err
@@ -98,16 +99,17 @@ func (k k) Authenticate(ctx context.Context, host string) (sasl.Session, []byte,
 	auth.Cksum = types.Checksum{
 		CksumType: 32771,                        // GSSAPI checksum type
 		Checksum:  []byte{0: 16, 20: 48, 23: 0}, // ContextFlagInteg | ContextFlagConf
+
 	}
-	aprReq, err := messages.NewAPReq(ticket, encKey, auth)
+	apReq, err := messages.NewAPReq(ticket, encKey, auth)
 	if err != nil {
 		return nil, nil, err
 	}
-	arpReqMarshaled, err := aprReq.Marshal()
+	apMarshaled, err := apReq.Marshal()
 	if err != nil {
 		return nil, nil, err
 	}
-	apr := append([]byte{1, 0}, arpReqMarshaled...)
+	apr := append([]byte{1, 0}, apMarshaled...)
 
 	/*
 	 *	Append the GSS-API header to the payload, conforming to RFC-2743
@@ -180,7 +182,7 @@ func asn1LengthBytes(l int) []byte {
 		if v == 0 { // skip leading zeroes
 			continue
 		}
-		return append([]byte{128 + byte(len(buf[i:])) - 1}, buf[i:]...) // first bit 1 + number of additional bytes, remaining payload
+		return append([]byte{128 + byte(len(buf[i:]))}, buf[i:]...) // first bit 1 + number of additional bytes, remaining payload
 	}
 	return nil // unreachable
 }
