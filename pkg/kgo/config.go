@@ -287,7 +287,7 @@ func defaultCfg() cfg {
 				return backoff
 			}
 		}(),
-		retries: math.MaxInt64, // effectively unbounded
+		retries: 30,
 		retryTimeout: func(key int16) time.Duration {
 			if key == 26 { // EndTxn key
 				return 5 * time.Minute
@@ -462,7 +462,7 @@ func RetryBackoff(backoff func(int) time.Duration) Opt {
 }
 
 // RequestRetries sets the number of tries that retriable requests are allowed,
-// overriding the unlimited default. This option does not apply to produce
+// overriding the default of 30. This option does not apply to produce
 // requests; to limit produce request retries, see ProduceRetries.
 func RequestRetries(n int) Opt {
 	return clientOpt{func(cfg *cfg) { cfg.retries = int64(n) }}
