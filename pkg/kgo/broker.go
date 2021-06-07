@@ -374,7 +374,7 @@ func (b *broker) handleReqs() {
 func (cxn *brokerCxn) hookWriteE2E(key int16, bytesWritten int, writeWait, timeToWrite time.Duration, writeErr error) {
 	cxn.cl.cfg.hooks.each(func(h Hook) {
 		if h, ok := h.(HookBrokerE2E); ok {
-			h.OnE2E(cxn.b.meta, key, E2EInfo{
+			h.OnBrokerE2E(cxn.b.meta, key, BrokerE2E{
 				BytesWritten: bytesWritten,
 				WriteWait:    writeWait,
 				TimeToWrite:  timeToWrite,
@@ -519,7 +519,7 @@ func (b *broker) connect(ctx context.Context) (net.Conn, error) {
 	since := time.Since(start)
 	b.cl.cfg.hooks.each(func(h Hook) {
 		if h, ok := h.(HookBrokerConnect); ok {
-			h.OnConnect(b.meta, since, conn, err)
+			h.OnBrokerConnect(b.meta, since, conn, err)
 		}
 	})
 	if err != nil {
@@ -867,7 +867,7 @@ func (cxn *brokerCxn) writeRequest(ctx context.Context, enqueuedForWritingAt tim
 
 	cxn.cl.cfg.hooks.each(func(h Hook) {
 		if h, ok := h.(HookBrokerWrite); ok {
-			h.OnWrite(cxn.b.meta, req.Key(), bytesWritten, writeWait, timeToWrite, writeErr)
+			h.OnBrokerWrite(cxn.b.meta, req.Key(), bytesWritten, writeWait, timeToWrite, writeErr)
 		}
 	})
 	if logger := cxn.cl.cfg.logger; logger.Level() >= LogLevelDebug {
@@ -1040,9 +1040,9 @@ func (cxn *brokerCxn) readResponse(
 	cxn.cl.cfg.hooks.each(func(h Hook) {
 		switch h := h.(type) {
 		case HookBrokerRead:
-			h.OnRead(cxn.b.meta, key, bytesRead, readWait, timeToRead, readErr)
+			h.OnBrokerRead(cxn.b.meta, key, bytesRead, readWait, timeToRead, readErr)
 		case HookBrokerE2E:
-			h.OnE2E(cxn.b.meta, key, E2EInfo{
+			h.OnBrokerE2E(cxn.b.meta, key, BrokerE2E{
 				BytesWritten: bytesWritten,
 				BytesRead:    bytesRead,
 				WriteWait:    writeWait,
@@ -1083,7 +1083,7 @@ func (cxn *brokerCxn) readResponse(
 func (cxn *brokerCxn) closeConn() {
 	cxn.cl.cfg.hooks.each(func(h Hook) {
 		if h, ok := h.(HookBrokerDisconnect); ok {
-			h.OnDisconnect(cxn.b.meta, cxn.conn)
+			h.OnBrokerDisconnect(cxn.b.meta, cxn.conn)
 		}
 	})
 	cxn.conn.Close()
@@ -1229,7 +1229,7 @@ func (cxn *brokerCxn) discard() {
 
 		cxn.cl.cfg.hooks.each(func(h Hook) {
 			if h, ok := h.(HookBrokerRead); ok {
-				h.OnRead(cxn.b.meta, 0, nread, 0, timeToRead, err)
+				h.OnBrokerRead(cxn.b.meta, 0, nread, 0, timeToRead, err)
 			}
 		})
 		if err != nil {

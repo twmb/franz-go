@@ -29,16 +29,16 @@ func (hs hooks) each(fn func(Hook)) {
 
 // HookBrokerConnect is called after a connection to a broker is opened.
 type HookBrokerConnect interface {
-	// OnConnect is passed the broker metadata, how long it took to dial,
-	// and either the dial's resulting net.Conn or error.
-	OnConnect(meta BrokerMetadata, dialDur time.Duration, conn net.Conn, err error)
+	// OnBrokerConnect is passed the broker metadata, how long it took to
+	// dial, and either the dial's resulting net.Conn or error.
+	OnBrokerConnect(meta BrokerMetadata, dialDur time.Duration, conn net.Conn, err error)
 }
 
 // HookBrokerDisconnect is called when a connection to a broker is closed.
 type HookBrokerDisconnect interface {
-	// OnDisconnect is passed the broker metadata and the connection that
-	// is closing.
-	OnDisconnect(meta BrokerMetadata, conn net.Conn)
+	// OnBrokerDisconnect is passed the broker metadata and the connection
+	// that is closing.
+	OnBrokerDisconnect(meta BrokerMetadata, conn net.Conn)
 }
 
 // HookBrokerWrite is called after a write to a broker.
@@ -46,14 +46,14 @@ type HookBrokerDisconnect interface {
 // Kerberos SASL does not cause write hooks, since it directly writes to the
 // connection.
 type HookBrokerWrite interface {
-	// OnWrite is passed the broker metadata, the key for the request that
-	// was written, the number of bytes that were written (may not be the
-	// whole request if there was an error), how long the request waited
-	// before being written (including throttling waiting), how long it
-	// took to write the request, and any error.
+	// OnBrokerWrite is passed the broker metadata, the key for the request
+	// that was written, the number of bytes that were written (may not be
+	// the whole request if there was an error), how long the request
+	// waited before being written (including throttling waiting), how long
+	// it took to write the request, and any error.
 	//
 	// The bytes written does not count any tls overhead.
-	OnWrite(meta BrokerMetadata, key int16, bytesWritten int, writeWait, timeToWrite time.Duration, err error)
+	OnBrokerWrite(meta BrokerMetadata, key int16, bytesWritten int, writeWait, timeToWrite time.Duration, err error)
 }
 
 // HookBrokerRead is called after a read from a broker.
@@ -61,21 +61,21 @@ type HookBrokerWrite interface {
 // Kerberos SASL does not cause read hooks, since it directly reads from the
 // connection.
 type HookBrokerRead interface {
-	// OnRead is passed the broker metadata, the key for the response that
-	// was read, the number of bytes read (may not be the whole read if
-	// there was an error), how long the client waited before reading the
-	// response, how long it took to read the response, and any error.
+	// OnBrokerRead is passed the broker metadata, the key for the response
+	// that was read, the number of bytes read (may not be the whole read
+	// if there was an error), how long the client waited before reading
+	// the response, how long it took to read the response, and any error.
 	//
 	// The bytes read does not count any tls overhead.
-	OnRead(meta BrokerMetadata, key int16, bytesRead int, readWait, timeToRead time.Duration, err error)
+	OnBrokerRead(meta BrokerMetadata, key int16, bytesRead int, readWait, timeToRead time.Duration, err error)
 }
 
-// E2EInfo tracks complete information for a write of a request followed by a
+// BrokerE2E tracks complete information for a write of a request followed by a
 // read of that requests's response.
 //
 // Note that if this is for a produce request with no acks, there will be no
 // read wait / time to read.
-type E2EInfo struct {
+type BrokerE2E struct {
 	// BytesWritten is the number of bytes written for this request.
 	//
 	// This may not be the whole request if there was an error while writing.
@@ -117,13 +117,13 @@ type E2EInfo struct {
 //
 // Kerberos SASL does not cause this hook, since it directly reads from the
 // connection.
-func (e *E2EInfo) DurationE2E() time.Duration {
+func (e *BrokerE2E) DurationE2E() time.Duration {
 	return e.TimeToWrite + e.ReadWait + e.TimeToRead
 }
 
 // Err returns the first of either the write err or the read err. If this
 // return is non-nil, the request/response had an error.
-func (e *E2EInfo) Err() error {
+func (e *BrokerE2E) Err() error {
 	if e.WriteErr != nil {
 		return e.WriteErr
 	}
@@ -137,10 +137,10 @@ func (e *E2EInfo) Err() error {
 // info for a write and a read, which allows for easier e2e metrics. This hook
 // can replace both the read and write hook.
 type HookBrokerE2E interface {
-	// OnE2E is passed the broker metadata, the key for the
+	// OnBrokerE2E is passed the broker metadata, the key for the
 	// request/response that was written/read, and the e2e info for the
 	// request and response.
-	OnE2E(meta BrokerMetadata, key int16, e2e E2EInfo)
+	OnBrokerE2E(meta BrokerMetadata, key int16, e2e BrokerE2E)
 }
 
 // HookBrokerThrottle is called after a response to a request is read
