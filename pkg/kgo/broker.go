@@ -299,7 +299,8 @@ func (b *broker) handleReqs() {
 
 		// Juuuust before we issue the request, we check if it was
 		// canceled. We could have previously tried this request, which
-		// then failed and retried due to the error being errDeadConn.
+		// then failed and retried.
+		//
 		// Checking the context was canceled here ensures we do not
 		// loop. We could be more precise with error tracking, though.
 		select {
@@ -908,9 +909,6 @@ func (cxn *brokerCxn) writeConn(ctx context.Context, buf []byte, timeout time.Du
 	}()
 	select {
 	case <-writeDone:
-		if writeErr != nil {
-			writeErr = &errDeadConn{writeErr}
-		}
 	case <-cxn.cl.ctx.Done():
 		cxn.conn.SetWriteDeadline(time.Now())
 		<-writeDone
@@ -951,7 +949,6 @@ func (cxn *brokerCxn) readConn(ctx context.Context, timeout time.Duration, enque
 			readWait = readStart.Sub(enqueuedForReadingAt)
 		}()
 		if nread, err = io.ReadFull(cxn.conn, sizeBuf); err != nil {
-			err = &errDeadConn{err}
 			return
 		}
 		var size int32
@@ -964,7 +961,6 @@ func (cxn *brokerCxn) readConn(ctx context.Context, timeout time.Duration, enque
 		nread += nread2
 		buf = buf[:nread2]
 		if err != nil {
-			err = &errDeadConn{err}
 			return
 		}
 	}()
@@ -1187,7 +1183,6 @@ func (cxn *brokerCxn) discard() {
 		go func() {
 			defer close(readDone)
 			if nread, err = io.ReadFull(cxn.conn, discardBuf[:4]); err != nil {
-				err = &errDeadConn{err}
 				return
 			}
 			deadlineMu.Lock()
@@ -1218,9 +1213,6 @@ func (cxn *brokerCxn) discard() {
 				nread2, err = cxn.conn.Read(discard)
 				nread += nread2
 				size -= int32(nread2) // nread2 max is 128
-			}
-			if err != nil {
-				err = &errDeadConn{err}
 			}
 		}()
 

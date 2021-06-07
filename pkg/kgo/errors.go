@@ -6,17 +6,6 @@ import (
 	"os"
 )
 
-type errDeadConn struct {
-	err error
-}
-
-func (e *errDeadConn) Error() string {
-	return e.err.Error()
-}
-func (e *errDeadConn) Temporary() bool {
-	return true
-}
-
 func isRetriableBrokerErr(err error) bool {
 	// https://github.com/golang/go/issues/45729
 	//

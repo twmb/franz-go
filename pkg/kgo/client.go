@@ -507,12 +507,7 @@ func (cl *Client) retriableBrokerFn(fn func() (*broker, error)) *retriable {
 }
 
 func (cl *Client) shouldRetry(tries int, err error) bool {
-	switch err.(type) {
-	case *errDeadConn:
-		return tries < cl.cfg.brokerConnDeadRetries
-	default:
-		return (kerr.IsRetriable(err) || isRetriableBrokerErr(err)) && int64(tries) < cl.cfg.retries
-	}
+	return (kerr.IsRetriable(err) || isRetriableBrokerErr(err)) && int64(tries) < cl.cfg.retries
 }
 
 type retriable struct {

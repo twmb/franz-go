@@ -59,10 +59,9 @@ type cfg struct {
 	maxVersions *kversion.Versions
 	minVersions *kversion.Versions
 
-	retryBackoff          func(int) time.Duration
-	retries               int64
-	retryTimeout          func(int16) time.Duration
-	brokerConnDeadRetries int
+	retryBackoff func(int) time.Duration
+	retries      int64
+	retryTimeout func(int16) time.Duration
 
 	maxBrokerWriteBytes int32
 	maxBrokerReadBytes  int32
@@ -287,14 +286,13 @@ func defaultCfg() cfg {
 				return backoff
 			}
 		}(),
-		retries: 30,
+		retries: 20,
 		retryTimeout: func(key int16) time.Duration {
 			if key == 26 { // EndTxn key
 				return 5 * time.Minute
 			}
 			return time.Minute
 		},
-		brokerConnDeadRetries: 20,
 
 		maxBrokerWriteBytes: 100 << 20, // Kafka socket.request.max.bytes default is 100<<20
 		maxBrokerReadBytes:  100 << 20,
@@ -462,8 +460,10 @@ func RetryBackoff(backoff func(int) time.Duration) Opt {
 }
 
 // RequestRetries sets the number of tries that retriable requests are allowed,
-// overriding the default of 30. This option does not apply to produce
-// requests; to limit produce request retries, see ProduceRetries.
+// overriding the default of 20.
+//
+// This option does not apply to produce requests; to limit produce request
+// retries, see ProduceRetries.
 func RequestRetries(n int) Opt {
 	return clientOpt{func(cfg *cfg) { cfg.retries = int64(n) }}
 }
@@ -485,26 +485,6 @@ func RequestRetries(n int) Opt {
 // still be tried once more once the backoff expires.
 func RetryTimeout(t func(int16) time.Duration) Opt {
 	return clientOpt{func(cfg *cfg) { cfg.retryTimeout = t }}
-}
-
-// BrokerConnDeadRetries sets the number of tries that are allowed for requests
-// that fail before a response is even received, overriding the default 20.
-//
-// These retries are for cases where a connection to a broker fails during a
-// request. Generally, you just must retry these requests anyway. However, if
-// Kafka cannot understand our request, it closes a connection deliberately.
-// Since the client cannot differentiate this case, we upper bound the number
-// of times we allow a connection to be cut before we call it quits on the
-// request, assuming that if a connection is cut *so many times* repeatedly,
-// then it is likely not the network but instead Kafka indicating a problem.
-//
-// This can only be triggered by connection read or write failures, indicating
-// Kafka closed the connection (or the connection actually just died).
-//
-// This setting applies to all but internally generated fetch and produce
-// requests.
-func BrokerConnDeadRetries(n int) Opt {
-	return clientOpt{func(cfg *cfg) { cfg.brokerConnDeadRetries = n }}
 }
 
 // AutoTopicCreation enables topics to be auto created if they do
