@@ -51,7 +51,7 @@ completed relatively quickly.
 The simpler fixes:
 
 - Change `AutoTopicCreate` to `AllowAutoTopicCreate`
-- Change `ProduceTopic` to `DefaultProduceTopic
+- Change `ProduceTopic` to `DefaultProduceTopic`
 - Remove `BrokerConnDeadRetries` and `DisableClientID` if you used them (unlikely)
 - Add `Broker` in any hook (`OnConnect` => `OnBrokerConnec`, etc)
 
