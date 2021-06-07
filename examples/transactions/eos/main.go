@@ -45,7 +45,7 @@ func main() {
 func inputProducer() {
 	cl, err := kgo.NewClient(
 		kgo.SeedBrokers(strings.Split(*seedBrokers, ",")...),
-		kgo.ProduceTopic(*produceTo),
+		kgo.DefaultProduceTopic(*produceTo),
 		kgo.TransactionalID(*produceTxnID),
 		kgo.WithLogger(kgo.BasicLogger(os.Stderr, kgo.LogLevelInfo, func() string {
 			return "[input producer] "
@@ -92,30 +92,27 @@ func inputProducer() {
 }
 
 func eosConsumer() {
-	cl, err := kgo.NewClient(
+	sess, err := kgo.NewGroupTransactSession(
 		kgo.SeedBrokers(strings.Split(*seedBrokers, ",")...),
-		kgo.ProduceTopic(*eosTo),
+		kgo.DefaultProduceTopic(*eosTo),
 		kgo.TransactionalID(*consumeTxnID),
 		kgo.FetchIsolationLevel(kgo.ReadCommitted()),
 		kgo.WithLogger(kgo.BasicLogger(os.Stderr, kgo.LogLevelInfo, func() string {
 			return "[eos consumer] "
 		})),
+		kgo.ConsumerGroup(*group),
+		kgo.ConsumeTopics(*produceTo),
+		kgo.RequireStableFetchOffsets(),
 	)
 	if err != nil {
 		die("unable to create eos consumer/producer: %v", err)
 	}
-	defer cl.Close()
+	defer sess.Close()
 
 	ctx := context.Background()
 
-	sess := cl.AssignGroupTransactSession(*group,
-		kgo.GroupTopics(*produceTo),
-		kgo.RequireStableFetchOffsets(),
-	)
-	defer cl.LeaveGroup()
-
 	for {
-		fetches := cl.PollFetches(ctx)
+		fetches := sess.PollFetches(ctx)
 
 		if fetchErrs := fetches.Errors(); len(fetchErrs) > 0 {
 			for _, fetchErr := range fetchErrs {
@@ -135,9 +132,9 @@ func eosConsumer() {
 			die("unable to start transaction: %v", err)
 		}
 
-		e := kgo.AbortingFirstErrPromise(cl)
+		e := kgo.AbortingFirstErrPromise(sess.Client())
 		fetches.EachRecord(func(r *kgo.Record) {
-			sess.Produce(ctx, kgo.StringRecord("eos "+string(r.Value)), e.Promise)
+			sess.Produce(ctx, kgo.StringRecord("eos "+string(r.Value)), e.Promise())
 		})
 		committed, err := sess.End(ctx, e.Err() == nil)
 

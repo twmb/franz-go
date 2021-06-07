@@ -49,7 +49,7 @@ var ( // interface checks to ensure we implement the hooks properly
 	_ kgo.HookBrokerThrottle   = new(Metrics)
 )
 
-func (m *Metrics) OnConnect(meta kgo.BrokerMetadata, _ time.Duration, _ net.Conn, err error) {
+func (m *Metrics) OnBrokerConnect(meta kgo.BrokerMetadata, _ time.Duration, _ net.Conn, err error) {
 	node := strconv.Itoa(int(meta.NodeID))
 	if err != nil {
 		m.connectErrs.WithLabelValues(node).Inc()
@@ -58,12 +58,12 @@ func (m *Metrics) OnConnect(meta kgo.BrokerMetadata, _ time.Duration, _ net.Conn
 	m.connects.WithLabelValues(node).Inc()
 }
 
-func (m *Metrics) OnDisconnect(meta kgo.BrokerMetadata, _ net.Conn) {
+func (m *Metrics) OnBrokerDisconnect(meta kgo.BrokerMetadata, _ net.Conn) {
 	node := strconv.Itoa(int(meta.NodeID))
 	m.disconnects.WithLabelValues(node).Inc()
 }
 
-func (m *Metrics) OnWrite(meta kgo.BrokerMetadata, _ int16, bytesWritten int, writeWait, timeToWrite time.Duration, err error) {
+func (m *Metrics) OnBrokerWrite(meta kgo.BrokerMetadata, _ int16, bytesWritten int, writeWait, timeToWrite time.Duration, err error) {
 	node := strconv.Itoa(int(meta.NodeID))
 	if err != nil {
 		m.writeErrs.WithLabelValues(node).Inc()
@@ -74,7 +74,7 @@ func (m *Metrics) OnWrite(meta kgo.BrokerMetadata, _ int16, bytesWritten int, wr
 	m.writeTimings.WithLabelValues(node).Observe(timeToWrite.Seconds())
 }
 
-func (m *Metrics) OnRead(meta kgo.BrokerMetadata, _ int16, bytesRead int, readWait, timeToRead time.Duration, err error) {
+func (m *Metrics) OnBrokerRead(meta kgo.BrokerMetadata, _ int16, bytesRead int, readWait, timeToRead time.Duration, err error) {
 	node := strconv.Itoa(int(meta.NodeID))
 	if err != nil {
 		m.readErrs.WithLabelValues(node).Inc()
@@ -85,7 +85,7 @@ func (m *Metrics) OnRead(meta kgo.BrokerMetadata, _ int16, bytesRead int, readWa
 	m.readTimings.WithLabelValues(node).Observe(timeToRead.Seconds())
 }
 
-func (m *Metrics) OnThrottle(meta kgo.BrokerMetadata, throttleInterval time.Duration, _ bool) {
+func (m *Metrics) OnBrokerThrottle(meta kgo.BrokerMetadata, throttleInterval time.Duration, _ bool) {
 	node := strconv.Itoa(int(meta.NodeID))
 	m.throttles.WithLabelValues(node).Observe(throttleInterval.Seconds())
 }

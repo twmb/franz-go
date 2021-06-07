@@ -72,13 +72,20 @@ func main() {
 
 	opts := []kgo.Opt{
 		kgo.SeedBrokers(strings.Split(*seedBrokers, ",")...),
-		kgo.ProduceTopic(*topic),
+		kgo.DefaultProduceTopic(*topic),
 		kgo.MaxBufferedRecords(250<<20 / *recordBytes + 1),
 		kgo.AllowedConcurrentFetches(3),
 		// We have good compression, so we want to limit what we read
 		// back because snappy deflation will balloon our memory usage.
 		kgo.FetchMaxBytes(5 << 20),
 	}
+	if *consume {
+		opts = append(opts, kgo.ConsumeTopics(*topic))
+		if *group != "" {
+			opts = append(opts, kgo.ConsumerGroup(*group))
+		}
+	}
+
 	if *noCompression {
 		opts = append(opts, kgo.BatchCompression(kgo.NoCompression()))
 	}
@@ -145,12 +152,6 @@ func main() {
 			num++
 		}
 	case true:
-		if *group != "" {
-			cl.AssignGroup(*group, kgo.GroupTopics(*topic))
-		} else {
-			cl.AssignPartitions(kgo.ConsumeTopics(kgo.NewOffset().AtStart(), *topic))
-		}
-
 		for {
 			fetches := cl.PollFetches(context.Background())
 			fetches.EachError(func(t string, p int32, err error) {

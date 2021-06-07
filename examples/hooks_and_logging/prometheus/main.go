@@ -31,6 +31,7 @@ func main() {
 		kgo.WithLogger(kgo.BasicLogger(os.Stderr, kgo.LogLevelInfo, func() string {
 			return time.Now().Format("[2006-01-02 15:04:05.999] ")
 		})),
+		kgo.ConsumeTopics(*topic),
 	)
 	if err != nil {
 		panic(fmt.Sprintf("unable to create client: %v", err))
@@ -42,7 +43,6 @@ func main() {
 		log.Fatal(http.ListenAndServe(fmt.Sprintf("localhost:%d", *debugPort), nil))
 	}()
 
-	client.AssignPartitions(kgo.ConsumeTopics(kgo.NewOffset().AtEnd(), *topic))
 	for {
 		client.PollFetches(context.Background()) // busy work...
 	}

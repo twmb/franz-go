@@ -105,13 +105,14 @@ franz-go supports consuming partitions directly, consuming as a part of a
 consumer group, and consuming in a group for EOS. Consuming can also be done
 via regex to match certain topics to consume.
 
-To consume partitions directly, use [`AssignPartitions`][13]. Otherwise, use
-[`AssignGroup`][14] for group consuming or [`AssignGroupTransactSession`][15]
+To consume partitions directly, use [`ConsumeTopics`][13] or [`ConsumePartitions`][a]. Otherwise, use
+`ConsumeTopics` with [`ConsumerGroup`][14] for group consuming or [`NewGroupTransactSession`][15]
 for group consuming for EOS.
 
-[13]: https://pkg.go.dev/github.com/twmb/franz-go/pkg/kgo#Client.AssignPartitions
-[14]: https://pkg.go.dev/github.com/twmb/franz-go/pkg/kgo#Client.AssignGroup
-[15]: https://pkg.go.dev/github.com/twmb/franz-go/pkg/kgo#Client.AssignGroupTransactSession
+[13]: https://pkg.go.dev/github.com/twmb/franz-go/pkg/kgo#Client.ConsumeTopics
+[a]: https://pkg.go.dev/github.com/twmb/franz-go/pkg/kgo#Client.ConsumePartitions
+[14]: https://pkg.go.dev/github.com/twmb/franz-go/pkg/kgo#Client.ConsumerGroup
+[15]: https://pkg.go.dev/github.com/twmb/franz-go/pkg/kgo#NewGroupTransactSession
 
 ### Consumer groups
 

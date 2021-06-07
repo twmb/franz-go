@@ -16,7 +16,7 @@ func startProducing(ctx context.Context, brokers []string, topic string) {
 	client, err := kgo.NewClient(
 		kgo.SeedBrokers(brokers...),
 		kgo.TransactionalID(producerId),
-		kgo.ProduceTopic(topic),
+		kgo.DefaultProduceTopic(topic),
 	)
 	if err != nil {
 		fmt.Printf("error initializing Kafka producer client: %v\n", err)

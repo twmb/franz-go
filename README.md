@@ -36,7 +36,13 @@ Here's a basic overview of producing and consuming:
 
 ```go
 seeds := []string{"localhost:9092"}
-cl, err := kgo.NewClient(kgo.SeedBrokers(seeds...))
+// One client can both produce and consume!
+// Consuming can either be direct (no consumer group), or through a group. Below, we use a group.
+cl, err := kgo.NewClient(
+	kgo.SeedBrokers(seeds...),
+	kgo.ConsumerGroup("my-group-identifier"),
+	kgo.ConsumeTopics("foo"),
+)
 if err != nil {
 	panic(err)
 }
@@ -65,8 +71,6 @@ if err := cl.ProduceSync(ctx, record).FirstErr(); err != nil {
 }
 
 // 2.) Consuming messages from a topic
-// Consuming can either be direct (no consumer group), or through a group. Below, we use a group.
-cl.AssignGroup("my-group-identifier", kgo.GroupTopics("foo"))
 for {
 	fetches := cl.PollFetches(ctx)
 	if errs := fetches.Errors(); len(errs) > 0 {
