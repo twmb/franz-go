@@ -481,9 +481,9 @@ func RetryTimeout(t func(int16) time.Duration) Opt {
 	return clientOpt{func(cfg *cfg) { cfg.retryTimeout = t }}
 }
 
-// AutoTopicCreation enables topics to be auto created if they do
+// AllowAutoTopicCreation enables topics to be auto created if they do
 // not exist when fetching their metadata.
-func AutoTopicCreation() Opt {
+func AllowAutoTopicCreation() Opt {
 	return clientOpt{func(cfg *cfg) { cfg.allowAutoTopicCreation = true }}
 }
 
