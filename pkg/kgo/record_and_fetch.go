@@ -99,8 +99,10 @@ type Record struct {
 
 	// Partition is the partition that a record is written to.
 	//
-	// For producing, this is left unset. This will be set by the client
-	// as appropriate.
+	// For producing, this is left unset. This will be set by the client as
+	// appropriate. Alternatively, you can use the ManualPartitioner, which
+	// makes it such that this field is always the field chosen when
+	// partitioning (i.e., you partition manually ahead of time).
 	Partition int32
 
 	// Attrs specifies what attributes were on this record.

@@ -206,7 +206,10 @@ func (f *FirstErrPromise) Err() error {
 //
 // If the record has an empty Topic field, the client will use a default topic
 // if the client was configured with one via ProduceTopic, otherwise the record
-// will be failed immediately.
+// will be failed immediately. The Partition field is ignored (setting it does
+// not set which partition will be produced to), but, because the field is set
+// only when finishing a record successfully, you can set the Partition field
+// yourself and use the ManualPartitioner to obey the Partition field.
 //
 // If the record is too large to fit in a batch on its own in a produce
 // request, the promise will be called with kerr.MessageTooLarge and there will

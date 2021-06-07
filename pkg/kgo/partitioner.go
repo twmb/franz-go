@@ -7,6 +7,10 @@ import (
 
 // Partitioner creates topic partitioners to determine which partition messages
 // should be sent to.
+//
+// Note that a record struct is unmodified (minus a potential default topic)
+// from producing through partitioning, so you can set fields in the record
+// struct before producing to aid in partitioning with a custom partitioner.
 type Partitioner interface {
 	// forTopic returns a partitioner for an individual topic. It is
 	// guaranteed that only one record will use the an individual topic's
@@ -28,6 +32,52 @@ type TopicPartitioner interface {
 	// Partition determines, among a set of n partitions, which index should
 	// be chosen to use for the partition for r.
 	Partition(r *Record, n int) int
+}
+
+// BasicConsistentPartitioner wraps a single function to provide a Partitioner
+// and TopicPartitioner (that function is essentially a combination of
+// Partitioner.ForTopic and TopicPartitioner.Partition).
+//
+// As a minimal example, if you do not care about the topic and you set the
+// partition before producing:
+//
+//     kgo.BasicConsistentPartitioner(func(topic) func(*Record, int) int {
+//             return func(r *Record, n int) int {
+//                     return int(r.Partition)
+//             }
+//     })
+func BasicConsistentPartitioner(partition func(string) func(r *Record, n int) int) Partitioner {
+	return &basicPartitioner{partition}
+}
+
+type basicPartitioner struct {
+	fn func(string) func(*Record, int) int
+}
+
+func (b *basicPartitioner) ForTopic(t string) TopicPartitioner {
+	return &basicTopicPartitioner{b.fn(t)}
+}
+
+type basicTopicPartitioner struct {
+	fn func(*Record, int) int
+}
+
+func (*basicTopicPartitioner) OnNewBatch()                      {}
+func (*basicTopicPartitioner) RequiresConsistency(*Record) bool { return true }
+func (b *basicTopicPartitioner) Partition(r *Record, n int) int { return b.fn(r, n) }
+
+// ManualPartitioner is a partitioner that simply returns the Partition field
+// that is already set on any record.
+//
+// Any record with an invalid partition will be immediately failed. This
+// partitioner is simply the partitioner that is demonstrated in the
+// BasicConsistentPartitioner documentation.
+func ManualPartitioner() Partitioner {
+	return BasicConsistentPartitioner(func(string) func(*Record, int) int {
+		return func(r *Record, _ int) int {
+			return int(r.Partition)
+		}
+	})
 }
 
 // StickyPartitioner is the same as StickyKeyPartitioner, but with no logic to
