@@ -328,12 +328,6 @@ func ClientID(id string) Opt {
 	return clientOpt{func(cfg *cfg) { cfg.id = &id }}
 }
 
-// DisableClientID sets the client ID to null for all requests sent to Kafka
-// brokers, overriding the default "kgo".
-func DisableClientID() Opt {
-	return clientOpt{func(cfg *cfg) { cfg.id = nil }}
-}
-
 // SoftwareNameAndVersion sets the client software name and version that will
 // be sent to Kafka as part of the ApiVersions request as of Kafka 2.4.0,
 // overriding the default "kgo" and internal version number.
