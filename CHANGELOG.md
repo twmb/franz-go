@@ -53,7 +53,7 @@ The simpler fixes:
 - Change `AutoTopicCreate` to `AllowAutoTopicCreate`
 - Change `ProduceTopic` to `DefaultProduceTopic`
 - Remove `BrokerConnDeadRetries` and `DisableClientID` if you used them (unlikely)
-- Add `Broker` in any hook (`OnConnect` => `OnBrokerConnec`, etc)
+- Add `Broker` in any hook (`OnConnect` => `OnBrokerConnect`, etc)
 
 If directly consuming, perform the following changes to options and move the options to `NewClient`:
 
@@ -72,16 +72,16 @@ If using a group transaction session, perform the above group changes, and use `
 
 ## Changes
 
-- [`6a048db`](github.com/twmb/franz-go/commit/6a048db) **breaking API** hooks: namespace all hooks with Broker
-- [`8498383`](github.com/twmb/franz-go/commit/8498383) **breaking API** client: large breaking change for consuming APIs
-- [`45004f8`](github.com/twmb/franz-go/commit/45004f8) **breaking API** config: rename ProduceTopic to DefaultProduceTopic, doc changes
-- [`aa849a1`](github.com/twmb/franz-go/commit/aa849a1) **breaking API** options: prefix AutoTopicCreation with Allow
-- [`be6adf5`](github.com/twmb/franz-go/commit/be6adf5) **breaking API** client: remove DisableClientID option
-- [`68b1a04`](github.com/twmb/franz-go/commit/68b1a04) **breaking API** client: remove BrokerConnDeadRetries option; drop retries to 20
-- [`88e131d`](github.com/twmb/franz-go/commit/88e131d) **bugfix** kerberos: fix off-by-one in asn1LengthBytes (but it appears this is still not fully working)
-- [`20e0f66`](github.com/twmb/franz-go/commit/20e0f66) **feature** Fetches: add EachError, clarifying documentation
-- [`085ad30`](github.com/twmb/franz-go/commit/085ad30) metadata: limit retries, bump produce load errors on failure
-- [`b26489f`](github.com/twmb/franz-go/commit/b26489f) config: change default non-produce retries from unlimited to 30 (later commit just above changes down to 20)
+- [`6a048db`](https://github.com/twmb/franz-go/commit/6a048db) **breaking API** hooks: namespace all hooks with Broker
+- [`8498383`](https://github.com/twmb/franz-go/commit/8498383) **breaking API** client: large breaking change for consuming APIs
+- [`45004f8`](https://github.com/twmb/franz-go/commit/45004f8) **breaking API** config: rename ProduceTopic to DefaultProduceTopic, doc changes
+- [`aa849a1`](https://github.com/twmb/franz-go/commit/aa849a1) **breaking API** options: prefix AutoTopicCreation with Allow
+- [`be6adf5`](https://github.com/twmb/franz-go/commit/be6adf5) **breaking API** client: remove DisableClientID option
+- [`68b1a04`](https://github.com/twmb/franz-go/commit/68b1a04) **breaking API** client: remove BrokerConnDeadRetries option; drop retries to 20
+- [`88e131d`](https://github.com/twmb/franz-go/commit/88e131d) **bugfix** kerberos: fix off-by-one in asn1LengthBytes (but it appears this is still not fully working)
+- [`20e0f66`](https://github.com/twmb/franz-go/commit/20e0f66) **feature** Fetches: add EachError, clarifying documentation
+- [`085ad30`](https://github.com/twmb/franz-go/commit/085ad30) metadata: limit retries, bump produce load errors on failure
+- [`b26489f`](https://github.com/twmb/franz-go/commit/b26489f) config: change default non-produce retries from unlimited to 30 (later commit just above changes down to 20)
 
 v0.7.9
 ===
