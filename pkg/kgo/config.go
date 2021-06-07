@@ -44,8 +44,12 @@ func (producerOpt) producerOpt()       {}
 func (consumerOpt) consumerOpt()       {}
 
 type cfg struct {
-	// ***GENERAL SECTION***
-	id                  *string
+
+	/////////////////////
+	// GENERAL SECTION //
+	/////////////////////
+
+	id                  *string // client ID
 	dialFn              func(context.Context, string, string) (net.Conn, error)
 	connTimeoutOverhead time.Duration
 	connIdleTimeout     time.Duration
@@ -75,7 +79,10 @@ type cfg struct {
 
 	hooks hooks
 
-	// ***PRODUCER SECTION***
+	//////////////////////
+	// PRODUCER SECTION //
+	//////////////////////
+
 	txnID              *string
 	txnTimeout         time.Duration
 	acks               Acks
@@ -96,7 +103,10 @@ type cfg struct {
 	stopOnDataLoss bool
 	onDataLoss     func(string, int32)
 
-	// ***CONSUMER SECTION***
+	//////////////////////
+	// CONSUMER SECTION //
+	//////////////////////
+
 	maxWait        int32
 	minBytes       int32
 	maxBytes       int32
@@ -320,7 +330,9 @@ func defaultCfg() cfg {
 	}
 }
 
-// ********** CLIENT CONFIGURATION **********
+//////////////////////////
+// CLIENT CONFIGURATION //
+//////////////////////////
 
 // ClientID uses id for all requests sent to Kafka brokers, overriding the
 // default "kgo".
@@ -551,14 +563,16 @@ func WithHooks(hooks ...Hook) Opt {
 	return clientOpt{func(cfg *cfg) { cfg.hooks = append(cfg.hooks, hooks...) }}
 }
 
-// ********** PRODUCER CONFIGURATION **********
+////////////////////////////
+// PRODUCER CONFIGURATION //
+////////////////////////////
 
-// ProduceTopic sets the default topic to produce to if the topic field is
-// empty in a kgo.Record.
+// DefaultProduceTopic sets the default topic to produce to if the topic field
+// is empty in a Record.
 //
 // If this option is not used, if a record has an empty topic, the record
 // cannot be produced and will be failed immediately.
-func ProduceTopic(t string) ProducerOpt {
+func DefaultProduceTopic(t string) ProducerOpt {
 	return producerOpt{func(cfg *cfg) { cfg.defaultProduceTopic = t }}
 }
 
@@ -597,8 +611,8 @@ func RequiredAcks(acks Acks) ProducerOpt {
 // transient network problems.
 //
 // Idempotent production is strictly a win, but does require the
-// IDEMPOTENT_WRITE permission on CLUSTER, and not all clients can have that
-// permission.
+// IDEMPOTENT_WRITE permission on CLUSTER (pre Kafka 3.0), and not all clients
+// can have that permission.
 //
 // This option is incompatible with specifying a transactional id.
 func DisableIdempotentWrite() ProducerOpt {
@@ -758,7 +772,7 @@ func RecordTimeout(timeout time.Duration) ProducerOpt {
 // After producing a batch, you must commit what you consumed. Auto committing
 // offsets is disabled during transactional consuming / producing.
 //
-// Note that, unless using Kafka 2.5.0, a consumer group rebalance may be
+// Note that unless using Kafka 2.5.0, a consumer group rebalance may be
 // problematic. Production should finish and be committed before the client
 // rejoins the group. It may be safer to use an eager group balancer and just
 // abort the transaction. Alternatively, any time a partition is revoked, you
@@ -787,7 +801,9 @@ func TransactionTimeout(timeout time.Duration) ProducerOpt {
 	return producerOpt{func(cfg *cfg) { cfg.txnTimeout = timeout }}
 }
 
-// ********** CONSUMER CONFIGURATION **********
+////////////////////////////
+// CONSUMER CONFIGURATION //
+////////////////////////////
 
 // FetchMaxWait sets the maximum amount of time a broker will wait for a
 // fetch response to hit the minimum number of required bytes before returning,
@@ -798,20 +814,24 @@ func FetchMaxWait(wait time.Duration) ConsumerOpt {
 	return consumerOpt{func(cfg *cfg) { cfg.maxWait = int32(wait.Milliseconds()) }}
 }
 
-// FetchMaxBytes sets the maximum amount of bytes a broker will try to
-// send during a fetch, overriding the default 50MiB. Note that brokers may not
-// obey this limit if it has records larger than this limit. Also note that
-// this client sends a fetch to each broker concurrently, meaning the client
-// will buffer up to <brokers * max bytes> worth of memory.
+// FetchMaxBytes sets the maximum amount of bytes a broker will try to send
+// during a fetch, overriding the default 50MiB. Note that brokers may not obey
+// this limit if it has records larger than this limit. Also note that this
+// client sends a fetch to each broker concurrently, meaning the client will
+// buffer up to <brokers * max bytes> worth of memory.
 //
 // This corresponds to the Java fetch.max.bytes setting.
 //
 // If bumping this, consider bumping BrokerMaxReadBytes.
+//
+// If what you are consuming is compressed, and compressed well, it is strongly
+// recommended to set this option so that decompression does not eat all of
+// your RAM.
 func FetchMaxBytes(b int32) ConsumerOpt {
 	return consumerOpt{func(cfg *cfg) { cfg.maxBytes = b }}
 }
 
-// FetchMinBYtes sets the minimum amount of bytes a broker will try to send
+// FetchMinBytes sets the minimum amount of bytes a broker will try to send
 // during a fetch, overriding the default 1 byte.
 //
 // With the default of 1, data is sent as soon as it is available. By bumping
@@ -862,7 +882,8 @@ func AllowedConcurrentFetches(n int) ConsumerOpt {
 }
 
 // ConsumeResetOffset sets the offset to restart consuming from when a
-// partition has no commits (for groups) or when a fetch sees an
+// partition has no commits (for groups) or when beginning to consume a
+// partition (for direct partition consuming), or when a fetch sees an
 // OffsetOutOfRange error, overriding the default ConsumeStartOffset.
 func ConsumeResetOffset(offset Offset) ConsumerOpt {
 	return consumerOpt{func(cfg *cfg) { cfg.resetOffset = offset }}
