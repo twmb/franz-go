@@ -1,3 +1,88 @@
+v0.8.0
+===
+
+This is a **major breaking release**. This release is intended to be a release
+candidate for a v1.0.0 tag; thus, I wanted to nail down all API breakage now to
+help prevent future breakage and to ensure a path towards 1.0 stabilization. I
+do not expect major API changes after this tag, and I intend to release v1.0.0
+within a month of this tag.
+
+## Why the breakage?
+
+It never felt "right" that to consume, you needed to first create a client, and
+then assign something to consume. One large reason that `AssignXyz` existed was
+so that you could reassign what was being consumed at runtime. In fact, you
+could consume from a group, then leave and switch to direct partition
+consuming, and then switch back to consuming from a different group. This
+flexibility was unnecessary, and assigning after the client was initialized was
+awkward. Worse, allowing these reassignments necessitated extreme care to not
+have race conditions or deadlocks. This was the source of many bugs in the
+past, and while they have since been ironed out, we may as well just remove
+them as a possibility while on the path towards v1.0.
+
+Because we have this one major breakage already, I decided it was a good time
+to clean up the other not-so-great aspects of the code.
+
+- All current hooks have been renamed, because `OnE2E` being dedicated to
+  brokers does not leave room for a different `E2E` hook in the future that is
+not specific to brokers. Instead, if we namespace the current broker hooks, we
+can namespace future hooks as well, and nothing will look weird. More
+beneficially, in user code, the hook will be more self describing.
+
+- One now redundant option has been removed (`BrokerConnDeadRetries`), and one
+  useless option has been removed (`DisableClientID`).
+
+Moving consumer options to the client required changing the names of some
+consumer options, merging some duplicated group / direct options, adding
+`*Client` as an argument to some callbacks, and cleaning up some consume APIs.
+
+From there on, the breakages get more minor: `AutoTopicCreation` now is
+`AllowAutoTopicCreation`, and `ProduceTopic` is now `DefaultPRoduceTopic`.
+
+## Upgrade considerations
+
+Due to the number of breaking changes, upgrading may _look_ more difficult than
+it actually is. I've updated every example in this repo and all code usage
+in my corresponding [`kcl`](github.com/twmb/kcl) repo, these updates were
+completed relatively quickly.
+
+## tl;dr of upgrading
+
+The simpler fixes:
+
+- Change `AutoTopicCreate` to `AllowAutoTopicCreate`
+- Change `ProduceTopic` to `DefaultProduceTopic
+- Remove `BrokerConnDeadRetries` and `DisableClientID` if you used them (unlikely)
+- Add `Broker` in any hook (`OnConnect` => `OnBrokerConnec`, etc)
+
+If directly consuming, perform the following changes to options and move the options to `NewClient`:
+
+- Drop the offset argument from `ConsumeTopics`
+- Move `ConsumePartitions`
+- Change `ConsumeTopicsRegex` to `ConsumeRegex`
+- Delete `AssignPartitions`
+
+If group consuming, perform the following changes to options and move the options to `NewClient`:
+
+- Add `ConsumerGroup` with the group argument you used in `AssignGroup`
+- Change `GroupTopics` to `ConsumeTopics`
+- Add a `*Client` argument to any of `OnAssigned`, `OnRevoked`, `OnLost`, and `CommitCallback`
+
+If using a group transaction session, perform the above group changes, and use `NewGroupTransactSession`, rather than `NewClient`.
+
+## Changes
+
+- [`6a048db`](github.com/twmb/franz-go/commit/6a048db) **breaking API** hooks: namespace all hooks with Broker
+- [`8498383`](github.com/twmb/franz-go/commit/8498383) **breaking API** client: large breaking change for consuming APIs
+- [`45004f8`](github.com/twmb/franz-go/commit/45004f8) **breaking API** config: rename ProduceTopic to DefaultProduceTopic, doc changes
+- [`aa849a1`](github.com/twmb/franz-go/commit/aa849a1) **breaking API** options: prefix AutoTopicCreation with Allow
+- [`be6adf5`](github.com/twmb/franz-go/commit/be6adf5) **breaking API** client: remove DisableClientID option
+- [`68b1a04`](github.com/twmb/franz-go/commit/68b1a04) **breaking API** client: remove BrokerConnDeadRetries option; drop retries to 20
+- [`88e131d`](github.com/twmb/franz-go/commit/88e131d) **bugfix** kerberos: fix off-by-one in asn1LengthBytes (but it appears this is still not fully working)
+- [`20e0f66`](github.com/twmb/franz-go/commit/20e0f66) **feature** Fetches: add EachError, clarifying documentation
+- [`085ad30`](github.com/twmb/franz-go/commit/085ad30) metadata: limit retries, bump produce load errors on failure
+- [`b26489f`](github.com/twmb/franz-go/commit/b26489f) config: change default non-produce retries from unlimited to 30 (later commit just above changes down to 20)
+
 v0.7.9
 ===
 
