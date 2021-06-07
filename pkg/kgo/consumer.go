@@ -18,7 +18,8 @@ type Offset struct {
 	currentEpoch int32 // set by us when mapping offsets to brokers
 }
 
-// NewOffsetcreates and returns an offset to use in AssignPartitions.
+// NewOffset creates and returns an offset to use in ConsumePartitions or
+// ConsumeResetOffset.
 //
 // The default offset begins at the end.
 func NewOffset() Offset {
@@ -81,16 +82,12 @@ func (o Offset) At(at int64) Offset {
 type consumer struct {
 	cl *Client
 
-	// assignMu is grabbed when setting v (AssignGroup, AssignDirect, or Close)
 	// mu is grabbed when
 	//  - polling fetches, for quickly draining sources / updating group uncommitted
 	//  - calling assignPartitions (group / direct updates)
-	//
-	// v is atomic for non-locking reads in a few instances where that
-	// is preferrable / allowed.
-	assignMu sync.Mutex
-	mu       sync.Mutex
-	v        atomic.Value // *consumerValue
+	mu sync.Mutex
+	d  *directConsumer // if non-nil, we are consuming partitions directly
+	g  *groupConsumer  // if non-nil, we are consuming as a group member
 
 	// On metadata update, if the consumer is set (direct or group), the
 	// client begins a goroutine that updates the consumer kind's
@@ -98,7 +95,8 @@ type consumer struct {
 	//
 	// This is done in a goroutine to not block the metadata loop, because
 	// the update **could** wait on a group consumer leaving if a
-	// concurrent AssignGroup is called (very low risk vector).
+	// concurrent LeaveGroup is called, or if restarting a session takes
+	// just a little bit of time.
 	//
 	// The update realistically should be instantaneous, but if it is slow,
 	// some metadata updates could pile up. We loop with our atomic work
@@ -134,59 +132,36 @@ func (u *usedCursors) use(c *cursor) {
 	(*u)[c] = struct{}{}
 }
 
-var consumerUnsetSentinel = new(consumerValue)
-var consumerDeadSentinel = new(consumerValue)
-
-func init() {
-	consumerUnsetSentinel.v = &consumerUnsetSentinel
-	consumerDeadSentinel.v = &consumerDeadSentinel
-}
-
-type consumerValue struct {
-	// Options:
-	//  - consumerUnsetSentinel
-	//  - *directConsumer
-	//  - *groupConsumer
-	//  - consumerDeadSentinel
-	v interface{}
-}
-
 func (c *consumer) init(cl *Client) {
 	c.cl = cl
 	c.sourcesReadyCond = sync.NewCond(&c.sourcesReadyMu)
-	c.v.Store(consumerUnsetSentinel)
+
+	if len(cl.cfg.topics) == 0 {
+		return // not consuming
+	}
+
+	defer cl.triggerUpdateMetadata(true) // we definitely want to trigger a metadata update
+
+	if len(cl.cfg.group) == 0 {
+		c.initDirect()
+	} else {
+		c.initGroup()
+	}
 }
 
-func (c *consumer) loadKind() interface{} { return c.v.Load().(*consumerValue).v }
-func (c *consumer) loadGroup() (*groupConsumer, bool) {
-	g, ok := c.loadKind().(*groupConsumer)
-	return g, ok
-}
-
-func (c *consumer) storeDirect(d *directConsumer) { c.v.Store(&consumerValue{v: d}) } // while locked
-func (c *consumer) storeGroup(g *groupConsumer)   { c.v.Store(&consumerValue{v: g}) } // while locked
-
-func (c *consumer) kill() (wasDead bool) {
-	c.assignMu.Lock()
-	wasDead, wait := c.unset()
-	c.v.Store(consumerDeadSentinel)
-	c.assignMu.Unlock()
-
-	wait()
-	return wasDead
-}
-
-func (c *consumer) unsetAndWait() (wasDead bool) {
-	wasDead, wait := c.unset()
-	wait()
-	return wasDead
+func (c *consumer) consuming() bool {
+	return c.g != nil || c.d != nil
 }
 
 // unset, called under the assign mu, transitions the consumer to the unset
 // state, invalidating old assignments and leaving a group if it was in one.
 //
-// This returns a function to wait for a group to be left, if in one.
-func (c *consumer) unset() (wasDead bool, wait func()) {
+// If in a group, this waits for the leave group to finish before returning.
+func (c *consumer) unset() {
+	if !c.consuming() {
+		return
+	}
+
 	// Unsetting means all old cursors are useless. Before we return, we
 	// delete all old cursors. This is especially important in the context
 	// of a new assignment, which will create new cursors that may
@@ -208,22 +183,17 @@ func (c *consumer) unset() (wasDead bool, wait func()) {
 		}
 	})
 
-	c.mu.Lock()
+	wait := func() {} // wait AFTER we unlock
+	defer func() { wait() }()
+
+	c.mu.Lock() // lock for assign
 	defer c.mu.Unlock()
 
 	c.assignPartitions(nil, assignInvalidateAll, noTopicsPartitions)
 
-	prior := c.loadKind()
-	wasDead = prior == consumerDeadSentinel
-	if !wasDead {
-		c.v.Store(consumerUnsetSentinel)
+	if c.g != nil {
+		wait = c.g.leave()
 	}
-
-	wait = func() {}
-	if g, ok := prior.(*groupConsumer); ok {
-		wait = g.leave()
-	}
-	return wasDead, wait
 }
 
 // addSourceReadyForDraining tracks that a source needs its buffered fetch
@@ -329,8 +299,8 @@ func (cl *Client) PollRecords(ctx context.Context, maxPollRecords int) Fetches {
 		// session to start. If we returned stale fetches that did not
 		// have their uncommitted offset tracked, then we would allow
 		// duplicates.
-		if g, ok := c.loadGroup(); ok {
-			g.updateUncommitted(realFetches)
+		if c.g != nil {
+			c.g.updateUncommitted(realFetches)
 		}
 	}
 
@@ -503,7 +473,7 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how
 	for topic, partitions := range assignments {
 		topicPartitions := topics.loadTopic(topic) // should be non-nil
 		if topicPartitions == nil {
-			c.cl.cfg.logger.Log(LogLevelError, "BUG! consumer was assigned topic that we did not ask for in AssignGroup nor AssignDirect, skipping!", "topic", topic)
+			c.cl.cfg.logger.Log(LogLevelError, "BUG! consumer was assigned topic that we did not ask for in ConsumeTopics nor ConsumePartitions, skipping!", "topic", topic)
 			continue
 		}
 
@@ -561,10 +531,7 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how
 }
 
 func (c *consumer) doOnMetadataUpdate() {
-	switch c.loadKind().(type) {
-	case *directConsumer:
-	case *groupConsumer:
-	default:
+	if !c.consuming() {
 		return
 	}
 
@@ -578,13 +545,13 @@ func (c *consumer) doOnMetadataUpdate() {
 			c.mu.Lock()
 			defer c.mu.Unlock()
 
-			switch t := c.loadKind().(type) {
-			case *directConsumer:
-				if new := t.findNewAssignments(); len(new) > 0 {
-					c.assignPartitions(new, assignWithoutInvalidating, t.tps)
+			switch {
+			case c.d != nil:
+				if new := c.d.findNewAssignments(); len(new) > 0 {
+					c.assignPartitions(new, assignWithoutInvalidating, c.d.tps)
 				}
-			case *groupConsumer:
-				t.findNewAssignments()
+			case c.g != nil:
+				c.g.findNewAssignments()
 			}
 
 			go c.loadSession().doOnMetadataUpdate()

@@ -405,12 +405,7 @@ func (cl *Client) updateBrokers(brokers []kmsg.MetadataResponseBroker) {
 // If you are group consuming and have overridden the default OnRevoked, you
 // must manually commit offsets before closing the client.
 func (cl *Client) Close() {
-	// First, kill the consumer. This waits for the consumer to unset
-	// gracefully, ensuring we leave groups properly, and then stores the
-	// dead consumer, meaning no more assigns can happen.
-	if wasDead := cl.consumer.kill(); wasDead {
-		return // client was already closed
-	}
+	cl.LeaveGroup()
 
 	// Now we kill the client context and all brokers, ensuring all
 	// requests fail. This will finish all producer callbacks and

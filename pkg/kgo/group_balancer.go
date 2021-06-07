@@ -256,13 +256,13 @@ func sortJoinMemberPtrs(members []*kmsg.JoinGroupResponseMember) {
 }
 
 func (g *groupConsumer) findBalancer(from, proto string) (GroupBalancer, error) {
-	for _, b := range g.balancers {
+	for _, b := range g.cfg.balancers {
 		if b.ProtocolName() == proto {
 			return b, nil
 		}
 	}
 	var ours []string
-	for _, b := range g.balancers {
+	for _, b := range g.cfg.balancers {
 		ours = append(ours, b.ProtocolName())
 	}
 	g.cl.cfg.logger.Log(LogLevelError, fmt.Sprintf("%s could not find Kafka-chosen balancer", from), "kafka_choice", proto, "our_set", strings.Join(ours, ", "))

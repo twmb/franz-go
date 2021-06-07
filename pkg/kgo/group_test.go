@@ -115,16 +115,15 @@ func (c *testConsumer) goGroupETL(etlsBeforeQuit int) {
 
 func (c *testConsumer) etl(etlsBeforeQuit int) {
 	defer c.wg.Done()
-	cl, _ := NewClient(WithLogger(testLogger()))
-	defer cl.Close()
 
-	opts := []GroupOpt{
-		GroupTopics(c.consumeFrom),
+	opts := []Opt{
+		WithLogger(testLogger()),
+		ConsumerGroup(c.group),
+		ConsumeTopics(c.consumeFrom),
 		Balancers(c.balancer),
 	}
 
 	if etlsBeforeQuit >= 0 {
-
 		// If we quit before consuming to the end, the behavior we are
 		// triggering is to poll a batch and _not_ commit. Thus, if we
 		// have etlsBeforeQuit, we do _not_ commit on leave, and so we
@@ -132,23 +131,22 @@ func (c *testConsumer) etl(etlsBeforeQuit int) {
 		//
 		// However, we still want to commit on valid rebalances, so we
 		// set that option, BUT we do not want to commit on lost, which
-		// triggers when we leave,when want to flush to avoid an unnecessary dead
-		// broker errors for unfinished produces.
-
+		// triggers when we leave.
 		opts = append(opts,
 			DisableAutoCommit(),
-			OnRevoked(func(ctx context.Context, _ map[string][]int32) {
+			OnRevoked(func(ctx context.Context, cl *Client, _ map[string][]int32) {
 				cl.BlockingCommitOffsets(
 					ctx,
 					cl.UncommittedOffsets(),
 					nil,
 				)
 			}),
-			OnLost(func(context.Context, map[string][]int32) {}),
+			OnLost(func(context.Context, *Client, map[string][]int32) {}),
 		)
 	}
 
-	cl.AssignGroup(c.group, opts...)
+	cl, _ := NewClient(opts...)
+	defer cl.Close()
 
 	defer func() {
 		defer cl.LeaveGroup()

@@ -40,9 +40,9 @@ type GroupTransactSession struct {
 	lostCh    chan struct{} // closed once when lost is set; reset after End
 }
 
-// AssignGroupTransactSession is exactly the same as AssignGroup, but wraps the
-// group consumer's OnRevoke with a function that will ensure a transaction
-// session is correctly aborted.
+// NewGroupTransactSession is exactly the same as NewClient, but wraps the
+// client's OnRevoked / OnLost to ensure that transactions are correctly
+// aborted whenever necessary so as to properly provide EOS.
 //
 // When ETLing in a group in a transaction, if a rebalance happens before the
 // transaction is ended, you either (a) must block the rebalance from finishing
@@ -62,66 +62,92 @@ type GroupTransactSession struct {
 // rebalance timeout, but this is just one request with no cpu logic. With a
 // proper rebalance timeout, this single request will not fail and the commit
 // will succeed properly.
-func (cl *Client) AssignGroupTransactSession(group string, opts ...GroupOpt) *GroupTransactSession {
-	cl.AssignGroup(group, opts...)
-
+func NewGroupTransactSession(opts ...Opt) (*GroupTransactSession, error) {
 	s := &GroupTransactSession{
-		cl: cl,
-
 		revokedCh: make(chan struct{}),
 		lostCh:    make(chan struct{}),
 	}
 
-	g, ok := cl.consumer.loadGroup()
-	if !ok {
-		return nil // concurrent Assign; users should not do this
-	}
-	g.mu.Lock()
-	defer g.mu.Unlock()
+	var noGroup error
 
-	s.cooperative = g.cooperative
-
-	userRevoked := g.onRevoked
-	g.onRevoked = func(ctx context.Context, rev map[string][]int32) {
-		s.failMu.Lock()
-		defer s.failMu.Unlock()
-		if s.revoked {
+	// We append one option, which will get applied last.  Because it is
+	// applied last, we can execute some logic and override some existing
+	// options.
+	opts = append(opts, groupOpt{func(cfg *cfg) {
+		if cfg.group == "" {
+			cfg.seedBrokers = nil // force a validation error
+			noGroup = errors.New("missing required group")
 			return
 		}
 
-		if s.cooperative && len(rev) == 0 && !s.revoked {
-			cl.cfg.logger.Log(LogLevelInfo, "transact session in on_revoke with nothing to revoke; allowing next commit")
-		} else {
-			cl.cfg.logger.Log(LogLevelInfo, "transact session in on_revoke; aborting next commit if we are currently in a transaction")
-			s.revoked = true
-			close(s.revokedCh)
+		s.cooperative = cfg.cooperative()
+
+		userRevoked := cfg.onRevoked
+		cfg.onRevoked = func(ctx context.Context, cl *Client, rev map[string][]int32) {
+			s.failMu.Lock()
+			defer s.failMu.Unlock()
+			if s.revoked {
+				return
+			}
+
+			if s.cooperative && len(rev) == 0 && !s.revoked {
+				cl.cfg.logger.Log(LogLevelInfo, "transact session in on_revoke with nothing to revoke; allowing next commit")
+			} else {
+				cl.cfg.logger.Log(LogLevelInfo, "transact session in on_revoke; aborting next commit if we are currently in a transaction")
+				s.revoked = true
+				close(s.revokedCh)
+			}
+
+			if userRevoked != nil {
+				userRevoked(ctx, cl, rev)
+			}
 		}
 
-		if userRevoked != nil {
-			userRevoked(ctx, rev)
+		userLost := cfg.onLost
+		cfg.onLost = func(ctx context.Context, cl *Client, lost map[string][]int32) {
+			s.failMu.Lock()
+			defer s.failMu.Unlock()
+			if s.lost {
+				return
+			}
+
+			cl.cfg.logger.Log(LogLevelInfo, "transact session in on_lost; aborting next commit if we are currently in a transaction")
+			s.lost = true
+			close(s.lostCh)
+
+			if userLost != nil {
+				userLost(ctx, cl, lost)
+			} else if userRevoked != nil {
+				userRevoked(ctx, cl, lost)
+			}
 		}
+	}})
+
+	cl, err := NewClient(opts...)
+	if err != nil {
+		if noGroup != nil {
+			err = noGroup
+		}
+		return nil, err
 	}
+	s.cl = cl
+	return s, nil
+}
 
-	userLost := g.onLost
-	g.onLost = func(ctx context.Context, lost map[string][]int32) {
-		s.failMu.Lock()
-		defer s.failMu.Unlock()
-		if s.lost {
-			return
-		}
+// Client returns the underlying client that this transact session wraps.  This
+// can be useful for functions that require a client, such as raw requests. The
+// returned client should not be used to manage transactions (leave that to the
+// GroupTransactSession).
+func (s *GroupTransactSession) Client() *Client {
+	return s.cl
+}
 
-		cl.cfg.logger.Log(LogLevelInfo, "transact session in on_lost; aborting next commit if we are currently in a transaction")
-		s.lost = true
-		close(s.lostCh)
-
-		if userLost != nil {
-			userLost(ctx, lost)
-		} else if userRevoked != nil {
-			userRevoked(ctx, lost)
-		}
-	}
-
-	return s
+// Close is a wrapper around Client.Close, with the exact same semantics.
+// Please refer to that function's documentation.
+//
+// This function must be called to leave the group before shutting down.
+func (s *GroupTransactSession) Close() {
+	s.cl.Close()
 }
 
 // PollFetches is a wrapper around Client.PollFetches, with the exact same
@@ -442,8 +468,7 @@ func (cl *Client) EndTransaction(ctx context.Context, commit TransactionEndTry) 
 	// partition to the transaction. Thus, if we added offsets, then we
 	// also produced.
 	var anyAdded bool
-	g, ok := cl.consumer.loadGroup()
-	if ok {
+	if g := cl.consumer.g; g != nil {
 		if g.offsetsAddedToTxn {
 			g.offsetsAddedToTxn = false
 			anyAdded = true
@@ -628,8 +653,8 @@ func (cl *Client) commitTransactionOffsets(
 	}
 	cl.producer.txnMu.Unlock()
 
-	g, ok := cl.consumer.loadGroup()
-	if !ok {
+	g := cl.consumer.g
+	if g == nil {
 		onDone(new(kmsg.TxnOffsetCommitRequest), new(kmsg.TxnOffsetCommitResponse), errNotGroup)
 		return nil
 	}
@@ -642,7 +667,7 @@ func (cl *Client) commitTransactionOffsets(
 	defer g.mu.Unlock()
 
 	if !g.offsetsAddedToTxn {
-		if err := cl.addOffsetsToTxn(g.ctx, g.id); err != nil {
+		if err := cl.addOffsetsToTxn(g.ctx, g.cfg.group); err != nil {
 			if onDone != nil {
 				onDone(nil, nil, err)
 			}
@@ -734,12 +759,12 @@ func (g *groupConsumer) commitTxn(
 	id, epoch, _ := g.cl.producerID()
 	req := &kmsg.TxnOffsetCommitRequest{
 		TransactionalID: *g.cl.cfg.txnID,
-		Group:           g.id,
+		Group:           g.cfg.group,
 		ProducerID:      id,
 		ProducerEpoch:   epoch,
 		Generation:      g.generation,
 		MemberID:        g.memberID,
-		InstanceID:      g.instanceID,
+		InstanceID:      g.cfg.instanceID,
 	}
 
 	if ctx.Done() != nil {

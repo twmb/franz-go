@@ -1,165 +1,80 @@
 package kgo
 
-import "regexp"
-
-// DirectConsumeOpt is an option to configure direct topic / partition consuming.
-type DirectConsumeOpt interface {
-	apply(*directConsumer)
-}
-
-type directConsumeOpt struct {
-	fn func(cfg *directConsumer)
-}
-
-func (opt directConsumeOpt) apply(cfg *directConsumer) { opt.fn(cfg) }
-
-// ConsumeTopics sets topics to consume directly and the offsets to start
-// consuming partitions from in those topics.
-//
-// If a metadata update sees partitions added to a topic, the client will
-// automatically begin consuming from those new partitions.
-func ConsumeTopics(offset Offset, topics ...string) DirectConsumeOpt {
-	return directConsumeOpt{func(cfg *directConsumer) {
-		cfg.topics = make(map[string]Offset, len(topics))
-		for _, topic := range topics {
-			cfg.topics[topic] = offset
-		}
-	}}
-}
-
-// ConsumePartitions sets partitions to consume from directly and the offsets
-// to start consuming those partitions from.
-//
-// Offsets from option have higher precedence than ConsumeTopics. If a topic's
-// partition is set in this option and that topic is also set in ConsumeTopics,
-// offsets on partitions in this option are used in favor of the more general
-// topic offset from ConsumeTopics.
-func ConsumePartitions(partitions map[string]map[int32]Offset) DirectConsumeOpt {
-	return directConsumeOpt{func(cfg *directConsumer) { cfg.partitions = partitions }}
-}
-
-// ConsumeTopicsRegex sets all topics in ConsumeTopics to be parsed as regular
-// expressions.
-func ConsumeTopicsRegex() DirectConsumeOpt {
-	return directConsumeOpt{func(cfg *directConsumer) { cfg.regexTopics = true }}
-}
-
 type directConsumer struct {
-	tps *topicsPartitions // data for topics that the user assigned
-
-	topics     map[string]Offset
-	partitions map[string]map[int32]Offset
-
-	regexTopics bool
-	reTopics    map[string]Offset
-	reIgnore    map[string]struct{}
-
-	using map[string]map[int32]struct{}
+	cfg    *cfg
+	tps    *topicsPartitions             // data for topics that the user assigned
+	reSeen map[string]bool               // topics we evaluated against regex, and whether we want them or not
+	using  map[string]map[int32]struct{} // topics we are currently using (this only grows)
 }
 
-// AssignPartitions assigns an exact set of partitions for the client to
-// consume from. Any prior direct assignment or group assignment is
-// invalidated.
-//
-// This takes ownership of any assignments.
-func (cl *Client) AssignPartitions(opts ...DirectConsumeOpt) {
-	c := &cl.consumer
-
-	c.assignMu.Lock()
-	defer c.assignMu.Unlock()
-
-	if wasDead := c.unsetAndWait(); wasDead {
-		return
-	}
-
+func (c *consumer) initDirect() {
 	d := &directConsumer{
-		tps:        newTopicsPartitions(),
-		topics:     make(map[string]Offset),
-		partitions: make(map[string]map[int32]Offset),
-		reTopics:   make(map[string]Offset),
-		reIgnore:   make(map[string]struct{}),
-		using:      make(map[string]map[int32]struct{}),
+		cfg:    &c.cl.cfg,
+		tps:    newTopicsPartitions(),
+		reSeen: make(map[string]bool),
+		using:  make(map[string]map[int32]struct{}),
 	}
-	for _, opt := range opts {
-		opt.apply(d)
-	}
-	if len(d.topics) == 0 && len(d.partitions) == 0 || c.dead {
-		return
-	}
+	c.d = d
 
-	defer c.storeDirect(d)
-	defer cl.triggerUpdateMetadata(true) // we definitely want to trigger a metadata update
-
-	if d.regexTopics {
+	if d.cfg.regex {
 		return
 	}
 
 	var topics []string
-	for topic := range d.topics {
+	for topic := range d.cfg.topics {
 		topics = append(topics, topic)
 	}
-	for topic := range d.partitions {
+	for topic := range d.cfg.partitions {
 		topics = append(topics, topic)
 	}
-	d.tps.storeTopics(topics)
+	d.tps.storeTopics(topics) // prime topics to load if non-regex (this is of no benefit if regex)
 }
 
 // findNewAssignments returns new partitions to consume at given offsets
 // based off the current topics.
 func (d *directConsumer) findNewAssignments() map[string]map[int32]Offset {
 	topics := d.tps.load()
-	// First, we build everything we could theoretically want to consume.
+
 	toUse := make(map[string]map[int32]Offset, 10)
 	for topic, topicPartitions := range topics {
-		var useTopic bool
-		var useOffset Offset
-
 		// If we are using regex topics, we have to check all
 		// topic regexes to see if any match on this topic.
-		if d.regexTopics {
-			// If we have already matched this topic prior,
-			// we do not need to check all regexes.
-			if offset, exists := d.reTopics[topic]; exists {
-				useTopic = true
-				useOffset = offset
-			} else if _, exists := d.reIgnore[topic]; exists {
-				// skip
-			} else {
-				for reTopic, offset := range d.topics {
-					if match, _ := regexp.MatchString(reTopic, topic); match {
-						useTopic = true
-						useOffset = offset
-						d.reTopics[topic] = offset
+		var useTopic bool
+		if d.cfg.regex {
+			want, seen := d.reSeen[topic]
+			if !seen {
+				for _, re := range d.cfg.topics {
+					if want = re.MatchString(topic); want {
 						break
 					}
 				}
-				if !useTopic {
-					d.reIgnore[topic] = struct{}{}
-				}
+				d.reSeen[topic] = want
 			}
-
+			useTopic = want
 		} else {
-			// If we are not using regex, we can just lookup.
-			useOffset, useTopic = d.topics[topic]
+			_, useTopic = d.cfg.topics[topic]
 		}
 
 		// If the above detected that we want to keep this topic, we
 		// set all partitions as usable.
+		//
+		// For internal partitions, we only allow consuming them if
+		// the topic is explicitly specified.
 		if useTopic {
 			partitions := topicPartitions.load()
-			if d.regexTopics && partitions.isInternal {
+			if d.cfg.regex && partitions.isInternal {
 				continue
 			}
 			toUseTopic := make(map[int32]Offset, len(partitions.partitions))
 			for partition := range partitions.partitions {
-				toUseTopic[int32(partition)] = useOffset
+				toUseTopic[int32(partition)] = d.cfg.resetOffset
 			}
 			toUse[topic] = toUseTopic
 		}
 
 		// Lastly, if this topic has some specific partitions pinned,
 		// we set those.
-		for partition, offset := range d.partitions[topic] {
+		for partition, offset := range d.cfg.partitions[topic] {
 			toUseTopic, exists := toUse[topic]
 			if !exists {
 				toUseTopic = make(map[int32]Offset, 10)
@@ -173,7 +88,7 @@ func (d *directConsumer) findNewAssignments() map[string]map[int32]Offset {
 	for topic, partitions := range d.using {
 		toUseTopic, exists := toUse[topic]
 		if !exists {
-			continue // forgotten topic
+			continue // metadata update did not return this topic (regex or failing load)
 		}
 		for partition := range partitions {
 			delete(toUseTopic, partition)

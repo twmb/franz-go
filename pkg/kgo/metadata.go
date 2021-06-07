@@ -215,14 +215,15 @@ func (cl *Client) updateMetadata() (needsRetry bool, err error) {
 	var (
 		tpsProducerLoad = cl.producer.topics.load()
 		tpsConsumer     *topicsPartitions
-		all             bool
+		all             = cl.cfg.regex
 		reqTopics       []string
 	)
-	switch v := cl.consumer.loadKind().(type) {
-	case *groupConsumer:
-		tpsConsumer, all = v.tps, v.regexTopics
-	case *directConsumer:
-		tpsConsumer, all = v.tps, v.regexTopics
+	c := &cl.consumer
+	switch {
+	case c.d != nil:
+		tpsConsumer = c.d.tps
+	case c.g != nil:
+		tpsConsumer = c.g.tps
 	}
 
 	if !all {

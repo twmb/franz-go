@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -14,261 +13,23 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
-// GroupOpt is an option to configure group consuming.
-type GroupOpt interface {
-	apply(*groupConsumer)
-}
-
-// groupOpt implements GroupOpt.
-type groupOpt struct {
-	fn func(cfg *groupConsumer)
-}
-
-func (opt groupOpt) apply(cfg *groupConsumer) { opt.fn(cfg) }
-
-// GroupTopics adds topics to use for group consuming.
-func GroupTopics(topics ...string) GroupOpt {
-	return groupOpt{func(cfg *groupConsumer) {
-		cfg.topics = make(map[string]struct{}, len(topics))
-		for _, topic := range topics {
-			cfg.topics[topic] = struct{}{}
-		}
-	}}
-}
-
-// GroupTopicsRegex sets all topics in GroupTopics to be parsed as regular
-// expressions.
-func GroupTopicsRegex() GroupOpt {
-	return groupOpt{func(cfg *groupConsumer) { cfg.regexTopics = true }}
-}
-
-// Balancers sets the group balancers to use for dividing topic partitions
-// among group members, overriding the defaults.
-//
-// The current default is [cooperative-sticky].
-//
-// For balancing, Kafka chooses the first protocol that all group members agree
-// to support.
-//
-// Note that if you want to opt in to cooperative-sticky rebalancing,
-// cooperative group balancing is incompatible with eager (classical)
-// rebalancing and requires a careful rollout strategy (see KIP-429).
-func Balancers(balancers ...GroupBalancer) GroupOpt {
-	return groupOpt{func(cfg *groupConsumer) { cfg.balancers = balancers }}
-}
-
-// SessionTimeout sets how long a member the group can go between heartbeats,
-// overriding the default 45,000ms. If a member does not heartbeat in this
-// timeout, the broker will remove the member from the group and initiate a
-// rebalance.
-//
-// If you are using a GroupTransactSession for EOS, wish to lower this, and are
-// talking to a Kafka cluster pre 2.5.0, consider lowering the
-// TransactionTimeout. If you do not, you risk a transaction finishing after a
-// group has rebalanced, which could lead to duplicate processing. If you are
-// talking to a Kafka 2.5.0+ cluster, you can safely use the
-// RequireStableFetchOffsets group option and prevent any problems.
-//
-// This option corresponds to Kafka's session.timeout.ms setting and must be
-// within the broker's group.min.session.timeout.ms and
-// group.max.session.timeout.ms.
-func SessionTimeout(timeout time.Duration) GroupOpt {
-	return groupOpt{func(cfg *groupConsumer) { cfg.sessionTimeout = timeout }}
-}
-
-// RebalanceTimeout sets how long group members are allowed to take when a a
-// rebalance has begun, overriding the default 60,000ms. This timeout is how
-// long all members are allowed to complete work and commit offsets, minus the
-// time it took to detect the rebalance (from a heartbeat).
-//
-// Kafka uses the largest rebalance timeout of all members in the group. If a
-// member does not rejoin within this timeout, Kafka will kick that member from
-// the group.
-//
-// This corresponds to Kafka's rebalance.timeout.ms.
-func RebalanceTimeout(timeout time.Duration) GroupOpt {
-	return groupOpt{func(cfg *groupConsumer) { cfg.rebalanceTimeout = timeout }}
-}
-
-// HeartbeatInterval sets how long a group member goes between heartbeats to
-// Kafka, overriding the default 3,000ms.
-//
-// Kafka uses heartbeats to ensure that a group member's session stays active.
-// This value can be any value lower than the session timeout, but should be no
-// higher than 1/3rd the session timeout.
-//
-// This corresponds to Kafka's heartbeat.interval.ms.
-func HeartbeatInterval(interval time.Duration) GroupOpt {
-	return groupOpt{func(cfg *groupConsumer) { cfg.heartbeatInterval = interval }}
-}
-
-// RequireStableFetchOffsets sets the group consumer to require "stable" fetch
-// offsets before consuming from the group. Proposed in KIP-447 and introduced
-// in Kafka 2.5.0, stable offsets are important when consuming from partitions
-// that a transactional producer could be committing to.
-//
-// With this option, Kafka will block group consumers from fetching offsets for
-// partitions that are in an active transaction.
-//
-// Because this can block consumption, it is strongly recommended to set
-// transactional timeouts to a small value (10s) rather than the default 60s.
-// Lowering the transactional timeout will reduce the chance that consumers are
-// entirely blocked.
-func RequireStableFetchOffsets() GroupOpt {
-	return groupOpt{func(cfg *groupConsumer) { cfg.requireStable = true }}
-}
-
-// OnAssigned sets the function to be called when a group is joined after
-// partitions are assigned before fetches for those partitions begin.
-//
-// This function combined with OnRevoked should not exceed the rebalance
-// interval. It is possible for the group, immediately after finishing a
-// balance, to re-enter a new balancing session.
-//
-// The OnAssigned function is passed the group's context, which is only
-// canceled if the group is left or the client is closed.
-func OnAssigned(onAssigned func(context.Context, map[string][]int32)) GroupOpt {
-	return groupOpt{func(cfg *groupConsumer) { cfg.onAssigned = onAssigned }}
-}
-
-// OnRevoked sets the function to be called once this group member has
-// partitions revoked.
-//
-// This function combined with OnAssigned should not exceed the rebalance
-// interval. It is possible for the group, immediately after finishing a
-// balance, to re-enter a new balancing session.
-//
-// If autocommit is enabled, the default OnRevoked is a blocking commit all
-// offsets. The reason for a blocking commit is so that no later commit cancels
-// the blocking commit. If the commit in OnRevoked were canceled, then the
-// rebalance would proceed immediately, the commit that canceled the blocking
-// commit would fail, and duplicates could be consumed after the rebalance
-// completes.
-//
-// The OnRevoked function is passed the group's context, which is only canceled
-// if the group is left or the client is closed.
-//
-// OnRevoked function is called at the end of a group session even if there are
-// no partitions being revoked.
-//
-// If you are committing offsets manually (have disabled autocommitting), it is
-// highly recommended to do a proper blocking commit in OnRevoked.
-func OnRevoked(onRevoked func(context.Context, map[string][]int32)) GroupOpt {
-	return groupOpt{func(cfg *groupConsumer) { cfg.onRevoked = onRevoked }}
-}
-
-// OnLost sets the function to be called on "fatal" group errors, such as
-// IllegalGeneration, UnknownMemberID, and authentication failures. This
-// function differs from OnRevoked in that it is unlikely that commits will
-// succeed when partitions are outright lost, whereas commits likely will
-// succeed when revoking partitions.
-//
-// If not set, OnRevoked is used.
-func OnLost(onLost func(context.Context, map[string][]int32)) GroupOpt {
-	return groupOpt{func(cfg *groupConsumer) { cfg.onLost = onLost }}
-}
-
-// DisableAutoCommit disable auto committing.
-func DisableAutoCommit() GroupOpt {
-	return groupOpt{func(cfg *groupConsumer) { cfg.autocommitDisable = true }}
-}
-
-// AutoCommitInterval sets how long to go between autocommits, overriding the
-// default 5s.
-func AutoCommitInterval(interval time.Duration) GroupOpt {
-	return groupOpt{func(cfg *groupConsumer) { cfg.autocommitInterval = interval }}
-}
-
-// InstanceID sets the group consumer's instance ID, switching the group member
-// from "dynamic" to "static".
-//
-// Prior to Kafka 2.3.0, joining a group gave a group member a new member ID.
-// The group leader could not tell if this was a rejoining member. Thus, any
-// join caused the group to rebalance.
-//
-// Kafka 2.3.0 introduced the concept of an instance ID, which can persist
-// across restarts. This allows for avoiding many costly rebalances and allows
-// for stickier rebalancing for rejoining members (since the ID for balancing
-// stays the same). The main downsides are that you, the user of a client, have
-// to manage instance IDs properly, and that it may take longer to rebalance in
-// the event that a client legitimately dies.
-//
-// When using an instance ID, the client does NOT send a leave group request
-// when closing. This allows for the client ot restart with the same instance
-// ID and rejoin the group to avoid a rebalance. It is strongly recommended to
-// increase the session timeout enough to allow time for the restart (remember
-// that the default session timeout is 10s).
-//
-// To actually leave the group, you must use an external admin command that
-// issues a leave group request on behalf of this instance ID (see kcl), or you
-// can manually use the kmsg package with a proper LeaveGroupRequest.
-//
-// NOTE: Leaving a group with an instance ID is only supported in Kafka 2.4.0+.
-func InstanceID(id string) GroupOpt {
-	return groupOpt{func(cfg *groupConsumer) { cfg.instanceID = &id }}
-}
-
-// GroupProtocol sets the group's join protocol, overriding the default value
-// "consumer". The only reason to override this is if you are implementing
-// custom join and sync group logic.
-func GroupProtocol(protocol string) GroupOpt {
-	return groupOpt{func(cfg *groupConsumer) { cfg.protocol = protocol }}
-}
-
-// CommitCallback sets the callback to use if autocommitting is enabled. This
-// overrides the default callback that logs errors and continues.
-func CommitCallback(fn func(*kmsg.OffsetCommitRequest, *kmsg.OffsetCommitResponse, error)) GroupOpt {
-	return groupOpt{func(cfg *groupConsumer) { cfg.commitCallback = fn }}
-}
-
 type groupConsumer struct {
-	c  *consumer // used to change consumer state; generally c.mu is grabbed on access
-	cl *Client   // used for running requests / adding to topics map
+	c   *consumer // used to change consumer state; generally c.mu is grabbed on access
+	cl  *Client   // used for running requests / adding to topics map
+	cfg *cfg
 
 	ctx        context.Context
 	cancel     func()
 	manageDone chan struct{} // closed once when the manage goroutine quits
 
-	/////////////////////////
-	// configuration block //
-	/////////////////////////
-
-	id          string              // group we are in
-	instanceID  *string             // optional, our instance ID
-	topics      map[string]struct{} // topics we are interested in
-	balancers   []GroupBalancer     // balancers we can use
-	protocol    string              // "consumer" by default, expected to never be overridden
-	cooperative bool                // whether all balancers are cooperative
-
-	sessionTimeout    time.Duration
-	rebalanceTimeout  time.Duration
-	heartbeatInterval time.Duration
-	requireStable     bool
-
-	onAssigned func(context.Context, map[string][]int32)
-	onRevoked  func(context.Context, map[string][]int32)
-	onLost     func(context.Context, map[string][]int32)
-
-	autocommitDisable  bool // true if autocommit was disabled or we are transactional
-	autocommitInterval time.Duration
-	commitCallback     func(*kmsg.OffsetCommitRequest, *kmsg.OffsetCommitResponse, error)
-
-	///////////////////////
-	// configuration end //
-	///////////////////////
+	cooperative bool // true if all config balancers are cooperative
 
 	// The data for topics that the user assigned. Metadata updates the
 	// atomic.Value in each pointer atomically. If we are consuming via
 	// regex, metadata grabs the lock to add new topics.
 	tps *topicsPartitions
 
-	// regexTopics is configuration, but used exclusively with reSeen,
-	// which is updated in findNewAssignments. If our assignment is for
-	// regular expressions, then we put every topic that we have passed
-	// against all our regex into reSeen. This avoids us re-evaluating
-	// topics in our regex on future metadata assignments.
-	regexTopics bool
-	reSeen      map[string]struct{}
+	reSeen map[string]bool // topics we evaluated against regex, and whether we want them or not
 
 	// Full lock grabbed in BlockingCommitOffsets, read lock grabbed in
 	// CommitOffsets, this lock ensures that only one blocking commit can
@@ -363,99 +124,56 @@ type groupConsumer struct {
 // manually issue a kmsg.LeaveGroupRequest or use an external tool (kafka
 // scripts or kcl).
 func (cl *Client) LeaveGroup() {
-	c := &cl.consumer
-	c.assignMu.Lock()
-	_, wait := cl.consumer.unset()
-	c.assignMu.Unlock()
-	wait()
+	cl.consumer.unset()
 }
 
-// AssignGroup assigns a group to consume from, overriding any prior
-// assignment.
-//
-// To leave a group, you can AssignGroup with an empty group, or just close the
-// client. If you are using instance IDs, the client does not explicitly leave
-// the group and instead you must issue a `kmsg.LeaveGroupRequest` manually (as
-// expected when using instance IDs).
-//
-// It is recommended to do one final blocking commit before leaving a group.
-func (cl *Client) AssignGroup(group string, opts ...GroupOpt) {
-	c := &cl.consumer
-
-	c.assignMu.Lock()
-	defer c.assignMu.Unlock()
-
-	if wasDead := c.unsetAndWait(); wasDead {
-		return
-	}
-
-	ctx, cancel := context.WithCancel(cl.ctx)
+func (c *consumer) initGroup() {
+	ctx, cancel := context.WithCancel(c.cl.ctx)
 	g := &groupConsumer{
-		c:  c,
-		cl: cl,
+		c:   c,
+		cl:  c.cl,
+		cfg: &c.cl.cfg,
 
-		ctx:        ctx,
-		cancel:     cancel,
-		manageDone: make(chan struct{}),
+		ctx:    ctx,
+		cancel: cancel,
 
-		id: group,
-
-		balancers: []GroupBalancer{
-			CooperativeStickyBalancer(),
-		},
-		protocol:    "consumer",
-		cooperative: true, // default yes, potentially canceled below by our balancers
-
-		tps: newTopicsPartitions(),
-
-		using:            make(map[string]int),
+		manageDone:       make(chan struct{}),
+		cooperative:      c.cl.cfg.cooperative(),
+		tps:              newTopicsPartitions(),
 		rejoinCh:         make(chan struct{}, 1),
 		heartbeatForceCh: make(chan func(error)),
-		reSeen:           make(map[string]struct{}),
-
-		sessionTimeout:    45000 * time.Millisecond,
-		rebalanceTimeout:  60000 * time.Millisecond,
-		heartbeatInterval: 3000 * time.Millisecond,
-
-		autocommitInterval: 5 * time.Second,
+		using:            make(map[string]int),
 	}
-	if c.cl.cfg.txnID == nil {
-		g.onRevoked = g.defaultRevoke
-		// We do not want to commit in onLost, so we explicitly set
-		// onLost to an empty function to avoid the fallback to
-		// onRevoked.
-		g.onLost = func(context.Context, map[string][]int32) {}
+	c.g = g
+
+	if g.cfg.txnID == nil {
+		// We only override revoked / lost if they were not explicitly
+		// set by options.
+		if !g.cfg.setRevoked {
+			g.cfg.onRevoked = g.defaultRevoke
+		}
+		// For onLost, we do not want to commit in onLost, so we
+		// explicitly set onLost to an empty function to avoid the
+		// fallback to onRevoked.
+		if !g.cfg.setLost {
+			g.cfg.onLost = func(context.Context, *Client, map[string][]int32) {}
+		}
 	} else {
-		g.autocommitDisable = true
-	}
-	for _, opt := range opts {
-		opt.apply(g)
-	}
-	if len(group) == 0 || len(g.topics) == 0 || c.dead {
-		return
+		g.cfg.autocommitDisable = true
 	}
 
-	if g.commitCallback == nil {
-		g.commitCallback = g.defaultCommitCallback
-	}
-
-	defer c.storeGroup(g)
-	defer cl.triggerUpdateMetadata(true) // we definitely want to trigger a metadata update
-
-	for _, balancer := range g.balancers {
-		g.cooperative = g.cooperative && balancer.IsCooperative()
-	}
-
-	// Ensure all topics exist so that we will fetch their metadata.
-	if !g.regexTopics {
-		topics := make([]string, 0, len(g.topics))
-		for topic := range g.topics {
+	// For non-regex topics, we explicitly ensure they exist for loading
+	// metadata. This is of no impact if we are *also* consuming via regex,
+	// but that is no problem.
+	if len(g.cfg.topics) > 0 {
+		topics := make([]string, 0, len(g.cfg.topics))
+		for topic := range g.cfg.topics {
 			topics = append(topics, topic)
 		}
 		g.tps.storeTopics(topics)
 	}
 
-	if !g.autocommitDisable && g.autocommitInterval > 0 {
+	if !g.cfg.autocommitDisable && g.cfg.autocommitInterval > 0 {
 		g.cl.cfg.logger.Log(LogLevelInfo, "beginning autocommit loop")
 		go g.loopCommit()
 	}
@@ -494,7 +212,7 @@ func (g *groupConsumer) manage() {
 			})
 		}
 
-		if err == context.Canceled && g.onRevoked != nil {
+		if err == context.Canceled && g.cfg.onRevoked != nil {
 			// The cooperative consumer does not revoke everything
 			// while rebalancing, meaning if our context is
 			// canceled, we may have uncommitted data. Rather than
@@ -508,17 +226,17 @@ func (g *groupConsumer) manage() {
 			// onRevoked, but since we are handling this case for
 			// the cooperative consumer we may as well just also
 			// include the eager consumer.
-			g.onRevoked(g.ctx, g.nowAssigned)
+			g.cfg.onRevoked(g.ctx, g.cl, g.nowAssigned)
 
-		} else if g.onLost != nil {
+		} else if g.cfg.onLost != nil {
 			// Any other error is perceived as a fatal error,
 			// and we go into OnLost as appropriate.
-			g.onLost(g.ctx, g.nowAssigned)
+			g.cfg.onLost(g.ctx, g.cl, g.nowAssigned)
 			hook()
 
-		} else if g.onRevoked != nil {
+		} else if g.cfg.onRevoked != nil {
 			// If OnLost is not specified, we fallback to OnRevoked.
-			g.onRevoked(g.ctx, g.nowAssigned)
+			g.cfg.onRevoked(g.ctx, g.cl, g.nowAssigned)
 			hook()
 		}
 
@@ -566,6 +284,7 @@ func (g *groupConsumer) leave() (wait func()) {
 	// If g.using is nonzero before this check, then a manage goroutine has
 	// started. If not, it will never start because we set dying.
 	g.mu.Lock()
+	wasDead := g.dying
 	g.dying = true
 	wasManaging := len(g.using) > 0
 	g.mu.Unlock()
@@ -583,16 +302,23 @@ func (g *groupConsumer) leave() (wait func()) {
 			<-g.manageDone
 		}
 
-		if g.instanceID == nil {
+		if wasDead {
+			// If we already called leave(), then we just wait for
+			// the prior leave to finish and we avoid re-issuing a
+			// LeaveGroup request.
+			return
+		}
+
+		if g.cfg.instanceID == nil {
 			g.cl.cfg.logger.Log(LogLevelInfo,
 				"leaving group",
-				"group", g.id,
+				"group", g.cfg.group,
 				"memberID", g.memberID, // lock not needed now since nothing can change it (manageDone)
 			)
 			// If we error when leaving, there is not much
 			// we can do. We may as well just return.
 			(&kmsg.LeaveGroupRequest{
-				Group:    g.id,
+				Group:    g.cfg.group,
 				MemberID: g.memberID,
 				Members: []kmsg.LeaveGroupRequestMember{{
 					MemberID: g.memberID,
@@ -693,8 +419,8 @@ func (g *groupConsumer) revoke(stage revokeStage, lost map[string][]int32, leavi
 		} else {
 			g.cl.cfg.logger.Log(LogLevelInfo, "cooperative consumer revoking prior assigned partitions because leaving group", "revoking", g.nowAssigned)
 		}
-		if g.onRevoked != nil {
-			g.onRevoked(g.ctx, g.nowAssigned)
+		if g.cfg.onRevoked != nil {
+			g.cfg.onRevoked(g.ctx, g.cl, g.nowAssigned)
 		}
 		g.nowAssigned = nil
 
@@ -717,7 +443,7 @@ func (g *groupConsumer) revoke(stage revokeStage, lost map[string][]int32, leavi
 		// lost is nil for cooperative assigning. Instead, we determine
 		// lost by finding subscriptions we are no longer interested in.
 		//
-		// TODO only relevant when we allow AssignGroup with the same
+		// TODO only relevant when we allow reassigning with the same
 		// group to change subscriptions (also we must delete the
 		// unused partitions from nowAssigned).
 	}
@@ -755,8 +481,8 @@ func (g *groupConsumer) revoke(stage revokeStage, lost map[string][]int32, leavi
 		} else {
 			g.cl.cfg.logger.Log(LogLevelInfo, "cooperative consumer calling onRevoke", "lost", lost, "stage", stage)
 		}
-		if g.onRevoked != nil {
-			g.onRevoked(g.ctx, lost)
+		if g.cfg.onRevoked != nil {
+			g.cfg.onRevoked(g.ctx, g.cl, lost)
 		}
 	}
 
@@ -825,11 +551,11 @@ func (s *assignRevokeSession) assign(g *groupConsumer, newAssigned map[string][]
 	go func() {
 		defer close(s.assignDone)
 		<-s.prerevokeDone
-		if g.onAssigned != nil {
+		if g.cfg.onAssigned != nil {
 			// We always call on assigned, even if nothing new is
 			// assigned. This allows consumers to know that
 			// assignment is done and do setup logic.
-			g.onAssigned(g.ctx, newAssigned)
+			g.cfg.onAssigned(g.ctx, g.cl, newAssigned)
 		}
 	}()
 	return s.assignDone
@@ -936,7 +662,7 @@ func (g *groupConsumer) setupAssignedAndHeartbeat() error {
 // If the offset fetch is successful, then we basically sit in this function
 // until a heartbeat errors or we, being the leader, decide to re-join.
 func (g *groupConsumer) heartbeat(fetchErrCh <-chan error, s *assignRevokeSession) error {
-	ticker := time.NewTicker(g.heartbeatInterval)
+	ticker := time.NewTicker(g.cfg.heartbeatInterval)
 	defer ticker.Stop()
 
 	// We issue one heartbeat quickly if we are cooperative because
@@ -988,10 +714,10 @@ func (g *groupConsumer) heartbeat(fetchErrCh <-chan error, s *assignRevokeSessio
 		if heartbeat {
 			g.cl.cfg.logger.Log(LogLevelDebug, "heartbeating")
 			req := &kmsg.HeartbeatRequest{
-				Group:      g.id,
+				Group:      g.cfg.group,
 				Generation: g.generation,
 				MemberID:   g.memberID,
-				InstanceID: g.instanceID,
+				InstanceID: g.cfg.instanceID,
 			}
 			var resp *kmsg.HeartbeatResponse
 			if resp, err = req.RequestWith(g.ctx, g.cl); err == nil {
@@ -1055,7 +781,7 @@ func (g *groupConsumer) heartbeat(fetchErrCh <-chan error, s *assignRevokeSessio
 			waited := make(chan struct{})
 			metadone = waited
 			go func() {
-				g.cl.waitmeta(g.ctx, g.sessionTimeout)
+				g.cl.waitmeta(g.ctx, g.cfg.sessionTimeout)
 				close(waited)
 			}()
 		}
@@ -1080,8 +806,7 @@ func (g *groupConsumer) heartbeat(fetchErrCh <-chan error, s *assignRevokeSessio
 // join group metadata has not changed), then Kafka will not actually trigger a
 // rebalance and will instead reply to the member with its current assignment.
 func (cl *Client) ForceRebalance() {
-	g, ok := cl.consumer.loadGroup()
-	if ok {
+	if g := cl.consumer.g; g != nil {
 		g.rejoin()
 	}
 }
@@ -1110,12 +835,12 @@ start:
 
 	var (
 		joinReq = &kmsg.JoinGroupRequest{
-			Group:                  g.id,
-			SessionTimeoutMillis:   int32(g.sessionTimeout.Milliseconds()),
-			RebalanceTimeoutMillis: int32(g.rebalanceTimeout.Milliseconds()),
-			ProtocolType:           g.protocol,
+			Group:                  g.cfg.group,
+			SessionTimeoutMillis:   int32(g.cfg.sessionTimeout.Milliseconds()),
+			RebalanceTimeoutMillis: int32(g.cfg.rebalanceTimeout.Milliseconds()),
+			ProtocolType:           g.cfg.protocol,
 			MemberID:               g.memberID,
-			InstanceID:             g.instanceID,
+			InstanceID:             g.cfg.instanceID,
 			Protocols:              g.joinGroupProtocols(),
 		}
 
@@ -1149,11 +874,11 @@ start:
 
 	var (
 		syncReq = &kmsg.SyncGroupRequest{
-			Group:           g.id,
+			Group:           g.cfg.group,
 			Generation:      g.generation,
 			MemberID:        g.memberID,
-			InstanceID:      g.instanceID,
-			ProtocolType:    &g.protocol,
+			InstanceID:      g.cfg.instanceID,
+			ProtocolType:    &g.cfg.protocol,
 			Protocol:        &protocol,
 			GroupAssignment: plan, // nil unless we are the leader
 		}
@@ -1162,7 +887,7 @@ start:
 		synced   = make(chan struct{})
 	)
 
-	g.cl.cfg.logger.Log(LogLevelInfo, "syncing", "protocol_type", g.protocol, "protocol", protocol)
+	g.cl.cfg.logger.Log(LogLevelInfo, "syncing", "protocol_type", g.cfg.protocol, "protocol", protocol)
 	go func() {
 		defer close(synced)
 		syncResp, err = syncReq.RequestWith(g.ctx, g.cl)
@@ -1224,7 +949,7 @@ func (g *groupConsumer) handleJoinResp(resp *kmsg.JoinGroupResponse) (restart bo
 		g.leader.set(true)
 		g.cl.cfg.logger.Log(LogLevelInfo, "joined, balancing group",
 			"memberID", g.memberID,
-			"instanceID", g.instanceID,
+			"instanceID", g.cfg.instanceID,
 			"generation", g.generation,
 			"balance_protocol", protocol,
 			"leader", true,
@@ -1238,7 +963,7 @@ func (g *groupConsumer) handleJoinResp(resp *kmsg.JoinGroupResponse) (restart bo
 	} else {
 		g.cl.cfg.logger.Log(LogLevelInfo, "joined",
 			"memberID", g.memberID,
-			"instanceID", g.instanceID,
+			"instanceID", g.cfg.instanceID,
 			"generation", g.generation,
 			"leader", false,
 		)
@@ -1287,7 +1012,7 @@ func (g *groupConsumer) joinGroupProtocols() []kmsg.JoinGroupRequestProtocol {
 	}
 	g.mu.Unlock()
 	var protos []kmsg.JoinGroupRequestProtocol
-	for _, balancer := range g.balancers {
+	for _, balancer := range g.cfg.balancers {
 		protos = append(protos, kmsg.JoinGroupRequestProtocol{
 			Name: balancer.ProtocolName(),
 			Metadata: balancer.JoinGroupMetadata(
@@ -1305,8 +1030,8 @@ func (g *groupConsumer) joinGroupProtocols() []kmsg.JoinGroupRequestProtocol {
 func (g *groupConsumer) fetchOffsets(ctx context.Context, newAssigned map[string][]int32) error {
 start:
 	req := kmsg.OffsetFetchRequest{
-		Group:         g.id,
-		RequireStable: g.requireStable,
+		Group:         g.cfg.group,
+		RequireStable: g.cfg.requireStable,
 	}
 	for topic, partitions := range newAssigned {
 		req.Topics = append(req.Topics, kmsg.OffsetFetchRequestTopic{
@@ -1373,7 +1098,7 @@ start:
 	for fetchedTopic := range offsets {
 		if !groupTopics.hasTopic(fetchedTopic) {
 			delete(offsets, fetchedTopic)
-			g.cl.cfg.logger.Log(LogLevelWarn, "member was assigned topic that we did not ask for in AssignGroup! skipping assigning this topic!", "topic", fetchedTopic)
+			g.cl.cfg.logger.Log(LogLevelWarn, "member was assigned topic that we did not ask for in ConsumeTopics! skipping assigning this topic!", "topic", fetchedTopic)
 		}
 	}
 
@@ -1444,7 +1169,8 @@ func (g *groupConsumer) findNewAssignments() {
 	var numNewTopics int
 	toChange := make(map[string]change, len(topics))
 	for topic, topicPartitions := range topics {
-		numPartitions := len(topicPartitions.load().partitions)
+		parts := topicPartitions.load()
+		numPartitions := len(parts.partitions)
 		// If we are already using this topic, add that it changed if
 		// there are more partitions than we were using prior.
 		if used, exists := g.using[topic]; exists {
@@ -1455,18 +1181,19 @@ func (g *groupConsumer) findNewAssignments() {
 		}
 
 		var useTopic bool
-		if g.regexTopics {
-			if _, exists := g.reSeen[topic]; !exists {
-				g.reSeen[topic] = struct{}{} // set we have seen so we do not reevaluate next time
-				for reTopic := range g.topics {
-					if match, _ := regexp.MatchString(reTopic, topic); match {
-						useTopic = true
+		if g.cfg.regex {
+			want, seen := g.reSeen[topic]
+			if !seen {
+				for _, re := range g.cfg.topics {
+					if want = re.MatchString(topic); want {
 						break
 					}
 				}
+				g.reSeen[topic] = want
 			}
+			useTopic = want
 		} else {
-			_, useTopic = g.topics[topic]
+			_, useTopic = g.cfg.topics[topic]
 		}
 
 		// We only track using the topic if there are partitions for
@@ -1474,7 +1201,7 @@ func (g *groupConsumer) findNewAssignments() {
 		// want to load the metadata", but the topic was not returned
 		// in the metadata (or it was returned with an error).
 		if useTopic && numPartitions > 0 {
-			if g.regexTopics && topicPartitions.load().isInternal {
+			if g.cfg.regex && parts.isInternal {
 				continue
 			}
 			toChange[topic] = change{isNew: true, delta: numPartitions}
@@ -1685,7 +1412,7 @@ func (g *groupConsumer) updateCommitted(
 
 }
 
-func (g *groupConsumer) defaultCommitCallback(_ *kmsg.OffsetCommitRequest, resp *kmsg.OffsetCommitResponse, err error) {
+func (g *groupConsumer) defaultCommitCallback(_ *Client, _ *kmsg.OffsetCommitRequest, resp *kmsg.OffsetCommitResponse, err error) {
 	if err != nil {
 		if err != context.Canceled {
 			g.cl.cfg.logger.Log(LogLevelError, "default commit failed", "err", err)
@@ -1707,7 +1434,7 @@ func (g *groupConsumer) defaultCommitCallback(_ *kmsg.OffsetCommitRequest, resp 
 }
 
 func (g *groupConsumer) loopCommit() {
-	ticker := time.NewTicker(g.autocommitInterval)
+	ticker := time.NewTicker(g.cfg.autocommitInterval)
 	defer ticker.Stop()
 
 	for {
@@ -1725,7 +1452,7 @@ func (g *groupConsumer) loopCommit() {
 		g.mu.Lock()
 		if !g.blockAuto {
 			g.cl.cfg.logger.Log(LogLevelDebug, "autocommitting")
-			g.commit(g.ctx, g.getUncommittedLocked(true), g.commitCallback)
+			g.commit(g.ctx, g.getUncommittedLocked(true), g.cfg.commitCallback)
 		}
 		g.mu.Unlock()
 	}
@@ -1753,8 +1480,8 @@ func (cl *Client) SetOffsets(setOffsets map[string]map[int32]EpochOffset) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	g, ok := c.loadGroup()
-	if !ok {
+	g := c.g
+	if g == nil {
 		return
 	}
 	g.mu.Lock()
@@ -1830,11 +1557,10 @@ func (cl *Client) SetOffsets(setOffsets map[string]map[int32]EpochOffset) {
 // If using a cooperative balancer, commits while consuming during rebalancing
 // may fail with REBALANCE_IN_PROGRESS.
 func (cl *Client) UncommittedOffsets() map[string]map[int32]EpochOffset {
-	g, ok := cl.consumer.loadGroup()
-	if !ok {
-		return nil
+	if g := cl.consumer.g; g != nil {
+		return g.getUncommitted()
 	}
-	return g.getUncommitted()
+	return nil
 }
 
 // CommittedOffsets returns the latest committed offsets. Committed offsets are
@@ -1842,8 +1568,8 @@ func (cl *Client) UncommittedOffsets() map[string]map[int32]EpochOffset {
 //
 // If there are no committed offsets, this returns nil.
 func (cl *Client) CommittedOffsets() map[string]map[int32]EpochOffset {
-	g, ok := cl.consumer.loadGroup()
-	if !ok {
+	g := cl.consumer.g
+	if g == nil {
 		return nil
 	}
 	g.mu.Lock()
@@ -1909,19 +1635,19 @@ func (g *groupConsumer) getUncommittedLocked(head bool) map[string]map[int32]Epo
 func (cl *Client) BlockingCommitOffsets(
 	ctx context.Context,
 	uncommitted map[string]map[int32]EpochOffset,
-	onDone func(*kmsg.OffsetCommitRequest, *kmsg.OffsetCommitResponse, error),
+	onDone func(*Client, *kmsg.OffsetCommitRequest, *kmsg.OffsetCommitResponse, error),
 ) {
 	if onDone == nil {
-		onDone = func(_ *kmsg.OffsetCommitRequest, _ *kmsg.OffsetCommitResponse, _ error) {}
+		onDone = func(*Client, *kmsg.OffsetCommitRequest, *kmsg.OffsetCommitResponse, error) {}
 	}
 
-	g, ok := cl.consumer.loadGroup()
-	if !ok {
-		onDone(new(kmsg.OffsetCommitRequest), new(kmsg.OffsetCommitResponse), errNotGroup)
+	g := cl.consumer.g
+	if g == nil {
+		onDone(cl, new(kmsg.OffsetCommitRequest), new(kmsg.OffsetCommitResponse), errNotGroup)
 		return
 	}
 	if len(uncommitted) == 0 {
-		onDone(new(kmsg.OffsetCommitRequest), new(kmsg.OffsetCommitResponse), nil)
+		onDone(cl, new(kmsg.OffsetCommitRequest), new(kmsg.OffsetCommitResponse), nil)
 		return
 	}
 	g.blockingCommitOffsets(ctx, uncommitted, onDone)
@@ -1930,7 +1656,7 @@ func (cl *Client) BlockingCommitOffsets(
 func (g *groupConsumer) blockingCommitOffsets(
 	ctx context.Context,
 	uncommitted map[string]map[int32]EpochOffset,
-	onDone func(*kmsg.OffsetCommitRequest, *kmsg.OffsetCommitResponse, error),
+	onDone func(*Client, *kmsg.OffsetCommitRequest, *kmsg.OffsetCommitResponse, error),
 ) {
 	done := make(chan struct{})
 	defer func() { <-done }()
@@ -1939,15 +1665,15 @@ func (g *groupConsumer) blockingCommitOffsets(
 	defer g.cl.cfg.logger.Log(LogLevelDebug, "left BlockingCommitOffsets")
 
 	if onDone == nil {
-		onDone = func(_ *kmsg.OffsetCommitRequest, _ *kmsg.OffsetCommitResponse, _ error) {}
+		onDone = func(*Client, *kmsg.OffsetCommitRequest, *kmsg.OffsetCommitResponse, error) {}
 	}
 
 	g.blockingCommitMu.Lock() // block all other concurrent commits until our OnDone is done.
 
-	unblockCommits := func(req *kmsg.OffsetCommitRequest, resp *kmsg.OffsetCommitResponse, err error) {
+	unblockCommits := func(cl *Client, req *kmsg.OffsetCommitRequest, resp *kmsg.OffsetCommitResponse, err error) {
 		defer close(done)
 		defer g.blockingCommitMu.Unlock()
-		onDone(req, resp, err)
+		onDone(cl, req, resp, err)
 	}
 
 	g.mu.Lock()
@@ -1955,8 +1681,8 @@ func (g *groupConsumer) blockingCommitOffsets(
 		defer g.mu.Unlock()
 
 		g.blockAuto = true
-		unblockAuto := func(req *kmsg.OffsetCommitRequest, resp *kmsg.OffsetCommitResponse, err error) {
-			unblockCommits(req, resp, err)
+		unblockAuto := func(cl *Client, req *kmsg.OffsetCommitRequest, resp *kmsg.OffsetCommitResponse, err error) {
+			unblockCommits(cl, req, resp, err)
 			g.mu.Lock()
 			defer g.mu.Unlock()
 			g.blockAuto = false
@@ -2002,29 +1728,29 @@ func (g *groupConsumer) blockingCommitOffsets(
 func (cl *Client) CommitOffsets(
 	ctx context.Context,
 	uncommitted map[string]map[int32]EpochOffset,
-	onDone func(*kmsg.OffsetCommitRequest, *kmsg.OffsetCommitResponse, error),
+	onDone func(*Client, *kmsg.OffsetCommitRequest, *kmsg.OffsetCommitResponse, error),
 ) {
 	cl.cfg.logger.Log(LogLevelDebug, "in CommitOffsets", "with", uncommitted)
 	defer cl.cfg.logger.Log(LogLevelDebug, "left CommitOffsets")
 	if onDone == nil {
-		onDone = func(_ *kmsg.OffsetCommitRequest, _ *kmsg.OffsetCommitResponse, _ error) {}
+		onDone = func(*Client, *kmsg.OffsetCommitRequest, *kmsg.OffsetCommitResponse, error) {}
 	}
 
-	g, ok := cl.consumer.loadGroup()
-	if !ok {
-		onDone(new(kmsg.OffsetCommitRequest), new(kmsg.OffsetCommitResponse), errNotGroup)
+	g := cl.consumer.g
+	if g == nil {
+		onDone(cl, new(kmsg.OffsetCommitRequest), new(kmsg.OffsetCommitResponse), errNotGroup)
 		return
 	}
 	if len(uncommitted) == 0 {
-		onDone(new(kmsg.OffsetCommitRequest), new(kmsg.OffsetCommitResponse), nil)
+		onDone(cl, new(kmsg.OffsetCommitRequest), new(kmsg.OffsetCommitResponse), nil)
 		return
 	}
 
 	g.blockingCommitMu.RLock() // block BlockingCommit, but allow other concurrent Commit to cancel us
 
-	unblockSyncCommit := func(req *kmsg.OffsetCommitRequest, resp *kmsg.OffsetCommitResponse, err error) {
+	unblockSyncCommit := func(cl *Client, req *kmsg.OffsetCommitRequest, resp *kmsg.OffsetCommitResponse, err error) {
 		defer g.blockingCommitMu.RUnlock()
-		onDone(req, resp, err)
+		onDone(cl, req, resp, err)
 	}
 
 	g.mu.Lock()
@@ -2032,8 +1758,8 @@ func (cl *Client) CommitOffsets(
 		defer g.mu.Unlock()
 
 		g.blockAuto = true
-		unblockAuto := func(req *kmsg.OffsetCommitRequest, resp *kmsg.OffsetCommitResponse, err error) {
-			unblockSyncCommit(req, resp, err)
+		unblockAuto := func(cl *Client, req *kmsg.OffsetCommitRequest, resp *kmsg.OffsetCommitResponse, err error) {
+			unblockSyncCommit(cl, req, resp, err)
 			g.mu.Lock()
 			defer g.mu.Unlock()
 			g.blockAuto = false
@@ -2049,12 +1775,12 @@ func (cl *Client) CommitOffsets(
 //
 // Note that the heartbeat loop invalidates all buffered, unpolled fetches
 // before revoking, meaning this truly will commit all polled fetches.
-func (g *groupConsumer) defaultRevoke(_ context.Context, _ map[string][]int32) {
-	if !g.autocommitDisable {
+func (g *groupConsumer) defaultRevoke(context.Context, *Client, map[string][]int32) {
+	if !g.cfg.autocommitDisable {
 		// We use the client's context rather than the group context,
 		// because this could come from the group being left. The group
 		// context will already be canceled.
-		g.blockingCommitOffsets(g.cl.ctx, g.getUncommitted(), g.commitCallback)
+		g.blockingCommitOffsets(g.cl.ctx, g.getUncommitted(), g.cfg.commitCallback)
 	}
 }
 
@@ -2064,15 +1790,15 @@ func (g *groupConsumer) defaultRevoke(_ context.Context, _ map[string][]int32) {
 func (g *groupConsumer) commit(
 	ctx context.Context,
 	uncommitted map[string]map[int32]EpochOffset,
-	onDone func(*kmsg.OffsetCommitRequest, *kmsg.OffsetCommitResponse, error),
+	onDone func(*Client, *kmsg.OffsetCommitRequest, *kmsg.OffsetCommitResponse, error),
 ) {
 	if onDone == nil { // note we must always call onDone
-		onDone = func(_ *kmsg.OffsetCommitRequest, _ *kmsg.OffsetCommitResponse, _ error) {}
+		onDone = func(*Client, *kmsg.OffsetCommitRequest, *kmsg.OffsetCommitResponse, error) {}
 	}
 	if len(uncommitted) == 0 { // only empty if called thru autocommit / default revoke
 		// We have to do this concurrently because the expectation is
 		// that commit itself does not block.
-		go onDone(new(kmsg.OffsetCommitRequest), new(kmsg.OffsetCommitResponse), nil)
+		go onDone(g.cl, new(kmsg.OffsetCommitRequest), new(kmsg.OffsetCommitResponse), nil)
 		return
 	}
 
@@ -2086,10 +1812,10 @@ func (g *groupConsumer) commit(
 	g.commitDone = commitDone
 
 	req := &kmsg.OffsetCommitRequest{
-		Group:      g.id,
+		Group:      g.cfg.group,
 		Generation: g.generation,
 		MemberID:   g.memberID,
-		InstanceID: g.instanceID,
+		InstanceID: g.cfg.instanceID,
 	}
 
 	if ctx.Done() != nil {
@@ -2133,10 +1859,10 @@ func (g *groupConsumer) commit(
 
 		resp, err := req.RequestWith(commitCtx, g.cl)
 		if err != nil {
-			onDone(req, nil, err)
+			onDone(g.cl, req, nil, err)
 			return
 		}
 		g.updateCommitted(req, resp)
-		onDone(req, resp, nil)
+		onDone(g.cl, req, resp, nil)
 	}()
 }

@@ -27,10 +27,13 @@ func TestTxnEtl(t *testing.T) {
 	////////////////////
 
 	go func() {
-		cl, _ := NewClient(
+		cl, err := NewClient(
 			WithLogger(BasicLogger(os.Stderr, testLogLevel, nil)),
 			TransactionalID("p"+randsha()),
 		)
+		if err != nil {
+			panic(err)
+		}
 
 		defer cl.Close()
 
@@ -137,22 +140,19 @@ func (c *testConsumer) goTransact(txnsBeforeQuit int) {
 
 func (c *testConsumer) transact(txnsBeforeQuit int) {
 	defer c.wg.Done()
-	cl, _ := NewClient(
+	txnSess, _ := NewGroupTransactSession(
 		TransactionalID(randsha()),
 		WithLogger(testLogger()),
 		// Control records have their own unique offset, so for testing,
 		// we keep the record to ensure we do not doubly consume control
 		// records (unless aborting).
 		KeepControlRecords(),
+		ConsumerGroup(c.group),
+		ConsumeTopics(c.consumeFrom),
 		FetchIsolationLevel(ReadCommitted()),
-	)
-	defer cl.Close()
-
-	txnSess := cl.AssignGroupTransactSession(c.group,
-		GroupTopics(c.consumeFrom),
 		Balancers(c.balancer),
 	)
-	defer cl.AssignGroup("") // leave group to allow for group deletion
+	defer txnSess.Close()
 
 	ntxns := 0 // for if txnsBeforeQuit is non-negative
 
@@ -160,7 +160,7 @@ func (c *testConsumer) transact(txnsBeforeQuit int) {
 		// We poll with a short timeout so that we do not hang waiting
 		// at the end if another consumer hit the limit.
 		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-		fetches := cl.PollFetches(ctx)
+		fetches := txnSess.PollFetches(ctx)
 		cancel()
 		if len(fetches) == 0 {
 			if consumed := atomic.LoadUint64(&c.consumed); consumed == testRecordLimit {
@@ -205,7 +205,7 @@ func (c *testConsumer) transact(txnsBeforeQuit int) {
 				fetchRecs[r.Partition] = append(fetchRecs[r.Partition], fetchRec{offset: r.Offset, num: keyNum})
 			}
 
-			cl.Produce(
+			txnSess.Produce(
 				context.Background(),
 				&Record{
 					Topic: c.produceTo,

@@ -7,9 +7,11 @@ import (
 	"math"
 	"math/rand"
 	"net"
+	"regexp"
 	"sync"
 	"time"
 
+	"github.com/twmb/franz-go/pkg/kmsg"
 	"github.com/twmb/franz-go/pkg/kversion"
 	"github.com/twmb/franz-go/pkg/sasl"
 )
@@ -19,32 +21,44 @@ type Opt interface {
 	apply(*cfg)
 }
 
-// ProducerOpt is a producer-specific option to configure a client.
+// ProducerOpt is a producer specific option to configure a client.
 // This is simply a namespaced Opt.
 type ProducerOpt interface {
 	Opt
 	producerOpt()
 }
 
-// ConsumerOpt is a consumer-specific option to configure a client.
+// ConsumerOpt is a consumer specific option to configure a client.
 // This is simply a namespaced Opt.
 type ConsumerOpt interface {
 	Opt
 	consumerOpt()
 }
 
+// GroupOpt is a consumer group specific option to configure a client.
+// This is simply a namespaced Opt.
+type GroupOpt interface {
+	Opt
+	groupOpt()
+}
+
 type clientOpt struct{ fn func(*cfg) }
 type producerOpt struct{ fn func(*cfg) }
 type consumerOpt struct{ fn func(*cfg) }
+type groupOpt struct{ fn func(*cfg) }
 
 func (opt clientOpt) apply(cfg *cfg)   { opt.fn(cfg) }
 func (opt producerOpt) apply(cfg *cfg) { opt.fn(cfg) }
 func (opt consumerOpt) apply(cfg *cfg) { opt.fn(cfg) }
+func (opt groupOpt) apply(cfg *cfg)    { opt.fn(cfg) }
 func (producerOpt) producerOpt()       {}
 func (consumerOpt) consumerOpt()       {}
+func (groupOpt) groupOpt()             {}
 
+// A cfg can be written to while initializing a client, and after that it is
+// only ever read from. Some areas of initializing may follow options, but all
+// initializing is done before NewClient returns.
 type cfg struct {
-
 	/////////////////////
 	// GENERAL SECTION //
 	/////////////////////
@@ -117,6 +131,46 @@ type cfg struct {
 	rack           string
 
 	allowedConcurrentFetches int
+
+	topics     map[string]*regexp.Regexp   // topics to consume; if regex is true, values are compiled regular expressions
+	partitions map[string]map[int32]Offset // partitions to directly consume from
+	regex      bool
+
+	////////////////////////////
+	// CONSUMER GROUP SECTION //
+	////////////////////////////
+
+	group      string          // group we are in
+	instanceID *string         // optional group instance ID
+	balancers  []GroupBalancer // balancers we can use
+	protocol   string          // "consumer" by default, expected to never be overridden
+
+	sessionTimeout    time.Duration
+	rebalanceTimeout  time.Duration
+	heartbeatInterval time.Duration
+	requireStable     bool
+
+	onAssigned func(context.Context, *Client, map[string][]int32)
+	onRevoked  func(context.Context, *Client, map[string][]int32)
+	onLost     func(context.Context, *Client, map[string][]int32)
+
+	setAssigned bool
+	setRevoked  bool
+	setLost     bool
+
+	autocommitDisable  bool // true if autocommit was disabled or we are transactional
+	autocommitInterval time.Duration
+	commitCallback     func(*Client, *kmsg.OffsetCommitRequest, *kmsg.OffsetCommitResponse, error)
+}
+
+// cooperative is a helper that returns whether all group balancers in the
+// config are cooperative.
+func (cfg *cfg) cooperative() bool {
+	cooperative := true
+	for _, balancer := range cfg.balancers {
+		cooperative = cooperative && balancer.IsCooperative()
+	}
+	return cooperative
 }
 
 func (cfg *cfg) validate() error {
@@ -227,10 +281,20 @@ func (cfg *cfg) validate() error {
 			return l < r, "less"
 		}, durs: true},
 
-		// And finally, consumer settings. maxWait is stored as int32
-		// milliseconds, but we want the error message to be in the
-		// nice time.Duration string format.
+		// Consumer settings. maxWait is stored as int32 milliseconds,
+		// but we want the error message to be in the nice
+		// time.Duration string format.
 		{name: "max fetch wait", v: int64(cfg.maxWait) * int64(time.Millisecond), allowed: int64(10 * time.Millisecond), badcmp: i64lt, durs: true},
+
+		// Group settings.
+		{name: "number of balancers", v: int64(len(cfg.balancers)), allowed: 1, badcmp: i64lt},
+		{name: "consumer protocol length", v: int64(len(cfg.protocol)), allowed: 1, badcmp: i64lt},
+
+		{name: "session timeout", v: int64(cfg.sessionTimeout), allowed: int64(100 * time.Millisecond), badcmp: i64lt, durs: true},
+		{name: "rebalance timeout", v: int64(cfg.rebalanceTimeout), allowed: int64(100 * time.Millisecond), badcmp: i64lt, durs: true},
+		{name: "autocommit interval", v: int64(cfg.autocommitInterval), allowed: int64(100 * time.Millisecond), badcmp: i64lt, durs: true},
+
+		{v: int64(cfg.heartbeatInterval), allowed: int64(cfg.rebalanceTimeout) * int64(time.Millisecond), badcmp: i64gt, durs: true, fmt: "heartbeat interval %v is erroneously larger than the session timeout %v"},
 	} {
 		bad, cmp := limit.badcmp(limit.v, limit.allowed)
 		if bad {
@@ -247,12 +311,39 @@ func (cfg *cfg) validate() error {
 		}
 	}
 
+	if len(cfg.group) > 0 {
+		if len(cfg.topics) == 0 {
+			return errors.New("unable to consume from a group when no topics are specified")
+		}
+		if len(cfg.partitions) != 0 {
+			return errors.New("invalid direct-partition consuming option when consuming as a group")
+		}
+	}
+
+	if cfg.regex {
+		if len(cfg.partitions) != 0 {
+			return errors.New("invalid direct-partition consuming option when consuming as regex")
+		}
+		for re := range cfg.topics {
+			compiled, err := regexp.Compile(re)
+			if err != nil {
+				return fmt.Errorf("invalid regular expression %q", re)
+			}
+			cfg.topics[re] = compiled
+		}
+	}
+
 	return nil
 }
 
 func defaultCfg() cfg {
 	defaultID := "kgo"
 	return cfg{
+
+		/////////////
+		// general //
+		/////////////
+
 		id:     &defaultID,
 		dialFn: (&net.Dialer{Timeout: 10 * time.Second}).DialContext,
 
@@ -310,6 +401,10 @@ func defaultCfg() cfg {
 		metadataMaxAge: 5 * time.Minute,
 		metadataMinAge: 10 * time.Second,
 
+		//////////////
+		// producer //
+		//////////////
+
 		txnTimeout:          40 * time.Second,
 		acks:                AllISRAcks(),
 		compression:         []CompressionCodec{SnappyCompression(), NoCompression()},
@@ -319,6 +414,10 @@ func defaultCfg() cfg {
 		produceRetries:      math.MaxInt64,             // effectively unbounded
 		partitioner:         StickyKeyPartitioner(nil), // default to how Kafka partitions
 
+		//////////////
+		// consumer //
+		//////////////
+
 		maxWait:        5000,
 		minBytes:       1,
 		maxBytes:       50 << 20,
@@ -327,6 +426,21 @@ func defaultCfg() cfg {
 		isolationLevel: 0,
 
 		allowedConcurrentFetches: 0, // unbounded default
+
+		///////////
+		// group //
+		///////////
+
+		balancers: []GroupBalancer{
+			CooperativeStickyBalancer(),
+		},
+		protocol: "consumer",
+
+		sessionTimeout:    45000 * time.Millisecond,
+		rebalanceTimeout:  60000 * time.Millisecond,
+		heartbeatInterval: 3000 * time.Millisecond,
+
+		autocommitInterval: 5 * time.Second,
 	}
 }
 
@@ -924,4 +1038,252 @@ func FetchIsolationLevel(level IsolationLevel) ConsumerOpt {
 // Generally, control messages are not useful.
 func KeepControlRecords() ConsumerOpt {
 	return consumerOpt{func(cfg *cfg) { cfg.keepControl = true }}
+}
+
+// ConsumeTopics adds topics to use for consuming.
+//
+// By default, consuming will start at the beginning of partitions. To change
+// this, use the ConsumeResetOffset option.
+func ConsumeTopics(topics ...string) ConsumerOpt {
+	return consumerOpt{func(cfg *cfg) {
+		cfg.topics = make(map[string]*regexp.Regexp, len(topics))
+		for _, topic := range topics {
+			cfg.topics[topic] = nil
+		}
+	}}
+}
+
+// ConsumePartitions sets partitions to consume from directly and the offsets
+// to start consuming those partitions from.
+//
+// This option is basically a way to explicitly consume from subsets of partitions
+// in topics, or to consume at exact offsets. Offsets from this option have
+// higher precedence than the ConsumeResetOffset.
+//
+// This option is not compatible with group consuming and regex consuming.
+func ConsumePartitions(partitions map[string]map[int32]Offset) ConsumerOpt {
+	return consumerOpt{func(cfg *cfg) { cfg.partitions = partitions }}
+}
+
+// ConsumeRegex sets the client to parse all topics passed to ConsumeTopics as
+// regular expressions.
+//
+// When consuming via regex, every metadata request loads *all* topics, so that
+// all topics can be passed to any regular expressions. Every topic is
+// evaluated only once ever across all regular expressions; either it
+// permanently is known to match, or is permanently known to not match.
+func ConsumeRegex() ConsumerOpt {
+	return consumerOpt{func(cfg *cfg) { cfg.regex = true }}
+}
+
+//////////////////////////////////
+// CONSUMER GROUP CONFIGURATION //
+//////////////////////////////////
+
+// ConsumerGroup sets the consumer group for the client to join and consume in.
+// This option is required if using any other group options.
+//
+// Note that when group consuming, the default is to autocommit every 5s.
+// Autocommitting risks losing data if your applications crashes after
+// autocommitting but before you have processed polled records. To ensure
+// that you lose absolutely no data, you can disable autocommitting and
+// manually commit, like so:
+//
+//     cl.BlockingCommitOffsets(
+//             context.Background(),
+//             cl.UncommittedOffsets(),
+//             callback,
+//     )
+//
+// There are two downsides with manually committing offsets: you must define
+// the callback yourself (and check per-partition errors), and it is possible
+// that a group rebalance can happen and you will be trying to commit offsets
+// for partitions that have moved to a different consumer. If you do this, you
+// will actually rewind the other consumer, and if it crashes, it will replace
+// additional data.
+//
+// Generally, if you can tolerate a little bit of data loss from crashes
+// because you do not expect to ever crash, then relying on autocommitting is a
+// fine option.
+func ConsumerGroup(group string) GroupOpt {
+	return groupOpt{func(cfg *cfg) { cfg.group = group }}
+}
+
+// Balancers sets the group balancers to use for dividing topic partitions
+// among group members, overriding the defaults.
+//
+// The current default is [cooperative-sticky].
+//
+// For balancing, Kafka chooses the first protocol that all group members agree
+// to support.
+//
+// Note that if you want to opt in to cooperative-sticky rebalancing,
+// cooperative group balancing is incompatible with eager (classical)
+// rebalancing and requires a careful rollout strategy (see KIP-429).
+func Balancers(balancers ...GroupBalancer) GroupOpt {
+	return groupOpt{func(cfg *cfg) { cfg.balancers = balancers }}
+}
+
+// SessionTimeout sets how long a member in the group can go between
+// heartbeats, overriding the default 45,000ms. If a member does not heartbeat
+// in this timeout, the broker will remove the member from the group and
+// initiate a rebalance.
+//
+// If you are using a GroupTransactSession for EOS, wish to lower this, and are
+// talking to a Kafka cluster pre 2.5.0, consider lowering the
+// TransactionTimeout. If you do not, you risk a transaction finishing after a
+// group has rebalanced, which could lead to duplicate processing. If you are
+// talking to a Kafka 2.5.0+ cluster, you can safely use the
+// RequireStableFetchOffsets group option and prevent any problems.
+//
+// This option corresponds to Kafka's session.timeout.ms setting and must be
+// within the broker's group.min.session.timeout.ms and
+// group.max.session.timeout.ms.
+func SessionTimeout(timeout time.Duration) GroupOpt {
+	return groupOpt{func(cfg *cfg) { cfg.sessionTimeout = timeout }}
+}
+
+// RebalanceTimeout sets how long group members are allowed to take when a a
+// rebalance has begun, overriding the default 60,000ms. This timeout is how
+// long all members are allowed to complete work and commit offsets, minus the
+// time it took to detect the rebalance (from a heartbeat).
+//
+// Kafka uses the largest rebalance timeout of all members in the group. If a
+// member does not rejoin within this timeout, Kafka will kick that member from
+// the group.
+//
+// This corresponds to Kafka's rebalance.timeout.ms.
+func RebalanceTimeout(timeout time.Duration) GroupOpt {
+	return groupOpt{func(cfg *cfg) { cfg.rebalanceTimeout = timeout }}
+}
+
+// HeartbeatInterval sets how long a group member goes between heartbeats to
+// Kafka, overriding the default 3,000ms.
+//
+// Kafka uses heartbeats to ensure that a group member's session stays active.
+// This value can be any value lower than the session timeout, but should be no
+// higher than 1/3rd the session timeout.
+//
+// This corresponds to Kafka's heartbeat.interval.ms.
+func HeartbeatInterval(interval time.Duration) GroupOpt {
+	return groupOpt{func(cfg *cfg) { cfg.heartbeatInterval = interval }}
+}
+
+// RequireStableFetchOffsets sets the group consumer to require "stable" fetch
+// offsets before consuming from the group. Proposed in KIP-447 and introduced
+// in Kafka 2.5.0, stable offsets are important when consuming from partitions
+// that a transactional producer could be committing to.
+//
+// With this option, Kafka will block group consumers from fetching offsets for
+// partitions that are in an active transaction.
+//
+// Because this can block consumption, it is strongly recommended to set
+// transactional timeouts to a small value (10s) rather than the default 60s.
+// Lowering the transactional timeout will reduce the chance that consumers are
+// entirely blocked.
+func RequireStableFetchOffsets() GroupOpt {
+	return groupOpt{func(cfg *cfg) { cfg.requireStable = true }}
+}
+
+// OnAssigned sets the function to be called when a group is joined after
+// partitions are assigned before fetches for those partitions begin.
+//
+// This function combined with OnRevoked should not exceed the rebalance
+// interval. It is possible for the group, immediately after finishing a
+// balance, to re-enter a new balancing session.
+//
+// The OnAssigned function is passed the group's context, which is only
+// canceled if the group is left or the client is closed.
+func OnAssigned(onAssigned func(context.Context, *Client, map[string][]int32)) GroupOpt {
+	return groupOpt{func(cfg *cfg) { cfg.onAssigned, cfg.setAssigned = onAssigned, true }}
+}
+
+// OnRevoked sets the function to be called once this group member has
+// partitions revoked.
+//
+// This function combined with OnAssigned should not exceed the rebalance
+// interval. It is possible for the group, immediately after finishing a
+// balance, to re-enter a new balancing session.
+//
+// If autocommit is enabled, the default OnRevoked is a blocking commit all
+// offsets. The reason for a blocking commit is so that no later commit cancels
+// the blocking commit. If the commit in OnRevoked were canceled, then the
+// rebalance would proceed immediately, the commit that canceled the blocking
+// commit would fail, and duplicates could be consumed after the rebalance
+// completes.
+//
+// The OnRevoked function is passed the group's context, which is only canceled
+// if the group is left or the client is closed.
+//
+// OnRevoked function is called at the end of a group session even if there are
+// no partitions being revoked.
+//
+// If you are committing offsets manually (have disabled autocommitting), it is
+// highly recommended to do a proper blocking commit in OnRevoked.
+func OnRevoked(onRevoked func(context.Context, *Client, map[string][]int32)) GroupOpt {
+	return groupOpt{func(cfg *cfg) { cfg.onRevoked, cfg.setRevoked = onRevoked, true }}
+}
+
+// OnLost sets the function to be called on "fatal" group errors, such as
+// IllegalGeneration, UnknownMemberID, and authentication failures. This
+// function differs from OnRevoked in that it is unlikely that commits will
+// succeed when partitions are outright lost, whereas commits likely will
+// succeed when revoking partitions.
+//
+// If not set, OnRevoked is used.
+func OnLost(onLost func(context.Context, *Client, map[string][]int32)) GroupOpt {
+	return groupOpt{func(cfg *cfg) { cfg.onLost, cfg.setLost = onLost, true }}
+}
+
+// DisableAutoCommit disable auto committing.
+func DisableAutoCommit() GroupOpt {
+	return groupOpt{func(cfg *cfg) { cfg.autocommitDisable = true }}
+}
+
+// AutoCommitInterval sets how long to go between autocommits, overriding the
+// default 5s.
+func AutoCommitInterval(interval time.Duration) GroupOpt {
+	return groupOpt{func(cfg *cfg) { cfg.autocommitInterval = interval }}
+}
+
+// InstanceID sets the group consumer's instance ID, switching the group member
+// from "dynamic" to "static".
+//
+// Prior to Kafka 2.3.0, joining a group gave a group member a new member ID.
+// The group leader could not tell if this was a rejoining member. Thus, any
+// join caused the group to rebalance.
+//
+// Kafka 2.3.0 introduced the concept of an instance ID, which can persist
+// across restarts. This allows for avoiding many costly rebalances and allows
+// for stickier rebalancing for rejoining members (since the ID for balancing
+// stays the same). The main downsides are that you, the user of a client, have
+// to manage instance IDs properly, and that it may take longer to rebalance in
+// the event that a client legitimately dies.
+//
+// When using an instance ID, the client does NOT send a leave group request
+// when closing. This allows for the client ot restart with the same instance
+// ID and rejoin the group to avoid a rebalance. It is strongly recommended to
+// increase the session timeout enough to allow time for the restart (remember
+// that the default session timeout is 10s).
+//
+// To actually leave the group, you must use an external admin command that
+// issues a leave group request on behalf of this instance ID (see kcl), or you
+// can manually use the kmsg package with a proper LeaveGroupRequest.
+//
+// NOTE: Leaving a group with an instance ID is only supported in Kafka 2.4.0+.
+func InstanceID(id string) GroupOpt {
+	return groupOpt{func(cfg *cfg) { cfg.instanceID = &id }}
+}
+
+// GroupProtocol sets the group's join protocol, overriding the default value
+// "consumer". The only reason to override this is if you are implementing
+// custom join and sync group logic.
+func GroupProtocol(protocol string) GroupOpt {
+	return groupOpt{func(cfg *cfg) { cfg.protocol = protocol }}
+}
+
+// CommitCallback sets the callback to use if autocommitting is enabled. This
+// overrides the default callback that logs errors and continues.
+func CommitCallback(fn func(*Client, *kmsg.OffsetCommitRequest, *kmsg.OffsetCommitResponse, error)) GroupOpt {
+	return groupOpt{func(cfg *cfg) { cfg.commitCallback = fn }}
 }
