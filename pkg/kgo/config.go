@@ -1089,22 +1089,18 @@ func ConsumeRegex() ConsumerOpt {
 // that you lose absolutely no data, you can disable autocommitting and
 // manually commit, like so:
 //
-//     cl.BlockingCommitOffsets(
-//             context.Background(),
-//             cl.UncommittedOffsets(),
-//             callback,
-//     )
+//     if err := cl.CommitUncommittedOffsets(context.Background()) {
+//             // handle err; unable to commit
+//     }
 //
-// There are two downsides with manually committing offsets: you must define
-// the callback yourself (and check per-partition errors), and it is possible
-// that a group rebalance can happen and you will be trying to commit offsets
-// for partitions that have moved to a different consumer. If you do this, you
-// will actually rewind the other consumer, and if it crashes, it will replace
-// additional data.
+// The main downside with disabling autocommitting is that you run the risk of
+// some duplicate processing of records than necessary. See the documentation
+// on DisableAutoCommit for more details.
 //
-// Generally, if you can tolerate a little bit of data loss from crashes
-// because you do not expect to ever crash, then relying on autocommitting is a
-// fine option.
+// If you can tolerate a little bit of data loss from crashes because you do
+// not expect to ever crash, then relying on autocommitting is a fine option.
+// However, if you can tolerate a little bit of duplicate processing, manually
+// committing is very easy.
 func ConsumerGroup(group string) GroupOpt {
 	return groupOpt{func(cfg *cfg) { cfg.group = group }}
 }
@@ -1236,6 +1232,26 @@ func OnLost(onLost func(context.Context, *Client, map[string][]int32)) GroupOpt 
 }
 
 // DisableAutoCommit disable auto committing.
+//
+// If you disable autocommitting, you may want to use a custom OnRevoked,
+// otherwise you may end up doubly processing records (which is fine, just
+// leads to duplicate processing). Consider the scenario: you, member A, are
+// processing partition 0, and previously committed offset 4 and have now
+// locally processed through offset 30. A rebalance happens, and partition 0
+// moves to member B. If you use OnRevoked, you can detect that you are losing
+// this partition and commit your work through offset 30, so that member B can
+// start processing at offset 30. If you do not commit (i.e. you do not use a
+// custom OnRevoked), the other member will start processing at offset 4. It
+// may process through offset 50, leading to double processing of offsets 4
+// through 29. Worse, you, member A, can rewind member B's commit, because
+// member B may commit offset 50 and you may finally eventually commit offset
+// 30. If a rebalance happens, then even more duplicate processing will occur
+// of offsets 30 through 49.
+//
+// Again, OnRevoked is not necessary, and not using it just means double
+// processing, which for most workloads is fine since a simple group consumer
+// is not EOS / transactional, only at-least-once. But, this is something to be
+// aware of.
 func DisableAutoCommit() GroupOpt {
 	return groupOpt{func(cfg *cfg) { cfg.autocommitDisable = true }}
 }
