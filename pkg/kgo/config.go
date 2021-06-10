@@ -1209,7 +1209,10 @@ func OnAssigned(onAssigned func(context.Context, *Client, map[string][]int32)) G
 // completes.
 //
 // The OnRevoked function is passed the group's context, which is only canceled
-// if the group is left or the client is closed.
+// if the group is left or the client is closed. Since OnRevoked is called when
+// leaving a group, you likely want to commit before leaving, and to ignore
+// context.Canceled / return early if your handling in OnRevoked fails due to
+// the context being canceled.
 //
 // OnRevoked function is called at the end of a group session even if there are
 // no partitions being revoked.

@@ -135,11 +135,11 @@ func (c *testConsumer) etl(etlsBeforeQuit int) {
 		opts = append(opts,
 			DisableAutoCommit(),
 			OnRevoked(func(ctx context.Context, cl *Client, _ map[string][]int32) {
-				cl.BlockingCommitOffsets(
-					ctx,
-					cl.UncommittedOffsets(),
-					nil,
-				)
+				// context.Canceled means the client left the
+				// group, so we ignore that.
+				if err := cl.CommitUncommittedOffsets(ctx); err != nil && err != context.Canceled {
+					c.errCh <- fmt.Errorf("unable to commit: %v", err)
+				}
 			}),
 			OnLost(func(context.Context, *Client, map[string][]int32) {}),
 		)
@@ -165,11 +165,9 @@ func (c *testConsumer) etl(etlsBeforeQuit int) {
 		// see above). To do so, we commit every time _before_ we poll.
 		// Thus, the final poll will remain uncommitted.
 		if etlsBeforeQuit > 0 {
-			cl.BlockingCommitOffsets(
-				context.Background(),
-				cl.UncommittedOffsets(),
-				nil,
-			)
+			if err := cl.CommitUncommittedOffsets(context.Background()); err != nil {
+				c.errCh <- fmt.Errorf("unable to commit: %v", err)
+			}
 		}
 
 		// We poll with a short timeout so that we do not hang waiting
