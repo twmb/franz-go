@@ -58,11 +58,13 @@ ACLResourceType int8 (
 // This field was added with Kafka 2.0.0 for KIP-290.
 ACLResourcePatternType int8 (
   // Matches anything.
-  1: MATCH
+  1: ANY
+  // Performs pattern matching; i.e., a literal match, or a prefix match, or wildcard.
+  2: MATCH
   // The name must be an exact match.
-  2: LITERAL
+  3: LITERAL
   // The name must have our requested name as a prefix (that is, "foo" will match on "foobar").
-  3: PREFIXED
+  4: PREFIXED
 )
 
 // An ACL permission type.

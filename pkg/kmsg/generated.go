@@ -38381,13 +38381,16 @@ const (
 //
 // Possible values and their meanings:
 //
-// * 1 (MATCH)
+// * 1 (ANY)
 // Matches anything.
 //
-// * 2 (LITERAL)
+// * 2 (MATCH)
+// Performs pattern matching; i.e., a literal match, or a prefix match, or wildcard.
+//
+// * 3 (LITERAL)
 // The name must be an exact match.
 //
-// * 3 (PREFIXED)
+// * 4 (PREFIXED)
 // The name must have our requested name as a prefix (that is, "foo" will match on "foobar").
 //
 type ACLResourcePatternType int8
@@ -38397,19 +38400,22 @@ func (v ACLResourcePatternType) String() string {
 	default:
 		return "UNKNOWN"
 	case 1:
-		return "MATCH"
+		return "ANY"
 	case 2:
-		return "LITERAL"
+		return "MATCH"
 	case 3:
+		return "LITERAL"
+	case 4:
 		return "PREFIXED"
 	}
 }
 
 const (
 	ACLResourcePatternTypeUnknown  ACLResourcePatternType = 0
-	ACLResourcePatternTypeMatch    ACLResourcePatternType = 1
-	ACLResourcePatternTypeLiteral  ACLResourcePatternType = 2
-	ACLResourcePatternTypePrefixed ACLResourcePatternType = 3
+	ACLResourcePatternTypeAny      ACLResourcePatternType = 1
+	ACLResourcePatternTypeMatch    ACLResourcePatternType = 2
+	ACLResourcePatternTypeLiteral  ACLResourcePatternType = 3
+	ACLResourcePatternTypePrefixed ACLResourcePatternType = 4
 )
 
 // An ACL permission type.
