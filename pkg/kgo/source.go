@@ -656,7 +656,7 @@ func (s *source) fetch(consumerSession *consumerSession, doneFetch chan<- struct
 		s.cl.triggerUpdateMetadataNow()
 	}
 
-	if len(fetch.Topics) > 0 {
+	if fetch.hasErrorsOrRecords() {
 		buffered = true
 		s.buffered = bufferedFetch{
 			fetch:       fetch,

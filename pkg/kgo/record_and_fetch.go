@@ -274,6 +274,23 @@ func (fs Fetches) Errors() []FetchError {
 	return errs
 }
 
+// When we fetch, it is possible for Kafka to reply with topics / partitions
+// that have no records and no errors. This will definitely happen outside of
+// fetch sessions, but may also happen at other times (for some reason).
+// When that happens we want to ignore the fetch.
+func (f Fetch) hasErrorsOrRecords() bool {
+	for i := range f.Topics {
+		t := &f.Topics[i]
+		for j := range t.Partitions {
+			p := &t.Partitions[j]
+			if p.Err != nil || len(p.Records) > 0 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // IsClientClosed returns whether the fetches includes an error indicating that
 // the client is closed.
 //
