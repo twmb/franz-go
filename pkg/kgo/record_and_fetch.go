@@ -263,12 +263,31 @@ type FetchError struct {
 //
 //   4) an injected ErrClientClosed; this is a fatal informational error that
 //      is returned from every Poll call if the client has been closed.
+//      A corresponding helper function IsClientClosed can be used to detect
+//      this error.
+//
 func (fs Fetches) Errors() []FetchError {
 	var errs []FetchError
 	fs.EachError(func(t string, p int32, err error) {
 		errs = append(errs, FetchError{t, p, err})
 	})
 	return errs
+}
+
+// IsClientClosed returns whether the fetches includes an error indicating that
+// the client is closed.
+//
+// This function is useful to break out of a poll loop; you likely want to call
+// this function before calling Errors.
+func (fs Fetches) IsClientClosed() bool {
+	// An injected ErrClientClosed is a dedicated fetch with one topic and
+	// one partition. We can use this to make IsClientClosed do less work.
+	for _, f := range fs {
+		if len(f.Topics) == 1 && len(f.Topics[0].Partitions) == 1 && f.Topics[0].Partitions[0].Err == ErrClientClosed {
+			return true
+		}
+	}
+	return false
 }
 
 // EachError calls fn for every partition that had a fetch error with the
