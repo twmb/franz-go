@@ -146,9 +146,9 @@ type HookBrokerE2E interface {
 // HookBrokerThrottle is called after a response to a request is read
 // from a broker, and the response identifies throttling in effect.
 type HookBrokerThrottle interface {
-	// OnThrottle is passed the broker metadata, the imposed throttling
-	// interval, and whether the throttle was applied before Kafka
-	// responded to them request or after.
+	// OnBrokerThrottle is passed the broker metadata, the imposed
+	// throttling interval, and whether the throttle was applied before
+	// Kafka responded to them request or after.
 	//
 	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
 	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
@@ -156,7 +156,7 @@ type HookBrokerThrottle interface {
 	// If throttledAfterResponse is false, then Kafka already applied the
 	// throttle. If it is true, the client internally will not send another
 	// request until the throttle deadline has passed.
-	OnThrottle(meta BrokerMetadata, throttleInterval time.Duration, throttledAfterResponse bool)
+	OnBrokerThrottle(meta BrokerMetadata, throttleInterval time.Duration, throttledAfterResponse bool)
 }
 
 // HookGroupManageError is called after every error that causes the client,

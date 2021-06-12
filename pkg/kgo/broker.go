@@ -1273,7 +1273,7 @@ func (cxn *brokerCxn) handleResps() {
 					}
 					cxn.cl.cfg.hooks.each(func(h Hook) {
 						if h, ok := h.(HookBrokerThrottle); ok {
-							h.OnThrottle(cxn.b.meta, time.Duration(millis)*time.Millisecond, throttlesAfterResp)
+							h.OnBrokerThrottle(cxn.b.meta, time.Duration(millis)*time.Millisecond, throttlesAfterResp)
 						}
 					})
 				}
