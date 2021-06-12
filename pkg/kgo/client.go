@@ -429,7 +429,7 @@ func (cl *Client) Close() {
 		sns.source.maybeConsume() // same
 	}
 
-	cl.failBufferedRecords(errClientClosing)
+	cl.failBufferedRecords(ErrClientClosed)
 }
 
 // Request issues a request to Kafka, waiting for and returning the response.

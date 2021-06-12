@@ -277,7 +277,7 @@ func (s *sink) produce(sem <-chan struct{}) bool {
 		default:
 			s.cl.cfg.logger.Log(LogLevelError, "fatal InitProducerID error, failing all buffered records", "broker", s.nodeID, "err", err)
 			fallthrough
-		case errClientClosing:
+		case ErrClientClosed:
 			s.cl.failBufferedRecords(err)
 		}
 		return false
@@ -495,8 +495,8 @@ func (s *sink) handleReqClientErr(req *produceRequest, err error) {
 		// retry to force a metadata reload.
 		s.handleRetryBatches(req.batches, req.backoffSeq, false, false)
 
-	case err == errClientClosing:
-		s.cl.failBufferedRecords(errClientClosing)
+	case err == ErrClientClosed:
+		s.cl.failBufferedRecords(ErrClientClosed)
 
 	default:
 		s.cl.cfg.logger.Log(LogLevelWarn, "random error while producing, requeueing unattempted request", "broker", s.nodeID, "err", err)

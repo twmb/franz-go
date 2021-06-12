@@ -842,7 +842,7 @@ func (cxn *brokerCxn) writeRequest(ctx context.Context, enqueuedForWritingAt tim
 				after.Stop()
 				writeErr = ctx.Err()
 			case <-cxn.cl.ctx.Done():
-				writeErr = errClientClosing
+				writeErr = ErrClientClosed
 			case <-cxn.deadCh:
 				writeErr = errChosenBrokerDead
 			}
@@ -913,7 +913,7 @@ func (cxn *brokerCxn) writeConn(ctx context.Context, buf []byte, timeout time.Du
 		cxn.conn.SetWriteDeadline(time.Now())
 		<-writeDone
 		if writeErr != nil {
-			writeErr = errClientClosing
+			writeErr = ErrClientClosed
 		}
 	case <-ctx.Done():
 		cxn.conn.SetWriteDeadline(time.Now())
@@ -970,7 +970,7 @@ func (cxn *brokerCxn) readConn(ctx context.Context, timeout time.Duration, enque
 		cxn.conn.SetReadDeadline(time.Now())
 		<-readDone
 		if err != nil {
-			err = errClientClosing
+			err = ErrClientClosed
 		}
 	case <-ctx.Done():
 		cxn.conn.SetReadDeadline(time.Now())

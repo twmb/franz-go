@@ -516,7 +516,7 @@ func (cl *Client) doInitProducerID(lastID int64, lastEpoch int16) (*producerID, 
 			select {
 			case <-cl.ctx.Done():
 				cl.cfg.logger.Log(LogLevelInfo, "producer id initialization failure due to dying client", "err", err)
-				return &producerID{lastID, lastEpoch, errClientClosing}, true
+				return &producerID{lastID, lastEpoch, ErrClientClosed}, true
 			default:
 			}
 		}
@@ -629,7 +629,7 @@ func (cl *Client) waitUnknownTopic(
 	for err == nil {
 		select {
 		case <-cl.ctx.Done():
-			err = errClientClosing
+			err = ErrClientClosed
 		case <-after:
 			err = errRecordTimeout
 		case retriableErr, ok := <-unknown.wait:

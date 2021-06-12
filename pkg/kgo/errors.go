@@ -91,8 +91,6 @@ var (
 
 	errRecordRetries = errors.New("record failed after being retried too many times")
 
-	errClientClosing = errors.New("client closing")
-
 	//////////////
 	// EXTERNAL //
 	//////////////
@@ -104,6 +102,17 @@ var (
 	// ErrAborting is returned for all buffered records while
 	// AbortBufferedRecords is being called.
 	ErrAborting = errors.New("client is aborting buffered records")
+
+	// ErrClientClosed is returned in various places when the client's
+	// Close function has been called.
+	//
+	// For producing, records are failed with this error.
+	//
+	// For consuming, a fake partition is injected into a poll response
+	// that has this error.
+	//
+	// For any request, the request is failed with this error.
+	ErrClientClosed = errors.New("client closed")
 )
 
 // ErrDataLoss is returned for Kafka >=2.1.0 when data loss is detected and the
