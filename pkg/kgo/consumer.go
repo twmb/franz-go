@@ -238,6 +238,11 @@ func (cl *Client) PollFetches(ctx context.Context) Fetches {
 // It is important to check all partition errors in the returned fetches. If
 // any partition has a fatal error and actually had no records, fake fetch will
 // be injected with the error.
+//
+// If the client is closing or has closed, a fake fetch will be injected that
+// has no topic, a partition of 0, and a partition error of ErrClientClosed.
+// This can be used to detect if the client is closing and to break out of a
+// poll loop.
 func (cl *Client) PollRecords(ctx context.Context, maxPollRecords int) Fetches {
 	if maxPollRecords == 0 {
 		maxPollRecords = -1
@@ -330,8 +335,13 @@ func (cl *Client) PollRecords(ctx context.Context, maxPollRecords int) Fetches {
 
 	select {
 	case <-cl.ctx.Done():
+		// The client is closed: we inject an error right now, which
+		// will be drained immediately in the fill call just below, and
+		// then will be returned with our fetches.
+		c.addFakeReadyForDraining("", 0, ErrClientClosed)
 		exit()
 	case <-ctx.Done():
+		// The user canceled: no need to inject anything; just return.
 		exit()
 	case <-done:
 	}

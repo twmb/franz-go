@@ -244,7 +244,7 @@ type FetchError struct {
 // Errors returns all errors in a fetch with the topic and partition that
 // errored.
 //
-// There are three classes of errors possible:
+// There are four classes of errors possible:
 //
 //   1) a normal kerr.Error; these are usually the non-retriable kerr.Errors,
 //      but theoretically a non-retriable error can be fixed at runtime (auth
@@ -261,6 +261,8 @@ type FetchError struct {
 //      restarting is an option, but you may need to manually repair your
 //      partition.
 //
+//   4) an injected ErrClientClosed; this is a fatal informational error that
+//      is returned from every Poll call if the client has been closed.
 func (fs Fetches) Errors() []FetchError {
 	var errs []FetchError
 	fs.EachError(func(t string, p int32, err error) {
