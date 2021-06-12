@@ -145,7 +145,7 @@ func TestRecBatchAppendTo(t *testing.T) {
 	var checkNum int
 	check := func() {
 		exp := kbatch.AppendTo(nil)
-		gotFull := ourBatch.appendTo(nil, version, 12, 11, true, true, compressor)
+		gotFull, _ := ourBatch.appendTo(nil, version, 12, 11, true, true, compressor)
 		lengthPrefix := 4
 		ourBatchSize := (&kbin.Reader{Src: gotFull}).Int32()
 		if version >= 9 {
@@ -318,11 +318,11 @@ func TestMessageSetAppendTo(t *testing.T) {
 		kset0rawc = kset0c.AppendTo(nil)
 		kset1rawc = kset1c.AppendTo(nil)
 
-		got0raw = ourBatch.appendToAsMessageSet(nil, 1, nil)
-		got1raw = ourBatch.appendToAsMessageSet(nil, 2, nil)
+		got0raw, _ = ourBatch.appendToAsMessageSet(nil, 1, nil)
+		got1raw, _ = ourBatch.appendToAsMessageSet(nil, 2, nil)
 
-		got0rawc = ourBatch.appendToAsMessageSet(nil, 1, compressor)
-		got1rawc = ourBatch.appendToAsMessageSet(nil, 2, compressor)
+		got0rawc, _ = ourBatch.appendToAsMessageSet(nil, 1, compressor)
+		got1rawc, _ = ourBatch.appendToAsMessageSet(nil, 2, compressor)
 	)
 
 	for i, pair := range []struct {

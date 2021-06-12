@@ -172,3 +172,35 @@ type HookGroupManageError interface {
 	// reached).
 	OnGroupManageError(error)
 }
+
+// ProduceBatchMetrics tracks information about successful produces to
+// partitions.
+type ProduceBatchMetrics struct {
+	// NumRecords is the number of records that were produced in this
+	// batch.
+	NumRecords int
+
+	// UncompressedBytes is the number of bytes the records serialized as
+	// before compression.
+	UncompressedBytes int
+
+	// CompressedBytes is the number of bytes actually written for this
+	// batch, after compression. If compression is not used, this will be
+	// equal to UncompresedBytes.
+	CompressedBytes int
+
+	// CompressionType signifies which algorithm the batch was compressed
+	// with.
+	//
+	// 0 is no compression, 1 is gzip, 2 is snappy, 3 is lz4, and 4 is
+	// zstd.
+	CompressionType uint8
+}
+
+// HookProduceBatchWritten is called whenever a batch is known to be
+// successfully produced.
+type HookProduceBatchWritten interface {
+	// OnProduceBatchWritten is called per successful batch written to a
+	// topic partition
+	OnProduceBatchWritten(meta BrokerMetadata, topic string, partition int32, metrics ProduceBatchMetrics)
+}
