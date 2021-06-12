@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"hash/crc32"
 	"math/rand"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -695,7 +696,7 @@ func (cl *Client) shardedRequest(ctx context.Context, req kmsg.Request) ([]Respo
 
 func shard(br *broker, req kmsg.Request, resp kmsg.Response, err error) ResponseShard {
 	if br == nil { // the broker could be nil if loading the broker failed.
-		return ResponseShard{unknownMetadata, req, resp, err}
+		return ResponseShard{unknownBrokerMetadata, req, resp, err}
 	}
 	return ResponseShard{br.meta, req, resp, err}
 }
@@ -711,6 +712,10 @@ func shards(shard ...ResponseShard) []ResponseShard {
 // metadata load once before failing. If the metadata load fails, this returns
 // that error.
 func (cl *Client) brokerOrErr(ctx context.Context, id int32, err error) (*broker, error) {
+	if id < 0 {
+		return nil, err
+	}
+
 	tryLoad := ctx != nil
 	tries := 0
 start:
@@ -1210,6 +1215,10 @@ type issueShard struct {
 	req    kmsg.Request
 	broker int32
 	any    bool
+
+	// if non-nil, we could not map this request shard to any broker, and
+	// this error is the reason.
+	err error
 }
 
 // sharder splits a request.
@@ -1343,7 +1352,9 @@ func (cl *Client) handleShardedReq(ctx context.Context, req kmsg.Request) ([]Res
 		if debug {
 			var brokerAnys []string
 			for _, issue := range issues {
-				if issue.any {
+				if issue.err != nil {
+					brokerAnys = append(brokerAnys, "err")
+				} else if issue.any {
 					brokerAnys = append(brokerAnys, "any")
 				} else {
 					brokerAnys = append(brokerAnys, fmt.Sprintf("%d", issue.broker))
@@ -1353,8 +1364,14 @@ func (cl *Client) handleShardedReq(ctx context.Context, req kmsg.Request) ([]Res
 		}
 
 		for i := range issues {
-			tries := try.tries
 			myIssue := issues[i]
+
+			if myIssue.err != nil {
+				addShard(shard(nil, myIssue.req, nil, myIssue.err))
+				continue
+			}
+
+			tries := try.tries
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
@@ -1474,6 +1491,96 @@ func (cl *Client) fetchMappedMetadata(ctx context.Context, topics []string) (map
 	return mapping, nil
 }
 
+func missingOrCodeT(t string, exists bool, code int16) error {
+	if !exists {
+		return fmt.Errorf("topic %s was not returned when looking up metadata for the topic", t)
+	}
+	return kerr.ErrorForCode(code)
+}
+
+func missingOrCodeP(t string, p int32, exists bool, code int16) error {
+	if !exists {
+		return fmt.Errorf("topic %s partition %d was not returned when looking up metadata for the topic", t, p)
+	}
+	return kerr.ErrorForCode(code)
+}
+
+// This is a helper for the sharded requests below; if mapping metadata fails
+// to load topics or partitions, we group the failures by error.
+//
+// We use a lot of reflect magic to make the actual usage much nicer.
+type unknownErrShards struct {
+	// load err => topic => mystery slice type
+	//
+	// The mystery type is basically just []Partition, where Partition can
+	// be any kmsg type.
+	mapped map[error]map[string]reflect.Value
+}
+
+// err stores a new failing partition with its failing error.
+//
+// partition's type is equal to the arg1 type of l.fn.
+func (l *unknownErrShards) err(err error, topic string, partition interface{}) {
+	if l.mapped == nil {
+		l.mapped = make(map[error]map[string]reflect.Value)
+	}
+	t := l.mapped[err]
+	if t == nil {
+		t = make(map[string]reflect.Value)
+		l.mapped[err] = t
+	}
+	slice, ok := t[topic]
+	if !ok {
+		// We make a slice of the input partition type.
+		slice = reflect.MakeSlice(reflect.SliceOf(reflect.TypeOf(partition)), 0, 1)
+	}
+
+	t[topic] = reflect.Append(slice, reflect.ValueOf(partition))
+}
+
+// errs takes an input slice of partitions and stores each with its failing
+// error.
+//
+// partitions is a slice where each element has type of arg1 of l.fn.
+func (l *unknownErrShards) errs(err error, topic string, partitions interface{}) {
+	v := reflect.ValueOf(partitions)
+	for i := 0; i < v.Len(); i++ {
+		l.err(err, topic, v.Index(i).Interface())
+	}
+}
+
+// Returns issueShards for each error stored in l.
+//
+// This takes a factory function: the first return is a new kmsg.Request, the
+// second is a function that adds a topic and its partitions to that request.
+//
+// Thus, fn is of type func() (kmsg.Request, func(string, []P))
+func (l *unknownErrShards) collect(mkreq, mergeParts interface{}) []issueShard {
+	if len(l.mapped) == 0 {
+		return nil
+	}
+
+	var shards []issueShard
+
+	factory := reflect.ValueOf(mkreq)
+	perTopic := reflect.ValueOf(mergeParts)
+	for err, topics := range l.mapped {
+
+		req := factory.Call(nil)[0]
+
+		for topic, partitions := range topics {
+			perTopic.Call([]reflect.Value{req, reflect.ValueOf(topic), partitions})
+		}
+
+		shards = append(shards, issueShard{
+			req: req.Interface().(kmsg.Request),
+			err: err,
+		})
+	}
+
+	return shards
+}
+
 // handles sharding ListOffsetsRequest
 type listOffsetsSharder struct{ *Client }
 
@@ -1495,21 +1602,22 @@ func (cl *listOffsetsSharder) shard(ctx context.Context, kreq kmsg.Request) ([]i
 	}
 
 	brokerReqs := make(map[int32]map[string][]kmsg.ListOffsetsRequestTopicPartition)
-	unknowns := make(map[string][]kmsg.ListOffsetsRequestTopicPartition)
+	var unknowns unknownErrShards
 
 	// For any topic or partition that had an error load, we blindly issue
 	// a load to the first seed broker. We expect the list to fail, but it
 	// is the best we could do.
 	for _, topic := range req.Topics {
-		tmapping, exists := mapping[topic.Topic]
-		if err := kerr.ErrorForCode(tmapping.topic.ErrorCode); err != nil || !exists {
-			unknowns[topic.Topic] = append(unknowns[topic.Topic], topic.Partitions...)
+		t := topic.Topic
+		tmapping, exists := mapping[t]
+		if err := missingOrCodeT(t, exists, tmapping.topic.ErrorCode); err != nil {
+			unknowns.errs(err, t, topic.Partitions)
 			continue
 		}
 		for _, partition := range topic.Partitions {
 			p, exists := tmapping.mapping[partition.Partition]
-			if !exists || kerr.ErrorForCode(p.ErrorCode) != nil {
-				unknowns[topic.Topic] = append(unknowns[topic.Topic], partition)
+			if err := missingOrCodeP(t, partition.Partition, exists, p.ErrorCode); err != nil {
+				unknowns.err(err, t, partition)
 				continue
 			}
 
@@ -1518,34 +1626,38 @@ func (cl *listOffsetsSharder) shard(ctx context.Context, kreq kmsg.Request) ([]i
 				brokerReq = make(map[string][]kmsg.ListOffsetsRequestTopicPartition)
 				brokerReqs[p.Leader] = brokerReq
 			}
-			brokerReq[topic.Topic] = append(brokerReq[topic.Topic], partition)
+			brokerReq[t] = append(brokerReq[t], partition)
 		}
 	}
 
-	if len(unknowns) > 0 {
-		brokerReqs[unknownSeedID(0)] = unknowns
+	mkreq := func() *kmsg.ListOffsetsRequest {
+		r := kmsg.NewPtrListOffsetsRequest()
+		r.ReplicaID = req.ReplicaID
+		r.IsolationLevel = req.IsolationLevel
+		return r
 	}
 
 	var issues []issueShard
 	for brokerID, brokerReq := range brokerReqs {
-		req := &kmsg.ListOffsetsRequest{
-			ReplicaID:      req.ReplicaID,
-			IsolationLevel: req.IsolationLevel,
-		}
+		req := mkreq()
 		for topic, parts := range brokerReq {
 			req.Topics = append(req.Topics, kmsg.ListOffsetsRequestTopic{
 				Topic:      topic,
 				Partitions: parts,
 			})
 		}
-
 		issues = append(issues, issueShard{
 			req:    req,
 			broker: brokerID,
 		})
 	}
 
-	return issues, true, nil // this is reshardable
+	return append(issues, unknowns.collect(mkreq, func(r *kmsg.ListOffsetsRequest, topic string, parts []kmsg.ListOffsetsRequestTopicPartition) {
+		r.Topics = append(r.Topics, kmsg.ListOffsetsRequestTopic{
+			Topic:      topic,
+			Partitions: parts,
+		})
+	})...), true, nil // this is reshardable
 }
 
 func (cl *listOffsetsSharder) onResp(kreq kmsg.Response) {} // metadata could be stale, but no cleanup we can do
@@ -1670,18 +1782,19 @@ func (cl *deleteRecordsSharder) shard(ctx context.Context, kreq kmsg.Request) ([
 	}
 
 	brokerReqs := make(map[int32]map[string][]kmsg.DeleteRecordsRequestTopicPartition)
-	unknowns := make(map[string][]kmsg.DeleteRecordsRequestTopicPartition)
+	var unknowns unknownErrShards
 
 	for _, topic := range req.Topics {
-		tmapping, exists := mapping[topic.Topic]
-		if err := kerr.ErrorForCode(tmapping.topic.ErrorCode); err != nil || !exists {
-			unknowns[topic.Topic] = append(unknowns[topic.Topic], topic.Partitions...)
+		t := topic.Topic
+		tmapping, exists := mapping[t]
+		if err := missingOrCodeT(t, exists, tmapping.topic.ErrorCode); err != nil {
+			unknowns.errs(err, t, topic.Partitions)
 			continue
 		}
 		for _, partition := range topic.Partitions {
 			p, exists := tmapping.mapping[partition.Partition]
-			if !exists || kerr.ErrorForCode(p.ErrorCode) != nil {
-				unknowns[topic.Topic] = append(unknowns[topic.Topic], partition)
+			if err := missingOrCodeP(t, partition.Partition, exists, p.ErrorCode); err != nil {
+				unknowns.err(err, t, partition)
 				continue
 			}
 
@@ -1690,33 +1803,37 @@ func (cl *deleteRecordsSharder) shard(ctx context.Context, kreq kmsg.Request) ([
 				brokerReq = make(map[string][]kmsg.DeleteRecordsRequestTopicPartition)
 				brokerReqs[p.Leader] = brokerReq
 			}
-			brokerReq[topic.Topic] = append(brokerReq[topic.Topic], partition)
+			brokerReq[t] = append(brokerReq[t], partition)
 		}
 	}
 
-	if len(unknowns) > 0 {
-		brokerReqs[unknownSeedID(0)] = unknowns
+	mkreq := func() *kmsg.DeleteRecordsRequest {
+		r := kmsg.NewPtrDeleteRecordsRequest()
+		r.TimeoutMillis = req.TimeoutMillis
+		return r
 	}
 
 	var issues []issueShard
 	for brokerID, brokerReq := range brokerReqs {
-		req := &kmsg.DeleteRecordsRequest{
-			TimeoutMillis: req.TimeoutMillis,
-		}
+		req := mkreq()
 		for topic, parts := range brokerReq {
 			req.Topics = append(req.Topics, kmsg.DeleteRecordsRequestTopic{
 				Topic:      topic,
 				Partitions: parts,
 			})
 		}
-
 		issues = append(issues, issueShard{
 			req:    req,
 			broker: brokerID,
 		})
 	}
 
-	return issues, true, nil // this is reshardable
+	return append(issues, unknowns.collect(mkreq, func(r *kmsg.DeleteRecordsRequest, topic string, parts []kmsg.DeleteRecordsRequestTopicPartition) {
+		r.Topics = append(r.Topics, kmsg.DeleteRecordsRequestTopic{
+			Topic:      topic,
+			Partitions: parts,
+		})
+	})...), true, nil // this is reshardable
 }
 
 func (cl *deleteRecordsSharder) onResp(kmsg.Response) {} // nothing to be done here
@@ -1759,18 +1876,19 @@ func (cl *offsetForLeaderEpochSharder) shard(ctx context.Context, kreq kmsg.Requ
 	}
 
 	brokerReqs := make(map[int32]map[string][]kmsg.OffsetForLeaderEpochRequestTopicPartition)
-	unknowns := make(map[string][]kmsg.OffsetForLeaderEpochRequestTopicPartition)
+	var unknowns unknownErrShards
 
 	for _, topic := range req.Topics {
-		tmapping, exists := mapping[topic.Topic]
-		if err := kerr.ErrorForCode(tmapping.topic.ErrorCode); err != nil || !exists {
-			unknowns[topic.Topic] = append(unknowns[topic.Topic], topic.Partitions...)
+		t := topic.Topic
+		tmapping, exists := mapping[t]
+		if err := missingOrCodeT(t, exists, tmapping.topic.ErrorCode); err != nil {
+			unknowns.errs(err, t, topic.Partitions)
 			continue
 		}
 		for _, partition := range topic.Partitions {
 			p, exists := tmapping.mapping[partition.Partition]
-			if !exists || kerr.ErrorForCode(p.ErrorCode) != nil {
-				unknowns[topic.Topic] = append(unknowns[topic.Topic], partition)
+			if err := missingOrCodeP(t, partition.Partition, exists, p.ErrorCode); err != nil {
+				unknowns.err(err, t, partition)
 				continue
 			}
 
@@ -1783,29 +1901,33 @@ func (cl *offsetForLeaderEpochSharder) shard(ctx context.Context, kreq kmsg.Requ
 		}
 	}
 
-	if len(unknowns) > 0 {
-		brokerReqs[unknownSeedID(0)] = unknowns
+	mkreq := func() *kmsg.OffsetForLeaderEpochRequest {
+		r := kmsg.NewPtrOffsetForLeaderEpochRequest()
+		r.ReplicaID = req.ReplicaID
+		return r
 	}
 
 	var issues []issueShard
 	for brokerID, brokerReq := range brokerReqs {
-		req := &kmsg.OffsetForLeaderEpochRequest{
-			ReplicaID: req.ReplicaID,
-		}
+		req := mkreq()
 		for topic, parts := range brokerReq {
 			req.Topics = append(req.Topics, kmsg.OffsetForLeaderEpochRequestTopic{
 				Topic:      topic,
 				Partitions: parts,
 			})
 		}
-
 		issues = append(issues, issueShard{
 			req:    req,
 			broker: brokerID,
 		})
 	}
 
-	return issues, true, nil // this is reshardable
+	return append(issues, unknowns.collect(mkreq, func(r *kmsg.OffsetForLeaderEpochRequest, topic string, parts []kmsg.OffsetForLeaderEpochRequestTopicPartition) {
+		r.Topics = append(r.Topics, kmsg.OffsetForLeaderEpochRequestTopic{
+			Topic:      topic,
+			Partitions: parts,
+		})
+	})...), true, nil // this is reshardable
 }
 
 func (cl *offsetForLeaderEpochSharder) onResp(kmsg.Response) {}
@@ -1986,7 +2108,7 @@ func (cl *alterReplicaLogDirsSharder) shard(ctx context.Context, kreq kmsg.Reque
 	}
 
 	brokerReqs := make(map[int32]map[string]map[string][]int32) // broker => dir => topic => partitions
-	unknowns := make(map[string]map[string][]int32)             // dir => topic => partitions
+	unknowns := make(map[error]map[string]map[string][]int32)   // err => dir => topic => partitions
 
 	addBroker := func(broker int32, dir, topic string, partition int32) {
 		brokerDirs := brokerReqs[broker]
@@ -2002,40 +2124,42 @@ func (cl *alterReplicaLogDirsSharder) shard(ctx context.Context, kreq kmsg.Reque
 		dirTopics[topic] = append(dirTopics[topic], partition)
 	}
 
-	addUnknown := func(dir, topic string, partition int32) {
-		dirTopics := unknowns[dir]
+	addUnknown := func(err error, dir, topic string, partition int32) {
+		dirs := unknowns[err]
+		if dirs == nil {
+			dirs = make(map[string]map[string][]int32)
+			unknowns[err] = dirs
+		}
+		dirTopics := dirs[dir]
 		if dirTopics == nil {
 			dirTopics = make(map[string][]int32)
-			unknowns[dir] = dirTopics
+			dirs[dir] = dirTopics
 		}
 		dirTopics[topic] = append(dirTopics[topic], partition)
 	}
 
 	for _, dir := range req.Dirs {
 		for _, topic := range dir.Topics {
-			tmapping, exists := mapping[topic.Topic]
-			if err := kerr.ErrorForCode(tmapping.topic.ErrorCode); err != nil || !exists {
+			t := topic.Topic
+			tmapping, exists := mapping[t]
+			if err := missingOrCodeT(t, exists, tmapping.topic.ErrorCode); err != nil {
 				for _, partition := range topic.Partitions {
-					addUnknown(dir.Dir, topic.Topic, partition)
+					addUnknown(err, dir.Dir, t, partition)
 				}
 				continue
 			}
 			for _, partition := range topic.Partitions {
 				p, exists := tmapping.mapping[partition]
-				if !exists || kerr.ErrorForCode(p.ErrorCode) != nil {
-					addUnknown(dir.Dir, topic.Topic, partition)
+				if err := missingOrCodeP(t, partition, exists, p.ErrorCode); err != nil {
+					addUnknown(err, dir.Dir, t, partition)
 					continue
 				}
 
 				for _, replica := range p.Replicas {
-					addBroker(replica, dir.Dir, topic.Topic, partition)
+					addBroker(replica, dir.Dir, t, partition)
 				}
 			}
 		}
-	}
-
-	if len(unknowns) > 0 {
-		brokerReqs[unknownSeedID(0)] = unknowns
 	}
 
 	var issues []issueShard
@@ -2057,6 +2181,27 @@ func (cl *alterReplicaLogDirsSharder) shard(ctx context.Context, kreq kmsg.Reque
 		issues = append(issues, issueShard{
 			req:    req,
 			broker: brokerID,
+		})
+	}
+
+	for err, dirs := range unknowns {
+		req := new(kmsg.AlterReplicaLogDirsRequest)
+		for dir, topics := range dirs {
+			rd := kmsg.AlterReplicaLogDirsRequestDir{
+				Dir: dir,
+			}
+			for topic, partitions := range topics {
+				rd.Topics = append(rd.Topics, kmsg.AlterReplicaLogDirsRequestDirTopic{
+					Topic:      topic,
+					Partitions: partitions,
+				})
+			}
+			req.Dirs = append(req.Dirs, rd)
+		}
+
+		issues = append(issues, issueShard{
+			req: req,
+			err: err,
 		})
 	}
 
@@ -2113,18 +2258,19 @@ func (cl *describeLogDirsSharder) shard(ctx context.Context, kreq kmsg.Request) 
 	}
 
 	brokerReqs := make(map[int32]map[string][]int32)
-	unknowns := make(map[string][]int32)
+	var unknowns unknownErrShards
 
 	for _, topic := range req.Topics {
-		tmapping, exists := mapping[topic.Topic]
-		if !exists || kerr.ErrorForCode(tmapping.topic.ErrorCode) != nil {
-			unknowns[topic.Topic] = append(unknowns[topic.Topic], topic.Partitions...)
+		t := topic.Topic
+		tmapping, exists := mapping[t]
+		if err := missingOrCodeT(t, exists, tmapping.topic.ErrorCode); err != nil {
+			unknowns.errs(err, t, topic.Partitions)
 			continue
 		}
 		for _, partition := range topic.Partitions {
 			p, exists := tmapping.mapping[partition]
-			if !exists || kerr.ErrorForCode(p.ErrorCode) != nil {
-				unknowns[topic.Topic] = append(unknowns[topic.Topic], partition)
+			if err := missingOrCodeP(t, partition, exists, p.ErrorCode); err != nil {
+				unknowns.err(err, t, partition)
 				continue
 			}
 
@@ -2139,27 +2285,31 @@ func (cl *describeLogDirsSharder) shard(ctx context.Context, kreq kmsg.Request) 
 		}
 	}
 
-	if len(unknowns) > 0 {
-		brokerReqs[unknownSeedID(0)] = unknowns
+	mkreq := func() *kmsg.DescribeLogDirsRequest {
+		return kmsg.NewPtrDescribeLogDirsRequest()
 	}
 
 	var issues []issueShard
 	for brokerID, brokerReq := range brokerReqs {
-		req := new(kmsg.DescribeLogDirsRequest)
+		req := mkreq()
 		for topic, parts := range brokerReq {
 			req.Topics = append(req.Topics, kmsg.DescribeLogDirsRequestTopic{
 				Topic:      topic,
 				Partitions: parts,
 			})
 		}
-
 		issues = append(issues, issueShard{
 			req:    req,
 			broker: brokerID,
 		})
 	}
 
-	return issues, true, nil // this is reshardable
+	return append(issues, unknowns.collect(mkreq, func(r *kmsg.DescribeLogDirsRequest, topic string, parts []int32) {
+		r.Topics = append(r.Topics, kmsg.DescribeLogDirsRequestTopic{
+			Topic:      topic,
+			Partitions: parts,
+		})
+	})...), true, nil // this is reshardable
 }
 
 func (cl *describeLogDirsSharder) onResp(kmsg.Response) {}
@@ -2335,18 +2485,19 @@ func (cl *describeProducersSharder) shard(ctx context.Context, kreq kmsg.Request
 	}
 
 	brokerReqs := make(map[int32]map[string][]int32) // broker => topic => partitions
-	unknowns := make(map[string][]int32)             // topic => partitions
+	var unknowns unknownErrShards
 
 	for _, topic := range req.Topics {
-		tmapping, exists := mapping[topic.Topic]
-		if err := kerr.ErrorForCode(tmapping.topic.ErrorCode); err != nil || !exists {
-			unknowns[topic.Topic] = append(unknowns[topic.Topic], topic.Partitions...)
+		t := topic.Topic
+		tmapping, exists := mapping[t]
+		if err := missingOrCodeT(t, exists, tmapping.topic.ErrorCode); err != nil {
+			unknowns.errs(err, t, topic.Partitions)
 			continue
 		}
 		for _, partition := range topic.Partitions {
 			p, exists := tmapping.mapping[partition]
-			if !exists || kerr.ErrorForCode(p.ErrorCode) != nil {
-				unknowns[topic.Topic] = append(unknowns[topic.Topic], partition)
+			if err := missingOrCodeP(t, partition, exists, p.ErrorCode); err != nil {
+				unknowns.err(err, t, partition)
 				continue
 			}
 
@@ -2359,27 +2510,31 @@ func (cl *describeProducersSharder) shard(ctx context.Context, kreq kmsg.Request
 		}
 	}
 
-	if len(unknowns) > 0 {
-		brokerReqs[unknownSeedID(0)] = unknowns
+	mkreq := func() *kmsg.DescribeProducersRequest {
+		return kmsg.NewPtrDescribeProducersRequest()
 	}
 
 	var issues []issueShard
 	for brokerID, brokerReq := range brokerReqs {
-		req := &kmsg.DescribeProducersRequest{}
+		req := mkreq()
 		for topic, parts := range brokerReq {
 			req.Topics = append(req.Topics, kmsg.DescribeProducersRequestTopic{
 				Topic:      topic,
 				Partitions: parts,
 			})
 		}
-
 		issues = append(issues, issueShard{
 			req:    req,
 			broker: brokerID,
 		})
 	}
 
-	return issues, true, nil // this is reshardable
+	return append(issues, unknowns.collect(mkreq, func(r *kmsg.DescribeProducersRequest, topic string, parts []int32) {
+		r.Topics = append(r.Topics, kmsg.DescribeProducersRequestTopic{
+			Topic:      topic,
+			Partitions: parts,
+		})
+	})...), true, nil // this is reshardable
 }
 
 func (cl *describeProducersSharder) onResp(kmsg.Response) {}

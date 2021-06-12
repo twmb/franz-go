@@ -62,10 +62,6 @@ type promisedResp struct {
 	readEnqueue  time.Time
 }
 
-var unknownMetadata = BrokerMetadata{
-	NodeID: -1,
-}
-
 // BrokerMetadata is metadata for a broker.
 //
 // This struct mirrors kmsg.MetadataResponseBroker.
@@ -130,6 +126,10 @@ type broker struct {
 }
 
 const unknownControllerID = -1
+
+var unknownBrokerMetadata = BrokerMetadata{
+	NodeID: -1,
+}
 
 // broker IDs are all positive, but Kafka uses -1 to signify unknown
 // controllers. To avoid issues where a client broker ID map knows of
