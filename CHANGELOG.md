@@ -1,3 +1,12 @@
+v0.8.3
+===
+
+- [`053911b`](https://github.com/twmb/commit/053911b) plugins: fix module declarations
+
+This is a patch release on the prior commit to fix the path declarations in the
+new plugin modules.
+
+
 v0.8.2
 ===
 
