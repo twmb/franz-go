@@ -1,3 +1,83 @@
+v0.8.1
+===
+
+This release contains a few features, one minor bugfix, two minor breaking
+API changes, and a few minor behavior changes.
+
+This release will immediately be followed with a v0.8.2 release that contains
+new examples using our new hooks added in this release.
+
+### Breakage
+
+One of the breaking API changes is followup from the prior release: all
+broker-specific hooks were meant to be renamed to `OnBrokerXyz`, but I missed
+`OnThrottle`. This is a rather niche hook so ideally this does not break
+many/any users.
+
+The other breaking API change is to make an API consistent: we have `Produce`
+and `ProduceSync`, and now we have `CommitRecords` and
+`CommitUncommittedOffsets` in addition to the original `CommitOffsets`, so
+`BlockingCommitOffsets` should be renamed to `CommitOffsetsSync`. This has the
+added benefit that now all committing functions will be next to each other in
+the documentation. One benefit with breaking this API is that it may help
+notify users of the much more easily used `CommitUncommittedOffsets`.
+
+### Features
+
+- Two new partitioners have been added, one of which allows you to set the
+  `Partition` field on a record before producing and have the client use that
+field for partitioning.
+
+- Two new hooks have been added that allow tracking some metrics per-batch
+  while producing and consuming. More per-batch metrics can be added to the
+hooks later if necessary, because the hooks take a struct that can be expanded
+upon.
+
+- The client now returns an injected `ErrClientClosed` fetch partition when
+  polling if the client has been closed, and `Fetches` now contains a helper
+`IsClientClosed` function. This can be used to break out of a poll loop on
+shutdown.
+
+### Behavior changes
+
+- The client will no longer add empty fetches to be polled. If fetch sessions
+  are disabled, or in certain other cases, Kafka replies to a fetch requests
+with the requested topics and partitions, but no records. The client would
+process these partitions and add them to be polled. Now, the client will avoid
+adding empty fetches (unless they contain an error), meaning polling should
+always have fetches that contain either records or an error.
+
+- When using sharded requests, the client no longer issues split pieces of the
+  requests to partitions that are currently erroring. Previously, if a request
+needed to go to the partition leader, but the leader was offline, the client
+would choose a random broker to send the request to. The request was expected
+to fail, but the failure error would be retriable, at which point we would
+reload metadata and hope the initial partition leader error would be resolved.
+We now just avoid this try-and-fail-and-hope loop, instead erroring the split
+piece immediately.
+
+### Examples
+
+This contains one more example, [`examples/group_consuming`](./examples/group_consuming),
+which demonstrates how to consume as a group and commit in three different ways,
+and describes the downsides of autocommitting.
+
+### Changes
+
+- [`fa1fd35`](https://github.com/twmb/franz-go/commit/fa1fd35) **feature** consuming: add HookFetchBatchRead
+- [`9810427`](https://github.com/twmb/franz-go/commit/9810427) **feature** producing: add HookProduceBatchWritten
+- [`20e5912`](https://github.com/twmb/franz-go/commit/20e5912) **breaking api** hook: rename OnThrottle => OnBrokerThrottle
+- [`a1d7506`](https://github.com/twmb/franz-go/commit/a1d7506) examples: add group consumer example, with three different commit styles
+- [`058f692`](https://github.com/twmb/franz-go/commit/058f692) behavior change, consuming: only add fetch if it has records or errors
+- [`d9649df`](https://github.com/twmb/franz-go/commit/d9649df) **feature** fetches: add IsClientClosed helper
+- [`bc0add3`](https://github.com/twmb/franz-go/commit/bc0add3) consumer: inject ErrClientClosing when polling if the client is closed
+- [`f50b320`](https://github.com/twmb/franz-go/commit/f50b320) client: make public ErrClientClosed
+- [`8b7b43e`](https://github.com/twmb/franz-go/commit/8b7b43e) behavior change, client: avoid issuing requests to shards that we know are erroring
+- [`96cb1c2`](https://github.com/twmb/franz-go/commit/96cb1c2) **bugfix** fix ACLResourcePatternType: add ANY
+- [`8cf3e5a`](https://github.com/twmb/franz-go/commit/8cf3e5a) **breaking api** rename BlockingCommitOffsets to CommitOffsetsSync
+- [`2092b4c`](https://github.com/twmb/franz-go/commit/2092b4c) and [`922f4b8`](https://github.com/twmb/franz-go/commit/922f4b8) **feature** add CommitRecords and CommitUncommittedOffsets
+- [`6808a55`](https://github.com/twmb/franz-go/commit/6808a55) **feature** add BasicConsistentPartitioner / ManualPartitioner
+
 v0.8.0
 ===
 
