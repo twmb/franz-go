@@ -47,7 +47,7 @@ type Logger interface {
 	Level() LogLevel
 
 	// Log logs a message with key, value pair arguments for the given log
-	// level.
+	// level. Keys are always strings, while values can be any type.
 	//
 	// This must be safe to call concurrently.
 	Log(level LogLevel, msg string, keyvals ...interface{})
