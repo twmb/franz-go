@@ -182,11 +182,21 @@ type ProduceBatchMetrics struct {
 
 	// UncompressedBytes is the number of bytes the records serialized as
 	// before compression.
+	//
+	// For record batches (Kafka v0.11.0+), this is the size of the records
+	// in a batch, and does not include record batch overhead.
+	//
+	// For message sets, this size includes message set overhead.
 	UncompressedBytes int
 
 	// CompressedBytes is the number of bytes actually written for this
 	// batch, after compression. If compression is not used, this will be
 	// equal to UncompresedBytes.
+	//
+	// For record batches, this is the size of the compressed records, and
+	// does not include record batch overhead.
+	//
+	// For message sets, this is the size of the compressed message set.
 	CompressedBytes int
 
 	// CompressionType signifies which algorithm the batch was compressed
@@ -203,4 +213,57 @@ type HookProduceBatchWritten interface {
 	// OnProduceBatchWritten is called per successful batch written to a
 	// topic partition
 	OnProduceBatchWritten(meta BrokerMetadata, topic string, partition int32, metrics ProduceBatchMetrics)
+}
+
+// FetchBatchMetrics tracks information about fetches of batches.
+type FetchBatchMetrics struct {
+	// NumRecords is the number of records that were fetched in this batch.
+	//
+	// Note that this number includes transaction markers, which are not
+	// actually returned to the user.
+	//
+	// If the batch has an encoding error, this will be 0.
+	NumRecords int
+
+	// UncompressedBytes is the number of bytes the records deserialized
+	// into after decompresion.
+	//
+	// For record batches (Kafka v0.11.0+), this is the size of the records
+	// in a batch, and does not include record batch overhead.
+	//
+	// For message sets, this size includes message set overhead.
+	//
+	// Note that this number may be higher than the corresponding number
+	// when producing, because as an "optimization", Kafka can return
+	// partial batches when fetching.
+	UncompressedBytes int
+
+	// CompressedBytes is the number of bytes actually read for this batch,
+	// before decompression. If the batch was not compressed, this will be
+	// equal to UncompressedBytes.
+	//
+	// For record batches, this is the size of the compressed records, and
+	// does not include record batch overhead.
+	//
+	// For message sets, this is the size of the compressed message set.
+	CompressedBytes int
+
+	// CompressionType signifies which algorithm the batch was compressed
+	// with.
+	//
+	// 0 is no compression, 1 is gzip, 2 is snappy, 3 is lz4, and 4 is
+	// zstd.
+	CompressionType uint8
+}
+
+// HookFetchBatchRead is called whenever a batch if read within the client.
+//
+// Note that this hook is called when processing, but a batch may be internally
+// discarded after processing in some uncommon specific circumstances.
+//
+// If the client reads v0 or v1 message sets, and they are not compressed, then
+// this hook will be called per record.
+type HookFetchBatchRead interface {
+	// OnFetchBatchRead is called per batch read from a topic partition.
+	OnFetchBatchRead(meta BrokerMetadata, topic string, partition int32, metrics FetchBatchMetrics)
 }
