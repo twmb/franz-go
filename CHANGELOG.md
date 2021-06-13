@@ -1,3 +1,16 @@
+v0.8.2
+===
+
+- [`65a0ed1`](https://github.com/twmb/commit/65a0ed1) add pluggable kgmetrics, kprom, kzap packages & examples
+
+This release immediately follows the prior release so that the plugin packages
+can refer to v0.8.1, which contains the (hopefully) final API breakages. This
+allows Go's version resolution to ensure users of these plugins use the latest
+franz-go package.
+
+These new plugins should make it very easy to integrate prometheus or
+go-metrics or zap with kgo.
+
 v0.8.1
 ===
 
