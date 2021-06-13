@@ -1,9 +1,8 @@
 Prometheus hooks & basic logging
 ===
 
-This contains a complete example for how to integrate prometheus metrics
-through read/write/connect/disconnect/throttle hooks, as well as how to
-use a logger with the kgo provided `BasicLogger`.
+This example shows how to use the plug-in kprom package to easily povide
+prometheus metrics.
 
 If your broker is running on `localhost:9092`, run `go run .` in this directory
 to see logs and run `curl localhost:9999/metrics` in a separate terminal to see
@@ -18,3 +17,6 @@ any comma delimited set of brokers.
 
 `-topic` can be specified to consume from an existing topic on your local
 broker, which will make the metrics and logs more meaningful.
+
+`-produce`, if used, configures this example to produce "foo" to the topic
+once per second, rather than the default of consuming from the topic.

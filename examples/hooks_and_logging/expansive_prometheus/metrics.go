@@ -31,6 +31,12 @@ type Metrics struct {
 	readTimings *prometheus.HistogramVec
 
 	throttles *prometheus.HistogramVec
+
+	produceBatchesUncompressed *prometheus.CounterVec
+	produceBatchesCompressed   *prometheus.CounterVec
+
+	fetchBatchesUncompressed *prometheus.CounterVec
+	fetchBatchesCompressed   *prometheus.CounterVec
 }
 
 func (m *Metrics) Handler() http.Handler {
@@ -38,15 +44,17 @@ func (m *Metrics) Handler() http.Handler {
 }
 
 // To see all hooks that are available, ctrl+f "Hook" in the package
-// documentation! The code below implements all hooks available at the time of
+// documentation! The code below implements most hooks available at the time of
 // this writing for demonstration.
 
 var ( // interface checks to ensure we implement the hooks properly
-	_ kgo.HookBrokerConnect    = new(Metrics)
-	_ kgo.HookBrokerDisconnect = new(Metrics)
-	_ kgo.HookBrokerWrite      = new(Metrics)
-	_ kgo.HookBrokerRead       = new(Metrics)
-	_ kgo.HookBrokerThrottle   = new(Metrics)
+	_ kgo.HookBrokerConnect       = new(Metrics)
+	_ kgo.HookBrokerDisconnect    = new(Metrics)
+	_ kgo.HookBrokerWrite         = new(Metrics)
+	_ kgo.HookBrokerRead          = new(Metrics)
+	_ kgo.HookBrokerThrottle      = new(Metrics)
+	_ kgo.HookProduceBatchWritten = new(Metrics)
+	_ kgo.HookFetchBatchRead      = new(Metrics)
 )
 
 func (m *Metrics) OnBrokerConnect(meta kgo.BrokerMetadata, _ time.Duration, _ net.Conn, err error) {
@@ -88,6 +96,18 @@ func (m *Metrics) OnBrokerRead(meta kgo.BrokerMetadata, _ int16, bytesRead int, 
 func (m *Metrics) OnBrokerThrottle(meta kgo.BrokerMetadata, throttleInterval time.Duration, _ bool) {
 	node := strconv.Itoa(int(meta.NodeID))
 	m.throttles.WithLabelValues(node).Observe(throttleInterval.Seconds())
+}
+
+func (m *Metrics) OnProduceBatchWritten(meta kgo.BrokerMetadata, topic string, _ int32, metrics kgo.ProduceBatchMetrics) {
+	node := strconv.Itoa(int(meta.NodeID))
+	m.produceBatchesUncompressed.WithLabelValues(node, topic).Add(float64(metrics.UncompressedBytes))
+	m.produceBatchesCompressed.WithLabelValues(node, topic).Add(float64(metrics.CompressedBytes))
+}
+
+func (m *Metrics) OnFetchBatchRead(meta kgo.BrokerMetadata, topic string, _ int32, metrics kgo.FetchBatchMetrics) {
+	node := strconv.Itoa(int(meta.NodeID))
+	m.fetchBatchesUncompressed.WithLabelValues(node, topic).Add(float64(metrics.UncompressedBytes))
+	m.fetchBatchesCompressed.WithLabelValues(node, topic).Add(float64(metrics.CompressedBytes))
 }
 
 func NewMetrics(namespace string) (m *Metrics) {
@@ -184,5 +204,31 @@ func NewMetrics(namespace string) (m *Metrics) {
 			Help:      "Latency of Kafka request throttles, in seconds by broker",
 			Buckets:   prometheus.ExponentialBuckets(0.0001, 1.5, 20),
 		}, []string{"node_id"}),
+
+		// produces & consumes
+
+		produceBatchesUncompressed: factory.NewCounterVec(prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "produce_bytes_uncompressed_total",
+			Help:      "Total number of uncompressed bytes produced, by broker and topic",
+		}, []string{"broker", "topic"}),
+
+		produceBatchesCompressed: factory.NewCounterVec(prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "produce_bytes_compressed_total",
+			Help:      "Total number of compressed bytes actually produced, by topic and partition",
+		}, []string{"topic", "partition"}),
+
+		fetchBatchesUncompressed: factory.NewCounterVec(prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "fetch_bytes_uncompressed_total",
+			Help:      "Total number of uncompressed bytes fetched, by topic and partition",
+		}, []string{"topic", "partition"}),
+
+		fetchBatchesCompressed: factory.NewCounterVec(prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "fetch_bytes_compressed_total",
+			Help:      "Total number of compressed bytes actually fetched, by topic and partition",
+		}, []string{"topic", "partition"}),
 	}
 }

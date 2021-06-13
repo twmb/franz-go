@@ -29,6 +29,7 @@ This library attempts to provide an intuitive API while interacting with Kafka t
 - Highly performant by avoiding channels and goroutines where not necessary
 - Written in pure Go (no wrapper lib for a C library or other bindings)
 - Ability to add detailed log messages or metrics using hooks
+- Plug-in metrics support for prometheus, zap, etc.
 
 ## Getting started
 
@@ -111,10 +112,10 @@ Supplementary information can be found in the docs directory:
 
 <pre>
 <a href="./docs">docs</a>
-├── <a href="./docs/admin-requests.md">admin requests</a> - an overview of how to issue admin requests
-├── <a href="./docs/package-layout.md">package layout</a> - describes the packages in franz-go
-├── <a href="./docs/producing-and-consuming.md">producing and consuming</a> - descriptions of producing & consuming & the guarantees
-└── <a href="./docs/transactions.md">transactions</a> - a description of transactions and the safety even in a pre-KIP-447 world
+├── <a href="./docs/admin-requests.md">admin requests</a> — an overview of how to issue admin requests
+├── <a href="./docs/package-layout.md">package layout</a> — describes the packages in franz-go
+├── <a href="./docs/producing-and-consuming.md">producing and consuming</a> — descriptions of producing & consuming & the guarantees
+└── <a href="./docs/transactions.md">transactions</a> — a description of transactions and the safety even in a pre-KIP-447 world
 </pre>
 
 ## Version Pinning
@@ -137,12 +138,17 @@ update roll.
 
 ## Metrics & logging
 
+**Note** there exists plug-in packages that allow you to easily add prometheus
+metrics, go-metrics, zap logging, etc. to your client! See the [plugin](./plugin)
+directory for more information!
+
 The franz-go client takes a neutral approach to metrics by providing hooks
 that you can use to plug in your own metrics.
 
 All connections, disconnections, reads, writes, and throttles can be hooked
-into.  If there is an aspect of the library that you wish you could have
-insight into, please open an issue and we can discuss adding another hook.
+into, as well as per-batch produce & consume metrics. If there is an aspect of
+the library that you wish you could have insight into, please open an issue and
+we can discuss adding another hook.
 
 Hooks allow you to log in the event of specific errors, or to trace latencies,
 count bytes, etc., all with your favorite monitoring systems.
@@ -153,8 +159,9 @@ file in a simple format. All logs have a message and then key/value pairs of
 supplementary information. It is recommended to always use a logger and to use
 `LogLevelInfo`.
 
-See [this example](./examples/hooks_and_logging/prometheus) for an example of
-integrating with prometheus!
+See [this example](./examples/hooks_and_logging/expansive_prometheus) for an expansive example of
+integrating with prometheus! Alternatively, see [this example](./examples/hooks_and_logging/plugin_prometheus)
+for how to use the plug-in prometheus package!
 
 ## Benchmarks
 
