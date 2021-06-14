@@ -140,7 +140,8 @@ update roll.
 
 **Note** there exists plug-in packages that allow you to easily add prometheus
 metrics, go-metrics, zap logging, etc. to your client! See the [plugin](./plugin)
-directory for more information!
+directory for more information! These plugins are provided under dedicated
+modules, e.g. `github.com/twmb/franz-go/plugin/kprom@v0.1.0`.
 
 The franz-go client takes a neutral approach to metrics by providing hooks
 that you can use to plug in your own metrics.

@@ -6,7 +6,6 @@ v0.8.3
 This is a patch release on the prior commit to fix the path declarations in the
 new plugin modules.
 
-
 v0.8.2
 ===
 
