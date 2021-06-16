@@ -29,6 +29,10 @@ var (
 	noCompression = flag.Bool("no-compression", false, "set to disable snappy compression (producing)")
 	poolProduce   = flag.Bool("pool", false, "if true, use a sync.Pool to reuse record structs/slices (producing)")
 
+	noIdempotency = flag.Bool("disable-idempotency", false, "if true, disable idempotency (force 1 produce rps")
+	logLevel      = flag.String("log-level", "", "if non-empty, use a basic logger with this log level (debug, info, warn, error)")
+	linger        = flag.Duration("linger", 0, "if non-zero, linger to use when producing")
+
 	consume = flag.Bool("consume", false, "if true, consume rather than produce")
 	group   = flag.String("group", "", "if non-empty, group to use for consuming rather than direct partition consuming (consuming)")
 
@@ -79,6 +83,9 @@ func main() {
 		// back because snappy deflation will balloon our memory usage.
 		kgo.FetchMaxBytes(5 << 20),
 	}
+	if *noIdempotency {
+		opts = append(opts, kgo.DisableIdempotentWrite())
+	}
 	if *consume {
 		opts = append(opts, kgo.ConsumeTopics(*topic))
 		if *group != "" {
@@ -86,12 +93,28 @@ func main() {
 		}
 	}
 
+	switch strings.ToLower(*logLevel) {
+	case "":
+	case "debug":
+		opts = append(opts, kgo.WithLogger(kgo.BasicLogger(os.Stderr, kgo.LogLevelDebug, nil)))
+	case "info":
+		opts = append(opts, kgo.WithLogger(kgo.BasicLogger(os.Stderr, kgo.LogLevelInfo, nil)))
+	case "warn":
+		opts = append(opts, kgo.WithLogger(kgo.BasicLogger(os.Stderr, kgo.LogLevelWarn, nil)))
+	case "error":
+		opts = append(opts, kgo.WithLogger(kgo.BasicLogger(os.Stderr, kgo.LogLevelError, nil)))
+	}
+
+	if *linger != 0 {
+		opts = append(opts, kgo.Linger(*linger))
+	}
 	if *noCompression {
 		opts = append(opts, kgo.BatchCompression(kgo.NoCompression()))
 	}
 	if *dialTLS {
 		opts = append(opts, kgo.Dialer((new(tls.Dialer)).DialContext))
 	}
+
 	if *saslMethod != "" || *saslUser != "" || *saslPass != "" {
 		if *saslMethod == "" || *saslUser == "" || *saslPass == "" {
 			die("all of -sasl-method, -sasl-user, -sasl-pass must be specified if any are")
