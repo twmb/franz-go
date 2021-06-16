@@ -62,7 +62,11 @@ func (cl *Client) newSink(nodeID int32) *sink {
 		nodeID:         nodeID,
 		produceVersion: -1,
 	}
-	s.inflightSem.Store(make(chan struct{}, 1))
+	maxInflight := 1
+	if cl.cfg.disableIdempotency {
+		maxInflight = cl.cfg.maxProduceInflight
+	}
+	s.inflightSem.Store(make(chan struct{}, maxInflight))
 	return s
 }
 
@@ -469,6 +473,10 @@ func (s *sink) issueTxnReq(
 // outside of a small window during the store, but some pages in the Kafka
 // confluence basically show that more than two in flight has marginal benefit
 // anyway (although that may be due to their Java API).
+//
+//   https://cwiki.apache.org/confluence/display/KAFKA/An+analysis+of+the+impact+of+max.in.flight.requests.per.connection+and+acks+on+Producer+performance
+//   https://issues.apache.org/jira/browse/KAFKA-5494
+//
 func (s *sink) firstRespCheck(idempotent bool, version int16) {
 	if s.produceVersion < 0 { // this is the only place this can be checked non-atomically
 		atomic.StoreInt32(&s.produceVersion, int32(version))

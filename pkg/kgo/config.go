@@ -105,6 +105,7 @@ type cfg struct {
 	txnTimeout         time.Duration
 	acks               Acks
 	disableIdempotency bool
+	maxProduceInflight int                // if idempotency is disabled, we allow a configurable max inflight
 	compression        []CompressionCodec // order of preference
 
 	defaultProduceTopic string
@@ -195,11 +196,20 @@ func (cfg *cfg) validate() error {
 		cfg.maxPartBytes = cfg.maxBytes
 	}
 
-	if cfg.disableIdempotency && cfg.txnID != nil {
-		return errors.New("cannot both disable idempotent writes and use transactional IDs")
-	}
-	if !cfg.disableIdempotency && cfg.acks.val != -1 {
-		return errors.New("idempotency requires acks=all")
+	if cfg.disableIdempotency {
+		if cfg.txnID != nil {
+			return errors.New("cannot both disable idempotent writes and use transactional IDs")
+		}
+		if cfg.maxProduceInflight <= 0 {
+			return fmt.Errorf("invalid max produce inflight %d with idempotency disabled", cfg.maxProduceInflight)
+		}
+	} else {
+		if cfg.acks.val != -1 {
+			return errors.New("idempotency requires acks=all")
+		}
+		if cfg.maxProduceInflight != 1 {
+			return fmt.Errorf("invalid usage of MaxProduceRequestsInflightPerBroker with idempotency enabled")
+		}
 	}
 
 	for _, limit := range []struct {
@@ -455,6 +465,7 @@ func defaultCfg() cfg {
 
 		txnTimeout:          40 * time.Second,
 		acks:                AllISRAcks(),
+		maxProduceInflight:  1,
 		compression:         []CompressionCodec{SnappyCompression(), NoCompression()},
 		maxRecordBatchBytes: 1000000, // Kafka max.message.bytes default is 1000012
 		maxBufferedRecords:  10000,
@@ -849,6 +860,17 @@ func RequiredAcks(acks Acks) ProducerOpt {
 // This option is incompatible with specifying a transactional id.
 func DisableIdempotentWrite() ProducerOpt {
 	return producerOpt{func(cfg *cfg) { cfg.disableIdempotency = true }}
+}
+
+// MaxProduceRequestsInflightPerBroker changes the number of allowed produce
+// requests in flight per broker if you disable idempotency, overriding the
+// default of 1. If using idempotency, this option has no effect: the maximum
+// in flight for Kafka v0.11 is 1, and from v1 onward is 5.
+//
+// Using more than 1 may result in out of order records and may result in
+// duplicates if there are connection issues.
+func MaxProduceRequestsInflightPerBroker(n int) ProducerOpt {
+	return producerOpt{func(cfg *cfg) { cfg.maxProduceInflight = n }}
 }
 
 // ProducerBatchCompression sets the compression codec to use for producing
