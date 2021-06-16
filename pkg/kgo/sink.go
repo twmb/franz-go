@@ -63,11 +63,7 @@ func (cl *Client) newSink(nodeID int32) *sink {
 		nodeID:         nodeID,
 		produceVersion: -1,
 	}
-	maxInflight := 1
-	if cl.cfg.disableIdempotency {
-		maxInflight = cl.cfg.maxProduceInflight
-	}
-	s.inflightSem.Store(make(chan struct{}, maxInflight))
+	s.inflightSem.Store(make(chan struct{}, 1))
 	return s
 }
 
@@ -486,10 +482,7 @@ func (s *sink) requeueUnattemptedReq(req *produceRequest, err error) {
 func (s *sink) firstRespCheck(version int16) {
 	if s.produceVersion < 0 { // this is the only place this can be checked non-atomically
 		atomic.StoreInt32(&s.produceVersion, int32(version))
-		// If idempotency is disabled, we initialize inflightSem with
-		// the number of inflight requests the user wants, so we do not
-		// override that preference here.
-		if version >= 4 && !s.cl.cfg.disableIdempotency {
+		if version >= 4 {
 			s.inflightSem.Store(make(chan struct{}, 4))
 		}
 	}
