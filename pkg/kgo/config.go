@@ -101,6 +101,7 @@ type cfg struct {
 	txnTimeout         time.Duration
 	acks               Acks
 	disableIdempotency bool
+	maxProduceInflight int                // if idempotency is disabled, we allow a configurable max inflight
 	compression        []CompressionCodec // order of preference
 
 	defaultProduceTopic string
@@ -184,11 +185,17 @@ func (cfg *cfg) validate() error {
 		cfg.maxPartBytes = cfg.maxBytes
 	}
 
-	if cfg.disableIdempotency && cfg.txnID != nil {
-		return errors.New("cannot both disable idempotent writes and use transactional IDs")
-	}
-	if !cfg.disableIdempotency && cfg.acks.val != -1 {
-		return errors.New("idempotency requires acks=all")
+	if cfg.disableIdempotency {
+		if cfg.txnID != nil {
+			return errors.New("cannot both disable idempotent writes and use transactional IDs")
+		}
+		if cfg.maxProduceInflight <= 0 {
+			return fmt.Errorf("invalid max produce inflight %d with idempotency disabled", cfg.maxProduceInflight)
+		}
+	} else {
+		if cfg.acks.val != -1 {
+			return errors.New("idempotency requires acks=all")
+		}
 	}
 
 	for _, limit := range []struct {
@@ -407,6 +414,7 @@ func defaultCfg() cfg {
 
 		txnTimeout:          40 * time.Second,
 		acks:                AllISRAcks(),
+		maxProduceInflight:  1,
 		compression:         []CompressionCodec{SnappyCompression(), NoCompression()},
 		maxRecordBatchBytes: 1000000, // Kafka max.message.bytes default is 1000012
 		maxBufferedRecords:  math.MaxInt64,
@@ -731,6 +739,19 @@ func RequiredAcks(acks Acks) ProducerOpt {
 // This option is incompatible with specifying a transactional id.
 func DisableIdempotentWrite() ProducerOpt {
 	return producerOpt{func(cfg *cfg) { cfg.disableIdempotency = true }}
+}
+
+// MaxProduceInflight changes the default number of maximum allowed produce
+// requests in flight.
+//
+// This option has no effect if using idempotency. If using idempotency, the
+// maximum in flight is 1 for Kafka v0.11 to v1, and then 5 from v1 onward.
+//
+// By default, if idempotency is disabled, the max inflight is set to 1, so
+// using this option allows you to increase the max inflight, but also
+// increases the risk of duplicates if there are connection issues.
+func MaxProduceInflight(n int) ProducerOpt {
+	return producerOpt{func(cfg *cfg) { cfg.maxProduceInflight = n }}
 }
 
 // BatchCompression sets the compression codec to use for producing records.
