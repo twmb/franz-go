@@ -1,7 +1,7 @@
 kzap
 ===
 
-kzap is a plug-in package to hook uber's [zap](https://github.com/uber-go/zap)
+kzap is a plug-in package to hook Uber's [zap](https://github.com/uber-go/zap)
 into a [`kgo.Logger`](https://pkg.go.dev/github.com/twmb/franz-go/pkg/kgo#Logger)
 
 To use,
