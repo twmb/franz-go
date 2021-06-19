@@ -30,7 +30,6 @@ var (
 	compression   = flag.String("compression", "snappy", "compression algorithm to use (none,gzip,snappy,lz4,zstd, for producing)")
 	poolProduce   = flag.Bool("pool", false, "if true, use a sync.Pool to reuse record structs/slices (producing)")
 	noIdempotency = flag.Bool("disable-idempotency", false, "if true, disable idempotency (force 1 produce rps)")
-	maxInflight   = flag.Int("max-inflight", 1, "if idempotency is disabled, set this to increase the max-inflight (increase duplicate risk, producing)")
 	linger        = flag.Duration("linger", 0, "if non-zero, linger to use when producing")
 	batchMaxBytes = flag.Int("batch-max-bytes", 1000000, "the maximum batch size to allow per-partition (must be less than Kafka's max.message.bytes, producing)")
 
@@ -89,7 +88,6 @@ func main() {
 	}
 	if *noIdempotency {
 		opts = append(opts, kgo.DisableIdempotentWrite())
-		opts = append(opts, kgo.MaxProduceInflight(*maxInflight))
 	}
 	if *consume {
 		opts = append(opts, kgo.ConsumeTopics(*topic))
