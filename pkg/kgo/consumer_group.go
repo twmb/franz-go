@@ -145,6 +145,9 @@ func (c *consumer) initGroup() {
 		using:            make(map[string]int),
 	}
 	c.g = g
+	if !g.cfg.setCommitCallback {
+		g.cfg.commitCallback = g.defaultCommitCallback
+	}
 
 	if g.cfg.txnID == nil {
 		// We only override revoked / lost if they were not explicitly

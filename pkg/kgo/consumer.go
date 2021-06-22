@@ -117,10 +117,6 @@ type consumer struct {
 	sourcesReadyCond        *sync.Cond
 	sourcesReadyForDraining []*source
 	fakeReadyForDraining    []Fetch
-
-	// dead is set when the client closes; this being true means that any
-	// Assign does nothing (aside from unassigning everything prior).
-	dead bool
 }
 
 type usedCursors map[*cursor]struct{}

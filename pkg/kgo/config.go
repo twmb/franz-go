@@ -154,9 +154,10 @@ type cfg struct {
 	onRevoked  func(context.Context, *Client, map[string][]int32)
 	onLost     func(context.Context, *Client, map[string][]int32)
 
-	setAssigned bool
-	setRevoked  bool
-	setLost     bool
+	setAssigned       bool
+	setRevoked        bool
+	setLost           bool
+	setCommitCallback bool
 
 	autocommitDisable  bool // true if autocommit was disabled or we are transactional
 	autocommitInterval time.Duration
@@ -1304,5 +1305,5 @@ func GroupProtocol(protocol string) GroupOpt {
 // CommitCallback sets the callback to use if autocommitting is enabled. This
 // overrides the default callback that logs errors and continues.
 func CommitCallback(fn func(*Client, *kmsg.OffsetCommitRequest, *kmsg.OffsetCommitResponse, error)) GroupOpt {
-	return groupOpt{func(cfg *cfg) { cfg.commitCallback = fn }}
+	return groupOpt{func(cfg *cfg) { cfg.commitCallback, cfg.setCommitCallback = fn, true }}
 }
