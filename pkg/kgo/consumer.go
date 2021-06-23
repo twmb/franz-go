@@ -132,7 +132,7 @@ func (c *consumer) init(cl *Client) {
 	c.cl = cl
 	c.sourcesReadyCond = sync.NewCond(&c.sourcesReadyMu)
 
-	if len(cl.cfg.topics) == 0 {
+	if len(cl.cfg.topics) == 0 && len(cl.cfg.partitions) == 0 {
 		return // not consuming
 	}
 
