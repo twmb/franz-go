@@ -1,3 +1,15 @@
+v0.8.4
+===
+
+[`e0346a2`](https://github.com/twmb/commit/e0346a2) **very minor bugfix** consumer group: set defaultCommitCallback
+- [`5047b31`](https://github.com/twmb/commit/5047b31) and [`05a6b8a`](https://github.com/twmb/commit/05a6b8a) bench: add -linger, -disable-idempotency, -log-level, -compression, -batch-max-bytes options
+
+This is a small release containing a very minor bugfix and more flags on the
+benchmark program. The bugfix basically re-adds a missing commit callback if
+you are not specifying your own, and the default commit callback just logs
+errors. So in short, this release ensures you see errors if there are any and
+you are using the default commit callback.
+
 v0.8.3
 ===
 
