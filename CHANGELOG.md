@@ -1,3 +1,12 @@
+v0.8.5
+===
+
+[`2732fb8`](https://github.com/twmb/commit/2732fb8) **bugfix** consumer: bugfix consuming of specific partitions if no topics are specified
+
+If `ConsumePartitions` was used without `ConsumeTopics`, the consumer would not
+start. This was missed in the conversion of starting the consumer after
+initializing a client to initializing the consumer _with_ the client.
+
 v0.8.4
 ===
 
