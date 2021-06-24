@@ -53,7 +53,7 @@ garbage as a factor of the benchmark.
 
 `-disable-idempotency` disables producing idempotently, which limits the throughput to 1rps
 
-`-ling` sets an amount of milliseconds to linger before producing, overriding the default 0.
+`-linger` sets an amount of milliseconds to linger before producing, overriding the default 0.
 
 ### Consuming (only relevant if consuming)
 
