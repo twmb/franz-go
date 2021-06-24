@@ -1,7 +1,7 @@
 v0.8.5
 ===
 
-[`2732fb8`](https://github.com/twmb/commit/2732fb8) **bugfix** consumer: bugfix consuming of specific partitions if no topics are specified
+[`2732fb8`](https://github.com/twmb/franz-go/commit/2732fb8) **bugfix** consumer: bugfix consuming of specific partitions if no topics are specified
 
 If `ConsumePartitions` was used without `ConsumeTopics`, the consumer would not
 start. This was missed in the conversion of starting the consumer after
@@ -10,8 +10,8 @@ initializing a client to initializing the consumer _with_ the client.
 v0.8.4
 ===
 
-[`e0346a2`](https://github.com/twmb/commit/e0346a2) **very minor bugfix** consumer group: set defaultCommitCallback
-- [`5047b31`](https://github.com/twmb/commit/5047b31) and [`05a6b8a`](https://github.com/twmb/commit/05a6b8a) bench: add -linger, -disable-idempotency, -log-level, -compression, -batch-max-bytes options
+[`e0346a2`](https://github.com/twmb/franz-go/commit/e0346a2) **very minor bugfix** consumer group: set defaultCommitCallback
+- [`5047b31`](https://github.com/twmb/franz-go/commit/5047b31) and [`05a6b8a`](https://github.com/twmb/franz-go/commit/05a6b8a) bench: add -linger, -disable-idempotency, -log-level, -compression, -batch-max-bytes options
 
 This is a small release containing a very minor bugfix and more flags on the
 benchmark program. The bugfix basically re-adds a missing commit callback if
@@ -22,7 +22,7 @@ you are using the default commit callback.
 v0.8.3
 ===
 
-- [`053911b`](https://github.com/twmb/commit/053911b) plugins: fix module declarations
+- [`053911b`](https://github.com/twmb/franz-go/commit/053911b) plugins: fix module declarations
 
 This is a patch release on the prior commit to fix the path declarations in the
 new plugin modules.
@@ -30,7 +30,7 @@ new plugin modules.
 v0.8.2
 ===
 
-- [`65a0ed1`](https://github.com/twmb/commit/65a0ed1) add pluggable kgmetrics, kprom, kzap packages & examples
+- [`65a0ed1`](https://github.com/twmb/franz-go/commit/65a0ed1) add pluggable kgmetrics, kprom, kzap packages & examples
 
 This release immediately follows the prior release so that the plugin packages
 can refer to v0.8.1, which contains the (hopefully) final API breakages. This
