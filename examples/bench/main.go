@@ -49,13 +49,11 @@ var (
 )
 
 func printRate() {
-	go func() {
-		for range time.Tick(time.Second) {
-			recs := atomic.SwapInt64(&rateRecs, 0)
-			bytes := atomic.SwapInt64(&rateBytes, 0)
-			fmt.Printf("%0.2f MiB/s; %0.2fk records/s\n", float64(bytes)/(1024*1024), float64(recs)/1000)
-		}
-	}()
+	for range time.Tick(time.Second) {
+		recs := atomic.SwapInt64(&rateRecs, 0)
+		bytes := atomic.SwapInt64(&rateBytes, 0)
+		fmt.Printf("%0.2f MiB/s; %0.2fk records/s\n", float64(bytes)/(1024*1024), float64(recs)/1000)
+	}
 }
 
 func die(msg string, args ...interface{}) {
