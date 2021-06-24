@@ -36,14 +36,24 @@ any comma delimited set of brokers.
 
 `-pprof` sets a port to bind to to enable the default pprof handlers.
 
+`-log-level` sets the log level to use, overriding the default of no client-level logs (can be debug, info, warn, error).
+
 ### Producing (only relevant if producing)
 
 `-record-bytes` specifies the size of records to produce.
 
-`-no-compression` disables snappy compression.
+`-batch-max-bytes` specifies the maximum amount of bytes per partition when producing. This must be less than Kafka's max.message.bytes value.
+
+`-no-compression` disables compression.
+
+`-compression` sets the compression to use, overriding the default of snappy. Supports "", "none", "snappy", "lz4", and "zstd".
 
 `-pool` enables using a `sync.Pool` to reuse records and value slices, reducing
 garbage as a factor of the benchmark.
+
+`-disable-idempotency` disables producing idempotently, which limits the throughput to 1rps
+
+`-ling` sets an amount of milliseconds to linger before producing, overriding the default 0.
 
 ### Consuming (only relevant if consuming)
 
