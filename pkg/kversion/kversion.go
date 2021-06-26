@@ -852,6 +852,9 @@ var maxTip = nextMax(max280, func(v listenerKeys) listenerKeys {
 		k(zkBroker, rBroker, rController), // 67 allocate producer ids
 	)
 
+	// KAFKA-12541 bd72ef1bf1e40feb3bc17349a385b479fa5fa530 KIP-734
+	v[2].inc() // 7 list offsets
+
 	return v
 })
 

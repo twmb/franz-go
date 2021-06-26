@@ -4,7 +4,10 @@
 // Version 5, introduced in Kafka 2.2.0, is the same as version 4. Using
 // version 5 implies you support Kafka's OffsetNotAvailableException
 // See KIP-207 for details.
-ListOffsetsRequest => key 2, max version 6, flexible v6+
+//
+// Version 7, introduced in Kafka 3.0, supports -3 as a timestamp to return
+// the timestamp and offset for the record with the largest timestamp.
+ListOffsetsRequest => key 2, max version 7, flexible v6+
   // ReplicaID is the broker ID to get offsets from. As a Kafka client, use -1.
   // The consumer replica ID (-1) causes requests to only succeed if issued
   // against the leader broker.
@@ -41,6 +44,15 @@ ListOffsetsRequest => key 2, max version 6, flexible v6+
       //
       // There exist two special timestamps: -2 corresponds to the earliest
       // timestamp, and -1 corresponds to the latest.
+      //
+      // If you are talking to Kafka 3.0+, there exists an additional special
+      // timestamp -3 that returns the latest timestamp produced so far and its
+      // corresponding offset. This is subtly different from the latest offset,
+      // because timestamps are client-side generated. More importantly though,
+      // because this returns the latest produced timestamp, this can be used
+      // to determine topic "liveness" (when was the last produce?).
+      // Previously, this was not easy to determine. See KIP-734 for more
+      // detail.
       Timestamp: int64
       // MaxNumOffsets is the maximum number of offsets to report.
       // This was removed after v0.

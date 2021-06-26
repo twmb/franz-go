@@ -4390,6 +4390,15 @@ type ListOffsetsRequestTopicPartition struct {
 	//
 	// There exist two special timestamps: -2 corresponds to the earliest
 	// timestamp, and -1 corresponds to the latest.
+	//
+	// If you are talking to Kafka 3.0+, there exists an additional special
+	// timestamp -3 that returns the latest timestamp produced so far and its
+	// corresponding offset. This is subtly different from the latest offset,
+	// because timestamps are client-side generated. More importantly though,
+	// because this returns the latest produced timestamp, this can be used
+	// to determine topic "liveness" (when was the last produce?).
+	// Previously, this was not easy to determine. See KIP-734 for more
+	// detail.
 	Timestamp int64
 
 	// MaxNumOffsets is the maximum number of offsets to report.
@@ -4449,6 +4458,9 @@ func NewListOffsetsRequestTopic() ListOffsetsRequestTopic {
 // Version 5, introduced in Kafka 2.2.0, is the same as version 4. Using
 // version 5 implies you support Kafka's OffsetNotAvailableException
 // See KIP-207 for details.
+//
+// Version 7, introduced in Kafka 3.0, supports -3 as a timestamp to return
+// the timestamp and offset for the record with the largest timestamp.
 type ListOffsetsRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
@@ -4475,7 +4487,7 @@ type ListOffsetsRequest struct {
 }
 
 func (*ListOffsetsRequest) Key() int16                 { return 2 }
-func (*ListOffsetsRequest) MaxVersion() int16          { return 6 }
+func (*ListOffsetsRequest) MaxVersion() int16          { return 7 }
 func (v *ListOffsetsRequest) SetVersion(version int16) { v.Version = version }
 func (v *ListOffsetsRequest) GetVersion() int16        { return v.Version }
 func (v *ListOffsetsRequest) IsFlexible() bool         { return v.Version >= 6 }
@@ -4819,7 +4831,7 @@ type ListOffsetsResponse struct {
 }
 
 func (*ListOffsetsResponse) Key() int16                 { return 2 }
-func (*ListOffsetsResponse) MaxVersion() int16          { return 6 }
+func (*ListOffsetsResponse) MaxVersion() int16          { return 7 }
 func (v *ListOffsetsResponse) SetVersion(version int16) { v.Version = version }
 func (v *ListOffsetsResponse) GetVersion() int16        { return v.Version }
 func (v *ListOffsetsResponse) IsFlexible() bool         { return v.Version >= 6 }
