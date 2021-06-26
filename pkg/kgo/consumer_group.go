@@ -1009,20 +1009,29 @@ func (g *groupConsumer) handleSyncResp(protocol string, resp *kmsg.SyncGroupResp
 
 func (g *groupConsumer) joinGroupProtocols() []kmsg.JoinGroupRequestProtocol {
 	g.mu.Lock()
+
 	topics := make([]string, 0, len(g.using))
 	for topic := range g.using {
 		topics = append(topics, topic)
 	}
+	nowDup := make(map[string][]int32) // deep copy to allow modifications
+	for topic, partitions := range g.nowAssigned {
+		nowDup[topic] = append([]int32(nil), partitions...)
+	}
+	gen := g.generation
+
 	g.mu.Unlock()
+
+	sort.Strings(topics) // we guarantee to JoinGroupMetadata that the input strings are sorted
+	for _, partitions := range nowDup {
+		sort.Slice(partitions, func(i, j int) bool { return partitions[i] < partitions[j] }) // same for partitions
+	}
+
 	var protos []kmsg.JoinGroupRequestProtocol
 	for _, balancer := range g.cfg.balancers {
 		protos = append(protos, kmsg.JoinGroupRequestProtocol{
-			Name: balancer.ProtocolName(),
-			Metadata: balancer.JoinGroupMetadata(
-				topics,
-				g.nowAssigned,
-				g.generation,
-			),
+			Name:     balancer.ProtocolName(),
+			Metadata: balancer.JoinGroupMetadata(topics, nowDup, gen),
 		})
 	}
 	return protos

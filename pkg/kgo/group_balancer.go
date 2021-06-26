@@ -17,8 +17,15 @@ type GroupBalancer interface {
 	// range, sticky.
 	ProtocolName() string
 
-	// JoinGroupMetadata returns the metadata to use in JoinGroup, given the topic
-	// interests and the current assignment and group generation.
+	// JoinGroupMetadata returns the metadata to use in JoinGroup, given
+	// the topic interests and the current assignment and group generation.
+	//
+	// It is safe to modify the input topics and currentAssignment. The
+	// input topics are guaranteed to be sorted, as are the partitions for
+	// each topic in currentAssignment. It is recommended for your output
+	// to be ordered by topic and partitions. Since Kafka uses the output
+	// from this function to determine whether a rebalance is needed, a
+	// deterministic output will avoid accidental rebalances.
 	JoinGroupMetadata(
 		topicInterests []string,
 		currentAssignment map[string][]int32,
@@ -62,8 +69,11 @@ type GroupMemberBalancer interface {
 	Balance(topics map[string]int32) IntoSyncAssignment
 }
 
-// IntoSyncAssignment takes a balance plan and returns a list of assignments
-// to use in a kmsg.SyncGroupRequest.
+// IntoSyncAssignment takes a balance plan and returns a list of assignments to
+// use in a kmsg.SyncGroupRequest.
+//
+// It is recommended to ensure the output is deterministic and ordered by
+// member / topic / partitions.
 type IntoSyncAssignment interface {
 	IntoSyncAssignment() []kmsg.SyncGroupRequestGroupAssignment
 }
@@ -223,16 +233,19 @@ func (p *BalancePlan) IntoSyncAssignment() []kmsg.SyncGroupRequestGroupAssignmen
 	for member, assignment := range p.plan {
 		var kassignment kmsg.GroupMemberAssignment
 		for topic, partitions := range assignment {
+			sort.Slice(partitions, func(i, j int) bool { return partitions[i] < partitions[j] })
 			kassignment.Topics = append(kassignment.Topics, kmsg.GroupMemberAssignmentTopic{
 				Topic:      topic,
 				Partitions: partitions,
 			})
 		}
+		sort.Slice(kassignment.Topics, func(i, j int) bool { return kassignment.Topics[i].Topic < kassignment.Topics[j].Topic })
 		kassignments = append(kassignments, kmsg.SyncGroupRequestGroupAssignment{
 			MemberID:         member,
 			MemberAssignment: kassignment.AppendTo(nil),
 		})
 	}
+	sort.Slice(kassignments, func(i, j int) bool { return kassignments[i].MemberID < kassignments[j].MemberID })
 	return kassignments
 }
 
@@ -361,7 +374,7 @@ func (g *groupConsumer) balanceGroup(proto string, members []kmsg.JoinGroupRespo
 func memberMetadataV0(interests []string) []byte {
 	return (&kmsg.GroupMemberMetadata{
 		Version: 0,
-		Topics:  interests,
+		Topics:  interests, // input interests are already sorted
 	}).AppendTo(nil)
 }
 
@@ -624,6 +637,13 @@ func (s *stickyBalancer) JoinGroupMetadata(interests []string, currentAssignment
 				Partitions: partitions,
 			})
 	}
+
+	// KAFKA-12898: ensure our topics are sorted
+	metaOwned := meta.OwnedPartitions
+	stickyCurrent := stickyMeta.CurrentAssignment
+	sort.Slice(metaOwned, func(i, j int) bool { return metaOwned[i].Topic < metaOwned[j].Topic })
+	sort.Slice(stickyCurrent, func(i, j int) bool { return stickyCurrent[i].Topic < stickyCurrent[j].Topic })
+
 	meta.UserData = stickyMeta.AppendTo(nil)
 	return meta.AppendTo(nil)
 }
