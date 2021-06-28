@@ -33,6 +33,7 @@ func (e Enum) WriteAppend(l *LineWriter) {
 	e.Type.WriteAppend(l)
 	l.Write("}")
 }
+
 func (e Enum) WriteDecode(l *LineWriter) {
 	l.Write("var t %s", e.Name)
 	l.Write("{")
@@ -609,30 +610,39 @@ func (s Struct) WriteDefn(l *LineWriter) {
 func (s Struct) WriteKeyFunc(l *LineWriter) {
 	l.Write("func (*%s) Key() int16 { return %d }", s.Name, s.Key)
 }
+
 func (s Struct) WriteMaxVersionFunc(l *LineWriter) {
 	l.Write("func (*%s) MaxVersion() int16 { return %d }", s.Name, s.MaxVersion)
 }
+
 func (s Struct) WriteGetVersionFunc(l *LineWriter) {
 	l.Write("func (v *%s) GetVersion() int16 { return v.Version }", s.Name)
 }
+
 func (s Struct) WriteSetVersionFunc(l *LineWriter) {
 	l.Write("func (v *%s) SetVersion(version int16) { v.Version = version }", s.Name)
 }
+
 func (s Struct) WriteAdminFunc(l *LineWriter) {
 	l.Write("func (v *%s) IsAdminRequest() {}", s.Name)
 }
+
 func (s Struct) WriteGroupCoordinatorFunc(l *LineWriter) {
 	l.Write("func (v *%s) IsGroupCoordinatorRequest() {}", s.Name)
 }
+
 func (s Struct) WriteTxnCoordinatorFunc(l *LineWriter) {
 	l.Write("func (v *%s) IsTxnCoordinatorRequest() {}", s.Name)
 }
+
 func (s Struct) WriteResponseKindFunc(l *LineWriter) {
 	l.Write("func (v *%s) ResponseKind() Response { return &%s{Version: v.Version }}", s.Name, s.ResponseKind)
 }
+
 func (s Struct) WriteRequestKindFunc(l *LineWriter) {
 	l.Write("func (v *%s) RequestKind() Request { return &%s{Version: v.Version }}", s.Name, s.RequestKind)
 }
+
 func (s Struct) WriteIsFlexibleFunc(l *LineWriter) {
 	if s.FlexibleAt >= 0 {
 		l.Write("func (v *%s) IsFlexible() bool { return v.Version >= %d }", s.Name, s.FlexibleAt)

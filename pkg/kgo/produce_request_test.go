@@ -449,5 +449,4 @@ func BenchmarkAppendBatch(b *testing.B) {
 			b.Log(len(buf))
 		})
 	}
-
 }

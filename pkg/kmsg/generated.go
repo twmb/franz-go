@@ -86,6 +86,7 @@ func (v *MessageV0) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *MessageV0) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -223,6 +224,7 @@ func (v *MessageV1) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *MessageV1) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -294,6 +296,7 @@ func (v *Header) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *Header) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -399,6 +402,7 @@ func (v *Record) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *Record) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -633,6 +637,7 @@ func (v *RecordBatch) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *RecordBatch) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -749,6 +754,7 @@ func (v *OffsetCommitKey) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *OffsetCommitKey) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -846,6 +852,7 @@ func (v *OffsetCommitValue) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *OffsetCommitValue) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -915,6 +922,7 @@ func (v *GroupMetadataKey) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *GroupMetadataKey) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -1088,6 +1096,7 @@ func (v *GroupMetadataValue) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *GroupMetadataValue) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -1205,6 +1214,7 @@ func (v *TxnMetadataKey) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *TxnMetadataKey) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -1339,6 +1349,7 @@ func (v *TxnMetadataValue) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *TxnMetadataValue) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -1567,6 +1578,7 @@ func (v *GroupMemberMetadata) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *GroupMemberMetadata) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -1717,6 +1729,7 @@ func (v *GroupMemberAssignment) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *GroupMemberAssignment) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -1839,6 +1852,7 @@ func (v *DefaultPrincipalData) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *DefaultPrincipalData) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -1913,6 +1927,7 @@ func (v *ControlRecordKey) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *ControlRecordKey) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -1965,6 +1980,7 @@ func (v *EndTxnMarker) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *EndTxnMarker) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -2086,6 +2102,7 @@ func (v *LeaderChangeMessage) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *LeaderChangeMessage) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -2368,6 +2385,7 @@ func (v *ProduceRequest) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *ProduceRequest) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -2813,6 +2831,7 @@ func (v *ProduceResponse) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *ProduceResponse) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -3354,6 +3373,7 @@ func (v *FetchRequest) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *FetchRequest) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -4126,6 +4146,7 @@ func (v *FetchResponse) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *FetchResponse) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -4575,6 +4596,7 @@ func (v *ListOffsetsRequest) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *ListOffsetsRequest) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -4923,6 +4945,7 @@ func (v *ListOffsetsResponse) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *ListOffsetsResponse) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -5215,6 +5238,7 @@ func (v *MetadataRequest) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *MetadataRequest) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -5683,6 +5707,7 @@ func (v *MetadataResponse) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *MetadataResponse) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -6399,6 +6424,7 @@ func (v *LeaderAndISRRequest) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *LeaderAndISRRequest) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -6969,6 +6995,7 @@ func (v *LeaderAndISRResponse) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *LeaderAndISRResponse) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -7317,6 +7344,7 @@ func (v *StopReplicaRequest) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *StopReplicaRequest) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -7561,6 +7589,7 @@ func (v *StopReplicaResponse) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *StopReplicaResponse) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -8097,6 +8126,7 @@ func (v *UpdateMetadataRequest) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *UpdateMetadataRequest) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -8566,6 +8596,7 @@ func (v *UpdateMetadataResponse) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *UpdateMetadataResponse) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -8667,6 +8698,7 @@ func (v *ControlledShutdownRequest) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *ControlledShutdownRequest) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -8799,6 +8831,7 @@ func (v *ControlledShutdownResponse) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *ControlledShutdownResponse) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -9120,6 +9153,7 @@ func (v *OffsetCommitRequest) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *OffsetCommitRequest) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -9451,6 +9485,7 @@ func (v *OffsetCommitResponse) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *OffsetCommitResponse) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -9691,6 +9726,7 @@ func (v *OffsetFetchRequest) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *OffsetFetchRequest) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -10000,6 +10036,7 @@ func (v *OffsetFetchResponse) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *OffsetFetchResponse) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -10193,6 +10230,7 @@ func (v *FindCoordinatorRequest) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *FindCoordinatorRequest) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -10340,6 +10378,7 @@ func (v *FindCoordinatorResponse) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *FindCoordinatorResponse) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -10613,6 +10652,7 @@ func (v *JoinGroupRequest) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *JoinGroupRequest) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -10966,6 +11006,7 @@ func (v *JoinGroupResponse) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *JoinGroupResponse) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -11192,6 +11233,7 @@ func (v *HeartbeatRequest) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *HeartbeatRequest) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -11324,6 +11366,7 @@ func (v *HeartbeatResponse) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *HeartbeatResponse) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -11488,6 +11531,7 @@ func (v *LeaveGroupRequest) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *LeaveGroupRequest) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -11713,6 +11757,7 @@ func (v *LeaveGroupResponse) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *LeaveGroupResponse) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -11969,6 +12014,7 @@ func (v *SyncGroupRequest) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *SyncGroupRequest) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -12199,6 +12245,7 @@ func (v *SyncGroupResponse) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *SyncGroupResponse) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -12337,6 +12384,7 @@ func (v *DescribeGroupsRequest) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *DescribeGroupsRequest) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -12666,6 +12714,7 @@ func (v *DescribeGroupsResponse) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *DescribeGroupsResponse) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -12916,6 +12965,7 @@ func (v *ListGroupsRequest) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *ListGroupsRequest) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -13100,6 +13150,7 @@ func (v *ListGroupsResponse) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *ListGroupsResponse) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -13240,6 +13291,7 @@ func (v *SASLHandshakeRequest) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *SASLHandshakeRequest) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -13315,6 +13367,7 @@ func (v *SASLHandshakeResponse) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *SASLHandshakeResponse) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -13447,6 +13500,7 @@ func (v *ApiVersionsRequest) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *ApiVersionsRequest) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -13784,6 +13838,7 @@ func (v *ApiVersionsResponse) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *ApiVersionsResponse) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -14223,6 +14278,7 @@ func (v *CreateTopicsRequest) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *CreateTopicsRequest) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -14677,6 +14733,7 @@ func (v *CreateTopicsResponse) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *CreateTopicsResponse) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -14972,6 +15029,7 @@ func (v *DeleteTopicsRequest) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *DeleteTopicsRequest) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -15230,6 +15288,7 @@ func (v *DeleteTopicsResponse) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *DeleteTopicsResponse) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -15496,6 +15555,7 @@ func (v *DeleteRecordsRequest) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *DeleteRecordsRequest) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -15774,6 +15834,7 @@ func (v *DeleteRecordsResponse) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *DeleteRecordsResponse) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -15974,6 +16035,7 @@ func (v *InitProducerIDRequest) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *InitProducerIDRequest) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -16118,6 +16180,7 @@ func (v *InitProducerIDResponse) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *InitProducerIDResponse) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -16337,6 +16400,7 @@ func (v *OffsetForLeaderEpochRequest) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *OffsetForLeaderEpochRequest) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -16646,6 +16710,7 @@ func (v *OffsetForLeaderEpochResponse) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *OffsetForLeaderEpochResponse) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -16896,6 +16961,7 @@ func (v *AddPartitionsToTxnRequest) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *AddPartitionsToTxnRequest) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -17180,6 +17246,7 @@ func (v *AddPartitionsToTxnResponse) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *AddPartitionsToTxnResponse) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -17373,6 +17440,7 @@ func (v *AddOffsetsToTxnRequest) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *AddOffsetsToTxnRequest) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -17493,6 +17561,7 @@ func (v *AddOffsetsToTxnResponse) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *AddOffsetsToTxnResponse) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -17609,6 +17678,7 @@ func (v *EndTxnRequest) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *EndTxnRequest) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -17732,6 +17802,7 @@ func (v *EndTxnResponse) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *EndTxnResponse) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -17936,6 +18007,7 @@ func (v *WriteTxnMarkersRequest) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *WriteTxnMarkersRequest) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -18236,6 +18308,7 @@ func (v *WriteTxnMarkersResponse) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *WriteTxnMarkersResponse) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -18609,6 +18682,7 @@ func (v *TxnOffsetCommitRequest) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *TxnOffsetCommitRequest) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -18955,6 +19029,7 @@ func (v *TxnOffsetCommitResponse) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *TxnOffsetCommitResponse) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -19188,6 +19263,7 @@ func (v *DescribeACLsRequest) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *DescribeACLsRequest) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -19501,6 +19577,7 @@ func (v *DescribeACLsResponse) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *DescribeACLsResponse) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -19830,6 +19907,7 @@ func (v *CreateACLsRequest) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *CreateACLsRequest) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -20050,6 +20128,7 @@ func (v *CreateACLsResponse) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *CreateACLsResponse) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -20272,6 +20351,7 @@ func (v *DeleteACLsRequest) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *DeleteACLsRequest) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -20615,6 +20695,7 @@ func (v *DeleteACLsResponse) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *DeleteACLsResponse) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -20936,6 +21017,7 @@ func (v *DescribeConfigsRequest) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *DescribeConfigsRequest) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -21373,6 +21455,7 @@ func (v *DescribeConfigsResponse) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *DescribeConfigsResponse) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -21792,6 +21875,7 @@ func (v *AlterConfigsRequest) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *AlterConfigsRequest) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -22050,6 +22134,7 @@ func (v *AlterConfigsResponse) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *AlterConfigsResponse) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -22300,6 +22385,7 @@ func (v *AlterReplicaLogDirsRequest) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *AlterReplicaLogDirsRequest) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -22583,6 +22669,7 @@ func (v *AlterReplicaLogDirsResponse) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *AlterReplicaLogDirsResponse) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -22795,6 +22882,7 @@ func (v *DescribeLogDirsRequest) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *DescribeLogDirsRequest) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -23116,6 +23204,7 @@ func (v *DescribeLogDirsResponse) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *DescribeLogDirsResponse) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -23326,6 +23415,7 @@ func (v *SASLAuthenticateRequest) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *SASLAuthenticateRequest) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -23439,6 +23529,7 @@ func (v *SASLAuthenticateResponse) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *SASLAuthenticateResponse) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -23679,6 +23770,7 @@ func (v *CreatePartitionsRequest) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *CreatePartitionsRequest) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -23944,6 +24036,7 @@ func (v *CreatePartitionsResponse) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *CreatePartitionsResponse) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -24150,6 +24243,7 @@ func (v *CreateDelegationTokenRequest) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *CreateDelegationTokenRequest) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -24358,6 +24452,7 @@ func (v *CreateDelegationTokenResponse) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *CreateDelegationTokenResponse) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -24509,6 +24604,7 @@ func (v *RenewDelegationTokenRequest) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *RenewDelegationTokenRequest) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -24618,6 +24714,7 @@ func (v *RenewDelegationTokenResponse) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *RenewDelegationTokenResponse) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -24731,6 +24828,7 @@ func (v *ExpireDelegationTokenRequest) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *ExpireDelegationTokenRequest) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -24839,6 +24937,7 @@ func (v *ExpireDelegationTokenResponse) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *ExpireDelegationTokenResponse) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -24988,6 +25087,7 @@ func (v *DescribeDelegationTokenRequest) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *DescribeDelegationTokenRequest) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -25283,6 +25383,7 @@ func (v *DescribeDelegationTokenResponse) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *DescribeDelegationTokenResponse) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -25505,6 +25606,7 @@ func (v *DeleteGroupsRequest) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *DeleteGroupsRequest) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -25676,6 +25778,7 @@ func (v *DeleteGroupsResponse) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *DeleteGroupsResponse) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -25885,6 +25988,7 @@ func (v *ElectLeadersRequest) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *ElectLeadersRequest) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -26162,6 +26266,7 @@ func (v *ElectLeadersResponse) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *ElectLeadersResponse) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -26482,6 +26587,7 @@ func (v *IncrementalAlterConfigsRequest) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *IncrementalAlterConfigsRequest) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -26745,6 +26851,7 @@ func (v *IncrementalAlterConfigsResponse) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *IncrementalAlterConfigsResponse) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -27002,6 +27109,7 @@ func (v *AlterPartitionAssignmentsRequest) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *AlterPartitionAssignmentsRequest) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -27312,6 +27420,7 @@ func (v *AlterPartitionAssignmentsResponse) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *AlterPartitionAssignmentsResponse) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -27560,6 +27669,7 @@ func (v *ListPartitionReassignmentsRequest) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *ListPartitionReassignmentsRequest) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -27861,6 +27971,7 @@ func (v *ListPartitionReassignmentsResponse) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *ListPartitionReassignmentsResponse) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -28149,6 +28260,7 @@ func (v *OffsetDeleteRequest) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *OffsetDeleteRequest) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -28356,6 +28468,7 @@ func (v *OffsetDeleteResponse) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *OffsetDeleteResponse) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -28563,6 +28676,7 @@ func (v *DescribeClientQuotasRequest) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *DescribeClientQuotasRequest) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -28860,6 +28974,7 @@ func (v *DescribeClientQuotasResponse) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *DescribeClientQuotasResponse) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -29230,6 +29345,7 @@ func (v *AlterClientQuotasRequest) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *AlterClientQuotasRequest) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -29535,6 +29651,7 @@ func (v *AlterClientQuotasResponse) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *AlterClientQuotasResponse) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -29748,6 +29865,7 @@ func (v *DescribeUserSCRAMCredentialsRequest) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *DescribeUserSCRAMCredentialsRequest) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -29993,6 +30111,7 @@ func (v *DescribeUserSCRAMCredentialsResponse) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *DescribeUserSCRAMCredentialsResponse) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -30311,6 +30430,7 @@ func (v *AlterUserSCRAMCredentialsRequest) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *AlterUserSCRAMCredentialsRequest) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -30552,6 +30672,7 @@ func (v *AlterUserSCRAMCredentialsResponse) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *AlterUserSCRAMCredentialsResponse) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -30804,6 +30925,7 @@ func (v *VoteRequest) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *VoteRequest) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -31067,6 +31189,7 @@ func (v *VoteResponse) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *VoteResponse) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -31298,6 +31421,7 @@ func (v *BeginQuorumEpochRequest) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *BeginQuorumEpochRequest) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -31491,6 +31615,7 @@ func (v *BeginQuorumEpochResponse) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *BeginQuorumEpochResponse) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -31709,6 +31834,7 @@ func (v *EndQuorumEpochRequest) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *EndQuorumEpochRequest) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -31920,6 +32046,7 @@ func (v *EndQuorumEpochResponse) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *EndQuorumEpochResponse) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -32163,6 +32290,7 @@ func (v *DescribeQuorumRequest) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *DescribeQuorumRequest) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -32459,6 +32587,7 @@ func (v *DescribeQuorumResponse) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *DescribeQuorumResponse) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -32816,6 +32945,7 @@ func (v *AlterISRRequest) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *AlterISRRequest) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -33124,6 +33254,7 @@ func (v *AlterISRResponse) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *AlterISRResponse) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -33388,6 +33519,7 @@ func (v *UpdateFeaturesRequest) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *UpdateFeaturesRequest) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -33591,6 +33723,7 @@ func (v *UpdateFeaturesResponse) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *UpdateFeaturesResponse) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -33762,6 +33895,7 @@ func (v *EnvelopeRequest) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *EnvelopeRequest) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -33872,6 +34006,7 @@ func (v *EnvelopeResponse) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *EnvelopeResponse) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -34155,6 +34290,7 @@ func (v *FetchSnapshotRequest) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *FetchSnapshotRequest) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -34585,6 +34721,7 @@ func (v *FetchSnapshotResponse) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *FetchSnapshotResponse) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -34802,6 +34939,7 @@ func (v *DescribeClusterRequest) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *DescribeClusterRequest) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -34998,6 +35136,7 @@ func (v *DescribeClusterResponse) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *DescribeClusterResponse) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -35225,6 +35364,7 @@ func (v *DescribeProducersRequest) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *DescribeProducersRequest) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -35555,6 +35695,7 @@ func (v *DescribeProducersResponse) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *DescribeProducersResponse) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -35930,6 +36071,7 @@ func (v *BrokerRegistrationRequest) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *BrokerRegistrationRequest) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -36142,6 +36284,7 @@ func (v *BrokerRegistrationResponse) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *BrokerRegistrationResponse) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -36266,6 +36409,7 @@ func (v *BrokerHeartbeatRequest) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *BrokerHeartbeatRequest) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -36390,6 +36534,7 @@ func (v *BrokerHeartbeatResponse) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *BrokerHeartbeatResponse) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -36492,6 +36637,7 @@ func (v *UnregisterBrokerRequest) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *UnregisterBrokerRequest) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -36587,6 +36733,7 @@ func (v *UnregisterBrokerResponse) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *UnregisterBrokerResponse) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -36697,6 +36844,7 @@ func (v *DescribeTransactionsRequest) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *DescribeTransactionsRequest) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -36967,6 +37115,7 @@ func (v *DescribeTransactionsResponse) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *DescribeTransactionsResponse) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -37205,6 +37354,7 @@ func (v *ListTransactionsRequest) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *ListTransactionsRequest) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -37426,6 +37576,7 @@ func (v *ListTransactionsResponse) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *ListTransactionsResponse) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -37601,6 +37752,7 @@ func (v *AllocateProducerIDsRequest) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *AllocateProducerIDsRequest) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
@@ -37706,6 +37858,7 @@ func (v *AllocateProducerIDsResponse) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (v *AllocateProducerIDsResponse) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}

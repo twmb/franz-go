@@ -84,7 +84,6 @@ func TestCompressDecompress(t *testing.T) {
 						if !bytes.Equal(got, in) {
 							t.Errorf("got decompress %s != exp compress in %s", got, in)
 						}
-
 					}()
 				}
 			}

@@ -1732,6 +1732,7 @@ func (p *produceRequest) AppendTo(dst []byte) []byte {
 	}
 	return dst
 }
+
 func (*produceRequest) ReadFrom([]byte) error {
 	panic("unreachable -- the client never uses ReadFrom on its internal produceRequest")
 }

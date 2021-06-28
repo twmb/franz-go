@@ -669,13 +669,10 @@ func (cl *Client) shardedRequest(ctx context.Context, req kmsg.Request) ([]Respo
 
 	} else if adminReq, admin := req.(kmsg.AdminRequest); admin {
 		return shards(cl.handleAdminReq(ctx, adminReq)), nil
-
 	} else if groupReq, isGroupReq := req.(kmsg.GroupCoordinatorRequest); isGroupReq {
 		return shards(cl.handleCoordinatorReq(ctx, groupReq, coordinatorTypeGroup)), nil
-
 	} else if txnReq, isTxnReq := req.(kmsg.TxnCoordinatorRequest); isTxnReq {
 		return shards(cl.handleCoordinatorReq(ctx, txnReq, coordinatorTypeTxn)), nil
-
 	} else if apiVersReq, isApiVersReq := req.(*kmsg.ApiVersionsRequest); isApiVersReq {
 		// As of v3, software name and version are required.
 		// If they are missing, we use the config options.
@@ -1265,7 +1262,6 @@ type sharder interface {
 // handleShardedReq splits and issues requests to brokers, recursively
 // splitting as necessary if requests fail and need remapping.
 func (cl *Client) handleShardedReq(ctx context.Context, req kmsg.Request) ([]ResponseShard, shardMerge) {
-
 	// First, determine our sharder.
 	var sharder sharder
 	switch req.(type) {
@@ -2649,5 +2645,4 @@ func (cl *listTransactionsSharder) merge(sresps []ResponseShard) (kmsg.Response,
 	}
 
 	return merged, firstErr
-
 }

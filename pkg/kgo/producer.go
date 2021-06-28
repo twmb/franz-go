@@ -395,7 +395,6 @@ func (cl *Client) producerID() (int64, int16, error) {
 		defer p.idMu.Unlock()
 
 		if id = p.id.Load().(*producerID); id.err == errReloadProducerID {
-
 			if cl.cfg.disableIdempotency {
 				cl.cfg.logger.Log(LogLevelInfo, "skipping producer id initialization because the client was configured to disable idempotent writes")
 				id = &producerID{

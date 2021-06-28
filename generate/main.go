@@ -308,6 +308,7 @@ func (s NullableString) SetDefault(v string) Type {
 	s.HasDefault = true
 	return s
 }
+
 func (s NullableString) GetDefault() (interface{}, bool) {
 	return "nil", s.HasDefault // we return the string so it is rendered correctly
 }
@@ -320,6 +321,7 @@ func (b NullableBytes) SetDefault(v string) Type {
 	b.HasDefault = true
 	return b
 }
+
 func (b NullableBytes) GetDefault() (interface{}, bool) {
 	return "nil", b.HasDefault
 }
@@ -332,6 +334,7 @@ func (a Array) SetDefault(v string) Type {
 	a.HasDefault = true
 	return a
 }
+
 func (a Array) GetDefault() (interface{}, bool) {
 	return "nil", a.HasDefault
 }
@@ -341,9 +344,11 @@ func (s Struct) SetDefault(v string) Type {
 	die("cannot set default on a struct; we already have a default")
 	return s
 }
+
 func (s Struct) GetDefault() (interface{}, bool) {
 	return "", false // no GetDefault
 }
+
 func (s Struct) GetTypeDefault() interface{} {
 	// This will not work if a tagged type has its own arrays, but for now
 	// nothing has that.
@@ -367,7 +372,7 @@ func (l *LineWriter) Write(line string, args ...interface{}) {
 	l.line++
 }
 
-//go:generate sh -c "go run . | gofmt > ../pkg/kmsg/generated.go"
+//go:generate sh -c "go run . | gofumpt > ../pkg/kmsg/generated.go"
 func main() {
 	const dir = "definitions"
 	const enums = "enums"

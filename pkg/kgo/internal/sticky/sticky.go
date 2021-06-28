@@ -545,9 +545,11 @@ func (m *membersByPartitions) init() {
 		m.down(i, n)
 	}
 }
+
 func (m *membersByPartitions) fix0() {
 	m.down(0, len(m.members))
 }
+
 func (m *membersByPartitions) down(i0, n int) {
 	node := i0
 	for {

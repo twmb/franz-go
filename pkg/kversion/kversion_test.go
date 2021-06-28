@@ -119,7 +119,6 @@ func TestVersionGuess(t *testing.T) {
 		}
 
 	}
-
 }
 
 func TestEqual(t *testing.T) {

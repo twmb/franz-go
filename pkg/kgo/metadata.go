@@ -558,7 +558,6 @@ func (cl *Client) mergeTopicPartitions(
 			} else {
 				newTP.cursor = oldTP.cursor // unlike records, there is no failing state for a cursor
 			}
-
 		} else {
 			if isProduce {
 				oldTP.migrateProductionTo(newTP) // migration clears failing state

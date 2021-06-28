@@ -79,7 +79,6 @@ func TestGroupETL(t *testing.T) {
 				},
 			)
 		}
-
 	}()
 
 	////////////////////////////
@@ -232,5 +231,4 @@ func (c *testConsumer) etl(etlsBeforeQuit int) {
 		}
 
 	}
-
 }

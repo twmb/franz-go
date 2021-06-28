@@ -155,7 +155,6 @@ func (cl *Client) storePartitionsUpdate(topic string, l *topicPartitions, lv *to
 			cl.doPartitionRecord(l, lv, pr)
 		}
 	}
-
 }
 
 // If a metadata request fails after retrying (internally retrying, so only a

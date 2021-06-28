@@ -261,9 +261,11 @@ func joinMemberLess(l, r *kmsg.JoinGroupResponseMember) bool {
 	}
 	return l.MemberID < r.MemberID
 }
+
 func sortJoinMembers(members []kmsg.JoinGroupResponseMember) {
 	sort.Slice(members, func(i, j int) bool { return joinMemberLess(&members[i], &members[j]) })
 }
+
 func sortJoinMemberPtrs(members []*kmsg.JoinGroupResponseMember) {
 	sort.Slice(members, func(i, j int) bool { return joinMemberLess(members[i], members[j]) })
 }
@@ -294,7 +296,6 @@ func (g *groupConsumer) balanceGroup(proto string, members []kmsg.JoinGroupRespo
 	sortJoinMembers(members)
 
 	memberBalancer, topics, err := b.MemberBalancer(members)
-
 	if err != nil {
 		return nil, fmt.Errorf("unable to create group member balancer: %v", err)
 	}
@@ -409,9 +410,11 @@ func (*roundRobinBalancer) IsCooperative() bool  { return false }
 func (*roundRobinBalancer) JoinGroupMetadata(interests []string, _ map[string][]int32, _ int32) []byte {
 	return memberMetadataV0(interests)
 }
+
 func (*roundRobinBalancer) ParseSyncAssignment(assignment []byte) (map[string][]int32, error) {
 	return ParseConsumerSyncAssignment(assignment)
 }
+
 func (r *roundRobinBalancer) MemberBalancer(members []kmsg.JoinGroupResponseMember) (GroupMemberBalancer, map[string]struct{}, error) {
 	b, err := NewConsumerBalancer(r, members)
 	return b, b.MemberTopics(), err
@@ -491,13 +494,16 @@ func (*rangeBalancer) IsCooperative() bool  { return false }
 func (*rangeBalancer) JoinGroupMetadata(interests []string, _ map[string][]int32, _ int32) []byte {
 	return memberMetadataV0(interests)
 }
+
 func (*rangeBalancer) ParseSyncAssignment(assignment []byte) (map[string][]int32, error) {
 	return ParseConsumerSyncAssignment(assignment)
 }
+
 func (r *rangeBalancer) MemberBalancer(members []kmsg.JoinGroupResponseMember) (GroupMemberBalancer, map[string]struct{}, error) {
 	b, err := NewConsumerBalancer(r, members)
 	return b, b.MemberTopics(), err
 }
+
 func (*rangeBalancer) Balance(b *ConsumerBalancer, topics map[string]int32) IntoSyncAssignment {
 	topics2PotentialConsumers := make(map[string][]*kmsg.JoinGroupResponseMember)
 	b.EachMember(func(member *kmsg.JoinGroupResponseMember, meta *kmsg.GroupMemberMetadata) {
@@ -647,13 +653,16 @@ func (s *stickyBalancer) JoinGroupMetadata(interests []string, currentAssignment
 	meta.UserData = stickyMeta.AppendTo(nil)
 	return meta.AppendTo(nil)
 }
+
 func (*stickyBalancer) ParseSyncAssignment(assignment []byte) (map[string][]int32, error) {
 	return ParseConsumerSyncAssignment(assignment)
 }
+
 func (s *stickyBalancer) MemberBalancer(members []kmsg.JoinGroupResponseMember) (GroupMemberBalancer, map[string]struct{}, error) {
 	b, err := NewConsumerBalancer(s, members)
 	return b, b.MemberTopics(), err
 }
+
 func (s *stickyBalancer) Balance(b *ConsumerBalancer, topics map[string]int32) IntoSyncAssignment {
 	// Since our input into balancing is already sorted by instance ID,
 	// the sticky strategy does not need to worry about instance IDs at all.
@@ -801,7 +810,6 @@ func (p *BalancePlan) AdjustCooperative(b *ConsumerBalancer) {
 				allAddedT[ppartition] = member.MemberID
 			}
 		}
-
 	})
 
 	// Over all revoked, if the revoked partition was added to a different

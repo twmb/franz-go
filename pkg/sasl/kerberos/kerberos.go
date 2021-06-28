@@ -55,8 +55,10 @@ func Kerberos(authFn func(context.Context) (Auth, error)) sasl.Mechanism {
 	return k(authFn)
 }
 
-type k func(context.Context) (Auth, error)
-type wrapped struct{ *client.Client }
+type (
+	k       func(context.Context) (Auth, error)
+	wrapped struct{ *client.Client }
+)
 
 func (k) Name() string { return "GSSAPI" }
 func (k k) Authenticate(ctx context.Context, host string) (sasl.Session, []byte, error) {

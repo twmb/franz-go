@@ -10,8 +10,10 @@ import (
 // If you are looking here, yes this is a shoddy parser, but it does the job.
 
 // newStructs and newEnums are top level structs that we print at the end.
-var newStructs []Struct
-var newEnums []Enum
+var (
+	newStructs []Struct
+	newEnums   []Enum
+)
 
 var enums = make(map[string]Enum)
 
@@ -639,10 +641,10 @@ func ParseEnums(raw []byte) {
 	// 1: name
 	// 2: type
 	// 3: if camel case (optional)
-	var enumNameRe = regexp.MustCompile(`^([A-Za-z]+) ([^ ]+) (camelcase )?\($`)
+	enumNameRe := regexp.MustCompile(`^([A-Za-z]+) ([^ ]+) (camelcase )?\($`)
 	// 1: value (number)
 	// 2: word (meaning)
-	var enumFieldRe = regexp.MustCompile(`^  (\d+): ([A-Z_a-z]+)$`)
+	enumFieldRe := regexp.MustCompile(`^  (\d+): ([A-Z_a-z]+)$`)
 
 	for scanner.Ok() {
 		line := scanner.Peek()

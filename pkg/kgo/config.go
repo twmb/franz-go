@@ -42,10 +42,12 @@ type GroupOpt interface {
 	groupOpt()
 }
 
-type clientOpt struct{ fn func(*cfg) }
-type producerOpt struct{ fn func(*cfg) }
-type consumerOpt struct{ fn func(*cfg) }
-type groupOpt struct{ fn func(*cfg) }
+type (
+	clientOpt   struct{ fn func(*cfg) }
+	producerOpt struct{ fn func(*cfg) }
+	consumerOpt struct{ fn func(*cfg) }
+	groupOpt    struct{ fn func(*cfg) }
+)
 
 func (opt clientOpt) apply(cfg *cfg)   { opt.fn(cfg) }
 func (opt producerOpt) apply(cfg *cfg) { opt.fn(cfg) }

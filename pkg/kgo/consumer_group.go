@@ -230,7 +230,6 @@ func (g *groupConsumer) manage() {
 			// the cooperative consumer we may as well just also
 			// include the eager consumer.
 			g.cfg.onRevoked(g.ctx, g.cl, g.nowAssigned)
-
 		} else if g.cfg.onLost != nil {
 			// Any other error is perceived as a fatal error,
 			// and we go into OnLost as appropriate.
@@ -519,7 +518,6 @@ func (g *groupConsumer) revoke(stage revokeStage, lost map[string][]int32, leavi
 	if len(g.uncommitted) == 0 {
 		g.uncommitted = nil
 	}
-
 }
 
 // assignRevokeSession aids in sequencing prerevoke/assign/revoke.
@@ -1327,7 +1325,6 @@ func (g *groupConsumer) updateUncommitted(fetches Fetches) {
 		update = strings.TrimSuffix(update, ", ") // trim trailing comma and space after final topic
 		g.cl.cfg.logger.Log(LogLevelDebug, "updated uncommitted", "to", update)
 	}
-
 }
 
 // updateCommitted updates the group's uncommitted map. This function triply
@@ -1421,7 +1418,6 @@ func (g *groupConsumer) updateCommitted(
 		update = strings.TrimSuffix(update, ", ") // trim trailing comma and space after final topic
 		g.cl.cfg.logger.Log(LogLevelDebug, "updated committed", "to", update)
 	}
-
 }
 
 func (g *groupConsumer) defaultCommitCallback(_ *Client, _ *kmsg.OffsetCommitRequest, resp *kmsg.OffsetCommitResponse, err error) {

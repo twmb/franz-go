@@ -122,14 +122,18 @@ func Test_stickyBalanceStrategy_Plan(t *testing.T) {
 		{
 			name: "three consumers (two old, one new) with one topic and 12 partitions",
 			members: []GroupMember{
-				{ID: "A", Topics: []string{"t1"},
+				{
+					ID: "A", Topics: []string{"t1"},
 					UserData: oldUD().
 						assign("t1", 4, 11, 8, 5, 9, 2).
-						encode()},
-				{ID: "B", Topics: []string{"t1"},
+						encode(),
+				},
+				{
+					ID: "B", Topics: []string{"t1"},
 					UserData: oldUD().
 						assign("t1", 1, 3, 0, 7, 10, 6).
-						encode()},
+						encode(),
+				},
 				{ID: "C", Topics: []string{"t1"}},
 			},
 			topics: map[string]int32{
@@ -141,14 +145,18 @@ func Test_stickyBalanceStrategy_Plan(t *testing.T) {
 		{
 			name: "three consumers (two old, one new) with one topic and 13 partitions",
 			members: []GroupMember{
-				{ID: "A", Topics: []string{"t1"},
+				{
+					ID: "A", Topics: []string{"t1"},
 					UserData: oldUD().
 						assign("t1", 4, 11, 8, 5, 9, 2, 6).
-						encode()},
-				{ID: "B", Topics: []string{"t1"},
+						encode(),
+				},
+				{
+					ID: "B", Topics: []string{"t1"},
 					UserData: oldUD().
 						assign("t1", 1, 3, 0, 7, 10, 12).
-						encode()},
+						encode(),
+				},
 				{ID: "C", Topics: []string{"t1"}},
 			},
 			topics: map[string]int32{
@@ -162,10 +170,12 @@ func Test_stickyBalanceStrategy_Plan(t *testing.T) {
 		{
 			name: "one consumer that is no longer subscribed to topic is was consuming",
 			members: []GroupMember{
-				{ID: "A", Topics: []string{"t2"},
+				{
+					ID: "A", Topics: []string{"t2"},
 					UserData: newUD().
 						assign("t1", 0).
-						encode()},
+						encode(),
+				},
 			},
 			topics: map[string]int32{
 				"t1": 1,
@@ -177,14 +187,18 @@ func Test_stickyBalanceStrategy_Plan(t *testing.T) {
 		{
 			name: "two consumers, one no longer consuming what it was",
 			members: []GroupMember{
-				{ID: "A", Topics: []string{"t2"},
+				{
+					ID: "A", Topics: []string{"t2"},
 					UserData: newUD().
 						assign("t1", 0).
-						encode()},
-				{ID: "B", Topics: []string{"t1", "t2"},
+						encode(),
+				},
+				{
+					ID: "B", Topics: []string{"t1", "t2"},
 					UserData: newUD().
 						assign("t1", 1).
-						encode()},
+						encode(),
+				},
 			},
 			topics: map[string]int32{
 				"t1": 2,
@@ -209,24 +223,30 @@ func Test_stickyBalanceStrategy_Plan(t *testing.T) {
 			// C -> 7, 8, 9
 			name: "bigly disbalancy 1",
 			members: []GroupMember{
-				{ID: "A", Topics: []string{"1", "2", "3", "4", "5", "6", "7", "8", "9"},
+				{
+					ID: "A", Topics: []string{"1", "2", "3", "4", "5", "6", "7", "8", "9"},
 					UserData: newUD().
 						assign("1", 0).
-						encode()},
-				{ID: "B", Topics: []string{"2", "3", "4"},
+						encode(),
+				},
+				{
+					ID: "B", Topics: []string{"2", "3", "4"},
 					UserData: newUD().
 						assign("2", 0).
 						assign("3", 0).
 						assign("4", 0).
-						encode()},
-				{ID: "C", Topics: []string{"5", "6", "7", "8", "9"},
+						encode(),
+				},
+				{
+					ID: "C", Topics: []string{"5", "6", "7", "8", "9"},
 					UserData: newUD().
 						assign("5", 0).
 						assign("6", 0).
 						assign("7", 0).
 						assign("8", 0).
 						assign("9", 0).
-						encode()},
+						encode(),
+				},
 			},
 			topics: map[string]int32{
 				"1": 1,
@@ -261,15 +281,20 @@ func Test_stickyBalanceStrategy_Plan(t *testing.T) {
 			// C -> 5, 6, 7
 			name: "bigly disbalancy 2",
 			members: []GroupMember{
-				{ID: "A", Topics: []string{"1", "2", "3", "4", "5", "6", "7", "8", "9"},
+				{
+					ID: "A", Topics: []string{"1", "2", "3", "4", "5", "6", "7", "8", "9"},
 					UserData: newUD().
 						assign("1", 0).
-						encode()},
-				{ID: "B", Topics: []string{"2", "3", "4"},
+						encode(),
+				},
+				{
+					ID: "B", Topics: []string{"2", "3", "4"},
 					UserData: newUD().
 						assign("2", 0).
-						encode()},
-				{ID: "C", Topics: []string{"3", "4", "5", "6", "7", "8", "9"},
+						encode(),
+				},
+				{
+					ID: "C", Topics: []string{"3", "4", "5", "6", "7", "8", "9"},
 					UserData: newUD().
 						assign("3", 0).
 						assign("4", 0).
@@ -278,7 +303,8 @@ func Test_stickyBalanceStrategy_Plan(t *testing.T) {
 						assign("7", 0).
 						assign("8", 0).
 						assign("9", 0).
-						encode()},
+						encode(),
+				},
 			},
 			topics: map[string]int32{
 				"1": 1,
@@ -305,15 +331,20 @@ func Test_stickyBalanceStrategy_Plan(t *testing.T) {
 			// C -> 5, 6, 7
 			name: "bigly disbalancy 3",
 			members: []GroupMember{
-				{ID: "A", Topics: []string{"1", "2", "3", "4", "5", "6", "7", "8", "9"},
+				{
+					ID: "A", Topics: []string{"1", "2", "3", "4", "5", "6", "7", "8", "9"},
 					UserData: newUD().
 						assign("1", 0).
-						encode()},
-				{ID: "B", Topics: []string{"2", "3", "4"},
+						encode(),
+				},
+				{
+					ID: "B", Topics: []string{"2", "3", "4"},
 					UserData: newUD().
 						assign("2", 0).
-						encode()},
-				{ID: "C", Topics: []string{"3", "4", "5", "6", "7", "8", "9"},
+						encode(),
+				},
+				{
+					ID: "C", Topics: []string{"3", "4", "5", "6", "7", "8", "9"},
 					UserData: newUD().
 						assign("3", 0).
 						assign("4", 0).
@@ -322,7 +353,8 @@ func Test_stickyBalanceStrategy_Plan(t *testing.T) {
 						assign("7", 0).
 						assign("8", 0).
 						assign("9", 0).
-						encode()},
+						encode(),
+				},
 			},
 			topics: map[string]int32{
 				"1": 1,
@@ -354,31 +386,41 @@ func Test_stickyBalanceStrategy_Plan(t *testing.T) {
 			// E -> c d
 			name: "complicated steals",
 			members: []GroupMember{
-				{ID: "A", Topics: []string{"1", "2", "3", "4", "5", "a", "b", "c", "d", "e"},
+				{
+					ID: "A", Topics: []string{"1", "2", "3", "4", "5", "a", "b", "c", "d", "e"},
 					UserData: newUD().
 						assign("1", 0).
 						assign("2", 0).
-						encode()},
-				{ID: "B", Topics: []string{"1", "2", "3", "4", "5"},
+						encode(),
+				},
+				{
+					ID: "B", Topics: []string{"1", "2", "3", "4", "5"},
 					UserData: newUD().
 						assign("3", 0).
 						assign("4", 0).
-						encode()},
-				{ID: "C", Topics: []string{"3", "4", "5"},
+						encode(),
+				},
+				{
+					ID: "C", Topics: []string{"3", "4", "5"},
 					UserData: newUD().
 						assign("5", 0).
-						encode()},
-				{ID: "D", Topics: []string{"a", "b", "c", "d", "e"},
+						encode(),
+				},
+				{
+					ID: "D", Topics: []string{"a", "b", "c", "d", "e"},
 					UserData: newUD().
 						assign("a", 0).
 						assign("b", 0).
 						assign("c", 0).
 						assign("d", 0).
 						assign("e", 0).
-						encode()},
-				{ID: "E", Topics: []string{"a", "b", "c", "d", "e"},
+						encode(),
+				},
+				{
+					ID: "E", Topics: []string{"a", "b", "c", "d", "e"},
 					UserData: newUD().
-						encode()},
+						encode(),
+				},
 			},
 			topics: map[string]int32{
 				"1": 1,
@@ -421,26 +463,35 @@ func Test_stickyBalanceStrategy_Plan(t *testing.T) {
 			// E -> d e f
 			name: "big disbalance to equal",
 			members: []GroupMember{
-				{ID: "A", Topics: []string{"1", "2", "3"},
+				{
+					ID: "A", Topics: []string{"1", "2", "3"},
 					UserData: newUD().
 						assign("1", 0).
 						assign("2", 0).
-						encode()},
-				{ID: "B", Topics: []string{"1", "2", "3", "4", "5", "6"},
+						encode(),
+				},
+				{
+					ID: "B", Topics: []string{"1", "2", "3", "4", "5", "6"},
 					UserData: newUD().
 						assign("3", 0).
-						encode()},
-				{ID: "C", Topics: []string{"4", "5", "6", "7", "8", "9"},
+						encode(),
+				},
+				{
+					ID: "C", Topics: []string{"4", "5", "6", "7", "8", "9"},
 					UserData: newUD().
 						assign("4", 0).
 						assign("5", 0).
-						encode()},
-				{ID: "D", Topics: []string{"6", "7", "8", "9", "a", "b", "c", "d", "e", "f"},
+						encode(),
+				},
+				{
+					ID: "D", Topics: []string{"6", "7", "8", "9", "a", "b", "c", "d", "e", "f"},
 					UserData: newUD().
 						assign("6", 0).
 						assign("7", 0).
-						encode()},
-				{ID: "E", Topics: []string{"6", "7", "8", "9", "a", "b", "c", "d", "e", "f"},
+						encode(),
+				},
+				{
+					ID: "E", Topics: []string{"6", "7", "8", "9", "a", "b", "c", "d", "e", "f"},
 					UserData: newUD().
 						assign("8", 0).
 						assign("9", 0).
@@ -450,7 +501,8 @@ func Test_stickyBalanceStrategy_Plan(t *testing.T) {
 						assign("d", 0).
 						assign("e", 0).
 						assign("f", 0).
-						encode()},
+						encode(),
+				},
 			},
 			topics: map[string]int32{
 				"1": 1,
@@ -474,7 +526,6 @@ func Test_stickyBalanceStrategy_Plan(t *testing.T) {
 
 		//
 	} {
-
 		t.Run(test.name, func(t *testing.T) {
 			plan := Balance(test.members, test.topics)
 			testEqualDivvy(t, plan, test.nsticky, test.members)
@@ -519,26 +570,34 @@ func TestImbalanced(t *testing.T) {
 			// D -> 8 9
 			name: "back and forth 1",
 			members: []GroupMember{
-				{ID: "A", Topics: []string{"1", "2", "3"},
+				{
+					ID: "A", Topics: []string{"1", "2", "3"},
 					UserData: newUD().
 						assign("1", 0).
 						assign("2", 0).
 						assign("3", 0).
-						encode()},
-				{ID: "B", Topics: []string{"1", "2", "3"},
+						encode(),
+				},
+				{
+					ID: "B", Topics: []string{"1", "2", "3"},
 					UserData: newUD().
-						encode()},
-				{ID: "C", Topics: []string{"5", "6", "7", "8", "9"},
+						encode(),
+				},
+				{
+					ID: "C", Topics: []string{"5", "6", "7", "8", "9"},
 					UserData: newUD().
 						assign("5", 0).
 						assign("6", 0).
 						assign("7", 0).
 						assign("8", 0).
 						assign("9", 0).
-						encode()},
-				{ID: "D", Topics: []string{"5", "6", "7", "8", "9"},
+						encode(),
+				},
+				{
+					ID: "D", Topics: []string{"5", "6", "7", "8", "9"},
 					UserData: newUD().
-						encode()},
+						encode(),
+				},
 			},
 			topics: map[string]int32{
 				"1": 1,
@@ -575,21 +634,28 @@ func TestImbalanced(t *testing.T) {
 			// E -> 9 a b
 			name: "back and forth 2",
 			members: []GroupMember{
-				{ID: "A", Topics: []string{"1", "2", "3", "4"},
+				{
+					ID: "A", Topics: []string{"1", "2", "3", "4"},
 					UserData: newUD().
 						assign("1", 0).
 						assign("2", 0).
 						assign("3", 0).
 						assign("4", 0).
-						encode()},
-				{ID: "B", Topics: []string{"2", "3", "4", "5"},
+						encode(),
+				},
+				{
+					ID: "B", Topics: []string{"2", "3", "4", "5"},
 					UserData: newUD().
 						assign("5", 0).
-						encode()},
-				{ID: "C", Topics: []string{"1", "3", "4", "5"},
+						encode(),
+				},
+				{
+					ID: "C", Topics: []string{"1", "3", "4", "5"},
 					UserData: newUD().
-						encode()},
-				{ID: "D", Topics: []string{"6", "7", "8", "9", "a", "b"},
+						encode(),
+				},
+				{
+					ID: "D", Topics: []string{"6", "7", "8", "9", "a", "b"},
 					UserData: newUD().
 						assign("6", 0).
 						assign("7", 0).
@@ -597,10 +663,13 @@ func TestImbalanced(t *testing.T) {
 						assign("9", 0).
 						assign("a", 0).
 						assign("b", 0).
-						encode()},
-				{ID: "E", Topics: []string{"6", "7", "8", "9", "a", "b"},
+						encode(),
+				},
+				{
+					ID: "E", Topics: []string{"6", "7", "8", "9", "a", "b"},
 					UserData: newUD().
-						encode()},
+						encode(),
+				},
 			},
 			topics: map[string]int32{
 				"1": 1,
@@ -644,41 +713,55 @@ func TestImbalanced(t *testing.T) {
 			// G -> d e
 			name: "back and forth 3",
 			members: []GroupMember{
-				{ID: "A", Topics: []string{"9", "1", "2"},
+				{
+					ID: "A", Topics: []string{"9", "1", "2"},
 					UserData: newUD().
 						assign("1", 0).
 						assign("2", 0).
-						encode()},
-				{ID: "B", Topics: []string{"2", "3", "4"},
+						encode(),
+				},
+				{
+					ID: "B", Topics: []string{"2", "3", "4"},
 					UserData: newUD().
 						assign("3", 0).
 						assign("4", 0).
-						encode()},
-				{ID: "C", Topics: []string{"4", "5", "6"},
+						encode(),
+				},
+				{
+					ID: "C", Topics: []string{"4", "5", "6"},
 					UserData: newUD().
 						assign("5", 0).
 						assign("6", 0).
-						encode()},
-				{ID: "D", Topics: []string{"6", "7", "8"},
+						encode(),
+				},
+				{
+					ID: "D", Topics: []string{"6", "7", "8"},
 					UserData: newUD().
 						assign("7", 0).
 						assign("8", 0).
-						encode()},
-				{ID: "E", Topics: []string{"8", "9", "1"},
+						encode(),
+				},
+				{
+					ID: "E", Topics: []string{"8", "9", "1"},
 					UserData: newUD().
 						assign("9", 0).
-						encode()},
-				{ID: "F", Topics: []string{"a", "b", "c", "d", "e"},
+						encode(),
+				},
+				{
+					ID: "F", Topics: []string{"a", "b", "c", "d", "e"},
 					UserData: newUD().
 						assign("a", 0).
 						assign("b", 0).
 						assign("c", 0).
 						assign("d", 0).
 						assign("e", 0).
-						encode()},
-				{ID: "G", Topics: []string{"a", "b", "c", "d", "e"},
+						encode(),
+				},
+				{
+					ID: "G", Topics: []string{"a", "b", "c", "d", "e"},
 					UserData: newUD().
-						encode()},
+						encode(),
+				},
 			},
 			topics: map[string]int32{
 				"1": 1,
@@ -741,17 +824,22 @@ func TestImbalanced(t *testing.T) {
 			// J -> j
 			name: "odd pyramid",
 			members: []GroupMember{
-				{ID: "A", Topics: []string{"1", "2", "3", "4"},
+				{
+					ID: "A", Topics: []string{"1", "2", "3", "4"},
 					UserData: newUD().
-						encode()},
-				{ID: "B", Topics: []string{"1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "c", "d"},
+						encode(),
+				},
+				{
+					ID: "B", Topics: []string{"1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "c", "d"},
 					UserData: newUD().
 						assign("1", 0).
 						assign("2", 0).
 						assign("3", 0).
 						assign("4", 0).
-						encode()},
-				{ID: "C", Topics: []string{"5", "6", "7", "8", "9", "a", "b", "c", "d"},
+						encode(),
+				},
+				{
+					ID: "C", Topics: []string{"5", "6", "7", "8", "9", "a", "b", "c", "d"},
 					UserData: newUD().
 						assign("5", 0).
 						assign("6", 0).
@@ -762,8 +850,10 @@ func TestImbalanced(t *testing.T) {
 						assign("b", 0).
 						assign("c", 0).
 						assign("d", 0).
-						encode()},
-				{ID: "D", Topics: []string{"5", "6", "7", "8", "9", "a", "b", "c", "d", "e", "f", "g", "h", "i", "j"},
+						encode(),
+				},
+				{
+					ID: "D", Topics: []string{"5", "6", "7", "8", "9", "a", "b", "c", "d", "e", "f", "g", "h", "i", "j"},
 					UserData: newUD().
 						assign("e", 0).
 						assign("f", 0).
@@ -771,25 +861,38 @@ func TestImbalanced(t *testing.T) {
 						assign("h", 0).
 						assign("i", 0).
 						assign("j", 0).
-						encode()},
-				{ID: "E", Topics: []string{"e"},
+						encode(),
+				},
+				{
+					ID: "E", Topics: []string{"e"},
 					UserData: newUD().
-						encode()},
-				{ID: "F", Topics: []string{"f"},
+						encode(),
+				},
+				{
+					ID: "F", Topics: []string{"f"},
 					UserData: newUD().
-						encode()},
-				{ID: "G", Topics: []string{"g"},
+						encode(),
+				},
+				{
+					ID: "G", Topics: []string{"g"},
 					UserData: newUD().
-						encode()},
-				{ID: "H", Topics: []string{"h"},
+						encode(),
+				},
+				{
+					ID: "H", Topics: []string{"h"},
 					UserData: newUD().
-						encode()},
-				{ID: "I", Topics: []string{"i"},
+						encode(),
+				},
+				{
+					ID: "I", Topics: []string{"i"},
 					UserData: newUD().
-						encode()},
-				{ID: "J", Topics: []string{"j"},
+						encode(),
+				},
+				{
+					ID: "J", Topics: []string{"j"},
 					UserData: newUD().
-						encode()},
+						encode(),
+				},
 			},
 			topics: map[string]int32{
 				"1": 1,
@@ -839,22 +942,31 @@ func TestImbalanced(t *testing.T) {
 			// D -> 9 a b c
 			name: "chain stop and noexist drop",
 			members: []GroupMember{
-				{ID: "A", Topics: []string{"1", "2", "3"},
+				{
+					ID: "A", Topics: []string{"1", "2", "3"},
 					UserData: newUD().
 						assign("1", 0).
 						assign("2", 0).
-						encode()},
-				{ID: "B", Topics: []string{"3", "4", "5"},
+						encode(),
+				},
+				{
+					ID: "B", Topics: []string{"3", "4", "5"},
 					UserData: newUD().
-						encode()},
-				{ID: "C", Topics: []string{"3", "4", "5", "6", "7", "8", "9", "a", "b", "c"},
+						encode(),
+				},
+				{
+					ID: "C", Topics: []string{"3", "4", "5", "6", "7", "8", "9", "a", "b", "c"},
 					UserData: newUD().
 						assign("3", 0).
 						assign("4", 0).
 						assign("5", 0).
-						encode()},
-				{ID: "D", Topics: []string{"3", "4", "5", "6", "7", "8", "9", "a", "b", "c",
-					"x"}, // x does not exist; hits continue branch in assign
+						encode(),
+				},
+				{
+					ID: "D", Topics: []string{
+						"3", "4", "5", "6", "7", "8", "9", "a", "b", "c",
+						"x",
+					}, // x does not exist; hits continue branch in assign
 					UserData: newUD().
 						assign("6", 0).
 						assign("7", 0).
@@ -864,7 +976,8 @@ func TestImbalanced(t *testing.T) {
 						assign("b", 0).
 						assign("c", 0).
 						assign("z", 0). // no longer exists; dropped in parseMemberMetadata
-						encode()},
+						encode(),
+				},
 			},
 			topics: map[string]int32{
 				"1": 1,
@@ -924,17 +1037,22 @@ func TestImbalanced(t *testing.T) {
 			// D -> d e f g
 			name: "graph reachy",
 			members: []GroupMember{
-				{ID: "A", Topics: []string{"1", "2", "3", "4"},
+				{
+					ID: "A", Topics: []string{"1", "2", "3", "4"},
 					UserData: newUD().
-						encode()},
-				{ID: "B", Topics: []string{"1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "c", "d", "e", "f", "g"},
+						encode(),
+				},
+				{
+					ID: "B", Topics: []string{"1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "c", "d", "e", "f", "g"},
 					UserData: newUD().
 						assign("1", 0).
 						assign("2", 0).
 						assign("3", 0).
 						assign("4", 0).
-						encode()},
-				{ID: "C", Topics: []string{"5", "6", "7", "8", "9", "a"},
+						encode(),
+				},
+				{
+					ID: "C", Topics: []string{"5", "6", "7", "8", "9", "a"},
 					UserData: newUD().
 						assign("5", 0).
 						assign("6", 0).
@@ -942,8 +1060,10 @@ func TestImbalanced(t *testing.T) {
 						assign("8", 0).
 						assign("9", 0).
 						assign("a", 0).
-						encode()},
-				{ID: "D", Topics: []string{"b", "c", "d", "e", "f", "g"},
+						encode(),
+				},
+				{
+					ID: "D", Topics: []string{"b", "c", "d", "e", "f", "g"},
 					UserData: newUD().
 						assign("b", 0).
 						assign("c", 0).
@@ -951,7 +1071,8 @@ func TestImbalanced(t *testing.T) {
 						assign("e", 0).
 						assign("f", 0).
 						assign("g", 0).
-						encode()},
+						encode(),
+				},
 			},
 			topics: map[string]int32{
 				"1": 1,
@@ -1012,7 +1133,8 @@ func TestImbalanced(t *testing.T) {
 
 			name: "imbalance hard",
 			members: []GroupMember{
-				{ID: "A", Topics: []string{"0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b"},
+				{
+					ID: "A", Topics: []string{"0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b"},
 					UserData: newUD().
 						assign("0", 0).
 						assign("1", 0).
@@ -1021,29 +1143,39 @@ func TestImbalanced(t *testing.T) {
 						assign("4", 0).
 						assign("5", 0).
 						assign("6", 0).
-						encode()},
-				{ID: "B", Topics: []string{"0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b"},
+						encode(),
+				},
+				{
+					ID: "B", Topics: []string{"0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b"},
 					UserData: newUD().
 						assign("7", 0).
 						assign("8", 0).
 						assign("9", 0).
 						assign("a", 0).
 						assign("b", 0).
-						encode()},
-				{ID: "C", Topics: []string{"7", "8", "9", "a", "b", "c", "d", "e", "f"},
+						encode(),
+				},
+				{
+					ID: "C", Topics: []string{"7", "8", "9", "a", "b", "c", "d", "e", "f"},
 					UserData: newUD().
-						encode()},
-				{ID: "D", Topics: []string{"c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r", "s", "t"},
+						encode(),
+				},
+				{
+					ID: "D", Topics: []string{"c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r", "s", "t"},
 					UserData: newUD().
 						assign("c", 0).
 						assign("d", 0).
-						encode()},
-				{ID: "E", Topics: []string{"c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r", "s", "t"},
+						encode(),
+				},
+				{
+					ID: "E", Topics: []string{"c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r", "s", "t"},
 					UserData: newUD().
 						assign("e", 0).
 						assign("f", 0).
-						encode()},
-				{ID: "F", Topics: []string{"c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r", "s", "t"},
+						encode(),
+				},
+				{
+					ID: "F", Topics: []string{"c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r", "s", "t"},
 					UserData: newUD().
 						assign("g", 0).
 						assign("h", 0).
@@ -1059,7 +1191,8 @@ func TestImbalanced(t *testing.T) {
 						assign("r", 0).
 						assign("s", 0).
 						assign("t", 0).
-						encode()},
+						encode(),
+				},
 			},
 			topics: map[string]int32{
 				"0": 1,
@@ -1133,25 +1266,31 @@ func TestMultiGenerational(t *testing.T) {
 			// C -> 1 2 5
 			name: "!canTake branch in resticky",
 			members: []GroupMember{
-				{ID: "A", Topics: []string{"3", "4"},
+				{
+					ID: "A", Topics: []string{"3", "4"},
 					UserData: newUD().
 						assign("1", 0).
 						assign("2", 0).
 						setGeneration(1).
-						encode()},
-				{ID: "B", Topics: []string{"3", "4"},
+						encode(),
+				},
+				{
+					ID: "B", Topics: []string{"3", "4"},
 					UserData: newUD().
 						assign("3", 0).
 						assign("4", 0).
 						setGeneration(2).
-						encode()},
-				{ID: "C", Topics: []string{"1", "2", "5"},
+						encode(),
+				},
+				{
+					ID: "C", Topics: []string{"1", "2", "5"},
 					UserData: newUD().
 						assign("1", 0).
 						assign("2", 0).
 						assign("5", 0).
 						setGeneration(2).
-						encode()},
+						encode(),
+				},
 			},
 			topics: map[string]int32{
 				"1": 1,
@@ -1389,21 +1528,27 @@ func Test_stickyBalanceStrategy_Plan_AssignmentWithConflictingPreviousGeneration
 
 	topics := map[string]int32{"1": 6}
 	members := []GroupMember{
-		{ID: "1", Topics: []string{"1"},
+		{
+			ID: "1", Topics: []string{"1"},
 			UserData: newUD().
 				assign("1", 0, 1, 4).
 				setGeneration(1).
-				encode()},
-		{ID: "2", Topics: []string{"1"},
+				encode(),
+		},
+		{
+			ID: "2", Topics: []string{"1"},
 			UserData: newUD().
 				assign("1", 0, 2, 3). // double zero consumption... OK I guess...
 				setGeneration(1).
-				encode()},
-		{ID: "3", Topics: []string{"1"},
+				encode(),
+		},
+		{
+			ID: "3", Topics: []string{"1"},
 			UserData: newUD().
 				assign("1", 3, 4, 5).
 				setGeneration(2).
-				encode()},
+				encode(),
+		},
 	}
 
 	plan := Balance(members, topics)
@@ -1416,15 +1561,19 @@ func Test_stickyBalanceStrategy_Plan_SchemaBackwardCompatibility(t *testing.T) {
 	t.Parallel()
 	topics := map[string]int32{"1": 3}
 	members := []GroupMember{
-		{ID: "1", Topics: []string{"1"},
+		{
+			ID: "1", Topics: []string{"1"},
 			UserData: newUD().
 				assign("1", 0, 2).
 				setGeneration(1).
-				encode()},
-		{ID: "2", Topics: []string{"1"},
+				encode(),
+		},
+		{
+			ID: "2", Topics: []string{"1"},
 			UserData: oldUD().
 				assign("1", 1).
-				encode()},
+				encode(),
+		},
 		{ID: "3", Topics: []string{"1"}},
 	}
 
@@ -1437,14 +1586,18 @@ func Test_stickyBalanceStrategy_Plan_ConflictingPreviousAssignments(t *testing.T
 	t.Parallel()
 	topics := map[string]int32{"1": 2}
 	members := []GroupMember{
-		{ID: "1", Topics: []string{"1"},
+		{
+			ID: "1", Topics: []string{"1"},
 			UserData: newUD().
 				assign("1", 0, 1).
-				encode()},
-		{ID: "2", Topics: []string{"1"},
+				encode(),
+		},
+		{
+			ID: "2", Topics: []string{"1"},
 			UserData: newUD().
 				assign("1", 0, 1).
-				encode()},
+				encode(),
+		},
 	}
 	plan := Balance(members, topics)
 	testEqualDivvy(t, plan, 2, members)
@@ -1463,9 +1616,11 @@ func TestLarge(t *testing.T) {
 	}
 }
 
-const topicNum = 100
-const partitionNum = 200
-const memberNum = 100
+const (
+	topicNum     = 100
+	partitionNum = 200
+	memberNum    = 100
+)
 
 func makeLargeBalance(withImbalance bool) generatedInput {
 	rng := rand.New(rand.NewSource(0))

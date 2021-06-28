@@ -103,7 +103,6 @@ func TestTxnEtl(t *testing.T) {
 				},
 			)
 		}
-
 	}()
 
 	////////////////////////////
@@ -130,7 +129,6 @@ func TestTxnEtl(t *testing.T) {
 			)
 		})
 	}
-
 }
 
 func (c *testConsumer) goTransact(txnsBeforeQuit int) {
@@ -249,9 +247,7 @@ func (c *testConsumer) transact(txnsBeforeQuit int) {
 					atomic.AddUint64(&c.consumed, 1)
 				}
 			}
-
 		}
 		c.mu.Unlock()
 	}
-
 }

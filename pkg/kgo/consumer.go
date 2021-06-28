@@ -571,7 +571,6 @@ func (c *consumer) doOnMetadataUpdate() {
 			}
 		}()
 	}
-
 }
 
 func (s *consumerSession) doOnMetadataUpdate() {
@@ -892,6 +891,7 @@ func (c *consumer) guardSessionChange(tps *topicsPartitions) *consumerSession {
 
 	return session
 }
+
 func (c *consumer) unguardSessionChange() {
 	c.sessionChangeMu.Unlock()
 }
