@@ -25,6 +25,8 @@ var (
 	topic       = flag.String("topic", "", "topic to produce to or consume from")
 	pprofPort   = flag.String("pprof", ":9876", "port to bind to for pprof, if non-empty")
 
+	useStaticValue = flag.Bool("static-record", false, "if true, use the same record value for every record (eliminates creating and formatting values for records; implies -pool)")
+
 	recordBytes   = flag.Int("record-bytes", 100, "bytes per record (producing)")
 	noCompression = flag.Bool("no-compression", false, "set to disable compression (alias for -compression none, producing)")
 	compression   = flag.String("compression", "snappy", "compression algorithm to use (none,gzip,snappy,lz4,zstd, for producing)")
@@ -72,6 +74,11 @@ func main() {
 
 	if *recordBytes <= 0 {
 		die("record bytes must be larger than zero")
+	}
+
+	if *useStaticValue {
+		staticValue = make([]byte, *recordBytes)
+		formatValue(0, staticValue)
 	}
 
 	opts := []kgo.Opt{
@@ -184,7 +191,9 @@ func main() {
 		var num int64
 		for {
 			cl.Produce(context.Background(), newRecord(num), func(r *kgo.Record, err error) {
-				if *poolProduce {
+				if *useStaticValue {
+					staticPool.Put(r)
+				} else if *poolProduce {
 					p.Put(r)
 				}
 				chk(err, "produce error: %v", err)
@@ -211,28 +220,32 @@ func main() {
 	}
 }
 
-var p = sync.Pool{
-	New: func() interface{} {
-		s := make([]byte, *recordBytes)
-		return &kgo.Record{Value: s}
-	},
-}
+var (
+	staticValue []byte
+	staticPool  = sync.Pool{New: func() interface{} { return kgo.SliceRecord(staticValue) }}
+	p           = sync.Pool{New: func() interface{} { return kgo.SliceRecord(make([]byte, *recordBytes)) }}
+)
 
 func newRecord(num int64) *kgo.Record {
-	var buf [20]byte // max int64 takes 19 bytes, then we add a space
-	b := strconv.AppendInt(buf[:0], num, 10)
-	b = append(b, ' ')
-
 	var r *kgo.Record
-	if *poolProduce {
+	if *useStaticValue {
+		return staticPool.Get().(*kgo.Record)
+	} else if *poolProduce {
 		r = p.Get().(*kgo.Record)
 	} else {
 		r = kgo.SliceRecord(make([]byte, *recordBytes))
 	}
-
-	var n int
-	for n != len(r.Value) {
-		n += copy(r.Value[n:], b)
-	}
+	formatValue(num, r.Value)
 	return r
+}
+
+func formatValue(num int64, v []byte) {
+	var buf [20]byte // max int64 takes 19 bytes, then we add a space
+	b := strconv.AppendInt(buf[:0], num, 10)
+	b = append(b, ' ')
+
+	n := copy(v, b)
+	for n != len(v) {
+		n += copy(v[n:], b)
+	}
 }

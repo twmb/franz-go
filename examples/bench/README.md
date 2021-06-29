@@ -27,6 +27,20 @@ a group.
 
 All flags that _can_ be easily supported in comparisons are the same.
 
+## `rdkafka_performance`
+
+This client has a few different default flags in comparison to librdkafka's
+`rdkafka_performance` utility. For starters, this prints less stats, but stats
+can be added if requested.
+
+To operate similarly to librdkafka's benchmarker, use `-linger 1s -compression none -static-record`.
+
+This will match `rdkafka_performance` flags of `./rdkafka_performance -P -t <topic> -b <brokers> -s 100 -i 1000`.
+
+librdkafka itself does not handle disabling lingering too well, but there is
+negligible performance impact in franz-go, so feel free to leave lingering
+disabled.
+
 ## Flags
 
 `-brokers` can be specified to override the default localhost:9092 broker to
@@ -50,6 +64,11 @@ any comma delimited set of brokers.
 
 `-pool` enables using a `sync.Pool` to reuse records and value slices, reducing
 garbage as a factor of the benchmark.
+
+`-static-record` configures the benchmarking to use a single, static value for
+all messages produced. This implies `-pool`, and completely eliminates any
+record-value-creation overhead from benchmarking so that you can specifically
+bench the performance of the client itself.
 
 `-disable-idempotency` disables producing idempotently, which limits the throughput to 1rps
 
