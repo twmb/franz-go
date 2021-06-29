@@ -137,6 +137,8 @@ func (c *consumer) initGroup() {
 		ctx:    ctx,
 		cancel: cancel,
 
+		reSeen: make(map[string]bool),
+
 		manageDone:       make(chan struct{}),
 		cooperative:      c.cl.cfg.cooperative(),
 		tps:              newTopicsPartitions(),
