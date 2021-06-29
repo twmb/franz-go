@@ -1,7 +1,24 @@
+v0.8.6
+===
+
+
+- [`7ec0a45`](https://github.com/twmb/franz-go/commit/7ec0a45) **bugfix** consumer group: bugfix regex consuming (from v0.8.0+)
+- [`91fe77b`](https://github.com/twmb/franz-go/commit/91fe77b) bench: faster record value generation, add -static-record flag
+- [`f95859e`](https://github.com/twmb/franz-go/commit/f95859e) generated code: always return typed value if present
+- [`db5fca5`](https://github.com/twmb/franz-go/commit/db5fca5) support KIP-734
+- [`ae7182b`](https://github.com/twmb/franz-go/commit/ae7182b) group balancing: address KAFKA-12898
+
+This small tag fixes a bug in group consuming via regex, adds a new
+`-static-record` flag to the benchmark example, and has a few other very minor
+changes (see commits).
+
+Also, thank you @Neal for fixing some typos and eliminating a useless goroutine
+in the benchmarks!
+
 v0.8.5
 ===
 
-[`2732fb8`](https://github.com/twmb/franz-go/commit/2732fb8) **bugfix** consumer: bugfix consuming of specific partitions if no topics are specified
+- [`2732fb8`](https://github.com/twmb/franz-go/commit/2732fb8) **bugfix** consumer: bugfix consuming of specific partitions if no topics are specified
 
 If `ConsumePartitions` was used without `ConsumeTopics`, the consumer would not
 start. This was missed in the conversion of starting the consumer after
@@ -10,7 +27,7 @@ initializing a client to initializing the consumer _with_ the client.
 v0.8.4
 ===
 
-[`e0346a2`](https://github.com/twmb/franz-go/commit/e0346a2) **very minor bugfix** consumer group: set defaultCommitCallback
+- [`e0346a2`](https://github.com/twmb/franz-go/commit/e0346a2) **very minor bugfix** consumer group: set defaultCommitCallback
 - [`5047b31`](https://github.com/twmb/franz-go/commit/5047b31) and [`05a6b8a`](https://github.com/twmb/franz-go/commit/05a6b8a) bench: add -linger, -disable-idempotency, -log-level, -compression, -batch-max-bytes options
 
 This is a small release containing a very minor bugfix and more flags on the
