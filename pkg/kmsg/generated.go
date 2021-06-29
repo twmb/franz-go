@@ -2300,12 +2300,12 @@ func (v *ProduceRequest) Timeout() int32           { return v.TimeoutMillis }
 func (v *ProduceRequest) ResponseKind() Response   { return &ProduceResponse{Version: v.Version} }
 
 // RequestWith is requests v on r and returns the response or an error.
+// For sharded requests, the response may be merged and still return an error.
+// It is better to rely on client.RequestSharded than to rely on proper merging behavior.
 func (v *ProduceRequest) RequestWith(ctx context.Context, r Requestor) (*ProduceResponse, error) {
 	kresp, err := r.Request(ctx, v)
-	if err != nil {
-		return nil, err
-	}
-	return kresp.(*ProduceResponse), nil
+	resp, _ := kresp.(*ProduceResponse)
+	return resp, err
 }
 
 func (v *ProduceRequest) AppendTo(dst []byte) []byte {
@@ -3195,12 +3195,12 @@ func (v *FetchRequest) IsFlexible() bool         { return v.Version >= 12 }
 func (v *FetchRequest) ResponseKind() Response   { return &FetchResponse{Version: v.Version} }
 
 // RequestWith is requests v on r and returns the response or an error.
+// For sharded requests, the response may be merged and still return an error.
+// It is better to rely on client.RequestSharded than to rely on proper merging behavior.
 func (v *FetchRequest) RequestWith(ctx context.Context, r Requestor) (*FetchResponse, error) {
 	kresp, err := r.Request(ctx, v)
-	if err != nil {
-		return nil, err
-	}
-	return kresp.(*FetchResponse), nil
+	resp, _ := kresp.(*FetchResponse)
+	return resp, err
 }
 
 func (v *FetchRequest) AppendTo(dst []byte) []byte {
@@ -4515,12 +4515,12 @@ func (v *ListOffsetsRequest) IsFlexible() bool         { return v.Version >= 6 }
 func (v *ListOffsetsRequest) ResponseKind() Response   { return &ListOffsetsResponse{Version: v.Version} }
 
 // RequestWith is requests v on r and returns the response or an error.
+// For sharded requests, the response may be merged and still return an error.
+// It is better to rely on client.RequestSharded than to rely on proper merging behavior.
 func (v *ListOffsetsRequest) RequestWith(ctx context.Context, r Requestor) (*ListOffsetsResponse, error) {
 	kresp, err := r.Request(ctx, v)
-	if err != nil {
-		return nil, err
-	}
-	return kresp.(*ListOffsetsResponse), nil
+	resp, _ := kresp.(*ListOffsetsResponse)
+	return resp, err
 }
 
 func (v *ListOffsetsRequest) AppendTo(dst []byte) []byte {
@@ -5157,12 +5157,12 @@ func (v *MetadataRequest) IsFlexible() bool         { return v.Version >= 9 }
 func (v *MetadataRequest) ResponseKind() Response   { return &MetadataResponse{Version: v.Version} }
 
 // RequestWith is requests v on r and returns the response or an error.
+// For sharded requests, the response may be merged and still return an error.
+// It is better to rely on client.RequestSharded than to rely on proper merging behavior.
 func (v *MetadataRequest) RequestWith(ctx context.Context, r Requestor) (*MetadataResponse, error) {
 	kresp, err := r.Request(ctx, v)
-	if err != nil {
-		return nil, err
-	}
-	return kresp.(*MetadataResponse), nil
+	resp, _ := kresp.(*MetadataResponse)
+	return resp, err
 }
 
 func (v *MetadataRequest) AppendTo(dst []byte) []byte {
@@ -6141,12 +6141,12 @@ func (v *LeaderAndISRRequest) ResponseKind() Response {
 }
 
 // RequestWith is requests v on r and returns the response or an error.
+// For sharded requests, the response may be merged and still return an error.
+// It is better to rely on client.RequestSharded than to rely on proper merging behavior.
 func (v *LeaderAndISRRequest) RequestWith(ctx context.Context, r Requestor) (*LeaderAndISRResponse, error) {
 	kresp, err := r.Request(ctx, v)
-	if err != nil {
-		return nil, err
-	}
-	return kresp.(*LeaderAndISRResponse), nil
+	resp, _ := kresp.(*LeaderAndISRResponse)
+	return resp, err
 }
 
 func (v *LeaderAndISRRequest) AppendTo(dst []byte) []byte {
@@ -7243,12 +7243,12 @@ func (v *StopReplicaRequest) IsFlexible() bool         { return v.Version >= 2 }
 func (v *StopReplicaRequest) ResponseKind() Response   { return &StopReplicaResponse{Version: v.Version} }
 
 // RequestWith is requests v on r and returns the response or an error.
+// For sharded requests, the response may be merged and still return an error.
+// It is better to rely on client.RequestSharded than to rely on proper merging behavior.
 func (v *StopReplicaRequest) RequestWith(ctx context.Context, r Requestor) (*StopReplicaResponse, error) {
 	kresp, err := r.Request(ctx, v)
-	if err != nil {
-		return nil, err
-	}
-	return kresp.(*StopReplicaResponse), nil
+	resp, _ := kresp.(*StopReplicaResponse)
+	return resp, err
 }
 
 func (v *StopReplicaRequest) AppendTo(dst []byte) []byte {
@@ -7832,12 +7832,12 @@ func (v *UpdateMetadataRequest) ResponseKind() Response {
 }
 
 // RequestWith is requests v on r and returns the response or an error.
+// For sharded requests, the response may be merged and still return an error.
+// It is better to rely on client.RequestSharded than to rely on proper merging behavior.
 func (v *UpdateMetadataRequest) RequestWith(ctx context.Context, r Requestor) (*UpdateMetadataResponse, error) {
 	kresp, err := r.Request(ctx, v)
-	if err != nil {
-		return nil, err
-	}
-	return kresp.(*UpdateMetadataResponse), nil
+	resp, _ := kresp.(*UpdateMetadataResponse)
+	return resp, err
 }
 
 func (v *UpdateMetadataRequest) AppendTo(dst []byte) []byte {
@@ -8671,12 +8671,12 @@ func (v *ControlledShutdownRequest) ResponseKind() Response {
 }
 
 // RequestWith is requests v on r and returns the response or an error.
+// For sharded requests, the response may be merged and still return an error.
+// It is better to rely on client.RequestSharded than to rely on proper merging behavior.
 func (v *ControlledShutdownRequest) RequestWith(ctx context.Context, r Requestor) (*ControlledShutdownResponse, error) {
 	kresp, err := r.Request(ctx, v)
-	if err != nil {
-		return nil, err
-	}
-	return kresp.(*ControlledShutdownResponse), nil
+	resp, _ := kresp.(*ControlledShutdownResponse)
+	return resp, err
 }
 
 func (v *ControlledShutdownRequest) AppendTo(dst []byte) []byte {
@@ -9040,12 +9040,12 @@ func (v *OffsetCommitRequest) ResponseKind() Response {
 }
 
 // RequestWith is requests v on r and returns the response or an error.
+// For sharded requests, the response may be merged and still return an error.
+// It is better to rely on client.RequestSharded than to rely on proper merging behavior.
 func (v *OffsetCommitRequest) RequestWith(ctx context.Context, r Requestor) (*OffsetCommitResponse, error) {
 	kresp, err := r.Request(ctx, v)
-	if err != nil {
-		return nil, err
-	}
-	return kresp.(*OffsetCommitResponse), nil
+	resp, _ := kresp.(*OffsetCommitResponse)
+	return resp, err
 }
 
 func (v *OffsetCommitRequest) AppendTo(dst []byte) []byte {
@@ -9652,12 +9652,12 @@ func (v *OffsetFetchRequest) IsGroupCoordinatorRequest() {}
 func (v *OffsetFetchRequest) ResponseKind() Response     { return &OffsetFetchResponse{Version: v.Version} }
 
 // RequestWith is requests v on r and returns the response or an error.
+// For sharded requests, the response may be merged and still return an error.
+// It is better to rely on client.RequestSharded than to rely on proper merging behavior.
 func (v *OffsetFetchRequest) RequestWith(ctx context.Context, r Requestor) (*OffsetFetchResponse, error) {
 	kresp, err := r.Request(ctx, v)
-	if err != nil {
-		return nil, err
-	}
-	return kresp.(*OffsetFetchResponse), nil
+	resp, _ := kresp.(*OffsetFetchResponse)
+	return resp, err
 }
 
 func (v *OffsetFetchRequest) AppendTo(dst []byte) []byte {
@@ -10199,12 +10199,12 @@ func (v *FindCoordinatorRequest) ResponseKind() Response {
 }
 
 // RequestWith is requests v on r and returns the response or an error.
+// For sharded requests, the response may be merged and still return an error.
+// It is better to rely on client.RequestSharded than to rely on proper merging behavior.
 func (v *FindCoordinatorRequest) RequestWith(ctx context.Context, r Requestor) (*FindCoordinatorResponse, error) {
 	kresp, err := r.Request(ctx, v)
-	if err != nil {
-		return nil, err
-	}
-	return kresp.(*FindCoordinatorResponse), nil
+	resp, _ := kresp.(*FindCoordinatorResponse)
+	return resp, err
 }
 
 func (v *FindCoordinatorRequest) AppendTo(dst []byte) []byte {
@@ -10562,12 +10562,12 @@ func (v *JoinGroupRequest) IsGroupCoordinatorRequest() {}
 func (v *JoinGroupRequest) ResponseKind() Response     { return &JoinGroupResponse{Version: v.Version} }
 
 // RequestWith is requests v on r and returns the response or an error.
+// For sharded requests, the response may be merged and still return an error.
+// It is better to rely on client.RequestSharded than to rely on proper merging behavior.
 func (v *JoinGroupRequest) RequestWith(ctx context.Context, r Requestor) (*JoinGroupResponse, error) {
 	kresp, err := r.Request(ctx, v)
-	if err != nil {
-		return nil, err
-	}
-	return kresp.(*JoinGroupResponse), nil
+	resp, _ := kresp.(*JoinGroupResponse)
+	return resp, err
 }
 
 func (v *JoinGroupRequest) AppendTo(dst []byte) []byte {
@@ -11186,12 +11186,12 @@ func (v *HeartbeatRequest) IsGroupCoordinatorRequest() {}
 func (v *HeartbeatRequest) ResponseKind() Response     { return &HeartbeatResponse{Version: v.Version} }
 
 // RequestWith is requests v on r and returns the response or an error.
+// For sharded requests, the response may be merged and still return an error.
+// It is better to rely on client.RequestSharded than to rely on proper merging behavior.
 func (v *HeartbeatRequest) RequestWith(ctx context.Context, r Requestor) (*HeartbeatResponse, error) {
 	kresp, err := r.Request(ctx, v)
-	if err != nil {
-		return nil, err
-	}
-	return kresp.(*HeartbeatResponse), nil
+	resp, _ := kresp.(*HeartbeatResponse)
+	return resp, err
 }
 
 func (v *HeartbeatRequest) AppendTo(dst []byte) []byte {
@@ -11465,12 +11465,12 @@ func (v *LeaveGroupRequest) IsGroupCoordinatorRequest() {}
 func (v *LeaveGroupRequest) ResponseKind() Response     { return &LeaveGroupResponse{Version: v.Version} }
 
 // RequestWith is requests v on r and returns the response or an error.
+// For sharded requests, the response may be merged and still return an error.
+// It is better to rely on client.RequestSharded than to rely on proper merging behavior.
 func (v *LeaveGroupRequest) RequestWith(ctx context.Context, r Requestor) (*LeaveGroupResponse, error) {
 	kresp, err := r.Request(ctx, v)
-	if err != nil {
-		return nil, err
-	}
-	return kresp.(*LeaveGroupResponse), nil
+	resp, _ := kresp.(*LeaveGroupResponse)
+	return resp, err
 }
 
 func (v *LeaveGroupRequest) AppendTo(dst []byte) []byte {
@@ -11920,12 +11920,12 @@ func (v *SyncGroupRequest) IsGroupCoordinatorRequest() {}
 func (v *SyncGroupRequest) ResponseKind() Response     { return &SyncGroupResponse{Version: v.Version} }
 
 // RequestWith is requests v on r and returns the response or an error.
+// For sharded requests, the response may be merged and still return an error.
+// It is better to rely on client.RequestSharded than to rely on proper merging behavior.
 func (v *SyncGroupRequest) RequestWith(ctx context.Context, r Requestor) (*SyncGroupResponse, error) {
 	kresp, err := r.Request(ctx, v)
-	if err != nil {
-		return nil, err
-	}
-	return kresp.(*SyncGroupResponse), nil
+	resp, _ := kresp.(*SyncGroupResponse)
+	return resp, err
 }
 
 func (v *SyncGroupRequest) AppendTo(dst []byte) []byte {
@@ -12345,12 +12345,12 @@ func (v *DescribeGroupsRequest) ResponseKind() Response {
 }
 
 // RequestWith is requests v on r and returns the response or an error.
+// For sharded requests, the response may be merged and still return an error.
+// It is better to rely on client.RequestSharded than to rely on proper merging behavior.
 func (v *DescribeGroupsRequest) RequestWith(ctx context.Context, r Requestor) (*DescribeGroupsResponse, error) {
 	kresp, err := r.Request(ctx, v)
-	if err != nil {
-		return nil, err
-	}
-	return kresp.(*DescribeGroupsResponse), nil
+	resp, _ := kresp.(*DescribeGroupsResponse)
+	return resp, err
 }
 
 func (v *DescribeGroupsRequest) AppendTo(dst []byte) []byte {
@@ -12930,12 +12930,12 @@ func (v *ListGroupsRequest) IsFlexible() bool         { return v.Version >= 3 }
 func (v *ListGroupsRequest) ResponseKind() Response   { return &ListGroupsResponse{Version: v.Version} }
 
 // RequestWith is requests v on r and returns the response or an error.
+// For sharded requests, the response may be merged and still return an error.
+// It is better to rely on client.RequestSharded than to rely on proper merging behavior.
 func (v *ListGroupsRequest) RequestWith(ctx context.Context, r Requestor) (*ListGroupsResponse, error) {
 	kresp, err := r.Request(ctx, v)
-	if err != nil {
-		return nil, err
-	}
-	return kresp.(*ListGroupsResponse), nil
+	resp, _ := kresp.(*ListGroupsResponse)
+	return resp, err
 }
 
 func (v *ListGroupsRequest) AppendTo(dst []byte) []byte {
@@ -13274,12 +13274,12 @@ func (v *SASLHandshakeRequest) ResponseKind() Response {
 }
 
 // RequestWith is requests v on r and returns the response or an error.
+// For sharded requests, the response may be merged and still return an error.
+// It is better to rely on client.RequestSharded than to rely on proper merging behavior.
 func (v *SASLHandshakeRequest) RequestWith(ctx context.Context, r Requestor) (*SASLHandshakeResponse, error) {
 	kresp, err := r.Request(ctx, v)
-	if err != nil {
-		return nil, err
-	}
-	return kresp.(*SASLHandshakeResponse), nil
+	resp, _ := kresp.(*SASLHandshakeResponse)
+	return resp, err
 }
 
 func (v *SASLHandshakeRequest) AppendTo(dst []byte) []byte {
@@ -13465,12 +13465,12 @@ func (v *ApiVersionsRequest) IsFlexible() bool         { return v.Version >= 3 }
 func (v *ApiVersionsRequest) ResponseKind() Response   { return &ApiVersionsResponse{Version: v.Version} }
 
 // RequestWith is requests v on r and returns the response or an error.
+// For sharded requests, the response may be merged and still return an error.
+// It is better to rely on client.RequestSharded than to rely on proper merging behavior.
 func (v *ApiVersionsRequest) RequestWith(ctx context.Context, r Requestor) (*ApiVersionsResponse, error) {
 	kresp, err := r.Request(ctx, v)
-	if err != nil {
-		return nil, err
-	}
-	return kresp.(*ApiVersionsResponse), nil
+	resp, _ := kresp.(*ApiVersionsResponse)
+	return resp, err
 }
 
 func (v *ApiVersionsRequest) AppendTo(dst []byte) []byte {
@@ -14158,12 +14158,12 @@ func (v *CreateTopicsRequest) ResponseKind() Response {
 }
 
 // RequestWith is requests v on r and returns the response or an error.
+// For sharded requests, the response may be merged and still return an error.
+// It is better to rely on client.RequestSharded than to rely on proper merging behavior.
 func (v *CreateTopicsRequest) RequestWith(ctx context.Context, r Requestor) (*CreateTopicsResponse, error) {
 	kresp, err := r.Request(ctx, v)
-	if err != nil {
-		return nil, err
-	}
-	return kresp.(*CreateTopicsResponse), nil
+	resp, _ := kresp.(*CreateTopicsResponse)
+	return resp, err
 }
 
 func (v *CreateTopicsRequest) AppendTo(dst []byte) []byte {
@@ -14963,12 +14963,12 @@ func (v *DeleteTopicsRequest) ResponseKind() Response {
 }
 
 // RequestWith is requests v on r and returns the response or an error.
+// For sharded requests, the response may be merged and still return an error.
+// It is better to rely on client.RequestSharded than to rely on proper merging behavior.
 func (v *DeleteTopicsRequest) RequestWith(ctx context.Context, r Requestor) (*DeleteTopicsResponse, error) {
 	kresp, err := r.Request(ctx, v)
-	if err != nil {
-		return nil, err
-	}
-	return kresp.(*DeleteTopicsResponse), nil
+	resp, _ := kresp.(*DeleteTopicsResponse)
+	return resp, err
 }
 
 func (v *DeleteTopicsRequest) AppendTo(dst []byte) []byte {
@@ -15486,12 +15486,12 @@ func (v *DeleteRecordsRequest) ResponseKind() Response {
 }
 
 // RequestWith is requests v on r and returns the response or an error.
+// For sharded requests, the response may be merged and still return an error.
+// It is better to rely on client.RequestSharded than to rely on proper merging behavior.
 func (v *DeleteRecordsRequest) RequestWith(ctx context.Context, r Requestor) (*DeleteRecordsResponse, error) {
 	kresp, err := r.Request(ctx, v)
-	if err != nil {
-		return nil, err
-	}
-	return kresp.(*DeleteRecordsResponse), nil
+	resp, _ := kresp.(*DeleteRecordsResponse)
+	return resp, err
 }
 
 func (v *DeleteRecordsRequest) AppendTo(dst []byte) []byte {
@@ -15996,12 +15996,12 @@ func (v *InitProducerIDRequest) ResponseKind() Response {
 }
 
 // RequestWith is requests v on r and returns the response or an error.
+// For sharded requests, the response may be merged and still return an error.
+// It is better to rely on client.RequestSharded than to rely on proper merging behavior.
 func (v *InitProducerIDRequest) RequestWith(ctx context.Context, r Requestor) (*InitProducerIDResponse, error) {
 	kresp, err := r.Request(ctx, v)
-	if err != nil {
-		return nil, err
-	}
-	return kresp.(*InitProducerIDResponse), nil
+	resp, _ := kresp.(*InitProducerIDResponse)
+	return resp, err
 }
 
 func (v *InitProducerIDRequest) AppendTo(dst []byte) []byte {
@@ -16327,12 +16327,12 @@ func (v *OffsetForLeaderEpochRequest) ResponseKind() Response {
 }
 
 // RequestWith is requests v on r and returns the response or an error.
+// For sharded requests, the response may be merged and still return an error.
+// It is better to rely on client.RequestSharded than to rely on proper merging behavior.
 func (v *OffsetForLeaderEpochRequest) RequestWith(ctx context.Context, r Requestor) (*OffsetForLeaderEpochResponse, error) {
 	kresp, err := r.Request(ctx, v)
-	if err != nil {
-		return nil, err
-	}
-	return kresp.(*OffsetForLeaderEpochResponse), nil
+	resp, _ := kresp.(*OffsetForLeaderEpochResponse)
+	return resp, err
 }
 
 func (v *OffsetForLeaderEpochRequest) AppendTo(dst []byte) []byte {
@@ -16637,6 +16637,7 @@ func (v *OffsetForLeaderEpochResponse) IsFlexible() bool         { return v.Vers
 func (v *OffsetForLeaderEpochResponse) Throttle() (int32, bool) {
 	return v.ThrottleMillis, v.Version >= 0
 }
+
 func (v *OffsetForLeaderEpochResponse) RequestKind() Request {
 	return &OffsetForLeaderEpochRequest{Version: v.Version}
 }
@@ -16891,12 +16892,12 @@ func (v *AddPartitionsToTxnRequest) ResponseKind() Response {
 }
 
 // RequestWith is requests v on r and returns the response or an error.
+// For sharded requests, the response may be merged and still return an error.
+// It is better to rely on client.RequestSharded than to rely on proper merging behavior.
 func (v *AddPartitionsToTxnRequest) RequestWith(ctx context.Context, r Requestor) (*AddPartitionsToTxnResponse, error) {
 	kresp, err := r.Request(ctx, v)
-	if err != nil {
-		return nil, err
-	}
-	return kresp.(*AddPartitionsToTxnResponse), nil
+	resp, _ := kresp.(*AddPartitionsToTxnResponse)
+	return resp, err
 }
 
 func (v *AddPartitionsToTxnRequest) AppendTo(dst []byte) []byte {
@@ -17181,6 +17182,7 @@ func (v *AddPartitionsToTxnResponse) IsFlexible() bool         { return v.Versio
 func (v *AddPartitionsToTxnResponse) Throttle() (int32, bool) {
 	return v.ThrottleMillis, v.Version >= 1
 }
+
 func (v *AddPartitionsToTxnResponse) RequestKind() Request {
 	return &AddPartitionsToTxnRequest{Version: v.Version}
 }
@@ -17397,12 +17399,12 @@ func (v *AddOffsetsToTxnRequest) ResponseKind() Response {
 }
 
 // RequestWith is requests v on r and returns the response or an error.
+// For sharded requests, the response may be merged and still return an error.
+// It is better to rely on client.RequestSharded than to rely on proper merging behavior.
 func (v *AddOffsetsToTxnRequest) RequestWith(ctx context.Context, r Requestor) (*AddOffsetsToTxnResponse, error) {
 	kresp, err := r.Request(ctx, v)
-	if err != nil {
-		return nil, err
-	}
-	return kresp.(*AddOffsetsToTxnResponse), nil
+	resp, _ := kresp.(*AddOffsetsToTxnResponse)
+	return resp, err
 }
 
 func (v *AddOffsetsToTxnRequest) AppendTo(dst []byte) []byte {
@@ -17639,12 +17641,12 @@ func (v *EndTxnRequest) IsTxnCoordinatorRequest() {}
 func (v *EndTxnRequest) ResponseKind() Response   { return &EndTxnResponse{Version: v.Version} }
 
 // RequestWith is requests v on r and returns the response or an error.
+// For sharded requests, the response may be merged and still return an error.
+// It is better to rely on client.RequestSharded than to rely on proper merging behavior.
 func (v *EndTxnRequest) RequestWith(ctx context.Context, r Requestor) (*EndTxnResponse, error) {
 	kresp, err := r.Request(ctx, v)
-	if err != nil {
-		return nil, err
-	}
-	return kresp.(*EndTxnResponse), nil
+	resp, _ := kresp.(*EndTxnResponse)
+	return resp, err
 }
 
 func (v *EndTxnRequest) AppendTo(dst []byte) []byte {
@@ -17922,12 +17924,12 @@ func (v *WriteTxnMarkersRequest) ResponseKind() Response {
 }
 
 // RequestWith is requests v on r and returns the response or an error.
+// For sharded requests, the response may be merged and still return an error.
+// It is better to rely on client.RequestSharded than to rely on proper merging behavior.
 func (v *WriteTxnMarkersRequest) RequestWith(ctx context.Context, r Requestor) (*WriteTxnMarkersResponse, error) {
 	kresp, err := r.Request(ctx, v)
-	if err != nil {
-		return nil, err
-	}
-	return kresp.(*WriteTxnMarkersResponse), nil
+	resp, _ := kresp.(*WriteTxnMarkersResponse)
+	return resp, err
 }
 
 func (v *WriteTxnMarkersRequest) AppendTo(dst []byte) []byte {
@@ -18561,12 +18563,12 @@ func (v *TxnOffsetCommitRequest) ResponseKind() Response {
 }
 
 // RequestWith is requests v on r and returns the response or an error.
+// For sharded requests, the response may be merged and still return an error.
+// It is better to rely on client.RequestSharded than to rely on proper merging behavior.
 func (v *TxnOffsetCommitRequest) RequestWith(ctx context.Context, r Requestor) (*TxnOffsetCommitResponse, error) {
 	kresp, err := r.Request(ctx, v)
-	if err != nil {
-		return nil, err
-	}
-	return kresp.(*TxnOffsetCommitResponse), nil
+	resp, _ := kresp.(*TxnOffsetCommitResponse)
+	return resp, err
 }
 
 func (v *TxnOffsetCommitRequest) AppendTo(dst []byte) []byte {
@@ -19192,12 +19194,12 @@ func (v *DescribeACLsRequest) ResponseKind() Response {
 }
 
 // RequestWith is requests v on r and returns the response or an error.
+// For sharded requests, the response may be merged and still return an error.
+// It is better to rely on client.RequestSharded than to rely on proper merging behavior.
 func (v *DescribeACLsRequest) RequestWith(ctx context.Context, r Requestor) (*DescribeACLsResponse, error) {
 	kresp, err := r.Request(ctx, v)
-	if err != nil {
-		return nil, err
-	}
-	return kresp.(*DescribeACLsResponse), nil
+	resp, _ := kresp.(*DescribeACLsResponse)
+	return resp, err
 }
 
 func (v *DescribeACLsRequest) AppendTo(dst []byte) []byte {
@@ -19821,12 +19823,12 @@ func (v *CreateACLsRequest) IsFlexible() bool         { return v.Version >= 2 }
 func (v *CreateACLsRequest) ResponseKind() Response   { return &CreateACLsResponse{Version: v.Version} }
 
 // RequestWith is requests v on r and returns the response or an error.
+// For sharded requests, the response may be merged and still return an error.
+// It is better to rely on client.RequestSharded than to rely on proper merging behavior.
 func (v *CreateACLsRequest) RequestWith(ctx context.Context, r Requestor) (*CreateACLsResponse, error) {
 	kresp, err := r.Request(ctx, v)
-	if err != nil {
-		return nil, err
-	}
-	return kresp.(*CreateACLsResponse), nil
+	resp, _ := kresp.(*CreateACLsResponse)
+	return resp, err
 }
 
 func (v *CreateACLsRequest) AppendTo(dst []byte) []byte {
@@ -20265,12 +20267,12 @@ func (v *DeleteACLsRequest) IsFlexible() bool         { return v.Version >= 2 }
 func (v *DeleteACLsRequest) ResponseKind() Response   { return &DeleteACLsResponse{Version: v.Version} }
 
 // RequestWith is requests v on r and returns the response or an error.
+// For sharded requests, the response may be merged and still return an error.
+// It is better to rely on client.RequestSharded than to rely on proper merging behavior.
 func (v *DeleteACLsRequest) RequestWith(ctx context.Context, r Requestor) (*DeleteACLsResponse, error) {
 	kresp, err := r.Request(ctx, v)
-	if err != nil {
-		return nil, err
-	}
-	return kresp.(*DeleteACLsResponse), nil
+	resp, _ := kresp.(*DeleteACLsResponse)
+	return resp, err
 }
 
 func (v *DeleteACLsRequest) AppendTo(dst []byte) []byte {
@@ -20944,12 +20946,12 @@ func (v *DescribeConfigsRequest) ResponseKind() Response {
 }
 
 // RequestWith is requests v on r and returns the response or an error.
+// For sharded requests, the response may be merged and still return an error.
+// It is better to rely on client.RequestSharded than to rely on proper merging behavior.
 func (v *DescribeConfigsRequest) RequestWith(ctx context.Context, r Requestor) (*DescribeConfigsResponse, error) {
 	kresp, err := r.Request(ctx, v)
-	if err != nil {
-		return nil, err
-	}
-	return kresp.(*DescribeConfigsResponse), nil
+	resp, _ := kresp.(*DescribeConfigsResponse)
+	return resp, err
 }
 
 func (v *DescribeConfigsRequest) AppendTo(dst []byte) []byte {
@@ -21791,12 +21793,12 @@ func (v *AlterConfigsRequest) ResponseKind() Response {
 }
 
 // RequestWith is requests v on r and returns the response or an error.
+// For sharded requests, the response may be merged and still return an error.
+// It is better to rely on client.RequestSharded than to rely on proper merging behavior.
 func (v *AlterConfigsRequest) RequestWith(ctx context.Context, r Requestor) (*AlterConfigsResponse, error) {
 	kresp, err := r.Request(ctx, v)
-	if err != nil {
-		return nil, err
-	}
-	return kresp.(*AlterConfigsResponse), nil
+	resp, _ := kresp.(*AlterConfigsResponse)
+	return resp, err
 }
 
 func (v *AlterConfigsRequest) AppendTo(dst []byte) []byte {
@@ -22308,12 +22310,12 @@ func (v *AlterReplicaLogDirsRequest) ResponseKind() Response {
 }
 
 // RequestWith is requests v on r and returns the response or an error.
+// For sharded requests, the response may be merged and still return an error.
+// It is better to rely on client.RequestSharded than to rely on proper merging behavior.
 func (v *AlterReplicaLogDirsRequest) RequestWith(ctx context.Context, r Requestor) (*AlterReplicaLogDirsResponse, error) {
 	kresp, err := r.Request(ctx, v)
-	if err != nil {
-		return nil, err
-	}
-	return kresp.(*AlterReplicaLogDirsResponse), nil
+	resp, _ := kresp.(*AlterReplicaLogDirsResponse)
+	return resp, err
 }
 
 func (v *AlterReplicaLogDirsRequest) AppendTo(dst []byte) []byte {
@@ -22604,6 +22606,7 @@ func (v *AlterReplicaLogDirsResponse) IsFlexible() bool         { return v.Versi
 func (v *AlterReplicaLogDirsResponse) Throttle() (int32, bool) {
 	return v.ThrottleMillis, v.Version >= 1
 }
+
 func (v *AlterReplicaLogDirsResponse) RequestKind() Request {
 	return &AlterReplicaLogDirsRequest{Version: v.Version}
 }
@@ -22828,12 +22831,12 @@ func (v *DescribeLogDirsRequest) ResponseKind() Response {
 }
 
 // RequestWith is requests v on r and returns the response or an error.
+// For sharded requests, the response may be merged and still return an error.
+// It is better to rely on client.RequestSharded than to rely on proper merging behavior.
 func (v *DescribeLogDirsRequest) RequestWith(ctx context.Context, r Requestor) (*DescribeLogDirsResponse, error) {
 	kresp, err := r.Request(ctx, v)
-	if err != nil {
-		return nil, err
-	}
-	return kresp.(*DescribeLogDirsResponse), nil
+	resp, _ := kresp.(*DescribeLogDirsResponse)
+	return resp, err
 }
 
 func (v *DescribeLogDirsRequest) AppendTo(dst []byte) []byte {
@@ -23388,12 +23391,12 @@ func (v *SASLAuthenticateRequest) ResponseKind() Response {
 }
 
 // RequestWith is requests v on r and returns the response or an error.
+// For sharded requests, the response may be merged and still return an error.
+// It is better to rely on client.RequestSharded than to rely on proper merging behavior.
 func (v *SASLAuthenticateRequest) RequestWith(ctx context.Context, r Requestor) (*SASLAuthenticateResponse, error) {
 	kresp, err := r.Request(ctx, v)
-	if err != nil {
-		return nil, err
-	}
-	return kresp.(*SASLAuthenticateResponse), nil
+	resp, _ := kresp.(*SASLAuthenticateResponse)
+	return resp, err
 }
 
 func (v *SASLAuthenticateRequest) AppendTo(dst []byte) []byte {
@@ -23689,12 +23692,12 @@ func (v *CreatePartitionsRequest) ResponseKind() Response {
 }
 
 // RequestWith is requests v on r and returns the response or an error.
+// For sharded requests, the response may be merged and still return an error.
+// It is better to rely on client.RequestSharded than to rely on proper merging behavior.
 func (v *CreatePartitionsRequest) RequestWith(ctx context.Context, r Requestor) (*CreatePartitionsResponse, error) {
 	kresp, err := r.Request(ctx, v)
-	if err != nil {
-		return nil, err
-	}
-	return kresp.(*CreatePartitionsResponse), nil
+	resp, _ := kresp.(*CreatePartitionsResponse)
+	return resp, err
 }
 
 func (v *CreatePartitionsRequest) AppendTo(dst []byte) []byte {
@@ -24189,12 +24192,12 @@ func (v *CreateDelegationTokenRequest) ResponseKind() Response {
 }
 
 // RequestWith is requests v on r and returns the response or an error.
+// For sharded requests, the response may be merged and still return an error.
+// It is better to rely on client.RequestSharded than to rely on proper merging behavior.
 func (v *CreateDelegationTokenRequest) RequestWith(ctx context.Context, r Requestor) (*CreateDelegationTokenResponse, error) {
 	kresp, err := r.Request(ctx, v)
-	if err != nil {
-		return nil, err
-	}
-	return kresp.(*CreateDelegationTokenResponse), nil
+	resp, _ := kresp.(*CreateDelegationTokenResponse)
+	return resp, err
 }
 
 func (v *CreateDelegationTokenRequest) AppendTo(dst []byte) []byte {
@@ -24385,6 +24388,7 @@ func (v *CreateDelegationTokenResponse) IsFlexible() bool         { return v.Ver
 func (v *CreateDelegationTokenResponse) Throttle() (int32, bool) {
 	return v.ThrottleMillis, v.Version >= 1
 }
+
 func (v *CreateDelegationTokenResponse) RequestKind() Request {
 	return &CreateDelegationTokenRequest{Version: v.Version}
 }
@@ -24573,12 +24577,12 @@ func (v *RenewDelegationTokenRequest) ResponseKind() Response {
 }
 
 // RequestWith is requests v on r and returns the response or an error.
+// For sharded requests, the response may be merged and still return an error.
+// It is better to rely on client.RequestSharded than to rely on proper merging behavior.
 func (v *RenewDelegationTokenRequest) RequestWith(ctx context.Context, r Requestor) (*RenewDelegationTokenResponse, error) {
 	kresp, err := r.Request(ctx, v)
-	if err != nil {
-		return nil, err
-	}
-	return kresp.(*RenewDelegationTokenResponse), nil
+	resp, _ := kresp.(*RenewDelegationTokenResponse)
+	return resp, err
 }
 
 func (v *RenewDelegationTokenRequest) AppendTo(dst []byte) []byte {
@@ -24687,6 +24691,7 @@ func (v *RenewDelegationTokenResponse) IsFlexible() bool         { return v.Vers
 func (v *RenewDelegationTokenResponse) Throttle() (int32, bool) {
 	return v.ThrottleMillis, v.Version >= 1
 }
+
 func (v *RenewDelegationTokenResponse) RequestKind() Request {
 	return &RenewDelegationTokenRequest{Version: v.Version}
 }
@@ -24797,12 +24802,12 @@ func (v *ExpireDelegationTokenRequest) ResponseKind() Response {
 }
 
 // RequestWith is requests v on r and returns the response or an error.
+// For sharded requests, the response may be merged and still return an error.
+// It is better to rely on client.RequestSharded than to rely on proper merging behavior.
 func (v *ExpireDelegationTokenRequest) RequestWith(ctx context.Context, r Requestor) (*ExpireDelegationTokenResponse, error) {
 	kresp, err := r.Request(ctx, v)
-	if err != nil {
-		return nil, err
-	}
-	return kresp.(*ExpireDelegationTokenResponse), nil
+	resp, _ := kresp.(*ExpireDelegationTokenResponse)
+	return resp, err
 }
 
 func (v *ExpireDelegationTokenRequest) AppendTo(dst []byte) []byte {
@@ -24910,6 +24915,7 @@ func (v *ExpireDelegationTokenResponse) IsFlexible() bool         { return v.Ver
 func (v *ExpireDelegationTokenResponse) Throttle() (int32, bool) {
 	return v.ThrottleMillis, v.Version >= 1
 }
+
 func (v *ExpireDelegationTokenResponse) RequestKind() Request {
 	return &ExpireDelegationTokenRequest{Version: v.Version}
 }
@@ -25037,12 +25043,12 @@ func (v *DescribeDelegationTokenRequest) ResponseKind() Response {
 }
 
 // RequestWith is requests v on r and returns the response or an error.
+// For sharded requests, the response may be merged and still return an error.
+// It is better to rely on client.RequestSharded than to rely on proper merging behavior.
 func (v *DescribeDelegationTokenRequest) RequestWith(ctx context.Context, r Requestor) (*DescribeDelegationTokenResponse, error) {
 	kresp, err := r.Request(ctx, v)
-	if err != nil {
-		return nil, err
-	}
-	return kresp.(*DescribeDelegationTokenResponse), nil
+	resp, _ := kresp.(*DescribeDelegationTokenResponse)
+	return resp, err
 }
 
 func (v *DescribeDelegationTokenRequest) AppendTo(dst []byte) []byte {
@@ -25270,6 +25276,7 @@ func (v *DescribeDelegationTokenResponse) IsFlexible() bool         { return v.V
 func (v *DescribeDelegationTokenResponse) Throttle() (int32, bool) {
 	return v.ThrottleMillis, v.Version >= 1
 }
+
 func (v *DescribeDelegationTokenResponse) RequestKind() Request {
 	return &DescribeDelegationTokenRequest{Version: v.Version}
 }
@@ -25571,12 +25578,12 @@ func (v *DeleteGroupsRequest) ResponseKind() Response {
 }
 
 // RequestWith is requests v on r and returns the response or an error.
+// For sharded requests, the response may be merged and still return an error.
+// It is better to rely on client.RequestSharded than to rely on proper merging behavior.
 func (v *DeleteGroupsRequest) RequestWith(ctx context.Context, r Requestor) (*DeleteGroupsResponse, error) {
 	kresp, err := r.Request(ctx, v)
-	if err != nil {
-		return nil, err
-	}
-	return kresp.(*DeleteGroupsResponse), nil
+	resp, _ := kresp.(*DeleteGroupsResponse)
+	return resp, err
 }
 
 func (v *DeleteGroupsRequest) AppendTo(dst []byte) []byte {
@@ -25926,12 +25933,12 @@ func (v *ElectLeadersRequest) ResponseKind() Response {
 }
 
 // RequestWith is requests v on r and returns the response or an error.
+// For sharded requests, the response may be merged and still return an error.
+// It is better to rely on client.RequestSharded than to rely on proper merging behavior.
 func (v *ElectLeadersRequest) RequestWith(ctx context.Context, r Requestor) (*ElectLeadersResponse, error) {
 	kresp, err := r.Request(ctx, v)
-	if err != nil {
-		return nil, err
-	}
-	return kresp.(*ElectLeadersResponse), nil
+	resp, _ := kresp.(*ElectLeadersResponse)
+	return resp, err
 }
 
 func (v *ElectLeadersRequest) AppendTo(dst []byte) []byte {
@@ -26499,12 +26506,12 @@ func (v *IncrementalAlterConfigsRequest) ResponseKind() Response {
 }
 
 // RequestWith is requests v on r and returns the response or an error.
+// For sharded requests, the response may be merged and still return an error.
+// It is better to rely on client.RequestSharded than to rely on proper merging behavior.
 func (v *IncrementalAlterConfigsRequest) RequestWith(ctx context.Context, r Requestor) (*IncrementalAlterConfigsResponse, error) {
 	kresp, err := r.Request(ctx, v)
-	if err != nil {
-		return nil, err
-	}
-	return kresp.(*IncrementalAlterConfigsResponse), nil
+	resp, _ := kresp.(*IncrementalAlterConfigsResponse)
+	return resp, err
 }
 
 func (v *IncrementalAlterConfigsRequest) AppendTo(dst []byte) []byte {
@@ -26790,6 +26797,7 @@ func (v *IncrementalAlterConfigsResponse) IsFlexible() bool         { return v.V
 func (v *IncrementalAlterConfigsResponse) Throttle() (int32, bool) {
 	return v.ThrottleMillis, v.Version >= 0
 }
+
 func (v *IncrementalAlterConfigsResponse) RequestKind() Request {
 	return &IncrementalAlterConfigsRequest{Version: v.Version}
 }
@@ -27032,12 +27040,12 @@ func (v *AlterPartitionAssignmentsRequest) ResponseKind() Response {
 }
 
 // RequestWith is requests v on r and returns the response or an error.
+// For sharded requests, the response may be merged and still return an error.
+// It is better to rely on client.RequestSharded than to rely on proper merging behavior.
 func (v *AlterPartitionAssignmentsRequest) RequestWith(ctx context.Context, r Requestor) (*AlterPartitionAssignmentsResponse, error) {
 	kresp, err := r.Request(ctx, v)
-	if err != nil {
-		return nil, err
-	}
-	return kresp.(*AlterPartitionAssignmentsResponse), nil
+	resp, _ := kresp.(*AlterPartitionAssignmentsResponse)
+	return resp, err
 }
 
 func (v *AlterPartitionAssignmentsRequest) AppendTo(dst []byte) []byte {
@@ -27335,6 +27343,7 @@ func (v *AlterPartitionAssignmentsResponse) IsFlexible() bool         { return v
 func (v *AlterPartitionAssignmentsResponse) Throttle() (int32, bool) {
 	return v.ThrottleMillis, v.Version >= 0
 }
+
 func (v *AlterPartitionAssignmentsResponse) RequestKind() Request {
 	return &AlterPartitionAssignmentsRequest{Version: v.Version}
 }
@@ -27611,12 +27620,12 @@ func (v *ListPartitionReassignmentsRequest) ResponseKind() Response {
 }
 
 // RequestWith is requests v on r and returns the response or an error.
+// For sharded requests, the response may be merged and still return an error.
+// It is better to rely on client.RequestSharded than to rely on proper merging behavior.
 func (v *ListPartitionReassignmentsRequest) RequestWith(ctx context.Context, r Requestor) (*ListPartitionReassignmentsResponse, error) {
 	kresp, err := r.Request(ctx, v)
-	if err != nil {
-		return nil, err
-	}
-	return kresp.(*ListPartitionReassignmentsResponse), nil
+	resp, _ := kresp.(*ListPartitionReassignmentsResponse)
+	return resp, err
 }
 
 func (v *ListPartitionReassignmentsRequest) AppendTo(dst []byte) []byte {
@@ -27862,6 +27871,7 @@ func (v *ListPartitionReassignmentsResponse) IsFlexible() bool         { return 
 func (v *ListPartitionReassignmentsResponse) Throttle() (int32, bool) {
 	return v.ThrottleMillis, v.Version >= 0
 }
+
 func (v *ListPartitionReassignmentsResponse) RequestKind() Request {
 	return &ListPartitionReassignmentsRequest{Version: v.Version}
 }
@@ -28221,12 +28231,12 @@ func (v *OffsetDeleteRequest) ResponseKind() Response {
 }
 
 // RequestWith is requests v on r and returns the response or an error.
+// For sharded requests, the response may be merged and still return an error.
+// It is better to rely on client.RequestSharded than to rely on proper merging behavior.
 func (v *OffsetDeleteRequest) RequestWith(ctx context.Context, r Requestor) (*OffsetDeleteResponse, error) {
 	kresp, err := r.Request(ctx, v)
-	if err != nil {
-		return nil, err
-	}
-	return kresp.(*OffsetDeleteResponse), nil
+	resp, _ := kresp.(*OffsetDeleteResponse)
+	return resp, err
 }
 
 func (v *OffsetDeleteRequest) AppendTo(dst []byte) []byte {
@@ -28618,12 +28628,12 @@ func (v *DescribeClientQuotasRequest) ResponseKind() Response {
 }
 
 // RequestWith is requests v on r and returns the response or an error.
+// For sharded requests, the response may be merged and still return an error.
+// It is better to rely on client.RequestSharded than to rely on proper merging behavior.
 func (v *DescribeClientQuotasRequest) RequestWith(ctx context.Context, r Requestor) (*DescribeClientQuotasResponse, error) {
 	kresp, err := r.Request(ctx, v)
-	if err != nil {
-		return nil, err
-	}
-	return kresp.(*DescribeClientQuotasResponse), nil
+	resp, _ := kresp.(*DescribeClientQuotasResponse)
+	return resp, err
 }
 
 func (v *DescribeClientQuotasRequest) AppendTo(dst []byte) []byte {
@@ -28870,6 +28880,7 @@ func (v *DescribeClientQuotasResponse) IsFlexible() bool         { return v.Vers
 func (v *DescribeClientQuotasResponse) Throttle() (int32, bool) {
 	return v.ThrottleMillis, v.Version >= 0
 }
+
 func (v *DescribeClientQuotasResponse) RequestKind() Request {
 	return &DescribeClientQuotasRequest{Version: v.Version}
 }
@@ -29245,12 +29256,12 @@ func (v *AlterClientQuotasRequest) ResponseKind() Response {
 }
 
 // RequestWith is requests v on r and returns the response or an error.
+// For sharded requests, the response may be merged and still return an error.
+// It is better to rely on client.RequestSharded than to rely on proper merging behavior.
 func (v *AlterClientQuotasRequest) RequestWith(ctx context.Context, r Requestor) (*AlterClientQuotasResponse, error) {
 	kresp, err := r.Request(ctx, v)
-	if err != nil {
-		return nil, err
-	}
-	return kresp.(*AlterClientQuotasResponse), nil
+	resp, _ := kresp.(*AlterClientQuotasResponse)
+	return resp, err
 }
 
 func (v *AlterClientQuotasRequest) AppendTo(dst []byte) []byte {
@@ -29823,12 +29834,12 @@ func (v *DescribeUserSCRAMCredentialsRequest) ResponseKind() Response {
 }
 
 // RequestWith is requests v on r and returns the response or an error.
+// For sharded requests, the response may be merged and still return an error.
+// It is better to rely on client.RequestSharded than to rely on proper merging behavior.
 func (v *DescribeUserSCRAMCredentialsRequest) RequestWith(ctx context.Context, r Requestor) (*DescribeUserSCRAMCredentialsResponse, error) {
 	kresp, err := r.Request(ctx, v)
-	if err != nil {
-		return nil, err
-	}
-	return kresp.(*DescribeUserSCRAMCredentialsResponse), nil
+	resp, _ := kresp.(*DescribeUserSCRAMCredentialsResponse)
+	return resp, err
 }
 
 func (v *DescribeUserSCRAMCredentialsRequest) AppendTo(dst []byte) []byte {
@@ -30022,6 +30033,7 @@ func (v *DescribeUserSCRAMCredentialsResponse) IsFlexible() bool         { retur
 func (v *DescribeUserSCRAMCredentialsResponse) Throttle() (int32, bool) {
 	return v.ThrottleMillis, v.Version >= 0
 }
+
 func (v *DescribeUserSCRAMCredentialsResponse) RequestKind() Request {
 	return &DescribeUserSCRAMCredentialsRequest{Version: v.Version}
 }
@@ -30337,12 +30349,12 @@ func (v *AlterUserSCRAMCredentialsRequest) ResponseKind() Response {
 }
 
 // RequestWith is requests v on r and returns the response or an error.
+// For sharded requests, the response may be merged and still return an error.
+// It is better to rely on client.RequestSharded than to rely on proper merging behavior.
 func (v *AlterUserSCRAMCredentialsRequest) RequestWith(ctx context.Context, r Requestor) (*AlterUserSCRAMCredentialsResponse, error) {
 	kresp, err := r.Request(ctx, v)
-	if err != nil {
-		return nil, err
-	}
-	return kresp.(*AlterUserSCRAMCredentialsResponse), nil
+	resp, _ := kresp.(*AlterUserSCRAMCredentialsResponse)
+	return resp, err
 }
 
 func (v *AlterUserSCRAMCredentialsRequest) AppendTo(dst []byte) []byte {
@@ -30618,6 +30630,7 @@ func (v *AlterUserSCRAMCredentialsResponse) IsFlexible() bool         { return v
 func (v *AlterUserSCRAMCredentialsResponse) Throttle() (int32, bool) {
 	return v.ThrottleMillis, v.Version >= 0
 }
+
 func (v *AlterUserSCRAMCredentialsResponse) RequestKind() Request {
 	return &AlterUserSCRAMCredentialsRequest{Version: v.Version}
 }
@@ -30840,12 +30853,12 @@ func (v *VoteRequest) IsAdminRequest()          {}
 func (v *VoteRequest) ResponseKind() Response   { return &VoteResponse{Version: v.Version} }
 
 // RequestWith is requests v on r and returns the response or an error.
+// For sharded requests, the response may be merged and still return an error.
+// It is better to rely on client.RequestSharded than to rely on proper merging behavior.
 func (v *VoteRequest) RequestWith(ctx context.Context, r Requestor) (*VoteResponse, error) {
 	kresp, err := r.Request(ctx, v)
-	if err != nil {
-		return nil, err
-	}
-	return kresp.(*VoteResponse), nil
+	resp, _ := kresp.(*VoteResponse)
+	return resp, err
 }
 
 func (v *VoteRequest) AppendTo(dst []byte) []byte {
@@ -31374,12 +31387,12 @@ func (v *BeginQuorumEpochRequest) ResponseKind() Response {
 }
 
 // RequestWith is requests v on r and returns the response or an error.
+// For sharded requests, the response may be merged and still return an error.
+// It is better to rely on client.RequestSharded than to rely on proper merging behavior.
 func (v *BeginQuorumEpochRequest) RequestWith(ctx context.Context, r Requestor) (*BeginQuorumEpochResponse, error) {
 	kresp, err := r.Request(ctx, v)
-	if err != nil {
-		return nil, err
-	}
-	return kresp.(*BeginQuorumEpochResponse), nil
+	resp, _ := kresp.(*BeginQuorumEpochResponse)
+	return resp, err
 }
 
 func (v *BeginQuorumEpochRequest) AppendTo(dst []byte) []byte {
@@ -31779,12 +31792,12 @@ func (v *EndQuorumEpochRequest) ResponseKind() Response {
 }
 
 // RequestWith is requests v on r and returns the response or an error.
+// For sharded requests, the response may be merged and still return an error.
+// It is better to rely on client.RequestSharded than to rely on proper merging behavior.
 func (v *EndQuorumEpochRequest) RequestWith(ctx context.Context, r Requestor) (*EndQuorumEpochResponse, error) {
 	kresp, err := r.Request(ctx, v)
-	if err != nil {
-		return nil, err
-	}
-	return kresp.(*EndQuorumEpochResponse), nil
+	resp, _ := kresp.(*EndQuorumEpochResponse)
+	return resp, err
 }
 
 func (v *EndQuorumEpochRequest) AppendTo(dst []byte) []byte {
@@ -32229,12 +32242,12 @@ func (v *DescribeQuorumRequest) ResponseKind() Response {
 }
 
 // RequestWith is requests v on r and returns the response or an error.
+// For sharded requests, the response may be merged and still return an error.
+// It is better to rely on client.RequestSharded than to rely on proper merging behavior.
 func (v *DescribeQuorumRequest) RequestWith(ctx context.Context, r Requestor) (*DescribeQuorumResponse, error) {
 	kresp, err := r.Request(ctx, v)
-	if err != nil {
-		return nil, err
-	}
-	return kresp.(*DescribeQuorumResponse), nil
+	resp, _ := kresp.(*DescribeQuorumResponse)
+	return resp, err
 }
 
 func (v *DescribeQuorumRequest) AppendTo(dst []byte) []byte {
@@ -32856,12 +32869,12 @@ func (v *AlterISRRequest) IsAdminRequest()          {}
 func (v *AlterISRRequest) ResponseKind() Response   { return &AlterISRResponse{Version: v.Version} }
 
 // RequestWith is requests v on r and returns the response or an error.
+// For sharded requests, the response may be merged and still return an error.
+// It is better to rely on client.RequestSharded than to rely on proper merging behavior.
 func (v *AlterISRRequest) RequestWith(ctx context.Context, r Requestor) (*AlterISRResponse, error) {
 	kresp, err := r.Request(ctx, v)
-	if err != nil {
-		return nil, err
-	}
-	return kresp.(*AlterISRResponse), nil
+	resp, _ := kresp.(*AlterISRResponse)
+	return resp, err
 }
 
 func (v *AlterISRRequest) AppendTo(dst []byte) []byte {
@@ -33465,12 +33478,12 @@ func (v *UpdateFeaturesRequest) ResponseKind() Response {
 }
 
 // RequestWith is requests v on r and returns the response or an error.
+// For sharded requests, the response may be merged and still return an error.
+// It is better to rely on client.RequestSharded than to rely on proper merging behavior.
 func (v *UpdateFeaturesRequest) RequestWith(ctx context.Context, r Requestor) (*UpdateFeaturesResponse, error) {
 	kresp, err := r.Request(ctx, v)
-	if err != nil {
-		return nil, err
-	}
-	return kresp.(*UpdateFeaturesResponse), nil
+	resp, _ := kresp.(*UpdateFeaturesResponse)
+	return resp, err
 }
 
 func (v *UpdateFeaturesRequest) AppendTo(dst []byte) []byte {
@@ -33852,12 +33865,12 @@ func (v *EnvelopeRequest) IsAdminRequest()          {}
 func (v *EnvelopeRequest) ResponseKind() Response   { return &EnvelopeResponse{Version: v.Version} }
 
 // RequestWith is requests v on r and returns the response or an error.
+// For sharded requests, the response may be merged and still return an error.
+// It is better to rely on client.RequestSharded than to rely on proper merging behavior.
 func (v *EnvelopeRequest) RequestWith(ctx context.Context, r Requestor) (*EnvelopeResponse, error) {
 	kresp, err := r.Request(ctx, v)
-	if err != nil {
-		return nil, err
-	}
-	return kresp.(*EnvelopeResponse), nil
+	resp, _ := kresp.(*EnvelopeResponse)
+	return resp, err
 }
 
 func (v *EnvelopeRequest) AppendTo(dst []byte) []byte {
@@ -34172,12 +34185,12 @@ func (v *FetchSnapshotRequest) ResponseKind() Response {
 }
 
 // RequestWith is requests v on r and returns the response or an error.
+// For sharded requests, the response may be merged and still return an error.
+// It is better to rely on client.RequestSharded than to rely on proper merging behavior.
 func (v *FetchSnapshotRequest) RequestWith(ctx context.Context, r Requestor) (*FetchSnapshotResponse, error) {
 	kresp, err := r.Request(ctx, v)
-	if err != nil {
-		return nil, err
-	}
-	return kresp.(*FetchSnapshotResponse), nil
+	resp, _ := kresp.(*FetchSnapshotResponse)
+	return resp, err
 }
 
 func (v *FetchSnapshotRequest) AppendTo(dst []byte) []byte {
@@ -34916,12 +34929,12 @@ func (v *DescribeClusterRequest) ResponseKind() Response {
 }
 
 // RequestWith is requests v on r and returns the response or an error.
+// For sharded requests, the response may be merged and still return an error.
+// It is better to rely on client.RequestSharded than to rely on proper merging behavior.
 func (v *DescribeClusterRequest) RequestWith(ctx context.Context, r Requestor) (*DescribeClusterResponse, error) {
 	kresp, err := r.Request(ctx, v)
-	if err != nil {
-		return nil, err
-	}
-	return kresp.(*DescribeClusterResponse), nil
+	resp, _ := kresp.(*DescribeClusterResponse)
+	return resp, err
 }
 
 func (v *DescribeClusterRequest) AppendTo(dst []byte) []byte {
@@ -35310,12 +35323,12 @@ func (v *DescribeProducersRequest) ResponseKind() Response {
 }
 
 // RequestWith is requests v on r and returns the response or an error.
+// For sharded requests, the response may be merged and still return an error.
+// It is better to rely on client.RequestSharded than to rely on proper merging behavior.
 func (v *DescribeProducersRequest) RequestWith(ctx context.Context, r Requestor) (*DescribeProducersResponse, error) {
 	kresp, err := r.Request(ctx, v)
-	if err != nil {
-		return nil, err
-	}
-	return kresp.(*DescribeProducersResponse), nil
+	resp, _ := kresp.(*DescribeProducersResponse)
+	return resp, err
 }
 
 func (v *DescribeProducersRequest) AppendTo(dst []byte) []byte {
@@ -35958,12 +35971,12 @@ func (v *BrokerRegistrationRequest) ResponseKind() Response {
 }
 
 // RequestWith is requests v on r and returns the response or an error.
+// For sharded requests, the response may be merged and still return an error.
+// It is better to rely on client.RequestSharded than to rely on proper merging behavior.
 func (v *BrokerRegistrationRequest) RequestWith(ctx context.Context, r Requestor) (*BrokerRegistrationResponse, error) {
 	kresp, err := r.Request(ctx, v)
-	if err != nil {
-		return nil, err
-	}
-	return kresp.(*BrokerRegistrationResponse), nil
+	resp, _ := kresp.(*BrokerRegistrationResponse)
+	return resp, err
 }
 
 func (v *BrokerRegistrationRequest) AppendTo(dst []byte) []byte {
@@ -36257,6 +36270,7 @@ func (v *BrokerRegistrationResponse) IsFlexible() bool         { return v.Versio
 func (v *BrokerRegistrationResponse) Throttle() (int32, bool) {
 	return v.ThrottleMillis, v.Version >= 0
 }
+
 func (v *BrokerRegistrationResponse) RequestKind() Request {
 	return &BrokerRegistrationRequest{Version: v.Version}
 }
@@ -36370,12 +36384,12 @@ func (v *BrokerHeartbeatRequest) ResponseKind() Response {
 }
 
 // RequestWith is requests v on r and returns the response or an error.
+// For sharded requests, the response may be merged and still return an error.
+// It is better to rely on client.RequestSharded than to rely on proper merging behavior.
 func (v *BrokerHeartbeatRequest) RequestWith(ctx context.Context, r Requestor) (*BrokerHeartbeatResponse, error) {
 	kresp, err := r.Request(ctx, v)
-	if err != nil {
-		return nil, err
-	}
-	return kresp.(*BrokerHeartbeatResponse), nil
+	resp, _ := kresp.(*BrokerHeartbeatResponse)
+	return resp, err
 }
 
 func (v *BrokerHeartbeatRequest) AppendTo(dst []byte) []byte {
@@ -36614,12 +36628,12 @@ func (v *UnregisterBrokerRequest) ResponseKind() Response {
 }
 
 // RequestWith is requests v on r and returns the response or an error.
+// For sharded requests, the response may be merged and still return an error.
+// It is better to rely on client.RequestSharded than to rely on proper merging behavior.
 func (v *UnregisterBrokerRequest) RequestWith(ctx context.Context, r Requestor) (*UnregisterBrokerResponse, error) {
 	kresp, err := r.Request(ctx, v)
-	if err != nil {
-		return nil, err
-	}
-	return kresp.(*UnregisterBrokerResponse), nil
+	resp, _ := kresp.(*UnregisterBrokerResponse)
+	return resp, err
 }
 
 func (v *UnregisterBrokerRequest) AppendTo(dst []byte) []byte {
@@ -36809,12 +36823,12 @@ func (v *DescribeTransactionsRequest) ResponseKind() Response {
 }
 
 // RequestWith is requests v on r and returns the response or an error.
+// For sharded requests, the response may be merged and still return an error.
+// It is better to rely on client.RequestSharded than to rely on proper merging behavior.
 func (v *DescribeTransactionsRequest) RequestWith(ctx context.Context, r Requestor) (*DescribeTransactionsResponse, error) {
 	kresp, err := r.Request(ctx, v)
-	if err != nil {
-		return nil, err
-	}
-	return kresp.(*DescribeTransactionsResponse), nil
+	resp, _ := kresp.(*DescribeTransactionsResponse)
+	return resp, err
 }
 
 func (v *DescribeTransactionsRequest) AppendTo(dst []byte) []byte {
@@ -37010,6 +37024,7 @@ func (v *DescribeTransactionsResponse) IsFlexible() bool         { return v.Vers
 func (v *DescribeTransactionsResponse) Throttle() (int32, bool) {
 	return v.ThrottleMillis, v.Version >= 0
 }
+
 func (v *DescribeTransactionsResponse) RequestKind() Request {
 	return &DescribeTransactionsRequest{Version: v.Version}
 }
@@ -37307,12 +37322,12 @@ func (v *ListTransactionsRequest) ResponseKind() Response {
 }
 
 // RequestWith is requests v on r and returns the response or an error.
+// For sharded requests, the response may be merged and still return an error.
+// It is better to rely on client.RequestSharded than to rely on proper merging behavior.
 func (v *ListTransactionsRequest) RequestWith(ctx context.Context, r Requestor) (*ListTransactionsResponse, error) {
 	kresp, err := r.Request(ctx, v)
-	if err != nil {
-		return nil, err
-	}
-	return kresp.(*ListTransactionsResponse), nil
+	resp, _ := kresp.(*ListTransactionsResponse)
+	return resp, err
 }
 
 func (v *ListTransactionsRequest) AppendTo(dst []byte) []byte {
@@ -37725,12 +37740,12 @@ func (v *AllocateProducerIDsRequest) ResponseKind() Response {
 }
 
 // RequestWith is requests v on r and returns the response or an error.
+// For sharded requests, the response may be merged and still return an error.
+// It is better to rely on client.RequestSharded than to rely on proper merging behavior.
 func (v *AllocateProducerIDsRequest) RequestWith(ctx context.Context, r Requestor) (*AllocateProducerIDsResponse, error) {
 	kresp, err := r.Request(ctx, v)
-	if err != nil {
-		return nil, err
-	}
-	return kresp.(*AllocateProducerIDsResponse), nil
+	resp, _ := kresp.(*AllocateProducerIDsResponse)
+	return resp, err
 }
 
 func (v *AllocateProducerIDsRequest) AppendTo(dst []byte) []byte {
@@ -37827,6 +37842,7 @@ func (v *AllocateProducerIDsResponse) IsFlexible() bool         { return v.Versi
 func (v *AllocateProducerIDsResponse) Throttle() (int32, bool) {
 	return v.ThrottleMillis, v.Version >= 0
 }
+
 func (v *AllocateProducerIDsResponse) RequestKind() Request {
 	return &AllocateProducerIDsRequest{Version: v.Version}
 }
