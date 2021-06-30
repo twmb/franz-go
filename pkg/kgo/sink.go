@@ -276,7 +276,7 @@ func (s *sink) produce(sem <-chan struct{}) bool {
 			s.cl.cfg.logger.Log(LogLevelWarn, "unable to load producer ID, bumping client's buffered record load errors by 1 and retrying")
 			return true // whatever caused our produce, we did nothing, so keep going
 		default:
-			s.cl.cfg.logger.Log(LogLevelError, "fatal InitProducerID error, failing all buffered records", "broker", s.nodeID, "err", err)
+			s.cl.cfg.logger.Log(LogLevelError, "fatal InitProducerID error, failing all buffered records", "broker", logID(s.nodeID), "err", err)
 			fallthrough
 		case ErrClientClosed:
 			s.cl.failBufferedRecords(err)
@@ -321,7 +321,7 @@ func (s *sink) produce(sem <-chan struct{}) bool {
 				// because that can lead to undesirable behavior
 				// with produce request vs. end txn (KAFKA-12671)
 				s.cl.failProducerID(id, epoch, err)
-				s.cl.cfg.logger.Log(LogLevelError, "fatal AddPartitionsToTxn error, failing all buffered records (it is possible the client can recover after EndTransaction)", "broker", s.nodeID, "err", err)
+				s.cl.cfg.logger.Log(LogLevelError, "fatal AddPartitionsToTxn error, failing all buffered records (it is possible the client can recover after EndTransaction)", "broker", logID(s.nodeID), "err", err)
 			}
 			return false
 		}
@@ -413,7 +413,7 @@ func (s *sink) issueTxnReq(
 	for _, topic := range resp.Topics {
 		topicBatches, ok := req.batches[topic.Topic]
 		if !ok {
-			s.cl.cfg.logger.Log(LogLevelError, "Kafka replied with topic in AddPartitionsToTxnResponse that was not in request", "broker", s.nodeID, "topic", topic.Topic)
+			s.cl.cfg.logger.Log(LogLevelError, "Kafka replied with topic in AddPartitionsToTxnResponse that was not in request", "broker", logID(s.nodeID), "topic", topic.Topic)
 			continue
 		}
 		for _, partition := range topic.Partitions {
@@ -427,7 +427,7 @@ func (s *sink) issueTxnReq(
 
 				batch, ok := topicBatches[partition.Partition]
 				if !ok {
-					s.cl.cfg.logger.Log(LogLevelError, "Kafka replied with partition in AddPartitionsToTxnResponse that was not in request", "broker", s.nodeID, "topic", topic.Topic, "partition", partition.Partition)
+					s.cl.cfg.logger.Log(LogLevelError, "Kafka replied with partition in AddPartitionsToTxnResponse that was not in request", "broker", logID(s.nodeID), "topic", topic.Topic, "partition", partition.Partition)
 					continue
 				}
 
@@ -501,7 +501,7 @@ func (s *sink) handleReqClientErr(req *produceRequest, err error) {
 		s.cl.failBufferedRecords(ErrClientClosed)
 
 	default:
-		s.cl.cfg.logger.Log(LogLevelWarn, "random error while producing, requeueing unattempted request", "broker", s.nodeID, "err", err)
+		s.cl.cfg.logger.Log(LogLevelWarn, "random error while producing, requeueing unattempted request", "broker", logID(s.nodeID), "err", err)
 		fallthrough
 
 	case isRetriableBrokerErr(err):
@@ -525,7 +525,7 @@ func (s *sink) handleReqResp(br *broker, req *produceRequest, resp kmsg.Response
 		defer func() {
 			update := b.String()
 			update = strings.TrimSuffix(update, ", ")
-			s.cl.cfg.logger.Log(LogLevelDebug, "produced", "broker", s.nodeID, "to", update)
+			s.cl.cfg.logger.Log(LogLevelDebug, "produced", "broker", logID(s.nodeID), "to", update)
 		}()
 	}
 
@@ -589,7 +589,7 @@ func (s *sink) handleReqResp(br *broker, req *produceRequest, resp kmsg.Response
 		topic := rTopic.Topic
 		partitions, ok := req.batches[topic]
 		if !ok {
-			s.cl.cfg.logger.Log(LogLevelError, "Kafka erroneously replied with topic in produce request that we did not produce to", "broker", s.nodeID, "topic", topic)
+			s.cl.cfg.logger.Log(LogLevelError, "Kafka erroneously replied with topic in produce request that we did not produce to", "broker", logID(s.nodeID), "topic", topic)
 			delete(req.metrics, topic)
 			continue // should not hit this
 		}
@@ -603,7 +603,7 @@ func (s *sink) handleReqResp(br *broker, req *produceRequest, resp kmsg.Response
 			partition := rPartition.Partition
 			batch, ok := partitions[partition]
 			if !ok {
-				s.cl.cfg.logger.Log(LogLevelError, "Kafka erroneously replied with partition in produce request that we did not produce to", "broker", s.nodeID, "topic", rTopic.Topic, "partition", partition)
+				s.cl.cfg.logger.Log(LogLevelError, "Kafka erroneously replied with partition in produce request that we did not produce to", "broker", logID(s.nodeID), "topic", rTopic.Topic, "partition", partition)
 				delete(tmetrics, partition)
 				continue // should not hit this
 			}
@@ -640,7 +640,7 @@ func (s *sink) handleReqResp(br *broker, req *produceRequest, resp kmsg.Response
 	}
 
 	if len(req.batches) > 0 {
-		s.cl.cfg.logger.Log(LogLevelError, "Kafka did not reply to all topics / partitions in the produce request! reenqueuing missing partitions", "broker", s.nodeID)
+		s.cl.cfg.logger.Log(LogLevelError, "Kafka did not reply to all topics / partitions in the produce request! reenqueuing missing partitions", "broker", logID(s.nodeID))
 		s.handleRetryBatches(req.batches, 0, true, false)
 	}
 	if len(reqRetry) > 0 {
@@ -746,7 +746,7 @@ func (s *sink) handleReqRespBatch(
 
 		if s.cl.cfg.txnID != nil || s.cl.cfg.stopOnDataLoss {
 			s.cl.cfg.logger.Log(LogLevelInfo, "batch errored, failing the producer ID",
-				"broker", s.nodeID,
+				"broker", logID(s.nodeID),
 				"topic", topic,
 				"partition", partition,
 				"producer_id", producerID,
@@ -776,7 +776,7 @@ func (s *sink) handleReqRespBatch(
 		// We should not be here, since this error occurs in the
 		// context of transactions, which are caught above.
 		s.cl.cfg.logger.Log(LogLevelInfo, fmt.Sprintf("batch errored with %s, failing the producer ID and resetting all sequence numbers", err.(*kerr.Error).Message),
-			"broker", s.nodeID,
+			"broker", logID(s.nodeID),
 			"topic", topic,
 			"partition", partition,
 			"producer_id", producerID,
@@ -796,7 +796,7 @@ func (s *sink) handleReqRespBatch(
 
 	case err == kerr.DuplicateSequenceNumber: // ignorable, but we should not get
 		s.cl.cfg.logger.Log(LogLevelInfo, "received unexpected duplicate sequence number, ignoring and treating batch as successful",
-			"broker", s.nodeID,
+			"broker", logID(s.nodeID),
 			"topic", topic,
 			"partition", partition,
 		)
@@ -805,7 +805,7 @@ func (s *sink) handleReqRespBatch(
 	default:
 		if err != nil {
 			s.cl.cfg.logger.Log(LogLevelInfo, "batch in a produce request failed",
-				"broker", s.nodeID,
+				"broker", logID(s.nodeID),
 				"topic", topic,
 				"partition", partition,
 				"err", err,
@@ -1133,7 +1133,7 @@ func (recBuf *recBuf) bumpRepeatedLoadErr(err error) {
 	if len(recBuf.batches) == 0 {
 		return
 	}
-	recBuf.cl.cfg.logger.Log(LogLevelWarn, "produce partition load error, bumping error count on first stored batch", "broker", recBuf.sink.nodeID, "topic", recBuf.topic, "partition", recBuf.partition, "err", err)
+	recBuf.cl.cfg.logger.Log(LogLevelWarn, "produce partition load error, bumping error count on first stored batch", "broker", logID(recBuf.sink.nodeID), "topic", recBuf.topic, "partition", recBuf.partition, "err", err)
 	batch0 := recBuf.batches[0]
 	batch0.tries++
 	failErr := batch0.maybeFailErr(&recBuf.cl.cfg)

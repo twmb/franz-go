@@ -616,7 +616,7 @@ func (cl *Client) waitUnknownTopic(
 	topic string,
 	unknown *unknownTopicProduces,
 ) {
-	cl.cfg.logger.Log(LogLevelInfo, "waiting for metadata to produce to unknown topic", "topic", topic)
+	cl.cfg.logger.Log(LogLevelInfo, "producing to a new topic for the first time, fetching metadata to learn its partitions", "topic", topic)
 	var after <-chan time.Time
 	if timeout := cl.cfg.recordTimeout; timeout > 0 {
 		timer := time.NewTimer(cl.cfg.recordTimeout)
@@ -633,10 +633,10 @@ func (cl *Client) waitUnknownTopic(
 			err = errRecordTimeout
 		case retriableErr, ok := <-unknown.wait:
 			if !ok {
-				cl.cfg.logger.Log(LogLevelInfo, "done waiting for unknown topic", "topic", topic)
+				cl.cfg.logger.Log(LogLevelInfo, "done waiting for metadata for new topic", "topic", topic)
 				return // metadata was successful!
 			}
-			cl.cfg.logger.Log(LogLevelInfo, "unknown topic wait failed, retrying wait", "topic", topic, "err", retriableErr)
+			cl.cfg.logger.Log(LogLevelInfo, "new topic metadata wait failed, retrying wait", "topic", topic, "err", retriableErr)
 			tries++
 			if int64(tries) >= cl.cfg.produceRetries {
 				err = fmt.Errorf("no partitions available after attempting to refresh metadata %d times, last err: %w", tries, retriableErr)
@@ -659,7 +659,7 @@ func (cl *Client) waitUnknownTopic(
 	if nowUnknown != unknown {
 		return
 	}
-	cl.cfg.logger.Log(LogLevelInfo, "unknown topic wait failed, done retrying, failing all records", "topic", topic)
+	cl.cfg.logger.Log(LogLevelInfo, "new topic metadata wait failed, done retrying, failing all records", "topic", topic, "err", err)
 
 	delete(p.unknownTopics, topic)
 	cl.failUnknownTopicRecords(topic, unknown, err)
