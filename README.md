@@ -309,6 +309,8 @@ generation.
 | [KIP-651](https://cwiki.apache.org/confluence/display/KAFKA/KIP-651+-+Support+PEM+format+for+SSL+certificates+and+private+key) — Support PEM | 2.7.0 | Supported (via dialer) |
 | [KIP-654](https://cwiki.apache.org/confluence/display/KAFKA/KIP-654%3A+Aborted+transaction+with+non-flushed+data+should+throw+a+non-fatal+exception) — Aborted txns with unflushed data is not fatal | 2.7.0 | Supported (default behavior) |
 | [KIP-664](https://cwiki.apache.org/confluence/display/KAFKA/KIP-664%3A+Provide+tooling+to+detect+and+abort+hanging+transactions) — Describe producers / etc. | 2.8.0 (mostly) | Supported |
+| [KIP-679](https://cwiki.apache.org/confluence/display/KAFKA/KIP-679%3A+Producer+will+enable+the+strongest+delivery+guarantee+by+default) — Strongest producer guarantee by default | 3.0.0 | Supported (by default always) |
+| [KIP-699](https://cwiki.apache.org/confluence/display/KAFKA/KIP-699%3A+Update+FindCoordinator+to+resolve+multiple+Coordinators+at+a+time) — Batch FindCoordinators| 3.0.0 | Supported |
 | [KIP-700](https://cwiki.apache.org/confluence/display/KAFKA/KIP-700%3A+Add+Describe+Cluster+API) — DescribeCluster | 2.8.0 | Supported |
 | [KIP-730](https://cwiki.apache.org/confluence/display/KAFKA/KIP-730%3A+Producer+ID+generation+in+KRaft+mode) - AllocateProducerIDs | 3.0.0 | Supported |
 | [KIP-734](https://cwiki.apache.org/confluence/display/KAFKA/KIP-734:+Improve+AdminClient.listOffsets+to+return+timestamp+and+offset+for+the+record+with+the+largest+timestamp) — Support MaxTimestamp in ListOffsets | 3.0.0 | Supported (simple version bump) |

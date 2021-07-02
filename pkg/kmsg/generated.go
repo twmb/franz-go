@@ -10184,13 +10184,16 @@ type FindCoordinatorRequest struct {
 	// transactional IDs are type 1.
 	CoordinatorType int8 // v1+
 
+	// CoordinatorKeys contains all keys to find the coordinator for.
+	CoordinatorKeys []string // v4+
+
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v3+
 
 }
 
 func (*FindCoordinatorRequest) Key() int16                 { return 10 }
-func (*FindCoordinatorRequest) MaxVersion() int16          { return 3 }
+func (*FindCoordinatorRequest) MaxVersion() int16          { return 4 }
 func (v *FindCoordinatorRequest) SetVersion(version int16) { v.Version = version }
 func (v *FindCoordinatorRequest) GetVersion() int16        { return v.Version }
 func (v *FindCoordinatorRequest) IsFlexible() bool         { return v.Version >= 3 }
@@ -10212,7 +10215,7 @@ func (v *FindCoordinatorRequest) AppendTo(dst []byte) []byte {
 	_ = version
 	isFlexible := version >= 3
 	_ = isFlexible
-	{
+	if version >= 0 && version <= 3 {
 		v := v.CoordinatorKey
 		if isFlexible {
 			dst = kbin.AppendCompactString(dst, v)
@@ -10223,6 +10226,22 @@ func (v *FindCoordinatorRequest) AppendTo(dst []byte) []byte {
 	if version >= 1 {
 		v := v.CoordinatorType
 		dst = kbin.AppendInt8(dst, v)
+	}
+	if version >= 4 {
+		v := v.CoordinatorKeys
+		if isFlexible {
+			dst = kbin.AppendCompactArrayLen(dst, len(v))
+		} else {
+			dst = kbin.AppendArrayLen(dst, len(v))
+		}
+		for i := range v {
+			v := v[i]
+			if isFlexible {
+				dst = kbin.AppendCompactString(dst, v)
+			} else {
+				dst = kbin.AppendString(dst, v)
+			}
+		}
 	}
 	if isFlexible {
 		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
@@ -10239,7 +10258,7 @@ func (v *FindCoordinatorRequest) ReadFrom(src []byte) error {
 	isFlexible := version >= 3
 	_ = isFlexible
 	s := v
-	{
+	if version >= 0 && version <= 3 {
 		var v string
 		if isFlexible {
 			v = b.CompactString()
@@ -10251,6 +10270,33 @@ func (v *FindCoordinatorRequest) ReadFrom(src []byte) error {
 	if version >= 1 {
 		v := b.Int8()
 		s.CoordinatorType = v
+	}
+	if version >= 4 {
+		v := s.CoordinatorKeys
+		a := v
+		var l int32
+		if isFlexible {
+			l = b.CompactArrayLen()
+		} else {
+			l = b.ArrayLen()
+		}
+		if !b.Ok() {
+			return b.Complete()
+		}
+		if l > 0 {
+			a = make([]string, l)
+		}
+		for i := int32(0); i < l; i++ {
+			var v string
+			if isFlexible {
+				v = b.CompactString()
+			} else {
+				v = b.String()
+			}
+			a[i] = v
+		}
+		v = a
+		s.CoordinatorKeys = v
 	}
 	if isFlexible {
 		s.UnknownTags = ReadTags(&b)
@@ -10275,6 +10321,37 @@ func (v *FindCoordinatorRequest) Default() {
 // This is a shortcut for creating a struct and calling Default yourself.
 func NewFindCoordinatorRequest() FindCoordinatorRequest {
 	var v FindCoordinatorRequest
+	v.Default()
+	return v
+}
+
+type FindCoordinatorResponseCoordinator struct {
+	Key string
+
+	NodeID int32
+
+	Host string
+
+	Port int32
+
+	ErrorCode int16
+
+	ErrorMessage *string
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v3+
+
+}
+
+// Default sets any default fields. Calling this allows for future compatibility
+// if new fields are added to FindCoordinatorResponseCoordinator.
+func (v *FindCoordinatorResponseCoordinator) Default() {
+}
+
+// NewFindCoordinatorResponseCoordinator returns a default FindCoordinatorResponseCoordinator
+// This is a shortcut for creating a struct and calling Default yourself.
+func NewFindCoordinatorResponseCoordinator() FindCoordinatorResponseCoordinator {
+	var v FindCoordinatorResponseCoordinator
 	v.Default()
 	return v
 }
@@ -10320,13 +10397,18 @@ type FindCoordinatorResponse struct {
 	// Port is the port of the coordinator.
 	Port int32
 
+	// Coordinators, introduced for KIP-699, is the bulk response for
+	// coordinators. The fields in the struct exactly match the original fields
+	// in the FindCoordinatorResponse, thus they are left undocumented.
+	Coordinators []FindCoordinatorResponseCoordinator // v4+
+
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v3+
 
 }
 
 func (*FindCoordinatorResponse) Key() int16                 { return 10 }
-func (*FindCoordinatorResponse) MaxVersion() int16          { return 3 }
+func (*FindCoordinatorResponse) MaxVersion() int16          { return 4 }
 func (v *FindCoordinatorResponse) SetVersion(version int16) { v.Version = version }
 func (v *FindCoordinatorResponse) GetVersion() int16        { return v.Version }
 func (v *FindCoordinatorResponse) IsFlexible() bool         { return v.Version >= 3 }
@@ -10344,11 +10426,11 @@ func (v *FindCoordinatorResponse) AppendTo(dst []byte) []byte {
 		v := v.ThrottleMillis
 		dst = kbin.AppendInt32(dst, v)
 	}
-	{
+	if version >= 0 && version <= 3 {
 		v := v.ErrorCode
 		dst = kbin.AppendInt16(dst, v)
 	}
-	if version >= 1 {
+	if version >= 1 && version <= 3 {
 		v := v.ErrorMessage
 		if isFlexible {
 			dst = kbin.AppendCompactNullableString(dst, v)
@@ -10356,11 +10438,11 @@ func (v *FindCoordinatorResponse) AppendTo(dst []byte) []byte {
 			dst = kbin.AppendNullableString(dst, v)
 		}
 	}
-	{
+	if version >= 0 && version <= 3 {
 		v := v.NodeID
 		dst = kbin.AppendInt32(dst, v)
 	}
-	{
+	if version >= 0 && version <= 3 {
 		v := v.Host
 		if isFlexible {
 			dst = kbin.AppendCompactString(dst, v)
@@ -10368,9 +10450,60 @@ func (v *FindCoordinatorResponse) AppendTo(dst []byte) []byte {
 			dst = kbin.AppendString(dst, v)
 		}
 	}
-	{
+	if version >= 0 && version <= 3 {
 		v := v.Port
 		dst = kbin.AppendInt32(dst, v)
+	}
+	if version >= 4 {
+		v := v.Coordinators
+		if isFlexible {
+			dst = kbin.AppendCompactArrayLen(dst, len(v))
+		} else {
+			dst = kbin.AppendArrayLen(dst, len(v))
+		}
+		for i := range v {
+			v := &v[i]
+			{
+				v := v.Key
+				if isFlexible {
+					dst = kbin.AppendCompactString(dst, v)
+				} else {
+					dst = kbin.AppendString(dst, v)
+				}
+			}
+			{
+				v := v.NodeID
+				dst = kbin.AppendInt32(dst, v)
+			}
+			{
+				v := v.Host
+				if isFlexible {
+					dst = kbin.AppendCompactString(dst, v)
+				} else {
+					dst = kbin.AppendString(dst, v)
+				}
+			}
+			{
+				v := v.Port
+				dst = kbin.AppendInt32(dst, v)
+			}
+			{
+				v := v.ErrorCode
+				dst = kbin.AppendInt16(dst, v)
+			}
+			{
+				v := v.ErrorMessage
+				if isFlexible {
+					dst = kbin.AppendCompactNullableString(dst, v)
+				} else {
+					dst = kbin.AppendNullableString(dst, v)
+				}
+			}
+			if isFlexible {
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
+			}
+		}
 	}
 	if isFlexible {
 		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
@@ -10391,11 +10524,11 @@ func (v *FindCoordinatorResponse) ReadFrom(src []byte) error {
 		v := b.Int32()
 		s.ThrottleMillis = v
 	}
-	{
+	if version >= 0 && version <= 3 {
 		v := b.Int16()
 		s.ErrorCode = v
 	}
-	if version >= 1 {
+	if version >= 1 && version <= 3 {
 		var v *string
 		if isFlexible {
 			v = b.CompactNullableString()
@@ -10404,11 +10537,11 @@ func (v *FindCoordinatorResponse) ReadFrom(src []byte) error {
 		}
 		s.ErrorMessage = v
 	}
-	{
+	if version >= 0 && version <= 3 {
 		v := b.Int32()
 		s.NodeID = v
 	}
-	{
+	if version >= 0 && version <= 3 {
 		var v string
 		if isFlexible {
 			v = b.CompactString()
@@ -10417,9 +10550,74 @@ func (v *FindCoordinatorResponse) ReadFrom(src []byte) error {
 		}
 		s.Host = v
 	}
-	{
+	if version >= 0 && version <= 3 {
 		v := b.Int32()
 		s.Port = v
+	}
+	if version >= 4 {
+		v := s.Coordinators
+		a := v
+		var l int32
+		if isFlexible {
+			l = b.CompactArrayLen()
+		} else {
+			l = b.ArrayLen()
+		}
+		if !b.Ok() {
+			return b.Complete()
+		}
+		if l > 0 {
+			a = make([]FindCoordinatorResponseCoordinator, l)
+		}
+		for i := int32(0); i < l; i++ {
+			v := &a[i]
+			v.Default()
+			s := v
+			{
+				var v string
+				if isFlexible {
+					v = b.CompactString()
+				} else {
+					v = b.String()
+				}
+				s.Key = v
+			}
+			{
+				v := b.Int32()
+				s.NodeID = v
+			}
+			{
+				var v string
+				if isFlexible {
+					v = b.CompactString()
+				} else {
+					v = b.String()
+				}
+				s.Host = v
+			}
+			{
+				v := b.Int32()
+				s.Port = v
+			}
+			{
+				v := b.Int16()
+				s.ErrorCode = v
+			}
+			{
+				var v *string
+				if isFlexible {
+					v = b.CompactNullableString()
+				} else {
+					v = b.NullableString()
+				}
+				s.ErrorMessage = v
+			}
+			if isFlexible {
+				s.UnknownTags = ReadTags(&b)
+			}
+		}
+		v = a
+		s.Coordinators = v
 	}
 	if isFlexible {
 		s.UnknownTags = ReadTags(&b)

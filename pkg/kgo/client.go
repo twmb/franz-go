@@ -825,6 +825,7 @@ func (cl *Client) loadCoordinator(reload bool, ctx context.Context, key coordina
 	resp, c.err = (&kmsg.FindCoordinatorRequest{
 		CoordinatorKey:  key.name,
 		CoordinatorType: key.typ,
+		CoordinatorKeys: []string{key.name},
 	}).RequestWith(ctx, cl.retriable())
 
 	if c.err != nil {
@@ -834,8 +835,20 @@ func (cl *Client) loadCoordinator(reload bool, ctx context.Context, key coordina
 	if c.err = kerr.ErrorForCode(resp.ErrorCode); c.err != nil {
 		return nil, c.err
 	}
-
 	c.node = resp.NodeID
+
+	if resp.Version >= 4 {
+		if l := len(resp.Coordinators); l != 1 {
+			c.err = fmt.Errorf("unexpectedly received %d coordinators when requesting 1", l)
+			return nil, c.err
+		}
+		first := resp.Coordinators[0]
+		if c.err = kerr.ErrorForCode(first.ErrorCode); c.err != nil {
+			return nil, c.err
+		}
+		c.node = first.NodeID
+	}
+
 	var b *broker
 	b, c.err = cl.brokerOrErr(ctx, c.node, &errUnknownCoordinator{c.node, key})
 	return b, c.err

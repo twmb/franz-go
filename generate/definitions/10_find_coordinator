@@ -3,14 +3,16 @@
 // This coordinator is different from the broker leader coordinator. This
 // coordinator is the partition leader for the partition that is storing
 // the group or transaction ID.
-FindCoordinatorRequest => key 10, max version 3, flexible v3+
+FindCoordinatorRequest => key 10, max version 4, flexible v3+
   // CoordinatorKey is the ID to use for finding the coordinator. For groups,
   // this is the group name, for transactional producer, this is the
   // transactional ID.
-  CoordinatorKey: string // v0+
+  CoordinatorKey: string // v0-v3
   // CoordinatorType is the type that key is. Groups are type 0,
   // transactional IDs are type 1.
   CoordinatorType: int8 // v1+
+  // CoordinatorKeys contains all keys to find the coordinator for.
+  CoordinatorKeys: [string] // v4+
 
 // FindCoordinatorResponse is returned from a FindCoordinatorRequest.
 FindCoordinatorResponse =>
@@ -29,12 +31,22 @@ FindCoordinatorResponse =>
   // COORDINATOR_NOT_AVAILABLE is returned if the coordinator is not available
   // for the requested ID, which would be if the group or transactional topic
   // does not exist or the partition the requested key maps to is not available.
-  ErrorCode: int16
+  ErrorCode: int16 // v0-v3
   // ErrorMessage is an informative message if the request errored.
-  ErrorMessage: nullable-string // v1+
+  ErrorMessage: nullable-string // v1-v3
   // NodeID is the broker ID of the coordinator.
-  NodeID: int32
+  NodeID: int32 // v0-v3
   // Host is the host of the coordinator.
-  Host: string
+  Host: string // v0-v3
   // Port is the port of the coordinator.
-  Port: int32
+  Port: int32 // v0-v3
+  // Coordinators, introduced for KIP-699, is the bulk response for
+  // coordinators. The fields in the struct exactly match the original fields
+  // in the FindCoordinatorResponse, thus they are left undocumented.
+  Coordinators: [=>] // v4+
+    Key: string
+    NodeID: int32
+    Host: string
+    Port: int32
+    ErrorCode: int16
+    ErrorMessage: nullable-string
