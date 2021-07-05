@@ -70,20 +70,26 @@ type Metrics struct {
 //
 // This is useful if you want the Metrics type to create its own registry for
 // you to add additional metrics to.
-func (m *Metrics) Registry() *prometheus.Registry {
+func (m *Metrics) Registry() prometheus.Registerer {
 	return m.cfg.reg
 }
 
 // Handler returns an http.Handler providing prometheus metrics.
 func (m *Metrics) Handler() http.Handler {
-	return promhttp.HandlerFor(m.cfg.reg, m.cfg.handlerOpts)
+	return promhttp.HandlerFor(m.cfg.gatherer, m.cfg.handlerOpts)
 }
 
 type cfg struct {
-	reg *prometheus.Registry
+	reg      prometheus.Registerer
+	gatherer prometheus.Gatherer
 
 	handlerOpts  promhttp.HandlerOpts
 	goCollectors bool
+}
+
+type RegistererGatherer interface {
+	prometheus.Registerer
+	prometheus.Gatherer
 }
 
 // Opt applies options to further tune how prometheus metrics are gathered or
@@ -96,9 +102,23 @@ type opt struct{ fn func(*cfg) }
 
 func (o opt) apply(c *cfg) { o.fn(c) }
 
-// Registry sets the registry to add metrics to, rather than a new registry.
-func Registry(reg *prometheus.Registry) Opt {
+// Registry sets the registerer and gatherer to add metrics to, rather than a new registry.
+// Use this option if you want to configure both Gatherer and Registerer with the same object.
+func Registry(rg RegistererGatherer) Opt {
+	return opt{func(c *cfg) {
+		c.reg = rg
+		c.gatherer = rg
+	}}
+}
+
+// Registry sets the registerer to add metrics to, rather than a new registry.
+func Registerer(reg prometheus.Registerer) Opt {
 	return opt{func(c *cfg) { c.reg = reg }}
+}
+
+// Registry sets the gatherer to add metrics to, rather than a new registry.
+func Gatherer(gatherer prometheus.Gatherer) Opt {
+	return opt{func(c *cfg) { c.gatherer = gatherer }}
 }
 
 // GoCollectors adds the prometheus.NewProcessCollector and
@@ -119,8 +139,10 @@ func HandlerOpts(opts promhttp.HandlerOpts) Opt {
 // NewMetrics returns a new Metrics that adds prometheus metrics to the
 // registry under the given namespace.
 func NewMetrics(namespace string, opts ...Opt) *Metrics {
+	var regGatherer RegistererGatherer = prometheus.NewRegistry()
 	cfg := cfg{
-		reg: prometheus.NewRegistry(),
+		reg:      regGatherer,
+		gatherer: regGatherer,
 	}
 	for _, opt := range opts {
 		opt.apply(&cfg)
