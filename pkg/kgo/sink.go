@@ -221,7 +221,7 @@ func (s *sink) drain() {
 	// rather than immediately eating just one record, we allow it to
 	// buffer a bit before we loop draining.
 	if s.cl.cfg.linger == 0 && !s.cl.cfg.manualFlushing {
-		time.Sleep(5 * time.Millisecond)
+		time.Sleep(50 * time.Microsecond)
 	}
 
 	again := true
