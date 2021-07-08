@@ -835,6 +835,18 @@ func (cxn *brokerCxn) doSasl(authenticate bool) error {
 	return nil
 }
 
+// Some internal requests use the client context to issue requests, so if the
+// client is closed, this select case can be selected.  We want to return the
+// proper error.
+//
+// This function is used in this file anywhere the client context can cause
+// ErrClientClosed.
+func maybeUpdateCtxErr(clientCtx, reqCtx context.Context, err *error) {
+	if clientCtx == reqCtx {
+		*err = ErrClientClosed
+	}
+}
+
 // writeRequest writes a message request to the broker connection, bumping the
 // connection's correlation ID as appropriate for the next write.
 func (cxn *brokerCxn) writeRequest(ctx context.Context, enqueuedForWritingAt time.Time, req kmsg.Request) (corrID int32, bytesWritten int, writeErr error, writeWait, timeToWrite time.Duration, readEnqueue time.Time) {
@@ -846,8 +858,8 @@ func (cxn *brokerCxn) writeRequest(ctx context.Context, enqueuedForWritingAt tim
 			select {
 			case <-after.C:
 			case <-ctx.Done():
-				after.Stop()
 				writeErr = ctx.Err()
+				maybeUpdateCtxErr(cxn.cl.ctx, ctx, &writeErr)
 			case <-cxn.cl.ctx.Done():
 				writeErr = ErrClientClosed
 			case <-cxn.deadCh:
@@ -927,6 +939,7 @@ func (cxn *brokerCxn) writeConn(ctx context.Context, buf []byte, timeout time.Du
 		<-writeDone
 		if writeErr != nil && ctx.Err() != nil {
 			writeErr = ctx.Err()
+			maybeUpdateCtxErr(cxn.cl.ctx, ctx, &writeErr)
 		}
 	}
 	return
@@ -984,6 +997,7 @@ func (cxn *brokerCxn) readConn(ctx context.Context, timeout time.Duration, enque
 		<-readDone
 		if err != nil && ctx.Err() != nil {
 			err = ctx.Err()
+			maybeUpdateCtxErr(cxn.cl.ctx, ctx, &err)
 		}
 	}
 	return
