@@ -291,7 +291,7 @@ func (cl *Client) Produce(
 		select {
 		case <-p.waitBuffer:
 		case <-cl.ctx.Done():
-			drainBuffered(cl.ctx.Err())
+			drainBuffered(ErrClientClosed)
 			return
 		case <-ctx.Done():
 			drainBuffered(ctx.Err())
