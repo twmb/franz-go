@@ -9619,6 +9619,52 @@ func NewOffsetFetchRequestTopic() OffsetFetchRequestTopic {
 	return v
 }
 
+type OffsetFetchRequestGroupTopic struct {
+	Topic string
+
+	Partitions []int32
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v6+
+
+}
+
+// Default sets any default fields. Calling this allows for future compatibility
+// if new fields are added to OffsetFetchRequestGroupTopic.
+func (v *OffsetFetchRequestGroupTopic) Default() {
+}
+
+// NewOffsetFetchRequestGroupTopic returns a default OffsetFetchRequestGroupTopic
+// This is a shortcut for creating a struct and calling Default yourself.
+func NewOffsetFetchRequestGroupTopic() OffsetFetchRequestGroupTopic {
+	var v OffsetFetchRequestGroupTopic
+	v.Default()
+	return v
+}
+
+type OffsetFetchRequestGroup struct {
+	Group string
+
+	Topics []OffsetFetchRequestGroupTopic
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v6+
+
+}
+
+// Default sets any default fields. Calling this allows for future compatibility
+// if new fields are added to OffsetFetchRequestGroup.
+func (v *OffsetFetchRequestGroup) Default() {
+}
+
+// NewOffsetFetchRequestGroup returns a default OffsetFetchRequestGroup
+// This is a shortcut for creating a struct and calling Default yourself.
+func NewOffsetFetchRequestGroup() OffsetFetchRequestGroup {
+	var v OffsetFetchRequestGroup
+	v.Default()
+	return v
+}
+
 // OffsetFetchRequest requests the most recent committed offsets for topic
 // partitions in a group.
 type OffsetFetchRequest struct {
@@ -9632,6 +9678,13 @@ type OffsetFetchRequest struct {
 	// null to return all topics the client is authorized to describe in the group.
 	Topics []OffsetFetchRequestTopic
 
+	// Groups, introduced in v8 (Kafka 3.0), allows for fetching offsets for
+	// multiple groups at a time.
+	//
+	// The fields here mirror the old top level fields on the request, thus they
+	// are left undocumented. Refer to the top level documentation if necessary.
+	Groups []OffsetFetchRequestGroup // v8+
+
 	// RequireStable signifies whether the broker should wait on returning
 	// unstable offsets, instead setting a retriable error on the relevant
 	// unstable partitions (UNSTABLE_OFFSET_COMMIT). See KIP-447 for more
@@ -9644,7 +9697,7 @@ type OffsetFetchRequest struct {
 }
 
 func (*OffsetFetchRequest) Key() int16                   { return 9 }
-func (*OffsetFetchRequest) MaxVersion() int16            { return 7 }
+func (*OffsetFetchRequest) MaxVersion() int16            { return 8 }
 func (v *OffsetFetchRequest) SetVersion(version int16)   { v.Version = version }
 func (v *OffsetFetchRequest) GetVersion() int16          { return v.Version }
 func (v *OffsetFetchRequest) IsFlexible() bool           { return v.Version >= 6 }
@@ -9665,7 +9718,7 @@ func (v *OffsetFetchRequest) AppendTo(dst []byte) []byte {
 	_ = version
 	isFlexible := version >= 6
 	_ = isFlexible
-	{
+	if version >= 0 && version <= 7 {
 		v := v.Group
 		if isFlexible {
 			dst = kbin.AppendCompactString(dst, v)
@@ -9673,7 +9726,7 @@ func (v *OffsetFetchRequest) AppendTo(dst []byte) []byte {
 			dst = kbin.AppendString(dst, v)
 		}
 	}
-	{
+	if version >= 0 && version <= 7 {
 		v := v.Topics
 		if version > 2 {
 			if isFlexible {
@@ -9716,6 +9769,64 @@ func (v *OffsetFetchRequest) AppendTo(dst []byte) []byte {
 			}
 		}
 	}
+	if version >= 8 {
+		v := v.Groups
+		if isFlexible {
+			dst = kbin.AppendCompactArrayLen(dst, len(v))
+		} else {
+			dst = kbin.AppendArrayLen(dst, len(v))
+		}
+		for i := range v {
+			v := &v[i]
+			{
+				v := v.Group
+				if isFlexible {
+					dst = kbin.AppendCompactString(dst, v)
+				} else {
+					dst = kbin.AppendString(dst, v)
+				}
+			}
+			{
+				v := v.Topics
+				if isFlexible {
+					dst = kbin.AppendCompactNullableArrayLen(dst, len(v), v == nil)
+				} else {
+					dst = kbin.AppendNullableArrayLen(dst, len(v), v == nil)
+				}
+				for i := range v {
+					v := &v[i]
+					{
+						v := v.Topic
+						if isFlexible {
+							dst = kbin.AppendCompactString(dst, v)
+						} else {
+							dst = kbin.AppendString(dst, v)
+						}
+					}
+					{
+						v := v.Partitions
+						if isFlexible {
+							dst = kbin.AppendCompactArrayLen(dst, len(v))
+						} else {
+							dst = kbin.AppendArrayLen(dst, len(v))
+						}
+						for i := range v {
+							v := v[i]
+							dst = kbin.AppendInt32(dst, v)
+						}
+					}
+					if isFlexible {
+						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+						dst = v.UnknownTags.AppendEach(dst)
+					}
+				}
+			}
+			if isFlexible {
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
+			}
+		}
+	}
 	if version >= 7 {
 		v := v.RequireStable
 		dst = kbin.AppendBool(dst, v)
@@ -9735,7 +9846,7 @@ func (v *OffsetFetchRequest) ReadFrom(src []byte) error {
 	isFlexible := version >= 6
 	_ = isFlexible
 	s := v
-	{
+	if version >= 0 && version <= 7 {
 		var v string
 		if isFlexible {
 			v = b.CompactString()
@@ -9744,7 +9855,7 @@ func (v *OffsetFetchRequest) ReadFrom(src []byte) error {
 		}
 		s.Group = v
 	}
-	{
+	if version >= 0 && version <= 7 {
 		v := s.Topics
 		a := v
 		var l int32
@@ -9803,6 +9914,101 @@ func (v *OffsetFetchRequest) ReadFrom(src []byte) error {
 		}
 		v = a
 		s.Topics = v
+	}
+	if version >= 8 {
+		v := s.Groups
+		a := v
+		var l int32
+		if isFlexible {
+			l = b.CompactArrayLen()
+		} else {
+			l = b.ArrayLen()
+		}
+		if !b.Ok() {
+			return b.Complete()
+		}
+		if l > 0 {
+			a = make([]OffsetFetchRequestGroup, l)
+		}
+		for i := int32(0); i < l; i++ {
+			v := &a[i]
+			v.Default()
+			s := v
+			{
+				var v string
+				if isFlexible {
+					v = b.CompactString()
+				} else {
+					v = b.String()
+				}
+				s.Group = v
+			}
+			{
+				v := s.Topics
+				a := v
+				var l int32
+				if isFlexible {
+					l = b.CompactArrayLen()
+				} else {
+					l = b.ArrayLen()
+				}
+				if version < 0 || l == 0 {
+					a = []OffsetFetchRequestGroupTopic{}
+				}
+				if !b.Ok() {
+					return b.Complete()
+				}
+				if l > 0 {
+					a = make([]OffsetFetchRequestGroupTopic, l)
+				}
+				for i := int32(0); i < l; i++ {
+					v := &a[i]
+					v.Default()
+					s := v
+					{
+						var v string
+						if isFlexible {
+							v = b.CompactString()
+						} else {
+							v = b.String()
+						}
+						s.Topic = v
+					}
+					{
+						v := s.Partitions
+						a := v
+						var l int32
+						if isFlexible {
+							l = b.CompactArrayLen()
+						} else {
+							l = b.ArrayLen()
+						}
+						if !b.Ok() {
+							return b.Complete()
+						}
+						if l > 0 {
+							a = make([]int32, l)
+						}
+						for i := int32(0); i < l; i++ {
+							v := b.Int32()
+							a[i] = v
+						}
+						v = a
+						s.Partitions = v
+					}
+					if isFlexible {
+						s.UnknownTags = ReadTags(&b)
+					}
+				}
+				v = a
+				s.Topics = v
+			}
+			if isFlexible {
+				s.UnknownTags = ReadTags(&b)
+			}
+		}
+		v = a
+		s.Groups = v
 	}
 	if version >= 7 {
 		v := b.Bool()
@@ -9922,6 +10128,85 @@ func NewOffsetFetchResponseTopic() OffsetFetchResponseTopic {
 	return v
 }
 
+type OffsetFetchResponseGroupTopicPartition struct {
+	Partition int32
+
+	Offset int64
+
+	// This field has a default of -1.
+	LeaderEpoch int32
+
+	Metadata *string
+
+	ErrorCode int16
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v6+
+
+}
+
+// Default sets any default fields. Calling this allows for future compatibility
+// if new fields are added to OffsetFetchResponseGroupTopicPartition.
+func (v *OffsetFetchResponseGroupTopicPartition) Default() {
+	v.LeaderEpoch = -1
+}
+
+// NewOffsetFetchResponseGroupTopicPartition returns a default OffsetFetchResponseGroupTopicPartition
+// This is a shortcut for creating a struct and calling Default yourself.
+func NewOffsetFetchResponseGroupTopicPartition() OffsetFetchResponseGroupTopicPartition {
+	var v OffsetFetchResponseGroupTopicPartition
+	v.Default()
+	return v
+}
+
+type OffsetFetchResponseGroupTopic struct {
+	Topic string
+
+	Partitions []OffsetFetchResponseGroupTopicPartition
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v6+
+
+}
+
+// Default sets any default fields. Calling this allows for future compatibility
+// if new fields are added to OffsetFetchResponseGroupTopic.
+func (v *OffsetFetchResponseGroupTopic) Default() {
+}
+
+// NewOffsetFetchResponseGroupTopic returns a default OffsetFetchResponseGroupTopic
+// This is a shortcut for creating a struct and calling Default yourself.
+func NewOffsetFetchResponseGroupTopic() OffsetFetchResponseGroupTopic {
+	var v OffsetFetchResponseGroupTopic
+	v.Default()
+	return v
+}
+
+type OffsetFetchResponseGroup struct {
+	Group string
+
+	Topics []OffsetFetchResponseGroupTopic
+
+	ErrorCode int16
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v6+
+
+}
+
+// Default sets any default fields. Calling this allows for future compatibility
+// if new fields are added to OffsetFetchResponseGroup.
+func (v *OffsetFetchResponseGroup) Default() {
+}
+
+// NewOffsetFetchResponseGroup returns a default OffsetFetchResponseGroup
+// This is a shortcut for creating a struct and calling Default yourself.
+func NewOffsetFetchResponseGroup() OffsetFetchResponseGroup {
+	var v OffsetFetchResponseGroup
+	v.Default()
+	return v
+}
+
 // OffsetFetchResponse is returned from an OffsetFetchRequest.
 type OffsetFetchResponse struct {
 	// Version is the version of this message used with a Kafka broker.
@@ -9942,13 +10227,18 @@ type OffsetFetchResponse struct {
 	// This will be any group error.
 	ErrorCode int16 // v2+
 
+	// Groups is the response for all groups. Each field mirrors the fields in the
+	// top level request, thus they are left undocumented. Refer to the top level
+	// documentation if necessary.
+	Groups []OffsetFetchResponseGroup // v8+
+
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v6+
 
 }
 
 func (*OffsetFetchResponse) Key() int16                 { return 9 }
-func (*OffsetFetchResponse) MaxVersion() int16          { return 7 }
+func (*OffsetFetchResponse) MaxVersion() int16          { return 8 }
 func (v *OffsetFetchResponse) SetVersion(version int16) { v.Version = version }
 func (v *OffsetFetchResponse) GetVersion() int16        { return v.Version }
 func (v *OffsetFetchResponse) IsFlexible() bool         { return v.Version >= 6 }
@@ -9964,7 +10254,7 @@ func (v *OffsetFetchResponse) AppendTo(dst []byte) []byte {
 		v := v.ThrottleMillis
 		dst = kbin.AppendInt32(dst, v)
 	}
-	{
+	if version >= 0 && version <= 7 {
 		v := v.Topics
 		if isFlexible {
 			dst = kbin.AppendCompactArrayLen(dst, len(v))
@@ -10026,9 +10316,98 @@ func (v *OffsetFetchResponse) AppendTo(dst []byte) []byte {
 			}
 		}
 	}
-	if version >= 2 {
+	if version >= 2 && version <= 7 {
 		v := v.ErrorCode
 		dst = kbin.AppendInt16(dst, v)
+	}
+	if version >= 8 {
+		v := v.Groups
+		if isFlexible {
+			dst = kbin.AppendCompactArrayLen(dst, len(v))
+		} else {
+			dst = kbin.AppendArrayLen(dst, len(v))
+		}
+		for i := range v {
+			v := &v[i]
+			{
+				v := v.Group
+				if isFlexible {
+					dst = kbin.AppendCompactString(dst, v)
+				} else {
+					dst = kbin.AppendString(dst, v)
+				}
+			}
+			{
+				v := v.Topics
+				if isFlexible {
+					dst = kbin.AppendCompactArrayLen(dst, len(v))
+				} else {
+					dst = kbin.AppendArrayLen(dst, len(v))
+				}
+				for i := range v {
+					v := &v[i]
+					{
+						v := v.Topic
+						if isFlexible {
+							dst = kbin.AppendCompactString(dst, v)
+						} else {
+							dst = kbin.AppendString(dst, v)
+						}
+					}
+					{
+						v := v.Partitions
+						if isFlexible {
+							dst = kbin.AppendCompactArrayLen(dst, len(v))
+						} else {
+							dst = kbin.AppendArrayLen(dst, len(v))
+						}
+						for i := range v {
+							v := &v[i]
+							{
+								v := v.Partition
+								dst = kbin.AppendInt32(dst, v)
+							}
+							{
+								v := v.Offset
+								dst = kbin.AppendInt64(dst, v)
+							}
+							{
+								v := v.LeaderEpoch
+								dst = kbin.AppendInt32(dst, v)
+							}
+							{
+								v := v.Metadata
+								if isFlexible {
+									dst = kbin.AppendCompactNullableString(dst, v)
+								} else {
+									dst = kbin.AppendNullableString(dst, v)
+								}
+							}
+							{
+								v := v.ErrorCode
+								dst = kbin.AppendInt16(dst, v)
+							}
+							if isFlexible {
+								dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+								dst = v.UnknownTags.AppendEach(dst)
+							}
+						}
+					}
+					if isFlexible {
+						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+						dst = v.UnknownTags.AppendEach(dst)
+					}
+				}
+			}
+			{
+				v := v.ErrorCode
+				dst = kbin.AppendInt16(dst, v)
+			}
+			if isFlexible {
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
+			}
+		}
 	}
 	if isFlexible {
 		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
@@ -10049,7 +10428,7 @@ func (v *OffsetFetchResponse) ReadFrom(src []byte) error {
 		v := b.Int32()
 		s.ThrottleMillis = v
 	}
-	{
+	if version >= 0 && version <= 7 {
 		v := s.Topics
 		a := v
 		var l int32
@@ -10135,9 +10514,134 @@ func (v *OffsetFetchResponse) ReadFrom(src []byte) error {
 		v = a
 		s.Topics = v
 	}
-	if version >= 2 {
+	if version >= 2 && version <= 7 {
 		v := b.Int16()
 		s.ErrorCode = v
+	}
+	if version >= 8 {
+		v := s.Groups
+		a := v
+		var l int32
+		if isFlexible {
+			l = b.CompactArrayLen()
+		} else {
+			l = b.ArrayLen()
+		}
+		if !b.Ok() {
+			return b.Complete()
+		}
+		if l > 0 {
+			a = make([]OffsetFetchResponseGroup, l)
+		}
+		for i := int32(0); i < l; i++ {
+			v := &a[i]
+			v.Default()
+			s := v
+			{
+				var v string
+				if isFlexible {
+					v = b.CompactString()
+				} else {
+					v = b.String()
+				}
+				s.Group = v
+			}
+			{
+				v := s.Topics
+				a := v
+				var l int32
+				if isFlexible {
+					l = b.CompactArrayLen()
+				} else {
+					l = b.ArrayLen()
+				}
+				if !b.Ok() {
+					return b.Complete()
+				}
+				if l > 0 {
+					a = make([]OffsetFetchResponseGroupTopic, l)
+				}
+				for i := int32(0); i < l; i++ {
+					v := &a[i]
+					v.Default()
+					s := v
+					{
+						var v string
+						if isFlexible {
+							v = b.CompactString()
+						} else {
+							v = b.String()
+						}
+						s.Topic = v
+					}
+					{
+						v := s.Partitions
+						a := v
+						var l int32
+						if isFlexible {
+							l = b.CompactArrayLen()
+						} else {
+							l = b.ArrayLen()
+						}
+						if !b.Ok() {
+							return b.Complete()
+						}
+						if l > 0 {
+							a = make([]OffsetFetchResponseGroupTopicPartition, l)
+						}
+						for i := int32(0); i < l; i++ {
+							v := &a[i]
+							v.Default()
+							s := v
+							{
+								v := b.Int32()
+								s.Partition = v
+							}
+							{
+								v := b.Int64()
+								s.Offset = v
+							}
+							{
+								v := b.Int32()
+								s.LeaderEpoch = v
+							}
+							{
+								var v *string
+								if isFlexible {
+									v = b.CompactNullableString()
+								} else {
+									v = b.NullableString()
+								}
+								s.Metadata = v
+							}
+							{
+								v := b.Int16()
+								s.ErrorCode = v
+							}
+							if isFlexible {
+								s.UnknownTags = ReadTags(&b)
+							}
+						}
+						v = a
+						s.Partitions = v
+					}
+					if isFlexible {
+						s.UnknownTags = ReadTags(&b)
+					}
+				}
+				v = a
+				s.Topics = v
+			}
+			{
+				v := b.Int16()
+				s.ErrorCode = v
+			}
+			if isFlexible {
+				s.UnknownTags = ReadTags(&b)
+			}
+		}
+		v = a
+		s.Groups = v
 	}
 	if isFlexible {
 		s.UnknownTags = ReadTags(&b)

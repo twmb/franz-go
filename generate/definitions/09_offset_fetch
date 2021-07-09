@@ -1,15 +1,25 @@
 // OffsetFetchRequest requests the most recent committed offsets for topic
 // partitions in a group.
-OffsetFetchRequest => key 9, max version 7, flexible v6+, group coordinator
+OffsetFetchRequest => key 9, max version 8, flexible v6+, group coordinator
   // Group is the group to fetch offsets for.
-  Group: string
+  Group: string // v0-v7
   // Topics contains topics to fetch offets for. Version 2+ allows this to be
   // null to return all topics the client is authorized to describe in the group.
-  Topics: nullable-v2+[=>]
+  Topics: nullable-v2+[=>] // v0-v7
     // Topic is a topic to fetch offsets for.
     Topic: string
     // Partitions in a list of partitions in a group to fetch offsets for.
     Partitions: [int32]
+  // Groups, introduced in v8 (Kafka 3.0), allows for fetching offsets for
+  // multiple groups at a time.
+  //
+  // The fields here mirror the old top level fields on the request, thus they
+  // are left undocumented. Refer to the top level documentation if necessary.
+  Groups: [=>] // v8+
+    Group: string
+    Topics: nullable[=>]
+      Topic: string
+      Partitions: [int32]
   // RequireStable signifies whether the broker should wait on returning
   // unstable offsets, instead setting a retriable error on the relevant
   // unstable partitions (UNSTABLE_OFFSET_COMMIT). See KIP-447 for more
@@ -20,7 +30,7 @@ OffsetFetchRequest => key 9, max version 7, flexible v6+, group coordinator
 OffsetFetchResponse =>
   ThrottleMillis(4) // v3+
   // Topics contains responses for each requested topic/partition.
-  Topics: [=>]
+  Topics: [=>] // v0-v7
     // Topic is the topic this offset fetch response corresponds to.
     Topic: string
     // Partitions contains responses for each requested partition in
@@ -62,4 +72,18 @@ OffsetFetchResponse =>
       ErrorCode: int16
   // ErrorCode is a top level error code that applies to all topic/partitions.
   // This will be any group error.
-  ErrorCode: int16 // v2+
+  ErrorCode: int16 // v2-v7
+  // Groups is the response for all groups. Each field mirrors the fields in the
+  // top level request, thus they are left undocumented. Refer to the top level
+  // documentation if necessary.
+  Groups: [=>] // v8+
+    Group: string
+    Topics: [=>]
+      Topic: string
+      Partitions: [=>]
+        Partition: int32
+        Offset: int64
+        LeaderEpoch: int32(-1)
+        Metadata: nullable-string
+        ErrorCode: int16
+    ErrorCode: int16
