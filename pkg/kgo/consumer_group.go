@@ -1041,6 +1041,9 @@ func (g *groupConsumer) joinGroupProtocols() []kmsg.JoinGroupRequestProtocol {
 // fetchOffsets is issued once we join a group to see what the prior commits
 // were for the partitions we were assigned.
 func (g *groupConsumer) fetchOffsets(ctx context.Context, newAssigned map[string][]int32) error {
+	// Our client maps the v0 to v7 format to v8+ when sharding this
+	// request, if we are only requesting one group, as well as maps the
+	// response back, so we do not need to worry about v8+ here.
 start:
 	req := kmsg.OffsetFetchRequest{
 		Group:         g.cfg.group,
