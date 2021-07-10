@@ -3059,6 +3059,9 @@ type FetchRequestTopic struct {
 	// Topic is a topic to try to fetch records for.
 	Topic string
 
+	// TopicID is the uuid of the topic to fetch records for.
+	TopicID [16]byte // v13+
+
 	// Partitions contains partitions in a topic to try to fetch records for.
 	Partitions []FetchRequestTopicPartition
 
@@ -3082,7 +3085,11 @@ func NewFetchRequestTopic() FetchRequestTopic {
 
 type FetchRequestForgottenTopic struct {
 	// Topic is a topic to remove from being tracked (with the partitions below).
-	Topic string
+	Topic string // v7+
+
+	// TopicID is the uuid of a topic to remove from being tracked (with the
+	// partitions below).
+	TopicID [16]byte // v13+
 
 	// Partitions are partitions to remove from tracking for a topic.
 	Partitions []int32
@@ -3114,6 +3121,9 @@ func NewFetchRequestForgottenTopic() FetchRequestForgottenTopic {
 // Note that starting in v3, Kafka began processing partitions in order,
 // meaning the order of partitions in the fetch request is important due to
 // potential size constraints.
+//
+// Starting in v13, topics must use UUIDs rather than their string name
+// identifiers.
 type FetchRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
@@ -3188,7 +3198,7 @@ type FetchRequest struct {
 }
 
 func (*FetchRequest) Key() int16                 { return 1 }
-func (*FetchRequest) MaxVersion() int16          { return 12 }
+func (*FetchRequest) MaxVersion() int16          { return 13 }
 func (v *FetchRequest) SetVersion(version int16) { v.Version = version }
 func (v *FetchRequest) GetVersion() int16        { return v.Version }
 func (v *FetchRequest) IsFlexible() bool         { return v.Version >= 12 }
@@ -3245,13 +3255,17 @@ func (v *FetchRequest) AppendTo(dst []byte) []byte {
 		}
 		for i := range v {
 			v := &v[i]
-			{
+			if version >= 0 && version <= 12 {
 				v := v.Topic
 				if isFlexible {
 					dst = kbin.AppendCompactString(dst, v)
 				} else {
 					dst = kbin.AppendString(dst, v)
 				}
+			}
+			if version >= 13 {
+				v := v.TopicID
+				dst = kbin.AppendUuid(dst, v)
 			}
 			{
 				v := v.Partitions
@@ -3307,13 +3321,17 @@ func (v *FetchRequest) AppendTo(dst []byte) []byte {
 		}
 		for i := range v {
 			v := &v[i]
-			{
+			if version >= 7 && version <= 12 {
 				v := v.Topic
 				if isFlexible {
 					dst = kbin.AppendCompactString(dst, v)
 				} else {
 					dst = kbin.AppendString(dst, v)
 				}
+			}
+			if version >= 13 {
+				v := v.TopicID
+				dst = kbin.AppendUuid(dst, v)
 			}
 			{
 				v := v.Partitions
@@ -3429,7 +3447,7 @@ func (v *FetchRequest) ReadFrom(src []byte) error {
 			v := &a[i]
 			v.Default()
 			s := v
-			{
+			if version >= 0 && version <= 12 {
 				var v string
 				if isFlexible {
 					v = b.CompactString()
@@ -3437,6 +3455,10 @@ func (v *FetchRequest) ReadFrom(src []byte) error {
 					v = b.String()
 				}
 				s.Topic = v
+			}
+			if version >= 13 {
+				v := b.Uuid()
+				s.TopicID = v
 			}
 			{
 				v := s.Partitions
@@ -3514,7 +3536,7 @@ func (v *FetchRequest) ReadFrom(src []byte) error {
 			v := &a[i]
 			v.Default()
 			s := v
-			{
+			if version >= 7 && version <= 12 {
 				var v string
 				if isFlexible {
 					v = b.CompactString()
@@ -3522,6 +3544,10 @@ func (v *FetchRequest) ReadFrom(src []byte) error {
 					v = b.String()
 				}
 				s.Topic = v
+			}
+			if version >= 13 {
+				v := b.Uuid()
+				s.TopicID = v
 			}
 			{
 				v := s.Partitions
@@ -3757,6 +3783,8 @@ type FetchResponseTopicPartition struct {
 	//
 	// OFFSET_OUT_OF_RANGE is returned if requesting an offset past the
 	// current end offset or before the beginning offset.
+	//
+	// UNKNOWN_TOPIC_ID is returned if using uuid's and the uuid is unknown.
 	ErrorCode int16
 
 	// HighWatermark is the current high watermark for this partition,
@@ -3861,6 +3889,9 @@ type FetchResponseTopic struct {
 	// Topic is a topic that records may have been received for.
 	Topic string
 
+	// TopicID is the uuid of a topic that records may have been received for.
+	TopicID [16]byte // v13+
+
 	// Partitions contains partitions in a topic that records may have
 	// been received for.
 	Partitions []FetchResponseTopicPartition
@@ -3922,7 +3953,7 @@ type FetchResponse struct {
 }
 
 func (*FetchResponse) Key() int16                 { return 1 }
-func (*FetchResponse) MaxVersion() int16          { return 12 }
+func (*FetchResponse) MaxVersion() int16          { return 13 }
 func (v *FetchResponse) SetVersion(version int16) { v.Version = version }
 func (v *FetchResponse) GetVersion() int16        { return v.Version }
 func (v *FetchResponse) IsFlexible() bool         { return v.Version >= 12 }
@@ -3955,13 +3986,17 @@ func (v *FetchResponse) AppendTo(dst []byte) []byte {
 		}
 		for i := range v {
 			v := &v[i]
-			{
+			if version >= 0 && version <= 12 {
 				v := v.Topic
 				if isFlexible {
 					dst = kbin.AppendCompactString(dst, v)
 				} else {
 					dst = kbin.AppendString(dst, v)
 				}
+			}
+			if version >= 13 {
+				v := v.TopicID
+				dst = kbin.AppendUuid(dst, v)
 			}
 			{
 				v := v.Partitions
@@ -4186,7 +4221,7 @@ func (v *FetchResponse) ReadFrom(src []byte) error {
 			v := &a[i]
 			v.Default()
 			s := v
-			{
+			if version >= 0 && version <= 12 {
 				var v string
 				if isFlexible {
 					v = b.CompactString()
@@ -4194,6 +4229,10 @@ func (v *FetchResponse) ReadFrom(src []byte) error {
 					v = b.String()
 				}
 				s.Topic = v
+			}
+			if version >= 13 {
+				v := b.Uuid()
+				s.TopicID = v
 			}
 			{
 				v := s.Partitions

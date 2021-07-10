@@ -394,6 +394,7 @@ func (cl *Client) fetchTopicMetadata(all bool, reqTopics []string) (map[string]*
 
 				cursor: &cursor{
 					topic:       topicMeta.Topic,
+					topicID:     topicMeta.TopicID,
 					partition:   partMeta.Partition,
 					keepControl: cl.cfg.keepControl,
 					cursorsIdx:  -1,

@@ -90,6 +90,7 @@ func (s *source) removeCursor(rm *cursor) {
 // cursor is where we are consuming from for an individual partition.
 type cursor struct {
 	topic     string
+	topicID   [16]byte
 	partition int32
 
 	keepControl bool // whether to keep control records
@@ -684,8 +685,15 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 		preferreds    []cursorOffsetPreferred
 		updateMeta    bool
 	)
+
 	for _, rt := range resp.Topics {
 		topic := rt.Topic
+		// v13 only uses topic IDs, so we have to map the response
+		// uuid's to our string topics.
+		if resp.Version >= 13 {
+			topic = req.id2topic[rt.TopicID]
+		}
+
 		// We always include all cursors on this source in the fetch;
 		// we should not receive any topics or partitions we do not
 		// expect.
@@ -1392,6 +1400,9 @@ type fetchRequest struct {
 	numOffsets  int
 	usedOffsets usedOffsets
 
+	topic2id map[string][16]byte
+	id2topic map[[16]byte]string
+
 	// Session is a copy of the source session at the time a request is
 	// built. If the source is reset, the session it has is reset at the
 	// field level only. Our view of the original session is still valid.
@@ -1401,11 +1412,15 @@ type fetchRequest struct {
 func (f *fetchRequest) addCursor(c *cursor) {
 	if f.usedOffsets == nil {
 		f.usedOffsets = make(usedOffsets)
+		f.id2topic = make(map[[16]byte]string)
+		f.topic2id = make(map[string][16]byte)
 	}
 	partitions := f.usedOffsets[c.topic]
 	if partitions == nil {
 		partitions = make(map[int32]*cursorOffsetNext)
 		f.usedOffsets[c.topic] = partitions
+		f.id2topic[c.topicID] = c.topic
+		f.topic2id[c.topic] = c.topicID
 	}
 	partitions[c.partition] = c.use()
 	f.numOffsets++
@@ -1443,7 +1458,8 @@ func (f *fetchRequest) AppendTo(dst []byte) []byte {
 
 				if reqTopic == nil {
 					req.Topics = append(req.Topics, kmsg.FetchRequestTopic{
-						Topic: topic,
+						Topic:   topic,
+						TopicID: f.topic2id[topic],
 					})
 					reqTopic = &req.Topics[len(req.Topics)-1]
 				}
