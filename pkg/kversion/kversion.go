@@ -478,11 +478,12 @@ var max0110 = nextMax(max0102, func(v listenerKeys) listenerKeys {
 		k(zkBroker, rBroker), // 21 delete records KAFKA-4586 see above
 		k(zkBroker, rBroker), // 22 init producer id KAFKA-4817 bdf4cba047 KIP-98 (raft added in KAFKA-12620 e97cff2702b6ba836c7925caa36ab18066a7c95d KIP-730)
 		k(zkBroker, rBroker), // 23 offsets for leader epoch KAFKA-1211 0baea2ac13 KIP-101
-		k(zkBroker),          // 24 add partitions to txn KAFKA-4990 865d82af2c KIP-98
-		k(zkBroker),          // 25 add offsets to txn (same)
-		k(zkBroker),          // 26 end txn (same)
+
+		k(zkBroker, rBroker), // 24 add partitions to txn KAFKA-4990 865d82af2c KIP-98 (raft 3.0 6e857c531f14d07d5b05f174e6063a124c917324)
+		k(zkBroker),          // 25 add offsets to txn (same, same raft)
+		k(zkBroker, rBroker), // 26 end txn (same, same raft)
 		k(zkBroker, rBroker), // 27 write txn markers (same)
-		k(zkBroker),          // 28 txn offset commit (same)
+		k(zkBroker, rBroker), // 28 txn offset commit (same, same raft)
 
 		// raft broker / controller added in 5b0c58ed53c420e93957369516f34346580dac95
 		k(zkBroker, rBroker, rController), // 29 describe acls KAFKA-3266 9815e18fef KIP-140
@@ -490,7 +491,7 @@ var max0110 = nextMax(max0102, func(v listenerKeys) listenerKeys {
 		k(zkBroker, rBroker, rController), // 31 delete acls (same)
 
 		k(zkBroker, rBroker), // 32 describe configs KAFKA-3267 972b754536 KIP-133
-		k(zkBroker),          // 33 alter configs (same)
+		k(zkBroker, rBroker), // 33 alter configs (same) (raft 3.0 6e857c531f14d07d5b05f174e6063a124c917324)
 	)
 
 	// KAFKA-4954 0104b657a1 KIP-124
@@ -525,7 +526,7 @@ var max100 = nextMax(max0110, func(v listenerKeys) listenerKeys {
 		k(zkBroker, rBroker),              // 34 alter replica log dirs KAFKA-5694 adefc8ea07 KIP-113
 		k(zkBroker, rBroker),              // 35 describe log dirs (same)
 		k(zkBroker, rBroker, rController), // 36 sasl authenticate KAFKA-4764 (see above)
-		k(zkBroker),                       // 37 create partitions KAFKA-5856 5f6393f9b1 KIP-195
+		k(zkBroker, rBroker, rController), // 37 create partitions KAFKA-5856 5f6393f9b1 KIP-195 (raft 3.0 6e857c531f14d07d5b05f174e6063a124c917324)
 	)
 })
 
@@ -616,7 +617,7 @@ var max220 = nextMax(max210, func(v listenerKeys) listenerKeys {
 	v[7].inc() // 2 controlled shutdown (same)
 
 	return append(v,
-		k(zkBroker), // 43 elect preferred leaders KAFKA-5692 269b65279c KIP-183
+		k(zkBroker, rBroker, rController), // 43 elect preferred leaders KAFKA-5692 269b65279c KIP-183 (raft 3.0 6e857c531f14d07d5b05f174e6063a124c917324)
 	)
 })
 
@@ -765,7 +766,7 @@ var max270 = nextMax(max260, func(v listenerKeys) listenerKeys {
 
 	// KAFKA-10028 fb4f297207ef62f71e4a6d2d0dac75752933043d KIP-584
 	return append(v,
-		k(zkBroker), // 57 update features
+		k(zkBroker, rBroker), // 57 update features (raft 3.0 6e857c531f14d07d5b05f174e6063a124c917324)
 	)
 })
 
@@ -830,7 +831,7 @@ var max280 = nextMax(max270, func(v listenerKeys) listenerKeys {
 	// KAFKA-12249 3f36f9a7ca153a9d221f6bedeb7d1503aa18eff1 KIP-500 / KIP-631
 	// Renamed from Decommission to Unregister in 06dce721ec0185d49fac37775dbf191d0e80e687
 	v = append(v,
-		k(rBroker, rController), // 64 unregister broker
+		k(rController), // 64 unregister broker
 	)
 	return v
 })
@@ -849,7 +850,7 @@ var maxTip = nextMax(max280, func(v listenerKeys) listenerKeys {
 	// KAFKA-12620 72d108274c98dca44514007254552481c731c958 KIP-730
 	// raft broker added in  e97cff2702b6ba836c7925caa36ab18066a7c95d
 	v = append(v,
-		k(zkBroker, rBroker, rController), // 67 allocate producer ids
+		k(zkBroker, rController), // 67 allocate producer ids
 	)
 
 	// KAFKA-12541 bd72ef1bf1e40feb3bc17349a385b479fa5fa530 KIP-734
