@@ -18,9 +18,12 @@ metrics being counter vecs:
 #{ns}_read_bytes_total{node_id="#{node}"}
 #{ns}_produce_bytes_total{node_id="#{node}",topic="#{topic}"}
 #{ns}_fetch_bytes_total{node_id="#{node}",topic="#{topic}"}
+#{ns}_buffered_produce_records_total
+#{ns}_buffered_fetch_records_total
 ```
 
-Note that seed brokers use broker IDs starting at math.MinInt32.
+Note that seed brokers use broker IDs prefixed with "seed_", with the number
+corresponding to which seed it is.
 
 To use,
 
