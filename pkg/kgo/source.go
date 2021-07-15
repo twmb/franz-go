@@ -279,6 +279,21 @@ type bufferedFetch struct {
 	usedOffsets usedOffsets     // what the offsets will be next if this fetch is used
 }
 
+func (s *source) hook(f *Fetch, buffered) {
+	var nrecs int
+	for i := range f.Topics {
+		t := &f.Topics[i]
+		for j := range t.Partitions {
+			nrecs += len(t.Partitions[j].Records)
+		}
+	}
+	if buffered {
+		atomic.AddInt64(&s.cl.consumer.bufferedRecords, int64(nrecs))
+	} else {
+		atomic.AddInt64(&s.cl.consumer.bufferedRecords, -int64(nrecs))
+	}
+}
+
 // takeBuffered drains a buffered fetch and updates offsets.
 func (s *source) takeBuffered() Fetch {
 	return s.takeBufferedFn(func(usedOffsets usedOffsets) {
@@ -358,6 +373,8 @@ func (s *source) takeNBuffered(n int) (Fetch, int, bool) {
 		}
 	}
 
+	s.hook(&r, false) // unbuffered
+
 	drained := len(bf.Topics) == 0
 	if drained {
 		s.takeBuffered()
@@ -371,6 +388,9 @@ func (s *source) takeBufferedFn(offsetFn func(usedOffsets)) Fetch {
 	offsetFn(r.usedOffsets)
 	r.doneFetch <- struct{}{}
 	close(s.sem)
+
+	s.hook(&r.fetch, false) // unbuffered
+
 	return r.fetch
 }
 
@@ -664,6 +684,7 @@ func (s *source) fetch(consumerSession *consumerSession, doneFetch chan<- struct
 			usedOffsets: req.usedOffsets,
 		}
 		s.sem = make(chan struct{})
+		s.hook(&fetch, true) // buffered
 		s.cl.consumer.addSourceReadyForDraining(s)
 	}
 	return

@@ -82,6 +82,8 @@ func (o Offset) At(at int64) Offset {
 type consumer struct {
 	cl *Client
 
+	bufferedRecords int64
+
 	// mu is grabbed when
 	//  - polling fetches, for quickly draining sources / updating group uncommitted
 	//  - calling assignPartitions (group / direct updates)
@@ -117,6 +119,19 @@ type consumer struct {
 	sourcesReadyCond        *sync.Cond
 	sourcesReadyForDraining []*source
 	fakeReadyForDraining    []Fetch
+}
+
+// BufferedFetchRecords returns the number of records currently buffered from
+// fetching within the client.
+//
+// This can be used as a gauge to determine how behind your application is for
+// processing records the client has fetched. Note that it is perfectly normal
+// to see a spike of buffered records, which would correspond to a fetch
+// response being processed just before a call to this function. It is only
+// problematic if for you if this function is consistently returning large
+// values.
+func (cl *Client) BufferedFetchRecords() int64 {
+	return atomic.LoadInt64(&cl.consumer.bufferedRecords)
 }
 
 type usedCursors map[*cursor]struct{}

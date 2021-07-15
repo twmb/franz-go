@@ -47,6 +47,16 @@ type producer struct {
 	inTxn bool
 }
 
+// BufferedProduceRecords returns the number of records currently buffered for
+// producing within the client.
+//
+// This can be used as a gauge to determine how far behind the client is for
+// flushing records produced by your client (which can help determine network /
+// cluster health).
+func (cl *Client) BufferedProduceRecords() int64 {
+	return atomic.LoadInt64(&cl.producer.bufferedRecords)
+}
+
 type unknownTopicProduces struct {
 	buffered []promisedRec
 	wait     chan error
