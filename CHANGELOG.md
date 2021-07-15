@@ -1,3 +1,47 @@
+v0.8.7
+===
+
+This release contains commits for upcoming Kafka protocol changes, new features
+to gain insight into buffered records (and intercept & modify them before being
+produced or consumed), a few minor other changes, and one minor breaking
+change.
+
+The minor breaking change should not affect anybody due to its rather niche use
+when better methods exist, but if it does, the fix is to delete the
+`Partitions` field that was removed (the field is now embedded).
+
+This field was removed just for ease of use purposes: there was no reason to
+have a separate named field in `FetchTopicPartition` for the `Partition`,
+instead, we can just embed `FetchPartition` to make usage of the type much
+simpler. Dropping this field basically makes this type much more appealing to
+use.
+
+I may be releasing v0.9.0 shortly, with plans to potentially split the kmsg
+package into a dedicated module. More details on that if this happens.
+
+### Breaking change
+
+- [`ffc94ea`](https://github.com/twmb/franz-go/commit/ffc94ea) **minor breaking change**: embed `FetchPartition` in `FetchTopicPartition` rather than have a named `Partition` field
+
+### Features
+
+- [`1bb70a5`](https://github.com/twmb/franz-go/commit/1bb70a5) kprom: clarify seed ids, add two new metrics
+- [`916fc10`](https://github.com/twmb/franz-go/commit/916fc10) client: add four new hooks to provide buffer/unbuffer interceptors
+- [`1e74109`](https://github.com/twmb/franz-go/commit/1e74109) hooks: add HookNewClient
+- [`3256518`](https://github.com/twmb/franz-go/commit/3256518) client: add Buffered{Produce,Fetch}Records methods
+- [`ebf2f07`](https://github.com/twmb/franz-go/commit/ebf2f07) support KIP-516 for Fetch (topic IDs in fetch requests)
+- [`e5e37fc`](https://github.com/twmb/franz-go/commit/e5e37fc) and [`3a3cc06`](https://github.com/twmb/franz-go/commit/3a3cc06) support KIP-709: batched OffsetFetchRequest in a forward-compatible way (and minor group sharded request redux)
+- [`eaf9ebe`](https://github.com/twmb/franz-go/commit/eaf9ebe) kprom: use Registerer and Gatherer interface instead of concrete registry type.
+- [`10e3f44`](https://github.com/twmb/franz-go/commit/10e3f44) and [`4fdc7e0`](https://github.com/twmb/franz-go/commit/4fdc7e0) support KIP-699 (batch FindCoordinator requests)
+
+### Minor other changes
+
+- [`d9b4fbe`](https://github.com/twmb/franz-go/commit/d9b4fbe) consumer group: add "group" to all log messages
+- [`f70db15`](https://github.com/twmb/franz-go/commit/f70db15) broker: use ErrClientClosed more properly for internal requests that use the client context
+- [`8f1e732`](https://github.com/twmb/franz-go/commit/8f1e732) producer: use ErrClientClosed properly if waiting to produce when the client is closed
+- [`ee918d9`](https://github.com/twmb/franz-go/commit/ee918d9) sink: drop the drain loop sleep from 5ms to 50microsec
+- [`e48c03c`](https://github.com/twmb/franz-go/commit/e48c03c) client: log "seed #" rather than a large negative for seed brokers
+
 v0.8.6
 ===
 
