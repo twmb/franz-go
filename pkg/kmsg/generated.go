@@ -39152,7 +39152,7 @@ const (
 // Static broker config provided at start up.
 //
 // * 5 (DEFAULT_CONFIG)
-// Build-in default configuration for those that have defaults.
+// Built-in default configuration for those that have defaults.
 //
 // * 6 (DYNAMIC_BROKER_LOGGER_CONFIG)
 // Broker logger; see KIP-412.

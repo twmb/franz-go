@@ -20,7 +20,7 @@ ConfigSource int8 (
   3: DYNAMIC_DEFAULT_BROKER_CONFIG
   // Static broker config provided at start up.
   4: STATIC_BROKER_CONFIG
-  // Build-in default configuration for those that have defaults.
+  // Built-in default configuration for those that have defaults.
   5: DEFAULT_CONFIG
   // Broker logger; see KIP-412.
   6: DYNAMIC_BROKER_LOGGER_CONFIG
