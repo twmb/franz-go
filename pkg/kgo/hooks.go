@@ -27,6 +27,18 @@ func (hs hooks) each(fn func(Hook)) {
 	}
 }
 
+// HookNewClient is called in NewClient after a client is initialized. This
+// hook can be used to perform final setup work in your hooks.
+type HookNewClient interface {
+	// OnNewClient is passed the newly initialized client, before any
+	// client goroutines are started.
+	OnNewClient(*Client)
+}
+
+//////////////////
+// BROKER HOOKS //
+//////////////////
+
 // HookBrokerConnect is called after a connection to a broker is opened.
 type HookBrokerConnect interface {
 	// OnBrokerConnect is passed the broker metadata, how long it took to
@@ -159,6 +171,10 @@ type HookBrokerThrottle interface {
 	OnBrokerThrottle(meta BrokerMetadata, throttleInterval time.Duration, throttledAfterResponse bool)
 }
 
+//////////
+// MISC //
+//////////
+
 // HookGroupManageError is called after every error that causes the client,
 // operating as a group member, to break out of the group managing loop and
 // backoff temporarily.
@@ -172,6 +188,10 @@ type HookGroupManageError interface {
 	// reached).
 	OnGroupManageError(error)
 }
+
+///////////////////////////////
+// PRODUCE & CONSUME BATCHES //
+///////////////////////////////
 
 // ProduceBatchMetrics tracks information about successful produces to
 // partitions.

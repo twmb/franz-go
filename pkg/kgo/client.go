@@ -175,6 +175,21 @@ func NewClient(opts ...Opt) (*Client, error) {
 		blockingMetadataFnCh: make(chan func()),
 		metadone:             make(chan struct{}),
 	}
+
+	compressor, err := newCompressor(cl.cfg.compression...)
+	if err != nil {
+		return nil, err
+	}
+	cl.compressor = compressor
+
+	// Before we start any goroutines below, we must notify any interested
+	// hooks of our existence.
+	cl.cfg.hooks.each(func(h Hook) {
+		if h, ok := h.(HookNewClient); ok {
+			h.OnNewClient(cl)
+		}
+	})
+
 	cl.producer.init()
 	cl.consumer.init(cl)
 	cl.metawait.init()
@@ -182,12 +197,6 @@ func NewClient(opts ...Opt) (*Client, error) {
 	if cfg.id != nil {
 		cl.reqFormatter = kmsg.NewRequestFormatter(kmsg.FormatterClientID(*cfg.id))
 	}
-
-	compressor, err := newCompressor(cl.cfg.compression...)
-	if err != nil {
-		return nil, err
-	}
-	cl.compressor = compressor
 
 	for i, seed := range seeds {
 		b := cl.newBroker(unknownSeedID(i), seed.host, seed.port, nil)
