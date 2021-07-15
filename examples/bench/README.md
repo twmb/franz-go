@@ -50,6 +50,8 @@ any comma delimited set of brokers.
 
 `-pprof` sets a port to bind to to enable the default pprof handlers.
 
+`-prometheus` adds a /metrics handler to the default handler (requires -pprof)
+
 `-log-level` sets the log level to use, overriding the default of no client-level logs (can be debug, info, warn, error).
 
 ### Producing (only relevant if producing)

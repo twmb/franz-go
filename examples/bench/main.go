@@ -14,6 +14,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/twmb/franz-go/plugin/kprom"
+
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/sasl/aws"
 	"github.com/twmb/franz-go/pkg/sasl/plain"
@@ -24,6 +26,7 @@ var (
 	seedBrokers = flag.String("brokers", "localhost:9092", "comma delimited list of seed brokers")
 	topic       = flag.String("topic", "", "topic to produce to or consume from")
 	pprofPort   = flag.String("pprof", ":9876", "port to bind to for pprof, if non-empty")
+	prom        = flag.Bool("prometheus", false, "if true, install a /metrics path for prometheus metrics to the default handler (usage requires -pprof)")
 
 	useStaticValue = flag.Bool("static-record", false, "if true, use the same record value for every record (eliminates creating and formatting values for records; implies -pool)")
 
@@ -99,6 +102,12 @@ func main() {
 		if *group != "" {
 			opts = append(opts, kgo.ConsumerGroup(*group))
 		}
+	}
+
+	if *prom {
+		metrics := kprom.NewMetrics("kgo")
+		http.Handle("/metrics", metrics.Handler())
+		opts = append(opts, kgo.WithHooks(metrics))
 	}
 
 	switch strings.ToLower(*logLevel) {
