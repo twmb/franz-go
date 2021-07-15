@@ -393,8 +393,8 @@ func (fs Fetches) EachPartition(fn func(FetchTopicPartition)) {
 		for _, topic := range fetch.Topics {
 			for i := range topic.Partitions {
 				fn(FetchTopicPartition{
-					Topic:     topic.Topic,
-					Partition: topic.Partitions[i],
+					Topic:          topic.Topic,
+					FetchPartition: topic.Partitions[i],
 				})
 			}
 		}
@@ -447,13 +447,13 @@ func (fs Fetches) EachRecord(fn func(*Record)) {
 type FetchTopicPartition struct {
 	// Topic is the topic this is for.
 	Topic string
-	// Partition is an individual partition within this topic.
-	Partition FetchPartition
+	// FetchPartition is an individual partition within this topic.
+	FetchPartition
 }
 
 // EachRecord calls fn for each record in the topic's partition.
 func (r *FetchTopicPartition) EachRecord(fn func(*Record)) {
-	for _, r := range r.Partition.Records {
+	for _, r := range r.Records {
 		fn(r)
 	}
 }
