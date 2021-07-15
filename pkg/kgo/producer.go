@@ -17,6 +17,13 @@ type producer struct {
 	topicsMu sync.Mutex // locked to prevent concurrent updates; reads are always atomic
 	topics   *topicsPartitions
 
+	// Hooks exist behind a pointer because likely they are not used.
+	// We only take up one byte vs. 6.
+	hooks *struct {
+		buffered   []HookProduceRecordBuffered
+		unbuffered []HookProduceRecordUnbuffered
+	}
+
 	// unknownTopics buffers all records for topics that are not loaded.
 	// The map is to a pointer to a slice for reasons documented in
 	// waitUnknownTopic.
@@ -62,7 +69,7 @@ type unknownTopicProduces struct {
 	wait     chan error
 }
 
-func (p *producer) init() {
+func (p *producer) init(cl *Client) {
 	p.topics = newTopicsPartitions()
 	p.unknownTopics = make(map[string]*unknownTopicProduces)
 	p.waitBuffer = make(chan struct{}, 32)
@@ -73,6 +80,26 @@ func (p *producer) init() {
 		err:   errReloadProducerID,
 	})
 	p.notifyCond = sync.NewCond(&p.notifyMu)
+
+	inithooks := func() {
+		if p.hooks == nil {
+			p.hooks = &struct {
+				buffered   []HookProduceRecordBuffered
+				unbuffered []HookProduceRecordUnbuffered
+			}{}
+		}
+	}
+
+	cl.cfg.hooks.each(func(h Hook) {
+		if h, ok := h.(HookProduceRecordBuffered); ok {
+			inithooks()
+			p.hooks.buffered = append(p.hooks.buffered, h)
+		}
+		if h, ok := h.(HookProduceRecordUnbuffered); ok {
+			inithooks()
+			p.hooks.unbuffered = append(p.hooks.unbuffered, h)
+		}
+	})
 }
 
 func (p *producer) isAborting() bool { return atomic.LoadInt32(&p.aborting) > 0 }
@@ -276,6 +303,14 @@ func (cl *Client) Produce(
 		return
 	}
 
+	// Our record is now "buffered", and past this point will fall into
+	// finishRecordPromise, where we track it is finished.
+	if p.hooks != nil {
+		for _, h := range p.hooks.buffered {
+			h.OnProduceRecordBuffered(r)
+		}
+	}
+
 	if atomic.AddInt64(&p.bufferedRecords, 1) > cl.cfg.maxBufferedRecords {
 		// If the client ctx cancels or the produce ctx cancels, we
 		// need to un-count our buffering of this record. We also need
@@ -314,6 +349,12 @@ func (cl *Client) Produce(
 
 func (cl *Client) finishRecordPromise(pr promisedRec, err error) {
 	p := &cl.producer
+
+	if p.hooks != nil {
+		for _, h := range p.hooks.unbuffered {
+			h.OnProduceRecordUnbuffered(pr.Record, err)
+		}
+	}
 
 	// We call the promise before finishing the record; this allows users
 	// of Flush to know that all buffered records are completely done

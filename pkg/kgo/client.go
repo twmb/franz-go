@@ -190,7 +190,7 @@ func NewClient(opts ...Opt) (*Client, error) {
 		}
 	})
 
-	cl.producer.init()
+	cl.producer.init(cl)
 	cl.consumer.init(cl)
 	cl.metawait.init()
 

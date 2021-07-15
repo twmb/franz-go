@@ -287,3 +287,72 @@ type HookFetchBatchRead interface {
 	// OnFetchBatchRead is called per batch read from a topic partition.
 	OnFetchBatchRead(meta BrokerMetadata, topic string, partition int32, metrics FetchBatchMetrics)
 }
+
+///////////////////////////////
+// PRODUCE & CONSUME RECORDS //
+///////////////////////////////
+
+// HookProduceRecordBuffered is called when a record is buffered internally in
+// the client from a call to Produce.
+//
+// This hook can be used to write metrics that gather the number of records or
+// bytes buffered, or the hook can be used to write interceptors that modify a
+// record's key / value / headers before being produced. If you just want a
+// metric for the number of records buffered, use the client's
+// BufferedProduceRecords method, as it is faster.
+//
+// Note that this hook may slow down high-volume producing a bit.
+type HookProduceRecordBuffered interface {
+	// OnProduceRecordBuffered is passed a record that is buffered.
+	//
+	// This hook is called immediately after Produce is called, after the
+	// function potentially sets the default topic.
+	OnProduceRecordBuffered(*Record)
+}
+
+// HookProduceRecordUnbuffered is called just before a record's promise is
+// finished; this is effectively a mirror of a record promise.
+//
+// As an example, if using HookProduceRecordBuffered for a gauge of how many
+// record bytes are buffered, this hook can be used to decrement the gauge.
+//
+// Note that this hook may slow down high-volume producing a bit.
+type HookProduceRecordUnbuffered interface {
+	// OnProduceRecordUnbuffered is passed a record that is just about to
+	// have its produce promise called, as well as the error that the
+	// promise will be called with.
+	OnProduceRecordUnbuffered(*Record, error)
+}
+
+// HookFetchRecordBuffered is called when a record is internally buffered after
+// fetching, ready to be polled.
+//
+// This hook can be used to write gauge metrics regarding the number of records
+// or bytes buffered, or to write interceptors that modify a record before
+// being returned from polling. If you just want a metric for the number of
+// records buffered, use the client's BufferedFetchRecords method, as it is
+// faster.
+//
+// Note that this hook may slow down high-volume consuming a bit.
+type HookFetchRecordBuffered interface {
+	// OnFetchRecordBuffered is passed a record that is now buffered, ready
+	// to be polled.
+	OnFetchRecordBuffered(*Record)
+}
+
+// HookFetchRecordUnbuffered is called when a fetched record is unbuffered.
+//
+// A record can be internally discarded after being in some scenarios without
+// being polled, such as when the internal assignment changes.
+//
+// As an example, if using HookFetchRecordBuffered for a gauge of how many
+// record bytes are buffered ready to be polled, this hook can be used to
+// decrement the gauge.
+//
+// Note that this hook may slow down high-volume consuming a bit.
+type HookFetchRecordUnbuffered interface {
+	// OnFetchRecordUnbuffered is passwed a record that is being
+	// "unbuffered" within the client, and whether the record is being
+	// returned from polling.
+	OnFetchRecordUnbuffered(r *Record, polled bool)
+}

@@ -279,7 +279,39 @@ type bufferedFetch struct {
 	usedOffsets usedOffsets     // what the offsets will be next if this fetch is used
 }
 
-func (s *source) hook(f *Fetch, buffered) {
+func (s *source) hook(f *Fetch, buffered, polled bool) {
+	s.cl.cfg.hooks.each(func(h Hook) {
+		switch h := h.(type) {
+		case HookFetchRecordBuffered:
+			if !buffered {
+				return
+			}
+			for i := range f.Topics {
+				t := &f.Topics[i]
+				for j := range t.Partitions {
+					p := &t.Partitions[j]
+					for _, r := range p.Records {
+						h.OnFetchRecordBuffered(r)
+					}
+				}
+			}
+
+		case HookFetchRecordUnbuffered:
+			if buffered {
+				return
+			}
+			for i := range f.Topics {
+				t := &f.Topics[i]
+				for j := range t.Partitions {
+					p := &t.Partitions[j]
+					for _, r := range p.Records {
+						h.OnFetchRecordUnbuffered(r, polled)
+					}
+				}
+			}
+		}
+	})
+
 	var nrecs int
 	for i := range f.Topics {
 		t := &f.Topics[i]
@@ -296,7 +328,7 @@ func (s *source) hook(f *Fetch, buffered) {
 
 // takeBuffered drains a buffered fetch and updates offsets.
 func (s *source) takeBuffered() Fetch {
-	return s.takeBufferedFn(func(usedOffsets usedOffsets) {
+	return s.takeBufferedFn(true, func(usedOffsets usedOffsets) {
 		usedOffsets.finishUsingAllWith(func(o *cursorOffsetNext) {
 			o.from.setOffset(o.cursorOffset)
 		})
@@ -304,7 +336,7 @@ func (s *source) takeBuffered() Fetch {
 }
 
 func (s *source) discardBuffered() {
-	s.takeBufferedFn(usedOffsets.finishUsingAll)
+	s.takeBufferedFn(false, usedOffsets.finishUsingAll)
 }
 
 // takeNBuffered takes a limited amount of records from a buffered fetch,
@@ -373,7 +405,7 @@ func (s *source) takeNBuffered(n int) (Fetch, int, bool) {
 		}
 	}
 
-	s.hook(&r, false) // unbuffered
+	s.hook(&r, false, true) // unbuffered, polled
 
 	drained := len(bf.Topics) == 0
 	if drained {
@@ -382,14 +414,14 @@ func (s *source) takeNBuffered(n int) (Fetch, int, bool) {
 	return r, taken, drained
 }
 
-func (s *source) takeBufferedFn(offsetFn func(usedOffsets)) Fetch {
+func (s *source) takeBufferedFn(polled bool, offsetFn func(usedOffsets)) Fetch {
 	r := s.buffered
 	s.buffered = bufferedFetch{}
 	offsetFn(r.usedOffsets)
 	r.doneFetch <- struct{}{}
 	close(s.sem)
 
-	s.hook(&r.fetch, false) // unbuffered
+	s.hook(&r.fetch, false, polled) // unbuffered, potentially polled
 
 	return r.fetch
 }
@@ -684,7 +716,7 @@ func (s *source) fetch(consumerSession *consumerSession, doneFetch chan<- struct
 			usedOffsets: req.usedOffsets,
 		}
 		s.sem = make(chan struct{})
-		s.hook(&fetch, true) // buffered
+		s.hook(&fetch, true, false) // buffered, not polled
 		s.cl.consumer.addSourceReadyForDraining(s)
 	}
 	return
