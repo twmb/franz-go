@@ -1649,14 +1649,14 @@ func (batch *recBatch) tryBuffer(pr promisedRec, produceVersion, maxBatchBytes i
 	batchWireLength, _ := batch.wireLengthForProduceVersion(produceVersion)
 	newBatchLength := batchWireLength + recordNumbers.wireLength()
 
-	if batch.tries == 0 && newBatchLength <= maxBatchBytes {
-		if abortOnNewBatch {
-			return false, true
-		}
-		batch.appendRecord(pr, recordNumbers)
-		return true, false
+	if batch.tries != 0 || newBatchLength > maxBatchBytes {
+		return false, false
 	}
-	return false, false
+	if abortOnNewBatch {
+		return false, true
+	}
+	batch.appendRecord(pr, recordNumbers)
+	return true, false
 }
 
 //////////////
