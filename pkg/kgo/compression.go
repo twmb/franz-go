@@ -39,8 +39,8 @@ type CompressionCodec struct {
 	level int8
 }
 
-// NoCompression is the default compression used for messages and can be used
-// as a fallback compression option.
+// NoCompression is a compression option that avoids compression. This can
+// always be used as a fallback compression.
 func NoCompression() CompressionCodec { return CompressionCodec{0, 0} }
 
 // GzipCompression enables gzip compression with the default compression level.

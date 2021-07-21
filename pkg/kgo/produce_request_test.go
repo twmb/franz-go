@@ -145,7 +145,7 @@ func TestRecBatchAppendTo(t *testing.T) {
 	var checkNum int
 	check := func() {
 		exp := kbatch.AppendTo(nil)
-		gotFull, _ := ourBatch.appendTo(nil, version, 12, 11, true, true, compressor)
+		gotFull, _ := ourBatch.appendTo(nil, version, 12, 11, true, compressor)
 		lengthPrefix := 4
 		ourBatchSize := (&kbin.Reader{Src: gotFull}).Int32()
 		if version >= 9 {
@@ -202,7 +202,6 @@ func TestRecBatchAppendTo(t *testing.T) {
 		timeout:       1000,
 		producerID:    12,
 		producerEpoch: 11,
-		idempotent:    true,
 		compressor:    compressor,
 	}
 	ourReq.batches.addSeqBatch("topic", 1, ourBatch)
