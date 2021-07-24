@@ -490,8 +490,8 @@ var max0110 = nextMax(max0102, func(v listenerKeys) listenerKeys {
 		k(zkBroker, rBroker, rController), // 30 create acls (same)
 		k(zkBroker, rBroker, rController), // 31 delete acls (same)
 
-		k(zkBroker, rBroker), // 32 describe configs KAFKA-3267 972b754536 KIP-133
-		k(zkBroker, rBroker), // 33 alter configs (same) (raft 3.0 6e857c531f14d07d5b05f174e6063a124c917324)
+		k(zkBroker, rBroker),              // 32 describe configs KAFKA-3267 972b754536 KIP-133
+		k(zkBroker, rBroker, rController), // 33 alter configs (same) (raft broker 3.0 6e857c531f14d07d5b05f174e6063a124c917324, controller 273d66479dbee2398b09e478ffaf996498d1ab34)
 	)
 
 	// KAFKA-4954 0104b657a1 KIP-124
