@@ -495,7 +495,7 @@ func (s Struct) WriteDecode(l *LineWriter) {
 
 	l.Write("if isFlexible {")
 	if len(tags) == 0 {
-		l.Write("s.UnknownTags = ReadTags(&b)")
+		l.Write("s.UnknownTags = internalReadTags(&b)")
 		l.Write("}")
 		return
 	}
