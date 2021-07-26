@@ -8,7 +8,7 @@ franz-go - A complete Apache Kafka client written in Go
 
 [godev]: https://pkg.go.dev/github.com/twmb/franz-go/pkg/kgo
 
-Franz-go is an all-encompassing Apache Kafka client fully written Go. This library aims to provide **every Kafka feature** from 
+Franz-go is an all-encompassing Apache Kafka client fully written Go. This library aims to provide **every Kafka feature** from
 Apache Kafka v0.8.0 onward. It has support for transactions, regex topic consuming, the latest partitioning strategies,
 data loss detection, closest replica fetching, and more. If a client KIP exists, this library aims to support it.
 
@@ -30,6 +30,13 @@ This library attempts to provide an intuitive API while interacting with Kafka t
 - Written in pure Go (no wrapper lib for a C library or other bindings)
 - Ability to add detailed log messages or metrics using hooks
 - Plug-in metrics support for prometheus, zap, etc.
+
+## Works with any Kafka compatible brokers:
+
+- [**Redpanda**](https://vectorized.io/): the fastest and most efficient Kafka compatible event streaming platform
+- **Kafka**: the original Java project
+- **Microsoft Event Hubs**
+- **Amazon MSK**
 
 ## Getting started
 
@@ -125,7 +132,7 @@ and defaults to using the maximum supported version for requests that each
 broker supports.
 
 Kafka 0.10.0 introduced the ApiVersions request; if you are working
-with brokers older than that, you must use the kversions package. Use the 
+with brokers older than that, you must use the kversions package. Use the
 MaxVersions option for the client if you do so.
 
 As well, it is recommended to set the MaxVersions to the version of your
