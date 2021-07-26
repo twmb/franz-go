@@ -472,6 +472,12 @@ func (cl *Client) producerID() (int64, int16, error) {
 				newID, keep := cl.doInitProducerID(id.id, id.epoch)
 				if keep {
 					id = newID
+					// Whenever we have a new producer ID, we need
+					// our sequence numbers to be 0. On the first
+					// record produced, this will be true, but if
+					// we were signaled to reset the producer ID,
+					// then we definitely still need to reset here.
+					cl.resetAllProducerSequences()
 					p.id.Store(id)
 				} else {
 					// If we are not keeping the producer ID,

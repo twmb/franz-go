@@ -571,16 +571,8 @@ func (cl *Client) maybeRecoverProducerID() (necessary, did bool, err error) {
 		return true, false, err // fatal, unrecoverable
 	}
 
-	// At this point, the producer ID loads with error; anything being
-	// concurrently produced (which should be nothing, per calling this at
-	// the beginning or end of a transaction) will load producer IDs with
-	// an error.
-	//
-	// Before we allow production to continue, we reset all sequence
-	// numbers. Storing errReloadProducerID will reset the id / epoch
-	// appropriately and everything will work as per KIP-360.
-	cl.resetAllProducerSequences()
-
+	// Storing errReloadProducerID will reset sequence numbers as appropriate
+	// when the producer ID is reloaded successfully.
 	cl.producer.id.Store(&producerID{
 		id:    id,
 		epoch: epoch,
