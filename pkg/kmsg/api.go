@@ -2,24 +2,24 @@
 // serialization and deserialization functions.
 //
 // This package reserves the right to add new fields to struct types as Kafka
-// adds new fields over time without bumping the major version. New requests
-// will also be added without bumping the major version. The major version will
-// also NOT BE BUMPED if a field's type is changed. The major version of this
-// package is only bumped if it is required to be bumped per the kgo package.
-//
-// Kafka has only once in its history changed a non-array field's type,
-// changing a string to a pointer to a string. These types of changes are
-// expected to be very uncommon, and this package is provided with the
-// understanding that it is advanced and may require some very minor
-// maintenance if a field's type changes.
+// adds new fields over time, or changes fields from non-nullable to nullable.
+// This package will never have a v1 release, and it will never have a semantic
+// version. Kafka has mild protocol changes at times, so any semantic
+// versioning in this package would need far to many major version bumps.
 //
 // If you are using this package directly with kgo, you should either ALWAYS
-// use New functions (or Default functions after creating structs, you should
-// pin the max supported version. If you use New functions, you should have
-// safe defaults as new fields are added. If you pin versions, you will avoid
-// new fields being used. If you do neither of these, you may opt in to new
-// fields that do not have safe zero value defaults, and this may lead to
-// errors or unexpected results.
+// use New functions or Default functions after creating structs, or you should
+// pin the max supported version. If you use New functions, you will have safe
+// defaults as new fields are added. If you pin versions, you will avoid new
+// fields being used. If you do neither of these, you may opt in to new fields
+// that do not have safe zero value defaults, and this may lead to errors or
+// unexpected results.
+//
+// That is, whenever you initialize a struct from this package, do the
+// following:
+//
+//     struct := kmsg.NewFoo()
+//     struct.Field = "value I want to set"
 //
 // All "Default" functions set non-Go-default field defaults. They do not set
 // any fields whose default value is a Go default. Thus, Default functions will
@@ -35,8 +35,10 @@ package kmsg
 import (
 	"context"
 
-	"github.com/twmb/franz-go/pkg/kbin"
+	"github.com/twmb/franz-go/pkg/kmsg/internal/kbin"
 )
+
+//go:generate cp ../kbin/primitives.go internal/kbin/
 
 // Requestor issues requests. Notably, the kgo.Client and kgo.Broker implements
 // Requestor. All Requests in this package have a RequestWith function to have
@@ -275,16 +277,51 @@ func (s *StickyMemberMetadata) AppendTo(dst []byte) []byte {
 	return dst
 }
 
-// SkipTags skips tags in a reader.
-func SkipTags(b *kbin.Reader) {
+// TagReader has is a type that has the ability to skip tags.
+//
+// This is effectively a trimmed version of the kbin.Reader, with the purpose
+// being that kmsg cannot depend on an external package.
+type TagReader interface {
+	// Uvarint returns a uint32. If the reader has read too much and has
+	// exhausted all bytes, this should set the reader's internal state
+	// to failed and return 0.
+	Uvarint() uint32
+
+	// Span returns n bytes from the reader. If the reader has read too
+	// much and exhausted all bytes this should set the reader's internal
+	// to failed and return nil.
+	Span(n int) []byte
+}
+
+// SkipTags skips tags in a TagReader.
+func SkipTags(b TagReader) {
 	for num := b.Uvarint(); num > 0; num-- {
 		_, size := b.Uvarint(), b.Uvarint()
 		b.Span(int(size))
 	}
 }
 
-// ReadTags reads tags in a reader and returns the tags.
-func ReadTags(b *kbin.Reader) Tags {
+// internalSkipTags skips tags in the duplicated inner kbin.Reader.
+func internalSkipTags(b *kbin.Reader) {
+	for num := b.Uvarint(); num > 0; num-- {
+		_, size := b.Uvarint(), b.Uvarint()
+		b.Span(int(size))
+	}
+}
+
+// ReadTags reads tags in a TagReader and returns the tags.
+func ReadTags(b TagReader) Tags {
+	var t Tags
+	for num := b.Uvarint(); num > 0; num-- {
+		key, size := b.Uvarint(), b.Uvarint()
+		t.Set(key, b.Span(int(size)))
+	}
+	return t
+}
+
+// internalReadTags reads tags in a reader and returns the tags from a
+// duplicated inner kbin.Reader.
+func internalReadTags(b *kbin.Reader) Tags {
 	var t Tags
 	for num := b.Uvarint(); num > 0; num-- {
 		key, size := b.Uvarint(), b.Uvarint()
