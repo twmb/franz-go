@@ -28,10 +28,17 @@ func requestMetadata() {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	// Construct message request and send it to Kafka
-	req := kmsg.MetadataRequest{
-		Topics: []kmsg.MetadataRequestTopic{},
-	}
+	// Construct message request and send it to Kafka.
+	//
+	// Because Go does not have RAII, and the Kafka protocol can add new fields
+	// at any time, all struct initializes from the kmsg package should use the
+	// NewXyz functions (or NewPtr for requests). These functions call "Default"
+	// before returning, which is forward compatible when Kafka adds new fields
+	// that require non-zero defaults.
+	req := kmsg.NewPtrMetadataRequest()
+	topic := kmsg.NewMetadataRequestTopic()
+	topic.Topic = kmsg.StringPtr("foo")
+	req.Topics = append(req.Topics, topic)
 
 	res, err := req.RequestWith(ctx, client)
 	if err != nil {
