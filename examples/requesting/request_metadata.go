@@ -3,6 +3,7 @@ package requesting
 import (
 	"context"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kerr"
@@ -35,25 +36,56 @@ func requestMetadata() {
 	// NewXyz functions (or NewPtr for requests). These functions call "Default"
 	// before returning, which is forward compatible when Kafka adds new fields
 	// that require non-zero defaults.
-	req := kmsg.NewPtrMetadataRequest()
-	topic := kmsg.NewMetadataRequestTopic()
-	topic.Topic = kmsg.StringPtr("foo")
-	req.Topics = append(req.Topics, topic)
 
-	res, err := req.RequestWith(ctx, client)
-	if err != nil {
-		// Error during request has happened (e. g. context cancelled)
-		panic(err)
-	}
+	// For the first request, we will create topic foo with 1 partition and
+	// a replication factor of 1.
+	{
+		req := kmsg.NewPtrCreateTopicsRequest()
+		topic := kmsg.NewCreateTopicsRequestTopic()
+		topic.Topic = "foo"
+		topic.NumPartitions = 1
+		topic.ReplicationFactor = 1
+		req.Topics = append(req.Topics, topic)
 
-	// Check response for Kafka error codes and print them.
-	// Other requests might have top level error codes, which indicate completed but failed requests.
-	for _, topic := range res.Topics {
-		err := kerr.ErrorForCode(topic.ErrorCode)
+		res, err := req.RequestWith(ctx, client)
 		if err != nil {
-			fmt.Printf("topic %v response has errored: %v\n", topic.Topic, err.Error())
+			// Error during request has happened (e. g. context cancelled)
+			panic(err)
 		}
+
+		if len(res.Topics) != 1 {
+			panic(fmt.Sprintf("expected one topic in response, saw %d", len(res.Topics)))
+		}
+		t := res.Topics[0]
+
+		if err := kerr.ErrorForCode(t.ErrorCode); err != nil {
+			fmt.Fprintf(os.Stderr, "topic creation failure: %v", err)
+			return
+		}
+		fmt.Printf("topic %s created successfully!", t.Topic)
 	}
 
-	fmt.Printf("received '%v' topics and '%v' brokers", len(res.Topics), len(res.Brokers))
+	// Now we will issue a metadata request to see that topic.
+	{
+		req := kmsg.NewPtrMetadataRequest()
+		topic := kmsg.NewMetadataRequestTopic()
+		topic.Topic = kmsg.StringPtr("foo")
+		req.Topics = append(req.Topics, topic)
+
+		res, err := req.RequestWith(ctx, client)
+		if err != nil {
+			panic(err)
+		}
+
+		// Check response for Kafka error codes and print them.
+		// Other requests might have top level error codes, which indicate completed but failed requests.
+		for _, topic := range res.Topics {
+			err := kerr.ErrorForCode(topic.ErrorCode)
+			if err != nil {
+				fmt.Printf("topic %v response has errored: %v\n", topic.Topic, err.Error())
+			}
+		}
+
+		fmt.Printf("received '%v' topics and '%v' brokers", len(res.Topics), len(res.Brokers))
+	}
 }
