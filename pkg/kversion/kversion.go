@@ -400,7 +400,7 @@ var max080 = nextMax(nil, func(listenerKeys) listenerKeys {
 		k(zkBroker, rBroker),              // 0 produce
 		k(zkBroker, rBroker, rController), // 1 fetch
 		k(zkBroker, rBroker),              // 2 list offset
-		k(zkBroker, rBroker, rController), // 3 metadata
+		k(zkBroker, rBroker),              // 3 metadata
 		k(zkBroker),                       // 4 leader and isr
 		k(zkBroker),                       // 5 stop replica
 		k(zkBroker),                       // 6 update metadata, actually not supported for a bit
