@@ -526,6 +526,12 @@ func (cl *Client) mergeTopicPartitions(
 			if oldTP.loadErr == nil {
 				r.writablePartitions = append(r.writablePartitions, oldTP)
 			}
+
+			cl.cfg.logger.Log(LogLevelDebug, "metadata update is missing partition in topic, keeping old data",
+				"topic", topic,
+				"partition", part,
+			)
+
 			continue
 		}
 		newTP := r.partitions[part]
@@ -552,6 +558,14 @@ func (cl *Client) mergeTopicPartitions(
 		// information.
 		if newTP.leaderEpoch < oldTP.leaderEpoch {
 			*newTP = *oldTP
+
+			cl.cfg.logger.Log(LogLevelDebug, "metadata leader epoch went backwards, ignoring update",
+				"topic", topic,
+				"partition", part,
+				"old_epoch", oldTP.leaderEpoch,
+				"new_epoch", newTP.leaderEpoch,
+			)
+
 			continue
 		}
 
