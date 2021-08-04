@@ -302,21 +302,10 @@ func (old *topicPartition) migrateProductionTo(new *topicPartition) {
 // have fewer concurrency issues to worry about.
 func (old *topicPartition) migrateCursorTo(
 	new *topicPartition,
-	consumer *consumer,
-	consumerSessionStopped *bool,
 	reloadOffsets *listOrEpochLoads,
-	tpsPrior **topicsPartitions,
+	stopConsumerSession func(),
 ) {
-	// Migrating a cursor requires stopping any consumer session. If we
-	// stop a session, we need to eventually re-start any offset listing or
-	// epoch loading that was stopped. Thus, we simply merge what we
-	// stopped into what we will reload.
-	if !*consumerSessionStopped {
-		loads, tps := consumer.stopSession()
-		reloadOffsets.mergeFrom(loads)
-		*tpsPrior = tps
-		*consumerSessionStopped = true
-	}
+	stopConsumerSession()
 
 	old.cursor.source.removeCursor(old.cursor)
 

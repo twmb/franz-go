@@ -426,8 +426,17 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how
 	defer func() {
 		if session == nil { // if nil, we stopped the session
 			session = c.startNewSession(tps)
+		} else { // else we guarded it
+			c.unguardSessionChange(session)
 		}
 		loadOffsets.loadWithSession(session) // odds are this assign came from a metadata update, so no reason to force a refresh with loadWithSessionNow
+
+		// If we started a new session or if we unguarded, we have one
+		// worker. This one worker allowed us to safely add our load
+		// offsets before the session could be concurrently stopped
+		// again. Now that we have added the load offsets, we allow the
+		// session to be stopped.
+		session.decWorker()
 	}()
 
 	if how == assignWithoutInvalidating {
@@ -435,8 +444,6 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how
 		// if we had no session before, which is why we need to pass in
 		// our topicPartitions.
 		session = c.guardSessionChange(tps)
-		defer c.unguardSessionChange()
-
 	} else {
 		loadOffsets, _ = c.stopSession()
 
@@ -877,12 +884,18 @@ func (c *consumerSession) manageFetchConcurrency() {
 }
 
 func (c *consumerSession) incWorker() {
+	if c == noConsumerSession { // from startNewSession
+		return
+	}
 	c.workersMu.Lock()
 	defer c.workersMu.Unlock()
 	c.workers++
 }
 
 func (c *consumerSession) decWorker() {
+	if c == noConsumerSession { // from followup to startNewSession
+		return
+	}
 	c.workersMu.Lock()
 	defer c.workersMu.Unlock()
 	c.workers--
@@ -922,7 +935,11 @@ func (c *consumer) guardSessionChange(tps *topicsPartitions) *consumerSession {
 	return session
 }
 
-func (c *consumer) unguardSessionChange() {
+// For the same reason below as in startNewSession, we inc a worker before
+// unguarding. This allows the unguarding to execute a bit of logic if
+// necessary before the session can be stopped.
+func (c *consumer) unguardSessionChange(session *consumerSession) {
+	session.incWorker()
 	c.sessionChangeMu.Unlock()
 }
 
@@ -987,9 +1004,19 @@ func (c *consumer) stopSession() (listOrEpochLoads, *topicsPartitions) {
 }
 
 // Starts a new consumer session, allowing fetches to happen.
+//
+// If there are no topic partitions to start with, this returns noConsumerSession.
+//
+// This is returned with 1 worker; decWorker must be called after return. The
+// 1 worker allows for initialization work to prevent the session from being
+// immediately stopped.
 func (c *consumer) startNewSession(tps *topicsPartitions) *consumerSession {
 	session := c.newConsumerSession(tps)
 	c.session.Store(session)
+
+	// Ensure that this session is usable before being stopped immediately.
+	// The caller must dec workers.
+	session.incWorker()
 
 	// At this point, sources can start consuming.
 

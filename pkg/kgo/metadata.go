@@ -264,19 +264,29 @@ func (cl *Client) updateMetadata() (needsRetry bool, err error) {
 		defer tpsConsumer.storeData(tpsConsumerLoad)
 	}
 
+	// Migrating a cursor requires stopping any consumer session. If we
+	// stop a session, we need to eventually re-start any offset listing or
+	// epoch loading that was stopped. Thus, we simply merge what we
+	// stopped into what we will reload.
 	var (
 		consumerSessionStopped bool
 		reloadOffsets          listOrEpochLoads
 		tpsPrior               *topicsPartitions
 	)
-
-	// Before we return, if we stopped the session, we need to restart it
-	// with the topic partitions we were consuming.  Lastly, we need to
-	// trigger the consumer metadata update to allow consumers waiting to
-	// continue.
+	stopConsumerSession := func() {
+		if consumerSessionStopped {
+			return
+		}
+		consumerSessionStopped = true
+		loads, tps := cl.consumer.stopSession()
+		reloadOffsets.mergeFrom(loads)
+		tpsPrior = tps
+	}
 	defer func() {
 		if consumerSessionStopped {
-			reloadOffsets.loadWithSession(cl.consumer.startNewSession(tpsPrior))
+			session := cl.consumer.startNewSession(tpsPrior)
+			defer session.decWorker()
+			reloadOffsets.loadWithSession(session)
 		}
 	}()
 
@@ -301,9 +311,8 @@ func (cl *Client) updateMetadata() (needsRetry bool, err error) {
 				priorParts,
 				newParts,
 				m.isProduce,
-				&consumerSessionStopped,
 				&reloadOffsets,
-				&tpsPrior,
+				stopConsumerSession,
 			)
 		}
 	}
@@ -449,9 +458,8 @@ func (cl *Client) mergeTopicPartitions(
 	l *topicPartitions,
 	r *topicPartitionsData,
 	isProduce bool,
-	consumerSessionStopped *bool,
 	reloadOffsets *listOrEpochLoads,
-	tpsPrior **topicsPartitions,
+	stopConsumerSession func(),
 ) (needsRetry bool) {
 	lv := *l.load() // copy so our field writes do not collide with reads
 
@@ -565,10 +573,8 @@ func (cl *Client) mergeTopicPartitions(
 			} else {
 				oldTP.migrateCursorTo(
 					newTP,
-					&cl.consumer,
-					consumerSessionStopped,
 					reloadOffsets,
-					tpsPrior,
+					stopConsumerSession,
 				)
 			}
 		}
