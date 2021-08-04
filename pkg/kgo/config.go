@@ -803,8 +803,8 @@ func ProduceRequestTimeout(limit time.Duration) ProducerOpt {
 //
 // This option is different from RequestRetries to allow finer grained control
 // of when to fail when producing records.
-func ProduceRetries(n int) Opt {
-	return clientOpt{func(cfg *cfg) { cfg.produceRetries = int64(n) }}
+func ProduceRetries(n int) ProducerOpt {
+	return producerOpt{func(cfg *cfg) { cfg.produceRetries = int64(n) }}
 }
 
 // StopOnDataLoss sets the client to stop producing if data loss is detected,
@@ -857,7 +857,7 @@ func ManualFlushing() ProducerOpt {
 }
 
 // RecordTimeout sets a rough time of how long a record can sit around in a
-// batch before timing out, overriding the ulimited default.
+// batch before timing out, overriding the unlimited default.
 //
 // If idempotency is enabled (as it is by default), this option is only
 // enforced if it is safe to do so without creating invalid sequence numbers.
