@@ -252,7 +252,7 @@ func (cl *Client) PollFetches(ctx context.Context) Fetches {
 // broker returns records in a fetch. If the context quits, this function
 // quits. If the context is nil or is already canceled, this function will
 // return immediately with any currently buffered records.
-
+//
 // This returns a maximum of maxPollRecords total across all fetches, or
 // returns all buffered records if maxPollRecords is <= 0.
 //
