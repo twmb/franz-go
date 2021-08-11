@@ -837,11 +837,22 @@ func (cl *Client) findCoordinator(ctx context.Context, req *kmsg.FindCoordinator
 	return r.last, resp, err
 }
 
+func (cl *Client) deleteStaleCoordinatorIfEqual(key coordinatorKey, current *coordinatorLoad) {
+	cl.coordinatorsMu.Lock()
+	defer cl.coordinatorsMu.Unlock()
+	if existing, ok := cl.coordinators[key]; ok && current == existing {
+		delete(cl.coordinators, key)
+	}
+}
+
 // loadController returns the group/txn coordinator for the given key, retrying
 // as necessary. Any non-retriable error does not cache the coordinator.
 func (cl *Client) loadCoordinator(ctx context.Context, key coordinatorKey) (*broker, error) {
+	var restarted bool
+start:
 	cl.coordinatorsMu.Lock()
 	c, ok := cl.coordinators[key]
+
 	if !ok {
 		c = &coordinatorLoad{
 			done: make(chan struct{}), // all requests for the same coordinator get collapsed into one
@@ -851,11 +862,7 @@ func (cl *Client) loadCoordinator(ctx context.Context, key coordinatorKey) (*bro
 			// but only if something else has not already replaced
 			// our pointer.
 			if c.err != nil {
-				cl.coordinatorsMu.Lock()
-				if existing, ok := cl.coordinators[key]; ok && c == existing {
-					delete(cl.coordinators, key)
-				}
-				cl.coordinatorsMu.Unlock()
+				cl.deleteStaleCoordinatorIfEqual(key, c)
 			}
 			close(c.done)
 		}()
@@ -868,7 +875,19 @@ func (cl *Client) loadCoordinator(ctx context.Context, key coordinatorKey) (*bro
 		if c.err != nil {
 			return nil, c.err
 		}
-		return cl.brokerOrErr(nil, c.node, &errUnknownCoordinator{c.node, key})
+
+		// If brokerOrErr returns an error, then our cached coordinator
+		// is using metadata that has updated and removed knowledge of
+		// that coordinator. We delete the stale coordinator here and
+		// retry once. The retry will force a coordinator reload, and
+		// everything will be fresh. Any errors after that we keep.
+		b, err := cl.brokerOrErr(nil, c.node, &errUnknownCoordinator{c.node, key})
+		if err != nil && !restarted {
+			restarted = true
+			cl.deleteStaleCoordinatorIfEqual(key, c)
+			goto start
+		}
+		return b, err
 	}
 
 	var resp *kmsg.FindCoordinatorResponse
