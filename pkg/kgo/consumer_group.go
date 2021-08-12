@@ -1077,6 +1077,11 @@ start:
 		return err
 	}
 
+	// Even if a leader epoch is returned, if brokers do not support
+	// OffsetForLeaderEpoch for some reason (odd set of supported reqs), we
+	// cannot use the returned leader epoch.
+	kip320 := g.cl.supportsOffsetForLeaderEpoch()
+
 	offsets := make(map[string]map[int32]Offset)
 	for _, rTopic := range resp.Topics {
 		topicOffsets := make(map[int32]Offset)
@@ -1104,7 +1109,7 @@ start:
 				at:    rPartition.Offset,
 				epoch: -1,
 			}
-			if resp.Version >= 5 { // KIP-320
+			if resp.Version >= 5 && kip320 { // KIP-320
 				offset.epoch = rPartition.LeaderEpoch
 			}
 			if rPartition.Offset == -1 {

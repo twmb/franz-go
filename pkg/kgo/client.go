@@ -305,6 +305,27 @@ func (cl *Client) waitTries(ctx context.Context, tries int) bool {
 	}
 }
 
+// A broker may sometimes indicate it supports offset for leader epoch v2+ when
+// it does not. We need to catch that and avoid issuing offset for leader
+// epoch, because we will just loop continuously failing.
+//
+// We do not catch every case, such as when a person explicitly assigns offsets
+// with epochs, but we catch a few areas that would be returned from a broker
+// itself.
+//
+// This should only be used *after* at least one successful response.
+func (cl *Client) supportsOffsetForLeaderEpoch() bool {
+	cl.brokersMu.RLock()
+	defer cl.brokersMu.RUnlock()
+
+	for _, b := range cl.brokers {
+		if v := b.loadVersions(); v != nil && v.versions[23] >= 2 {
+			return true
+		}
+	}
+	return false
+}
+
 // fetchBrokerMetadata issues a metadata request solely for broker information.
 func (cl *Client) fetchBrokerMetadata(ctx context.Context) error {
 	cl.fetchingBrokersMu.Lock()

@@ -316,6 +316,9 @@ func (old *topicPartition) migrateCursorTo(
 	// KIP-320: if we had consumed some messages, we need to validate the
 	// leader epoch on the new broker to see if we experienced data loss
 	// before we can use this cursor.
+	//
+	// Metadata ensures that leaderEpoch is non-negative only if the broker
+	// supports KIP-320.
 	if new.leaderEpoch != -1 && old.cursor.lastConsumedEpoch >= 0 {
 		// Since the cursor consumed messages, it is definitely usable.
 		// We use it so that the epoch load can finish using it

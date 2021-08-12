@@ -737,6 +737,8 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 		reloadOffsets listOrEpochLoads
 		preferreds    []cursorOffsetPreferred
 		updateMeta    bool
+
+		kip320 = s.cl.supportsOffsetForLeaderEpoch()
 	)
 
 	for _, rt := range resp.Topics {
@@ -836,13 +838,23 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 						Offset:  s.cl.cfg.resetOffset,
 					})
 				} else { // partOffset.offset > fp.HighWatermark, KIP-392 case 4
-					reloadOffsets.addLoad(topic, partition, loadTypeEpoch, offsetLoad{
-						replica: -1,
-						Offset: Offset{
-							at:    partOffset.offset,
-							epoch: partOffset.lastConsumedEpoch,
-						},
-					})
+					if kip320 {
+						reloadOffsets.addLoad(topic, partition, loadTypeEpoch, offsetLoad{
+							replica: -1,
+							Offset: Offset{
+								at:    partOffset.offset,
+								epoch: partOffset.lastConsumedEpoch,
+							},
+						})
+					} else {
+						// If the broker does not support offset for leader epoch but
+						// does support follower fetching for some reason, we have to
+						// fallback to listing.
+						reloadOffsets.addLoad(topic, partition, loadTypeList, offsetLoad{
+							replica: -1,
+							Offset:  s.cl.cfg.resetOffset,
+						})
+					}
 				}
 
 			case kerr.FencedLeaderEpoch:
@@ -853,6 +865,10 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 				// If we have consumed nothing, then we got unlucky
 				// by being fenced right after we grabbed metadata.
 				// We just refresh metadata and try again.
+				//
+				// It would be odd for a broker to reply we are fenced
+				// but not support offset for leader epoch, so we do
+				// not check KIP-320 support here.
 				if partOffset.lastConsumedEpoch >= 0 {
 					reloadOffsets.addLoad(topic, partition, loadTypeEpoch, offsetLoad{
 						replica: -1,

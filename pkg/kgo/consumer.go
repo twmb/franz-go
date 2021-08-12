@@ -538,6 +538,11 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how
 			// Otherwise, an epoch is specified without an exact
 			// request which is useless for us, or a request is
 			// specified without a known epoch.
+			//
+			// The client ensures the epoch is non-negative from
+			// fetch offsets only if the broker supports KIP-320,
+			// but we do not override the user manually specifying
+			// an epoch.
 			if offset.at >= 0 && offset.epoch >= 0 {
 				loadOffsets.addLoad(topic, partition, loadTypeEpoch, offsetLoad{
 					replica: -1,

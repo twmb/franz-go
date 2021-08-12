@@ -337,6 +337,11 @@ func (cl *Client) fetchTopicMetadata(all bool, reqTopics []string) (map[string]*
 
 	topics := make(map[string]*topicPartitionsData, len(meta.Topics))
 
+	// Even if metadata returns a leader epoch, we do not use it unless we
+	// can validate it per OffsetForLeaderEpoch. Some brokers may have an
+	// odd set of support.
+	useLeaderEpoch := cl.supportsOffsetForLeaderEpoch()
+
 	for i := range meta.Topics {
 		topicMeta := &meta.Topics[i]
 
@@ -378,7 +383,7 @@ func (cl *Client) fetchTopicMetadata(all bool, reqTopics []string) (map[string]*
 		for i := range topicMeta.Partitions {
 			partMeta := &topicMeta.Partitions[i]
 			leaderEpoch := partMeta.LeaderEpoch
-			if meta.Version < 7 {
+			if meta.Version < 7 || !useLeaderEpoch {
 				leaderEpoch = -1
 			}
 
