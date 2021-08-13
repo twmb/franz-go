@@ -1002,6 +1002,8 @@ func AllowedConcurrentFetches(n int) ConsumerOpt {
 // partition has no commits (for groups) or when beginning to consume a
 // partition (for direct partition consuming), or when a fetch sees an
 // OffsetOutOfRange error, overriding the default ConsumeStartOffset.
+//
+// Defaults to: NewOffset().AtStart() / Earliest Offset
 func ConsumeResetOffset(offset Offset) ConsumerOpt {
 	return consumerOpt{func(cfg *cfg) { cfg.resetOffset = offset }}
 }
