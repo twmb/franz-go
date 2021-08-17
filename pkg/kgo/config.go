@@ -109,7 +109,7 @@ type cfg struct {
 	maxRecordBatchBytes int32
 	maxBufferedRecords  int64
 	produceTimeout      time.Duration
-	produceRetries      int64
+	recordRetries       int64
 	linger              time.Duration
 	recordTimeout       time.Duration
 	manualFlushing      bool
@@ -414,7 +414,7 @@ func defaultCfg() cfg {
 		maxRecordBatchBytes: 1000000, // Kafka max.message.bytes default is 1000012
 		maxBufferedRecords:  math.MaxInt64,
 		produceTimeout:      30 * time.Second,
-		produceRetries:      math.MaxInt64,             // effectively unbounded
+		recordRetries:       math.MaxInt64,             // effectively unbounded
 		partitioner:         StickyKeyPartitioner(nil), // default to how Kafka partitions
 
 		//////////////
@@ -586,7 +586,7 @@ func RetryBackoffFn(backoff func(int) time.Duration) Opt {
 // overriding the default of 20.
 //
 // This option does not apply to produce requests; to limit produce request
-// retries, see ProduceRetries.
+// retries / record retries, see RecordRetries.
 func RequestRetries(n int) Opt {
 	return clientOpt{func(cfg *cfg) { cfg.retries = int64(n) }}
 }
@@ -809,8 +809,8 @@ func ProduceRequestTimeout(limit time.Duration) ProducerOpt {
 	return producerOpt{func(cfg *cfg) { cfg.produceTimeout = limit }}
 }
 
-// ProduceRetries sets the number of tries for producing records, overriding
-// the unlimited default.
+// RecordRetries sets the number of tries for producing records, overriding the
+// unlimited default.
 //
 // If idempotency is enabled (as it is by default), this option is only
 // enforced if it is safe to do so without creating invalid sequence numbers.
@@ -819,8 +819,8 @@ func ProduceRequestTimeout(limit time.Duration) ProducerOpt {
 //
 // This option is different from RequestRetries to allow finer grained control
 // of when to fail when producing records.
-func ProduceRetries(n int) ProducerOpt {
-	return producerOpt{func(cfg *cfg) { cfg.produceRetries = int64(n) }}
+func RecordRetries(n int) ProducerOpt {
+	return producerOpt{func(cfg *cfg) { cfg.recordRetries = int64(n) }}
 }
 
 // StopOnDataLoss sets the client to stop producing if data loss is detected,

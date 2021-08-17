@@ -712,7 +712,7 @@ func (s *sink) handleReqRespBatch(
 	switch {
 	case kerr.IsRetriable(err) &&
 		err != kerr.CorruptMessage &&
-		batch.tries < s.cl.cfg.produceRetries:
+		batch.tries < s.cl.cfg.recordRetries:
 
 		if debug {
 			fmt.Fprintf(b, "retrying@%d,%d(%s)}, ", baseOffset, nrec, err)
@@ -824,7 +824,7 @@ func (s *sink) handleReqRespBatch(
 				"partition", partition,
 				"err", err,
 				"err_is_retriable", kerr.IsRetriable(err),
-				"max_retries_reached", batch.tries >= s.cl.cfg.produceRetries,
+				"max_retries_reached", batch.tries >= s.cl.cfg.recordRetries,
 			)
 		}
 		s.cl.finishBatch(batch.recBatch, producerID, producerEpoch, partition, baseOffset, err)
@@ -1274,7 +1274,7 @@ func (b *recBatch) maybeFailErr(cfg *cfg) error {
 	}
 	if b.isTimedOut(cfg.recordTimeout) {
 		return errRecordTimeout
-	} else if b.tries >= cfg.produceRetries {
+	} else if b.tries >= cfg.recordRetries {
 		return errRecordRetries
 	} else if b.owner.cl.producer.isAborting() {
 		return ErrAborting
