@@ -2,6 +2,7 @@ package kgo
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"math"
@@ -339,6 +340,8 @@ func (cfg *cfg) validate() error {
 	return nil
 }
 
+var defaultDialer = &net.Dialer{Timeout: 10 * time.Second}
+
 func defaultCfg() cfg {
 	defaultID := "kgo"
 	return cfg{
@@ -348,7 +351,7 @@ func defaultCfg() cfg {
 		/////////////
 
 		id:     &defaultID,
-		dialFn: (&net.Dialer{Timeout: 10 * time.Second}).DialContext,
+		dialFn: defaultDialer.DialContext,
 
 		connTimeoutOverhead: 20 * time.Second,
 		connIdleTimeout:     20 * time.Second,
@@ -533,6 +536,31 @@ func ConnIdleTimeout(timeout time.Duration) Opt {
 //
 func Dialer(fn func(ctx context.Context, network, host string) (net.Conn, error)) Opt {
 	return clientOpt{func(cfg *cfg) { cfg.dialFn = fn }}
+}
+
+// DialTLSConfig opts in to dialing brokers with the given TLS config with a
+// 10s dial timeout. This is a shortcut for manually specifying a tls dialer
+// using the Dialer option.
+//
+// Every dial, the input config is cloned. If the config's ServerName is not
+// specified, this function uses net.SplitHostPort to extract the host from the
+// broker being dialed and sets the ServerName. In short, it is not necessary
+// to set the ServerName.
+func DialTLSConfig(c *tls.Config) Opt {
+	return Dialer(func(ctx context.Context, network, host string) (net.Conn, error) {
+		c := c.Clone()
+		if c.ServerName == "" {
+			server, _, err := net.SplitHostPort(host)
+			if err != nil {
+				return nil, fmt.Errorf("unable to split host:port for dialing: %w", err)
+			}
+			c.ServerName = server
+		}
+		return (&tls.Dialer{
+			NetDialer: defaultDialer,
+			Config:    c.Clone(),
+		}).DialContext(ctx, network, host)
+	})
 }
 
 // SeedBrokers sets the seed brokers for the client to use, overriding the
