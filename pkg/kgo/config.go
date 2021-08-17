@@ -597,6 +597,22 @@ func RequestRetries(n int) Opt {
 // This timeout applies to any request issued through a client's Request
 // function. It does not apply to fetches nor produces.
 //
+// A value of zero indicates no request timeout.
+//
+// The timeout is evaluated after a request is issued. If a retry backoff
+// places the next request past the retry timeout deadline, the request will
+// still be tried once more once the backoff expires.
+func RetryTimeout(t time.Duration) Opt {
+	return RetryTimeoutFn(func(int16) time.Duration { return t })
+}
+
+// RetryTimeoutFn sets the per-request upper limit on how long we allow
+// requests to retry, overriding the default of 5m for EndTxn requests, 1m for
+// all others.
+//
+// This timeout applies to any request issued through a client's Request
+// function. It does not apply to fetches nor produces.
+//
 // The function is called with the request key that is being retried. While it
 // is not expected that the request key will be used, including it gives users
 // the opportinuty to have different retry timeouts for different keys.
@@ -606,7 +622,7 @@ func RequestRetries(n int) Opt {
 // The timeout is evaluated after a request is issued. If a retry backoff
 // places the next request past the retry timeout deadline, the request will
 // still be tried once more once the backoff expires.
-func RetryTimeout(t func(int16) time.Duration) Opt {
+func RetryTimeoutFn(t func(int16) time.Duration) Opt {
 	return clientOpt{func(cfg *cfg) { cfg.retryTimeout = t }}
 }
 
