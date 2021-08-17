@@ -1,3 +1,23 @@
+v0.10.0
+===
+
+#62 now tracks the v1.0.0 stabilization status. This release contains
+everything but addressing #57, which I would like to address before
+stabilizing.
+
+After using this client some more in a different program, I've run into some
+things that are better to break now. Particularly, a few options are awkward.
+The goal is for this release to make these options less awkward.
+
+Three options have been renamed in this release, the fixes are very simple (and
+ideally, if you used `RetryTimeout`, you may find the new `RetryTimeout` even
+simpler).
+
+- [`c1d62a7`](https://github.com/twmb/franz-go/commit/c1d62a7) **feature** config: add DialTLSConfig option
+- [`4e5eca8`](https://github.com/twmb/franz-go/commit/4e5eca8) **breaking**: rename ProduceRetries to RecordRetries
+- [`12808d5`](https://github.com/twmb/franz-go/commit/12808d5) **breaking**: rename RetryBackoff to RetryBackoffFn
+- [`8199f5b`](https://github.com/twmb/franz-go/commit/8199f5b) **breaking**: split RetryTimeout function
+
 v0.9.1
 ===
 
@@ -331,7 +351,7 @@ v0.7.9
 
 - [`5231902`](https://github.com/twmb/franz-go/commit/5231902) **bugfix** patch on prior commit
 
-If I could yank tags, I would. Nice 10 minutes between them though! 🙃
+If I could yank tags, I would.
 
 v0.7.8
 ===
