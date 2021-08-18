@@ -580,6 +580,10 @@ func (cl *Client) shouldRetry(tries int, err error) bool {
 	return (kerr.IsRetriable(err) || isRetriableBrokerErr(err)) && int64(tries) < cl.cfg.retries
 }
 
+func (cl *Client) shouldRetryNext(tries int, err error) bool {
+	return isSkippableBrokerErr(err) && int64(tries) < cl.cfg.retries
+}
+
 type retriable struct {
 	cl   *Client
 	br   func() (*broker, error)
@@ -601,9 +605,11 @@ func (r *retriable) Request(ctx context.Context, req kmsg.Request) (kmsg.Respons
 	tries := 0
 	tryStart := time.Now()
 	retryTimeout := r.cl.cfg.retryTimeout(req.Key())
+
+	next, nextErr := r.br()
 start:
 	tries++
-	br, err := r.br()
+	br, err := next, nextErr
 	r.last = br
 	var resp kmsg.Response
 	var retryErr error
@@ -613,13 +619,25 @@ start:
 			retryErr = r.parseRetryErr(resp)
 		}
 	}
-	if err != nil || retryErr != nil {
-		if retryTimeout == 0 || time.Since(tryStart) <= retryTimeout {
-			if (r.cl.shouldRetry(tries, err) || r.cl.shouldRetry(tries, retryErr)) &&
-				(r.limitRetries == 0 || tries < r.limitRetries) &&
-				r.cl.waitTries(ctx, tries) {
 
-				goto start
+	if err != nil || retryErr != nil {
+		if r.limitRetries == 0 || tries < r.limitRetries {
+			if retryTimeout == 0 || time.Since(tryStart) <= retryTimeout {
+				// If this broker / request had a retriable error, we can
+				// just retry now. If the error is *not* retriable but
+				// is a broker-specific network error, and the next
+				// broker is different than the current, we also retry.
+				if r.cl.shouldRetry(tries, err) || r.cl.shouldRetry(tries, retryErr) {
+					if r.cl.waitTries(ctx, tries) {
+						next, err = r.br()
+						goto start
+					}
+				} else if r.cl.shouldRetryNext(tries, err) {
+					next, nextErr = r.br()
+					if next != br && r.cl.waitTries(ctx, tries) {
+						goto start
+					}
+				}
 			}
 		}
 	}

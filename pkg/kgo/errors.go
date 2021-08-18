@@ -1,8 +1,10 @@
 package kgo
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 )
 
@@ -40,6 +42,24 @@ func isRetriableBrokerErr(err error) bool {
 	switch err {
 	case errChosenBrokerDead,
 		errCorrelationIDMismatch:
+		return true
+	}
+	return false
+}
+
+func isSkippableBrokerErr(err error) bool {
+	// Some broker errors are not retriable for the given broker itself,
+	// but we *could* skip the broker and try again on the next broker. For
+	// example, if the user input an invalid address and a valid address
+	// for seeds, when we fail dialing the first seed, we cannot retry that
+	// broker, but we can skip to the next.
+	//
+	// We take anything that returns an OpError that *is not* a context
+	// error deep inside.
+	var ne *net.OpError
+	if errors.As(err, &ne) &&
+		!errors.Is(err, context.Canceled) &&
+		!errors.Is(err, context.DeadlineExceeded) {
 		return true
 	}
 	return false
