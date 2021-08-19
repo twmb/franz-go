@@ -504,9 +504,10 @@ func (s *sink) firstRespCheck(idempotent bool, version int16) {
 // produce response.
 func (s *sink) handleReqClientErr(req *produceRequest, err error) {
 	switch {
-	case err == errChosenBrokerDead:
-		// A dead broker means the broker may have migrated, so we
-		// retry to force a metadata reload.
+	case err == errChosenBrokerDead,
+		err == errUnknownBroker:
+		// A dead / unknown broker means the broker may have migrated,
+		// so we retry to force a metadata reload.
 		s.handleRetryBatches(req.batches, req.backoffSeq, false, false)
 
 	case err == ErrClientClosed:

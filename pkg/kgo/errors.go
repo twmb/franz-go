@@ -56,6 +56,9 @@ func isSkippableBrokerErr(err error) bool {
 	//
 	// We take anything that returns an OpError that *is not* a context
 	// error deep inside.
+	if err == errUnknownBroker {
+		return true
+	}
 	var ne *net.OpError
 	if errors.As(err, &ne) &&
 		!errors.Is(err, context.Canceled) &&
@@ -69,6 +72,10 @@ var (
 	//////////////
 	// INTERNAL // -- when used multiple times or checked in different areas of the client
 	//////////////
+
+	// Returned when issuing a request to a broker that the client does not
+	// know about (maybe missing from metadata responses now).
+	errUnknownBroker = errors.New("unknown broker")
 
 	// A temporary error returned when a broker chosen for a request is
 	// stopped due to a concurrent metadata response.
@@ -100,10 +107,6 @@ var (
 
 	// Returned when trying to produce a record outside of a transaction.
 	errNotInTransaction = errors.New("cannot produce record transactionally if not in a transaction")
-
-	// Returned when issuing a request to a broker that the client does not
-	// know about.
-	errUnknownBroker = errors.New("unknown broker")
 
 	// Returned when records are unable to be produced and they hit the
 	// configured record timeout limit.
