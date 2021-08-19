@@ -580,6 +580,12 @@ func (cl *Client) mergeTopicPartitions(
 		// If the tp data equals the old, then the sink / source is the
 		// same, because the sink/source is from the tp leader.
 		if newTP.topicPartitionData == oldTP.topicPartitionData {
+			cl.cfg.logger.Log(LogLevelDebug, "metadata refresh has identical topic partition data",
+				"topic", topic,
+				"partition", part,
+				"leader", newTP.leader,
+				"leader_epoch", newTP.leaderEpoch,
+			)
 			if isProduce {
 				newTP.records = oldTP.records
 				newTP.records.clearFailing() // always clear failing state for producing after meta update
@@ -587,6 +593,14 @@ func (cl *Client) mergeTopicPartitions(
 				newTP.cursor = oldTP.cursor // unlike records, there is no failing state for a cursor
 			}
 		} else {
+			cl.cfg.logger.Log(LogLevelDebug, "metadata refresh topic partition data changed",
+				"topic", topic,
+				"partition", part,
+				"new_leader", newTP.leader,
+				"new_leader_epoch", newTP.leaderEpoch,
+				"old_leader", oldTP.leader,
+				"old_leader_epoch", oldTP.leaderEpoch,
+			)
 			if isProduce {
 				oldTP.migrateProductionTo(newTP) // migration clears failing state
 			} else {
