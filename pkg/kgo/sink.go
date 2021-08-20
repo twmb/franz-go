@@ -336,8 +336,11 @@ func (s *sink) produce(sem <-chan struct{}) bool {
 	req.backoffSeq = s.backoffSeq // safe to read outside mu since we are in drain loop
 
 	produced = true
+
+	batches := req.batches.sliced()
 	s.doSequenced(req, func(br *broker, resp kmsg.Response, err error) {
 		s.handleReqResp(br, req, resp, err)
+		batches.eachOwnerLocked((*recBatch).decInflight)
 		<-sem
 	})
 	return moreToDrain
@@ -544,11 +547,6 @@ func (s *sink) handleReqRespNoack(b *bytes.Buffer, debug bool, req *produceReque
 }
 
 func (s *sink) handleReqResp(br *broker, req *produceRequest, resp kmsg.Response, err error) {
-	// The last thing we do before returning is to decrement the inflight
-	// count on all used batches. This func uses batchesFlat, meaning map
-	// deletions below do not affect us.
-	defer req.decBatchesInflight()
-
 	if err != nil {
 		s.handleReqClientErr(req, err)
 		return
@@ -1399,11 +1397,10 @@ type produceRequest struct {
 
 	backoffSeq uint32
 
-	txnID       *string
-	acks        int16
-	timeout     int32
-	batches     seqRecBatches
-	batchesFlat []*recBatch
+	txnID   *string
+	acks    int16
+	timeout int32
+	batches seqRecBatches
 
 	producerID    int64
 	producerEpoch int16
@@ -1502,17 +1499,7 @@ func (r *produceRequest) tryAddBatch(produceVersion int32, recBuf *recBuf, batch
 		recBuf.seq,
 		batch,
 	)
-	r.batchesFlat = append(r.batchesFlat, batch)
 	return true
-}
-
-// decBatchesInflight is called at the end of handling a req response.
-func (r *produceRequest) decBatchesInflight() {
-	for _, batch := range r.batchesFlat {
-		batch.owner.mu.Lock()
-		batch.decInflight()
-		batch.owner.mu.Unlock()
-	}
 }
 
 // seqRecBatch: a recBatch with a sequence number.
@@ -1561,6 +1548,26 @@ func (rbs seqRecBatches) eachOwnerLocked(fn func(seqRecBatch)) {
 		defer batch.owner.mu.Unlock()
 		fn(batch)
 	})
+}
+
+func (rbs seqRecBatches) sliced() recBatches {
+	var batches []*recBatch
+	for _, partitions := range rbs {
+		for _, batch := range partitions {
+			batches = append(batches, batch.recBatch)
+		}
+	}
+	return batches
+}
+
+type recBatches []*recBatch
+
+func (bs recBatches) eachOwnerLocked(fn func(*recBatch)) {
+	for _, b := range bs {
+		b.owner.mu.Lock()
+		fn(b)
+		b.owner.mu.Unlock()
+	}
 }
 
 //////////////
