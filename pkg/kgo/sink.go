@@ -405,16 +405,18 @@ func (s *sink) doTxnReq(
 	// not be trying to add them to a partition if they were not.
 	defer func() {
 		if err != nil {
-			req.batches.eachOwnerLocked(func(batch seqRecBatch) {
-				batch.owner.addedToTxn = false
-				batch.owner.resetBatchDrainIdx()
-				batch.decInflight()
-			})
+			req.batches.eachOwnerLocked(seqRecBatch.removeFromTxn)
 		}
 	}()
 	return s.cl.doWithConcurrentTransactions("AddPartitionsToTxn", func() error {
 		return s.issueTxnReq(req, txnReq)
 	})
+}
+
+func (b seqRecBatch) removeFromTxn() {
+	b.owner.addedToTxn = false
+	b.owner.resetBatchDrainIdx()
+	b.decInflight()
 }
 
 func (s *sink) issueTxnReq(
@@ -450,9 +452,7 @@ func (s *sink) issueTxnReq(
 				// We are stripping this retriable-err batch from the request,
 				// so we must reset that it has been added to the txn.
 				batch.owner.mu.Lock()
-				batch.owner.addedToTxn = false
-				batch.owner.resetBatchDrainIdx()
-				batch.decInflight()
+				batch.removeFromTxn()
 				batch.owner.mu.Unlock()
 
 				delete(topicBatches, partition.Partition)
@@ -463,18 +463,6 @@ func (s *sink) issueTxnReq(
 		}
 	}
 	return nil
-}
-
-// Resets the drain indices for any first-batch.
-func (s *sink) requeueUnattemptedReq(req *produceRequest, err error) {
-	var maybeDrain bool
-	req.batches.tryResetFailingBatchesWith(&s.cl.cfg, false, func(seqRecBatch) {
-		maybeDrain = true
-	})
-	if maybeDrain {
-		s.maybeTriggerBackoff(req.backoffSeq)
-		s.maybeDrain()
-	}
 }
 
 // firstRespCheck is effectively a sink.Once. On the first response, if the
@@ -504,21 +492,52 @@ func (s *sink) firstRespCheck(idempotent bool, version int16) {
 // produce response.
 func (s *sink) handleReqClientErr(req *produceRequest, err error) {
 	switch {
-	case err == errChosenBrokerDead,
-		err == errUnknownBroker:
-		// A dead / unknown broker means the broker may have migrated,
-		// so we retry to force a metadata reload.
-		s.handleRetryBatches(req.batches, req.backoffSeq, false, false)
-
-	case err == ErrClientClosed:
-		s.cl.failBufferedRecords(ErrClientClosed)
-
 	default:
 		s.cl.cfg.logger.Log(LogLevelWarn, "random error while producing, requeueing unattempted request", "broker", logID(s.nodeID), "err", err)
 		fallthrough
 
-	case isRetriableBrokerErr(err):
-		s.requeueUnattemptedReq(req, err)
+	case err == errChosenBrokerDead,
+		err == errUnknownBroker,
+		isRetriableBrokerErr(err):
+		// A dead / unknown broker means the broker may have migrated,
+		// so we retry to force a metadata reload.
+		updateMeta := err == errUnknownBroker
+		s.handleRetryBatches(req.batches, req.backoffSeq, updateMeta, false)
+
+	case err == ErrClientClosed:
+		s.cl.failBufferedRecords(ErrClientClosed)
+	}
+}
+
+// No acks mean no response. The following block is basically an extremely
+// condensed version of the logic in handleReqResp.
+func (s *sink) handleReqRespNoack(b *bytes.Buffer, debug bool, req *produceRequest) {
+	if debug {
+		fmt.Fprintf(b, "noack ")
+	}
+	for topic, partitions := range req.batches {
+		if debug {
+			fmt.Fprintf(b, "%s[", topic)
+		}
+		for partition, batch := range partitions {
+			batch.owner.mu.Lock()
+			if batch.isOwnersFirstBatch() {
+				if debug {
+					fmt.Fprintf(b, "%d{0=>%d}, ", partition, len(batch.records))
+				}
+				s.cl.finishBatch(batch.recBatch, req.producerID, req.producerEpoch, partition, 0, nil)
+			} else if debug {
+				fmt.Fprintf(b, "%d{skipped}, ", partition)
+			}
+			batch.decInflight()
+			batch.owner.mu.Unlock()
+		}
+		if debug {
+			if bytes.HasSuffix(b.Bytes(), []byte(", ")) {
+				b.Truncate(b.Len() - 2)
+			}
+			b.WriteString("], ")
+		}
 	}
 }
 
@@ -529,10 +548,10 @@ func (s *sink) handleReqResp(br *broker, req *produceRequest, resp kmsg.Response
 	}
 	s.firstRespCheck(req.idempotent(), req.version)
 	atomic.StoreUint32(&s.consecutiveFailures, 0)
+	defer req.metrics.hook(&s.cl.cfg, br) // defer to end so that non-written batches are removed
 
 	var b *bytes.Buffer
 	debug := s.cl.cfg.logger.Level() >= LogLevelDebug
-
 	if debug {
 		b = bytes.NewBuffer(make([]byte, 0, 128))
 		defer func() {
@@ -542,57 +561,8 @@ func (s *sink) handleReqResp(br *broker, req *produceRequest, resp kmsg.Response
 		}()
 	}
 
-	// We defer updating the produce batch metrics in a goroutine; anything
-	// that we count as not-written (not the first batch, error) is removed
-	// from metrics before we return.
-	defer func() {
-		if len(req.metrics) > 0 {
-			s.cl.cfg.hooks.each(func(h Hook) {
-				if h, ok := h.(HookProduceBatchWritten); ok {
-					go func() {
-						for topic, partitions := range req.metrics {
-							for partition, metrics := range partitions { // I heard you liked tabs?
-								h.OnProduceBatchWritten(br.meta, topic, partition, metrics)
-							}
-						}
-					}()
-				}
-			})
-		}
-	}()
-
-	// If we have no acks, we will have no response. The following block is
-	// basically an extremely condensed version of everything that follows.
-	// We *do* retry on error even with no acks, because an error would
-	// mean the write itself failed.
 	if req.acks == 0 {
-		if debug {
-			fmt.Fprintf(b, "noack ")
-		}
-		for topic, partitions := range req.batches {
-			if debug {
-				fmt.Fprintf(b, "%s[", topic)
-			}
-			for partition, batch := range partitions {
-				batch.owner.mu.Lock()
-				if batch.isOwnersFirstBatch() {
-					if debug {
-						fmt.Fprintf(b, "%d{0=>%d}, ", partition, len(batch.records))
-					}
-					s.cl.finishBatch(batch.recBatch, req.producerID, req.producerEpoch, partition, 0, nil)
-				} else if debug {
-					fmt.Fprintf(b, "%d{skipped}, ", partition)
-				}
-				batch.decInflight()
-				batch.owner.mu.Unlock()
-			}
-			if debug {
-				if bytes.HasSuffix(b.Bytes(), []byte(", ")) {
-					b.Truncate(b.Len() - 2)
-				}
-				b.WriteString("], ")
-			}
-		}
+		s.handleReqRespNoack(b, debug, req)
 		return
 	}
 
@@ -890,6 +860,9 @@ func (cl *Client) finishBatch(batch *recBatch, producerID int64, producerEpoch i
 
 // handleRetryBatches sets any first-buf-batch to failing and triggers a
 // metadata that will eventually clear the failing state and re-drain.
+//
+// If idempotency is disabled, if a batch is timed out or hit the retry limit,
+// we fail it and anything after it.
 func (s *sink) handleRetryBatches(
 	retry seqRecBatches,
 	backoffSeq uint32,
@@ -897,7 +870,22 @@ func (s *sink) handleRetryBatches(
 	canFail bool, // if records can fail if they are at limits
 ) {
 	var needsMetaUpdate bool
-	retry.tryResetFailingBatchesWith(&s.cl.cfg, canFail, func(batch seqRecBatch) {
+	retry.eachOwnerLocked(func(batch seqRecBatch) {
+		defer batch.decInflight()
+
+		if !batch.isOwnersFirstBatch() {
+			return
+		}
+
+		if canFail || s.cl.cfg.disableIdempotency {
+			if err := batch.maybeFailErr(&s.cl.cfg); err != nil {
+				batch.owner.failAllRecords(err)
+				return
+			}
+		}
+
+		batch.owner.resetBatchDrainIdx()
+
 		if updateMeta {
 			batch.owner.failing = true
 			needsMetaUpdate = true
@@ -1376,8 +1364,12 @@ func (b *recBatch) decInflight() {
 	if recBuf.inflight != 0 {
 		return
 	}
+	if recBuf.inflight < 0 {
+		panic("record buffer went negative inflight!")
+	}
+	oldSink := recBuf.inflightOnSink
 	recBuf.inflightOnSink = nil
-	if recBuf.batchDrainIdx != len(recBuf.batches) {
+	if oldSink != recBuf.sink && recBuf.batchDrainIdx != len(recBuf.batches) {
 		recBuf.sink.maybeDrain()
 	}
 }
@@ -1407,7 +1399,7 @@ type produceRequest struct {
 	// sizes (in byteS) of each batch.
 	//
 	// We use this in handleReqResp for the OnProduceHook.
-	metrics map[string]map[int32]ProduceBatchMetrics
+	metrics produceMetrics
 
 	compressor *compressor
 
@@ -1417,6 +1409,32 @@ type produceRequest struct {
 	// we use the proper flexible numbers when calculating.
 	wireLength      int32
 	wireLengthLimit int32
+}
+
+type produceMetrics map[string]map[int32]ProduceBatchMetrics
+
+func (p produceMetrics) hook(cfg *cfg, br *broker) {
+	if len(p) == 0 {
+		return
+	}
+	var hooks []HookProduceBatchWritten
+	cfg.hooks.each(func(h Hook) {
+		if h, ok := h.(HookProduceBatchWritten); ok {
+			hooks = append(hooks, h)
+		}
+	})
+	if len(hooks) == 0 {
+		return
+	}
+	go func() {
+		for _, h := range hooks {
+			for topic, partitions := range p {
+				for partition, metrics := range partitions {
+					h.OnProduceBatchWritten(br.meta, topic, partition, metrics)
+				}
+			}
+		}
+	}()
 }
 
 func (r *produceRequest) idempotent() bool { return r.producerID >= 0 }
@@ -1504,31 +1522,6 @@ func (rbs *seqRecBatches) addSeqBatch(topic string, part int32, batch seqRecBatc
 		(*rbs)[topic] = topicBatches
 	}
 	topicBatches[part] = batch
-}
-
-// Resets the drain index for any batch that is the first in its record buffer,
-// as well as decrements the inflight for all batches always.
-//
-// If idempotency is disabled, if a batch is timed out or hit the retry limit,
-// we fail it and anything after it.
-func (rbs seqRecBatches) tryResetFailingBatchesWith(cfg *cfg, canFail bool, fn func(seqRecBatch)) {
-	rbs.eachOwnerLocked(func(batch seqRecBatch) {
-		defer batch.decInflight()
-
-		if !batch.isOwnersFirstBatch() {
-			return
-		}
-
-		if canFail || cfg.disableIdempotency {
-			if err := batch.maybeFailErr(cfg); err != nil {
-				batch.owner.failAllRecords(err)
-				return
-			}
-		}
-
-		batch.owner.resetBatchDrainIdx()
-		fn(batch)
-	})
 }
 
 func (rbs seqRecBatches) each(fn func(seqRecBatch)) {
