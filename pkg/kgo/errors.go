@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 )
@@ -38,6 +39,12 @@ func isRetriableBrokerErr(err error) bool {
 	var tempErr interface{ Temporary() bool }
 	if errors.As(err, &tempErr) {
 		return tempErr.Temporary()
+	}
+
+	// EOF can be returned if a broker kills a connection unexpectedly, and
+	// we can retry that.
+	if errors.Is(err, io.EOF) {
+		return true
 	}
 	switch err {
 	case errChosenBrokerDead,
