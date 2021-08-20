@@ -406,14 +406,14 @@ func (cl *Client) doPartitionRecord(parts *topicPartitions, partsData *topicPart
 	}
 
 	var pick int
-	tlp, _ := parts.partitioner.(TopicLoadPartitioner)
+	tlp, _ := parts.partitioner.(TopicBackupPartitioner)
 	if tlp != nil {
 		if parts.lpInput == nil {
 			parts.lpInput = new(lpInput)
 		}
 		parts.lpInput.on = 0
 		parts.lpInput.mapping = mapping
-		pick = tlp.PartitionByLoad(pr.Record, len(mapping), parts.lpInput.next)
+		pick = tlp.PartitionByBackup(pr.Record, len(mapping), parts.lpInput.next)
 	} else {
 		pick = parts.partitioner.Partition(pr.Record, len(mapping))
 	}
@@ -431,7 +431,7 @@ func (cl *Client) doPartitionRecord(parts *topicPartitions, partsData *topicPart
 		if tlp != nil {
 			parts.lpInput.on = 0
 			parts.lpInput.mapping = mapping
-			pick = tlp.PartitionByLoad(pr.Record, len(mapping), parts.lpInput.next)
+			pick = tlp.PartitionByBackup(pr.Record, len(mapping), parts.lpInput.next)
 		} else {
 			pick = parts.partitioner.Partition(pr.Record, len(mapping))
 		}
