@@ -405,7 +405,18 @@ func (cl *Client) doPartitionRecord(parts *topicPartitions, partsData *topicPart
 		return
 	}
 
-	pick := parts.partitioner.Partition(pr.Record, len(mapping))
+	var pick int
+	tlp, _ := parts.partitioner.(TopicLoadPartitioner)
+	if tlp != nil {
+		if parts.lpInput == nil {
+			parts.lpInput = new(lpInput)
+		}
+		parts.lpInput.on = 0
+		parts.lpInput.mapping = mapping
+		pick = tlp.PartitionByLoad(pr.Record, len(mapping), parts.lpInput.next)
+	} else {
+		pick = parts.partitioner.Partition(pr.Record, len(mapping))
+	}
 	if pick < 0 || pick >= len(mapping) {
 		cl.finishRecordPromise(pr, fmt.Errorf("invalid record partitioning choice of %d from %d available", pick, len(mapping)))
 		return
@@ -416,7 +427,15 @@ func (cl *Client) doPartitionRecord(parts *topicPartitions, partsData *topicPart
 	processed := partition.records.bufferRecord(pr, true) // KIP-480
 	if !processed {
 		parts.partitioner.OnNewBatch()
-		pick = parts.partitioner.Partition(pr.Record, len(mapping))
+
+		if tlp != nil {
+			parts.lpInput.on = 0
+			parts.lpInput.mapping = mapping
+			pick = tlp.PartitionByLoad(pr.Record, len(mapping), parts.lpInput.next)
+		} else {
+			pick = parts.partitioner.Partition(pr.Record, len(mapping))
+		}
+
 		if pick < 0 || pick >= len(mapping) {
 			cl.finishRecordPromise(pr, fmt.Errorf("invalid record partitioning choice of %d from %d available", pick, len(mapping)))
 			return

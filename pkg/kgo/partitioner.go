@@ -1,7 +1,9 @@
 package kgo
 
 import (
+	"math"
 	"math/rand"
+	"sync/atomic"
 	"time"
 )
 
@@ -34,6 +36,33 @@ type TopicPartitioner interface {
 	Partition(r *Record, n int) int
 }
 
+// TopicLoadPartitioner is an optional extension interface to the
+// TopicPartitioner that can partition by load.
+//
+// If a partitioner implements this interface, the Partition function will
+// never be called.
+type TopicLoadPartitioner interface {
+	TopicPartitioner
+
+	// PartitionByLoad is similar to Partition, but has an additional
+	// loadFn function. This function will return the number of buffered
+	// records per index. The function can only be called up to n times,
+	// calling it any more will panic.
+	PartitionByLoad(r *Record, n int, loadFn func() (int, int64)) int
+}
+
+type lpInput struct {
+	on      int
+	mapping []*topicPartition
+}
+
+func (i *lpInput) next() (int, int64) {
+	on := i.on
+	buffered := atomic.LoadInt64(&i.mapping[on].records.buffered)
+	i.on++
+	return on, buffered
+}
+
 // BasicConsistentPartitioner wraps a single function to provide a Partitioner
 // and TopicPartitioner (that function is essentially a combination of
 // Partitioner.ForTopic and TopicPartitioner.Partition).
@@ -46,6 +75,7 @@ type TopicPartitioner interface {
 //                     return int(r.Partition)
 //             }
 //     })
+//
 func BasicConsistentPartitioner(partition func(string) func(r *Record, n int) int) Partitioner {
 	return &basicPartitioner{partition}
 }
@@ -78,6 +108,69 @@ func ManualPartitioner() Partitioner {
 			return int(r.Partition)
 		}
 	})
+}
+
+// LeastLoadPartitioner prioritizes partitioning by three factors, in order:
+//
+//  1) pin to the current pick until there is a new batch
+//  2) on new batch, choose the least loaded partition
+//  3) if multiple partitions are equally least-loaded, choose one at random
+//
+// This algorithm prioritizes lead-loaded throughput, which may result in
+// unequal partitioning. It is likely that the algorithm will talk most to the
+// broker that it has the best connection to.
+//
+// This algorithm is resilient to brokers going down: if a few brokers die, it
+// is possible your throughput will be so high that the maximum buffered
+// records will be reached in any offline partitions before metadata responds
+// that the broker is offline. With the standard partitioning algorithms, the
+// only recovery is if the partition is remapped or if the broker comes back
+// online. With the lead load partitioner, downed partitions will see slight
+// backup, but then the other partitions that are still accepting writes will
+// get all of the load.
+//
+// Under ideal scenarios (no broker / connection issues), StickyPartitioner is
+// faster than LeastLoadPartitioner due to the sticky partitioner doing less
+// work while partitioning. This partitioner is only recommended if you are a
+// producer consistently dealing with flaky connections or problematic brokers
+// and do not mind uneven load on your brokers.
+func LeastLoadPartitioner() Partitioner {
+	return new(leastLoadPartitioner)
+}
+
+type leastLoadPartitioner struct{}
+
+func (*leastLoadPartitioner) ForTopic(string) TopicPartitioner {
+	p := newLeastLoadTopicPartitioner()
+	return &p
+}
+
+func newLeastLoadTopicPartitioner() leastLoadTopicPartitioner {
+	return leastLoadTopicPartitioner{
+		onPart: -1,
+	}
+}
+
+type leastLoadTopicPartitioner struct {
+	onPart int
+}
+
+func (p *leastLoadTopicPartitioner) OnNewBatch()                    { p.onPart = -1 }
+func (*leastLoadTopicPartitioner) RequiresConsistency(*Record) bool { return false }
+func (*leastLoadTopicPartitioner) Partition(*Record, int) int       { panic("unreachable") }
+
+func (p *leastLoadTopicPartitioner) PartitionByLoad(_ *Record, n int, loadFn func() (int, int64)) int {
+	if p.onPart == -1 || p.onPart >= n {
+		leastLoad := int64(math.MaxInt64)
+		for ; n > 0; n-- {
+			pick, load := loadFn()
+			if load < leastLoad {
+				leastLoad = load
+				p.onPart = pick
+			}
+		}
+	}
+	return p.onPart
 }
 
 // StickyPartitioner is the same as StickyKeyPartitioner, but with no logic to

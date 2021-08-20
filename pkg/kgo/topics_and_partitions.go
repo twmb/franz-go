@@ -19,6 +19,7 @@ type topicPartitions struct {
 
 	partsMu     sync.Mutex
 	partitioner TopicPartitioner
+	lpInput     *lpInput // for partitioning if the partitioner is a LoadTopicPartitioner
 }
 
 func (t *topicPartitions) load() *topicPartitionsData { return t.v.Load().(*topicPartitionsData) }

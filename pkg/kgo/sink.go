@@ -829,7 +829,9 @@ func (cl *Client) finishBatch(batch *recBatch, producerID int64, producerEpoch i
 
 	// We know the batch made it to Kafka successfully without error.
 	// We remove this batch and finish all records appropriately.
-	recBuf.batch0Seq += int32(len(recBuf.batches[0].records))
+	finished := len(recBuf.batches[0].records)
+	recBuf.batch0Seq += int32(finished)
+	atomic.AddInt64(&recBuf.buffered, -int64(finished))
 	recBuf.batches[0] = nil
 	recBuf.batches = recBuf.batches[1:]
 	recBuf.batchDrainIdx--
@@ -959,6 +961,10 @@ type recBuf struct {
 	// the partition to a txn (again serially), or in EndTransaction after
 	// all buffered records are flushed (if the API is used correctly).
 	addedToTxn bool
+
+	// For LoadTopicPartitioner partitioning; atomically tracks the number
+	// of records buffered in total on this recBuf.
+	buffered int64
 
 	mu sync.Mutex // guards r/w access to all fields below
 
@@ -1095,6 +1101,7 @@ func (recBuf *recBuf) bufferRecord(pr promisedRec, abortOnNewBatch bool) bool {
 		}
 	}
 
+	atomic.AddInt64(&recBuf.buffered, 1)
 	return true
 }
 
@@ -1188,6 +1195,7 @@ func (recBuf *recBuf) failAllRecords(err error) {
 		recBuf.cl.pnrPool.put(records)
 	}
 	recBuf.resetBatchDrainIdx()
+	atomic.StoreInt64(&recBuf.buffered, 0)
 	recBuf.batches = nil
 }
 
