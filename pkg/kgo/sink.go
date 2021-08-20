@@ -659,13 +659,13 @@ func (s *sink) handleReqRespBatch(
 	if !batch.isOwnersFirstBatch() {
 		if debug {
 			if err := kerr.ErrorForCode(errorCode); err == nil {
-				if len(batch.records) > 0 {
+				if nrec > 0 {
 					fmt.Fprintf(b, "skipped@%d=>%d}, ", baseOffset, baseOffset+int64(nrec))
 				} else {
 					fmt.Fprintf(b, "skipped@%d}, ", baseOffset)
 				}
 			} else {
-				if len(batch.records) > 0 {
+				if nrec > 0 {
 					fmt.Fprintf(b, "skipped@%d,%d(%s)}, ", baseOffset, nrec, err)
 				} else {
 					fmt.Fprintf(b, "skipped@%d(%s)}, ", baseOffset, err)
@@ -742,7 +742,7 @@ func (s *sink) handleReqRespBatch(
 
 			s.cl.finishBatch(batch.recBatch, producerID, producerEpoch, partition, baseOffset, err)
 			if debug {
-				fmt.Fprintf(b, "fatal@%d,%d(%s)}, ", baseOffset, len(batch.records), err)
+				fmt.Fprintf(b, "fatal@%d,%d(%s)}, ", baseOffset, nrec, err)
 			}
 			return false, false
 		}
@@ -775,7 +775,7 @@ func (s *sink) handleReqRespBatch(
 		// will reset sequence numbers appropriately.
 		s.cl.failProducerID(producerID, producerEpoch, errReloadProducerID)
 		if debug {
-			fmt.Fprintf(b, "resetting@%d,%d(%s)}, ", baseOffset, len(batch.records), err)
+			fmt.Fprintf(b, "resetting@%d,%d(%s)}, ", baseOffset, nrec, err)
 		}
 		return true, false
 
@@ -802,9 +802,9 @@ func (s *sink) handleReqRespBatch(
 		didProduce = err == nil
 		if debug {
 			if err != nil {
-				fmt.Fprintf(b, "err@%d,%d(%s)}, ", baseOffset, len(batch.records), err)
+				fmt.Fprintf(b, "err@%d,%d(%s)}, ", baseOffset, nrec, err)
 			} else {
-				fmt.Fprintf(b, "%d=>%d}, ", baseOffset, baseOffset+int64(len(batch.records)))
+				fmt.Fprintf(b, "%d=>%d}, ", baseOffset, baseOffset+int64(nrec))
 			}
 		}
 	}
@@ -829,7 +829,7 @@ func (cl *Client) finishBatch(batch *recBatch, producerID int64, producerEpoch i
 
 	// We know the batch made it to Kafka successfully without error.
 	// We remove this batch and finish all records appropriately.
-	finished := len(recBuf.batches[0].records)
+	finished := len(batch.records)
 	recBuf.batch0Seq += int32(finished)
 	atomic.AddInt64(&recBuf.buffered, -int64(finished))
 	recBuf.batches[0] = nil
