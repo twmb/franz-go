@@ -413,6 +413,9 @@ func (s *sink) doTxnReq(
 	})
 }
 
+// Removing a batch from the transaction means we will not be issuing it
+// inflight, and that it was not added to the txn and that we need to reset the
+// drain index.
 func (b seqRecBatch) removeFromTxn() {
 	b.owner.addedToTxn = false
 	b.owner.resetBatchDrainIdx()
@@ -529,7 +532,6 @@ func (s *sink) handleReqRespNoack(b *bytes.Buffer, debug bool, req *produceReque
 			} else if debug {
 				fmt.Fprintf(b, "%d{skipped}, ", partition)
 			}
-			batch.decInflight()
 			batch.owner.mu.Unlock()
 		}
 		if debug {
@@ -542,6 +544,11 @@ func (s *sink) handleReqRespNoack(b *bytes.Buffer, debug bool, req *produceReque
 }
 
 func (s *sink) handleReqResp(br *broker, req *produceRequest, resp kmsg.Response, err error) {
+	// The last thing we do before returning is to decrement the inflight
+	// count on all used batches. This func uses batchesFlat, meaning map
+	// deletions below do not affect us.
+	defer req.decBatchesInflight()
+
 	if err != nil {
 		s.handleReqClientErr(req, err)
 		return
@@ -644,7 +651,6 @@ func (s *sink) handleReqRespBatch(
 ) (retry, didProduce bool) {
 	batch.owner.mu.Lock()
 	defer batch.owner.mu.Unlock()
-	defer batch.decInflight()
 
 	nrec := len(batch.records)
 
@@ -873,8 +879,6 @@ func (s *sink) handleRetryBatches(
 ) {
 	var needsMetaUpdate bool
 	retry.eachOwnerLocked(func(batch seqRecBatch) {
-		defer batch.decInflight()
-
 		if !batch.isOwnersFirstBatch() {
 			return
 		}
@@ -1363,17 +1367,17 @@ func (b *recBatch) isTimedOut(limit time.Duration) bool {
 //
 // This is always called in the produce request path, not anywhere else (i.e.
 // not failAllRecords). We want inflight decrementing to be the last thing that
-// happens always for every request It does not matter if the records were
+// happens always for every request. It does not matter if the records were
 // independently failed: from the request issuing perspective, the batch is
 // still inflight.
 func (b *recBatch) decInflight() {
 	recBuf := b.owner
 	recBuf.inflight--
-	if recBuf.inflight != 0 {
-		return
-	}
 	if recBuf.inflight < 0 {
 		panic("record buffer went negative inflight!")
+	}
+	if recBuf.inflight != 0 {
+		return
 	}
 	oldSink := recBuf.inflightOnSink
 	recBuf.inflightOnSink = nil
@@ -1395,10 +1399,11 @@ type produceRequest struct {
 
 	backoffSeq uint32
 
-	txnID   *string
-	acks    int16
-	timeout int32
-	batches seqRecBatches
+	txnID       *string
+	acks        int16
+	timeout     int32
+	batches     seqRecBatches
+	batchesFlat []*recBatch
 
 	producerID    int64
 	producerEpoch int16
@@ -1497,7 +1502,17 @@ func (r *produceRequest) tryAddBatch(produceVersion int32, recBuf *recBuf, batch
 		recBuf.seq,
 		batch,
 	)
+	r.batchesFlat = append(r.batchesFlat, batch)
 	return true
+}
+
+// decBatchesInflight is called at the end of handling a req response.
+func (r *produceRequest) decBatchesInflight() {
+	for _, batch := range r.batchesFlat {
+		batch.owner.mu.Lock()
+		batch.decInflight()
+		batch.owner.mu.Unlock()
+	}
 }
 
 // seqRecBatch: a recBatch with a sequence number.
