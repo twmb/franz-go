@@ -1,3 +1,22 @@
+v0.10.1
+===
+
+This fix contains an important bugfix for some behavior introduced in v0.9.1,
+as well as extra debug logging messages, and a few other general improvements.
+Some more errors are now retriable in more cases, and the client can now
+tolerate some input seeds being invalid when others are not invalid.
+
+It is highly recommended that any use of v0.9.1 switch to v0.10.1. If on v0.9.1
+and a produced batch has a retriable error, and then some cluster maintenance
+causes the partition to move to a different broker, the client will be unable
+to continue producing to the partition.
+
+- [`029f5e3`](https://github.com/twmb/franz-go/commit/029f5e3) **bugfix** sink: fix decInflight double decrement bug
+- [`2cf62e2`](https://github.com/twmb/franz-go/commit/2cf62e2) sink: properly debug log the number of records written
+- [`370c18e`](https://github.com/twmb/franz-go/commit/370c18e) and [`caadb8b`](https://github.com/twmb/franz-go/commit/caadb8b) **feature**: add LeastBackupPartitioner
+- [`0fee54c`](https://github.com/twmb/franz-go/commit/0fee54c) and [`589c5e5`](https://github.com/twmb/franz-go/commit/589c5e5) add errUnknownBroker and io.EOF to be retriable errors in sink; add errUnknownBroker to be skippable in the client
+- [`ec0c992`](https://github.com/twmb/franz-go/commit/ec0c992) client improvement: retry more when input brokers are invalid
+
 v0.10.0
 ===
 
