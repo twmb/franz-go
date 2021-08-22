@@ -1684,7 +1684,7 @@ func (cl *Client) CommitRecords(ctx context.Context, rs ...*Record) error {
 		}
 		toffsets[r.Partition] = EpochOffset{
 			r.LeaderEpoch,
-			r.Offset,
+			r.Offset + 1, // need to advice to next offset to move forward
 		}
 	}
 
