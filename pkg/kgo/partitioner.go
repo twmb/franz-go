@@ -23,9 +23,6 @@ type Partitioner interface {
 
 // TopicPartitioner partitions records in an individual topic.
 type TopicPartitioner interface {
-	// OnNewBatch is called when producing a record if that record would
-	// trigger a new batch on its current partition.
-	OnNewBatch()
 	// RequiresConsistency returns true if a record must hash to the same
 	// partition even if a partition is down.
 	// If true, a record may hash to a partition that cannot be written to
@@ -36,7 +33,20 @@ type TopicPartitioner interface {
 	Partition(r *Record, n int) int
 }
 
-// TopicBackupPartitioner is an optional extension interface to the
+// TopicPartitionerOnNewBatch is an optional extension interface to
+// TopicPartitioner that calls OnNewBatch before any new batch is created. If
+// buffering a record would cause a new batch, OnNewBatch is called.
+//
+// This interface allows for partitioner implementations that effectively pin
+// to a partition until a new batch is created, after which the partitioner can
+// choose which next partition to use.
+type TopicPartitionerOnNewBatch interface {
+	// OnNewBatch is called when producing a record if that record would
+	// trigger a new batch on its current partition.
+	OnNewBatch()
+}
+
+// TopicBackupPartitioner is an optional extension interface to
 // TopicPartitioner that can partition by the number of records buffered.
 //
 // If a partitioner implements this interface, the Partition function will
@@ -105,7 +115,6 @@ type basicTopicPartitioner struct {
 	fn func(*Record, int) int
 }
 
-func (*basicTopicPartitioner) OnNewBatch()                      {}
 func (*basicTopicPartitioner) RequiresConsistency(*Record) bool { return true }
 func (b *basicTopicPartitioner) Partition(r *Record, n int) int { return b.fn(r, n) }
 
@@ -121,6 +130,34 @@ func ManualPartitioner() Partitioner {
 			return int(r.Partition)
 		}
 	})
+}
+
+// RoundRobinPartitioner is a partitioner that round-robin's through all
+// available partitions. This algorithm has lower throughput and causes higher
+// CPU load on brokers, but can be useful if you want to ensure an even
+// distribution of records to partitions.
+func RoundRobinPartitioner() Partitioner {
+	return new(roundRobinPartitioner)
+}
+
+type roundRobinPartitioner struct{}
+
+func (*roundRobinPartitioner) ForTopic(string) TopicPartitioner {
+	return new(roundRobinTopicPartitioner)
+}
+
+type roundRobinTopicPartitioner struct {
+	on int
+}
+
+func (*roundRobinTopicPartitioner) RequiresConsistency(*Record) bool { return false }
+func (r *roundRobinTopicPartitioner) Partition(_ *Record, n int) int {
+	if r.on >= n {
+		r.on = 0
+	}
+	ret := r.on
+	r.on++
+	return ret
 }
 
 // LeastBackupPartitioner prioritizes partitioning by three factors, in order:

@@ -423,9 +423,11 @@ func (cl *Client) doPartitionRecord(parts *topicPartitions, partsData *topicPart
 
 	partition := mapping[pick]
 
-	processed := partition.records.bufferRecord(pr, true) // KIP-480
+	onNewBatch, _ := parts.partitioner.(TopicPartitionerOnNewBatch)
+	abortOnNewBatch := onNewBatch != nil
+	processed := partition.records.bufferRecord(pr, abortOnNewBatch) // KIP-480
 	if !processed {
-		parts.partitioner.OnNewBatch()
+		onNewBatch.OnNewBatch()
 
 		if tlp != nil {
 			parts.lb.mapping = mapping
