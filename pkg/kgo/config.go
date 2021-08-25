@@ -163,6 +163,7 @@ type cfg struct {
 	setCommitCallback bool
 
 	autocommitDisable  bool // true if autocommit was disabled or we are transactional
+	autocommitGreedy   bool
 	autocommitInterval time.Duration
 	commitCallback     func(*Client, *kmsg.OffsetCommitRequest, *kmsg.OffsetCommitResponse, error)
 }
@@ -1132,24 +1133,14 @@ func ConsumeRegex() ConsumerOpt {
 // ConsumerGroup sets the consumer group for the client to join and consume in.
 // This option is required if using any other group options.
 //
-// Note that when group consuming, the default is to autocommit every 5s.
-// Autocommitting risks losing data if your applications crashes after
-// autocommitting but before you have processed polled records. To ensure
-// that you lose absolutely no data, you can disable autocommitting and
-// manually commit, like so:
-//
-//     if err := cl.CommitUncommittedOffsets(context.Background()) {
-//             // handle err; unable to commit
-//     }
-//
-// The main downside with disabling autocommitting is that you run the risk of
-// some duplicate processing of records than necessary. See the documentation
-// on DisableAutoCommit for more details.
-//
-// If you can tolerate a little bit of data loss from crashes because you do
-// not expect to ever crash, then relying on autocommitting is a fine option.
-// However, if you can tolerate a little bit of duplicate processing, manually
-// committing is very easy.
+// Note that when group consuming, the default is to autocommit every 5s. To be
+// safe, autocommitting only commits what is *previously* polled. If you poll
+// once, nothing will be committed. If you poll again, the first poll is
+// available to be committed. This ensures at-least-once processing, but does
+// mean there is likely some duplicate processing during rebalances. When your
+// client shuts down, you should issue one final synchronous commit before
+// leaving the group (because you will not be polling again, and you are not
+// waiting for an autocommit).
 func ConsumerGroup(group string) GroupOpt {
 	return groupOpt{func(cfg *cfg) { cfg.group = group }}
 }
@@ -1237,8 +1228,8 @@ func RequireStableFetchOffsets() GroupOpt {
 // interval. It is possible for the group, immediately after finishing a
 // balance, to re-enter a new balancing session.
 //
-// The OnAssigned function is passed the group's context, which is only
-// canceled if the group is left or the client is closed.
+// The OnAssigned function is passed the client's context, which is only
+// canceled if the client is closed.
 func OnAssigned(onAssigned func(context.Context, *Client, map[string][]int32)) GroupOpt {
 	return groupOpt{func(cfg *cfg) { cfg.onAssigned, cfg.setAssigned = onAssigned, true }}
 }
@@ -1251,17 +1242,14 @@ func OnAssigned(onAssigned func(context.Context, *Client, map[string][]int32)) G
 // balance, to re-enter a new balancing session.
 //
 // If autocommit is enabled, the default OnRevoked is a blocking commit all
-// offsets. The reason for a blocking commit is so that no later commit cancels
-// the blocking commit. If the commit in OnRevoked were canceled, then the
-// rebalance would proceed immediately, the commit that canceled the blocking
-// commit would fail, and duplicates could be consumed after the rebalance
-// completes.
+// non-dirty offsets (where dirty is the most recent poll). The reason for a
+// blocking commit is so that no later commit cancels the blocking commit. If
+// the commit in OnRevoked were canceled, then the rebalance would proceed
+// immediately, the commit that canceled the blocking commit would fail, and
+// duplicates could be consumed after the rebalance completes.
 //
-// The OnRevoked function is passed the group's context, which is only canceled
-// if the group is left or the client is closed. Since OnRevoked is called when
-// leaving a group, you likely want to commit before leaving, and to ignore
-// context.Canceled / return early if your handling in OnRevoked fails due to
-// the context being canceled.
+// The OnRevoked function is passed the client's context, which is only
+// canceled if the client is closed.
 //
 // OnRevoked function is called at the end of a group session even if there are
 // no partitions being revoked.
@@ -1306,6 +1294,14 @@ func OnLost(onLost func(context.Context, *Client, map[string][]int32)) GroupOpt 
 // aware of.
 func DisableAutoCommit() GroupOpt {
 	return groupOpt{func(cfg *cfg) { cfg.autocommitDisable = true }}
+}
+
+// GreedyAutoCommit opts in to committing everything that has been polled when
+// autocommitting (the dirty offsets), rather than committing what has
+// previously been polled. This option may result in message loss if your
+// application crashes.
+func GreedyAutoCommit() GroupOpt {
+	return groupOpt{func(cfg *cfg) { cfg.autocommitGreedy = true }}
 }
 
 // AutoCommitInterval sets how long to go between autocommits, overriding the

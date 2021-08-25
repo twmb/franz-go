@@ -115,33 +115,35 @@ func (c *testConsumer) goGroupETL(etlsBeforeQuit int) {
 func (c *testConsumer) etl(etlsBeforeQuit int) {
 	defer c.wg.Done()
 
+	netls := 0 // for if etlsBeforeQuit is non-negative
+
 	opts := []Opt{
 		WithLogger(testLogger()),
 		ConsumerGroup(c.group),
 		ConsumeTopics(c.consumeFrom),
 		Balancers(c.balancer),
-	}
 
-	if etlsBeforeQuit >= 0 {
-		// If we quit before consuming to the end, the behavior we are
-		// triggering is to poll a batch and _not_ commit. Thus, if we
-		// have etlsBeforeQuit, we do _not_ commit on leave, and so we
-		// disable autocommitting.
+		// Even with autocommitting, autocommitting does not commit
+		// *the latest* when being revoked. We always want to commit
+		// everything we have processed, because our loop below always
+		// is successful. If we do not commit on revoke, we would have
+		// duplicate processing.
 		//
-		// However, we still want to commit on valid rebalances, so we
-		// set that option, BUT we do not want to commit on lost, which
-		// triggers when we leave.
-		opts = append(opts,
-			DisableAutoCommit(),
-			OnRevoked(func(ctx context.Context, cl *Client, _ map[string][]int32) {
-				// context.Canceled means the client left the
-				// group, so we ignore that.
-				if err := cl.CommitUncommittedOffsets(ctx); err != nil && err != context.Canceled {
-					c.errCh <- fmt.Errorf("unable to commit: %v", err)
-				}
-			}),
-			OnLost(func(context.Context, *Client, map[string][]int32) {}),
-		)
+		// If we have etlsBeforeQuit, the behavior we want to trigger
+		// is to *not* commit when we leave.
+		//
+		// Lastly, we do not want to fall back from OnLost: OnLost
+		// should not be called due to us not erroring, but we may as
+		// well explicitly disable it.
+		OnRevoked(func(ctx context.Context, cl *Client, _ map[string][]int32) {
+			if etlsBeforeQuit >= 0 && netls >= etlsBeforeQuit {
+				return
+			}
+			if err := cl.CommitUncommittedOffsets(ctx); err != nil {
+				c.errCh <- fmt.Errorf("unable to commit: %v", err)
+			}
+		}),
+		OnLost(func(context.Context, *Client, map[string][]int32) {}),
 	}
 
 	cl, _ := NewClient(opts...)
@@ -154,8 +156,6 @@ func (c *testConsumer) etl(etlsBeforeQuit int) {
 			c.errCh <- fmt.Errorf("unable to flush: %v", err)
 		}
 	}()
-
-	netls := 0 // for if etlsBeforeQuit is non-negative
 
 	for {
 
@@ -178,7 +178,7 @@ func (c *testConsumer) etl(etlsBeforeQuit int) {
 			if consumed := atomic.LoadUint64(&c.consumed); consumed == testRecordLimit {
 				return
 			} else if consumed > testRecordLimit {
-				panic("invalid: consumed too much")
+				panic(fmt.Sprintf("invalid: consumed too much from %s (group %s)", c.consumeFrom, c.group))
 			}
 		}
 
@@ -204,7 +204,7 @@ func (c *testConsumer) etl(etlsBeforeQuit int) {
 			c.mu.Lock()
 			// check dup
 			if _, exists := c.partOffsets[partOffset{r.Partition, r.Offset}]; exists {
-				c.errCh <- fmt.Errorf("saw double offset p%do%d", r.Partition, r.Offset)
+				c.errCh <- fmt.Errorf("saw double offset t %s p%do%d", r.Topic, r.Partition, r.Offset)
 			}
 			c.partOffsets[partOffset{r.Partition, r.Offset}] = struct{}{}
 

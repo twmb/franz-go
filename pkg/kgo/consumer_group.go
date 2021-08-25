@@ -167,6 +167,30 @@ func (c *consumer) initGroup() {
 		g.cfg.autocommitDisable = true
 	}
 
+	for _, logOn := range []struct {
+		name string
+		set  *func(context.Context, *Client, map[string][]int32)
+	}{
+		{"OnAssigned", &g.cfg.onAssigned},
+		{"OnRevoked", &g.cfg.onRevoked},
+		{"OnLost", &g.cfg.onLost},
+	} {
+		user := *logOn.set
+		name := logOn.name
+		*logOn.set = func(ctx context.Context, cl *Client, m map[string][]int32) {
+			var ctxExpired bool
+			select {
+			case <-ctx.Done():
+				ctxExpired = true
+			default:
+			}
+			cl.cfg.logger.Log(LogLevelDebug, "entering "+name, "with", m, "context_expired", ctxExpired)
+			if user != nil {
+				user(ctx, cl, m)
+			}
+		}
+	}
+
 	// For non-regex topics, we explicitly ensure they exist for loading
 	// metadata. This is of no impact if we are *also* consuming via regex,
 	// but that is no problem.
@@ -231,16 +255,16 @@ func (g *groupConsumer) manage() {
 			// onRevoked, but since we are handling this case for
 			// the cooperative consumer we may as well just also
 			// include the eager consumer.
-			g.cfg.onRevoked(g.ctx, g.cl, g.nowAssigned)
+			g.cfg.onRevoked(g.cl.ctx, g.cl, g.nowAssigned)
 		} else if g.cfg.onLost != nil {
 			// Any other error is perceived as a fatal error,
 			// and we go into OnLost as appropriate.
-			g.cfg.onLost(g.ctx, g.cl, g.nowAssigned)
+			g.cfg.onLost(g.cl.ctx, g.cl, g.nowAssigned)
 			hook()
 
 		} else if g.cfg.onRevoked != nil {
 			// If OnLost is not specified, we fallback to OnRevoked.
-			g.cfg.onRevoked(g.ctx, g.cl, g.nowAssigned)
+			g.cfg.onRevoked(g.cl.ctx, g.cl, g.nowAssigned)
 			hook()
 		}
 
@@ -424,7 +448,7 @@ func (g *groupConsumer) revoke(stage revokeStage, lost map[string][]int32, leavi
 			g.cfg.logger.Log(LogLevelInfo, "cooperative consumer revoking prior assigned partitions because leaving group", "group", g.cfg.group, "revoking", g.nowAssigned)
 		}
 		if g.cfg.onRevoked != nil {
-			g.cfg.onRevoked(g.ctx, g.cl, g.nowAssigned)
+			g.cfg.onRevoked(g.cl.ctx, g.cl, g.nowAssigned)
 		}
 		g.nowAssigned = nil
 
@@ -486,7 +510,7 @@ func (g *groupConsumer) revoke(stage revokeStage, lost map[string][]int32, leavi
 			g.cfg.logger.Log(LogLevelInfo, "cooperative consumer calling onRevoke", "group", g.cfg.group, "lost", lost, "stage", stage)
 		}
 		if g.cfg.onRevoked != nil {
-			g.cfg.onRevoked(g.ctx, g.cl, lost)
+			g.cfg.onRevoked(g.cl.ctx, g.cl, lost)
 		}
 	}
 
@@ -558,7 +582,7 @@ func (s *assignRevokeSession) assign(g *groupConsumer, newAssigned map[string][]
 			// We always call on assigned, even if nothing new is
 			// assigned. This allows consumers to know that
 			// assignment is done and do setup logic.
-			g.cfg.onAssigned(g.ctx, g.cl, newAssigned)
+			g.cfg.onAssigned(g.cl.ctx, g.cl, newAssigned)
 		}
 	}()
 	return s.assignDone
@@ -1157,6 +1181,7 @@ start:
 				Offset: offset.at,
 			}
 			topicUncommitted[partition] = uncommit{
+				dirty:     committed,
 				head:      committed,
 				committed: committed,
 			}
@@ -1265,8 +1290,9 @@ func (g *groupConsumer) findNewAssignments() {
 // The reason head is just past the latest offset is because we want
 // to commit TO an offset, not BEFORE an offset.
 type uncommit struct {
-	head      EpochOffset
-	committed EpochOffset
+	dirty     EpochOffset // if autocommitting, what will move to head on next Poll
+	head      EpochOffset // ready to commit
+	committed EpochOffset // what is committed
 }
 
 // EpochOffset combines a record offset with the leader epoch the broker
@@ -1282,6 +1308,8 @@ type uncommitted map[string]map[int32]uncommit
 func (g *groupConsumer) updateUncommitted(fetches Fetches) {
 	var b bytes.Buffer
 	debug := g.cfg.logger.Level() >= LogLevelDebug
+
+	setHead := g.cfg.autocommitDisable || g.cfg.autocommitGreedy
 
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -1311,19 +1339,28 @@ func (g *groupConsumer) updateUncommitted(fetches Fetches) {
 					}
 				}
 
-				uncommit := topicOffsets[partition.Partition]
-
 				// Our new head points just past the final consumed offset,
 				// that is, if we rejoin, this is the offset to begin at.
-				newOffset := final.Offset + 1
-				if debug {
-					fmt.Fprintf(&b, "%d{%d=>%d}, ", partition.Partition, uncommit.head.Offset, newOffset)
-				}
-				uncommit.head = EpochOffset{
+				set := EpochOffset{
 					final.LeaderEpoch, // -1 if old message / unknown
-					newOffset,
+					final.Offset + 1,
 				}
-				topicOffsets[partition.Partition] = uncommit
+				prior := topicOffsets[partition.Partition]
+
+				if debug {
+					if setHead {
+						fmt.Fprintf(&b, "%d{%d=>%d}, ", partition.Partition, prior.head.Offset, set.Offset)
+					} else {
+						fmt.Fprintf(&b, "%d{%d=>%d=>%d}, ", partition.Partition, prior.head.Offset, prior.dirty.Offset, set.Offset)
+					}
+				}
+
+				prior.head = prior.dirty
+				prior.dirty = set
+				if setHead {
+					prior.head = set
+				}
+				topicOffsets[partition.Partition] = prior
 			}
 
 			if debug {
@@ -1412,9 +1449,27 @@ func (g *groupConsumer) updateCommitted(
 				fmt.Fprintf(&b, "%d{%d=>%d}, ", reqPart.Partition, uncommit.committed.Offset, reqPart.Offset)
 			}
 
-			uncommit.committed = EpochOffset{
+			set := EpochOffset{
 				reqPart.LeaderEpoch,
 				reqPart.Offset,
+			}
+			uncommit.committed = set
+
+			// We always commit either dirty offsets or head
+			// offsets. For sanity, we bump both dirty/head to the
+			// commit if they are before the commit. We only expect
+			// head to be before the commit, if committing manually
+			// through UncommittedOffsets in an OnRevoke with
+			// autocommitting enabled.
+			for _, next := range []*EpochOffset{
+				&uncommit.head,
+				&uncommit.committed,
+			} {
+				if set.Epoch > next.Epoch ||
+					set.Epoch == next.Epoch &&
+						set.Offset > next.Offset {
+					*next = set
+				}
 			}
 			topic[respPart.Partition] = uncommit
 		}
@@ -1473,10 +1528,14 @@ func (g *groupConsumer) loopCommit() {
 		// after the group context is canceled (which is the first
 		// thing that happens so as to quit the manage loop before
 		// leaving a group).
+		//
+		// We always commit only the head. If we are autocommitting
+		// dirty, then updateUncommitted updates the head to dirty
+		// offsets.
 		g.mu.Lock()
 		if !g.blockAuto {
 			g.cfg.logger.Log(LogLevelDebug, "autocommitting", "group", g.cfg.group)
-			g.commit(g.ctx, g.getUncommittedLocked(true), g.cfg.commitCallback)
+			g.commit(g.ctx, g.getUncommittedLocked(true, false), g.cfg.commitCallback)
 		}
 		g.mu.Unlock()
 	}
@@ -1536,21 +1595,19 @@ func (cl *Client) SetOffsets(setOffsets map[string]map[int32]EpochOffset) {
 		var topicAssigns map[int32]Offset
 		for partition, epochOffset := range partitions {
 			current, exists := topicUncommitted[partition]
-			if exists && current.head == epochOffset {
-				current.committed = epochOffset
-				topicUncommitted[partition] = current
-				continue
+			topicUncommitted[partition] = uncommit{
+				dirty:     epochOffset,
+				head:      epochOffset,
+				committed: epochOffset,
 			}
-			if topicAssigns == nil {
+			if exists && current.dirty == epochOffset {
+				continue
+			} else if topicAssigns == nil {
 				topicAssigns = make(map[int32]Offset, len(partitions))
 			}
 			topicAssigns[partition] = Offset{
 				at:    epochOffset.Offset,
 				epoch: epochOffset.Epoch,
-			}
-			topicUncommitted[partition] = uncommit{
-				head:      epochOffset,
-				committed: epochOffset,
 			}
 		}
 		if len(topicAssigns) > 0 {
@@ -1582,7 +1639,7 @@ func (cl *Client) SetOffsets(setOffsets map[string]map[int32]EpochOffset) {
 // may fail with REBALANCE_IN_PROGRESS.
 func (cl *Client) UncommittedOffsets() map[string]map[int32]EpochOffset {
 	if g := cl.consumer.g; g != nil {
-		return g.getUncommitted()
+		return g.getUncommitted(true)
 	}
 	return nil
 }
@@ -1599,16 +1656,16 @@ func (cl *Client) CommittedOffsets() map[string]map[int32]EpochOffset {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
-	return g.getUncommittedLocked(false)
+	return g.getUncommittedLocked(false, false)
 }
 
-func (g *groupConsumer) getUncommitted() map[string]map[int32]EpochOffset {
+func (g *groupConsumer) getUncommitted(dirty bool) map[string]map[int32]EpochOffset {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	return g.getUncommittedLocked(true)
+	return g.getUncommittedLocked(true, dirty)
 }
 
-func (g *groupConsumer) getUncommittedLocked(head bool) map[string]map[int32]EpochOffset {
+func (g *groupConsumer) getUncommittedLocked(head, dirty bool) map[string]map[int32]EpochOffset {
 	if g.uncommitted == nil {
 		return nil
 	}
@@ -1617,7 +1674,7 @@ func (g *groupConsumer) getUncommittedLocked(head bool) map[string]map[int32]Epo
 	for topic, partitions := range g.uncommitted {
 		var topicUncommitted map[int32]EpochOffset
 		for partition, uncommit := range partitions {
-			if head && uncommit.head == uncommit.committed {
+			if head && uncommit.dirty == uncommit.committed {
 				continue
 			}
 			if topicUncommitted == nil {
@@ -1631,7 +1688,11 @@ func (g *groupConsumer) getUncommittedLocked(head bool) map[string]map[int32]Epo
 				}
 			}
 			if head {
-				topicUncommitted[partition] = uncommit.head
+				if dirty {
+					topicUncommitted[partition] = uncommit.dirty
+				} else {
+					topicUncommitted[partition] = uncommit.head
+				}
 			} else {
 				topicUncommitted[partition] = uncommit.committed
 			}
@@ -1917,7 +1978,7 @@ func (g *groupConsumer) defaultRevoke(context.Context, *Client, map[string][]int
 		// We use the client's context rather than the group context,
 		// because this could come from the group being left. The group
 		// context will already be canceled.
-		g.commitOffsetsSync(g.cl.ctx, g.getUncommitted(), g.cfg.commitCallback)
+		g.commitOffsetsSync(g.cl.ctx, g.getUncommitted(false), g.cfg.commitCallback)
 	}
 }
 
