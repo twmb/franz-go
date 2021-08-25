@@ -133,7 +133,7 @@ type cfg struct {
 	keepControl    bool
 	rack           string
 
-	allowedConcurrentFetches int
+	maxConcurrentFetches int
 
 	topics     map[string]*regexp.Regexp   // topics to consume; if regex is true, values are compiled regular expressions
 	partitions map[string]map[int32]Offset // partitions to directly consume from
@@ -260,7 +260,7 @@ func (cfg *cfg) validate() error {
 		{v: int64(cfg.maxBrokerReadBytes), allowed: int64(cfg.maxBytes), badcmp: i64lt, fmt: "max broker read bytes %v is erroneously less than max fetch bytes %v"},
 
 		// 0 <= allowed concurrency
-		{name: "allowed concurrency", v: int64(cfg.allowedConcurrentFetches), allowed: 0, badcmp: i64lt},
+		{name: "max concurrent fetches", v: int64(cfg.maxConcurrentFetches), allowed: 0, badcmp: i64lt},
 
 		// 1s <= conn timeout overhead <= 15m
 		{name: "conn timeout max overhead", v: int64(cfg.connTimeoutOverhead), allowed: int64(15 * time.Minute), badcmp: i64gt, durs: true},
@@ -432,7 +432,7 @@ func defaultCfg() cfg {
 		resetOffset:    NewOffset().AtStart(),
 		isolationLevel: 0,
 
-		allowedConcurrentFetches: 0, // unbounded default
+		maxConcurrentFetches: 0, // unbounded default
 
 		///////////
 		// group //
@@ -1015,8 +1015,8 @@ func FetchMaxPartitionBytes(b int32) ConsumerOpt {
 	return consumerOpt{func(cfg *cfg) { cfg.maxPartBytes = b }}
 }
 
-// AllowedConcurrentFetches sets the maximum number of fetch requests to allow
-// in flight or buffered at once, overriding the unbounded (i.e. number of
+// MaxConcurrentFetches sets the maximum number of fetch requests to allow in
+// flight or buffered at once, overriding the unbounded (i.e. number of
 // brokers) default.
 //
 // This setting, paired with FetchMaxBytes, can upper bound the maximum amount
@@ -1039,8 +1039,8 @@ func FetchMaxPartitionBytes(b int32) ConsumerOpt {
 //
 // A value of 0 implies the allowed concurrency is unbounded and will be
 // limited only by the number of brokers in the cluster.
-func AllowedConcurrentFetches(n int) ConsumerOpt {
-	return consumerOpt{func(cfg *cfg) { cfg.allowedConcurrentFetches = n }}
+func MaxConcurrentFetches(n int) ConsumerOpt {
+	return consumerOpt{func(cfg *cfg) { cfg.maxConcurrentFetches = n }}
 }
 
 // ConsumeResetOffset sets the offset to restart consuming from when a

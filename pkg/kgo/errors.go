@@ -93,7 +93,7 @@ var (
 
 	// A temporary error returned when a broker chosen for a request is
 	// stopped due to a concurrent metadata response.
-	errChosenBrokerDead = errors.New("the internal broker struct chosen to issue this requesthas died--either the broker id is migrating or no longer exists")
+	errChosenBrokerDead = errors.New("the internal broker struct chosen to issue this request has died--either the broker id is migrating or no longer exists")
 
 	errProducerIDLoadFail = errors.New("unable to initialize a producer ID due to request failures")
 

@@ -795,7 +795,7 @@ type consumerSession struct {
 	// they send back when they are done. Thus, three level chan.
 	desireFetchCh       chan chan chan struct{}
 	cancelFetchCh       chan chan chan struct{}
-	allowedConcurrency  int
+	allowedFetches      int
 	fetchManagerStarted uint32 // atomic, once 1, we start the fetch manager
 
 	// Workers signify the number of fetch and list / epoch goroutines that
@@ -824,9 +824,9 @@ func (c *consumer) newConsumerSession(tps *topicsPartitions) *consumerSession {
 
 		tps: tps,
 
-		desireFetchCh:      make(chan chan chan struct{}, 8),
-		cancelFetchCh:      make(chan chan chan struct{}, 4),
-		allowedConcurrency: c.cl.cfg.allowedConcurrentFetches,
+		desireFetchCh:  make(chan chan chan struct{}, 8),
+		cancelFetchCh:  make(chan chan chan struct{}, 4),
+		allowedFetches: c.cl.cfg.maxConcurrentFetches,
 	}
 	session.workersCond = sync.NewCond(&session.workersMu)
 	return session
@@ -875,7 +875,7 @@ func (c *consumerSession) manageFetchConcurrency() {
 			ctxCh = nil
 		}
 
-		if len(wantFetch) > 0 && (activeFetches < c.allowedConcurrency || c.allowedConcurrency == 0) { // 0 means unbounded
+		if len(wantFetch) > 0 && (activeFetches < c.allowedFetches || c.allowedFetches == 0) { // 0 means unbounded
 			wantFetch[0] <- doneFetch
 			wantFetch = wantFetch[1:]
 			activeFetches++
