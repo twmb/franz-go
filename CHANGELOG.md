@@ -1,3 +1,23 @@
+v0.10.2
+===
+
+This release contains everything currently outstanding for a v1.0.0 release.
+Primarily, this release addresses #57, meaning that by default, auto committing
+no longer has the potential to lose records during crashes. It is now highly
+recommended to have a manual `CommitUncommittedOffsets` before shutting down if
+autocommitting, just to prevent any unnecessary duplicate messages.
+
+The aim is to let this release bake for a day / a few days / a week so that if
+anybody tries it out, I can receive any bug reports.
+
+- [`31754a9`](https://github.com/twmb/franz-go/commit/31754a9) **feature-ish** compression: switch snappy to @klauspost's s2
+- [`28bba43`](https://github.com/twmb/franz-go/commit/28bba43) autocommitting: only commit previously polled fetches
+- [`4fb0de2`](https://github.com/twmb/franz-go/commit/4fb0de2) `isRetriableBrokerErr`: opt in `net.ErrClosed`, restructure
+- [`0d01f74`](https://github.com/twmb/franz-go/commit/0d01f74) **feature** add `RoundRobinPartitioner`
+- [`5be804d`](https://github.com/twmb/franz-go/commit/5be804d) `LeastBackupPartitioner`: fix, speedup
+- [`733848b`](https://github.com/twmb/franz-go/commit/733848b) **bugfix** CommitRecords: commit next offset to move forward
+- [`4c20135`](https://github.com/twmb/franz-go/commit/4c20135) **bugfix/simplification** sink: simplify decInflight for batches in req
+
 v0.10.1
 ===
 
