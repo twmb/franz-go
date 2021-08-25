@@ -36,20 +36,24 @@ func isRetriableBrokerErr(err error) bool {
 	if errors.As(err, &se) {
 		return true
 	}
+	// EOF can be returned if a broker kills a connection unexpectedly, and
+	// we can retry that. Same for ErrClosed.
+	if errors.Is(err, net.ErrClosed) || errors.Is(err, io.EOF) {
+		return true
+	}
+	// We could have chosen a broker, and then a concurrent metadata update
+	// could have removed it.
+	if errors.Is(err, errChosenBrokerDead) {
+		return true
+	}
+	// We really should not get correlation mismatch, but if we do, we can
+	// retry.
+	if errors.Is(err, errCorrelationIDMismatch) {
+		return true
+	}
 	var tempErr interface{ Temporary() bool }
 	if errors.As(err, &tempErr) {
 		return tempErr.Temporary()
-	}
-
-	// EOF can be returned if a broker kills a connection unexpectedly, and
-	// we can retry that.
-	if errors.Is(err, io.EOF) {
-		return true
-	}
-	switch err {
-	case errChosenBrokerDead,
-		errCorrelationIDMismatch:
-		return true
 	}
 	return false
 }
