@@ -10,6 +10,9 @@ import (
 )
 
 func isRetriableBrokerErr(err error) bool {
+	if err == nil { // sanity
+		return true
+	}
 	// https://github.com/golang/go/issues/45729
 	//
 	// Temporary is relatively useless. We will still check for the
@@ -38,7 +41,7 @@ func isRetriableBrokerErr(err error) bool {
 	}
 	// EOF can be returned if a broker kills a connection unexpectedly, and
 	// we can retry that. Same for ErrClosed.
-	if errors.Is(err, net.ErrClosed) || errors.Is(err, io.EOF) {
+	if isNetClosedErr(err) || errors.Is(err, io.EOF) {
 		return true
 	}
 	// We could have chosen a broker, and then a concurrent metadata update

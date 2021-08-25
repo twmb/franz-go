@@ -1,6 +1,6 @@
 module github.com/twmb/franz-go
 
-go 1.13
+go 1.15
 
 require (
 	github.com/golang/snappy v0.0.4 // indirect
