@@ -489,14 +489,17 @@ func WithLogger(l Logger) Opt {
 // ConnTimeoutOverhead uses the given time as overhead while deadlining
 // requests, overriding the default overhead of 20s.
 //
-// For most requests, the overhead will simply be this timeout. However, for any
-// request with a TimeoutMillis field, the overhead is added on top of the
+// For most requests, the overhead will simply be this timeout. However, for
+// any request with a TimeoutMillis field, the overhead is added on top of the
 // request's TimeoutMillis. This ensures that we give Kafka enough time to
 // actually process the request given the timeout, while still having a
 // deadline on the connection as a whole to ensure it does not hang.
 //
 // For writes, the timeout is always the overhead. We buffer writes in our
 // client before one quick flush, so we always expect the write to be fast.
+//
+// This option is roughly equivalent to request.timeout.ms, but grants
+// additional time to requests that have timeout fields.
 func ConnTimeoutOverhead(overhead time.Duration) Opt {
 	return clientOpt{func(cfg *cfg) { cfg.connTimeoutOverhead = overhead }}
 }
@@ -846,6 +849,11 @@ func ProduceRequestTimeout(limit time.Duration) ProducerOpt {
 // It is safe to enforce if a record was never issued in a request to Kafka, or
 // if it was requested and received a response.
 //
+// If a record fails due to retries, all records buffered in the same partition
+// are failed as well. This ensures gapless ordering: the client will not fail
+// one record only to produce a later one successfully. This also allows for
+// easier sequence number ordering internally.
+//
 // This option is different from RequestRetries to allow finer grained control
 // of when to fail when producing records.
 func RecordRetries(n int) ProducerOpt {
@@ -915,8 +923,15 @@ func ManualFlushing() ProducerOpt {
 // this option with lingering. In that case, simply add the linger to the
 // record timeout to avoid problems.
 //
+// If a record times out, all records buffered in the same partition are failed
+// as well. This ensures gapless ordering: the client will not fail one record
+// only to produce a later one successfully. This also allows for easier
+// sequence number ordering internally.
+//
 // The timeout is only evaluated evaluated before writing a request or after a
 // produce response. Thus, a sink backoff may delay record timeout slightly.
+//
+// This option is roughly equivalent to delivery.timeout.ms.
 func RecordTimeout(timeout time.Duration) ProducerOpt {
 	return producerOpt{func(cfg *cfg) { cfg.recordTimeout = timeout }}
 }
