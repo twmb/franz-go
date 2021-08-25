@@ -91,7 +91,7 @@ func consume(cl *kgo.Client, style int) {
 			fetches.EachRecord(func(*kgo.Record) {
 				seen++
 			})
-			fmt.Printf("processed %d records--because of autocommitting, we could have lost these records if a commit happened and then the client crashed before this log!\n", seen)
+			fmt.Printf("processed %d records--autocommitting now allows the **prior** poll to be available for committing, nothing can be lost!\n", seen)
 
 		case 1:
 			var rs []*kgo.Record
