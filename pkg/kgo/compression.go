@@ -9,7 +9,7 @@ import (
 	"runtime"
 	"sync"
 
-	"github.com/golang/snappy"
+	"github.com/klauspost/compress/s2"
 	"github.com/klauspost/compress/zstd"
 	"github.com/pierrec/lz4/v4"
 )
@@ -196,7 +196,7 @@ func (c *compressor) compress(dst *sliceWriter, src []byte, produceRequestVersio
 		}
 
 	case 2:
-		dst.inner = snappy.Encode(dst.inner[:cap(dst.inner)], src)
+		dst.inner = s2.EncodeSnappy(dst.inner[:cap(dst.inner)], src)
 
 	case 3:
 		lz := c.lz4Pool.Get().(*lz4.Writer)
@@ -267,7 +267,7 @@ func (d *decompressor) decompress(src []byte, codec byte) ([]byte, error) {
 		if len(src) > 16 && bytes.HasPrefix(src, xerialPfx) {
 			return xerialDecode(src)
 		}
-		return snappy.Decode(nil, src)
+		return s2.Decode(nil, src)
 	case 3:
 		unlz4 := d.unlz4Pool.Get().(*lz4.Reader)
 		defer d.unlz4Pool.Put(unlz4)
@@ -303,7 +303,7 @@ func xerialDecode(src []byte) ([]byte, error) {
 		if size < 0 || len(src) < int(size) {
 			return nil, errMalformedXerial
 		}
-		if chunk, err = snappy.Decode(chunk[:cap(chunk)], src[:size]); err != nil {
+		if chunk, err = s2.Decode(chunk[:cap(chunk)], src[:size]); err != nil {
 			return nil, err
 		}
 		src = src[size:]
