@@ -96,7 +96,7 @@ for {
 
 	// or a callback function.
 	fetches.EachPartition(func(p kgo.FetchTopicPartition) {
-		for _, record := range p.Partition.Records {
+		for _, record := range p.Records {
 			fmt.Println(string(record.Value), "from range inside a callback!")
 		}
 
