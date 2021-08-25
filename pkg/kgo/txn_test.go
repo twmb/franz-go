@@ -30,6 +30,7 @@ func TestTxnEtl(t *testing.T) {
 		cl, err := NewClient(
 			WithLogger(BasicLogger(os.Stderr, testLogLevel, nil)),
 			TransactionalID("p"+randsha()),
+			TransactionTimeout(2*time.Minute),
 		)
 		if err != nil {
 			panic(err)
@@ -140,6 +141,7 @@ func (c *testConsumer) transact(txnsBeforeQuit int) {
 	defer c.wg.Done()
 	txnSess, _ := NewGroupTransactSession(
 		TransactionalID(randsha()),
+		TransactionTimeout(2*time.Minute),
 		WithLogger(testLogger()),
 		// Control records have their own unique offset, so for testing,
 		// we keep the record to ensure we do not doubly consume control
