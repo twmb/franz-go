@@ -270,6 +270,10 @@ func (cl *Client) PollRecords(ctx context.Context, maxPollRecords int) Fetches {
 	}
 	c := &cl.consumer
 
+	if c.g != nil && !cl.cfg.autocommitDisable && !cl.cfg.autocommitGreedy {
+		c.g.undirtyUncommitted()
+	}
+
 	var fetches Fetches
 	fill := func() {
 		// A group can grab the consumer lock then the group mu and

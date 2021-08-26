@@ -1379,6 +1379,23 @@ func (g *groupConsumer) updateUncommitted(fetches Fetches) {
 	}
 }
 
+// Called at the start of PollXyz only if autocommitting is enabled and we are
+// not committing greedily, this ensures that when we enter poll, everything
+// previously consumed is a candidate for autocommitting.
+func (g *groupConsumer) undirtyUncommitted() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	for _, partitions := range g.uncommitted {
+		for partition, uncommit := range partitions {
+			if uncommit.dirty != uncommit.head {
+				uncommit.head = uncommit.dirty
+				partitions[partition] = uncommit
+			}
+		}
+	}
+}
+
 // updateCommitted updates the group's uncommitted map. This function triply
 // verifies that the resp matches the req as it should and that the req does
 // not somehow contain more than what is in our uncommitted map.
