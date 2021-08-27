@@ -2027,10 +2027,11 @@ func (g *groupConsumer) commit(
 	g.commitDone = commitDone
 
 	req := &kmsg.OffsetCommitRequest{
-		Group:      g.cfg.group,
-		Generation: g.generation,
-		MemberID:   g.memberID,
-		InstanceID: g.cfg.instanceID,
+		Group:               g.cfg.group,
+		Generation:          g.generation,
+		MemberID:            g.memberID,
+		InstanceID:          g.cfg.instanceID,
+		RetentionTimeMillis: -1,
 	}
 
 	if ctx.Done() != nil {
