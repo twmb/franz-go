@@ -1,5 +1,5 @@
 // MetadataRequest requests metadata from Kafka.
-MetadataRequest => key 3, max version 11, flexible v9+
+MetadataRequest => key 3, max version 12, flexible v9+
   // Topics is a list of topics to return metadata about. If this is null
   // in v1+, all topics are included. If this is empty, no topics are.
   // For v0 (<Kafka 0.10.0.0), if this is empty, all topics are included.
@@ -63,7 +63,7 @@ MetadataResponse =>
     // There can be a myriad of other errors for unsuccessful topic creation.
     ErrorCode: int16
     // Topic is the topic this metadata corresponds to.
-    Topic: string
+    Topic: nullable-string
     // The topic ID.
     TopicID: uuid // v10+
     // IsInternal signifies whether this topic is a Kafka internal topic.

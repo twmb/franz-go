@@ -868,8 +868,8 @@ var maxTip = nextMax(max280, func(v listenerKeys) listenerKeys {
 	// KAFKA-10580 2b8aff58b575c199ee8372e5689420c9d77357a5 KIP-516
 	v[1].inc() // 13 fetch
 
+	// KAFKA-10744 1d22b0d70686aef5689b775ea2ea7610a37f3e8c KIP-516
+	v[3].inc() // 12 metadata
+
 	return v
 })
-
-// NOTE when adding to this, be sure to update any raw usages of requests in
-// kgo (because we do not go through NewXyzRequest() to set fields).

@@ -5189,7 +5189,7 @@ type MetadataRequest struct {
 }
 
 func (*MetadataRequest) Key() int16                 { return 3 }
-func (*MetadataRequest) MaxVersion() int16          { return 11 }
+func (*MetadataRequest) MaxVersion() int16          { return 12 }
 func (v *MetadataRequest) SetVersion(version int16) { v.Version = version }
 func (v *MetadataRequest) GetVersion() int16        { return v.Version }
 func (v *MetadataRequest) IsFlexible() bool         { return v.Version >= 9 }
@@ -5484,7 +5484,7 @@ type MetadataResponseTopic struct {
 	ErrorCode int16
 
 	// Topic is the topic this metadata corresponds to.
-	Topic string
+	Topic *string
 
 	// The topic ID.
 	TopicID [16]byte // v10+
@@ -5563,7 +5563,7 @@ type MetadataResponse struct {
 }
 
 func (*MetadataResponse) Key() int16                 { return 3 }
-func (*MetadataResponse) MaxVersion() int16          { return 11 }
+func (*MetadataResponse) MaxVersion() int16          { return 12 }
 func (v *MetadataResponse) SetVersion(version int16) { v.Version = version }
 func (v *MetadataResponse) GetVersion() int16        { return v.Version }
 func (v *MetadataResponse) IsFlexible() bool         { return v.Version >= 9 }
@@ -5646,9 +5646,9 @@ func (v *MetadataResponse) AppendTo(dst []byte) []byte {
 			{
 				v := v.Topic
 				if isFlexible {
-					dst = kbin.AppendCompactString(dst, v)
+					dst = kbin.AppendCompactNullableString(dst, v)
 				} else {
-					dst = kbin.AppendString(dst, v)
+					dst = kbin.AppendNullableString(dst, v)
 				}
 			}
 			if version >= 10 {
@@ -5848,11 +5848,11 @@ func (v *MetadataResponse) ReadFrom(src []byte) error {
 				s.ErrorCode = v
 			}
 			{
-				var v string
+				var v *string
 				if isFlexible {
-					v = b.CompactString()
+					v = b.CompactNullableString()
 				} else {
-					v = b.String()
+					v = b.NullableString()
 				}
 				s.Topic = v
 			}
