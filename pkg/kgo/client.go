@@ -629,7 +629,7 @@ start:
 				// broker is different than the current, we also retry.
 				if r.cl.shouldRetry(tries, err) || r.cl.shouldRetry(tries, retryErr) {
 					if r.cl.waitTries(ctx, tries) {
-						next, err = r.br()
+						next, nextErr = r.br()
 						goto start
 					}
 				} else if r.cl.shouldRetryNext(tries, err) {
