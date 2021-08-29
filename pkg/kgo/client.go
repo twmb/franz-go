@@ -393,8 +393,9 @@ func (cl *Client) fetchMetadataForTopics(ctx context.Context, all bool, topics [
 		req.Topics = []kmsg.MetadataRequestTopic{}
 	} else {
 		for _, topic := range topics {
-			t := topic
-			req.Topics = append(req.Topics, kmsg.MetadataRequestTopic{Topic: &t})
+			reqTopic := kmsg.NewMetadataRequestTopic()
+			reqTopic.Topic = kmsg.StringPtr(topic)
+			req.Topics = append(req.Topics, reqTopic)
 		}
 	}
 	return cl.fetchMetadata(ctx, req, true)
@@ -1622,11 +1623,16 @@ func (cl *Client) fetchMappedMetadata(ctx context.Context, topics []string) (map
 	}
 	mapping := make(map[string]mappedMetadataTopic)
 	for _, topic := range meta.Topics {
+		if topic.Topic == nil {
+			// We do not request with topic IDs, so we should not
+			// receive topic IDs in the response.
+			continue
+		}
 		t := mappedMetadataTopic{
 			topic:   topic,
 			mapping: make(map[int32]kmsg.MetadataResponseTopicPartition),
 		}
-		mapping[topic.Topic] = t
+		mapping[*topic.Topic] = t
 		for _, partition := range topic.Partitions {
 			t.mapping[partition.Partition] = partition
 		}

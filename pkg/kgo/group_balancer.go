@@ -325,11 +325,15 @@ func (g *groupConsumer) balanceGroup(proto string, members []kmsg.JoinGroupRespo
 		}
 		for i := range resp.Topics {
 			t := &resp.Topics[i]
+			if t.Topic == nil {
+				g.cl.cfg.logger.Log(LogLevelWarn, "metadata resp in balance for topic has nil topic, skipping...", "err", kerr.ErrorForCode(t.ErrorCode))
+				continue
+			}
 			if t.ErrorCode != 0 {
 				g.cl.cfg.logger.Log(LogLevelWarn, "metadata resp in balance for topic has error, skipping...", "topic", t.Topic, "err", kerr.ErrorForCode(t.ErrorCode))
 				continue
 			}
-			topicPartitionCount[t.Topic] = int32(len(t.Partitions))
+			topicPartitionCount[*t.Topic] = int32(len(t.Partitions))
 		}
 	}
 

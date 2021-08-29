@@ -344,6 +344,11 @@ func (cl *Client) fetchTopicMetadata(all bool, reqTopics []string) (map[string]*
 
 	for i := range meta.Topics {
 		topicMeta := &meta.Topics[i]
+		if topicMeta.Topic == nil {
+			cl.cfg.logger.Log(LogLevelWarn, "metadata response contained nil topic name even though we did not request with topic IDs, skipping")
+			continue
+		}
+		topic := *topicMeta.Topic
 
 		parts := &topicPartitionsData{
 			loadErr:            kerr.ErrorForCode(topicMeta.ErrorCode),
@@ -351,15 +356,15 @@ func (cl *Client) fetchTopicMetadata(all bool, reqTopics []string) (map[string]*
 			partitions:         make([]*topicPartition, 0, len(topicMeta.Partitions)),
 			writablePartitions: make([]*topicPartition, 0, len(topicMeta.Partitions)),
 		}
-		topics[topicMeta.Topic] = parts
+		topics[topic] = parts
 
 		if parts.loadErr != nil {
 			continue
 		}
 
 		// This 249 limit is in Kafka itself, we copy it here to rely on it while producing.
-		if len(topicMeta.Topic) > 249 {
-			parts.loadErr = fmt.Errorf("invalid long topic name of (len %d) greater than max allowed 249", len(topicMeta.Topic))
+		if len(topic) > 249 {
+			parts.loadErr = fmt.Errorf("invalid long topic name of (len %d) greater than max allowed 249", len(topic))
 			continue
 		}
 
@@ -397,17 +402,17 @@ func (cl *Client) fetchTopicMetadata(all bool, reqTopics []string) (map[string]*
 				records: &recBuf{
 					cl: cl,
 
-					topic:     topicMeta.Topic,
+					topic:     topic,
 					partition: partMeta.Partition,
 
-					maxRecordBatchBytes: cl.maxRecordBatchBytesForTopic(topicMeta.Topic),
+					maxRecordBatchBytes: cl.maxRecordBatchBytesForTopic(topic),
 
 					recBufsIdx: -1,
 					failing:    partMeta.ErrorCode != 0,
 				},
 
 				cursor: &cursor{
-					topic:       topicMeta.Topic,
+					topic:       topic,
 					topicID:     topicMeta.TopicID,
 					partition:   partMeta.Partition,
 					keepControl: cl.cfg.keepControl,
