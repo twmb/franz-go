@@ -88,7 +88,7 @@ func main() {
 		kgo.SeedBrokers(strings.Split(*seedBrokers, ",")...),
 		kgo.DefaultProduceTopic(*topic),
 		kgo.MaxBufferedRecords(250<<20 / *recordBytes + 1),
-		kgo.AllowedConcurrentFetches(3),
+		kgo.MaxConcurrentFetches(3),
 		// We have good compression, so we want to limit what we read
 		// back because snappy deflation will balloon our memory usage.
 		kgo.FetchMaxBytes(5 << 20),
