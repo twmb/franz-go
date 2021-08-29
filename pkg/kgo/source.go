@@ -1501,17 +1501,16 @@ func (f *fetchRequest) SetVersion(v int16) { f.version = v }
 func (f *fetchRequest) GetVersion() int16  { return f.version }
 func (f *fetchRequest) IsFlexible() bool   { return f.version >= 12 } // version 12+ is flexible
 func (f *fetchRequest) AppendTo(dst []byte) []byte {
-	req := kmsg.FetchRequest{
-		Version:        f.version,
-		ReplicaID:      -1,
-		MaxWaitMillis:  f.maxWait,
-		MinBytes:       f.minBytes,
-		MaxBytes:       f.maxBytes,
-		IsolationLevel: f.isolationLevel,
-		SessionID:      f.session.id,
-		SessionEpoch:   f.session.epoch,
-		Rack:           f.rack,
-	}
+	req := kmsg.NewFetchRequest()
+	req.Version = f.version
+	req.ReplicaID = -1
+	req.MaxWaitMillis = f.maxWait
+	req.MinBytes = f.minBytes
+	req.MaxBytes = f.maxBytes
+	req.IsolationLevel = f.isolationLevel
+	req.SessionID = f.session.id
+	req.SessionEpoch = f.session.epoch
+	req.Rack = f.rack
 
 	for topic, partitions := range f.usedOffsets {
 
@@ -1526,21 +1525,21 @@ func (f *fetchRequest) AppendTo(dst []byte) []byte {
 			) {
 
 				if reqTopic == nil {
-					req.Topics = append(req.Topics, kmsg.FetchRequestTopic{
-						Topic:   topic,
-						TopicID: f.topic2id[topic],
-					})
+					t := kmsg.NewFetchRequestTopic()
+					t.Topic = topic
+					t.TopicID = f.topic2id[topic]
+					req.Topics = append(req.Topics, t)
 					reqTopic = &req.Topics[len(req.Topics)-1]
 				}
 
-				reqTopic.Partitions = append(reqTopic.Partitions, kmsg.FetchRequestTopicPartition{
-					Partition:          partition,
-					CurrentLeaderEpoch: cursorOffsetNext.currentLeaderEpoch,
-					FetchOffset:        cursorOffsetNext.offset,
-					LastFetchedEpoch:   -1,
-					LogStartOffset:     -1,
-					PartitionMaxBytes:  f.maxPartBytes,
-				})
+				reqPartition := kmsg.NewFetchRequestTopicPartition()
+				reqPartition.Partition = partition
+				reqPartition.CurrentLeaderEpoch = cursorOffsetNext.currentLeaderEpoch
+				reqPartition.FetchOffset = cursorOffsetNext.offset
+				reqPartition.LastFetchedEpoch = -1
+				reqPartition.LogStartOffset = -1
+				reqPartition.PartitionMaxBytes = f.maxPartBytes
+				reqTopic.Partitions = append(reqTopic.Partitions, reqPartition)
 			}
 		}
 	}
@@ -1553,7 +1552,9 @@ func (*fetchRequest) ReadFrom([]byte) error {
 }
 
 func (f *fetchRequest) ResponseKind() kmsg.Response {
-	return &kmsg.FetchResponse{Version: f.version}
+	r := kmsg.NewPtrFetchResponse()
+	r.Version = f.version
+	return r
 }
 
 // fetchSessions, introduced in KIP-227, allow us to send less information back

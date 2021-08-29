@@ -345,14 +345,13 @@ func (g *groupConsumer) leave() (wait func()) {
 			)
 			// If we error when leaving, there is not much
 			// we can do. We may as well just return.
-			(&kmsg.LeaveGroupRequest{
-				Group:    g.cfg.group,
-				MemberID: g.memberID,
-				Members: []kmsg.LeaveGroupRequestMember{{
-					MemberID: g.memberID,
-					// no instance ID
-				}},
-			}).RequestWith(g.cl.ctx, g.cl)
+			req := kmsg.NewPtrLeaveGroupRequest()
+			req.Group = g.cfg.group
+			req.MemberID = g.memberID
+			member := kmsg.NewLeaveGroupRequestMember()
+			member.MemberID = g.memberID
+			req.Members = append(req.Members, member)
+			req.RequestWith(g.cl.ctx, g.cl)
 		}
 	}()
 
@@ -740,12 +739,11 @@ func (g *groupConsumer) heartbeat(fetchErrCh <-chan error, s *assignRevokeSessio
 
 		if heartbeat {
 			g.cfg.logger.Log(LogLevelDebug, "heartbeating", "group", g.cfg.group)
-			req := &kmsg.HeartbeatRequest{
-				Group:      g.cfg.group,
-				Generation: g.generation,
-				MemberID:   g.memberID,
-				InstanceID: g.cfg.instanceID,
-			}
+			req := kmsg.NewPtrHeartbeatRequest()
+			req.Group = g.cfg.group
+			req.Generation = g.generation
+			req.MemberID = g.memberID
+			req.InstanceID = g.cfg.instanceID
 			var resp *kmsg.HeartbeatResponse
 			if resp, err = req.RequestWith(g.ctx, g.cl); err == nil {
 				err = kerr.ErrorForCode(resp.ErrorCode)
@@ -860,17 +858,15 @@ start:
 	default:
 	}
 
+	joinReq := kmsg.NewPtrJoinGroupRequest()
+	joinReq.Group = g.cfg.group
+	joinReq.SessionTimeoutMillis = int32(g.cfg.sessionTimeout.Milliseconds())
+	joinReq.RebalanceTimeoutMillis = int32(g.cfg.rebalanceTimeout.Milliseconds())
+	joinReq.ProtocolType = g.cfg.protocol
+	joinReq.MemberID = g.memberID
+	joinReq.InstanceID = g.cfg.instanceID
+	joinReq.Protocols = g.joinGroupProtocols()
 	var (
-		joinReq = &kmsg.JoinGroupRequest{
-			Group:                  g.cfg.group,
-			SessionTimeoutMillis:   int32(g.cfg.sessionTimeout.Milliseconds()),
-			RebalanceTimeoutMillis: int32(g.cfg.rebalanceTimeout.Milliseconds()),
-			ProtocolType:           g.cfg.protocol,
-			MemberID:               g.memberID,
-			InstanceID:             g.cfg.instanceID,
-			Protocols:              g.joinGroupProtocols(),
-		}
-
 		joinResp *kmsg.JoinGroupResponse
 		err      error
 		joined   = make(chan struct{})
@@ -899,17 +895,15 @@ start:
 		return err
 	}
 
+	syncReq := kmsg.NewPtrSyncGroupRequest()
+	syncReq.Group = g.cfg.group
+	syncReq.Generation = g.generation
+	syncReq.MemberID = g.memberID
+	syncReq.InstanceID = g.cfg.instanceID
+	syncReq.ProtocolType = &g.cfg.protocol
+	syncReq.Protocol = &protocol
+	syncReq.GroupAssignment = plan // nil unless we are the leader
 	var (
-		syncReq = &kmsg.SyncGroupRequest{
-			Group:           g.cfg.group,
-			Generation:      g.generation,
-			MemberID:        g.memberID,
-			InstanceID:      g.cfg.instanceID,
-			ProtocolType:    &g.cfg.protocol,
-			Protocol:        &protocol,
-			GroupAssignment: plan, // nil unless we are the leader
-		}
-
 		syncResp *kmsg.SyncGroupResponse
 		synced   = make(chan struct{})
 	)
@@ -1054,10 +1048,10 @@ func (g *groupConsumer) joinGroupProtocols() []kmsg.JoinGroupRequestProtocol {
 
 	var protos []kmsg.JoinGroupRequestProtocol
 	for _, balancer := range g.cfg.balancers {
-		protos = append(protos, kmsg.JoinGroupRequestProtocol{
-			Name:     balancer.ProtocolName(),
-			Metadata: balancer.JoinGroupMetadata(topics, nowDup, gen),
-		})
+		proto := kmsg.NewJoinGroupRequestProtocol()
+		proto.Name = balancer.ProtocolName()
+		proto.Metadata = balancer.JoinGroupMetadata(topics, nowDup, gen)
+		protos = append(protos, proto)
 	}
 	return protos
 }
@@ -1069,15 +1063,14 @@ func (g *groupConsumer) fetchOffsets(ctx context.Context, newAssigned map[string
 	// request, if we are only requesting one group, as well as maps the
 	// response back, so we do not need to worry about v8+ here.
 start:
-	req := kmsg.OffsetFetchRequest{
-		Group:         g.cfg.group,
-		RequireStable: g.cfg.requireStable,
-	}
+	req := kmsg.NewPtrOffsetFetchRequest()
+	req.Group = g.cfg.group
+	req.RequireStable = g.cfg.requireStable
 	for topic, partitions := range newAssigned {
-		req.Topics = append(req.Topics, kmsg.OffsetFetchRequestTopic{
-			Topic:      topic,
-			Partitions: partitions,
-		})
+		reqTopic := kmsg.NewOffsetFetchRequestTopic()
+		reqTopic.Topic = topic
+		reqTopic.Partitions = partitions
+		req.Topics = append(req.Topics, reqTopic)
 	}
 
 	var (
@@ -1857,11 +1850,11 @@ func (cl *Client) CommitOffsetsSync(
 
 	g := cl.consumer.g
 	if g == nil {
-		onDone(cl, new(kmsg.OffsetCommitRequest), new(kmsg.OffsetCommitResponse), errNotGroup)
+		onDone(cl, kmsg.NewPtrOffsetCommitRequest(), kmsg.NewPtrOffsetCommitResponse(), errNotGroup)
 		return
 	}
 	if len(uncommitted) == 0 {
-		onDone(cl, new(kmsg.OffsetCommitRequest), new(kmsg.OffsetCommitResponse), nil)
+		onDone(cl, kmsg.NewPtrOffsetCommitRequest(), kmsg.NewPtrOffsetCommitResponse(), nil)
 		return
 	}
 	g.commitOffsetsSync(ctx, uncommitted, onDone)
@@ -1953,11 +1946,11 @@ func (cl *Client) CommitOffsets(
 
 	g := cl.consumer.g
 	if g == nil {
-		onDone(cl, new(kmsg.OffsetCommitRequest), new(kmsg.OffsetCommitResponse), errNotGroup)
+		onDone(cl, kmsg.NewPtrOffsetCommitRequest(), kmsg.NewPtrOffsetCommitResponse(), errNotGroup)
 		return
 	}
 	if len(uncommitted) == 0 {
-		onDone(cl, new(kmsg.OffsetCommitRequest), new(kmsg.OffsetCommitResponse), nil)
+		onDone(cl, kmsg.NewPtrOffsetCommitRequest(), kmsg.NewPtrOffsetCommitResponse(), nil)
 		return
 	}
 
@@ -2013,7 +2006,7 @@ func (g *groupConsumer) commit(
 	if len(uncommitted) == 0 { // only empty if called thru autocommit / default revoke
 		// We have to do this concurrently because the expectation is
 		// that commit itself does not block.
-		go onDone(g.cl, new(kmsg.OffsetCommitRequest), new(kmsg.OffsetCommitResponse), nil)
+		go onDone(g.cl, kmsg.NewPtrOffsetCommitRequest(), kmsg.NewPtrOffsetCommitResponse(), nil)
 		return
 	}
 
@@ -2026,13 +2019,11 @@ func (g *groupConsumer) commit(
 	g.commitCancel = commitCancel
 	g.commitDone = commitDone
 
-	req := &kmsg.OffsetCommitRequest{
-		Group:               g.cfg.group,
-		Generation:          g.generation,
-		MemberID:            g.memberID,
-		InstanceID:          g.cfg.instanceID,
-		RetentionTimeMillis: -1,
-	}
+	req := kmsg.NewPtrOffsetCommitRequest()
+	req.Group = g.cfg.group
+	req.Generation = g.generation
+	req.MemberID = g.memberID
+	req.InstanceID = g.cfg.instanceID
 
 	if ctx.Done() != nil {
 		go func() {
@@ -2059,18 +2050,17 @@ func (g *groupConsumer) commit(
 		g.cfg.logger.Log(LogLevelDebug, "issuing commit", "group", g.cfg.group, "uncommitted", uncommitted)
 
 		for topic, partitions := range uncommitted {
-			req.Topics = append(req.Topics, kmsg.OffsetCommitRequestTopic{
-				Topic: topic,
-			})
-			reqTopic := &req.Topics[len(req.Topics)-1]
+			reqTopic := kmsg.NewOffsetCommitRequestTopic()
+			reqTopic.Topic = topic
 			for partition, eo := range partitions {
-				reqTopic.Partitions = append(reqTopic.Partitions, kmsg.OffsetCommitRequestTopicPartition{
-					Partition:   partition,
-					Offset:      eo.Offset,
-					LeaderEpoch: eo.Epoch, // KIP-320
-					Metadata:    &req.MemberID,
-				})
+				reqPartition := kmsg.NewOffsetCommitRequestTopicPartition()
+				reqPartition.Partition = partition
+				reqPartition.Offset = eo.Offset
+				reqPartition.LeaderEpoch = eo.Epoch // KIP-320
+				reqPartition.Metadata = &req.MemberID
+				reqTopic.Partitions = append(reqTopic.Partitions, reqPartition)
 			}
+			req.Topics = append(req.Topics, reqTopic)
 		}
 
 		resp, err := req.RequestWith(commitCtx, g.cl)

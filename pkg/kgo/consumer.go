@@ -1424,11 +1424,10 @@ func (cl *Client) loadEpochsForBrokerLoad(ctx context.Context, broker *broker, l
 }
 
 func (o offsetLoadMap) buildListReq(isolationLevel int8) *kmsg.ListOffsetsRequest {
-	req := &kmsg.ListOffsetsRequest{
-		ReplicaID:      -1,
-		IsolationLevel: isolationLevel,
-		Topics:         make([]kmsg.ListOffsetsRequestTopic, 0, len(o)),
-	}
+	req := kmsg.NewPtrListOffsetsRequest()
+	req.ReplicaID = -1
+	req.IsolationLevel = isolationLevel
+	req.Topics = make([]kmsg.ListOffsetsRequestTopic, 0, len(o))
 	for topic, partitions := range o {
 		parts := make([]kmsg.ListOffsetsRequestTopicPartition, 0, len(partitions))
 		for partition, offset := range partitions {
@@ -1440,39 +1439,39 @@ func (o offsetLoadMap) buildListReq(isolationLevel int8) *kmsg.ListOffsetsReques
 			if timestamp >= 0 {
 				timestamp = -1
 			}
-			parts = append(parts, kmsg.ListOffsetsRequestTopicPartition{
-				Partition:          partition,
-				CurrentLeaderEpoch: offset.currentEpoch, // KIP-320
-				Timestamp:          offset.at,
-				MaxNumOffsets:      1,
-			})
+			p := kmsg.NewListOffsetsRequestTopicPartition()
+			p.Partition = partition
+			p.CurrentLeaderEpoch = offset.currentEpoch // KIP-320
+			p.Timestamp = offset.at
+			p.MaxNumOffsets = 1
+
+			parts = append(parts, p)
 		}
-		req.Topics = append(req.Topics, kmsg.ListOffsetsRequestTopic{
-			Topic:      topic,
-			Partitions: parts,
-		})
+		t := kmsg.NewListOffsetsRequestTopic()
+		t.Topic = topic
+		t.Partitions = parts
+		req.Topics = append(req.Topics, t)
 	}
 	return req
 }
 
 func (o offsetLoadMap) buildEpochReq() *kmsg.OffsetForLeaderEpochRequest {
-	req := &kmsg.OffsetForLeaderEpochRequest{
-		ReplicaID: -1,
-		Topics:    make([]kmsg.OffsetForLeaderEpochRequestTopic, 0, len(o)),
-	}
+	req := kmsg.NewPtrOffsetForLeaderEpochRequest()
+	req.ReplicaID = -1
+	req.Topics = make([]kmsg.OffsetForLeaderEpochRequestTopic, 0, len(o))
 	for topic, partitions := range o {
 		parts := make([]kmsg.OffsetForLeaderEpochRequestTopicPartition, 0, len(partitions))
 		for partition, offset := range partitions {
-			parts = append(parts, kmsg.OffsetForLeaderEpochRequestTopicPartition{
-				Partition:          partition,
-				CurrentLeaderEpoch: offset.currentEpoch,
-				LeaderEpoch:        offset.epoch,
-			})
+			p := kmsg.NewOffsetForLeaderEpochRequestTopicPartition()
+			p.Partition = partition
+			p.CurrentLeaderEpoch = offset.currentEpoch
+			p.LeaderEpoch = offset.epoch
+			parts = append(parts, p)
 		}
-		req.Topics = append(req.Topics, kmsg.OffsetForLeaderEpochRequestTopic{
-			Topic:      topic,
-			Partitions: parts,
-		})
+		t := kmsg.NewOffsetForLeaderEpochRequestTopic()
+		t.Topic = topic
+		t.Partitions = parts
+		req.Topics = append(req.Topics, t)
 	}
 	return req
 }

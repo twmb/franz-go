@@ -149,20 +149,20 @@ func (t *txnReqBuilder) add(rb *recBuf) {
 	}
 	rb.addedToTxn = true
 	if t.req == nil {
-		t.req = &kmsg.AddPartitionsToTxnRequest{
-			TransactionalID: *t.txnID,
-			ProducerID:      t.id,
-			ProducerEpoch:   t.epoch,
-		}
+		req := kmsg.NewPtrAddPartitionsToTxnRequest()
+		req.TransactionalID = *t.txnID
+		req.ProducerID = t.id
+		req.ProducerEpoch = t.epoch
+		t.req = req
 		t.addedTopics = make(map[string]int, 10)
 	}
 	idx, exists := t.addedTopics[rb.topic]
 	if !exists {
 		idx = len(t.req.Topics)
 		t.addedTopics[rb.topic] = idx
-		t.req.Topics = append(t.req.Topics, kmsg.AddPartitionsToTxnRequestTopic{
-			Topic: rb.topic,
-		})
+		reqTopic := kmsg.NewAddPartitionsToTxnRequestTopic()
+		reqTopic.Topic = rb.topic
+		t.req.Topics = append(t.req.Topics, reqTopic)
 	}
 	t.req.Topics[idx].Partitions = append(t.req.Topics[idx].Partitions, rb.partition)
 }
@@ -1371,9 +1371,6 @@ func (b *recBatch) isTimedOut(limit time.Duration) bool {
 func (b *recBatch) decInflight() {
 	recBuf := b.owner
 	recBuf.inflight--
-	if recBuf.inflight < 0 {
-		panic("record buffer went negative inflight!")
-	}
 	if recBuf.inflight != 0 {
 		return
 	}
@@ -1831,7 +1828,9 @@ func (*produceRequest) ReadFrom([]byte) error {
 }
 
 func (p *produceRequest) ResponseKind() kmsg.Response {
-	return &kmsg.ProduceResponse{Version: p.version}
+	r := kmsg.NewPtrProduceResponse()
+	r.Version = p.version
+	return r
 }
 
 func (r seqRecBatch) appendTo(

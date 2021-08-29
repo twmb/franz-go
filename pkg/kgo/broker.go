@@ -368,7 +368,7 @@ func (b *broker) handleReqs() {
 		// with 0 acks and then send it to handleResps where it will
 		// not get a response.
 		var isNoResp bool
-		var noResp kmsg.Response
+		var noResp *kmsg.ProduceResponse
 		switch r := req.(type) {
 		case *produceRequest:
 			isNoResp = r.acks == 0
@@ -378,7 +378,8 @@ func (b *broker) handleReqs() {
 				isNoResp = true
 				r.TimeoutMillis = int32(b.cl.cfg.produceTimeout.Milliseconds())
 			}
-			noResp = &kmsg.ProduceResponse{Version: req.GetVersion()}
+			noResp = kmsg.NewPtrProduceResponse()
+			noResp.Version = req.GetVersion()
 		}
 
 		corrID, bytesWritten, writeErr, writeWait, timeToWrite, readEnqueue := cxn.writeRequest(pr.ctx, pr.enqueue, req)
@@ -652,11 +653,10 @@ func (cxn *brokerCxn) requestAPIVersions() error {
 	}
 
 start:
-	req := &kmsg.ApiVersionsRequest{
-		Version:               maxVersion,
-		ClientSoftwareName:    cxn.cl.cfg.softwareName,
-		ClientSoftwareVersion: cxn.cl.cfg.softwareVersion,
-	}
+	req := kmsg.NewPtrApiVersionsRequest()
+	req.Version = maxVersion
+	req.ClientSoftwareName = cxn.cl.cfg.softwareName
+	req.ClientSoftwareVersion = cxn.cl.cfg.softwareVersion
 	cxn.cl.cfg.logger.Log(LogLevelDebug, "issuing api versions request", "broker", logID(cxn.b.meta.NodeID), "version", maxVersion)
 	corrID, bytesWritten, writeErr, writeWait, timeToWrite, readEnqueue := cxn.writeRequest(nil, time.Now(), req)
 	if writeErr != nil {
@@ -724,7 +724,7 @@ func (cxn *brokerCxn) sasl() error {
 	authenticate := false
 
 	v := cxn.b.loadVersions()
-	req := new(kmsg.SASLHandshakeRequest)
+	req := kmsg.NewPtrSASLHandshakeRequest()
 start:
 	if mechanism.Name() != "GSSAPI" && v.versions[req.Key()] >= 0 {
 		req.Mechanism = mechanism.Name()
@@ -781,7 +781,7 @@ func (cxn *brokerCxn) doSasl(authenticate bool) error {
 
 	// Even if we do not wrap our reads/writes in SASLAuthenticate, we
 	// still use the SASLAuthenticate timeouts.
-	rt, wt := cxn.cl.connTimeoutFn(new(kmsg.SASLAuthenticateRequest))
+	rt, wt := cxn.cl.connTimeoutFn(kmsg.NewPtrSASLAuthenticateRequest())
 
 	// We continue writing until both the challenging is done AND the
 	// responses are done. We can have an additional response once we
@@ -813,9 +813,8 @@ func (cxn *brokerCxn) doSasl(authenticate bool) error {
 			}
 
 		} else {
-			req := &kmsg.SASLAuthenticateRequest{
-				SASLAuthBytes: clientWrite,
-			}
+			req := kmsg.NewPtrSASLAuthenticateRequest()
+			req.SASLAuthBytes = clientWrite
 			req.Version = cxn.b.loadVersions().versions[req.Key()]
 			cxn.cl.cfg.logger.Log(LogLevelDebug, "issuing SASLAuthenticate", "broker", logID(cxn.b.meta.NodeID), "version", req.Version, "step", step)
 

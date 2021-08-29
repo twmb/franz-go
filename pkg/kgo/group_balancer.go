@@ -234,16 +234,16 @@ func (p *BalancePlan) IntoSyncAssignment() []kmsg.SyncGroupRequestGroupAssignmen
 		var kassignment kmsg.GroupMemberAssignment
 		for topic, partitions := range assignment {
 			sort.Slice(partitions, func(i, j int) bool { return partitions[i] < partitions[j] })
-			kassignment.Topics = append(kassignment.Topics, kmsg.GroupMemberAssignmentTopic{
-				Topic:      topic,
-				Partitions: partitions,
-			})
+			assnTopic := kmsg.NewGroupMemberAssignmentTopic()
+			assnTopic.Topic = topic
+			assnTopic.Partitions = partitions
+			kassignment.Topics = append(kassignment.Topics, assnTopic)
 		}
 		sort.Slice(kassignment.Topics, func(i, j int) bool { return kassignment.Topics[i].Topic < kassignment.Topics[j].Topic })
-		kassignments = append(kassignments, kmsg.SyncGroupRequestGroupAssignment{
-			MemberID:         member,
-			MemberAssignment: kassignment.AppendTo(nil),
-		})
+		syncAssn := kmsg.NewSyncGroupRequestGroupAssignment()
+		syncAssn.MemberID = member
+		syncAssn.MemberAssignment = kassignment.AppendTo(nil)
+		kassignments = append(kassignments, syncAssn)
 	}
 	sort.Slice(kassignments, func(i, j int) bool { return kassignments[i].MemberID < kassignments[j].MemberID })
 	return kassignments
@@ -377,10 +377,10 @@ func (g *groupConsumer) balanceGroup(proto string, members []kmsg.JoinGroupRespo
 
 // helper func; range and roundrobin use v0
 func memberMetadataV0(interests []string) []byte {
-	return (&kmsg.GroupMemberMetadata{
-		Version: 0,
-		Topics:  interests, // input interests are already sorted
-	}).AppendTo(nil)
+	meta := kmsg.NewGroupMemberMetadata()
+	meta.Version = 0
+	meta.Topics = interests // input interests are already sorted
+	return meta.AppendTo(nil)
 }
 
 ///////////////////
@@ -624,28 +624,25 @@ func (s *stickyBalancer) ProtocolName() string {
 }
 func (s *stickyBalancer) IsCooperative() bool { return s.cooperative }
 func (s *stickyBalancer) JoinGroupMetadata(interests []string, currentAssignment map[string][]int32, generation int32) []byte {
-	meta := kmsg.GroupMemberMetadata{
-		Version: 0,
-		Topics:  interests,
-	}
+	meta := kmsg.NewGroupMemberMetadata()
+	meta.Version = 0
+	meta.Topics = interests
 	if s.cooperative {
 		meta.Version = 1
 	}
-	stickyMeta := kmsg.StickyMemberMetadata{
-		Generation: generation,
-	}
+	stickyMeta := kmsg.NewStickyMemberMetadata()
+	stickyMeta.Generation = generation
 	for topic, partitions := range currentAssignment {
 		if s.cooperative {
-			meta.OwnedPartitions = append(meta.OwnedPartitions, kmsg.GroupMemberMetadataOwnedPartition{
-				Topic:      topic,
-				Partitions: partitions,
-			})
+			metaPart := kmsg.NewGroupMemberMetadataOwnedPartition()
+			metaPart.Topic = topic
+			metaPart.Partitions = partitions
+			meta.OwnedPartitions = append(meta.OwnedPartitions, metaPart)
 		}
-		stickyMeta.CurrentAssignment = append(stickyMeta.CurrentAssignment,
-			kmsg.StickyMemberMetadataCurrentAssignment{
-				Topic:      topic,
-				Partitions: partitions,
-			})
+		stickyAssn := kmsg.NewStickyMemberMetadataCurrentAssignment()
+		stickyAssn.Topic = topic
+		stickyAssn.Partitions = partitions
+		stickyMeta.CurrentAssignment = append(stickyMeta.CurrentAssignment, stickyAssn)
 	}
 
 	// KAFKA-12898: ensure our topics are sorted

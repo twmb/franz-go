@@ -526,12 +526,12 @@ func (cl *Client) EndTransaction(ctx context.Context, commit TransactionEndTry) 
 	)
 
 	err = cl.doWithConcurrentTransactions("EndTxn", func() error {
-		resp, err := (&kmsg.EndTxnRequest{
-			TransactionalID: *cl.cfg.txnID,
-			ProducerID:      id,
-			ProducerEpoch:   epoch,
-			Commit:          bool(commit),
-		}).RequestWith(ctx, cl)
+		req := kmsg.NewPtrEndTxnRequest()
+		req.TransactionalID = *cl.cfg.txnID
+		req.ProducerID = id
+		req.ProducerEpoch = epoch
+		req.Commit = bool(commit)
+		resp, err := req.RequestWith(ctx, cl)
 		if err != nil {
 			return err
 		}
@@ -647,11 +647,11 @@ func (cl *Client) commitTransactionOffsets(
 
 	g := cl.consumer.g
 	if g == nil {
-		onDone(new(kmsg.TxnOffsetCommitRequest), new(kmsg.TxnOffsetCommitResponse), errNotGroup)
+		onDone(kmsg.NewPtrTxnOffsetCommitRequest(), kmsg.NewPtrTxnOffsetCommitResponse(), errNotGroup)
 		return nil
 	}
 	if len(uncommitted) == 0 {
-		onDone(new(kmsg.TxnOffsetCommitRequest), new(kmsg.TxnOffsetCommitResponse), nil)
+		onDone(kmsg.NewPtrTxnOffsetCommitRequest(), kmsg.NewPtrTxnOffsetCommitResponse(), nil)
 		return g
 	}
 
@@ -688,12 +688,12 @@ func (cl *Client) addOffsetsToTxn(ctx context.Context, group string) error {
 			"producerEpoch", epoch,
 			"group", group,
 		)
-		resp, err := (&kmsg.AddOffsetsToTxnRequest{
-			TransactionalID: *cl.cfg.txnID,
-			ProducerID:      id,
-			ProducerEpoch:   epoch,
-			Group:           group,
-		}).RequestWith(ctx, cl)
+		req := kmsg.NewPtrAddOffsetsToTxnRequest()
+		req.TransactionalID = *cl.cfg.txnID
+		req.ProducerID = id
+		req.ProducerEpoch = epoch
+		req.Group = group
+		resp, err := req.RequestWith(ctx, cl)
 		if err != nil {
 			return err
 		}
@@ -722,7 +722,7 @@ func (g *groupConsumer) commitTxn(
 		onDone = func(_ *kmsg.TxnOffsetCommitRequest, _ *kmsg.TxnOffsetCommitResponse, _ error) {}
 	}
 	if len(uncommitted) == 0 { // only empty if called thru autocommit / default revoke
-		onDone(new(kmsg.TxnOffsetCommitRequest), new(kmsg.TxnOffsetCommitResponse), nil)
+		onDone(kmsg.NewPtrTxnOffsetCommitRequest(), kmsg.NewPtrTxnOffsetCommitResponse(), nil)
 		return
 	}
 
@@ -749,15 +749,14 @@ func (g *groupConsumer) commitTxn(
 	// The id must have been set at least once by this point because of
 	// addOffsetsToTxn.
 	id, epoch, _ := g.cl.producerID()
-	req := &kmsg.TxnOffsetCommitRequest{
-		TransactionalID: *g.cl.cfg.txnID,
-		Group:           g.cfg.group,
-		ProducerID:      id,
-		ProducerEpoch:   epoch,
-		Generation:      g.generation,
-		MemberID:        g.memberID,
-		InstanceID:      g.cfg.instanceID,
-	}
+	req := kmsg.NewPtrTxnOffsetCommitRequest()
+	req.TransactionalID = *g.cl.cfg.txnID
+	req.Group = g.cfg.group
+	req.ProducerID = id
+	req.ProducerEpoch = epoch
+	req.Generation = g.generation
+	req.MemberID = g.memberID
+	req.InstanceID = g.cfg.instanceID
 
 	if ctx.Done() != nil {
 		go func() {
@@ -784,18 +783,17 @@ func (g *groupConsumer) commitTxn(
 		g.cl.cfg.logger.Log(LogLevelDebug, "issuing txn offset commit", "uncommitted", uncommitted)
 
 		for topic, partitions := range uncommitted {
-			req.Topics = append(req.Topics, kmsg.TxnOffsetCommitRequestTopic{
-				Topic: topic,
-			})
-			reqTopic := &req.Topics[len(req.Topics)-1]
+			reqTopic := kmsg.NewTxnOffsetCommitRequestTopic()
+			reqTopic.Topic = topic
 			for partition, eo := range partitions {
-				reqTopic.Partitions = append(reqTopic.Partitions, kmsg.TxnOffsetCommitRequestTopicPartition{
-					Partition:   partition,
-					Offset:      eo.Offset,
-					LeaderEpoch: eo.Epoch,
-					Metadata:    &req.MemberID,
-				})
+				reqPartition := kmsg.NewTxnOffsetCommitRequestTopicPartition()
+				reqPartition.Partition = partition
+				reqPartition.Offset = eo.Offset
+				reqPartition.LeaderEpoch = eo.Epoch
+				reqPartition.Metadata = &req.MemberID
+				reqTopic.Partitions = append(reqTopic.Partitions, reqPartition)
 			}
+			req.Topics = append(req.Topics, reqTopic)
 		}
 
 		var resp *kmsg.TxnOffsetCommitResponse

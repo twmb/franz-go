@@ -357,9 +357,8 @@ type topicPartition struct {
 // we return empty defaults. The member will just be assumed to have no
 // history.
 func deserializeUserData(userdata []byte) (memberPlan []topicPartition, generation int32) {
-	s := kmsg.StickyMemberMetadata{
-		Generation: -1,
-	}
+	s := kmsg.NewStickyMemberMetadata()
+	s.Generation = -1
 	if err := s.ReadFrom(userdata); err != nil {
 		return nil, 0
 	}

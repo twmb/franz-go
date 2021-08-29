@@ -572,11 +572,10 @@ func (cl *Client) failProducerID(id int64, epoch int16, err error) {
 // producer epoch, returning whether to keep the result.
 func (cl *Client) doInitProducerID(lastID int64, lastEpoch int16) (*producerID, bool) {
 	cl.cfg.logger.Log(LogLevelInfo, "initializing producer id")
-	req := &kmsg.InitProducerIDRequest{
-		TransactionalID: cl.cfg.txnID,
-		ProducerID:      lastID,
-		ProducerEpoch:   lastEpoch,
-	}
+	req := kmsg.NewPtrInitProducerIDRequest()
+	req.TransactionalID = cl.cfg.txnID
+	req.ProducerID = lastID
+	req.ProducerEpoch = lastEpoch
 	if cl.cfg.txnID != nil {
 		req.TransactionTimeoutMillis = int32(cl.cfg.txnTimeout.Milliseconds())
 	}

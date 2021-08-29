@@ -153,7 +153,7 @@ func NewClient(opts ...Opt) (*Client, error) {
 
 		sinksAndSources: make(map[int32]sinkAndSource),
 
-		reqFormatter:  new(kmsg.RequestFormatter),
+		reqFormatter:  kmsg.NewRequestFormatter(),
 		connTimeoutFn: connTimeoutBuilder(cfg.connTimeoutOverhead),
 
 		bufPool: newBufPool(),
@@ -384,9 +384,8 @@ func (cl *Client) fetchBrokerMetadata(ctx context.Context) error {
 }
 
 func (cl *Client) fetchMetadataForTopics(ctx context.Context, all bool, topics []string) (*broker, *kmsg.MetadataResponse, error) {
-	req := &kmsg.MetadataRequest{
-		AllowAutoTopicCreation: cl.cfg.allowAutoTopicCreation,
-	}
+	req := kmsg.NewPtrMetadataRequest()
+	req.AllowAutoTopicCreation = cl.cfg.allowAutoTopicCreation
 	if all {
 		req.Topics = nil
 	} else if len(topics) == 0 {
@@ -968,10 +967,10 @@ start:
 	}
 
 	var resp *kmsg.FindCoordinatorResponse
-	_, resp, c.err = cl.findCoordinator(ctx, &kmsg.FindCoordinatorRequest{
-		CoordinatorKey:  key.name,
-		CoordinatorType: key.typ,
-	})
+	req := kmsg.NewPtrFindCoordinatorRequest()
+	req.CoordinatorKey = key.name
+	req.CoordinatorType = key.typ
+	_, resp, c.err = cl.findCoordinator(ctx, req)
 	if c.err != nil {
 		return nil, c.err
 	}
@@ -1790,10 +1789,10 @@ func (cl *listOffsetsSharder) shard(ctx context.Context, kreq kmsg.Request) ([]i
 	for brokerID, brokerReq := range brokerReqs {
 		req := mkreq()
 		for topic, parts := range brokerReq {
-			req.Topics = append(req.Topics, kmsg.ListOffsetsRequestTopic{
-				Topic:      topic,
-				Partitions: parts,
-			})
+			reqTopic := kmsg.NewListOffsetsRequestTopic()
+			reqTopic.Topic = topic
+			reqTopic.Partitions = parts
+			req.Topics = append(req.Topics, reqTopic)
 		}
 		issues = append(issues, issueShard{
 			req:    req,
@@ -1802,17 +1801,17 @@ func (cl *listOffsetsSharder) shard(ctx context.Context, kreq kmsg.Request) ([]i
 	}
 
 	return append(issues, unknowns.collect(mkreq, func(r *kmsg.ListOffsetsRequest, topic string, parts []kmsg.ListOffsetsRequestTopicPartition) {
-		r.Topics = append(r.Topics, kmsg.ListOffsetsRequestTopic{
-			Topic:      topic,
-			Partitions: parts,
-		})
+		reqTopic := kmsg.NewListOffsetsRequestTopic()
+		reqTopic.Topic = topic
+		reqTopic.Partitions = parts
+		r.Topics = append(r.Topics, reqTopic)
 	})...), true, nil // this is reshardable
 }
 
 func (cl *listOffsetsSharder) onResp(kmsg.Request, kmsg.Response) error { return nil } // topic / partitions: not retried
 
 func (cl *listOffsetsSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
-	merged := new(kmsg.ListOffsetsResponse)
+	merged := kmsg.NewPtrListOffsetsResponse()
 	topics := make(map[string][]kmsg.ListOffsetsResponseTopicPartition)
 
 	firstErr := firstErrMerger(sresps, func(kresp kmsg.Response) {
@@ -1825,10 +1824,10 @@ func (cl *listOffsetsSharder) merge(sresps []ResponseShard) (kmsg.Response, erro
 		}
 	})
 	for topic, partitions := range topics {
-		merged.Topics = append(merged.Topics, kmsg.ListOffsetsResponseTopic{
-			Topic:      topic,
-			Partitions: partitions,
-		})
+		respTopic := kmsg.NewListOffsetsResponseTopic()
+		respTopic.Topic = topic
+		respTopic.Partitions = partitions
+		merged.Topics = append(merged.Topics, respTopic)
 	}
 	return merged, firstErr
 }
@@ -1840,31 +1839,29 @@ func offsetFetchReqToGroup(req *kmsg.OffsetFetchRequest) kmsg.OffsetFetchRequest
 	g := kmsg.NewOffsetFetchRequestGroup()
 	g.Group = req.Group
 	for _, topic := range req.Topics {
-		g.Topics = append(g.Topics, kmsg.OffsetFetchRequestGroupTopic{
-			Topic:      topic.Topic,
-			Partitions: topic.Partitions,
-		})
+		reqTopic := kmsg.NewOffsetFetchRequestGroupTopic()
+		reqTopic.Topic = topic.Topic
+		reqTopic.Partitions = topic.Partitions
+		g.Topics = append(g.Topics, reqTopic)
 	}
 	return g
 }
 
 func offsetFetchRespToGroup(req *kmsg.OffsetFetchRequest, resp *kmsg.OffsetFetchResponse) kmsg.OffsetFetchResponseGroup {
-	g := kmsg.OffsetFetchResponseGroup{
-		Group:     req.Group,
-		ErrorCode: resp.ErrorCode,
-	}
+	g := kmsg.NewOffsetFetchResponseGroup()
+	g.Group = req.Group
+	g.ErrorCode = resp.ErrorCode
 	for _, topic := range resp.Topics {
-		t := kmsg.OffsetFetchResponseGroupTopic{
-			Topic: topic.Topic,
-		}
+		t := kmsg.NewOffsetFetchResponseGroupTopic()
+		t.Topic = topic.Topic
 		for _, partition := range topic.Partitions {
-			t.Partitions = append(t.Partitions, kmsg.OffsetFetchResponseGroupTopicPartition{
-				Partition:   partition.Partition,
-				Offset:      partition.Offset,
-				LeaderEpoch: partition.LeaderEpoch,
-				Metadata:    partition.Metadata,
-				ErrorCode:   partition.ErrorCode,
-			})
+			p := kmsg.NewOffsetFetchResponseGroupTopicPartition()
+			p.Partition = partition.Partition
+			p.Offset = partition.Offset
+			p.LeaderEpoch = partition.LeaderEpoch
+			p.Metadata = partition.Metadata
+			p.ErrorCode = partition.ErrorCode
+			t.Partitions = append(t.Partitions, p)
 		}
 		g.Topics = append(g.Topics, t)
 	}
@@ -1875,17 +1872,16 @@ func offsetFetchRespGroupIntoResp(g kmsg.OffsetFetchResponseGroup, into *kmsg.Of
 	into.ErrorCode = g.ErrorCode
 	into.Topics = into.Topics[:0]
 	for _, topic := range g.Topics {
-		t := kmsg.OffsetFetchResponseTopic{
-			Topic: topic.Topic,
-		}
+		t := kmsg.NewOffsetFetchResponseTopic()
+		t.Topic = topic.Topic
 		for _, partition := range topic.Partitions {
-			t.Partitions = append(t.Partitions, kmsg.OffsetFetchResponseTopicPartition{
-				Partition:   partition.Partition,
-				Offset:      partition.Offset,
-				LeaderEpoch: partition.LeaderEpoch,
-				Metadata:    partition.Metadata,
-				ErrorCode:   partition.ErrorCode,
-			})
+			p := kmsg.NewOffsetFetchResponseTopicPartition()
+			p.Partition = partition.Partition
+			p.Offset = partition.Offset
+			p.LeaderEpoch = partition.LeaderEpoch
+			p.Metadata = partition.Metadata
+			p.ErrorCode = partition.ErrorCode
+			t.Partitions = append(t.Partitions, p)
 		}
 		into.Topics = append(into.Topics, t)
 	}
@@ -1945,10 +1941,10 @@ func (cl *offsetFetchSharder) shard(ctx context.Context, kreq kmsg.Request) ([]i
 	)
 
 	newReq := func(groups ...kmsg.OffsetFetchRequestGroup) *kmsg.OffsetFetchRequest {
-		return &kmsg.OffsetFetchRequest{
-			RequireStable: req.RequireStable,
-			Groups:        groups,
-		}
+		newReq := kmsg.NewPtrOffsetFetchRequest()
+		newReq.RequireStable = req.RequireStable
+		newReq.Groups = groups
+		return newReq
 	}
 
 	for _, group := range req.Groups {
@@ -2027,7 +2023,7 @@ func (cl *offsetFetchSharder) onResp(kreq kmsg.Request, kresp kmsg.Response) err
 }
 
 func (cl *offsetFetchSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
-	merged := new(kmsg.OffsetFetchResponse)
+	merged := kmsg.NewPtrOffsetFetchResponse()
 
 	return merged, firstErrMerger(sresps, func(kresp kmsg.Response) {
 		resp := kresp.(*kmsg.OffsetFetchResponse)
@@ -2059,10 +2055,10 @@ func (cl *describeGroupsSharder) shard(ctx context.Context, kreq kmsg.Request) (
 	)
 
 	newReq := func(groups ...string) *kmsg.DescribeGroupsRequest {
-		return &kmsg.DescribeGroupsRequest{
-			IncludeAuthorizedOperations: req.IncludeAuthorizedOperations,
-			Groups:                      groups,
-		}
+		newReq := kmsg.NewPtrDescribeGroupsRequest()
+		newReq.IncludeAuthorizedOperations = req.IncludeAuthorizedOperations
+		newReq.Groups = groups
+		return newReq
 	}
 
 	for _, group := range req.Groups {
@@ -2119,7 +2115,7 @@ func (cl *describeGroupsSharder) onResp(_ kmsg.Request, kresp kmsg.Response) err
 }
 
 func (cl *describeGroupsSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
-	merged := new(kmsg.DescribeGroupsResponse)
+	merged := kmsg.NewPtrDescribeGroupsResponse()
 
 	return merged, firstErrMerger(sresps, func(kresp kmsg.Response) {
 		resp := kresp.(*kmsg.DescribeGroupsResponse)
@@ -2146,7 +2142,7 @@ func (cl *listGroupsSharder) onResp(_ kmsg.Request, kresp kmsg.Response) error {
 }
 
 func (cl *listGroupsSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
-	merged := new(kmsg.ListGroupsResponse)
+	merged := kmsg.NewPtrListGroupsResponse()
 
 	return merged, firstErrMerger(sresps, func(kresp kmsg.Response) {
 		resp := kresp.(*kmsg.ListGroupsResponse)
@@ -2210,10 +2206,10 @@ func (cl *deleteRecordsSharder) shard(ctx context.Context, kreq kmsg.Request) ([
 	for brokerID, brokerReq := range brokerReqs {
 		req := mkreq()
 		for topic, parts := range brokerReq {
-			req.Topics = append(req.Topics, kmsg.DeleteRecordsRequestTopic{
-				Topic:      topic,
-				Partitions: parts,
-			})
+			reqTopic := kmsg.NewDeleteRecordsRequestTopic()
+			reqTopic.Topic = topic
+			reqTopic.Partitions = parts
+			req.Topics = append(req.Topics, reqTopic)
 		}
 		issues = append(issues, issueShard{
 			req:    req,
@@ -2222,17 +2218,17 @@ func (cl *deleteRecordsSharder) shard(ctx context.Context, kreq kmsg.Request) ([
 	}
 
 	return append(issues, unknowns.collect(mkreq, func(r *kmsg.DeleteRecordsRequest, topic string, parts []kmsg.DeleteRecordsRequestTopicPartition) {
-		r.Topics = append(r.Topics, kmsg.DeleteRecordsRequestTopic{
-			Topic:      topic,
-			Partitions: parts,
-		})
+		reqTopic := kmsg.NewDeleteRecordsRequestTopic()
+		reqTopic.Topic = topic
+		reqTopic.Partitions = parts
+		r.Topics = append(r.Topics, reqTopic)
 	})...), true, nil // this is reshardable
 }
 
 func (cl *deleteRecordsSharder) onResp(kmsg.Request, kmsg.Response) error { return nil } // topic / partitions: not retried
 
 func (cl *deleteRecordsSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
-	merged := new(kmsg.DeleteRecordsResponse)
+	merged := kmsg.NewPtrDeleteRecordsResponse()
 	topics := make(map[string][]kmsg.DeleteRecordsResponseTopicPartition)
 
 	firstErr := firstErrMerger(sresps, func(kresp kmsg.Response) {
@@ -2245,10 +2241,10 @@ func (cl *deleteRecordsSharder) merge(sresps []ResponseShard) (kmsg.Response, er
 		}
 	})
 	for topic, partitions := range topics {
-		merged.Topics = append(merged.Topics, kmsg.DeleteRecordsResponseTopic{
-			Topic:      topic,
-			Partitions: partitions,
-		})
+		respTopic := kmsg.NewDeleteRecordsResponseTopic()
+		respTopic.Topic = topic
+		respTopic.Partitions = partitions
+		merged.Topics = append(merged.Topics, respTopic)
 	}
 	return merged, firstErr
 }
@@ -2304,10 +2300,10 @@ func (cl *offsetForLeaderEpochSharder) shard(ctx context.Context, kreq kmsg.Requ
 	for brokerID, brokerReq := range brokerReqs {
 		req := mkreq()
 		for topic, parts := range brokerReq {
-			req.Topics = append(req.Topics, kmsg.OffsetForLeaderEpochRequestTopic{
-				Topic:      topic,
-				Partitions: parts,
-			})
+			reqTopic := kmsg.NewOffsetForLeaderEpochRequestTopic()
+			reqTopic.Topic = topic
+			reqTopic.Partitions = parts
+			req.Topics = append(req.Topics, reqTopic)
 		}
 		issues = append(issues, issueShard{
 			req:    req,
@@ -2316,17 +2312,17 @@ func (cl *offsetForLeaderEpochSharder) shard(ctx context.Context, kreq kmsg.Requ
 	}
 
 	return append(issues, unknowns.collect(mkreq, func(r *kmsg.OffsetForLeaderEpochRequest, topic string, parts []kmsg.OffsetForLeaderEpochRequestTopicPartition) {
-		r.Topics = append(r.Topics, kmsg.OffsetForLeaderEpochRequestTopic{
-			Topic:      topic,
-			Partitions: parts,
-		})
+		reqTopic := kmsg.NewOffsetForLeaderEpochRequestTopic()
+		reqTopic.Topic = topic
+		reqTopic.Partitions = parts
+		r.Topics = append(r.Topics, reqTopic)
 	})...), true, nil // this is reshardable
 }
 
 func (cl *offsetForLeaderEpochSharder) onResp(kmsg.Request, kmsg.Response) error { return nil } // topic / partitions: not retried
 
 func (cl *offsetForLeaderEpochSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
-	merged := new(kmsg.OffsetForLeaderEpochResponse)
+	merged := kmsg.NewPtrOffsetForLeaderEpochResponse()
 	topics := make(map[string][]kmsg.OffsetForLeaderEpochResponseTopicPartition)
 
 	firstErr := firstErrMerger(sresps, func(kresp kmsg.Response) {
@@ -2339,10 +2335,10 @@ func (cl *offsetForLeaderEpochSharder) merge(sresps []ResponseShard) (kmsg.Respo
 		}
 	})
 	for topic, partitions := range topics {
-		merged.Topics = append(merged.Topics, kmsg.OffsetForLeaderEpochResponseTopic{
-			Topic:      topic,
-			Partitions: partitions,
-		})
+		respTopic := kmsg.NewOffsetForLeaderEpochResponseTopic()
+		respTopic.Topic = topic
+		respTopic.Partitions = partitions
+		merged.Topics = append(merged.Topics, respTopic)
 	}
 	return merged, firstErr
 }
@@ -2375,25 +2371,24 @@ func (cl *describeConfigsSharder) shard(ctx context.Context, kreq kmsg.Request) 
 
 	var issues []issueShard
 	for brokerID, brokerReq := range brokerReqs {
-		req := &kmsg.DescribeConfigsRequest{
-			Resources:            brokerReq,
-			IncludeSynonyms:      req.IncludeSynonyms,
-			IncludeDocumentation: req.IncludeDocumentation,
-		}
+		newReq := kmsg.NewPtrDescribeConfigsRequest()
+		newReq.Resources = brokerReq
+		newReq.IncludeSynonyms = req.IncludeSynonyms
+		newReq.IncludeDocumentation = req.IncludeDocumentation
 
 		issues = append(issues, issueShard{
-			req:    req,
+			req:    newReq,
 			broker: brokerID,
 		})
 	}
 
 	if len(any) > 0 {
+		newReq := kmsg.NewPtrDescribeConfigsRequest()
+		newReq.Resources = any
+		newReq.IncludeSynonyms = req.IncludeSynonyms
+		newReq.IncludeDocumentation = req.IncludeDocumentation
 		issues = append(issues, issueShard{
-			req: &kmsg.DescribeConfigsRequest{
-				Resources:            any,
-				IncludeSynonyms:      req.IncludeSynonyms,
-				IncludeDocumentation: req.IncludeDocumentation,
-			},
+			req: newReq,
 			any: true,
 		})
 	}
@@ -2404,7 +2399,7 @@ func (cl *describeConfigsSharder) shard(ctx context.Context, kreq kmsg.Request) 
 func (cl *describeConfigsSharder) onResp(kmsg.Request, kmsg.Response) error { return nil } // configs: nothing retriable
 
 func (cl *describeConfigsSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
-	merged := new(kmsg.DescribeConfigsResponse)
+	merged := kmsg.NewPtrDescribeConfigsResponse()
 
 	return merged, firstErrMerger(sresps, func(kresp kmsg.Response) {
 		resp := kresp.(*kmsg.DescribeConfigsResponse)
@@ -2442,23 +2437,22 @@ func (cl *alterConfigsSharder) shard(ctx context.Context, kreq kmsg.Request) ([]
 
 	var issues []issueShard
 	for brokerID, brokerReq := range brokerReqs {
-		req := &kmsg.AlterConfigsRequest{
-			Resources:    brokerReq,
-			ValidateOnly: req.ValidateOnly,
-		}
+		newReq := kmsg.NewPtrAlterConfigsRequest()
+		newReq.Resources = brokerReq
+		newReq.ValidateOnly = req.ValidateOnly
 
 		issues = append(issues, issueShard{
-			req:    req,
+			req:    newReq,
 			broker: brokerID,
 		})
 	}
 
 	if len(any) > 0 {
+		newReq := kmsg.NewPtrAlterConfigsRequest()
+		newReq.Resources = any
+		newReq.ValidateOnly = req.ValidateOnly
 		issues = append(issues, issueShard{
-			req: &kmsg.AlterConfigsRequest{
-				Resources:    any,
-				ValidateOnly: req.ValidateOnly,
-			},
+			req: newReq,
 			any: true,
 		})
 	}
@@ -2469,7 +2463,7 @@ func (cl *alterConfigsSharder) shard(ctx context.Context, kreq kmsg.Request) ([]
 func (cl *alterConfigsSharder) onResp(kmsg.Request, kmsg.Response) error { return nil } // configs: nothing retriable
 
 func (cl *alterConfigsSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
-	merged := new(kmsg.AlterConfigsResponse)
+	merged := kmsg.NewPtrAlterConfigsResponse()
 
 	return merged, firstErrMerger(sresps, func(kresp kmsg.Response) {
 		resp := kresp.(*kmsg.AlterConfigsResponse)
@@ -2557,16 +2551,15 @@ func (cl *alterReplicaLogDirsSharder) shard(ctx context.Context, kreq kmsg.Reque
 
 	var issues []issueShard
 	for brokerID, brokerReq := range brokerReqs {
-		req := new(kmsg.AlterReplicaLogDirsRequest)
+		req := kmsg.NewPtrAlterReplicaLogDirsRequest()
 		for dir, topics := range brokerReq {
-			rd := kmsg.AlterReplicaLogDirsRequestDir{
-				Dir: dir,
-			}
+			rd := kmsg.NewAlterReplicaLogDirsRequestDir()
+			rd.Dir = dir
 			for topic, partitions := range topics {
-				rd.Topics = append(rd.Topics, kmsg.AlterReplicaLogDirsRequestDirTopic{
-					Topic:      topic,
-					Partitions: partitions,
-				})
+				rdTopic := kmsg.NewAlterReplicaLogDirsRequestDirTopic()
+				rdTopic.Topic = topic
+				rdTopic.Partitions = partitions
+				rd.Topics = append(rd.Topics, rdTopic)
 			}
 			req.Dirs = append(req.Dirs, rd)
 		}
@@ -2578,16 +2571,15 @@ func (cl *alterReplicaLogDirsSharder) shard(ctx context.Context, kreq kmsg.Reque
 	}
 
 	for err, dirs := range unknowns {
-		req := new(kmsg.AlterReplicaLogDirsRequest)
+		req := kmsg.NewPtrAlterReplicaLogDirsRequest()
 		for dir, topics := range dirs {
-			rd := kmsg.AlterReplicaLogDirsRequestDir{
-				Dir: dir,
-			}
+			rd := kmsg.NewAlterReplicaLogDirsRequestDir()
+			rd.Dir = dir
 			for topic, partitions := range topics {
-				rd.Topics = append(rd.Topics, kmsg.AlterReplicaLogDirsRequestDirTopic{
-					Topic:      topic,
-					Partitions: partitions,
-				})
+				rdTopic := kmsg.NewAlterReplicaLogDirsRequestDirTopic()
+				rdTopic.Topic = topic
+				rdTopic.Partitions = partitions
+				rd.Topics = append(rd.Topics, rdTopic)
 			}
 			req.Dirs = append(req.Dirs, rd)
 		}
@@ -2605,7 +2597,7 @@ func (cl *alterReplicaLogDirsSharder) onResp(kmsg.Request, kmsg.Response) error 
 
 // merge does not make sense for this function, but we provide a one anyway.
 func (cl *alterReplicaLogDirsSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
-	merged := new(kmsg.AlterReplicaLogDirsResponse)
+	merged := kmsg.NewPtrAlterReplicaLogDirsResponse()
 	topics := make(map[string][]kmsg.AlterReplicaLogDirsResponseTopicPartition)
 
 	firstErr := firstErrMerger(sresps, func(kresp kmsg.Response) {
@@ -2618,10 +2610,10 @@ func (cl *alterReplicaLogDirsSharder) merge(sresps []ResponseShard) (kmsg.Respon
 		}
 	})
 	for topic, partitions := range topics {
-		merged.Topics = append(merged.Topics, kmsg.AlterReplicaLogDirsResponseTopic{
-			Topic:      topic,
-			Partitions: partitions,
-		})
+		respTopic := kmsg.NewAlterReplicaLogDirsResponseTopic()
+		respTopic.Topic = topic
+		respTopic.Partitions = partitions
+		merged.Topics = append(merged.Topics, respTopic)
 	}
 	return merged, firstErr
 }
@@ -2686,10 +2678,10 @@ func (cl *describeLogDirsSharder) shard(ctx context.Context, kreq kmsg.Request) 
 	for brokerID, brokerReq := range brokerReqs {
 		req := mkreq()
 		for topic, parts := range brokerReq {
-			req.Topics = append(req.Topics, kmsg.DescribeLogDirsRequestTopic{
-				Topic:      topic,
-				Partitions: parts,
-			})
+			reqTopic := kmsg.NewDescribeLogDirsRequestTopic()
+			reqTopic.Topic = topic
+			reqTopic.Partitions = parts
+			req.Topics = append(req.Topics, reqTopic)
 		}
 		issues = append(issues, issueShard{
 			req:    req,
@@ -2698,10 +2690,10 @@ func (cl *describeLogDirsSharder) shard(ctx context.Context, kreq kmsg.Request) 
 	}
 
 	return append(issues, unknowns.collect(mkreq, func(r *kmsg.DescribeLogDirsRequest, topic string, parts []int32) {
-		r.Topics = append(r.Topics, kmsg.DescribeLogDirsRequestTopic{
-			Topic:      topic,
-			Partitions: parts,
-		})
+		reqTopic := kmsg.NewDescribeLogDirsRequestTopic()
+		reqTopic.Topic = topic
+		reqTopic.Partitions = parts
+		r.Topics = append(r.Topics, reqTopic)
 	})...), true, nil // this is reshardable
 }
 
@@ -2710,7 +2702,7 @@ func (cl *describeLogDirsSharder) onResp(kmsg.Request, kmsg.Response) error { re
 // merge does not make sense for this function, but we provide one anyway.
 // We lose the error code for directories.
 func (cl *describeLogDirsSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
-	merged := new(kmsg.DescribeLogDirsResponse)
+	merged := kmsg.NewPtrDescribeLogDirsResponse()
 	dirs := make(map[string]map[string][]kmsg.DescribeLogDirsResponseDirTopicPartition)
 
 	firstErr := firstErrMerger(sresps, func(kresp kmsg.Response) {
@@ -2730,14 +2722,13 @@ func (cl *describeLogDirsSharder) merge(sresps []ResponseShard) (kmsg.Response, 
 		}
 	})
 	for dir, topics := range dirs {
-		md := kmsg.DescribeLogDirsResponseDir{
-			Dir: dir,
-		}
+		md := kmsg.NewDescribeLogDirsResponseDir()
+		md.Dir = dir
 		for topic, partitions := range topics {
-			md.Topics = append(md.Topics, kmsg.DescribeLogDirsResponseDirTopic{
-				Topic:      topic,
-				Partitions: partitions,
-			})
+			mdTopic := kmsg.NewDescribeLogDirsResponseDirTopic()
+			mdTopic.Topic = topic
+			mdTopic.Partitions = partitions
+			md.Topics = append(md.Topics, mdTopic)
 		}
 		merged.Dirs = append(merged.Dirs, md)
 	}
@@ -2762,9 +2753,9 @@ func (cl *deleteGroupsSharder) shard(ctx context.Context, kreq kmsg.Request) ([]
 	)
 
 	newReq := func(groups ...string) *kmsg.DeleteGroupsRequest {
-		return &kmsg.DeleteGroupsRequest{
-			Groups: groups,
-		}
+		newReq := kmsg.NewPtrDeleteGroupsRequest()
+		newReq.Groups = groups
+		return newReq
 	}
 
 	for _, group := range req.Groups {
@@ -2821,7 +2812,7 @@ func (cl *deleteGroupsSharder) onResp(_ kmsg.Request, kresp kmsg.Response) error
 }
 
 func (cl *deleteGroupsSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
-	merged := new(kmsg.DeleteGroupsResponse)
+	merged := kmsg.NewPtrDeleteGroupsResponse()
 
 	return merged, firstErrMerger(sresps, func(kresp kmsg.Response) {
 		resp := kresp.(*kmsg.DeleteGroupsResponse)
@@ -2859,23 +2850,22 @@ func (cl *incrementalAlterConfigsSharder) shard(ctx context.Context, kreq kmsg.R
 
 	var issues []issueShard
 	for brokerID, brokerReq := range brokerReqs {
-		req := &kmsg.IncrementalAlterConfigsRequest{
-			Resources:    brokerReq,
-			ValidateOnly: req.ValidateOnly,
-		}
+		newReq := kmsg.NewPtrIncrementalAlterConfigsRequest()
+		newReq.Resources = brokerReq
+		newReq.ValidateOnly = req.ValidateOnly
 
 		issues = append(issues, issueShard{
-			req:    req,
+			req:    newReq,
 			broker: brokerID,
 		})
 	}
 
 	if len(any) > 0 {
+		newReq := kmsg.NewPtrIncrementalAlterConfigsRequest()
+		newReq.Resources = any
+		newReq.ValidateOnly = req.ValidateOnly
 		issues = append(issues, issueShard{
-			req: &kmsg.IncrementalAlterConfigsRequest{
-				Resources:    any,
-				ValidateOnly: req.ValidateOnly,
-			},
+			req: newReq,
 			any: true,
 		})
 	}
@@ -2886,7 +2876,7 @@ func (cl *incrementalAlterConfigsSharder) shard(ctx context.Context, kreq kmsg.R
 func (cl *incrementalAlterConfigsSharder) onResp(kmsg.Request, kmsg.Response) error { return nil } // config: nothing retriable
 
 func (cl *incrementalAlterConfigsSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
-	merged := new(kmsg.IncrementalAlterConfigsResponse)
+	merged := kmsg.NewPtrIncrementalAlterConfigsResponse()
 
 	return merged, firstErrMerger(sresps, func(kresp kmsg.Response) {
 		resp := kresp.(*kmsg.IncrementalAlterConfigsResponse)
@@ -2945,10 +2935,10 @@ func (cl *describeProducersSharder) shard(ctx context.Context, kreq kmsg.Request
 	for brokerID, brokerReq := range brokerReqs {
 		req := mkreq()
 		for topic, parts := range brokerReq {
-			req.Topics = append(req.Topics, kmsg.DescribeProducersRequestTopic{
-				Topic:      topic,
-				Partitions: parts,
-			})
+			reqTopic := kmsg.NewDescribeProducersRequestTopic()
+			reqTopic.Topic = topic
+			reqTopic.Partitions = parts
+			req.Topics = append(req.Topics, reqTopic)
 		}
 		issues = append(issues, issueShard{
 			req:    req,
@@ -2957,17 +2947,17 @@ func (cl *describeProducersSharder) shard(ctx context.Context, kreq kmsg.Request
 	}
 
 	return append(issues, unknowns.collect(mkreq, func(r *kmsg.DescribeProducersRequest, topic string, parts []int32) {
-		r.Topics = append(r.Topics, kmsg.DescribeProducersRequestTopic{
-			Topic:      topic,
-			Partitions: parts,
-		})
+		reqTopic := kmsg.NewDescribeProducersRequestTopic()
+		reqTopic.Topic = topic
+		reqTopic.Partitions = parts
+		r.Topics = append(r.Topics, reqTopic)
 	})...), true, nil // this is reshardable
 }
 
 func (cl *describeProducersSharder) onResp(kmsg.Request, kmsg.Response) error { return nil } // topic / partitions: not retriable
 
 func (cl *describeProducersSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
-	merged := new(kmsg.DescribeProducersResponse)
+	merged := kmsg.NewPtrDescribeProducersResponse()
 	topics := make(map[string][]kmsg.DescribeProducersResponseTopicPartition)
 
 	firstErr := firstErrMerger(sresps, func(kresp kmsg.Response) {
@@ -2980,10 +2970,10 @@ func (cl *describeProducersSharder) merge(sresps []ResponseShard) (kmsg.Response
 		}
 	})
 	for topic, partitions := range topics {
-		merged.Topics = append(merged.Topics, kmsg.DescribeProducersResponseTopic{
-			Topic:      topic,
-			Partitions: partitions,
-		})
+		respTopic := kmsg.NewDescribeProducersResponseTopic()
+		respTopic.Topic = topic
+		respTopic.Partitions = partitions
+		merged.Topics = append(merged.Topics, respTopic)
 	}
 	return merged, firstErr
 }
@@ -3006,9 +2996,9 @@ func (cl *describeTransactionsSharder) shard(ctx context.Context, kreq kmsg.Requ
 	)
 
 	newReq := func(txnIDs ...string) *kmsg.DescribeTransactionsRequest {
-		return &kmsg.DescribeTransactionsRequest{
-			TransactionalIDs: txnIDs,
-		}
+		r := kmsg.NewPtrDescribeTransactionsRequest()
+		r.TransactionalIDs = txnIDs
+		return r
 	}
 
 	for _, txnID := range req.TransactionalIDs {
@@ -3065,7 +3055,7 @@ func (cl *describeTransactionsSharder) onResp(_ kmsg.Request, kresp kmsg.Respons
 }
 
 func (cl *describeTransactionsSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
-	merged := new(kmsg.DescribeTransactionsResponse)
+	merged := kmsg.NewPtrDescribeTransactionsResponse()
 
 	return merged, firstErrMerger(sresps, func(kresp kmsg.Response) {
 		resp := kresp.(*kmsg.DescribeTransactionsResponse)
@@ -3092,7 +3082,7 @@ func (cl *listTransactionsSharder) onResp(_ kmsg.Request, kresp kmsg.Response) e
 }
 
 func (cl *listTransactionsSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
-	merged := new(kmsg.ListTransactionsResponse)
+	merged := kmsg.NewPtrListTransactionsResponse()
 
 	unknownStates := make(map[string]struct{})
 
