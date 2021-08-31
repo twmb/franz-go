@@ -263,8 +263,8 @@ func (os usedOffsets) eachOffset(fn func(*cursorOffsetNext)) {
 	}
 }
 
-func (os usedOffsets) finishUsingAllWith(fn func(*cursorOffsetNext)) {
-	os.eachOffset(func(o *cursorOffsetNext) { fn(o); o.from.allowUsable() })
+func (os usedOffsets) finishUsingAllWithSet() {
+	os.eachOffset(func(o *cursorOffsetNext) { o.from.setOffset(o.cursorOffset); o.from.allowUsable() })
 }
 
 func (os usedOffsets) finishUsingAll() {
@@ -328,11 +328,7 @@ func (s *source) hook(f *Fetch, buffered, polled bool) {
 
 // takeBuffered drains a buffered fetch and updates offsets.
 func (s *source) takeBuffered() Fetch {
-	return s.takeBufferedFn(true, func(usedOffsets usedOffsets) {
-		usedOffsets.finishUsingAllWith(func(o *cursorOffsetNext) {
-			o.from.setOffset(o.cursorOffset)
-		})
-	})
+	return s.takeBufferedFn(true, usedOffsets.finishUsingAllWithSet)
 }
 
 func (s *source) discardBuffered() {
@@ -547,12 +543,19 @@ func (s *source) fetch(consumerSession *consumerSession, doneFetch chan<- struct
 
 	// For all returns, if we do not buffer our fetch, then we want to
 	// ensure our used offsets are usable again.
-	var alreadySentToDoneFetch bool
-	var buffered bool
+	var (
+		alreadySentToDoneFetch bool
+		setOffsets             bool
+		buffered               bool
+	)
 	defer func() {
 		if !buffered {
 			if req.numOffsets > 0 {
-				req.usedOffsets.finishUsingAll()
+				if setOffsets {
+					req.usedOffsets.finishUsingAllWithSet()
+				} else {
+					req.usedOffsets.finishUsingAll()
+				}
 			}
 			if !alreadySentToDoneFetch {
 				doneFetch <- struct{}{}
@@ -688,6 +691,12 @@ func (s *source) fetch(consumerSession *consumerSession, doneFetch chan<- struct
 		s.session.reset()
 		return
 	}
+
+	// At this point, we have successfully processed the response. Even if
+	// the response contains no records, we want to keep any offset
+	// advancements (we could have consumed only control records, we must
+	// advance past them).
+	setOffsets = true
 
 	if resp.Version < 7 {
 		// If the version is less than 7, we cannot use fetch sessions,
