@@ -2,6 +2,7 @@ package kgo
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -16,6 +17,20 @@ type Offset struct {
 	relative     int64
 	epoch        int32
 	currentEpoch int32 // set by us when mapping offsets to brokers
+}
+
+func (o Offset) MarshalJSON() ([]byte, error) {
+	if o.relative == 0 {
+		return []byte(fmt.Sprintf(`{"At":%d,"Epoch":%d,"CurrentEpoch":%d}`, o.at, o.epoch, o.currentEpoch)), nil
+	}
+	return []byte(fmt.Sprintf(`{"At":%d,"Relative":%d,"Epoch":%d,"CurrentEpoch":%d}`, o.at, o.relative, o.epoch, o.currentEpoch)), nil
+}
+
+func (o Offset) String() string {
+	if o.relative == 0 {
+		return fmt.Sprintf("at:%d epoch:%d curEpoch:%d", o.at, o.epoch, o.currentEpoch)
+	}
+	return fmt.Sprintf("at:%d rel:%d epoch:%d curEpoch:%d", o.at, o.relative, o.epoch, o.currentEpoch)
 }
 
 // NewOffset creates and returns an offset to use in ConsumePartitions or
@@ -636,6 +651,8 @@ func (s *consumerSession) doOnMetadataUpdate() {
 	}
 }
 
+type offsetLoadMap map[string]map[int32]offsetLoad
+
 // offsetLoad is effectively an Offset, but also includes a potential replica
 // to directly use if a cursor had a preferred replica.
 type offsetLoad struct {
@@ -643,7 +660,25 @@ type offsetLoad struct {
 	Offset
 }
 
-type offsetLoadMap map[string]map[int32]offsetLoad
+func (o offsetLoad) MarshalJSON() ([]byte, error) {
+	if o.replica == -1 {
+		return o.Offset.MarshalJSON()
+	}
+	if o.relative == 0 {
+		return []byte(fmt.Sprintf(`{"Replica":%d,"At":%d,"Epoch":%d,"CurrentEpoch":%d}`, o.replica, o.at, o.epoch, o.currentEpoch)), nil
+	}
+	return []byte(fmt.Sprintf(`{"Replica":%d,"At":%d,"Relative":%d,"Epoch":%d,"CurrentEpoch":%d}`, o.replica, o.at, o.relative, o.epoch, o.currentEpoch)), nil
+}
+
+func (o offsetLoad) String() string {
+	if o.replica == -1 {
+		return o.Offset.String()
+	}
+	if o.relative == 0 {
+		return fmt.Sprintf("rep:%d at:%d epoch:%d curEpoch:%d", o.replica, o.at, o.epoch, o.currentEpoch)
+	}
+	return fmt.Sprintf("rep:%d at:%d rel:%d epoch:%d curEpoch:%d", o.replica, o.at, o.relative, o.epoch, o.currentEpoch)
+}
 
 func (o offsetLoadMap) errToLoaded(err error) []loadedOffset {
 	var loaded []loadedOffset
@@ -662,8 +697,10 @@ func (o offsetLoadMap) errToLoaded(err error) []loadedOffset {
 
 // Combines list and epoch loads into one type for simplicity.
 type listOrEpochLoads struct {
-	list  offsetLoadMap
-	epoch offsetLoadMap
+	// List and Epoch are public so that anything marshaling through
+	// reflect (i.e. json) can see the fields.
+	List  offsetLoadMap
+	Epoch offsetLoadMap
 }
 
 type listOrEpochLoadType uint8
@@ -676,9 +713,9 @@ const (
 // adds an offset to be loaded, ensuring it exists only in the final loadType.
 func (l *listOrEpochLoads) addLoad(t string, p int32, loadType listOrEpochLoadType, load offsetLoad) {
 	l.removeLoad(t, p)
-	dst := &l.list
+	dst := &l.List
 	if loadType == loadTypeEpoch {
-		dst = &l.epoch
+		dst = &l.Epoch
 	}
 
 	if *dst == nil {
@@ -694,8 +731,8 @@ func (l *listOrEpochLoads) addLoad(t string, p int32, loadType listOrEpochLoadTy
 
 func (l *listOrEpochLoads) removeLoad(t string, p int32) {
 	for _, m := range []offsetLoadMap{
-		l.list,
-		l.epoch,
+		l.List,
+		l.Epoch,
 	} {
 		if m == nil {
 			continue
@@ -713,8 +750,8 @@ func (l *listOrEpochLoads) removeLoad(t string, p int32) {
 
 func (l listOrEpochLoads) each(fn func(string, int32)) {
 	for _, m := range []offsetLoadMap{
-		l.list,
-		l.epoch,
+		l.List,
+		l.Epoch,
 	} {
 		for topic, partitions := range m {
 			for partition := range partitions {
@@ -726,8 +763,8 @@ func (l listOrEpochLoads) each(fn func(string, int32)) {
 
 func (l *listOrEpochLoads) keepFilter(keep func(string, int32) bool) {
 	for _, m := range []offsetLoadMap{
-		l.list,
-		l.epoch,
+		l.List,
+		l.Epoch,
 	} {
 		for t, ps := range m {
 			for p := range ps {
@@ -749,8 +786,8 @@ func (dst *listOrEpochLoads) mergeFrom(src listOrEpochLoads) {
 		m        offsetLoadMap
 		loadType listOrEpochLoadType
 	}{
-		{src.list, loadTypeList},
-		{src.epoch, loadTypeEpoch},
+		{src.List, loadTypeList},
+		{src.Epoch, loadTypeEpoch},
 	} {
 		for t, ps := range srcs.m {
 			for p, load := range ps {
@@ -760,7 +797,7 @@ func (dst *listOrEpochLoads) mergeFrom(src listOrEpochLoads) {
 	}
 }
 
-func (l listOrEpochLoads) isEmpty() bool { return len(l.list) == 0 && len(l.epoch) == 0 }
+func (l listOrEpochLoads) isEmpty() bool { return len(l.List) == 0 && len(l.Epoch) == 0 }
 
 func (l listOrEpochLoads) loadWithSession(s *consumerSession) {
 	if !l.isEmpty() {
@@ -1089,13 +1126,13 @@ func (s *consumerSession) listOrEpoch(waiting listOrEpochLoads, immediate bool) 
 	var issued, received int
 	for broker, brokerLoad := range brokerLoads {
 		s.c.cl.cfg.logger.Log(LogLevelDebug, "offsets to load broker", "broker", broker.meta.NodeID, "load", brokerLoad)
-		if len(brokerLoad.list) > 0 {
+		if len(brokerLoad.List) > 0 {
 			issued++
-			go s.c.cl.listOffsetsForBrokerLoad(s.ctx, broker, brokerLoad.list, s.tps, results)
+			go s.c.cl.listOffsetsForBrokerLoad(s.ctx, broker, brokerLoad.List, s.tps, results)
 		}
-		if len(brokerLoad.epoch) > 0 {
+		if len(brokerLoad.Epoch) > 0 {
 			issued++
-			go s.c.cl.loadEpochsForBrokerLoad(s.ctx, broker, brokerLoad.epoch, s.tps, results)
+			go s.c.cl.loadEpochsForBrokerLoad(s.ctx, broker, brokerLoad.Epoch, s.tps, results)
 		}
 	}
 
@@ -1209,8 +1246,8 @@ func (s *consumerSession) mapLoadsToBrokers(loads listOrEpochLoads) map[*broker]
 		m        offsetLoadMap
 		loadType listOrEpochLoadType
 	}{
-		{loads.list, loadTypeList},
-		{loads.epoch, loadTypeEpoch},
+		{loads.List, loadTypeList},
+		{loads.Epoch, loadTypeEpoch},
 	} {
 		for topic, partitions := range loads.m {
 			topicPartitions := topics.loadTopic(topic) // this must exist, it not existing would be a bug
