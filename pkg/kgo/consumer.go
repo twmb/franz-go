@@ -26,13 +26,6 @@ func (o Offset) MarshalJSON() ([]byte, error) {
 	return []byte(fmt.Sprintf(`{"At":%d,"Relative":%d,"Epoch":%d,"CurrentEpoch":%d}`, o.at, o.relative, o.epoch, o.currentEpoch)), nil
 }
 
-func (o Offset) String() string {
-	if o.relative == 0 {
-		return fmt.Sprintf("at:%d epoch:%d curEpoch:%d", o.at, o.epoch, o.currentEpoch)
-	}
-	return fmt.Sprintf("at:%d rel:%d epoch:%d curEpoch:%d", o.at, o.relative, o.epoch, o.currentEpoch)
-}
-
 // NewOffset creates and returns an offset to use in ConsumePartitions or
 // ConsumeResetOffset.
 //
@@ -670,16 +663,6 @@ func (o offsetLoad) MarshalJSON() ([]byte, error) {
 	return []byte(fmt.Sprintf(`{"Replica":%d,"At":%d,"Relative":%d,"Epoch":%d,"CurrentEpoch":%d}`, o.replica, o.at, o.relative, o.epoch, o.currentEpoch)), nil
 }
 
-func (o offsetLoad) String() string {
-	if o.replica == -1 {
-		return o.Offset.String()
-	}
-	if o.relative == 0 {
-		return fmt.Sprintf("rep:%d at:%d epoch:%d curEpoch:%d", o.replica, o.at, o.epoch, o.currentEpoch)
-	}
-	return fmt.Sprintf("rep:%d at:%d rel:%d epoch:%d curEpoch:%d", o.replica, o.at, o.relative, o.epoch, o.currentEpoch)
-}
-
 func (o offsetLoadMap) errToLoaded(err error) []loadedOffset {
 	var loaded []loadedOffset
 	for t, ps := range o {
@@ -1196,6 +1179,25 @@ func (s *consumerSession) handleListOrEpochResults(loaded loadedOffsets) (reload
 	// This function can be running twice concurrently, so we need to guard
 	// listOrEpochLoadsLoading and usingCursors. For simplicity, we just
 	// guard this entire function.
+
+	debug := s.c.cl.cfg.logger.Level() >= LogLevelDebug
+	type offsetEpoch struct {
+		Offset      int64
+		LeaderEpoch int32
+	}
+	var using, reloading map[string]map[int32]offsetEpoch
+	if debug {
+		using = make(map[string]map[int32]offsetEpoch)
+		reloading = make(map[string]map[int32]offsetEpoch)
+		defer func() {
+			t := "list"
+			if loaded.loadType == loadTypeEpoch {
+				t = "epoch"
+			}
+			s.c.cl.cfg.logger.Log(LogLevelDebug, fmt.Sprintf("handled %s results", t), "broker", logID(loaded.broker), "using", using, "reloading", reloading)
+		}()
+	}
+
 	s.listOrEpochMu.Lock()
 	defer s.listOrEpochMu.Unlock()
 
@@ -1203,6 +1205,15 @@ func (s *consumerSession) handleListOrEpochResults(loaded loadedOffsets) (reload
 		s.listOrEpochLoadsLoading.removeLoad(load.topic, load.partition) // remove the tracking of this load from our session
 
 		use := func() {
+			if debug {
+				tusing := using[load.topic]
+				if tusing == nil {
+					tusing = make(map[int32]offsetEpoch)
+					using[load.topic] = tusing
+				}
+				tusing[load.partition] = offsetEpoch{load.offset, load.leaderEpoch}
+			}
+
 			load.cursor.setOffset(cursorOffset{
 				offset:            load.offset,
 				lastConsumedEpoch: load.leaderEpoch,
@@ -1223,6 +1234,15 @@ func (s *consumerSession) handleListOrEpochResults(loaded loadedOffsets) (reload
 			reloads.addLoad(load.topic, load.partition, loaded.loadType, load.request)
 			if !kerr.IsRetriable(load.err) && !isRetriableBrokerErr(load.err) { // non-retriable response error; signal such in a response
 				s.c.addFakeReadyForDraining(load.topic, load.partition, load.err)
+			}
+
+			if debug {
+				treloading := reloading[load.topic]
+				if treloading == nil {
+					treloading = make(map[int32]offsetEpoch)
+					reloading[load.topic] = treloading
+				}
+				treloading[load.partition] = offsetEpoch{load.offset, load.leaderEpoch}
 			}
 		}
 	}
@@ -1306,6 +1326,7 @@ type loadedOffset struct {
 
 // The results of ListOffsets or OffsetForLeaderEpoch for an individual broker.
 type loadedOffsets struct {
+	broker   int32
 	loaded   []loadedOffset
 	loadType listOrEpochLoadType
 }
@@ -1317,7 +1338,7 @@ func (l *loadedOffsets) addAll(as []loadedOffset) loadedOffsets {
 }
 
 func (cl *Client) listOffsetsForBrokerLoad(ctx context.Context, broker *broker, load offsetLoadMap, tps *topicsPartitions, results chan<- loadedOffsets) {
-	loaded := loadedOffsets{loadType: loadTypeList}
+	loaded := loadedOffsets{broker: broker.meta.NodeID, loadType: loadTypeList}
 
 	kresp, err := broker.waitResp(ctx, load.buildListReq(cl.cfg.isolationLevel))
 	if err != nil {
@@ -1388,7 +1409,7 @@ func (cl *Client) listOffsetsForBrokerLoad(ctx context.Context, broker *broker, 
 }
 
 func (cl *Client) loadEpochsForBrokerLoad(ctx context.Context, broker *broker, load offsetLoadMap, tps *topicsPartitions, results chan<- loadedOffsets) {
-	loaded := loadedOffsets{loadType: loadTypeEpoch}
+	loaded := loadedOffsets{broker: broker.meta.NodeID, loadType: loadTypeEpoch}
 
 	kresp, err := broker.waitResp(ctx, load.buildEpochReq())
 	if err != nil {
