@@ -12,6 +12,8 @@ import (
 )
 
 // GroupBalancer balances topics and partitions among group members.
+//
+// A GroupBalancer is roughly equivalent to Kafka's PartitionAssignor.
 type GroupBalancer interface {
 	// ProtocolName returns the name of the protocol, e.g. roundrobin,
 	// range, sticky.
@@ -135,6 +137,10 @@ func (b *ConsumerBalancer) NewPlan() *BalancePlan {
 
 // ConsumerBalancerBalance is what the ConsumerBalancer invokes to balance a
 // group.
+//
+// This is a complicated interface, but in short, this interface has one
+// function that implements the actual balancing logic: using the input
+// balancer, balance the input topics and partitions.
 type ConsumerBalancerBalance interface {
 	Balance(*ConsumerBalancer, map[string]int32) IntoSyncAssignment
 }

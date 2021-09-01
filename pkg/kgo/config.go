@@ -1178,16 +1178,15 @@ func ConsumerGroup(group string) GroupOpt {
 }
 
 // Balancers sets the group balancers to use for dividing topic partitions
-// among group members, overriding the defaults.
-//
-// The current default is [cooperative-sticky].
+// among group members, overriding the current default [cooperative-sticky].
+// This option is equivalent to Kafka's partition.assignment.strategies option.
 //
 // For balancing, Kafka chooses the first protocol that all group members agree
 // to support.
 //
-// Note that if you want to opt in to cooperative-sticky rebalancing,
-// cooperative group balancing is incompatible with eager (classical)
-// rebalancing and requires a careful rollout strategy (see KIP-429).
+// Note that if you opt in to cooperative-sticky rebalancing, cooperative group
+// balancing is incompatible with eager (classical) rebalancing and requires a
+// careful rollout strategy (see KIP-429).
 func Balancers(balancers ...GroupBalancer) GroupOpt {
 	return groupOpt{func(cfg *cfg) { cfg.balancers = balancers }}
 }
