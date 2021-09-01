@@ -348,8 +348,11 @@ func (cfg *cfg) validate() error {
 	if cfg.autocommitGreedy && cfg.autocommitMarks {
 		return errors.New("cannot enable both greedy autocommitting and marked autocommitting")
 	}
-	if cfg.autocommitGreedy || cfg.autocommitDisable || cfg.autocommitMarks && len(cfg.group) == 0 {
+	if (cfg.autocommitGreedy || cfg.autocommitDisable || cfg.autocommitMarks || cfg.setCommitCallback) && len(cfg.group) == 0 {
 		return errors.New("invalid autocommit options specified when a group was not specified")
+	}
+	if (cfg.setLost || cfg.setRevoked || cfg.setAssigned) && len(cfg.group) == 0 {
+		return errors.New("invalid group partition assigned/revoked/lost functions set when a group was not specified")
 	}
 
 	return nil
@@ -1389,8 +1392,8 @@ func GroupProtocol(protocol string) GroupOpt {
 	return groupOpt{func(cfg *cfg) { cfg.protocol = protocol }}
 }
 
-// CommitCallback sets the callback to use if autocommitting is enabled. This
-// overrides the default callback that logs errors and continues.
-func CommitCallback(fn func(*Client, *kmsg.OffsetCommitRequest, *kmsg.OffsetCommitResponse, error)) GroupOpt {
+// AutoCommitCallback sets the callback to use if autocommitting is enabled.
+// This overrides the default callback that logs errors and continues.
+func AutoCommitCallback(fn func(*Client, *kmsg.OffsetCommitRequest, *kmsg.OffsetCommitResponse, error)) GroupOpt {
 	return groupOpt{func(cfg *cfg) { cfg.commitCallback, cfg.setCommitCallback = fn, true }}
 }
