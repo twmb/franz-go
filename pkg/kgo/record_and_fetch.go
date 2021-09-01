@@ -314,8 +314,10 @@ func (fs Fetches) IsClientClosed() bool {
 // documentation on that function for what types of errors are possible.
 func (fs Fetches) EachError(fn func(string, int32, error)) {
 	for _, f := range fs {
-		for _, ft := range f.Topics {
-			for _, fp := range ft.Partitions {
+		for i := range f.Topics {
+			ft := &f.Topics[i]
+			for j := range ft.Partitions {
+				fp := &ft.Partitions[j]
 				if fp.Err != nil {
 					fn(ft.Topic, fp.Partition, fp.Err)
 				}
@@ -440,6 +442,21 @@ func (fs Fetches) EachRecord(fn func(*Record)) {
 	for iter := fs.RecordIter(); !iter.Done(); {
 		fn(iter.Next())
 	}
+}
+
+// CollectRecords returns all records in all fetches.
+//
+// This is a convenience function that does a single slice allocation.
+func (fs Fetches) CollectRecords() []*Record {
+	var n int
+	fs.EachPartition(func(p FetchTopicPartition) {
+		n += len(p.Records)
+	})
+	rs := make([]*Record, 0, n)
+	fs.EachPartition(func(p FetchTopicPartition) {
+		rs = append(rs, p.Records...)
+	})
+	return rs
 }
 
 // FetchTopicPartition is similar to FetchTopic, but for an individual
