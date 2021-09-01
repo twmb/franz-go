@@ -881,25 +881,25 @@ func RecordRetries(n int) ProducerOpt {
 	return producerOpt{func(cfg *cfg) { cfg.recordRetries = int64(n) }}
 }
 
-// StopOnDataLoss sets the client to stop producing if data loss is detected,
-// overriding the default false.
+// StopProducerOnDataLossDetected sets the client to stop producing if data
+// loss is detected, overriding the default false.
 //
 // Note that if using this option, it is strongly recommended to not have a
 // retry limit. Doing so may lead to errors where the client fails a batch on a
 // recoverable error, which internally bumps the idempotent sequence number
 // used for producing, which may then later cause an inadvertent out of order
 // sequence number and false "data loss" detection.
-func StopOnDataLoss() ProducerOpt {
+func StopProducerOnDataLossDetected() ProducerOpt {
 	return producerOpt{func(cfg *cfg) { cfg.stopOnDataLoss = true }}
 }
 
-// OnDataLoss sets a function to call if data loss is detected when
-// producing records if the client is configured to continue on data loss.
-// Thus, this option is mutually exclusive with StopOnDataLoss.
+// ProducerOnDataLossDetected sets a function to call if data loss is detected
+// when producing records if the client is configured to continue on data loss.
+// Thus, this option is mutually exclusive with StopProducerOnDataLossDetected.
 //
 // The passed function will be called with the topic and partition that data
 // loss was detected on.
-func OnDataLoss(fn func(string, int32)) ProducerOpt {
+func ProducerOnDataLossDetected(fn func(string, int32)) ProducerOpt {
 	return producerOpt{func(cfg *cfg) { cfg.onDataLoss = fn }}
 }
 
