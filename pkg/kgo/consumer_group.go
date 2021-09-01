@@ -1348,7 +1348,6 @@ func (g *groupConsumer) updateUncommitted(fetches Fetches) {
 					}
 				}
 
-				prior.head = prior.dirty
 				prior.dirty = set
 				if setHead {
 					prior.head = set
