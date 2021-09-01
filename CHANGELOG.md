@@ -1,3 +1,37 @@
+v0.11.0
+===
+
+This release is an rc2 for a v1 release, and contains breaking API changes
+related to renaming some options. The point of this release is to allow any
+chance for final API suggestions before stabilization.
+
+The following configuration options were changed:
+
+* `ConnTimeoutOverhead` to `RequestTimeoutOverhead`
+* `CommitCallback` to `AutoCommitCallback`
+* `On{Assigned,Revoked,Lost}` to `OnPartitions{Assigned,LostRevoked}`
+* `BatchCompression` to `ProducerBatchCompression`
+* `Linger` to `ProducerLinger`
+* `BatchMaxBytes` to `ProducerBatchMaxBytes`
+* `{,Stop}OnDataLoss` to `{,Stop}ProducerOnDataLossDetected`
+* `RecordTimeout` to `RecordDeliveryTimeout`
+
+The point of these renames is to make the options a bit clearer as to their
+purpose and to hopefully be slightly less confusing.
+
+**If you have any API suggestions that should be addressed before a 1.0 API
+stabilization release, please open an issue.**
+
+- [`577c73a`](https://github.com/twmb/franz-go/commit/577c73a) **breaking**: rename RecordTimeout to RecordDeliveryTimeout
+- [`76ae8f5`](https://github.com/twmb/franz-go/commit/76ae8f5) **breaking**: rename {,Stop}OnDataLoss to {,Stop}ProducerOnDataLossDetected
+- [`6272a3b`](https://github.com/twmb/franz-go/commit/6272a3b) **breaking**: rename BatchMaxBytes to ProducerBatchMaxBytes
+- [`9a76213`](https://github.com/twmb/franz-go/commit/9a76213) **breaking**: rename Linger to ProducerLinger
+- [`3d354bc`](https://github.com/twmb/franz-go/commit/3d354bc) **breaking**: rename BatchCompression to ProducerBatchCompression
+- [`8c3eb3c`](https://github.com/twmb/franz-go/commit/8c3eb3c) **breaking**: renaming OnXyz to OnPartitionsXyz
+- [`525b2d2`](https://github.com/twmb/franz-go/commit/525b2d2) **breaking**: rename CommitCallback to AutoCommitCallback
+- [`ac9fd1c`](https://github.com/twmb/franz-go/commit/ac9fd1c) docs: clarify Balancer is equivalent to Java's PartitionAssignor
+- [`2109ed4`](https://github.com/twmb/franz-go/commit/2109ed4) **breaking**: rename ConnTimeoutOverhead to RequestTimeoutOverhead
+
 v0.10.3
 ===
 
