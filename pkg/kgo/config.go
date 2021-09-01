@@ -804,17 +804,18 @@ func DisableIdempotentWrite() ProducerOpt {
 	return producerOpt{func(cfg *cfg) { cfg.disableIdempotency = true }}
 }
 
-// BatchCompression sets the compression codec to use for producing records.
+// ProducerBatchCompression sets the compression codec to use for producing
+// records.
 //
-// Compression is chosen in the order preferred based on broker support.
-// For example, zstd compression was introduced in Kafka 2.1.0, so the
-// preference can be first zstd, fallback snappy, fallback none.
+// Compression is chosen in the order preferred based on broker support.  For
+// example, zstd compression was introduced in Kafka 2.1.0, so the preference
+// can be first zstd, fallback snappy, fallback none.
 //
-// The default preference is [snappy, none], which should be fine for all
-// old consumers since snappy compression has existed since Kafka 0.8.0.
-// To use zstd, your brokers must be at least 2.1.0 and all consumers must
-// be upgraded to support decoding zstd records.
-func BatchCompression(preference ...CompressionCodec) ProducerOpt {
+// The default preference is [snappy, none], which should be fine for all old
+// consumers since snappy compression has existed since Kafka 0.8.0.  To use
+// zstd, your brokers must be at least 2.1.0 and all consumers must be upgraded
+// to support decoding zstd records.
+func ProducerBatchCompression(preference ...CompressionCodec) ProducerOpt {
 	return producerOpt{func(cfg *cfg) { cfg.compression = preference }}
 }
 
