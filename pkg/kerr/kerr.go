@@ -174,6 +174,7 @@ var (
 	InconsistentTopicID                = &Error{"INCONSISTENT_TOPIC_ID", 103, true, "The log's topic ID did not match the topic ID in the request."}
 	InconsistentClusterID              = &Error{"INCONSISTENT_CLUSTER_ID", 104, false, "The clusterId in the request does not match that found on the server."}
 	TransactionalIDNotFound            = &Error{"TRANSACTIONAL_ID_NOT_FOUND", 105, false, "The transactionalId could not be found."}
+	FetchSessionTopicIDError           = &Error{"FETCH_SESSION_TOPIC_ID_ERROR", 106, true, "The fetch session encountered inconsistent topic ID usage."}
 )
 
 var code2err = map[int16]error{
@@ -284,4 +285,5 @@ var code2err = map[int16]error{
 	103: InconsistentTopicID,
 	104: InconsistentClusterID,
 	105: TransactionalIDNotFound,
+	106: FetchSessionTopicIDError,
 }
