@@ -397,7 +397,7 @@ func (b *broker) handleReqs() {
 			continue
 		}
 
-		rt, _ := cxn.cl.connTimeoutFn(req)
+		rt, _ := cxn.cl.connTimeouter.timeouts(req)
 
 		cxn.waitResp(promisedResp{
 			pr.ctx,
@@ -664,7 +664,7 @@ start:
 		return writeErr
 	}
 
-	rt, _ := cxn.cl.connTimeoutFn(req)
+	rt, _ := cxn.cl.connTimeouter.timeouts(req)
 	// api versions does *not* use flexible response headers; see comment in promisedResp
 	rawResp, err := cxn.readResponse(nil, req.Key(), req.GetVersion(), corrID, false, rt, bytesWritten, writeWait, timeToWrite, readEnqueue)
 	if err != nil {
@@ -736,7 +736,7 @@ start:
 			return writeErr
 		}
 
-		rt, _ := cxn.cl.connTimeoutFn(req)
+		rt, _ := cxn.cl.connTimeouter.timeouts(req)
 		rawResp, err := cxn.readResponse(nil, req.Key(), req.GetVersion(), corrID, req.IsFlexible(), rt, bytesWritten, writeWait, timeToWrite, readEnqueue)
 		if err != nil {
 			return err
@@ -781,7 +781,7 @@ func (cxn *brokerCxn) doSasl(authenticate bool) error {
 
 	// Even if we do not wrap our reads/writes in SASLAuthenticate, we
 	// still use the SASLAuthenticate timeouts.
-	rt, wt := cxn.cl.connTimeoutFn(kmsg.NewPtrSASLAuthenticateRequest())
+	rt, wt := cxn.cl.connTimeouter.timeouts(kmsg.NewPtrSASLAuthenticateRequest())
 
 	// We continue writing until both the challenging is done AND the
 	// responses are done. We can have an additional response once we
@@ -918,7 +918,7 @@ func (cxn *brokerCxn) writeRequest(ctx context.Context, enqueuedForWritingAt tim
 		cxn.corrID,
 	)
 
-	_, wt := cxn.cl.connTimeoutFn(req)
+	_, wt := cxn.cl.connTimeouter.timeouts(req)
 	bytesWritten, writeErr, writeWait, timeToWrite, readEnqueue = cxn.writeConn(ctx, buf, wt, enqueuedForWritingAt)
 
 	cxn.cl.bufPool.put(buf)

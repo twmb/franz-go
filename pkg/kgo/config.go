@@ -66,10 +66,10 @@ type cfg struct {
 	// GENERAL SECTION //
 	/////////////////////
 
-	id                  *string // client ID
-	dialFn              func(context.Context, string, string) (net.Conn, error)
-	connTimeoutOverhead time.Duration
-	connIdleTimeout     time.Duration
+	id                     *string // client ID
+	dialFn                 func(context.Context, string, string) (net.Conn, error)
+	requestTimeoutOverhead time.Duration
+	connIdleTimeout        time.Duration
 
 	softwareName    string // KIP-511
 	softwareVersion string // KIP-511
@@ -263,9 +263,9 @@ func (cfg *cfg) validate() error {
 		// 0 <= allowed concurrency
 		{name: "max concurrent fetches", v: int64(cfg.maxConcurrentFetches), allowed: 0, badcmp: i64lt},
 
-		// 1s <= conn timeout overhead <= 15m
-		{name: "conn timeout max overhead", v: int64(cfg.connTimeoutOverhead), allowed: int64(15 * time.Minute), badcmp: i64gt, durs: true},
-		{name: "conn timeout min overhead", v: int64(cfg.connTimeoutOverhead), allowed: int64(time.Second), badcmp: i64lt, durs: true},
+		// 1s <= request timeout overhead <= 15m
+		{name: "request timeout max overhead", v: int64(cfg.requestTimeoutOverhead), allowed: int64(15 * time.Minute), badcmp: i64gt, durs: true},
+		{name: "request timeout min overhead", v: int64(cfg.requestTimeoutOverhead), allowed: int64(time.Second), badcmp: i64lt, durs: true},
 
 		// 1s <= conn idle <= 15m
 		{name: "conn min idle timeout", v: int64(cfg.connIdleTimeout), allowed: int64(time.Second), badcmp: i64lt, durs: true},
@@ -368,8 +368,8 @@ func defaultCfg() cfg {
 		id:     &defaultID,
 		dialFn: defaultDialer.DialContext,
 
-		connTimeoutOverhead: 20 * time.Second,
-		connIdleTimeout:     20 * time.Second,
+		requestTimeoutOverhead: 20 * time.Second,
+		connIdleTimeout:        20 * time.Second,
 
 		softwareName:    "kgo",
 		softwareVersion: "0.1.0",
@@ -500,7 +500,7 @@ func WithLogger(l Logger) Opt {
 	return clientOpt{func(cfg *cfg) { cfg.logger = &wrappedLogger{l} }}
 }
 
-// ConnTimeoutOverhead uses the given time as overhead while deadlining
+// RequestTimeoutOverhead uses the given time as overhead while deadlining
 // requests, overriding the default overhead of 20s.
 //
 // For most requests, the overhead will simply be this timeout. However, for
@@ -512,10 +512,13 @@ func WithLogger(l Logger) Opt {
 // For writes, the timeout is always the overhead. We buffer writes in our
 // client before one quick flush, so we always expect the write to be fast.
 //
+// Note that hitting the timeout kills a connection, which will fail any other
+// active writes or reads on the connection.
+//
 // This option is roughly equivalent to request.timeout.ms, but grants
 // additional time to requests that have timeout fields.
-func ConnTimeoutOverhead(overhead time.Duration) Opt {
-	return clientOpt{func(cfg *cfg) { cfg.connTimeoutOverhead = overhead }}
+func RequestTimeoutOverhead(overhead time.Duration) Opt {
+	return clientOpt{func(cfg *cfg) { cfg.requestTimeoutOverhead = overhead }}
 }
 
 // ConnIdleTimeout is a rough amount of time to allow connections to idle
@@ -530,7 +533,7 @@ func ConnTimeoutOverhead(overhead time.Duration) Opt {
 //
 // Connections are not reaped if they are actively being written to or read
 // from; thus, a request can take a really long time itself and not be reaped
-// (however, this may lead to the ConnTimeoutOverhead).
+// (however, this may lead to the RequestTimeoutOverhead).
 func ConnIdleTimeout(timeout time.Duration) Opt {
 	return clientOpt{func(cfg *cfg) { cfg.connIdleTimeout = timeout }}
 }

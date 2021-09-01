@@ -62,7 +62,7 @@ type Client struct {
 	sinksAndSources   map[int32]sinkAndSource
 
 	reqFormatter  *kmsg.RequestFormatter
-	connTimeoutFn func(kmsg.Request) (time.Duration, time.Duration)
+	connTimeouter connTimeouter
 
 	bufPool bufPool // for to brokers to share underlying reusable request buffers
 	pnrPool pnrPool // for sinks to reuse []promisedNumberedRecord
@@ -154,7 +154,7 @@ func NewClient(opts ...Opt) (*Client, error) {
 		sinksAndSources: make(map[int32]sinkAndSource),
 
 		reqFormatter:  kmsg.NewRequestFormatter(),
-		connTimeoutFn: connTimeoutBuilder(cfg.connTimeoutOverhead),
+		connTimeouter: connTimeouter{def: cfg.requestTimeoutOverhead},
 
 		bufPool: newBufPool(),
 		pnrPool: newPnrPool(),
@@ -245,55 +245,57 @@ func parseBrokerAddr(addr string) (hostport, error) {
 	return hostport{h, int32(port)}, nil
 }
 
-func connTimeoutBuilder(def time.Duration) func(kmsg.Request) (time.Duration, time.Duration) {
-	var joinMu sync.Mutex
-	var lastRebalanceTimeout time.Duration
+type connTimeouter struct {
+	def                  time.Duration
+	joinMu               sync.Mutex
+	lastRebalanceTimeout time.Duration
+}
 
-	return func(req kmsg.Request) (read, write time.Duration) {
-		millis := func(m int32) time.Duration { return time.Duration(m) * time.Millisecond }
-		switch t := req.(type) {
-		default:
-			if timeoutRequest, ok := req.(kmsg.TimeoutRequest); ok {
-				timeoutMillis := timeoutRequest.Timeout()
-				return def + millis(timeoutMillis), def
-			}
-			return def, def
-
-		case *produceRequest:
-			return def + millis(t.timeout), def
-		case *fetchRequest:
-			return def + millis(t.maxWait), def
-		case *kmsg.FetchRequest:
-			return def + millis(t.MaxWaitMillis), def
-
-		// SASL may interact with an external system; we give each step
-		// of the read process 30s by default.
-
-		case *kmsg.SASLHandshakeRequest,
-			*kmsg.SASLAuthenticateRequest:
-			return 30 * time.Second, def
-
-		// Join and sync can take a long time. Sync has no notion of
-		// timeouts, but since the flow of requests should be first
-		// join, then sync, we can stash the timeout from the join.
-
-		case *kmsg.JoinGroupRequest:
-			joinMu.Lock()
-			lastRebalanceTimeout = millis(t.RebalanceTimeoutMillis)
-			joinMu.Unlock()
-
-			return def + millis(t.RebalanceTimeoutMillis), def
-		case *kmsg.SyncGroupRequest:
-			read := def
-			joinMu.Lock()
-			if lastRebalanceTimeout != 0 {
-				read = lastRebalanceTimeout
-			}
-			joinMu.Unlock()
-
-			return read, def
-
+func (c *connTimeouter) timeouts(req kmsg.Request) (r, w time.Duration) {
+	def := c.def
+	millis := func(m int32) time.Duration { return time.Duration(m) * time.Millisecond }
+	switch t := req.(type) {
+	default:
+		if timeoutRequest, ok := req.(kmsg.TimeoutRequest); ok {
+			timeoutMillis := timeoutRequest.Timeout()
+			return def + millis(timeoutMillis), def
 		}
+		return def, def
+
+	case *produceRequest:
+		return def + millis(t.timeout), def
+	case *fetchRequest:
+		return def + millis(t.maxWait), def
+	case *kmsg.FetchRequest:
+		return def + millis(t.MaxWaitMillis), def
+
+	// SASL may interact with an external system; we give each step
+	// of the read process 30s by default.
+
+	case *kmsg.SASLHandshakeRequest,
+		*kmsg.SASLAuthenticateRequest:
+		return 30 * time.Second, def
+
+	// Join and sync can take a long time. Sync has no notion of
+	// timeouts, but since the flow of requests should be first
+	// join, then sync, we can stash the timeout from the join.
+
+	case *kmsg.JoinGroupRequest:
+		c.joinMu.Lock()
+		c.lastRebalanceTimeout = millis(t.RebalanceTimeoutMillis)
+		c.joinMu.Unlock()
+
+		return def + millis(t.RebalanceTimeoutMillis), def
+	case *kmsg.SyncGroupRequest:
+		read := def
+		c.joinMu.Lock()
+		if c.lastRebalanceTimeout != 0 {
+			read = c.lastRebalanceTimeout
+		}
+		c.joinMu.Unlock()
+
+		return read, def
+
 	}
 }
 
