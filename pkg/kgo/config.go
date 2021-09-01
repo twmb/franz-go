@@ -1255,77 +1255,78 @@ func RequireStableFetchOffsets() GroupOpt {
 	return groupOpt{func(cfg *cfg) { cfg.requireStable = true }}
 }
 
-// OnAssigned sets the function to be called when a group is joined after
-// partitions are assigned before fetches for those partitions begin.
+// OnPartitionsAssigned sets the function to be called when a group is joined
+// after partitions are assigned before fetches for those partitions begin.
 //
-// This function combined with OnRevoked should not exceed the rebalance
-// interval. It is possible for the group, immediately after finishing a
-// balance, to re-enter a new balancing session.
+// This function combined with OnPartitionsRevoked should not exceed the
+// rebalance interval. It is possible for the group, immediately after
+// finishing a balance, to re-enter a new balancing session.
 //
-// The OnAssigned function is passed the client's context, which is only
-// canceled if the client is closed.
-func OnAssigned(onAssigned func(context.Context, *Client, map[string][]int32)) GroupOpt {
+// The OnPartitionsAssigned function is passed the client's context, which is
+// only canceled if the client is closed.
+func OnPartitionsAssigned(onAssigned func(context.Context, *Client, map[string][]int32)) GroupOpt {
 	return groupOpt{func(cfg *cfg) { cfg.onAssigned, cfg.setAssigned = onAssigned, true }}
 }
 
-// OnRevoked sets the function to be called once this group member has
-// partitions revoked.
+// OnPartitionsRevoked sets the function to be called once this group member
+// has partitions revoked.
 //
-// This function combined with OnAssigned should not exceed the rebalance
-// interval. It is possible for the group, immediately after finishing a
-// balance, to re-enter a new balancing session.
+// This function combined with OnPartitionsAssigned should not exceed the
+// rebalance interval. It is possible for the group, immediately after
+// finishing a balance, to re-enter a new balancing session.
 //
-// If autocommit is enabled, the default OnRevoked is a blocking commit all
-// non-dirty offsets (where dirty is the most recent poll). The reason for a
-// blocking commit is so that no later commit cancels the blocking commit. If
-// the commit in OnRevoked were canceled, then the rebalance would proceed
-// immediately, the commit that canceled the blocking commit would fail, and
-// duplicates could be consumed after the rebalance completes.
+// If autocommit is enabled, the default OnPartitionsRevoked is a blocking
+// commit all non-dirty offsets (where dirty is the most recent poll). The
+// reason for a blocking commit is so that no later commit cancels the blocking
+// commit. If the commit in OnPartitionsRevoked were canceled, then the
+// rebalance would proceed immediately, the commit that canceled the blocking
+// commit would fail, and duplicates could be consumed after the rebalance
+// completes.
 //
-// The OnRevoked function is passed the client's context, which is only
-// canceled if the client is closed.
+// The OnPartitionsRevoked function is passed the client's context, which is
+// only canceled if the client is closed.
 //
-// OnRevoked function is called at the end of a group session even if there are
-// no partitions being revoked.
+// OnPartitionsRevoked function is called at the end of a group session even if
+// there are no partitions being revoked.
 //
 // If you are committing offsets manually (have disabled autocommitting), it is
-// highly recommended to do a proper blocking commit in OnRevoked.
-func OnRevoked(onRevoked func(context.Context, *Client, map[string][]int32)) GroupOpt {
+// highly recommended to do a proper blocking commit in OnPartitionsRevoked.
+func OnPartitionsRevoked(onRevoked func(context.Context, *Client, map[string][]int32)) GroupOpt {
 	return groupOpt{func(cfg *cfg) { cfg.onRevoked, cfg.setRevoked = onRevoked, true }}
 }
 
-// OnLost sets the function to be called on "fatal" group errors, such as
-// IllegalGeneration, UnknownMemberID, and authentication failures. This
-// function differs from OnRevoked in that it is unlikely that commits will
-// succeed when partitions are outright lost, whereas commits likely will
-// succeed when revoking partitions.
+// OnPartitionsLost sets the function to be called on "fatal" group errors,
+// such as IllegalGeneration, UnknownMemberID, and authentication failures.
+// This function differs from OnPartitionsRevoked in that it is unlikely that
+// commits will succeed when partitions are outright lost, whereas commits
+// likely will succeed when revoking partitions.
 //
-// If not set, OnRevoked is used.
-func OnLost(onLost func(context.Context, *Client, map[string][]int32)) GroupOpt {
+// If not set, OnPartitionsRevoked is used.
+func OnPartitionsLost(onLost func(context.Context, *Client, map[string][]int32)) GroupOpt {
 	return groupOpt{func(cfg *cfg) { cfg.onLost, cfg.setLost = onLost, true }}
 }
 
 // DisableAutoCommit disable auto committing.
 //
-// If you disable autocommitting, you may want to use a custom OnRevoked,
-// otherwise you may end up doubly processing records (which is fine, just
-// leads to duplicate processing). Consider the scenario: you, member A, are
-// processing partition 0, and previously committed offset 4 and have now
-// locally processed through offset 30. A rebalance happens, and partition 0
-// moves to member B. If you use OnRevoked, you can detect that you are losing
-// this partition and commit your work through offset 30, so that member B can
-// start processing at offset 30. If you do not commit (i.e. you do not use a
-// custom OnRevoked), the other member will start processing at offset 4. It
-// may process through offset 50, leading to double processing of offsets 4
-// through 29. Worse, you, member A, can rewind member B's commit, because
-// member B may commit offset 50 and you may finally eventually commit offset
-// 30. If a rebalance happens, then even more duplicate processing will occur
-// of offsets 30 through 49.
+// If you disable autocommitting, you may want to use a custom
+// OnPartitionsRevoked, otherwise you may end up doubly processing records
+// (which is fine, just leads to duplicate processing). Consider the scenario:
+// you, member A, are processing partition 0, and previously committed offset 4
+// and have now locally processed through offset 30. A rebalance happens, and
+// partition 0 moves to member B. If you use OnPartitionsRevoked, you can
+// detect that you are losing this partition and commit your work through
+// offset 30, so that member B can start processing at offset 30. If you do not
+// commit (i.e. you do not use a custom OnPartitionsRevoked), the other member
+// will start processing at offset 4. It may process through offset 50, leading
+// to double processing of offsets 4 through 29. Worse, you, member A, can
+// rewind member B's commit, because member B may commit offset 50 and you may
+// finally eventually commit offset 30. If a rebalance happens, then even more
+// duplicate processing will occur of offsets 30 through 49.
 //
-// Again, OnRevoked is not necessary, and not using it just means double
-// processing, which for most workloads is fine since a simple group consumer
-// is not EOS / transactional, only at-least-once. But, this is something to be
-// aware of.
+// Again, OnPartitionsRevoked is not necessary, and not using it just means
+// double processing, which for most workloads is fine since a simple group
+// consumer is not EOS / transactional, only at-least-once. But, this is
+// something to be aware of.
 func DisableAutoCommit() GroupOpt {
 	return groupOpt{func(cfg *cfg) { cfg.autocommitDisable = true }}
 }

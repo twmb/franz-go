@@ -132,10 +132,10 @@ func (c *testConsumer) etl(etlsBeforeQuit int) {
 		// If we have etlsBeforeQuit, the behavior we want to trigger
 		// is to *not* commit when we leave.
 		//
-		// Lastly, we do not want to fall back from OnLost: OnLost
-		// should not be called due to us not erroring, but we may as
-		// well explicitly disable it.
-		OnRevoked(func(ctx context.Context, cl *Client, _ map[string][]int32) {
+		// Lastly, we do not want to fall back from OnPartitionsLost:
+		// OnPartitionsLost should not be called due to us not
+		// erroring, but we may as well explicitly disable it.
+		OnPartitionsRevoked(func(ctx context.Context, cl *Client, _ map[string][]int32) {
 			if etlsBeforeQuit >= 0 && netls >= etlsBeforeQuit {
 				return
 			}
@@ -143,7 +143,7 @@ func (c *testConsumer) etl(etlsBeforeQuit int) {
 				c.errCh <- fmt.Errorf("unable to commit: %v", err)
 			}
 		}),
-		OnLost(func(context.Context, *Client, map[string][]int32) {}),
+		OnPartitionsLost(func(context.Context, *Client, map[string][]int32) {}),
 	}
 
 	cl, _ := NewClient(opts...)
