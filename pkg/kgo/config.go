@@ -819,8 +819,8 @@ func ProducerBatchCompression(preference ...CompressionCodec) ProducerOpt {
 	return producerOpt{func(cfg *cfg) { cfg.compression = preference }}
 }
 
-// BatchMaxBytes upper bounds the size of a record batch, overriding the
-// default 1MB.
+// ProducerBatchMaxBytes upper bounds the size of a record batch, overriding
+// the default 1MB.
 //
 // This corresponds to Kafka's max.message.bytes, which defaults to 1,000,012
 // bytes (just over 1MB).
@@ -832,10 +832,10 @@ func ProducerBatchCompression(preference ...CompressionCodec) ProducerOpt {
 // If a single record encodes larger than this number (before compression), it
 // will will not be written and a callback will have the appropriate error.
 //
-// Note that this is the maximum size of a record batch before compression.
-// If a batch compresses poorly and actually grows the batch, the uncompressed
+// Note that this is the maximum size of a record batch before compression. If
+// a batch compresses poorly and actually grows the batch, the uncompressed
 // form will be used.
-func BatchMaxBytes(v int32) ProducerOpt {
+func ProducerBatchMaxBytes(v int32) ProducerOpt {
 	return producerOpt{func(cfg *cfg) { cfg.maxRecordBatchBytes = v }}
 }
 
