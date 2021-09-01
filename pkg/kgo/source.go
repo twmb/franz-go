@@ -690,6 +690,13 @@ func (s *source) fetch(consumerSession *consumerSession, doneFetch chan<- struct
 		s.cl.cfg.logger.Log(LogLevelInfo, "resetting fetch session", "broker", logID(s.nodeID), "err", err)
 		s.session.reset()
 		return
+
+	case kerr.FetchSessionTopicIDError, kerr.UnknownTopicID, kerr.InconsistentTopicID:
+		s.cl.cfg.logger.Log(LogLevelInfo, "topic id issues, resetting session and updating metadata", "broker", logID(s.nodeID), "err", err)
+		s.session.reset()
+		s.cl.triggerUpdateMetadataNow()
+		return
+
 	}
 
 	// At this point, we have successfully processed the response. Even if
