@@ -444,10 +444,12 @@ func (fs Fetches) EachRecord(fn func(*Record)) {
 	}
 }
 
-// CollectRecords returns all records in all fetches.
+// Records returns all records in all fetches.
 //
-// This is a convenience function that does a single slice allocation.
-func (fs Fetches) CollectRecords() []*Record {
+// This is a convenience function that does a single slice allocation. If you
+// can process records individually, it is far more efficient to use the Each
+// functions or the RecordIter.
+func (fs Fetches) Records() []*Record {
 	var n int
 	fs.EachPartition(func(p FetchTopicPartition) {
 		n += len(p.Records)
