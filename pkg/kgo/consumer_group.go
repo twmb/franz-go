@@ -1295,6 +1295,10 @@ type EpochOffset struct {
 	Offset int64
 }
 
+func (e EpochOffset) less(o EpochOffset) bool {
+	return e.Epoch < o.Epoch || e.Epoch == o.Epoch && e.Offset < o.Offset
+}
+
 type uncommitted map[string]map[int32]uncommit
 
 // updateUncommitted sets the latest uncommitted offset.
@@ -1302,6 +1306,9 @@ func (g *groupConsumer) updateUncommitted(fetches Fetches) {
 	var b bytes.Buffer
 	debug := g.cfg.logger.Level() >= LogLevelDebug
 
+	// We set the head offset if autocommitting is disabled (because we
+	// only use head / committed in that case), or if we are greedily
+	// autocommitting (so that the latest head is available to autocommit).
 	setHead := g.cfg.autocommitDisable || g.cfg.autocommitGreedy
 
 	g.mu.Lock()
@@ -1375,6 +1382,25 @@ func (g *groupConsumer) updateUncommitted(fetches Fetches) {
 // not committing greedily, this ensures that when we enter poll, everything
 // previously consumed is a candidate for autocommitting.
 func (g *groupConsumer) undirtyUncommitted() {
+	if g == nil {
+		return
+	}
+	// Disabling autocommit means we do not use the dirty offset: we always
+	// update head, and then manual commits use that.
+	if g.cfg.autocommitDisable {
+		return
+	}
+	// Greedy autocommitting does not use dirty offsets, because we always
+	// just set head to the latest.
+	if g.cfg.autocommitGreedy {
+		return
+	}
+	// If we are autocommitting marked records only, then we do not
+	// automatically un-dirty our offsets.
+	if g.cfg.autocommitMarks {
+		return
+	}
+
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
@@ -1474,9 +1500,7 @@ func (g *groupConsumer) updateCommitted(
 				&uncommit.head,
 				&uncommit.committed,
 			} {
-				if set.Epoch > next.Epoch ||
-					set.Epoch == next.Epoch &&
-						set.Offset > next.Offset {
+				if next.less(set) {
 					*next = set
 				}
 			}
@@ -1780,6 +1804,51 @@ func (cl *Client) CommitRecords(ctx context.Context, rs ...*Record) error {
 	})
 
 	return rerr
+}
+
+// MarkCommitRecords marks records to be available for autocommitting. This
+// function is only useful if you use the AutoCommitMarks config option, see
+// the documentation on that option for more details.
+func (cl *Client) MarkCommitRecords(rs ...*Record) {
+	g := cl.consumer.g
+	if g == nil || !cl.cfg.autocommitMarks {
+		return
+	}
+
+	sort.Slice(rs, func(i, j int) bool {
+		return rs[i].Topic < rs[j].Topic ||
+			rs[i].Topic == rs[j].Topic && rs[i].Partition < rs[j].Partition
+	})
+
+	if g.uncommitted == nil {
+		g.uncommitted = make(uncommitted)
+	}
+	var curTopic string
+	var curPartitions map[int32]uncommit
+	for _, r := range rs {
+		if curPartitions == nil || r.Topic != curTopic {
+			curPartitions = g.uncommitted[r.Topic]
+			if curPartitions == nil {
+				curPartitions = make(map[int32]uncommit)
+				g.uncommitted[r.Topic] = curPartitions
+			}
+			curTopic = r.Topic
+		}
+
+		set := EpochOffset{
+			r.LeaderEpoch,
+			r.Offset + 1,
+		}
+
+		next := curPartitions[r.Partition]
+		if next.head.less(set) {
+			next.head = set
+		}
+		if next.dirty.less(set) { // for sanity, but this should not happen
+			next.dirty = set
+		}
+		curPartitions[r.Partition] = next
+	}
 }
 
 // CommitUncommittedOffsets issues a synchronous offset commit for any

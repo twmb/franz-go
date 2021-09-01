@@ -164,6 +164,7 @@ type cfg struct {
 
 	autocommitDisable  bool // true if autocommit was disabled or we are transactional
 	autocommitGreedy   bool
+	autocommitMarks    bool
 	autocommitInterval time.Duration
 	commitCallback     func(*Client, *kmsg.OffsetCommitRequest, *kmsg.OffsetCommitResponse, error)
 }
@@ -336,6 +337,19 @@ func (cfg *cfg) validate() error {
 			}
 			cfg.topics[re] = compiled
 		}
+	}
+
+	if cfg.autocommitDisable && cfg.autocommitGreedy {
+		return errors.New("cannot both disable autocommitting and enable greedy autocommitting")
+	}
+	if cfg.autocommitDisable && cfg.autocommitMarks {
+		return errors.New("cannot both disable autocommitting and enable marked autocommitting")
+	}
+	if cfg.autocommitGreedy && cfg.autocommitMarks {
+		return errors.New("cannot enable both greedy autocommitting and marked autocommitting")
+	}
+	if cfg.autocommitGreedy || cfg.autocommitDisable || cfg.autocommitMarks && len(cfg.group) == 0 {
+		return errors.New("invalid autocommit options specified when a group was not specified")
 	}
 
 	return nil
@@ -1323,6 +1337,18 @@ func GreedyAutoCommit() GroupOpt {
 // default 5s.
 func AutoCommitInterval(interval time.Duration) GroupOpt {
 	return groupOpt{func(cfg *cfg) { cfg.autocommitInterval = interval }}
+}
+
+// AutoCommitMarks switches the autocommitting behavior to only commit "marked"
+// records, which can be done with the MarkCommitRecords method.
+//
+// This option is basically a halfway point between autocommitting and manually
+// committing. If you have slow batch processing of polls, then you can
+// manually mark records to be autocommitted before you poll again. This way,
+// if you usually take a long time between polls, your partial work can still
+// be automatically checkpointed through autocommitting.
+func AutoCommitMarks() GroupOpt {
+	return groupOpt{func(cfg *cfg) { cfg.autocommitMarks = true }}
 }
 
 // InstanceID sets the group consumer's instance ID, switching the group member
