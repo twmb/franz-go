@@ -903,8 +903,8 @@ func OnDataLoss(fn func(string, int32)) ProducerOpt {
 	return producerOpt{func(cfg *cfg) { cfg.onDataLoss = fn }}
 }
 
-// Linger sets how long individual topic partitions will linger
-// waiting for more records before triggering a request to be built.
+// ProducerLinger sets how long individual topic partitions will linger waiting
+// for more records before triggering a request to be built.
 //
 // Note that this option should only be used in low volume producers. The only
 // benefit of lingering is to potentially build a larger batch to reduce cpu
@@ -917,7 +917,7 @@ func OnDataLoss(fn func(string, int32)) ProducerOpt {
 // producer will likely be producing to many partitions; it is both unnecessary
 // to linger in this case and inefficient because the client will have many
 // timers running (and stopping and restarting) unnecessarily.
-func Linger(linger time.Duration) ProducerOpt {
+func ProducerLinger(linger time.Duration) ProducerOpt {
 	return producerOpt{func(cfg *cfg) { cfg.linger = linger }}
 }
 
