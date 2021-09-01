@@ -930,8 +930,8 @@ func ManualFlushing() ProducerOpt {
 	return producerOpt{func(cfg *cfg) { cfg.manualFlushing = true }}
 }
 
-// RecordTimeout sets a rough time of how long a record can sit around in a
-// batch before timing out, overriding the unlimited default.
+// RecordDeliveryTimeout sets a rough time of how long a record can sit around
+// in a batch before timing out, overriding the unlimited default.
 //
 // If idempotency is enabled (as it is by default), this option is only
 // enforced if it is safe to do so without creating invalid sequence numbers.
@@ -953,7 +953,7 @@ func ManualFlushing() ProducerOpt {
 // produce response. Thus, a sink backoff may delay record timeout slightly.
 //
 // This option is roughly equivalent to delivery.timeout.ms.
-func RecordTimeout(timeout time.Duration) ProducerOpt {
+func RecordDeliveryTimeout(timeout time.Duration) ProducerOpt {
 	return producerOpt{func(cfg *cfg) { cfg.recordTimeout = timeout }}
 }
 
