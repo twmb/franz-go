@@ -3,7 +3,7 @@ module bench
 go 1.16
 
 require (
-	github.com/twmb/franz-go v0.9.0
+	github.com/twmb/franz-go v0.11.0
 	github.com/twmb/franz-go/plugin/kprom v0.3.0
 )
 

@@ -104,8 +104,9 @@ func printBrokers(controllerID int32, brokers []kmsg.MetadataResponseBroker) {
 }
 
 func printTopics(topics []kmsg.MetadataResponseTopic) {
+	// We request with no topic IDs, so we should not receive nil topics.
 	sort.Slice(topics, func(i, j int) bool {
-		return topics[i].Topic < topics[j].Topic
+		return *topics[i].Topic < *topics[j].Topic
 	})
 
 	tw := beginTabWrite()
@@ -118,6 +119,6 @@ func printTopics(topics []kmsg.MetadataResponseTopic) {
 		if parts > 0 {
 			replicas = len(topic.Partitions[0].Replicas)
 		}
-		fmt.Fprintf(tw, "%s\t%d\t%d\n", topic.Topic, parts, replicas)
+		fmt.Fprintf(tw, "%s\t%d\t%d\n", *topic.Topic, parts, replicas)
 	}
 }

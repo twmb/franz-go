@@ -92,7 +92,7 @@ func main() {
 		// We have good compression, so we want to limit what we read
 		// back because snappy deflation will balloon our memory usage.
 		kgo.FetchMaxBytes(5 << 20),
-		kgo.BatchMaxBytes(int32(*batchMaxBytes)),
+		kgo.ProducerBatchMaxBytes(int32(*batchMaxBytes)),
 	}
 	if *noIdempotency {
 		opts = append(opts, kgo.DisableIdempotentWrite())
@@ -125,22 +125,22 @@ func main() {
 	}
 
 	if *linger != 0 {
-		opts = append(opts, kgo.Linger(*linger))
+		opts = append(opts, kgo.ProducerLinger(*linger))
 	}
 	if *noCompression {
-		opts = append(opts, kgo.BatchCompression(kgo.NoCompression()))
+		opts = append(opts, kgo.ProducerBatchCompression(kgo.NoCompression()))
 	} else {
 		switch strings.ToLower(*compression) {
 		case "", "none":
-			opts = append(opts, kgo.BatchCompression(kgo.NoCompression()))
+			opts = append(opts, kgo.ProducerBatchCompression(kgo.NoCompression()))
 		case "gzip":
-			opts = append(opts, kgo.BatchCompression(kgo.GzipCompression()))
+			opts = append(opts, kgo.ProducerBatchCompression(kgo.GzipCompression()))
 		case "snappy":
-			opts = append(opts, kgo.BatchCompression(kgo.SnappyCompression()))
+			opts = append(opts, kgo.ProducerBatchCompression(kgo.SnappyCompression()))
 		case "lz4":
-			opts = append(opts, kgo.BatchCompression(kgo.Lz4Compression()))
+			opts = append(opts, kgo.ProducerBatchCompression(kgo.Lz4Compression()))
 		case "zstd":
-			opts = append(opts, kgo.BatchCompression(kgo.ZstdCompression()))
+			opts = append(opts, kgo.ProducerBatchCompression(kgo.ZstdCompression()))
 		default:
 			die("unrecognized compression %s", *compression)
 		}
