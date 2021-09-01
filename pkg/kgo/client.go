@@ -1,20 +1,10 @@
 // Package kgo provides a pure Go efficient Kafka client for Kafka 0.8.0+ with
 // support for transactions, regex topic consuming, the latest partition
-// strategies, and more. This client aims to support all KIPs.
+// strategies, and more. This client supports all client related KIPs.
 //
 // This client aims to be simple to use while still interacting with Kafka in a
-// near ideal way. If any of this client is confusing, please raise GitHub
-// issues so we can make this clearer.
-//
-// For more overview of the entire client itself, please see the package
-// source's README.
-//
-// Note that the default group consumer balancing strategy is
-// "cooperative-sticky", which is incompatible with the historical (pre 2.4.0)
-// balancers. If you are planning to work with an older Kafka or in an existing
-// consumer group that uses eager balancers, be sure to use the Balancers
-// option when assigning a group. See the documentation on balancers for more
-// information.
+// near ideal way. For more overview of the entire client itself, please see
+// the README on the project's Github page.
 package kgo
 
 import (

@@ -556,7 +556,7 @@ func ConnIdleTimeout(timeout time.Duration) Opt {
 //
 // or
 //
-//     kgo.Dialer((&tls.Dialer{...})}.DialContext)
+//     kgo.Dialer((&tls.Dialer{...}).DialContext)
 //
 func Dialer(fn func(ctx context.Context, network, host string) (net.Conn, error)) Opt {
 	return clientOpt{func(cfg *cfg) { cfg.dialFn = fn }}
