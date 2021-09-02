@@ -7,6 +7,109 @@ import (
 	"github.com/twmb/franz-go/pkg/kerr"
 )
 
+type pausedTopics map[string]pausedPartitions
+
+type pausedPartitions struct {
+	all bool
+	m   map[int32]struct{}
+}
+
+func (m pausedTopics) has(topic string, partition int32) (paused bool) {
+	if len(m) == 0 {
+		return false
+	}
+	pps, exists := m[topic]
+	if !exists {
+		return false
+	}
+	if pps.all {
+		return true
+	}
+	_, exists = pps.m[partition]
+	return exists
+}
+
+func (m pausedTopics) addTopics(topics ...string) {
+	for _, topic := range topics {
+		pps, exists := m[topic]
+		if !exists {
+			pps = pausedPartitions{m: make(map[int32]struct{})}
+		}
+		pps.all = true
+		m[topic] = pps
+	}
+}
+
+func (m pausedTopics) delTopics(topics ...string) {
+	for _, topic := range topics {
+		pps, exists := m[topic]
+		if !exists {
+			continue
+		}
+		pps.all = false
+		if !pps.all && len(pps.m) == 0 {
+			delete(m, topic)
+		}
+	}
+}
+
+func (m pausedTopics) addPartitions(topicPartitions map[string][]int32) {
+	for topic, partitions := range topicPartitions {
+		pps, exists := m[topic]
+		if !exists {
+			pps = pausedPartitions{m: make(map[int32]struct{})}
+		}
+		for _, partition := range partitions {
+			pps.m[partition] = struct{}{}
+		}
+		m[topic] = pps
+	}
+}
+
+func (m pausedTopics) delPartitions(topicPartitions map[string][]int32) {
+	for topic, partitions := range topicPartitions {
+		pps, exists := m[topic]
+		if !exists {
+			continue
+		}
+		for _, partition := range partitions {
+			delete(pps.m, partition)
+		}
+		if !pps.all && len(pps.m) == 0 {
+			delete(m, topic)
+		}
+	}
+}
+
+func (m pausedTopics) pausedTopics() []string {
+	var r []string
+	for topic, pps := range m {
+		if pps.all {
+			r = append(r, topic)
+		}
+	}
+	return r
+}
+
+func (m pausedTopics) pausedPartitions() map[string][]int32 {
+	r := make(map[string][]int32)
+	for topic, pps := range m {
+		ps := make([]int32, 0, len(pps.m))
+		for partition := range pps.m {
+			ps = append(ps, partition)
+		}
+		r[topic] = ps
+	}
+	return r
+}
+
+func (m pausedTopics) clone() pausedTopics {
+	dup := make(pausedTopics)
+	dup.addTopics(m.pausedTopics()...)
+	dup.addPartitions(m.pausedPartitions())
+	return dup
+}
+
 func newTopicPartitions() *topicPartitions {
 	parts := new(topicPartitions)
 	parts.v.Store(new(topicPartitionsData))

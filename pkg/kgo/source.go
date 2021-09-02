@@ -439,6 +439,8 @@ func (s *source) createReq() *fetchRequest {
 		session: s.session,
 	}
 
+	paused := s.cl.consumer.loadPaused()
+
 	s.cursorsMu.Lock()
 	defer s.cursorsMu.Unlock()
 
@@ -446,7 +448,7 @@ func (s *source) createReq() *fetchRequest {
 	for i := 0; i < len(s.cursors); i++ {
 		c := s.cursors[cursorIdx]
 		cursorIdx = (cursorIdx + 1) % len(s.cursors)
-		if !c.usable() {
+		if !c.usable() || paused.has(c.topic, c.partition) {
 			continue
 		}
 		req.addCursor(c)

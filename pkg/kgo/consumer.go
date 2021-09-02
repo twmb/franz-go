@@ -92,6 +92,9 @@ type consumer struct {
 
 	bufferedRecords int64
 
+	pausedMu sync.Mutex   // grabbed when updating paused
+	paused   atomic.Value // loaded when issuing fetches
+
 	// mu is grabbed when
 	//  - polling fetches, for quickly draining sources / updating group uncommitted
 	//  - calling assignPartitions (group / direct updates)
@@ -129,6 +132,10 @@ type consumer struct {
 	fakeReadyForDraining    []Fetch
 }
 
+func (c *consumer) loadPaused() pausedTopics   { return c.paused.Load().(pausedTopics) }
+func (c *consumer) clonePaused() pausedTopics  { return c.paused.Load().(pausedTopics).clone() }
+func (c *consumer) storePaused(p pausedTopics) { c.paused.Store(p) }
+
 // BufferedFetchRecords returns the number of records currently buffered from
 // fetching within the client.
 //
@@ -153,6 +160,7 @@ func (u *usedCursors) use(c *cursor) {
 
 func (c *consumer) init(cl *Client) {
 	c.cl = cl
+	c.paused.Store(make(pausedTopics))
 	c.sourcesReadyCond = sync.NewCond(&c.sourcesReadyMu)
 
 	if len(cl.cfg.topics) == 0 && len(cl.cfg.partitions) == 0 {
@@ -384,6 +392,107 @@ func (cl *Client) PollRecords(ctx context.Context, maxPollRecords int) Fetches {
 
 	fill()
 	return fetches
+}
+
+// PauseFetchTopics sets the client to no longer fetch the given topics and
+// returns all currently paused topics. Paused topics persist until resumed.
+// You can call this function with no topics to simply receive the list of
+// currently paused topics.
+//
+// In contrast to the canonical Java client, this function does not clear
+// anything currently buffered. Buffered fetches containing paused topics are
+// still returned from polling.
+//
+// Pausing topics is independent from pausing individual partitions with the
+// PauseFetchPartitions method. If you pause partitions for a topic with
+// PauseFetchPartitions, and then pause that same topic with PauseFetchTopics,
+// the individually paused partitions will not be unpaused if you only call
+// ResumeFetchTopics.
+func (cl *Client) PauseFetchTopics(topics ...string) []string {
+	c := &cl.consumer
+	if len(topics) == 0 {
+		return c.loadPaused().pausedTopics()
+	}
+
+	c.pausedMu.Lock()
+	defer c.pausedMu.Unlock()
+
+	paused := c.clonePaused()
+	paused.addTopics(topics...)
+	c.storePaused(paused)
+	return paused.pausedTopics()
+}
+
+// PauseFetchPartitions sets the client to no longer fetch the given partitions
+// and returns all currently paused partitions. Paused partitions persist until
+// resumed. You can call this function with no partitions to simply receive the
+// list of currently paused partitions.
+//
+// In contrast to the canonical Java client, this function does not clear
+// anything currently buffered. Buffered fetches containing paused partitions
+// are still returned from polling.
+//
+// Pausing individual partitions is independent from pausing topics with the
+// PauseFetchTopics method. If you pause partitions for a topic with
+// PauseFetchPartitions, and then pause that same topic with PauseFetchTopics,
+// the individually paused partitions will not be unpaused if you only call
+// ResumeFetchTopics.
+func (cl *Client) PauseFetchPartitions(topicPartitions map[string][]int32) map[string][]int32 {
+	c := &cl.consumer
+	if len(topicPartitions) == 0 {
+		return c.loadPaused().pausedPartitions()
+	}
+
+	c.pausedMu.Lock()
+	defer c.pausedMu.Unlock()
+
+	paused := c.clonePaused()
+	paused.addPartitions(topicPartitions)
+	c.storePaused(paused)
+	return paused.pausedPartitions()
+}
+
+// ResumeFetchTopics resumes fetching the input topics if they were previously
+// paused. Resuming topics that are not currently paused is a per-topic no-op.
+// See the documentation on PauseTfetchTopics for more details.
+func (cl *Client) ResumeFetchTopics(topics ...string) {
+	defer func() {
+		cl.sinksAndSourcesMu.Lock()
+		for _, sns := range cl.sinksAndSources {
+			sns.source.maybeConsume()
+		}
+		cl.sinksAndSourcesMu.Unlock()
+	}()
+
+	c := &cl.consumer
+	c.pausedMu.Lock()
+	defer c.pausedMu.Unlock()
+
+	paused := c.clonePaused()
+	paused.delTopics(topics...)
+	c.storePaused(paused)
+}
+
+// ResumeFetchPartitions resumes fetching the input partitions if they were
+// previously paused. Resuming partitions that are not currently paused is a
+// per-topic no-op. See the documentation on PauseFetchPartitions for more
+// details.
+func (cl *Client) ResumeFetchPartitions(topicPartitions map[string][]int32) {
+	defer func() {
+		cl.sinksAndSourcesMu.Lock()
+		for _, sns := range cl.sinksAndSources {
+			sns.source.maybeConsume()
+		}
+		cl.sinksAndSourcesMu.Unlock()
+	}()
+
+	c := &cl.consumer
+	c.pausedMu.Lock()
+	defer c.pausedMu.Unlock()
+
+	paused := c.clonePaused()
+	paused.delPartitions(topicPartitions)
+	c.storePaused(paused)
 }
 
 // assignHow controls how assignPartitions operates.
