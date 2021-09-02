@@ -1820,6 +1820,10 @@ func (cl *Client) MarkCommitRecords(rs ...*Record) {
 			rs[i].Topic == rs[j].Topic && rs[i].Partition < rs[j].Partition
 	})
 
+	// protect g.uncommitted map
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
 	if g.uncommitted == nil {
 		g.uncommitted = make(uncommitted)
 	}
