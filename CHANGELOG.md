@@ -1,3 +1,15 @@
+v0.11.1
+===
+
+This is a patch release to a bug introduced in v0.10.3 / v0.11.0.
+
+The intent is to tag v1.0 either Friday (tomorrow) or Monday.
+
+- [`1469495`](https://github.com/twmb/franz-go/commit/1469495) **bugfix** isRetriableBrokerErr: nil error is **not** retriable (thanks @Neal!)
+- [`33635e2`](https://github.com/twmb/franz-go/commit/33635e2) **feature** consumer: add pausing / unpausing topics and partitions
+- [`082db89`](https://github.com/twmb/franz-go/commit/082db89) **bugfix** add locking to g.uncommitted MarkCommitRecords (thanks @vtolstov!)
+- [`3684df2`](https://github.com/twmb/franz-go/commit/3684df2) fetches: rename CollectRecords to Records
+
 v0.11.0
 ===
 
