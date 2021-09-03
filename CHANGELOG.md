@@ -1,3 +1,15 @@
+v1.0.0
+===
+
+This is a significant release and is a commitment to not changing the API.
+There is no change in this release from v0.11.1. This release has been a long
+time coming!
+
+The kmsg package is a separate dedicated module and its API can still change if
+Kafka changes the protocol in a way that breaks kmsg. However, the odds are
+increasingly likely that kmsg will switch to bumping major versions as Kafka
+makes incompatible changes, so that the module does not have breaking updates.
+
 v0.11.1
 ===
 
