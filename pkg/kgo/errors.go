@@ -10,8 +10,13 @@ import (
 )
 
 func isRetriableBrokerErr(err error) bool {
-	if err == nil { // sanity
-		return true
+	// The error could be nil if we are evaluating multiple errors at once,
+	// and only one is non-nil. The intent of this function is to evaluate
+	// whether an **error** is retriable, not a non-error. We return that
+	// nil is not retriable -- the calling code evaluating multiple errors
+	// at once would not call into this function if all errors were nil.
+	if err == nil {
+		return false
 	}
 	// https://github.com/golang/go/issues/45729
 	//
