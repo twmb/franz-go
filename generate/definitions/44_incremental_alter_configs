@@ -40,7 +40,7 @@ IncrementalAlterConfigsRequest => key 44, max version 1, flexible v1+
       //
       // SUBTRACT (3) is to remove a value from a list of values (if the key
       // is for a list of values).
-      Op: int8
+      Op: enum-IncrementalAlterConfigOp
       // Value is a value to set for the key (e.g. 10).
       Value: nullable-string
   // ValidateOnly validates the request but does not apply it.

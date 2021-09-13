@@ -27154,7 +27154,7 @@ type IncrementalAlterConfigsRequestResourceConfig struct {
 	//
 	// SUBTRACT (3) is to remove a value from a list of values (if the key
 	// is for a list of values).
-	Op int8
+	Op IncrementalAlterConfigOp
 
 	// Value is a value to set for the key (e.g. 10).
 	Value *string
@@ -27303,7 +27303,10 @@ func (v *IncrementalAlterConfigsRequest) AppendTo(dst []byte) []byte {
 					}
 					{
 						v := v.Op
-						dst = kbin.AppendInt8(dst, v)
+						{
+							v := int8(v)
+							dst = kbin.AppendInt8(dst, v)
+						}
 					}
 					{
 						v := v.Value
@@ -27410,7 +27413,12 @@ func (v *IncrementalAlterConfigsRequest) ReadFrom(src []byte) error {
 						s.Name = v
 					}
 					{
-						v := b.Int8()
+						var t IncrementalAlterConfigOp
+						{
+							v := b.Int8()
+							t = IncrementalAlterConfigOp(v)
+						}
+						v := t
 						s.Op = v
 					}
 					{
@@ -39248,6 +39256,42 @@ const (
 	ConfigTypeList     ConfigType = 7
 	ConfigTypeClass    ConfigType = 8
 	ConfigTypePassword ConfigType = 9
+)
+
+// An incremental configuration operation.
+//
+// Possible values and their meanings:
+//
+// * 0 (SET)
+//
+// * 1 (DELETE)
+//
+// * 2 (APPEND)
+//
+// * 3 (SUBTRACT)
+//
+type IncrementalAlterConfigOp int8
+
+func (v IncrementalAlterConfigOp) String() string {
+	switch v {
+	default:
+		return "UNKNOWN"
+	case 0:
+		return "SET"
+	case 1:
+		return "DELETE"
+	case 2:
+		return "APPEND"
+	case 3:
+		return "SUBTRACT"
+	}
+}
+
+const (
+	IncrementalAlterConfigOpSet      IncrementalAlterConfigOp = 0
+	IncrementalAlterConfigOpDelete   IncrementalAlterConfigOp = 1
+	IncrementalAlterConfigOpAppend   IncrementalAlterConfigOp = 2
+	IncrementalAlterConfigOpSubtract IncrementalAlterConfigOp = 3
 )
 
 // ACLResourceType is a type of resource to use for ACLs.

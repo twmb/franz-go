@@ -39,6 +39,14 @@ ConfigType int8 (
   9: PASSWORD
 )
 
+// An incremental configuration operation.
+IncrementalAlterConfigOp int8 (
+  0: SET
+  1: DELETE
+  2: APPEND
+  3: SUBTRACT
+)
+
 //////////
 // ACLS //
 //////////
