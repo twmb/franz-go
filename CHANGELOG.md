@@ -1,3 +1,12 @@
+TBD
+===
+
+This section tracks commits yet to be released. Any new features can be removed
+before an actual release.
+
+- [`563e016`](https://github.com/twmb/franz-go/commit/563e016) **feature** FetchTopic: add EachPartition; FetchPartition: add EachRecord
+- [`8f648e7`](https://github.com/twmb/franz-go/commit/8f648e7) consumer group: document actual behavior for on revoked / lost
+
 v1.0.0
 ===
 
