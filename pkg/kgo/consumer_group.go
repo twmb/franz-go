@@ -184,9 +184,17 @@ func (c *consumer) initGroup() {
 				ctxExpired = true
 			default:
 			}
-			cl.cfg.logger.Log(LogLevelDebug, "entering "+name, "with", m, "context_expired", ctxExpired)
+			if ctxExpired {
+				cl.cfg.logger.Log(LogLevelDebug, "entering "+name, "with", m, "context_expired", ctxExpired)
+			} else {
+				cl.cfg.logger.Log(LogLevelDebug, "entering "+name, "with", m)
+			}
 			if user != nil {
-				user(ctx, cl, m)
+				dup := make(map[string][]int32)
+				for k, vs := range m {
+					dup[k] = append([]int32(nil), vs...)
+				}
+				user(ctx, cl, dup)
 			}
 		}
 	}
@@ -256,15 +264,12 @@ func (g *groupConsumer) manage() {
 			// the cooperative consumer we may as well just also
 			// include the eager consumer.
 			g.cfg.onRevoked(g.cl.ctx, g.cl, g.nowAssigned)
-		} else if g.cfg.onLost != nil {
+		} else {
 			// Any other error is perceived as a fatal error,
 			// and we go into OnLost as appropriate.
-			g.cfg.onLost(g.cl.ctx, g.cl, g.nowAssigned)
-			hook()
-
-		} else if g.cfg.onRevoked != nil {
-			// If OnLost is not specified, we fallback to OnRevoked.
-			g.cfg.onRevoked(g.cl.ctx, g.cl, g.nowAssigned)
+			if g.cfg.onLost != nil {
+				g.cfg.onLost(g.cl.ctx, g.cl, g.nowAssigned)
+			}
 			hook()
 		}
 

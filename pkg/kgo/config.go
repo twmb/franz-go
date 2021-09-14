@@ -1265,6 +1265,9 @@ func RequireStableFetchOffsets() GroupOpt {
 //
 // The OnPartitionsAssigned function is passed the client's context, which is
 // only canceled if the client is closed.
+//
+// This function is not called concurrent with any other On callback, and this
+// function is given a new map that the user is free to modify.
 func OnPartitionsAssigned(onAssigned func(context.Context, *Client, map[string][]int32)) GroupOpt {
 	return groupOpt{func(cfg *cfg) { cfg.onAssigned, cfg.setAssigned = onAssigned, true }}
 }
@@ -1285,13 +1288,14 @@ func OnPartitionsAssigned(onAssigned func(context.Context, *Client, map[string][
 // completes.
 //
 // The OnPartitionsRevoked function is passed the client's context, which is
-// only canceled if the client is closed.
+// only canceled if the client is closed. OnPartitionsRevoked function is
+// called at the end of a group session even if there are no partitions being
+// revoked. If you are committing offsets manually (have disabled
+// autocommitting), it is highly recommended to do a proper blocking commit in
+// OnPartitionsRevoked.
 //
-// OnPartitionsRevoked function is called at the end of a group session even if
-// there are no partitions being revoked.
-//
-// If you are committing offsets manually (have disabled autocommitting), it is
-// highly recommended to do a proper blocking commit in OnPartitionsRevoked.
+// This function is not called concurrent with any other On callback, and this
+// function is given a new map that the user is free to modify.
 func OnPartitionsRevoked(onRevoked func(context.Context, *Client, map[string][]int32)) GroupOpt {
 	return groupOpt{func(cfg *cfg) { cfg.onRevoked, cfg.setRevoked = onRevoked, true }}
 }
@@ -1302,7 +1306,12 @@ func OnPartitionsRevoked(onRevoked func(context.Context, *Client, map[string][]i
 // commits will succeed when partitions are outright lost, whereas commits
 // likely will succeed when revoking partitions.
 //
-// If not set, OnPartitionsRevoked is used.
+// If this is not set, you will not know when a group error occurs that
+// forcefully loses all partitions. If you wish to use the same callback for
+// lost and revoked, you can use OnPartitionsLostAsRevoked as a shortcut.
+//
+// This function is not called concurrent with any other On callback, and this
+// function is given a new map that the user is free to modify.
 func OnPartitionsLost(onLost func(context.Context, *Client, map[string][]int32)) GroupOpt {
 	return groupOpt{func(cfg *cfg) { cfg.onLost, cfg.setLost = onLost, true }}
 }
