@@ -4,8 +4,12 @@ TBD
 This section tracks commits yet to be released. Any new features can be removed
 before an actual release.
 
+- [`e44dde9`](https://github.com/twmb/franz-go/commit/e44dde9) add `goroutine_per_partition` consuming example
+- [`cedffb7`](https://github.com/twmb/franz-go/commit/cedffb7) **feature** plugins: Add kzerolog logging adapter (thanks @fsaintjacques!)
 - [`563e016`](https://github.com/twmb/franz-go/commit/563e016) **feature** FetchTopic: add EachPartition; FetchPartition: add EachRecord
 - [`8f648e7`](https://github.com/twmb/franz-go/commit/8f648e7) consumer group: document actual behavior for on revoked / lost
+
+Lastly, all plugins have been tagged as v1.0.0.
 
 v1.0.0
 ===
