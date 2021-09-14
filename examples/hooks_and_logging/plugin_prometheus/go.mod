@@ -9,7 +9,7 @@ require (
 	github.com/prometheus/procfs v0.7.3 // indirect
 	github.com/twmb/franz-go v0.8.3
 	github.com/twmb/franz-go/plugin/kprom v0.1.0
-	golang.org/x/sys v0.0.0-20210831042530-f4d43177bf5e // indirect
+	golang.org/x/sys v0.0.0-20210910150752-751e447fb3d0 // indirect
 	google.golang.org/protobuf v1.27.1 // indirect
 )
 
