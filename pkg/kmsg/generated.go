@@ -39148,7 +39148,7 @@ func ConfigResourceTypeStrings() []string {
 // ParseConfigResourceType normalizes the input s and returns
 // the value represented by the string.
 //
-// Normalizing works by stripping all dots and underscores,
+// Normalizing works by stripping all dots, underscores, and dashes,
 // trimming spaces, and lowercasing.
 func ParseConfigResourceType(s string) (ConfigResourceType, error) {
 	switch strnorm(s) {
@@ -39228,7 +39228,7 @@ func ConfigSourceStrings() []string {
 // ParseConfigSource normalizes the input s and returns
 // the value represented by the string.
 //
-// Normalizing works by stripping all dots and underscores,
+// Normalizing works by stripping all dots, underscores, and dashes,
 // trimming spaces, and lowercasing.
 func ParseConfigSource(s string) (ConfigSource, error) {
 	switch strnorm(s) {
@@ -39325,7 +39325,7 @@ func ConfigTypeStrings() []string {
 // ParseConfigType normalizes the input s and returns
 // the value represented by the string.
 //
-// Normalizing works by stripping all dots and underscores,
+// Normalizing works by stripping all dots, underscores, and dashes,
 // trimming spaces, and lowercasing.
 func ParseConfigType(s string) (ConfigType, error) {
 	switch strnorm(s) {
@@ -39406,7 +39406,7 @@ func IncrementalAlterConfigOpStrings() []string {
 // ParseIncrementalAlterConfigOp normalizes the input s and returns
 // the value represented by the string.
 //
-// Normalizing works by stripping all dots and underscores,
+// Normalizing works by stripping all dots, underscores, and dashes,
 // trimming spaces, and lowercasing.
 func ParseIncrementalAlterConfigOp(s string) (IncrementalAlterConfigOp, error) {
 	switch strnorm(s) {
@@ -39481,7 +39481,7 @@ func ACLResourceTypeStrings() []string {
 // ParseACLResourceType normalizes the input s and returns
 // the value represented by the string.
 //
-// Normalizing works by stripping all dots and underscores,
+// Normalizing works by stripping all dots, underscores, and dashes,
 // trimming spaces, and lowercasing.
 func ParseACLResourceType(s string) (ACLResourceType, error) {
 	switch strnorm(s) {
@@ -39559,7 +39559,7 @@ func ACLResourcePatternTypeStrings() []string {
 // ParseACLResourcePatternType normalizes the input s and returns
 // the value represented by the string.
 //
-// Normalizing works by stripping all dots and underscores,
+// Normalizing works by stripping all dots, underscores, and dashes,
 // trimming spaces, and lowercasing.
 func ParseACLResourcePatternType(s string) (ACLResourcePatternType, error) {
 	switch strnorm(s) {
@@ -39623,7 +39623,7 @@ func ACLPermissionTypeStrings() []string {
 // ParseACLPermissionType normalizes the input s and returns
 // the value represented by the string.
 //
-// Normalizing works by stripping all dots and underscores,
+// Normalizing works by stripping all dots, underscores, and dashes,
 // trimming spaces, and lowercasing.
 func ParseACLPermissionType(s string) (ACLPermissionType, error) {
 	switch strnorm(s) {
@@ -39728,7 +39728,7 @@ func ACLOperationStrings() []string {
 // ParseACLOperation normalizes the input s and returns
 // the value represented by the string.
 //
-// Normalizing works by stripping all dots and underscores,
+// Normalizing works by stripping all dots, underscores, and dashes,
 // trimming spaces, and lowercasing.
 func ParseACLOperation(s string) (ACLOperation, error) {
 	switch strnorm(s) {
@@ -39838,7 +39838,7 @@ func TransactionStateStrings() []string {
 // ParseTransactionState normalizes the input s and returns
 // the value represented by the string.
 //
-// Normalizing works by stripping all dots and underscores,
+// Normalizing works by stripping all dots, underscores, and dashes,
 // trimming spaces, and lowercasing.
 func ParseTransactionState(s string) (TransactionState, error) {
 	switch strnorm(s) {
@@ -39913,7 +39913,7 @@ func ControlRecordKeyTypeStrings() []string {
 // ParseControlRecordKeyType normalizes the input s and returns
 // the value represented by the string.
 //
-// Normalizing works by stripping all dots and underscores,
+// Normalizing works by stripping all dots, underscores, and dashes,
 // trimming spaces, and lowercasing.
 func ParseControlRecordKeyType(s string) (ControlRecordKeyType, error) {
 	switch strnorm(s) {
@@ -39940,6 +39940,7 @@ const (
 func strnorm(s string) string {
 	s = strings.ReplaceAll(s, ".", "")
 	s = strings.ReplaceAll(s, "_", "")
+	s = strings.ReplaceAll(s, "-", "")
 	s = strings.TrimSpace(s)
 	s = strings.ToLower(s)
 	return s
