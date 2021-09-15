@@ -404,6 +404,8 @@ func main() {
 	l.Write("package kmsg")
 	l.Write("import (")
 	l.Write(`"context"`)
+	l.Write(`"fmt"`)
+	l.Write(`"strings"`)
 	l.Write(`"reflect"`)
 	l.Write("")
 	l.Write(`"github.com/twmb/franz-go/pkg/kmsg/internal/kbin"`)
@@ -507,8 +509,12 @@ func main() {
 	for _, e := range newEnums {
 		e.WriteDefn(l)
 		e.WriteStringFunc(l)
+		e.WriteStringsFunc(l)
+		e.WriteParseFunc(l)
 		e.WriteConsts(l)
 	}
+
+	writeStrnorm(l)
 
 	fmt.Println(l.buf.String())
 }

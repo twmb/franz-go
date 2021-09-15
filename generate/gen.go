@@ -768,6 +768,52 @@ func (e Enum) WriteStringFunc(l *LineWriter) {
 	l.Write("}")
 }
 
+func (e Enum) WriteStringsFunc(l *LineWriter) {
+	l.Write("func %sStrings() []string {", e.Name)
+	l.Write("return []string{")
+	for _, v := range e.Values {
+		l.Write(`"%s",`, v.Word)
+	}
+	l.Write("}")
+	l.Write("}")
+}
+
+func (e Enum) WriteParseFunc(l *LineWriter) {
+	l.Write("// Parse%s normalizes the input s and returns", e.Name)
+	l.Write("// the value represented by the string.")
+	l.Write("//")
+	l.Write("// Normalizing works by stripping all dots and underscores,")
+	l.Write("// trimming spaces, and lowercasing.")
+	l.Write("func Parse%[1]s(s string) (%[1]s, error) {", e.Name)
+	l.Write("switch strnorm(s) {")
+	for _, v := range e.Values {
+		l.Write(`case "%s":`, strnorm(v.Word))
+		l.Write("return %d, nil", v.Value)
+	}
+	l.Write("default:")
+	l.Write(`return 0, fmt.Errorf("%s: unable to parse %%q", s)`, e.Name)
+	l.Write("}")
+	l.Write("}")
+}
+
+func strnorm(s string) string {
+	s = strings.ReplaceAll(s, ".", "")
+	s = strings.ReplaceAll(s, "_", "")
+	s = strings.TrimSpace(s)
+	s = strings.ToLower(s)
+	return s
+}
+
+func writeStrnorm(l *LineWriter) {
+	l.Write(`func strnorm(s string) string {`)
+	l.Write(`s = strings.ReplaceAll(s, ".", "")`)
+	l.Write(`s = strings.ReplaceAll(s, "_", "")`)
+	l.Write(`s = strings.TrimSpace(s)`)
+	l.Write(`s = strings.ToLower(s)`)
+	l.Write(`return s`)
+	l.Write(`}`)
+}
+
 func (e Enum) WriteConsts(l *LineWriter) {
 	l.Write("const (")
 	if !e.HasZero {

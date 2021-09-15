@@ -2,7 +2,9 @@ package kmsg
 
 import (
 	"context"
+	"fmt"
 	"reflect"
+	"strings"
 
 	"github.com/twmb/franz-go/pkg/kmsg/internal/kbin"
 )
@@ -39135,6 +39137,32 @@ func (v ConfigResourceType) String() string {
 	}
 }
 
+func ConfigResourceTypeStrings() []string {
+	return []string{
+		"TOPIC",
+		"BROKER",
+		"BROKER_LOGGER",
+	}
+}
+
+// ParseConfigResourceType normalizes the input s and returns
+// the value represented by the string.
+//
+// Normalizing works by stripping all dots and underscores,
+// trimming spaces, and lowercasing.
+func ParseConfigResourceType(s string) (ConfigResourceType, error) {
+	switch strnorm(s) {
+	case "topic":
+		return 2, nil
+	case "broker":
+		return 4, nil
+	case "brokerlogger":
+		return 8, nil
+	default:
+		return 0, fmt.Errorf("ConfigResourceType: unable to parse %q", s)
+	}
+}
+
 const (
 	ConfigResourceTypeUnknown      ConfigResourceType = 0
 	ConfigResourceTypeTopic        ConfigResourceType = 2
@@ -39183,6 +39211,41 @@ func (v ConfigSource) String() string {
 		return "DEFAULT_CONFIG"
 	case 6:
 		return "DYNAMIC_BROKER_LOGGER_CONFIG"
+	}
+}
+
+func ConfigSourceStrings() []string {
+	return []string{
+		"DYNAMIC_TOPIC_CONFIG",
+		"DYNAMIC_BROKER_CONFIG",
+		"DYNAMIC_DEFAULT_BROKER_CONFIG",
+		"STATIC_BROKER_CONFIG",
+		"DEFAULT_CONFIG",
+		"DYNAMIC_BROKER_LOGGER_CONFIG",
+	}
+}
+
+// ParseConfigSource normalizes the input s and returns
+// the value represented by the string.
+//
+// Normalizing works by stripping all dots and underscores,
+// trimming spaces, and lowercasing.
+func ParseConfigSource(s string) (ConfigSource, error) {
+	switch strnorm(s) {
+	case "dynamictopicconfig":
+		return 1, nil
+	case "dynamicbrokerconfig":
+		return 2, nil
+	case "dynamicdefaultbrokerconfig":
+		return 3, nil
+	case "staticbrokerconfig":
+		return 4, nil
+	case "defaultconfig":
+		return 5, nil
+	case "dynamicbrokerloggerconfig":
+		return 6, nil
+	default:
+		return 0, fmt.Errorf("ConfigSource: unable to parse %q", s)
 	}
 }
 
@@ -39245,6 +39308,50 @@ func (v ConfigType) String() string {
 	}
 }
 
+func ConfigTypeStrings() []string {
+	return []string{
+		"BOOLEAN",
+		"STRING",
+		"INT",
+		"SHORT",
+		"LONG",
+		"DOUBLE",
+		"LIST",
+		"CLASS",
+		"PASSWORD",
+	}
+}
+
+// ParseConfigType normalizes the input s and returns
+// the value represented by the string.
+//
+// Normalizing works by stripping all dots and underscores,
+// trimming spaces, and lowercasing.
+func ParseConfigType(s string) (ConfigType, error) {
+	switch strnorm(s) {
+	case "boolean":
+		return 1, nil
+	case "string":
+		return 2, nil
+	case "int":
+		return 3, nil
+	case "short":
+		return 4, nil
+	case "long":
+		return 5, nil
+	case "double":
+		return 6, nil
+	case "list":
+		return 7, nil
+	case "class":
+		return 8, nil
+	case "password":
+		return 9, nil
+	default:
+		return 0, fmt.Errorf("ConfigType: unable to parse %q", s)
+	}
+}
+
 const (
 	ConfigTypeUnknown  ConfigType = 0
 	ConfigTypeBoolean  ConfigType = 1
@@ -39284,6 +39391,35 @@ func (v IncrementalAlterConfigOp) String() string {
 		return "APPEND"
 	case 3:
 		return "SUBTRACT"
+	}
+}
+
+func IncrementalAlterConfigOpStrings() []string {
+	return []string{
+		"SET",
+		"DELETE",
+		"APPEND",
+		"SUBTRACT",
+	}
+}
+
+// ParseIncrementalAlterConfigOp normalizes the input s and returns
+// the value represented by the string.
+//
+// Normalizing works by stripping all dots and underscores,
+// trimming spaces, and lowercasing.
+func ParseIncrementalAlterConfigOp(s string) (IncrementalAlterConfigOp, error) {
+	switch strnorm(s) {
+	case "set":
+		return 0, nil
+	case "delete":
+		return 1, nil
+	case "append":
+		return 2, nil
+	case "subtract":
+		return 3, nil
+	default:
+		return 0, fmt.Errorf("IncrementalAlterConfigOp: unable to parse %q", s)
 	}
 }
 
@@ -39328,6 +39464,41 @@ func (v ACLResourceType) String() string {
 		return "TRANSACTIONAL_ID"
 	case 6:
 		return "DELEGATION_TOKEN"
+	}
+}
+
+func ACLResourceTypeStrings() []string {
+	return []string{
+		"ANY",
+		"TOPIC",
+		"GROUP",
+		"CLUSTER",
+		"TRANSACTIONAL_ID",
+		"DELEGATION_TOKEN",
+	}
+}
+
+// ParseACLResourceType normalizes the input s and returns
+// the value represented by the string.
+//
+// Normalizing works by stripping all dots and underscores,
+// trimming spaces, and lowercasing.
+func ParseACLResourceType(s string) (ACLResourceType, error) {
+	switch strnorm(s) {
+	case "any":
+		return 1, nil
+	case "topic":
+		return 2, nil
+	case "group":
+		return 3, nil
+	case "cluster":
+		return 4, nil
+	case "transactionalid":
+		return 5, nil
+	case "delegationtoken":
+		return 6, nil
+	default:
+		return 0, fmt.Errorf("ACLResourceType: unable to parse %q", s)
 	}
 }
 
@@ -39376,6 +39547,35 @@ func (v ACLResourcePatternType) String() string {
 	}
 }
 
+func ACLResourcePatternTypeStrings() []string {
+	return []string{
+		"ANY",
+		"MATCH",
+		"LITERAL",
+		"PREFIXED",
+	}
+}
+
+// ParseACLResourcePatternType normalizes the input s and returns
+// the value represented by the string.
+//
+// Normalizing works by stripping all dots and underscores,
+// trimming spaces, and lowercasing.
+func ParseACLResourcePatternType(s string) (ACLResourcePatternType, error) {
+	switch strnorm(s) {
+	case "any":
+		return 1, nil
+	case "match":
+		return 2, nil
+	case "literal":
+		return 3, nil
+	case "prefixed":
+		return 4, nil
+	default:
+		return 0, fmt.Errorf("ACLResourcePatternType: unable to parse %q", s)
+	}
+}
+
 const (
 	ACLResourcePatternTypeUnknown  ACLResourcePatternType = 0
 	ACLResourcePatternTypeAny      ACLResourcePatternType = 1
@@ -39409,6 +39609,32 @@ func (v ACLPermissionType) String() string {
 		return "DENY"
 	case 3:
 		return "ALLOW"
+	}
+}
+
+func ACLPermissionTypeStrings() []string {
+	return []string{
+		"ANY",
+		"DENY",
+		"ALLOW",
+	}
+}
+
+// ParseACLPermissionType normalizes the input s and returns
+// the value represented by the string.
+//
+// Normalizing works by stripping all dots and underscores,
+// trimming spaces, and lowercasing.
+func ParseACLPermissionType(s string) (ACLPermissionType, error) {
+	switch strnorm(s) {
+	case "any":
+		return 1, nil
+	case "deny":
+		return 2, nil
+	case "allow":
+		return 3, nil
+	default:
+		return 0, fmt.Errorf("ACLPermissionType: unable to parse %q", s)
 	}
 }
 
@@ -39482,6 +39708,59 @@ func (v ACLOperation) String() string {
 	}
 }
 
+func ACLOperationStrings() []string {
+	return []string{
+		"ANY",
+		"ALL",
+		"READ",
+		"WRITE",
+		"CREATE",
+		"DELETE",
+		"ALTER",
+		"DESCRIBE",
+		"CLUSTER_ACTION",
+		"DESCRIBE_CONFIGS",
+		"ALTER_CONFIGS",
+		"IDEMPOTENT_WRITE",
+	}
+}
+
+// ParseACLOperation normalizes the input s and returns
+// the value represented by the string.
+//
+// Normalizing works by stripping all dots and underscores,
+// trimming spaces, and lowercasing.
+func ParseACLOperation(s string) (ACLOperation, error) {
+	switch strnorm(s) {
+	case "any":
+		return 1, nil
+	case "all":
+		return 2, nil
+	case "read":
+		return 3, nil
+	case "write":
+		return 4, nil
+	case "create":
+		return 5, nil
+	case "delete":
+		return 6, nil
+	case "alter":
+		return 7, nil
+	case "describe":
+		return 8, nil
+	case "clusteraction":
+		return 9, nil
+	case "describeconfigs":
+		return 10, nil
+	case "alterconfigs":
+		return 11, nil
+	case "idempotentwrite":
+		return 12, nil
+	default:
+		return 0, fmt.Errorf("ACLOperation: unable to parse %q", s)
+	}
+}
+
 const (
 	ACLOperationUnknown         ACLOperation = 0
 	ACLOperationAny             ACLOperation = 1
@@ -39543,6 +39822,47 @@ func (v TransactionState) String() string {
 	}
 }
 
+func TransactionStateStrings() []string {
+	return []string{
+		"Empty",
+		"Ongoing",
+		"PrepareCommit",
+		"PrepareAbort",
+		"CompleteCommit",
+		"CompleteAbort",
+		"Dead",
+		"PrepareEpochFence",
+	}
+}
+
+// ParseTransactionState normalizes the input s and returns
+// the value represented by the string.
+//
+// Normalizing works by stripping all dots and underscores,
+// trimming spaces, and lowercasing.
+func ParseTransactionState(s string) (TransactionState, error) {
+	switch strnorm(s) {
+	case "empty":
+		return 0, nil
+	case "ongoing":
+		return 1, nil
+	case "preparecommit":
+		return 2, nil
+	case "prepareabort":
+		return 3, nil
+	case "completecommit":
+		return 4, nil
+	case "completeabort":
+		return 5, nil
+	case "dead":
+		return 6, nil
+	case "prepareepochfence":
+		return 7, nil
+	default:
+		return 0, fmt.Errorf("TransactionState: unable to parse %q", s)
+	}
+}
+
 const (
 	TransactionStateEmpty             TransactionState = 0
 	TransactionStateOngoing           TransactionState = 1
@@ -39581,9 +39901,46 @@ func (v ControlRecordKeyType) String() string {
 	}
 }
 
+func ControlRecordKeyTypeStrings() []string {
+	return []string{
+		"ABORT",
+		"COMMIT",
+		"QUORUM_REASSIGNMENT",
+		"LEADER_CHANGE",
+	}
+}
+
+// ParseControlRecordKeyType normalizes the input s and returns
+// the value represented by the string.
+//
+// Normalizing works by stripping all dots and underscores,
+// trimming spaces, and lowercasing.
+func ParseControlRecordKeyType(s string) (ControlRecordKeyType, error) {
+	switch strnorm(s) {
+	case "abort":
+		return 0, nil
+	case "commit":
+		return 1, nil
+	case "quorumreassignment":
+		return 2, nil
+	case "leaderchange":
+		return 3, nil
+	default:
+		return 0, fmt.Errorf("ControlRecordKeyType: unable to parse %q", s)
+	}
+}
+
 const (
 	ControlRecordKeyTypeAbort              ControlRecordKeyType = 0
 	ControlRecordKeyTypeCommit             ControlRecordKeyType = 1
 	ControlRecordKeyTypeQuorumReassignment ControlRecordKeyType = 2
 	ControlRecordKeyTypeLeaderChange       ControlRecordKeyType = 3
 )
+
+func strnorm(s string) string {
+	s = strings.ReplaceAll(s, ".", "")
+	s = strings.ReplaceAll(s, "_", "")
+	s = strings.TrimSpace(s)
+	s = strings.ToLower(s)
+	return s
+}
