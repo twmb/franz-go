@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -62,10 +63,13 @@ func (pc *pconsumer) consume(topic string, partition int32) {
 }
 
 type splitConsume struct {
+	mu        sync.Mutex // gaurds assigning / losing vs. polling
 	consumers map[string]map[int32]pconsumer
 }
 
 func (s *splitConsume) assigned(_ context.Context, cl *kgo.Client, assigned map[string][]int32) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	for topic, partitions := range assigned {
 		if s.consumers[topic] == nil {
 			s.consumers[topic] = make(map[int32]pconsumer)
@@ -82,6 +86,8 @@ func (s *splitConsume) assigned(_ context.Context, cl *kgo.Client, assigned map[
 }
 
 func (s *splitConsume) lost(_ context.Context, cl *kgo.Client, lost map[string][]int32) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	for topic, partitions := range lost {
 		ptopics := s.consumers[topic]
 		for _, partition := range partitions {
@@ -148,6 +154,8 @@ func (s *splitConsume) poll(cl *kgo.Client) {
 			panic(err)
 		})
 		fetches.EachTopic(func(t kgo.FetchTopic) {
+			s.mu.Lock()
+			defer s.mu.Unlock()
 			tconsumers := s.consumers[t.Topic]
 			if tconsumers == nil {
 				return
