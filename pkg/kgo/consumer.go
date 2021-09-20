@@ -1569,8 +1569,8 @@ func (cl *Client) loadEpochsForBrokerLoad(ctx context.Context, broker *broker, l
 			offset := loadPart.at
 			var err error
 			if rPartition.EndOffset < offset {
-				offset = rPartition.EndOffset
 				err = &ErrDataLoss{topic, partition, offset, rPartition.EndOffset}
+				offset = rPartition.EndOffset
 			}
 
 			loaded.add(loadedOffset{
