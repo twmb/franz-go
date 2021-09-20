@@ -20510,7 +20510,7 @@ type CreateACLsRequestCreation struct {
 	// authorizer, this must begin with "User:".
 	Principal string
 
-	// Host is the host address to use for this acl. Yes, each host to allow
+	// Host is the host address to use for this acl. Each host to allow
 	// the principal access from must be specified as a new creation. KIP-252
 	// might solve this someday. The special wildcard host "*" allows all hosts.
 	Host string

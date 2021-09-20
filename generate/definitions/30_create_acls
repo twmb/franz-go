@@ -18,7 +18,7 @@ CreateACLsRequest => key 30, max version 2, flexible v2+
     // Principal is the user to apply this acl for. With the Kafka simple
     // authorizer, this must begin with "User:".
     Principal: string
-    // Host is the host address to use for this acl. Yes, each host to allow
+    // Host is the host address to use for this acl. Each host to allow
     // the principal access from must be specified as a new creation. KIP-252
     // might solve this someday. The special wildcard host "*" allows all hosts.
     Host: string
