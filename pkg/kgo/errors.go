@@ -127,15 +127,17 @@ var (
 	// Returned when trying to produce a record outside of a transaction.
 	errNotInTransaction = errors.New("cannot produce record transactionally if not in a transaction")
 
-	// Returned when records are unable to be produced and they hit the
-	// configured record timeout limit.
-	errRecordTimeout = errors.New("records have timed out before they were able to be produced")
-
-	errRecordRetries = errors.New("record failed after being retried too many times")
-
 	//////////////
 	// EXTERNAL //
 	//////////////
+
+	// ErrRecordTimeout is passed to produce promises when records are
+	// unable to be produced within the RecordDeliveryTimeout.
+	ErrRecordTimeout = errors.New("records have timed out before they were able to be produced")
+
+	// ErrRecordRetries is passed to produce promises when records are
+	// unable to be produced after RecordRetries attempts.
+	ErrRecordRetries = errors.New("record failed after being retried too many times")
 
 	// ErrMaxBuffered is returned when producing with manual flushing
 	// enabled and the maximum amount of records are buffered.

@@ -1272,9 +1272,9 @@ func (b *recBatch) maybeFailErr(cfg *cfg) error {
 		}
 	}
 	if b.isTimedOut(cfg.recordTimeout) {
-		return errRecordTimeout
+		return ErrRecordTimeout
 	} else if b.tries >= cfg.recordRetries {
-		return errRecordRetries
+		return ErrRecordRetries
 	} else if b.owner.cl.producer.isAborting() {
 		return ErrAborting
 	}

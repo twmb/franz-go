@@ -705,7 +705,7 @@ func (cl *Client) waitUnknownTopic(
 		case <-cl.ctx.Done():
 			err = ErrClientClosed
 		case <-after:
-			err = errRecordTimeout
+			err = ErrRecordTimeout
 		case retriableErr, ok := <-unknown.wait:
 			if !ok {
 				cl.cfg.logger.Log(LogLevelInfo, "done waiting for metadata for new topic", "topic", topic)
