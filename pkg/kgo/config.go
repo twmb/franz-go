@@ -875,6 +875,10 @@ func ProduceRequestTimeout(limit time.Duration) ProducerOpt {
 // one record only to produce a later one successfully. This also allows for
 // easier sequence number ordering internally.
 //
+// If a topic repeatedly fails to load with UNKNOWN_TOPIC_OR_PARTITION, it has
+// a different, internal retry limit. All records for a topic that repeatedly
+// cannot be loaded are failed when the internal limit is hit.
+//
 // This option is different from RequestRetries to allow finer grained control
 // of when to fail when producing records.
 func RecordRetries(n int) ProducerOpt {

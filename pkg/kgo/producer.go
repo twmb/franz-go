@@ -716,6 +716,9 @@ func (cl *Client) waitUnknownTopic(
 			if int64(tries) >= cl.cfg.recordRetries {
 				err = fmt.Errorf("no partitions available after attempting to refresh metadata %d times, last err: %w", tries, retriableErr)
 			}
+			if tries > 5 && errors.Is(retriableErr, kerr.UnknownTopicOrPartition) {
+				err = retriableErr
+			}
 		}
 	}
 
