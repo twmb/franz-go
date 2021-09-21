@@ -1,3 +1,8 @@
+TBD
+===
+
+- [`49f82b9`](https://github.com/twmb/franz-go/commit/49f82b9): kversion: cut 3.0
+
 v1.1.0
 ===
 
