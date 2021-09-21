@@ -212,6 +212,7 @@ func (vs *Versions) VersionGuess(opts ...VersionGuessOpt) string {
 		{max260, "v2.6"},
 		{max270, "v2.7"},
 		{max280, "v2.8"},
+		{max300, "v3.0"},
 	} {
 		for k, v := range comparison.cmp.filter(cfg.listener) {
 			if !skip[int16(k)] && v != -1 {
@@ -313,7 +314,7 @@ func (vs *Versions) String() string {
 // Stable is a shortcut for the latest _released_ Kafka versions.
 //
 // This is the default version used in kgo to avoid breaking tip changes.
-func Stable() *Versions { return zkBrokerOf(max280) }
+func Stable() *Versions { return zkBrokerOf(max300) }
 
 // Tip is the latest defined Kafka key versions; this may be slightly out of date.
 func Tip() *Versions { return zkBrokerOf(maxTip) }
@@ -337,6 +338,7 @@ func V2_5_0() *Versions  { return zkBrokerOf(max250) }
 func V2_6_0() *Versions  { return zkBrokerOf(max260) }
 func V2_7_0() *Versions  { return zkBrokerOf(max270) }
 func V2_8_0() *Versions  { return zkBrokerOf(max280) }
+func V3_0_0() *Versions  { return zkBrokerOf(max300) }
 
 func zkBrokerOf(lks listenerKeys) *Versions {
 	return &Versions{lks.filter(zkBroker)}
@@ -839,7 +841,7 @@ var max280 = nextMax(max270, func(v listenerKeys) listenerKeys {
 	return v
 })
 
-var maxTip = nextMax(max280, func(v listenerKeys) listenerKeys {
+var max300 = nextMax(max280, func(v listenerKeys) listenerKeys {
 	// KAFKA-12267 3f09fb97b6943c0612488dfa8e5eab8078fd7ca0 KIP-664
 	v = append(v,
 		k(zkBroker, rBroker), // 65 describe transactions
@@ -865,6 +867,10 @@ var maxTip = nextMax(max280, func(v listenerKeys) listenerKeys {
 	// KAFKA-12234 e00c0f3719ad0803620752159ef8315d668735d6 KIP-709
 	v[9].inc() // 8 offset fetch
 
+	return v
+})
+
+var maxTip = nextMax(max300, func(v listenerKeys) listenerKeys {
 	// KAFKA-10580 2b8aff58b575c199ee8372e5689420c9d77357a5 KIP-516
 	v[1].inc() // 13 fetch
 
