@@ -1,7 +1,11 @@
-TBD
+v1.1.1
 ===
 
-- [`49f82b9`](https://github.com/twmb/franz-go/commit/49f82b9): kversion: cut 3.0
+This patch release fixes a bug in `PollRecords` that could cause a panic during
+cluster instability. This also defines Kafka 3.0 in kversion.
+
+- [`847aeb9`](https://github.com/twmb/franz-go/commit/847aeb9) **bugfix** consumer: do not buffer partitions we reload
+- [`49f82b9`](https://github.com/twmb/franz-go/commit/49f82b9) kversion: cut 3.0
 
 v1.1.0
 ===
