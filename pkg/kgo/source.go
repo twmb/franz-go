@@ -368,7 +368,7 @@ func (s *source) takeNBuffered(n int) (Fetch, int, bool) {
 				take = len(p.Records)
 			}
 
-			rp.Records = p.Records[:take]
+			rp.Records = p.Records[:take:take]
 			p.Records = p.Records[take:]
 
 			n -= take
