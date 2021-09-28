@@ -39,7 +39,7 @@ type MessageV0 struct {
 
 	// Attributes describe the attributes of this message.
 	//
-	// Bits 0 thru 2 correspond to compression:
+	// The first three bits correspond to compression:
 	//   - 00 is no compression
 	//   - 01 is gzip compression
 	//   - 10 is snappy compression
@@ -165,12 +165,12 @@ type MessageV1 struct {
 
 	// Attributes describe the attributes of this message.
 	//
-	// Bits 0 thru 2 correspond to compression:
+	// The first three bits correspond to compression:
 	//   - 00 is no compression
 	//   - 01 is gzip compression
 	//   - 10 is snappy compression
 	//
-	// Bit 3 is the timestamp type, with 0 meaning CreateTime corresponding
+	// Bit 4 is the timestamp type, with 0 meaning CreateTime corresponding
 	// to the timestamp being from the producer, and 1 meaning LogAppendTime
 	// corresponding to the timestamp being from the broker.
 	// Setting this to LogAppendTime will cause batches to be rejected.
@@ -503,7 +503,7 @@ type RecordBatch struct {
 
 	// Attributes describe the records array of this batch.
 	//
-	// Bits 0 thru 3 correspond to compression:
+	// The first three bits correspond to compression:
 	//   - 000 is no compression
 	//   - 001 is gzip compression
 	//   - 010 is snappy compression

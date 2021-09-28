@@ -1016,12 +1016,12 @@ func (o *cursorOffsetNext) processRespPartition(br *broker, version int16, rp *k
 		switch t := r.(type) {
 		case *kmsg.MessageV0:
 			m.CompressedBytes = int(length) // for message sets, we include the message set overhead in length
-			m.CompressionType = uint8(t.Attributes) & 0b0000_0011
+			m.CompressionType = uint8(t.Attributes) & 0b0000_0111
 			m.NumRecords, m.UncompressedBytes = o.processV0OuterMessage(&fp, t, decompressor)
 
 		case *kmsg.MessageV1:
 			m.CompressedBytes = int(length)
-			m.CompressionType = uint8(t.Attributes) & 0b0000_0011
+			m.CompressionType = uint8(t.Attributes) & 0b0000_0111
 			m.NumRecords, m.UncompressedBytes = o.processV1OuterMessage(&fp, t, decompressor)
 
 		case *kmsg.RecordBatch:
@@ -1278,7 +1278,7 @@ func (o *cursorOffsetNext) processV1Message(
 		fp.Err = fmt.Errorf("unknown message magic %d", message.Magic)
 		return false
 	}
-	if uint8(message.Attributes)&0b1111_1000 != 0 {
+	if uint8(message.Attributes)&0b1111_0000 != 0 {
 		fp.Err = fmt.Errorf("unknown attributes on message %d", message.Attributes)
 		return false
 	}
@@ -1354,7 +1354,7 @@ func (o *cursorOffsetNext) processV0Message(
 		fp.Err = fmt.Errorf("unknown message magic %d", message.Magic)
 		return false
 	}
-	if uint8(message.Attributes)&0b1111_1100 != 0 {
+	if uint8(message.Attributes)&0b1111_1000 != 0 {
 		fp.Err = fmt.Errorf("unknown attributes on message %d", message.Attributes)
 		return false
 	}
@@ -1428,8 +1428,6 @@ func recordToRecord(
 
 func messageAttrsToRecordAttrs(attrs int8, v0 bool) RecordAttrs {
 	uattrs := uint8(attrs)
-	timestampType := uattrs & 0b0000_0100
-	uattrs = uattrs&0b0000_0011 | timestampType<<1
 	if v0 {
 		uattrs = uattrs | 0b1000_0000
 	}
