@@ -582,7 +582,7 @@ func DialTLSConfig(c *tls.Config) Opt {
 		}
 		return (&tls.Dialer{
 			NetDialer: defaultDialer,
-			Config:    c.Clone(),
+			Config:    c,
 		}).DialContext(ctx, network, host)
 	})
 }
