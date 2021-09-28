@@ -1,3 +1,12 @@
+v1.1.2
+===
+
+This patch release fixes processing the `LogAppendTime` timestamp for message
+set v1 formatted records. Message set v1 records were used only during the
+Kafka v0.10 releases.
+
+- [`5fee169..688d6fb`](https://github.com/twmb/franz-go/compare/5fee169..688d6fb): **bugfix** message set v1: fix bit 4 as the timestamp bit
+
 v1.1.1
 ===
 
