@@ -1278,7 +1278,7 @@ func (o *cursorOffsetNext) processV1Message(
 		fp.Err = fmt.Errorf("unknown message magic %d", message.Magic)
 		return false
 	}
-	if message.Attributes&0b1111_1000 != 0 {
+	if uint8(message.Attributes)&0b1111_1000 != 0 {
 		fp.Err = fmt.Errorf("unknown attributes on message %d", message.Attributes)
 		return false
 	}
@@ -1354,7 +1354,7 @@ func (o *cursorOffsetNext) processV0Message(
 		fp.Err = fmt.Errorf("unknown message magic %d", message.Magic)
 		return false
 	}
-	if message.Attributes&0b1111_1100 != 0 {
+	if uint8(message.Attributes)&0b1111_1100 != 0 {
 		fp.Err = fmt.Errorf("unknown attributes on message %d", message.Attributes)
 		return false
 	}
