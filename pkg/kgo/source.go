@@ -1255,11 +1255,13 @@ out:
 		switch innerMessage := innerMessage.(type) {
 		case *kmsg.MessageV0:
 			innerMessage.Offset = firstOffset + int64(i)
+			innerMessage.Attributes |= int8(compression)
 			if !o.processV0Message(fp, innerMessage) {
 				return i, uncompressedBytes
 			}
 		case *kmsg.MessageV1:
 			innerMessage.Offset = firstOffset + int64(i)
+			innerMessage.Attributes |= int8(compression)
 			if !o.processV1Message(fp, innerMessage) {
 				return i, uncompressedBytes
 			}
@@ -1276,8 +1278,8 @@ func (o *cursorOffsetNext) processV1Message(
 		fp.Err = fmt.Errorf("unknown message magic %d", message.Magic)
 		return false
 	}
-	if message.Attributes != 0 {
-		fp.Err = fmt.Errorf("unknown attributes on uncompressed message %d", message.Attributes)
+	if message.Attributes&0b1111_1000 != 0 {
+		fp.Err = fmt.Errorf("unknown attributes on message %d", message.Attributes)
 		return false
 	}
 	record := v1MessageToRecord(o.from.topic, fp.Partition, message)
@@ -1335,6 +1337,7 @@ func (o *cursorOffsetNext) processV0OuterMessage(
 	firstOffset := message.Offset - int64(len(innerMessages)) + 1
 	for i := range innerMessages {
 		innerMessage := &innerMessages[i]
+		innerMessage.Attributes |= int8(compression)
 		innerMessage.Offset = firstOffset + int64(i)
 		if !o.processV0Message(fp, innerMessage) {
 			return i, uncompressedBytes
@@ -1351,8 +1354,8 @@ func (o *cursorOffsetNext) processV0Message(
 		fp.Err = fmt.Errorf("unknown message magic %d", message.Magic)
 		return false
 	}
-	if message.Attributes != 0 {
-		fp.Err = fmt.Errorf("unknown attributes on uncompressed message %d", message.Attributes)
+	if message.Attributes&0b1111_1100 != 0 {
+		fp.Err = fmt.Errorf("unknown attributes on message %d", message.Attributes)
 		return false
 	}
 	record := v0MessageToRecord(o.from.topic, fp.Partition, message)
