@@ -126,7 +126,14 @@ func (opt guessOpt) apply(cfg *guessCfg) { opt.fn(cfg) }
 
 // SkipKeys skips the given keys while guessing versions.
 //
-// The current default is to skip keys 4, 5, 6, and 7.
+// The current default is to skip keys that are only used by brokers:
+//
+//      4: LeaderAndISR
+//      5: StopReplica
+//      6: UpdateMetadata
+//      7: ControlledShutdown
+//     27: WriteTxnMarkers
+//
 func SkipKeys(keys ...int16) VersionGuessOpt {
 	return guessOpt{func(cfg *guessCfg) { cfg.skipKeys = keys }}
 }
@@ -176,7 +183,7 @@ type guessCfg struct {
 func (vs *Versions) VersionGuess(opts ...VersionGuessOpt) string {
 	cfg := guessCfg{
 		listener: zkBroker,
-		skipKeys: []int16{4, 5, 6, 7},
+		skipKeys: []int16{4, 5, 6, 7, 27},
 	}
 	for _, opt := range opts {
 		opt.apply(&cfg)
