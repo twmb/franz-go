@@ -135,6 +135,18 @@ type Record struct {
 	Offset int64
 }
 
+// AppendRecord appends a record to b given the layout or returns an error if
+// the layout is invalid. This is a one-off shortcut for using
+// NewRecordFormatter. See that function's documentation for the layout
+// specification.
+func (r *Record) AppendFormat(b []byte, layout string) ([]byte, error) {
+	f, err := NewRecordFormatter(layout)
+	if err != nil {
+		return b, err
+	}
+	return f.AppendRecord(b, r), nil
+}
+
 // StringRecord returns a Record with the Value field set to the input value
 // string. For producing, this function is useful in tandem with the
 // client-level ProduceTopic option.
