@@ -118,6 +118,83 @@ func TestRecordFormatter(t *testing.T) {
 	}
 }
 
+func TestRecordFormatterSerde(t *testing.T) {
+	for _, test := range []struct {
+		layout string
+		in     string
+		exp    string
+	}{
+		{
+			layout: "%v{serde#c#}",
+			in:     "foo",
+			exp:    "f",
+		},
+
+		{
+			layout: "%v{serde#cbs#}",
+			in:     "foo",
+			exp:    "f111o",
+		},
+
+		{
+			layout: "%v{serde#cBs#}",
+			in:     "foo",
+			exp:    "f111o",
+		},
+
+		{
+			layout: "%v{serde[ch]}",
+			in:     "f\xff\xff",
+			exp:    "f-1",
+		},
+		{
+			layout: "%v{serde[cH]}",
+			in:     "f\xff\xff",
+			exp:    "f65535",
+		},
+
+		{
+			layout: "%v{serde[ci]}",
+			in:     "f\xff\xff\xff\xff\xff\xff\xff\xff",
+			exp:    "f-1",
+		},
+		{
+			layout: "%v{serde[cI]}",
+			in:     "f\xff\xff\xff\xff\xff\xff\xff\xff",
+			exp:    "f4294967295",
+		},
+
+		{
+			layout: "%v{serde{{{cq}}}}",
+			in:     "f\xff\xff\xff\xff\xff\xff\xff\xff",
+			exp:    "f-1",
+		},
+		{
+			layout: "%v{serde((cQ))}",
+			in:     "f\xff\xff\xff\xff\xff\xff\xff\xff",
+			exp:    "f18446744073709551615",
+		},
+
+		{
+			layout: "%v{serde[x<xH.xx>Hxx.xxHxx.xx<xxHxx$]}",
+			in:     "\x00\x01 \x00\x01 \x00\x01 \x00\x01",
+			exp:    "256 1 1 256",
+		},
+
+		//
+	} {
+		f, err := NewRecordFormatter(test.layout)
+		if err != nil {
+			t.Errorf("%s: unexpected err: %v", test.layout, err)
+			continue
+		}
+		got := string(f.AppendRecord(nil, &Record{Value: []byte(test.in)}))
+		if got != test.exp {
+			t.Errorf("%q: got %s != exp %s", test.in, got, test.exp)
+		}
+	}
+}
+
 func TestRecordReader(t *testing.T) {
 	for _, test := range []struct {
 		layout string

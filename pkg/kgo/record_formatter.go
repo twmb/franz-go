@@ -159,10 +159,39 @@ func (f *RecordFormatter) AppendPartitionRecord(b []byte, p *FetchPartition, r *
 //
 // Text
 //
-// Topics, keys, and values have "base64" and "hex" formatting options:
+// Topics, keys, and values have "base64", "hex", and "serde" formatting
+// options:
 //
 //     %t{hex}
+//     %k{serde(<bBhH>iIqQc.$)}
 //     %v{base64}
+//
+// Serde formatting is inside of enclosing pounds, braces, or brackets, the
+// same way that timestamp formatting is understood. The syntax roughly follows
+// Python's struct packing/unpacking rules:
+//
+//     x    pad character (does not parse input)
+//     <    parse what follows as little endian
+//     >    parse what follows as big endian
+//
+//     b    signed byte
+//     B    unsigned byte
+//     h    int16  ("half word")
+//     H    uint16 ("half word")
+//     i    int32
+//     I    uint32
+//     q    int64  ("quad word")
+//     Q    uint64 ("quad word")
+//
+//     c    any character
+//     .    alias for c
+//     s    consume the rest of the input as a string
+//     $    match the end of the line (append error string if anything remains)
+//
+// Unlike python, a '<' or '>' can appear anywhere in the format string and
+// affects everything that follows. It is possible to switch endianness
+// multiple times. If the parser needs more data than available, or if the more
+// input remains after '$', an error message will be appended.
 //
 func NewRecordFormatter(layout string) (*RecordFormatter, error) {
 	var f RecordFormatter
@@ -305,6 +334,20 @@ func NewRecordFormatter(layout string) (*RecordFormatter, error) {
 				case strings.HasPrefix(layout, "hex}"):
 					appendFn = appendHex
 					layout = layout[len("hex}"):]
+				case strings.HasPrefix(layout, "serde"):
+					serde, rem, err := nomOpenClose(layout[len("serde"):])
+					if err != nil {
+						return nil, fmt.Errorf("serde parse err: %v", err)
+					}
+					if len(rem) == 0 || rem[0] != '}' {
+						return nil, fmt.Errorf("serde missing closing } in %q", layout)
+					}
+					layout = rem[1:]
+					appendFn, err = parseSerde(serde)
+					if err != nil {
+						return nil, fmt.Errorf("serde formatting parse err: %v", err)
+					}
+
 				default:
 					return nil, fmt.Errorf("unknown %%%s{ escape", string(escaped))
 				}
@@ -479,6 +522,139 @@ func nomOpenClose(src string) (string, string, error) {
 	}
 	middle := src[:idx]
 	return middle, src[idx+len(end):], nil
+}
+
+func parseSerde(layout string) (func([]byte, []byte) []byte, error) {
+	// take dst, src; return dst
+	// %!q(eof)
+	// take 8 bytes, decode it, print decoded
+	var fns []func([]byte, []byte) ([]byte, int)
+	little := true
+	var sawEnd bool
+	for i := range layout {
+		if sawEnd {
+			return nil, errors.New("already saw end-of-input parsing character")
+		}
+
+		var need int
+		var signed bool
+		cs := layout[i : i+1]
+		switch cs[0] {
+		case 'x':
+			continue
+
+		case '<':
+			little = true
+			continue
+		case '>':
+			little = false
+			continue
+
+		case 'b':
+			need = 1
+			signed = true
+		case 'B':
+			need = 1
+		case 'h':
+			need = 2
+			signed = true
+		case 'H':
+			need = 2
+		case 'i':
+			need = 4
+			signed = true
+		case 'I':
+			need = 4
+		case 'q':
+			need = 8
+			signed = true
+		case 'Q':
+			need = 8
+
+		case 'c', '.':
+			fns = append(fns, func(dst, src []byte) ([]byte, int) {
+				if len(src) < 1 {
+					return append(dst, "%!c(no bytes available)"...), 0
+				}
+				return append(dst, src[0]), 1
+			})
+			continue
+
+		case 's':
+			sawEnd = true
+			fns = append(fns, func(dst, src []byte) ([]byte, int) {
+				return append(dst, src...), len(src)
+			})
+			continue
+
+		case '$':
+			fns = append(fns, func(dst, src []byte) ([]byte, int) {
+				if len(src) != 0 {
+					dst = append(dst, "%!$(not end-of-input)"...)
+				}
+				return dst, len(src)
+			})
+			sawEnd = true
+			continue
+
+		default:
+			return nil, fmt.Errorf("invalid serde parsing character %s", cs)
+		}
+
+		islittle := little
+		fns = append(fns, func(dst, src []byte) ([]byte, int) {
+			if len(src) < need {
+				return append(dst, fmt.Sprintf("%%!%%s(have %d bytes, need %d)", len(src), need)...), len(src)
+			}
+
+			var ul, ub uint64
+			var il, ib int64
+			switch need {
+			case 1:
+				ul = uint64(src[0])
+				ub = ul
+				il = int64(byte(ul))
+				ib = int64(byte(ub))
+			case 2:
+				ul = uint64(binary.LittleEndian.Uint16(src))
+				ub = uint64(binary.BigEndian.Uint16(src))
+				il = int64(int16(ul))
+				ib = int64(int16(ub))
+			case 4:
+				ul = uint64(binary.LittleEndian.Uint32(src))
+				ub = uint64(binary.BigEndian.Uint32(src))
+				il = int64(int32(ul))
+				ib = int64(int32(ub))
+			case 8:
+				ul = binary.LittleEndian.Uint64(src)
+				ub = binary.BigEndian.Uint64(src)
+				il = int64(ul)
+				ib = int64(ub)
+			}
+			u := ub
+			i := ib
+			if islittle {
+				u = ul
+				i = il
+			}
+
+			if signed {
+				return strconv.AppendInt(dst, i, 10), need
+			} else {
+				return strconv.AppendUint(dst, u, 10), need
+			}
+		})
+
+	}
+
+	return func(dst, src []byte) []byte {
+		for _, fn := range fns {
+			var n int
+			dst, n = fn(dst, src)
+			src = src[n:]
+		}
+		return dst
+	}, nil
 }
 
 func parseNumWriteLayout(layout string) (func([]byte, int64) []byte, int, error) {
