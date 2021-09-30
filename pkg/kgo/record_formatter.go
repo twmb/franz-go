@@ -859,6 +859,9 @@ func (r *RecordReader) parseReadLayout(layout string) error {
 			if r.has(bit) {
 				return fmt.Errorf("%%%s is doubly specified", string(escaped))
 			}
+			if r.has(bit - 1) {
+				return fmt.Errorf("size specification %%%s cannot come after value specification %%%s", string(escaped), strings.ToLower(string(escaped)))
+			}
 			r.set(bit)
 			fn, n, err := r.parseReadSize("ascii", dst, false)
 			if handledBrace = isOpenBrace; handledBrace {
@@ -1099,6 +1102,8 @@ func (d *parseDelims) split(data []byte, atEOF bool) (advance int, token []byte,
 		return 0, nil, nil
 	}
 
+	// We look for our delimiter. If we find it, our token is up *to* the
+	// delimiter, and we advance past the token *and* the delimiter.
 	if i := bytes.Index(data, delim); i >= 0 {
 		d.atDelim++
 		if d.atDelim == len(d.delims) {
