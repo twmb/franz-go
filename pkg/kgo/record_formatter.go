@@ -130,13 +130,14 @@ func (f *RecordFormatter) AppendPartitionRecord(b []byte, p *FetchPartition, r *
 //     %v{big64}       print the number in big endian uint64 format
 //     %v{big32}       print the number in big endian uint32 format
 //     %v{big16}       print the number in big endian uint16 format
-//     %v{big8}        print the number truncated to a byte
-//     %v{byte}        same as big8
+//     %v{big8}        alias for byte
 //
 //     %v{little64}    print the number in little endian uint64 format
 //     %v{little32}    print the number in little endian uint32 format
 //     %v{little16}    print the number in little endian uint16 format
-//     %v{little8}     print the number truncated to a byte
+//     %v{little8}     alias for byte
+//
+//     %v{byte}        print the number as a single byte
 //
 // All numbers are truncated as necessary per each given format.
 //
@@ -669,6 +670,11 @@ type RecordReader struct {
 //     %V    value length
 //     %h    begin the header specification
 //     %H    number of headers
+//     %p    partition
+//     %o    offset
+//     %e    leader epoch
+//     %x    producer id
+//     %y    producer epoch
 //
 // If using length / number verbs (i.e., "sized" verbs), they must occur before
 // what they are sizing.
@@ -695,13 +701,14 @@ type RecordReader struct {
 //     %v{big64}       read the number as big endian uint64 format
 //     %v{big32}       read the number as big endian uint32 format
 //     %v{big16}       read the number as big endian uint16 format
-//     %v{big8}        read the number as a byte
-//     %v{byte}        same as big8
+//     %v{big8}        alias for byte
 //
 //     %v{little64}    read the number as little endian uint64 format
 //     %v{little32}    read the number as little endian uint32 format
 //     %v{little16}    read the number as little endian uint16 format
 //     %v{little8}     read the number as a byte
+//
+//     %v{byte}        read the number as a byte
 //
 //     %v{3}           read 3 characters (any number)
 //
@@ -865,6 +872,61 @@ func (r *RecordReader) parseReadLayout(layout string) error {
 				return fmt.Errorf("unable to parse %%%s: %s", string(escaped), err)
 			}
 			layout = layout[n:]
+			r.fns = append(r.fns, fn)
+
+		case 'p', 'o', 'e', 'x', 'y':
+			dst := new(uint64)
+			fn, n, err := r.parseReadSize("ascii", dst, false)
+			if handledBrace = isOpenBrace; handledBrace {
+				fn, n, err = r.parseReadSize(layout, dst, true)
+			}
+			if err != nil {
+				return fmt.Errorf("unable to parse %%%s: %s", string(escaped), err)
+			}
+			layout = layout[n:]
+			numParse := fn.parse
+			switch escaped {
+			case 'p':
+				fn.parse = func(b []byte, rec *Record) error {
+					if err := numParse(b, nil); err != nil {
+						return err
+					}
+					rec.Partition = int32(*dst)
+					return nil
+				}
+			case 'o':
+				fn.parse = func(b []byte, rec *Record) error {
+					if err := numParse(b, nil); err != nil {
+						return err
+					}
+					rec.Offset = int64(*dst)
+					return nil
+				}
+			case 'e':
+				fn.parse = func(b []byte, rec *Record) error {
+					if err := numParse(b, nil); err != nil {
+						return err
+					}
+					rec.LeaderEpoch = int32(*dst)
+					return nil
+				}
+			case 'x':
+				fn.parse = func(b []byte, rec *Record) error {
+					if err := numParse(b, nil); err != nil {
+						return err
+					}
+					rec.ProducerID = int64(*dst)
+					return nil
+				}
+			case 'y':
+				fn.parse = func(b []byte, rec *Record) error {
+					if err := numParse(b, nil); err != nil {
+						return err
+					}
+					rec.ProducerEpoch = int16(*dst)
+					return nil
+				}
+			}
 			r.fns = append(r.fns, fn)
 
 		case 't':

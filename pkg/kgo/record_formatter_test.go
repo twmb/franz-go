@@ -277,6 +277,18 @@ func TestRecordReader(t *testing.T) {
 			exp:    []*Record{StringRecord("foo")},
 		},
 
+		{
+			layout: "%p %o %e %x %y{hex8}",
+			in:     "3 4 5 6 0a",
+			exp: []*Record{{
+				Partition:     3,
+				Offset:        4,
+				LeaderEpoch:   5,
+				ProducerID:    6,
+				ProducerEpoch: 10,
+			}},
+		},
+
 		//
 	} {
 		r, err := NewRecordReader(strings.NewReader(test.in), -1, test.layout)
