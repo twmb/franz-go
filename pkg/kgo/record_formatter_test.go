@@ -278,6 +278,18 @@ func TestRecordReader(t *testing.T) {
 		},
 
 		{
+			layout: "%V %v{hex}asdf",
+			in:     "6 6b6579asdf",
+			exp:    []*Record{StringRecord("key")},
+		},
+
+		{
+			layout: "%V %v{base64}asdf",
+			in:     "4 a2V5asdf",
+			exp:    []*Record{StringRecord("key")},
+		},
+
+		{
 			layout: "%p %o %e %d %x %y{hex8}",
 			in:     "3 4 5 17000 6 0a",
 			exp: []*Record{{

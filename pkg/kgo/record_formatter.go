@@ -724,6 +724,15 @@ type RecordReader struct {
 // Similar to number formatting, headers are parsed using a nested primitive
 // format option, accepting the key and value escapes previously mentioned.
 //
+// Text
+//
+// Topics, keys, and values can be decoded uding "base64" and "hex" formatting
+// options. Any size specification is the size of the encoded value actually
+// being read:
+//
+//     %t{hex}
+//     %v{base64}
+//
 func NewRecordReader(reader io.Reader, maxRead int, layout string) (*RecordReader, error) {
 	switch {
 	case maxRead < 0:
@@ -774,19 +783,15 @@ type parseRecordBits uint8
 func (p *parseRecordBits) set(r parseRecordBits)     { *p = *p | r }
 func (p parseRecordBits) has(r parseRecordBits) bool { return p&r != 0 }
 
-func (p parseRecordBits) hasSized() bool {
-	return p&(parsesTopicSize|parsesKeySize|parsesValueSize|parsesHeadersNum) != 0
-}
-
 func (r *RecordReader) parseReadLayout(layout string) error {
 	var (
 		// If we are reading by size, we parse the layout size into one
 		// of these variables. When reading, we use the captured
 		// variable's value.
-		topicSize  uint64
-		keySize    uint64
-		valueSize  uint64
-		headersNum uint64
+		topicSize  = new(uint64)
+		keySize    = new(uint64)
+		valueSize  = new(uint64)
+		headersNum = new(uint64)
 
 		bits parseRecordBits
 
@@ -825,7 +830,8 @@ func (r *RecordReader) parseReadLayout(layout string) error {
 		}
 
 		if len(layout) == 0 {
-			return errors.New("invalid escape sequence at end of layout string")
+			literal = append(literal, rawc...)
+			continue
 		}
 
 		cNext, size := utf8.DecodeRuneInString(layout)
@@ -856,13 +862,13 @@ func (r *RecordReader) parseReadLayout(layout string) error {
 			var bit parseRecordBits
 			switch escaped {
 			case 'T':
-				dst, bit = &topicSize, parsesTopicSize
+				dst, bit = topicSize, parsesTopicSize
 			case 'K':
-				dst, bit = &keySize, parsesKeySize
+				dst, bit = keySize, parsesKeySize
 			case 'V':
-				dst, bit = &valueSize, parsesValueSize
+				dst, bit = valueSize, parsesValueSize
 			case 'H':
-				dst, bit = &headersNum, parsesHeadersNum
+				dst, bit = headersNum, parsesHeadersNum
 			}
 			if bits.has(bit) {
 				return fmt.Errorf("%%%s is doubly specified", string(escaped))
@@ -944,27 +950,50 @@ func (r *RecordReader) parseReadLayout(layout string) error {
 			}
 			r.fns = append(r.fns, fn)
 
-		case 't':
-			bits.set(parsesTopic)
-			fn := readParse{parse: func(b []byte, r *Record) error { r.Topic = string(b); return nil }}
-			if bits.has(parsesTopicSize) {
-				fn.read = readKind{sizefn: func() int { return int(topicSize) }}
+		case 't', 'k', 'v':
+			var decodeFn func([]byte) ([]byte, error)
+			if handledBrace = isOpenBrace; handledBrace {
+				switch {
+				case strings.HasPrefix(layout, "base64}"):
+					decodeFn = decodeBase64
+					layout = layout[len("base64}"):]
+				case strings.HasPrefix(layout, "hex}"):
+					decodeFn = decodeHex
+					layout = layout[len("hex}"):]
+				default:
+					return fmt.Errorf("unknown %%%s{ escape", string(escaped))
+				}
 			}
-			r.fns = append(r.fns, fn)
 
-		case 'k':
-			bits.set(parsesKey)
-			fn := readParse{parse: func(b []byte, r *Record) error { r.Key = dupslice(b); return nil }}
-			if bits.has(parsesKeySize) {
-				fn.read = readKind{sizefn: func() int { return int(keySize) }}
+			var bit, bitSize parseRecordBits
+			var inner func([]byte, *Record)
+			var size *uint64
+			switch escaped {
+			case 't':
+				bit, bitSize, size = parsesTopic, parsesTopicSize, topicSize
+				inner = func(b []byte, r *Record) { r.Topic = string(b) }
+			case 'k':
+				bit, bitSize, size = parsesKey, parsesKeySize, keySize
+				inner = func(b []byte, r *Record) { r.Key = dupslice(b) }
+			case 'v':
+				bit, bitSize, size = parsesValue, parsesValueSize, valueSize
+				inner = func(b []byte, r *Record) { r.Value = dupslice(b) }
 			}
-			r.fns = append(r.fns, fn)
 
-		case 'v':
-			bits.set(parsesValue)
-			fn := readParse{parse: func(b []byte, r *Record) error { r.Value = dupslice(b); return nil }}
-			if bits.has(parsesValueSize) {
-				fn.read = readKind{sizefn: func() int { return int(valueSize) }}
+			fn := readParse{parse: func(b []byte, r *Record) error {
+				if decodeFn != nil {
+					dec, err := decodeFn(b)
+					if err != nil {
+						return err
+					}
+					b = dec
+				}
+				inner(b, r)
+				return nil
+			}}
+			bit.set(bit)
+			if bits.has(bitSize) {
+				fn.read = readKind{sizefn: func() int { return int(*size) }}
 			}
 			r.fns = append(r.fns, fn)
 
@@ -1014,7 +1043,7 @@ func (r *RecordReader) parseReadLayout(layout string) error {
 				k, v := rec.Key, rec.Value
 				defer func() { rec.Key, rec.Value = k, v }()
 				inr.r = r.r
-				for i := uint64(0); i < headersNum; i++ {
+				for i := uint64(0); i < *headersNum; i++ {
 					rec.Key, rec.Value = nil, nil
 					if err := inr.next(rec); err != nil {
 						return err
@@ -1135,6 +1164,16 @@ func (r *RecordReader) parseReadSize(layout string, dst *uint64, needBrace bool)
 			func(b []byte, _ *Record) (err error) { *dst, err = strconv.ParseUint(string(b), 16, 64); return err },
 		}, end, nil
 	}
+}
+
+func decodeBase64(b []byte) ([]byte, error) {
+	n, err := base64.StdEncoding.Decode(b[:base64.StdEncoding.DecodedLen(len(b))], b)
+	return b[:n], err
+}
+
+func decodeHex(b []byte) ([]byte, error) {
+	n, err := hex.Decode(b[:hex.DecodedLen(len(b))], b)
+	return b[:n], err
 }
 
 type readKind struct {
