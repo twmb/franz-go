@@ -118,65 +118,65 @@ func TestRecordFormatter(t *testing.T) {
 	}
 }
 
-func TestRecordFormatterSerde(t *testing.T) {
+func TestRecordFormatterUnpack(t *testing.T) {
 	for _, test := range []struct {
 		layout string
 		in     string
 		exp    string
 	}{
 		{
-			layout: "%v{serde#c#}",
+			layout: "%v{unpack#c#}",
 			in:     "foo",
 			exp:    "f",
 		},
 
 		{
-			layout: "%v{serde#cbs#}",
+			layout: "%v{unpack#cbs#}",
 			in:     "foo",
 			exp:    "f111o",
 		},
 
 		{
-			layout: "%v{serde#cBs#}",
+			layout: "%v{unpack#cBs#}",
 			in:     "foo",
 			exp:    "f111o",
 		},
 
 		{
-			layout: "%v{serde[ch]}",
+			layout: "%v{unpack[ch]}",
 			in:     "f\xff\xff",
 			exp:    "f-1",
 		},
 		{
-			layout: "%v{serde[cH]}",
+			layout: "%v{unpack[cH]}",
 			in:     "f\xff\xff",
 			exp:    "f65535",
 		},
 
 		{
-			layout: "%v{serde[ci]}",
+			layout: "%v{unpack[ci]}",
 			in:     "f\xff\xff\xff\xff\xff\xff\xff\xff",
 			exp:    "f-1",
 		},
 		{
-			layout: "%v{serde[cI]}",
+			layout: "%v{unpack[cI]}",
 			in:     "f\xff\xff\xff\xff\xff\xff\xff\xff",
 			exp:    "f4294967295",
 		},
 
 		{
-			layout: "%v{serde{{{cq}}}}",
+			layout: "%v{unpack{{{cq}}}}",
 			in:     "f\xff\xff\xff\xff\xff\xff\xff\xff",
 			exp:    "f-1",
 		},
 		{
-			layout: "%v{serde((cQ))}",
+			layout: "%v{unpack((cQ))}",
 			in:     "f\xff\xff\xff\xff\xff\xff\xff\xff",
 			exp:    "f18446744073709551615",
 		},
 
 		{
-			layout: "%v{serde[x<xH.xx>Hxx.xxHxx.xx<xxHxx$]}",
+			layout: "%v{unpack[x<xH.xx>Hxx.xxHxx.xx<xxHxx$]}",
 			in:     "\x00\x01 \x00\x01 \x00\x01 \x00\x01",
 			exp:    "256 1 1 256",
 		},

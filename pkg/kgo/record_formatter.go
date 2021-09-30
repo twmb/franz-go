@@ -159,14 +159,14 @@ func (f *RecordFormatter) AppendPartitionRecord(b []byte, p *FetchPartition, r *
 //
 // Text
 //
-// Topics, keys, and values have "base64", "hex", and "serde" formatting
+// Topics, keys, and values have "base64", "hex", and "unpack" formatting
 // options:
 //
 //     %t{hex}
-//     %k{serde(<bBhH>iIqQc.$)}
+//     %k{unpack{<bBhH>iIqQc.$}}
 //     %v{base64}
 //
-// Serde formatting is inside of enclosing pounds, braces, or brackets, the
+// Unpack formatting is inside of enclosing pounds, braces, or brackets, the
 // same way that timestamp formatting is understood. The syntax roughly follows
 // Python's struct packing/unpacking rules:
 //
@@ -334,18 +334,18 @@ func NewRecordFormatter(layout string) (*RecordFormatter, error) {
 				case strings.HasPrefix(layout, "hex}"):
 					appendFn = appendHex
 					layout = layout[len("hex}"):]
-				case strings.HasPrefix(layout, "serde"):
-					serde, rem, err := nomOpenClose(layout[len("serde"):])
+				case strings.HasPrefix(layout, "unpack"):
+					unpack, rem, err := nomOpenClose(layout[len("unpack"):])
 					if err != nil {
-						return nil, fmt.Errorf("serde parse err: %v", err)
+						return nil, fmt.Errorf("unpack parse err: %v", err)
 					}
 					if len(rem) == 0 || rem[0] != '}' {
-						return nil, fmt.Errorf("serde missing closing } in %q", layout)
+						return nil, fmt.Errorf("unpack missing closing } in %q", layout)
 					}
 					layout = rem[1:]
-					appendFn, err = parseSerde(serde)
+					appendFn, err = parseUnpack(unpack)
 					if err != nil {
-						return nil, fmt.Errorf("serde formatting parse err: %v", err)
+						return nil, fmt.Errorf("unpack formatting parse err: %v", err)
 					}
 
 				default:
@@ -524,7 +524,7 @@ func nomOpenClose(src string) (string, string, error) {
 	return middle, src[idx+len(end):], nil
 }
 
-func parseSerde(layout string) (func([]byte, []byte) []byte, error) {
+func parseUnpack(layout string) (func([]byte, []byte) []byte, error) {
 	// take dst, src; return dst
 	// %!q(eof)
 	// take 8 bytes, decode it, print decoded
@@ -598,7 +598,7 @@ func parseSerde(layout string) (func([]byte, []byte) []byte, error) {
 			continue
 
 		default:
-			return nil, fmt.Errorf("invalid serde parsing character %s", cs)
+			return nil, fmt.Errorf("invalid unpack parsing character %s", cs)
 		}
 
 		islittle := little
