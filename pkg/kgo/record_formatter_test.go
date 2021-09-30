@@ -278,12 +278,13 @@ func TestRecordReader(t *testing.T) {
 		},
 
 		{
-			layout: "%p %o %e %x %y{hex8}",
-			in:     "3 4 5 6 0a",
+			layout: "%p %o %e %d %x %y{hex8}",
+			in:     "3 4 5 17000 6 0a",
 			exp: []*Record{{
 				Partition:     3,
 				Offset:        4,
 				LeaderEpoch:   5,
+				Timestamp:     time.Unix(17, 0),
 				ProducerID:    6,
 				ProducerEpoch: 10,
 			}},

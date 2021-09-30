@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync/atomic"
+	"time"
 	"unicode/utf8"
 )
 
@@ -143,17 +144,18 @@ func (f *RecordFormatter) AppendPartitionRecord(b []byte, p *FetchPartition, r *
 //
 // Timestamps
 //
-// Timestamps can be specified in two formats: native Go timestamp formatting,
-// or strftime formatting. Both format options, specified within braces, have
-// internal format options:
+// Timestamps can be specified in three formats: plain number formatting,
+// native Go timestamp formatting, or strftime formatting. Number formatting is
+// follows the rules above using the millisecond timestamp value. Go and
+// strftime have further internal format options:
 //
 //     %d{go##2006-01-02T15:04:05Z07:00##}
 //     %d{strftime[%F]}
 //
-// An arbitrary amount of pound symbols, braces, and brackets are understood
-// before beginning the actual timestamp formatting. For Go formatting, the
-// format is simply passed to the time package's AppendFormat function. For
-// strftime, all "man strftime" options are supported.
+// An arbitrary amount of pounds, braces, and brackets are understood before
+// beginning the actual timestamp formatting. For Go formatting, the format is
+// simply passed to the time package's AppendFormat function. For strftime, all
+// "man strftime" options are supported.
 //
 // Text
 //
@@ -673,6 +675,7 @@ type RecordReader struct {
 //     %p    partition
 //     %o    offset
 //     %e    leader epoch
+//     %d    timestamp
 //     %x    producer id
 //     %y    producer epoch
 //
@@ -685,6 +688,10 @@ type RecordReader struct {
 //     %%    percent sign
 //     %{    left brace
 //     %}    right brace
+//
+// Unlike record formatting, timestamps can only be read as numbers because Go
+// or strftime formatting can both be variable length and do not play too well
+// with delimiters. Timestamps numbers are read as milliseconds.
 //
 // Numbers
 //
@@ -715,7 +722,7 @@ type RecordReader struct {
 // Header specification
 //
 // Similar to number formatting, headers are parsed using a nested primitive
-// format option, accpeting the key and value escapes previously mentioned.
+// format option, accepting the key and value escapes previously mentioned.
 //
 func NewRecordReader(reader io.Reader, maxRead int, layout string) (*RecordReader, error) {
 	switch {
@@ -874,7 +881,7 @@ func (r *RecordReader) parseReadLayout(layout string) error {
 			layout = layout[n:]
 			r.fns = append(r.fns, fn)
 
-		case 'p', 'o', 'e', 'x', 'y':
+		case 'p', 'o', 'e', 'd', 'x', 'y':
 			dst := new(uint64)
 			fn, n, err := r.parseReadSize("ascii", dst, false)
 			if handledBrace = isOpenBrace; handledBrace {
@@ -908,6 +915,14 @@ func (r *RecordReader) parseReadLayout(layout string) error {
 						return err
 					}
 					rec.LeaderEpoch = int32(*dst)
+					return nil
+				}
+			case 'd':
+				fn.parse = func(b []byte, rec *Record) error {
+					if err := numParse(b, nil); err != nil {
+						return err
+					}
+					rec.Timestamp = time.Unix(0, int64(*dst)*1e6)
 					return nil
 				}
 			case 'x':
