@@ -163,6 +163,14 @@ func TestRecordReader(t *testing.T) {
 		},
 
 		{
+			layout: "%T%to %k %v",
+			in:     "3fooo bar biz",
+			exp: []*Record{
+				&Record{Topic: "foo", Key: []byte("bar"), Value: []byte("biz")},
+			},
+		},
+
+		{
 			layout: "%K{ascii}%k",
 			in:     "3foo",
 			exp:    []*Record{KeyStringRecord("foo", "")},

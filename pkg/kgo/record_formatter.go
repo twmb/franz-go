@@ -632,14 +632,12 @@ func writeNumByte(b []byte, n int64) []byte { u := uint64(n); return append(b, b
 
 // RecordReader reads records from an io.Reader.
 type RecordReader struct {
-	r       io.Reader
-	scanner *bufio.Scanner
+	r *bufio.Reader
 
-	fn        func(*RecordReader, *Record) error
-	delimiter *parseDelims
+	buf []byte
+	fns []readParse
 
 	maxRead int
-	parseRecordBits
 }
 
 // NewRecordReader returns a record reader for the given layout, or an error if
@@ -672,9 +670,8 @@ type RecordReader struct {
 //     %h    begin the header specification
 //     %H    number of headers
 //
-// If using length / number verbs (i.e., "sized" verbs), then all verbs must be
-// sized. Using sizes allows the format to read a size before reading the
-// value, rather than using delimiter based parsing.
+// If using length / number verbs (i.e., "sized" verbs), they must occur before
+// what they are sizing.
 //
 // There are three escapes to parse raw characters, rather than opting into
 // some formatting option:
@@ -720,7 +717,7 @@ func NewRecordReader(reader io.Reader, maxRead int, layout string) (*RecordReade
 	case maxRead == 0:
 		return nil, fmt.Errorf("invalid max read size %d", maxRead)
 	}
-	r := &RecordReader{r: reader, maxRead: maxRead}
+	r := &RecordReader{r: bufio.NewReader(reader), maxRead: maxRead}
 	if err := r.parseReadLayout(layout); err != nil {
 		return nil, err
 	}
@@ -737,17 +734,12 @@ func (r *RecordReader) ReadRecord() (*Record, error) {
 // ReadRecord reads the next record into the given record and returns any
 // parsing error
 func (r *RecordReader) ReadRecordInto(rec *Record) error {
-	return r.fn(r, rec)
+	return r.next(rec)
 }
 
 // SetReader replaces the underlying reader with the given reader.
 func (r *RecordReader) SetReader(reader io.Reader) {
-	r.r = reader
-	if r.delimiter != nil {
-		r.scanner = bufio.NewScanner(r.r)
-		r.scanner.Buffer(nil, r.maxRead)
-		r.scanner.Split(r.delimiter.split)
-	}
+	r.r = bufio.NewReader(reader)
 }
 
 const (
@@ -782,15 +774,19 @@ func (r *RecordReader) parseReadLayout(layout string) error {
 		valueSize  uint64
 		headersNum uint64
 
-		// Until the end, we build both sized fns and delim fns.
-		sizeFns  []func(*RecordReader, *Record) error
-		delimFns []func([]byte, *Record)
+		bits parseRecordBits
 
-		// literals contains spans of raw text to read. We always have
-		// one literal per sizeFn/delimFn to make indexing easy, even
-		// if a given literal is empty.
-		literals [][]byte
-		literal  []byte // raw literal we are currently working on
+		literal    []byte // raw literal we are currently working on
+		addLiteral = func() {
+			if len(r.fns) > 0 && r.fns[len(r.fns)-1].read.empty() {
+				r.fns[len(r.fns)-1].read.delim = literal
+			} else if len(literal) > 0 {
+				r.fns = append(r.fns, readParse{
+					read: readKind{exact: literal},
+				})
+			}
+			literal = nil
+		}
 	)
 
 	for len(layout) > 0 {
@@ -831,9 +827,7 @@ func (r *RecordReader) parseReadLayout(layout string) error {
 			escaped      = layout[0]
 		)
 		layout = layout[1:]
-
-		literals = append(literals, literal) // always cut literal at new format
-		literal = nil
+		addLiteral()
 
 		if isOpenBrace { // opening a brace: layout continues after
 			layout = layout[1:]
@@ -856,13 +850,13 @@ func (r *RecordReader) parseReadLayout(layout string) error {
 			case 'H':
 				dst, bit = &headersNum, parsesHeadersNum
 			}
-			if r.has(bit) {
+			if bits.has(bit) {
 				return fmt.Errorf("%%%s is doubly specified", string(escaped))
 			}
-			if r.has(bit - 1) {
+			if bits.has(bit >> 1) {
 				return fmt.Errorf("size specification %%%s cannot come after value specification %%%s", string(escaped), strings.ToLower(string(escaped)))
 			}
-			r.set(bit)
+			bits.set(bit)
 			fn, n, err := r.parseReadSize("ascii", dst, false)
 			if handledBrace = isOpenBrace; handledBrace {
 				fn, n, err = r.parseReadSize(layout, dst, true)
@@ -871,65 +865,35 @@ func (r *RecordReader) parseReadLayout(layout string) error {
 				return fmt.Errorf("unable to parse %%%s: %s", string(escaped), err)
 			}
 			layout = layout[n:]
-			sizeFns = append(sizeFns, fn)
+			r.fns = append(r.fns, fn)
 
 		case 't':
-			r.set(parsesTopic)
-			delimFns = append(delimFns, func(in []byte, r *Record) { r.Topic = string(in) })
-			sizeFns = append(sizeFns, func(r *RecordReader, rec *Record) error {
-				if topicSize > uint64(r.maxRead) {
-					return fmt.Errorf("topic size %d larger than allowed %d", topicSize, r.maxRead)
-				}
-				if topicSize == 0 {
-					return nil
-				}
-				buf := make([]byte, topicSize)
-				_, err := io.ReadFull(r.r, buf)
-				rec.Topic = string(buf)
-				return err
-			})
+			bits.set(parsesTopic)
+			fn := readParse{parse: func(b []byte, r *Record) error { r.Topic = string(b); return nil }}
+			if bits.has(parsesTopicSize) {
+				fn.read = readKind{sizefn: func() int { return int(topicSize) }}
+			}
+			r.fns = append(r.fns, fn)
 
 		case 'k':
-			r.set(parsesKey)
-			delimFns = append(delimFns, func(in []byte, r *Record) {
-				if len(in) > 0 {
-					r.Key = in
-				}
-			})
-			sizeFns = append(sizeFns, func(r *RecordReader, rec *Record) error {
-				if keySize > uint64(r.maxRead) {
-					return fmt.Errorf("key size %d larger than allowed %d", keySize, r.maxRead)
-				}
-				if keySize == 0 {
-					return nil
-				}
-				rec.Key = make([]byte, keySize)
-				_, err := io.ReadFull(r.r, rec.Key)
-				return err
-			})
+			bits.set(parsesKey)
+			fn := readParse{parse: func(b []byte, r *Record) error { r.Key = dupslice(b); return nil }}
+			if bits.has(parsesKeySize) {
+				fn.read = readKind{sizefn: func() int { return int(keySize) }}
+			}
+			r.fns = append(r.fns, fn)
 
 		case 'v':
-			r.set(parsesValue)
-			delimFns = append(delimFns, func(in []byte, r *Record) {
-				if len(in) > 0 {
-					r.Value = in
-				}
-			})
-			sizeFns = append(sizeFns, func(r *RecordReader, rec *Record) error {
-				if valueSize > uint64(r.maxRead) {
-					return fmt.Errorf("value size %d larger than allowed %d", valueSize, r.maxRead)
-				}
-				if valueSize == 0 {
-					return nil
-				}
-				rec.Value = make([]byte, valueSize)
-				_, err := io.ReadFull(r.r, rec.Value)
-				return err
-			})
+			bits.set(parsesValue)
+			fn := readParse{parse: func(b []byte, r *Record) error { r.Value = dupslice(b); return nil }}
+			if bits.has(parsesValueSize) {
+				fn.read = readKind{sizefn: func() int { return int(valueSize) }}
+			}
+			r.fns = append(r.fns, fn)
 
 		case 'h':
-			r.set(parsesHeaders)
-			if !r.has(parsesHeadersNum) {
+			bits.set(parsesHeaders)
+			if !bits.has(parsesHeadersNum) {
 				return errors.New("missing header count specification %H before header specification %h")
 			}
 			if !isOpenBrace {
@@ -965,29 +929,24 @@ func (r *RecordReader) parseReadLayout(layout string) error {
 				return fmt.Errorf("invalid header specification: %v", err)
 			}
 			layout = layout[at:]
-			if inr.delimiter != nil {
-				return errors.New("invalid header specification: does not use sized fields")
-			}
-			if inr.has(parsesTopic | parsesHeaders) {
-				return errors.New("invalid header specification: only keys and values can be specified")
-			}
 
 			// To parse headers, we save the inner reader's parsing
 			// function stash the current record's key/value before
 			// parsing, and then capture the key/value as a header.
-			fnInner := inr.fn
-			sizeFns = append(sizeFns, func(r *RecordReader, rec *Record) error {
+			r.fns = append(r.fns, readParse{read: readKind{handoff: func(r *RecordReader, rec *Record) error {
 				k, v := rec.Key, rec.Value
 				defer func() { rec.Key, rec.Value = k, v }()
+				inr.r = r.r
 				for i := uint64(0); i < headersNum; i++ {
 					rec.Key, rec.Value = nil, nil
-					if err := fnInner(r, rec); err != nil {
+					if err := inr.next(rec); err != nil {
 						return err
 					}
 					rec.Headers = append(rec.Headers, RecordHeader{Key: string(rec.Key), Value: rec.Value})
 				}
 				return nil
-			})
+			}}})
+
 		}
 
 		if isOpenBrace && !handledBrace {
@@ -995,126 +954,8 @@ func (r *RecordReader) parseReadLayout(layout string) error {
 		}
 	}
 
-	if r.hasSized() {
-		if r.has(parsesTopic) && !r.has(parsesTopicSize) ||
-			r.has(parsesKey) && !r.has(parsesKeySize) ||
-			r.has(parsesValue) && !r.has(parsesValueSize) ||
-			r.has(parsesHeaders) && !r.has(parsesHeadersNum) {
-			return errors.New("invalid mix of sized fields and unsized fields for reading")
-		}
-		if r.has(parsesTopicSize) && !r.has(parsesTopic) ||
-			r.has(parsesKeySize) && !r.has(parsesKey) ||
-			r.has(parsesValueSize) && !r.has(parsesValue) ||
-			r.has(parsesHeadersNum) && !r.has(parsesHeaders) {
-			return errors.New("field size specified without corresponding field specification")
-		}
-
-		if len(literal) > 0 {
-			literals = append(literals, literal)
-			sizeFns = append(sizeFns, func(*RecordReader, *Record) error { return nil })
-		}
-
-		var largestLiteral []byte
-		for _, literal := range literals {
-			if len(literal) > len(largestLiteral) {
-				largestLiteral = literal
-			}
-		}
-
-		// For exact size reading, we read a literal (if non-empty), and then
-		// we read the size fn.
-		scratchLiteral := make([]byte, len(largestLiteral))
-		r.fn = func(r *RecordReader, rec *Record) error {
-			for i, literal := range literals {
-				if len(literal) > 0 {
-					if _, err := io.ReadFull(r.r, scratchLiteral); err != nil {
-						return fmt.Errorf("unable to read literal: %v", err)
-					}
-					if !bytes.Equal(scratchLiteral, literal) {
-						return fmt.Errorf("read literal piece %q != expected %q", scratchLiteral, literal)
-					}
-				}
-				if err := sizeFns[i](r, rec); err != nil {
-					return err
-				}
-			}
-			return nil
-		}
-		return nil
-	}
-
-	var leadingDelim bool
-	if len(literals) > 0 {
-		if len(literals[0]) != 0 {
-			leadingDelim = true
-			delimFns = append([]func([]byte, *Record){nil}, delimFns...)
-		} else {
-			literals = literals[1:]
-		}
-	}
-	literals = append(literals, literal)
-	d := &parseDelims{delims: literals}
-
-	r.scanner = bufio.NewScanner(r.r)
-	r.scanner.Split(d.split)
-	r.delimiter = d
-	r.fn = func(r *RecordReader, rec *Record) error {
-		var scanned int
-		for r.scanner.Scan() {
-			if scanned == 0 && leadingDelim {
-				if len(r.scanner.Bytes()) > 0 {
-					return fmt.Errorf("invalid content %q before leading delimeter", r.scanner.Bytes())
-				}
-			} else {
-				val := make([]byte, len(r.scanner.Bytes()))
-				copy(val, r.scanner.Bytes())
-				delimFns[scanned](val, rec)
-			}
-			scanned++
-			if scanned == len(d.delims) {
-				return nil
-			}
-		}
-		if r.scanner.Err() != nil {
-			return r.scanner.Err()
-		}
-		return io.EOF
-	}
-
+	addLiteral()
 	return nil
-}
-
-type parseDelims struct {
-	delims  [][]byte
-	atDelim int
-}
-
-func (d *parseDelims) split(data []byte, atEOF bool) (advance int, token []byte, err error) {
-	if atEOF && len(data) == 0 {
-		return 0, nil, nil
-	}
-	delim := d.delims[d.atDelim]
-	// If the delim is empty, we consume to the end.
-	if len(delim) == 0 && d.atDelim+1 == len(d.delims) {
-		if atEOF {
-			return len(data), data, nil
-		}
-		return 0, nil, nil
-	}
-
-	// We look for our delimiter. If we find it, our token is up *to* the
-	// delimiter, and we advance past the token *and* the delimiter.
-	if i := bytes.Index(data, delim); i >= 0 {
-		d.atDelim++
-		if d.atDelim == len(d.delims) {
-			d.atDelim = 0
-		}
-		return i + len(delim), data[0:i], nil
-	}
-	if atEOF {
-		return 0, nil, fmt.Errorf("unfinished delim %q", delim)
-	}
-	return 0, nil, nil
 }
 
 // Returns a function that parses a number from the internal reader into dst.
@@ -1122,12 +963,12 @@ func (d *parseDelims) split(data []byte, atEOF bool) (advance int, token []byte,
 // If needBrace is true, the user is specifying how to read the number,
 // otherwise we default to ascii. Reading ascii requires us to peek at bytes
 // until we get to a non-number byte.
-func (r *RecordReader) parseReadSize(layout string, dst *uint64, needBrace bool) (func(*RecordReader, *Record) error, int, error) {
+func (r *RecordReader) parseReadSize(layout string, dst *uint64, needBrace bool) (readParse, int, error) {
 	var end int
 	if needBrace {
 		braceEnd := strings.IndexByte(layout, '}')
 		if braceEnd == -1 {
-			return nil, 0, errors.New("missing brace end } to close number size specification")
+			return readParse{}, 0, errors.New("missing brace end } to close number size specification")
 		}
 		layout = layout[:braceEnd]
 		end = braceEnd + 1
@@ -1137,229 +978,221 @@ func (r *RecordReader) parseReadSize(layout string, dst *uint64, needBrace bool)
 	default:
 		num, err := strconv.Atoi(layout)
 		if err != nil {
-			return nil, 0, fmt.Errorf("unrecognized number reading layout %q: %v", layout, err)
+			return readParse{}, 0, fmt.Errorf("unrecognized number reading layout %q: %v", layout, err)
 		}
 		if num <= 0 {
-			return nil, 0, fmt.Errorf("invalid zero or negative number %q when parsing read size", layout)
+			return readParse{}, 0, fmt.Errorf("invalid zero or negative number %q when parsing read size", layout)
 		}
-		return func(r *RecordReader, _ *Record) error { *dst = uint64(num); return nil }, end, nil
-
-	case "big64":
-		return func(r *RecordReader, _ *Record) error {
-			var buf [8]byte
-			if _, err := io.ReadFull(r.r, buf[:]); err != nil {
-				return err
-			}
-			*dst = binary.BigEndian.Uint64(buf[:])
-			return nil
-		}, end, nil
-
-	case "big32":
-		return func(r *RecordReader, _ *Record) error {
-			var buf [4]byte
-			if _, err := io.ReadFull(r.r, buf[:]); err != nil {
-				return err
-			}
-			*dst = uint64(binary.BigEndian.Uint32(buf[:]))
-			return nil
-		}, end, nil
-
-	case "big16":
-		return func(r *RecordReader, _ *Record) error {
-			var buf [2]byte
-			if _, err := io.ReadFull(r.r, buf[:]); err != nil {
-				return err
-			}
-			*dst = uint64(binary.BigEndian.Uint16(buf[:]))
-			return nil
-		}, end, nil
-
-	case "byte", "big8", "little8":
-		return func(r *RecordReader, _ *Record) error {
-			var buf [1]byte
-			if _, err := io.ReadFull(r.r, buf[:]); err != nil {
-				return err
-			}
-			*dst = uint64(buf[0])
-			return nil
-		}, end, nil
-
-	case "little64":
-		return func(r *RecordReader, _ *Record) error {
-			var buf [8]byte
-			if _, err := io.ReadFull(r.r, buf[:]); err != nil {
-				return err
-			}
-			*dst = binary.LittleEndian.Uint64(buf[:])
-			return nil
-		}, end, nil
-
-	case "little32":
-		return func(r *RecordReader, _ *Record) error {
-			var buf [4]byte
-			if _, err := io.ReadFull(r.r, buf[:]); err != nil {
-				return err
-			}
-			*dst = uint64(binary.LittleEndian.Uint32(buf[:]))
-			return nil
-		}, end, nil
-
-	case "little16":
-		return func(r *RecordReader, _ *Record) error {
-			var buf [2]byte
-			if _, err := io.ReadFull(r.r, buf[:]); err != nil {
-				return err
-			}
-			*dst = uint64(binary.LittleEndian.Uint16(buf[:]))
-			return nil
-		}, end, nil
-
-	case "hex64":
-		return func(r *RecordReader, _ *Record) error {
-			var buf [16]byte
-			if _, err := io.ReadFull(r.r, buf[:]); err != nil {
-				return err
-			}
-			du64, err := strconv.ParseUint(string(buf[:]), 16, 64)
-			if err != nil {
-				return err
-			}
-			*dst = du64
-			return nil
-		}, end, nil
-	case "hex32":
-		return func(r *RecordReader, _ *Record) error {
-			var buf [8]byte
-			if _, err := io.ReadFull(r.r, buf[:]); err != nil {
-				return err
-			}
-			du64, err := strconv.ParseUint(string(buf[:]), 16, 64)
-			if err != nil {
-				return err
-			}
-			*dst = du64
-			return nil
-		}, end, nil
-	case "hex16":
-		return func(r *RecordReader, _ *Record) error {
-			var buf [4]byte
-			if _, err := io.ReadFull(r.r, buf[:]); err != nil {
-				return err
-			}
-			du64, err := strconv.ParseUint(string(buf[:]), 16, 64)
-			if err != nil {
-				return err
-			}
-			*dst = du64
-			return nil
-		}, end, nil
-
-	case "hex8":
-		return func(r *RecordReader, _ *Record) error {
-			var buf [2]byte
-			if _, err := io.ReadFull(r.r, buf[:]); err != nil {
-				return err
-			}
-			du64, err := strconv.ParseUint(string(buf[:]), 16, 64)
-			if err != nil {
-				return err
-			}
-			*dst = du64
-			return nil
-		}, end, nil
-
-	case "hex4":
-		return func(r *RecordReader, _ *Record) error {
-			var buf [1]byte
-			if _, err := io.ReadFull(r.r, buf[:]); err != nil {
-				return err
-			}
-			du64, err := strconv.ParseUint(string(buf[:]), 16, 64)
-			if err != nil {
-				return err
-			}
-			*dst = du64
-			return nil
+		return readParse{
+			readKind{noread: true},
+			func([]byte, *Record) error { *dst = uint64(num); return nil },
 		}, end, nil
 
 	case "ascii":
-		return func(r *RecordReader, _ *Record) error {
-			// We could read many ascii characters in one go.  On
-			// the first read, we wrap our reader in a byte peeker.
-			// All future reads will use this single peeker.
-			peeker, ok := r.r.(bytePeeker)
-			if !ok {
-				r.r = &bytePeekWrapper{r: r.r}
-				peeker = r.r.(bytePeeker)
-			}
-			rawNum := make([]byte, 0, 20)
-			for i := 0; i < 21; i++ {
-				next, err := peeker.Peek()
-				if err != nil || next < '0' || next > '9' {
-					if err != nil && len(rawNum) == 0 {
-						return err
-					}
-					break
-				}
-				if i == 20 {
-					return fmt.Errorf("still parsing ascii number in %s past max uint64 possible length of 20", rawNum)
-				}
-				rawNum = append(rawNum, next)
-				peeker.SkipPeek()
-			}
-			parsed, err := strconv.ParseUint(string(rawNum), 10, 64)
-			if err != nil {
-				return err
-			}
-			*dst = parsed
-			return nil
+		return readParse{
+			readKind{condition: func(b byte) bool { return b < '0' || b > '9' }},
+			func(b []byte, _ *Record) (err error) { *dst, err = strconv.ParseUint(string(b), 10, 64); return err },
+		}, end, nil
+
+	case "big64":
+		return readParse{
+			readKind{size: 8},
+			func(b []byte, _ *Record) error { *dst = binary.BigEndian.Uint64(b); return nil },
+		}, end, nil
+	case "big32":
+		return readParse{
+			readKind{size: 4},
+			func(b []byte, _ *Record) error { *dst = uint64(binary.BigEndian.Uint32(b)); return nil },
+		}, end, nil
+	case "big16":
+		return readParse{
+			readKind{size: 2},
+			func(b []byte, _ *Record) error { *dst = uint64(binary.BigEndian.Uint16(b)); return nil },
+		}, end, nil
+
+	case "little64":
+		return readParse{
+			readKind{size: 8},
+			func(b []byte, _ *Record) error { *dst = binary.LittleEndian.Uint64(b); return nil },
+		}, end, nil
+	case "little32":
+		return readParse{
+			readKind{size: 4},
+			func(b []byte, _ *Record) error { *dst = uint64(binary.LittleEndian.Uint32(b)); return nil },
+		}, end, nil
+	case "little16":
+		return readParse{
+			readKind{size: 2},
+			func(b []byte, _ *Record) error { *dst = uint64(binary.LittleEndian.Uint16(b)); return nil },
+		}, end, nil
+
+	case "byte", "big8", "little8":
+		return readParse{
+			readKind{size: 1},
+			func(b []byte, _ *Record) error { *dst = uint64(b[0]); return nil },
+		}, end, nil
+
+	case "hex64":
+		return readParse{
+			readKind{size: 16},
+			func(b []byte, _ *Record) (err error) { *dst, err = strconv.ParseUint(string(b), 16, 64); return err },
+		}, end, nil
+	case "hex32":
+		return readParse{
+			readKind{size: 8},
+			func(b []byte, _ *Record) (err error) { *dst, err = strconv.ParseUint(string(b), 16, 64); return err },
+		}, end, nil
+	case "hex16":
+		return readParse{
+			readKind{size: 4},
+			func(b []byte, _ *Record) (err error) { *dst, err = strconv.ParseUint(string(b), 16, 64); return err },
+		}, end, nil
+	case "hex8":
+		return readParse{
+			readKind{size: 2},
+			func(b []byte, _ *Record) (err error) { *dst, err = strconv.ParseUint(string(b), 16, 64); return err },
+		}, end, nil
+	case "hex4":
+		return readParse{
+			readKind{size: 1},
+			func(b []byte, _ *Record) (err error) { *dst, err = strconv.ParseUint(string(b), 16, 64); return err },
 		}, end, nil
 	}
 }
 
-// bytePeeker is our little reader helper time for when we need to read ascii
-// numbers. While reading the number, we peek at the next byte and continue
-// processing as a number until wee see a non-numeric ascii char.
-type bytePeeker interface {
-	Peek() (byte, error)
-	SkipPeek()
-	io.Reader
+type readKind struct {
+	noread    bool
+	exact     []byte
+	condition func(byte) bool
+	size      int
+	sizefn    func() int
+	handoff   func(*RecordReader, *Record) error
+	delim     []byte
 }
 
-type bytePeekWrapper struct {
-	haspeek bool
-	peek    byte
-	r       io.Reader
+func (r *readKind) empty() bool {
+	return r.noread == false &&
+		r.exact == nil &&
+		r.condition == nil &&
+		r.size == 0 &&
+		r.sizefn == nil &&
+		r.handoff == nil &&
+		r.delim == nil
 }
 
-func (b *bytePeekWrapper) Peek() (byte, error) {
-	if b.haspeek {
-		return b.peek, nil
-	}
-	var peek [1]byte
-	if _, err := io.ReadFull(b.r, peek[:]); err != nil {
-		return 0, err
-	}
-	b.haspeek = true
-	b.peek = peek[0]
-	return b.peek, nil
+type readParse struct {
+	read  readKind
+	parse func([]byte, *Record) error
 }
 
-func (b *bytePeekWrapper) SkipPeek() {
-	b.haspeek = false
+func dupslice(b []byte) []byte {
+	if len(b) == 0 {
+		return nil
+	}
+	dup := make([]byte, len(b))
+	copy(dup, b)
+	return dup
 }
 
-func (b *bytePeekWrapper) Read(p []byte) (n int, err error) {
-	if len(p) == 0 {
-		return 0, nil
+// TODO maxRead
+func (r *RecordReader) next(rec *Record) error {
+	for i, fn := range r.fns {
+		var err error
+		switch {
+		case fn.read.noread:
+			// do nothing
+		case fn.read.exact != nil:
+			err = r.readExact(fn.read.exact)
+		case fn.read.condition != nil:
+			err = r.readCondition(fn.read.condition)
+		case fn.read.size > 0:
+			err = r.readSize(fn.read.size)
+		case fn.read.sizefn != nil:
+			err = r.readSize(fn.read.sizefn())
+		case fn.read.handoff != nil:
+			err = fn.read.handoff(r, rec)
+		default:
+			err = r.readDelim(fn.read.delim) // we *always* fall back to delim parsing
+		}
+		if err != nil {
+			if err == io.EOF && i != 0 {
+				err = io.ErrUnexpectedEOF
+			}
+			return err
+		}
+
+		if fn.parse == nil {
+			continue
+		}
+
+		if err = fn.parse(r.buf, rec); err != nil {
+			return err
+		}
 	}
-	if b.haspeek {
-		b.haspeek = false
-		p[n] = b.peek
-		n++
+	return nil
+}
+
+func (r *RecordReader) readCondition(fn func(byte) bool) error {
+	// Conditions are essentially "read numerals until a non-numeral",
+	// which is short. We start with a buf of ~4.
+	r.buf = append(r.buf[:0], make([]byte, 4)...)[:0]
+	for {
+		peek, err := r.r.Peek(1)
+		if err != nil {
+			return err
+		}
+		c := peek[0]
+		if fn(c) {
+			return nil
+		}
+		r.r.Discard(1)
+		r.buf = append(r.buf, c)
 	}
-	nn, err := b.r.Read(p[n:])
-	return n + nn, err
+}
+
+func (r *RecordReader) readSize(n int) error {
+	r.buf = append(r.buf[:0], make([]byte, n)...)
+	_, err := io.ReadFull(r.r, r.buf)
+	return err
+}
+
+func (r *RecordReader) readExact(d []byte) error {
+	r.buf = append(r.buf[:0], make([]byte, len(d))...)
+	_, err := io.ReadFull(r.r, r.buf)
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(d, r.buf) {
+		return fmt.Errorf("exact text mismatch, read %q when expecting %q", r.buf, d)
+	}
+	return nil
+}
+
+func (r *RecordReader) readDelim(d []byte) error {
+	// Empty delimiters opt in to reading the rest of the text.
+	if len(d) == 0 {
+		b, err := io.ReadAll(r.r)
+		r.buf = b
+		return err
+	}
+
+	// We use the simple inefficient search algorithm, which can be O(nm),
+	// but we aren't expecting huge search spaces. Long term we could
+	// convert to a two-way search.
+	r.buf = r.buf[:0]
+	for {
+		peek, err := r.r.Peek(len(d))
+		if err != nil {
+			return err
+		}
+		if !bytes.Equal(peek, d) {
+			r.buf = append(r.buf, peek[0])
+			r.r.Discard(1)
+			continue
+		}
+		r.r.Discard(len(d))
+		return nil
+	}
 }
 
 ////////////
