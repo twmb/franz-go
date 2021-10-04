@@ -816,14 +816,11 @@ type RecordReader struct {
 	buf []byte
 	fns []readParse
 
-	maxRead int
+	done bool
 }
 
 // NewRecordReader returns a record reader for the given layout, or an error if
-// the layout is invalid. The maxRead option specifies the maximum size of any
-// parsing option. Using -1 opts in to the internal default size, which is
-// currently bufio.MaxScanTokenSize. Any read more than maxRead returns a parse
-// error.
+// the layout is invalid.
 //
 // Similar to the RecordFormatter, the RecordReader parsing is quite powerful.
 // There is a bit less to describe in comparison to RecordFormatter, but still,
@@ -909,14 +906,8 @@ type RecordReader struct {
 //     %t{hex}
 //     %v{base64}
 //
-func NewRecordReader(reader io.Reader, maxRead int, layout string) (*RecordReader, error) {
-	switch {
-	case maxRead < 0:
-		maxRead = bufio.MaxScanTokenSize
-	case maxRead == 0:
-		return nil, fmt.Errorf("invalid max read size %d", maxRead)
-	}
-	r := &RecordReader{r: bufio.NewReader(reader), maxRead: maxRead}
+func NewRecordReader(reader io.Reader, layout string) (*RecordReader, error) {
+	r := &RecordReader{r: bufio.NewReader(reader)}
 	if err := r.parseReadLayout(layout); err != nil {
 		return nil, err
 	}
@@ -925,6 +916,11 @@ func NewRecordReader(reader io.Reader, maxRead int, layout string) (*RecordReade
 
 // ReadRecord reads the next record in the reader and returns it, or returns a
 // parsing error.
+//
+// This will return io.EOF only if the underlying reader returns io.EOF at the
+// start of a new record. If an io.EOF is returned mid record, this returns
+// io.ErrUnexpectedEOF. It is expected for this function to be called until it
+// returns io.EOF.
 func (r *RecordReader) ReadRecord() (*Record, error) {
 	rec := new(Record)
 	return rec, r.ReadRecordInto(rec)
@@ -932,7 +928,15 @@ func (r *RecordReader) ReadRecord() (*Record, error) {
 
 // ReadRecord reads the next record into the given record and returns any
 // parsing error
+//
+// This will return io.EOF only if the underlying reader returns io.EOF at the
+// start of a new record. If an io.EOF is returned mid record, this returns
+// io.ErrUnexpectedEOF. It is expected for this function to be called until it
+// returns io.EOF.
 func (r *RecordReader) ReadRecordInto(rec *Record) error {
+	if r.done {
+		return io.EOF
+	}
 	return r.next(rec)
 }
 
@@ -1237,6 +1241,25 @@ func (r *RecordReader) parseReadLayout(layout string) error {
 	}
 
 	addLiteral()
+
+	// We must sort noreads to the front, we use this guarantee when
+	// reading to handle EOF properly.
+	var noreads, reads []readParse
+	for _, fn := range r.fns {
+		if fn.read.noread {
+			noreads = append(noreads, fn)
+		} else {
+			reads = append(reads, fn)
+		}
+	}
+	r.fns = make([]readParse, 0, len(noreads)+len(reads))
+	for _, fn := range noreads {
+		r.fns = append(r.fns, fn)
+	}
+	for _, fn := range reads {
+		r.fns = append(r.fns, fn)
+	}
+
 	return nil
 }
 
@@ -1386,9 +1409,10 @@ func dupslice(b []byte) []byte {
 	return dup
 }
 
-// TODO maxRead
 func (r *RecordReader) next(rec *Record) error {
 	for i, fn := range r.fns {
+		r.buf = r.buf[:0]
+
 		var err error
 		switch {
 		case fn.read.noread:
@@ -1407,10 +1431,22 @@ func (r *RecordReader) next(rec *Record) error {
 			err = r.readDelim(fn.read.delim) // we *always* fall back to delim parsing
 		}
 		if err != nil {
-			if err == io.EOF && i != 0 {
-				err = io.ErrUnexpectedEOF
+			if err == io.EOF {
+				r.done = true
+				// We guarantee that all noread parses are at
+				// the front, so if we io.EOF on the first
+				// non-noread, then we bubble it up.
+				if len(r.buf) == 0 && (i == 0 || r.fns[i-1].read.noread) {
+					return io.EOF
+				}
+				if i == len(r.fns)-1 {
+					err = nil
+				} else {
+					return io.ErrUnexpectedEOF
+				}
+			} else {
+				return err
 			}
-			return err
 		}
 
 		if fn.parse == nil {
@@ -1425,9 +1461,6 @@ func (r *RecordReader) next(rec *Record) error {
 }
 
 func (r *RecordReader) readCondition(fn func(byte) bool) error {
-	// Conditions are essentially "read numerals until a non-numeral",
-	// which is short. We start with a buf of ~4.
-	r.buf = append(r.buf[:0], make([]byte, 4)...)[:0]
 	for {
 		peek, err := r.r.Peek(1)
 		if err != nil {
@@ -1443,15 +1476,14 @@ func (r *RecordReader) readCondition(fn func(byte) bool) error {
 }
 
 func (r *RecordReader) readSize(n int) error {
-	r.buf = append(r.buf[:0], make([]byte, n)...)
-	_, err := io.ReadFull(r.r, r.buf)
+	r.buf = append(r.buf, make([]byte, n)...)
+	n, err := io.ReadFull(r.r, r.buf)
+	r.buf = r.buf[:n]
 	return err
 }
 
 func (r *RecordReader) readExact(d []byte) error {
-	r.buf = append(r.buf[:0], make([]byte, len(d))...)
-	_, err := io.ReadFull(r.r, r.buf)
-	if err != nil {
+	if err := r.readSize(len(d)); err != nil {
 		return err
 	}
 	if !bytes.Equal(d, r.buf) {
@@ -1465,13 +1497,16 @@ func (r *RecordReader) readDelim(d []byte) error {
 	if len(d) == 0 {
 		b, err := io.ReadAll(r.r)
 		r.buf = b
+		// ReadAll stops at io.EOF, but we need to bubble that up.
+		if err == nil {
+			return io.EOF
+		}
 		return err
 	}
 
 	// We use the simple inefficient search algorithm, which can be O(nm),
 	// but we aren't expecting huge search spaces. Long term we could
 	// convert to a two-way search.
-	r.buf = r.buf[:0]
 	for {
 		peek, err := r.r.Peek(len(d))
 		if err != nil {

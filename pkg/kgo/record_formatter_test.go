@@ -1,6 +1,7 @@
 package kgo
 
 import (
+	"io"
 	"reflect"
 	"strings"
 	"testing"
@@ -381,20 +382,25 @@ func TestRecordReader(t *testing.T) {
 
 		//
 	} {
-		r, err := NewRecordReader(strings.NewReader(test.in), -1, test.layout)
-		if err != nil {
-			t.Errorf("%s: unexpected err: %v", test.layout, err)
-			continue
-		}
-		for i, exp := range test.exp {
-			rec, err := r.ReadRecord()
+		t.Run(test.layout, func(t *testing.T) {
+			r, err := NewRecordReader(strings.NewReader(test.in), test.layout)
 			if err != nil {
-				t.Errorf("%d %s: unable to read record: %v", i, test.layout, err)
-				continue
+				t.Errorf("unexpected err: %v", err)
+				return
 			}
-			if !reflect.DeepEqual(rec, exp) {
-				t.Errorf("%d %s:\ngot %#v\nexp %#v", i, test.layout, rec, exp)
+			for i, exp := range test.exp {
+				rec, err := r.ReadRecord()
+				if err != nil {
+					t.Errorf("%d: unable to read record: %v", i, err)
+					return
+				}
+				if !reflect.DeepEqual(rec, exp) {
+					t.Errorf("%d:\ngot %#v\nexp %#v", i, rec, exp)
+				}
 			}
-		}
+			if _, err := r.ReadRecord(); err != io.EOF {
+				t.Errorf("got err %v != io.EOF after exhausting records", err)
+			}
+		})
 	}
 }
