@@ -9,6 +9,7 @@ import (
 	"math/rand"
 	"net"
 	"regexp"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -358,7 +359,24 @@ func (cfg *cfg) validate() error {
 	return nil
 }
 
-var defaultDialer = &net.Dialer{Timeout: 10 * time.Second}
+var (
+	defaultDialer = &net.Dialer{Timeout: 10 * time.Second}
+	reVersion     = regexp.MustCompile(`^[a-zA-Z0-9](?:[a-zA-Z0-9\.-]*[a-zA-Z0-9])?$`)
+)
+
+func softwareVersion() string {
+	info, ok := debug.ReadBuildInfo()
+	if ok {
+		for _, dep := range info.Deps {
+			if dep.Path == "github.com/twmb/franz-go" {
+				if reVersion.MatchString(dep.Version) {
+					return dep.Version
+				}
+			}
+		}
+	}
+	return "unknown"
+}
 
 func defaultCfg() cfg {
 	defaultID := "kgo"
@@ -375,7 +393,7 @@ func defaultCfg() cfg {
 		connIdleTimeout:        20 * time.Second,
 
 		softwareName:    "kgo",
-		softwareVersion: "0.1.0",
+		softwareVersion: softwareVersion(),
 
 		logger: new(nopLogger),
 
@@ -488,7 +506,7 @@ func ClientID(id string) Opt {
 // It is generally not recommended to set this. As well, if you do, the name
 // and version must match the following regular expression:
 //
-//     [a-zA-Z0-9](?:[a-zA-Z0-9\\-.]*[a-zA-Z0-9])?
+//     [a-zA-Z0-9](?:[a-zA-Z0-9\.-]*[a-zA-Z0-9])?
 //
 // Note this means neither the name nor version can be empty.
 func SoftwareNameAndVersion(name, version string) Opt {
