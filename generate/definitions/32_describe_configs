@@ -60,6 +60,9 @@ DescribeConfigsResponse =>
       // the value will be null.
       Value: nullable-string
       // ReadOnly signifies whether this is not a dynamic config option.
+      //
+      // Note that this field is not always correct, and you may need to check
+      // whether the Source is any dynamic enum. See franz-go#91 for more details.
       ReadOnly: bool
       // IsDefault is whether this is a default config option. This has been
       // replaced in favor of Source.
