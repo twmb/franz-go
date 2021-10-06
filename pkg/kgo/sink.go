@@ -502,14 +502,13 @@ func (s *sink) handleReqClientErr(req *produceRequest, err error) {
 		s.cl.cfg.logger.Log(LogLevelWarn, "random error while producing, requeueing unattempted request", "broker", logID(s.nodeID), "err", err)
 		fallthrough
 
-	case err == errChosenBrokerDead,
-		err == errUnknownBroker,
+	case err == errUnknownBroker,
 		isDialErr(err),
 		isRetriableBrokerErr(err):
-		// A dead / unknown broker means the broker may have migrated,
-		// so we retry to force a metadata reload. As well, if this is
-		// not a retriable broker error, we should reload.
-		updateMeta := err == errUnknownBroker || !isRetriableBrokerErr(err)
+		updateMeta := !isRetriableBrokerErr(err)
+		if updateMeta {
+			s.cl.cfg.logger.log(LogLevelInfo, "produce request failed triggering metadata update", "broker", logID(s.nodeID), "err", err)
+		}
 		s.handleRetryBatches(req.batches, req.backoffSeq, updateMeta, false)
 
 	case err == ErrClientClosed:
