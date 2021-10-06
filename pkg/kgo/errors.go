@@ -40,9 +40,11 @@ func isRetriableBrokerErr(err error) bool {
 	// We favor testing os.SyscallError first, because net.OpError _always_
 	// implements Temporary, so if we test that first, it'll return false
 	// in many cases when we want to return true from os.SyscallError.
-	var se *os.SyscallError
-	if errors.As(err, &se) {
-		return true
+	if se := (*os.SyscallError)(nil); errors.As(err, &se) {
+		// If a dial fails, potentially we could retry if the resolver
+		// had a temporary hiccup, but we will err on the side of this
+		// being a slightly less temporary error.
+		return !isDialErr(err)
 	}
 	// EOF can be returned if a broker kills a connection unexpectedly, and
 	// we can retry that. Same for ErrClosed.
@@ -64,6 +66,11 @@ func isRetriableBrokerErr(err error) bool {
 		return tempErr.Temporary()
 	}
 	return false
+}
+
+func isDialErr(err error) bool {
+	var ne *net.OpError
+	return errors.As(err, &ne) && ne.Op == "dial"
 }
 
 func isSkippableBrokerErr(err error) bool {
