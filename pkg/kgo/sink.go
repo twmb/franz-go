@@ -311,7 +311,7 @@ func (s *sink) produce(sem <-chan struct{}) bool {
 		// it was set on, since producer id recovery resets the flag.
 		if err := s.doTxnReq(req, txnReq); err != nil {
 			switch {
-			case isRetriableBrokerErr(err):
+			case isRetriableBrokerErr(err) || isDialErr(err):
 				s.cl.bumpRepeatedLoadErr(err)
 				s.cl.cfg.logger.Log(LogLevelWarn, "unable to AddPartitionsToTxn due to retriable broker err, bumping client's buffered record load errors by 1 and retrying", "err", err)
 				return moreToDrain || len(req.batches) > 0
@@ -504,10 +504,12 @@ func (s *sink) handleReqClientErr(req *produceRequest, err error) {
 
 	case err == errChosenBrokerDead,
 		err == errUnknownBroker,
+		isDialErr(err),
 		isRetriableBrokerErr(err):
 		// A dead / unknown broker means the broker may have migrated,
-		// so we retry to force a metadata reload.
-		updateMeta := err == errUnknownBroker
+		// so we retry to force a metadata reload. As well, if this is
+		// not a retriable broker error, we should reload.
+		updateMeta := err == errUnknownBroker || !isRetriableBrokerErr(err)
 		s.handleRetryBatches(req.batches, req.backoffSeq, updateMeta, false)
 
 	case err == ErrClientClosed:
@@ -1162,7 +1164,7 @@ func (recBuf *recBuf) bumpRepeatedLoadErr(err error) {
 	batch0 := recBuf.batches[0]
 	batch0.tries++
 	failErr := batch0.maybeFailErr(&recBuf.cl.cfg)
-	if (!recBuf.cl.idempotent() || batch0.canFailFromLoadErrs) && (failErr != nil || !isRetriableBrokerErr(err) && !kerr.IsRetriable(err)) {
+	if (!recBuf.cl.idempotent() || batch0.canFailFromLoadErrs) && (failErr != nil || !isRetriableBrokerErr(err) && !isDialErr(err) && !kerr.IsRetriable(err)) {
 		recBuf.failAllRecords(err)
 	}
 }
