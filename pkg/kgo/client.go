@@ -1631,6 +1631,7 @@ func (cl *Client) fetchMappedMetadata(ctx context.Context, topics []string) (map
 	return mapping, nil
 }
 
+// These errors pair with "collect" below for wording.
 var (
 	errMissingTopic     = errors.New("topic was not returned when looking up its metadata")
 	errMissingPartition = errors.New("partition was not returned when looking up its metadata")
@@ -1721,8 +1722,32 @@ func (l *unknownErrShards) collect(mkreq, mergeParts interface{}) []issueShard {
 
 		req := factory.Call(nil)[0]
 
+		var ntopics, npartitions int
 		for topic, partitions := range topics {
+			ntopics++
+			npartitions += partitions.Len()
 			perTopic.Call([]reflect.Value{req, reflect.ValueOf(topic), partitions})
+		}
+
+		switch err {
+		case errMissingTopic:
+			if ntopics == 1 {
+				err = errors.New("1 topic was not returned when lookup up its metadata")
+			} else if ntopics > 1 {
+				err = fmt.Errorf("%d topics were not returned when lookup up their metadata", ntopics)
+			}
+		case errMissingPartition:
+			if npartitions == 1 {
+				err = errors.New("1 partition was not returned when looking up its metadata")
+			} else if npartitions > 1 {
+				err = fmt.Errorf("%d partitions were not returned when looking up their metadata", npartitions)
+			}
+		case errNoLeader:
+			if npartitions == 1 {
+				err = errors.New("1 partition has no leader from a metadata lookup")
+			} else if npartitions > 1 {
+				err = fmt.Errorf("%d partitions have no leader from a metadata lookup", npartitions)
+			}
 		}
 
 		shards = append(shards, issueShard{
