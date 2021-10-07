@@ -1647,7 +1647,7 @@ func missingOrCodeP(t string, p int32, exists bool, code int16) error {
 
 func noLeader(t string, p int32, l int32) error {
 	if l < 0 {
-		return fmt.Errorf("topic %s partition %d has no leader according to the metadata lookup", t, p, l)
+		return fmt.Errorf("topic %s partition %d has no leader according to the metadata lookup", t, p)
 	}
 	return nil
 }
