@@ -1631,23 +1631,29 @@ func (cl *Client) fetchMappedMetadata(ctx context.Context, topics []string) (map
 	return mapping, nil
 }
 
+var (
+	errMissingTopic     = errors.New("topic was not returned when looking up its metadata")
+	errMissingPartition = errors.New("partition was not returned when looking up its metadata")
+	errNoLeader         = errors.New("partition has no leader from metadata lookup")
+)
+
 func missingOrCodeT(t string, exists bool, code int16) error {
 	if !exists {
-		return fmt.Errorf("topic %s was not returned when looking up metadata for the topic", t)
+		return errMissingTopic
 	}
 	return kerr.ErrorForCode(code)
 }
 
 func missingOrCodeP(t string, p int32, exists bool, code int16) error {
 	if !exists {
-		return fmt.Errorf("topic %s partition %d was not returned when looking up metadata for the topic", t, p)
+		return errMissingPartition
 	}
 	return kerr.ErrorForCode(code)
 }
 
 func noLeader(t string, p int32, l int32) error {
 	if l < 0 {
-		return fmt.Errorf("topic %s partition %d has no leader according to the metadata lookup", t, p)
+		return errNoLeader
 	}
 	return nil
 }
