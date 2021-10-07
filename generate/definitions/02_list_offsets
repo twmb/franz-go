@@ -11,7 +11,7 @@ ListOffsetsRequest => key 2, max version 7, flexible v6+
   // ReplicaID is the broker ID to get offsets from. As a Kafka client, use -1.
   // The consumer replica ID (-1) causes requests to only succeed if issued
   // against the leader broker.
-  ReplicaID: int32
+  ReplicaID: int32(-1)
   // IsolationLevel configures which record offsets are visible in the
   // response. READ_UNCOMMITTED (0) makes all records visible. READ_COMMITTED
   // (1) makes non-transactional and committed transactional records visible.
