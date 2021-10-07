@@ -4530,6 +4530,8 @@ type ListOffsetsRequest struct {
 	// ReplicaID is the broker ID to get offsets from. As a Kafka client, use -1.
 	// The consumer replica ID (-1) causes requests to only succeed if issued
 	// against the leader broker.
+	//
+	// This field has a default of -1.
 	ReplicaID int32
 
 	// IsolationLevel configures which record offsets are visible in the
@@ -4748,6 +4750,7 @@ func NewPtrListOffsetsRequest() *ListOffsetsRequest {
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to ListOffsetsRequest.
 func (v *ListOffsetsRequest) Default() {
+	v.ReplicaID = -1
 }
 
 // NewListOffsetsRequest returns a default ListOffsetsRequest
