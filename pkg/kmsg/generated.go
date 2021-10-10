@@ -16194,7 +16194,7 @@ func NewDeleteRecordsRequestTopic() DeleteRecordsRequestTopic {
 // DeleteRecordsRequest is an admin request to delete records from Kafka.
 // This was added for KIP-107.
 //
-// To delete records, Kafka sets the LastStableOffset for partitions to
+// To delete records, Kafka sets the LogStartOffset for partitions to
 // the requested offset. All segments whose max partition is before the
 // requested offset are deleted, and any records within the segment before
 // the requested offset can no longer be read.
