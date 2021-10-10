@@ -15260,7 +15260,7 @@ type CreateTopicsResponseTopic struct {
 	// NOT_CONTROLLER is returned if the request was not issued to a Kafka
 	// controller.
 	//
-	// TOPIC_AUTHORIZATION_FAILED is returned if the client is not authorized
+	// TOPIC_AUTHORIZATION_FAILED is returned if the client is not authorized.
 	//
 	// INVALID_REQUEST is returned if the same topic occurred multiple times
 	// in the request.
@@ -15689,7 +15689,7 @@ type DeleteTopicsRequest struct {
 	// will continue to be processed if the timeout is reached. If the timeout is
 	// reached, Kafka will reply with a REQUEST_TIMED_OUT error.
 	//
-	// This field has a default of 15000.
+	// This field has a default of 60000.
 	TimeoutMillis int32
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
@@ -15871,7 +15871,7 @@ func NewPtrDeleteTopicsRequest() *DeleteTopicsRequest {
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to DeleteTopicsRequest.
 func (v *DeleteTopicsRequest) Default() {
-	v.TimeoutMillis = 15000
+	v.TimeoutMillis = 60000
 }
 
 // NewDeleteTopicsRequest returns a default DeleteTopicsRequest
@@ -16213,7 +16213,7 @@ type DeleteRecordsRequest struct {
 	// will continue to be processed if the timeout is reached. If the timeout is
 	// reached, Kafka will reply with a REQUEST_TIMED_OUT error.
 	//
-	// This field has a default of 15000.
+	// This field has a default of 60000.
 	TimeoutMillis int32
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
@@ -16400,7 +16400,7 @@ func NewPtrDeleteRecordsRequest() *DeleteRecordsRequest {
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to DeleteRecordsRequest.
 func (v *DeleteRecordsRequest) Default() {
-	v.TimeoutMillis = 15000
+	v.TimeoutMillis = 60000
 }
 
 // NewDeleteRecordsRequest returns a default DeleteRecordsRequest
@@ -24417,7 +24417,7 @@ type CreatePartitionsRequest struct {
 	// will continue to be processed if the timeout is reached. If the timeout is
 	// reached, Kafka will reply with a REQUEST_TIMED_OUT error.
 	//
-	// This field has a default of 15000.
+	// This field has a default of 60000.
 	TimeoutMillis int32
 
 	// ValidateOnly is makes this request a dry-run; everything is validated but
@@ -24646,7 +24646,7 @@ func NewPtrCreatePartitionsRequest() *CreatePartitionsRequest {
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to CreatePartitionsRequest.
 func (v *CreatePartitionsRequest) Default() {
-	v.TimeoutMillis = 15000
+	v.TimeoutMillis = 60000
 }
 
 // NewCreatePartitionsRequest returns a default CreatePartitionsRequest

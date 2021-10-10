@@ -6,7 +6,7 @@ DeleteTopicsRequest => key 20, max version 6, flexible v4+, admin
   Topics: [=>] // v6+
     Topic: nullable-string
     TopicID: uuid
-  TimeoutMillis
+  TimeoutMillis(60000)
 
 // DeleteTopicsResponse is returned from a DeleteTopicsRequest.
 // Version 3 added the TOPIC_DELETION_DISABLED error proposed in KIP-322

@@ -24,7 +24,7 @@ DeleteRecordsRequest => key 21, max version 2, flexible v2+
       // To delete all records, use -1, which is mapped to the partition's
       // current high watermark.
       Offset: int64
-  TimeoutMillis
+  TimeoutMillis(60000)
 
 // DeleteRecordsResponse is returned from a DeleteRecordsRequest.
 DeleteRecordsResponse =>
