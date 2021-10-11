@@ -51,6 +51,16 @@ func (ds PartitionDetails) Sorted() []PartitionDetail {
 	return s
 }
 
+// Numbers returns a sorted list of all partition numbers.
+func (ds PartitionDetails) Numbers() []int32 {
+	all := make([]int32, 0, len(ds))
+	for p := range ds {
+		all = append(all, p)
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i] < all[j] })
+	return all
+}
+
 // TopicDetail is the detail of a topic as returned by a metadata response. If
 // the topic fails to load / has an error, then there will be no partitions.
 type TopicDetail struct {
@@ -67,7 +77,7 @@ type TopicDetail struct {
 type TopicDetails map[string]TopicDetail
 
 // Topics returns a sorted list of all topic names.
-func (ds TopicDetails) Topics() []string {
+func (ds TopicDetails) Names() []string {
 	all := make([]string, 0, len(ds))
 	for t := range ds {
 		all = append(all, t)
