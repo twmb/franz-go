@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"sync"
 
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kmsg"
@@ -449,6 +450,71 @@ func (cl *Client) FetchOffsets(ctx context.Context, group string) (OffsetRespons
 	return rs, nil
 }
 
+// FetchOffsetsResponse contains a fetch offsets response for a single group.
+type FetchOffsetsResponse struct {
+	Group   string          // Group is the offsets these fetches correspond to.
+	Fetched OffsetResponses // Fetched contains offsets fetched for this group, if any.
+	Err     error           // Err contains any error preventing offsets from being fetched.
+}
+
+// FetchOFfsetsResponses contains responses for many fetch offsets requests.
+type FetchOffsetsResponses map[string]FetchOffsetsResponse
+
+// EachError calls fn for every response that as a non-nil error.
+func (rs FetchOffsetsResponses) EachError(fn func(FetchOffsetsResponse)) {
+	for _, r := range rs {
+		if r.Err != nil {
+			fn(r)
+		}
+	}
+}
+
+// AllFailed returns whether all fetch offsets requests failed.
+func (rs FetchOffsetsResponses) AllFailed() bool {
+	var n int
+	rs.EachError(func(FetchOffsetsResponse) { n++ })
+	return n == len(rs)
+}
+
+// FetchManyOffsets issues a fetch offsets requests for each group specified.
+//
+// This API is slightly different from others on the admin client: the
+// underlying FetchOFfsets request only supports one group at a time. Unlike
+// all other methods, which build and issue a single request, this method
+// issues many requests and captures all responses into the return map
+// (disregarding sharded functions, which actually have the input request
+// split).
+//
+// More importantly, FetchOffsets and CommitOffsets are important to provide as
+// simple APIs for users that manage group offsets outside of a consumer group.
+// This function complements FetchOffsets by supporting the metric gathering
+// use case of fetching offsets for many groups at once.
+func (cl *Client) FetchManyOffsets(ctx context.Context, groups ...string) FetchOffsetsResponses {
+	if len(groups) == 0 {
+		return nil
+	}
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	fetched := make(FetchOffsetsResponses)
+	for i := range groups {
+		group := groups[i]
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			offsets, err := cl.FetchOffsets(ctx, group)
+			mu.Lock()
+			defer mu.Unlock()
+			fetched[group] = FetchOffsetsResponse{
+				Group:   group,
+				Fetched: offsets,
+				Err:     err,
+			}
+		}()
+	}
+	wg.Wait()
+	return fetched
+}
+
 // DeleteOffsetsResponses contains the per topic, per partition errors. If an
 // offset deletion for a partition was successful, the error will be nil.
 type DeleteOffsetsResponses map[string]map[int32]error
@@ -568,9 +634,10 @@ func (l GroupLag) Sorted() []GroupMemberLag {
 //     FetchOffsets(ctx, group)
 //     ListEndOffsets(ctx, described.AssignedPartitions().Topics())
 //
-// If assigned partitions are missing in either the commit offsets or the
-// listed end offsets, the partition will have an error indicating it is
-// missing.
+// If assigned partitions are missing in the listed end offsets listed end
+// offsets, the partition will have an error indicating it is missing. A
+// missing topic or partition in the commits is assumed to be nothing
+// committing yet.
 func CalculateGroupLag(
 	group DescribedGroup,
 	commit OffsetResponses,
@@ -595,20 +662,21 @@ func CalculateGroupLag(
 					perr    error
 					ok      bool
 				)
-				if tcommit == nil {
-					perr = errMissing
-				} else {
+
+				if tcommit != nil {
 					if pcommit, ok = tcommit[p]; !ok {
-						perr = errMissing
+						pcommit = OffsetResponse{Offset: Offset{
+							Topic:     t.Topic,
+							Partition: p,
+							Offset:    -1,
+						}}
 					}
 				}
-				if perr == nil {
-					if tend == nil {
-						perr = errMissing
-					} else {
-						if pend, ok = tend[p]; !ok {
-							perr = errMissing
-						}
+				if tend == nil {
+					perr = errListMissing
+				} else {
+					if pend, ok = tend[p]; !ok {
+						perr = errListMissing
 					}
 				}
 
@@ -620,7 +688,10 @@ func CalculateGroupLag(
 
 				lag := int64(-1)
 				if perr == nil {
-					lag = pend.Offset - pcommit.Offset.Offset
+					lag = pend.Offset
+					if pcommit.Offset.Offset >= 0 {
+						lag = pend.Offset - pcommit.Offset.Offset
+					}
 				}
 
 				lt[p] = GroupMemberLag{
@@ -638,4 +709,4 @@ func CalculateGroupLag(
 	return l
 }
 
-var errMissing = errors.New("missing")
+var errListMissing = errors.New("missing from list offsets")
