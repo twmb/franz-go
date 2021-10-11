@@ -77,6 +77,16 @@ func (ds DescribedGroups) Sorted() []DescribedGroup {
 	return s
 }
 
+// Topics returns a sorted list of all group names.
+func (ds DescribedGroups) Names() []string {
+	all := make([]string, 0, len(ds))
+	for g := range ds {
+		all = append(all, g)
+	}
+	sort.Strings(all)
+	return all
+}
+
 // ListedGroup contains data from a list groups response for a single group.
 type ListedGroup struct {
 	Group string // Group is the name of this group.

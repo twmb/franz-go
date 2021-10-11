@@ -233,8 +233,9 @@ func (l ListedOffsets) Each(fn func(ListedOffset)) {
 	}
 }
 
-// ListStartOffsets returns the start (oldest) offsets for each partition in each
-// requested topic. In Kafka terms, this returns the log start offset.
+// ListStartOffsets returns the start (oldest) offsets for each partition in
+// each requested topic. In Kafka terms, this returns the log start offset. If
+// no topics are specified, all topics are listed.
 //
 // This may return *ShardErrors.
 func (cl *Client) ListStartOffsets(ctx context.Context, topics ...string) (ListedOffsets, error) {
@@ -242,7 +243,8 @@ func (cl *Client) ListStartOffsets(ctx context.Context, topics ...string) (Liste
 }
 
 // ListEndOffsets returns the end (newest) offsets for each partition in each
-// requested topic. In Kafka terms, this returns high watermarks.
+// requested topic. In Kafka terms, this returns high watermarks. If no topics
+// are specified, all topics are listed.
 //
 // This may return *ShardErrors.
 func (cl *Client) ListEndOffsets(ctx context.Context, topics ...string) (ListedOffsets, error) {
@@ -253,7 +255,8 @@ func (cl *Client) ListEndOffsets(ctx context.Context, topics ...string) (ListedO
 // each requested topic. A committed offset may be slightly less than the
 // latest offset. In Kafka terms, committed means the last stable offset, and
 // newest means the high watermark. Record offsets in active, uncommitted
-// transactions will not be returned.
+// transactions will not be returned. If no topics are specified, all topics
+// are listed.
 //
 // This may return *ShardErrors.
 func (cl *Client) ListCommittedOffsets(ctx context.Context, topics ...string) (ListedOffsets, error) {
@@ -262,7 +265,8 @@ func (cl *Client) ListCommittedOffsets(ctx context.Context, topics ...string) (L
 
 // ListOffsetsAfterMilli returns the first offsets after the requested
 // millisecond timestamp. Unlike listing start/end/committed offsets, offsets
-// returned from this function also include the timestamp of the offset.
+// returned from this function also include the timestamp of the offset. If no
+// topics are specified, all topics are listed.
 //
 // This may return *ShardErrors.
 func (cl *Client) ListOffsetsAfterMilli(ctx context.Context, millisecond int64, topics ...string) (ListedOffsets, error) {
