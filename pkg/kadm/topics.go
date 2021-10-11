@@ -16,7 +16,7 @@ func (cl *Client) ListTopics(
 	ctx context.Context,
 	topics ...string,
 ) (TopicDetails, error) {
-	m, err := cl.RequestMetadata(ctx, topics...)
+	m, err := cl.Metadata(ctx, topics...)
 	if err != nil {
 		return nil, err
 	}

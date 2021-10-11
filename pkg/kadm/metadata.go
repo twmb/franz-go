@@ -66,6 +66,16 @@ type TopicDetail struct {
 // TopicDetails contains details for topics as returned by a metadata response.
 type TopicDetails map[string]TopicDetail
 
+// Topics returns a sorted list of all topic names.
+func (ds TopicDetails) Topics() []string {
+	all := make([]string, 0, len(ds))
+	for t := range ds {
+		all = append(all, t)
+	}
+	sort.Strings(all)
+	return all
+}
+
 // Sorted returns all topics in sorted order.
 func (ds TopicDetails) Sorted() []TopicDetail {
 	s := make([]TopicDetail, 0, len(ds))
@@ -116,12 +126,12 @@ func int32s(is []int32) []int32 {
 	return is
 }
 
-// RequestMetadata issues a metadata request and returns it. Specific topics to
+// Metadata issues a metadata request and returns it. Specific topics to
 // describe can be passed as additional arguments. If no topics are specified,
 // all topics are requested.
 //
 // This returns an error if the request fails to be issued, or an *AuthErr.
-func (cl *Client) RequestMetadata(
+func (cl *Client) Metadata(
 	ctx context.Context,
 	topics ...string,
 ) (Metadata, error) {
