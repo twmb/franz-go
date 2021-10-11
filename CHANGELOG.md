@@ -1,3 +1,27 @@
+v1.1.3
+===
+
+This patch allows `BrokerNotAvailable` to be retried. As well, it contains some
+small improvements under the hood. When sharding certain requests, we now avoid
+issuing requests to partitions that have no leader. We also better collapse
+per-partition sharding error messages.
+
+Dial errors are now not retriable. Now, if a produce request fails because the
+broker cannot be dialed, we refresh metadata. Previously, we just accepted the
+error as retriable and tried producing again.
+
+The SoftwareVersion used in ApiVersions requests now includes your current kgo
+version.
+
+This tag is based on a 1.1.x branch in the repo. There is some feature work
+that is yet to be stabilized on the main branch.
+
+Notable commits:
+
+- [`747ab0c`](https://github.com/twmb/franz-go/commit/747ab0c) kerr: make BrokerNotAvailable retriable
+- [`f494301`](https://github.com/twmb/franz-go/commit/f494301) errors: make dial errors non-retriable
+- [`4a76861`](https://github.com/twmb/franz-go/commit/4a76861) config: default to kgo dep version in ApiVersions
+
 v1.1.2
 ===
 
