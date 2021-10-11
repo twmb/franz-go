@@ -65,6 +65,11 @@ type Client struct {
 	cl *kgo.Client
 }
 
+// NewClient returns an admin client.
+func NewClient(cl *kgo.Client) *Client {
+	return &Client{cl}
+}
+
 // StringPtr is a shortcut function to aid building configs for creating or
 // altering topics.
 func StringPtr(s string) *string {
