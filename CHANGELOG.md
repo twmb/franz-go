@@ -1,3 +1,12 @@
+v1.1.4
+===
+
+This includes on more patch for the prior tag to fully make `InitProducerID`
+retriable when it encounters a retriable error.
+
+- [`d623ffe`](https://github.com/twmb/franz-go/commit/d623ffe) errors: make errProducerIDLoadFail retriable
+
+
 v1.1.3
 ===
 
