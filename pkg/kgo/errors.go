@@ -51,6 +51,11 @@ func isRetriableBrokerErr(err error) bool {
 	if isNetClosedErr(err) || errors.Is(err, io.EOF) {
 		return true
 	}
+	// We could have a retriable producer ID failure, which then bubbled up
+	// as errProducerIDLoadFail so as to be retried later.
+	if errors.Is(err, errProducerIDLoadFail) {
+		return true
+	}
 	// We could have chosen a broker, and then a concurrent metadata update
 	// could have removed it.
 	if errors.Is(err, errChosenBrokerDead) {
