@@ -451,7 +451,7 @@ func defaultCfg() cfg {
 		acks:                AllISRAcks(),
 		compression:         []CompressionCodec{SnappyCompression(), NoCompression()},
 		maxRecordBatchBytes: 1000000, // Kafka max.message.bytes default is 1000012
-		maxBufferedRecords:  math.MaxInt64,
+		maxBufferedRecords:  10000,
 		produceTimeout:      30 * time.Second,
 		recordRetries:       math.MaxInt64,             // effectively unbounded
 		partitioner:         StickyKeyPartitioner(nil), // default to how Kafka partitions
@@ -859,7 +859,7 @@ func ProducerBatchMaxBytes(v int32) ProducerOpt {
 
 // MaxBufferedRecords sets the max amount of records the client will buffer,
 // blocking produces until records are finished if this limit is reached.
-// This overrides the unbounded default.
+// This overrides the default of 10,000.
 func MaxBufferedRecords(n int) ProducerOpt {
 	return producerOpt{func(cfg *cfg) { cfg.maxBufferedRecords = int64(n) }}
 }
