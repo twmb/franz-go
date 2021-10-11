@@ -50,7 +50,7 @@ type ResourceConfig struct {
 // DescribeTopicConfigs returns the configuration for the requested topics.
 //
 // This may return *ShardErrors.
-func (cl *Client) DescribeTopicsConfigs(
+func (cl *Client) DescribeTopicConfigs(
 	ctx context.Context,
 	topics ...string,
 ) ([]ResourceConfig, error) {

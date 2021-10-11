@@ -57,8 +57,7 @@ func (ds PartitionDetails) Numbers() []int32 {
 	for p := range ds {
 		all = append(all, p)
 	}
-	sort.Slice(all, func(i, j int) bool { return all[i] < all[j] })
-	return all
+	return int32s(all)
 }
 
 // TopicDetail is the detail of a topic as returned by a metadata response. If
@@ -125,10 +124,10 @@ func (ds TopicDetails) FilterInternal() {
 
 // Metadata is the data from a metadata response.
 type Metadata struct {
-	Cluster    string         // Cluster is the cluster name, if any.
-	Controller int32          // Controller is the node ID of the controller broker, if available, otherwise -1.
-	Brokers    []BrokerDetail // Brokers contains broker details.
-	Topics     TopicDetails   // Topics contains topic details.
+	Cluster    string        // Cluster is the cluster name, if any.
+	Controller int32         // Controller is the node ID of the controller broker, if available, otherwise -1.
+	Brokers    BrokerDetails // Brokers contains broker details.
+	Topics     TopicDetails  // Topics contains topic details.
 }
 
 func int32s(is []int32) []int32 {

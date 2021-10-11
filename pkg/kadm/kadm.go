@@ -79,6 +79,18 @@ func StringPtr(s string) *string {
 // BrokerDetail is a type alias for kgo.BrokerMetadata.
 type BrokerDetail = kgo.BrokerMetadata
 
+// BrokerDetails contains the details for many brokers.
+type BrokerDetails []BrokerDetail
+
+// NodeIDs returns the IDs of all nodes.
+func (ds BrokerDetails) NodeIDs() []int32 {
+	var all []int32
+	for _, d := range ds {
+		all = append(all, d.NodeID)
+	}
+	return int32s(all)
+}
+
 // Partition is a partition for a topic.
 type Partition struct {
 	Topic     string // Topic is the topic for this partition.
@@ -262,9 +274,7 @@ func (s TopicsSet) Sorted() TopicsList {
 		for p := range ps {
 			tps.Partitions = append(tps.Partitions, p)
 		}
-		sort.Slice(tps.Partitions, func(i, j int) bool {
-			return tps.Partitions[i] < tps.Partitions[j]
-		})
+		tps.Partitions = int32s(tps.Partitions)
 	}
 	sort.Slice(l, func(i, j int) bool { return l[i].Topic < l[j].Topic })
 	return l
