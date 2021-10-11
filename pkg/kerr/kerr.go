@@ -76,7 +76,7 @@ var (
 	LeaderNotAvailable                 = &Error{"LEADER_NOT_AVAILABLE", 5, true, "There is no leader for this topic-partition as we are in the middle of a leadership election."}
 	NotLeaderForPartition              = &Error{"NOT_LEADER_FOR_PARTITION", 6, true, "This server is not the leader for that topic-partition."}
 	RequestTimedOut                    = &Error{"REQUEST_TIMED_OUT", 7, true, "The request timed out."}
-	BrokerNotAvailable                 = &Error{"BROKER_NOT_AVAILABLE", 8, false, "The broker is not available."}
+	BrokerNotAvailable                 = &Error{"BROKER_NOT_AVAILABLE", 8, true, "The broker is not available."}
 	ReplicaNotAvailable                = &Error{"REPLICA_NOT_AVAILABLE", 9, true, "The replica is not available for the requested topic-partition."}
 	MessageTooLarge                    = &Error{"MESSAGE_TOO_LARGE", 10, false, "The request included a message larger than the max message size the server will accept."}
 	StaleControllerEpoch               = &Error{"STALE_CONTROLLER_EPOCH", 11, false, "The controller moved to another broker."}
