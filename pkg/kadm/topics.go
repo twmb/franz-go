@@ -75,7 +75,7 @@ func (cl *Client) createTopics(ctx context.Context, dry bool, p int32, rf int16,
 	}
 
 	req := kmsg.NewCreateTopicsRequest()
-	req.ValidateOnly = true
+	req.ValidateOnly = dry
 	for _, t := range topics {
 		rt := kmsg.NewCreateTopicsRequestTopic()
 		rt.Topic = t
