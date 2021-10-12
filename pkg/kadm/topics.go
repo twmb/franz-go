@@ -11,7 +11,7 @@ import (
 // topics to describe can be passed as additional arguments. If no topics are
 // specified, all topics are requested.
 //
-// This returns an error if the request fails to be issued, or an *AuthErr.
+// This returns an error if the request fails to be issued, or an *AuthError.
 func (cl *Client) ListTopics(
 	ctx context.Context,
 	topics ...string,

@@ -135,6 +135,16 @@ func int32s(is []int32) []int32 {
 	return is
 }
 
+// ListBrokers issues a metadata request and returns BrokerDetails. This
+// returns an error if the request fails to be issued, or an *AuthError.
+func (cl *Client) ListBrokers(ctx context.Context) (BrokerDetails, error) {
+	m, err := cl.Metadata(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return m.Brokers, nil
+}
+
 // Metadata issues a metadata request and returns it. Specific topics to
 // describe can be passed as additional arguments. If no topics are specified,
 // all topics are requested.
