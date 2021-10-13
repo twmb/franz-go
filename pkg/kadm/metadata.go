@@ -21,6 +21,11 @@ func (t TopicID) String() string { return base64.StdEncoding.EncodeToString(t[:]
 // MarshalJSON returns the topic ID encoded as quoted base64.
 func (t TopicID) MarshalJSON() ([]byte, error) { return []byte(`"` + t.String() + `"`), nil }
 
+// Less returns if this ID is less than the other, byte by byte.
+func (t TopicID) Less(other TopicID) bool {
+	return bytes.Compare(t[:], other[:]) == -1
+}
+
 // PartitionDetail is the detail of a partition as returned by a metadata
 // response. If the partition fails to load / has an error, then only the
 // partition number itself and the Err fields will be set.

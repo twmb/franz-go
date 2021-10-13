@@ -47,13 +47,35 @@ type ResourceConfig struct {
 	Err     error    // Err is any error preventing configs from loading (likely, an unknown topic).
 }
 
+// ResourceConfigs contains the configuration values for many resources.
+type ResourceConfigs []ResourceConfig
+
+// On calls fn for the response config if it exists, returning the config and
+// the error returned from fn. If fn is nil, this simply returns the config.
+//
+// The fn is given a copy of the config. This function returns the copy as
+// well; any modifications within fn are modifications on the returned copy.
+//
+// If the resource does not exist, this returns an error indicating it is missing.
+func (rs ResourceConfigs) On(name string, fn func(*ResourceConfig) error) (ResourceConfig, error) {
+	for _, r := range rs {
+		if r.Name == name {
+			if fn == nil {
+				return r, nil
+			}
+			return r, fn(&r)
+		}
+	}
+	return ResourceConfig{}, errMissing(name)
+}
+
 // DescribeTopicConfigs returns the configuration for the requested topics.
 //
 // This may return *ShardErrors.
 func (cl *Client) DescribeTopicConfigs(
 	ctx context.Context,
 	topics ...string,
-) ([]ResourceConfig, error) {
+) (ResourceConfigs, error) {
 	if len(topics) == 0 {
 		return nil, nil
 	}
@@ -68,7 +90,7 @@ func (cl *Client) DescribeTopicConfigs(
 func (cl *Client) DescribeBrokerConfigs(
 	ctx context.Context,
 	brokers ...int32,
-) ([]ResourceConfig, error) {
+) (ResourceConfigs, error) {
 	var names []string
 	if len(brokers) == 0 {
 		names = append(names, "")
@@ -83,7 +105,7 @@ func (cl *Client) describeConfigs(
 	ctx context.Context,
 	kind kmsg.ConfigResourceType,
 	names []string,
-) ([]ResourceConfig, error) {
+) (ResourceConfigs, error) {
 	req := kmsg.NewPtrDescribeConfigsRequest()
 	req.IncludeSynonyms = true
 	for _, name := range names {
@@ -159,11 +181,32 @@ type AlterConfig struct {
 	Value *string       // Value is the value to use when altering, if any.
 }
 
-// AlteredConfigsResponse contains the response for an individual topic
-// alteration.
+// AlteredConfigsResponse contains the response for an individual alteration.
 type AlterConfigsResponse struct {
 	Name string // Name is the name of this resource (topic name or broker number).
 	Err  error  // Err is non-nil if the config could not be altered.
+}
+
+// AlterConfigsResponses contains responses for many alterations.
+type AlterConfigsResponses []AlterConfigsResponse
+
+// On calls fn for the response name if it exists, returning the response and
+// the error returned from fn. If fn is nil, this simply returns the response.
+//
+// The fn is given a copy of the response. This function returns the copy as
+// well; any modifications within fn are modifications on the returned copy.
+//
+// If the resource does not exist, this returns an error indicating it is missing.
+func (rs AlterConfigsResponses) On(name string, fn func(*AlterConfigsResponse) error) (AlterConfigsResponse, error) {
+	for _, r := range rs {
+		if r.Name == name {
+			if fn == nil {
+				return r, nil
+			}
+			return r, fn(&r)
+		}
+	}
+	return AlterConfigsResponse{}, errMissing(name)
 }
 
 // AlterTopicConfigs incrementally alters topic configuration values.
@@ -179,7 +222,7 @@ type AlterConfigsResponse struct {
 //
 // This may return *ShardErrors. You may consider checking
 // ValidateAlterTopicConfigs before using this method.
-func (cl *Client) AlterTopicConfigs(ctx context.Context, configs []AlterConfig, topics ...string) ([]AlterConfigsResponse, error) {
+func (cl *Client) AlterTopicConfigs(ctx context.Context, configs []AlterConfig, topics ...string) (AlterConfigsResponses, error) {
 	return cl.alterConfigs(ctx, false, configs, kmsg.ConfigResourceTypeTopic, topics)
 }
 
@@ -188,7 +231,7 @@ func (cl *Client) AlterTopicConfigs(ctx context.Context, configs []AlterConfig, 
 //
 // This returns exactly what AlterTopicConfigs returns, but does not actually
 // alter configurations.
-func (cl *Client) ValidateAlterTopicConfigs(ctx context.Context, configs []AlterConfig, topics ...string) ([]AlterConfigsResponse, error) {
+func (cl *Client) ValidateAlterTopicConfigs(ctx context.Context, configs []AlterConfig, topics ...string) (AlterConfigsResponses, error) {
 	return cl.alterConfigs(ctx, true, configs, kmsg.ConfigResourceTypeTopic, topics)
 }
 
@@ -207,7 +250,7 @@ func (cl *Client) ValidateAlterTopicConfigs(ctx context.Context, configs []Alter
 //
 // This may return *ShardErrors. You may consider checking
 // ValidateAlterBrokerConfigs before using this method.
-func (cl *Client) AlterBrokerConfigs(ctx context.Context, configs []AlterConfig, brokers ...int32) ([]AlterConfigsResponse, error) {
+func (cl *Client) AlterBrokerConfigs(ctx context.Context, configs []AlterConfig, brokers ...int32) (AlterConfigsResponses, error) {
 	var names []string
 	if len(brokers) == 0 {
 		names = append(names, "")
@@ -223,7 +266,7 @@ func (cl *Client) AlterBrokerConfigs(ctx context.Context, configs []AlterConfig,
 //
 // This returns exactly what AlterBrokerConfigs returns, but does not actually
 // alter configurations.
-func (cl *Client) ValidateAlterBrokerConfigs(ctx context.Context, configs []AlterConfig, brokers ...int32) ([]AlterConfigsResponse, error) {
+func (cl *Client) ValidateAlterBrokerConfigs(ctx context.Context, configs []AlterConfig, brokers ...int32) (AlterConfigsResponses, error) {
 	var names []string
 	if len(brokers) == 0 {
 		names = append(names, "")
@@ -240,7 +283,7 @@ func (cl *Client) alterConfigs(
 	configs []AlterConfig,
 	kind kmsg.ConfigResourceType,
 	names []string,
-) ([]AlterConfigsResponse, error) {
+) (AlterConfigsResponses, error) {
 	req := kmsg.NewPtrIncrementalAlterConfigsRequest()
 	req.ValidateOnly = dry
 	for _, name := range names {

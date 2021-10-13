@@ -2,6 +2,7 @@ package kadm
 
 import (
 	"context"
+	"sort"
 
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kmsg"
@@ -30,6 +31,46 @@ type CreateTopicResponse struct {
 	Err   error   // Err is any error preventing this topic from being created.
 }
 
+// CreateTopicRepsonses contains per-topic responses for created topics.
+type CreateTopicResponses map[string]CreateTopicResponse
+
+// Sorted returns all create topic responses sorted first by topic ID, then by
+// topic name.
+func (rs CreateTopicResponses) Sorted() []CreateTopicResponse {
+	s := make([]CreateTopicResponse, 0, len(rs))
+	for _, d := range rs {
+		s = append(s, d)
+	}
+	sort.Slice(s, func(i, j int) bool {
+		l, r := s[i], s[j]
+		if l.ID.Less(r.ID) {
+			return true
+		}
+		return l.Topic < r.Topic
+	})
+	return s
+}
+
+// On calls fn for the response topic if it exists, returning the response and
+// the error returned from fn. If fn is nil, this simply returns the response.
+//
+// The fn is given a copy of the response. This function returns the copy as
+// well; any modifications within fn are modifications on the returned copy.
+//
+// If the topic does not exist, this returns an error indicating it is missing.
+func (rs CreateTopicResponses) On(topic string, fn func(*CreateTopicResponse) error) (CreateTopicResponse, error) {
+	if len(rs) > 0 {
+		r, ok := rs[topic]
+		if ok {
+			if fn == nil {
+				return r, nil
+			}
+			return r, fn(&r)
+		}
+	}
+	return CreateTopicResponse{}, errMissing(topic)
+}
+
 // CreateTopics issues a create topics request with the given partitions,
 // replication factor, and (optional) configs for every topic. Under the hood,
 // this uses the default 60s request timeout and lets Kafka choose where to
@@ -47,7 +88,7 @@ func (cl *Client) CreateTopics(
 	replicationFactor int16,
 	configs map[string]*string,
 	topics ...string,
-) ([]CreateTopicResponse, error) {
+) (CreateTopicResponses, error) {
 	return cl.createTopics(ctx, false, partitions, replicationFactor, configs, topics)
 }
 
@@ -65,13 +106,13 @@ func (cl *Client) ValidateCreateTopics(
 	replicationFactor int16,
 	configs map[string]*string,
 	topics ...string,
-) ([]CreateTopicResponse, error) {
+) (CreateTopicResponses, error) {
 	return cl.createTopics(ctx, true, partitions, replicationFactor, configs, topics)
 }
 
-func (cl *Client) createTopics(ctx context.Context, dry bool, p int32, rf int16, configs map[string]*string, topics []string) ([]CreateTopicResponse, error) {
+func (cl *Client) createTopics(ctx context.Context, dry bool, p int32, rf int16, configs map[string]*string, topics []string) (CreateTopicResponses, error) {
 	if len(topics) == 0 {
-		return nil, nil
+		return make(CreateTopicResponses), nil
 	}
 
 	req := kmsg.NewCreateTopicsRequest()
@@ -95,13 +136,13 @@ func (cl *Client) createTopics(ctx context.Context, dry bool, p int32, rf int16,
 		return nil, err
 	}
 
-	var rs []CreateTopicResponse
+	rs := make(CreateTopicResponses)
 	for _, t := range resp.Topics {
-		rs = append(rs, CreateTopicResponse{
+		rs[t.Topic] = CreateTopicResponse{
 			Topic: t.Topic,
 			ID:    t.TopicID,
 			Err:   kerr.ErrorForCode(t.ErrorCode),
-		})
+		}
 	}
 	return rs, nil
 }
@@ -113,15 +154,55 @@ type DeleteTopicResponse struct {
 	Err   error   // Err is any error preventing this topic from being deleted.
 }
 
+// DeleteTopicResponses contains per-topic responses for deleted topics.
+type DeleteTopicResponses map[string]DeleteTopicResponse
+
+// Sorted returns all delete topic responses sorted first by topic ID, then by
+// topic name.
+func (rs DeleteTopicResponses) Sorted() []DeleteTopicResponse {
+	s := make([]DeleteTopicResponse, 0, len(rs))
+	for _, d := range rs {
+		s = append(s, d)
+	}
+	sort.Slice(s, func(i, j int) bool {
+		l, r := s[i], s[j]
+		if l.ID.Less(r.ID) {
+			return true
+		}
+		return l.Topic < r.Topic
+	})
+	return s
+}
+
+// On calls fn for the response topic if it exists, returning the response and
+// the error returned from fn. If fn is nil, this simply returns the response.
+//
+// The fn is given a copy of the response. This function returns the copy as
+// well; any modifications within fn are modifications on the returned copy.
+//
+// If the topic does not exist, this returns an error indicating it is missing.
+func (rs DeleteTopicResponses) On(topic string, fn func(*DeleteTopicResponse) error) (DeleteTopicResponse, error) {
+	if len(rs) > 0 {
+		r, ok := rs[topic]
+		if ok {
+			if fn == nil {
+				return r, nil
+			}
+			return r, fn(&r)
+		}
+	}
+	return DeleteTopicResponse{}, errMissing(topic)
+}
+
 // DeleteTopics issues a delete topics request for the given topic names with a
 // 60s timeout.
 //
 // This does not return an error on authorization failures, instead,
 // authorization failures are included in the responses. This only returns an
 // error if the request fails to be issued.
-func (cl *Client) DeleteTopics(ctx context.Context, topics ...string) ([]DeleteTopicResponse, error) {
+func (cl *Client) DeleteTopics(ctx context.Context, topics ...string) (DeleteTopicResponses, error) {
 	if len(topics) == 0 {
-		return nil, nil
+		return make(DeleteTopicResponses), nil
 	}
 
 	req := kmsg.NewDeleteTopicsRequest()
@@ -137,17 +218,20 @@ func (cl *Client) DeleteTopics(ctx context.Context, topics ...string) ([]DeleteT
 		return nil, err
 	}
 
-	var rs []DeleteTopicResponse
+	rs := make(DeleteTopicResponses)
 	for _, t := range resp.Topics {
+		// A valid Kafka will return non-nil topics here, because we
+		// are deleting by topic name, not ID. We still check to be
+		// sure, but multiple invalid (nil) topics will collide.
 		var topic string
 		if t.Topic != nil {
 			topic = *t.Topic
 		}
-		rs = append(rs, DeleteTopicResponse{
+		rs[topic] = DeleteTopicResponse{
 			Topic: topic,
 			ID:    t.TopicID,
 			Err:   kerr.ErrorForCode(t.ErrorCode),
-		})
+		}
 	}
 	return rs, nil
 }
@@ -173,6 +257,53 @@ func (ds DeleteRecordsResponses) Each(fn func(DeleteRecordsResponse)) {
 	}
 }
 
+// Sorted returns all delete records responses sorted first by topic, then by
+// partition.
+func (rs DeleteRecordsResponses) Sorted() []DeleteRecordsResponse {
+	var s []DeleteRecordsResponse
+	for _, ps := range rs {
+		for _, d := range ps {
+			s = append(s, d)
+		}
+	}
+	sort.Slice(s, func(i, j int) bool {
+		l, r := s[i], s[j]
+		if l.Topic < r.Topic {
+			return true
+		}
+		if l.Topic > r.Topic {
+			return false
+		}
+		return l.Partition < r.Partition
+	})
+	return s
+}
+
+// On calls fn for the response topic/partition if it exists, returning the
+// response and the error returned from fn. If fn is nil, this simply returns
+// the response.
+//
+// The fn is given a copy of the response. This function returns the copy as
+// well; any modifications within fn are modifications on the returned copy.
+//
+// If the topic or partition does not exist, this returns an error indicating
+// it is missing.
+func (rs DeleteRecordsResponses) On(topic string, partition int32, fn func(*DeleteRecordsResponse) error) (DeleteRecordsResponse, error) {
+	if len(rs) > 0 {
+		t, ok := rs[topic]
+		if ok {
+			p, ok := t[partition]
+			if ok {
+				if fn == nil {
+					return p, nil
+				}
+				return p, fn(&p)
+			}
+		}
+	}
+	return DeleteRecordsResponse{}, errPartMissing(topic, partition)
+}
+
 // DeleteRecords issues a delete records request for the given offsets. Per
 // offset, only the Offset field needs to be set.
 //
@@ -187,7 +318,7 @@ func (ds DeleteRecordsResponses) Each(fn func(DeleteRecordsResponse)) {
 // This may return *ShardErrors.
 func (cl *Client) DeleteRecords(ctx context.Context, os Offsets) (DeleteRecordsResponses, error) {
 	if len(os) == 0 {
-		return nil, nil
+		return make(DeleteRecordsResponses), nil
 	}
 
 	req := kmsg.NewPtrDeleteRecordsRequest()
@@ -228,6 +359,40 @@ type CreatePartitionsResponse struct {
 	Err   error  // Err is non-nil if partitions were unable to be added to this topic.
 }
 
+// CreatePartitionsResponses contains per-topic responses for a create
+// partitions request.
+type CreatePartitionsResponses map[string]CreatePartitionsResponse
+
+// Sorted returns all create partitions responses sorted by topic.
+func (rs CreatePartitionsResponses) Sorted() []CreatePartitionsResponse {
+	var s []CreatePartitionsResponse
+	for _, r := range rs {
+		s = append(s, r)
+	}
+	sort.Slice(s, func(i, j int) bool { return s[i].Topic < s[j].Topic })
+	return s
+}
+
+// On calls fn for the response topic if it exists, returning the response and
+// the error returned from fn. If fn is nil, this simply returns the response.
+//
+// The fn is given a copy of the response. This function returns the copy as
+// well; any modifications within fn are modifications on the returned copy.
+//
+// If the topic does not exist, this returns an error indicating it is missing.
+func (rs CreatePartitionsResponses) On(topic string, fn func(*CreatePartitionsResponse) error) (CreatePartitionsResponse, error) {
+	if len(rs) > 0 {
+		r, ok := rs[topic]
+		if ok {
+			if fn == nil {
+				return r, nil
+			}
+			return r, fn(&r)
+		}
+	}
+	return CreatePartitionsResponse{}, errMissing(topic)
+}
+
 // CreatePartitions issues a create partitions request for the given topics,
 // adding "add" partitions to each topic. This request lets Kafka choose where
 // the new partitions should be.
@@ -238,7 +403,7 @@ type CreatePartitionsResponse struct {
 // request to learn the current count of partitions. If that fails, this
 // returns the metadata request error. You may consider checking
 // ValidateCreatePartitions before using this method.
-func (cl *Client) CreatePartitions(ctx context.Context, add int, topics ...string) ([]CreatePartitionsResponse, error) {
+func (cl *Client) CreatePartitions(ctx context.Context, add int, topics ...string) (CreatePartitionsResponses, error) {
 	return cl.createPartitions(ctx, false, add, topics)
 }
 
@@ -248,13 +413,13 @@ func (cl *Client) CreatePartitions(ctx context.Context, add int, topics ...strin
 // This uses the same logic as CreatePartitions, but with the request's
 // ValidateOnly field set to true. The response is the same response you would
 // receive from CreatePartitions, but no partitions are actually added.
-func (cl *Client) ValidateCreatePartitions(ctx context.Context, add int, topics ...string) ([]CreatePartitionsResponse, error) {
+func (cl *Client) ValidateCreatePartitions(ctx context.Context, add int, topics ...string) (CreatePartitionsResponses, error) {
 	return cl.createPartitions(ctx, true, add, topics)
 }
 
-func (cl *Client) createPartitions(ctx context.Context, dry bool, add int, topics []string) ([]CreatePartitionsResponse, error) {
+func (cl *Client) createPartitions(ctx context.Context, dry bool, add int, topics []string) (CreatePartitionsResponses, error) {
 	if len(topics) == 0 {
-		return nil, nil
+		return make(CreatePartitionsResponses), nil
 	}
 
 	td, err := cl.ListTopics(ctx, topics...)
@@ -275,12 +440,12 @@ func (cl *Client) createPartitions(ctx context.Context, dry bool, add int, topic
 		return nil, err
 	}
 
-	var rs []CreatePartitionsResponse
+	rs := make(CreatePartitionsResponses)
 	for _, t := range resp.Topics {
-		rs = append(rs, CreatePartitionsResponse{
+		rs[t.Topic] = CreatePartitionsResponse{
 			Topic: t.Topic,
 			Err:   kerr.ErrorForCode(t.ErrorCode),
-		})
+		}
 	}
 	return rs, nil
 }

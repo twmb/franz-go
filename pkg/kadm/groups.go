@@ -77,6 +77,28 @@ func (ds DescribedGroups) Sorted() []DescribedGroup {
 	return s
 }
 
+// On calls fn for the group if it exists, returning the group and the error
+// returned from fn. If fn is nil, this simply returns the group.
+//
+// The fn is given a shallow copy of the group. This function returns the copy
+// as well; any modifications within fn are modifications on the returned copy.
+// Modifications on a described group's inner fields are persisted to the
+// original map (because slices are pointers).
+//
+// If the group does not exist, this returns an error indicating it is missing.
+func (rs DescribedGroups) On(group string, fn func(*DescribedGroup) error) (DescribedGroup, error) {
+	if len(rs) > 0 {
+		r, ok := rs[group]
+		if ok {
+			if fn == nil {
+				return r, nil
+			}
+			return r, fn(&r)
+		}
+	}
+	return DescribedGroup{}, errMissing(group)
+}
+
 // Topics returns a sorted list of all group names.
 func (ds DescribedGroups) Names() []string {
 	all := make([]string, 0, len(ds))
@@ -239,6 +261,39 @@ type DeleteGroupResponse struct {
 	Err   error  // Err is non-nil if the group failed to be deleted.
 }
 
+// DeleteGroupResponses contains per-group responses to deleted groups.
+type DeleteGroupResponses map[string]DeleteGroupResponse
+
+// Sorted returns all deleted group responses sorted by group name.
+func (ds DeleteGroupResponses) Sorted() []DeleteGroupResponse {
+	s := make([]DeleteGroupResponse, 0, len(ds))
+	for _, d := range ds {
+		s = append(s, d)
+	}
+	sort.Slice(s, func(i, j int) bool { return s[i].Group < s[j].Group })
+	return s
+}
+
+// On calls fn for the response group if it exists, returning the response and
+// the error returned from fn. If fn is nil, this simply returns the group.
+//
+// The fn is given a copy of the response. This function returns the copy as
+// well; any modifications within fn are modifications on the returned copy.
+//
+// If the group does not exist, this returns an error indicating it is missing.
+func (rs DeleteGroupResponses) On(group string, fn func(*DeleteGroupResponse) error) (DeleteGroupResponse, error) {
+	if len(rs) > 0 {
+		r, ok := rs[group]
+		if ok {
+			if fn == nil {
+				return r, nil
+			}
+			return r, fn(&r)
+		}
+	}
+	return DeleteGroupResponse{}, errMissing(group)
+}
+
 // DeleteGroups deletes all groups specified.
 //
 // The purpose of this request is to allow operators a way to delete groups
@@ -247,7 +302,7 @@ type DeleteGroupResponse struct {
 //
 // This may return *ShardErrors. This does not return on authorization
 // failures, instead, authorization failures are included in the responses.
-func (cl *Client) DeleteGroups(ctx context.Context, groups ...string) ([]DeleteGroupResponse, error) {
+func (cl *Client) DeleteGroups(ctx context.Context, groups ...string) (DeleteGroupResponses, error) {
 	if len(groups) == 0 {
 		return nil, nil
 	}
@@ -255,14 +310,14 @@ func (cl *Client) DeleteGroups(ctx context.Context, groups ...string) ([]DeleteG
 	req.Groups = append(req.Groups, groups...)
 	shards := cl.cl.RequestSharded(ctx, req)
 
-	var resps []DeleteGroupResponse
-	return resps, shardErrEach(req, shards, func(kr kmsg.Response) error {
+	rs := make(map[string]DeleteGroupResponse)
+	return rs, shardErrEach(req, shards, func(kr kmsg.Response) error {
 		resp := kr.(*kmsg.DeleteGroupsResponse)
 		for _, g := range resp.Groups {
-			resps = append(resps, DeleteGroupResponse{
+			rs[g.Group] = DeleteGroupResponse{
 				Group: g.Group,
 				Err:   kerr.ErrorForCode(g.ErrorCode),
-			})
+			}
 		}
 		return nil
 	})
@@ -484,6 +539,26 @@ func (rs FetchOffsetsResponses) AllFailed() bool {
 	var n int
 	rs.EachError(func(FetchOffsetsResponse) { n++ })
 	return n == len(rs)
+}
+
+// On calls fn for the response group if it exists, returning the response and
+// the error returned from fn. If fn is nil, this simply returns the group.
+//
+// The fn is given a copy of the response. This function returns the copy as
+// well; any modifications within fn are modifications on the returned copy.
+//
+// If the group does not exist, this returns an error indicating it is missing.
+func (rs FetchOffsetsResponses) On(group string, fn func(*FetchOffsetsResponse) error) (FetchOffsetsResponse, error) {
+	if len(rs) > 0 {
+		r, ok := rs[group]
+		if ok {
+			if fn == nil {
+				return r, nil
+			}
+			return r, fn(&r)
+		}
+	}
+	return FetchOffsetsResponse{}, errMissing(group)
 }
 
 // FetchManyOffsets issues a fetch offsets requests for each group specified.
