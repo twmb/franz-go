@@ -129,11 +129,8 @@ type broker struct {
 
 	reapMu sync.Mutex // held when modifying a brokerCxn
 
-	// dieMu guards sending to reqs in case the broker has been
-	// permanently stopped.
-	dieMu sync.RWMutex
 	// reqs manages incoming message requests.
-	reqs chan promisedReq
+	reqs ringReq
 	// dead is an atomic so a backed up reqs cannot block broker stoppage.
 	dead int32
 }
@@ -179,7 +176,7 @@ func unknownSeedID(seedNum int) int32 {
 }
 
 func (cl *Client) newBroker(nodeID int32, host string, port int32, rack *string) *broker {
-	br := &broker{
+	return &broker{
 		cl: cl,
 
 		addr: net.JoinHostPort(host, strconv.Itoa(int(port))),
@@ -189,13 +186,7 @@ func (cl *Client) newBroker(nodeID int32, host string, port int32, rack *string)
 			Port:   port,
 			Rack:   rack,
 		},
-
-		reqs: make(chan promisedReq, 10),
 	}
-
-	go br.handleReqs()
-
-	return br
 }
 
 // stopForever permanently disables this broker.
@@ -204,19 +195,10 @@ func (b *broker) stopForever() {
 		return
 	}
 
-	// begin draining reqs before lock/unlocking to ensure nothing
-	// sitting on the rlock will block our lock
-	go func() {
-		for pr := range b.reqs {
-			pr.promise(nil, errChosenBrokerDead)
-		}
-	}()
-
-	b.dieMu.Lock()
-	b.dieMu.Unlock()
-
-	// after dieMu, nothing will be sent down reqs
-	close(b.reqs)
+	b.reqs.die() // no more pushing
+	b.cxnNormal.die()
+	b.cxnProduce.die()
+	b.cxnFetch.die()
 }
 
 // do issues a request to the broker, eventually calling the response
@@ -228,18 +210,13 @@ func (b *broker) do(
 	req kmsg.Request,
 	promise func(kmsg.Response, error),
 ) {
-	dead := false
+	pr := promisedReq{ctx, req, promise, time.Now()}
 
-	enqueue := time.Now()
-	b.dieMu.RLock()
-	if atomic.LoadInt32(&b.dead) == 1 {
-		dead = true
-	} else {
-		b.reqs <- promisedReq{ctx, req, promise, enqueue}
-	}
-	b.dieMu.RUnlock()
+	first, dead := b.reqs.push(pr)
 
-	if dead {
+	if first {
+		go b.handleReqs(pr)
+	} else if dead {
 		promise(nil, errChosenBrokerDead)
 	}
 }
@@ -258,160 +235,161 @@ func (b *broker) waitResp(ctx context.Context, req kmsg.Request) (kmsg.Response,
 	return resp, err
 }
 
-// handleReqs manages the intake of message requests for a broker.
-//
-// This creates connections as appropriate, serializes the request, and sends
-// awaiting responses with the request promise to be handled as appropriate.
-//
-// If any of these steps fail, the promise is called with the relevant error.
-func (b *broker) handleReqs() {
-	defer func() {
-		b.cxnNormal.die()
-		b.cxnProduce.die()
-		b.cxnFetch.die()
-	}()
-
-	for pr := range b.reqs {
-		req := pr.req
-		var cxn *brokerCxn
-		{
-			var err error
-			if cxn, err = b.loadConnection(pr.ctx, req.Key()); err != nil {
-				pr.promise(nil, err)
-				continue
-			}
-		}
-
-		v := b.loadVersions()
-
-		if int(req.Key()) > v.len() || b.cl.cfg.maxVersions != nil && !b.cl.cfg.maxVersions.HasKey(req.Key()) {
-			pr.promise(nil, errUnknownRequestKey)
-			continue
-		}
-
-		// If v.versions[0] is non-negative, then we loaded API
-		// versions. If the version for this request is negative, we
-		// know the broker cannot handle this request.
-		if v.versions[0] >= 0 && v.versions[req.Key()] < 0 {
-			pr.promise(nil, errBrokerTooOld)
-			continue
-		}
-
-		ourMax := req.MaxVersion()
-		if b.cl.cfg.maxVersions != nil {
-			userMax, _ := b.cl.cfg.maxVersions.LookupMaxKeyVersion(req.Key()) // we validated HasKey above
-			if userMax < ourMax {
-				ourMax = userMax
-			}
-		}
-
-		// If brokerMax is negative at this point, we have no api
-		// versions because the client is pinned pre 0.10.0 and we
-		// stick with our max.
-		version := ourMax
-		if brokerMax := v.versions[req.Key()]; brokerMax >= 0 && brokerMax < ourMax {
-			version = brokerMax
-		}
-
-		// If the version now (after potential broker downgrading) is
-		// lower than we desire, we fail the request for the broker is
-		// too old.
-		if b.cl.cfg.minVersions != nil {
-			minVersion, minVersionExists := b.cl.cfg.minVersions.LookupMaxKeyVersion(req.Key())
-			if minVersionExists && version < minVersion {
-				pr.promise(nil, errBrokerTooOld)
-				continue
-			}
-		}
-
-		req.SetVersion(version) // always go for highest version
-
-		if !cxn.expiry.IsZero() && time.Now().After(cxn.expiry) {
-			// If we are after the reauth time, try to reauth. We
-			// can only have an expiry if we went the authenticate
-			// flow, so we know we are authenticating again.
-			// For KIP-368.
-			cxn.cl.cfg.logger.Log(LogLevelDebug, "sasl expiry limit reached, reauthenticating", "broker", logID(cxn.b.meta.NodeID))
-			if err := cxn.sasl(); err != nil {
-				pr.promise(nil, err)
-				cxn.die()
-				continue
-			}
-		}
-
-		// Juuuust before we issue the request, we check if it was
-		// canceled. We could have previously tried this request, which
-		// then failed and retried.
-		//
-		// Checking the context was canceled here ensures we do not
-		// loop. We could be more precise with error tracking, though.
-		select {
-		case <-pr.ctx.Done():
-			pr.promise(nil, pr.ctx.Err())
-			continue
-		default:
-		}
-
-		// Produce requests (and only produce requests) can be written
-		// without receiving a reply. If we see required acks is 0,
-		// then we immediately call the promise with no response.
-		//
-		// We provide a non-nil *kmsg.ProduceResponse for
-		// *kmsg.ProduceRequest just to ensure we do not return with no
-		// error and no kmsg.Response, per the client contract.
-		//
-		// As documented on the client's Request function, if this is a
-		// *kmsg.ProduceRequest, we rewrite the acks to match the
-		// client configured acks, and we rewrite the timeout millis if
-		// acks is 0. We do this to ensure that our discard goroutine
-		// is used correctly, and so that we do not write a request
-		// with 0 acks and then send it to handleResps where it will
-		// not get a response.
-		var isNoResp bool
-		var noResp *kmsg.ProduceResponse
-		switch r := req.(type) {
-		case *produceRequest:
-			isNoResp = r.acks == 0
-		case *kmsg.ProduceRequest:
-			r.Acks = b.cl.cfg.acks.val
-			if r.Acks == 0 {
-				isNoResp = true
-				r.TimeoutMillis = int32(b.cl.cfg.produceTimeout.Milliseconds())
-			}
-			noResp = kmsg.NewPtrProduceResponse()
-			noResp.Version = req.GetVersion()
-		}
-
-		corrID, bytesWritten, writeErr, writeWait, timeToWrite, readEnqueue := cxn.writeRequest(pr.ctx, pr.enqueue, req)
-
-		if writeErr != nil {
-			pr.promise(nil, writeErr)
-			cxn.die()
-			cxn.hookWriteE2E(req.Key(), bytesWritten, writeWait, timeToWrite, writeErr)
-			continue
-		}
-
-		if isNoResp {
-			pr.promise(noResp, nil)
-			cxn.hookWriteE2E(req.Key(), bytesWritten, writeWait, timeToWrite, writeErr)
-			continue
-		}
-
-		rt, _ := cxn.cl.connTimeouter.timeouts(req)
-
-		cxn.waitResp(promisedResp{
-			pr.ctx,
-			corrID,
-			req.IsFlexible() && req.Key() != 18, // response header not flexible if ApiVersions; see promisedResp doc
-			req.ResponseKind(),
-			pr.promise,
-			rt,
-			bytesWritten,
-			writeWait,
-			timeToWrite,
-			readEnqueue,
-		})
+func (b *broker) handleReqs(pr promisedReq) {
+	var more, dead bool
+start:
+	if dead {
+		pr.promise(nil, errChosenBrokerDead)
+	} else {
+		b.handleReq(pr)
 	}
+
+	pr, more, dead = b.reqs.dropPeek()
+	if more {
+		goto start
+	}
+}
+
+func (b *broker) handleReq(pr promisedReq) {
+	req := pr.req
+	var cxn *brokerCxn
+	{
+		var err error
+		if cxn, err = b.loadConnection(pr.ctx, req.Key()); err != nil {
+			pr.promise(nil, err)
+			return
+		}
+	}
+
+	v := b.loadVersions()
+
+	if int(req.Key()) > v.len() || b.cl.cfg.maxVersions != nil && !b.cl.cfg.maxVersions.HasKey(req.Key()) {
+		pr.promise(nil, errUnknownRequestKey)
+		return
+	}
+
+	// If v.versions[0] is non-negative, then we loaded API
+	// versions. If the version for this request is negative, we
+	// know the broker cannot handle this request.
+	if v.versions[0] >= 0 && v.versions[req.Key()] < 0 {
+		pr.promise(nil, errBrokerTooOld)
+		return
+	}
+
+	ourMax := req.MaxVersion()
+	if b.cl.cfg.maxVersions != nil {
+		userMax, _ := b.cl.cfg.maxVersions.LookupMaxKeyVersion(req.Key()) // we validated HasKey above
+		if userMax < ourMax {
+			ourMax = userMax
+		}
+	}
+
+	// If brokerMax is negative at this point, we have no api
+	// versions because the client is pinned pre 0.10.0 and we
+	// stick with our max.
+	version := ourMax
+	if brokerMax := v.versions[req.Key()]; brokerMax >= 0 && brokerMax < ourMax {
+		version = brokerMax
+	}
+
+	// If the version now (after potential broker downgrading) is
+	// lower than we desire, we fail the request for the broker is
+	// too old.
+	if b.cl.cfg.minVersions != nil {
+		minVersion, minVersionExists := b.cl.cfg.minVersions.LookupMaxKeyVersion(req.Key())
+		if minVersionExists && version < minVersion {
+			pr.promise(nil, errBrokerTooOld)
+			return
+		}
+	}
+
+	req.SetVersion(version) // always go for highest version
+
+	if !cxn.expiry.IsZero() && time.Now().After(cxn.expiry) {
+		// If we are after the reauth time, try to reauth. We
+		// can only have an expiry if we went the authenticate
+		// flow, so we know we are authenticating again.
+		// For KIP-368.
+		cxn.cl.cfg.logger.Log(LogLevelDebug, "sasl expiry limit reached, reauthenticating", "broker", logID(cxn.b.meta.NodeID))
+		if err := cxn.sasl(); err != nil {
+			pr.promise(nil, err)
+			cxn.die()
+			return
+		}
+	}
+
+	// Juuuust before we issue the request, we check if it was
+	// canceled. We could have previously tried this request, which
+	// then failed and retried.
+	//
+	// Checking the context was canceled here ensures we do not
+	// loop. We could be more precise with error tracking, though.
+	select {
+	case <-pr.ctx.Done():
+		pr.promise(nil, pr.ctx.Err())
+		return
+	default:
+	}
+
+	// Produce requests (and only produce requests) can be written
+	// without receiving a reply. If we see required acks is 0,
+	// then we immediately call the promise with no response.
+	//
+	// We provide a non-nil *kmsg.ProduceResponse for
+	// *kmsg.ProduceRequest just to ensure we do not return with no
+	// error and no kmsg.Response, per the client contract.
+	//
+	// As documented on the client's Request function, if this is a
+	// *kmsg.ProduceRequest, we rewrite the acks to match the
+	// client configured acks, and we rewrite the timeout millis if
+	// acks is 0. We do this to ensure that our discard goroutine
+	// is used correctly, and so that we do not write a request
+	// with 0 acks and then send it to handleResps where it will
+	// not get a response.
+	var isNoResp bool
+	var noResp *kmsg.ProduceResponse
+	switch r := req.(type) {
+	case *produceRequest:
+		isNoResp = r.acks == 0
+	case *kmsg.ProduceRequest:
+		r.Acks = b.cl.cfg.acks.val
+		if r.Acks == 0 {
+			isNoResp = true
+			r.TimeoutMillis = int32(b.cl.cfg.produceTimeout.Milliseconds())
+		}
+		noResp = kmsg.NewPtrProduceResponse()
+		noResp.Version = req.GetVersion()
+	}
+
+	corrID, bytesWritten, writeErr, writeWait, timeToWrite, readEnqueue := cxn.writeRequest(pr.ctx, pr.enqueue, req)
+
+	if writeErr != nil {
+		pr.promise(nil, writeErr)
+		cxn.die()
+		cxn.hookWriteE2E(req.Key(), bytesWritten, writeWait, timeToWrite, writeErr)
+		return
+	}
+
+	if isNoResp {
+		pr.promise(noResp, nil)
+		cxn.hookWriteE2E(req.Key(), bytesWritten, writeWait, timeToWrite, writeErr)
+		return
+	}
+
+	rt, _ := cxn.cl.connTimeouter.timeouts(req)
+
+	cxn.waitResp(promisedResp{
+		pr.ctx,
+		corrID,
+		req.IsFlexible() && req.Key() != 18, // response header not flexible if ApiVersions; see promisedResp doc
+		req.ResponseKind(),
+		pr.promise,
+		rt,
+		bytesWritten,
+		writeWait,
+		timeToWrite,
+		readEnqueue,
+	})
 }
 
 func (cxn *brokerCxn) hookWriteE2E(key int16, bytesWritten int, writeWait, timeToWrite time.Duration, writeErr error) {
@@ -599,10 +577,10 @@ type brokerCxn struct {
 	writing   uint32
 	reading   uint32
 
-	// dieMu guards sending to resps in case the connection has died.
-	dieMu sync.RWMutex
+	successes uint64
+
 	// resps manages reading kafka responses.
-	resps chan promisedResp
+	resps ringResp
 	// dead is an atomic so that a backed up resps cannot block cxn death.
 	dead int32
 	// closed in cloneConn; allows throttle waiting to quit
@@ -629,11 +607,8 @@ func (cxn *brokerCxn) init(isProduceCxn bool) error {
 		return err
 	}
 
-	cxn.resps = make(chan promisedResp, 10)
 	if isProduceCxn && cxn.cl.cfg.acks.val == 0 {
 		go cxn.discard() // see docs on discard for why we do this
-	} else {
-		go cxn.handleResps()
 	}
 	return nil
 }
@@ -1153,42 +1128,20 @@ func (cxn *brokerCxn) closeConn() {
 // die kills a broker connection (which could be dead already) and replies to
 // all requests awaiting responses appropriately.
 func (cxn *brokerCxn) die() {
-	if cxn == nil {
+	if cxn == nil || atomic.SwapInt32(&cxn.dead, 1) == 1 {
 		return
 	}
-	if atomic.SwapInt32(&cxn.dead, 1) == 1 {
-		return
-	}
-
 	cxn.closeConn()
-
-	go func() {
-		for pr := range cxn.resps {
-			pr.promise(nil, errChosenBrokerDead)
-			cxn.hookWriteE2E(pr.resp.Key(), pr.bytesWritten, pr.writeWait, pr.timeToWrite, errChosenBrokerDead)
-		}
-	}()
-
-	cxn.dieMu.Lock()
-	cxn.dieMu.Unlock()
-
-	close(cxn.resps) // after lock, nothing sends down resps
+	cxn.resps.die()
 }
 
 // waitResp, called serially by a broker's handleReqs, manages handling a
 // message requests's response.
 func (cxn *brokerCxn) waitResp(pr promisedResp) {
-	dead := false
-
-	cxn.dieMu.RLock()
-	if atomic.LoadInt32(&cxn.dead) == 1 {
-		dead = true
-	} else {
-		cxn.resps <- pr
-	}
-	cxn.dieMu.RUnlock()
-
-	if dead {
+	first, dead := cxn.resps.push(pr)
+	if first {
+		go cxn.handleResps(pr)
+	} else if dead {
 		pr.promise(nil, errChosenBrokerDead)
 		cxn.hookWriteE2E(pr.resp.Key(), pr.bytesWritten, pr.writeWait, pr.timeToWrite, errChosenBrokerDead)
 	}
@@ -1299,47 +1252,71 @@ func (cxn *brokerCxn) discard() {
 }
 
 // handleResps serially handles all broker responses for an single connection.
-func (cxn *brokerCxn) handleResps() {
-	defer cxn.die() // always track our death
-
-	var successes uint64
-	for pr := range cxn.resps {
-		rawResp, err := cxn.readResponse(pr.ctx, pr.resp.Key(), pr.resp.GetVersion(), pr.corrID, pr.flexibleHeader, pr.readTimeout, pr.bytesWritten, pr.writeWait, pr.timeToWrite, pr.readEnqueue)
-		if err != nil {
-			if successes > 0 || len(cxn.b.cl.cfg.sasls) > 0 {
-				cxn.b.cl.cfg.logger.Log(LogLevelDebug, "read from broker errored, killing connection", "addr", cxn.b.addr, "broker", logID(cxn.b.meta.NodeID), "successful_reads", successes, "err", err)
-			} else {
-				cxn.b.cl.cfg.logger.Log(LogLevelWarn, "read from broker errored, killing connection after 0 successful responses (is sasl missing?)", "addr", cxn.b.addr, "broker", logID(cxn.b.meta.NodeID), "err", err)
-			}
-			pr.promise(nil, err)
-			return
-		}
-		successes++
-		readErr := pr.resp.ReadFrom(rawResp)
-
-		// If we had no error, we read the response successfully.
-		//
-		// Any response that can cause throttling satisfies the
-		// kmsg.ThrottleResponse interface. We check that here.
-		if readErr == nil {
-			if throttleResponse, ok := pr.resp.(kmsg.ThrottleResponse); ok {
-				millis, throttlesAfterResp := throttleResponse.Throttle()
-				if millis > 0 {
-					if throttlesAfterResp {
-						throttleUntil := time.Now().Add(time.Millisecond * time.Duration(millis)).UnixNano()
-						if throttleUntil > cxn.throttleUntil {
-							atomic.StoreInt64(&cxn.throttleUntil, throttleUntil)
-						}
-					}
-					cxn.cl.cfg.hooks.each(func(h Hook) {
-						if h, ok := h.(HookBrokerThrottle); ok {
-							h.OnBrokerThrottle(cxn.b.meta, time.Duration(millis)*time.Millisecond, throttlesAfterResp)
-						}
-					})
-				}
-			}
-		}
-
-		pr.promise(pr.resp, readErr)
+func (cxn *brokerCxn) handleResps(pr promisedResp) {
+	var more, dead bool
+start:
+	if dead {
+		pr.promise(nil, errChosenBrokerDead)
+		cxn.hookWriteE2E(pr.resp.Key(), pr.bytesWritten, pr.writeWait, pr.timeToWrite, errChosenBrokerDead)
+	} else {
+		cxn.handleResp(pr)
 	}
+
+	pr, more, dead = cxn.resps.dropPeek()
+	if more {
+		goto start
+	}
+}
+
+func (cxn *brokerCxn) handleResp(pr promisedResp) {
+	rawResp, err := cxn.readResponse(
+		pr.ctx,
+		pr.resp.Key(),
+		pr.resp.GetVersion(),
+		pr.corrID,
+		pr.flexibleHeader,
+		pr.readTimeout,
+		pr.bytesWritten,
+		pr.writeWait,
+		pr.timeToWrite,
+		pr.readEnqueue,
+	)
+	if err != nil {
+		if cxn.successes > 0 || len(cxn.b.cl.cfg.sasls) > 0 {
+			cxn.b.cl.cfg.logger.Log(LogLevelDebug, "read from broker errored, killing connection", "addr", cxn.b.addr, "broker", logID(cxn.b.meta.NodeID), "successful_reads", cxn.successes, "err", err)
+		} else {
+			cxn.b.cl.cfg.logger.Log(LogLevelWarn, "read from broker errored, killing connection after 0 successful responses (is sasl missing?)", "addr", cxn.b.addr, "broker", logID(cxn.b.meta.NodeID), "err", err)
+		}
+		pr.promise(nil, err)
+		cxn.die()
+		return
+	}
+
+	cxn.successes++
+	readErr := pr.resp.ReadFrom(rawResp)
+
+	// If we had no error, we read the response successfully.
+	//
+	// Any response that can cause throttling satisfies the
+	// kmsg.ThrottleResponse interface. We check that here.
+	if readErr == nil {
+		if throttleResponse, ok := pr.resp.(kmsg.ThrottleResponse); ok {
+			millis, throttlesAfterResp := throttleResponse.Throttle()
+			if millis > 0 {
+				if throttlesAfterResp {
+					throttleUntil := time.Now().Add(time.Millisecond * time.Duration(millis)).UnixNano()
+					if throttleUntil > cxn.throttleUntil {
+						atomic.StoreInt64(&cxn.throttleUntil, throttleUntil)
+					}
+				}
+				cxn.cl.cfg.hooks.each(func(h Hook) {
+					if h, ok := h.(HookBrokerThrottle); ok {
+						h.OnBrokerThrottle(cxn.b.meta, time.Duration(millis)*time.Millisecond, throttlesAfterResp)
+					}
+				})
+			}
+		}
+	}
+
+	pr.promise(pr.resp, readErr)
 }

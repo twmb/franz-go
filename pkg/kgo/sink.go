@@ -31,8 +31,7 @@ type sink struct {
 	// seqRespsMu, guarded by seqRespsMu, contains responses that must
 	// be handled sequentially. These responses are handled asynchronously,
 	// but sequentially.
-	seqRespsMu sync.Mutex
-	seqResps   []*seqResp
+	seqResps ringSeqResp
 
 	backoffMu   sync.Mutex // guards the following
 	needBackoff bool
@@ -370,29 +369,22 @@ func (s *sink) doSequenced(
 		wait.br = br
 	}
 
-	s.seqRespsMu.Lock()
-	defer s.seqRespsMu.Unlock()
-
-	s.seqResps = append(s.seqResps, wait)
-	if len(s.seqResps) == 1 {
-		go s.handleSeqResps(s.seqResps[0])
+	if first, _ := s.seqResps.push(wait); first {
+		go s.handleSeqResps(wait)
 	}
 }
 
 // Ensures that all request responses are processed in order.
 func (s *sink) handleSeqResps(wait *seqResp) {
-more:
+	var more bool
+start:
 	<-wait.done
 	wait.promise(wait.br, wait.resp, wait.err)
 
-	s.seqRespsMu.Lock()
-	s.seqResps = s.seqResps[1:]
-	if len(s.seqResps) > 0 {
-		wait = s.seqResps[0]
-		s.seqRespsMu.Unlock()
-		goto more
+	wait, more, _ = s.seqResps.dropPeek()
+	if more {
+		goto start
 	}
-	s.seqRespsMu.Unlock()
 }
 
 // Issues an AddPartitionsToTxnRequest before a produce request for all
