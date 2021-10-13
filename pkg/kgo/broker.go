@@ -867,7 +867,7 @@ func (cxn *brokerCxn) writeRequest(ctx context.Context, enqueuedForWritingAt tim
 	// A nil ctx means we cannot be throttled.
 	if ctx != nil {
 		throttleUntil := time.Unix(0, atomic.LoadInt64(&cxn.throttleUntil))
-		if sleep := throttleUntil.Sub(time.Now()); sleep > 0 {
+		if sleep := time.Until(throttleUntil); sleep > 0 {
 			after := time.NewTimer(sleep)
 			select {
 			case <-after.C:

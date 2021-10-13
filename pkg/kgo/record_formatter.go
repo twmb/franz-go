@@ -1253,12 +1253,8 @@ func (r *RecordReader) parseReadLayout(layout string) error {
 		}
 	}
 	r.fns = make([]readParse, 0, len(noreads)+len(reads))
-	for _, fn := range noreads {
-		r.fns = append(r.fns, fn)
-	}
-	for _, fn := range reads {
-		r.fns = append(r.fns, fn)
-	}
+	r.fns = append(r.fns, noreads...)
+	r.fns = append(r.fns, reads...)
 
 	return nil
 }
