@@ -404,3 +404,47 @@ func TestRecordReader(t *testing.T) {
 		})
 	}
 }
+
+func BenchmarkFormatter(b *testing.B) {
+	buf := make([]byte, 1024)
+	r := &Record{
+		Key:   []byte(strings.Repeat("key", 10)),
+		Value: []byte(strings.Repeat("foo", 40)),
+	}
+	for _, fmt := range []string{
+		"%v\n",
+		"%k %v",
+		"%k %v %o",
+	} {
+		b.Run(fmt, func(b *testing.B) {
+			f, _ := NewRecordFormatter(fmt)
+			for i := 0; i < b.N; i++ {
+				buf = f.AppendRecord(buf[:0], r)
+			}
+		})
+	}
+}
+
+func BenchmarkRecordReader(b *testing.B) {
+	into := new(Record)
+	for _, bench := range []struct {
+		fmt   string
+		input string
+	}{
+		{"%v\n", "foo bar biz baz\n"},
+		{"%V{16}%v", "0123456789abcdef"},
+		{"%k %o %v\n", "key 30 " + strings.Repeat("val", 40) + "\n"},
+		{"%k %p{2}%o{hex8} %v\n", "key 30 " + strings.Repeat("val", 40) + "\n"},
+	} {
+		b.Run(bench.fmt, func(b *testing.B) {
+			s := strings.NewReader(bench.input)
+			r, _ := NewRecordReader(s, bench.fmt)
+			for i := 0; i < b.N; i++ {
+				s.Reset(bench.input)
+				if err := r.ReadRecordInto(into); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
