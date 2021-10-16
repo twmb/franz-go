@@ -1167,11 +1167,15 @@ func ConsumeTopics(topics ...string) ConsumerOpt {
 // ConsumePartitions sets partitions to consume from directly and the offsets
 // to start consuming those partitions from.
 //
-// This option is basically a way to explicitly consume from subsets of partitions
-// in topics, or to consume at exact offsets. Offsets from this option have
-// higher precedence than the ConsumeResetOffset.
+// This option is basically a way to explicitly consume from subsets of
+// partitions in topics, or to consume at exact offsets. Offsets from this
+// option have higher precedence than the ConsumeResetOffset.
 //
-// This option is not compatible with group consuming and regex consuming.
+// This option is not compatible with group consuming and regex consuming. If
+// you want to assign partitions directly, but still use Kafka to commit
+// offsets, check out the kadm package's FetchOffsets and CommitOffsets
+// methods. These will allow you to commit as a group outside the context of a
+// Kafka group.
 func ConsumePartitions(partitions map[string]map[int32]Offset) ConsumerOpt {
 	return consumerOpt{func(cfg *cfg) { cfg.partitions = partitions }}
 }
