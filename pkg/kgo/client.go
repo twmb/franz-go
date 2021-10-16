@@ -117,6 +117,18 @@ func NewClient(opts ...Opt) (*Client, error) {
 		opt.apply(&cfg)
 	}
 
+	if cfg.retryTimeout == nil {
+		cfg.retryTimeout = func(key int16) time.Duration {
+			switch key {
+			case ((*kmsg.JoinGroupRequest)(nil)).Key(),
+				((*kmsg.SyncGroupRequest)(nil)).Key(),
+				((*kmsg.HeartbeatRequest)(nil)).Key():
+				return cfg.sessionTimeout
+			}
+			return 30 * time.Second
+		}
+	}
+
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}

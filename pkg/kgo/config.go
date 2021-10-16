@@ -389,7 +389,7 @@ func defaultCfg() cfg {
 		id:     &defaultID,
 		dialFn: defaultDialer.DialContext,
 
-		requestTimeoutOverhead: 20 * time.Second,
+		requestTimeoutOverhead: 10 * time.Second,
 		connIdleTimeout:        20 * time.Second,
 
 		softwareName:    "kgo",
@@ -430,12 +430,6 @@ func defaultCfg() cfg {
 			}
 		}(),
 		retries: 20,
-		retryTimeout: func(key int16) time.Duration {
-			if key == 26 { // EndTxn key
-				return 5 * time.Minute
-			}
-			return time.Minute
-		},
 
 		maxBrokerWriteBytes: 100 << 20, // Kafka socket.request.max.bytes default is 100<<20
 		maxBrokerReadBytes:  100 << 20,
@@ -522,7 +516,7 @@ func WithLogger(l Logger) Opt {
 }
 
 // RequestTimeoutOverhead uses the given time as overhead while deadlining
-// requests, overriding the default overhead of 20s.
+// requests, overriding the default overhead of 10s.
 //
 // For most requests, the overhead will simply be this timeout. However, for
 // any request with a TimeoutMillis field, the overhead is added on top of the
@@ -662,7 +656,12 @@ func RequestRetries(n int) Opt {
 }
 
 // RetryTimeout sets the upper limit on how long we allow requests to retry,
-// overriding the default of 5m for EndTxn requests, 1m for all others.
+// overriding the default of:
+//
+//     JoinGroup: cfg.SessionTimeout (default 45s)
+//     SyncGroup: cfg.SessionTimeout (default 45s)
+//     Heartbeat: cfg.SessionTimeout (default 45s)
+//        others: 30s
 //
 // This timeout applies to any request issued through a client's Request
 // function. It does not apply to fetches nor produces.
@@ -677,8 +676,12 @@ func RetryTimeout(t time.Duration) Opt {
 }
 
 // RetryTimeoutFn sets the per-request upper limit on how long we allow
-// requests to retry, overriding the default of 5m for EndTxn requests, 1m for
-// all others.
+// requests to retry, overriding the default of:
+//
+//     JoinGroup: cfg.SessionTimeout (default 45s)
+//     SyncGroup: cfg.SessionTimeout (default 45s)
+//     Heartbeat: cfg.SessionTimeout (default 45s)
+//        others: 30s
 //
 // This timeout applies to any request issued through a client's Request
 // function. It does not apply to fetches nor produces.
