@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/twmb/franz-go/plugin/kprom"
+	"github.com/twmb/tlscfg"
 
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/sasl/aws"
@@ -43,7 +44,10 @@ var (
 	consume = flag.Bool("consume", false, "if true, consume rather than produce")
 	group   = flag.String("group", "", "if non-empty, group to use for consuming rather than direct partition consuming (consuming)")
 
-	dialTLS = flag.Bool("tls", false, "if true, use tls for connecting")
+	dialTLS  = flag.Bool("tls", false, "if true, use tls for connecting (if using well-known TLS certs)")
+	caFile   = flag.String("ca-cert", "", "if non-empty, path to CA cert to use for TLS (implies -tls)")
+	certFile = flag.String("client-cert", "", "if non-empty, path to client cert to use for TLS (requires -client-key, implies -tls)")
+	keyFile  = flag.String("client-key", "", "if non-empty, path to client key to use for TLS (requires -client-cert, implies -tls)")
 
 	saslMethod = flag.String("sasl-method", "", "if non-empty, sasl method to use (must specify all options; supports plain, scram-sha-256, scram-sha-512, aws_msk_iam)")
 	saslUser   = flag.String("sasl-user", "", "if non-empty, username to use for sasl (must specify all options)")
@@ -74,6 +78,12 @@ func chk(err error, msg string, args ...interface{}) {
 
 func main() {
 	flag.Parse()
+
+	var customTLS bool
+	if *caFile != "" || *certFile != "" || *keyFile != "" {
+		*dialTLS = true
+		customTLS = true
+	}
 
 	if *recordBytes <= 0 {
 		die("record bytes must be larger than zero")
@@ -147,7 +157,18 @@ func main() {
 	}
 
 	if *dialTLS {
-		opts = append(opts, kgo.Dialer((new(tls.Dialer)).DialContext))
+		if customTLS {
+			tc, err := tlscfg.New(
+				tlscfg.MaybeWithDiskCA(*caFile, tlscfg.ForClient),
+				tlscfg.MaybeWithDiskKeyPair(*certFile, *keyFile),
+			)
+			if err != nil {
+				die("unable to create tls config: %v", err)
+			}
+			opts = append(opts, kgo.DialTLSConfig(tc))
+		} else {
+			opts = append(opts, kgo.DialTLSConfig(new(tls.Config)))
+		}
 	}
 
 	if *saslMethod != "" || *saslUser != "" || *saslPass != "" {

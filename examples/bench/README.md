@@ -88,6 +88,12 @@ a consumer group.
 
 `-tls` if true, sets the benchmark to dial over tls
 
+`-ca-cert` specifies a custom CA to use when dialing (implies `-tls`)
+
+`-client-cert` specifies a client cert to use when dialing (implies `-tls`, requires `-client-key`)
+
+`-client-key` specifies a client key to use when dialing (implies `-tls`, requires `-client-cert`)
+
 `-sasl-method` specifies a SASL method to use when connecting. This supports
 `PLAIN`, `SCRAM-SHA-256`, `SCRAM-SHA-512`, or `AWS_MSK_IAM` (any casing, with
 or without dashes or underscores).
