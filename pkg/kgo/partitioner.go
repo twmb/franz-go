@@ -301,8 +301,12 @@ func StickyKeyPartitioner(overrideHasher PartitionerHasher) Partitioner {
 // of partitions.
 type PartitionerHasher func([]byte, int) int
 
-// KafkaHasher returns a PartitionerHasher using hashFn that mirrors how
-// Kafka partitions after hashing data.
+// KafkaHasher returns a PartitionerHasher using hashFn that mirrors how Kafka
+// partitions after hashing data. In Kafka, after hashing into a uint32, the
+// hash is converted to an int32 and the high bit is stripped. Kafka by default
+// uses murmur2 hashing, and the StickyKeyPartiitoner uses this by default.
+// Using this KafkaHasher function is only necessary if you want to change the
+// underlying hashing algorithm.
 func KafkaHasher(hashFn func([]byte) uint32) PartitionerHasher {
 	return func(key []byte, n int) int {
 		// https://github.com/apache/kafka/blob/d91a94e/clients/src/main/java/org/apache/kafka/clients/producer/internals/DefaultPartitioner.java#L59
@@ -314,6 +318,25 @@ func KafkaHasher(hashFn func([]byte) uint32) PartitionerHasher {
 
 // SaramaHasher returns a PartitionerHasher using hashFn that mirrors how
 // Sarama partitions after hashing data.
+//
+// Sarama has two differences from Kafka when partitioning:
+//
+// 1) In Kafka, when converting the uint32 hash to an int32, Kafka masks the
+// high bit. In Sarama, if the high bit is 1 (i.e., the number as an int32 is
+// negative), Sarama negates the number.
+//
+// 2) Kafka by default uses the murmur2 hashing algorithm. Sarama by default
+// uses fnv-1a.
+//
+// Sarama added a NewReferenceHashPartitioner function that attempted to align
+// with Kafka, but the reference partitioner only fixed the first difference,
+// not the second. Further customization options were added later that made it
+// possible to exactly match Kafka when hashing.
+//
+// In short, to *exactly* match the Sarama defaults, use the following:
+//
+//     kgo.StickyKeyPartitioner(kgo.SaramaHasher(fnv.New32a()))
+//
 func SaramaHasher(hashFn func([]byte) uint32) PartitionerHasher {
 	return func(key []byte, n int) int {
 		p := int(hashFn(key)) % n
