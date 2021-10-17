@@ -25,6 +25,7 @@ This library attempts to provide an intuitive API while interacting with Kafka t
 - SSL/TLS provided through custom dialer options
 - All SASL mechanisms supported (GSSAPI/Kerberos, PLAIN, SCRAM, and OAUTHBEARER)
 - Low-level admin functionality supported through a simple `Request` function
+- High-level admin package with many helper types to make cluster administration easy.
 - Utilizes modern & idiomatic Go (support for contexts, variadic configuration options, ...)
 - Highly performant by avoiding channels and goroutines where not necessary
 - Written in pure Go (no wrapper lib for a C library or other bindings)

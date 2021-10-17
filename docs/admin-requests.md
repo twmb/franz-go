@@ -1,5 +1,19 @@
 # Admin Requests
 
+This repo provides two ways to issue admin requests: a high level [kadm][a]
+package, and a low level [kmsg][b] package. The kadm package is an opinionated
+package that attempts to abstract the low level details of administrating into
+some intuitive methods and types that have many helper functions. If you see a
+type that could have more helper functions, please create a pull request.
+
+[a]: https://pkg.go.dev/github.com/twmb/franz-go/pkg/kadm
+[b]: https://pkg.go.dev/github.com/twmb/franz-go/pkg/kmsg
+
+Not all of the low level API can be encapsulated in a high level API, and the
+kadm package must sacrifice some details to make things easier to use. If the
+kadm package does not give you the control you need, the low level kadm package
+allows you to construct requests to Kafka directly.
+
 All Kafka requests and responses are supported through generated code in the
 kmsg package. The package aims to provide some relatively comprehensive
 documentation (at least more than Kafka itself provides), but may be lacking

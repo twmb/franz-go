@@ -147,6 +147,15 @@ If you rely on the default options and do not commit yourself, all of this is
 automatically handled. My recommendation is to just set a custom
 `CommitCallback` if you need to and to rely on the default commit behavior.
 
+##### Direct offset management outside of a group
+
+You can use the `ConsumePartitions` option to assign partitions manually and
+consume outside of the context of a group. If you want to use Kafka to manage
+group offsets even with direct partition assignment, this repo provides a
+`kadm` package to easily manage offsets via an admin interface. Check the
+[`manual_committing`](../examples/manual_committing) example to see some
+example code for how to do this.
+
 ##### Without transactions
 
 There are two easy patterns to success for offset management in a normal
