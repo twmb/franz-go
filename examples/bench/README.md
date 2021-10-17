@@ -12,7 +12,7 @@ in TLS or SASL.
 go run . -topic foo
 go run . -topic foo -consume
 
-go run . -topic foo -no-compression
+go run . -topic foo -compression snappy
 
 go run . -tls -sasl-method scram-sha-256 -sasl-user user -sasl-pass pass -consume -group group -topic foo
 ```
@@ -33,7 +33,7 @@ This client has a few different default flags in comparison to librdkafka's
 `rdkafka_performance` utility. For starters, this prints less stats, but stats
 can be added if requested.
 
-To operate similarly to librdkafka's benchmarker, use `-linger 1s -compression none -static-record`.
+To operate similarly to librdkafka's benchmarker, use `-linger 1s -static-record`.
 
 This will match `rdkafka_performance` flags of `./rdkafka_performance -P -t <topic> -b <brokers> -s 100 -i 1000`.
 
@@ -60,9 +60,7 @@ any comma delimited set of brokers.
 
 `-batch-max-bytes` specifies the maximum amount of bytes per partition when producing. This must be less than Kafka's max.message.bytes value.
 
-`-no-compression` disables compression.
-
-`-compression` sets the compression to use, overriding the default of snappy. Supports "", "none", "snappy", "lz4", and "zstd".
+`-compression` sets the compression to use. Supports "", "none", "snappy", "lz4", and "zstd".
 
 `-pool` enables using a `sync.Pool` to reuse records and value slices, reducing
 garbage as a factor of the benchmark.

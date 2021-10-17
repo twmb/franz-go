@@ -32,8 +32,7 @@ var (
 	useStaticValue = flag.Bool("static-record", false, "if true, use the same record value for every record (eliminates creating and formatting values for records; implies -pool)")
 
 	recordBytes   = flag.Int("record-bytes", 100, "bytes per record (producing)")
-	noCompression = flag.Bool("no-compression", false, "set to disable compression (alias for -compression none, producing)")
-	compression   = flag.String("compression", "snappy", "compression algorithm to use (none,gzip,snappy,lz4,zstd, for producing)")
+	compression   = flag.String("compression", "none", "compression algorithm to use (none,gzip,snappy,lz4,zstd, for producing)")
 	poolProduce   = flag.Bool("pool", false, "if true, use a sync.Pool to reuse record structs/slices (producing)")
 	noIdempotency = flag.Bool("disable-idempotency", false, "if true, disable idempotency (force 1 produce rps)")
 	linger        = flag.Duration("linger", 0, "if non-zero, linger to use when producing")
@@ -137,23 +136,19 @@ func main() {
 	if *linger != 0 {
 		opts = append(opts, kgo.ProducerLinger(*linger))
 	}
-	if *noCompression {
+	switch strings.ToLower(*compression) {
+	case "", "none":
 		opts = append(opts, kgo.ProducerBatchCompression(kgo.NoCompression()))
-	} else {
-		switch strings.ToLower(*compression) {
-		case "", "none":
-			opts = append(opts, kgo.ProducerBatchCompression(kgo.NoCompression()))
-		case "gzip":
-			opts = append(opts, kgo.ProducerBatchCompression(kgo.GzipCompression()))
-		case "snappy":
-			opts = append(opts, kgo.ProducerBatchCompression(kgo.SnappyCompression()))
-		case "lz4":
-			opts = append(opts, kgo.ProducerBatchCompression(kgo.Lz4Compression()))
-		case "zstd":
-			opts = append(opts, kgo.ProducerBatchCompression(kgo.ZstdCompression()))
-		default:
-			die("unrecognized compression %s", *compression)
-		}
+	case "gzip":
+		opts = append(opts, kgo.ProducerBatchCompression(kgo.GzipCompression()))
+	case "snappy":
+		opts = append(opts, kgo.ProducerBatchCompression(kgo.SnappyCompression()))
+	case "lz4":
+		opts = append(opts, kgo.ProducerBatchCompression(kgo.Lz4Compression()))
+	case "zstd":
+		opts = append(opts, kgo.ProducerBatchCompression(kgo.ZstdCompression()))
+	default:
+		die("unrecognized compression %s", *compression)
 	}
 
 	if *dialTLS {
