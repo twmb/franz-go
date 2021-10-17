@@ -786,6 +786,16 @@ func (l GroupLag) Sorted() []GroupMemberLag {
 	return all
 }
 
+// IsEmpty returns if the group is empty.
+func (l GroupLag) IsEmpty() bool {
+	for _, ps := range l {
+		for _, m := range ps {
+			return m.IsEmpty()
+		}
+	}
+	return false
+}
+
 // CalculateGroupLag returns the per-partition lag of all members in a group.
 // The input to this method is the returns from the three following methods,
 //
