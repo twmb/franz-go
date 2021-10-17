@@ -741,8 +741,15 @@ func (cl *Client) DeleteOffsets(ctx context.Context, group string, s TopicsSet) 
 // If either the offset commits have load errors, or the listed end offsets
 // have load errors, the Lag field will be -1 and the Err field will be set (to
 // the first of either the commit error, or else the list error).
+//
+// If the group is in the Empty state, lag is calculated for all partitions in
+// a topic, but the member is nil. The calculate function assumes that any
+// assigned topic is meant to be entirely consumed. If the group is Empty and
+// topics could not be listed, some partitions may be missing.
 type GroupMemberLag struct {
-	Member *DescribedGroupMember // Member is a reference to the group member consuming this partition.
+	// Member is a reference to the group member consuming this partition.
+	// If the group is in state Empty, the member will be nil.
+	Member *DescribedGroupMember
 
 	Commit Offset       // Commit is this member's current offset commit.
 	End    ListedOffset // EndOffset is a reference to the end offset of this partition.
@@ -750,6 +757,9 @@ type GroupMemberLag struct {
 
 	Err error // Err is either the commit error, or the list end offsets error, or nil.
 }
+
+// IsEmpty returns if the this lag is for a group in the Empty state.
+func (g *GroupMemberLag) IsEmpty() bool { return g.Member == nil }
 
 // GroupLag is the per-topic, per-partition lag of members in a group.
 type GroupLag map[string]map[int32]GroupMemberLag
@@ -792,8 +802,11 @@ func CalculateGroupLag(
 	commit OffsetResponses,
 	offsets ListedOffsets,
 ) GroupLag {
-	l := make(map[string]map[int32]GroupMemberLag)
+	if group.State == "Empty" {
+		return calculateEmptyLag(commit, offsets)
+	}
 
+	l := make(map[string]map[int32]GroupMemberLag)
 	for mi, m := range group.Members {
 		for _, t := range m.Assigned.Topics {
 			lt := l[t.Topic]
@@ -851,6 +864,84 @@ func CalculateGroupLag(
 					Err:    perr,
 				}
 
+			}
+		}
+	}
+
+	return l
+}
+
+func calculateEmptyLag(commit OffsetResponses, offsets ListedOffsets) GroupLag {
+	l := make(map[string]map[int32]GroupMemberLag)
+	for t, ps := range commit {
+		lt := l[t]
+		if lt == nil {
+			lt = make(map[int32]GroupMemberLag)
+			l[t] = lt
+		}
+		tend := offsets[t]
+		for p, pcommit := range ps {
+			var (
+				pend ListedOffset
+				perr error
+				ok   bool
+			)
+			if tend == nil {
+				perr = errListMissing
+			} else {
+				if pend, ok = tend[p]; !ok {
+					perr = errListMissing
+				}
+			}
+			if perr == nil {
+				if perr = pcommit.Err; perr == nil {
+					perr = pend.Err
+				}
+			}
+
+			lag := int64(-1)
+			if perr == nil {
+				lag = pend.Offset
+				if pcommit.Offset.Offset >= 0 {
+					lag = pend.Offset - pcommit.Offset.Offset
+				}
+			}
+
+			lt[p] = GroupMemberLag{
+				Commit: pcommit.Offset,
+				End:    pend,
+				Lag:    lag,
+				Err:    perr,
+			}
+		}
+	}
+
+	// Now we look at all topics that we calculated lag for, and check out
+	// the partitions we listed. If those partitions are missing from the
+	// lag calculations above, the partitions were not committed to and we
+	// count that as entirely lagging.
+	for t, lt := range l {
+		tend := offsets[t]
+		for p, pend := range tend {
+			if _, ok := lt[p]; ok {
+				continue
+			}
+			pcommit := Offset{
+				Topic:       t,
+				Partition:   p,
+				Offset:      -1,
+				LeaderEpoch: -1,
+			}
+			perr := pend.Err
+			lag := int64(-1)
+			if perr == nil {
+				lag = pend.Offset
+			}
+			lt[p] = GroupMemberLag{
+				Commit: pcommit,
+				End:    pend,
+				Lag:    lag,
+				Err:    perr,
 			}
 		}
 	}
