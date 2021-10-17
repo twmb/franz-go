@@ -63,11 +63,35 @@ import (
 // This is a simple wrapper around a *kgo.Client to provide helper admin methods.
 type Client struct {
 	cl *kgo.Client
+
+	timeoutMillis int32
 }
 
 // NewClient returns an admin client.
 func NewClient(cl *kgo.Client) *Client {
-	return &Client{cl}
+	return &Client{cl, 60000} // 60s timeout default, matching kmsg
+}
+
+// SetTimeoutMillis sets the timeout to use for requests that have a timeout,
+// overriding the default of 60,000 (60s).
+//
+// Not all requests have timeouts. Most requests are expected to return
+// immediately or are expected to deliberately hang. The following requests
+// have timeout fields:
+//
+//     Produce
+//     CreateTopics
+//     DeleteTopics
+//     DeleteRecords
+//     CreatePartitions
+//     ElectLeaders
+//     AlterPartitionAssignments
+//     ListPartitionReassignments
+//     UpdateFeatures
+//
+// Not all requests above are supported in the admin API.
+func (cl *Client) SetTimeoutMillis(millis int32) {
+	cl.timeoutMillis = millis
 }
 
 // StringPtr is a shortcut function to aid building configs for creating or

@@ -116,6 +116,7 @@ func (cl *Client) createTopics(ctx context.Context, dry bool, p int32, rf int16,
 	}
 
 	req := kmsg.NewCreateTopicsRequest()
+	req.TimeoutMillis = cl.timeoutMillis
 	req.ValidateOnly = dry
 	for _, t := range topics {
 		rt := kmsg.NewCreateTopicsRequestTopic()
@@ -206,6 +207,7 @@ func (cl *Client) DeleteTopics(ctx context.Context, topics ...string) (DeleteTop
 	}
 
 	req := kmsg.NewDeleteTopicsRequest()
+	req.TimeoutMillis = cl.timeoutMillis
 	req.TopicNames = topics
 	for _, t := range topics {
 		rt := kmsg.NewDeleteTopicsRequestTopic()
@@ -322,6 +324,7 @@ func (cl *Client) DeleteRecords(ctx context.Context, os Offsets) (DeleteRecordsR
 	}
 
 	req := kmsg.NewPtrDeleteRecordsRequest()
+	req.TimeoutMillis = cl.timeoutMillis
 	for t, ps := range os {
 		rt := kmsg.NewDeleteRecordsRequestTopic()
 		rt.Topic = t
@@ -428,6 +431,7 @@ func (cl *Client) createPartitions(ctx context.Context, dry bool, add int, topic
 	}
 
 	req := kmsg.NewCreatePartitionsRequest()
+	req.TimeoutMillis = cl.timeoutMillis
 	req.ValidateOnly = dry
 	for _, t := range topics {
 		rt := kmsg.NewCreatePartitionsRequestTopic()
