@@ -348,6 +348,15 @@ func (os OffsetResponses) Keep(o Offsets) {
 	})
 }
 
+// Each returns these offset responses as offsets.
+func (os OffsetResponses) Into() Offsets {
+	var i Offsets
+	os.Each(func(o OffsetResponse) {
+		i.Add(o.Offset)
+	})
+	return i
+}
+
 // DeleteFunc deletes any offset for which fn returns true.
 func (os OffsetResponses) DeleteFunc(fn func(OffsetResponse) bool) {
 	for t, ps := range os {
@@ -427,13 +436,13 @@ func (cl *Client) CommitOffsets(ctx context.Context, group string, os Offsets) (
 			rp := kmsg.NewOffsetCommitRequestTopicPartition()
 			rp.Partition = p
 			rp.Offset = o.Offset
+			rp.LeaderEpoch = o.LeaderEpoch
 			if len(o.Metadata) > 0 {
 				rp.Metadata = kmsg.StringPtr(o.Metadata)
 			}
-			if o.CommitLeaderEpoch {
-				rp.LeaderEpoch = o.LeaderEpoch
-			}
+			rt.Partitions = append(rt.Partitions, rp)
 		}
+		req.Topics = append(req.Topics, rt)
 	}
 
 	resp, err := req.RequestWith(ctx, cl.cl)
@@ -467,6 +476,21 @@ func (cl *Client) CommitOffsets(ctx context.Context, group string, os Offsets) (
 		}
 	}
 	return rs, nil
+}
+
+// CommitAllOffsets is identical to CommitOffsets, but returns an error if the
+// offset commit was successful, but some offset within the commit failed to be
+// committed.
+//
+// This is a shortcut function provided to avoid checking two errors, but you
+// must be careful with this if partially successful commits can be a problem
+// for you.
+func (cl *Client) CommitAllOffsets(ctx context.Context, group string, os Offsets) error {
+	commits, err := cl.CommitOffsets(ctx, group, os)
+	if err != nil {
+		return err
+	}
+	return commits.Error()
 }
 
 // FetchOffsets issues an offset fetch requests for all topics and partitions
@@ -513,6 +537,46 @@ func (cl *Client) FetchOffsets(ctx context.Context, group string) (OffsetRespons
 		}
 	}
 	return rs, nil
+}
+
+// FetchOffsetsForTopics is a helper function that returns the currently
+// committed offsets for the given group, as well as default -1 offsets for any
+// topic/partition that does not yet have a commit.
+//
+// If any partition fetched or listed has an error, this function returns an
+// error. The returned offsets are ready to be used or converted directly to
+// kgo offsets with `Into`.
+func (cl *Client) FetchOffsetsForTopics(ctx context.Context, group string, topics ...string) (Offsets, error) {
+	var os Offsets
+
+	if len(topics) > 0 {
+		listed, err := cl.ListTopics(ctx, topics...)
+		if err != nil {
+			return nil, fmt.Errorf("unable to list topics: %w", err)
+		}
+
+		for _, topic := range topics {
+			t := listed[topic]
+			if t.Err != nil {
+				return nil, fmt.Errorf("unable to describe topics, topic err: %w", t.Err)
+			}
+			for _, p := range t.Partitions {
+				os.AddOffset(topic, p.Partition, -1, -1)
+			}
+		}
+	}
+
+	resps, err := cl.FetchOffsets(ctx, group)
+	if err != nil {
+		return nil, fmt.Errorf("unable to fetch offsets: %w", err)
+	}
+	if err := resps.Error(); err != nil {
+		return nil, fmt.Errorf("offset fetches had a load error, first error: %w", err)
+	}
+	resps.Each(func(o OffsetResponse) {
+		os.Add(o.Offset)
+	})
+	return os, nil
 }
 
 // FetchOffsetsResponse contains a fetch offsets response for a single group.

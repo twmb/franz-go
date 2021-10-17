@@ -101,21 +101,9 @@ type Partition struct {
 type Offset struct {
 	Topic       string
 	Partition   int32
-	Offset      int64 // Offset is the partition to set.
-	LeaderEpoch int32 // LeaderEpoch is the broker leader epoch of the record at this offset.
-
-	// CommitLeaderEpoch indicates whether to use the leader epoch field
-	// when committing. The leader epoch can then later be used after
-	// fetching offsets, when consuming, if the leader epoch for this
-	// offset does not match the broker's, the client will receive an
-	// error.
-	//
-	// If you do not care about handling log truncation / data loss as a
-	// consumer, the LeaderEpoch field is not necessary. The LeaderEpoch
-	// field is only used if CommitLeaderEpoch is true.
-	CommitLeaderEpoch bool
-
-	Metadata string // Metadata, if non-empty, is used for offset commits.
+	Offset      int64  // Offset is the partition to set.
+	LeaderEpoch int32  // LeaderEpoch is the broker leader epoch of the record at this offset.
+	Metadata    string // Metadata, if non-empty, is used for offset commits.
 }
 
 // Partitions wraps many partitions.
@@ -152,6 +140,14 @@ func (l OffsetsList) Into() Offsets {
 type Offsets map[string]map[int32]Offset
 
 // Add adds an offset for a given topic/partition to this Offsets map.
+//
+// If the partition already exists, the offset is only added if:
+//
+//     - the new leader epoch is higher than the old, or
+//     - the leader epochs equal, and the new offset is higher than the old
+//
+// If you would like to add offsets forcefully no matter what, use the Delete
+// method before this.
 func (os *Offsets) Add(o Offset) {
 	if *os == nil {
 		*os = make(map[string]map[int32]Offset)
@@ -161,30 +157,98 @@ func (os *Offsets) Add(o Offset) {
 		ot = make(map[int32]Offset)
 		(*os)[o.Topic] = ot
 	}
-	ot[o.Partition] = o
+
+	prior, exists := ot[o.Partition]
+	if !exists || prior.LeaderEpoch < o.LeaderEpoch ||
+		prior.LeaderEpoch == o.LeaderEpoch && prior.Offset < o.Offset {
+		ot[o.Partition] = o
+	}
 }
 
-// AddOffset is a helper to add an offset for a given topic and partition.
-// The input offset will have no leader epoch nor metadata.
-func (os *Offsets) AddOffset(t string, p int32, o int64) {
+// Delete removes any offset at topic t and partition p.
+func (os Offsets) Delete(t string, p int32) {
+	if os == nil {
+		return
+	}
+	ot := os[t]
+	if ot == nil {
+		return
+	}
+	delete(ot, p)
+	if len(ot) == 0 {
+		delete(os, t)
+	}
+}
+
+// AddOffset is a helper to add an offset for a given topic and partition. The
+// leader epoch field must be -1 if you do not know the leader epoch or if
+// you do not have an offset yet.
+func (os *Offsets) AddOffset(t string, p int32, o int64, leaderEpoch int32) {
 	os.Add(Offset{
 		Topic:       t,
 		Partition:   p,
 		Offset:      o,
-		LeaderEpoch: -1,
+		LeaderEpoch: leaderEpoch,
 	})
 }
 
-// AddOffsetEpoch is a helper to add an offset for a given topic and partition
-// with the given leader epoch. The CommitLeaderEpoch field is set to true.
-func (os *Offsets) AddOffsetEpoch(t string, p int32, o int64, e int32) {
-	os.Add(Offset{
-		Topic:             t,
-		Partition:         p,
-		Offset:            o,
-		LeaderEpoch:       e,
-		CommitLeaderEpoch: true,
+// KeepFunc calls fn for every offset, keeping the offset if fn returns true.
+func (os Offsets) KeepFunc(fn func(o Offset) bool) {
+	for t, ps := range os {
+		for p, o := range ps {
+			if !fn(o) {
+				delete(ps, p)
+			}
+		}
+		if len(ps) == 0 {
+			delete(os, t)
+		}
+	}
+}
+
+// Into returns these offsets as a kgo offset map.
+func (os Offsets) Into() map[string]map[int32]kgo.Offset {
+	tskgo := make(map[string]map[int32]kgo.Offset)
+	for t, ps := range os {
+		pskgo := make(map[int32]kgo.Offset)
+		for p, o := range ps {
+			pskgo[p] = kgo.NewOffset().
+				At(o.Offset).
+				WithEpoch(o.LeaderEpoch)
+		}
+		tskgo[t] = pskgo
+	}
+	return tskgo
+}
+
+// OffsetsFromFetches returns Offsets for the final record in any partition in
+// the fetches. This is a helper to enable committing an entire returned batch.
+//
+// This function looks at only the last record per partition, assuming that the
+// last record is the highest offset (which is the behavior returned by kgo's
+// Poll functions). The returned offsets are one past the offset contained in
+// the records.
+func OffsetsFromFetches(fs kgo.Fetches) Offsets {
+	var os Offsets
+	fs.EachPartition(func(p kgo.FetchTopicPartition) {
+		if len(p.Records) == 0 {
+			return
+		}
+		r := p.Records[len(p.Records)-1]
+		os.AddOffset(r.Topic, r.Partition, r.Offset+1, r.LeaderEpoch)
 	})
+	return os
+}
+
+// OffsetsFromRecords returns offsets for all given records, using the highest
+// offset per partition. The returned offsets are one past the offset contained
+// in the records.
+func OffsetsFromRecords(rs ...kgo.Record) Offsets {
+	var os Offsets
+	for _, r := range rs {
+		os.AddOffset(r.Topic, r.Partition, r.Offset+1, r.LeaderEpoch)
+	}
+	return os
 }
 
 // TopicsSet is a set of topics and, per topic, a set of partitions.
