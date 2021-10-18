@@ -10,10 +10,26 @@ import (
 
 // ListTopics issues a metadata request and returns TopicDetails. Specific
 // topics to describe can be passed as additional arguments. If no topics are
-// specified, all topics are requested.
+// specified, all topics are requested. Internal topics are not returned unless
+// specifically requested. To see all topics including internal topics, use
+// ListInternalTopics.
 //
 // This returns an error if the request fails to be issued, or an *AuthError.
 func (cl *Client) ListTopics(
+	ctx context.Context,
+	topics ...string,
+) (TopicDetails, error) {
+	t, err := cl.ListInternalTopics(ctx, topics...)
+	if err != nil {
+		return nil, err
+	}
+	t.FilterInternal()
+	return t, nil
+}
+
+// ListInternalTopics is the same as ListTopics, but does not filter internal
+// topics before returning.
+func (cl *Client) ListInternalTopics(
 	ctx context.Context,
 	topics ...string,
 ) (TopicDetails, error) {
