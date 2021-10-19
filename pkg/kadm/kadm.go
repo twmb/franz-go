@@ -72,6 +72,11 @@ func NewClient(cl *kgo.Client) *Client {
 	return &Client{cl, 15000} // 15s timeout default, matching kmsg
 }
 
+// Close closes the underlying *kgo.Client.
+func (cl *Client) Close() {
+	cl.cl.Close()
+}
+
 // SetTimeoutMillis sets the timeout to use for requests that have a timeout,
 // overriding the default of 15,000 (15s).
 //
