@@ -65,6 +65,17 @@ func (ds PartitionDetails) Numbers() []int32 {
 	return int32s(all)
 }
 
+// NumReplicas returns the number of replicas for these partitions
+//
+// It is assumed that all partitions have the same number of replicas, so this
+// simply returns the number of replicas in the first encountered partition.
+func (ds PartitionDetails) NumReplicas() int {
+	for _, p := range ds {
+		return len(p.Replicas)
+	}
+	return 0
+}
+
 // TopicDetail is the detail of a topic as returned by a metadata response. If
 // the topic fails to load / has an error, then there will be no partitions.
 type TopicDetail struct {
