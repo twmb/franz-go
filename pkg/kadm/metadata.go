@@ -131,7 +131,7 @@ func (ds TopicDetails) FilterInternal() {
 type Metadata struct {
 	Cluster    string        // Cluster is the cluster name, if any.
 	Controller int32         // Controller is the node ID of the controller broker, if available, otherwise -1.
-	Brokers    BrokerDetails // Brokers contains broker details.
+	Brokers    BrokerDetails // Brokers contains broker details, sorted by default.
 	Topics     TopicDetails  // Topics contains topic details.
 }
 
@@ -231,6 +231,7 @@ func (cl *Client) metadata(ctx context.Context, noTopics bool, topics []string) 
 			Rack:   b.Rack,
 		})
 	}
+	sort.Slice(m.Brokers, func(i, j int) bool { return m.Brokers[i].NodeID < m.Brokers[j].NodeID })
 
 	if len(topics) > 0 && len(m.Topics) != len(topics) {
 		return Metadata{}, fmt.Errorf("metadata returned only %d topics of %d requested", len(m.Topics), len(topics))
