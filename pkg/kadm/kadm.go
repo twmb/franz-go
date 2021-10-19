@@ -72,6 +72,16 @@ func NewClient(cl *kgo.Client) *Client {
 	return &Client{cl, 15000} // 15s timeout default, matching kmsg
 }
 
+// NewOptClient returns a new client directly from kgo options. This is a
+// wrapper around creating a new *kgo.Client and then creating an admin client.
+func NewOptClient(opts ...kgo.Opt) (*Client, error) {
+	cl, err := kgo.NewClient(opts...)
+	if err != nil {
+		return nil, err
+	}
+	return NewClient(cl)
+}
+
 // Close closes the underlying *kgo.Client.
 func (cl *Client) Close() {
 	cl.cl.Close()
