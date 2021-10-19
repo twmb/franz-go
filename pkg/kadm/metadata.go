@@ -171,7 +171,7 @@ func (cl *Client) Metadata(
 	return cl.metadata(ctx, false, topics)
 }
 
-func (cl *Client) metadata(ctx context.Context, noTopics bool, topics []string) {
+func (cl *Client) metadata(ctx context.Context, noTopics bool, topics []string) (Metadata, error) {
 	req := kmsg.NewPtrMetadataRequest()
 	for _, t := range topics {
 		rt := kmsg.NewMetadataRequestTopic()

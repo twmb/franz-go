@@ -79,7 +79,7 @@ func NewOptClient(opts ...kgo.Opt) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return NewClient(cl)
+	return NewClient(cl), nil
 }
 
 // Close closes the underlying *kgo.Client.
