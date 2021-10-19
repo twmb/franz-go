@@ -15260,7 +15260,7 @@ type CreateTopicsResponseTopic struct {
 	// NOT_CONTROLLER is returned if the request was not issued to a Kafka
 	// controller.
 	//
-	// TOPIC_AUTHORIZATION_FAILED is returned if the client is not authorized
+	// TOPIC_AUTHORIZATION_FAILED is returned if the client is not authorized.
 	//
 	// INVALID_REQUEST is returned if the same topic occurred multiple times
 	// in the request.

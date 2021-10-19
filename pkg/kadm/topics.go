@@ -89,7 +89,7 @@ func (rs CreateTopicResponses) On(topic string, fn func(*CreateTopicResponse) er
 
 // CreateTopics issues a create topics request with the given partitions,
 // replication factor, and (optional) configs for every topic. Under the hood,
-// this uses the default 60s request timeout and lets Kafka choose where to
+// this uses the default 15s request timeout and lets Kafka choose where to
 // place partitions.
 //
 // This package includes a StringPtr function to aid in building config values.
@@ -212,7 +212,7 @@ func (rs DeleteTopicResponses) On(topic string, fn func(*DeleteTopicResponse) er
 }
 
 // DeleteTopics issues a delete topics request for the given topic names with a
-// 60s timeout.
+// 15s timeout.
 //
 // This does not return an error on authorization failures, instead,
 // authorization failures are included in the responses. This only returns an

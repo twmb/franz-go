@@ -135,7 +135,7 @@ type Record struct {
 	Offset int64
 }
 
-// AppendRecord appends a record to b given the layout or returns an error if
+// AppendFormat appends a record to b given the layout or returns an error if
 // the layout is invalid. This is a one-off shortcut for using
 // NewRecordFormatter. See that function's documentation for the layout
 // specification.
