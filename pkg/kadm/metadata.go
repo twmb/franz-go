@@ -150,6 +150,15 @@ func (cl *Client) ListBrokers(ctx context.Context) (BrokerDetails, error) {
 	return m.Brokers, nil
 }
 
+// MetadataWithoutTopics issues a metadata request and returns it, and does not
+// ask for any topics. This request is the counterpart to requesting all topics
+// by default with the Metadata method.
+//
+// This returns an error if the request fails to be issued, or an *AuthErr.
+func (cl *Client) MetadataWithoutTopics(ctx context.Context) (Metadata, error) {
+	return cl.metadata(ctx, true, nil)
+}
+
 // Metadata issues a metadata request and returns it. Specific topics to
 // describe can be passed as additional arguments. If no topics are specified,
 // all topics are requested.
@@ -159,11 +168,18 @@ func (cl *Client) Metadata(
 	ctx context.Context,
 	topics ...string,
 ) (Metadata, error) {
+	return cl.metadata(ctx, false, topics)
+}
+
+func (cl *Client) metadata(ctx context.Context, noTopics bool, topics []string) {
 	req := kmsg.NewPtrMetadataRequest()
 	for _, t := range topics {
 		rt := kmsg.NewMetadataRequestTopic()
 		rt.Topic = kmsg.StringPtr(t)
 		req.Topics = append(req.Topics, rt)
+	}
+	if noTopics {
+		req.Topics = []kmsg.MetadataRequestTopic{}
 	}
 	resp, err := req.RequestWith(ctx, cl.cl)
 	if err != nil {
