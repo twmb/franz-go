@@ -560,7 +560,9 @@ func (b *broker) connect(ctx context.Context) (net.Conn, error) {
 		}
 	})
 	if err != nil {
-		b.cl.cfg.logger.Log(LogLevelWarn, "unable to open connection to broker", "addr", b.addr, "broker", logID(b.meta.NodeID), "err", err)
+		if !errors.Is(err, ErrClientClosed) {
+			b.cl.cfg.logger.Log(LogLevelWarn, "unable to open connection to broker", "addr", b.addr, "broker", logID(b.meta.NodeID), "err", err)
+		}
 		return nil, fmt.Errorf("unable to dial: %w", err)
 	} else {
 		b.cl.cfg.logger.Log(LogLevelDebug, "connection opened to broker", "addr", b.addr, "broker", logID(b.meta.NodeID))
@@ -608,7 +610,9 @@ func (cxn *brokerCxn) init(isProduceCxn bool) error {
 	if !hasVersions {
 		if cxn.b.cl.cfg.maxVersions == nil || cxn.b.cl.cfg.maxVersions.HasKey(18) {
 			if err := cxn.requestAPIVersions(); err != nil {
-				cxn.cl.cfg.logger.Log(LogLevelError, "unable to request api versions", "broker", logID(cxn.b.meta.NodeID), "err", err)
+				if !errors.Is(err, ErrClientClosed) {
+					cxn.cl.cfg.logger.Log(LogLevelError, "unable to request api versions", "broker", logID(cxn.b.meta.NodeID), "err", err)
+				}
 				return err
 			}
 		} else {
@@ -619,7 +623,9 @@ func (cxn *brokerCxn) init(isProduceCxn bool) error {
 	}
 
 	if err := cxn.sasl(); err != nil {
-		cxn.cl.cfg.logger.Log(LogLevelError, "unable to initialize sasl", "broker", logID(cxn.b.meta.NodeID), "err", err)
+		if !errors.Is(err, ErrClientClosed) {
+			cxn.cl.cfg.logger.Log(LogLevelError, "unable to initialize sasl", "broker", logID(cxn.b.meta.NodeID), "err", err)
+		}
 		return err
 	}
 
@@ -866,7 +872,7 @@ func (cxn *brokerCxn) doSasl(authenticate bool) error {
 }
 
 // Some internal requests use the client context to issue requests, so if the
-// client is closed, this select case can be selected.  We want to return the
+// client is closed, this select case can be selected. We want to return the
 // proper error.
 //
 // This function is used in this file anywhere the client context can cause
@@ -1301,7 +1307,9 @@ func (cxn *brokerCxn) handleResp(pr promisedResp) {
 		if cxn.successes > 0 || len(cxn.b.cl.cfg.sasls) > 0 {
 			cxn.b.cl.cfg.logger.Log(LogLevelDebug, "read from broker errored, killing connection", "addr", cxn.b.addr, "broker", logID(cxn.b.meta.NodeID), "successful_reads", cxn.successes, "err", err)
 		} else {
-			cxn.b.cl.cfg.logger.Log(LogLevelWarn, "read from broker errored, killing connection after 0 successful responses (is sasl missing?)", "addr", cxn.b.addr, "broker", logID(cxn.b.meta.NodeID), "err", err)
+			if !errors.Is(err, ErrClientClosed) {
+				cxn.b.cl.cfg.logger.Log(LogLevelWarn, "read from broker errored, killing connection after 0 successful responses (is sasl missing?)", "addr", cxn.b.addr, "broker", logID(cxn.b.meta.NodeID), "err", err)
+			}
 		}
 		pr.promise(nil, err)
 		cxn.die()
