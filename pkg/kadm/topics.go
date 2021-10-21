@@ -453,6 +453,7 @@ func (cl *Client) createPartitions(ctx context.Context, dry bool, add int, topic
 		rt := kmsg.NewCreatePartitionsRequestTopic()
 		rt.Topic = t
 		rt.Count = int32(len(td[t].Partitions) + add)
+		req.Topics = append(req.Topics, rt)
 	}
 
 	resp, err := req.RequestWith(ctx, cl.cl)
