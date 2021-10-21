@@ -1,3 +1,50 @@
+v1.2.0
+===
+
+This release contains new formatting features and sets the stage for a new
+admin administration package to be added in v1.3.0. For now, the `kadm` package
+is in a separate unversioned module. The API is relatively stable, but I'd like
+to play with it some more to figure out what needs changing or not. Any
+external experimenting and feedback is welcome.
+
+There are two new types introduced in the kgo package: `RecordFormatter` and
+`RecordReader`. Both of these extract and improve logic used in the
+[`kcl`](github.com/twmb/kcl) repo. These are effectively powerful ways to
+format records into bytes, and read bytes into records. They are not _exactly_
+opposites of each other due to reasons mentioned in the docs. I expect
+formatting to be more useful than reading, and formatting is actually
+surprisingly fast if the formatter is reused. The one off `Record.AppendFormat`
+builds a new formatter on each use and should only be used if needed
+infrequently, because building the formatter is the slow part.
+
+I am considering removing the default of snappy compression for the v1.3
+release. I generally find it useful: many people forget to add compression
+which increases network costs and makes broker disks fill faster, and snappy
+compression is cheap cpu-wise and fast. However, some people are confused when
+their bandwidth metrics look lower than they expect, and snappy _does_ mean
+throughput is not _as_ high as it could be. Removal of snappy by default may or
+may not happen, but if anybody agrees or disagrees with it, please mention so
+in an issue or on discord.
+
+There are a few minor behavior changes in this release that should make default
+clients safer (lowering max buffered memory) and faster on request failures.
+These behavior changes should not affect anything. As well, the `bench` utility
+no longer uses snappy by default.
+
+Non-formatter/reader/kadm commits worth mentioning:
+
+- [`a8dbd2f`](https://github.com/twmb/franz-go/commit/a8dbd2f) broker: add context to responses that look like HTTP
+- [`ec0d81f`](https://github.com/twmb/franz-go/commit/ec0d81f) broker: avoid non-debug logs on ErrClientClosed
+- [`af4fce4`](https://github.com/twmb/franz-go/commit/af4fce4) **beahvior change** bench: use no compression by default, remove -no-compression flag
+- [`d368d11`](https://github.com/twmb/franz-go/commit/d368d11) bench: allow custom certs with -ca-cert, -client-cert, -client-key
+- [`fbf9239`](https://github.com/twmb/franz-go/commit/fbf9239) broker: add two new connection types, cxnGroup and cxnSlow
+- [`2d6c1a8`](https://github.com/twmb/franz-go/commit/2d6c1a8) **behavior change** client: lower ConnTimeoutOverhead and RetryTimeout defaults
+- [`9bcfc98`](https://github.com/twmb/franz-go/commit/9bcfc98) kgo: only run req/resp handling goroutines when needed
+- [`b9b592e`](https://github.com/twmb/franz-go/commit/b9b592e) **behavior change** kgo: change default MaxBufferedRecords from unlimited to 10,000
+- [`19f4e9b`](https://github.com/twmb/franz-go/commit/19f4e9b) and [`58bf74a`](https://github.com/twmb/franz-go/commit/58bf74a) client: collapse shard errors
+- [`126778a`](https://github.com/twmb/franz-go/commit/126778a) client: avoid sharding to partitions with no leader
+- [`254764a`](https://github.com/twmb/franz-go/commit/254764a) **behavior change** kversion: skip WriteTxnMarkers for version guessing
+
 v1.1.4
 ===
 
