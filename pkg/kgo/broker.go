@@ -1047,6 +1047,9 @@ func (cxn *brokerCxn) parseReadSize(sizeBuf []byte) (int32, error) {
 		return 0, fmt.Errorf("invalid negative response size %d", size)
 	}
 	if maxSize := cxn.b.cl.cfg.maxBrokerReadBytes; size > maxSize {
+		if maxSize == 0x48545450 { // "HTTP"
+			return 0, fmt.Errorf("invalid large response size %d > limit %d; the four size bytes are 'HTTP' in ascii, the beginning of an HTTP response; is your broker port correct?", size, maxSize)
+		}
 		// A TLS alert is 21, and a TLS alert has the version
 		// following, where all major versions are 03xx. We
 		// look for an alert and major version byte to suspect
