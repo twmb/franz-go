@@ -2,6 +2,8 @@ package kgo
 
 import (
 	"bytes"
+	"encoding/base64"
+	"reflect"
 	"sync"
 	"testing"
 )
@@ -99,5 +101,56 @@ func BenchmarkCompress(b *testing.B) {
 		w := sliceWriters.Get().(*sliceWriter)
 		c.compress(w, in, 0)
 		sliceWriters.Put(w)
+	}
+}
+
+func Test_xerialDecode(t *testing.T) {
+	tests := []struct {
+		name            string
+		compressedInput string
+		want            []byte
+		wantErr         bool
+	}{
+		{
+			"Compressed data ok",
+			"glNOQVBQWQAAAAABAAAAAQAAAA8NMEhlbGxvLCBXb3JsZCE=",
+			[]byte("Hello, World!"),
+			false,
+		},
+		{
+			"Compressed data without header",
+			"/wYAAHNOYVBwWQERAACChVPDSGVsbG8sIFdvcmxkIQ==",
+			nil,
+			true,
+		},
+		{
+			"Compressed data less than minimum length, malformed",
+			"glNOQVBQWQAAAAABAAAAAQAAAA==",
+			nil,
+			true,
+		},
+		{
+			"Compressed data not the advertised length",
+			"glNOQVBQWQAAAAABAAAAAQAAAA8NMEhlbGxvLCBXb3Js",
+			nil,
+			true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			data, err := base64.StdEncoding.DecodeString(test.compressedInput)
+			if err != nil {
+				t.Errorf("base64 decode error = %v", err)
+				return
+			}
+			got, err := xerialDecode(data)
+			if (err != nil) != test.wantErr {
+				t.Errorf("xerialDecode() error = %v, wantErr %v", err, test.wantErr)
+				return
+			}
+			if !reflect.DeepEqual(got, test.want) {
+				t.Errorf("got decompress %s != exp compress in %s", got, test.want)
+			}
+		})
 	}
 }
