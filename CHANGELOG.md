@@ -4,12 +4,12 @@ v1.2.1
 This patch release fixes a panic that can occur in the following sequence of
 events:
 
-1) a LeaveGroup occurs
+1) a LeaveGroup occurs (which always happens in Close)
 2) the cluster moves a partition from one broker to another
 3) a metadata refresh occurs and sees the partition has moved
 
-If consuming as a group, `Close` leaves a group and there is a very small
-window of time before the metadata loop quits.
+Whenever a client closes, `Close` calls `LeaveGroup` (even if not in a group),
+and there is a small window of time before the metadata loop quits.
 
 - [`864526a`](https://github.com/twmb/franz-go/commit/864526a) **bugfix** consuming: avoid setting cursors to nil on LeaveGroup
 
