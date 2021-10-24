@@ -104,13 +104,6 @@ func (cl *Client) triggerUpdateMetadataNow() {
 	}
 }
 
-func (cl *Client) blockingMetadataFn(fn func()) {
-	select {
-	case cl.blockingMetadataFnCh <- fn:
-	case <-cl.ctx.Done():
-	}
-}
-
 // updateMetadataLoop updates metadata whenever the update ticker ticks,
 // or whenever deliberately triggered.
 func (cl *Client) updateMetadataLoop() {
@@ -120,7 +113,6 @@ func (cl *Client) updateMetadataLoop() {
 
 	ticker := time.NewTicker(cl.cfg.metadataMaxAge)
 	defer ticker.Stop()
-loop:
 	for {
 		var now bool
 		select {
@@ -130,9 +122,6 @@ loop:
 		case <-cl.updateMetadataCh:
 		case <-cl.updateMetadataNowCh:
 			now = true
-		case fn := <-cl.blockingMetadataFnCh:
-			fn()
-			continue loop
 		}
 
 		var nowTries int
@@ -141,7 +130,6 @@ loop:
 		if !now {
 			if wait := cl.cfg.metadataMinAge - time.Since(lastAt); wait > 0 {
 				timer := time.NewTimer(wait)
-			prewait:
 				select {
 				case <-cl.ctx.Done():
 					timer.Stop()
@@ -149,9 +137,6 @@ loop:
 				case <-cl.updateMetadataNowCh:
 					timer.Stop()
 				case <-timer.C:
-				case fn := <-cl.blockingMetadataFnCh:
-					fn()
-					goto prewait
 				}
 			}
 		} else {
@@ -166,8 +151,6 @@ loop:
 			select {
 			case <-cl.updateMetadataCh:
 			case <-cl.updateMetadataNowCh:
-			case fn := <-cl.blockingMetadataFnCh:
-				fn()
 			default:
 				break out
 			}
@@ -188,15 +171,11 @@ loop:
 
 		consecutiveErrors++
 		after := time.NewTimer(cl.cfg.retryBackoff(consecutiveErrors))
-	backoff:
 		select {
 		case <-cl.ctx.Done():
 			after.Stop()
 			return
 		case <-after.C:
-		case fn := <-cl.blockingMetadataFnCh:
-			fn()
-			goto backoff
 		}
 
 	}

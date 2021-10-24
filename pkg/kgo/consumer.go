@@ -189,27 +189,6 @@ func (c *consumer) unset() {
 		return
 	}
 
-	// Unsetting means all old cursors are useless. Before we return, we
-	// delete all old cursors. This is especially important in the context
-	// of a new assignment, which will create new cursors that may
-	// duplicate our old.
-	//
-	// Note that this is happening outside of the context of a valid
-	// consumer session, so we do not need to worry about much else.
-	//
-	// Since we are blocking metadata, sinksAndSources cannot be modified
-	// concurrently and we do not need a lock.
-	cl := c.cl
-	defer cl.blockingMetadataFn(func() {
-		for _, sns := range cl.sinksAndSources {
-			s := sns.source
-			s.cursorsMu.Lock()
-			s.cursors = nil
-			s.cursorsStart = 0
-			s.cursorsMu.Unlock()
-		}
-	})
-
 	wait := func() {} // wait AFTER we unlock
 	defer func() { wait() }()
 
