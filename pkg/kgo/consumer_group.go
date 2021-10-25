@@ -37,7 +37,7 @@ type groupConsumer struct {
 	// happening.
 	syncCommitMu sync.RWMutex
 
-	rejoinCh chan struct{} // cap 1; sent to if subscription changes (regex)
+	rejoinCh chan string // cap 1; sent to if subscription changes (regex)
 
 	// For EOS, before we commit, we force a heartbeat. If the client and
 	// group member are both configured properly, then the transactional
@@ -142,7 +142,7 @@ func (c *consumer) initGroup() {
 		manageDone:       make(chan struct{}),
 		cooperative:      c.cl.cfg.cooperative(),
 		tps:              newTopicsPartitions(),
-		rejoinCh:         make(chan struct{}, 1),
+		rejoinCh:         make(chan string, 1),
 		heartbeatForceCh: make(chan func(error)),
 		using:            make(map[string]int),
 	}
@@ -303,7 +303,7 @@ func (g *groupConsumer) manage() {
 			"backoff", backoff,
 		)
 		deadline := time.Now().Add(backoff)
-		g.cl.waitmeta(g.ctx, backoff)
+		g.cl.waitmeta(g.ctx, backoff, "waitmeta during join & sync error backoff")
 		after := time.NewTimer(time.Until(deadline))
 		select {
 		case <-g.ctx.Done():
@@ -522,7 +522,7 @@ func (g *groupConsumer) revoke(stage revokeStage, lost map[string][]int32, leavi
 		return
 	}
 
-	defer g.rejoin() // cooperative consumers rejoin after they revoking what they lost
+	defer g.rejoin("cooperative rejoin after revoking what we lost") // cooperative consumers rejoin after they revoking what they lost
 
 	// The block below deletes everything lost from our uncommitted map.
 	// All commits should be **completed** by the time this runs. An async
@@ -721,9 +721,10 @@ func (g *groupConsumer) heartbeat(fetchErrCh <-chan error, s *assignRevokeSessio
 			heartbeat = true
 		case force = <-g.heartbeatForceCh:
 			heartbeat = true
-		case <-g.rejoinCh:
+		case why := <-g.rejoinCh:
 			// If a metadata update changes our subscription,
 			// we just pretend we are rebalancing.
+			g.cfg.logger.Log(LogLevelInfo, "forced rejoin quitting heartbeat loop", "why", why)
 			err = kerr.RebalanceInProgress
 		case err = <-fetchErrCh:
 			fetchErrCh = nil
@@ -811,7 +812,7 @@ func (g *groupConsumer) heartbeat(fetchErrCh <-chan error, s *assignRevokeSessio
 			waited := make(chan struct{})
 			metadone = waited
 			go func() {
-				g.cl.waitmeta(g.ctx, g.cfg.sessionTimeout)
+				g.cl.waitmeta(g.ctx, g.cfg.sessionTimeout, "waitmeta after heartbeat error")
 				close(waited)
 			}()
 		}
@@ -837,16 +838,16 @@ func (g *groupConsumer) heartbeat(fetchErrCh <-chan error, s *assignRevokeSessio
 // rebalance and will instead reply to the member with its current assignment.
 func (cl *Client) ForceRebalance() {
 	if g := cl.consumer.g; g != nil {
-		g.rejoin()
+		g.rejoin("rejoin from ForceRebalance")
 	}
 }
 
 // rejoin is called after a cooperative member revokes what it lost at the
 // beginning of a session, or if we are leader and detect new partitions to
 // consume.
-func (g *groupConsumer) rejoin() {
+func (g *groupConsumer) rejoin(why string) {
 	select {
-	case g.rejoinCh <- struct{}{}:
+	case g.rejoinCh <- why:
 	default:
 	}
 }
@@ -1186,11 +1187,7 @@ start:
 		}
 	}
 
-	if g.cfg.logger.Level() >= LogLevelDebug {
-		g.cfg.logger.Log(LogLevelDebug, "fetched committed offsets", "group", g.cfg.group, "fetched", offsets)
-	} else {
-		g.cfg.logger.Log(LogLevelInfo, "fetched committed offsets", "group", g.cfg.group)
-	}
+	g.cfg.logger.Log(LogLevelInfo, "fetched committed offsets", "group", g.cfg.group, "fetched", offsets)
 	return nil
 }
 
@@ -1279,8 +1276,10 @@ func (g *groupConsumer) findNewAssignments() {
 		return
 	}
 
-	if numNewTopics > 0 || g.leader.get() {
-		g.rejoin()
+	if numNewTopics > 0 {
+		g.rejoin("rejoining because there are more topics to consume, our interests have changed")
+	} else if g.leader.get() {
+		g.rejoin("rejoining because we are the leader and noticed some topics have new partitions")
 	}
 }
 

@@ -167,7 +167,7 @@ func (c *consumer) init(cl *Client) {
 		return // not consuming
 	}
 
-	defer cl.triggerUpdateMetadata(true) // we definitely want to trigger a metadata update
+	defer cl.triggerUpdateMetadata(true, "client initialization") // we definitely want to trigger a metadata update
 
 	if len(cl.cfg.group) == 0 {
 		c.initDirect()
@@ -527,7 +527,7 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how
 		} else { // else we guarded it
 			c.unguardSessionChange(session)
 		}
-		loadOffsets.loadWithSession(session) // odds are this assign came from a metadata update, so no reason to force a refresh with loadWithSessionNow
+		loadOffsets.loadWithSession(session, "loading offsets in new session from assign") // odds are this assign came from a metadata update, so no reason to force a refresh with loadWithSessionNow
 
 		// If we started a new session or if we unguarded, we have one
 		// worker. This one worker allowed us to safely add our load
@@ -868,17 +868,17 @@ func (dst *listOrEpochLoads) mergeFrom(src listOrEpochLoads) {
 
 func (l listOrEpochLoads) isEmpty() bool { return len(l.List) == 0 && len(l.Epoch) == 0 }
 
-func (l listOrEpochLoads) loadWithSession(s *consumerSession) {
+func (l listOrEpochLoads) loadWithSession(s *consumerSession, why string) {
 	if !l.isEmpty() {
 		s.incWorker()
-		go s.listOrEpoch(l, false)
+		go s.listOrEpoch(l, false, why)
 	}
 }
 
-func (l listOrEpochLoads) loadWithSessionNow(s *consumerSession) bool {
+func (l listOrEpochLoads) loadWithSessionNow(s *consumerSession, why string) bool {
 	if !l.isEmpty() {
 		s.incWorker()
-		go s.listOrEpoch(l, true)
+		go s.listOrEpoch(l, true, why)
 		return true
 	}
 	return false
@@ -1153,14 +1153,14 @@ func (c *consumer) startNewSession(tps *topicsPartitions) *consumerSession {
 // This function is responsible for issuing ListOffsets or
 // OffsetForLeaderEpoch. These requests's responses  are only handled within
 // the context of a consumer session.
-func (s *consumerSession) listOrEpoch(waiting listOrEpochLoads, immediate bool) {
+func (s *consumerSession) listOrEpoch(waiting listOrEpochLoads, immediate bool, why string) {
 	defer s.decWorker()
 
 	wait := true
 	if immediate {
-		s.c.cl.triggerUpdateMetadataNow()
+		s.c.cl.triggerUpdateMetadataNow(why)
 	} else {
-		wait = s.c.cl.triggerUpdateMetadata(false) // avoid trigger if within refresh interval
+		wait = s.c.cl.triggerUpdateMetadata(false, why) // avoid trigger if within refresh interval
 	}
 
 	s.listOrEpochMu.Lock() // collapse any listOrEpochs that occur during meta update into one
@@ -1217,7 +1217,7 @@ func (s *consumerSession) listOrEpoch(waiting listOrEpochLoads, immediate bool) 
 				// add things back to the session, we could abandon
 				// loading these offsets and have a stuck cursor.
 				defer s.decWorker()
-				defer reloads.loadWithSession(s)
+				defer reloads.loadWithSession(s, "reload offsets from load failure")
 				after := time.NewTimer(time.Second)
 				defer after.Stop()
 				select {

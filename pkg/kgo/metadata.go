@@ -37,7 +37,7 @@ func (m *metawait) signal() {
 
 // waitmeta returns immediately if metadata was updated within the last second,
 // otherwise this waits for up to wait for a metadata update to complete.
-func (cl *Client) waitmeta(ctx context.Context, wait time.Duration) {
+func (cl *Client) waitmeta(ctx context.Context, wait time.Duration, why string) {
 	now := time.Now()
 
 	cl.metawait.mu.Lock()
@@ -47,7 +47,7 @@ func (cl *Client) waitmeta(ctx context.Context, wait time.Duration) {
 	}
 	cl.metawait.mu.Unlock()
 
-	cl.triggerUpdateMetadataNow()
+	cl.triggerUpdateMetadataNow(why)
 
 	quit := false
 	done := make(chan struct{})
@@ -81,7 +81,7 @@ func (cl *Client) waitmeta(ctx context.Context, wait time.Duration) {
 	cl.metawait.c.Broadcast()
 }
 
-func (cl *Client) triggerUpdateMetadata(must bool) bool {
+func (cl *Client) triggerUpdateMetadata(must bool, why string) bool {
 	if !must {
 		cl.metawait.mu.Lock()
 		defer cl.metawait.mu.Unlock()
@@ -91,15 +91,15 @@ func (cl *Client) triggerUpdateMetadata(must bool) bool {
 	}
 
 	select {
-	case cl.updateMetadataCh <- struct{}{}:
+	case cl.updateMetadataCh <- why:
 	default:
 	}
 	return true
 }
 
-func (cl *Client) triggerUpdateMetadataNow() {
+func (cl *Client) triggerUpdateMetadataNow(why string) {
 	select {
-	case cl.updateMetadataNowCh <- struct{}{}:
+	case cl.updateMetadataNowCh <- why:
 	default:
 	}
 }
@@ -119,8 +119,11 @@ func (cl *Client) updateMetadataLoop() {
 		case <-cl.ctx.Done():
 			return
 		case <-ticker.C:
-		case <-cl.updateMetadataCh:
-		case <-cl.updateMetadataNowCh:
+			cl.cfg.logger.Log(LogLevelInfo, "updating metadata due to max age ticker")
+		case why := <-cl.updateMetadataCh:
+			cl.cfg.logger.Log(LogLevelInfo, "updating metadata", "why", why)
+		case why := <-cl.updateMetadataNowCh:
+			cl.cfg.logger.Log(LogLevelInfo, "immediately updating metadata", "why", why)
 			now = true
 		}
 
@@ -134,16 +137,17 @@ func (cl *Client) updateMetadataLoop() {
 				case <-cl.ctx.Done():
 					timer.Stop()
 					return
-				case <-cl.updateMetadataNowCh:
+				case why := <-cl.updateMetadataNowCh:
 					timer.Stop()
+					cl.cfg.logger.Log(LogLevelInfo, "immediately updating metadata, bypassing normal metadata wait", "why", why)
 				case <-timer.C:
 				}
 			}
-		} else {
-			// Even with an "update now", we sleep just a bit to allow some
-			// potential pile on now triggers.
-			time.Sleep(10 * time.Millisecond)
 		}
+
+		// Even with an "update now", we sleep just a bit to allow some
+		// potential pile on now triggers.
+		time.Sleep(time.Until(lastAt.Add(10 * time.Millisecond)))
 
 		// Drain any refires that occured during our waiting.
 	out:
@@ -161,7 +165,11 @@ func (cl *Client) updateMetadataLoop() {
 			if now && nowTries < 3 {
 				goto start
 			}
-			cl.triggerUpdateMetadata(true)
+			if err != nil {
+				cl.triggerUpdateMetadata(true, fmt.Sprintf("re-updating metadata due to err: %s", err))
+			} else {
+				cl.triggerUpdateMetadata(true, "re-updating metadata due inner topic or partition error")
+			}
 		}
 		if err == nil {
 			lastAt = time.Now()
@@ -265,7 +273,7 @@ func (cl *Client) updateMetadata() (needsRetry bool, err error) {
 		if consumerSessionStopped {
 			session := cl.consumer.startNewSession(tpsPrior)
 			defer session.decWorker()
-			reloadOffsets.loadWithSession(session)
+			reloadOffsets.loadWithSession(session, "resuming reload offsets after session stopped for cursor migrating in metadata")
 		}
 	}()
 

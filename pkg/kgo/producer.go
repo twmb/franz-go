@@ -649,7 +649,7 @@ func (cl *Client) partitionsForTopicProduce(pr promisedRec) (*topicPartitions, *
 
 			p.topics.storeTopics([]string{topic})
 			cl.addUnknownTopicRecord(pr)
-			cl.triggerUpdateMetadataNow()
+			cl.triggerUpdateMetadataNow("forced load due to unknown produce topic")
 			return nil, nil
 		}
 	}
@@ -664,7 +664,7 @@ func (cl *Client) partitionsForTopicProduce(pr promisedRec) (*topicPartitions, *
 		return parts, v
 	}
 	cl.addUnknownTopicRecord(pr)
-	cl.triggerUpdateMetadata(false)
+	cl.triggerUpdateMetadata(false, "reload trigger due to produce topic still not known")
 
 	return nil, nil // our record is buffered waiting for metadata update; nothing to return
 }

@@ -185,7 +185,7 @@ func (s *sink) maybeBackoff() {
 	}
 	defer s.clearBackoff()
 
-	s.cl.triggerUpdateMetadata(false) // as good a time as any
+	s.cl.triggerUpdateMetadata(false, "opportunistic load during sink backoff") // as good a time as any
 
 	tries := int(atomic.AddUint32(&s.consecutiveFailures, 1))
 	after := time.NewTimer(s.cl.cfg.retryBackoff(tries))
@@ -501,7 +501,7 @@ func (s *sink) handleReqClientErr(req *produceRequest, err error) {
 		if updateMeta {
 			s.cl.cfg.logger.Log(LogLevelInfo, "produce request failed triggering metadata update", "broker", logID(s.nodeID), "err", err)
 		}
-		s.handleRetryBatches(req.batches, req.backoffSeq, updateMeta, false)
+		s.handleRetryBatches(req.batches, req.backoffSeq, updateMeta, false, "failed produce request triggering metadata update")
 
 	case err == ErrClientClosed:
 		s.cl.failBufferedRecords(ErrClientClosed)
@@ -623,10 +623,10 @@ func (s *sink) handleReqResp(br *broker, req *produceRequest, resp kmsg.Response
 
 	if len(req.batches) > 0 {
 		s.cl.cfg.logger.Log(LogLevelError, "Kafka did not reply to all topics / partitions in the produce request! reenqueuing missing partitions", "broker", logID(s.nodeID))
-		s.handleRetryBatches(req.batches, 0, true, false)
+		s.handleRetryBatches(req.batches, 0, true, false, "kafka did not reply to all topics in produce request")
 	}
 	if len(reqRetry) > 0 {
-		s.handleRetryBatches(reqRetry, 0, true, true)
+		s.handleRetryBatches(reqRetry, 0, true, true, "produce request had retry batches")
 	}
 }
 
@@ -867,6 +867,7 @@ func (s *sink) handleRetryBatches(
 	backoffSeq uint32,
 	updateMeta bool, // if we should maybe update the metadata
 	canFail bool, // if records can fail if they are at limits
+	why string,
 ) {
 	var needsMetaUpdate bool
 	retry.eachOwnerLocked(func(batch seqRecBatch) {
@@ -896,7 +897,7 @@ func (s *sink) handleRetryBatches(
 	// If we do want to metadata update, we only do so if any batch was the
 	// first batch in its buf / not concurrently failed.
 	if needsMetaUpdate {
-		s.cl.triggerUpdateMetadata(true)
+		s.cl.triggerUpdateMetadata(true, why)
 	} else if !updateMeta {
 		s.maybeTriggerBackoff(backoffSeq)
 		s.maybeDrain()

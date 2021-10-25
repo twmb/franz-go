@@ -78,8 +78,8 @@ type Client struct {
 	coordinatorsMu sync.Mutex
 	coordinators   map[coordinatorKey]*coordinatorLoad
 
-	updateMetadataCh    chan struct{}
-	updateMetadataNowCh chan struct{} // like above, but with high priority
+	updateMetadataCh    chan string
+	updateMetadataNowCh chan string // like above, but with high priority
 	metawait            metawait
 	metadone            chan struct{}
 }
@@ -164,8 +164,8 @@ func NewClient(opts ...Opt) (*Client, error) {
 
 		coordinators: make(map[coordinatorKey]*coordinatorLoad),
 
-		updateMetadataCh:    make(chan struct{}, 1),
-		updateMetadataNowCh: make(chan struct{}, 1),
+		updateMetadataCh:    make(chan string, 1),
+		updateMetadataNowCh: make(chan string, 1),
 		metadone:            make(chan struct{}),
 	}
 

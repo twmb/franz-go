@@ -233,7 +233,7 @@ func (p *cursorOffsetPreferred) move() {
 	c.source.cl.sinksAndSourcesMu.Unlock()
 
 	if !exists {
-		c.source.cl.triggerUpdateMetadataNow()
+		c.source.cl.triggerUpdateMetadataNow("cursor moving to a different broker that is not yet known")
 		return
 	}
 
@@ -604,7 +604,7 @@ func (s *source) fetch(consumerSession *consumerSession, doneFetch chan<- struct
 		alreadySentToDoneFetch = true
 		s.session.reset()
 
-		s.cl.triggerUpdateMetadata(false) // as good a time as any
+		s.cl.triggerUpdateMetadata(false, "opportunistic load during source backoff") // as good a time as any
 		s.consecutiveFailures++
 		after := time.NewTimer(s.cl.cfg.retryBackoff(s.consecutiveFailures))
 		defer after.Stop()
@@ -695,7 +695,7 @@ func (s *source) fetch(consumerSession *consumerSession, doneFetch chan<- struct
 	case kerr.FetchSessionTopicIDError, kerr.UnknownTopicID, kerr.InconsistentTopicID:
 		s.cl.cfg.logger.Log(LogLevelInfo, "topic id issues, resetting session and updating metadata", "broker", logID(s.nodeID), "err", err)
 		s.session.reset()
-		s.cl.triggerUpdateMetadataNow()
+		s.cl.triggerUpdateMetadataNow("topic id issues")
 		return
 
 	}
@@ -721,8 +721,8 @@ func (s *source) fetch(consumerSession *consumerSession, doneFetch chan<- struct
 		s.session.reset()
 	}
 
-	if updateMeta && !reloadOffsets.loadWithSessionNow(consumerSession) {
-		s.cl.triggerUpdateMetadataNow()
+	if updateMeta && !reloadOffsets.loadWithSessionNow(consumerSession, "out of range offset / fenced leader epoch caused reload offsets on fetch") {
+		s.cl.triggerUpdateMetadataNow("fetch partitition had an error causing immediate metadata update")
 	}
 
 	if fetch.hasErrorsOrRecords() {
