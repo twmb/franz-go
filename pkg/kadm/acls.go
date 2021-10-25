@@ -1,0 +1,935 @@
+package kadm
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"sync"
+
+	"github.com/twmb/franz-go/pkg/kerr"
+	"github.com/twmb/franz-go/pkg/kmsg"
+)
+
+// ACLBuilder is a builder that is used for batch creating / listing / deleting
+// ACLS.
+//
+// An ACL consists of five components:
+//
+//     - the user (principal)
+//     - the host the user runs on
+//     - what resource to access (topic name, group id, etc.)
+//     - the operation (read, write)
+//     - whether to allow or deny the above
+//
+// This builder allows for adding the above five components in batches and then
+// creating, listing, or deleting a batch of ACLs in one go. This builder
+// merges the fifth component (allowing or denying) into allowing users and
+// hosts and denying users and hosts. The builder must always have an Allow or
+// Deny. For creating, the host is optional and defaults to the wildcard * that
+// allows or denies all hosts. For listing / deleting, the host is also
+// required (specifying no hosts matches all hosts, but you must specify this).
+//
+// Building works on a multiplying factor: every user, every host, every
+// resource, and every operation is combined (users * hosts * resources *
+// operations).
+//
+// With the Kafka simple authorizor (and most reimplementations), all users are
+// required to have the "User:" prefix. The Allow and Deny functions prefix
+// input users with "User:" if the prefix is missing.
+//
+// The full set of operations and which requests require what operations is
+// described in a large doc comment on the ACLOperation type.
+//
+// Lastly, resources to access / deny access to can be created / matched based
+// on literal (exact) names, or on prefix names, or more. See the ACLPattern
+// docs for more information.
+type ACLBuilder struct {
+	any         []string
+	anyResource bool
+	topics      []string
+	anyTopic    bool
+	groups      []string
+	anyGroup    bool
+	anyCluster  bool
+	txnIDs      []string
+	anyTxn      bool
+	tokens      []string
+	anyToken    bool
+
+	allow         []string
+	anyAllow      bool
+	allowHosts    []string
+	anyAllowHosts bool
+	deny          []string
+	anyDeny       bool
+	denyHosts     []string
+	anyDenyHosts  bool
+
+	ops []ACLOperation
+
+	pattern ACLPattern
+}
+
+func (b *ACLBuilder) prefixUser() {
+	for i, u := range b.allow {
+		if !strings.HasPrefix(u, "User:") {
+			b.allow[i] = "User:" + u
+		}
+	}
+	for i, u := range b.deny {
+		if !strings.HasPrefix(u, "User:") {
+			b.deny[i] = "User:" + u
+		}
+	}
+}
+
+// NewACLs returns a new ACL builder.
+func NewACLs() *ACLBuilder {
+	return new(ACLBuilder)
+}
+
+// AnyResource lists & deletes ACLs of any type matching the given names
+// (pending other filters). If no names are given, this matches all names.
+//
+// This returns the input pointer.
+//
+// This function does nothing for creating.
+func (b *ACLBuilder) AnyResource(name ...string) *ACLBuilder {
+	b.any = name
+	if len(name) == 0 {
+		b.anyResource = true
+	}
+	return b
+}
+
+// Topics lists/deletes/creates ACLs of resource type "topic" for the given
+// topics.
+//
+// This returns the input pointer.
+//
+// For listing or deleting, if this is provided no topics, all "topic" resource
+// type ACLs are matched. For creating, if no topics are provided, this
+// function does nothing.
+func (b *ACLBuilder) Topics(t ...string) *ACLBuilder {
+	b.topics = t
+	if len(t) == 0 {
+		b.anyTopic = true
+	}
+	return b
+}
+
+// Groups lists/deletes/creates ACLs of resource type "group" for the given
+// groups.
+//
+// This returns the input pointer.
+//
+// For listing or deleting, if this is provided no groups, all "group" resource
+// type ACLs are matched. For creating, if no groups are provided, this
+// function does nothing.
+func (b *ACLBuilder) Groups(g ...string) *ACLBuilder {
+	b.groups = g
+	if len(g) == 0 {
+		b.anyGroup = true
+	}
+	return b
+}
+
+// Clusters lists/deletes/creates ACLs of resource type "cluster".
+//
+// This returns the input pointer.
+//
+// There is only one type of cluster in Kafka, "kafka-cluster". Opting in to
+// listing or deleting by cluster inherently matches all ACLS of resource type
+// cluster. For creating, this function allows for creating cluster ACLs.
+func (b *ACLBuilder) Clusters() *ACLBuilder {
+	b.anyCluster = true
+	return b
+}
+
+// TransactionalIDs lists/deletes/creates ACLs of resource type
+// "transactional_id" for the given transactional IDs.
+//
+// This returns the input pointer.
+//
+// For listing or deleting, if this is provided no IDs, all "transactional_id"
+// resource type ACLs matched. For creating, if no IDs are provided, this
+// function does nothing.
+func (b *ACLBuilder) TransactionalIDs(x ...string) *ACLBuilder {
+	b.txnIDs = x
+	if len(x) == 0 {
+		b.anyTxn = true
+	}
+	return b
+}
+
+// DelegationTokens lists/deletes/creates ACLs of resource type
+// "delegation_token" for the given delegation tokens.
+//
+// This returns the input pointer.
+//
+// For listing or deleting, if this is provided no tokens, all
+// "delegation_token" resource type ACLs are matched. For creating, if no
+// tokens are provided, this function does nothing.
+func (b *ACLBuilder) DelegationTokens(t ...string) *ACLBuilder {
+	b.tokens = t
+	if len(t) == 0 {
+		b.anyToken = true
+	}
+	return b
+}
+
+// Allow sets the users to add allow permissions for. For listing and deleting,
+// you must also use AllowHosts.
+//
+// This function automatically adds a "User:" prefix to all users that are
+// missing it. This returns the input pointer.
+//
+// For creating, if this is not paired with AllowHosts, the user will have
+// access to all hosts (the wildcard *).
+//
+// For listing & deleting, if the users are empty, this matches any user.
+func (b *ACLBuilder) Allow(users ...string) *ACLBuilder {
+	b.allow = users
+	if len(users) == 0 {
+		b.anyAllow = true
+	}
+	return b
+}
+
+// AllowHosts sets the hosts to add allow permissions for. If using this, you
+// must also use Allow.
+//
+// This returns the input pointer.
+//
+// For creating, if this is empty, the user will have access to all hosts (the
+// wildcard *) and this function is actually not necessary.
+//
+// For listing & deleting, if the hosts are empty, this matches any host.
+func (b *ACLBuilder) AllowHosts(hosts ...string) *ACLBuilder {
+	b.allowHosts = hosts
+	if len(hosts) == 0 {
+		b.anyAllowHosts = true
+	}
+	return b
+}
+
+// Deny sets the users to add deny permissions for. For listing and deleting,
+// you must also use DenyHosts.
+//
+// This function automatically adds a "User:" prefix to all users that are
+// missing it. This returns the input pointer.
+// chaining.
+//
+// For creating, if this is not paired with DenyHosts, the user will be denied
+// access to all hosts (the wildcard *).
+//
+// For listing & deleting, if the users are empty, this matches any user.
+func (b *ACLBuilder) Deny(users ...string) *ACLBuilder {
+	b.deny = users
+	if len(users) == 0 {
+		b.anyDeny = true
+	}
+	return b
+}
+
+// DenyHosts sets the hosts to add deny permissions for. If using this, you
+// must also use Deny.
+//
+// This returns the input pointer.
+//
+// For creating, if this is empty, the user will be denied access to all hosts
+// (the wildcard *) and this function is actually not necessary.
+//
+// For listing & deleting, if the hosts are empty, this matches any host.
+func (b *ACLBuilder) DenyHosts(hosts ...string) *ACLBuilder {
+	b.denyHosts = hosts
+	if len(hosts) == 0 {
+		b.anyDenyHosts = true
+	}
+	return b
+}
+
+// ACLOperation is a type alias for kmsg.ACLOperation, which is an enum
+// containing all Kafka ACL operations and has helper functions.
+//
+// Kafka requests require the following operations (broker <=> broker ACLs
+// elided):
+//
+//     PRODUCING/CONSUMING
+//     ===================
+//     Produce      WRITE on TOPIC for topics
+//                  WRITE on TRANSACTIONAL_ID for txn id (if transactionally producing)
+//
+//     Fetch        READ on TOPIC for topics
+//
+//     ListOffsets  DESCRIBE on TOPIC for topics
+//
+//     Metadata     DESCRIBE on TOPIC for topics
+//                  CREATE on CLUSTER for kafka-cluster (if automatically creating new topics)
+//                  CREATE on TOPIC for topics (if automatically creating new topics)
+//
+//     OffsetForLeaderEpoch  DESCRIBE on TOPIC for topics
+//
+//     GROUPS
+//     ======
+//     FindCoordinator  DESCRIBE on GROUP for group (if finding group coordinator)
+//                      DESCRIBE on TRANSACTIONAL_ID for id (if finding transactiona coordinator)
+//
+//     OffsetCommit     READ on GROUP for group
+//                      READ on TOPIC for topics
+//
+//     OffsetFetch      DESCRIBE on GROUP for group
+//                      DESCRIBE on TOPIC for topics
+//
+//     OffsetDelete     DELETE on GROUP For group
+//                      READ on TOPIC for topics
+//
+//     JoinGroup        READ on GROUP for group
+//     Heartbeat        READ on GROUP for group
+//     LeaveGroup       READ on GROUP for group
+//     SyncGroup        READ on GROUP for group
+//
+//     DescribeGroup    DESCRIBE on GROUP for groups
+//
+//     ListGroups       DESCRIBE on GROUP for groups
+//                      or, DESCRIBE on CLUSTER for kafka-cluster
+//
+//     DeleteGroups     DELETE on GROUP for groups
+//
+//     TRANSACTIONS (including FindCoordinator above)
+//     ============
+//     InitProducerID      WRITE on TRANSACTIONAL_ID for id, if using transactions
+//                         or, IDEMPOTENT_WRITE on CLUSTER for kafka-cluster, if pre Kafka 3.0
+//                         or, WRITE on TOPIC for any topic, if Kafka 3.0+
+//
+//     AddPartitionsToTxn  WRITE on TRANSACTIONAL_ID for id
+//                         WRITE on TOPIC for topics
+//
+//     AddOffsetsToTxn     WRITE on TRANSACTIONAL_ID for id
+//                         READ on GROUP for group
+//
+//     EndTxn              WRITE on TRANSACTIONAL_ID for id
+//
+//     TxnOffsetCommit     WRITE on TRANSACTIONAL_ID for id
+//                         READ on GROUP for group
+//                         READ on TOPIC for topics
+//
+//     TOPIC ADMIN
+//     ===========
+//     CreateTopics      CREATE on CLUSTER for kafka-cluster
+//                       CREATE on TOPIC for topics
+//                       DESCRIBE_CONFIGS on TOPIC for topics, for returning topic configs on create
+//
+//     CreatePartitions  ALTER on TOPIC for topics
+//
+//     DeleteTopics      DELETE on TOPIC for topics
+//                       DESCRIBE on TOPIC for topics, if deleting by topic id (in addition to prior ACL)
+//
+//     DeleteRecords     DELETE on TOPIC for topics
+//
+//     CONFIG ADMIN
+//     ============
+//     DescribeConfigs          DESCRIBE_CONFIGS on CLUSTER for kafka-cluster, for broker or broker-logger describing
+//                              DESCRIBE_CONFIGS on TOPIC for topics, for topic describing
+//
+//     AlterConfigs             ALTER_CONFIGS on CLUSTER for kafka-cluster, for broker altering
+//                              ALTER_CONFIGS on TOPIC for topics, for topic altering
+//
+//     IncrementalAlterConfigs  ALTER_CONFIGS on CLUSTER for kafka-cluster, for broker or broker-logger altering
+//                              ALTER_CONFIGS on TOPIC for topics, for topic altering
+//
+//
+//     MISC ADMIN
+//     ==========
+//     AlterReplicaLogDirs  ALTER on CLUSTER for kafka-cluster
+//     DescribeLogDirs      DESCRIBE on CLUSTER for kafka-cluster
+//
+//     AlterPartitionAssignments   ALTER on CLUSTER for kafka-cluster
+//     ListPartitionReassignments  DESCRIBE on CLUSTER for kafka-cluster
+//
+//     DescribeDelegationTokens    DESCRIBE on DELEGATION_TOKEN for id
+//
+//     ElectLeaders          ALTER on CLUSTER for kafka-cluster
+//
+//     DescribeClientQuotas  DESCRIBE_CONFIGS on CLUSTER for kafka-cluster
+//     AlterClientQuotas     ALTER_CONFIGS on CLUSTER for kafka-cluster
+//
+//     DescribeUserScramCredentials  DESCRIBE on CLUSTER for kafka-cluster
+//     AlterUserScramCredentials     ALTER on CLUSTER for kafka-cluster
+//
+//     UpdateFeatures        ALTER on CLUSTER for kafka-cluster
+//
+//     DescribeCluster       DESCRIBE on CLUSTER for kafka-cluster
+//
+//     DescribeProducerIDs   READ on TOPIC for topics
+//     DescribeTransactions  DESCRIBE on TRANSACTIONAL_ID for ids
+//                           DESCRIBE on TOPIC for topics
+//     ListTransactions      DESCRIBE on TRANSACTIONAL_ID for ids
+//
+type ACLOperation = kmsg.ACLOperation
+
+const (
+	// OpUnknown is returned for unknown operations.
+	OpUnknown ACLOperation = kmsg.ACLOperationUnknown
+
+	// OpAny, used for listing and deleting, matches any operation.
+	OpAny ACLOperation = kmsg.ACLOperationAny
+
+	// OpAll is a shortcut for allowing / denying all operations.
+	OpAll ACLOperation = kmsg.ACLOperationAll
+
+	// OpRead is the READ operation.
+	OpRead ACLOperation = kmsg.ACLOperationRead
+
+	// OpWrite is the WRITE operation.
+	OpWrite ACLOperation = kmsg.ACLOperationWrite
+
+	// OpCreate is the CREATE operation.
+	OpCreate ACLOperation = kmsg.ACLOperationCreate
+
+	// OpDelete is the DELETE operation.
+	OpDelete ACLOperation = kmsg.ACLOperationDelete
+
+	// OpAlter is the ALTER operation.
+	OpAlter ACLOperation = kmsg.ACLOperationAlter
+
+	// OpDescribe is the DESCRIBE operation.
+	OpDescribe ACLOperation = kmsg.ACLOperationDescribe
+
+	// OpClusterAction is the CLUSTER_ACTION operation. This operation is
+	// used for any broker<=>broker communication and is not needed by
+	// clients.
+	OpClusterAction ACLOperation = kmsg.ACLOperationClusterAction
+
+	// OpDescribeConfigs is the DESCRIBE_CONFIGS operation.
+	OpDescribeConfigs ACLOperation = kmsg.ACLOperationDescribeConfigs
+
+	// OpAlterConfigs is the ALTER_CONFIGS operation.
+	OpAlterConfigs ACLOperation = kmsg.ACLOperationAlterConfigs
+
+	// OpIdempotentWrite is the IDEMPOTENT_WRITE operation. As of Kafka
+	// 3.0+, this has been deprecated and replaced by the ability to WRITE
+	// on any topic.
+	OpIdempotentWrite ACLOperation = kmsg.ACLOperationIdempotentWrite
+)
+
+// Ops sets operations to allow or deny. Passing no operations defaults to
+// OpAny.
+//
+// This returns the input pointer.
+//
+// For creating, OpAny returns an error, for it is strictly used for filters
+// (listing & deleting).
+func (b *ACLBuilder) Ops(operations ...ACLOperation) *ACLBuilder {
+	b.ops = operations
+	if len(operations) == 0 {
+		b.ops = []ACLOperation{OpAny}
+	}
+	return b
+}
+
+// ACLPattern is a type alias for kmsg.ACLResourcePatternType, which is an enum
+// containing all Kafka ACL resource pattern options.
+//
+// Creating/listing/deleting ACLs works on a resource name basis: every ACL
+// created has a name, and every ACL filtered for listing / deleting matches by
+// name. The name by default is "literal", meaning created ACLs will have the
+// exact name, and matched ACLs must match completely.
+//
+// Prefixed names allow for creating an ACL that matches any prefix: users
+// foo-bar and foo-baz both have the prefix "foo-", meaning a READ on TOPIC for
+// User:foo- with prefix pattern will allow both of those users to read the
+// topic.
+//
+// Any and match are used for listing and deleting. Any will match any name, be
+// it literal or prefix or a wildcard name. There is no need for specifying
+// topics, groups, etc. when using any resource pattern.
+//
+// Alternatively, match requires a name, but it matches any literal name (exact
+// match), any prefix, and any wildcard.
+type ACLPattern = kmsg.ACLResourcePatternType
+
+const (
+	// ACLPatternUnknown is returned for unknown patterns.
+	ACLPatternUnknown ACLPattern = kmsg.ACLResourcePatternTypeUnknown
+
+	// ACLPatternAny is the ANY resource pattern.
+	ACLPatternAny ACLPattern = kmsg.ACLResourcePatternTypeAny
+
+	// ACLPatternMatch is the MATCH resource pattern.
+	ACLPatternMatch ACLPattern = kmsg.ACLResourcePatternTypeMatch
+
+	// ACLPatternLiteral is the LITERAL resource pattern, the default.
+	ACLPatternLiteral ACLPattern = kmsg.ACLResourcePatternTypeLiteral
+
+	// ACLPatternPrefixed is the PREFIXED resource pattern.
+	ACLPatternPrefixed ACLPattern = kmsg.ACLResourcePatternTypePrefixed
+)
+
+// ResourcePatternType sets the pattern type to use when creating or filtering
+// ACL resource names, overriding the default of LITERAL.
+//
+// This returns the input pointer.
+//
+// For creating, only LITERAL and PREFIXED are supported.
+func (b *ACLBuilder) ResourcePatternType(pattern ACLPattern) *ACLBuilder {
+	b.pattern = pattern
+	return b
+}
+
+// CreateACLsResult is a result for an individual ACL creation.
+type CreateACLsResult struct {
+	Principal string
+	Host      string
+
+	Type       kmsg.ACLResourceType   // Type is the type of resource this is.
+	Name       string                 // Name is the name of the resource allowed / denied.
+	Pattern    ACLPattern             // Pattern is the name pattern.
+	Operation  ACLOperation           // Operation is the operation allowed / denied.
+	Permission kmsg.ACLPermissionType // Permission is whether this is allowed / denied.
+
+	Err error // Err is the error for this ACL creation.
+}
+
+// CreateACLsResults contains all results to created ACLs.
+type CreateACLsResults []CreateACLsResult
+
+// CreateACLs creates a batch of ACLs using the ACL builder, validating the
+// input before issuing the CreateACLs request.
+//
+// If the input is invalid, or if the response fails, or if the response does
+// not contain as many ACLs as we issued in our create request, this returns an
+// error.
+func (cl *Client) CreateACLs(ctx context.Context, b *ACLBuilder) (CreateACLsResults, error) {
+	for _, op := range b.ops {
+		switch op {
+		case OpAny, OpUnknown:
+			return nil, fmt.Errorf("invalid operation %s for creating ACLs", op)
+		}
+	}
+
+	switch b.pattern {
+	case ACLPatternLiteral, ACLPatternPrefixed:
+	default:
+		return nil, fmt.Errorf("invalid acl resource pattern %s for creating ACLs", b.pattern)
+	}
+
+	if len(b.allow) != 0 && len(b.allowHosts) == 0 {
+		b.allowHosts = []string{"*"}
+	}
+	if len(b.deny) != 0 && len(b.denyHosts) == 0 {
+		b.denyHosts = []string{"*"}
+	}
+	if len(b.allowHosts) != 0 && len(b.allow) == 0 {
+		return nil, fmt.Errorf("invalid allow hosts with no allow users")
+	}
+	if len(b.denyHosts) != 0 && len(b.deny) == 0 {
+		return nil, fmt.Errorf("invalid deny hosts with no deny users")
+	}
+
+	b.prefixUser()
+
+	var clusters []string
+	if b.anyCluster {
+		clusters = []string{"kafka-cluster"}
+	}
+
+	req := kmsg.NewPtrCreateACLsRequest()
+	for _, typeNames := range []struct {
+		t     kmsg.ACLResourceType
+		names []string
+	}{
+		{kmsg.ACLResourceTypeTopic, b.topics},
+		{kmsg.ACLResourceTypeGroup, b.groups},
+		{kmsg.ACLResourceTypeCluster, clusters},
+		{kmsg.ACLResourceTypeTransactionalId, b.txnIDs},
+		{kmsg.ACLResourceTypeDelegationToken, b.tokens},
+	} {
+		for _, name := range typeNames.names {
+			for _, op := range b.ops {
+				for _, perm := range []struct {
+					principals []string
+					hosts      []string
+					permType   kmsg.ACLPermissionType
+				}{
+					{b.allow, b.allowHosts, kmsg.ACLPermissionTypeAllow},
+					{b.deny, b.denyHosts, kmsg.ACLPermissionTypeDeny},
+				} {
+					for _, principal := range perm.principals {
+						for _, host := range perm.hosts {
+							c := kmsg.NewCreateACLsRequestCreation()
+							c.ResourceType = typeNames.t
+							c.ResourceName = name
+							c.ResourcePatternType = b.pattern
+							c.Operation = op
+							c.Principal = principal
+							c.Host = host
+							c.PermissionType = perm.permType
+							req.Creations = append(req.Creations, c)
+						}
+					}
+				}
+			}
+		}
+	}
+
+	resp, err := req.RequestWith(ctx, cl.cl)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(resp.Results) != len(req.Creations) {
+		return nil, fmt.Errorf("received %d results to %d creations", len(resp.Results), len(req.Creations))
+	}
+
+	var rs CreateACLsResults
+	for i, r := range resp.Results {
+		c := &req.Creations[i]
+		rs = append(rs, CreateACLsResult{
+			Principal: c.Principal,
+			Host:      c.Host,
+
+			Type:       c.ResourceType,
+			Name:       c.ResourceName,
+			Pattern:    c.ResourcePatternType,
+			Operation:  c.Operation,
+			Permission: c.PermissionType,
+
+			Err: kerr.ErrorForCode(r.ErrorCode),
+		})
+	}
+
+	return rs, nil
+}
+
+// DeletedACL an ACL that was deleted.
+type DeletedACL struct {
+	Principal string // Principal is this deleted ACL's principal.
+	Host      string // Host is this deleted ACL's host.
+
+	Type       kmsg.ACLResourceType   // Type is this deleted ACL's resource type.
+	Name       string                 // Name is this deleted ACL's resource name.
+	Pattern    ACLPattern             // Pattern is this deleted ACL's resource name pattern.
+	Operation  ACLOperation           // Operation is this deleted ACL's operation.
+	Permission kmsg.ACLPermissionType // Permission this deleted ACLs permission.
+
+	Err error // Err is non-nil if this match has an error.
+}
+
+// DeletedACLs contains ACLs that were deleted from a single delete filter.
+type DeletedACLs []DeletedACL
+
+// DeleteACLsResult contains the input used for a delete ACL filter, and the
+// deletes that the filter matched or the error for this filter.
+//
+// All fields but Deleted and Err are set from the request input. The response
+// sets either Deleted (potentially to nothing if the filter matched nothing)
+// or Err.
+type DeleteACLsResult struct {
+	Principal *string // Principal is the optional user that was used in this filter.
+	Host      *string // Host is the optional host that was used in this filter.
+
+	Type       kmsg.ACLResourceType   // Type is the type of resource used for this filter.
+	Name       *string                // Name is the name of the resource used for this filter.
+	Pattern    ACLPattern             // Pattern is the name pattern used for this filter.
+	Operation  ACLOperation           // Operation is the operation used for this filter.
+	Permission kmsg.ACLPermissionType // Permission is permission used for this filter.
+
+	Deleted DeletedACLs // Deleted contains all ACLs this delete filter matched.
+
+	Err error // Err is non-nil if this filter has an error.
+}
+
+// DeleteACLsResults contains all results to deleted ACLs.
+type DeleteACLsResults []DeleteACLsResult
+
+// DeleteACLs deletes a batch of ACLs using the ACL builder, validating the
+// input before issuing the DeleteACLs request.
+//
+// If the input is invalid, or if the response fails, or if the response does
+// not contain as many ACL results as we issued in our delete request, this
+// returns an error.
+//
+// Deleting ACLs works on a filter basis: a single filter can match many ACLs.
+// For example, deleting with operation ANY matches any operation. For safety /
+// verification purposes, you an DescribeACLs with the same builder first to
+// see what would be deleted.
+func (cl *Client) DeleteACLs(ctx context.Context, b *ACLBuilder) (DeleteACLsResults, error) {
+	dels, _, err := createDelDescACL(b)
+	if err != nil {
+		return nil, err
+	}
+
+	req := kmsg.NewPtrDeleteACLsRequest()
+	req.Filters = dels
+	resp, err := req.RequestWith(ctx, cl.cl)
+	if err != nil {
+		return nil, err
+	}
+	if len(resp.Results) != len(req.Filters) {
+		return nil, fmt.Errorf("received %d results to %d filters", len(resp.Results), len(req.Filters))
+	}
+
+	var rs DeleteACLsResults
+	for i, r := range resp.Results {
+		f := &req.Filters[i]
+		var ms DeletedACLs
+		for _, m := range r.MatchingACLs {
+			ms = append(ms, DeletedACL{
+				Principal:  m.Principal,
+				Host:       m.Host,
+				Type:       m.ResourceType,
+				Name:       m.ResourceName,
+				Pattern:    m.ResourcePatternType,
+				Operation:  m.Operation,
+				Permission: m.PermissionType,
+				Err:        kerr.ErrorForCode(m.ErrorCode),
+			})
+		}
+		rs = append(rs, DeleteACLsResult{
+			Principal:  f.Principal,
+			Host:       f.Host,
+			Type:       f.ResourceType,
+			Name:       f.ResourceName,
+			Pattern:    f.ResourcePatternType,
+			Operation:  f.Operation,
+			Permission: f.PermissionType,
+			Deleted:    ms,
+			Err:        kerr.ErrorForCode(r.ErrorCode),
+		})
+	}
+	return rs, nil
+}
+
+// DescribedACL is an ACL that was described.
+type DescribedACL struct {
+	Principal string // Principal is this described ACL's principal.
+	Host      string // Host is this described ACL's host.
+
+	Type       kmsg.ACLResourceType   // Type is this described ACL's resource type.
+	Name       string                 // Name is this described ACL's resource name.
+	Pattern    ACLPattern             // Pattern is this described ACL's resource name pattern.
+	Operation  ACLOperation           // Operation is this described ACL's operation.
+	Permission kmsg.ACLPermissionType // Permission this described ACLs permission.
+}
+
+// DescribedACLs contains ACLs that were described from a single describe
+// filter.
+type DescribedACLs []DescribedACL
+
+// DescribeACLsResults contains the input used for a describe ACL filter, and
+// the describes that the filter matched or the error for this filter.
+//
+// All fields but Described and Err are set from the request input. The
+// response sets either Described (potentially to nothing if the filter matched
+// nothing) or Err.
+type DescribeACLsResult struct {
+	Principal *string // Principal is the optional user that was used in this filter.
+	Host      *string // Host is the optional host that was used in this filter.
+
+	Type       kmsg.ACLResourceType   // Type is the type of resource used for this filter.
+	Name       *string                // Name is the name of the resource used for this filter.
+	Pattern    ACLPattern             // Pattern is the name pattern used for this filter.
+	Operation  ACLOperation           // Operation is the operation used for this filter.
+	Permission kmsg.ACLPermissionType // Permission is permission used for this filter.
+
+	Described DescribedACLs // Described contains all ACLs this describe filter matched.
+
+	Err error // Err is non-nil if this filter has an error.
+}
+
+// DescribeACLsResults contains all results to described ACLs.
+type DescribeACLsResults []DescribeACLsResult
+
+// DescribeACLs describes a batch of ACLs using the ACL builder, validating the
+// input before issuing DescribeACLs requests.
+//
+// If the input is invalid, or if any response fails, this returns an error.
+//
+// Listing ACLs works on a filter basis: a single filter can match many ACLs.
+// For example, describing with operation ANY matches any operation. Under the
+// hood, this method issues one describe request per filter, because describing
+// ACLs does not work on a batch basis (unlike creating & deleting). The return
+// of this function can be used to see what would be deleted given the same
+// builder input.
+func (cl *Client) DescribeACLs(ctx context.Context, b *ACLBuilder) (DescribeACLsResults, error) {
+	_, descs, err := createDelDescACL(b)
+	if err != nil {
+		return nil, err
+	}
+
+	var (
+		ictx, cancel = context.WithCancel(ctx)
+		mu           sync.Mutex
+		wg           sync.WaitGroup
+		firstErr     error
+		resps        = make([]*kmsg.DescribeACLsResponse, len(descs))
+	)
+	defer cancel()
+	for i := range descs {
+		req := descs[i]
+		myIdx := i
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			resp, err := req.RequestWith(ictx, cl.cl)
+			resps[myIdx] = resp
+			if err == nil {
+				return
+			}
+			cancel()
+			mu.Lock()
+			defer mu.Unlock()
+			if firstErr == nil { // keep the first err
+				firstErr = err
+			}
+		}()
+	}
+	wg.Wait()
+	if firstErr != nil {
+		return nil, firstErr
+	}
+
+	var rs DescribeACLsResults
+	for i, r := range resps {
+		f := descs[i]
+		var ds DescribedACLs
+		for _, resource := range r.Resources {
+			for _, acl := range resource.ACLs {
+				ds = append(ds, DescribedACL{
+					Principal:  acl.Principal,
+					Host:       acl.Host,
+					Type:       resource.ResourceType,
+					Name:       resource.ResourceName,
+					Pattern:    resource.ResourcePatternType,
+					Operation:  acl.Operation,
+					Permission: acl.PermissionType,
+				})
+			}
+		}
+		rs = append(rs, DescribeACLsResult{
+			Principal:  f.Principal,
+			Host:       f.Host,
+			Type:       f.ResourceType,
+			Name:       f.ResourceName,
+			Pattern:    f.ResourcePatternType,
+			Operation:  f.Operation,
+			Permission: f.PermissionType,
+			Described:  ds,
+			Err:        kerr.ErrorForCode(r.ErrorCode),
+		})
+	}
+	return rs, nil
+}
+
+var any = []string{"any"}
+
+func createDelDescACL(b *ACLBuilder) ([]kmsg.DeleteACLsRequestFilter, []*kmsg.DescribeACLsRequest, error) {
+	if len(b.allowHosts) != 0 && len(b.allow) == 0 && !b.anyAllow {
+		return nil, nil, fmt.Errorf("invalid allow hosts with no allow users")
+	}
+	if len(b.allow) != 0 && len(b.allowHosts) == 0 && !b.anyAllowHosts {
+		return nil, nil, fmt.Errorf("invalid allow users with no allow hosts")
+	}
+	if len(b.denyHosts) != 0 && len(b.deny) == 0 && !b.anyDeny {
+		return nil, nil, fmt.Errorf("invalid deny hosts with no deny users")
+	}
+	if len(b.deny) != 0 && len(b.denyHosts) == 0 && !b.anyDenyHosts {
+		return nil, nil, fmt.Errorf("invalid deny users with no deny hosts")
+	}
+
+	b.prefixUser()
+
+	var clusters []string
+	if b.anyCluster {
+		clusters = []string{"kafka-cluster"}
+	}
+	var deletions []kmsg.DeleteACLsRequestFilter
+	var describes []*kmsg.DescribeACLsRequest
+	for _, typeNames := range []struct {
+		t     kmsg.ACLResourceType
+		names []string
+		any   bool
+	}{
+		{kmsg.ACLResourceTypeAny, b.any, b.anyResource},
+		{kmsg.ACLResourceTypeTopic, b.topics, b.anyTopic},
+		{kmsg.ACLResourceTypeGroup, b.groups, b.anyGroup},
+		{kmsg.ACLResourceTypeCluster, clusters, b.anyCluster},
+		{kmsg.ACLResourceTypeTransactionalId, b.txnIDs, b.anyTxn},
+		{kmsg.ACLResourceTypeDelegationToken, b.tokens, b.anyToken},
+	} {
+		if typeNames.any {
+			typeNames.names = any
+		}
+		for _, name := range typeNames.names {
+			for _, op := range b.ops {
+				for _, perm := range []struct {
+					principals   []string
+					anyPrincipal bool
+					hosts        []string
+					anyHost      bool
+					permType     kmsg.ACLPermissionType
+				}{
+					{
+						b.allow,
+						b.anyAllow,
+						b.allowHosts,
+						b.anyAllowHosts,
+						kmsg.ACLPermissionTypeAllow,
+					},
+					{
+						b.deny,
+						b.anyDeny,
+						b.denyHosts,
+						b.anyDenyHosts,
+						kmsg.ACLPermissionTypeDeny,
+					},
+				} {
+					if perm.anyPrincipal {
+						perm.principals = any
+					}
+					if perm.anyHost {
+						perm.hosts = any
+					}
+					for _, principal := range perm.principals {
+						for _, host := range perm.hosts {
+							deletion := kmsg.NewDeleteACLsRequestFilter()
+							describe := kmsg.NewPtrDescribeACLsRequest()
+
+							deletion.ResourceType = typeNames.t
+							describe.ResourceType = typeNames.t
+
+							if !typeNames.any {
+								deletion.ResourceName = kmsg.StringPtr(name)
+								describe.ResourceName = kmsg.StringPtr(name)
+							}
+
+							deletion.ResourcePatternType = b.pattern
+							describe.ResourcePatternType = b.pattern
+
+							deletion.Operation = op
+							describe.Operation = op
+
+							if !perm.anyPrincipal {
+								deletion.Principal = kmsg.StringPtr(principal)
+								describe.Principal = kmsg.StringPtr(principal)
+							}
+
+							if !perm.anyHost {
+								deletion.Host = kmsg.StringPtr(host)
+								describe.Host = kmsg.StringPtr(host)
+							}
+
+							deletion.PermissionType = perm.permType
+							describe.PermissionType = perm.permType
+
+							deletions = append(deletions, deletion)
+							describes = append(describes, describe)
+						}
+					}
+				}
+			}
+		}
+	}
+	return deletions, describes, nil
+}
