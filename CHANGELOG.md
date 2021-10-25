@@ -1,3 +1,18 @@
+v1.2.2
+===
+
+This patch release fixes a bug with cooperative group consuming. If a
+cooperative group member rebalances before offset fetching returns, then it
+will not resume offset fetching partitions it kept across the rebalance. It
+will only offset fetch new partitions.
+
+This release fixes that by tracking a bit of fetch state across rebalances for
+cooperative consumers. See the embedded comments in the commit for more
+details.
+
+- [`4f2e7fe`](https://github.com/twmb/franz-go/commit/4f2e7fe) **bugfix** consumer group: fix cooperative rebalancing losing offset fetches
+
+
 v1.2.1
 ===
 
