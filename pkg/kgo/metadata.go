@@ -119,11 +119,11 @@ func (cl *Client) updateMetadataLoop() {
 		case <-cl.ctx.Done():
 			return
 		case <-ticker.C:
-			cl.cfg.logger.Log(LogLevelInfo, "updating metadata due to max age ticker")
+			// We do not log on the standard update case.
 		case why := <-cl.updateMetadataCh:
-			cl.cfg.logger.Log(LogLevelInfo, "updating metadata", "why", why)
+			cl.cfg.logger.Log(LogLevelInfo, "metadata update triggered", "why", why)
 		case why := <-cl.updateMetadataNowCh:
-			cl.cfg.logger.Log(LogLevelInfo, "immediately updating metadata", "why", why)
+			cl.cfg.logger.Log(LogLevelInfo, "immediate metadata update triggered", "why", why)
 			now = true
 		}
 
@@ -139,7 +139,7 @@ func (cl *Client) updateMetadataLoop() {
 					return
 				case why := <-cl.updateMetadataNowCh:
 					timer.Stop()
-					cl.cfg.logger.Log(LogLevelInfo, "immediately updating metadata, bypassing normal metadata wait", "why", why)
+					cl.cfg.logger.Log(LogLevelInfo, "immediate metadata update triggered, bypassing normal wait", "why", why)
 				case <-timer.C:
 				}
 			}
