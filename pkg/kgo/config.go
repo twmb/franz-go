@@ -405,8 +405,8 @@ func defaultCfg() cfg {
 			rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 			return func(fails int) time.Duration {
 				const (
-					min = 100 * time.Millisecond
-					max = time.Second
+					min = 250 * time.Millisecond
+					max = 5 * time.Second / 2
 				)
 				if fails <= 0 {
 					return min
@@ -638,7 +638,7 @@ func MinVersions(versions *kversion.Versions) Opt {
 
 // RetryBackoffFn sets the backoff strategy for how long to backoff for a given
 // amount of retries, overriding the default jittery exponential backoff that
-// ranges from 100ms min to 1s max.
+// ranges from 250ms min to 2.5s max.
 //
 // This (roughly) corresponds to Kafka's retry.backoff.ms setting and
 // retry.backoff.max.ms (which is being introduced with KIP-500).
