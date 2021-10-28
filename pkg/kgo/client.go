@@ -269,13 +269,6 @@ func (c *connTimeouter) timeouts(req kmsg.Request) (r, w time.Duration) {
 	case *kmsg.FetchRequest:
 		return def + millis(t.MaxWaitMillis), def
 
-	// SASL may interact with an external system; we give each step
-	// of the read process 30s by default.
-
-	case *kmsg.SASLHandshakeRequest,
-		*kmsg.SASLAuthenticateRequest:
-		return 30 * time.Second, def
-
 	// Join and sync can take a long time. Sync has no notion of
 	// timeouts, but since the flow of requests should be first
 	// join, then sync, we can stash the timeout from the join.
