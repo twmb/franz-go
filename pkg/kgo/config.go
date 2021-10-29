@@ -1034,7 +1034,7 @@ func TransactionTimeout(timeout time.Duration) ProducerOpt {
 // fetch response to hit the minimum number of required bytes before returning,
 // overriding the default 5s.
 //
-// This corresponds to the Java replica.fetch.wait.max.ms setting.
+// This corresponds to the Java fetch.max.wait.ms setting.
 func FetchMaxWait(wait time.Duration) ConsumerOpt {
 	return consumerOpt{func(cfg *cfg) { cfg.maxWait = int32(wait.Milliseconds()) }}
 }
