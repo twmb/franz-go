@@ -420,10 +420,29 @@ func (rs CreatePartitionsResponses) On(topic string, fn func(*CreatePartitionsRe
 // partitions request itself, instead, authorization failures are included in
 // the responses. Before adding partitions, this request must issue a metadata
 // request to learn the current count of partitions. If that fails, this
-// returns the metadata request error. You may consider checking
+// returns the metadata request error. If you already know the final amount of
+// partitions you want, you can use UpdatePartitions to set the count directly
+// (rather than adding to the current count). You may consider checking
 // ValidateCreatePartitions before using this method.
 func (cl *Client) CreatePartitions(ctx context.Context, add int, topics ...string) (CreatePartitionsResponses, error) {
-	return cl.createPartitions(ctx, false, add, topics)
+	return cl.createPartitions(ctx, false, add, -1, topics)
+}
+
+// UpdatePartitions issues a create partitions request for the given topics,
+// setting the final partition count to "set" for each topic. This request lets
+// Kafka choos where the new partitions should be.
+//
+// This does not return an error on authorization failures for the create
+// partitions request itself, instead, authorization failures are included in
+// the responses. Unlike CreatePartitions, this request uses your "set" value
+// to set the new final count of partitions. "set" must be equal to or larger
+// than the current count of partitions in the topic. All topics will have the
+// same final count of partitions (unlike CreatePartitions, which allows you to
+// add a specific count of partitions to topics that have a different amount of
+// current partitions). You may consider checking ValidateUpdatePartitions
+// before using this method.
+func (cl *Client) UpdatePartitions(ctx context.Context, set int, topics ...string) (CreatePartitionsResponses, error) {
+	return cl.createPartitions(ctx, false, -1, set, topics)
 }
 
 // ValidateCreatePartitions validates a create partitions request for adding
@@ -433,17 +452,31 @@ func (cl *Client) CreatePartitions(ctx context.Context, add int, topics ...strin
 // ValidateOnly field set to true. The response is the same response you would
 // receive from CreatePartitions, but no partitions are actually added.
 func (cl *Client) ValidateCreatePartitions(ctx context.Context, add int, topics ...string) (CreatePartitionsResponses, error) {
-	return cl.createPartitions(ctx, true, add, topics)
+	return cl.createPartitions(ctx, true, add, -1, topics)
 }
 
-func (cl *Client) createPartitions(ctx context.Context, dry bool, add int, topics []string) (CreatePartitionsResponses, error) {
+// ValidateUpdatePartitions validates a create partitions request for setting
+// the partition count on the given topics to "set".
+//
+// This uses the same logic as UpdatePartitions, but with the request's
+// ValidateOnly field set to true. The response is the same response you would
+// receive from UpdatePartitions, but no partitions are actually added.
+func (cl *Client) ValidateUpdatePartitions(ctx context.Context, set int, topics ...string) (CreatePartitionsResponses, error) {
+	return cl.createPartitions(ctx, true, -1, set, topics)
+}
+
+func (cl *Client) createPartitions(ctx context.Context, dry bool, add, set int, topics []string) (CreatePartitionsResponses, error) {
 	if len(topics) == 0 {
 		return make(CreatePartitionsResponses), nil
 	}
 
-	td, err := cl.ListTopics(ctx, topics...)
-	if err != nil {
-		return nil, err
+	var td TopicDetails
+	var err error
+	if add != -1 {
+		td, err = cl.ListTopics(ctx, topics...)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	req := kmsg.NewCreatePartitionsRequest()
@@ -452,7 +485,11 @@ func (cl *Client) createPartitions(ctx context.Context, dry bool, add int, topic
 	for _, t := range topics {
 		rt := kmsg.NewCreatePartitionsRequestTopic()
 		rt.Topic = t
-		rt.Count = int32(len(td[t].Partitions) + add)
+		if add == -1 {
+			rt.Count = int32(set)
+		} else {
+			rt.Count = int32(len(td[t].Partitions) + add)
+		}
 		req.Topics = append(req.Topics, rt)
 	}
 
