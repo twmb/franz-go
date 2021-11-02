@@ -413,14 +413,14 @@ const (
 	OpIdempotentWrite ACLOperation = kmsg.ACLOperationIdempotentWrite
 )
 
-// Ops sets operations to allow or deny. Passing no operations defaults to
-// OpAny.
+// Operations sets operations to allow or deny. Passing no operations defaults
+// to OpAny.
 //
 // This returns the input pointer.
 //
 // For creating, OpAny returns an error, for it is strictly used for filters
 // (listing & deleting).
-func (b *ACLBuilder) Ops(operations ...ACLOperation) *ACLBuilder {
+func (b *ACLBuilder) Operations(operations ...ACLOperation) *ACLBuilder {
 	b.ops = operations
 	if len(operations) == 0 {
 		b.ops = []ACLOperation{OpAny}
@@ -477,6 +477,89 @@ func (b *ACLBuilder) ResourcePatternType(pattern ACLPattern) *ACLBuilder {
 	return b
 }
 
+// ValidateCreate returns an error if the builder is invalid for creating ACLs.
+func (b *ACLBuilder) ValidateCreate() error {
+	for _, op := range b.ops {
+		switch op {
+		case OpAny, OpUnknown:
+			return fmt.Errorf("invalid operation %s for creating ACLs", op)
+		}
+	}
+
+	switch b.pattern {
+	case ACLPatternLiteral, ACLPatternPrefixed:
+	default:
+		return fmt.Errorf("invalid acl resource pattern %s for creating ACLs", b.pattern)
+	}
+
+	if len(b.allowHosts) != 0 && len(b.allow) == 0 {
+		return fmt.Errorf("invalid allow hosts with no allow users")
+	}
+	if len(b.denyHosts) != 0 && len(b.deny) == 0 {
+		return fmt.Errorf("invalid deny hosts with no deny users")
+	}
+	return nil
+}
+
+// ValidateDelete is an alias for ValidateFilter.
+func (b *ACLBuilder) ValidateDelete() error { return b.ValidateFilter() }
+
+// ValidateDescribe is an alias for ValidateFilter.
+func (b *ACLBuilder) ValidateDescribe() error { return b.ValidateFilter() }
+
+// ValidateFilter returns an error if the builder is invalid for deleting or
+// describing ACLs (which both operate on a filter basis).
+func (b *ACLBuilder) ValidateFilter() error {
+	if len(b.allowHosts) != 0 && len(b.allow) == 0 && !b.anyAllow {
+		return fmt.Errorf("invalid allow hosts with no allow users")
+	}
+	if len(b.allow) != 0 && len(b.allowHosts) == 0 && !b.anyAllowHosts {
+		return fmt.Errorf("invalid allow users with no allow hosts")
+	}
+	if len(b.denyHosts) != 0 && len(b.deny) == 0 && !b.anyDeny {
+		return fmt.Errorf("invalid deny hosts with no deny users")
+	}
+	if len(b.deny) != 0 && len(b.denyHosts) == 0 && !b.anyDenyHosts {
+		return fmt.Errorf("invalid deny users with no deny hosts")
+	}
+	return nil
+}
+
+// HasAnyFilter returns whether any field in this builder is opted into "any",
+// meaning a wide glob. This would be if you used Topics with no topics, and so
+// on. This function can be used to detect if you accidentally opted into a
+// non-specific ACL.
+//
+// The evaluated fields are: resources, users/hosts, a single OpAny operation,
+// and an Any pattern.
+func (b *ACLBuilder) HasAnyFilter() bool {
+	return b.anyResource ||
+		b.anyTopic ||
+		b.anyGroup ||
+		b.anyTxn ||
+		b.anyToken ||
+		b.anyAllow ||
+		b.anyAllowHosts ||
+		b.anyDeny ||
+		b.anyDenyHosts ||
+		b.hasOpAny() ||
+		b.pattern == ACLPatternAny
+}
+
+func (b *ACLBuilder) hasOpAny() bool {
+	for _, op := range b.ops {
+		if op == OpAny {
+			return true
+		}
+	}
+	return false
+}
+
+func (b *ACLBuilder) dup() *ACLBuilder { // shallow copy
+	d := *b
+	return &d
+}
+
 // CreateACLsResult is a result for an individual ACL creation.
 type CreateACLsResult struct {
 	Principal string
@@ -501,32 +584,15 @@ type CreateACLsResults []CreateACLsResult
 // not contain as many ACLs as we issued in our create request, this returns an
 // error.
 func (cl *Client) CreateACLs(ctx context.Context, b *ACLBuilder) (CreateACLsResults, error) {
-	for _, op := range b.ops {
-		switch op {
-		case OpAny, OpUnknown:
-			return nil, fmt.Errorf("invalid operation %s for creating ACLs", op)
-		}
+	if err := b.ValidateCreate(); err != nil {
+		return nil, err
 	}
-
-	switch b.pattern {
-	case ACLPatternLiteral, ACLPatternPrefixed:
-	default:
-		return nil, fmt.Errorf("invalid acl resource pattern %s for creating ACLs", b.pattern)
-	}
-
 	if len(b.allow) != 0 && len(b.allowHosts) == 0 {
 		b.allowHosts = []string{"*"}
 	}
 	if len(b.deny) != 0 && len(b.denyHosts) == 0 {
 		b.denyHosts = []string{"*"}
 	}
-	if len(b.allowHosts) != 0 && len(b.allow) == 0 {
-		return nil, fmt.Errorf("invalid allow hosts with no allow users")
-	}
-	if len(b.denyHosts) != 0 && len(b.deny) == 0 {
-		return nil, fmt.Errorf("invalid deny hosts with no deny users")
-	}
-
 	b.prefixUser()
 
 	var clusters []string
@@ -825,20 +891,31 @@ func (cl *Client) DescribeACLs(ctx context.Context, b *ACLBuilder) (DescribeACLs
 var any = []string{"any"}
 
 func createDelDescACL(b *ACLBuilder) ([]kmsg.DeleteACLsRequestFilter, []*kmsg.DescribeACLsRequest, error) {
-	if len(b.allowHosts) != 0 && len(b.allow) == 0 && !b.anyAllow {
-		return nil, nil, fmt.Errorf("invalid allow hosts with no allow users")
+	if err := b.ValidateFilter(); err != nil {
+		return nil, nil, err
 	}
-	if len(b.allow) != 0 && len(b.allowHosts) == 0 && !b.anyAllowHosts {
-		return nil, nil, fmt.Errorf("invalid allow users with no allow hosts")
-	}
-	if len(b.denyHosts) != 0 && len(b.deny) == 0 && !b.anyDeny {
-		return nil, nil, fmt.Errorf("invalid deny hosts with no deny users")
-	}
-	if len(b.deny) != 0 && len(b.denyHosts) == 0 && !b.anyDenyHosts {
-		return nil, nil, fmt.Errorf("invalid deny users with no deny hosts")
-	}
-
 	b.prefixUser()
+
+	// As a special shortcut, if we have any allow and deny users and
+	// hosts, we collapse these into one "any" group. The anyAny and
+	// anyAnyHosts vars are used in our looping below, and if we do this,
+	// we dup and set all the relevant fields to false to not expand them
+	// in our loops.
+	var anyAny, anyAnyHosts bool
+	if b.anyAllow && b.anyDeny && b.anyAllowHosts && b.anyDenyHosts {
+		anyAny = true
+		anyAnyHosts = true
+
+		b = b.dup()
+		b.allow = nil
+		b.allowHosts = nil
+		b.deny = nil
+		b.denyHosts = nil
+		b.anyAllow = false
+		b.anyAllowHosts = false
+		b.anyDeny = false
+		b.anyDenyHosts = false
+	}
 
 	var clusters []string
 	if b.anyCluster {
@@ -883,6 +960,13 @@ func createDelDescACL(b *ACLBuilder) ([]kmsg.DeleteACLsRequestFilter, []*kmsg.De
 						b.denyHosts,
 						b.anyDenyHosts,
 						kmsg.ACLPermissionTypeDeny,
+					},
+					{
+						nil,
+						anyAny,
+						nil,
+						anyAnyHosts,
+						kmsg.ACLPermissionTypeAny,
 					},
 				} {
 					if perm.anyPrincipal {
