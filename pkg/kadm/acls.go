@@ -23,19 +23,20 @@ import (
 //
 // This builder allows for adding the above five components in batches and then
 // creating, listing, or deleting a batch of ACLs in one go. This builder
-// merges the fifth component (allowing or denying) into allowing users and
-// hosts and denying users and hosts. The builder must always have an Allow or
-// Deny. For creating, the host is optional and defaults to the wildcard * that
-// allows or denies all hosts. For listing / deleting, the host is also
-// required (specifying no hosts matches all hosts, but you must specify this).
+// merges the fifth component (allowing or denying) into allowing principals
+// and hosts and denying principals and hosts. The builder must always have an
+// Allow or Deny. For creating, the host is optional and defaults to the
+// wildcard * that allows or denies all hosts. For listing / deleting, the host
+// is also required (specifying no hosts matches all hosts, but you must
+// specify this).
 //
 // Building works on a multiplying factor: every user, every host, every
-// resource, and every operation is combined (users * hosts * resources *
+// resource, and every operation is combined (principals * hosts * resources *
 // operations).
 //
-// With the Kafka simple authorizor (and most reimplementations), all users are
-// required to have the "User:" prefix. The Allow and Deny functions prefix
-// input users with "User:" if the prefix is missing.
+// With the Kafka simple authorizer (and most reimplementations), all
+// principals are required to have the "User:" prefix. The PrefixUserExcept
+// function can be used to easily add the "User:" prefix if missing.
 //
 // The full set of operations and which requests require what operations is
 // described in a large doc comment on the ACLOperation type.
@@ -70,16 +71,26 @@ type ACLBuilder struct {
 	pattern ACLPattern
 }
 
-func (b *ACLBuilder) prefixUser() {
-	for i, u := range b.allow {
+// PrefixUserExcept prefixes all allowed and denied principals with "User:",
+// unless they have any of the given except prefixes.
+func (b *ACLBuilder) PrefixUserExcept(except ...string) {
+	replace := func(u string) string {
 		if !strings.HasPrefix(u, "User:") {
-			b.allow[i] = "User:" + u
+			for _, e := range except {
+				if strings.HasPrefix(u, e) {
+					return u
+				}
+			}
+			return "User:" + u
 		}
+		return u
+	}
+
+	for i, u := range b.allow {
+		b.allow[i] = replace(u)
 	}
 	for i, u := range b.deny {
-		if !strings.HasPrefix(u, "User:") {
-			b.deny[i] = "User:" + u
-		}
+		b.allow[i] = replace(u)
 	}
 }
 
@@ -198,27 +209,26 @@ func (b *ACLBuilder) DelegationTokens(t ...string) *ACLBuilder {
 // all tokens if none are provided.
 func (b *ACLBuilder) MaybeDelegationTokens(t ...string) *ACLBuilder { b.tokens = t; return b }
 
-// Allow sets the users (principals) to add allow permissions for. For listing
-// and deleting, you must also use AllowHosts.
+// Allow sets the principals to add allow permissions for. For listing and
+// deleting, you must also use AllowHosts.
 //
-// This function automatically adds a "User:" prefix to all users that are
-// missing it. This returns the input pointer.
+// This returns the input pointer.
 //
 // For creating, if this is not paired with AllowHosts, the user will have
 // access to all hosts (the wildcard *).
 //
-// For listing & deleting, if the users are empty, this matches any user.
-func (b *ACLBuilder) Allow(users ...string) *ACLBuilder {
-	b.allow = users
-	if len(users) == 0 {
+// For listing & deleting, if the principals are empty, this matches any user.
+func (b *ACLBuilder) Allow(principals ...string) *ACLBuilder {
+	b.allow = principals
+	if len(principals) == 0 {
 		b.anyAllow = true
 	}
 	return b
 }
 
-// MaybeAllow is the same as Allow, but does not match all allowed users if
-// none are provided.
-func (b *ACLBuilder) MaybeAllow(users ...string) *ACLBuilder { b.allow = users; return b }
+// MaybeAllow is the same as Allow, but does not match all allowed principals
+// if none are provided.
+func (b *ACLBuilder) MaybeAllow(principals ...string) *ACLBuilder { b.allow = principals; return b }
 
 // AllowHosts sets the hosts to add allow permissions for. If using this, you
 // must also use Allow.
@@ -241,28 +251,26 @@ func (b *ACLBuilder) AllowHosts(hosts ...string) *ACLBuilder {
 // hosts if none are provided.
 func (b *ACLBuilder) MaybeAllowHosts(hosts ...string) *ACLBuilder { b.allowHosts = hosts; return b }
 
-// Deny sets the users (principals) to add deny permissions for. For listing
-// and deleting, you must also use DenyHosts.
+// Deny sets the principals to add deny permissions for. For listing and
+// deleting, you must also use DenyHosts.
 //
-// This function automatically adds a "User:" prefix to all users that are
-// missing it. This returns the input pointer.
-// chaining.
+// This returns the input pointer.
 //
 // For creating, if this is not paired with DenyHosts, the user will be denied
 // access to all hosts (the wildcard *).
 //
-// For listing & deleting, if the users are empty, this matches any user.
-func (b *ACLBuilder) Deny(users ...string) *ACLBuilder {
-	b.deny = users
-	if len(users) == 0 {
+// For listing & deleting, if the principals are empty, this matches any user.
+func (b *ACLBuilder) Deny(principals ...string) *ACLBuilder {
+	b.deny = principals
+	if len(principals) == 0 {
 		b.anyDeny = true
 	}
 	return b
 }
 
-// MaybeDeny is the same as Deny, but does not match all denied users if
+// MaybeDeny is the same as Deny, but does not match all denied principals if
 // none are provided.
-func (b *ACLBuilder) MaybeDeny(users ...string) *ACLBuilder { b.deny = users; return b }
+func (b *ACLBuilder) MaybeDeny(principals ...string) *ACLBuilder { b.deny = principals; return b }
 
 // DenyHosts sets the hosts to add deny permissions for. If using this, you
 // must also use Deny.
@@ -472,10 +480,10 @@ func (b *ACLBuilder) Operations(operations ...ACLOperation) *ACLBuilder {
 // name. The name by default is "literal", meaning created ACLs will have the
 // exact name, and matched ACLs must match completely.
 //
-// Prefixed names allow for creating an ACL that matches any prefix: users
+// Prefixed names allow for creating an ACL that matches any prefix: principals
 // foo-bar and foo-baz both have the prefix "foo-", meaning a READ on TOPIC for
-// User:foo- with prefix pattern will allow both of those users to read the
-// topic.
+// User:foo- with prefix pattern will allow both of those principals to read
+// the topic.
 //
 // Any and match are used for listing and deleting. Any will match any name, be
 // it literal or prefix or a wildcard name. There is no need for specifying
@@ -566,8 +574,8 @@ func (b *ACLBuilder) ValidateFilter() error {
 // on. This function can be used to detect if you accidentally opted into a
 // non-specific ACL.
 //
-// The evaluated fields are: resources, users/hosts, a single OpAny operation,
-// and an Any pattern.
+// The evaluated fields are: resources, principals/hosts, a single OpAny
+// operation, and an Any pattern.
 func (b *ACLBuilder) HasAnyFilter() bool {
 	return b.anyResource ||
 		b.anyTopic ||
@@ -664,7 +672,6 @@ func (cl *Client) CreateACLs(ctx context.Context, b *ACLBuilder) (CreateACLsResu
 	if len(b.deny) != 0 && len(b.denyHosts) == 0 {
 		b.denyHosts = []string{"*"}
 	}
-	b.prefixUser()
 
 	var clusters []string
 	if b.anyCluster {
@@ -965,9 +972,8 @@ func createDelDescACL(b *ACLBuilder) ([]kmsg.DeleteACLsRequestFilter, []*kmsg.De
 	if err := b.ValidateFilter(); err != nil {
 		return nil, nil, err
 	}
-	b.prefixUser()
 
-	// As a special shortcut, if we have any allow and deny users and
+	// As a special shortcut, if we have any allow and deny principals and
 	// hosts, we collapse these into one "any" group. The anyAny and
 	// anyAnyHosts vars are used in our looping below, and if we do this,
 	// we dup and set all the relevant fields to false to not expand them
