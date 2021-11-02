@@ -118,6 +118,10 @@ func (b *ACLBuilder) Topics(t ...string) *ACLBuilder {
 	return b
 }
 
+// MaybeTopics is the same as Topics, but does not match all topics if none are
+// provided.
+func (b *ACLBuilder) MaybeTopics(t ...string) *ACLBuilder { b.topics = t; return b }
+
 // Groups lists/deletes/creates ACLs of resource type "group" for the given
 // groups.
 //
@@ -134,6 +138,10 @@ func (b *ACLBuilder) Groups(g ...string) *ACLBuilder {
 	return b
 }
 
+// MaybeGroups is the same as Groups, but does not match all groups if none are
+// provided.
+func (b *ACLBuilder) MaybeGroups(g ...string) *ACLBuilder { b.groups = g; return b }
+
 // Clusters lists/deletes/creates ACLs of resource type "cluster".
 //
 // This returns the input pointer.
@@ -145,6 +153,10 @@ func (b *ACLBuilder) Clusters() *ACLBuilder {
 	b.anyCluster = true
 	return b
 }
+
+// MaybeClusters is the same as Clusters, but only matches clusters if c is
+// true.
+func (b *ACLBuilder) MaybeClusters(c bool) *ACLBuilder { b.anyCluster = c; return b }
 
 // TransactionalIDs lists/deletes/creates ACLs of resource type
 // "transactional_id" for the given transactional IDs.
@@ -162,6 +174,10 @@ func (b *ACLBuilder) TransactionalIDs(x ...string) *ACLBuilder {
 	return b
 }
 
+// MaybeTransactionalIDs is the same as TransactionalIDs, but does not match
+// all transactional ID's if none are provided.
+func (b *ACLBuilder) MaybeTransactionalIDs(g ...string) *ACLBuilder { b.groups = g; return b }
+
 // DelegationTokens lists/deletes/creates ACLs of resource type
 // "delegation_token" for the given delegation tokens.
 //
@@ -178,8 +194,12 @@ func (b *ACLBuilder) DelegationTokens(t ...string) *ACLBuilder {
 	return b
 }
 
-// Allow sets the users to add allow permissions for. For listing and deleting,
-// you must also use AllowHosts.
+// MaybeDelegationTokens is the same as DelegationTokens, but does not match
+// all tokens if none are provided.
+func (b *ACLBuilder) MaybeDelegationTokens(t ...string) *ACLBuilder { b.tokens = t; return b }
+
+// Allow sets the users (principals) to add allow permissions for. For listing
+// and deleting, you must also use AllowHosts.
 //
 // This function automatically adds a "User:" prefix to all users that are
 // missing it. This returns the input pointer.
@@ -195,6 +215,10 @@ func (b *ACLBuilder) Allow(users ...string) *ACLBuilder {
 	}
 	return b
 }
+
+// MaybeAllow is the same as Allow, but does not match all allowed users if
+// none are provided.
+func (b *ACLBuilder) MaybeAllow(users ...string) *ACLBuilder { b.allow = users; return b }
 
 // AllowHosts sets the hosts to add allow permissions for. If using this, you
 // must also use Allow.
@@ -213,8 +237,12 @@ func (b *ACLBuilder) AllowHosts(hosts ...string) *ACLBuilder {
 	return b
 }
 
-// Deny sets the users to add deny permissions for. For listing and deleting,
-// you must also use DenyHosts.
+// MaybeAllowHosts is the same as AllowHosts, but does not match all allowed
+// hosts if none are provided.
+func (b *ACLBuilder) MaybeAllowHosts(hosts ...string) *ACLBuilder { b.allowHosts = hosts; return b }
+
+// Deny sets the users (principals) to add deny permissions for. For listing
+// and deleting, you must also use DenyHosts.
 //
 // This function automatically adds a "User:" prefix to all users that are
 // missing it. This returns the input pointer.
@@ -232,6 +260,10 @@ func (b *ACLBuilder) Deny(users ...string) *ACLBuilder {
 	return b
 }
 
+// MaybeDeny is the same as Deny, but does not match all denied users if
+// none are provided.
+func (b *ACLBuilder) MaybeDeny(users ...string) *ACLBuilder { b.deny = users; return b }
+
 // DenyHosts sets the hosts to add deny permissions for. If using this, you
 // must also use Deny.
 //
@@ -248,6 +280,10 @@ func (b *ACLBuilder) DenyHosts(hosts ...string) *ACLBuilder {
 	}
 	return b
 }
+
+// MaybeDenyHosts is the same as DenyHosts, but does not match all denied
+// hosts if none are provided.
+func (b *ACLBuilder) MaybeDenyHosts(hosts ...string) *ACLBuilder { b.denyHosts = hosts; return b }
 
 // ACLOperation is a type alias for kmsg.ACLOperation, which is an enum
 // containing all Kafka ACL operations and has helper functions.
@@ -493,10 +529,10 @@ func (b *ACLBuilder) ValidateCreate() error {
 	}
 
 	if len(b.allowHosts) != 0 && len(b.allow) == 0 {
-		return fmt.Errorf("invalid allow hosts with no allow users")
+		return fmt.Errorf("invalid allow hosts with no allow principals")
 	}
 	if len(b.denyHosts) != 0 && len(b.deny) == 0 {
-		return fmt.Errorf("invalid deny hosts with no deny users")
+		return fmt.Errorf("invalid deny hosts with no deny principals")
 	}
 	return nil
 }
@@ -511,16 +547,16 @@ func (b *ACLBuilder) ValidateDescribe() error { return b.ValidateFilter() }
 // describing ACLs (which both operate on a filter basis).
 func (b *ACLBuilder) ValidateFilter() error {
 	if len(b.allowHosts) != 0 && len(b.allow) == 0 && !b.anyAllow {
-		return fmt.Errorf("invalid allow hosts with no allow users")
+		return fmt.Errorf("invalid allow hosts with no allow principals")
 	}
 	if len(b.allow) != 0 && len(b.allowHosts) == 0 && !b.anyAllowHosts {
-		return fmt.Errorf("invalid allow users with no allow hosts")
+		return fmt.Errorf("invalid allow principals with no allow hosts")
 	}
 	if len(b.denyHosts) != 0 && len(b.deny) == 0 && !b.anyDeny {
-		return fmt.Errorf("invalid deny hosts with no deny users")
+		return fmt.Errorf("invalid deny hosts with no deny principals")
 	}
 	if len(b.deny) != 0 && len(b.denyHosts) == 0 && !b.anyDenyHosts {
-		return fmt.Errorf("invalid deny users with no deny hosts")
+		return fmt.Errorf("invalid deny principals with no deny hosts")
 	}
 	return nil
 }
@@ -553,6 +589,41 @@ func (b *ACLBuilder) hasOpAny() bool {
 		}
 	}
 	return false
+}
+
+// HasResource returns true if the builder has a non-empty resource (topic,
+// group, ...), or if any resource has "any" set to true.
+func (b *ACLBuilder) HasResource() bool {
+	l := len(b.any) +
+		len(b.topics) +
+		len(b.groups) +
+		len(b.txnIDs) +
+		len(b.tokens)
+	return l > 0 ||
+		b.anyResource ||
+		b.anyTopic ||
+		b.anyGroup ||
+		b.anyCluster ||
+		b.anyTxn ||
+		b.anyToken
+}
+
+// HasPrincipals returns if any allow or deny principals have been set, or if
+// their "any" field is true.
+func (b *ACLBuilder) HasPrincipals() bool {
+	return len(b.allow) > 0 ||
+		b.anyAllow ||
+		len(b.deny) > 0 ||
+		b.anyDeny
+}
+
+// HasHosts returns if any allow or deny hosts have been set, or if their "any"
+// field is true.
+func (b *ACLBuilder) HasHosts() bool {
+	return len(b.allowHosts) > 0 ||
+		b.anyAllowHosts ||
+		len(b.denyHosts) > 0 ||
+		b.anyDenyHosts
 }
 
 func (b *ACLBuilder) dup() *ACLBuilder { // shallow copy
