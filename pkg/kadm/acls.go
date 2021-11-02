@@ -472,6 +472,15 @@ func (b *ACLBuilder) Operations(operations ...ACLOperation) *ACLBuilder {
 	return b
 }
 
+// MaybeOperations is the same as Operations, but does not match all operations
+// if none are provided.
+func (b *ACLBuilder) MaybeOperations(operations ...ACLOperation) *ACLBuilder {
+	if len(operations) > 0 {
+		b.Operations(operations...)
+	}
+	return b
+}
+
 // ACLPattern is a type alias for kmsg.ACLResourcePatternType, which is an enum
 // containing all Kafka ACL resource pattern options.
 //
