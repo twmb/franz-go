@@ -623,6 +623,7 @@ func (s *source) fetch(consumerSession *consumerSession, doneFetch chan<- struct
 		reloadOffsets listOrEpochLoads
 		preferreds    cursorPreferreds
 		updateMeta    bool
+		updateWhy     string
 		handled       = make(chan struct{})
 	)
 
@@ -633,7 +634,7 @@ func (s *source) fetch(consumerSession *consumerSession, doneFetch chan<- struct
 	// Processing the response only needs the source's nodeID and client.
 	go func() {
 		defer close(handled)
-		fetch, reloadOffsets, preferreds, updateMeta = s.handleReqResp(br, req, resp)
+		fetch, reloadOffsets, preferreds, updateMeta, updateWhy = s.handleReqResp(br, req, resp)
 	}()
 
 	select {
@@ -721,8 +722,8 @@ func (s *source) fetch(consumerSession *consumerSession, doneFetch chan<- struct
 		s.session.reset()
 	}
 
-	if updateMeta && !reloadOffsets.loadWithSessionNow(consumerSession, "out of range offset / fenced leader epoch caused reload offsets on fetch") {
-		s.cl.triggerUpdateMetadataNow("fetch partitition had an error causing immediate metadata update")
+	if updateMeta && !reloadOffsets.loadWithSessionNow(consumerSession, updateWhy) {
+		s.cl.triggerUpdateMetadataNow(updateWhy)
 	}
 
 	if fetch.hasErrorsOrRecords() {
@@ -746,7 +747,7 @@ func (s *source) fetch(consumerSession *consumerSession, doneFetch chan<- struct
 // the source mutex.
 //
 // This function, and everything it calls, is side effect free.
-func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchResponse) (Fetch, listOrEpochLoads, cursorPreferreds, bool) {
+func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchResponse) (Fetch, listOrEpochLoads, cursorPreferreds, bool, string) {
 	var (
 		f = Fetch{
 			Topics: make([]FetchTopic, 0, len(resp.Topics)),
@@ -754,6 +755,12 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 		reloadOffsets listOrEpochLoads
 		preferreds    []cursorOffsetPreferred
 		updateMeta    bool
+		updateWhy     string
+		setUpdateWhy  = func(why string) {
+			if updateWhy == "" {
+				updateWhy = why
+			}
+		}
 
 		kip320 = s.cl.supportsOffsetForLeaderEpoch()
 	)
@@ -799,7 +806,10 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 			}
 
 			fp := partOffset.processRespPartition(br, resp.Version, rp, s.cl.decompressor, s.cl.cfg.hooks)
-			updateMeta = updateMeta || fp.Err != nil
+			if fp.Err != nil {
+				updateMeta = true
+				setUpdateWhy(fmt.Sprintf("fetch topic %s partition %d has error %s causing metadata update", topic, partition, fp.Err))
+			}
 
 			// We only keep the partition if it has no error, or an
 			// error we do not internally retry.
@@ -904,7 +914,7 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 		}
 	}
 
-	return f, reloadOffsets, preferreds, updateMeta
+	return f, reloadOffsets, preferreds, updateMeta, updateWhy
 }
 
 // processRespPartition processes all records in all potentially compressed

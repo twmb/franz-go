@@ -26,6 +26,17 @@ func (o Offset) MarshalJSON() ([]byte, error) {
 	return []byte(fmt.Sprintf(`{"At":%d,"Relative":%d,"Epoch":%d,"CurrentEpoch":%d}`, o.at, o.relative, o.epoch, o.currentEpoch)), nil
 }
 
+// String returns the offset as a string; the purpose of this is for logs.
+func (o Offset) String() string {
+	if o.relative == 0 {
+		return fmt.Sprintf("{%d.%d~%d}", o.at, o.epoch, o.currentEpoch)
+	} else if o.relative > 0 {
+		return fmt.Sprintf("{%d+%d.%d~%d}", o.at, o.relative, o.epoch, o.currentEpoch)
+	} else {
+		return fmt.Sprintf("{%d-%d.%d~%d}", o.at, o.relative, o.epoch, o.currentEpoch)
+	}
+}
+
 // NewOffset creates and returns an offset to use in ConsumePartitions or
 // ConsumeResetOffset.
 //
@@ -178,28 +189,6 @@ func (c *consumer) init(cl *Client) {
 
 func (c *consumer) consuming() bool {
 	return c.g != nil || c.d != nil
-}
-
-// unset, called under the assign mu, transitions the consumer to the unset
-// state, invalidating old assignments and leaving a group if it was in one.
-//
-// If in a group, this waits for the leave group to finish before returning.
-func (c *consumer) unset() {
-	if !c.consuming() {
-		return
-	}
-
-	wait := func() {} // wait AFTER we unlock
-	defer func() { wait() }()
-
-	c.mu.Lock() // lock for assign
-	defer c.mu.Unlock()
-
-	c.assignPartitions(nil, assignInvalidateAll, noTopicsPartitions)
-
-	if c.g != nil {
-		wait = c.g.leave()
-	}
 }
 
 // addSourceReadyForDraining tracks that a source needs its buffered fetch
@@ -502,20 +491,30 @@ const (
 func (h assignHow) String() string {
 	switch h {
 	case assignWithoutInvalidating:
-		return "assign without invalidating"
+		return "assigning everything new, keeping current assignment"
 	case assignInvalidateAll:
-		return "assign invalidate all"
+		return "unassigning everything"
 	case assignInvalidateMatching:
-		return "assign invalidate matching"
+		return "unassigning any currently assigned matching partition that is in the input"
 	case assignSetMatching:
-		return "assign set matching"
+		return "reassigning any currently assigned matching partition to the input"
 	}
 	return ""
 }
 
 // assignPartitions, called under the consumer's mu, is used to set new
 // cursors or add to the existing cursors.
-func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how assignHow, tps *topicsPartitions) {
+func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how assignHow, tps *topicsPartitions, why string) {
+	// The internal code can avoid giving an assign reason in cases where
+	// the caller logs itself immediately before assigning. We only log if
+	// there is a reason.
+	if len(why) > 0 {
+		c.cl.cfg.logger.Log(LogLevelInfo, "assigning partitions",
+			"why", why,
+			"how", how,
+			"input", assignments,
+		)
+	}
 	var session *consumerSession
 	var loadOffsets listOrEpochLoads
 	if how == assignInvalidateAll {
@@ -694,7 +693,7 @@ func (c *consumer) doOnMetadataUpdate() {
 			switch {
 			case c.d != nil:
 				if new := c.d.findNewAssignments(); len(new) > 0 {
-					c.assignPartitions(new, assignWithoutInvalidating, c.d.tps)
+					c.assignPartitions(new, assignWithoutInvalidating, c.d.tps, "new assignments from direct consumer")
 				}
 			case c.g != nil:
 				c.g.findNewAssignments()

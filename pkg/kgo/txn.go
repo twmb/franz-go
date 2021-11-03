@@ -344,13 +344,13 @@ retryUnattempted:
 			"state_precommit", precommit,
 			"state_currently_committed", currentCommit,
 		)
-		s.cl.SetOffsets(currentCommit)
+		s.cl.setOffsets(currentCommit, false)
 	} else if willTryCommit && endTxnErr == nil {
 		s.cl.cfg.logger.Log(LogLevelInfo, "transact session successful, setting to newly committed state",
 			"tried_commit", willTryCommit,
 			"postcommit", postcommit,
 		)
-		s.cl.SetOffsets(postcommit)
+		s.cl.setOffsets(postcommit, false)
 	}
 
 	switch {

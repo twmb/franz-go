@@ -133,7 +133,17 @@ type groupConsumer struct {
 // manually issue a kmsg.LeaveGroupRequest or use an external tool (kafka
 // scripts or kcl).
 func (cl *Client) LeaveGroup() {
-	cl.consumer.unset()
+	c := &cl.consumer
+	if c.g == nil {
+		return
+	}
+
+	c.mu.Lock() // lock for assign
+	c.assignPartitions(nil, assignInvalidateAll, noTopicsPartitions, "invalidating all assignments in LeaveGroup")
+	wait := c.g.leave()
+	c.mu.Unlock()
+
+	wait() // wait after we unlock
 }
 
 func (c *consumer) initGroup() {
@@ -285,7 +295,7 @@ func (g *groupConsumer) manage() {
 		// We need to invalidate everything from an error return.
 		{
 			g.c.mu.Lock()
-			g.c.assignPartitions(nil, assignInvalidateAll, nil)
+			g.c.assignPartitions(nil, assignInvalidateAll, nil, "clearing assignment at end of group management session")
 			g.mu.Lock()     // before allowing poll to touch uncommitted, lock the group
 			g.c.mu.Unlock() // now part of poll can continue
 			g.uncommitted = nil
@@ -453,7 +463,11 @@ func (g *groupConsumer) revoke(stage revokeStage, lost map[string][]int32, leavi
 		// If we are an eager consumer, we stop fetching all of our
 		// current partitions as we will be revoking them.
 		g.c.mu.Lock()
-		g.c.assignPartitions(nil, assignInvalidateAll, nil)
+		if leaving {
+			g.c.assignPartitions(nil, assignInvalidateAll, nil, "revoking all assignments because we are leaving the group")
+		} else {
+			g.c.assignPartitions(nil, assignInvalidateAll, nil, "revoking all assignments because we are not cooperative")
+		}
 		g.c.mu.Unlock()
 
 		if !g.cooperative {
@@ -513,7 +527,7 @@ func (g *groupConsumer) revoke(stage revokeStage, lost map[string][]int32, leavi
 		// logical race of allowing fetches for revoked partitions
 		// after a revoke but before an invalidation.
 		g.c.mu.Lock()
-		g.c.assignPartitions(lostOffsets, assignInvalidateMatching, g.tps)
+		g.c.assignPartitions(lostOffsets, assignInvalidateMatching, g.tps, "revoking assignments from cooperative consuming")
 		g.c.mu.Unlock()
 	}
 
@@ -1247,7 +1261,7 @@ start:
 
 	// Eager: we already invalidated everything; nothing to re-invalidate.
 	// Cooperative: assign without invalidating what we are consuming.
-	g.c.assignPartitions(offsets, assignWithoutInvalidating, g.tps)
+	g.c.assignPartitions(offsets, assignWithoutInvalidating, g.tps, fmt.Sprintf("newly fetched offsets for group %s", g.cfg.group))
 
 	// We need to update the uncommited map so that SetOffsets(Committed)
 	// does not rewind before the committed offsets we just fetched.
@@ -1275,8 +1289,6 @@ start:
 			}
 		}
 	}
-
-	g.cfg.logger.Log(LogLevelInfo, "fetched committed offsets", "group", g.cfg.group, "fetched", offsets)
 	return nil
 }
 
@@ -1569,7 +1581,15 @@ func (g *groupConsumer) updateCommitted(
 				continue
 			}
 			if respPart.ErrorCode != 0 {
-				g.cfg.logger.Log(LogLevelWarn, "unable to commit offset for topic partition", "group", g.cfg.group, "topic", reqTopic.Topic, "partition", reqPart.Partition, "error_code", respPart.ErrorCode)
+				g.cfg.logger.Log(LogLevelWarn, "unable to commit offset for topic partition",
+					"group", g.cfg.group,
+					"topic", reqTopic.Topic,
+					"partition", reqPart.Partition,
+					"commit_from", uncommit.committed.Offset,
+					"commit_to", reqPart.Offset,
+					"commit_epoch", reqPart.LeaderEpoch,
+					"error_code", respPart.ErrorCode,
+				)
 				continue
 			}
 
@@ -1679,6 +1699,10 @@ func (g *groupConsumer) loopCommit() {
 // block any concurrent revoke while issuing this call). Any other usage is
 // prone to odd interactions.
 func (cl *Client) SetOffsets(setOffsets map[string]map[int32]EpochOffset) {
+	cl.setOffsets(setOffsets, true)
+}
+
+func (cl *Client) setOffsets(setOffsets map[string]map[int32]EpochOffset, log bool) {
 	if len(setOffsets) == 0 {
 		return
 	}
@@ -1748,7 +1772,11 @@ func (cl *Client) SetOffsets(setOffsets map[string]map[int32]EpochOffset) {
 		return
 	}
 
-	c.assignPartitions(assigns, assignSetMatching, g.tps)
+	if log {
+		c.assignPartitions(assigns, assignSetMatching, g.tps, "from manual SetOffsets")
+	} else {
+		c.assignPartitions(assigns, assignSetMatching, g.tps, "")
+	}
 }
 
 // UncommittedOffsets returns the latest uncommitted offsets. Uncommitted
@@ -2030,11 +2058,11 @@ func (g *groupConsumer) commitOffsetsSync(
 	uncommitted map[string]map[int32]EpochOffset,
 	onDone func(*Client, *kmsg.OffsetCommitRequest, *kmsg.OffsetCommitResponse, error),
 ) {
-	done := make(chan struct{})
-	defer func() { <-done }()
-
 	g.cfg.logger.Log(LogLevelDebug, "in CommitOffsetsSync", "group", g.cfg.group, "with", uncommitted)
 	defer g.cfg.logger.Log(LogLevelDebug, "left CommitOffsetsSync", "group", g.cfg.group)
+
+	done := make(chan struct{})
+	defer func() { <-done }()
 
 	if onDone == nil {
 		onDone = func(*Client, *kmsg.OffsetCommitRequest, *kmsg.OffsetCommitResponse, error) {}
@@ -2049,19 +2077,17 @@ func (g *groupConsumer) commitOffsetsSync(
 	}
 
 	g.mu.Lock()
-	go func() {
+	defer g.mu.Unlock()
+
+	g.blockAuto = true
+	unblockAuto := func(cl *Client, req *kmsg.OffsetCommitRequest, resp *kmsg.OffsetCommitResponse, err error) {
+		unblockCommits(cl, req, resp, err)
+		g.mu.Lock()
 		defer g.mu.Unlock()
+		g.blockAuto = false
+	}
 
-		g.blockAuto = true
-		unblockAuto := func(cl *Client, req *kmsg.OffsetCommitRequest, resp *kmsg.OffsetCommitResponse, err error) {
-			unblockCommits(cl, req, resp, err)
-			g.mu.Lock()
-			defer g.mu.Unlock()
-			g.blockAuto = false
-		}
-
-		g.commit(ctx, uncommitted, unblockAuto)
-	}()
+	g.commit(ctx, uncommitted, unblockAuto)
 }
 
 // CommitOffsets commits the given offsets for a group, calling onDone with the
@@ -2127,19 +2153,17 @@ func (cl *Client) CommitOffsets(
 	}
 
 	g.mu.Lock()
-	go func() {
+	defer g.mu.Unlock()
+
+	g.blockAuto = true
+	unblockAuto := func(cl *Client, req *kmsg.OffsetCommitRequest, resp *kmsg.OffsetCommitResponse, err error) {
+		unblockSyncCommit(cl, req, resp, err)
+		g.mu.Lock()
 		defer g.mu.Unlock()
+		g.blockAuto = false
+	}
 
-		g.blockAuto = true
-		unblockAuto := func(cl *Client, req *kmsg.OffsetCommitRequest, resp *kmsg.OffsetCommitResponse, err error) {
-			unblockSyncCommit(cl, req, resp, err)
-			g.mu.Lock()
-			defer g.mu.Unlock()
-			g.blockAuto = false
-		}
-
-		g.commit(ctx, uncommitted, unblockAuto)
-	}()
+	g.commit(ctx, uncommitted, unblockAuto)
 }
 
 // defaultRevoke commits the last fetched offsets and waits for the commit to
