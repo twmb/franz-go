@@ -755,12 +755,7 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 		reloadOffsets listOrEpochLoads
 		preferreds    []cursorOffsetPreferred
 		updateMeta    bool
-		updateWhy     string
-		setUpdateWhy  = func(why string) {
-			if updateWhy == "" {
-				updateWhy = why
-			}
-		}
+		updateWhy     multiUpdateWhy
 
 		kip320 = s.cl.supportsOffsetForLeaderEpoch()
 	)
@@ -808,7 +803,7 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 			fp := partOffset.processRespPartition(br, resp.Version, rp, s.cl.decompressor, s.cl.cfg.hooks)
 			if fp.Err != nil {
 				updateMeta = true
-				setUpdateWhy(fmt.Sprintf("fetch topic %s partition %d has error %s causing metadata update", topic, partition, fp.Err))
+				updateWhy.add(topic, partition, fp.Err)
 			}
 
 			// We only keep the partition if it has no error, or an
@@ -914,7 +909,7 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 		}
 	}
 
-	return f, reloadOffsets, preferreds, updateMeta, updateWhy
+	return f, reloadOffsets, preferreds, updateMeta, updateWhy.reason("fetch had inner topic errors")
 }
 
 // processRespPartition processes all records in all potentially compressed
