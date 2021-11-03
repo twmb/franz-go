@@ -250,6 +250,32 @@ func (t *FetchTopic) EachPartition(fn func(FetchPartition)) {
 	}
 }
 
+// EachRecord calls fn for each record in the topic, in any partition order.
+func (t *FetchTopic) EachRecord(fn func(*Record)) {
+	for i := range t.Partitions {
+		for _, r := range t.Partitions[i].Records {
+			fn(r)
+		}
+	}
+}
+
+// Records returns all records in all partitions in this topic.
+//
+// This is a convenience function that does a single slice allocation. If you
+// can process records individually, it is far more efficient to use the Each
+// functions.
+func (t *FetchTopic) Records() []*Record {
+	var n int
+	t.EachPartition(func(p FetchPartition) {
+		n += len(p.Records)
+	})
+	rs := make([]*Record, 0, n)
+	t.EachPartition(func(p FetchPartition) {
+		rs = append(rs, p.Records...)
+	})
+	return rs
+}
+
 // Fetch is an individual response from a broker.
 type Fetch struct {
 	// Topics are all topics being responded to from a fetch to a broker.
