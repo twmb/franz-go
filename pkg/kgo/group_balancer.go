@@ -51,7 +51,7 @@ type GroupBalancer interface {
 	// It is up to the user to decide how to decode each member's
 	// ProtocolMetadata field. The default client group protocol of
 	// "consumer" by default uses join group metadata's of type
-	// kmsg.GroupMemberMetadata. If this is the case for you, it may be
+	// kmsg.ConsumerMemberMetadata. If this is the case for you, it may be
 	// useful to use the ConsumerBalancer type to help parse the metadata
 	// and balance.
 	//
@@ -81,12 +81,12 @@ type IntoSyncAssignment interface {
 }
 
 // ConsumerBalancer is a helper type for writing balance plans that use the
-// "consumer" protocol, such that each member uses a kmsg.GroupMemberMetadata
+// "consumer" protocol, such that each member uses a kmsg.ConsumerMemberMetadata
 // in its join group request.
 type ConsumerBalancer struct {
 	b         ConsumerBalancerBalance
 	members   []kmsg.JoinGroupResponseMember
-	metadatas []kmsg.GroupMemberMetadata
+	metadatas []kmsg.ConsumerMemberMetadata
 	topics    map[string]struct{}
 }
 
@@ -102,14 +102,14 @@ func (b *ConsumerBalancer) Members() []kmsg.JoinGroupResponseMember {
 
 // EachMember calls fn for each member and its corresponding metadata in the
 // consumer group being balanced.
-func (b *ConsumerBalancer) EachMember(fn func(member *kmsg.JoinGroupResponseMember, meta *kmsg.GroupMemberMetadata)) {
+func (b *ConsumerBalancer) EachMember(fn func(member *kmsg.JoinGroupResponseMember, meta *kmsg.ConsumerMemberMetadata)) {
 	for i := range b.members {
 		fn(&b.members[i], &b.metadatas[i])
 	}
 }
 
 // MemberAt returns the nth member and its corresponding metadata.
-func (b *ConsumerBalancer) MemberAt(n int) (*kmsg.JoinGroupResponseMember, *kmsg.GroupMemberMetadata) {
+func (b *ConsumerBalancer) MemberAt(n int) (*kmsg.JoinGroupResponseMember, *kmsg.ConsumerMemberMetadata) {
 	return &b.members[n], &b.metadatas[n]
 }
 
@@ -146,10 +146,10 @@ type ConsumerBalancerBalance interface {
 }
 
 // ParseConsumerSyncAssignment returns an assignment as specified a
-// kmsg.GroupMemberAssignment, that is, the type encoded in metadata for the
+// kmsg.ConsumerMemberAssignment, that is, the type encoded in metadata for the
 // consumer protocol.
 func ParseConsumerSyncAssignment(assignment []byte) (map[string][]int32, error) {
-	var kassignment kmsg.GroupMemberAssignment
+	var kassignment kmsg.ConsumerMemberAssignment
 	if err := kassignment.ReadFrom(assignment); err != nil {
 		return nil, fmt.Errorf("sync assignment parse failed: %v", err)
 	}
@@ -162,14 +162,14 @@ func ParseConsumerSyncAssignment(assignment []byte) (map[string][]int32, error) 
 }
 
 // NewConsumerBalancer parses the each member's metadata as a
-// kmsg.GroupMemberMetadata and returns a ConsumerBalancer to use in balancing.
+// kmsg.ConsumerMemberMetadata and returns a ConsumerBalancer to use in balancing.
 //
 // If any metadata parsing fails, this returns an error.
 func NewConsumerBalancer(balance ConsumerBalancerBalance, members []kmsg.JoinGroupResponseMember) (*ConsumerBalancer, error) {
 	b := &ConsumerBalancer{
 		b:         balance,
 		members:   members,
-		metadatas: make([]kmsg.GroupMemberMetadata, len(members)),
+		metadatas: make([]kmsg.ConsumerMemberMetadata, len(members)),
 		topics:    make(map[string]struct{}),
 	}
 
@@ -237,10 +237,10 @@ func (p *BalancePlan) AddPartitions(member *kmsg.JoinGroupResponseMember, topic 
 func (p *BalancePlan) IntoSyncAssignment() []kmsg.SyncGroupRequestGroupAssignment {
 	kassignments := make([]kmsg.SyncGroupRequestGroupAssignment, 0, len(p.plan))
 	for member, assignment := range p.plan {
-		var kassignment kmsg.GroupMemberAssignment
+		var kassignment kmsg.ConsumerMemberAssignment
 		for topic, partitions := range assignment {
 			sort.Slice(partitions, func(i, j int) bool { return partitions[i] < partitions[j] })
-			assnTopic := kmsg.NewGroupMemberAssignmentTopic()
+			assnTopic := kmsg.NewConsumerMemberAssignmentTopic()
 			assnTopic.Topic = topic
 			assnTopic.Partitions = partitions
 			kassignment.Topics = append(kassignment.Topics, assnTopic)
@@ -348,7 +348,7 @@ func (g *groupConsumer) balanceGroup(proto string, members []kmsg.JoinGroupRespo
 	// about what member interests are.
 	if b, ok := memberBalancer.(*ConsumerBalancer); ok {
 		interests := new(bytes.Buffer)
-		b.EachMember(func(member *kmsg.JoinGroupResponseMember, meta *kmsg.GroupMemberMetadata) {
+		b.EachMember(func(member *kmsg.JoinGroupResponseMember, meta *kmsg.ConsumerMemberMetadata) {
 			interests.Reset()
 			fmt.Fprintf(interests, "interested topics: %v, previously owned: ", meta.Topics)
 			for _, owned := range meta.OwnedPartitions {
@@ -383,7 +383,7 @@ func (g *groupConsumer) balanceGroup(proto string, members []kmsg.JoinGroupRespo
 
 // helper func; range and roundrobin use v0
 func memberMetadataV0(interests []string) []byte {
-	meta := kmsg.NewGroupMemberMetadata()
+	meta := kmsg.NewConsumerMemberMetadata()
 	meta.Version = 0
 	meta.Topics = interests // input interests are already sorted
 	return meta.AppendTo(nil)
@@ -516,7 +516,7 @@ func (r *rangeBalancer) MemberBalancer(members []kmsg.JoinGroupResponseMember) (
 
 func (*rangeBalancer) Balance(b *ConsumerBalancer, topics map[string]int32) IntoSyncAssignment {
 	topics2PotentialConsumers := make(map[string][]*kmsg.JoinGroupResponseMember)
-	b.EachMember(func(member *kmsg.JoinGroupResponseMember, meta *kmsg.GroupMemberMetadata) {
+	b.EachMember(func(member *kmsg.JoinGroupResponseMember, meta *kmsg.ConsumerMemberMetadata) {
 		for _, topic := range meta.Topics {
 			topics2PotentialConsumers[topic] = append(topics2PotentialConsumers[topic], member)
 		}
@@ -630,7 +630,7 @@ func (s *stickyBalancer) ProtocolName() string {
 }
 func (s *stickyBalancer) IsCooperative() bool { return s.cooperative }
 func (s *stickyBalancer) JoinGroupMetadata(interests []string, currentAssignment map[string][]int32, generation int32) []byte {
-	meta := kmsg.NewGroupMemberMetadata()
+	meta := kmsg.NewConsumerMemberMetadata()
 	meta.Version = 0
 	meta.Topics = interests
 	if s.cooperative {
@@ -640,7 +640,7 @@ func (s *stickyBalancer) JoinGroupMetadata(interests []string, currentAssignment
 	stickyMeta.Generation = generation
 	for topic, partitions := range currentAssignment {
 		if s.cooperative {
-			metaPart := kmsg.NewGroupMemberMetadataOwnedPartition()
+			metaPart := kmsg.NewConsumerMemberMetadataOwnedPartition()
 			metaPart.Topic = topic
 			metaPart.Partitions = partitions
 			meta.OwnedPartitions = append(meta.OwnedPartitions, metaPart)
@@ -675,7 +675,7 @@ func (s *stickyBalancer) Balance(b *ConsumerBalancer, topics map[string]int32) I
 	// the sticky strategy does not need to worry about instance IDs at all.
 	// See my (slightly rambling) comment on KAFKA-8432.
 	stickyMembers := make([]sticky.GroupMember, 0, len(b.Members()))
-	b.EachMember(func(member *kmsg.JoinGroupResponseMember, meta *kmsg.GroupMemberMetadata) {
+	b.EachMember(func(member *kmsg.JoinGroupResponseMember, meta *kmsg.ConsumerMemberMetadata) {
 		stickyMembers = append(stickyMembers, sticky.GroupMember{
 			ID:       member.MemberID,
 			Topics:   meta.Topics,
@@ -759,7 +759,7 @@ func (p *BalancePlan) AdjustCooperative(b *ConsumerBalancer) {
 
 	// First, on all members, we find what was added and what was removed
 	// to and from that member.
-	b.EachMember(func(member *kmsg.JoinGroupResponseMember, meta *kmsg.GroupMemberMetadata) {
+	b.EachMember(func(member *kmsg.JoinGroupResponseMember, meta *kmsg.ConsumerMemberMetadata) {
 		planned := plan[member.MemberID]
 
 		// added   := planned - current
