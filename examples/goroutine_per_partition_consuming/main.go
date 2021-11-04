@@ -155,8 +155,8 @@ func (s *splitConsume) poll(cl *kgo.Client) {
 		})
 		fetches.EachTopic(func(t kgo.FetchTopic) {
 			s.mu.Lock()
-			defer s.mu.Unlock()
 			tconsumers := s.consumers[t.Topic]
+			s.mu.Unlock()
 			if tconsumers == nil {
 				return
 			}
