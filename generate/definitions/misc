@@ -380,7 +380,7 @@ GroupMemberMetadata => not top level, with version field
 
 // GroupMemberAssignment is the assignment data that is usually sent with a
 // sync group request with the "consumer" protocol.
-GroupMemberAssignment => not top level
+GroupMemberAssignment => not top level, with version field
   // Verson is currently version 0.
   Version: int16
   // Topics contains topics in the assignment.
@@ -391,6 +391,36 @@ GroupMemberAssignment => not top level
     Partitions: [int32]
   // UserData is arbitrary client data for a given client in the group.
   UserData: nullable-bytes
+
+// ConnectMemberMetadata is the metadata used in a join group request with the
+// "connect" protocol. v1 introduced incremental cooperative rebalancing (akin
+// to cooperative-sticky) per KIP-415.
+//
+//     v0 defined in connect/runtime/src/main/java/org/apache/kafka/connect/runtime/distributed/ConnectProtocol.java
+//     v1+ defined in connect/runtime/src/main/java/org/apache/kafka/connect/runtime/distributed/IncrementalCooperativeConnectProtocol.java
+//
+ConnectMemberMetadata => not top level, with version field
+  Version: int16
+  URL: string
+  ConfigOffset: int64
+  CurrentAssignment: nullable-bytes // v1+
+
+// ConnectMemberAssignment is the assignment that is used in a sync group
+// request with the "connect" protocol. See ConnectMemberMetadata for links to
+// the Kafka code where these fields are defined.
+ConnectMemberAssignment => not top level, with version field
+  Version: int16
+  Error: int16
+  Leader: string
+  LeaderURL: string
+  ConfigOffset: int64
+  Assignment: [=>]
+    Connector: string
+    Tasks: [int16]
+  Revoked: [=>] // v1+
+    Connector: string
+    Tasks: [int16]
+  ScheduledDelay: int32 // v1+
 
 // DefaultPrincipalData is the encoded principal data. This is used in an
 // envelope request from broker to broker.

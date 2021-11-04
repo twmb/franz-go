@@ -1702,6 +1702,8 @@ type GroupMemberAssignment struct {
 }
 
 func (v *GroupMemberAssignment) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
 	{
 		v := v.Version
 		dst = kbin.AppendInt16(dst, v)
@@ -1735,11 +1737,10 @@ func (v *GroupMemberAssignment) AppendTo(dst []byte) []byte {
 func (v *GroupMemberAssignment) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
+	v.Version = b.Int16()
+	version := v.Version
+	_ = version
 	s := v
-	{
-		v := b.Int16()
-		s.Version = v
-	}
 	{
 		v := s.Topics
 		a := v
@@ -1797,6 +1798,332 @@ func (v *GroupMemberAssignment) Default() {
 // This is a shortcut for creating a struct and calling Default yourself.
 func NewGroupMemberAssignment() GroupMemberAssignment {
 	var v GroupMemberAssignment
+	v.Default()
+	return v
+}
+
+// ConnectMemberMetadata is the metadata used in a join group request with the
+// "connect" protocol. v1 introduced incremental cooperative rebalancing (akin
+// to cooperative-sticky) per KIP-415.
+//
+//     v0 defined in connect/runtime/src/main/java/org/apache/kafka/connect/runtime/distributed/ConnectProtocol.java
+//     v1+ defined in connect/runtime/src/main/java/org/apache/kafka/connect/runtime/distributed/IncrementalCooperativeConnectProtocol.java
+//
+type ConnectMemberMetadata struct {
+	Version int16
+
+	URL string
+
+	ConfigOffset int64
+
+	CurrentAssignment []byte // v1+
+}
+
+func (v *ConnectMemberMetadata) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	{
+		v := v.Version
+		dst = kbin.AppendInt16(dst, v)
+	}
+	{
+		v := v.URL
+		dst = kbin.AppendString(dst, v)
+	}
+	{
+		v := v.ConfigOffset
+		dst = kbin.AppendInt64(dst, v)
+	}
+	if version >= 1 {
+		v := v.CurrentAssignment
+		dst = kbin.AppendNullableBytes(dst, v)
+	}
+	return dst
+}
+
+func (v *ConnectMemberMetadata) ReadFrom(src []byte) error {
+	v.Default()
+	b := kbin.Reader{Src: src}
+	v.Version = b.Int16()
+	version := v.Version
+	_ = version
+	s := v
+	{
+		v := b.String()
+		s.URL = v
+	}
+	{
+		v := b.Int64()
+		s.ConfigOffset = v
+	}
+	if version >= 1 {
+		v := b.NullableBytes()
+		s.CurrentAssignment = v
+	}
+	return b.Complete()
+}
+
+// Default sets any default fields. Calling this allows for future compatibility
+// if new fields are added to ConnectMemberMetadata.
+func (v *ConnectMemberMetadata) Default() {
+}
+
+// NewConnectMemberMetadata returns a default ConnectMemberMetadata
+// This is a shortcut for creating a struct and calling Default yourself.
+func NewConnectMemberMetadata() ConnectMemberMetadata {
+	var v ConnectMemberMetadata
+	v.Default()
+	return v
+}
+
+type ConnectMemberAssignmentAssignment struct {
+	Connector string
+
+	Tasks []int16
+}
+
+// Default sets any default fields. Calling this allows for future compatibility
+// if new fields are added to ConnectMemberAssignmentAssignment.
+func (v *ConnectMemberAssignmentAssignment) Default() {
+}
+
+// NewConnectMemberAssignmentAssignment returns a default ConnectMemberAssignmentAssignment
+// This is a shortcut for creating a struct and calling Default yourself.
+func NewConnectMemberAssignmentAssignment() ConnectMemberAssignmentAssignment {
+	var v ConnectMemberAssignmentAssignment
+	v.Default()
+	return v
+}
+
+type ConnectMemberAssignmentRevoked struct {
+	Connector string
+
+	Tasks []int16
+}
+
+// Default sets any default fields. Calling this allows for future compatibility
+// if new fields are added to ConnectMemberAssignmentRevoked.
+func (v *ConnectMemberAssignmentRevoked) Default() {
+}
+
+// NewConnectMemberAssignmentRevoked returns a default ConnectMemberAssignmentRevoked
+// This is a shortcut for creating a struct and calling Default yourself.
+func NewConnectMemberAssignmentRevoked() ConnectMemberAssignmentRevoked {
+	var v ConnectMemberAssignmentRevoked
+	v.Default()
+	return v
+}
+
+// ConnectMemberAssignment is the assignment that is used in a sync group
+// request with the "connect" protocol. See ConnectMemberMetadata for links to
+// the Kafka code where these fields are defined.
+type ConnectMemberAssignment struct {
+	Version int16
+
+	Error int16
+
+	Leader string
+
+	LeaderURL string
+
+	ConfigOffset int64
+
+	Assignment []ConnectMemberAssignmentAssignment
+
+	Revoked []ConnectMemberAssignmentRevoked // v1+
+
+	ScheduledDelay int32 // v1+
+}
+
+func (v *ConnectMemberAssignment) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	{
+		v := v.Version
+		dst = kbin.AppendInt16(dst, v)
+	}
+	{
+		v := v.Error
+		dst = kbin.AppendInt16(dst, v)
+	}
+	{
+		v := v.Leader
+		dst = kbin.AppendString(dst, v)
+	}
+	{
+		v := v.LeaderURL
+		dst = kbin.AppendString(dst, v)
+	}
+	{
+		v := v.ConfigOffset
+		dst = kbin.AppendInt64(dst, v)
+	}
+	{
+		v := v.Assignment
+		dst = kbin.AppendArrayLen(dst, len(v))
+		for i := range v {
+			v := &v[i]
+			{
+				v := v.Connector
+				dst = kbin.AppendString(dst, v)
+			}
+			{
+				v := v.Tasks
+				dst = kbin.AppendArrayLen(dst, len(v))
+				for i := range v {
+					v := v[i]
+					dst = kbin.AppendInt16(dst, v)
+				}
+			}
+		}
+	}
+	if version >= 1 {
+		v := v.Revoked
+		dst = kbin.AppendArrayLen(dst, len(v))
+		for i := range v {
+			v := &v[i]
+			{
+				v := v.Connector
+				dst = kbin.AppendString(dst, v)
+			}
+			{
+				v := v.Tasks
+				dst = kbin.AppendArrayLen(dst, len(v))
+				for i := range v {
+					v := v[i]
+					dst = kbin.AppendInt16(dst, v)
+				}
+			}
+		}
+	}
+	if version >= 1 {
+		v := v.ScheduledDelay
+		dst = kbin.AppendInt32(dst, v)
+	}
+	return dst
+}
+
+func (v *ConnectMemberAssignment) ReadFrom(src []byte) error {
+	v.Default()
+	b := kbin.Reader{Src: src}
+	v.Version = b.Int16()
+	version := v.Version
+	_ = version
+	s := v
+	{
+		v := b.Int16()
+		s.Error = v
+	}
+	{
+		v := b.String()
+		s.Leader = v
+	}
+	{
+		v := b.String()
+		s.LeaderURL = v
+	}
+	{
+		v := b.Int64()
+		s.ConfigOffset = v
+	}
+	{
+		v := s.Assignment
+		a := v
+		var l int32
+		l = b.ArrayLen()
+		if !b.Ok() {
+			return b.Complete()
+		}
+		if l > 0 {
+			a = make([]ConnectMemberAssignmentAssignment, l)
+		}
+		for i := int32(0); i < l; i++ {
+			v := &a[i]
+			v.Default()
+			s := v
+			{
+				v := b.String()
+				s.Connector = v
+			}
+			{
+				v := s.Tasks
+				a := v
+				var l int32
+				l = b.ArrayLen()
+				if !b.Ok() {
+					return b.Complete()
+				}
+				if l > 0 {
+					a = make([]int16, l)
+				}
+				for i := int32(0); i < l; i++ {
+					v := b.Int16()
+					a[i] = v
+				}
+				v = a
+				s.Tasks = v
+			}
+		}
+		v = a
+		s.Assignment = v
+	}
+	if version >= 1 {
+		v := s.Revoked
+		a := v
+		var l int32
+		l = b.ArrayLen()
+		if !b.Ok() {
+			return b.Complete()
+		}
+		if l > 0 {
+			a = make([]ConnectMemberAssignmentRevoked, l)
+		}
+		for i := int32(0); i < l; i++ {
+			v := &a[i]
+			v.Default()
+			s := v
+			{
+				v := b.String()
+				s.Connector = v
+			}
+			{
+				v := s.Tasks
+				a := v
+				var l int32
+				l = b.ArrayLen()
+				if !b.Ok() {
+					return b.Complete()
+				}
+				if l > 0 {
+					a = make([]int16, l)
+				}
+				for i := int32(0); i < l; i++ {
+					v := b.Int16()
+					a[i] = v
+				}
+				v = a
+				s.Tasks = v
+			}
+		}
+		v = a
+		s.Revoked = v
+	}
+	if version >= 1 {
+		v := b.Int32()
+		s.ScheduledDelay = v
+	}
+	return b.Complete()
+}
+
+// Default sets any default fields. Calling this allows for future compatibility
+// if new fields are added to ConnectMemberAssignment.
+func (v *ConnectMemberAssignment) Default() {
+}
+
+// NewConnectMemberAssignment returns a default ConnectMemberAssignment
+// This is a shortcut for creating a struct and calling Default yourself.
+func NewConnectMemberAssignment() ConnectMemberAssignment {
+	var v ConnectMemberAssignment
 	v.Default()
 	return v
 }
