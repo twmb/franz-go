@@ -340,7 +340,7 @@ TxnMetadataValue => not top level, with version field
   StartTimestamp: int64
 
 // StickyMemberMetadata is is what is encoded in UserData for
-// GroupMemberMetadata in group join requests with the sticky partitioning
+// ConsumerMemberMetadata in group join requests with the sticky partitioning
 // strategy.
 //
 // V1 added generation, which fixed a bug with flaky group members joining
@@ -361,9 +361,9 @@ StickyMemberMetadata => not top level, no encoding
   // Generation is the generation of this join. This is incremented every join.
   Generation: int32(-1) // v1+
 
-// GroupMemberMetadata is the metadata that is usually sent with a join group
-// request with the "consumer" protocol.
-GroupMemberMetadata => not top level, with version field
+// ConsumerMemberMetadata is the metadata that is usually sent with a join group
+// request with the "consumer" protocol (normal, non-connect consumers).
+ConsumerMemberMetadata => not top level, with version field
   // Version is either version 0 or version 1.
   Version: int16
   // Topics is the list of topics in the group that this member is interested
@@ -378,9 +378,10 @@ GroupMemberMetadata => not top level, with version field
     Topic: string
     Partitions: [int32]
 
-// GroupMemberAssignment is the assignment data that is usually sent with a
-// sync group request with the "consumer" protocol.
-GroupMemberAssignment => not top level, with version field
+// ConsumerMemberAssignment is the assignment data that is usually sent with a
+// sync group request with the "consumer" protocol )normal, non-connect
+// consumers).
+ConsumerMemberAssignment => not top level, with version field
   // Verson is currently version 0.
   Version: int16
   // Topics contains topics in the assignment.

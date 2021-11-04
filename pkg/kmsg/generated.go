@@ -1468,7 +1468,7 @@ func NewStickyMemberMetadataCurrentAssignment() StickyMemberMetadataCurrentAssig
 }
 
 // StickyMemberMetadata is is what is encoded in UserData for
-// GroupMemberMetadata in group join requests with the sticky partitioning
+// ConsumerMemberMetadata in group join requests with the sticky partitioning
 // strategy.
 //
 // V1 added generation, which fixed a bug with flaky group members joining
@@ -1502,28 +1502,28 @@ func NewStickyMemberMetadata() StickyMemberMetadata {
 	return v
 }
 
-type GroupMemberMetadataOwnedPartition struct {
+type ConsumerMemberMetadataOwnedPartition struct {
 	Topic string
 
 	Partitions []int32
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
-// if new fields are added to GroupMemberMetadataOwnedPartition.
-func (v *GroupMemberMetadataOwnedPartition) Default() {
+// if new fields are added to ConsumerMemberMetadataOwnedPartition.
+func (v *ConsumerMemberMetadataOwnedPartition) Default() {
 }
 
-// NewGroupMemberMetadataOwnedPartition returns a default GroupMemberMetadataOwnedPartition
+// NewConsumerMemberMetadataOwnedPartition returns a default ConsumerMemberMetadataOwnedPartition
 // This is a shortcut for creating a struct and calling Default yourself.
-func NewGroupMemberMetadataOwnedPartition() GroupMemberMetadataOwnedPartition {
-	var v GroupMemberMetadataOwnedPartition
+func NewConsumerMemberMetadataOwnedPartition() ConsumerMemberMetadataOwnedPartition {
+	var v ConsumerMemberMetadataOwnedPartition
 	v.Default()
 	return v
 }
 
-// GroupMemberMetadata is the metadata that is usually sent with a join group
-// request with the "consumer" protocol.
-type GroupMemberMetadata struct {
+// ConsumerMemberMetadata is the metadata that is usually sent with a join group
+// request with the "consumer" protocol (normal, non-connect consumers).
+type ConsumerMemberMetadata struct {
 	// Version is either version 0 or version 1.
 	Version int16
 
@@ -1537,10 +1537,10 @@ type GroupMemberMetadata struct {
 
 	// OwnedPartitions, introduced for KIP-429, are the partitions that this
 	// member currently owns.
-	OwnedPartitions []GroupMemberMetadataOwnedPartition // v1+
+	OwnedPartitions []ConsumerMemberMetadataOwnedPartition // v1+
 }
 
-func (v *GroupMemberMetadata) AppendTo(dst []byte) []byte {
+func (v *ConsumerMemberMetadata) AppendTo(dst []byte) []byte {
 	version := v.Version
 	_ = version
 	{
@@ -1581,7 +1581,7 @@ func (v *GroupMemberMetadata) AppendTo(dst []byte) []byte {
 	return dst
 }
 
-func (v *GroupMemberMetadata) ReadFrom(src []byte) error {
+func (v *ConsumerMemberMetadata) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
 	v.Version = b.Int16()
@@ -1619,7 +1619,7 @@ func (v *GroupMemberMetadata) ReadFrom(src []byte) error {
 			return b.Complete()
 		}
 		if l > 0 {
-			a = make([]GroupMemberMetadataOwnedPartition, l)
+			a = make([]ConsumerMemberMetadataOwnedPartition, l)
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
@@ -1655,19 +1655,19 @@ func (v *GroupMemberMetadata) ReadFrom(src []byte) error {
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
-// if new fields are added to GroupMemberMetadata.
-func (v *GroupMemberMetadata) Default() {
+// if new fields are added to ConsumerMemberMetadata.
+func (v *ConsumerMemberMetadata) Default() {
 }
 
-// NewGroupMemberMetadata returns a default GroupMemberMetadata
+// NewConsumerMemberMetadata returns a default ConsumerMemberMetadata
 // This is a shortcut for creating a struct and calling Default yourself.
-func NewGroupMemberMetadata() GroupMemberMetadata {
-	var v GroupMemberMetadata
+func NewConsumerMemberMetadata() ConsumerMemberMetadata {
+	var v ConsumerMemberMetadata
 	v.Default()
 	return v
 }
 
-type GroupMemberAssignmentTopic struct {
+type ConsumerMemberAssignmentTopic struct {
 	// Topic is a topic in the assignment.
 	Topic string
 
@@ -1676,32 +1676,33 @@ type GroupMemberAssignmentTopic struct {
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
-// if new fields are added to GroupMemberAssignmentTopic.
-func (v *GroupMemberAssignmentTopic) Default() {
+// if new fields are added to ConsumerMemberAssignmentTopic.
+func (v *ConsumerMemberAssignmentTopic) Default() {
 }
 
-// NewGroupMemberAssignmentTopic returns a default GroupMemberAssignmentTopic
+// NewConsumerMemberAssignmentTopic returns a default ConsumerMemberAssignmentTopic
 // This is a shortcut for creating a struct and calling Default yourself.
-func NewGroupMemberAssignmentTopic() GroupMemberAssignmentTopic {
-	var v GroupMemberAssignmentTopic
+func NewConsumerMemberAssignmentTopic() ConsumerMemberAssignmentTopic {
+	var v ConsumerMemberAssignmentTopic
 	v.Default()
 	return v
 }
 
-// GroupMemberAssignment is the assignment data that is usually sent with a
-// sync group request with the "consumer" protocol.
-type GroupMemberAssignment struct {
+// ConsumerMemberAssignment is the assignment data that is usually sent with a
+// sync group request with the "consumer" protocol )normal, non-connect
+// consumers).
+type ConsumerMemberAssignment struct {
 	// Verson is currently version 0.
 	Version int16
 
 	// Topics contains topics in the assignment.
-	Topics []GroupMemberAssignmentTopic
+	Topics []ConsumerMemberAssignmentTopic
 
 	// UserData is arbitrary client data for a given client in the group.
 	UserData []byte
 }
 
-func (v *GroupMemberAssignment) AppendTo(dst []byte) []byte {
+func (v *ConsumerMemberAssignment) AppendTo(dst []byte) []byte {
 	version := v.Version
 	_ = version
 	{
@@ -1734,7 +1735,7 @@ func (v *GroupMemberAssignment) AppendTo(dst []byte) []byte {
 	return dst
 }
 
-func (v *GroupMemberAssignment) ReadFrom(src []byte) error {
+func (v *ConsumerMemberAssignment) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
 	v.Version = b.Int16()
@@ -1750,7 +1751,7 @@ func (v *GroupMemberAssignment) ReadFrom(src []byte) error {
 			return b.Complete()
 		}
 		if l > 0 {
-			a = make([]GroupMemberAssignmentTopic, l)
+			a = make([]ConsumerMemberAssignmentTopic, l)
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
@@ -1790,14 +1791,14 @@ func (v *GroupMemberAssignment) ReadFrom(src []byte) error {
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
-// if new fields are added to GroupMemberAssignment.
-func (v *GroupMemberAssignment) Default() {
+// if new fields are added to ConsumerMemberAssignment.
+func (v *ConsumerMemberAssignment) Default() {
 }
 
-// NewGroupMemberAssignment returns a default GroupMemberAssignment
+// NewConsumerMemberAssignment returns a default ConsumerMemberAssignment
 // This is a shortcut for creating a struct and calling Default yourself.
-func NewGroupMemberAssignment() GroupMemberAssignment {
-	var v GroupMemberAssignment
+func NewConsumerMemberAssignment() ConsumerMemberAssignment {
+	var v ConsumerMemberAssignment
 	v.Default()
 	return v
 }
