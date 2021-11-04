@@ -19,8 +19,8 @@ type DescribedGroupMember struct {
 	ClientID   string  // ClientID is the Kafka client given ClientID of this group member.
 	ClientHost string  // ClientHost is the host this member is running on.
 
-	Join     kmsg.GroupMemberMetadata   // Join is what this member sent in its join group request; what it wants to consume.
-	Assigned kmsg.GroupMemberAssignment // Assigned is what this member was assigned to consume by the leader.
+	Join     kmsg.ConsumerMemberMetadata   // Join is what this member sent in its join group request; what it wants to consume.
+	Assigned kmsg.ConsumerMemberAssignment // Assigned is what this member was assigned to consume by the leader.
 }
 
 // AssignedPartitions returns the set of unique topics and partitions that are
