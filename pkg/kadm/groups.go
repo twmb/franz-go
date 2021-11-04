@@ -11,6 +11,62 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
+// GroupMemberMetadata is the metadata that a client sent in a JoinGroup request.
+// This can have one of three types:
+//
+//     *kmsg.ConsumerMemberMetadata, if the group's ProtocolType is "consumer"
+//     *kmsg.ConnectMemberMetadata, if the group's ProtocolType is "connect"
+//     []byte, if the group's ProtocolType is unknown
+//
+type GroupMemberMetadata struct{ i interface{} }
+
+// AsConsumer returns the metadata as a ConsumerMemberMetadata if possible.
+func (m GroupMemberMetadata) AsConsumer() (*kmsg.ConsumerMemberMetadata, bool) {
+	c, ok := m.i.(*kmsg.ConsumerMemberMetadata)
+	return c, ok
+}
+
+// AsConnect returns the metadata as ConnectMemberMetadata if possible.
+func (m GroupMemberMetadata) AsConnect() (*kmsg.ConnectMemberMetadata, bool) {
+	c, ok := m.i.(*kmsg.ConnectMemberMetadata)
+	return c, ok
+}
+
+// Raw returns the metadata as a raw byte slice, if it is neither of consumer
+// type nor connect type.
+func (m GroupMemberMetadata) Raw() ([]byte, bool) {
+	c, ok := m.i.([]byte)
+	return c, ok
+}
+
+// GroupMemberAssignment is the assignment that a leader sent / a member
+// received in a SyncGroup request.  This can have one of three types:
+//
+//     *kmsg.ConsumerMemberAssignment, if the group's ProtocolType is "consumer"
+//     *kmsg.ConnectMemberAssignment, if the group's ProtocolType is "connect"
+//     []byte, if the group's ProtocolType is unknown
+//
+type GroupMemberAssignment struct{ i interface{} }
+
+// AsConsumer returns the assignment as a ConsumerMemberAssignment if possible.
+func (m GroupMemberAssignment) AsConsumer() (*kmsg.ConsumerMemberAssignment, bool) {
+	c, ok := m.i.(*kmsg.ConsumerMemberAssignment)
+	return c, ok
+}
+
+// AsConnect returns the assignment as ConnectMemberAssignment if possible.
+func (m GroupMemberAssignment) AsConnect() (*kmsg.ConnectMemberAssignment, bool) {
+	c, ok := m.i.(*kmsg.ConnectMemberAssignment)
+	return c, ok
+}
+
+// Raw returns the assignment as a raw byte slice, if it is neither of consumer
+// type nor connect type.
+func (m GroupMemberAssignment) Raw() ([]byte, bool) {
+	c, ok := m.i.([]byte)
+	return c, ok
+}
+
 // DescribedGroupMember is the detail of an individual group member as returned
 // by a describe groups response.
 type DescribedGroupMember struct {
@@ -19,17 +75,21 @@ type DescribedGroupMember struct {
 	ClientID   string  // ClientID is the Kafka client given ClientID of this group member.
 	ClientHost string  // ClientHost is the host this member is running on.
 
-	Join     kmsg.ConsumerMemberMetadata   // Join is what this member sent in its join group request; what it wants to consume.
-	Assigned kmsg.ConsumerMemberAssignment // Assigned is what this member was assigned to consume by the leader.
+	Join     GroupMemberMetadata   // Join is what this member sent in its join group request; what it wants to consume.
+	Assigned GroupMemberAssignment // Assigned is what this member was assigned to consume by the leader.
 }
 
 // AssignedPartitions returns the set of unique topics and partitions that are
 // assigned across all members in this group.
+//
+// This function is only relevant if the group is of type "consumer".
 func (d *DescribedGroup) AssignedPartitions() TopicsSet {
 	var s TopicsSet
 	for _, m := range d.Members {
-		for _, t := range m.Assigned.Topics {
-			s.Add(t.Topic, t.Partitions...)
+		if c, ok := m.Assigned.AsConsumer(); ok {
+			for _, t := range c.Topics {
+				s.Add(t.Topic, t.Partitions...)
+			}
 		}
 	}
 	return s
@@ -40,10 +100,11 @@ func (d *DescribedGroup) AssignedPartitions() TopicsSet {
 type DescribedGroup struct {
 	Group string // Group is the name of the described group.
 
-	Coordinator BrokerDetail           // Coordinator is the coordinator broker for this group.
-	State       string                 // State is the state this group is in (Empty, Dead, Stable, etc.).
-	Protocol    string                 // Protocol is the partition assignor strategy this group is using.
-	Members     []DescribedGroupMember // Members contains the members of this group sorted first by InstanceID, or if nil, by MemberID.
+	Coordinator  BrokerDetail           // Coordinator is the coordinator broker for this group.
+	State        string                 // State is the state this group is in (Empty, Dead, Stable, etc.).
+	ProtocolType string                 // ProtocolType is the type of protocol the group is using, "consumer" for normal consumers, "connect" for Kafka connect.
+	Protocol     string                 // Protocol is the partition assignor strategy this group is using.
+	Members      []DescribedGroupMember // Members contains the members of this group sorted first by InstanceID, or if nil, by MemberID.
 
 	Err error // Err is non-nil if the group could not be described.
 }
@@ -55,12 +116,16 @@ type DescribedGroups map[string]DescribedGroup
 // AssignedPartitions returns the set of unique topics and partitions that are
 // assigned across all members in all groups. This is the all-group analogue to
 // DescribedGroup.AssignedPartitions.
+//
+// This function is only relevant for groups of type "consumer".
 func (ds DescribedGroups) AssignedPartitions() TopicsSet {
 	var s TopicsSet
 	for _, g := range ds {
 		for _, m := range g.Members {
-			for _, t := range m.Assigned.Topics {
-				s.Add(t.Topic, t.Partitions...)
+			if c, ok := m.Assigned.AsConsumer(); ok {
+				for _, t := range c.Topics {
+					s.Add(t.Topic, t.Partitions...)
+				}
 			}
 		}
 	}
@@ -207,11 +272,12 @@ func (cl *Client) DescribeGroups(ctx context.Context, groups ...string) (Describ
 				return err
 			}
 			g := DescribedGroup{
-				Group:       rg.Group,
-				Coordinator: b,
-				State:       rg.State,
-				Protocol:    rg.Protocol,
-				Err:         kerr.ErrorForCode(rg.ErrorCode),
+				Group:        rg.Group,
+				Coordinator:  b,
+				State:        rg.State,
+				ProtocolType: rg.ProtocolType,
+				Protocol:     rg.Protocol,
+				Err:          kerr.ErrorForCode(rg.ErrorCode),
 			}
 			for _, rm := range rg.Members {
 				gm := DescribedGroupMember{
@@ -220,8 +286,31 @@ func (cl *Client) DescribeGroups(ctx context.Context, groups ...string) (Describ
 					ClientID:   rm.ClientID,
 					ClientHost: rm.ClientHost,
 				}
-				gm.Join.ReadFrom(rm.ProtocolMetadata)
-				gm.Assigned.ReadFrom(rm.MemberAssignment)
+
+				var mi, ai interface{}
+				switch g.ProtocolType {
+				case "consumer":
+					m := new(kmsg.ConsumerMemberMetadata)
+					a := new(kmsg.ConsumerMemberAssignment)
+
+					m.ReadFrom(rm.ProtocolMetadata)
+					a.ReadFrom(rm.MemberAssignment)
+
+					mi, ai = m, a
+				case "connect":
+					m := new(kmsg.ConnectMemberMetadata)
+					a := new(kmsg.ConnectMemberAssignment)
+
+					m.ReadFrom(rm.ProtocolMetadata)
+					a.ReadFrom(rm.MemberAssignment)
+
+					mi, ai = m, a
+				default:
+					mi, ai = rm.ProtocolMetadata, rm.MemberAssignment
+				}
+
+				gm.Join = GroupMemberMetadata{mi}
+				gm.Assigned = GroupMemberAssignment{ai}
 				g.Members = append(g.Members, gm)
 			}
 			sort.Slice(g.Members, func(i, j int) bool {
@@ -818,7 +907,11 @@ func CalculateGroupLag(
 
 	l := make(map[string]map[int32]GroupMemberLag)
 	for mi, m := range group.Members {
-		for _, t := range m.Assigned.Topics {
+		c, ok := m.Assigned.AsConsumer()
+		if !ok {
+			continue
+		}
+		for _, t := range c.Topics {
 			lt := l[t.Topic]
 			if lt == nil {
 				lt = make(map[int32]GroupMemberLag)
