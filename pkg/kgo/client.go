@@ -37,7 +37,8 @@ type Client struct {
 	rng *rand.Rand
 
 	brokersMu    sync.RWMutex
-	brokers      map[int32]*broker // broker id => broker
+	brokers      []*broker // ordered by broker ID
+	seeds        []*broker // seed brokers, also ordered by ID
 	anyBrokerIdx int32
 	anySeedIdx   int32
 	stopBrokers  bool // set to true on close to stop updateBrokers
@@ -150,7 +151,6 @@ func NewClient(opts ...Opt) (*Client, error) {
 		rng:       rand.New(rand.NewSource(time.Now().UnixNano())),
 
 		controllerID: unknownControllerID,
-		brokers:      make(map[int32]*broker),
 
 		sinksAndSources: make(map[int32]sinkAndSource),
 
@@ -193,8 +193,9 @@ func NewClient(opts ...Opt) (*Client, error) {
 
 	for i, seed := range seeds {
 		b := cl.newBroker(unknownSeedID(i), seed.host, seed.port, nil)
-		cl.brokers[b.meta.NodeID] = b
+		cl.seeds = append(cl.seeds, b)
 	}
+	sort.Slice(cl.seeds, func(i, j int) bool { return cl.seeds[i].meta.NodeID < cl.seeds[j].meta.NodeID })
 	go cl.updateMetadataLoop()
 	go cl.reapConnectionsLoop()
 
@@ -297,23 +298,16 @@ func (cl *Client) broker() *broker {
 	cl.brokersMu.Lock() // full lock needed for anyBrokerIdx below
 	defer cl.brokersMu.Unlock()
 
-	b, exists := cl.brokers[cl.anyBrokerIdx]
-	if !exists && cl.anyBrokerIdx != 0 {
-		cl.anyBrokerIdx = 0
-		b, exists = cl.brokers[cl.anyBrokerIdx]
-	}
-	cl.anyBrokerIdx++
-
-	// Maybe we have not loaded brokers yet--fallback to seeds.
-	if !exists {
-		b, exists = cl.brokers[unknownSeedID(int(cl.anySeedIdx))]
-		if !exists {
-			cl.anySeedIdx = 0 // seed 0 **must** exists.
-			b = cl.brokers[unknownSeedID(int(cl.anySeedIdx))]
-		}
+	var b *broker
+	if len(cl.brokers) > 0 {
+		cl.anyBrokerIdx = cl.anyBrokerIdx % int32(len(cl.brokers))
+		b = cl.brokers[cl.anyBrokerIdx]
+		cl.anyBrokerIdx++
+	} else {
+		cl.anySeedIdx = cl.anySeedIdx % int32(len(cl.seeds))
+		b = cl.seeds[cl.anySeedIdx]
 		cl.anySeedIdx++
 	}
-
 	return b
 }
 
@@ -427,7 +421,8 @@ func (cl *Client) fetchMetadata(ctx context.Context, req *kmsg.MetadataRequest, 
 // All metadata responses contain all known live brokers, so we can always
 // use the response.
 func (cl *Client) updateBrokers(brokers []kmsg.MetadataResponseBroker) {
-	newBrokers := make(map[int32]*broker, len(brokers))
+	sort.Slice(brokers, func(i, j int) bool { return brokers[i].NodeID < brokers[j].NodeID })
+	newBrokers := make([]*broker, 0, len(brokers))
 
 	cl.brokersMu.Lock()
 	defer cl.brokersMu.Unlock()
@@ -436,28 +431,40 @@ func (cl *Client) updateBrokers(brokers []kmsg.MetadataResponseBroker) {
 		return
 	}
 
-	for _, broker := range brokers {
-		b, exists := cl.brokers[broker.NodeID]
-		if exists {
-			// delete the broker to avoid stopping it below in goneBrokers
-			delete(cl.brokers, broker.NodeID)
-			if !b.meta.equals(broker) {
-				b.stopForever()
-				b = cl.newBroker(broker.NodeID, broker.Host, broker.Port, broker.Rack)
-			}
-		} else {
-			b = cl.newBroker(broker.NodeID, broker.Host, broker.Port, broker.Rack)
-		}
+	for len(brokers) > 0 && len(cl.brokers) > 0 {
+		ob := cl.brokers[0]
+		nb := brokers[0]
 
-		newBrokers[broker.NodeID] = b
+		switch {
+		case ob.meta.NodeID < nb.NodeID:
+			ob.stopForever()
+			cl.brokers = cl.brokers[1:]
+
+		case ob.meta.NodeID == nb.NodeID:
+			if !ob.meta.equals(nb) {
+				ob.stopForever()
+				ob = cl.newBroker(nb.NodeID, nb.Host, nb.Port, nb.Rack)
+			}
+			newBrokers = append(newBrokers, ob)
+			cl.brokers = cl.brokers[1:]
+			brokers = brokers[1:]
+
+		case ob.meta.NodeID > nb.NodeID:
+			newBrokers = append(newBrokers, cl.newBroker(nb.NodeID, nb.Host, nb.Port, nb.Rack))
+			brokers = brokers[1:]
+		}
 	}
 
-	for goneID, goneBroker := range cl.brokers {
-		if goneID < -1 { // seed broker, unknown ID, always keep
-			newBrokers[goneID] = goneBroker
-		} else {
-			goneBroker.stopForever()
-		}
+	for len(cl.brokers) > 0 {
+		ob := cl.brokers[0]
+		ob.stopForever()
+		cl.brokers = cl.brokers[1:]
+	}
+
+	for len(brokers) > 0 {
+		nb := brokers[0]
+		newBrokers = append(newBrokers, cl.newBroker(nb.NodeID, nb.Host, nb.Port, nb.Rack))
+		brokers = brokers[1:]
 	}
 
 	cl.brokers = newBrokers
@@ -797,6 +804,18 @@ func shards(shard ...ResponseShard) []ResponseShard {
 	return shard
 }
 
+func findBroker(candidates []*broker, node int32) *broker {
+	n := sort.Search(len(candidates), func(n int) bool { return candidates[n].meta.NodeID >= node })
+	var b *broker
+	if n < len(candidates) {
+		c := candidates[n]
+		if c.meta.NodeID == node {
+			b = c
+		}
+	}
+	return b
+}
+
 // brokerOrErr returns the broker for ID or the error if the broker does not
 // exist.
 //
@@ -812,7 +831,12 @@ func (cl *Client) brokerOrErr(ctx context.Context, id int32, err error) (*broker
 	tries := 0
 start:
 	cl.brokersMu.RLock()
-	broker := cl.brokers[id]
+	var broker *broker
+	if id < 0 {
+		broker = findBroker(cl.seeds, id)
+	} else {
+		broker = findBroker(cl.brokers, id)
+	}
 	cl.brokersMu.RUnlock()
 
 	if broker == nil {
@@ -1247,9 +1271,7 @@ func (cl *Client) DiscoveredBrokers() []*Broker {
 
 	var bs []*Broker
 	for _, broker := range cl.brokers {
-		if broker.meta.NodeID >= 0 {
-			bs = append(bs, &Broker{id: broker.meta.NodeID, cl: cl})
-		}
+		bs = append(bs, &Broker{id: broker.meta.NodeID, cl: cl})
 	}
 	return bs
 }
@@ -1260,13 +1282,10 @@ func (cl *Client) SeedBrokers() []*Broker {
 	defer cl.brokersMu.RUnlock()
 
 	var bs []*Broker
-	for i := 0; ; i++ {
-		id := unknownSeedID(i)
-		if _, exists := cl.brokers[id]; !exists {
-			return bs
-		}
-		bs = append(bs, &Broker{id: id, cl: cl})
+	for _, broker := range cl.seeds {
+		bs = append(bs, &Broker{id: broker.meta.NodeID, cl: cl})
 	}
+	return bs
 }
 
 // Broker pairs a broker ID with a client to directly issue requests to a
@@ -1576,9 +1595,6 @@ func (cl *Client) allBrokersShardedReq(ctx context.Context, fn func() kmsg.Reque
 	var issues []issueShard
 	cl.brokersMu.RLock()
 	for _, broker := range cl.brokers {
-		if broker.meta.NodeID < 0 {
-			continue // we skip seed brokers
-		}
 		issues = append(issues, issueShard{
 			req:    fn(),
 			broker: broker.meta.NodeID,

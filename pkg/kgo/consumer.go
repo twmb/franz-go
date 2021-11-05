@@ -1344,7 +1344,7 @@ func (s *consumerSession) mapLoadsToBrokers(loads listOrEpochLoads) map[*broker]
 	defer s.c.cl.brokersMu.RUnlock()
 
 	brokers := s.c.cl.brokers
-	seed := brokers[unknownSeedID(0)] // must be non-nil
+	seed := s.c.cl.seeds[0]
 
 	topics := s.tps.load()
 	for _, loads := range []struct {
@@ -1371,7 +1371,7 @@ func (s *consumerSession) mapLoadsToBrokers(loads listOrEpochLoads) map[*broker]
 						// being non-negative signals that.
 						brokerID = offset.replica
 					}
-					if tryBroker := brokers[brokerID]; tryBroker != nil {
+					if tryBroker := findBroker(brokers, brokerID); tryBroker != nil {
 						broker = tryBroker
 					}
 					offset.currentEpoch = topicPartition.leaderEpoch // ensure we set our latest epoch for the partition
