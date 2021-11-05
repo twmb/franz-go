@@ -20,10 +20,10 @@ import (
 //
 // Thus while it is an ugly test, it is effective.
 func Test_stickyAdjustCooperative(t *testing.T) {
-	assn := func(in map[string][]int32) []kmsg.GroupMemberMetadataOwnedPartition {
-		var ks []kmsg.GroupMemberMetadataOwnedPartition
+	assn := func(in map[string][]int32) []kmsg.ConsumerMemberMetadataOwnedPartition {
+		var ks []kmsg.ConsumerMemberMetadataOwnedPartition
 		for topic, partitions := range in {
-			ks = append(ks, kmsg.GroupMemberMetadataOwnedPartition{
+			ks = append(ks, kmsg.ConsumerMemberMetadataOwnedPartition{
 				Topic:      topic,
 				Partitions: partitions,
 			})
@@ -38,7 +38,7 @@ func Test_stickyAdjustCooperative(t *testing.T) {
 			{MemberID: "c"},
 			{MemberID: "d"},
 		},
-		metadatas: []kmsg.GroupMemberMetadata{
+		metadatas: []kmsg.ConsumerMemberMetadata{
 			{OwnedPartitions: assn(map[string][]int32{
 				"t1":      {1, 2, 3, 4},
 				"tmove":   {1, 2},
