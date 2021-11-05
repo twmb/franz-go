@@ -1,3 +1,35 @@
+v1.2.3
+===
+
+This patch fixes the client not supporting brokers that start from large node
+IDs. The client previously assumed that brokers started at node ID 0 or 1 and
+went upwards from there. Starting at node 1000 would not always work.
+
+This also adds two very tiny new APIs, `FetchTopic.Each{Partition,Record}`,
+which are so tiny they are not worth a minor release.
+
+More work on kadm has been done: the package now supports ACLs.
+
+SASL no longer has a hard coded 30s write timeout; instead, we use the
+ConnTimeoutOverhead same as everything else. The default produce request
+timeout has been dropped to 10s from 30s, which is still ~10x more time than
+Kafka usually needs at the p99.9 level. This will help speed up producing to
+hung brokers. As well, the default backoff has been changed to 250ms-2.5s
+rather than 100ms-1s. The old backoff retried too quickly in all cases.
+
+Logs for assigned partitions have been improved, as have logs for inner
+metadata request / fetch request failures.
+
+- [`07a38bc`](https://github.com/twmb/franz-go/commit/07a38bc) **bugfix** client: support non-zero/one node IDs
+- [`3cbaa5f`](https://github.com/twmb/franz-go/commit/3cbaa5f) add more context to metadata reloads on inner partition errors
+- [`1bc1156`](https://github.com/twmb/franz-go/commit/1bc1156) **feature** FetchTopic: add EachRecord, Records helper methods
+- [`0779837`](https://github.com/twmb/franz-go/commit/0779837) consuming, group: improve logging, simplify code
+- [`d378b32`](https://github.com/twmb/franz-go/commit/d378b32) config: edit comment for FetchMaxWait (about Java setting) (thanks @dwagin!)
+- [`df80a52`](https://github.com/twmb/franz-go/commit/df80a52) **behavior change** config: drop ProduceRequestTimeout to 10s, doc more
+- [`6912cfe`](https://github.com/twmb/franz-go/commit/6912cfe) **behavior change** config: change default backoff from 100ms-1s to 250ms-2.5s
+- [`c197efd`](https://github.com/twmb/franz-go/commit/c197efd) **behavior change** client: remove 30s default write timeout for SASL
+- [`10ff785`](https://github.com/twmb/franz-go/commit/10ff785) metadata: drop timer based info log, reword
+
 v1.2.2
 ===
 
