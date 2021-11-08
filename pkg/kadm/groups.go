@@ -176,8 +176,9 @@ func (ds DescribedGroups) Names() []string {
 
 // ListedGroup contains data from a list groups response for a single group.
 type ListedGroup struct {
-	Group string // Group is the name of this group.
-	State string // State is the state this group is in (Empty, Dead, Stable, etc.; only if talking to Kafka 2.6+).
+	Group        string // Group is the name of this group.
+	ProtocolType string // ProtocolType is the type of protocol the group is using, "consumer" for normal consumers, "connect" for Kafka connect.
+	State        string // State is the state this group is in (Empty, Dead, Stable, etc.; only if talking to Kafka 2.6+).
 }
 
 // ListedGroups contains information from a list groups response.
@@ -224,8 +225,9 @@ func (cl *Client) ListGroups(ctx context.Context, filterStates ...string) (Liste
 		}
 		for _, g := range resp.Groups {
 			list[g.Group] = ListedGroup{
-				Group: g.Group,
-				State: g.GroupState,
+				Group:        g.Group,
+				ProtocolType: g.ProtocolType,
+				State:        g.GroupState,
 			}
 		}
 		return nil
