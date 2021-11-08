@@ -487,7 +487,7 @@ func (os OffsetResponses) Each(fn func(OffsetResponse)) {
 // Note that offset operations can be partially successful. For example, some
 // offsets could succeed in an offset commit while others fail (maybe one topic
 // does not exist for some reason, or you are not authorized for one topic). If
-// This is something you need to worry about, you may need to check all offsets
+// this is something you need to worry about, you may need to check all offsets
 // manually.
 func (os OffsetResponses) Error() error {
 	for _, ps := range os {

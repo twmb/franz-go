@@ -276,6 +276,38 @@ func (l ListedOffsets) Each(fn func(ListedOffset)) {
 	}
 }
 
+// Error iterates over all offsets and returns the first error encountered, if
+// any. This can be to check if a listing was entirely successful or not.
+//
+// Note that offset listing can be partially successful. For example, some
+// offsets could succeed to be listed, while other could fail (maybe one
+// partition is offline). If this is something you need to worry about, you may
+// need to check all offsets manually.
+func (l ListedOffsets) Error() error {
+	for _, ps := range l {
+		for _, o := range ps {
+			if o.Err != nil {
+				return o.Err
+			}
+		}
+	}
+	return nil
+}
+
+// Into returns these listed offsets as offsets.
+func (l ListedOffsets) Into() Offsets {
+	var o Offsets
+	l.Each(func(l ListedOffset) {
+		o.Add(Offset{
+			Topic:       l.Topic,
+			Partition:   l.Partition,
+			Offset:      l.Offset,
+			LeaderEpoch: l.LeaderEpoch,
+		})
+	})
+	return o
+}
+
 // ListStartOffsets returns the start (oldest) offsets for each partition in
 // each requested topic. In Kafka terms, this returns the log start offset. If
 // no topics are specified, all topics are listed.
