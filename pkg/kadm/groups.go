@@ -473,6 +473,17 @@ func (os OffsetResponses) EachError(fn func(o OffsetResponse)) {
 	}
 }
 
+// Sorted returns the responses sorted by topic and partition.
+func (os OffsetResponses) Sorted() []OffsetResponse {
+	var s []OffsetResponse
+	os.Each(func(o OffsetResponse) { s = append(s, o) })
+	sort.Slice(s, func(i, j int) bool {
+		return s[i].Topic < s[j].Topic ||
+			s[i].Topic == s[j].Topic && s[i].Partition < s[j].Partition
+	})
+	return s
+}
+
 // Each calls fn for every offset.
 func (os OffsetResponses) Each(fn func(OffsetResponse)) {
 	for _, ps := range os {
