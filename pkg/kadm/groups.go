@@ -424,6 +424,19 @@ type OffsetResponse struct {
 // OffsetResponses contains per-partition responses to offset methods.
 type OffsetResponses map[string]map[int32]OffsetResponse
 
+// Lookup returns the offset at t and p and whether it exists.
+func (os OffsetResponses) Lookup(t string, p int32) (OffsetResponse, bool) {
+	if len(os) == 0 {
+		return OffsetResponse{}, false
+	}
+	ps := os[t]
+	if len(ps) == 0 {
+		return OffsetResponse{}, false
+	}
+	o, exists := ps[p]
+	return o, exists
+}
+
 // Keep filters the responses to only keep the input offsets.
 func (os OffsetResponses) Keep(o Offsets) {
 	os.DeleteFunc(func(r OffsetResponse) bool {
@@ -770,6 +783,19 @@ func (cl *Client) FetchManyOffsets(ctx context.Context, groups ...string) FetchO
 // offset deletion for a partition was successful, the error will be nil.
 type DeleteOffsetsResponses map[string]map[int32]error
 
+// Lookup returns the response at t and p and whether it exists.
+func (ds DeleteOffsetsResponses) Lookup(t string, p int32) (error, bool) {
+	if len(ds) == 0 {
+		return nil, false
+	}
+	ps := ds[t]
+	if len(ps) == 0 {
+		return nil, false
+	}
+	r, exists := ps[p]
+	return r, exists
+}
+
 // EachError calls fn for every partition that as a non-nil deletion error.
 func (ds DeleteOffsetsResponses) EachError(fn func(string, int32, error)) {
 	for t, ps := range ds {
@@ -865,6 +891,19 @@ func (g *GroupMemberLag) IsEmpty() bool { return g.Member == nil }
 
 // GroupLag is the per-topic, per-partition lag of members in a group.
 type GroupLag map[string]map[int32]GroupMemberLag
+
+// Lookup returns the lag at t and p and whether it exists.
+func (l GroupLag) Lookup(t string, p int32) (GroupMemberLag, bool) {
+	if len(l) == 0 {
+		return GroupMemberLag{}, false
+	}
+	ps := l[t]
+	if len(ps) == 0 {
+		return GroupMemberLag{}, false
+	}
+	m, exists := ps[p]
+	return m, exists
+}
 
 // Sorted returns the per-topic, per-partition lag by member sorted in order by
 // topic then partition.

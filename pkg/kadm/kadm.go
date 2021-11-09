@@ -178,6 +178,19 @@ func (l OffsetsList) Into() Offsets {
 // Offsets wraps many offsets and is the type used for offset functions.
 type Offsets map[string]map[int32]Offset
 
+// Lookup returns the offset at t and p and whether it exists.
+func (os Offsets) Lookup(t string, p int32) (Offset, bool) {
+	if len(os) == 0 {
+		return Offset{}, false
+	}
+	ps := os[t]
+	if len(ps) == 0 {
+		return Offset{}, false
+	}
+	o, exists := ps[p]
+	return o, exists
+}
+
 // Add adds an offset for a given topic/partition to this Offsets map.
 //
 // If the partition already exists, the offset is only added if:
@@ -313,6 +326,19 @@ func OffsetsFromRecords(rs ...kgo.Record) Offsets {
 //
 // All methods provided for TopicsSet are safe to use on a nil (default) set.
 type TopicsSet map[string]map[int32]struct{}
+
+// Lookup returns whether the topic and partition exists.
+func (s TopicsSet) Lookup(t string, p int32) bool {
+	if len(s) == 0 {
+		return false
+	}
+	ps := s[t]
+	if len(ps) == 0 {
+		return false
+	}
+	_, exists := ps[p]
+	return exists
+}
 
 // Each calls fn for each topic / partition in the topics set.
 func (s TopicsSet) Each(fn func(t string, p int32)) {

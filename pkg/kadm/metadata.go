@@ -267,6 +267,19 @@ type ListedOffset struct {
 // returned from any of the List.*Offsets functions.
 type ListedOffsets map[string]map[int32]ListedOffset
 
+// Lookup returns the offset at t and p and whether it exists.
+func (l ListedOffsets) Lookup(t string, p int32) (ListedOffset, bool) {
+	if len(l) == 0 {
+		return ListedOffset{}, false
+	}
+	ps := l[t]
+	if len(ps) == 0 {
+		return ListedOffset{}, false
+	}
+	o, exists := ps[p]
+	return o, exists
+}
+
 // Each calls fn for each listed offset.
 func (l ListedOffsets) Each(fn func(ListedOffset)) {
 	for _, ps := range l {

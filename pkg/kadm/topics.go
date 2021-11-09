@@ -266,6 +266,19 @@ type DeleteRecordsResponse struct {
 // DeleteRecordsResponses contains per-partition responses to a delete records request.
 type DeleteRecordsResponses map[string]map[int32]DeleteRecordsResponse
 
+// Lookup returns the response at t and p and whether it exists.
+func (ds DeleteRecordsResponses) Lookup(t string, p int32) (DeleteRecordsResponse, bool) {
+	if len(ds) == 0 {
+		return DeleteRecordsResponse{}, false
+	}
+	ps := ds[t]
+	if len(ps) == 0 {
+		return DeleteRecordsResponse{}, false
+	}
+	r, exists := ps[p]
+	return r, exists
+}
+
 // Each calls fn for every delete records response.
 func (ds DeleteRecordsResponses) Each(fn func(DeleteRecordsResponse)) {
 	for _, ps := range ds {
