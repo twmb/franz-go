@@ -9,6 +9,6 @@ require github.com/twmb/franz-go v1.0.0
 require (
 	github.com/klauspost/compress v1.13.5 // indirect
 	github.com/pierrec/lz4/v4 v4.1.8 // indirect
-	github.com/twmb/franz-go/pkg/kmsg v0.0.0-20210914042331-106aef61b693 // indirect
+	github.com/twmb/franz-go/pkg/kmsg v0.0.0-20211104051938-70808186d5f7 // indirect
 	github.com/twmb/go-rbtree v1.0.0 // indirect
 )

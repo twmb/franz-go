@@ -3,7 +3,7 @@ module manual_committing
 go 1.16
 
 require (
-	github.com/twmb/franz-go v1.1.4
+	github.com/twmb/franz-go v1.2.3-0.20211104052441-7952375c09c0
 	github.com/twmb/franz-go/pkg/kadm v0.0.0-20211016003631-fbf9239e2698
 )
 
