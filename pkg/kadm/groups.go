@@ -176,6 +176,7 @@ func (ds DescribedGroups) Names() []string {
 
 // ListedGroup contains data from a list groups response for a single group.
 type ListedGroup struct {
+	Coordinator  int32  // Coordinator is the node ID of the coordinator for this group.
 	Group        string // Group is the name of this group.
 	ProtocolType string // ProtocolType is the type of protocol the group is using, "consumer" for normal consumers, "connect" for Kafka connect.
 	State        string // State is the state this group is in (Empty, Dead, Stable, etc.; only if talking to Kafka 2.6+).
@@ -215,7 +216,7 @@ func (cl *Client) ListGroups(ctx context.Context, filterStates ...string) (Liste
 	req.StatesFilter = append(req.StatesFilter, filterStates...)
 	shards := cl.cl.RequestSharded(ctx, req)
 	list := make(ListedGroups)
-	return list, shardErrEach(req, shards, func(kr kmsg.Response) error {
+	return list, shardErrEachBroker(req, shards, func(b BrokerDetail, kr kmsg.Response) error {
 		resp := kr.(*kmsg.ListGroupsResponse)
 		if err := maybeAuthErr(resp.ErrorCode); err != nil {
 			return err
@@ -225,6 +226,7 @@ func (cl *Client) ListGroups(ctx context.Context, filterStates ...string) (Liste
 		}
 		for _, g := range resp.Groups {
 			list[g.Group] = ListedGroup{
+				Coordinator:  b.NodeID,
 				Group:        g.Group,
 				ProtocolType: g.ProtocolType,
 				State:        g.GroupState,
