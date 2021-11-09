@@ -966,6 +966,10 @@ func (p *parseRecordBits) set(r parseRecordBits)     { *p = *p | r }
 func (p parseRecordBits) has(r parseRecordBits) bool { return p&r != 0 }
 
 func (r *RecordReader) parseReadLayout(layout string) error {
+	if len(layout) == 0 {
+		return errors.New("RecordReader: invalid empty format")
+	}
+
 	var (
 		// If we are reading by size, we parse the layout size into one
 		// of these variables. When reading, we use the captured
