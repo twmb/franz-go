@@ -245,6 +245,25 @@ func (os Offsets) KeepFunc(fn func(o Offset) bool) {
 	}
 }
 
+// Topics returns the set of topics and partitions currently used in these
+// offsets.
+func (os Offsets) TopicsSet() TopicsSet {
+	var s TopicsSet
+	os.Each(func(t string, p int32, _ Offset) {
+		s.Add(t, p)
+	})
+	return s
+}
+
+// Each calls fn for each topic/partition/offset in these offsets.
+func (os Offsets) Each(fn func(string, int32, Offset)) {
+	for t, ps := range os {
+		for p, o := range ps {
+			fn(t, p, o)
+		}
+	}
+}
+
 // Into returns these offsets as a kgo offset map.
 func (os Offsets) Into() map[string]map[int32]kgo.Offset {
 	tskgo := make(map[string]map[int32]kgo.Offset)
