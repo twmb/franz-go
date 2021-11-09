@@ -296,7 +296,7 @@ func (l ListedOffsets) Error() error {
 
 // Into returns these listed offsets as offsets.
 func (l ListedOffsets) Into() Offsets {
-	var o Offsets
+	o := make(Offsets)
 	l.Each(func(l ListedOffset) {
 		o.Add(Offset{
 			Topic:       l.Topic,

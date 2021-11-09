@@ -150,7 +150,7 @@ type Partitions []Partition
 
 // TopicsSet returns these partitions as TopicsSet.
 func (ps Partitions) TopicsSet() TopicsSet {
-	var s TopicsSet
+	s := make(TopicsSet)
 	for _, p := range ps {
 		s.Add(p.Topic, p.Partition)
 	}
@@ -168,7 +168,7 @@ type OffsetsList []Offset
 // Into returns this list as the non-list Offsets. All fields in each Offset
 // must be set properly.
 func (l OffsetsList) Into() Offsets {
-	var os Offsets
+	os := make(Offsets)
 	for _, o := range l {
 		os.Add(o)
 	}
@@ -248,7 +248,7 @@ func (os Offsets) KeepFunc(fn func(o Offset) bool) {
 // Topics returns the set of topics and partitions currently used in these
 // offsets.
 func (os Offsets) TopicsSet() TopicsSet {
-	var s TopicsSet
+	s := make(TopicsSet)
 	os.Each(func(t string, p int32, _ Offset) {
 		s.Add(t, p)
 	})
@@ -287,7 +287,7 @@ func (os Offsets) Into() map[string]map[int32]kgo.Offset {
 // Poll functions). The returned offsets are one past the offset contained in
 // the records.
 func OffsetsFromFetches(fs kgo.Fetches) Offsets {
-	var os Offsets
+	os := make(Offsets)
 	fs.EachPartition(func(p kgo.FetchTopicPartition) {
 		if len(p.Records) == 0 {
 			return
@@ -302,7 +302,7 @@ func OffsetsFromFetches(fs kgo.Fetches) Offsets {
 // offset per partition. The returned offsets are one past the offset contained
 // in the records.
 func OffsetsFromRecords(rs ...kgo.Record) Offsets {
-	var os Offsets
+	os := make(Offsets)
 	for _, r := range rs {
 		os.AddOffset(r.Topic, r.Partition, r.Offset+1, r.LeaderEpoch)
 	}
@@ -404,7 +404,7 @@ func (s TopicsSet) Sorted() TopicsList {
 
 // IntoSet returns this list as a set.
 func (l TopicsList) IntoSet() TopicsSet {
-	var s TopicsSet
+	s := make(TopicsSet)
 	for _, t := range l {
 		s.Add(t.Topic, t.Partitions...)
 	}

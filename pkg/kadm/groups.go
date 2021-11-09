@@ -84,7 +84,7 @@ type DescribedGroupMember struct {
 //
 // This function is only relevant if the group is of type "consumer".
 func (d *DescribedGroup) AssignedPartitions() TopicsSet {
-	var s TopicsSet
+	s := make(TopicsSet)
 	for _, m := range d.Members {
 		if c, ok := m.Assigned.AsConsumer(); ok {
 			for _, t := range c.Topics {
@@ -119,7 +119,7 @@ type DescribedGroups map[string]DescribedGroup
 //
 // This function is only relevant for groups of type "consumer".
 func (ds DescribedGroups) AssignedPartitions() TopicsSet {
-	var s TopicsSet
+	s := make(TopicsSet)
 	for _, g := range ds {
 		for _, m := range g.Members {
 			if c, ok := m.Assigned.AsConsumer(); ok {
@@ -441,7 +441,7 @@ func (os OffsetResponses) Keep(o Offsets) {
 
 // Each returns these offset responses as offsets.
 func (os OffsetResponses) Into() Offsets {
-	var i Offsets
+	i := make(Offsets)
 	os.Each(func(o OffsetResponse) {
 		i.Add(o.Offset)
 	})
@@ -649,7 +649,7 @@ func (cl *Client) FetchOffsets(ctx context.Context, group string) (OffsetRespons
 // error. The returned offsets are ready to be used or converted directly to
 // kgo offsets with `Into`.
 func (cl *Client) FetchOffsetsForTopics(ctx context.Context, group string, topics ...string) (Offsets, error) {
-	var os Offsets
+	os := make(Offsets)
 
 	if len(topics) > 0 {
 		listed, err := cl.ListTopics(ctx, topics...)
