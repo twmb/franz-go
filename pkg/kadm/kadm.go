@@ -140,7 +140,7 @@ type Partition struct {
 type Offset struct {
 	Topic       string
 	Partition   int32
-	Offset      int64  // Offset is the partition to set.
+	At          int64  // Offset is the partition to set.
 	LeaderEpoch int32  // LeaderEpoch is the broker leader epoch of the record at this offset.
 	Metadata    string // Metadata, if non-empty, is used for offset commits.
 }
@@ -199,7 +199,7 @@ func (os *Offsets) Add(o Offset) {
 
 	prior, exists := ot[o.Partition]
 	if !exists || prior.LeaderEpoch < o.LeaderEpoch ||
-		prior.LeaderEpoch == o.LeaderEpoch && prior.Offset < o.Offset {
+		prior.LeaderEpoch == o.LeaderEpoch && prior.At < o.At {
 		ot[o.Partition] = o
 	}
 }
@@ -226,7 +226,7 @@ func (os *Offsets) AddOffset(t string, p int32, o int64, leaderEpoch int32) {
 	os.Add(Offset{
 		Topic:       t,
 		Partition:   p,
-		Offset:      o,
+		At:          o,
 		LeaderEpoch: leaderEpoch,
 	})
 }
@@ -271,7 +271,7 @@ func (os Offsets) Into() map[string]map[int32]kgo.Offset {
 		pskgo := make(map[int32]kgo.Offset)
 		for p, o := range ps {
 			pskgo[p] = kgo.NewOffset().
-				At(o.Offset).
+				At(o.At).
 				WithEpoch(o.LeaderEpoch)
 		}
 		tskgo[t] = pskgo

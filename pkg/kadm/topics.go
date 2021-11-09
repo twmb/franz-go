@@ -347,7 +347,7 @@ func (cl *Client) DeleteRecords(ctx context.Context, os Offsets) (DeleteRecordsR
 		for p, o := range ps {
 			rp := kmsg.NewDeleteRecordsRequestTopicPartition()
 			rp.Partition = p
-			rp.Offset = o.Offset
+			rp.Offset = o.At
 		}
 	}
 

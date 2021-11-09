@@ -537,7 +537,7 @@ func (cl *Client) CommitOffsets(ctx context.Context, group string, os Offsets) (
 		for p, o := range ps {
 			rp := kmsg.NewOffsetCommitRequestTopicPartition()
 			rp.Partition = p
-			rp.Offset = o.Offset
+			rp.Offset = o.At
 			rp.LeaderEpoch = o.LeaderEpoch
 			if len(o.Metadata) > 0 {
 				rp.Metadata = kmsg.StringPtr(o.Metadata)
@@ -630,7 +630,7 @@ func (cl *Client) FetchOffsets(ctx context.Context, group string) (OffsetRespons
 				Offset: Offset{
 					Topic:       t.Topic,
 					Partition:   p.Partition,
-					Offset:      p.Offset,
+					At:          p.Offset,
 					LeaderEpoch: p.LeaderEpoch,
 					Metadata:    meta,
 				},
@@ -946,7 +946,7 @@ func CalculateGroupLag(
 						pcommit = OffsetResponse{Offset: Offset{
 							Topic:     t.Topic,
 							Partition: p,
-							Offset:    -1,
+							At:        -1,
 						}}
 					}
 				}
@@ -967,8 +967,8 @@ func CalculateGroupLag(
 				lag := int64(-1)
 				if perr == nil {
 					lag = pend.Offset
-					if pcommit.Offset.Offset >= 0 {
-						lag = pend.Offset - pcommit.Offset.Offset
+					if pcommit.At >= 0 {
+						lag = pend.Offset - pcommit.At
 					}
 				}
 
@@ -1018,8 +1018,8 @@ func calculateEmptyLag(commit OffsetResponses, offsets ListedOffsets) GroupLag {
 			lag := int64(-1)
 			if perr == nil {
 				lag = pend.Offset
-				if pcommit.Offset.Offset >= 0 {
-					lag = pend.Offset - pcommit.Offset.Offset
+				if pcommit.At >= 0 {
+					lag = pend.Offset - pcommit.At
 				}
 			}
 
@@ -1045,7 +1045,7 @@ func calculateEmptyLag(commit OffsetResponses, offsets ListedOffsets) GroupLag {
 			pcommit := Offset{
 				Topic:       t,
 				Partition:   p,
-				Offset:      -1,
+				At:          -1,
 				LeaderEpoch: -1,
 			}
 			perr := pend.Err

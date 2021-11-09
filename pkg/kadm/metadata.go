@@ -301,7 +301,7 @@ func (l ListedOffsets) Into() Offsets {
 		o.Add(Offset{
 			Topic:       l.Topic,
 			Partition:   l.Partition,
-			Offset:      l.Offset,
+			At:          l.Offset,
 			LeaderEpoch: l.LeaderEpoch,
 		})
 	})
