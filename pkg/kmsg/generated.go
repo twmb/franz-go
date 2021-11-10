@@ -39446,6 +39446,89 @@ func NameForKey(key int16) string {
 	}
 }
 
+// Key is a typed representation of a request key, with helper functions.
+type Key int16
+
+const (
+	Produce                      Key = 0
+	Fetch                        Key = 1
+	ListOffsets                  Key = 2
+	Metadata                     Key = 3
+	LeaderAndISR                 Key = 4
+	StopReplica                  Key = 5
+	UpdateMetadata               Key = 6
+	ControlledShutdown           Key = 7
+	OffsetCommit                 Key = 8
+	OffsetFetch                  Key = 9
+	FindCoordinator              Key = 10
+	JoinGroup                    Key = 11
+	Heartbeat                    Key = 12
+	LeaveGroup                   Key = 13
+	SyncGroup                    Key = 14
+	DescribeGroups               Key = 15
+	ListGroups                   Key = 16
+	SASLHandshake                Key = 17
+	ApiVersions                  Key = 18
+	CreateTopics                 Key = 19
+	DeleteTopics                 Key = 20
+	DeleteRecords                Key = 21
+	InitProducerID               Key = 22
+	OffsetForLeaderEpoch         Key = 23
+	AddPartitionsToTxn           Key = 24
+	AddOffsetsToTxn              Key = 25
+	EndTxn                       Key = 26
+	WriteTxnMarkers              Key = 27
+	TxnOffsetCommit              Key = 28
+	DescribeACLs                 Key = 29
+	CreateACLs                   Key = 30
+	DeleteACLs                   Key = 31
+	DescribeConfigs              Key = 32
+	AlterConfigs                 Key = 33
+	AlterReplicaLogDirs          Key = 34
+	DescribeLogDirs              Key = 35
+	SASLAuthenticate             Key = 36
+	CreatePartitions             Key = 37
+	CreateDelegationToken        Key = 38
+	RenewDelegationToken         Key = 39
+	ExpireDelegationToken        Key = 40
+	DescribeDelegationToken      Key = 41
+	DeleteGroups                 Key = 42
+	ElectLeaders                 Key = 43
+	IncrementalAlterConfigs      Key = 44
+	AlterPartitionAssignments    Key = 45
+	ListPartitionReassignments   Key = 46
+	OffsetDelete                 Key = 47
+	DescribeClientQuotas         Key = 48
+	AlterClientQuotas            Key = 49
+	DescribeUserSCRAMCredentials Key = 50
+	AlterUserSCRAMCredentials    Key = 51
+	Vote                         Key = 52
+	BeginQuorumEpoch             Key = 53
+	EndQuorumEpoch               Key = 54
+	DescribeQuorum               Key = 55
+	AlterISR                     Key = 56
+	UpdateFeatures               Key = 57
+	Envelope                     Key = 58
+	FetchSnapshot                Key = 59
+	DescribeCluster              Key = 60
+	DescribeProducers            Key = 61
+	BrokerRegistration           Key = 62
+	BrokerHeartbeat              Key = 63
+	UnregisterBroker             Key = 64
+	DescribeTransactions         Key = 65
+	ListTransactions             Key = 66
+	AllocateProducerIDs          Key = 67
+)
+
+// Name returns the name for this key.
+func (k Key) Name() string { return NameForKey(int16(k)) }
+
+// Request returns a new request for this key if the key is known.
+func (k Key) Request() Request { return RequestForKey(int16(k)) }
+
+// Response returns a new response for this key if the key is known.
+func (k Key) Response() Response { return ResponseForKey(int16(k)) }
+
 // A type of config.
 //
 // Possible values and their meanings:

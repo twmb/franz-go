@@ -506,6 +506,20 @@ func main() {
 	l.Write("}")
 	l.Write("}")
 
+	l.Write("// Key is a typed representation of a request key, with helper functions.")
+	l.Write("type Key int16")
+	l.Write("const (")
+	for _, key2struct := range name2structs {
+		l.Write("%s Key = %d", strings.TrimSuffix(key2struct.Name, "Request"), key2struct.Key)
+	}
+	l.Write(")")
+	l.Write("// Name returns the name for this key.")
+	l.Write("func (k Key) Name() string { return NameForKey(int16(k)) }")
+	l.Write("// Request returns a new request for this key if the key is known.")
+	l.Write("func (k Key) Request() Request { return RequestForKey(int16(k)) }")
+	l.Write("// Response returns a new response for this key if the key is known.")
+	l.Write("func (k Key) Response() Response { return ResponseForKey(int16(k)) }")
+
 	for _, e := range newEnums {
 		e.WriteDefn(l)
 		e.WriteStringFunc(l)
