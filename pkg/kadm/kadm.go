@@ -258,21 +258,25 @@ func (os Offsets) KeepFunc(fn func(o Offset) bool) {
 	}
 }
 
+// DeleteFunc calls fn for every offset, deleting the offset if fn returns
+// true.
+func (os Offsets) DeleteFunc(fn func(o Offset) bool) {
+	os.KeepFunc(func(o Offset) bool { return !fn(o) })
+}
+
 // Topics returns the set of topics and partitions currently used in these
 // offsets.
 func (os Offsets) TopicsSet() TopicsSet {
 	s := make(TopicsSet)
-	os.Each(func(t string, p int32, _ Offset) {
-		s.Add(t, p)
-	})
+	os.Each(func(o Offset) { s.Add(o.Topic, o.Partition) })
 	return s
 }
 
-// Each calls fn for each topic/partition/offset in these offsets.
-func (os Offsets) Each(fn func(string, int32, Offset)) {
-	for t, ps := range os {
-		for p, o := range ps {
-			fn(t, p, o)
+// Each calls fn for each offset in these offsets.
+func (os Offsets) Each(fn func(Offset)) {
+	for _, ps := range os {
+		for _, o := range ps {
+			fn(o)
 		}
 	}
 }
@@ -290,6 +294,17 @@ func (os Offsets) Into() map[string]map[int32]kgo.Offset {
 		tskgo[t] = pskgo
 	}
 	return tskgo
+}
+
+// Sorted returns the offsets sorted by topic and partition.
+func (os Offsets) Sorted() []Offset {
+	var s []Offset
+	os.Each(func(o Offset) { s = append(s, o) })
+	sort.Slice(s, func(i, j int) bool {
+		return s[i].Topic < s[j].Topic ||
+			s[i].Topic == s[j].Topic && s[i].Partition < s[j].Partition
+	})
+	return s
 }
 
 // OffsetsFromFetches returns Offsets for the final record in any partition in

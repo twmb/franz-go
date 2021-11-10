@@ -463,8 +463,8 @@ func (os OffsetResponses) Into() Offsets {
 	return i
 }
 
-// DeleteFunc deletes any offset for which fn returns true.
-func (os OffsetResponses) DeleteFunc(fn func(OffsetResponse) bool) {
+// DeleteFunc keeps only the offsets for which fn returns true.
+func (os OffsetResponses) KeepFunc(fn func(OffsetResponse) bool) {
 	for t, ps := range os {
 		for p, o := range ps {
 			if fn(o) {
@@ -475,6 +475,11 @@ func (os OffsetResponses) DeleteFunc(fn func(OffsetResponse) bool) {
 			delete(os, t)
 		}
 	}
+}
+
+// DeleteFunc deletes any offset for which fn returns true.
+func (os OffsetResponses) DeleteFunc(fn func(OffsetResponse) bool) {
+	os.KeepFunc(func(o OffsetResponse) bool { return !fn(o) })
 }
 
 // EachError calls fn for every offset that as a non-nil error.
