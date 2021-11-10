@@ -467,7 +467,7 @@ func (os OffsetResponses) Into() Offsets {
 func (os OffsetResponses) KeepFunc(fn func(OffsetResponse) bool) {
 	for t, ps := range os {
 		for p, o := range ps {
-			if fn(o) {
+			if !fn(o) {
 				delete(ps, p)
 			}
 		}
