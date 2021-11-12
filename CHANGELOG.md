@@ -1,3 +1,23 @@
+v1.2.4
+===
+
+This patch release fixes handling forgotten topics in fetch sessions, and
+allows disabling fetch sessions. Previously, if a topic or partition was paused
+with fetch sessions active, the partition would continually be fetched and
+skipped behind the scenes. As well, the client now allows disabling fetch
+sessions entirely if they are not desired.
+
+This also fixes one bug in the `RecordReader`: using an empty layout would mean
+that any `io.Reader` would result in infinite messages.
+
+Lastly, some log messages have been improved.
+
+- [`db90100`](https://github.com/twmb/franz-go/commit/db90100) consuming: improve error messages
+- [`101d6bd`](https://github.com/twmb/franz-go/commit/101d6bd) consuming: log added/skipped when consuming by regex
+- [`b6759bc`](https://github.com/twmb/franz-go/commit/b6759bc) **improvement** consumer: allow disabling fetch sessions with a config opt
+- [`7cd959c`](https://github.com/twmb/franz-go/commit/7cd959c) **bugfix** source: use forgotten topics for sessions
+- [`cfb4a7f`](https://github.com/twmb/franz-go/commit/cfb4a7f) **bugfix** kgo: error if RecordReader layout is empty
+
 v1.2.3
 ===
 
