@@ -49,6 +49,9 @@ func (cl *Client) newSource(nodeID int32) *source {
 		nodeID: nodeID,
 		sem:    make(chan struct{}),
 	}
+	if cl.cfg.disableFetchSessions {
+		s.session.kill()
+	}
 	close(s.sem)
 	return s
 }
