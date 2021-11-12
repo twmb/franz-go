@@ -1312,6 +1312,11 @@ func (g *groupConsumer) findNewAssignments() {
 		delta int
 	}
 
+	var rns reNews
+	if g.cfg.regex {
+		defer rns.log(&g.cl.cfg)
+	}
+
 	var numNewTopics int
 	toChange := make(map[string]change, len(topics))
 	for topic, topicPartitions := range topics {
@@ -1330,10 +1335,14 @@ func (g *groupConsumer) findNewAssignments() {
 		if g.cfg.regex {
 			want, seen := g.reSeen[topic]
 			if !seen {
-				for _, re := range g.cfg.topics {
+				for rawRe, re := range g.cfg.topics {
 					if want = re.MatchString(topic); want {
+						rns.add(rawRe, topic)
 						break
 					}
+				}
+				if !want {
+					rns.skip(topic)
 				}
 				g.reSeen[topic] = want
 			}
@@ -2260,4 +2269,31 @@ func (g *groupConsumer) commit(
 		g.updateCommitted(req, resp)
 		onDone(g.cl, req, resp, nil)
 	}()
+}
+
+type reNews struct {
+	added   map[string][]string
+	skipped []string
+}
+
+func (r *reNews) add(re, match string) {
+	if r.added == nil {
+		r.added = make(map[string][]string)
+	}
+	r.added[re] = append(r.added[re], match)
+}
+
+func (r *reNews) skip(topic string) {
+	r.skipped = append(r.skipped, topic)
+}
+
+func (r *reNews) log(cfg *cfg) {
+	var addeds []string
+	for re, matches := range r.added {
+		sort.Strings(matches)
+		addeds = append(addeds, fmt.Sprintf("%s[%s]", re, strings.Join(matches, " ")))
+	}
+	added := strings.Join(addeds, " ")
+	sort.Strings(r.skipped)
+	cfg.logger.Log(LogLevelInfo, "consumer regular expressions evaluated on new topics", "added", added, "evaluated_and_skipped", r.skipped)
 }

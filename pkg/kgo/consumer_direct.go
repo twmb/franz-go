@@ -35,6 +35,11 @@ func (c *consumer) initDirect() {
 func (d *directConsumer) findNewAssignments() map[string]map[int32]Offset {
 	topics := d.tps.load()
 
+	var rns reNews
+	if d.cfg.regex {
+		defer rns.log(d.cfg)
+	}
+
 	toUse := make(map[string]map[int32]Offset, 10)
 	for topic, topicPartitions := range topics {
 		// If we are using regex topics, we have to check all
@@ -43,10 +48,14 @@ func (d *directConsumer) findNewAssignments() map[string]map[int32]Offset {
 		if d.cfg.regex {
 			want, seen := d.reSeen[topic]
 			if !seen {
-				for _, re := range d.cfg.topics {
+				for rawRe, re := range d.cfg.topics {
 					if want = re.MatchString(topic); want {
+						rns.add(rawRe, topic)
 						break
 					}
+				}
+				if !want {
+					rns.skip(topic)
 				}
 				d.reSeen[topic] = want
 			}
