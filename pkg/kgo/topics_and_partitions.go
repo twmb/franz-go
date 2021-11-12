@@ -1,11 +1,28 @@
 package kgo
 
 import (
+	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 
 	"github.com/twmb/franz-go/pkg/kerr"
 )
+
+type tpsFmt map[string][]int32
+
+func (f tpsFmt) String() string {
+	var sb strings.Builder
+	var topicsWritten int
+	for topic, partitions := range f {
+		topicsWritten++
+		fmt.Fprintf(&sb, "%s%v", topic, partitions)
+		if topicsWritten < len(f) {
+			sb.WriteString(", ")
+		}
+	}
+	return sb.String()
+}
 
 type pausedTopics map[string]pausedPartitions
 

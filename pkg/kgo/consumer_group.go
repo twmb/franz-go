@@ -649,7 +649,7 @@ func (g *groupConsumer) setupAssignedAndHeartbeat() error {
 
 	s := newAssignRevokeSession()
 	added, lost := g.diffAssigned()
-	g.cfg.logger.Log(LogLevelInfo, "new group session begun", "group", g.cfg.group, "added", added, "lost", lost)
+	g.cfg.logger.Log(LogLevelInfo, "new group session begun", "group", g.cfg.group, "added", tpsFmt(added), "lost", tpsFmt(lost))
 	s.prerevoke(g, lost) // for cooperative consumers
 
 	// Since we have joined the group, we immediately begin heartbeating.
@@ -676,7 +676,6 @@ func (g *groupConsumer) setupAssignedAndHeartbeat() error {
 		go func() {
 			defer close(fetchDone)
 			defer close(fetchErrCh)
-			g.cfg.logger.Log(LogLevelInfo, "fetching offsets for added partitions", "group", g.cfg.group, "added", added)
 			fetchErrCh <- g.fetchOffsets(ctx, added, lost)
 		}()
 	} else {
@@ -1040,12 +1039,7 @@ func (g *groupConsumer) handleSyncResp(protocol string, resp *kmsg.SyncGroupResp
 		return err
 	}
 
-	var sb strings.Builder
-	for topic, partitions := range assigned {
-		fmt.Fprintf(&sb, "%s%v", topic, partitions)
-		sb.WriteString(", ")
-	}
-	g.cfg.logger.Log(LogLevelInfo, "synced", "group", g.cfg.group, "assigned", strings.TrimSuffix(sb.String(), ", "))
+	g.cfg.logger.Log(LogLevelInfo, "synced", "group", g.cfg.group, "assigned", tpsFmt(assigned))
 
 	// Past this point, we will fall into the setupAssigned prerevoke code,
 	// meaning for cooperative, we will revoke what we need to.

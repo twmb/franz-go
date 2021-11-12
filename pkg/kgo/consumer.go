@@ -3,6 +3,7 @@ package kgo
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -29,11 +30,11 @@ func (o Offset) MarshalJSON() ([]byte, error) {
 // String returns the offset as a string; the purpose of this is for logs.
 func (o Offset) String() string {
 	if o.relative == 0 {
-		return fmt.Sprintf("{%d.%d~%d}", o.at, o.epoch, o.currentEpoch)
+		return fmt.Sprintf("{%d.%d %d}", o.at, o.epoch, o.currentEpoch)
 	} else if o.relative > 0 {
-		return fmt.Sprintf("{%d+%d.%d~%d}", o.at, o.relative, o.epoch, o.currentEpoch)
+		return fmt.Sprintf("{%d+%d.%d %d}", o.at, o.relative, o.epoch, o.currentEpoch)
 	} else {
-		return fmt.Sprintf("{%d-%d.%d~%d}", o.at, o.relative, o.epoch, o.currentEpoch)
+		return fmt.Sprintf("{%d-%d.%d %d}", o.at, o.relative, o.epoch, o.currentEpoch)
 	}
 }
 
@@ -502,6 +503,35 @@ func (h assignHow) String() string {
 	return ""
 }
 
+type fmtAssignment map[string]map[int32]Offset
+
+func (f fmtAssignment) String() string {
+	var sb strings.Builder
+
+	var topicsWritten int
+	for topic, partitions := range f {
+		topicsWritten++
+		sb.WriteString(topic)
+		sb.WriteString("[")
+
+		var partitionsWritten int
+		for partition, offset := range partitions {
+			fmt.Fprintf(&sb, "%d%s", partition, offset)
+			partitionsWritten++
+			if partitionsWritten < len(partitions) {
+				sb.WriteString(" ")
+			}
+		}
+
+		sb.WriteString("]")
+		if topicsWritten < len(f) {
+			sb.WriteString(", ")
+		}
+	}
+
+	return sb.String()
+}
+
 // assignPartitions, called under the consumer's mu, is used to set new
 // cursors or add to the existing cursors.
 func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how assignHow, tps *topicsPartitions, why string) {
@@ -512,7 +542,7 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how
 		c.cl.cfg.logger.Log(LogLevelInfo, "assigning partitions",
 			"why", why,
 			"how", how,
-			"input", assignments,
+			"input", fmtAssignment(assignments),
 		)
 	}
 	var session *consumerSession
