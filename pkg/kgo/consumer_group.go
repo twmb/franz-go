@@ -2282,6 +2282,9 @@ func (r *reNews) skip(topic string) {
 }
 
 func (r *reNews) log(cfg *cfg) {
+	if len(r.added) == 0 && len(r.skipped) == 0 {
+		return
+	}
 	var addeds []string
 	for re, matches := range r.added {
 		sort.Strings(matches)
