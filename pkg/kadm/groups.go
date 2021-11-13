@@ -482,6 +482,20 @@ func (os OffsetResponses) DeleteFunc(fn func(OffsetResponse) bool) {
 	os.KeepFunc(func(o OffsetResponse) bool { return !fn(o) })
 }
 
+// Add adds an offset for a given topic/partition to this OffsetResponses map
+// (even if it exists).
+func (os *OffsetResponses) Add(o OffsetResponse) {
+	if *os == nil {
+		*os = make(map[string]map[int32]OffsetResponse)
+	}
+	ot := (*os)[o.Topic]
+	if ot == nil {
+		ot = make(map[int32]OffsetResponse)
+		(*os)[o.Topic] = ot
+	}
+	ot[o.Partition] = o
+}
+
 // EachError calls fn for every offset that as a non-nil error.
 func (os OffsetResponses) EachError(fn func(o OffsetResponse)) {
 	for _, ps := range os {
@@ -666,9 +680,10 @@ func (cl *Client) FetchOffsets(ctx context.Context, group string) (OffsetRespons
 // topic/partition that does not yet have a commit.
 //
 // If any partition fetched or listed has an error, this function returns an
-// error. The returned offsets are ready to be used or converted directly to
-// kgo offsets with `Into`.
-func (cl *Client) FetchOffsetsForTopics(ctx context.Context, group string, topics ...string) (Offsets, error) {
+// error. The returned offset responses are ready to be used or converted
+// directly to pure offsets with `Into`, and again into kgo offsets with
+// another `Into`.
+func (cl *Client) FetchOffsetsForTopics(ctx context.Context, group string, topics ...string) (OffsetResponses, error) {
 	os := make(Offsets)
 
 	if len(topics) > 0 {
@@ -695,10 +710,12 @@ func (cl *Client) FetchOffsetsForTopics(ctx context.Context, group string, topic
 	if err := resps.Error(); err != nil {
 		return nil, fmt.Errorf("offset fetches had a load error, first error: %w", err)
 	}
-	resps.Each(func(o OffsetResponse) {
-		os.Add(o.Offset)
+	os.Each(func(o Offset) {
+		if _, ok := resps.Lookup(o.Topic, o.Partition); !ok {
+			resps.Add(OffsetResponse{Offset: o})
+		}
 	})
-	return os, nil
+	return resps, nil
 }
 
 // FetchOffsetsResponse contains a fetch offsets response for a single group.
