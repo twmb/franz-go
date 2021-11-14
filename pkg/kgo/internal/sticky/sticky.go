@@ -105,6 +105,7 @@ func newBalancer(members []GroupMember, topics map[string]int32) *balancer {
 		memberNums: memberNums,
 		topicNums:  topicNums,
 		topicInfos: topicInfos,
+
 		partOwners: partOwners,
 		stales:     make(map[int32]uint16),
 		plan:       make(membersPartitions, len(members)),
@@ -144,17 +145,16 @@ func (b *balancer) into() Plan {
 		lastTopicInfo := b.topicInfos[lastTopicNum]
 		for _, partNum := range partNums {
 			topicNum := b.partOwners[partNum]
-			info := b.topicInfos[topicNum]
 
 			if topicNum != lastTopicNum {
 				topics[lastTopicInfo.topic] = topicParts[:len(topicParts):len(topicParts)]
 				topicParts = topicParts[len(topicParts):]
 
 				lastTopicNum = topicNum
-				lastTopicInfo = info
+				lastTopicInfo = b.topicInfos[topicNum]
 			}
 
-			partition := partNum - info.partNum
+			partition := partNum - lastTopicInfo.partNum
 			topicParts = append(topicParts, int32(partition))
 		}
 		topics[lastTopicInfo.topic] = topicParts[:len(topicParts):len(topicParts)]
@@ -196,10 +196,6 @@ func (m *memberPartitions) takeEnd() int32 {
 
 func (m *memberPartitions) add(partNum int32) {
 	*m = append(*m, partNum)
-}
-
-func (m *memberPartitions) len() int {
-	return len(*m)
 }
 
 // memberPartitions contains partitions for a member.
@@ -298,20 +294,18 @@ func (b *balancer) parseMemberMetadata() {
 	// Each partition should only have one consumer, but a flaky member
 	// could rejoin with an old generation (stale user data) and say it
 	// is consuming something a different member is. See KIP-341.
-	partitionConsumersByGeneration := make([][2]memberGeneration, cap(b.partOwners))
+	partitionConsumersByGeneration := make([]memberGeneration, cap(b.partOwners))
 
+	const highBit uint32 = 1 << 31
 	s := kmsg.NewStickyMemberMetadata()
 	var memberPlan []topicPartition
-	var generation int32
+	var gen uint32
 
 	for _, member := range b.members {
 		resetSticky(&s)
-		memberPlan, generation = deserializeUserData(&s, member.UserData, memberPlan[:0])
-		n := memberGeneration{ // new
-			true,
-			b.memberNums[member.ID],
-			generation,
-		}
+		memberPlan, gen = deserializeUserData(&s, member.UserData, memberPlan[:0])
+		gen |= highBit
+		memberNum := b.memberNums[member.ID]
 		for _, topicPartition := range memberPlan {
 			partNum, exists := b.partNumByTopic(topicPartition.topic, topicPartition.partition)
 			if !exists {
@@ -322,32 +316,31 @@ func (b *balancer) parseMemberMetadata() {
 			// If something is doubly consumed, we skip it.
 			pcs := &partitionConsumersByGeneration[partNum]
 			switch {
-			case !pcs[0].set: // no consumers yet for this partition
-				pcs[0] = n
+			case gen > pcs.genNew: // one consumer already, but new member has higher generation
+				pcs.memberOld, pcs.genOld = pcs.memberNew, pcs.genNew
+				pcs.memberNew, pcs.genNew = memberNum, gen
 
-			case n.generation > pcs[0].generation: // one consumer already, but new member has higher generation
-				pcs[0], pcs[1] = n, pcs[0]
-
-			case !pcs[1].set || n.generation > pcs[1].generation: // one consumer already, we could be second, or if there is a second, we have higher generation
-				pcs[1] = n
+			case gen > pcs.genOld: // one consumer already, we could be second, or if there is a second, we have a high generation
+				pcs.memberOld, pcs.genOld = memberNum, gen
 			}
 		}
 	}
 
 	for partNum, pcs := range partitionConsumersByGeneration {
-		if pcs[0].set {
-			b.plan[pcs[0].memberNum].add(int32(partNum))
-			if pcs[1].set {
-				b.stales[int32(partNum)] = pcs[1].memberNum
+		if pcs.genNew&highBit != 0 {
+			b.plan[pcs.memberNew].add(int32(partNum))
+			if pcs.genOld&highBit != 0 {
+				b.stales[int32(partNum)] = pcs.memberOld
 			}
 		}
 	}
 }
 
 type memberGeneration struct {
-	set        bool
-	memberNum  uint16
-	generation int32
+	memberNew uint16
+	memberOld uint16
+	genNew    uint32
+	genOld    uint32
 }
 
 type topicPartition struct {
@@ -365,12 +358,16 @@ func resetSticky(s *kmsg.StickyMemberMetadata) {
 // If anything fails or we do not understand the userdata parsing generation,
 // we return empty defaults. The member will just be assumed to have no
 // history.
-func deserializeUserData(s *kmsg.StickyMemberMetadata, userdata []byte, base []topicPartition) (memberPlan []topicPartition, generation int32) {
+func deserializeUserData(s *kmsg.StickyMemberMetadata, userdata []byte, base []topicPartition) (memberPlan []topicPartition, generation uint32) {
 	if err := s.ReadFrom(userdata); err != nil {
 		return nil, 0
 	}
 	memberPlan = base[:0]
-	generation = s.Generation
+	// A generation of -1 is just as good of a generation as 0, so we use 0
+	// and then use the high bit to signify this generation has been set.
+	if s.Generation >= 0 {
+		generation = uint32(s.Generation)
+	}
 	for _, topicAssignment := range s.CurrentAssignment {
 		for _, partition := range topicAssignment.Partitions {
 			memberPlan = append(memberPlan, topicPartition{
@@ -379,8 +376,7 @@ func deserializeUserData(s *kmsg.StickyMemberMetadata, userdata []byte, base []t
 			})
 		}
 	}
-
-	return memberPlan, generation
+	return
 }
 
 // assignUnassignedAndInitGraph is a long function that assigns unassigned
@@ -523,7 +519,7 @@ func (b *balancer) tryRestickyStales(
 		currentOwner := partitionConsumers[staleNum].memberNum
 		lastOwnerPartitions := &b.plan[lastOwnerNum]
 		currentOwnerPartitions := &b.plan[currentOwner]
-		if lastOwnerPartitions.len()+1 < currentOwnerPartitions.len() {
+		if lastOwnerPartitions.Len()+1 < currentOwnerPartitions.Len() {
 			currentOwnerPartitions.remove(staleNum)
 			lastOwnerPartitions.add(staleNum)
 		}
@@ -675,8 +671,8 @@ func (b *balancer) reassignPartition(src, dst uint16, partNum int32) {
 	srcPartitions := &b.plan[src]
 	dstPartitions := &b.plan[dst]
 
-	oldSrcLevel := srcPartitions.len()
-	oldDstLevel := dstPartitions.len()
+	oldSrcLevel := srcPartitions.Len()
+	oldDstLevel := dstPartitions.Len()
 
 	srcPartitions.remove(partNum)
 	dstPartitions.add(partNum)
