@@ -300,8 +300,13 @@ func (b *balancer) parseMemberMetadata() {
 	// is consuming something a different member is. See KIP-341.
 	partitionConsumersByGeneration := make([][2]memberGeneration, cap(b.partOwners))
 
+	s := kmsg.NewStickyMemberMetadata()
+	var memberPlan []topicPartition
+	var generation int32
+
 	for _, member := range b.members {
-		memberPlan, generation := deserializeUserData(member.UserData)
+		resetSticky(&s)
+		memberPlan, generation = deserializeUserData(&s, member.UserData, memberPlan[:0])
 		n := memberGeneration{ // new
 			true,
 			b.memberNums[member.ID],
@@ -350,18 +355,21 @@ type topicPartition struct {
 	partition int32
 }
 
+func resetSticky(s *kmsg.StickyMemberMetadata) {
+	s.CurrentAssignment = s.CurrentAssignment[:0]
+}
+
 // deserializeUserData returns the topic partitions a member was consuming and
 // the join generation it was consuming from.
 //
 // If anything fails or we do not understand the userdata parsing generation,
 // we return empty defaults. The member will just be assumed to have no
 // history.
-func deserializeUserData(userdata []byte) (memberPlan []topicPartition, generation int32) {
-	s := kmsg.NewStickyMemberMetadata()
-	s.Generation = -1
+func deserializeUserData(s *kmsg.StickyMemberMetadata, userdata []byte, base []topicPartition) (memberPlan []topicPartition, generation int32) {
 	if err := s.ReadFrom(userdata); err != nil {
 		return nil, 0
 	}
+	memberPlan = base[:0]
 	generation = s.Generation
 	for _, topicAssignment := range s.CurrentAssignment {
 		for _, partition := range topicAssignment.Partitions {
