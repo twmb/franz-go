@@ -246,21 +246,27 @@ func (s *StickyMemberMetadata) ReadFrom(src []byte) error {
 	if numAssignments < 0 {
 		numAssignments = 0
 	}
-	s.CurrentAssignment = make([]StickyMemberMetadataCurrentAssignment, 0, numAssignments)
-	for i := numAssignments; i > 0; i-- {
+	need := numAssignments - int32(cap(s.CurrentAssignment))
+	if need > 0 {
+		s.CurrentAssignment = append(s.CurrentAssignment[:cap(s.CurrentAssignment)], make([]StickyMemberMetadataCurrentAssignment, need)...)
+	}
+	s.CurrentAssignment = s.CurrentAssignment[:numAssignments]
+	for i := int32(0); i < numAssignments; i++ {
 		topic := b.String()
 		numPartitions := b.ArrayLen()
 		if numPartitions < 0 {
 			numPartitions = 0
 		}
-		assignment := StickyMemberMetadataCurrentAssignment{
-			Topic:      topic,
-			Partitions: make([]int32, 0, numPartitions),
+		a := &s.CurrentAssignment[i]
+		a.Topic = topic
+		need := numPartitions - int32(cap(a.Partitions))
+		if need > 0 {
+			a.Partitions = append(a.Partitions[:cap(a.Partitions)], make([]int32, need)...)
 		}
+		a.Partitions = a.Partitions[:0]
 		for i := numPartitions; i > 0; i-- {
-			assignment.Partitions = append(assignment.Partitions, b.Int32())
+			a.Partitions = append(a.Partitions, b.Int32())
 		}
-		s.CurrentAssignment = append(s.CurrentAssignment, assignment)
 	}
 	if len(b.Src) > 0 {
 		s.Generation = b.Int32()
