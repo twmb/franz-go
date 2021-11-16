@@ -90,7 +90,7 @@ func (b *ACLBuilder) PrefixUserExcept(except ...string) {
 		b.allow[i] = replace(u)
 	}
 	for i, u := range b.deny {
-		b.allow[i] = replace(u)
+		b.deny[i] = replace(u)
 	}
 }
 
@@ -187,7 +187,7 @@ func (b *ACLBuilder) TransactionalIDs(x ...string) *ACLBuilder {
 
 // MaybeTransactionalIDs is the same as TransactionalIDs, but does not match
 // all transactional ID's if none are provided.
-func (b *ACLBuilder) MaybeTransactionalIDs(g ...string) *ACLBuilder { b.groups = g; return b }
+func (b *ACLBuilder) MaybeTransactionalIDs(x ...string) *ACLBuilder { b.txnIDs = x; return b }
 
 // DelegationTokens lists/deletes/creates ACLs of resource type
 // "delegation_token" for the given delegation tokens.
