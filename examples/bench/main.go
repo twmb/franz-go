@@ -31,7 +31,7 @@ var (
 
 	useStaticValue = flag.Bool("static-record", false, "if true, use the same record value for every record (eliminates creating and formatting values for records; implies -pool)")
 
-	recordBytes   = flag.Int("record-bytes", 100, "bytes per record (producing)")
+	recordBytes   = flag.Int("record-bytes", 100, "bytes per record value (producing)")
 	compression   = flag.String("compression", "none", "compression algorithm to use (none,gzip,snappy,lz4,zstd, for producing)")
 	poolProduce   = flag.Bool("pool", false, "if true, use a sync.Pool to reuse record structs/slices (producing)")
 	noIdempotency = flag.Bool("disable-idempotency", false, "if true, disable idempotency (force 1 produce rps)")
