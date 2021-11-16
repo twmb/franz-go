@@ -519,6 +519,8 @@ func main() {
 	l.Write("func (k Key) Request() Request { return RequestForKey(int16(k)) }")
 	l.Write("// Response returns a new response for this key if the key is known.")
 	l.Write("func (k Key) Response() Response { return ResponseForKey(int16(k)) }")
+	l.Write("// Int16 is an alias for int16(k).")
+	l.Write("func (k Key) Int16() int16 { return int16(k) }")
 
 	for _, e := range newEnums {
 		e.WriteDefn(l)

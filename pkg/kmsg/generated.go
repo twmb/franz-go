@@ -39529,6 +39529,9 @@ func (k Key) Request() Request { return RequestForKey(int16(k)) }
 // Response returns a new response for this key if the key is known.
 func (k Key) Response() Response { return ResponseForKey(int16(k)) }
 
+// Int16 is an alias for int16(k).
+func (k Key) Int16() int16 { return int16(k) }
+
 // A type of config.
 //
 // Possible values and their meanings:
