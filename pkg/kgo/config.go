@@ -1382,7 +1382,7 @@ func AutoCommitMarks() GroupOpt {
 // the event that a client legitimately dies.
 //
 // When using an instance ID, the client does NOT send a leave group request
-// when closing. This allows for the client ot restart with the same instance
+// when closing. This allows for the client to restart with the same instance
 // ID and rejoin the group to avoid a rebalance. It is strongly recommended to
 // increase the session timeout enough to allow time for the restart (remember
 // that the default session timeout is 10s).
