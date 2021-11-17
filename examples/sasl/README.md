@@ -9,7 +9,7 @@ Supported SASL mechanisms are:
 - `GSSAPI` / (Kerberos)
 - `OAUTHBEARER`
 - `PLAIN`
-- `SCRAM-SHA-256` / `SCRAM-SHA_512`
+- `SCRAM-SHA-256` / `SCRAM-SHA-512`
 - `AWS_MSK_IAM`
 
 ## TLS Support
