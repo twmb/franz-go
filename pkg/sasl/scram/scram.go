@@ -113,7 +113,7 @@ func (s scram) Authenticate(ctx context.Context, _ string) (sasl.Session, []byte
 		auth.Nonce = buf
 	}
 
-	auth.Nonce = []byte(base64.StdEncoding.EncodeToString(auth.Nonce))
+	auth.Nonce = []byte(base64.RawStdEncoding.EncodeToString(auth.Nonce))
 
 	clientFirstMsgBare := make([]byte, 0, 100)
 	clientFirstMsgBare = append(clientFirstMsgBare, "n="...)
@@ -126,7 +126,7 @@ func (s scram) Authenticate(ctx context.Context, _ string) (sasl.Session, []byte
 
 	gs2Header := "n," // no channel binding
 	if auth.Zid != "" {
-		gs2Header += "a=" + auth.Zid
+		gs2Header += "a=" + escaper.Replace(auth.Zid)
 	}
 	gs2Header += ","
 	clientFirstMsg := append([]byte(gs2Header), clientFirstMsgBare...)
@@ -219,7 +219,7 @@ func (s *session) authenticateClient(serverFirstMsg []byte) ([]byte, error) {
 	storedKey := h.Sum(nil) // StoredKey := H(ClientKey)
 
 	// biws is `n,,` base64 encoded; we do not use a channel
-	clientFinalMsgWithoutProof := append([]byte("c=biws,r="), s.auth.Nonce...)
+	clientFinalMsgWithoutProof := append([]byte("c=biws,r="), serverNonce...)
 	authMsg := append(s.clientFirstMsgBare, ',')             // AuthMsg := client-first-message-bare + "," +
 	authMsg = append(authMsg, serverFirstMsg...)             //            server-first-message +
 	authMsg = append(authMsg, ',')                           //            "," +
