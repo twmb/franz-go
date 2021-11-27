@@ -93,10 +93,8 @@ func TestTxnEtl(t *testing.T) {
 					// ensure the offsets for this partition are contiguous
 					offsetsMu.Lock()
 					current, ok := offsets[r.Partition]
-					if ok && r.Offset != current+1 {
+					if ok && r.Offset < current+1 {
 						errs <- fmt.Errorf("partition %d produced offsets out of order, got %d != exp %d", r.Partition, r.Offset, current+1)
-					} else if !ok && r.Offset != 0 {
-						errs <- fmt.Errorf("expected first produced record to partition to have offset 0, got %d", r.Offset)
 					}
 					offsets[r.Partition] = r.Offset
 					partsUsed[r.Partition] = struct{}{}
