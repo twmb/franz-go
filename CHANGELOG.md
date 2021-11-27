@@ -1,3 +1,41 @@
+v1.2.5
+===
+
+This small patch release fixes one non-impacting bug in SCRAM authentication,
+and allows more errors to be abort&retryable rather than fatal while
+transactionally committing.
+
+For SCRAM, this client did not implement the client-final-reply completely
+correctly: this client replied with just the `client nonce`, not the `client
+nonce + server nonce`. Technically this was not to spec, but no broker today
+enforces this final nonce correctly. However, the client has been fixed so that
+if someday brokers do start enforcing the nonce correctly, this client will be
+ready.
+
+For transactional committing, we can handle a few extra errors while committing
+without entering a fatal state. Previously, `ILLEGAL_GENERATION` was handled:
+this meant that a rebalance began and completed before the client's commit went
+through. In this case, we just aborted the transaction and continued
+successfully. We can do this same thing for `REBALANCE_IN_PROGRESS`, which is
+similar to the prior error, as well as for errors that result from client
+request retry limits.
+
+The integration tests now no longer depend on `kcl`, meaning you can simply `go
+test` in the `kgo` package to test against your local brokers. Seeds can be
+provided by specifying a `KGO_SEEDS` environment variable, otherwise the
+default is 127.0.0.1:9092.
+
+Lastly, a few bugs have been fixed in the not-yet-stable,
+currently-separate-module kadm package. If you use that package, you may have
+already pulled in these fixes.
+
+- [`17dfae8`](https://github.com/twmb/franz-go/commit/17dfae8) go.{mod,sum}: update deps
+- [`3b34db0`](https://github.com/twmb/franz-go/commit/3b34db0) txn test: remove increasing-from-0 strictness when producing
+- [`d0a27f3`](https://github.com/twmb/franz-go/commit/d0a27f3) testing: remove dependency on kcl
+- [`8edf934`](https://github.com/twmb/franz-go/commit/8edf934) txn: allow more commit errors to just trigger abort
+- [`03c58cb`](https://github.com/twmb/franz-go/commit/03c58cb) scram: use c-nonce s-nonce, not just c-nonce, in client-reply-final
+- [`8f34083`](https://github.com/twmb/franz-go/commit/8f34083) consumer group: avoid regex log if no topics were added/skipped
+
 v1.2.4
 ===
 
