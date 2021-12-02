@@ -9,14 +9,6 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
-func errMissing(name string) error {
-	return fmt.Errorf("missing %q", name)
-}
-
-func errPartMissing(t string, p int32) error {
-	return fmt.Errorf("missing %q partition %d", t, p)
-}
-
 // AuthError can be returned from requests for resources that you are not
 // authorized for.
 type AuthError struct {

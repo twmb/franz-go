@@ -73,7 +73,7 @@ func (rs CreateTopicResponses) Sorted() []CreateTopicResponse {
 // The fn is given a copy of the response. This function returns the copy as
 // well; any modifications within fn are modifications on the returned copy.
 //
-// If the topic does not exist, this returns an error indicating it is missing.
+// If the topic does not exist, this returns kerr.UnknownTopicOrPartition.
 func (rs CreateTopicResponses) On(topic string, fn func(*CreateTopicResponse) error) (CreateTopicResponse, error) {
 	if len(rs) > 0 {
 		r, ok := rs[topic]
@@ -84,7 +84,7 @@ func (rs CreateTopicResponses) On(topic string, fn func(*CreateTopicResponse) er
 			return r, fn(&r)
 		}
 	}
-	return CreateTopicResponse{}, errMissing(topic)
+	return CreateTopicResponse{}, kerr.UnknownTopicOrPartition
 }
 
 // CreateTopics issues a create topics request with the given partitions,
@@ -197,7 +197,7 @@ func (rs DeleteTopicResponses) Sorted() []DeleteTopicResponse {
 // The fn is given a copy of the response. This function returns the copy as
 // well; any modifications within fn are modifications on the returned copy.
 //
-// If the topic does not exist, this returns an error indicating it is missing.
+// If the topic does not exist, this returns kerr.UnknownTopicOrPartition.
 func (rs DeleteTopicResponses) On(topic string, fn func(*DeleteTopicResponse) error) (DeleteTopicResponse, error) {
 	if len(rs) > 0 {
 		r, ok := rs[topic]
@@ -208,7 +208,7 @@ func (rs DeleteTopicResponses) On(topic string, fn func(*DeleteTopicResponse) er
 			return r, fn(&r)
 		}
 	}
-	return DeleteTopicResponse{}, errMissing(topic)
+	return DeleteTopicResponse{}, kerr.UnknownTopicOrPartition
 }
 
 // DeleteTopics issues a delete topics request for the given topic names with a
@@ -317,8 +317,8 @@ func (rs DeleteRecordsResponses) Sorted() []DeleteRecordsResponse {
 // The fn is given a copy of the response. This function returns the copy as
 // well; any modifications within fn are modifications on the returned copy.
 //
-// If the topic or partition does not exist, this returns an error indicating
-// it is missing.
+// If the topic or partition does not exist, this returns
+// kerr.UnknownTopicOrPartition.
 func (rs DeleteRecordsResponses) On(topic string, partition int32, fn func(*DeleteRecordsResponse) error) (DeleteRecordsResponse, error) {
 	if len(rs) > 0 {
 		t, ok := rs[topic]
@@ -332,7 +332,7 @@ func (rs DeleteRecordsResponses) On(topic string, partition int32, fn func(*Dele
 			}
 		}
 	}
-	return DeleteRecordsResponse{}, errPartMissing(topic, partition)
+	return DeleteRecordsResponse{}, kerr.UnknownTopicOrPartition
 }
 
 // DeleteRecords issues a delete records request for the given offsets. Per
@@ -411,7 +411,7 @@ func (rs CreatePartitionsResponses) Sorted() []CreatePartitionsResponse {
 // The fn is given a copy of the response. This function returns the copy as
 // well; any modifications within fn are modifications on the returned copy.
 //
-// If the topic does not exist, this returns an error indicating it is missing.
+// If the topic does not exist, this returns kerr.UnknownTopicOrPartition.
 func (rs CreatePartitionsResponses) On(topic string, fn func(*CreatePartitionsResponse) error) (CreatePartitionsResponse, error) {
 	if len(rs) > 0 {
 		r, ok := rs[topic]
@@ -422,7 +422,7 @@ func (rs CreatePartitionsResponses) On(topic string, fn func(*CreatePartitionsRe
 			return r, fn(&r)
 		}
 	}
-	return CreatePartitionsResponse{}, errMissing(topic)
+	return CreatePartitionsResponse{}, kerr.UnknownTopicOrPartition
 }
 
 // CreatePartitions issues a create partitions request for the given topics,

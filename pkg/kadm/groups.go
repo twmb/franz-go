@@ -150,7 +150,7 @@ func (ds DescribedGroups) Sorted() []DescribedGroup {
 // Modifications on a described group's inner fields are persisted to the
 // original map (because slices are pointers).
 //
-// If the group does not exist, this returns an error indicating it is missing.
+// If the group does not exist, this returns kerr.GroupIDNotFound.
 func (rs DescribedGroups) On(group string, fn func(*DescribedGroup) error) (DescribedGroup, error) {
 	if len(rs) > 0 {
 		r, ok := rs[group]
@@ -161,7 +161,7 @@ func (rs DescribedGroups) On(group string, fn func(*DescribedGroup) error) (Desc
 			return r, fn(&r)
 		}
 	}
-	return DescribedGroup{}, errMissing(group)
+	return DescribedGroup{}, kerr.GroupIDNotFound
 }
 
 // Topics returns a sorted list of all group names.
@@ -373,7 +373,7 @@ func (ds DeleteGroupResponses) Sorted() []DeleteGroupResponse {
 // The fn is given a copy of the response. This function returns the copy as
 // well; any modifications within fn are modifications on the returned copy.
 //
-// If the group does not exist, this returns an error indicating it is missing.
+// If the group does not exist, this returns kerr.GroupIDNotFound.
 func (rs DeleteGroupResponses) On(group string, fn func(*DeleteGroupResponse) error) (DeleteGroupResponse, error) {
 	if len(rs) > 0 {
 		r, ok := rs[group]
@@ -384,7 +384,7 @@ func (rs DeleteGroupResponses) On(group string, fn func(*DeleteGroupResponse) er
 			return r, fn(&r)
 		}
 	}
-	return DeleteGroupResponse{}, errMissing(group)
+	return DeleteGroupResponse{}, kerr.GroupIDNotFound
 }
 
 // DeleteGroups deletes all groups specified.
@@ -750,7 +750,7 @@ func (rs FetchOffsetsResponses) AllFailed() bool {
 // The fn is given a copy of the response. This function returns the copy as
 // well; any modifications within fn are modifications on the returned copy.
 //
-// If the group does not exist, this returns an error indicating it is missing.
+// If the group does not exist, this returns kerr.GroupIDNotFound.
 func (rs FetchOffsetsResponses) On(group string, fn func(*FetchOffsetsResponse) error) (FetchOffsetsResponse, error) {
 	if len(rs) > 0 {
 		r, ok := rs[group]
@@ -761,7 +761,7 @@ func (rs FetchOffsetsResponses) On(group string, fn func(*FetchOffsetsResponse) 
 			return r, fn(&r)
 		}
 	}
-	return FetchOffsetsResponse{}, errMissing(group)
+	return FetchOffsetsResponse{}, kerr.GroupIDNotFound
 }
 
 // FetchManyOffsets issues a fetch offsets requests for each group specified.

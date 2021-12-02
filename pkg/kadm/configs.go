@@ -56,7 +56,7 @@ type ResourceConfigs []ResourceConfig
 // The fn is given a copy of the config. This function returns the copy as
 // well; any modifications within fn are modifications on the returned copy.
 //
-// If the resource does not exist, this returns an error indicating it is missing.
+// If the resource does not exist, this returns kerr.UnknownTopicOrPartition.
 func (rs ResourceConfigs) On(name string, fn func(*ResourceConfig) error) (ResourceConfig, error) {
 	for _, r := range rs {
 		if r.Name == name {
@@ -66,7 +66,7 @@ func (rs ResourceConfigs) On(name string, fn func(*ResourceConfig) error) (Resou
 			return r, fn(&r)
 		}
 	}
-	return ResourceConfig{}, errMissing(name)
+	return ResourceConfig{}, kerr.UnknownTopicOrPartition
 }
 
 // DescribeTopicConfigs returns the configuration for the requested topics.
@@ -196,7 +196,7 @@ type AlterConfigsResponses []AlterConfigsResponse
 // The fn is given a copy of the response. This function returns the copy as
 // well; any modifications within fn are modifications on the returned copy.
 //
-// If the resource does not exist, this returns an error indicating it is missing.
+// If the resource does not exist, this returns kerr.UnknownTopicOrPartition.
 func (rs AlterConfigsResponses) On(name string, fn func(*AlterConfigsResponse) error) (AlterConfigsResponse, error) {
 	for _, r := range rs {
 		if r.Name == name {
@@ -206,7 +206,7 @@ func (rs AlterConfigsResponses) On(name string, fn func(*AlterConfigsResponse) e
 			return r, fn(&r)
 		}
 	}
-	return AlterConfigsResponse{}, errMissing(name)
+	return AlterConfigsResponse{}, kerr.UnknownTopicOrPartition
 }
 
 // AlterTopicConfigs incrementally alters topic configuration values.
