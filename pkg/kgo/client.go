@@ -399,7 +399,7 @@ func (cl *Client) fetchMetadata(ctx context.Context, req *kmsg.MetadataRequest, 
 	// number more accurate, we should *never* retry here, but this is
 	// pretty intolerant of immediately-temporary network issues. Rather,
 	// we use a small count of 3 retries, which with the default backoff,
-	// will be <500ms of retrying. This is still intolerant of temporary
+	// will be <2s of retrying. This is still intolerant of temporary
 	// failures, but it does allow recovery from a dns issue / bad path.
 	if limitRetries {
 		r.limitRetries = 3

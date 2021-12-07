@@ -12,16 +12,6 @@ import (
 	"github.com/twmb/franz-go/pkg/kerr"
 )
 
-// This corresponds to the amount of time we cache stale metadata before
-// forcing a refresh when calling `waitmeta` or `triggerUpdateMetadata`. If
-// either function is called within the refresh window, then we just return
-// immediately / avoid triggering a refresh.
-//
-// This is similar to the client configurable metadata min age, the difference
-// being is that that limit kicks in when a trigger actually does happen and
-// causes a sleep before proceeding into a metadata request.
-const minRefreshTrigger = 5 * time.Second / 2
-
 type metawait struct {
 	mu         sync.Mutex
 	c          *sync.Cond
@@ -42,7 +32,7 @@ func (cl *Client) waitmeta(ctx context.Context, wait time.Duration, why string) 
 	now := time.Now()
 
 	cl.metawait.mu.Lock()
-	if now.Sub(cl.metawait.lastUpdate) < minRefreshTrigger {
+	if now.Sub(cl.metawait.lastUpdate) < cl.cfg.metadataMinAge {
 		cl.metawait.mu.Unlock()
 		return
 	}
@@ -61,7 +51,7 @@ func (cl *Client) waitmeta(ctx context.Context, wait time.Duration, why string) 
 		defer cl.metawait.mu.Unlock()
 
 		for !quit {
-			if now.Sub(cl.metawait.lastUpdate) < minRefreshTrigger {
+			if now.Sub(cl.metawait.lastUpdate) < cl.cfg.metadataMinAge {
 				return
 			}
 			cl.metawait.c.Wait()
@@ -86,7 +76,7 @@ func (cl *Client) triggerUpdateMetadata(must bool, why string) bool {
 	if !must {
 		cl.metawait.mu.Lock()
 		defer cl.metawait.mu.Unlock()
-		if time.Since(cl.metawait.lastUpdate) < minRefreshTrigger {
+		if time.Since(cl.metawait.lastUpdate) < cl.cfg.metadataMinAge {
 			return false
 		}
 	}
@@ -163,7 +153,28 @@ func (cl *Client) updateMetadataLoop() {
 
 		again, err, why := cl.updateMetadata()
 		if again || err != nil {
-			if now && nowTries < 3 {
+			// If err is non-nil, the metadata request failed
+			// itself and already retried 3x; we do not loop more.
+			//
+			// If err is nil, the a topic or partition had a load
+			// error and is perhaps still being created. We retry a
+			// few more times to give Kafka a chance to figure
+			// things out. By default this will put us at 2s of
+			// looping+waiting (250ms per wait, 8x), and if things
+			// still fail we will fall into the slower update below
+			// which waits (default) 5s between tries.
+			if now && err == nil && nowTries < 8 {
+				wait := 250 * time.Millisecond
+				if cl.cfg.metadataMinAge < wait {
+					wait = cl.cfg.metadataMinAge
+				}
+				timer := time.NewTimer(wait)
+				select {
+				case <-cl.ctx.Done():
+					timer.Stop()
+					return
+				case <-timer.C:
+				}
 				goto start
 			}
 			if err != nil {

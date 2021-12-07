@@ -436,7 +436,7 @@ func defaultCfg() cfg {
 		maxBrokerReadBytes:  100 << 20,
 
 		metadataMaxAge: 5 * time.Minute,
-		metadataMinAge: 10 * time.Second,
+		metadataMinAge: 5 * time.Second,
 
 		//////////////
 		// producer //
@@ -738,13 +738,13 @@ func MetadataMaxAge(age time.Duration) Opt {
 	return clientOpt{func(cfg *cfg) { cfg.metadataMaxAge = age }}
 }
 
-// MetadataMinAge sets the minimum time between metadata queries,
-// overriding the default 10s. You may want to raise or lower this to reduce
-// the number of metadata queries the client will make. Notably, if metadata
-// detects an error in any topic or partition, it triggers itself to update as
-// soon as allowed. Additionally, any connection failures causing backoff while
-// producing or consuming trigger metadata updates, because the client must
-// assume that maybe the connection died due to a broker dying.
+// MetadataMinAge sets the minimum time between metadata queries, overriding
+// the default 5s. You may want to raise or lower this to reduce the number of
+// metadata queries the client will make. Notably, if metadata detects an error
+// in any topic or partition, it triggers itself to update as soon as allowed.
+// Additionally, any connection failures causing backoff while producing or
+// consuming trigger metadata updates, because the client must assume that
+// maybe the connection died due to a broker dying.
 func MetadataMinAge(age time.Duration) Opt {
 	return clientOpt{func(cfg *cfg) { cfg.metadataMinAge = age }}
 }
