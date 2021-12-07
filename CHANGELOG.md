@@ -1,3 +1,39 @@
+v1.2.6
+===
+
+This patch release contains a behavior change to immediate metadata triggers to
+better support some loading error conditions and drops the default
+MetadataMinAge from 10s to 5s. For more details, see commit
+[`8325ba7`][8325ba7] or issue [114][issue114].
+
+This release also contains a bugfix for using preferred read replicas.
+Previously, if a replica was not the leader of any partition being consumed,
+the client would not internally save knowledge of that replica and it could not
+be consumed from. This would result in the client ping-ponging trying to fetch
+from the leader and then erroring when the leader indicates the client should
+consume from a replica the client does not know about. This is no longer the
+case.
+
+Lastly, this patch fixes the behavior of rotating through partitions while
+consuming. Previously, the client rotated through partitions to evaluate for
+consuming, but then saved those partitions to nested maps which had
+non-deterministic (and, due to how Go ranges, mostly not-that-random) range
+semantics. The client now always rotates through partitions and topics in the
+order the partitions are evaluated. The old behavior could theoretically lead
+to more starvation than necessary while consuming. The new behavior should have
+no starvation, but really due to the randomness of the prior behavior, the new
+semantics may be a wash. However, the new semantics are the original intended
+semantics.
+
+[`bc391a3`](https://github.com/twmb/franz-go/commit/bc391a3) **improvement** source: rotate through topics/partitions as we fetch
+[`6bbdaa2`](https://github.com/twmb/franz-go/commit/6bbdaa2) **bugfix** client: create a sink & source for all partition replicas
+[`8325ba7`][8325ba7] **behavior change** metadata: minor changes, & wait a bit when looping for now triggers
+[`b8b7bd1`](https://github.com/twmb/franz-go/commit/b8b7bd1) **behavior change** RecordFormatter: always use UTC
+[`6ab9044`](https://github.com/twmb/franz-go/commit/6ab9044) kadm: return defined errors for On functions
+
+[8325ba7]: https://github.com/twmb/franz-go/commit/8325ba7
+[issue114]: https://github.com/twmb/franz-go/issues/114
+
 v1.2.5
 ===
 
