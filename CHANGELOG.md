@@ -25,11 +25,11 @@ no starvation, but really due to the randomness of the prior behavior, the new
 semantics may be a wash. However, the new semantics are the original intended
 semantics.
 
-[`bc391a3`](https://github.com/twmb/franz-go/commit/bc391a3) **improvement** source: rotate through topics/partitions as we fetch
-[`6bbdaa2`](https://github.com/twmb/franz-go/commit/6bbdaa2) **bugfix** client: create a sink & source for all partition replicas
-[`8325ba7`][8325ba7] **behavior change** metadata: minor changes, & wait a bit when looping for now triggers
-[`b8b7bd1`](https://github.com/twmb/franz-go/commit/b8b7bd1) **behavior change** RecordFormatter: always use UTC
-[`6ab9044`](https://github.com/twmb/franz-go/commit/6ab9044) kadm: return defined errors for On functions
+- [`bc391a3`](https://github.com/twmb/franz-go/commit/bc391a3) **improvement** source: rotate through topics/partitions as we fetch
+- [`6bbdaa2`](https://github.com/twmb/franz-go/commit/6bbdaa2) **bugfix** client: create a sink & source for all partition replicas
+- [`8325ba7`][8325ba7] **behavior change** metadata: minor changes, & wait a bit when looping for now triggers
+- [`b8b7bd1`](https://github.com/twmb/franz-go/commit/b8b7bd1) **behavior change** RecordFormatter: always use UTC
+- [`6ab9044`](https://github.com/twmb/franz-go/commit/6ab9044) kadm: return defined errors for On functions
 
 [8325ba7]: https://github.com/twmb/franz-go/commit/8325ba7
 [issue114]: https://github.com/twmb/franz-go/issues/114
