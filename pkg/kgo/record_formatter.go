@@ -156,7 +156,7 @@ func (f *RecordFormatter) AppendPartitionRecord(b []byte, p *FetchPartition, r *
 // An arbitrary amount of pounds, braces, and brackets are understood before
 // beginning the actual timestamp formatting. For Go formatting, the format is
 // simply passed to the time package's AppendFormat function. For strftime, all
-// "man strftime" options are supported.
+// "man strftime" options are supported. Time is always in UTC.
 //
 // Text
 //
@@ -437,7 +437,7 @@ func NewRecordFormatter(layout string) (*RecordFormatter, error) {
 				}
 				layout = rem[1:]
 				f.fns = append(f.fns, func(b []byte, _ *FetchPartition, r *Record) []byte {
-					return writeR(b, r, func(b []byte, r *Record) []byte { return strftimeAppendFormat(b, tfmt, r.Timestamp) })
+					return writeR(b, r, func(b []byte, r *Record) []byte { return strftimeAppendFormat(b, tfmt, r.Timestamp.UTC()) })
 				})
 
 			case strings.HasPrefix(layout, "go"):
@@ -450,7 +450,7 @@ func NewRecordFormatter(layout string) (*RecordFormatter, error) {
 				}
 				layout = rem[1:]
 				f.fns = append(f.fns, func(b []byte, _ *FetchPartition, r *Record) []byte {
-					return writeR(b, r, func(b []byte, r *Record) []byte { return r.Timestamp.AppendFormat(b, tfmt) })
+					return writeR(b, r, func(b []byte, r *Record) []byte { return r.Timestamp.UTC().AppendFormat(b, tfmt) })
 				})
 
 			default:

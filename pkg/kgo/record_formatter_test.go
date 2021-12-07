@@ -53,7 +53,7 @@ func TestRecordFormatter(t *testing.T) {
 
 		{
 			layout: "%d{strftime## %a ##} %d %d{ascii}",
-			expR:   " Wed  17000 17000",
+			expR:   " Thu  17000 17000",
 		},
 
 		{
