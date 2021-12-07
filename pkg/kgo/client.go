@@ -92,6 +92,15 @@ type sinkAndSource struct {
 	source *source
 }
 
+func (cl *Client) allSinksAndSources(fn func(sns sinkAndSource)) {
+	cl.sinksAndSourcesMu.Lock()
+	defer cl.sinksAndSourcesMu.Unlock()
+
+	for _, sns := range cl.sinksAndSources {
+		fn(sns)
+	}
+}
+
 type hostport struct {
 	host string
 	port int32

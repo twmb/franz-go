@@ -445,6 +445,17 @@ func (cl *Client) fetchTopicMetadata(all bool, reqTopics []string) (map[string]*
 				}
 				cl.sinksAndSources[p.leader] = sns
 			}
+			for _, replica := range partMeta.Replicas {
+				if replica < 0 {
+					continue
+				}
+				if _, exists = cl.sinksAndSources[replica]; !exists {
+					cl.sinksAndSources[replica] = sinkAndSource{
+						sink:   cl.newSink(replica),
+						source: cl.newSource(replica),
+					}
+				}
+			}
 			cl.sinksAndSourcesMu.Unlock()
 			p.records.sink = sns.sink
 			p.cursor.source = sns.source

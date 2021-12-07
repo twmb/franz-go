@@ -425,13 +425,9 @@ func (cl *Client) PauseFetchPartitions(topicPartitions map[string][]int32) map[s
 // paused. Resuming topics that are not currently paused is a per-topic no-op.
 // See the documentation on PauseTfetchTopics for more details.
 func (cl *Client) ResumeFetchTopics(topics ...string) {
-	defer func() {
-		cl.sinksAndSourcesMu.Lock()
-		for _, sns := range cl.sinksAndSources {
-			sns.source.maybeConsume()
-		}
-		cl.sinksAndSourcesMu.Unlock()
-	}()
+	defer cl.allSinksAndSources(func(sns sinkAndSource) {
+		sns.source.maybeConsume()
+	})
 
 	c := &cl.consumer
 	c.pausedMu.Lock()
@@ -447,13 +443,9 @@ func (cl *Client) ResumeFetchTopics(topics ...string) {
 // per-topic no-op. See the documentation on PauseFetchPartitions for more
 // details.
 func (cl *Client) ResumeFetchPartitions(topicPartitions map[string][]int32) {
-	defer func() {
-		cl.sinksAndSourcesMu.Lock()
-		for _, sns := range cl.sinksAndSources {
-			sns.source.maybeConsume()
-		}
-		cl.sinksAndSourcesMu.Unlock()
-	}()
+	defer cl.allSinksAndSources(func(sns sinkAndSource) {
+		sns.source.maybeConsume()
+	})
 
 	c := &cl.consumer
 	c.pausedMu.Lock()
@@ -1123,11 +1115,9 @@ func (c *consumer) stopSession() (listOrEpochLoads, *topicsPartitions) {
 	// our num-fetches manager without worrying about a source trying to
 	// register itself.
 
-	c.cl.sinksAndSourcesMu.Lock()
-	for _, sns := range c.cl.sinksAndSources {
+	c.cl.allSinksAndSources(func(sns sinkAndSource) {
 		sns.source.session.reset()
-	}
-	c.cl.sinksAndSourcesMu.Unlock()
+	})
 
 	// At this point, if we begin fetching anew, then the sources will not
 	// be using stale fetch sessions.
@@ -1166,11 +1156,9 @@ func (c *consumer) startNewSession(tps *topicsPartitions) *consumerSession {
 
 	c.sessionChangeMu.Unlock()
 
-	c.cl.sinksAndSourcesMu.Lock()
-	for _, sns := range c.cl.sinksAndSources {
+	c.cl.allSinksAndSources(func(sns sinkAndSource) {
 		sns.source.maybeConsume()
-	}
-	c.cl.sinksAndSourcesMu.Unlock()
+	})
 
 	// At this point, any source that was not consuming becauase it saw the
 	// session was stopped has been notified to potentially start consuming
