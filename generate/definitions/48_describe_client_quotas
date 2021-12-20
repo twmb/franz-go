@@ -10,7 +10,7 @@ DescribeClientQuotasRequest => key 48, max version 1, flexible v1+
     // with 0 meaning match on the name exactly,
     // 1 meaning match on the default name,
     // and 2 meaning any specified name.
-    MatchType: int8
+    MatchType: enum-QuotasMatchType
     // Match is the string to match against, or null if unused for the given
     // match type.
     Match: nullable-string
