@@ -5,7 +5,7 @@ AlterClientQuotasRequest => key 49, max version 1, flexible v1+
   Entries: [=>Entry]
     // Entity contains the components of a quota entity to alter.
     Entity: [=>]
-      // Type is the entity component's type; e.g. "client-id" or "user".
+      // Type is the entity component's type; e.g. "client-id", "user" or "ip".
       Type: string
       // Name is the name of the entity, or null for the default.
       Name: nullable-string
