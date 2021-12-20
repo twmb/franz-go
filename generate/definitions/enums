@@ -119,6 +119,20 @@ TransactionState int8 camelcase (
   7: PrepareEpochFence
 )
 
+////////////
+// QUOTAS //
+////////////
+
+// QuotasMatchType specifies how to match a Quota entity as part of the DescribeClientQuotasRequestComponent.
+QuotasMatchType int8 (
+  // Matches all quotas for the given EntityType with names equal to the Match field.
+  0: EXACT
+  // Matches the default for the given EntityType.
+  1: DEFAULT
+  // Matches all named quotas and default quotas for the given EntityType.
+  2: ANY
+)
+
 //////////
 // MISC //
 //////////

@@ -29661,7 +29661,7 @@ type DescribeClientQuotasRequestComponent struct {
 	// with 0 meaning match on the name exactly,
 	// 1 meaning match on the default name,
 	// and 2 meaning any specified name.
-	MatchType int8
+	MatchType QuotasMatchType
 
 	// Match is the string to match against, or null if unused for the given
 	// match type.
@@ -29745,7 +29745,10 @@ func (v *DescribeClientQuotasRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.MatchType
-				dst = kbin.AppendInt8(dst, v)
+				{
+					v := int8(v)
+					dst = kbin.AppendInt8(dst, v)
+				}
 			}
 			{
 				v := v.Match
@@ -29809,7 +29812,12 @@ func (v *DescribeClientQuotasRequest) ReadFrom(src []byte) error {
 				s.EntityType = v
 			}
 			{
-				v := b.Int8()
+				var t QuotasMatchType
+				{
+					v := b.Int8()
+					t = QuotasMatchType(v)
+				}
+				v := t
 				s.MatchType = v
 			}
 			{
@@ -30236,7 +30244,7 @@ func NewDescribeClientQuotasResponse() DescribeClientQuotasResponse {
 }
 
 type AlterClientQuotasRequestEntryEntity struct {
-	// Type is the entity component's type; e.g. "client-id" or "user".
+	// Type is the entity component's type; e.g. "client-id", "user" or "ip".
 	Type string
 
 	// Name is the name of the entity, or null for the default.
@@ -40292,6 +40300,66 @@ const (
 	TransactionStateCompleteAbort     TransactionState = 5
 	TransactionStateDead              TransactionState = 6
 	TransactionStatePrepareEpochFence TransactionState = 7
+)
+
+// QuotasMatchType specifies how to match a Quota entity as part of the DescribeClientQuotasRequestComponent.
+//
+// Possible values and their meanings:
+//
+// * 0 (EXACT)
+// Matches all quotas for the given EntityType with names equal to the Match field.
+//
+// * 1 (DEFAULT)
+// Matches the default for the given EntityType.
+//
+// * 2 (ANY)
+// Matches all named quotas and default quotas for the given EntityType.
+//
+type QuotasMatchType int8
+
+func (v QuotasMatchType) String() string {
+	switch v {
+	default:
+		return "UNKNOWN"
+	case 0:
+		return "EXACT"
+	case 1:
+		return "DEFAULT"
+	case 2:
+		return "ANY"
+	}
+}
+
+func QuotasMatchTypeStrings() []string {
+	return []string{
+		"EXACT",
+		"DEFAULT",
+		"ANY",
+	}
+}
+
+// ParseQuotasMatchType normalizes the input s and returns
+// the value represented by the string.
+//
+// Normalizing works by stripping all dots, underscores, and dashes,
+// trimming spaces, and lowercasing.
+func ParseQuotasMatchType(s string) (QuotasMatchType, error) {
+	switch strnorm(s) {
+	case "exact":
+		return 0, nil
+	case "default":
+		return 1, nil
+	case "any":
+		return 2, nil
+	default:
+		return 0, fmt.Errorf("QuotasMatchType: unable to parse %q", s)
+	}
+}
+
+const (
+	QuotasMatchTypeExact   QuotasMatchType = 0
+	QuotasMatchTypeDefault QuotasMatchType = 1
+	QuotasMatchTypeAny     QuotasMatchType = 2
 )
 
 // Possible values and their meanings:
