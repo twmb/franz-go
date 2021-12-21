@@ -29661,7 +29661,7 @@ type DescribeClientQuotasRequestComponent struct {
 	// with 0 meaning match on the name exactly,
 	// 1 meaning match on the default name,
 	// and 2 meaning any specified name.
-	MatchType int8
+	MatchType QuotasMatchType
 
 	// Match is the string to match against, or null if unused for the given
 	// match type.
@@ -29745,7 +29745,10 @@ func (v *DescribeClientQuotasRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.MatchType
-				dst = kbin.AppendInt8(dst, v)
+				{
+					v := int8(v)
+					dst = kbin.AppendInt8(dst, v)
+				}
 			}
 			{
 				v := v.Match
@@ -29809,7 +29812,12 @@ func (v *DescribeClientQuotasRequest) ReadFrom(src []byte) error {
 				s.EntityType = v
 			}
 			{
-				v := b.Int8()
+				var t QuotasMatchType
+				{
+					v := b.Int8()
+					t = QuotasMatchType(v)
+				}
+				v := t
 				s.MatchType = v
 			}
 			{
@@ -30236,7 +30244,7 @@ func NewDescribeClientQuotasResponse() DescribeClientQuotasResponse {
 }
 
 type AlterClientQuotasRequestEntryEntity struct {
-	// Type is the entity component's type; e.g. "client-id" or "user".
+	// Type is the entity component's type; e.g. "client-id", "user" or "ip".
 	Type string
 
 	// Name is the name of the entity, or null for the default.
