@@ -1695,49 +1695,19 @@ func (g *groupConsumer) loopCommit() {
 	}
 }
 
-// SetOffsets, for consumer groups, sets any matching offsets in setOffsets to
-// the given epoch/offset. Partitions that are not specified are not set. It is
-// invalid to set topics that were not yet returned from a PollFetches.
+// For SetOffsets, the gist of what follows:
 //
-// If using transactions, it is advised to just use a GroupTransactSession and
-// avoid this function entirely.
-//
-// It is strongly recommended to use this function outside of the context of a
-// PollFetches loop and only when you know the group is not revoked (i.e.,
-// block any concurrent revoke while issuing this call). Any other usage is
-// prone to odd interactions.
-func (cl *Client) SetOffsets(setOffsets map[string]map[int32]EpochOffset) {
-	cl.setOffsets(setOffsets, true)
-}
-
-func (cl *Client) setOffsets(setOffsets map[string]map[int32]EpochOffset, log bool) {
-	if len(setOffsets) == 0 {
-		return
-	}
-
-	// We assignPartitions before returning, so we grab the consumer lock
-	// first to preserve consumer mu => group mu ordering.
-	c := &cl.consumer
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	g := c.g
-	if g == nil {
-		return
-	}
+// We need to set uncommitted.committed; that is the guarantee of this
+// function. However, if, for everything we are setting, the head equals the
+// commit, then we do not need to actually invalidate our current assignments.
+// This is a great optimization for transactions that are resetting their state
+// on abort.
+func (g *groupConsumer) getSetAssigns(setOffsets map[string]map[int32]EpochOffset) (assigns map[string]map[int32]Offset) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
 	groupTopics := g.tps.load()
 
-	// The gist of what follows:
-	//
-	// We need to set uncommitted.committed; that is the guarantee of this
-	// function. However, if, for everything we are setting, the head
-	// equals the commit, then we do not need to actually invalidate our
-	// current assignments. This is a great optimization for transactions
-	// that are resetting their state on abort.
-	var assigns map[string]map[int32]Offset
 	if g.uncommitted == nil {
 		g.uncommitted = make(uncommitted)
 	}
@@ -1776,15 +1746,7 @@ func (cl *Client) setOffsets(setOffsets map[string]map[int32]EpochOffset, log bo
 		}
 	}
 
-	if len(assigns) == 0 {
-		return
-	}
-
-	if log {
-		c.assignPartitions(assigns, assignSetMatching, g.tps, "from manual SetOffsets")
-	} else {
-		c.assignPartitions(assigns, assignSetMatching, g.tps, "")
-	}
+	return assigns
 }
 
 // UncommittedOffsets returns the latest uncommitted offsets. Uncommitted

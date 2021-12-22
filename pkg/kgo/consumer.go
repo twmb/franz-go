@@ -456,6 +456,55 @@ func (cl *Client) ResumeFetchPartitions(topicPartitions map[string][]int32) {
 	c.storePaused(paused)
 }
 
+// SetOffsets sets any matching offsets in setOffsets to the given
+// epoch/offset. Partitions that are not specified are not set. It is invalid
+// to set topics that were not yet returned from a PollFetches: this function
+// sets only partitions that were previously consumed, any extra partitions are
+// skipped.
+//
+// If using transactions, it is advised to just use a GroupTransactSession and
+// avoid this function entirely.
+//
+// It is strongly recommended to use this function outside of the context of a
+// PollFetches loop and only when you know the group is not revoked (i.e.,
+// block any concurrent revoke while issuing this call). Any other usage is
+// prone to odd interactions.
+func (cl *Client) SetOffsets(setOffsets map[string]map[int32]EpochOffset) {
+	cl.setOffsets(setOffsets, true)
+}
+
+func (cl *Client) setOffsets(setOffsets map[string]map[int32]EpochOffset, log bool) {
+	if len(setOffsets) == 0 {
+		return
+	}
+
+	// We assignPartitions before returning, so we grab the consumer lock
+	// first to preserve consumer mu => group mu ordering, or to ensure
+	// no concurrent metadata assign for direct consuming.
+	c := &cl.consumer
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	var assigns map[string]map[int32]Offset
+	var tps *topicsPartitions
+	switch {
+	case c.d != nil:
+		assigns = c.d.getSetAssigns(setOffsets)
+		tps = c.d.tps
+	case c.g != nil:
+		assigns = c.g.getSetAssigns(setOffsets)
+		tps = c.g.tps
+	}
+	if len(assigns) == 0 {
+		return
+	}
+	if log {
+		c.assignPartitions(assigns, assignSetMatching, tps, "from manual SetOffsets")
+	} else {
+		c.assignPartitions(assigns, assignSetMatching, tps, "")
+	}
+}
+
 // assignHow controls how assignPartitions operates.
 type assignHow int8
 
@@ -708,7 +757,8 @@ func (c *consumer) doOnMetadataUpdate() {
 		doUpdate := func() {
 			// We forbid reassignments while we do a quick check for
 			// new assignments--for the direct consumer particularly,
-			// this prevents TOCTOU.
+			// this prevents TOCTOU, and guards against a concurrent
+			// assignment from SetOffsets.
 			c.mu.Lock()
 			defer c.mu.Unlock()
 
