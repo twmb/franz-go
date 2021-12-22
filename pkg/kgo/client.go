@@ -496,6 +496,9 @@ func (cl *Client) Close() {
 		broker.stopForever()
 	}
 	cl.brokersMu.Unlock()
+	for _, broker := range cl.seeds {
+		broker.stopForever()
+	}
 
 	// Wait for metadata to quit so we know no more erroring topic
 	// partitions will be created. After metadata has quit, we can
@@ -839,14 +842,14 @@ func (cl *Client) brokerOrErr(ctx context.Context, id int32, err error) (*broker
 	tryLoad := ctx != nil
 	tries := 0
 start:
-	cl.brokersMu.RLock()
 	var broker *broker
 	if id < 0 {
 		broker = findBroker(cl.seeds, id)
 	} else {
+		cl.brokersMu.RLock()
 		broker = findBroker(cl.brokers, id)
+		cl.brokersMu.RUnlock()
 	}
-	cl.brokersMu.RUnlock()
 
 	if broker == nil {
 		if tryLoad {
@@ -1287,9 +1290,6 @@ func (cl *Client) DiscoveredBrokers() []*Broker {
 
 // SeedBrokers returns the all seed brokers.
 func (cl *Client) SeedBrokers() []*Broker {
-	cl.brokersMu.RLock()
-	defer cl.brokersMu.RUnlock()
-
 	var bs []*Broker
 	for _, broker := range cl.seeds {
 		bs = append(bs, &Broker{id: broker.meta.NodeID, cl: cl})
