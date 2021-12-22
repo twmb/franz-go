@@ -211,6 +211,34 @@ func NewClient(opts ...Opt) (*Client, error) {
 	return cl, nil
 }
 
+// Ping returns whether any broker is reachable, iterating over any discovered
+// broker or seed broker until one returns a successful response to an
+// ApiVersions request. No discovered broker nor seed broker is attempted more
+// than once. If all requests fail, this returns final error.
+func (cl *Client) Ping(ctx context.Context) error {
+	req := kmsg.NewPtrApiVersionsRequest()
+	req.ClientSoftwareName = cl.cfg.softwareName
+	req.ClientSoftwareVersion = cl.cfg.softwareVersion
+
+	cl.brokersMu.RLock()
+	brokers := append([]*broker(nil), cl.brokers...)
+	cl.brokersMu.RUnlock()
+
+	var lastErr error
+	for _, brs := range [2][]*broker{
+		brokers,
+		cl.seeds,
+	} {
+		for _, br := range brs {
+			_, err := br.waitResp(ctx, req)
+			if lastErr = err; lastErr == nil {
+				return nil
+			}
+		}
+	}
+	return lastErr
+}
+
 // Parse broker IP/host and port from a string, using the default Kafka port if
 // unspecified. Supported address formats:
 //
