@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"github.com/twmb/franz-go/pkg/kmsg"
 	"math"
 	"math/rand"
 	"net"
@@ -13,7 +14,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/twmb/franz-go/pkg/kmsg"
 	"github.com/twmb/franz-go/pkg/kversion"
 	"github.com/twmb/franz-go/pkg/sasl"
 )
@@ -158,6 +158,8 @@ type cfg struct {
 	onAssigned func(context.Context, *Client, map[string][]int32)
 	onRevoked  func(context.Context, *Client, map[string][]int32)
 	onLost     func(context.Context, *Client, map[string][]int32)
+
+	adjustOffsetsBeforeAssign func(ctx context.Context, offsets map[string]map[int32]Offset) (map[string]map[int32]Offset, error)
 
 	setAssigned       bool
 	setRevoked        bool
@@ -1315,6 +1317,23 @@ func HeartbeatInterval(interval time.Duration) GroupOpt {
 // entirely blocked.
 func RequireStableFetchOffsets() GroupOpt {
 	return groupOpt{func(cfg *cfg) { cfg.requireStable = true }}
+}
+
+// AdjustOffsetsBeforeAssign sets the function to be called when a group is joined
+// after offsets are fetched for those partitions so that a user can adjust them
+// before consumption begins.
+//
+// This function combined with OnPartitionsRevoked should not exceed the
+// rebalance interval. It is possible for the group, immediately after
+// finishing a balance, to re-enter a new balancing session.
+//
+// The AdjustOffsetsBeforeAssign function is passed the client's context, which is
+// only canceled if the client is closed.
+//
+// This function is not called concurrent with any other On callback, and this
+// function is given a new map that the user is free to modify.
+func AdjustOffsetsBeforeAssign(adjustOffsetsBeforeAssign func(context.Context, map[string]map[int32]Offset) (map[string]map[int32]Offset, error)) GroupOpt {
+	return groupOpt{func(cfg *cfg) { cfg.adjustOffsetsBeforeAssign = adjustOffsetsBeforeAssign }}
 }
 
 // OnPartitionsAssigned sets the function to be called when a group is joined
