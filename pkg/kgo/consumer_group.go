@@ -1246,6 +1246,11 @@ start:
 			g.cfg.logger.Log(LogLevelWarn, "member was assigned topic that we did not ask for in ConsumeTopics! skipping assigning this topic!", "group", g.cfg.group, "topic", fetchedTopic)
 		}
 	}
+	if g.cfg.adjustOffsetsBeforeAssign != nil {
+		if offsets, err = g.cfg.adjustOffsetsBeforeAssign(ctx, offsets); err != nil {
+			return err
+		}
+	}
 
 	// Lock for assign and then updating uncommitted.
 	g.c.mu.Lock()
