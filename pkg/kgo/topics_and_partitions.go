@@ -354,6 +354,15 @@ type topicPartition struct {
 	// keep the old topicPartition data and the new error.
 	loadErr error
 
+	// If, on metadata refresh, the leader epoch for this partition goes
+	// backwards, we ignore the metadata refresh and signal the metadata
+	// should be reloaded: the broker we requested is stale. However, the
+	// broker could get into a bad state through some weird cluster failure
+	// scenarios. If we see the epoch rewind repeatedly, we eventually keep
+	// the metadata refresh. This is not detrimental and at worst will lead
+	// to the broker telling us to update our metadata.
+	epochRewinds uint8
+
 	// If we do not have a load error, we determine if the new
 	// topicPartition is the same or different from the old based on
 	// whether the data changed (leader or leader epoch, etc.).
