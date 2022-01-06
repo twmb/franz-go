@@ -27,6 +27,10 @@ const (
 // GroupTransactSession abstracts away the proper way to begin a transaction
 // and more importantly how to end a transaction when consuming in a group,
 // modifying records, and producing (EOS transaction).
+//
+// If you are running Kafka 2.5+, it is strongly recommended that you also use
+// RequireStableFetchOffsets. See that config option's documentation for more
+// details.
 type GroupTransactSession struct {
 	cl *Client
 
@@ -62,6 +66,13 @@ type GroupTransactSession struct {
 // rebalance timeout, but this is just one request with no cpu logic. With a
 // proper rebalance timeout, this single request will not fail and the commit
 // will succeed properly.
+//
+// If this client detects you are talking to a pre-2.5 cluster, OR if you have
+// not enabled RequireStableFetchOffsets, the client will sleep for 200ms after
+// a successful commit to allow Kafka's txn markers to propagate. This is not
+// foolproof in the event of some extremely unlikely communication patterns and
+// **potentially** could allow duplicates. See this repo's transaction's doc
+// for more details.
 func NewGroupTransactSession(opts ...Opt) (*GroupTransactSession, error) {
 	s := &GroupTransactSession{
 		revokedCh: make(chan struct{}),
@@ -219,7 +230,7 @@ func (s *GroupTransactSession) failed() bool {
 // and prevents new requests (multiple requests are issued at the end of a
 // transact session). Thus, while a context is allowed, it is strongly
 // recommended to not cancel it.
-func (s *GroupTransactSession) End(ctx context.Context, commit TransactionEndTry) (bool, error) {
+func (s *GroupTransactSession) End(ctx context.Context, commit TransactionEndTry) (committed bool, err error) {
 	defer func() {
 		s.failMu.Lock()
 		s.revoked = false
@@ -253,12 +264,14 @@ func (s *GroupTransactSession) End(ctx context.Context, commit TransactionEndTry
 	var commitErr error
 	var g *groupConsumer
 
+	kip447 := false
 	if wantCommit && !failed {
 		var commitErrs []string
 
 		committed := make(chan struct{})
 		g = s.cl.commitTransactionOffsets(context.Background(), postcommit,
 			func(_ *kmsg.TxnOffsetCommitRequest, resp *kmsg.TxnOffsetCommitResponse, err error) {
+				kip447 = resp.Version >= 3
 				defer close(committed)
 				if err != nil {
 					commitErrs = append(commitErrs, err.Error())
@@ -318,7 +331,33 @@ func (s *GroupTransactSession) End(ctx context.Context, commit TransactionEndTry
 	}
 
 	s.failMu.Lock()
-	defer s.failMu.Unlock()
+
+	// If we know we are KIP-447 and the user is requiring stable, we can
+	// unlock immediately because Kafka will itself block a rebalance
+	// fetching offsets from oustanding transactions.
+	//
+	// If either of these are false, we spin up a goroutine that sleeps for
+	// 200ms before unlocking to give Kafka a chance to avoid some odd race
+	// that would permit duplicates (i.e., what KIP-447 is preventing).
+	//
+	// This 200ms is not perfect but it should be well enough time on a
+	// stable cluster. On an unstable cluster, I still expect clients to be
+	// slower than intra-cluster communication, but there is a risk.
+	if kip447 && s.cl.cfg.requireStable {
+		defer s.failMu.Unlock()
+	} else {
+		defer func() {
+			if committed {
+				s.cl.cfg.logger.Log(LogLevelDebug, "sleeping 200ms before allowing a rebalance to continue to give Kafka a chance to write txn markers and avoid duplicates")
+				go func() {
+					time.Sleep(200 * time.Millisecond)
+					s.failMu.Unlock()
+				}()
+			} else {
+				s.failMu.Unlock()
+			}
+		}()
+	}
 
 	tryCommit := !s.failed() && commitErr == nil && !hasAbortableCommitErr && okHeartbeat
 	willTryCommit := wantCommit && tryCommit
@@ -368,6 +407,7 @@ retryUnattempted:
 		return false, endTxnErr
 
 	default: // both errs nil
+		committed = willTryCommit
 		return willTryCommit, nil
 	}
 }

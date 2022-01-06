@@ -30,9 +30,8 @@ KIP-447?
 ## The problem
  
 [KIP-447](https://cwiki.apache.org/confluence/display/KAFKA/KIP-447%3A+Producer+scalability+for+exactly+once+semantics)
-bills itself as producer scalability for exactly once semantics. Mostly, this
-is a KIP to add a bit more safety to EOS, and is mostly tailored for the Java
-client due to how it is implemented.
+bills itself as producer scalability for exactly once semantics. This
+is a KIP to add more safety to EOS.
 
 Before KIP-447, Kafka Streams was implemented to consume from only one
 partition, modify records it consumed, and produce back to a new topic. Streams
@@ -89,8 +88,12 @@ blip of time and then later reconnects to commit.
 
 ## The franz-go approach
 
-The franz-go client supports KIP-447, but allows consuming multiple partitions as
-an EOS consumer/producer even on older (pre 2.5.0) Kafka clusters.
+The franz-go client supports KIP-447, but allows consuming multiple partitions
+as an EOS consumer/producer even on older (pre 2.5) Kafka clusters. There is
+a very small risk of duplicates with the approach this client chooses, you can
+read on below for more details. Alternatively, you can use this client exactly
+like the Java client, but as with the Java client, this requires extra special
+care.
 
 To start, unlike the Java client, franz-go does not require a separate client
 and producer. Instead, both are merged into one "client", and by merging them,
@@ -108,7 +111,7 @@ not, and then we will commit the transaction. To work around this, the franz-go
 client forces a successful heartbeat (and a successful response) immediately
 before committing the transaction. **If a heartbeat immediately before
 committing is successful, then we know we can commit within the session
-timeout**. Only a little bit more remains.
+timeout**. Still, more remains.
 
 Even if we commit immediately before ending a transaction, it is possible that
 our commit will take so long that a rebalance happens before the commit
@@ -130,7 +133,38 @@ If a rebalance happens while committing, the OnRevoked callback is blocked
 until the `EndTxn` request completes, meaning either the `EndTxn` will complete
 successfully before the member is allowed to rebalance, or the `EndTxn` will
 hang long enough for the member to be booted. In either scenario, we avoid our
-problem.
+problem. Again though, more remains.
 
-Thus, although we do support 2.5.0+ behavior, the client itself works around
-duplicates in a pre-2.5.0 world with a lot of edge case handling.
+After `EndTxn`, it is possible that a rebalance could immediately happen.
+Within Kafka when a transaction ends, Kafka propagates a commit marker to all
+partitions that were a part of the transaction. If a rebalance finishes and the
+new consumer fetches offsets _before_ the commit marker is propagated, then the
+new consumer will fetch the previously committed offsets, not the newly
+committed offsets. There is nothing a client can do to reliably prevent this
+scenario. Here, franz-go takes a heuristic approach: the assumption is that
+inter-broker communication is always inevitably faster than broker `<=>` client
+communication. On successful commit, if the client is not speaking to a 2.5+
+cluster (KIP-447 cluster) _or_ the client does not have
+`RequireStableFetchOffsets` enabled, then the client will sleep 200ms before
+releasing the lock that allows a rebalance to continue. The assumption is that
+200ms is enough time for Kafka to propagate transactional markers: the
+propagation should finish before a client is able to do the following: re-join,
+have a new leader assign partitions, sync the assignment, and issue the offset
+fetch request. In effect, the 200ms here is an attempt to provide KIP-447
+semantics (waiting for stable fetch offsets) in place it matters most even
+though the cluster does not support the wait officially. Internally, the sleep
+is concurrent and only blocks a rebalance from beginning, it does not block
+you from starting a new transaction (but, it does prevent you from _ending_
+a new transaction).
+
+One last flaw of the above approach is that a lot of it is dependent on timing.
+If the servers you are running on do not have reliable clocks and may be very
+out of sync, then the timing aspects above may not work. However, it is likely
+your cluster will have other issues if some broker clocks are very off. It is
+recommended to have alerts on ntp clock drift.
+
+Thus, although we do support 2.5+ behavior, the client itself works around
+duplicates in a pre-2.5 world with a lot of edge case handling. It is
+_strongly_ recommended to use a 2.5+ cluster and to always enable
+`RequireStableFetchOffsets`. The option itself has more documentation on
+what other settings may need to be tweaked.

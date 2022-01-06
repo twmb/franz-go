@@ -1309,7 +1309,9 @@ func HeartbeatInterval(interval time.Duration) GroupOpt {
 // that a transactional producer could be committing to.
 //
 // With this option, Kafka will block group consumers from fetching offsets for
-// partitions that are in an active transaction.
+// partitions that are in an active transaction. This option is **strongly**
+// recommended to help prevent duplication problems. See this repo's KIP-447
+// doc to learn more.
 //
 // Because this can block consumption, it is strongly recommended to set
 // transactional timeouts to a small value (10s) rather than the default 60s.
