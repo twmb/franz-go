@@ -1323,14 +1323,14 @@ func RequireStableFetchOffsets() GroupOpt {
 // after offsets are fetched for those partitions so that a user can adjust them
 // before consumption begins.
 //
-// This function combined should not exceed the rebalance interval. It is possible
+// This function should not exceed the rebalance interval. It is possible
 // for the group, immediately after finishing a balance, to re-enter a new balancing
 // session. This function is passed a context that is canceled if the current group
 // session finishes (i.e., after revoking).
 //
 // If you are resetting the position of the offset, you may want to clear any existing
 // "epoch" with WithEpoch(-1). If the epoch is non-negative, the client performs
-// data loss detection, which may result in errors and unexpected consuming offsets.
+// data loss detection, which may result in errors and unexpected behavior.
 func AdjustFetchOffsetsFn(adjustOffsetsBeforeAssign func(context.Context, map[string]map[int32]Offset) (map[string]map[int32]Offset, error)) GroupOpt {
 	return groupOpt{func(cfg *cfg) { cfg.adjustOffsetsBeforeAssign = adjustOffsetsBeforeAssign }}
 }
