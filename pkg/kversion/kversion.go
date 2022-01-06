@@ -486,7 +486,7 @@ var max0110 = nextMax(max0102, func(v listenerKeys) listenerKeys {
 	v = append(v,
 		k(zkBroker, rBroker), // 21 delete records KAFKA-4586 see above
 		k(zkBroker, rBroker), // 22 init producer id KAFKA-4817 bdf4cba047 KIP-98 (raft added in KAFKA-12620 e97cff2702b6ba836c7925caa36ab18066a7c95d KIP-730)
-		k(zkBroker, rBroker), // 23 offsets for leader epoch KAFKA-1211 0baea2ac13 KIP-101
+		k(zkBroker, rBroker), // 23 offset for leader epoch KAFKA-1211 0baea2ac13 KIP-101
 
 		k(zkBroker, rBroker), // 24 add partitions to txn KAFKA-4990 865d82af2c KIP-98 (raft 3.0 6e857c531f14d07d5b05f174e6063a124c917324)
 		k(zkBroker),          // 25 add offsets to txn (same, same raft)
@@ -593,7 +593,7 @@ var max200 = nextMax(max110, func(v listenerKeys) listenerKeys {
 	v[30].inc() // 1 create acls (same)
 	v[31].inc() // 1 delete acls (same)
 
-	v[23].inc() // 1 offsets for leader epoch KAFKA-6361 9679c44d2b KIP-279
+	v[23].inc() // 1 offset for leader epoch KAFKA-6361 9679c44d2b KIP-279
 	return v
 })
 
@@ -607,7 +607,7 @@ var max210 = nextMax(max200, func(v listenerKeys) listenerKeys {
 	v[3].inc()  // 7 metadata (same)
 	v[8].inc()  // 6 offset commit (same)
 	v[9].inc()  // 5 offset fetch (same)
-	v[23].inc() // 2 offsets for leader epoch (same, also in Kafka PR #5635 79ad9026a6)
+	v[23].inc() // 2 offset for leader epoch (same, also in Kafka PR #5635 79ad9026a6)
 	v[28].inc() // 2 txn offset commit (same)
 
 	v[0].inc() // 7 produce KAFKA-4514 741cb761c5 KIP-110
@@ -635,7 +635,7 @@ var max230 = nextMax(max220, func(v listenerKeys) listenerKeys {
 	v[15].inc() // 3 describe groups KAFKA-7922 f11fa5ef40 KIP-430
 
 	v[1].inc()  // 11 fetch KAFKA-8365 e2847e8603 KIP-392
-	v[23].inc() // 3 offsets for leader epoch (same)
+	v[23].inc() // 3 offset for leader epoch (same)
 
 	v[11].inc() // 5 join group KAFKA-7862 0f995ba6be KIP-345
 	v[8].inc()  // 7 offset commit KAFKA-8225 9fa331b811 KIP-345
@@ -792,7 +792,7 @@ var max280 = nextMax(max270, func(v listenerKeys) listenerKeys {
 	// (flexible bumps)
 	v[0].inc()  // 9 produce
 	v[2].inc()  // 6 list offsets
-	v[23].inc() // 4 offsets for leader epoch
+	v[23].inc() // 4 offset for leader epoch
 	v[24].inc() // 3 add partitions to txn
 	v[25].inc() // 3 add offsets to txn
 	v[26].inc() // 3 end txn

@@ -61,7 +61,7 @@ OffsetForLeaderEpochResponse =>
       // next field. If the requested leader epoch is unknown, this is -1. If the
       // requested epoch had no records produced during the requested epoch, this
       // is the first prior epoch that had records.
-      LeaderEpoch: int32(-1)
+      LeaderEpoch: int32(-1) // v1+
       // EndOffset is either (1) just past the last recorded offset in the
       // current partition if the broker leader has the same epoch as the
       // leader epoch in the request, or (2) the beginning offset of the next

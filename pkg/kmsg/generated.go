@@ -17620,7 +17620,7 @@ type OffsetForLeaderEpochResponseTopicPartition struct {
 	// is the first prior epoch that had records.
 	//
 	// This field has a default of -1.
-	LeaderEpoch int32
+	LeaderEpoch int32 // v1+
 
 	// EndOffset is either (1) just past the last recorded offset in the
 	// current partition if the broker leader has the same epoch as the
@@ -17759,7 +17759,7 @@ func (v *OffsetForLeaderEpochResponse) AppendTo(dst []byte) []byte {
 						v := v.Partition
 						dst = kbin.AppendInt32(dst, v)
 					}
-					{
+					if version >= 1 {
 						v := v.LeaderEpoch
 						dst = kbin.AppendInt32(dst, v)
 					}
@@ -17853,7 +17853,7 @@ func (v *OffsetForLeaderEpochResponse) ReadFrom(src []byte) error {
 						v := b.Int32()
 						s.Partition = v
 					}
-					{
+					if version >= 1 {
 						v := b.Int32()
 						s.LeaderEpoch = v
 					}
