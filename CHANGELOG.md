@@ -1,3 +1,25 @@
+v1.3.1
+===
+
+This small patch release fixes a leaked-goroutine problem after closing a
+consuming client, and adds one config validation to hopefully reduce confusion.
+
+For the bug, if a fetch was buffered when you were closing the client, an
+internal goroutine would stay alive. In normal cases where you have one client
+in your program and you close it on program shutdown, this leak is not really
+important. If your program recreates consuming clients often and stays alive,
+the leaked goroutine could eventually result in unexpected memory consumption.
+Now, the client internally unbuffers all fetches at the end of `Close`, which
+allows the previously-leaking goroutine to exit.
+
+For the config validation, using `ConsumePartitions` and `ConsumeTopics` with
+the same topic in both options would silently ignore the topic in
+`ConsumePartitions`. Now, the client will return an error that using the same
+topic in both options is invalid.
+
+- [`ea11266`](https://github.com/twmb/franz-go/commit/ea11266) config: add duplicately specified topic validation
+- [`bb581f4`](https://github.com/twmb/franz-go/commit/bb581f4) **bugfix** client: unbuffer fetches on Close to allow mangeFetchConcurrency to quit
+
 v1.3.0
 ===
 
