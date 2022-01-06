@@ -587,32 +587,38 @@ func (cl *Client) CommitOffsets(ctx context.Context, group string, os Offsets) (
 	}
 
 	rs := make(OffsetResponses)
-	for i, t := range resp.Topics {
+	for _, t := range resp.Topics {
 		rt := make(map[int32]OffsetResponse)
 		rs[t.Topic] = rt
-		if i >= len(req.Topics) {
-			return nil, fmt.Errorf("topic %q at response index %d was not in offset commit request", t.Topic, i)
-		}
-		reqt := req.Topics[i]
-		if reqt.Topic != t.Topic {
-			return nil, fmt.Errorf("topic %q at response index %d does not match request topic %q", t.Topic, i, reqt.Topic)
-		}
-		for j, p := range t.Partitions {
-			if j >= len(reqt.Partitions) {
-				return nil, fmt.Errorf("topic %q partition %d at response index %d was not in offset commit request", t.Topic, p.Partition, j)
-			}
-			reqp := reqt.Partitions[j]
-			if reqp.Partition != p.Partition {
-				return nil, fmt.Errorf("topic %q partition %d at response index %d does not match request partition %d", t.Topic, p.Partition, j, reqp.Partition)
-			}
+		for _, p := range t.Partitions {
 			rt[p.Partition] = OffsetResponse{
 				Offset: os[t.Topic][p.Partition],
 				Err:    kerr.ErrorForCode(p.ErrorCode),
 			}
 		}
 	}
+
+	for t, ps := range os {
+		respt := rs[t]
+		if respt == nil {
+			respt = make(map[int32]OffsetResponse)
+			rs[t] = respt
+		}
+		for p, o := range ps {
+			if _, exists := respt[p]; exists {
+				continue
+			}
+			respt[p] = OffsetResponse{
+				Offset: o,
+				Err:    errOffsetCommitMissing,
+			}
+		}
+	}
+
 	return rs, nil
 }
+
+var errOffsetCommitMissing = errors.New("partition missing in commit response")
 
 // CommitAllOffsets is identical to CommitOffsets, but returns an error if the
 // offset commit was successful, but some offset within the commit failed to be
