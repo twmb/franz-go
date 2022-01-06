@@ -255,7 +255,7 @@ func (f *FirstErrPromise) Err() error {
 // The context is used if the client currently has the max amount of buffered
 // records. If so, the client waits for some records to complete or for the
 // context or client to quit. If the context / client quits, the promise is
-// called with ctx.Err().
+// called with ctx.Err(). If the context is nil, this defaults to context.Background().
 //
 // The context is also used on a per-partition basis to abort buffered records.
 // If the context is done for the first record buffered in a partition, and if
@@ -283,6 +283,9 @@ func (cl *Client) Produce(
 	r *Record,
 	promise func(*Record, error),
 ) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if promise == nil {
 		promise = noPromise
 	}
