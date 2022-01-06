@@ -1,3 +1,39 @@
+v1.3.0
+===
+
+This release contains three new features, a few behavior changes, and one minor
+bugfix.
+
+For features, you can now adjust fetched offsets before they are used (thanks
+@michaelwilner!), you can now "ping" your cluster to see if the client can
+connect at all, and you can now use `SetOffsets` when consuming partitions
+manually. As a somewhat of a feature-ish, producing no longer requires a
+context, instead if a context is nil, `context.Background` is used (this was
+added to allow more laziness when writing small unimportant files).
+
+The transactional behavior change is important: the documentation changes are
+worth reading, and it is worth using a 2.5+ cluster along with the
+`RequireStableFetchOffsets` option if possible. The metadata leader epoch
+rewinding behavior change allows the client to continue in the event of odd
+cluster issues.
+
+In kadm, we now return individual per-partition errors if partitions are not
+included in OffsetCommit responses. The generated code now has a few more enums
+(thanks @weeco!)
+
+Lastly, as a small bugfix, `client.Close()` did not properly stop seed brokers.
+A previous commit split seed brokers and non-seed brokers internally into two
+fields but did not add broker shutdown on the now-split seed broker field.
+
+- [`e0b520c`](https://github.com/twmb/franz-go/commit/e0b520c) **behavior change** kadm: set per-partition errors on missing offsets in CommitOffsets
+- [`32425df`](https://github.com/twmb/franz-go/commit/32425df) **feature** client: add Ping method
+- [`a059901`](https://github.com/twmb/franz-go/commit/a059901) **behavior change**  txns: sleep 200ms on commit, preventing rebalance / new commit
+- [`12eaa1e`](https://github.com/twmb/franz-go/commit/12eaa1e) **behavior change** metadata: allow leader epoch rewinds after 5 tries
+- [`029e655`](https://github.com/twmb/franz-go/commit/029e655) **feature-ish** Produce{,Sync}: default to context.Background if no ctx is provided
+- [`eb2cec3`](https://github.com/twmb/franz-go/commit/eb2cec3) **bugfix** client: stop seed brokers on client.Close
+- [`2eae20d`](https://github.com/twmb/franz-go/commit/2eae20d) **feature** consumer: allow SetOffsets for direct partition consuming
+- [pr #120](https://github.com/twmb/franz-go/pull/120) **feature** Add groupopt to swizzle offset assignments before consumption (thanks @michaelwilner!)
+
 v1.2.6
 ===
 
