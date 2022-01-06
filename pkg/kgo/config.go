@@ -343,6 +343,14 @@ func (cfg *cfg) validate() error {
 		}
 	}
 
+	if cfg.topics != nil && cfg.partitions != nil {
+		for topic := range cfg.partitions {
+			if _, exists := cfg.topics[topic]; exists {
+				return fmt.Errorf("topic %q seen in both ConsumePartitions and ConsumeTopics; these options are a union, it is invalid to specify specific partitions for a topic while also consuming the entire topic", topic)
+			}
+		}
+	}
+
 	if cfg.autocommitDisable && cfg.autocommitGreedy {
 		return errors.New("cannot both disable autocommitting and enable greedy autocommitting")
 	}
