@@ -513,6 +513,10 @@ func (cl *Client) updateBrokers(brokers []kmsg.MetadataResponseBroker) {
 // must manually commit offsets before closing the client.
 func (cl *Client) Close() {
 	cl.LeaveGroup()
+	// After LeaveGroup, consumers cannot consume anymore. LeaveGroup
+	// internally assigns noTopicsPartitions, which uses noConsmerSession,
+	// which prevents loopFetch from starting. Assigning also waits for the
+	// prior session to be complete, meaning loopFetch cannot be running.
 
 	// Now we kill the client context and all brokers, ensuring all
 	// requests fail. This will finish all producer callbacks and
@@ -539,6 +543,12 @@ func (cl *Client) Close() {
 	}
 
 	cl.failBufferedRecords(ErrClientClosed)
+
+	// We need one final poll: if any sources buffered a fetch, then the
+	// manageFetchConcurrency loop only exits when all fetches have been
+	// drained, because draining a fetch is what decrements an "active"
+	// fetch. PollFetches with `nil` is instant.
+	cl.PollFetches(nil)
 }
 
 // Request issues a request to Kafka, waiting for and returning the response.
