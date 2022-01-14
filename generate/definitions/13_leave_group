@@ -3,7 +3,7 @@
 //
 // Version 3 changed removed MemberID and added a batch instance+member ID
 // way of leaving a group.
-LeaveGroupRequest => key 13, max version 4, flexible v4+, group coordinator
+LeaveGroupRequest => key 13, max version 5, flexible v4+, group coordinator
   // Group is the group to leave.
   Group: string
   // MemberID is the member that is leaving.
@@ -12,6 +12,8 @@ LeaveGroupRequest => key 13, max version 4, flexible v4+, group coordinator
   Members: [=>] // v3+
     MemberID: string
     InstanceID: nullable-string
+    // Reason is an optional reason why this member is leaving the group.
+    Reason: nullable-string // v5+
 
 // LeaveGroupResponse is returned from a LeaveGroupRequest.
 LeaveGroupResponse =>

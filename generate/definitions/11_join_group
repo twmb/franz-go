@@ -12,7 +12,7 @@
 //
 // Version 5 introduced InstanceID, allowing for more "static" membership.
 // See KIP-345 for more details.
-JoinGroupRequest => key 11, max version 7, flexible v6+, group coordinator
+JoinGroupRequest => key 11, max version 8, flexible v6+, group coordinator
   // Group is the group to join.
   Group: string
   // SessionTimeoutMillis is how long a member in the group can go between
@@ -65,6 +65,9 @@ JoinGroupRequest => key 11, max version 7, flexible v6+, group coordinator
     // The protocol metadata is where group members will communicate which
     // topics they collectively as a group want to consume.
     Metadata: bytes
+  // Reason is an optional reason the member is joining (or rejoining) the
+  // group (KIP-800, Kafka 3.1+).
+  Reason: nullable-string
 
 // JoinGroupResponse is returned from a JoinGroupRequest.
 JoinGroupResponse =>

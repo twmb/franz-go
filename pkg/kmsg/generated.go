@@ -11622,13 +11622,17 @@ type JoinGroupRequest struct {
 	// name.
 	Protocols []JoinGroupRequestProtocol
 
+	// Reason is an optional reason the member is joining (or rejoining) the
+	// group (KIP-800, Kafka 3.1+).
+	Reason *string
+
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v6+
 
 }
 
 func (*JoinGroupRequest) Key() int16                   { return 11 }
-func (*JoinGroupRequest) MaxVersion() int16            { return 7 }
+func (*JoinGroupRequest) MaxVersion() int16            { return 8 }
 func (v *JoinGroupRequest) SetVersion(version int16)   { v.Version = version }
 func (v *JoinGroupRequest) GetVersion() int16          { return v.Version }
 func (v *JoinGroupRequest) IsFlexible() bool           { return v.Version >= 6 }
@@ -11718,6 +11722,14 @@ func (v *JoinGroupRequest) AppendTo(dst []byte) []byte {
 				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
 				dst = v.UnknownTags.AppendEach(dst)
 			}
+		}
+	}
+	{
+		v := v.Reason
+		if isFlexible {
+			dst = kbin.AppendCompactNullableString(dst, v)
+		} else {
+			dst = kbin.AppendNullableString(dst, v)
 		}
 	}
 	if isFlexible {
@@ -11822,6 +11834,15 @@ func (v *JoinGroupRequest) ReadFrom(src []byte) error {
 		}
 		v = a
 		s.Protocols = v
+	}
+	{
+		var v *string
+		if isFlexible {
+			v = b.CompactNullableString()
+		} else {
+			v = b.NullableString()
+		}
+		s.Reason = v
 	}
 	if isFlexible {
 		s.UnknownTags = internalReadTags(&b)
@@ -11964,7 +11985,7 @@ type JoinGroupResponse struct {
 }
 
 func (*JoinGroupResponse) Key() int16                 { return 11 }
-func (*JoinGroupResponse) MaxVersion() int16          { return 7 }
+func (*JoinGroupResponse) MaxVersion() int16          { return 8 }
 func (v *JoinGroupResponse) SetVersion(version int16) { v.Version = version }
 func (v *JoinGroupResponse) GetVersion() int16        { return v.Version }
 func (v *JoinGroupResponse) IsFlexible() bool         { return v.Version >= 6 }
@@ -12489,6 +12510,9 @@ type LeaveGroupRequestMember struct {
 
 	InstanceID *string
 
+	// Reason is an optional reason why this member is leaving the group.
+	Reason *string // v5+
+
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v4+
 
@@ -12531,7 +12555,7 @@ type LeaveGroupRequest struct {
 }
 
 func (*LeaveGroupRequest) Key() int16                   { return 13 }
-func (*LeaveGroupRequest) MaxVersion() int16            { return 4 }
+func (*LeaveGroupRequest) MaxVersion() int16            { return 5 }
 func (v *LeaveGroupRequest) SetVersion(version int16)   { v.Version = version }
 func (v *LeaveGroupRequest) GetVersion() int16          { return v.Version }
 func (v *LeaveGroupRequest) IsFlexible() bool           { return v.Version >= 4 }
@@ -12587,6 +12611,14 @@ func (v *LeaveGroupRequest) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.InstanceID
+				if isFlexible {
+					dst = kbin.AppendCompactNullableString(dst, v)
+				} else {
+					dst = kbin.AppendNullableString(dst, v)
+				}
+			}
+			if version >= 5 {
+				v := v.Reason
 				if isFlexible {
 					dst = kbin.AppendCompactNullableString(dst, v)
 				} else {
@@ -12668,6 +12700,15 @@ func (v *LeaveGroupRequest) ReadFrom(src []byte) error {
 					v = b.NullableString()
 				}
 				s.InstanceID = v
+			}
+			if version >= 5 {
+				var v *string
+				if isFlexible {
+					v = b.CompactNullableString()
+				} else {
+					v = b.NullableString()
+				}
+				s.Reason = v
 			}
 			if isFlexible {
 				s.UnknownTags = internalReadTags(&b)
@@ -12770,7 +12811,7 @@ type LeaveGroupResponse struct {
 }
 
 func (*LeaveGroupResponse) Key() int16                 { return 13 }
-func (*LeaveGroupResponse) MaxVersion() int16          { return 4 }
+func (*LeaveGroupResponse) MaxVersion() int16          { return 5 }
 func (v *LeaveGroupResponse) SetVersion(version int16) { v.Version = version }
 func (v *LeaveGroupResponse) GetVersion() int16        { return v.Version }
 func (v *LeaveGroupResponse) IsFlexible() bool         { return v.Version >= 4 }
