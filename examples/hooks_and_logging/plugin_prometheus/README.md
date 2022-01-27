@@ -1,7 +1,7 @@
 Prometheus hooks & basic logging
 ===
 
-This example shows how to use the plug-in kprom package to easily povide
+This example shows how to use the plug-in kprom package to easily provide
 prometheus metrics.
 
 If your broker is running on `localhost:9092`, run `go run .` in this directory
