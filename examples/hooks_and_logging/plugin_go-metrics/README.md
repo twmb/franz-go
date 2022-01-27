@@ -1,7 +1,7 @@
 go-metrics hooks & basic logging
 ===
 
-This example shows how to use the plug-in kgmetrics package to easily povide
+This example shows how to use the plug-in kgmetrics package to easily provide
 go-metrics metrics.
 
 If your broker is running on `localhost:9092`, run `go run .` in this directory
