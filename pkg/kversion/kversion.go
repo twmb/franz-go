@@ -889,5 +889,8 @@ var maxTip = nextMax(max300, func(v listenerKeys) listenerKeys {
 	// KAFKA-13496 bf609694f83931990ce63e0123f811e6475820c5 KIP-800
 	v[13].inc() // 5 sync group
 
+	// KAFKA-13527 31fca1611a6780e8a8aa3ac21618135201718e32 KIP-784
+	v[35].inc() // 3 describe log dirs
+
 	return v
 })

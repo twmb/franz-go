@@ -23940,7 +23940,7 @@ type DescribeLogDirsRequest struct {
 }
 
 func (*DescribeLogDirsRequest) Key() int16                 { return 35 }
-func (*DescribeLogDirsRequest) MaxVersion() int16          { return 2 }
+func (*DescribeLogDirsRequest) MaxVersion() int16          { return 3 }
 func (v *DescribeLogDirsRequest) SetVersion(version int16) { v.Version = version }
 func (v *DescribeLogDirsRequest) GetVersion() int16        { return v.Version }
 func (v *DescribeLogDirsRequest) IsFlexible() bool         { return v.Version >= 2 }
@@ -24210,6 +24210,9 @@ type DescribeLogDirsResponse struct {
 	// This request switched at version 1.
 	ThrottleMillis int32
 
+	// The error code, or 0 if there was no error.
+	ErrorCode int16 // v3+
+
 	// Dirs pairs log directories with the topics and partitions that are
 	// stored in those directores.
 	Dirs []DescribeLogDirsResponseDir
@@ -24220,7 +24223,7 @@ type DescribeLogDirsResponse struct {
 }
 
 func (*DescribeLogDirsResponse) Key() int16                 { return 35 }
-func (*DescribeLogDirsResponse) MaxVersion() int16          { return 2 }
+func (*DescribeLogDirsResponse) MaxVersion() int16          { return 3 }
 func (v *DescribeLogDirsResponse) SetVersion(version int16) { v.Version = version }
 func (v *DescribeLogDirsResponse) GetVersion() int16        { return v.Version }
 func (v *DescribeLogDirsResponse) IsFlexible() bool         { return v.Version >= 2 }
@@ -24237,6 +24240,10 @@ func (v *DescribeLogDirsResponse) AppendTo(dst []byte) []byte {
 	{
 		v := v.ThrottleMillis
 		dst = kbin.AppendInt32(dst, v)
+	}
+	if version >= 3 {
+		v := v.ErrorCode
+		dst = kbin.AppendInt16(dst, v)
 	}
 	{
 		v := v.Dirs
@@ -24337,6 +24344,10 @@ func (v *DescribeLogDirsResponse) ReadFrom(src []byte) error {
 	{
 		v := b.Int32()
 		s.ThrottleMillis = v
+	}
+	if version >= 3 {
+		v := b.Int16()
+		s.ErrorCode = v
 	}
 	{
 		v := s.Dirs

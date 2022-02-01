@@ -1,6 +1,6 @@
 // DescribeLogDirsRequest requests directory information for topic partitions.
 // This request was added in support of KIP-113.
-DescribeLogDirsRequest => key 35, max version 2, flexible v2+
+DescribeLogDirsRequest => key 35, max version 3, flexible v2+
   // Topics is an array of topics to describe the log dirs of. If this is
   // null, the response includes all topics and all of their partitions.
   Topics: nullable[=>]
@@ -12,6 +12,8 @@ DescribeLogDirsRequest => key 35, max version 2, flexible v2+
 // DescribeLogDirsResponse is returned from a DescribeLogDirsRequest.
 DescribeLogDirsResponse =>
   ThrottleMillis(1)
+  // The error code, or 0 if there was no error.
+  ErrorCode: int16 // v3+
   // Dirs pairs log directories with the topics and partitions that are
   // stored in those directores.
   Dirs: [=>]
