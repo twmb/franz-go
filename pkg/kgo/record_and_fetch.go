@@ -124,6 +124,9 @@ type Record struct {
 
 	// LeaderEpoch is the leader epoch of the broker at the time this
 	// record was written, or -1 if on message sets.
+	//
+	// For committing records, it is not recommended to modify the
+	// LeaderEpoch. Clients use the LeaderEpoch for data loss detection.
 	LeaderEpoch int32
 
 	// Offset is the offset that a record is written as.
