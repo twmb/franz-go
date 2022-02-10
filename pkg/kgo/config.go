@@ -115,6 +115,7 @@ type cfg struct {
 	linger              time.Duration
 	recordTimeout       time.Duration
 	manualFlushing      bool
+	txnBackoff          time.Duration
 
 	partitioner Partitioner
 
@@ -460,6 +461,7 @@ func defaultCfg() cfg {
 		produceTimeout:      10 * time.Second,
 		recordRetries:       math.MaxInt64,             // effectively unbounded
 		partitioner:         StickyKeyPartitioner(nil), // default to how Kafka partitions
+		txnBackoff:          20 * time.Millisecond,
 
 		//////////////
 		// consumer //
@@ -1035,6 +1037,12 @@ func TransactionalID(id string) ProducerOpt {
 // transaction, not when a transaction begins.
 func TransactionTimeout(timeout time.Duration) ProducerOpt {
 	return producerOpt{func(cfg *cfg) { cfg.txnTimeout = timeout }}
+}
+
+// ConcurrentTransactionBackoff sets the backoff interval to use during
+// transactional requests in case we encounter CONCURRENT_TRANSACTIONS error.
+func ConcurrentTransactionBackoff(backoff time.Duration) ProducerOpt {
+	return producerOpt{func(cfg *cfg) { cfg.txnBackoff = backoff }}
 }
 
 ////////////////////////////
