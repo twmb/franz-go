@@ -782,6 +782,19 @@ func WithHooks(hooks ...Hook) Opt {
 	return clientOpt{func(cfg *cfg) { cfg.hooks = append(cfg.hooks, hooks...) }}
 }
 
+// ConcurrentTransactionBackoff sets the backoff interval to use during
+// transactional requests in case we encounter CONCURRENT_TRANSACTIONS error,
+// overriding the default 20ms.
+//
+// Sometimes, when a client begins a transaction quickly enough after finishing
+// a previous one, Kafka will return a CONCURRENT_TRANSACTIONS error. Clients
+// are expected to backoff slightly and retry the operation. Lower backoffs may
+// increase load on the brokers, while higher backoffs may increase transaction
+// latency in clients.
+func ConcurrentTransactionBackoff(backoff time.Duration) Opt {
+	return clientOpt{func(cfg *cfg) { cfg.txnBackoff = backoff }}
+}
+
 ////////////////////////////
 // PRODUCER CONFIGURATION //
 ////////////////////////////
@@ -1037,12 +1050,6 @@ func TransactionalID(id string) ProducerOpt {
 // transaction, not when a transaction begins.
 func TransactionTimeout(timeout time.Duration) ProducerOpt {
 	return producerOpt{func(cfg *cfg) { cfg.txnTimeout = timeout }}
-}
-
-// ConcurrentTransactionBackoff sets the backoff interval to use during
-// transactional requests in case we encounter CONCURRENT_TRANSACTIONS error.
-func ConcurrentTransactionBackoff(backoff time.Duration) ProducerOpt {
-	return producerOpt{func(cfg *cfg) { cfg.txnBackoff = backoff }}
 }
 
 ////////////////////////////
