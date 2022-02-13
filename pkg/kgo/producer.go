@@ -228,56 +228,33 @@ func (f *FirstErrPromise) Err() error {
 }
 
 // Produce sends a Kafka record to the topic in the record's Topic field,
-// calling promise with the record or an error when Kafka replies. For a
-// synchronous produce, see ProduceSync.
+// calling an optional `promise` with the record and a potential error when
+// Kafka replies. For a synchronous produce, see ProduceSync. Records are
+// produced in order per partition if the record is produced successfully.
+// Records that fail to be produced (topic load failures, unbufferable records,
+// etc.) may have their promised called at any time, and may be called
+// concurrent with other promises. Successfully produced records will have
+// their attributes, offset, and partition set before the promise is called.
 //
-// The promise is optional, but not using it means you will not know if Kafka
-// recorded a record properly. Records are produced in per-partition order and
-// promises are called in per-partition order if the record is buffered to a
-// topic that has loaded successfully. Topics that fail loading, or records
-// that cannot be buffered, may not have their promises called in order.
-// Promises may be called concurrently.
+// If the topic field is empty, the client will use the DefaultProduceTopic; if
+// that is also empty, the record will be failed immediately. If the record is
+// too large to fit in a batch on its own in a produce request, the record will
+// be failed with immediately kerr.MessageTooLarge.
 //
-// If a record is produced successfully, the record's attrs / offset / etc.
-// fields are updated appropriately before a promise is called.
+// If the client is configured to automatically flush the client currently has
+// the configured maximum amount of records buffered, Produce will block. The
+// context can be used to cancel waiting while some records flush. In contrast,
+// if flushing is configured, the record will be failed immediately with
+// ErrMaxBuffered.
 //
-// If the record has an empty Topic field, the client will use a default topic
-// if the client was configured with one via ProduceTopic, otherwise the record
-// will be failed immediately. The Partition field is ignored (setting it does
-// not set which partition will be produced to), but, because the field is set
-// only when finishing a record successfully, you can set the Partition field
-// yourself and use the ManualPartitioner to obey the Partition field.
-//
-// If the record is too large to fit in a batch on its own in a produce
-// request, the promise will be called with kerr.MessageTooLarge and there will
-// be no attempt to produce the record.
-//
-// The context is used if the client currently has the max amount of buffered
-// records. If so, the client waits for some records to complete or for the
-// context or client to quit. If the context / client quits, the promise is
-// called with ctx.Err(). If the context is nil, this defaults to context.Background().
-//
-// The context is also used on a per-partition basis to abort buffered records.
-// If the context is done for the first record buffered in a partition, and if
-// it is valid to abort records (i.e., we can avoid invalid sequence numbers),
-// then all buffered records for a partition are aborted. The context checked
-// for doneness is always the first buffered record's context. The context is
-// evaluated before or after writing a request.
-//
-// The first buffered record for an unknown topic begins a timeout for the
-// configured record timeout limit; all records buffered within the wait will
-// expire with the same timeout if the topic does not load in time. For
-// simplicity, any time spent waiting for the topic to load is not persisted
-// through once the topic loads, meaning the record may further wait once
-// buffered. This may be changed in the future if necessary, however, the only
-// reason for a topic to not load promptly is if it does not exist.
-//
-// If manual flushing is configured and there are already MaxBufferedRecords
-// buffered, the promise is immediately called with ErrMaxBuffered.
+// Once a record is buffered into a batch, it can be canceled in three ways:
+// canceling the context, the record timing out, or hitting the maximum
+// retries. If any of these conditions are hit and it is currently safe to fail
+// records, all buffered records for the relevant partition are failed.
 //
 // If the client is transactional and a transaction has not been begun, the
-// promise is immediately called with an error corresponding to not being in
-// a transaction.
+// promise is immediately called with an error corresponding to not being in a
+// transaction.
 func (cl *Client) Produce(
 	ctx context.Context,
 	r *Record,
