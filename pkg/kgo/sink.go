@@ -217,14 +217,6 @@ func (s *sink) clearBackoff() {
 // This function is harmless if there are no records that need draining.
 // We rely on that to not worry about accidental triggers of this function.
 func (s *sink) drain() {
-	// If not lingering, before we begin draining, sleep a tiny bit. This
-	// helps when a high volume new sink began draining with no linger;
-	// rather than immediately eating just one record, we allow it to
-	// buffer a bit before we loop draining.
-	if s.cl.cfg.linger == 0 && !s.cl.cfg.manualFlushing {
-		time.Sleep(50 * time.Microsecond)
-	}
-
 	again := true
 	for again {
 		s.maybeBackoff()
