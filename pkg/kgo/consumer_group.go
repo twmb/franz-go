@@ -1611,20 +1611,44 @@ func (g *groupConsumer) updateCommitted(
 			}
 			uncommit.committed = set
 
-			// We always commit either dirty offsets or head
-			// offsets. For sanity, we bump both dirty/head to the
-			// commit if they are before the commit. We only expect
-			// head to be before the commit, if committing manually
-			// through UncommittedOffsets in an OnRevoke with
-			// autocommitting enabled.
-			for _, next := range []*EpochOffset{
-				&uncommit.head,
-				&uncommit.committed,
-			} {
-				if next.less(set) {
-					*next = set
-				}
+			// head is set in four places:
+			//  (1) if manually committing or greedily autocommitting,
+			//      then head is bumped on poll
+			//  (2) if autocommitting normally, then head is bumped
+			//      to the prior poll on poll
+			//  (3) if using marks, head is bumped on mark
+			//  (4) here, and we can be here on autocommit or on
+			//      manual commit (usually manual in an OnRevoke)
+			//
+			// head is usually at or past the commit: usually, head
+			// is used to build the commit itself. However, in case 4
+			// when the user manually commits in OnRevoke, the user
+			// is likely committing with UncommittedOffsets, i.e.,
+			// the dirty offsets that are past the current head.
+			// We want to ensure we forward the head so that using
+			// it later does not rewind the manual commit.
+			//
+			// This does not affect the first case, because dirty == head,
+			// and manually committing dirty changes nothing.
+			//
+			// This does not affect the second case, because effectively,
+			// this is just bumping head early (dirty == head, no change).
+			//
+			// This *could* affect the third case, because an
+			// autocommit could begin, followed by a mark rewind,
+			// followed by autocommit completion. We document that
+			// using marks to rewind is not recommended.
+			//
+			// The user could also muck the offsets with SetOffsets.
+			// We document that concurrent committing is not encouraged,
+			// we do not attempt to guard past that.
+			//
+			// w.r.t. leader epoch's, we document that modifying
+			// leader epoch's is not recommended.
+			if uncommit.head.less(set) {
+				uncommit.head = set
 			}
+
 			topic[respPart.Partition] = uncommit
 		}
 
@@ -1798,7 +1822,7 @@ func (g *groupConsumer) getUncommittedLocked(head, dirty bool) map[string]map[in
 	for topic, partitions := range g.uncommitted {
 		var topicUncommitted map[int32]EpochOffset
 		for partition, uncommit := range partitions {
-			if head && uncommit.dirty == uncommit.committed {
+			if head && (dirty && uncommit.dirty == uncommit.committed || !dirty && uncommit.head == uncommit.committed) {
 				continue
 			}
 			if topicUncommitted == nil {
@@ -1900,6 +1924,12 @@ func (cl *Client) CommitRecords(ctx context.Context, rs ...*Record) error {
 // MarkCommitRecords marks records to be available for autocommitting. This
 // function is only useful if you use the AutoCommitMarks config option, see
 // the documentation on that option for more details.
+//
+// This function blindly sets the "head" per partition that will be committed
+// on the next autocommit. This can be used to rewind partitions if necessary,
+// however it is strongly not recommended to use autocommitting + marks to
+// rewind commits, and depending on timing, the autocommit may undo a mark
+// rewind.
 func (cl *Client) MarkCommitRecords(rs ...*Record) {
 	g := cl.consumer.g
 	if g == nil || !cl.cfg.autocommitMarks {
@@ -1930,19 +1960,15 @@ func (cl *Client) MarkCommitRecords(rs ...*Record) {
 			curTopic = r.Topic
 		}
 
-		set := EpochOffset{
-			r.LeaderEpoch,
-			r.Offset + 1,
+		current := curPartitions[r.Partition]
+		curPartitions[r.Partition] = uncommit{
+			dirty:     current.dirty,
+			committed: current.committed,
+			head: EpochOffset{
+				r.LeaderEpoch,
+				r.Offset + 1,
+			},
 		}
-
-		next := curPartitions[r.Partition]
-		if next.head.less(set) {
-			next.head = set
-		}
-		if next.dirty.less(set) { // for sanity, but this should not happen
-			next.dirty = set
-		}
-		curPartitions[r.Partition] = next
 	}
 }
 
