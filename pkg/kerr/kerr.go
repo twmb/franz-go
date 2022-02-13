@@ -1,7 +1,9 @@
 // Package kerr contains Kafka errors.
 //
 // The errors are undocumented to avoid duplicating the official descriptions
-// that can be found at http://kafka.apache.org/protocol.html#protocolErrorCodes.
+// that can be found at https://kafka.apache.org/protocol.html#protocol_error_codes (although,
+// this code does duplicate the descriptions into the errors themselves, so the
+// descriptions can be seen as the documentation).
 //
 // Since this package is dedicated to errors and the package is named "kerr",
 // all errors elide the standard "Err" prefix.
