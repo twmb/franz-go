@@ -115,6 +115,7 @@ type cfg struct {
 	linger              time.Duration
 	recordTimeout       time.Duration
 	manualFlushing      bool
+	txnBackoff          time.Duration
 
 	partitioner Partitioner
 
@@ -460,6 +461,7 @@ func defaultCfg() cfg {
 		produceTimeout:      10 * time.Second,
 		recordRetries:       math.MaxInt64,             // effectively unbounded
 		partitioner:         StickyKeyPartitioner(nil), // default to how Kafka partitions
+		txnBackoff:          20 * time.Millisecond,
 
 		//////////////
 		// consumer //
@@ -778,6 +780,19 @@ func SASL(sasls ...sasl.Mechanism) Opt {
 // interfaces, and only the hooks that it implements will be called.
 func WithHooks(hooks ...Hook) Opt {
 	return clientOpt{func(cfg *cfg) { cfg.hooks = append(cfg.hooks, hooks...) }}
+}
+
+// ConcurrentTransactionBackoff sets the backoff interval to use during
+// transactional requests in case we encounter CONCURRENT_TRANSACTIONS error,
+// overriding the default 20ms.
+//
+// Sometimes, when a client begins a transaction quickly enough after finishing
+// a previous one, Kafka will return a CONCURRENT_TRANSACTIONS error. Clients
+// are expected to backoff slightly and retry the operation. Lower backoffs may
+// increase load on the brokers, while higher backoffs may increase transaction
+// latency in clients.
+func ConcurrentTransactionBackoff(backoff time.Duration) Opt {
+	return clientOpt{func(cfg *cfg) { cfg.txnBackoff = backoff }}
 }
 
 ////////////////////////////
