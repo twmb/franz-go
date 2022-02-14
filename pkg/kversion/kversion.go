@@ -220,6 +220,7 @@ func (vs *Versions) VersionGuess(opts ...VersionGuessOpt) string {
 		{max270, "v2.7"},
 		{max280, "v2.8"},
 		{max300, "v3.0"},
+		{max310, "v3.1"},
 	} {
 		for k, v := range comparison.cmp.filter(cfg.listener) {
 			if !skip[int16(k)] && v != -1 {
@@ -346,6 +347,7 @@ func V2_6_0() *Versions  { return zkBrokerOf(max260) }
 func V2_7_0() *Versions  { return zkBrokerOf(max270) }
 func V2_8_0() *Versions  { return zkBrokerOf(max280) }
 func V3_0_0() *Versions  { return zkBrokerOf(max300) }
+func V3_1_0() *Versions  { return zkBrokerOf(max310) }
 
 func zkBrokerOf(lks listenerKeys) *Versions {
 	return &Versions{lks.filter(zkBroker)}
@@ -877,17 +879,22 @@ var max300 = nextMax(max280, func(v listenerKeys) listenerKeys {
 	return v
 })
 
-var maxTip = nextMax(max300, func(v listenerKeys) listenerKeys {
+var max310 = nextMax(max300, func(v listenerKeys) listenerKeys {
 	// KAFKA-10580 2b8aff58b575c199ee8372e5689420c9d77357a5 KIP-516
 	v[1].inc() // 13 fetch
 
 	// KAFKA-10744 1d22b0d70686aef5689b775ea2ea7610a37f3e8c KIP-516
 	v[3].inc() // 12 metadata
 
+	return v
+})
+
+var maxTip = nextMax(max310, func(v listenerKeys) listenerKeys {
 	// KAFKA-13495 69645f1fe5103adb00de6fa43152e7df989f3aea KIP-800
 	v[11].inc() // 8 join group
+
 	// KAFKA-13496 bf609694f83931990ce63e0123f811e6475820c5 KIP-800
-	v[13].inc() // 5 sync group
+	v[13].inc() // 5 leave group
 
 	// KAFKA-13527 31fca1611a6780e8a8aa3ac21618135201718e32 KIP-784
 	v[35].inc() // 3 describe log dirs
