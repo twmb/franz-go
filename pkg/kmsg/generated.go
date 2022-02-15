@@ -11972,7 +11972,7 @@ type JoinGroupResponse struct {
 	LeaderID string
 
 	// True if the leader must skip running the assignment; see KIP-814.
-	SkipAssignment bool
+	SkipAssignment bool // v9+
 
 	// MemberID is the member of the receiving client.
 	MemberID string
@@ -12051,7 +12051,7 @@ func (v *JoinGroupResponse) AppendTo(dst []byte) []byte {
 			dst = kbin.AppendString(dst, v)
 		}
 	}
-	{
+	if version >= 9 {
 		v := v.SkipAssignment
 		dst = kbin.AppendBool(dst, v)
 	}
@@ -12166,7 +12166,7 @@ func (v *JoinGroupResponse) ReadFrom(src []byte) error {
 		}
 		s.LeaderID = v
 	}
-	{
+	if version >= 9 {
 		v := b.Bool()
 		s.SkipAssignment = v
 	}

@@ -123,7 +123,7 @@ JoinGroupResponse =>
   // LeaderID is the leader member.
   LeaderID: string
   // True if the leader must skip running the assignment; see KIP-814.
-  SkipAssignment: bool
+  SkipAssignment: bool // v9+
   // MemberID is the member of the receiving client.
   MemberID: string
   // Members contains all other members of this group. Only the group leader
