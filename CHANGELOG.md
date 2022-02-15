@@ -1,3 +1,80 @@
+v1.3.3
+===
+
+This patch release contains two minor bug fixes and a few small behavior
+changes. The upcoming v1.4 release will contain more changes to lint the entire
+codebase and will have a few new options as features to configure the client
+internals. There are a few features in development yet that I would like to
+complete before tagging the next minor release.
+
+## Bug fixes
+
+Repeated integration testing resulted in a rare data race, and one other bug
+was found by linting. For the race, if a group was left _or_ heartbeating
+stopped _before_ offset fetching finished, then there would be a concurrent
+double write to an error variable: one write would try to write an error from
+the request being cut (which would be `context.Canceled`), and the other write
+would write the same error, but directly from `ctx.Err`. Since both of these
+are the same type pointer and data pointer, it is unlikely this race would
+result in anything if it was ever encountered, and encountering it would be
+rare.
+
+For the second bug, after this prior one, I wondered if any linter would have
+caught this bug (the answer is no). However, in the process of heavily linting
+the code base, a separate bug was found. This bug has **no impact**, but it is
+good to fix. If you previously consumed and specified _exact_ offsets to
+consume from, the internal `ListOffsets` request would use that offset as a
+timestamp, rather than using -1 as I meant to internally. The whole point is
+just to load the partition, so using a random number for a timestmap is just as
+good as using -1, but we may as well use -1 to be proper.
+
+## Behavior changes
+
+Previously when producing, the buffer draining goroutine would sleep for 50ms
+whenever it started. This was done to give high throughput producers a chance
+to produce more records within the first batch, rather than the loop being so
+fast that one record is in the first batch (and more in the others). This 50ms
+sleep is a huge penalty to oneshot producers (producing one message at a time,
+synchronously) and also was a slight penalty to high throughput producers
+whenever the drain loop quit and needed to be resumed. We now eliminate this
+sleep. This may result in more smaller batches, but definitely helps oneshot
+producers. A linger can be used to avoid small batches, if needed.
+
+Previously, due to MS Azure improperly replying to produce requests when acks
+were zero, a discard goroutine was added to drain the produce connection if the
+client was configured to produce with no acks. Logic has been added to quit
+this goroutine if nothing is read on that goroutine for 3x the connection
+timeout overhead, which is well enough time that a response should be received
+if the broker is ever going to send one.
+
+Previously, `MarkCommitRecords` would forbid rewinds and only allow advancing
+offsets. The code now allows rewinds if you mark an early offset after you have
+already marked a later offset. This brings the behavior in line with the
+current `CommitOffsets`.
+
+Previously, if the client encountered `CONCURRENT_TRANSACTIONS` during transactions,
+it would sleep for 100ms and then retry the relevant request. This sleep has been
+dropped to 20ms, which should help latency when transacting quickly. The v1.4
+release will allow this number to be configured with a new option.
+
+## Additions
+
+KIP-784 and KIP-814 are now supported (unreleased yet in Kafka). Support for
+KIP-814 required bumping the franz-go's kmsg dep. Internally, only KIP-814
+affects client behavior, but since this is unrelased, it is not changing any
+behavior.
+
+## Relevant commits
+
+- [`b39ca31`](https://github.com/twmb/franz-go/commit/b39ca31) fetchOffsets: fix data race
+- [`4156e9f`](https://github.com/twmb/franz-go/commit/4156e9f) kgo: fix one bug found by linting
+- [`72760bf..ad991d8`](https://github.com/twmb/franz-go/compare/72760bf..ad991d8) kmsg, kversion, kgo: support KIP-814 (SkipAssignment in JoinGroupResponse)
+- [`db9017a`](https://github.com/twmb/franz-go/commit/db9017a) broker: allow the acks==0 producing discard goroutine to die
+- [`eefb1f3`](https://github.com/twmb/franz-go/commit/eefb1f3) consuming: update docs & simplify; `MarkCommitRecords`: allow rewinds
+- [`8808b94`](https://github.com/twmb/franz-go/commit/8808b94) sink: remove 50ms wait on new drain loops
+- [`a13f918`](https://github.com/twmb/franz-go/commit/a13f918) kmsg & kversion: add support for KIP-784 (ErrorCode in DescribeLogDirs response)
+- [PR #133](https://github.com/twmb/franz-go/pull/133) - lower concurrent transactions retry to 20ms; configurability will be in the next release (thanks [@eduard-netsajev](https://github.com/eduard-netsajev))
+
 v1.3.2
 ===
 
