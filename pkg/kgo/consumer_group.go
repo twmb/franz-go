@@ -1156,14 +1156,14 @@ func (g *groupConsumer) adjustCooperativeFetchOffsets(added, lost map[string][]i
 
 // fetchOffsets is issued once we join a group to see what the prior commits
 // were for the partitions we were assigned.
-func (g *groupConsumer) fetchOffsets(ctx context.Context, added, lost map[string][]int32) (err error) {
+func (g *groupConsumer) fetchOffsets(ctx context.Context, added, lost map[string][]int32) (rerr error) { // we must use "rerr"! see introducing commit
 	// If cooperative consuming, we may have to resume fetches. See the
 	// comment on adjustCooperativeFetchOffsets. If we successfully fetch,
 	// we clear what we were fetching.
 	if g.cooperative {
 		added = g.adjustCooperativeFetchOffsets(added, lost)
 		defer func() {
-			if err == nil {
+			if rerr == nil {
 				g.fetching = nil
 			}
 		}()
@@ -1184,6 +1184,7 @@ start:
 	}
 
 	var resp *kmsg.OffsetFetchResponse
+	var err error
 
 	fetchDone := make(chan struct{})
 	go func() {
