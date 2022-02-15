@@ -935,7 +935,7 @@ func RecordPartitioner(partitioner Partitioner) ProducerOpt {
 //
 // This somewhat corresponds to Kafka's request.timeout.ms setting, but only
 // applies to produce requests. This settings sets the TimeoutMillis field in
-// the produce request itself. The ConnTimeoutOverhead is applied as a write
+// the produce request itself. The RequestTimeoutOverhead is applied as a write
 // limit and read limit in addition to this.
 func ProduceRequestTimeout(limit time.Duration) ProducerOpt {
 	return producerOpt{func(cfg *cfg) { cfg.produceTimeout = limit }}
