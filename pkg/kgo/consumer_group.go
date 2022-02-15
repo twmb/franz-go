@@ -997,20 +997,30 @@ func (g *groupConsumer) handleJoinResp(resp *kmsg.JoinGroupResponse) (restart bo
 	leader := resp.LeaderID == resp.MemberID
 	if leader {
 		g.leader.set(true)
-		g.cfg.logger.Log(LogLevelInfo, "joined, balancing group",
-			"group", g.cfg.group,
-			"member_id", g.memberID,
-			"instance_id", g.cfg.instanceID,
-			"generation", g.generation,
-			"balance_protocol", protocol,
-			"leader", true,
-		)
 
-		plan, err = g.balanceGroup(protocol, resp.Members)
-		if err != nil {
-			return
+		if resp.SkipAssignment {
+			g.cfg.logger.Log(LogLevelInfo, "joined, skipping assignment even though leader (KIP-814)",
+				"group", g.cfg.group,
+				"member_id", g.memberID,
+				"instance_id", g.cfg.instanceID,
+				"generation", g.generation,
+				"balance_protocol", protocol,
+				"leader", true,
+			)
+		} else {
+			g.cfg.logger.Log(LogLevelInfo, "joined, balancing group",
+				"group", g.cfg.group,
+				"member_id", g.memberID,
+				"instance_id", g.cfg.instanceID,
+				"generation", g.generation,
+				"balance_protocol", protocol,
+				"leader", true,
+			)
+			plan, err = g.balanceGroup(protocol, resp.Members)
+			if err != nil {
+				return
+			}
 		}
-
 	} else {
 		g.cfg.logger.Log(LogLevelInfo, "joined",
 			"group", g.cfg.group,

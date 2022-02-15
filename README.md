@@ -327,6 +327,7 @@ generation.
 | [KIP-735](https://cwiki.apache.org/confluence/display/KAFKA/KIP-735%3A+Increase+default+consumer+session+timeout) — Bump default session timeout | ? | Supported |
 | [KIP-784](https://cwiki.apache.org/confluence/display/KAFKA/KIP-784%3A+Add+top-level+error+code+field+to+DescribeLogDirsResponse) — Add ErrorCode to DescribeLogDirs response| 3.1 | Supported |
 | [KIP-800](https://cwiki.apache.org/confluence/display/KAFKA/KIP-800%3A+Add+reason+to+JoinGroupRequest+and+LeaveGroupRequest) — Reason in Join/Leave group | 3.1 | Supported |
+| [KIP-814](https://cwiki.apache.org/confluence/display/KAFKA/KIP-814%3A+Static+membership+protocol+should+let+the+leader+skip+assignment) — SkipAssignment for static group leaders | 3.1 | Supported |
 
 Missing from above but included in librdkafka is:
 
