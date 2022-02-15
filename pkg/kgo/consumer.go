@@ -1657,7 +1657,7 @@ func (o offsetLoadMap) buildListReq(isolationLevel int8) *kmsg.ListOffsetsReques
 			p := kmsg.NewListOffsetsRequestTopicPartition()
 			p.Partition = partition
 			p.CurrentLeaderEpoch = offset.currentEpoch // KIP-320
-			p.Timestamp = offset.at
+			p.Timestamp = timestamp
 			p.MaxNumOffsets = 1
 
 			parts = append(parts, p)
