@@ -12,7 +12,7 @@
 //
 // Version 5 introduced InstanceID, allowing for more "static" membership.
 // See KIP-345 for more details.
-JoinGroupRequest => key 11, max version 8, flexible v6+, group coordinator
+JoinGroupRequest => key 11, max version 9, flexible v6+, group coordinator
   // Group is the group to join.
   Group: string
   // SessionTimeoutMillis is how long a member in the group can go between
@@ -122,6 +122,8 @@ JoinGroupResponse =>
   Protocol: nullable-string-v7+
   // LeaderID is the leader member.
   LeaderID: string
+  // True if the leader must skip running the assignment; see KIP-814.
+  SkipAssignment: bool
   // MemberID is the member of the receiving client.
   MemberID: string
   // Members contains all other members of this group. Only the group leader

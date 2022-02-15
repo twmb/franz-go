@@ -11632,7 +11632,7 @@ type JoinGroupRequest struct {
 }
 
 func (*JoinGroupRequest) Key() int16                   { return 11 }
-func (*JoinGroupRequest) MaxVersion() int16            { return 8 }
+func (*JoinGroupRequest) MaxVersion() int16            { return 9 }
 func (v *JoinGroupRequest) SetVersion(version int16)   { v.Version = version }
 func (v *JoinGroupRequest) GetVersion() int16          { return v.Version }
 func (v *JoinGroupRequest) IsFlexible() bool           { return v.Version >= 6 }
@@ -11971,6 +11971,9 @@ type JoinGroupResponse struct {
 	// LeaderID is the leader member.
 	LeaderID string
 
+	// True if the leader must skip running the assignment; see KIP-814.
+	SkipAssignment bool
+
 	// MemberID is the member of the receiving client.
 	MemberID string
 
@@ -11985,7 +11988,7 @@ type JoinGroupResponse struct {
 }
 
 func (*JoinGroupResponse) Key() int16                 { return 11 }
-func (*JoinGroupResponse) MaxVersion() int16          { return 8 }
+func (*JoinGroupResponse) MaxVersion() int16          { return 9 }
 func (v *JoinGroupResponse) SetVersion(version int16) { v.Version = version }
 func (v *JoinGroupResponse) GetVersion() int16        { return v.Version }
 func (v *JoinGroupResponse) IsFlexible() bool         { return v.Version >= 6 }
@@ -12047,6 +12050,10 @@ func (v *JoinGroupResponse) AppendTo(dst []byte) []byte {
 		} else {
 			dst = kbin.AppendString(dst, v)
 		}
+	}
+	{
+		v := v.SkipAssignment
+		dst = kbin.AppendBool(dst, v)
 	}
 	{
 		v := v.MemberID
@@ -12158,6 +12165,10 @@ func (v *JoinGroupResponse) ReadFrom(src []byte) error {
 			v = b.String()
 		}
 		s.LeaderID = v
+	}
+	{
+		v := b.Bool()
+		s.SkipAssignment = v
 	}
 	{
 		var v string
