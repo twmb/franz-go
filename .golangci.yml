@@ -1,0 +1,167 @@
+# We may as well allow multiple golangci-lint invocations at once.
+run:
+  allow-parallel-runners: true
+
+# golangci-lint by default ignores some staticcheck and vet raised issues that
+# are actually important to catch. The following ensures that we do not ignore
+# those tools ever.
+issues:
+  exclude-use-default: false
+
+linters:
+  disable-all: true
+  enable:
+    # Enabled by default linters: we want all except errcheck
+    - deadcode
+    - gosimple
+    - govet
+    - ineffassign
+    - staticcheck
+    - structcheck
+    - typecheck
+    - unused
+    - varcheck
+    # Not enabled by default: we want a good chunk
+    - asciicheck
+    - bidichk
+    - bodyclose
+    - durationcheck
+    - exhaustive
+    - exportloopref
+    - gocritic
+    - gofmt
+    - gofumpt
+    - goimports
+    - goprintffuncname
+    - misspell
+    - nilerr
+    - noctx
+    - nolintlint
+    - revive
+    - rowserrcheck
+    - sqlclosecheck
+    - tenv
+    - unconvert
+    - unparam
+    - wastedassign
+    - whitespace
+
+linters-settings:
+  # A default case ensures we have checked everything. We should not require
+  # every enum to be checked if we want to default.
+  exhaustive:
+    default-signifies-exhaustive: true
+
+  # If we want to opt out of a lint, we require an explanation.
+  nolintlint:
+    allow-leading-space: true
+    allow-unused: false
+    require-explanation: true
+    require-specific: true
+
+  # We do not want every usage of fmt.Errorf to use %w.
+  errorlint:
+    errorf: false
+
+  # If gofumpt is run outside of a module, it assumes Go 1.0 rather than the
+  # latest Go. We always want the latest formatting.
+  #
+  # https://github.com/mvdan/gofumpt/issues/137
+  gofumpt:
+    lang-version: "1.17"
+    extra-rules: true
+
+  # Gocritic is a meta linter that has very good lints, and most of the
+  # experimental ones are very good too. We opt into everything, which helps
+  # us when we upgrade golangci-lint, and we specifically opt out of a batch.
+  #
+  # You can see what the opt-outs would flag by deleting them.
+  gocritic:
+    enabled-tags:
+      - diagnostic
+      - experimental
+      - opinionated
+      - performance
+      - style
+    disabled-checks:
+      - appendAssign 
+      - builtinShadow
+      - commentedOutCode
+      - emptyStringTest
+      - evalOrder
+      - ifElseChain
+      - importShadow
+      - ioutilDeprecated
+      - ptrToRefParam
+      - sloppyReassign
+      - tooManyResultsChecker
+      - typeDefFirst
+      - unlabelStmt
+      - unlambda
+      - unnamedResult
+      - unnecessaryBlock
+    settings:
+      hugeParam:
+        sizeThreshold: 256
+      rangeValCopy:
+        sizeThreshold: 256
+
+  # Revive is yet another metalinter with a bunch of useful lints. The below
+  # opts in to all of the ones we would like to use.
+  revive:
+    ignore-generated-header: true
+    severity: warning
+    confidence: 0.8
+    error-code: 0
+    warning-code: 0
+    rules:
+      - name: atomic
+      - name: blank-imports
+      - name: bool-literal-in-expr
+      - name: call-to-gc
+      - name: constant-logical-expr
+      - name: context-as-argument
+      - name: context-keys-type
+      - name: defer
+      - name: dot-imports
+      - name: duplicated-imports
+      - name: early-return
+      - name: empty-block
+      - name: empty-lines
+      - name: error-naming
+      - name: error-return
+      - name: error-strings
+      - name: errorf
+      - name: get-return
+      - name: identical-branches
+      - name: if-return
+      - name: increment-decrement
+      - name: indent-error-flow
+      - name: optimize-operands-order
+      - name: package-comments
+      - name: range
+      - name: range-val-in-closure
+      - name: receiver-naming
+      - name: redefines-builtin-id
+      - name: string-of-int
+      - name: struct-tag
+      - name: superfluous-else
+      - name: time-equal
+      - name: time-naming
+      - name: var-declaration
+      - name: unconditional-recursion
+      - name: unexported-naming
+      - name: unexported-return
+      - name: unnecessary-stmt
+      - name: unreachable-code
+      - name: unused-parameter
+      - name: unused-receiver
+      - name: useless-break
+      - name: waitgroup-by-value
+
+  # We disable the nil ctx check, because we deliberately internally use nil
+  # contexts for beneficial reasons, and we disable the SSLv3 deprecation
+  # warning because this is solely for a debug log.
+  staticcheck:
+    go: "1.17"
+    checks: ["all", "-SA1012", "-SA1019"]
