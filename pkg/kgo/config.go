@@ -791,9 +791,7 @@ func WithHooks(hooks ...Hook) Opt {
 	return clientOpt{func(cfg *cfg) { cfg.hooks = append(cfg.hooks, hooks...) }}
 }
 
-/* TODO: commenting out for a v1.3.3 release
-
-// ConcurrentTransactionBackoff sets the backoff interval to use during
+// ConcurrentTransactionsBackoff sets the backoff interval to use during
 // transactional requests in case we encounter CONCURRENT_TRANSACTIONS error,
 // overriding the default 20ms.
 //
@@ -802,11 +800,9 @@ func WithHooks(hooks ...Hook) Opt {
 // are expected to backoff slightly and retry the operation. Lower backoffs may
 // increase load on the brokers, while higher backoffs may increase transaction
 // latency in clients.
-func ConcurrentTransactionBackoff(backoff time.Duration) Opt {
+func ConcurrentTransactionsBackoff(backoff time.Duration) Opt {
 	return clientOpt{func(cfg *cfg) { cfg.txnBackoff = backoff }}
 }
-
-*/
 
 ////////////////////////////
 // PRODUCER CONFIGURATION //
@@ -864,8 +860,6 @@ func DisableIdempotentWrite() ProducerOpt {
 	return producerOpt{func(cfg *cfg) { cfg.disableIdempotency = true }}
 }
 
-/* TODO: commenting out for a v1.3.3 release
-
 // MaxProduceRequestsInflightPerBroker changes the number of allowed produce
 // requests in flight per broker if you disable idempotency, overriding the
 // default of 1. If using idempotency, this option has no effect: the maximum
@@ -876,8 +870,6 @@ func DisableIdempotentWrite() ProducerOpt {
 func MaxProduceRequestsInflightPerBroker(n int) ProducerOpt {
 	return producerOpt{func(cfg *cfg) { cfg.maxProduceInflight = n }}
 }
-
-*/
 
 // ProducerBatchCompression sets the compression codec to use for producing
 // records.
