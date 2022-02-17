@@ -3,6 +3,7 @@ package kgo
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -250,7 +251,7 @@ func (g *groupConsumer) manage() {
 		err := g.joinAndSync()
 		if err == nil {
 			if err = g.setupAssignedAndHeartbeat(); err != nil {
-				if err == kerr.RebalanceInProgress {
+				if errors.Is(err, kerr.RebalanceInProgress) {
 					err = nil
 				}
 			}
@@ -268,7 +269,7 @@ func (g *groupConsumer) manage() {
 			})
 		}
 
-		if err == context.Canceled && g.cfg.onRevoked != nil {
+		if errors.Is(err, context.Canceled) && g.cfg.onRevoked != nil {
 			// The cooperative consumer does not revoke everything
 			// while rebalancing, meaning if our context is
 			// canceled, we may have uncommitted data. Rather than
@@ -308,7 +309,7 @@ func (g *groupConsumer) manage() {
 			g.leader.set(false)
 		}
 
-		if err == context.Canceled { // context was canceled, quit now
+		if errors.Is(err, context.Canceled) { // context was canceled, quit now
 			return
 		}
 
@@ -823,7 +824,7 @@ func (g *groupConsumer) heartbeat(fetchErrCh <-chan error, s *assignRevokeSessio
 			// setupAssignedAndHeartbeat still waits for onAssigned
 			// to be done so that we avoid calling onLost
 			// concurrently.
-			if err != kerr.RebalanceInProgress && revoked == nil {
+			if !errors.Is(err, kerr.RebalanceInProgress) && revoked == nil {
 				return err
 			}
 
@@ -833,7 +834,7 @@ func (g *groupConsumer) heartbeat(fetchErrCh <-chan error, s *assignRevokeSessio
 			//
 			// If the err is context.Canceled, the group is being
 			// left and we revoke everything.
-			revoked = s.revoke(g, err == context.Canceled)
+			revoked = s.revoke(g, errors.Is(err, context.Canceled))
 		}
 		// Since we errored, while waiting for the revoke to finish, we
 		// update our metadata. A leader may have re-joined with new
@@ -960,7 +961,7 @@ start:
 	}
 
 	if err = g.handleSyncResp(protocol, syncResp); err != nil {
-		if err == kerr.RebalanceInProgress {
+		if errors.Is(err, kerr.RebalanceInProgress) {
 			g.cfg.logger.Log(LogLevelInfo, "sync failed with RebalanceInProgress, rejoining", "group", g.cfg.group)
 			goto start
 		}
@@ -987,7 +988,7 @@ func (g *groupConsumer) handleJoinResp(resp *kmsg.JoinGroupResponse) (restart bo
 			g.cfg.logger.Log(LogLevelInfo, "join returned UnknownMemberID, rejoining without a member id", "group", g.cfg.group)
 			return true, "", nil, nil
 		}
-		return // Request retries as necesary, so this must be a failure
+		return // Request retries as necessary, so this must be a failure
 	}
 
 	// Concurrent committing, while erroneous to do at the moment, could
@@ -1219,7 +1220,7 @@ start:
 				// KIP-447: Unstable offset commit means there is a
 				// pending transaction that should be committing soon.
 				// We sleep for 1s and retry fetching offsets.
-				if err == kerr.UnstableOffsetCommit {
+				if errors.Is(err, kerr.UnstableOffsetCommit) {
 					g.cfg.logger.Log(LogLevelInfo, "fetch offsets failed with UnstableOffsetCommit, waiting 1s and retrying",
 						"group", g.cfg.group,
 						"topic", rTopic.Topic,
@@ -1276,7 +1277,7 @@ start:
 	// Cooperative: assign without invalidating what we are consuming.
 	g.c.assignPartitions(offsets, assignWithoutInvalidating, g.tps, fmt.Sprintf("newly fetched offsets for group %s", g.cfg.group))
 
-	// We need to update the uncommited map so that SetOffsets(Committed)
+	// We need to update the uncommitted map so that SetOffsets(Committed)
 	// does not rewind before the committed offsets we just fetched.
 	if g.uncommitted == nil {
 		g.uncommitted = make(uncommitted, 10)
@@ -1375,7 +1376,6 @@ func (g *groupConsumer) findNewAssignments() {
 			toChange[topic] = change{isNew: true, delta: numPartitions}
 			numNewTopics++
 		}
-
 	}
 
 	if len(toChange) == 0 {
@@ -1443,11 +1443,9 @@ func (g *groupConsumer) updateUncommitted(fetches Fetches) {
 
 	for _, fetch := range fetches {
 		for _, topic := range fetch.Topics {
-
 			if debug {
 				fmt.Fprintf(&b, "%s[", topic.Topic)
 			}
-
 			var topicOffsets map[int32]uncommit
 			for _, partition := range topic.Partitions {
 				if len(partition.Records) == 0 {
@@ -1672,7 +1670,6 @@ func (g *groupConsumer) updateCommitted(
 			}
 			b.WriteString("], ")
 		}
-
 	}
 
 	if debug {
@@ -1684,7 +1681,7 @@ func (g *groupConsumer) updateCommitted(
 
 func (g *groupConsumer) defaultCommitCallback(_ *Client, _ *kmsg.OffsetCommitRequest, resp *kmsg.OffsetCommitResponse, err error) {
 	if err != nil {
-		if err != context.Canceled {
+		if !errors.Is(err, context.Canceled) {
 			g.cfg.logger.Log(LogLevelError, "default commit failed", "group", g.cfg.group, "err", err)
 		} else {
 			g.cfg.logger.Log(LogLevelDebug, "default commit canceled", "group", g.cfg.group)

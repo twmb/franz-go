@@ -234,7 +234,7 @@ func NewRecordFormatter(layout string) (*RecordFormatter, error) {
 
 		var (
 			isOpenBrace  = len(layout) > 2 && layout[1] == '{'
-			handledBrace = false
+			handledBrace bool
 			escaped      = layout[0]
 		)
 		layout = layout[1:]
@@ -268,7 +268,7 @@ func NewRecordFormatter(layout string) (*RecordFormatter, error) {
 				layout = layout[n:]
 				numfn = numfn2
 			} else {
-				numfn = writeNumAscii
+				numfn = writeNumASCII
 			}
 			switch escaped {
 			case 'T':
@@ -362,13 +362,12 @@ func NewRecordFormatter(layout string) (*RecordFormatter, error) {
 				})
 			case 'k':
 				f.fns = append(f.fns, func(b []byte, _ *FetchPartition, r *Record) []byte {
-					return writeR(b, r, func(b []byte, r *Record) []byte { return appendFn(b, []byte(r.Key)) })
+					return writeR(b, r, func(b []byte, r *Record) []byte { return appendFn(b, r.Key) })
 				})
 			case 'v':
 				f.fns = append(f.fns, func(b []byte, _ *FetchPartition, r *Record) []byte {
-					return writeR(b, r, func(b []byte, r *Record) []byte { return appendFn(b, []byte(r.Value)) })
+					return writeR(b, r, func(b []byte, r *Record) []byte { return appendFn(b, r.Value) })
 				})
-
 			}
 
 		case 'h':
@@ -461,7 +460,7 @@ func NewRecordFormatter(layout string) (*RecordFormatter, error) {
 				layout = layout[n:]
 
 				f.fns = append(f.fns, func(b []byte, _ *FetchPartition, r *Record) []byte {
-					return writeR(b, r, func(b []byte, r *Record) []byte { return numfn(b, int64(r.Timestamp.UnixNano())/1e6) })
+					return writeR(b, r, func(b []byte, r *Record) []byte { return numfn(b, r.Timestamp.UnixNano()/1e6) })
 				})
 			}
 		}
@@ -498,7 +497,7 @@ func appendHex(dst, src []byte) []byte {
 
 // nomOpenClose extracts a middle section from a string beginning with repeated
 // delimiters and returns it as with remaining (past end delimiters) string.
-func nomOpenClose(src string) (string, string, error) {
+func nomOpenClose(src string) (middle, remaining string, err error) {
 	if len(src) == 0 {
 		return "", "", errors.New("empty layout")
 	}
@@ -521,7 +520,7 @@ func nomOpenClose(src string) (string, string, error) {
 	if idx < 0 {
 		return "", "", fmt.Errorf("missing end delim %q", end)
 	}
-	middle := src[:idx]
+	middle = src[:idx]
 	return middle, src[idx+len(end):], nil
 }
 
@@ -641,11 +640,9 @@ func parseUnpack(layout string) (func([]byte, []byte) []byte, error) {
 
 			if signed {
 				return strconv.AppendInt(dst, i, 10), need
-			} else {
-				return strconv.AppendUint(dst, u, 10), need
 			}
+			return strconv.AppendUint(dst, u, 10), need
 		})
-
 	}
 
 	return func(dst, src []byte) []byte {
@@ -666,7 +663,7 @@ func parseNumWriteLayout(layout string) (func([]byte, int64) []byte, int, error)
 	end := braceEnd + 1
 	switch layout = layout[:braceEnd]; layout {
 	case "ascii":
-		return writeNumAscii, end, nil
+		return writeNumASCII, end, nil
 	case "hex64":
 		return writeNumHex64, end, nil
 	case "hex32":
@@ -711,7 +708,7 @@ func writeP(b []byte, p *FetchPartition, fn func([]byte, *FetchPartition) []byte
 	}
 	return fn(b, p)
 }
-func writeNumAscii(b []byte, n int64) []byte { return strconv.AppendInt(b, n, 10) }
+func writeNumASCII(b []byte, n int64) []byte { return strconv.AppendInt(b, n, 10) }
 
 const hexc = "0123456789abcdef"
 
@@ -927,7 +924,7 @@ func (r *RecordReader) ReadRecord() (*Record, error) {
 	return rec, r.ReadRecordInto(rec)
 }
 
-// ReadRecord reads the next record into the given record and returns any
+// ReadRecordInto reads the next record into the given record and returns any
 // parsing error
 //
 // This will return io.EOF only if the underlying reader returns io.EOF at the
@@ -962,7 +959,7 @@ const (
 // This type helps us track what's what.
 type parseRecordBits uint8
 
-func (p *parseRecordBits) set(r parseRecordBits)     { *p = *p | r }
+func (p *parseRecordBits) set(r parseRecordBits)     { *p |= r }
 func (p parseRecordBits) has(r parseRecordBits) bool { return p&r != 0 }
 
 func (r *RecordReader) parseReadLayout(layout string) error {
@@ -1029,7 +1026,7 @@ func (r *RecordReader) parseReadLayout(layout string) error {
 
 		var (
 			isOpenBrace  = len(layout) > 2 && layout[1] == '{'
-			handledBrace = false
+			handledBrace bool
 			escaped      = layout[0]
 		)
 		layout = layout[1:]
@@ -1238,7 +1235,6 @@ func (r *RecordReader) parseReadLayout(layout string) error {
 				}
 				return nil
 			}}})
-
 		}
 
 		if isOpenBrace && !handledBrace {
@@ -1270,7 +1266,7 @@ func (r *RecordReader) parseReadLayout(layout string) error {
 // If needBrace is true, the user is specifying how to read the number,
 // otherwise we default to ascii. Reading ascii requires us to peek at bytes
 // until we get to a non-number byte.
-func (r *RecordReader) parseReadSize(layout string, dst *uint64, needBrace bool) (readParse, int, error) {
+func (*RecordReader) parseReadSize(layout string, dst *uint64, needBrace bool) (readParse, int, error) {
 	var end int
 	if needBrace {
 		braceEnd := strings.IndexByte(layout, '}')
@@ -1390,7 +1386,7 @@ type readKind struct {
 }
 
 func (r *readKind) empty() bool {
-	return r.noread == false &&
+	return !r.noread &&
 		r.exact == nil &&
 		r.condition == nil &&
 		r.size == 0 &&
@@ -1435,29 +1431,27 @@ func (r *RecordReader) next(rec *Record) error {
 			err = r.readDelim(fn.read.delim) // we *always* fall back to delim parsing
 		}
 		if err != nil {
-			if err == io.EOF {
-				r.done = true
-				// We guarantee that all noread parses are at
-				// the front, so if we io.EOF on the first
-				// non-noread, then we bubble it up.
-				if len(r.buf) == 0 && (i == 0 || r.fns[i-1].read.noread) {
-					return io.EOF
-				}
-				if i == len(r.fns)-1 {
-					err = nil
-				} else {
-					return io.ErrUnexpectedEOF
-				}
-			} else {
+			if !errors.Is(err, io.EOF) {
 				return err
 			}
+			r.done = true
+			// We guarantee that all noread parses are at
+			// the front, so if we io.EOF on the first
+			// non-noread, then we bubble it up.
+			if len(r.buf) == 0 && (i == 0 || r.fns[i-1].read.noread) {
+				return io.EOF
+			}
+			if i != len(r.fns)-1 {
+				return io.ErrUnexpectedEOF
+			}
+			err = nil
 		}
 
 		if fn.parse == nil {
 			continue
 		}
 
-		if err = fn.parse(r.buf, rec); err != nil {
+		if err := fn.parse(r.buf, rec); err != nil {
 			return err
 		}
 	}

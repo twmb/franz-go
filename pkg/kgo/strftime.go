@@ -43,7 +43,7 @@ func strftimeAppendFormat(dst []byte, format string, t time.Time) []byte {
 		case 'c': // preferred date and time representation
 			dst = t.AppendFormat(dst, time.ANSIC)
 		case 'C': // century (year/100) as two digit num
-			dst = append0Pad(dst, int(t.Year())/100, 2)
+			dst = append0Pad(dst, t.Year()/100, 2)
 		case 'd': // day of month as two digit num
 			dst = append0Pad(dst, t.Day(), 2)
 		case 'D': // %m/%d/%y
@@ -170,7 +170,7 @@ func appendSpacePad(p []byte, n int) []byte {
 	return strconv.AppendInt(p, int64(n), 10)
 }
 
-func append0Pad(dst []byte, n int, size int) []byte {
+func append0Pad(dst []byte, n, size int) []byte {
 	switch size {
 	case 4:
 		if n < 1000 {

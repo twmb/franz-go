@@ -214,7 +214,7 @@ func (c *compressor) compress(dst *sliceWriter, src []byte, produceRequestVersio
 		dst.inner = zstdEnc.inner.EncodeAll(src, dst.inner)
 	}
 
-	return dst.inner, int8(use)
+	return dst.inner, use
 }
 
 type decompressor struct {

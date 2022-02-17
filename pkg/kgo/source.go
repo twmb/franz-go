@@ -699,7 +699,6 @@ func (s *source) fetch(consumerSession *consumerSession, doneFetch chan<- struct
 		s.session.reset()
 		s.cl.triggerUpdateMetadataNow("topic id issues")
 		return
-
 	}
 
 	// At this point, we have successfully processed the response. Even if
@@ -803,7 +802,7 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 				continue
 			}
 
-			fp := partOffset.processRespPartition(br, resp.Version, rp, s.cl.decompressor, s.cl.cfg.hooks)
+			fp := partOffset.processRespPartition(br, rp, s.cl.decompressor, s.cl.cfg.hooks)
 			if fp.Err != nil {
 				updateMeta = true
 				updateWhy.add(topic, partition, fp.Err)
@@ -917,7 +916,7 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 
 // processRespPartition processes all records in all potentially compressed
 // batches (or message sets).
-func (o *cursorOffsetNext) processRespPartition(br *broker, version int16, rp *kmsg.FetchResponseTopicPartition, decompressor *decompressor, hooks hooks) FetchPartition {
+func (o *cursorOffsetNext) processRespPartition(br *broker, rp *kmsg.FetchResponseTopicPartition, decompressor *decompressor, hooks hooks) FetchPartition {
 	fp := FetchPartition{
 		Partition:        rp.Partition,
 		Err:              kerr.ErrorForCode(rp.ErrorCode),
@@ -1437,7 +1436,7 @@ func recordToRecord(
 func messageAttrsToRecordAttrs(attrs int8, v0 bool) RecordAttrs {
 	uattrs := uint8(attrs)
 	if v0 {
-		uattrs = uattrs | 0b1000_0000
+		uattrs |= 0b1000_0000
 	}
 	return RecordAttrs{uattrs}
 }
@@ -1576,7 +1575,6 @@ func (f *fetchRequest) AppendTo(dst []byte) []byte {
 				cursorOffsetNext.offset,
 				cursorOffsetNext.currentLeaderEpoch,
 			) {
-
 				if reqTopic == nil {
 					t := kmsg.NewFetchRequestTopic()
 					t.Topic = topic

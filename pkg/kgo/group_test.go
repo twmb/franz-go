@@ -158,7 +158,6 @@ func (c *testConsumer) etl(etlsBeforeQuit int) {
 	}()
 
 	for {
-
 		// If we etl a few times before quitting, then we want to
 		// commit at least some of our work (except the last commit,
 		// see above). To do so, we commit every time _before_ we poll.
@@ -229,6 +228,5 @@ func (c *testConsumer) etl(etlsBeforeQuit int) {
 				},
 			)
 		}
-
 	}
 }

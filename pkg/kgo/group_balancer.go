@@ -95,7 +95,7 @@ func (b *ConsumerBalancer) Balance(topics map[string]int32) IntoSyncAssignment {
 	return b.b.Balance(b, topics)
 }
 
-// Member returns the list of input members for this group balancer.
+// Members returns the list of input members for this group balancer.
 func (b *ConsumerBalancer) Members() []kmsg.JoinGroupResponseMember {
 	return b.members
 }
@@ -599,7 +599,7 @@ func (*rangeBalancer) Balance(b *ConsumerBalancer, topics map[string]int32) Into
 // minimal (see KIP-54; this client also includes the KIP-351 bugfix).
 //
 // Note that this API implements the sticky partitioning quite differently from
-// the Java implementation. The Java implementaiton is difficult to reason
+// the Java implementation. The Java implementation is difficult to reason
 // about and has many edge cases that result in non-optimal balancing (albeit,
 // you likely have to be trying to hit those edge cases). This API uses a
 // different algorithm to ensure optimal balancing while being an order of

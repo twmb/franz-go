@@ -3,6 +3,7 @@ package kgo
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -93,7 +94,7 @@ func TestTxnEtl(t *testing.T) {
 					// ensure the offsets for this partition are contiguous
 					offsetsMu.Lock()
 					current, ok := offsets[r.Partition]
-					if ok && r.Offset < current+1 {
+					if ok && r.Offset <= current {
 						errs <- fmt.Errorf("partition %d produced offsets out of order, got %d != exp %d", r.Partition, r.Offset, current+1)
 					}
 					offsets[r.Partition] = r.Offset
@@ -192,16 +193,15 @@ func (c *testConsumer) transact(txnsBeforeQuit int) {
 			if r.Attrs.IsControl() {
 				fetchRecs[r.Partition] = append(fetchRecs[r.Partition], fetchRec{offset: r.Offset, control: true})
 				continue
-			} else {
-				keyNum, err := strconv.Atoi(string(r.Key))
-				if err != nil {
-					c.errCh <- err
-				}
-				if !bytes.Equal(r.Value, c.expBody) {
-					c.errCh <- fmt.Errorf("body not what was expected")
-				}
-				fetchRecs[r.Partition] = append(fetchRecs[r.Partition], fetchRec{offset: r.Offset, num: keyNum})
 			}
+			keyNum, err := strconv.Atoi(string(r.Key))
+			if err != nil {
+				c.errCh <- err
+			}
+			if !bytes.Equal(r.Value, c.expBody) {
+				c.errCh <- fmt.Errorf("body not what was expected")
+			}
+			fetchRecs[r.Partition] = append(fetchRecs[r.Partition], fetchRec{offset: r.Offset, num: keyNum})
 
 			txnSess.Produce(
 				context.Background(),
@@ -211,7 +211,7 @@ func (c *testConsumer) transact(txnsBeforeQuit int) {
 					Value: r.Value,
 				},
 				func(_ *Record, err error) {
-					if err != nil && err != ErrAborting {
+					if err != nil && !errors.Is(err, ErrAborting) {
 						c.errCh <- fmt.Errorf("unexpected transactional produce err: %v", err)
 					}
 				},

@@ -3,6 +3,7 @@ package kgo
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"hash/crc32"
 	"strings"
@@ -267,15 +268,15 @@ func (s *sink) produce(sem <-chan struct{}) bool {
 	// numbers. (i.e., resetAllSequenceNumbers && producerID logic combo).
 	id, epoch, err := s.cl.producerID()
 	if err != nil {
-		switch err {
-		case errProducerIDLoadFail:
+		switch {
+		case errors.Is(err, errProducerIDLoadFail):
 			s.cl.bumpRepeatedLoadErr(err)
 			s.cl.cfg.logger.Log(LogLevelWarn, "unable to load producer ID, bumping client's buffered record load errors by 1 and retrying")
 			return true // whatever caused our produce, we did nothing, so keep going
+		case errors.Is(err, ErrClientClosed):
+			s.cl.failBufferedRecords(err)
 		default:
 			s.cl.cfg.logger.Log(LogLevelError, "fatal InitProducerID error, failing all buffered records", "broker", logID(s.nodeID), "err", err)
-			fallthrough
-		case ErrClientClosed:
 			s.cl.failBufferedRecords(err)
 		}
 		return false
@@ -407,7 +408,7 @@ func (s *sink) doTxnReq(
 // Removing a batch from the transaction means we will not be issuing it
 // inflight, and that it was not added to the txn and that we need to reset the
 // drain index.
-func (b seqRecBatch) removeFromTxn() {
+func (b *recBatch) removeFromTxn() {
 	b.owner.addedToTxn = false
 	b.owner.resetBatchDrainIdx()
 	b.decInflight()
@@ -433,7 +434,7 @@ func (s *sink) issueTxnReq(
 				// OperationNotAttempted is set for all partitions that are authorized
 				// if any partition is unauthorized _or_ does not exist. We simply remove
 				// unattempted partitions and treat them as retriable.
-				if !kerr.IsRetriable(err) && err != kerr.OperationNotAttempted {
+				if !kerr.IsRetriable(err) && !errors.Is(err, kerr.OperationNotAttempted) {
 					return err // auth err, etc.
 				}
 
@@ -494,7 +495,7 @@ func (s *sink) handleReqClientErr(req *produceRequest, err error) {
 		s.cl.cfg.logger.Log(LogLevelWarn, "random error while producing, requeueing unattempted request", "broker", logID(s.nodeID), "err", err)
 		fallthrough
 
-	case err == errUnknownBroker,
+	case errors.Is(err, errUnknownBroker),
 		isDialErr(err),
 		isRetriableBrokerErr(err):
 		updateMeta := !isRetriableBrokerErr(err)
@@ -503,7 +504,7 @@ func (s *sink) handleReqClientErr(req *produceRequest, err error) {
 		}
 		s.handleRetryBatches(req.batches, req.backoffSeq, updateMeta, false, "failed produce request triggering metadata update")
 
-	case err == ErrClientClosed:
+	case errors.Is(err, ErrClientClosed):
 		s.cl.failBufferedRecords(ErrClientClosed)
 	}
 }
@@ -921,8 +922,7 @@ func (s *sink) removeRecBuf(rm *recBuf) {
 	defer s.recBufsMu.Unlock()
 
 	if rm.recBufsIdx != len(s.recBufs)-1 {
-		s.recBufs[rm.recBufsIdx], s.recBufs[len(s.recBufs)-1] =
-			s.recBufs[len(s.recBufs)-1], nil
+		s.recBufs[rm.recBufsIdx], s.recBufs[len(s.recBufs)-1] = s.recBufs[len(s.recBufs)-1], nil
 
 		s.recBufs[rm.recBufsIdx].recBufsIdx = rm.recBufsIdx
 	} else {
@@ -1265,11 +1265,12 @@ func (b *recBatch) maybeFailErr(cfg *cfg) error {
 		default:
 		}
 	}
-	if b.isTimedOut(cfg.recordTimeout) {
+	switch {
+	case b.isTimedOut(cfg.recordTimeout):
 		return ErrRecordTimeout
-	} else if b.tries >= cfg.recordRetries {
+	case b.tries >= cfg.recordRetries:
 		return ErrRecordRetries
-	} else if b.owner.cl.producer.isAborting() {
+	case b.owner.cl.producer.isAborting():
 		return ErrAborting
 	}
 	return nil
@@ -1438,13 +1439,13 @@ func (p produceMetrics) hook(cfg *cfg, br *broker) {
 	}()
 }
 
-func (r *produceRequest) idempotent() bool { return r.producerID >= 0 }
+func (p *produceRequest) idempotent() bool { return p.producerID >= 0 }
 
-func (r *produceRequest) tryAddBatch(produceVersion int32, recBuf *recBuf, batch *recBatch) bool {
+func (p *produceRequest) tryAddBatch(produceVersion int32, recBuf *recBuf, batch *recBatch) bool {
 	batchWireLength, flexible := batch.wireLengthForProduceVersion(produceVersion)
 	batchWireLength += 4 // int32 partition prefix
 
-	if partitions, exists := r.batches[recBuf.topic]; !exists {
+	if partitions, exists := p.batches[recBuf.topic]; !exists {
 		lt := int32(len(recBuf.topic))
 		if flexible {
 			batchWireLength += uvarlen(len(recBuf.topic)) + lt + 1 // compact string len, topic, compact array len for 1 item
@@ -1463,12 +1464,12 @@ func (r *produceRequest) tryAddBatch(produceVersion int32, recBuf *recBuf, batch
 	// non-flexible, we have 200mil partitions to add before we have to
 	// worry about hitting 5 bytes vs. the non-flexible 4. We do not worry.
 
-	if r.wireLength+batchWireLength > r.wireLengthLimit {
+	if p.wireLength+batchWireLength > p.wireLengthLimit {
 		return false
 	}
 
 	if recBuf.batches[0] == batch {
-		if !r.idempotent() || batch.canFailFromLoadErrs {
+		if !p.idempotent() || batch.canFailFromLoadErrs {
 			if err := batch.maybeFailErr(&batch.owner.cl.cfg); err != nil {
 				recBuf.failAllRecords(err)
 				return false
@@ -1483,8 +1484,8 @@ func (r *produceRequest) tryAddBatch(produceVersion int32, recBuf *recBuf, batch
 
 	batch.tries++
 	batch.canFailFromLoadErrs = false
-	r.wireLength += batchWireLength
-	r.batches.addBatch(
+	p.wireLength += batchWireLength
+	p.batches.addBatch(
 		recBuf.topic,
 		recBuf.partition,
 		recBuf.seq,
@@ -1501,7 +1502,7 @@ type seqRecBatch struct {
 
 type seqRecBatches map[string]map[int32]seqRecBatch
 
-func (rbs *seqRecBatches) addBatch(topic string, part int32, seq int32, batch *recBatch) {
+func (rbs *seqRecBatches) addBatch(topic string, part, seq int32, batch *recBatch) {
 	if *rbs == nil {
 		*rbs = make(seqRecBatches, 5)
 	}
@@ -1695,31 +1696,30 @@ func (n recordNumbers) wireLength() int32 {
 	return int32(kbin.VarintLen(n.lengthField)) + n.lengthField
 }
 
-func (batch *recBatch) wireLengthForProduceVersion(v int32) (batchWireLength int32, flexible bool) {
-	batchWireLength = batch.wireLength
+func (b *recBatch) wireLengthForProduceVersion(v int32) (batchWireLength int32, flexible bool) {
+	batchWireLength = b.wireLength
 
 	// If we do not yet know the produce version, we default to the largest
 	// size. Our request building sizes will always be an overestimate.
 	if v < 0 {
-		v1BatchWireLength := batch.v1wireLength
+		v1BatchWireLength := b.v1wireLength
 		if v1BatchWireLength > batchWireLength {
 			batchWireLength = v1BatchWireLength
 		}
-		flexibleBatchWireLength := batch.flexibleWireLength()
+		flexibleBatchWireLength := b.flexibleWireLength()
 		if flexibleBatchWireLength > batchWireLength {
 			batchWireLength = flexibleBatchWireLength
 		}
-
 	} else {
 		switch v {
 		case 0, 1:
-			batchWireLength = batch.v0wireLength()
+			batchWireLength = b.v0wireLength()
 		case 2:
-			batchWireLength = batch.v1wireLength
+			batchWireLength = b.v1wireLength
 		case 3, 4, 5, 6, 7, 8:
-			batchWireLength = batch.wireLength
+			batchWireLength = b.wireLength
 		default:
-			batchWireLength = batch.flexibleWireLength()
+			batchWireLength = b.flexibleWireLength()
 			flexible = true
 		}
 	}
@@ -1727,19 +1727,19 @@ func (batch *recBatch) wireLengthForProduceVersion(v int32) (batchWireLength int
 	return
 }
 
-func (batch *recBatch) tryBuffer(pr promisedRec, produceVersion, maxBatchBytes int32, abortOnNewBatch bool) (appended, aborted bool) {
-	recordNumbers := batch.calculateRecordNumbers(pr.Record)
+func (b *recBatch) tryBuffer(pr promisedRec, produceVersion, maxBatchBytes int32, abortOnNewBatch bool) (appended, aborted bool) {
+	recordNumbers := b.calculateRecordNumbers(pr.Record)
 
-	batchWireLength, _ := batch.wireLengthForProduceVersion(produceVersion)
+	batchWireLength, _ := b.wireLengthForProduceVersion(produceVersion)
 	newBatchLength := batchWireLength + recordNumbers.wireLength()
 
-	if batch.tries != 0 || newBatchLength > maxBatchBytes {
+	if b.tries != 0 || newBatchLength > maxBatchBytes {
 		return false, false
 	}
 	if abortOnNewBatch {
 		return false, true
 	}
-	batch.appendRecord(pr, recordNumbers)
+	b.appendRecord(pr, recordNumbers)
 	return true, false
 }
 
@@ -1827,7 +1827,7 @@ func (p *produceRequest) ResponseKind() kmsg.Response {
 	return r
 }
 
-func (r seqRecBatch) appendTo(
+func (b seqRecBatch) appendTo(
 	in []byte,
 	version int16,
 	producerID int64,
@@ -1837,7 +1837,7 @@ func (r seqRecBatch) appendTo(
 ) (dst []byte, m ProduceBatchMetrics) { // named return so that our defer for flexible versions can modify it
 	flexible := version >= 9
 	dst = in
-	nullableBytesLen := r.wireLength - 4 // NULLABLE_BYTES leading length, minus itself
+	nullableBytesLen := b.wireLength - 4 // NULLABLE_BYTES leading length, minus itself
 	nullableBytesLenAt := len(dst)       // in case compression adjusting
 	dst = kbin.AppendInt32(dst, nullableBytesLen)
 
@@ -1849,7 +1849,7 @@ func (r seqRecBatch) appendTo(
 	// as, we have to shift everything down.
 	if flexible {
 		dst = dst[:nullableBytesLenAt]
-		batchLength := r.batchLength()
+		batchLength := b.batchLength()
 		dst = kbin.AppendUvarint(dst, uvar32(batchLength)) // compact array non-null prefix
 		batchAt := len(dst)
 		defer func() {
@@ -1858,8 +1858,9 @@ func (r seqRecBatch) appendTo(
 				return
 			}
 
-			// We could have only shrunk the batch bytes, so our
-			// append here will not overwrite anything.
+			// We *only* could have shrunk the batch bytes, so our
+			// append here will not overwrite anything we need to
+			// keep.
 			newDst := kbin.AppendUvarint(dst[:nullableBytesLenAt], uvar32(int32(len(batch))))
 
 			// If our append did not shorten the length prefix, we
@@ -1888,19 +1889,19 @@ func (r seqRecBatch) appendTo(
 	dst = kbin.AppendInt32(dst, 0) // reserved crc
 
 	attrsAt := len(dst) // in case compression adjusting
-	r.attrs = 0
+	b.attrs = 0
 	if transactional {
-		r.attrs |= 0x0010 // bit 5 is the "is transactional" bit
+		b.attrs |= 0x0010 // bit 5 is the "is transactional" bit
 	}
-	dst = kbin.AppendInt16(dst, r.attrs)
-	dst = kbin.AppendInt32(dst, int32(len(r.records)-1)) // lastOffsetDelta
-	dst = kbin.AppendInt64(dst, r.firstTimestamp)
+	dst = kbin.AppendInt16(dst, b.attrs)
+	dst = kbin.AppendInt32(dst, int32(len(b.records)-1)) // lastOffsetDelta
+	dst = kbin.AppendInt64(dst, b.firstTimestamp)
 
 	// maxTimestamp is the timestamp of the last record in a batch.
-	lastRecord := r.records[len(r.records)-1]
-	dst = kbin.AppendInt64(dst, r.firstTimestamp+int64(lastRecord.timestampDelta))
+	lastRecord := b.records[len(b.records)-1]
+	dst = kbin.AppendInt64(dst, b.firstTimestamp+int64(lastRecord.timestampDelta))
 
-	seq := r.seq
+	seq := b.seq
 	if producerID < 0 { // a negative producer ID means we are not using idempotence
 		seq = 0
 	}
@@ -1908,14 +1909,14 @@ func (r seqRecBatch) appendTo(
 	dst = kbin.AppendInt16(dst, producerEpoch)
 	dst = kbin.AppendInt32(dst, seq)
 
-	dst = kbin.AppendArrayLen(dst, len(r.records))
+	dst = kbin.AppendArrayLen(dst, len(b.records))
 	recordsAt := len(dst)
-	for i, pnr := range r.records {
+	for i, pnr := range b.records {
 		dst = pnr.appendTo(dst, int32(i))
 	}
 
 	toCompress := dst[recordsAt:]
-	m.NumRecords = len(r.records)
+	m.NumRecords = len(b.records)
 	m.UncompressedBytes = len(toCompress)
 	m.CompressedBytes = m.UncompressedBytes
 
@@ -1926,7 +1927,6 @@ func (r seqRecBatch) appendTo(
 		compressed, codec := compressor.compress(w, toCompress, version)
 		if compressed != nil && // nil would be from an error
 			len(compressed) < len(toCompress) {
-
 			// our compressed was shorter: copy over
 			copy(dst[recordsAt:], compressed)
 			dst = dst[:recordsAt+len(compressed)]
@@ -1937,12 +1937,12 @@ func (r seqRecBatch) appendTo(
 			savings := int32(len(toCompress) - len(compressed))
 			nullableBytesLen -= savings
 			batchLen -= savings
-			r.attrs |= int16(codec)
+			b.attrs |= int16(codec)
 			if !flexible {
 				kbin.AppendInt32(dst[:nullableBytesLenAt], nullableBytesLen)
 			}
 			kbin.AppendInt32(dst[:batchLenAt], batchLen)
-			kbin.AppendInt16(dst[:attrsAt], r.attrs)
+			kbin.AppendInt16(dst[:attrsAt], b.attrs)
 		}
 	}
 
@@ -1966,23 +1966,23 @@ func (pnr promisedNumberedRecord) appendTo(dst []byte, offsetDelta int32) []byte
 	return dst
 }
 
-func (r seqRecBatch) appendToAsMessageSet(dst []byte, version uint8, compressor *compressor) ([]byte, ProduceBatchMetrics) {
+func (b seqRecBatch) appendToAsMessageSet(dst []byte, version uint8, compressor *compressor) ([]byte, ProduceBatchMetrics) {
 	var m ProduceBatchMetrics
 
 	nullableBytesLenAt := len(dst)
 	dst = append(dst, 0, 0, 0, 0) // nullable bytes len
-	for i, pnr := range r.records {
+	for i, pnr := range b.records {
 		dst = appendMessageTo(
 			dst,
 			version,
 			0,
 			int64(i),
-			r.firstTimestamp+int64(pnr.timestampDelta),
+			b.firstTimestamp+int64(pnr.timestampDelta),
 			pnr.Record,
 		)
 	}
 
-	r.attrs = 0
+	b.attrs = 0
 
 	// Produce request v0 and v1 uses message set v0, which does not have
 	// timestamps. We set bit 8 in our attrs which corresponds with our own
@@ -1991,11 +1991,11 @@ func (r seqRecBatch) appendToAsMessageSet(dst []byte, version uint8, compressor 
 	// more bits in our internal RecordAttrs, the below will need to
 	// change.
 	if version == 0 || version == 1 {
-		r.attrs |= 0b1000_0000
+		b.attrs |= 0b1000_0000
 	}
 
 	toCompress := dst[nullableBytesLenAt+4:] // skip nullable bytes leading prefix
-	m.NumRecords = len(r.records)
+	m.NumRecords = len(b.records)
 	m.UncompressedBytes = len(toCompress)
 	m.CompressedBytes = m.UncompressedBytes
 
@@ -2010,20 +2010,18 @@ func (r seqRecBatch) appendToAsMessageSet(dst []byte, version uint8, compressor 
 			wrappedLength += 8 // timestamp
 		}
 
-		if compressed != nil &&
-			int(wrappedLength) < len(toCompress) {
-
+		if compressed != nil && int(wrappedLength) < len(toCompress) {
 			m.CompressedBytes = int(wrappedLength)
 			m.CompressionType = uint8(codec)
 
-			r.attrs |= int16(codec)
+			b.attrs |= int16(codec)
 
 			dst = appendMessageTo(
 				dst[:nullableBytesLenAt+4],
 				version,
 				codec,
-				int64(len(r.records)-1),
-				r.firstTimestamp,
+				int64(len(b.records)-1),
+				b.firstTimestamp,
 				inner,
 			)
 		}
@@ -2046,9 +2044,10 @@ func appendMessageTo(
 	msgSizeStart := len(dst)
 	dst = append(dst, 0, 0, 0, 0)
 	crc32Start := len(dst)
-	dst = append(dst, 0, 0, 0, 0)
-	dst = append(dst, magic)
-	dst = append(dst, byte(attributes))
+	dst = append(dst,
+		0, 0, 0, 0,
+		magic,
+		byte(attributes))
 	if magic == 1 {
 		dst = kbin.AppendInt64(dst, timestamp)
 	}

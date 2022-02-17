@@ -16,7 +16,7 @@ type graph struct {
 	// edge => who owns this edge; built in balancer's assignUnassigned
 	cxns []partitionConsumer
 
-	// scores are all node scores from a seach node. The distance field
+	// scores are all node scores from a search node. The distance field
 	// is reset on findSteal to infinityScore..
 	scores pathScores
 
@@ -120,7 +120,6 @@ func (g *graph) findSteal(from uint16) ([]stealSegment, bool) {
 					neighbor.distance = distance
 					neighbor.heapIdx = len(*rem)
 					heap.Push(rem, neighbor)
-
 				} else if !neighbor.srcIsOriginal && srcIsOriginal {
 					// If the search path has seen this neighbor before, but
 					// we now are evaluating a partition that would increase

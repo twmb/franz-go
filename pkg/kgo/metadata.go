@@ -140,7 +140,7 @@ func (cl *Client) updateMetadataLoop() {
 		// potential pile on now triggers.
 		time.Sleep(time.Until(lastAt.Add(10 * time.Millisecond)))
 
-		// Drain any refires that occured during our waiting.
+		// Drain any refires that occurred during our waiting.
 	out:
 		for {
 			select {
@@ -197,12 +197,11 @@ func (cl *Client) updateMetadataLoop() {
 			return
 		case <-after.C:
 		}
-
 	}
 }
 
 // Updates all producer and consumer partition data, returning whether a new
-// update needs scheduling or if an error occured.
+// update needs scheduling or if an error occurred.
 //
 // The producer and consumer use different topic maps and underlying
 // topicPartitionsData pointers, but we update those underlying pointers
@@ -612,7 +611,6 @@ func (cl *Client) mergeTopicPartitions(
 				"old_leader_epoch", oldTP.leaderEpoch,
 				"new_leader_epoch", newTP.leaderEpoch,
 			)
-
 		}
 
 		// If the tp data is the same, we simply copy over the records

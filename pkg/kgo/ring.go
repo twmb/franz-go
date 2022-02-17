@@ -79,7 +79,7 @@ func (r *ringReq) push(pr promisedReq) (first, dead bool) {
 
 	r.elems[r.tail] = pr
 	r.tail = (r.tail + 1) & mask7
-	r.l = r.l + 1
+	r.l++
 
 	return r.l == 1, false
 }
@@ -141,7 +141,7 @@ func (r *ringResp) push(pr promisedResp) (first, dead bool) {
 
 	r.elems[r.tail] = pr
 	r.tail = (r.tail + 1) & mask7
-	r.l = r.l + 1
+	r.l++
 
 	return r.l == 1, false
 }
@@ -192,7 +192,7 @@ func (r *ringSeqResp) push(sr *seqResp) (first, dead bool) {
 
 	r.elems[r.tail] = sr
 	r.tail = (r.tail + 1) & mask7
-	r.l = r.l + 1
+	r.l++
 
 	return r.l == 1, false
 }

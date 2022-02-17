@@ -2,6 +2,7 @@ package kgo
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -21,6 +22,7 @@ type Offset struct {
 	currentEpoch int32 // set by us when mapping offsets to brokers
 }
 
+// MarshalJSON implements json.Marshaler.
 func (o Offset) MarshalJSON() ([]byte, error) {
 	if o.relative == 0 {
 		return []byte(fmt.Sprintf(`{"At":%d,"Epoch":%d,"CurrentEpoch":%d}`, o.at, o.epoch, o.currentEpoch)), nil
@@ -660,6 +662,8 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how
 		// assignment went straight to listing / epoch loading, and
 		// that list/epoch never finished.
 		switch how {
+		case assignWithoutInvalidating:
+			// Nothing to do -- this is handled above.
 		case assignInvalidateAll:
 			loadOffsets = listOrEpochLoads{}
 		case assignSetMatching:
@@ -698,7 +702,7 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how
 			// portion. We are modifying a copy of the offset, i.e. we
 			// are appropriately not modfying 'assignments' itself.
 			if offset.at >= 0 {
-				offset.at = offset.at + offset.relative
+				offset.at += offset.relative
 				if offset.at < 0 {
 					offset.at = 0
 				}
@@ -926,7 +930,7 @@ func (l *listOrEpochLoads) keepFilter(keep func(string, int32) bool) {
 
 // Merges loads into the caller; used to coalesce loads while a metadata update
 // is happening (see the only use below).
-func (dst *listOrEpochLoads) mergeFrom(src listOrEpochLoads) {
+func (l *listOrEpochLoads) mergeFrom(src listOrEpochLoads) {
 	for _, srcs := range []struct {
 		m        offsetLoadMap
 		loadType listOrEpochLoadType
@@ -936,7 +940,7 @@ func (dst *listOrEpochLoads) mergeFrom(src listOrEpochLoads) {
 	} {
 		for t, ps := range srcs.m {
 			for p, load := range ps {
-				dst.addLoad(t, p, srcs.loadType, load)
+				l.addLoad(t, p, srcs.loadType, load)
 			}
 		}
 	}
@@ -1018,27 +1022,27 @@ func (c *consumer) newConsumerSession(tps *topicsPartitions) *consumerSession {
 	return session
 }
 
-func (c *consumerSession) desireFetch() chan chan chan struct{} {
-	if atomic.SwapUint32(&c.fetchManagerStarted, 1) == 0 {
-		go c.manageFetchConcurrency()
+func (s *consumerSession) desireFetch() chan chan chan struct{} {
+	if atomic.SwapUint32(&s.fetchManagerStarted, 1) == 0 {
+		go s.manageFetchConcurrency()
 	}
-	return c.desireFetchCh
+	return s.desireFetchCh
 }
 
-func (c *consumerSession) manageFetchConcurrency() {
+func (s *consumerSession) manageFetchConcurrency() {
 	var (
 		activeFetches int
 		doneFetch     = make(chan struct{}, 20)
 		wantFetch     []chan chan struct{}
 
-		ctxCh    = c.ctx.Done()
+		ctxCh    = s.ctx.Done()
 		wantQuit bool
 	)
 	for {
 		select {
-		case register := <-c.desireFetchCh:
+		case register := <-s.desireFetchCh:
 			wantFetch = append(wantFetch, register)
-		case cancel := <-c.cancelFetchCh:
+		case cancel := <-s.cancelFetchCh:
 			var found bool
 			for i, want := range wantFetch {
 				if want == cancel {
@@ -1061,7 +1065,7 @@ func (c *consumerSession) manageFetchConcurrency() {
 			ctxCh = nil
 		}
 
-		if len(wantFetch) > 0 && (activeFetches < c.allowedFetches || c.allowedFetches == 0) { // 0 means unbounded
+		if len(wantFetch) > 0 && (activeFetches < s.allowedFetches || s.allowedFetches == 0) { // 0 means unbounded
 			wantFetch[0] <- doneFetch
 			wantFetch = wantFetch[1:]
 			activeFetches++
@@ -1074,24 +1078,24 @@ func (c *consumerSession) manageFetchConcurrency() {
 	}
 }
 
-func (c *consumerSession) incWorker() {
-	if c == noConsumerSession { // from startNewSession
+func (s *consumerSession) incWorker() {
+	if s == noConsumerSession { // from startNewSession
 		return
 	}
-	c.workersMu.Lock()
-	defer c.workersMu.Unlock()
-	c.workers++
+	s.workersMu.Lock()
+	defer s.workersMu.Unlock()
+	s.workers++
 }
 
-func (c *consumerSession) decWorker() {
-	if c == noConsumerSession { // from followup to startNewSession
+func (s *consumerSession) decWorker() {
+	if s == noConsumerSession { // from followup to startNewSession
 		return
 	}
-	c.workersMu.Lock()
-	defer c.workersMu.Unlock()
-	c.workers--
-	if c.workers == 0 {
-		c.workersCond.Broadcast()
+	s.workersMu.Lock()
+	defer s.workersMu.Unlock()
+	s.workers--
+	if s.workers == 0 {
+		s.workersCond.Broadcast()
 	}
 }
 
@@ -1380,12 +1384,13 @@ func (s *consumerSession) handleListOrEpochResults(loaded loadedOffsets) (reload
 			s.c.usingCursors.use(load.cursor)
 		}
 
-		switch load.err.(type) {
-		case *ErrDataLoss:
+		var edl *ErrDataLoss
+		switch {
+		case errors.As(load.err, &edl):
 			s.c.addFakeReadyForDraining(load.topic, load.partition, load.err) // signal we lost data, but set the cursor to what we can
 			use()
 
-		case nil:
+		case load.err == nil:
 			use()
 
 		default: // from ErrorCode in a response
@@ -1430,7 +1435,6 @@ func (s *consumerSession) mapLoadsToBrokers(loads listOrEpochLoads) map[*broker]
 		for topic, partitions := range loads.m {
 			topicPartitions := topics.loadTopic(topic) // this must exist, it not existing would be a bug
 			for partition, offset := range partitions {
-
 				// We default to the first seed broker if we have no loaded
 				// the broker leader for this partition (we should have).
 				// Worst case, we get an error for the partition and retry.
@@ -1694,7 +1698,7 @@ func (cl *Client) listOffsetsForBrokerLoad(ctx context.Context, broker *broker, 
 	results <- loaded.addAll(load.errToLoaded(kerr.UnknownTopicOrPartition))
 }
 
-func (cl *Client) loadEpochsForBrokerLoad(ctx context.Context, broker *broker, load offsetLoadMap, tps *topicsPartitions, results chan<- loadedOffsets) {
+func (*Client) loadEpochsForBrokerLoad(ctx context.Context, broker *broker, load offsetLoadMap, tps *topicsPartitions, results chan<- loadedOffsets) {
 	loaded := loadedOffsets{broker: broker.meta.NodeID, loadType: loadTypeEpoch}
 
 	kresp, err := broker.waitResp(ctx, load.buildEpochReq())

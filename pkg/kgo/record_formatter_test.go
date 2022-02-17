@@ -1,6 +1,7 @@
 package kgo
 
 import (
+	"errors"
 	"io"
 	"reflect"
 	"strings"
@@ -228,7 +229,7 @@ func TestRecordReader(t *testing.T) {
 			layout: "%t %k %v",
 			in:     "foo bar biz",
 			exp: []*Record{
-				&Record{Topic: "foo", Key: []byte("bar"), Value: []byte("biz")},
+				{Topic: "foo", Key: []byte("bar"), Value: []byte("biz")},
 			},
 		},
 
@@ -236,7 +237,7 @@ func TestRecordReader(t *testing.T) {
 			layout: "%T%t %K%k %V{byte}%v",
 			in:     "3foo 3bar \x03biz",
 			exp: []*Record{
-				&Record{Topic: "foo", Key: []byte("bar"), Value: []byte("biz")},
+				{Topic: "foo", Key: []byte("bar"), Value: []byte("biz")},
 			},
 		},
 
@@ -244,7 +245,7 @@ func TestRecordReader(t *testing.T) {
 			layout: "%T%to %k %v",
 			in:     "3fooo bar biz",
 			exp: []*Record{
-				&Record{Topic: "foo", Key: []byte("bar"), Value: []byte("biz")},
+				{Topic: "foo", Key: []byte("bar"), Value: []byte("biz")},
 			},
 		},
 
@@ -339,7 +340,7 @@ func TestRecordReader(t *testing.T) {
 			layout: "%H{2}%V{ascii}%v%h{%V%v%K%k}",
 			in:     "3foo1v1k2vv2kk",
 			exp: []*Record{
-				&Record{
+				{
 					Value: []byte("foo"),
 					Headers: []RecordHeader{
 						{"k", []byte("v")},
@@ -398,7 +399,7 @@ func TestRecordReader(t *testing.T) {
 					t.Errorf("%d:\ngot %#v\nexp %#v", i, rec, exp)
 				}
 			}
-			if _, err := r.ReadRecord(); err != io.EOF {
+			if _, err := r.ReadRecord(); !errors.Is(err, io.EOF) {
 				t.Errorf("got err %v != io.EOF after exhausting records", err)
 			}
 		})

@@ -1,6 +1,7 @@
 package kgo
 
 import (
+	"errors"
 	"reflect"
 	"time"
 	"unsafe"
@@ -218,8 +219,8 @@ type FetchPartition struct {
 	HighWatermark int64
 	// LastStableOffset is the offset at which all prior offsets have been
 	// "decided". Non transactional records are always decided immediately,
-	// but transactional records are only decided once they are commited or
-	// aborted.
+	// but transactional records are only decided once they are committed
+	// or aborted.
 	//
 	// The LastStableOffset will always be at or under the HighWatermark.
 	LastStableOffset int64
@@ -355,7 +356,7 @@ func (fs Fetches) IsClientClosed() bool {
 	// An injected ErrClientClosed is a dedicated fetch with one topic and
 	// one partition. We can use this to make IsClientClosed do less work.
 	for _, f := range fs {
-		if len(f.Topics) == 1 && len(f.Topics[0].Partitions) == 1 && f.Topics[0].Partitions[0].Err == ErrClientClosed {
+		if len(f.Topics) == 1 && len(f.Topics[0].Partitions) == 1 && errors.Is(f.Topics[0].Partitions[0].Err, ErrClientClosed) {
 			return true
 		}
 	}

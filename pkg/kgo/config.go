@@ -292,7 +292,7 @@ func (cfg *cfg) validate() error {
 		{v: int64(cfg.metadataMaxAge), allowed: int64(cfg.metadataMinAge), badcmp: i64lt, fmt: "metadata max age %v is erroneously less than metadata min age %v", durs: true},
 
 		// Some random producer settings.
-		{name: "max buffered records", v: int64(cfg.maxBufferedRecords), allowed: 1, badcmp: i64lt},
+		{name: "max buffered records", v: cfg.maxBufferedRecords, allowed: 1, badcmp: i64lt},
 		{name: "linger", v: int64(cfg.linger), allowed: int64(time.Minute), badcmp: i64gt, durs: true},
 		{name: "produce timeout", v: int64(cfg.produceTimeout), allowed: int64(100 * time.Millisecond), badcmp: i64lt, durs: true},
 		{name: "record timeout", v: int64(cfg.recordTimeout), allowed: int64(time.Second), badcmp: func(l, r int64) (bool, string) {
@@ -383,7 +383,7 @@ func (cfg *cfg) validate() error {
 
 var (
 	defaultDialer = &net.Dialer{Timeout: 10 * time.Second}
-	reVersion     = regexp.MustCompile(`^[a-zA-Z0-9](?:[a-zA-Z0-9\.-]*[a-zA-Z0-9])?$`)
+	reVersion     = regexp.MustCompile(`^[a-zA-Z0-9](?:[a-zA-Z0-9.-]*[a-zA-Z0-9])?$`)
 )
 
 func softwareVersion() string {
@@ -403,11 +403,9 @@ func softwareVersion() string {
 func defaultCfg() cfg {
 	defaultID := "kgo"
 	return cfg{
-
 		/////////////
 		// general //
 		/////////////
-
 		id:     &defaultID,
 		dialFn: defaultDialer.DialContext,
 

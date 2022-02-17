@@ -155,7 +155,7 @@ func (b *balancer) into() Plan {
 			}
 
 			partition := partNum - lastTopicInfo.partNum
-			topicParts = append(topicParts, int32(partition))
+			topicParts = append(topicParts, partition)
 		}
 		topics[lastTopicInfo.topic] = topicParts[:len(topicParts):len(topicParts)]
 	}
@@ -173,6 +173,9 @@ func (b *balancer) partNumByTopic(topic string, partition int32) (int32, bool) {
 	}
 	return topicInfo.partNum + partition, true
 }
+
+// memberPartitions contains partitions for a member.
+type memberPartitions []int32
 
 func (m *memberPartitions) remove(needle int32) {
 	s := *m
@@ -197,9 +200,6 @@ func (m *memberPartitions) takeEnd() int32 {
 func (m *memberPartitions) add(partNum int32) {
 	*m = append(*m, partNum)
 }
-
-// memberPartitions contains partitions for a member.
-type memberPartitions []int32
 
 func (m *memberPartitions) Len() int           { return len(*m) }
 func (m *memberPartitions) Less(i, j int) bool { return (*m)[i] < (*m)[j] }

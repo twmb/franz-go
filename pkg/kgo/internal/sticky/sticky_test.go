@@ -550,7 +550,6 @@ func TestImbalanced(t *testing.T) {
 		nsticky int
 		balance map[int]resultOptions
 	}{
-
 		{
 			// Start:
 			// A -> [1 2 3]
@@ -1099,12 +1098,10 @@ func TestImbalanced(t *testing.T) {
 		},
 
 		{
-
 			// This test specifically triggers a condition where B
 			// will still from A and then A will steal back from B.
 			// The problem is that we want A to re-steal its
 			// partition, rather than lose stickiness.
-
 			// Start:
 			// A: [1 2 3 4 5 6]
 			// B: [1 2 3 4 5 6]
@@ -1128,9 +1125,7 @@ func TestImbalanced(t *testing.T) {
 			// D => [d h j p s]
 			// E => [g i l n q]
 			// F => [k m o r t]
-
 			// Less ideal is the same balance, but with lost stickiness.
-
 			name: "imbalance hard",
 			members: []GroupMember{
 				{
@@ -1251,7 +1246,6 @@ func TestMultiGenerational(t *testing.T) {
 		nsticky int
 		balance map[int]resultOptions
 	}{
-
 		{
 			// When old generation cannot take back.
 			//

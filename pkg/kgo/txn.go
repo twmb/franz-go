@@ -334,7 +334,7 @@ func (s *GroupTransactSession) End(ctx context.Context, commit TransactionEndTry
 
 	// If we know we are KIP-447 and the user is requiring stable, we can
 	// unlock immediately because Kafka will itself block a rebalance
-	// fetching offsets from oustanding transactions.
+	// fetching offsets from outstanding transactions.
 	//
 	// If either of these are false, we spin up a goroutine that sleeps for
 	// 200ms before unlocking to give Kafka a chance to avoid some odd race
@@ -372,7 +372,7 @@ func (s *GroupTransactSession) End(ctx context.Context, commit TransactionEndTry
 	retried := false // just in case, we use this to avoid looping
 retryUnattempted:
 	endTxnErr := s.cl.EndTransaction(ctx, TransactionEndTry(willTryCommit))
-	if endTxnErr == kerr.OperationNotAttempted && !retried {
+	if errors.Is(endTxnErr, kerr.OperationNotAttempted) && !retried {
 		willTryCommit = false
 		retried = true
 		s.cl.cfg.logger.Log(LogLevelInfo, "end transaction with commit not attempted; retrying as abort")
@@ -485,7 +485,7 @@ func (cl *Client) AbortBufferedRecords(ctx context.Context) error {
 // transaction.
 //
 // If the producer ID has an error and you are trying to commit, this will
-// return with kerr.OperationNotAttempted. If this happend, retry
+// return with kerr.OperationNotAttempted. If this happened, retry
 // EndTransaction with TryAbort. Not other error is retriable, and you should
 // not retry with TryAbort.
 //
@@ -602,13 +602,13 @@ func (cl *Client) maybeRecoverProducerID() (necessary, did bool, err error) {
 		return false, false, nil
 	}
 
-	ke, ok := err.(*kerr.Error)
-	if !ok {
+	var ke *kerr.Error
+	if ok := errors.As(err, &ke); !ok {
 		return true, false, err
 	}
 
-	kip360 := cl.producer.idVersion >= 3 && (ke == kerr.UnknownProducerID || ke == kerr.InvalidProducerIDMapping)
-	kip588 := cl.producer.idVersion >= 4 && (ke == kerr.InvalidProducerEpoch || false /* TODO err == kerr.TransactionTimedOut */)
+	kip360 := cl.producer.idVersion >= 3 && (errors.Is(ke, kerr.UnknownProducerID) || errors.Is(ke, kerr.InvalidProducerIDMapping))
+	kip588 := cl.producer.idVersion >= 4 && errors.Is(ke, kerr.InvalidProducerEpoch /* TODO || err == kerr.TransactionTimedOut */)
 
 	recoverable := kip360 || kip588
 	if !recoverable {
@@ -634,7 +634,7 @@ func (cl *Client) doWithConcurrentTransactions(name string, fn func() error) err
 	backoff := cl.cfg.txnBackoff
 start:
 	err := fn()
-	if err == kerr.ConcurrentTransactions && time.Since(start) < 10*time.Second {
+	if errors.Is(err, kerr.ConcurrentTransactions) && time.Since(start) < 10*time.Second {
 		tries++
 		cl.cfg.logger.Log(LogLevelInfo, fmt.Sprintf("%s failed with CONCURRENT_TRANSACTIONS, which may be because we ended a txn and began producing in a new txn too quickly; backing off and retrying", name),
 			"backoff", backoff,

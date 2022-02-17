@@ -32,7 +32,7 @@ func (c *consumer) initDirect() {
 
 // For SetOffsets, unlike the group consumer, we just blindly translate the
 // input EpochOffsets into Offsets, and those will be set directly.
-func (d *directConsumer) getSetAssigns(setOffsets map[string]map[int32]EpochOffset) (assigns map[string]map[int32]Offset) {
+func (*directConsumer) getSetAssigns(setOffsets map[string]map[int32]EpochOffset) (assigns map[string]map[int32]Offset) {
 	assigns = make(map[string]map[int32]Offset)
 	for topic, partitions := range setOffsets {
 		set := make(map[int32]Offset)

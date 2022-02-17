@@ -268,12 +268,12 @@ func (cl *Client) Produce(
 	}
 
 	if r.Topic == "" {
-		if def := cl.cfg.defaultProduceTopic; def != "" {
-			r.Topic = def
-		} else {
+		def := cl.cfg.defaultProduceTopic
+		if def == "" {
 			go promise(r, errors.New("cannot produce to a record that does not have a topic set"))
 			return
 		}
+		r.Topic = def
 	}
 
 	p := &cl.producer
@@ -346,7 +346,7 @@ func (cl *Client) finishRecordPromise(pr promisedRec, err error) {
 		go func() { p.waitBuffer <- struct{}{} }()
 	} else if buffered == 0 && atomic.LoadInt32(&p.flushing) > 0 {
 		p.notifyMu.Lock()
-		p.notifyMu.Unlock()
+		p.notifyMu.Unlock() // nolint:gocritic,staticcheck // We use the lock as a barrier, unlocking immediately is safe.
 		p.notifyCond.Broadcast()
 	}
 }
@@ -433,18 +433,18 @@ type producerID struct {
 
 var errReloadProducerID = errors.New("producer id needs reloading")
 
-// initProducerID initalizes the client's producer ID for idempotent
+// initProducerID initializes the client's producer ID for idempotent
 // producing only (no transactions, which are more special). After the first
 // load, this clears all buffered unknown topics.
 func (cl *Client) producerID() (int64, int16, error) {
 	p := &cl.producer
 
 	id := p.id.Load().(*producerID)
-	if id.err == errReloadProducerID {
+	if errors.Is(id.err, errReloadProducerID) {
 		p.idMu.Lock()
 		defer p.idMu.Unlock()
 
-		if id = p.id.Load().(*producerID); id.err == errReloadProducerID {
+		if id = p.id.Load().(*producerID); errors.Is(id.err, errReloadProducerID) {
 			if cl.cfg.disableIdempotency {
 				cl.cfg.logger.Log(LogLevelInfo, "skipping producer id initialization because the client was configured to disable idempotent writes")
 				id = &producerID{
@@ -453,20 +453,17 @@ func (cl *Client) producerID() (int64, int16, error) {
 					err:   nil,
 				}
 				p.id.Store(id)
-
+			} else if cl.cfg.txnID == nil && id.id >= 0 && id.epoch < math.MaxInt16-1 {
 				// For the idempotent producer, as specified in KIP-360,
 				// if we had an ID, we can bump the epoch locally.
 				// If we are at the max epoch, we will ask for a new ID.
-			} else if cl.cfg.txnID == nil && id.id >= 0 && id.epoch < math.MaxInt16-1 {
 				cl.resetAllProducerSequences()
-
 				id = &producerID{
 					id:    id.id,
 					epoch: id.epoch + 1,
 					err:   nil,
 				}
 				p.id.Store(id)
-
 			} else {
 				newID, keep := cl.doInitProducerID(id.id, id.epoch)
 				if keep {
@@ -562,11 +559,11 @@ func (cl *Client) doInitProducerID(lastID int64, lastEpoch int16) (*producerID, 
 
 	resp, err := req.RequestWith(cl.ctx, cl)
 	if err != nil {
-		if err == errUnknownRequestKey || err == errBrokerTooOld {
+		if errors.Is(err, errUnknownRequestKey) || errors.Is(err, errBrokerTooOld) {
 			cl.cfg.logger.Log(LogLevelInfo, "unable to initialize a producer id because the broker is too old or the client is pinned to an old version, continuing without a producer id")
 			return &producerID{-1, -1, nil}, true
 		}
-		if err == errChosenBrokerDead {
+		if errors.Is(err, errChosenBrokerDead) {
 			select {
 			case <-cl.ctx.Done():
 				cl.cfg.logger.Log(LogLevelInfo, "producer id initialization failure due to dying client", "err", err)
@@ -720,7 +717,7 @@ func (cl *Client) waitUnknownTopic(
 	cl.cfg.logger.Log(LogLevelInfo, "new topic metadata wait failed, done retrying, failing all records", "topic", topic, "err", err)
 
 	delete(p.unknownTopics, topic)
-	cl.failUnknownTopicRecords(topic, unknown, err)
+	cl.failUnknownTopicRecords(unknown, err)
 }
 
 // Called under the unknown mu, this finishes promises for an unknown topic.
@@ -738,7 +735,7 @@ func (cl *Client) waitUnknownTopic(
 // Leaving a topic buffered even if we failed it as unknown should be of no
 // consequence because clients should not really be producing to loads of
 // unknown topics.
-func (cl *Client) failUnknownTopicRecords(topic string, unknown *unknownTopicProduces, err error) {
+func (cl *Client) failUnknownTopicRecords(unknown *unknownTopicProduces, err error) {
 	go func() {
 		for _, pr := range unknown.buffered {
 			cl.finishRecordPromise(pr, err)

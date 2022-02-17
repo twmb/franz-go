@@ -22,8 +22,8 @@ func TestPromisedNumberedRecordAppendTo(t *testing.T) {
 		Key:            []byte("key"),
 		Value:          []byte("value"),
 		Headers: []kmsg.Header{
-			{"header key 1", []byte("header value 1")},
-			{"header key 2", []byte("header value 2")},
+			{Key: "header key 1", Value: []byte("header value 1")},
+			{Key: "header key 2", Value: []byte("header value 2")},
 		},
 	}
 
@@ -39,8 +39,8 @@ func TestPromisedNumberedRecordAppendTo(t *testing.T) {
 				Key:   []byte("key"),
 				Value: []byte("value"),
 				Headers: []RecordHeader{
-					{"header key 1", []byte("header value 1")},
-					{"header key 2", []byte("header value 2")},
+					{Key: "header key 1", Value: []byte("header value 1")},
+					{Key: "header key 2", Value: []byte("header value 2")},
 				},
 			},
 		},
@@ -80,8 +80,8 @@ func TestRecBatchAppendTo(t *testing.T) {
 				Key:            []byte("key 1"),
 				Value:          []byte("value 1"),
 				Headers: []kmsg.Header{
-					{"header key 1", []byte("header value 1")},
-					{"header key 2", []byte("header value 2")},
+					{Key: "header key 1", Value: []byte("header value 1")},
+					{Key: "header key 2", Value: []byte("header value 2")},
 				},
 			}).AppendTo(nil),
 			(&kmsg.Record{

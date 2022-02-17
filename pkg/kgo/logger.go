@@ -34,8 +34,9 @@ func (l LogLevel) String() string {
 		return "INFO"
 	case LogLevelDebug:
 		return "DEBUG"
+	default:
+		return "NONE"
 	}
-	return "NONE"
 }
 
 // Logger is used to log informational messages.
@@ -100,7 +101,7 @@ func (b *basicLogger) Log(level LogLevel, msg string, keyvals ...interface{}) {
 type nopLogger struct{}
 
 func (*nopLogger) Level() LogLevel { return LogLevelNone }
-func (*nopLogger) Log(level LogLevel, msg string, keyvals ...interface{}) {
+func (*nopLogger) Log(LogLevel, string, ...interface{}) {
 }
 
 // wrappedLogger wraps the config logger for convenience at logging callsites.

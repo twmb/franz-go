@@ -92,7 +92,7 @@ func isSkippableBrokerErr(err error) bool {
 	//
 	// We take anything that returns an OpError that *is not* a context
 	// error deep inside.
-	if err == errUnknownBroker {
+	if errors.Is(err, errUnknownBroker) {
 		return true
 	}
 	var ne *net.OpError

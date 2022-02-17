@@ -273,8 +273,7 @@ func parseBrokerAddr(addr string) (hostport, error) {
 	// Try to parse as IP:port or host:port
 	h, p, err := net.SplitHostPort(addr)
 	if err != nil {
-		// IPV6 literal - use default Kafka port
-		return hostport{addr, defaultKafkaPort}, nil
+		return hostport{addr, defaultKafkaPort}, nil // nolint:nilerr // ipv6 literal -- use default kafka port
 	}
 	port, err := strconv.ParseInt(p, 10, 32)
 	if err != nil {
@@ -326,7 +325,6 @@ func (c *connTimeouter) timeouts(req kmsg.Request) (r, w time.Duration) {
 		c.joinMu.Unlock()
 
 		return read, def
-
 	}
 }
 
@@ -337,11 +335,11 @@ func (cl *Client) broker() *broker {
 
 	var b *broker
 	if len(cl.brokers) > 0 {
-		cl.anyBrokerIdx = cl.anyBrokerIdx % int32(len(cl.brokers))
+		cl.anyBrokerIdx %= int32(len(cl.brokers))
 		b = cl.brokers[cl.anyBrokerIdx]
 		cl.anyBrokerIdx++
 	} else {
-		cl.anySeedIdx = cl.anySeedIdx % int32(len(cl.seeds))
+		cl.anySeedIdx %= int32(len(cl.seeds))
 		b = cl.seeds[cl.anySeedIdx]
 		cl.anySeedIdx++
 	}
@@ -813,23 +811,22 @@ func (cl *Client) shardedRequest(ctx context.Context, req kmsg.Request) ([]Respo
 		return shards(shard(last, req, resp, err)), nil
 	}
 
-	if metaReq, isMetaReq := req.(*kmsg.MetadataRequest); isMetaReq {
+	switch t := req.(type) {
+	case *kmsg.MetadataRequest:
 		// We hijack any metadata request so as to populate our
 		// own brokers and controller ID.
-		br, resp, err := cl.fetchMetadata(ctx, metaReq, false)
+		br, resp, err := cl.fetchMetadata(ctx, t, false)
 		return shards(shard(br, req, resp, err)), nil
-
-	} else if adminReq, admin := req.(kmsg.AdminRequest); admin {
-		return shards(cl.handleAdminReq(ctx, adminReq)), nil
-	} else if groupReq, isGroupReq := req.(kmsg.GroupCoordinatorRequest); isGroupReq {
-		return shards(cl.handleCoordinatorReq(ctx, groupReq, coordinatorTypeGroup)), nil
-	} else if txnReq, isTxnReq := req.(kmsg.TxnCoordinatorRequest); isTxnReq {
-		return shards(cl.handleCoordinatorReq(ctx, txnReq, coordinatorTypeTxn)), nil
-	} else if apiVersReq, isApiVersReq := req.(*kmsg.ApiVersionsRequest); isApiVersReq {
+	case kmsg.AdminRequest:
+		return shards(cl.handleAdminReq(ctx, t)), nil
+	case kmsg.GroupCoordinatorRequest,
+		kmsg.TxnCoordinatorRequest:
+		return shards(cl.handleCoordinatorReq(ctx, t)), nil
+	case *kmsg.ApiVersionsRequest:
 		// As of v3, software name and version are required.
 		// If they are missing, we use the config options.
-		if apiVersReq.ClientSoftwareName == "" && apiVersReq.ClientSoftwareVersion == "" {
-			dup := *apiVersReq
+		if t.ClientSoftwareName == "" && t.ClientSoftwareVersion == "" {
+			dup := *t
 			dup.ClientSoftwareName = cl.cfg.softwareName
 			dup.ClientSoftwareVersion = cl.cfg.softwareVersion
 			req = &dup
@@ -1055,10 +1052,10 @@ start:
 }
 
 func (cl *Client) maybeDeleteStaleCoordinator(name string, typ int8, err error) bool {
-	switch err {
-	case kerr.CoordinatorNotAvailable,
-		kerr.CoordinatorLoadInProgress,
-		kerr.NotCoordinator:
+	switch {
+	case errors.Is(err, kerr.CoordinatorNotAvailable),
+		errors.Is(err, kerr.CoordinatorLoadInProgress),
+		errors.Is(err, kerr.NotCoordinator):
 
 		cl.coordinatorsMu.Lock()
 		delete(cl.coordinators, coordinatorKey{
@@ -1087,8 +1084,8 @@ func (cl *Client) loadCoordinators(typ int8, names ...string) map[string]brokerO
 	m := make(map[string]brokerOrErr)
 
 	var wg sync.WaitGroup
-	for name := range uniq {
-		myName := name
+	for uniqName := range uniq {
+		myName := uniqName
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -1157,7 +1154,7 @@ func (cl *Client) handleAdminReq(ctx context.Context, req kmsg.Request) Response
 		case *kmsg.EnvelopeResponse:
 			code = t.ErrorCode
 		}
-		if err := kerr.ErrorForCode(code); err == kerr.NotController {
+		if err := kerr.ErrorForCode(code); errors.Is(err, kerr.NotController) {
 			// There must be a last broker if we were able to issue
 			// the request and get a response.
 			cl.forgetControllerID(r.last.meta.NodeID)
@@ -1171,7 +1168,7 @@ func (cl *Client) handleAdminReq(ctx context.Context, req kmsg.Request) Response
 }
 
 // handleCoordinatorReq issues simple (non-shardable) group or txn requests.
-func (cl *Client) handleCoordinatorReq(ctx context.Context, req kmsg.Request, typ int8) ResponseShard {
+func (cl *Client) handleCoordinatorReq(ctx context.Context, req kmsg.Request) ResponseShard {
 	switch t := req.(type) {
 	default:
 		// All group requests should be listed below, so if it isn't,
@@ -1247,12 +1244,10 @@ func (cl *Client) handleReqWithCoordinator(
 	name string, // group ID or the transactional id
 	req kmsg.Request,
 ) (*broker, kmsg.Response, error) {
-
 	r := cl.retriableBrokerFn(coordinator)
 	r.parseRetryErr = func(resp kmsg.Response) error {
 		var code int16
 		switch t := resp.(type) {
-
 		// TXN
 		case *kmsg.InitProducerIDResponse:
 			code = t.ErrorCode
@@ -1282,7 +1277,6 @@ func (cl *Client) handleReqWithCoordinator(
 			code = t.ErrorCode
 		case *kmsg.SyncGroupResponse:
 			code = t.ErrorCode
-
 		}
 
 		// ListGroups, OffsetFetch, DeleteGroups, DescribeGroups, and
@@ -1352,17 +1346,17 @@ type Broker struct {
 //
 // It is more beneficial to always use RetriableRequest.
 func (b *Broker) Request(ctx context.Context, req kmsg.Request) (kmsg.Response, error) {
-	return b.request(false, ctx, req)
+	return b.request(ctx, false, req)
 }
 
 // RetriableRequest issues a request to a broker the same as Broker, but
 // retries in the face of retriable broker connection errors. This does not
 // retry on response internal errors.
 func (b *Broker) RetriableRequest(ctx context.Context, req kmsg.Request) (kmsg.Response, error) {
-	return b.request(true, ctx, req)
+	return b.request(ctx, true, req)
 }
 
-func (b *Broker) request(retry bool, ctx context.Context, req kmsg.Request) (kmsg.Response, error) {
+func (b *Broker) request(ctx context.Context, retry bool, req kmsg.Request) (kmsg.Response, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	var resp kmsg.Response
@@ -1706,21 +1700,21 @@ var (
 	errNoLeader         = errors.New("partition has no leader from metadata lookup")
 )
 
-func missingOrCodeT(t string, exists bool, code int16) error {
+func missingOrCodeT(exists bool, code int16) error {
 	if !exists {
 		return errMissingTopic
 	}
 	return kerr.ErrorForCode(code)
 }
 
-func missingOrCodeP(t string, p int32, exists bool, code int16) error {
+func missingOrCodeP(exists bool, code int16) error {
 	if !exists {
 		return errMissingPartition
 	}
 	return kerr.ErrorForCode(code)
 }
 
-func noLeader(t string, p int32, l int32) error {
+func noLeader(l int32) error {
 	if l < 0 {
 		return errNoLeader
 	}
@@ -1787,7 +1781,6 @@ func (l *unknownErrShards) collect(mkreq, mergeParts interface{}) []issueShard {
 	factory := reflect.ValueOf(mkreq)
 	perTopic := reflect.ValueOf(mergeParts)
 	for err, topics := range l.mapped {
-
 		req := factory.Call(nil)[0]
 
 		var ntopics, npartitions int
@@ -1797,20 +1790,20 @@ func (l *unknownErrShards) collect(mkreq, mergeParts interface{}) []issueShard {
 			perTopic.Call([]reflect.Value{req, reflect.ValueOf(topic), partitions})
 		}
 
-		switch err {
-		case errMissingTopic:
+		switch {
+		case errors.Is(err, errMissingTopic):
 			if ntopics == 1 {
 				err = errors.New("1 topic was not returned when lookup up its metadata")
 			} else if ntopics > 1 {
 				err = fmt.Errorf("%d topics were not returned when lookup up their metadata", ntopics)
 			}
-		case errMissingPartition:
+		case errors.Is(err, errMissingPartition):
 			if npartitions == 1 {
 				err = errors.New("1 partition was not returned when looking up its metadata")
 			} else if npartitions > 1 {
 				err = fmt.Errorf("%d partitions were not returned when looking up their metadata", npartitions)
 			}
-		case errNoLeader:
+		case errors.Is(err, errNoLeader):
 			if npartitions == 1 {
 				err = errors.New("1 partition has no leader from a metadata lookup")
 			} else if npartitions > 1 {
@@ -1856,17 +1849,17 @@ func (cl *listOffsetsSharder) shard(ctx context.Context, kreq kmsg.Request) ([]i
 	for _, topic := range req.Topics {
 		t := topic.Topic
 		tmapping, exists := mapping[t]
-		if err := missingOrCodeT(t, exists, tmapping.topic.ErrorCode); err != nil {
+		if err := missingOrCodeT(exists, tmapping.topic.ErrorCode); err != nil {
 			unknowns.errs(err, t, topic.Partitions)
 			continue
 		}
 		for _, partition := range topic.Partitions {
 			p, exists := tmapping.mapping[partition.Partition]
-			if err := missingOrCodeP(t, partition.Partition, exists, p.ErrorCode); err != nil {
+			if err := missingOrCodeP(exists, p.ErrorCode); err != nil {
 				unknowns.err(err, t, partition)
 				continue
 			}
-			if err := noLeader(t, p.Partition, p.Leader); err != nil {
+			if err := noLeader(p.Leader); err != nil {
 				unknowns.err(err, t, partition)
 				continue
 			}
@@ -1910,9 +1903,9 @@ func (cl *listOffsetsSharder) shard(ctx context.Context, kreq kmsg.Request) ([]i
 	})...), true, nil // this is reshardable
 }
 
-func (cl *listOffsetsSharder) onResp(kmsg.Request, kmsg.Response) error { return nil } // topic / partitions: not retried
+func (*listOffsetsSharder) onResp(kmsg.Request, kmsg.Response) error { return nil } // topic / partitions: not retried
 
-func (cl *listOffsetsSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
+func (*listOffsetsSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
 	merged := kmsg.NewPtrListOffsetsResponse()
 	topics := make(map[string][]kmsg.ListOffsetsResponseTopicPartition)
 
@@ -1989,7 +1982,7 @@ func offsetFetchRespGroupIntoResp(g kmsg.OffsetFetchResponseGroup, into *kmsg.Of
 	}
 }
 
-func (cl *offsetFetchSharder) shard(ctx context.Context, kreq kmsg.Request) ([]issueShard, bool, error) {
+func (cl *offsetFetchSharder) shard(_ context.Context, kreq kmsg.Request) ([]issueShard, bool, error) {
 	req := kreq.(*kmsg.OffsetFetchRequest)
 
 	groups := make([]string, 0, len(req.Groups)+1)
@@ -2011,7 +2004,7 @@ func (cl *offsetFetchSharder) shard(ctx context.Context, kreq kmsg.Request) ([]i
 	if len(req.Groups) == 0 {
 		berr := coordinators[req.Group]
 		if berr.err != nil {
-			return []issueShard{{
+			return []issueShard{{ // nolint:nilerr // error is returned in the struct
 				req: req,
 				err: berr.err,
 			}}, false, nil // not reshardable, because this is an error
@@ -2124,9 +2117,8 @@ func (cl *offsetFetchSharder) onResp(kreq kmsg.Request, kresp kmsg.Response) err
 	return retErr
 }
 
-func (cl *offsetFetchSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
+func (*offsetFetchSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
 	merged := kmsg.NewPtrOffsetFetchResponse()
-
 	return merged, firstErrMerger(sresps, func(kresp kmsg.Response) {
 		resp := kresp.(*kmsg.OffsetFetchResponse)
 		merged.Version = resp.Version
@@ -2142,7 +2134,7 @@ func (cl *offsetFetchSharder) merge(sresps []ResponseShard) (kmsg.Response, erro
 // handles sharding DescribeGroupsRequest
 type describeGroupsSharder struct{ *Client }
 
-func (cl *describeGroupsSharder) shard(ctx context.Context, kreq kmsg.Request) ([]issueShard, bool, error) {
+func (cl *describeGroupsSharder) shard(_ context.Context, kreq kmsg.Request) ([]issueShard, bool, error) {
 	req := kreq.(*kmsg.DescribeGroupsRequest)
 
 	coordinators := cl.loadCoordinators(coordinatorTypeGroup, req.Groups...)
@@ -2216,9 +2208,8 @@ func (cl *describeGroupsSharder) onResp(_ kmsg.Request, kresp kmsg.Response) err
 	return retErr
 }
 
-func (cl *describeGroupsSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
+func (*describeGroupsSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
 	merged := kmsg.NewPtrDescribeGroupsResponse()
-
 	return merged, firstErrMerger(sresps, func(kresp kmsg.Response) {
 		resp := kresp.(*kmsg.DescribeGroupsResponse)
 		merged.Version = resp.Version
@@ -2238,14 +2229,13 @@ func (cl *listGroupsSharder) shard(ctx context.Context, kreq kmsg.Request) ([]is
 	})
 }
 
-func (cl *listGroupsSharder) onResp(_ kmsg.Request, kresp kmsg.Response) error {
+func (*listGroupsSharder) onResp(_ kmsg.Request, kresp kmsg.Response) error {
 	resp := kresp.(*kmsg.ListGroupsResponse)
 	return kerr.ErrorForCode(resp.ErrorCode)
 }
 
-func (cl *listGroupsSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
+func (*listGroupsSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
 	merged := kmsg.NewPtrListGroupsResponse()
-
 	return merged, firstErrMerger(sresps, func(kresp kmsg.Response) {
 		resp := kresp.(*kmsg.ListGroupsResponse)
 		merged.Version = resp.Version
@@ -2278,17 +2268,17 @@ func (cl *deleteRecordsSharder) shard(ctx context.Context, kreq kmsg.Request) ([
 	for _, topic := range req.Topics {
 		t := topic.Topic
 		tmapping, exists := mapping[t]
-		if err := missingOrCodeT(t, exists, tmapping.topic.ErrorCode); err != nil {
+		if err := missingOrCodeT(exists, tmapping.topic.ErrorCode); err != nil {
 			unknowns.errs(err, t, topic.Partitions)
 			continue
 		}
 		for _, partition := range topic.Partitions {
 			p, exists := tmapping.mapping[partition.Partition]
-			if err := missingOrCodeP(t, partition.Partition, exists, p.ErrorCode); err != nil {
+			if err := missingOrCodeP(exists, p.ErrorCode); err != nil {
 				unknowns.err(err, t, partition)
 				continue
 			}
-			if err := noLeader(t, p.Partition, p.Leader); err != nil {
+			if err := noLeader(p.Leader); err != nil {
 				unknowns.err(err, t, partition)
 				continue
 			}
@@ -2331,9 +2321,9 @@ func (cl *deleteRecordsSharder) shard(ctx context.Context, kreq kmsg.Request) ([
 	})...), true, nil // this is reshardable
 }
 
-func (cl *deleteRecordsSharder) onResp(kmsg.Request, kmsg.Response) error { return nil } // topic / partitions: not retried
+func (*deleteRecordsSharder) onResp(kmsg.Request, kmsg.Response) error { return nil } // topic / partitions: not retried
 
-func (cl *deleteRecordsSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
+func (*deleteRecordsSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
 	merged := kmsg.NewPtrDeleteRecordsResponse()
 	topics := make(map[string][]kmsg.DeleteRecordsResponseTopicPartition)
 
@@ -2376,17 +2366,17 @@ func (cl *offsetForLeaderEpochSharder) shard(ctx context.Context, kreq kmsg.Requ
 	for _, topic := range req.Topics {
 		t := topic.Topic
 		tmapping, exists := mapping[t]
-		if err := missingOrCodeT(t, exists, tmapping.topic.ErrorCode); err != nil {
+		if err := missingOrCodeT(exists, tmapping.topic.ErrorCode); err != nil {
 			unknowns.errs(err, t, topic.Partitions)
 			continue
 		}
 		for _, partition := range topic.Partitions {
 			p, exists := tmapping.mapping[partition.Partition]
-			if err := missingOrCodeP(t, partition.Partition, exists, p.ErrorCode); err != nil {
+			if err := missingOrCodeP(exists, p.ErrorCode); err != nil {
 				unknowns.err(err, t, partition)
 				continue
 			}
-			if err := noLeader(t, p.Partition, p.Leader); err != nil {
+			if err := noLeader(p.Leader); err != nil {
 				unknowns.err(err, t, partition)
 				continue
 			}
@@ -2429,9 +2419,9 @@ func (cl *offsetForLeaderEpochSharder) shard(ctx context.Context, kreq kmsg.Requ
 	})...), true, nil // this is reshardable
 }
 
-func (cl *offsetForLeaderEpochSharder) onResp(kmsg.Request, kmsg.Response) error { return nil } // topic / partitions: not retried
+func (*offsetForLeaderEpochSharder) onResp(kmsg.Request, kmsg.Response) error { return nil } // topic / partitions: not retried
 
-func (cl *offsetForLeaderEpochSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
+func (*offsetForLeaderEpochSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
 	merged := kmsg.NewPtrOffsetForLeaderEpochResponse()
 	topics := make(map[string][]kmsg.OffsetForLeaderEpochResponseTopicPartition)
 
@@ -2456,7 +2446,7 @@ func (cl *offsetForLeaderEpochSharder) merge(sresps []ResponseShard) (kmsg.Respo
 // handle sharding DescribeConfigsRequest
 type describeConfigsSharder struct{ *Client }
 
-func (cl *describeConfigsSharder) shard(ctx context.Context, kreq kmsg.Request) ([]issueShard, bool, error) {
+func (*describeConfigsSharder) shard(_ context.Context, kreq kmsg.Request) ([]issueShard, bool, error) {
 	req := kreq.(*kmsg.DescribeConfigsRequest)
 
 	brokerReqs := make(map[int32][]kmsg.DescribeConfigsRequestResource)
@@ -2506,11 +2496,10 @@ func (cl *describeConfigsSharder) shard(ctx context.Context, kreq kmsg.Request) 
 	return issues, false, nil // this is not reshardable, but the any block can go anywhere
 }
 
-func (cl *describeConfigsSharder) onResp(kmsg.Request, kmsg.Response) error { return nil } // configs: nothing retriable
+func (*describeConfigsSharder) onResp(kmsg.Request, kmsg.Response) error { return nil } // configs: nothing retriable
 
-func (cl *describeConfigsSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
+func (*describeConfigsSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
 	merged := kmsg.NewPtrDescribeConfigsResponse()
-
 	return merged, firstErrMerger(sresps, func(kresp kmsg.Response) {
 		resp := kresp.(*kmsg.DescribeConfigsResponse)
 		merged.Version = resp.Version
@@ -2522,7 +2511,7 @@ func (cl *describeConfigsSharder) merge(sresps []ResponseShard) (kmsg.Response, 
 // handle sharding AlterConfigsRequest
 type alterConfigsSharder struct{ *Client }
 
-func (cl *alterConfigsSharder) shard(ctx context.Context, kreq kmsg.Request) ([]issueShard, bool, error) {
+func (*alterConfigsSharder) shard(_ context.Context, kreq kmsg.Request) ([]issueShard, bool, error) {
 	req := kreq.(*kmsg.AlterConfigsRequest)
 
 	brokerReqs := make(map[int32][]kmsg.AlterConfigsRequestResource)
@@ -2570,11 +2559,10 @@ func (cl *alterConfigsSharder) shard(ctx context.Context, kreq kmsg.Request) ([]
 	return issues, false, nil // this is not reshardable, but the any block can go anywhere
 }
 
-func (cl *alterConfigsSharder) onResp(kmsg.Request, kmsg.Response) error { return nil } // configs: nothing retriable
+func (*alterConfigsSharder) onResp(kmsg.Request, kmsg.Response) error { return nil } // configs: nothing retriable
 
-func (cl *alterConfigsSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
+func (*alterConfigsSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
 	merged := kmsg.NewPtrAlterConfigsResponse()
-
 	return merged, firstErrMerger(sresps, func(kresp kmsg.Response) {
 		resp := kresp.(*kmsg.AlterConfigsResponse)
 		merged.Version = resp.Version
@@ -2639,7 +2627,7 @@ func (cl *alterReplicaLogDirsSharder) shard(ctx context.Context, kreq kmsg.Reque
 		for _, topic := range dir.Topics {
 			t := topic.Topic
 			tmapping, exists := mapping[t]
-			if err := missingOrCodeT(t, exists, tmapping.topic.ErrorCode); err != nil {
+			if err := missingOrCodeT(exists, tmapping.topic.ErrorCode); err != nil {
 				for _, partition := range topic.Partitions {
 					addUnknown(err, dir.Dir, t, partition)
 				}
@@ -2647,7 +2635,7 @@ func (cl *alterReplicaLogDirsSharder) shard(ctx context.Context, kreq kmsg.Reque
 			}
 			for _, partition := range topic.Partitions {
 				p, exists := tmapping.mapping[partition]
-				if err := missingOrCodeP(t, partition, exists, p.ErrorCode); err != nil {
+				if err := missingOrCodeP(exists, p.ErrorCode); err != nil {
 					addUnknown(err, dir.Dir, t, partition)
 					continue
 				}
@@ -2703,10 +2691,10 @@ func (cl *alterReplicaLogDirsSharder) shard(ctx context.Context, kreq kmsg.Reque
 	return issues, true, nil // this is reshardable
 }
 
-func (cl *alterReplicaLogDirsSharder) onResp(kmsg.Request, kmsg.Response) error { return nil } // topic / partitions: not retried
+func (*alterReplicaLogDirsSharder) onResp(kmsg.Request, kmsg.Response) error { return nil } // topic / partitions: not retried
 
 // merge does not make sense for this function, but we provide a one anyway.
-func (cl *alterReplicaLogDirsSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
+func (*alterReplicaLogDirsSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
 	merged := kmsg.NewPtrAlterReplicaLogDirsResponse()
 	topics := make(map[string][]kmsg.AlterReplicaLogDirsResponseTopicPartition)
 
@@ -2758,13 +2746,13 @@ func (cl *describeLogDirsSharder) shard(ctx context.Context, kreq kmsg.Request) 
 	for _, topic := range req.Topics {
 		t := topic.Topic
 		tmapping, exists := mapping[t]
-		if err := missingOrCodeT(t, exists, tmapping.topic.ErrorCode); err != nil {
+		if err := missingOrCodeT(exists, tmapping.topic.ErrorCode); err != nil {
 			unknowns.errs(err, t, topic.Partitions)
 			continue
 		}
 		for _, partition := range topic.Partitions {
 			p, exists := tmapping.mapping[partition]
-			if err := missingOrCodeP(t, partition, exists, p.ErrorCode); err != nil {
+			if err := missingOrCodeP(exists, p.ErrorCode); err != nil {
 				unknowns.err(err, t, partition)
 				continue
 			}
@@ -2807,11 +2795,11 @@ func (cl *describeLogDirsSharder) shard(ctx context.Context, kreq kmsg.Request) 
 	})...), true, nil // this is reshardable
 }
 
-func (cl *describeLogDirsSharder) onResp(kmsg.Request, kmsg.Response) error { return nil } // topic / configs: not retried
+func (*describeLogDirsSharder) onResp(kmsg.Request, kmsg.Response) error { return nil } // topic / configs: not retried
 
 // merge does not make sense for this function, but we provide one anyway.
 // We lose the error code for directories.
-func (cl *describeLogDirsSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
+func (*describeLogDirsSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
 	merged := kmsg.NewPtrDescribeLogDirsResponse()
 	dirs := make(map[string]map[string][]kmsg.DescribeLogDirsResponseDirTopicPartition)
 
@@ -2848,7 +2836,7 @@ func (cl *describeLogDirsSharder) merge(sresps []ResponseShard) (kmsg.Response, 
 // handles sharding DeleteGroupsRequest
 type deleteGroupsSharder struct{ *Client }
 
-func (cl *deleteGroupsSharder) shard(ctx context.Context, kreq kmsg.Request) ([]issueShard, bool, error) {
+func (cl *deleteGroupsSharder) shard(_ context.Context, kreq kmsg.Request) ([]issueShard, bool, error) {
 	req := kreq.(*kmsg.DeleteGroupsRequest)
 
 	coordinators := cl.loadCoordinators(coordinatorTypeGroup, req.Groups...)
@@ -2921,9 +2909,8 @@ func (cl *deleteGroupsSharder) onResp(_ kmsg.Request, kresp kmsg.Response) error
 	return retErr
 }
 
-func (cl *deleteGroupsSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
+func (*deleteGroupsSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
 	merged := kmsg.NewPtrDeleteGroupsResponse()
-
 	return merged, firstErrMerger(sresps, func(kresp kmsg.Response) {
 		resp := kresp.(*kmsg.DeleteGroupsResponse)
 		merged.Version = resp.Version
@@ -2935,7 +2922,7 @@ func (cl *deleteGroupsSharder) merge(sresps []ResponseShard) (kmsg.Response, err
 // handle sharding IncrementalAlterConfigsRequest
 type incrementalAlterConfigsSharder struct{ *Client }
 
-func (cl *incrementalAlterConfigsSharder) shard(ctx context.Context, kreq kmsg.Request) ([]issueShard, bool, error) {
+func (*incrementalAlterConfigsSharder) shard(_ context.Context, kreq kmsg.Request) ([]issueShard, bool, error) {
 	req := kreq.(*kmsg.IncrementalAlterConfigsRequest)
 
 	brokerReqs := make(map[int32][]kmsg.IncrementalAlterConfigsRequestResource)
@@ -2983,11 +2970,10 @@ func (cl *incrementalAlterConfigsSharder) shard(ctx context.Context, kreq kmsg.R
 	return issues, false, nil // this is not reshardable, but the any block can go anywhere
 }
 
-func (cl *incrementalAlterConfigsSharder) onResp(kmsg.Request, kmsg.Response) error { return nil } // config: nothing retriable
+func (*incrementalAlterConfigsSharder) onResp(kmsg.Request, kmsg.Response) error { return nil } // config: nothing retriable
 
-func (cl *incrementalAlterConfigsSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
+func (*incrementalAlterConfigsSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
 	merged := kmsg.NewPtrIncrementalAlterConfigsResponse()
-
 	return merged, firstErrMerger(sresps, func(kresp kmsg.Response) {
 		resp := kresp.(*kmsg.IncrementalAlterConfigsResponse)
 		merged.Version = resp.Version
@@ -3017,13 +3003,13 @@ func (cl *describeProducersSharder) shard(ctx context.Context, kreq kmsg.Request
 	for _, topic := range req.Topics {
 		t := topic.Topic
 		tmapping, exists := mapping[t]
-		if err := missingOrCodeT(t, exists, tmapping.topic.ErrorCode); err != nil {
+		if err := missingOrCodeT(exists, tmapping.topic.ErrorCode); err != nil {
 			unknowns.errs(err, t, topic.Partitions)
 			continue
 		}
 		for _, partition := range topic.Partitions {
 			p, exists := tmapping.mapping[partition]
-			if err := missingOrCodeP(t, partition, exists, p.ErrorCode); err != nil {
+			if err := missingOrCodeP(exists, p.ErrorCode); err != nil {
 				unknowns.err(err, t, partition)
 				continue
 			}
@@ -3064,12 +3050,11 @@ func (cl *describeProducersSharder) shard(ctx context.Context, kreq kmsg.Request
 	})...), true, nil // this is reshardable
 }
 
-func (cl *describeProducersSharder) onResp(kmsg.Request, kmsg.Response) error { return nil } // topic / partitions: not retriable
+func (*describeProducersSharder) onResp(kmsg.Request, kmsg.Response) error { return nil } // topic / partitions: not retriable
 
-func (cl *describeProducersSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
+func (*describeProducersSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
 	merged := kmsg.NewPtrDescribeProducersResponse()
 	topics := make(map[string][]kmsg.DescribeProducersResponseTopicPartition)
-
 	firstErr := firstErrMerger(sresps, func(kresp kmsg.Response) {
 		resp := kresp.(*kmsg.DescribeProducersResponse)
 		merged.Version = resp.Version
@@ -3091,7 +3076,7 @@ func (cl *describeProducersSharder) merge(sresps []ResponseShard) (kmsg.Response
 // handles sharding DescribeTransactionsRequest
 type describeTransactionsSharder struct{ *Client }
 
-func (cl *describeTransactionsSharder) shard(ctx context.Context, kreq kmsg.Request) ([]issueShard, bool, error) {
+func (cl *describeTransactionsSharder) shard(_ context.Context, kreq kmsg.Request) ([]issueShard, bool, error) {
 	req := kreq.(*kmsg.DescribeTransactionsRequest)
 
 	coordinators := cl.loadCoordinators(coordinatorTypeTxn, req.TransactionalIDs...)
@@ -3164,9 +3149,8 @@ func (cl *describeTransactionsSharder) onResp(_ kmsg.Request, kresp kmsg.Respons
 	return retErr
 }
 
-func (cl *describeTransactionsSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
+func (*describeTransactionsSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
 	merged := kmsg.NewPtrDescribeTransactionsResponse()
-
 	return merged, firstErrMerger(sresps, func(kresp kmsg.Response) {
 		resp := kresp.(*kmsg.DescribeTransactionsResponse)
 		merged.Version = resp.Version
@@ -3186,12 +3170,12 @@ func (cl *listTransactionsSharder) shard(ctx context.Context, kreq kmsg.Request)
 	})
 }
 
-func (cl *listTransactionsSharder) onResp(_ kmsg.Request, kresp kmsg.Response) error {
+func (*listTransactionsSharder) onResp(_ kmsg.Request, kresp kmsg.Response) error {
 	resp := kresp.(*kmsg.ListTransactionsResponse)
 	return kerr.ErrorForCode(resp.ErrorCode)
 }
 
-func (cl *listTransactionsSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
+func (*listTransactionsSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
 	merged := kmsg.NewPtrListTransactionsResponse()
 
 	unknownStates := make(map[string]struct{})
