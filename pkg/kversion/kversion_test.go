@@ -100,7 +100,6 @@ func TestVersionGuess(t *testing.T) {
 		if got, exp := v.VersionGuess(TryRaftController()), "v2.7"; got != exp {
 			t.Errorf("got %s != exp %s for trying as raft controller v2.7", got, exp)
 		}
-
 	}
 
 	{ // Here, we ensure we skip 4, 5, 6, and 7 by default.
@@ -117,7 +116,6 @@ func TestVersionGuess(t *testing.T) {
 		if got, exp := v.VersionGuess(SkipKeys()), "unknown custom version"; got != exp {
 			t.Errorf("got %s != exp %s for v2.7 with 4,5,6,7 unset without skipping them", got, exp)
 		}
-
 	}
 }
 

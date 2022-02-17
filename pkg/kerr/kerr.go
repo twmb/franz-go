@@ -9,7 +9,10 @@
 // all errors elide the standard "Err" prefix.
 package kerr
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+)
 
 // Error is a Kafka error.
 type Error struct {
@@ -65,8 +68,8 @@ func TypedErrorForCode(code int16) *Error {
 
 // IsRetriable returns whether a Kafka error is considered retriable.
 func IsRetriable(err error) bool {
-	kerr, ok := err.(*Error)
-	return ok && kerr.Retriable
+	var kerr *Error
+	return errors.As(err, &kerr) && kerr.Retriable
 }
 
 var (

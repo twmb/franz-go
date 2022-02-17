@@ -83,7 +83,7 @@ func (vs *Versions) SetMaxKeyVersion(k, v int16) {
 	vs.k2v[k] = v
 }
 
-// Returns whether two versions are equal.
+// Equal returns whether two versions are equal.
 func (vs *Versions) Equal(other *Versions) bool {
 	// We allow the version slices to be of different lengths, so long as
 	// the versions for keys in one and not the other are -1.
@@ -106,7 +106,7 @@ func (vs *Versions) Equal(other *Versions) bool {
 	return true
 }
 
-// EachMaxKey calls fn for each key and max version
+// EachMaxKeyVersion calls fn for each key and max version
 func (vs *Versions) EachMaxKeyVersion(fn func(k, v int16)) {
 	for k, v := range vs.k2v {
 		if v >= 0 {
@@ -258,9 +258,8 @@ func (vs *Versions) VersionGuess(opts ...VersionGuessOpt) string {
 				// We can have a negative version if a key was manually
 				// unset.
 				over = true
-			} else {
-				// If the version is < 0, the key is unset.
 			}
+			// If the version is < 0, the key is unset.
 		}
 
 		// If our versions did not clear out what we are comparing against, we
@@ -292,7 +291,6 @@ func (vs *Versions) VersionGuess(opts ...VersionGuessOpt) string {
 
 		case equal:
 			return current
-
 		}
 		// At least one of under, equal, or over must be true, so there
 		// is no default case.
@@ -301,7 +299,8 @@ func (vs *Versions) VersionGuess(opts ...VersionGuessOpt) string {
 	return "at least " + last
 }
 
-// Returns a string representation of the versions; the format may change.
+// String returns a string representation of the versions; the format may
+// change.
 func (vs *Versions) String() string {
 	var buf bytes.Buffer
 	w := tabwriter.NewWriter(&buf, 0, 0, 2, ' ', 0)

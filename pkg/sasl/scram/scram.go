@@ -52,7 +52,7 @@ type Auth struct {
 	// Set this to true if the user and pass are from a delegation token.
 	IsToken bool
 
-	_internal struct{} // require explicit field initalization
+	_internal struct{} // nolint:structcheck,unused // require explicit field initialization
 }
 
 // AsSha256Mechanism returns a sasl mechanism that will use 'a' as credentials
@@ -176,7 +176,7 @@ func (s *session) authenticateClient(serverFirstMsg []byte) ([]byte, error) {
 		return nil, fmt.Errorf("unexpected kv %q where nonce expected", kvs[0])
 	}
 	serverNonce := kvs[0][2:]
-	if !bytes.HasPrefix(serverNonce, []byte(s.auth.Nonce)) {
+	if !bytes.HasPrefix(serverNonce, s.auth.Nonce) {
 		return nil, errors.New("server did not reply with nonce beginning with client nonce")
 	}
 

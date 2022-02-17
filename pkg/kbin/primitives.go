@@ -235,7 +235,7 @@ func AppendCompactBytes(dst, b []byte) []byte {
 
 // AppendNullableBytes appends a potentially nil slice to dst prefixed with its
 // int32 length or int32(-1) if nil.
-func AppendNullableBytes(dst []byte, b []byte) []byte {
+func AppendNullableBytes(dst, b []byte) []byte {
 	if b == nil {
 		return AppendInt32(dst, -1)
 	}
@@ -247,7 +247,7 @@ func AppendNullableBytes(dst []byte, b []byte) []byte {
 // the decoded uvarint - 1.
 //
 // For KIP-482.
-func AppendCompactNullableBytes(dst []byte, b []byte) []byte {
+func AppendCompactNullableBytes(dst, b []byte) []byte {
 	if b == nil {
 		return AppendUvarint(dst, 0)
 	}
@@ -263,7 +263,7 @@ func AppendVarintString(dst []byte, s string) []byte {
 
 // AppendVarintBytes appends a slice to dst prefixed with its length encoded as
 // a varint.
-func AppendVarintBytes(dst []byte, b []byte) []byte {
+func AppendVarintBytes(dst, b []byte) []byte {
 	if b == nil {
 		return AppendVarint(dst, -1)
 	}
@@ -423,7 +423,7 @@ func (b *Reader) Varint() int32 {
 		return 0
 	}
 	b.Src = b.Src[n:]
-	return int32(val)
+	return val
 }
 
 // Uvarint returns a uvarint encoded uint32 from the reader.
@@ -479,7 +479,7 @@ func (b *Reader) CompactNullableString() *string {
 	if l < 0 {
 		return nil
 	}
-	s := string(b.Span(int(l)))
+	s := string(b.Span(l))
 	return &s
 }
 
@@ -508,7 +508,7 @@ func (b *Reader) CompactBytes() []byte {
 	if l == -1 { // same as above: -1 should not be allowed here
 		return []byte{}
 	}
-	return b.Span(int(l))
+	return b.Span(l)
 }
 
 // NullableBytes returns a Kafka nullable byte array from the reader, returning
@@ -529,7 +529,7 @@ func (b *Reader) CompactNullableBytes() []byte {
 	if l < 0 {
 		return nil
 	}
-	r := b.Span(int(l))
+	r := b.Span(l)
 	return r
 }
 

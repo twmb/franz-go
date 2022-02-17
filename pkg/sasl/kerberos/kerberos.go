@@ -1,4 +1,4 @@
-// Package scram provides Kerberos v5 sasl authentication.
+// Package kerberos provides Kerberos v5 sasl authentication.
 package kerberos
 
 import (
@@ -62,12 +62,12 @@ type (
 
 func (k) Name() string { return "GSSAPI" }
 func (k k) Authenticate(ctx context.Context, host string) (sasl.Session, []byte, error) {
-	auther, err := k(ctx)
+	kerb, err := k(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
-	c := &wrapped{auther.Client}
-	if !auther.PersistAfterAuth {
+	c := &wrapped{kerb.Client}
+	if !kerb.PersistAfterAuth {
 		runtime.SetFinalizer(c, func(c *wrapped) { c.Destroy() })
 	}
 
@@ -75,7 +75,7 @@ func (k k) Authenticate(ctx context.Context, host string) (sasl.Session, []byte,
 		return nil, nil, err
 	}
 
-	if err = c.AffirmLogin(); err != nil {
+	if err := c.AffirmLogin(); err != nil {
 		return nil, nil, err
 	}
 
@@ -85,7 +85,7 @@ func (k k) Authenticate(ctx context.Context, host string) (sasl.Session, []byte,
 		}
 	}
 
-	ticket, encKey, err := c.GetServiceTicket(auther.Service + "/" + host)
+	ticket, encKey, err := c.GetServiceTicket(kerb.Service + "/" + host)
 	if err != nil {
 		return nil, nil, err
 	}
