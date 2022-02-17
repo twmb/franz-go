@@ -672,11 +672,18 @@ func (g *groupConsumer) setupAssignedAndHeartbeat() error {
 	// is specifically used for this function's return.
 	fetchDone := make(chan struct{})
 	defer func() { <-fetchDone }()
+
+	// If cooperative consuming, we may have to resume fetches. See the
+	// comment on adjustCooperativeFetchOffsets.
+	if g.cooperative {
+		added = g.adjustCooperativeFetchOffsets(added, lost)
+	}
+
 	if len(added) > 0 {
 		go func() {
 			defer close(fetchDone)
 			defer close(fetchErrCh)
-			fetchErrCh <- g.fetchOffsets(ctx, added, lost)
+			fetchErrCh <- g.fetchOffsets(ctx, added)
 		}()
 	} else {
 		close(fetchDone)
@@ -1156,18 +1163,14 @@ func (g *groupConsumer) adjustCooperativeFetchOffsets(added, lost map[string][]i
 
 // fetchOffsets is issued once we join a group to see what the prior commits
 // were for the partitions we were assigned.
-func (g *groupConsumer) fetchOffsets(ctx context.Context, added, lost map[string][]int32) (rerr error) { // we must use "rerr"! see introducing commit
-	// If cooperative consuming, we may have to resume fetches. See the
-	// comment on adjustCooperativeFetchOffsets. If we successfully fetch,
-	// we clear what we were fetching.
-	if g.cooperative {
-		added = g.adjustCooperativeFetchOffsets(added, lost)
-		defer func() {
-			if rerr == nil {
-				g.fetching = nil
-			}
-		}()
-	}
+func (g *groupConsumer) fetchOffsets(ctx context.Context, added map[string][]int32) (rerr error) { // we must use "rerr"! see introducing commit
+	// If we fetch successfully, we can clear the cross-group-cycle
+	// fetching tracking.
+	defer func() {
+		if rerr == nil {
+			g.fetching = nil
+		}
+	}()
 
 	// Our client maps the v0 to v7 format to v8+ when sharding this
 	// request, if we are only requesting one group, as well as maps the
