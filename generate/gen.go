@@ -122,9 +122,10 @@ func (a Array) WriteAppend(l *LineWriter) {
 		}
 	}
 
-	if a.IsVarintArray {
+	switch {
+	case a.IsVarintArray:
 		l.Write("dst = kbin.AppendVarint(dst, int32(len(v)))")
-	} else if a.IsNullableArray {
+	case a.IsNullableArray:
 		if a.NullableVersion > 0 {
 			l.Write("if version > %d {", a.NullableVersion)
 			writeNullable()
@@ -134,7 +135,7 @@ func (a Array) WriteAppend(l *LineWriter) {
 		} else {
 			writeNullable()
 		}
-	} else {
+	default:
 		writeNormal()
 	}
 	l.Write("for i := range v {")
@@ -276,16 +277,17 @@ func (f StructField) writeBeginAndTag(l *LineWriter, tags map[int]StructField) (
 		}
 		tags[f.Tag] = f
 	}
-	if f.MaxVersion > -1 {
+	switch {
+	case f.MaxVersion > -1:
 		l.Write("if version >= %d && version <= %d {", f.MinVersion, f.MaxVersion)
-	} else if f.MinVersion > 0 {
+	case f.MinVersion > 0:
 		l.Write("if version >= %d {", f.MinVersion)
-	} else if f.MinVersion == -1 {
+	case f.MinVersion == -1:
 		if f.Tag < 0 {
 			die("unexpected min version -1 with tag %d on field %s", f.Tag, f.FieldName)
 		}
 		return true
-	} else {
+	default:
 		l.Write("{")
 	}
 	return false
@@ -412,10 +414,11 @@ func (a Array) WriteDecode(l *LineWriter) {
 	l.Write("}")
 
 	l.Write("for i := int32(0); i < l; i++ {")
-	if _, isStruct := a.Inner.(Struct); isStruct {
+	switch a.Inner.(type) {
+	case Struct:
 		l.Write("v := &a[i]")
 		l.Write("v.Default()") // set defaults first
-	} else if _, isArray := a.Inner.(Array); isArray {
+	case Array:
 		// With nested arrays, we declare a new v and introduce scope
 		// so that the next level will not collide with our current "a".
 		l.Write("v := a[i]")

@@ -172,7 +172,7 @@ type (
 )
 
 /////////////////////
-// DEFUALT SETTING //
+// DEFAULT SETTING //
 /////////////////////
 
 type Defaulter interface {
@@ -198,7 +198,7 @@ func (b Bool) SetDefault(s string) Type {
 	return b
 }
 func (b Bool) GetDefault() (interface{}, bool) { return b.Default, b.HasDefault }
-func (b Bool) GetTypeDefault() interface{}     { return false }
+func (Bool) GetTypeDefault() interface{}       { return false }
 
 func (i Int8) SetDefault(s string) Type {
 	v, err := strconv.ParseInt(s, 0, 8)
@@ -210,7 +210,7 @@ func (i Int8) SetDefault(s string) Type {
 	return i
 }
 func (i Int8) GetDefault() (interface{}, bool) { return i.Default, i.HasDefault }
-func (i Int8) GetTypeDefault() interface{}     { return 0 }
+func (Int8) GetTypeDefault() interface{}       { return 0 }
 
 func (i Int16) SetDefault(s string) Type {
 	v, err := strconv.ParseInt(s, 0, 16)
@@ -222,7 +222,7 @@ func (i Int16) SetDefault(s string) Type {
 	return i
 }
 func (i Int16) GetDefault() (interface{}, bool) { return i.Default, i.HasDefault }
-func (i Int16) GetTypeDefault() interface{}     { return 0 }
+func (Int16) GetTypeDefault() interface{}       { return 0 }
 
 func (u Uint16) SetDefault(s string) Type {
 	v, err := strconv.ParseUint(s, 0, 16)
@@ -234,7 +234,7 @@ func (u Uint16) SetDefault(s string) Type {
 	return u
 }
 func (u Uint16) GetDefault() (interface{}, bool) { return u.Default, u.HasDefault }
-func (u Uint16) GetTypeDefault() interface{}     { return 0 }
+func (Uint16) GetTypeDefault() interface{}       { return 0 }
 
 func (i Int32) SetDefault(s string) Type {
 	v, err := strconv.ParseInt(s, 0, 32)
@@ -246,7 +246,7 @@ func (i Int32) SetDefault(s string) Type {
 	return i
 }
 func (i Int32) GetDefault() (interface{}, bool) { return i.Default, i.HasDefault }
-func (i Int32) GetTypeDefault() interface{}     { return 0 }
+func (Int32) GetTypeDefault() interface{}       { return 0 }
 
 func (t Timeout) SetDefault(s string) Type {
 	t.Int32 = t.Int32.SetDefault(s).(Int32)
@@ -258,12 +258,12 @@ func (i Int64) SetDefault(s string) Type {
 	if err != nil {
 		die("invalid int64 default: %v", err)
 	}
-	i.Default = int64(v)
+	i.Default = v
 	i.HasDefault = true
 	return i
 }
 func (i Int64) GetDefault() (interface{}, bool) { return i.Default, i.HasDefault }
-func (i Int64) GetTypeDefault() interface{}     { return 0 }
+func (Int64) GetTypeDefault() interface{}       { return 0 }
 
 func (f Float64) SetDefault(s string) Type {
 	v, err := strconv.ParseFloat(s, 64)
@@ -275,7 +275,7 @@ func (f Float64) SetDefault(s string) Type {
 	return f
 }
 func (f Float64) GetDefault() (interface{}, bool) { return f.Default, f.HasDefault }
-func (f Float64) GetTypeDefault() interface{}     { return 0 }
+func (Float64) GetTypeDefault() interface{}       { return 0 }
 
 func (u Uint32) SetDefault(s string) Type {
 	v, err := strconv.ParseUint(s, 10, 32)
@@ -287,7 +287,7 @@ func (u Uint32) SetDefault(s string) Type {
 	return u
 }
 func (u Uint32) GetDefault() (interface{}, bool) { return u.Default, u.HasDefault }
-func (u Uint32) GetTypeDefault() interface{}     { return 0 }
+func (Uint32) GetTypeDefault() interface{}       { return 0 }
 
 func (i Varint) SetDefault(s string) Type {
 	v, err := strconv.ParseInt(s, 0, 32)
@@ -299,7 +299,7 @@ func (i Varint) SetDefault(s string) Type {
 	return i
 }
 func (i Varint) GetDefault() (interface{}, bool) { return i.Default, i.HasDefault }
-func (i Varint) GetTypeDefault() interface{}     { return 0 }
+func (Varint) GetTypeDefault() interface{}       { return 0 }
 
 func (s NullableString) SetDefault(v string) Type {
 	if v != "null" {
@@ -312,7 +312,7 @@ func (s NullableString) SetDefault(v string) Type {
 func (s NullableString) GetDefault() (interface{}, bool) {
 	return "nil", s.HasDefault // we return the string so it is rendered correctly
 }
-func (s NullableString) GetTypeDefault() interface{} { return "nil" }
+func (NullableString) GetTypeDefault() interface{} { return "nil" }
 
 func (b NullableBytes) SetDefault(v string) Type {
 	if v != "null" {
@@ -325,7 +325,7 @@ func (b NullableBytes) SetDefault(v string) Type {
 func (b NullableBytes) GetDefault() (interface{}, bool) {
 	return "nil", b.HasDefault
 }
-func (b NullableBytes) GetTypeDefault() interface{} { return "nil" }
+func (NullableBytes) GetTypeDefault() interface{} { return "nil" }
 
 func (a Array) SetDefault(v string) Type {
 	if v != "null" {
@@ -338,14 +338,14 @@ func (a Array) SetDefault(v string) Type {
 func (a Array) GetDefault() (interface{}, bool) {
 	return "nil", a.HasDefault
 }
-func (a Array) GetTypeDefault() interface{} { return "nil" }
+func (Array) GetTypeDefault() interface{} { return "nil" }
 
-func (s Struct) SetDefault(v string) Type {
+func (s Struct) SetDefault(string) Type {
 	die("cannot set default on a struct; we already have a default")
 	return s
 }
 
-func (s Struct) GetDefault() (interface{}, bool) {
+func (Struct) GetDefault() (interface{}, bool) {
 	return "", false // no GetDefault
 }
 
@@ -361,9 +361,9 @@ type FlexibleSetter interface {
 
 func (s String) AsFromFlexible() Type         { dup := s; dup.FromFlexible = true; return dup }
 func (s NullableString) AsFromFlexible() Type { dup := s; dup.FromFlexible = true; return dup }
-func (s Bytes) AsFromFlexible() Type          { dup := s; dup.FromFlexible = true; return dup }
-func (s NullableBytes) AsFromFlexible() Type  { dup := s; dup.FromFlexible = true; return dup }
-func (s Array) AsFromFlexible() Type          { dup := s; dup.FromFlexible = true; return dup }
+func (b Bytes) AsFromFlexible() Type          { dup := b; dup.FromFlexible = true; return dup }
+func (b NullableBytes) AsFromFlexible() Type  { dup := b; dup.FromFlexible = true; return dup }
+func (a Array) AsFromFlexible() Type          { dup := a; dup.FromFlexible = true; return dup }
 func (s Struct) AsFromFlexible() Type         { dup := s; dup.FromFlexible = true; return dup }
 
 func (l *LineWriter) Write(line string, args ...interface{}) {
@@ -442,11 +442,12 @@ func main() {
 			}
 
 			if s.ResponseKind != "" {
-				if s.Admin {
+				switch {
+				case s.Admin:
 					s.WriteAdminFunc(l)
-				} else if s.GroupCoordinator {
+				case s.GroupCoordinator:
 					s.WriteGroupCoordinatorFunc(l)
-				} else if s.TxnCoordinator {
+				case s.TxnCoordinator:
 					s.WriteTxnCoordinatorFunc(l)
 				}
 				s.WriteResponseKindFunc(l)

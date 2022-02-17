@@ -66,7 +66,7 @@ func (l *LineScanner) Next() {
 //
 // If a blank line is ever encountered, the struct is done being built and
 // the done status is bubbled up through all recursion levels.
-func (s *Struct) BuildFrom(scanner *LineScanner, key int, level int) (done bool) {
+func (s *Struct) BuildFrom(scanner *LineScanner, key, level int) (done bool) {
 	fieldSpaces := strings.Repeat(" ", 2*(level+1))
 
 	var nextComment string
@@ -94,7 +94,7 @@ func (s *Struct) BuildFrom(scanner *LineScanner, key int, level int) (done bool)
 		}
 
 		// ThrottleMillis is a special field:
-		// - we die if there is preceeding documentation
+		// - we die if there is preceding documentation
 		// - there can only be a minimum version, no max
 		// - no tags
 		if strings.Contains(line, "ThrottleMillis") {
@@ -312,7 +312,7 @@ func (s *Struct) BuildFrom(scanner *LineScanner, key int, level int) (done bool)
 // 4: tag, if not versioned
 var fieldRe = regexp.MustCompile(`^ // (?:v(\d+)(?:\+|\-v(\d+))(?:, tag (\d+))?|tag (\d+))$`)
 
-func parseFieldComment(in string) (int, int, int, error) {
+func parseFieldComment(in string) (min, max, tag int, err error) {
 	match := fieldRe.FindStringSubmatch(in)
 	if len(match) == 0 {
 		return 0, 0, 0, fmt.Errorf("invalid field comment %q", in)
@@ -323,9 +323,9 @@ func parseFieldComment(in string) (int, int, int, error) {
 		return -1, -1, tag, nil
 	}
 
-	min, _ := strconv.Atoi(match[1])
-	max, _ := strconv.Atoi(match[2])
-	tag, _ := strconv.Atoi(match[3])
+	min, _ = strconv.Atoi(match[1])
+	max, _ = strconv.Atoi(match[2])
+	tag, _ = strconv.Atoi(match[3])
 	if match[2] == "" {
 		max = -1
 	} else if max < min {
@@ -644,7 +644,7 @@ func ParseEnums(raw []byte) {
 	enumNameRe := regexp.MustCompile(`^([A-Za-z]+) ([^ ]+) (camelcase )?\($`)
 	// 1: value (number)
 	// 2: word (meaning)
-	enumFieldRe := regexp.MustCompile(`^  (\d+): ([A-Z_a-z]+)$`)
+	enumFieldRe := regexp.MustCompile(`^ {2}(\d+): ([A-Z_a-z]+)$`)
 
 	for scanner.Ok() {
 		line := scanner.Peek()
