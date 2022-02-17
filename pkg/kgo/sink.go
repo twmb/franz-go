@@ -1036,6 +1036,10 @@ type recBuf struct {
 	//
 	// It is always cleared on metadata update.
 	failing bool
+
+	// Only possibly set in PurgeTopics, this is used to fail anything that
+	// was in the process of being buffered.
+	purged bool
 }
 
 // bufferRecord usually buffers a record, but does not if abortOnNewBatch is
@@ -1051,6 +1055,11 @@ func (recBuf *recBuf) bufferRecord(pr promisedRec, abortOnNewBatch bool) bool {
 	// milliseconds to avoid some accumulated rounding error problems
 	// (see Shopify/sarama#1455)
 	pr.Timestamp = time.Now().Truncate(time.Millisecond)
+
+	if recBuf.purged {
+		recBuf.cl.finishRecordPromise(pr, errPurged)
+		return true
+	}
 
 	var (
 		newBatch       = true

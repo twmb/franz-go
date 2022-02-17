@@ -512,6 +512,46 @@ func (cl *Client) setOffsets(setOffsets map[string]map[int32]EpochOffset, log bo
 	}
 }
 
+// This is guaranteed to be called in a blocking metadata fn, which ensures
+// that metadata does not load the tps we are changing. Basically, we ensure
+// everything w.r.t. consuming is at a stand still.
+func (cl *Client) purgeConsumeTopics(topics []string) {
+	c := &cl.consumer
+
+	if c.g == nil && c.d == nil {
+		return
+	}
+
+	purgeAssignments := make(map[string]map[int32]Offset, len(topics))
+	for _, topic := range topics {
+		purgeAssignments[topic] = nil
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// The difference for groups is we need to lock the group and there is
+	// a slight type difference in g.using vs d.using.
+	if c.g != nil {
+		c.g.mu.Lock()
+		defer c.g.mu.Unlock()
+		c.g.tps.purgeTopics(topics)
+		c.assignPartitions(purgeAssignments, assignPurgeMatching, c.g.tps, fmt.Sprintf("purge of %v requested", topics))
+		for _, topic := range topics {
+			delete(c.g.using, topic)
+			delete(c.g.reSeen, topic)
+		}
+		c.g.rejoin("rejoin from PurgeFetchTopics")
+	} else {
+		c.d.tps.purgeTopics(topics)
+		c.assignPartitions(purgeAssignments, assignPurgeMatching, c.d.tps, fmt.Sprintf("purge of %v requested", topics))
+		for _, topic := range topics {
+			delete(c.d.using, topic)
+			delete(c.d.reSeen, topic)
+		}
+	}
+}
+
 // assignHow controls how assignPartitions operates.
 type assignHow int8
 
@@ -532,6 +572,8 @@ const (
 	// meaningless / a dummy offset.
 	assignInvalidateMatching
 
+	assignPurgeMatching
+
 	// The counterpart to assignInvalidateMatching, assignSetMatching
 	// resets all matching partitions to the specified offset / epoch.
 	assignSetMatching
@@ -545,6 +587,8 @@ func (h assignHow) String() string {
 		return "unassigning everything"
 	case assignInvalidateMatching:
 		return "unassigning any currently assigned matching partition that is in the input"
+	case assignPurgeMatching:
+		return "unassigning and purging any partition matching the input topics"
 	case assignSetMatching:
 		return "reassigning any currently assigned matching partition to the input"
 	}
@@ -595,9 +639,7 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how
 	}
 	var session *consumerSession
 	var loadOffsets listOrEpochLoads
-	if how == assignInvalidateAll {
-		tps = nil
-	}
+
 	defer func() {
 		if session == nil { // if nil, we stopped the session
 			session = c.startNewSession(tps)
@@ -633,7 +675,10 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how
 				shouldKeep = false
 			} else { // invalidateMatching or setMatching
 				if assignTopic, ok := assignments[usedCursor.topic]; ok {
-					if assignPart, ok := assignTopic[usedCursor.partition]; ok {
+					if how == assignPurgeMatching { // topic level
+						usedCursor.source.removeCursor(usedCursor)
+						shouldKeep = false
+					} else if assignPart, ok := assignTopic[usedCursor.partition]; ok {
 						if how == assignInvalidateMatching {
 							usedCursor.unset()
 							shouldKeep = false
@@ -669,7 +714,7 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how
 		case assignSetMatching:
 			// We had not yet loaded this partition, so there is
 			// nothing to set, and we keep everything.
-		case assignInvalidateMatching:
+		case assignInvalidateMatching, assignPurgeMatching:
 			loadOffsets.keepFilter(func(t string, p int32) bool {
 				if assignTopic, ok := assignments[t]; ok {
 					if _, ok := assignTopic[p]; ok {
@@ -683,7 +728,7 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how
 
 	// This assignment could contain nothing (for the purposes of
 	// invalidating active fetches), so we only do this if needed.
-	if len(assignments) == 0 || how == assignInvalidateMatching || how == assignSetMatching {
+	if len(assignments) == 0 || how == assignInvalidateMatching || how == assignPurgeMatching || how == assignSetMatching {
 		return
 	}
 

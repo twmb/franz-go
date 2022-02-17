@@ -118,6 +118,9 @@ type groupConsumer struct {
 	// autocommit does not cancel the user's manual commit.
 	blockAuto bool
 
+	// We set this once to manage the group lifecycle once.
+	managing bool
+
 	dying bool // set when closing, read in findNewAssignments
 }
 
@@ -222,7 +225,7 @@ func (c *consumer) initGroup() {
 	// For non-regex topics, we explicitly ensure they exist for loading
 	// metadata. This is of no impact if we are *also* consuming via regex,
 	// but that is no problem.
-	if len(g.cfg.topics) > 0 {
+	if len(g.cfg.topics) > 0 && !g.cfg.regex {
 		topics := make([]string, 0, len(g.cfg.topics))
 		for topic := range g.cfg.topics {
 			topics = append(topics, topic)
@@ -341,7 +344,7 @@ func (g *groupConsumer) leave() (wait func()) {
 	g.mu.Lock()
 	wasDead := g.dying
 	g.dying = true
-	wasManaging := len(g.using) > 0
+	wasManaging := g.managing
 	g.mu.Unlock()
 
 	done := make(chan struct{})
@@ -454,8 +457,7 @@ const (
 //     (1) if revoking lost partitions from a prior session (i.e., after sync),
 //         this revokes the passed in lost
 //     (2) if revoking at the end of a session, this revokes topics that the
-//         consumer is no longer interested in consuming (TODO, actually, only
-//         once we allow subscriptions to change without leaving the group).
+//         consumer is no longer interested in consuming
 //
 // Lastly, for cooperative consumers, this must selectively delete what was
 // lost from the uncommitted map.
@@ -498,11 +500,24 @@ func (g *groupConsumer) revoke(stage revokeStage, lost map[string][]int32, leavi
 
 	case revokeThisSession:
 		// lost is nil for cooperative assigning. Instead, we determine
-		// lost by finding subscriptions we are no longer interested in.
+		// lost by finding subscriptions we are no longer interested
+		// in. This would be from a user's PurgeConsumeTopics call.
 		//
-		// TODO only relevant when we allow reassigning with the same
-		// group to change subscriptions (also we must delete the
-		// unused partitions from nowAssigned).
+		// We just paused metadata, but purging triggers a rebalance
+		// which causes a new metadata request -- in short, this could
+		// be concurrent with a metadata findNewAssignments, so we
+		// lock.
+		g.mu.Lock()
+		for topic, partitions := range g.nowAssigned {
+			if _, exists := g.using[topic]; !exists {
+				if lost == nil {
+					lost = make(map[string][]int32)
+				}
+				lost[topic] = partitions
+				delete(g.nowAssigned, topic)
+			}
+		}
+		g.mu.Unlock()
 	}
 
 	if len(lost) > 0 {
@@ -547,7 +562,9 @@ func (g *groupConsumer) revoke(stage revokeStage, lost map[string][]int32, leavi
 		return
 	}
 
-	defer g.rejoin("cooperative rejoin after revoking what we lost") // cooperative consumers rejoin after they revoking what they lost
+	if stage != revokeThisSession { // cooperative consumers rejoin after they revoking what they lost
+		defer g.rejoin("cooperative rejoin after revoking what we lost from a rebalance")
+	}
 
 	// The block below deletes everything lost from our uncommitted map.
 	// All commits should be **completed** by the time this runs. An async
@@ -1389,12 +1406,12 @@ func (g *groupConsumer) findNewAssignments() {
 		return
 	}
 
-	wasManaging := len(g.using) != 0
 	for topic, change := range toChange {
 		g.using[topic] += change.delta
 	}
 
-	if !wasManaging {
+	if !g.managing {
+		g.managing = true
 		go g.manage()
 		return
 	}

@@ -102,6 +102,60 @@ func (p *producer) init(cl *Client) {
 	})
 }
 
+func (cl *Client) purgeProduceTopics(topics []string) {
+	p := &cl.producer
+
+	p.topicsMu.Lock()
+	defer p.topicsMu.Unlock()
+
+	p.unknownTopicsMu.Lock()
+	for _, topic := range topics {
+		if unknown, exists := p.unknownTopics[topic]; exists {
+			delete(p.unknownTopics, topic)
+			close(unknown.wait)
+			cl.failUnknownTopicRecords(unknown, errPurged)
+		}
+	}
+	p.unknownTopicsMu.Unlock()
+
+	toStore := p.topics.clone()
+	defer p.topics.storeData(toStore)
+
+	for _, topic := range topics {
+		d := toStore.loadTopic(topic)
+		if d == nil {
+			continue
+		}
+		delete(toStore, topic)
+		for _, p := range d.partitions {
+			r := p.records
+
+			// First we set purged, so that anything in the process
+			// of being buffered will immediately fail when it goes
+			// to buffer.
+			r.mu.Lock()
+			r.purged = true
+			r.mu.Unlock()
+
+			// Now we remove from the sink. When we do, the recBuf
+			// is effectively abandonded. Any active produces may
+			// finish before we fail the records; if they finish
+			// after they will no longer belong in the batch, but
+			// they may have been produced. This is the duplicate
+			// risk a user runs when purging.
+			r.sink.removeRecBuf(r)
+
+			// Once abandonded, we now need to fail anything that
+			// was buffered.
+			go func() {
+				r.mu.Lock()
+				defer r.mu.Unlock()
+				r.failAllRecords(errPurged)
+			}()
+		}
+	}
+}
+
 func (p *producer) isAborting() bool { return atomic.LoadInt32(&p.aborting) > 0 }
 
 func noPromise(*Record, error) {}

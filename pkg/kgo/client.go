@@ -241,6 +241,47 @@ func (cl *Client) Ping(ctx context.Context) error {
 	return lastErr
 }
 
+// PurgeTopicsFromClient internally removes all internal information about the
+// input topics.
+//
+// For producing, this clears all knowledge that these topics have ever been
+// produced to. Producing to the topic again may result in out of order
+// sequence number errors, or, if idempotency is disabled and the sequence
+// numbers align, may result in invisibly discarded records at the broker.
+// Purging a topic that was previously produced to may be useful to free up
+// resources if you are producing to many disparate and short lived topic in
+// the lifetime of this client and you do not plan to produce to the topic
+// anymore. You may want to flush buffered records before purging if records
+// for a topic you are purging are currently in flight.
+//
+// For consuming, this removes all concept of the topic from being consumed.
+// This is different from PauseFetchTopics, which literally pauses the fetching
+// of topics but keeps the topic information around for resuming fetching
+// later. Purging a topic that was being consumed can be useful if you know the
+// topic no longer exists, or if you are consuming via regex and know that some
+// previously consumed topics no longer exist, or if you simply do not want to
+// ever consume from a topic again. If you are group consuming, this function
+// will likely cause a rebalance.
+func (cl *Client) PurgeTopicsFromClient(topics ...string) {
+	if len(topics) == 0 {
+		return
+	}
+	sort.Strings(topics)           // for logging in the functions
+	cl.blockingMetadataFn(func() { // make reasoning about concurrency easier
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			cl.purgeProduceTopics(topics)
+		}()
+		go func() {
+			defer wg.Done()
+			cl.purgeConsumeTopics(topics)
+		}()
+		wg.Wait()
+	})
+}
+
 // Parse broker IP/host and port from a string, using the default Kafka port if
 // unspecified. Supported address formats:
 //

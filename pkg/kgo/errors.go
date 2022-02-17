@@ -149,6 +149,9 @@ var (
 	// Returned when trying to produce a record outside of a transaction.
 	errNotInTransaction = errors.New("cannot produce record transactionally if not in a transaction")
 
+	// Returned for all buffered produce records when a user purges topics.
+	errPurged = errors.New("topic purged while buffered")
+
 	//////////////
 	// EXTERNAL //
 	//////////////

@@ -206,6 +206,24 @@ func (t *topicsPartitions) ensureTopics(topics []string) topicsPartitionsData {
 	return current
 }
 
+// Opposite of ensureTopics, this purges the input topics and *does* store.
+func (t *topicsPartitions) purgeTopics(topics []string) {
+	var cloned bool
+	current := t.load()
+	for _, topic := range topics {
+		if _, exists := current[topic]; exists {
+			if !cloned {
+				current = t.clone()
+				cloned = true
+			}
+			delete(current, topic)
+		}
+	}
+	if cloned {
+		t.storeData(current)
+	}
+}
+
 // Updates the topic partitions data atomic value.
 //
 // If this is the first time seeing partitions, we do processing of unknown
