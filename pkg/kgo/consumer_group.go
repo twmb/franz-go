@@ -1362,7 +1362,13 @@ func (g *groupConsumer) findNewAssignments() {
 			continue
 		}
 
-		var useTopic bool
+		// We are iterating over g.tps, which is initialized in the
+		// group.init from the config's topics, but can also be added
+		// to in AddConsumeTopics. By default, we use the topic. If
+		// this is regex based, the config's topics are regular
+		// expressions that we need to evaluate against (and we do not
+		// support adding new regex).
+		useTopic := true
 		if g.cfg.regex {
 			want, seen := g.reSeen[topic]
 			if !seen {
@@ -1378,8 +1384,6 @@ func (g *groupConsumer) findNewAssignments() {
 				g.reSeen[topic] = want
 			}
 			useTopic = want
-		} else {
-			_, useTopic = g.cfg.topics[topic]
 		}
 
 		// We only track using the topic if there are partitions for

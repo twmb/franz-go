@@ -552,6 +552,27 @@ func (cl *Client) purgeConsumeTopics(topics []string) {
 	}
 }
 
+// AddConsumeTopics adds new topics to be consumed. This function is a no-op if
+// the client is configured to consume via regex.
+func (cl *Client) AddConsumeTopics(topics ...string) {
+	c := &cl.consumer
+	if len(topics) == 0 || c.g == nil && c.d == nil || cl.cfg.regex {
+		return
+	}
+
+	// We can do this outside of the metadata loop because we are strictly
+	// adding new topics and forbid regex consuming.
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.g != nil {
+		c.g.tps.storeTopics(topics)
+	} else {
+		c.d.tps.storeTopics(topics)
+	}
+	cl.triggerUpdateMetadataNow("from AddConsumeTopics")
+}
+
 // assignHow controls how assignPartitions operates.
 type assignHow int8
 
