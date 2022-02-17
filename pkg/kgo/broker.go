@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -572,7 +573,7 @@ func (b *broker) connect(ctx context.Context) (net.Conn, error) {
 		}
 	})
 	if err != nil {
-		if !errors.Is(err, ErrClientClosed) {
+		if !errors.Is(err, ErrClientClosed) && !strings.Contains(err.Error(), "operation was canceled") {
 			b.cl.cfg.logger.Log(LogLevelWarn, "unable to open connection to broker", "addr", b.addr, "broker", logID(b.meta.NodeID), "err", err)
 		}
 		return nil, fmt.Errorf("unable to dial: %w", err)
@@ -1381,10 +1382,12 @@ func (cxn *brokerCxn) handleResp(pr promisedResp) {
 		pr.readEnqueue,
 	)
 	if err != nil {
-		if cxn.successes > 0 || len(cxn.b.cl.cfg.sasls) > 0 {
-			cxn.b.cl.cfg.logger.Log(LogLevelDebug, "read from broker errored, killing connection", "addr", cxn.b.addr, "broker", logID(cxn.b.meta.NodeID), "successful_reads", cxn.successes, "err", err)
-		} else if !errors.Is(err, ErrClientClosed) {
-			cxn.b.cl.cfg.logger.Log(LogLevelWarn, "read from broker errored, killing connection after 0 successful responses (is sasl missing?)", "addr", cxn.b.addr, "broker", logID(cxn.b.meta.NodeID), "err", err)
+		if !errors.Is(err, ErrClientClosed) && !errors.Is(err, context.Canceled) {
+			if cxn.successes > 0 || len(cxn.b.cl.cfg.sasls) > 0 {
+				cxn.b.cl.cfg.logger.Log(LogLevelDebug, "read from broker errored, killing connection", "addr", cxn.b.addr, "broker", logID(cxn.b.meta.NodeID), "successful_reads", cxn.successes, "err", err)
+			} else {
+				cxn.b.cl.cfg.logger.Log(LogLevelWarn, "read from broker errored, killing connection after 0 successful responses (is sasl missing?)", "addr", cxn.b.addr, "broker", logID(cxn.b.meta.NodeID), "err", err)
+			}
 		}
 		pr.promise(nil, err)
 		cxn.die()
