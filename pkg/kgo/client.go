@@ -79,10 +79,11 @@ type Client struct {
 	coordinatorsMu sync.Mutex
 	coordinators   map[coordinatorKey]*coordinatorLoad
 
-	updateMetadataCh    chan string
-	updateMetadataNowCh chan string // like above, but with high priority
-	metawait            metawait
-	metadone            chan struct{}
+	updateMetadataCh     chan string
+	updateMetadataNowCh  chan string // like above, but with high priority
+	blockingMetadataFnCh chan func()
+	metawait             metawait
+	metadone             chan struct{}
 }
 
 func (cl *Client) idempotent() bool { return !cl.cfg.disableIdempotency }
@@ -173,9 +174,10 @@ func NewClient(opts ...Opt) (*Client, error) {
 
 		coordinators: make(map[coordinatorKey]*coordinatorLoad),
 
-		updateMetadataCh:    make(chan string, 1),
-		updateMetadataNowCh: make(chan string, 1),
-		metadone:            make(chan struct{}),
+		updateMetadataCh:     make(chan string, 1),
+		updateMetadataNowCh:  make(chan string, 1),
+		blockingMetadataFnCh: make(chan func()),
+		metadone:             make(chan struct{}),
 	}
 
 	compressor, err := newCompressor(cl.cfg.compression...)
@@ -512,7 +514,7 @@ func (cl *Client) updateBrokers(brokers []kmsg.MetadataResponseBroker) {
 func (cl *Client) Close() {
 	cl.LeaveGroup()
 	// After LeaveGroup, consumers cannot consume anymore. LeaveGroup
-	// internally assigns noTopicsPartitions, which uses noConsmerSession,
+	// internally assigns noTopicsPartitions, which uses noConsumerSession,
 	// which prevents loopFetch from starting. Assigning also waits for the
 	// prior session to be complete, meaning loopFetch cannot be running.
 

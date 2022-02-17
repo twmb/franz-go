@@ -95,6 +95,13 @@ func (cl *Client) triggerUpdateMetadataNow(why string) {
 	}
 }
 
+func (cl *Client) blockingMetadataFn(fn func()) {
+	select {
+	case cl.blockingMetadataFnCh <- fn:
+	case <-cl.ctx.Done():
+	}
+}
+
 // updateMetadataLoop updates metadata whenever the update ticker ticks,
 // or whenever deliberately triggered.
 func (cl *Client) updateMetadataLoop() {
@@ -104,6 +111,7 @@ func (cl *Client) updateMetadataLoop() {
 
 	ticker := time.NewTicker(cl.cfg.metadataMaxAge)
 	defer ticker.Stop()
+loop:
 	for {
 		var now bool
 		select {
@@ -116,6 +124,9 @@ func (cl *Client) updateMetadataLoop() {
 		case why := <-cl.updateMetadataNowCh:
 			cl.cfg.logger.Log(LogLevelInfo, "immediate metadata update triggered", "why", why)
 			now = true
+		case fn := <-cl.blockingMetadataFnCh:
+			fn()
+			continue loop
 		}
 
 		var nowTries int
@@ -124,6 +135,7 @@ func (cl *Client) updateMetadataLoop() {
 		if !now {
 			if wait := cl.cfg.metadataMinAge - time.Since(lastAt); wait > 0 {
 				timer := time.NewTimer(wait)
+			prewait:
 				select {
 				case <-cl.ctx.Done():
 					timer.Stop()
@@ -132,6 +144,9 @@ func (cl *Client) updateMetadataLoop() {
 					timer.Stop()
 					cl.cfg.logger.Log(LogLevelInfo, "immediate metadata update triggered, bypassing normal wait", "why", why)
 				case <-timer.C:
+				case fn := <-cl.blockingMetadataFnCh:
+					fn()
+					goto prewait
 				}
 			}
 		}
@@ -146,6 +161,8 @@ func (cl *Client) updateMetadataLoop() {
 			select {
 			case <-cl.updateMetadataCh:
 			case <-cl.updateMetadataNowCh:
+			case fn := <-cl.blockingMetadataFnCh:
+				fn()
 			default:
 				break out
 			}
@@ -169,11 +186,15 @@ func (cl *Client) updateMetadataLoop() {
 					wait = cl.cfg.metadataMinAge
 				}
 				timer := time.NewTimer(wait)
+			quickbackoff:
 				select {
 				case <-cl.ctx.Done():
 					timer.Stop()
 					return
 				case <-timer.C:
+				case fn := <-cl.blockingMetadataFnCh:
+					fn()
+					goto quickbackoff
 				}
 				goto start
 			}
@@ -191,11 +212,15 @@ func (cl *Client) updateMetadataLoop() {
 
 		consecutiveErrors++
 		after := time.NewTimer(cl.cfg.retryBackoff(consecutiveErrors))
+	backoff:
 		select {
 		case <-cl.ctx.Done():
 			after.Stop()
 			return
 		case <-after.C:
+		case fn := <-cl.blockingMetadataFnCh:
+			fn()
+			goto backoff
 		}
 	}
 }
