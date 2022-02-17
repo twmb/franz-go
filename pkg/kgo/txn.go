@@ -608,7 +608,7 @@ func (cl *Client) maybeRecoverProducerID() (necessary, did bool, err error) {
 	}
 
 	kip360 := cl.producer.idVersion >= 3 && (errors.Is(ke, kerr.UnknownProducerID) || errors.Is(ke, kerr.InvalidProducerIDMapping))
-	kip588 := cl.producer.idVersion >= 4 && errors.Is(ke, kerr.InvalidProducerEpoch /* TODO || err == kerr.TransactionTimedOut */)
+	kip588 := cl.producer.idVersion >= 4 && errors.Is(ke, kerr.InvalidProducerEpoch /* || err == kerr.TransactionTimedOut when implemented in Kafka */)
 
 	recoverable := kip360 || kip588
 	if !recoverable {
