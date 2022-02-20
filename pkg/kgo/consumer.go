@@ -515,9 +515,7 @@ func (cl *Client) setOffsets(setOffsets map[string]map[int32]EpochOffset, log bo
 // This is guaranteed to be called in a blocking metadata fn, which ensures
 // that metadata does not load the tps we are changing. Basically, we ensure
 // everything w.r.t. consuming is at a stand still.
-func (cl *Client) purgeConsumeTopics(topics []string) {
-	c := &cl.consumer
-
+func (c *consumer) purgeTopics(topics []string) {
 	if c.g == nil && c.d == nil {
 		return
 	}

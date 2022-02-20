@@ -14,6 +14,8 @@ import (
 )
 
 type producer struct {
+	cl *Client
+
 	topicsMu sync.Mutex // locked to prevent concurrent updates; reads are always atomic
 	topics   *topicsPartitions
 
@@ -70,6 +72,7 @@ type unknownTopicProduces struct {
 }
 
 func (p *producer) init(cl *Client) {
+	p.cl = cl
 	p.topics = newTopicsPartitions()
 	p.unknownTopics = make(map[string]*unknownTopicProduces)
 	p.waitBuffer = make(chan struct{}, 32)
@@ -102,9 +105,7 @@ func (p *producer) init(cl *Client) {
 	})
 }
 
-func (cl *Client) purgeProduceTopics(topics []string) {
-	p := &cl.producer
-
+func (p *producer) purgeTopics(topics []string) {
 	p.topicsMu.Lock()
 	defer p.topicsMu.Unlock()
 
@@ -113,7 +114,7 @@ func (cl *Client) purgeProduceTopics(topics []string) {
 		if unknown, exists := p.unknownTopics[topic]; exists {
 			delete(p.unknownTopics, topic)
 			close(unknown.wait)
-			cl.failUnknownTopicRecords(unknown, errPurged)
+			p.failUnknownTopicRecords(unknown, errPurged)
 		}
 	}
 	p.unknownTopicsMu.Unlock()
@@ -771,7 +772,7 @@ func (cl *Client) waitUnknownTopic(
 	cl.cfg.logger.Log(LogLevelInfo, "new topic metadata wait failed, done retrying, failing all records", "topic", topic, "err", err)
 
 	delete(p.unknownTopics, topic)
-	cl.failUnknownTopicRecords(unknown, err)
+	p.failUnknownTopicRecords(unknown, err)
 }
 
 // Called under the unknown mu, this finishes promises for an unknown topic.
@@ -789,10 +790,10 @@ func (cl *Client) waitUnknownTopic(
 // Leaving a topic buffered even if we failed it as unknown should be of no
 // consequence because clients should not really be producing to loads of
 // unknown topics.
-func (cl *Client) failUnknownTopicRecords(unknown *unknownTopicProduces, err error) {
+func (p *producer) failUnknownTopicRecords(unknown *unknownTopicProduces, err error) {
 	go func() {
 		for _, pr := range unknown.buffered {
-			cl.finishRecordPromise(pr, err)
+			p.cl.finishRecordPromise(pr, err)
 		}
 	}()
 }

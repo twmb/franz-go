@@ -272,11 +272,11 @@ func (cl *Client) PurgeTopicsFromClient(topics ...string) {
 		wg.Add(2)
 		go func() {
 			defer wg.Done()
-			cl.purgeProduceTopics(topics)
+			cl.producer.purgeTopics(topics)
 		}()
 		go func() {
 			defer wg.Done()
-			cl.purgeConsumeTopics(topics)
+			cl.consumer.purgeTopics(topics)
 		}()
 		wg.Wait()
 	})
