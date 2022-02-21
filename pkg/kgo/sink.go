@@ -678,8 +678,10 @@ func (s *sink) handleReqRespBatch(
 	batch.canFailFromLoadErrs = true
 
 	err := kerr.ErrorForCode(errorCode)
+	failUnknown := batch.owner.checkUnknownFailLimit(err)
 	switch {
 	case kerr.IsRetriable(err) &&
+		!failUnknown &&
 		err != kerr.CorruptMessage &&
 		batch.tries < s.cl.cfg.recordRetries:
 
@@ -793,7 +795,7 @@ func (s *sink) handleReqRespBatch(
 				"partition", partition,
 				"err", err,
 				"err_is_retriable", kerr.IsRetriable(err),
-				"max_retries_reached", batch.tries >= s.cl.cfg.recordRetries,
+				"max_retries_reached", !failUnknown && batch.tries >= s.cl.cfg.recordRetries,
 			)
 		}
 		s.cl.finishBatch(batch.recBatch, producerID, producerEpoch, partition, baseOffset, err)
@@ -1018,6 +1020,11 @@ type recBuf struct {
 	// This is read while buffering and modified in a few places.
 	batchDrainIdx int
 
+	// If we fail with UNKNOWN_TOPIC_OR_PARTITION, we bump this and fail
+	// all records once this exceeds the config's unknown topic fail limit.
+	// If we ever see a different error (or no error), this is reset.
+	unknownFailures int64
+
 	// lingering is a timer that avoids starting maybeDrain until expiry,
 	// allowing for more records to be buffered in a single batch.
 	//
@@ -1164,10 +1171,32 @@ func (recBuf *recBuf) bumpRepeatedLoadErr(err error) {
 	recBuf.cl.cfg.logger.Log(LogLevelWarn, "produce partition load error, bumping error count on first stored batch", "broker", logID(recBuf.sink.nodeID), "topic", recBuf.topic, "partition", recBuf.partition, "err", err)
 	batch0 := recBuf.batches[0]
 	batch0.tries++
-	failErr := batch0.maybeFailErr(&recBuf.cl.cfg)
-	if (!recBuf.cl.idempotent() || batch0.canFailFromLoadErrs) && (failErr != nil || !isRetriableBrokerErr(err) && !isDialErr(err) && !kerr.IsRetriable(err)) {
+
+	canFail := !recBuf.cl.idempotent() || batch0.canFailFromLoadErrs
+	if !canFail {
+		return
+	}
+
+	batch0Fail := batch0.maybeFailErr(&recBuf.cl.cfg) != nil // timeout, retries, or aborting
+
+	okNet := !isRetriableBrokerErr(err) && !isDialErr(err) // we can fail if this is *not* a network error
+	retriableKerr := kerr.IsRetriable(err)                 // we fail if this is not a retriable kerr,
+	isUnknownLimit := recBuf.checkUnknownFailLimit(err)    // or if it is, but it is UnknownTopicOrPartition and we are at our limit
+
+	if batch0Fail || okNet && (!retriableKerr || retriableKerr && isUnknownLimit) {
 		recBuf.failAllRecords(err)
 	}
+}
+
+// Called locked, if err is an unknown error, bumps our limit, otherwise resets
+// it. This returns if we have reached or exceeded the limit.
+func (recBuf *recBuf) checkUnknownFailLimit(err error) bool {
+	if errors.Is(err, kerr.UnknownTopicOrPartition) {
+		recBuf.unknownFailures++
+	} else {
+		recBuf.unknownFailures = 0
+	}
+	return recBuf.unknownFailures > recBuf.cl.cfg.maxUnknownFailures
 }
 
 // failAllRecords fails all buffered records in this recBuf.

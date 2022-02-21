@@ -113,6 +113,7 @@ type cfg struct {
 	maxBufferedRecords  int64
 	produceTimeout      time.Duration
 	recordRetries       int64
+	maxUnknownFailures  int64
 	linger              time.Duration
 	recordTimeout       time.Duration
 	manualFlushing      bool
@@ -468,7 +469,8 @@ func defaultCfg() cfg {
 		maxRecordBatchBytes: 1000000, // Kafka max.message.bytes default is 1000012
 		maxBufferedRecords:  10000,
 		produceTimeout:      10 * time.Second,
-		recordRetries:       math.MaxInt64,             // effectively unbounded
+		recordRetries:       math.MaxInt64, // effectively unbounded
+		maxUnknownFailures:  4,
 		partitioner:         StickyKeyPartitioner(nil), // default to how Kafka partitions
 		txnBackoff:          20 * time.Millisecond,
 
@@ -945,13 +947,26 @@ func ProduceRequestTimeout(limit time.Duration) ProducerOpt {
 // easier sequence number ordering internally.
 //
 // If a topic repeatedly fails to load with UNKNOWN_TOPIC_OR_PARTITION, it has
-// a different, internal retry limit. All records for a topic that repeatedly
-// cannot be loaded are failed when the internal limit is hit.
+// a different limit (the UnknownTopicRetries option). All records for a topic
+// that repeatedly cannot be loaded are failed when that limit is hit.
 //
 // This option is different from RequestRetries to allow finer grained control
 // of when to fail when producing records.
 func RecordRetries(n int) ProducerOpt {
 	return producerOpt{func(cfg *cfg) { cfg.recordRetries = int64(n) }}
+}
+
+// UnknownTopicRetries sets the number of times a record can fail with
+// UNKNOWN_TOPIC_OR_PARTITION, overriding the default 4.
+//
+// This is a separate limit from RecordRetries because unknown topic or
+// partition errors should only happen if the topic does not exist. It is
+// pointless for the client to continue producing to a topic that does not
+// exist, and if we repeatedly see that the topic does not exist across
+// multiple metadata queries (which are going to different brokers), then we
+// may as well stop trying and fail the records.
+func UnknownTopicRetries(n int) ProducerOpt {
+	return producerOpt{func(cfg *cfg) { cfg.maxUnknownFailures = int64(n) }}
 }
 
 // StopProducerOnDataLossDetected sets the client to stop producing if data
