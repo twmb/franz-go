@@ -1660,10 +1660,16 @@ func (cl *Client) handleShardedReq(ctx context.Context, req kmsg.Request) ([]Res
 	return shards, sharder.merge
 }
 
-// Sets the error any amount of times to a retriable error, but sets to a
-// non-retriable error once.
+// For sharded errors, we prefer to keep retriable errors rather than
+// non-retriable errors. We keep the non-retriable if everything is
+// non-retriable.
+//
+// We favor retriable because retriable means we used a stale cache value; we
+// clear the stale entries on failure and the retry uses fresh data. The
+// request will be split and remapped, and the non-retriable errors will be
+// encountered again.
 func onRespShardErr(err *error, newKerr error) {
-	if newKerr == nil || *err != nil && !kerr.IsRetriable(*err) {
+	if newKerr == nil || *err != nil && kerr.IsRetriable(*err) {
 		return
 	}
 	*err = newKerr
