@@ -1252,6 +1252,8 @@ func (cxn *brokerCxn) discard() {
 	defer func() {
 		if !firstTimeout { // see below
 			cxn.die()
+		} else {
+			cxn.b.cl.cfg.logger.Log(LogLevelDebug, "produce acks==0 discard goroutine exiting; this broker looks to correctly not reply to ack==0 produce requests", "addr", cxn.b.addr, "broker", logID(cxn.b.meta.NodeID))
 		}
 	}()
 
