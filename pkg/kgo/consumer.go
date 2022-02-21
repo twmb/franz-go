@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"sync"
@@ -50,6 +51,26 @@ func NewOffset() Offset {
 		at:    -1,
 		epoch: -1,
 	}
+}
+
+var noResetOffset = Offset{
+	at:           math.MinInt64,
+	relative:     math.MinInt64,
+	epoch:        math.MinInt32,
+	currentEpoch: math.MinInt32,
+}
+
+// NoResetOffset returns an offset that can be used as a "none" option for the
+// ConsumeResetOffset option. The returned offset should not be modified; if it
+// is, it will no longer be the no reset offset.
+//
+// Using this offset will make it such that if OffsetOutOfRange is ever
+// encountered while consuming, rather than trying to recover, the client will
+// return the error to the user. Since the client does not record, the error
+// will forever be encountered and the partition is effectively in a fatal
+// state.
+func NoResetOffset() Offset {
+	return noResetOffset
 }
 
 // AtStart returns a copy of the calling offset, changing the returned offset

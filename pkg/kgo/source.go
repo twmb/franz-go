@@ -849,18 +849,29 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 				// rare". Rather than falling back to listing offsets,
 				// we stay in a cycle of validating the leader epoch
 				// until the follower has caught up.
+				//
+				// In all cases except case 4, we also have to check if
+				// no reset offset was configured. If so, we ignore
+				// trying to reset and instead keep our failed partition.
+				addList := func(replica int32) {
+					if s.cl.cfg.resetOffset == noResetOffset {
+						keep = true
+					} else {
+						reloadOffsets.addLoad(topic, partition, loadTypeList, offsetLoad{
+							replica: replica,
+							Offset:  s.cl.cfg.resetOffset,
+						})
+					}
+				}
 
-				if s.nodeID == partOffset.from.leader { // non KIP-392 case
-					reloadOffsets.addLoad(topic, partition, loadTypeList, offsetLoad{
-						replica: -1,
-						Offset:  s.cl.cfg.resetOffset,
-					})
-				} else if partOffset.offset < fp.LogStartOffset { // KIP-392 case 3
-					reloadOffsets.addLoad(topic, partition, loadTypeList, offsetLoad{
-						replica: s.nodeID,
-						Offset:  s.cl.cfg.resetOffset,
-					})
-				} else { // partOffset.offset > fp.HighWatermark, KIP-392 case 4
+				switch {
+				case s.nodeID == partOffset.from.leader: // non KIP-392 case
+					addList(-1)
+
+				case partOffset.offset < fp.LogStartOffset: // KIP-392 case 3
+					addList(s.nodeID)
+
+				default: // partOffset.offset > fp.HighWatermark, KIP-392 case 4
 					if kip320 {
 						reloadOffsets.addLoad(topic, partition, loadTypeEpoch, offsetLoad{
 							replica: -1,
@@ -873,10 +884,7 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 						// If the broker does not support offset for leader epoch but
 						// does support follower fetching for some reason, we have to
 						// fallback to listing.
-						reloadOffsets.addLoad(topic, partition, loadTypeList, offsetLoad{
-							replica: -1,
-							Offset:  s.cl.cfg.resetOffset,
-						})
+						addList(-1)
 					}
 				}
 

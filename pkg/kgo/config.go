@@ -1177,6 +1177,9 @@ func MaxConcurrentFetches(n int) ConsumerOpt {
 // offset is before the partition's log start offset or after the high
 // watermark, this will reset to the start offset or end offset, respectively.
 // Relative offsets are only obeyed if they fall within bounds.
+//
+// You can use the NoResetOffset to change the behavior of the client to enter
+// a fatal state when OffsetOutOfRange is encountered.
 func ConsumeResetOffset(offset Offset) ConsumerOpt {
 	return consumerOpt{func(cfg *cfg) { cfg.resetOffset = offset }}
 }
