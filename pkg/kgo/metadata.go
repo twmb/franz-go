@@ -26,6 +26,19 @@ func (m *metawait) signal() {
 	m.c.Broadcast()
 }
 
+// ForceMetadataRefresh triggers the client to update the metadata that is
+// currently used for producing & consuming.
+//
+// Internally, the client already properly triggers metadata updates whenever a
+// partition is discovered to be out of date (leader moved, epoch is old, etc).
+// However, when partitions are added to a topic through a CreatePartitions
+// request, it may take up to MetadataMaxAge for the new partitions to be
+// discovered. In this case, you may want to forcefully refresh metadata
+// manually to discover these new partitions sooner.
+func (cl *Client) ForceMetadataRefresh() {
+	cl.triggerUpdateMetadataNow("from user ForceMetadataRefresh")
+}
+
 // waitmeta returns immediately if metadata was updated within the last second,
 // otherwise this waits for up to wait for a metadata update to complete.
 func (cl *Client) waitmeta(ctx context.Context, wait time.Duration, why string) {
