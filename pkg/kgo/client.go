@@ -84,6 +84,9 @@ type Client struct {
 	blockingMetadataFnCh chan func()
 	metawait             metawait
 	metadone             chan struct{}
+
+	mappedMetaMu sync.Mutex
+	mappedMeta   map[string]mappedMetadataTopic
 }
 
 func (cl *Client) idempotent() bool { return !cl.cfg.disableIdempotency }
@@ -262,6 +265,11 @@ func (cl *Client) Ping(ctx context.Context) error {
 // previously consumed topics no longer exist, or if you simply do not want to
 // ever consume from a topic again. If you are group consuming, this function
 // will likely cause a rebalance.
+//
+// For admin requests, this deletes the topic from the cached metadata map for
+// sharded requests. Metadata for sharded admin requests is only cached for
+// MetadataMinAge anyway, but the map is not cleaned up one the metadata
+// expires. This function ensures the map is purged.
 func (cl *Client) PurgeTopicsFromClient(topics ...string) {
 	if len(topics) == 0 {
 		return
@@ -280,6 +288,11 @@ func (cl *Client) PurgeTopicsFromClient(topics ...string) {
 		}()
 		wg.Wait()
 	})
+	cl.mappedMetaMu.Lock()
+	for _, t := range topics {
+		delete(cl.mappedMeta, t)
+	}
+	cl.mappedMetaMu.Unlock()
 }
 
 // Parse broker IP/host and port from a string, using the default Kafka port if
@@ -1155,6 +1168,18 @@ func (cl *Client) handleAdminReq(ctx context.Context, req kmsg.Request) Response
 		return cl.controller(ctx)
 	})
 
+	// The only request that can break mapped metadata is CreatePartitions,
+	// because our mapping will still be "valid" but behind the scenes,
+	// more partitions exist. If CreatePartitions is going through this
+	// client, we preemptively delete any mapping for these topics.
+	if t, ok := req.(*kmsg.CreatePartitionsRequest); ok {
+		var topics []string
+		for i := range t.Topics {
+			topics = append(topics, t.Topics[i].Topic)
+		}
+		cl.maybeDeleteMappedMetadata(topics...)
+	}
+
 	r.parseRetryErr = func(resp kmsg.Response) error {
 		var code int16
 		switch t := resp.(type) {
@@ -1466,32 +1491,8 @@ type sharder interface {
 
 	// onResp is called on a successful response to investigate the
 	// response and potentially perform cleanup, and potentially returns an
-	// error signifying to retry.
-	//
-	// We consider a request entirely retriable if there is at least one
-	// retriable error, and all other errors are retriable or not an error.
-	// Any non-retriable error makes the request un-retriable.
-	//
-	// Generally we only perform this logic for group requests, because for
-	// non-group requests (topic / partition based requests), we load
-	// metadata immediately before issuing the request and thus we expect
-	// how we originally mapped the request to still be valid. For group
-	// requests, we use cached coordinators, so we may receive not
-	// coordinator errors once, after which we will delete the stale
-	// coordinator and remap.
-	//
-	// The most thorough approach would be to split the original request
-	// into retriable pieces and unretriable pieces, but this gets complicated
-	// fast. We would have to:
-	//   - pair all request partitions to the response partition (maybe the
-	//     response is missing some pieces because of a buggy kafka)
-	//   - split non-retriable pieces of the request & response:
-	//     - any missing response pieces have a request piece that is not
-	//       retriable
-	//     - any matching piece can be retriable if the response piece err
-	//       is retriable
-	//   - return the non-retriable request & response piece, and the retriable
-	//     request piece and err.
+	// error signifying to retry. See onShardRespErr below for more
+	// details.
 	onResp(kmsg.Request, kmsg.Response) error
 
 	// merge is a function that can be used to merge sharded responses into
@@ -1711,19 +1712,92 @@ func firstErrMerger(sresps []ResponseShard, merge func(kresp kmsg.Response)) err
 }
 
 type mappedMetadataTopic struct {
-	topic   kmsg.MetadataResponseTopic
-	mapping map[int32]kmsg.MetadataResponseTopicPartition
+	t    kmsg.MetadataResponseTopic
+	ps   map[int32]kmsg.MetadataResponseTopicPartition
+	when time.Time
+}
+
+// We only delete stale metadata if it is older than the min age or 1s,
+// whichever is smaller. We use 1s even if min age is larger, because we want
+// to encourage larger min age for caching purposes. More obvious would be to
+// *always* evict the cache here, but if we *just* requested metadata, then
+// evicting the cache would cause churn for a topic that genuinely does not
+// exist.
+func (cl *Client) maybeDeleteMappedMetadata(ts ...string) (shouldRetry bool) {
+	if len(ts) == 0 {
+		return
+	}
+
+	min := time.Second
+	if cl.cfg.metadataMinAge < min {
+		min = cl.cfg.metadataMinAge
+	}
+
+	cl.mappedMetaMu.Lock()
+	defer cl.mappedMetaMu.Unlock()
+	for _, t := range ts {
+		tcached, exists := cl.mappedMeta[t]
+		if exists && time.Since(tcached.when) > min {
+			shouldRetry = true
+			delete(cl.mappedMeta, t)
+		}
+	}
+	return shouldRetry
+}
+
+// We only cache for metadata min age. We could theoretically cache forever,
+// but an out of band CreatePartitions can result in our metadata being stale
+// and us never knowing. So, we choose metadata min age. There are only a few
+// requests that are sharded and use metadata, and the one this benefits most
+// is ListOffsets. Likely, ListOffsets for the same topic will be issued back
+// to back, so not caching for so long is ok.
+func (cl *Client) cachedMappedMetadata(ts ...string) (map[string]mappedMetadataTopic, []string) {
+	cl.mappedMetaMu.Lock()
+	defer cl.mappedMetaMu.Unlock()
+	if cl.mappedMeta == nil {
+		return nil, ts
+	}
+	cached := make(map[string]mappedMetadataTopic)
+	needed := ts[:0]
+
+	for _, t := range ts {
+		tcached, exists := cl.mappedMeta[t]
+		if exists && time.Since(tcached.when) < cl.cfg.metadataMinAge {
+			cached[t] = tcached
+		} else {
+			needed = append(needed, t)
+		}
+	}
+	return cached, needed
 }
 
 // fetchMappedMetadata provides a convenience type of working with metadata;
 // this is garbage heavy, so it is only used in one off requests in this
 // package.
-func (cl *Client) fetchMappedMetadata(ctx context.Context, topics []string) (map[string]mappedMetadataTopic, error) {
-	_, meta, err := cl.fetchMetadataForTopics(ctx, false, topics)
+func (cl *Client) fetchMappedMetadata(ctx context.Context, topics []string, useCache bool) (map[string]mappedMetadataTopic, error) {
+	var r map[string]mappedMetadataTopic
+	needed := topics
+	if useCache {
+		r, needed = cl.cachedMappedMetadata(topics...)
+		if len(needed) == 0 {
+			return r, nil
+		}
+	}
+	if r == nil {
+		r = make(map[string]mappedMetadataTopic)
+	}
+
+	_, meta, err := cl.fetchMetadataForTopics(ctx, false, needed)
 	if err != nil {
 		return nil, err
 	}
-	mapping := make(map[string]mappedMetadataTopic)
+
+	cl.mappedMetaMu.Lock()
+	defer cl.mappedMetaMu.Unlock()
+	if cl.mappedMeta == nil {
+		cl.mappedMeta = make(map[string]mappedMetadataTopic)
+	}
+	when := time.Now()
 	for _, topic := range meta.Topics {
 		if topic.Topic == nil {
 			// We do not request with topic IDs, so we should not
@@ -1731,41 +1805,29 @@ func (cl *Client) fetchMappedMetadata(ctx context.Context, topics []string) (map
 			continue
 		}
 		t := mappedMetadataTopic{
-			topic:   topic,
-			mapping: make(map[int32]kmsg.MetadataResponseTopicPartition),
+			t:    topic,
+			ps:   make(map[int32]kmsg.MetadataResponseTopicPartition),
+			when: when,
 		}
-		mapping[*topic.Topic] = t
+		cl.mappedMeta[*topic.Topic] = t
+		r[*topic.Topic] = t
 		for _, partition := range topic.Partitions {
-			t.mapping[partition.Partition] = partition
+			t.ps[partition.Partition] = partition
 		}
 	}
-	return mapping, nil
+	return r, nil
 }
 
-// These errors pair with "collect" below for wording.
-var (
-	errMissingTopic     = errors.New("topic was not returned when looking up its metadata")
-	errMissingPartition = errors.New("partition was not returned when looking up its metadata")
-	errNoLeader         = errors.New("partition has no leader from metadata lookup")
-)
-
-func missingOrCodeT(exists bool, code int16) error {
+func unknownOrCode(exists bool, code int16) error {
 	if !exists {
-		return errMissingTopic
-	}
-	return kerr.ErrorForCode(code)
-}
-
-func missingOrCodeP(exists bool, code int16) error {
-	if !exists {
-		return errMissingPartition
+		return kerr.UnknownTopicOrPartition
 	}
 	return kerr.ErrorForCode(code)
 }
 
 func noLeader(l int32) error {
 	if l < 0 {
-		return errNoLeader
+		return kerr.LeaderNotAvailable
 	}
 	return nil
 }
@@ -1839,27 +1901,6 @@ func (l *unknownErrShards) collect(mkreq, mergeParts interface{}) []issueShard {
 			perTopic.Call([]reflect.Value{req, reflect.ValueOf(topic), partitions})
 		}
 
-		switch {
-		case errors.Is(err, errMissingTopic):
-			if ntopics == 1 {
-				err = errors.New("1 topic was not returned when lookup up its metadata")
-			} else if ntopics > 1 {
-				err = fmt.Errorf("%d topics were not returned when lookup up their metadata", ntopics)
-			}
-		case errors.Is(err, errMissingPartition):
-			if npartitions == 1 {
-				err = errors.New("1 partition was not returned when looking up its metadata")
-			} else if npartitions > 1 {
-				err = fmt.Errorf("%d partitions were not returned when looking up their metadata", npartitions)
-			}
-		case errors.Is(err, errNoLeader):
-			if npartitions == 1 {
-				err = errors.New("1 partition has no leader from a metadata lookup")
-			} else if npartitions > 1 {
-				err = fmt.Errorf("%d partitions have no leader from a metadata lookup", npartitions)
-			}
-		}
-
 		shards = append(shards, issueShard{
 			req: req.Interface().(kmsg.Request),
 			err: err,
@@ -1884,7 +1925,7 @@ func (cl *listOffsetsSharder) shard(ctx context.Context, kreq kmsg.Request) ([]i
 	for _, topic := range req.Topics {
 		need = append(need, topic.Topic)
 	}
-	mapping, err := cl.fetchMappedMetadata(ctx, need)
+	mapping, err := cl.fetchMappedMetadata(ctx, need, true)
 	if err != nil {
 		return nil, false, err
 	}
@@ -1898,13 +1939,13 @@ func (cl *listOffsetsSharder) shard(ctx context.Context, kreq kmsg.Request) ([]i
 	for _, topic := range req.Topics {
 		t := topic.Topic
 		tmapping, exists := mapping[t]
-		if err := missingOrCodeT(exists, tmapping.topic.ErrorCode); err != nil {
+		if err := unknownOrCode(exists, tmapping.t.ErrorCode); err != nil {
 			unknowns.errs(err, t, topic.Partitions)
 			continue
 		}
 		for _, partition := range topic.Partitions {
-			p, exists := tmapping.mapping[partition.Partition]
-			if err := missingOrCodeP(exists, p.ErrorCode); err != nil {
+			p, exists := tmapping.ps[partition.Partition]
+			if err := unknownOrCode(exists, p.ErrorCode); err != nil {
 				unknowns.err(err, t, partition)
 				continue
 			}
@@ -1952,7 +1993,26 @@ func (cl *listOffsetsSharder) shard(ctx context.Context, kreq kmsg.Request) ([]i
 	})...), true, nil // this is reshardable
 }
 
-func (*listOffsetsSharder) onResp(kmsg.Request, kmsg.Response) error { return nil } // topic / partitions: not retried
+func (cl *listOffsetsSharder) onResp(_ kmsg.Request, kresp kmsg.Response) error {
+	resp := kresp.(*kmsg.ListOffsetsResponse)
+	var del []string
+	var retErr error
+	for i := range resp.Topics {
+		t := &resp.Topics[i]
+		for j := range t.Partitions {
+			p := &t.Partitions[j]
+			err := kerr.ErrorForCode(p.ErrorCode)
+			if err == kerr.UnknownTopicOrPartition || err == kerr.NotLeaderForPartition {
+				del = append(del, t.Topic)
+			}
+			onRespShardErr(&retErr, err)
+		}
+	}
+	if cl.maybeDeleteMappedMetadata(del...) {
+		return retErr
+	}
+	return nil
+}
 
 func (*listOffsetsSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
 	merged := kmsg.NewPtrListOffsetsResponse()
@@ -2306,7 +2366,7 @@ func (cl *deleteRecordsSharder) shard(ctx context.Context, kreq kmsg.Request) ([
 	for _, topic := range req.Topics {
 		need = append(need, topic.Topic)
 	}
-	mapping, err := cl.fetchMappedMetadata(ctx, need)
+	mapping, err := cl.fetchMappedMetadata(ctx, need, true)
 	if err != nil {
 		return nil, false, err
 	}
@@ -2317,13 +2377,13 @@ func (cl *deleteRecordsSharder) shard(ctx context.Context, kreq kmsg.Request) ([
 	for _, topic := range req.Topics {
 		t := topic.Topic
 		tmapping, exists := mapping[t]
-		if err := missingOrCodeT(exists, tmapping.topic.ErrorCode); err != nil {
+		if err := unknownOrCode(exists, tmapping.t.ErrorCode); err != nil {
 			unknowns.errs(err, t, topic.Partitions)
 			continue
 		}
 		for _, partition := range topic.Partitions {
-			p, exists := tmapping.mapping[partition.Partition]
-			if err := missingOrCodeP(exists, p.ErrorCode); err != nil {
+			p, exists := tmapping.ps[partition.Partition]
+			if err := unknownOrCode(exists, p.ErrorCode); err != nil {
 				unknowns.err(err, t, partition)
 				continue
 			}
@@ -2370,7 +2430,26 @@ func (cl *deleteRecordsSharder) shard(ctx context.Context, kreq kmsg.Request) ([
 	})...), true, nil // this is reshardable
 }
 
-func (*deleteRecordsSharder) onResp(kmsg.Request, kmsg.Response) error { return nil } // topic / partitions: not retried
+func (cl *deleteRecordsSharder) onResp(_ kmsg.Request, kresp kmsg.Response) error {
+	resp := kresp.(*kmsg.DeleteRecordsResponse)
+	var del []string
+	var retErr error
+	for i := range resp.Topics {
+		t := &resp.Topics[i]
+		for j := range t.Partitions {
+			p := &t.Partitions[j]
+			err := kerr.ErrorForCode(p.ErrorCode)
+			if err == kerr.UnknownTopicOrPartition || err == kerr.NotLeaderForPartition {
+				del = append(del, t.Topic)
+			}
+			onRespShardErr(&retErr, err)
+		}
+	}
+	if cl.maybeDeleteMappedMetadata(del...) {
+		return retErr
+	}
+	return nil
+}
 
 func (*deleteRecordsSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
 	merged := kmsg.NewPtrDeleteRecordsResponse()
@@ -2404,7 +2483,7 @@ func (cl *offsetForLeaderEpochSharder) shard(ctx context.Context, kreq kmsg.Requ
 	for _, topic := range req.Topics {
 		need = append(need, topic.Topic)
 	}
-	mapping, err := cl.fetchMappedMetadata(ctx, need)
+	mapping, err := cl.fetchMappedMetadata(ctx, need, true)
 	if err != nil {
 		return nil, false, err
 	}
@@ -2415,13 +2494,13 @@ func (cl *offsetForLeaderEpochSharder) shard(ctx context.Context, kreq kmsg.Requ
 	for _, topic := range req.Topics {
 		t := topic.Topic
 		tmapping, exists := mapping[t]
-		if err := missingOrCodeT(exists, tmapping.topic.ErrorCode); err != nil {
+		if err := unknownOrCode(exists, tmapping.t.ErrorCode); err != nil {
 			unknowns.errs(err, t, topic.Partitions)
 			continue
 		}
 		for _, partition := range topic.Partitions {
-			p, exists := tmapping.mapping[partition.Partition]
-			if err := missingOrCodeP(exists, p.ErrorCode); err != nil {
+			p, exists := tmapping.ps[partition.Partition]
+			if err := unknownOrCode(exists, p.ErrorCode); err != nil {
 				unknowns.err(err, t, partition)
 				continue
 			}
@@ -2468,7 +2547,26 @@ func (cl *offsetForLeaderEpochSharder) shard(ctx context.Context, kreq kmsg.Requ
 	})...), true, nil // this is reshardable
 }
 
-func (*offsetForLeaderEpochSharder) onResp(kmsg.Request, kmsg.Response) error { return nil } // topic / partitions: not retried
+func (cl *offsetForLeaderEpochSharder) onResp(_ kmsg.Request, kresp kmsg.Response) error {
+	resp := kresp.(*kmsg.OffsetForLeaderEpochResponse)
+	var del []string
+	var retErr error
+	for i := range resp.Topics {
+		t := &resp.Topics[i]
+		for j := range t.Partitions {
+			p := &t.Partitions[j]
+			err := kerr.ErrorForCode(p.ErrorCode)
+			if err == kerr.UnknownTopicOrPartition || err == kerr.NotLeaderForPartition {
+				del = append(del, t.Topic)
+			}
+			onRespShardErr(&retErr, err)
+		}
+	}
+	if cl.maybeDeleteMappedMetadata(del...) {
+		return retErr
+	}
+	return nil
+}
 
 func (*offsetForLeaderEpochSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
 	merged := kmsg.NewPtrOffsetForLeaderEpochResponse()
@@ -2545,7 +2643,7 @@ func (*describeConfigsSharder) shard(_ context.Context, kreq kmsg.Request) ([]is
 	return issues, false, nil // this is not reshardable, but the any block can go anywhere
 }
 
-func (*describeConfigsSharder) onResp(kmsg.Request, kmsg.Response) error { return nil } // configs: nothing retriable
+func (*describeConfigsSharder) onResp(kmsg.Request, kmsg.Response) error { return nil } // configs: topics not mapped, nothing retriable
 
 func (*describeConfigsSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
 	merged := kmsg.NewPtrDescribeConfigsResponse()
@@ -2608,7 +2706,7 @@ func (*alterConfigsSharder) shard(_ context.Context, kreq kmsg.Request) ([]issue
 	return issues, false, nil // this is not reshardable, but the any block can go anywhere
 }
 
-func (*alterConfigsSharder) onResp(kmsg.Request, kmsg.Response) error { return nil } // configs: nothing retriable
+func (*alterConfigsSharder) onResp(kmsg.Request, kmsg.Response) error { return nil } // configs: topics not mapped, nothing retriable
 
 func (*alterConfigsSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
 	merged := kmsg.NewPtrAlterConfigsResponse()
@@ -2636,7 +2734,7 @@ func (cl *alterReplicaLogDirsSharder) shard(ctx context.Context, kreq kmsg.Reque
 	for topic := range needMap {
 		need = append(need, topic)
 	}
-	mapping, err := cl.fetchMappedMetadata(ctx, need)
+	mapping, err := cl.fetchMappedMetadata(ctx, need, false) // bypass cache, tricky to manage response
 	if err != nil {
 		return nil, false, err
 	}
@@ -2676,15 +2774,15 @@ func (cl *alterReplicaLogDirsSharder) shard(ctx context.Context, kreq kmsg.Reque
 		for _, topic := range dir.Topics {
 			t := topic.Topic
 			tmapping, exists := mapping[t]
-			if err := missingOrCodeT(exists, tmapping.topic.ErrorCode); err != nil {
+			if err := unknownOrCode(exists, tmapping.t.ErrorCode); err != nil {
 				for _, partition := range topic.Partitions {
 					addUnknown(err, dir.Dir, t, partition)
 				}
 				continue
 			}
 			for _, partition := range topic.Partitions {
-				p, exists := tmapping.mapping[partition]
-				if err := missingOrCodeP(exists, p.ErrorCode); err != nil {
+				p, exists := tmapping.ps[partition]
+				if err := unknownOrCode(exists, p.ErrorCode); err != nil {
 					addUnknown(err, dir.Dir, t, partition)
 					continue
 				}
@@ -2784,7 +2882,7 @@ func (cl *describeLogDirsSharder) shard(ctx context.Context, kreq kmsg.Request) 
 	for _, topic := range req.Topics {
 		need = append(need, topic.Topic)
 	}
-	mapping, err := cl.fetchMappedMetadata(ctx, need)
+	mapping, err := cl.fetchMappedMetadata(ctx, need, false) // bypass cache, tricky to manage response
 	if err != nil {
 		return nil, false, err
 	}
@@ -2795,13 +2893,13 @@ func (cl *describeLogDirsSharder) shard(ctx context.Context, kreq kmsg.Request) 
 	for _, topic := range req.Topics {
 		t := topic.Topic
 		tmapping, exists := mapping[t]
-		if err := missingOrCodeT(exists, tmapping.topic.ErrorCode); err != nil {
+		if err := unknownOrCode(exists, tmapping.t.ErrorCode); err != nil {
 			unknowns.errs(err, t, topic.Partitions)
 			continue
 		}
 		for _, partition := range topic.Partitions {
-			p, exists := tmapping.mapping[partition]
-			if err := missingOrCodeP(exists, p.ErrorCode); err != nil {
+			p, exists := tmapping.ps[partition]
+			if err := unknownOrCode(exists, p.ErrorCode); err != nil {
 				unknowns.err(err, t, partition)
 				continue
 			}
@@ -3019,7 +3117,7 @@ func (*incrementalAlterConfigsSharder) shard(_ context.Context, kreq kmsg.Reques
 	return issues, false, nil // this is not reshardable, but the any block can go anywhere
 }
 
-func (*incrementalAlterConfigsSharder) onResp(kmsg.Request, kmsg.Response) error { return nil } // config: nothing retriable
+func (*incrementalAlterConfigsSharder) onResp(kmsg.Request, kmsg.Response) error { return nil } // configs: topics not mapped, nothing retriable
 
 func (*incrementalAlterConfigsSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
 	merged := kmsg.NewPtrIncrementalAlterConfigsResponse()
@@ -3041,7 +3139,7 @@ func (cl *describeProducersSharder) shard(ctx context.Context, kreq kmsg.Request
 	for _, topic := range req.Topics {
 		need = append(need, topic.Topic)
 	}
-	mapping, err := cl.fetchMappedMetadata(ctx, need)
+	mapping, err := cl.fetchMappedMetadata(ctx, need, true)
 	if err != nil {
 		return nil, false, err
 	}
@@ -3052,13 +3150,13 @@ func (cl *describeProducersSharder) shard(ctx context.Context, kreq kmsg.Request
 	for _, topic := range req.Topics {
 		t := topic.Topic
 		tmapping, exists := mapping[t]
-		if err := missingOrCodeT(exists, tmapping.topic.ErrorCode); err != nil {
+		if err := unknownOrCode(exists, tmapping.t.ErrorCode); err != nil {
 			unknowns.errs(err, t, topic.Partitions)
 			continue
 		}
 		for _, partition := range topic.Partitions {
-			p, exists := tmapping.mapping[partition]
-			if err := missingOrCodeP(exists, p.ErrorCode); err != nil {
+			p, exists := tmapping.ps[partition]
+			if err := unknownOrCode(exists, p.ErrorCode); err != nil {
 				unknowns.err(err, t, partition)
 				continue
 			}
@@ -3099,7 +3197,26 @@ func (cl *describeProducersSharder) shard(ctx context.Context, kreq kmsg.Request
 	})...), true, nil // this is reshardable
 }
 
-func (*describeProducersSharder) onResp(kmsg.Request, kmsg.Response) error { return nil } // topic / partitions: not retriable
+func (cl *describeProducersSharder) onResp(_ kmsg.Request, kresp kmsg.Response) error {
+	resp := kresp.(*kmsg.DescribeProducersResponse)
+	var del []string
+	var retErr error
+	for i := range resp.Topics {
+		t := &resp.Topics[i]
+		for j := range t.Partitions {
+			p := &t.Partitions[j]
+			err := kerr.ErrorForCode(p.ErrorCode)
+			if err == kerr.UnknownTopicOrPartition || err == kerr.NotLeaderForPartition {
+				del = append(del, t.Topic)
+			}
+			onRespShardErr(&retErr, err)
+		}
+	}
+	if cl.maybeDeleteMappedMetadata(del...) {
+		return retErr
+	}
+	return nil
+}
 
 func (*describeProducersSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
 	merged := kmsg.NewPtrDescribeProducersResponse()
