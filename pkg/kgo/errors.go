@@ -164,9 +164,10 @@ var (
 	// unable to be produced after RecordRetries attempts.
 	ErrRecordRetries = errors.New("record failed after being retried too many times")
 
-	// ErrMaxBuffered is returned when producing with manual flushing
-	// enabled and the maximum amount of records are buffered.
-	ErrMaxBuffered = errors.New("manual flushing is enabled and the maximum amount of records are buffered, cannot buffer more")
+	// ErrMaxBuffered is returned when the maximum amount of records are
+	// buffered and either manual flushing is enabled or you are using
+	// TryProduce.
+	ErrMaxBuffered = errors.New("the maximum amount of records are buffered, cannot buffer more")
 
 	// ErrAborting is returned for all buffered records while
 	// AbortBufferedRecords is being called.

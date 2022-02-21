@@ -154,7 +154,7 @@ func (s *GroupTransactSession) Client() *Client {
 }
 
 // Close is a wrapper around Client.Close, with the exact same semantics.
-// Please refer to that function's documentation.
+// Refer to that function's documentation.
 //
 // This function must be called to leave the group before shutting down.
 func (s *GroupTransactSession) Close() {
@@ -162,7 +162,7 @@ func (s *GroupTransactSession) Close() {
 }
 
 // PollFetches is a wrapper around Client.PollFetches, with the exact same
-// semantics. Please refer to that function's documentation.
+// semantics. Refer to that function's documentation.
 //
 // It is invalid to call PollFetches concurrently with Begin or End.
 func (s *GroupTransactSession) PollFetches(ctx context.Context) Fetches {
@@ -170,7 +170,7 @@ func (s *GroupTransactSession) PollFetches(ctx context.Context) Fetches {
 }
 
 // PollRecords is a wrapper around Client.PollRecords, with the exact same
-// semantics. Please refer to that function's documentation.
+// semantics. Refer to that function's documentation.
 //
 // It is invalid to call PollRecords concurrently with Begin or End.
 func (s *GroupTransactSession) PollRecords(ctx context.Context, maxPollRecords int) Fetches {
@@ -178,7 +178,7 @@ func (s *GroupTransactSession) PollRecords(ctx context.Context, maxPollRecords i
 }
 
 // ProduceSync is a wrapper around Client.ProduceSync, with the exact same
-// semantics. Please refer to that function's documentation.
+// semantics. Refer to that function's documentation.
 //
 // It is invalid to call ProduceSync concurrently with Begin or End.
 func (s *GroupTransactSession) ProduceSync(ctx context.Context, rs ...*Record) ProduceResults {
@@ -186,11 +186,19 @@ func (s *GroupTransactSession) ProduceSync(ctx context.Context, rs ...*Record) P
 }
 
 // Produce is a wrapper around Client.Produce, with the exact same semantics.
-// Please refer to that function's documentation.
+// Refer to that function's documentation.
 //
 // It is invalid to call Produce concurrently with Begin or End.
 func (s *GroupTransactSession) Produce(ctx context.Context, r *Record, promise func(*Record, error)) {
 	s.cl.Produce(ctx, r, promise)
+}
+
+// TryProduce is a wrapper around Client.TryProduce, with the exact same
+// semantics. Refer to that function's documentation.
+//
+// It is invalid to call TryProduce concurrently with Begin or End.
+func (s *GroupTransactSession) TryProduce(ctx context.Context, r *Record, promise func(*Record, error)) {
+	s.cl.TryProduce(ctx, r, promise)
 }
 
 // Begin begins a transaction, returning an error if the client has no

@@ -195,8 +195,8 @@ func (rs ProduceResults) First() (*Record, error) {
 	return rs[0].Record, rs[0].Err
 }
 
-// ProduceSync is a synchronous produce. Please see the Produce documentation
-// for an in depth description of how producing works.
+// ProduceSync is a synchronous produce. See the Produce documentation for an
+// in depth description of how producing works.
 //
 // This function produces all records in one range loop and waits for them all
 // to be produced before returning.
@@ -282,6 +282,17 @@ func (f *FirstErrPromise) Err() error {
 	return f.err
 }
 
+// TryProduce is similar to Produce, but rather than blocking if the client
+// currently has MaxBufferedRecords buffered, this fails immediately with
+// ErrMaxBuffered. See the Produce documentation for more details.
+func (cl *Client) TryProduce(
+	ctx context.Context,
+	r *Record,
+	promise func(*Record, error),
+) {
+	cl.produce(ctx, r, promise, false)
+}
+
 // Produce sends a Kafka record to the topic in the record's Topic field,
 // calling an optional `promise` with the record and a potential error when
 // Kafka replies. For a synchronous produce, see ProduceSync. Records are
@@ -298,9 +309,9 @@ func (f *FirstErrPromise) Err() error {
 //
 // If the client is configured to automatically flush the client currently has
 // the configured maximum amount of records buffered, Produce will block. The
-// context can be used to cancel waiting while some records flush. In contrast,
-// if flushing is configured, the record will be failed immediately with
-// ErrMaxBuffered.
+// context can be used to cancel waiting while records flush to make space. In
+// contrast, if flushing is configured, the record will be failed immediately
+// with ErrMaxBuffered (this same behavior can be had with TryProduce).
 //
 // Once a record is buffered into a batch, it can be canceled in three ways:
 // canceling the context, the record timing out, or hitting the maximum
@@ -314,6 +325,15 @@ func (cl *Client) Produce(
 	ctx context.Context,
 	r *Record,
 	promise func(*Record, error),
+) {
+	cl.produce(ctx, r, promise, true)
+}
+
+func (cl *Client) produce(
+	ctx context.Context,
+	r *Record,
+	promise func(*Record, error),
+	block bool,
 ) {
 	if ctx == nil {
 		ctx = context.Background()
@@ -364,7 +384,7 @@ func (cl *Client) Produce(
 			go func() { <-p.waitBuffer }()
 			go cl.finishRecordPromise(promisedRec{ctx, promise, r}, err)
 		}
-		if cl.cfg.manualFlushing {
+		if !block || cl.cfg.manualFlushing {
 			drainBuffered(ErrMaxBuffered)
 			return
 		}
