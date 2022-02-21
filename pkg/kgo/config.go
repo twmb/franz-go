@@ -1165,9 +1165,13 @@ func MaxConcurrentFetches(n int) ConsumerOpt {
 // ConsumeResetOffset sets the offset to restart consuming from when a
 // partition has no commits (for groups) or when beginning to consume a
 // partition (for direct partition consuming), or when a fetch sees an
-// OffsetOutOfRange error, overriding the default ConsumeStartOffset.
+// OffsetOutOfRange error, overriding the default NewOffset().AtStart(), i.e.,
+// the earliest offset.
 //
-// Defaults to: NewOffset().AtStart() / Earliest Offset
+// If you are choosing an exact offset to reset to (NewOffset.At(#)), if the
+// offset is before the partition's log start offset or after the high
+// watermark, this will reset to the start offset or end offset, respectively.
+// Relative offsets are only obeyed if they fall within bounds.
 func ConsumeResetOffset(offset Offset) ConsumerOpt {
 	return consumerOpt{func(cfg *cfg) { cfg.resetOffset = offset }}
 }
