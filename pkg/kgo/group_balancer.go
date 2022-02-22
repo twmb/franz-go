@@ -291,8 +291,17 @@ func (g *groupConsumer) findBalancer(from, proto string) (GroupBalancer, error) 
 }
 
 // balanceGroup returns a balancePlan from a join group response.
-func (g *groupConsumer) balanceGroup(proto string, members []kmsg.JoinGroupResponseMember) ([]kmsg.SyncGroupRequestGroupAssignment, error) {
-	g.cl.cfg.logger.Log(LogLevelInfo, "balancing group as leader")
+//
+// If the group has topics this leader does not want to consume, this also
+// returns all topics and partitions; the leader will then periodically do its
+// own metadata update to see if partition counts have changed for these random
+// topics.
+func (g *groupConsumer) balanceGroup(proto string, members []kmsg.JoinGroupResponseMember, skipBalance bool) ([]kmsg.SyncGroupRequestGroupAssignment, error) {
+	if skipBalance {
+		g.cl.cfg.logger.Log(LogLevelInfo, "parsing group balance as leader but not assigning (KIP-814)")
+	} else {
+		g.cl.cfg.logger.Log(LogLevelInfo, "balancing group as leader")
+	}
 
 	b, err := g.findBalancer("balance group", proto)
 	if err != nil {
@@ -318,6 +327,23 @@ func (g *groupConsumer) balanceGroup(proto string, members []kmsg.JoinGroupRespo
 		topicPartitionCount[topic] = int32(len(data.load().partitions))
 	}
 
+	// If our consumer metadata does not contain all topics, the group is
+	// expressing interests in topics we are not consuming. Perhaps we have
+	// those topics saved in our external topics map.
+	if needMeta {
+		g.loadExternal().fn(func(m map[string]int32) {
+			needMeta = false
+			for topic := range topics {
+				partitions, exists := m[topic]
+				if !exists {
+					needMeta = true
+					continue
+				}
+				topicPartitionCount[topic] = partitions
+			}
+		})
+	}
+
 	if needMeta {
 		g.cl.cfg.logger.Log(LogLevelInfo, "group members indicated interest in topics the leader is not assigned, fetching metadata for all group topics")
 		var metaTopics []string
@@ -341,6 +367,8 @@ func (g *groupConsumer) balanceGroup(proto string, members []kmsg.JoinGroupRespo
 			}
 			topicPartitionCount[*t.Topic] = int32(len(t.Partitions))
 		}
+
+		g.initExternal(topicPartitionCount)
 	}
 
 	// If the returned balancer is a ConsumerBalancer (which it likely
@@ -366,6 +394,15 @@ func (g *groupConsumer) balanceGroup(proto string, members []kmsg.JoinGroupRespo
 		})
 	} else {
 		g.cl.cfg.logger.Log(LogLevelInfo, "unable to log information about group member interests: the user has defined a custom balancer (not a *ConsumerBalancer)")
+	}
+
+	// KIP-814: we are leader and we know what the entire group is
+	// consuming. Crucially, we parsed topics that we are potentially not
+	// interested in and are now tracking them for metadata updates. We
+	// have logged the current interests, we do not need to actually
+	// balance.
+	if skipBalance {
+		return nil, nil
 	}
 
 	// If the returned IntoSyncAssignment is a BalancePlan, which it likely

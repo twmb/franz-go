@@ -251,6 +251,7 @@ func (cl *Client) updateMetadata() (retryWhy multiUpdateWhy, err error) {
 	var (
 		tpsProducerLoad = cl.producer.topics.load()
 		tpsConsumer     *topicsPartitions
+		groupExternal   *groupExternal
 		all             = cl.cfg.regex
 		reqTopics       []string
 	)
@@ -260,6 +261,7 @@ func (cl *Client) updateMetadata() (retryWhy multiUpdateWhy, err error) {
 		tpsConsumer = c.d.tps
 	case c.g != nil:
 		tpsConsumer = c.g.tps
+		groupExternal = c.g.loadExternal()
 	}
 
 	if !all {
@@ -272,6 +274,9 @@ func (cl *Client) updateMetadata() (retryWhy multiUpdateWhy, err error) {
 				reqTopicsSet[topic] = struct{}{}
 			}
 		}
+		groupExternal.eachTopic(func(t string) {
+			reqTopicsSet[t] = struct{}{}
+		})
 		reqTopics = make([]string, 0, len(reqTopicsSet))
 		for topic := range reqTopicsSet {
 			reqTopics = append(reqTopics, topic)
@@ -286,6 +291,7 @@ func (cl *Client) updateMetadata() (retryWhy multiUpdateWhy, err error) {
 		)
 		return nil, err
 	}
+	groupExternal.updateLatest(latest)
 
 	// If we are consuming with regex and fetched all topics, the metadata
 	// may have returned topics the consumer is not yet tracking. We ensure

@@ -9,6 +9,14 @@ import (
 	"github.com/twmb/franz-go/pkg/kerr"
 )
 
+func dupmsi32(m map[string]int32) map[string]int32 {
+	d := make(map[string]int32, len(m))
+	for t, ps := range m {
+		d[t] = ps
+	}
+	return d
+}
+
 type tpsFmt map[string][]int32
 
 func (f tpsFmt) String() string {

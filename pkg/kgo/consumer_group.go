@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kerr"
@@ -72,6 +73,12 @@ type groupConsumer struct {
 	// offsets, and then set to false immediately after before calling
 	// EndTransaction.
 	offsetsAddedToTxn bool
+
+	// If we are leader, then other members may express interest to consume
+	// topics that we are not interested in consuming. We track the entire
+	// group's topics in external, and our fetchMetadata loop uses this.
+	// We store this as a pointer for address comparisons.
+	external atomic.Value // *groupExternal
 
 	//////////////
 	// mu block //
@@ -310,6 +317,7 @@ func (g *groupConsumer) manage() {
 			g.fetching = nil
 
 			g.leader.set(false)
+			g.resetExternal()
 		}
 
 		if errors.Is(err, context.Canceled) { // context was canceled, quit now
@@ -813,7 +821,6 @@ func (g *groupConsumer) heartbeat(fetchErrCh <-chan error, s *assignRevokeSessio
 		// revoke, we wait for it to complete regardless of any future
 		// error.
 		if didMetadone && didRevoke {
-			g.cfg.logger.Log(LogLevelInfo, "heartbeat loop complete", "group", g.cfg.group, "err", lastErr)
 			return lastErr
 		}
 
@@ -905,6 +912,15 @@ func (g *groupConsumer) rejoin(why string) {
 func (g *groupConsumer) joinAndSync() error {
 	g.cfg.logger.Log(LogLevelInfo, "joining group", "group", g.cfg.group)
 	g.leader.set(false)
+	g.getAndResetExternalRejoin()
+	defer func() {
+		// If we are not leader, we clear any tracking of external
+		// topics from when we were previously leader, since tracking
+		// these is just a waste.
+		if !g.leader.get() {
+			g.resetExternal()
+		}
+	}()
 
 start:
 	select {
@@ -1022,30 +1038,15 @@ func (g *groupConsumer) handleJoinResp(resp *kmsg.JoinGroupResponse) (restart bo
 	leader := resp.LeaderID == resp.MemberID
 	if leader {
 		g.leader.set(true)
-
-		if resp.SkipAssignment {
-			g.cfg.logger.Log(LogLevelInfo, "joined, skipping assignment even though leader (KIP-814)",
-				"group", g.cfg.group,
-				"member_id", g.memberID,
-				"instance_id", g.cfg.instanceID,
-				"generation", g.generation,
-				"balance_protocol", protocol,
-				"leader", true,
-			)
-		} else {
-			g.cfg.logger.Log(LogLevelInfo, "joined, balancing group",
-				"group", g.cfg.group,
-				"member_id", g.memberID,
-				"instance_id", g.cfg.instanceID,
-				"generation", g.generation,
-				"balance_protocol", protocol,
-				"leader", true,
-			)
-			plan, err = g.balanceGroup(protocol, resp.Members)
-			if err != nil {
-				return
-			}
-		}
+		g.cfg.logger.Log(LogLevelInfo, "joined, balancing group",
+			"group", g.cfg.group,
+			"member_id", g.memberID,
+			"instance_id", g.cfg.instanceID,
+			"generation", g.generation,
+			"balance_protocol", protocol,
+			"leader", true,
+		)
+		plan, err = g.balanceGroup(protocol, resp.Members, resp.SkipAssignment)
 	} else {
 		g.cfg.logger.Log(LogLevelInfo, "joined",
 			"group", g.cfg.group,
@@ -1056,6 +1057,106 @@ func (g *groupConsumer) handleJoinResp(resp *kmsg.JoinGroupResponse) (restart bo
 		)
 	}
 	return
+}
+
+// If other group members consume topics we are not interested in, we track the
+// entire group's topics in this groupExternal type. On metadata update, we see
+// if any partitions for any of these topics have changed, and if so, we as
+// leader rejoin the group.
+//
+// Our external topics are cleared whenever we join and are not leader. We keep
+// our previous external topics if we are leader: on the first balance as
+// leader, we request metadata for all topics, then on followup balances, we
+// already have that metadata and do not need to reload it when balancing.
+//
+// Whenever metadata updates, we detect if a rejoin is needed and always reset
+// the rejoin status.
+type groupExternal struct {
+	tps    atomic.Value // map[string]int32
+	rejoin atomicBool
+}
+
+func (g *groupConsumer) loadExternal() *groupExternal {
+	e := g.external.Load()
+	if e != nil {
+		return e.(*groupExternal)
+	}
+	return nil
+}
+
+// We reset our external topics whenever join&sync loop errors, or when we join
+// and are not leader.
+func (g *groupConsumer) resetExternal() {
+	g.external.Store((*groupExternal)(nil))
+}
+
+// If this is our first join as leader, or if a new member joined with new
+// topics we were not tracking, we re-initialize external with the all-topics
+// metadata refresh.
+func (g *groupConsumer) initExternal(current map[string]int32) {
+	var e groupExternal
+	e.tps.Store(dupmsi32(current))
+	g.external.Store(&e)
+}
+
+// Reset whenever we join, & potentially used to rejoin when finding new
+// assignments (i.e., end of metadata).
+func (g *groupConsumer) getAndResetExternalRejoin() bool {
+	e := g.loadExternal()
+	if e == nil {
+		return false
+	}
+	defer e.rejoin.set(false)
+	return e.rejoin.get()
+}
+
+// Runs fn over a load, not copy, of our map.
+func (g *groupExternal) fn(fn func(map[string]int32)) {
+	if g == nil {
+		return
+	}
+	v := g.tps.Load()
+	if v == nil {
+		return
+	}
+	tps := v.(map[string]int32)
+	fn(tps)
+}
+
+// Runs fn over a clone of our external map and updates the map.
+func (g *groupExternal) cloned(fn func(map[string]int32)) {
+	g.fn(func(tps map[string]int32) {
+		dup := dupmsi32(tps)
+		fn(dup)
+		g.tps.Store(dup)
+	})
+}
+
+func (g *groupExternal) eachTopic(fn func(string)) {
+	g.fn(func(tps map[string]int32) {
+		for t := range tps {
+			fn(t)
+		}
+	})
+}
+
+func (g *groupExternal) updateLatest(meta map[string]*topicPartitionsData) {
+	g.cloned(func(tps map[string]int32) {
+		var rejoin bool
+		for t, ps := range tps {
+			latest := meta[t]
+			if latest == nil || latest.loadErr != nil {
+				continue
+			}
+			if psLatest := int32(len(latest.partitions)); psLatest != ps {
+				rejoin = true
+				tps[t] = psLatest
+			}
+		}
+		if rejoin {
+			g.rejoin.set(true)
+		}
+	})
 }
 
 func (g *groupConsumer) handleSyncResp(protocol string, resp *kmsg.SyncGroupResponse) error {
@@ -1399,7 +1500,9 @@ func (g *groupConsumer) findNewAssignments() {
 		}
 	}
 
-	if len(toChange) == 0 {
+	externalRejoin := g.leader.get() && g.getAndResetExternalRejoin()
+
+	if len(toChange) == 0 && !externalRejoin {
 		return
 	}
 
@@ -1423,7 +1526,11 @@ func (g *groupConsumer) findNewAssignments() {
 	if numNewTopics > 0 {
 		g.rejoin("rejoining because there are more topics to consume, our interests have changed")
 	} else if g.leader.get() {
-		g.rejoin("rejoining because we are the leader and noticed some topics have new partitions")
+		if len(toChange) > 0 {
+			g.rejoin("rejoining because we are the leader and noticed some topics have new partitions")
+		} else if externalRejoin {
+			g.rejoin("leader detected that partitions on topics another member is consuming have changed, rejoining to trigger rebalance")
+		}
 	}
 }
 
