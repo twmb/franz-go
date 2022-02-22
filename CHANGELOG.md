@@ -1,3 +1,22 @@
+v1.3.4
+===
+
+This small patch release fixes a problem with
+[`4f2e7fe3`](https://github.com/twmb/franz-go/commit/4f2e7fe3) which was meant
+to address [#98](https://github.com/twmb/franz-go/issues/98). The fix was not
+complete in that the fix would only trigger if a group member had partitions
+added to it. We now rearrange the logic such that it occurs always. This bug
+was found while making a change in the code in support of a new feature in the
+v1.4 branch; this bug was not encountered in production.
+
+This also bumps the franz-go/pkg/kmsg dependency so that `JoinGroup.Reason` is
+properly tagged as v9+.
+
+The next release will be v1.4, which is nearly ready to be merged into this
+branch and tagged. Follow issue #135 for more details.
+
+- [`02560c7`](https://github.com/twmb/franz-go/commit/02560c7) consumer group: bugfix fetch offsets spanning rebalance
+
 v1.3.3
 ===
 
