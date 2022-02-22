@@ -11623,8 +11623,8 @@ type JoinGroupRequest struct {
 	Protocols []JoinGroupRequestProtocol
 
 	// Reason is an optional reason the member is joining (or rejoining) the
-	// group (KIP-800, Kafka 3.1+).
-	Reason *string
+	// group (KIP-800, Kafka 3.2+).
+	Reason *string // v9+
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v6+
@@ -11724,7 +11724,7 @@ func (v *JoinGroupRequest) AppendTo(dst []byte) []byte {
 			}
 		}
 	}
-	{
+	if version >= 9 {
 		v := v.Reason
 		if isFlexible {
 			dst = kbin.AppendCompactNullableString(dst, v)
@@ -11835,7 +11835,7 @@ func (v *JoinGroupRequest) ReadFrom(src []byte) error {
 		v = a
 		s.Protocols = v
 	}
-	{
+	if version >= 9 {
 		var v *string
 		if isFlexible {
 			v = b.CompactNullableString()
@@ -11971,7 +11971,7 @@ type JoinGroupResponse struct {
 	// LeaderID is the leader member.
 	LeaderID string
 
-	// True if the leader must skip running the assignment; see KIP-814.
+	// True if the leader must skip running the assignment (KIP-814, Kafka 3.2+).
 	SkipAssignment bool // v9+
 
 	// MemberID is the member of the receiving client.
@@ -12521,7 +12521,8 @@ type LeaveGroupRequestMember struct {
 
 	InstanceID *string
 
-	// Reason is an optional reason why this member is leaving the group.
+	// Reason is an optional reason why this member is leaving the group
+	// (KIP-800, Kafka 3.2+).
 	Reason *string // v5+
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.

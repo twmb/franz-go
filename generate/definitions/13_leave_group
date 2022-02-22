@@ -12,7 +12,8 @@ LeaveGroupRequest => key 13, max version 5, flexible v4+, group coordinator
   Members: [=>] // v3+
     MemberID: string
     InstanceID: nullable-string
-    // Reason is an optional reason why this member is leaving the group.
+    // Reason is an optional reason why this member is leaving the group
+    // (KIP-800, Kafka 3.2+).
     Reason: nullable-string // v5+
 
 // LeaveGroupResponse is returned from a LeaveGroupRequest.

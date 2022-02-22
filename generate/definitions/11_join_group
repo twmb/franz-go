@@ -66,8 +66,8 @@ JoinGroupRequest => key 11, max version 9, flexible v6+, group coordinator
     // topics they collectively as a group want to consume.
     Metadata: bytes
   // Reason is an optional reason the member is joining (or rejoining) the
-  // group (KIP-800, Kafka 3.1+).
-  Reason: nullable-string
+  // group (KIP-800, Kafka 3.2+).
+  Reason: nullable-string // v9+
 
 // JoinGroupResponse is returned from a JoinGroupRequest.
 JoinGroupResponse =>
@@ -122,7 +122,7 @@ JoinGroupResponse =>
   Protocol: nullable-string-v7+
   // LeaderID is the leader member.
   LeaderID: string
-  // True if the leader must skip running the assignment; see KIP-814.
+  // True if the leader must skip running the assignment (KIP-814, Kafka 3.2+).
   SkipAssignment: bool // v9+
   // MemberID is the member of the receiving client.
   MemberID: string
