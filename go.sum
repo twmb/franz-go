@@ -30,10 +30,8 @@ github.com/stretchr/objx v0.1.0/go.mod h1:HFkY916IF+rwdDfMAkV7OtwuqBVzrE8GR6GFx+
 github.com/stretchr/testify v1.4.0/go.mod h1:j7eGeouHqKxXV5pUuKE4zz7dFj8WfuZ+81PSLYec5m4=
 github.com/stretchr/testify v1.6.1 h1:hDPOHmpOpP40lSULcqw7IrRb/u7w6RpDC9399XyoNd0=
 github.com/stretchr/testify v1.6.1/go.mod h1:6Fq8oRcR53rry900zMqJjRRixrwX3KX962/h/Wwjteg=
-github.com/twmb/franz-go/pkg/kmsg v0.0.0-20220215165111-72760bf2e9a6 h1:53g0bbKhTdc5Y7q7SWXtpWxDuj9jm3Owk0v1MH2SKQA=
-github.com/twmb/franz-go/pkg/kmsg v0.0.0-20220215165111-72760bf2e9a6/go.mod h1:SxG/xJKhgPu25SamAq0rrucfp7lbzCpEXOC+vH/ELrY=
-github.com/twmb/franz-go/pkg/kmsg v0.0.0-20220215171957-ef99f297bf9b h1:/XHPq9A9iqyqTUziLn2qHwCv8WO5uc8j61/EEOUy8yk=
-github.com/twmb/franz-go/pkg/kmsg v0.0.0-20220215171957-ef99f297bf9b/go.mod h1:SxG/xJKhgPu25SamAq0rrucfp7lbzCpEXOC+vH/ELrY=
+github.com/twmb/franz-go/pkg/kmsg v0.0.0-20220222041924-02560c7b49ca h1:TtTuEMxsLQ6xwtDzov7wCcP08Zsdua/9+mB2nEtNY5w=
+github.com/twmb/franz-go/pkg/kmsg v0.0.0-20220222041924-02560c7b49ca/go.mod h1:SxG/xJKhgPu25SamAq0rrucfp7lbzCpEXOC+vH/ELrY=
 github.com/twmb/go-rbtree v1.0.0 h1:KxN7dXJ8XaZ4cvmHV1qqXTshxX3EBvX/toG5+UR49Mg=
 github.com/twmb/go-rbtree v1.0.0/go.mod h1:UlIAI8gu3KRPkXSobZnmJfVwCJgEhD/liWzT5ppzIyc=
 golang.org/x/crypto v0.0.0-20190308221718-c2843e01d9a2/go.mod h1:djNgcEr1/C05ACkg1iLfiJU5Ep61QUkGW8qpdssI0+w=
