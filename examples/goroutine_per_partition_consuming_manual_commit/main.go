@@ -2,11 +2,11 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"sync"
 	"time"
 
-	"github.com/Unity-Technologies/uzap"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"go.uber.org/zap"
 )
@@ -15,6 +15,11 @@ type pconsumer struct {
 	quit chan struct{}
 	recs chan []*kgo.Record
 }
+
+var (
+	topic = flag.String("t", "", "topic to consume")
+	group = flag.String("g", "", "group to consume in")
+)
 
 func (pc *pconsumer) consume(topic string, partition int32, cl *kgo.Client) {
 	zap.L().Info("Starting consume", zap.String("topic", topic))
@@ -83,7 +88,8 @@ func (s *splitConsume) lost(_ context.Context, cl *kgo.Client, lost map[string][
 }
 
 func main() {
-	uzap.MustZap()
+	flag.Parse()
+	zap.NewDevelopment()
 
 	s := &splitConsume{
 		consumers: make(map[string]map[int32]pconsumer),
@@ -91,8 +97,8 @@ func main() {
 
 	opts := []kgo.Opt{
 		kgo.SeedBrokers("localhost:9092"),
-		kgo.ConsumerGroup("consumerGroup"),
-		kgo.ConsumeTopics("topic1", "topic2", "topic3"),
+		kgo.ConsumerGroup(*group),
+		kgo.ConsumeTopics(*topic),
 		kgo.OnPartitionsAssigned(s.assigned),
 		kgo.OnPartitionsRevoked(s.lost),
 		kgo.OnPartitionsLost(s.lost),
