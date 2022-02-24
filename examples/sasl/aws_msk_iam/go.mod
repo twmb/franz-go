@@ -5,7 +5,7 @@ go 1.16
 require (
 	github.com/aws/aws-sdk-go v1.40.42
 	github.com/twmb/franz-go v0.8.3
-	github.com/twmb/franz-go/pkg/kmsg v0.0.0-20211127185622-3b34db0c6d1e
+	github.com/twmb/franz-go/pkg/kmsg v0.0.0-20220222044056-99b4da42cf4b
 )
 
 replace github.com/twmb/franz-go => ../../..
