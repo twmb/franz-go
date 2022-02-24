@@ -12,7 +12,7 @@ import (
 // This file contains golden tests against kmsg AppendTo's to ensure our custom
 // encoding is correct.
 
-func TestPromisedNumberedRecordAppendTo(t *testing.T) {
+func TestPromisedRecAppendTo(t *testing.T) {
 	t.Parallel()
 	// golden
 	kmsgRec := kmsg.Record{
@@ -28,27 +28,22 @@ func TestPromisedNumberedRecordAppendTo(t *testing.T) {
 	}
 
 	// input
-	const pnrOffsetDelta = 3
-	pnrRec := promisedNumberedRecord{
-		recordNumbers: recordNumbers{
-			lengthField:    1,
-			timestampDelta: 2,
-		},
-		promisedRec: promisedRec{
-			Record: &Record{
-				Key:   []byte("key"),
-				Value: []byte("value"),
-				Headers: []RecordHeader{
-					{Key: "header key 1", Value: []byte("header value 1")},
-					{Key: "header key 2", Value: []byte("header value 2")},
-				},
+	const prOffsetDelta = 3
+	pr := promisedRec{
+		Record: &Record{
+			Key:   []byte("key"),
+			Value: []byte("value"),
+			Headers: []RecordHeader{
+				{Key: "header key 1", Value: []byte("header value 1")},
+				{Key: "header key 2", Value: []byte("header value 2")},
 			},
+			Offset: 1<<32 | 2,
 		},
 	}
 
 	// compare
 	exp := kmsgRec.AppendTo(nil)
-	got := pnrRec.appendTo(nil, pnrOffsetDelta)
+	got := pr.appendTo(nil, prOffsetDelta)
 
 	if !bytes.Equal(got, exp) {
 		t.Error("got != exp")
@@ -98,33 +93,23 @@ func TestRecBatchAppendTo(t *testing.T) {
 		seq: 10,
 		recBatch: &recBatch{
 			firstTimestamp: 20,
-			records: []promisedNumberedRecord{
+			records: []promisedRec{
 				{
-					recordNumbers: recordNumbers{
-						lengthField:    1,
-						timestampDelta: 2,
-					},
-					promisedRec: promisedRec{
-						Record: &Record{
-							Key:   []byte("key 1"),
-							Value: []byte("value 1"),
-							Headers: []RecordHeader{
-								{"header key 1", []byte("header value 1")},
-								{"header key 2", []byte("header value 2")},
-							},
+					Record: &Record{
+						Key:   []byte("key 1"),
+						Value: []byte("value 1"),
+						Headers: []RecordHeader{
+							{"header key 1", []byte("header value 1")},
+							{"header key 2", []byte("header value 2")},
 						},
+						Offset: 1<<32 | 2,
 					},
 				},
 				{
-					recordNumbers: recordNumbers{
-						lengthField:    3,
-						timestampDelta: 4,
-					},
-					promisedRec: promisedRec{
-						Record: &Record{
-							Key:   []byte("key 2"),
-							Value: []byte("value 2"),
-						},
+					Record: &Record{
+						Key:    []byte("key 2"),
+						Value:  []byte("value 2"),
+						Offset: 3<<32 | 4,
 					},
 				},
 			},
@@ -284,29 +269,19 @@ func TestMessageSetAppendTo(t *testing.T) {
 	ourBatch := seqRecBatch{
 		recBatch: &recBatch{
 			firstTimestamp: 12,
-			records: []promisedNumberedRecord{
+			records: []promisedRec{
 				{
-					recordNumbers: recordNumbers{
-						lengthField:    1,
-						timestampDelta: 0,
-					},
-					promisedRec: promisedRec{
-						Record: &Record{
-							Key:   []byte("loooooong key 1"),
-							Value: []byte("loooooong value 1"),
-						},
+					Record: &Record{
+						Key:    []byte("loooooong key 1"),
+						Value:  []byte("loooooong value 1"),
+						Offset: 1 << 32,
 					},
 				},
 				{
-					recordNumbers: recordNumbers{
-						lengthField:    3,
-						timestampDelta: 1,
-					},
-					promisedRec: promisedRec{
-						Record: &Record{
-							Key:   []byte("loooooong key 2"),
-							Value: []byte("loooooong value 2"),
-						},
+					Record: &Record{
+						Key:    []byte("loooooong key 2"),
+						Value:  []byte("loooooong value 2"),
+						Offset: 3<<32 | 1,
 					},
 				},
 			},
@@ -389,33 +364,23 @@ func BenchmarkAppendBatch(b *testing.B) {
 		seq: 10,
 		recBatch: &recBatch{
 			firstTimestamp: 20,
-			records: []promisedNumberedRecord{
+			records: []promisedRec{
 				{
-					recordNumbers: recordNumbers{
-						lengthField:    1,
-						timestampDelta: 2,
-					},
-					promisedRec: promisedRec{
-						Record: &Record{
-							Key:   []byte("key 1"),
-							Value: bytes.Repeat([]byte("value 1"), 1000),
-							Headers: []RecordHeader{
-								{"header key 1", []byte("header value 1")},
-								{"header key 2", []byte("header value 2")},
-							},
+					Record: &Record{
+						Key:   []byte("key 1"),
+						Value: bytes.Repeat([]byte("value 1"), 1000),
+						Headers: []RecordHeader{
+							{"header key 1", []byte("header value 1")},
+							{"header key 2", []byte("header value 2")},
 						},
+						Offset: 1<<32 | 2,
 					},
 				},
 				{
-					recordNumbers: recordNumbers{
-						lengthField:    3,
-						timestampDelta: 4,
-					},
-					promisedRec: promisedRec{
-						Record: &Record{
-							Key:   []byte("key 2"),
-							Value: bytes.Repeat([]byte("value 2"), 1000),
-						},
+					Record: &Record{
+						Key:    []byte("key 2"),
+						Value:  bytes.Repeat([]byte("value 2"), 1000),
+						Offset: 3<<32 | 4,
 					},
 				},
 			},

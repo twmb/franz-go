@@ -56,7 +56,7 @@ type Client struct {
 	connTimeouter connTimeouter
 
 	bufPool bufPool // for to brokers to share underlying reusable request buffers
-	pnrPool pnrPool // for sinks to reuse []promisedNumberedRecord
+	prsPool prsPool // for sinks to reuse []promisedNumberedRecord
 
 	controllerIDMu sync.Mutex
 	controllerID   int32
@@ -171,7 +171,7 @@ func NewClient(opts ...Opt) (*Client, error) {
 		connTimeouter: connTimeouter{def: cfg.requestTimeoutOverhead},
 
 		bufPool: newBufPool(),
-		pnrPool: newPnrPool(),
+		prsPool: newPrsPool(),
 
 		decompressor: newDecompressor(),
 

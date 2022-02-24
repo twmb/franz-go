@@ -841,23 +841,23 @@ func (cl *Client) finishBatch(batch *recBatch, producerID int64, producerEpoch i
 	batch.records = nil
 	batch.mu.Unlock()
 
-	for i, pnr := range records {
-		pnr.Offset = baseOffset + int64(i)
-		pnr.Partition = partition
-		pnr.ProducerID = producerID
-		pnr.ProducerEpoch = producerEpoch
+	for i, pr := range records {
+		pr.Offset = baseOffset + int64(i)
+		pr.Partition = partition
+		pr.ProducerID = producerID
+		pr.ProducerEpoch = producerEpoch
 
 		// A recBuf.attrs is updated when appending to be written. For
 		// v0 && v1 produce requests, we set bit 8 in the attrs
 		// corresponding to our own RecordAttr's bit 8 being no
 		// timestamp type. Thus, we can directly convert the batch
 		// attrs to our own RecordAttrs.
-		pnr.Attrs = RecordAttrs{uint8(attrs)}
+		pr.Attrs = RecordAttrs{uint8(attrs)}
 
-		cl.finishRecordPromise(pnr.promisedRec, err)
-		records[i] = noPNR
+		cl.finishRecordPromise(pr, err)
+		records[i] = promisedRec{}
 	}
-	cl.pnrPool.put(records)
+	cl.prsPool.put(records)
 }
 
 // handleRetryBatches sets any first-buf-batch to failing and triggers a
@@ -1222,11 +1222,11 @@ func (recBuf *recBuf) failAllRecords(err error) {
 		batch.records = nil
 		batch.mu.Unlock()
 
-		for i, pnr := range records {
-			recBuf.cl.finishRecordPromise(pnr.promisedRec, err)
-			records[i] = noPNR
+		for i, pr := range records {
+			recBuf.cl.finishRecordPromise(pr, err)
+			records[i] = promisedRec{}
 		}
-		recBuf.cl.pnrPool.put(records)
+		recBuf.cl.prsPool.put(records)
 	}
 	recBuf.resetBatchDrainIdx()
 	atomic.StoreInt64(&recBuf.buffered, 0)
@@ -1261,14 +1261,6 @@ type promisedRec struct {
 	*Record
 }
 
-// promisedNumberedRecord ties a promised record to its calculated numbers.
-type promisedNumberedRecord struct {
-	recordNumbers
-	promisedRec
-}
-
-var noPNR = promisedNumberedRecord{}
-
 // recBatch is the type used for buffering records before they are written.
 type recBatch struct {
 	owner *recBuf // who owns us
@@ -1289,8 +1281,8 @@ type recBatch struct {
 	attrs          int16 // updated during apending; read and converted to RecordAttrs on success
 	firstTimestamp int64 // since unix epoch, in millis
 
-	mu      sync.Mutex // guards appendTo's reading of records against failAllRecords emptying it
-	records []promisedNumberedRecord
+	mu      sync.Mutex    // guards appendTo's reading of records against failAllRecords emptying it
+	records []promisedRec // record w/ length, ts calculated
 }
 
 // Returns an error if the batch should fail.
@@ -1332,10 +1324,7 @@ func (b *recBatch) appendRecord(pr promisedRec, nums recordNumbers) {
 	if len(b.records) == 0 {
 		b.firstTimestamp = pr.Timestamp.UnixNano() / 1e6
 	}
-	b.records = append(b.records, promisedNumberedRecord{
-		nums,
-		pr,
-	})
+	b.records = append(b.records, pr)
 }
 
 // newRecordBatch returns a new record batch for a topic and partition.
@@ -1356,23 +1345,23 @@ func (recBuf *recBuf) newRecordBatch() *recBatch {
 		4 // record array length
 	return &recBatch{
 		owner:      recBuf,
-		records:    recBuf.cl.pnrPool.get()[:0],
+		records:    recBuf.cl.prsPool.get()[:0],
 		wireLength: recordBatchOverhead,
 
 		canFailFromLoadErrs: true, // until we send this batch, we can fail it
 	}
 }
 
-type pnrPool struct{ p *sync.Pool }
+type prsPool struct{ p *sync.Pool }
 
-func newPnrPool() pnrPool {
-	return pnrPool{
-		p: &sync.Pool{New: func() interface{} { r := make([]promisedNumberedRecord, 10); return &r }},
+func newPrsPool() prsPool {
+	return prsPool{
+		p: &sync.Pool{New: func() interface{} { r := make([]promisedRec, 10); return &r }},
 	}
 }
 
-func (p pnrPool) get() []promisedNumberedRecord  { return (*p.p.Get().(*[]promisedNumberedRecord))[:0] }
-func (p pnrPool) put(s []promisedNumberedRecord) { p.p.Put(&s) }
+func (p prsPool) get() []promisedRec  { return (*p.p.Get().(*[]promisedRec))[:0] }
+func (p prsPool) put(s []promisedRec) { p.p.Put(&s) }
 
 // isOwnersFirstBatch returns if the batch in a recBatch is the first batch in
 // a records. We only ever want to update batch / buffer logic if the batch is
@@ -1715,8 +1704,8 @@ func (b *recBatch) calculateRecordNumbers(r *Record) recordNumbers {
 	}
 
 	return recordNumbers{
-		lengthField:    int32(l),
-		timestampDelta: tsDelta,
+		lengthField: int32(l),
+		tsDelta:     tsDelta,
 	}
 }
 
@@ -1725,8 +1714,8 @@ func uvarlen(l int) int32   { return int32(kbin.UvarintLen(uvar32(int32(l)))) }
 
 // recordNumbers tracks a few numbers for a record that is buffered.
 type recordNumbers struct {
-	lengthField    int32 // the length field prefix of a record encoded on the wire
-	timestampDelta int32 // the ms delta of when the record was added against the first timestamp
+	lengthField int32 // the length field prefix of a record encoded on the wire
+	tsDelta     int32 // the ms delta of when the record was added against the first timestamp
 }
 
 // wireLength is the wire length of a record including its length field prefix.
@@ -1766,10 +1755,10 @@ func (b *recBatch) wireLengthForProduceVersion(v int32) (batchWireLength int32, 
 }
 
 func (b *recBatch) tryBuffer(pr promisedRec, produceVersion, maxBatchBytes int32, abortOnNewBatch bool) (appended, aborted bool) {
-	recordNumbers := b.calculateRecordNumbers(pr.Record)
+	nums := b.calculateRecordNumbers(pr.Record)
 
 	batchWireLength, _ := b.wireLengthForProduceVersion(produceVersion)
-	newBatchLength := batchWireLength + recordNumbers.wireLength()
+	newBatchLength := batchWireLength + nums.wireLength()
 
 	if b.tries != 0 || newBatchLength > maxBatchBytes {
 		return false, false
@@ -1777,7 +1766,11 @@ func (b *recBatch) tryBuffer(pr promisedRec, produceVersion, maxBatchBytes int32
 	if abortOnNewBatch {
 		return false, true
 	}
-	b.appendRecord(pr, recordNumbers)
+	b.appendRecord(pr, nums)
+	pr.setLengthAndTimestampDelta(
+		nums.lengthField,
+		nums.tsDelta,
+	)
 	return true, false
 }
 
@@ -1937,7 +1930,8 @@ func (b seqRecBatch) appendTo(
 
 	// maxTimestamp is the timestamp of the last record in a batch.
 	lastRecord := b.records[len(b.records)-1]
-	dst = kbin.AppendInt64(dst, b.firstTimestamp+int64(lastRecord.timestampDelta))
+	_, tsDelta := lastRecord.lengthAndTimestampDelta()
+	dst = kbin.AppendInt64(dst, b.firstTimestamp+int64(tsDelta))
 
 	seq := b.seq
 	if producerID < 0 { // a negative producer ID means we are not using idempotence
@@ -1949,8 +1943,8 @@ func (b seqRecBatch) appendTo(
 
 	dst = kbin.AppendArrayLen(dst, len(b.records))
 	recordsAt := len(dst)
-	for i, pnr := range b.records {
-		dst = pnr.appendTo(dst, int32(i))
+	for i, pr := range b.records {
+		dst = pr.appendTo(dst, int32(i))
 	}
 
 	toCompress := dst[recordsAt:]
@@ -1989,15 +1983,16 @@ func (b seqRecBatch) appendTo(
 	return dst, m
 }
 
-func (pnr promisedNumberedRecord) appendTo(dst []byte, offsetDelta int32) []byte {
-	dst = kbin.AppendVarint(dst, pnr.lengthField)
+func (pr promisedRec) appendTo(dst []byte, offsetDelta int32) []byte {
+	length, tsDelta := pr.lengthAndTimestampDelta()
+	dst = kbin.AppendVarint(dst, length)
 	dst = kbin.AppendInt8(dst, 0) // attributes, currently unused
-	dst = kbin.AppendVarint(dst, pnr.timestampDelta)
+	dst = kbin.AppendVarint(dst, tsDelta)
 	dst = kbin.AppendVarint(dst, offsetDelta)
-	dst = kbin.AppendVarintBytes(dst, pnr.Key)
-	dst = kbin.AppendVarintBytes(dst, pnr.Value)
-	dst = kbin.AppendVarint(dst, int32(len(pnr.Headers)))
-	for _, h := range pnr.Headers {
+	dst = kbin.AppendVarintBytes(dst, pr.Key)
+	dst = kbin.AppendVarintBytes(dst, pr.Value)
+	dst = kbin.AppendVarint(dst, int32(len(pr.Headers)))
+	for _, h := range pr.Headers {
 		dst = kbin.AppendVarintString(dst, h.Key)
 		dst = kbin.AppendVarintBytes(dst, h.Value)
 	}
@@ -2009,14 +2004,15 @@ func (b seqRecBatch) appendToAsMessageSet(dst []byte, version uint8, compressor 
 
 	nullableBytesLenAt := len(dst)
 	dst = append(dst, 0, 0, 0, 0) // nullable bytes len
-	for i, pnr := range b.records {
+	for i, pr := range b.records {
+		_, tsDelta := pr.lengthAndTimestampDelta()
 		dst = appendMessageTo(
 			dst,
 			version,
 			0,
 			int64(i),
-			b.firstTimestamp+int64(pnr.timestampDelta),
-			pnr.Record,
+			b.firstTimestamp+int64(tsDelta),
+			pr.Record,
 		)
 	}
 

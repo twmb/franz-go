@@ -135,8 +135,20 @@ type Record struct {
 	// For producing, this is left unset. This will be set by the client as
 	// appropriate. If you are producing with no acks, this will just be
 	// the offset used in the produce request and does not mirror the
-	// offset actually stored within Kafka.
+	// offset actually stored within Kafka. The offset will not be valid
+	// unless the record was successfully produced.
 	Offset int64
+}
+
+// When buffering records, we calculate the length and tsDelta ahead of time
+// (also because number width affects encoding length). We repurpose the Offset
+// field to save space.
+func (r *Record) setLengthAndTimestampDelta(length, tsDelta int32) {
+	r.Offset = int64(uint64(length)<<32 | uint64(tsDelta))
+}
+
+func (r *Record) lengthAndTimestampDelta() (length, tsDelta int32) {
+	return int32(uint64(r.Offset) >> 32), int32(uint64(r.Offset))
 }
 
 // AppendFormat appends a record to b given the layout or returns an error if
