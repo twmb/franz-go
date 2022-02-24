@@ -49,9 +49,9 @@ var testLogLevel = func() LogLevel {
 
 func testLogger() Logger {
 	num := atomic.AddInt64(&loggerNum, 1)
-	pfx := fmt.Sprintf("[%d] ", num)
+	pfx := strconv.Itoa(int(num))
 	return BasicLogger(os.Stderr, testLogLevel, func() string {
-		return pfx
+		return time.Now().Format("[15:04:05 ") + pfx + "]"
 	})
 }
 
@@ -131,7 +131,7 @@ func tmpGroup(tb testing.TB) (string, func()) {
 			err = kerr.ErrorForCode(resp.Groups[0].ErrorCode)
 		}
 		if err != nil {
-			tb.Fatalf("unable to delete group %q: %v", group, err)
+			tb.Logf("unable to delete group %q: %v", group, err)
 		}
 	}
 }
