@@ -27,11 +27,11 @@ func (pc *pconsumer) consume(topic string, partition int32, cl *kgo.Client) {
 		case recs := <-pc.recs:
 			fmt.Print(".")
 
-			commitErr := cl.CommitRecords(context.Background(), recs...)
+			err := cl.CommitRecords(context.Background(), recs...)
 
-			if commitErr != nil {
+			if err != nil {
 				zap.L().Error("Error when committing offsets to kafka",
-					zap.Error(commitErr),
+					zap.Error(err),
 					zap.Int64("Commited offset", recs[len(recs)-1].Offset+1),
 				)
 			}
