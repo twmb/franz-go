@@ -4,11 +4,11 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kgo"
-	"go.uber.org/zap"
 )
 
 type pconsumer struct {
@@ -17,30 +17,25 @@ type pconsumer struct {
 }
 
 var (
-	topic = flag.String("t", "", "topic to consume")
-	group = flag.String("g", "", "group to consume in")
+	brokers = flag.String("b", "", "comma delimited brokers to consume from")
+	topic   = flag.String("t", "", "topic to consume")
+	group   = flag.String("g", "", "group to consume in")
 )
 
 func (pc *pconsumer) consume(topic string, partition int32, cl *kgo.Client) {
-	zap.L().Info("Starting consume", zap.String("topic", topic))
-	defer zap.L().Info("Killing consume consume", zap.String("topic", topic))
+	fmt.Printf("Starting consume for  t %s p %d\n", topic, partition)
+	defer fmt.Printf("Killing consume for t %s p %d\n", topic, partition)
 	for {
 		select {
 		case <-pc.quit:
-			zap.L().Info("Consume quitting")
 			return
 		case recs := <-pc.recs:
-			fmt.Print(".")
-
-			err := cl.CommitRecords(context.Background(), recs...)
-
-			if err != nil {
-				zap.L().Error("Error when committing offsets to kafka",
-					zap.Error(err),
-					zap.Int64("Commited offset", recs[len(recs)-1].Offset+1),
-				)
-			}
+			// Mimick work to happen before committing records
 			time.Sleep(100 * time.Millisecond)
+			err := cl.CommitRecords(context.Background(), recs...)
+			if err != nil {
+				fmt.Printf("Error when committing offsets to kafka err: %t, topic_partition:%s_%d offset: %d\n", err, topic, partition, recs[len(recs)-1].Offset+1)
+			}
 		}
 	}
 }
@@ -58,7 +53,6 @@ func (s *splitConsume) assigned(_ context.Context, cl *kgo.Client, assigned map[
 			s.consumers[topic] = make(map[int32]pconsumer)
 		}
 		for _, partition := range partitions {
-			zap.L().Info("Assigning", zap.String("topic", topic))
 			pc := pconsumer{
 				quit: make(chan struct{}),
 				recs: make(chan []*kgo.Record),
@@ -72,7 +66,6 @@ func (s *splitConsume) assigned(_ context.Context, cl *kgo.Client, assigned map[
 func (s *splitConsume) lost(_ context.Context, cl *kgo.Client, lost map[string][]int32) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	fmt.Println("REVOKED!!!!!!!!")
 	for topic, partitions := range lost {
 		ptopics := s.consumers[topic]
 		for _, partition := range partitions {
@@ -81,7 +74,7 @@ func (s *splitConsume) lost(_ context.Context, cl *kgo.Client, lost map[string][
 			if len(ptopics) == 0 {
 				delete(s.consumers, topic)
 			}
-			zap.L().Info("Quitting", zap.String("topic", topic))
+			fmt.Printf("Parititon lost/revoked quitting %s", topic)
 			close(pc.quit)
 		}
 	}
@@ -89,14 +82,22 @@ func (s *splitConsume) lost(_ context.Context, cl *kgo.Client, lost map[string][
 
 func main() {
 	flag.Parse()
-	zap.NewDevelopment()
+
+	if len(*group) == 0 {
+		fmt.Println("missing required group")
+		return
+	}
+	if len(*topic) == 0 {
+		fmt.Println("missing required topic")
+		return
+	}
 
 	s := &splitConsume{
 		consumers: make(map[string]map[int32]pconsumer),
 	}
 
 	opts := []kgo.Opt{
-		kgo.SeedBrokers("localhost:9092"),
+		kgo.SeedBrokers(strings.Split(*brokers, ",")...),
 		kgo.ConsumerGroup(*group),
 		kgo.ConsumeTopics(*topic),
 		kgo.OnPartitionsAssigned(s.assigned),
@@ -141,7 +142,6 @@ func (s *splitConsume) poll(cl *kgo.Client) {
 				select {
 				case pc.recs <- p.Records:
 				case <-pc.quit:
-					zap.L().Info("Quit case in poll")
 				}
 			})
 		})
