@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"math/rand"
 	"strings"
 	"sync"
 	"time"
@@ -13,6 +14,7 @@ import (
 
 type pconsumer struct {
 	quit chan struct{}
+	done chan struct{}
 	recs chan []*kgo.Record
 }
 
@@ -23,18 +25,21 @@ var (
 )
 
 func (pc *pconsumer) consume(topic string, partition int32, cl *kgo.Client) {
+	rand.Seed(time.Now().Unix())
 	fmt.Printf("Starting consume for  t %s p %d\n", topic, partition)
 	defer fmt.Printf("Killing consume for t %s p %d\n", topic, partition)
 	for {
 		select {
 		case <-pc.quit:
+			pc.done <- struct{}{}
 			return
 		case recs := <-pc.recs:
 			// Mimick work to happen before committing records
-			time.Sleep(100 * time.Millisecond)
+			time.Sleep(time.Duration(rand.Intn(150)+100) * time.Millisecond)
+			fmt.Printf("Some sort of work done, about to commit t %s p %d\n", topic, partition)
 			err := cl.CommitRecords(context.Background(), recs...)
 			if err != nil {
-				fmt.Printf("Error when committing offsets to kafka err: %t, topic_partition:%s_%d offset: %d\n", err, topic, partition, recs[len(recs)-1].Offset+1)
+				fmt.Printf("Error when committing offsets to kafka err: %v t: %s p: %d offset %d\n", err, topic, partition, recs[len(recs)-1].Offset+1)
 			}
 		}
 	}
@@ -55,6 +60,7 @@ func (s *splitConsume) assigned(_ context.Context, cl *kgo.Client, assigned map[
 		for _, partition := range partitions {
 			pc := pconsumer{
 				quit: make(chan struct{}),
+				done: make(chan struct{}),
 				recs: make(chan []*kgo.Record),
 			}
 			s.consumers[topic][partition] = pc
@@ -74,8 +80,8 @@ func (s *splitConsume) lost(_ context.Context, cl *kgo.Client, lost map[string][
 			if len(ptopics) == 0 {
 				delete(s.consumers, topic)
 			}
-			fmt.Printf("Parititon lost/revoked quitting %s", topic)
 			close(pc.quit)
+			<-pc.done
 		}
 	}
 }
@@ -110,6 +116,7 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
+	// Check connectivity to cluster
 	err = cl.Ping(context.Background())
 	if err != nil {
 		panic(err)
@@ -120,7 +127,7 @@ func main() {
 
 func (s *splitConsume) poll(cl *kgo.Client) {
 	for {
-		fetches := cl.PollRecords(context.Background(), 10)
+		fetches := cl.PollRecords(context.Background(), 10000)
 		if fetches.IsClientClosed() {
 			return
 		}
