@@ -18,7 +18,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
-const testRecordLimit = 1000000
+const testRecordLimit = 500000
 
 var adm *Client
 
