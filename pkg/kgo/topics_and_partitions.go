@@ -2,6 +2,7 @@ package kgo
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -17,15 +18,53 @@ func dupmsi32(m map[string]int32) map[string]int32 {
 	return d
 }
 
-type tpsFmt map[string][]int32
+// "Atomic map of topic partitions", for lack of a better name at this point.
+type amtps struct {
+	v atomic.Value
+}
 
-func (f tpsFmt) String() string {
+func (a *amtps) read() map[string][]int32 {
+	v := a.v.Load()
+	if v == nil {
+		return nil
+	}
+	return v.(map[string][]int32)
+}
+
+func (a *amtps) write(fn func(map[string][]int32)) {
+	dup := a.clone()
+	fn(dup)
+	a.store(dup)
+}
+
+func (a *amtps) clone() map[string][]int32 {
+	orig := a.read()
+	dup := make(map[string][]int32, len(orig))
+	for t, ps := range orig {
+		dup[t] = append(dup[t], ps...)
+	}
+	return dup
+}
+
+func (a *amtps) store(m map[string][]int32) { a.v.Store(m) }
+
+type mtps map[string][]int32
+
+func (m mtps) String() string {
 	var sb strings.Builder
 	var topicsWritten int
-	for topic, partitions := range f {
+	ts := make([]string, 0, len(m))
+	var ps []int32
+	for t := range m {
+		ts = append(ts, t)
+	}
+	sort.Strings(ts)
+	for _, t := range ts {
+		ps = append(ps[:0], m[t]...)
+		sort.Slice(ps, func(i, j int) bool { return ps[i] < ps[j] })
 		topicsWritten++
-		fmt.Fprintf(&sb, "%s%v", topic, partitions)
-		if topicsWritten < len(f) {
+		fmt.Fprintf(&sb, "%s%v", t, ps)
+		if topicsWritten < len(m) {
 			sb.WriteString(", ")
 		}
 	}
