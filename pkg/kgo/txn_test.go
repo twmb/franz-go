@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"strconv"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -32,6 +31,7 @@ func TestTxnEtl(t *testing.T) {
 			WithLogger(BasicLogger(os.Stderr, testLogLevel, nil)),
 			TransactionalID("p"+randsha()),
 			TransactionTimeout(2*time.Minute),
+			MaxBufferedRecords(10000),
 		)
 		if err != nil {
 			panic(err)
@@ -39,7 +39,6 @@ func TestTxnEtl(t *testing.T) {
 
 		defer cl.Close()
 
-		var offsetsMu sync.Mutex
 		offsets := make(map[int32]int64)
 		partsUsed := make(map[int32]struct{})
 
@@ -91,15 +90,13 @@ func TestTxnEtl(t *testing.T) {
 						errs <- fmt.Errorf("unexpected out of order key; got %s != exp %v", r.Key, myKey)
 					}
 
-					// ensure the offsets for this partition are contiguous
-					offsetsMu.Lock()
+					// ensure the offsets for this partition are monotonically increasing
 					current, ok := offsets[r.Partition]
 					if ok && r.Offset <= current {
 						errs <- fmt.Errorf("partition %d produced offsets out of order, got %d != exp %d", r.Partition, r.Offset, current+1)
 					}
 					offsets[r.Partition] = r.Offset
 					partsUsed[r.Partition] = struct{}{}
-					offsetsMu.Unlock()
 				},
 			)
 		}
@@ -150,6 +147,7 @@ func (c *testConsumer) transact(txnsBeforeQuit int) {
 		ConsumeTopics(c.consumeFrom),
 		FetchIsolationLevel(ReadCommitted()),
 		Balancers(c.balancer),
+		MaxBufferedRecords(10000),
 	)
 	defer txnSess.Close()
 

@@ -135,8 +135,7 @@ type Record struct {
 	// For producing, this is left unset. This will be set by the client as
 	// appropriate. If you are producing with no acks, this will just be
 	// the offset used in the produce request and does not mirror the
-	// offset actually stored within Kafka. The offset will not be valid
-	// unless the record was successfully produced.
+	// offset actually stored within Kafka.
 	Offset int64
 }
 

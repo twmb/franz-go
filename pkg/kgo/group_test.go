@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"strconv"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -37,10 +36,12 @@ func TestGroupETL(t *testing.T) {
 	////////////////////
 
 	go func() {
-		cl, _ := NewClient(WithLogger(BasicLogger(os.Stderr, testLogLevel, nil)))
+		cl, _ := NewClient(
+			WithLogger(BasicLogger(os.Stderr, testLogLevel, nil)),
+			MaxBufferedRecords(10000),
+		)
 		defer cl.Close()
 
-		var offsetsMu sync.Mutex
 		offsets := make(map[int32]int64)
 
 		defer func() {
@@ -66,7 +67,6 @@ func TestGroupETL(t *testing.T) {
 					}
 
 					// ensure the offsets for this partition are contiguous
-					offsetsMu.Lock()
 					current, ok := offsets[r.Partition]
 					if ok && r.Offset != current+1 {
 						errs <- fmt.Errorf("partition produced offsets out of order, got %d != exp %d", r.Offset, current+1)
@@ -74,8 +74,6 @@ func TestGroupETL(t *testing.T) {
 						errs <- fmt.Errorf("expected first produced record to partition to have offset 0, got %d", r.Offset)
 					}
 					offsets[r.Partition] = r.Offset
-
-					offsetsMu.Unlock()
 				},
 			)
 		}
@@ -122,6 +120,7 @@ func (c *testConsumer) etl(etlsBeforeQuit int) {
 		ConsumerGroup(c.group),
 		ConsumeTopics(c.consumeFrom),
 		Balancers(c.balancer),
+		MaxBufferedRecords(10000),
 
 		// Even with autocommitting, autocommitting does not commit
 		// *the latest* when being revoked. We always want to commit

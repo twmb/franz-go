@@ -211,3 +211,65 @@ func (r *ringSeqResp) dropPeek() (next *seqResp, more, dead bool) {
 
 	return r.elems[r.head], r.l > 0, r.dead
 }
+
+// Also no die; this type is slightly different because we can have overflow.
+// If we have overflow, we add to overflow until overflow is drained -- we
+// always want strict odering.
+type ringBatchPromise struct {
+	mu sync.Mutex
+
+	elems [eight]batchPromise
+
+	head uint8
+	tail uint8
+	l    uint8
+
+	overflow []batchPromise
+}
+
+func (r *ringBatchPromise) push(b batchPromise) (first bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	// If the ring is full, we go into overflow; if overflow is non-empty,
+	// for ordering purposes, we add to the end of overflow. We only go
+	// back to using the ring once overflow is finally empty.
+	if r.l == eight || len(r.overflow) > 0 {
+		r.overflow = append(r.overflow, b)
+		return false
+	}
+
+	r.elems[r.tail] = b
+	r.tail = (r.tail + 1) & mask7
+	r.l++
+
+	return r.l == 1
+}
+
+func (r *ringBatchPromise) dropPeek() (next batchPromise, more bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	// We always drain the ring first. If the ring is ever empty, there
+	// must be overflow: we would not be here if the ring is not-empty.
+	if r.l > 1 {
+		r.elems[r.head] = batchPromise{}
+		r.head = (r.head + 1) & mask7
+		r.l--
+		return r.elems[r.head], true
+	} else if r.l == 1 {
+		r.elems[r.head] = batchPromise{}
+		r.head = (r.head + 1) & mask7
+		r.l--
+		if len(r.overflow) == 0 {
+			return next, false
+		}
+		return r.overflow[0], true
+	} else {
+		r.overflow = r.overflow[1:]
+		if len(r.overflow) > 0 {
+			return r.overflow[0], true
+		}
+		return next, false
+	}
+}

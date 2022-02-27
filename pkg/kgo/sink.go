@@ -841,23 +841,20 @@ func (cl *Client) finishBatch(batch *recBatch, producerID int64, producerEpoch i
 	batch.records = nil
 	batch.mu.Unlock()
 
-	for i, pr := range records {
-		pr.Offset = baseOffset + int64(i)
-		pr.Partition = partition
-		pr.ProducerID = producerID
-		pr.ProducerEpoch = producerEpoch
-
+	cl.producer.promiseBatch(batchPromise{
+		baseOffset: baseOffset,
+		pid:        producerID,
+		epoch:      producerEpoch,
 		// A recBuf.attrs is updated when appending to be written. For
 		// v0 && v1 produce requests, we set bit 8 in the attrs
 		// corresponding to our own RecordAttr's bit 8 being no
 		// timestamp type. Thus, we can directly convert the batch
 		// attrs to our own RecordAttrs.
-		pr.Attrs = RecordAttrs{uint8(attrs)}
-
-		cl.finishRecordPromise(pr, err)
-		records[i] = promisedRec{}
-	}
-	cl.prsPool.put(records)
+		attrs:     RecordAttrs{uint8(attrs)},
+		partition: partition,
+		recs:      records,
+		err:       err,
+	})
 }
 
 // handleRetryBatches sets any first-buf-batch to failing and triggers a
@@ -1064,7 +1061,7 @@ func (recBuf *recBuf) bufferRecord(pr promisedRec, abortOnNewBatch bool) bool {
 	pr.Timestamp = time.Now().Truncate(time.Millisecond)
 
 	if recBuf.purged {
-		recBuf.cl.finishRecordPromise(pr, errPurged)
+		recBuf.cl.producer.promiseRecord(pr, errPurged)
 		return true
 	}
 
@@ -1089,7 +1086,7 @@ func (recBuf *recBuf) bufferRecord(pr promisedRec, abortOnNewBatch bool) bool {
 			return false
 		case appended: // we return true below
 		default: // processed as failure
-			recBuf.cl.finishRecordPromise(pr, kerr.MessageTooLarge)
+			recBuf.cl.producer.promiseRecord(pr, kerr.MessageTooLarge)
 			return true
 		}
 
@@ -1222,11 +1219,10 @@ func (recBuf *recBuf) failAllRecords(err error) {
 		batch.records = nil
 		batch.mu.Unlock()
 
-		for i, pr := range records {
-			recBuf.cl.finishRecordPromise(pr, err)
-			records[i] = promisedRec{}
-		}
-		recBuf.cl.prsPool.put(records)
+		recBuf.cl.producer.promiseBatch(batchPromise{
+			recs: records,
+			err:  err,
+		})
 	}
 	recBuf.resetBatchDrainIdx()
 	atomic.StoreInt64(&recBuf.buffered, 0)

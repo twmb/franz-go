@@ -296,7 +296,10 @@ func (cl *Client) storePartitionsUpdate(topic string, l *topicPartitions, lv *to
 	close(unknown.wait) // allow waiting goroutine to quit
 
 	if len(lv.partitions) == 0 {
-		cl.producer.failUnknownTopicRecords(unknown, lv.loadErr)
+		cl.producer.promiseBatch(batchPromise{
+			recs: unknown.buffered,
+			err:  lv.loadErr,
+		})
 	} else {
 		for _, pr := range unknown.buffered {
 			cl.doPartitionRecord(l, lv, pr)
