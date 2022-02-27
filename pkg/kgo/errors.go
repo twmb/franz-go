@@ -61,6 +61,11 @@ func isRetriableBrokerErr(err error) bool {
 	if errors.Is(err, errChosenBrokerDead) {
 		return true
 	}
+	// A broker kept giving us short sasl lifetimes, so we killed the
+	// connection ourselves. We can retry on a new connection.
+	if errors.Is(err, errSaslReauthLoop) {
+		return true
+	}
 	// We really should not get correlation mismatch, but if we do, we can
 	// retry.
 	if errors.Is(err, errCorrelationIDMismatch) {
@@ -111,6 +116,11 @@ var (
 	// A temporary error returned when a broker chosen for a request is
 	// stopped due to a concurrent metadata response.
 	errChosenBrokerDead = errors.New("the internal broker struct chosen to issue this request has died--either the broker id is migrating or no longer exists")
+
+	// If a broker repeatedly gives us tiny sasl lifetimes, we fail a
+	// request after a few tries to forcefully kill the connection and
+	// restart a new connection ourselves.
+	errSaslReauthLoop = errors.New("the broker is repeatedly giving us sasl lifetimes that are too short to write a request")
 
 	errProducerIDLoadFail = errors.New("unable to initialize a producer ID due to request failures")
 
