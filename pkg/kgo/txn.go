@@ -522,7 +522,7 @@ func (cl *Client) EndTransaction(ctx context.Context, commit TransactionEndTry) 
 	}
 
 	if !cl.producer.inTxn {
-		return errNotInTransaction
+		return nil
 	}
 	cl.producer.inTxn = false
 
