@@ -642,9 +642,9 @@ func (cl *Client) doWithConcurrentTransactions(name string, fn func() error) err
 	backoff := cl.cfg.txnBackoff
 start:
 	err := fn()
-	if errors.Is(err, kerr.ConcurrentTransactions) && time.Since(start) < 10*time.Second {
+	if errors.Is(err, kerr.ConcurrentTransactions) && time.Since(start) < 5*time.Second {
 		tries++
-		cl.cfg.logger.Log(LogLevelInfo, fmt.Sprintf("%s failed with CONCURRENT_TRANSACTIONS, which may be because we ended a txn and began producing in a new txn too quickly; backing off and retrying", name),
+		cl.cfg.logger.Log(LogLevelDebug, fmt.Sprintf("%s failed with CONCURRENT_TRANSACTIONS, which may be because we ended a txn and began producing in a new txn too quickly; backing off and retrying", name),
 			"backoff", backoff,
 			"since_request_tries_start", time.Since(start),
 			"tries", tries,
