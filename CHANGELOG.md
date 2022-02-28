@@ -1,3 +1,19 @@
+v1.3.5
+===
+
+This patch release fixes a panic in `GroupTransactSession.End` and has three
+behavior changes that are beneficial to users. The panic was introduced in
+v1.3.0; if using a `GroupTransactSession`, it is recommended you upgrade to
+this release.
+
+The next release aims to be v1.4.0, this release is a small one to address a
+few issues before the much larger and feature filled v1.4 release.
+
+- [`010e8e1`](https://github.com/twmb/franz-go/commit/010e8e1) txn: fix panic in GroupTransactSession.End
+- [`f9cd625`](https://github.com/twmb/franz-go/commit/f9cd625) consuming: handle exact offset consuming better
+- [`2ab1978`](https://github.com/twmb/franz-go/commit/2ab1978) EndTransaction: return nil rather than an error if not in a transaction
+- [`96bfe52`](https://github.com/twmb/franz-go/commit/96bfe52) broker: remove 5s minimum for sasl session lifetime
+
 v1.3.4
 ===
 
