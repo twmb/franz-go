@@ -440,7 +440,7 @@ func (cl *Client) BeginTransaction() error {
 	needRecover, didRecover, err := cl.maybeRecoverProducerID()
 	if needRecover && !didRecover {
 		cl.cfg.logger.Log(LogLevelInfo, "unable to begin transaction due to unrecoverable producer id error", "err", err)
-		return fmt.Errorf("producer ID has a fatal, unrecoverable error, err: %v", err)
+		return fmt.Errorf("producer ID has a fatal, unrecoverable error, err: %w", err)
 	}
 
 	cl.producer.inTxn = true
@@ -448,6 +448,230 @@ func (cl *Client) BeginTransaction() error {
 	cl.cfg.logger.Log(LogLevelInfo, "beginning transaction", "transactional_id", *cl.cfg.txnID)
 
 	return nil
+}
+
+// EndBeginTxnHow controls the safety of how EndAndBeginTransaction executes.
+type EndBeginTxnHow uint8
+
+const (
+	// EndBeginTxnSafe ensures a "safe" execution of EndAndBeginTransaction
+	// at the expense of speed. This option blocks all produce requests and
+	// only resumes produce requests when onEnd finishes. Note that some
+	// produce requests may have finished successfully and records that
+	// were a part of a transaction may have their promises waiting to be
+	// called: not all promises are guaranteed to be called.
+	EndBeginTxnSafe EndBeginTxnHow = iota
+
+	// EndBeginTxnUnsafe opts for less safe EndAndBeginTransaction flow to
+	// achieve higher throughput. This option allows produce requests to
+	// continue while EndTxn actually commits. This is unsafe because a
+	// produce request itself only half begins a transaction. Internally,
+	// AddPartitionsToTxn actually begins a transaction. If your
+	// application dies before the client is able to successfully issue
+	// AddPartitionsToTxn, then a transaction will have partially begun
+	// within Kafka: the partial transaction will prevent the partition
+	// from being consumable past where the transaction begun, and the
+	// transaction will not timeout. You will have to restart your
+	// application with the SAME transactional ID and produce to all the
+	// same partitions to ensure to resume the transaction and unstick the
+	// partitions.
+	EndBeginTxnUnsafe
+)
+
+// EndAndBeginTransaction is a combination of EndTransaction and
+// BeginTransaction, and relaxes the restriction that the client must have no
+// buffered records. This function does not flush nor abort any buffered
+// records. It is ok to concurrently produce while this function executes.
+//
+// This function has different safety guarantees which are up to the user to
+// decide. See the documentation on EndBeginTxnHow for which you would like to
+// choose.
+//
+// The onEnd function is called with your input context and the result of
+// EndTransaction. Promises are paused while onEnd executes. If onEnd returns
+// an error, BeginTransaction is not called and this function returns the
+// result of onEnd. Otherwise, this function returns the result of
+// BeginTransaction. See the documentation on EndTransaction and
+// BeginTransaction for further details. It is invalid to call this function
+// more than once at a time, and it is invalid to call concurrent with
+// EndTransaction or BeginTransaction.
+func (cl *Client) EndAndBeginTransaction(
+	ctx context.Context,
+	how EndBeginTxnHow,
+	commit TransactionEndTry,
+	onEnd func(context.Context, error) error,
+) (rerr error) {
+	if g := cl.consumer.g; g != nil {
+		return errors.New("cannot use EndAndBeginTransaction with EOS")
+	}
+
+	cl.producer.txnMu.Lock()
+	defer cl.producer.txnMu.Unlock()
+
+	// From BeginTransaction: if we return with no error, we begin.  Unlike
+	// BeginTransaction, we do not error if in a transaction, because we
+	// expect to be in one.
+	defer func() {
+		if rerr == nil {
+			needRecover, didRecover, err := cl.maybeRecoverProducerID()
+			if needRecover && !didRecover {
+				cl.cfg.logger.Log(LogLevelInfo, "unable to begin transaction due to unrecoverable producer id error", "err", err)
+				rerr = fmt.Errorf("producer ID has a fatal, unrecoverable error, err: %w", err)
+				return
+			}
+			cl.producer.inTxn = true
+			cl.cfg.logger.Log(LogLevelInfo, "beginning transaction", "transactional_id", *cl.cfg.txnID)
+		}
+	}()
+
+	// If end/beginning safely, we have to pause AddPartitionsToTxn and
+	// ProduceRequest, and we only resume after the user's onEnd has been
+	// called.
+	if how == EndBeginTxnSafe {
+		if err := cl.producer.pause(ctx); err != nil {
+			return err
+		}
+		defer cl.producer.resume()
+	}
+
+	// Before BeginTransaction, we block promises & call onEnd with whatever
+	// the return error is.
+	cl.producer.promisesMu.Lock()
+	var promisesUnblocked bool
+	unblockPromises := func() {
+		if promisesUnblocked {
+			return
+		}
+		promisesUnblocked = true
+		defer cl.producer.promisesMu.Unlock()
+		rerr = onEnd(ctx, rerr)
+	}
+	defer unblockPromises()
+
+	if !cl.producer.inTxn {
+		return nil
+	}
+
+	var anyAdded bool
+	var readd map[string][]int32
+	for topic, parts := range cl.producer.topics.load() {
+		for i, part := range parts.load().partitions {
+			if part.records.addedToTxn.swap(false) {
+				if how == EndBeginTxnUnsafe {
+					if readd == nil {
+						readd = make(map[string][]int32)
+					}
+					readd[topic] = append(readd[topic], int32(i))
+				}
+				anyAdded = true
+			}
+		}
+	}
+
+	// EndTxn when no txn was started returns INVALID_TXN_STATE.
+	if !anyAdded {
+		cl.cfg.logger.Log(LogLevelInfo, "no records were produced during the commit; thus no transaction was began; ending without doing anything")
+		return nil
+	}
+
+	// From EndTransaction: if the pid has an error, we may try to recover.
+	id, epoch, err := cl.producerID()
+	if err != nil {
+		if commit {
+			return kerr.OperationNotAttempted
+		}
+		if _, didRecover, _ := cl.maybeRecoverProducerID(); didRecover {
+			return nil
+		}
+	}
+	cl.cfg.logger.Log(LogLevelInfo, "ending transaction",
+		"transactional_id", *cl.cfg.txnID,
+		"producer_id", id,
+		"epoch", epoch,
+		"commit", commit,
+	)
+	err = cl.doWithConcurrentTransactions("EndTxn", func() error {
+		req := kmsg.NewPtrEndTxnRequest()
+		req.TransactionalID = *cl.cfg.txnID
+		req.ProducerID = id
+		req.ProducerEpoch = epoch
+		req.Commit = bool(commit)
+		resp, err := req.RequestWith(ctx, cl)
+		if err != nil {
+			return err
+		}
+		return kerr.ErrorForCode(resp.ErrorCode)
+	})
+	var ke *kerr.Error
+	if errors.As(err, &ke) && !ke.Retriable {
+		cl.failProducerID(id, epoch, err)
+	}
+	if err != nil || how != EndBeginTxnUnsafe {
+		return err
+	}
+	unblockPromises()
+
+	// If we are end/beginning unsafely, then we need to re-add all
+	// partitions to a new transaction immediately. Timing makes it
+	// impossible to know what was truly added before EndTxn, so we
+	// pessimistically assume that every partition must be re-added.
+	//
+	// We track readd before the txn and swap those to un-added, but we
+	// also need to track anything that is newly added that raced with our
+	// EndTxn.  We swap before the txn to ensure that *eventually*,
+	// partitions will be tracked as not in a transaction if people stop
+	// producing.
+	//
+	// We do this before the user callback because we *need* to start a new
+	// transaction within Kafka to ensure there will be a timeout. Per the
+	// unsafe aspect, the client could die or this request could error and
+	// there could be a stranded txn within Kafka's ProducerStateManager,
+	// but ideally the user will reconnect with the same txnal id.
+	return cl.doWithConcurrentTransactions("AddPartitionsToTxn", func() error {
+		req := kmsg.NewPtrAddPartitionsToTxnRequest()
+		req.TransactionalID = *cl.cfg.txnID
+		req.ProducerID = id
+		req.ProducerEpoch = epoch
+
+		for topic, parts := range cl.producer.topics.load() {
+			for i, part := range parts.load().partitions {
+				if part.records.addedToTxn.get() {
+					readd[topic] = append(readd[topic], int32(i))
+				}
+			}
+		}
+
+		ps := make(map[int32]struct{})
+		for topic, parts := range readd {
+			t := kmsg.NewAddPartitionsToTxnRequestTopic()
+			t.Topic = topic
+			for _, part := range parts {
+				ps[part] = struct{}{}
+			}
+			for p := range ps {
+				t.Partitions = append(t.Partitions, p)
+				delete(ps, p)
+			}
+			if len(t.Partitions) > 0 {
+				req.Topics = append(req.Topics, t)
+			}
+		}
+
+		resp, err := req.RequestWith(ctx, cl)
+		if err != nil {
+			return err
+		}
+		for i := range resp.Topics {
+			t := &resp.Topics[i]
+			for j := range t.Partitions {
+				p := &t.Partitions[j]
+				if err := kerr.ErrorForCode(p.ErrorCode); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	})
 }
 
 // AbortBufferedRecords fails all unflushed records with ErrAborted and waits
@@ -521,6 +745,8 @@ func (cl *Client) EndTransaction(ctx context.Context, commit TransactionEndTry) 
 	// also produced.
 	var anyAdded bool
 	if g := cl.consumer.g; g != nil {
+		// We do not lock because we expect commitTransactionOffsets to
+		// be called *before* ending a transaction.
 		if g.offsetsAddedToTxn {
 			g.offsetsAddedToTxn = false
 			anyAdded = true
@@ -538,10 +764,7 @@ func (cl *Client) EndTransaction(ctx context.Context, commit TransactionEndTry) 
 	// addedToTxn to false outside of any mutex.
 	for _, parts := range cl.producer.topics.load() {
 		for _, part := range parts.load().partitions {
-			if part.records.addedToTxn {
-				part.records.addedToTxn = false
-				anyAdded = true
-			}
+			anyAdded = part.records.addedToTxn.swap(false) || anyAdded
 		}
 	}
 
@@ -605,6 +828,9 @@ func (cl *Client) EndTransaction(ctx context.Context, commit TransactionEndTry) 
 //
 // We call this when beginning a transaction or when ending with an abort.
 func (cl *Client) maybeRecoverProducerID() (necessary, did bool, err error) {
+	cl.producer.mu.Lock()
+	defer cl.producer.mu.Unlock()
+
 	id, epoch, err := cl.producerID()
 	if err == nil {
 		return false, false, nil

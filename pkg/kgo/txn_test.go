@@ -53,23 +53,22 @@ func TestTxnEtl(t *testing.T) {
 				errs <- fmt.Errorf("unable to end transaction: %v", err)
 			}
 		}()
+		var safeUnsafe bool
 		for i := 0; i < testRecordLimit; i++ {
 			// We start with a transaction, and every 10k records
 			// we commit and begin a new one.
 			if i > 0 && i%10000 == 0 {
-				if err := cl.Flush(context.Background()); err != nil {
-					errs <- fmt.Errorf("unable to flush: %v", err)
+				how := EndBeginTxnSafe
+				if safeUnsafe {
+					how = EndBeginTxnUnsafe
 				}
-				// Control markers ending a transaction take up
-				// one record offset, so for all partitions that
-				// were used in the txn, we bump their offset.
-				for partition := range partsUsed {
-					offsets[partition]++
-				}
-				if err := cl.EndTransaction(context.Background(), true); err != nil {
-					errs <- fmt.Errorf("unable to end transaction: %v", err)
-				}
-				if err := cl.BeginTransaction(); err != nil {
+				safeUnsafe = !safeUnsafe
+				if err := cl.EndAndBeginTransaction(context.Background(), how, TryCommit, func(_ context.Context, endErr error) error {
+					if err != nil {
+						errs <- fmt.Errorf("unable to end transaction: %v", err)
+					}
+					return err
+				}); err != nil {
 					errs <- fmt.Errorf("unable to begin transaction: %v", err)
 				}
 			}

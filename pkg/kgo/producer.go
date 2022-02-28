@@ -48,11 +48,15 @@ type producer struct {
 	idVersion  int16
 	waitBuffer chan struct{}
 
-	// notifyMu and notifyCond are used for flush and drain notifications.
-	notifyMu   sync.Mutex
-	notifyCond *sync.Cond
+	// mu and c are used for flush and drain notifications; mu is used for
+	// a few other tight locks.
+	mu sync.Mutex
+	c  *sync.Cond
+
+	inflight int64 // high 16: # waiters, low 48: # inflight
 
 	batchPromises ringBatchPromise
+	promisesMu    sync.Mutex
 
 	txnMu sync.Mutex
 	inTxn bool
@@ -84,7 +88,7 @@ func (p *producer) init(cl *Client) {
 		epoch: -1,
 		err:   errReloadProducerID,
 	})
-	p.notifyCond = sync.NewCond(&p.notifyMu)
+	p.c = sync.NewCond(&p.mu)
 
 	inithooks := func() {
 		if p.hooks == nil {
@@ -415,6 +419,7 @@ func (p *producer) finishPromises(b batchPromise) {
 	cl := p.cl
 	var more bool
 start:
+	p.promisesMu.Lock()
 	for i, pr := range b.recs {
 		pr.Offset = b.baseOffset + int64(i)
 		pr.Partition = b.partition
@@ -424,6 +429,7 @@ start:
 		cl.finishRecordPromise(pr, b.err)
 		b.recs[i] = promisedRec{}
 	}
+	p.promisesMu.Unlock()
 	if cap(b.recs) > 4 {
 		cl.prsPool.put(b.recs)
 	}
@@ -452,9 +458,9 @@ func (cl *Client) finishRecordPromise(pr promisedRec, err error) {
 	if buffered >= cl.cfg.maxBufferedRecords {
 		p.waitBuffer <- struct{}{}
 	} else if buffered == 0 && atomic.LoadInt32(&p.flushing) > 0 {
-		p.notifyMu.Lock()
-		p.notifyMu.Unlock() // nolint:gocritic,staticcheck // We use the lock as a barrier, unlocking immediately is safe.
-		p.notifyCond.Broadcast()
+		p.mu.Lock()
+		p.mu.Unlock() // nolint:gocritic,staticcheck // We use the lock as a barrier, unlocking immediately is safe.
+		p.c.Broadcast()
 	}
 }
 
@@ -867,12 +873,12 @@ func (cl *Client) Flush(ctx context.Context) error {
 	quit := false
 	done := make(chan struct{})
 	go func() {
-		p.notifyMu.Lock()
-		defer p.notifyMu.Unlock()
+		p.mu.Lock()
+		defer p.mu.Unlock()
 		defer close(done)
 
 		for !quit && atomic.LoadInt64(&p.bufferedRecords) > 0 {
-			p.notifyCond.Wait()
+			p.c.Wait()
 		}
 	}()
 
@@ -880,11 +886,63 @@ func (cl *Client) Flush(ctx context.Context) error {
 	case <-done:
 		return nil
 	case <-ctx.Done():
-		p.notifyMu.Lock()
+		p.mu.Lock()
 		quit = true
-		p.notifyMu.Unlock()
-		p.notifyCond.Broadcast()
+		p.mu.Unlock()
+		p.c.Broadcast()
 		return ctx.Err()
+	}
+}
+
+func (p *producer) pause(ctx context.Context) error {
+	atomic.AddInt64(&p.inflight, 1<<48)
+
+	quit := false
+	done := make(chan struct{})
+	go func() {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		defer close(done)
+		for !quit && atomic.LoadInt64(&p.inflight)&0x0000ffffffffffff != 0 {
+			p.c.Wait()
+		}
+	}()
+
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		p.mu.Lock()
+		quit = true
+		p.mu.Unlock()
+		p.c.Broadcast()
+		p.resume() // dec our inflight
+		return ctx.Err()
+	}
+}
+
+func (p *producer) resume() {
+	if atomic.AddInt64(&p.inflight, -1<<48) == 0 {
+		p.cl.allSinksAndSources(func(sns sinkAndSource) {
+			sns.sink.maybeDrain()
+		})
+	}
+}
+
+func (p *producer) maybeAddInflight() bool {
+	if atomic.LoadInt64(&p.inflight)>>48 > 0 {
+		return false
+	}
+	if atomic.AddInt64(&p.inflight, 1)>>48 > 0 {
+		p.decInflight()
+		return false
+	}
+	return true
+}
+
+func (p *producer) decInflight() {
+	if atomic.AddInt64(&p.inflight, -1)>>48 > 0 {
+		p.c.Broadcast()
 	}
 }
 

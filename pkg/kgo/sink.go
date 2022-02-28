@@ -148,10 +148,9 @@ func (t *txnReqBuilder) add(rb *recBuf) {
 	if t.txnID == nil {
 		return
 	}
-	if rb.addedToTxn {
+	if rb.addedToTxn.swap(true) {
 		return
 	}
-	rb.addedToTxn = true
 	if t.req == nil {
 		req := kmsg.NewPtrAddPartitionsToTxnRequest()
 		req.TransactionalID = *t.txnID
@@ -282,6 +281,15 @@ func (s *sink) produce(sem <-chan struct{}) bool {
 		return false
 	}
 
+	if !s.cl.producer.maybeAddInflight() { // must do before marking recBufs on a txn
+		return false
+	}
+	defer func() {
+		if !produced {
+			s.cl.producer.decInflight()
+		}
+	}()
+
 	// NOTE: we create the req AFTER getting our producer ID!
 	//
 	// If a prior response caused errReloadProducerID, then calling
@@ -335,6 +343,7 @@ func (s *sink) produce(sem <-chan struct{}) bool {
 
 	batches := req.batches.sliced()
 	s.doSequenced(req, func(br *broker, resp kmsg.Response, err error) {
+		s.cl.producer.decInflight()
 		s.handleReqResp(br, req, resp, err)
 		batches.eachOwnerLocked((*recBatch).decInflight)
 		<-sem
@@ -409,7 +418,7 @@ func (s *sink) doTxnReq(
 // inflight, and that it was not added to the txn and that we need to reset the
 // drain index.
 func (b *recBatch) removeFromTxn() {
-	b.owner.addedToTxn = false
+	b.owner.addedToTxn.set(false)
 	b.owner.resetBatchDrainIdx()
 	b.decInflight()
 }
@@ -426,7 +435,7 @@ func (s *sink) issueTxnReq(
 	for _, topic := range resp.Topics {
 		topicBatches, ok := req.batches[topic.Topic]
 		if !ok {
-			s.cl.cfg.logger.Log(LogLevelError, "Kafka replied with topic in AddPartitionsToTxnResponse that was not in request", "broker", logID(s.nodeID), "topic", topic.Topic)
+			s.cl.cfg.logger.Log(LogLevelError, "Kafka replied with topic in AddPartitionsToTxnResponse that was not in request", "topic", topic.Topic)
 			continue
 		}
 		for _, partition := range topic.Partitions {
@@ -440,7 +449,7 @@ func (s *sink) issueTxnReq(
 
 				batch, ok := topicBatches[partition.Partition]
 				if !ok {
-					s.cl.cfg.logger.Log(LogLevelError, "Kafka replied with partition in AddPartitionsToTxnResponse that was not in request", "broker", logID(s.nodeID), "topic", topic.Topic, "partition", partition.Partition)
+					s.cl.cfg.logger.Log(LogLevelError, "Kafka replied with partition in AddPartitionsToTxnResponse that was not in request", "topic", topic.Topic, "partition", partition.Partition)
 					continue
 				}
 
@@ -950,12 +959,7 @@ type recBuf struct {
 
 	// addedToTxn, for transactions only, signifies whether this partition
 	// has been added to the transaction yet or not.
-	//
-	// This does not need to be under the mu since it is updated either
-	// serially in building a req (the first time) or after failing to add
-	// the partition to a txn (again serially), or in EndTransaction after
-	// all buffered records are flushed (if the API is used correctly).
-	addedToTxn bool
+	addedToTxn atomicBool
 
 	// For LoadTopicPartitioner partitioning; atomically tracks the number
 	// of records buffered in total on this recBuf.

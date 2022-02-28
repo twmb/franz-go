@@ -15,6 +15,14 @@ func (b *atomicBool) set(v bool) {
 
 func (b *atomicBool) get() bool { return atomic.LoadUint32((*uint32)(b)) == 1 }
 
+func (b *atomicBool) swap(v bool) bool {
+	var swap uint32
+	if v {
+		swap = 1
+	}
+	return atomic.SwapUint32((*uint32)(b), swap) == 1
+}
+
 const (
 	stateUnstarted = iota
 	stateWorking
