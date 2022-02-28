@@ -271,12 +271,12 @@ func (s *GroupTransactSession) End(ctx context.Context, commit TransactionEndTry
 		committed := make(chan struct{})
 		g = s.cl.commitTransactionOffsets(context.Background(), postcommit,
 			func(_ *kmsg.TxnOffsetCommitRequest, resp *kmsg.TxnOffsetCommitResponse, err error) {
-				kip447 = resp.Version >= 3
 				defer close(committed)
 				if err != nil {
 					commitErrs = append(commitErrs, err.Error())
 					return
 				}
+				kip447 = resp.Version >= 3
 
 				for _, t := range resp.Topics {
 					for _, p := range t.Partitions {
