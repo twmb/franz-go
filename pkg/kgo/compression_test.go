@@ -3,6 +3,7 @@ package kgo
 import (
 	"bytes"
 	"encoding/base64"
+	"fmt"
 	"reflect"
 	"sync"
 	"testing"
@@ -95,12 +96,19 @@ func TestCompressDecompress(t *testing.T) {
 }
 
 func BenchmarkCompress(b *testing.B) {
-	c, _ := newCompressor(CompressionCodec{codec: 2}) // snappy
-	in := []byte("foo")
-	for i := 0; i < b.N; i++ {
-		w := sliceWriters.Get().(*sliceWriter)
-		c.compress(w, in, 0)
-		sliceWriters.Put(w)
+	in := bytes.Repeat([]byte("abcdefghijklmno pqrs tuvwxy   z"), 100)
+	for _, codec := range []int8{1, 2, 3, 4} {
+		c, _ := newCompressor(CompressionCodec{codec: codec}) // snappy
+		b.Run(fmt.Sprint(codec), func(b *testing.B) {
+			var afterSize int
+			for i := 0; i < b.N; i++ {
+				w := sliceWriters.Get().(*sliceWriter)
+				after, _ := c.compress(w, in, 99)
+				afterSize = len(after)
+				sliceWriters.Put(w)
+			}
+			b.Logf("%d => %d", len(in), afterSize)
+		})
 	}
 }
 

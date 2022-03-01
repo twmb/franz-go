@@ -14,11 +14,6 @@ import (
 	"github.com/pierrec/lz4/v4"
 )
 
-// NOTE: level configuration was removed at some point due to it likely being
-// more configuration than necessary; we may add level options as new functions
-// down the line. The code below supports levels; zstd levels will need wiring
-// in and levels will need validating.
-
 // sliceWriter a reusable slice as an io.Writer
 type sliceWriter struct{ inner []byte }
 
@@ -109,47 +104,47 @@ out:
 		case 0:
 			break out
 		case 1:
-			level := codec.level
-			if _, err := gzip.NewWriterLevel(nil, int(level)); err != nil {
-				level = gzip.DefaultCompression
+			level := gzip.DefaultCompression
+			if codec.level != 0 {
+				if _, err := gzip.NewWriterLevel(nil, int(codec.level)); err != nil {
+					level = int(codec.level)
+				}
 			}
-			c.gzPool = sync.Pool{New: func() interface{} { c, _ := gzip.NewWriterLevel(nil, int(level)); return c }}
+			c.gzPool = sync.Pool{New: func() interface{} { c, _ := gzip.NewWriterLevel(nil, level); return c }}
 		case 3:
 			level := codec.level
 			if level < 0 {
-				level = 0
+				level = 0 // 0 == lz4.Fast
 			}
-			c.lz4Pool = sync.Pool{
-				New: func() interface{} {
+			fn := func() interface{} { return lz4.NewWriter(new(bytes.Buffer)) }
+			w := lz4.NewWriter(new(bytes.Buffer))
+			if err := w.Apply(lz4.CompressionLevelOption(lz4.CompressionLevel(level))); err == nil {
+				fn = func() interface{} {
 					w := lz4.NewWriter(new(bytes.Buffer))
-					if err := w.Apply(lz4.CompressionLevelOption(lz4.CompressionLevel(level))); err != nil {
-						w.Close()
-						w = lz4.NewWriter(nil)
-					}
+					w.Apply(lz4.CompressionLevelOption(lz4.CompressionLevel(level)))
 					return w
-				},
+				}
 			}
+			w.Close()
+			c.lz4Pool = sync.Pool{New: fn}
 		case 4:
-			level := zstd.EncoderLevel(codec.level)
-			c.zstdPool = sync.Pool{
-				New: func() interface{} {
-					zstdEnc, err := zstd.NewWriter(nil,
-						zstd.WithEncoderLevel(level),
-						zstd.WithWindowSize(64<<10),
-						zstd.WithEncoderConcurrency(1),
-						zstd.WithZeroFrames(true),
-					)
-					if err != nil {
-						zstdEnc, _ = zstd.NewWriter(nil,
-							zstd.WithEncoderConcurrency(1))
-					}
-					r := &zstdEncoder{zstdEnc}
-					runtime.SetFinalizer(r, func(r *zstdEncoder) {
-						r.inner.Close()
-					})
-					return r
-				},
+			opts := []zstd.EOption{
+				zstd.WithWindowSize(64 << 10),
+				zstd.WithEncoderConcurrency(1),
+				zstd.WithZeroFrames(true),
 			}
+			fn := func() interface{} {
+				zstdEnc, _ := zstd.NewWriter(nil, opts...)
+				r := &zstdEncoder{zstdEnc}
+				runtime.SetFinalizer(r, func(r *zstdEncoder) { r.inner.Close() })
+				return r
+			}
+			zstdEnc, err := zstd.NewWriter(nil, append(opts, zstd.WithEncoderLevel(zstd.EncoderLevel(codec.level)))...)
+			if err == nil {
+				zstdEnc.Close()
+				opts = append(opts, zstd.WithEncoderLevel(zstd.EncoderLevel(codec.level)))
+			}
+			c.zstdPool = sync.Pool{New: fn}
 		}
 	}
 
