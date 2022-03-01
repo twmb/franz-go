@@ -121,6 +121,7 @@ Supplementary information can be found in the docs directory:
 <pre>
 <a href="./docs">docs</a>
 ├── <a href="./docs/admin-requests.md">admin requests</a> — an overview of how to issue admin requests
+├── <a href="./docs/metrics-and-logging.md">metrics and logging</a> — a small writeup on how to enable metrics & logging in franz-go, as well as a few thoughts on latency tracking
 ├── <a href="./docs/package-layout.md">package layout</a> — describes the packages in franz-go
 ├── <a href="./docs/producing-and-consuming.md">producing and consuming</a> — descriptions of producing & consuming & the guarantees
 └── <a href="./docs/transactions.md">transactions</a> — a description of transactions and the safety even in a pre-KIP-447 world
