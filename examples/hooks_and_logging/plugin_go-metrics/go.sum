@@ -20,8 +20,8 @@ github.com/rcrowley/go-metrics v0.0.0-20201227073835-cf1acfcdf475/go.mod h1:bCqn
 github.com/stretchr/objx v0.1.0/go.mod h1:HFkY916IF+rwdDfMAkV7OtwuqBVzrE8GR6GFx+wExME=
 github.com/stretchr/testify v1.4.0/go.mod h1:j7eGeouHqKxXV5pUuKE4zz7dFj8WfuZ+81PSLYec5m4=
 github.com/stretchr/testify v1.6.1/go.mod h1:6Fq8oRcR53rry900zMqJjRRixrwX3KX962/h/Wwjteg=
-github.com/twmb/franz-go/pkg/kmsg v0.0.0-20220222044056-99b4da42cf4b h1:K7ICUMoexUPk3aFQOgydoeRS2nCZvTcKMm93lkGDGPc=
-github.com/twmb/franz-go/pkg/kmsg v0.0.0-20220222044056-99b4da42cf4b/go.mod h1:SxG/xJKhgPu25SamAq0rrucfp7lbzCpEXOC+vH/ELrY=
+github.com/twmb/franz-go/pkg/kmsg v0.0.0-20220301191019-c3fc8e03e6f4 h1:M1kTQy+dMZWjXW2Ps1XBPwhbmV3xjR8XAtQ4Vlwx8gU=
+github.com/twmb/franz-go/pkg/kmsg v0.0.0-20220301191019-c3fc8e03e6f4/go.mod h1:SxG/xJKhgPu25SamAq0rrucfp7lbzCpEXOC+vH/ELrY=
 github.com/twmb/franz-go/plugin/kgmetrics v0.1.0 h1:qeiIKJDhF0WMn7JnD231mLBd2KFX/s8hYel/g8sLu38=
 github.com/twmb/franz-go/plugin/kgmetrics v0.1.0/go.mod h1:1ieTsN7poTHhf6EYCiGgGUJ2/ubdJg3Qu8lzImSip60=
 github.com/twmb/go-rbtree v1.0.0 h1:KxN7dXJ8XaZ4cvmHV1qqXTshxX3EBvX/toG5+UR49Mg=

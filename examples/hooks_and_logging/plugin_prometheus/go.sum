@@ -196,8 +196,8 @@ github.com/stretchr/testify v1.2.2/go.mod h1:a8OnRcib4nhh0OaRAV+Yts87kKdq0PP7pXf
 github.com/stretchr/testify v1.3.0/go.mod h1:M5WIy9Dh21IEIfnGCwXGc5bZfKNJtfHm1UVUgZn+9EI=
 github.com/stretchr/testify v1.4.0/go.mod h1:j7eGeouHqKxXV5pUuKE4zz7dFj8WfuZ+81PSLYec5m4=
 github.com/stretchr/testify v1.6.1/go.mod h1:6Fq8oRcR53rry900zMqJjRRixrwX3KX962/h/Wwjteg=
-github.com/twmb/franz-go/pkg/kmsg v0.0.0-20220222044056-99b4da42cf4b h1:K7ICUMoexUPk3aFQOgydoeRS2nCZvTcKMm93lkGDGPc=
-github.com/twmb/franz-go/pkg/kmsg v0.0.0-20220222044056-99b4da42cf4b/go.mod h1:SxG/xJKhgPu25SamAq0rrucfp7lbzCpEXOC+vH/ELrY=
+github.com/twmb/franz-go/pkg/kmsg v0.0.0-20220301191019-c3fc8e03e6f4 h1:M1kTQy+dMZWjXW2Ps1XBPwhbmV3xjR8XAtQ4Vlwx8gU=
+github.com/twmb/franz-go/pkg/kmsg v0.0.0-20220301191019-c3fc8e03e6f4/go.mod h1:SxG/xJKhgPu25SamAq0rrucfp7lbzCpEXOC+vH/ELrY=
 github.com/twmb/franz-go/plugin/kprom v0.1.0 h1:obXrrv8qR/E78PNw5Y9r7rXAqoZokPISyKHdu4hrgzI=
 github.com/twmb/franz-go/plugin/kprom v0.1.0/go.mod h1:PoWAhy9nQobiSZaDR28zooq8yzCkssEf4xCKP/hDfSs=
 github.com/twmb/go-rbtree v1.0.0 h1:KxN7dXJ8XaZ4cvmHV1qqXTshxX3EBvX/toG5+UR49Mg=
