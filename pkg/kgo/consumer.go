@@ -166,11 +166,73 @@ type consumer struct {
 	sourcesReadyCond        *sync.Cond
 	sourcesReadyForDraining []*source
 	fakeReadyForDraining    []Fetch
+
+	pollWaitMu    sync.Mutex
+	pollWaitC     *sync.Cond
+	pollWaitState uint64 // 0 == nothing, low 32 bits: # pollers, high 32: # waiting rebalances
 }
 
 func (c *consumer) loadPaused() pausedTopics   { return c.paused.Load().(pausedTopics) }
 func (c *consumer) clonePaused() pausedTopics  { return c.paused.Load().(pausedTopics).clone() }
 func (c *consumer) storePaused(p pausedTopics) { c.paused.Store(p) }
+
+func (c *consumer) waitAndAddPoller() {
+	if !c.cl.cfg.blockRebalanceOnPoll {
+		return
+	}
+	c.pollWaitMu.Lock()
+	defer c.pollWaitMu.Unlock()
+	for c.pollWaitState>>32 != 0 {
+		c.pollWaitC.Wait()
+	}
+	// Rebalance always takes priority, but if there are no active
+	// rebalances, our poll blocks rebalances.
+	c.pollWaitState++
+}
+
+func (c *consumer) unaddPoller() {
+	if !c.cl.cfg.blockRebalanceOnPoll {
+		return
+	}
+	c.pollWaitMu.Lock()
+	defer c.pollWaitMu.Unlock()
+	c.pollWaitState--
+	c.pollWaitC.Broadcast()
+}
+
+func (c *consumer) allowRebalance() {
+	if !c.cl.cfg.blockRebalanceOnPoll {
+		return
+	}
+	c.pollWaitMu.Lock()
+	defer c.pollWaitMu.Unlock()
+	// When allowing rebalances, the user is explicitly saying all pollers
+	// are done. We mask them out.
+	c.pollWaitState &= math.MaxUint32 << 32
+	c.pollWaitC.Broadcast()
+}
+
+func (c *consumer) waitAndAddRebalance() {
+	if !c.cl.cfg.blockRebalanceOnPoll {
+		return
+	}
+	c.pollWaitMu.Lock()
+	defer c.pollWaitMu.Unlock()
+	c.pollWaitState += 1 << 32
+	for c.pollWaitState&math.MaxUint32 != 0 {
+		c.pollWaitC.Wait()
+	}
+}
+
+func (c *consumer) unaddRebalance() {
+	if !c.cl.cfg.blockRebalanceOnPoll {
+		return
+	}
+	c.pollWaitMu.Lock()
+	defer c.pollWaitMu.Unlock()
+	c.pollWaitState -= 1 << 32
+	c.pollWaitC.Broadcast()
+}
 
 // BufferedFetchRecords returns the number of records currently buffered from
 // fetching within the client.
@@ -198,6 +260,7 @@ func (c *consumer) init(cl *Client) {
 	c.cl = cl
 	c.paused.Store(make(pausedTopics))
 	c.sourcesReadyCond = sync.NewCond(&c.sourcesReadyMu)
+	c.pollWaitC = sync.NewCond(&c.pollWaitMu)
 
 	if len(cl.cfg.topics) == 0 && len(cl.cfg.partitions) == 0 {
 		return // not consuming
@@ -253,6 +316,12 @@ func (c *consumer) addFakeReadyForDraining(topic string, partition int32, err er
 // has no topic, a partition of 0, and a partition error of ErrClientClosed.
 // This can be used to detect if the client is closing and to break out of a
 // poll loop.
+//
+// If you are group consuming, a rebalance can happen under the hood while you
+// process the returned fetches. This can result in duplicate work, and you may
+// accidentally commit to partitions that you no longer own. You can prevent
+// this by using BlockRebalanceOnPoll, but this comes with different tradeoffs.
+// See the documentation on BlockRebalanceOnPoll for more information.
 func (cl *Client) PollFetches(ctx context.Context) Fetches {
 	return cl.PollRecords(ctx, 0)
 }
@@ -273,6 +342,12 @@ func (cl *Client) PollFetches(ctx context.Context) Fetches {
 // has no topic, a partition of 0, and a partition error of ErrClientClosed.
 // This can be used to detect if the client is closing and to break out of a
 // poll loop.
+//
+// If you are group consuming, a rebalance can happen under the hood while you
+// process the returned fetches. This can result in duplicate work, and you may
+// accidentally commit to partitions that you no longer own. You can prevent
+// this by using BlockRebalanceOnPoll, but this comes with different tradeoffs.
+// See the documentation on BlockRebalanceOnPoll for more information.
 func (cl *Client) PollRecords(ctx context.Context, maxPollRecords int) Fetches {
 	if maxPollRecords == 0 {
 		maxPollRecords = -1
@@ -283,6 +358,15 @@ func (cl *Client) PollRecords(ctx context.Context, maxPollRecords int) Fetches {
 
 	var fetches Fetches
 	fill := func() {
+		if c.cl.cfg.blockRebalanceOnPoll {
+			c.waitAndAddPoller()
+			defer func() {
+				if len(fetches) == 0 {
+					c.unaddPoller()
+				}
+			}()
+		}
+
 		// A group can grab the consumer lock then the group mu and
 		// assign partitions. The group mu is grabbed to update its
 		// uncommitted map. Assigning partitions clears sources ready
@@ -385,6 +469,19 @@ func (cl *Client) PollRecords(ctx context.Context, maxPollRecords int) Fetches {
 
 	fill()
 	return fetches
+}
+
+// AllowRebalance allows a consumer group to rebalance if it was blocked by you
+// polling records in tandem with the BlockRebalanceOnPoll option.
+//
+// You can poll many times before calling this function; this function
+// internally resets the poll count and allows any blocked rebalances to
+// continue. Rebalances take priority: if a rebalance is blocked, and you allow
+// rebalances and then immediately poll, your poll will be blocked until the
+// rebalance completes. Internally, this function simply waits for lost
+// partitions to stop being fetched before allowing you to poll again.
+func (cl *Client) AllowRebalance() {
+	cl.consumer.allowRebalance()
 }
 
 // PauseFetchTopics sets the client to no longer fetch the given topics and
@@ -545,6 +642,9 @@ func (c *consumer) purgeTopics(topics []string) {
 	for _, topic := range topics {
 		purgeAssignments[topic] = nil
 	}
+
+	c.waitAndAddRebalance()
+	defer c.unaddRebalance()
 
 	c.mu.Lock()
 	defer c.mu.Unlock()

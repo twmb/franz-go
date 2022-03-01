@@ -152,10 +152,12 @@ func (cl *Client) LeaveGroup() {
 		return
 	}
 
+	c.waitAndAddRebalance()
 	c.mu.Lock() // lock for assign
 	c.assignPartitions(nil, assignInvalidateAll, noTopicsPartitions, "invalidating all assignments in LeaveGroup")
 	wait := c.g.leave()
 	c.mu.Unlock()
+	c.unaddRebalance()
 
 	wait() // wait after we unlock
 }
@@ -279,13 +281,9 @@ func (g *groupConsumer) manage() {
 		}
 		joinWhy = "rejoining after we previously errored and backed off"
 
-		hook := func() {
-			g.cfg.hooks.each(func(h Hook) {
-				if h, ok := h.(HookGroupManageError); ok {
-					h.OnGroupManageError(err)
-				}
-			})
-		}
+		// If the user has BlockPollOnRebalance enabled, we have to
+		// block around the onLost and assigning.
+		g.c.waitAndAddRebalance()
 
 		if errors.Is(err, context.Canceled) && g.cfg.onRevoked != nil {
 			// The cooperative consumer does not revoke everything
@@ -308,10 +306,21 @@ func (g *groupConsumer) manage() {
 			if g.cfg.onLost != nil {
 				g.cfg.onLost(g.cl.ctx, g.cl, g.nowAssigned.read())
 			}
-			hook()
+			g.cfg.hooks.each(func(h Hook) {
+				if h, ok := h.(HookGroupManageError); ok {
+					h.OnGroupManageError(err)
+				}
+			})
 		}
 
-		// We need to invalidate everything from an error return.
+		// If we are eager, we should have invalidated everything
+		// before getting here, but we do so doubly just in case.
+		//
+		// If we are cooperative, the join and sync could have failed
+		// during the cooperative rebalance where we were still
+		// consuming. We need to invalidate everything. Waiting to
+		// resume from poll is necessary, but the user will likely be
+		// unable to commit.
 		{
 			g.c.mu.Lock()
 			g.c.assignPartitions(nil, assignInvalidateAll, nil, "clearing assignment at end of group management session")
@@ -327,6 +336,10 @@ func (g *groupConsumer) manage() {
 			g.leader.set(false)
 			g.resetExternal()
 		}
+
+		// Unblock bolling now that we have called onLost and
+		// re-assigned.
+		g.c.unaddRebalance()
 
 		if errors.Is(err, context.Canceled) { // context was canceled, quit now
 			return
@@ -480,6 +493,9 @@ const (
 // Lastly, for cooperative consumers, this must selectively delete what was
 // lost from the uncommitted map.
 func (g *groupConsumer) revoke(stage revokeStage, lost map[string][]int32, leaving bool) {
+	g.c.waitAndAddRebalance()
+	defer g.c.unaddRebalance()
+
 	if !g.cooperative || leaving { // stage == revokeThisSession if not cooperative
 		// If we are an eager consumer, we stop fetching all of our
 		// current partitions as we will be revoking them.
@@ -648,6 +664,10 @@ func (s *assignRevokeSession) assign(g *groupConsumer, newAssigned map[string][]
 			// We always call on assigned, even if nothing new is
 			// assigned. This allows consumers to know that
 			// assignment is done and do setup logic.
+			//
+			// If configured, we have to block polling.
+			g.c.waitAndAddRebalance()
+			defer g.c.unaddRebalance()
 			g.cfg.onAssigned(g.cl.ctx, g.cl, newAssigned)
 		}
 	}()
@@ -722,6 +742,24 @@ func (g *groupConsumer) setupAssignedAndHeartbeat() (string, error) {
 		added = g.adjustCooperativeFetchOffsets(added, lost)
 	}
 
+	// Before we fetch offsets, we wait for the user's onAssign callback to
+	// be done. This ensures a few things:
+	//
+	// * that we wait for for prerevoking to be done, which updates the
+	// uncommitted field. Waiting for that ensures that a rejoin and poll
+	// does not have weird concurrent interaction.
+	//
+	// * that our onLost will not be concurrent with onAssign
+	//
+	// * that the user can start up any per-partition processors necessary
+	// before we begin consuming that partition.
+	//
+	// We especially need to wait here because heartbeating may not
+	// necessarily run onRevoke before returning (because of a fatal
+	// error).
+	s.assign(g, added)
+	<-s.assignDone
+
 	if len(added) > 0 {
 		go func() {
 			defer close(fetchDone)
@@ -732,23 +770,6 @@ func (g *groupConsumer) setupAssignedAndHeartbeat() (string, error) {
 		close(fetchDone)
 		close(fetchErrCh)
 	}
-
-	// Before we return, we also want to ensure that the user's onAssign is
-	// done.
-	//
-	// Ensuring assigning is done ensures two things:
-	//
-	// * that we wait for for prerevoking to be done, which updates the
-	// uncommitted field. Waiting for that ensures that a rejoin and poll
-	// does not have weird concurrent interaction.
-	//
-	// * that our onLost will not be concurrent with onAssign
-	//
-	// We especially need to wait here because heartbeating may not
-	// necessarily run onRevoke before returning (because of a fatal
-	// error).
-	s.assign(g, added)
-	defer func() { <-s.assignDone }()
 
 	// Finally, we simply return whatever the heartbeat error is. This will
 	// be the fetch offset error if that function is what killed this.
@@ -2020,7 +2041,9 @@ func (g *groupConsumer) getUncommittedLocked(head, dirty bool) map[string]map[in
 // group rebalance occurs before or while this function is being executed. You
 // can avoid this scenario by calling CommitRecords in a custom OnRevoked, but
 // for most workloads, a small bit of potential duplicate processing is fine.
-// See the documentation on DisableAutoCommit for more details.
+// See the documentation on DisableAutoCommit for more details. You can also
+// avoid this problem by using BlockRebalanceOnCommit, but that option comes
+// with its own tradeoffs (refer to its documentation).
 //
 // It is recommended to always commit records in order (per partition). If you
 // call this function twice with record for partition 0 at offset 999
@@ -2144,7 +2167,9 @@ func (cl *Client) MarkCommitRecords(rs ...*Record) {
 // group rebalance occurs before or while this function is being executed. You
 // can avoid this scenario by calling CommitRecords in a custom OnRevoked, but
 // for most workloads, a small bit of potential duplicate processing is fine.
-// See the documentation on DisableAutoCommit for more details.
+// See the documentation on DisableAutoCommit for more details. You can also
+// avoid this problem by using BlockRebalanceOnCommit, but that option comes
+// with its own tradeoffs (refer to its documentation).
 //
 // The recommended pattern for using this function is to have a poll / process
 // / commit loop. First PollFetches, then process every record, then call

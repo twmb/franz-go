@@ -164,6 +164,8 @@ type cfg struct {
 
 	adjustOffsetsBeforeAssign func(ctx context.Context, offsets map[string]map[int32]Offset) (map[string]map[int32]Offset, error)
 
+	blockRebalanceOnPoll bool
+
 	setAssigned       bool
 	setRevoked        bool
 	setLost           bool
@@ -1383,6 +1385,43 @@ func RequireStableFetchOffsets() GroupOpt {
 	return groupOpt{func(cfg *cfg) { cfg.requireStable = true }}
 }
 
+// BlockRebalanceOnPoll switches the client to block rebalances whenever you
+// poll until you explicitly call AllowRebalance. This option also ensures that
+// any OnPartitions{Assigned,Revoked,Lost} callbacks are only called when you
+// allow rebalances; they cannot be called if you have polled and are
+// processing records.
+//
+// By default, a consumer group is managed completely independently of
+// consuming. A rebalance may occur at any moment. If you poll records, and
+// then a rebalance happens, and then you commit, you may be committing to
+// partitions you no longer own. This will result in duplicates. In the worst
+// case, you could rewind commits that a different member has already made
+// (risking duplicates if another rebalance were to happen before that other
+// member commits again).
+//
+// By blocking rebalancing after you poll until you call AllowRebalances, you
+// can be sure that you commit records that your member currently owns.
+// However, the big tradeoff is that by blocking rebalances, you put your group
+// member at risk of waiting so long that the group member is kicked from the
+// group because it exceeded the rebalance timeout. To compare clients, Sarama
+// takes the default choice of blocking rebalancing; this option makes kgo more
+// similar to Sarama.
+//
+// If you use this option, you should ensure that you always process records
+// quickly, and that your OnPartitions{Assigned,Revoked,Lost} callbacks are
+// fast. It is recommended you also use PollRecords rather than PollFetches so
+// that you can bound how many records you process at once. You must always
+// AllowRebalances when you are done processing the records you received. Only
+// rebalances that lose partitions are blocked; rebalances that are strictly
+// net additions or non-modifications do not block (the On callbacks are always
+// blocked so that you can ensure their serialization).
+//
+// This function can largely replace any commit logic you may want to do in
+// OnPartitionsRevoked.
+func BlockRebalanceOnPoll() GroupOpt {
+	return groupOpt{func(cfg *cfg) { cfg.blockRebalanceOnPoll = true }}
+}
+
 // AdjustFetchOffsetsFn sets the function to be called when a group is joined
 // after offsets are fetched for those partitions so that a user can adjust them
 // before consumption begins.
@@ -1410,7 +1449,10 @@ func AdjustFetchOffsetsFn(adjustOffsetsBeforeAssign func(context.Context, map[st
 // only canceled if the client is closed.
 //
 // This function is not called concurrent with any other On callback, and this
-// function is given a new map that the user is free to modify.
+// function is given a new map that the user is free to modify. This function
+// can be called at any time you are polling or processing records. If you want
+// to ensure this function is called serially with processing, consider the
+// BlockRebalanceOnPoll option.
 func OnPartitionsAssigned(onAssigned func(context.Context, *Client, map[string][]int32)) GroupOpt {
 	return groupOpt{func(cfg *cfg) { cfg.onAssigned, cfg.setAssigned = onAssigned, true }}
 }
@@ -1438,7 +1480,10 @@ func OnPartitionsAssigned(onAssigned func(context.Context, *Client, map[string][
 // OnPartitionsRevoked.
 //
 // This function is not called concurrent with any other On callback, and this
-// function is given a new map that the user is free to modify.
+// function is given a new map that the user is free to modify. This function
+// can be called at any time you are polling or processing records. If you want
+// to ensure this function is called serially with processing, consider the
+// BlockRebalanceOnPoll option.
 func OnPartitionsRevoked(onRevoked func(context.Context, *Client, map[string][]int32)) GroupOpt {
 	return groupOpt{func(cfg *cfg) { cfg.onRevoked, cfg.setRevoked = onRevoked, true }}
 }
@@ -1454,7 +1499,10 @@ func OnPartitionsRevoked(onRevoked func(context.Context, *Client, map[string][]i
 // lost and revoked, you can use OnPartitionsLostAsRevoked as a shortcut.
 //
 // This function is not called concurrent with any other On callback, and this
-// function is given a new map that the user is free to modify.
+// function is given a new map that the user is free to modify. This function
+// can be called at any time you are polling or processing records. If you want
+// to ensure this function is called serially with processing, consider the
+// BlockRebalanceOnPoll option.
 func OnPartitionsLost(onLost func(context.Context, *Client, map[string][]int32)) GroupOpt {
 	return groupOpt{func(cfg *cfg) { cfg.onLost, cfg.setLost = onLost, true }}
 }
