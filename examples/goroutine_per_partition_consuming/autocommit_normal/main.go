@@ -151,6 +151,9 @@ func (s *splitConsume) poll(cl *kgo.Client) {
 			return
 		}
 		fetches.EachError(func(_ string, _ int32, err error) {
+			// Note: you can delete this block, which will result
+			// in these errors being sent to the partition
+			// consumers, and then you can handle the errors there.
 			panic(err)
 		})
 		fetches.EachTopic(func(t kgo.FetchTopic) {

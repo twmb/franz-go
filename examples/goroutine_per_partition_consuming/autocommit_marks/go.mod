@@ -2,7 +2,7 @@ module goroutine_per_partition_consuming
 
 go 1.17
 
-replace github.com/twmb/franz-go => ../../
+replace github.com/twmb/franz-go => ../../../
 
 require github.com/twmb/franz-go v1.0.0
 
