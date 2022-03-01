@@ -1,3 +1,120 @@
+v1.4.0
+===
+
+This release adds a lot of new features and changes a few internal behaviors.
+The new features have been tested, but it is possible that a bug slipped by—if
+you see one, please open an issue and the bug can be fixed promptly.
+
+## Behavior changes
+
+* **Promises are now serialized**. Previously, promises were called at the end
+  of handling produce requests. As well, errors that caused records to fail
+independent of producing could fail whenever. Now, all promises are called in
+one loop. Benchmarking showed that concurrent promises did not really help,
+even in cases where the promises could be concurrent. As well, my guess is that
+most people serialize promises, resulting in more complicated logic punted to
+the users. Now with serializing promises, user code can be simpler.
+
+* The default `MetadataMinAge` has been lowered from 5s to 2.5s. Metadata
+refreshes internally on retryable errors, 2.5s helps fail records for
+non-existing topics quicker. Related, for sharded requests, we now cache topic
+& partition metadata for the `MetadataMinAge`. This mostly benefits
+`ListOffsets`, where usually a person may list both the start and end back to
+back. We cannot cache indefinitely because a user may add partitions outside
+this client, but 2.5s is still helpful especially for how infrequently sharded
+requests are issued.
+
+* Group leaders now track topics that the leader is not interested in
+  consuming. Previously, if leader A consumed only topic foo and member B only
+bar, then leader A would not notice if partitions were added to bar. Now, the
+leader tracks bar. This behavior change only affects groups where the members
+consume non-overlapping topics.
+
+* Group joins & leaves now include a reason, as per KIP-800. This will be
+  useful when Kafka 3.2 is released.
+
+* Transactions no longer log `CONCURRENT_TRANSACTIONS` errors at the info
+  level. This was a noisy log that meant nothing and was non-actionable. We
+still track this at the debug level.
+
+## Features
+
+A few new APIs and options have been added. These will be described shortly
+here, and the commits are linked below.
+
+* `ConcurrentTransactionsBackoff`: a new option that allows configuring the
+  backoff when starting a transaction runs into the `CONCURRENT_TRANSACTIONS`
+error. Changing the backoff can decrease latency if Kafka is fast, but can
+increase load on the cluster.
+
+* `MaxProduceRequestsInflightPerBroker`: a new option that allows changing the
+  max inflight produce requests per broker _if_ you disable idempotency.
+Idempotency has an upper bound of 5 requests; by default, disabling idempotency
+sets the max inflight to 1.
+
+* `UnknownTopicRetries`: a new option that sets how many times a metadata load
+  for a topic can return `UNKNOWN_TOPIC_OR_PARTITION` before all records
+buffered for the topic are failed. As well, we now use this option more widely:
+if a topic is loaded successfully and then later repeatedly experiences these
+errors, records will be failed. Previously, this limit was internal and was
+only applied before the topic was loaded successfully once.
+
+* `NoResetOffset`: a new special offset that can be used with
+  `ConsumeResetOffset` to trigger the client to enter a fatal state if
+`OffsetOutOfRange` is encountered.
+
+* `Client.PurgeTopicsFromClient`: a new API that allows for completely removing
+a topic from the client. This can help if you regex consume and delete a topic,
+or if you produce to random topics and then stop producing to some of them.
+
+* `Client.AddConsumeTopics`: a new API that enables you to consume from topics
+  that you did not initially configure. This enables you to add more topics to
+consume from without restarting the client; this works both both direct
+consumers and group consumers.
+
+* `Client.TryProduce`: a new API that is a truly non-blocking produce. If the
+  client has the maximum amount of records buffered, this function will
+immediately fail a new promise with `ErrMaxBuffered`.
+
+* `Client.ForceMetadataRefresh`: a new API that allows you to manually trigger
+a metadata refresh. This can be useful if you added partitions to a topic and
+want to trigger a metadata refresh to load those partitions sooner than the
+default `MetadataMaxAge` refresh interval.
+
+* `Client.EndAndBeginTransaction`: a new API that can be used to have higher
+  throughput when producing transactionally. This API requires care; if you use
+it, read the documentation for what it provides and any downsides.
+
+* `BlockRebalancesOnPoll` and `Client.AllowRebalance`: a new option and
+  corresponding required API that allows for easier reasoning about when
+rebalances can happen. This option can be greatly beneficial to users for
+simplifying code, but has a risk around taking so long that your group member
+is booted from the group. Two examples were added using these options.
+
+* `kversion.V3_1_0`: the kversion package now officially detects v3.1 and has
+  an API for it.
+
+## Relevant commits
+
+- [PR #137](https://github.com/twmb/franz-go/pull/137) and [`c3fc8e0`](https://github.com/twmb/franz-go/commit/c3fc8e0): add two more goroutine per consumer examples (thanks [@JacobSMoller](https://github.com/JacobSMoller)) example
+- [`cffbee7`](https://github.com/twmb/franz-go/commit/cffbee7) consumer: add BlockRebalancesOnPoll option, AllowRebalance (commit accidentally pluralized)
+- [`39af436`](https://github.com/twmb/franz-go/commit/39af436) docs: add metrics-and-logging.md
+- [`83dfa9d`](https://github.com/twmb/franz-go/commit/83dfa9d) client: add EndAndBeginTransaction
+- [`d11066f`](https://github.com/twmb/franz-go/commit/d11066f) committing: internally retry on some errors when cooperative
+- [`31f3f5f`](https://github.com/twmb/franz-go/commit/31f3f5f) producer: serialize promises
+- [`e3ef142`](https://github.com/twmb/franz-go/commit/e3ef142) txn: move concurrent transactions log to debug level
+- [`10ee8dd`](https://github.com/twmb/franz-go/commit/10ee8dd) group consuming: add reasons to JoinGroup, LeaveGroup per KIP-800
+- [`0bfaf64`](https://github.com/twmb/franz-go/commit/0bfaf64) consumer group: track topics that the leader is not interested in
+- [`e8495bb`](https://github.com/twmb/franz-go/commit/e8495bb) client: add ForceMetadataRefresh
+- [`c763c9b`](https://github.com/twmb/franz-go/commit/c763c9b) consuming: add NoResetOffset
+- [`4e0e1d7`](https://github.com/twmb/franz-go/commit/4e0e1d7) config: add UnknownTopicRetries option, use more widely
+- [`7f58a97`](https://github.com/twmb/franz-go/commit/7f58a97) config: lower default MetadataMinAge to 2.5s
+- [`e7bd28f`](https://github.com/twmb/franz-go/commit/e7bd28f) Client,GroupTransactSession: add TryProduce
+- [`2a2cf66`](https://github.com/twmb/franz-go/commit/2a2cf66) consumer: add AddConsumeTopics
+- [`d178e26`](https://github.com/twmb/franz-go/commit/d178e26) client: add PurgeTopicsFromClient
+- [`336d2c9`](https://github.com/twmb/franz-go/commit/336d2c9) kgo: add ConcurrentTransactionsBackoff, MaxProduceRequestsInflightPerBroker
+- [`fb04711`](https://github.com/twmb/franz-go/commit/fb04711) kversion: cut v3.1
+
 v1.3.5
 ===
 
