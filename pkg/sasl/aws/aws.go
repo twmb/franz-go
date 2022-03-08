@@ -52,7 +52,7 @@ type Auth struct {
 	//
 	UserAgent string
 
-	_internal struct{} // nolint:structcheck,unused // require explicit field initialization
+	_ struct{} // require explicit field initialization
 }
 
 var hostname, _ = os.Hostname()

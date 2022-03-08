@@ -93,7 +93,7 @@ type BrokerMetadata struct {
 	// Seed brokers will not have a rack.
 	Rack *string
 
-	_internal struct{} // nolint:structcheck,unused // allow us to add fields later
+	_ struct{} // allow us to add fields later
 }
 
 func (me BrokerMetadata) equals(other kmsg.MetadataResponseBroker) bool {
