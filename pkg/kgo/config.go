@@ -427,7 +427,7 @@ func defaultCfg() cfg {
 		maxWait:        5000,
 		minBytes:       1,
 		maxBytes:       50 << 20,
-		maxPartBytes:   10 << 20,
+		maxPartBytes:   1 << 20,
 		resetOffset:    NewOffset().AtStart(),
 		isolationLevel: 0,
 
