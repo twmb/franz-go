@@ -799,6 +799,22 @@ func (e Enum) WriteParseFunc(l *LineWriter) {
 	l.Write("}")
 }
 
+func (e Enum) WriteUnmarshalTextFunc(l *LineWriter) {
+	l.Write("// UnmarshalText implements encoding.TextUnmarshaler.")
+	l.Write("func (e *%s) UnmarshalText(text []byte) error {", e.Name)
+	l.Write("v, err := Parse%s(string(text))", e.Name)
+	l.Write("*e = v")
+	l.Write("return err")
+	l.Write("}")
+}
+
+func (e Enum) WriteMarshalTextFunc(l *LineWriter) {
+	l.Write("// MarshalText implements encoding.TextMarshaler.")
+	l.Write("func (e %s) MarshalText() (text []byte, err error) {", e.Name)
+	l.Write("return []byte(e.String()), nil")
+	l.Write("}")
+}
+
 func strnorm(s string) string {
 	s = strings.ReplaceAll(s, ".", "")
 	s = strings.ReplaceAll(s, "_", "")

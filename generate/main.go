@@ -529,6 +529,8 @@ func main() {
 		e.WriteStringsFunc(l)
 		e.WriteParseFunc(l)
 		e.WriteConsts(l)
+		e.WriteMarshalTextFunc(l)
+		e.WriteUnmarshalTextFunc(l)
 	}
 
 	writeStrnorm(l)

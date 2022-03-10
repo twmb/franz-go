@@ -39662,6 +39662,18 @@ const (
 	ConfigResourceTypeBrokerLogger ConfigResourceType = 8
 )
 
+// MarshalText implements encoding.TextMarshaler.
+func (e ConfigResourceType) MarshalText() (text []byte, err error) {
+	return []byte(e.String()), nil
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (e *ConfigResourceType) UnmarshalText(text []byte) error {
+	v, err := ParseConfigResourceType(string(text))
+	*e = v
+	return err
+}
+
 // Where a config entry is from. If there are no config synonyms,
 // the source is DEFAULT_CONFIG.
 //
@@ -39750,6 +39762,18 @@ const (
 	ConfigSourceDefaultConfig              ConfigSource = 5
 	ConfigSourceDynamicBrokerLoggerConfig  ConfigSource = 6
 )
+
+// MarshalText implements encoding.TextMarshaler.
+func (e ConfigSource) MarshalText() (text []byte, err error) {
+	return []byte(e.String()), nil
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (e *ConfigSource) UnmarshalText(text []byte) error {
+	v, err := ParseConfigSource(string(text))
+	*e = v
+	return err
+}
 
 // A configuration data type.
 //
@@ -39857,6 +39881,18 @@ const (
 	ConfigTypePassword ConfigType = 9
 )
 
+// MarshalText implements encoding.TextMarshaler.
+func (e ConfigType) MarshalText() (text []byte, err error) {
+	return []byte(e.String()), nil
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (e *ConfigType) UnmarshalText(text []byte) error {
+	v, err := ParseConfigType(string(text))
+	*e = v
+	return err
+}
+
 // An incremental configuration operation.
 //
 // Possible values and their meanings:
@@ -39921,6 +39957,18 @@ const (
 	IncrementalAlterConfigOpAppend   IncrementalAlterConfigOp = 2
 	IncrementalAlterConfigOpSubtract IncrementalAlterConfigOp = 3
 )
+
+// MarshalText implements encoding.TextMarshaler.
+func (e IncrementalAlterConfigOp) MarshalText() (text []byte, err error) {
+	return []byte(e.String()), nil
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (e *IncrementalAlterConfigOp) UnmarshalText(text []byte) error {
+	v, err := ParseIncrementalAlterConfigOp(string(text))
+	*e = v
+	return err
+}
 
 // ACLResourceType is a type of resource to use for ACLs.
 //
@@ -40004,6 +40052,18 @@ const (
 	ACLResourceTypeDelegationToken ACLResourceType = 6
 )
 
+// MarshalText implements encoding.TextMarshaler.
+func (e ACLResourceType) MarshalText() (text []byte, err error) {
+	return []byte(e.String()), nil
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (e *ACLResourceType) UnmarshalText(text []byte) error {
+	v, err := ParseACLResourceType(string(text))
+	*e = v
+	return err
+}
+
 // ACLResourcePatternType is how an acl's ResourceName is understood.
 //
 // This field was added with Kafka 2.0.0 for KIP-290.
@@ -40076,6 +40136,18 @@ const (
 	ACLResourcePatternTypePrefixed ACLResourcePatternType = 4
 )
 
+// MarshalText implements encoding.TextMarshaler.
+func (e ACLResourcePatternType) MarshalText() (text []byte, err error) {
+	return []byte(e.String()), nil
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (e *ACLResourcePatternType) UnmarshalText(text []byte) error {
+	v, err := ParseACLResourcePatternType(string(text))
+	*e = v
+	return err
+}
+
 // An ACL permission type.
 //
 // Possible values and their meanings:
@@ -40136,6 +40208,18 @@ const (
 	ACLPermissionTypeDeny    ACLPermissionType = 2
 	ACLPermissionTypeAllow   ACLPermissionType = 3
 )
+
+// MarshalText implements encoding.TextMarshaler.
+func (e ACLPermissionType) MarshalText() (text []byte, err error) {
+	return []byte(e.String()), nil
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (e *ACLPermissionType) UnmarshalText(text []byte) error {
+	v, err := ParseACLPermissionType(string(text))
+	*e = v
+	return err
+}
 
 // An ACL operation.
 //
@@ -40269,6 +40353,18 @@ const (
 	ACLOperationIdempotentWrite ACLOperation = 12
 )
 
+// MarshalText implements encoding.TextMarshaler.
+func (e ACLOperation) MarshalText() (text []byte, err error) {
+	return []byte(e.String()), nil
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (e *ACLOperation) UnmarshalText(text []byte) error {
+	v, err := ParseACLOperation(string(text))
+	*e = v
+	return err
+}
+
 // TransactionState is the state of a transaction.
 //
 // Possible values and their meanings:
@@ -40366,6 +40462,18 @@ const (
 	TransactionStatePrepareEpochFence TransactionState = 7
 )
 
+// MarshalText implements encoding.TextMarshaler.
+func (e TransactionState) MarshalText() (text []byte, err error) {
+	return []byte(e.String()), nil
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (e *TransactionState) UnmarshalText(text []byte) error {
+	v, err := ParseTransactionState(string(text))
+	*e = v
+	return err
+}
+
 // QuotasMatchType specifies how to match a Quota entity as part of the DescribeClientQuotasRequestComponent.
 //
 // Possible values and their meanings:
@@ -40425,6 +40533,18 @@ const (
 	QuotasMatchTypeDefault QuotasMatchType = 1
 	QuotasMatchTypeAny     QuotasMatchType = 2
 )
+
+// MarshalText implements encoding.TextMarshaler.
+func (e QuotasMatchType) MarshalText() (text []byte, err error) {
+	return []byte(e.String()), nil
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (e *QuotasMatchType) UnmarshalText(text []byte) error {
+	v, err := ParseQuotasMatchType(string(text))
+	*e = v
+	return err
+}
 
 // Possible values and their meanings:
 //
@@ -40488,6 +40608,18 @@ const (
 	ControlRecordKeyTypeQuorumReassignment ControlRecordKeyType = 2
 	ControlRecordKeyTypeLeaderChange       ControlRecordKeyType = 3
 )
+
+// MarshalText implements encoding.TextMarshaler.
+func (e ControlRecordKeyType) MarshalText() (text []byte, err error) {
+	return []byte(e.String()), nil
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (e *ControlRecordKeyType) UnmarshalText(text []byte) error {
+	v, err := ParseControlRecordKeyType(string(text))
+	*e = v
+	return err
+}
 
 func strnorm(s string) string {
 	s = strings.ReplaceAll(s, ".", "")
