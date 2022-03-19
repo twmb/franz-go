@@ -322,6 +322,7 @@ generation.
 | [KIP-679](https://cwiki.apache.org/confluence/display/KAFKA/KIP-679%3A+Producer+will+enable+the+strongest+delivery+guarantee+by+default) — Strongest producer guarantee by default | 3.0 | Supported (by default always) |
 | [KIP-699](https://cwiki.apache.org/confluence/display/KAFKA/KIP-699%3A+Update+FindCoordinator+to+resolve+multiple+Coordinators+at+a+time) — Batch FindCoordinators| 3.0 | Supported |
 | [KIP-700](https://cwiki.apache.org/confluence/display/KAFKA/KIP-700%3A+Add+Describe+Cluster+API) — DescribeCluster | 2.8 | Supported |
+| [KIP-704](https://cwiki.apache.org/confluence/display/KAFKA/KIP-704%3A+Send+a+hint+to+the+partition+leader+to+recover+the+partition) — AlterISR => AlterPartition | 3.2 | Supported |
 | [KIP-709](https://cwiki.apache.org/confluence/pages/viewpage.action?pageId=173084258) — Batch OffsetFetch | 3.0 | Supported |
 | [KIP-730](https://cwiki.apache.org/confluence/display/KAFKA/KIP-730%3A+Producer+ID+generation+in+KRaft+mode) - AllocateProducerIDs | 3.0 | Supported |
 | [KIP-734](https://cwiki.apache.org/confluence/display/KAFKA/KIP-734:+Improve+AdminClient.listOffsets+to+return+timestamp+and+offset+for+the+record+with+the+largest+timestamp) — Support MaxTimestamp in ListOffsets | 3.0 | Supported (simple version bump) |

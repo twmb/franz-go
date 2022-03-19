@@ -1,0 +1,40 @@
+// AlterPartitionRequest, proposed in KIP-497 and introduced in Kafka 2.7.0,
+// is an admin request to modify ISR.
+AlterPartitionRequest => key 56, max version 1, flexible v0+, admin
+  // The ID of the requesting broker.
+  BrokerID: int32
+  // The epoch of the requesting broker.
+  BrokerEpoch: int64(-1)
+  Topics: [=>]
+    Topic: string
+    Partitions: [=>]
+      Partition: int32
+      // The leader epoch of this partition.
+      LeaderEpoch: int32
+      // The ISR for this partition.
+      NewISR: [int32]
+      // 1 if the partition is recovering from unclean leader election; 0 otherwise
+      LeaderRecoveryState: int8 // v1+
+      // The expected epoch of the partition which is being updated.
+      // For a legacy cluster, this is the ZkVersion in the LeaderAndISR request.
+      PartitionEpoch: int32
+
+AlterPartitionResponse =>
+  ThrottleMillis
+  ErrorCode: int16
+  Topics: [=>]
+    Topic: string
+    Partitions: [=>]
+      Partition: int32
+      ErrorCode: int16
+      // The broker ID of the leader.
+      LeaderID: int32
+      // The leader epoch of this partition.
+      LeaderEpoch: int32
+      // The in-sync replica ids.
+      ISR: [int32]
+      // 1 if the partition is recovering from unclean leader election; 0 otherwise
+      LeaderRecoveryState: int8 // v1+
+      // The current epoch of the partition for KRaft controllers.
+      // The current ZK version for legacy controllers.
+      PartitionEpoch: int32

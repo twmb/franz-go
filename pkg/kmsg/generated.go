@@ -6374,6 +6374,8 @@ type LeaderAndISRRequestTopicPartition struct {
 
 	IsNew bool // v1+
 
+	LeaderRecoveryState int8 // v6+
+
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v4+
 
@@ -6504,7 +6506,7 @@ type LeaderAndISRRequest struct {
 }
 
 func (*LeaderAndISRRequest) Key() int16                 { return 4 }
-func (*LeaderAndISRRequest) MaxVersion() int16          { return 5 }
+func (*LeaderAndISRRequest) MaxVersion() int16          { return 6 }
 func (v *LeaderAndISRRequest) SetVersion(version int16) { v.Version = version }
 func (v *LeaderAndISRRequest) GetVersion() int16        { return v.Version }
 func (v *LeaderAndISRRequest) IsFlexible() bool         { return v.Version >= 4 }
@@ -6631,6 +6633,10 @@ func (v *LeaderAndISRRequest) AppendTo(dst []byte) []byte {
 				v := v.IsNew
 				dst = kbin.AppendBool(dst, v)
 			}
+			if version >= 6 {
+				v := v.LeaderRecoveryState
+				dst = kbin.AppendInt8(dst, v)
+			}
 			if isFlexible {
 				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
 				dst = v.UnknownTags.AppendEach(dst)
@@ -6746,6 +6752,10 @@ func (v *LeaderAndISRRequest) AppendTo(dst []byte) []byte {
 					if version >= 1 {
 						v := v.IsNew
 						dst = kbin.AppendBool(dst, v)
+					}
+					if version >= 6 {
+						v := v.LeaderRecoveryState
+						dst = kbin.AppendInt8(dst, v)
 					}
 					if isFlexible {
 						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
@@ -6961,6 +6971,10 @@ func (v *LeaderAndISRRequest) ReadFrom(src []byte) error {
 				v := b.Bool()
 				s.IsNew = v
 			}
+			if version >= 6 {
+				v := b.Int8()
+				s.LeaderRecoveryState = v
+			}
 			if isFlexible {
 				s.UnknownTags = internalReadTags(&b)
 			}
@@ -7140,6 +7154,10 @@ func (v *LeaderAndISRRequest) ReadFrom(src []byte) error {
 						v := b.Bool()
 						s.IsNew = v
 					}
+					if version >= 6 {
+						v := b.Int8()
+						s.LeaderRecoveryState = v
+					}
 					if isFlexible {
 						s.UnknownTags = internalReadTags(&b)
 					}
@@ -7265,7 +7283,7 @@ type LeaderAndISRResponse struct {
 }
 
 func (*LeaderAndISRResponse) Key() int16                 { return 4 }
-func (*LeaderAndISRResponse) MaxVersion() int16          { return 5 }
+func (*LeaderAndISRResponse) MaxVersion() int16          { return 6 }
 func (v *LeaderAndISRResponse) SetVersion(version int16) { v.Version = version }
 func (v *LeaderAndISRResponse) GetVersion() int16        { return v.Version }
 func (v *LeaderAndISRResponse) IsFlexible() bool         { return v.Version >= 4 }
@@ -33946,7 +33964,7 @@ func NewDescribeQuorumResponse() DescribeQuorumResponse {
 	return v
 }
 
-type AlterISRRequestTopicPartition struct {
+type AlterPartitionRequestTopicPartition struct {
 	Partition int32
 
 	// The leader epoch of this partition.
@@ -33955,51 +33973,55 @@ type AlterISRRequestTopicPartition struct {
 	// The ISR for this partition.
 	NewISR []int32
 
-	// The expected version of ISR which is being updated.
-	CurrentISRVersion int32
+	// 1 if the partition is recovering from unclean leader election; 0 otherwise
+	LeaderRecoveryState int8 // v1+
+
+	// The expected epoch of the partition which is being updated.
+	// For a legacy cluster, this is the ZkVersion in the LeaderAndISR request.
+	PartitionEpoch int32
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
-// if new fields are added to AlterISRRequestTopicPartition.
-func (v *AlterISRRequestTopicPartition) Default() {
+// if new fields are added to AlterPartitionRequestTopicPartition.
+func (v *AlterPartitionRequestTopicPartition) Default() {
 }
 
-// NewAlterISRRequestTopicPartition returns a default AlterISRRequestTopicPartition
+// NewAlterPartitionRequestTopicPartition returns a default AlterPartitionRequestTopicPartition
 // This is a shortcut for creating a struct and calling Default yourself.
-func NewAlterISRRequestTopicPartition() AlterISRRequestTopicPartition {
-	var v AlterISRRequestTopicPartition
+func NewAlterPartitionRequestTopicPartition() AlterPartitionRequestTopicPartition {
+	var v AlterPartitionRequestTopicPartition
 	v.Default()
 	return v
 }
 
-type AlterISRRequestTopic struct {
+type AlterPartitionRequestTopic struct {
 	Topic string
 
-	Partitions []AlterISRRequestTopicPartition
+	Partitions []AlterPartitionRequestTopicPartition
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
-// if new fields are added to AlterISRRequestTopic.
-func (v *AlterISRRequestTopic) Default() {
+// if new fields are added to AlterPartitionRequestTopic.
+func (v *AlterPartitionRequestTopic) Default() {
 }
 
-// NewAlterISRRequestTopic returns a default AlterISRRequestTopic
+// NewAlterPartitionRequestTopic returns a default AlterPartitionRequestTopic
 // This is a shortcut for creating a struct and calling Default yourself.
-func NewAlterISRRequestTopic() AlterISRRequestTopic {
-	var v AlterISRRequestTopic
+func NewAlterPartitionRequestTopic() AlterPartitionRequestTopic {
+	var v AlterPartitionRequestTopic
 	v.Default()
 	return v
 }
 
-// AlterISRRequest, proposed in KIP-497 and introduced in Kafka 2.7.0,
+// AlterPartitionRequest, proposed in KIP-497 and introduced in Kafka 2.7.0,
 // is an admin request to modify ISR.
-type AlterISRRequest struct {
+type AlterPartitionRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
@@ -34011,30 +34033,32 @@ type AlterISRRequest struct {
 	// This field has a default of -1.
 	BrokerEpoch int64
 
-	Topics []AlterISRRequestTopic
+	Topics []AlterPartitionRequestTopic
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags
 }
 
-func (*AlterISRRequest) Key() int16                 { return 56 }
-func (*AlterISRRequest) MaxVersion() int16          { return 0 }
-func (v *AlterISRRequest) SetVersion(version int16) { v.Version = version }
-func (v *AlterISRRequest) GetVersion() int16        { return v.Version }
-func (v *AlterISRRequest) IsFlexible() bool         { return v.Version >= 0 }
-func (v *AlterISRRequest) IsAdminRequest()          {}
-func (v *AlterISRRequest) ResponseKind() Response   { return &AlterISRResponse{Version: v.Version} }
+func (*AlterPartitionRequest) Key() int16                 { return 56 }
+func (*AlterPartitionRequest) MaxVersion() int16          { return 1 }
+func (v *AlterPartitionRequest) SetVersion(version int16) { v.Version = version }
+func (v *AlterPartitionRequest) GetVersion() int16        { return v.Version }
+func (v *AlterPartitionRequest) IsFlexible() bool         { return v.Version >= 0 }
+func (v *AlterPartitionRequest) IsAdminRequest()          {}
+func (v *AlterPartitionRequest) ResponseKind() Response {
+	return &AlterPartitionResponse{Version: v.Version}
+}
 
 // RequestWith is requests v on r and returns the response or an error.
 // For sharded requests, the response may be merged and still return an error.
 // It is better to rely on client.RequestSharded than to rely on proper merging behavior.
-func (v *AlterISRRequest) RequestWith(ctx context.Context, r Requestor) (*AlterISRResponse, error) {
+func (v *AlterPartitionRequest) RequestWith(ctx context.Context, r Requestor) (*AlterPartitionResponse, error) {
 	kresp, err := r.Request(ctx, v)
-	resp, _ := kresp.(*AlterISRResponse)
+	resp, _ := kresp.(*AlterPartitionResponse)
 	return resp, err
 }
 
-func (v *AlterISRRequest) AppendTo(dst []byte) []byte {
+func (v *AlterPartitionRequest) AppendTo(dst []byte) []byte {
 	version := v.Version
 	_ = version
 	isFlexible := version >= 0
@@ -34093,8 +34117,12 @@ func (v *AlterISRRequest) AppendTo(dst []byte) []byte {
 							dst = kbin.AppendInt32(dst, v)
 						}
 					}
+					if version >= 1 {
+						v := v.LeaderRecoveryState
+						dst = kbin.AppendInt8(dst, v)
+					}
 					{
-						v := v.CurrentISRVersion
+						v := v.PartitionEpoch
 						dst = kbin.AppendInt32(dst, v)
 					}
 					if isFlexible {
@@ -34116,7 +34144,7 @@ func (v *AlterISRRequest) AppendTo(dst []byte) []byte {
 	return dst
 }
 
-func (v *AlterISRRequest) ReadFrom(src []byte) error {
+func (v *AlterPartitionRequest) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
 	version := v.Version
@@ -34145,7 +34173,7 @@ func (v *AlterISRRequest) ReadFrom(src []byte) error {
 			return b.Complete()
 		}
 		if l > 0 {
-			a = make([]AlterISRRequestTopic, l)
+			a = make([]AlterPartitionRequestTopic, l)
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
@@ -34173,7 +34201,7 @@ func (v *AlterISRRequest) ReadFrom(src []byte) error {
 					return b.Complete()
 				}
 				if l > 0 {
-					a = make([]AlterISRRequestTopicPartition, l)
+					a = make([]AlterPartitionRequestTopicPartition, l)
 				}
 				for i := int32(0); i < l; i++ {
 					v := &a[i]
@@ -34209,9 +34237,13 @@ func (v *AlterISRRequest) ReadFrom(src []byte) error {
 						v = a
 						s.NewISR = v
 					}
+					if version >= 1 {
+						v := b.Int8()
+						s.LeaderRecoveryState = v
+					}
 					{
 						v := b.Int32()
-						s.CurrentISRVersion = v
+						s.PartitionEpoch = v
 					}
 					if isFlexible {
 						s.UnknownTags = internalReadTags(&b)
@@ -34233,29 +34265,29 @@ func (v *AlterISRRequest) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
-// NewPtrAlterISRRequest returns a pointer to a default AlterISRRequest
+// NewPtrAlterPartitionRequest returns a pointer to a default AlterPartitionRequest
 // This is a shortcut for creating a new(struct) and calling Default yourself.
-func NewPtrAlterISRRequest() *AlterISRRequest {
-	var v AlterISRRequest
+func NewPtrAlterPartitionRequest() *AlterPartitionRequest {
+	var v AlterPartitionRequest
 	v.Default()
 	return &v
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
-// if new fields are added to AlterISRRequest.
-func (v *AlterISRRequest) Default() {
+// if new fields are added to AlterPartitionRequest.
+func (v *AlterPartitionRequest) Default() {
 	v.BrokerEpoch = -1
 }
 
-// NewAlterISRRequest returns a default AlterISRRequest
+// NewAlterPartitionRequest returns a default AlterPartitionRequest
 // This is a shortcut for creating a struct and calling Default yourself.
-func NewAlterISRRequest() AlterISRRequest {
-	var v AlterISRRequest
+func NewAlterPartitionRequest() AlterPartitionRequest {
+	var v AlterPartitionRequest
 	v.Default()
 	return v
 }
 
-type AlterISRResponseTopicPartition struct {
+type AlterPartitionResponseTopicPartition struct {
 	Partition int32
 
 	ErrorCode int16
@@ -34269,49 +34301,53 @@ type AlterISRResponseTopicPartition struct {
 	// The in-sync replica ids.
 	ISR []int32
 
-	// The current ISR version.
-	CurrentISRVersion int32
+	// 1 if the partition is recovering from unclean leader election; 0 otherwise
+	LeaderRecoveryState int8 // v1+
+
+	// The current epoch of the partition for KRaft controllers.
+	// The current ZK version for legacy controllers.
+	PartitionEpoch int32
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
-// if new fields are added to AlterISRResponseTopicPartition.
-func (v *AlterISRResponseTopicPartition) Default() {
+// if new fields are added to AlterPartitionResponseTopicPartition.
+func (v *AlterPartitionResponseTopicPartition) Default() {
 }
 
-// NewAlterISRResponseTopicPartition returns a default AlterISRResponseTopicPartition
+// NewAlterPartitionResponseTopicPartition returns a default AlterPartitionResponseTopicPartition
 // This is a shortcut for creating a struct and calling Default yourself.
-func NewAlterISRResponseTopicPartition() AlterISRResponseTopicPartition {
-	var v AlterISRResponseTopicPartition
+func NewAlterPartitionResponseTopicPartition() AlterPartitionResponseTopicPartition {
+	var v AlterPartitionResponseTopicPartition
 	v.Default()
 	return v
 }
 
-type AlterISRResponseTopic struct {
+type AlterPartitionResponseTopic struct {
 	Topic string
 
-	Partitions []AlterISRResponseTopicPartition
+	Partitions []AlterPartitionResponseTopicPartition
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
-// if new fields are added to AlterISRResponseTopic.
-func (v *AlterISRResponseTopic) Default() {
+// if new fields are added to AlterPartitionResponseTopic.
+func (v *AlterPartitionResponseTopic) Default() {
 }
 
-// NewAlterISRResponseTopic returns a default AlterISRResponseTopic
+// NewAlterPartitionResponseTopic returns a default AlterPartitionResponseTopic
 // This is a shortcut for creating a struct and calling Default yourself.
-func NewAlterISRResponseTopic() AlterISRResponseTopic {
-	var v AlterISRResponseTopic
+func NewAlterPartitionResponseTopic() AlterPartitionResponseTopic {
+	var v AlterPartitionResponseTopic
 	v.Default()
 	return v
 }
 
-type AlterISRResponse struct {
+type AlterPartitionResponse struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
@@ -34321,21 +34357,23 @@ type AlterISRResponse struct {
 
 	ErrorCode int16
 
-	Topics []AlterISRResponseTopic
+	Topics []AlterPartitionResponseTopic
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags
 }
 
-func (*AlterISRResponse) Key() int16                 { return 56 }
-func (*AlterISRResponse) MaxVersion() int16          { return 0 }
-func (v *AlterISRResponse) SetVersion(version int16) { v.Version = version }
-func (v *AlterISRResponse) GetVersion() int16        { return v.Version }
-func (v *AlterISRResponse) IsFlexible() bool         { return v.Version >= 0 }
-func (v *AlterISRResponse) Throttle() (int32, bool)  { return v.ThrottleMillis, v.Version >= 0 }
-func (v *AlterISRResponse) RequestKind() Request     { return &AlterISRRequest{Version: v.Version} }
+func (*AlterPartitionResponse) Key() int16                 { return 56 }
+func (*AlterPartitionResponse) MaxVersion() int16          { return 1 }
+func (v *AlterPartitionResponse) SetVersion(version int16) { v.Version = version }
+func (v *AlterPartitionResponse) GetVersion() int16        { return v.Version }
+func (v *AlterPartitionResponse) IsFlexible() bool         { return v.Version >= 0 }
+func (v *AlterPartitionResponse) Throttle() (int32, bool)  { return v.ThrottleMillis, v.Version >= 0 }
+func (v *AlterPartitionResponse) RequestKind() Request {
+	return &AlterPartitionRequest{Version: v.Version}
+}
 
-func (v *AlterISRResponse) AppendTo(dst []byte) []byte {
+func (v *AlterPartitionResponse) AppendTo(dst []byte) []byte {
 	version := v.Version
 	_ = version
 	isFlexible := version >= 0
@@ -34402,8 +34440,12 @@ func (v *AlterISRResponse) AppendTo(dst []byte) []byte {
 							dst = kbin.AppendInt32(dst, v)
 						}
 					}
+					if version >= 1 {
+						v := v.LeaderRecoveryState
+						dst = kbin.AppendInt8(dst, v)
+					}
 					{
-						v := v.CurrentISRVersion
+						v := v.PartitionEpoch
 						dst = kbin.AppendInt32(dst, v)
 					}
 					if isFlexible {
@@ -34425,7 +34467,7 @@ func (v *AlterISRResponse) AppendTo(dst []byte) []byte {
 	return dst
 }
 
-func (v *AlterISRResponse) ReadFrom(src []byte) error {
+func (v *AlterPartitionResponse) ReadFrom(src []byte) error {
 	v.Default()
 	b := kbin.Reader{Src: src}
 	version := v.Version
@@ -34454,7 +34496,7 @@ func (v *AlterISRResponse) ReadFrom(src []byte) error {
 			return b.Complete()
 		}
 		if l > 0 {
-			a = make([]AlterISRResponseTopic, l)
+			a = make([]AlterPartitionResponseTopic, l)
 		}
 		for i := int32(0); i < l; i++ {
 			v := &a[i]
@@ -34482,7 +34524,7 @@ func (v *AlterISRResponse) ReadFrom(src []byte) error {
 					return b.Complete()
 				}
 				if l > 0 {
-					a = make([]AlterISRResponseTopicPartition, l)
+					a = make([]AlterPartitionResponseTopicPartition, l)
 				}
 				for i := int32(0); i < l; i++ {
 					v := &a[i]
@@ -34526,9 +34568,13 @@ func (v *AlterISRResponse) ReadFrom(src []byte) error {
 						v = a
 						s.ISR = v
 					}
+					if version >= 1 {
+						v := b.Int8()
+						s.LeaderRecoveryState = v
+					}
 					{
 						v := b.Int32()
-						s.CurrentISRVersion = v
+						s.PartitionEpoch = v
 					}
 					if isFlexible {
 						s.UnknownTags = internalReadTags(&b)
@@ -34550,23 +34596,23 @@ func (v *AlterISRResponse) ReadFrom(src []byte) error {
 	return b.Complete()
 }
 
-// NewPtrAlterISRResponse returns a pointer to a default AlterISRResponse
+// NewPtrAlterPartitionResponse returns a pointer to a default AlterPartitionResponse
 // This is a shortcut for creating a new(struct) and calling Default yourself.
-func NewPtrAlterISRResponse() *AlterISRResponse {
-	var v AlterISRResponse
+func NewPtrAlterPartitionResponse() *AlterPartitionResponse {
+	var v AlterPartitionResponse
 	v.Default()
 	return &v
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
-// if new fields are added to AlterISRResponse.
-func (v *AlterISRResponse) Default() {
+// if new fields are added to AlterPartitionResponse.
+func (v *AlterPartitionResponse) Default() {
 }
 
-// NewAlterISRResponse returns a default AlterISRResponse
+// NewAlterPartitionResponse returns a default AlterPartitionResponse
 // This is a shortcut for creating a struct and calling Default yourself.
-func NewAlterISRResponse() AlterISRResponse {
-	var v AlterISRResponse
+func NewAlterPartitionResponse() AlterPartitionResponse {
+	var v AlterPartitionResponse
 	v.Default()
 	return v
 }
@@ -39202,7 +39248,7 @@ func RequestForKey(key int16) Request {
 	case 55:
 		return NewPtrDescribeQuorumRequest()
 	case 56:
-		return NewPtrAlterISRRequest()
+		return NewPtrAlterPartitionRequest()
 	case 57:
 		return NewPtrUpdateFeaturesRequest()
 	case 58:
@@ -39347,7 +39393,7 @@ func ResponseForKey(key int16) Response {
 	case 55:
 		return NewPtrDescribeQuorumResponse()
 	case 56:
-		return NewPtrAlterISRResponse()
+		return NewPtrAlterPartitionResponse()
 	case 57:
 		return NewPtrUpdateFeaturesResponse()
 	case 58:
@@ -39492,7 +39538,7 @@ func NameForKey(key int16) string {
 	case 55:
 		return "DescribeQuorum"
 	case 56:
-		return "AlterISR"
+		return "AlterPartition"
 	case 57:
 		return "UpdateFeatures"
 	case 58:
@@ -39578,7 +39624,7 @@ const (
 	BeginQuorumEpoch             Key = 53
 	EndQuorumEpoch               Key = 54
 	DescribeQuorum               Key = 55
-	AlterISR                     Key = 56
+	AlterPartition               Key = 56
 	UpdateFeatures               Key = 57
 	Envelope                     Key = 58
 	FetchSnapshot                Key = 59
