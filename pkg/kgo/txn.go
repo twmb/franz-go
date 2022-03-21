@@ -798,6 +798,11 @@ func (cl *Client) EndTransaction(ctx context.Context, commit TransactionEndTry) 
 		}
 	}
 
+	// If the user previously used EndAndBeginTransaction with
+	// EndBeginTxnUnsafe, we may have to end a transaction even though
+	// nothing may be in it.
+	anyAdded = anyAdded || cl.producer.readded
+
 	// If no partition was added to a transaction, then we have nothing to commit.
 	//
 	// Note that anyAdded is true if the producer ID was failed, meaning we will
@@ -830,6 +835,7 @@ func (cl *Client) EndTransaction(ctx context.Context, commit TransactionEndTry) 
 		"commit", commit,
 	)
 
+	cl.producer.readded = false
 	err = cl.doWithConcurrentTransactions("EndTxn", func() error {
 		req := kmsg.NewPtrEndTxnRequest()
 		req.TransactionalID = *cl.cfg.txnID
