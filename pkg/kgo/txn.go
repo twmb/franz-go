@@ -567,10 +567,11 @@ func (cl *Client) EndAndBeginTransaction(
 			}
 		}
 	}
+	anyAdded = anyAdded || cl.producer.readded
 
 	// EndTxn when no txn was started returns INVALID_TXN_STATE.
 	if !anyAdded {
-		cl.cfg.logger.Log(LogLevelInfo, "no records were produced during the commit; thus no transaction was began; ending without doing anything")
+		cl.cfg.logger.Log(LogLevelDebug, "no records were produced during the commit; thus no transaction was began; ending without doing anything")
 		return nil
 	}
 
@@ -590,6 +591,7 @@ func (cl *Client) EndAndBeginTransaction(
 		"epoch", epoch,
 		"commit", commit,
 	)
+	cl.producer.readded = false
 	err = cl.doWithConcurrentTransactions("EndTxn", func() error {
 		req := kmsg.NewPtrEndTxnRequest()
 		req.TransactionalID = *cl.cfg.txnID
@@ -599,6 +601,33 @@ func (cl *Client) EndAndBeginTransaction(
 		resp, err := req.RequestWith(ctx, cl)
 		if err != nil {
 			return err
+		}
+
+		// When ending a transaction, if the user is using unsafe mode,
+		// there is a logic race where the user can actually end before
+		// AddPartitionsToTxn is issued. This should be rare and is
+		// most likely only to happen whenever a new transaction is
+		// starting from a not-in-transaction state (i.e., the first
+		// transaction). If we see InvalidTxnState in unsafe mode, we
+		// assume that a transaction was not actually begun and we
+		// return success.
+		//
+		// In Kafka, InvalidTxnState is also returned when producing
+		// non-transactional records from a producer that is currently
+		// in a transaction.
+		//
+		// All other cases it is returned is in EndTxn:
+		//   * state == CompleteCommit and EndTxn != commit
+		//   * state == CompleteAbort and EndTxn != abort
+		//   * state == PrepareCommit and EndTxn != commit (otherwise, returns concurrent transactions)
+		//   * state == PrepareAbort and EndTxn != abort (otherwise, returns concurrent transactions)
+		//   * state == Empty
+		//
+		// This basically guards against the final case, all others are
+		// Kafka internal state transitioning and we should never hit
+		// them.
+		if how == EndBeginTxnUnsafe && resp.ErrorCode == kerr.InvalidTxnState.Code {
+			return nil
 		}
 		return kerr.ErrorForCode(resp.ErrorCode)
 	})
@@ -670,6 +699,7 @@ func (cl *Client) EndAndBeginTransaction(
 				}
 			}
 		}
+		cl.producer.readded = true
 		return nil
 	})
 }
@@ -773,7 +803,7 @@ func (cl *Client) EndTransaction(ctx context.Context, commit TransactionEndTry) 
 	// Note that anyAdded is true if the producer ID was failed, meaning we will
 	// get to the potential recovery logic below if necessary.
 	if !anyAdded {
-		cl.cfg.logger.Log(LogLevelInfo, "no records were produced during the commit; thus no transaction was began; ending without doing anything")
+		cl.cfg.logger.Log(LogLevelDebug, "no records were produced during the commit; thus no transaction was began; ending without doing anything")
 		return nil
 	}
 

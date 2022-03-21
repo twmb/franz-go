@@ -60,6 +60,19 @@ type producer struct {
 
 	txnMu sync.Mutex
 	inTxn bool
+
+	// If using EndBeginTxnUnsafe, and any partitions are actually produced
+	// to, we issue an AddPartitionsToTxn at the end to re-add them to a
+	// new transaction. We have to due to logic races: the broker may not
+	// have handled the produce requests yet, and we want to ensure a new
+	// transaction is started.
+	//
+	// If the user stops producing, we want to ensure that our restarted
+	// transaction is actually ended. Thus, we set readded whenever we have
+	// partitions we actually restart. We issue EndTxn and reset readded in
+	// EndAndBegin; if nothing more was produced to, we ensure we finish
+	// the started txn.
+	readded bool
 }
 
 // BufferedProduceRecords returns the number of records currently buffered for
@@ -419,6 +432,21 @@ func (p *producer) finishPromises(b batchPromise) {
 	cl := p.cl
 	var more bool
 start:
+	// If we are transactional, we want to set that records were added to a
+	// transaction after we finish a batch's promises. This is only
+	// encessary when using EndBeginTxnUnsafe: if we did not set after the
+	// promises, it is possible that the records finish but the client does
+	// not think another EndTxn needs to be issued.
+	//
+	// To keep our batchPromise struct to 64 bytes (better copying), we
+	// stuff the atomic bool into the error. We only need to mark things
+	// added if the batch did not error.
+	var addedToTxn *atomicBool
+	if sa := (stuffedAtomic{}); errors.As(b.err, &sa) {
+		b.err = nil
+		addedToTxn = sa.b
+	}
+
 	p.promisesMu.Lock()
 	for i, pr := range b.recs {
 		pr.Offset = b.baseOffset + int64(i)
@@ -428,6 +456,9 @@ start:
 		pr.Attrs = b.attrs
 		cl.finishRecordPromise(pr, b.err)
 		b.recs[i] = promisedRec{}
+	}
+	if addedToTxn != nil {
+		addedToTxn.set(true)
 	}
 	p.promisesMu.Unlock()
 	if cap(b.recs) > 4 {
