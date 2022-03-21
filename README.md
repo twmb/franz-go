@@ -127,6 +127,16 @@ Supplementary information can be found in the docs directory:
 └── <a href="./docs/transactions.md">transactions</a> — a description of transactions and the safety even in a pre-KIP-447 world
 </pre>
 
+## Who uses this?
+
+In alphabetical order,
+
+* [Alpaca](https://alpaca.markets/blog/alpaca-launches-next-gen-order-management-system/)
+* [Redpanda Data](https://redpanda.com/)
+
+If you use this library and want on the list above, please either open a PR
+or comment on [#142](https://github.com/twmb/franz-go/issues/142)!
+
 ## Version Pinning
 
 By default, the client issues an ApiVersions request on connect to brokers
