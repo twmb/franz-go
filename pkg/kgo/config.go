@@ -1130,7 +1130,7 @@ func FetchMinBytes(b int32) ConsumerOpt {
 
 // FetchMaxPartitionBytes sets the maximum amount of bytes that will be
 // consumed for a single partition in a fetch request, overriding the default
-// 10MiB. Note that if a single batch is larger than this number, that batch
+// 1MiB. Note that if a single batch is larger than this number, that batch
 // will still be returned so the client can make progress.
 //
 // This corresponds to the Java max.partition.fetch.bytes setting.
