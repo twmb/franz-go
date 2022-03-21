@@ -163,7 +163,7 @@ var (
 	InvalidRecord                      = &Error{"INVALID_RECORD", 87, false, "This record has failed the validation on broker and hence be rejected."}
 	UnstableOffsetCommit               = &Error{"UNSTABLE_OFFSET_COMMIT", 88, true, "There are unstable offsets that need to be cleared."}
 	ThrottlingQuotaExceeded            = &Error{"THROTTLING_QUOTA_EXCEEDED", 89, true, "The throttling quota has been exceeded."}
-	ProducerFenced                     = &Error{"PRODUCER_FENCED", 90, true, "There is a newer producer with the same transactionalId which fences the current one."}
+	ProducerFenced                     = &Error{"PRODUCER_FENCED", 90, false, "There is a newer producer with the same transactionalId which fences the current one."}
 	ResourceNotFound                   = &Error{"RESOURCE_NOT_FOUND", 91, false, "A request illegally referred to a resource that does not exist."}
 	DuplicateResource                  = &Error{"DUPLICATE_RESOURCE", 92, false, "A request illegally referred to the same resource twice."}
 	UnacceptableCredential             = &Error{"UNACCEPTABLE_CREDENTIAL", 93, false, "Requested credential would not meet criteria for acceptability."}
