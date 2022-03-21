@@ -1215,7 +1215,7 @@ func (cl *Client) handleAdminReq(ctx context.Context, req kmsg.Request) Response
 			code = t.ErrorCode
 		case *kmsg.DescribeQuorumResponse:
 			code = t.ErrorCode
-		case *kmsg.AlterISRResponse:
+		case *kmsg.AlterPartitionResponse:
 			code = t.ErrorCode
 		case *kmsg.UpdateFeaturesResponse:
 			code = t.ErrorCode
