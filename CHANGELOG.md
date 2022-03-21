@@ -1,3 +1,31 @@
+v1.4.1
+===
+
+This release pins kmsg to its newly stable version v1.0.0, fixing a compilation
+issue for anybody doing `go get -u`.
+
+The kmsg package was previously unversioned because Kafka sometimes changes the
+protocol in such a way that breaks the API as chosen in kmsg (plain types, not
+objects for everything). The most recent change in kmsg to match a recent type
+rename in Kafka broke kgo because kgo depended on the old name. Again, this was
+not pinned because franz-go did not depend on a specific version of kmsg. To
+prevent this issue from happening again, we now pin to a stable kmsg version.
+
+There are also two small bugfixes and a few improvements. Previously,
+`ProducerFenced` was marked as retriable, which could result in the client
+internally entering a fatal state that the user was unaware of. This should now
+be bubbled up. As well, there were a few subtle issues with `EndBeginTxnUnsafe`
+that have been addressed.
+
+Notable commits & PRs:
+
+- [`83b0a32`](https://github.com/twmb/franz-go/commit/83b0a32) **bugfix** kgo: EndAndBeginTransaction w/ EndBeginTxnUnsafe: fix three issues
+- [`bd1d43d`](https://github.com/twmb/franz-go/commit/bd1d43d) sink: small AddPartitionsToTxn improvements
+- [`65ca0bd`](https://github.com/twmb/franz-go/commit/65ca0bd) **bugfix** kerr: ProducerFenced is not retriable
+- [PR #148](https://github.com/twmb/franz-go/pull/148) lower `FetchMaxPartitionBytes` to 1MiB to be in line with the Kafka default (thanks [@jcsp](https://github.com/jcsp))
+- [`806cf53`](https://github.com/twmb/franz-go/commit/806cf53) **feature** kmsg: add TextMarshaler/TextUnmarshaler to enums
+- [`49f678d`](https://github.com/twmb/franz-go/commit/49f678d) update deps, pulling in klauspost/compress v1.15.1 which makes zstd encoding & decoding stateless
+
 v1.4.0
 ===
 
@@ -96,7 +124,7 @@ is booted from the group. Two examples were added using these options.
 
 ## Relevant commits
 
-- [PR #137](https://github.com/twmb/franz-go/pull/137) and [`c3fc8e0`](https://github.com/twmb/franz-go/commit/c3fc8e0): add two more goroutine per consumer examples (thanks [@JacobSMoller](https://github.com/JacobSMoller)) example
+- [PR #137](https://github.com/twmb/franz-go/pull/137) and [`c3fc8e0`](https://github.com/twmb/franz-go/commit/c3fc8e0): add two more goroutine per consumer examples (thanks [@JacobSMoller](https://github.com/JacobSMoller))
 - [`cffbee7`](https://github.com/twmb/franz-go/commit/cffbee7) consumer: add BlockRebalancesOnPoll option, AllowRebalance (commit accidentally pluralized)
 - [`39af436`](https://github.com/twmb/franz-go/commit/39af436) docs: add metrics-and-logging.md
 - [`83dfa9d`](https://github.com/twmb/franz-go/commit/83dfa9d) client: add EndAndBeginTransaction
