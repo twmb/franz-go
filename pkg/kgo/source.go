@@ -707,11 +707,11 @@ func (s *source) fetch(consumerSession *consumerSession, doneFetch chan<- struct
 	// advance past them).
 	setOffsets = true
 
-	if resp.Version < 7 {
+	if resp.Version < 7 || resp.SessionID <= 0 {
 		// If the version is less than 7, we cannot use fetch sessions,
 		// so we kill them on the first response.
 		s.session.kill()
-	} else if resp.SessionID > 0 {
+	} else {
 		s.session.bumpEpoch(resp.SessionID)
 	}
 
