@@ -133,6 +133,9 @@ In alphabetical order,
 
 * [Alpaca](https://alpaca.markets/blog/alpaca-launches-next-gen-order-management-system/)
 * [Redpanda Data](https://redpanda.com/)
+* [XXX Bank](https://www.xxxbank.ru) (hide first 3 chars as of NDA now)
+* [*ber](https://www.xber.kz) (hide first char as of NDA now)
+* [Unistack](https://unistack.org) (Cloud Management System)
 
 If you use this library and want on the list above, please either open a PR
 or comment on [#142](https://github.com/twmb/franz-go/issues/142)!
