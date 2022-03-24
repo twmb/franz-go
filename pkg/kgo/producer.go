@@ -432,21 +432,6 @@ func (p *producer) finishPromises(b batchPromise) {
 	cl := p.cl
 	var more bool
 start:
-	// If we are transactional, we want to set that records were added to a
-	// transaction after we finish a batch's promises. This is only
-	// encessary when using EndBeginTxnUnsafe: if we did not set after the
-	// promises, it is possible that the records finish but the client does
-	// not think another EndTxn needs to be issued.
-	//
-	// To keep our batchPromise struct to 64 bytes (better copying), we
-	// stuff the atomic bool into the error. We only need to mark things
-	// added if the batch did not error.
-	var addedToTxn *atomicBool
-	if sa := (stuffedAtomic{}); errors.As(b.err, &sa) {
-		b.err = nil
-		addedToTxn = sa.b
-	}
-
 	p.promisesMu.Lock()
 	for i, pr := range b.recs {
 		pr.Offset = b.baseOffset + int64(i)
@@ -456,9 +441,6 @@ start:
 		pr.Attrs = b.attrs
 		cl.finishRecordPromise(pr, b.err)
 		b.recs[i] = promisedRec{}
-	}
-	if addedToTxn != nil {
-		addedToTxn.set(true)
 	}
 	p.promisesMu.Unlock()
 	if cap(b.recs) > 4 {
@@ -934,7 +916,7 @@ func (p *producer) pause(ctx context.Context) error {
 		p.mu.Lock()
 		defer p.mu.Unlock()
 		defer close(done)
-		for !quit && atomic.LoadInt64(&p.inflight)&0x0000ffffffffffff != 0 {
+		for !quit && atomic.LoadInt64(&p.inflight)&((1<<48)-1) != 0 {
 			p.c.Wait()
 		}
 	}()

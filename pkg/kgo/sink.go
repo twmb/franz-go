@@ -867,13 +867,6 @@ func (cl *Client) finishBatch(batch *recBatch, producerID int64, producerEpoch i
 	batch.records = nil
 	batch.mu.Unlock()
 
-	// See comment in finishPromises: we have no error, so if we are
-	// transactional, we stuff our addedToTxn bool into a fake error.
-	var sa error
-	if cl.cfg.txnID != nil {
-		sa = stuffedAtomic{&batch.owner.addedToTxn}
-	}
-
 	cl.producer.promiseBatch(batchPromise{
 		baseOffset: baseOffset,
 		pid:        producerID,
@@ -886,13 +879,8 @@ func (cl *Client) finishBatch(batch *recBatch, producerID int64, producerEpoch i
 		attrs:     RecordAttrs{uint8(attrs)},
 		partition: partition,
 		recs:      records,
-		err:       sa,
 	})
 }
-
-type stuffedAtomic struct{ b *atomicBool }
-
-func (stuffedAtomic) Error() string { panic("unreachable") }
 
 // handleRetryBatches sets any first-buf-batch to failing and triggers a
 // metadata that will eventually clear the failing state and re-drain.

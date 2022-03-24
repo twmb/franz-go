@@ -63,7 +63,7 @@ func TestTxnEtl(t *testing.T) {
 					how = EndBeginTxnUnsafe
 				}
 				safeUnsafe = !safeUnsafe
-				if err := cl.EndAndBeginTransaction(context.Background(), how, TryCommit, func(_ context.Context, endErr error) error {
+				if err := cl.EndAndBeginTransaction(context.Background(), how, TryCommit, func(_ context.Context, err error) error {
 					if err != nil {
 						errs <- fmt.Errorf("unable to end transaction: %v", err)
 					}

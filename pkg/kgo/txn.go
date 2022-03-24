@@ -656,6 +656,7 @@ func (cl *Client) EndAndBeginTransaction(
 	// unsafe aspect, the client could die or this request could error and
 	// there could be a stranded txn within Kafka's ProducerStateManager,
 	// but ideally the user will reconnect with the same txnal id.
+	cl.producer.readded = true
 	return cl.doWithConcurrentTransactions("AddPartitionsToTxn", func() error {
 		req := kmsg.NewPtrAddPartitionsToTxnRequest()
 		req.TransactionalID = *cl.cfg.txnID
@@ -690,6 +691,7 @@ func (cl *Client) EndAndBeginTransaction(
 		if err != nil {
 			return err
 		}
+
 		for i := range resp.Topics {
 			t := &resp.Topics[i]
 			for j := range t.Partitions {
@@ -699,7 +701,6 @@ func (cl *Client) EndAndBeginTransaction(
 				}
 			}
 		}
-		cl.producer.readded = true
 		return nil
 	})
 }
@@ -763,6 +764,11 @@ func (cl *Client) EndTransaction(ctx context.Context, commit TransactionEndTry) 
 	cl.producer.txnMu.Lock()
 	defer cl.producer.txnMu.Unlock()
 
+	if !cl.producer.inTxn {
+		return nil
+	}
+	cl.producer.inTxn = false
+
 	atomic.StoreUint32(&cl.producer.producingTxn, 0) // forbid any new produces while ending txn
 
 	// anyAdded tracks if any partitions were added to this txn, because
@@ -784,11 +790,6 @@ func (cl *Client) EndTransaction(ctx context.Context, commit TransactionEndTry) 
 	} else {
 		cl.cfg.logger.Log(LogLevelDebug, "transaction ending, no group loaded; this must be a producer-only transaction, not consume-modify-produce EOS")
 	}
-
-	if !cl.producer.inTxn {
-		return nil
-	}
-	cl.producer.inTxn = false
 
 	// After the flush, no records are being produced to, and we can set
 	// addedToTxn to false outside of any mutex.
