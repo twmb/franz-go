@@ -1,3 +1,35 @@
+v1.4.2
+===
+
+This release fixes a potential incremental fetch session spin loop /
+undesirable behavior. This was not reported, but can happen if you use many
+clients against your cluster.
+
+Previously, if a broker advertised that it supported consumer fetch sessions
+but did not actually create any and returned "0" to signify no session was
+created, the client would accept that 0 as a new fetch session. If the fetch
+response returned no data and thus made no forward progress, the next fetch
+request would include no partitions (believing a fetch session was created),
+and the broker would again reply immediately with no data and no fetch session.
+This would loop. Now, if the broker indicates no fetch session was created, we
+immediately stop trying to create new fetch sessions and never try again.
+
+In practice, fetch sessions are rejected if and replied to with 0 if a new one
+cannot be created. The default fetch session cache in Kafka is 1,000. If you
+have more than 1,000 active clients (where brokers count as clients against
+other brokers), you are at risk of this bug.
+
+This bug would manifest in clearly visible ways: higher cpu, no forward
+progress while consuming. If you have not seen these, you have not experienced
+the bug. However, it is recommended that all users upgrade to avoid it.
+
+Lastly, this has one followup fix to
+[`83b0a32`](https://github.com/twmb/franz-go/commit/83b0a32),
+mirroring the `EndBeginTxnUnsafe` fix into `EndTransaction` itself.
+
+- [`85a680e`](https://github.com/twmb/franz-go/commit/85a680e) **bugfix** consuming: do not continually try to create fetch sessions
+- [`2decd27`](https://github.com/twmb/franz-go/commit/2decd27) **bugfix** EndTransaction: mirror EndBeginTxnUnsafe logic
+
 v1.4.1
 ===
 
