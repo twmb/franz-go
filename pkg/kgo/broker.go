@@ -201,6 +201,10 @@ func (b *broker) stopForever() {
 	}
 
 	b.reqs.die() // no more pushing
+
+	b.reapMu.Lock()
+	defer b.reapMu.Unlock()
+
 	b.cxnNormal.die()
 	b.cxnProduce.die()
 	b.cxnFetch.die()
