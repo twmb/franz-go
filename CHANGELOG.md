@@ -23,12 +23,18 @@ This bug would manifest in clearly visible ways: higher cpu, no forward
 progress while consuming. If you have not seen these, you have not experienced
 the bug. However, it is recommended that all users upgrade to avoid it.
 
-Lastly, this has one followup fix to
-[`83b0a32`](https://github.com/twmb/franz-go/commit/83b0a32),
-mirroring the `EndBeginTxnUnsafe` fix into `EndTransaction` itself.
+This has two followup fixes to [`83b0a32`][83b0a32], one which fixes behavior
+that broke `EndBeginTxnSafe`, and one which mirrors some of the logic
+supporting `EndBeginTxnUnsafe` into `EndTransaction` itself. This also fixes a
+very rare data race that _realistically_ would result in a new connection being
+killed immediately (since at the CPU, reads/writes of pointers is atomic).
 
+- [`2faf459`](https://github.com/twmb/franz-go/commit/2faf459) **bugfix** broker: fix rare data race
+- [`8f7c8cd`](https://github.com/twmb/franz-go/commit/8f7c8cd) **bugfix** EndBeginTxnUnsafe: partially back out of [`83b0a32`][83b0a32]
 - [`85a680e`](https://github.com/twmb/franz-go/commit/85a680e) **bugfix** consuming: do not continually try to create fetch sessions
 - [`2decd27`](https://github.com/twmb/franz-go/commit/2decd27) **bugfix** EndTransaction: mirror EndBeginTxnUnsafe logic
+
+[83b0a32]: https://github.com/twmb/franz-go/commit/83b0a32
 
 v1.4.1
 ===
