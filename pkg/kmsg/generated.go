@@ -31025,9 +31025,9 @@ func (v *DescribeUserSCRAMCredentialsRequest) AppendTo(dst []byte) []byte {
 	{
 		v := v.Users
 		if isFlexible {
-			dst = kbin.AppendCompactArrayLen(dst, len(v))
+			dst = kbin.AppendCompactNullableArrayLen(dst, len(v), v == nil)
 		} else {
-			dst = kbin.AppendArrayLen(dst, len(v))
+			dst = kbin.AppendNullableArrayLen(dst, len(v), v == nil)
 		}
 		for i := range v {
 			v := &v[i]
@@ -31068,6 +31068,9 @@ func (v *DescribeUserSCRAMCredentialsRequest) ReadFrom(src []byte) error {
 			l = b.CompactArrayLen()
 		} else {
 			l = b.ArrayLen()
+		}
+		if version < 0 || l == 0 {
+			a = []DescribeUserSCRAMCredentialsRequestUser{}
 		}
 		if !b.Ok() {
 			return b.Complete()
