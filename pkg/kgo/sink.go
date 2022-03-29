@@ -83,6 +83,7 @@ func (s *sink) createReq(id int64, epoch int16) (*produceRequest, *kmsg.AddParti
 		producerID:    id,
 		producerEpoch: epoch,
 
+		hasHook:    s.cl.producer.hasHookBatchWritten,
 		compressor: s.cl.compressor,
 
 		wireLength:      s.cl.baseProduceRequestLength(), // start length with no topics
@@ -1445,6 +1446,7 @@ type produceRequest struct {
 	//
 	// We use this in handleReqResp for the OnProduceHook.
 	metrics produceMetrics
+	hasHook bool
 
 	compressor *compressor
 
@@ -1802,7 +1804,9 @@ func (p *produceRequest) IsFlexible() bool   { return p.version >= 9 }
 func (p *produceRequest) AppendTo(dst []byte) []byte {
 	flexible := p.IsFlexible()
 
-	p.metrics = make(map[string]map[int32]ProduceBatchMetrics)
+	if p.hasHook {
+		p.metrics = make(map[string]map[int32]ProduceBatchMetrics)
+	}
 
 	if p.version >= 3 {
 		if flexible {
@@ -1828,8 +1832,13 @@ func (p *produceRequest) AppendTo(dst []byte) []byte {
 			dst = kbin.AppendString(dst, topic)
 			dst = kbin.AppendArrayLen(dst, len(partitions))
 		}
-		tmetrics := make(map[int32]ProduceBatchMetrics)
-		p.metrics[topic] = tmetrics
+
+		var tmetrics map[int32]ProduceBatchMetrics
+		if p.hasHook {
+			tmetrics = make(map[int32]ProduceBatchMetrics)
+			p.metrics[topic] = tmetrics
+		}
+
 		for partition, batch := range partitions {
 			dst = kbin.AppendInt32(dst, partition)
 			batch.mu.Lock()
@@ -1849,7 +1858,9 @@ func (p *produceRequest) AppendTo(dst []byte) []byte {
 				dst, pmetrics = batch.appendTo(dst, p.version, p.producerID, p.producerEpoch, p.txnID != nil, p.compressor)
 			}
 			batch.mu.Unlock()
-			tmetrics[partition] = pmetrics
+			if p.hasHook {
+				tmetrics[partition] = pmetrics
+			}
 			if flexible {
 				dst = append(dst, 0)
 			}
