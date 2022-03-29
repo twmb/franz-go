@@ -443,7 +443,7 @@ func (cl *Client) CreatePartitions(ctx context.Context, add int, topics ...strin
 
 // UpdatePartitions issues a create partitions request for the given topics,
 // setting the final partition count to "set" for each topic. This request lets
-// Kafka choos where the new partitions should be.
+// Kafka choose where the new partitions should be.
 //
 // This does not return an error on authorization failures for the create
 // partitions request itself, instead, authorization failures are included in
