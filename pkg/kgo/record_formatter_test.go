@@ -381,6 +381,40 @@ func TestRecordReader(t *testing.T) {
 			}},
 		},
 
+		{
+			layout: `%v{re[\d{2}]}`,
+			in:     "2345",
+			exp: []*Record{
+				StringRecord("23"),
+				StringRecord("45"),
+			},
+		},
+
+		{
+			layout: `%v{re[(\d{2}|asdf)]}`,
+			in:     "23asdf45",
+			exp: []*Record{
+				StringRecord("23"),
+				StringRecord("asdf"),
+				StringRecord("45"),
+			},
+		},
+
+		{
+			layout: `%v{re[(\d{2}|asdf)]}`,
+			in:     "",
+			exp:    []*Record{},
+		},
+
+		{
+			layout: `%K{3}%v{re[.*?\d]}%k`,
+			in:     "abcdefg[1aaad2bbb",
+			exp: []*Record{
+				KeyStringRecord("aaa", "abcdefg[1"),
+				KeyStringRecord("bbb", "d2"),
+			},
+		},
+
 		//
 	} {
 		t.Run(test.layout, func(t *testing.T) {

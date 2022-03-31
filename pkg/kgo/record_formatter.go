@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -899,10 +900,14 @@ type RecordReader struct {
 //
 // Topics, keys, and values can be decoded uding "base64" and "hex" formatting
 // options. Any size specification is the size of the encoded value actually
-// being read:
+// being read.
 //
-//     %t{hex}
-//     %v{base64}
+//     %T%t{hex}     -  4abcd reads four hex characters "abcd"
+//     %V%v{base64}  -  2z9 reads two base64 characters "z9"
+//
+// As well, these text options can be parsed with regular expressions:
+//
+//     %k{re[\d*]}%v{re[\s+]}
 //
 func NewRecordReader(reader io.Reader, layout string) (*RecordReader, error) {
 	r := &RecordReader{r: bufio.NewReader(reader)}
@@ -1135,6 +1140,7 @@ func (r *RecordReader) parseReadLayout(layout string) error {
 
 		case 't', 'k', 'v':
 			var decodeFn func([]byte) ([]byte, error)
+			var re *regexp.Regexp
 			if handledBrace = isOpenBrace; handledBrace {
 				switch {
 				case strings.HasPrefix(layout, "base64}"):
@@ -1143,6 +1149,23 @@ func (r *RecordReader) parseReadLayout(layout string) error {
 				case strings.HasPrefix(layout, "hex}"):
 					decodeFn = decodeHex
 					layout = layout[len("hex}"):]
+				case strings.HasPrefix(layout, "re"):
+					restr, rem, err := nomOpenClose(layout[len("re"):])
+					if err != nil {
+						return fmt.Errorf("re parse err: %v", err)
+					}
+					if len(rem) == 0 || rem[0] != '}' {
+						return fmt.Errorf("re missing closing } in %q", layout)
+					}
+					layout = rem[1:]
+					if !strings.HasPrefix(restr, "^") {
+						restr = "^" + restr
+					}
+					re, err = regexp.Compile(restr)
+					if err != nil {
+						return fmt.Errorf("re parse err: %v", err)
+					}
+
 				default:
 					return fmt.Errorf("unknown %%%s{ escape", string(escaped))
 				}
@@ -1176,7 +1199,12 @@ func (r *RecordReader) parseReadLayout(layout string) error {
 			}}
 			bit.set(bit)
 			if bits.has(bitSize) {
+				if re != nil {
+					return errors.New("cannot specify exact size and regular expression")
+				}
 				fn.read = readKind{sizefn: func() int { return int(*size) }}
+			} else if re != nil {
+				fn.read = readKind{re: re}
 			}
 			r.fns = append(r.fns, fn)
 
@@ -1383,6 +1411,7 @@ type readKind struct {
 	sizefn    func() int
 	handoff   func(*RecordReader, *Record) error
 	delim     []byte
+	re        *regexp.Regexp
 }
 
 func (r *readKind) empty() bool {
@@ -1427,6 +1456,8 @@ func (r *RecordReader) next(rec *Record) error {
 			err = r.readSize(fn.read.sizefn())
 		case fn.read.handoff != nil:
 			err = fn.read.handoff(r, rec)
+		case fn.read.re != nil:
+			err = r.readRe(fn.read.re)
 		default:
 			err = r.readDelim(fn.read.delim) // we *always* fall back to delim parsing
 		}
@@ -1471,6 +1502,35 @@ func (r *RecordReader) readCondition(fn func(byte) bool) error {
 		r.r.Discard(1)
 		r.buf = append(r.buf, c)
 	}
+}
+
+type reReader struct {
+	r    *RecordReader
+	peek []byte
+	err  error
+}
+
+func (re *reReader) ReadRune() (r rune, size int, err error) {
+	re.peek, re.err = re.r.r.Peek(len(re.peek) + 1)
+	if re.err != nil {
+		return 0, 0, re.err
+	}
+	return rune(re.peek[len(re.peek)-1]), 1, nil
+}
+
+func (r *RecordReader) readRe(re *regexp.Regexp) error {
+	reader := reReader{r: r}
+	loc := re.FindReaderIndex(&reader)
+	if loc == nil {
+		return reader.err
+	}
+	n := loc[1] // we ensure the regexp begins with ^, so we only need the end
+	r.buf = append(r.buf, reader.peek[:n]...)
+	r.r.Discard(n)
+	if n == len(reader.peek) {
+		return reader.err
+	}
+	return nil
 }
 
 func (r *RecordReader) readSize(n int) error {
