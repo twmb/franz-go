@@ -10,5 +10,6 @@ require (
 
 replace (
 	github.com/twmb/franz-go => ../..
+	github.com/twmb/franz-go/pkg/kmsg => ../../pkg/kmsg
 	github.com/twmb/franz-go/plugin/kprom => ../../plugin/kprom
 )
