@@ -25,6 +25,9 @@ type Offset struct {
 
 // MarshalJSON implements json.Marshaler.
 func (o Offset) MarshalJSON() ([]byte, error) {
+	if o == noResetOffset {
+		return []byte(`{"NoReset":true}`), nil
+	}
 	if o.relative == 0 {
 		return []byte(fmt.Sprintf(`{"At":%d,"Epoch":%d,"CurrentEpoch":%d}`, o.at, o.epoch, o.currentEpoch)), nil
 	}
@@ -33,7 +36,9 @@ func (o Offset) MarshalJSON() ([]byte, error) {
 
 // String returns the offset as a string; the purpose of this is for logs.
 func (o Offset) String() string {
-	if o.relative == 0 {
+	if o == noResetOffset {
+		return "{no-reset}"
+	} else if o.relative == 0 {
 		return fmt.Sprintf("{%d.%d %d}", o.at, o.epoch, o.currentEpoch)
 	} else if o.relative > 0 {
 		return fmt.Sprintf("{%d+%d.%d %d}", o.at, o.relative, o.epoch, o.currentEpoch)
