@@ -322,8 +322,8 @@ func (cl *Client) TryProduce(
 // Kafka replies. For a synchronous produce, see ProduceSync. Records are
 // produced in order per partition if the record is produced successfully.
 // Successfully produced records will have their attributes, offset, and
-// partition set before the promise is called. All promises are called
-// serially (and should be relatively fast).
+// partition set before the promise is called. All promises are called serially
+// (and should be relatively fast).
 //
 // If the topic field is empty, the client will use the DefaultProduceTopic; if
 // that is also empty, the record is failed immediately. If the record is too
@@ -339,7 +339,9 @@ func (cl *Client) TryProduce(
 // Once a record is buffered into a batch, it can be canceled in three ways:
 // canceling the context, the record timing out, or hitting the maximum
 // retries. If any of these conditions are hit and it is currently safe to fail
-// records, all buffered records for the relevant partition are failed.
+// records, all buffered records for the relevant partition are failed. Only
+// the first record's context in a batch is considered when determining whether
+// the batch should be canceled.
 //
 // If the client is transactional and a transaction has not been begun, the
 // promise is immediately called with an error corresponding to not being in a

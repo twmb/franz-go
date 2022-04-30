@@ -24,9 +24,9 @@ const (
 	TryCommit TransactionEndTry = true
 )
 
-// GroupTransactSession abstracts away the proper way to begin a transaction
-// and more importantly how to end a transaction when consuming in a group,
-// modifying records, and producing (EOS transaction).
+// GroupTransactSession abstracts away the proper way to begin and end a
+// transaction when consuming in a group, modifying records, and producing
+// (EOS).
 //
 // If you are running Kafka 2.5+, it is strongly recommended that you also use
 // RequireStableFetchOffsets. See that config option's documentation for more
@@ -81,7 +81,7 @@ func NewGroupTransactSession(opts ...Opt) (*GroupTransactSession, error) {
 
 	var noGroup error
 
-	// We append one option, which will get applied last.  Because it is
+	// We append one option, which will get applied last. Because it is
 	// applied last, we can execute some logic and override some existing
 	// options.
 	opts = append(opts, groupOpt{func(cfg *cfg) {
@@ -145,7 +145,7 @@ func NewGroupTransactSession(opts ...Opt) (*GroupTransactSession, error) {
 	return s, nil
 }
 
-// Client returns the underlying client that this transact session wraps.  This
+// Client returns the underlying client that this transact session wraps. This
 // can be useful for functions that require a client, such as raw requests. The
 // returned client should not be used to manage transactions (leave that to the
 // GroupTransactSession).
@@ -202,14 +202,8 @@ func (s *GroupTransactSession) TryProduce(ctx context.Context, r *Record, promis
 }
 
 // Begin begins a transaction, returning an error if the client has no
-// transactional id or is already in a transaction.
-//
-// Begin must be called before producing records in a transaction.
-//
-// Note that a revoke of any partitions sets the session's revoked state, even
-// if the session has not begun. This state is only reset on EndTransaction.
-// Thus, it is safe to begin transactions after a poll (but still before you
-// produce).
+// transactional id or is already in a transaction. Begin must be called
+// before producing records in a transaction.
 func (s *GroupTransactSession) Begin() error {
 	s.cl.cfg.logger.Log(LogLevelInfo, "beginning transact session")
 	return s.cl.BeginTransaction()
@@ -221,23 +215,15 @@ func (s *GroupTransactSession) failed() bool {
 
 // End ends a transaction, committing if commit is true, if the group did not
 // rebalance since the transaction began, and if committing offsets is
-// successful. If commit is false, the group has rebalanced, or any partition
-// in committing offsets fails, this aborts.
-//
-// This function calls Flush or AbortBufferedRecords depending on the commit
-// status. If you are flushing, it is strongly recommended to Flush yourself
-// before calling this, so that you can then determine if you need to abort.
+// successful. If any of these conditions are false, this aborts. This flushes
+// or aborts depending on `commit`.
 //
 // This returns whether the transaction committed or any error that occurred.
 // No returned error is retriable. Either the transactional ID has entered a
 // failed state, or the client retried so much that the retry limit was hit,
-// and odds are you should not continue.
-//
-// Note that canceling the context will likely leave the client in an
-// undesirable state, because canceling the context cancels in flight requests
-// and prevents new requests (multiple requests are issued at the end of a
-// transact session). Thus, while a context is allowed, it is strongly
-// recommended to not cancel it.
+// and odds are you should not continue. While a context is allowed, canceling
+// it will likely leave the client in an invalid state. Canceling should only
+// be done if you want to shut down.
 func (s *GroupTransactSession) End(ctx context.Context, commit TransactionEndTry) (committed bool, err error) {
 	defer func() {
 		s.failMu.Lock()
@@ -708,22 +694,11 @@ func (cl *Client) EndAndBeginTransaction(
 // AbortBufferedRecords fails all unflushed records with ErrAborted and waits
 // for there to be no buffered records.
 //
-// This accepts a context to quit the wait early, but it is strongly
-// recommended to always wait for all records to be flushed. Waits should not
-// occur. The only case where this function returns an error is if the context
-// is canceled while flushing.
-//
-// The intent of this function is to provide a way to clear the client's
-// production backlog. For example, before aborting a transaction and
-// beginning a new one, it would be erroneous to not wait for the backlog to
-// clear before beginning a new transaction. Anything not cleared may be a part
-// of the new transaction.
-//
-// Records produced during or after a call to this function may not be failed,
-// thus it is incorrect to concurrently produce with this function.
-//
-// This function is safe to call multiple times concurrently, and safe to call
-// concurrent with Flush.
+// This accepts a context to quit the wait early, but quitting the wait may
+// lead to an invalid state and should only be used if you are quitting your
+// application. This function waits to abort records at safe points: if records
+// are known to not be in flight. This function is safe to call multiple times
+// concurrently, and safe to call concurrent with Flush.
 func (cl *Client) AbortBufferedRecords(ctx context.Context) error {
 	atomic.AddInt32(&cl.producer.aborting, 1)
 	defer atomic.AddInt32(&cl.producer.aborting, -1)
