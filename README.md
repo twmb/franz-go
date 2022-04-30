@@ -37,7 +37,10 @@ This library attempts to provide an intuitive API while interacting with Kafka t
 - [**Redpanda**](https://vectorized.io/): the fastest and most efficient Kafka compatible event streaming platform
 - **Kafka**: the original Java project
 - **Microsoft Event Hubs**
+  - Event Hubs does [not support][MSEH] producing with compression; be sure to use `kgo.ProducerBatchCompression(kgo.NoCompression)`.
 - **Amazon MSK**
+
+[MSEH]: https://docs.microsoft.com/en-us/azure/event-hubs/apache-kafka-troubleshooting-guide#compressionmessage-format-version-issue
 
 ## Getting started
 
