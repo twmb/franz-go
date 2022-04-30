@@ -10,17 +10,19 @@ particularly in the transaction examples.
 
 ## Producing
 
-The client provides two methods to produce, [`Produce`][1] and
-[`ProduceSync`][2]. The former allows for asynchronous production, the latter
-for synchronous. These two methods are also available on
-[`GroupTransactSession`][3] if you are using that for EOS.
+The client provides three methods to produce, [`Produce`][1],
+[`ProduceSync`][2], and [`TryProduce`][TryProduce]. The first allows for
+asynchronous production, the second for synchronous, and the third for async
+while also failing a record immediately if the [maximum records][max_records]
+are buffered. These methods are also available on [`GroupTransactSession`][3]
+if you are using that for EOS.
 
 Everything is produced through a [`Record`][4]. You can produce to multiple
 topics by creating a record in full (i.e., with a `Value` or `Key` or
 `Headers`) and then setting the `Topic` field, but if you are only ever
-producing to one topic, you can use the client's `ProduceTopic` option.  You
-can still use this option even when producing to multiple topics; the option
-only applies to records that have an empty topic.
+producing to one topic, you can use the client's `DefaultProduceTopic` option.
+You can still use this option even when producing to multiple topics; the
+option only applies to records that have an empty topic.
 
 There exist a few small helpers to create records out of slices or strings:
 
@@ -46,6 +48,8 @@ help eliminate promise boilerplate.
 [7]: https://pkg.go.dev/github.com/twmb/franz-go/pkg/kgo#SliceRecord
 [8]: https://pkg.go.dev/github.com/twmb/franz-go/pkg/kgo#KeySliceRecord
 [9]: https://pkg.go.dev/github.com/twmb/franz-go/pkg/kgo#FirstErrPromise
+[TryProduce]: https://pkg.go.dev/github.com/twmb/franz-go/pkg/kgo#Client.TryProduce
+[max_records]: https://pkg.go.dev/github.com/twmb/franz-go/pkg/kgo#MaxBufferedRecords
 
 ### Record reliability
 
@@ -56,7 +60,7 @@ if you want to produce with no ack required or with only leader acks required.
 [10]: https://pkg.go.dev/github.com/twmb/franz-go/pkg/kgo#DisableIdempotentWrite
 
 The default is to always retry records forever, but this can be dropped with
-the [`ProduceRetries`][11] and [`RecordTimeout`][12] options, as well as with
+the [`RecordRetries`][11] and [`RecordDeliveryTimeout`][12] options, as well as with
 the context that you use for producing a record. A record will only be aborted
 if it is safe to do so without messing up the client's sequence numbers. Thus,
 a record can only be aborted if it has never been produced or if it knows that
@@ -64,8 +68,8 @@ it received a successful response from its last produce attempt (even if that
 response indicated an error on that partition). If a record is ever failed, all
 records buffered on the same partition are failed.
 
-[11]: https://pkg.go.dev/github.com/twmb/franz-go/pkg/kgo#ProduceRetries
-[12]: https://pkg.go.dev/github.com/twmb/franz-go/pkg/kgo#RecordTimeout
+[11]: https://pkg.go.dev/github.com/twmb/franz-go/pkg/kgo#RecordRetries
+[12]: https://pkg.go.dev/github.com/twmb/franz-go/pkg/kgo#RecordDeliveryTimeout
 
 ### Exactly once semantics
 
@@ -77,9 +81,9 @@ the transaction should be aborted, the session sets its internal abort state.
 This may mean you will end up re-processing records more than necessary, but
 in general this should only happen on group rebalances, which should be rare.
 
-By proxy, producer-only transactions are also supported. This is just a simple
-extension of the idempotent producer except with a manual begin transaction and
-end transaction call whenever appropriate.
+Producer-only transactions are also supported. This is just a simple extension
+of the idempotent producer except with a manual begin transaction and end
+transaction call whenever appropriate.
 
 To see more documentation about transactions and EOS, see the
 [transactions](./transactions.md) page.
@@ -109,9 +113,9 @@ To consume partitions directly, use [`ConsumeTopics`][13] or [`ConsumePartitions
 `ConsumeTopics` with [`ConsumerGroup`][14] for group consuming or [`NewGroupTransactSession`][15]
 for group consuming for EOS.
 
-[13]: https://pkg.go.dev/github.com/twmb/franz-go/pkg/kgo#Client.ConsumeTopics
-[a]: https://pkg.go.dev/github.com/twmb/franz-go/pkg/kgo#Client.ConsumePartitions
-[14]: https://pkg.go.dev/github.com/twmb/franz-go/pkg/kgo#Client.ConsumerGroup
+[13]: https://pkg.go.dev/github.com/twmb/franz-go/pkg/kgo#ConsumeTopics
+[a]: https://pkg.go.dev/github.com/twmb/franz-go/pkg/kgo#ConsumePartitions
+[14]: https://pkg.go.dev/github.com/twmb/franz-go/pkg/kgo#ConsumerGroup
 [15]: https://pkg.go.dev/github.com/twmb/franz-go/pkg/kgo#NewGroupTransactSession
 
 ### Consumer groups
@@ -122,14 +126,14 @@ If you wish to use this client with another client that uses a historical balanc
 you must set the balancers option.
 
 By default, the group consumer will autocommit every 5s, commit whenever a
-rebalance happens (in [`OnRevoked`][16]), and will issue a blocking commit when
-leaving the group. For most purposes, this can suffice. The default commit logs
-any errors encountered, but this can be overridden with the
-[`CommitCallback`][16] option or by disabling autocommit and instead committing
+rebalance happens (in [`OnPartitionsRevoked`][16]), and will issue a blocking
+commit when leaving the group. For most purposes, this can suffice. The default
+commit logs any errors encountered, but this can be overridden with the
+[`AutoCommitCallback`][16] option or by disabling autocommit and instead committing
 yourself.
 
-[16]: https://pkg.go.dev/github.com/twmb/franz-go/pkg/kgo#OnRevoked
-[17]: https://pkg.go.dev/github.com/twmb/franz-go/pkg/kgo#CommitCallback
+[16]: https://pkg.go.dev/github.com/twmb/franz-go/pkg/kgo#OnPartitionsRevoked
+[17]: https://pkg.go.dev/github.com/twmb/franz-go/pkg/kgo#AutoCommitCallback
 
 #### Offset management
 
@@ -138,14 +142,28 @@ group **completely independently** from consuming itself. More to the point, a
 revoke can happen **at any time** and if you need to stop consuming or do some
 cleanup on a revoke, you must set a callback that will **not return** until you
 are ready for the group to be rejoined. Even more to the point, if you are
-manually committing offsets, you **must** commit in your `OnRevoked`, or you
-must abandon your work after the revoke finishes, because otherwise you may be
-working on partitions that moved to another client. When you are **done
-consuming**, before you shut down, you must perform a blocking commit.
+manually committing offsets, you **must** commit in your `OnPartitionsRevoked`,
+or you must abandon your work after the revoke finishes, because otherwise you
+may be working on partitions that moved to another client. When you are **done
+consuming**, before you shut down, you must perform a blocking commit. If you
+rely on the default options and do not commit yourself, all of this is
+automatically handled.
 
-If you rely on the default options and do not commit yourself, all of this is
-automatically handled. My recommendation is to just set a custom
-`CommitCallback` if you need to and to rely on the default commit behavior.
+Alternatively, you can use the [`BlockRebalanceOnPoll`][BROP] option in
+combination with [`AllowRebalance`][AR] to ensure rebalance cannot happen after
+you poll until you explicitly allow it. This option is much easier to reason
+about, but has a risk if processing your poll takes so long that a rebalance
+started and finished and you were kicked from the group. If you use this option
+and this API, it is recommended to take care and use [`PollRecords`][PR] and
+ensure your [SessionTimeout][ST] is long enough to encompass any processing you
+do between polls. My recommendation is to block rebalance on poll, ensure your
+processing is quick, and to use [`CommitUncommittedOffsets`][CUO].
+
+[BROP]: https://pkg.go.dev/github.com/twmb/franz-go/pkg/kgo#BlockRebalanceOnPoll
+[AR]: https://pkg.go.dev/github.com/twmb/franz-go/pkg/kgo#Client.AllowRebalance
+[PR]: https://pkg.go.dev/github.com/twmb/franz-go/pkg/kgo#Client.PollRecords
+[ST]: https://pkg.go.dev/github.com/twmb/franz-go/pkg/kgo#SessionTimeout
+[CUO]: https://pkg.go.dev/github.com/twmb/franz-go/pkg/kgo#Client.CommitUncommittedOffsets
 
 ##### Direct offset management outside of a group
 
@@ -166,7 +184,7 @@ autocommiting behavior and the default blocking commit on leave. At most, you
 may want to use your own custom commit callback.
 
 Alternatively, you can disable autocommitting with [`DisableAutoCommit`][19]
-and instead use a custom `OnRevoked`.
+and instead use a custom `OnPartitionsRevoked`.
 
 [19]: https://pkg.go.dev/github.com/twmb/franz-go/pkg/kgo#DisableAutoCommit
 
@@ -219,4 +237,3 @@ membership, your cluster must be at least 2.4.0, and you can use the
 [`InstanceID`][23] option.
 
 [23]: https://pkg.go.dev/github.com/twmb/franz-go/pkg/kgo#InstanceID
-

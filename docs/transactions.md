@@ -129,11 +129,11 @@ By having the transactional timeout strictly less than the session timeout,
 we know that even if requests hang after our successful heartbeat, then
 the transaction will be timed out before a rebalance happens.
 
-If a rebalance happens while committing, the OnRevoked callback is blocked
-until the `EndTxn` request completes, meaning either the `EndTxn` will complete
-successfully before the member is allowed to rebalance, or the `EndTxn` will
-hang long enough for the member to be booted. In either scenario, we avoid our
-problem. Again though, more remains.
+If a rebalance happens while committing, the OnPartitionsRevoked callback is
+blocked until the `EndTxn` request completes, meaning either the `EndTxn` will
+complete successfully before the member is allowed to rebalance, or the
+`EndTxn` will hang long enough for the member to be booted. In either scenario,
+we avoid our problem. Again though, more remains.
 
 After `EndTxn`, it is possible that a rebalance could immediately happen.
 Within Kafka when a transaction ends, Kafka propagates a commit marker to all

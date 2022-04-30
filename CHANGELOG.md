@@ -485,7 +485,7 @@ which are so tiny they are not worth a minor release.
 More work on kadm has been done: the package now supports ACLs.
 
 SASL no longer has a hard coded 30s write timeout; instead, we use the
-ConnTimeoutOverhead same as everything else. The default produce request
+RequestTimeoutOverhead same as everything else. The default produce request
 timeout has been dropped to 10s from 30s, which is still ~10x more time than
 Kafka usually needs at the p99.9 level. This will help speed up producing to
 hung brokers. As well, the default backoff has been changed to 250ms-2.5s
@@ -575,7 +575,7 @@ Non-formatter/reader/kadm commits worth mentioning:
 - [`af4fce4`](https://github.com/twmb/franz-go/commit/af4fce4) **beahvior change** bench: use no compression by default, remove -no-compression flag
 - [`d368d11`](https://github.com/twmb/franz-go/commit/d368d11) bench: allow custom certs with -ca-cert, -client-cert, -client-key
 - [`fbf9239`](https://github.com/twmb/franz-go/commit/fbf9239) broker: add two new connection types, cxnGroup and cxnSlow
-- [`2d6c1a8`](https://github.com/twmb/franz-go/commit/2d6c1a8) **behavior change** client: lower ConnTimeoutOverhead and RetryTimeout defaults
+- [`2d6c1a8`](https://github.com/twmb/franz-go/commit/2d6c1a8) **behavior change** client: lower RequestTimeoutOverhead and RetryTimeout defaults
 - [`9bcfc98`](https://github.com/twmb/franz-go/commit/9bcfc98) kgo: only run req/resp handling goroutines when needed
 - [`b9b592e`](https://github.com/twmb/franz-go/commit/b9b592e) **behavior change** kgo: change default MaxBufferedRecords from unlimited to 10,000
 - [`19f4e9b`](https://github.com/twmb/franz-go/commit/19f4e9b) and [`58bf74a`](https://github.com/twmb/franz-go/commit/58bf74a) client: collapse shard errors
@@ -1066,7 +1066,7 @@ consumer options, merging some duplicated group / direct options, adding
 `*Client` as an argument to some callbacks, and cleaning up some consume APIs.
 
 From there on, the breakages get more minor: `AutoTopicCreation` now is
-`AllowAutoTopicCreation`, and `ProduceTopic` is now `DefaultPRoduceTopic`.
+`AllowAutoTopicCreation`, and `ProduceTopic` is now `DefaultProduceTopic`.
 
 ## Upgrade considerations
 

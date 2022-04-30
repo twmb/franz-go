@@ -45,8 +45,8 @@ type GroupTransactSession struct {
 }
 
 // NewGroupTransactSession is exactly the same as NewClient, but wraps the
-// client's OnRevoked / OnLost to ensure that transactions are correctly
-// aborted whenever necessary so as to properly provide EOS.
+// client's OnPartitionsRevoked / OnPartitionsLost to ensure that transactions
+// are correctly aborted whenever necessary so as to properly provide EOS.
 //
 // When ETLing in a group in a transaction, if a rebalance happens before the
 // transaction is ended, you either (a) must block the rebalance from finishing

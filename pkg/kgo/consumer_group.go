@@ -206,9 +206,9 @@ func (c *consumer) initGroup() {
 		name string
 		set  *func(context.Context, *Client, map[string][]int32)
 	}{
-		{"OnAssigned", &g.cfg.onAssigned},
-		{"OnRevoked", &g.cfg.onRevoked},
-		{"OnLost", &g.cfg.onLost},
+		{"OnPartitionsAssigned", &g.cfg.onAssigned},
+		{"OnPartitionsRevoked", &g.cfg.onRevoked},
+		{"OnPartitionsLost", &g.cfg.onLost},
 	} {
 		user := *logOn.set
 		name := logOn.name
@@ -289,9 +289,9 @@ func (g *groupConsumer) manage() {
 			// The cooperative consumer does not revoke everything
 			// while rebalancing, meaning if our context is
 			// canceled, we may have uncommitted data. Rather than
-			// diving into OnLost, we should go into OnRevoked,
+			// diving into onLost, we should go into onRevoked,
 			// because for the most part, a context cancelation
-			// means we are leaving the group. Going into OnRevoked
+			// means we are leaving the group. Going into onRevoked
 			// gives us an opportunity to commit outstanding
 			// offsets. For the eager consumer, since we always
 			// revoke before exiting the heartbeat loop, we do not
@@ -302,7 +302,7 @@ func (g *groupConsumer) manage() {
 			g.cfg.onRevoked(g.cl.ctx, g.cl, g.nowAssigned.read())
 		} else {
 			// Any other error is perceived as a fatal error,
-			// and we go into OnLost as appropriate.
+			// and we go into onLost as appropriate.
 			if g.cfg.onLost != nil {
 				g.cfg.onLost(g.cl.ctx, g.cl, g.nowAssigned.read())
 			}
@@ -1799,11 +1799,11 @@ func (g *groupConsumer) updateCommitted(
 			//      to the prior poll on poll
 			//  (3) if using marks, head is bumped on mark
 			//  (4) here, and we can be here on autocommit or on
-			//      manual commit (usually manual in an OnRevoke)
+			//      manual commit (usually manual in an onRevoke)
 			//
 			// head is usually at or past the commit: usually, head
 			// is used to build the commit itself. However, in case 4
-			// when the user manually commits in OnRevoke, the user
+			// when the user manually commits in onRevoke, the user
 			// is likely committing with UncommittedOffsets, i.e.,
 			// the dirty offsets that are past the current head.
 			// We want to ensure we forward the head so that using
@@ -2039,11 +2039,12 @@ func (g *groupConsumer) getUncommittedLocked(head, dirty bool) map[string]map[in
 //
 // Simple usage of this function may lead to duplicate records if a consumer
 // group rebalance occurs before or while this function is being executed. You
-// can avoid this scenario by calling CommitRecords in a custom OnRevoked, but
-// for most workloads, a small bit of potential duplicate processing is fine.
-// See the documentation on DisableAutoCommit for more details. You can also
-// avoid this problem by using BlockRebalanceOnCommit, but that option comes
-// with its own tradeoffs (refer to its documentation).
+// can avoid this scenario by calling CommitRecords in a custom
+// OnPartitionsRevoked, but for most workloads, a small bit of potential
+// duplicate processing is fine.  See the documentation on DisableAutoCommit
+// for more details. You can also avoid this problem by using
+// BlockRebalanceOnCommit, but that option comes with its own tradeoffs (refer
+// to its documentation).
 //
 // It is recommended to always commit records in order (per partition). If you
 // call this function twice with record for partition 0 at offset 999
@@ -2165,11 +2166,12 @@ func (cl *Client) MarkCommitRecords(rs ...*Record) {
 //
 // Simple usage of this function may lead to duplicate records if a consumer
 // group rebalance occurs before or while this function is being executed. You
-// can avoid this scenario by calling CommitRecords in a custom OnRevoked, but
-// for most workloads, a small bit of potential duplicate processing is fine.
-// See the documentation on DisableAutoCommit for more details. You can also
-// avoid this problem by using BlockRebalanceOnCommit, but that option comes
-// with its own tradeoffs (refer to its documentation).
+// can avoid this scenario by calling CommitRecords in a custom
+// OnPartitionsRevoked, but for most workloads, a small bit of potential
+// duplicate processing is fine. See the documentation on DisableAutoCommit
+// for more details. You can also avoid this problem by using
+// BlockRebalanceOnCommit, but that option comes with its own tradeoffs (refer
+// to its documentation).
 //
 // The recommended pattern for using this function is to have a poll / process
 // / commit loop. First PollFetches, then process every record, then call
@@ -2203,9 +2205,9 @@ func (cl *Client) CommitUncommittedOffsets(ctx context.Context) error {
 // will not return until the commit is done and the onDone callback is
 // complete.
 //
-// The purpose of this function is for use in OnRevoke or committing before
-// leaving a group, because you do not want to have a commit issued in
-// OnRevoked canceled.
+// The purpose of this function is for use in OnPartitionsRevoked or committing
+// before leaving a group, because you do not want to have a commit issued in
+// OnPartitionsRevoked canceled.
 //
 // This is an advanced function, and for simpler, more easily understandable
 // committing, see CommitRecords and CommitUncommittedOffsets.
@@ -2300,7 +2302,7 @@ func (g *groupConsumer) commitOffsetsSync(
 // This is most likely to happen if a commit occurs too late in a rebalance
 // event.
 //
-// Do not use this async CommitOffsets in OnRevoked, instead use
+// Do not use this async CommitOffsets in OnPartitionsRevoked, instead use
 // CommitOffsetsSync. If you commit async, the rebalance will proceed before
 // this function executes, and you will commit offsets for partitions that have
 // moved to a different consumer.

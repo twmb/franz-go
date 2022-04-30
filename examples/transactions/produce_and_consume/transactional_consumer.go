@@ -22,7 +22,7 @@ func startConsuming(ctx context.Context, brokers []string, group, topic string) 
 	// way to kill this program is to interrupt it, but, usually you will
 	// close the client and wait for it to close before quitting. If you
 	// want to perform an action on commit errors, you can use the
-	// CommitCallback option.
+	// AutoCommitCallback option.
 	defer client.Close()
 
 consumerLoop:
