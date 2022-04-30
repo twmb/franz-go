@@ -964,6 +964,8 @@ func RecordRetries(n int) ProducerOpt {
 // exist, and if we repeatedly see that the topic does not exist across
 // multiple metadata queries (which are going to different brokers), then we
 // may as well stop trying and fail the records.
+//
+// If this is -1, the client never fails records with this error.
 func UnknownTopicRetries(n int) ProducerOpt {
 	return producerOpt{func(cfg *cfg) { cfg.maxUnknownFailures = int64(n) }}
 }

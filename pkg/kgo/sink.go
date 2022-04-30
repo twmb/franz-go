@@ -1214,7 +1214,7 @@ func (recBuf *recBuf) checkUnknownFailLimit(err error) bool {
 	} else {
 		recBuf.unknownFailures = 0
 	}
-	return recBuf.unknownFailures > recBuf.cl.cfg.maxUnknownFailures
+	return recBuf.cl.cfg.maxUnknownFailures >= 0 && recBuf.unknownFailures > recBuf.cl.cfg.maxUnknownFailures
 }
 
 // failAllRecords fails all buffered records in this recBuf.
