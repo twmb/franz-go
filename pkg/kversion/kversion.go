@@ -779,7 +779,7 @@ var max270 = nextMax(max260, func(v listenerKeys) listenerKeys {
 
 	// KAFKA-10028 fb4f297207ef62f71e4a6d2d0dac75752933043d KIP-584
 	return append(v,
-		k(zkBroker, rBroker), // 57 update features (raft 3.0 6e857c531f14d07d5b05f174e6063a124c917324)
+		k(zkBroker, rBroker, rController), // 57 update features (rbroker 3.0 6e857c531f14d07d5b05f174e6063a124c917324; rcontroller 3.2 55ff5d360381af370fe5b3a215831beac49571a4 KIP-778  KAFKA-13823)
 	)
 })
 
@@ -904,6 +904,9 @@ var maxTip = nextMax(max310, func(v listenerKeys) listenerKeys {
 	// KAFKA-13587 52621613fd386203773ba93903abd50b46fa093a KIP-704
 	v[4].inc()  // 6 leader and isr
 	v[56].inc() // 1 alter isr => alter partition
+
+	// KAFKA-13823 55ff5d360381af370fe5b3a215831beac49571a4 KIP-778
+	v[57].inc() // 1 update features
 
 	return v
 })

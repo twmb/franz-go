@@ -1,5 +1,5 @@
 // From KIP-584 and introduced in 2.7.0, this request updates broker-wide features.
-UpdateFeaturesRequest => key 57, max version 0, flexible v0+, admin
+UpdateFeaturesRequest => key 57, max version 1, flexible v0+, admin
   TimeoutMillis(60000)
   // The list of updates to finalized features.
   FeatureUpdates: [=>]
@@ -13,7 +13,16 @@ UpdateFeaturesRequest => key 57, max version 0, flexible v0+, admin
     // downgraded/deleted. The downgrade request will fail if the new maximum
     // version level is a value that's not lower than the existing maximum
     // finalized version level.
-    AllowDowngrade: bool
+    //
+    // Replaced in v1 with ValidateOnly.
+    AllowDowngrade: bool // v0-v0
+    // Determine which type of upgrade will be performed: 1 will perform an
+    // upgrade only (default), 2 is safe downgrades only (lossless), 3 is
+    // unsafe downgrades (lossy).
+    UpgradeType: int8 // v1+
+  // True if we should validate the request, but not perform the upgrade or
+  // downgrade.
+  ValidateOnly: bool // v1+
 
 UpdateFeaturesResponse =>
   ThrottleMillis

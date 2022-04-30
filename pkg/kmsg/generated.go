@@ -2539,7 +2539,6 @@ type ProduceRequestTopicPartition struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v9+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -2564,7 +2563,6 @@ type ProduceRequestTopic struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v9+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -2618,7 +2616,6 @@ type ProduceRequest struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v9+
-
 }
 
 func (*ProduceRequest) Key() int16                 { return 0 }
@@ -2852,7 +2849,6 @@ type ProduceResponseTopicPartitionErrorRecord struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v9+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -2979,7 +2975,6 @@ type ProduceResponseTopicPartition struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v9+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -3007,7 +3002,6 @@ type ProduceResponseTopic struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v9+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -3042,7 +3036,6 @@ type ProduceResponse struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v9+
-
 }
 
 func (*ProduceResponse) Key() int16                 { return 0 }
@@ -3366,7 +3359,6 @@ type FetchRequestTopicPartition struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v12+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -3397,7 +3389,6 @@ type FetchRequestTopic struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v12+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -3426,7 +3417,6 @@ type FetchRequestForgottenTopic struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v12+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -3524,7 +3514,6 @@ type FetchRequest struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v12+
-
 }
 
 func (*FetchRequest) Key() int16                 { return 1 }
@@ -3973,7 +3962,6 @@ type FetchResponseTopicPartitionDivergingEpoch struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v12+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -4004,7 +3992,6 @@ type FetchResponseTopicPartitionCurrentLeader struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v12+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -4031,7 +4018,6 @@ type FetchResponseTopicPartitionSnapshotID struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v12+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -4058,7 +4044,6 @@ type FetchResponseTopicPartitionAbortedTransaction struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v12+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -4178,7 +4163,6 @@ type FetchResponseTopicPartition struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v12+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -4228,7 +4212,6 @@ type FetchResponseTopic struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v12+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -4279,7 +4262,6 @@ type FetchResponse struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v12+
-
 }
 
 func (*FetchResponse) Key() int16                 { return 1 }
@@ -4799,7 +4781,6 @@ type ListOffsetsRequestTopicPartition struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v6+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -4826,7 +4807,6 @@ type ListOffsetsRequestTopic struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v6+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -4875,7 +4855,6 @@ type ListOffsetsRequest struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v6+
-
 }
 
 func (*ListOffsetsRequest) Key() int16                 { return 2 }
@@ -5157,7 +5136,6 @@ type ListOffsetsResponseTopicPartition struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v6+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -5186,7 +5164,6 @@ type ListOffsetsResponseTopic struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v6+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -5221,7 +5198,6 @@ type ListOffsetsResponse struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v6+
-
 }
 
 func (*ListOffsetsResponse) Key() int16                 { return 2 }
@@ -5472,7 +5448,6 @@ type MetadataRequestTopic struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v9+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -5518,7 +5493,6 @@ type MetadataRequest struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v9+
-
 }
 
 func (*MetadataRequest) Key() int16                 { return 3 }
@@ -5725,7 +5699,6 @@ type MetadataResponseBroker struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v9+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -5783,7 +5756,6 @@ type MetadataResponseTopicPartition struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v9+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -5838,7 +5810,6 @@ type MetadataResponseTopic struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v9+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -5892,7 +5863,6 @@ type MetadataResponse struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v9+
-
 }
 
 func (*MetadataResponse) Key() int16                 { return 3 }
@@ -6378,7 +6348,6 @@ type LeaderAndISRRequestTopicPartition struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v4+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -6405,7 +6374,6 @@ type LeaderAndISRResponseTopicPartition struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v4+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -6430,7 +6398,6 @@ type LeaderAndISRRequestTopicState struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v4+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -6455,7 +6422,6 @@ type LeaderAndISRRequestLiveLeader struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v4+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -6502,7 +6468,6 @@ type LeaderAndISRRequest struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v4+
-
 }
 
 func (*LeaderAndISRRequest) Key() int16                 { return 4 }
@@ -7250,7 +7215,6 @@ type LeaderAndISRResponseTopic struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v4+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -7279,7 +7243,6 @@ type LeaderAndISRResponse struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v4+
-
 }
 
 func (*LeaderAndISRResponse) Key() int16                 { return 4 }
@@ -7551,7 +7514,6 @@ type StopReplicaRequestTopicPartitionState struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v2+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -7579,7 +7541,6 @@ type StopReplicaRequestTopic struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v2+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -7622,7 +7583,6 @@ type StopReplicaRequest struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v2+
-
 }
 
 func (*StopReplicaRequest) Key() int16                 { return 5 }
@@ -7895,7 +7855,6 @@ type StopReplicaResponsePartition struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v2+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -7923,7 +7882,6 @@ type StopReplicaResponse struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v2+
-
 }
 
 func (*StopReplicaResponse) Key() int16                 { return 5 }
@@ -8083,7 +8041,6 @@ type UpdateMetadataRequestTopicPartition struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v6+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -8108,7 +8065,6 @@ type UpdateMetadataRequestTopicState struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v6+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -8135,7 +8091,6 @@ type UpdateMetadataRequestLiveBrokerEndpoint struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v6+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -8164,7 +8119,6 @@ type UpdateMetadataRequestLiveBroker struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v6+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -8209,7 +8163,6 @@ type UpdateMetadataRequest struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v6+
-
 }
 
 func (*UpdateMetadataRequest) Key() int16                 { return 6 }
@@ -8959,7 +8912,6 @@ type UpdateMetadataResponse struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v6+
-
 }
 
 func (*UpdateMetadataResponse) Key() int16                 { return 6 }
@@ -9048,7 +9000,6 @@ type ControlledShutdownRequest struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v3+
-
 }
 
 func (*ControlledShutdownRequest) Key() int16                 { return 7 }
@@ -9140,7 +9091,6 @@ type ControlledShutdownResponsePartitionsRemaining struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v3+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -9167,7 +9117,6 @@ type ControlledShutdownResponse struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v3+
-
 }
 
 func (*ControlledShutdownResponse) Key() int16                 { return 7 }
@@ -9330,7 +9279,6 @@ type OffsetCommitRequestTopicPartition struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v8+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -9357,7 +9305,6 @@ type OffsetCommitRequestTopic struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v8+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -9416,7 +9363,6 @@ type OffsetCommitRequest struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v8+
-
 }
 
 func (*OffsetCommitRequest) Key() int16                   { return 8 }
@@ -9743,7 +9689,6 @@ type OffsetCommitResponseTopicPartition struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v8+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -9769,7 +9714,6 @@ type OffsetCommitResponseTopic struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v8+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -9803,7 +9747,6 @@ type OffsetCommitResponse struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v8+
-
 }
 
 func (*OffsetCommitResponse) Key() int16                 { return 8 }
@@ -9993,7 +9936,6 @@ type OffsetFetchRequestTopic struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v6+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -10016,7 +9958,6 @@ type OffsetFetchRequestGroupTopic struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v6+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -10039,7 +9980,6 @@ type OffsetFetchRequestGroup struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v6+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -10083,7 +10023,6 @@ type OffsetFetchRequest struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v6+
-
 }
 
 func (*OffsetFetchRequest) Key() int16                   { return 9 }
@@ -10475,7 +10414,6 @@ type OffsetFetchResponseTopicPartition struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v6+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -10502,7 +10440,6 @@ type OffsetFetchResponseTopic struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v6+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -10532,7 +10469,6 @@ type OffsetFetchResponseGroupTopicPartition struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v6+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -10556,7 +10492,6 @@ type OffsetFetchResponseGroupTopic struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v6+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -10581,7 +10516,6 @@ type OffsetFetchResponseGroup struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v6+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -10624,7 +10558,6 @@ type OffsetFetchResponse struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v6+
-
 }
 
 func (*OffsetFetchResponse) Key() int16                 { return 9 }
@@ -11083,7 +11016,6 @@ type FindCoordinatorRequest struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v3+
-
 }
 
 func (*FindCoordinatorRequest) Key() int16                 { return 10 }
@@ -11234,7 +11166,6 @@ type FindCoordinatorResponseCoordinator struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v3+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -11298,7 +11229,6 @@ type FindCoordinatorResponse struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v3+
-
 }
 
 func (*FindCoordinatorResponse) Key() int16                 { return 10 }
@@ -11561,7 +11491,6 @@ type JoinGroupRequestProtocol struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v6+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -11646,7 +11575,6 @@ type JoinGroupRequest struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v6+
-
 }
 
 func (*JoinGroupRequest) Key() int16                   { return 11 }
@@ -11903,7 +11831,6 @@ type JoinGroupResponseMember struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v6+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -12002,7 +11929,6 @@ type JoinGroupResponse struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v6+
-
 }
 
 func (*JoinGroupResponse) Key() int16                 { return 11 }
@@ -12298,7 +12224,6 @@ type HeartbeatRequest struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v4+
-
 }
 
 func (*HeartbeatRequest) Key() int16                   { return 12 }
@@ -12460,7 +12385,6 @@ type HeartbeatResponse struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v4+
-
 }
 
 func (*HeartbeatResponse) Key() int16                 { return 12 }
@@ -12545,7 +12469,6 @@ type LeaveGroupRequestMember struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v4+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -12581,7 +12504,6 @@ type LeaveGroupRequest struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v4+
-
 }
 
 func (*LeaveGroupRequest) Key() int16                   { return 13 }
@@ -12784,7 +12706,6 @@ type LeaveGroupResponseMember struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v4+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -12837,7 +12758,6 @@ type LeaveGroupResponse struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v4+
-
 }
 
 func (*LeaveGroupResponse) Key() int16                 { return 13 }
@@ -13004,7 +12924,6 @@ type SyncGroupRequestGroupAssignment struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v4+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -13053,7 +12972,6 @@ type SyncGroupRequest struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v4+
-
 }
 
 func (*SyncGroupRequest) Key() int16                   { return 14 }
@@ -13336,7 +13254,6 @@ type SyncGroupResponse struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v4+
-
 }
 
 func (*SyncGroupResponse) Key() int16                 { return 14 }
@@ -13476,7 +13393,6 @@ type DescribeGroupsRequest struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v5+
-
 }
 
 func (*DescribeGroupsRequest) Key() int16                   { return 15 }
@@ -13621,7 +13537,6 @@ type DescribeGroupsResponseGroupMember struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v5+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -13678,7 +13593,6 @@ type DescribeGroupsResponseGroup struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v5+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -13713,7 +13627,6 @@ type DescribeGroupsResponse struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v5+
-
 }
 
 func (*DescribeGroupsResponse) Key() int16                 { return 15 }
@@ -14064,7 +13977,6 @@ type ListGroupsRequest struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v3+
-
 }
 
 func (*ListGroupsRequest) Key() int16                 { return 16 }
@@ -14185,7 +14097,6 @@ type ListGroupsResponseGroup struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v3+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -14226,7 +14137,6 @@ type ListGroupsResponse struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v3+
-
 }
 
 func (*ListGroupsResponse) Key() int16                 { return 16 }
@@ -14599,7 +14509,6 @@ type ApiVersionsRequest struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v3+
-
 }
 
 func (*ApiVersionsRequest) Key() int16                 { return 18 }
@@ -14711,7 +14620,6 @@ type ApiVersionsResponseApiKey struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v3+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -14739,7 +14647,6 @@ type ApiVersionsResponseSupportedFeature struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v3+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -14767,7 +14674,6 @@ type ApiVersionsResponseFinalizedFeature struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v3+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -14823,7 +14729,6 @@ type ApiVersionsResponse struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v3+
-
 }
 
 func (*ApiVersionsResponse) Key() int16                 { return 18 }
@@ -15179,7 +15084,6 @@ type CreateTopicsRequestTopicReplicaAssignment struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v5+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -15204,7 +15108,6 @@ type CreateTopicsRequestTopicConfig struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v5+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -15245,7 +15148,6 @@ type CreateTopicsRequestTopic struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v5+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -15288,7 +15190,6 @@ type CreateTopicsRequest struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v5+
-
 }
 
 func (*CreateTopicsRequest) Key() int16                 { return 19 }
@@ -15630,7 +15531,6 @@ type CreateTopicsResponseTopicConfig struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v5+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -15711,7 +15611,6 @@ type CreateTopicsResponseTopic struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v5+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -15747,7 +15646,6 @@ type CreateTopicsResponse struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v5+
-
 }
 
 func (*CreateTopicsResponse) Key() int16                 { return 19 }
@@ -16056,7 +15954,6 @@ type DeleteTopicsRequestTopic struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v4+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -16093,7 +15990,6 @@ type DeleteTopicsRequest struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v4+
-
 }
 
 func (*DeleteTopicsRequest) Key() int16                 { return 20 }
@@ -16317,7 +16213,6 @@ type DeleteTopicsResponseTopic struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v4+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -16353,7 +16248,6 @@ type DeleteTopicsResponse struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v4+
-
 }
 
 func (*DeleteTopicsResponse) Key() int16                 { return 20 }
@@ -16549,7 +16443,6 @@ type DeleteRecordsRequestTopicPartition struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v2+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -16574,7 +16467,6 @@ type DeleteRecordsRequestTopic struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v2+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -16617,7 +16509,6 @@ type DeleteRecordsRequest struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v2+
-
 }
 
 func (*DeleteRecordsRequest) Key() int16                 { return 21 }
@@ -16841,7 +16732,6 @@ type DeleteRecordsResponseTopicPartition struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v2+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -16867,7 +16757,6 @@ type DeleteRecordsResponseTopic struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v2+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -16901,7 +16790,6 @@ type DeleteRecordsResponse struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v2+
-
 }
 
 func (*DeleteRecordsResponse) Key() int16                 { return 21 }
@@ -17127,7 +17015,6 @@ type InitProducerIDRequest struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v2+
-
 }
 
 func (*InitProducerIDRequest) Key() int16                 { return 22 }
@@ -17285,7 +17172,6 @@ type InitProducerIDResponse struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v2+
-
 }
 
 func (*InitProducerIDResponse) Key() int16                 { return 22 }
@@ -17396,7 +17282,6 @@ type OffsetForLeaderEpochRequestTopicPartition struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v4+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -17422,7 +17307,6 @@ type OffsetForLeaderEpochRequestTopic struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v4+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -17459,7 +17343,6 @@ type OffsetForLeaderEpochRequest struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v4+
-
 }
 
 func (*OffsetForLeaderEpochRequest) Key() int16                 { return 23 }
@@ -17714,7 +17597,6 @@ type OffsetForLeaderEpochResponseTopicPartition struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v4+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -17741,7 +17623,6 @@ type OffsetForLeaderEpochResponseTopic struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v4+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -17771,7 +17652,6 @@ type OffsetForLeaderEpochResponse struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v4+
-
 }
 
 func (*OffsetForLeaderEpochResponse) Key() int16                 { return 23 }
@@ -17983,7 +17863,6 @@ type AddPartitionsToTxnRequestTopic struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v3+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -18023,7 +17902,6 @@ type AddPartitionsToTxnRequest struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v3+
-
 }
 
 func (*AddPartitionsToTxnRequest) Key() int16                 { return 24 }
@@ -18257,7 +18135,6 @@ type AddPartitionsToTxnResponseTopicPartition struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v3+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -18282,7 +18159,6 @@ type AddPartitionsToTxnResponseTopic struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v3+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -18316,7 +18192,6 @@ type AddPartitionsToTxnResponse struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v3+
-
 }
 
 func (*AddPartitionsToTxnResponse) Key() int16                 { return 24 }
@@ -18530,7 +18405,6 @@ type AddOffsetsToTxnRequest struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v3+
-
 }
 
 func (*AddOffsetsToTxnRequest) Key() int16                 { return 25 }
@@ -18676,7 +18550,6 @@ type AddOffsetsToTxnResponse struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v3+
-
 }
 
 func (*AddOffsetsToTxnResponse) Key() int16                 { return 25 }
@@ -18774,7 +18647,6 @@ type EndTxnRequest struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v3+
-
 }
 
 func (*EndTxnRequest) Key() int16                 { return 26 }
@@ -18919,7 +18791,6 @@ type EndTxnResponse struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v3+
-
 }
 
 func (*EndTxnResponse) Key() int16                 { return 26 }
@@ -19000,7 +18871,6 @@ type WriteTxnMarkersRequestMarkerTopic struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v1+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -19029,7 +18899,6 @@ type WriteTxnMarkersRequestMarker struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v1+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -19056,7 +18925,6 @@ type WriteTxnMarkersRequest struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v1+
-
 }
 
 func (*WriteTxnMarkersRequest) Key() int16                 { return 27 }
@@ -19296,7 +19164,6 @@ type WriteTxnMarkersResponseMarkerTopicPartition struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v1+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -19319,7 +19186,6 @@ type WriteTxnMarkersResponseMarkerTopic struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v1+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -19342,7 +19208,6 @@ type WriteTxnMarkersResponseMarker struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v1+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -19367,7 +19232,6 @@ type WriteTxnMarkersResponse struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v1+
-
 }
 
 func (*WriteTxnMarkersResponse) Key() int16                 { return 27 }
@@ -19614,7 +19478,6 @@ type TxnOffsetCommitRequestTopicPartition struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v3+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -19640,7 +19503,6 @@ type TxnOffsetCommitRequestTopic struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v3+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -19694,7 +19556,6 @@ type TxnOffsetCommitRequest struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v3+
-
 }
 
 func (*TxnOffsetCommitRequest) Key() int16                   { return 28 }
@@ -20043,7 +19904,6 @@ type TxnOffsetCommitResponseTopicPartition struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v3+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -20068,7 +19928,6 @@ type TxnOffsetCommitResponseTopic struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v3+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -20102,7 +19961,6 @@ type TxnOffsetCommitResponse struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v3+
-
 }
 
 func (*TxnOffsetCommitResponse) Key() int16                 { return 28 }
@@ -20326,7 +20184,6 @@ type DescribeACLsRequest struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v2+
-
 }
 
 func (*DescribeACLsRequest) Key() int16                 { return 29 }
@@ -20525,7 +20382,6 @@ type DescribeACLsResponseResourceACL struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v2+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -20558,7 +20414,6 @@ type DescribeACLsResponseResource struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v2+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -20604,7 +20459,6 @@ type DescribeACLsResponse struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v2+
-
 }
 
 func (*DescribeACLsResponse) Key() int16                 { return 29 }
@@ -20927,7 +20781,6 @@ type CreateACLsRequestCreation struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v2+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -20957,7 +20810,6 @@ type CreateACLsRequest struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v2+
-
 }
 
 func (*CreateACLsRequest) Key() int16                 { return 30 }
@@ -21188,7 +21040,6 @@ type CreateACLsResponseResult struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v2+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -21222,7 +21073,6 @@ type CreateACLsResponse struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v2+
-
 }
 
 func (*CreateACLsResponse) Key() int16                 { return 30 }
@@ -21372,7 +21222,6 @@ type DeleteACLsRequestFilter struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v2+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -21401,7 +21250,6 @@ type DeleteACLsRequest struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v2+
-
 }
 
 func (*DeleteACLsRequest) Key() int16                 { return 31 }
@@ -21647,7 +21495,6 @@ type DeleteACLsResponseResultMatchingACL struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v2+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -21676,7 +21523,6 @@ type DeleteACLsResponseResult struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v2+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -21710,7 +21556,6 @@ type DeleteACLsResponse struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v2+
-
 }
 
 func (*DeleteACLsResponse) Key() int16                 { return 31 }
@@ -22042,7 +21887,6 @@ type DescribeConfigsRequestResource struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v4+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -22078,7 +21922,6 @@ type DescribeConfigsRequest struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v4+
-
 }
 
 func (*DescribeConfigsRequest) Key() int16                 { return 32 }
@@ -22291,7 +22134,6 @@ type DescribeConfigsResponseResourceConfigConfigSynonym struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v4+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -22348,7 +22190,6 @@ type DescribeConfigsResponseResourceConfig struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v4+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -22398,7 +22239,6 @@ type DescribeConfigsResponseResource struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v4+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -22432,7 +22272,6 @@ type DescribeConfigsResponse struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v4+
-
 }
 
 func (*DescribeConfigsResponse) Key() int16                 { return 32 }
@@ -22847,7 +22686,6 @@ type AlterConfigsRequestResourceConfig struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v2+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -22887,7 +22725,6 @@ type AlterConfigsRequestResource struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v2+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -22928,7 +22765,6 @@ type AlterConfigsRequest struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v2+
-
 }
 
 func (*AlterConfigsRequest) Key() int16                 { return 33 }
@@ -23182,7 +23018,6 @@ type AlterConfigsResponseResource struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v2+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -23216,7 +23051,6 @@ type AlterConfigsResponse struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v2+
-
 }
 
 func (*AlterConfigsResponse) Key() int16                 { return 33 }
@@ -23390,7 +23224,6 @@ type AlterReplicaLogDirsRequestDirTopic struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v2+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -23416,7 +23249,6 @@ type AlterReplicaLogDirsRequestDir struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v2+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -23445,7 +23277,6 @@ type AlterReplicaLogDirsRequest struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v2+
-
 }
 
 func (*AlterReplicaLogDirsRequest) Key() int16                 { return 34 }
@@ -23682,7 +23513,6 @@ type AlterReplicaLogDirsResponseTopicPartition struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v2+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -23708,7 +23538,6 @@ type AlterReplicaLogDirsResponseTopic struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v2+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -23743,7 +23572,6 @@ type AlterReplicaLogDirsResponse struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v2+
-
 }
 
 func (*AlterReplicaLogDirsResponse) Key() int16                 { return 34 }
@@ -23938,7 +23766,6 @@ type DescribeLogDirsRequestTopic struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v2+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -23966,7 +23793,6 @@ type DescribeLogDirsRequest struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v2+
-
 }
 
 func (*DescribeLogDirsRequest) Key() int16                 { return 35 }
@@ -24155,7 +23981,6 @@ type DescribeLogDirsResponseDirTopicPartition struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v2+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -24181,7 +24006,6 @@ type DescribeLogDirsResponseDirTopic struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v2+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -24211,7 +24035,6 @@ type DescribeLogDirsResponseDir struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v2+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -24249,7 +24072,6 @@ type DescribeLogDirsResponse struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v2+
-
 }
 
 func (*DescribeLogDirsResponse) Key() int16                 { return 35 }
@@ -24537,7 +24359,6 @@ type SASLAuthenticateRequest struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v2+
-
 }
 
 func (*SASLAuthenticateRequest) Key() int16                 { return 36 }
@@ -24644,7 +24465,6 @@ type SASLAuthenticateResponse struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v2+
-
 }
 
 func (*SASLAuthenticateResponse) Key() int16                 { return 36 }
@@ -24759,7 +24579,6 @@ type CreatePartitionsRequestTopicAssignment struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v2+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -24798,7 +24617,6 @@ type CreatePartitionsRequestTopic struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v2+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -24836,7 +24654,6 @@ type CreatePartitionsRequest struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v2+
-
 }
 
 func (*CreatePartitionsRequest) Key() int16                 { return 37 }
@@ -25101,7 +24918,6 @@ type CreatePartitionsResponseTopic struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v2+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -25135,7 +24951,6 @@ type CreatePartitionsResponse struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v2+
-
 }
 
 func (*CreatePartitionsResponse) Key() int16                 { return 37 }
@@ -25295,7 +25110,6 @@ type CreateDelegationTokenRequestRenewer struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v2+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -25338,7 +25152,6 @@ type CreateDelegationTokenRequest struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v2+
-
 }
 
 func (*CreateDelegationTokenRequest) Key() int16                 { return 38 }
@@ -25536,7 +25349,6 @@ type CreateDelegationTokenResponse struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v2+
-
 }
 
 func (*CreateDelegationTokenResponse) Key() int16                 { return 38 }
@@ -25723,7 +25535,6 @@ type RenewDelegationTokenRequest struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v2+
-
 }
 
 func (*RenewDelegationTokenRequest) Key() int16                 { return 39 }
@@ -25839,7 +25650,6 @@ type RenewDelegationTokenResponse struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v2+
-
 }
 
 func (*RenewDelegationTokenResponse) Key() int16                 { return 39 }
@@ -25948,7 +25758,6 @@ type ExpireDelegationTokenRequest struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v2+
-
 }
 
 func (*ExpireDelegationTokenRequest) Key() int16                 { return 40 }
@@ -26063,7 +25872,6 @@ type ExpireDelegationTokenResponse struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v2+
-
 }
 
 func (*ExpireDelegationTokenResponse) Key() int16                 { return 40 }
@@ -26161,7 +25969,6 @@ type DescribeDelegationTokenRequestOwner struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v2+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -26189,7 +25996,6 @@ type DescribeDelegationTokenRequest struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v2+
-
 }
 
 func (*DescribeDelegationTokenRequest) Key() int16                 { return 41 }
@@ -26342,7 +26148,6 @@ type DescribeDelegationTokenResponseTokenDetailRenewer struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v2+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -26386,7 +26191,6 @@ type DescribeDelegationTokenResponseTokenDetail struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v2+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -26424,7 +26228,6 @@ type DescribeDelegationTokenResponse struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v2+
-
 }
 
 func (*DescribeDelegationTokenResponse) Key() int16                 { return 41 }
@@ -26723,7 +26526,6 @@ type DeleteGroupsRequest struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v2+
-
 }
 
 func (*DeleteGroupsRequest) Key() int16                   { return 42 }
@@ -26857,7 +26659,6 @@ type DeleteGroupsResponseGroup struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v2+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -26891,7 +26692,6 @@ type DeleteGroupsResponse struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v2+
-
 }
 
 func (*DeleteGroupsResponse) Key() int16                 { return 42 }
@@ -27034,7 +26834,6 @@ type ElectLeadersRequestTopic struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v2+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -27077,7 +26876,6 @@ type ElectLeadersRequest struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v2+
-
 }
 
 func (*ElectLeadersRequest) Key() int16                 { return 43 }
@@ -27287,7 +27085,6 @@ type ElectLeadersResponseTopicPartition struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v2+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -27312,7 +27109,6 @@ type ElectLeadersResponseTopic struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v2+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -27348,7 +27144,6 @@ type ElectLeadersResponse struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v2+
-
 }
 
 func (*ElectLeadersResponse) Key() int16                 { return 43 }
@@ -27579,7 +27374,6 @@ type IncrementalAlterConfigsRequestResourceConfig struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v1+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -27618,7 +27412,6 @@ type IncrementalAlterConfigsRequestResource struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v1+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -27652,7 +27445,6 @@ type IncrementalAlterConfigsRequest struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v1+
-
 }
 
 func (*IncrementalAlterConfigsRequest) Key() int16                 { return 44 }
@@ -27923,7 +27715,6 @@ type IncrementalAlterConfigsResponseResource struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v1+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -27953,7 +27744,6 @@ type IncrementalAlterConfigsResponse struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v1+
-
 }
 
 func (*IncrementalAlterConfigsResponse) Key() int16                 { return 44 }
@@ -29751,7 +29541,6 @@ type DescribeClientQuotasRequestComponent struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v1+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -29782,7 +29571,6 @@ type DescribeClientQuotasRequest struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v1+
-
 }
 
 func (*DescribeClientQuotasRequest) Key() int16                 { return 48 }
@@ -29958,7 +29746,6 @@ type DescribeClientQuotasResponseEntryEntity struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v1+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -29983,7 +29770,6 @@ type DescribeClientQuotasResponseEntryValue struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v1+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -30008,7 +29794,6 @@ type DescribeClientQuotasResponseEntry struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v1+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -30044,7 +29829,6 @@ type DescribeClientQuotasResponse struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v1+
-
 }
 
 func (*DescribeClientQuotasResponse) Key() int16                 { return 48 }
@@ -30334,7 +30118,6 @@ type AlterClientQuotasRequestEntryEntity struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v1+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -30362,7 +30145,6 @@ type AlterClientQuotasRequestEntryOp struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v1+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -30387,7 +30169,6 @@ type AlterClientQuotasRequestEntry struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v1+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -30418,7 +30199,6 @@ type AlterClientQuotasRequest struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v1+
-
 }
 
 func (*AlterClientQuotasRequest) Key() int16                 { return 49 }
@@ -30693,7 +30473,6 @@ type AlterClientQuotasResponseEntryEntity struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v1+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -30721,7 +30500,6 @@ type AlterClientQuotasResponseEntry struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v1+
-
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
@@ -30751,7 +30529,6 @@ type AlterClientQuotasResponse struct {
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v1+
-
 }
 
 func (*AlterClientQuotasResponse) Key() int16                 { return 49 }
@@ -34633,7 +34410,14 @@ type UpdateFeaturesRequestFeatureUpdate struct {
 	// downgraded/deleted. The downgrade request will fail if the new maximum
 	// version level is a value that's not lower than the existing maximum
 	// finalized version level.
+	//
+	// Replaced in v1 with ValidateOnly.
 	AllowDowngrade bool
+
+	// Determine which type of upgrade will be performed: 1 will perform an
+	// upgrade only (default), 2 is safe downgrades only (lossless), 3 is
+	// unsafe downgrades (lossy).
+	UpgradeType int8 // v1+
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags
@@ -34668,12 +34452,16 @@ type UpdateFeaturesRequest struct {
 	// The list of updates to finalized features.
 	FeatureUpdates []UpdateFeaturesRequestFeatureUpdate
 
+	// True if we should validate the request, but not perform the upgrade or
+	// downgrade.
+	ValidateOnly bool // v1+
+
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags
 }
 
 func (*UpdateFeaturesRequest) Key() int16                 { return 57 }
-func (*UpdateFeaturesRequest) MaxVersion() int16          { return 0 }
+func (*UpdateFeaturesRequest) MaxVersion() int16          { return 1 }
 func (v *UpdateFeaturesRequest) SetVersion(version int16) { v.Version = version }
 func (v *UpdateFeaturesRequest) GetVersion() int16        { return v.Version }
 func (v *UpdateFeaturesRequest) IsFlexible() bool         { return v.Version >= 0 }
@@ -34722,15 +34510,23 @@ func (v *UpdateFeaturesRequest) AppendTo(dst []byte) []byte {
 				v := v.MaxVersionLevel
 				dst = kbin.AppendInt16(dst, v)
 			}
-			{
+			if version >= 0 && version <= 0 {
 				v := v.AllowDowngrade
 				dst = kbin.AppendBool(dst, v)
+			}
+			if version >= 1 {
+				v := v.UpgradeType
+				dst = kbin.AppendInt8(dst, v)
 			}
 			if isFlexible {
 				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
 				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
+	}
+	if version >= 1 {
+		v := v.ValidateOnly
+		dst = kbin.AppendBool(dst, v)
 	}
 	if isFlexible {
 		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
@@ -34783,9 +34579,13 @@ func (v *UpdateFeaturesRequest) ReadFrom(src []byte) error {
 				v := b.Int16()
 				s.MaxVersionLevel = v
 			}
-			{
+			if version >= 0 && version <= 0 {
 				v := b.Bool()
 				s.AllowDowngrade = v
+			}
+			if version >= 1 {
+				v := b.Int8()
+				s.UpgradeType = v
 			}
 			if isFlexible {
 				s.UnknownTags = internalReadTags(&b)
@@ -34793,6 +34593,10 @@ func (v *UpdateFeaturesRequest) ReadFrom(src []byte) error {
 		}
 		v = a
 		s.FeatureUpdates = v
+	}
+	if version >= 1 {
+		v := b.Bool()
+		s.ValidateOnly = v
 	}
 	if isFlexible {
 		s.UnknownTags = internalReadTags(&b)
@@ -34871,7 +34675,7 @@ type UpdateFeaturesResponse struct {
 }
 
 func (*UpdateFeaturesResponse) Key() int16                 { return 57 }
-func (*UpdateFeaturesResponse) MaxVersion() int16          { return 0 }
+func (*UpdateFeaturesResponse) MaxVersion() int16          { return 1 }
 func (v *UpdateFeaturesResponse) SetVersion(version int16) { v.Version = version }
 func (v *UpdateFeaturesResponse) GetVersion() int16        { return v.Version }
 func (v *UpdateFeaturesResponse) IsFlexible() bool         { return v.Version >= 0 }
