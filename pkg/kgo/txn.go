@@ -706,6 +706,18 @@ func (cl *Client) AbortBufferedRecords(ctx context.Context) error {
 	cl.cfg.logger.Log(LogLevelInfo, "producer state set to aborting; continuing to wait via flushing")
 	defer cl.cfg.logger.Log(LogLevelDebug, "aborted buffered records")
 
+	// We must clear unknown topics ourselves, because flush just waits
+	// like normal.
+	p := &cl.producer
+	p.unknownTopicsMu.Lock()
+	for _, unknown := range p.unknownTopics {
+		select {
+		case unknown.fatal <- ErrAborting:
+		default:
+		}
+	}
+	p.unknownTopicsMu.Unlock()
+
 	// Setting the aborting state allows records to fail before
 	// or after produce requests; thus, now we just flush.
 	return cl.Flush(ctx)

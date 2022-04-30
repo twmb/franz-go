@@ -89,7 +89,8 @@ func (cl *Client) BufferedProduceRecords() int64 {
 
 type unknownTopicProduces struct {
 	buffered []promisedRec
-	wait     chan error
+	wait     chan error // retriable errors
+	fatal    chan error // must-signal quit errors; capacity 1
 }
 
 func (p *producer) init(cl *Client) {
@@ -787,36 +788,53 @@ func (cl *Client) addUnknownTopicRecord(pr promisedRec) {
 		unknown = &unknownTopicProduces{
 			buffered: make([]promisedRec, 0, 100),
 			wait:     make(chan error, 5),
+			fatal:    make(chan error, 1),
 		}
 		cl.producer.unknownTopics[pr.Topic] = unknown
 	}
 	unknown.buffered = append(unknown.buffered, pr)
 	if len(unknown.buffered) == 1 {
-		go cl.waitUnknownTopic(pr.Topic, unknown)
+		go cl.waitUnknownTopic(pr.ctx, pr.Topic, unknown)
 	}
 }
 
 // waitUnknownTopic waits for a notification
 func (cl *Client) waitUnknownTopic(
+	rctx context.Context,
 	topic string,
 	unknown *unknownTopicProduces,
 ) {
 	cl.cfg.logger.Log(LogLevelInfo, "producing to a new topic for the first time, fetching metadata to learn its partitions", "topic", topic)
-	var after <-chan time.Time
+
+	var (
+		tries        int
+		unknownTries int64
+		err          error
+		after        <-chan time.Time
+	)
+
 	if timeout := cl.cfg.recordTimeout; timeout > 0 {
 		timer := time.NewTimer(cl.cfg.recordTimeout)
 		defer timer.Stop()
 		after = timer.C
 	}
-	var tries int
-	var unknownTries int64
-	var err error
+
+	// Ordering: aborting is set first, then unknown topics are manually
+	// canceled in a lock. New unknown topics after that lock will see
+	// aborting here and immediately cancel themselves.
+	if cl.producer.isAborting() {
+		err = ErrAborting
+	}
+
 	for err == nil {
 		select {
+		case <-rctx.Done():
+			err = rctx.Err()
 		case <-cl.ctx.Done():
 			err = ErrClientClosed
 		case <-after:
 			err = ErrRecordTimeout
+		case err = <-unknown.fatal:
 		case retriableErr, ok := <-unknown.wait:
 			if !ok {
 				cl.cfg.logger.Log(LogLevelInfo, "done waiting for metadata for new topic", "topic", topic)

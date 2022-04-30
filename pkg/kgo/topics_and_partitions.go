@@ -391,7 +391,7 @@ func (cl *Client) bumpMetadataFailForTopics(requested map[string]*topicPartition
 	defer p.unknownTopicsMu.Unlock()
 
 	for topic, unknown := range p.unknownTopics {
-		// if nil, mode 1, else mode 2
+		// if nil, mode 1 (req err), else mode 2 (missing resp)
 		if missing != nil && !missing[topic] {
 			continue
 		}
