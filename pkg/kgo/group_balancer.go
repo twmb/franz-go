@@ -75,9 +75,21 @@ type GroupMemberBalancer interface {
 // use in a kmsg.SyncGroupRequest.
 //
 // It is recommended to ensure the output is deterministic and ordered by
-// member / topic / partitions.
+// member / topic / partitions. If your assignment can fail, you can implement
+// the optional IntoSyncAssignmentOrError.
 type IntoSyncAssignment interface {
 	IntoSyncAssignment() []kmsg.SyncGroupRequestGroupAssignment
+}
+
+// IntoSyncAssignmentOrError is an optional extension interface for
+// IntoSyncAssignment. This can be implemented if your assignment function can
+// fail.
+//
+// For interface purposes, it is required to implement IntoSyncAssignment, but
+// that function will never be called.
+type IntoSyncAssignmentOrError interface {
+	IntoSyncAssignment
+	IntoSyncAssignmentOrError() ([]kmsg.SyncGroupRequestGroupAssignment, error)
 }
 
 // ConsumerBalancer is a helper type for writing balance plans that use the
@@ -413,6 +425,10 @@ func (g *groupConsumer) balanceGroup(proto string, members []kmsg.JoinGroupRespo
 		g.cl.cfg.logger.Log(LogLevelInfo, "balanced", "plan", p.String())
 	} else {
 		g.cl.cfg.logger.Log(LogLevelInfo, "unable to log balance plan: the user has returned a custom IntoSyncAssignment (not a *BalancePlan)")
+	}
+
+	if intoOrErr, ok := into.(IntoSyncAssignmentOrError); ok {
+		return intoOrErr.IntoSyncAssignmentOrError()
 	}
 
 	return into.IntoSyncAssignment(), nil
