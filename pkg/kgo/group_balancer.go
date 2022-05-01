@@ -206,6 +206,19 @@ type BalancePlan struct {
 	plan map[string]map[string][]int32 // member => topic => partitions
 }
 
+// AsMemberIDMap returns the plan as a map of member IDs to their topic &
+// partition assignments.
+//
+// Internally, a BalancePlan is currently represented as this map. Any
+// modification to the map modifies the plan. The internal representation of a
+// plan may change in the future to include more metadata. If this happens, the
+// map returned from this function may not represent all aspects of a plan.
+// The client will attempt to mirror modifications to the map directly back
+// into the underlying plan as best as possible.
+func (p *BalancePlan) AsMemberIDMap() map[string]map[string][]int32 {
+	return p.plan
+}
+
 func (p *BalancePlan) String() string {
 	var sb strings.Builder
 
