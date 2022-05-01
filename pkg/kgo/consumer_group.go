@@ -2029,6 +2029,19 @@ func (g *groupConsumer) getUncommittedLocked(head, dirty bool) map[string]map[in
 	return uncommitted
 }
 
+type commitContextFnT struct{}
+
+var commitContextFn commitContextFnT
+
+// PreCommitContextFn attaches fn to the context through WithValue. Using the
+// context while committing allows fn to be called just before the commit is
+// issued. This can be used to modify the actual commit, such as by associating
+// metadata with partitions. If fn returns an error, the commit is not
+// attempted.
+func PreCommitContextFn(ctx context.Context, fn func(*kmsg.OffsetCommitRequest) error) context.Context {
+	return context.WithValue(ctx, commitContextFn, fn)
+}
+
 // CommitRecords issues a synchronous offset commit for the offsets contained
 // within rs. Retriable errors are retried up to the configured retry limit,
 // and any unretriable error is returned.
@@ -2516,6 +2529,13 @@ func (g *groupConsumer) commitAcrossRebalance(
 				reqTopic.Partitions = append(reqTopic.Partitions, reqPartition)
 			}
 			req.Topics = append(req.Topics, reqTopic)
+		}
+
+		if fn, ok := ctx.Value(commitContextFn).(func(*kmsg.OffsetCommitRequest) error); ok {
+			if err := fn(req); err != nil {
+				onDone(g.cl, req, nil, err)
+				return
+			}
 		}
 
 		resp, err := req.RequestWith(commitCtx, g.cl)
