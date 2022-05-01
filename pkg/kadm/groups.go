@@ -454,8 +454,11 @@ func (os OffsetResponses) Keep(o Offsets) {
 	})
 }
 
-// Each returns these offset responses as offsets.
-func (os OffsetResponses) Into() Offsets {
+// Deprecated: Use Offsets; this will be removed in v1.0.
+func (os OffsetResponses) Into() Offsets { return os.Offsets() }
+
+// Offsets returns these offset responses as offsets.
+func (os OffsetResponses) Offsets() Offsets {
 	i := make(Offsets)
 	os.Each(func(o OffsetResponse) {
 		i.Add(o.Offset)

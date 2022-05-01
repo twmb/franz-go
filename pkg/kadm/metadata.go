@@ -307,8 +307,11 @@ func (l ListedOffsets) Error() error {
 	return nil
 }
 
-// Into returns these listed offsets as offsets.
-func (l ListedOffsets) Into() Offsets {
+// Deprecated: Use Offsets; this will be removed in v1.0.
+func (l ListedOffsets) Into() Offsets { return l.Offsets() }
+
+// Offsets returns these listed offsets as offsets.
+func (l ListedOffsets) Offsets() Offsets {
 	o := make(Offsets)
 	l.Each(func(l ListedOffset) {
 		o.Add(Offset{
