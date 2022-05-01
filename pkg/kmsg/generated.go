@@ -1689,7 +1689,7 @@ func NewConsumerMemberAssignmentTopic() ConsumerMemberAssignmentTopic {
 }
 
 // ConsumerMemberAssignment is the assignment data that is usually sent with a
-// sync group request with the "consumer" protocol )normal, non-connect
+// sync group request with the "consumer" protocol (normal, non-connect
 // consumers).
 type ConsumerMemberAssignment struct {
 	// Verson is currently version 0.
