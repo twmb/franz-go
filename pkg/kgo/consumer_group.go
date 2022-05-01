@@ -65,6 +65,20 @@ type groupConsumer struct {
 	// hard error once the heartbeat/fetch has returned.
 	fetching map[string]map[int32]struct{}
 
+	// onFetchedMu ensures we do not call onFetched nor adjustOffsets
+	// concurrent with onRevoked.
+	//
+	// The group session itself ensures that OnPartitions functions are
+	// serial, but offset fetching is concurrent with heartbeating and can
+	// finish before or after heartbeating has already detected a revoke.
+	// To make user lives easier, we guarantee that offset fetch callbacks
+	// cannot be concurrent with onRevoked with this mu. If fetch callbacks
+	// are present, we hook this mu into onRevoked, and we grab it in the
+	// locations fetch callbacks are called. We only have to worry about
+	// onRevoked because fetching offsets occurs after onAssigned, and
+	// onLost happens after fetching offsets is done.
+	onFetchedMu sync.Mutex
+
 	// leader is whether we are the leader right now. This is set to false
 	//
 	//  - set to false at the beginning of a join group session
@@ -231,6 +245,15 @@ func (c *consumer) initGroup() {
 				}
 				user(ctx, cl, dup)
 			}
+		}
+	}
+
+	if g.cfg.onFetched != nil || g.cfg.adjustOffsetsBeforeAssign != nil {
+		revoked := g.cfg.onRevoked
+		g.cfg.onRevoked = func(ctx context.Context, cl *Client, m map[string][]int32) {
+			g.onFetchedMu.Lock()
+			defer g.onFetchedMu.Unlock()
+			revoked(ctx, cl, m)
 		}
 	}
 
@@ -1420,8 +1443,20 @@ start:
 			g.cfg.logger.Log(LogLevelWarn, "member was assigned topic that we did not ask for in ConsumeTopics! skipping assigning this topic!", "group", g.cfg.group, "topic", fetchedTopic)
 		}
 	}
+
+	if g.cfg.onFetched != nil {
+		g.onFetchedMu.Lock()
+		err = g.cfg.onFetched(ctx, g.cl, resp)
+		g.onFetchedMu.Unlock()
+		if err != nil {
+			return err
+		}
+	}
 	if g.cfg.adjustOffsetsBeforeAssign != nil {
-		if offsets, err = g.cfg.adjustOffsetsBeforeAssign(ctx, offsets); err != nil {
+		g.onFetchedMu.Lock()
+		offsets, err = g.cfg.adjustOffsetsBeforeAssign(ctx, offsets)
+		g.onFetchedMu.Unlock()
+		if err != nil {
 			return err
 		}
 	}

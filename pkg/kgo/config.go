@@ -161,6 +161,7 @@ type cfg struct {
 	onAssigned func(context.Context, *Client, map[string][]int32)
 	onRevoked  func(context.Context, *Client, map[string][]int32)
 	onLost     func(context.Context, *Client, map[string][]int32)
+	onFetched  func(context.Context, *Client, *kmsg.OffsetFetchResponse) error
 
 	adjustOffsetsBeforeAssign func(ctx context.Context, offsets map[string]map[int32]Offset) (map[string]map[int32]Offset, error)
 
@@ -1425,8 +1426,8 @@ func BlockRebalanceOnPoll() GroupOpt {
 }
 
 // AdjustFetchOffsetsFn sets the function to be called when a group is joined
-// after offsets are fetched for those partitions so that a user can adjust them
-// before consumption begins.
+// after offsets are fetched so that a user can adjust offsets before
+// consumption begins.
 //
 // This function should not exceed the rebalance interval. It is possible
 // for the group, immediately after finishing a balance, to re-enter a new balancing
@@ -1436,6 +1437,9 @@ func BlockRebalanceOnPoll() GroupOpt {
 // If you are resetting the position of the offset, you may want to clear any existing
 // "epoch" with WithEpoch(-1). If the epoch is non-negative, the client performs
 // data loss detection, which may result in errors and unexpected behavior.
+//
+// This function is called after OnPartitionsAssigned and may be called before
+// or after OnPartitionsRevoked.
 func AdjustFetchOffsetsFn(adjustOffsetsBeforeAssign func(context.Context, map[string]map[int32]Offset) (map[string]map[int32]Offset, error)) GroupOpt {
 	return groupOpt{func(cfg *cfg) { cfg.adjustOffsetsBeforeAssign = adjustOffsetsBeforeAssign }}
 }
@@ -1507,6 +1511,22 @@ func OnPartitionsRevoked(onRevoked func(context.Context, *Client, map[string][]i
 // BlockRebalanceOnPoll option.
 func OnPartitionsLost(onLost func(context.Context, *Client, map[string][]int32)) GroupOpt {
 	return groupOpt{func(cfg *cfg) { cfg.onLost, cfg.setLost = onLost, true }}
+}
+
+// OnOffsetsFetched sets a function to be called after offsets have been
+// fetched after a group has been balanced. This function is meant to allow
+// users to inspect offset commit metadata. An error can be returned to exit
+// this group session and exit back to join group.
+//
+// This function should not exceed the rebalance interval. It is possible for
+// the group, immediately after finishing a balance, to re-enter a new
+// balancing session. This function is passed a context that is canceled if the
+// current group session finishes (i.e., after revoking).
+//
+// This function is called after OnPartitionsAssigned and may be called before
+// or after OnPartitionsRevoked.
+func OnOffsetsFetched(onFetched func(context.Context, *Client, *kmsg.OffsetFetchResponse) error) GroupOpt {
+	return groupOpt{func(cfg *cfg) { cfg.onFetched = onFetched }}
 }
 
 // DisableAutoCommit disable auto committing.
