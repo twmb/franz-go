@@ -2235,6 +2235,10 @@ func (*offsetFetchSharder) merge(sresps []ResponseShard) (kmsg.Response, error) 
 		merged.ThrottleMillis = resp.ThrottleMillis
 		merged.Groups = append(merged.Groups, resp.Groups...)
 
+		// Old requests only support one group; *either* the commit
+		// used multiple groups and they are expecting the batch
+		// response, *or* the commit used one group and we always merge
+		// that one group into the old format.
 		if len(resp.Groups) == 1 {
 			offsetFetchRespGroupIntoResp(resp.Groups[0], merged)
 		}
