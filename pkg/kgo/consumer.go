@@ -17,17 +17,18 @@ import (
 
 // Offset is a message offset in a partition.
 type Offset struct {
-	at           int64
-	relative     int64
-	epoch        int32
+	at       int64
+	relative int64
+	epoch    int32
+
 	currentEpoch int32 // set by us when mapping offsets to brokers
+
+	noReset    bool
+	afterMilli bool
 }
 
 // MarshalJSON implements json.Marshaler.
 func (o Offset) MarshalJSON() ([]byte, error) {
-	if o == noResetOffset {
-		return []byte(`{"NoReset":true}`), nil
-	}
 	if o.relative == 0 {
 		return []byte(fmt.Sprintf(`{"At":%d,"Epoch":%d,"CurrentEpoch":%d}`, o.at, o.epoch, o.currentEpoch)), nil
 	}
@@ -36,14 +37,12 @@ func (o Offset) MarshalJSON() ([]byte, error) {
 
 // String returns the offset as a string; the purpose of this is for logs.
 func (o Offset) String() string {
-	if o == noResetOffset {
-		return "{no-reset}"
-	} else if o.relative == 0 {
-		return fmt.Sprintf("{%d.%d %d}", o.at, o.epoch, o.currentEpoch)
+	if o.relative == 0 {
+		return fmt.Sprintf("{%d e%d ce%d}", o.at, o.epoch, o.currentEpoch)
 	} else if o.relative > 0 {
-		return fmt.Sprintf("{%d+%d.%d %d}", o.at, o.relative, o.epoch, o.currentEpoch)
+		return fmt.Sprintf("{%d+%d e%d ce%d}", o.at, o.relative, o.epoch, o.currentEpoch)
 	} else {
-		return fmt.Sprintf("{%d-%d.%d %d}", o.at, o.relative, o.epoch, o.currentEpoch)
+		return fmt.Sprintf("{%d-%d e%d ce%d}", o.at, -o.relative, o.epoch, o.currentEpoch)
 	}
 }
 
@@ -58,36 +57,57 @@ func NewOffset() Offset {
 	}
 }
 
-var noResetOffset = Offset{
-	at:           math.MinInt64,
-	relative:     math.MinInt64,
-	epoch:        math.MinInt32,
-	currentEpoch: math.MinInt32,
-}
-
 // NoResetOffset returns an offset that can be used as a "none" option for the
-// ConsumeResetOffset option. The returned offset should not be modified; if it
-// is, it will no longer be the no reset offset.
+// ConsumeResetOffset option. By default, NoResetOffset starts consuming from
+// the beginning of partitions (similar to NewOffset().AtStart()). This can be
+// changed with AtEnd, Relative, etc.
 //
 // Using this offset will make it such that if OffsetOutOfRange is ever
 // encountered while consuming, rather than trying to recover, the client will
-// return the error to the user. Since the client does not record, the error
-// will forever be encountered and the partition is effectively in a fatal
-// state.
+// return the error to the user and enter a fatal state (for the partition).
 func NoResetOffset() Offset {
-	return noResetOffset
+	return Offset{
+		at:       math.MinInt64,
+		relative: 0,
+		noReset:  true,
+	}
+}
+
+// AfterMilli returns an offset that consumes from the first offset after a
+// given timestamp. This option is not compatible with At/Relative/WithEpoch;
+// using any of those will clear the special millisecond state.
+//
+// This option can be used to consume at the end of existing partitions, but at
+// the start of any new partitions that are created later:
+//
+//     AfterMilli(time.Now().UnixMilli())
+//
+//
+// By default when using this offset, if consuming encounters an
+// OffsetOutOfRange error, consuming will reset to the first offset after this
+// timestamp. You can use NoResetOffset().AfterMilli(...) to instead switch the
+// client to a fatal state.
+func (o Offset) AfterMilli(millisec int64) Offset {
+	return Offset{
+		at:         millisec,
+		afterMilli: true,
+	}
 }
 
 // AtStart returns a copy of the calling offset, changing the returned offset
 // to begin at the beginning of a partition.
 func (o Offset) AtStart() Offset {
+	o.afterMilli = false
 	o.at = -2
 	return o
 }
 
 // AtEnd returns a copy of the calling offset, changing the returned offset to
-// begin at the end of a partition.
+// begin at the end of a partition. If you want to consume at the end of the
+// topic as it exists right now, but at the beginning of new partitions as they
+// are added to the topic later, check out AfterMilli.
 func (o Offset) AtEnd() Offset {
+	o.afterMilli = false
 	o.at = -1
 	return o
 }
@@ -96,6 +116,7 @@ func (o Offset) AtEnd() Offset {
 // to be n relative to what it currently is. If the offset is beginning at the
 // end, Relative(-100) will begin 100 before the end.
 func (o Offset) Relative(n int64) Offset {
+	o.afterMilli = false
 	o.relative = n
 	return o
 }
@@ -104,6 +125,7 @@ func (o Offset) Relative(n int64) Offset {
 // to use the given epoch. This epoch is used for truncation detection; the
 // default of -1 implies no truncation detection.
 func (o Offset) WithEpoch(e int32) Offset {
+	o.afterMilli = false
 	if e < 0 {
 		e = -1
 	}
@@ -121,6 +143,7 @@ func (o Offset) WithEpoch(e int32) Offset {
 // If the offset is less than -2, the client bounds it to -2 to consume at the
 // start.
 func (o Offset) At(at int64) Offset {
+	o.afterMilli = false
 	if at < -2 {
 		at = -2
 	}
@@ -888,6 +911,17 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how
 		}
 
 		for partition, offset := range partitions {
+			// If we are loading the first record after a millisec,
+			// we go directly to listing offsets. Epoch validation
+			// does not ever set afterMilli.
+			if offset.afterMilli {
+				loadOffsets.addLoad(topic, partition, loadTypeList, offsetLoad{
+					replica: -1,
+					Offset:  offset,
+				})
+				continue
+			}
+
 			// First, if the request is exact, get rid of the relative
 			// portion. We are modifying a copy of the offset, i.e. we
 			// are appropriately not modfying 'assignments' itself.
@@ -1802,6 +1836,14 @@ func (cl *Client) listOffsetsForBrokerLoad(ctx context.Context, broker *broker, 
 		resp2.Topics = rkeept
 	}
 
+	poffset := func(p *kmsg.ListOffsetsResponseTopicPartition) int64 {
+		offset := p.Offset
+		if len(p.OldStyleOffsets) > 0 {
+			offset = p.OldStyleOffsets[0] // list offsets v0
+		}
+		return offset
+	}
+
 	for i, rTopic := range resp.Topics {
 		topic := rTopic.Topic
 		loadParts, ok := load[topic]
@@ -1837,38 +1879,47 @@ func (cl *Client) listOffsetsForBrokerLoad(ctx context.Context, broker *broker, 
 				delete(load, topic)
 			}
 
-			offset := rPartition.Offset
-			if len(rPartition.OldStyleOffsets) > 0 {
-				offset = rPartition.OldStyleOffsets[0] // list offsets v0
-			}
+			offset := poffset(&rPartition)
+			end := func() int64 { return poffset(&resp2.Topics[i].Partitions[j]) }
 
-			// If the user requested an exact offset, we asked for
-			// both the start and end offsets. We validate the
-			// exact offset (delta any relative) is within bounds.
-			//
-			// For start & end, we only obey relative if it is
-			// positive to the start or negative to the end.
-			if loadPart.at >= 0 {
-				// We ensured the resp2 shape is as we want, so
-				// these lookups are safe and the partition has
-				// no error.
-				pend := &resp2.Topics[i].Partitions[j]
-				start := offset
-				end := pend.Offset
-				if len(pend.OldStyleOffsets) > 0 {
-					end = pend.OldStyleOffsets[0]
+			// We ensured the resp2 shape is as we want and has no
+			// error, so resp2 lookups are safe.
+			if loadPart.afterMilli {
+				// If after a milli, if the milli is after the
+				// end of a partition, the offset is -1. We use
+				// our end offset request: anything after the
+				// end offset *now* is after our milli.
+				if offset == -1 {
+					offset = end()
 				}
-				rel := loadPart.at + loadPart.relative
-				if rel >= start {
-					offset = rel
+			} else if loadPart.at >= 0 {
+				// If an exact offset, we listed start and end.
+				// We validate the offset is within bounds.
+				end := end()
+				want := loadPart.at + loadPart.relative
+				if want >= offset {
+					offset = want
 				}
-				if rel >= end {
+				if want >= end {
 					offset = end
 				}
 			} else if loadPart.at == -2 && loadPart.relative > 0 {
+				// Relative to the start: both start & end were
+				// issued, and we bound to the end.
 				offset += loadPart.relative
+				if end := end(); offset >= end {
+					offset = end
+				}
 			} else if loadPart.at == -1 && loadPart.relative < 0 {
+				// Relative to the end: both start & end were
+				// issued, offset is currently the start, so we
+				// set to the end and then bound to the start.
+				start := offset
+				offset = end()
 				offset += loadPart.relative
+				if offset <= start {
+					offset = start
+				}
 			}
 			if offset < 0 {
 				offset = 0 // sanity
@@ -1939,6 +1990,9 @@ func (*Client) loadEpochsForBrokerLoad(ctx context.Context, broker *broker, load
 				delete(load, topic)
 			}
 
+			// Epoch loading never uses noReset nor afterMilli;
+			// this at is the offset we wanted to consume and are
+			// validating.
 			offset := loadPart.at
 			var err error
 			if rPartition.EndOffset < offset {
@@ -1973,13 +2027,22 @@ func (o offsetLoadMap) buildListReq(isolationLevel int8) (r1, r2 *kmsg.ListOffse
 	for topic, partitions := range o {
 		parts := make([]kmsg.ListOffsetsRequestTopicPartition, 0, len(partitions))
 		for partition, offset := range partitions {
-			// If this partition is using an exact offset request,
-			// then we are listing for a partition that was not yet
-			// loaded by the client (due to metadata). We use -2
-			// just to ensure things are loaded and to ensure we
-			// load the start offset to validate lower bounds.
+			// If this is a milli request, we issue two lists: if
+			// our milli is after the end of a partition, we get no
+			// offset back and we want to know the start offset
+			// (since it will be after our milli).
+			//
+			// If we are using an exact offset request, we issue
+			// the start and end so that we can bound the exact
+			// offset to being within that range.
+			//
+			// If we are using a relative offset, we potentially
+			// issue the end request because relative may shift us
+			// too far in the other direction.
 			timestamp := offset.at
-			if timestamp >= 0 {
+			if offset.afterMilli {
+				createEnd = true
+			} else if timestamp >= 0 || timestamp == -2 && offset.relative > 0 || timestamp == -1 && offset.relative < 0 {
 				timestamp = -2
 				createEnd = true
 			}

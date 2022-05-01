@@ -854,7 +854,7 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 				// no reset offset was configured. If so, we ignore
 				// trying to reset and instead keep our failed partition.
 				addList := func(replica int32) {
-					if s.cl.cfg.resetOffset == noResetOffset {
+					if s.cl.cfg.resetOffset.noReset {
 						keep = true
 					} else {
 						reloadOffsets.addLoad(topic, partition, loadTypeList, offsetLoad{

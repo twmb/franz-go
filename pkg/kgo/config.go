@@ -1169,19 +1169,32 @@ func MaxConcurrentFetches(n int) ConsumerOpt {
 	return consumerOpt{func(cfg *cfg) { cfg.maxConcurrentFetches = n }}
 }
 
-// ConsumeResetOffset sets the offset to restart consuming from when a
-// partition has no commits (for groups) or when beginning to consume a
-// partition (for direct partition consuming), or when a fetch sees an
-// OffsetOutOfRange error, overriding the default NewOffset().AtStart(), i.e.,
-// the earliest offset.
+// ConsumeResetOffset sets the offset to start consuming from, or if
+// OffsetOutOfRange is seen while fetching, to restart consuming from. The
+// default is NewOffset().AtStart(), i.e., the earliest offset.
 //
-// If you are choosing an exact offset to reset to (NewOffset.At(#)), if the
-// offset is before the partition's log start offset or after the high
-// watermark, this will reset to the start offset or end offset, respectively.
-// Relative offsets are only obeyed if they fall within bounds.
+// For direct consumers, this is the offset that partitions begin to consume
+// from. For group consumers, this is the offset that partitions begin to
+// consume from if a partition has no commits. If partitions have commits, the
+// commit offset is used. While fetching, if OffsetOutOfRange is encountered,
+// the partition resets to ConsumeResetOffset. Conversely, using NoResetOffset
+// stops consuming a partition if the client encounters OffsetOutOfRange.
 //
-// You can use the NoResetOffset to change the behavior of the client to enter
-// a fatal state when OffsetOutOfRange is encountered.
+// If you use an exact offset or relative offsets and the offset ends up out of
+// range, the client chooses the nearest of either the log start offset or the
+// high watermark: using At(3) when the partition starts at 8 results in the
+// partition being consumed from offset 8.
+//
+// In short form, the following determines the offset for when a partition is
+// seen for the first time, or reset while fetching:
+//
+//     reset at start?                        => log start offset
+//     reset at end?                          => high watermark
+//     reset at exact?                        => this exact offset (3 means offset 3)
+//     reset relative?                        => the above, + / - the relative amount
+//     reset exact or relative out of bounds? => nearest boundary (start or end)
+//     reset after millisec?                  => high watermark, or first offset after millisec if one exists
+//
 func ConsumeResetOffset(offset Offset) ConsumerOpt {
 	return consumerOpt{func(cfg *cfg) { cfg.resetOffset = offset }}
 }
