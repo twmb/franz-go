@@ -451,12 +451,12 @@ func (g *groupConsumer) balanceGroup(proto string, members []kmsg.JoinGroupRespo
 	// more useful debugging information.
 	var into IntoSyncAssignment
 	if memberBalancerOrErr, ok := memberBalancer.(GroupMemberBalancerOrError); ok {
-		into, err = memberBalancerOrErr.BalanceOrError(topicPartitionCount)
+		if into, err = memberBalancerOrErr.BalanceOrError(topicPartitionCount); err != nil {
+			g.cl.cfg.logger.Log(LogLevelError, "balance failed", "err", err)
+			return nil, err
+		}
 	} else {
 		into = memberBalancer.Balance(topicPartitionCount)
-	}
-	if err != nil {
-		return nil, err
 	}
 
 	if p, ok := into.(*BalancePlan); ok {
