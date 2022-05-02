@@ -13,12 +13,12 @@ break compatibility for the few usages of this package, when the fix can be
 done entirely when `go get`ing.
 
 The [gokrb5](https://github.com/jcmturner/gokrb5) library, basically the only
-library in the Go ecosystem that implements Kerberos, has a slightly
-[broken](https://github.com/jcmturner/gokrb5/issues/461). Organizations that
-are sensitive to this are now required to not use franz-go, even if they do not
-use Kerberos, because franz-go pulls in a dependency on gokrb5.
+library in the Go ecosystem that implements Kerberos, has a slightly [broken
+license](https://github.com/jcmturner/gokrb5/issues/461). Organizations that
+are sensitive to this were required to not use franz-go even if they did not
+use Kerberos because franz-go pulls in a dependency on gokrb5.
 
-Now, with the `kerberos` being a distinct and separate module, depending on
+Now, with `kerberos` being a distinct and separate module, depending on
 franz-go only will _not_ cause an indirect dependency on gokrb5.
 
 If your upgrade is broken by this change, run:
@@ -30,14 +30,14 @@ go get github.com/twmb/franz-go@v1.5.0
 
 ## Behavior changes
 
-* `UnknownTopicRetries` now allows -1 to signal disabling the option, meaning
-  unlimited retries, rather than no retries. This follows the convention of
-other options where -1 disables.
+* `UnknownTopicRetries` now allows -1 to signal disabling the option (meaning
+  unlimited retries, rather than no retries). This follows the convention of
+other options where -1 disables limits.
 
 ## Improvements
 
-* Waiting for unknown topics while producing now takes into account the produce
-  context, as well as aborting. Previously, the record context was only taken
+* Waiting for unknown topics while producing now takes into account both the
+  produce context and aborting. Previously, the record context was only taken
 into account _after_ a topic was loaded. The same is true for aborting buffered
 records: previously, abort would hang until a topic was loaded.
 
@@ -50,10 +50,10 @@ records: previously, abort would hang until a topic was loaded.
 * `ConsumeResetOffset` is now clearer, you can now use `NoResetOffset` with
   start _or_ end _or_ exact offsets, and there is now the very useful
 `Offset.AfterMilli` function. Previously, `NoResetOffset` only allowed starting
-consuming at the start, and it was not obvious why. We keep the previous
+consuming at the start and it was not obvious why. We keep the previous
 default-to-start behavior, but we now allow modifying it. As well, `AfterMilli`
-can be used to largely replace `AtEnd`, because odds are, you want to consume
-all records after your program starts _even if_ new partitions are added to a
+can be used to largely replace `AtEnd`. Odds are, you want to consume all
+records after your program starts _even if_ new partitions are added to a
 topic. Previously, if you added a partition to a topic, `AtEnd` would miss
 records that were produced until the client refreshed metadata and discovered
 the partition. Because of this, you were safer using `AtStart`, but this
@@ -61,7 +61,7 @@ unnecessarily forced you to consume everything on program start.
 
 * Custom group balancers can now return errors, you can now intercept commits
   to attach metadata, and you can now intercept offset fetches to read
-metadata.  Previously, none of this was possible; I considered metadata a bit
+metadata.  Previously, none of this was possible. I considered metadata a bit
 of a niche feature, but accessing it (as well as returning errors when
 balancing) is required if you want to implement streams. New APIs now exist to
 support the more advanced behavior: `PreCommitFnContext`, `OnOffsetsFetched`,
