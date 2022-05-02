@@ -2068,12 +2068,12 @@ type commitContextFnT struct{}
 
 var commitContextFn commitContextFnT
 
-// PreCommitContextFn attaches fn to the context through WithValue. Using the
+// PreCommitFnContext attaches fn to the context through WithValue. Using the
 // context while committing allows fn to be called just before the commit is
 // issued. This can be used to modify the actual commit, such as by associating
 // metadata with partitions. If fn returns an error, the commit is not
 // attempted.
-func PreCommitContextFn(ctx context.Context, fn func(*kmsg.OffsetCommitRequest) error) context.Context {
+func PreCommitFnContext(ctx context.Context, fn func(*kmsg.OffsetCommitRequest) error) context.Context {
 	return context.WithValue(ctx, commitContextFn, fn)
 }
 
