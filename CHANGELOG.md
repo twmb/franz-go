@@ -1,3 +1,91 @@
+v1.5.0
+===
+
+This release adds a few new APIs, has a few small behavior changes, and has one
+"breaking" change.
+
+## Breaking changes
+
+The `kerberos` package is now a dedicated separate module. Rather than
+requiring a major version bump, since this fix is entirely at the module level
+for an almost entirely unused package, I figured it is _okayish_ to technically
+break compatibility for the few usages of this package, when the fix can be
+done entirely when `go get`ing.
+
+The [gokrb5](https://github.com/jcmturner/gokrb5) library, basically the only
+library in the Go ecosystem that implements Kerberos, has a slightly
+[broken](https://github.com/jcmturner/gokrb5/issues/461). Organizations that
+are sensitive to this are now required to not use franz-go, even if they do not
+use Kerberos, because franz-go pulls in a dependency on gokrb5.
+
+Now, with the `kerberos` being a distinct and separate module, depending on
+franz-go only will _not_ cause an indirect dependency on gokrb5.
+
+If your upgrade is broken by this change, run:
+
+```go
+go get github.com/twmb/franz-go/pkg/sasl/kerberos@v1.0.0
+```
+
+## Behavior changes
+
+* `UnknownTopicRetries` now allows -1 to signal disabling the option, meaning
+  unlimited retries, rather than no retries. This follows the convention of
+other options where -1 disables.
+
+## Improvements
+
+* Waiting for unknown topics while producing now takes into account the produce
+  context, as well as aborting. Previously, the record context was only taken
+into account _after_ a topic was loaded. The same is true for aborting buffered
+records: previously, abort would hang until a topic was loaded.
+
+* New APIs are added to kmsg to deprecate the previous `Into` functions. The
+  `Into` functions still exist and will not be removed until kadm is stabilized
+(see [#141](https://github.com/twmb/franz-go/issues/141)).
+
+## Features
+
+* `ConsumeResetOffset` is now clearer, you can now use `NoResetOffset` with
+  start _or_ end _or_ exact offsets, and there is now the very useful
+`Offset.AfterMilli` function. Previously, `NoResetOffset` only allowed starting
+consuming at the start, and it was not obvious why. We keep the previous
+default-to-start behavior, but we now allow modifying it. As well, `AfterMilli`
+can be used to largely replace `AtEnd`, because odds are, you want to consume
+all records after your program starts _even if_ new partitions are added to a
+topic. Previously, if you added a partition to a topic, `AtEnd` would miss
+records that were produced until the client refreshed metadata and discovered
+the partition. Because of this, you were safer using `AtStart`, but this
+unnecessarily forced you to consume everything on program start.
+
+* Custom group balancers can now return errors, you can now intercept commits
+  to attach metadata, and you can now intercept offset fetches to read
+metadata.  Previously, none of this was possible; I considered metadata a bit
+of a niche feature, but accessing it (as well as returning errors when
+balancing) is required if you want to implement streams. New APIs now exist to
+support the more advanced behavior: `PreCommitFnContext`, `OnOffsetsFetched`,
+and `GroupMemberBalancerOrError`. As well, `BalancePlan.AsMemberIDMap` now
+exists to provide access to a plan's underlying plan map. This did not exist
+previously because I wanted to keep the type opaque for potential future
+changes, but the odds of this are low and we can attempt forward compatibility
+when the time arises.
+
+* `RecordReader` now supports regular expressions for text values.
+
+## Relevant commits
+
+- [`a2cbbf8`](https://github.com/twmb/franz-go/commit/a2cbbf8) go.{mod,sum}: go get -u ./...; go mod tidy
+- [`ce7a84f`](https://github.com/twmb/franz-go/commit/ce7a84f) kerberos: split into dedicated module, p1
+- [`e8e5c82`](https://github.com/twmb/franz-go/commit/e8e5c82) and [`744a60e`](https://github.com/twmb/franz-go/commit/744a60e) kgo: improve ConsumeResetOffset, NoResetOffset, add Offset.AfterMilli
+- [`78fff0f`](https://github.com/twmb/franz-go/commit/78fff0f) and [`e8e5117`](https://github.com/twmb/franz-go/commit/e8e5117) and [`b457742`](https://github.com/twmb/franz-go/commit/b457742): add GroupMemberBalancerOrError
+- [`b5256c7`](https://github.com/twmb/franz-go/commit/b5256c7) kadm: fix long standing poor API (Into fns)
+- [`8148c55`](https://github.com/twmb/franz-go/commit/8148c55) BalancePlan: add AsMemberIDMap
+- [`113a2c0`](https://github.com/twmb/franz-go/commit/113a2c0) add OnOffsetsFetched function to allow inspecting commit metadata
+- [`0a4f2ec`](https://github.com/twmb/franz-go/commit/0a4f2ec) and [`cba9e26`](https://github.com/twmb/franz-go/commit/cba9e26) kgo: add PreCommitFnContext, enabling pre-commit interceptors for metadata
+- [`42e5b57`](https://github.com/twmb/franz-go/commit/42e5b57) producer: allow a canceled context & aborting to quit unknown wait
+- [`96d647a`](https://github.com/twmb/franz-go/commit/96d647a) UnknownTopicRetries: allow -1 to disable the option
+- [`001c6d3`](https://github.com/twmb/franz-go/commit/001c6d3) RecordReader: support regular expressions for text values
+
 v1.4.2
 ===
 
