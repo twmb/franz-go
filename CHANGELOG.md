@@ -25,6 +25,7 @@ If your upgrade is broken by this change, run:
 
 ```go
 go get github.com/twmb/franz-go/pkg/sasl/kerberos@v1.0.0
+go get github.com/twmb/franz-go@v1.5.0
 ```
 
 ## Behavior changes
