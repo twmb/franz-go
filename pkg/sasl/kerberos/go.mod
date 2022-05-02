@@ -2,8 +2,6 @@ module github.com/twmb/franz-go/pkg/sasl/kerberos
 
 go 1.15
 
-replace github.com/twmb/franz-go => ../../..
-
 require (
 	github.com/hashicorp/go-uuid v1.0.3 // indirect
 	github.com/jcmturner/gokrb5/v8 v8.4.2
