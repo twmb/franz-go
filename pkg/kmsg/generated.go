@@ -4758,7 +4758,7 @@ type ListOffsetsRequestTopicPartition struct {
 	// The offset returned will be the one of the message whose timestamp is
 	// the first timestamp greater than or equal to this requested timestamp.
 	//
-	// If no such message is found, the log end offset is returned.
+	// If no such message is found, then no offset is returned (-1).
 	//
 	// There exist two special timestamps: -2 corresponds to the earliest
 	// timestamp, and -1 corresponds to the latest.

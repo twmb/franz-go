@@ -357,7 +357,8 @@ func (cl *Client) ListCommittedOffsets(ctx context.Context, topics ...string) (L
 // ListOffsetsAfterMilli returns the first offsets after the requested
 // millisecond timestamp. Unlike listing start/end/committed offsets, offsets
 // returned from this function also include the timestamp of the offset. If no
-// topics are specified, all topics are listed.
+// topics are specified, all topics are listed. If a partition has no offsets
+// after the requested millisecond, the offset will be -1.
 //
 // This may return *ShardErrors.
 func (cl *Client) ListOffsetsAfterMilli(ctx context.Context, millisecond int64, topics ...string) (ListedOffsets, error) {
