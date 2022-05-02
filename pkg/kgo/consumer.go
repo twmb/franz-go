@@ -88,10 +88,11 @@ func NoResetOffset() Offset {
 // timestamp. You can use NoResetOffset().AfterMilli(...) to instead switch the
 // client to a fatal state.
 func (o Offset) AfterMilli(millisec int64) Offset {
-	return Offset{
-		at:         millisec,
-		afterMilli: true,
-	}
+	o.at = millisec
+	o.relative = 0
+	o.epoch = -1
+	o.afterMilli = true
+	return o
 }
 
 // AtStart returns a copy of the calling offset, changing the returned offset
