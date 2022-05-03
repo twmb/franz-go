@@ -1,4 +1,4 @@
-module goroutine_per_partition_consuming
+module goroutine_per_partition_consuming_autocommit_normal
 
 go 1.17
 

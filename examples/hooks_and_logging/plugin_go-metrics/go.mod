@@ -1,4 +1,4 @@
-module dropin_prometheus
+module dropin_go_metrics
 
 go 1.16
 
