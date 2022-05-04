@@ -476,9 +476,9 @@ func memberMetadataV0(interests []string) []byte {
 	return meta.AppendTo(nil)
 }
 
-///////////////////
+// /////////////////
 // Balance Plans //
-///////////////////
+// /////////////////
 
 // RoundRobinBalancer returns a group balancer that evenly maps topics and
 // partitions to group members.
@@ -643,7 +643,7 @@ func (*rangeBalancer) Balance(b *ConsumerBalancer, topics map[string]int32) Into
 // StickyBalancer returns a group balancer that ensures minimal partition
 // movement on group changes while also ensuring optimal balancing.
 //
-// Suppose there are three members M0, M1, and M3, and two topics t0 and t1
+// Suppose there are three members M0, M1, and M2, and two topics t0 and t1
 // each with three partitions p0, p1, and p2. If the initial balance plan looks
 // like
 //
