@@ -476,9 +476,9 @@ func memberMetadataV0(interests []string) []byte {
 	return meta.AppendTo(nil)
 }
 
-// /////////////////
+///////////////////
 // Balance Plans //
-// /////////////////
+///////////////////
 
 // RoundRobinBalancer returns a group balancer that evenly maps topics and
 // partitions to group members.
