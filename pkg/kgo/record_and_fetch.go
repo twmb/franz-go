@@ -364,14 +364,28 @@ func (f Fetch) hasErrorsOrRecords() bool {
 // This function is useful to break out of a poll loop; you likely want to call
 // this function before calling Errors.
 func (fs Fetches) IsClientClosed() bool {
-	// An injected ErrClientClosed is a dedicated fetch with one topic and
+	// An injected ErrClientClosed is a single fetch with one topic and
 	// one partition. We can use this to make IsClientClosed do less work.
+	return len(fs) == 1 && len(fs[0].Topics) == 1 && len(fs[0].Topics[0].Partitions) == 1 && errors.Is(fs[0].Topics[0].Partitions[0].Err, ErrClientClosed)
+}
+
+// Err returns the first error in all fetches, if any. This can be used to
+// quickly check if the client is closed or your poll context was canceled, or
+// to check if there's some other error that requires deeper investigation with
+// EachError.
+func (fs Fetches) Err() error {
 	for _, f := range fs {
-		if len(f.Topics) == 1 && len(f.Topics[0].Partitions) == 1 && errors.Is(f.Topics[0].Partitions[0].Err, ErrClientClosed) {
-			return true
+		for i := range f.Topics {
+			ft := &f.Topics[i]
+			for j := range ft.Partitions {
+				fp := &ft.Partitions[j]
+				if fp.Err != nil {
+					return fp.Err
+				}
+			}
 		}
 	}
-	return false
+	return nil
 }
 
 // EachError calls fn for every partition that had a fetch error with the

@@ -332,19 +332,30 @@ func (c *consumer) addFakeReadyForDraining(topic string, partition int32, err er
 	c.sourcesReadyCond.Broadcast()
 }
 
+func errFetch(err error) Fetches {
+	return []Fetch{{
+		Topics: []FetchTopic{{
+			Topic: "",
+			Partitions: []FetchPartition{{
+				Partition: 0,
+				Err:       err,
+			}},
+		}},
+	}}
+}
+
 // PollFetches waits for fetches to be available, returning as soon as any
-// broker returns a fetch. If the context quits, this function quits. If the
-// context is nil or is already canceled, this function will return immediately
-// with any currently buffered records.
+// broker returns a fetch. If the context is nil, this function will return
+// immediately with any currently buffered records.
+//
+// If the client is closed, a fake fetch will be injected that has no topic, a
+// partition of 0, and a partition error of ErrClientClosed. If the context is
+// canceled, a fake fetch will be injected with ctx.Err. These injected errors
+// can be used to break out of a poll loop.
 //
 // It is important to check all partition errors in the returned fetches. If
 // any partition has a fatal error and actually had no records, fake fetch will
 // be injected with the error.
-//
-// If the client is closing or has closed, a fake fetch will be injected that
-// has no topic, a partition of 0, and a partition error of ErrClientClosed.
-// This can be used to detect if the client is closing and to break out of a
-// poll loop.
 //
 // If you are group consuming, a rebalance can happen under the hood while you
 // process the returned fetches. This can result in duplicate work, and you may
@@ -356,9 +367,13 @@ func (cl *Client) PollFetches(ctx context.Context) Fetches {
 }
 
 // PollRecords waits for records to be available, returning as soon as any
-// broker returns records in a fetch. If the context quits, this function
-// quits. If the context is nil or is already canceled, this function will
-// return immediately with any currently buffered records.
+// broker returns records in a fetch. If the context is nil, this function
+// will return immediately with any currently buffered records.
+//
+// If the client is closed, a fake fetch will be injected that has no topic, a
+// partition of 0, and a partition error of ErrClientClosed. If the context is
+// canceled, a fake fetch will be injected with ctx.Err. These injected errors
+// can be used to break out of a poll loop.
 //
 // This returns a maximum of maxPollRecords total across all fetches, or
 // returns all buffered records if maxPollRecords is <= 0.
@@ -366,11 +381,6 @@ func (cl *Client) PollFetches(ctx context.Context) Fetches {
 // It is important to check all partition errors in the returned fetches. If
 // any partition has a fatal error and actually had no records, fake fetch will
 // be injected with the error.
-//
-// If the client is closing or has closed, a fake fetch will be injected that
-// has no topic, a partition of 0, and a partition error of ErrClientClosed.
-// This can be used to detect if the client is closing and to break out of a
-// poll loop.
 //
 // If you are group consuming, a rebalance can happen under the hood while you
 // process the returned fetches. This can result in duplicate work, and you may
@@ -384,6 +394,16 @@ func (cl *Client) PollRecords(ctx context.Context, maxPollRecords int) Fetches {
 	c := &cl.consumer
 
 	c.g.undirtyUncommitted()
+
+	// If the user gave us a canceled context, we bail immediately after
+	// un-dirty-ing marked records.
+	if ctx != nil {
+		select {
+		case <-ctx.Done():
+			return errFetch(ctx.Err())
+		default:
+		}
+	}
 
 	var fetches Fetches
 	fill := func() {
@@ -454,14 +474,11 @@ func (cl *Client) PollRecords(ctx context.Context, maxPollRecords int) Fetches {
 		}
 	}
 
+	// We try filling fetches once before waiting. If we have no context,
+	// we guarantee that we just drain anything available and return.
 	fill()
 	if len(fetches) > 0 || ctx == nil {
 		return fetches
-	}
-	select {
-	case <-ctx.Done():
-		return fetches
-	default:
 	}
 
 	done := make(chan struct{})
@@ -485,14 +502,11 @@ func (cl *Client) PollRecords(ctx context.Context, maxPollRecords int) Fetches {
 
 	select {
 	case <-cl.ctx.Done():
-		// The client is closed: we inject an error right now, which
-		// will be drained immediately in the fill call just below, and
-		// then will be returned with our fetches.
-		c.addFakeReadyForDraining("", 0, ErrClientClosed)
 		exit()
+		return errFetch(ErrClientClosed)
 	case <-ctx.Done():
-		// The user canceled: no need to inject anything; just return.
 		exit()
+		return errFetch(ctx.Err())
 	case <-done:
 	}
 

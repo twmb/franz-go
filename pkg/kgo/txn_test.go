@@ -158,7 +158,7 @@ func (c *testConsumer) transact(txnsBeforeQuit int) {
 		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 		fetches := txnSess.PollFetches(ctx)
 		cancel()
-		if len(fetches) == 0 {
+		if fetches.Err() == context.DeadlineExceeded || fetches.Err() == ErrClientClosed {
 			if consumed := atomic.LoadUint64(&c.consumed); consumed == testRecordLimit {
 				return
 			} else if consumed > testRecordLimit {
