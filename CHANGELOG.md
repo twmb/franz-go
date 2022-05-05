@@ -1,3 +1,24 @@
+v1.5.1
+===
+
+This release fixes a minor bug in `RecordReader`, and has a behavior change for
+polling records (and a corresponding tiny new helper API for this).
+
+For the bugfix, `RecordReader` did not always properly return
+`io.ErrUnexpectedEOF`. We now return it more properly and add tests for the
+missing edge cases.
+
+For the behavior change, we now inject an error into `PollFetches` and
+`PollRecords` if the user context is canceled. Previously, we would just quit
+the poll and return. This change introduces a new corresponding function,
+`Fetches.Err() error`. The thought here is that now we have more injected
+errors, so `Fetches.Err` can make it easier to check various errors.
+
+- [`cbc8962`](https://github.com/twmb/franz-go/commit/cbc8962) **behavior change** Poll{Records,Fetches}: inject an error for canceled context
+- [#163](https://github.com/twmb/franz-go/pull/163) docs: updates StickyBalancer godoc (thanks [@Streppel](https://github.com/Streppel))
+- [`2018d20`](https://github.com/twmb/franz-go/commit/2018d20) **bugfix** RecordReader: properly return `io.ErrUnexpectedEOF`
+- [#161](https://github.com/twmb/franz-go/pull/161) examples: avoid duplicated module name (thanks [@robsonpeixoto](https://github.com/robsonpeixoto))
+
 v1.5.0
 ===
 
