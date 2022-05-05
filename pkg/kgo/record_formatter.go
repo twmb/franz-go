@@ -1461,10 +1461,11 @@ func (r *RecordReader) next(rec *Record) error {
 		default:
 			err = r.readDelim(fn.read.delim) // we *always* fall back to delim parsing
 		}
-		if err != nil {
-			if !errors.Is(err, io.EOF) {
-				return err
-			}
+		switch err {
+		default:
+			return err
+		case nil:
+		case io.EOF, io.ErrUnexpectedEOF:
 			r.done = true
 			// We guarantee that all noread parses are at
 			// the front, so if we io.EOF on the first
@@ -1472,10 +1473,9 @@ func (r *RecordReader) next(rec *Record) error {
 			if len(r.buf) == 0 && (i == 0 || r.fns[i-1].read.noread) {
 				return io.EOF
 			}
-			if i != len(r.fns)-1 {
+			if i != len(r.fns)-1 || err == io.ErrUnexpectedEOF {
 				return io.ErrUnexpectedEOF
 			}
-			err = nil
 		}
 
 		if fn.parse == nil {
@@ -1522,6 +1522,9 @@ func (r *RecordReader) readRe(re *regexp.Regexp) error {
 	reader := reReader{r: r}
 	loc := re.FindReaderIndex(&reader)
 	if loc == nil {
+		if reader.err == io.EOF && len(reader.peek) > 0 {
+			return fmt.Errorf("regexp text mismatch, saw %q", reader.peek)
+		}
 		return reader.err
 	}
 	n := loc[1] // we ensure the regexp begins with ^, so we only need the end
@@ -1568,13 +1571,21 @@ func (r *RecordReader) readDelim(d []byte) error {
 	for {
 		peek, err := r.r.Peek(len(d))
 		if err != nil {
+			// If we peek an io.EOF, we were looking for our delim
+			// and hit the end. This is unexpected.
+			if err == io.EOF {
+				err = io.ErrUnexpectedEOF
+			}
 			return err
 		}
 		if !bytes.Equal(peek, d) {
+			// We did not find our delim. Skip the first char
+			// then continue again.
 			r.buf = append(r.buf, peek[0])
 			r.r.Discard(1)
 			continue
 		}
+		// We found our delim. We discard it and return.
 		r.r.Discard(len(d))
 		return nil
 	}

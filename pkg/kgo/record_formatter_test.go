@@ -202,6 +202,7 @@ func TestRecordReader(t *testing.T) {
 		layout string
 		in     string
 		exp    []*Record
+		expErr bool
 	}{
 		{
 			layout: "%v",
@@ -415,6 +416,81 @@ func TestRecordReader(t *testing.T) {
 			},
 		},
 
+		{
+			layout: `%v`,
+			in:     "foo\n",
+			exp: []*Record{
+				StringRecord("foo\n"),
+			},
+		},
+
+		{
+			layout: `%v{re#...#}`,
+			in:     "abc123",
+			exp: []*Record{
+				StringRecord("abc"),
+				StringRecord("123"),
+			},
+		},
+
+		{
+			layout: `%v{re#....#}`,
+			in:     "abc123",
+			exp: []*Record{
+				StringRecord("abc1"),
+			},
+			expErr: true,
+		},
+
+		{
+			layout: `%v{re#....#}`,
+			in:     "abc",
+			exp:    []*Record{},
+			expErr: true,
+		},
+
+		{
+			layout: `%v\n`,
+			in:     "foo",
+			expErr: true,
+		},
+
+		{
+			layout: `%V{4}%v`,
+			in:     "fo",
+			expErr: true,
+		},
+
+		{
+			layout: `asdf%vasdf`,
+			in:     "asdf123addd",
+			expErr: true,
+		},
+
+		{
+			layout: `asdf%v`,
+			in:     "asd",
+			expErr: true,
+		},
+
+		{
+			layout: `asdf%v`,
+			in:     "asddd",
+			expErr: true,
+		},
+
+		{
+			layout: `asdf%v`,
+			in:     "asddd",
+			expErr: true,
+		},
+
+		{
+			layout: `%o{hex8}`,
+			in:     "az",
+			expErr: true,
+		},
+
 		//
 	} {
 		t.Run(test.layout, func(t *testing.T) {
@@ -433,7 +509,16 @@ func TestRecordReader(t *testing.T) {
 					t.Errorf("%d:\ngot %#v\nexp %#v", i, rec, exp)
 				}
 			}
-			if _, err := r.ReadRecord(); !errors.Is(err, io.EOF) {
+
+			_, err = r.ReadRecord()
+			// If we are expecting an error, we expect this final read to
+			// not be io.EOF.
+			if test.expErr {
+				if errors.Is(err, io.EOF) {
+					t.Error("was expecting an error, got io.EOF")
+				}
+				return
+			} else if !errors.Is(err, io.EOF) {
 				t.Errorf("got err %v != io.EOF after exhausting records", err)
 			}
 		})
