@@ -1,3 +1,23 @@
+v1.5.2
+===
+
+This tiny release contains another fix for `RecordReader`, specifically for
+regex parsing, and changes the behavior of `MarkCommitRecords` to its original
+behavior.
+
+* For `RecordReader`, the regex type was not properly registered everywhere
+  internally. This resulted in `%v{re#...#}\n` trying to parse a newline as
+part of the regex, rather than as a delimiter. This is fixed and a test case
+added. Note that this feature is niche _and_ new, so this is a very minor bug.
+
+* For `MarkCommitRecords`, v1.3.3 changed the behavior to allow rewinds. This
+  is difficult to reason about and can result in bugs. More likely, you just
+want to periodically mark to move forward; the behavior now is more in line
+with what people expect.
+
+- [`ff5a3ed`](https://github.com/twmb/franz-go/commit/ff5a3ed) MarkCommitRecords: forbid rewinds
+- [`41284b3`](https://github.com/twmb/franz-go/commit/41284b3) RecordReader: fix regex reading even more
+
 v1.5.1
 ===
 
