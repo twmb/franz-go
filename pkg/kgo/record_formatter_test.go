@@ -434,6 +434,22 @@ func TestRecordReader(t *testing.T) {
 		},
 
 		{
+			layout: `%v{re#...?#}\n`,
+			in:     "abc\n",
+			exp: []*Record{
+				StringRecord("abc"),
+			},
+		},
+
+		{
+			layout: `%v{re#...?#}\n`,
+			in:     "ab\n",
+			exp: []*Record{
+				StringRecord("ab"),
+			},
+		},
+
+		{
 			layout: `%v{re#....#}`,
 			in:     "abc123",
 			exp: []*Record{

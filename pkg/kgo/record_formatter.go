@@ -1421,7 +1421,8 @@ func (r *readKind) empty() bool {
 		r.size == 0 &&
 		r.sizefn == nil &&
 		r.handoff == nil &&
-		r.delim == nil
+		r.delim == nil &&
+		r.re == nil
 }
 
 type readParse struct {
@@ -1461,6 +1462,7 @@ func (r *RecordReader) next(rec *Record) error {
 		default:
 			err = r.readDelim(fn.read.delim) // we *always* fall back to delim parsing
 		}
+
 		switch err {
 		default:
 			return err
