@@ -2154,13 +2154,8 @@ func (cl *Client) CommitRecords(ctx context.Context, rs ...*Record) error {
 
 // MarkCommitRecords marks records to be available for autocommitting. This
 // function is only useful if you use the AutoCommitMarks config option, see
-// the documentation on that option for more details.
-//
-// This function blindly sets the "head" per partition that will be committed
-// on the next autocommit. This can be used to rewind partitions if necessary,
-// however it is strongly not recommended to use autocommitting + marks to
-// rewind commits, and depending on timing, the autocommit may undo a mark
-// rewind.
+// the documentation on that option for more details. This function does not
+// allow rewinds.
 func (cl *Client) MarkCommitRecords(rs ...*Record) {
 	g := cl.consumer.g
 	if g == nil || !cl.cfg.autocommitMarks {
@@ -2192,13 +2187,15 @@ func (cl *Client) MarkCommitRecords(rs ...*Record) {
 		}
 
 		current := curPartitions[r.Partition]
-		curPartitions[r.Partition] = uncommit{
-			dirty:     current.dirty,
-			committed: current.committed,
-			head: EpochOffset{
-				r.LeaderEpoch,
-				r.Offset + 1,
-			},
+		if newHead := (EpochOffset{
+			r.LeaderEpoch,
+			r.Offset + 1,
+		}); current.head.less(newHead) {
+			curPartitions[r.Partition] = uncommit{
+				dirty:     current.dirty,
+				committed: current.committed,
+				head:      newHead,
+			}
 		}
 	}
 }
