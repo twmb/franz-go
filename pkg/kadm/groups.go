@@ -989,6 +989,12 @@ func CalculateGroupLag(
 	if group.State == "Empty" {
 		return calculateEmptyLag(commit, offsets)
 	}
+	if commit == nil { // avoid panics below
+		commit = make(OffsetResponses)
+	}
+	if offsets == nil {
+		offsets = make(ListedOffsets)
+	}
 
 	l := make(map[string]map[int32]GroupMemberLag)
 	for mi, m := range group.Members {
