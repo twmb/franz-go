@@ -16,7 +16,7 @@ import (
 // bug. The second version introduced generations with the default generation
 // from the first generation's consumers defaulting to -1.
 
-// We can support up to 65533 members; two slots are reserved.
+// We can support up to 65534 members; one slot is reserved.
 // We can support up to 2,147,483,647 partitions.
 // I expect a server to fall over before reaching either of these numbers.
 
@@ -43,6 +43,7 @@ type balancer struct {
 	topicNums  map[string]uint32 // topic name => index into topicInfos
 	topicInfos []topicInfo
 	partOwners []uint32 // partition => owning topicNum
+	nparts     int
 
 	// Stales tracks partNums that are doubly subscribed in this join
 	// where one of the subscribers is on an old generation.
@@ -90,15 +91,36 @@ func newBalancer(members []GroupMember, topics map[string]int32) *balancer {
 		}
 		nparts += int(partitions)
 	}
-	partOwners := make([]uint32, 0, nparts)
-	for topicNum, info := range topicInfos {
-		for i := int32(0); i < info.partitions; i++ {
-			partOwners = append(partOwners, uint32(topicNum))
-		}
-	}
 	memberNums := make(map[string]uint16, len(members))
 	for num, member := range members {
 		memberNums[member.ID] = uint16(num)
+	}
+
+	// partOwners is a special slice: we overallocate and use it
+	// differently depending on the function.
+	//
+	// Our first use is for [nparts]memberGeneration, each memberGeneration
+	// being 12 bytes. Thus we need at least 3*nparts uint32's.
+	//
+	// We then use the first [nparts]uint32 as actual partition owners for
+	// all partitions. That leaves the latter 2*nparts for free space.
+	//
+	// The second block is used for [nparts]partitionConsumer, which is two
+	// uint16s i.e. a uint32 in size.
+	//
+	// Our third and final block is used for topicPotentials, i.e. for each
+	// topic, who is a potential owner. This is actually ntopics*nmembers
+	// in length of uint16s, or (ntopics*nmembers+1)/2 of uint32s.
+	//
+	// Thus, rather than allocate nparts*3 of uint32s, we allocate
+	//
+	//     uint32s = nparts*2 + max(nparts, (ntopics*nmembers+1)/2)
+	topicPotentialsAsU32s := (len(topicNums)*len(members) + 1) / 2
+	partsSize := nparts * 2
+	if topicPotentialsAsU32s > nparts {
+		partsSize += topicPotentialsAsU32s
+	} else {
+		partsSize += nparts
 	}
 
 	b := &balancer{
@@ -107,7 +129,8 @@ func newBalancer(members []GroupMember, topics map[string]int32) *balancer {
 		topicNums:  topicNums,
 		topicInfos: topicInfos,
 
-		partOwners: partOwners,
+		partOwners: make([]uint32, partsSize),
+		nparts:     nparts,
 		stales:     make(map[int32]uint16),
 		plan:       make(membersPartitions, len(members)),
 	}
@@ -202,9 +225,9 @@ func (m *memberPartitions) add(partNum int32) {
 	*m = append(*m, partNum)
 }
 
-func (m *memberPartitions) Len() int           { return len(*m) }
-func (m *memberPartitions) Less(i, j int) bool { return (*m)[i] < (*m)[j] }
-func (m *memberPartitions) Swap(i, j int)      { (*m)[i], (*m)[j] = (*m)[j], (*m)[i] }
+func (m memberPartitions) Len() int           { return len(m) }
+func (m memberPartitions) Less(i, j int) bool { return m[i] < m[j] }
+func (m memberPartitions) Swap(i, j int)      { m[i], m[j] = m[j], m[i] }
 
 // membersPartitions maps members to their partitions.
 type membersPartitions []memberPartitions
@@ -282,6 +305,7 @@ func Balance(members []GroupMember, topics map[string]int32) Plan {
 		return b.into()
 	}
 	b.parseMemberMetadata()
+	b.initializePartOwners()
 	b.assignUnassignedAndInitGraph()
 	b.initPlanByNumPartitions()
 	b.balance()
@@ -294,7 +318,7 @@ func (b *balancer) parseMemberMetadata() {
 	// Each partition should only have one consumer, but a flaky member
 	// could rejoin with an old generation (stale user data) and say it
 	// is consuming something a different member is. See KIP-341.
-	partitionConsumersByGeneration := make([]memberGeneration, cap(b.partOwners))
+	partitionConsumersByGeneration := b.partitionConsumersByGenerationSlice()
 
 	const highBit uint32 = 1 << 31
 	s := kmsg.NewStickyMemberMetadata()
@@ -396,12 +420,26 @@ func deserializeUserData(s *kmsg.StickyMemberMetadata, userdata []byte, base []t
 	return
 }
 
+func (b *balancer) initializePartOwners() {
+	b.partOwners = b.partOwners[:0]
+	for topicNum, info := range b.topicInfos {
+		for i := int32(0); i < info.partitions; i++ {
+			b.partOwners = append(b.partOwners, uint32(topicNum))
+		}
+	}
+}
+
 // assignUnassignedAndInitGraph is a long function that assigns unassigned
 // partitions to the least loaded members and initializes our steal graph.
 //
 // Doing so requires a bunch of metadata, and in the process we want to remove
 // partitions from the plan that no longer exist in the client.
 func (b *balancer) assignUnassignedAndInitGraph() {
+	// We reserved some space in our partOwners buf for these next two
+	// slices: convert here now.
+	partitionConsumers := b.partitionConsumersSlice()
+	topicPotentialsBuf := b.topicPotentialsBufSlice()
+
 	// First, over all members in this assignment, map each partition to
 	// the members that can consume it. We will use this for assigning.
 	//
@@ -410,7 +448,6 @@ func (b *balancer) assignUnassignedAndInitGraph() {
 	// below in the partition mapping. Doing this two step process allows
 	// for a 10x speed boost rather than ranging over all partitions many
 	// times.
-	topicPotentialsBuf := make([]uint16, len(b.topicNums)*len(b.members))
 	topicPotentials := make([][]uint16, len(b.topicNums))
 	for memberNum, member := range b.members {
 		for _, topic := range member.Topics {
@@ -444,10 +481,6 @@ func (b *balancer) assignUnassignedAndInitGraph() {
 	// Next, over the prior plan, un-map deleted topics or topics that
 	// members no longer want. This is where we determine what is now
 	// unassigned.
-	partitionConsumers := make([]partitionConsumer, cap(b.partOwners)) // partNum => consuming member
-	for i := range partitionConsumers {
-		partitionConsumers[i] = partitionConsumer{unassignedPart, unassignedPart}
-	}
 	for memberNum := range b.plan {
 		partNums := &b.plan[memberNum]
 		for _, partNum := range *partNums {
@@ -478,7 +511,7 @@ func (b *balancer) assignUnassignedAndInitGraph() {
 	}
 
 	for partNum, owner := range partitionConsumers {
-		if owner.memberNum != unassignedPart {
+		if owner.memberNum != math.MaxUint16 {
 			continue
 		}
 		potentials := topicPotentials[b.partOwners[partNum]]
@@ -500,10 +533,6 @@ func (b *balancer) assignUnassignedAndInitGraph() {
 		)
 	}
 }
-
-// unassignedPart is a fake member number that we use to track if a partition
-// is deleted or unassigned.
-const unassignedPart = math.MaxUint16 - 1
 
 // tryRestickyStales is a pre-assigning step where, for all stale members,
 // we give partitions back to them if the partition is currently on an
