@@ -6,6 +6,8 @@ import (
 	"errors"
 	"math"
 	"math/bits"
+	"reflect"
+	"unsafe"
 )
 
 // This file contains primitive type encoding and decoding.
@@ -450,16 +452,44 @@ func (b *Reader) Span(l int) []byte {
 	return r
 }
 
+// UnsafeString returns a Kafka string from the reader without allocating using
+// the unsafe package. This must be used with care; note the string holds a
+// reference to the original slice.
+func (b *Reader) UnsafeString() string {
+	l := b.Int16()
+	return UnsafeString(b.Span(int(l)))
+}
+
 // String returns a Kafka string from the reader.
 func (b *Reader) String() string {
 	l := b.Int16()
 	return string(b.Span(int(l)))
 }
 
+// UnsafeCompactString returns a Kafka compact string from the reader without
+// allocating using the unsafe package. This must be used with care; note the
+// string holds a reference to the original slice.
+func (b *Reader) UnsafeCompactString() string {
+	l := int(b.Uvarint()) - 1
+	return UnsafeString(b.Span(l))
+}
+
 // CompactString returns a Kafka compact string from the reader.
 func (b *Reader) CompactString() string {
 	l := int(b.Uvarint()) - 1
 	return string(b.Span(l))
+}
+
+// UnsafeNullableString returns a Kafka nullable string from the reader without
+// allocating using the unsafe package. This must be used with care; note the
+// string holds a reference to the original slice.
+func (b *Reader) UnsafeNullableString() *string {
+	l := b.Int16()
+	if l < 0 {
+		return nil
+	}
+	s := UnsafeString(b.Span(int(l)))
+	return &s
 }
 
 // NullableString returns a Kafka nullable string from the reader.
@@ -469,6 +499,18 @@ func (b *Reader) NullableString() *string {
 		return nil
 	}
 	s := string(b.Span(int(l)))
+	return &s
+}
+
+// UnsafeCompactNullableString returns a Kafka compact nullable string from the
+// reader without allocating using the unsafe package. This must be used with
+// care; note the string holds a reference to the original slice.
+func (b *Reader) UnsafeCompactNullableString() *string {
+	l := int(b.Uvarint()) - 1
+	if l < 0 {
+		return nil
+	}
+	s := UnsafeString(b.Span(l))
 	return &s
 }
 
@@ -582,6 +624,13 @@ func (b *Reader) VarintBytes() []byte {
 	return b.Span(int(l))
 }
 
+// UnsafeVarintString returns a Kafka encoded varint string from the reader
+// without allocating using the unsafe package. This must be used with care;
+// note the string holds a reference to the original slice.
+func (b *Reader) UnsafeVarintString() string {
+	return UnsafeString(b.VarintBytes())
+}
+
 // VarintString returns a Kafka encoded varint string from the reader.
 func (b *Reader) VarintString() string {
 	return string(b.VarintBytes())
@@ -598,4 +647,13 @@ func (b *Reader) Complete() error {
 // Ok returns true if the reader is still ok.
 func (b *Reader) Ok() bool {
 	return !b.bad
+}
+
+// UnsafeString returns the slice as a string using unsafe rule (6).
+func UnsafeString(slice []byte) string {
+	var str string
+	strhdr := (*reflect.StringHeader)(unsafe.Pointer(&str))
+	strhdr.Data = ((*reflect.SliceHeader)(unsafe.Pointer(&slice))).Data
+	strhdr.Len = len(slice)
+	return str
 }
