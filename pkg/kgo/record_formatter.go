@@ -15,7 +15,8 @@ import (
 	"sync/atomic"
 	"time"
 	"unicode/utf8"
-	"unsafe"
+
+	"github.com/twmb/franz-go/pkg/kbin"
 )
 
 ////////////
@@ -1322,7 +1323,10 @@ func (*RecordReader) parseReadSize(layout string, dst *uint64, needBrace bool) (
 	case "ascii":
 		return readParse{
 			readKind{condition: func(b byte) bool { return b < '0' || b > '9' }},
-			func(b []byte, _ *Record) (err error) { *dst, err = strconv.ParseUint(slicestr(b), 10, 64); return err },
+			func(b []byte, _ *Record) (err error) {
+				*dst, err = strconv.ParseUint(kbin.UnsafeString(b), 10, 64)
+				return err
+			},
 		}, end, nil
 
 	case "big64":
@@ -1366,32 +1370,45 @@ func (*RecordReader) parseReadSize(layout string, dst *uint64, needBrace bool) (
 	case "hex64":
 		return readParse{
 			readKind{size: 16},
-			func(b []byte, _ *Record) (err error) { *dst, err = strconv.ParseUint(slicestr(b), 16, 64); return err },
+			func(b []byte, _ *Record) (err error) {
+				*dst, err = strconv.ParseUint(kbin.UnsafeString(b), 16, 64)
+				return err
+			},
 		}, end, nil
 	case "hex32":
 		return readParse{
 			readKind{size: 8},
-			func(b []byte, _ *Record) (err error) { *dst, err = strconv.ParseUint(slicestr(b), 16, 64); return err },
+			func(b []byte, _ *Record) (err error) {
+				*dst, err = strconv.ParseUint(kbin.UnsafeString(b), 16, 64)
+				return err
+			},
 		}, end, nil
 	case "hex16":
 		return readParse{
 			readKind{size: 4},
-			func(b []byte, _ *Record) (err error) { *dst, err = strconv.ParseUint(slicestr(b), 16, 64); return err },
+			func(b []byte, _ *Record) (err error) {
+				*dst, err = strconv.ParseUint(kbin.UnsafeString(b), 16, 64)
+				return err
+			},
 		}, end, nil
 	case "hex8":
 		return readParse{
 			readKind{size: 2},
-			func(b []byte, _ *Record) (err error) { *dst, err = strconv.ParseUint(slicestr(b), 16, 64); return err },
+			func(b []byte, _ *Record) (err error) {
+				*dst, err = strconv.ParseUint(kbin.UnsafeString(b), 16, 64)
+				return err
+			},
 		}, end, nil
 	case "hex4":
 		return readParse{
 			readKind{size: 1},
-			func(b []byte, _ *Record) (err error) { *dst, err = strconv.ParseUint(slicestr(b), 16, 64); return err },
+			func(b []byte, _ *Record) (err error) {
+				*dst, err = strconv.ParseUint(kbin.UnsafeString(b), 16, 64)
+				return err
+			},
 		}, end, nil
 	}
 }
-
-func slicestr(b []byte) string { return *(*string)(unsafe.Pointer(&b)) }
 
 func decodeBase64(b []byte) ([]byte, error) {
 	n, err := base64.StdEncoding.Decode(b[:base64.StdEncoding.DecodedLen(len(b))], b)
