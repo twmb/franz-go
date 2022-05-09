@@ -5,6 +5,8 @@ import (
 	"math/rand"
 	"sync/atomic"
 	"time"
+
+	"github.com/twmb/franz-go/pkg/kbin"
 )
 
 // Partitioner creates topic partitioners to determine which partition messages
@@ -71,20 +73,9 @@ type TopicBackupIter interface {
 	Rem() int
 }
 
-type leastBackupInput struct {
-	mapping []*topicPartition
-}
-
-func (i *leastBackupInput) Next() (int, int64) {
-	last := len(i.mapping) - 1
-	buffered := atomic.LoadInt64(&i.mapping[last].records.buffered)
-	i.mapping = i.mapping[:last]
-	return last, buffered
-}
-
-func (i *leastBackupInput) Rem() int {
-	return len(i.mapping)
-}
+////////////
+// SIMPLE // - BasicConsistent, Manual, RoundRobin
+////////////
 
 // BasicConsistentPartitioner wraps a single function to provide a Partitioner
 // and TopicPartitioner (that function is essentially a combination of
@@ -103,16 +94,18 @@ func BasicConsistentPartitioner(partition func(string) func(r *Record, n int) in
 	return &basicPartitioner{partition}
 }
 
-type basicPartitioner struct {
-	fn func(string) func(*Record, int) int
-}
+type (
+	basicPartitioner struct {
+		fn func(string) func(*Record, int) int
+	}
+
+	basicTopicPartitioner struct {
+		fn func(*Record, int) int
+	}
+)
 
 func (b *basicPartitioner) ForTopic(t string) TopicPartitioner {
 	return &basicTopicPartitioner{b.fn(t)}
-}
-
-type basicTopicPartitioner struct {
-	fn func(*Record, int) int
 }
 
 func (*basicTopicPartitioner) RequiresConsistency(*Record) bool { return true }
@@ -140,14 +133,16 @@ func RoundRobinPartitioner() Partitioner {
 	return new(roundRobinPartitioner)
 }
 
-type roundRobinPartitioner struct{}
+type (
+	roundRobinPartitioner struct{}
+
+	roundRobinTopicPartitioner struct {
+		on int
+	}
+)
 
 func (*roundRobinPartitioner) ForTopic(string) TopicPartitioner {
 	return new(roundRobinTopicPartitioner)
-}
-
-type roundRobinTopicPartitioner struct {
-	on int
 }
 
 func (*roundRobinTopicPartitioner) RequiresConsistency(*Record) bool { return false }
@@ -159,6 +154,10 @@ func (r *roundRobinTopicPartitioner) Partition(_ *Record, n int) int {
 	r.on++
 	return ret
 }
+
+//////////////////
+// LEAST BACKUP //
+//////////////////
 
 // LeastBackupPartitioner prioritizes partitioning by three factors, in order:
 //
@@ -189,23 +188,33 @@ func LeastBackupPartitioner() Partitioner {
 	return new(leastBackupPartitioner)
 }
 
-type leastBackupPartitioner struct{}
+type (
+	leastBackupInput struct{ mapping []*topicPartition }
 
-func (*leastBackupPartitioner) ForTopic(string) TopicPartitioner {
-	p := newLeastBackupTopicPartitioner()
-	return &p
+	leastBackupPartitioner struct{}
+
+	leastBackupTopicPartitioner struct {
+		onPart int
+		rng    *rand.Rand
+	}
+)
+
+func (i *leastBackupInput) Next() (int, int64) {
+	last := len(i.mapping) - 1
+	buffered := atomic.LoadInt64(&i.mapping[last].records.buffered)
+	i.mapping = i.mapping[:last]
+	return last, buffered
 }
 
-func newLeastBackupTopicPartitioner() leastBackupTopicPartitioner {
-	return leastBackupTopicPartitioner{
+func (i *leastBackupInput) Rem() int {
+	return len(i.mapping)
+}
+
+func (*leastBackupPartitioner) ForTopic(string) TopicPartitioner {
+	return &leastBackupTopicPartitioner{
 		onPart: -1,
 		rng:    rand.New(rand.NewSource(time.Now().UnixNano())),
 	}
-}
-
-type leastBackupTopicPartitioner struct {
-	onPart int
-	rng    *rand.Rand
 }
 
 func (p *leastBackupTopicPartitioner) OnNewBatch()                    { p.onPart = -1 }
@@ -233,6 +242,161 @@ func (p *leastBackupTopicPartitioner) PartitionByBackup(_ *Record, n int, backup
 	return p.onPart
 }
 
+///////////////////
+// UNIFORM BYTES //
+///////////////////
+
+// UniformBytesPartitioner is a redux of the StickyPartitioner, proposed in
+// KIP-794 and release with the Java client in Kafka 3.3. This partitioner
+// returns the same partition until 'bytes' is hit. At that point, a
+// re-partitioning happens. If adaptive is false, this chooses a new random
+// partition. If adaptive is true, this chooses a broker based on the inverse
+// of the backlog currently buffered for that broker. If keys is true, this
+// uses standard hashing based on record key for records with non-nil keys.
+// hasher is optional; if nil, the default hasher murmur2 (Kafka's default).
+//
+// The point of this hasher is to create larger batches while producing the
+// same amount to all partitions over the long run. Adaptive opts in to a
+// slight imbalance so that this can produce more to brokers that are less
+// loaded.
+//
+// This implementation differs slightly from Kafka's because this does not
+// account for the compressed size of a batch, nor batch overhead. For
+// overhead, in practice, the overhead is relatively constant so it would
+// affect all batches equally. For compression, this client does not compress
+// until after a batch is created and frozen, so it is not possible to track
+// compression. This client also uses the number of records for backup
+// calculation rather than number of bytes, but the heuristic should be
+// similar. Lastly, this client does not have a timeout for partition
+// availability. Realistically, these will be the most backed up partitions so
+// they should be chosen the least.
+func UniformBytesPartitioner(bytes int, adaptive, keys bool, hasher PartitionerHasher) Partitioner {
+	if hasher == nil {
+		hasher = KafkaHasher(murmur2)
+	}
+	return &uniformBytesPartitioner{
+		bytes,
+		adaptive,
+		keys,
+		hasher,
+	}
+}
+
+type (
+	uniformBytesPartitioner struct {
+		bytes    int
+		adaptive bool
+		keys     bool
+		hasher   PartitionerHasher
+	}
+
+	uniformBytesTopicPartitioner struct {
+		u      uniformBytesPartitioner
+		bytes  int
+		onPart int
+		rng    *rand.Rand
+
+		calc []struct {
+			f float64
+			n int
+		}
+	}
+)
+
+func (u *uniformBytesPartitioner) ForTopic(string) TopicPartitioner {
+	return &uniformBytesTopicPartitioner{
+		u:      *u,
+		onPart: -1,
+		rng:    rand.New(rand.NewSource(time.Now().UnixNano())),
+	}
+}
+
+func (p *uniformBytesTopicPartitioner) RequiresConsistency(r *Record) bool {
+	return p.u.keys && r.Key != nil
+}
+func (*uniformBytesTopicPartitioner) Partition(*Record, int) int { panic("unreachable") }
+
+func (p *uniformBytesTopicPartitioner) PartitionByBackup(r *Record, n int, backup TopicBackupIter) int {
+	if p.u.keys && r.Key != nil {
+		return p.u.hasher(r.Key, n)
+	}
+
+	l := 1 + // attributes, int8 unused
+		1 + // ts delta, 1 minimum (likely 2 or 3)
+		1 + // offset delta, likely 1
+		kbin.VarintLen(int32(len(r.Key))) +
+		len(r.Key) +
+		kbin.VarintLen(int32(len(r.Value))) +
+		len(r.Value) +
+		kbin.VarintLen(int32(len(r.Headers))) // varint array len headers
+
+	for _, h := range r.Headers {
+		l += kbin.VarintLen(int32(len(h.Key))) +
+			len(h.Key) +
+			kbin.VarintLen(int32(len(h.Value))) +
+			len(h.Value)
+	}
+
+	p.bytes += l
+	if p.bytes >= p.u.bytes {
+		p.bytes = l
+		p.onPart = -1
+	}
+
+	if p.onPart >= 0 && p.onPart < n {
+		return p.onPart
+	}
+
+	if !p.u.adaptive {
+		p.onPart = p.rng.Intn(n)
+	} else {
+		p.calc = p.calc[:0]
+
+		// For adaptive, the logic is that we pick by broker according
+		// to the inverse of the queue size. Presumably this means
+		// bytes, but we use records for simplicity.
+		//
+		// We calculate 1/recs for all brokers and choose the first one
+		// in this ordering that takes us negative.
+		//
+		// e.g., 1/1 + 1/3; pick is 0.2; 0.2*1.3333 = 0.26666; minus 1
+		// is negative, meaning our pick is the first. If rng was 0.9,
+		// scaled is 1.2, meaning our pick is the second (-1, still
+		// positive, second pick takes us negative).
+		//
+		// To guard floating rounding problems, if we pick nothing,
+		// then this means we pick our last.
+		var t float64
+		for ; n > 0; n-- {
+			n, backup := backup.Next()
+			backup++ // ensure non-zero
+			f := 1 / float64(backup)
+			t += f
+			p.calc = append(p.calc, struct {
+				f float64
+				n int
+			}{f, n})
+		}
+		r := p.rng.Float64()
+		pick := r * t
+		for _, c := range p.calc {
+			pick -= c.f
+			if pick <= 0 {
+				p.onPart = c.n
+				break
+			}
+		}
+		if p.onPart == -1 {
+			p.onPart = p.calc[len(p.calc)-1].n
+		}
+	}
+	return p.onPart
+}
+
+/////////////////////
+// STICKY & COMPAT // - Sticky, Kafka (custom hash), Sarama (custom hash)
+/////////////////////
+
 // StickyPartitioner is the same as StickyKeyPartitioner, but with no logic to
 // consistently hash keys. That is, this only partitions according to the
 // sticky partition strategy.
@@ -240,7 +404,15 @@ func StickyPartitioner() Partitioner {
 	return new(stickyPartitioner)
 }
 
-type stickyPartitioner struct{}
+type (
+	stickyPartitioner struct{}
+
+	stickyTopicPartitioner struct {
+		lastPart int
+		onPart   int
+		rng      *rand.Rand
+	}
+)
 
 func (*stickyPartitioner) ForTopic(string) TopicPartitioner {
 	p := newStickyTopicPartitioner()
@@ -255,12 +427,6 @@ func newStickyTopicPartitioner() stickyTopicPartitioner {
 	}
 }
 
-type stickyTopicPartitioner struct {
-	lastPart int
-	onPart   int
-	rng      *rand.Rand
-}
-
 func (p *stickyTopicPartitioner) OnNewBatch()                    { p.lastPart, p.onPart = p.onPart, -1 }
 func (*stickyTopicPartitioner) RequiresConsistency(*Record) bool { return false }
 func (p *stickyTopicPartitioner) Partition(_ *Record, n int) int {
@@ -273,8 +439,10 @@ func (p *stickyTopicPartitioner) Partition(_ *Record, n int) int {
 	return p.onPart
 }
 
-// StickyKeyPartitioner mirrors the default Java partitioner from Kafka's 2.4.0
-// release (see KAFKA-8601).
+// StickyKeyPartitioner mirrors the default Java partitioner from Kafka's 2.4
+// release (see KIP-480 and KAFKA-8601) until their 3.3 release. This was
+// replaced in 3.3 with the uniform sticky partitioner (KIP-794), which is
+// reimplemented in this client as the UniformBytesPartitioner.
 //
 // This is the same "hash the key consistently, if no key, choose random
 // partition" strategy that the Java partitioner has always used, but rather
@@ -286,15 +454,15 @@ func (p *stickyTopicPartitioner) Partition(_ *Record, n int) int {
 // Over time, the random distribution is the same, but the brokers are handling
 // on average larger batches.
 //
-// overrideHasher is optional; if nil, this will return a partitioner that
-// partitions exactly how Kafka does. Specifically, the partitioner will use
-// murmur2 to hash keys, will mask out the 32nd bit, and then will mod by the
-// number of potential partitions.
-func StickyKeyPartitioner(overrideHasher PartitionerHasher) Partitioner {
-	if overrideHasher == nil {
-		overrideHasher = KafkaHasher(murmur2)
+// hasher is optional; if nil, this will return a partitioner that partitions
+// exactly how Kafka does. Specifically, the partitioner will use murmur2 to
+// hash keys, will mask out the 32nd bit, and then will mod by the number of
+// potential partitions.
+func StickyKeyPartitioner(hasher PartitionerHasher) Partitioner {
+	if hasher == nil {
+		hasher = KafkaHasher(murmur2)
 	}
-	return &keyPartitioner{overrideHasher}
+	return &keyPartitioner{hasher}
 }
 
 // PartitionerHasher returns a partition to use given the input data and number
@@ -347,17 +515,19 @@ func SaramaHasher(hashFn func([]byte) uint32) PartitionerHasher {
 	}
 }
 
-type keyPartitioner struct {
-	hasher PartitionerHasher
-}
+type (
+	keyPartitioner struct {
+		hasher PartitionerHasher
+	}
+
+	stickyKeyTopicPartitioner struct {
+		hasher PartitionerHasher
+		stickyTopicPartitioner
+	}
+)
 
 func (k *keyPartitioner) ForTopic(string) TopicPartitioner {
 	return &stickyKeyTopicPartitioner{k.hasher, newStickyTopicPartitioner()}
-}
-
-type stickyKeyTopicPartitioner struct {
-	hasher PartitionerHasher
-	stickyTopicPartitioner
 }
 
 func (*stickyKeyTopicPartitioner) RequiresConsistency(r *Record) bool { return r.Key != nil }
@@ -367,6 +537,10 @@ func (p *stickyKeyTopicPartitioner) Partition(r *Record, n int) int {
 	}
 	return p.stickyTopicPartitioner.Partition(r, n)
 }
+
+/////////////
+// MURMUR2 //
+/////////////
 
 // Straight from the C++ code and from the Java code duplicating it.
 // https://github.com/apache/kafka/blob/d91a94e/clients/src/main/java/org/apache/kafka/common/utils/Utils.java#L383-L421

@@ -345,7 +345,8 @@ generation.
 | [KIP-734](https://cwiki.apache.org/confluence/display/KAFKA/KIP-734:+Improve+AdminClient.listOffsets+to+return+timestamp+and+offset+for+the+record+with+the+largest+timestamp) — Support MaxTimestamp in ListOffsets | 3.0 | Supported (simple version bump) |
 | [KIP-735](https://cwiki.apache.org/confluence/display/KAFKA/KIP-735%3A+Increase+default+consumer+session+timeout) — Bump default session timeout | ? | Supported |
 | [KIP-778](https://wiki.apache.org/confluence/pages/viewpage.action?pageId=188746840) — KRaft Upgrades (protocol changes only) | 3.2 | Supported |
-| [KIP-784](https://cwiki.apache.org/confluence/display/KAFKA/KIP-784%3A+Add+top-level+error+code+field+to+DescribeLogDirsResponse) — Add ErrorCode to DescribeLogDirs response| 3.1 | Supported |
+| [KIP-784](https://cwiki.apache.org/confluence/display/KAFKA/KIP-784%3A+Add+top-level+error+code+field+to+DescribeLogDirsResponse) — Add ErrorCode to DescribeLogDirs response | 3.1 | Supported |
+| [KIP-794](https://cwiki.apache.org/confluence/display/KAFKA/KIP-794%3A+Strictly+Uniform+Sticky+Partitioner) —  Better sticky partitioning | 3.3 | Supported (`UniformBytesPartitioner`) |
 | [KIP-800](https://cwiki.apache.org/confluence/display/KAFKA/KIP-800%3A+Add+reason+to+JoinGroupRequest+and+LeaveGroupRequest) — Reason in Join/Leave group | 3.1 | Supported |
 | [KIP-814](https://cwiki.apache.org/confluence/display/KAFKA/KIP-814%3A+Static+membership+protocol+should+let+the+leader+skip+assignment) — SkipAssignment for static group leaders | 3.1 | Supported |
 

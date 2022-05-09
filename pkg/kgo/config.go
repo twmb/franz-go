@@ -474,7 +474,7 @@ func defaultCfg() cfg {
 		produceTimeout:      10 * time.Second,
 		recordRetries:       math.MaxInt64, // effectively unbounded
 		maxUnknownFailures:  4,
-		partitioner:         StickyKeyPartitioner(nil), // default to how Kafka partitions
+		partitioner:         UniformBytesPartitioner(64<<10, true, true, nil),
 		txnBackoff:          20 * time.Millisecond,
 
 		//////////////
@@ -916,7 +916,7 @@ func MaxBufferedRecords(n int) ProducerOpt {
 }
 
 // RecordPartitioner uses the given partitioner to partition records, overriding
-// the default StickyKeyPartitioner.
+// the default UniformBytesPartitioner(64KiB, true, true, nil).
 func RecordPartitioner(partitioner Partitioner) ProducerOpt {
 	return producerOpt{func(cfg *cfg) { cfg.partitioner = partitioner }}
 }
