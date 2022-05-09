@@ -356,7 +356,7 @@ func resetSticky(s *kmsg.StickyMemberMetadata) {
 // we return empty defaults. The member will just be assumed to have no
 // history.
 func deserializeUserData(s *kmsg.StickyMemberMetadata, userdata []byte, base []topicPartition) (memberPlan []topicPartition, generation uint32) {
-	if err := s.ReadFrom(userdata); err != nil {
+	if err := s.UnsafeReadFrom(userdata); err != nil {
 		return nil, 0
 	}
 	memberPlan = base[:0]
