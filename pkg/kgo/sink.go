@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/crc32"
+	"math"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -122,7 +123,11 @@ func (s *sink) createReq(id int64, epoch int16) (*produceRequest, *kmsg.AddParti
 		recBuf.inflight++
 
 		recBuf.batchDrainIdx++
-		recBuf.seq += int32(len(batch.records))
+		if recBuf.seq > math.MaxInt32-int32(len(batch.records)) {
+			recBuf.seq = int32(len(batch.records)) - (math.MaxInt32 - recBuf.seq) - 1
+		} else {
+			recBuf.seq += int32(len(batch.records))
+		}
 		moreToDrain = moreToDrain || recBuf.tryStopLingerForDraining()
 		recBuf.mu.Unlock()
 
