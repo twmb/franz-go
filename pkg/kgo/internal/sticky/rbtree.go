@@ -201,7 +201,7 @@ repair:
 	g.color = red
 }
 
-func (t *treePlan) delete(n *treePlanNode) *treePlanNode {
+func (t *treePlan) delete(n *treePlanNode) {
 	t.size--
 
 	// We only want to delete nodes with at most one child. If this has
@@ -222,8 +222,6 @@ func (t *treePlan) delete(n *treePlanNode) *treePlanNode {
 
 	t.doDelete(n, c)
 	t.relinkParenting(n, c)
-
-	return n
 }
 
 // Since we do not represent leave nodes with objects, we relink the parent
@@ -372,11 +370,11 @@ func (t *treePlan) min() *treePlanNode {
 	return t.root.min()
 }
 
-func (on *treePlanNode) min() *treePlanNode {
-	for on.left != nil {
-		on = on.left
+func (n *treePlanNode) min() *treePlanNode {
+	for n.left != nil {
+		n = n.left
 	}
-	return on
+	return n
 }
 
 func (t *treePlan) max() *treePlanNode {
@@ -386,9 +384,9 @@ func (t *treePlan) max() *treePlanNode {
 	return t.root.max()
 }
 
-func (on *treePlanNode) max() *treePlanNode {
-	for on.right != nil {
-		on = on.right
+func (n *treePlanNode) max() *treePlanNode {
+	for n.right != nil {
+		n = n.right
 	}
-	return on
+	return n
 }
