@@ -9,8 +9,6 @@ import (
 	"math"
 	"sort"
 
-	"github.com/twmb/go-rbtree"
-
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
@@ -56,7 +54,7 @@ type balancer struct {
 	//
 	// The nodes in the tree reference values in plan, meaning updates in
 	// this field are visible in plan.
-	planByNumPartitions rbtree.Tree
+	planByNumPartitions treePlan
 
 	// if the subscriptions are complex (all members do _not_ consume the
 	// same partitions), then we build a graph and use that for assigning.
@@ -228,14 +226,14 @@ func (l *partitionLevel) removeMember(memberNum uint16) {
 }
 
 func (b *balancer) findLevel(level int) *partitionLevel {
-	return b.planByNumPartitions.FindWithOrInsertWith(
-		func(n *rbtree.Node) int { return level - n.Item.(*partitionLevel).level },
-		func() rbtree.Item { return newPartitionLevel(level) },
-	).Item.(*partitionLevel)
+	return b.planByNumPartitions.findWithOrInsertWith(
+		func(n *partitionLevel) int { return level - n.level },
+		func() *partitionLevel { return newPartitionLevel(level) },
+	).item
 }
 
 func (b *balancer) fixMemberLevel(
-	src *rbtree.Node,
+	src *treePlanNode,
 	memberNum uint16,
 	partNums memberPartitions,
 ) {
@@ -246,18 +244,17 @@ func (b *balancer) fixMemberLevel(
 }
 
 func (b *balancer) removeLevelingMember(
-	src *rbtree.Node,
+	src *treePlanNode,
 	memberNum uint16,
 ) {
-	level := src.Item.(*partitionLevel)
-	level.removeMember(memberNum)
-	if len(level.members) == 0 {
-		b.planByNumPartitions.Delete(src)
+	src.item.removeMember(memberNum)
+	if len(src.item.members) == 0 {
+		b.planByNumPartitions.delete(src)
 	}
 }
 
-func (l *partitionLevel) Less(r rbtree.Item) bool {
-	return l.level < r.(*partitionLevel).level
+func (l *partitionLevel) less(r *partitionLevel) bool {
+	return l.level < r.level
 }
 
 func newPartitionLevel(level int) *partitionLevel {
@@ -588,8 +585,8 @@ func (b *balancer) balance() {
 	// If all partitions are consumed equally, we have a very easy
 	// algorithm to balance: while the min and max levels are separated
 	// by over two, take from the top and give to the bottom.
-	min := b.planByNumPartitions.Min().Item.(*partitionLevel)
-	max := b.planByNumPartitions.Max().Item.(*partitionLevel)
+	min := b.planByNumPartitions.min().item
+	max := b.planByNumPartitions.max().item
 	for {
 		if max.level <= min.level+1 {
 			return
@@ -623,23 +620,23 @@ func (b *balancer) balance() {
 		max.members = max.members[endOfDowns:]
 
 		if len(min.members) == 0 {
-			b.planByNumPartitions.Delete(b.planByNumPartitions.Min())
-			min = b.planByNumPartitions.Min().Item.(*partitionLevel)
+			b.planByNumPartitions.delete(b.planByNumPartitions.min())
+			min = b.planByNumPartitions.min().item
 		}
 		if len(max.members) == 0 {
-			b.planByNumPartitions.Delete(b.planByNumPartitions.Max())
-			max = b.planByNumPartitions.Max().Item.(*partitionLevel)
+			b.planByNumPartitions.delete(b.planByNumPartitions.max())
+			max = b.planByNumPartitions.max().item
 		}
 	}
 }
 
 func (b *balancer) balanceComplex() {
 out:
-	for min := b.planByNumPartitions.Min(); b.planByNumPartitions.Len() > 1; min = b.planByNumPartitions.Min() {
-		level := min.Item.(*partitionLevel)
+	for min := b.planByNumPartitions.min(); b.planByNumPartitions.size > 1; min = b.planByNumPartitions.min() {
+		level := min.item
 		// If this max level is within one of this level, then nothing
 		// can steal down so we return early.
-		max := b.planByNumPartitions.Max().Item.(*partitionLevel)
+		max := b.planByNumPartitions.max().item
 		if max.level <= level.level+1 {
 			return
 		}
@@ -661,7 +658,7 @@ out:
 			// member is not static (will never grow).
 			level.removeMember(memberNum)
 			if len(level.members) == 0 {
-				b.planByNumPartitions.Delete(b.planByNumPartitions.Min())
+				b.planByNumPartitions.delete(b.planByNumPartitions.min())
 			}
 		}
 	}
@@ -678,15 +675,15 @@ func (b *balancer) reassignPartition(src, dst uint16, partNum int32) {
 	dstPartitions.add(partNum)
 
 	b.fixMemberLevel(
-		b.planByNumPartitions.FindWith(func(n *rbtree.Node) int {
-			return oldSrcLevel - n.Item.(*partitionLevel).level
+		b.planByNumPartitions.findWith(func(n *partitionLevel) int {
+			return oldSrcLevel - n.level
 		}),
 		src,
 		*srcPartitions,
 	)
 	b.fixMemberLevel(
-		b.planByNumPartitions.FindWith(func(n *rbtree.Node) int {
-			return oldDstLevel - n.Item.(*partitionLevel).level
+		b.planByNumPartitions.findWith(func(n *partitionLevel) int {
+			return oldDstLevel - n.level
 		}),
 		dst,
 		*dstPartitions,
