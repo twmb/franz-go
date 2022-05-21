@@ -270,7 +270,7 @@ func (p *leastBackupTopicPartitioner) PartitionByBackup(_ *Record, n int, backup
 // similar. Lastly, this client does not have a timeout for partition
 // availability. Realistically, these will be the most backed up partitions so
 // they should be chosen the least.
-func UniformBytesPartitioner(bytes int, adaptive, keys bool, hasher PartitionerHasher) Partitioner {
+func hiddenUniformBytesPartitioner(bytes int, adaptive, keys bool, hasher PartitionerHasher) Partitioner {
 	if hasher == nil {
 		hasher = KafkaHasher(murmur2)
 	}
