@@ -1,9 +1,8 @@
 package kgo
 
 import (
+	"reflect"
 	"testing"
-
-	"github.com/google/go-cmp/cmp"
 
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
@@ -95,7 +94,7 @@ func Test_stickyAdjustCooperative(t *testing.T) {
 
 	(&BalancePlan{inPlan}).AdjustCooperative(b)
 
-	if diff := cmp.Diff(inPlan, expPlan, cmp.AllowUnexported()); diff != "" {
-		t.Error(diff)
+	if !reflect.DeepEqual(inPlan, expPlan) {
+		t.Errorf("got plan != exp\ngot: %#v\nexp: %#v\n", inPlan, expPlan)
 	}
 }
