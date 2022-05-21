@@ -1,3 +1,34 @@
+v1.5.3
+===
+
+This bugfix release fixes a problem I noticed when reading Kafka source code
+last week. KIP-98 never specified what a sequence number wrapping meant when
+producing with idempotency enabled / with transactions, so I implemented this
+to wrap to negative. As it turns out, there is validation in the Kafka code
+that the sequence number must wrap to 0.
+
+Thus, using this client, if an application produced `2**31` records to a single
+partition with idempotent production or with transactions without restarting,
+this client would enter a fatal state.
+
+I'm not sure how common this use case is considering this bug has not been
+reported in 2 years, but this patch release is to ensure people do not
+encounter this bug after this point.
+
+I've tested this by producing >2.147bil records to a single-partition Kafka topic
+before this patch, which eventually results in `INVALID_RECORD` errors, and
+then producing >2.2 records to a single-partition Kafka topic after this
+patch. The patch allows the client to produce indefinitely.
+
+This release also includes a few commits that eliminate two external
+dependencies, and contains a patch in kadm to avoid a panic on nil input to a
+function.
+
+- [`4e2fa3f`](https://github.com/twmb/franz-go/commit/4e2fa3f) sticky: vendor go-rbtree, drop external dep
+- [`6c0756d`](https://github.com/twmb/franz-go/commit/6c0756d) drop go-cmp dep
+- [`27880b4`](https://github.com/twmb/franz-go/commit/27880b4) **bugfix** sink: sequence number wrapping for EOS
+- [`afc9017`](https://github.com/twmb/franz-go/commit/afc9017) kadm.CalculateGroupLag: avoid panic if input maps are nil
+
 v1.5.2
 ===
 
