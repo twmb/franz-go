@@ -1,6 +1,9 @@
 package sr
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // SchemaType as an enum representing schema types. The default schema type
 // is avro.
@@ -33,8 +36,8 @@ func (t SchemaType) MarshalText() ([]byte, error) {
 	return []byte(s), nil
 }
 
-func (t *SchemaType) UnmrshalText(text []byte) error {
-	switch s := string(text); s {
+func (t *SchemaType) UnmarshalText(text []byte) error {
+	switch s := strings.ToUpper(string(text)); s {
 	default:
 		return fmt.Errorf("unknown schema type %q", s)
 	case "", "AVRO":
@@ -89,8 +92,8 @@ func (l CompatibilityLevel) MarshalText() ([]byte, error) {
 	return []byte(s), nil
 }
 
-func (l *CompatibilityLevel) UnmrshalText(text []byte) error {
-	switch s := string(text); s {
+func (l *CompatibilityLevel) UnmarshalText(text []byte) error {
+	switch s := strings.ToUpper(string(text)); s {
 	default:
 		return fmt.Errorf("unknown compatibility level %q", s)
 	case "NONE":
@@ -141,8 +144,8 @@ func (m Mode) MarshalText() ([]byte, error) {
 	return []byte(s), nil
 }
 
-func (m *Mode) UnmrshalText(text []byte) error {
-	switch s := string(text); s {
+func (m *Mode) UnmarshalText(text []byte) error {
+	switch s := strings.ToUpper(string(text)); s {
 	default:
 		return fmt.Errorf("unknown schema type %q", s)
 	case "IMPORT":

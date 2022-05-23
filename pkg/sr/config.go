@@ -22,6 +22,12 @@ func HTTPClient(httpcl *http.Client) Opt {
 	return opt{func(cl *Client) { cl.httpcl = httpcl }}
 }
 
+// UserAgent sets the User-Agent to use in requests, overriding the default
+// "franz-go".
+func UserAgent(ua string) Opt {
+	return opt{func(cl *Client) { cl.ua = ua }}
+}
+
 // URLs sets the URLs that the client speaks to, overriding the default
 // http://localhost:8081. This option automatically prefixes any URL that is
 // missing an http:// or https:// prefix with http://.

@@ -47,6 +47,7 @@ func (e *ResponseError) Error() string { return e.Message }
 type Client struct {
 	urls   []string
 	httpcl *http.Client
+	ua     string
 
 	basicAuth *struct {
 		user string
@@ -63,6 +64,7 @@ func NewClient(opts ...Opt) (*Client, error) {
 	cl := &Client{
 		urls:   []string{"http://localhost:8081"},
 		httpcl: &http.Client{Timeout: 5 * time.Second},
+		ua:     "franz-go",
 	}
 
 	for _, opt := range opts {
@@ -113,6 +115,8 @@ start:
 		return fmt.Errorf("unable to create request for %s %q: %v", method, url, err)
 	}
 	req.Header.Set("Content-Type", "application/vnd.schemaregistry.v1+json")
+	req.Header.Set("Accept", "application/vnd.schemaregistry.v1+json")
+	req.Header.Set("User-Agent", cl.ua)
 	if cl.basicAuth != nil {
 		req.SetBasicAuth(cl.basicAuth.user, cl.basicAuth.pass)
 	}
