@@ -760,7 +760,7 @@ func (cl *Client) partitionsForTopicProduce(pr promisedRec) (*topicPartitions, *
 
 			p.topics.storeTopics([]string{topic})
 			cl.addUnknownTopicRecord(pr)
-			cl.triggerUpdateMetadataNow("forced load due to unknown produce topic")
+			cl.triggerUpdateMetadataNow("forced load because we are producing to a new topic for the first time")
 			return nil, nil
 		}
 	}

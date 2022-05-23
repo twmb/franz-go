@@ -736,6 +736,12 @@ start:
 				// is a broker-specific network error, and the next
 				// broker is different than the current, we also retry.
 				if r.cl.shouldRetry(tries, err) || r.cl.shouldRetry(tries, retryErr) {
+					r.cl.cfg.logger.Log(LogLevelDebug, "retrying request",
+						"tries", tries,
+						"backoff", backoff,
+						"request_error", err,
+						"response_error", err,
+					)
 					if r.cl.waitTries(ctx, backoff) {
 						next, nextErr = r.br()
 						goto start
