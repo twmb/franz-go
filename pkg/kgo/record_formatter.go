@@ -162,12 +162,13 @@ func (f *RecordFormatter) AppendPartitionRecord(b []byte, p *FetchPartition, r *
 //
 // Text
 //
-// Topics, keys, and values have "base64", "hex", and "unpack" formatting
-// options:
+// Topics, keys, and values have "base64", "base64raw", "hex", and "unpack"
+// formatting options:
 //
 //     %t{hex}
 //     %k{unpack{<bBhH>iIqQc.$}}
 //     %v{base64}
+//     %v{base64raw}
 //
 // Unpack formatting is inside of enclosing pounds, braces, or brackets, the
 // same way that timestamp formatting is understood. The syntax roughly follows
@@ -334,6 +335,9 @@ func NewRecordFormatter(layout string) (*RecordFormatter, error) {
 				case strings.HasPrefix(layout, "base64}"):
 					appendFn = appendBase64
 					layout = layout[len("base64}"):]
+				case strings.HasPrefix(layout, "base64raw}"):
+					appendFn = appendBase64raw
+					layout = layout[len("base64raw}"):]
 				case strings.HasPrefix(layout, "hex}"):
 					appendFn = appendHex
 					layout = layout[len("hex}"):]
@@ -486,6 +490,12 @@ func appendPlain(dst, src []byte) []byte {
 }
 
 func appendBase64(dst, src []byte) []byte {
+	fin := append(dst, make([]byte, base64.StdEncoding.EncodedLen(len(src)))...)
+	base64.StdEncoding.Encode(fin[len(dst):], src)
+	return fin
+}
+
+func appendBase64raw(dst, src []byte) []byte {
 	fin := append(dst, make([]byte, base64.RawStdEncoding.EncodedLen(len(src)))...)
 	base64.RawStdEncoding.Encode(fin[len(dst):], src)
 	return fin

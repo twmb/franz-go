@@ -89,6 +89,11 @@ func TestRecordFormatter(t *testing.T) {
 		},
 
 		{
+			layout: "%v{base64} %v{base64raw}",
+			expR:   "dmFsdWU= dmFsdWU",
+		},
+
+		{
 			layout: "%H %h{ %K{ascii} %k %v %V } %k %v",
 			expR:   "2  2 H1 V1 2  2 h2 v2 2  key value",
 		},
