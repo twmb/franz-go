@@ -14,6 +14,7 @@ require (
 	github.com/twmb/franz-go/pkg/kmsg v1.1.0 // indirect
 	go.uber.org/atomic v1.9.0 // indirect
 	go.uber.org/multierr v1.8.0 // indirect
+	gopkg.in/yaml.v3 v3.0.0 // indirect
 )
 
 replace github.com/twmb/franz-go => ../../..

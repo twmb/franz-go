@@ -8,4 +8,5 @@ require (
 	github.com/twmb/franz-go v1.5.3
 	golang.org/x/crypto v0.0.0-20220518034528-6f7dac969898 // indirect
 	golang.org/x/net v0.0.0-20220524220425-1d687d428aca // indirect
+	gopkg.in/yaml.v3 v3.0.0 // indirect
 )
