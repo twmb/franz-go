@@ -901,6 +901,7 @@ func (s *sink) handleRetryBatches(
 	why string,
 ) {
 	var needsMetaUpdate bool
+	var shouldBackoff bool
 	retry.eachOwnerLocked(func(batch seqRecBatch) {
 		if !batch.isOwnersFirstBatch() {
 			return
@@ -915,21 +916,43 @@ func (s *sink) handleRetryBatches(
 
 		batch.owner.resetBatchDrainIdx()
 
+		// If our first batch (seq == 0) fails with unknown topic, we
+		// retry immediately. Kafka can reply with valid metadata
+		// immediately after a topic was created, before the leaders
+		// actually know they are leader.
+		unknownAndFirstBatch := batch.owner.unknownFailures == 1 && batch.owner.seq == 0
+
+		if unknownAndFirstBatch {
+			shouldBackoff = true
+			return
+		}
 		if updateMeta {
 			batch.owner.failing = true
 			needsMetaUpdate = true
 		}
 	})
 
-	// If we are retrying without a metadata update, then we definitely
-	// want to backoff a little bit: our chosen broker died, let's not
-	// spin-loop re-requesting.
-	//
 	// If we do want to metadata update, we only do so if any batch was the
 	// first batch in its buf / not concurrently failed.
 	if needsMetaUpdate {
 		s.cl.triggerUpdateMetadata(true, why)
-	} else if !updateMeta {
+		return
+	}
+
+	// We could not need a metadata update for two reasons:
+	//
+	//   * our request died when being issued
+	//
+	//   * we would update metadata, but what failed was the first batch
+	//     produced and the error was unknown topic / partition.
+	//
+	// In either of these cases, we should backoff a little bit to avoid
+	// spin looping.
+	//
+	// If neither of these cases are true, then we entered wanting a
+	// metadata update, but the batches either were not the first batch, or
+	// the batches were concurrently failed.
+	if shouldBackoff || !updateMeta {
 		s.maybeTriggerBackoff(backoffSeq)
 		s.maybeDrain()
 	}
@@ -1021,6 +1044,9 @@ type recBuf struct {
 	//
 	// If idempotency is disabled, we just use "0" for the first sequence
 	// when encoding our payload.
+	//
+	// This is also used to check the first batch produced (disregarding
+	// seq resets) -- see handleRetryBatches.
 	seq int32
 	// batch0Seq is the seq of the batch at batchDrainIdx 0. If we reset
 	// the drain index, we reset seq with this number. If we successfully

@@ -295,7 +295,7 @@ func (c *consumer) init(cl *Client) {
 		return // not consuming
 	}
 
-	defer cl.triggerUpdateMetadata(true, "client initialization") // we definitely want to trigger a metadata update
+	defer cl.triggerUpdateMetadataNow("client initialization") // we definitely want to trigger a metadata update
 
 	if len(cl.cfg.group) == 0 {
 		c.initDirect()

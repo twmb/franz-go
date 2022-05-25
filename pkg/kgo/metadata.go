@@ -198,6 +198,10 @@ loop:
 				if cl.cfg.metadataMinAge < wait {
 					wait = cl.cfg.metadataMinAge
 				}
+				cl.cfg.logger.Log(LogLevelDebug, "immediate metadata update had inner errors, re-updating",
+					"errors", retryWhy.reason(""),
+					"update_after", wait,
+				)
 				timer := time.NewTimer(wait)
 			quickbackoff:
 				select {
@@ -218,6 +222,8 @@ loop:
 			}
 		}
 		if err == nil {
+			cl.metawait.signal()
+			cl.consumer.doOnMetadataUpdate()
 			lastAt = time.Now()
 			consecutiveErrors = 0
 			continue
@@ -245,9 +251,6 @@ loop:
 // topicPartitionsData pointers, but we update those underlying pointers
 // equally.
 func (cl *Client) updateMetadata() (retryWhy multiUpdateWhy, err error) {
-	defer cl.metawait.signal()
-	defer cl.consumer.doOnMetadataUpdate()
-
 	var (
 		tpsProducerLoad = cl.producer.topics.load()
 		tpsConsumer     *topicsPartitions
@@ -792,6 +795,9 @@ func (m multiUpdateWhy) reason(reason string) string {
 		} else {
 			errorStrings = append(errorStrings, fmt.Sprintf("%s{%s}", ks.s, strings.Join(topicStrings, " ")))
 		}
+	}
+	if reason == "" {
+		return strings.Join(errorStrings, " ")
 	}
 	return reason + ": " + strings.Join(errorStrings, " ")
 }
