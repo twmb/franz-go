@@ -48,18 +48,11 @@ func DecodeFn(fn func([]byte, interface{}) error) SerdeOpt {
 	return serdeOpt{func(t *tserde) { t.decode = fn }}
 }
 
-// NewValueFn allows Serde to generate a new value to decode into, allowing the use
-// of the Decode and MustDecode functions.
-func NewValueFn(fn func() interface{}) SerdeOpt {
-	return serdeOpt{func(t *tserde) { t.mk = fn }}
-}
-
 type tserde struct {
 	id           uint32
 	encode       func(interface{}) ([]byte, error)
 	appendEncode func([]byte, interface{}) ([]byte, error)
 	decode       func([]byte, interface{}) error
-	mk           func() interface{}
 }
 
 // Serde encodes and decodes values according to the schema registry wire
@@ -164,7 +157,8 @@ func (s *Serde) AppendEncode(b []byte, v interface{}) ([]byte, error) {
 	return append(b, encoded...), nil
 }
 
-// MustEncode returns the value of Encode, panicking on error.
+// MustEncode returns the value of Encode, panicking on error. This is a
+// shortcut for if your encode function cannot error.
 func (s *Serde) MustEncode(v interface{}) []byte {
 	b, err := s.Encode(v)
 	if err != nil {
@@ -174,6 +168,7 @@ func (s *Serde) MustEncode(v interface{}) []byte {
 }
 
 // MustAppendEncode returns the value of AppendEncode, panicking on error.
+// This is a shortcut for if your encode function cannot error.
 func (s *Serde) MustAppendEncode(b []byte, v interface{}) []byte {
 	b, err := s.AppendEncode(b, v)
 	if err != nil {
@@ -182,33 +177,13 @@ func (s *Serde) MustAppendEncode(b []byte, v interface{}) []byte {
 	return b
 }
 
-// Decode decodes b into a value returned by NewValueFn. If DecodeFn or
-// NewValueFn options were not used, this returns ErrNotRegistered.
-//
-// Serde does not handle references in schemas; it is up to you to register the
-// full decode function for any top-level ID, regardless of how many other
-// schemas are referenced in top-level ID.
-func (s *Serde) Decode(b []byte) (interface{}, error) {
-	if len(b) < 5 || b[0] != 0 {
-		return nil, ErrBadHeader
-	}
-	id := binary.BigEndian.Uint32(b[1:5])
-
-	t, ok := s.loadIDs()[int(id)]
-	if !ok || t.decode == nil || t.mk == nil {
-		return b, ErrNotRegistered
-	}
-	v := t.mk()
-	return v, t.decode(b[5:], v)
-}
-
-// DecodeInto decodes b into v. If DecodeFn option was not used, this returns
+// Decode decodes b into v. If DecodeFn option was not used, this returns
 // ErrNotRegistered.
 //
 // Serde does not handle references in schemas; it is up to you to register the
 // full decode function for any top-level ID, regardless of how many other
 // schemas are referenced in top-level ID.
-func (s *Serde) DecodeInto(b []byte, v interface{}) error {
+func (s *Serde) Decode(b []byte, v interface{}) error {
 	if len(b) < 5 || b[0] != 0 {
 		return ErrBadHeader
 	}
