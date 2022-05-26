@@ -28,7 +28,7 @@ corresponding to which seed it is.
 To use,
 
 ```go
-m := kprom.NewMetrics("namespace")
+metrics := kprom.NewMetrics("namespace")
 cl, err := kgo.NewClient(
 	kgo.WithHooks(metrics),
 	// ...other opts
