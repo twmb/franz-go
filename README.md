@@ -31,6 +31,7 @@ This library attempts to provide an intuitive API while interacting with Kafka t
 - Written in pure Go (no wrapper lib for a C library or other bindings)
 - Ability to add detailed log messages or metrics using hooks
 - Plug-in metrics support for prometheus, zap, etc.
+- A Schema Registry Client and convenience Serde type for encoding and decoding
 
 ## Works with any Kafka compatible brokers:
 
@@ -146,21 +147,14 @@ or comment on [#142](https://github.com/twmb/franz-go/issues/142)!
 
 ## Version Pinning
 
-By default, the client issues an ApiVersions request on connect to brokers
-and defaults to using the maximum supported version for requests that each
-broker supports.
+By default, the client issues an ApiVersions request on connect to brokers and
+defaults to using the maximum supported version for requests that each broker
+supports. If you want to pin to an exact version, you can use the `MaxVersions`
+option.
 
-Kafka 0.10.0 introduced the ApiVersions request; if you are working
-with brokers older than that, you must use the kversions package. Use the
+Kafka 0.10.0 introduced the ApiVersions request; if you are working with
+brokers older than that, you must use the kversions package. Use the
 MaxVersions option for the client if you do so.
-
-As well, it is recommended to set the MaxVersions to the version of your
-broker cluster. Until [KIP-584][5] is implemented, it is possible that
-if you do not pin a max version, this client will speak with some features
-to one broker while not to another when you are in the middle of a broker
-update roll.
-
-[5]: https://cwiki.apache.org/confluence/display/KAFKA/KIP-584%3A+Versioning+scheme+for+features
 
 ## Metrics & logging
 
