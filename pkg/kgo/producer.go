@@ -324,7 +324,8 @@ func (cl *Client) TryProduce(
 // produced in order per partition if the record is produced successfully.
 // Successfully produced records will have their attributes, offset, and
 // partition set before the promise is called. All promises are called serially
-// (and should be relatively fast).
+// (and should be relatively fast). If a record's timestamp is unset, this
+// sets the timestamp to time.Now.
 //
 // If the topic field is empty, the client will use the DefaultProduceTopic; if
 // that is also empty, the record is failed immediately. If the record is too

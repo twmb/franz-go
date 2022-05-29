@@ -92,7 +92,8 @@ func TestRecBatchAppendTo(t *testing.T) {
 	ourBatch := seqRecBatch{
 		seq: 10,
 		recBatch: &recBatch{
-			firstTimestamp: 20,
+			firstTimestamp:    20,
+			maxTimestampDelta: 4,
 			records: []promisedRec{
 				{
 					Record: &Record{
@@ -268,7 +269,8 @@ func TestMessageSetAppendTo(t *testing.T) {
 	// input
 	ourBatch := seqRecBatch{
 		recBatch: &recBatch{
-			firstTimestamp: 12,
+			firstTimestamp:    12,
+			maxTimestampDelta: 1,
 			records: []promisedRec{
 				{
 					Record: &Record{
@@ -363,7 +365,8 @@ func BenchmarkAppendBatch(b *testing.B) {
 	ourBatch := seqRecBatch{
 		seq: 10,
 		recBatch: &recBatch{
-			firstTimestamp: 20,
+			firstTimestamp:    20,
+			maxTimestampDelta: 4,
 			records: []promisedRec{
 				{
 					Record: &Record{

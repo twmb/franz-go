@@ -1107,10 +1107,12 @@ func (recBuf *recBuf) bufferRecord(pr promisedRec, abortOnNewBatch bool) bool {
 	recBuf.mu.Lock()
 	defer recBuf.mu.Unlock()
 
-	// Timestamp after locking to ensure sequential, and truncate to
-	// milliseconds to avoid some accumulated rounding error problems
-	// (see Shopify/sarama#1455)
-	pr.Timestamp = time.Now().Truncate(time.Millisecond)
+	// We truncate to milliseconds to avoid some accumulated rounding error
+	// problems (see Shopify/sarama#1455)
+	if pr.Timestamp.IsZero() {
+		pr.Timestamp = time.Now()
+	}
+	pr.Timestamp = pr.Timestamp.Truncate(time.Millisecond)
 
 	if recBuf.purged {
 		recBuf.cl.producer.promiseRecord(pr, errPurged)
@@ -1326,8 +1328,9 @@ type recBatch struct {
 	wireLength   int32 // tracks total size this batch would currently encode as, including length prefix
 	v1wireLength int32 // same as wireLength, but for message set v1
 
-	attrs          int16 // updated during apending; read and converted to RecordAttrs on success
-	firstTimestamp int64 // since unix epoch, in millis
+	attrs             int16 // updated during apending; read and converted to RecordAttrs on success
+	firstTimestamp    int64 // since unix epoch, in millis
+	maxTimestampDelta int32
 
 	mu      sync.Mutex    // guards appendTo's reading of records against failAllRecords emptying it
 	records []promisedRec // record w/ length, ts calculated
@@ -1371,6 +1374,8 @@ func (b *recBatch) appendRecord(pr promisedRec, nums recordNumbers) {
 	b.v1wireLength += messageSet1Length(pr.Record)
 	if len(b.records) == 0 {
 		b.firstTimestamp = pr.Timestamp.UnixNano() / 1e6
+	} else if nums.tsDelta > b.maxTimestampDelta {
+		b.maxTimestampDelta = nums.tsDelta
 	}
 	b.records = append(b.records, pr)
 }
@@ -1903,6 +1908,7 @@ func (p *produceRequest) AppendTo(dst []byte) []byte {
 	if flexible {
 		dst = append(dst, 0)
 	}
+
 	return dst
 }
 
@@ -1924,6 +1930,7 @@ func (b seqRecBatch) appendTo(
 	transactional bool,
 	compressor *compressor,
 ) (dst []byte, m ProduceBatchMetrics) { // named return so that our defer for flexible versions can modify it
+
 	flexible := version >= 9
 	dst = in
 	nullableBytesLen := b.wireLength - 4 // NULLABLE_BYTES leading length, minus itself
@@ -1985,11 +1992,7 @@ func (b seqRecBatch) appendTo(
 	dst = kbin.AppendInt16(dst, b.attrs)
 	dst = kbin.AppendInt32(dst, int32(len(b.records)-1)) // lastOffsetDelta
 	dst = kbin.AppendInt64(dst, b.firstTimestamp)
-
-	// maxTimestamp is the timestamp of the last record in a batch.
-	lastRecord := b.records[len(b.records)-1]
-	_, tsDelta := lastRecord.lengthAndTimestampDelta()
-	dst = kbin.AppendInt64(dst, b.firstTimestamp+int64(tsDelta))
+	dst = kbin.AppendInt64(dst, b.firstTimestamp+int64(b.maxTimestampDelta))
 
 	seq := b.seq
 	if producerID < 0 { // a negative producer ID means we are not using idempotence
