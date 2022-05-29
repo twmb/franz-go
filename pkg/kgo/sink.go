@@ -1930,7 +1930,6 @@ func (b seqRecBatch) appendTo(
 	transactional bool,
 	compressor *compressor,
 ) (dst []byte, m ProduceBatchMetrics) { // named return so that our defer for flexible versions can modify it
-
 	flexible := version >= 9
 	dst = in
 	nullableBytesLen := b.wireLength - 4 // NULLABLE_BYTES leading length, minus itself
