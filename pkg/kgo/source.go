@@ -1426,11 +1426,10 @@ func recordToRecord(
 		})
 	}
 
-	return &Record{
+	r := &Record{
 		Key:           record.Key,
 		Value:         record.Value,
 		Headers:       h,
-		Timestamp:     timeFromMillis(batch.FirstTimestamp + int64(record.TimestampDelta)),
 		Topic:         topic,
 		Partition:     partition,
 		Attrs:         RecordAttrs{uint8(batch.Attributes)},
@@ -1439,6 +1438,12 @@ func recordToRecord(
 		LeaderEpoch:   batch.PartitionLeaderEpoch,
 		Offset:        batch.FirstOffset + int64(record.OffsetDelta),
 	}
+	if r.Attrs.TimestampType() == 0 {
+		r.Timestamp = timeFromMillis(batch.FirstTimestamp + int64(record.TimestampDelta))
+	} else {
+		r.Timestamp = timeFromMillis(batch.MaxTimestamp)
+	}
+	return r
 }
 
 func messageAttrsToRecordAttrs(attrs int8, v0 bool) RecordAttrs {
