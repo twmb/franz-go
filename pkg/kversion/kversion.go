@@ -846,7 +846,8 @@ var max280 = nextMax(max270, func(v listenerKeys) listenerKeys {
 	// KAFKA-12249 3f36f9a7ca153a9d221f6bedeb7d1503aa18eff1 KIP-500 / KIP-631
 	// Renamed from Decommission to Unregister in 06dce721ec0185d49fac37775dbf191d0e80e687
 	v = append(v,
-		k(rController), // 64 unregister broker
+		// kraft broker added in 7143267f71ca0c14957d8560fbc42a5f8aac564d
+		k(rBroker, rController), // 64 unregister broker
 	)
 	return v
 })
