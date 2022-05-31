@@ -9,7 +9,8 @@ import (
 )
 
 // AlterReplicaLogDirsReq is the input for a request to alter replica log
-// directories.
+// directories. The key is the directory that all topics and partitions in
+// the topic set will move to.
 type AlterReplicaLogDirsReq map[string]TopicsSet
 
 // Add merges the input topic set into the given directory.
