@@ -161,12 +161,11 @@ func (cl *Client) ListBrokers(ctx context.Context) (BrokerDetails, error) {
 	return m.Brokers, nil
 }
 
-// MetadataWithoutTopics issues a metadata request and returns it, and does not
-// ask for any topics. This request is the counterpart to requesting all topics
-// by default with the Metadata method.
+// BrokerMetadata issues a metadata request and returns it, and does not ask
+// for any topics.
 //
 // This returns an error if the request fails to be issued, or an *AuthErr.
-func (cl *Client) MetadataWithoutTopics(ctx context.Context) (Metadata, error) {
+func (cl *Client) BrokerMetadata(ctx context.Context) (Metadata, error) {
 	return cl.metadata(ctx, true, nil)
 }
 
@@ -307,9 +306,6 @@ func (l ListedOffsets) Error() error {
 	return nil
 }
 
-// Deprecated: Use Offsets; this will be removed in v1.0.
-func (l ListedOffsets) Into() Offsets { return l.Offsets() }
-
 // Offsets returns these listed offsets as offsets.
 func (l ListedOffsets) Offsets() Offsets {
 	o := make(Offsets)
@@ -322,6 +318,11 @@ func (l ListedOffsets) Offsets() Offsets {
 		})
 	})
 	return o
+}
+
+// KOffsets returns these listed offsets as a kgo offset map.
+func (l ListedOffsets) KOffsets() map[string]map[int32]kgo.Offset {
+	return l.Offsets().KOffsets()
 }
 
 // ListStartOffsets returns the start (oldest) offsets for each partition in

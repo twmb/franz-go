@@ -165,9 +165,6 @@ func (ps Partitions) TopicsList() TopicsList {
 // OffsetsList wraps many offsets and is a helper for building Offsets.
 type OffsetsList []Offset
 
-// Deprecated: Use Offsets; this will be removed in v1.0.
-func (l OffsetsList) Into() Offsets { return l.Offsets() }
-
 // Offsets returns this list as the non-list Offsets. All fields in each
 // Offset must be set properly.
 func (l OffsetsList) Offsets() Offsets {
@@ -176,6 +173,11 @@ func (l OffsetsList) Offsets() Offsets {
 		os.Add(o)
 	}
 	return os
+}
+
+// KOffsets returns this list as a kgo offset map.
+func (l OffsetsList) KOffsets() map[string]map[int32]kgo.Offset {
+	return l.Offsets().KOffsets()
 }
 
 // Offsets wraps many offsets and is the type used for offset functions.
@@ -284,11 +286,8 @@ func (os Offsets) Each(fn func(Offset)) {
 	}
 }
 
-// Deprecated: Use AsKgo; this will be removed in v1.0.
-func (os Offsets) Into() map[string]map[int32]kgo.Offset { return os.AsKgo() }
-
-// AsKgo returns these offsets as a kgo offset map.
-func (os Offsets) AsKgo() map[string]map[int32]kgo.Offset {
+// KOffsets returns these offsets as a kgo offset map.
+func (os Offsets) KOffsets() map[string]map[int32]kgo.Offset {
 	tskgo := make(map[string]map[int32]kgo.Offset)
 	for t, ps := range os {
 		pskgo := make(map[int32]kgo.Offset)

@@ -71,6 +71,11 @@ type ACLBuilder struct {
 	pattern ACLPattern
 }
 
+// PrefixUser prefixes all allowed and denied principals with "User:".
+func (b *ACLBuilder) PrefixUser() {
+	b.PrefixUserExcept()
+}
+
 // PrefixUserExcept prefixes all allowed and denied principals with "User:",
 // unless they have any of the given except prefixes.
 func (b *ACLBuilder) PrefixUserExcept(except ...string) {

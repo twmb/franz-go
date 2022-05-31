@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/twmb/franz-go/pkg/kerr"
+	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
@@ -454,9 +455,6 @@ func (os OffsetResponses) Keep(o Offsets) {
 	})
 }
 
-// Deprecated: Use Offsets; this will be removed in v1.0.
-func (os OffsetResponses) Into() Offsets { return os.Offsets() }
-
 // Offsets returns these offset responses as offsets.
 func (os OffsetResponses) Offsets() Offsets {
 	i := make(Offsets)
@@ -464,6 +462,11 @@ func (os OffsetResponses) Offsets() Offsets {
 		i.Add(o.Offset)
 	})
 	return i
+}
+
+// KOffsets returns these offset responses as a kgo offset map.
+func (os OffsetResponses) KOffsets() map[string]map[int32]kgo.Offset {
+	return os.Offsets().KOffsets()
 }
 
 // DeleteFunc keeps only the offsets for which fn returns true.
