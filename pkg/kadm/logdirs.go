@@ -198,6 +198,7 @@ func describeLogDirsReq(s TopicsSet) *kmsg.DescribeLogDirsRequest {
 		for p := range ps {
 			rt.Partitions = append(rt.Partitions, p)
 		}
+		req.Topics = append(req.Topics, rt)
 	}
 	return req
 }
