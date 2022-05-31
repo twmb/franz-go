@@ -26420,9 +26420,9 @@ func NewDescribeLogDirsResponseDirTopic() DescribeLogDirsResponseDirTopic {
 }
 
 type DescribeLogDirsResponseDir struct {
-	// ErrorCode is the error code returned for descrbing log dirs.
+	// ErrorCode is the error code returned for describing log dirs.
 	//
-	// KAFKA_STORAGE_ERROR is returned if the log directoy is offline.
+	// KAFKA_STORAGE_ERROR is returned if the log directory is offline.
 	ErrorCode int16
 
 	// Dir is the absolute path of a log directory.

@@ -17,9 +17,9 @@ DescribeLogDirsResponse =>
   // Dirs pairs log directories with the topics and partitions that are
   // stored in those directores.
   Dirs: [=>]
-    // ErrorCode is the error code returned for descrbing log dirs.
+    // ErrorCode is the error code returned for describing log dirs.
     //
-    // KAFKA_STORAGE_ERROR is returned if the log directoy is offline.
+    // KAFKA_STORAGE_ERROR is returned if the log directory is offline.
     ErrorCode: int16
     // Dir is the absolute path of a log directory.
     Dir: string
