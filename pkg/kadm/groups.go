@@ -973,6 +973,53 @@ func (l GroupLag) IsEmpty() bool {
 	return false
 }
 
+// Total returns the total lag across all topics.
+func (l GroupLag) Total() int64 {
+	var tot int64
+	for _, tl := range l.TotalByTopic() {
+		tot += tl.Lag
+	}
+	return tot
+}
+
+// TotalByTopic returns the total lag for each topic.
+func (l GroupLag) TotalByTopic() GroupTopicsLag {
+	m := make(map[string]TopicLag)
+	for t, ps := range l {
+		mt := TopicLag{
+			Topic: t,
+		}
+		for _, l := range ps {
+			if l.Lag > 0 {
+				mt.Lag += l.Lag
+			}
+		}
+		m[t] = mt
+	}
+	return m
+}
+
+// GroupTopicsLag is the total lag per topic within a group.
+type GroupTopicsLag map[string]TopicLag
+
+// TopicLag is the lag for an individual topic within a group.
+type TopicLag struct {
+	Topic string
+	Lag   int64
+}
+
+// Sorted returns the per-topic lag, sorted by topic.
+func (l GroupTopicsLag) Sorted() []TopicLag {
+	var all []TopicLag
+	for _, tl := range l {
+		all = append(all, tl)
+	}
+	sort.Slice(all, func(i, j int) bool {
+		return all[i].Topic < all[j].Topic
+	})
+	return all
+}
+
 // CalculateGroupLag returns the per-partition lag of all members in a group.
 // The input to this method is the returns from the three following methods,
 //
