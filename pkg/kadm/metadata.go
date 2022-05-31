@@ -138,6 +138,38 @@ func (ds TopicDetails) FilterInternal() {
 	}
 }
 
+// EachPartition calls fn for every partition in all topics.
+func (ds TopicDetails) EachPartition(fn func(PartitionDetail)) {
+	for _, td := range ds {
+		for _, d := range td.Partitions {
+			fn(d)
+		}
+	}
+}
+
+// EachError calls fn for each topic that could not be loaded.
+func (ds TopicDetails) EachError(fn func(TopicDetail)) {
+	for _, td := range ds {
+		if td.Err != nil {
+			fn(td)
+		}
+	}
+}
+
+// TopicsSet returns the topics and partitions as a set.
+func (ds TopicDetails) TopicsSet() TopicsSet {
+	var s TopicsSet
+	ds.EachPartition(func(d PartitionDetail) {
+		s.Add(d.Topic, d.Partition)
+	})
+	return s
+}
+
+// TopicsList returns the topics and partitions as a list.
+func (ds TopicDetails) TopicsList() TopicsList {
+	return ds.TopicsSet().Sorted()
+}
+
 // Metadata is the data from a metadata response.
 type Metadata struct {
 	Cluster    string        // Cluster is the cluster name, if any.
