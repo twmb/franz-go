@@ -553,9 +553,6 @@ func newDescribeLogDirsResp(node int32, resp *kmsg.DescribeLogDirsResponse) Desc
 //
 // This may return *ShardErrors.
 func (cl *Client) DescribeAllLogDirs(ctx context.Context, s TopicsSet) (DescribedAllLogDirs, error) {
-	if len(s) == 0 {
-		return make(DescribedAllLogDirs), nil
-	}
 	req := describeLogDirsReq(s)
 	shards := cl.cl.RequestSharded(ctx, req)
 	resps := make(DescribedAllLogDirs)
@@ -576,9 +573,6 @@ func (cl *Client) DescribeAllLogDirs(ctx context.Context, s TopicsSet) (Describe
 // partitions on the given broker. If the input set is nil, this describes all
 // log directories.
 func (cl *Client) DescribeBrokerLogDirs(ctx context.Context, broker int32, s TopicsSet) (DescribedLogDirs, error) {
-	if len(s) == 0 {
-		return make(DescribedLogDirs), nil
-	}
 	req := describeLogDirsReq(s)
 	b := cl.cl.Broker(int(broker))
 	kresp, err := b.RetriableRequest(ctx, req)
