@@ -412,6 +412,15 @@ func (s TopicsSet) Topics() []string {
 	return ts
 }
 
+// Merge merges another topic set into this one.
+func (s TopicsSet) Merge(other TopicsSet) {
+	for t, ps := range other {
+		for p := range ps {
+			s.Add(t, p)
+		}
+	}
+}
+
 // TopicPartitions is a topic and partitions.
 type TopicPartitions struct {
 	Topic      string
