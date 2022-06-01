@@ -37,7 +37,9 @@ This is an improvement on the previous `StickyKeyPartitioner` in a few ways and
 can be read about in [KIP-794][KIP-794]. The implementation in this client is
 slightly different from KIP-794 in ways that are documented on the
 `UniformBytesPartitioner` itself. This new partitioner can result in more
-balanced load over a long period of producing to your brokers.
+balanced load over a long period of producing to your brokers. Note: the new
+default partitioner partitions keys the _same_ as the old default partitioner,
+so this is not a behavior change.
 
 ## Features
 

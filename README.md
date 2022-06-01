@@ -31,7 +31,11 @@ This library attempts to provide an intuitive API while interacting with Kafka t
 - Written in pure Go (no wrapper lib for a C library or other bindings)
 - Ability to add detailed log messages or metrics using hooks
 - Plug-in metrics support for prometheus, zap, etc.
-- A Schema Registry Client and convenience Serde type for encoding and decoding
+- An [admin client][KADMC] with many helper functions for easy admin tasks
+- A [schema registry client][SRC] and convenience Serde type for encoding and decoding
+
+[KADMC]: https://pkg.go.dev/github.com/twmb/franz-go/pkg/kadm
+[SRC]: https://pkg.go.dev/github.com/twmb/franz-go/pkg/sr
 
 ## Works with any Kafka compatible brokers:
 
@@ -161,7 +165,7 @@ MaxVersions option for the client if you do so.
 **Note** there exists plug-in packages that allow you to easily add prometheus
 metrics, go-metrics, zap logging, etc. to your client! See the [plugin](./plugin)
 directory for more information! These plugins are provided under dedicated
-modules, e.g. `github.com/twmb/franz-go/plugin/kprom@v0.1.0`.
+modules, e.g. `github.com/twmb/franz-go/plugin/kprom@v1.0.0`.
 
 The franz-go client takes a neutral approach to metrics by providing hooks
 that you can use to plug in your own metrics.
