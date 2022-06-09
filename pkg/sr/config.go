@@ -34,9 +34,11 @@ func UserAgent(ua string) Opt {
 func URLs(urls ...string) Opt {
 	return opt{func(cl *Client) {
 		for i, u := range urls {
-			if !strings.HasPrefix(u, "http://") {
-				urls[i] = "http://" + u
+			if strings.HasPrefix(u, "http://") || strings.HasPrefix(u, "https://") {
+				continue
 			}
+
+			urls[i] = "http://" + u
 		}
 		cl.urls = urls
 	}}
