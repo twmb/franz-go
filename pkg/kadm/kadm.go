@@ -452,6 +452,7 @@ func (s TopicsSet) Sorted() TopicsList {
 			tps.Partitions = append(tps.Partitions, p)
 		}
 		tps.Partitions = int32s(tps.Partitions)
+		l = append(l, tps)
 	}
 	sort.Slice(l, func(i, j int) bool { return l[i].Topic < l[j].Topic })
 	return l
