@@ -68,10 +68,27 @@ func (o opt) apply(l *Logger) { o.fn(l) }
 // debug strings. Thus, the client often pre-checks "should I do this?", and
 // then either performs an expensive operation or skips it.
 //
-// Thus, this option provides the initial filter before Log is called, after
-// which the zap logger level takes effect.
+// This option provides the initial filter before Log is called, after which
+// the zap logger level takes effect. If you have access to zap.AtomicLevel,
+// the AtomicLevel option is much easier to use.
 func LevelFn(fn func() kgo.LogLevel) Opt {
 	return opt{func(l *Logger) { l.levelFn = fn }}
+}
+
+// AtomicLevel returns an option that uses the current atomic level for
+// LevelFn.
+func AtomicLevel(level zap.AtomicLevel) Opt {
+	return LevelFn(func() kgo.LogLevel {
+		switch level.Level() {
+		case zap.DebugLevel:
+			return kgo.LogLevelDebug
+		case zap.InfoLevel:
+			return kgo.LogLevelInfo
+		case zap.WarnLevel:
+			return kgo.LogLevelWarn
+		}
+		return kgo.LogLevelError
+	})
 }
 
 // Level sets a static level for the kgo.Logger Level function.
