@@ -45,7 +45,7 @@ func main() {
 		die("unable to fetch group offsets: %v", err)
 	}
 
-	cl, err := kgo.NewClient(seeds, kgo.ConsumePartitions(os.Into().Into()))
+	cl, err := kgo.NewClient(seeds, kgo.ConsumePartitions(os.KOffsets()))
 	if err != nil {
 		die("unable to create client: %v", err)
 	}
