@@ -198,9 +198,17 @@ func (s Struct) WriteAppend(l *LineWriter) {
 				if !has {
 					def = d.GetTypeDefault()
 				}
-				switch f.Type.(type) {
+				switch t := f.Type.(type) {
 				case Struct:
 					l.Write("if !reflect.DeepEqual(v.%s, %v) {", f.FieldName, def)
+
+				case Array:
+					if t.IsNullableArray {
+						l.Write("if version < %[1]d && len(v.%[2]s) > 0 || version >= %[1]d && v.%[2]s != nil {", t.NullableVersion, f.FieldName)
+					} else {
+						l.Write("if len(v.%s) > 0 {", f.FieldName)
+					}
+
 				default:
 					l.Write("if v.%s != %v {", f.FieldName, def)
 				}

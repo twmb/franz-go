@@ -16283,13 +16283,13 @@ func (v *ApiVersionsResponse) AppendTo(dst []byte) []byte {
 	}
 	if isFlexible {
 		var toEncode []uint32
-		if v.SupportedFeatures != nil {
+		if len(v.SupportedFeatures) > 0 {
 			toEncode = append(toEncode, 0)
 		}
 		if v.FinalizedFeaturesEpoch != -1 {
 			toEncode = append(toEncode, 1)
 		}
-		if v.FinalizedFeatures != nil {
+		if len(v.FinalizedFeatures) > 0 {
 			toEncode = append(toEncode, 2)
 		}
 		dst = kbin.AppendUvarint(dst, uint32(len(toEncode)+v.UnknownTags.Len()))
