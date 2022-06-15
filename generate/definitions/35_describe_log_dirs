@@ -1,6 +1,6 @@
 // DescribeLogDirsRequest requests directory information for topic partitions.
 // This request was added in support of KIP-113.
-DescribeLogDirsRequest => key 35, max version 3, flexible v2+
+DescribeLogDirsRequest => key 35, max version 4, flexible v2+
   // Topics is an array of topics to describe the log dirs of. If this is
   // null, the response includes all topics and all of their partitions.
   Topics: nullable[=>]
@@ -49,3 +49,9 @@ DescribeLogDirsResponse =>
         // AlterReplicaLogDirsRequest and will replace the current log of the
         // replica in the future.
         IsFuture: bool
+    // TotalBytes is the total size in bytes of the volume the log directory is
+    // in.
+    TotalBytes: int64(-1) // v4+
+    // UsableBytes is the usable size in bytes of the volume the log directory
+    // is in.
+    UsableBytes: int64(-1) // v4+

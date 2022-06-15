@@ -26176,7 +26176,7 @@ type DescribeLogDirsRequest struct {
 }
 
 func (*DescribeLogDirsRequest) Key() int16                 { return 35 }
-func (*DescribeLogDirsRequest) MaxVersion() int16          { return 3 }
+func (*DescribeLogDirsRequest) MaxVersion() int16          { return 4 }
 func (v *DescribeLogDirsRequest) SetVersion(version int16) { v.Version = version }
 func (v *DescribeLogDirsRequest) GetVersion() int16        { return v.Version }
 func (v *DescribeLogDirsRequest) IsFlexible() bool         { return v.Version >= 2 }
@@ -26431,6 +26431,18 @@ type DescribeLogDirsResponseDir struct {
 	// Topics is an array of topics within a log directory.
 	Topics []DescribeLogDirsResponseDirTopic
 
+	// TotalBytes is the total size in bytes of the volume the log directory is
+	// in.
+	//
+	// This field has a default of -1.
+	TotalBytes int64 // v4+
+
+	// UsableBytes is the usable size in bytes of the volume the log directory
+	// is in.
+	//
+	// This field has a default of -1.
+	UsableBytes int64 // v4+
+
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v2+
 }
@@ -26438,6 +26450,8 @@ type DescribeLogDirsResponseDir struct {
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to DescribeLogDirsResponseDir.
 func (v *DescribeLogDirsResponseDir) Default() {
+	v.TotalBytes = -1
+	v.UsableBytes = -1
 }
 
 // NewDescribeLogDirsResponseDir returns a default DescribeLogDirsResponseDir
@@ -26473,7 +26487,7 @@ type DescribeLogDirsResponse struct {
 }
 
 func (*DescribeLogDirsResponse) Key() int16                 { return 35 }
-func (*DescribeLogDirsResponse) MaxVersion() int16          { return 3 }
+func (*DescribeLogDirsResponse) MaxVersion() int16          { return 4 }
 func (v *DescribeLogDirsResponse) SetVersion(version int16) { v.Version = version }
 func (v *DescribeLogDirsResponse) GetVersion() int16        { return v.Version }
 func (v *DescribeLogDirsResponse) IsFlexible() bool         { return v.Version >= 2 }
@@ -26569,6 +26583,14 @@ func (v *DescribeLogDirsResponse) AppendTo(dst []byte) []byte {
 						dst = v.UnknownTags.AppendEach(dst)
 					}
 				}
+			}
+			if version >= 4 {
+				v := v.TotalBytes
+				dst = kbin.AppendInt64(dst, v)
+			}
+			if version >= 4 {
+				v := v.UsableBytes
+				dst = kbin.AppendInt64(dst, v)
 			}
 			if isFlexible {
 				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
@@ -26734,6 +26756,14 @@ func (v *DescribeLogDirsResponse) readFrom(src []byte, unsafe bool) error {
 				}
 				v = a
 				s.Topics = v
+			}
+			if version >= 4 {
+				v := b.Int64()
+				s.TotalBytes = v
+			}
+			if version >= 4 {
+				v := b.Int64()
+				s.UsableBytes = v
 			}
 			if isFlexible {
 				s.UnknownTags = internalReadTags(&b)

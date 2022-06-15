@@ -347,6 +347,7 @@ generation.
 | [KIP-794](https://cwiki.apache.org/confluence/display/KAFKA/KIP-794%3A+Strictly+Uniform+Sticky+Partitioner) —  Better sticky partitioning | 3.3 | Supported (`UniformBytesPartitioner`) |
 | [KIP-800](https://cwiki.apache.org/confluence/display/KAFKA/KIP-800%3A+Add+reason+to+JoinGroupRequest+and+LeaveGroupRequest) — Reason in Join/Leave group | 3.1 | Supported |
 | [KIP-814](https://cwiki.apache.org/confluence/display/KAFKA/KIP-814%3A+Static+membership+protocol+should+let+the+leader+skip+assignment) — SkipAssignment for static group leaders | 3.1 | Supported |
+| [KIP-827](https://cwiki.apache.org/confluence/display/KAFKA/KIP-827%3A+Expose+logdirs+total+and+usable+space+via+Kafka+API) — `DescribeLogDirs.{Total,Usable}Bytes` | 3.3 | Supported |
 
 Missing from above but included in librdkafka is:
 
