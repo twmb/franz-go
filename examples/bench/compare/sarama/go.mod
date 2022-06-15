@@ -2,7 +2,7 @@ module saram
 
 go 1.18
 
-require github.com/Shopify/sarama v1.33.0
+require github.com/Shopify/sarama v1.34.1
 
 require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
@@ -18,10 +18,10 @@ require (
 	github.com/jcmturner/gofork v1.0.0 // indirect
 	github.com/jcmturner/gokrb5/v8 v8.4.2 // indirect
 	github.com/jcmturner/rpc/v2 v2.0.3 // indirect
-	github.com/klauspost/compress v1.15.4 // indirect
-	github.com/pierrec/lz4 v2.6.1+incompatible // indirect
+	github.com/klauspost/compress v1.15.6 // indirect
+	github.com/pierrec/lz4/v4 v4.1.14 // indirect
 	github.com/rcrowley/go-metrics v0.0.0-20201227073835-cf1acfcdf475 // indirect
-	golang.org/x/crypto v0.0.0-20220518034528-6f7dac969898 // indirect
-	golang.org/x/net v0.0.0-20220524220425-1d687d428aca // indirect
+	golang.org/x/crypto v0.0.0-20220525230936-793ad666bf5e // indirect
+	golang.org/x/net v0.0.0-20220614195744-fb05da6f9022 // indirect
 	gopkg.in/yaml.v3 v3.0.0 // indirect
 )
