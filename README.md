@@ -3,7 +3,6 @@ franz-go - A complete Apache Kafka client written in Go
 
 [![GoDev](https://img.shields.io/static/v1?label=godev&message=reference&color=00add8)][godev]
 ![GitHub](https://img.shields.io/github/license/twmb/franz-go)
-![GitHub tag (latest SemVer)](https://img.shields.io/github/v/tag/twmb/franz-go)
 [![Discord Chat](https://img.shields.io/badge/discord-online-brightgreen.svg)](https://discord.gg/K4R5c8zsMS)
 
 [godev]: https://pkg.go.dev/github.com/twmb/franz-go/pkg/kgo
