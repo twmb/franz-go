@@ -58,6 +58,13 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
+func unptrStr(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
+}
+
 // Client is an admin client.
 //
 // This is a simple wrapper around a *kgo.Client to provide helper admin methods.
