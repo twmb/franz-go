@@ -16,7 +16,6 @@ package kzap
 
 import (
 	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
 
 	"github.com/twmb/franz-go/pkg/kgo"
 )
@@ -29,21 +28,22 @@ type Logger struct {
 	levelFn func() kgo.LogLevel
 }
 
-// New returns a new logger that by default forever logs at the highest level
-// enabled in the zap logger.
+// New returns a new logger that checks the enabled log level on every log.
 func New(zl *zap.Logger, opts ...Opt) *Logger {
-	static := kgo.LogLevelError
-	switch {
-	case zl.Core().Enabled(zapcore.DebugLevel):
-		static = kgo.LogLevelDebug
-	case zl.Core().Enabled(zapcore.InfoLevel):
-		static = kgo.LogLevelInfo
-	case zl.Core().Enabled(zapcore.WarnLevel):
-		static = kgo.LogLevelWarn
-	}
+	c := zl.Core()
 	l := &Logger{
-		zl:      zl,
-		levelFn: func() kgo.LogLevel { return static },
+		zl: zl,
+		levelFn: func() kgo.LogLevel {
+			switch {
+			case c.Enabled(zap.DebugLevel):
+				return kgo.LogLevelDebug
+			case c.Enabled(zap.InfoLevel):
+				return kgo.LogLevelInfo
+			case c.Enabled(zap.WarnLevel):
+				return kgo.LogLevelWarn
+			}
+			return kgo.LogLevelError // default
+		},
 	}
 	for _, opt := range opts {
 		opt.apply(l)
@@ -60,23 +60,16 @@ type opt struct{ fn func(*Logger) }
 
 func (o opt) apply(l *Logger) { o.fn(l) }
 
-// LevelFn sets a function that can dynamically change the log level.
-//
-// This log level is independent of the zap logger level. Zap itself does not
-// have a way to pre-check which log level the logger is operating at.  While
-// zap can have variable levels, the kgo.Client does a *lot* more work to build
-// debug strings. Thus, the client often pre-checks "should I do this?", and
-// then either performs an expensive operation or skips it.
-//
-// This option provides the initial filter before Log is called, after which
-// the zap logger level takes effect. If you have access to zap.AtomicLevel,
-// the AtomicLevel option is much easier to use.
+// LevelFn sets a function that can dynamically change the log level. You may
+// want to set this is the checking if a log level is enabled is expensive.
 func LevelFn(fn func() kgo.LogLevel) Opt {
 	return opt{func(l *Logger) { l.levelFn = fn }}
 }
 
 // AtomicLevel returns an option that uses the current atomic level for
-// LevelFn.
+// LevelFn. If your zap logger uses the AtomicLevel already, using this option
+// is not necessary, but it is *slightly* less work than the default level
+// function that has to check if each level is enabled individually.
 func AtomicLevel(level zap.AtomicLevel) Opt {
 	return LevelFn(func() kgo.LogLevel {
 		switch level.Level() {
@@ -92,15 +85,6 @@ func AtomicLevel(level zap.AtomicLevel) Opt {
 }
 
 // Level sets a static level for the kgo.Logger Level function.
-//
-// This log level is independent of the zap logger level. Zap itself does not
-// have a way to pre-check which log level the logger is operating at.  While
-// zap can have variable levels, the kgo.Client does a *lot* more work to build
-// debug strings. Thus, the client often pre-checks "should I do this?", and
-// then either performs an expensive operation or skips it.
-//
-// Thus, this option provides the initial filter before Log is called, after
-// which the zap logger level takes effect.
 func Level(level kgo.LogLevel) Opt {
 	return LevelFn(func() kgo.LogLevel { return level })
 }
