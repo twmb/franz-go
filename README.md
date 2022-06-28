@@ -144,6 +144,7 @@ In alphabetical order,
 * [Mux](https://mux.com/blog/processing-cdn-logs-exactly-once-with-kafka-transactions/)
 * [Redpanda Data](https://redpanda.com/)
 * [Unistack](https://unistack.org) (Cloud Management System)
+* [ThinkingData](https://thinkingdata.cn)
 
 If you use this library and want on the list above, please either open a PR
 or comment on [#142](https://github.com/twmb/franz-go/issues/142)!
