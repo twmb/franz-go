@@ -143,6 +143,7 @@ In alphabetical order,
 * [Kowl](https://github.com/cloudhut/kowl/)
 * [Mux](https://mux.com/blog/processing-cdn-logs-exactly-once-with-kafka-transactions/)
 * [Redpanda Data](https://redpanda.com/)
+* [ThinkingData](https://thinkingdata.cn)
 * [Unistack](https://unistack.org) (Cloud Management System)
 
 If you use this library and want on the list above, please either open a PR
