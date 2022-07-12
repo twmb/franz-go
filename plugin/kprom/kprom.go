@@ -22,6 +22,8 @@
 //             // ...other opts
 //     )
 //
+// More examples are linked in the main project readme: https://github.com/twmb/franz-go/#metrics--logging
+//
 // By default, metrics are installed under the a new prometheus registry, but
 // this can be overridden with the Registry option.
 //
