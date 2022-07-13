@@ -5977,7 +5977,7 @@ func (v *MetadataRequest) AppendTo(dst []byte) []byte {
 	_ = isFlexible
 	{
 		v := v.Topics
-		if version > 1 {
+		if version >= 1 {
 			if isFlexible {
 				dst = kbin.AppendCompactNullableArrayLen(dst, len(v), v == nil)
 			} else {
@@ -10878,7 +10878,7 @@ func (v *OffsetFetchRequest) AppendTo(dst []byte) []byte {
 	}
 	if version >= 0 && version <= 7 {
 		v := v.Topics
-		if version > 2 {
+		if version >= 2 {
 			if isFlexible {
 				dst = kbin.AppendCompactNullableArrayLen(dst, len(v), v == nil)
 			} else {

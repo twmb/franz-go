@@ -127,7 +127,7 @@ func (a Array) WriteAppend(l *LineWriter) {
 		l.Write("dst = kbin.AppendVarint(dst, int32(len(v)))")
 	case a.IsNullableArray:
 		if a.NullableVersion > 0 {
-			l.Write("if version > %d {", a.NullableVersion)
+			l.Write("if version >= %d {", a.NullableVersion)
 			writeNullable()
 			l.Write("} else {")
 			writeNormal()
