@@ -14699,7 +14699,7 @@ type DescribeGroupsRequest struct {
 	// IncludeAuthorizedOperations, introduced in Kafka 2.3.0, specifies
 	// whether to include a bitfield of AclOperations this client can perform
 	// on the groups. See KIP-430 for more details.
-	IncludeAuthorizedOperations bool
+	IncludeAuthorizedOperations bool // v3+
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v5+
@@ -14745,7 +14745,7 @@ func (v *DescribeGroupsRequest) AppendTo(dst []byte) []byte {
 			}
 		}
 	}
-	{
+	if version >= 3 {
 		v := v.IncludeAuthorizedOperations
 		dst = kbin.AppendBool(dst, v)
 	}
@@ -14808,7 +14808,7 @@ func (v *DescribeGroupsRequest) readFrom(src []byte, unsafe bool) error {
 		v = a
 		s.Groups = v
 	}
-	{
+	if version >= 3 {
 		v := b.Bool()
 		s.IncludeAuthorizedOperations = v
 	}

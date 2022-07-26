@@ -5,7 +5,7 @@ DescribeGroupsRequest => key 15, max version 5, flexible v5+, group coordinator
   // IncludeAuthorizedOperations, introduced in Kafka 2.3.0, specifies
   // whether to include a bitfield of AclOperations this client can perform
   // on the groups. See KIP-430 for more details.
-  IncludeAuthorizedOperations: bool
+  IncludeAuthorizedOperations: bool // v3+
 
 // DescribeGroupsResponse is returned from a DescribeGroupsRequest.
 DescribeGroupsResponse =>

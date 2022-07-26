@@ -28,6 +28,7 @@ package kmsg
 
 import (
 	"context"
+	"sort"
 
 	"github.com/twmb/franz-go/pkg/kmsg/internal/kbin"
 )
@@ -376,8 +377,19 @@ func (t *Tags) Len() int { return len(t.keyvals) }
 
 // Each calls fn for each key and val in the tags.
 func (t *Tags) Each(fn func(uint32, []byte)) {
-	for key, val := range t.keyvals {
-		fn(key, val)
+	if len(t.keyvals) == 0 {
+		return
+	}
+	// We must encode keys in order. We expect to have limited (no) unknown
+	// keys, so for now, we take a lazy approach and allocate an ordered
+	// slice.
+	ordered := make([]uint32, 0, len(t.keyvals))
+	for key := range t.keyvals {
+		ordered = append(ordered, key)
+	}
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i] < ordered[j] })
+	for _, key := range ordered {
+		fn(key, t.keyvals[key])
 	}
 }
 
