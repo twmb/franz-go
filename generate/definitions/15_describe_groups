@@ -9,7 +9,7 @@ DescribeGroupsRequest => key 15, max version 5, flexible v5+, group coordinator
 
 // DescribeGroupsResponse is returned from a DescribeGroupsRequest.
 DescribeGroupsResponse =>
-  ThrottleMillis(2)
+  ThrottleMillis(2) // v1+
   // Groups is an array of group metadata.
   Groups: [=>]
     // ErrorCode is the error code for an individual group in a request.

@@ -14947,7 +14947,7 @@ type DescribeGroupsResponse struct {
 	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
 	//
 	// This request switched at version 2.
-	ThrottleMillis int32
+	ThrottleMillis int32 // v1+
 
 	// Groups is an array of group metadata.
 	Groups []DescribeGroupsResponseGroup
@@ -14971,7 +14971,7 @@ func (v *DescribeGroupsResponse) AppendTo(dst []byte) []byte {
 	_ = version
 	isFlexible := version >= 5
 	_ = isFlexible
-	{
+	if version >= 1 {
 		v := v.ThrottleMillis
 		dst = kbin.AppendInt32(dst, v)
 	}
@@ -15116,7 +15116,7 @@ func (v *DescribeGroupsResponse) readFrom(src []byte, unsafe bool) error {
 	isFlexible := version >= 5
 	_ = isFlexible
 	s := v
-	{
+	if version >= 1 {
 		v := b.Int32()
 		s.ThrottleMillis = v
 	}
