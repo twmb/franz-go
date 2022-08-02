@@ -139,6 +139,7 @@ Supplementary information can be found in the docs directory:
 In alphabetical order,
 
 * [Alpaca](https://alpaca.markets/blog/alpaca-launches-next-gen-order-management-system/)
+* [Banyan](https://banyan.com)
 * [Eoitek](https://eoitek.com/)
 * [Kowl](https://github.com/cloudhut/kowl/)
 * [Mux](https://mux.com/blog/processing-cdn-logs-exactly-once-with-kafka-transactions/)
