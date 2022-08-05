@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"regexp"
 	"strconv"
 	"strings"
@@ -1585,7 +1586,7 @@ func (r *RecordReader) readExact(d []byte) error {
 func (r *RecordReader) readDelim(d []byte) error {
 	// Empty delimiters opt in to reading the rest of the text.
 	if len(d) == 0 {
-		b, err := io.ReadAll(r.r)
+		b, err := ioutil.ReadAll(r.r)
 		r.buf = b
 		// ReadAll stops at io.EOF, but we need to bubble that up.
 		if err == nil {
