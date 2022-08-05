@@ -22196,7 +22196,7 @@ type DescribeACLsRequest struct {
 }
 
 func (*DescribeACLsRequest) Key() int16                 { return 29 }
-func (*DescribeACLsRequest) MaxVersion() int16          { return 2 }
+func (*DescribeACLsRequest) MaxVersion() int16          { return 3 }
 func (v *DescribeACLsRequest) SetVersion(version int16) { v.Version = version }
 func (v *DescribeACLsRequest) GetVersion() int16        { return v.Version }
 func (v *DescribeACLsRequest) IsFlexible() bool         { return v.Version >= 2 }
@@ -22503,7 +22503,7 @@ type DescribeACLsResponse struct {
 }
 
 func (*DescribeACLsResponse) Key() int16                 { return 29 }
-func (*DescribeACLsResponse) MaxVersion() int16          { return 2 }
+func (*DescribeACLsResponse) MaxVersion() int16          { return 3 }
 func (v *DescribeACLsResponse) SetVersion(version int16) { v.Version = version }
 func (v *DescribeACLsResponse) GetVersion() int16        { return v.Version }
 func (v *DescribeACLsResponse) IsFlexible() bool         { return v.Version >= 2 }
@@ -22896,7 +22896,7 @@ type CreateACLsRequest struct {
 }
 
 func (*CreateACLsRequest) Key() int16                 { return 30 }
-func (*CreateACLsRequest) MaxVersion() int16          { return 2 }
+func (*CreateACLsRequest) MaxVersion() int16          { return 3 }
 func (v *CreateACLsRequest) SetVersion(version int16) { v.Version = version }
 func (v *CreateACLsRequest) GetVersion() int16        { return v.Version }
 func (v *CreateACLsRequest) IsFlexible() bool         { return v.Version >= 2 }
@@ -23192,7 +23192,7 @@ type CreateACLsResponse struct {
 }
 
 func (*CreateACLsResponse) Key() int16                 { return 30 }
-func (*CreateACLsResponse) MaxVersion() int16          { return 2 }
+func (*CreateACLsResponse) MaxVersion() int16          { return 3 }
 func (v *CreateACLsResponse) SetVersion(version int16) { v.Version = version }
 func (v *CreateACLsResponse) GetVersion() int16        { return v.Version }
 func (v *CreateACLsResponse) IsFlexible() bool         { return v.Version >= 2 }
@@ -23386,7 +23386,7 @@ type DeleteACLsRequest struct {
 }
 
 func (*DeleteACLsRequest) Key() int16                 { return 31 }
-func (*DeleteACLsRequest) MaxVersion() int16          { return 2 }
+func (*DeleteACLsRequest) MaxVersion() int16          { return 3 }
 func (v *DeleteACLsRequest) SetVersion(version int16) { v.Version = version }
 func (v *DeleteACLsRequest) GetVersion() int16        { return v.Version }
 func (v *DeleteACLsRequest) IsFlexible() bool         { return v.Version >= 2 }
@@ -23725,7 +23725,7 @@ type DeleteACLsResponse struct {
 }
 
 func (*DeleteACLsResponse) Key() int16                 { return 31 }
-func (*DeleteACLsResponse) MaxVersion() int16          { return 2 }
+func (*DeleteACLsResponse) MaxVersion() int16          { return 3 }
 func (v *DeleteACLsResponse) SetVersion(version int16) { v.Version = version }
 func (v *DeleteACLsResponse) GetVersion() int16        { return v.Version }
 func (v *DeleteACLsResponse) IsFlexible() bool         { return v.Version >= 2 }
@@ -27698,6 +27698,14 @@ type CreateDelegationTokenRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
+	// The principal type of the owner of the token. If null, this defaults
+	// to the token request principal.
+	OwnerPrincipalType *string // v3+
+
+	// Principal name of the owner of the token. If null, this defaults to
+	// the token request principal.
+	OwnerPrincipalName *string // v3+
+
 	// Renewers is a list of who can renew this delegation token. If empty, the
 	// default is the principal (user) who created the token.
 	Renewers []CreateDelegationTokenRequestRenewer
@@ -27711,7 +27719,7 @@ type CreateDelegationTokenRequest struct {
 }
 
 func (*CreateDelegationTokenRequest) Key() int16                 { return 38 }
-func (*CreateDelegationTokenRequest) MaxVersion() int16          { return 2 }
+func (*CreateDelegationTokenRequest) MaxVersion() int16          { return 3 }
 func (v *CreateDelegationTokenRequest) SetVersion(version int16) { v.Version = version }
 func (v *CreateDelegationTokenRequest) GetVersion() int16        { return v.Version }
 func (v *CreateDelegationTokenRequest) IsFlexible() bool         { return v.Version >= 2 }
@@ -27733,6 +27741,22 @@ func (v *CreateDelegationTokenRequest) AppendTo(dst []byte) []byte {
 	_ = version
 	isFlexible := version >= 2
 	_ = isFlexible
+	if version >= 3 {
+		v := v.OwnerPrincipalType
+		if isFlexible {
+			dst = kbin.AppendCompactNullableString(dst, v)
+		} else {
+			dst = kbin.AppendNullableString(dst, v)
+		}
+	}
+	if version >= 3 {
+		v := v.OwnerPrincipalName
+		if isFlexible {
+			dst = kbin.AppendCompactNullableString(dst, v)
+		} else {
+			dst = kbin.AppendNullableString(dst, v)
+		}
+	}
 	{
 		v := v.Renewers
 		if isFlexible {
@@ -27791,6 +27815,40 @@ func (v *CreateDelegationTokenRequest) readFrom(src []byte, unsafe bool) error {
 	isFlexible := version >= 2
 	_ = isFlexible
 	s := v
+	if version >= 3 {
+		var v *string
+		if isFlexible {
+			if unsafe {
+				v = b.UnsafeCompactNullableString()
+			} else {
+				v = b.CompactNullableString()
+			}
+		} else {
+			if unsafe {
+				v = b.UnsafeNullableString()
+			} else {
+				v = b.NullableString()
+			}
+		}
+		s.OwnerPrincipalType = v
+	}
+	if version >= 3 {
+		var v *string
+		if isFlexible {
+			if unsafe {
+				v = b.UnsafeCompactNullableString()
+			} else {
+				v = b.CompactNullableString()
+			}
+		} else {
+			if unsafe {
+				v = b.UnsafeNullableString()
+			} else {
+				v = b.NullableString()
+			}
+		}
+		s.OwnerPrincipalName = v
+	}
 	{
 		v := s.Renewers
 		a := v
@@ -27899,6 +27957,12 @@ type CreateDelegationTokenResponse struct {
 	// token.
 	PrincipalName string
 
+	// The principal type of the requester of the token.
+	TokenRequesterPrincipalType string // v3+
+
+	// The principal name of the requester token.
+	TokenRequesterPrincipalName string // v3+
+
 	// IssueTimestamp is the millisecond timestamp this delegation token was
 	// issued.
 	IssueTimestamp int64
@@ -27933,7 +27997,7 @@ type CreateDelegationTokenResponse struct {
 }
 
 func (*CreateDelegationTokenResponse) Key() int16                 { return 38 }
-func (*CreateDelegationTokenResponse) MaxVersion() int16          { return 2 }
+func (*CreateDelegationTokenResponse) MaxVersion() int16          { return 3 }
 func (v *CreateDelegationTokenResponse) SetVersion(version int16) { v.Version = version }
 func (v *CreateDelegationTokenResponse) GetVersion() int16        { return v.Version }
 func (v *CreateDelegationTokenResponse) IsFlexible() bool         { return v.Version >= 2 }
@@ -27964,6 +28028,22 @@ func (v *CreateDelegationTokenResponse) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.PrincipalName
+		if isFlexible {
+			dst = kbin.AppendCompactString(dst, v)
+		} else {
+			dst = kbin.AppendString(dst, v)
+		}
+	}
+	if version >= 3 {
+		v := v.TokenRequesterPrincipalType
+		if isFlexible {
+			dst = kbin.AppendCompactString(dst, v)
+		} else {
+			dst = kbin.AppendString(dst, v)
+		}
+	}
+	if version >= 3 {
+		v := v.TokenRequesterPrincipalName
 		if isFlexible {
 			dst = kbin.AppendCompactString(dst, v)
 		} else {
@@ -28062,6 +28142,40 @@ func (v *CreateDelegationTokenResponse) readFrom(src []byte, unsafe bool) error 
 			}
 		}
 		s.PrincipalName = v
+	}
+	if version >= 3 {
+		var v string
+		if unsafe {
+			if isFlexible {
+				v = b.UnsafeCompactString()
+			} else {
+				v = b.UnsafeString()
+			}
+		} else {
+			if isFlexible {
+				v = b.CompactString()
+			} else {
+				v = b.String()
+			}
+		}
+		s.TokenRequesterPrincipalType = v
+	}
+	if version >= 3 {
+		var v string
+		if unsafe {
+			if isFlexible {
+				v = b.UnsafeCompactString()
+			} else {
+				v = b.UnsafeString()
+			}
+		} else {
+			if isFlexible {
+				v = b.CompactString()
+			} else {
+				v = b.String()
+			}
+		}
+		s.TokenRequesterPrincipalName = v
 	}
 	{
 		v := b.Int64()
@@ -28644,7 +28758,7 @@ type DescribeDelegationTokenRequest struct {
 }
 
 func (*DescribeDelegationTokenRequest) Key() int16                 { return 41 }
-func (*DescribeDelegationTokenRequest) MaxVersion() int16          { return 2 }
+func (*DescribeDelegationTokenRequest) MaxVersion() int16          { return 3 }
 func (v *DescribeDelegationTokenRequest) SetVersion(version int16) { v.Version = version }
 func (v *DescribeDelegationTokenRequest) GetVersion() int16        { return v.Version }
 func (v *DescribeDelegationTokenRequest) IsFlexible() bool         { return v.Version >= 2 }
@@ -28840,6 +28954,12 @@ type DescribeDelegationTokenResponseTokenDetail struct {
 	// PrincipalName is the principal name of who created this token.
 	PrincipalName string
 
+	// The principal type of the requester of the token.
+	TokenRequesterPrincipalType string // v3+
+
+	// The principal name of the requester token.
+	TokenRequesterPrincipalName string // v3+
+
 	// IssueTimestamp is the millisecond timestamp of when this token was issued.
 	IssueTimestamp int64
 
@@ -28901,7 +29021,7 @@ type DescribeDelegationTokenResponse struct {
 }
 
 func (*DescribeDelegationTokenResponse) Key() int16                 { return 41 }
-func (*DescribeDelegationTokenResponse) MaxVersion() int16          { return 2 }
+func (*DescribeDelegationTokenResponse) MaxVersion() int16          { return 3 }
 func (v *DescribeDelegationTokenResponse) SetVersion(version int16) { v.Version = version }
 func (v *DescribeDelegationTokenResponse) GetVersion() int16        { return v.Version }
 func (v *DescribeDelegationTokenResponse) IsFlexible() bool         { return v.Version >= 2 }
@@ -28941,6 +29061,22 @@ func (v *DescribeDelegationTokenResponse) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.PrincipalName
+				if isFlexible {
+					dst = kbin.AppendCompactString(dst, v)
+				} else {
+					dst = kbin.AppendString(dst, v)
+				}
+			}
+			if version >= 3 {
+				v := v.TokenRequesterPrincipalType
+				if isFlexible {
+					dst = kbin.AppendCompactString(dst, v)
+				} else {
+					dst = kbin.AppendString(dst, v)
+				}
+			}
+			if version >= 3 {
+				v := v.TokenRequesterPrincipalName
 				if isFlexible {
 					dst = kbin.AppendCompactString(dst, v)
 				} else {
@@ -29096,6 +29232,40 @@ func (v *DescribeDelegationTokenResponse) readFrom(src []byte, unsafe bool) erro
 					}
 				}
 				s.PrincipalName = v
+			}
+			if version >= 3 {
+				var v string
+				if unsafe {
+					if isFlexible {
+						v = b.UnsafeCompactString()
+					} else {
+						v = b.UnsafeString()
+					}
+				} else {
+					if isFlexible {
+						v = b.CompactString()
+					} else {
+						v = b.String()
+					}
+				}
+				s.TokenRequesterPrincipalType = v
+			}
+			if version >= 3 {
+				var v string
+				if unsafe {
+					if isFlexible {
+						v = b.UnsafeCompactString()
+					} else {
+						v = b.UnsafeString()
+					}
+				} else {
+					if isFlexible {
+						v = b.CompactString()
+					} else {
+						v = b.String()
+					}
+				}
+				s.TokenRequesterPrincipalName = v
 			}
 			{
 				v := b.Int64()
@@ -43761,6 +43931,8 @@ func (e *IncrementalAlterConfigOp) UnmarshalText(text []byte) error {
 //
 // * 6 (DELEGATION_TOKEN)
 //
+// * 7 (USER)
+//
 type ACLResourceType int8
 
 func (v ACLResourceType) String() string {
@@ -43779,6 +43951,8 @@ func (v ACLResourceType) String() string {
 		return "TRANSACTIONAL_ID"
 	case 6:
 		return "DELEGATION_TOKEN"
+	case 7:
+		return "USER"
 	}
 }
 
@@ -43790,6 +43964,7 @@ func ACLResourceTypeStrings() []string {
 		"CLUSTER",
 		"TRANSACTIONAL_ID",
 		"DELEGATION_TOKEN",
+		"USER",
 	}
 }
 
@@ -43812,6 +43987,8 @@ func ParseACLResourceType(s string) (ACLResourceType, error) {
 		return 5, nil
 	case "delegationtoken":
 		return 6, nil
+	case "user":
+		return 7, nil
 	default:
 		return 0, fmt.Errorf("ACLResourceType: unable to parse %q", s)
 	}
@@ -43825,6 +44002,7 @@ const (
 	ACLResourceTypeCluster         ACLResourceType = 4
 	ACLResourceTypeTransactionalId ACLResourceType = 5
 	ACLResourceTypeDelegationToken ACLResourceType = 6
+	ACLResourceTypeUser            ACLResourceType = 7
 )
 
 // MarshalText implements encoding.TextMarshaler.
@@ -44026,6 +44204,10 @@ func (e *ACLPermissionType) UnmarshalText(text []byte) error {
 //
 // * 12 (IDEMPOTENT_WRITE)
 //
+// * 13 (CREATE_TOKENS)
+//
+// * 14 (DESCRIBE_TOKENS)
+//
 type ACLOperation int8
 
 func (v ACLOperation) String() string {
@@ -44056,6 +44238,10 @@ func (v ACLOperation) String() string {
 		return "ALTER_CONFIGS"
 	case 12:
 		return "IDEMPOTENT_WRITE"
+	case 13:
+		return "CREATE_TOKENS"
+	case 14:
+		return "DESCRIBE_TOKENS"
 	}
 }
 
@@ -44073,6 +44259,8 @@ func ACLOperationStrings() []string {
 		"DESCRIBE_CONFIGS",
 		"ALTER_CONFIGS",
 		"IDEMPOTENT_WRITE",
+		"CREATE_TOKENS",
+		"DESCRIBE_TOKENS",
 	}
 }
 
@@ -44107,6 +44295,10 @@ func ParseACLOperation(s string) (ACLOperation, error) {
 		return 11, nil
 	case "idempotentwrite":
 		return 12, nil
+	case "createtokens":
+		return 13, nil
+	case "describetokens":
+		return 14, nil
 	default:
 		return 0, fmt.Errorf("ACLOperation: unable to parse %q", s)
 	}
@@ -44126,6 +44318,8 @@ const (
 	ACLOperationDescribeConfigs ACLOperation = 10
 	ACLOperationAlterConfigs    ACLOperation = 11
 	ACLOperationIdempotentWrite ACLOperation = 12
+	ACLOperationCreateTokens    ACLOperation = 13
+	ACLOperationDescribeTokens  ACLOperation = 14
 )
 
 // MarshalText implements encoding.TextMarshaler.

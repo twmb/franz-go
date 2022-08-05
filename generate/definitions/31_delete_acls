@@ -1,7 +1,7 @@
 // DeleteACLsRequest deletes acls. This request works on filters the same way
 // that DescribeACLsRequest does. See DescribeACLsRequest for documentation of
 // the fields.
-DeleteACLsRequest => key 31, max version 2, flexible v2+
+DeleteACLsRequest => key 31, max version 3, flexible v2+
   // Filters are filters for acls to delete.
   Filters: [=>]
     ResourceType: enum-ACLResourceType

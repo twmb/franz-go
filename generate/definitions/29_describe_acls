@@ -3,7 +3,7 @@
 // "types" of filters in this request: the resource filter and the entry
 // filter, with entries corresponding to users. The first three fields form the
 // resource filter, the last four the entry filter.
-DescribeACLsRequest => key 29, max version 2, flexible v2+
+DescribeACLsRequest => key 29, max version 3, flexible v2+
   // ResourceType is the type of resource to describe.
   ResourceType: enum-ACLResourceType
   // ResourceName is the name to filter out. For the CLUSTER resource type,

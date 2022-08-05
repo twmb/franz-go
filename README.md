@@ -293,6 +293,7 @@ generation.
 | [KIP-361](https://cwiki.apache.org/confluence/display/KAFKA/KIP-361%3A+Add+Consumer+Configuration+to+Disable+Auto+Topic+Creation) — Allow disable auto topic creation | 2.3 | Supported |
 | [KIP-368](https://cwiki.apache.org/confluence/display/KAFKA/KIP-368%3A+Allow+SASL+Connections+to+Periodically+Re-Authenticate) — Periodically reauthenticate SASL | 2.2 | Supported |
 | [KIP-369](https://cwiki.apache.org/confluence/pages/viewpage.action?pageId=89070828) — An always round robin produce partitioner | 2.4 | Supported |
+| [KIP-373](https://cwiki.apache.org/confluence/pages/viewpage.action?pageId=93324147) — Users can create delegation tokens for others | 3.3 | Supported |
 | [KIP-380](https://cwiki.apache.org/confluence/display/KAFKA/KIP-380%3A+Detect+outdated+control+requests+and+bounced+brokers+using+broker+generation) — Inter-broker protocol changes | 2.2 | Supported |
 | [KIP-389](https://cwiki.apache.org/confluence/pages/viewpage.action?pageId=89070828) — Group max size error | 2.2 | Supported |
 | [KIP-392](https://cwiki.apache.org/confluence/display/KAFKA/KIP-392%3A+Allow+consumers+to+fetch+from+closest+replica) — Closest replica fetching w/ rack | 2.2 | Supported |

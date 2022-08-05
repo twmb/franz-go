@@ -923,5 +923,12 @@ var maxTip = nextMax(max320, func(v listenerKeys) listenerKeys {
 	// KAFKA-13888 a126e3a622f KIP-836
 	v[55].inc() // 1 describe quorum
 
+	// KAFKA-6945 d65d8867983 KIP-373
+	v[29].inc() // 3 describe acls
+	v[30].inc() // 3 create acls
+	v[31].inc() // 3 delete acls
+	v[38].inc() // 3 create delegation token
+	v[41].inc() // 3 describe delegation token
+
 	return v
 })

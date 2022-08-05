@@ -59,6 +59,7 @@ ACLResourceType int8 (
   4: CLUSTER
   5: TRANSACTIONAL_ID
   6: DELEGATION_TOKEN
+  7: USER
 )
 
 // ACLResourcePatternType is how an acl's ResourceName is understood.
@@ -101,6 +102,8 @@ ACLOperation int8 (
   10: DESCRIBE_CONFIGS
   11: ALTER_CONFIGS
   12: IDEMPOTENT_WRITE
+  13: CREATE_TOKENS
+  14: DESCRIBE_TOKENS
 )
 
 //////////

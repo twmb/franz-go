@@ -3,7 +3,7 @@
 //
 // See the DescribeACLsRequest documentation for more descriptions of what
 // valid values for the fields in this request are.
-CreateACLsRequest => key 30, max version 2, flexible v2+
+CreateACLsRequest => key 30, max version 3, flexible v2+
   Creations: [=>]
     // ResourceType is the type of resource this acl entry will be on.
     // It is invalid to use UNKNOWN or ANY.

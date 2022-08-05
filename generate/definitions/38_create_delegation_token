@@ -11,7 +11,13 @@
 //
 // Delegation tokens live inside of Kafka and use SASL SCRAM-SHA-256 for
 // authorization.
-CreateDelegationTokenRequest => key 38, max version 2, flexible v2+
+CreateDelegationTokenRequest => key 38, max version 3, flexible v2+
+  // The principal type of the owner of the token. If null, this defaults
+  // to the token request principal.
+  OwnerPrincipalType: nullable-string // v3+
+  // Principal name of the owner of the token. If null, this defaults to
+  // the token request principal.
+  OwnerPrincipalName: nullable-string // v3+
   // Renewers is a list of who can renew this delegation token. If empty, the
   // default is the principal (user) who created the token.
   Renewers: [=>]
@@ -33,6 +39,10 @@ CreateDelegationTokenResponse =>
   // PrincipalName is the name of the principal that granted this delegation
   // token.
   PrincipalName: string
+  // The principal type of the requester of the token.
+  TokenRequesterPrincipalType: string // v3+
+  // The principal name of the requester token.
+  TokenRequesterPrincipalName: string // v3+
   // IssueTimestamp is the millisecond timestamp this delegation token was
   // issued.
   IssueTimestamp: int64

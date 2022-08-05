@@ -1,5 +1,5 @@
 // DescribeDelegationTokenRequest is a request to describe delegation tokens.
-DescribeDelegationTokenRequest => key 41, max version 2, flexible v2+
+DescribeDelegationTokenRequest => key 41, max version 3, flexible v2+
   // Owners contains owners to describe delegation tokens for, or null for all.
   // If non-null, only tokens created from a matching principal type, name
   // combination are printed.
@@ -22,6 +22,10 @@ DescribeDelegationTokenResponse =>
     PrincipalType: string
     // PrincipalName is the principal name of who created this token.
     PrincipalName: string
+    // The principal type of the requester of the token.
+    TokenRequesterPrincipalType: string // v3+
+    // The principal name of the requester token.
+    TokenRequesterPrincipalName: string // v3+
     // IssueTimestamp is the millisecond timestamp of when this token was issued.
     IssueTimestamp: int64
     // ExpiryTimestamp is the millisecond timestamp of when this token will expire.
