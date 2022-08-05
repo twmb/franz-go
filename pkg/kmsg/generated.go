@@ -36471,6 +36471,19 @@ type DescribeQuorumResponseTopicPartitionReplicaState struct {
 	// The last known log end offset of the follower, or -1 if it is unknown.
 	LogEndOffset int64
 
+	// The last known leader wall clock time when a follower fetched from the
+	// leader, or -1 for the current leader or if unknown for a voter.
+	//
+	// This field has a default of -1.
+	LastFetchTimestamp int64 // v1+
+
+	// The leader wall clock append time of the offset for which the follower
+	// made the most recent fetch request, or -1 for the current leader or if
+	// unknown for a voter.
+	//
+	// This field has a default of -1.
+	LastCaughtUpTimestamp int64 // v1+
+
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags
 }
@@ -36478,6 +36491,8 @@ type DescribeQuorumResponseTopicPartitionReplicaState struct {
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to DescribeQuorumResponseTopicPartitionReplicaState.
 func (v *DescribeQuorumResponseTopicPartitionReplicaState) Default() {
+	v.LastFetchTimestamp = -1
+	v.LastCaughtUpTimestamp = -1
 }
 
 // NewDescribeQuorumResponseTopicPartitionReplicaState returns a default DescribeQuorumResponseTopicPartitionReplicaState
@@ -36544,7 +36559,7 @@ type DescribeQuorumRequest struct {
 }
 
 func (*DescribeQuorumRequest) Key() int16                 { return 55 }
-func (*DescribeQuorumRequest) MaxVersion() int16          { return 0 }
+func (*DescribeQuorumRequest) MaxVersion() int16          { return 1 }
 func (v *DescribeQuorumRequest) SetVersion(version int16) { v.Version = version }
 func (v *DescribeQuorumRequest) GetVersion() int16        { return v.Version }
 func (v *DescribeQuorumRequest) IsFlexible() bool         { return v.Version >= 0 }
@@ -36803,7 +36818,7 @@ type DescribeQuorumResponse struct {
 }
 
 func (*DescribeQuorumResponse) Key() int16                 { return 55 }
-func (*DescribeQuorumResponse) MaxVersion() int16          { return 0 }
+func (*DescribeQuorumResponse) MaxVersion() int16          { return 1 }
 func (v *DescribeQuorumResponse) SetVersion(version int16) { v.Version = version }
 func (v *DescribeQuorumResponse) GetVersion() int16        { return v.Version }
 func (v *DescribeQuorumResponse) IsFlexible() bool         { return v.Version >= 0 }
@@ -36883,6 +36898,14 @@ func (v *DescribeQuorumResponse) AppendTo(dst []byte) []byte {
 								v := v.LogEndOffset
 								dst = kbin.AppendInt64(dst, v)
 							}
+							if version >= 1 {
+								v := v.LastFetchTimestamp
+								dst = kbin.AppendInt64(dst, v)
+							}
+							if version >= 1 {
+								v := v.LastCaughtUpTimestamp
+								dst = kbin.AppendInt64(dst, v)
+							}
 							if isFlexible {
 								dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
 								dst = v.UnknownTags.AppendEach(dst)
@@ -36904,6 +36927,14 @@ func (v *DescribeQuorumResponse) AppendTo(dst []byte) []byte {
 							}
 							{
 								v := v.LogEndOffset
+								dst = kbin.AppendInt64(dst, v)
+							}
+							if version >= 1 {
+								v := v.LastFetchTimestamp
+								dst = kbin.AppendInt64(dst, v)
+							}
+							if version >= 1 {
+								v := v.LastCaughtUpTimestamp
 								dst = kbin.AppendInt64(dst, v)
 							}
 							if isFlexible {
@@ -37056,6 +37087,14 @@ func (v *DescribeQuorumResponse) readFrom(src []byte, unsafe bool) error {
 								v := b.Int64()
 								s.LogEndOffset = v
 							}
+							if version >= 1 {
+								v := b.Int64()
+								s.LastFetchTimestamp = v
+							}
+							if version >= 1 {
+								v := b.Int64()
+								s.LastCaughtUpTimestamp = v
+							}
 							if isFlexible {
 								s.UnknownTags = internalReadTags(&b)
 							}
@@ -37090,6 +37129,14 @@ func (v *DescribeQuorumResponse) readFrom(src []byte, unsafe bool) error {
 							{
 								v := b.Int64()
 								s.LogEndOffset = v
+							}
+							if version >= 1 {
+								v := b.Int64()
+								s.LastFetchTimestamp = v
+							}
+							if version >= 1 {
+								v := b.Int64()
+								s.LastCaughtUpTimestamp = v
 							}
 							if isFlexible {
 								s.UnknownTags = internalReadTags(&b)
