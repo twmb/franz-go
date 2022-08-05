@@ -656,7 +656,6 @@ var max240 = nextMax(max230, func(v listenerKeys) listenerKeys {
 	v[19].inc() // 4 create topics KAFKA-8305 8e161580b8 KIP-464
 	v[43].inc() // 1 elect preferred leaders KAFKA-8286 121308cc7a KIP-460
 	v = append(v,
-
 		// raft added in e07de97a4ce730a2755db7eeacb9b3e1f69a12c8 for the following two
 		k(zkBroker, rBroker, rController), // 45 alter partition reassignments KAFKA-8345 81900d0ba0 KIP-455
 		k(zkBroker, rBroker, rController), // 46 list partition reassignments (same)
@@ -917,6 +916,9 @@ var maxTip = nextMax(max320, func(v listenerKeys) listenerKeys {
 
 	// KAFKA-13958 4fcfd9ddc4a8da3d4cfbb69268c06763352e29a9 KIP-827
 	v[35].inc() // 4 describe log dirs
+
+	// KAFKA-841 f83d95d9a28 KIP-841
+	v[56].inc() // 2 alter partition
 
 	return v
 })

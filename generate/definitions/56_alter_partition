@@ -1,12 +1,13 @@
 // AlterPartitionRequest, proposed in KIP-497 and introduced in Kafka 2.7.0,
 // is an admin request to modify ISR.
-AlterPartitionRequest => key 56, max version 1, flexible v0+, admin
+AlterPartitionRequest => key 56, max version 2, flexible v0+, admin
   // The ID of the requesting broker.
   BrokerID: int32
   // The epoch of the requesting broker.
   BrokerEpoch: int64(-1)
   Topics: [=>]
-    Topic: string
+    Topic: string // v0-v1
+    TopicID: uuid // v2+
     Partitions: [=>]
       Partition: int32
       // The leader epoch of this partition.
@@ -23,7 +24,8 @@ AlterPartitionResponse =>
   ThrottleMillis
   ErrorCode: int16
   Topics: [=>]
-    Topic: string
+    Topic: string // v0-v1
+    TopidID: uuid // v2+
     Partitions: [=>]
       Partition: int32
       ErrorCode: int16

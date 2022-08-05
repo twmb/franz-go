@@ -37175,6 +37175,8 @@ func NewAlterPartitionRequestTopicPartition() AlterPartitionRequestTopicPartitio
 type AlterPartitionRequestTopic struct {
 	Topic string
 
+	TopicID [16]byte // v2+
+
 	Partitions []AlterPartitionRequestTopicPartition
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
@@ -37215,7 +37217,7 @@ type AlterPartitionRequest struct {
 }
 
 func (*AlterPartitionRequest) Key() int16                 { return 56 }
-func (*AlterPartitionRequest) MaxVersion() int16          { return 1 }
+func (*AlterPartitionRequest) MaxVersion() int16          { return 2 }
 func (v *AlterPartitionRequest) SetVersion(version int16) { v.Version = version }
 func (v *AlterPartitionRequest) GetVersion() int16        { return v.Version }
 func (v *AlterPartitionRequest) IsFlexible() bool         { return v.Version >= 0 }
@@ -37255,13 +37257,17 @@ func (v *AlterPartitionRequest) AppendTo(dst []byte) []byte {
 		}
 		for i := range v {
 			v := &v[i]
-			{
+			if version >= 0 && version <= 1 {
 				v := v.Topic
 				if isFlexible {
 					dst = kbin.AppendCompactString(dst, v)
 				} else {
 					dst = kbin.AppendString(dst, v)
 				}
+			}
+			if version >= 2 {
+				v := v.TopicID
+				dst = kbin.AppendUuid(dst, v)
 			}
 			{
 				v := v.Partitions
@@ -37363,7 +37369,7 @@ func (v *AlterPartitionRequest) readFrom(src []byte, unsafe bool) error {
 			v := &a[i]
 			v.Default()
 			s := v
-			{
+			if version >= 0 && version <= 1 {
 				var v string
 				if unsafe {
 					if isFlexible {
@@ -37379,6 +37385,10 @@ func (v *AlterPartitionRequest) readFrom(src []byte, unsafe bool) error {
 					}
 				}
 				s.Topic = v
+			}
+			if version >= 2 {
+				v := b.Uuid()
+				s.TopicID = v
 			}
 			{
 				v := s.Partitions
@@ -37522,6 +37532,8 @@ func NewAlterPartitionResponseTopicPartition() AlterPartitionResponseTopicPartit
 type AlterPartitionResponseTopic struct {
 	Topic string
 
+	TopidID [16]byte // v2+
+
 	Partitions []AlterPartitionResponseTopicPartition
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
@@ -37558,7 +37570,7 @@ type AlterPartitionResponse struct {
 }
 
 func (*AlterPartitionResponse) Key() int16                 { return 56 }
-func (*AlterPartitionResponse) MaxVersion() int16          { return 1 }
+func (*AlterPartitionResponse) MaxVersion() int16          { return 2 }
 func (v *AlterPartitionResponse) SetVersion(version int16) { v.Version = version }
 func (v *AlterPartitionResponse) GetVersion() int16        { return v.Version }
 func (v *AlterPartitionResponse) IsFlexible() bool         { return v.Version >= 0 }
@@ -37589,13 +37601,17 @@ func (v *AlterPartitionResponse) AppendTo(dst []byte) []byte {
 		}
 		for i := range v {
 			v := &v[i]
-			{
+			if version >= 0 && version <= 1 {
 				v := v.Topic
 				if isFlexible {
 					dst = kbin.AppendCompactString(dst, v)
 				} else {
 					dst = kbin.AppendString(dst, v)
 				}
+			}
+			if version >= 2 {
+				v := v.TopidID
+				dst = kbin.AppendUuid(dst, v)
 			}
 			{
 				v := v.Partitions
@@ -37705,7 +37721,7 @@ func (v *AlterPartitionResponse) readFrom(src []byte, unsafe bool) error {
 			v := &a[i]
 			v.Default()
 			s := v
-			{
+			if version >= 0 && version <= 1 {
 				var v string
 				if unsafe {
 					if isFlexible {
@@ -37721,6 +37737,10 @@ func (v *AlterPartitionResponse) readFrom(src []byte, unsafe bool) error {
 					}
 				}
 				s.Topic = v
+			}
+			if version >= 2 {
+				v := b.Uuid()
+				s.TopidID = v
 			}
 			{
 				v := s.Partitions
