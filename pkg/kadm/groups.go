@@ -533,6 +533,15 @@ func (os OffsetResponses) Each(fn func(OffsetResponse)) {
 	}
 }
 
+// Partitions returns the set of unique topics and partitions in these offsets.
+func (os OffsetResponses) Partitions() TopicsSet {
+	s := make(TopicsSet)
+	os.Each(func(o OffsetResponse) {
+		s.Add(o.Topic, o.Partition)
+	})
+	return s
+}
+
 // Error iterates over all offsets and returns the first error encountered, if
 // any. This can be used to check if an operation was entirely successful or
 // not.
@@ -737,6 +746,12 @@ type FetchOffsetsResponse struct {
 	Err     error           // Err contains any error preventing offsets from being fetched.
 }
 
+// CommittedPartitions returns the set of unique topics and partitions that
+// have been committed to in this group.
+func (r FetchOffsetsResponse) CommittedPartitions() TopicsSet {
+	return r.Fetched.Partitions()
+}
+
 // FetchOFfsetsResponses contains responses for many fetch offsets requests.
 type FetchOffsetsResponses map[string]FetchOffsetsResponse
 
@@ -754,6 +769,17 @@ func (rs FetchOffsetsResponses) AllFailed() bool {
 	var n int
 	rs.EachError(func(FetchOffsetsResponse) { n++ })
 	return n == len(rs)
+}
+
+// CommittedPartitions returns the set of unique topics and partitions that
+// have been committed to across all members in all responses. This is the
+// all-group analogue to FetchOffsetsResponse.CommittedPartitions.
+func (rs FetchOffsetsResponses) CommittedPartitions() TopicsSet {
+	s := make(TopicsSet)
+	for _, r := range rs {
+		s.Merge(r.CommittedPartitions())
+	}
+	return s
 }
 
 // On calls fn for the response group if it exists, returning the response and
@@ -1023,9 +1049,11 @@ func (l GroupTopicsLag) Sorted() []TopicLag {
 // CalculateGroupLag returns the per-partition lag of all members in a group.
 // The input to this method is the returns from the three following methods,
 //
-//     DescribeGroups(ctx, group)
-//     FetchOffsets(ctx, group)
-//     ListEndOffsets(ctx, described.AssignedPartitions().Topics())
+//     described := DescribeGroups(ctx, group)
+//     fetched := FetchOffsets(ctx, group)
+//     toList := described.AssignedPartitions()
+//     toList.Merge(fetched.CommittedPartitions()
+//     ListEndOffsets(ctx, toList.Topics())
 //
 // If assigned partitions are missing in the listed end offsets listed end
 // offsets, the partition will have an error indicating it is missing. A
