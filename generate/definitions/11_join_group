@@ -67,7 +67,7 @@ JoinGroupRequest => key 11, max version 9, flexible v6+, group coordinator
     Metadata: bytes
   // Reason is an optional reason the member is joining (or rejoining) the
   // group (KIP-800, Kafka 3.2+).
-  Reason: nullable-string // v9+
+  Reason: nullable-string // v8+
 
 // JoinGroupResponse is returned from a JoinGroupRequest.
 JoinGroupResponse =>

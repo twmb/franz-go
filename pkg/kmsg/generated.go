@@ -6432,10 +6432,25 @@ func (v *MetadataResponse) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Topic
-				if isFlexible {
-					dst = kbin.AppendCompactNullableString(dst, v)
+				if version < 12 {
+					var vv string
+					if v != nil {
+						vv = *v
+					}
+					{
+						v := vv
+						if isFlexible {
+							dst = kbin.AppendCompactString(dst, v)
+						} else {
+							dst = kbin.AppendString(dst, v)
+						}
+					}
 				} else {
-					dst = kbin.AppendNullableString(dst, v)
+					if isFlexible {
+						dst = kbin.AppendCompactNullableString(dst, v)
+					} else {
+						dst = kbin.AppendNullableString(dst, v)
+					}
 				}
 			}
 			if version >= 10 {
@@ -6670,17 +6685,35 @@ func (v *MetadataResponse) readFrom(src []byte, unsafe bool) error {
 			}
 			{
 				var v *string
-				if isFlexible {
-					if unsafe {
-						v = b.UnsafeCompactNullableString()
+				if version < 12 {
+					var vv string
+					if isFlexible {
+						if unsafe {
+							vv = b.UnsafeCompactString()
+						} else {
+							vv = b.CompactString()
+						}
 					} else {
-						v = b.CompactNullableString()
+						if unsafe {
+							vv = b.UnsafeString()
+						} else {
+							vv = b.String()
+						}
 					}
+					v = &vv
 				} else {
-					if unsafe {
-						v = b.UnsafeNullableString()
+					if isFlexible {
+						if unsafe {
+							v = b.UnsafeCompactNullableString()
+						} else {
+							v = b.CompactNullableString()
+						}
 					} else {
-						v = b.NullableString()
+						if unsafe {
+							v = b.UnsafeNullableString()
+						} else {
+							v = b.NullableString()
+						}
 					}
 				}
 				s.Topic = v
@@ -8682,7 +8715,7 @@ type UpdateMetadataRequestTopicPartition struct {
 
 	Replicas []int32
 
-	OfflineReplicas []int32
+	OfflineReplicas []int32 // v4+
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v6+
@@ -8906,7 +8939,7 @@ func (v *UpdateMetadataRequest) AppendTo(dst []byte) []byte {
 					dst = kbin.AppendInt32(dst, v)
 				}
 			}
-			{
+			if version >= 4 {
 				v := v.OfflineReplicas
 				if isFlexible {
 					dst = kbin.AppendCompactArrayLen(dst, len(v))
@@ -9006,7 +9039,7 @@ func (v *UpdateMetadataRequest) AppendTo(dst []byte) []byte {
 							dst = kbin.AppendInt32(dst, v)
 						}
 					}
-					{
+					if version >= 4 {
 						v := v.OfflineReplicas
 						if isFlexible {
 							dst = kbin.AppendCompactArrayLen(dst, len(v))
@@ -9246,7 +9279,7 @@ func (v *UpdateMetadataRequest) readFrom(src []byte, unsafe bool) error {
 				v = a
 				s.Replicas = v
 			}
-			{
+			if version >= 4 {
 				v := s.OfflineReplicas
 				a := v
 				var l int32
@@ -9420,7 +9453,7 @@ func (v *UpdateMetadataRequest) readFrom(src []byte, unsafe bool) error {
 						v = a
 						s.Replicas = v
 					}
-					{
+					if version >= 4 {
 						v := s.OfflineReplicas
 						a := v
 						var l int32
@@ -12564,7 +12597,7 @@ type JoinGroupRequest struct {
 
 	// Reason is an optional reason the member is joining (or rejoining) the
 	// group (KIP-800, Kafka 3.2+).
-	Reason *string // v9+
+	Reason *string // v8+
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v6+
@@ -12663,7 +12696,7 @@ func (v *JoinGroupRequest) AppendTo(dst []byte) []byte {
 			}
 		}
 	}
-	if version >= 9 {
+	if version >= 8 {
 		v := v.Reason
 		if isFlexible {
 			dst = kbin.AppendCompactNullableString(dst, v)
@@ -12823,7 +12856,7 @@ func (v *JoinGroupRequest) readFrom(src []byte, unsafe bool) error {
 		v = a
 		s.Protocols = v
 	}
-	if version >= 9 {
+	if version >= 8 {
 		var v *string
 		if isFlexible {
 			if unsafe {
@@ -35251,6 +35284,9 @@ type VoteResponseTopicPartition struct {
 	// The ID of the current leader, or -1 if the leader is unknown.
 	LeaderID int32
 
+	// The latest known leader epoch.
+	LeaderEpoch int32
+
 	// Whether the vote was granted.
 	VoteGranted bool
 
@@ -35357,6 +35393,10 @@ func (v *VoteResponse) AppendTo(dst []byte) []byte {
 					}
 					{
 						v := v.LeaderID
+						dst = kbin.AppendInt32(dst, v)
+					}
+					{
+						v := v.LeaderEpoch
 						dst = kbin.AppendInt32(dst, v)
 					}
 					{
@@ -35470,6 +35510,10 @@ func (v *VoteResponse) readFrom(src []byte, unsafe bool) error {
 					{
 						v := b.Int32()
 						s.LeaderID = v
+					}
+					{
+						v := b.Int32()
+						s.LeaderEpoch = v
 					}
 					{
 						v := b.Bool()

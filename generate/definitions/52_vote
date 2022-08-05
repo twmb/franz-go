@@ -27,5 +27,7 @@ VoteResponse =>
       ErrorCode: int16
       // The ID of the current leader, or -1 if the leader is unknown.
       LeaderID: int32
+      // The latest known leader epoch.
+      LeaderEpoch: int32
       // Whether the vote was granted.
       VoteGranted: bool

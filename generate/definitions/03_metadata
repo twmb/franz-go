@@ -63,7 +63,7 @@ MetadataResponse =>
     // There can be a myriad of other errors for unsuccessful topic creation.
     ErrorCode: int16
     // Topic is the topic this metadata corresponds to.
-    Topic: nullable-string
+    Topic: nullable-string-v12+
     // The topic ID.
     TopicID: uuid // v10+
     // IsInternal signifies whether this topic is a Kafka internal topic.

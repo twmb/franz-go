@@ -7,7 +7,7 @@ UpdateMetadataRequestTopicPartition => not top level, no encoding, flexible v6+
   ISR: [int32]
   ZKVersion: int32
   Replicas: [int32]
-  OfflineReplicas: [int32]
+  OfflineReplicas: [int32] // v4+
 
 // UpdateMetadataRequest is an advanced request that brokers use to
 // issue metadata updates to each other.
