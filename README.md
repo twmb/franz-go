@@ -46,6 +46,31 @@ This library attempts to provide an intuitive API while interacting with Kafka t
 
 [MSEH]: https://docs.microsoft.com/en-us/azure/event-hubs/apache-kafka-troubleshooting-guide#compressionmessage-format-version-issue
 
+## Install
+
+This repo contains multiple tags to allow separate features to be developed and
+released independently. The main client is in franz-go. Plugins are released
+from `plugin/{plugin}`. The raw-protocol package is released from `pkg/kmsg`,
+and the admin package is released from `pkg/kadm`.
+
+To use just the main client,
+
+```
+go get github.com/twmb/franz-go
+```
+
+To use a plugin,
+
+```
+go get github.com/twmb/franz-go/plugin/kzap
+```
+
+To use kadm,
+
+```
+go get github.com/twmb/franz-go/pkg/kadm
+```
+
 ## Getting started
 
 Here's a basic overview of producing and consuming:
