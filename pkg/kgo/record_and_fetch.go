@@ -1,6 +1,7 @@
 package kgo
 
 import (
+	"context"
 	"errors"
 	"reflect"
 	"time"
@@ -358,7 +359,7 @@ func (f Fetch) hasErrorsOrRecords() bool {
 	return false
 }
 
-// IsClientClosed returns whether the fetches includes an error indicating that
+// IsClientClosed returns whether the fetches include an error indicating that
 // the client is closed.
 //
 // This function is useful to break out of a poll loop; you likely want to call
@@ -367,6 +368,11 @@ func (fs Fetches) IsClientClosed() bool {
 	// An injected ErrClientClosed is a single fetch with one topic and
 	// one partition. We can use this to make IsClientClosed do less work.
 	return len(fs) == 1 && len(fs[0].Topics) == 1 && len(fs[0].Topics[0].Partitions) == 1 && errors.Is(fs[0].Topics[0].Partitions[0].Err, ErrClientClosed)
+}
+
+// IsContextCanceled same as IsClientClosed but checks for context.Canceled error.
+func (fs Fetches) IsContextCanceled() bool {
+	return len(fs) == 1 && len(fs[0].Topics) == 1 && len(fs[0].Topics[0].Partitions) == 1 && errors.Is(fs[0].Topics[0].Partitions[0].Err, context.Canceled)
 }
 
 // Err returns the first error in all fetches, if any. This can be used to
