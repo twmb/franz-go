@@ -1,7 +1,6 @@
 package kgo
 
 import (
-	"context"
 	"errors"
 	"reflect"
 	"time"
@@ -314,26 +313,25 @@ type FetchError struct {
 //
 // There are four classes of errors possible:
 //
-//   1) a normal kerr.Error; these are usually the non-retriable kerr.Errors,
-//      but theoretically a non-retriable error can be fixed at runtime (auth
-//      error? fix auth). It is worth restarting the client for these errors if
-//      you do not intend to fix this problem at runtime.
+//  1. a normal kerr.Error; these are usually the non-retriable kerr.Errors,
+//     but theoretically a non-retriable error can be fixed at runtime (auth
+//     error? fix auth). It is worth restarting the client for these errors if
+//     you do not intend to fix this problem at runtime.
 //
-//   2) an injected *ErrDataLoss; these are informational, the client
-//      automatically resets consuming to where it should and resumes. This
-//      error is worth logging and investigating, but not worth restarting the
-//      client for.
+//  2. an injected *ErrDataLoss; these are informational, the client
+//     automatically resets consuming to where it should and resumes. This
+//     error is worth logging and investigating, but not worth restarting the
+//     client for.
 //
-//   3) an untyped batch parse failure; these are usually unrecoverable by
-//      restarts, and it may be best to just let the client continue. However,
-//      restarting is an option, but you may need to manually repair your
-//      partition.
+//  3. an untyped batch parse failure; these are usually unrecoverable by
+//     restarts, and it may be best to just let the client continue. However,
+//     restarting is an option, but you may need to manually repair your
+//     partition.
 //
-//   4) an injected ErrClientClosed; this is a fatal informational error that
-//      is returned from every Poll call if the client has been closed.
-//      A corresponding helper function IsClientClosed can be used to detect
-//      this error.
-//
+//  4. an injected ErrClientClosed; this is a fatal informational error that
+//     is returned from every Poll call if the client has been closed.
+//     A corresponding helper function IsClientClosed can be used to detect
+//     this error.
 func (fs Fetches) Errors() []FetchError {
 	var errs []FetchError
 	fs.EachError(func(t string, p int32, err error) {
@@ -370,9 +368,15 @@ func (fs Fetches) IsClientClosed() bool {
 	return len(fs) == 1 && len(fs[0].Topics) == 1 && len(fs[0].Topics[0].Partitions) == 1 && errors.Is(fs[0].Topics[0].Partitions[0].Err, ErrClientClosed)
 }
 
-// IsContextCanceled same as IsClientClosed but checks for context.Canceled error.
-func (fs Fetches) IsContextCanceled() bool {
-	return len(fs) == 1 && len(fs[0].Topics) == 1 && len(fs[0].Topics[0].Partitions) == 1 && errors.Is(fs[0].Topics[0].Partitions[0].Err, context.Canceled)
+// OnlyError returns an error when the fetches consist of only one error.
+//
+// This function is useful to break out of a poll loop; you likely want to call
+// this function before calling Errors.
+func (fs Fetches) OnlyError() error {
+	if len(fs) == 1 && len(fs[0].Topics) == 1 && len(fs[0].Topics[0].Partitions) == 1 {
+		return fs[0].Topics[0].Partitions[0].Err
+	}
+	return nil
 }
 
 // Err returns the first error in all fetches, if any. This can be used to
