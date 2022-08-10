@@ -313,26 +313,25 @@ type FetchError struct {
 //
 // There are four classes of errors possible:
 //
-//   1) a normal kerr.Error; these are usually the non-retriable kerr.Errors,
-//      but theoretically a non-retriable error can be fixed at runtime (auth
-//      error? fix auth). It is worth restarting the client for these errors if
-//      you do not intend to fix this problem at runtime.
+//  1. a normal kerr.Error; these are usually the non-retriable kerr.Errors,
+//     but theoretically a non-retriable error can be fixed at runtime (auth
+//     error? fix auth). It is worth restarting the client for these errors if
+//     you do not intend to fix this problem at runtime.
 //
-//   2) an injected *ErrDataLoss; these are informational, the client
-//      automatically resets consuming to where it should and resumes. This
-//      error is worth logging and investigating, but not worth restarting the
-//      client for.
+//  2. an injected *ErrDataLoss; these are informational, the client
+//     automatically resets consuming to where it should and resumes. This
+//     error is worth logging and investigating, but not worth restarting the
+//     client for.
 //
-//   3) an untyped batch parse failure; these are usually unrecoverable by
-//      restarts, and it may be best to just let the client continue. However,
-//      restarting is an option, but you may need to manually repair your
-//      partition.
+//  3. an untyped batch parse failure; these are usually unrecoverable by
+//     restarts, and it may be best to just let the client continue. However,
+//     restarting is an option, but you may need to manually repair your
+//     partition.
 //
-//   4) an injected ErrClientClosed; this is a fatal informational error that
-//      is returned from every Poll call if the client has been closed.
-//      A corresponding helper function IsClientClosed can be used to detect
-//      this error.
-//
+//  4. an injected ErrClientClosed; this is a fatal informational error that
+//     is returned from every Poll call if the client has been closed.
+//     A corresponding helper function IsClientClosed can be used to detect
+//     this error.
 func (fs Fetches) Errors() []FetchError {
 	var errs []FetchError
 	fs.EachError(func(t string, p int32, err error) {
@@ -531,15 +530,34 @@ func (fs Fetches) EachRecord(fn func(*Record)) {
 // can process records individually, it is far more efficient to use the Each
 // functions or the RecordIter.
 func (fs Fetches) Records() []*Record {
-	var n int
-	fs.EachPartition(func(p FetchTopicPartition) {
-		n += len(p.Records)
-	})
-	rs := make([]*Record, 0, n)
+	rs := make([]*Record, 0, fs.NumRecords())
 	fs.EachPartition(func(p FetchTopicPartition) {
 		rs = append(rs, p.Records...)
 	})
 	return rs
+}
+
+// NumRecords returns the total number of records across all fetched partitions.
+func (fs Fetches) NumRecords() (n int) {
+	fs.EachPartition(func(p FetchTopicPartition) {
+		n += len(p.Records)
+	})
+	return n
+}
+
+// Empty checks whether the fetch result empty. This method is faster than NumRecords() == 0.
+func (fs Fetches) Empty() bool {
+	for i := range fs {
+		for j := range fs[i].Topics {
+			for k := range fs[i].Topics[j].Partitions {
+				if len(fs[i].Topics[j].Partitions[k].Records) > 0 {
+					return false
+				}
+			}
+		}
+	}
+
+	return true
 }
 
 // FetchTopicPartition is similar to FetchTopic, but for an individual
