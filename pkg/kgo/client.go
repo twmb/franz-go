@@ -740,7 +740,7 @@ start:
 						"tries", tries,
 						"backoff", backoff,
 						"request_error", err,
-						"response_error", err,
+						"response_error", retryErr,
 					)
 					if r.cl.waitTries(ctx, backoff) {
 						next, nextErr = r.br()
