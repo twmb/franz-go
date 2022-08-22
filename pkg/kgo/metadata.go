@@ -39,6 +39,42 @@ func (cl *Client) ForceMetadataRefresh() {
 	cl.triggerUpdateMetadataNow("from user ForceMetadataRefresh")
 }
 
+// PartitionLeader returns the given topic partition's leader, leader epoch and
+// load error. This returns -1, -1, nil if the partition has not been loaded.
+func (cl *Client) PartitionLeader(topic string, partition int32) (leader, leaderEpoch int32, err error) {
+	if partition < 0 {
+		return -1, -1, errors.New("invalid negative partition")
+	}
+
+	var t *topicPartitions
+
+	m := cl.producer.topics.load()
+	if len(m) > 0 {
+		t = m[topic]
+	}
+	if t == nil {
+		if cl.consumer.g != nil {
+			if m = cl.consumer.g.tps.load(); len(m) > 0 {
+				t = m[topic]
+			}
+		} else if cl.consumer.d != nil {
+			if m = cl.consumer.d.tps.load(); len(m) > 0 {
+				t = m[topic]
+			}
+		}
+		if t == nil {
+			return -1, -1, nil
+		}
+	}
+
+	tv := t.load()
+	if len(tv.partitions) <= int(partition) {
+		return -1, -1, tv.loadErr
+	}
+	p := tv.partitions[partition]
+	return p.leader, p.leaderEpoch, p.loadErr
+}
+
 // waitmeta returns immediately if metadata was updated within the last second,
 // otherwise this waits for up to wait for a metadata update to complete.
 func (cl *Client) waitmeta(ctx context.Context, wait time.Duration, why string) {
@@ -260,11 +296,11 @@ func (cl *Client) updateMetadata() (retryWhy multiUpdateWhy, err error) {
 	)
 	c := &cl.consumer
 	switch {
-	case c.d != nil:
-		tpsConsumer = c.d.tps
 	case c.g != nil:
 		tpsConsumer = c.g.tps
 		groupExternal = c.g.loadExternal()
+	case c.d != nil:
+		tpsConsumer = c.d.tps
 	}
 
 	if !all {

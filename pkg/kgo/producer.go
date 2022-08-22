@@ -560,6 +560,31 @@ func (cl *Client) doPartitionRecord(parts *topicPartitions, partsData *topicPart
 	}
 }
 
+// ProducerID returns, loading if necessary, the current producer ID and epoch.
+// This returns an error if the producer ID could not be loaded, if the
+// producer ID has fatally errored, or if the context is canceled.
+func (cl *Client) ProducerID(ctx context.Context) (int64, int16, error) {
+	var (
+		id    int64
+		epoch int16
+		err   error
+
+		done = make(chan struct{})
+	)
+
+	go func() {
+		defer close(done)
+		id, epoch, err = cl.producerID()
+	}()
+
+	select {
+	case <-ctx.Done():
+		return 0, 0, ctx.Err()
+	case <-done:
+		return id, epoch, err
+	}
+}
+
 type producerID struct {
 	id    int64
 	epoch int16

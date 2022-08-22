@@ -176,6 +176,21 @@ func (cl *Client) LeaveGroup() {
 	wait() // wait after we unlock
 }
 
+// GroupMetadata returns the current group member ID and generation, or an
+// empty string and -1 if not in the group.
+func (cl *Client) GroupMetadata() (string, int32) {
+	g := cl.consumer.g
+	if g == nil {
+		return "", -1
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.memberID == "" {
+		return "", -1
+	}
+	return g.memberID, g.generation
+}
+
 func (c *consumer) initGroup() {
 	ctx, cancel := context.WithCancel(c.cl.ctx)
 	g := &groupConsumer{
