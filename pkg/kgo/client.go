@@ -429,9 +429,14 @@ func (cl *Client) supportsOffsetForLeaderEpoch() bool {
 	cl.brokersMu.RLock()
 	defer cl.brokersMu.RUnlock()
 
-	for _, b := range cl.brokers {
-		if v := b.loadVersions(); v != nil && v.versions[23] >= 2 {
-			return true
+	for _, brokers := range [][]*broker{
+		cl.brokers,
+		cl.seeds,
+	} {
+		for _, b := range brokers {
+			if v := b.loadVersions(); v != nil && v.versions[23] >= 2 {
+				return true
+			}
 		}
 	}
 	return false
