@@ -53,7 +53,10 @@ released independently. The main client is in franz-go. Plugins are released
 from `plugin/{plugin}`. The raw-protocol package is released from `pkg/kmsg`,
 and the admin package is released from `pkg/kadm`.
 
-To use just the main client,
+The main client is located in the package `github.com/twmb/franz-go/pkg/kgo`,
+while the root of the project is at `github.com/twmb/franz-go`. There are
+a few extra packages within the project, as well as a few sub-modules. To
+use the main kgo package,
 
 ```
 go get github.com/twmb/franz-go
@@ -69,6 +72,16 @@ To use kadm,
 
 ```
 go get github.com/twmb/franz-go/pkg/kadm
+```
+
+As an example, your require section in go.mod may look like this:
+
+
+```
+require (
+	github.com/twmb/franz-go v1.7.0
+	github.com/twmb/franz-go/pkg/kmsg v1.1.0
+)
 ```
 
 ## Getting started
