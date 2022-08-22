@@ -2414,6 +2414,33 @@ func (g *groupConsumer) commit(
 	uncommitted map[string]map[int32]EpochOffset,
 	onDone func(*Client, *kmsg.OffsetCommitRequest, *kmsg.OffsetCommitResponse, error),
 ) {
+	// The user could theoretically give us topics that have no partitions
+	// to commit. We strip those: Kafka does not reply to them, and we
+	// expect all partitions in our request to be replied to in
+	// updateCommitted. If any topic is empty, we deeply clone and then
+	// strip everything empty. See #186.
+	var clone bool
+	for _, ps := range uncommitted {
+		if len(ps) == 0 {
+			clone = true
+			break
+		}
+	}
+	if clone {
+		dup := make(map[string]map[int32]EpochOffset, len(uncommitted))
+		for t, ps := range uncommitted {
+			if len(ps) == 0 {
+				continue
+			}
+			dupPs := make(map[int32]EpochOffset, len(ps))
+			dup[t] = dupPs
+			for p, eo := range ps {
+				dupPs[p] = eo
+			}
+		}
+		uncommitted = dup
+	}
+
 	g.commitAcrossRebalance(ctx, uncommitted, onDone, 1)
 }
 
