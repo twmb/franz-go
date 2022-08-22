@@ -357,21 +357,40 @@ func (f Fetch) hasErrorsOrRecords() bool {
 	return false
 }
 
-// IsClientClosed returns whether the fetches includes an error indicating that
+// IsClientClosed returns whether the fetches include an error indicating that
 // the client is closed.
 //
 // This function is useful to break out of a poll loop; you likely want to call
-// this function before calling Errors.
+// this function before calling Errors. If you may cancel the context to poll,
+// you may want to use Err0 and manually check errors.Is(ErrClientClosed) or
+// errors.Is(context.Canceled).
 func (fs Fetches) IsClientClosed() bool {
 	// An injected ErrClientClosed is a single fetch with one topic and
 	// one partition. We can use this to make IsClientClosed do less work.
 	return len(fs) == 1 && len(fs[0].Topics) == 1 && len(fs[0].Topics[0].Partitions) == 1 && errors.Is(fs[0].Topics[0].Partitions[0].Err, ErrClientClosed)
 }
 
+// Err0 returns the error at the 0th index fetch, topic, and partition. This
+// can be used to quickly check if polling returned early because the client
+// was closed or the context was canceled and is faster than performing a
+// linear scan over all partitions with Err. When the client is closed or the
+// context is canceled, fetches will contain only one partition whose Err field
+// indicates the close / cancel. Note that this returns whatever the first
+// error is, nil or non-nil, and does not check for a specific error value.
+func (fs Fetches) Err0() error {
+	if len(fs) > 0 && len(fs[0].Topics) > 0 && len(fs[0].Topics[0].Partitions) > 0 {
+		return fs[0].Topics[0].Partitions[0].Err
+	}
+	return nil
+}
+
 // Err returns the first error in all fetches, if any. This can be used to
 // quickly check if the client is closed or your poll context was canceled, or
 // to check if there's some other error that requires deeper investigation with
-// EachError.
+// EachError. This function performs a linear scan over all fetched partitions.
+// It is recommended to always check all errors. If you would like to more
+// quickly check ahead of time if a poll was canceled because of closing the
+// client or canceling the context, you can use Err0.
 func (fs Fetches) Err() error {
 	for _, f := range fs {
 		for i := range f.Topics {
