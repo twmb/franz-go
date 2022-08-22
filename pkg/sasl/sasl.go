@@ -31,3 +31,11 @@ type Mechanism interface {
 	// The provided context can be used through the duration of the session.
 	Authenticate(ctx context.Context, host string) (Session, []byte, error)
 }
+
+// ClosingMechanism is an optional interface for sasl mechanism's. Implementing
+// this interface signals that the mechanism should be closed if it will never
+// be used again.
+type ClosingMechanism interface {
+	// Close permanently closes a mechanism.
+	Close()
+}

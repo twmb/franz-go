@@ -23,6 +23,7 @@ import (
 
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kmsg"
+	"github.com/twmb/franz-go/pkg/sasl"
 )
 
 var crc32c = crc32.MakeTable(crc32.Castagnoli) // record crc's use Castagnoli table; for consuming/producing
@@ -604,6 +605,12 @@ func (cl *Client) Close() {
 	// drained, because draining a fetch is what decrements an "active"
 	// fetch. PollFetches with `nil` is instant.
 	cl.PollFetches(nil)
+
+	for _, s := range cl.cfg.sasls {
+		if closing, ok := s.(sasl.ClosingMechanism); ok {
+			closing.Close()
+		}
+	}
 }
 
 // Request issues a request to Kafka, waiting for and returning the response.

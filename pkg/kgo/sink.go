@@ -976,7 +976,6 @@ func (s *sink) removeRecBuf(rm *recBuf) {
 
 	if rm.recBufsIdx != len(s.recBufs)-1 {
 		s.recBufs[rm.recBufsIdx], s.recBufs[len(s.recBufs)-1] = s.recBufs[len(s.recBufs)-1], nil
-
 		s.recBufs[rm.recBufsIdx].recBufsIdx = rm.recBufsIdx
 	} else {
 		s.recBufs[rm.recBufsIdx] = nil // do not let this removal hang around
