@@ -247,9 +247,9 @@ func (cl *Client) metadata(ctx context.Context, noTopics bool, topics []string) 
 
 				Leader:          p.Leader,
 				LeaderEpoch:     p.LeaderEpoch,
-				Replicas:        int32s(p.Replicas),
-				ISR:             int32s(p.ISR),
-				OfflineReplicas: int32s(p.OfflineReplicas),
+				Replicas:        p.Replicas,
+				ISR:             p.ISR,
+				OfflineReplicas: p.OfflineReplicas,
 
 				Err: kerr.ErrorForCode(p.ErrorCode),
 			}
