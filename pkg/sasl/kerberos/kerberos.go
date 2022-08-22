@@ -20,8 +20,18 @@ import (
 // Auth contains a Kerberos client and the service name that we will use to get
 // a ticket for.
 type Auth struct {
-	// Client is a Kerberos client.
+	// Client is a Kerberos client. This is not used if ClientFn is
+	// non-nil.
 	Client *client.Client
+
+	// ClientFn returns a newly initialized Kerberos client. If this is
+	// non-nil, it is used for every new sasl session and you must return a
+	// new client every time. Regardless of all other docs, the client is
+	// never persisted, because each client is assumed to be unique.
+	//
+	// This function is similar to the sarama's NewKerberosClientFunc
+	// field.
+	ClientFn func(context.Context) *client.Client
 
 	// Service is the service name we will get a ticket for.
 	Service string
@@ -29,12 +39,16 @@ type Auth struct {
 	// PersistAfterAuth specifies whether the client should persist after
 	// logging in or if it should be destroyed (the default).
 	//
-	// If persisting, we never call client.Destroy ourselves, and it is
-	// expected that you will return the same client in every authFn. The
-	// client itself spins up a goroutine to automatically renew sessions,
-	// thus if you return the same client, nothing leaks, but if you return
-	// a new client on every call and set PersistAfterAuth, goroutines will
-	// leak.
+	// If persisting, we never call client.Destroy ourselves in the session
+	// flow, and it is expected that you will return the same client in
+	// every authFn. The client itself spins up a goroutine to
+	// automatically renew sessions, thus if you return the same client,
+	// nothing leaks, but if you return a new client on every call and set
+	// PersistAfterAuth, goroutines will leak.
+	//
+	// Note that this field is ignored and clients are always destroyed if
+	// ClientFn is non-nil. As well, AsMechanismWithClose can ensure the
+	// Kerberos client is destroyed when you close your kgo.Client.
 	PersistAfterAuth bool
 }
 
@@ -43,14 +57,41 @@ type Auth struct {
 //
 // This is a shortcut for using the Kerberos function and is useful when you do
 // not need to live-rotate credentials.
+//
+// This option automatically sets Auth.PersistAfterAuth to true, because the
+// client will be used for all authentications.
+//
+// NOTE: This will NOT close the Kerberos client when a kgo.Client is closed.
+// Use AsMechanismWithClose to opt into the Kerberos client automatically
+// closing when you close your kgo.Client.
 func (a Auth) AsMechanism() sasl.Mechanism {
+	a.PersistAfterAuth = true
 	return Kerberos(func(context.Context) (Auth, error) {
 		return a, nil
 	})
 }
 
+// AsMechanismWithClose returns a sasl mechanism that will use a as credentials
+// for all sasl sessions.
+//
+// This is similar to AsMechanism, but also attachs the optional Close function
+// to satisfy sasl.ClosingMechanism. This function persists the Kerberos client
+// across all connections. The Kerberos client is destroyed when the kgo.Client
+// is closed.
+func (a Auth) AsMechanismWithClose() sasl.Mechanism {
+	a.PersistAfterAuth = true
+	return &closing{
+		auth: a,
+		k: func(context.Context) (Auth, error) {
+			return a, nil
+		},
+	}
+}
+
 // Kerberos returns a sasl mechanism that will call authFn whenever sasl
 // authentication is needed. The returned Auth is used for a single session.
+// Be sure to set PersistAfterAuth to true if you want the same underlying
+// client to be reused for future authentication calls.
 func Kerberos(authFn func(context.Context) (Auth, error)) sasl.Mechanism {
 	return k(authFn)
 }
@@ -58,7 +99,19 @@ func Kerberos(authFn func(context.Context) (Auth, error)) sasl.Mechanism {
 type (
 	k       func(context.Context) (Auth, error)
 	wrapped struct{ *client.Client }
+
+	closing struct {
+		auth Auth
+		k
+	}
 )
+
+var _ sasl.ClosingMechanism = new(closing)
+
+// Close implements sasl.ClosingMechanism.
+func (c *closing) Close() {
+	c.auth.Client.Destroy()
+}
 
 func (k) Name() string { return "GSSAPI" }
 func (k k) Authenticate(ctx context.Context, host string) (sasl.Session, []byte, error) {
@@ -67,7 +120,14 @@ func (k k) Authenticate(ctx context.Context, host string) (sasl.Session, []byte,
 		return nil, nil, err
 	}
 	c := &wrapped{kerb.Client}
-	if !kerb.PersistAfterAuth {
+
+	persist := kerb.PersistAfterAuth
+	if kerb.ClientFn != nil {
+		persist = false
+		c.Client = kerb.ClientFn(ctx)
+	}
+
+	if !persist {
 		runtime.SetFinalizer(c, func(c *wrapped) { c.Destroy() })
 	}
 
