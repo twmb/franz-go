@@ -1,3 +1,30 @@
+v1.7.0
+===
+
+This feature release adds a few new APIs to expose more information in the
+client or make some things simpler. There are also two minor bug fixes:
+manually committing a topic with no partitions would previously result in an
+error, and we previously did not properly load the partition leader epochs for
+a brief period of time when the client started which prevented truncation
+detection. See the commits below for more details.
+
+[`3a229d9`](https://github.com/twmb/franz-go/commit/3a229d9) kgo.Fetches: add Err0
+[`5dd3321`](https://github.com/twmb/franz-go/commit/5dd3321) kgo.EpochOffset: export Less, add docs
+[`2b38ec5`](https://github.com/twmb/franz-go/commit/2b38ec5) kgo: add CloseAllowingRebalance
+[`ac2f97b`](https://github.com/twmb/franz-go/commit/ac2f97b) kgo.Client: add GroupMetadata, ProducerID, PartitionLeader functions
+[`9497cf3`](https://github.com/twmb/franz-go/commit/9497cf3) **minor bugfix** kgo client.go: bugfix -1 leader epoch for a few minutes
+[`11e3277`](https://github.com/twmb/franz-go/commit/11e3277) **bugfix** consumer groups: do not commit empty topics
+[`52126de`](https://github.com/twmb/franz-go/commit/52126de) kgo: add optional interface to close sasls on client close
+[`#193`](https://github.com/twmb/franz-go/pull/193) **minor logging bugfix** Use correct error in debug log for request failure (thanks [@keitwb](https://github.com/keitwb))
+[`#191`](https://github.com/twmb/franz-go/pull/191) Add Fetches.NumRecords(), Fetches.Empty() (thanks [@un000](https://github.com/un000))
+[`669a761`](https://github.com/twmb/franz-go/commit/669a761) kerr: add two new errors
+
+Also recently and newly released:
+
+* [pkg/kmsg v1.2.0](https://github.com/twmb/franz-go/releases/tag/pkg%2Fkmsg%2Fv1.2.0), adding protocol support for new incoming KIPs.
+* [pkg/kadm v1.2.1](https://github.com/twmb/franz-go/releases/tag/pkg%2Fkadm%2Fv1.2.1), removing sorting from metadata response replica fields (v1.2 added new helpers)
+* [pkg/sasl/kerberos v1.1.0](https://github.com/twmb/franz-go/releases/tag/pkg%2Fsasl%2Fkerberos%2Fv1.1.0), making it easier to persist and shutdown the Kerberos client
+
 v1.6.0
 ===
 
