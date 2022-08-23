@@ -217,6 +217,16 @@ func NewClient(opts ...Opt) (*Client, error) {
 	return cl, nil
 }
 
+// Validate returns an error if the options are invalid.
+func Validate(opts ...Opt) error {
+	cfg := defaultCfg()
+	for _, opt := range opts {
+		opt.apply(&cfg)
+	}
+
+	return cfg.validate()
+}
+
 // Ping returns whether any broker is reachable, iterating over any discovered
 // broker or seed broker until one returns a successful response to an
 // ApiVersions request. No discovered broker nor seed broker is attempted more
