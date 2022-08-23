@@ -111,7 +111,37 @@ type hostport struct {
 	port int32
 }
 
-const defaultKafkaPort = 9092
+// ValidateOpts returns an error if the options are invalid.
+func ValidateOpts(opts ...Opt) error {
+	_, _, _, err := validateCfg(opts...)
+	return err
+}
+
+// This function validates the configuration and returns a few things that we
+// initialize while validating. The difference between this and NewClient
+// initialization is all NewClient initialization is infallible.
+func validateCfg(opts ...Opt) (cfg, []hostport, *compressor, error) {
+	cfg := defaultCfg()
+	for _, opt := range opts {
+		opt.apply(&cfg)
+	}
+	if err := cfg.validate(); err != nil {
+		return cfg, nil, nil, err
+	}
+	seeds := make([]hostport, 0, len(cfg.seedBrokers))
+	for _, seedBroker := range cfg.seedBrokers {
+		hp, err := parseBrokerAddr(seedBroker)
+		if err != nil {
+			return cfg, nil, nil, err
+		}
+		seeds = append(seeds, hp)
+	}
+	compressor, err := newCompressor(cfg.compression...)
+	if err != nil {
+		return cfg, nil, nil, err
+	}
+	return cfg, seeds, compressor, nil
+}
 
 // NewClient returns a new Kafka client with the given options or an error if
 // the options are invalid. Connections to brokers are lazily created only when
@@ -126,9 +156,9 @@ const defaultKafkaPort = 9092
 // NewClient also launches a goroutine which periodically updates the cached
 // topic metadata.
 func NewClient(opts ...Opt) (*Client, error) {
-	cfg := defaultCfg()
-	for _, opt := range opts {
-		opt.apply(&cfg)
+	cfg, seeds, compressor, err := validateCfg(opts...)
+	if err != nil {
+		return nil, err
 	}
 
 	if cfg.retryTimeout == nil {
@@ -141,19 +171,6 @@ func NewClient(opts ...Opt) (*Client, error) {
 			}
 			return 30 * time.Second
 		}
-	}
-
-	if err := cfg.validate(); err != nil {
-		return nil, err
-	}
-
-	seeds := make([]hostport, 0, len(cfg.seedBrokers))
-	for _, seedBroker := range cfg.seedBrokers {
-		hp, err := parseBrokerAddr(seedBroker)
-		if err != nil {
-			return nil, err
-		}
-		seeds = append(seeds, hp)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -174,6 +191,7 @@ func NewClient(opts ...Opt) (*Client, error) {
 		bufPool: newBufPool(),
 		prsPool: newPrsPool(),
 
+		compressor:   compressor,
 		decompressor: newDecompressor(),
 
 		coordinators: make(map[coordinatorKey]*coordinatorLoad),
@@ -183,12 +201,6 @@ func NewClient(opts ...Opt) (*Client, error) {
 		blockingMetadataFnCh: make(chan func()),
 		metadone:             make(chan struct{}),
 	}
-
-	compressor, err := newCompressor(cl.cfg.compression...)
-	if err != nil {
-		return nil, err
-	}
-	cl.compressor = compressor
 
 	// Before we start any goroutines below, we must notify any interested
 	// hooks of our existence.
@@ -304,6 +316,8 @@ func (cl *Client) PurgeTopicsFromClient(topics ...string) {
 // - IPv6 IP without port:  "[2001:1000:2000::1]", "::1"
 // - IPv6 IP with port: "[2001:1000:2000::1]:1234"
 func parseBrokerAddr(addr string) (hostport, error) {
+	const defaultKafkaPort = 9092
+
 	// Bracketed IPv6
 	if strings.IndexByte(addr, '[') == 0 {
 		parts := strings.Split(addr[1:], "]")
