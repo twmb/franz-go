@@ -124,7 +124,7 @@ func main() {
 		kgo.ConsumerGroup(*group),
 		kgo.ConsumeTopics(*topic),
 		kgo.OnPartitionsAssigned(s.assigned),
-		kgo.OnPartitionsRevoked(s.lost),
+		kgo.OnPartitionsRevoked(s.revoked),
 		kgo.OnPartitionsLost(s.lost),
 		kgo.AutoCommitMarks(),
 		kgo.BlockRebalanceOnPoll(),
