@@ -674,16 +674,15 @@ func (cl *Client) mergeTopicPartitions(
 			// agree things rewound.
 			const maxEpochRewinds = 5
 			if oldTP.epochRewinds < maxEpochRewinds {
-				*newTP = *oldTP
-				newTP.epochRewinds++
-
 				cl.cfg.logger.Log(LogLevelDebug, "metadata leader epoch went backwards, ignoring update",
 					"topic", topic,
 					"partition", part,
 					"old_leader_epoch", oldTP.leaderEpoch,
 					"new_leader_epoch", newTP.leaderEpoch,
-					"current_num_rewinds", newTP.epochRewinds,
+					"current_num_rewinds", oldTP.epochRewinds+1,
 				)
+				*newTP = *oldTP
+				newTP.epochRewinds++
 				retryWhy.add(topic, int32(part), errEpochRewind)
 				continue
 			}

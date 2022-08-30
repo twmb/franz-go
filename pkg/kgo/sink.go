@@ -900,10 +900,18 @@ func (s *sink) handleRetryBatches(
 	canFail bool, // if records can fail if they are at limits
 	why string,
 ) {
+	logger := s.cl.cfg.logger
+	debug := logger.Level() >= LogLevelDebug
 	var needsMetaUpdate bool
 	var shouldBackoff bool
 	retry.eachOwnerLocked(func(batch seqRecBatch) {
 		if !batch.isOwnersFirstBatch() {
+			if debug {
+				logger.Log(LogLevelDebug, "retry batch is not the first batch in the owner, skipping result",
+					"topic", batch.owner.topic,
+					"partition", batch.owner.partition,
+				)
+			}
 			return
 		}
 
@@ -931,6 +939,14 @@ func (s *sink) handleRetryBatches(
 			needsMetaUpdate = true
 		}
 	})
+
+	if debug {
+		logger.Log(LogLevelDebug, "retry batches processed",
+			"wanted_metadata_update", updateMeta,
+			"triggering_metadata_update", needsMetaUpdate,
+			"should_backoff", shouldBackoff,
+		)
+	}
 
 	// If we do want to metadata update, we only do so if any batch was the
 	// first batch in its buf / not concurrently failed.
