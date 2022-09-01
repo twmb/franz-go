@@ -1,6 +1,7 @@
 package kgo
 
 import (
+	"context"
 	"net"
 	"time"
 )
@@ -187,6 +188,14 @@ type HookGroupManageError interface {
 	// at runtime to recover (such as group auth errors, or group max size
 	// reached).
 	OnGroupManageError(error)
+}
+
+//////////
+// HACK //
+//////////
+
+type HookProduce interface {
+	OnProduce(ctx context.Context, r *Record, promise func(*Record, error))
 }
 
 ///////////////////////////////

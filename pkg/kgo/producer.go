@@ -24,6 +24,7 @@ type producer struct {
 	hooks *struct {
 		buffered   []HookProduceRecordBuffered
 		unbuffered []HookProduceRecordUnbuffered
+		onProduce  []HookProduce
 	}
 
 	hasHookBatchWritten bool
@@ -111,6 +112,7 @@ func (p *producer) init(cl *Client) {
 			p.hooks = &struct {
 				buffered   []HookProduceRecordBuffered
 				unbuffered []HookProduceRecordUnbuffered
+				onProduce  []HookProduce
 			}{}
 		}
 	}
@@ -126,6 +128,10 @@ func (p *producer) init(cl *Client) {
 		}
 		if _, ok := h.(HookProduceBatchWritten); ok {
 			p.hasHookBatchWritten = true
+		}
+		if h, ok := h.(HookProduce); ok {
+			inithooks()
+			p.hooks.onProduce = append(p.hooks.onProduce, h)
 		}
 	})
 }
@@ -371,8 +377,8 @@ func (cl *Client) produce(
 
 	p := &cl.producer
 	if p.hooks != nil {
-		for _, h := range p.hooks.buffered {
-			h.OnProduceRecordBuffered(r)
+		for _, h := range p.hooks.onProduce {
+			h.OnProduce(ctx, r, promise)
 		}
 	}
 
