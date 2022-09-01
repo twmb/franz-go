@@ -378,7 +378,7 @@ func (cl *Client) produce(
 	p := &cl.producer
 	if p.hooks != nil {
 		for _, h := range p.hooks.onProduce {
-			h.OnProduce(ctx, r, promise)
+			h.OnProduce(ctx, r)
 		}
 	}
 

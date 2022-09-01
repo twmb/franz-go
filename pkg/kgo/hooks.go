@@ -195,7 +195,7 @@ type HookGroupManageError interface {
 //////////
 
 type HookProduce interface {
-	OnProduce(ctx context.Context, r *Record, promise func(*Record, error))
+	OnProduce(ctx context.Context, r *Record)
 }
 
 ///////////////////////////////
