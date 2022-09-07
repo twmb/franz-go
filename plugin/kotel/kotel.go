@@ -30,7 +30,8 @@ func NewKotel(tracerProvider *sdktrace.TracerProvider) (*Kotel, error) {
 func (k *Kotel) OnProduce(ctx context.Context, r *kgo.Record) {
 	fmt.Println("OnProduce Reached")
 	tracer := k.TracerProvider.Tracer("foo")
-	spanContext, _ := tracer.Start(ctx, "produce")
+	spanContext, _ := tracer.Start(ctx, "produce", trace.WithSpanKind(trace.SpanKindProducer))
+
 	textMapPropagator := propagation.NewCompositeTextMapPropagator(propagation.TraceContext{})
 	textMapPropagator.Inject(spanContext, NewRecordCarrier(r))
 	k.spanMap[r] = spanContext
@@ -52,11 +53,10 @@ func (k *Kotel) OnFetchRecordBuffered(r *kgo.Record) {
 	producerSpan = textMapPropagator.Extract(producerSpan, NewRecordCarrier(r))
 	tracer := k.TracerProvider.Tracer("foo")
 
-	timeOpt := trace.WithTimestamp(r.Timestamp)
-	logappendContext, span := tracer.Start(producerSpan, "logappend", timeOpt)
+	logappendContext, span := tracer.Start(producerSpan, "logappend", trace.WithTimestamp(r.Timestamp), trace.WithSpanKind(trace.SpanKindConsumer))
 	span.End()
 
-	_, span = tracer.Start(logappendContext, "consume")
+	_, span = tracer.Start(logappendContext, "consume", trace.WithSpanKind(trace.SpanKindConsumer))
 	time.Sleep(time.Second)
 	span.End()
 }
