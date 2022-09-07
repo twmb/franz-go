@@ -3,6 +3,10 @@ package kotel
 import (
 	"context"
 	"fmt"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	semconv "go.opentelemetry.io/otel/semconv/v1.12.0"
+	"strconv"
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kgo"
@@ -30,7 +34,18 @@ func NewKotel(tracerProvider *sdktrace.TracerProvider) (*Kotel, error) {
 func (k *Kotel) OnProduce(ctx context.Context, r *kgo.Record) {
 	fmt.Println("OnProduce Reached")
 	tracer := k.TracerProvider.Tracer("foo")
-	spanContext, _ := tracer.Start(ctx, "produce", trace.WithSpanKind(trace.SpanKindProducer))
+
+	attrs := []attribute.KeyValue{
+		semconv.MessagingSystemKey.String("kafka"),
+		semconv.MessagingDestinationKindTopic,
+		semconv.MessagingDestinationKey.String(r.Topic),
+	}
+	opts := []trace.SpanStartOption{
+		trace.WithAttributes(attrs...),
+		trace.WithSpanKind(trace.SpanKindProducer),
+	}
+
+	spanContext, _ := tracer.Start(ctx, "produce", opts...)
 
 	textMapPropagator := propagation.NewCompositeTextMapPropagator(propagation.TraceContext{})
 	textMapPropagator.Inject(spanContext, NewRecordCarrier(r))
@@ -40,6 +55,17 @@ func (k *Kotel) OnProduce(ctx context.Context, r *kgo.Record) {
 func (k *Kotel) OnProduceRecordUnbuffered(r *kgo.Record, err error) {
 	fmt.Println("HookProduceRecordUnbuffered Reached")
 	span := trace.SpanFromContext(k.spanMap[r])
+
+	span.SetAttributes(
+		semconv.MessagingMessageIDKey.String(strconv.FormatInt(r.Offset, 10)),
+		semconv.MessagingKafkaPartitionKey.Int64(int64(r.Partition)),
+	)
+
+	if err != nil {
+		span.SetStatus(codes.Error, err.Error())
+		span.RecordError(err)
+	}
+
 	span.End()
 	defer delete(k.spanMap, r)
 }
@@ -53,10 +79,30 @@ func (k *Kotel) OnFetchRecordBuffered(r *kgo.Record) {
 	producerSpan = textMapPropagator.Extract(producerSpan, NewRecordCarrier(r))
 	tracer := k.TracerProvider.Tracer("foo")
 
-	logappendContext, span := tracer.Start(producerSpan, "logappend", trace.WithTimestamp(r.Timestamp), trace.WithSpanKind(trace.SpanKindConsumer))
+	attrs := []attribute.KeyValue{
+		semconv.MessagingSystemKey.String("kafka"),
+		semconv.MessagingDestinationKindTopic,
+		semconv.MessagingDestinationKey.String(r.Topic),
+		semconv.MessagingOperationReceive,
+		semconv.MessagingMessageIDKey.String(strconv.FormatInt(r.Offset, 10)),
+		semconv.MessagingKafkaPartitionKey.Int64(int64(r.Partition)),
+	}
+
+	opts := []trace.SpanStartOption{
+		trace.WithTimestamp(r.Timestamp),
+		trace.WithAttributes(attrs...),
+		trace.WithSpanKind(trace.SpanKindConsumer),
+	}
+	
+	logappendContext, span := tracer.Start(producerSpan, "logappend", opts...)
 	span.End()
 
-	_, span = tracer.Start(logappendContext, "consume", trace.WithSpanKind(trace.SpanKindConsumer))
+	opts = []trace.SpanStartOption{
+		trace.WithAttributes(attrs...),
+		trace.WithSpanKind(trace.SpanKindConsumer),
+	}
+
+	_, span = tracer.Start(logappendContext, "consume", opts...)
 	time.Sleep(time.Second)
 	span.End()
 }
