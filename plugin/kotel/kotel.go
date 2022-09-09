@@ -3,58 +3,55 @@ package kotel
 import (
 	"context"
 	"fmt"
+	"github.com/twmb/franz-go/pkg/kgo"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
-	semconv "go.opentelemetry.io/otel/semconv/v1.12.0"
-	"strconv"
-	"time"
-
-	"github.com/twmb/franz-go/pkg/kgo"
 	"go.opentelemetry.io/otel/propagation"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	semconv "go.opentelemetry.io/otel/semconv/v1.12.0"
 	"go.opentelemetry.io/otel/trace"
+	"strconv"
 )
 
+const libraryName = "github.com/twmb/franz-go/tree/master/plugin/kotel"
+
+// Kotel Requires a TracerProvider from the client
 type Kotel struct {
-	spanMap        map[*kgo.Record]context.Context
 	TracerProvider *sdktrace.TracerProvider
 }
 
 func NewKotel(tracerProvider *sdktrace.TracerProvider) (*Kotel, error) {
 	return &Kotel{
-		spanMap:        make(map[*kgo.Record]context.Context),
 		TracerProvider: tracerProvider,
 	}, nil
 }
 
-// Attribues ideas:
-// Topic, payload size, consumergroup (consumer only), clientid (who is calling)
-// Look at what attributes / labesl Sarama applies.
-
-func (k *Kotel) OnProduce(ctx context.Context, r *kgo.Record) {
-	fmt.Println("OnProduce Reached")
-	tracer := k.TracerProvider.Tracer("foo")
+func (k *Kotel) OnProduceRecordBuffered(r *kgo.Record) {
+	tracer := k.TracerProvider.Tracer(libraryName)
 
 	attrs := []attribute.KeyValue{
 		semconv.MessagingSystemKey.String("kafka"),
 		semconv.MessagingDestinationKindTopic,
 		semconv.MessagingDestinationKey.String(r.Topic),
+		semconv.MessagingKafkaClientIDKey.String(strconv.FormatInt(r.ProducerID, 10)),
+		semconv.MessagingOperationKey.String("send"),
 	}
+
 	opts := []trace.SpanStartOption{
 		trace.WithAttributes(attrs...),
 		trace.WithSpanKind(trace.SpanKindProducer),
 	}
 
-	spanContext, _ := tracer.Start(ctx, "produce", opts...)
+	spanContext, _ := tracer.Start(r.Ctx, fmt.Sprintf("%s send", r.Topic), opts...)
 
 	textMapPropagator := propagation.NewCompositeTextMapPropagator(propagation.TraceContext{})
 	textMapPropagator.Inject(spanContext, NewRecordCarrier(r))
-	k.spanMap[r] = spanContext
+
+	r.Ctx = spanContext
 }
 
 func (k *Kotel) OnProduceRecordUnbuffered(r *kgo.Record, err error) {
-	fmt.Println("HookProduceRecordUnbuffered Reached")
-	span := trace.SpanFromContext(k.spanMap[r])
+	span := trace.SpanFromContext(r.Ctx)
 
 	span.SetAttributes(
 		semconv.MessagingMessageIDKey.String(strconv.FormatInt(r.Offset, 10)),
@@ -67,17 +64,14 @@ func (k *Kotel) OnProduceRecordUnbuffered(r *kgo.Record, err error) {
 	}
 
 	span.End()
-	defer delete(k.spanMap, r)
 }
 
 func (k *Kotel) OnFetchRecordBuffered(r *kgo.Record) {
-	fmt.Println("HookOnFetchRecordBuffered Reached")
-	fmt.Printf("offset %d\n", r.Offset)
-
 	textMapPropagator := propagation.NewCompositeTextMapPropagator(propagation.TraceContext{})
 	producerSpan := context.Background()
 	producerSpan = textMapPropagator.Extract(producerSpan, NewRecordCarrier(r))
-	tracer := k.TracerProvider.Tracer("foo")
+
+	tracer := k.TracerProvider.Tracer(libraryName)
 
 	attrs := []attribute.KeyValue{
 		semconv.MessagingSystemKey.String("kafka"),
@@ -93,7 +87,7 @@ func (k *Kotel) OnFetchRecordBuffered(r *kgo.Record) {
 		trace.WithAttributes(attrs...),
 		trace.WithSpanKind(trace.SpanKindConsumer),
 	}
-	
+
 	logappendContext, span := tracer.Start(producerSpan, "logappend", opts...)
 	span.End()
 
@@ -102,7 +96,6 @@ func (k *Kotel) OnFetchRecordBuffered(r *kgo.Record) {
 		trace.WithSpanKind(trace.SpanKindConsumer),
 	}
 
-	_, span = tracer.Start(logappendContext, "consume", opts...)
-	time.Sleep(time.Second)
+	_, span = tracer.Start(logappendContext, fmt.Sprintf("%s receive", r.Topic), opts...)
 	span.End()
 }
