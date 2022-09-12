@@ -151,8 +151,10 @@ func (r *Record) WithContext(ctx context.Context) *Record {
 	if ctx == nil {
 		panic("nil context")
 	}
-	r.ctx = ctx
-	return r
+	r2 := new(Record)
+	*r2 = *r
+	r2.ctx = ctx
+	return r2
 }
 
 // Context returns the Records context.
