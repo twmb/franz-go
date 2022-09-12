@@ -68,7 +68,7 @@ func (a RecordAttrs) IsControl() bool {
 
 // Record is a record to write to Kafka.
 type Record struct {
-	// Context is an optional field that can be used to pass contextual information
+	// ctx is an optional field that can be used to pass contextual information
 	// to a record.
 	//
 	// This is useful when you want to propagate span data from tracing libraries.
@@ -146,12 +146,16 @@ type Record struct {
 	Offset int64
 }
 
-// SetContext sets the Context on the Record.
-// It can be used to enrich records.
-func (r *Record) SetContext(ctx context.Context) {
+// WithContext enriches the Record with a Context.
+func (r *Record) WithContext(ctx context.Context) *Record {
+	if ctx == nil {
+		panic("nil context")
+	}
 	r.ctx = ctx
+	return r
 }
 
+// Context returns the Records context.
 func (r *Record) Context() context.Context {
 	if r.ctx != nil {
 		return r.ctx
