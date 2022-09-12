@@ -364,6 +364,8 @@ func (cl *Client) produce(
 ) {
 	if ctx == nil {
 		ctx = context.Background()
+	} else {
+		r.Ctx = ctx
 	}
 	if promise == nil {
 		promise = noPromise

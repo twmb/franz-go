@@ -1,6 +1,7 @@
 package kgo
 
 import (
+	"context"
 	"errors"
 	"reflect"
 	"time"
@@ -67,6 +68,12 @@ func (a RecordAttrs) IsControl() bool {
 
 // Record is a record to write to Kafka.
 type Record struct {
+	// Ctx is an optional field that can be used to pass contextual information
+	// to a record.
+	//
+	// This is useful when you want to propagate span data from tracing libraries.
+	Ctx context.Context
+
 	// Key is an optional field that can be used for partition assignment.
 	//
 	// This is generally used with a hash partitioner to cause all records
