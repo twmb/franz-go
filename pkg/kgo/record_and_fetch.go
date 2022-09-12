@@ -1,6 +1,7 @@
 package kgo
 
 import (
+	"context"
 	"errors"
 	"reflect"
 	"time"
@@ -137,6 +138,14 @@ type Record struct {
 	// the offset used in the produce request and does not mirror the
 	// offset actually stored within Kafka.
 	Offset int64
+
+	// Context is an optional field that is used for enriching records.
+	//
+	// If this field is nil when producing, it is set to the Produce ctx
+	// arg. This field can be used to propagate record encrichment across
+	// producer hooks. It can also be set in a consumer hook to propagate
+	// enrichment to consumer clients.
+	Context context.Context
 }
 
 // When buffering records, we calculate the length and tsDelta ahead of time
