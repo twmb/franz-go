@@ -1222,12 +1222,12 @@ func (g *groupExternal) eachTopic(fn func(string)) {
 	})
 }
 
-func (g *groupExternal) updateLatest(meta map[string]*topicPartitionsData) {
+func (g *groupExternal) updateLatest(meta map[string]*metadataTopic) {
 	g.cloned(func(tps map[string]int32) {
 		var rejoin bool
 		for t, ps := range tps {
-			latest := meta[t]
-			if latest == nil || latest.loadErr != nil {
+			latest, exists := meta[t]
+			if !exists || latest.loadErr != nil {
 				continue
 			}
 			if psLatest := int32(len(latest.partitions)); psLatest != ps {

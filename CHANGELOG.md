@@ -1,3 +1,41 @@
+v1.7.1
+===
+
+This release fixes two bugs, one that is obscure and unlikely to be ran into in
+most use cases, and one that is not as obsure and may be ran into in a racy
+scenario. It is recommended to upgrade.
+
+[`3191842`][171a] fixes a bug that could eventually lead to a completely
+stalled consumer. The problem can happen whenever an internal "consumer
+session" is stopped and restarted -- which happens on most rebalances, and
+happens whenever a partition moves from one broker to another. This logic race
+required no active fetches to be in flight nor buffered, and required a fetch
+to _just about_ be issued.
+
+[`0ca6478`][171b] fixes a complicated bug that could result in a panic. It
+requires the following:
+
+* using a single client to produce and consume to the
+* consuming from that topic first
+* producing to that topic after the first consume
+* the metadata load that is triggered from the produce fails with partition errors
+* the metadata load retry moves a previously-errored partition from one broker to another
+
+Any deviation from this sequence of events would not result in a panic. If the
+final step did not move the partition between brokers, the client would still
+be internally problematic, but there would be no visible problem (the partition
+would be produced to two brokers, the produce to the wrong broker would fail
+while the correct broker would succeed),
+
+[171a]: https://github.com/twmb/franz-go/commit/3191842a81033342e8d37a529bd0a1b3d190fd9f
+[171b]: https://github.com/twmb/franz-go/commit/0ca6478600c632deed4c7d65c13c3459d19071bd
+
+## Relevant commits
+
+- [`0ca6478`](https://github.com/twmb/franz-go/commit/0ca6478) kgo: avoid pointer reuse in metadata across producers & consumers
+- [`3191842`](https://github.com/twmb/franz-go/commit/3191842) consumer: bugfix fetch concurrency loop
+- [`5f24fae`](https://github.com/twmb/franz-go/commit/5f24fae) kgo: fix an incorrect log line, add another log line
+
 v1.7.0
 ===
 
