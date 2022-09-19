@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/plugin/kotel"
+	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -31,7 +32,7 @@ func initProvider() (*sdktrace.TracerProvider, error) {
 		resource.Default(),
 		resource.NewWithAttributes(
 			semconv.SchemaURL,
-			semconv.ServiceNameKey.String("kafka-service"),
+			semconv.ServiceNameKey.String("test-service"),
 		),
 	)
 
@@ -56,11 +57,10 @@ func do() error {
 		return err
 	}
 
-	ctx := context.Background()
-
+	// Set up Kafka client
 	opts := []kgo.Opt{
 		kgo.SeedBrokers(strings.Split(*seedBrokers, ",")...),
-		kgo.WithHooks(tracing),
+		kgo.WithHooks(tracing), // pass in tracing hook
 		kgo.ConsumeTopics(*topic),
 	}
 	cl, err := kgo.NewClient(opts...)
@@ -68,21 +68,29 @@ func do() error {
 		panic(err)
 	}
 
+	// Add request span
+	requestTracer := tracerProvider.Tracer("request-service")
+	requestCtx, requestSpan := requestTracer.Start(context.Background(), "request-span")
+
 	// Produce a message
 	var wg sync.WaitGroup
 	wg.Add(1)
-	// Add context to record context.
-	record := &kgo.Record{Ctx: context.Background(), Topic: *topic, Value: []byte("bar")}
-	cl.Produce(ctx, record, func(_ *kgo.Record, err error) {
+	record := &kgo.Record{Topic: *topic, Value: []byte("bar")}
+	cl.Produce(requestCtx, record, func(_ *kgo.Record, err error) {
 		defer wg.Done()
 		if err != nil {
 			fmt.Printf("record had a produce error: %v\n", err)
+			requestSpan.SetStatus(codes.Error, err.Error())
+			requestSpan.RecordError(err)
 		}
-
 	})
 	wg.Wait()
 
+	requestSpan.End()
+
 	// Consume message
+	ctx := context.Background()
+
 	for {
 		fetches := cl.PollFetches(ctx)
 		if errs := fetches.Errors(); len(errs) > 0 {
@@ -94,6 +102,7 @@ func do() error {
 		iter := fetches.RecordIter()
 		for !iter.Done() {
 			record := iter.Next()
+			// TODO: Trace consumer processor span via record.Context()
 			fmt.Println(string(record.Value), "from an iterator!")
 		}
 	}

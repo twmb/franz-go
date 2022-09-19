@@ -157,6 +157,14 @@ func (r *Record) WithContext(ctx context.Context) *Record {
 	return r2
 }
 
+// SetContext enriches the Record with a Context.
+func (r *Record) SetContext(ctx context.Context) {
+	if ctx == nil {
+		panic("nil context")
+	}
+	r.ctx = ctx
+}
+
 // Context returns the Records context.
 func (r *Record) Context() context.Context {
 	if r.ctx != nil {

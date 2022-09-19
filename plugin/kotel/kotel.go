@@ -1,7 +1,6 @@
 package kotel
 
 import (
-	"context"
 	"fmt"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"go.opentelemetry.io/otel/attribute"
@@ -27,6 +26,7 @@ func NewKotel(tracerProvider *sdktrace.TracerProvider) (*Kotel, error) {
 }
 
 func (k *Kotel) OnProduceRecordBuffered(r *kgo.Record) {
+	println("OnProduceRecordBuffered reached")
 	tracer := k.TracerProvider.Tracer(libraryName)
 
 	attrs := []attribute.KeyValue{
@@ -42,16 +42,19 @@ func (k *Kotel) OnProduceRecordBuffered(r *kgo.Record) {
 		trace.WithSpanKind(trace.SpanKindProducer),
 	}
 
-	spanContext, _ := tracer.Start(r.Ctx, fmt.Sprintf("%s send", r.Topic), opts...)
+	spanContext, span := tracer.Start(r.Context(), fmt.Sprintf("%s send", r.Topic), opts...)
+	span.AddEvent("OnProduceRecordBuffered")
 
-	textMapPropagator := propagation.NewCompositeTextMapPropagator(propagation.TraceContext{})
-	textMapPropagator.Inject(spanContext, NewRecordCarrier(r))
+	propagator := propagation.NewCompositeTextMapPropagator(propagation.TraceContext{})
+	propagator.Inject(spanContext, NewRecordCarrier(r))
 
-	r.Ctx = spanContext
+	r.SetContext(spanContext)
 }
 
 func (k *Kotel) OnProduceRecordUnbuffered(r *kgo.Record, err error) {
-	span := trace.SpanFromContext(r.Ctx)
+	println("OnProduceRecordUnbuffered reached")
+	span := trace.SpanFromContext(r.Context())
+	span.AddEvent("OnProduceRecordUnbuffered")
 
 	span.SetAttributes(
 		semconv.MessagingMessageIDKey.String(strconv.FormatInt(r.Offset, 10)),
@@ -67,9 +70,10 @@ func (k *Kotel) OnProduceRecordUnbuffered(r *kgo.Record, err error) {
 }
 
 func (k *Kotel) OnFetchRecordBuffered(r *kgo.Record) {
-	textMapPropagator := propagation.NewCompositeTextMapPropagator(propagation.TraceContext{})
-	producerSpan := context.Background()
-	producerSpan = textMapPropagator.Extract(producerSpan, NewRecordCarrier(r))
+	println("OnFetchRecordBuffered reached")
+	propagator := propagation.NewCompositeTextMapPropagator(propagation.TraceContext{})
+	ctx := r.Context()
+	ctx = propagator.Extract(ctx, NewRecordCarrier(r))
 
 	tracer := k.TracerProvider.Tracer(libraryName)
 
@@ -88,14 +92,18 @@ func (k *Kotel) OnFetchRecordBuffered(r *kgo.Record) {
 		trace.WithSpanKind(trace.SpanKindConsumer),
 	}
 
-	logappendContext, span := tracer.Start(producerSpan, "logappend", opts...)
-	span.End()
+	logappendContext, logAppendSpan := tracer.Start(ctx, "logappend", opts...)
+	logAppendSpan.AddEvent("logappend")
+	logAppendSpan.End()
 
 	opts = []trace.SpanStartOption{
 		trace.WithAttributes(attrs...),
 		trace.WithSpanKind(trace.SpanKindConsumer),
 	}
 
-	_, span = tracer.Start(logappendContext, fmt.Sprintf("%s receive", r.Topic), opts...)
-	span.End()
+	receiveCtx, receiveSpan := tracer.Start(logappendContext, fmt.Sprintf("%s receive", r.Topic), opts...)
+	receiveSpan.AddEvent("receive")
+	receiveSpan.End()
+
+	r.SetContext(receiveCtx)
 }

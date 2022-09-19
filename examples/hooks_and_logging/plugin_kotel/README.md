@@ -1,4 +1,4 @@
-go-metrics hooks & basic logging
+kotel hooks
 ===
 
 This example shows how to use the plug-in kotel package to easily export
@@ -13,4 +13,4 @@ to see traces printed in the console.
 any comma delimited set of brokers.
 
 `-topic` can be specified to consume from an existing topic on your local
-broker, which will make the metrics and logs more meaningful.
+broker.
