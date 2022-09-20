@@ -3,32 +3,74 @@ package kotel
 import (
 	"fmt"
 	"github.com/twmb/franz-go/pkg/kgo"
+	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/propagation"
-	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.12.0"
 	"go.opentelemetry.io/otel/trace"
 	"strconv"
 )
 
-const libraryName = "github.com/twmb/franz-go/tree/master/plugin/kotel"
+const (
+	instrumentationName = "github.com/twmb/franz-go/tree/master/plugin/kotel"
+)
 
-// Kotel Requires a TracerProvider from the client
+// Kotel represents the configuration options available for the kotel plugin
 type Kotel struct {
-	TracerProvider *sdktrace.TracerProvider
+	Propagators    propagation.TextMapPropagator
+	TracerProvider trace.TracerProvider
+	tracer         trace.Tracer
 }
 
-func NewKotel(tracerProvider *sdktrace.TracerProvider) (*Kotel, error) {
-	return &Kotel{
-		TracerProvider: tracerProvider,
-	}, nil
+// Option interface used for setting optional config properties.
+type Option interface {
+	apply(*Kotel)
 }
+
+type optionFunc func(*Kotel)
+
+func (o optionFunc) apply(c *Kotel) {
+	o(c)
+}
+
+// NewKotel creates a new Kotel struct and applies opts to it.
+func NewKotel(opts ...Option) *Kotel {
+	c := &Kotel{
+		Propagators: otel.GetTextMapPropagator(),
+	}
+	for _, opt := range opts {
+		opt.apply(c)
+	}
+
+	c.tracer = c.TracerProvider.Tracer(instrumentationName)
+
+	return c
+}
+
+// WithTracerProvider specifies a tracer provider to use for creating a tracer.
+// If none is specified, the global provider is used.
+func WithTracerProvider(provider trace.TracerProvider) Option {
+	return optionFunc(func(cfg *Kotel) {
+		if provider != nil {
+			cfg.TracerProvider = provider
+		}
+	})
+}
+
+// WithPropagators configures specific propagators. If this
+// option isn't specified, then the global TextMapPropagator is used.
+func WithPropagators(ps propagation.TextMapPropagator) Option {
+	return optionFunc(func(c *Kotel) {
+		if ps != nil {
+			c.Propagators = ps
+		}
+	})
+}
+
+// franz-go hooks
 
 func (k *Kotel) OnProduceRecordBuffered(r *kgo.Record) {
-	println("OnProduceRecordBuffered reached")
-	tracer := k.TracerProvider.Tracer(libraryName)
-
 	attrs := []attribute.KeyValue{
 		semconv.MessagingSystemKey.String("kafka"),
 		semconv.MessagingDestinationKindTopic,
@@ -42,17 +84,15 @@ func (k *Kotel) OnProduceRecordBuffered(r *kgo.Record) {
 		trace.WithSpanKind(trace.SpanKindProducer),
 	}
 
-	spanContext, span := tracer.Start(r.Context(), fmt.Sprintf("%s send", r.Topic), opts...)
+	spanContext, span := k.tracer.Start(r.Context(), fmt.Sprintf("%s send", r.Topic), opts...)
 	span.AddEvent("OnProduceRecordBuffered")
 
-	propagator := propagation.NewCompositeTextMapPropagator(propagation.TraceContext{})
-	propagator.Inject(spanContext, NewRecordCarrier(r))
+	k.Propagators.Inject(spanContext, NewRecordCarrier(r))
 
 	r.SetContext(spanContext)
 }
 
 func (k *Kotel) OnProduceRecordUnbuffered(r *kgo.Record, err error) {
-	println("OnProduceRecordUnbuffered reached")
 	span := trace.SpanFromContext(r.Context())
 	span.AddEvent("OnProduceRecordUnbuffered")
 
@@ -70,12 +110,8 @@ func (k *Kotel) OnProduceRecordUnbuffered(r *kgo.Record, err error) {
 }
 
 func (k *Kotel) OnFetchRecordBuffered(r *kgo.Record) {
-	println("OnFetchRecordBuffered reached")
-	propagator := propagation.NewCompositeTextMapPropagator(propagation.TraceContext{})
 	ctx := r.Context()
-	ctx = propagator.Extract(ctx, NewRecordCarrier(r))
-
-	tracer := k.TracerProvider.Tracer(libraryName)
+	ctx = k.Propagators.Extract(ctx, NewRecordCarrier(r))
 
 	attrs := []attribute.KeyValue{
 		semconv.MessagingSystemKey.String("kafka"),
@@ -86,22 +122,29 @@ func (k *Kotel) OnFetchRecordBuffered(r *kgo.Record) {
 		semconv.MessagingKafkaPartitionKey.Int64(int64(r.Partition)),
 	}
 
+	// logAppend is an optional parent span
+	var logAppendContext = ctx
+	var logAppendSpan trace.Span
+
+	// is timestamp set in kafka? (aka log append)
+	if r.Attrs.TimestampType() == 1 {
+		opts := []trace.SpanStartOption{
+			trace.WithTimestamp(r.Timestamp),
+			trace.WithAttributes(attrs...),
+			trace.WithSpanKind(trace.SpanKindConsumer),
+		}
+
+		logAppendContext, logAppendSpan = k.tracer.Start(ctx, fmt.Sprintf("%s logappend", r.Topic), opts...)
+		logAppendSpan.AddEvent("logappend")
+		logAppendSpan.End()
+	}
+
 	opts := []trace.SpanStartOption{
-		trace.WithTimestamp(r.Timestamp),
 		trace.WithAttributes(attrs...),
 		trace.WithSpanKind(trace.SpanKindConsumer),
 	}
 
-	logappendContext, logAppendSpan := tracer.Start(ctx, "logappend", opts...)
-	logAppendSpan.AddEvent("logappend")
-	logAppendSpan.End()
-
-	opts = []trace.SpanStartOption{
-		trace.WithAttributes(attrs...),
-		trace.WithSpanKind(trace.SpanKindConsumer),
-	}
-
-	receiveCtx, receiveSpan := tracer.Start(logappendContext, fmt.Sprintf("%s receive", r.Topic), opts...)
+	receiveCtx, receiveSpan := k.tracer.Start(logAppendContext, fmt.Sprintf("%s receive", r.Topic), opts...)
 	receiveSpan.AddEvent("receive")
 	receiveSpan.End()
 
