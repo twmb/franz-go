@@ -44,7 +44,7 @@ func (a RecordAttrs) TimestampType() int8 {
 	if a.attrs&0b1000_0000 != 0 {
 		return -1
 	}
-	return int8(a.attrs & 0b0000_1000)
+	return int8(a.attrs&0b0000_1000) >> 3
 }
 
 // CompressionType signifies with which algorithm this record was compressed.
