@@ -404,8 +404,12 @@ func (cl *Client) broker() *broker {
 	cl.brokersMu.Lock() // full lock needed for anyBrokerIdx below
 	defer cl.brokersMu.Unlock()
 
+	// Every time we loop through all discovered brokers, we issue one
+	// request to the next seed. This ensures that if all discovered
+	// brokers are down, we will *eventually* loop through seeds and
+	// hopefully have a reachable seed.
 	var b *broker
-	if len(cl.brokers) > 0 {
+	if len(cl.brokers) > 0 && int(cl.anyBrokerIdx) < len(cl.brokers) {
 		cl.anyBrokerIdx %= int32(len(cl.brokers))
 		b = cl.brokers[cl.anyBrokerIdx]
 		cl.anyBrokerIdx++
@@ -413,6 +417,13 @@ func (cl *Client) broker() *broker {
 		cl.anySeedIdx %= int32(len(cl.seeds))
 		b = cl.seeds[cl.anySeedIdx]
 		cl.anySeedIdx++
+
+		// If we have brokers, we ranged past discovered brokers.
+		// We now reset the anyBrokerIdx to begin ranging through
+		// discovered brokers again.
+		if len(cl.brokers) > 0 {
+			cl.anyBrokerIdx %= int32(len(cl.brokers))
+		}
 	}
 	return b
 }
