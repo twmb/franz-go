@@ -101,27 +101,30 @@ type Record struct {
 
 	// Partition is the partition that a record is written to.
 	//
-	// For producing, this is left unset. This will be set by the client as
-	// appropriate. Alternatively, you can use the ManualPartitioner, which
-	// makes it such that this field is always the field chosen when
-	// partitioning (i.e., you partition manually ahead of time).
+	// For producing, this is left unset. This will be set by the client
+	// before the record is unbuffered. If you use the ManualPartitioner,
+	// the value of this field is always the partition chosen when
+	// producing (i.e., you partition manually ahead of time).
 	Partition int32
 
 	// Attrs specifies what attributes were on this record.
+	//
+	// For producing, this is left unset. This will be set by the client
+	// before the record is unbuffered.
 	Attrs RecordAttrs
 
 	// ProducerEpoch is the producer epoch of this message if it was
 	// produced with a producer ID. An epoch and ID of 0 means it was not.
 	//
 	// For producing, this is left unset. This will be set by the client
-	// as appropriate.
+	// before the record is unbuffered.
 	ProducerEpoch int16
 
 	// ProducerEpoch is the producer ID of this message if it was produced
 	// with a producer ID. An epoch and ID of 0 means it was not.
 	//
 	// For producing, this is left unset. This will be set by the client
-	// as appropriate.
+	// before the record is unbuffered.
 	ProducerID int64
 
 	// LeaderEpoch is the leader epoch of the broker at the time this
@@ -133,10 +136,10 @@ type Record struct {
 
 	// Offset is the offset that a record is written as.
 	//
-	// For producing, this is left unset. This will be set by the client as
-	// appropriate. If you are producing with no acks, this will just be
-	// the offset used in the produce request and does not mirror the
-	// offset actually stored within Kafka.
+	// For producing, this is left unset. This will be set by the client
+	// before the record is unbuffered. If you are producing with no acks,
+	// this will just be the offset used in the produce request and does
+	// not mirror the offset actually stored within Kafka.
 	Offset int64
 
 	// Context is an optional field that is used for enriching records.
