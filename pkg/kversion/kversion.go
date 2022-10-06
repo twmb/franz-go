@@ -222,6 +222,7 @@ func (vs *Versions) VersionGuess(opts ...VersionGuessOpt) string {
 		{max300, "v3.0"},
 		{max310, "v3.1"},
 		{max320, "v3.2"},
+		{max330, "v3.3"},
 	} {
 		for k, v := range comparison.cmp.filter(cfg.listener) {
 			if !skip[int16(k)] && v != -1 {
@@ -349,6 +350,7 @@ func V2_8_0() *Versions  { return zkBrokerOf(max280) }
 func V3_0_0() *Versions  { return zkBrokerOf(max300) }
 func V3_1_0() *Versions  { return zkBrokerOf(max310) }
 func V3_2_0() *Versions  { return zkBrokerOf(max320) }
+func V3_3_0() *Versions  { return zkBrokerOf(max330) }
 
 func zkBrokerOf(lks listenerKeys) *Versions {
 	return &Versions{lks.filter(zkBroker)}
@@ -910,7 +912,7 @@ var max320 = nextMax(max310, func(v listenerKeys) listenerKeys {
 	return v
 })
 
-var maxTip = nextMax(max320, func(v listenerKeys) listenerKeys {
+var max330 = nextMax(max320, func(v listenerKeys) listenerKeys {
 	// KAFKA-13823 55ff5d360381af370fe5b3a215831beac49571a4 KIP-778
 	v[57].inc() // 1 update features
 
@@ -930,5 +932,9 @@ var maxTip = nextMax(max320, func(v listenerKeys) listenerKeys {
 	v[38].inc() // 3 create delegation token
 	v[41].inc() // 3 describe delegation token
 
+	return v
+})
+
+var maxTip = nextMax(max330, func(v listenerKeys) listenerKeys {
 	return v
 })
