@@ -250,10 +250,10 @@ func (p *leastBackupTopicPartitioner) PartitionByBackup(_ *Record, n int, backup
 // KIP-794 and release with the Java client in Kafka 3.3. This partitioner
 // returns the same partition until 'bytes' is hit. At that point, a
 // re-partitioning happens. If adaptive is false, this chooses a new random
-// partition. If adaptive is true, this chooses a broker based on the inverse
-// of the backlog currently buffered for that broker. If keys is true, this
-// uses standard hashing based on record key for records with non-nil keys.
-// hasher is optional; if nil, the default hasher murmur2 (Kafka's default).
+// partition, otherwise this chooses a broker based on the inverse of the
+// backlog currently buffered for that broker. If keys is true, this uses
+// standard hashing based on record key for records with non-nil keys. hasher
+// is optional; if nil, the default hasher murmur2 (Kafka's default).
 //
 // The point of this hasher is to create larger batches while producing the
 // same amount to all partitions over the long run. Adaptive opts in to a
@@ -270,6 +270,11 @@ func (p *leastBackupTopicPartitioner) PartitionByBackup(_ *Record, n int, backup
 // similar. Lastly, this client does not have a timeout for partition
 // availability. Realistically, these will be the most backed up partitions so
 // they should be chosen the least.
+//
+// NOTE: This implementation may create sub-optimal batches if lingering is
+// enabled. This client's default is to disable lingering. The patch used to
+// address this in Kafka is KAFKA-14156 (which itself is not perfect in the
+// context of disabling lingering). For more details, read KAFKA-14156.
 func UniformBytesPartitioner(bytes int, adaptive, keys bool, hasher PartitionerHasher) Partitioner {
 	if hasher == nil {
 		hasher = KafkaHasher(murmur2)
