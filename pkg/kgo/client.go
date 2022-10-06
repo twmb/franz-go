@@ -443,14 +443,37 @@ func (cl *Client) waitTries(ctx context.Context, backoff time.Duration) bool {
 
 // A broker may sometimes indicate it supports offset for leader epoch v2+ when
 // it does not. We need to catch that and avoid issuing offset for leader
-// epoch, because we will just loop continuously failing.
+// epoch, because we will just loop continuously failing. We do not catch every
+// case, such as when a person explicitly assigns offsets with epochs, but we
+// catch a few areas that would be returned from a broker itself.
 //
-// We do not catch every case, such as when a person explicitly assigns offsets
-// with epochs, but we catch a few areas that would be returned from a broker
-// itself.
+// This function is always used *after* at least one request has been issued,
+// so we do not check ensurePinged.
 //
-// This should only be used *after* at least one successful response.
+// NOTE: This is a weak check; we check if any broker in the cluster supports
+// the request. We use this function in three locations:
+//
+//  1) When using the LeaderEpoch returned in a metadata response. This guards
+//     against buggy brokers that return 0 rather than -1 even if they do not
+//     support OffsetForLeaderEpoch. If any support, the cluster is in the
+//     middle of an upgrade and we can start using the epoch.
+//  2) When deciding whether to keep LeaderEpoch from fetched offsets.
+//     Realistically, clients should only commit epochs if the cluster supports
+//     them.
+//  3) When receiving OffsetOutOfRange when follower fetching and we fetched
+//     past the end.
+//
+// In any of these cases, if we OffsetForLeaderEpoch against a broker that does
+// not support (even though one in the cluster does), we will loop fail until
+// the rest of the cluster is upgraded and supports the request.
 func (cl *Client) supportsOffsetForLeaderEpoch() bool {
+	return cl.supportsKeyVersion(int16(kmsg.OffsetForLeaderEpoch), 2)
+}
+
+// A broker may not support some requests we want to make. This function checks
+// support. This should only be used *after* at least one successful response.
+// To absolutely ensure a response has been received, use ensurePinged.
+func (cl *Client) supportsKeyVersion(key, version int16) bool {
 	cl.brokersMu.RLock()
 	defer cl.brokersMu.RUnlock()
 
@@ -459,7 +482,7 @@ func (cl *Client) supportsOffsetForLeaderEpoch() bool {
 		cl.seeds,
 	} {
 		for _, b := range brokers {
-			if v := b.loadVersions(); v != nil && v.versions[23] >= 2 {
+			if v := b.loadVersions(); v != nil && v.versions[key] >= version {
 				return true
 			}
 		}
@@ -2262,8 +2285,11 @@ func (cl *offsetFetchSharder) onResp(kreq kmsg.Request, kresp kmsg.Response) err
 
 	switch len(resp.Groups) {
 	case 0:
+		// Requested no groups: move top level into batch for v0-v7 to
+		// v8 forward compat.
 		resp.Groups = append(resp.Groups, offsetFetchRespToGroup(req, resp))
 	case 1:
+		// Requested 1 group v8+: set top level for v0-v7 back-compat.
 		offsetFetchRespGroupIntoResp(resp.Groups[0], resp)
 	default:
 	}
