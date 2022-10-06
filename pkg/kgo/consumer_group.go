@@ -1785,7 +1785,7 @@ func (g *groupConsumer) updateCommitted(
 	}
 	if g.uncommitted == nil || // just in case
 		len(req.Topics) != len(resp.Topics) { // bad kafka
-		g.cfg.logger.Log(LogLevelError, fmt.Sprintf("Kafka replied to our OffsetCommitRequest incorrectly! Num topics in request: %d, in reply: %d, we cannot handle this!", len(req.Topics), len(resp.Topics)), "group", g.cfg.group)
+		g.cfg.logger.Log(LogLevelError, fmt.Sprintf("broker replied to our OffsetCommitRequest incorrectly! Num topics in request: %d, in reply: %d, we cannot handle this!", len(req.Topics), len(resp.Topics)), "group", g.cfg.group)
 		return
 	}
 
@@ -1806,7 +1806,7 @@ func (g *groupConsumer) updateCommitted(
 		if topic == nil || // just in case
 			reqTopic.Topic != respTopic.Topic || // bad kafka
 			len(reqTopic.Partitions) != len(respTopic.Partitions) { // same
-			g.cfg.logger.Log(LogLevelError, fmt.Sprintf("Kafka replied to our OffsetCommitRequest incorrectly! Topic at request index %d: %s, reply at index: %s; num partitions on request topic: %d, in reply: %d, we cannot handle this!", i, reqTopic.Topic, respTopic.Topic, len(reqTopic.Partitions), len(respTopic.Partitions)), "group", g.cfg.group)
+			g.cfg.logger.Log(LogLevelError, fmt.Sprintf("broker replied to our OffsetCommitRequest incorrectly! Topic at request index %d: %s, reply at index: %s; num partitions on request topic: %d, in reply: %d, we cannot handle this!", i, reqTopic.Topic, respTopic.Topic, len(reqTopic.Partitions), len(respTopic.Partitions)), "group", g.cfg.group)
 			continue
 		}
 
@@ -1828,7 +1828,7 @@ func (g *groupConsumer) updateCommitted(
 				continue
 			}
 			if reqPart.Partition != respPart.Partition { // bad kafka
-				g.cfg.logger.Log(LogLevelError, fmt.Sprintf("Kafka replied to our OffsetCommitRequest incorrectly! Topic %s partition %d != resp partition %d", reqTopic.Topic, reqPart.Partition, respPart.Partition), "group", g.cfg.group)
+				g.cfg.logger.Log(LogLevelError, fmt.Sprintf("broker replied to our OffsetCommitRequest incorrectly! Topic %s partition %d != resp partition %d", reqTopic.Topic, reqPart.Partition, respPart.Partition), "group", g.cfg.group)
 				continue
 			}
 			if respPart.ErrorCode != 0 {

@@ -696,14 +696,14 @@ start:
 	// Post, Kafka replies with all versions.
 	if rawResp[1] == 35 {
 		if maxVersion == 0 {
-			return errors.New("Kafka replied with UNSUPPORTED_VERSION to an ApiVersions request of version 0")
+			return errors.New("broker replied with UNSUPPORTED_VERSION to an ApiVersions request of version 0")
 		}
 		srawResp := string(rawResp)
 		if srawResp == "\x00\x23\x00\x00\x00\x00" ||
 			// EventHubs erroneously replies with v1, so we check
 			// for that as well.
 			srawResp == "\x00\x23\x00\x00\x00\x00\x00\x00\x00\x00" {
-			cxn.cl.cfg.logger.Log(LogLevelDebug, "kafka does not know our ApiVersions version, downgrading to version 0 and retrying", "broker", logID(cxn.b.meta.NodeID))
+			cxn.cl.cfg.logger.Log(LogLevelDebug, "broker does not know our ApiVersions version, downgrading to version 0 and retrying", "broker", logID(cxn.b.meta.NodeID))
 			maxVersion = 0
 			goto start
 		}

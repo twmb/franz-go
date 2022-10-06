@@ -327,7 +327,7 @@ func (g *groupConsumer) findBalancer(from, proto string) (GroupBalancer, error) 
 	for _, b := range g.cfg.balancers {
 		ours = append(ours, b.ProtocolName())
 	}
-	g.cl.cfg.logger.Log(LogLevelError, fmt.Sprintf("%s could not find Kafka-chosen balancer", from), "kafka_choice", proto, "our_set", strings.Join(ours, ", "))
+	g.cl.cfg.logger.Log(LogLevelError, fmt.Sprintf("%s could not find broker-chosen balancer", from), "kafka_choice", proto, "our_set", strings.Join(ours, ", "))
 	return nil, fmt.Errorf("unable to balance: none of our balancers have a name equal to the balancer chosen for balancing (%s)", proto)
 }
 

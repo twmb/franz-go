@@ -71,6 +71,16 @@ func isRetriableBrokerErr(err error) bool {
 	if errors.Is(err, errCorrelationIDMismatch) {
 		return true
 	}
+	// We sometimes load the controller before issuing requests, and the
+	// cluster may not yet be ready and will return -1 for the controller.
+	// We can backoff and retry and hope the cluster has stabilized.
+	if ce := (*errUnknownController)(nil); errors.As(err, &ce) {
+		return true
+	}
+	// Same thought for a non-existing coordinator.
+	if ce := (*errUnknownCoordinator)(nil); errors.As(err, &ce) {
+		return true
+	}
 	var tempErr interface{ Temporary() bool }
 	if errors.As(err, &tempErr) {
 		return tempErr.Temporary()
@@ -213,7 +223,10 @@ type errUnknownController struct {
 }
 
 func (e *errUnknownController) Error() string {
-	return fmt.Sprintf("Kafka replied that the controller broker is %d,"+
+	if e.id == -1 {
+		return "broker replied that the controller broker is not available"
+	}
+	return fmt.Sprintf("broker replied that the controller broker is %d,"+
 		" but did not reply with that broker in the broker list", e.id)
 }
 
@@ -225,15 +238,15 @@ type errUnknownCoordinator struct {
 func (e *errUnknownCoordinator) Error() string {
 	switch e.key.typ {
 	case coordinatorTypeGroup:
-		return fmt.Sprintf("Kafka replied that group %s has broker coordinator %d,"+
+		return fmt.Sprintf("broker replied that group %s has broker coordinator %d,"+
 			" but did not reply with that broker in the broker list",
 			e.key.name, e.coordinator)
 	case coordinatorTypeTxn:
-		return fmt.Sprintf("Kafka replied that txn id %s has broker coordinator %d,"+
+		return fmt.Sprintf("broker replied that txn id %s has broker coordinator %d,"+
 			" but did not reply with that broker in the broker list",
 			e.key.name, e.coordinator)
 	default:
-		return fmt.Sprintf("Kafka replied to an unknown coordinator key %s (type %d) that it has a broker coordinator %d,"+
+		return fmt.Sprintf("broker replied to an unknown coordinator key %s (type %d) that it has a broker coordinator %d,"+
 			" but did not reply with that broker in the broker list", e.key.name, e.key.typ, e.coordinator)
 	}
 }

@@ -342,7 +342,7 @@ func (s *GroupTransactSession) End(ctx context.Context, commit TransactionEndTry
 	} else {
 		defer func() {
 			if committed {
-				s.cl.cfg.logger.Log(LogLevelDebug, "sleeping 200ms before allowing a rebalance to continue to give Kafka a chance to write txn markers and avoid duplicates")
+				s.cl.cfg.logger.Log(LogLevelDebug, "sleeping 200ms before allowing a rebalance to continue to give the brokers a chance to write txn markers and avoid duplicates")
 				go func() {
 					time.Sleep(200 * time.Millisecond)
 					s.failMu.Unlock()

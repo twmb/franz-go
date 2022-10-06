@@ -455,7 +455,7 @@ func (s *sink) issueTxnReq(
 	for _, topic := range resp.Topics {
 		topicBatches, ok := req.batches[topic.Topic]
 		if !ok {
-			s.cl.cfg.logger.Log(LogLevelError, "Kafka replied with topic in AddPartitionsToTxnResponse that was not in request", "topic", topic.Topic)
+			s.cl.cfg.logger.Log(LogLevelError, "broker replied with topic in AddPartitionsToTxnResponse that was not in request", "topic", topic.Topic)
 			continue
 		}
 		for _, partition := range topic.Partitions {
@@ -470,7 +470,7 @@ func (s *sink) issueTxnReq(
 
 				batch, ok := topicBatches[partition.Partition]
 				if !ok {
-					s.cl.cfg.logger.Log(LogLevelError, "Kafka replied with partition in AddPartitionsToTxnResponse that was not in request", "topic", topic.Topic, "partition", partition.Partition)
+					s.cl.cfg.logger.Log(LogLevelError, "broker replied with partition in AddPartitionsToTxnResponse that was not in request", "topic", topic.Topic, "partition", partition.Partition)
 					continue
 				}
 
@@ -604,7 +604,7 @@ func (s *sink) handleReqResp(br *broker, req *produceRequest, resp kmsg.Response
 		topic := rTopic.Topic
 		partitions, ok := req.batches[topic]
 		if !ok {
-			s.cl.cfg.logger.Log(LogLevelError, "Kafka erroneously replied with topic in produce request that we did not produce to", "broker", logID(s.nodeID), "topic", topic)
+			s.cl.cfg.logger.Log(LogLevelError, "broker erroneously replied with topic in produce request that we did not produce to", "broker", logID(s.nodeID), "topic", topic)
 			delete(req.metrics, topic)
 			continue // should not hit this
 		}
@@ -618,7 +618,7 @@ func (s *sink) handleReqResp(br *broker, req *produceRequest, resp kmsg.Response
 			partition := rPartition.Partition
 			batch, ok := partitions[partition]
 			if !ok {
-				s.cl.cfg.logger.Log(LogLevelError, "Kafka erroneously replied with partition in produce request that we did not produce to", "broker", logID(s.nodeID), "topic", rTopic.Topic, "partition", partition)
+				s.cl.cfg.logger.Log(LogLevelError, "broker erroneously replied with partition in produce request that we did not produce to", "broker", logID(s.nodeID), "topic", rTopic.Topic, "partition", partition)
 				delete(tmetrics, partition)
 				continue // should not hit this
 			}
@@ -655,8 +655,8 @@ func (s *sink) handleReqResp(br *broker, req *produceRequest, resp kmsg.Response
 	}
 
 	if len(req.batches) > 0 {
-		s.cl.cfg.logger.Log(LogLevelError, "Kafka did not reply to all topics / partitions in the produce request! reenqueuing missing partitions", "broker", logID(s.nodeID))
-		s.handleRetryBatches(req.batches, 0, true, false, "kafka did not reply to all topics in produce request")
+		s.cl.cfg.logger.Log(LogLevelError, "broker did not reply to all topics / partitions in the produce request! reenqueuing missing partitions", "broker", logID(s.nodeID))
+		s.handleRetryBatches(req.batches, 0, true, false, "broker did not reply to all topics in produce request")
 	}
 	if len(reqRetry) > 0 {
 		s.handleRetryBatches(reqRetry, 0, true, true, "produce request had retry batches")
