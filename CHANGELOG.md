@@ -1,3 +1,30 @@
+v1.8.0
+===
+
+This feature release adds one new API in kgo, one new field on `kgo.Record`,
+and stabilizes `kversion.V3_3_0()`. There is also one minor bug fix:
+`Record.TimestampType()` previously did not correctly return 1 to indicate
+broker generated timestamp types.
+
+This release improves the behavior of the client if the entire cluster becomes
+unreachable. Previously, the client may not have been able to reload metadata
+to discover new endpoints; now, the client periodically tries a seed broker to
+issue randomly-routable requests to. This release also makes a few more
+internal errors retryable, which can help reduce some request failures.
+
+A few docs have been improved. Notably, the UniformBytesPartitioner contains a
+new line describing that it may have poor interaction with lingering. See the
+doc comment for more details as well as the linked Kafka issue. This library
+does not use lingering by default.
+
+- [`f35ef66`](https://github.com/twmb/franz-go/commit/f35ef66) make `errUnknown{Controller,Coordinator}` retryable, improve error wording
+- [`750bf54`](https://github.com/twmb/franz-go/commit/750bf54) kversion: stabilize v3.3
+- [`3e02574`](https://github.com/twmb/franz-go/commit/3e02574) kgo: occasionally use seed brokers when choosing "random" brokers
+- [`3ebd775`](https://github.com/twmb/franz-go/commit/3ebd775) UniformBytesPartitioner: note sub-optimal batches with lingering
+- [PR #206](https://github.com/twmb/franz-go/pull/206) **bugfix** Record.TimestampType function to correctly return 1 for broker-set timestamps (thanks [@JacobSMoller](https://github.com/JacobSMoller))
+- [PR #201](https://github.com/twmb/franz-go/pull/201) **feature** add Context field to Record to enable more end-user instrumentation (thanks [@yianni](https://github.com/yianni))
+- [PR #197](https://github.com/twmb/franz-go/pull/197) **feature** add ValidateOpts to validate options before client initialization (thanks [@dwagin](https://github.com/dwagin))
+
 v1.7.1
 ===
 
