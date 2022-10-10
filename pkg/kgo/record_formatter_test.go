@@ -20,6 +20,7 @@ func TestRecordFormatter(t *testing.T) {
 		Timestamp:     time.Unix(17, 0),
 		Topic:         "topictopictopictopictopict",
 		Partition:     3,
+		Attrs:         RecordAttrs{attrs: 0b1011_0011}, // no timestamp type, control, txnal, lz4
 		ProducerEpoch: 1,
 		ProducerID:    791,
 		LeaderEpoch:   -1,
@@ -96,6 +97,21 @@ func TestRecordFormatter(t *testing.T) {
 		{
 			layout: "%H %h{ %K{ascii} %k %v %V } %k %v",
 			expR:   "2  2 H1 V1 2  2 h2 v2 2  key value",
+		},
+
+		{
+			layout: "%a{compression}",
+			expR:   "lz4",
+		},
+
+		{
+			layout: "%a{compression;number} %a{transactional-bit;bool} %a{control-bit;hex8} %a{timestamp-type;hex8}",
+			expR:   "3 true 01 ff",
+		},
+
+		{
+			layout: "%a{compression} %a{transactional-bit} %a{control-bit} %a{timestamp-type}",
+			expR:   "lz4 1 1 -1",
 		},
 
 		//
@@ -363,6 +379,36 @@ func TestRecordReader(t *testing.T) {
 		},
 
 		{
+			layout: "%V{bool}%v",
+			in:     "truee",
+			exp:    []*Record{StringRecord("e")},
+		},
+
+		{
+			layout: "%V{bool}%ve",
+			in:     "trueee",
+			exp:    []*Record{StringRecord("e")},
+		},
+
+		{
+			layout: "%V{bool}%v",
+			in:     "false",
+			exp:    []*Record{StringRecord("")},
+		},
+
+		{
+			layout: "%V{bool}%v %K{bool}%k",
+			in:     "false true1",
+			exp:    []*Record{KeyStringRecord("1", "")},
+		},
+
+		{
+			layout: "%V{bool}%v %K{ascii}%k",
+			in:     "false 0",
+			exp:    []*Record{KeyStringRecord("", "")},
+		},
+
+		{
 			layout: "%V %v{hex}asdf",
 			in:     "6 6b6579asdf",
 			exp:    []*Record{StringRecord("key")},
@@ -503,6 +549,24 @@ func TestRecordReader(t *testing.T) {
 		{
 			layout: `asdf%v`,
 			in:     "asddd",
+			expErr: true,
+		},
+
+		{
+			layout: `a%V{bool}%v`,
+			in:     "abc",
+			expErr: true,
+		},
+
+		{
+			layout: `a%V{bool}%v`,
+			in:     "atruze",
+			expErr: true,
+		},
+
+		{
+			layout: `a%V{bool}%v`,
+			in:     "afalsn",
 			expErr: true,
 		},
 
