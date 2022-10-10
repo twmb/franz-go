@@ -99,6 +99,20 @@ func (se *ShardErrors) into() error {
 	return se
 }
 
+// Merges two shard errors; the input errors should come from the same request.
+func mergeShardErrs(e1, e2 error) error {
+	var se1, se2 *ShardErrors
+	if !errors.As(e1, &se1) {
+		return e2
+	}
+	if !errors.As(e2, &se2) {
+		return e1
+	}
+	se1.Errs = append(se1.Errs, se2.Errs...)
+	se1.AllFailed = se1.AllFailed && se2.AllFailed
+	return se1
+}
+
 // Error returns an error indicating the name of the request that failed, the
 // number of separate errors, and the first error.
 func (e *ShardErrors) Error() string {
