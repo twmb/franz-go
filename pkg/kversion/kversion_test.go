@@ -67,14 +67,6 @@ func TestVersionGuess(t *testing.T) {
 		}
 	}
 
-	{
-		v := Tip()
-		v.SetMaxKeyVersion(0, 999)
-		if got, exp := v.VersionGuess(), "at least v3.1"; got != exp {
-			t.Errorf("got %s != exp %s without modifications", got, exp)
-		}
-	}
-
 	{ // Here, we ensure we skip 4, 5, 6, and 7 by default.
 		v := V2_7_0()
 		v.SetMaxKeyVersion(4, -1)
