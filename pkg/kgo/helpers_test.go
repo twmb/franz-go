@@ -20,7 +20,10 @@ import (
 
 const testRecordLimit = 500000
 
-var adm *Client
+var (
+	adm    *Client
+	testrf int
+)
 
 func init() {
 	seeds := os.Getenv("KGO_SEEDS")
@@ -31,6 +34,11 @@ func init() {
 	adm, err = NewClient(SeedBrokers(strings.Split(seeds, ",")...))
 	if err != nil {
 		panic(fmt.Sprintf("unable to create admin client: %v", err))
+	}
+
+	n, _ := strconv.Atoi(os.Getenv("KGO_TEST_RF"))
+	if n > 0 {
+		testrf = n
 	}
 }
 
@@ -83,7 +91,7 @@ func tmpTopic(tb testing.TB) (string, func()) {
 	reqTopic := kmsg.NewCreateTopicsRequestTopic()
 	reqTopic.Topic = topic
 	reqTopic.NumPartitions = 20
-	reqTopic.ReplicationFactor = 3
+	reqTopic.ReplicationFactor = int16(testrf)
 	req.Topics = append(req.Topics, reqTopic)
 
 	resp, err := req.RequestWith(context.Background(), adm)
