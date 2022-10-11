@@ -97,7 +97,7 @@ func (p *producer) init(cl *Client) {
 	p.cl = cl
 	p.topics = newTopicsPartitions()
 	p.unknownTopics = make(map[string]*unknownTopicProduces)
-	p.waitBuffer = make(chan struct{}, math.MaxInt64)
+	p.waitBuffer = make(chan struct{}, math.MaxInt32)
 	p.idVersion = -1
 	p.id.Store(&producerID{
 		id:    -1,
