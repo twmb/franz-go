@@ -3031,9 +3031,7 @@ func (cl *describeLogDirsSharder) shard(ctx context.Context, kreq kmsg.Request) 
 		}
 	}
 
-	mkreq := func() *kmsg.DescribeLogDirsRequest {
-		return kmsg.NewPtrDescribeLogDirsRequest()
-	}
+	mkreq := kmsg.NewPtrDescribeLogDirsRequest
 
 	var issues []issueShard
 	for brokerID, brokerReq := range brokerReqs {
@@ -3286,9 +3284,7 @@ func (cl *describeProducersSharder) shard(ctx context.Context, kreq kmsg.Request
 		}
 	}
 
-	mkreq := func() *kmsg.DescribeProducersRequest {
-		return kmsg.NewPtrDescribeProducersRequest()
-	}
+	mkreq := kmsg.NewPtrDescribeProducersRequest
 
 	var issues []issueShard
 	for brokerID, brokerReq := range brokerReqs {

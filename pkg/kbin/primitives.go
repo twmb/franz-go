@@ -652,8 +652,8 @@ func (b *Reader) Ok() bool {
 // UnsafeString returns the slice as a string using unsafe rule (6).
 func UnsafeString(slice []byte) string {
 	var str string
-	strhdr := (*reflect.StringHeader)(unsafe.Pointer(&str))
-	strhdr.Data = ((*reflect.SliceHeader)(unsafe.Pointer(&slice))).Data
+	strhdr := (*reflect.StringHeader)(unsafe.Pointer(&str))             //nolint:gosec // known way to convert slice to string
+	strhdr.Data = ((*reflect.SliceHeader)(unsafe.Pointer(&slice))).Data //nolint:gosec // known way to convert slice to string
 	strhdr.Len = len(slice)
 	return str
 }
