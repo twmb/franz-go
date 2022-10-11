@@ -56,7 +56,7 @@ type Logger interface {
 
 // BasicLogger returns a logger that will print to dst in the following format:
 //
-//     prefix [LEVEL] message; key: val, key: val
+//	prefix [LEVEL] message; key: val, key: val
 //
 // prefixFn is optional; if non-nil, it is called for a per-message prefix.
 //

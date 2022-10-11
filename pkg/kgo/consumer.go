@@ -80,8 +80,7 @@ func NoResetOffset() Offset {
 // This option can be used to consume at the end of existing partitions, but at
 // the start of any new partitions that are created later:
 //
-//     AfterMilli(time.Now().UnixMilli())
-//
+//	AfterMilli(time.Now().UnixMilli())
 //
 // By default when using this offset, if consuming encounters an
 // OffsetOutOfRange error, consuming will reset to the first offset after this

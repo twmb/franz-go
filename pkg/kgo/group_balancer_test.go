@@ -10,12 +10,12 @@ import (
 // This simple test hits every branch of cooperative-sticky's adjustCooperative
 // by:
 //
-//   1) having partitions migrating from one member to another
-//   2) having a whole topic migrate from one member to another
-//   3) adding new partitions in the plan (new topic wanted for consuming, or an eager member)
-//   4) completely deleting partitions from the plan (topic no longer wanted for consuming)
-//   5) having a member that is still on eager
-//   6) having two members that think they own the same partitions (similar to KIP-341)
+//  1. having partitions migrating from one member to another
+//  2. having a whole topic migrate from one member to another
+//  3. adding new partitions in the plan (new topic wanted for consuming, or an eager member)
+//  4. completely deleting partitions from the plan (topic no longer wanted for consuming)
+//  5. having a member that is still on eager
+//  6. having two members that think they own the same partitions (similar to KIP-341)
 //
 // Thus while it is an ugly test, it is effective.
 func Test_stickyAdjustCooperative(t *testing.T) {

@@ -68,7 +68,7 @@ linters-settings:
   #
   # https://github.com/mvdan/gofumpt/issues/137
   gofumpt:
-    lang-version: "1.17"
+    lang-version: "1.19"
     extra-rules: true
 
   # Gocritic is a meta linter that has very good lints, and most of the

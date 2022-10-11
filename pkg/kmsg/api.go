@@ -18,8 +18,8 @@
 //
 // Thus, whenever you initialize a struct from this package, do the following:
 //
-//     struct := kmsg.NewFoo()
-//     struct.Field = "value I want to set"
+//	struct := kmsg.NewFoo()
+//	struct.Field = "value I want to set"
 //
 // Most of this package is generated, but a few things are manual. What is
 // manual: all interfaces, the RequestFormatter, record / message / record

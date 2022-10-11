@@ -13,8 +13,7 @@
 //
 // To read more about the schema registry, see the following:
 //
-//     https://docs.confluent.io/platform/current/schema-registry/develop/api.html
-//
+//	https://docs.confluent.io/platform/current/schema-registry/develop/api.html
 package sr
 
 import (
@@ -82,11 +81,11 @@ func (cl *Client) get(ctx context.Context, path string, into interface{}) error 
 	return cl.do(ctx, http.MethodGet, path, nil, into)
 }
 
-func (cl *Client) post(ctx context.Context, path string, v interface{}, into interface{}) error {
+func (cl *Client) post(ctx context.Context, path string, v, into interface{}) error {
 	return cl.do(ctx, http.MethodPost, path, v, into)
 }
 
-func (cl *Client) put(ctx context.Context, path string, v interface{}, into interface{}) error {
+func (cl *Client) put(ctx context.Context, path string, v, into interface{}) error {
 	return cl.do(ctx, http.MethodPut, path, v, into)
 }
 
@@ -94,7 +93,7 @@ func (cl *Client) delete(ctx context.Context, path string, into interface{}) err
 	return cl.do(ctx, http.MethodDelete, path, nil, into)
 }
 
-func (cl *Client) do(ctx context.Context, method, path string, v interface{}, into interface{}) error {
+func (cl *Client) do(ctx context.Context, method, path string, v, into interface{}) error {
 	urls := cl.urls
 
 start:

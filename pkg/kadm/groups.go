@@ -15,10 +15,9 @@ import (
 // GroupMemberMetadata is the metadata that a client sent in a JoinGroup request.
 // This can have one of three types:
 //
-//     *kmsg.ConsumerMemberMetadata, if the group's ProtocolType is "consumer"
-//     *kmsg.ConnectMemberMetadata, if the group's ProtocolType is "connect"
-//     []byte, if the group's ProtocolType is unknown
-//
+//	*kmsg.ConsumerMemberMetadata, if the group's ProtocolType is "consumer"
+//	*kmsg.ConnectMemberMetadata, if the group's ProtocolType is "connect"
+//	[]byte, if the group's ProtocolType is unknown
 type GroupMemberMetadata struct{ i interface{} }
 
 // AsConsumer returns the metadata as a ConsumerMemberMetadata if possible.
@@ -43,10 +42,9 @@ func (m GroupMemberMetadata) Raw() ([]byte, bool) {
 // GroupMemberAssignment is the assignment that a leader sent / a member
 // received in a SyncGroup request.  This can have one of three types:
 //
-//     *kmsg.ConsumerMemberAssignment, if the group's ProtocolType is "consumer"
-//     *kmsg.ConnectMemberAssignment, if the group's ProtocolType is "connect"
-//     []byte, if the group's ProtocolType is unknown
-//
+//	*kmsg.ConsumerMemberAssignment, if the group's ProtocolType is "consumer"
+//	*kmsg.ConnectMemberAssignment, if the group's ProtocolType is "connect"
+//	[]byte, if the group's ProtocolType is unknown
 type GroupMemberAssignment struct{ i interface{} }
 
 // AsConsumer returns the assignment as a ConsumerMemberAssignment if possible.
@@ -1049,11 +1047,11 @@ func (l GroupTopicsLag) Sorted() []TopicLag {
 // CalculateGroupLag returns the per-partition lag of all members in a group.
 // The input to this method is the returns from the three following methods,
 //
-//     described := DescribeGroups(ctx, group)
-//     fetched := FetchOffsets(ctx, group)
-//     toList := described.AssignedPartitions()
-//     toList.Merge(fetched.CommittedPartitions()
-//     ListEndOffsets(ctx, toList.Topics())
+//	described := DescribeGroups(ctx, group)
+//	fetched := FetchOffsets(ctx, group)
+//	toList := described.AssignedPartitions()
+//	toList.Merge(fetched.CommittedPartitions()
+//	ListEndOffsets(ctx, toList.Topics())
 //
 // If assigned partitions are missing in the listed end offsets listed end
 // offsets, the partition will have an error indicating it is missing. A

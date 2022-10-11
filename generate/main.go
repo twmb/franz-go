@@ -373,7 +373,7 @@ func (l *LineWriter) Write(line string, args ...interface{}) {
 	l.line++
 }
 
-//go:generate sh -c "go run . | gofumpt | gofumpt > ../pkg/kmsg/generated.go"
+//go:generate sh -c "go run . | gofumpt | gofumpt -lang 1.19 -extra > ../pkg/kmsg/generated.go"
 func main() {
 	const dir = "definitions"
 	const enums = "enums"

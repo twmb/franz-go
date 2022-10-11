@@ -475,14 +475,14 @@ func (cl *Client) waitTries(ctx context.Context, backoff time.Duration) bool {
 // NOTE: This is a weak check; we check if any broker in the cluster supports
 // the request. We use this function in three locations:
 //
-//  1) When using the LeaderEpoch returned in a metadata response. This guards
+//  1. When using the LeaderEpoch returned in a metadata response. This guards
 //     against buggy brokers that return 0 rather than -1 even if they do not
 //     support OffsetForLeaderEpoch. If any support, the cluster is in the
 //     middle of an upgrade and we can start using the epoch.
-//  2) When deciding whether to keep LeaderEpoch from fetched offsets.
+//  2. When deciding whether to keep LeaderEpoch from fetched offsets.
 //     Realistically, clients should only commit epochs if the cluster supports
 //     them.
-//  3) When receiving OffsetOutOfRange when follower fetching and we fetched
+//  3. When receiving OffsetOutOfRange when follower fetching and we fetched
 //     past the end.
 //
 // In any of these cases, if we OffsetForLeaderEpoch against a broker that does
@@ -731,21 +731,21 @@ func (cl *Client) Close() {
 //
 // The following requests are split:
 //
-//     ListOffsets
-//     OffsetFetch (if using v8+ for Kafka 3.0+)
-//     DescribeGroups
-//     ListGroups
-//     DeleteRecords
-//     OffsetForLeaderEpoch
-//     DescribeConfigs
-//     AlterConfigs
-//     AlterReplicaLogDirs
-//     DescribeLogDirs
-//     DeleteGroups
-//     IncrementalAlterConfigs
-//     DescribeProducers
-//     DescribeTransactions
-//     ListTransactions
+//	ListOffsets
+//	OffsetFetch (if using v8+ for Kafka 3.0+)
+//	DescribeGroups
+//	ListGroups
+//	DeleteRecords
+//	OffsetForLeaderEpoch
+//	DescribeConfigs
+//	AlterConfigs
+//	AlterReplicaLogDirs
+//	DescribeLogDirs
+//	DeleteGroups
+//	IncrementalAlterConfigs
+//	DescribeProducers
+//	DescribeTransactions
+//	ListTransactions
 //
 // Kafka 3.0 introduced batch OffsetFetch and batch FindCoordinator requests.
 // This function is forward-compatible for the old, singular OffsetFetch and

@@ -507,9 +507,8 @@ func (s *sink) issueTxnReq(
 // confluence basically show that more than two in flight has marginal benefit
 // anyway (although that may be due to their Java API).
 //
-//   https://cwiki.apache.org/confluence/display/KAFKA/An+analysis+of+the+impact+of+max.in.flight.requests.per.connection+and+acks+on+Producer+performance
-//   https://issues.apache.org/jira/browse/KAFKA-5494
-//
+//	https://cwiki.apache.org/confluence/display/KAFKA/An+analysis+of+the+impact+of+max.in.flight.requests.per.connection+and+acks+on+Producer+performance
+//	https://issues.apache.org/jira/browse/KAFKA-5494
 func (s *sink) firstRespCheck(idempotent bool, version int16) {
 	if s.produceVersion < 0 { // this is the only place this can be checked non-atomically
 		atomic.StoreInt32(&s.produceVersion, int32(version))

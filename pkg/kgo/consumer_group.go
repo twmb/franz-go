@@ -523,10 +523,10 @@ const (
 //
 // For cooperative consumers, this either
 //
-//     (1) if revoking lost partitions from a prior session (i.e., after sync),
-//         this revokes the passed in lost
-//     (2) if revoking at the end of a session, this revokes topics that the
-//         consumer is no longer interested in consuming
+//	(1) if revoking lost partitions from a prior session (i.e., after sync),
+//	    this revokes the passed in lost
+//	(2) if revoking at the end of a session, this revokes topics that the
+//	    consumer is no longer interested in consuming
 //
 // Lastly, for cooperative consumers, this must selectively delete what was
 // lost from the uncommitted map.
@@ -735,10 +735,10 @@ func (s *assignRevokeSession) revoke(g *groupConsumer, leaving bool) <-chan stru
 // when heartbeating errors (or if fetch offsets errors).
 //
 // Before returning, this function ensures that
-//  - onAssigned is complete
-//    - which ensures that pre revoking is complete
-//  - fetching is complete
-//  - heartbeating is complete
+//   - onAssigned is complete
+//   - which ensures that pre revoking is complete
+//   - fetching is complete
+//   - heartbeating is complete
 func (g *groupConsumer) setupAssignedAndHeartbeat() (string, error) {
 	type hbquit struct {
 		rejoinWhy string
@@ -1306,9 +1306,9 @@ func (g *groupConsumer) joinGroupProtocols() []kmsg.JoinGroupRequestProtocol {
 // Now, if fetching returns early due to an error, when we rejoin and re-fetch,
 // we will resume fetching what we were previously:
 //
-//   * first we remove what was lost
-//   * then we add anything new
-//   * then we translate our total set into the "added" list to be fetched on return
+//   - first we remove what was lost
+//   - then we add anything new
+//   - then we translate our total set into the "added" list to be fetched on return
 //
 // Any time a group is completely lost, the manage loop clears fetching. When
 // cooperative consuming, a hard error is basically losing the entire state and
@@ -1519,8 +1519,8 @@ start:
 // We only grab the group mu at the end if we need to.
 //
 // This joins the group if
-//  - the group has never been joined
-//  - new topics are found for consuming (changing this consumer's join metadata)
+//   - the group has never been joined
+//   - new topics are found for consuming (changing this consumer's join metadata)
 //
 // Additionally, if the member is the leader, this rejoins the group if the
 // leader notices new partitions in an existing topic.

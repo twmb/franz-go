@@ -28,9 +28,8 @@ func (cl *Client) SupportedTypes(ctx context.Context) ([]SchemaType, error) {
 // that use the key "$ref" can refer to another schema via URL. For more details
 // on references, see the following link:
 //
-//     https://docs.confluent.io/platform/current/schema-registry/serdes-develop/index.html#schema-references
-//     https://docs.confluent.io/platform/current/schema-registry/develop/api.html
-//
+//	https://docs.confluent.io/platform/current/schema-registry/serdes-develop/index.html#schema-references
+//	https://docs.confluent.io/platform/current/schema-registry/develop/api.html
 type SchemaReference struct {
 	Name    string `json:"name"`
 	Subject string `json:"subject"`
@@ -145,12 +144,11 @@ func (cl *Client) Subjects(ctx context.Context, deleted HideShowDeleted) ([]stri
 //
 // For example, if the schema for an ID is
 //
-//     "{\"type\":\"boolean\"}"
+//	"{\"type\":\"boolean\"}"
 //
 // this will return
 //
-//     {"type":"boolean"}
-//
+//	{"type":"boolean"}
 func (cl *Client) SchemaTextByID(ctx context.Context, id int) (string, error) {
 	// GET /schemas/ids/{id}
 	var s Schema

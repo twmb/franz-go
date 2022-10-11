@@ -486,8 +486,8 @@ func memberMetadataV0(interests []string) []byte {
 // Suppose there are two members M0 and M1, two topics t0 and t1, and each
 // topic has three partitions p0, p1, and p2. The partition balancing will be
 //
-//     M0: [t0p0, t0p2, t1p1]
-//     M1: [t0p1, t1p0, t1p2]
+//	M0: [t0p0, t0p2, t1p1]
+//	M1: [t0p1, t1p0, t1p2]
 //
 // If all members subscribe to all topics equally, the roundrobin balancer
 // will give a perfect balance. However, if topic subscriptions are quite
@@ -576,8 +576,8 @@ func (*roundRobinBalancer) Balance(b *ConsumerBalancer, topics map[string]int32)
 // Suppose there are two members M0 and M1, two topics t0 and t1, and each
 // topic has three partitions p0, p1, and p2. The partition balancing will be
 //
-//     M0: [t0p0, t0p1, t1p0, t1p1]
-//     M1: [t0p2, t1p2]
+//	M0: [t0p0, t0p1, t1p0, t1p1]
+//	M1: [t0p2, t1p2]
 //
 // This is equivalent to the Java range balancer.
 func RangeBalancer() GroupBalancer {
@@ -647,33 +647,33 @@ func (*rangeBalancer) Balance(b *ConsumerBalancer, topics map[string]int32) Into
 // each with three partitions p0, p1, and p2. If the initial balance plan looks
 // like
 //
-//     M0: [t0p0, t0p1, t0p2]
-//     M1: [t1p0, t1p1, t1p2]
-//     M2: [t2p0, t2p2, t2p2]
+//	M0: [t0p0, t0p1, t0p2]
+//	M1: [t1p0, t1p1, t1p2]
+//	M2: [t2p0, t2p2, t2p2]
 //
 // If M2 disappears, both roundrobin and range would have mostly destructive
 // reassignments.
 //
 // Range would result in
 //
-//     M0: [t0p0, t0p1, t1p0, t1p1, t2p0, t2p1]
-//     M1: [t0p2, t1p2, t2p2]
+//	M0: [t0p0, t0p1, t1p0, t1p1, t2p0, t2p1]
+//	M1: [t0p2, t1p2, t2p2]
 //
 // which is imbalanced and has 3 partitions move from members that did not need
 // to move (t0p2, t1p0, t1p1).
 //
 // RoundRobin would result in
 //
-//     M0: [t0p0, t0p2, t1p1, t2p0, t2p2]
-//     M1: [t0p1, t1p0, t1p2, t2p1]
+//	M0: [t0p0, t0p2, t1p1, t2p0, t2p2]
+//	M1: [t0p1, t1p0, t1p2, t2p1]
 //
 // which is balanced, but has 2 partitions move when they do not need to
 // (t0p1, t1p1).
 //
 // Sticky balancing results in
 //
-//     M0: [t0p0, t0p1, t0p2, t2p0, t2p2]
-//     M1: [t1p0, t1p1, t1p2, t2p1]
+//	M0: [t0p0, t0p1, t0p2, t2p0, t2p2]
+//	M1: [t1p0, t1p1, t1p2, t2p1]
 //
 // which is balanced and does not cause any unnecessary partition movement.
 // The actual t2 partitions may not be in that exact combination, but they

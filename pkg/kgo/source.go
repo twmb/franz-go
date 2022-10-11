@@ -529,11 +529,11 @@ func (s *source) loopFetch() {
 // contains a lot of the side effects of fetching and updating. The function
 // consists of two main bulks of logic:
 //
-//   * First, issue a request that can be killed if the source needs to be
-//   stopped. Processing the response modifies no state on the source.
+//   - First, issue a request that can be killed if the source needs to be
+//     stopped. Processing the response modifies no state on the source.
 //
-//   * Second, we keep the fetch response and update everything relevant
-//   (session, trigger some list or epoch updates, buffer the fetch).
+//   - Second, we keep the fetch response and update everything relevant
+//     (session, trigger some list or epoch updates, buffer the fetch).
 //
 // One small part between the first and second step is to update preferred
 // replicas. We always keep the preferred replicas from the fetch response

@@ -532,7 +532,7 @@ func ClientID(id string) Opt {
 // It is generally not recommended to set this. As well, if you do, the name
 // and version must match the following regular expression:
 //
-//     [a-zA-Z0-9](?:[a-zA-Z0-9\.-]*[a-zA-Z0-9])?
+//	[a-zA-Z0-9](?:[a-zA-Z0-9\.-]*[a-zA-Z0-9])?
 //
 // Note this means neither the name nor version can be empty.
 func SoftwareNameAndVersion(name, version string) Opt {
@@ -596,12 +596,11 @@ func ConnIdleTimeout(timeout time.Duration) Opt {
 // This function has the same signature as net.Dialer's DialContext and
 // tls.Dialer's DialContext, meaning you can use this function like so:
 //
-//     kgo.Dialer((&net.Dialer{Timeout: 10*time.Second}).DialContext)
+//	kgo.Dialer((&net.Dialer{Timeout: 10*time.Second}).DialContext)
 //
 // or
 //
-//     kgo.Dialer((&tls.Dialer{...}).DialContext)
-//
+//	kgo.Dialer((&tls.Dialer{...}).DialContext)
 func Dialer(fn func(ctx context.Context, network, host string) (net.Conn, error)) Opt {
 	return clientOpt{func(cfg *cfg) { cfg.dialFn = fn }}
 }
@@ -685,10 +684,10 @@ func RequestRetries(n int) Opt {
 // RetryTimeout sets the upper limit on how long we allow requests to retry,
 // overriding the default of:
 //
-//     JoinGroup: cfg.SessionTimeout (default 45s)
-//     SyncGroup: cfg.SessionTimeout (default 45s)
-//     Heartbeat: cfg.SessionTimeout (default 45s)
-//        others: 30s
+//	JoinGroup: cfg.SessionTimeout (default 45s)
+//	SyncGroup: cfg.SessionTimeout (default 45s)
+//	Heartbeat: cfg.SessionTimeout (default 45s)
+//	   others: 30s
 //
 // This timeout applies to any request issued through a client's Request
 // function. It does not apply to fetches nor produces.
@@ -705,10 +704,10 @@ func RetryTimeout(t time.Duration) Opt {
 // RetryTimeoutFn sets the per-request upper limit on how long we allow
 // requests to retry, overriding the default of:
 //
-//     JoinGroup: cfg.SessionTimeout (default 45s)
-//     SyncGroup: cfg.SessionTimeout (default 45s)
-//     Heartbeat: cfg.SessionTimeout (default 45s)
-//        others: 30s
+//	JoinGroup: cfg.SessionTimeout (default 45s)
+//	SyncGroup: cfg.SessionTimeout (default 45s)
+//	Heartbeat: cfg.SessionTimeout (default 45s)
+//	   others: 30s
 //
 // This timeout applies to any request issued through a client's Request
 // function. It does not apply to fetches nor produces.
@@ -1188,13 +1187,12 @@ func MaxConcurrentFetches(n int) ConsumerOpt {
 // In short form, the following determines the offset for when a partition is
 // seen for the first time, or reset while fetching:
 //
-//     reset at start?                        => log start offset
-//     reset at end?                          => high watermark
-//     reset at exact?                        => this exact offset (3 means offset 3)
-//     reset relative?                        => the above, + / - the relative amount
-//     reset exact or relative out of bounds? => nearest boundary (start or end)
-//     reset after millisec?                  => high watermark, or first offset after millisec if one exists
-//
+//	reset at start?                        => log start offset
+//	reset at end?                          => high watermark
+//	reset at exact?                        => this exact offset (3 means offset 3)
+//	reset relative?                        => the above, + / - the relative amount
+//	reset exact or relative out of bounds? => nearest boundary (start or end)
+//	reset after millisec?                  => high watermark, or first offset after millisec if one exists
 func ConsumeResetOffset(offset Offset) ConsumerOpt {
 	return consumerOpt{func(cfg *cfg) { cfg.resetOffset = offset }}
 }

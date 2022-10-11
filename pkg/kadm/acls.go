@@ -15,11 +15,11 @@ import (
 //
 // An ACL consists of five components:
 //
-//     - the user (principal)
-//     - the host the user runs on
-//     - what resource to access (topic name, group id, etc.)
-//     - the operation (read, write)
-//     - whether to allow or deny the above
+//   - the user (principal)
+//   - the host the user runs on
+//   - what resource to access (topic name, group id, etc.)
+//   - the operation (read, write)
+//   - whether to allow or deny the above
 //
 // This builder allows for adding the above five components in batches and then
 // creating, listing, or deleting a batch of ACLs in one go. This builder
@@ -304,117 +304,116 @@ func (b *ACLBuilder) MaybeDenyHosts(hosts ...string) *ACLBuilder { b.denyHosts =
 // Kafka requests require the following operations (broker <=> broker ACLs
 // elided):
 //
-//     PRODUCING/CONSUMING
-//     ===================
-//     Produce      WRITE on TOPIC for topics
-//                  WRITE on TRANSACTIONAL_ID for txn id (if transactionally producing)
+//	PRODUCING/CONSUMING
+//	===================
+//	Produce      WRITE on TOPIC for topics
+//	             WRITE on TRANSACTIONAL_ID for txn id (if transactionally producing)
 //
-//     Fetch        READ on TOPIC for topics
+//	Fetch        READ on TOPIC for topics
 //
-//     ListOffsets  DESCRIBE on TOPIC for topics
+//	ListOffsets  DESCRIBE on TOPIC for topics
 //
-//     Metadata     DESCRIBE on TOPIC for topics
-//                  CREATE on CLUSTER for kafka-cluster (if automatically creating new topics)
-//                  CREATE on TOPIC for topics (if automatically creating new topics)
+//	Metadata     DESCRIBE on TOPIC for topics
+//	             CREATE on CLUSTER for kafka-cluster (if automatically creating new topics)
+//	             CREATE on TOPIC for topics (if automatically creating new topics)
 //
-//     OffsetForLeaderEpoch  DESCRIBE on TOPIC for topics
+//	OffsetForLeaderEpoch  DESCRIBE on TOPIC for topics
 //
-//     GROUPS
-//     ======
-//     FindCoordinator  DESCRIBE on GROUP for group (if finding group coordinator)
-//                      DESCRIBE on TRANSACTIONAL_ID for id (if finding transactiona coordinator)
+//	GROUPS
+//	======
+//	FindCoordinator  DESCRIBE on GROUP for group (if finding group coordinator)
+//	                 DESCRIBE on TRANSACTIONAL_ID for id (if finding transactiona coordinator)
 //
-//     OffsetCommit     READ on GROUP for group
-//                      READ on TOPIC for topics
+//	OffsetCommit     READ on GROUP for group
+//	                 READ on TOPIC for topics
 //
-//     OffsetFetch      DESCRIBE on GROUP for group
-//                      DESCRIBE on TOPIC for topics
+//	OffsetFetch      DESCRIBE on GROUP for group
+//	                 DESCRIBE on TOPIC for topics
 //
-//     OffsetDelete     DELETE on GROUP For group
-//                      READ on TOPIC for topics
+//	OffsetDelete     DELETE on GROUP For group
+//	                 READ on TOPIC for topics
 //
-//     JoinGroup        READ on GROUP for group
-//     Heartbeat        READ on GROUP for group
-//     LeaveGroup       READ on GROUP for group
-//     SyncGroup        READ on GROUP for group
+//	JoinGroup        READ on GROUP for group
+//	Heartbeat        READ on GROUP for group
+//	LeaveGroup       READ on GROUP for group
+//	SyncGroup        READ on GROUP for group
 //
-//     DescribeGroup    DESCRIBE on GROUP for groups
+//	DescribeGroup    DESCRIBE on GROUP for groups
 //
-//     ListGroups       DESCRIBE on GROUP for groups
-//                      or, DESCRIBE on CLUSTER for kafka-cluster
+//	ListGroups       DESCRIBE on GROUP for groups
+//	                 or, DESCRIBE on CLUSTER for kafka-cluster
 //
-//     DeleteGroups     DELETE on GROUP for groups
+//	DeleteGroups     DELETE on GROUP for groups
 //
-//     TRANSACTIONS (including FindCoordinator above)
-//     ============
-//     InitProducerID      WRITE on TRANSACTIONAL_ID for id, if using transactions
-//                         or, IDEMPOTENT_WRITE on CLUSTER for kafka-cluster, if pre Kafka 3.0
-//                         or, WRITE on TOPIC for any topic, if Kafka 3.0+
+//	TRANSACTIONS (including FindCoordinator above)
+//	============
+//	InitProducerID      WRITE on TRANSACTIONAL_ID for id, if using transactions
+//	                    or, IDEMPOTENT_WRITE on CLUSTER for kafka-cluster, if pre Kafka 3.0
+//	                    or, WRITE on TOPIC for any topic, if Kafka 3.0+
 //
-//     AddPartitionsToTxn  WRITE on TRANSACTIONAL_ID for id
-//                         WRITE on TOPIC for topics
+//	AddPartitionsToTxn  WRITE on TRANSACTIONAL_ID for id
+//	                    WRITE on TOPIC for topics
 //
-//     AddOffsetsToTxn     WRITE on TRANSACTIONAL_ID for id
-//                         READ on GROUP for group
+//	AddOffsetsToTxn     WRITE on TRANSACTIONAL_ID for id
+//	                    READ on GROUP for group
 //
-//     EndTxn              WRITE on TRANSACTIONAL_ID for id
+//	EndTxn              WRITE on TRANSACTIONAL_ID for id
 //
-//     TxnOffsetCommit     WRITE on TRANSACTIONAL_ID for id
-//                         READ on GROUP for group
-//                         READ on TOPIC for topics
+//	TxnOffsetCommit     WRITE on TRANSACTIONAL_ID for id
+//	                    READ on GROUP for group
+//	                    READ on TOPIC for topics
 //
-//     TOPIC ADMIN
-//     ===========
-//     CreateTopics      CREATE on CLUSTER for kafka-cluster
-//                       CREATE on TOPIC for topics
-//                       DESCRIBE_CONFIGS on TOPIC for topics, for returning topic configs on create
+//	TOPIC ADMIN
+//	===========
+//	CreateTopics      CREATE on CLUSTER for kafka-cluster
+//	                  CREATE on TOPIC for topics
+//	                  DESCRIBE_CONFIGS on TOPIC for topics, for returning topic configs on create
 //
-//     CreatePartitions  ALTER on TOPIC for topics
+//	CreatePartitions  ALTER on TOPIC for topics
 //
-//     DeleteTopics      DELETE on TOPIC for topics
-//                       DESCRIBE on TOPIC for topics, if deleting by topic id (in addition to prior ACL)
+//	DeleteTopics      DELETE on TOPIC for topics
+//	                  DESCRIBE on TOPIC for topics, if deleting by topic id (in addition to prior ACL)
 //
-//     DeleteRecords     DELETE on TOPIC for topics
+//	DeleteRecords     DELETE on TOPIC for topics
 //
-//     CONFIG ADMIN
-//     ============
-//     DescribeConfigs          DESCRIBE_CONFIGS on CLUSTER for kafka-cluster, for broker or broker-logger describing
-//                              DESCRIBE_CONFIGS on TOPIC for topics, for topic describing
+//	CONFIG ADMIN
+//	============
+//	DescribeConfigs          DESCRIBE_CONFIGS on CLUSTER for kafka-cluster, for broker or broker-logger describing
+//	                         DESCRIBE_CONFIGS on TOPIC for topics, for topic describing
 //
-//     AlterConfigs             ALTER_CONFIGS on CLUSTER for kafka-cluster, for broker altering
-//                              ALTER_CONFIGS on TOPIC for topics, for topic altering
+//	AlterConfigs             ALTER_CONFIGS on CLUSTER for kafka-cluster, for broker altering
+//	                         ALTER_CONFIGS on TOPIC for topics, for topic altering
 //
-//     IncrementalAlterConfigs  ALTER_CONFIGS on CLUSTER for kafka-cluster, for broker or broker-logger altering
-//                              ALTER_CONFIGS on TOPIC for topics, for topic altering
+//	IncrementalAlterConfigs  ALTER_CONFIGS on CLUSTER for kafka-cluster, for broker or broker-logger altering
+//	                         ALTER_CONFIGS on TOPIC for topics, for topic altering
 //
 //
-//     MISC ADMIN
-//     ==========
-//     AlterReplicaLogDirs  ALTER on CLUSTER for kafka-cluster
-//     DescribeLogDirs      DESCRIBE on CLUSTER for kafka-cluster
+//	MISC ADMIN
+//	==========
+//	AlterReplicaLogDirs  ALTER on CLUSTER for kafka-cluster
+//	DescribeLogDirs      DESCRIBE on CLUSTER for kafka-cluster
 //
-//     AlterPartitionAssignments   ALTER on CLUSTER for kafka-cluster
-//     ListPartitionReassignments  DESCRIBE on CLUSTER for kafka-cluster
+//	AlterPartitionAssignments   ALTER on CLUSTER for kafka-cluster
+//	ListPartitionReassignments  DESCRIBE on CLUSTER for kafka-cluster
 //
-//     DescribeDelegationTokens    DESCRIBE on DELEGATION_TOKEN for id
+//	DescribeDelegationTokens    DESCRIBE on DELEGATION_TOKEN for id
 //
-//     ElectLeaders          ALTER on CLUSTER for kafka-cluster
+//	ElectLeaders          ALTER on CLUSTER for kafka-cluster
 //
-//     DescribeClientQuotas  DESCRIBE_CONFIGS on CLUSTER for kafka-cluster
-//     AlterClientQuotas     ALTER_CONFIGS on CLUSTER for kafka-cluster
+//	DescribeClientQuotas  DESCRIBE_CONFIGS on CLUSTER for kafka-cluster
+//	AlterClientQuotas     ALTER_CONFIGS on CLUSTER for kafka-cluster
 //
-//     DescribeUserScramCredentials  DESCRIBE on CLUSTER for kafka-cluster
-//     AlterUserScramCredentials     ALTER on CLUSTER for kafka-cluster
+//	DescribeUserScramCredentials  DESCRIBE on CLUSTER for kafka-cluster
+//	AlterUserScramCredentials     ALTER on CLUSTER for kafka-cluster
 //
-//     UpdateFeatures        ALTER on CLUSTER for kafka-cluster
+//	UpdateFeatures        ALTER on CLUSTER for kafka-cluster
 //
-//     DescribeCluster       DESCRIBE on CLUSTER for kafka-cluster
+//	DescribeCluster       DESCRIBE on CLUSTER for kafka-cluster
 //
-//     DescribeProducerIDs   READ on TOPIC for topics
-//     DescribeTransactions  DESCRIBE on TRANSACTIONAL_ID for ids
-//                           DESCRIBE on TOPIC for topics
-//     ListTransactions      DESCRIBE on TRANSACTIONAL_ID for ids
-//
+//	DescribeProducerIDs   READ on TOPIC for topics
+//	DescribeTransactions  DESCRIBE on TRANSACTIONAL_ID for ids
+//	                      DESCRIBE on TOPIC for topics
+//	ListTransactions      DESCRIBE on TRANSACTIONAL_ID for ids
 type ACLOperation = kmsg.ACLOperation
 
 const (

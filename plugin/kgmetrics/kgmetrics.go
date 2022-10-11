@@ -4,25 +4,25 @@
 // This package tracks the following metrics under the following names, all
 // metrics are meters:
 //
-//     broker.<id>.connects
-//     broker.<id>.connect_errors
-//     broker.<id>.disconnects
-//     broker.<id>.write_errors
-//     broker.<id>.write_bytes
-//     broker.<id>.read_errors
-//     broker.<id>.read_bytes
-//     broker.<id>.topic.<topic>.produce_bytes
-//     broker.<id>.topic.<topic>.fetch_bytes
+//	broker.<id>.connects
+//	broker.<id>.connect_errors
+//	broker.<id>.disconnects
+//	broker.<id>.write_errors
+//	broker.<id>.write_bytes
+//	broker.<id>.read_errors
+//	broker.<id>.read_bytes
+//	broker.<id>.topic.<topic>.produce_bytes
+//	broker.<id>.topic.<topic>.fetch_bytes
 //
 // The metrics can be prefixed with the NamePrefix option.
 //
 // This can be used in a client like so:
 //
-//     m := kgmetrics.NewMetrics()
-//     cl, err := kgo.NewClient(
-//             kgo.WithHooks(m),
-//             // ...other opts
-//     )
+//	m := kgmetrics.NewMetrics()
+//	cl, err := kgo.NewClient(
+//	        kgo.WithHooks(m),
+//	        // ...other opts
+//	)
 //
 // By default, metrics are installed under the DefaultRegistry, but this can
 // be overridden with the Registry option.

@@ -84,12 +84,11 @@ type TopicBackupIter interface {
 // As a minimal example, if you do not care about the topic and you set the
 // partition before producing:
 //
-//     kgo.BasicConsistentPartitioner(func(topic) func(*Record, int) int {
-//             return func(r *Record, n int) int {
-//                     return int(r.Partition)
-//             }
-//     })
-//
+//	kgo.BasicConsistentPartitioner(func(topic) func(*Record, int) int {
+//	        return func(r *Record, n int) int {
+//	                return int(r.Partition)
+//	        }
+//	})
 func BasicConsistentPartitioner(partition func(string) func(r *Record, n int) int) Partitioner {
 	return &basicPartitioner{partition}
 }
@@ -161,10 +160,10 @@ func (r *roundRobinTopicPartitioner) Partition(_ *Record, n int) int {
 
 // LeastBackupPartitioner prioritizes partitioning by three factors, in order:
 //
-//  1) pin to the current pick until there is a new batch
-//  2) on new batch, choose the least backed up partition (the partition with
+//  1. pin to the current pick until there is a new batch
+//  2. on new batch, choose the least backed up partition (the partition with
 //     the fewest amount of buffered records)
-//  3) if multiple partitions are equally least-backed-up, choose one at random
+//  3. if multiple partitions are equally least-backed-up, choose one at random
 //
 // This algorithm prioritizes least-backed-up throughput, which may result in
 // unequal partitioning. It is likely that this algorithm will talk most to the
@@ -508,8 +507,7 @@ func KafkaHasher(hashFn func([]byte) uint32) PartitionerHasher {
 //
 // In short, to *exactly* match the Sarama defaults, use the following:
 //
-//     kgo.StickyKeyPartitioner(kgo.SaramaHasher(fnv.New32a()))
-//
+//	kgo.StickyKeyPartitioner(kgo.SaramaHasher(fnv.New32a()))
 func SaramaHasher(hashFn func([]byte) uint32) PartitionerHasher {
 	return func(key []byte, n int) int {
 		p := int(hashFn(key)) % n
