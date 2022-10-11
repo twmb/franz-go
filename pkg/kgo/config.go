@@ -69,6 +69,8 @@ type cfg struct {
 
 	id                     *string // client ID
 	dialFn                 func(context.Context, string, string) (net.Conn, error)
+	dialTimeout            time.Duration
+	dialTLS                *tls.Config
 	requestTimeoutOverhead time.Duration
 	connIdleTimeout        time.Duration
 
@@ -336,6 +338,12 @@ func (cfg *cfg) validate() error {
 		}
 	}
 
+	if cfg.dialFn != nil {
+		if cfg.dialTLS != nil {
+			return errors.New("cannot set both Dialer and DialTLSConfig")
+		}
+	}
+
 	if len(cfg.group) > 0 {
 		if len(cfg.topics) == 0 {
 			return errors.New("unable to consume from a group when no topics are specified")
@@ -385,10 +393,7 @@ func (cfg *cfg) validate() error {
 	return nil
 }
 
-var (
-	defaultDialer = &net.Dialer{Timeout: 10 * time.Second}
-	reVersion     = regexp.MustCompile(`^[a-zA-Z0-9](?:[a-zA-Z0-9.-]*[a-zA-Z0-9])?$`)
-)
+var reVersion = regexp.MustCompile(`^[a-zA-Z0-9](?:[a-zA-Z0-9.-]*[a-zA-Z0-9])?$`)
 
 func softwareVersion() string {
 	info, ok := debug.ReadBuildInfo()
@@ -410,9 +415,9 @@ func defaultCfg() cfg {
 		/////////////
 		// general //
 		/////////////
-		id:     &defaultID,
-		dialFn: defaultDialer.DialContext,
+		id: &defaultID,
 
+		dialTimeout:            10 * time.Second,
 		requestTimeoutOverhead: 10 * time.Second,
 		connIdleTimeout:        20 * time.Second,
 
@@ -601,29 +606,24 @@ func Dialer(fn func(ctx context.Context, network, host string) (net.Conn, error)
 	return clientOpt{func(cfg *cfg) { cfg.dialFn = fn }}
 }
 
+// DialTimeout sets the dial timeout, overriding the default of 10s. This
+// option is useful if you do not want to set a custom dialer, and is useful in
+// tandem with DialTLSConfig.
+func DialTimeout(timeout time.Duration) Opt {
+	return clientOpt{func(cfg *cfg) { cfg.dialTimeout = timeout }}
+}
+
 // DialTLSConfig opts in to dialing brokers with the given TLS config with a
 // 10s dial timeout. This is a shortcut for manually specifying a tls dialer
-// using the Dialer option.
+// using the Dialer option. You can also change the default 10s timeout with
+// DialTimeout.
 //
 // Every dial, the input config is cloned. If the config's ServerName is not
 // specified, this function uses net.SplitHostPort to extract the host from the
 // broker being dialed and sets the ServerName. In short, it is not necessary
 // to set the ServerName.
 func DialTLSConfig(c *tls.Config) Opt {
-	return Dialer(func(ctx context.Context, network, host string) (net.Conn, error) {
-		c := c.Clone()
-		if c.ServerName == "" {
-			server, _, err := net.SplitHostPort(host)
-			if err != nil {
-				return nil, fmt.Errorf("unable to split host:port for dialing: %w", err)
-			}
-			c.ServerName = server
-		}
-		return (&tls.Dialer{
-			NetDialer: defaultDialer,
-			Config:    c,
-		}).DialContext(ctx, network, host)
-	})
+	return clientOpt{func(cfg *cfg) { cfg.dialTLS = c }}
 }
 
 // SeedBrokers sets the seed brokers for the client to use, overriding the

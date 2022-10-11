@@ -9,6 +9,7 @@ package kgo
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"hash/crc32"
@@ -170,6 +171,27 @@ func NewClient(opts ...Opt) (*Client, error) {
 				return cfg.sessionTimeout
 			}
 			return 30 * time.Second
+		}
+	}
+
+	if cfg.dialFn == nil {
+		dialer := &net.Dialer{Timeout: cfg.dialTimeout}
+		cfg.dialFn = dialer.DialContext
+		if cfg.dialTLS != nil {
+			cfg.dialFn = func(ctx context.Context, network, host string) (net.Conn, error) {
+				c := cfg.dialTLS.Clone()
+				if c.ServerName == "" {
+					server, _, err := net.SplitHostPort(host)
+					if err != nil {
+						return nil, fmt.Errorf("unable to split host:port for dialing: %w", err)
+					}
+					c.ServerName = server
+				}
+				return (&tls.Dialer{
+					NetDialer: dialer,
+					Config:    c,
+				}).DialContext(ctx, network, host)
+			}
 		}
 	}
 
