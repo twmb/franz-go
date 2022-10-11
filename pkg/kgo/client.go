@@ -366,7 +366,7 @@ func parseBrokerAddr(addr string) (hostport, error) {
 	// Try to parse as IP:port or host:port
 	h, p, err := net.SplitHostPort(addr)
 	if err != nil {
-		return hostport{addr, defaultKafkaPort}, nil // nolint:nilerr // ipv6 literal -- use default kafka port
+		return hostport{addr, defaultKafkaPort}, nil //nolint:nilerr // ipv6 literal -- use default kafka port
 	}
 	port, err := strconv.ParseInt(p, 10, 32)
 	if err != nil {
@@ -2222,7 +2222,7 @@ func (cl *offsetFetchSharder) shard(_ context.Context, kreq kmsg.Request) ([]iss
 	if len(req.Groups) == 0 {
 		berr := coordinators[req.Group]
 		if berr.err != nil {
-			return []issueShard{{ // nolint:nilerr // error is returned in the struct
+			return []issueShard{{ //nolint:nilerr // error is returned in the struct
 				req: req,
 				err: berr.err,
 			}}, false, nil // not reshardable, because this is an error

@@ -480,9 +480,8 @@ func NewRecordFormatter(layout string) (*RecordFormatter, error) {
 					return writeR(b, r, func(b []byte, r *Record) []byte {
 						if r.Attrs.IsTransactional() {
 							return append(b, '1')
-						} else {
-							return append(b, '0')
 						}
+						return append(b, '0')
 					})
 				})
 			case strings.HasPrefix(layout, "transactional-bit;"):
@@ -496,9 +495,8 @@ func NewRecordFormatter(layout string) (*RecordFormatter, error) {
 					return writeR(b, r, func(b []byte, r *Record) []byte {
 						if r.Attrs.IsControl() {
 							return append(b, '1')
-						} else {
-							return append(b, '0')
 						}
+						return append(b, '0')
 					})
 				})
 			case strings.HasPrefix(layout, "control-bit;"):
@@ -1478,9 +1476,8 @@ func (*RecordReader) parseReadSize(layout string, dst *uint64, needBrace bool) (
 			readKind{condition: func(b byte) int8 {
 				if b < '0' || b > '9' {
 					return -1
-				} else {
-					return 2 // ignore EOF if we hit it after this
 				}
+				return 2 // ignore EOF if we hit it after this
 			}},
 			func(b []byte, _ *Record) (err error) {
 				*dst, err = strconv.ParseUint(kbin.UnsafeString(b), 10, 64)

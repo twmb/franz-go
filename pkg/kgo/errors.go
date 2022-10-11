@@ -205,12 +205,12 @@ var (
 // check if you might be missing required credentials.
 type ErrFirstReadEOF struct{}
 
-func (e *ErrFirstReadEOF) Error() string {
+func (*ErrFirstReadEOF) Error() string {
 	return "broker closed the connection immediately, which happens when SASL is required but not provided: is SASL missing?"
 }
 
 // Unwrap returns io.EOF.
-func (e *ErrFirstReadEOF) Unwrap() error { return io.EOF }
+func (*ErrFirstReadEOF) Unwrap() error { return io.EOF }
 
 // ErrDataLoss is returned for Kafka >=2.1.0 when data loss is detected and the
 // client is able to reset to the last valid offset.
