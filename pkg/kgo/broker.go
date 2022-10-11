@@ -1393,6 +1393,9 @@ func (cxn *brokerCxn) handleResp(pr promisedResp) {
 				cxn.b.cl.cfg.logger.Log(LogLevelDebug, "read from broker errored, killing connection", "addr", cxn.b.addr, "broker", logID(cxn.b.meta.NodeID), "successful_reads", cxn.successes, "err", err)
 			} else {
 				cxn.b.cl.cfg.logger.Log(LogLevelWarn, "read from broker errored, killing connection after 0 successful responses (is sasl missing?)", "addr", cxn.b.addr, "broker", logID(cxn.b.meta.NodeID), "err", err)
+				if err == io.EOF { // specifically avoid checking errors.Is to ensure this is not already wrapped
+					err = &ErrFirstReadEOF{}
+				}
 			}
 		}
 		pr.promise(nil, err)
