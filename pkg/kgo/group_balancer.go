@@ -110,7 +110,7 @@ func (*ConsumerBalancer) Balance(map[string]int32) IntoSyncAssignment {
 	panic("unreachable")
 }
 
-// Balance satisfies the GroupMemberBalancerOrError interface.
+// BalanceOrError satisfies the GroupMemberBalancerOrError interface.
 func (b *ConsumerBalancer) BalanceOrError(topics map[string]int32) (IntoSyncAssignment, error) {
 	return b.b.Balance(b, topics), b.err
 }

@@ -79,6 +79,7 @@ type (
 	// The following types can be encoded "compact"; this happens on
 	// flexible versions. If adding types here, be sure to add the
 	// AsFromFlexible method below.
+
 	String struct {
 		FromFlexible bool
 	}

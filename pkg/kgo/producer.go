@@ -14,6 +14,9 @@ import (
 )
 
 type producer struct {
+	bufferedRecords int64
+	inflight        int64 // high 16: # waiters, low 48: # inflight
+
 	cl *Client
 
 	topicsMu sync.Mutex // locked to prevent concurrent updates; reads are always atomic
@@ -34,8 +37,6 @@ type producer struct {
 	unknownTopicsMu sync.Mutex
 	unknownTopics   map[string]*unknownTopicProduces
 
-	bufferedRecords int64
-
 	id           atomic.Value
 	producingTxn uint32 // 1 if in txn
 
@@ -54,8 +55,6 @@ type producer struct {
 	// a few other tight locks.
 	mu sync.Mutex
 	c  *sync.Cond
-
-	inflight int64 // high 16: # waiters, low 48: # inflight
 
 	batchPromises ringBatchPromise
 	promisesMu    sync.Mutex
@@ -484,7 +483,7 @@ func (cl *Client) finishRecordPromise(pr promisedRec, err error) {
 		p.waitBuffer <- struct{}{}
 	} else if buffered == 0 && atomic.LoadInt32(&p.flushing) > 0 {
 		p.mu.Lock()
-		p.mu.Unlock() // nolint:gocritic,staticcheck // We use the lock as a barrier, unlocking immediately is safe.
+		p.mu.Unlock() //nolint:gocritic,staticcheck // We use the lock as a barrier, unlocking immediately is safe.
 		p.c.Broadcast()
 	}
 }

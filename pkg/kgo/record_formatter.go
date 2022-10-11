@@ -26,8 +26,8 @@ import (
 
 // RecordFormatter formats records.
 type RecordFormatter struct {
-	fns   []func([]byte, *FetchPartition, *Record) []byte
 	calls int64
+	fns   []func([]byte, *FetchPartition, *Record) []byte
 }
 
 // AppendRecord appends a record to b given the parsed format and returns the

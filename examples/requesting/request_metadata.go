@@ -1,4 +1,4 @@
-package requesting
+package main
 
 import (
 	"context"
@@ -12,7 +12,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kversion"
 )
 
-func requestMetadata() {
+func main() {
 	seeds := []string{"localhost:9092"}
 	client, err := kgo.NewClient(
 		kgo.SeedBrokers(seeds...),

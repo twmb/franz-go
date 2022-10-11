@@ -153,9 +153,9 @@ func (o Offset) At(at int64) Offset {
 }
 
 type consumer struct {
-	cl *Client
-
 	bufferedRecords int64
+
+	cl *Client
 
 	pausedMu sync.Mutex   // grabbed when updating paused
 	paused   atomic.Value // loaded when issuing fetches

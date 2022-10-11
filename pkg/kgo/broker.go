@@ -589,6 +589,8 @@ func (b *broker) connect(ctx context.Context) (net.Conn, error) {
 // brokerCxn manages an actual connection to a Kafka broker. This is separate
 // the broker struct to allow lazy connection (re)creation.
 type brokerCxn struct {
+	throttleUntil int64 // atomic nanosec
+
 	conn net.Conn
 
 	cl *Client
@@ -598,8 +600,6 @@ type brokerCxn struct {
 
 	mechanism sasl.Mechanism
 	expiry    time.Time
-
-	throttleUntil int64 // atomic nanosec
 
 	corrID int32
 
