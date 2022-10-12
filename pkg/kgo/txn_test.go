@@ -159,7 +159,7 @@ func (c *testConsumer) transact(txnsBeforeQuit int) {
 		fetches := txnSess.PollFetches(ctx)
 		cancel()
 		if fetches.Err() == context.DeadlineExceeded || fetches.Err() == ErrClientClosed {
-			if consumed := atomic.LoadUint64(&c.consumed); consumed == testRecordLimit {
+			if consumed := int(atomic.LoadUint64(&c.consumed)); consumed == testRecordLimit {
 				return
 			} else if consumed > testRecordLimit {
 				panic("invalid: consumed too much")
