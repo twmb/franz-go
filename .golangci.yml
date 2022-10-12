@@ -1,26 +1,25 @@
 # We may as well allow multiple golangci-lint invocations at once.
 run:
   allow-parallel-runners: true
+  go: "1.19"
 
 # golangci-lint by default ignores some staticcheck and vet raised issues that
 # are actually important to catch. The following ensures that we do not ignore
 # those tools ever.
 issues:
   exclude-use-default: false
+  max-same-issues: 0 # print all failures
 
 linters:
   disable-all: true
   enable:
     # Enabled by default linters: we want all except errcheck
-    - deadcode
     - gosimple
     - govet
     - ineffassign
     - staticcheck
-    - structcheck
     - typecheck
     - unused
-    - varcheck
     # Not enabled by default: we want a good chunk
     - asciicheck
     - bidichk
@@ -33,6 +32,7 @@ linters:
     - gofumpt
     - goimports
     - goprintffuncname
+    - gosec
     - misspell
     - nilerr
     - noctx
@@ -68,8 +68,14 @@ linters-settings:
   #
   # https://github.com/mvdan/gofumpt/issues/137
   gofumpt:
-    lang-version: "1.17"
+    lang-version: "1.19"
     extra-rules: true
+
+  gosec:
+    excludes:
+      - G104 # unhandled errors, we exclude for the same reason we do not use errcheck
+      - G404 # we want math/rand
+
 
   # Gocritic is a meta linter that has very good lints, and most of the
   # experimental ones are very good too. We opt into everything, which helps
@@ -84,7 +90,7 @@ linters-settings:
       - performance
       - style
     disabled-checks:
-      - appendAssign 
+      - appendAssign
       - builtinShadow
       - commentedOutCode
       - emptyStringTest
@@ -96,8 +102,6 @@ linters-settings:
       - sloppyReassign
       - tooManyResultsChecker
       - typeDefFirst
-      - unlabelStmt
-      - unlambda
       - unnamedResult
       - unnecessaryBlock
     settings:
@@ -138,7 +142,6 @@ linters-settings:
       - name: increment-decrement
       - name: indent-error-flow
       - name: optimize-operands-order
-      - name: package-comments
       - name: range
       - name: range-val-in-closure
       - name: receiver-naming
@@ -162,5 +165,5 @@ linters-settings:
   # contexts for beneficial reasons, and we disable the SSLv3 deprecation
   # warning because this is solely for a debug log.
   staticcheck:
-    go: "1.17"
+    go: "1.19"
     checks: ["all", "-SA1012", "-SA1019"]

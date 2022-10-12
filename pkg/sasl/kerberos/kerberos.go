@@ -221,18 +221,18 @@ func (s *session) Challenge(resp []byte) (bool, []byte, error) {
 /*
 RFC 2743 § 3.1:
 
-   2a. If the indicated value is less than 128, it shall be
-   represented in a single octet with bit 8 (high order) set to
-   "0" and the remaining bits representing the value.
+	2a. If the indicated value is less than 128, it shall be
+	represented in a single octet with bit 8 (high order) set to
+	"0" and the remaining bits representing the value.
 
-   2b. If the indicated value is 128 or more, it shall be
-   represented in two or more octets, with bit 8 of the first
-   octet set to "1" and the remaining bits of the first octet
-   specifying the number of additional octets.  The subsequent
-   octets carry the value, 8 bits per octet, most significant
-   digit first.  The minimum number of octets shall be used to
-   encode the length (i.e., no octets representing leading zeros
-   shall be included within the length encoding).
+	2b. If the indicated value is 128 or more, it shall be
+	represented in two or more octets, with bit 8 of the first
+	octet set to "1" and the remaining bits of the first octet
+	specifying the number of additional octets.  The subsequent
+	octets carry the value, 8 bits per octet, most significant
+	digit first.  The minimum number of octets shall be used to
+	encode the length (i.e., no octets representing leading zeros
+	shall be included within the length encoding).
 */
 func asn1LengthBytes(l int) []byte {
 	if l <= 127 {

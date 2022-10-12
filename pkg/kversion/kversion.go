@@ -128,12 +128,11 @@ func (opt guessOpt) apply(cfg *guessCfg) { opt.fn(cfg) }
 //
 // The current default is to skip keys that are only used by brokers:
 //
-//      4: LeaderAndISR
-//      5: StopReplica
-//      6: UpdateMetadata
-//      7: ControlledShutdown
-//     27: WriteTxnMarkers
-//
+//	 4: LeaderAndISR
+//	 5: StopReplica
+//	 6: UpdateMetadata
+//	 7: ControlledShutdown
+//	27: WriteTxnMarkers
 func SkipKeys(keys ...int16) VersionGuessOpt {
 	return guessOpt{func(cfg *guessCfg) { cfg.skipKeys = keys }}
 }

@@ -9,6 +9,7 @@ package kgo
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"hash/crc32"
@@ -170,6 +171,27 @@ func NewClient(opts ...Opt) (*Client, error) {
 				return cfg.sessionTimeout
 			}
 			return 30 * time.Second
+		}
+	}
+
+	if cfg.dialFn == nil {
+		dialer := &net.Dialer{Timeout: cfg.dialTimeout}
+		cfg.dialFn = dialer.DialContext
+		if cfg.dialTLS != nil {
+			cfg.dialFn = func(ctx context.Context, network, host string) (net.Conn, error) {
+				c := cfg.dialTLS.Clone()
+				if c.ServerName == "" {
+					server, _, err := net.SplitHostPort(host)
+					if err != nil {
+						return nil, fmt.Errorf("unable to split host:port for dialing: %w", err)
+					}
+					c.ServerName = server
+				}
+				return (&tls.Dialer{
+					NetDialer: dialer,
+					Config:    c,
+				}).DialContext(ctx, network, host)
+			}
 		}
 	}
 
@@ -344,7 +366,7 @@ func parseBrokerAddr(addr string) (hostport, error) {
 	// Try to parse as IP:port or host:port
 	h, p, err := net.SplitHostPort(addr)
 	if err != nil {
-		return hostport{addr, defaultKafkaPort}, nil // nolint:nilerr // ipv6 literal -- use default kafka port
+		return hostport{addr, defaultKafkaPort}, nil //nolint:nilerr // ipv6 literal -- use default kafka port
 	}
 	port, err := strconv.ParseInt(p, 10, 32)
 	if err != nil {
@@ -453,14 +475,14 @@ func (cl *Client) waitTries(ctx context.Context, backoff time.Duration) bool {
 // NOTE: This is a weak check; we check if any broker in the cluster supports
 // the request. We use this function in three locations:
 //
-//  1) When using the LeaderEpoch returned in a metadata response. This guards
+//  1. When using the LeaderEpoch returned in a metadata response. This guards
 //     against buggy brokers that return 0 rather than -1 even if they do not
 //     support OffsetForLeaderEpoch. If any support, the cluster is in the
 //     middle of an upgrade and we can start using the epoch.
-//  2) When deciding whether to keep LeaderEpoch from fetched offsets.
+//  2. When deciding whether to keep LeaderEpoch from fetched offsets.
 //     Realistically, clients should only commit epochs if the cluster supports
 //     them.
-//  3) When receiving OffsetOutOfRange when follower fetching and we fetched
+//  3. When receiving OffsetOutOfRange when follower fetching and we fetched
 //     past the end.
 //
 // In any of these cases, if we OffsetForLeaderEpoch against a broker that does
@@ -709,21 +731,21 @@ func (cl *Client) Close() {
 //
 // The following requests are split:
 //
-//     ListOffsets
-//     OffsetFetch (if using v8+ for Kafka 3.0+)
-//     DescribeGroups
-//     ListGroups
-//     DeleteRecords
-//     OffsetForLeaderEpoch
-//     DescribeConfigs
-//     AlterConfigs
-//     AlterReplicaLogDirs
-//     DescribeLogDirs
-//     DeleteGroups
-//     IncrementalAlterConfigs
-//     DescribeProducers
-//     DescribeTransactions
-//     ListTransactions
+//	ListOffsets
+//	OffsetFetch (if using v8+ for Kafka 3.0+)
+//	DescribeGroups
+//	ListGroups
+//	DeleteRecords
+//	OffsetForLeaderEpoch
+//	DescribeConfigs
+//	AlterConfigs
+//	AlterReplicaLogDirs
+//	DescribeLogDirs
+//	DeleteGroups
+//	IncrementalAlterConfigs
+//	DescribeProducers
+//	DescribeTransactions
+//	ListTransactions
 //
 // Kafka 3.0 introduced batch OffsetFetch and batch FindCoordinator requests.
 // This function is forward-compatible for the old, singular OffsetFetch and
@@ -2200,7 +2222,7 @@ func (cl *offsetFetchSharder) shard(_ context.Context, kreq kmsg.Request) ([]iss
 	if len(req.Groups) == 0 {
 		berr := coordinators[req.Group]
 		if berr.err != nil {
-			return []issueShard{{ // nolint:nilerr // error is returned in the struct
+			return []issueShard{{ //nolint:nilerr // error is returned in the struct
 				req: req,
 				err: berr.err,
 			}}, false, nil // not reshardable, because this is an error
@@ -3009,9 +3031,7 @@ func (cl *describeLogDirsSharder) shard(ctx context.Context, kreq kmsg.Request) 
 		}
 	}
 
-	mkreq := func() *kmsg.DescribeLogDirsRequest {
-		return kmsg.NewPtrDescribeLogDirsRequest()
-	}
+	mkreq := kmsg.NewPtrDescribeLogDirsRequest
 
 	var issues []issueShard
 	for brokerID, brokerReq := range brokerReqs {
@@ -3264,9 +3284,7 @@ func (cl *describeProducersSharder) shard(ctx context.Context, kreq kmsg.Request
 		}
 	}
 
-	mkreq := func() *kmsg.DescribeProducersRequest {
-		return kmsg.NewPtrDescribeProducersRequest()
-	}
+	mkreq := kmsg.NewPtrDescribeProducersRequest
 
 	var issues []issueShard
 	for brokerID, brokerReq := range brokerReqs {

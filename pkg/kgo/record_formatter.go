@@ -26,8 +26,8 @@ import (
 
 // RecordFormatter formats records.
 type RecordFormatter struct {
-	fns   []func([]byte, *FetchPartition, *Record) []byte
 	calls int64
+	fns   []func([]byte, *FetchPartition, *Record) []byte
 }
 
 // AppendRecord appends a record to b given the parsed format and returns the
@@ -58,7 +58,7 @@ func (f *RecordFormatter) AppendPartitionRecord(b []byte, p *FetchPartition, r *
 // and percent "verbs" (copying fmt package lingo). Slashes are used for common
 // escapes,
 //
-//     \t \n \r \\ \xNN
+//	\t \n \r \\ \xNN
 //
 // printing tabs, newlines, carriage returns, slashes, and hex encoded
 // characters.
@@ -66,167 +66,167 @@ func (f *RecordFormatter) AppendPartitionRecord(b []byte, p *FetchPartition, r *
 // Percent encoding opts in to printing aspects of either a record or a fetch
 // partition:
 //
-//     %t    topic
-//     %T    topic length
-//     %k    key
-//     %K    key length
-//     %v    value
-//     %V    value length
-//     %h    begin the header specification
-//     %H    number of headers
-//     %p    partition
-//     %o    offset
-//     %e    leader epoch
-//     %d    timestamp (date, formatting described below)
-//     %a    record attributes (formatting required, described below)
-//     %x    producer id
-//     %y    producer epoch
+//	%t    topic
+//	%T    topic length
+//	%k    key
+//	%K    key length
+//	%v    value
+//	%V    value length
+//	%h    begin the header specification
+//	%H    number of headers
+//	%p    partition
+//	%o    offset
+//	%e    leader epoch
+//	%d    timestamp (date, formatting described below)
+//	%a    record attributes (formatting required, described below)
+//	%x    producer id
+//	%y    producer epoch
 //
 // For AppendPartitionRecord, the formatter also undersands the following three
 // formatting options:
 //
-//     %[    partition log start offset
-//     %|    partition last stable offset
-//     %]    partition high watermark
+//	%[    partition log start offset
+//	%|    partition last stable offset
+//	%]    partition high watermark
 //
 // The formatter internally tracks the number of times AppendRecord or
 // AppendPartitionRecord have been called. The special option %i prints the
 // iteration / call count:
 //
-//     %i    format iteration number (starts at 1)
+//	%i    format iteration number (starts at 1)
 //
 // Lastly, there are three escapes to print raw characters that are usually
 // used for formatting options:
 //
-//     %%    percent sign
-//     %{    left brace (required if a brace is after another format option)
-//     %}    right brace
+//	%%    percent sign
+//	%{    left brace (required if a brace is after another format option)
+//	%}    right brace
 //
-// Header specification
+// # Header specification
 //
 // Specifying headers is essentially a primitive nested format option,
 // accepting the key and value escapes above:
 //
-//     %K    header key length
-//     %k    header key
-//     %V    header value length
-//     %v    header value
+//	%K    header key length
+//	%k    header key
+//	%V    header value length
+//	%v    header value
 //
 // For example, "%H %h{%k %v }" will print the number of headers, and then each
 // header key and value with a space after each.
 //
-// Verb modifiers
+// # Verb modifiers
 //
 // Most of the previous verb specifications can be modified by adding braces
 // with a given modifier, e.g., "%V{ascii}". All modifiers are described below.
 //
-// Numbers
+// # Numbers
 //
 // All number verbs accept braces that control how the number is printed:
 //
-//     %v{ascii}       the default, print the number as ascii
-//     %v{number}      alias for ascii
+//	%v{ascii}       the default, print the number as ascii
+//	%v{number}      alias for ascii
 //
-//     %v{hex64}       print 16 hex characters for the number
-//     %v{hex32}       print 8 hex characters for the number
-//     %v{hex16}       print 4 hex characters for the number
-//     %v{hex8}        print 2 hex characters for the number
-//     %v{hex4}        print 1 hex characters for the number
-//     %v{hex}         print as many hex characters as necessary for the number
+//	%v{hex64}       print 16 hex characters for the number
+//	%v{hex32}       print 8 hex characters for the number
+//	%v{hex16}       print 4 hex characters for the number
+//	%v{hex8}        print 2 hex characters for the number
+//	%v{hex4}        print 1 hex characters for the number
+//	%v{hex}         print as many hex characters as necessary for the number
 //
-//     %v{big64}       print the number in big endian uint64 format
-//     %v{big32}       print the number in big endian uint32 format
-//     %v{big16}       print the number in big endian uint16 format
-//     %v{big8}        alias for byte
+//	%v{big64}       print the number in big endian uint64 format
+//	%v{big32}       print the number in big endian uint32 format
+//	%v{big16}       print the number in big endian uint16 format
+//	%v{big8}        alias for byte
 //
-//     %v{little64}    print the number in little endian uint64 format
-//     %v{little32}    print the number in little endian uint32 format
-//     %v{little16}    print the number in little endian uint16 format
-//     %v{little8}     alias for byte
+//	%v{little64}    print the number in little endian uint64 format
+//	%v{little32}    print the number in little endian uint32 format
+//	%v{little16}    print the number in little endian uint16 format
+//	%v{little8}     alias for byte
 //
-//     %v{byte}        print the number as a single byte
-//     %v{bool}        print "true" if the number is non-zero, otherwise "false"
+//	%v{byte}        print the number as a single byte
+//	%v{bool}        print "true" if the number is non-zero, otherwise "false"
 //
 // All numbers are truncated as necessary per each given format.
 //
-// Timestamps
+// # Timestamps
 //
 // Timestamps can be specified in three formats: plain number formatting,
 // native Go timestamp formatting, or strftime formatting. Number formatting is
 // follows the rules above using the millisecond timestamp value. Go and
 // strftime have further internal format options:
 //
-//     %d{go##2006-01-02T15:04:05Z07:00##}
-//     %d{strftime[%F]}
+//	%d{go##2006-01-02T15:04:05Z07:00##}
+//	%d{strftime[%F]}
 //
 // An arbitrary amount of pounds, braces, and brackets are understood before
 // beginning the actual timestamp formatting. For Go formatting, the format is
 // simply passed to the time package's AppendFormat function. For strftime, all
 // "man strftime" options are supported. Time is always in UTC.
 //
-// Attributes
+// # Attributes
 //
 // Records attributes require formatting, where each formatting option selects
 // which attribute to print and how to print it.
 //
-//     %a{compression}
-//     %a{compression;number}
-//     %a{compression;big64}
-//     %a{compression;hex8}
+//	%a{compression}
+//	%a{compression;number}
+//	%a{compression;big64}
+//	%a{compression;hex8}
 //
 // By default, prints the compression as text ("none", "gzip", ...).
 // Compression can be printed as a number with ";number", where number is any
 // number formatting option described above.
 //
-//     %a{timestamp-type}
-//     %a{timestamp-type;big64}
+//	%a{timestamp-type}
+//	%a{timestamp-type;big64}
 //
 // Prints -1 for pre-0.10 records, 0 for client generated timestamps, and 1 for
 // broker generated. Number formatting can be controlled with ";number".
 //
-//     %a{transactional-bit}
-//     %a{transactional-bit;bool}
+//	%a{transactional-bit}
+//	%a{transactional-bit;bool}
 //
 // Prints 1 if the record is a transaction marker and 0 if the record is not a
 // transaction marker. Number formatting can be controlled with ";number".
 //
-//     %a{control-bit}
-//     %a{control-bit;bool}
+//	%a{control-bit}
+//	%a{control-bit;bool}
 //
 // Prints 1 if the record is a control record and 0 if the record is not a
 // control record. Number formatting can be controlled with ";number".
 //
-// Text
+// # Text
 //
 // Topics, keys, and values have "base64", "base64raw", "hex", and "unpack"
 // formatting options:
 //
-//     %t{hex}
-//     %k{unpack{<bBhH>iIqQc.$}}
-//     %v{base64}
-//     %v{base64raw}
+//	%t{hex}
+//	%k{unpack{<bBhH>iIqQc.$}}
+//	%v{base64}
+//	%v{base64raw}
 //
 // Unpack formatting is inside of enclosing pounds, braces, or brackets, the
 // same way that timestamp formatting is understood. The syntax roughly follows
 // Python's struct packing/unpacking rules:
 //
-//     x    pad character (does not parse input)
-//     <    parse what follows as little endian
-//     >    parse what follows as big endian
+//	x    pad character (does not parse input)
+//	<    parse what follows as little endian
+//	>    parse what follows as big endian
 //
-//     b    signed byte
-//     B    unsigned byte
-//     h    int16  ("half word")
-//     H    uint16 ("half word")
-//     i    int32
-//     I    uint32
-//     q    int64  ("quad word")
-//     Q    uint64 ("quad word")
+//	b    signed byte
+//	B    unsigned byte
+//	h    int16  ("half word")
+//	H    uint16 ("half word")
+//	i    int32
+//	I    uint32
+//	q    int64  ("quad word")
+//	Q    uint64 ("quad word")
 //
-//     c    any character
-//     .    alias for c
-//     s    consume the rest of the input as a string
-//     $    match the end of the line (append error string if anything remains)
+//	c    any character
+//	.    alias for c
+//	s    consume the rest of the input as a string
+//	$    match the end of the line (append error string if anything remains)
 //
 // Unlike python, a '<' or '>' can appear anywhere in the format string and
 // affects everything that follows. It is possible to switch endianness
@@ -480,9 +480,8 @@ func NewRecordFormatter(layout string) (*RecordFormatter, error) {
 					return writeR(b, r, func(b []byte, r *Record) []byte {
 						if r.Attrs.IsTransactional() {
 							return append(b, '1')
-						} else {
-							return append(b, '0')
 						}
+						return append(b, '0')
 					})
 				})
 			case strings.HasPrefix(layout, "transactional-bit;"):
@@ -496,9 +495,8 @@ func NewRecordFormatter(layout string) (*RecordFormatter, error) {
 					return writeR(b, r, func(b []byte, r *Record) []byte {
 						if r.Attrs.IsControl() {
 							return append(b, '1')
-						} else {
-							return append(b, '0')
 						}
+						return append(b, '0')
 					})
 				})
 			case strings.HasPrefix(layout, "control-bit;"):
@@ -983,27 +981,27 @@ type RecordReader struct {
 // percent "verbs" (copying fmt package lingo). Slashes are used for common
 // escapes,
 //
-//     \t \n \r \\ \xNN
+//	\t \n \r \\ \xNN
 //
 // reading tabs, newlines, carriage returns, slashes, and hex encoded
 // characters.
 //
 // Percent encoding reads into specific values of a Record:
 //
-//     %t    topic
-//     %T    topic length
-//     %k    key
-//     %K    key length
-//     %v    value
-//     %V    value length
-//     %h    begin the header specification
-//     %H    number of headers
-//     %p    partition
-//     %o    offset
-//     %e    leader epoch
-//     %d    timestamp
-//     %x    producer id
-//     %y    producer epoch
+//	%t    topic
+//	%T    topic length
+//	%k    key
+//	%K    key length
+//	%v    value
+//	%V    value length
+//	%h    begin the header specification
+//	%H    number of headers
+//	%p    partition
+//	%o    offset
+//	%e    leader epoch
+//	%d    timestamp
+//	%x    producer id
+//	%y    producer epoch
 //
 // If using length / number verbs (i.e., "sized" verbs), they must occur before
 // what they are sizing.
@@ -1011,59 +1009,58 @@ type RecordReader struct {
 // There are three escapes to parse raw characters, rather than opting into
 // some formatting option:
 //
-//     %%    percent sign
-//     %{    left brace
-//     %}    right brace
+//	%%    percent sign
+//	%{    left brace
+//	%}    right brace
 //
 // Unlike record formatting, timestamps can only be read as numbers because Go
 // or strftime formatting can both be variable length and do not play too well
 // with delimiters. Timestamps numbers are read as milliseconds.
 //
-// Numbers
+// # Numbers
 //
 // All size numbers can be parsed in the following ways:
 //
-//     %v{ascii}       parse numeric digits until a non-numeric
-//     %v{number}      alias for ascii
+//	%v{ascii}       parse numeric digits until a non-numeric
+//	%v{number}      alias for ascii
 //
-//     %v{hex64}       read 16 hex characters for the number
-//     %v{hex32}       read 8 hex characters for the number
-//     %v{hex16}       read 4 hex characters for the number
-//     %v{hex8}        read 2 hex characters for the number
-//     %v{hex4}        read 1 hex characters for the number
+//	%v{hex64}       read 16 hex characters for the number
+//	%v{hex32}       read 8 hex characters for the number
+//	%v{hex16}       read 4 hex characters for the number
+//	%v{hex8}        read 2 hex characters for the number
+//	%v{hex4}        read 1 hex characters for the number
 //
-//     %v{big64}       read the number as big endian uint64 format
-//     %v{big32}       read the number as big endian uint32 format
-//     %v{big16}       read the number as big endian uint16 format
-//     %v{big8}        alias for byte
+//	%v{big64}       read the number as big endian uint64 format
+//	%v{big32}       read the number as big endian uint32 format
+//	%v{big16}       read the number as big endian uint16 format
+//	%v{big8}        alias for byte
 //
-//     %v{little64}    read the number as little endian uint64 format
-//     %v{little32}    read the number as little endian uint32 format
-//     %v{little16}    read the number as little endian uint16 format
-//     %v{little8}     read the number as a byte
+//	%v{little64}    read the number as little endian uint64 format
+//	%v{little32}    read the number as little endian uint32 format
+//	%v{little16}    read the number as little endian uint16 format
+//	%v{little8}     read the number as a byte
 //
-//     %v{byte}        read the number as a byte
-//     %v{bool}        read "true" as 1, "false" as 0
-//     %v{3}           read 3 characters (any number)
+//	%v{byte}        read the number as a byte
+//	%v{bool}        read "true" as 1, "false" as 0
+//	%v{3}           read 3 characters (any number)
 //
-// Header specification
+// # Header specification
 //
 // Similar to number formatting, headers are parsed using a nested primitive
 // format option, accepting the key and value escapes previously mentioned.
 //
-// Text
+// # Text
 //
 // Topics, keys, and values can be decoded uding "base64" and "hex" formatting
 // options. Any size specification is the size of the encoded value actually
 // being read.
 //
-//     %T%t{hex}     -  4abcd reads four hex characters "abcd"
-//     %V%v{base64}  -  2z9 reads two base64 characters "z9"
+//	%T%t{hex}     -  4abcd reads four hex characters "abcd"
+//	%V%v{base64}  -  2z9 reads two base64 characters "z9"
 //
 // As well, these text options can be parsed with regular expressions:
 //
-//     %k{re[\d*]}%v{re[\s+]}
-//
+//	%k{re[\d*]}%v{re[\s+]}
 func NewRecordReader(reader io.Reader, layout string) (*RecordReader, error) {
 	r := &RecordReader{r: bufio.NewReader(reader)}
 	if err := r.parseReadLayout(layout); err != nil {
@@ -1479,9 +1476,8 @@ func (*RecordReader) parseReadSize(layout string, dst *uint64, needBrace bool) (
 			readKind{condition: func(b byte) int8 {
 				if b < '0' || b > '9' {
 					return -1
-				} else {
-					return 2 // ignore EOF if we hit it after this
 				}
+				return 2 // ignore EOF if we hit it after this
 			}},
 			func(b []byte, _ *Record) (err error) {
 				*dst, err = strconv.ParseUint(kbin.UnsafeString(b), 10, 64)

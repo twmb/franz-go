@@ -1,6 +1,7 @@
 package sticky
 
 import (
+	"math"
 	"testing"
 
 	"github.com/twmb/franz-go/pkg/kmsg"
@@ -69,7 +70,7 @@ func partitionsForMember(member map[string][]int32) int {
 func testEqualDivvy(t *testing.T, plan Plan, expSticky int, input []GroupMember) {
 	t.Helper()
 
-	min := 1 << 31
+	min := math.MaxInt32
 	max := 0
 	var stickiness int
 	for member, topics := range plan {

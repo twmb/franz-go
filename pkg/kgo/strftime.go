@@ -12,9 +12,9 @@ import (
 //
 // this does not take into account locale; some high level differences:
 //
-//     %E and %O are stripped, as well as a single subsequent alpha char
-//     %x is DD/MM/YY
-//     %c is time.ANSIC
+//	%E and %O are stripped, as well as a single subsequent alpha char
+//	%x is DD/MM/YY
+//	%c is time.ANSIC
 //
 // In normal strftime, %a, %A, %b, %B, %c, %p, %P, %r, %x, and %X are all
 // affected by locale. This package hardcodes the implementation to mirror

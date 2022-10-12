@@ -42,11 +42,11 @@
 // Rather than needing to build deeply nested maps directly, this package has a
 // few helper types that are worth knowing:
 //
-//     TopicsList  - a slice of topics and their partitions
-//     TopicsSet   - a set of topics, each containing a set of partitions
-//     Partitions  - a slice of partitions
-//     OffsetsList - a slice of offsets
-//     Offsets     - a map of offsets
+//	TopicsList  - a slice of topics and their partitions
+//	TopicsSet   - a set of topics, each containing a set of partitions
+//	Partitions  - a slice of partitions
+//	OffsetsList - a slice of offsets
+//	Offsets     - a map of offsets
 //
 // These types are meant to be easy to build and use, and can be used as the
 // starting point for other types.
@@ -101,15 +101,15 @@ func (cl *Client) Close() {
 // immediately or are expected to deliberately hang. The following requests
 // have timeout fields:
 //
-//     Produce
-//     CreateTopics
-//     DeleteTopics
-//     DeleteRecords
-//     CreatePartitions
-//     ElectLeaders
-//     AlterPartitionAssignments
-//     ListPartitionReassignments
-//     UpdateFeatures
+//	Produce
+//	CreateTopics
+//	DeleteTopics
+//	DeleteRecords
+//	CreatePartitions
+//	ElectLeaders
+//	AlterPartitionAssignments
+//	ListPartitionReassignments
+//	UpdateFeatures
 //
 // Not all requests above are supported in the admin API.
 func (cl *Client) SetTimeoutMillis(millis int32) {
@@ -207,8 +207,8 @@ func (os Offsets) Lookup(t string, p int32) (Offset, bool) {
 //
 // If the partition already exists, the offset is only added if:
 //
-//     - the new leader epoch is higher than the old, or
-//     - the leader epochs equal, and the new offset is higher than the old
+//   - the new leader epoch is higher than the old, or
+//   - the leader epochs equal, and the new offset is higher than the old
 //
 // If you would like to add offsets forcefully no matter what, use the Delete
 // method before this.

@@ -185,8 +185,8 @@ func (r *Record) AppendFormat(b []byte, layout string) ([]byte, error) {
 // for producing; the client never modifies a record's key nor value fields.
 func StringRecord(value string) *Record {
 	var slice []byte
-	slicehdr := (*reflect.SliceHeader)(unsafe.Pointer(&slice))
-	slicehdr.Data = ((*reflect.StringHeader)(unsafe.Pointer(&value))).Data
+	slicehdr := (*reflect.SliceHeader)(unsafe.Pointer(&slice))             //nolint:gosec // known way to convert string to slice
+	slicehdr.Data = ((*reflect.StringHeader)(unsafe.Pointer(&value))).Data //nolint:gosec // known way to convert string to slice
 	slicehdr.Len = len(value)
 	slicehdr.Cap = len(value)
 
@@ -205,8 +205,8 @@ func StringRecord(value string) *Record {
 func KeyStringRecord(key, value string) *Record {
 	r := StringRecord(value)
 
-	keyhdr := (*reflect.SliceHeader)(unsafe.Pointer(&r.Key))
-	keyhdr.Data = ((*reflect.StringHeader)(unsafe.Pointer(&key))).Data
+	keyhdr := (*reflect.SliceHeader)(unsafe.Pointer(&r.Key))           //nolint:gosec // known way to convert string to slice
+	keyhdr.Data = ((*reflect.StringHeader)(unsafe.Pointer(&key))).Data //nolint:gosec // known way to convert string to slice
 	keyhdr.Len = len(key)
 	keyhdr.Cap = len(key)
 

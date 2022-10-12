@@ -173,7 +173,7 @@ func (c *testConsumer) etl(etlsBeforeQuit int) {
 		fetches := cl.PollRecords(ctx, 100)
 		cancel()
 		if fetches.Err() == context.DeadlineExceeded || fetches.Err() == ErrClientClosed {
-			if consumed := atomic.LoadUint64(&c.consumed); consumed == testRecordLimit {
+			if consumed := int(atomic.LoadUint64(&c.consumed)); consumed == testRecordLimit {
 				return
 			} else if consumed > testRecordLimit {
 				panic(fmt.Sprintf("invalid: consumed too much from %s (group %s)", c.consumeFrom, c.group))

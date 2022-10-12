@@ -3,24 +3,24 @@
 // This package tracks the following metrics under the following names,
 // all metrics being counter vecs:
 //
-//     #{ns}_connects_total{node_id="#{node}"}
-//     #{ns}_connect_errors_total{node_id="#{node}"}
-//     #{ns}_write_errors_total{node_id="#{node}"}
-//     #{ns}_write_bytes_total{node_id="#{node}"}
-//     #{ns}_read_errors_total{node_id="#{node}"}
-//     #{ns}_read_bytes_total{node_id="#{node}"}
-//     #{ns}_produce_bytes_total{node_id="#{node}",topic="#{topic}"}
-//     #{ns}_fetch_bytes_total{node_id="#{node}",topic="#{topic}"}
-//     #{ns}_buffered_produce_records_total
-//     #{ns}_buffered_fetch_records_total
+//	#{ns}_connects_total{node_id="#{node}"}
+//	#{ns}_connect_errors_total{node_id="#{node}"}
+//	#{ns}_write_errors_total{node_id="#{node}"}
+//	#{ns}_write_bytes_total{node_id="#{node}"}
+//	#{ns}_read_errors_total{node_id="#{node}"}
+//	#{ns}_read_bytes_total{node_id="#{node}"}
+//	#{ns}_produce_bytes_total{node_id="#{node}",topic="#{topic}"}
+//	#{ns}_fetch_bytes_total{node_id="#{node}",topic="#{topic}"}
+//	#{ns}_buffered_produce_records_total
+//	#{ns}_buffered_fetch_records_total
 //
 // This can be used in a client like so:
 //
-//     m := kprom.NewMetrics()
-//     cl, err := kgo.NewClient(
-//             kgo.WithHooks(m),
-//             // ...other opts
-//     )
+//	m := kprom.NewMetrics()
+//	cl, err := kgo.NewClient(
+//	        kgo.WithHooks(m),
+//	        // ...other opts
+//	)
 //
 // More examples are linked in the main project readme: https://github.com/twmb/franz-go/#metrics--logging
 //

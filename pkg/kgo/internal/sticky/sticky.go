@@ -134,7 +134,7 @@ func (b *balancer) into() Plan {
 		// partOwners is created by topic, and partNums refers to
 		// indices in partOwners. If we sort by partNum, we have sorted
 		// topics and partitions.
-		sort.Sort(&partNums)
+		sort.Sort(&partNums) //nolint:gosec // sorting the slice, not using the pointer across iter
 
 		// We can reuse partNums for our topic partitions.
 		topicParts := partNums[:0]
@@ -631,7 +631,6 @@ func (b *balancer) balance() {
 }
 
 func (b *balancer) balanceComplex() {
-out:
 	for min := b.planByNumPartitions.min(); b.planByNumPartitions.size > 1; min = b.planByNumPartitions.min() {
 		level := min.item
 		// If this max level is within one of this level, then nothing
@@ -649,7 +648,7 @@ out:
 					b.reassignPartition(segment.src, segment.dst, segment.part)
 				}
 				if len(max.members) == 0 {
-					continue out
+					break
 				}
 				continue
 			}

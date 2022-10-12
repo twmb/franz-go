@@ -589,6 +589,8 @@ func (b *broker) connect(ctx context.Context) (net.Conn, error) {
 // brokerCxn manages an actual connection to a Kafka broker. This is separate
 // the broker struct to allow lazy connection (re)creation.
 type brokerCxn struct {
+	throttleUntil int64 // atomic nanosec
+
 	conn net.Conn
 
 	cl *Client
@@ -598,8 +600,6 @@ type brokerCxn struct {
 
 	mechanism sasl.Mechanism
 	expiry    time.Time
-
-	throttleUntil int64 // atomic nanosec
 
 	corrID int32
 
@@ -1393,6 +1393,9 @@ func (cxn *brokerCxn) handleResp(pr promisedResp) {
 				cxn.b.cl.cfg.logger.Log(LogLevelDebug, "read from broker errored, killing connection", "addr", cxn.b.addr, "broker", logID(cxn.b.meta.NodeID), "successful_reads", cxn.successes, "err", err)
 			} else {
 				cxn.b.cl.cfg.logger.Log(LogLevelWarn, "read from broker errored, killing connection after 0 successful responses (is sasl missing?)", "addr", cxn.b.addr, "broker", logID(cxn.b.meta.NodeID), "err", err)
+				if err == io.EOF { // specifically avoid checking errors.Is to ensure this is not already wrapped
+					err = &ErrFirstReadEOF{}
+				}
 			}
 		}
 		pr.promise(nil, err)

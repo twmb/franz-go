@@ -80,8 +80,7 @@ func NoResetOffset() Offset {
 // This option can be used to consume at the end of existing partitions, but at
 // the start of any new partitions that are created later:
 //
-//     AfterMilli(time.Now().UnixMilli())
-//
+//	AfterMilli(time.Now().UnixMilli())
 //
 // By default when using this offset, if consuming encounters an
 // OffsetOutOfRange error, consuming will reset to the first offset after this
@@ -153,9 +152,9 @@ func (o Offset) At(at int64) Offset {
 }
 
 type consumer struct {
-	cl *Client
-
 	bufferedRecords int64
+
+	cl *Client
 
 	pausedMu sync.Mutex   // grabbed when updating paused
 	paused   atomic.Value // loaded when issuing fetches
@@ -1911,7 +1910,7 @@ func (cl *Client) listOffsetsForBrokerLoad(ctx context.Context, broker *broker, 
 				delete(load, topic)
 			}
 
-			offset := poffset(&rPartition)
+			offset := poffset(&rPartition) //nolint:gosec // poffset returns int64 from input, does not save pointer
 			end := func() int64 { return poffset(&resp2.Topics[i].Partitions[j]) }
 
 			// We ensured the resp2 shape is as we want and has no

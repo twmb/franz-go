@@ -354,12 +354,11 @@ func (cl *Client) storePartitionsUpdate(topic string, l *topicPartitions, lv *to
 //
 // This has two modes of operation:
 //
-//   1) if no topics were missing, then the metadata request failed outright,
-//      and we need to bump errors on all stored topics and unknown topics.
+//  1. if no topics were missing, then the metadata request failed outright,
+//     and we need to bump errors on all stored topics and unknown topics.
 //
-//   2) if topics were missing, then the metadata request was successful but
-//      had missing data, and we need to bump errors on only what was mising.
-//
+//  2. if topics were missing, then the metadata request was successful but
+//     had missing data, and we need to bump errors on only what was mising.
 func (cl *Client) bumpMetadataFailForTopics(requested map[string]*topicPartitions, err error, missingTopics ...string) {
 	p := &cl.producer
 

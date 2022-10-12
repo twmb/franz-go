@@ -18,11 +18,10 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
-const testRecordLimit = 500000
-
 var (
-	adm    *Client
-	testrf int
+	adm             *Client
+	testrf          = 3
+	testRecordLimit = 500000
 )
 
 func init() {
@@ -36,9 +35,11 @@ func init() {
 		panic(fmt.Sprintf("unable to create admin client: %v", err))
 	}
 
-	n, _ := strconv.Atoi(os.Getenv("KGO_TEST_RF"))
-	if n > 0 {
+	if n, _ := strconv.Atoi(os.Getenv("KGO_TEST_RF")); n > 0 {
 		testrf = n
+	}
+	if n, _ := strconv.Atoi(os.Getenv("KGO_TEST_RECORDS")); n > 0 {
+		testRecordLimit = n
 	}
 }
 

@@ -3,10 +3,10 @@
 //
 // This can be used like so:
 //
-//     cl, err := kgo.NewClient(
-//             kgo.WithLogger(kzerolog.New(logger)),
-//             // ...other opts
-//     )
+//	cl, err := kgo.NewClient(
+//	        kgo.WithLogger(kzerolog.New(logger)),
+//	        // ...other opts
+//	)
 package kzerolog
 
 import (

@@ -197,6 +197,21 @@ var (
 	ErrClientClosed = errors.New("client closed")
 )
 
+// ErrFirstReadEOF is returned for responses when you are not using SASL, and
+// the first read from a broker failed with io.EOF. When SASL is required but
+// missing, brokers close connections immediately. There may be other reasons
+// that an immediate io.EOF is encountered (perhaps the connection truly was
+// severed before a response was received), but this error can help you quickly
+// check if you might be missing required credentials.
+type ErrFirstReadEOF struct{}
+
+func (*ErrFirstReadEOF) Error() string {
+	return "broker closed the connection immediately, which happens when SASL is required but not provided: is SASL missing?"
+}
+
+// Unwrap returns io.EOF.
+func (*ErrFirstReadEOF) Unwrap() error { return io.EOF }
+
 // ErrDataLoss is returned for Kafka >=2.1.0 when data loss is detected and the
 // client is able to reset to the last valid offset.
 type ErrDataLoss struct {

@@ -3,10 +3,10 @@
 //
 // This can be used like so:
 //
-//     cl, err := kgo.NewClient(
-//             kgo.WithLogger(kzap.New(zapLogger)),
-//             // ...other opts
-//     )
+//	cl, err := kgo.NewClient(
+//	        kgo.WithLogger(kzap.New(zapLogger)),
+//	        // ...other opts
+//	)
 //
 // By default, the logger chooses the highest level possible that is enabled on
 // the zap logger, and then sticks with that level forever. A variable level
