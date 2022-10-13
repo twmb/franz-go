@@ -37,7 +37,6 @@ jobs:
         with:
           arch: armv6
           distro: bullseye
-          githubToken: ${{ github.token }}
           run: |
             echo "updating"
             apt-get -qq -y update
