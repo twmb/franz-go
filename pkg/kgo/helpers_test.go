@@ -25,12 +25,8 @@ var (
 )
 
 func init() {
-	seeds := os.Getenv("KGO_SEEDS")
-	if seeds == "" {
-		seeds = "127.0.0.1:9092"
-	}
 	var err error
-	adm, err = NewClient(SeedBrokers(strings.Split(seeds, ",")...))
+	adm, err = NewClient(getSeedBrokers())
 	if err != nil {
 		panic(fmt.Sprintf("unable to create admin client: %v", err))
 	}
@@ -41,6 +37,14 @@ func init() {
 	if n, _ := strconv.Atoi(os.Getenv("KGO_TEST_RECORDS")); n > 0 {
 		testRecordLimit = n
 	}
+}
+
+func getSeedBrokers() Opt {
+	seeds := os.Getenv("KGO_SEEDS")
+	if seeds == "" {
+		seeds = "127.0.0.1:9092"
+	}
+	return SeedBrokers(strings.Split(seeds, ",")...)
 }
 
 var loggerNum int64

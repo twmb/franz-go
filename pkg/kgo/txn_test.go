@@ -28,6 +28,7 @@ func TestTxnEtl(t *testing.T) {
 
 	go func() {
 		cl, err := NewClient(
+			getSeedBrokers(),
 			WithLogger(BasicLogger(os.Stderr, testLogLevel, nil)),
 			TransactionalID("p"+randsha()),
 			TransactionTimeout(2*time.Minute),
@@ -136,6 +137,7 @@ func (c *testConsumer) goTransact(txnsBeforeQuit int) {
 func (c *testConsumer) transact(txnsBeforeQuit int) {
 	defer c.wg.Done()
 	txnSess, _ := NewGroupTransactSession(
+		getSeedBrokers(),
 		// Kraft sometimes has massive hangs internally when completing
 		// transactions. Against zk Kafka, we could rely on our
 		// internal mitigations to never have KIP-447 problems.
