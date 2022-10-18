@@ -594,16 +594,15 @@ func (s *source) fetch(consumerSession *consumerSession, doneFetch chan<- struct
 		return
 	}
 
-	// If we had an error, we backoff. Killing a fetch quits the backoff,
-	// but that is fine; we may just re-request too early and fall into
-	// another backoff.
-	if err != nil {
+	var didBackoff bool
+	backoff := func() {
 		// We preemptively allow more fetches (since we are not buffering)
 		// and reset our session because of the error (who knows if kafka
 		// processed the request but the client failed to receive it).
 		doneFetch <- struct{}{}
 		alreadySentToDoneFetch = true
 		s.session.reset()
+		didBackoff = true
 
 		s.cl.triggerUpdateMetadata(false, "opportunistic load during source backoff") // as good a time as any
 		s.consecutiveFailures++
@@ -613,19 +612,31 @@ func (s *source) fetch(consumerSession *consumerSession, doneFetch chan<- struct
 		case <-after.C:
 		case <-ctx.Done():
 		}
+	}
+	defer func() {
+		if !didBackoff {
+			s.consecutiveFailures = 0
+		}
+	}()
+
+	// If we had an error, we backoff. Killing a fetch quits the backoff,
+	// but that is fine; we may just re-request too early and fall into
+	// another backoff.
+	if err != nil {
+		backoff()
 		return
 	}
-	s.consecutiveFailures = 0
 
 	resp := kresp.(*kmsg.FetchResponse)
 
 	var (
-		fetch         Fetch
-		reloadOffsets listOrEpochLoads
-		preferreds    cursorPreferreds
-		updateMeta    bool
-		updateWhy     string
-		handled       = make(chan struct{})
+		fetch           Fetch
+		reloadOffsets   listOrEpochLoads
+		preferreds      cursorPreferreds
+		allErrsStripped bool
+		updateMeta      bool
+		updateWhy       string
+		handled         = make(chan struct{})
 	)
 
 	// Theoretically, handleReqResp could take a bit of CPU time due to
@@ -635,7 +646,7 @@ func (s *source) fetch(consumerSession *consumerSession, doneFetch chan<- struct
 	// Processing the response only needs the source's nodeID and client.
 	go func() {
 		defer close(handled)
-		fetch, reloadOffsets, preferreds, updateMeta, updateWhy = s.handleReqResp(br, req, resp)
+		fetch, reloadOffsets, preferreds, allErrsStripped, updateMeta, updateWhy = s.handleReqResp(br, req, resp)
 	}()
 
 	select {
@@ -729,6 +740,12 @@ func (s *source) fetch(consumerSession *consumerSession, doneFetch chan<- struct
 		s.sem = make(chan struct{})
 		s.hook(&fetch, true, false) // buffered, not polled
 		s.cl.consumer.addSourceReadyForDraining(s)
+	} else if allErrsStripped {
+		// If we stripped all errors from the response, we are likely
+		// fetching from topics that were deleted. We want to back off
+		// a bit rather than spin-loop immediately re-requesting
+		// deleted topics.
+		backoff()
 	}
 	return
 }
@@ -740,15 +757,20 @@ func (s *source) fetch(consumerSession *consumerSession, doneFetch chan<- struct
 // the source mutex.
 //
 // This function, and everything it calls, is side effect free.
-func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchResponse) (Fetch, listOrEpochLoads, cursorPreferreds, bool, string) {
+func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchResponse) (
+	f Fetch,
+	reloadOffsets listOrEpochLoads,
+	preferreds cursorPreferreds,
+	allErrsStripped bool,
+	updateMeta bool,
+	why string,
+) {
+	f = Fetch{Topics: make([]FetchTopic, 0, len(resp.Topics))}
 	var (
-		f = Fetch{
-			Topics: make([]FetchTopic, 0, len(resp.Topics)),
-		}
-		reloadOffsets listOrEpochLoads
-		preferreds    []cursorOffsetPreferred
-		updateMeta    bool
-		updateWhy     multiUpdateWhy
+		updateWhy multiUpdateWhy
+
+		numParts        int
+		numErrsStripped int
 
 		kip320 = s.cl.supportsOffsetForLeaderEpoch()
 	)
@@ -791,6 +813,8 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 				continue
 			}
 
+			numParts++
+
 			// If we are fetching from the replica already, Kafka replies with a -1
 			// preferred read replica. If Kafka replies with a preferred replica,
 			// it sends no records.
@@ -826,6 +850,8 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 				kerr.KafkaStorageError,
 				kerr.UnknownLeaderEpoch, // our meta is newer than broker we fetched from
 				kerr.OffsetNotAvailable: // fetched from out of sync replica or a behind in-sync one (KIP-392: case 1 and case 2)
+
+				numErrsStripped++
 
 			case kerr.OffsetOutOfRange:
 				// If we are out of range, we reset to what we can.
@@ -919,7 +945,7 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 		}
 	}
 
-	return f, reloadOffsets, preferreds, updateMeta, updateWhy.reason("fetch had inner topic errors")
+	return f, reloadOffsets, preferreds, numParts == numErrsStripped, updateMeta, updateWhy.reason("fetch had inner topic errors")
 }
 
 // processRespPartition processes all records in all potentially compressed
