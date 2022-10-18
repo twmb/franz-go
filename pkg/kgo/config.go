@@ -801,6 +801,9 @@ func WithHooks(hooks ...Hook) Opt {
 // are expected to backoff slightly and retry the operation. Lower backoffs may
 // increase load on the brokers, while higher backoffs may increase transaction
 // latency in clients.
+//
+// Note that if brokers are hanging in this concurrent transactions state for
+// too long, the client progressively increases the backoff.
 func ConcurrentTransactionsBackoff(backoff time.Duration) Opt {
 	return clientOpt{func(cfg *cfg) { cfg.txnBackoff = backoff }}
 }

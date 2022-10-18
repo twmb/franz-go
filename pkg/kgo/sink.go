@@ -427,7 +427,7 @@ func (s *sink) doTxnReq(
 			req.batches.eachOwnerLocked(seqRecBatch.removeFromTxn)
 		}
 	}()
-	err = s.cl.doWithConcurrentTransactions("AddPartitionsToTxn", func() error {
+	err = s.cl.doWithConcurrentTransactions(s.cl.ctx, "AddPartitionsToTxn", func() error {
 		stripped, err = s.issueTxnReq(req, txnReq)
 		return err
 	})
