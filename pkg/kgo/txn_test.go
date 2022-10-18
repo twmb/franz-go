@@ -28,10 +28,12 @@ func TestTxnEtl(t *testing.T) {
 
 	go func() {
 		cl, err := NewClient(
+			getSeedBrokers(),
 			WithLogger(BasicLogger(os.Stderr, testLogLevel, nil)),
 			TransactionalID("p"+randsha()),
 			TransactionTimeout(2*time.Minute),
 			MaxBufferedRecords(10000),
+			UnknownTopicRetries(-1), // see comment below
 		)
 		if err != nil {
 			panic(err)
@@ -135,8 +137,18 @@ func (c *testConsumer) goTransact(txnsBeforeQuit int) {
 func (c *testConsumer) transact(txnsBeforeQuit int) {
 	defer c.wg.Done()
 	txnSess, _ := NewGroupTransactSession(
+		getSeedBrokers(),
+		// Kraft sometimes has massive hangs internally when completing
+		// transactions. Against zk Kafka, we could rely on our
+		// internal mitigations to never have KIP-447 problems.
+		// Not true against Kraft, see #223.
+		RequireStableFetchOffsets(),
+		// Kraft sometimes returns success from topic creation, and
+		// then returns UnknownTopicXyz for a while in metadata loads.
+		// It also returns NotLeaderXyz; we handle both problems.
+		UnknownTopicRetries(-1),
 		TransactionalID(randsha()),
-		TransactionTimeout(2*time.Minute),
+		TransactionTimeout(10*time.Second),
 		WithLogger(testLogger()),
 		// Control records have their own unique offset, so for testing,
 		// we keep the record to ensure we do not doubly consume control
@@ -235,7 +247,7 @@ func (c *testConsumer) transact(txnsBeforeQuit int) {
 			for _, rec := range recs {
 				po := partOffset{part, rec.offset}
 				if _, exists := c.partOffsets[po]; exists {
-					c.errCh <- fmt.Errorf("saw double offset p%do%d", po.part, po.offset)
+					c.errCh <- fmt.Errorf("saw double offset t %s p%do%d", c.consumeFrom, po.part, po.offset)
 				}
 				c.partOffsets[po] = struct{}{}
 

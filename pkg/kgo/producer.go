@@ -738,7 +738,9 @@ func (cl *Client) doInitProducerID(lastID int64, lastEpoch int16) (*producerID, 
 	}
 
 	if err = kerr.ErrorForCode(resp.ErrorCode); err != nil {
-		if kerr.IsRetriable(err) { // this could return ConcurrentTransactions, but this is rare; ignore until a user report
+		// We could receive concurrent transactions; this is ignorable
+		// and we just want to re-init.
+		if kerr.IsRetriable(err) || errors.Is(err, kerr.ConcurrentTransactions) {
 			cl.cfg.logger.Log(LogLevelInfo, "producer id initialization resulted in retriable error, discarding initialization attempt", "err", err)
 			return &producerID{lastID, lastEpoch, err}, false
 		}

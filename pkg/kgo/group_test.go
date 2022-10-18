@@ -37,8 +37,10 @@ func TestGroupETL(t *testing.T) {
 
 	go func() {
 		cl, _ := NewClient(
+			getSeedBrokers(),
 			WithLogger(BasicLogger(os.Stderr, testLogLevel, nil)),
 			MaxBufferedRecords(10000),
+			UnknownTopicRetries(-1), // see txn_test comment
 		)
 		defer cl.Close()
 
@@ -116,6 +118,8 @@ func (c *testConsumer) etl(etlsBeforeQuit int) {
 	netls := 0 // for if etlsBeforeQuit is non-negative
 
 	opts := []Opt{
+		getSeedBrokers(),
+		UnknownTopicRetries(-1), // see txn_test comment
 		WithLogger(testLogger()),
 		ConsumerGroup(c.group),
 		ConsumeTopics(c.consumeFrom),
