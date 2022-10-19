@@ -22,6 +22,17 @@ var (
 	adm             *Client
 	testrf          = 3
 	testRecordLimit = 500000
+
+	// Kraft sometimes has massive hangs internally when completing
+	// transactions. Against zk Kafka as well as Redpanda, we could rely on
+	// our internal mitigations to never have KIP-447 problems. Not true
+	// against Kraft, see #223.
+	requireStableFetch = false
+
+	// Redpanda is a bit more strict with transactions: we must wait for
+	// EndTxn to return successfully before beginning a new transaction. We
+	// cannot use EndAndBeginTransaction with EndBeginTxnUnsafe.
+	allowUnsafe = false
 )
 
 func init() {
@@ -36,6 +47,12 @@ func init() {
 	}
 	if n, _ := strconv.Atoi(os.Getenv("KGO_TEST_RECORDS")); n > 0 {
 		testRecordLimit = n
+	}
+	if _, exists := os.LookupEnv("KGO_TEST_STABLE_FETCH"); exists {
+		requireStableFetch = true
+	}
+	if _, exists := os.LookupEnv("KGO_TEST_UNSAFE"); exists {
+		allowUnsafe = true
 	}
 }
 

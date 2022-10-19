@@ -61,7 +61,7 @@ func TestTxnEtl(t *testing.T) {
 			// we commit and begin a new one.
 			if i > 0 && i%10000 == 0 {
 				how := EndBeginTxnSafe
-				if safeUnsafe {
+				if safeUnsafe && allowUnsafe {
 					how = EndBeginTxnUnsafe
 				}
 				safeUnsafe = !safeUnsafe
@@ -136,19 +136,15 @@ func (c *testConsumer) goTransact(txnsBeforeQuit int) {
 
 func (c *testConsumer) transact(txnsBeforeQuit int) {
 	defer c.wg.Done()
-	txnSess, _ := NewGroupTransactSession(
+
+	opts := []Opt{
 		getSeedBrokers(),
-		// Kraft sometimes has massive hangs internally when completing
-		// transactions. Against zk Kafka, we could rely on our
-		// internal mitigations to never have KIP-447 problems.
-		// Not true against Kraft, see #223.
-		RequireStableFetchOffsets(),
 		// Kraft sometimes returns success from topic creation, and
 		// then returns UnknownTopicXyz for a while in metadata loads.
 		// It also returns NotLeaderXyz; we handle both problems.
 		UnknownTopicRetries(-1),
 		TransactionalID(randsha()),
-		TransactionTimeout(10*time.Second),
+		TransactionTimeout(10 * time.Second),
 		WithLogger(testLogger()),
 		// Control records have their own unique offset, so for testing,
 		// we keep the record to ensure we do not doubly consume control
@@ -159,7 +155,12 @@ func (c *testConsumer) transact(txnsBeforeQuit int) {
 		FetchIsolationLevel(ReadCommitted()),
 		Balancers(c.balancer),
 		MaxBufferedRecords(10000),
-	)
+	}
+	if requireStableFetch {
+		opts = append(opts, RequireStableFetchOffsets())
+	}
+
+	txnSess, _ := NewGroupTransactSession(opts...)
 	defer txnSess.Close()
 
 	ntxns := 0 // for if txnsBeforeQuit is non-negative
