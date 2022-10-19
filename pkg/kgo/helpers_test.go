@@ -4,7 +4,9 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"net"
 	"os"
 	"sort"
 	"strconv"
@@ -116,7 +118,19 @@ func tmpTopic(tb testing.TB) (string, func()) {
 	reqTopic.ReplicationFactor = int16(testrf)
 	req.Topics = append(req.Topics, reqTopic)
 
+	start := time.Now()
+issue:
 	resp, err := req.RequestWith(context.Background(), adm)
+
+	// If we run tests in a container _immediately_ after the container
+	// starts, we can receive dial errors for a bit if the container is not
+	// fully initialized. Handle this by retrying specifically dial errors.
+	if ne := (*net.OpError)(nil); errors.As(err, &ne) && ne.Op == "dial" && time.Since(start) < 5*time.Second {
+		tb.Log("topic creation failed with dial error, sleeping 100ms and trying again")
+		time.Sleep(100 * time.Millisecond)
+		goto issue
+	}
+
 	if err == nil {
 		err = kerr.ErrorForCode(resp.Topics[0].ErrorCode)
 	}
