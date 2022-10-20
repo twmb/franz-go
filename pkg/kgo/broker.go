@@ -777,7 +777,7 @@ start:
 		}
 		authenticate = req.Version == 1
 	}
-	cxn.cl.cfg.logger.Log(LogLevelDebug, "beginning sasl authentication", "broker", logID(cxn.b.meta.NodeID), "mechanism", mechanism.Name(), "authenticate", authenticate)
+	cxn.cl.cfg.logger.Log(LogLevelDebug, "beginning sasl authentication", "broker", logID(cxn.b.meta.NodeID), "addr", cxn.addr, "mechanism", mechanism.Name(), "authenticate", authenticate)
 	cxn.mechanism = mechanism
 	return cxn.doSasl(authenticate)
 }
@@ -813,7 +813,7 @@ func (cxn *brokerCxn) doSasl(authenticate bool) error {
 			binary.BigEndian.PutUint32(buf, uint32(len(clientWrite)))
 			buf = append(buf, clientWrite...)
 
-			cxn.cl.cfg.logger.Log(LogLevelDebug, "issuing raw sasl authenticate", "broker", logID(cxn.b.meta.NodeID), "step", step)
+			cxn.cl.cfg.logger.Log(LogLevelDebug, "issuing raw sasl authenticate", "broker", logID(cxn.b.meta.NodeID), "addr", cxn.addr, "step", step)
 			_, _, _, _, err = cxn.writeConn(context.Background(), buf, wt, time.Now())
 
 			cxn.cl.bufPool.put(buf)
