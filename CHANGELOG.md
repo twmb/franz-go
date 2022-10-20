@@ -1,3 +1,43 @@
+v1.9.0
+===
+
+This release contains one important bugfix (sequence number int32 overflow) for
+long-lived producers, one minor bugfix that allows this client to work on 32
+bit systems, and a few other small improvements.
+
+This project now has integration tests ran on every PR (and it is now forbidden
+to push directly to master). These integration tests run against Kraft (Kafka +
+Raft), which itself seems to not be 100% polished. A good amount of
+investigation went into hardening the client internals to not fail when Kraft
+is going sideways.
+
+This release also improves behavior when a consumer group leader using an
+instance ID restarts _and_ changes the topics it wants to consume from. See the
+KIP-814 commit for more details.
+
+It is now easier to setup a TLS dialer with a custom dial timeout, it is easier
+to detect if requests are failing due to missing SASL, and it is now possible
+to print attributes with `RecordFormatter`.
+
+Lastly, the corresponding kadm v1.3.0 release adds new LeaveGroup admin APIs.
+
+#### franz-go
+
+- [`b18341d`](https://github.com/twmb/franz-go/commit/b18341d) kgo: work around KIP-814 limitations
+- [`6cac810`](https://github.com/twmb/franz-go/commit/6cac810) kversions: bump Stable from 3.0 to 3.3
+- [PR #227](https://github.com/twmb/franz-go/pull/227) **bugfix** further sequence number overflows fix (thanks [@ladislavmacoun](https://github.com/ladislavmacoun)!)
+- [PR #223](https://github.com/twmb/franz-go/pull/223) add GitHub actions integration test (thanks [@mihaitodor](https://github.com/mihaitodor)!) and [PR #224](https://github.com/twmb/franz-go/pull/224) fixup kgo guts to work around new kraft failures
+- [`203a837`](https://github.com/twmb/franz-go/commit/203a837) franz-go: fix 32 bit alignment, fix a few lints
+- [`719c6f4`](https://github.com/twmb/franz-go/commit/719c6f4) kgo: avoid overflow on 32 bit systems
+- [`db5c159`](https://github.com/twmb/franz-go/commit/db5c159) **feature** kgo: add DialTimeout function, complementing DialTLSConfig
+- [`b4aebf4`](https://github.com/twmb/franz-go/commit/b4aebf4) kgo: add ErrFirstReadEOF, which unwraps to io.EOF
+- [`bbac68b`](https://github.com/twmb/franz-go/commit/bbac68b) RecordFormatter: support %a; formatter&reader: support 'bool'
+
+#### kadm
+
+- [`d3ee144`](https://github.com/twmb/franz-go/commit/d3ee144) kadm: add LeaveGroup api
+- [`7b8d404`](https://github.com/twmb/franz-go/commit/7b8d404) kadm: ListOffsetsAfterMill(future) should return end offsets
+
 v1.8.0
 ===
 
