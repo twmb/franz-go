@@ -212,7 +212,7 @@ func (*ErrFirstReadEOF) Error() string {
 // Unwrap returns io.EOF.
 func (*ErrFirstReadEOF) Unwrap() error { return io.EOF }
 
-// ErrDataLoss is returned for Kafka >=2.1.0 when data loss is detected and the
+// ErrDataLoss is returned for Kafka >=2.1 when data loss is detected and the
 // client is able to reset to the last valid offset.
 type ErrDataLoss struct {
 	// Topic is the topic data loss was detected on.

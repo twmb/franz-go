@@ -659,10 +659,10 @@ func (cl *Client) producerID() (int64, int16, error) {
 // for every partition. Otherwise, we will use a new id/epoch for a partition
 // and trigger OOOSN errors.
 //
-// Pre 2.5.0, this function is only be called if it is acceptable to continue
+// Pre 2.5, this function is only be called if it is acceptable to continue
 // on data loss (idempotent producer with no StopOnDataLoss option).
 //
-// 2.5.0+, it is safe to call this if the producer ID can be reset (KIP-360),
+// 2.5+, it is safe to call this if the producer ID can be reset (KIP-360),
 // in EndTransaction.
 func (cl *Client) resetAllProducerSequences() {
 	for _, tp := range cl.producer.topics.load() {

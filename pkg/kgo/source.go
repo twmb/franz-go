@@ -855,7 +855,7 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 
 			case kerr.OffsetOutOfRange:
 				// If we are out of range, we reset to what we can.
-				// With Kafka >= 2.1.0, we should only get offset out
+				// With Kafka >= 2.1, we should only get offset out
 				// of range if we fetch before the start, but a user
 				// could start past the end and want to reset to
 				// the end. We respect that.

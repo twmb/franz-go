@@ -22,9 +22,9 @@ type sink struct {
 	nodeID int32   // the node ID of the broker this sink belongs to
 
 	// inflightSem controls the number of concurrent produce requests.  We
-	// start with a limit of 1, which covers Kafka v0.11.0.0. On the first
+	// start with a limit of 1, which covers Kafka v0.11.0. On the first
 	// response, we check what version was set in the request. If it is at
-	// least 4, which 1.0.0 introduced, we upgrade the sem size.
+	// least 4, which 1.0 introduced, we upgrade the sem size.
 	inflightSem    atomic.Value
 	produceVersion int32 // atomic, negative is unset, positive is version
 
@@ -730,7 +730,7 @@ func (s *sink) handleReqRespBatch(
 		err == kerr.InvalidProducerIDMapping,
 		err == kerr.InvalidProducerEpoch:
 
-		// OOOSN always means data loss 1.0.0+ and is ambiguous prior.
+		// OOOSN always means data loss 1.0+ and is ambiguous prior.
 		// We assume the worst and only continue if requested.
 		//
 		// UnknownProducerID was introduced to allow some form of safe
@@ -740,9 +740,9 @@ func (s *sink) handleReqRespBatch(
 		// InvalidMapping is similar to UnknownProducerID, but occurs
 		// when the txnal coordinator timed out our transaction.
 		//
-		// 2.5.0
+		// 2.5
 		// =====
-		// 2.5.0 introduced some behavior to potentially safely reset
+		// 2.5 introduced some behavior to potentially safely reset
 		// the sequence numbers by bumping an epoch (see KIP-360).
 		//
 		// For the idempotent producer, the solution is to fail all
@@ -756,9 +756,9 @@ func (s *sink) handleReqRespBatch(
 		// For the transactional producer, we always fail the producerID.
 		// EndTransaction will trigger recovery if possible.
 		//
-		// 2.7.0
+		// 2.7
 		// =====
-		// InvalidProducerEpoch became retriable in 2.7.0. Prior, it
+		// InvalidProducerEpoch became retriable in 2.7. Prior, it
 		// was ambiguous (timeout? fenced?). Now, InvalidProducerEpoch
 		// is only returned on produce, and then we can recover on other
 		// txn coordinator requests, which have PRODUCER_FENCED vs
@@ -2012,7 +2012,7 @@ func (b seqRecBatch) appendTo(
 	dst = kbin.AppendInt32(dst, batchLen)
 
 	dst = kbin.AppendInt32(dst, -1) // partitionLeaderEpoch, unused in clients
-	dst = kbin.AppendInt8(dst, 2)   // magic, defined as 2 for records v0.11.0.0+
+	dst = kbin.AppendInt8(dst, 2)   // magic, defined as 2 for records v0.11.0+
 
 	crcStart := len(dst)           // fill at end
 	dst = kbin.AppendInt32(dst, 0) // reserved crc
