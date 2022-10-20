@@ -56,7 +56,7 @@ type GroupTransactSession struct {
 // The problem with (a) is that if your ETL work loop is slow, you run the risk
 // of exceeding the rebalance timeout and being kicked from the group. You will
 // try to commit, and depending on the Kafka version, the commit may even be
-// erroneously successful (pre Kafka 2.5.0). This will lead to duplicates.
+// erroneously successful (pre Kafka 2.5). This will lead to duplicates.
 //
 // Instead, for safety, a GroupTransactSession favors (b). If a rebalance
 // occurs at any time before ending a transaction with a commit, this will
@@ -753,7 +753,7 @@ func (cl *Client) AbortBufferedRecords(ctx context.Context) error {
 // not retry with TryAbort.
 //
 // If records failed with UnknownProducerID and your Kafka version is at least
-// 2.5.0, then aborting here will potentially allow the client to recover for
+// 2.5, then aborting here will potentially allow the client to recover for
 // more production.
 //
 // Note that canceling the context will likely leave the client in an

@@ -692,7 +692,7 @@ start:
 	// If we used a version larger than Kafka supports, Kafka replies with
 	// Version 0 and an UNSUPPORTED_VERSION error.
 	//
-	// Pre Kafka 2.4.0, we have to retry the request with version 0.
+	// Pre Kafka 2.4, we have to retry the request with version 0.
 	// Post, Kafka replies with all versions.
 	if rawResp[1] == 35 {
 		if maxVersion == 0 {

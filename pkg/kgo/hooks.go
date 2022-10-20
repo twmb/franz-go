@@ -162,8 +162,8 @@ type HookBrokerThrottle interface {
 	// throttling interval, and whether the throttle was applied before
 	// Kafka responded to them request or after.
 	//
-	// For Kafka < 2.0.0, the throttle is applied before issuing a response.
-	// For Kafka >= 2.0.0, the throttle is applied after issuing a response.
+	// For Kafka < 2.0, the throttle is applied before issuing a response.
+	// For Kafka >= 2.0, the throttle is applied after issuing a response.
 	//
 	// If throttledAfterResponse is false, then Kafka already applied the
 	// throttle. If it is true, the client internally will not send another

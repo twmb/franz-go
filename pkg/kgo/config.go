@@ -523,7 +523,7 @@ func ClientID(id string) Opt {
 }
 
 // SoftwareNameAndVersion sets the client software name and version that will
-// be sent to Kafka as part of the ApiVersions request as of Kafka 2.4.0,
+// be sent to Kafka as part of the ApiVersions request as of Kafka 2.4,
 // overriding the default "kgo" and internal version number.
 //
 // Kafka exposes this through metrics to help operators understand the impact
@@ -879,12 +879,12 @@ func MaxProduceRequestsInflightPerBroker(n int) ProducerOpt {
 // records.
 //
 // Compression is chosen in the order preferred based on broker support.  For
-// example, zstd compression was introduced in Kafka 2.1.0, so the preference
+// example, zstd compression was introduced in Kafka 2.1, so the preference
 // can be first zstd, fallback snappy, fallback none.
 //
 // The default preference is [snappy, none], which should be fine for all old
 // consumers since snappy compression has existed since Kafka 0.8.0.  To use
-// zstd, your brokers must be at least 2.1.0 and all consumers must be upgraded
+// zstd, your brokers must be at least 2.1 and all consumers must be upgraded
 // to support decoding zstd records.
 func ProducerBatchCompression(preference ...CompressionCodec) ProducerOpt {
 	return producerOpt{func(cfg *cfg) { cfg.compression = preference }}
@@ -1062,7 +1062,7 @@ func RecordDeliveryTimeout(timeout time.Duration) ProducerOpt {
 // After producing a batch, you must commit what you consumed. Auto committing
 // offsets is disabled during transactional consuming / producing.
 //
-// Note that unless using Kafka 2.5.0, a consumer group rebalance may be
+// Note that unless using Kafka 2.5, a consumer group rebalance may be
 // problematic. Production should finish and be committed before the client
 // rejoins the group. It may be safer to use an eager group balancer and just
 // abort the transaction. Alternatively, any time a partition is revoked, you
@@ -1081,8 +1081,8 @@ func TransactionalID(id string) ProducerOpt {
 // default 40s. It is a good idea to keep this less than a group's session
 // timeout, so that a group member will always be alive for the duration of a
 // transaction even if connectivity dies. This helps prevent a transaction
-// finishing after a rebalance, which is problematic pre-Kafka 2.5.0. If you
-// are on Kafka 2.5.0+, then you can use the RequireStableFetchOffsets option
+// finishing after a rebalance, which is problematic pre-Kafka 2.5. If you
+// are on Kafka 2.5+, then you can use the RequireStableFetchOffsets option
 // when assigning the group, and you can set this to whatever you would like.
 //
 // Transaction timeouts begin when the first record is produced within a
@@ -1345,10 +1345,10 @@ func Balancers(balancers ...GroupBalancer) GroupOpt {
 // initiate a rebalance.
 //
 // If you are using a GroupTransactSession for EOS, wish to lower this, and are
-// talking to a Kafka cluster pre 2.5.0, consider lowering the
+// talking to a Kafka cluster pre 2.5, consider lowering the
 // TransactionTimeout. If you do not, you risk a transaction finishing after a
 // group has rebalanced, which could lead to duplicate processing. If you are
-// talking to a Kafka 2.5.0+ cluster, you can safely use the
+// talking to a Kafka 2.5+ cluster, you can safely use the
 // RequireStableFetchOffsets group option and prevent any problems.
 //
 // This option corresponds to Kafka's session.timeout.ms setting and must be
@@ -1386,7 +1386,7 @@ func HeartbeatInterval(interval time.Duration) GroupOpt {
 
 // RequireStableFetchOffsets sets the group consumer to require "stable" fetch
 // offsets before consuming from the group. Proposed in KIP-447 and introduced
-// in Kafka 2.5.0, stable offsets are important when consuming from partitions
+// in Kafka 2.5, stable offsets are important when consuming from partitions
 // that a transactional producer could be committing to.
 //
 // With this option, Kafka will block group consumers from fetching offsets for
@@ -1597,15 +1597,15 @@ func AutoCommitMarks() GroupOpt {
 // InstanceID sets the group consumer's instance ID, switching the group member
 // from "dynamic" to "static".
 //
-// Prior to Kafka 2.3.0, joining a group gave a group member a new member ID.
+// Prior to Kafka 2.3, joining a group gave a group member a new member ID.
 // The group leader could not tell if this was a rejoining member. Thus, any
 // join caused the group to rebalance.
 //
-// Kafka 2.3.0 introduced the concept of an instance ID, which can persist
-// across restarts. This allows for avoiding many costly rebalances and allows
-// for stickier rebalancing for rejoining members (since the ID for balancing
-// stays the same). The main downsides are that you, the user of a client, have
-// to manage instance IDs properly, and that it may take longer to rebalance in
+// Kafka 2.3 introduced the concept of an instance ID, which can persist across
+// restarts. This allows for avoiding many costly rebalances and allows for
+// stickier rebalancing for rejoining members (since the ID for balancing stays
+// the same). The main downsides are that you, the user of a client, have to
+// manage instance IDs properly, and that it may take longer to rebalance in
 // the event that a client legitimately dies.
 //
 // When using an instance ID, the client does NOT send a leave group request
