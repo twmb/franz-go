@@ -1045,31 +1045,39 @@ func (l GroupTopicsLag) Sorted() []TopicLag {
 }
 
 // CalculateGroupLag returns the per-partition lag of all members in a group.
-// The input to this method is the returns from the three following methods,
+// The input to this method is the returns from the following methods (make
+// sure to check shard errors):
 //
-//	described := DescribeGroups(ctx, group)
-//	fetched := FetchOffsets(ctx, group)
-//	toList := described.AssignedPartitions()
-//	toList.Merge(fetched.CommittedPartitions()
-//	ListEndOffsets(ctx, toList.Topics())
+//	// Note that FetchOffsets exists to fetch only one group's offsets,
+//	// but some of the code below slightly changes.
+//	groups := DescribeGroups(ctx, group)
+//	commits := FetchManyOffsets(ctx, group)
+//	var endOffsets ListedOffsets
+//	listPartitions := described.AssignedPartitions()
+//	listPartitions.Merge(commits.CommittedPartitions()
+//	if topics := listPartitions.Topics(); len(topics) > 0 {
+//		endOffsets = ListEndOffsets(ctx, listPartitions.Topics())
+//	}
+//	for _, group := range groups {
+//		lag := CalculateGroupLag(group, commits[group.Group].Fetched, endOffsets)
+//	}
 //
-// If assigned partitions are missing in the listed end offsets listed end
-// offsets, the partition will have an error indicating it is missing. A
-// missing topic or partition in the commits is assumed to be nothing
-// committing yet.
+// If assigned partitions are missing in the listed end offsets, the partition
+// will have an error indicating it is missing. A missing topic or partition in
+// the commits is assumed to be nothing committing yet.
 func CalculateGroupLag(
 	group DescribedGroup,
 	commit OffsetResponses,
-	offsets ListedOffsets,
+	endOffsets ListedOffsets,
 ) GroupLag {
 	if group.State == "Empty" {
-		return calculateEmptyLag(commit, offsets)
+		return calculateEmptyLag(commit, endOffsets)
 	}
 	if commit == nil { // avoid panics below
 		commit = make(OffsetResponses)
 	}
-	if offsets == nil {
-		offsets = make(ListedOffsets)
+	if endOffsets == nil {
+		endOffsets = make(ListedOffsets)
 	}
 
 	l := make(map[string]map[int32]GroupMemberLag)
@@ -1086,7 +1094,7 @@ func CalculateGroupLag(
 			}
 
 			tcommit := commit[t.Topic]
-			tend := offsets[t.Topic]
+			tend := endOffsets[t.Topic]
 			for _, p := range t.Partitions {
 				var (
 					pcommit OffsetResponse
@@ -1141,7 +1149,7 @@ func CalculateGroupLag(
 	return l
 }
 
-func calculateEmptyLag(commit OffsetResponses, offsets ListedOffsets) GroupLag {
+func calculateEmptyLag(commit OffsetResponses, endOffsets ListedOffsets) GroupLag {
 	l := make(map[string]map[int32]GroupMemberLag)
 	for t, ps := range commit {
 		lt := l[t]
@@ -1149,7 +1157,7 @@ func calculateEmptyLag(commit OffsetResponses, offsets ListedOffsets) GroupLag {
 			lt = make(map[int32]GroupMemberLag)
 			l[t] = lt
 		}
-		tend := offsets[t]
+		tend := endOffsets[t]
 		for p, pcommit := range ps {
 			var (
 				pend ListedOffset
@@ -1191,7 +1199,7 @@ func calculateEmptyLag(commit OffsetResponses, offsets ListedOffsets) GroupLag {
 	// lag calculations above, the partitions were not committed to and we
 	// count that as entirely lagging.
 	for t, lt := range l {
-		tend := offsets[t]
+		tend := endOffsets[t]
 		for p, pend := range tend {
 			if _, ok := lt[p]; ok {
 				continue
