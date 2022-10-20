@@ -322,7 +322,7 @@ func (vs *Versions) String() string {
 // Stable is a shortcut for the latest _released_ Kafka versions.
 //
 // This is the default version used in kgo to avoid breaking tip changes.
-func Stable() *Versions { return zkBrokerOf(max300) }
+func Stable() *Versions { return zkBrokerOf(maxStable) }
 
 // Tip is the latest defined Kafka key versions; this may be slightly out of date.
 func Tip() *Versions { return zkBrokerOf(maxTip) }
@@ -934,6 +934,9 @@ var max330 = nextMax(max320, func(v listenerKeys) listenerKeys {
 	return v
 })
 
-var maxTip = nextMax(max330, func(v listenerKeys) listenerKeys {
-	return v
-})
+var (
+	maxStable = max330
+	maxTip    = nextMax(maxStable, func(v listenerKeys) listenerKeys {
+		return v
+	})
+)
