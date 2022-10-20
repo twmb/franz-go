@@ -338,11 +338,7 @@ func (g *groupConsumer) findBalancer(from, proto string) (GroupBalancer, error) 
 // own metadata update to see if partition counts have changed for these random
 // topics.
 func (g *groupConsumer) balanceGroup(proto string, members []kmsg.JoinGroupResponseMember, skipBalance bool) ([]kmsg.SyncGroupRequestGroupAssignment, error) {
-	if skipBalance {
-		g.cl.cfg.logger.Log(LogLevelInfo, "parsing group balance as leader but not assigning (KIP-814)")
-	} else {
-		g.cl.cfg.logger.Log(LogLevelInfo, "balancing group as leader")
-	}
+	g.cl.cfg.logger.Log(LogLevelInfo, "balancing group as leader")
 
 	b, err := g.findBalancer("balance group", proto)
 	if err != nil {
@@ -443,7 +439,14 @@ func (g *groupConsumer) balanceGroup(proto string, members []kmsg.JoinGroupRespo
 	// have logged the current interests, we do not need to actually
 	// balance.
 	if skipBalance {
-		return nil, nil
+		switch proto := b.ProtocolName(); proto {
+		case RangeBalancer().ProtocolName(),
+			RoundRobinBalancer().ProtocolName(),
+			StickyBalancer().ProtocolName(),
+			CooperativeStickyBalancer().ProtocolName():
+		default:
+			return nil, nil
+		}
 	}
 
 	// If the returned IntoSyncAssignment is a BalancePlan, which it likely

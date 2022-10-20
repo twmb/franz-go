@@ -1618,7 +1618,12 @@ func AutoCommitMarks() GroupOpt {
 // issues a leave group request on behalf of this instance ID (see kcl), or you
 // can manually use the kmsg package with a proper LeaveGroupRequest.
 //
-// NOTE: Leaving a group with an instance ID is only supported in Kafka 2.4.0+.
+// NOTE: Leaving a group with an instance ID is only supported in Kafka 2.4+.
+//
+// NOTE: If you restart a consumer group leader that is using an instance ID,
+// it will not cause a rebalance even if you change which topics the leader is
+// consuming. If your cluster is 3.2+, this client internally works around this
+// limitation and you do not need to trigger a rebalance manually.
 func InstanceID(id string) GroupOpt {
 	return groupOpt{func(cfg *cfg) { cfg.instanceID = &id }}
 }
