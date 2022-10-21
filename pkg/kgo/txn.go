@@ -474,6 +474,11 @@ const (
 	// application with the SAME transactional ID and produce to all the
 	// same partitions to ensure to resume the transaction and unstick the
 	// partitions.
+	//
+	// Also note: this option does not work on all broker implementations.
+	// This relies on Kafka internals. Some brokers (notably Redpanda) are
+	// more strict with enforcing transaction correctness and this option
+	// cannot be used and will cause errors.
 	EndBeginTxnUnsafe
 )
 

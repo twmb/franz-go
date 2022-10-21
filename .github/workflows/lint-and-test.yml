@@ -57,7 +57,7 @@ jobs:
             echo "staticcheck ./..."
             staticcheck -checks 'all,-ST1003,-SA1012,-ST1016,-SA1019,-SA2001' ./... # actually contains atomicalign check
 
-  integration-test:
+  integration-test-kafka:
     if: github.repository == 'twmb/franz-go'
     needs: golangci
     runs-on: ubuntu-latest
@@ -80,11 +80,31 @@ jobs:
           KAFKA_CFG_BROKER_ID: 1
           ALLOW_PLAINTEXT_LISTENER: yes
           KAFKA_KRAFT_CLUSTER_ID: XkpGZQ27R3eTl3OdTm2LYA # 16 byte base64-encoded UUID
-          # BITNAMI_DEBUG: true # Enable this to get more info on startup failures
     steps:
       - uses: actions/checkout@v3
       - run: go test ./...
         env:
           KGO_TEST_RF: 1
           KGO_SEEDS: kafka:9092
-          KGO_TEST_RECORDS: 50000
+          KGO_TEST_UNSAFE: true
+          KGO_TEST_STABLE_FETCH: true
+
+  integration-test-redpanda:
+    if: github.repository == 'twmb/franz-go'
+    needs: golangci
+    runs-on: ubuntu-latest
+    name: "integration test redpanda"
+    container: golang:1.19.2
+    services:
+      redpanda:
+        image: vectorized/redpanda-nightly:latest
+        ports:
+          - 9092:9092
+        env:
+          REDPANDA_ADVERTISE_KAFKA_ADDRESS: redpanda:9092
+    steps:
+      - uses: actions/checkout@v3
+      - run: go test ./...
+        env:
+          KGO_TEST_RF: 1
+          KGO_SEEDS: redpanda:9092
