@@ -100,6 +100,8 @@ jobs:
         image: vectorized/redpanda-nightly:latest
         ports:
           - 9092:9092
+        env:
+          REDPANDA_ADVERTISE_KAFKA_ADDRESS: redpanda:9092
     steps:
       - uses: actions/checkout@v3
       - run: go test ./...
