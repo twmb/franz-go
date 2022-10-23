@@ -187,14 +187,14 @@ func (f *RecordFormatter) AppendPartitionRecord(b []byte, p *FetchPartition, r *
 //	%a{transactional-bit}
 //	%a{transactional-bit;bool}
 //
-// Prints 1 if the record is a transaction marker and 0 if the record is not a
-// transaction marker. Number formatting can be controlled with ";number".
+// Prints 1 if the record is a part of a transaction or 0 if it is not. Number
+// formatting can be controlled with ";number".
 //
 //	%a{control-bit}
 //	%a{control-bit;bool}
 //
-// Prints 1 if the record is a control record and 0 if the record is not a
-// control record. Number formatting can be controlled with ";number".
+// Prints 1 if the record is a commit marker or 0 if it is not. Number
+// formatting can be controlled with ";number".
 //
 // # Text
 //
