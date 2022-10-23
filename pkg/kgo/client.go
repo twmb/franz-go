@@ -36,7 +36,7 @@ type Client struct {
 	ctx       context.Context
 	ctxCancel func()
 
-	rng *rand.Rand
+	rng func() float64
 
 	brokersMu    sync.RWMutex
 	brokers      []*broker // ordered by broker ID
@@ -201,7 +201,16 @@ func NewClient(opts ...Opt) (*Client, error) {
 		cfg:       cfg,
 		ctx:       ctx,
 		ctxCancel: cancel,
-		rng:       rand.New(rand.NewSource(time.Now().UnixNano())),
+
+		rng: func() func() float64 {
+			var mu sync.Mutex
+			rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+			return func() float64 {
+				mu.Lock()
+				defer mu.Unlock()
+				return rng.Float64()
+			}
+		}(),
 
 		controllerID: unknownControllerID,
 
