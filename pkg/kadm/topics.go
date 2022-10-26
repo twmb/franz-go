@@ -361,7 +361,9 @@ func (cl *Client) DeleteRecords(ctx context.Context, os Offsets) (DeleteRecordsR
 			rp := kmsg.NewDeleteRecordsRequestTopicPartition()
 			rp.Partition = p
 			rp.Offset = o.At
+			rt.Partitions = append(rt.Partitions, rp)
 		}
+		req.Topics = append(req.Topics, rt)
 	}
 
 	shards := cl.cl.RequestSharded(ctx, req)
