@@ -1,3 +1,26 @@
+v1.9.1
+===
+
+This is a small patch release to work around two behavior problems, one with
+AWS and one with Redpanda. This is not an important bug release if you are
+using this library against Kafka itself.
+
+For AWS, AWS is unexpectedly expiring certain permissions before the SASL
+lifetime is up. This manifests as `GROUP_AUTHORIZATION_ERROR` while consuming.
+Previously, we the client would mark connections to reauthenticate when the
+connection was within 3s of SASL expiry. We now are more pessimistic and
+reauthenticate within 95% to 98% of the lifetime, with a 2s minimum. This is
+similar to the Java client, which has always used 85 to 95% of the SASL
+lifetime and has no minimum.
+
+For Redpanda, Redpanda's transaction support is nearly complete (v22.3 release
+imminent), but Redpanda can return `UNKNOWN_SERVER_ERROR` a bit more than Kafka
+does. These errors are being ironed out, but there is no harm in the client to
+pre-emptively handling these as retryable.
+
+- [`3ecaff2`](https://github.com/twmb/franz-go/commit/3ecaff2) kgo txn: handle `UNKNOWN_SERVER_ERROR` more widely
+- [`eb6e3b5`](https://github.com/twmb/franz-go/commit/eb6e3b5) kgo sasl reauth: be more pessimistic
+
 v1.9.0
 ===
 
