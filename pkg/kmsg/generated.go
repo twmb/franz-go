@@ -891,7 +891,7 @@ type OffsetCommitValue struct {
 
 	// ExpireTimestamp, introduced in v1 and dropped in v2 with KIP-111,
 	// is when this commit expires.
-	ExpireTimestamp int64 // v1+
+	ExpireTimestamp int64 // v1-v1
 }
 
 func (v *OffsetCommitValue) AppendTo(dst []byte) []byte {
@@ -3737,7 +3737,7 @@ func NewFetchRequestTopicPartition() FetchRequestTopicPartition {
 
 type FetchRequestTopic struct {
 	// Topic is a topic to try to fetch records for.
-	Topic string
+	Topic string // v0-v12
 
 	// TopicID is the uuid of the topic to fetch records for.
 	TopicID [16]byte // v13+
@@ -3764,7 +3764,7 @@ func NewFetchRequestTopic() FetchRequestTopic {
 
 type FetchRequestForgottenTopic struct {
 	// Topic is a topic to remove from being tracked (with the partitions below).
-	Topic string // v7+
+	Topic string // v7-v12
 
 	// TopicID is the uuid of a topic to remove from being tracked (with the
 	// partitions below).
@@ -4603,7 +4603,7 @@ func NewFetchResponseTopicPartition() FetchResponseTopicPartition {
 
 type FetchResponseTopic struct {
 	// Topic is a topic that records may have been received for.
-	Topic string
+	Topic string // v0-v12
 
 	// TopicID is the uuid of a topic that records may have been received for.
 	TopicID [16]byte // v13+
@@ -5940,7 +5940,7 @@ type MetadataRequest struct {
 	// on the cluster. See KIP-430 for more details.
 	//
 	// This field was removed in Kafka 2.8.0 in favor of the new DescribeClusterRequest.
-	IncludeClusterAuthorizedOperations bool // v8+
+	IncludeClusterAuthorizedOperations bool // v8-v10
 
 	// IncludeTopicAuthorizedOperations, introduced in Kakfa 2.3.0, specifies
 	// whether to return a bitfield of AclOperations that this client can perform
@@ -6342,7 +6342,7 @@ type MetadataResponse struct {
 	// is allowed to perform on this cluster.
 	//
 	// This field has a default of -2147483648.
-	AuthorizedOperations int32 // v8+
+	AuthorizedOperations int32 // v8-v10
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v9+
@@ -6884,7 +6884,7 @@ func NewMetadataResponse() MetadataResponse {
 // LeaderAndISRRequestTopicPartition is a common struct that is used across
 // different versions of LeaderAndISRRequest.
 type LeaderAndISRRequestTopicPartition struct {
-	Topic string
+	Topic string // v0-v1
 
 	Partition int32
 
@@ -6928,7 +6928,7 @@ func NewLeaderAndISRRequestTopicPartition() LeaderAndISRRequestTopicPartition {
 // LeaderAndISRResponseTopicPartition is a common struct that is used across
 // different versions of LeaderAndISRResponse.
 type LeaderAndISRResponseTopicPartition struct {
-	Topic string
+	Topic string // v0-v4
 
 	Partition int32
 
@@ -7022,7 +7022,7 @@ type LeaderAndISRRequest struct {
 
 	Type int8 // v5+
 
-	PartitionStates []LeaderAndISRRequestTopicPartition
+	PartitionStates []LeaderAndISRRequestTopicPartition // v0-v1
 
 	TopicStates []LeaderAndISRRequestTopicState // v2+
 
@@ -7851,7 +7851,7 @@ type LeaderAndISRResponse struct {
 
 	ErrorCode int16
 
-	Partitions []LeaderAndISRResponseTopicPartition
+	Partitions []LeaderAndISRResponseTopicPartition // v0-v4
 
 	Topics []LeaderAndISRResponseTopic // v5+
 
@@ -8176,7 +8176,7 @@ type StopReplicaRequestTopic struct {
 
 	Partition int32
 
-	Partitions []int32 // v1+
+	Partitions []int32 // v1-v2
 
 	PartitionStates []StopReplicaRequestTopicPartitionState // v3+
 
@@ -8218,7 +8218,7 @@ type StopReplicaRequest struct {
 	// This field has a default of -1.
 	BrokerEpoch int64 // v1+
 
-	DeletePartitions bool
+	DeletePartitions bool // v0-v2
 
 	Topics []StopReplicaRequestTopic
 
@@ -8698,7 +8698,7 @@ func NewStopReplicaResponse() StopReplicaResponse {
 }
 
 type UpdateMetadataRequestTopicPartition struct {
-	Topic string
+	Topic string // v0-v4
 
 	Partition int32
 
@@ -8832,7 +8832,7 @@ type UpdateMetadataRequest struct {
 	// This field has a default of -1.
 	BrokerEpoch int64 // v5+
 
-	PartitionStates []UpdateMetadataRequestTopicPartition
+	PartitionStates []UpdateMetadataRequestTopicPartition // v0-v4
 
 	TopicStates []UpdateMetadataRequestTopicState // v5+
 
@@ -10047,7 +10047,7 @@ type OffsetCommitRequestTopicPartition struct {
 	// timestamp was zero, current time + offset.retention.minutes.
 	//
 	// This field has a default of -1.
-	Timestamp int64 // v1+
+	Timestamp int64 // v1-v1
 
 	// LeaderEpoch, proposed in KIP-320 and introduced in Kafka 2.1.0,
 	// is the leader epoch of the record this request is committing.
@@ -10141,7 +10141,7 @@ type OffsetCommitRequest struct {
 	// group is empty. Read KIP-211 for more details.
 	//
 	// This field has a default of -1.
-	RetentionTimeMillis int64 // v2+
+	RetentionTimeMillis int64 // v2-v4
 
 	// Topics is contains topics and partitions for which to commit offsets.
 	Topics []OffsetCommitRequestTopic
@@ -10855,11 +10855,11 @@ type OffsetFetchRequest struct {
 	Version int16
 
 	// Group is the group to fetch offsets for.
-	Group string
+	Group string // v0-v7
 
 	// Topics contains topics to fetch offets for. Version 2+ allows this to be
 	// null to return all topics the client is authorized to describe in the group.
-	Topics []OffsetFetchRequestTopic
+	Topics []OffsetFetchRequestTopic // v0-v7
 
 	// Groups, introduced in v8 (Kafka 3.0), allows for fetching offsets for
 	// multiple groups at a time.
@@ -11443,11 +11443,11 @@ type OffsetFetchResponse struct {
 	ThrottleMillis int32 // v3+
 
 	// Topics contains responses for each requested topic/partition.
-	Topics []OffsetFetchResponseTopic
+	Topics []OffsetFetchResponseTopic // v0-v7
 
 	// ErrorCode is a top level error code that applies to all topic/partitions.
 	// This will be any group error.
-	ErrorCode int16 // v2+
+	ErrorCode int16 // v2-v7
 
 	// Groups is the response for all groups. Each field mirrors the fields in the
 	// top level request, thus they are left undocumented. Refer to the top level
@@ -11956,7 +11956,7 @@ type FindCoordinatorRequest struct {
 	// CoordinatorKey is the ID to use for finding the coordinator. For groups,
 	// this is the group name, for transactional producer, this is the
 	// transactional ID.
-	CoordinatorKey string
+	CoordinatorKey string // v0-v3
 
 	// CoordinatorType is the type that key is. Groups are type 0,
 	// transactional IDs are type 1.
@@ -12184,19 +12184,19 @@ type FindCoordinatorResponse struct {
 	// COORDINATOR_NOT_AVAILABLE is returned if the coordinator is not available
 	// for the requested ID, which would be if the group or transactional topic
 	// does not exist or the partition the requested key maps to is not available.
-	ErrorCode int16
+	ErrorCode int16 // v0-v3
 
 	// ErrorMessage is an informative message if the request errored.
-	ErrorMessage *string // v1+
+	ErrorMessage *string // v1-v3
 
 	// NodeID is the broker ID of the coordinator.
-	NodeID int32
+	NodeID int32 // v0-v3
 
 	// Host is the host of the coordinator.
-	Host string
+	Host string // v0-v3
 
 	// Port is the port of the coordinator.
-	Port int32
+	Port int32 // v0-v3
 
 	// Coordinators, introduced for KIP-699, is the bulk response for
 	// coordinators. The fields in the struct exactly match the original fields
@@ -13684,7 +13684,7 @@ type LeaveGroupRequest struct {
 	Group string
 
 	// MemberID is the member that is leaving.
-	MemberID string
+	MemberID string // v0-v2
 
 	// Members are member and group instance IDs to cause to leave a group.
 	Members []LeaveGroupRequestMember // v3+
@@ -17613,7 +17613,7 @@ type DeleteTopicsRequest struct {
 	Version int16
 
 	// Topics is an array of topics to delete.
-	TopicNames []string
+	TopicNames []string // v0-v5
 
 	// The name or topic ID of topics to delete.
 	Topics []DeleteTopicsRequestTopic // v6+
@@ -37389,7 +37389,7 @@ func NewAlterPartitionRequestTopicPartition() AlterPartitionRequestTopicPartitio
 }
 
 type AlterPartitionRequestTopic struct {
-	Topic string
+	Topic string // v0-v1
 
 	TopicID [16]byte // v2+
 
@@ -37746,7 +37746,7 @@ func NewAlterPartitionResponseTopicPartition() AlterPartitionResponseTopicPartit
 }
 
 type AlterPartitionResponseTopic struct {
-	Topic string
+	Topic string // v0-v1
 
 	TopidID [16]byte // v2+
 
