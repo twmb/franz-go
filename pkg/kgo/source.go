@@ -1566,8 +1566,24 @@ func (f *fetchRequest) addCursor(c *cursor) {
 	f.numOffsets++
 }
 
+// If the end user prefers to consume lag, we
+func (f *fetchRequest) adjustPreferringLag() {
+	if f.preferLagAt < 0 {
+		return
+	}
+	for t, ps := range f.usedOffsets {
+		for p, c := range ps {
+			lag := c.hwm - c.offset
+			if lag < f.preferLagAt {
+				continue
+			}
+			_, _, _ = t, p, c
+		}
+	}
+}
+
 func (*fetchRequest) Key() int16           { return 1 }
-func (*fetchRequest) MaxVersion() int16    { return 12 }
+func (*fetchRequest) MaxVersion() int16    { return 13 }
 func (f *fetchRequest) SetVersion(v int16) { f.version = v }
 func (f *fetchRequest) GetVersion() int16  { return f.version }
 func (f *fetchRequest) IsFlexible() bool   { return f.version >= 12 } // version 12+ is flexible
