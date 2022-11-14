@@ -138,6 +138,7 @@ type cfg struct {
 	isolationLevel int8
 	keepControl    bool
 	rack           string
+	preferLagFn    PreferLagFn
 
 	maxConcurrentFetches int
 	disableFetchSessions bool
@@ -1304,6 +1305,27 @@ func ConsumeRegex() ConsumerOpt {
 // For more details on fetch sessions, see KIP-227.
 func DisableFetchSessions() ConsumerOpt {
 	return consumerOpt{func(cfg *cfg) { cfg.disableFetchSessions = true }}
+}
+
+// ConsumePreferringLagFn allows you to re-order partitions before they are
+// fetched, given each partition's current lag.
+//
+// By default, the client rotates partitions fetched by one after every fetch
+// request. Kafka answers fetch requests in the order that partitions are
+// requested, filling the fetch response until FetchMaxBytes and
+// FetchMaxPartitionBytes are hit. All partitions eventually rotate to the
+// front, ensuring no partition is starved.
+//
+// With this option, you can return topic order and per-topic partition
+// ordering. These orders will sort to the front (first by topic, then by
+// partition). Any topic or partitions that you do not return are added to the
+// end, preserving their original ordering.
+//
+// For a simple lag preference that sorts the laggiest topics and partitions
+// first, use `kgo.ConsumePreferringLagFn(kgo.PreferLagAt(50))` (or some other
+// similar lag number).
+func ConsumePreferringLagFn(fn PreferLagFn) ConsumerOpt {
+	return consumerOpt{func(cfg *cfg) { cfg.preferLagFn = fn }}
 }
 
 //////////////////////////////////
