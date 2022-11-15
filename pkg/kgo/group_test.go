@@ -125,6 +125,7 @@ func (c *testConsumer) etl(etlsBeforeQuit int) {
 		ConsumeTopics(c.consumeFrom),
 		Balancers(c.balancer),
 		MaxBufferedRecords(10000),
+		ConsumePreferringLagFn(PreferLagAt(10)),
 
 		// Even with autocommitting, autocommitting does not commit
 		// *the latest* when being revoked. We always want to commit
