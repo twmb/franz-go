@@ -1852,8 +1852,11 @@ func (g *groupConsumer) updateCommitted(
 	if req.Generation != g.generation {
 		return
 	}
-	if g.uncommitted == nil || // just in case
-		len(req.Topics) != len(resp.Topics) { // bad kafka
+	if g.uncommitted == nil {
+		g.cfg.logger.Log(LogLevelWarn, "received an OffsetCommitResponse after our group session has ended, unable to handle this (were we kicked from the group?)")
+		return
+	}
+	if len(req.Topics) != len(resp.Topics) { // bad kafka
 		g.cfg.logger.Log(LogLevelError, fmt.Sprintf("broker replied to our OffsetCommitRequest incorrectly! Num topics in request: %d, in reply: %d, we cannot handle this!", len(req.Topics), len(resp.Topics)), "group", g.cfg.group)
 		return
 	}

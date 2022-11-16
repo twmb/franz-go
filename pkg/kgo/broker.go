@@ -282,6 +282,8 @@ start:
 func (b *broker) handleReq(pr promisedReq) {
 	req := pr.req
 	var cxn *brokerCxn
+	var retriedOnNewConnection bool
+start:
 	{
 		var err error
 		if cxn, err = b.loadConnection(pr.ctx, req); err != nil {
@@ -349,27 +351,26 @@ func (b *broker) handleReq(pr promisedReq) {
 		return
 	}
 
-	for reauthentications := 1; !cxn.expiry.IsZero() && time.Now().After(cxn.expiry); reauthentications++ {
-		// We allow 15 reauths, which is a lot. If a new lifetime is
-		// <2.5s, we sleep 100ms and try again. Retrying 15x puts us at
-		// <1s compared to the original lifetime. A broker should not
-		// reply with a <1s lifetime, but if we end up here, then we
-		// kill the connection ourselves and retry on a new connection.
-		if reauthentications > 15 {
-			cxn.cl.cfg.logger.Log(LogLevelError, "the broker has repeatedly given us short sasl lifetimes, we are forcefully killing our own connection to retry on a new connection ", "broker", logID(cxn.b.meta.NodeID))
-			pr.promise(nil, errSaslReauthLoop)
-			cxn.die()
-			return
-		}
-
+	if !cxn.expiry.IsZero() && time.Now().After(cxn.expiry) {
 		// If we are after the reauth time, try to reauth. We
 		// can only have an expiry if we went the authenticate
 		// flow, so we know we are authenticating again.
+		//
+		// Some implementations (AWS) occasionally fail for
+		// unclear reasons (principals change, somehow). If
+		// we receive SASL_AUTHENTICATION_FAILED, we retry
+		// once on a new connection. See #249.
+		//
 		// For KIP-368.
 		cxn.cl.cfg.logger.Log(LogLevelDebug, "sasl expiry limit reached, reauthenticating", "broker", logID(cxn.b.meta.NodeID))
 		if err := cxn.sasl(); err != nil {
-			pr.promise(nil, err)
 			cxn.die()
+			if errors.Is(err, kerr.SaslAuthenticationFailed) && !retriedOnNewConnection {
+				cxn.cl.cfg.logger.Log(LogLevelDebug, "sasl reauth failed, retrying once on new connection", "broker", logID(cxn.b.meta.NodeID), "err", err)
+				retriedOnNewConnection = true
+				goto start
+			}
+			pr.promise(nil, err)
 			return
 		}
 	}
@@ -916,60 +917,43 @@ func (cxn *brokerCxn) doSasl(authenticate bool) error {
 	if lifetimeMillis > 0 {
 		// Lifetime is problematic. We need to be a bit pessimistic.
 		//
-		// We want a lowerbound: we use 2s (arbitrary), but if 1.1x our
-		// e2e sasl latency is more than 2s, we use the latency.
+		// We want a lowerbound: we use 1s (arbitrary), but if 1.1x our
+		// e2e sasl latency is more than 1s, we use the latency.
 		//
 		// We do not want to reauthenticate too close to the lifetime
 		// especially for larger lifetimes due to clock issues (#205).
 		// We take 95% to 98% of the lifetime.
-		minPessimismMillis := float64(2 * time.Second.Milliseconds())
+		minPessimismMillis := float64(time.Second.Milliseconds())
 		latencyMillis := 1.1 * float64(time.Since(prereq).Milliseconds())
 		if latencyMillis > minPessimismMillis {
 			minPessimismMillis = latencyMillis
 		}
 		maxPessimismMillis := float64(lifetimeMillis) * (0.05 - 0.03*cxn.b.cl.rng()) // 95 to 98% of lifetime (pessimism 2% to 5%)
 
-		// Our minimum lifetime is always 2s (or latency, if larger).
-		//
-		// If rng is 0, we begin using max lifetime at 40s:
-		//
-		//     maxLifetime = 40s - (40s * 0.05) = 38s
-		//     minLifetime = 40s - 2s = 38s
-		//
-		// If rng is 1, we begin using max lifetime at 25s:
-		//
-		//     maxLifetime = 25s - (25s * 0.08) = 23s
-		//     minLifetime = 25s - 2s = 23s
-		//
-		// Every second after, we add between 0.05s or 0.08s to our
-		// backoff:
-		//
-		//     rng@0: maxLifetime = 41s - (41s * 0.05) = 38.95
-		//     rng@1: maxLifetime = 26s - (26s * 0.08) = 23.92
-		//
-		// At 12hr, we reauth ~24 to 28min before the lifetime.
+		// Our minimum lifetime is always 1s (or latency, if larger).
+		// When our max pessimism becomes more than min pessimism,
+		// every second after, we add between 0.05s or 0.08s to our
+		// backoff. At 12hr, we reauth ~24 to 28min before the
+		// lifetime.
 		usePessimismMillis := maxPessimismMillis
 		if minPessimismMillis > maxPessimismMillis {
 			usePessimismMillis = minPessimismMillis
 		}
 		useLifetimeMillis := lifetimeMillis - int64(usePessimismMillis)
 
-		// If our lifetime is <0 (broker said our lifetime is less than
-		// our client picked min), we sleep for 100ms and retry.
-		// Brokers should give us longer lifetimes, but that may not
-		// always happen (see #136). We sleep to avoid spin loop
-		// reauthenticating.
+		// Subtracting our min pessimism may result in our connection
+		// immediately expiring. We always accept this one reauth to
+		// issue our one request, and our next request will again
+		// reauth. Brokers should give us longer lifetimes, but that
+		// may not always happen (see #136, #249).
 		now := time.Now()
 		cxn.expiry = now.Add(time.Duration(useLifetimeMillis) * time.Millisecond)
-		cxn.cl.cfg.logger.Log(LogLevelDebug, "sasl has a limited lifetime", "broker", logID(cxn.b.meta.NodeID), "reauthenticate_in", cxn.expiry.Sub(now))
-		if useLifetimeMillis < 0 {
-			cxn.cl.cfg.logger.Log(LogLevelInfo, "sasl lifetime minus lower bound latency results in immediate reauthentication, sleeping 100ms to avoid spin-loop",
-				"broker", logID(cxn.b.meta.NodeID),
-				"session_lifetime", time.Duration(lifetimeMillis)*time.Millisecond,
-				"latency_lower_bound", time.Duration(latencyMillis)*time.Millisecond,
-			)
-			time.Sleep(100 * time.Millisecond)
-		}
+		cxn.cl.cfg.logger.Log(LogLevelDebug, "sasl has a limited lifetime",
+			"broker", logID(cxn.b.meta.NodeID),
+			"session_lifetime", time.Duration(lifetimeMillis)*time.Millisecond,
+			"lifetime_pessimism", time.Duration(usePessimismMillis)*time.Millisecond,
+			"reauthenticate_in", cxn.expiry.Sub(now),
+		)
 	}
 	return nil
 }
