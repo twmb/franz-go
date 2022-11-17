@@ -458,7 +458,7 @@ func (g *groupConsumer) leave() (wait func()) {
 // returns the difference of g.nowAssigned and g.lastAssigned.
 func (g *groupConsumer) diffAssigned() (added, lost map[string][]int32) {
 	nowAssigned := g.nowAssigned.clone()
-	if g.lastAssigned == nil {
+	if !g.cooperative {
 		return nowAssigned, nil
 	}
 
@@ -749,6 +749,8 @@ func (g *groupConsumer) setupAssignedAndHeartbeat() (string, error) {
 
 	s := newAssignRevokeSession()
 	added, lost := g.diffAssigned()
+	g.lastAssigned = g.nowAssigned.clone() // now that we are done with our last assignment, update it per the new assignment
+
 	g.cfg.logger.Log(LogLevelInfo, "new group session begun", "group", g.cfg.group, "added", mtps(added), "lost", mtps(lost))
 	s.prerevoke(g, lost) // for cooperative consumers
 
@@ -1330,9 +1332,6 @@ func (g *groupConsumer) handleSyncResp(protocol string, resp *kmsg.SyncGroupResp
 
 	// Past this point, we will fall into the setupAssigned prerevoke code,
 	// meaning for cooperative, we will revoke what we need to.
-	if g.cooperative {
-		g.lastAssigned = g.nowAssigned.clone()
-	}
 	g.nowAssigned.store(assigned)
 	return nil
 }
@@ -1344,13 +1343,16 @@ func (g *groupConsumer) joinGroupProtocols() []kmsg.JoinGroupRequestProtocol {
 	for topic := range g.using {
 		topics = append(topics, topic)
 	}
-	nowDup := g.nowAssigned.clone() // deep copy to allow modifications
+	lastDup := make(map[string][]int32, len(g.lastAssigned))
+	for t, ps := range g.lastAssigned {
+		lastDup[t] = append([]int32(nil), ps...) // deep copy to allow modifications
+	}
 	gen := g.generation
 
 	g.mu.Unlock()
 
 	sort.Strings(topics) // we guarantee to JoinGroupMetadata that the input strings are sorted
-	for _, partitions := range nowDup {
+	for _, partitions := range lastDup {
 		sort.Slice(partitions, func(i, j int) bool { return partitions[i] < partitions[j] }) // same for partitions
 	}
 
@@ -1358,7 +1360,7 @@ func (g *groupConsumer) joinGroupProtocols() []kmsg.JoinGroupRequestProtocol {
 	for _, balancer := range g.cfg.balancers {
 		proto := kmsg.NewJoinGroupRequestProtocol()
 		proto.Name = balancer.ProtocolName()
-		proto.Metadata = balancer.JoinGroupMetadata(topics, nowDup, gen)
+		proto.Metadata = balancer.JoinGroupMetadata(topics, lastDup, gen)
 		protos = append(protos, proto)
 	}
 	return protos
