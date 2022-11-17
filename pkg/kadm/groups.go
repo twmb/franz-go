@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-	"sync"
 
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
@@ -939,40 +938,81 @@ func (rs FetchOffsetsResponses) On(group string, fn func(*FetchOffsetsResponse) 
 
 // FetchManyOffsets issues a fetch offsets requests for each group specified.
 //
-// This API is slightly different from others on the admin client: the
-// underlying FetchOFfsets request only supports one group at a time. Unlike
-// all other methods, which build and issue a single request, this method
-// issues many requests and captures all responses into the return map
-// (disregarding sharded functions, which actually have the input request
-// split).
-//
-// More importantly, FetchOffsets and CommitOffsets are important to provide as
-// simple APIs for users that manage group offsets outside of a consumer group.
-// This function complements FetchOffsets by supporting the metric gathering
-// use case of fetching offsets for many groups at once.
+// This function is a batch version of FetchOffsets. FetchOffsets and
+// CommitOffsets are important to provide as simple APIs for users that manage
+// group offsets outside of a consumer group. Each individual group may have an
+// auth error.
 func (cl *Client) FetchManyOffsets(ctx context.Context, groups ...string) FetchOffsetsResponses {
-	if len(groups) == 0 {
-		return nil
-	}
-	var mu sync.Mutex
-	var wg sync.WaitGroup
 	fetched := make(FetchOffsetsResponses)
-	for i := range groups {
-		group := groups[i]
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			offsets, err := cl.FetchOffsets(ctx, group)
-			mu.Lock()
-			defer mu.Unlock()
-			fetched[group] = FetchOffsetsResponse{
-				Group:   group,
-				Fetched: offsets,
-				Err:     err,
-			}
-		}()
+	if len(groups) == 0 {
+		return fetched
 	}
-	wg.Wait()
+
+	req := kmsg.NewPtrOffsetFetchRequest()
+	for _, group := range groups {
+		rg := kmsg.NewOffsetFetchRequestGroup()
+		rg.Group = group
+		req.Groups = append(req.Groups, rg)
+	}
+
+	groupErr := func(g string, err error) {
+		fetched[g] = FetchOffsetsResponse{
+			Group: g,
+			Err:   err,
+		}
+	}
+	allGroupsErr := func(req *kmsg.OffsetFetchRequest, err error) {
+		for _, g := range req.Groups {
+			groupErr(g.Group, err)
+		}
+	}
+
+	shards := cl.cl.RequestSharded(ctx, req)
+	for _, shard := range shards {
+		req := shard.Req.(*kmsg.OffsetFetchRequest)
+		if shard.Err != nil {
+			allGroupsErr(req, shard.Err)
+			continue
+		}
+		resp := shard.Resp.(*kmsg.OffsetFetchResponse)
+		if err := maybeAuthErr(resp.ErrorCode); err != nil {
+			allGroupsErr(req, err)
+			continue
+		}
+		for _, g := range resp.Groups {
+			if err := maybeAuthErr(g.ErrorCode); err != nil {
+				groupErr(g.Group, err)
+				continue
+			}
+			rs := make(OffsetResponses)
+			fg := FetchOffsetsResponse{
+				Group:   g.Group,
+				Fetched: rs,
+				Err:     kerr.ErrorForCode(g.ErrorCode),
+			}
+			fetched[g.Group] = fg
+			for _, t := range g.Topics {
+				rt := make(map[int32]OffsetResponse)
+				rs[t.Topic] = rt
+				for _, p := range t.Partitions {
+					var meta string
+					if p.Metadata != nil {
+						meta = *p.Metadata
+					}
+					rt[p.Partition] = OffsetResponse{
+						Offset: Offset{
+							Topic:       t.Topic,
+							Partition:   p.Partition,
+							At:          p.Offset,
+							LeaderEpoch: p.LeaderEpoch,
+							Metadata:    meta,
+						},
+						Err: kerr.ErrorForCode(p.ErrorCode),
+					}
+				}
+			}
+		}
+	}
 	return fetched
 }
 
