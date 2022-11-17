@@ -1,3 +1,30 @@
+v1.10.0
+===
+
+This is a small release that contains one bug fix, one new feature, and
+improvements in log lines, and improvements to work around AWS MSK being a bit
+odd with SASL reauthentication.
+
+Previously, the client's sticky partitioners actually did not preserve
+stickiness because the client did not attach previous-partitions when rejoining
+the group. That is now fixed.
+
+The new feature, `ConsumePreferringLagFn`, allows you to have some advanced
+reordering of how to consume. The recommended way of using this option is
+`kgo.ConsumePreferringLagFn(kgo.PreferLagAt(50))`, which allows you to favor
+laggy partitions if the client is more than 50 records behind in the topic.
+
+The kadm module is also released with v1.4.0, which contains new APIs to find
+coordinators for groups or transactional IDs, and an API to fetch API versions
+for all brokers in the cluster.
+
+- [`a995b1b`](https://github.com/twmb/franz-go/commit/a995b1b) kgo broker: retry sasl auth failures during reauthentication
+- [`8ab8074`](https://github.com/twmb/franz-go/commit/8ab8074) kgo connection: always allow one request after SASL
+- [`dcfcacb`](https://github.com/twmb/franz-go/commit/dcfcacb) **bugfix** `{Cooperative,Sticky}Balancer`: bug fix lack of stickiness
+- [`76430a8`](https://github.com/twmb/franz-go/commit/76430a8) **feature** kgo: add `ConsumePreferringLagFn` to consume preferring laggy partitions
+- [`9ac6c97`](https://github.com/twmb/franz-go/commit/9ac6c97) **improvement** kgo: support forward & backward batch requests for FindCoordinator, OffsetFetch
+
+
 v1.9.1
 ===
 
