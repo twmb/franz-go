@@ -2,9 +2,9 @@ package kadm
 
 import (
 	"context"
-	"regexp"
-	"runtime/debug"
+	"fmt"
 	"sort"
+	"strings"
 	"sync"
 
 	"github.com/twmb/franz-go/pkg/kerr"
@@ -271,23 +271,196 @@ func (cl *Client) ApiVersions(ctx context.Context) (BrokersApiVersions, error) {
 	return vs, nil
 }
 
-var (
-	reVersion     *regexp.Regexp
-	reVersionOnce sync.Once
-)
+// ClientQuotaEntityComponent is a quota entity component.
+type ClientQuotaEntityComponent struct {
+	Type string  // Type is the entity type ("user", "client-id", "ip").
+	Name *string // Name is the entity name, or null if the default.
+}
 
-// Copied from kgo, but we use the kadm package version.
-func softwareVersion() string {
-	info, ok := debug.ReadBuildInfo()
-	if ok {
-		reVersionOnce.Do(func() { reVersion = regexp.MustCompile(`^[a-zA-Z0-9](?:[a-zA-Z0-9.-]*[a-zA-Z0-9])?$`) })
-		for _, dep := range info.Deps {
-			if dep.Path == "github.com/twmb/franz-go/pkg/kadm" {
-				if reVersion.MatchString(dep.Version) {
-					return dep.Version
-				}
-			}
-		}
+// String returns key=value, or key=<default> if value is nil.
+func (d ClientQuotaEntityComponent) String() string {
+	if d.Name == nil {
+		return d.Type + "=<default>"
 	}
-	return "unknown"
+	return fmt.Sprintf("%s=%s", d.Type, *d.Name)
+}
+
+// ClientQuotaEntity contains the components that make up a single entity.
+type ClientQuotaEntity []ClientQuotaEntityComponent
+
+// String returns {key=value, key=value}, joining all entities with a ", " and
+// wrapping in braces.
+func (ds ClientQuotaEntity) String() string {
+	var ss []string
+	for _, d := range ds {
+		ss = append(ss, d.String())
+	}
+	return "{" + strings.Join(ss, ", ") + "}"
+}
+
+// ClientQuotaValue is a quota name and value.
+type ClientQuotaValue struct {
+	Key   string  // Key is the quota configuration key.
+	Value float64 // Value is the quota configuration value.
+}
+
+// String returns key=value.
+func (d ClientQuotaValue) String() string {
+	return fmt.Sprintf("%s=%f", d.Key, d.Value)
+}
+
+// ClientQuotaValues contains all client quota values.
+type ClientQuotaValues []ClientQuotaValue
+
+// QuotasMatchType specifies how to match a described client quota entity.
+//
+// 0 means to match the name exactly: user=foo will only match components of
+// entity type "user" and entity name "foo".
+//
+// 1 means to match the default of the name: entity type "user" with a default
+// match will return the default quotas for user entities.
+//
+// 2 means to match any name: entity type "user" with any matching will return
+// both names and defaults.
+type QuotasMatchType = kmsg.QuotasMatchType
+
+// DescribeClientQuotaComponent is an input entity component to describing
+// client quotas: we define the type of quota ("client-id", "user"), how to
+// match, and the match name if needed.
+type DescribeClientQuotaComponent struct {
+	Type      string          // Type is the type of entity component to describe ("user", "client-id", "ip").
+	MatchName *string         // MatchName is the name to match again; this is only needed when MatchType is 0 (exact).
+	MatchType QuotasMatchType // MatchType is how to match an entity.
+}
+
+// DescribedClientQuota contains a described quota. A single quota is made up
+// of multiple entities and multiple values, for example, "user=foo" is one
+// component of the entity, and "client-id=bar" is another.
+type DescribedClientQuota struct {
+	Entity ClientQuotaEntity // Entity is the entity of this described client quota.
+	Values ClientQuotaValues // Values contains the quota valies for this entity.
+}
+
+// DescribedClientQuota contains client quotas that were described.
+type DescribedClientQuotas []DescribedClientQuota
+
+// DescribeClientQuotas describes client quotas. If strict is true, the
+// response includes only the requested components.
+func (cl *Client) DescribeClientQuotas(ctx context.Context, strict bool, entityComponents []DescribeClientQuotaComponent) (DescribedClientQuotas, error) {
+	req := kmsg.NewPtrDescribeClientQuotasRequest()
+	req.Strict = strict
+	for _, entity := range entityComponents {
+		rc := kmsg.NewDescribeClientQuotasRequestComponent()
+		rc.EntityType = entity.Type
+		rc.Match = entity.MatchName
+		rc.MatchType = entity.MatchType
+		req.Components = append(req.Components, rc)
+	}
+	resp, err := req.RequestWith(ctx, cl.cl)
+	if err != nil {
+		return nil, err
+	}
+	if err := maybeAuthErr(resp.ErrorCode); err != nil {
+		return nil, err
+	}
+	if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
+		return nil, err
+	}
+	var qs DescribedClientQuotas
+	for _, entry := range resp.Entries {
+		var q DescribedClientQuota
+		for _, e := range entry.Entity {
+			q.Entity = append(q.Entity, ClientQuotaEntityComponent{
+				Type: e.Type,
+				Name: e.Name,
+			})
+		}
+		for _, v := range entry.Values {
+			q.Values = append(q.Values, ClientQuotaValue{
+				Key:   v.Key,
+				Value: v.Value,
+			})
+		}
+		qs = append(qs, q)
+	}
+	return qs, nil
+}
+
+// AlterClientQuotaOp sets or remove a client quota.
+type AlterClientQuotaOp struct {
+	Key    string  // Key is the quota configuration key to set or remove.
+	Value  float64 // Value is the quota configuration value to set or remove.
+	Remove bool    // Remove, if true, removes this quota rather than sets it.
+}
+
+// AlterClientQuotaEntry pairs an entity with quotas to set or remove.
+type AlterClientQuotaEntry struct {
+	Entity ClientQuotaEntity    // Entity is the entity to alter quotas for.
+	Ops    []AlterClientQuotaOp // Ops are quotas to set or remove.
+}
+
+// AlteredClientQuota is the result for a single entity that was altered.
+type AlteredClientQuota struct {
+	Entity     ClientQuotaEntity // Entity is the entity this result is for.
+	Err        error             // Err is non-nil if the alter operation on this entity failed.
+	ErrMessage string            // ErrMessage is an optional additional message on error.
+}
+
+// AlteredClientQuotas contains results for all altered entities.
+type AlteredClientQuotas []AlteredClientQuota
+
+// AlterClientQuotas alters quotas for the input entries. You may consider
+// checking ValidateAlterClientQuotas before using this method.
+func (cl *Client) AlterClientQuotas(ctx context.Context, entries []AlterClientQuotaEntry) (AlteredClientQuotas, error) {
+	return cl.alterClientQuotas(ctx, false, entries)
+}
+
+// ValidateAlterClientQuotas validates an alter client quota request. This
+// returns exactly what AlterClientQuotas returns, but does not actually alter
+// quotas.
+func (cl *Client) ValidateAlterClientQuotas(ctx context.Context, entries []AlterClientQuotaEntry) (AlteredClientQuotas, error) {
+	return cl.alterClientQuotas(ctx, true, entries)
+}
+
+func (cl *Client) alterClientQuotas(ctx context.Context, validate bool, entries []AlterClientQuotaEntry) (AlteredClientQuotas, error) {
+	req := kmsg.NewPtrAlterClientQuotasRequest()
+	req.ValidateOnly = validate
+	for _, entry := range entries {
+		re := kmsg.NewAlterClientQuotasRequestEntry()
+		for _, c := range entry.Entity {
+			rec := kmsg.NewAlterClientQuotasRequestEntryEntity()
+			rec.Type = c.Type
+			rec.Name = c.Name
+			re.Entity = append(re.Entity, rec)
+		}
+		for _, op := range entry.Ops {
+			reo := kmsg.NewAlterClientQuotasRequestEntryOp()
+			reo.Key = op.Key
+			reo.Value = op.Value
+			reo.Remove = op.Remove
+			re.Ops = append(re.Ops, reo)
+		}
+		req.Entries = append(req.Entries, re)
+	}
+	resp, err := req.RequestWith(ctx, cl.cl)
+	if err != nil {
+		return nil, err
+	}
+	var as AlteredClientQuotas
+	for _, entry := range resp.Entries {
+		var e ClientQuotaEntity
+		for _, c := range entry.Entity {
+			e = append(e, ClientQuotaEntityComponent{
+				Type: c.Type,
+				Name: c.Name,
+			})
+		}
+		a := AlteredClientQuota{
+			Entity:     e,
+			Err:        kerr.ErrorForCode(entry.ErrorCode),
+			ErrMessage: unptrStr(entry.ErrorMessage),
+		}
+		as = append(as, a)
+	}
+	return as, nil
 }

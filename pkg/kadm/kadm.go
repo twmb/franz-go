@@ -53,7 +53,10 @@
 package kadm
 
 import (
+	"regexp"
+	"runtime/debug"
 	"sort"
+	"sync"
 
 	"github.com/twmb/franz-go/pkg/kgo"
 )
@@ -63,6 +66,27 @@ func unptrStr(s *string) string {
 		return ""
 	}
 	return *s
+}
+
+var (
+	reVersion     *regexp.Regexp
+	reVersionOnce sync.Once
+)
+
+// Copied from kgo, but we use the kadm package version.
+func softwareVersion() string {
+	info, ok := debug.ReadBuildInfo()
+	if ok {
+		reVersionOnce.Do(func() { reVersion = regexp.MustCompile(`^[a-zA-Z0-9](?:[a-zA-Z0-9.-]*[a-zA-Z0-9])?$`) })
+		for _, dep := range info.Deps {
+			if dep.Path == "github.com/twmb/franz-go/pkg/kadm" {
+				if reVersion.MatchString(dep.Version) {
+					return dep.Version
+				}
+			}
+		}
+	}
+	return "unknown"
 }
 
 // Client is an admin client.
