@@ -428,6 +428,22 @@ func (s TopicsSet) Merge(other TopicsSet) {
 	}
 }
 
+// IntoList returns this set as a list.
+func (s TopicsSet) IntoList() TopicsList {
+	l := make(TopicsList, 0, len(s))
+	for t, ps := range s {
+		lps := make([]int32, 0, len(ps))
+		for p := range ps {
+			lps = append(lps, p)
+		}
+		l = append(l, TopicPartitions{
+			Topic:      t,
+			Partitions: lps,
+		})
+	}
+	return l
+}
+
 // TopicPartitions is a topic and partitions.
 type TopicPartitions struct {
 	Topic      string
