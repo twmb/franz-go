@@ -20759,8 +20759,10 @@ func NewEndTxnResponse() EndTxnResponse {
 }
 
 type WriteTxnMarkersRequestMarkerTopic struct {
+	// Topic is the name of the topic to write markers for.
 	Topic string
 
+	// Partitions contains partitions to write markers for.
 	Partitions []int32
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
@@ -20781,14 +20783,22 @@ func NewWriteTxnMarkersRequestMarkerTopic() WriteTxnMarkersRequestMarkerTopic {
 }
 
 type WriteTxnMarkersRequestMarker struct {
+	// ProducerID is the current producer ID to use when writing a marker.
 	ProducerID int64
 
+	// ProducerEpoch is the current producer epoch to use when writing a
+	// marker.
 	ProducerEpoch int16
 
+	// Committed is true if this marker is for a committed transaction,
+	// otherwise false if this is for an aborted transaction.
 	Committed bool
 
+	// Topics contains the topics we are writing markers for.
 	Topics []WriteTxnMarkersRequestMarkerTopic
 
+	// CoordinatorEpoch is the current epoch of the transaction coordinator we
+	// are writing a marker to. This is used to detect fenced writers.
 	CoordinatorEpoch int32
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
@@ -20809,12 +20819,12 @@ func NewWriteTxnMarkersRequestMarker() WriteTxnMarkersRequestMarker {
 }
 
 // WriteTxnMarkersRequest is a broker-to-broker request that Kafka uses to
-// finish transactions. Since this is specifically for inter-broker
-// communication, this is left undocumented.
+// finish transactions.
 type WriteTxnMarkersRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
+	// Markers contains transactional markers to be written.
 	Markers []WriteTxnMarkersRequestMarker
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
@@ -21071,8 +21081,23 @@ func NewWriteTxnMarkersRequest() WriteTxnMarkersRequest {
 }
 
 type WriteTxnMarkersResponseMarkerTopicPartition struct {
+	// Partition is the partition this result is for.
 	Partition int32
 
+	// ErrorCode is non-nil if writing the transansactional marker for this
+	// partition errored.
+	//
+	// CLUSTER_AUTHORIZATION_FAILED is returned if the user does not have
+	// CLUSTER_ACTION on CLUSTER.
+	//
+	// NOT_LEADER_OR_FOLLOWER is returned if the broker receiving this
+	// request is not the leader of the partition.
+	//
+	// UNKNOWN_TOPIC_OR_PARTITION is returned if the topic or partition is
+	// not known to exist.
+	//
+	// INVALID_PRODUCER_EPOCH is returned if the cluster epoch is provided
+	// and the provided epoch does not match.
 	ErrorCode int16
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
@@ -21093,8 +21118,11 @@ func NewWriteTxnMarkersResponseMarkerTopicPartition() WriteTxnMarkersResponseMar
 }
 
 type WriteTxnMarkersResponseMarkerTopic struct {
+	// Topic is the topic these results are for.
 	Topic string
 
+	// Partitions contains per-partition results for the write markers
+	// request.
 	Partitions []WriteTxnMarkersResponseMarkerTopicPartition
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
@@ -21115,8 +21143,11 @@ func NewWriteTxnMarkersResponseMarkerTopic() WriteTxnMarkersResponseMarkerTopic 
 }
 
 type WriteTxnMarkersResponseMarker struct {
+	// ProducerID is the producer ID these results are for (from the input
+	// request).
 	ProducerID int64
 
+	// Topics contains the results for the write markers request.
 	Topics []WriteTxnMarkersResponseMarkerTopic
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
@@ -21141,6 +21172,7 @@ type WriteTxnMarkersResponse struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
+	// Markers contains results for writing transactional markers.
 	Markers []WriteTxnMarkersResponseMarker
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
