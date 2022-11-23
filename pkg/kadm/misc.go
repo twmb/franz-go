@@ -2,10 +2,15 @@ package kadm
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/sha512"
 	"fmt"
 	"sort"
 	"strings"
 	"sync"
+
+	"golang.org/x/crypto/pbkdf2"
 
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kmsg"
@@ -463,4 +468,285 @@ func (cl *Client) alterClientQuotas(ctx context.Context, validate bool, entries 
 		as = append(as, a)
 	}
 	return as, nil
+}
+
+// ScramMechanism is a SCRAM mechanism.
+type ScramMechanism int8
+
+const (
+	// ScramSha256 represents the SCRAM-SHA-256 mechanism.
+	ScramSha256 ScramMechanism = 1
+	// ScramSha512 represents the SCRAM-SHA-512 mechanism.
+	ScramSha512 ScramMechanism = 2
+)
+
+// String returns either SCRAM-SHA-256, SCRAM-SHA-512, or UNKNOWN.
+func (s ScramMechanism) String() string {
+	switch s {
+	case ScramSha256:
+		return "SCRAM-SHA-256"
+	case ScramSha512:
+		return "SCRAM-SHA-512"
+	default:
+		return "UNKNOWN"
+	}
+}
+
+// CredInfo contains the SCRAM mechanism and iterations for a password.
+type CredInfo struct {
+	// Mechanism is the SCRAM mechanism a password exists for. This is 0
+	// for UNKNOWN, 1 for SCRAM-SHA-256, and 2 for SCRAM-SHA-512.
+	Mechanism ScramMechanism
+	// Iterations is the number of SCRAM iterations for this password.
+	Iterations int32
+}
+
+// String returns MECHANISM=iterations={c.Iterations}.
+func (c CredInfo) String() string {
+	return fmt.Sprintf("%s=iterations=%d", c.Mechanism, c.Iterations)
+}
+
+// DescribedUserSCRAM contains a user, the SCRAM mechanisms that the user has
+// passwords for, and if describing the user SCRAM credentials errored.
+type DescribedUserSCRAM struct {
+	User       string     // User is the user this described user credential is for.
+	CredInfos  []CredInfo // CredInfos contains SCRAM mechanisms the user has passwords for.
+	Err        error      // Err is any error encountered when describing the user.
+	ErrMessage string     // ErrMessage a potential extra message describing any error.
+}
+
+// DescribedUserSCRAMs contains described user SCRAM credentials keyed by user.
+type DescribedUserSCRAMs map[string]DescribedUserSCRAM
+
+// Sorted returns the described user credentials ordered by user.
+func (ds DescribedUserSCRAMs) Sorted() []DescribedUserSCRAM {
+	s := make([]DescribedUserSCRAM, 0, len(ds))
+	for _, d := range ds {
+		s = append(s, d)
+	}
+	sort.Slice(s, func(i, j int) bool { return s[i].User < s[j].User })
+	return s
+}
+
+// AllFailed returns whether all described user credentials are errored.
+func (ds DescribedUserSCRAMs) AllFailed() bool {
+	var n int
+	ds.EachError(func(DescribedUserSCRAM) { n++ })
+	return n == len(ds)
+}
+
+// EachError calls fn for every described user that has a non-nil error.
+func (ds DescribedUserSCRAMs) EachError(fn func(DescribedUserSCRAM)) {
+	for _, d := range ds {
+		if d.Err != nil {
+			fn(d)
+		}
+	}
+}
+
+// Each calls fn for every described user.
+func (ds DescribedUserSCRAMs) Each(fn func(DescribedUserSCRAM)) {
+	for _, d := range ds {
+		fn(d)
+	}
+}
+
+// Error iterates over all described users and returns the first error
+// encountered, if any.
+func (ds DescribedUserSCRAMs) Error() error {
+	for _, d := range ds {
+		if d.Err != nil {
+			return d.Err
+		}
+	}
+	return nil
+}
+
+// Ok returns true if there are no errors. This is a shortcut for rs.Error() ==
+// nil.
+func (ds DescribedUserSCRAMs) Ok() bool {
+	return ds.Error() == nil
+}
+
+// DescribeUserSCRAMs returns a small bit of information about all users in the
+// input request that have SCRAM passwords configured.  No users requests all
+// users.
+func (cl *Client) DescribeUserSCRAMs(ctx context.Context, users ...string) (DescribedUserSCRAMs, error) {
+	req := kmsg.NewPtrDescribeUserSCRAMCredentialsRequest()
+	for _, u := range users {
+		ru := kmsg.NewDescribeUserSCRAMCredentialsRequestUser()
+		ru.Name = u
+		req.Users = append(req.Users, ru)
+	}
+	resp, err := req.RequestWith(ctx, cl.cl)
+	if err != nil {
+		return nil, err
+	}
+	if err := maybeAuthErr(resp.ErrorCode); err != nil {
+		return nil, err
+	}
+	if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
+		return nil, err
+	}
+	rs := make(DescribedUserSCRAMs)
+	for _, res := range resp.Results {
+		r := DescribedUserSCRAM{
+			User:       res.User,
+			Err:        kerr.ErrorForCode(res.ErrorCode),
+			ErrMessage: unptrStr(res.ErrorMessage),
+		}
+		for _, i := range res.CredentialInfos {
+			r.CredInfos = append(r.CredInfos, CredInfo{
+				Mechanism:  ScramMechanism(i.Mechanism),
+				Iterations: i.Iterations,
+			})
+		}
+		rs[r.User] = r
+	}
+	return rs, nil
+}
+
+// DeleteSCRAM deletes a password with the given mechanism for the user.
+type DeleteSCRAM struct {
+	User      string         // User is the username to match for deletion.
+	Mechanism ScramMechanism // Mechanism is the mechanism to match to delete a password for.
+}
+
+// UpsertSCRAM either updates or creates (inserts) a new password for a user.
+// There are two ways to specify a password: either with the Password field
+// directly, or by specifying both Salt and SaltedPassword. If you specify just
+// a password, this package generates a 24 byte salt and uses pbkdf2 to create
+// the salted password.
+type UpsertSCRAM struct {
+	User           string         // User is the username to use.
+	Mechanism      ScramMechanism // Mechanism is the mechanism to use.
+	Iterations     int32          // Iterations is the SCRAM iterations to use; must be between 4096 and 16384.
+	Password       string         // Password is the password to salt and convert to a salted password. Requires Salt and SaltedPassword to be empty.
+	Salt           []byte         // Salt must be paired with SaltedPassword and requires Password to be empty.
+	SaltedPassword []byte         // SaltedPassword must be paired with Salt and requires Password to be empty.
+}
+
+// AlteredUserSCRAM is the result of an alter operation.
+type AlteredUserSCRAM struct {
+	User       string // User is the username that was altered.
+	Err        error  // Err is any error encountered when altering the user.
+	ErrMessage string // ErrMessage a potential extra message describing any error.
+}
+
+// AlteredUserSCRAMs contains altered user SCRAM credentials keyed by user.
+type AlteredUserSCRAMs map[string]AlteredUserSCRAM
+
+// Sorted returns the altered user credentials ordered by user.
+func (as AlteredUserSCRAMs) Sorted() []AlteredUserSCRAM {
+	s := make([]AlteredUserSCRAM, 0, len(as))
+	for _, a := range as {
+		s = append(s, a)
+	}
+	sort.Slice(s, func(i, j int) bool { return s[i].User < s[j].User })
+	return s
+}
+
+// AllFailed returns whether all altered user credentials are errored.
+func (as AlteredUserSCRAMs) AllFailed() bool {
+	var n int
+	as.EachError(func(AlteredUserSCRAM) { n++ })
+	return n == len(as)
+}
+
+// EachError calls fn for every altered user that has a non-nil error.
+func (as AlteredUserSCRAMs) EachError(fn func(AlteredUserSCRAM)) {
+	for _, a := range as {
+		if a.Err != nil {
+			fn(a)
+		}
+	}
+}
+
+// Each calls fn for every altered user.
+func (as AlteredUserSCRAMs) Each(fn func(AlteredUserSCRAM)) {
+	for _, a := range as {
+		fn(a)
+	}
+}
+
+// Error iterates over all altered users and returns the first error
+// encountered, if any.
+func (as AlteredUserSCRAMs) Error() error {
+	for _, a := range as {
+		if a.Err != nil {
+			return a.Err
+		}
+	}
+	return nil
+}
+
+// Ok returns true if there are no errors. This is a shortcut for rs.Error() ==
+// nil.
+func (as AlteredUserSCRAMs) Ok() bool {
+	return as.Error() == nil
+}
+
+// AlterUserSCRAMs deletes, updates, or creates (inserts) user SCRAM
+// credentials. Note that a username can only appear once across both upserts
+// and deletes. This modifies elements of the upsert slice that need to have a
+// salted password generated.
+func (cl *Client) AlterUserSCRAMs(ctx context.Context, del []DeleteSCRAM, upsert []UpsertSCRAM) (AlteredUserSCRAMs, error) {
+	for i, u := range upsert {
+		if u.Password != "" {
+			if len(u.Salt) > 0 || len(u.SaltedPassword) > 0 {
+				return nil, fmt.Errorf("user %s: cannot specify both a password and a salt / salted password", u.User)
+			}
+			u.Salt = make([]byte, 24)
+			if _, err := rand.Read(u.Salt); err != nil {
+				return nil, fmt.Errorf("user %s: unable to generate salt: %v", u.User, err)
+			}
+			switch u.Mechanism {
+			case ScramSha256:
+				u.SaltedPassword = pbkdf2.Key([]byte(u.Password), u.Salt, int(u.Iterations), sha256.Size, sha256.New)
+			case ScramSha512:
+				u.SaltedPassword = pbkdf2.Key([]byte(u.Password), u.Salt, int(u.Iterations), sha512.Size, sha512.New)
+			default:
+				return nil, fmt.Errorf("user %s: unknown mechanism, unable to generate password", u.User)
+			}
+			upsert[i] = u
+		} else {
+			if len(u.Salt) == 0 || len(u.SaltedPassword) == 0 {
+				return nil, fmt.Errorf("user %s: must specify either a password or a salt and salted password", u.User)
+			}
+		}
+	}
+
+	req := kmsg.NewPtrAlterUserSCRAMCredentialsRequest()
+	for _, d := range del {
+		rd := kmsg.NewAlterUserSCRAMCredentialsRequestDeletion()
+		rd.Name = d.User
+		rd.Mechanism = int8(d.Mechanism)
+		req.Deletions = append(req.Deletions, rd)
+	}
+	for _, u := range upsert {
+		ru := kmsg.NewAlterUserSCRAMCredentialsRequestUpsertion()
+		ru.Name = u.User
+		ru.Mechanism = int8(u.Mechanism)
+		ru.Iterations = u.Iterations
+		ru.Salt = u.Salt
+		ru.SaltedPassword = u.SaltedPassword
+		req.Upsertions = append(req.Upsertions, ru)
+	}
+	resp, err := req.RequestWith(ctx, cl.cl)
+	if err != nil {
+		return nil, err
+	}
+	rs := make(AlteredUserSCRAMs)
+	for _, res := range resp.Results {
+		if err := maybeAuthErr(res.ErrorCode); err != nil {
+			return nil, err
+		}
+		r := AlteredUserSCRAM{
+			User:       res.User,
+			Err:        kerr.ErrorForCode(res.ErrorCode),
+			ErrMessage: unptrStr(res.ErrorMessage),
+		}
+		rs[r.User] = r
+	}
+	return rs, nil
 }
