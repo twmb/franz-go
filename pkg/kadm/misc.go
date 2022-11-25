@@ -83,12 +83,16 @@ func (rs FindCoordinatorResponses) Ok() bool {
 }
 
 // FindGroupCoordinators returns the coordinator for all requested group names.
+//
+// This may return *ShardErrors or *AuthError.
 func (cl *Client) FindGroupCoordinators(ctx context.Context, groups ...string) FindCoordinatorResponses {
 	return cl.findCoordinators(ctx, 0, groups...)
 }
 
 // FindTxnCoordinators returns the coordinator for all requested transactional
 // IDs.
+//
+// This may return *ShardErrors or *AuthError.
 func (cl *Client) FindTxnCoordinators(ctx context.Context, txnIDs ...string) FindCoordinatorResponses {
 	return cl.findCoordinators(ctx, 1, txnIDs...)
 }
@@ -749,4 +753,185 @@ func (cl *Client) AlterUserSCRAMs(ctx context.Context, del []DeleteSCRAM, upsert
 		rs[r.User] = r
 	}
 	return rs, nil
+}
+
+// ElectLeadersHow is how partition leaders should be elected.
+type ElectLeadersHow int8
+
+const (
+	// ElectPreferredReplica elects the preferred replica for a partition.
+	ElectPreferredReplica ElectLeadersHow = 0
+	// ElectLiveReplica elects the first life replica if there are no
+	// in-sync replicas (i.e., this is unclean leader election).
+	ElectLiveReplica ElectLeadersHow = 1
+)
+
+// ElectLeadersResult is the result for a single partition in an elect leaders
+// request.
+type ElectLeadersResult struct {
+	Topic      string          // Topic is the topic this result is for.
+	Partition  int32           // Partition is the partition this result is for.
+	How        ElectLeadersHow // How is the type of election that was performed.
+	Err        error           // Err is non-nil if electing this partition's leader failed, such as the partition not existing or the preferred leader is not available and you used ElectPreferredReplica.
+	ErrMessage string          // ErrMessage a potential extra message describing any error.
+}
+
+// ElectLeadersResults contains per-topic, per-partition results for an elect
+// leaders request.
+type ElectLeadersResults map[string]map[int32]ElectLeadersResult
+
+// ElectLeaders elects leaders for partitions. This request was added in Kafka
+// 2.2 to replace the previously-ZooKeeper-only option of triggering leader
+// elections. See KIP-183 for more details.
+//
+// Kafka 2.4 introduced the ability to use unclean leader election. If you use
+// unclean leader election on a Kafka 2.2 or 2.3 cluster, the client will
+// instead fall back to preferred replica (clean) leader election. You can
+// check the result's How function (or field) to see.
+//
+// If s is nil, this will elect leaders for all partitions.
+//
+// This will return *AuthError if you do not have ALTER on CLUSTER for
+// kafka-cluster.
+func (cl *Client) ElectLeaders(ctx context.Context, how ElectLeadersHow, s TopicsSet) (ElectLeadersResults, error) {
+	req := kmsg.NewPtrElectLeadersRequest()
+	req.ElectionType = int8(how)
+	for _, t := range s.IntoList() {
+		rt := kmsg.NewElectLeadersRequestTopic()
+		rt.Topic = t.Topic
+		rt.Partitions = t.Partitions
+		req.Topics = append(req.Topics, rt)
+	}
+	resp, err := req.RequestWith(ctx, cl.cl)
+	if err != nil {
+		return nil, err
+	}
+	if err := maybeAuthErr(resp.ErrorCode); err != nil {
+		return nil, err
+	}
+	if resp.Version == 0 { // v0 does not have the election type field
+		how = ElectPreferredReplica
+	}
+	rs := make(ElectLeadersResults)
+	for _, t := range resp.Topics {
+		rt := make(map[int32]ElectLeadersResult)
+		rs[t.Topic] = rt
+		for _, p := range t.Partitions {
+			if err := maybeAuthErr(p.ErrorCode); err != nil {
+				return nil, err // v0 has no top-level err
+			}
+			rt[p.Partition] = ElectLeadersResult{
+				Topic:      t.Topic,
+				Partition:  p.Partition,
+				How:        how,
+				Err:        kerr.ErrorForCode(p.ErrorCode),
+				ErrMessage: unptrStr(p.ErrorMessage),
+			}
+		}
+	}
+	return rs, nil
+}
+
+// OffsetForLeaderEpochRequest contains topics, partitions, and leader epochs
+// to request offsets for in an OffsetForLeaderEpoch.
+type OffsetForLeaderEpochRequest map[string]map[int32]int32
+
+// Add adds a topic, partition, and leader epoch to the request.
+func (l *OffsetForLeaderEpochRequest) Add(topic string, partition, leaderEpoch int32) {
+	if *l == nil {
+		*l = make(map[string]map[int32]int32)
+	}
+	t := (*l)[topic]
+	if t == nil {
+		t = make(map[int32]int32)
+		(*l)[topic] = t
+	}
+	t[partition] = leaderEpoch
+}
+
+// OffsetForLeaderEpoch contains a response for a single partition in an
+// OffsetForLeaderEpoch request.
+type OffsetForLeaderEpoch struct {
+	NodeID    int32  // NodeID is the node that is the leader of this topic / partition.
+	Topic     string // Topic is the topic this leader epoch response is for.
+	Partition int32  // Partition is the partition this leader epoch response is for.
+
+	// LeaderEpoch is either
+	//
+	// 1) -1, if the requested LeaderEpoch is unknown.
+	//
+	// 2) Less than the requested LeaderEpoch, if the requested LeaderEpoch
+	// exists but has no records in it. For example, epoch 1 had end offset
+	// 37, then epoch 2 and 3 had no records: if you request LeaderEpoch 3,
+	// this will return LeaderEpoch 1 with EndOffset 37.
+	//
+	// 3) Equal to the requested LeaderEpoch, if the requested LeaderEpoch
+	// is equal to or less than the current epoch for the partition.
+	LeaderEpoch int32
+
+	// EndOffset is either
+	//
+	// 1) The LogEndOffset, if the broker has the same LeaderEpoch as the
+	// request.
+	//
+	// 2) the beginning offset of the next LeaderEpoch, if the broker has a
+	// higher LeaderEpoch.
+	//
+	// The second option allows the user to detect data loss: if the
+	// consumer consumed past the EndOffset that is returned, then the
+	// consumer should reset to the returned offset and the consumer knows
+	// that everything from the returned offset to the requested offset was
+	// lost.
+	EndOffset int64
+
+	// Err is non-nil if this partition had a response error.
+	Err error
+}
+
+// OffsetsForLeaderEpochs contains responses for partitions in a
+// OffsetForLeaderEpochRequest.
+type OffsetsForLeaderEpochs map[string]map[int32]OffsetForLeaderEpoch
+
+// OffsetForLeaderEpoch requests end offsets for the requested leader epoch in
+// partitions in the request. This is a relatively advanced and client internal
+// request, for more details, see the doc comments on the OffsetForLeaderEpoch
+// type.
+//
+// This may return *ShardErrors or *AuthError.
+func (cl *Client) OffetForLeaderEpoch(ctx context.Context, r OffsetForLeaderEpochRequest) (OffsetsForLeaderEpochs, error) {
+	req := kmsg.NewPtrOffsetForLeaderEpochRequest()
+	for t, ps := range r {
+		rt := kmsg.NewOffsetForLeaderEpochRequestTopic()
+		rt.Topic = t
+		for p, e := range ps {
+			rp := kmsg.NewOffsetForLeaderEpochRequestTopicPartition()
+			rp.Partition = p
+			rp.LeaderEpoch = e
+			rt.Partitions = append(rt.Partitions, rp)
+		}
+		req.Topics = append(req.Topics, rt)
+	}
+	shards := cl.cl.RequestSharded(ctx, req)
+	ls := make(OffsetsForLeaderEpochs)
+	return ls, shardErrEachBroker(req, shards, func(b BrokerDetail, kr kmsg.Response) error {
+		resp := kr.(*kmsg.OffsetForLeaderEpochResponse)
+		for _, rt := range resp.Topics {
+			lps := make(map[int32]OffsetForLeaderEpoch)
+			ls[rt.Topic] = lps
+			for _, rp := range rt.Partitions {
+				if err := maybeAuthErr(rp.ErrorCode); err != nil {
+					return err
+				}
+				lps[rp.Partition] = OffsetForLeaderEpoch{
+					NodeID:      b.NodeID,
+					Topic:       rt.Topic,
+					Partition:   rp.Partition,
+					LeaderEpoch: rp.LeaderEpoch,
+					EndOffset:   rp.EndOffset,
+					Err:         kerr.ErrorForCode(rp.ErrorCode),
+				}
+			}
+		}
+		return nil
+	})
 }
