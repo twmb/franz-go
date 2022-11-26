@@ -1,0 +1,462 @@
+package kadm
+
+import (
+	"context"
+	"errors"
+	"sort"
+
+	"github.com/twmb/franz-go/pkg/kerr"
+	"github.com/twmb/franz-go/pkg/kmsg"
+)
+
+// DescribedProducer contains the state of a transactional producer's last
+// produce.
+type DescribedProducer struct {
+	Leader                int32  // Leader is the leader broker for this topic / partition.
+	Topic                 string // Topic is the topic being produced to.
+	Partition             int32  // Partition is the partition being produced to.
+	ProducerID            int64  // ProducerID is the producer ID that produced.
+	ProducerEpoch         int16  // ProducerEpoch is the epoch that produced.
+	LastSequence          int32  // LastSequence is the last sequence number the producer produced.
+	LastTimestamp         int64  // LastTimestamp is the last time this producer produced.
+	CoordinatorEpoch      int32  // CoordinatorEpoch is the epoch of the transactional coordinator for the last produce.
+	CurrentTxnStartOffset int64  // CurrentTxnStartOffset is the first offset in the transaction.
+}
+
+// DescribedProducers maps producer IDs to the full described producer.
+type DescribedProducers map[int64]DescribedProducer
+
+// Sorted returns the described producers sorted by topic, partition, and
+// producer ID.
+func (ds DescribedProducers) Sorted() []DescribedProducer {
+	var all []DescribedProducer
+	for _, d := range ds {
+		all = append(all, d)
+	}
+	sort.Slice(all, func(i, j int) bool {
+		l, r := all[i], all[j]
+		return l.Topic < r.Topic || l.Topic == r.Topic && (l.Partition < r.Partition || l.Partition == r.Partition && l.ProducerID < r.ProducerID)
+	})
+	return all
+}
+
+// Each calls fn for each described producer.
+func (ds DescribedProducers) Each(fn func(DescribedProducer)) {
+	for _, d := range ds {
+		fn(d)
+	}
+}
+
+// DescribedProducersPartition is a partition whose producer's were described.
+type DescribedProducersPartition struct {
+	Leader          int32              // Leader is the leader broker for this topic / partition.
+	Topic           string             // Topic is the topic whose producer's were described.
+	Partition       int32              // Partition is the partition whose producer's were described.
+	ActiveProducers DescribedProducers // ActiveProducers are producer's actively transactionally producing to this partition.
+	Err             error              // Err is non-nil if describing this partition failed.
+}
+
+// DescribedProducersPartitions contains partitions whose producer's were described.
+type DescribedProducersPartitions map[int32]DescribedProducersPartition
+
+// Sorted returns the described partitions sorted by topic and partition.
+func (ds DescribedProducersPartitions) Sorted() []DescribedProducersPartition {
+	var all []DescribedProducersPartition
+	for _, d := range ds {
+		all = append(all, d)
+	}
+	sort.Slice(all, func(i, j int) bool {
+		l, r := all[i], all[j]
+		return l.Topic < r.Topic || l.Topic == r.Topic && l.Partition < r.Partition
+	})
+	return all
+}
+
+// SortedProducer returns all producers sorted first by partition, then by producer ID.
+func (ds DescribedProducersPartitions) SortedProducers() []DescribedProducer {
+	var all []DescribedProducer
+	ds.EachProducer(func(d DescribedProducer) {
+		all = append(all, d)
+	})
+	sort.Slice(all, func(i, j int) bool {
+		l, r := all[i], all[j]
+		return l.Topic < r.Topic || l.Topic == r.Topic && (l.Partition < r.Partition || l.Partition == r.Partition && l.ProducerID < r.ProducerID)
+	})
+	return all
+}
+
+// Each calls fn for each partition.
+func (ds DescribedProducersPartitions) Each(fn func(DescribedProducersPartition)) {
+	for _, d := range ds {
+		fn(d)
+	}
+}
+
+// EachProducer calls fn for each producer in all partitions.
+func (ds DescribedProducersPartitions) EachProducer(fn func(DescribedProducer)) {
+	for _, d := range ds {
+		for _, p := range d.ActiveProducers {
+			fn(p)
+		}
+	}
+}
+
+// DescribedProducersTopic contains topic partitions whose producer's were described.
+type DescribedProducersTopic struct {
+	Topic      string                       // Topic is the topic whose producer's were described.
+	Partitions DescribedProducersPartitions // Partitions are partitions whose producer's were described.
+}
+
+// DescribedProducersTopics contains topics whose producer's were described.
+type DescribedProducersTopics map[string]DescribedProducersTopic
+
+// Sorted returns the described topics sorted by topic.
+func (ds DescribedProducersTopics) Sorted() []DescribedProducersTopic {
+	var all []DescribedProducersTopic
+	ds.Each(func(d DescribedProducersTopic) {
+		all = append(all, d)
+	})
+	sort.Slice(all, func(i, j int) bool {
+		l, r := all[i], all[j]
+		return l.Topic < r.Topic
+	})
+	return all
+}
+
+// Sorted returns the described partitions sorted by topic and partition.
+func (ds DescribedProducersTopics) SortedPartitions() []DescribedProducersPartition {
+	var all []DescribedProducersPartition
+	ds.EachPartition(func(d DescribedProducersPartition) {
+		all = append(all, d)
+	})
+	sort.Slice(all, func(i, j int) bool {
+		l, r := all[i], all[j]
+		return l.Topic < r.Topic || l.Topic == r.Topic && l.Partition < r.Partition
+	})
+	return all
+}
+
+// SortedProducer returns all producers sorted first by partition, then by producer ID.
+func (ds DescribedProducersTopics) SortedProducers() []DescribedProducer {
+	var all []DescribedProducer
+	ds.EachProducer(func(d DescribedProducer) {
+		all = append(all, d)
+	})
+	sort.Slice(all, func(i, j int) bool {
+		l, r := all[i], all[j]
+		return l.Topic < r.Topic || l.Topic == r.Topic && (l.Partition < r.Partition || l.Partition == r.Partition && l.ProducerID < r.ProducerID)
+	})
+	return all
+}
+
+// Each calls fn for every topic.
+func (ds DescribedProducersTopics) Each(fn func(DescribedProducersTopic)) {
+	for _, d := range ds {
+		fn(d)
+	}
+}
+
+// EachPartitions calls fn for all topic partitions.
+func (ds DescribedProducersTopics) EachPartition(fn func(DescribedProducersPartition)) {
+	for _, d := range ds {
+		for _, p := range d.Partitions {
+			fn(p)
+		}
+	}
+}
+
+// EachProducer calls fn for each producer in all topics and partitions.
+func (ds DescribedProducersTopics) EachProducer(fn func(DescribedProducer)) {
+	for _, d := range ds {
+		for _, p := range d.Partitions {
+			for _, b := range p.ActiveProducers {
+				fn(b)
+			}
+		}
+	}
+}
+
+// DescribeProducers describes all producers that are transactionally producing
+// to the requested topic set. This request can be used to detect hanging
+// transactions or other transaction related problems. If the input set is
+// empty, this requests data for all partitions.
+//
+// This may return *ShardErrors or *AuthError.
+func (cl *Client) DescribeProducers(ctx context.Context, s TopicsSet) (DescribedProducersTopics, error) {
+	if len(s) == 0 {
+		m, err := cl.Metadata(ctx)
+		if err != nil {
+			return nil, err
+		}
+		s = m.Topics.TopicsSet()
+	}
+
+	req := kmsg.NewPtrDescribeProducersRequest()
+	for _, t := range s.IntoList() {
+		rt := kmsg.NewDescribeProducersRequestTopic()
+		rt.Topic = t.Topic
+		rt.Partitions = t.Partitions
+		req.Topics = append(req.Topics, rt)
+	}
+	shards := cl.cl.RequestSharded(ctx, req)
+	dts := make(DescribedProducersTopics)
+	return dts, shardErrEachBroker(req, shards, func(b BrokerDetail, kr kmsg.Response) error {
+		resp := kr.(*kmsg.DescribeProducersResponse)
+		for _, rt := range resp.Topics {
+			dps := make(DescribedProducersPartitions)
+			dt := DescribedProducersTopic{
+				Topic:      rt.Topic,
+				Partitions: dps,
+			}
+			dts[rt.Topic] = dt
+			for _, rp := range rt.Partitions {
+				if err := maybeAuthErr(rp.ErrorCode); err != nil {
+					return err
+				}
+				drs := make(DescribedProducers)
+				dp := DescribedProducersPartition{
+					Leader:          b.NodeID,
+					Topic:           rt.Topic,
+					Partition:       rp.Partition,
+					ActiveProducers: drs,
+					Err:             kerr.ErrorForCode(rp.ErrorCode),
+				}
+				dps[rp.Partition] = dp
+				for _, rr := range rp.ActiveProducers {
+					dr := DescribedProducer{
+						Leader:                b.NodeID,
+						Topic:                 rt.Topic,
+						Partition:             rp.Partition,
+						ProducerID:            rr.ProducerID,
+						ProducerEpoch:         int16(rr.ProducerEpoch),
+						LastSequence:          rr.LastSequence,
+						LastTimestamp:         rr.LastTimestamp,
+						CoordinatorEpoch:      rr.CoordinatorEpoch,
+						CurrentTxnStartOffset: rr.CurrentTxnStartOffset,
+					}
+					drs[dr.ProducerID] = dr
+				}
+			}
+		}
+		return nil
+	})
+}
+
+// DescribedTransaction contains data from a describe transactions response for
+// a single transactional ID.
+type DescribedTransaction struct {
+	Coordinator    int32  // Coordinator is the coordinator broker for this transactional ID.
+	TxnID          string // TxnID is the name of this transactional ID.
+	State          string // State is the state this transaction is in (Empty, Ongoing, PrepareCommit, PrepareAbort, CompleteCommit, CompleteAbort, Dead, PrepareEpochFence).
+	TimeoutMillis  int32  // TimeoutMillis is the timeout of this transaction in milliseconds.
+	StartTimestamp int64  // StartTimestamp is millisecond when this transaction started.
+	ProducerID     int64  // ProducerID is the ID in use by the transactional ID.
+	ProducerEpoch  int16  // ProducerEpoch is the epoch associated with the produce rID.
+
+	// Topics is the set of partitions in the transaction, if active. When
+	// preparing to commit or abort, this includes only partitions which do
+	// not have markers. This does not include topics the user is not
+	// authorized to describe.
+	Topics TopicsSet
+
+	Err error // Err is non-nil if the transaction could not be described.
+}
+
+// DescribedTransactions contains information from a describe transactions
+// response.
+type DescribedTransactions map[string]DescribedTransaction
+
+// Sorted returns all described transactions sorted by transactional ID.
+func (ds DescribedTransactions) Sorted() []DescribedTransaction {
+	s := make([]DescribedTransaction, 0, len(ds))
+	for _, d := range ds {
+		s = append(s, d)
+	}
+	sort.Slice(s, func(i, j int) bool { return s[i].TxnID < s[j].TxnID })
+	return s
+}
+
+// Each calls fn for each described transaction.
+func (ds DescribedTransactions) Each(fn func(DescribedTransaction)) {
+	for _, d := range ds {
+		fn(d)
+	}
+}
+
+// On calls fn for the transactional ID if it exists, returning the transaction
+// and the error returned from fn. If fn is nil, this simply returns the
+// transaction.
+//
+// The fn is given a shallow copy of the transaction. This function returns the
+// copy as well; any modifications within fn are modifications on the returned
+// copy.  Modifications on a described transaction's inner fields are persisted
+// to the original map (because slices are pointers).
+//
+// If the transaction does not exist, this returns
+// kerr.TransactionalIDNotFound.
+func (rs DescribedTransactions) On(txnID string, fn func(*DescribedTransaction) error) (DescribedTransaction, error) {
+	if len(rs) > 0 {
+		r, ok := rs[txnID]
+		if ok {
+			if fn == nil {
+				return r, nil
+			}
+			return r, fn(&r)
+		}
+	}
+	return DescribedTransaction{}, kerr.TransactionalIDNotFound
+}
+
+// TransactionalIDs returns a sorted list of all transactional IDs.
+func (ds DescribedTransactions) TransactionalIDs() []string {
+	all := make([]string, 0, len(ds))
+	for t := range ds {
+		all = append(all, t)
+	}
+	sort.Strings(all)
+	return all
+}
+
+// DescribeTransactions describes either all transactional IDs specified, or
+// all transactional IDs in the cluster if none are specified.
+//
+// This may return *ShardErrors.
+//
+// If no transactional IDs are specified and this method first lists
+// transactional IDs, and listing IDs returns a *ShardErrors, this function
+// describes all successfully listed IDs and appends the list shard errors to
+// any describe shard errors.
+//
+// If only one ID is described, there will be at most one request issued and
+// there is no need to deeply inspect the error.
+func (cl *Client) DescribeTransactions(ctx context.Context, txnIDs ...string) (DescribedTransactions, error) {
+	var seList *ShardErrors
+	if len(txnIDs) == 0 {
+		listed, err := cl.ListTransactions(ctx, nil, nil)
+		switch {
+		case err == nil:
+		case errors.As(err, &seList):
+		default:
+			return nil, err
+		}
+		txnIDs = listed.TransactionalIDs()
+		if len(txnIDs) == 0 {
+			return nil, err
+		}
+	}
+
+	req := kmsg.NewPtrDescribeTransactionsRequest()
+	req.TransactionalIDs = txnIDs
+
+	shards := cl.cl.RequestSharded(ctx, req)
+	described := make(DescribedTransactions)
+	err := shardErrEachBroker(req, shards, func(b BrokerDetail, kr kmsg.Response) error {
+		resp := kr.(*kmsg.DescribeTransactionsResponse)
+		for _, rt := range resp.TransactionStates {
+			if err := maybeAuthErr(rt.ErrorCode); err != nil {
+				return err
+			}
+			t := DescribedTransaction{
+				Coordinator:    b.NodeID,
+				TxnID:          rt.TransactionalID,
+				State:          rt.State,
+				TimeoutMillis:  rt.TimeoutMillis,
+				StartTimestamp: rt.StartTimestamp,
+				ProducerID:     rt.ProducerID,
+				ProducerEpoch:  rt.ProducerEpoch,
+				Err:            kerr.ErrorForCode(rt.ErrorCode),
+			}
+			for _, rtt := range rt.Topics {
+				t.Topics.Add(rtt.Topic, rtt.Partitions...)
+			}
+			described[t.TxnID] = t
+
+		}
+		return nil
+	})
+
+	var seDesc *ShardErrors
+	switch {
+	case err == nil:
+		return described, seList.into()
+	case errors.As(err, &seDesc):
+		if seList != nil {
+			seDesc.Errs = append(seList.Errs, seDesc.Errs...)
+		}
+		return described, seDesc.into()
+	default:
+		return nil, err
+	}
+}
+
+// ListedTransaction contains data from a list transactions response for a
+// single transactional ID.
+type ListedTransaction struct {
+	Coordinator int32  // Coordinator the coordinator broker for this transactional ID.
+	TxnID       string // TxnID is the name of this transactional ID.
+	ProducerID  int64  // ProducerID is the producer ID for this transaction.
+	State       string // State is the state this transaction is in (Empty, Ongoing, PrepareCommit, PrepareAbort, CompleteCommit, CompleteAbort, Dead, PrepareEpochFence).
+}
+
+// ListedTransactions contains information from a list transactions response.
+type ListedTransactions map[string]ListedTransaction
+
+// Sorted returns all transactions sorted by transactional ID.
+func (ls ListedTransactions) Sorted() []ListedTransaction {
+	s := make([]ListedTransaction, 0, len(ls))
+	for _, l := range ls {
+		s = append(s, l)
+	}
+	sort.Slice(s, func(i, j int) bool { return s[i].TxnID < s[j].TxnID })
+	return s
+}
+
+// Each calls fn for each listed transaction.
+func (ls ListedTransactions) Each(fn func(ListedTransaction)) {
+	for _, l := range ls {
+		fn(l)
+	}
+}
+
+// TransactionalIDs returns a sorted list of all transactional IDs.
+func (ls ListedTransactions) TransactionalIDs() []string {
+	all := make([]string, 0, len(ls))
+	for t := range ls {
+		all = append(all, t)
+	}
+	sort.Strings(all)
+	return all
+}
+
+// ListTransactions returns all transactions and their states in the cluster.
+// Filter states can be used to return transactions only in the requested
+// states. By default, this returns all transactions you have DESCRIBE access
+// to. Producer IDs can be specified to filter for transactions from the given
+// producer.
+//
+// This may return *ShardErrors.
+func (cl *Client) ListTransactions(ctx context.Context, producerIDs []int64, filterStates []string) (ListedTransactions, error) {
+	req := kmsg.NewPtrListTransactionsRequest()
+	req.ProducerIDFilters = producerIDs
+	req.StateFilters = filterStates
+	shards := cl.cl.RequestSharded(ctx, req)
+	list := make(ListedTransactions)
+	return list, shardErrEachBroker(req, shards, func(b BrokerDetail, kr kmsg.Response) error {
+		resp := kr.(*kmsg.ListTransactionsResponse)
+		if err := maybeAuthErr(resp.ErrorCode); err != nil {
+			return err
+		}
+		if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
+			return err
+		}
+		for _, t := range resp.TransactionStates {
+			list[t.TransactionalID] = ListedTransaction{
+				Coordinator: b.NodeID,
+				TxnID:       t.TransactionalID,
+				ProducerID:  t.ProducerID,
+				State:       t.TransactionState,
+			}
+		}
+		return nil
+	})
+}

@@ -241,8 +241,8 @@ func (cl *Client) ListGroups(ctx context.Context, filterStates ...string) (Liste
 //
 // If no groups are specified and this method first lists groups, and list
 // groups returns a *ShardErrors, this function describes all successfully
-// listed groups and appends the list shard errors to any returned describe
-// shard errors.
+// listed groups and appends the list shard errors to any describe shard
+// errors.
 //
 // If only one group is described, there will be at most one request issued,
 // and there is no need to deeply inspect the error.
