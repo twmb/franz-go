@@ -23,6 +23,49 @@ type DescribedProducer struct {
 	CurrentTxnStartOffset int64  // CurrentTxnStartOffset is the first offset in the transaction.
 }
 
+// Less returns whether the left described producer is less than the right,
+// in order of:
+//
+//   - Topic
+//   - Partition
+//   - ProducerID
+//   - ProducerEpoch
+//   - LastTimestamp
+//   - LastSequence
+func (l *DescribedProducer) Less(r *DescribedProducer) bool {
+	if l.Topic < r.Topic {
+		return true
+	}
+	if l.Topic > r.Topic {
+		return false
+	}
+	if l.Partition < r.Partition {
+		return true
+	}
+	if l.Partition > r.Partition {
+		return false
+	}
+	if l.ProducerID < r.ProducerID {
+		return true
+	}
+	if l.ProducerID > r.ProducerID {
+		return false
+	}
+	if l.ProducerEpoch < r.ProducerEpoch {
+		return true
+	}
+	if l.ProducerEpoch > r.ProducerEpoch {
+		return false
+	}
+	if l.LastTimestamp < r.LastTimestamp {
+		return true
+	}
+	if l.LastTimestamp > r.LastTimestamp {
+		return false
+	}
+	return l.LastSequence < r.LastSequence
+}
+
 // DescribedProducers maps producer IDs to the full described producer.
 type DescribedProducers map[int64]DescribedProducer
 
