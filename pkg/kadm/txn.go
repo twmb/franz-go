@@ -232,6 +232,14 @@ func (cl *Client) DescribeProducers(ctx context.Context, s TopicsSet) (Described
 			return nil, err
 		}
 		s = m.Topics.TopicsSet()
+	} else if e := s.EmptyTopics(); len(e) > 0 {
+		m, err := cl.Metadata(ctx, e...)
+		if err != nil {
+			return nil, err
+		}
+		for t, ps := range m.Topics.TopicsSet() {
+			s[t] = ps
+		}
 	}
 
 	req := kmsg.NewPtrDescribeProducersRequest()
