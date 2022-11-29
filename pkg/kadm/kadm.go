@@ -400,7 +400,30 @@ func (s TopicsSet) Each(fn func(t string, p int32)) {
 	}
 }
 
-// Add adds partitions for a topic to the topics set.
+// EachPartitions calls fn for each topic and its partitions in the topics set.
+func (s TopicsSet) EachPartitions(fn func(t string, ps []int32)) {
+	for t, ps := range s {
+		sliced := make([]int32, 0, len(ps))
+		for p := range ps {
+			sliced = append(sliced, p)
+		}
+		fn(t, sliced)
+	}
+}
+
+// EmptyTopics returns all topics with no partitions.
+func (s TopicsSet) EmptyTopics() []string {
+	var e []string
+	for t, ps := range s {
+		if len(ps) == 0 {
+			e = append(e, t)
+		}
+	}
+	return e
+}
+
+// Add adds partitions for a topic to the topics set. If no partitions are
+// added, this still creates the topic.
 func (s *TopicsSet) Add(t string, ps ...int32) {
 	if *s == nil {
 		*s = make(map[string]map[int32]struct{})
@@ -468,6 +491,25 @@ func (s TopicsSet) IntoList() TopicsList {
 	return l
 }
 
+// Sorted returns this set as a list in topic-sorted order, with each topic
+// having sorted partitions.
+func (s TopicsSet) Sorted() TopicsList {
+	l := make(TopicsList, 0, len(s))
+	for t, ps := range s {
+		tps := TopicPartitions{
+			Topic:      t,
+			Partitions: make([]int32, 0, len(ps)),
+		}
+		for p := range ps {
+			tps.Partitions = append(tps.Partitions, p)
+		}
+		tps.Partitions = int32s(tps.Partitions)
+		l = append(l, tps)
+	}
+	sort.Slice(l, func(i, j int) bool { return l[i].Topic < l[j].Topic })
+	return l
+}
+
 // TopicPartitions is a topic and partitions.
 type TopicPartitions struct {
 	Topic      string
@@ -486,23 +528,33 @@ func (l TopicsList) Each(fn func(t string, p int32)) {
 	}
 }
 
-// Sorted returns this set as a list in topic-sorted order, with each topic
-// having sorted partitions.
-func (s TopicsSet) Sorted() TopicsList {
-	l := make(TopicsList, 0, len(s))
-	for t, ps := range s {
-		tps := TopicPartitions{
-			Topic:      t,
-			Partitions: make([]int32, 0, len(ps)),
-		}
-		for p := range ps {
-			tps.Partitions = append(tps.Partitions, p)
-		}
-		tps.Partitions = int32s(tps.Partitions)
-		l = append(l, tps)
+// EachPartitions calls fn for each topic and its partitions in the topics
+// list.
+func (l TopicsList) EachPartitions(fn func(t string, ps []int32)) {
+	for _, t := range l {
+		fn(t.Topic, t.Partitions)
 	}
-	sort.Slice(l, func(i, j int) bool { return l[i].Topic < l[j].Topic })
-	return l
+}
+
+// EmptyTopics returns all topics with no partitions.
+func (l TopicsList) EmptyTopics() []string {
+	var e []string
+	for _, t := range l {
+		if len(t.Partitions) == 0 {
+			e = append(e, t.Topic)
+		}
+	}
+	return e
+}
+
+// Topics returns all topics in this set in sorted order.
+func (l TopicsList) Topics() []string {
+	ts := make([]string, 0, len(l))
+	for _, t := range l {
+		ts = append(ts, t.Topic)
+	}
+	sort.Strings(ts)
+	return ts
 }
 
 // IntoSet returns this list as a set.
