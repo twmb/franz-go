@@ -513,3 +513,117 @@ func (cl *Client) ListTransactions(ctx context.Context, producerIDs []int64, fil
 		return nil
 	})
 }
+
+// TxnMarkers marks the end of a partition: the producer ID / epoch doing the
+// writing, whether this is a commit, the coordinator epoch of the broker we
+// are writing to (for fencing), and the topics and partitions that we are
+// writing this abort or commit for.
+//
+// This is a very low level admin request and should likely be built from data
+// in a DescribeProducers response. See KIP-664 if you are trying to use this.
+type TxnMarkers struct {
+	ProducerID       int64     // ProducerID is the ID to write markers for.
+	ProducerEpoch    int16     // ProducerEpoch is the epoch to write markers for.
+	Commit           bool      // Commit is true if we are committing, false if we are aborting.
+	CoordinatorEpoch int32     // CoordinatorEpoch is the epoch of the transactional coordinator we are writing to; this is used for fencing.
+	Topics           TopicsSet // Topics are topics and partitions to write markers for.
+}
+
+// TxnMarkersPartitionResponse is a response to a topic's partition within a
+// single marker written.
+type TxnMarkersPartitionResponse struct {
+	NodeID     int32  // NodeID is the node that this marker was written to.
+	ProducerID int64  // ProducerID corresponds to the PID in the write marker request.
+	Topic      string // Topic is the topic being responded to.
+	Partition  int32  // Partition is the partition being responded to.
+	Err        error  // Err is non-nil if the WriteTxnMarkers request for this pid/topic/partition failed.
+}
+
+// TxnMarkersPartitionResponses contains per-partition responses to a
+// WriteTxnMarkers request.
+type TxnMarkersPartitionResponses map[int32]TxnMarkersPartitionResponse
+
+// TxnMarkersTopicResponse is a response to a topic within a single marker
+// written.
+type TxnMarkersTopicResponse struct {
+	ProducerID int64                        // ProducerID corresponds to the PID in the write marker request.
+	Topic      string                       // Topic is the topic being responded to.
+	Partitions TxnMarkersPartitionResponses // Partitions are the responses for partitions in this marker.
+}
+
+// TxnMarkersTopicResponses contains per-topic responses to a WriteTxnMarkers
+// request.
+type TxnMarkersTopicResponses map[string]TxnMarkersTopicResponse
+
+// TxnMarkersResponse is a response for a single marker written.
+type TxnMarkersResponse struct {
+	ProducerID int64                    // ProducerID corresponds to the PID in the write marker request.
+	Topics     TxnMarkersTopicResponses // Topics contains the topics that markers were written for, for this ProducerID.
+}
+
+// TxnMarkersResponse contains per-partition-ID responses to a WriteTxnMarkers
+// request.
+type TxnMarkersResponses map[int64]TxnMarkersResponse
+
+// WriteTxnMarkers writes transaction markers to brokers. This is an advanced
+// admin way to close out open transactions. See KIP-664 for more details.
+//
+// This may return *ShardErrors or *AuthError.
+func (cl *Client) WriteTxnMarkers(ctx context.Context, markers []TxnMarkers) (TxnMarkersResponses, error) {
+	req := kmsg.NewPtrWriteTxnMarkersRequest()
+	for _, m := range markers {
+		rm := kmsg.NewWriteTxnMarkersRequestMarker()
+		rm.ProducerID = m.ProducerID
+		rm.ProducerEpoch = m.ProducerEpoch
+		rm.Committed = m.Commit
+		rm.CoordinatorEpoch = m.CoordinatorEpoch
+		for t, ps := range m.Topics {
+			rt := kmsg.NewWriteTxnMarkersRequestMarkerTopic()
+			rt.Topic = t
+			for p := range ps {
+				rt.Partitions = append(rt.Partitions, p)
+			}
+			rm.Topics = append(rm.Topics, rt)
+		}
+		req.Markers = append(req.Markers, rm)
+	}
+	shards := cl.cl.RequestSharded(ctx, req)
+	rs := make(TxnMarkersResponses)
+	return rs, shardErrEachBroker(req, shards, func(b BrokerDetail, kr kmsg.Response) error {
+		resp := kr.(*kmsg.WriteTxnMarkersResponse)
+		for _, rm := range resp.Markers {
+			m, exists := rs[rm.ProducerID] // partitions are spread around, our marker could be split: we need to check existence
+			if !exists {
+				m = TxnMarkersResponse{
+					ProducerID: rm.ProducerID,
+					Topics:     make(TxnMarkersTopicResponses),
+				}
+				rs[rm.ProducerID] = m
+			}
+			for _, rt := range rm.Topics {
+				t, exists := m.Topics[rt.Topic]
+				if !exists { // same thought
+					t = TxnMarkersTopicResponse{
+						ProducerID: rm.ProducerID,
+						Topic:      rt.Topic,
+						Partitions: make(TxnMarkersPartitionResponses),
+					}
+					m.Topics[rt.Topic] = t
+				}
+				for _, rp := range rt.Partitions {
+					if err := maybeAuthErr(rp.ErrorCode); err != nil {
+						return err
+					}
+					t.Partitions[rp.Partition] = TxnMarkersPartitionResponse{ // one partition globally, no need to exist-check
+						NodeID:     b.NodeID,
+						ProducerID: rm.ProducerID,
+						Topic:      rt.Topic,
+						Partition:  rp.Partition,
+						Err:        kerr.ErrorForCode(rp.ErrorCode),
+					}
+				}
+			}
+		}
+		return nil
+	})
+}
