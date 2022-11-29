@@ -143,7 +143,7 @@ func (cl *Client) describeConfigs(
 				}
 				rc.Configs = append(rc.Configs, rcv)
 			}
-			configs = append(configs, rc)
+			configs = append(configs, rc) // we are not storing in a map, no existence-check possible
 		}
 		return nil
 	})
@@ -315,7 +315,7 @@ func (cl *Client) alterConfigs(
 	return rs, shardErrEach(req, shards, func(kr kmsg.Response) error {
 		resp := kr.(*kmsg.IncrementalAlterConfigsResponse)
 		for _, r := range resp.Resources {
-			rs = append(rs, AlterConfigsResponse{
+			rs = append(rs, AlterConfigsResponse{ // we are not storing in a map, no existence check possible
 				Name: r.ResourceName,
 				Err:  kerr.ErrorForCode(r.ErrorCode),
 			})
