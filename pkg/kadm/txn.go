@@ -203,12 +203,15 @@ func (cl *Client) DescribeProducers(ctx context.Context, s TopicsSet) (Described
 	return dts, shardErrEachBroker(req, shards, func(b BrokerDetail, kr kmsg.Response) error {
 		resp := kr.(*kmsg.DescribeProducersResponse)
 		for _, rt := range resp.Topics {
-			dps := make(DescribedProducersPartitions)
-			dt := DescribedProducersTopic{
-				Topic:      rt.Topic,
-				Partitions: dps,
+			dt, exists := dts[rt.Topic]
+			if !exists { // topic could be spread around brokers, we need to check existence
+				dt = DescribedProducersTopic{
+					Topic:      rt.Topic,
+					Partitions: make(DescribedProducersPartitions),
+				}
+				dts[rt.Topic] = dt
 			}
-			dts[rt.Topic] = dt
+			dps := dt.Partitions
 			for _, rp := range rt.Partitions {
 				if err := maybeAuthErr(rp.ErrorCode); err != nil {
 					return err
@@ -221,7 +224,7 @@ func (cl *Client) DescribeProducers(ctx context.Context, s TopicsSet) (Described
 					ActiveProducers: drs,
 					Err:             kerr.ErrorForCode(rp.ErrorCode),
 				}
-				dps[rp.Partition] = dp
+				dps[rp.Partition] = dp // one partition globally, no need to exist-check
 				for _, rr := range rp.ActiveProducers {
 					dr := DescribedProducer{
 						Leader:                b.NodeID,
@@ -369,8 +372,7 @@ func (cl *Client) DescribeTransactions(ctx context.Context, txnIDs ...string) (D
 			for _, rtt := range rt.Topics {
 				t.Topics.Add(rtt.Topic, rtt.Partitions...)
 			}
-			described[t.TxnID] = t
-
+			described[t.TxnID] = t // txnID lives on one coordinator, no need to exist-check
 		}
 		return nil
 	})
@@ -450,7 +452,7 @@ func (cl *Client) ListTransactions(ctx context.Context, producerIDs []int64, fil
 			return err
 		}
 		for _, t := range resp.TransactionStates {
-			list[t.TransactionalID] = ListedTransaction{
+			list[t.TransactionalID] = ListedTransaction{ // txnID lives on one coordinator, no need to exist-check
 				Coordinator: b.NodeID,
 				TxnID:       t.TransactionalID,
 				ProducerID:  t.ProducerID,

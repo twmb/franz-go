@@ -223,7 +223,7 @@ func (cl *Client) ListGroups(ctx context.Context, filterStates ...string) (Liste
 			return err
 		}
 		for _, g := range resp.Groups {
-			list[g.Group] = ListedGroup{
+			list[g.Group] = ListedGroup{ // group only lives on one broker, no need to exist-check
 				Coordinator:  b.NodeID,
 				Group:        g.Group,
 				ProtocolType: g.ProtocolType,
@@ -327,7 +327,7 @@ func (cl *Client) DescribeGroups(ctx context.Context, groups ...string) (Describ
 				}
 				return g.Members[i].MemberID < g.Members[j].MemberID
 			})
-			described[g.Group] = g
+			described[g.Group] = g // group only lives on one broker, no need to exist-check
 		}
 		return nil
 	})
@@ -405,7 +405,7 @@ func (cl *Client) DeleteGroups(ctx context.Context, groups ...string) (DeleteGro
 	return rs, shardErrEach(req, shards, func(kr kmsg.Response) error {
 		resp := kr.(*kmsg.DeleteGroupsResponse)
 		for _, g := range resp.Groups {
-			rs[g.Group] = DeleteGroupResponse{
+			rs[g.Group] = DeleteGroupResponse{ // group is always on one broker, no need to exist-check
 				Group: g.Group,
 				Err:   kerr.ErrorForCode(g.ErrorCode),
 			}
@@ -990,7 +990,7 @@ func (cl *Client) FetchManyOffsets(ctx context.Context, groups ...string) FetchO
 				Fetched: rs,
 				Err:     kerr.ErrorForCode(g.ErrorCode),
 			}
-			fetched[g.Group] = fg
+			fetched[g.Group] = fg // group coordinator owns all of a group, no need to check existence
 			for _, t := range g.Topics {
 				rt := make(map[int32]OffsetResponse)
 				rs[t.Topic] = rt

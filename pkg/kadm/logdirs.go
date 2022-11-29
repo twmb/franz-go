@@ -171,7 +171,7 @@ func (cl *Client) AlterAllReplicaLogDirs(ctx context.Context, alter AlterReplica
 	resps := make(AlterAllReplicaLogDirsResponses)
 	return resps, shardErrEachBroker(req, shards, func(b BrokerDetail, kr kmsg.Response) error {
 		resp := kr.(*kmsg.AlterReplicaLogDirsResponse)
-		resps[b.NodeID] = newAlterLogDirsResp(b.NodeID, alter, resp)
+		resps[b.NodeID] = newAlterLogDirsResp(b.NodeID, alter, resp) // one node ID, no need to unique-check
 		return nil
 	})
 }
@@ -566,7 +566,7 @@ func (cl *Client) DescribeAllLogDirs(ctx context.Context, s TopicsSet) (Describe
 		if err := kerr.ErrorForCode(resp.ErrorCode); err != nil {
 			return err
 		}
-		resps[b.NodeID] = newDescribeLogDirsResp(b.NodeID, resp)
+		resps[b.NodeID] = newDescribeLogDirsResp(b.NodeID, resp) // one node ID, no need to unique-check
 		return nil
 	})
 }

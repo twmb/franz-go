@@ -136,7 +136,7 @@ func (cl *Client) findCoordinators(ctx context.Context, kind int8, names ...stri
 				keyErr(c.Key, err)
 				continue
 			}
-			resps[c.Key] = FindCoordinatorResponse{
+			resps[c.Key] = FindCoordinatorResponse{ // key is always on one broker, no need to check existence
 				Name:       c.Key,
 				NodeID:     c.NodeID,
 				Host:       c.Host,
@@ -916,13 +916,16 @@ func (cl *Client) OffetForLeaderEpoch(ctx context.Context, r OffsetForLeaderEpoc
 	return ls, shardErrEachBroker(req, shards, func(b BrokerDetail, kr kmsg.Response) error {
 		resp := kr.(*kmsg.OffsetForLeaderEpochResponse)
 		for _, rt := range resp.Topics {
-			lps := make(map[int32]OffsetForLeaderEpoch)
-			ls[rt.Topic] = lps
+			lps, exists := ls[rt.Topic]
+			if !exists { // topic partitions could be spread around brokers, need to check existence
+				lps = make(map[int32]OffsetForLeaderEpoch)
+				ls[rt.Topic] = lps
+			}
 			for _, rp := range rt.Partitions {
 				if err := maybeAuthErr(rp.ErrorCode); err != nil {
 					return err
 				}
-				lps[rp.Partition] = OffsetForLeaderEpoch{
+				lps[rp.Partition] = OffsetForLeaderEpoch{ // one partition globally, no need to exist check
 					NodeID:      b.NodeID,
 					Topic:       rt.Topic,
 					Partition:   rp.Partition,

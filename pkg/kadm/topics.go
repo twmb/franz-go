@@ -371,8 +371,11 @@ func (cl *Client) DeleteRecords(ctx context.Context, os Offsets) (DeleteRecordsR
 	return rs, shardErrEach(req, shards, func(kr kmsg.Response) error {
 		resp := kr.(*kmsg.DeleteRecordsResponse)
 		for _, t := range resp.Topics {
-			rt := make(map[int32]DeleteRecordsResponse)
-			rs[t.Topic] = rt
+			rt, exists := rs[t.Topic]
+			if !exists { // topic could be spread around brokers, we need to check existence
+				rt = make(map[int32]DeleteRecordsResponse)
+				rs[t.Topic] = rt
+			}
 			for _, p := range t.Partitions {
 				rt[p.Partition] = DeleteRecordsResponse{
 					Topic:        t.Topic,
