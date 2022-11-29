@@ -1255,22 +1255,32 @@ func (recBuf *recBuf) bumpRepeatedLoadErr(err error) {
 	if len(recBuf.batches) == 0 {
 		return
 	}
-	recBuf.cl.cfg.logger.Log(LogLevelWarn, "produce partition load error, bumping error count on first stored batch", "broker", logID(recBuf.sink.nodeID), "topic", recBuf.topic, "partition", recBuf.partition, "err", err)
 	batch0 := recBuf.batches[0]
 	batch0.tries++
 
-	canFail := !recBuf.cl.idempotent() || batch0.canFailFromLoadErrs
-	if !canFail {
-		return
-	}
+	var (
+		canFail        = !recBuf.cl.idempotent() || batch0.canFailFromLoadErrs // we can only fail if we are not idempotent or if we have no outstanding requests
+		batch0Fail     = batch0.maybeFailErr(&recBuf.cl.cfg) != nil            // timeout, retries, or aborting
+		netErr         = isRetriableBrokerErr(err) || isDialErr(err)           // we can fail if this is *not* a network error
+		retriableKerr  = kerr.IsRetriable(err)                                 // we fail if this is not a retriable kerr,
+		isUnknownLimit = recBuf.checkUnknownFailLimit(err)                     // or if it is, but it is UnknownTopicOrPartition and we are at our limit
 
-	batch0Fail := batch0.maybeFailErr(&recBuf.cl.cfg) != nil // timeout, retries, or aborting
+		willFail = canFail && (batch0Fail || !netErr && (!retriableKerr || retriableKerr && isUnknownLimit))
+	)
 
-	okNet := !isRetriableBrokerErr(err) && !isDialErr(err) // we can fail if this is *not* a network error
-	retriableKerr := kerr.IsRetriable(err)                 // we fail if this is not a retriable kerr,
-	isUnknownLimit := recBuf.checkUnknownFailLimit(err)    // or if it is, but it is UnknownTopicOrPartition and we are at our limit
-
-	if batch0Fail || okNet && (!retriableKerr || retriableKerr && isUnknownLimit) {
+	recBuf.cl.cfg.logger.Log(LogLevelWarn, "produce partition load error, bumping error count on first stored batch",
+		"broker", logID(recBuf.sink.nodeID),
+		"topic", recBuf.topic,
+		"partition", recBuf.partition,
+		"err", err,
+		"can_fail", canFail,
+		"batch0_should_fail", batch0Fail,
+		"is_network_err", netErr,
+		"is_retriable_kerr", retriableKerr,
+		"is_unknown_limit", isUnknownLimit,
+		"will_fail", willFail,
+	)
+	if willFail {
 		recBuf.failAllRecords(err)
 	}
 }
