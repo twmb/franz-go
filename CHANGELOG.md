@@ -1,3 +1,19 @@
+v1.10.1
+===
+
+This patch release contains minor kgo internal improvements, and enables a new
+API for kadm. This patch contains no bug fixes. This patch should help recover
+faster if a transaction coordinator goes down while producing.
+
+This is released in tandem with kadm v1.6.0, which contains a small kadm bugfix
+for `DeleteRecords`, `OffsetForLeaderEpoch`, and `DescribeProducers`, and
+(hopefully) finishes support for all current admin APIs.
+
+- [`56fcfb4`](https://github.com/twmb/franz-go/commit/56fcfb4) sink: log all aspects of wanting to / failing records
+- [`9ee5efa`](https://github.com/twmb/franz-go/commit/9ee5efa) sink: update metadata when AddPartitionsToTxn fails repeatedly
+- [`bc6810d`](https://github.com/twmb/franz-go/commit/bc6810d) broker: hide retryable errors *once*
+- [`83f0dbe`](https://github.com/twmb/franz-go/commit/83f0dbe) kgo: add support for sharding WriteTxnMarkers
+
 v1.10.0
 ===
 
