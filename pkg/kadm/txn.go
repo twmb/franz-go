@@ -543,6 +543,26 @@ type TxnMarkersPartitionResponse struct {
 // WriteTxnMarkers request.
 type TxnMarkersPartitionResponses map[int32]TxnMarkersPartitionResponse
 
+// Sorted returns all partitions sorted by partition.
+func (ps TxnMarkersPartitionResponses) Sorted() []TxnMarkersPartitionResponse {
+	var all []TxnMarkersPartitionResponse
+	ps.Each(func(p TxnMarkersPartitionResponse) {
+		all = append(all, p)
+	})
+	sort.Slice(all, func(i, j int) bool {
+		l, r := all[i], all[j]
+		return l.Partition < r.Partition
+	})
+	return all
+}
+
+// Each calls fn for each partition.
+func (ps TxnMarkersPartitionResponses) Each(fn func(TxnMarkersPartitionResponse)) {
+	for _, p := range ps {
+		fn(p)
+	}
+}
+
 // TxnMarkersTopicResponse is a response to a topic within a single marker
 // written.
 type TxnMarkersTopicResponse struct {
@@ -555,6 +575,48 @@ type TxnMarkersTopicResponse struct {
 // request.
 type TxnMarkersTopicResponses map[string]TxnMarkersTopicResponse
 
+// Sorted returns all topics sorted by topic.
+func (ts TxnMarkersTopicResponses) Sorted() []TxnMarkersTopicResponse {
+	var all []TxnMarkersTopicResponse
+	ts.Each(func(t TxnMarkersTopicResponse) {
+		all = append(all, t)
+	})
+	sort.Slice(all, func(i, j int) bool {
+		l, r := all[i], all[j]
+		return l.Topic < r.Topic
+	})
+	return all
+}
+
+// SortedPartitions returns all topics sorted by topic then partition.
+func (ts TxnMarkersTopicResponses) SortedPartitions() []TxnMarkersPartitionResponse {
+	var all []TxnMarkersPartitionResponse
+	ts.EachPartition(func(p TxnMarkersPartitionResponse) {
+		all = append(all, p)
+	})
+	sort.Slice(all, func(i, j int) bool {
+		l, r := all[i], all[j]
+		return l.Topic < r.Topic || l.Topic == r.Topic && l.Partition < r.Partition
+	})
+	return all
+}
+
+// Each calls fn for each topic.
+func (ts TxnMarkersTopicResponses) Each(fn func(TxnMarkersTopicResponse)) {
+	for _, t := range ts {
+		fn(t)
+	}
+}
+
+// EachPartition calls fn for every partition in all topics.
+func (ts TxnMarkersTopicResponses) EachPartition(fn func(TxnMarkersPartitionResponse)) {
+	for _, t := range ts {
+		for _, p := range t.Partitions {
+			fn(p)
+		}
+	}
+}
+
 // TxnMarkersResponse is a response for a single marker written.
 type TxnMarkersResponse struct {
 	ProducerID int64                    // ProducerID corresponds to the PID in the write marker request.
@@ -565,11 +627,79 @@ type TxnMarkersResponse struct {
 // request.
 type TxnMarkersResponses map[int64]TxnMarkersResponse
 
+// Sorted returns all markers sorted by producer ID.
+func (ms TxnMarkersResponses) Sorted() []TxnMarkersResponse {
+	var all []TxnMarkersResponse
+	ms.Each(func(m TxnMarkersResponse) {
+		all = append(all, m)
+	})
+	sort.Slice(all, func(i, j int) bool {
+		l, r := all[i], all[j]
+		return l.ProducerID < r.ProducerID
+	})
+	return all
+}
+
+// SortedTopics returns all marker topics sorted by producer ID then topic.
+func (ms TxnMarkersResponses) SortedTopics() []TxnMarkersTopicResponse {
+	var all []TxnMarkersTopicResponse
+	ms.EachTopic(func(t TxnMarkersTopicResponse) {
+		all = append(all, t)
+	})
+	sort.Slice(all, func(i, j int) bool {
+		l, r := all[i], all[j]
+		return l.ProducerID < r.ProducerID || l.ProducerID == r.ProducerID && l.Topic < r.Topic
+	})
+	return all
+}
+
+// SortedPartitions returns all marker topic partitions sorted by producer ID
+// then topic then partition.
+func (ms TxnMarkersResponses) SortedPartitions() []TxnMarkersPartitionResponse {
+	var all []TxnMarkersPartitionResponse
+	ms.EachPartition(func(p TxnMarkersPartitionResponse) {
+		all = append(all, p)
+	})
+	sort.Slice(all, func(i, j int) bool {
+		l, r := all[i], all[j]
+		return l.ProducerID < r.ProducerID || l.ProducerID == r.ProducerID && l.Topic < r.Topic || l.Topic == r.Topic && l.Partition < r.Partition
+	})
+	return all
+}
+
+// Each calls fn for each marker response.
+func (ms TxnMarkersResponses) Each(fn func(TxnMarkersResponse)) {
+	for _, m := range ms {
+		fn(m)
+	}
+}
+
+// EachTopic calls fn for every topic in all marker responses.
+func (ms TxnMarkersResponses) EachTopic(fn func(TxnMarkersTopicResponse)) {
+	for _, m := range ms {
+		for _, t := range m.Topics {
+			fn(t)
+		}
+	}
+}
+
+// EachPartition calls fn for every partition in all topics in all marker
+// responses.
+func (ms TxnMarkersResponses) EachPartition(fn func(TxnMarkersPartitionResponse)) {
+	for _, m := range ms {
+		for _, t := range m.Topics {
+			for _, p := range t.Partitions {
+				fn(p)
+			}
+		}
+	}
+}
+
 // WriteTxnMarkers writes transaction markers to brokers. This is an advanced
 // admin way to close out open transactions. See KIP-664 for more details.
 //
 // This may return *ShardErrors or *AuthError.
-func (cl *Client) WriteTxnMarkers(ctx context.Context, markers []TxnMarkers) (TxnMarkersResponses, error) {
+func (cl *Client) WriteTxnMarkers(ctx context.Context, markers ...TxnMarkers) (TxnMarkersResponses, error) {
 	req := kmsg.NewPtrWriteTxnMarkersRequest()
 	for _, m := range markers {
 		rm := kmsg.NewWriteTxnMarkersRequestMarker()
