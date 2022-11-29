@@ -374,7 +374,7 @@ func (ds DescribedTransactions) TransactionalIDs() []string {
 // DescribeTransactions describes either all transactional IDs specified, or
 // all transactional IDs in the cluster if none are specified.
 //
-// This may return *ShardErrors.
+// This may return *ShardErrors or *AuthError.
 //
 // If no transactional IDs are specified and this method first lists
 // transactional IDs, and listing IDs returns a *ShardErrors, this function
@@ -487,7 +487,7 @@ func (ls ListedTransactions) TransactionalIDs() []string {
 // to. Producer IDs can be specified to filter for transactions from the given
 // producer.
 //
-// This may return *ShardErrors.
+// This may return *ShardErrors or *AuthError.
 func (cl *Client) ListTransactions(ctx context.Context, producerIDs []int64, filterStates []string) (ListedTransactions, error) {
 	req := kmsg.NewPtrListTransactionsRequest()
 	req.ProducerIDFilters = producerIDs
