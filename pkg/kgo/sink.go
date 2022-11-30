@@ -2158,7 +2158,7 @@ func (b seqRecBatch) appendToAsMessageSet(dst []byte, version uint8, compressor 
 			dst = appendMessageTo(
 				dst[:nullableBytesLenAt+4],
 				version,
-				codec,
+				int8(codec),
 				int64(len(b.records)-1),
 				b.firstTimestamp,
 				inner,

@@ -24,31 +24,41 @@ func (s *sliceWriter) Write(p []byte) (int, error) {
 
 var sliceWriters = sync.Pool{New: func() interface{} { r := make([]byte, 8<<10); return &sliceWriter{inner: r} }}
 
+type codecType int8
+
+const (
+	codecNone = iota
+	codecGzip
+	codecSnappy
+	codecLZ4
+	codecZstd
+)
+
 // CompressionCodec configures how records are compressed before being sent.
 //
 // Records are compressed within individual topics and partitions, inside of a
 // RecordBatch. All records in a RecordBatch are compressed into one record
 // for that batch.
 type CompressionCodec struct {
-	codec int8 // 1: gzip, 2: snappy, 3: lz4, 4: zstd
+	codec codecType
 	level int8
 }
 
 // NoCompression is a compression option that avoids compression. This can
 // always be used as a fallback compression.
-func NoCompression() CompressionCodec { return CompressionCodec{0, 0} }
+func NoCompression() CompressionCodec { return CompressionCodec{codecNone, 0} }
 
 // GzipCompression enables gzip compression with the default compression level.
-func GzipCompression() CompressionCodec { return CompressionCodec{1, gzip.DefaultCompression} }
+func GzipCompression() CompressionCodec { return CompressionCodec{codecGzip, gzip.DefaultCompression} }
 
 // SnappyCompression enables snappy compression.
-func SnappyCompression() CompressionCodec { return CompressionCodec{2, 0} }
+func SnappyCompression() CompressionCodec { return CompressionCodec{codecSnappy, 0} }
 
 // Lz4Compression enables lz4 compression with the fastest compression level.
-func Lz4Compression() CompressionCodec { return CompressionCodec{3, 0} }
+func Lz4Compression() CompressionCodec { return CompressionCodec{codecLZ4, 0} }
 
 // ZstdCompression enables zstd compression with the default compression level.
-func ZstdCompression() CompressionCodec { return CompressionCodec{4, 0} }
+func ZstdCompression() CompressionCodec { return CompressionCodec{codecZstd, 0} }
 
 // WithLevel changes the compression codec's "level", effectively allowing for
 // higher or lower compression ratios at the expense of CPU speed.
@@ -66,7 +76,7 @@ func (c CompressionCodec) WithLevel(level int) CompressionCodec {
 }
 
 type compressor struct {
-	options  []int8
+	options  []codecType
 	gzPool   sync.Pool
 	lz4Pool  sync.Pool
 	zstdPool sync.Pool
@@ -77,7 +87,7 @@ func newCompressor(codecs ...CompressionCodec) (*compressor, error) {
 		return nil, nil
 	}
 
-	used := make(map[int8]bool) // we keep one type of codec per CompressionCodec
+	used := make(map[codecType]bool) // we keep one type of codec per CompressionCodec
 	var keepIdx int
 	for _, codec := range codecs {
 		if _, exists := used[codec.codec]; exists {
@@ -101,9 +111,9 @@ out:
 	for _, codec := range codecs {
 		c.options = append(c.options, codec.codec)
 		switch codec.codec {
-		case 0:
+		case codecNone:
 			break out
-		case 1:
+		case codecGzip:
 			level := gzip.DefaultCompression
 			if codec.level != 0 {
 				if _, err := gzip.NewWriterLevel(nil, int(codec.level)); err != nil {
@@ -111,7 +121,7 @@ out:
 				}
 			}
 			c.gzPool = sync.Pool{New: func() interface{} { c, _ := gzip.NewWriterLevel(nil, level); return c }}
-		case 3:
+		case codecLZ4:
 			level := codec.level
 			if level < 0 {
 				level = 0 // 0 == lz4.Fast
@@ -127,7 +137,7 @@ out:
 			}
 			w.Close()
 			c.lz4Pool = sync.Pool{New: fn}
-		case 4:
+		case codecZstd:
 			opts := []zstd.EOption{
 				zstd.WithWindowSize(64 << 10),
 				zstd.WithEncoderConcurrency(1),
@@ -148,7 +158,7 @@ out:
 		}
 	}
 
-	if c.options[0] == 0 {
+	if c.options[0] == codecNone {
 		return nil, nil // first codec was passthrough
 	}
 
@@ -164,12 +174,12 @@ type zstdEncoder struct {
 //
 // The writer should be put back to its pool after the returned slice is done
 // being used.
-func (c *compressor) compress(dst *sliceWriter, src []byte, produceRequestVersion int16) ([]byte, int8) {
+func (c *compressor) compress(dst *sliceWriter, src []byte, produceRequestVersion int16) ([]byte, codecType) {
 	dst.inner = dst.inner[:0]
 
-	var use int8
+	var use codecType
 	for _, option := range c.options {
-		if option == 4 && produceRequestVersion < 7 {
+		if option == codecZstd && produceRequestVersion < 7 {
 			continue
 		}
 		use = option
@@ -177,9 +187,9 @@ func (c *compressor) compress(dst *sliceWriter, src []byte, produceRequestVersio
 	}
 
 	switch use {
-	case 0:
+	case codecNone:
 		return src, 0
-	case 1:
+	case codecGzip:
 		gz := c.gzPool.Get().(*gzip.Writer)
 		defer c.gzPool.Put(gz)
 		gz.Reset(dst)
@@ -190,10 +200,10 @@ func (c *compressor) compress(dst *sliceWriter, src []byte, produceRequestVersio
 			return nil, -1
 		}
 
-	case 2:
+	case codecSnappy:
 		dst.inner = s2.EncodeSnappy(dst.inner[:cap(dst.inner)], src)
 
-	case 3:
+	case codecLZ4:
 		lz := c.lz4Pool.Get().(*lz4.Writer)
 		defer c.lz4Pool.Put(lz)
 		lz.Reset(dst)
@@ -203,7 +213,7 @@ func (c *compressor) compress(dst *sliceWriter, src []byte, produceRequestVersio
 		if err := lz.Close(); err != nil {
 			return nil, -1
 		}
-	case 4:
+	case codecZstd:
 		zstdEnc := c.zstdPool.Get().(*zstdEncoder)
 		defer c.zstdPool.Put(zstdEnc)
 		dst.inner = zstdEnc.inner.EncodeAll(src, dst.inner)
