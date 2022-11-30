@@ -158,7 +158,7 @@ func (t *txnReqBuilder) add(rb *recBuf) {
 	if t.txnID == nil {
 		return
 	}
-	if rb.addedToTxn.swap(true) {
+	if rb.addedToTxn.Swap(true) {
 		return
 	}
 	if t.req == nil {
@@ -443,7 +443,7 @@ func (s *sink) doTxnReq(
 // inflight, and that it was not added to the txn and that we need to reset the
 // drain index.
 func (b *recBatch) removeFromTxn() {
-	b.owner.addedToTxn.set(false)
+	b.owner.addedToTxn.Store(false)
 	b.owner.resetBatchDrainIdx()
 	b.decInflight()
 }

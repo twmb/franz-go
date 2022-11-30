@@ -371,7 +371,7 @@ func (g *groupConsumer) manage() {
 			g.lastAssigned = nil
 			g.fetching = nil
 
-			g.leader.set(false)
+			g.leader.Store(false)
 			g.resetExternal()
 		}
 
@@ -992,13 +992,13 @@ func (g *groupConsumer) rejoin(why string) {
 // for group cancelation to return early.
 func (g *groupConsumer) joinAndSync(joinWhy string) error {
 	g.cfg.logger.Log(LogLevelInfo, "joining group", "group", g.cfg.group)
-	g.leader.set(false)
+	g.leader.Store(false)
 	g.getAndResetExternalRejoin()
 	defer func() {
 		// If we are not leader, we clear any tracking of external
 		// topics from when we were previously leader, since tracking
 		// these is just a waste.
-		if !g.leader.get() {
+		if !g.leader.Load() {
 			g.resetExternal()
 		}
 	}()
@@ -1169,7 +1169,7 @@ func (g *groupConsumer) handleJoinResp(resp *kmsg.JoinGroupResponse) (restart bo
 	leader := resp.LeaderID == resp.MemberID
 	leaderNoPlan := !leader && resp.Version <= 8 && g.cfg.instanceID != nil && strings.HasPrefix(resp.LeaderID, *g.cfg.instanceID+"-")
 	if leader {
-		g.leader.set(true)
+		g.leader.Store(true)
 		g.cfg.logger.Log(LogLevelInfo, "joined, balancing group",
 			"group", g.cfg.group,
 			"member_id", g.memberID,
@@ -1180,7 +1180,7 @@ func (g *groupConsumer) handleJoinResp(resp *kmsg.JoinGroupResponse) (restart bo
 		)
 		plan, err = g.balanceGroup(protocol, resp.Members, resp.SkipAssignment)
 	} else if leaderNoPlan {
-		g.leader.set(true)
+		g.leader.Store(true)
 		g.cfg.logger.Log(LogLevelInfo, "joined as leader but unable to balance group due to KIP-345 limitations",
 			"group", g.cfg.group,
 			"member_id", g.memberID,
@@ -1259,8 +1259,8 @@ func (g *groupConsumer) getAndResetExternalRejoin() bool {
 	if e == nil {
 		return false
 	}
-	defer e.rejoin.set(false)
-	return e.rejoin.get()
+	defer e.rejoin.Store(false)
+	return e.rejoin.Load()
 }
 
 // Runs fn over a load, not copy, of our map.
@@ -1307,7 +1307,7 @@ func (g *groupExternal) updateLatest(meta map[string]*metadataTopic) {
 			}
 		}
 		if rejoin {
-			g.rejoin.set(true)
+			g.rejoin.Store(true)
 		}
 	})
 }
@@ -1662,7 +1662,7 @@ func (g *groupConsumer) findNewAssignments() {
 		}
 	}
 
-	externalRejoin := g.leader.get() && g.getAndResetExternalRejoin()
+	externalRejoin := g.leader.Load() && g.getAndResetExternalRejoin()
 
 	if len(toChange) == 0 && !externalRejoin {
 		return
@@ -1687,7 +1687,7 @@ func (g *groupConsumer) findNewAssignments() {
 
 	if numNewTopics > 0 {
 		g.rejoin("rejoining because there are more topics to consume, our interests have changed")
-	} else if g.leader.get() {
+	} else if g.leader.Load() {
 		if len(toChange) > 0 {
 			g.rejoin("rejoining because we are the leader and noticed some topics have new partitions")
 		} else if externalRejoin {
