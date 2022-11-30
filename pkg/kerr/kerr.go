@@ -297,6 +297,8 @@ func makeCodeMapping() map[int16]error {
 		InconsistentClusterID,
 		TransactionalIDNotFound,
 		FetchSessionTopicIDError,
+		IneligibleReplica,
+		NewLeaderElected,
 	} {
 		if _, ok := mapping[e.Code]; ok {
 			panic("duplicate error code " + strconv.Itoa(int(e.Code)))
