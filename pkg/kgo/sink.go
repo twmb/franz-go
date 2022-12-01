@@ -1609,7 +1609,6 @@ func (p *produceRequest) tryAddBatch(produceVersion int32, recBuf *recBuf, batch
 	}
 
 	batch.tries++
-	batch.canFailFromLoadErrs = false
 	p.wireLength += batchWireLength
 	p.batches.addBatch(
 		recBuf.topic,
@@ -1932,6 +1931,7 @@ func (p *produceRequest) AppendTo(dst []byte) []byte {
 				batch.mu.Unlock()
 				continue
 			}
+			batch.canFailFromLoadErrs = false // we are going to write this batch: the response status is now unknown
 			var pmetrics ProduceBatchMetrics
 			if p.version < 3 {
 				dst, pmetrics = batch.appendToAsMessageSet(dst, uint8(p.version), p.compressor)
