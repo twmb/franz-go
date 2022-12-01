@@ -180,7 +180,7 @@ There are two easy patterns to success for offset management in a normal
 consumer group.
 
 First and the most recommended option, you can just rely on the default
-autocommiting behavior and the default blocking commit on leave. At most, you
+autocommitting behavior and the default blocking commit on leave. At most, you
 may want to use your own custom commit callback.
 
 Alternatively, you can disable autocommitting with [`DisableAutoCommit`][19]
@@ -202,7 +202,7 @@ Because an EOS consumer is difficult to implement correctly, all details have
 been abstracted away to a [`GroupTransactSession`][20] type. See the
 [transactions](./transactions.md) page for more details.
 
-### The cooperative balancer
+##### The cooperative balancer
 
 Kafka 2.4.0 introduced support for [KIP-429][21], the incremental rebalancing
 protocol. This allows consumers to continue fetching records **during** a
@@ -221,7 +221,7 @@ Cooperative rebalancing allows a client to continue fetching during rebalances,
 even during transactions. For transactions, a transact session will only be
 aborted if the member has partitions revoked.
 
-### Static membership
+##### Static membership
 
 Kafka 2.4.0 also introduced support for [KIP-345][22], the "static" member
 concept for consumer group members. This is a relatively simple concept that
