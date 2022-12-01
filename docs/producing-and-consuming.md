@@ -180,7 +180,7 @@ There are two easy patterns to success for offset management in a normal
 consumer group.
 
 First and the most recommended option, you can just rely on the default
-autocommiting behavior and the default blocking commit on leave. At most, you
+autocommitting behavior and the default blocking commit on leave. At most, you
 may want to use your own custom commit callback.
 
 Alternatively, you can disable autocommitting with [`DisableAutoCommit`][19]
