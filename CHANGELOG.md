@@ -1,3 +1,33 @@
+v1.10.2
+===
+
+This patch release contains one very minor bug fix, tightens a failure
+scenario, adds two missing errors to kerr, fixes a build constraint, and has a
+few internal style fixes from [@PleasingFungus][1.10.2:pf] (thanks!).
+
+[1.10.2:pf]: https://github.com/PleasingFungus
+
+The bug was introduced in v1.9.0 through a patch that fixed a potential spin
+loop. In fixing the spin loop, I inadvertently caused consumer fetch sessions
+to reset when there is no more data to consume. In your application, this would
+show up as more frequent metadata updates and up to 100ms of extra latency when
+there is new data to consume.
+
+The tightened failure scenario allows records to be failed in more cases.
+Previously, as soon as a record was added to a produce request internally, the
+record could not be failed until a produce response is received. This behavior
+exists for duplicate prevention. However, there is a period of time between a
+produce request being created and actually being written, and if an
+`AddPartitionsToTxn` request takes a long time and then fails, the produce
+request would never be written and the records could never be failed. The
+tightened failure scenario allows records to be failed all the way up until
+they are actually serialized and written.
+
+- [`0cf51ef`](https://github.com/twmb/franz-go/commit/0cf51ef) sink: tighten canFailFromLoadErrs
+- [`f2d5023`](https://github.com/twmb/franz-go/commit/f2d5023) **minor bugfix** source: avoid backoff / session reset when there is no consumed data
+- [`bb3d9c1`](https://github.com/twmb/franz-go/commit/bb3d9c1) kerr: add two missing errors to ErrorForCode
+- [PR #264](https://github.com/twmb/franz-go/pull/264) fix `isNetClosedErr` build constraints: franz-go was using the `strings.Contains` version, which was meant for Go 1.15 only (thanks [@PleasingFungus][1.10.2:pf]!)
+
 v1.10.1
 ===
 
