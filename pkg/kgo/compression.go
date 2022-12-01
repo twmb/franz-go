@@ -27,7 +27,7 @@ var sliceWriters = sync.Pool{New: func() interface{} { r := make([]byte, 8<<10);
 type codecType int8
 
 const (
-	codecNone = iota
+	codecNone codecType = iota
 	codecGzip
 	codecSnappy
 	codecLZ4
@@ -121,6 +121,7 @@ out:
 				}
 			}
 			c.gzPool = sync.Pool{New: func() interface{} { c, _ := gzip.NewWriterLevel(nil, level); return c }}
+		case codecSnappy: // (no pool needed for snappy)
 		case codecLZ4:
 			level := codec.level
 			if level < 0 {
