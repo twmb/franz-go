@@ -1691,7 +1691,7 @@ func NewConsumerMemberMetadataOwnedPartition() ConsumerMemberMetadataOwnedPartit
 // ConsumerMemberMetadata is the metadata that is usually sent with a join group
 // request with the "consumer" protocol (normal, non-connect consumers).
 type ConsumerMemberMetadata struct {
-	// Version is either version 0 or version 1.
+	// Version is 0, 1, or 2.
 	Version int16
 
 	// Topics is the list of topics in the group that this member is interested
@@ -1892,7 +1892,7 @@ func NewConsumerMemberAssignmentTopic() ConsumerMemberAssignmentTopic {
 // sync group request with the "consumer" protocol (normal, non-connect
 // consumers).
 type ConsumerMemberAssignment struct {
-	// Verson is currently version 0.
+	// Verson is 0, 1, or 2.
 	Version int16
 
 	// Topics contains topics in the assignment.
@@ -7018,14 +7018,20 @@ func NewLeaderAndISRRequestLiveLeader() LeaderAndISRRequestLiveLeader {
 // As this is an advanced request and there is little reason to issue it as a
 // client, this request is undocumented.
 //
-// Kafka 1.0.0 introduced version 1. Kafka 2.2.0 introduced version 2, proposed
+// Kafka 1.0 introduced version 1. Kafka 2.2 introduced version 2, proposed
 // in KIP-380, which changed the layout of the struct to be more memory
 // efficient. Kafka 2.4.0 introduced version 3 with KIP-455.
+// Kafka 3.4 introduced version 7 with KIP-866.
 type LeaderAndISRRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
 	ControllerID int32
+
+	// The KRaft controller id, used during migration. See KIP-866.
+	//
+	// This field has a default of -1.
+	KRaftControllerID int32 // v7+
 
 	ControllerEpoch int32
 
@@ -7045,7 +7051,7 @@ type LeaderAndISRRequest struct {
 }
 
 func (*LeaderAndISRRequest) Key() int16                 { return 4 }
-func (*LeaderAndISRRequest) MaxVersion() int16          { return 6 }
+func (*LeaderAndISRRequest) MaxVersion() int16          { return 7 }
 func (v *LeaderAndISRRequest) SetVersion(version int16) { v.Version = version }
 func (v *LeaderAndISRRequest) GetVersion() int16        { return v.Version }
 func (v *LeaderAndISRRequest) IsFlexible() bool         { return v.Version >= 4 }
@@ -7069,6 +7075,10 @@ func (v *LeaderAndISRRequest) AppendTo(dst []byte) []byte {
 	_ = isFlexible
 	{
 		v := v.ControllerID
+		dst = kbin.AppendInt32(dst, v)
+	}
+	if version >= 7 {
+		v := v.KRaftControllerID
 		dst = kbin.AppendInt32(dst, v)
 	}
 	{
@@ -7365,6 +7375,10 @@ func (v *LeaderAndISRRequest) readFrom(src []byte, unsafe bool) error {
 	{
 		v := b.Int32()
 		s.ControllerID = v
+	}
+	if version >= 7 {
+		v := b.Int32()
+		s.KRaftControllerID = v
 	}
 	{
 		v := b.Int32()
@@ -7823,6 +7837,7 @@ func NewPtrLeaderAndISRRequest() *LeaderAndISRRequest {
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to LeaderAndISRRequest.
 func (v *LeaderAndISRRequest) Default() {
+	v.KRaftControllerID = -1
 	v.BrokerEpoch = -1
 }
 
@@ -7872,7 +7887,7 @@ type LeaderAndISRResponse struct {
 }
 
 func (*LeaderAndISRResponse) Key() int16                 { return 4 }
-func (*LeaderAndISRResponse) MaxVersion() int16          { return 6 }
+func (*LeaderAndISRResponse) MaxVersion() int16          { return 7 }
 func (v *LeaderAndISRResponse) SetVersion(version int16) { v.Version = version }
 func (v *LeaderAndISRResponse) GetVersion() int16        { return v.Version }
 func (v *LeaderAndISRResponse) IsFlexible() bool         { return v.Version >= 4 }
@@ -8214,11 +8229,12 @@ func NewStopReplicaRequestTopic() StopReplicaRequestTopic {
 // As this is an advanced request and there is little reason to issue it as a
 // client, this request is undocumented.
 //
-// Kafka 2.2.0 introduced version 1, proposed in KIP-380, which changed the
+// Kafka 2.2 introduced version 1, proposed in KIP-380, which changed the
 // layout of the struct to be more memory efficient.
 //
-// Kafka 2.6.0 introduced version 3, proposed in KIP-570, reorganizes partitions
+// Kafka 2.6 introduced version 3, proposed in KIP-570, reorganizes partitions
 // to be stored and adds the leader epoch and delete partition fields per partition.
+// Kafka 3.4 introduced version 4 with KIP-866.
 type StopReplicaRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
@@ -8226,6 +8242,11 @@ type StopReplicaRequest struct {
 	ControllerID int32
 
 	ControllerEpoch int32
+
+	// The KRaft controller id, used during migration. See KIP-866.
+	//
+	// This field has a default of -1.
+	KRaftControllerID int32 // v4+
 
 	// This field has a default of -1.
 	BrokerEpoch int64 // v1+
@@ -8239,7 +8260,7 @@ type StopReplicaRequest struct {
 }
 
 func (*StopReplicaRequest) Key() int16                 { return 5 }
-func (*StopReplicaRequest) MaxVersion() int16          { return 3 }
+func (*StopReplicaRequest) MaxVersion() int16          { return 4 }
 func (v *StopReplicaRequest) SetVersion(version int16) { v.Version = version }
 func (v *StopReplicaRequest) GetVersion() int16        { return v.Version }
 func (v *StopReplicaRequest) IsFlexible() bool         { return v.Version >= 2 }
@@ -8265,6 +8286,10 @@ func (v *StopReplicaRequest) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.ControllerEpoch
+		dst = kbin.AppendInt32(dst, v)
+	}
+	if version >= 4 {
+		v := v.KRaftControllerID
 		dst = kbin.AppendInt32(dst, v)
 	}
 	if version >= 1 {
@@ -8371,6 +8396,10 @@ func (v *StopReplicaRequest) readFrom(src []byte, unsafe bool) error {
 	{
 		v := b.Int32()
 		s.ControllerEpoch = v
+	}
+	if version >= 4 {
+		v := b.Int32()
+		s.KRaftControllerID = v
 	}
 	if version >= 1 {
 		v := b.Int64()
@@ -8507,6 +8536,7 @@ func NewPtrStopReplicaRequest() *StopReplicaRequest {
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to StopReplicaRequest.
 func (v *StopReplicaRequest) Default() {
+	v.KRaftControllerID = -1
 	v.BrokerEpoch = -1
 }
 
@@ -8557,7 +8587,7 @@ type StopReplicaResponse struct {
 }
 
 func (*StopReplicaResponse) Key() int16                 { return 5 }
-func (*StopReplicaResponse) MaxVersion() int16          { return 3 }
+func (*StopReplicaResponse) MaxVersion() int16          { return 4 }
 func (v *StopReplicaResponse) SetVersion(version int16) { v.Version = version }
 func (v *StopReplicaResponse) GetVersion() int16        { return v.Version }
 func (v *StopReplicaResponse) IsFlexible() bool         { return v.Version >= 2 }
@@ -8831,13 +8861,17 @@ func NewUpdateMetadataRequestLiveBroker() UpdateMetadataRequestLiveBroker {
 //
 // Version 1 changed the layout of the live brokers.
 //
-// Kafka 2.2.0 introduced version 5, proposed in KIP-380, which changed the
+// Kafka 2.2 introduced version 5, proposed in KIP-380, which changed the
 // layout of the struct to be more memory efficient.
+// Kafka 3.4 introduced version 8 with KIP-866.
 type UpdateMetadataRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
 	ControllerID int32
+
+	// The KRaft controller id, used during migration. See KIP-866.
+	KRaftControllerID int32 // v8+
 
 	ControllerEpoch int32
 
@@ -8855,7 +8889,7 @@ type UpdateMetadataRequest struct {
 }
 
 func (*UpdateMetadataRequest) Key() int16                 { return 6 }
-func (*UpdateMetadataRequest) MaxVersion() int16          { return 7 }
+func (*UpdateMetadataRequest) MaxVersion() int16          { return 8 }
 func (v *UpdateMetadataRequest) SetVersion(version int16) { v.Version = version }
 func (v *UpdateMetadataRequest) GetVersion() int16        { return v.Version }
 func (v *UpdateMetadataRequest) IsFlexible() bool         { return v.Version >= 6 }
@@ -8879,6 +8913,10 @@ func (v *UpdateMetadataRequest) AppendTo(dst []byte) []byte {
 	_ = isFlexible
 	{
 		v := v.ControllerID
+		dst = kbin.AppendInt32(dst, v)
+	}
+	if version >= 8 {
+		v := v.KRaftControllerID
 		dst = kbin.AppendInt32(dst, v)
 	}
 	{
@@ -9178,6 +9216,10 @@ func (v *UpdateMetadataRequest) readFrom(src []byte, unsafe bool) error {
 	{
 		v := b.Int32()
 		s.ControllerID = v
+	}
+	if version >= 8 {
+		v := b.Int32()
+		s.KRaftControllerID = v
 	}
 	{
 		v := b.Int32()
@@ -9679,7 +9721,7 @@ type UpdateMetadataResponse struct {
 }
 
 func (*UpdateMetadataResponse) Key() int16                 { return 6 }
-func (*UpdateMetadataResponse) MaxVersion() int16          { return 7 }
+func (*UpdateMetadataResponse) MaxVersion() int16          { return 8 }
 func (v *UpdateMetadataResponse) SetVersion(version int16) { v.Version = version }
 func (v *UpdateMetadataResponse) GetVersion() int16        { return v.Version }
 func (v *UpdateMetadataResponse) IsFlexible() bool         { return v.Version >= 6 }
@@ -40879,6 +40921,10 @@ type BrokerRegistrationRequest struct {
 	// The rack that this broker is in, if any.
 	Rack *string
 
+	// Set by a ZK broker if the required configurations for ZK migration are
+	// present.
+	IsMigratingZkBroker int8 // tag 0
+
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags
 }
@@ -41001,7 +41047,22 @@ func (v *BrokerRegistrationRequest) AppendTo(dst []byte) []byte {
 		}
 	}
 	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		var toEncode []uint32
+		if v.IsMigratingZkBroker != 0 {
+			toEncode = append(toEncode, 0)
+		}
+		dst = kbin.AppendUvarint(dst, uint32(len(toEncode)+v.UnknownTags.Len()))
+		for _, tag := range toEncode {
+			switch tag {
+			case 0:
+				{
+					v := v.IsMigratingZkBroker
+					dst = kbin.AppendUvarint(dst, 0)
+					dst = kbin.AppendUvarint(dst, 1)
+					dst = kbin.AppendInt8(dst, v)
+				}
+			}
+		}
 		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
@@ -41187,7 +41248,19 @@ func (v *BrokerRegistrationRequest) readFrom(src []byte, unsafe bool) error {
 		s.Rack = v
 	}
 	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
+		for i := b.Uvarint(); i > 0; i-- {
+			switch key := b.Uvarint(); key {
+			default:
+				s.UnknownTags.Set(key, b.Span(int(b.Uvarint())))
+			case 0:
+				b := kbin.Reader{Src: b.Span(int(b.Uvarint()))}
+				v := b.Int8()
+				s.IsMigratingZkBroker = v
+				if err := b.Complete(); err != nil {
+					return err
+				}
+			}
+		}
 	}
 	return b.Complete()
 }

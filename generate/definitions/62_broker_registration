@@ -27,6 +27,9 @@ BrokerRegistrationRequest => key 62, max version 0, flexible v0+
     MaxSupportedVersion: int16
   // The rack that this broker is in, if any.
   Rack: nullable-string
+  // Set by a ZK broker if the required configurations for ZK migration are
+  // present.
+  IsMigratingZkBroker: int8 // tag 0
 
 // BrokerRegistrationResponse is a response to a BrokerRegistrationRequest.
 BrokerRegistrationResponse =>
