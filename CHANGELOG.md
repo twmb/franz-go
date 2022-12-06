@@ -1,3 +1,31 @@
+v1.10.3
+===
+
+This small patch release is another attempted fix at [#239](https://github.com/twmb/franz-go/issues/239).
+It is only possible to encounter this bug if a broker completely dies and never
+comes back, and you do not replace the broker (i.e., broker 3 dies and it is
+just gone forever).
+
+Previously, kgo would cache the broker controller until `NOT_CONTROLLER` is
+seen. We now clear it a bit more widely, but this is just extra defensive
+behavior: the controller is updated on every metadata request.
+
+Worse however, kgo previously cached group or transactional-id coordinators
+until `COORDINATOR_NOT_AVAILABLE`, `COORDINATOR_LOAD_IN_PROGRESS`, or
+`NOT_CONTROLLER` were seen. If the coordinator outright died and never comes
+back and is never replaced, all coordinator requests to that specific
+coordinator would fail.
+
+Now, if we fail to dial the coordinator or controller 3x in a row, we delete
+the coordinator or controller to force a reload on the next retry. We only do
+this for dial errors because any other error means we actually contacted the
+broker and it exists.
+
+Lastly, we change the default max produce record batch bytes from 1,000,000 to
+1,000,012, to exactly mirror Kafka's max.message.bytes.
+
+- [`e2e80bf`](https://github.com/twmb/franz-go/commit/e2e80bf) kgo: clear controller/coordinator caches on failed dials
+
 v1.10.2
 ===
 
@@ -23,9 +51,9 @@ request would never be written and the records could never be failed. The
 tightened failure scenario allows records to be failed all the way up until
 they are actually serialized and written.
 
-- [`0cf51ef`](https://github.com/twmb/franz-go/commit/0cf51ef) sink: tighten canFailFromLoadErrs
-- [`f2d5023`](https://github.com/twmb/franz-go/commit/f2d5023) **minor bugfix** source: avoid backoff / session reset when there is no consumed data
-- [`bb3d9c1`](https://github.com/twmb/franz-go/commit/bb3d9c1) kerr: add two missing errors to ErrorForCode
+- [`d620765`](https://github.com/twmb/franz-go/commit/d620765) sink: tighten canFailFromLoadErrs
+- [`6c0abd1`](https://github.com/twmb/franz-go/commit/6c0abd1) **minor bugfix** source: avoid backoff / session reset when there is no consumed data
+- [`6ce8bdf`](https://github.com/twmb/franz-go/commit/6ce8bdf) kerr: add two missing errors to ErrorForCode
 - [PR #264](https://github.com/twmb/franz-go/pull/264) fix `isNetClosedErr` build constraints: franz-go was using the `strings.Contains` version, which was meant for Go 1.15 only (thanks [@PleasingFungus][1.10.2:pf]!)
 
 v1.10.1
