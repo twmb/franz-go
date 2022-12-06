@@ -475,7 +475,7 @@ func defaultCfg() cfg {
 		acks:                AllISRAcks(),
 		maxProduceInflight:  1,
 		compression:         []CompressionCodec{SnappyCompression(), NoCompression()},
-		maxRecordBatchBytes: 1000000, // Kafka max.message.bytes default is 1000012
+		maxRecordBatchBytes: 1000012, // Kafka max.message.bytes default is 1000012
 		maxBufferedRecords:  10000,
 		produceTimeout:      10 * time.Second,
 		recordRetries:       math.MaxInt64, // effectively unbounded
@@ -892,10 +892,7 @@ func ProducerBatchCompression(preference ...CompressionCodec) ProducerOpt {
 }
 
 // ProducerBatchMaxBytes upper bounds the size of a record batch, overriding
-// the default 1MB.
-//
-// This corresponds to Kafka's max.message.bytes, which defaults to 1,000,012
-// bytes (just over 1MB).
+// the default 1,000,012 bytes. This mirrors Kafka's max.message.bytes.
 //
 // Record batches are independent of a ProduceRequest: a record batch is
 // specific to a topic and partition, whereas the produce request can contain

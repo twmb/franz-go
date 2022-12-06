@@ -1090,12 +1090,18 @@ start:
 
 // controller returns the controller broker, forcing a broker load if
 // necessary.
-func (cl *Client) controller(ctx context.Context) (*broker, error) {
+func (cl *Client) controller(ctx context.Context) (b *broker, err error) {
 	get := func() int32 {
 		cl.controllerIDMu.Lock()
 		defer cl.controllerIDMu.Unlock()
 		return cl.controllerID
 	}
+
+	defer func() {
+		if ec := (*errUnknownController)(nil); errors.As(err, &ec) {
+			cl.forgetControllerID(ec.id)
+		}
+	}()
 
 	var id int32
 	if id = get(); id < 0 {
