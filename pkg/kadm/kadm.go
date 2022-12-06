@@ -50,9 +50,24 @@
 //
 // These types are meant to be easy to build and use, and can be used as the
 // starting point for other types.
+//
+// Many functions in this package are variadic and return either a map or a
+// list of responses, and you may only use one element as input and are only
+// interested in one element of output. This package provides the following
+// functions to help:
+//
+//	Any(map)
+//	AnyE(map, err)
+//	First(slice)
+//	FirstE(slice, err)
+//
+// The intended use case of these is something like `kadm.AnyE(kadm.CreateTopics(..., "my-one-topic"))`,
+// such that you can immediately get the response for the one topic you are
+// creating.
 package kadm
 
 import (
+	"errors"
 	"regexp"
 	"runtime/debug"
 	"sort"
@@ -564,4 +579,77 @@ func (l TopicsList) IntoSet() TopicsSet {
 		s.Add(t.Topic, t.Partitions...)
 	}
 	return s
+}
+
+// First returns the first element of the input slice and whether it exists.
+// This is the non-error-accepting equivalent of FirstE.
+//
+// Many client methods in kadm accept a variadic amount of input arguments and
+// return either a slice or a map of responses, but you often use the method
+// with only one argument. This function can help extract the one response you
+// are interested in.
+func First[S ~[]T, T any](s S) (T, bool) {
+	if len(s) == 0 {
+		var t T
+		return t, false
+	}
+	return s[0], true
+}
+
+// Any returns the first range element of the input map and whether it exists.
+// This is the non-error-accepting equivalent of AnyE.
+//
+// Many client methods in kadm accept a variadic amount of input arguments and
+// return either a slice or a map of responses, but you often use the method
+// with only one argument. This function can help extract the one response you
+// are interested in.
+func Any[M ~map[K]V, K comparable, V any](m M) (V, bool) {
+	for _, v := range m {
+		return v, true
+	}
+	var v V
+	return v, false
+}
+
+// ErrEmpty is returned from FirstE or AnyE if the input is empty.
+var ErrEmpty = errors.New("empty")
+
+// FirstE returns the first element of the input slice, or the input error
+// if it is non-nil. If the error is nil but the slice is empty, this returns
+// ErrEmpty. This is the error-accepting equivalent of First.
+//
+// Many client methods in kadm accept a variadic amount of input arguments and
+// return either a slice or a map of responses, but you often use the method
+// with only one argument. This function can help extract the one response you
+// are interested in.
+func FirstE[S ~[]T, T any](s S, err error) (T, error) {
+	if err != nil {
+		var t T
+		return t, err
+	}
+	if len(s) == 0 {
+		var t T
+		return t, ErrEmpty
+	}
+	return s[0], err
+}
+
+// AnyE returns the first range element of the input map, or the input error if
+// it is non-nil. If the error is nil but the map is empty, this returns
+// ErrEmpty. This is the error-accepting equivalent of Any.
+//
+// Many client methods in kadm accept a variadic amount of input arguments and
+// return either a slice or a map of responses, but you often use the method
+// with only one argument. This function can help extract the one response you
+// are interested in.
+func AnyE[M ~map[K]V, K comparable, V any](m M, err error) (V, error) {
+	if err != nil {
+		var v V
+		return v, err
+	}
+	for _, v := range m {
+		return v, nil
+	}
+	var v V
+	return v, ErrEmpty
 }

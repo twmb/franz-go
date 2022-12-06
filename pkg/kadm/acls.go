@@ -979,7 +979,7 @@ func (cl *Client) DescribeACLs(ctx context.Context, b *ACLBuilder) (DescribeACLs
 	return rs, nil
 }
 
-var any = []string{"any"}
+var sliceAny = []string{"any"}
 
 func createDelDescACL(b *ACLBuilder) ([]kmsg.DeleteACLsRequestFilter, []*kmsg.DescribeACLsRequest, error) {
 	if err := b.ValidateFilter(); err != nil {
@@ -1026,7 +1026,7 @@ func createDelDescACL(b *ACLBuilder) ([]kmsg.DeleteACLsRequestFilter, []*kmsg.De
 		{kmsg.ACLResourceTypeDelegationToken, b.tokens, b.anyToken},
 	} {
 		if typeNames.any {
-			typeNames.names = any
+			typeNames.names = sliceAny
 		}
 		for _, name := range typeNames.names {
 			for _, op := range b.ops {
@@ -1060,10 +1060,10 @@ func createDelDescACL(b *ACLBuilder) ([]kmsg.DeleteACLsRequestFilter, []*kmsg.De
 					},
 				} {
 					if perm.anyPrincipal {
-						perm.principals = any
+						perm.principals = sliceAny
 					}
 					if perm.anyHost {
-						perm.hosts = any
+						perm.hosts = sliceAny
 					}
 					for _, principal := range perm.principals {
 						for _, host := range perm.hosts {
