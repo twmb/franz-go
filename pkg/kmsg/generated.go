@@ -1705,6 +1705,9 @@ type ConsumerMemberMetadata struct {
 	// OwnedPartitions, introduced for KIP-429, are the partitions that this
 	// member currently owns.
 	OwnedPartitions []ConsumerMemberMetadataOwnedPartition // v1+
+
+	// This field has a default of -1.
+	Generation int32 // v2+
 }
 
 func (v *ConsumerMemberMetadata) AppendTo(dst []byte) []byte {
@@ -1744,6 +1747,10 @@ func (v *ConsumerMemberMetadata) AppendTo(dst []byte) []byte {
 				}
 			}
 		}
+	}
+	if version >= 2 {
+		v := v.Generation
+		dst = kbin.AppendInt32(dst, v)
 	}
 	return dst
 }
@@ -1839,12 +1846,17 @@ func (v *ConsumerMemberMetadata) readFrom(src []byte, unsafe bool) error {
 		v = a
 		s.OwnedPartitions = v
 	}
+	if version >= 2 {
+		v := b.Int32()
+		s.Generation = v
+	}
 	return b.Complete()
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to ConsumerMemberMetadata.
 func (v *ConsumerMemberMetadata) Default() {
+	v.Generation = -1
 }
 
 // NewConsumerMemberMetadata returns a default ConsumerMemberMetadata
@@ -2010,9 +2022,8 @@ func NewConsumerMemberAssignment() ConsumerMemberAssignment {
 // "connect" protocol. v1 introduced incremental cooperative rebalancing (akin
 // to cooperative-sticky) per KIP-415.
 //
-//     v0 defined in connect/runtime/src/main/java/org/apache/kafka/connect/runtime/distributed/ConnectProtocol.java
-//     v1+ defined in connect/runtime/src/main/java/org/apache/kafka/connect/runtime/distributed/IncrementalCooperativeConnectProtocol.java
-//
+//	v0 defined in connect/runtime/src/main/java/org/apache/kafka/connect/runtime/distributed/ConnectProtocol.java
+//	v1+ defined in connect/runtime/src/main/java/org/apache/kafka/connect/runtime/distributed/IncrementalCooperativeConnectProtocol.java
 type ConnectMemberMetadata struct {
 	Version int16
 
@@ -16010,8 +16021,7 @@ type ApiVersionsRequest struct {
 	//
 	// If using v3, this field is required and must match the following pattern:
 	//
-	//     [a-zA-Z0-9](?:[a-zA-Z0-9\\-.]*[a-zA-Z0-9])?
-	//
+	//	[a-zA-Z0-9](?:[a-zA-Z0-9\\-.]*[a-zA-Z0-9])?
 	ClientSoftwareName string // v3+
 
 	// ClientSoftwareVersion is the version of the software name in the prior
@@ -19339,7 +19349,7 @@ type OffsetForLeaderEpochResponseTopicPartition struct {
 	// UNKNOWN_LEADER_EPOCH if returned if the client is using a current leader epoch
 	// that the actual leader does not know of. This could occur when the client
 	// has newer metadata than the broker when the broker just became the leader for
-	//  a replica.
+	// a replica.
 	ErrorCode int16
 
 	// Partition is the partition this response is for.
@@ -43586,7 +43596,6 @@ func (k Key) Int16() int16 { return int16(k) }
 // * 4 (BROKER)
 //
 // * 8 (BROKER_LOGGER)
-//
 type ConfigResourceType int8
 
 func (v ConfigResourceType) String() string {
@@ -43669,7 +43678,6 @@ func (e *ConfigResourceType) UnmarshalText(text []byte) error {
 //
 // * 6 (DYNAMIC_BROKER_LOGGER_CONFIG)
 // Broker logger; see KIP-412.
-//
 type ConfigSource int8
 
 func (v ConfigSource) String() string {
@@ -43769,7 +43777,6 @@ func (e *ConfigSource) UnmarshalText(text []byte) error {
 // * 8 (CLASS)
 //
 // * 9 (PASSWORD)
-//
 type ConfigType int8
 
 func (v ConfigType) String() string {
@@ -43877,7 +43884,6 @@ func (e *ConfigType) UnmarshalText(text []byte) error {
 // * 2 (APPEND)
 //
 // * 3 (SUBTRACT)
-//
 type IncrementalAlterConfigOp int8
 
 func (v IncrementalAlterConfigOp) String() string {
@@ -43960,7 +43966,6 @@ func (e *IncrementalAlterConfigOp) UnmarshalText(text []byte) error {
 // * 6 (DELEGATION_TOKEN)
 //
 // * 7 (USER)
-//
 type ACLResourceType int8
 
 func (v ACLResourceType) String() string {
@@ -44062,7 +44067,6 @@ func (e *ACLResourceType) UnmarshalText(text []byte) error {
 //
 // * 4 (PREFIXED)
 // The name must have our requested name as a prefix (that is, "foo" will match on "foobar").
-//
 type ACLResourcePatternType int8
 
 func (v ACLResourcePatternType) String() string {
@@ -44141,7 +44145,6 @@ func (e *ACLResourcePatternType) UnmarshalText(text []byte) error {
 //
 // * 3 (ALLOW)
 // Any allow permission.
-//
 type ACLPermissionType int8
 
 func (v ACLPermissionType) String() string {
@@ -44235,7 +44238,6 @@ func (e *ACLPermissionType) UnmarshalText(text []byte) error {
 // * 13 (CREATE_TOKENS)
 //
 // * 14 (DESCRIBE_TOKENS)
-//
 type ACLOperation int8
 
 func (v ACLOperation) String() string {
@@ -44381,7 +44383,6 @@ func (e *ACLOperation) UnmarshalText(text []byte) error {
 // * 6 (Dead)
 //
 // * 7 (PrepareEpochFence)
-//
 type TransactionState int8
 
 func (v TransactionState) String() string {
@@ -44483,7 +44484,6 @@ func (e *TransactionState) UnmarshalText(text []byte) error {
 //
 // * 2 (ANY)
 // Matches all named quotas and default quotas for the given EntityType.
-//
 type QuotasMatchType int8
 
 func (v QuotasMatchType) String() string {
@@ -44552,7 +44552,6 @@ func (e *QuotasMatchType) UnmarshalText(text []byte) error {
 // * 2 (QUORUM_REASSIGNMENT)
 //
 // * 3 (LEADER_CHANGE)
-//
 type ControlRecordKeyType int8
 
 func (v ControlRecordKeyType) String() string {
