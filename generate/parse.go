@@ -198,8 +198,12 @@ func (s *Struct) BuildFrom(scanner *LineScanner, key, level int) (done bool) {
 		}
 
 		switch {
-		case strings.HasPrefix(typ, "=>"): // nested struct; recurse
-			newS := Struct{FromFlexible: s.FromFlexible, FlexibleAt: s.FlexibleAt}
+		case strings.HasPrefix(typ, "=>") || strings.HasPrefix(typ, "nullable=>"): // nested struct; recurse
+			newS := Struct{
+				FromFlexible: s.FromFlexible,
+				FlexibleAt:   s.FlexibleAt,
+				Nullable:     strings.HasPrefix(typ, "nullable"),
+			}
 			newS.Name = s.Name + f.FieldName
 			newS.Key = key // for kmsg generating ordering purposes
 			newS.Anonymous = true
