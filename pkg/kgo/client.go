@@ -1229,12 +1229,12 @@ func (cl *Client) loadCoordinators(ctx context.Context, typ int8, keys ...string
 					}
 				}
 			} else {
-				resp, _ := shard.Resp.(*kmsg.FindCoordinatorResponse)
+				resp := shard.Resp.(*kmsg.FindCoordinatorResponse)
 				for _, rc := range resp.Coordinators {
 					c, ok := key2load[rc.Key]
 					if ok {
 						c.err = kerr.ErrorForCode(rc.ErrorCode)
-						c.node = resp.NodeID
+						c.node = rc.NodeID
 					}
 				}
 			}
