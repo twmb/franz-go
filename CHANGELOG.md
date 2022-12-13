@@ -1,3 +1,20 @@
+v1.10.4
+===
+
+This patch release fixes two bugs introduced with v1.10.0. These bugs are not
+encountered in when using the client to simply consume or produce. Only admin
+usages of the client may encounter the bugs this patch is fixing.
+
+v1.10.0 introduced support for batch offset fetching or coordinator finding.
+These changes introduced a bug where empty coordinator keys (i.e., group names
+or transactional IDs) would be stripped from requests, and then a field in a
+nil pointer could be accessed and panic the program. These changes also
+introduced a bug that did not properly mirror one field for batched
+`FindCoordinator` requests.
+
+- [`ca67da4`](https://github.com/twmb/franz-go/commit/ca67da4) **bugfix** kgo: fix batch coordinator fetching
+- [`c6f7f9a`](https://github.com/twmb/franz-go/commit/c6f7f9a) **bugfix** kgo: allow empty groups when finding coordinator / fetching offsets
+
 v1.10.3
 ===
 
