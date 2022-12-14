@@ -40941,14 +40941,14 @@ type BrokerRegistrationRequest struct {
 
 	// Set by a ZK broker if the required configurations for ZK migration are
 	// present.
-	IsMigratingZkBroker int8 // tag 0
+	IsMigratingZkBroker bool // v1+
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags
 }
 
 func (*BrokerRegistrationRequest) Key() int16                 { return 62 }
-func (*BrokerRegistrationRequest) MaxVersion() int16          { return 0 }
+func (*BrokerRegistrationRequest) MaxVersion() int16          { return 1 }
 func (v *BrokerRegistrationRequest) SetVersion(version int16) { v.Version = version }
 func (v *BrokerRegistrationRequest) GetVersion() int16        { return v.Version }
 func (v *BrokerRegistrationRequest) IsFlexible() bool         { return v.Version >= 0 }
@@ -41064,23 +41064,12 @@ func (v *BrokerRegistrationRequest) AppendTo(dst []byte) []byte {
 			dst = kbin.AppendNullableString(dst, v)
 		}
 	}
+	if version >= 1 {
+		v := v.IsMigratingZkBroker
+		dst = kbin.AppendBool(dst, v)
+	}
 	if isFlexible {
-		var toEncode []uint32
-		if v.IsMigratingZkBroker != 0 {
-			toEncode = append(toEncode, 0)
-		}
-		dst = kbin.AppendUvarint(dst, uint32(len(toEncode)+v.UnknownTags.Len()))
-		for _, tag := range toEncode {
-			switch tag {
-			case 0:
-				{
-					v := v.IsMigratingZkBroker
-					dst = kbin.AppendUvarint(dst, 0)
-					dst = kbin.AppendUvarint(dst, 1)
-					dst = kbin.AppendInt8(dst, v)
-				}
-			}
-		}
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
 		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
@@ -41265,20 +41254,12 @@ func (v *BrokerRegistrationRequest) readFrom(src []byte, unsafe bool) error {
 		}
 		s.Rack = v
 	}
+	if version >= 1 {
+		v := b.Bool()
+		s.IsMigratingZkBroker = v
+	}
 	if isFlexible {
-		for i := b.Uvarint(); i > 0; i-- {
-			switch key := b.Uvarint(); key {
-			default:
-				s.UnknownTags.Set(key, b.Span(int(b.Uvarint())))
-			case 0:
-				b := kbin.Reader{Src: b.Span(int(b.Uvarint()))}
-				v := b.Int8()
-				s.IsMigratingZkBroker = v
-				if err := b.Complete(); err != nil {
-					return err
-				}
-			}
-		}
+		s.UnknownTags = internalReadTags(&b)
 	}
 	return b.Complete()
 }
@@ -41326,7 +41307,7 @@ type BrokerRegistrationResponse struct {
 }
 
 func (*BrokerRegistrationResponse) Key() int16                 { return 62 }
-func (*BrokerRegistrationResponse) MaxVersion() int16          { return 0 }
+func (*BrokerRegistrationResponse) MaxVersion() int16          { return 1 }
 func (v *BrokerRegistrationResponse) SetVersion(version int16) { v.Version = version }
 func (v *BrokerRegistrationResponse) GetVersion() int16        { return v.Version }
 func (v *BrokerRegistrationResponse) IsFlexible() bool         { return v.Version >= 0 }
