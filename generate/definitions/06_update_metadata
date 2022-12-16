@@ -19,11 +19,8 @@ UpdateMetadataRequestTopicPartition => not top level, no encoding, flexible v6+
 //
 // Kafka 2.2 introduced version 5, proposed in KIP-380, which changed the
 // layout of the struct to be more memory efficient.
-// Kafka 3.4 introduced version 8 with KIP-866.
-UpdateMetadataRequest => key 6, max version 8, flexible v6+
+UpdateMetadataRequest => key 6, max version 7, flexible v6+
   ControllerID: int32
-  // The KRaft controller id, used during migration. See KIP-866.
-  KRaftControllerID: int32 // v8+
   ControllerEpoch: int32
   BrokerEpoch: int64(-1) // v5+
   PartitionStates: [UpdateMetadataRequestTopicPartition] // v0-v4

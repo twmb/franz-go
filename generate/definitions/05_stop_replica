@@ -8,12 +8,9 @@
 //
 // Kafka 2.6 introduced version 3, proposed in KIP-570, reorganizes partitions
 // to be stored and adds the leader epoch and delete partition fields per partition.
-// Kafka 3.4 introduced version 4 with KIP-866.
-StopReplicaRequest => key 5, max version 4, flexible v2+
+StopReplicaRequest => key 5, max version 3, flexible v2+
   ControllerID: int32
   ControllerEpoch: int32
-  // The KRaft controller id, used during migration. See KIP-866.
-  KRaftControllerID: int32(-1) // v4+
   BrokerEpoch: int64(-1) // v1+
   DeletePartitions: bool // v0-v2
   Topics: [=>]
