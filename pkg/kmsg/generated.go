@@ -6893,11 +6893,15 @@ func NewLeaderAndISRRequestLiveLeader() LeaderAndISRRequestLiveLeader {
 // Kafka 1.0 introduced version 1. Kafka 2.2 introduced version 2, proposed
 // in KIP-380, which changed the layout of the struct to be more memory
 // efficient. Kafka 2.4.0 introduced version 3 with KIP-455.
+// Kafka 3.4 introduced version 7 with KIP-866.
 type LeaderAndISRRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
 	ControllerID int32
+
+	// If KRaft controller id is used during migration. See KIP-866.
+	IsKRaftController bool // v7+
 
 	ControllerEpoch int32
 
@@ -6917,7 +6921,7 @@ type LeaderAndISRRequest struct {
 }
 
 func (*LeaderAndISRRequest) Key() int16                 { return 4 }
-func (*LeaderAndISRRequest) MaxVersion() int16          { return 6 }
+func (*LeaderAndISRRequest) MaxVersion() int16          { return 7 }
 func (v *LeaderAndISRRequest) SetVersion(version int16) { v.Version = version }
 func (v *LeaderAndISRRequest) GetVersion() int16        { return v.Version }
 func (v *LeaderAndISRRequest) IsFlexible() bool         { return v.Version >= 4 }
@@ -6944,6 +6948,10 @@ func (v *LeaderAndISRRequest) AppendTo(dst []byte) []byte {
 	{
 		v := v.ControllerID
 		dst = kbin.AppendInt32(dst, v)
+	}
+	if version >= 7 {
+		v := v.IsKRaftController
+		dst = kbin.AppendBool(dst, v)
 	}
 	{
 		v := v.ControllerEpoch
@@ -7239,6 +7247,10 @@ func (v *LeaderAndISRRequest) readFrom(src []byte, unsafe bool) error {
 	{
 		v := b.Int32()
 		s.ControllerID = v
+	}
+	if version >= 7 {
+		v := b.Bool()
+		s.IsKRaftController = v
 	}
 	{
 		v := b.Int32()
@@ -7746,7 +7758,7 @@ type LeaderAndISRResponse struct {
 }
 
 func (*LeaderAndISRResponse) Key() int16                 { return 4 }
-func (*LeaderAndISRResponse) MaxVersion() int16          { return 6 }
+func (*LeaderAndISRResponse) MaxVersion() int16          { return 7 }
 func (v *LeaderAndISRResponse) SetVersion(version int16) { v.Version = version }
 func (v *LeaderAndISRResponse) GetVersion() int16        { return v.Version }
 func (v *LeaderAndISRResponse) IsFlexible() bool         { return v.Version >= 4 }
@@ -8093,6 +8105,7 @@ func NewStopReplicaRequestTopic() StopReplicaRequestTopic {
 //
 // Kafka 2.6 introduced version 3, proposed in KIP-570, reorganizes partitions
 // to be stored and adds the leader epoch and delete partition fields per partition.
+// Kafka 3.4 introduced version 4 with KIP-866.
 type StopReplicaRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
@@ -8100,6 +8113,9 @@ type StopReplicaRequest struct {
 	ControllerID int32
 
 	ControllerEpoch int32
+
+	// If KRaft controller id is used during migration. See KIP-866.
+	IsKRaftController bool // v4+
 
 	// This field has a default of -1.
 	BrokerEpoch int64 // v1+
@@ -8113,7 +8129,7 @@ type StopReplicaRequest struct {
 }
 
 func (*StopReplicaRequest) Key() int16                 { return 5 }
-func (*StopReplicaRequest) MaxVersion() int16          { return 3 }
+func (*StopReplicaRequest) MaxVersion() int16          { return 4 }
 func (v *StopReplicaRequest) SetVersion(version int16) { v.Version = version }
 func (v *StopReplicaRequest) GetVersion() int16        { return v.Version }
 func (v *StopReplicaRequest) IsFlexible() bool         { return v.Version >= 2 }
@@ -8144,6 +8160,10 @@ func (v *StopReplicaRequest) AppendTo(dst []byte) []byte {
 	{
 		v := v.ControllerEpoch
 		dst = kbin.AppendInt32(dst, v)
+	}
+	if version >= 4 {
+		v := v.IsKRaftController
+		dst = kbin.AppendBool(dst, v)
 	}
 	if version >= 1 {
 		v := v.BrokerEpoch
@@ -8249,6 +8269,10 @@ func (v *StopReplicaRequest) readFrom(src []byte, unsafe bool) error {
 	{
 		v := b.Int32()
 		s.ControllerEpoch = v
+	}
+	if version >= 4 {
+		v := b.Bool()
+		s.IsKRaftController = v
 	}
 	if version >= 1 {
 		v := b.Int64()
@@ -8435,7 +8459,7 @@ type StopReplicaResponse struct {
 }
 
 func (*StopReplicaResponse) Key() int16                 { return 5 }
-func (*StopReplicaResponse) MaxVersion() int16          { return 3 }
+func (*StopReplicaResponse) MaxVersion() int16          { return 4 }
 func (v *StopReplicaResponse) SetVersion(version int16) { v.Version = version }
 func (v *StopReplicaResponse) GetVersion() int16        { return v.Version }
 func (v *StopReplicaResponse) IsFlexible() bool         { return v.Version >= 2 }
@@ -8711,11 +8735,15 @@ func NewUpdateMetadataRequestLiveBroker() UpdateMetadataRequestLiveBroker {
 //
 // Kafka 2.2 introduced version 5, proposed in KIP-380, which changed the
 // layout of the struct to be more memory efficient.
+// Kafka 3.4 introduced version 8 with KIP-866.
 type UpdateMetadataRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
 	ControllerID int32
+
+	// If KRaft controller id is used during migration. See KIP-866.
+	IsKRaftController bool // v8+
 
 	ControllerEpoch int32
 
@@ -8733,7 +8761,7 @@ type UpdateMetadataRequest struct {
 }
 
 func (*UpdateMetadataRequest) Key() int16                 { return 6 }
-func (*UpdateMetadataRequest) MaxVersion() int16          { return 7 }
+func (*UpdateMetadataRequest) MaxVersion() int16          { return 8 }
 func (v *UpdateMetadataRequest) SetVersion(version int16) { v.Version = version }
 func (v *UpdateMetadataRequest) GetVersion() int16        { return v.Version }
 func (v *UpdateMetadataRequest) IsFlexible() bool         { return v.Version >= 6 }
@@ -8760,6 +8788,10 @@ func (v *UpdateMetadataRequest) AppendTo(dst []byte) []byte {
 	{
 		v := v.ControllerID
 		dst = kbin.AppendInt32(dst, v)
+	}
+	if version >= 8 {
+		v := v.IsKRaftController
+		dst = kbin.AppendBool(dst, v)
 	}
 	{
 		v := v.ControllerEpoch
@@ -9058,6 +9090,10 @@ func (v *UpdateMetadataRequest) readFrom(src []byte, unsafe bool) error {
 	{
 		v := b.Int32()
 		s.ControllerID = v
+	}
+	if version >= 8 {
+		v := b.Bool()
+		s.IsKRaftController = v
 	}
 	{
 		v := b.Int32()
@@ -9559,7 +9595,7 @@ type UpdateMetadataResponse struct {
 }
 
 func (*UpdateMetadataResponse) Key() int16                 { return 6 }
-func (*UpdateMetadataResponse) MaxVersion() int16          { return 7 }
+func (*UpdateMetadataResponse) MaxVersion() int16          { return 8 }
 func (v *UpdateMetadataResponse) SetVersion(version int16) { v.Version = version }
 func (v *UpdateMetadataResponse) GetVersion() int16        { return v.Version }
 func (v *UpdateMetadataResponse) IsFlexible() bool         { return v.Version >= 6 }
@@ -16191,6 +16227,10 @@ type ApiVersionsResponse struct {
 	// FinalizedFeaturesEpoch is >= 0).
 	FinalizedFeatures []ApiVersionsResponseFinalizedFeature // tag 2
 
+	// Set by a KRaft controller if the required configurations for ZK migration
+	// are present
+	ZkMigrationReady bool // tag 3
+
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v3+
 }
@@ -16253,6 +16293,9 @@ func (v *ApiVersionsResponse) AppendTo(dst []byte) []byte {
 		}
 		if len(v.FinalizedFeatures) > 0 {
 			toEncode = append(toEncode, 2)
+		}
+		if v.ZkMigrationReady != false {
+			toEncode = append(toEncode, 3)
 		}
 		dst = kbin.AppendUvarint(dst, uint32(len(toEncode)+v.UnknownTags.Len()))
 		for _, tag := range toEncode {
@@ -16345,6 +16388,13 @@ func (v *ApiVersionsResponse) AppendTo(dst []byte) []byte {
 						sized = true
 						goto fFinalizedFeatures
 					}
+				}
+			case 3:
+				{
+					v := v.ZkMigrationReady
+					dst = kbin.AppendUvarint(dst, 3)
+					dst = kbin.AppendUvarint(dst, 1)
+					dst = kbin.AppendBool(dst, v)
 				}
 			}
 		}
@@ -16535,6 +16585,13 @@ func (v *ApiVersionsResponse) readFrom(src []byte, unsafe bool) error {
 				}
 				v = a
 				s.FinalizedFeatures = v
+				if err := b.Complete(); err != nil {
+					return err
+				}
+			case 3:
+				b := kbin.Reader{Src: b.Span(int(b.Uvarint()))}
+				v := b.Bool()
+				s.ZkMigrationReady = v
 				if err := b.Complete(); err != nil {
 					return err
 				}
@@ -40894,12 +40951,16 @@ type BrokerRegistrationRequest struct {
 	// The rack that this broker is in, if any.
 	Rack *string
 
+	// If the required configurations for ZK migration are present, this value is
+	// set to true.
+	IsMigratingZkBroker bool // v1+
+
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags
 }
 
 func (*BrokerRegistrationRequest) Key() int16                 { return 62 }
-func (*BrokerRegistrationRequest) MaxVersion() int16          { return 0 }
+func (*BrokerRegistrationRequest) MaxVersion() int16          { return 1 }
 func (v *BrokerRegistrationRequest) SetVersion(version int16) { v.Version = version }
 func (v *BrokerRegistrationRequest) GetVersion() int16        { return v.Version }
 func (v *BrokerRegistrationRequest) IsFlexible() bool         { return v.Version >= 0 }
@@ -41016,6 +41077,10 @@ func (v *BrokerRegistrationRequest) AppendTo(dst []byte) []byte {
 		} else {
 			dst = kbin.AppendNullableString(dst, v)
 		}
+	}
+	if version >= 1 {
+		v := v.IsMigratingZkBroker
+		dst = kbin.AppendBool(dst, v)
 	}
 	if isFlexible {
 		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
@@ -41203,6 +41268,10 @@ func (v *BrokerRegistrationRequest) readFrom(src []byte, unsafe bool) error {
 		}
 		s.Rack = v
 	}
+	if version >= 1 {
+		v := b.Bool()
+		s.IsMigratingZkBroker = v
+	}
 	if isFlexible {
 		s.UnknownTags = internalReadTags(&b)
 	}
@@ -41252,7 +41321,7 @@ type BrokerRegistrationResponse struct {
 }
 
 func (*BrokerRegistrationResponse) Key() int16                 { return 62 }
-func (*BrokerRegistrationResponse) MaxVersion() int16          { return 0 }
+func (*BrokerRegistrationResponse) MaxVersion() int16          { return 1 }
 func (v *BrokerRegistrationResponse) SetVersion(version int16) { v.Version = version }
 func (v *BrokerRegistrationResponse) GetVersion() int16        { return v.Version }
 func (v *BrokerRegistrationResponse) IsFlexible() bool         { return v.Version >= 0 }

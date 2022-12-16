@@ -1,6 +1,6 @@
 // For KIP-500 / KIP-631, BrokerRegistrationRequest is an internal
 // broker-to-broker only request.
-BrokerRegistrationRequest => key 62, max version 0, flexible v0+
+BrokerRegistrationRequest => key 62, max version 1, flexible v0+
   // The broker ID.
   BrokerID: int32
   // The cluster ID of the broker process.
@@ -27,6 +27,9 @@ BrokerRegistrationRequest => key 62, max version 0, flexible v0+
     MaxSupportedVersion: int16
   // The rack that this broker is in, if any.
   Rack: nullable-string
+  // If the required configurations for ZK migration are present, this value is
+  // set to true.
+  IsMigratingZkBroker: bool // v1+
 
 // BrokerRegistrationResponse is a response to a BrokerRegistrationRequest.
 BrokerRegistrationResponse =>
