@@ -1691,7 +1691,7 @@ func NewConsumerMemberMetadataOwnedPartition() ConsumerMemberMetadataOwnedPartit
 // ConsumerMemberMetadata is the metadata that is usually sent with a join group
 // request with the "consumer" protocol (normal, non-connect consumers).
 type ConsumerMemberMetadata struct {
-	// Version is 0, 1, 2, or 3.
+	// Version is 0, 1, or 2.
 	Version int16
 
 	// Topics is the list of topics in the group that this member is interested
@@ -1706,13 +1706,8 @@ type ConsumerMemberMetadata struct {
 	// member currently owns.
 	OwnedPartitions []ConsumerMemberMetadataOwnedPartition // v1+
 
-	// Generation is the generation of the group.
-	//
 	// This field has a default of -1.
 	Generation int32 // v2+
-
-	// Rack, if non-nil, opts into rack-aware replica assignment.
-	Rack *string // v3+
 }
 
 func (v *ConsumerMemberMetadata) AppendTo(dst []byte) []byte {
@@ -1756,10 +1751,6 @@ func (v *ConsumerMemberMetadata) AppendTo(dst []byte) []byte {
 	if version >= 2 {
 		v := v.Generation
 		dst = kbin.AppendInt32(dst, v)
-	}
-	if version >= 3 {
-		v := v.Rack
-		dst = kbin.AppendNullableString(dst, v)
 	}
 	return dst
 }
@@ -1858,15 +1849,6 @@ func (v *ConsumerMemberMetadata) readFrom(src []byte, unsafe bool) error {
 	if version >= 2 {
 		v := b.Int32()
 		s.Generation = v
-	}
-	if version >= 3 {
-		var v *string
-		if unsafe {
-			v = b.UnsafeNullableString()
-		} else {
-			v = b.NullableString()
-		}
-		s.Rack = v
 	}
 	return b.Complete()
 }
