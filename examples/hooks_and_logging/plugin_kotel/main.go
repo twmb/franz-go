@@ -18,11 +18,9 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.12.0"
 	"go.opentelemetry.io/otel/trace"
 	"log"
-	"math/rand"
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 )
 
 var (
@@ -87,60 +85,44 @@ func initMeterProvider() (*metric.MeterProvider, error) {
 	return mp, nil
 }
 
-func do() error {
-	// Set up the tracer
-	tracerProvider, err := initTracerProvider()
-	if err != nil {
-		return err
-	}
-
+func newKotelTracer(tracerProvider *sdktrace.TracerProvider) *kotel.Tracer {
 	tracingOpts := []kotel.TracingOption{
 		kotel.TracerProvider(tracerProvider),
 		kotel.TracerPropagator(propagation.NewCompositeTextMapPropagator(propagation.TraceContext{})),
 	}
-	tracer := kotel.NewTracer(tracingOpts...)
+	return kotel.NewTracer(tracingOpts...)
+}
 
-	// Set up the meter
-	meterProvider, err := initMeterProvider()
-	if err != nil {
-		return err
-	}
-
+func newKotelMeter(meterProvider *metric.MeterProvider) *kotel.Meter {
 	metricsOpts := []kotel.MetricsOption{kotel.MeterProvider(meterProvider)}
-	meter := kotel.NewMeter(metricsOpts...)
+	return kotel.NewMeter(metricsOpts...)
+}
 
-	// Pass tracer/meter to NewKotel hook
+func newKotel(tracer *kotel.Tracer, meter *kotel.Meter) *kotel.Kotel {
 	kotelOps := []kotel.Option{
 		kotel.WithTracing(tracer),
 		kotel.WithMetrics(meter),
 	}
+	return kotel.NewKotel(kotelOps...)
+}
 
-	kotelService := kotel.NewKotel(kotelOps...)
-
-	// Set up producer Kafka client
-	fmt.Println("Start producer...")
-
+func newProducerClient(kotelService *kotel.Kotel) (*kgo.Client, error) {
 	opts := []kgo.Opt{
 		kgo.SeedBrokers(strings.Split(*seedBrokers, ",")...),
-		kgo.WithHooks(kotelService.Hooks()...), // pass in kotel hook
+		kgo.WithHooks(kotelService.Hooks()...),
 	}
-	cl, err := kgo.NewClient(opts...)
-	if err != nil {
-		panic(fmt.Sprintf("unable to create client: %v", err))
-		return err
-	}
+	return kgo.NewClient(opts...)
+}
 
-	// Optionally create a request tracer
+func produceMessage(client *kgo.Client, tracerProvider *sdktrace.TracerProvider) error {
 	requestTracer := tracerProvider.Tracer("request-service")
 	requestCtx, requestSpan := requestTracer.Start(context.Background(), "request-span")
-	requestSpan.SetAttributes(attribute.String("foo", "bar"))
+	requestSpan.SetAttributes(attribute.String("some-key", "foo"))
 
-	// Produce a message
 	var wg sync.WaitGroup
 	wg.Add(1)
-	record := &kgo.Record{Key: []byte(fmt.Sprint(rand.Intn(9-0+1) + 0)), Topic: *topic, Value: []byte("bar")}
-	// Optionally pass a Context from a span
-	cl.Produce(requestCtx, record, func(_ *kgo.Record, err error) {
+	record := &kgo.Record{Topic: *topic, Key: []byte("some-key"), Value: []byte("some-value")}
+	client.Produce(requestCtx, record, func(_ *kgo.Record, err error) {
 		defer wg.Done()
 		if err != nil {
 			fmt.Printf("record had a produce error: %v\n", err)
@@ -150,42 +132,85 @@ func do() error {
 	})
 	wg.Wait()
 	requestSpan.End()
-
-	// Set up consumer Kafka client
-	fmt.Println("Start consumer...")
-
-	cl2, err := kgo.NewClient(append(opts, kgo.ConsumeTopics(*topic))...)
-	if err != nil {
-		panic(fmt.Sprintf("unable to create client: %v", err))
-		return err
-	}
-
-	// Optionally create a processor tracer
-	processTracer := tracerProvider.Tracer("process-service")
-
-	// Consume message
-	for {
-		fetches := cl2.PollFetches(context.Background())
-		if errs := fetches.Errors(); len(errs) > 0 {
-			panic(fmt.Sprint(errs))
-		}
-
-		iter := fetches.RecordIter()
-		for !iter.Done() {
-			record := iter.Next()
-			processRecord(processTracer, record)
-			time.Sleep(time.Duration(rand.Intn(150)+100) * time.Millisecond)
-		}
-	}
+	return nil
 }
 
-func processRecord(t trace.Tracer, r *kgo.Record) {
-	fmt.Println("Got record offset: " + strconv.FormatInt(r.Offset, 10))
-	// Extract span from record Context
-	// This continues the trace from the consumer hook
-	_, span := t.Start(r.Context, fmt.Sprintf("%s process", r.Topic))
-	defer span.End()
-	span.SetAttributes(attribute.String("baz", "qux"))
+func newConsumerClient(kotelService *kotel.Kotel) (*kgo.Client, error) {
+	opts := []kgo.Opt{
+		kgo.SeedBrokers(strings.Split(*seedBrokers, ",")...),
+		kgo.WithHooks(kotelService.Hooks()...),
+		kgo.ConsumeTopics(*topic),
+	}
+	return kgo.NewClient(opts...)
+}
+
+func consumeMessages(client *kgo.Client, tracer trace.Tracer) error {
+	fetches := client.PollFetches(context.Background())
+	if errs := fetches.Errors(); len(errs) > 0 {
+		return fmt.Errorf("%v", errs)
+	}
+
+	iter := fetches.RecordIter()
+	for !iter.Done() {
+		record := iter.Next()
+		processRecord(tracer, record)
+	}
+	return nil
+}
+
+func processRecord(tracer trace.Tracer, record *kgo.Record) {
+	_, processSpan := tracer.Start(record.Context, "process-span")
+	defer processSpan.End()
+
+	fmt.Printf(
+		"processed offset '%s' with key '%s' and value '%s'\n",
+		strconv.FormatInt(record.Offset, 10),
+		string(record.Key),
+		string(record.Value),
+	)
+	processSpan.SetAttributes(
+		attribute.String("some-key", "bar"),
+		attribute.String("some-other-key", "baz"),
+	)
+}
+
+func do() error {
+	tracerProvider, err := initTracerProvider()
+	if err != nil {
+		return fmt.Errorf("failed to initialize tracer provider: %w", err)
+	}
+
+	meterProvider, err := initMeterProvider()
+	if err != nil {
+		return fmt.Errorf("failed to initialize meter provider: %w", err)
+	}
+
+	kotelTracer := newKotelTracer(tracerProvider)
+	kotelMeter := newKotelMeter(meterProvider)
+	kotelService := newKotel(kotelTracer, kotelMeter)
+
+	producerClient, err := newProducerClient(kotelService)
+	if err != nil {
+		return fmt.Errorf("unable to create producer client: %w", err)
+	}
+	defer producerClient.Close()
+
+	if err := produceMessage(producerClient, tracerProvider); err != nil {
+		return fmt.Errorf("failed to produce message: %w", err)
+	}
+
+	consumerClient, err := newConsumerClient(kotelService)
+	if err != nil {
+		return fmt.Errorf("unable to create consumer client: %w", err)
+	}
+	defer consumerClient.Close()
+
+	processTracer := tracerProvider.Tracer("process-service")
+	for {
+		if err := consumeMessages(consumerClient, processTracer); err != nil {
+			return fmt.Errorf("failed to consume messages: %w", err)
+		}
+	}
 }
 
 func main() {

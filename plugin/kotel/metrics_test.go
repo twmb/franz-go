@@ -13,33 +13,14 @@ func TestWithMetrics(t *testing.T) {
 	provider := metric.NewNoopMeterProvider()
 
 	testCases := []struct {
-		name     string
-		opts     []MetricsOption
-		expected *Meter
+		name string
+		opts []MetricsOption
+		want *Meter
 	}{
-		// TODO: Fix test
-		//{
-		//	name: "Empty (Global provider)",
-		//	opts: []MetricsOption{},
-		//	expected: &Meter{
-		//		provider: meterProvider,
-		//		meter:    globalMeter,
-		//		metrics:  metrics,
-		//	},
-		//},
-		//{
-		//	name: "Nil MeterProvider",
-		//	opts: []MetricsOption{MeterProvider(nil)},
-		//	expected: &Meter{
-		//		provider: meterProvider,
-		//		meter:    globalMeter,
-		//		metrics:  metrics,
-		//	},
-		//},
 		{
 			name: "With MeterProvider",
-			opts: []MetricsOption{MeterProvider(metric.NewNoopMeterProvider())},
-			expected: &Meter{
+			opts: []MetricsOption{MeterProvider(provider)},
+			want: &Meter{
 				provider: provider,
 				meter: provider.Meter(
 					"github.com/twmb/franz-go/plugin/kotel",
@@ -54,7 +35,7 @@ func TestWithMetrics(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			result := NewMeter(tc.opts...)
-			assert.Equal(t, tc.expected, result)
+			assert.Equal(t, tc.want, result)
 		})
 	}
 }

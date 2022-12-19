@@ -8,6 +8,8 @@ import (
 
 func TestNewConfig(t *testing.T) {
 
+	meter := NewMeter()
+
 	testCases := []struct {
 		name string
 		opts []Option
@@ -20,9 +22,9 @@ func TestNewConfig(t *testing.T) {
 		},
 		{
 			name: "WithMetrics",
-			opts: []Option{WithMetrics(NewMeter())},
+			opts: []Option{WithMetrics(meter)},
 			want: &Kotel{
-				Meter: NewMeter(),
+				Meter: meter,
 			},
 		},
 		{
@@ -34,9 +36,9 @@ func TestNewConfig(t *testing.T) {
 		},
 		{
 			name: "WithMetrics and WithTracing",
-			opts: []Option{WithMetrics(NewMeter()), WithTracing(NewTracer())},
+			opts: []Option{WithMetrics(meter), WithTracing(NewTracer())},
 			want: &Kotel{
-				Meter:  NewMeter(),
+				Meter:  meter,
 				Tracer: NewTracer(),
 			},
 		},

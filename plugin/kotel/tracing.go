@@ -94,8 +94,7 @@ func (t *Tracer) OnProduceRecordBuffered(r *kgo.Record) {
 		trace.WithSpanKind(trace.SpanKindProducer),
 	}
 
-	spanContext, span := t.tracer.Start(r.Context, fmt.Sprintf("%s send", r.Topic), opts...)
-	span.AddEvent("OnProduceRecordBuffered")
+	spanContext, _ := t.tracer.Start(r.Context, fmt.Sprintf("%s send", r.Topic), opts...)
 
 	t.propagators.Inject(spanContext, NewRecordCarrier(r))
 
@@ -105,7 +104,6 @@ func (t *Tracer) OnProduceRecordBuffered(r *kgo.Record) {
 // OnProduceRecordUnbuffered Completes the producer span
 func (t *Tracer) OnProduceRecordUnbuffered(r *kgo.Record, err error) {
 	span := trace.SpanFromContext(r.Context)
-	span.AddEvent("OnProduceRecordUnbuffered")
 
 	span.SetAttributes(
 		semconv.MessagingMessageIDKey.String(strconv.FormatInt(r.Offset, 10)),
@@ -137,11 +135,10 @@ func (t *Tracer) OnFetchRecordBuffered(r *kgo.Record) {
 		semconv.MessagingKafkaPartitionKey.Int64(int64(r.Partition)),
 	}
 
-	// logAppend is an optional parent span
-	var logAppendContext = ctx
-	var logAppendSpan trace.Span
+	var nextSpanContext = ctx
+	var nextSpan trace.Span
 
-	// is timestamp set in kafka? (aka log append)
+	// Optionally add the LogAppend span if the record timestamp is set in Kafka
 	if r.Attrs.TimestampType() == 1 {
 		opts := []trace.SpanStartOption{
 			trace.WithTimestamp(r.Timestamp),
@@ -149,9 +146,8 @@ func (t *Tracer) OnFetchRecordBuffered(r *kgo.Record) {
 			trace.WithSpanKind(trace.SpanKindConsumer),
 		}
 
-		logAppendContext, logAppendSpan = t.tracer.Start(ctx, fmt.Sprintf("%s logappend", r.Topic), opts...)
-		logAppendSpan.AddEvent("logappend")
-		logAppendSpan.End()
+		nextSpanContext, nextSpan = t.tracer.Start(ctx, fmt.Sprintf("%s logappend", r.Topic), opts...)
+		nextSpan.End()
 	}
 
 	opts := []trace.SpanStartOption{
@@ -159,8 +155,7 @@ func (t *Tracer) OnFetchRecordBuffered(r *kgo.Record) {
 		trace.WithSpanKind(trace.SpanKindConsumer),
 	}
 
-	receiveCtx, receiveSpan := t.tracer.Start(logAppendContext, fmt.Sprintf("%s receive", r.Topic), opts...)
-	receiveSpan.AddEvent("receive")
+	receiveCtx, receiveSpan := t.tracer.Start(nextSpanContext, fmt.Sprintf("%s receive", r.Topic), opts...)
 	receiveSpan.End()
 
 	r.Context = receiveCtx

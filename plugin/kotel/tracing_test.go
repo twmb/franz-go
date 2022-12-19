@@ -21,15 +21,14 @@ func TestNewTracer(t *testing.T) {
 	)
 
 	testCases := []struct {
-		name     string
-		opts     []TracingOption
-		expected *Tracer
+		name string
+		opts []TracingOption
+		want *Tracer
 	}{
-
 		{
 			name: "Empty (Use globals)",
 			opts: []TracingOption{},
-			expected: &Tracer{
+			want: &Tracer{
 				tracerProvider: otel.GetTracerProvider(),
 				tracer:         tracer,
 				propagators:    otel.GetTextMapPropagator(),
@@ -38,7 +37,7 @@ func TestNewTracer(t *testing.T) {
 		{
 			name: "With TracerPropagator",
 			opts: []TracingOption{TracerPropagator(prop)},
-			expected: &Tracer{
+			want: &Tracer{
 				tracerProvider: otel.GetTracerProvider(),
 				tracer:         tracer,
 				propagators:    prop,
@@ -47,7 +46,7 @@ func TestNewTracer(t *testing.T) {
 		{
 			name: "Nil TracerPropagator",
 			opts: []TracingOption{TracerPropagator(nil)},
-			expected: &Tracer{
+			want: &Tracer{
 				tracerProvider: otel.GetTracerProvider(),
 				tracer:         tracer,
 				propagators:    otel.GetTextMapPropagator(),
@@ -58,7 +57,7 @@ func TestNewTracer(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			result := NewTracer(tc.opts...)
-			assert.Equal(t, tc.expected, result)
+			assert.Equal(t, tc.want, result)
 		})
 	}
 }
