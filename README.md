@@ -340,6 +340,7 @@ generation.
 | [KIP-392](https://cwiki.apache.org/confluence/display/KAFKA/KIP-392%3A+Allow+consumers+to+fetch+from+closest+replica) — Closest replica fetching w/ rack | 2.2 | Supported |
 | [KIP-394](https://cwiki.apache.org/confluence/display/KAFKA/KIP-394%3A+Require+member.id+for+initial+join+group+request) — Require member.id for initial join request |  2.2 | Supported |
 | [KIP-396](https://cwiki.apache.org/confluence/pages/viewpage.action?pageId=97551484) — Commit offsets manually | 2.4 | Supported |
+| [KIP-405](https://cwiki.apache.org/confluence/display/KAFKA/KIP-405%3A+Kafka+Tiered+Storage) — Kafka Tiered Storage | 3.5 | Supported (protos) |
 | [KIP-412](https://cwiki.apache.org/confluence/display/KAFKA/KIP-412%3A+Extend+Admin+API+to+support+dynamic+application+log+levels) — Dynamic log levels w/ IncrementalAlterConfigs | 2.4 | Supported |
 | [KIP-429](https://cwiki.apache.org/confluence/display/KAFKA/KIP-429%3A+Kafka+Consumer+Incremental+Rebalance+Protocol) — Incremental rebalance (see KAFKA-8179) | 2.4 | Supported |
 | [KIP-430](https://cwiki.apache.org/confluence/display/KAFKA/KIP-430+-+Return+Authorized+Operations+in+Describe+Responses) — Authorized ops in DescribeGroups | 2.3 | Supported |
