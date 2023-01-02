@@ -3887,7 +3887,7 @@ type FetchRequest struct {
 }
 
 func (*FetchRequest) Key() int16                 { return 1 }
-func (*FetchRequest) MaxVersion() int16          { return 13 }
+func (*FetchRequest) MaxVersion() int16          { return 14 }
 func (v *FetchRequest) SetVersion(version int16) { v.Version = version }
 func (v *FetchRequest) GetVersion() int16        { return v.Version }
 func (v *FetchRequest) IsFlexible() bool         { return v.Version >= 12 }
@@ -4513,7 +4513,11 @@ type FetchResponseTopicPartition struct {
 	// OFFSET_OUT_OF_RANGE is returned if requesting an offset past the
 	// current end offset or before the beginning offset.
 	//
-	// UNKNOWN_TOPIC_ID is returned if using uuid's and the uuid is unknown.
+	// UNKNOWN_TOPIC_ID is returned if using uuid's and the uuid is unknown
+	// (v13+ / Kafka 3.1+).
+	//
+	// OFFSET_MOVED_TO_TIERED_STORAGE is returned if a follower is trying to
+	// fetch from an offset that is now in tiered storage.
 	ErrorCode int16
 
 	// HighWatermark is the current high watermark for this partition,
@@ -4679,7 +4683,7 @@ type FetchResponse struct {
 }
 
 func (*FetchResponse) Key() int16                 { return 1 }
-func (*FetchResponse) MaxVersion() int16          { return 13 }
+func (*FetchResponse) MaxVersion() int16          { return 14 }
 func (v *FetchResponse) SetVersion(version int16) { v.Version = version }
 func (v *FetchResponse) GetVersion() int16        { return v.Version }
 func (v *FetchResponse) IsFlexible() bool         { return v.Version >= 12 }
@@ -5204,6 +5208,11 @@ type ListOffsetsRequestTopicPartition struct {
 	// to determine topic "liveness" (when was the last produce?).
 	// Previously, this was not easy to determine. See KIP-734 for more
 	// detail.
+	//
+	// If you are talking to Kafka 3.4+ and using request version 8+ (for
+	// KIP-405), the new special timestamp -4 returns the local log start
+	// offset. In the context of tiered storage, the earliest local log start
+	// offset is the offset actually available on disk on the broker.
 	Timestamp int64
 
 	// MaxNumOffsets is the maximum number of offsets to report.
@@ -5264,6 +5273,9 @@ func NewListOffsetsRequestTopic() ListOffsetsRequestTopic {
 //
 // Version 7, introduced in Kafka 3.0, supports -3 as a timestamp to return
 // the timestamp and offset for the record with the largest timestamp.
+//
+// Version 8, introduced in Kafka 3.4, supports -4 as a timestamp to return
+// the local log start offset (in the context of tiered storage, see KIP-405).
 type ListOffsetsRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
@@ -5291,7 +5303,7 @@ type ListOffsetsRequest struct {
 }
 
 func (*ListOffsetsRequest) Key() int16                 { return 2 }
-func (*ListOffsetsRequest) MaxVersion() int16          { return 7 }
+func (*ListOffsetsRequest) MaxVersion() int16          { return 8 }
 func (v *ListOffsetsRequest) SetVersion(version int16) { v.Version = version }
 func (v *ListOffsetsRequest) GetVersion() int16        { return v.Version }
 func (v *ListOffsetsRequest) IsFlexible() bool         { return v.Version >= 6 }
@@ -5652,7 +5664,7 @@ type ListOffsetsResponse struct {
 }
 
 func (*ListOffsetsResponse) Key() int16                 { return 2 }
-func (*ListOffsetsResponse) MaxVersion() int16          { return 7 }
+func (*ListOffsetsResponse) MaxVersion() int16          { return 8 }
 func (v *ListOffsetsResponse) SetVersion(version int16) { v.Version = version }
 func (v *ListOffsetsResponse) GetVersion() int16        { return v.Version }
 func (v *ListOffsetsResponse) IsFlexible() bool         { return v.Version >= 6 }

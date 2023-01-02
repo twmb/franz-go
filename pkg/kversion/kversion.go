@@ -943,6 +943,10 @@ var (
 		v[5].inc()  // 4 stop replica
 		v[6].inc()  // 8 update metadata
 		v[62].inc() // 1 broker registration
+
+		// KAFKA-13369 7146ac57ba9ddd035dac992b9f188a8e7677c08d KIP-405
+		v[1].inc() // 14 fetch
+		v[2].inc() // 8 list offsets
 		return v
 	})
 )
