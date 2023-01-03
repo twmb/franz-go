@@ -370,12 +370,24 @@ func (cl *Client) produce(
 	if promise == nil {
 		promise = noPromise
 	}
+	if r.Topic == "" {
+		r.Topic = cl.cfg.defaultProduceTopic
+	}
 
 	p := &cl.producer
 	if p.hooks != nil {
 		for _, h := range p.hooks.buffered {
 			h.OnProduceRecordBuffered(r)
 		}
+	}
+
+	if r.Topic == "" {
+		p.promiseRecord(promisedRec{ctx, promise, r}, errNoTopic)
+		return
+	}
+	if cl.cfg.txnID != nil && atomic.LoadUint32(&p.producingTxn) != 1 {
+		p.promiseRecord(promisedRec{ctx, promise, r}, errNotInTransaction)
+		return
 	}
 
 	if atomic.AddInt64(&p.bufferedRecords, 1) > cl.cfg.maxBufferedRecords {
@@ -400,20 +412,6 @@ func (cl *Client) produce(
 			drainBuffered(ctx.Err())
 			return
 		}
-	}
-
-	// Neither of the errors below should be hit in applications.
-	if r.Topic == "" {
-		def := cl.cfg.defaultProduceTopic
-		if def == "" {
-			p.promiseRecord(promisedRec{ctx, promise, r}, errNoTopic)
-			return
-		}
-		r.Topic = def
-	}
-	if cl.cfg.txnID != nil && atomic.LoadUint32(&p.producingTxn) != 1 {
-		p.promiseRecord(promisedRec{ctx, promise, r}, errNotInTransaction)
-		return
 	}
 
 	cl.partitionRecord(promisedRec{ctx, promise, r})
