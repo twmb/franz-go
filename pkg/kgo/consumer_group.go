@@ -2108,6 +2108,31 @@ func (cl *Client) UncommittedOffsets() map[string]map[int32]EpochOffset {
 	return nil
 }
 
+// MarkedOffsets returns the latest marked offsets. When autocommitting, a
+// marked offset is an offset that can be committed, in comparison to a dirty
+// offset that cannot yet be committed. You usually see marked offsets with
+// AutoCommitMarks and MarkCommitRecords, but you can also use this function to
+// grab the current offsets that are candidates for committing from normal
+// autocommitting.
+//
+// If you set a custom OnPartitionsRevoked, marked offsets are not committed
+// when partitions are revoked. You can use this function to mark records and
+// issue a commit inside your OnPartitionsRevoked.
+//
+// Note that, if manually committing, you should be careful with committing
+// during group rebalances. You must ensure you commit before the group's
+// session timeout is reached, otherwise this client will be kicked from the
+// group and the commit will fail.
+//
+// If using a cooperative balancer, commits while consuming during rebalancing
+// may fail with REBALANCE_IN_PROGRESS.
+func (cl *Client) MarkedOffsets() map[string]map[int32]EpochOffset {
+	if g := cl.consumer.g; g != nil {
+		return g.getUncommitted(false)
+	}
+	return nil
+}
+
 // CommittedOffsets returns the latest committed offsets. Committed offsets are
 // updated from commits or from joining a group and fetching offsets.
 //
