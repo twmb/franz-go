@@ -596,7 +596,7 @@ func (cl *Client) EndAndBeginTransaction(
 	var readd map[string][]int32
 	for topic, parts := range cl.producer.topics.load() {
 		for i, part := range parts.load().partitions {
-			if part.records.addedToTxn.swap(false) {
+			if part.records.addedToTxn.Swap(false) {
 				if how == EndBeginTxnUnsafe {
 					if readd == nil {
 						readd = make(map[string][]int32)
@@ -705,7 +705,7 @@ func (cl *Client) EndAndBeginTransaction(
 
 		for topic, parts := range cl.producer.topics.load() {
 			for i, part := range parts.load().partitions {
-				if part.records.addedToTxn.get() {
+				if part.records.addedToTxn.Load() {
 					readd[topic] = append(readd[topic], int32(i))
 				}
 			}
@@ -836,7 +836,7 @@ func (cl *Client) EndTransaction(ctx context.Context, commit TransactionEndTry) 
 	// addedToTxn to false outside of any mutex.
 	for _, parts := range cl.producer.topics.load() {
 		for _, part := range parts.load().partitions {
-			anyAdded = part.records.addedToTxn.swap(false) || anyAdded
+			anyAdded = part.records.addedToTxn.Swap(false) || anyAdded
 		}
 	}
 
