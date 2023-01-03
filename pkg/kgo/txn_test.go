@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"strconv"
-	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -172,7 +171,7 @@ func (c *testConsumer) transact(txnsBeforeQuit int) {
 		fetches := txnSess.PollFetches(ctx)
 		cancel()
 		if fetches.Err() == context.DeadlineExceeded || fetches.Err() == ErrClientClosed {
-			if consumed := int(atomic.LoadUint64(&c.consumed)); consumed == testRecordLimit {
+			if consumed := int(c.consumed.Load()); consumed == testRecordLimit {
 				return
 			} else if consumed > testRecordLimit {
 				panic("invalid: consumed too much")
@@ -254,7 +253,7 @@ func (c *testConsumer) transact(txnsBeforeQuit int) {
 
 				if !rec.control {
 					c.part2key[part] = append(c.part2key[part], rec.num)
-					atomic.AddUint64(&c.consumed, 1)
+					c.consumed.Add(1)
 				}
 			}
 		}

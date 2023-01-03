@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"strconv"
-	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -178,7 +177,7 @@ func (c *testConsumer) etl(etlsBeforeQuit int) {
 		fetches := cl.PollRecords(ctx, 100)
 		cancel()
 		if fetches.Err() == context.DeadlineExceeded || fetches.Err() == ErrClientClosed {
-			if consumed := int(atomic.LoadUint64(&c.consumed)); consumed == testRecordLimit {
+			if consumed := int(c.consumed.Load()); consumed == testRecordLimit {
 				return
 			} else if consumed > testRecordLimit {
 				panic(fmt.Sprintf("invalid: consumed too much from %s (group %s)", c.consumeFrom, c.group))
@@ -217,7 +216,7 @@ func (c *testConsumer) etl(etlsBeforeQuit int) {
 
 			c.mu.Unlock()
 
-			atomic.AddUint64(&c.consumed, 1)
+			c.consumed.Add(1)
 
 			cl.Produce(
 				context.Background(),

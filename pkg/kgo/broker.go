@@ -155,7 +155,7 @@ type broker struct {
 	// reqs manages incoming message requests.
 	reqs ringReq
 	// dead is an atomic so a backed up reqs cannot block broker stoppage.
-	dead int32
+	dead atomicBool
 }
 
 // brokerVersions is loaded once (and potentially a few times concurrently if
@@ -214,7 +214,7 @@ func (cl *Client) newBroker(nodeID int32, host string, port int32, rack *string)
 
 // stopForever permanently disables this broker.
 func (b *broker) stopForever() {
-	if atomic.SwapInt32(&b.dead, 1) == 1 {
+	if b.dead.Swap(true) {
 		return
 	}
 
@@ -502,7 +502,7 @@ func (b *broker) loadConnection(ctx context.Context, req kmsg.Request) (*brokerC
 		pcxn = &b.cxnSlow
 	}
 
-	if *pcxn != nil && atomic.LoadInt32(&(*pcxn).dead) == 0 {
+	if *pcxn != nil && !(*pcxn).dead.Load() {
 		return *pcxn, nil
 	}
 
@@ -581,7 +581,7 @@ func (b *broker) reapConnections(idleTimeout time.Duration) (total int) {
 		b.cxnGroup,
 		b.cxnSlow,
 	} {
-		if cxn == nil || atomic.LoadInt32(&cxn.dead) == 1 {
+		if cxn == nil || cxn.dead.Load() {
 			continue
 		}
 
@@ -592,11 +592,11 @@ func (b *broker) reapConnections(idleTimeout time.Duration) (total int) {
 		// - produce can write but never read
 		// - fetch can hang for a while reading (infrequent writes)
 
-		lastWrite := time.Unix(0, atomic.LoadInt64(&cxn.lastWrite))
-		lastRead := time.Unix(0, atomic.LoadInt64(&cxn.lastRead))
+		lastWrite := time.Unix(0, cxn.lastWrite.Load())
+		lastRead := time.Unix(0, cxn.lastRead.Load())
 
-		writeIdle := time.Since(lastWrite) > idleTimeout && atomic.LoadUint32(&cxn.writing) == 0
-		readIdle := time.Since(lastRead) > idleTimeout && atomic.LoadUint32(&cxn.reading) == 0
+		writeIdle := time.Since(lastWrite) > idleTimeout && !cxn.writing.Load()
+		readIdle := time.Since(lastRead) > idleTimeout && !cxn.reading.Load()
 
 		if writeIdle && readIdle {
 			cxn.die()
@@ -634,7 +634,7 @@ func (b *broker) connect(ctx context.Context) (net.Conn, error) {
 // brokerCxn manages an actual connection to a Kafka broker. This is separate
 // the broker struct to allow lazy connection (re)creation.
 type brokerCxn struct {
-	throttleUntil int64 // atomic nanosec
+	throttleUntil atomicI64 // atomic nanosec
 
 	conn net.Conn
 
@@ -651,17 +651,17 @@ type brokerCxn struct {
 	// The following four fields are used for connection reaping.
 	// Write is only updated in one location; read is updated in three
 	// due to readConn, readConnAsync, and discard.
-	lastWrite int64
-	lastRead  int64
-	writing   uint32
-	reading   uint32
+	lastWrite atomicI64
+	lastRead  atomicI64
+	writing   atomicBool
+	reading   atomicBool
 
 	successes uint64
 
 	// resps manages reading kafka responses.
 	resps ringResp
 	// dead is an atomic so that a backed up resps cannot block cxn death.
-	dead int32
+	dead atomicBool
 	// closed in cloneConn; allows throttle waiting to quit
 	deadCh chan struct{}
 }
@@ -982,7 +982,7 @@ func maybeUpdateCtxErr(clientCtx, reqCtx context.Context, err *error) {
 func (cxn *brokerCxn) writeRequest(ctx context.Context, enqueuedForWritingAt time.Time, req kmsg.Request) (corrID int32, bytesWritten int, writeWait, timeToWrite time.Duration, readEnqueue time.Time, writeErr error) {
 	// A nil ctx means we cannot be throttled.
 	if ctx != nil {
-		throttleUntil := time.Unix(0, atomic.LoadInt64(&cxn.throttleUntil))
+		throttleUntil := time.Unix(0, cxn.throttleUntil.Load())
 		if sleep := time.Until(throttleUntil); sleep > 0 {
 			after := time.NewTimer(sleep)
 			select {
@@ -1037,10 +1037,10 @@ func (cxn *brokerCxn) writeConn(
 	timeout time.Duration,
 	enqueuedForWritingAt time.Time,
 ) (bytesWritten int, writeWait, timeToWrite time.Duration, readEnqueue time.Time, writeErr error) {
-	atomic.SwapUint32(&cxn.writing, 1)
+	cxn.writing.Store(true)
 	defer func() {
-		atomic.StoreInt64(&cxn.lastWrite, time.Now().UnixNano())
-		atomic.SwapUint32(&cxn.writing, 0)
+		cxn.lastWrite.Store(time.Now().UnixNano())
+		cxn.writing.Store(false)
 	}()
 
 	if ctx == nil {
@@ -1085,10 +1085,10 @@ func (cxn *brokerCxn) readConn(
 	timeout time.Duration,
 	enqueuedForReadingAt time.Time,
 ) (nread int, buf []byte, readWait, timeToRead time.Duration, err error) {
-	atomic.SwapUint32(&cxn.reading, 1)
+	cxn.reading.Store(true)
 	defer func() {
-		atomic.StoreInt64(&cxn.lastRead, time.Now().UnixNano())
-		atomic.SwapUint32(&cxn.reading, 0)
+		cxn.lastRead.Store(time.Now().UnixNano())
+		cxn.reading.Store(false)
 	}()
 
 	if ctx == nil {
@@ -1256,7 +1256,7 @@ func (cxn *brokerCxn) closeConn() {
 // die kills a broker connection (which could be dead already) and replies to
 // all requests awaiting responses appropriately.
 func (cxn *brokerCxn) die() {
-	if cxn == nil || atomic.SwapInt32(&cxn.dead, 1) == 1 {
+	if cxn == nil || cxn.dead.Swap(true) {
 		return
 	}
 	cxn.closeConn()
@@ -1364,10 +1364,10 @@ func (cxn *brokerCxn) discard() {
 			}
 			deadlineMu.Unlock()
 
-			atomic.SwapUint32(&cxn.reading, 1)
+			cxn.reading.Store(true)
 			defer func() {
-				atomic.StoreInt64(&cxn.lastRead, time.Now().UnixNano())
-				atomic.SwapUint32(&cxn.reading, 0)
+				cxn.lastRead.Store(time.Now().UnixNano())
+				cxn.reading.Store(false)
 			}()
 
 			readStart := time.Now()
@@ -1470,8 +1470,8 @@ func (cxn *brokerCxn) handleResp(pr promisedResp) {
 			if millis > 0 {
 				if throttlesAfterResp {
 					throttleUntil := time.Now().Add(time.Millisecond * time.Duration(millis)).UnixNano()
-					if throttleUntil > cxn.throttleUntil {
-						atomic.StoreInt64(&cxn.throttleUntil, throttleUntil)
+					if throttleUntil > cxn.throttleUntil.Load() {
+						cxn.throttleUntil.Store(throttleUntil)
 					}
 				}
 				cxn.cl.cfg.hooks.each(func(h Hook) {

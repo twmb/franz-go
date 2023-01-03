@@ -12,7 +12,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -66,7 +65,7 @@ func getSeedBrokers() Opt {
 	return SeedBrokers(strings.Split(seeds, ",")...)
 }
 
-var loggerNum int64
+var loggerNum atomicI64
 
 var testLogLevel = func() LogLevel {
 	level := strings.ToLower(os.Getenv("KGO_LOG_LEVEL"))
@@ -80,7 +79,7 @@ var testLogLevel = func() LogLevel {
 }()
 
 func testLogger() Logger {
-	num := atomic.AddInt64(&loggerNum, 1)
+	num := loggerNum.Add(1)
 	pfx := strconv.Itoa(int(num))
 	return BasicLogger(os.Stderr, testLogLevel, func() string {
 		return time.Now().Format("[15:04:05 ") + pfx + "]"
@@ -193,7 +192,7 @@ type testConsumer struct {
 
 	expBody []byte // what every record body should be
 
-	consumed uint64 // shared atomically
+	consumed atomicU64 // shared atomically
 
 	wg sync.WaitGroup
 	mu sync.Mutex

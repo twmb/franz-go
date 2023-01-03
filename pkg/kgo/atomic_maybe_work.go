@@ -1,26 +1,24 @@
 package kgo
 
-import "sync/atomic"
-
 const (
 	stateUnstarted = iota
 	stateWorking
 	stateContinueWorking
 )
 
-type workLoop struct{ state uint32 }
+type workLoop struct{ state atomicU32 }
 
 // maybeBegin returns whether a work loop should begin.
 func (l *workLoop) maybeBegin() bool {
 	var state uint32
 	var done bool
 	for !done {
-		switch state = atomic.LoadUint32(&l.state); state {
+		switch state = l.state.Load(); state {
 		case stateUnstarted:
-			done = atomic.CompareAndSwapUint32(&l.state, state, stateWorking)
+			done = l.state.CompareAndSwap(state, stateWorking)
 			state = stateWorking
 		case stateWorking:
-			done = atomic.CompareAndSwapUint32(&l.state, state, stateContinueWorking)
+			done = l.state.CompareAndSwap(state, stateContinueWorking)
 			state = stateContinueWorking
 		case stateContinueWorking:
 			done = true
@@ -43,18 +41,18 @@ func (l *workLoop) maybeBegin() bool {
 // since the loop itself calls MaybeFinish after it has been started, this
 // should never be called if the loop is unstarted.
 func (l *workLoop) maybeFinish(again bool) bool {
-	switch state := atomic.LoadUint32(&l.state); state {
+	switch state := l.state.Load(); state {
 	// Working:
 	// If again, we know we should continue; keep our state.
 	// If not again, we try to downgrade state and stop.
 	// If we cannot, then something slipped in to say keep going.
 	case stateWorking:
 		if !again {
-			again = !atomic.CompareAndSwapUint32(&l.state, state, stateUnstarted)
+			again = !l.state.CompareAndSwap(state, stateUnstarted)
 		}
 	// Continue: demote ourself and run again no matter what.
 	case stateContinueWorking:
-		atomic.StoreUint32(&l.state, stateWorking)
+		l.state.Store(stateWorking)
 		again = true
 	}
 
@@ -62,5 +60,5 @@ func (l *workLoop) maybeFinish(again bool) bool {
 }
 
 func (l *workLoop) hardFinish() {
-	atomic.StoreUint32(&l.state, stateUnstarted)
+	l.state.Store(stateUnstarted)
 }
