@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kerr"
@@ -479,7 +478,7 @@ func (cl *Client) BeginTransaction() error {
 	}
 
 	cl.producer.inTxn = true
-	atomic.StoreUint32(&cl.producer.producingTxn, 1) // allow produces for txns now
+	cl.producer.producingTxn.Store(true) // allow produces for txns now
 	cl.cfg.logger.Log(LogLevelInfo, "beginning transaction", "transactional_id", *cl.cfg.txnID)
 
 	return nil
@@ -754,8 +753,8 @@ func (cl *Client) EndAndBeginTransaction(
 // are known to not be in flight. This function is safe to call multiple times
 // concurrently, and safe to call concurrent with Flush.
 func (cl *Client) AbortBufferedRecords(ctx context.Context) error {
-	atomic.AddInt32(&cl.producer.aborting, 1)
-	defer atomic.AddInt32(&cl.producer.aborting, -1)
+	cl.producer.aborting.Add(1)
+	defer cl.producer.aborting.Add(-1)
 
 	cl.cfg.logger.Log(LogLevelInfo, "producer state set to aborting; continuing to wait via flushing")
 	defer cl.cfg.logger.Log(LogLevelDebug, "aborted buffered records")
@@ -810,7 +809,7 @@ func (cl *Client) EndTransaction(ctx context.Context, commit TransactionEndTry) 
 	}
 	cl.producer.inTxn = false
 
-	atomic.StoreUint32(&cl.producer.producingTxn, 0) // forbid any new produces while ending txn
+	cl.producer.producingTxn.Store(false) // forbid any new produces while ending txn
 
 	// anyAdded tracks if any partitions were added to this txn, because
 	// any partitions written to triggers AddPartitionToTxn, which triggers

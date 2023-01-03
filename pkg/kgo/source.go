@@ -7,7 +7,6 @@ import (
 	"hash/crc32"
 	"sort"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kbin"
@@ -112,7 +111,7 @@ type cursor struct {
 	// transitioning from used to usable.
 	source *source
 
-	// useState is an atomic that has two states: unusable and usable.  A
+	// useState is an atomic that has two states: unusable and usable. A
 	// cursor can be used in a fetch request if it is in the usable state.
 	// Once used, the cursor is unusable, and will be set back to usable
 	// one the request lifecycle is complete (a usable fetch response, or
@@ -123,7 +122,7 @@ type cursor struct {
 	//
 	// The used state is exclusively updated by either building a fetch
 	// request or when the source is stopped.
-	useState uint32
+	useState atomicBool
 
 	topicPartitionData // updated in metadata when session is stopped
 
@@ -161,7 +160,7 @@ func (c *cursor) use() *cursorOffsetNext {
 	// A source using a cursor has exclusive access to the use field by
 	// virtue of that source building a request during a live session,
 	// or by virtue of the session being stopped.
-	c.useState = 0
+	c.useState.Store(false)
 	return &cursorOffsetNext{
 		cursorOffset:       c.cursorOffset,
 		from:               c,
@@ -173,7 +172,7 @@ func (c *cursor) use() *cursorOffsetNext {
 // to be consumed. This is called exclusively after sources are stopped.
 // This also unsets the cursor offset, which is assumed to be unused now.
 func (c *cursor) unset() {
-	c.useState = 0
+	c.useState.Store(false)
 	c.setOffset(cursorOffset{
 		offset:            -1,
 		lastConsumedEpoch: -1,
@@ -183,14 +182,14 @@ func (c *cursor) unset() {
 
 // usable returns whether a cursor can be used for building a fetch request.
 func (c *cursor) usable() bool {
-	return atomic.LoadUint32(&c.useState) == 1
+	return c.useState.Load()
 }
 
 // allowUsable allows a cursor to be fetched, and is called either in assigning
 // offsets, or when a buffered fetch is taken or discarded,  or when listing /
 // epoch loading finishes.
 func (c *cursor) allowUsable() {
-	atomic.SwapUint32(&c.useState, 1)
+	c.useState.Swap(true)
 	c.source.maybeConsume()
 }
 
@@ -329,9 +328,9 @@ func (s *source) hook(f *Fetch, buffered, polled bool) {
 		}
 	}
 	if buffered {
-		atomic.AddInt64(&s.cl.consumer.bufferedRecords, int64(nrecs))
+		s.cl.consumer.bufferedRecords.Add(int64(nrecs))
 	} else {
-		atomic.AddInt64(&s.cl.consumer.bufferedRecords, -int64(nrecs))
+		s.cl.consumer.bufferedRecords.Add(-int64(nrecs))
 	}
 }
 

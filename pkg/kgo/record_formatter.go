@@ -13,7 +13,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -26,7 +25,7 @@ import (
 
 // RecordFormatter formats records.
 type RecordFormatter struct {
-	calls int64
+	calls atomicI64
 	fns   []func([]byte, *FetchPartition, *Record) []byte
 }
 
@@ -339,7 +338,7 @@ func NewRecordFormatter(layout string) (*RecordFormatter, error) {
 				})
 			case 'i':
 				f.fns = append(f.fns, func(b []byte, _ *FetchPartition, _ *Record) []byte {
-					return numfn(b, atomic.AddInt64(&f.calls, 1))
+					return numfn(b, f.calls.Add(1))
 				})
 			case 'x':
 				f.fns = append(f.fns, func(b []byte, _ *FetchPartition, r *Record) []byte {

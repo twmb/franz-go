@@ -14,8 +14,8 @@ import (
 )
 
 type producer struct {
-	bufferedRecords int64
-	inflight        int64 // high 16: # waiters, low 48: # inflight
+	bufferedRecords atomicI64
+	inflight        atomicI64 // high 16: # waiters, low 48: # inflight
 
 	cl *Client
 
@@ -38,14 +38,14 @@ type producer struct {
 	unknownTopics   map[string]*unknownTopicProduces
 
 	id           atomic.Value
-	producingTxn uint32 // 1 if in txn
+	producingTxn atomicBool
 
 	// We must have a producer field for flushing; we cannot just have a
 	// field on recBufs that is toggled on flush. If we did, then a new
 	// recBuf could be created and records sent to while we are flushing.
-	flushing int32 // >0 if flushing, can Flush many times concurrently
+	flushing atomicI32 // >0 if flushing, can Flush many times concurrently
 
-	aborting int32 // >0 if aborting, can abort many times concurrently
+	aborting atomicI32 // >0 if aborting, can abort many times concurrently
 
 	idMu       sync.Mutex
 	idVersion  int16
@@ -83,7 +83,7 @@ type producer struct {
 // flushing records produced by your client (which can help determine network /
 // cluster health).
 func (cl *Client) BufferedProduceRecords() int64 {
-	return atomic.LoadInt64(&cl.producer.bufferedRecords)
+	return cl.producer.bufferedRecords.Load()
 }
 
 type unknownTopicProduces struct {
@@ -184,7 +184,7 @@ func (p *producer) purgeTopics(topics []string) {
 	}
 }
 
-func (p *producer) isAborting() bool { return atomic.LoadInt32(&p.aborting) > 0 }
+func (p *producer) isAborting() bool { return p.aborting.Load() > 0 }
 
 func noPromise(*Record, error) {}
 
@@ -258,7 +258,7 @@ func (cl *Client) ProduceSync(ctx context.Context, rs ...*Record) ProduceResults
 // This is similar to using ProduceResult's FirstErr function.
 type FirstErrPromise struct {
 	wg   sync.WaitGroup
-	once uint32
+	once atomicBool
 	err  error
 	cl   *Client
 }
@@ -278,7 +278,7 @@ func AbortingFirstErrPromise(cl *Client) *FirstErrPromise {
 // encountered.
 func (f *FirstErrPromise) promise(_ *Record, err error) {
 	defer f.wg.Done()
-	if err != nil && atomic.SwapUint32(&f.once, 1) == 0 {
+	if err != nil && !f.once.Swap(true) {
 		f.err = err
 		if f.cl != nil {
 			f.wg.Add(1)
@@ -385,12 +385,12 @@ func (cl *Client) produce(
 		p.promiseRecord(promisedRec{ctx, promise, r}, errNoTopic)
 		return
 	}
-	if cl.cfg.txnID != nil && atomic.LoadUint32(&p.producingTxn) != 1 {
+	if cl.cfg.txnID != nil && !p.producingTxn.Load() {
 		p.promiseRecord(promisedRec{ctx, promise, r}, errNotInTransaction)
 		return
 	}
 
-	if atomic.AddInt64(&p.bufferedRecords, 1) > cl.cfg.maxBufferedRecords {
+	if p.bufferedRecords.Add(1) > cl.cfg.maxBufferedRecords {
 		// If the client ctx cancels or the produce ctx cancels, we
 		// need to un-count our buffering of this record. We also need
 		// to drain a slot from the waitBuffer chan, which could be
@@ -476,10 +476,10 @@ func (cl *Client) finishRecordPromise(pr promisedRec, err error) {
 	// before Flush returns.
 	pr.promise(pr.Record, err)
 
-	buffered := atomic.AddInt64(&p.bufferedRecords, -1)
+	buffered := p.bufferedRecords.Add(-1)
 	if buffered >= cl.cfg.maxBufferedRecords {
 		p.waitBuffer <- struct{}{}
-	} else if buffered == 0 && atomic.LoadInt32(&p.flushing) > 0 {
+	} else if buffered == 0 && p.flushing.Load() > 0 {
 		p.mu.Lock()
 		p.mu.Unlock() //nolint:gocritic,staticcheck // We use the lock as a barrier, unlocking immediately is safe.
 		p.c.Broadcast()
@@ -918,8 +918,8 @@ func (cl *Client) Flush(ctx context.Context) error {
 
 	// Signal to finishRecord that we want to be notified once buffered hits 0.
 	// Also forbid any new producing to start a linger.
-	atomic.AddInt32(&p.flushing, 1)
-	defer atomic.AddInt32(&p.flushing, -1)
+	p.flushing.Add(1)
+	defer p.flushing.Add(-1)
 
 	cl.cfg.logger.Log(LogLevelInfo, "flushing")
 	defer cl.cfg.logger.Log(LogLevelDebug, "flushed")
@@ -943,7 +943,7 @@ func (cl *Client) Flush(ctx context.Context) error {
 		defer p.mu.Unlock()
 		defer close(done)
 
-		for !quit && atomic.LoadInt64(&p.bufferedRecords) > 0 {
+		for !quit && p.bufferedRecords.Load() > 0 {
 			p.c.Wait()
 		}
 	}()
@@ -961,7 +961,7 @@ func (cl *Client) Flush(ctx context.Context) error {
 }
 
 func (p *producer) pause(ctx context.Context) error {
-	atomic.AddInt64(&p.inflight, 1<<48)
+	p.inflight.Add(1 << 48)
 
 	quit := false
 	done := make(chan struct{})
@@ -969,7 +969,7 @@ func (p *producer) pause(ctx context.Context) error {
 		p.mu.Lock()
 		defer p.mu.Unlock()
 		defer close(done)
-		for !quit && atomic.LoadInt64(&p.inflight)&((1<<48)-1) != 0 {
+		for !quit && p.inflight.Load()&((1<<48)-1) != 0 {
 			p.c.Wait()
 		}
 	}()
@@ -988,7 +988,7 @@ func (p *producer) pause(ctx context.Context) error {
 }
 
 func (p *producer) resume() {
-	if atomic.AddInt64(&p.inflight, -1<<48) == 0 {
+	if p.inflight.Add(-1<<48) == 0 {
 		p.cl.allSinksAndSources(func(sns sinkAndSource) {
 			sns.sink.maybeDrain()
 		})
@@ -996,10 +996,10 @@ func (p *producer) resume() {
 }
 
 func (p *producer) maybeAddInflight() bool {
-	if atomic.LoadInt64(&p.inflight)>>48 > 0 {
+	if p.inflight.Load()>>48 > 0 {
 		return false
 	}
-	if atomic.AddInt64(&p.inflight, 1)>>48 > 0 {
+	if p.inflight.Add(1)>>48 > 0 {
 		p.decInflight()
 		return false
 	}
@@ -1007,7 +1007,7 @@ func (p *producer) maybeAddInflight() bool {
 }
 
 func (p *producer) decInflight() {
-	if atomic.AddInt64(&p.inflight, -1)>>48 > 0 {
+	if p.inflight.Add(-1)>>48 > 0 {
 		p.c.Broadcast()
 	}
 }

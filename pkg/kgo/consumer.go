@@ -152,7 +152,7 @@ func (o Offset) At(at int64) Offset {
 }
 
 type consumer struct {
-	bufferedRecords int64
+	bufferedRecords atomicI64
 
 	cl *Client
 
@@ -272,7 +272,7 @@ func (c *consumer) unaddRebalance() {
 // problematic if for you if this function is consistently returning large
 // values.
 func (cl *Client) BufferedFetchRecords() int64 {
-	return atomic.LoadInt64(&cl.consumer.bufferedRecords)
+	return cl.consumer.bufferedRecords.Load()
 }
 
 type usedCursors map[*cursor]struct{}
@@ -1224,7 +1224,7 @@ type consumerSession struct {
 	desireFetchCh       chan chan chan struct{}
 	cancelFetchCh       chan chan chan struct{}
 	allowedFetches      int
-	fetchManagerStarted uint32 // atomic, once 1, we start the fetch manager
+	fetchManagerStarted atomicBool // atomic, once true, we start the fetch manager
 
 	// Workers signify the number of fetch and list / epoch goroutines that
 	// are currently running within the context of this consumer session.
@@ -1278,7 +1278,7 @@ func (c *consumer) newConsumerSession(tps *topicsPartitions) *consumerSession {
 }
 
 func (s *consumerSession) desireFetch() chan chan chan struct{} {
-	if atomic.SwapUint32(&s.fetchManagerStarted, 1) == 0 {
+	if !s.fetchManagerStarted.Swap(true) {
 		go s.manageFetchConcurrency()
 	}
 	return s.desireFetchCh

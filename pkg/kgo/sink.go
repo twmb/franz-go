@@ -26,7 +26,7 @@ type sink struct {
 	// response, we check what version was set in the request. If it is at
 	// least 4, which 1.0 introduced, we upgrade the sem size.
 	inflightSem    atomic.Value
-	produceVersion int32 // atomic, negative is unset, positive is version
+	produceVersion atomicI32 // negative is unset, positive is version
 
 	drainState workLoop
 
@@ -43,7 +43,7 @@ type sink struct {
 	// successful response. For simplicity, if we have a good response
 	// following an error response before the error response's backoff
 	// occurs, the backoff is not cleared.
-	consecutiveFailures uint32
+	consecutiveFailures atomicU32
 
 	recBufsMu    sync.Mutex // guards the following
 	recBufs      []*recBuf  // contains all partition records for batch building
@@ -60,10 +60,10 @@ type seqResp struct {
 
 func (cl *Client) newSink(nodeID int32) *sink {
 	s := &sink{
-		cl:             cl,
-		nodeID:         nodeID,
-		produceVersion: -1,
+		cl:     cl,
+		nodeID: nodeID,
 	}
+	s.produceVersion.Store(-1)
 	maxInflight := 1
 	if cl.cfg.disableIdempotency {
 		maxInflight = cl.cfg.maxProduceInflight
@@ -113,7 +113,7 @@ func (s *sink) createReq(id int64, epoch int16) (*produceRequest, *kmsg.AddParti
 		}
 
 		batch := recBuf.batches[recBuf.batchDrainIdx]
-		if added := req.tryAddBatch(atomic.LoadInt32(&s.produceVersion), recBuf, batch); !added {
+		if added := req.tryAddBatch(s.produceVersion.Load(), recBuf, batch); !added {
 			recBuf.mu.Unlock()
 			moreToDrain = true
 			continue
@@ -181,7 +181,7 @@ func (t *txnReqBuilder) add(rb *recBuf) {
 }
 
 func (s *sink) maybeDrain() {
-	if s.cl.cfg.manualFlushing && atomic.LoadInt32(&s.cl.producer.flushing) == 0 {
+	if s.cl.cfg.manualFlushing && s.cl.producer.flushing.Load() == 0 {
 		return
 	}
 	if s.drainState.maybeBegin() {
@@ -201,7 +201,7 @@ func (s *sink) maybeBackoff() {
 
 	s.cl.triggerUpdateMetadata(false, "opportunistic load during sink backoff") // as good a time as any
 
-	tries := int(atomic.AddUint32(&s.consecutiveFailures, 1))
+	tries := int(s.consecutiveFailures.Add(1))
 	after := time.NewTimer(s.cl.cfg.retryBackoff(tries))
 	defer after.Stop()
 
@@ -258,7 +258,7 @@ func (s *sink) produce(sem <-chan struct{}) bool {
 	// We could have been triggered from a metadata update even though the
 	// user is not producing at all. If we have no buffered records, let's
 	// avoid potentially creating a producer ID.
-	if atomic.LoadInt64(&s.cl.producer.bufferedRecords) == 0 {
+	if s.cl.producer.bufferedRecords.Load() == 0 {
 		return false
 	}
 
@@ -515,8 +515,8 @@ func (s *sink) issueTxnReq(
 //	https://cwiki.apache.org/confluence/display/KAFKA/An+analysis+of+the+impact+of+max.in.flight.requests.per.connection+and+acks+on+Producer+performance
 //	https://issues.apache.org/jira/browse/KAFKA-5494
 func (s *sink) firstRespCheck(idempotent bool, version int16) {
-	if s.produceVersion < 0 { // this is the only place this can be checked non-atomically
-		atomic.StoreInt32(&s.produceVersion, int32(version))
+	if s.produceVersion.Load() < 0 {
+		s.produceVersion.Store(int32(version))
 		if idempotent && version >= 4 {
 			s.inflightSem.Store(make(chan struct{}, 4))
 		}
@@ -582,7 +582,7 @@ func (s *sink) handleReqResp(br *broker, req *produceRequest, resp kmsg.Response
 		return
 	}
 	s.firstRespCheck(req.idempotent(), req.version)
-	atomic.StoreUint32(&s.consecutiveFailures, 0)
+	s.consecutiveFailures.Store(0)
 	defer req.metrics.hook(&s.cl.cfg, br) // defer to end so that non-written batches are removed
 
 	var b *bytes.Buffer
@@ -870,7 +870,7 @@ func (cl *Client) finishBatch(batch *recBatch, producerID int64, producerEpoch i
 	// We remove this batch and finish all records appropriately.
 	finished := len(batch.records)
 	recBuf.batch0Seq = incrementSequence(recBuf.batch0Seq, int32(finished))
-	atomic.AddInt64(&recBuf.buffered, -int64(finished))
+	recBuf.buffered.Add(-int64(finished))
 	recBuf.batches[0] = nil
 	recBuf.batches = recBuf.batches[1:]
 	recBuf.batchDrainIdx--
@@ -1030,7 +1030,7 @@ type recBuf struct {
 
 	// For LoadTopicPartitioner partitioning; atomically tracks the number
 	// of records buffered in total on this recBuf.
-	buffered int64
+	buffered atomicI64
 
 	mu sync.Mutex // guards r/w access to all fields below
 
@@ -1158,7 +1158,7 @@ func (recBuf *recBuf) bufferRecord(pr promisedRec, abortOnNewBatch bool) bool {
 	var (
 		newBatch       = true
 		onDrainBatch   = recBuf.batchDrainIdx == len(recBuf.batches)
-		produceVersion = atomic.LoadInt32(&recBuf.sink.produceVersion)
+		produceVersion = recBuf.sink.produceVersion.Load()
 	)
 
 	if !onDrainBatch {
@@ -1200,7 +1200,7 @@ func (recBuf *recBuf) bufferRecord(pr promisedRec, abortOnNewBatch bool) bool {
 		}
 	}
 
-	atomic.AddInt64(&recBuf.buffered, 1)
+	recBuf.buffered.Add(1)
 	return true
 }
 
@@ -1221,7 +1221,7 @@ func (recBuf *recBuf) tryStopLingerForDraining() bool {
 
 // Begins a linger timer unless the producer is being flushed.
 func (recBuf *recBuf) lockedMaybeStartLinger() bool {
-	if atomic.LoadInt32(&recBuf.cl.producer.flushing) == 1 {
+	if recBuf.cl.producer.flushing.Load() > 0 {
 		return false
 	}
 	recBuf.lingering = time.AfterFunc(recBuf.cl.cfg.linger, recBuf.sink.maybeDrain)
@@ -1325,7 +1325,7 @@ func (recBuf *recBuf) failAllRecords(err error) {
 		})
 	}
 	recBuf.resetBatchDrainIdx()
-	atomic.StoreInt64(&recBuf.buffered, 0)
+	recBuf.buffered.Store(0)
 	recBuf.batches = nil
 }
 
