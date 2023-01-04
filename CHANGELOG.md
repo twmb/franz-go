@@ -1,3 +1,36 @@
+v1.11.0
+===
+
+This is a small release containing two minor features and a few behavior
+improvements. The `MarkedOffsets` function allows for manually committing
+marked offsets if you override `OnPartitionsRevoked`, and
+`UnsafeAbortBufferedRecords` allows for forcefully dropping anything being
+produced (albeit with documented caveats and downsides)
+
+The client now guards against a broker that advertises FetchRequest v13+ (which
+_only_ uses TopicIDs) but does not actually return / use TopicIDs. If you have
+an old IBP configured, the broker will not use TopicIDs even if the broker
+indicates it should. The client will now pin fetching to a max version of 12 if
+a topic has no TopicID.
+
+The client now sets a record's `Topic` field earlier to `DefaultProduceTopic`,
+which allows the `Topic` field to be known present (or known non-present) in
+the `OnRecordBuffered` hook.
+
+Lastly, we now universally use Go 1.19 atomic types if compiled with 1.19+. Go
+uses compiler intrinsics to ensure proper int64 / uint64 alignment within
+structs for the atomic types; Go does not ensure plain int64 / uint64 are
+properly aligned. A lot of work previously went into ensuring alignment and
+having a GitHub workflow that ran `go vet` on qemu armv7 emulation, but
+apparently that was not comprehensive enough. Now, if you use a 32 bit arch, it
+is recommended to just compile with 1.19+.
+
+[`d1b6897`](https://github.com/twmb/franz-go/commit/d1b6897) **feature** kgo: add UnsafeAbortBufferedRecords
+[`d0c42ad`](https://github.com/twmb/franz-go/commit/d0c42ad) **improvement** kgo source: do not use fetch topic IDs if the broker returns no ID
+[`cc3a355`](https://github.com/twmb/franz-go/commit/cc3a355) and [`a2c4bad`](https://github.com/twmb/franz-go/commit/a2c4bad) **improvement** kgo: universally switch to 1.19's atomics if on Go 1.19+
+[`66e626f`](https://github.com/twmb/franz-go/commit/66e626f) producer: set Record.Topic earlier
+[`3186e61`](https://github.com/twmb/franz-go/commit/3186e61) **feature** kgo: add MarkedOffsets function
+
 v1.10.4
 ===
 
