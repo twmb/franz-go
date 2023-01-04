@@ -53,7 +53,7 @@ OffsetForLeaderEpochResponse =>
       // UNKNOWN_LEADER_EPOCH if returned if the client is using a current leader epoch
       // that the actual leader does not know of. This could occur when the client
       // has newer metadata than the broker when the broker just became the leader for
-      // a replica.
+      //  a replica.
       ErrorCode: int16
       // Partition is the partition this response is for.
       Partition: int32
