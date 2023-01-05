@@ -22,7 +22,7 @@ func TestFirst(t *testing.T) {
 		{[]int{4}, errors.New("foo"), 4, true},
 		{nil, errors.New("foo"), 0, true},
 	} {
-		got, err := FirstOrErr(inputErr(test.in, test.inErr))
+		got, err := FirstE(inputErr(test.in, test.inErr))
 		gotErr := err != nil
 		if gotErr != test.expErr {
 			t.Errorf("got err? %v, exp err? %v", gotErr, test.expErr)
@@ -60,7 +60,7 @@ func TestAny(t *testing.T) {
 		{map[int]string{3: "foo"}, errors.New("foo"), "foo", true},
 		{nil, errors.New("foo"), "", true},
 	} {
-		got, err := AnyOrErr(inputErr(test.in, test.inErr))
+		got, err := AnyE(inputErr(test.in, test.inErr))
 		gotErr := err != nil
 		if gotErr != test.expErr {
 			t.Errorf("got err? %v, exp err? %v", gotErr, test.expErr)
