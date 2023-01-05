@@ -1,6 +1,6 @@
 module github.com/twmb/franz-go/pkg/kadm
 
-go 1.17
+go 1.19
 
 require (
 	github.com/twmb/franz-go v1.10.1
