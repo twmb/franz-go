@@ -18,11 +18,11 @@ instructions and examples, see the usage sections below.
 Please visit the  [OpenTelemetry documentation](https://opentelemetry.io/docs) for additional information about
 OpenTelemetry and how it can be used in your `franz-go` projects.
 
-## tracing
+## Tracing
 
-`kotel`'s tracing module allows you to track the lineage of `kgo.record` objects through a series of `franz-go` hooks:
+`kotel`'s tracing module allows you to track the lineage of `kgo.Record` objects through a series of `franz-go` hooks:
 
-1) OnProduceRecordBuffered
+1) HookProduceRecordBuffered
 2) HookProduceRecordUnbuffered
 3) HookFetchRecordBuffered
 
@@ -108,7 +108,7 @@ for {
 }
 ```
 
-## metrics
+## Metrics
 
 The metrics module of `kotel` tracks various metrics related to the processing of records, such as the number of
 successful and unsuccessful connections, bytes written and read, and the number of buffered records. These metrics are
@@ -150,7 +150,3 @@ cl, err := kgo.NewClient(
 	// ...other opts
 )
 ```
-
-## performance
-
-TODO

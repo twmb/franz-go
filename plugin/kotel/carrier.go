@@ -5,8 +5,15 @@ import (
 )
 
 // RecordCarrier injects and extracts traces from a kgo.Record.
+//
+// This type exists to satisfy the otel/propagation.TextMapCarrier interface.
 type RecordCarrier struct {
 	record *kgo.Record
+}
+
+// NewRecordCarrier creates a new RecordCarrier.
+func NewRecordCarrier(record *kgo.Record) RecordCarrier {
+	return RecordCarrier{record: record}
 }
 
 // Get retrieves a single value for a given key.
@@ -21,13 +28,14 @@ func (c RecordCarrier) Get(key string) string {
 
 // Set sets a header.
 func (c RecordCarrier) Set(key, val string) {
-	// Ensure uniqueness of keys
-	for i := 0; i < len(c.record.Headers); i++ {
-		if c.record.Headers[i].Key == key {
-			c.record.Headers = append(c.record.Headers[:i], c.record.Headers[i+1:]...)
-			i--
+	// Check if key already exists
+	for i, h := range c.record.Headers {
+		if h.Key == key {
+			c.record.Headers[i].Value = []byte(val)
+			return
 		}
 	}
+	// Key does not exist, append new header
 	c.record.Headers = append(c.record.Headers, kgo.RecordHeader{
 		Key:   key,
 		Value: []byte(val),
@@ -41,9 +49,4 @@ func (c RecordCarrier) Keys() []string {
 		out[i] = h.Key
 	}
 	return out
-}
-
-// NewRecordCarrier creates a new RecordCarrier.
-func NewRecordCarrier(record *kgo.Record) RecordCarrier {
-	return RecordCarrier{record: record}
 }

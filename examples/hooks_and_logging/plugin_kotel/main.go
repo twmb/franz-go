@@ -25,7 +25,7 @@ import (
 
 var (
 	seedBrokers = flag.String("brokers", "localhost:9092", "comma delimited list of seed brokers")
-	topic       = flag.String("topic", "my-topic", "topic to produce and consume for trace/metric exporting")
+	topic       = flag.String("topic", "topic", "topic to produce and consume for trace/metric exporting")
 )
 
 func initTracerProvider() (*sdktrace.TracerProvider, error) {

@@ -7,9 +7,7 @@ import (
 )
 
 func TestNewConfig(t *testing.T) {
-
 	meter := NewMeter()
-
 	testCases := []struct {
 		name string
 		opts []Option
@@ -43,7 +41,6 @@ func TestNewConfig(t *testing.T) {
 			},
 		},
 	}
-
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			result := NewKotel(tc.opts...)

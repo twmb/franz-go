@@ -8,133 +8,124 @@ import (
 )
 
 func TestNewRecordCarrier(t *testing.T) {
-	type args struct {
-		record *kgo.Record
-	}
 	tests := []struct {
-		name string
-		args args
-		want RecordCarrier
+		name   string
+		record *kgo.Record
+		want   RecordCarrier
 	}{
 		{
-			name: "Carrier",
-			args: args{record: kgo.KeyStringRecord("key", "value")},
-			want: RecordCarrier{kgo.KeyStringRecord("key", "value")},
+			name:   "Carrier",
+			record: kgo.KeyStringRecord("key", "value"),
+			want:   RecordCarrier{kgo.KeyStringRecord("key", "value")},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equalf(t, tt.want, NewRecordCarrier(tt.args.record), "NewRecordCarrier(%v)", tt.args.record)
+			assert.Equalf(t, tt.want, NewRecordCarrier(tt.record), "NewRecordCarrier(%v)", tt.record)
 		})
 	}
 }
 
 func TestRecordCarrier_Get(t *testing.T) {
-	type fields struct {
-		record *kgo.Record
-	}
-	type args struct {
-		key string
-	}
 	tests := []struct {
 		name   string
-		fields fields
-		args   args
+		record *kgo.Record
+		key    string
 		want   string
 	}{
 		{
 			name:   "Exists",
-			fields: fields{record: &kgo.Record{Headers: []kgo.RecordHeader{{Key: "key", Value: []byte("value")}}}},
-			args:   args{key: "key"},
+			record: &kgo.Record{Headers: []kgo.RecordHeader{{Key: "key", Value: []byte("value")}}},
+			key:    "key",
 			want:   "value",
 		},
 		{
 			name:   "Empty",
-			fields: fields{record: &kgo.Record{Headers: []kgo.RecordHeader{{}}}},
-			args:   args{key: "key"},
+			record: &kgo.Record{Headers: []kgo.RecordHeader{{}}},
+			key:    "key",
 			want:   "",
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			c := RecordCarrier{
-				record: tt.fields.record,
+				record: tt.record,
 			}
-			assert.Equalf(t, tt.want, c.Get(tt.args.key), "Get(%v)", tt.args.key)
+			assert.Equalf(t, tt.want, c.Get(tt.key), "Get(%v)", tt.key)
 		})
 	}
 }
 
 func TestRecordCarrier_Keys(t *testing.T) {
-	type fields struct {
-		record *kgo.Record
-	}
 	tests := []struct {
 		name   string
-		fields fields
+		record *kgo.Record
 		want   []string
 	}{
 		{
 			name:   "Empty",
-			fields: fields{record: &kgo.Record{}},
+			record: &kgo.Record{},
 			want:   []string{},
 		},
 		{
 			name:   "Single",
-			fields: fields{record: &kgo.Record{Headers: []kgo.RecordHeader{{Key: "key", Value: []byte("value")}}}},
+			record: &kgo.Record{Headers: []kgo.RecordHeader{{Key: "key", Value: []byte("value")}}},
 			want:   []string{"key"},
 		},
 		{
 			name: "Multiple",
-			fields: fields{
-				record: &kgo.Record{Headers: []kgo.RecordHeader{
-					{Key: "key1", Value: []byte("value1")},
-					{Key: "key2", Value: []byte("value2")},
-				}},
+			record: &kgo.Record{Headers: []kgo.RecordHeader{
+				{Key: "key1", Value: []byte("value1")},
+				{Key: "key2", Value: []byte("value2")},
+			},
 			},
 			want: []string{"key1", "key2"},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			c := RecordCarrier{record: tt.fields.record}
+			c := RecordCarrier{record: tt.record}
 			assert.Equalf(t, tt.want, c.Keys(), "Keys()")
 		})
 	}
 }
 
 func TestRecordCarrier_Set(t *testing.T) {
-	type fields struct {
-		record *kgo.Record
+	type kv struct {
+		key string
+		val string
 	}
-	type args struct {
-		key1 string
-		val1 string
-		key2 string
-		val2 string
-	}
+
 	tests := []struct {
 		name   string
-		fields fields
-		args   args
+		record *kgo.Record
+		kv1    kv
+		kv2    kv
+		kv3    kv
+		kv4    kv
 		want   []kgo.RecordHeader
 	}{
 		{
 			name:   "Set",
-			fields: fields{record: &kgo.Record{Headers: []kgo.RecordHeader{{Key: "key1", Value: []byte("value1")}}}},
-			args:   args{key1: "key1", val1: "value1", key2: "key2", val2: "value2"},
+			record: &kgo.Record{Headers: []kgo.RecordHeader{{Key: "key1", Value: []byte("value1")}}},
+			kv1:    kv{key: "key1", val: "updated"},
+			kv2:    kv{key: "key2", val: "value2"},
+			kv3:    kv{key: "key2", val: "updated"},
+			kv4:    kv{key: "key3", val: "value3"},
 			want: []kgo.RecordHeader{
-				{Key: "key1", Value: []byte("value1")},
-				{Key: "key2", Value: []byte("value2")},
+				{Key: "key1", Value: []byte("updated")},
+				{Key: "key2", Value: []byte("updated")},
+				{Key: "key3", Value: []byte("value3")},
 			},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			c := RecordCarrier{record: tt.fields.record}
-			c.Set(tt.args.key1, tt.args.val1)
-			c.Set(tt.args.key2, tt.args.val2)
-
+			c := RecordCarrier{record: tt.record}
+			c.Set(tt.kv1.key, tt.kv1.val)
+			c.Set(tt.kv2.key, tt.kv2.val)
+			c.Set(tt.kv3.key, tt.kv3.val)
+			c.Set(tt.kv4.key, tt.kv4.val)
 			assert.ElementsMatch(t, c.record.Headers, tt.want)
 		})
 	}

@@ -86,9 +86,6 @@ type Metrics struct {
 
 	produceBytes syncint64.Counter
 	fetchBytes   syncint64.Counter
-
-	bufferedProduceRecords int64
-	bufferedFetchRecords   int64
 }
 
 func (m *Meter) NewMetrics() Metrics {
@@ -97,17 +94,17 @@ func (m *Meter) NewMetrics() Metrics {
 	connects, _ := m.meter.SyncInt64().Counter(
 		"connects_total",
 		instrument.WithUnit(unit.Dimensionless),
-		instrument.WithDescription("Total number of connections opened, by metrics"),
+		instrument.WithDescription("Total number of connections opened, by broker"),
 	)
 	connectsErrors, _ := m.meter.SyncInt64().Counter(
 		"connect_errors_total",
 		instrument.WithUnit(unit.Dimensionless),
-		instrument.WithDescription("Total number of connection errors, by metrics"),
+		instrument.WithDescription("Total number of connection errors, by broker"),
 	)
 	disconnects, _ := m.meter.SyncInt64().Counter(
 		"disconnects_total",
 		instrument.WithUnit(unit.Dimensionless),
-		instrument.WithDescription("Total number of connections closed, by metrics"),
+		instrument.WithDescription("Total number of connections closed, by broker"),
 	)
 
 	// write
@@ -115,12 +112,12 @@ func (m *Meter) NewMetrics() Metrics {
 	writeErrs, _ := m.meter.SyncInt64().Counter(
 		"write_errors_total",
 		instrument.WithUnit(unit.Dimensionless),
-		instrument.WithDescription("Total number of bytes written, by metrics"),
+		instrument.WithDescription("Total number of write errors, by broker"),
 	)
 	writeBytes, _ := m.meter.SyncInt64().Counter(
 		"write_bytes_total",
 		instrument.WithUnit(unit.Bytes),
-		instrument.WithDescription("The number of bytes that were written to a metrics"),
+		instrument.WithDescription("Total number of bytes written, by broker"),
 	)
 
 	// read
@@ -128,12 +125,12 @@ func (m *Meter) NewMetrics() Metrics {
 	readErrs, _ := m.meter.SyncInt64().Counter(
 		"read_errors_total",
 		instrument.WithUnit(unit.Dimensionless),
-		instrument.WithDescription("Total number of read errors, by metrics"),
+		instrument.WithDescription("Total number of read errors, by broker"),
 	)
 	readBytes, _ := m.meter.SyncInt64().Counter(
 		"read_bytes_total",
 		instrument.WithUnit(unit.Bytes),
-		instrument.WithDescription("Total number of bytes read, by metrics"),
+		instrument.WithDescription("Total number of bytes read, by broker"),
 	)
 
 	// produce & consume
@@ -141,15 +138,15 @@ func (m *Meter) NewMetrics() Metrics {
 	produceBytes, _ := m.meter.SyncInt64().Counter(
 		"produce_bytes_total",
 		instrument.WithUnit(unit.Bytes),
-		instrument.WithDescription("Total number of uncompressed bytes produced, by metrics and topic"),
+		instrument.WithDescription("Total number of uncompressed bytes produced, by broker and topic"),
 	)
 	fetchBytes, _ := m.meter.SyncInt64().Counter(
 		"fetch_bytes_total",
 		instrument.WithUnit(unit.Bytes),
-		instrument.WithDescription("Total number of uncompressed bytes fetched, by metrics and topic"),
+		instrument.WithDescription("Total number of uncompressed bytes fetched, by broker and topic"),
 	)
 
-	metrics := Metrics{
+	return Metrics{
 		connects:    connects,
 		connectErrs: connectsErrors,
 		disconnects: disconnects,
@@ -163,12 +160,11 @@ func (m *Meter) NewMetrics() Metrics {
 		produceBytes: produceBytes,
 		fetchBytes:   fetchBytes,
 	}
-
-	return metrics
 }
 
 // Helpers -------------------------------------------------------------------
 
+// TODO: Delete this function and import the exported version from version 1.11 when it is released
 func strnode(node int32) string {
 	if node < 0 {
 		return "seed_" + strconv.Itoa(int(node)-math.MinInt32)
