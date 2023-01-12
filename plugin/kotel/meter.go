@@ -2,19 +2,19 @@ package kotel
 
 import (
 	"context"
-	"go.opentelemetry.io/otel/attribute"
-	semconv "go.opentelemetry.io/otel/semconv/v1.12.0"
 	"math"
 	"net"
 	"strconv"
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kgo"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/metric/global"
 	"go.opentelemetry.io/otel/metric/instrument"
 	"go.opentelemetry.io/otel/metric/instrument/syncint64"
 	"go.opentelemetry.io/otel/metric/unit"
+	semconv "go.opentelemetry.io/otel/semconv/v1.12.0"
 )
 
 var ( // interface checks to ensure we implement the hooks properly
@@ -32,19 +32,19 @@ type Meter struct {
 	metrics  Metrics
 }
 
-// MetricsOption interface used for setting optional config properties.
-type MetricsOption interface {
+// MeterOpt interface used for setting optional config properties.
+type MeterOpt interface {
 	apply(*Meter)
 }
 
-type metricsOptionFunc func(*Meter)
+type meterOptFunc func(*Meter)
 
-func (o metricsOptionFunc) apply(m *Meter) {
+func (o meterOptFunc) apply(m *Meter) {
 	o(m)
 }
 
 // NewMeter returns a Meter, used as option for kotel to instrument franz-go with metrics
-func NewMeter(opts ...MetricsOption) *Meter {
+func NewMeter(opts ...MeterOpt) *Meter {
 	m := &Meter{}
 	for _, opt := range opts {
 		opt.apply(m)
@@ -63,8 +63,8 @@ func NewMeter(opts ...MetricsOption) *Meter {
 
 // MeterProvider takes a metric.MeterProvider and applies it to the Meter
 // If none is specified, the global provider is used.
-func MeterProvider(provider metric.MeterProvider) MetricsOption {
-	return metricsOptionFunc(func(m *Meter) {
+func MeterProvider(provider metric.MeterProvider) MeterOpt {
+	return meterOptFunc(func(m *Meter) {
 		if provider != nil {
 			m.provider = provider
 		}
@@ -164,7 +164,6 @@ func (m *Meter) NewMetrics() Metrics {
 
 // Helpers -------------------------------------------------------------------
 
-// TODO: Delete this function and import the exported version from version 1.11 when it is released
 func strnode(node int32) string {
 	if node < 0 {
 		return "seed_" + strconv.Itoa(int(node)-math.MinInt32)

@@ -3,12 +3,11 @@ package kotel
 import (
 	"testing"
 
-	semconv "go.opentelemetry.io/otel/semconv/v1.12.0"
-	"go.opentelemetry.io/otel/trace"
-
 	"github.com/stretchr/testify/assert"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
+	semconv "go.opentelemetry.io/otel/semconv/v1.12.0"
+	"go.opentelemetry.io/otel/trace"
 )
 
 func TestNewTracer(t *testing.T) {
@@ -22,12 +21,12 @@ func TestNewTracer(t *testing.T) {
 
 	testCases := []struct {
 		name string
-		opts []TracingOption
+		opts []TracerOpt
 		want *Tracer
 	}{
 		{
 			name: "Empty (Use globals)",
-			opts: []TracingOption{},
+			opts: []TracerOpt{},
 			want: &Tracer{
 				tracerProvider: otel.GetTracerProvider(),
 				tracer:         tracer,
@@ -36,7 +35,7 @@ func TestNewTracer(t *testing.T) {
 		},
 		{
 			name: "With TracerPropagator",
-			opts: []TracingOption{TracerPropagator(prop)},
+			opts: []TracerOpt{TracerPropagator(prop)},
 			want: &Tracer{
 				tracerProvider: otel.GetTracerProvider(),
 				tracer:         tracer,
@@ -45,7 +44,7 @@ func TestNewTracer(t *testing.T) {
 		},
 		{
 			name: "Nil TracerPropagator",
-			opts: []TracingOption{TracerPropagator(nil)},
+			opts: []TracerOpt{TracerPropagator(nil)},
 			want: &Tracer{
 				tracerProvider: otel.GetTracerProvider(),
 				tracer:         tracer,

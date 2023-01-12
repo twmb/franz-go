@@ -16,7 +16,7 @@ func NewRecordCarrier(record *kgo.Record) RecordCarrier {
 	return RecordCarrier{record: record}
 }
 
-// Get retrieves a single value for a given key.
+// Get retrieves a single value for a given key if it exists.
 func (c RecordCarrier) Get(key string) string {
 	for _, h := range c.record.Headers {
 		if h.Key == key {

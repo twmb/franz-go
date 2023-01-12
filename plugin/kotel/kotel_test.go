@@ -10,31 +10,31 @@ func TestNewConfig(t *testing.T) {
 	meter := NewMeter()
 	testCases := []struct {
 		name string
-		opts []Option
+		opts []Opt
 		want *Kotel
 	}{
 		{
 			name: "Empty",
-			opts: []Option{},
+			opts: []Opt{},
 			want: &Kotel{},
 		},
 		{
-			name: "WithMetrics",
-			opts: []Option{WithMetrics(meter)},
+			name: "WithMeter",
+			opts: []Opt{WithMeter(meter)},
 			want: &Kotel{
 				Meter: meter,
 			},
 		},
 		{
-			name: "WithTracing",
-			opts: []Option{WithTracing(NewTracer())},
+			name: "WithTracer",
+			opts: []Opt{WithTracer(NewTracer())},
 			want: &Kotel{
 				Tracer: NewTracer(),
 			},
 		},
 		{
-			name: "WithMetrics and WithTracing",
-			opts: []Option{WithMetrics(meter), WithTracing(NewTracer())},
+			name: "WithMeter and WithTracer",
+			opts: []Opt{WithMeter(meter), WithTracer(NewTracer())},
 			want: &Kotel{
 				Meter:  meter,
 				Tracer: NewTracer(),

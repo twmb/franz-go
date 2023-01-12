@@ -14,19 +14,19 @@ type Kotel struct {
 	Tracer *Tracer
 }
 
-// Option interface used for setting optional kotel properties.
-type Option interface {
+// Opt interface used for setting optional kotel properties.
+type Opt interface {
 	apply(*Kotel)
 }
 
-type optionFunc func(*Kotel)
+type optFunc func(*Kotel)
 
-func (o optionFunc) apply(c *Kotel) {
+func (o optFunc) apply(c *Kotel) {
 	o(c)
 }
 
 // NewKotel creates a new Kotel struct and applies opts to it.
-func NewKotel(opts ...Option) *Kotel {
+func NewKotel(opts ...Opt) *Kotel {
 	k := &Kotel{}
 	for _, opt := range opts {
 		opt.apply(k)
@@ -34,18 +34,18 @@ func NewKotel(opts ...Option) *Kotel {
 	return k
 }
 
-// WithTracing configures Kotel with a Tracer
-func WithTracing(t *Tracer) Option {
-	return optionFunc(func(k *Kotel) {
+// WithTracer configures Kotel with a Tracer
+func WithTracer(t *Tracer) Opt {
+	return optFunc(func(k *Kotel) {
 		if t != nil {
 			k.Tracer = t
 		}
 	})
 }
 
-// WithMetrics configures Kotel with a Meter
-func WithMetrics(m *Meter) Option {
-	return optionFunc(func(k *Kotel) {
+// WithMeter configures Kotel with a Meter
+func WithMeter(m *Meter) Opt {
+	return optFunc(func(k *Kotel) {
 		if m != nil {
 			k.Meter = m
 		}

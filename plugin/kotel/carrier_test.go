@@ -99,19 +99,18 @@ func TestRecordCarrier_Set(t *testing.T) {
 	tests := []struct {
 		name   string
 		record *kgo.Record
-		kv1    kv
-		kv2    kv
-		kv3    kv
-		kv4    kv
+		kvs    []kv
 		want   []kgo.RecordHeader
 	}{
 		{
 			name:   "Set",
 			record: &kgo.Record{Headers: []kgo.RecordHeader{{Key: "key1", Value: []byte("value1")}}},
-			kv1:    kv{key: "key1", val: "updated"},
-			kv2:    kv{key: "key2", val: "value2"},
-			kv3:    kv{key: "key2", val: "updated"},
-			kv4:    kv{key: "key3", val: "value3"},
+			kvs: []kv{
+				{key: "key1", val: "updated"},
+				{key: "key2", val: "value2"},
+				{key: "key2", val: "updated"},
+				{key: "key3", val: "value3"},
+			},
 			want: []kgo.RecordHeader{
 				{Key: "key1", Value: []byte("updated")},
 				{Key: "key2", Value: []byte("updated")},
@@ -122,10 +121,9 @@ func TestRecordCarrier_Set(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			c := RecordCarrier{record: tt.record}
-			c.Set(tt.kv1.key, tt.kv1.val)
-			c.Set(tt.kv2.key, tt.kv2.val)
-			c.Set(tt.kv3.key, tt.kv3.val)
-			c.Set(tt.kv4.key, tt.kv4.val)
+			for _, kv := range tt.kvs {
+				c.Set(kv.key, kv.val)
+			}
 			assert.ElementsMatch(t, c.record.Headers, tt.want)
 		})
 	}

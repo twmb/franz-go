@@ -8,8 +8,8 @@ a [`kgo.Hook`](https://pkg.go.dev/github.com/twmb/franz-go/pkg/kgo#Hook) interfa
 records with ancestor trace data for producers, or extract ancestor trace data from records for consumers. In
 addition, `kotel` tracks a variety of metrics related to connections, errors, and bytes transferred.
 
-To get started with `kotel`, you will need to set up a tracer and/or metric provider and configure the desired tracing
-and/or metrics options. You can then create a `kotel` hook and pass it to the `kgo.WithHooks` options when creating a
+To get started with `kotel`, you will need to set up a tracer and/or meter provider and configure the desired tracer
+and/or meter options. You can then create a `kotel` hook and pass it to the `kgo.WithHooks` options when creating a
 new client.
 
 From there, you can use the `kotel` tracing and metrics features in your `franz-go` code as needed. For more detailed
@@ -26,7 +26,7 @@ OpenTelemetry and how it can be used in your `franz-go` projects.
 2) HookProduceRecordUnbuffered
 3) HookFetchRecordBuffered
 
-To get started with tracing in `kotel`, you'll need to set up a tracer provider and configure any desired tracing
+To get started with tracing in `kotel`, you'll need to set up a tracer provider and configure any desired tracer
 options. You can then create a `kotel` hook and pass it to `kgo.WithHooks` when creating a new client.
 
 Here's an example of how you might do this:
@@ -34,14 +34,14 @@ Here's an example of how you might do this:
 ```go
 tracerProvider, err := initTracerProvider()
 
-tracingOpts := []kotel.TracingOption{
+tracerOpts := []kotel.TracerOpt{
 	kotel.TracerProvider(tracerProvider),
 	kotel.TracerPropagator(propagation.NewCompositeTextMapPropagator(propagation.TraceContext{})),
 }
-tracer := kotel.NewTracer(tracingOpts...)
+tracer := kotel.NewTracer(tracerOpts...)
 
-kotelOps := []kotel.Option{
-	kotel.WithTracing(tracer)
+kotelOps := []kotel.Opt{
+	kotel.WithTracer(tracer)
 }
 
 kotelService := kotel.NewKotel(kotelOps...)
@@ -62,6 +62,7 @@ To include ancestor trace data in your records, you can use the `ctx` object obt
 ```go
 func httpHandler(w http.ResponseWriter, r *http.Request) {
     ctx, span := tracer.Start(r.Context(), "request-span")
+    defer span.End()
     span.SetAttributes(attribute.String("foo", "bar"))
 
     var wg sync.WaitGroup
@@ -77,7 +78,6 @@ func httpHandler(w http.ResponseWriter, r *http.Request) {
     }
     })
     wg.Wait()
-    defer span.End()
     // ...
 }
 ```
@@ -110,7 +110,7 @@ for {
 
 ## Metrics
 
-The metrics module of `kotel` tracks various metrics related to the processing of records, such as the number of
+The meter module of `kotel` tracks various metrics related to the processing of records, such as the number of
 successful and unsuccessful connections, bytes written and read, and the number of buffered records. These metrics are
 all counters and are tracked under the following names:
 
@@ -127,7 +127,7 @@ buffered_produce_records_total
 buffered_fetch_records_total
 ```
 
-To get started with metrics in `kotel`, you'll need to set up a meter provider and configure any desired metrics
+To get started with metrics in `kotel`, you'll need to set up a meter provider and configure any desired meter
 options. You can then create a `kotel` hook and pass it to `kgo.WithHooks` when creating a new client.
 
 Here's an example of how you might do this:
@@ -135,12 +135,12 @@ Here's an example of how you might do this:
 ```go
 meterProvider, err := initMeterProvider()
 
-metricsOpts := []kotel.MetricsOption{kotel.MeterProvider(meterProvider)}
-meter := kotel.NewMeter(metricsOpts...)
+meterOpts := []kotel.MeterOpt{kotel.MeterProvider(meterProvider)}
+meter := kotel.NewMeter(meterOpts...)
 
 // Pass tracer and meter to NewKotel hook
-kotelOps := []kotel.Option{
-	kotel.WithMetrics(meter)
+kotelOps := []kotel.Opt{
+	kotel.WithMeter(meter)
 }
 
 kotelService := kotel.NewKotel(kotelOps...)

@@ -26,19 +26,19 @@ type Tracer struct {
 	tracer         trace.Tracer
 }
 
-// TracingOption interface used for setting optional config properties.
-type TracingOption interface {
+// TracerOpt interface used for setting optional config properties.
+type TracerOpt interface {
 	apply(*Tracer)
 }
 
-type tracingOptionFunc func(*Tracer)
+type tracerOptFunc func(*Tracer)
 
-func (o tracingOptionFunc) apply(t *Tracer) {
+func (o tracerOptFunc) apply(t *Tracer) {
 	o(t)
 }
 
 // NewTracer returns a Tracer, used as option for kotel to instrument franz-go with tracing
-func NewTracer(opts ...TracingOption) *Tracer {
+func NewTracer(opts ...TracerOpt) *Tracer {
 	t := &Tracer{}
 	for _, opt := range opts {
 		opt.apply(t)
@@ -59,8 +59,8 @@ func NewTracer(opts ...TracingOption) *Tracer {
 
 // TracerProvider takes a trace.TracerProvider and applies it to the Tracer
 // If none is specified, the global provider is used.
-func TracerProvider(provider trace.TracerProvider) TracingOption {
-	return tracingOptionFunc(func(t *Tracer) {
+func TracerProvider(provider trace.TracerProvider) TracerOpt {
+	return tracerOptFunc(func(t *Tracer) {
 		if t != nil {
 			t.tracerProvider = provider
 		}
@@ -69,8 +69,8 @@ func TracerProvider(provider trace.TracerProvider) TracingOption {
 
 // TracerPropagator takes a propagation.TextMapPropagator and applies it to the Tracer
 // If none is specified, the global Propagator is used.
-func TracerPropagator(propagator propagation.TextMapPropagator) TracingOption {
-	return tracingOptionFunc(func(t *Tracer) {
+func TracerPropagator(propagator propagation.TextMapPropagator) TracerOpt {
+	return tracerOptFunc(func(t *Tracer) {
 		if t != nil {
 			t.propagators = propagator
 		}
@@ -104,6 +104,7 @@ func (t *Tracer) OnProduceRecordBuffered(r *kgo.Record) {
 // OnProduceRecordUnbuffered Completes the producer span
 func (t *Tracer) OnProduceRecordUnbuffered(r *kgo.Record, err error) {
 	span := trace.SpanFromContext(r.Context)
+	defer span.End()
 
 	span.SetAttributes(
 		semconv.MessagingMessageIDKey.String(strconv.FormatInt(r.Offset, 10)),
@@ -114,8 +115,6 @@ func (t *Tracer) OnProduceRecordUnbuffered(r *kgo.Record, err error) {
 		span.SetStatus(codes.Error, err.Error())
 		span.RecordError(err)
 	}
-
-	span.End()
 }
 
 // OnFetchRecordBuffered Starts and completes the consumer spans

@@ -3,23 +3,22 @@ package kotel
 import (
 	"testing"
 
-	semconv "go.opentelemetry.io/otel/semconv/v1.12.0"
-
 	"github.com/stretchr/testify/assert"
 	"go.opentelemetry.io/otel/metric"
+	semconv "go.opentelemetry.io/otel/semconv/v1.12.0"
 )
 
-func TestWithMetrics(t *testing.T) {
+func TestWithMeter(t *testing.T) {
 	provider := metric.NewNoopMeterProvider()
 
 	testCases := []struct {
 		name string
-		opts []MetricsOption
+		opts []MeterOpt
 		want *Meter
 	}{
 		{
 			name: "With MeterProvider",
-			opts: []MetricsOption{MeterProvider(provider)},
+			opts: []MeterOpt{MeterProvider(provider)},
 			want: &Meter{
 				provider: provider,
 				meter: provider.Meter(

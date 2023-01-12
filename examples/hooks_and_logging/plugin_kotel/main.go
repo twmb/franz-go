@@ -4,6 +4,11 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"log"
+	"strconv"
+	"strings"
+	"sync"
+
 	"github.com/google/uuid"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/plugin/kotel"
@@ -17,10 +22,6 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.12.0"
 	"go.opentelemetry.io/otel/trace"
-	"log"
-	"strconv"
-	"strings"
-	"sync"
 )
 
 var (
@@ -86,22 +87,22 @@ func initMeterProvider() (*metric.MeterProvider, error) {
 }
 
 func newKotelTracer(tracerProvider *sdktrace.TracerProvider) *kotel.Tracer {
-	tracingOpts := []kotel.TracingOption{
+	tracerOpts := []kotel.TracerOpt{
 		kotel.TracerProvider(tracerProvider),
 		kotel.TracerPropagator(propagation.NewCompositeTextMapPropagator(propagation.TraceContext{})),
 	}
-	return kotel.NewTracer(tracingOpts...)
+	return kotel.NewTracer(tracerOpts...)
 }
 
 func newKotelMeter(meterProvider *metric.MeterProvider) *kotel.Meter {
-	metricsOpts := []kotel.MetricsOption{kotel.MeterProvider(meterProvider)}
-	return kotel.NewMeter(metricsOpts...)
+	meterOpts := []kotel.MeterOpt{kotel.MeterProvider(meterProvider)}
+	return kotel.NewMeter(meterOpts...)
 }
 
 func newKotel(tracer *kotel.Tracer, meter *kotel.Meter) *kotel.Kotel {
-	kotelOps := []kotel.Option{
-		kotel.WithTracing(tracer),
-		kotel.WithMetrics(meter),
+	kotelOps := []kotel.Opt{
+		kotel.WithTracer(tracer),
+		kotel.WithMeter(meter),
 	}
 	return kotel.NewKotel(kotelOps...)
 }
@@ -117,6 +118,7 @@ func newProducerClient(kotelService *kotel.Kotel) (*kgo.Client, error) {
 func produceMessage(client *kgo.Client, tracerProvider *sdktrace.TracerProvider) error {
 	requestTracer := tracerProvider.Tracer("request-service")
 	requestCtx, requestSpan := requestTracer.Start(context.Background(), "request-span")
+	defer requestSpan.End()
 	requestSpan.SetAttributes(attribute.String("some-key", "foo"))
 
 	var wg sync.WaitGroup
@@ -131,7 +133,6 @@ func produceMessage(client *kgo.Client, tracerProvider *sdktrace.TracerProvider)
 		}
 	})
 	wg.Wait()
-	requestSpan.End()
 	return nil
 }
 
