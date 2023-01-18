@@ -536,9 +536,9 @@ func (s *sink) handleReqClientErr(req *produceRequest, err error) {
 		isRetriableBrokerErr(err):
 		updateMeta := !isRetriableBrokerErr(err)
 		if updateMeta {
-			s.cl.cfg.logger.Log(LogLevelInfo, "produce request failed triggering metadata update", "broker", logID(s.nodeID), "err", err)
+			s.cl.cfg.logger.Log(LogLevelInfo, "produce request failed, triggering metadata update", "broker", logID(s.nodeID), "err", err)
 		}
-		s.handleRetryBatches(req.batches, req.backoffSeq, updateMeta, false, "failed produce request triggering metadata update")
+		s.handleRetryBatches(req.batches, req.backoffSeq, updateMeta, false, "failed produce request triggered metadata update")
 
 	case errors.Is(err, ErrClientClosed):
 		s.cl.failBufferedRecords(ErrClientClosed)
