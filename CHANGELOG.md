@@ -1,3 +1,23 @@
+v1.11.1
+===
+
+This patch release fixes a bug in `ConsumePreferringLagFn`. The code could
+panic if you:
+
+* Consumed from two+ topics
+* Two of the topics have a different amount of partitions
+* The single-partition topic has some lag, the topic with more partitions has
+  one partition with no lag, and another partition with _more_ lag than the
+  single-partition topic
+
+In this case, the code previously would create a non-existent partition to
+consume from for the single-partition topic and this would immediately result
+in a panic when the fetch request was built.
+
+See the commit for more details.
+
+* [`38f2ec6`](https://github.com/twmb/franz-go/commit/38f2ec6) **bugfix** pkg/kgo: bugfix ConsumePreferringLagFn
+
 v1.11.0
 ===
 
