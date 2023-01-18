@@ -1582,13 +1582,17 @@ func (f *fetchRequest) addCursor(c *cursor) {
 // order, and the previously determined per-topic partition order, and returns
 // a new topic and per-topic partition order.
 //
-// Most use cases will not need to look at the prior orders, but they exist
-// if you want to get fancy.
+// Most use cases will not need to look at the prior orders, but they exist if
+// you want to get fancy.
 //
 // You can return partial results: if you only return topics, partitions within
 // each topic keep their prior ordering. If you only return some topics but not
 // all, the topics you do not return / the partitions you do not return will
 // retain their original ordering *after* your given ordering.
+//
+// NOTE: torderPrior and porderPrior must not be modified. To avoid a bit of
+// unnecessary allocations, these arguments are views into data that is used to
+// build a fetch request.
 type PreferLagFn func(lag map[string]map[int32]int64, torderPrior []string, porderPrior map[string][]int32) ([]string, map[string][]int32)
 
 // PreferLagAt is a simple PreferLagFn that orders the largest lag first, for
@@ -1704,6 +1708,9 @@ func (f *fetchRequest) adjustPreferringLag() {
 			if c.offset <= 0 {
 				lag = hwm
 			}
+			if lag < 0 {
+				lag = 0
+			}
 			plag[p] = lag
 		}
 	}
@@ -1712,29 +1719,34 @@ func (f *fetchRequest) adjustPreferringLag() {
 	if torder == nil && porder == nil {
 		return
 	}
-	if torder == nil {
-		torder = f.torder
-	}
-	if porder == nil {
-		porder = f.porder
-	}
 	defer func() { f.torder, f.porder = torder, porder }()
 
-	// Remove any extra topics the user returned that we were not
-	// consuming, and add all topics they did not give back.
-	for i := 0; i < len(torder); i++ {
-		t := torder[i]
-		if _, exists := tall[t]; !exists {
-			torder = append(torder[:i], torder[i+1:]...) // user gave topic we were not fetching
-			i--
+	if len(torder) == 0 {
+		torder = f.torder // user did not modify topic order, keep old order
+	} else {
+		// Remove any extra topics the user returned that we were not
+		// consuming, and add all topics they did not give back.
+		for i := 0; i < len(torder); i++ {
+			t := torder[i]
+			if _, exists := tall[t]; !exists {
+				torder = append(torder[:i], torder[i+1:]...) // user gave topic we were not fetching
+				i--
+			}
+			delete(tall, t)
 		}
-		delete(tall, t)
-	}
-	for t := range tall {
-		torder = append(torder, t) // user did not return topic we were fetching
+		for _, t := range f.torder {
+			if _, exists := tall[t]; exists {
+				torder = append(torder, t) // user did not return topic we were fetching
+				delete(tall, t)
+			}
+		}
 	}
 
-	// Now, same thing for partitions.
+	if len(porder) == 0 {
+		porder = f.porder // user did not modify partition order, keep old order
+		return
+	}
+
 	pused := make(map[int32]struct{})
 	for t, ps := range pall {
 		order, exists := porder[t]
@@ -1753,8 +1765,11 @@ func (f *fetchRequest) adjustPreferringLag() {
 			}
 			delete(pused, p)
 		}
-		for p := range pused {
-			order = append(order, p)
+		for _, p := range f.porder[t] {
+			if _, exists := pused[p]; exists {
+				order = append(order, p)
+				delete(pused, p)
+			}
 		}
 		porder[t] = order
 	}

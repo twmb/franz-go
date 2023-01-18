@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -34,6 +35,12 @@ var (
 	// EndTxn to return successfully before beginning a new transaction. We
 	// cannot use EndAndBeginTransaction with EndBeginTxnUnsafe.
 	allowUnsafe = false
+
+	// We create topics with a different number of partitions to exercise
+	// a few extra code paths; we index into npartitions with npartitionsAt,
+	// an atomic that we modulo after load.
+	npartitions   = []int{7, 11, 31}
+	npartitionsAt int64
 )
 
 func init() {
@@ -110,10 +117,11 @@ func tmpTopic(tb testing.TB) (string, func()) {
 
 	topic := randsha()
 
+	partitions := npartitions[int(atomic.AddInt64(&npartitionsAt, 1))%len(npartitions)]
 	req := kmsg.NewPtrCreateTopicsRequest()
 	reqTopic := kmsg.NewCreateTopicsRequestTopic()
 	reqTopic.Topic = topic
-	reqTopic.NumPartitions = 20
+	reqTopic.NumPartitions = int32(partitions)
 	reqTopic.ReplicationFactor = int16(testrf)
 	req.Topics = append(req.Topics, reqTopic)
 
