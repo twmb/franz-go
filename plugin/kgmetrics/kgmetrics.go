@@ -18,7 +18,7 @@
 //
 // This can be used in a client like so:
 //
-//	m := kgmetrics.NewMetrics()
+//	m := kgmetrics.NewInstruments()
 //	cl, err := kgo.NewClient(
 //	        kgo.WithHooks(m),
 //	        // ...other opts

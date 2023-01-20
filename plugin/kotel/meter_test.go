@@ -22,11 +22,11 @@ func TestWithMeter(t *testing.T) {
 			want: &Meter{
 				provider: provider,
 				meter: provider.Meter(
-					"github.com/twmb/franz-go/plugin/kotel",
+					instrumentationName,
 					metric.WithInstrumentationVersion(SemVersion()),
 					metric.WithSchemaURL(semconv.SchemaURL),
 				),
-				metrics: NewMeter(MeterProvider(provider)).metrics,
+				instruments: NewMeter(MeterProvider(provider)).instruments,
 			},
 		},
 	}

@@ -115,16 +115,15 @@ successful and unsuccessful connections, bytes written and read, and the number 
 all counters and are tracked under the following names:
 
 ```
-connects_total{node_id = "#{node}"}
-connect_errors_total{node_id = "#{node}"}
-write_errors_total{node_id = "#{node}"}
-write_bytes_total{node_id = "#{node}"}
-read_errors_total{node_id = "#{node}"}
-read_bytes_total{node_id = "#{node}"}
-produce_bytes_total{node_id = "#{node}", topic = "#{topic}"}
-fetch_bytes_total{node_id = "#{node}", topic = "#{topic}"}
-buffered_produce_records_total
-buffered_fetch_records_total
+messaging.kafka.connects.count{node_id = "#{node}"}
+messaging.kafka.connect_errors.count{node_id = "#{node}"}
+messaging.kafka.disconnects.count{node_id = "#{node}"}
+messaging.kafka.write_errors.count{node_id = "#{node}"}
+messaging.kafka.write_bytes{node_id = "#{node}"}
+messaging.kafka.read_errors.count{node_id = "#{node}"}
+messaging.kafka.read_bytes.count{node_id = "#{node}", topic = "#{topic}"}
+messaging.kafka.produce_bytes.count{node_id = "#{node}", topic = "#{topic}"}
+messaging.kafka.fetch_bytes.count{node_id = "#{node}", topic = "#{topic}"}
 ```
 
 To get started with metrics in `kotel`, you'll need to set up a meter provider and configure any desired meter

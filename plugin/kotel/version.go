@@ -7,7 +7,7 @@ func Version() string {
 	info, ok := debug.ReadBuildInfo()
 	if ok {
 		for _, dep := range info.Deps {
-			if dep.Path == "github.com/twmb/franz-go/plugin/kotel" {
+			if dep.Path == instrumentationName {
 				return dep.Version
 			}
 		}

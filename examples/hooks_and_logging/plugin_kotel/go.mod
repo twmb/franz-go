@@ -4,7 +4,7 @@ go 1.19
 
 require (
 	github.com/google/uuid v1.3.0
-	github.com/twmb/franz-go v1.11.0
+	github.com/twmb/franz-go v1.11.1
 	github.com/twmb/franz-go/plugin/kotel v0.0.0-00010101000000-000000000000
 	go.opentelemetry.io/otel v1.11.2
 	go.opentelemetry.io/otel/exporters/stdout/stdoutmetric v0.34.0
