@@ -1,3 +1,14 @@
+v1.11.2
+===
+
+This patch release fixes `HookFetchRecordUnbuffered` never being called if a
+hook also implemented `HookFetchRecordBuffered`. No existing plugin currently
+implements these hooks (though one will soon), so this patch is only relevant
+to you if you manually have added these hooks.
+
+* [`2a37df9`](https://github.com/twmb/franz-go/commit/2a37df9) **bugfix** kgo: patch HookFetchRecordUnbuffered
+
+
 v1.11.1
 ===
 
