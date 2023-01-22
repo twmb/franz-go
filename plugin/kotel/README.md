@@ -41,52 +41,44 @@ tracerOpts := []kotel.TracerOpt{
 tracer := kotel.NewTracer(tracerOpts...)
 
 kotelOps := []kotel.Opt{
-	kotel.WithTracer(tracer)
+	kotel.WithTracer(tracer),
 }
 
 kotelService := kotel.NewKotel(kotelOps...)
 
 cl, err := kgo.NewClient(
 	kgo.WithHooks(kotelService.Hooks()...),
-    // ...other opts
+	// ...other opts
 )
 ```
 
-`kotel` enables you to enrich records with ancestor trace data, such as trace context from a `http.Request` object that
-may already contain a parent span from an instrumentation library. This can be useful for tracking the lineage of your
-records and providing additional context for tracing and debugging purposes.
-
-To include ancestor trace data in your records, you can use the `ctx` object obtained from `tracer.Start` and pass it to
-`cl.Produce` as shown in the example below:
+To include ancestor trace data in your records, you can use the `ctx` object obtained from `tracer.Start` and pass it
+to `cl.Produce` as shown in the example below:
 
 ```go
 func httpHandler(w http.ResponseWriter, r *http.Request) {
-    ctx, span := tracer.Start(r.Context(), "request-span")
-    defer span.End()
-    span.SetAttributes(attribute.String("foo", "bar"))
+	ctx, span := tracer.Start(r.Context(), "request")
+	defer span.End()
+	span.SetAttributes(attribute.String("foo", "bar"))
 
-    var wg sync.WaitGroup
-    wg.Add(1)
-    record := &kgo.Record{Topic: "my-topic", Value: []byte("bar")}
-    
-    cl.Produce(ctx, record, func(_ *kgo.Record, err error) {
-    defer wg.Done()
-    if err != nil {
-        fmt.Printf("record had a produce error: %v\n", err)
-        span.SetStatus(codes.Error, err.Error())
-        span.RecordError(err)
-    }
-    })
-    wg.Wait()
-    // ...
+	var wg sync.WaitGroup
+	wg.Add(1)
+	record := &kgo.Record{Topic: "topic", Value: []byte("foo")}
+
+	cl.Produce(ctx, record, func(_ *kgo.Record, err error) {
+		defer wg.Done()
+		if err != nil {
+			fmt.Printf("record had a produce error: %v\n", err)
+			span.SetStatus(codes.Error, err.Error())
+			span.RecordError(err)
+		}
+	})
+	wg.Wait()
 }
 ```
 
-`kotel` enables consumers to extract ancestor trace data from kafka records and continue the trace in downstream
-processing steps. This can be useful for providing additional context and visibility into the processing of records.
-
-To extract and continue trace data in downstream processing, you can pass the kafka record context to the `tracer.Start`
-, which returns a new context and span as shown in the example below:
+To extract and continue trace data in downstream processing, you can pass the kafka record context to
+the `tracer.Start`, which returns a new context and span as shown in the example below:
 
 ```go
 tracer := tracerProvider.Tracer("process-service")
@@ -100,8 +92,9 @@ for {
 	iter := fetches.RecordIter()
 	for !iter.Done() {
 		record := iter.Next()
-		ctx, span := tracer.Start(r.Context, fmt.Sprintf("%s process", r.Topic))
+		ctx, span := tracer.Start(record.Context, record.Topic+" process")
 		span.SetAttributes(attribute.String("baz", "qux"))
+        // process record here
 		span.End()
 		// optionally pass the context to the next processing step
 	}
@@ -121,7 +114,7 @@ messaging.kafka.disconnects.count{node_id = "#{node}"}
 messaging.kafka.write_errors.count{node_id = "#{node}"}
 messaging.kafka.write_bytes{node_id = "#{node}"}
 messaging.kafka.read_errors.count{node_id = "#{node}"}
-messaging.kafka.read_bytes.count{node_id = "#{node}", topic = "#{topic}"}
+messaging.kafka.read_bytes.count{node_id = "#{node}"}
 messaging.kafka.produce_bytes.count{node_id = "#{node}", topic = "#{topic}"}
 messaging.kafka.fetch_bytes.count{node_id = "#{node}", topic = "#{topic}"}
 ```
@@ -139,9 +132,8 @@ meter := kotel.NewMeter(meterOpts...)
 
 // Pass tracer and meter to NewKotel hook
 kotelOps := []kotel.Opt{
-	kotel.WithMeter(meter)
+	kotel.WithMeter(meter),
 }
-
 kotelService := kotel.NewKotel(kotelOps...)
 
 cl, err := kgo.NewClient(

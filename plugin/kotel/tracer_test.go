@@ -15,7 +15,7 @@ func TestNewTracer(t *testing.T) {
 
 	tracer := otel.GetTracerProvider().Tracer(
 		instrumentationName,
-		trace.WithInstrumentationVersion(SemVersion()),
+		trace.WithInstrumentationVersion(semVersion()),
 		trace.WithSchemaURL(semconv.SchemaURL),
 	)
 
@@ -52,7 +52,6 @@ func TestNewTracer(t *testing.T) {
 			},
 		},
 	}
-
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			result := NewTracer(tc.opts...)

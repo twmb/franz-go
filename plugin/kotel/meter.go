@@ -2,6 +2,7 @@ package kotel
 
 import (
 	"context"
+	"log"
 	"math"
 	"net"
 	"strconv"
@@ -29,7 +30,7 @@ var ( // interface checks to ensure we implement the hooks properly
 type Meter struct {
 	provider    metric.MeterProvider
 	meter       metric.Meter
-	instruments Instruments
+	instruments instruments
 }
 
 // MeterOpt interface used for setting optional config properties.
@@ -38,28 +39,6 @@ type MeterOpt interface {
 }
 
 type meterOptFunc func(*Meter)
-
-func (o meterOptFunc) apply(m *Meter) {
-	o(m)
-}
-
-// NewMeter returns a Meter, used as option for kotel to instrument franz-go with instruments
-func NewMeter(opts ...MeterOpt) *Meter {
-	m := &Meter{}
-	for _, opt := range opts {
-		opt.apply(m)
-	}
-	if m.provider == nil {
-		m.provider = global.MeterProvider()
-	}
-	m.meter = m.provider.Meter(
-		instrumentationName,
-		metric.WithInstrumentationVersion(SemVersion()),
-		metric.WithSchemaURL(semconv.SchemaURL),
-	)
-	m.instruments = m.NewInstruments()
-	return m
-}
 
 // MeterProvider takes a metric.MeterProvider and applies it to the Meter
 // If none is specified, the global provider is used.
@@ -71,9 +50,32 @@ func MeterProvider(provider metric.MeterProvider) MeterOpt {
 	})
 }
 
-// Instruments -------------------------------------------------------------------
+func (o meterOptFunc) apply(m *Meter) {
+	o(m)
+}
 
-type Instruments struct {
+// NewMeter returns a Meter, used as option for kotel to instrument franz-go
+// with instruments
+func NewMeter(opts ...MeterOpt) *Meter {
+	m := &Meter{}
+	for _, opt := range opts {
+		opt.apply(m)
+	}
+	if m.provider == nil {
+		m.provider = global.MeterProvider()
+	}
+	m.meter = m.provider.Meter(
+		instrumentationName,
+		metric.WithInstrumentationVersion(semVersion()),
+		metric.WithSchemaURL(semconv.SchemaURL),
+	)
+	m.instruments = m.newInstruments()
+	return m
+}
+
+// instruments ---------------------------------------------------------------
+
+type instruments struct {
 	connects    syncint64.Counter
 	connectErrs syncint64.Counter
 	disconnects syncint64.Counter
@@ -88,61 +90,97 @@ type Instruments struct {
 	fetchBytes   syncint64.Counter
 }
 
-func (m *Meter) NewInstruments() Instruments {
+func (m *Meter) newInstruments() instruments {
 	// connects and disconnects
-	connects, _ := m.meter.SyncInt64().Counter(
+
+	connects, err := m.meter.SyncInt64().Counter(
 		"messaging.kafka.connects.count",
 		instrument.WithUnit(unit.Dimensionless),
 		instrument.WithDescription("Total number of connections opened, by broker"),
 	)
-	connectErrs, _ := m.meter.SyncInt64().Counter(
+	if err != nil {
+		log.Printf("failed to create connects instrument, %v", err)
+	}
+
+	connectErrs, err := m.meter.SyncInt64().Counter(
 		"messaging.kafka.connect_errors.count",
 		instrument.WithUnit(unit.Dimensionless),
 		instrument.WithDescription("Total number of connection errors, by broker"),
 	)
-	disconnects, _ := m.meter.SyncInt64().Counter(
+	if err != nil {
+		log.Printf("failed to create connectErrs instrument, %v", err)
+	}
+
+	disconnects, err := m.meter.SyncInt64().Counter(
 		"messaging.kafka.disconnects.count",
 		instrument.WithUnit(unit.Dimensionless),
 		instrument.WithDescription("Total number of connections closed, by broker"),
 	)
+	if err != nil {
+		log.Printf("failed to create disconnects instrument, %v", err)
+	}
 
 	// write
-	writeErrs, _ := m.meter.SyncInt64().Counter(
+
+	writeErrs, err := m.meter.SyncInt64().Counter(
 		"messaging.kafka.write_errors.count",
 		instrument.WithUnit(unit.Dimensionless),
 		instrument.WithDescription("Total number of write errors, by broker"),
 	)
-	writeBytes, _ := m.meter.SyncInt64().Counter(
+	if err != nil {
+		log.Printf("failed to create writeErrs instrument, %v", err)
+	}
+
+	writeBytes, err := m.meter.SyncInt64().Counter(
 		"messaging.kafka.write_bytes",
 		instrument.WithUnit(unit.Bytes),
 		instrument.WithDescription("Total number of bytes written, by broker"),
 	)
+	if err != nil {
+		log.Printf("failed to create writeBytes instrument, %v", err)
+	}
 
 	// read
-	readErrs, _ := m.meter.SyncInt64().Counter(
+
+	readErrs, err := m.meter.SyncInt64().Counter(
 		"messaging.kafka.read_errors.count",
 		instrument.WithUnit(unit.Dimensionless),
 		instrument.WithDescription("Total number of read errors, by broker"),
 	)
-	readBytes, _ := m.meter.SyncInt64().Counter(
+	if err != nil {
+		log.Printf("failed to create readErrs instrument, %v", err)
+	}
+
+	readBytes, err := m.meter.SyncInt64().Counter(
 		"messaging.kafka.read_bytes.count",
 		instrument.WithUnit(unit.Bytes),
 		instrument.WithDescription("Total number of bytes read, by broker"),
 	)
+	if err != nil {
+		log.Printf("failed to create readBytes instrument, %v", err)
+	}
 
 	// produce & consume
-	produceBytes, _ := m.meter.SyncInt64().Counter(
+
+	produceBytes, err := m.meter.SyncInt64().Counter(
 		"messaging.kafka.produce_bytes.count",
 		instrument.WithUnit(unit.Bytes),
 		instrument.WithDescription("Total number of uncompressed bytes produced, by broker and topic"),
 	)
-	fetchBytes, _ := m.meter.SyncInt64().Counter(
+	if err != nil {
+		log.Printf("failed to create produceBytes instrument, %v", err)
+	}
+
+	fetchBytes, err := m.meter.SyncInt64().Counter(
 		"messaging.kafka.fetch_bytes.count",
 		instrument.WithUnit(unit.Bytes),
 		instrument.WithDescription("Total number of uncompressed bytes fetched, by broker and topic"),
 	)
+	if err != nil {
+		log.Printf("failed to create fetchBytes instrument, %v", err)
+	}
 
-	return Instruments{
+	return instruments{
 		connects:    connects,
 		connectErrs: connectErrs,
 		disconnects: disconnects,

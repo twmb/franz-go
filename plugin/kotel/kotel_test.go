@@ -22,22 +22,22 @@ func TestNewConfig(t *testing.T) {
 			name: "WithMeter",
 			opts: []Opt{WithMeter(meter)},
 			want: &Kotel{
-				Meter: meter,
+				meter: meter,
 			},
 		},
 		{
 			name: "WithTracer",
 			opts: []Opt{WithTracer(NewTracer())},
 			want: &Kotel{
-				Tracer: NewTracer(),
+				tracer: NewTracer(),
 			},
 		},
 		{
 			name: "WithMeter and WithTracer",
 			opts: []Opt{WithMeter(meter), WithTracer(NewTracer())},
 			want: &Kotel{
-				Meter:  meter,
-				Tracer: NewTracer(),
+				meter:  meter,
+				tracer: NewTracer(),
 			},
 		},
 	}

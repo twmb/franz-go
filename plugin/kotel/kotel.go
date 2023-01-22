@@ -10,8 +10,8 @@ const (
 
 // Kotel represents the configuration options available for the kotel plugin
 type Kotel struct {
-	Meter  *Meter
-	Tracer *Tracer
+	meter  *Meter
+	tracer *Tracer
 }
 
 // Opt interface used for setting optional kotel properties.
@@ -25,20 +25,11 @@ func (o optFunc) apply(c *Kotel) {
 	o(c)
 }
 
-// NewKotel creates a new Kotel struct and applies opts to it.
-func NewKotel(opts ...Opt) *Kotel {
-	k := &Kotel{}
-	for _, opt := range opts {
-		opt.apply(k)
-	}
-	return k
-}
-
 // WithTracer configures Kotel with a Tracer
 func WithTracer(t *Tracer) Opt {
 	return optFunc(func(k *Kotel) {
 		if t != nil {
-			k.Tracer = t
+			k.tracer = t
 		}
 	})
 }
@@ -47,7 +38,7 @@ func WithTracer(t *Tracer) Opt {
 func WithMeter(m *Meter) Opt {
 	return optFunc(func(k *Kotel) {
 		if m != nil {
-			k.Meter = m
+			k.meter = m
 		}
 	})
 }
@@ -55,11 +46,20 @@ func WithMeter(m *Meter) Opt {
 // Hooks return a list of kgo.hooks compatible with its interface
 func (k *Kotel) Hooks() []kgo.Hook {
 	var hooks []kgo.Hook
-	if k.Tracer != nil {
-		hooks = append(hooks, k.Tracer)
+	if k.tracer != nil {
+		hooks = append(hooks, k.tracer)
 	}
-	if k.Meter != nil {
-		hooks = append(hooks, k.Meter)
+	if k.meter != nil {
+		hooks = append(hooks, k.meter)
 	}
 	return hooks
+}
+
+// NewKotel creates a new Kotel struct and applies opts to it.
+func NewKotel(opts ...Opt) *Kotel {
+	k := &Kotel{}
+	for _, opt := range opts {
+		opt.apply(k)
+	}
+	return k
 }

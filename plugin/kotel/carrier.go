@@ -31,6 +31,7 @@ func (c RecordCarrier) Set(key, val string) {
 	// Check if key already exists
 	for i, h := range c.record.Headers {
 		if h.Key == key {
+			// Key exist, update the value
 			c.record.Headers[i].Value = []byte(val)
 			return
 		}

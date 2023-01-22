@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"flag"
 	"fmt"
@@ -32,7 +33,8 @@ var (
 
 func initTracerProvider() (*sdktrace.TracerProvider, error) {
 	// Create a new trace exporter
-	traceExporter, err := stdouttrace.New(stdouttrace.WithPrettyPrint())
+	var b bytes.Buffer
+	traceExporter, err := stdouttrace.New(stdouttrace.WithWriter(&b))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create trace exporter: %w", err)
 	}
@@ -104,10 +106,10 @@ func newKotelMeter(meterProvider *metric.MeterProvider) *kotel.Meter {
 	return kotel.NewMeter(meterOpts...)
 }
 
-func newKotel(tracer *kotel.Tracer, meter *kotel.Meter) *kotel.Kotel {
+func newKotel(tracer *kotel.Tracer) *kotel.Kotel {
 	kotelOps := []kotel.Opt{
 		kotel.WithTracer(tracer),
-		kotel.WithMeter(meter),
+		//kotel.WithMeter(meter),
 	}
 	return kotel.NewKotel(kotelOps...)
 }
@@ -185,7 +187,7 @@ func processRecord(record *kgo.Record, tracer trace.Tracer) {
 		),
 	}
 	// Start a new span using the provided context and options
-	_, processSpan := tracer.Start(record.Context, fmt.Sprintf("%s process", record.Topic), opts...)
+	_, processSpan := tracer.Start(record.Context, record.Topic+" process", opts...)
 	// Simulate some work
 	time.Sleep(1 * time.Second)
 	// End the span when function exits
@@ -212,22 +214,22 @@ func do() error {
 	}()
 
 	// Initialize meter provider and handle shutdown
-	meterProvider, err := initMeterProvider()
-	if err != nil {
-		return fmt.Errorf("failed to initialize meter provider: %w", err)
-	}
-	defer func() {
-		if err := meterProvider.Shutdown(context.Background()); err != nil {
-			log.Printf("Error shutting down meter provider: %v", err)
-		}
-	}()
+	//meterProvider, err := initMeterProvider()
+	//if err != nil {
+	//	return fmt.Errorf("failed to initialize meter provider: %w", err)
+	//}
+	//defer func() {
+	//	if err := meterProvider.Shutdown(context.Background()); err != nil {
+	//		log.Printf("Error shutting down meter provider: %v", err)
+	//	}
+	//}()
 
 	// Create a new kotel tracer and meter
 	kotelTracer := newKotelTracer(tracerProvider)
-	kotelMeter := newKotelMeter(meterProvider)
+	//kotelMeter := newKotelMeter(meterProvider)
 
 	// Create a new kotel service
-	kotelService := newKotel(kotelTracer, kotelMeter)
+	kotelService := newKotel(kotelTracer)
 
 	// Initialize producer client and handle close
 	producerClient, err := newProducerClient(kotelService)

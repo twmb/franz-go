@@ -23,14 +23,13 @@ func TestWithMeter(t *testing.T) {
 				provider: provider,
 				meter: provider.Meter(
 					instrumentationName,
-					metric.WithInstrumentationVersion(SemVersion()),
+					metric.WithInstrumentationVersion(semVersion()),
 					metric.WithSchemaURL(semconv.SchemaURL),
 				),
 				instruments: NewMeter(MeterProvider(provider)).instruments,
 			},
 		},
 	}
-
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			result := NewMeter(tc.opts...)
