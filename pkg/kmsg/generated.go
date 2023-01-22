@@ -891,7 +891,7 @@ type OffsetCommitValue struct {
 
 	// ExpireTimestamp, introduced in v1 and dropped in v2 with KIP-111,
 	// is when this commit expires.
-	ExpireTimestamp int64 // v1+
+	ExpireTimestamp int64 // v1-v1
 }
 
 func (v *OffsetCommitValue) AppendTo(dst []byte) []byte {
@@ -1691,7 +1691,7 @@ func NewConsumerMemberMetadataOwnedPartition() ConsumerMemberMetadataOwnedPartit
 // ConsumerMemberMetadata is the metadata that is usually sent with a join group
 // request with the "consumer" protocol (normal, non-connect consumers).
 type ConsumerMemberMetadata struct {
-	// Version is either version 0 or version 1.
+	// Version is 0, 1, or 2.
 	Version int16
 
 	// Topics is the list of topics in the group that this member is interested
@@ -1880,7 +1880,7 @@ func NewConsumerMemberAssignmentTopic() ConsumerMemberAssignmentTopic {
 // sync group request with the "consumer" protocol (normal, non-connect
 // consumers).
 type ConsumerMemberAssignment struct {
-	// Verson is currently version 0.
+	// Verson is 0, 1, or 2.
 	Version int16
 
 	// Topics contains topics in the assignment.
@@ -2010,8 +2010,9 @@ func NewConsumerMemberAssignment() ConsumerMemberAssignment {
 // "connect" protocol. v1 introduced incremental cooperative rebalancing (akin
 // to cooperative-sticky) per KIP-415.
 //
-//	v0 defined in connect/runtime/src/main/java/org/apache/kafka/connect/runtime/distributed/ConnectProtocol.java
-//	v1+ defined in connect/runtime/src/main/java/org/apache/kafka/connect/runtime/distributed/IncrementalCooperativeConnectProtocol.java
+//     v0 defined in connect/runtime/src/main/java/org/apache/kafka/connect/runtime/distributed/ConnectProtocol.java
+//     v1+ defined in connect/runtime/src/main/java/org/apache/kafka/connect/runtime/distributed/IncrementalCooperativeConnectProtocol.java
+//
 type ConnectMemberMetadata struct {
 	Version int16
 
@@ -3737,7 +3738,7 @@ func NewFetchRequestTopicPartition() FetchRequestTopicPartition {
 
 type FetchRequestTopic struct {
 	// Topic is a topic to try to fetch records for.
-	Topic string
+	Topic string // v0-v12
 
 	// TopicID is the uuid of the topic to fetch records for.
 	TopicID [16]byte // v13+
@@ -3764,7 +3765,7 @@ func NewFetchRequestTopic() FetchRequestTopic {
 
 type FetchRequestForgottenTopic struct {
 	// Topic is a topic to remove from being tracked (with the partitions below).
-	Topic string // v7+
+	Topic string // v7-v12
 
 	// TopicID is the uuid of a topic to remove from being tracked (with the
 	// partitions below).
@@ -4603,7 +4604,7 @@ func NewFetchResponseTopicPartition() FetchResponseTopicPartition {
 
 type FetchResponseTopic struct {
 	// Topic is a topic that records may have been received for.
-	Topic string
+	Topic string // v0-v12
 
 	// TopicID is the uuid of a topic that records may have been received for.
 	TopicID [16]byte // v13+
@@ -5940,7 +5941,7 @@ type MetadataRequest struct {
 	// on the cluster. See KIP-430 for more details.
 	//
 	// This field was removed in Kafka 2.8.0 in favor of the new DescribeClusterRequest.
-	IncludeClusterAuthorizedOperations bool // v8+
+	IncludeClusterAuthorizedOperations bool // v8-v10
 
 	// IncludeTopicAuthorizedOperations, introduced in Kakfa 2.3.0, specifies
 	// whether to return a bitfield of AclOperations that this client can perform
@@ -6342,7 +6343,7 @@ type MetadataResponse struct {
 	// is allowed to perform on this cluster.
 	//
 	// This field has a default of -2147483648.
-	AuthorizedOperations int32 // v8+
+	AuthorizedOperations int32 // v8-v10
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags // v9+
@@ -6884,7 +6885,7 @@ func NewMetadataResponse() MetadataResponse {
 // LeaderAndISRRequestTopicPartition is a common struct that is used across
 // different versions of LeaderAndISRRequest.
 type LeaderAndISRRequestTopicPartition struct {
-	Topic string
+	Topic string // v0-v1
 
 	Partition int32
 
@@ -6928,7 +6929,7 @@ func NewLeaderAndISRRequestTopicPartition() LeaderAndISRRequestTopicPartition {
 // LeaderAndISRResponseTopicPartition is a common struct that is used across
 // different versions of LeaderAndISRResponse.
 type LeaderAndISRResponseTopicPartition struct {
-	Topic string
+	Topic string // v0-v4
 
 	Partition int32
 
@@ -7006,7 +7007,7 @@ func NewLeaderAndISRRequestLiveLeader() LeaderAndISRRequestLiveLeader {
 // As this is an advanced request and there is little reason to issue it as a
 // client, this request is undocumented.
 //
-// Kafka 1.0.0 introduced version 1. Kafka 2.2.0 introduced version 2, proposed
+// Kafka 1.0 introduced version 1. Kafka 2.2 introduced version 2, proposed
 // in KIP-380, which changed the layout of the struct to be more memory
 // efficient. Kafka 2.4.0 introduced version 3 with KIP-455.
 type LeaderAndISRRequest struct {
@@ -7022,7 +7023,7 @@ type LeaderAndISRRequest struct {
 
 	Type int8 // v5+
 
-	PartitionStates []LeaderAndISRRequestTopicPartition
+	PartitionStates []LeaderAndISRRequestTopicPartition // v0-v1
 
 	TopicStates []LeaderAndISRRequestTopicState // v2+
 
@@ -7851,7 +7852,7 @@ type LeaderAndISRResponse struct {
 
 	ErrorCode int16
 
-	Partitions []LeaderAndISRResponseTopicPartition
+	Partitions []LeaderAndISRResponseTopicPartition // v0-v4
 
 	Topics []LeaderAndISRResponseTopic // v5+
 
@@ -8176,7 +8177,7 @@ type StopReplicaRequestTopic struct {
 
 	Partition int32
 
-	Partitions []int32 // v1+
+	Partitions []int32 // v1-v2
 
 	PartitionStates []StopReplicaRequestTopicPartitionState // v3+
 
@@ -8202,10 +8203,10 @@ func NewStopReplicaRequestTopic() StopReplicaRequestTopic {
 // As this is an advanced request and there is little reason to issue it as a
 // client, this request is undocumented.
 //
-// Kafka 2.2.0 introduced version 1, proposed in KIP-380, which changed the
+// Kafka 2.2 introduced version 1, proposed in KIP-380, which changed the
 // layout of the struct to be more memory efficient.
 //
-// Kafka 2.6.0 introduced version 3, proposed in KIP-570, reorganizes partitions
+// Kafka 2.6 introduced version 3, proposed in KIP-570, reorganizes partitions
 // to be stored and adds the leader epoch and delete partition fields per partition.
 type StopReplicaRequest struct {
 	// Version is the version of this message used with a Kafka broker.
@@ -8218,7 +8219,7 @@ type StopReplicaRequest struct {
 	// This field has a default of -1.
 	BrokerEpoch int64 // v1+
 
-	DeletePartitions bool
+	DeletePartitions bool // v0-v2
 
 	Topics []StopReplicaRequestTopic
 
@@ -8698,7 +8699,7 @@ func NewStopReplicaResponse() StopReplicaResponse {
 }
 
 type UpdateMetadataRequestTopicPartition struct {
-	Topic string
+	Topic string // v0-v4
 
 	Partition int32
 
@@ -8819,7 +8820,7 @@ func NewUpdateMetadataRequestLiveBroker() UpdateMetadataRequestLiveBroker {
 //
 // Version 1 changed the layout of the live brokers.
 //
-// Kafka 2.2.0 introduced version 5, proposed in KIP-380, which changed the
+// Kafka 2.2 introduced version 5, proposed in KIP-380, which changed the
 // layout of the struct to be more memory efficient.
 type UpdateMetadataRequest struct {
 	// Version is the version of this message used with a Kafka broker.
@@ -8832,7 +8833,7 @@ type UpdateMetadataRequest struct {
 	// This field has a default of -1.
 	BrokerEpoch int64 // v5+
 
-	PartitionStates []UpdateMetadataRequestTopicPartition
+	PartitionStates []UpdateMetadataRequestTopicPartition // v0-v4
 
 	TopicStates []UpdateMetadataRequestTopicState // v5+
 
@@ -10047,7 +10048,7 @@ type OffsetCommitRequestTopicPartition struct {
 	// timestamp was zero, current time + offset.retention.minutes.
 	//
 	// This field has a default of -1.
-	Timestamp int64 // v1+
+	Timestamp int64 // v1-v1
 
 	// LeaderEpoch, proposed in KIP-320 and introduced in Kafka 2.1.0,
 	// is the leader epoch of the record this request is committing.
@@ -10141,7 +10142,7 @@ type OffsetCommitRequest struct {
 	// group is empty. Read KIP-211 for more details.
 	//
 	// This field has a default of -1.
-	RetentionTimeMillis int64 // v2+
+	RetentionTimeMillis int64 // v2-v4
 
 	// Topics is contains topics and partitions for which to commit offsets.
 	Topics []OffsetCommitRequestTopic
@@ -10855,11 +10856,11 @@ type OffsetFetchRequest struct {
 	Version int16
 
 	// Group is the group to fetch offsets for.
-	Group string
+	Group string // v0-v7
 
 	// Topics contains topics to fetch offets for. Version 2+ allows this to be
 	// null to return all topics the client is authorized to describe in the group.
-	Topics []OffsetFetchRequestTopic
+	Topics []OffsetFetchRequestTopic // v0-v7
 
 	// Groups, introduced in v8 (Kafka 3.0), allows for fetching offsets for
 	// multiple groups at a time.
@@ -11443,11 +11444,11 @@ type OffsetFetchResponse struct {
 	ThrottleMillis int32 // v3+
 
 	// Topics contains responses for each requested topic/partition.
-	Topics []OffsetFetchResponseTopic
+	Topics []OffsetFetchResponseTopic // v0-v7
 
 	// ErrorCode is a top level error code that applies to all topic/partitions.
 	// This will be any group error.
-	ErrorCode int16 // v2+
+	ErrorCode int16 // v2-v7
 
 	// Groups is the response for all groups. Each field mirrors the fields in the
 	// top level request, thus they are left undocumented. Refer to the top level
@@ -11956,7 +11957,7 @@ type FindCoordinatorRequest struct {
 	// CoordinatorKey is the ID to use for finding the coordinator. For groups,
 	// this is the group name, for transactional producer, this is the
 	// transactional ID.
-	CoordinatorKey string
+	CoordinatorKey string // v0-v3
 
 	// CoordinatorType is the type that key is. Groups are type 0,
 	// transactional IDs are type 1.
@@ -12184,19 +12185,19 @@ type FindCoordinatorResponse struct {
 	// COORDINATOR_NOT_AVAILABLE is returned if the coordinator is not available
 	// for the requested ID, which would be if the group or transactional topic
 	// does not exist or the partition the requested key maps to is not available.
-	ErrorCode int16
+	ErrorCode int16 // v0-v3
 
 	// ErrorMessage is an informative message if the request errored.
-	ErrorMessage *string // v1+
+	ErrorMessage *string // v1-v3
 
 	// NodeID is the broker ID of the coordinator.
-	NodeID int32
+	NodeID int32 // v0-v3
 
 	// Host is the host of the coordinator.
-	Host string
+	Host string // v0-v3
 
 	// Port is the port of the coordinator.
-	Port int32
+	Port int32 // v0-v3
 
 	// Coordinators, introduced for KIP-699, is the bulk response for
 	// coordinators. The fields in the struct exactly match the original fields
@@ -13684,7 +13685,7 @@ type LeaveGroupRequest struct {
 	Group string
 
 	// MemberID is the member that is leaving.
-	MemberID string
+	MemberID string // v0-v2
 
 	// Members are member and group instance IDs to cause to leave a group.
 	Members []LeaveGroupRequestMember // v3+
@@ -16009,7 +16010,8 @@ type ApiVersionsRequest struct {
 	//
 	// If using v3, this field is required and must match the following pattern:
 	//
-	//	[a-zA-Z0-9](?:[a-zA-Z0-9\\-.]*[a-zA-Z0-9])?
+	//     [a-zA-Z0-9](?:[a-zA-Z0-9\\-.]*[a-zA-Z0-9])?
+	//
 	ClientSoftwareName string // v3+
 
 	// ClientSoftwareVersion is the version of the software name in the prior
@@ -17613,7 +17615,7 @@ type DeleteTopicsRequest struct {
 	Version int16
 
 	// Topics is an array of topics to delete.
-	TopicNames []string
+	TopicNames []string // v0-v5
 
 	// The name or topic ID of topics to delete.
 	Topics []DeleteTopicsRequestTopic // v6+
@@ -19337,8 +19339,7 @@ type OffsetForLeaderEpochResponseTopicPartition struct {
 	// UNKNOWN_LEADER_EPOCH if returned if the client is using a current leader epoch
 	// that the actual leader does not know of. This could occur when the client
 	// has newer metadata than the broker when the broker just became the leader for
-	//
-	//	a replica.
+	//  a replica.
 	ErrorCode int16
 
 	// Partition is the partition this response is for.
@@ -20759,8 +20760,10 @@ func NewEndTxnResponse() EndTxnResponse {
 }
 
 type WriteTxnMarkersRequestMarkerTopic struct {
+	// Topic is the name of the topic to write markers for.
 	Topic string
 
+	// Partitions contains partitions to write markers for.
 	Partitions []int32
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
@@ -20781,14 +20784,22 @@ func NewWriteTxnMarkersRequestMarkerTopic() WriteTxnMarkersRequestMarkerTopic {
 }
 
 type WriteTxnMarkersRequestMarker struct {
+	// ProducerID is the current producer ID to use when writing a marker.
 	ProducerID int64
 
+	// ProducerEpoch is the current producer epoch to use when writing a
+	// marker.
 	ProducerEpoch int16
 
+	// Committed is true if this marker is for a committed transaction,
+	// otherwise false if this is for an aborted transaction.
 	Committed bool
 
+	// Topics contains the topics we are writing markers for.
 	Topics []WriteTxnMarkersRequestMarkerTopic
 
+	// CoordinatorEpoch is the current epoch of the transaction coordinator we
+	// are writing a marker to. This is used to detect fenced writers.
 	CoordinatorEpoch int32
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
@@ -20809,12 +20820,12 @@ func NewWriteTxnMarkersRequestMarker() WriteTxnMarkersRequestMarker {
 }
 
 // WriteTxnMarkersRequest is a broker-to-broker request that Kafka uses to
-// finish transactions. Since this is specifically for inter-broker
-// communication, this is left undocumented.
+// finish transactions.
 type WriteTxnMarkersRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
+	// Markers contains transactional markers to be written.
 	Markers []WriteTxnMarkersRequestMarker
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
@@ -21071,8 +21082,23 @@ func NewWriteTxnMarkersRequest() WriteTxnMarkersRequest {
 }
 
 type WriteTxnMarkersResponseMarkerTopicPartition struct {
+	// Partition is the partition this result is for.
 	Partition int32
 
+	// ErrorCode is non-nil if writing the transansactional marker for this
+	// partition errored.
+	//
+	// CLUSTER_AUTHORIZATION_FAILED is returned if the user does not have
+	// CLUSTER_ACTION on CLUSTER.
+	//
+	// NOT_LEADER_OR_FOLLOWER is returned if the broker receiving this
+	// request is not the leader of the partition.
+	//
+	// UNKNOWN_TOPIC_OR_PARTITION is returned if the topic or partition is
+	// not known to exist.
+	//
+	// INVALID_PRODUCER_EPOCH is returned if the cluster epoch is provided
+	// and the provided epoch does not match.
 	ErrorCode int16
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
@@ -21093,8 +21119,11 @@ func NewWriteTxnMarkersResponseMarkerTopicPartition() WriteTxnMarkersResponseMar
 }
 
 type WriteTxnMarkersResponseMarkerTopic struct {
+	// Topic is the topic these results are for.
 	Topic string
 
+	// Partitions contains per-partition results for the write markers
+	// request.
 	Partitions []WriteTxnMarkersResponseMarkerTopicPartition
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
@@ -21115,8 +21144,11 @@ func NewWriteTxnMarkersResponseMarkerTopic() WriteTxnMarkersResponseMarkerTopic 
 }
 
 type WriteTxnMarkersResponseMarker struct {
+	// ProducerID is the producer ID these results are for (from the input
+	// request).
 	ProducerID int64
 
+	// Topics contains the results for the write markers request.
 	Topics []WriteTxnMarkersResponseMarkerTopic
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
@@ -21141,6 +21173,7 @@ type WriteTxnMarkersResponse struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
 
+	// Markers contains results for writing transactional markers.
 	Markers []WriteTxnMarkersResponseMarker
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
@@ -28489,13 +28522,9 @@ type ExpireDelegationTokenRequest struct {
 	HMAC []byte
 
 	// ExpiryPeriodMillis changes the delegation token's expiry timestamp to
-	// now + expiry time millis. This can be used to force tokens to expiry
-	// quickly, or to allow tokens a grace period before expiry. This can only
-	// change the final expiry timestamp down; you cannot add enough time that
-	// would increase the expiry timestamp.
-	//
-	// Note that you can change the expiry timestamp down and then back up, so
-	// long as you change it back up before the timestamp expires.
+	// now + expiry time millis. This can be used to force tokens to expire
+	// quickly, or to allow tokens a grace period before expiry. You cannot
+	// add enough expiry that exceeds the original max timestamp.
 	ExpiryPeriodMillis int64
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
@@ -37389,7 +37418,7 @@ func NewAlterPartitionRequestTopicPartition() AlterPartitionRequestTopicPartitio
 }
 
 type AlterPartitionRequestTopic struct {
-	Topic string
+	Topic string // v0-v1
 
 	TopicID [16]byte // v2+
 
@@ -37746,7 +37775,7 @@ func NewAlterPartitionResponseTopicPartition() AlterPartitionResponseTopicPartit
 }
 
 type AlterPartitionResponseTopic struct {
-	Topic string
+	Topic string // v0-v1
 
 	TopidID [16]byte // v2+
 
@@ -43557,6 +43586,7 @@ func (k Key) Int16() int16 { return int16(k) }
 // * 4 (BROKER)
 //
 // * 8 (BROKER_LOGGER)
+//
 type ConfigResourceType int8
 
 func (v ConfigResourceType) String() string {
@@ -43639,6 +43669,7 @@ func (e *ConfigResourceType) UnmarshalText(text []byte) error {
 //
 // * 6 (DYNAMIC_BROKER_LOGGER_CONFIG)
 // Broker logger; see KIP-412.
+//
 type ConfigSource int8
 
 func (v ConfigSource) String() string {
@@ -43738,6 +43769,7 @@ func (e *ConfigSource) UnmarshalText(text []byte) error {
 // * 8 (CLASS)
 //
 // * 9 (PASSWORD)
+//
 type ConfigType int8
 
 func (v ConfigType) String() string {
@@ -43845,6 +43877,7 @@ func (e *ConfigType) UnmarshalText(text []byte) error {
 // * 2 (APPEND)
 //
 // * 3 (SUBTRACT)
+//
 type IncrementalAlterConfigOp int8
 
 func (v IncrementalAlterConfigOp) String() string {
@@ -43927,6 +43960,7 @@ func (e *IncrementalAlterConfigOp) UnmarshalText(text []byte) error {
 // * 6 (DELEGATION_TOKEN)
 //
 // * 7 (USER)
+//
 type ACLResourceType int8
 
 func (v ACLResourceType) String() string {
@@ -44028,6 +44062,7 @@ func (e *ACLResourceType) UnmarshalText(text []byte) error {
 //
 // * 4 (PREFIXED)
 // The name must have our requested name as a prefix (that is, "foo" will match on "foobar").
+//
 type ACLResourcePatternType int8
 
 func (v ACLResourcePatternType) String() string {
@@ -44106,6 +44141,7 @@ func (e *ACLResourcePatternType) UnmarshalText(text []byte) error {
 //
 // * 3 (ALLOW)
 // Any allow permission.
+//
 type ACLPermissionType int8
 
 func (v ACLPermissionType) String() string {
@@ -44199,6 +44235,7 @@ func (e *ACLPermissionType) UnmarshalText(text []byte) error {
 // * 13 (CREATE_TOKENS)
 //
 // * 14 (DESCRIBE_TOKENS)
+//
 type ACLOperation int8
 
 func (v ACLOperation) String() string {
@@ -44344,6 +44381,7 @@ func (e *ACLOperation) UnmarshalText(text []byte) error {
 // * 6 (Dead)
 //
 // * 7 (PrepareEpochFence)
+//
 type TransactionState int8
 
 func (v TransactionState) String() string {
@@ -44445,6 +44483,7 @@ func (e *TransactionState) UnmarshalText(text []byte) error {
 //
 // * 2 (ANY)
 // Matches all named quotas and default quotas for the given EntityType.
+//
 type QuotasMatchType int8
 
 func (v QuotasMatchType) String() string {
@@ -44513,6 +44552,7 @@ func (e *QuotasMatchType) UnmarshalText(text []byte) error {
 // * 2 (QUORUM_REASSIGNMENT)
 //
 // * 3 (LEADER_CHANGE)
+//
 type ControlRecordKeyType int8
 
 func (v ControlRecordKeyType) String() string {

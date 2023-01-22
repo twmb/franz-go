@@ -27,7 +27,7 @@ open an issue and we can figure out if some logs need to be changed.
 
 ## Metrics
 
-`kgo` takes an unopinionated stance on metris, instead supporting ["hooks"][8]
+`kgo` takes an unopinionated stance on metrics, instead supporting ["hooks"][8]
 that you can provide functions for to implement your own metrics. You can
 provide an interface that hooks into any behavior you wish to monitor and
 provide yourself extremely coarse monitoring or extremely detailed monitoring.

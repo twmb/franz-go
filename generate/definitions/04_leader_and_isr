@@ -28,7 +28,7 @@ LeaderAndISRResponseTopicPartition => not top level, no encoding, flexible v4+
 // As this is an advanced request and there is little reason to issue it as a
 // client, this request is undocumented.
 //
-// Kafka 1.0.0 introduced version 1. Kafka 2.2.0 introduced version 2, proposed
+// Kafka 1.0 introduced version 1. Kafka 2.2 introduced version 2, proposed
 // in KIP-380, which changed the layout of the struct to be more memory
 // efficient. Kafka 2.4.0 introduced version 3 with KIP-455.
 LeaderAndISRRequest => key 4, max version 6, flexible v4+

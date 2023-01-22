@@ -197,22 +197,41 @@ var (
 	ErrClientClosed = errors.New("client closed")
 )
 
-// ErrFirstReadEOF is returned for responses when you are not using SASL, and
-// the first read from a broker failed with io.EOF. When SASL is required but
-// missing, brokers close connections immediately. There may be other reasons
-// that an immediate io.EOF is encountered (perhaps the connection truly was
-// severed before a response was received), but this error can help you quickly
-// check if you might be missing required credentials.
-type ErrFirstReadEOF struct{}
-
-func (*ErrFirstReadEOF) Error() string {
-	return "broker closed the connection immediately, which happens when SASL is required but not provided: is SASL missing?"
+// ErrFirstReadEOF is returned for responses that immediately error with
+// io.EOF. This is the client's guess as to why a read from a broker is
+// failing with io.EOF. Two cases are currently handled,
+//
+//   - When the client is using TLS but brokers are not, brokers close
+//     connections immediately because the incoming request looks wrong.
+//   - When SASL is required but missing, brokers close connections immediately.
+//
+// There may be other reasons that an immediate io.EOF is encountered (perhaps
+// the connection truly was severed before a response was received), but this
+// error can help you quickly check common problems.
+type ErrFirstReadEOF struct {
+	kind uint8
+	err  error
 }
 
-// Unwrap returns io.EOF.
-func (*ErrFirstReadEOF) Unwrap() error { return io.EOF }
+const (
+	firstReadSASL uint8 = iota
+	firstReadTLS
+)
 
-// ErrDataLoss is returned for Kafka >=2.1.0 when data loss is detected and the
+func (e *ErrFirstReadEOF) Error() string {
+	switch e.kind {
+	case firstReadTLS:
+		return "broker closed the connection immediately after a dial, which happens if the client is using TLS when the broker is not expecting it: is TLS misconfigured on the client or the broker?"
+	default: // firstReadSASL
+		return "broker closed the connection immediately after a request was issued, which happens when SASL is required but not provided: is SASL missing?"
+	}
+}
+
+// Unwrap returns io.EOF (or, if a custom dialer returned a wrapped io.EOF,
+// this returns the custom dialer's wrapped error).
+func (e *ErrFirstReadEOF) Unwrap() error { return e.err }
+
+// ErrDataLoss is returned for Kafka >=2.1 when data loss is detected and the
 // client is able to reset to the last valid offset.
 type ErrDataLoss struct {
 	// Topic is the topic data loss was detected on.

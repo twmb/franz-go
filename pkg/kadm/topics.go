@@ -2,6 +2,7 @@ package kadm
 
 import (
 	"context"
+	"errors"
 	"sort"
 
 	"github.com/twmb/franz-go/pkg/kerr"
@@ -87,10 +88,59 @@ func (rs CreateTopicResponses) On(topic string, fn func(*CreateTopicResponse) er
 	return CreateTopicResponse{}, kerr.UnknownTopicOrPartition
 }
 
+// CreateTopic issues a create topics request with the given partitions,
+// replication factor, and (optional) configs for the given topic name. Under
+// the hood, this uses the default 15s request timeout and lets Kafka choose
+// where to place partitions. This function exists to complement CreateTopics,
+// making the single-topic creation case easier to handle.
+//
+// Version 4 of the underlying create topic request was introduced in Kafka 2.4
+// and brought client support for creation defaults. If talking to a 2.4+
+// cluster, you can use -1 for partitions and replicationFactor to use broker
+// defaults.
+//
+// This package includes a StringPtr function to aid in building config values.
+//
+// If the topic could not be created this function will return an error. An
+// error may be returned due to authorization failure, a failed network
+// request, a missing controller or other issues. If the request was successful
+// but the CreateTopicResponse.Err is non-nil, this returns the error, so you
+// do not need to additionally check the Err field.
+func (cl *Client) CreateTopic(
+	ctx context.Context,
+	partitions int32,
+	replicationFactor int16,
+	configs map[string]*string,
+	topic string,
+) (CreateTopicResponse, error) {
+	createTopicResponse, err := cl.CreateTopics(
+		ctx,
+		partitions,
+		replicationFactor,
+		configs,
+		topic,
+	)
+	if err != nil {
+		return CreateTopicResponse{}, err
+	}
+
+	response, exists := createTopicResponse[topic]
+	if !exists {
+		return CreateTopicResponse{}, errors.New("requested topic was not part of create topic response")
+	}
+
+	return response, response.Err
+}
+
 // CreateTopics issues a create topics request with the given partitions,
 // replication factor, and (optional) configs for every topic. Under the hood,
 // this uses the default 15s request timeout and lets Kafka choose where to
 // place partitions.
+//
+// Version 4 of the underlying create topic request was introduced in Kafka 2.4
+// and brought client support for creation defaults. If talking to a 2.4+
+// cluster, you can use -1 for partitions and replicationFactor to use broker
+// defaults.
 //
 // This package includes a StringPtr function to aid in building config values.
 //
@@ -361,7 +411,9 @@ func (cl *Client) DeleteRecords(ctx context.Context, os Offsets) (DeleteRecordsR
 			rp := kmsg.NewDeleteRecordsRequestTopicPartition()
 			rp.Partition = p
 			rp.Offset = o.At
+			rt.Partitions = append(rt.Partitions, rp)
 		}
+		req.Topics = append(req.Topics, rt)
 	}
 
 	shards := cl.cl.RequestSharded(ctx, req)
@@ -369,8 +421,11 @@ func (cl *Client) DeleteRecords(ctx context.Context, os Offsets) (DeleteRecordsR
 	return rs, shardErrEach(req, shards, func(kr kmsg.Response) error {
 		resp := kr.(*kmsg.DeleteRecordsResponse)
 		for _, t := range resp.Topics {
-			rt := make(map[int32]DeleteRecordsResponse)
-			rs[t.Topic] = rt
+			rt, exists := rs[t.Topic]
+			if !exists { // topic could be spread around brokers, we need to check existence
+				rt = make(map[int32]DeleteRecordsResponse)
+				rs[t.Topic] = rt
+			}
 			for _, p := range t.Partitions {
 				rt[p.Partition] = DeleteRecordsResponse{
 					Topic:        t.Topic,

@@ -1,3 +1,248 @@
+v1.11.2
+===
+
+This patch release fixes `HookFetchRecordUnbuffered` never being called if a
+hook also implemented `HookFetchRecordBuffered`. No existing plugin currently
+implements these hooks (though one will soon), so this patch is only relevant
+to you if you manually have added these hooks.
+
+* [`2a37df9`](https://github.com/twmb/franz-go/commit/2a37df9) **bugfix** kgo: patch HookFetchRecordUnbuffered
+
+
+v1.11.1
+===
+
+This patch release fixes a bug in `ConsumePreferringLagFn`. The code could
+panic if you:
+
+* Consumed from two+ topics
+* Two of the topics have a different amount of partitions
+* The single-partition topic has some lag, the topic with more partitions has
+  one partition with no lag, and another partition with _more_ lag than the
+  single-partition topic
+
+In this case, the code previously would create a non-existent partition to
+consume from for the single-partition topic and this would immediately result
+in a panic when the fetch request was built.
+
+See the commit for more details.
+
+* [`38f2ec6`](https://github.com/twmb/franz-go/commit/38f2ec6) **bugfix** pkg/kgo: bugfix ConsumePreferringLagFn
+
+v1.11.0
+===
+
+This is a small release containing two minor features and a few behavior
+improvements. The `MarkedOffsets` function allows for manually committing
+marked offsets if you override `OnPartitionsRevoked`, and
+`UnsafeAbortBufferedRecords` allows for forcefully dropping anything being
+produced (albeit with documented caveats and downsides)
+
+The client now guards against a broker that advertises FetchRequest v13+ (which
+_only_ uses TopicIDs) but does not actually return / use TopicIDs. If you have
+an old IBP configured, the broker will not use TopicIDs even if the broker
+indicates it should. The client will now pin fetching to a max version of 12 if
+a topic has no TopicID.
+
+The client now sets a record's `Topic` field earlier to `DefaultProduceTopic`,
+which allows the `Topic` field to be known present (or known non-present) in
+the `OnRecordBuffered` hook.
+
+Lastly, we now universally use Go 1.19 atomic types if compiled with 1.19+. Go
+uses compiler intrinsics to ensure proper int64 / uint64 alignment within
+structs for the atomic types; Go does not ensure plain int64 / uint64 are
+properly aligned. A lot of work previously went into ensuring alignment and
+having a GitHub workflow that ran `go vet` on qemu armv7 emulation, but
+apparently that was not comprehensive enough. Now, if you use a 32 bit arch, it
+is recommended to just compile with 1.19+.
+
+* [`d1b6897`](https://github.com/twmb/franz-go/commit/d1b6897) **feature** kgo: add UnsafeAbortBufferedRecords
+* [`d0c42ad`](https://github.com/twmb/franz-go/commit/d0c42ad) **improvement** kgo source: do not use fetch topic IDs if the broker returns no ID
+* [`cc3a355`](https://github.com/twmb/franz-go/commit/cc3a355) and [`a2c4bad`](https://github.com/twmb/franz-go/commit/a2c4bad) **improvement** kgo: universally switch to 1.19's atomics if on Go 1.19+
+* [`66e626f`](https://github.com/twmb/franz-go/commit/66e626f) producer: set Record.Topic earlier
+* [`3186e61`](https://github.com/twmb/franz-go/commit/3186e61) **feature** kgo: add MarkedOffsets function
+
+v1.10.4
+===
+
+This patch release fixes two bugs introduced with v1.10.0. These bugs are not
+encountered in when using the client to simply consume or produce. Only admin
+usages of the client may encounter the bugs this patch is fixing.
+
+v1.10.0 introduced support for batch offset fetching or coordinator finding.
+These changes introduced a bug where empty coordinator keys (i.e., group names
+or transactional IDs) would be stripped from requests, and then a field in a
+nil pointer could be accessed and panic the program. These changes also
+introduced a bug that did not properly mirror one field for batched
+`FindCoordinator` requests.
+
+- [`ca67da4`](https://github.com/twmb/franz-go/commit/ca67da4) **bugfix** kgo: fix batch coordinator fetching
+- [`c6f7f9a`](https://github.com/twmb/franz-go/commit/c6f7f9a) **bugfix** kgo: allow empty groups when finding coordinator / fetching offsets
+
+v1.10.3
+===
+
+This small patch release is another attempted fix at [#239](https://github.com/twmb/franz-go/issues/239).
+It is only possible to encounter this bug if a broker completely dies and never
+comes back, and you do not replace the broker (i.e., broker 3 dies and it is
+just gone forever).
+
+Previously, kgo would cache the broker controller until `NOT_CONTROLLER` is
+seen. We now clear it a bit more widely, but this is just extra defensive
+behavior: the controller is updated on every metadata request.
+
+Worse however, kgo previously cached group or transactional-id coordinators
+until `COORDINATOR_NOT_AVAILABLE`, `COORDINATOR_LOAD_IN_PROGRESS`, or
+`NOT_CONTROLLER` were seen. If the coordinator outright died and never comes
+back and is never replaced, all coordinator requests to that specific
+coordinator would fail.
+
+Now, if we fail to dial the coordinator or controller 3x in a row, we delete
+the coordinator or controller to force a reload on the next retry. We only do
+this for dial errors because any other error means we actually contacted the
+broker and it exists.
+
+Lastly, we change the default max produce record batch bytes from 1,000,000 to
+1,000,012, to exactly mirror Kafka's max.message.bytes.
+
+- [`e2e80bf`](https://github.com/twmb/franz-go/commit/e2e80bf) kgo: clear controller/coordinator caches on failed dials
+
+v1.10.2
+===
+
+This patch release contains one very minor bug fix, tightens a failure
+scenario, adds two missing errors to kerr, fixes a build constraint, and has a
+few internal style fixes from [@PleasingFungus][1.10.2:pf] (thanks!).
+
+[1.10.2:pf]: https://github.com/PleasingFungus
+
+The bug was introduced in v1.9.0 through a patch that fixed a potential spin
+loop. In fixing the spin loop, I inadvertently caused consumer fetch sessions
+to reset when there is no more data to consume. In your application, this would
+show up as more frequent metadata updates and up to 100ms of extra latency when
+there is new data to consume.
+
+The tightened failure scenario allows records to be failed in more cases.
+Previously, as soon as a record was added to a produce request internally, the
+record could not be failed until a produce response is received. This behavior
+exists for duplicate prevention. However, there is a period of time between a
+produce request being created and actually being written, and if an
+`AddPartitionsToTxn` request takes a long time and then fails, the produce
+request would never be written and the records could never be failed. The
+tightened failure scenario allows records to be failed all the way up until
+they are actually serialized and written.
+
+- [`d620765`](https://github.com/twmb/franz-go/commit/d620765) sink: tighten canFailFromLoadErrs
+- [`6c0abd1`](https://github.com/twmb/franz-go/commit/6c0abd1) **minor bugfix** source: avoid backoff / session reset when there is no consumed data
+- [`6ce8bdf`](https://github.com/twmb/franz-go/commit/6ce8bdf) kerr: add two missing errors to ErrorForCode
+- [PR #264](https://github.com/twmb/franz-go/pull/264) fix `isNetClosedErr` build constraints: franz-go was using the `strings.Contains` version, which was meant for Go 1.15 only (thanks [@PleasingFungus][1.10.2:pf]!)
+
+v1.10.1
+===
+
+This patch release contains minor kgo internal improvements, and enables a new
+API for kadm. This patch contains no bug fixes. This patch should help recover
+faster if a transaction coordinator goes down while producing.
+
+This is released in tandem with kadm v1.6.0, which contains a small kadm bugfix
+for `DeleteRecords`, `OffsetForLeaderEpoch`, and `DescribeProducers`, and
+(hopefully) finishes support for all current admin APIs.
+
+- [`56fcfb4`](https://github.com/twmb/franz-go/commit/56fcfb4) sink: log all aspects of wanting to / failing records
+- [`9ee5efa`](https://github.com/twmb/franz-go/commit/9ee5efa) sink: update metadata when AddPartitionsToTxn fails repeatedly
+- [`bc6810d`](https://github.com/twmb/franz-go/commit/bc6810d) broker: hide retryable errors *once*
+- [`83f0dbe`](https://github.com/twmb/franz-go/commit/83f0dbe) kgo: add support for sharding WriteTxnMarkers
+
+v1.10.0
+===
+
+This is a small release that contains one bug fix, one new feature, and
+improvements in log lines, and improvements to work around AWS MSK being a bit
+odd with SASL reauthentication.
+
+Previously, the client's sticky partitioners actually did not preserve
+stickiness because the client did not attach previous-partitions when rejoining
+the group. That is now fixed.
+
+The new feature, `ConsumePreferringLagFn`, allows you to have some advanced
+reordering of how to consume. The recommended way of using this option is
+`kgo.ConsumePreferringLagFn(kgo.PreferLagAt(50))`, which allows you to favor
+laggy partitions if the client is more than 50 records behind in the topic.
+
+The kadm module is also released with v1.4.0, which contains new APIs to find
+coordinators for groups or transactional IDs, and an API to fetch API versions
+for all brokers in the cluster.
+
+- [`a995b1b`](https://github.com/twmb/franz-go/commit/a995b1b) kgo broker: retry sasl auth failures during reauthentication
+- [`8ab8074`](https://github.com/twmb/franz-go/commit/8ab8074) kgo connection: always allow one request after SASL
+- [`dcfcacb`](https://github.com/twmb/franz-go/commit/dcfcacb) **bugfix** `{Cooperative,Sticky}Balancer`: bug fix lack of stickiness
+- [`76430a8`](https://github.com/twmb/franz-go/commit/76430a8) **feature** kgo: add `ConsumePreferringLagFn` to consume preferring laggy partitions
+- [`9ac6c97`](https://github.com/twmb/franz-go/commit/9ac6c97) **improvement** kgo: support forward & backward batch requests for FindCoordinator, OffsetFetch
+
+
+v1.9.1
+===
+
+This is a small patch release to work around two behavior problems, one with
+AWS and one with Redpanda. This is not an important bug release if you are
+using this library against Kafka itself.
+
+For AWS, AWS is unexpectedly expiring certain permissions before the SASL
+lifetime is up. This manifests as `GROUP_AUTHORIZATION_ERROR` while consuming.
+Previously, we the client would mark connections to reauthenticate when the
+connection was within 3s of SASL expiry. We now are more pessimistic and
+reauthenticate within 95% to 98% of the lifetime, with a 2s minimum. This is
+similar to the Java client, which has always used 85 to 95% of the SASL
+lifetime and has no minimum.
+
+For Redpanda, Redpanda's transaction support is nearly complete (v22.3 release
+imminent), but Redpanda can return `UNKNOWN_SERVER_ERROR` a bit more than Kafka
+does. These errors are being ironed out, but there is no harm in the client to
+pre-emptively handling these as retryable.
+
+- [`3ecaff2`](https://github.com/twmb/franz-go/commit/3ecaff2) kgo txn: handle `UNKNOWN_SERVER_ERROR` more widely
+- [`eb6e3b5`](https://github.com/twmb/franz-go/commit/eb6e3b5) kgo sasl reauth: be more pessimistic
+
+v1.9.0
+===
+
+This release contains one important bugfix (sequence number int32 overflow) for
+long-lived producers, one minor bugfix that allows this client to work on 32
+bit systems, and a few other small improvements.
+
+This project now has integration tests ran on every PR (and it is now forbidden
+to push directly to master). These integration tests run against Kraft (Kafka +
+Raft), which itself seems to not be 100% polished. A good amount of
+investigation went into hardening the client internals to not fail when Kraft
+is going sideways.
+
+This release also improves behavior when a consumer group leader using an
+instance ID restarts _and_ changes the topics it wants to consume from. See the
+KIP-814 commit for more details.
+
+It is now easier to setup a TLS dialer with a custom dial timeout, it is easier
+to detect if requests are failing due to missing SASL, and it is now possible
+to print attributes with `RecordFormatter`.
+
+Lastly, the corresponding kadm v1.3.0 release adds new LeaveGroup admin APIs.
+
+#### franz-go
+
+- [`b18341d`](https://github.com/twmb/franz-go/commit/b18341d) kgo: work around KIP-814 limitations
+- [`6cac810`](https://github.com/twmb/franz-go/commit/6cac810) kversions: bump Stable from 3.0 to 3.3
+- [PR #227](https://github.com/twmb/franz-go/pull/227) **bugfix** further sequence number overflows fix (thanks [@ladislavmacoun](https://github.com/ladislavmacoun)!)
+- [PR #223](https://github.com/twmb/franz-go/pull/223) add GitHub actions integration test (thanks [@mihaitodor](https://github.com/mihaitodor)!) and [PR #224](https://github.com/twmb/franz-go/pull/224) fixup kgo guts to work around new kraft failures
+- [`203a837`](https://github.com/twmb/franz-go/commit/203a837) franz-go: fix 32 bit alignment, fix a few lints
+- [`719c6f4`](https://github.com/twmb/franz-go/commit/719c6f4) kgo: avoid overflow on 32 bit systems
+- [`db5c159`](https://github.com/twmb/franz-go/commit/db5c159) **feature** kgo: add DialTimeout function, complementing DialTLSConfig
+- [`b4aebf4`](https://github.com/twmb/franz-go/commit/b4aebf4) kgo: add ErrFirstReadEOF, which unwraps to io.EOF
+- [`bbac68b`](https://github.com/twmb/franz-go/commit/bbac68b) RecordFormatter: support %a; formatter&reader: support 'bool'
+
+#### kadm
+
+- [`d3ee144`](https://github.com/twmb/franz-go/commit/d3ee144) kadm: add LeaveGroup api
+- [`7b8d404`](https://github.com/twmb/franz-go/commit/7b8d404) kadm: ListOffsetsAfterMill(future) should return end offsets
+
 v1.8.0
 ===
 

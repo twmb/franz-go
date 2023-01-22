@@ -5,13 +5,9 @@ ExpireDelegationTokenRequest => key 40, max version 2, flexible v2+
   // HMAC is the HMAC of the token to change the expiry timestamp of.
   HMAC: bytes
   // ExpiryPeriodMillis changes the delegation token's expiry timestamp to
-  // now + expiry time millis. This can be used to force tokens to expiry
-  // quickly, or to allow tokens a grace period before expiry. This can only
-  // change the final expiry timestamp down; you cannot add enough time that
-  // would increase the expiry timestamp.
-  //
-  // Note that you can change the expiry timestamp down and then back up, so
-  // long as you change it back up before the timestamp expires.
+  // now + expiry time millis. This can be used to force tokens to expire
+  // quickly, or to allow tokens a grace period before expiry. You cannot
+  // add enough expiry that exceeds the original max timestamp.
   ExpiryPeriodMillis: int64
 
 // ExpireDelegationTokenResponse is a response to an ExpireDelegationTokenRequest.

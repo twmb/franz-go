@@ -179,11 +179,12 @@ In alphabetical order,
 * [Alpaca](https://alpaca.markets/blog/alpaca-launches-next-gen-order-management-system/)
 * [Banyan](https://banyan.com)
 * [Eoitek](https://eoitek.com/)
-* [Kowl](https://github.com/cloudhut/kowl/)
 * [Mux](https://mux.com/blog/processing-cdn-logs-exactly-once-with-kafka-transactions/)
+* [Redpanda Console](https://github.com/redpanda-data/console/)
 * [Redpanda Data](https://redpanda.com/)
 * [ThinkingData](https://thinkingdata.cn)
 * [Unistack](https://unistack.org) (Cloud Management System)
+* [Unity Technologies](https://unity.com)
 
 If you use this library and want on the list above, please either open a PR
 or comment on [#142](https://github.com/twmb/franz-go/issues/142)!
@@ -390,6 +391,7 @@ generation.
 | [KIP-827](https://cwiki.apache.org/confluence/display/KAFKA/KIP-827%3A+Expose+logdirs+total+and+usable+space+via+Kafka+API) — `DescribeLogDirs.{Total,Usable}Bytes` | 3.3 | Supported |
 | [KIP-836](https://cwiki.apache.org/confluence/display/KAFKA/KIP-836%3A+Addition+of+Information+in+DescribeQuorumResponse+about+Voter+Lag) — `DescribeQuorum` voter lag info | 3.3 | Supported |
 | [KIP-841](https://cwiki.apache.org/confluence/display/KAFKA/KIP-841%3A+Fenced+replicas+should+not+be+allowed+to+join+the+ISR+in+KRaft) — `AlterPartition.TopicID` | 3.3 | Supported |
+| [KIP-866](https://cwiki.apache.org/confluence/display/KAFKA/KIP-866+ZooKeeper+to+KRaft+Migration) — ZK to Raft RPC changes | 3.4 | Supported |
 
 Missing from above but included in librdkafka is:
 

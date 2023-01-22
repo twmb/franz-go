@@ -3,8 +3,12 @@ name: lint and test
 on:
   push:
     branches: ["*"]
+    paths-ignore:
+      - '**/*.md'
   pull_request:
     branches: ["*"]
+    paths-ignore:
+      - '**/*.md'
 
 concurrency:
   group: ${{ github.ref }}
@@ -14,7 +18,7 @@ jobs:
   golangci:
     if: github.repository == 'twmb/franz-go'
     runs-on: ubuntu-latest
-    name: 'golangci-lint on amd64'
+    name: "golangci-lint on amd64"
     steps:
       - uses: actions/checkout@v3
       - uses: actions/setup-go@v3
@@ -23,66 +27,3 @@ jobs:
       - uses: golangci/golangci-lint-action@v3
         with:
           version: latest
-
-  vet-arm:
-    if: github.repository == 'twmb/franz-go'
-    needs: golangci
-    runs-on: ubuntu-latest
-    name: 'vet on arm'
-    steps:
-      - uses: actions/checkout@v3
-        with:
-          path: "repo"
-      - uses: uraimo/run-on-arch-action@v2
-        with:
-          arch: armv6
-          distro: bullseye
-          githubToken: ${{ github.token }}
-          run: |
-            echo "updating"
-            apt-get -qq -y update
-            echo "installing wget"
-            apt-get -qq -y install wget
-            echo "downloading go"
-            wget --quiet https://go.dev/dl/go1.19.2.linux-armv6l.tar.gz
-            tar xzf go1.19.2.linux-armv6l.tar.gz
-            mkdir bins
-            export PATH=$(pwd)/go/bin:$(pwd)/bins:$PATH
-            export GOBIN=$(pwd)/bins
-            export CGO_ENABLED=0
-            cd repo
-            echo "go vet ./..."
-            go vet ./...
-            echo "installing staticcheck"
-            go install honnef.co/go/tools/cmd/staticcheck@latest
-            echo "staticcheck ./..."
-            staticcheck -checks 'all,-ST1003,-SA1012,-ST1016,-SA1019,-SA2001' ./... # actually contains atomicalign check
-
-# TODO: fix
-#  integration-test:
-#    if: github.repository == 'twmb/franz-go'
-#    needs: golangci
-#    runs-on: ubuntu-latest
-#    name: 'integration test kafka'
-#    container: golang:1.19.2
-#    services:
-#      zk:
-#        image: bitnami/zookeeper:latest
-#        ports:
-#          - 2181:2181
-#        env:
-#          ALLOW_ANONYMOUS_LOGIN: yes
-#      kafka:
-#        image: bitnami/kafka:latest
-#        ports:
-#          - 9092:9092
-#        env:
-#          ALLOW_PLAINTEXT_LISTENER: yes
-#          KAFKA_CFG_ZOOKEEPER_CONNECT: zk:2181
-#    steps:
-#      - uses: actions/checkout@v3
-#      - run: go test ./...
-#        env:
-#          KGO_TEST_RF: 1
-#          KGO_SEEDS: kafka:9092
-#          KGO_TEST_RECORDS: 50000

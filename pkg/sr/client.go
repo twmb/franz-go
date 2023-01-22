@@ -77,23 +77,23 @@ func NewClient(opts ...Opt) (*Client, error) {
 	return cl, nil
 }
 
-func (cl *Client) get(ctx context.Context, path string, into interface{}) error {
+func (cl *Client) get(ctx context.Context, path string, into any) error {
 	return cl.do(ctx, http.MethodGet, path, nil, into)
 }
 
-func (cl *Client) post(ctx context.Context, path string, v, into interface{}) error {
+func (cl *Client) post(ctx context.Context, path string, v, into any) error {
 	return cl.do(ctx, http.MethodPost, path, v, into)
 }
 
-func (cl *Client) put(ctx context.Context, path string, v, into interface{}) error {
+func (cl *Client) put(ctx context.Context, path string, v, into any) error {
 	return cl.do(ctx, http.MethodPut, path, v, into)
 }
 
-func (cl *Client) delete(ctx context.Context, path string, into interface{}) error {
+func (cl *Client) delete(ctx context.Context, path string, into any) error {
 	return cl.do(ctx, http.MethodDelete, path, nil, into)
 }
 
-func (cl *Client) do(ctx context.Context, method, path string, v, into interface{}) error {
+func (cl *Client) do(ctx context.Context, method, path string, v, into any) error {
 	urls := cl.urls
 
 start:

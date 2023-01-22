@@ -399,13 +399,13 @@ func BenchmarkAppendBatch(b *testing.B) {
 	buf := make([]byte, 10<<10) // broker's reuse input buffers, so we do so here as well
 	for _, pair := range []struct {
 		name  string
-		codec int8
+		codec codecType
 	}{
-		{"no compression", 0},
-		{"gzip", 1},
-		{"snappy", 2},
-		{"lz4", 3},
-		{"zstd", 4},
+		{"no compression", codecNone},
+		{"gzip", codecGzip},
+		{"snappy", codecSnappy},
+		{"lz4", codecLZ4},
+		{"zstd", codecZstd},
 	} {
 		b.Run(pair.name, func(b *testing.B) {
 			compressor, _ := newCompressor(CompressionCodec{codec: pair.codec})

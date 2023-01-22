@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"strconv"
-	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -37,8 +36,10 @@ func TestGroupETL(t *testing.T) {
 
 	go func() {
 		cl, _ := NewClient(
+			getSeedBrokers(),
 			WithLogger(BasicLogger(os.Stderr, testLogLevel, nil)),
 			MaxBufferedRecords(10000),
+			UnknownTopicRetries(-1), // see txn_test comment
 		)
 		defer cl.Close()
 
@@ -116,11 +117,14 @@ func (c *testConsumer) etl(etlsBeforeQuit int) {
 	netls := 0 // for if etlsBeforeQuit is non-negative
 
 	opts := []Opt{
+		getSeedBrokers(),
+		UnknownTopicRetries(-1), // see txn_test comment
 		WithLogger(testLogger()),
 		ConsumerGroup(c.group),
 		ConsumeTopics(c.consumeFrom),
 		Balancers(c.balancer),
 		MaxBufferedRecords(10000),
+		ConsumePreferringLagFn(PreferLagAt(1)),
 
 		// Even with autocommitting, autocommitting does not commit
 		// *the latest* when being revoked. We always want to commit
@@ -173,7 +177,7 @@ func (c *testConsumer) etl(etlsBeforeQuit int) {
 		fetches := cl.PollRecords(ctx, 100)
 		cancel()
 		if fetches.Err() == context.DeadlineExceeded || fetches.Err() == ErrClientClosed {
-			if consumed := int(atomic.LoadUint64(&c.consumed)); consumed == testRecordLimit {
+			if consumed := int(c.consumed.Load()); consumed == testRecordLimit {
 				return
 			} else if consumed > testRecordLimit {
 				panic(fmt.Sprintf("invalid: consumed too much from %s (group %s)", c.consumeFrom, c.group))
@@ -212,7 +216,7 @@ func (c *testConsumer) etl(etlsBeforeQuit int) {
 
 			c.mu.Unlock()
 
-			atomic.AddUint64(&c.consumed, 1)
+			c.consumed.Add(1)
 
 			cl.Produce(
 				context.Background(),

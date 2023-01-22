@@ -293,4 +293,6 @@ var code2err = map[int16]error{
 	104: InconsistentClusterID,
 	105: TransactionalIDNotFound,
 	106: FetchSessionTopicIDError,
+	107: IneligibleReplica,
+	108: NewLeaderElected,
 }

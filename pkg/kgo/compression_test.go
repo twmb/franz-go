@@ -97,8 +97,8 @@ func TestCompressDecompress(t *testing.T) {
 
 func BenchmarkCompress(b *testing.B) {
 	in := bytes.Repeat([]byte("abcdefghijklmno pqrs tuvwxy   z"), 100)
-	for _, codec := range []int8{1, 2, 3, 4} {
-		c, _ := newCompressor(CompressionCodec{codec: codec}) // snappy
+	for _, codec := range []codecType{codecGzip, codecSnappy, codecLZ4, codecZstd} {
+		c, _ := newCompressor(CompressionCodec{codec: codec})
 		b.Run(fmt.Sprint(codec), func(b *testing.B) {
 			var afterSize int
 			for i := 0; i < b.N; i++ {

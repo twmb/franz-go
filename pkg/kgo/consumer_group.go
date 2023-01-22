@@ -371,7 +371,7 @@ func (g *groupConsumer) manage() {
 			g.lastAssigned = nil
 			g.fetching = nil
 
-			g.leader.set(false)
+			g.leader.Store(false)
 			g.resetExternal()
 		}
 
@@ -458,7 +458,7 @@ func (g *groupConsumer) leave() (wait func()) {
 // returns the difference of g.nowAssigned and g.lastAssigned.
 func (g *groupConsumer) diffAssigned() (added, lost map[string][]int32) {
 	nowAssigned := g.nowAssigned.clone()
-	if g.lastAssigned == nil {
+	if !g.cooperative {
 		return nowAssigned, nil
 	}
 
@@ -749,6 +749,8 @@ func (g *groupConsumer) setupAssignedAndHeartbeat() (string, error) {
 
 	s := newAssignRevokeSession()
 	added, lost := g.diffAssigned()
+	g.lastAssigned = g.nowAssigned.clone() // now that we are done with our last assignment, update it per the new assignment
+
 	g.cfg.logger.Log(LogLevelInfo, "new group session begun", "group", g.cfg.group, "added", mtps(added), "lost", mtps(lost))
 	s.prerevoke(g, lost) // for cooperative consumers
 
@@ -990,13 +992,13 @@ func (g *groupConsumer) rejoin(why string) {
 // for group cancelation to return early.
 func (g *groupConsumer) joinAndSync(joinWhy string) error {
 	g.cfg.logger.Log(LogLevelInfo, "joining group", "group", g.cfg.group)
-	g.leader.set(false)
+	g.leader.Store(false)
 	g.getAndResetExternalRejoin()
 	defer func() {
 		// If we are not leader, we clear any tracking of external
 		// topics from when we were previously leader, since tracking
 		// these is just a waste.
-		if !g.leader.get() {
+		if !g.leader.Load() {
 			g.resetExternal()
 		}
 	}()
@@ -1054,7 +1056,9 @@ start:
 	syncReq.InstanceID = g.cfg.instanceID
 	syncReq.ProtocolType = &g.cfg.protocol
 	syncReq.Protocol = &protocol
-	syncReq.GroupAssignment = plan // nil unless we are the leader
+	if !joinResp.SkipAssignment {
+		syncReq.GroupAssignment = plan // nil unless we are the leader
+	}
 	var (
 		syncResp *kmsg.SyncGroupResponse
 		synced   = make(chan struct{})
@@ -1082,6 +1086,26 @@ start:
 		}
 		g.cfg.logger.Log(LogLevelWarn, "sync group failed", "group", g.cfg.group, "err", err)
 		return err
+	}
+
+	// KIP-814 fixes one limitation with KIP-345, but has another
+	// fundamental limitation. When an instance ID leader restarts, its
+	// first join always gets its old assignment *even if* the member's
+	// topic interests have changed. The broker tells us to skip doing
+	// assignment ourselves, but we ignore that for our well known
+	// balancers. Instead, we balance (but avoid sending it while syncing,
+	// as we are supposed to), and if our sync assignment differs from our
+	// own calculated assignment, We know we have a stale broker assignment
+	// and must trigger a rebalance.
+	if plan != nil && joinResp.SkipAssignment {
+		for _, assign := range plan {
+			if assign.MemberID == g.memberID {
+				if !bytes.Equal(assign.MemberAssignment, syncResp.MemberAssignment) {
+					g.rejoin("instance group leader restarted and was reassigned old plan, our topic interests changed and we must rejoin to force a rebalance")
+				}
+				break
+			}
+		}
 	}
 
 	return nil
@@ -1117,28 +1141,75 @@ func (g *groupConsumer) handleJoinResp(resp *kmsg.JoinGroupResponse) (restart bo
 		protocol = *resp.Protocol
 	}
 
+	// KIP-345 has a fundamental limitation that KIP-814 also does not
+	// solve.
+	//
+	// When using instance IDs, if a leader restarts, its first join
+	// receives its old assignment no matter what. KIP-345 resulted in
+	// leaderless consumer groups, KIP-814 fixes this by notifying the
+	// restarted leader that it is still leader but that it should not
+	// balance.
+	//
+	// If the join response is <= v8, we hackily work around the leaderless
+	// situation by checking if the LeaderID is prefixed with our
+	// InstanceID. This is how Kafka and Redpanda are both implemented.  At
+	// worst, if we mis-predict the leader, then we may accidentally try to
+	// cause a rebalance later and it will do nothing. That's fine. At
+	// least we can cause rebalances now, rather than having a leaderless,
+	// not-ever-rebalancing client.
+	//
+	// KIP-814 does not solve our problem fully: if we restart and rejoin,
+	// we always get our old assignment even if we changed what topics we
+	// were interested in. Because we have our old assignment, we think
+	// that the plan is fine *even with* our new interests, and we wait for
+	// some external rebalance trigger. We work around this limitation
+	// above (see "KIP-814") only for well known balancers; we cannot work
+	// around this limitation for not well known balancers because they may
+	// do so weird things we cannot control nor reason about.
 	leader := resp.LeaderID == resp.MemberID
+	leaderNoPlan := !leader && resp.Version <= 8 && g.cfg.instanceID != nil && strings.HasPrefix(resp.LeaderID, *g.cfg.instanceID+"-")
 	if leader {
-		g.leader.set(true)
+		g.leader.Store(true)
 		g.cfg.logger.Log(LogLevelInfo, "joined, balancing group",
 			"group", g.cfg.group,
 			"member_id", g.memberID,
-			"instance_id", g.cfg.instanceID,
+			"instance_id", strptr{g.cfg.instanceID},
 			"generation", g.generation,
 			"balance_protocol", protocol,
 			"leader", true,
 		)
 		plan, err = g.balanceGroup(protocol, resp.Members, resp.SkipAssignment)
+	} else if leaderNoPlan {
+		g.leader.Store(true)
+		g.cfg.logger.Log(LogLevelInfo, "joined as leader but unable to balance group due to KIP-345 limitations",
+			"group", g.cfg.group,
+			"member_id", g.memberID,
+			"instance_id", strptr{g.cfg.instanceID},
+			"generation", g.generation,
+			"balance_protocol", protocol,
+			"leader", true,
+		)
 	} else {
 		g.cfg.logger.Log(LogLevelInfo, "joined",
 			"group", g.cfg.group,
 			"member_id", g.memberID,
-			"instance_id", g.cfg.instanceID,
+			"instance_id", strptr{g.cfg.instanceID},
 			"generation", g.generation,
 			"leader", false,
 		)
 	}
 	return
+}
+
+type strptr struct {
+	s *string
+}
+
+func (s strptr) String() string {
+	if s.s == nil {
+		return "<nil>"
+	}
+	return *s.s
 }
 
 // If other group members consume topics we are not interested in, we track the
@@ -1188,8 +1259,8 @@ func (g *groupConsumer) getAndResetExternalRejoin() bool {
 	if e == nil {
 		return false
 	}
-	defer e.rejoin.set(false)
-	return e.rejoin.get()
+	defer e.rejoin.Store(false)
+	return e.rejoin.Load()
 }
 
 // Runs fn over a load, not copy, of our map.
@@ -1236,7 +1307,7 @@ func (g *groupExternal) updateLatest(meta map[string]*metadataTopic) {
 			}
 		}
 		if rejoin {
-			g.rejoin.set(true)
+			g.rejoin.Store(true)
 		}
 	})
 }
@@ -1261,9 +1332,6 @@ func (g *groupConsumer) handleSyncResp(protocol string, resp *kmsg.SyncGroupResp
 
 	// Past this point, we will fall into the setupAssigned prerevoke code,
 	// meaning for cooperative, we will revoke what we need to.
-	if g.cooperative {
-		g.lastAssigned = g.nowAssigned.clone()
-	}
 	g.nowAssigned.store(assigned)
 	return nil
 }
@@ -1275,13 +1343,16 @@ func (g *groupConsumer) joinGroupProtocols() []kmsg.JoinGroupRequestProtocol {
 	for topic := range g.using {
 		topics = append(topics, topic)
 	}
-	nowDup := g.nowAssigned.clone() // deep copy to allow modifications
+	lastDup := make(map[string][]int32, len(g.lastAssigned))
+	for t, ps := range g.lastAssigned {
+		lastDup[t] = append([]int32(nil), ps...) // deep copy to allow modifications
+	}
 	gen := g.generation
 
 	g.mu.Unlock()
 
 	sort.Strings(topics) // we guarantee to JoinGroupMetadata that the input strings are sorted
-	for _, partitions := range nowDup {
+	for _, partitions := range lastDup {
 		sort.Slice(partitions, func(i, j int) bool { return partitions[i] < partitions[j] }) // same for partitions
 	}
 
@@ -1289,7 +1360,7 @@ func (g *groupConsumer) joinGroupProtocols() []kmsg.JoinGroupRequestProtocol {
 	for _, balancer := range g.cfg.balancers {
 		proto := kmsg.NewJoinGroupRequestProtocol()
 		proto.Name = balancer.ProtocolName()
-		proto.Metadata = balancer.JoinGroupMetadata(topics, nowDup, gen)
+		proto.Metadata = balancer.JoinGroupMetadata(topics, lastDup, gen)
 		protos = append(protos, proto)
 	}
 	return protos
@@ -1591,7 +1662,7 @@ func (g *groupConsumer) findNewAssignments() {
 		}
 	}
 
-	externalRejoin := g.leader.get() && g.getAndResetExternalRejoin()
+	externalRejoin := g.leader.Load() && g.getAndResetExternalRejoin()
 
 	if len(toChange) == 0 && !externalRejoin {
 		return
@@ -1616,7 +1687,7 @@ func (g *groupConsumer) findNewAssignments() {
 
 	if numNewTopics > 0 {
 		g.rejoin("rejoining because there are more topics to consume, our interests have changed")
-	} else if g.leader.get() {
+	} else if g.leader.Load() {
 		if len(toChange) > 0 {
 			g.rejoin("rejoining because we are the leader and noticed some topics have new partitions")
 		} else if externalRejoin {
@@ -1783,8 +1854,11 @@ func (g *groupConsumer) updateCommitted(
 	if req.Generation != g.generation {
 		return
 	}
-	if g.uncommitted == nil || // just in case
-		len(req.Topics) != len(resp.Topics) { // bad kafka
+	if g.uncommitted == nil {
+		g.cfg.logger.Log(LogLevelWarn, "received an OffsetCommitResponse after our group session has ended, unable to handle this (were we kicked from the group?)")
+		return
+	}
+	if len(req.Topics) != len(resp.Topics) { // bad kafka
 		g.cfg.logger.Log(LogLevelError, fmt.Sprintf("broker replied to our OffsetCommitRequest incorrectly! Num topics in request: %d, in reply: %d, we cannot handle this!", len(req.Topics), len(resp.Topics)), "group", g.cfg.group)
 		return
 	}
@@ -2030,6 +2104,31 @@ func (g *groupConsumer) getSetAssigns(setOffsets map[string]map[int32]EpochOffse
 func (cl *Client) UncommittedOffsets() map[string]map[int32]EpochOffset {
 	if g := cl.consumer.g; g != nil {
 		return g.getUncommitted(true)
+	}
+	return nil
+}
+
+// MarkedOffsets returns the latest marked offsets. When autocommitting, a
+// marked offset is an offset that can be committed, in comparison to a dirty
+// offset that cannot yet be committed. You usually see marked offsets with
+// AutoCommitMarks and MarkCommitRecords, but you can also use this function to
+// grab the current offsets that are candidates for committing from normal
+// autocommitting.
+//
+// If you set a custom OnPartitionsRevoked, marked offsets are not committed
+// when partitions are revoked. You can use this function to mark records and
+// issue a commit inside your OnPartitionsRevoked.
+//
+// Note that, if manually committing, you should be careful with committing
+// during group rebalances. You must ensure you commit before the group's
+// session timeout is reached, otherwise this client will be kicked from the
+// group and the commit will fail.
+//
+// If using a cooperative balancer, commits while consuming during rebalancing
+// may fail with REBALANCE_IN_PROGRESS.
+func (cl *Client) MarkedOffsets() map[string]map[int32]EpochOffset {
+	if g := cl.consumer.g; g != nil {
+		return g.getUncommitted(false)
 	}
 	return nil
 }

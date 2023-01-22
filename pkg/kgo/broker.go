@@ -22,6 +22,24 @@ import (
 	"github.com/twmb/franz-go/pkg/sasl"
 )
 
+type pinReq struct {
+	kmsg.Request
+	min    int16
+	max    int16
+	pinMin bool
+	pinMax bool
+}
+
+func (p *pinReq) SetVersion(v int16) {
+	if p.pinMin && v < p.min {
+		v = p.min
+	}
+	if p.pinMax && v > p.max {
+		v = p.max
+	}
+	p.Request.SetVersion(v)
+}
+
 type promisedReq struct {
 	ctx     context.Context
 	req     kmsg.Request
@@ -137,7 +155,7 @@ type broker struct {
 	// reqs manages incoming message requests.
 	reqs ringReq
 	// dead is an atomic so a backed up reqs cannot block broker stoppage.
-	dead int32
+	dead atomicBool
 }
 
 // brokerVersions is loaded once (and potentially a few times concurrently if
@@ -196,7 +214,7 @@ func (cl *Client) newBroker(nodeID int32, host string, port int32, rack *string)
 
 // stopForever permanently disables this broker.
 func (b *broker) stopForever() {
-	if atomic.SwapInt32(&b.dead, 1) == 1 {
+	if b.dead.Swap(true) {
 		return
 	}
 
@@ -264,9 +282,18 @@ start:
 func (b *broker) handleReq(pr promisedReq) {
 	req := pr.req
 	var cxn *brokerCxn
+	var retriedOnNewConnection bool
+start:
 	{
 		var err error
 		if cxn, err = b.loadConnection(pr.ctx, req); err != nil {
+			// It is rare, but it is possible that the broker has
+			// an immediate issue on a new connection. We retry
+			// once.
+			if isRetriableBrokerErr(err) && !retriedOnNewConnection {
+				retriedOnNewConnection = true
+				goto start
+			}
 			pr.promise(nil, err)
 			return
 		}
@@ -303,40 +330,54 @@ func (b *broker) handleReq(pr promisedReq) {
 		version = brokerMax
 	}
 
+	minVersion := int16(-1)
+
 	// If the version now (after potential broker downgrading) is
 	// lower than we desire, we fail the request for the broker is
 	// too old.
 	if b.cl.cfg.minVersions != nil {
-		minVersion, minVersionExists := b.cl.cfg.minVersions.LookupMaxKeyVersion(req.Key())
-		if minVersionExists && version < minVersion {
+		minVersion, _ = b.cl.cfg.minVersions.LookupMaxKeyVersion(req.Key())
+		if minVersion > -1 && version < minVersion {
 			pr.promise(nil, errBrokerTooOld)
 			return
 		}
 	}
 
 	req.SetVersion(version) // always go for highest version
+	setVersion := req.GetVersion()
+	if minVersion > -1 && setVersion < minVersion {
+		pr.promise(nil, fmt.Errorf("request key %d version returned %d below the user defined min of %d", req.Key(), setVersion, minVersion))
+		return
+	}
+	if version < setVersion {
+		// If we want to set an old version, but the request is pinned
+		// high, we need to fail with errBrokerTooOld. The broker wants
+		// an old version, we want a high version. We rely on this
+		// error in backcompat request sharding.
+		pr.promise(nil, errBrokerTooOld)
+		return
+	}
 
-	for reauthentications := 1; !cxn.expiry.IsZero() && time.Now().After(cxn.expiry); reauthentications++ {
-		// We allow 15 reauths, which is a lot. If a new lifetime is
-		// <2.5s, we sleep 100ms and try again. Retrying 15x puts us at
-		// <1s compared to the original lifetime. A broker should not
-		// reply with a <1s lifetime, but if we end up here, then we
-		// kill the connection ourselves and retry on a new connection.
-		if reauthentications > 15 {
-			cxn.cl.cfg.logger.Log(LogLevelError, "the broker has repeatedly given us short sasl lifetimes, we are forcefully killing our own connection to retry on a new connection ", "broker", logID(cxn.b.meta.NodeID))
-			pr.promise(nil, errSaslReauthLoop)
-			cxn.die()
-			return
-		}
-
+	if !cxn.expiry.IsZero() && time.Now().After(cxn.expiry) {
 		// If we are after the reauth time, try to reauth. We
 		// can only have an expiry if we went the authenticate
 		// flow, so we know we are authenticating again.
+		//
+		// Some implementations (AWS) occasionally fail for
+		// unclear reasons (principals change, somehow). If
+		// we receive SASL_AUTHENTICATION_FAILED, we retry
+		// once on a new connection. See #249.
+		//
 		// For KIP-368.
 		cxn.cl.cfg.logger.Log(LogLevelDebug, "sasl expiry limit reached, reauthenticating", "broker", logID(cxn.b.meta.NodeID))
 		if err := cxn.sasl(); err != nil {
-			pr.promise(nil, err)
 			cxn.die()
+			if errors.Is(err, kerr.SaslAuthenticationFailed) && !retriedOnNewConnection {
+				cxn.cl.cfg.logger.Log(LogLevelDebug, "sasl reauth failed, retrying once on new connection", "broker", logID(cxn.b.meta.NodeID), "err", err)
+				retriedOnNewConnection = true
+				goto start
+			}
+			pr.promise(nil, err)
 			return
 		}
 	}
@@ -461,7 +502,7 @@ func (b *broker) loadConnection(ctx context.Context, req kmsg.Request) (*brokerC
 		pcxn = &b.cxnSlow
 	}
 
-	if *pcxn != nil && atomic.LoadInt32(&(*pcxn).dead) == 0 {
+	if *pcxn != nil && !(*pcxn).dead.Load() {
 		return *pcxn, nil
 	}
 
@@ -540,7 +581,7 @@ func (b *broker) reapConnections(idleTimeout time.Duration) (total int) {
 		b.cxnGroup,
 		b.cxnSlow,
 	} {
-		if cxn == nil || atomic.LoadInt32(&cxn.dead) == 1 {
+		if cxn == nil || cxn.dead.Load() {
 			continue
 		}
 
@@ -551,11 +592,11 @@ func (b *broker) reapConnections(idleTimeout time.Duration) (total int) {
 		// - produce can write but never read
 		// - fetch can hang for a while reading (infrequent writes)
 
-		lastWrite := time.Unix(0, atomic.LoadInt64(&cxn.lastWrite))
-		lastRead := time.Unix(0, atomic.LoadInt64(&cxn.lastRead))
+		lastWrite := time.Unix(0, cxn.lastWrite.Load())
+		lastRead := time.Unix(0, cxn.lastRead.Load())
 
-		writeIdle := time.Since(lastWrite) > idleTimeout && atomic.LoadUint32(&cxn.writing) == 0
-		readIdle := time.Since(lastRead) > idleTimeout && atomic.LoadUint32(&cxn.reading) == 0
+		writeIdle := time.Since(lastWrite) > idleTimeout && !cxn.writing.Load()
+		readIdle := time.Since(lastRead) > idleTimeout && !cxn.reading.Load()
 
 		if writeIdle && readIdle {
 			cxn.die()
@@ -578,6 +619,10 @@ func (b *broker) connect(ctx context.Context) (net.Conn, error) {
 	})
 	if err != nil {
 		if !errors.Is(err, ErrClientClosed) && !strings.Contains(err.Error(), "operation was canceled") {
+			if errors.Is(err, io.EOF) {
+				b.cl.cfg.logger.Log(LogLevelWarn, "unable to open connection to broker due to an immediate EOF, which often means the client is using TLS when the broker is not expecting it (is TLS misconfigured?)", "addr", b.addr, "broker", logID(b.meta.NodeID), "err", err)
+				return nil, &ErrFirstReadEOF{kind: firstReadTLS, err: err}
+			}
 			b.cl.cfg.logger.Log(LogLevelWarn, "unable to open connection to broker", "addr", b.addr, "broker", logID(b.meta.NodeID), "err", err)
 		}
 		return nil, fmt.Errorf("unable to dial: %w", err)
@@ -589,7 +634,7 @@ func (b *broker) connect(ctx context.Context) (net.Conn, error) {
 // brokerCxn manages an actual connection to a Kafka broker. This is separate
 // the broker struct to allow lazy connection (re)creation.
 type brokerCxn struct {
-	throttleUntil int64 // atomic nanosec
+	throttleUntil atomicI64 // atomic nanosec
 
 	conn net.Conn
 
@@ -606,17 +651,17 @@ type brokerCxn struct {
 	// The following four fields are used for connection reaping.
 	// Write is only updated in one location; read is updated in three
 	// due to readConn, readConnAsync, and discard.
-	lastWrite int64
-	lastRead  int64
-	writing   uint32
-	reading   uint32
+	lastWrite atomicI64
+	lastRead  atomicI64
+	writing   atomicBool
+	reading   atomicBool
 
 	successes uint64
 
 	// resps manages reading kafka responses.
 	resps ringResp
 	// dead is an atomic so that a backed up resps cannot block cxn death.
-	dead int32
+	dead atomicBool
 	// closed in cloneConn; allows throttle waiting to quit
 	deadCh chan struct{}
 }
@@ -626,7 +671,7 @@ func (cxn *brokerCxn) init(isProduceCxn bool) error {
 	if !hasVersions {
 		if cxn.b.cl.cfg.maxVersions == nil || cxn.b.cl.cfg.maxVersions.HasKey(18) {
 			if err := cxn.requestAPIVersions(); err != nil {
-				if !errors.Is(err, ErrClientClosed) {
+				if !errors.Is(err, ErrClientClosed) && !isRetriableBrokerErr(err) {
 					cxn.cl.cfg.logger.Log(LogLevelError, "unable to request api versions", "broker", logID(cxn.b.meta.NodeID), "err", err)
 				}
 				return err
@@ -639,7 +684,7 @@ func (cxn *brokerCxn) init(isProduceCxn bool) error {
 	}
 
 	if err := cxn.sasl(); err != nil {
-		if !errors.Is(err, ErrClientClosed) {
+		if !errors.Is(err, ErrClientClosed) && !isRetriableBrokerErr(err) {
 			cxn.cl.cfg.logger.Log(LogLevelError, "unable to initialize sasl", "broker", logID(cxn.b.meta.NodeID), "err", err)
 		}
 		return err
@@ -692,7 +737,7 @@ start:
 	// If we used a version larger than Kafka supports, Kafka replies with
 	// Version 0 and an UNSUPPORTED_VERSION error.
 	//
-	// Pre Kafka 2.4.0, we have to retry the request with version 0.
+	// Pre Kafka 2.4, we have to retry the request with version 0.
 	// Post, Kafka replies with all versions.
 	if rawResp[1] == 35 {
 		if maxVersion == 0 {
@@ -777,7 +822,7 @@ start:
 		}
 		authenticate = req.Version == 1
 	}
-	cxn.cl.cfg.logger.Log(LogLevelDebug, "beginning sasl authentication", "broker", logID(cxn.b.meta.NodeID), "mechanism", mechanism.Name(), "authenticate", authenticate)
+	cxn.cl.cfg.logger.Log(LogLevelDebug, "beginning sasl authentication", "broker", logID(cxn.b.meta.NodeID), "addr", cxn.addr, "mechanism", mechanism.Name(), "authenticate", authenticate)
 	cxn.mechanism = mechanism
 	return cxn.doSasl(authenticate)
 }
@@ -813,7 +858,7 @@ func (cxn *brokerCxn) doSasl(authenticate bool) error {
 			binary.BigEndian.PutUint32(buf, uint32(len(clientWrite)))
 			buf = append(buf, clientWrite...)
 
-			cxn.cl.cfg.logger.Log(LogLevelDebug, "issuing raw sasl authenticate", "broker", logID(cxn.b.meta.NodeID), "step", step)
+			cxn.cl.cfg.logger.Log(LogLevelDebug, "issuing raw sasl authenticate", "broker", logID(cxn.b.meta.NodeID), "addr", cxn.addr, "step", step)
 			_, _, _, _, err = cxn.writeConn(context.Background(), buf, wt, time.Now())
 
 			cxn.cl.bufPool.put(buf)
@@ -877,36 +922,45 @@ func (cxn *brokerCxn) doSasl(authenticate bool) error {
 	}
 
 	if lifetimeMillis > 0 {
-		// Lifetime: we could have written our request instantaenously,
-		// the broker calculating our session lifetime, and then the
-		// broker / network hung for a bit when writing. We
-		// pessimistically assume this worst case and take off the
-		// final request e2e latency x1.1 from the lifetime.
+		// Lifetime is problematic. We need to be a bit pessimistic.
 		//
-		// If the latency is <2.5s, we also pessimistically assume that
-		// things may take 2.5s in the future.
+		// We want a lowerbound: we use 1s (arbitrary), but if 1.1x our
+		// e2e sasl latency is more than 1s, we use the latency.
 		//
-		// We may make our lifetime <0; brokers should use longer
-		// lifetimes, but some do not in all cases. If our lifetime is
-		// <100ms, we sleep for 100ms just to ensure we do not
-		// spin-loop reauthenticating *too* much.
-		latency := int64(float64(time.Since(prereq).Milliseconds()) * 1.1)
-		if latency < 2500 {
-			latency = 2500
+		// We do not want to reauthenticate too close to the lifetime
+		// especially for larger lifetimes due to clock issues (#205).
+		// We take 95% to 98% of the lifetime.
+		minPessimismMillis := float64(time.Second.Milliseconds())
+		latencyMillis := 1.1 * float64(time.Since(prereq).Milliseconds())
+		if latencyMillis > minPessimismMillis {
+			minPessimismMillis = latencyMillis
 		}
+		maxPessimismMillis := float64(lifetimeMillis) * (0.05 - 0.03*cxn.b.cl.rng()) // 95 to 98% of lifetime (pessimism 2% to 5%)
 
-		useLifetime := lifetimeMillis - latency
-		now := time.Now()
-		cxn.expiry = now.Add(time.Duration(useLifetime) * time.Millisecond)
-		cxn.cl.cfg.logger.Log(LogLevelDebug, "sasl has a limited lifetime", "broker", logID(cxn.b.meta.NodeID), "reauthenticate_in", cxn.expiry.Sub(now))
-		if useLifetime < 0 {
-			cxn.cl.cfg.logger.Log(LogLevelInfo, "sasl lifetime minus 2.5s lower bound latency results in immediate reauthentication, sleeping 100ms to avoid spin-loop",
-				"broker", logID(cxn.b.meta.NodeID),
-				"session_lifetime", time.Duration(lifetimeMillis)*time.Millisecond,
-				"latency_lower_bound", time.Duration(latency)*time.Millisecond,
-			)
-			time.Sleep(100 * time.Millisecond)
+		// Our minimum lifetime is always 1s (or latency, if larger).
+		// When our max pessimism becomes more than min pessimism,
+		// every second after, we add between 0.05s or 0.08s to our
+		// backoff. At 12hr, we reauth ~24 to 28min before the
+		// lifetime.
+		usePessimismMillis := maxPessimismMillis
+		if minPessimismMillis > maxPessimismMillis {
+			usePessimismMillis = minPessimismMillis
 		}
+		useLifetimeMillis := lifetimeMillis - int64(usePessimismMillis)
+
+		// Subtracting our min pessimism may result in our connection
+		// immediately expiring. We always accept this one reauth to
+		// issue our one request, and our next request will again
+		// reauth. Brokers should give us longer lifetimes, but that
+		// may not always happen (see #136, #249).
+		now := time.Now()
+		cxn.expiry = now.Add(time.Duration(useLifetimeMillis) * time.Millisecond)
+		cxn.cl.cfg.logger.Log(LogLevelDebug, "sasl has a limited lifetime",
+			"broker", logID(cxn.b.meta.NodeID),
+			"session_lifetime", time.Duration(lifetimeMillis)*time.Millisecond,
+			"lifetime_pessimism", time.Duration(usePessimismMillis)*time.Millisecond,
+			"reauthenticate_in", cxn.expiry.Sub(now),
+		)
 	}
 	return nil
 }
@@ -928,7 +982,7 @@ func maybeUpdateCtxErr(clientCtx, reqCtx context.Context, err *error) {
 func (cxn *brokerCxn) writeRequest(ctx context.Context, enqueuedForWritingAt time.Time, req kmsg.Request) (corrID int32, bytesWritten int, writeWait, timeToWrite time.Duration, readEnqueue time.Time, writeErr error) {
 	// A nil ctx means we cannot be throttled.
 	if ctx != nil {
-		throttleUntil := time.Unix(0, atomic.LoadInt64(&cxn.throttleUntil))
+		throttleUntil := time.Unix(0, cxn.throttleUntil.Load())
 		if sleep := time.Until(throttleUntil); sleep > 0 {
 			after := time.NewTimer(sleep)
 			select {
@@ -983,10 +1037,10 @@ func (cxn *brokerCxn) writeConn(
 	timeout time.Duration,
 	enqueuedForWritingAt time.Time,
 ) (bytesWritten int, writeWait, timeToWrite time.Duration, readEnqueue time.Time, writeErr error) {
-	atomic.SwapUint32(&cxn.writing, 1)
+	cxn.writing.Store(true)
 	defer func() {
-		atomic.StoreInt64(&cxn.lastWrite, time.Now().UnixNano())
-		atomic.SwapUint32(&cxn.writing, 0)
+		cxn.lastWrite.Store(time.Now().UnixNano())
+		cxn.writing.Store(false)
 	}()
 
 	if ctx == nil {
@@ -1031,10 +1085,10 @@ func (cxn *brokerCxn) readConn(
 	timeout time.Duration,
 	enqueuedForReadingAt time.Time,
 ) (nread int, buf []byte, readWait, timeToRead time.Duration, err error) {
-	atomic.SwapUint32(&cxn.reading, 1)
+	cxn.reading.Store(true)
 	defer func() {
-		atomic.StoreInt64(&cxn.lastRead, time.Now().UnixNano())
-		atomic.SwapUint32(&cxn.reading, 0)
+		cxn.lastRead.Store(time.Now().UnixNano())
+		cxn.reading.Store(false)
 	}()
 
 	if ctx == nil {
@@ -1202,7 +1256,7 @@ func (cxn *brokerCxn) closeConn() {
 // die kills a broker connection (which could be dead already) and replies to
 // all requests awaiting responses appropriately.
 func (cxn *brokerCxn) die() {
-	if cxn == nil || atomic.SwapInt32(&cxn.dead, 1) == 1 {
+	if cxn == nil || cxn.dead.Swap(true) {
 		return
 	}
 	cxn.closeConn()
@@ -1310,10 +1364,10 @@ func (cxn *brokerCxn) discard() {
 			}
 			deadlineMu.Unlock()
 
-			atomic.SwapUint32(&cxn.reading, 1)
+			cxn.reading.Store(true)
 			defer func() {
-				atomic.StoreInt64(&cxn.lastRead, time.Now().UnixNano())
-				atomic.SwapUint32(&cxn.reading, 0)
+				cxn.lastRead.Store(time.Now().UnixNano())
+				cxn.reading.Store(false)
 			}()
 
 			readStart := time.Now()
@@ -1392,9 +1446,9 @@ func (cxn *brokerCxn) handleResp(pr promisedResp) {
 			if cxn.successes > 0 || len(cxn.b.cl.cfg.sasls) > 0 {
 				cxn.b.cl.cfg.logger.Log(LogLevelDebug, "read from broker errored, killing connection", "addr", cxn.b.addr, "broker", logID(cxn.b.meta.NodeID), "successful_reads", cxn.successes, "err", err)
 			} else {
-				cxn.b.cl.cfg.logger.Log(LogLevelWarn, "read from broker errored, killing connection after 0 successful responses (is sasl missing?)", "addr", cxn.b.addr, "broker", logID(cxn.b.meta.NodeID), "err", err)
+				cxn.b.cl.cfg.logger.Log(LogLevelWarn, "read from broker errored, killing connection after 0 successful responses (is SASL missing?)", "addr", cxn.b.addr, "broker", logID(cxn.b.meta.NodeID), "err", err)
 				if err == io.EOF { // specifically avoid checking errors.Is to ensure this is not already wrapped
-					err = &ErrFirstReadEOF{}
+					err = &ErrFirstReadEOF{kind: firstReadSASL, err: err}
 				}
 			}
 		}
@@ -1416,8 +1470,8 @@ func (cxn *brokerCxn) handleResp(pr promisedResp) {
 			if millis > 0 {
 				if throttlesAfterResp {
 					throttleUntil := time.Now().Add(time.Millisecond * time.Duration(millis)).UnixNano()
-					if throttleUntil > cxn.throttleUntil {
-						atomic.StoreInt64(&cxn.throttleUntil, throttleUntil)
+					if throttleUntil > cxn.throttleUntil.Load() {
+						cxn.throttleUntil.Store(throttleUntil)
 					}
 				}
 				cxn.cl.cfg.hooks.each(func(h Hook) {

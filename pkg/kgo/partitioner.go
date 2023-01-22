@@ -3,7 +3,6 @@ package kgo
 import (
 	"math"
 	"math/rand"
-	"sync/atomic"
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kbin"
@@ -200,7 +199,7 @@ type (
 
 func (i *leastBackupInput) Next() (int, int64) {
 	last := len(i.mapping) - 1
-	buffered := atomic.LoadInt64(&i.mapping[last].records.buffered)
+	buffered := i.mapping[last].records.buffered.Load()
 	i.mapping = i.mapping[:last]
 	return last, buffered
 }

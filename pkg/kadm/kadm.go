@@ -50,10 +50,28 @@
 //
 // These types are meant to be easy to build and use, and can be used as the
 // starting point for other types.
+//
+// Many functions in this package are variadic and return either a map or a
+// list of responses, and you may only use one element as input and are only
+// interested in one element of output. This package provides the following
+// functions to help:
+//
+//	Any(map)
+//	AnyE(map, err)
+//	First(slice)
+//	FirstE(slice, err)
+//
+// The intended use case of these is something like `kadm.AnyE(kadm.CreateTopics(..., "my-one-topic"))`,
+// such that you can immediately get the response for the one topic you are
+// creating.
 package kadm
 
 import (
+	"errors"
+	"regexp"
+	"runtime/debug"
 	"sort"
+	"sync"
 
 	"github.com/twmb/franz-go/pkg/kgo"
 )
@@ -63,6 +81,27 @@ func unptrStr(s *string) string {
 		return ""
 	}
 	return *s
+}
+
+var (
+	reVersion     *regexp.Regexp
+	reVersionOnce sync.Once
+)
+
+// Copied from kgo, but we use the kadm package version.
+func softwareVersion() string {
+	info, ok := debug.ReadBuildInfo()
+	if ok {
+		reVersionOnce.Do(func() { reVersion = regexp.MustCompile(`^[a-zA-Z0-9](?:[a-zA-Z0-9.-]*[a-zA-Z0-9])?$`) })
+		for _, dep := range info.Deps {
+			if dep.Path == "github.com/twmb/franz-go/pkg/kadm" {
+				if reVersion.MatchString(dep.Version) {
+					return dep.Version
+				}
+			}
+		}
+	}
+	return "unknown"
 }
 
 // Client is an admin client.
@@ -376,7 +415,30 @@ func (s TopicsSet) Each(fn func(t string, p int32)) {
 	}
 }
 
-// Add adds partitions for a topic to the topics set.
+// EachPartitions calls fn for each topic and its partitions in the topics set.
+func (s TopicsSet) EachPartitions(fn func(t string, ps []int32)) {
+	for t, ps := range s {
+		sliced := make([]int32, 0, len(ps))
+		for p := range ps {
+			sliced = append(sliced, p)
+		}
+		fn(t, sliced)
+	}
+}
+
+// EmptyTopics returns all topics with no partitions.
+func (s TopicsSet) EmptyTopics() []string {
+	var e []string
+	for t, ps := range s {
+		if len(ps) == 0 {
+			e = append(e, t)
+		}
+	}
+	return e
+}
+
+// Add adds partitions for a topic to the topics set. If no partitions are
+// added, this still creates the topic.
 func (s *TopicsSet) Add(t string, ps ...int32) {
 	if *s == nil {
 		*s = make(map[string]map[int32]struct{})
@@ -428,22 +490,20 @@ func (s TopicsSet) Merge(other TopicsSet) {
 	}
 }
 
-// TopicPartitions is a topic and partitions.
-type TopicPartitions struct {
-	Topic      string
-	Partitions []int32
-}
-
-// TopicsList is a list of topics and partitions.
-type TopicsList []TopicPartitions
-
-// Each calls fn for each topic / partition in the topics list.
-func (l TopicsList) Each(fn func(t string, p int32)) {
-	for _, t := range l {
-		for _, p := range t.Partitions {
-			fn(t.Topic, p)
+// IntoList returns this set as a list.
+func (s TopicsSet) IntoList() TopicsList {
+	l := make(TopicsList, 0, len(s))
+	for t, ps := range s {
+		lps := make([]int32, 0, len(ps))
+		for p := range ps {
+			lps = append(lps, p)
 		}
+		l = append(l, TopicPartitions{
+			Topic:      t,
+			Partitions: lps,
+		})
 	}
+	return l
 }
 
 // Sorted returns this set as a list in topic-sorted order, with each topic
@@ -465,6 +525,53 @@ func (s TopicsSet) Sorted() TopicsList {
 	return l
 }
 
+// TopicPartitions is a topic and partitions.
+type TopicPartitions struct {
+	Topic      string
+	Partitions []int32
+}
+
+// TopicsList is a list of topics and partitions.
+type TopicsList []TopicPartitions
+
+// Each calls fn for each topic / partition in the topics list.
+func (l TopicsList) Each(fn func(t string, p int32)) {
+	for _, t := range l {
+		for _, p := range t.Partitions {
+			fn(t.Topic, p)
+		}
+	}
+}
+
+// EachPartitions calls fn for each topic and its partitions in the topics
+// list.
+func (l TopicsList) EachPartitions(fn func(t string, ps []int32)) {
+	for _, t := range l {
+		fn(t.Topic, t.Partitions)
+	}
+}
+
+// EmptyTopics returns all topics with no partitions.
+func (l TopicsList) EmptyTopics() []string {
+	var e []string
+	for _, t := range l {
+		if len(t.Partitions) == 0 {
+			e = append(e, t.Topic)
+		}
+	}
+	return e
+}
+
+// Topics returns all topics in this set in sorted order.
+func (l TopicsList) Topics() []string {
+	ts := make([]string, 0, len(l))
+	for _, t := range l {
+		ts = append(ts, t.Topic)
+	}
+	sort.Strings(ts)
+	return ts
+}
+
 // IntoSet returns this list as a set.
 func (l TopicsList) IntoSet() TopicsSet {
 	s := make(TopicsSet)
@@ -472,4 +579,77 @@ func (l TopicsList) IntoSet() TopicsSet {
 		s.Add(t.Topic, t.Partitions...)
 	}
 	return s
+}
+
+// First returns the first element of the input slice and whether it exists.
+// This is the non-error-accepting equivalent of FirstE.
+//
+// Many client methods in kadm accept a variadic amount of input arguments and
+// return either a slice or a map of responses, but you often use the method
+// with only one argument. This function can help extract the one response you
+// are interested in.
+func First[S ~[]T, T any](s S) (T, bool) {
+	if len(s) == 0 {
+		var t T
+		return t, false
+	}
+	return s[0], true
+}
+
+// Any returns the first range element of the input map and whether it exists.
+// This is the non-error-accepting equivalent of AnyE.
+//
+// Many client methods in kadm accept a variadic amount of input arguments and
+// return either a slice or a map of responses, but you often use the method
+// with only one argument. This function can help extract the one response you
+// are interested in.
+func Any[M ~map[K]V, K comparable, V any](m M) (V, bool) {
+	for _, v := range m {
+		return v, true
+	}
+	var v V
+	return v, false
+}
+
+// ErrEmpty is returned from FirstE or AnyE if the input is empty.
+var ErrEmpty = errors.New("empty")
+
+// FirstE returns the first element of the input slice, or the input error
+// if it is non-nil. If the error is nil but the slice is empty, this returns
+// ErrEmpty. This is the error-accepting equivalent of First.
+//
+// Many client methods in kadm accept a variadic amount of input arguments and
+// return either a slice or a map of responses, but you often use the method
+// with only one argument. This function can help extract the one response you
+// are interested in.
+func FirstE[S ~[]T, T any](s S, err error) (T, error) {
+	if err != nil {
+		var t T
+		return t, err
+	}
+	if len(s) == 0 {
+		var t T
+		return t, ErrEmpty
+	}
+	return s[0], err
+}
+
+// AnyE returns the first range element of the input map, or the input error if
+// it is non-nil. If the error is nil but the map is empty, this returns
+// ErrEmpty. This is the error-accepting equivalent of Any.
+//
+// Many client methods in kadm accept a variadic amount of input arguments and
+// return either a slice or a map of responses, but you often use the method
+// with only one argument. This function can help extract the one response you
+// are interested in.
+func AnyE[M ~map[K]V, K comparable, V any](m M, err error) (V, error) {
+	if err != nil {
+		var v V
+		return v, err
+	}
+	for _, v := range m {
+		return v, nil
+	}
+	var v V
+	return v, ErrEmpty
 }

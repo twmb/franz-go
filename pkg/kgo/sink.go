@@ -22,11 +22,11 @@ type sink struct {
 	nodeID int32   // the node ID of the broker this sink belongs to
 
 	// inflightSem controls the number of concurrent produce requests.  We
-	// start with a limit of 1, which covers Kafka v0.11.0.0. On the first
+	// start with a limit of 1, which covers Kafka v0.11.0. On the first
 	// response, we check what version was set in the request. If it is at
-	// least 4, which 1.0.0 introduced, we upgrade the sem size.
+	// least 4, which 1.0 introduced, we upgrade the sem size.
 	inflightSem    atomic.Value
-	produceVersion int32 // atomic, negative is unset, positive is version
+	produceVersion atomicI32 // negative is unset, positive is version
 
 	drainState workLoop
 
@@ -43,7 +43,7 @@ type sink struct {
 	// successful response. For simplicity, if we have a good response
 	// following an error response before the error response's backoff
 	// occurs, the backoff is not cleared.
-	consecutiveFailures uint32
+	consecutiveFailures atomicU32
 
 	recBufsMu    sync.Mutex // guards the following
 	recBufs      []*recBuf  // contains all partition records for batch building
@@ -60,10 +60,10 @@ type seqResp struct {
 
 func (cl *Client) newSink(nodeID int32) *sink {
 	s := &sink{
-		cl:             cl,
-		nodeID:         nodeID,
-		produceVersion: -1,
+		cl:     cl,
+		nodeID: nodeID,
 	}
+	s.produceVersion.Store(-1)
 	maxInflight := 1
 	if cl.cfg.disableIdempotency {
 		maxInflight = cl.cfg.maxProduceInflight
@@ -107,13 +107,13 @@ func (s *sink) createReq(id int64, epoch int16) (*produceRequest, *kmsg.AddParti
 		recBufsIdx = (recBufsIdx + 1) % len(s.recBufs)
 
 		recBuf.mu.Lock()
-		if recBuf.failing || len(recBuf.batches) == recBuf.batchDrainIdx || recBuf.inflightOnSink != nil && recBuf.inflightOnSink != s {
+		if recBuf.failing || len(recBuf.batches) == recBuf.batchDrainIdx || recBuf.inflightOnSink != nil && recBuf.inflightOnSink != s || recBuf.inflight != 0 && !recBuf.okOnSink {
 			recBuf.mu.Unlock()
 			continue
 		}
 
 		batch := recBuf.batches[recBuf.batchDrainIdx]
-		if added := req.tryAddBatch(atomic.LoadInt32(&s.produceVersion), recBuf, batch); !added {
+		if added := req.tryAddBatch(s.produceVersion.Load(), recBuf, batch); !added {
 			recBuf.mu.Unlock()
 			moreToDrain = true
 			continue
@@ -123,11 +123,7 @@ func (s *sink) createReq(id int64, epoch int16) (*produceRequest, *kmsg.AddParti
 		recBuf.inflight++
 
 		recBuf.batchDrainIdx++
-		if recBuf.seq > math.MaxInt32-int32(len(batch.records)) {
-			recBuf.seq = int32(len(batch.records)) - (math.MaxInt32 - recBuf.seq) - 1
-		} else {
-			recBuf.seq += int32(len(batch.records))
-		}
+		recBuf.seq = incrementSequence(recBuf.seq, int32(len(batch.records)))
 		moreToDrain = moreToDrain || recBuf.tryStopLingerForDraining()
 		recBuf.mu.Unlock()
 
@@ -142,6 +138,14 @@ func (s *sink) createReq(id int64, epoch int16) (*produceRequest, *kmsg.AddParti
 	return req, txnBuilder.req, moreToDrain
 }
 
+func incrementSequence(sequence, increment int32) int32 {
+	if sequence > math.MaxInt32-increment {
+		return increment - (math.MaxInt32 - sequence) - 1
+	}
+
+	return sequence + increment
+}
+
 type txnReqBuilder struct {
 	txnID       *string
 	req         *kmsg.AddPartitionsToTxnRequest
@@ -154,7 +158,7 @@ func (t *txnReqBuilder) add(rb *recBuf) {
 	if t.txnID == nil {
 		return
 	}
-	if rb.addedToTxn.swap(true) {
+	if rb.addedToTxn.Swap(true) {
 		return
 	}
 	if t.req == nil {
@@ -177,7 +181,7 @@ func (t *txnReqBuilder) add(rb *recBuf) {
 }
 
 func (s *sink) maybeDrain() {
-	if s.cl.cfg.manualFlushing && atomic.LoadInt32(&s.cl.producer.flushing) == 0 {
+	if s.cl.cfg.manualFlushing && s.cl.producer.flushing.Load() == 0 {
 		return
 	}
 	if s.drainState.maybeBegin() {
@@ -197,7 +201,7 @@ func (s *sink) maybeBackoff() {
 
 	s.cl.triggerUpdateMetadata(false, "opportunistic load during sink backoff") // as good a time as any
 
-	tries := int(atomic.AddUint32(&s.consecutiveFailures, 1))
+	tries := int(s.consecutiveFailures.Add(1))
 	after := time.NewTimer(s.cl.cfg.retryBackoff(tries))
 	defer after.Stop()
 
@@ -254,7 +258,7 @@ func (s *sink) produce(sem <-chan struct{}) bool {
 	// We could have been triggered from a metadata update even though the
 	// user is not producing at all. If we have no buffered records, let's
 	// avoid potentially creating a producer ID.
-	if atomic.LoadInt64(&s.cl.producer.bufferedRecords) == 0 {
+	if s.cl.producer.bufferedRecords.Load() == 0 {
 		return false
 	}
 
@@ -325,6 +329,7 @@ func (s *sink) produce(sem <-chan struct{}) bool {
 			case isRetriableBrokerErr(err) || isDialErr(err):
 				s.cl.bumpRepeatedLoadErr(err)
 				s.cl.cfg.logger.Log(LogLevelWarn, "unable to AddPartitionsToTxn due to retriable broker err, bumping client's buffered record load errors by 1 and retrying", "err", err)
+				s.cl.triggerUpdateMetadata(false, "attempting to refresh broker list due to failed AddPartitionsToTxn requests")
 				return moreToDrain || len(req.batches) > 0 // nothing stripped if request-issuing error
 			default:
 				// Note that err can be InvalidProducerEpoch, which is
@@ -427,7 +432,7 @@ func (s *sink) doTxnReq(
 			req.batches.eachOwnerLocked(seqRecBatch.removeFromTxn)
 		}
 	}()
-	err = s.cl.doWithConcurrentTransactions("AddPartitionsToTxn", func() error {
+	err = s.cl.doWithConcurrentTransactions(s.cl.ctx, "AddPartitionsToTxn", func() error {
 		stripped, err = s.issueTxnReq(req, txnReq)
 		return err
 	})
@@ -438,7 +443,7 @@ func (s *sink) doTxnReq(
 // inflight, and that it was not added to the txn and that we need to reset the
 // drain index.
 func (b *recBatch) removeFromTxn() {
-	b.owner.addedToTxn.set(false)
+	b.owner.addedToTxn.Store(false)
 	b.owner.resetBatchDrainIdx()
 	b.decInflight()
 }
@@ -510,8 +515,8 @@ func (s *sink) issueTxnReq(
 //	https://cwiki.apache.org/confluence/display/KAFKA/An+analysis+of+the+impact+of+max.in.flight.requests.per.connection+and+acks+on+Producer+performance
 //	https://issues.apache.org/jira/browse/KAFKA-5494
 func (s *sink) firstRespCheck(idempotent bool, version int16) {
-	if s.produceVersion < 0 { // this is the only place this can be checked non-atomically
-		atomic.StoreInt32(&s.produceVersion, int32(version))
+	if s.produceVersion.Load() < 0 {
+		s.produceVersion.Store(int32(version))
 		if idempotent && version >= 4 {
 			s.inflightSem.Store(make(chan struct{}, 4))
 		}
@@ -531,9 +536,9 @@ func (s *sink) handleReqClientErr(req *produceRequest, err error) {
 		isRetriableBrokerErr(err):
 		updateMeta := !isRetriableBrokerErr(err)
 		if updateMeta {
-			s.cl.cfg.logger.Log(LogLevelInfo, "produce request failed triggering metadata update", "broker", logID(s.nodeID), "err", err)
+			s.cl.cfg.logger.Log(LogLevelInfo, "produce request failed, triggering metadata update", "broker", logID(s.nodeID), "err", err)
 		}
-		s.handleRetryBatches(req.batches, req.backoffSeq, updateMeta, false, "failed produce request triggering metadata update")
+		s.handleRetryBatches(req.batches, req.backoffSeq, updateMeta, false, "failed produce request triggered metadata update")
 
 	case errors.Is(err, ErrClientClosed):
 		s.cl.failBufferedRecords(ErrClientClosed)
@@ -577,7 +582,7 @@ func (s *sink) handleReqResp(br *broker, req *produceRequest, resp kmsg.Response
 		return
 	}
 	s.firstRespCheck(req.idempotent(), req.version)
-	atomic.StoreUint32(&s.consecutiveFailures, 0)
+	s.consecutiveFailures.Store(0)
 	defer req.metrics.hook(&s.cl.cfg, br) // defer to end so that non-written batches are removed
 
 	var b *bytes.Buffer
@@ -726,7 +731,7 @@ func (s *sink) handleReqRespBatch(
 		err == kerr.InvalidProducerIDMapping,
 		err == kerr.InvalidProducerEpoch:
 
-		// OOOSN always means data loss 1.0.0+ and is ambiguous prior.
+		// OOOSN always means data loss 1.0+ and is ambiguous prior.
 		// We assume the worst and only continue if requested.
 		//
 		// UnknownProducerID was introduced to allow some form of safe
@@ -736,9 +741,9 @@ func (s *sink) handleReqRespBatch(
 		// InvalidMapping is similar to UnknownProducerID, but occurs
 		// when the txnal coordinator timed out our transaction.
 		//
-		// 2.5.0
+		// 2.5
 		// =====
-		// 2.5.0 introduced some behavior to potentially safely reset
+		// 2.5 introduced some behavior to potentially safely reset
 		// the sequence numbers by bumping an epoch (see KIP-360).
 		//
 		// For the idempotent producer, the solution is to fail all
@@ -752,9 +757,9 @@ func (s *sink) handleReqRespBatch(
 		// For the transactional producer, we always fail the producerID.
 		// EndTransaction will trigger recovery if possible.
 		//
-		// 2.7.0
+		// 2.7
 		// =====
-		// InvalidProducerEpoch became retriable in 2.7.0. Prior, it
+		// InvalidProducerEpoch became retriable in 2.7. Prior, it
 		// was ambiguous (timeout? fenced?). Now, InvalidProducerEpoch
 		// is only returned on produce, and then we can recover on other
 		// txn coordinator requests, which have PRODUCER_FENCED vs
@@ -828,6 +833,9 @@ func (s *sink) handleReqRespBatch(
 				"err_is_retriable", kerr.IsRetriable(err),
 				"max_retries_reached", !failUnknown && batch.tries >= s.cl.cfg.recordRetries,
 			)
+			batch.owner.okOnSink = false
+		} else {
+			batch.owner.okOnSink = true
 		}
 		s.cl.finishBatch(batch.recBatch, producerID, producerEpoch, partition, baseOffset, err)
 		didProduce = err == nil
@@ -861,8 +869,8 @@ func (cl *Client) finishBatch(batch *recBatch, producerID int64, producerEpoch i
 	// We know the batch made it to Kafka successfully without error.
 	// We remove this batch and finish all records appropriately.
 	finished := len(batch.records)
-	recBuf.batch0Seq += int32(finished)
-	atomic.AddInt64(&recBuf.buffered, -int64(finished))
+	recBuf.batch0Seq = incrementSequence(recBuf.batch0Seq, int32(finished))
+	recBuf.buffered.Add(-int64(finished))
 	recBuf.batches[0] = nil
 	recBuf.batches = recBuf.batches[1:]
 	recBuf.batchDrainIdx--
@@ -1022,7 +1030,7 @@ type recBuf struct {
 
 	// For LoadTopicPartitioner partitioning; atomically tracks the number
 	// of records buffered in total on this recBuf.
-	buffered int64
+	buffered atomicI64
 
 	mu sync.Mutex // guards r/w access to all fields below
 
@@ -1045,6 +1053,20 @@ type recBuf struct {
 	// finishing, we would allow requests to finish out of order:
 	// handleSeqResps works per sink, not across sinks.
 	inflightOnSink *sink
+	// We only want to allow more than 1 inflight on a sink *if* we are
+	// currently receiving successful responses. Unimportantly, this allows
+	// us to save resources if the broker is having a problem or just
+	// recovered from one. Importantly, we work around an edge case in
+	// Kafka. Kafka will accept the first produce request for a pid/epoch
+	// with *any* sequence number. Say we sent two requests inflight. The
+	// first request Kafka replies to with NOT_LEADER_FOR_PARTITION, the
+	// second, the broker finished setting up and accepts. The broker now
+	// has the second request but not the first, we will retry both
+	// requests and receive OOOSN, and the broker has logs out of order.
+	// By only allowing more than one inflight if we have seen an ok
+	// response, we largely eliminate risk of this problem. See #223 for
+	// more details.
+	okOnSink bool
 	// Inflight tracks the number of requests inflight using batches from
 	// this recBuf. Every time this hits zero, if the batchDrainIdx is not
 	// at the end, we clear inflightOnSink and trigger the *current* sink
@@ -1136,7 +1158,7 @@ func (recBuf *recBuf) bufferRecord(pr promisedRec, abortOnNewBatch bool) bool {
 	var (
 		newBatch       = true
 		onDrainBatch   = recBuf.batchDrainIdx == len(recBuf.batches)
-		produceVersion = atomic.LoadInt32(&recBuf.sink.produceVersion)
+		produceVersion = recBuf.sink.produceVersion.Load()
 	)
 
 	if !onDrainBatch {
@@ -1178,7 +1200,7 @@ func (recBuf *recBuf) bufferRecord(pr promisedRec, abortOnNewBatch bool) bool {
 		}
 	}
 
-	atomic.AddInt64(&recBuf.buffered, 1)
+	recBuf.buffered.Add(1)
 	return true
 }
 
@@ -1199,7 +1221,7 @@ func (recBuf *recBuf) tryStopLingerForDraining() bool {
 
 // Begins a linger timer unless the producer is being flushed.
 func (recBuf *recBuf) lockedMaybeStartLinger() bool {
-	if atomic.LoadInt32(&recBuf.cl.producer.flushing) == 1 {
+	if recBuf.cl.producer.flushing.Load() > 0 {
 		return false
 	}
 	recBuf.lingering = time.AfterFunc(recBuf.cl.cfg.linger, recBuf.sink.maybeDrain)
@@ -1233,22 +1255,32 @@ func (recBuf *recBuf) bumpRepeatedLoadErr(err error) {
 	if len(recBuf.batches) == 0 {
 		return
 	}
-	recBuf.cl.cfg.logger.Log(LogLevelWarn, "produce partition load error, bumping error count on first stored batch", "broker", logID(recBuf.sink.nodeID), "topic", recBuf.topic, "partition", recBuf.partition, "err", err)
 	batch0 := recBuf.batches[0]
 	batch0.tries++
 
-	canFail := !recBuf.cl.idempotent() || batch0.canFailFromLoadErrs
-	if !canFail {
-		return
-	}
+	var (
+		canFail        = !recBuf.cl.idempotent() || batch0.canFailFromLoadErrs // we can only fail if we are not idempotent or if we have no outstanding requests
+		batch0Fail     = batch0.maybeFailErr(&recBuf.cl.cfg) != nil            // timeout, retries, or aborting
+		netErr         = isRetriableBrokerErr(err) || isDialErr(err)           // we can fail if this is *not* a network error
+		retriableKerr  = kerr.IsRetriable(err)                                 // we fail if this is not a retriable kerr,
+		isUnknownLimit = recBuf.checkUnknownFailLimit(err)                     // or if it is, but it is UnknownTopicOrPartition and we are at our limit
 
-	batch0Fail := batch0.maybeFailErr(&recBuf.cl.cfg) != nil // timeout, retries, or aborting
+		willFail = canFail && (batch0Fail || !netErr && (!retriableKerr || retriableKerr && isUnknownLimit))
+	)
 
-	okNet := !isRetriableBrokerErr(err) && !isDialErr(err) // we can fail if this is *not* a network error
-	retriableKerr := kerr.IsRetriable(err)                 // we fail if this is not a retriable kerr,
-	isUnknownLimit := recBuf.checkUnknownFailLimit(err)    // or if it is, but it is UnknownTopicOrPartition and we are at our limit
-
-	if batch0Fail || okNet && (!retriableKerr || retriableKerr && isUnknownLimit) {
+	recBuf.cl.cfg.logger.Log(LogLevelWarn, "produce partition load error, bumping error count on first stored batch",
+		"broker", logID(recBuf.sink.nodeID),
+		"topic", recBuf.topic,
+		"partition", recBuf.partition,
+		"err", err,
+		"can_fail", canFail,
+		"batch0_should_fail", batch0Fail,
+		"is_network_err", netErr,
+		"is_retriable_kerr", retriableKerr,
+		"is_unknown_limit", isUnknownLimit,
+		"will_fail", willFail,
+	)
+	if willFail {
 		recBuf.failAllRecords(err)
 	}
 }
@@ -1293,7 +1325,7 @@ func (recBuf *recBuf) failAllRecords(err error) {
 		})
 	}
 	recBuf.resetBatchDrainIdx()
-	atomic.StoreInt64(&recBuf.buffered, 0)
+	recBuf.buffered.Store(0)
 	recBuf.batches = nil
 }
 
@@ -1463,9 +1495,8 @@ func (b *recBatch) decInflight() {
 	if recBuf.inflight != 0 {
 		return
 	}
-	oldSink := recBuf.inflightOnSink
 	recBuf.inflightOnSink = nil
-	if oldSink != recBuf.sink && recBuf.batchDrainIdx != len(recBuf.batches) {
+	if recBuf.batchDrainIdx != len(recBuf.batches) {
 		recBuf.sink.maybeDrain()
 	}
 }
@@ -1578,7 +1609,6 @@ func (p *produceRequest) tryAddBatch(produceVersion int32, recBuf *recBuf, batch
 	}
 
 	batch.tries++
-	batch.canFailFromLoadErrs = false
 	p.wireLength += batchWireLength
 	p.batches.addBatch(
 		recBuf.topic,
@@ -1901,6 +1931,7 @@ func (p *produceRequest) AppendTo(dst []byte) []byte {
 				batch.mu.Unlock()
 				continue
 			}
+			batch.canFailFromLoadErrs = false // we are going to write this batch: the response status is now unknown
 			var pmetrics ProduceBatchMetrics
 			if p.version < 3 {
 				dst, pmetrics = batch.appendToAsMessageSet(dst, uint8(p.version), p.compressor)
@@ -1992,7 +2023,7 @@ func (b seqRecBatch) appendTo(
 	dst = kbin.AppendInt32(dst, batchLen)
 
 	dst = kbin.AppendInt32(dst, -1) // partitionLeaderEpoch, unused in clients
-	dst = kbin.AppendInt8(dst, 2)   // magic, defined as 2 for records v0.11.0.0+
+	dst = kbin.AppendInt8(dst, 2)   // magic, defined as 2 for records v0.11.0+
 
 	crcStart := len(dst)           // fill at end
 	dst = kbin.AppendInt32(dst, 0) // reserved crc
@@ -2127,7 +2158,7 @@ func (b seqRecBatch) appendToAsMessageSet(dst []byte, version uint8, compressor 
 			dst = appendMessageTo(
 				dst[:nullableBytesLenAt+4],
 				version,
-				codec,
+				int8(codec),
 				int64(len(b.records)-1),
 				b.firstTimestamp,
 				inner,

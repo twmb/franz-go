@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"strconv"
-	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -28,10 +27,12 @@ func TestTxnEtl(t *testing.T) {
 
 	go func() {
 		cl, err := NewClient(
+			getSeedBrokers(),
 			WithLogger(BasicLogger(os.Stderr, testLogLevel, nil)),
 			TransactionalID("p"+randsha()),
 			TransactionTimeout(2*time.Minute),
 			MaxBufferedRecords(10000),
+			UnknownTopicRetries(-1), // see comment below
 		)
 		if err != nil {
 			panic(err)
@@ -59,7 +60,7 @@ func TestTxnEtl(t *testing.T) {
 			// we commit and begin a new one.
 			if i > 0 && i%10000 == 0 {
 				how := EndBeginTxnSafe
-				if safeUnsafe {
+				if safeUnsafe && allowUnsafe {
 					how = EndBeginTxnUnsafe
 				}
 				safeUnsafe = !safeUnsafe
@@ -134,9 +135,15 @@ func (c *testConsumer) goTransact(txnsBeforeQuit int) {
 
 func (c *testConsumer) transact(txnsBeforeQuit int) {
 	defer c.wg.Done()
-	txnSess, _ := NewGroupTransactSession(
+
+	opts := []Opt{
+		getSeedBrokers(),
+		// Kraft sometimes returns success from topic creation, and
+		// then returns UnknownTopicXyz for a while in metadata loads.
+		// It also returns NotLeaderXyz; we handle both problems.
+		UnknownTopicRetries(-1),
 		TransactionalID(randsha()),
-		TransactionTimeout(2*time.Minute),
+		TransactionTimeout(10 * time.Second),
 		WithLogger(testLogger()),
 		// Control records have their own unique offset, so for testing,
 		// we keep the record to ensure we do not doubly consume control
@@ -147,7 +154,12 @@ func (c *testConsumer) transact(txnsBeforeQuit int) {
 		FetchIsolationLevel(ReadCommitted()),
 		Balancers(c.balancer),
 		MaxBufferedRecords(10000),
-	)
+	}
+	if requireStableFetch {
+		opts = append(opts, RequireStableFetchOffsets())
+	}
+
+	txnSess, _ := NewGroupTransactSession(opts...)
 	defer txnSess.Close()
 
 	ntxns := 0 // for if txnsBeforeQuit is non-negative
@@ -159,7 +171,7 @@ func (c *testConsumer) transact(txnsBeforeQuit int) {
 		fetches := txnSess.PollFetches(ctx)
 		cancel()
 		if fetches.Err() == context.DeadlineExceeded || fetches.Err() == ErrClientClosed {
-			if consumed := int(atomic.LoadUint64(&c.consumed)); consumed == testRecordLimit {
+			if consumed := int(c.consumed.Load()); consumed == testRecordLimit {
 				return
 			} else if consumed > testRecordLimit {
 				panic("invalid: consumed too much")
@@ -235,13 +247,13 @@ func (c *testConsumer) transact(txnsBeforeQuit int) {
 			for _, rec := range recs {
 				po := partOffset{part, rec.offset}
 				if _, exists := c.partOffsets[po]; exists {
-					c.errCh <- fmt.Errorf("saw double offset p%do%d", po.part, po.offset)
+					c.errCh <- fmt.Errorf("saw double offset t %s p%do%d", c.consumeFrom, po.part, po.offset)
 				}
 				c.partOffsets[po] = struct{}{}
 
 				if !rec.control {
 					c.part2key[part] = append(c.part2key[part], rec.num)
-					atomic.AddUint64(&c.consumed, 1)
+					c.consumed.Add(1)
 				}
 			}
 		}

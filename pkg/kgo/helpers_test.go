@@ -4,7 +4,9 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"net"
 	"os"
 	"sort"
 	"strconv"
@@ -22,15 +24,28 @@ var (
 	adm             *Client
 	testrf          = 3
 	testRecordLimit = 500000
+
+	// Kraft sometimes has massive hangs internally when completing
+	// transactions. Against zk Kafka as well as Redpanda, we could rely on
+	// our internal mitigations to never have KIP-447 problems. Not true
+	// against Kraft, see #223.
+	requireStableFetch = false
+
+	// Redpanda is a bit more strict with transactions: we must wait for
+	// EndTxn to return successfully before beginning a new transaction. We
+	// cannot use EndAndBeginTransaction with EndBeginTxnUnsafe.
+	allowUnsafe = false
+
+	// We create topics with a different number of partitions to exercise
+	// a few extra code paths; we index into npartitions with npartitionsAt,
+	// an atomic that we modulo after load.
+	npartitions   = []int{7, 11, 31}
+	npartitionsAt int64
 )
 
 func init() {
-	seeds := os.Getenv("KGO_SEEDS")
-	if seeds == "" {
-		seeds = "127.0.0.1:9092"
-	}
 	var err error
-	adm, err = NewClient(SeedBrokers(strings.Split(seeds, ",")...))
+	adm, err = NewClient(getSeedBrokers())
 	if err != nil {
 		panic(fmt.Sprintf("unable to create admin client: %v", err))
 	}
@@ -41,9 +56,23 @@ func init() {
 	if n, _ := strconv.Atoi(os.Getenv("KGO_TEST_RECORDS")); n > 0 {
 		testRecordLimit = n
 	}
+	if _, exists := os.LookupEnv("KGO_TEST_STABLE_FETCH"); exists {
+		requireStableFetch = true
+	}
+	if _, exists := os.LookupEnv("KGO_TEST_UNSAFE"); exists {
+		allowUnsafe = true
+	}
 }
 
-var loggerNum int64
+func getSeedBrokers() Opt {
+	seeds := os.Getenv("KGO_SEEDS")
+	if seeds == "" {
+		seeds = "127.0.0.1:9092"
+	}
+	return SeedBrokers(strings.Split(seeds, ",")...)
+}
+
+var loggerNum atomicI64
 
 var testLogLevel = func() LogLevel {
 	level := strings.ToLower(os.Getenv("KGO_LOG_LEVEL"))
@@ -57,7 +86,7 @@ var testLogLevel = func() LogLevel {
 }()
 
 func testLogger() Logger {
-	num := atomic.AddInt64(&loggerNum, 1)
+	num := loggerNum.Add(1)
 	pfx := strconv.Itoa(int(num))
 	return BasicLogger(os.Stderr, testLogLevel, func() string {
 		return time.Now().Format("[15:04:05 ") + pfx + "]"
@@ -88,14 +117,27 @@ func tmpTopic(tb testing.TB) (string, func()) {
 
 	topic := randsha()
 
+	partitions := npartitions[int(atomic.AddInt64(&npartitionsAt, 1))%len(npartitions)]
 	req := kmsg.NewPtrCreateTopicsRequest()
 	reqTopic := kmsg.NewCreateTopicsRequestTopic()
 	reqTopic.Topic = topic
-	reqTopic.NumPartitions = 20
+	reqTopic.NumPartitions = int32(partitions)
 	reqTopic.ReplicationFactor = int16(testrf)
 	req.Topics = append(req.Topics, reqTopic)
 
+	start := time.Now()
+issue:
 	resp, err := req.RequestWith(context.Background(), adm)
+
+	// If we run tests in a container _immediately_ after the container
+	// starts, we can receive dial errors for a bit if the container is not
+	// fully initialized. Handle this by retrying specifically dial errors.
+	if ne := (*net.OpError)(nil); errors.As(err, &ne) && ne.Op == "dial" && time.Since(start) < 5*time.Second {
+		tb.Log("topic creation failed with dial error, sleeping 100ms and trying again")
+		time.Sleep(100 * time.Millisecond)
+		goto issue
+	}
+
 	if err == nil {
 		err = kerr.ErrorForCode(resp.Topics[0].ErrorCode)
 	}
@@ -158,7 +200,7 @@ type testConsumer struct {
 
 	expBody []byte // what every record body should be
 
-	consumed uint64 // shared atomically
+	consumed atomicU64 // shared atomically
 
 	wg sync.WaitGroup
 	mu sync.Mutex

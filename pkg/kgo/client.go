@@ -1,4 +1,4 @@
-// Package kgo provides a pure Go efficient Kafka client for Kafka 0.8.0+ with
+// Package kgo provides a pure Go efficient Kafka client for Kafka 0.8+ with
 // support for transactions, regex topic consuming, the latest partition
 // strategies, and more. This client supports all client related KIPs.
 //
@@ -36,7 +36,7 @@ type Client struct {
 	ctx       context.Context
 	ctxCancel func()
 
-	rng *rand.Rand
+	rng func() float64
 
 	brokersMu    sync.RWMutex
 	brokers      []*broker // ordered by broker ID
@@ -201,7 +201,16 @@ func NewClient(opts ...Opt) (*Client, error) {
 		cfg:       cfg,
 		ctx:       ctx,
 		ctxCancel: cancel,
-		rng:       rand.New(rand.NewSource(time.Now().UnixNano())),
+
+		rng: func() func() float64 {
+			var mu sync.Mutex
+			rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+			return func() float64 {
+				mu.Lock()
+				defer mu.Unlock()
+				return rng.Float64()
+			}
+		}(),
 
 		controllerID: unknownControllerID,
 
@@ -469,8 +478,7 @@ func (cl *Client) waitTries(ctx context.Context, backoff time.Duration) bool {
 // case, such as when a person explicitly assigns offsets with epochs, but we
 // catch a few areas that would be returned from a broker itself.
 //
-// This function is always used *after* at least one request has been issued,
-// so we do not check ensurePinged.
+// This function is always used *after* at least one request has been issued.
 //
 // NOTE: This is a weak check; we check if any broker in the cluster supports
 // the request. We use this function in three locations:
@@ -494,7 +502,6 @@ func (cl *Client) supportsOffsetForLeaderEpoch() bool {
 
 // A broker may not support some requests we want to make. This function checks
 // support. This should only be used *after* at least one successful response.
-// To absolutely ensure a response has been received, use ensurePinged.
 func (cl *Client) supportsKeyVersion(key, version int16) bool {
 	cl.brokersMu.RLock()
 	defer cl.brokersMu.RUnlock()
@@ -733,6 +740,7 @@ func (cl *Client) Close() {
 //
 //	ListOffsets
 //	OffsetFetch (if using v8+ for Kafka 3.0+)
+//	FindCoordinator (if using v4+ for Kafka 3.0+)
 //	DescribeGroups
 //	ListGroups
 //	DeleteRecords
@@ -748,10 +756,9 @@ func (cl *Client) Close() {
 //	ListTransactions
 //
 // Kafka 3.0 introduced batch OffsetFetch and batch FindCoordinator requests.
-// This function is forward-compatible for the old, singular OffsetFetch and
-// FindCoordinator requests, but is not backward-compatible for batched
-// requests. It is recommended to only use the old format unless you know you
-// are speaking to Kafka 3.0+.
+// This function is forward and backward compatible: old requests will be
+// batched as necessary, and batched requests will be split as necessary. It is
+// recommended to always use batch requests for simplicity.
 //
 // In short, this method tries to do the correct thing depending on what type
 // of request is being issued.
@@ -803,11 +810,27 @@ type retriable struct {
 	// that can fail / do not need to retry forever.
 	limitRetries int
 
-	// parseRetryErr, if non-nil, can parse a retriable error out of the
-	// response and return it. This error is *not* returned from the
-	// request if the req cannot be retried due to timeout or retry limits,
-	// but it *can* allow a retry if neither limit is hit yet.
-	parseRetryErr func(kmsg.Response) error
+	// parseRetryErr, if non-nil, can delete stale cached brokers. We do
+	// *not* return the error from this function to the caller, but we do
+	// use it to potentially retry. It is not necessary, but also not
+	// harmful, to return the input error.
+	parseRetryErr func(kmsg.Response, error) error
+}
+
+type failDial struct{ fails int8 }
+
+// The controller and group/txn coordinators are cached. If dialing the broker
+// repeatedly fails, we need to forget our cache to force a re-load: the broker
+// may have completely died.
+func (d *failDial) isRepeatedDialFail(err error) bool {
+	if isDialErr(err) {
+		d.fails++
+		if d.fails == 3 {
+			d.fails = 0
+			return true
+		}
+	}
+	return false
 }
 
 func (r *retriable) Request(ctx context.Context, req kmsg.Request) (kmsg.Response, error) {
@@ -824,8 +847,8 @@ start:
 	var retryErr error
 	if err == nil {
 		resp, err = r.last.waitResp(ctx, req)
-		if err == nil && r.parseRetryErr != nil {
-			retryErr = r.parseRetryErr(resp)
+		if r.parseRetryErr != nil {
+			retryErr = r.parseRetryErr(resp, err)
 		}
 	}
 
@@ -954,6 +977,7 @@ func (cl *Client) shardedRequest(ctx context.Context, req kmsg.Request) ([]Respo
 	switch t := req.(type) {
 	case *kmsg.ListOffsetsRequest, // key 2
 		*kmsg.OffsetFetchRequest,             // key 9
+		*kmsg.FindCoordinatorRequest,         // key 10
 		*kmsg.DescribeGroupsRequest,          // key 15
 		*kmsg.ListGroupsRequest,              // key 16
 		*kmsg.DeleteRecordsRequest,           // key 21
@@ -969,24 +993,19 @@ func (cl *Client) shardedRequest(ctx context.Context, req kmsg.Request) ([]Respo
 		*kmsg.ListTransactionsRequest:        // key 66
 		return cl.handleShardedReq(ctx, req)
 
-	// We support being forward-compatible with FindCoordinator, so we need
-	// to use our special hijack function that batches a singular key.
-	case *kmsg.FindCoordinatorRequest:
-		last, resp, err := cl.findCoordinator(ctx, t)
-		return shards(shard(last, req, resp, err)), nil
-	}
-
-	switch t := req.(type) {
 	case *kmsg.MetadataRequest:
 		// We hijack any metadata request so as to populate our
 		// own brokers and controller ID.
 		br, resp, err := cl.fetchMetadata(ctx, t, false)
 		return shards(shard(br, req, resp, err)), nil
+
 	case kmsg.AdminRequest:
 		return shards(cl.handleAdminReq(ctx, t)), nil
+
 	case kmsg.GroupCoordinatorRequest,
 		kmsg.TxnCoordinatorRequest:
 		return shards(cl.handleCoordinatorReq(ctx, t)), nil
+
 	case *kmsg.ApiVersionsRequest:
 		// As of v3, software name and version are required.
 		// If they are missing, we use the config options.
@@ -1071,12 +1090,18 @@ start:
 
 // controller returns the controller broker, forcing a broker load if
 // necessary.
-func (cl *Client) controller(ctx context.Context) (*broker, error) {
+func (cl *Client) controller(ctx context.Context) (b *broker, err error) {
 	get := func() int32 {
 		cl.controllerIDMu.Lock()
 		defer cl.controllerIDMu.Unlock()
 		return cl.controllerID
 	}
+
+	defer func() {
+		if ec := (*errUnknownController)(nil); errors.As(err, &ec) {
+			cl.forgetControllerID(ec.id)
+		}
+	}()
 
 	var id int32
 	if id = get(); id < 0 {
@@ -1095,7 +1120,6 @@ func (cl *Client) controller(ctx context.Context) (*broker, error) {
 func (cl *Client) forgetControllerID(id int32) {
 	cl.controllerIDMu.Lock()
 	defer cl.controllerIDMu.Unlock()
-
 	if cl.controllerID == id {
 		cl.controllerID = unknownControllerID
 	}
@@ -1112,108 +1136,170 @@ type coordinatorKey struct {
 }
 
 type coordinatorLoad struct {
-	done chan struct{}
-	node int32
-	err  error
+	loadWait chan struct{}
+	node     int32
+	err      error
 }
 
-// findCoordinator is allows FindCoordinator request to be forward compatible,
-// by duplicating a top level request into a single-element batch request, and
-// downconverting the response.
-func (cl *Client) findCoordinator(ctx context.Context, req *kmsg.FindCoordinatorRequest) (*broker, *kmsg.FindCoordinatorResponse, error) {
-	var compat bool
-	if len(req.CoordinatorKeys) == 0 {
-		req.CoordinatorKeys = []string{req.CoordinatorKey}
-		compat = true
+func (cl *Client) loadCoordinator(ctx context.Context, typ int8, key string) (*broker, error) {
+	berr := cl.loadCoordinators(ctx, typ, key)[key]
+	return berr.b, berr.err
+}
+
+func (cl *Client) loadCoordinators(ctx context.Context, typ int8, keys ...string) map[string]brokerOrErr {
+	m := make(map[string]brokerOrErr, len(keys))
+	if len(keys) == 0 {
+		return m
 	}
-	r := cl.retriable()
-	resp, err := req.RequestWith(ctx, r)
-	if resp != nil {
-		if compat && resp.Version >= 4 {
-			if l := len(resp.Coordinators); l != 1 {
-				return r.last, resp, fmt.Errorf("unexpectedly received %d coordinators when requesting 1", l)
+
+	toRequest := make(map[string]bool, len(keys)) // true == bypass the cache
+	for _, key := range keys {
+		toRequest[key] = false
+	}
+
+	// For each of these keys, we have two cases:
+	//
+	// 1) The key is cached. It is either loading or loaded. We do not
+	// request the key ourselves; we wait for the load to finish.
+	//
+	// 2) The key is not cached, and we request it.
+	//
+	// If a key is cached but the coordinator no longer exists for us, we
+	// re-request to refresh the coordinator by setting toRequest[key] to
+	// true (bypass cache).
+	//
+	// If we ever request a key ourselves, we do not request it again. We
+	// ensure this by deleting from toRequest. We also delete if the key
+	// was cached with no error.
+	//
+	// We could have some keys cached and some that need to be requested.
+	// We issue a request but do not request what is cached.
+	//
+	// Lastly, we only ever trigger one metadata update, which happens if
+	// we have an unknown coordinator after we load coordinators.
+	var hasLoadedBrokers bool
+	for len(toRequest) > 0 {
+		var loadWait chan struct{}
+		load2key := make(map[*coordinatorLoad][]string)
+
+		cl.coordinatorsMu.Lock()
+		for key, bypassCache := range toRequest {
+			c, ok := cl.coordinators[coordinatorKey{key, typ}]
+			if !ok || bypassCache {
+				if loadWait == nil {
+					loadWait = make(chan struct{})
+				}
+				c = &coordinatorLoad{
+					loadWait: loadWait,
+					err:      errors.New("coordinator was not returned in broker response"),
+				}
+				cl.coordinators[coordinatorKey{key, typ}] = c
 			}
-
-			first := resp.Coordinators[0]
-			resp.ErrorCode = first.ErrorCode
-			resp.ErrorMessage = first.ErrorMessage
-			resp.NodeID = first.NodeID
-			resp.Host = first.Host
-			resp.Port = first.Port
+			load2key[c] = append(load2key[c], key)
 		}
-	}
-	return r.last, resp, err
-}
+		cl.coordinatorsMu.Unlock()
 
-func (cl *Client) deleteStaleCoordinatorIfEqual(key coordinatorKey, current *coordinatorLoad) {
-	cl.coordinatorsMu.Lock()
-	defer cl.coordinatorsMu.Unlock()
-	if existing, ok := cl.coordinators[key]; ok && current == existing {
-		delete(cl.coordinators, key)
-	}
-}
-
-// loadController returns the group/txn coordinator for the given key, retrying
-// as necessary. Any non-retriable error does not cache the coordinator.
-func (cl *Client) loadCoordinator(ctx context.Context, key coordinatorKey) (*broker, error) {
-	var restarted bool
-start:
-	cl.coordinatorsMu.Lock()
-	c, ok := cl.coordinators[key]
-
-	if !ok {
-		c = &coordinatorLoad{
-			done: make(chan struct{}), // all requests for the same coordinator get collapsed into one
+		if loadWait == nil { // all coordinators were cached
+			hasLoadedBrokers = cl.waitCoordinatorLoad(ctx, typ, load2key, !hasLoadedBrokers, toRequest, m)
+			continue
 		}
-		defer func() {
-			// If our load fails, we avoid caching the coordinator,
-			// but only if something else has not already replaced
-			// our pointer.
+
+		key2load := make(map[string]*coordinatorLoad)
+		req := kmsg.NewPtrFindCoordinatorRequest()
+		req.CoordinatorType = typ
+		for c, keys := range load2key {
+			if c.loadWait == loadWait { // if this is our wait, this is ours to request
+				req.CoordinatorKeys = append(req.CoordinatorKeys, keys...)
+				for _, key := range keys {
+					key2load[key] = c
+					delete(toRequest, key)
+				}
+			}
+		}
+
+		shards := cl.RequestSharded(ctx, req)
+
+		for _, shard := range shards {
+			if shard.Err != nil {
+				req := shard.Req.(*kmsg.FindCoordinatorRequest)
+				for _, key := range req.CoordinatorKeys {
+					c, ok := key2load[key]
+					if ok {
+						c.err = shard.Err
+					}
+				}
+			} else {
+				resp := shard.Resp.(*kmsg.FindCoordinatorResponse)
+				for _, rc := range resp.Coordinators {
+					c, ok := key2load[rc.Key]
+					if ok {
+						c.err = kerr.ErrorForCode(rc.ErrorCode)
+						c.node = rc.NodeID
+					}
+				}
+			}
+		}
+
+		// For anything we loaded, if it has a load failure (including
+		// not being replied to), we remove the key from the cache.  We
+		// do not want to cache erroring values.
+		//
+		// We range key2load, which contains only coordinators we are
+		// responsible for loading.
+		cl.coordinatorsMu.Lock()
+		for key, c := range key2load {
 			if c.err != nil {
-				cl.deleteStaleCoordinatorIfEqual(key, c)
+				ck := coordinatorKey{key, typ}
+				if loading, ok := cl.coordinators[ck]; ok && loading == c {
+					delete(cl.coordinators, ck)
+				}
 			}
-			close(c.done)
-		}()
-		cl.coordinators[key] = c
-	}
-	cl.coordinatorsMu.Unlock()
-
-	if ok {
-		<-c.done
-		if c.err != nil {
-			return nil, c.err
 		}
+		cl.coordinatorsMu.Unlock()
 
-		// If brokerOrErr returns an error, then our cached coordinator
-		// is using metadata that has updated and removed knowledge of
-		// that coordinator. We delete the stale coordinator here and
-		// retry once. The retry will force a coordinator reload, and
-		// everything will be fresh. Any errors after that we keep.
-		b, err := cl.brokerOrErr(nil, c.node, &errUnknownCoordinator{c.node, key})
-		if err != nil && !restarted {
-			restarted = true
-			cl.deleteStaleCoordinatorIfEqual(key, c)
-			goto start
+		close(loadWait)
+		hasLoadedBrokers = cl.waitCoordinatorLoad(ctx, typ, load2key, !hasLoadedBrokers, toRequest, m)
+	}
+	return m
+}
+
+// After some prep work, we wait for coordinators to load. We update toRequest
+// values with true if the caller should bypass cache and re-load these
+// coordinators.
+//
+// This returns if we load brokers, and populates m with results.
+func (cl *Client) waitCoordinatorLoad(ctx context.Context, typ int8, load2key map[*coordinatorLoad][]string, shouldLoadBrokers bool, toRequest map[string]bool, m map[string]brokerOrErr) bool {
+	var loadedBrokers bool
+	for c, keys := range load2key {
+		<-c.loadWait
+		for _, key := range keys {
+			if c.err != nil {
+				delete(toRequest, key)
+				m[key] = brokerOrErr{nil, c.err}
+				continue
+			}
+
+			var brokerCtx context.Context
+			if shouldLoadBrokers && !loadedBrokers {
+				brokerCtx = ctx
+				loadedBrokers = true
+			}
+
+			b, err := cl.brokerOrErr(brokerCtx, c.node, &errUnknownCoordinator{c.node, coordinatorKey{key, typ}})
+			if err != nil {
+				if _, exists := toRequest[key]; exists {
+					toRequest[key] = true
+					continue
+				}
+				// If the key does not exist, we just loaded this
+				// coordinator and also the brokers. We do not
+				// re-request.
+			}
+			delete(toRequest, key)
+			m[key] = brokerOrErr{b, err}
 		}
-		return b, err
 	}
-
-	var resp *kmsg.FindCoordinatorResponse
-	req := kmsg.NewPtrFindCoordinatorRequest()
-	req.CoordinatorKey = key.name
-	req.CoordinatorType = key.typ
-	_, resp, c.err = cl.findCoordinator(ctx, req)
-	if c.err != nil {
-		return nil, c.err
-	}
-	if c.err = kerr.ErrorForCode(resp.ErrorCode); c.err != nil {
-		return nil, c.err
-	}
-	c.node = resp.NodeID
-
-	var b *broker
-	b, c.err = cl.brokerOrErr(ctx, c.node, &errUnknownCoordinator{c.node, key})
-	return b, c.err
+	return loadedBrokers
 }
 
 func (cl *Client) maybeDeleteStaleCoordinator(name string, typ int8, err error) bool {
@@ -1221,52 +1307,24 @@ func (cl *Client) maybeDeleteStaleCoordinator(name string, typ int8, err error) 
 	case errors.Is(err, kerr.CoordinatorNotAvailable),
 		errors.Is(err, kerr.CoordinatorLoadInProgress),
 		errors.Is(err, kerr.NotCoordinator):
-
-		cl.coordinatorsMu.Lock()
-		delete(cl.coordinators, coordinatorKey{
-			name: name,
-			typ:  typ,
-		})
-		cl.coordinatorsMu.Unlock()
+		cl.deleteStaleCoordinator(name, typ)
 		return true
 	}
 	return false
 }
 
+func (cl *Client) deleteStaleCoordinator(name string, typ int8) {
+	cl.coordinatorsMu.Lock()
+	defer cl.coordinatorsMu.Unlock()
+	delete(cl.coordinators, coordinatorKey{
+		name: name,
+		typ:  typ,
+	})
+}
+
 type brokerOrErr struct {
 	b   *broker
 	err error
-}
-
-// loadCoordinators does a concurrent load of many coordinators.
-func (cl *Client) loadCoordinators(typ int8, names ...string) map[string]brokerOrErr {
-	uniq := make(map[string]struct{})
-	for _, name := range names {
-		uniq[name] = struct{}{}
-	}
-
-	var mu sync.Mutex
-	m := make(map[string]brokerOrErr)
-
-	var wg sync.WaitGroup
-	for uniqName := range uniq {
-		myName := uniqName
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			coordinator, err := cl.loadCoordinator(cl.ctx, coordinatorKey{
-				name: myName,
-				typ:  typ,
-			})
-
-			mu.Lock()
-			defer mu.Unlock()
-			m[myName] = brokerOrErr{coordinator, err}
-		}()
-	}
-	wg.Wait()
-
-	return m
 }
 
 func (cl *Client) handleAdminReq(ctx context.Context, req kmsg.Request) ResponseShard {
@@ -1289,7 +1347,14 @@ func (cl *Client) handleAdminReq(ctx context.Context, req kmsg.Request) Response
 		cl.maybeDeleteMappedMetadata(topics...)
 	}
 
-	r.parseRetryErr = func(resp kmsg.Response) error {
+	var d failDial
+	r.parseRetryErr = func(resp kmsg.Response, err error) error {
+		if err != nil {
+			if d.isRepeatedDialFail(err) {
+				cl.forgetControllerID(r.last.meta.NodeID)
+			}
+			return err
+		}
 		var code int16
 		switch t := resp.(type) {
 		case *kmsg.CreateTopicsResponse:
@@ -1402,10 +1467,7 @@ func (cl *Client) handleCoordinatorReq(ctx context.Context, req kmsg.Request) Re
 // coordinator is deleted.
 func (cl *Client) handleCoordinatorReqSimple(ctx context.Context, typ int8, name string, req kmsg.Request) ResponseShard {
 	coordinator, resp, err := cl.handleReqWithCoordinator(ctx, func() (*broker, error) {
-		return cl.loadCoordinator(ctx, coordinatorKey{
-			name: name,
-			typ:  typ,
-		})
+		return cl.loadCoordinator(ctx, typ, name)
 	}, typ, name, req)
 	return shard(coordinator, req, resp, err)
 }
@@ -1422,7 +1484,14 @@ func (cl *Client) handleReqWithCoordinator(
 	req kmsg.Request,
 ) (*broker, kmsg.Response, error) {
 	r := cl.retriableBrokerFn(coordinator)
-	r.parseRetryErr = func(resp kmsg.Response) error {
+	var d failDial
+	r.parseRetryErr = func(resp kmsg.Response, err error) error {
+		if err != nil {
+			if d.isRepeatedDialFail(err) {
+				cl.deleteStaleCoordinator(name, typ)
+			}
+			return err
+		}
 		var code int16
 		switch t := resp.(type) {
 		// TXN
@@ -1588,6 +1657,14 @@ type issueShard struct {
 
 // sharder splits a request.
 type sharder interface {
+	// If a request originally was not batched, then the protocol switched
+	// to being batched, we always try batched first then fallback.
+	//
+	// Requests that make this switch should always return pinReq requests,
+	// and we must unpack the pinReq to return to end users / use
+	// internally.
+	unpackPinReq() bool
+
 	// shard splits a request and returns the requests to issue tied to the
 	// brokers to issue the requests to. This can return an error if there
 	// is some pre-loading that needs to happen. If an error is returned,
@@ -1596,7 +1673,10 @@ type sharder interface {
 	// Due to sharded requests not being retriable if a response is
 	// received, to avoid stale coordinator errors, this function should
 	// not use any previously cached metadata.
-	shard(context.Context, kmsg.Request) ([]issueShard, bool, error)
+	//
+	// This takes the last error if the request is being retried, which is
+	// currently only useful for errBrokerTooOld.
+	shard(context.Context, kmsg.Request, error) ([]issueShard, bool, error)
 
 	// onResp is called on a successful response to investigate the
 	// response and potentially perform cleanup, and potentially returns an
@@ -1619,6 +1699,8 @@ func (cl *Client) handleShardedReq(ctx context.Context, req kmsg.Request) ([]Res
 		sharder = &listOffsetsSharder{cl}
 	case *kmsg.OffsetFetchRequest:
 		sharder = &offsetFetchSharder{cl}
+	case *kmsg.FindCoordinatorRequest:
+		sharder = &findCoordinatorSharder{cl}
 	case *kmsg.DescribeGroupsRequest:
 		sharder = &describeGroupsSharder{cl}
 	case *kmsg.ListGroupsRequest:
@@ -1627,6 +1709,8 @@ func (cl *Client) handleShardedReq(ctx context.Context, req kmsg.Request) ([]Res
 		sharder = &deleteRecordsSharder{cl}
 	case *kmsg.OffsetForLeaderEpochRequest:
 		sharder = &offsetForLeaderEpochSharder{cl}
+	case *kmsg.WriteTxnMarkersRequest:
+		sharder = &writeTxnMarkersSharder{cl}
 	case *kmsg.DescribeConfigsRequest:
 		sharder = &describeConfigsSharder{cl}
 	case *kmsg.AlterConfigsRequest:
@@ -1651,8 +1735,9 @@ func (cl *Client) handleShardedReq(ctx context.Context, req kmsg.Request) ([]Res
 	// again). reqTry tracks how many total tries a request piece has had;
 	// we quit at either the max configured tries or max configured time.
 	type reqTry struct {
-		tries int
-		req   kmsg.Request
+		tries   int
+		req     kmsg.Request
+		lastErr error
 	}
 
 	var (
@@ -1678,8 +1763,9 @@ func (cl *Client) handleShardedReq(ctx context.Context, req kmsg.Request) ([]Res
 	// issue is called to progressively split and issue requests.
 	//
 	// This recursively calls itself if a request fails and can be retried.
+	// We avoid stack problems because this calls itself in a goroutine.
 	issue = func(try reqTry) {
-		issues, reshardable, err := sharder.shard(ctx, try.req)
+		issues, reshardable, err := sharder.shard(ctx, try.req, try.lastErr)
 		if err != nil {
 			l.Log(LogLevelDebug, "unable to shard request", "previous_tries", try.tries, "err", err)
 			addShard(shard(nil, try.req, nil, err)) // failure to shard means data loading failed; this request is failed
@@ -1713,9 +1799,13 @@ func (cl *Client) handleShardedReq(ctx context.Context, req kmsg.Request) ([]Res
 
 		for i := range issues {
 			myIssue := issues[i]
+			myUnderlyingReq := myIssue.req
+			if sharder.unpackPinReq() {
+				myUnderlyingReq = myIssue.req.(*pinReq).Request
+			}
 
 			if myIssue.err != nil {
-				addShard(shard(nil, myIssue.req, nil, myIssue.err))
+				addShard(shard(nil, myUnderlyingReq, nil, myIssue.err))
 				continue
 			}
 
@@ -1732,20 +1822,22 @@ func (cl *Client) handleShardedReq(ctx context.Context, req kmsg.Request) ([]Res
 					broker, err = cl.brokerOrErr(ctx, myIssue.broker, errUnknownBroker)
 				}
 				if err != nil {
-					addShard(shard(nil, myIssue.req, nil, err)) // failure to load a broker is a failure to issue a request
+					addShard(shard(nil, myUnderlyingReq, nil, err)) // failure to load a broker is a failure to issue a request
 					return
 				}
 
 				resp, err := broker.waitResp(ctx, myIssue.req)
 				if err == nil {
-					err = sharder.onResp(myIssue.req, resp) // perform some potential cleanup, and potentially receive an error to retry
+					err = sharder.onResp(myUnderlyingReq, resp) // perform some potential cleanup, and potentially receive an error to retry
 				}
 
 				// If we failed to issue the request, we *maybe* will retry.
 				// We could have failed to even issue the request or receive
 				// a response, which is retriable.
 				backoff := cl.cfg.retryBackoff(tries)
-				if err != nil && (retryTimeout == 0 || time.Now().Add(backoff).Sub(start) < retryTimeout) && cl.shouldRetry(tries, err) && cl.waitTries(ctx, backoff) {
+				if err != nil &&
+					(retryTimeout == 0 || time.Now().Add(backoff).Sub(start) < retryTimeout) &&
+					(reshardable && sharder.unpackPinReq() && errors.Is(err, errBrokerTooOld) || cl.shouldRetry(tries, err) && cl.waitTries(ctx, backoff)) {
 					// Non-reshardable re-requests just jump back to the
 					// top where the broker is loaded. This is the case on
 					// requests where the original request is split to
@@ -1755,16 +1847,16 @@ func (cl *Client) handleShardedReq(ctx context.Context, req kmsg.Request) ([]Res
 						goto start
 					}
 					l.Log(LogLevelDebug, "sharded request failed, resharding and reissuing", "time_since_start", time.Since(start), "tries", try.tries, "err", err)
-					issue(reqTry{tries, myIssue.req})
+					issue(reqTry{tries, myUnderlyingReq, err})
 					return
 				}
 
-				addShard(shard(broker, myIssue.req, resp, err)) // the error was not retriable
+				addShard(shard(broker, myUnderlyingReq, resp, err)) // the error was not retriable
 			}()
 		}
 	}
 
-	issue(reqTry{0, req})
+	issue(reqTry{0, req, nil})
 	wg.Wait()
 
 	return shards, sharder.merge
@@ -2022,7 +2114,9 @@ func (l *unknownErrShards) collect(mkreq, mergeParts interface{}) []issueShard {
 // handles sharding ListOffsetsRequest
 type listOffsetsSharder struct{ *Client }
 
-func (cl *listOffsetsSharder) shard(ctx context.Context, kreq kmsg.Request) ([]issueShard, bool, error) {
+func (*listOffsetsSharder) unpackPinReq() bool { return false }
+
+func (cl *listOffsetsSharder) shard(ctx context.Context, kreq kmsg.Request, _ error) ([]issueShard, bool, error) {
 	req := kreq.(*kmsg.ListOffsetsRequest)
 
 	// For listing offsets, we need the broker leader for each partition we
@@ -2148,6 +2242,8 @@ func (*listOffsetsSharder) merge(sresps []ResponseShard) (kmsg.Response, error) 
 // handles sharding OffsetFetchRequest
 type offsetFetchSharder struct{ *Client }
 
+func (*offsetFetchSharder) unpackPinReq() bool { return true } // batch first, single group fallback
+
 func offsetFetchReqToGroup(req *kmsg.OffsetFetchRequest) kmsg.OffsetFetchRequestGroup {
 	g := kmsg.NewOffsetFetchRequestGroup()
 	g.Group = req.Group
@@ -2158,6 +2254,19 @@ func offsetFetchReqToGroup(req *kmsg.OffsetFetchRequest) kmsg.OffsetFetchRequest
 		g.Topics = append(g.Topics, reqTopic)
 	}
 	return g
+}
+
+func offsetFetchGroupToReq(requireStable bool, group kmsg.OffsetFetchRequestGroup) *kmsg.OffsetFetchRequest {
+	req := kmsg.NewPtrOffsetFetchRequest()
+	req.RequireStable = requireStable
+	req.Group = group.Group
+	for _, topic := range group.Topics {
+		reqTopic := kmsg.NewOffsetFetchRequestTopic()
+		reqTopic.Topic = topic.Topic
+		reqTopic.Partitions = topic.Partitions
+		req.Topics = append(req.Topics, reqTopic)
+	}
+	return req
 }
 
 func offsetFetchRespToGroup(req *kmsg.OffsetFetchRequest, resp *kmsg.OffsetFetchResponse) kmsg.OffsetFetchResponseGroup {
@@ -2200,46 +2309,24 @@ func offsetFetchRespGroupIntoResp(g kmsg.OffsetFetchResponseGroup, into *kmsg.Of
 	}
 }
 
-func (cl *offsetFetchSharder) shard(_ context.Context, kreq kmsg.Request) ([]issueShard, bool, error) {
+func (cl *offsetFetchSharder) shard(ctx context.Context, kreq kmsg.Request, lastErr error) ([]issueShard, bool, error) {
 	req := kreq.(*kmsg.OffsetFetchRequest)
 
-	groups := make([]string, 0, len(req.Groups)+1)
-	if len(req.Groups) == 0 { // v0-v7
-		groups = append(groups, req.Group)
+	// We always try batching and only split at the end if lastErr
+	// indicates too old. We convert to batching immediately.
+	dup := *req
+	req = &dup
+
+	if len(req.Groups) == 0 {
+		req.Groups = append(req.Groups, offsetFetchReqToGroup(req))
 	}
-	for i := range req.Groups { // v8+
+	groups := make([]string, 0, len(req.Groups))
+	for i := range req.Groups {
 		groups = append(groups, req.Groups[i].Group)
 	}
 
-	coordinators := cl.loadCoordinators(coordinatorTypeGroup, groups...)
+	coordinators := cl.loadCoordinators(ctx, coordinatorTypeGroup, groups...)
 
-	// If there is only the top level group, then we simply return our
-	// request mapped to its specific broker. For forward compatibility, we
-	// also embed the top level request into the Groups list: this allows
-	// operators of old request versions (v0-v7) to issue a v8 request
-	// appropriately. On response, if the length of groups is 1, we merge
-	// the first item back to the top level.
-	if len(req.Groups) == 0 {
-		berr := coordinators[req.Group]
-		if berr.err != nil {
-			return []issueShard{{ //nolint:nilerr // error is returned in the struct
-				req: req,
-				err: berr.err,
-			}}, false, nil // not reshardable, because this is an error
-		}
-
-		dup := *req
-		brokerReq := &dup
-		brokerReq.Groups = append(brokerReq.Groups, offsetFetchReqToGroup(req))
-
-		return []issueShard{{
-			req:    brokerReq,
-			broker: berr.b.meta.NodeID,
-		}}, false, nil // reshardable to reload correct coordinator
-	}
-
-	// v8+ behavior: we have multiple groups.
-	//
 	// Loading coordinators can have each group fail with its unique error,
 	// or with a kerr.Error that can be merged. Unique errors get their own
 	// failure shard, while kerr.Error's get merged.
@@ -2278,12 +2365,24 @@ func (cl *offsetFetchSharder) shard(_ context.Context, kreq kmsg.Request) ([]iss
 		}
 	}
 
+	splitReq := errors.Is(lastErr, errBrokerTooOld)
+
 	var issues []issueShard
 	for id, req := range brokerReqs {
-		issues = append(issues, issueShard{
-			req:    req,
-			broker: id,
-		})
+		if splitReq {
+			for _, group := range req.Groups {
+				req := offsetFetchGroupToReq(req.RequireStable, group)
+				issues = append(issues, issueShard{
+					req:    &pinReq{Request: req, pinMax: true, max: 7},
+					broker: id,
+				})
+			}
+		} else {
+			issues = append(issues, issueShard{
+				req:    &pinReq{Request: req, pinMin: true, min: 8},
+				broker: id,
+			})
+		}
 	}
 	for _, unkerr := range unkerrs {
 		issues = append(issues, issueShard{
@@ -2302,7 +2401,7 @@ func (cl *offsetFetchSharder) shard(_ context.Context, kreq kmsg.Request) ([]iss
 }
 
 func (cl *offsetFetchSharder) onResp(kreq kmsg.Request, kresp kmsg.Response) error {
-	req := kreq.(*kmsg.OffsetFetchRequest)
+	req := kreq.(*kmsg.OffsetFetchRequest) // we always issue pinned requests
 	resp := kresp.(*kmsg.OffsetFetchResponse)
 
 	switch len(resp.Groups) {
@@ -2356,13 +2455,104 @@ func (*offsetFetchSharder) merge(sresps []ResponseShard) (kmsg.Response, error) 
 	})
 }
 
+// handles sharding FindCoordinatorRequest
+type findCoordinatorSharder struct{ *Client }
+
+func (*findCoordinatorSharder) unpackPinReq() bool { return true } // batch first, single key fallback
+
+func findCoordinatorRespCoordinatorIntoResp(c kmsg.FindCoordinatorResponseCoordinator, into *kmsg.FindCoordinatorResponse) {
+	into.NodeID = c.NodeID
+	into.Host = c.Host
+	into.Port = c.Port
+	into.ErrorCode = c.ErrorCode
+	into.ErrorMessage = c.ErrorMessage
+}
+
+func (*findCoordinatorSharder) shard(_ context.Context, kreq kmsg.Request, lastErr error) ([]issueShard, bool, error) {
+	req := kreq.(*kmsg.FindCoordinatorRequest)
+
+	// We always try batching and only split at the end if lastErr
+	// indicates too old. We convert to batching immediately.
+	dup := *req
+	req = &dup
+
+	uniq := make(map[string]struct{}, len(req.CoordinatorKeys))
+	uniq[req.CoordinatorKey] = struct{}{}
+	for _, key := range req.CoordinatorKeys {
+		uniq[key] = struct{}{}
+	}
+	req.CoordinatorKeys = req.CoordinatorKeys[:0]
+	for key := range uniq {
+		req.CoordinatorKeys = append(req.CoordinatorKeys, key)
+	}
+
+	splitReq := errors.Is(lastErr, errBrokerTooOld)
+	if !splitReq {
+		return []issueShard{{
+			req: &pinReq{Request: req, pinMin: true, min: 4},
+			any: true,
+		}}, true, nil // this is "reshardable", in that we will split the request next
+	}
+
+	var issues []issueShard
+	for _, key := range req.CoordinatorKeys {
+		sreq := kmsg.NewPtrFindCoordinatorRequest()
+		sreq.CoordinatorType = req.CoordinatorType
+		sreq.CoordinatorKey = key
+		issues = append(issues, issueShard{
+			req: &pinReq{Request: sreq, pinMax: true, max: 3},
+			any: true,
+		})
+	}
+	return issues, false, nil // not reshardable
+}
+
+func (*findCoordinatorSharder) onResp(kreq kmsg.Request, kresp kmsg.Response) error {
+	req := kreq.(*kmsg.FindCoordinatorRequest) // we always issue pinned requests
+	resp := kresp.(*kmsg.FindCoordinatorResponse)
+
+	switch len(resp.Coordinators) {
+	case 0:
+		// Convert v3 and prior to v4+
+		rc := kmsg.NewFindCoordinatorResponseCoordinator()
+		rc.Key = req.CoordinatorKey
+		rc.NodeID = resp.NodeID
+		rc.Host = resp.Host
+		rc.Port = resp.Port
+		rc.ErrorCode = resp.ErrorCode
+		rc.ErrorMessage = resp.ErrorMessage
+		resp.Coordinators = append(resp.Coordinators, rc)
+	case 1:
+		// Convert v4 to v3 and prior
+		findCoordinatorRespCoordinatorIntoResp(resp.Coordinators[0], resp)
+	}
+
+	return nil
+}
+
+func (*findCoordinatorSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
+	merged := kmsg.NewPtrFindCoordinatorResponse()
+	return merged, firstErrMerger(sresps, func(kresp kmsg.Response) {
+		resp := kresp.(*kmsg.FindCoordinatorResponse)
+		merged.Version = resp.Version
+		merged.ThrottleMillis = resp.ThrottleMillis
+		merged.Coordinators = append(merged.Coordinators, resp.Coordinators...)
+
+		if len(resp.Coordinators) == 1 {
+			findCoordinatorRespCoordinatorIntoResp(resp.Coordinators[0], merged)
+		}
+	})
+}
+
 // handles sharding DescribeGroupsRequest
 type describeGroupsSharder struct{ *Client }
 
-func (cl *describeGroupsSharder) shard(_ context.Context, kreq kmsg.Request) ([]issueShard, bool, error) {
+func (*describeGroupsSharder) unpackPinReq() bool { return false }
+
+func (cl *describeGroupsSharder) shard(ctx context.Context, kreq kmsg.Request, _ error) ([]issueShard, bool, error) {
 	req := kreq.(*kmsg.DescribeGroupsRequest)
 
-	coordinators := cl.loadCoordinators(coordinatorTypeGroup, req.Groups...)
+	coordinators := cl.loadCoordinators(ctx, coordinatorTypeGroup, req.Groups...)
 	type unkerr struct {
 		err   error
 		group string
@@ -2446,7 +2636,9 @@ func (*describeGroupsSharder) merge(sresps []ResponseShard) (kmsg.Response, erro
 // handles sharding ListGroupsRequest
 type listGroupsSharder struct{ *Client }
 
-func (cl *listGroupsSharder) shard(ctx context.Context, kreq kmsg.Request) ([]issueShard, bool, error) {
+func (*listGroupsSharder) unpackPinReq() bool { return false }
+
+func (cl *listGroupsSharder) shard(ctx context.Context, kreq kmsg.Request, _ error) ([]issueShard, bool, error) {
 	req := kreq.(*kmsg.ListGroupsRequest)
 	return cl.allBrokersShardedReq(ctx, func() kmsg.Request {
 		dup := *req
@@ -2475,7 +2667,9 @@ func (*listGroupsSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
 // handle sharding DeleteRecordsRequest
 type deleteRecordsSharder struct{ *Client }
 
-func (cl *deleteRecordsSharder) shard(ctx context.Context, kreq kmsg.Request) ([]issueShard, bool, error) {
+func (*deleteRecordsSharder) unpackPinReq() bool { return false }
+
+func (cl *deleteRecordsSharder) shard(ctx context.Context, kreq kmsg.Request, _ error) ([]issueShard, bool, error) {
 	req := kreq.(*kmsg.DeleteRecordsRequest)
 
 	var need []string
@@ -2592,7 +2786,9 @@ func (*deleteRecordsSharder) merge(sresps []ResponseShard) (kmsg.Response, error
 // handle sharding OffsetForLeaderEpochRequest
 type offsetForLeaderEpochSharder struct{ *Client }
 
-func (cl *offsetForLeaderEpochSharder) shard(ctx context.Context, kreq kmsg.Request) ([]issueShard, bool, error) {
+func (*offsetForLeaderEpochSharder) unpackPinReq() bool { return false }
+
+func (cl *offsetForLeaderEpochSharder) shard(ctx context.Context, kreq kmsg.Request, _ error) ([]issueShard, bool, error) {
 	req := kreq.(*kmsg.OffsetForLeaderEpochRequest)
 
 	var need []string
@@ -2706,10 +2902,200 @@ func (*offsetForLeaderEpochSharder) merge(sresps []ResponseShard) (kmsg.Response
 	return merged, firstErr
 }
 
+// handle sharding WriteTxnMarkersRequest
+type writeTxnMarkersSharder struct{ *Client }
+
+func (*writeTxnMarkersSharder) unpackPinReq() bool { return false }
+
+func (cl *writeTxnMarkersSharder) shard(ctx context.Context, kreq kmsg.Request, _ error) ([]issueShard, bool, error) {
+	req := kreq.(*kmsg.WriteTxnMarkersRequest)
+
+	var need []string
+	for _, marker := range req.Markers {
+		for _, topic := range marker.Topics {
+			need = append(need, topic.Topic)
+		}
+	}
+	mapping, err := cl.fetchMappedMetadata(ctx, need, true)
+	if err != nil {
+		return nil, false, err
+	}
+
+	type pidEpochCommit struct {
+		pid    int64
+		epoch  int16
+		commit bool
+	}
+
+	brokerReqs := make(map[int32]map[pidEpochCommit]map[string][]int32)
+	unknown := make(map[error]map[pidEpochCommit]map[string][]int32) // err => pec => topic => partitions
+
+	addreq := func(b int32, pec pidEpochCommit, t string, p int32) {
+		pecs := brokerReqs[b]
+		if pecs == nil {
+			pecs = make(map[pidEpochCommit]map[string][]int32)
+			brokerReqs[b] = pecs
+		}
+		ts := pecs[pec]
+		if ts == nil {
+			ts = make(map[string][]int32)
+			pecs[pec] = ts
+		}
+		ts[t] = append(ts[t], p)
+	}
+	addunk := func(err error, pec pidEpochCommit, t string, p int32) {
+		pecs := unknown[err]
+		if pecs == nil {
+			pecs = make(map[pidEpochCommit]map[string][]int32)
+			unknown[err] = pecs
+		}
+		ts := pecs[pec]
+		if ts == nil {
+			ts = make(map[string][]int32)
+			pecs[pec] = ts
+		}
+		ts[t] = append(ts[t], p)
+	}
+
+	for _, marker := range req.Markers {
+		pec := pidEpochCommit{
+			marker.ProducerID,
+			marker.ProducerEpoch,
+			marker.Committed,
+		}
+		for _, topic := range marker.Topics {
+			t := topic.Topic
+			tmapping, exists := mapping[t]
+			if err := unknownOrCode(exists, tmapping.t.ErrorCode); err != nil {
+				for _, partition := range topic.Partitions {
+					addunk(err, pec, t, partition)
+				}
+				continue
+			}
+			for _, partition := range topic.Partitions {
+				p, exists := tmapping.ps[partition]
+				if err := unknownOrCode(exists, p.ErrorCode); err != nil {
+					addunk(err, pec, t, partition)
+					continue
+				}
+				if err := noLeader(p.Leader); err != nil {
+					addunk(err, pec, t, partition)
+					continue
+				}
+				addreq(p.Leader, pec, t, partition)
+			}
+		}
+	}
+
+	mkreq := kmsg.NewPtrWriteTxnMarkersRequest
+
+	var issues []issueShard
+	for brokerID, brokerReq := range brokerReqs {
+		req := mkreq()
+		for pec, topics := range brokerReq {
+			rm := kmsg.NewWriteTxnMarkersRequestMarker()
+			rm.ProducerID = pec.pid
+			rm.ProducerEpoch = pec.epoch
+			rm.Committed = pec.commit
+			for topic, parts := range topics {
+				rt := kmsg.NewWriteTxnMarkersRequestMarkerTopic()
+				rt.Topic = topic
+				rt.Partitions = parts
+				rm.Topics = append(rm.Topics, rt)
+			}
+			req.Markers = append(req.Markers, rm)
+		}
+		issues = append(issues, issueShard{
+			req:    req,
+			broker: brokerID,
+		})
+	}
+
+	for err, errReq := range unknown {
+		req := mkreq()
+		for pec, topics := range errReq {
+			rm := kmsg.NewWriteTxnMarkersRequestMarker()
+			rm.ProducerID = pec.pid
+			rm.ProducerEpoch = pec.epoch
+			rm.Committed = pec.commit
+			for topic, parts := range topics {
+				rt := kmsg.NewWriteTxnMarkersRequestMarkerTopic()
+				rt.Topic = topic
+				rt.Partitions = parts
+				rm.Topics = append(rm.Topics, rt)
+			}
+			req.Markers = append(req.Markers, rm)
+		}
+		issues = append(issues, issueShard{
+			req: req,
+			err: err,
+		})
+	}
+	return issues, true, nil // this is reshardable
+}
+
+func (cl *writeTxnMarkersSharder) onResp(_ kmsg.Request, kresp kmsg.Response) error {
+	resp := kresp.(*kmsg.WriteTxnMarkersResponse)
+	var del []string
+	var retErr error
+	for i := range resp.Markers {
+		m := &resp.Markers[i]
+		for j := range m.Topics {
+			t := &m.Topics[j]
+			for k := range t.Partitions {
+				p := &t.Partitions[k]
+				err := kerr.ErrorForCode(p.ErrorCode)
+				if err == kerr.UnknownTopicOrPartition || err == kerr.NotLeaderForPartition {
+					del = append(del, t.Topic)
+				}
+				onRespShardErr(&retErr, err)
+			}
+		}
+	}
+	if cl.maybeDeleteMappedMetadata(del...) {
+		return retErr
+	}
+	return nil
+}
+
+func (*writeTxnMarkersSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
+	merged := kmsg.NewPtrWriteTxnMarkersResponse()
+	markers := make(map[int64]map[string][]kmsg.WriteTxnMarkersResponseMarkerTopicPartition)
+
+	firstErr := firstErrMerger(sresps, func(kresp kmsg.Response) {
+		resp := kresp.(*kmsg.WriteTxnMarkersResponse)
+		merged.Version = resp.Version
+		for _, marker := range resp.Markers {
+			topics := markers[marker.ProducerID]
+			if topics == nil {
+				topics = make(map[string][]kmsg.WriteTxnMarkersResponseMarkerTopicPartition)
+				markers[marker.ProducerID] = topics
+			}
+			for _, topic := range marker.Topics {
+				topics[topic.Topic] = append(topics[topic.Topic], topic.Partitions...)
+			}
+		}
+	})
+	for pid, topics := range markers {
+		respMarker := kmsg.NewWriteTxnMarkersResponseMarker()
+		respMarker.ProducerID = pid
+		for topic, partitions := range topics {
+			respTopic := kmsg.NewWriteTxnMarkersResponseMarkerTopic()
+			respTopic.Topic = topic
+			respTopic.Partitions = append(respTopic.Partitions, partitions...)
+			respMarker.Topics = append(respMarker.Topics, respTopic)
+		}
+		merged.Markers = append(merged.Markers, respMarker)
+	}
+	return merged, firstErr
+}
+
 // handle sharding DescribeConfigsRequest
 type describeConfigsSharder struct{ *Client }
 
-func (*describeConfigsSharder) shard(_ context.Context, kreq kmsg.Request) ([]issueShard, bool, error) {
+func (*describeConfigsSharder) unpackPinReq() bool { return false }
+
+func (*describeConfigsSharder) shard(_ context.Context, kreq kmsg.Request, _ error) ([]issueShard, bool, error) {
 	req := kreq.(*kmsg.DescribeConfigsRequest)
 
 	brokerReqs := make(map[int32][]kmsg.DescribeConfigsRequestResource)
@@ -2774,7 +3160,9 @@ func (*describeConfigsSharder) merge(sresps []ResponseShard) (kmsg.Response, err
 // handle sharding AlterConfigsRequest
 type alterConfigsSharder struct{ *Client }
 
-func (*alterConfigsSharder) shard(_ context.Context, kreq kmsg.Request) ([]issueShard, bool, error) {
+func (*alterConfigsSharder) unpackPinReq() bool { return false }
+
+func (*alterConfigsSharder) shard(_ context.Context, kreq kmsg.Request, _ error) ([]issueShard, bool, error) {
 	req := kreq.(*kmsg.AlterConfigsRequest)
 
 	brokerReqs := make(map[int32][]kmsg.AlterConfigsRequestResource)
@@ -2837,7 +3225,9 @@ func (*alterConfigsSharder) merge(sresps []ResponseShard) (kmsg.Response, error)
 // handles sharding AlterReplicaLogDirsRequest
 type alterReplicaLogDirsSharder struct{ *Client }
 
-func (cl *alterReplicaLogDirsSharder) shard(ctx context.Context, kreq kmsg.Request) ([]issueShard, bool, error) {
+func (*alterReplicaLogDirsSharder) unpackPinReq() bool { return false }
+
+func (cl *alterReplicaLogDirsSharder) shard(ctx context.Context, kreq kmsg.Request, _ error) ([]issueShard, bool, error) {
 	req := kreq.(*kmsg.AlterReplicaLogDirsRequest)
 
 	needMap := make(map[string]struct{})
@@ -2982,7 +3372,9 @@ func (*alterReplicaLogDirsSharder) merge(sresps []ResponseShard) (kmsg.Response,
 // handles sharding DescribeLogDirsRequest
 type describeLogDirsSharder struct{ *Client }
 
-func (cl *describeLogDirsSharder) shard(ctx context.Context, kreq kmsg.Request) ([]issueShard, bool, error) {
+func (*describeLogDirsSharder) unpackPinReq() bool { return false }
+
+func (cl *describeLogDirsSharder) shard(ctx context.Context, kreq kmsg.Request, _ error) ([]issueShard, bool, error) {
 	req := kreq.(*kmsg.DescribeLogDirsRequest)
 
 	// If req.Topics is nil, the request is to describe all logdirs. Thus,
@@ -3097,10 +3489,12 @@ func (*describeLogDirsSharder) merge(sresps []ResponseShard) (kmsg.Response, err
 // handles sharding DeleteGroupsRequest
 type deleteGroupsSharder struct{ *Client }
 
-func (cl *deleteGroupsSharder) shard(_ context.Context, kreq kmsg.Request) ([]issueShard, bool, error) {
+func (*deleteGroupsSharder) unpackPinReq() bool { return false }
+
+func (cl *deleteGroupsSharder) shard(ctx context.Context, kreq kmsg.Request, _ error) ([]issueShard, bool, error) {
 	req := kreq.(*kmsg.DeleteGroupsRequest)
 
-	coordinators := cl.loadCoordinators(coordinatorTypeGroup, req.Groups...)
+	coordinators := cl.loadCoordinators(ctx, coordinatorTypeGroup, req.Groups...)
 	type unkerr struct {
 		err   error
 		group string
@@ -3183,7 +3577,9 @@ func (*deleteGroupsSharder) merge(sresps []ResponseShard) (kmsg.Response, error)
 // handle sharding IncrementalAlterConfigsRequest
 type incrementalAlterConfigsSharder struct{ *Client }
 
-func (*incrementalAlterConfigsSharder) shard(_ context.Context, kreq kmsg.Request) ([]issueShard, bool, error) {
+func (*incrementalAlterConfigsSharder) unpackPinReq() bool { return false }
+
+func (*incrementalAlterConfigsSharder) shard(_ context.Context, kreq kmsg.Request, _ error) ([]issueShard, bool, error) {
 	req := kreq.(*kmsg.IncrementalAlterConfigsRequest)
 
 	brokerReqs := make(map[int32][]kmsg.IncrementalAlterConfigsRequestResource)
@@ -3246,7 +3642,9 @@ func (*incrementalAlterConfigsSharder) merge(sresps []ResponseShard) (kmsg.Respo
 // handle sharding DescribeProducersRequest
 type describeProducersSharder struct{ *Client }
 
-func (cl *describeProducersSharder) shard(ctx context.Context, kreq kmsg.Request) ([]issueShard, bool, error) {
+func (*describeProducersSharder) unpackPinReq() bool { return false }
+
+func (cl *describeProducersSharder) shard(ctx context.Context, kreq kmsg.Request, _ error) ([]issueShard, bool, error) {
 	req := kreq.(*kmsg.DescribeProducersRequest)
 
 	var need []string
@@ -3354,10 +3752,12 @@ func (*describeProducersSharder) merge(sresps []ResponseShard) (kmsg.Response, e
 // handles sharding DescribeTransactionsRequest
 type describeTransactionsSharder struct{ *Client }
 
-func (cl *describeTransactionsSharder) shard(_ context.Context, kreq kmsg.Request) ([]issueShard, bool, error) {
+func (*describeTransactionsSharder) unpackPinReq() bool { return false }
+
+func (cl *describeTransactionsSharder) shard(ctx context.Context, kreq kmsg.Request, _ error) ([]issueShard, bool, error) {
 	req := kreq.(*kmsg.DescribeTransactionsRequest)
 
-	coordinators := cl.loadCoordinators(coordinatorTypeTxn, req.TransactionalIDs...)
+	coordinators := cl.loadCoordinators(ctx, coordinatorTypeTxn, req.TransactionalIDs...)
 	type unkerr struct {
 		err   error
 		txnID string
@@ -3440,7 +3840,9 @@ func (*describeTransactionsSharder) merge(sresps []ResponseShard) (kmsg.Response
 // handles sharding ListTransactionsRequest
 type listTransactionsSharder struct{ *Client }
 
-func (cl *listTransactionsSharder) shard(ctx context.Context, kreq kmsg.Request) ([]issueShard, bool, error) {
+func (*listTransactionsSharder) unpackPinReq() bool { return false }
+
+func (cl *listTransactionsSharder) shard(ctx context.Context, kreq kmsg.Request, _ error) ([]issueShard, bool, error) {
 	req := kreq.(*kmsg.ListTransactionsRequest)
 	return cl.allBrokersShardedReq(ctx, func() kmsg.Request {
 		dup := *req

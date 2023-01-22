@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 )
@@ -608,8 +609,13 @@ func (s Struct) WriteDefn(l *LineWriter) {
 			l.Write("%s", f.Comment)
 		}
 		versionTag := ""
-		if f.MinVersion > 0 {
-			versionTag = " // v" + strconv.Itoa(f.MinVersion) + "+"
+		switch {
+		case f.MinVersion > 0 && f.MaxVersion > 0:
+			versionTag = fmt.Sprintf(" // v%d-v%d", f.MinVersion, f.MaxVersion)
+		case f.MinVersion > 0:
+			versionTag = fmt.Sprintf(" // v%d+", f.MinVersion)
+		case f.MaxVersion > 0:
+			versionTag = fmt.Sprintf(" // v0-v%d", f.MaxVersion)
 		}
 		if f.Tag >= 0 {
 			if versionTag == "" {

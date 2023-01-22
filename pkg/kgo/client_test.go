@@ -2,7 +2,18 @@ package kgo
 
 import (
 	"testing"
+
+	"github.com/twmb/franz-go/pkg/kmsg"
 )
+
+func TestMaxVersions(t *testing.T) {
+	if ours, main := new(fetchRequest).MaxVersion(), new(kmsg.FetchRequest).MaxVersion(); ours != main {
+		t.Errorf("our fetch request max version %d != kmsg's %d", ours, main)
+	}
+	if ours, main := new(produceRequest).MaxVersion(), new(kmsg.ProduceRequest).MaxVersion(); ours != main {
+		t.Errorf("our produce request max version %d != kmsg's %d", ours, main)
+	}
+}
 
 func TestParseBrokerAddr(t *testing.T) {
 	tests := []struct {

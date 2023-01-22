@@ -17,7 +17,7 @@ UpdateMetadataRequestTopicPartition => not top level, no encoding, flexible v6+
 //
 // Version 1 changed the layout of the live brokers.
 //
-// Kafka 2.2.0 introduced version 5, proposed in KIP-380, which changed the
+// Kafka 2.2 introduced version 5, proposed in KIP-380, which changed the
 // layout of the struct to be more memory efficient.
 UpdateMetadataRequest => key 6, max version 7, flexible v6+
   ControllerID: int32
