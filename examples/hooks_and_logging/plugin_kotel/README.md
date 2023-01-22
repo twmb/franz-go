@@ -6,10 +6,10 @@ open telemetry traces/metrics.
 
 The following spans will be linked with a trace id:
 
-1) my-topic send
-2) my-topic receive
-3) request-span
-4) process-span
+1) request
+2) topic send
+3) topic receive
+4) topic process
 
 Metrics will be printed every 60 seconds.
 

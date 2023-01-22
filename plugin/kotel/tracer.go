@@ -2,7 +2,6 @@ package kotel
 
 import (
 	"context"
-	"strconv"
 
 	"github.com/twmb/franz-go/pkg/kgo"
 	"go.opentelemetry.io/otel"
@@ -13,7 +12,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-var ( // interface checks to ensure we implement the hooks properly
+var ( // interface checks to ensure we implement the hooks properly.
 	_ kgo.HookProduceRecordBuffered   = new(Tracer)
 	_ kgo.HookProduceRecordUnbuffered = new(Tracer)
 	_ kgo.HookFetchRecordBuffered     = new(Tracer)
@@ -29,25 +28,20 @@ type Tracer struct {
 }
 
 // TracerOpt interface used for setting optional config properties.
-type TracerOpt interface {
-	apply(*Tracer)
-}
+type TracerOpt interface{ apply(*Tracer) }
 
 type tracerOptFunc func(*Tracer)
 
-// TracerProvider takes a trace.TracerProvider and applies it to the Tracer
+// TracerProvider takes a trace.TracerProvider and applies it to the Tracer.
 // If none is specified, the global provider is used.
 func TracerProvider(provider trace.TracerProvider) TracerOpt {
-	return tracerOptFunc(func(t *Tracer) {
-		t.tracerProvider = provider
-	})
+	return tracerOptFunc(func(t *Tracer) { t.tracerProvider = provider })
 }
 
-func (o tracerOptFunc) apply(t *Tracer) {
-	o(t)
-}
+func (o tracerOptFunc) apply(t *Tracer) { o(t) }
 
-// NewTracer returns a Tracer, used as option for kotel to instrument franz-go with tracing
+// NewTracer returns a Tracer, used as option for kotel to instrument franz-go
+// with tracing.
 func NewTracer(opts ...TracerOpt) *Tracer {
 	t := &Tracer{}
 	for _, opt := range opts {
@@ -67,40 +61,34 @@ func NewTracer(opts ...TracerOpt) *Tracer {
 	return t
 }
 
-// TracerPropagator takes a propagation.TextMapPropagator and applies it to the Tracer
+// TracerPropagator takes a propagation.TextMapPropagator and applies it to the
+// Tracer.
+//
 // If none is specified, the global Propagator is used.
 func TracerPropagator(propagator propagation.TextMapPropagator) TracerOpt {
-	return tracerOptFunc(func(t *Tracer) {
-		if t != nil {
-			t.propagators = propagator
-		}
-	})
+	return tracerOptFunc(func(t *Tracer) { t.propagators = propagator })
 }
 
-// ClientID sets the optional client_id attribute value
+// ClientID sets the optional client_id attribute value.
 func ClientID(id string) TracerOpt {
-	return tracerOptFunc(func(t *Tracer) {
-		if t != nil {
-			t.clientID = id
-		}
-	})
+	return tracerOptFunc(func(t *Tracer) { t.clientID = id })
 }
 
-// ConsumerGroup sets the optional group attribute value
+// ConsumerGroup sets the optional group attribute value.
 func ConsumerGroup(group string) TracerOpt {
-	return tracerOptFunc(func(t *Tracer) {
-		if t != nil {
-			t.consumerGroup = group
-		}
-	})
+	return tracerOptFunc(func(t *Tracer) { t.consumerGroup = group })
 }
 
-// Hooks ---------------------------------------------------------------------
+// Hooks ----------------------------------------------------------------------
 
-// OnProduceRecordBuffered starts a new span for the "send" operation on a buffered record
+// OnProduceRecordBuffered starts a new span for the "send" operation on a
+// buffered record.
 //
-// It sets the attributes and injects the span context into the record's context
+// It sets span options and injects the span context into record and updates
+// the record's context, so it can be ended in the OnProduceRecordUnbuffered
+// hook.
 func (t *Tracer) OnProduceRecordBuffered(r *kgo.Record) {
+	// Set up span options.
 	attrs := []attribute.KeyValue{
 		semconv.MessagingSystemKey.String("kafka"),
 		semconv.MessagingDestinationKindTopic,
@@ -116,14 +104,19 @@ func (t *Tracer) OnProduceRecordBuffered(r *kgo.Record) {
 		trace.WithAttributes(attrs...),
 		trace.WithSpanKind(trace.SpanKindProducer),
 	}
-	spanContext, _ := t.tracer.Start(r.Context, r.Topic+" send", opts...)
-	t.propagators.Inject(spanContext, NewRecordCarrier(r))
-	r.Context = spanContext
+	// Start the "send" span.
+	ctx, _ := t.tracer.Start(r.Context, r.Topic+" send", opts...)
+	// Inject the span context into the record.
+	t.propagators.Inject(ctx, NewRecordCarrier(r))
+	// Update the record context.
+	r.Context = ctx
 }
 
-// OnProduceRecordUnbuffered continues and ends the "send" span for an unbuffered record
+// OnProduceRecordUnbuffered continues and ends the "send" span for an
+// unbuffered record.
 //
-// It sets attributes and records any error that occurred during the send operation
+// It sets attributes with values unset when producing and records any error
+// that occurred during the send operation.
 func (t *Tracer) OnProduceRecordUnbuffered(r *kgo.Record, err error) {
 	span := trace.SpanFromContext(r.Context)
 	defer span.End()
@@ -136,11 +129,15 @@ func (t *Tracer) OnProduceRecordUnbuffered(r *kgo.Record, err error) {
 	}
 }
 
-// OnFetchRecordBuffered starts and ends a new span for the "receive" operation on a buffered record
+// OnFetchRecordBuffered starts a new span for the "receive" operation on a
+// buffered record.
 //
-// It sets attributes and injects the span context into the record's context
+// It sets the span options and extracts the span context from the record,
+// updates the record's context to ensure it can be ended in the
+// OnFetchRecordUnbuffered hook and can be used in downstream consumer
+// processing.
 func (t *Tracer) OnFetchRecordBuffered(r *kgo.Record) {
-	println("(1) OnFetchRecordBuffered: " + strconv.FormatInt(r.Offset, 10))
+	// Set up the span options.
 	attrs := []attribute.KeyValue{
 		semconv.MessagingSystemKey.String("kafka"),
 		semconv.MessagingDestinationKindTopic,
@@ -161,15 +158,21 @@ func (t *Tracer) OnFetchRecordBuffered(r *kgo.Record) {
 		trace.WithAttributes(attrs...),
 		trace.WithSpanKind(trace.SpanKindConsumer),
 	}
+
 	if r.Context == nil {
 		r.Context = context.Background()
 	}
+	// Extract the span context from the record.
 	ctx := t.propagators.Extract(r.Context, NewRecordCarrier(r))
-	newCtx, span := t.tracer.Start(ctx, r.Topic+" receive", opts...)
-	span.End()
+	// Start the "receive" span.
+	newCtx, _ := t.tracer.Start(ctx, r.Topic+" receive", opts...)
+	// Update the record context.
 	r.Context = newCtx
 }
 
-func (t *Tracer) OnFetchRecordUnbuffered(r *kgo.Record, polled bool) {
-	println("(2) OnFetchRecordUnbuffered: " + strconv.FormatInt(r.Offset, 10))
+// OnFetchRecordUnbuffered continues and ends the "receive" span for an
+// unbuffered record.
+func (t *Tracer) OnFetchRecordUnbuffered(r *kgo.Record, _ bool) {
+	span := trace.SpanFromContext(r.Context)
+	defer span.End()
 }

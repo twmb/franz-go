@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"flag"
 	"fmt"
@@ -33,8 +32,7 @@ var (
 
 func initTracerProvider() (*sdktrace.TracerProvider, error) {
 	// Create a new trace exporter
-	var b bytes.Buffer
-	traceExporter, err := stdouttrace.New(stdouttrace.WithWriter(&b))
+	traceExporter, err := stdouttrace.New(stdouttrace.WithPrettyPrint())
 	if err != nil {
 		return nil, fmt.Errorf("failed to create trace exporter: %w", err)
 	}
@@ -106,10 +104,10 @@ func newKotelMeter(meterProvider *metric.MeterProvider) *kotel.Meter {
 	return kotel.NewMeter(meterOpts...)
 }
 
-func newKotel(tracer *kotel.Tracer) *kotel.Kotel {
+func newKotel(tracer *kotel.Tracer, meter *kotel.Meter) *kotel.Kotel {
 	kotelOps := []kotel.Opt{
 		kotel.WithTracer(tracer),
-		//kotel.WithMeter(meter),
+		kotel.WithMeter(meter),
 	}
 	return kotel.NewKotel(kotelOps...)
 }
@@ -138,7 +136,8 @@ func produceMessage(client *kgo.Client, tracer trace.Tracer) error {
 	var wg sync.WaitGroup
 	wg.Add(1)
 	record := &kgo.Record{Topic: *topic, Key: []byte("some-key"), Value: []byte("some-value")}
-	// Pass in the context from the tracer.Start() call to ensure that the span created is linked to the parent span
+	// Pass in the context from the tracer.Start() call to ensure that the span
+	// created is linked to the parent span.
 	client.Produce(ctx, record, func(_ *kgo.Record, err error) {
 		defer wg.Done()
 		if err != nil {
@@ -187,12 +186,11 @@ func processRecord(record *kgo.Record, tracer trace.Tracer) {
 		),
 	}
 	// Start a new span using the provided context and options
-	_, processSpan := tracer.Start(record.Context, record.Topic+" process", opts...)
+	_, span := tracer.Start(record.Context, record.Topic+" process", opts...)
 	// Simulate some work
 	time.Sleep(1 * time.Second)
 	// End the span when function exits
-	defer processSpan.End()
-
+	defer span.End()
 	fmt.Printf(
 		"processed offset '%s' with key '%s' and value '%s'\n",
 		strconv.FormatInt(record.Offset, 10),
@@ -214,22 +212,22 @@ func do() error {
 	}()
 
 	// Initialize meter provider and handle shutdown
-	//meterProvider, err := initMeterProvider()
-	//if err != nil {
-	//	return fmt.Errorf("failed to initialize meter provider: %w", err)
-	//}
-	//defer func() {
-	//	if err := meterProvider.Shutdown(context.Background()); err != nil {
-	//		log.Printf("Error shutting down meter provider: %v", err)
-	//	}
-	//}()
+	meterProvider, err := initMeterProvider()
+	if err != nil {
+		return fmt.Errorf("failed to initialize meter provider: %w", err)
+	}
+	defer func() {
+		if err := meterProvider.Shutdown(context.Background()); err != nil {
+			log.Printf("Error shutting down meter provider: %v", err)
+		}
+	}()
 
 	// Create a new kotel tracer and meter
 	kotelTracer := newKotelTracer(tracerProvider)
-	//kotelMeter := newKotelMeter(meterProvider)
+	kotelMeter := newKotelMeter(meterProvider)
 
 	// Create a new kotel service
-	kotelService := newKotel(kotelTracer)
+	kotelService := newKotel(kotelTracer, kotelMeter)
 
 	// Initialize producer client and handle close
 	producerClient, err := newProducerClient(kotelService)

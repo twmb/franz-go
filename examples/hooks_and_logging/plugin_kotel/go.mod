@@ -25,6 +25,3 @@ require (
 )
 
 replace github.com/twmb/franz-go => ../../..
-
-// TODO: Remove this before pushing to github
-replace github.com/twmb/franz-go/plugin/kotel => ../../../plugin/kotel
