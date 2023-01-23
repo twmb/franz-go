@@ -1,7 +1,10 @@
 package kgo
 
 import (
+	"context"
+	"strconv"
 	"testing"
+	"time"
 
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
@@ -103,4 +106,20 @@ func TestParseBrokerAddrErrors(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestUnknownGroupOffsetFetchPinned(t *testing.T) {
+	req := kmsg.NewOffsetFetchRequest()
+	req.Group = "unknown-" + strconv.FormatInt(time.Now().UnixNano(), 10)
+
+	cl, _ := NewClient(
+		getSeedBrokers(),
+	)
+	defer cl.Close()
+	defer func() {
+		if err := recover(); err != nil {
+			t.Errorf("fetch panicked: %v", err)
+		}
+	}()
+	req.RequestWith(context.Background(), cl)
 }

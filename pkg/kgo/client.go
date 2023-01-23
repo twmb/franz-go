@@ -1657,14 +1657,6 @@ type issueShard struct {
 
 // sharder splits a request.
 type sharder interface {
-	// If a request originally was not batched, then the protocol switched
-	// to being batched, we always try batched first then fallback.
-	//
-	// Requests that make this switch should always return pinReq requests,
-	// and we must unpack the pinReq to return to end users / use
-	// internally.
-	unpackPinReq() bool
-
 	// shard splits a request and returns the requests to issue tied to the
 	// brokers to issue the requests to. This can return an error if there
 	// is some pre-loading that needs to happen. If an error is returned,
@@ -1800,8 +1792,10 @@ func (cl *Client) handleShardedReq(ctx context.Context, req kmsg.Request) ([]Res
 		for i := range issues {
 			myIssue := issues[i]
 			myUnderlyingReq := myIssue.req
-			if sharder.unpackPinReq() {
-				myUnderlyingReq = myIssue.req.(*pinReq).Request
+			var isPinned bool
+			if pinned, ok := myIssue.req.(*pinReq); ok {
+				myUnderlyingReq = pinned.Request
+				isPinned = true
 			}
 
 			if myIssue.err != nil {
@@ -1837,7 +1831,7 @@ func (cl *Client) handleShardedReq(ctx context.Context, req kmsg.Request) ([]Res
 				backoff := cl.cfg.retryBackoff(tries)
 				if err != nil &&
 					(retryTimeout == 0 || time.Now().Add(backoff).Sub(start) < retryTimeout) &&
-					(reshardable && sharder.unpackPinReq() && errors.Is(err, errBrokerTooOld) || cl.shouldRetry(tries, err) && cl.waitTries(ctx, backoff)) {
+					(reshardable && isPinned && errors.Is(err, errBrokerTooOld) || cl.shouldRetry(tries, err) && cl.waitTries(ctx, backoff)) {
 					// Non-reshardable re-requests just jump back to the
 					// top where the broker is loaded. This is the case on
 					// requests where the original request is split to
@@ -2114,8 +2108,6 @@ func (l *unknownErrShards) collect(mkreq, mergeParts interface{}) []issueShard {
 // handles sharding ListOffsetsRequest
 type listOffsetsSharder struct{ *Client }
 
-func (*listOffsetsSharder) unpackPinReq() bool { return false }
-
 func (cl *listOffsetsSharder) shard(ctx context.Context, kreq kmsg.Request, _ error) ([]issueShard, bool, error) {
 	req := kreq.(*kmsg.ListOffsetsRequest)
 
@@ -2241,8 +2233,6 @@ func (*listOffsetsSharder) merge(sresps []ResponseShard) (kmsg.Response, error) 
 
 // handles sharding OffsetFetchRequest
 type offsetFetchSharder struct{ *Client }
-
-func (*offsetFetchSharder) unpackPinReq() bool { return true } // batch first, single group fallback
 
 func offsetFetchReqToGroup(req *kmsg.OffsetFetchRequest) kmsg.OffsetFetchRequestGroup {
 	g := kmsg.NewOffsetFetchRequestGroup()
@@ -2458,8 +2448,6 @@ func (*offsetFetchSharder) merge(sresps []ResponseShard) (kmsg.Response, error) 
 // handles sharding FindCoordinatorRequest
 type findCoordinatorSharder struct{ *Client }
 
-func (*findCoordinatorSharder) unpackPinReq() bool { return true } // batch first, single key fallback
-
 func findCoordinatorRespCoordinatorIntoResp(c kmsg.FindCoordinatorResponseCoordinator, into *kmsg.FindCoordinatorResponse) {
 	into.NodeID = c.NodeID
 	into.Host = c.Host
@@ -2477,9 +2465,12 @@ func (*findCoordinatorSharder) shard(_ context.Context, kreq kmsg.Request, lastE
 	req = &dup
 
 	uniq := make(map[string]struct{}, len(req.CoordinatorKeys))
-	uniq[req.CoordinatorKey] = struct{}{}
-	for _, key := range req.CoordinatorKeys {
-		uniq[key] = struct{}{}
+	if len(req.CoordinatorKeys) == 0 {
+		uniq[req.CoordinatorKey] = struct{}{}
+	} else {
+		for _, key := range req.CoordinatorKeys {
+			uniq[key] = struct{}{}
+		}
 	}
 	req.CoordinatorKeys = req.CoordinatorKeys[:0]
 	for key := range uniq {
@@ -2546,8 +2537,6 @@ func (*findCoordinatorSharder) merge(sresps []ResponseShard) (kmsg.Response, err
 
 // handles sharding DescribeGroupsRequest
 type describeGroupsSharder struct{ *Client }
-
-func (*describeGroupsSharder) unpackPinReq() bool { return false }
 
 func (cl *describeGroupsSharder) shard(ctx context.Context, kreq kmsg.Request, _ error) ([]issueShard, bool, error) {
 	req := kreq.(*kmsg.DescribeGroupsRequest)
@@ -2636,8 +2625,6 @@ func (*describeGroupsSharder) merge(sresps []ResponseShard) (kmsg.Response, erro
 // handles sharding ListGroupsRequest
 type listGroupsSharder struct{ *Client }
 
-func (*listGroupsSharder) unpackPinReq() bool { return false }
-
 func (cl *listGroupsSharder) shard(ctx context.Context, kreq kmsg.Request, _ error) ([]issueShard, bool, error) {
 	req := kreq.(*kmsg.ListGroupsRequest)
 	return cl.allBrokersShardedReq(ctx, func() kmsg.Request {
@@ -2666,8 +2653,6 @@ func (*listGroupsSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
 
 // handle sharding DeleteRecordsRequest
 type deleteRecordsSharder struct{ *Client }
-
-func (*deleteRecordsSharder) unpackPinReq() bool { return false }
 
 func (cl *deleteRecordsSharder) shard(ctx context.Context, kreq kmsg.Request, _ error) ([]issueShard, bool, error) {
 	req := kreq.(*kmsg.DeleteRecordsRequest)
@@ -2786,8 +2771,6 @@ func (*deleteRecordsSharder) merge(sresps []ResponseShard) (kmsg.Response, error
 // handle sharding OffsetForLeaderEpochRequest
 type offsetForLeaderEpochSharder struct{ *Client }
 
-func (*offsetForLeaderEpochSharder) unpackPinReq() bool { return false }
-
 func (cl *offsetForLeaderEpochSharder) shard(ctx context.Context, kreq kmsg.Request, _ error) ([]issueShard, bool, error) {
 	req := kreq.(*kmsg.OffsetForLeaderEpochRequest)
 
@@ -2904,8 +2887,6 @@ func (*offsetForLeaderEpochSharder) merge(sresps []ResponseShard) (kmsg.Response
 
 // handle sharding WriteTxnMarkersRequest
 type writeTxnMarkersSharder struct{ *Client }
-
-func (*writeTxnMarkersSharder) unpackPinReq() bool { return false }
 
 func (cl *writeTxnMarkersSharder) shard(ctx context.Context, kreq kmsg.Request, _ error) ([]issueShard, bool, error) {
 	req := kreq.(*kmsg.WriteTxnMarkersRequest)
@@ -3093,8 +3074,6 @@ func (*writeTxnMarkersSharder) merge(sresps []ResponseShard) (kmsg.Response, err
 // handle sharding DescribeConfigsRequest
 type describeConfigsSharder struct{ *Client }
 
-func (*describeConfigsSharder) unpackPinReq() bool { return false }
-
 func (*describeConfigsSharder) shard(_ context.Context, kreq kmsg.Request, _ error) ([]issueShard, bool, error) {
 	req := kreq.(*kmsg.DescribeConfigsRequest)
 
@@ -3160,8 +3139,6 @@ func (*describeConfigsSharder) merge(sresps []ResponseShard) (kmsg.Response, err
 // handle sharding AlterConfigsRequest
 type alterConfigsSharder struct{ *Client }
 
-func (*alterConfigsSharder) unpackPinReq() bool { return false }
-
 func (*alterConfigsSharder) shard(_ context.Context, kreq kmsg.Request, _ error) ([]issueShard, bool, error) {
 	req := kreq.(*kmsg.AlterConfigsRequest)
 
@@ -3224,8 +3201,6 @@ func (*alterConfigsSharder) merge(sresps []ResponseShard) (kmsg.Response, error)
 
 // handles sharding AlterReplicaLogDirsRequest
 type alterReplicaLogDirsSharder struct{ *Client }
-
-func (*alterReplicaLogDirsSharder) unpackPinReq() bool { return false }
 
 func (cl *alterReplicaLogDirsSharder) shard(ctx context.Context, kreq kmsg.Request, _ error) ([]issueShard, bool, error) {
 	req := kreq.(*kmsg.AlterReplicaLogDirsRequest)
@@ -3372,8 +3347,6 @@ func (*alterReplicaLogDirsSharder) merge(sresps []ResponseShard) (kmsg.Response,
 // handles sharding DescribeLogDirsRequest
 type describeLogDirsSharder struct{ *Client }
 
-func (*describeLogDirsSharder) unpackPinReq() bool { return false }
-
 func (cl *describeLogDirsSharder) shard(ctx context.Context, kreq kmsg.Request, _ error) ([]issueShard, bool, error) {
 	req := kreq.(*kmsg.DescribeLogDirsRequest)
 
@@ -3489,8 +3462,6 @@ func (*describeLogDirsSharder) merge(sresps []ResponseShard) (kmsg.Response, err
 // handles sharding DeleteGroupsRequest
 type deleteGroupsSharder struct{ *Client }
 
-func (*deleteGroupsSharder) unpackPinReq() bool { return false }
-
 func (cl *deleteGroupsSharder) shard(ctx context.Context, kreq kmsg.Request, _ error) ([]issueShard, bool, error) {
 	req := kreq.(*kmsg.DeleteGroupsRequest)
 
@@ -3577,8 +3548,6 @@ func (*deleteGroupsSharder) merge(sresps []ResponseShard) (kmsg.Response, error)
 // handle sharding IncrementalAlterConfigsRequest
 type incrementalAlterConfigsSharder struct{ *Client }
 
-func (*incrementalAlterConfigsSharder) unpackPinReq() bool { return false }
-
 func (*incrementalAlterConfigsSharder) shard(_ context.Context, kreq kmsg.Request, _ error) ([]issueShard, bool, error) {
 	req := kreq.(*kmsg.IncrementalAlterConfigsRequest)
 
@@ -3641,8 +3610,6 @@ func (*incrementalAlterConfigsSharder) merge(sresps []ResponseShard) (kmsg.Respo
 
 // handle sharding DescribeProducersRequest
 type describeProducersSharder struct{ *Client }
-
-func (*describeProducersSharder) unpackPinReq() bool { return false }
 
 func (cl *describeProducersSharder) shard(ctx context.Context, kreq kmsg.Request, _ error) ([]issueShard, bool, error) {
 	req := kreq.(*kmsg.DescribeProducersRequest)
@@ -3752,8 +3719,6 @@ func (*describeProducersSharder) merge(sresps []ResponseShard) (kmsg.Response, e
 // handles sharding DescribeTransactionsRequest
 type describeTransactionsSharder struct{ *Client }
 
-func (*describeTransactionsSharder) unpackPinReq() bool { return false }
-
 func (cl *describeTransactionsSharder) shard(ctx context.Context, kreq kmsg.Request, _ error) ([]issueShard, bool, error) {
 	req := kreq.(*kmsg.DescribeTransactionsRequest)
 
@@ -3839,8 +3804,6 @@ func (*describeTransactionsSharder) merge(sresps []ResponseShard) (kmsg.Response
 
 // handles sharding ListTransactionsRequest
 type listTransactionsSharder struct{ *Client }
-
-func (*listTransactionsSharder) unpackPinReq() bool { return false }
 
 func (cl *listTransactionsSharder) shard(ctx context.Context, kreq kmsg.Request, _ error) ([]issueShard, bool, error) {
 	req := kreq.(*kmsg.ListTransactionsRequest)
