@@ -1,3 +1,26 @@
+v1.11.3
+===
+
+This patch release fixes a panic that can occur when fetching offsets in the
+following scenario:
+
+* You are fetching offsets for a group that the client has not yet loaded
+  internally
+* The internal load's FindCoordinator request fails OR the group cannot be
+  loaded
+
+FindCoordinator usually does not fail outright because the request internally
+retries. As well, the group load is usually successful. Group loading only
+fails if you are unauthorized to describe the group or if the group coordinator
+is not loaded.
+
+The most common case to encounter this error is when you issue a group request
+against a new cluster. The first time a group request is seen, the group
+coordinator loads. While loading, group requests are failed with
+`COORDINATOR_LOAD_IN_PROGRESS` or some other similar error.
+
+* [`5289ef6`](https://github.com/twmb/franz-go/commit/5289ef6) **bugfix** kgo.Client: avoid panic in OffsetFetchRequest when coordinator is not loaded
+
 v1.11.2
 ===
 
