@@ -52,7 +52,8 @@ func initTracerProvider() (*sdktrace.TracerProvider, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create tracer resource: %w", err)
 	}
-	// Create a new tracer provider with the batch span processor, always sample, and the created resource
+	// Create a new tracer provider with the batch span processor, always
+	// sample, and the created resource.
 	tp := sdktrace.NewTracerProvider(
 		sdktrace.WithSpanProcessor(bsp),
 		sdktrace.WithSampler(sdktrace.AlwaysSample()),
@@ -81,7 +82,8 @@ func initMeterProvider() (*metric.MeterProvider, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create meter resource: %w", err)
 	}
-	// Create a new meter provider with the created exporter and the created resource
+	// Create a new meter provider with the created exporter and the created
+	// resource.
 	mp := metric.NewMeterProvider(
 		metric.WithReader(metric.NewPeriodicReader(exp)),
 		metric.WithResource(res),
@@ -90,7 +92,8 @@ func initMeterProvider() (*metric.MeterProvider, error) {
 }
 
 func newKotelTracer(tracerProvider *sdktrace.TracerProvider) *kotel.Tracer {
-	// Create a new kotel tracer with the provided tracer provider and propagator
+	// Create a new kotel tracer with the provided tracer provider and
+	// propagator.
 	tracerOpts := []kotel.TracerOpt{
 		kotel.TracerProvider(tracerProvider),
 		kotel.TracerPropagator(propagation.NewCompositeTextMapPropagator(propagation.TraceContext{})),
@@ -99,7 +102,7 @@ func newKotelTracer(tracerProvider *sdktrace.TracerProvider) *kotel.Tracer {
 }
 
 func newKotelMeter(meterProvider *metric.MeterProvider) *kotel.Meter {
-	// Create a new kotel meter using a provided meter provider
+	// Create a new kotel meter using a provided meter provider.
 	meterOpts := []kotel.MeterOpt{kotel.MeterProvider(meterProvider)}
 	return kotel.NewMeter(meterOpts...)
 }
@@ -121,16 +124,16 @@ func newProducerClient(kotelService *kotel.Kotel) (*kgo.Client, error) {
 }
 
 func produceMessage(client *kgo.Client, tracer trace.Tracer) error {
-	// Start a new span with options
+	// Start a new span with options.
 	opts := []trace.SpanStartOption{
 		trace.WithSpanKind(trace.SpanKindServer),
 		trace.WithAttributes([]attribute.KeyValue{attribute.String("some-key", "foo")}...),
 	}
 	ctx, span := tracer.Start(context.Background(), "request", opts...)
-	// End the span when function exits
+	// End the span when function exits.
 	defer span.End()
 
-	// Simulate some work
+	// Simulate some work.
 	time.Sleep(1 * time.Second)
 
 	var wg sync.WaitGroup
@@ -142,7 +145,7 @@ func produceMessage(client *kgo.Client, tracer trace.Tracer) error {
 		defer wg.Done()
 		if err != nil {
 			fmt.Printf("record had a produce error: %v\n", err)
-			// Set the status and record error on the span
+			// Set the status and record error on the span.
 			span.SetStatus(codes.Error, err.Error())
 			span.RecordError(err)
 		}
@@ -152,10 +155,10 @@ func produceMessage(client *kgo.Client, tracer trace.Tracer) error {
 }
 
 func newConsumerClient(kotelService *kotel.Kotel) (*kgo.Client, error) {
-	// Create options for the new client
+	// Create options for the new client.
 	opts := []kgo.Opt{
 		kgo.SeedBrokers(strings.Split(*seedBrokers, ",")...),
-		// Add hooks from kotel service
+		// Add hooks from kotel service.
 		kgo.WithHooks(kotelService.Hooks()...),
 		kgo.ConsumeTopics(*topic),
 	}
@@ -177,7 +180,7 @@ func consumeMessages(client *kgo.Client, tracer trace.Tracer) error {
 }
 
 func processRecord(record *kgo.Record, tracer trace.Tracer) {
-	// Create options for the new span
+	// Create options for the new span.
 	opts := []trace.SpanStartOption{trace.WithSpanKind(trace.SpanKindConsumer),
 		trace.WithAttributes(
 			semconv.MessagingOperationProcess,
@@ -185,11 +188,11 @@ func processRecord(record *kgo.Record, tracer trace.Tracer) {
 			attribute.String("some-other-key", "baz"),
 		),
 	}
-	// Start a new span using the provided context and options
+	// Start a new span using the provided context and options.
 	_, span := tracer.Start(record.Context, record.Topic+" process", opts...)
-	// Simulate some work
+	// Simulate some work.
 	time.Sleep(1 * time.Second)
-	// End the span when function exits
+	// End the span when function exits.
 	defer span.End()
 	fmt.Printf(
 		"processed offset '%s' with key '%s' and value '%s'\n",
@@ -200,7 +203,7 @@ func processRecord(record *kgo.Record, tracer trace.Tracer) {
 }
 
 func do() error {
-	// Initialize tracer provider and handle shutdown
+	// Initialize tracer provider and handle shutdown.
 	tracerProvider, err := initTracerProvider()
 	if err != nil {
 		return fmt.Errorf("failed to initialize tracer provider: %w", err)
@@ -211,7 +214,7 @@ func do() error {
 		}
 	}()
 
-	// Initialize meter provider and handle shutdown
+	// Initialize meter provider and handle shutdown.
 	meterProvider, err := initMeterProvider()
 	if err != nil {
 		return fmt.Errorf("failed to initialize meter provider: %w", err)
@@ -222,34 +225,34 @@ func do() error {
 		}
 	}()
 
-	// Create a new kotel tracer and meter
+	// Create a new kotel tracer and meter.
 	kotelTracer := newKotelTracer(tracerProvider)
 	kotelMeter := newKotelMeter(meterProvider)
 
-	// Create a new kotel service
+	// Create a new kotel service.
 	kotelService := newKotel(kotelTracer, kotelMeter)
 
-	// Initialize producer client and handle close
+	// Initialize producer client and handle close.
 	producerClient, err := newProducerClient(kotelService)
 	if err != nil {
 		return fmt.Errorf("unable to create producer client: %w", err)
 	}
 	defer producerClient.Close()
 
-	// Create request tracer and produce message
+	// Create request tracer and produce message.
 	requestTracer := tracerProvider.Tracer("request-service")
 	if err := produceMessage(producerClient, requestTracer); err != nil {
 		return fmt.Errorf("failed to produce message: %w", err)
 	}
 
-	// Initialize consumer client and handle close
+	// Initialize consumer client and handle close.
 	consumerClient, err := newConsumerClient(kotelService)
 	if err != nil {
 		return fmt.Errorf("unable to create consumer client: %w", err)
 	}
 	defer consumerClient.Close()
 
-	// Create process tracer and consume messages in a loop
+	// Create process tracer and consume messages in a loop.
 	processTracer := tracerProvider.Tracer("process-service")
 	for {
 		if err := consumeMessages(consumerClient, processTracer); err != nil {

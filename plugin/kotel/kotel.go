@@ -8,24 +8,20 @@ const (
 	instrumentationName = "github.com/twmb/franz-go/plugin/kotel"
 )
 
-// Kotel represents the configuration options available for the kotel plugin
+// Kotel represents the configuration options available for the kotel plugin.
 type Kotel struct {
 	meter  *Meter
 	tracer *Tracer
 }
 
 // Opt interface used for setting optional kotel properties.
-type Opt interface {
-	apply(*Kotel)
-}
+type Opt interface{ apply(*Kotel) }
 
 type optFunc func(*Kotel)
 
-func (o optFunc) apply(c *Kotel) {
-	o(c)
-}
+func (o optFunc) apply(c *Kotel) { o(c) }
 
-// WithTracer configures Kotel with a Tracer
+// WithTracer configures Kotel with a Tracer.
 func WithTracer(t *Tracer) Opt {
 	return optFunc(func(k *Kotel) {
 		if t != nil {
@@ -34,7 +30,7 @@ func WithTracer(t *Tracer) Opt {
 	})
 }
 
-// WithMeter configures Kotel with a Meter
+// WithMeter configures Kotel with a Meter.
 func WithMeter(m *Meter) Opt {
 	return optFunc(func(k *Kotel) {
 		if m != nil {
@@ -43,7 +39,7 @@ func WithMeter(m *Meter) Opt {
 	})
 }
 
-// Hooks return a list of kgo.hooks compatible with its interface
+// Hooks return a list of kgo.hooks compatible with its interface.
 func (k *Kotel) Hooks() []kgo.Hook {
 	var hooks []kgo.Hook
 	if k.tracer != nil {

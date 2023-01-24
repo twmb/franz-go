@@ -62,13 +62,13 @@ to `cl.Produce` as shown in the example below:
 
 ```go
 func httpHandler(w http.ResponseWriter, r *http.Request) {
-	// Start a new span with options
+	// Start a new span with options.
 	opts := []trace.SpanStartOption{
 		trace.WithSpanKind(trace.SpanKindServer),
 		trace.WithAttributes([]attribute.KeyValue{attribute.String("some-key", "foo")}...),
 	}
 	ctx, span := tracer.Start(r.Context(), "request", opts...)
-	// End the span when function exits
+	// End the span when function exits.
 	defer span.End()
 
 	var wg sync.WaitGroup
@@ -103,7 +103,7 @@ for {
 	iter := fetches.RecordIter()
 	for !iter.Done() {
 		record := iter.Next()
-		// Create options for the new span
+		// Create options for the new span.
 		opts := []trace.SpanStartOption{trace.WithSpanKind(trace.SpanKindConsumer),
 			trace.WithAttributes(
 				semconv.MessagingOperationProcess,
@@ -111,11 +111,11 @@ for {
 				attribute.String("some-other-key", "baz"),
 			),
 		}
-		// Start a new span using the provided context and options
+		// Start a new span using the provided context and options.
 		ctx, span := tracer.Start(record.Context, record.Topic+" process", opts...)
-		// process record here
+		// process record here.
 		span.End()
-		// optionally pass the context to the next processing step
+		// optionally pass the context to the next processing step.
 	}
 }
 ```
@@ -149,7 +149,7 @@ meterProvider, err := initMeterProvider()
 meterOpts := []kotel.MeterOpt{kotel.MeterProvider(meterProvider)}
 meter := kotel.NewMeter(meterOpts...)
 
-// Pass tracer and meter to NewKotel hook
+// Pass tracer and meter to NewKotel hook.
 kotelOps := []kotel.Opt{
 	kotel.WithMeter(meter),
 }
@@ -157,6 +157,6 @@ kotelService := kotel.NewKotel(kotelOps...)
 
 cl, err := kgo.NewClient(
 	kgo.WithHooks(kotelService.Hooks()...),
-	// ...other opts
+	// ...other opts.
 )
 ```

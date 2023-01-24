@@ -55,7 +55,7 @@ func (o meterOptFunc) apply(m *Meter) {
 }
 
 // NewMeter returns a Meter, used as option for kotel to instrument franz-go
-// with instruments
+// with instruments.
 func NewMeter(opts ...MeterOpt) *Meter {
 	m := &Meter{}
 	for _, opt := range opts {

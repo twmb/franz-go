@@ -28,15 +28,15 @@ func (c RecordCarrier) Get(key string) string {
 
 // Set sets a header.
 func (c RecordCarrier) Set(key, val string) {
-	// Check if key already exists
+	// Check if key already exists.
 	for i, h := range c.record.Headers {
 		if h.Key == key {
-			// Key exist, update the value
+			// Key exist, update the value.
 			c.record.Headers[i].Value = []byte(val)
 			return
 		}
 	}
-	// Key does not exist, append new header
+	// Key does not exist, append new header.
 	c.record.Headers = append(c.record.Headers, kgo.RecordHeader{
 		Key:   key,
 		Value: []byte(val),
