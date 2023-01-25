@@ -2331,25 +2331,11 @@ func (cl *Client) MarkCommitRecords(rs ...*Record) {
 // Retriable errors are retried up to the configured retry limit, and any
 // unretriable error is returned.
 //
-// This function is useful as a simple way to commit offsets if you have
-// disabled autocommitting. As an alternative if you want to commit specific
-// records, see CommitRecords.
-//
-// Simple usage of this function may lead to duplicate records if a consumer
-// group rebalance occurs before or while this function is being executed. You
-// can avoid this scenario by calling CommitRecords in a custom
-// OnPartitionsRevoked, but for most workloads, a small bit of potential
-// duplicate processing is fine. See the documentation on DisableAutoCommit
-// for more details. You can also avoid this problem by using
-// BlockRebalanceOnCommit, but that option comes with its own tradeoffs (refer
-// to its documentation).
-//
 // The recommended pattern for using this function is to have a poll / process
 // / commit loop. First PollFetches, then process every record, then call
 // CommitUncommittedOffsets.
 //
-// If you do not want to wait for this function to complete before continuing
-// processing records, you can call this function in a goroutine.
+// As an alternative if you want to commit specific records, see CommitRecords.
 func (cl *Client) CommitUncommittedOffsets(ctx context.Context) error {
 	// This function is just the tail end of CommitRecords just above.
 	return cl.commitOffsets(ctx, cl.UncommittedOffsets())
@@ -2360,26 +2346,15 @@ func (cl *Client) CommitUncommittedOffsets(ctx context.Context) error {
 // Retriable errors are retried up to the configured retry limit, and any
 // unretriable error is returned.
 //
-// This function is useful as a simple way to commit offsets if you have
-// marked offsets with MarkCommitRecords when using AutoCommitMarks. As an
-// alternative if you want to commit specific records, see CommitRecords.
-//
-// Simple usage of this function may lead to duplicate records if a consumer
-// group rebalance occurs before or while this function is being executed. You
-// can avoid this scenario by calling CommitRecords in a custom
-// OnPartitionsRevoked, but for most workloads, a small bit of potential
-// duplicate processing is fine. See the documentation on DisableAutoCommit
-// for more details. You can also avoid this problem by using
-// BlockRebalanceOnCommit, but that option comes with its own tradeoffs (refer
-// to its documentation).
+// This function is useful if you have marked offsets with MarkCommitRecords
+// when using AutoCommitMarks.
 //
 // The recommended pattern for using this function is to have a poll / process
 // / commit loop. First PollFetches, then process every record,
 // call MarkCommitRecords for the records you wish the commit and then call
 // CommitMarkedOffsets.
 //
-// If you do not want to wait for this function to complete before continuing
-// processing records, you can call this function in a goroutine.
+// As an alternative if you want to commit specific records, see CommitRecords.
 func (cl *Client) CommitMarkedOffsets(ctx context.Context) error {
 	// This function is just the tail end of CommitRecords just above.
 	return cl.commitOffsets(ctx, cl.MarkedOffsets())
