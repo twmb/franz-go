@@ -1,64 +1,88 @@
 kotel
 ===
 
-`kotel` is a plug-in package for franz-go that provides OpenTelemetry instrumentation. It offers telemetry options
-for [tracing](https://pkg.go.dev/go.opentelemetry.io/otel/trace)
-and [metrics](https://pkg.go.dev/go.opentelemetry.io/otel/metric) through
-a [`kgo.Hook`](https://pkg.go.dev/github.com/twmb/franz-go/pkg/kgo#Hook) interface. `kotel` can be used to enrich
-records with ancestor trace data for producers, or extract ancestor trace data from records for consumers. In
-addition, `kotel` tracks a variety of metrics related to connections, errors, and bytes transferred.
+Kotel is an OpenTelemetry instrumentation plug-in package for franz-go. It
+provides [tracing](https://pkg.go.dev/go.opentelemetry.io/otel/trace)
+and [metrics](https://pkg.go.dev/go.opentelemetry.io/otel/metric) options
+through
+a [`kgo.Hook`](https://pkg.go.dev/github.com/twmb/franz-go/pkg/kgo#Hook). With
+kotel, you can trace records produced or consumed with franz-go. You can pass
+parent traces into records and extract parent traces from records. It also
+tracks metrics related to connections, errors, and bytes transferred.
 
-To get started with `kotel`, you will need to set up a tracer and/or meter provider and configure the desired tracer
-and/or meter options. You can then create a `kotel` hook and pass it to the `kgo.WithHooks` options when creating a
-new Kafka client.
-
-From there, you can use the `kotel` tracing and metrics features in your `franz-go` code as needed. For more detailed
-instructions and examples, see the usage sections below.
-
-Please visit the  [OpenTelemetry documentation](https://opentelemetry.io/docs) for additional information about
-OpenTelemetry and how it can be used in your `franz-go` projects.
+To learn more about how to use kotel, see the usage sections in the README and
+refer to the [OpenTelemetry documentation](https://opentelemetry.io/docs) for
+additional information about OpenTelemetry and how it can be used in your
+franz-go projects.
 
 ## Tracing
 
-`kotel`'s tracing module allows you to track the lineage of `kgo.Record` objects through a series of `franz-go` hooks:
+kotel provides tracing capabilities for Kafka using OpenTelemetry
+specifications. It allows for the creation of three different span
+operations: "send", "receive", and "process". Additionally, it also provides a
+set of attributes to use with these spans.
 
-1) HookProduceRecordBuffered
-2) HookProduceRecordUnbuffered
-3) HookFetchRecordBuffered
-4) HookFetchRecordUnbuffered
+### How it works
 
-To get started with tracing in `kotel`, you'll need to set up a tracer provider and configure any desired tracer
-options. You can then create a `kotel` hook and pass it to `kgo.WithHooks` when creating a new client.
+The kotel tracer module uses hooks to automatically create and close "send"
+and "receive" spans as a `kgo.Record` flows through the application. However,
+for the "process" span, it uses a convenience method that must be manually
+invoked and closed in the consumer code to capture processing.
+
+The following table provides a visual representation of the lineage of the
+span operations:
+
+| Order | Hook/Method                     | Operation | State |
+|-------|---------------------------------|-----------|-------|
+| 1     | kgo.HookProduceRecordBuffered   | Send      | Start |
+| 2     | kgo.HookProduceRecordUnbuffered | Send      | End   |
+| 3     | kgo.HookFetchRecordBuffered     | Receive   | Start |
+| 4     | kgo.HookFetchRecordUnbuffered   | Receive   | End   |
+| 5     | kotel.Tracer.WithProcessSpan    | Process   | Start |
+
+### Getting started
+
+To start using kotel for tracing, you will need to:
+
+1. Set up a tracer provider
+2. Configure any desired tracer options
+3. Create a new kotel tracer
+4. Create a new kotel service hook
+5. Create a new Kafka client and pass in the kotel hook
 
 Here's an example of how you might do this:
 
 ```go
-// Initialize tracer provider
+// Initialize tracer provider.
 tracerProvider, err := initTracerProvider()
 
-// Create a new kotel tracer
+// Create a new kotel tracer.
 tracerOpts := []kotel.TracerOpt{
 	kotel.TracerProvider(tracerProvider),
 	kotel.TracerPropagator(propagation.NewCompositeTextMapPropagator(propagation.TraceContext{})),
 }
 tracer := kotel.NewTracer(tracerOpts...)
 
-// Create a new kotel service
+// Create a new kotel service.
 kotelOps := []kotel.Opt{
 	kotel.WithTracer(tracer),
 }
 kotelService := kotel.NewKotel(kotelOps...)
 
-// Create a new Kafka client
+// Create a new Kafka client.
 cl, err := kgo.NewClient(
-	// Pass in the kotel hook
+	// Pass in the kotel hook.
 	kgo.WithHooks(kotelService.Hooks()...),
-	// ...other opts
+	// ...other opts.
 )
 ```
 
-To include ancestor trace data in your records, you can use the `ctx` object obtained from `tracer.Start` and pass it
-to `cl.Produce` as shown in the example below:
+### Sending records
+
+When producing a record with franz-go, it will traced by kotel. To include
+parent traces, pass in an instrumented context.
+
+Here's an example of how to do this:
 
 ```go
 func httpHandler(w http.ResponseWriter, r *http.Request) {
@@ -88,43 +112,36 @@ func httpHandler(w http.ResponseWriter, r *http.Request) {
 }
 ```
 
-To extract and continue trace data in downstream processing, you can pass the Kafka record context to
-the `tracer.Start`, which returns a new context and span as shown in the example below:
+### Processing Records
+
+Use the `kotel.Tracer.WithProcessSpan` method to start a "process" span. Make
+sure to end the span after you finish processing the record. The trace can be
+continued to the next processing step if desired.
+
+Here is an example of how you might do this:
 
 ```go
-tracer := tracerProvider.Tracer("process-service")
-
-for {
-	fetches := cl.PollFetches(context.Background())
-	if errs := fetches.Errors(); len(errs) > 0 {
-		panic(fmt.Sprint(errs))
-	}
-
-	iter := fetches.RecordIter()
-	for !iter.Done() {
-		record := iter.Next()
-		// Create options for the new span.
-		opts := []trace.SpanStartOption{trace.WithSpanKind(trace.SpanKindConsumer),
-			trace.WithAttributes(
-				semconv.MessagingOperationProcess,
-				attribute.String("some-key", "bar"),
-				attribute.String("some-other-key", "baz"),
-			),
-		}
-		// Start a new span using the provided context and options.
-		ctx, span := tracer.Start(record.Context, record.Topic+" process", opts...)
-		// process record here.
-		span.End()
-		// optionally pass the context to the next processing step.
-	}
+func processRecord(record *kgo.Record, tracer *kotel.Tracer) {
+	ctx, span := tracer.WithProcessSpan(record)
+	// Process the record here.
+	// End the span when function exits.
+	defer span.End()
+	// optionally pass the context to the next processing step.
+	fmt.Printf(
+		"processed offset '%s' with key '%s' and value '%s'\n",
+		strconv.FormatInt(record.Offset, 10),
+		string(record.Key),
+		string(record.Value),
+	)
 }
 ```
 
 ## Metrics
 
-The meter module of `kotel` tracks various metrics related to the processing of records, such as the number of
-successful and unsuccessful connections, bytes written and read, and the number of buffered records. These metrics are
-all counters and are tracked under the following names:
+The kotel meter module tracks various metrics related to the processing of
+records, such as the number of successful and unsuccessful connections, bytes
+written and read, and the number of buffered records. These metrics are all
+counters and are tracked under the following names:
 
 ```
 messaging.kafka.connects.count{node_id = "#{node}"}
@@ -138,24 +155,37 @@ messaging.kafka.produce_bytes.count{node_id = "#{node}", topic = "#{topic}"}
 messaging.kafka.fetch_bytes.count{node_id = "#{node}", topic = "#{topic}"}
 ```
 
-To get started with metrics in `kotel`, you'll need to set up a meter provider and configure any desired meter
-options. You can then create a `kotel` hook and pass it to `kgo.WithHooks` when creating a new client.
+### Getting started
+
+To start using kotel for metrics, you will need to:
+
+1. Set up a meter provider
+2. Configure any desired meter options
+3. Create a new kotel meter
+4. Create a new kotel service hook
+5. Create a new Kafka client and pass in the kotel hook
 
 Here's an example of how you might do this:
 
 ```go
+// Initialize meter provider.
 meterProvider, err := initMeterProvider()
 
+// Create a new kotel meter.
 meterOpts := []kotel.MeterOpt{kotel.MeterProvider(meterProvider)}
 meter := kotel.NewMeter(meterOpts...)
 
-// Pass tracer and meter to NewKotel hook.
+// Pass the meter to NewKotel hook.
 kotelOps := []kotel.Opt{
 	kotel.WithMeter(meter),
 }
+
+// Create a new kotel service.
 kotelService := kotel.NewKotel(kotelOps...)
 
+// Create a new Kafka client.
 cl, err := kgo.NewClient(
+	// Pass in the kotel hook.
 	kgo.WithHooks(kotelService.Hooks()...),
 	// ...other opts.
 )

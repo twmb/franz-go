@@ -165,7 +165,7 @@ func newConsumerClient(kotelService *kotel.Kotel) (*kgo.Client, error) {
 	return kgo.NewClient(opts...)
 }
 
-func consumeMessages(client *kgo.Client, tracer trace.Tracer) error {
+func consumeMessages(client *kgo.Client, tracer *kotel.Tracer) error {
 	fetches := client.PollFetches(context.Background())
 	if errs := fetches.Errors(); len(errs) > 0 {
 		return fmt.Errorf("%v", errs)
@@ -179,17 +179,8 @@ func consumeMessages(client *kgo.Client, tracer trace.Tracer) error {
 	return nil
 }
 
-func processRecord(record *kgo.Record, tracer trace.Tracer) {
-	// Create options for the new span.
-	opts := []trace.SpanStartOption{trace.WithSpanKind(trace.SpanKindConsumer),
-		trace.WithAttributes(
-			semconv.MessagingOperationProcess,
-			attribute.String("some-key", "bar"),
-			attribute.String("some-other-key", "baz"),
-		),
-	}
-	// Start a new span using the provided context and options.
-	_, span := tracer.Start(record.Context, record.Topic+" process", opts...)
+func processRecord(record *kgo.Record, tracer *kotel.Tracer) {
+	_, span := tracer.WithProcessSpan(record)
 	// Simulate some work.
 	time.Sleep(1 * time.Second)
 	// End the span when function exits.
@@ -252,10 +243,9 @@ func do() error {
 	}
 	defer consumerClient.Close()
 
-	// Create process tracer and consume messages in a loop.
-	processTracer := tracerProvider.Tracer("process-service")
+	// Pass in the kotel tracer and consume messages in a loop.
 	for {
-		if err := consumeMessages(consumerClient, processTracer); err != nil {
+		if err := consumeMessages(consumerClient, kotelTracer); err != nil {
 			return fmt.Errorf("failed to consume messages: %w", err)
 		}
 	}

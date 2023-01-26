@@ -79,6 +79,41 @@ func ConsumerGroup(group string) TracerOpt {
 	return tracerOptFunc(func(t *Tracer) { t.consumerGroup = group })
 }
 
+// WithProcessSpan starts a new span for the "process" operation on a consumer
+// record.
+//
+// It sets up the span options. The user's application code is responsible for
+// ending the span.
+func (t *Tracer) WithProcessSpan(r *kgo.Record) (context.Context, trace.Span) {
+	// Set up the span options.
+	attrs := []attribute.KeyValue{
+		semconv.MessagingSystemKey.String("kafka"),
+		semconv.MessagingDestinationKindTopic,
+		semconv.MessagingDestinationKey.String(r.Topic),
+		semconv.MessagingOperationProcess,
+		semconv.MessagingKafkaPartitionKey.Int64(int64(r.Partition)),
+	}
+	if r.Key != nil {
+		attrs = append(attrs, semconv.MessagingKafkaMessageKeyKey.String(string(r.Key)))
+	}
+	if t.clientID != "" {
+		attrs = append(attrs, semconv.MessagingKafkaClientIDKey.String(t.clientID))
+	}
+	if t.consumerGroup != "" {
+		attrs = append(attrs, semconv.MessagingKafkaConsumerGroupKey.String(t.consumerGroup))
+	}
+	opts := []trace.SpanStartOption{
+		trace.WithAttributes(attrs...),
+		trace.WithSpanKind(trace.SpanKindConsumer),
+	}
+
+	if r.Context == nil {
+		r.Context = context.Background()
+	}
+	// Start a new span using the provided context and options.
+	return t.tracer.Start(r.Context, r.Topic+" process", opts...)
+}
+
 // Hooks ----------------------------------------------------------------------
 
 // OnProduceRecordBuffered starts a new span for the "send" operation on a
