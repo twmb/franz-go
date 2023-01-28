@@ -368,7 +368,7 @@ type Record struct {
 
 	// TimestampDelta is the millisecond delta of this record's timestamp
 	// from the record's RecordBatch's FirstTimestamp.
-	TimestampDelta int32
+	TimestampDelta int64
 
 	// OffsetDelta is the delta of this record's offset from the record's
 	// RecordBatch's FirstOffset.
@@ -402,7 +402,7 @@ func (v *Record) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.TimestampDelta
-		dst = kbin.AppendVarint(dst, v)
+		dst = kbin.AppendVarlong(dst, v)
 	}
 	{
 		v := v.OffsetDelta
@@ -455,7 +455,7 @@ func (v *Record) readFrom(src []byte, unsafe bool) error {
 		s.Attributes = v
 	}
 	{
-		v := b.Varint()
+		v := b.Varlong()
 		s.TimestampDelta = v
 	}
 	{
@@ -1691,7 +1691,7 @@ func NewConsumerMemberMetadataOwnedPartition() ConsumerMemberMetadataOwnedPartit
 // ConsumerMemberMetadata is the metadata that is usually sent with a join group
 // request with the "consumer" protocol (normal, non-connect consumers).
 type ConsumerMemberMetadata struct {
-	// Version is 0, 1, or 2.
+	// Version is either version 0 or version 1.
 	Version int16
 
 	// Topics is the list of topics in the group that this member is interested
@@ -1880,7 +1880,7 @@ func NewConsumerMemberAssignmentTopic() ConsumerMemberAssignmentTopic {
 // sync group request with the "consumer" protocol (normal, non-connect
 // consumers).
 type ConsumerMemberAssignment struct {
-	// Verson is 0, 1, or 2.
+	// Verson is currently version 0.
 	Version int16
 
 	// Topics contains topics in the assignment.

@@ -27,6 +27,7 @@ var types = map[string]Type{
 	"float64":         Float64{},
 	"uint32":          Uint32{},
 	"varint":          Varint{},
+	"varlong":         Varlong{},
 	"uuid":            Uuid{},
 	"string":          String{},
 	"nullable-string": NullableString{},

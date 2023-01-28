@@ -95,7 +95,7 @@ Record => not top level
   Attributes: int8
   // TimestampDelta is the millisecond delta of this record's timestamp
   // from the record's RecordBatch's FirstTimestamp.
-  TimestampDelta: varint
+  TimestampDelta: varlong
   // OffsetDelta is the delta of this record's offset from the record's
   // RecordBatch's FirstOffset.
   //

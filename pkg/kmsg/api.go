@@ -33,16 +33,6 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg/internal/kbin"
 )
 
-// GroupMemberMetadata is a type alias for ConsumerMemberMetadata. This is the
-// old deprecated name. The old name is kept around as part of API guarantees
-// in the kgo package.
-type GroupMemberMetadata = ConsumerMemberMetadata
-
-// GroupMemberAssignment is a type alias for ConsumerMemberAssignment. This is
-// the old deprecated name. The old name is kept around as part of API
-// guarantees in the kgo package.
-type GroupMemberAssignment = ConsumerMemberAssignment
-
 //go:generate cp ../kbin/primitives.go internal/kbin/
 
 // Requestor issues requests. Notably, the kgo.Client and kgo.Broker implements

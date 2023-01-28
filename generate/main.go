@@ -67,6 +67,10 @@ type (
 		HasDefault bool
 		Default    int32
 	}
+	Varlong struct {
+		HasDefault bool
+		Default    int64
+	}
 	Uuid         struct{}
 	VarintString struct{}
 	VarintBytes  struct{}
@@ -301,6 +305,18 @@ func (i Varint) SetDefault(s string) Type {
 }
 func (i Varint) GetDefault() (interface{}, bool) { return i.Default, i.HasDefault }
 func (Varint) GetTypeDefault() interface{}       { return 0 }
+
+func (i Varlong) SetDefault(s string) Type {
+	v, err := strconv.ParseInt(s, 0, 64)
+	if err != nil {
+		die("invalid varlong default: %v", err)
+	}
+	i.Default = v
+	i.HasDefault = true
+	return i
+}
+func (i Varlong) GetDefault() (interface{}, bool) { return i.Default, i.HasDefault }
+func (Varlong) GetTypeDefault() interface{}       { return 0 }
 
 func (s NullableString) SetDefault(v string) Type {
 	if v != "null" {
