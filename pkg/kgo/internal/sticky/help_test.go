@@ -4,7 +4,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/twmb/franz-go/pkg/kmsg"
+	"github.com/twmb/franz-go/pkg/kmsg/v2"
 )
 
 type udBuilder struct {

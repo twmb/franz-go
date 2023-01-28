@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kerr"
-	"github.com/twmb/franz-go/pkg/kmsg"
+	"github.com/twmb/franz-go/pkg/kmsg/v2"
 )
 
 // Offset is a message offset in a partition.
