@@ -15,6 +15,7 @@ func (Int64) TypeName() string                 { return "int64" }
 func (Float64) TypeName() string               { return "float64" }
 func (Uint32) TypeName() string                { return "uint32" }
 func (Varint) TypeName() string                { return "int32" }
+func (Varlong) TypeName() string               { return "int64" }
 func (Uuid) TypeName() string                  { return "[16]byte" }
 func (String) TypeName() string                { return "string" }
 func (NullableString) TypeName() string        { return "*string" }
@@ -69,6 +70,7 @@ func (Int64) WriteAppend(l *LineWriter)        { primAppend("Int64", l) }
 func (Float64) WriteAppend(l *LineWriter)      { primAppend("Float64", l) }
 func (Uint32) WriteAppend(l *LineWriter)       { primAppend("Uint32", l) }
 func (Varint) WriteAppend(l *LineWriter)       { primAppend("Varint", l) }
+func (Varlong) WriteAppend(l *LineWriter)      { primAppend("Varlong", l) }
 func (Uuid) WriteAppend(l *LineWriter)         { primAppend("Uuid", l) }
 func (VarintString) WriteAppend(l *LineWriter) { primAppend("VarintString", l) }
 func (VarintBytes) WriteAppend(l *LineWriter)  { primAppend("VarintBytes", l) }
@@ -254,6 +256,9 @@ func (s Struct) WriteAppend(l *LineWriter) {
 		case Varint:
 			l.Write("dst = kbin.AppendUvarint(dst, kbin.VarintLen(v))")
 			f.Type.WriteAppend(l)
+		case Varlong:
+			l.Write("dst = kbin.AppendUvarint(dst, kbin.VarlongLen(v))")
+			f.Type.WriteAppend(l)
 		case Uuid:
 			l.Write("dst = kbin.AppendUvarint(dst, 16)")
 			f.Type.WriteAppend(l)
@@ -366,6 +371,7 @@ func (Int64) WriteDecode(l *LineWriter)        { primDecode("Int64", l) }
 func (Float64) WriteDecode(l *LineWriter)      { primDecode("Float64", l) }
 func (Uint32) WriteDecode(l *LineWriter)       { primDecode("Uint32", l) }
 func (Varint) WriteDecode(l *LineWriter)       { primDecode("Varint", l) }
+func (Varlong) WriteDecode(l *LineWriter)      { primDecode("Varlong", l) }
 func (Uuid) WriteDecode(l *LineWriter)         { primDecode("Uuid", l) }
 func (VarintString) WriteDecode(l *LineWriter) { primUnsafeDecode("VarintString", l) }
 func (VarintBytes) WriteDecode(l *LineWriter)  { primDecode("VarintBytes", l) }
