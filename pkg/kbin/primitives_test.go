@@ -31,6 +31,30 @@ func TestUvarint(t *testing.T) {
 	}
 }
 
+func TestVarlong(t *testing.T) {
+	if err := quick.Check(func(x int64) bool {
+		var expPut [10]byte
+		n := binary.PutVarint(expPut[:], x)
+
+		gotPut := AppendVarlong(nil, x)
+		if !bytes.Equal(expPut[:n], gotPut) {
+			fmt.Println(expPut[:n], gotPut)
+			return false
+		}
+
+		expRead, expN := binary.Varint(expPut[:n])
+		gotRead, gotN := Varlong(gotPut)
+
+		if expN != gotN || expRead != gotRead {
+			return false
+		}
+
+		return true
+	}, nil); err != nil {
+		t.Error(err)
+	}
+}
+
 func BenchmarkUvarint(b *testing.B) {
 	for _, u := range []uint32{
 		0,         // len 1
