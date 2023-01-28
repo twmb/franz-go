@@ -30,7 +30,7 @@ import (
 	"context"
 	"sort"
 
-	"github.com/twmb/franz-go/pkg/kmsg/internal/kbin"
+	"github.com/twmb/franz-go/pkg/kmsg/v2/internal/kbin"
 )
 
 //go:generate cp ../kbin/primitives.go internal/kbin/
