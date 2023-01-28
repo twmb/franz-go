@@ -75,7 +75,7 @@ func AppendUint32(dst []byte, u uint32) []byte {
 
 // uvarintLens could only be length 65, but using 256 allows bounds check
 // elimination on lookup.
-const uvarintLens = "\x01\x01\x01\x01\x01\x01\x01\x01\x02\x02\x02\x02\x02\x02\x02\x03\x03\x03\x03\x03\x03\x03\x04\x04\x04\x04\x04\x04\x04\x05\x05\x05\x05\x05\x05\x05\x06\x06\x06\x06\x06\x06\x06\x07\x07\x07\x07\x07\x07\x07\x08\x08\x08\x08\x08\x08\x08\x09\x09\x09\x09\x09\x09\x09\x10\x10\x10\x10\x10\x10\x10\x11\x11\x11\x11\x11\x11\x11\x12\x12\x12\x12\x12\x12\x12\x13\x13\x13\x13\x13\x13\x13\x14\x14\x14\x14\x14\x14\x14\x15\x15\x15\x15\x15\x15\x15\x16\x16\x16\x16\x16\x16\x16\x17\x17\x17\x17\x17\x17\x17\x18\x18\x18\x18\x18\x18\x18\x19\x19\x19\x19\x19\x19\x19\x20\x20\x20\x20\x20\x20\x20\x21\x21\x21\x21\x21\x21\x21\x22\x22\x22\x22\x22\x22\x22\x23\x23\x23\x23\x23\x23\x23\x24\x24\x24\x24\x24\x24\x24\x25\x25\x25\x25\x25\x25\x25\x26\x26\x26\x26\x26\x26\x26\x27\x27\x27\x27\x27\x27\x27\x28\x28\x28\x28\x28\x28\x28\x29\x29\x29\x29\x29\x29\x29\x30\x30\x30\x30\x30\x30\x30\x31\x31\x31\x31\x31\x31\x31\x32\x32\x32\x32\x32\x32\x32\x33\x33\x33\x33\x33\x33\x33\x34\x34\x34\x34\x34\x34\x34\x35\x35\x35\x35\x35\x35\x35\x36\x36\x36\x36\x36\x36\x36\x37\x37\x37"
+const uvarintLens = "\x01\x01\x01\x01\x01\x01\x01\x01\x02\x02\x02\x02\x02\x02\x02\x03\x03\x03\x03\x03\x03\x03\x04\x04\x04\x04\x04\x04\x04\x05\x05\x05\x05\x05\x05\x05\x06\x06\x06\x06\x06\x06\x06\x07\x07\x07\x07\x07\x07\x07\x08\x08\x08\x08\x08\x08\x08\x09\x09\x09\x09\x09\x09\x09\x0a\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
 
 // VarintLen returns how long i would be if it were varint encoded.
 func VarintLen(i int32) int {
@@ -86,6 +86,10 @@ func VarintLen(i int32) int {
 // UvarintLen returns how long u would be if it were uvarint encoded.
 func UvarintLen(u uint32) int {
 	return int(uvarintLens[byte(bits.Len32(u))])
+}
+
+func uvarlongLen(u uint64) int {
+	return int(uvarintLens[byte(bits.Len64(u))])
 }
 
 // Varint is a loop unrolled 32 bit varint decoder. The return semantics
@@ -135,12 +139,102 @@ func Uvarint(in []byte) (uint32, int) {
 		goto fail
 	}
 
-	x |= uint32(in[4]&0x7f) << 28
+	x |= uint32(in[4]) << 28
 	if in[4] <= 0x0f {
 		return x, 5
 	}
 
 	overflow = -5
+
+fail:
+	return 0, overflow
+}
+
+// Varlong is a loop unrolled 64 bit varint decoder. The return semantics
+// are the same as binary.Varint, with the added benefit that overflows
+// in 10 byte encodings are handled rather than left to the user.
+func Varlong(in []byte) (int64, int) {
+	x, n := uvarlong(in)
+	return int64((x >> 1) ^ -(x & 1)), n
+}
+
+func uvarlong(in []byte) (uint64, int) {
+	var x uint64
+	var overflow int
+
+	if len(in) < 1 {
+		goto fail
+	}
+
+	x = uint64(in[0] & 0x7f)
+	if in[0]&0x80 == 0 {
+		return x, 1
+	} else if len(in) < 2 {
+		goto fail
+	}
+
+	x |= uint64(in[1]&0x7f) << 7
+	if in[1]&0x80 == 0 {
+		return x, 2
+	} else if len(in) < 3 {
+		goto fail
+	}
+
+	x |= uint64(in[2]&0x7f) << 14
+	if in[2]&0x80 == 0 {
+		return x, 3
+	} else if len(in) < 4 {
+		goto fail
+	}
+
+	x |= uint64(in[3]&0x7f) << 21
+	if in[3]&0x80 == 0 {
+		return x, 4
+	} else if len(in) < 5 {
+		goto fail
+	}
+
+	x |= uint64(in[4]&0x7f) << 28
+	if in[4]&0x80 == 0 {
+		return x, 5
+	} else if len(in) < 6 {
+		goto fail
+	}
+
+	x |= uint64(in[5]&0x7f) << 35
+	if in[5]&0x80 == 0 {
+		return x, 6
+	} else if len(in) < 7 {
+		goto fail
+	}
+
+	x |= uint64(in[6]&0x7f) << 42
+	if in[6]&0x80 == 0 {
+		return x, 7
+	} else if len(in) < 8 {
+		goto fail
+	}
+
+	x |= uint64(in[7]&0x7f) << 49
+	if in[7]&0x80 == 0 {
+		return x, 8
+	} else if len(in) < 9 {
+		goto fail
+	}
+
+	x |= uint64(in[8]&0x7f) << 56
+	if in[8]&0x80 == 0 {
+		return x, 9
+	} else if len(in) < 10 {
+		goto fail
+	}
+
+	x |= uint64(in[9]) << 63
+	if in[9] <= 0x01 {
+		return x, 10
+	}
+
+	overflow = -10
 
 fail:
 	return 0, overflow
@@ -154,6 +248,91 @@ func AppendVarint(dst []byte, i int32) []byte {
 // AppendUvarint appends a uvarint encoded u to dst.
 func AppendUvarint(dst []byte, u uint32) []byte {
 	switch UvarintLen(u) {
+	case 5:
+		return append(dst,
+			byte(u&0x7f|0x80),
+			byte((u>>7)&0x7f|0x80),
+			byte((u>>14)&0x7f|0x80),
+			byte((u>>21)&0x7f|0x80),
+			byte(u>>28))
+	case 4:
+		return append(dst,
+			byte(u&0x7f|0x80),
+			byte((u>>7)&0x7f|0x80),
+			byte((u>>14)&0x7f|0x80),
+			byte(u>>21))
+	case 3:
+		return append(dst,
+			byte(u&0x7f|0x80),
+			byte((u>>7)&0x7f|0x80),
+			byte(u>>14))
+	case 2:
+		return append(dst,
+			byte(u&0x7f|0x80),
+			byte(u>>7))
+	case 1:
+		return append(dst, byte(u))
+	}
+	return dst
+}
+
+// AppendVarlong appends a varint encoded i to dst.
+func AppendVarlong(dst []byte, i int64) []byte {
+	return appendUvarlong(dst, uint64(i)<<1^uint64(i>>63))
+}
+
+func appendUvarlong(dst []byte, u uint64) []byte {
+	switch uvarlongLen(u) {
+	case 10:
+		return append(dst,
+			byte(u&0x7f|0x80),
+			byte((u>>7)&0x7f|0x80),
+			byte((u>>14)&0x7f|0x80),
+			byte((u>>21)&0x7f|0x80),
+			byte((u>>28)&0x7f|0x80),
+			byte((u>>35)&0x7f|0x80),
+			byte((u>>42)&0x7f|0x80),
+			byte((u>>49)&0x7f|0x80),
+			byte((u>>56)&0x7f|0x80),
+			byte(u>>63))
+	case 9:
+		return append(dst,
+			byte(u&0x7f|0x80),
+			byte((u>>7)&0x7f|0x80),
+			byte((u>>14)&0x7f|0x80),
+			byte((u>>21)&0x7f|0x80),
+			byte((u>>28)&0x7f|0x80),
+			byte((u>>35)&0x7f|0x80),
+			byte((u>>42)&0x7f|0x80),
+			byte((u>>49)&0x7f|0x80),
+			byte(u>>56))
+	case 8:
+		return append(dst,
+			byte(u&0x7f|0x80),
+			byte((u>>7)&0x7f|0x80),
+			byte((u>>14)&0x7f|0x80),
+			byte((u>>21)&0x7f|0x80),
+			byte((u>>28)&0x7f|0x80),
+			byte((u>>35)&0x7f|0x80),
+			byte((u>>42)&0x7f|0x80),
+			byte(u>>49))
+	case 7:
+		return append(dst,
+			byte(u&0x7f|0x80),
+			byte((u>>7)&0x7f|0x80),
+			byte((u>>14)&0x7f|0x80),
+			byte((u>>21)&0x7f|0x80),
+			byte((u>>28)&0x7f|0x80),
+			byte((u>>35)&0x7f|0x80),
+			byte(u>>42))
+	case 6:
+		return append(dst,
+			byte(u&0x7f|0x80),
+			byte((u>>7)&0x7f|0x80),
+			byte((u>>14)&0x7f|0x80),
+			byte((u>>21)&0x7f|0x80),
+			byte((u>>28)&0x7f|0x80),
+			byte(u>>35))
 	case 5:
 		return append(dst,
 			byte(u&0x7f|0x80),
@@ -428,6 +607,18 @@ func (b *Reader) Varint() int32 {
 	return val
 }
 
+// Varlong returns a varlong int64 from the reader.
+func (b *Reader) Varlong() int64 {
+	val, n := Varlong(b.Src)
+	if n <= 0 {
+		b.bad = true
+		b.Src = nil
+		return 0
+	}
+	b.Src = b.Src[n:]
+	return val
+}
+
 // Uvarint returns a uvarint encoded uint32 from the reader.
 func (b *Reader) Uvarint() uint32 {
 	val, n := Uvarint(b.Src)
@@ -652,8 +843,8 @@ func (b *Reader) Ok() bool {
 // UnsafeString returns the slice as a string using unsafe rule (6).
 func UnsafeString(slice []byte) string {
 	var str string
-	strhdr := (*reflect.StringHeader)(unsafe.Pointer(&str))
-	strhdr.Data = ((*reflect.SliceHeader)(unsafe.Pointer(&slice))).Data
+	strhdr := (*reflect.StringHeader)(unsafe.Pointer(&str))             //nolint:gosec // known way to convert slice to string
+	strhdr.Data = ((*reflect.SliceHeader)(unsafe.Pointer(&slice))).Data //nolint:gosec // known way to convert slice to string
 	strhdr.Len = len(slice)
 	return str
 }
