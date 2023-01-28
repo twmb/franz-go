@@ -290,11 +290,9 @@ func (c *consumer) init(cl *Client) {
 	c.sourcesReadyCond = sync.NewCond(&c.sourcesReadyMu)
 	c.pollWaitC = sync.NewCond(&c.pollWaitMu)
 
-	if len(cl.cfg.topics) == 0 && len(cl.cfg.partitions) == 0 {
-		return // not consuming
+	if len(cl.cfg.topics) > 0 || len(cl.cfg.partitions) > 0 {
+		defer cl.triggerUpdateMetadataNow("querying metadata for consumer initialization") // we definitely want to trigger a metadata update
 	}
-
-	defer cl.triggerUpdateMetadataNow("client initialization") // we definitely want to trigger a metadata update
 
 	if len(cl.cfg.group) == 0 {
 		c.initDirect()

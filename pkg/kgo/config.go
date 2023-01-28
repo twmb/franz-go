@@ -346,9 +346,6 @@ func (cfg *cfg) validate() error {
 	}
 
 	if len(cfg.group) > 0 {
-		if len(cfg.topics) == 0 {
-			return errors.New("unable to consume from a group when no topics are specified")
-		}
 		if len(cfg.partitions) != 0 {
 			return errors.New("invalid direct-partition consuming option when consuming as a group")
 		}

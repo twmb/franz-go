@@ -59,9 +59,7 @@ func (d *directConsumer) findNewAssignments() map[string]map[int32]Offset {
 
 	toUse := make(map[string]map[int32]Offset, 10)
 	for topic, topicPartitions := range topics {
-		// If we are using regex topics, we have to check all
-		// topic regexes to see if any match on this topic.
-		var useTopic bool
+		useTopic := true
 		if d.cfg.regex {
 			want, seen := d.reSeen[topic]
 			if !seen {
@@ -77,8 +75,6 @@ func (d *directConsumer) findNewAssignments() map[string]map[int32]Offset {
 				d.reSeen[topic] = want
 			}
 			useTopic = want
-		} else {
-			_, useTopic = d.cfg.topics[topic]
 		}
 
 		// If the above detected that we want to keep this topic, we
