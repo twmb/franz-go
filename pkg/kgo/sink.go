@@ -366,8 +366,8 @@ func (s *sink) produce(sem <-chan struct{}) bool {
 
 	batches := req.batches.sliced()
 	s.doSequenced(req, func(br *broker, resp kmsg.Response, err error) {
-		s.cl.producer.decInflight()
 		s.handleReqResp(br, req, resp, err)
+		s.cl.producer.decInflight()
 		batches.eachOwnerLocked((*recBatch).decInflight)
 		<-sem
 	})
