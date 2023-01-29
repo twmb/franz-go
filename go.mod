@@ -8,3 +8,5 @@ require (
 	github.com/twmb/franz-go/pkg/kmsg v1.2.0
 	golang.org/x/crypto v0.0.0-20220817201139-bc19a97f63c8
 )
+
+retract v1.11.4 // This version is actually a breaking change and requires a major version change.
