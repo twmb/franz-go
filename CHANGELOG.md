@@ -1,3 +1,29 @@
+v1.11.4
+===
+
+This patch release is tied to a v2 major release in pkg/kmsg and fixes two
+bugs.
+
+When this repo was initially written, the Kafka documentation for the wire
+serialization of a Kafka record was wrong and different from how things were
+actually implemented in the Java source. I used the documentation for my own
+implementation. The documentation was [later fixed](https://github.com/apache/kafka/commit/94ccd4d).
+
+What this means is that in this repo, `kmsg.Record.TimestampDelta` has changed
+from an int32 to an int64, necessitating a major version bump in the kmsg
+package.
+
+The old 32 bit timestamp delta meant that this package could only represent
+records that had up to 24 days of a delta within a batch. Apparently, this may
+happen in compacted topics.
+
+More minor: previously, `AddConsumeTopics` did not work on direct consumers nor
+on a client that consumed nothing to begin with. These shortcomings have been
+addressed.
+
+* [`f613fb8`](https://github.com/twmb/franz-go/commit/f613fb8) **bugfix** pkg/kgo: patch AddConsumeTopics
+* [`bb41aa3`](https://github.com/twmb/franz-go/commit/bb41aa3) **bugfix** pkg/kmsg: change Record.TimestampDelta to int64, a varlong
+
 v1.11.3
 ===
 
