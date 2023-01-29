@@ -14,7 +14,7 @@ import (
 
 	"github.com/twmb/franz-go/pkg/kbin"
 	"github.com/twmb/franz-go/pkg/kerr"
-	"github.com/twmb/franz-go/pkg/kmsg/v2"
+	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
 type sink struct {
@@ -1376,7 +1376,7 @@ type recBatch struct {
 
 	attrs             int16 // updated during apending; read and converted to RecordAttrs on success
 	firstTimestamp    int64 // since unix epoch, in millis
-	maxTimestampDelta int32
+	maxTimestampDelta int64
 
 	mu      sync.Mutex    // guards appendTo's reading of records against failAllRecords emptying it
 	records []promisedRec // record w/ length, ts calculated
@@ -1775,7 +1775,7 @@ func messageSet1Length(r *Record) int32 {
 // Returns the numbers for a record if it were added to the record batch.
 func (b *recBatch) calculateRecordNumbers(r *Record) recordNumbers {
 	tsMillis := r.Timestamp.UnixNano() / 1e6
-	tsDelta := int32(tsMillis - b.firstTimestamp)
+	tsDelta := tsMillis - b.firstTimestamp
 
 	// If this is to be the first record in the batch, then our timestamp
 	// delta is actually 0.
@@ -1786,7 +1786,7 @@ func (b *recBatch) calculateRecordNumbers(r *Record) recordNumbers {
 	offsetDelta := int32(len(b.records)) // since called before adding record, delta is the current end
 
 	l := 1 + // attributes, int8 unused
-		kbin.VarintLen(tsDelta) +
+		kbin.VarlongLen(tsDelta) +
 		kbin.VarintLen(offsetDelta) +
 		kbin.VarintLen(int32(len(r.Key))) +
 		len(r.Key) +
@@ -1813,7 +1813,7 @@ func uvarlen(l int) int32   { return int32(kbin.UvarintLen(uvar32(int32(l)))) }
 // recordNumbers tracks a few numbers for a record that is buffered.
 type recordNumbers struct {
 	lengthField int32 // the length field prefix of a record encoded on the wire
-	tsDelta     int32 // the ms delta of when the record was added against the first timestamp
+	tsDelta     int64 // the ms delta of when the record was added against the first timestamp
 }
 
 // wireLength is the wire length of a record including its length field prefix.
@@ -2036,7 +2036,7 @@ func (b seqRecBatch) appendTo(
 	dst = kbin.AppendInt16(dst, b.attrs)
 	dst = kbin.AppendInt32(dst, int32(len(b.records)-1)) // lastOffsetDelta
 	dst = kbin.AppendInt64(dst, b.firstTimestamp)
-	dst = kbin.AppendInt64(dst, b.firstTimestamp+int64(b.maxTimestampDelta))
+	dst = kbin.AppendInt64(dst, b.firstTimestamp+b.maxTimestampDelta)
 
 	seq := b.seq
 	if producerID < 0 { // a negative producer ID means we are not using idempotence
@@ -2092,7 +2092,7 @@ func (pr promisedRec) appendTo(dst []byte, offsetDelta int32) []byte {
 	length, tsDelta := pr.lengthAndTimestampDelta()
 	dst = kbin.AppendVarint(dst, length)
 	dst = kbin.AppendInt8(dst, 0) // attributes, currently unused
-	dst = kbin.AppendVarint(dst, tsDelta)
+	dst = kbin.AppendVarlong(dst, tsDelta)
 	dst = kbin.AppendVarint(dst, offsetDelta)
 	dst = kbin.AppendVarintBytes(dst, pr.Key)
 	dst = kbin.AppendVarintBytes(dst, pr.Value)
@@ -2116,7 +2116,7 @@ func (b seqRecBatch) appendToAsMessageSet(dst []byte, version uint8, compressor 
 			version,
 			0,
 			int64(i),
-			b.firstTimestamp+int64(tsDelta),
+			b.firstTimestamp+tsDelta,
 			pr.Record,
 		)
 	}

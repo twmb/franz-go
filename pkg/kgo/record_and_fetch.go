@@ -154,12 +154,13 @@ type Record struct {
 // When buffering records, we calculate the length and tsDelta ahead of time
 // (also because number width affects encoding length). We repurpose the Offset
 // field to save space.
-func (r *Record) setLengthAndTimestampDelta(length, tsDelta int32) {
-	r.Offset = int64(uint64(uint32(length))<<32 | uint64(uint32(tsDelta)))
+func (r *Record) setLengthAndTimestampDelta(length int32, tsDelta int64) {
+	r.LeaderEpoch = length
+	r.Offset = tsDelta
 }
 
-func (r *Record) lengthAndTimestampDelta() (length, tsDelta int32) {
-	return int32(uint32(uint64(r.Offset) >> 32)), int32(uint32(uint64(r.Offset)))
+func (r *Record) lengthAndTimestampDelta() (length int32, tsDelta int64) {
+	return r.LeaderEpoch, r.Offset
 }
 
 // AppendFormat appends a record to b given the layout or returns an error if

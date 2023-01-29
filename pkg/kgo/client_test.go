@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/twmb/franz-go/pkg/kmsg/v2"
+	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
 func TestMaxVersions(t *testing.T) {

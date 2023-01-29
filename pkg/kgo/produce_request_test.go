@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/twmb/franz-go/pkg/kbin"
-	"github.com/twmb/franz-go/pkg/kmsg/v2"
+	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
 // This file contains golden tests against kmsg AppendTo's to ensure our custom
@@ -37,7 +37,8 @@ func TestPromisedRecAppendTo(t *testing.T) {
 				{Key: "header key 1", Value: []byte("header value 1")},
 				{Key: "header key 2", Value: []byte("header value 2")},
 			},
-			Offset: 1<<32 | 2,
+			LeaderEpoch: 1,
+			Offset:      2,
 		},
 	}
 
@@ -103,14 +104,16 @@ func TestRecBatchAppendTo(t *testing.T) {
 							{"header key 1", []byte("header value 1")},
 							{"header key 2", []byte("header value 2")},
 						},
-						Offset: 1<<32 | 2,
+						LeaderEpoch: 1,
+						Offset:      2,
 					},
 				},
 				{
 					Record: &Record{
-						Key:    []byte("key 2"),
-						Value:  []byte("value 2"),
-						Offset: 3<<32 | 4,
+						Key:         []byte("key 2"),
+						Value:       []byte("value 2"),
+						LeaderEpoch: 3,
+						Offset:      4,
 					},
 				},
 			},
@@ -274,16 +277,18 @@ func TestMessageSetAppendTo(t *testing.T) {
 			records: []promisedRec{
 				{
 					Record: &Record{
-						Key:    []byte("loooooong key 1"),
-						Value:  []byte("loooooong value 1"),
-						Offset: 1 << 32,
+						Key:         []byte("loooooong key 1"),
+						Value:       []byte("loooooong value 1"),
+						LeaderEpoch: 1,
+						Offset:      0,
 					},
 				},
 				{
 					Record: &Record{
-						Key:    []byte("loooooong key 2"),
-						Value:  []byte("loooooong value 2"),
-						Offset: 3<<32 | 1,
+						Key:         []byte("loooooong key 2"),
+						Value:       []byte("loooooong value 2"),
+						LeaderEpoch: 3,
+						Offset:      1,
 					},
 				},
 			},
@@ -376,14 +381,16 @@ func BenchmarkAppendBatch(b *testing.B) {
 							{"header key 1", []byte("header value 1")},
 							{"header key 2", []byte("header value 2")},
 						},
-						Offset: 1<<32 | 2,
+						LeaderEpoch: 1,
+						Offset:      2,
 					},
 				},
 				{
 					Record: &Record{
-						Key:    []byte("key 2"),
-						Value:  bytes.Repeat([]byte("value 2"), 1000),
-						Offset: 3<<32 | 4,
+						Key:         []byte("key 2"),
+						Value:       bytes.Repeat([]byte("value 2"), 1000),
+						LeaderEpoch: 3,
+						Offset:      4,
 					},
 				},
 			},
