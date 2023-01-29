@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/twmb/franz-go/pkg/kbin"
-	"github.com/twmb/franz-go/pkg/kmsg/v2"
+	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
 // This file contains golden tests against kmsg AppendTo's to ensure our custom
