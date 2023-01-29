@@ -8,6 +8,35 @@ import (
 	"testing/quick"
 )
 
+func TestVarint(t *testing.T) {
+	if err := quick.Check(func(x int32) bool {
+		var expPut [10]byte
+		n := binary.PutVarint(expPut[:], int64(x))
+
+		gotPut := AppendVarint(nil, x)
+		if !bytes.Equal(expPut[:n], gotPut) {
+			return false
+		}
+		if len(gotPut) != n {
+			return false
+		}
+		if VarintLen(x) != n {
+			return false
+		}
+
+		expRead, expN := binary.Varint(expPut[:n])
+		gotRead, gotN := Varint(gotPut)
+
+		if expN != gotN || expRead != int64(gotRead) {
+			return false
+		}
+
+		return true
+	}, nil); err != nil {
+		t.Error(err)
+	}
+}
+
 func TestUvarint(t *testing.T) {
 	if err := quick.Check(func(u uint32) bool {
 		var expPut [10]byte
@@ -38,7 +67,12 @@ func TestVarlong(t *testing.T) {
 
 		gotPut := AppendVarlong(nil, x)
 		if !bytes.Equal(expPut[:n], gotPut) {
-			fmt.Println(expPut[:n], gotPut)
+			return false
+		}
+		if len(gotPut) != n {
+			return false
+		}
+		if VarlongLen(x) != n {
 			return false
 		}
 

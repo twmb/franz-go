@@ -443,6 +443,7 @@ func (p *producer) finishPromises(b batchPromise) {
 start:
 	p.promisesMu.Lock()
 	for i, pr := range b.recs {
+		pr.LeaderEpoch = 0
 		pr.Offset = b.baseOffset + int64(i)
 		pr.Partition = b.partition
 		pr.ProducerID = b.pid

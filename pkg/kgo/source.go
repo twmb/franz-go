@@ -1470,7 +1470,7 @@ func recordToRecord(
 		Offset:        batch.FirstOffset + int64(record.OffsetDelta),
 	}
 	if r.Attrs.TimestampType() == 0 {
-		r.Timestamp = timeFromMillis(batch.FirstTimestamp + int64(record.TimestampDelta))
+		r.Timestamp = timeFromMillis(batch.FirstTimestamp + record.TimestampDelta64)
 	} else {
 		r.Timestamp = timeFromMillis(batch.MaxTimestamp)
 	}
