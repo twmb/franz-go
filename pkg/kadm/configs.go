@@ -5,7 +5,7 @@ import (
 	"strconv"
 
 	"github.com/twmb/franz-go/pkg/kerr"
-	"github.com/twmb/franz-go/pkg/kmsg"
+	"github.com/twmb/franz-go/pkg/kmsg/v2"
 )
 
 // ConfigSynonym is a fallback value for a config.

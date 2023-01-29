@@ -6,7 +6,7 @@ import (
 	"sort"
 
 	"github.com/twmb/franz-go/pkg/kerr"
-	"github.com/twmb/franz-go/pkg/kmsg"
+	"github.com/twmb/franz-go/pkg/kmsg/v2"
 )
 
 // DescribedProducer contains the state of a transactional producer's last

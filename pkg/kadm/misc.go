@@ -13,7 +13,7 @@ import (
 	"golang.org/x/crypto/pbkdf2"
 
 	"github.com/twmb/franz-go/pkg/kerr"
-	"github.com/twmb/franz-go/pkg/kmsg"
+	"github.com/twmb/franz-go/pkg/kmsg/v2"
 	"github.com/twmb/franz-go/pkg/kversion"
 )
 
