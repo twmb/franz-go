@@ -1,3 +1,24 @@
+v1.11.6
+===
+
+v1.11.5 introduced a regression when:
+
+* Using a direct consumer (not a consumer group)
+* Using `ConsumePartitions`
+* Not specifying _all_ partitions in the topic
+
+With the above setup, 1.11.5 introduced a bug that would consume all partitions
+in the topic, i.e. all partitions in a topic that were not specified in
+`ConsumePartitions`.
+
+This patch restores the old behavior to only consume partitions that are
+requested. This patch also makes it possible to purge topics or partitions from
+the direct consumer, and makes it possible to re-add a topic. Lastly, three
+integration tests were added to ensure that the problems fixed in 1.11.5 and in
+this patch do not crop up again.
+
+* [`edd0985`](https://github.com/twmb/franz-go/commit/edd0985) **bugfix** kgo: patch ConsumePartitions regression from 1.11.5
+
 v1.11.5
 ===
 
