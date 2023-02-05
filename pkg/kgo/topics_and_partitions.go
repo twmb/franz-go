@@ -10,6 +10,10 @@ import (
 	"github.com/twmb/franz-go/pkg/kerr"
 )
 
+/////////////
+// HELPERS // -- ugly types to eliminate the toil of nil maps and lookups
+/////////////
+
 func dupmsi32(m map[string]int32) map[string]int32 {
 	d := make(map[string]int32, len(m))
 	for t, ps := range m {
@@ -70,6 +74,43 @@ func (m mtps) String() string {
 	}
 	return sb.String()
 }
+
+type mtmps map[string]map[int32]struct{} // map of topics to map of partitions
+
+func (m *mtmps) add(t string, p int32) {
+	if *m == nil {
+		*m = make(mtmps)
+	}
+	mps := (*m)[t]
+	if mps == nil {
+		mps = make(map[int32]struct{})
+		(*m)[t] = mps
+	}
+	mps[p] = struct{}{}
+}
+
+func (m *mtmps) addt(t string) {
+	if *m == nil {
+		*m = make(mtmps)
+	}
+	mps := (*m)[t]
+	if mps == nil {
+		mps = make(map[int32]struct{})
+		(*m)[t] = mps
+	}
+}
+
+func (m mtmps) onlyt(t string) bool {
+	if m == nil {
+		return false
+	}
+	ps, exists := m[t]
+	return exists && len(ps) == 0
+}
+
+////////////
+// PAUSED // -- types for pausing topics and partitions
+////////////
 
 type pausedTopics map[string]pausedPartitions
 
@@ -173,6 +214,10 @@ func (m pausedTopics) clone() pausedTopics {
 	dup.addPartitions(m.pausedPartitions())
 	return dup
 }
+
+//////////
+// GUTS // -- the key types for storing important metadata for topics & partitions
+//////////
 
 func newTopicPartitions() *topicPartitions {
 	parts := new(topicPartitions)

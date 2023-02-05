@@ -707,12 +707,19 @@ func (c *consumer) purgeTopics(topics []string) {
 		for _, topic := range topics {
 			delete(c.d.using, topic)
 			delete(c.d.reSeen, topic)
+			delete(c.d.m, topic)
 		}
 	}
 }
 
 // AddConsumeTopics adds new topics to be consumed. This function is a no-op if
 // the client is configured to consume via regex.
+//
+// Note that if you are directly consuming and specified ConsumePartitions,
+// this function will not add the rest of the partitions for a topic unless the
+// topic has been previously purged. That is, if you directly consumed only one
+// of five partitions originally, this will not add the other four until the
+// entire topic is purged.
 func (cl *Client) AddConsumeTopics(topics ...string) {
 	c := &cl.consumer
 	if len(topics) == 0 || c.g == nil && c.d == nil || cl.cfg.regex {
@@ -728,6 +735,9 @@ func (cl *Client) AddConsumeTopics(topics ...string) {
 		c.g.tps.storeTopics(topics)
 	} else {
 		c.d.tps.storeTopics(topics)
+		for _, topic := range topics {
+			c.d.m.addt(topic)
+		}
 	}
 	cl.triggerUpdateMetadataNow("from AddConsumeTopics")
 }

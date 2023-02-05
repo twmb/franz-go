@@ -145,8 +145,15 @@ func (cl *Client) triggerUpdateMetadataNow(why string) {
 }
 
 func (cl *Client) blockingMetadataFn(fn func()) {
+	var wg sync.WaitGroup
+	wg.Add(1)
+	waitfn := func() {
+		defer wg.Done()
+		fn()
+	}
 	select {
-	case cl.blockingMetadataFnCh <- fn:
+	case cl.blockingMetadataFnCh <- waitfn:
+		wg.Wait()
 	case <-cl.ctx.Done():
 	}
 }
