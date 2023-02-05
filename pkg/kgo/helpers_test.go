@@ -113,11 +113,15 @@ var randsha = func() func() string {
 }()
 
 func tmpTopic(tb testing.TB) (string, func()) {
+	partitions := npartitions[int(atomic.AddInt64(&npartitionsAt, 1))%len(npartitions)]
+	return tmpTopicPartitions(tb, partitions)
+}
+
+func tmpTopicPartitions(tb testing.TB, partitions int) (string, func()) {
 	tb.Helper()
 
 	topic := randsha()
 
-	partitions := npartitions[int(atomic.AddInt64(&npartitionsAt, 1))%len(npartitions)]
 	req := kmsg.NewPtrCreateTopicsRequest()
 	reqTopic := kmsg.NewCreateTopicsRequestTopic()
 	reqTopic.Topic = topic

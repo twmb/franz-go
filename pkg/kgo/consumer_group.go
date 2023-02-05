@@ -2596,10 +2596,10 @@ func (g *groupConsumer) commitAcrossRebalance(
 		return
 	}
 
-	// We retry up to twice (three tries total): cooperative rebalancing
+	// We retry four times, for five tries total: cooperative rebalancing
 	// uses two back to back rebalances, and the commit could
-	// pathologically end during both. A third failure is unexpected.
-	if g.cooperative && tries < 3 {
+	// pathologically end during both.
+	if g.cooperative && tries < 5 {
 		origDone := onDone
 		onDone = func(cl *Client, req *kmsg.OffsetCommitRequest, resp *kmsg.OffsetCommitResponse, err error) {
 			retry := err == nil
@@ -2653,6 +2653,7 @@ func (g *groupConsumer) commitAcrossRebalance(
 			if retry {
 				go func() {
 					g.cl.cfg.logger.Log(LogLevelInfo, "CommitOffsets spanned a rebalance, we are cooperative and did not lose any partition we were trying to commit, recommitting", "err", retryErr)
+					time.Sleep(10 * time.Millisecond)
 					g.mu.Lock()
 					defer g.mu.Unlock()
 					g.commitAcrossRebalance(ctx, uncommitted, origDone, tries+1)
