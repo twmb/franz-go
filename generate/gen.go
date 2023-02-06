@@ -678,7 +678,11 @@ func (s Struct) WriteTxnCoordinatorFunc(l *LineWriter) {
 }
 
 func (s Struct) WriteResponseKindFunc(l *LineWriter) {
-	l.Write("func (v *%s) ResponseKind() Response { return &%s{Version: v.Version }}", s.Name, s.ResponseKind)
+	l.Write("func (v *%s) ResponseKind() Response {", s.Name)
+	l.Write("r := &%s{Version: v.Version }", s.ResponseKind)
+	l.Write("r.Default()")
+	l.Write("return r")
+	l.Write("}")
 }
 
 func (s Struct) WriteRequestKindFunc(l *LineWriter) {

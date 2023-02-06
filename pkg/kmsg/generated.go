@@ -2759,7 +2759,11 @@ func (v *ProduceRequest) SetVersion(version int16) { v.Version = version }
 func (v *ProduceRequest) GetVersion() int16        { return v.Version }
 func (v *ProduceRequest) IsFlexible() bool         { return v.Version >= 9 }
 func (v *ProduceRequest) Timeout() int32           { return v.TimeoutMillis }
-func (v *ProduceRequest) ResponseKind() Response   { return &ProduceResponse{Version: v.Version} }
+func (v *ProduceRequest) ResponseKind() Response {
+	r := &ProduceResponse{Version: v.Version}
+	r.Default()
+	return r
+}
 
 // RequestWith is requests v on r and returns the response or an error.
 // For sharded requests, the response may be merged and still return an error.
@@ -3717,7 +3721,11 @@ func (*FetchRequest) MaxVersion() int16          { return 13 }
 func (v *FetchRequest) SetVersion(version int16) { v.Version = version }
 func (v *FetchRequest) GetVersion() int16        { return v.Version }
 func (v *FetchRequest) IsFlexible() bool         { return v.Version >= 12 }
-func (v *FetchRequest) ResponseKind() Response   { return &FetchResponse{Version: v.Version} }
+func (v *FetchRequest) ResponseKind() Response {
+	r := &FetchResponse{Version: v.Version}
+	r.Default()
+	return r
+}
 
 // RequestWith is requests v on r and returns the response or an error.
 // For sharded requests, the response may be merged and still return an error.
@@ -5121,7 +5129,11 @@ func (*ListOffsetsRequest) MaxVersion() int16          { return 7 }
 func (v *ListOffsetsRequest) SetVersion(version int16) { v.Version = version }
 func (v *ListOffsetsRequest) GetVersion() int16        { return v.Version }
 func (v *ListOffsetsRequest) IsFlexible() bool         { return v.Version >= 6 }
-func (v *ListOffsetsRequest) ResponseKind() Response   { return &ListOffsetsResponse{Version: v.Version} }
+func (v *ListOffsetsRequest) ResponseKind() Response {
+	r := &ListOffsetsResponse{Version: v.Version}
+	r.Default()
+	return r
+}
 
 // RequestWith is requests v on r and returns the response or an error.
 // For sharded requests, the response may be merged and still return an error.
@@ -5796,7 +5808,11 @@ func (*MetadataRequest) MaxVersion() int16          { return 12 }
 func (v *MetadataRequest) SetVersion(version int16) { v.Version = version }
 func (v *MetadataRequest) GetVersion() int16        { return v.Version }
 func (v *MetadataRequest) IsFlexible() bool         { return v.Version >= 9 }
-func (v *MetadataRequest) ResponseKind() Response   { return &MetadataResponse{Version: v.Version} }
+func (v *MetadataRequest) ResponseKind() Response {
+	r := &MetadataResponse{Version: v.Version}
+	r.Default()
+	return r
+}
 
 // RequestWith is requests v on r and returns the response or an error.
 // For sharded requests, the response may be merged and still return an error.
@@ -6876,7 +6892,9 @@ func (v *LeaderAndISRRequest) SetVersion(version int16) { v.Version = version }
 func (v *LeaderAndISRRequest) GetVersion() int16        { return v.Version }
 func (v *LeaderAndISRRequest) IsFlexible() bool         { return v.Version >= 4 }
 func (v *LeaderAndISRRequest) ResponseKind() Response {
-	return &LeaderAndISRResponse{Version: v.Version}
+	r := &LeaderAndISRResponse{Version: v.Version}
+	r.Default()
+	return r
 }
 
 // RequestWith is requests v on r and returns the response or an error.
@@ -8069,7 +8087,11 @@ func (*StopReplicaRequest) MaxVersion() int16          { return 3 }
 func (v *StopReplicaRequest) SetVersion(version int16) { v.Version = version }
 func (v *StopReplicaRequest) GetVersion() int16        { return v.Version }
 func (v *StopReplicaRequest) IsFlexible() bool         { return v.Version >= 2 }
-func (v *StopReplicaRequest) ResponseKind() Response   { return &StopReplicaResponse{Version: v.Version} }
+func (v *StopReplicaRequest) ResponseKind() Response {
+	r := &StopReplicaResponse{Version: v.Version}
+	r.Default()
+	return r
+}
 
 // RequestWith is requests v on r and returns the response or an error.
 // For sharded requests, the response may be merged and still return an error.
@@ -8686,7 +8708,9 @@ func (v *UpdateMetadataRequest) SetVersion(version int16) { v.Version = version 
 func (v *UpdateMetadataRequest) GetVersion() int16        { return v.Version }
 func (v *UpdateMetadataRequest) IsFlexible() bool         { return v.Version >= 6 }
 func (v *UpdateMetadataRequest) ResponseKind() Response {
-	return &UpdateMetadataResponse{Version: v.Version}
+	r := &UpdateMetadataResponse{Version: v.Version}
+	r.Default()
+	return r
 }
 
 // RequestWith is requests v on r and returns the response or an error.
@@ -9606,7 +9630,9 @@ func (v *ControlledShutdownRequest) SetVersion(version int16) { v.Version = vers
 func (v *ControlledShutdownRequest) GetVersion() int16        { return v.Version }
 func (v *ControlledShutdownRequest) IsFlexible() bool         { return v.Version >= 3 }
 func (v *ControlledShutdownRequest) ResponseKind() Response {
-	return &ControlledShutdownResponse{Version: v.Version}
+	r := &ControlledShutdownResponse{Version: v.Version}
+	r.Default()
+	return r
 }
 
 // RequestWith is requests v on r and returns the response or an error.
@@ -9995,7 +10021,9 @@ func (v *OffsetCommitRequest) GetVersion() int16          { return v.Version }
 func (v *OffsetCommitRequest) IsFlexible() bool           { return v.Version >= 8 }
 func (v *OffsetCommitRequest) IsGroupCoordinatorRequest() {}
 func (v *OffsetCommitRequest) ResponseKind() Response {
-	return &OffsetCommitResponse{Version: v.Version}
+	r := &OffsetCommitResponse{Version: v.Version}
+	r.Default()
+	return r
 }
 
 // RequestWith is requests v on r and returns the response or an error.
@@ -10722,7 +10750,11 @@ func (v *OffsetFetchRequest) SetVersion(version int16)   { v.Version = version }
 func (v *OffsetFetchRequest) GetVersion() int16          { return v.Version }
 func (v *OffsetFetchRequest) IsFlexible() bool           { return v.Version >= 6 }
 func (v *OffsetFetchRequest) IsGroupCoordinatorRequest() {}
-func (v *OffsetFetchRequest) ResponseKind() Response     { return &OffsetFetchResponse{Version: v.Version} }
+func (v *OffsetFetchRequest) ResponseKind() Response {
+	r := &OffsetFetchResponse{Version: v.Version}
+	r.Default()
+	return r
+}
 
 // RequestWith is requests v on r and returns the response or an error.
 // For sharded requests, the response may be merged and still return an error.
@@ -11813,7 +11845,9 @@ func (v *FindCoordinatorRequest) SetVersion(version int16) { v.Version = version
 func (v *FindCoordinatorRequest) GetVersion() int16        { return v.Version }
 func (v *FindCoordinatorRequest) IsFlexible() bool         { return v.Version >= 3 }
 func (v *FindCoordinatorRequest) ResponseKind() Response {
-	return &FindCoordinatorResponse{Version: v.Version}
+	r := &FindCoordinatorResponse{Version: v.Version}
+	r.Default()
+	return r
 }
 
 // RequestWith is requests v on r and returns the response or an error.
@@ -12446,7 +12480,11 @@ func (v *JoinGroupRequest) SetVersion(version int16)   { v.Version = version }
 func (v *JoinGroupRequest) GetVersion() int16          { return v.Version }
 func (v *JoinGroupRequest) IsFlexible() bool           { return v.Version >= 6 }
 func (v *JoinGroupRequest) IsGroupCoordinatorRequest() {}
-func (v *JoinGroupRequest) ResponseKind() Response     { return &JoinGroupResponse{Version: v.Version} }
+func (v *JoinGroupRequest) ResponseKind() Response {
+	r := &JoinGroupResponse{Version: v.Version}
+	r.Default()
+	return r
+}
 
 // RequestWith is requests v on r and returns the response or an error.
 // For sharded requests, the response may be merged and still return an error.
@@ -13217,7 +13255,11 @@ func (v *HeartbeatRequest) SetVersion(version int16)   { v.Version = version }
 func (v *HeartbeatRequest) GetVersion() int16          { return v.Version }
 func (v *HeartbeatRequest) IsFlexible() bool           { return v.Version >= 4 }
 func (v *HeartbeatRequest) IsGroupCoordinatorRequest() {}
-func (v *HeartbeatRequest) ResponseKind() Response     { return &HeartbeatResponse{Version: v.Version} }
+func (v *HeartbeatRequest) ResponseKind() Response {
+	r := &HeartbeatResponse{Version: v.Version}
+	r.Default()
+	return r
+}
 
 // RequestWith is requests v on r and returns the response or an error.
 // For sharded requests, the response may be merged and still return an error.
@@ -13537,7 +13579,11 @@ func (v *LeaveGroupRequest) SetVersion(version int16)   { v.Version = version }
 func (v *LeaveGroupRequest) GetVersion() int16          { return v.Version }
 func (v *LeaveGroupRequest) IsFlexible() bool           { return v.Version >= 4 }
 func (v *LeaveGroupRequest) IsGroupCoordinatorRequest() {}
-func (v *LeaveGroupRequest) ResponseKind() Response     { return &LeaveGroupResponse{Version: v.Version} }
+func (v *LeaveGroupRequest) ResponseKind() Response {
+	r := &LeaveGroupResponse{Version: v.Version}
+	r.Default()
+	return r
+}
 
 // RequestWith is requests v on r and returns the response or an error.
 // For sharded requests, the response may be merged and still return an error.
@@ -14079,7 +14125,11 @@ func (v *SyncGroupRequest) SetVersion(version int16)   { v.Version = version }
 func (v *SyncGroupRequest) GetVersion() int16          { return v.Version }
 func (v *SyncGroupRequest) IsFlexible() bool           { return v.Version >= 4 }
 func (v *SyncGroupRequest) IsGroupCoordinatorRequest() {}
-func (v *SyncGroupRequest) ResponseKind() Response     { return &SyncGroupResponse{Version: v.Version} }
+func (v *SyncGroupRequest) ResponseKind() Response {
+	r := &SyncGroupResponse{Version: v.Version}
+	r.Default()
+	return r
+}
 
 // RequestWith is requests v on r and returns the response or an error.
 // For sharded requests, the response may be merged and still return an error.
@@ -14582,7 +14632,9 @@ func (v *DescribeGroupsRequest) GetVersion() int16          { return v.Version }
 func (v *DescribeGroupsRequest) IsFlexible() bool           { return v.Version >= 5 }
 func (v *DescribeGroupsRequest) IsGroupCoordinatorRequest() {}
 func (v *DescribeGroupsRequest) ResponseKind() Response {
-	return &DescribeGroupsResponse{Version: v.Version}
+	r := &DescribeGroupsResponse{Version: v.Version}
+	r.Default()
+	return r
 }
 
 // RequestWith is requests v on r and returns the response or an error.
@@ -15255,7 +15307,11 @@ func (*ListGroupsRequest) MaxVersion() int16          { return 4 }
 func (v *ListGroupsRequest) SetVersion(version int16) { v.Version = version }
 func (v *ListGroupsRequest) GetVersion() int16        { return v.Version }
 func (v *ListGroupsRequest) IsFlexible() bool         { return v.Version >= 3 }
-func (v *ListGroupsRequest) ResponseKind() Response   { return &ListGroupsResponse{Version: v.Version} }
+func (v *ListGroupsRequest) ResponseKind() Response {
+	r := &ListGroupsResponse{Version: v.Version}
+	r.Default()
+	return r
+}
 
 // RequestWith is requests v on r and returns the response or an error.
 // For sharded requests, the response may be merged and still return an error.
@@ -15646,7 +15702,9 @@ func (v *SASLHandshakeRequest) SetVersion(version int16) { v.Version = version }
 func (v *SASLHandshakeRequest) GetVersion() int16        { return v.Version }
 func (v *SASLHandshakeRequest) IsFlexible() bool         { return false }
 func (v *SASLHandshakeRequest) ResponseKind() Response {
-	return &SASLHandshakeResponse{Version: v.Version}
+	r := &SASLHandshakeResponse{Version: v.Version}
+	r.Default()
+	return r
 }
 
 // RequestWith is requests v on r and returns the response or an error.
@@ -15864,7 +15922,11 @@ func (*ApiVersionsRequest) MaxVersion() int16          { return 3 }
 func (v *ApiVersionsRequest) SetVersion(version int16) { v.Version = version }
 func (v *ApiVersionsRequest) GetVersion() int16        { return v.Version }
 func (v *ApiVersionsRequest) IsFlexible() bool         { return v.Version >= 3 }
-func (v *ApiVersionsRequest) ResponseKind() Response   { return &ApiVersionsResponse{Version: v.Version} }
+func (v *ApiVersionsRequest) ResponseKind() Response {
+	r := &ApiVersionsResponse{Version: v.Version}
+	r.Default()
+	return r
+}
 
 // RequestWith is requests v on r and returns the response or an error.
 // For sharded requests, the response may be merged and still return an error.
@@ -16599,7 +16661,9 @@ func (v *CreateTopicsRequest) IsFlexible() bool         { return v.Version >= 5 
 func (v *CreateTopicsRequest) Timeout() int32           { return v.TimeoutMillis }
 func (v *CreateTopicsRequest) IsAdminRequest()          {}
 func (v *CreateTopicsRequest) ResponseKind() Response {
-	return &CreateTopicsResponse{Version: v.Version}
+	r := &CreateTopicsResponse{Version: v.Version}
+	r.Default()
+	return r
 }
 
 // RequestWith is requests v on r and returns the response or an error.
@@ -17477,7 +17541,9 @@ func (v *DeleteTopicsRequest) IsFlexible() bool         { return v.Version >= 4 
 func (v *DeleteTopicsRequest) Timeout() int32           { return v.TimeoutMillis }
 func (v *DeleteTopicsRequest) IsAdminRequest()          {}
 func (v *DeleteTopicsRequest) ResponseKind() Response {
-	return &DeleteTopicsResponse{Version: v.Version}
+	r := &DeleteTopicsResponse{Version: v.Version}
+	r.Default()
+	return r
 }
 
 // RequestWith is requests v on r and returns the response or an error.
@@ -18054,7 +18120,9 @@ func (v *DeleteRecordsRequest) GetVersion() int16        { return v.Version }
 func (v *DeleteRecordsRequest) IsFlexible() bool         { return v.Version >= 2 }
 func (v *DeleteRecordsRequest) Timeout() int32           { return v.TimeoutMillis }
 func (v *DeleteRecordsRequest) ResponseKind() Response {
-	return &DeleteRecordsResponse{Version: v.Version}
+	r := &DeleteRecordsResponse{Version: v.Version}
+	r.Default()
+	return r
 }
 
 // RequestWith is requests v on r and returns the response or an error.
@@ -18596,7 +18664,9 @@ func (v *InitProducerIDRequest) GetVersion() int16        { return v.Version }
 func (v *InitProducerIDRequest) IsFlexible() bool         { return v.Version >= 2 }
 func (v *InitProducerIDRequest) IsTxnCoordinatorRequest() {}
 func (v *InitProducerIDRequest) ResponseKind() Response {
-	return &InitProducerIDResponse{Version: v.Version}
+	r := &InitProducerIDResponse{Version: v.Version}
+	r.Default()
+	return r
 }
 
 // RequestWith is requests v on r and returns the response or an error.
@@ -18947,7 +19017,9 @@ func (v *OffsetForLeaderEpochRequest) SetVersion(version int16) { v.Version = ve
 func (v *OffsetForLeaderEpochRequest) GetVersion() int16        { return v.Version }
 func (v *OffsetForLeaderEpochRequest) IsFlexible() bool         { return v.Version >= 4 }
 func (v *OffsetForLeaderEpochRequest) ResponseKind() Response {
-	return &OffsetForLeaderEpochResponse{Version: v.Version}
+	r := &OffsetForLeaderEpochResponse{Version: v.Version}
+	r.Default()
+	return r
 }
 
 // RequestWith is requests v on r and returns the response or an error.
@@ -19543,7 +19615,9 @@ func (v *AddPartitionsToTxnRequest) GetVersion() int16        { return v.Version
 func (v *AddPartitionsToTxnRequest) IsFlexible() bool         { return v.Version >= 3 }
 func (v *AddPartitionsToTxnRequest) IsTxnCoordinatorRequest() {}
 func (v *AddPartitionsToTxnRequest) ResponseKind() Response {
-	return &AddPartitionsToTxnResponse{Version: v.Version}
+	r := &AddPartitionsToTxnResponse{Version: v.Version}
+	r.Default()
+	return r
 }
 
 // RequestWith is requests v on r and returns the response or an error.
@@ -20090,7 +20164,9 @@ func (v *AddOffsetsToTxnRequest) GetVersion() int16        { return v.Version }
 func (v *AddOffsetsToTxnRequest) IsFlexible() bool         { return v.Version >= 3 }
 func (v *AddOffsetsToTxnRequest) IsTxnCoordinatorRequest() {}
 func (v *AddOffsetsToTxnRequest) ResponseKind() Response {
-	return &AddOffsetsToTxnResponse{Version: v.Version}
+	r := &AddOffsetsToTxnResponse{Version: v.Version}
+	r.Default()
+	return r
 }
 
 // RequestWith is requests v on r and returns the response or an error.
@@ -20363,7 +20439,11 @@ func (v *EndTxnRequest) SetVersion(version int16) { v.Version = version }
 func (v *EndTxnRequest) GetVersion() int16        { return v.Version }
 func (v *EndTxnRequest) IsFlexible() bool         { return v.Version >= 3 }
 func (v *EndTxnRequest) IsTxnCoordinatorRequest() {}
-func (v *EndTxnRequest) ResponseKind() Response   { return &EndTxnResponse{Version: v.Version} }
+func (v *EndTxnRequest) ResponseKind() Response {
+	r := &EndTxnResponse{Version: v.Version}
+	r.Default()
+	return r
+}
 
 // RequestWith is requests v on r and returns the response or an error.
 // For sharded requests, the response may be merged and still return an error.
@@ -20675,7 +20755,9 @@ func (v *WriteTxnMarkersRequest) SetVersion(version int16) { v.Version = version
 func (v *WriteTxnMarkersRequest) GetVersion() int16        { return v.Version }
 func (v *WriteTxnMarkersRequest) IsFlexible() bool         { return v.Version >= 1 }
 func (v *WriteTxnMarkersRequest) ResponseKind() Response {
-	return &WriteTxnMarkersResponse{Version: v.Version}
+	r := &WriteTxnMarkersResponse{Version: v.Version}
+	r.Default()
+	return r
 }
 
 // RequestWith is requests v on r and returns the response or an error.
@@ -21367,7 +21449,9 @@ func (v *TxnOffsetCommitRequest) GetVersion() int16          { return v.Version 
 func (v *TxnOffsetCommitRequest) IsFlexible() bool           { return v.Version >= 3 }
 func (v *TxnOffsetCommitRequest) IsGroupCoordinatorRequest() {}
 func (v *TxnOffsetCommitRequest) ResponseKind() Response {
-	return &TxnOffsetCommitResponse{Version: v.Version}
+	r := &TxnOffsetCommitResponse{Version: v.Version}
+	r.Default()
+	return r
 }
 
 // RequestWith is requests v on r and returns the response or an error.
@@ -22070,7 +22154,9 @@ func (v *DescribeACLsRequest) SetVersion(version int16) { v.Version = version }
 func (v *DescribeACLsRequest) GetVersion() int16        { return v.Version }
 func (v *DescribeACLsRequest) IsFlexible() bool         { return v.Version >= 2 }
 func (v *DescribeACLsRequest) ResponseKind() Response {
-	return &DescribeACLsResponse{Version: v.Version}
+	r := &DescribeACLsResponse{Version: v.Version}
+	r.Default()
+	return r
 }
 
 // RequestWith is requests v on r and returns the response or an error.
@@ -22769,7 +22855,11 @@ func (*CreateACLsRequest) MaxVersion() int16          { return 3 }
 func (v *CreateACLsRequest) SetVersion(version int16) { v.Version = version }
 func (v *CreateACLsRequest) GetVersion() int16        { return v.Version }
 func (v *CreateACLsRequest) IsFlexible() bool         { return v.Version >= 2 }
-func (v *CreateACLsRequest) ResponseKind() Response   { return &CreateACLsResponse{Version: v.Version} }
+func (v *CreateACLsRequest) ResponseKind() Response {
+	r := &CreateACLsResponse{Version: v.Version}
+	r.Default()
+	return r
+}
 
 // RequestWith is requests v on r and returns the response or an error.
 // For sharded requests, the response may be merged and still return an error.
@@ -23259,7 +23349,11 @@ func (*DeleteACLsRequest) MaxVersion() int16          { return 3 }
 func (v *DeleteACLsRequest) SetVersion(version int16) { v.Version = version }
 func (v *DeleteACLsRequest) GetVersion() int16        { return v.Version }
 func (v *DeleteACLsRequest) IsFlexible() bool         { return v.Version >= 2 }
-func (v *DeleteACLsRequest) ResponseKind() Response   { return &DeleteACLsResponse{Version: v.Version} }
+func (v *DeleteACLsRequest) ResponseKind() Response {
+	r := &DeleteACLsResponse{Version: v.Version}
+	r.Default()
+	return r
+}
 
 // RequestWith is requests v on r and returns the response or an error.
 // For sharded requests, the response may be merged and still return an error.
@@ -24015,7 +24109,9 @@ func (v *DescribeConfigsRequest) SetVersion(version int16) { v.Version = version
 func (v *DescribeConfigsRequest) GetVersion() int16        { return v.Version }
 func (v *DescribeConfigsRequest) IsFlexible() bool         { return v.Version >= 4 }
 func (v *DescribeConfigsRequest) ResponseKind() Response {
-	return &DescribeConfigsResponse{Version: v.Version}
+	r := &DescribeConfigsResponse{Version: v.Version}
+	r.Default()
+	return r
 }
 
 // RequestWith is requests v on r and returns the response or an error.
@@ -24951,7 +25047,9 @@ func (v *AlterConfigsRequest) SetVersion(version int16) { v.Version = version }
 func (v *AlterConfigsRequest) GetVersion() int16        { return v.Version }
 func (v *AlterConfigsRequest) IsFlexible() bool         { return v.Version >= 2 }
 func (v *AlterConfigsRequest) ResponseKind() Response {
-	return &AlterConfigsResponse{Version: v.Version}
+	r := &AlterConfigsResponse{Version: v.Version}
+	r.Default()
+	return r
 }
 
 // RequestWith is requests v on r and returns the response or an error.
@@ -25522,7 +25620,9 @@ func (v *AlterReplicaLogDirsRequest) SetVersion(version int16) { v.Version = ver
 func (v *AlterReplicaLogDirsRequest) GetVersion() int16        { return v.Version }
 func (v *AlterReplicaLogDirsRequest) IsFlexible() bool         { return v.Version >= 2 }
 func (v *AlterReplicaLogDirsRequest) ResponseKind() Response {
-	return &AlterReplicaLogDirsResponse{Version: v.Version}
+	r := &AlterReplicaLogDirsResponse{Version: v.Version}
+	r.Default()
+	return r
 }
 
 // RequestWith is requests v on r and returns the response or an error.
@@ -26083,7 +26183,9 @@ func (v *DescribeLogDirsRequest) SetVersion(version int16) { v.Version = version
 func (v *DescribeLogDirsRequest) GetVersion() int16        { return v.Version }
 func (v *DescribeLogDirsRequest) IsFlexible() bool         { return v.Version >= 2 }
 func (v *DescribeLogDirsRequest) ResponseKind() Response {
-	return &DescribeLogDirsResponse{Version: v.Version}
+	r := &DescribeLogDirsResponse{Version: v.Version}
+	r.Default()
+	return r
 }
 
 // RequestWith is requests v on r and returns the response or an error.
@@ -26724,7 +26826,9 @@ func (v *SASLAuthenticateRequest) SetVersion(version int16) { v.Version = versio
 func (v *SASLAuthenticateRequest) GetVersion() int16        { return v.Version }
 func (v *SASLAuthenticateRequest) IsFlexible() bool         { return v.Version >= 2 }
 func (v *SASLAuthenticateRequest) ResponseKind() Response {
-	return &SASLAuthenticateResponse{Version: v.Version}
+	r := &SASLAuthenticateResponse{Version: v.Version}
+	r.Default()
+	return r
 }
 
 // RequestWith is requests v on r and returns the response or an error.
@@ -27045,7 +27149,9 @@ func (v *CreatePartitionsRequest) IsFlexible() bool         { return v.Version >
 func (v *CreatePartitionsRequest) Timeout() int32           { return v.TimeoutMillis }
 func (v *CreatePartitionsRequest) IsAdminRequest()          {}
 func (v *CreatePartitionsRequest) ResponseKind() Response {
-	return &CreatePartitionsResponse{Version: v.Version}
+	r := &CreatePartitionsResponse{Version: v.Version}
+	r.Default()
+	return r
 }
 
 // RequestWith is requests v on r and returns the response or an error.
@@ -27593,7 +27699,9 @@ func (v *CreateDelegationTokenRequest) SetVersion(version int16) { v.Version = v
 func (v *CreateDelegationTokenRequest) GetVersion() int16        { return v.Version }
 func (v *CreateDelegationTokenRequest) IsFlexible() bool         { return v.Version >= 2 }
 func (v *CreateDelegationTokenRequest) ResponseKind() Response {
-	return &CreateDelegationTokenResponse{Version: v.Version}
+	r := &CreateDelegationTokenResponse{Version: v.Version}
+	r.Default()
+	return r
 }
 
 // RequestWith is requests v on r and returns the response or an error.
@@ -28139,7 +28247,9 @@ func (v *RenewDelegationTokenRequest) SetVersion(version int16) { v.Version = ve
 func (v *RenewDelegationTokenRequest) GetVersion() int16        { return v.Version }
 func (v *RenewDelegationTokenRequest) IsFlexible() bool         { return v.Version >= 2 }
 func (v *RenewDelegationTokenRequest) ResponseKind() Response {
-	return &RenewDelegationTokenResponse{Version: v.Version}
+	r := &RenewDelegationTokenResponse{Version: v.Version}
+	r.Default()
+	return r
 }
 
 // RequestWith is requests v on r and returns the response or an error.
@@ -28374,7 +28484,9 @@ func (v *ExpireDelegationTokenRequest) SetVersion(version int16) { v.Version = v
 func (v *ExpireDelegationTokenRequest) GetVersion() int16        { return v.Version }
 func (v *ExpireDelegationTokenRequest) IsFlexible() bool         { return v.Version >= 2 }
 func (v *ExpireDelegationTokenRequest) ResponseKind() Response {
-	return &ExpireDelegationTokenResponse{Version: v.Version}
+	r := &ExpireDelegationTokenResponse{Version: v.Version}
+	r.Default()
+	return r
 }
 
 // RequestWith is requests v on r and returns the response or an error.
@@ -28628,7 +28740,9 @@ func (v *DescribeDelegationTokenRequest) SetVersion(version int16) { v.Version =
 func (v *DescribeDelegationTokenRequest) GetVersion() int16        { return v.Version }
 func (v *DescribeDelegationTokenRequest) IsFlexible() bool         { return v.Version >= 2 }
 func (v *DescribeDelegationTokenRequest) ResponseKind() Response {
-	return &DescribeDelegationTokenResponse{Version: v.Version}
+	r := &DescribeDelegationTokenResponse{Version: v.Version}
+	r.Default()
+	return r
 }
 
 // RequestWith is requests v on r and returns the response or an error.
@@ -29290,7 +29404,9 @@ func (v *DeleteGroupsRequest) GetVersion() int16          { return v.Version }
 func (v *DeleteGroupsRequest) IsFlexible() bool           { return v.Version >= 2 }
 func (v *DeleteGroupsRequest) IsGroupCoordinatorRequest() {}
 func (v *DeleteGroupsRequest) ResponseKind() Response {
-	return &DeleteGroupsResponse{Version: v.Version}
+	r := &DeleteGroupsResponse{Version: v.Version}
+	r.Default()
+	return r
 }
 
 // RequestWith is requests v on r and returns the response or an error.
@@ -29675,7 +29791,9 @@ func (v *ElectLeadersRequest) IsFlexible() bool         { return v.Version >= 2 
 func (v *ElectLeadersRequest) Timeout() int32           { return v.TimeoutMillis }
 func (v *ElectLeadersRequest) IsAdminRequest()          {}
 func (v *ElectLeadersRequest) ResponseKind() Response {
-	return &ElectLeadersResponse{Version: v.Version}
+	r := &ElectLeadersResponse{Version: v.Version}
+	r.Default()
+	return r
 }
 
 // RequestWith is requests v on r and returns the response or an error.
@@ -30286,7 +30404,9 @@ func (v *IncrementalAlterConfigsRequest) SetVersion(version int16) { v.Version =
 func (v *IncrementalAlterConfigsRequest) GetVersion() int16        { return v.Version }
 func (v *IncrementalAlterConfigsRequest) IsFlexible() bool         { return v.Version >= 1 }
 func (v *IncrementalAlterConfigsRequest) ResponseKind() Response {
-	return &IncrementalAlterConfigsResponse{Version: v.Version}
+	r := &IncrementalAlterConfigsResponse{Version: v.Version}
+	r.Default()
+	return r
 }
 
 // RequestWith is requests v on r and returns the response or an error.
@@ -30885,7 +31005,9 @@ func (v *AlterPartitionAssignmentsRequest) IsFlexible() bool         { return v.
 func (v *AlterPartitionAssignmentsRequest) Timeout() int32           { return v.TimeoutMillis }
 func (v *AlterPartitionAssignmentsRequest) IsAdminRequest()          {}
 func (v *AlterPartitionAssignmentsRequest) ResponseKind() Response {
-	return &AlterPartitionAssignmentsResponse{Version: v.Version}
+	r := &AlterPartitionAssignmentsResponse{Version: v.Version}
+	r.Default()
+	return r
 }
 
 // RequestWith is requests v on r and returns the response or an error.
@@ -31518,7 +31640,9 @@ func (v *ListPartitionReassignmentsRequest) IsFlexible() bool         { return v
 func (v *ListPartitionReassignmentsRequest) Timeout() int32           { return v.TimeoutMillis }
 func (v *ListPartitionReassignmentsRequest) IsAdminRequest()          {}
 func (v *ListPartitionReassignmentsRequest) ResponseKind() Response {
-	return &ListPartitionReassignmentsResponse{Version: v.Version}
+	r := &ListPartitionReassignmentsResponse{Version: v.Version}
+	r.Default()
+	return r
 }
 
 // RequestWith is requests v on r and returns the response or an error.
@@ -32176,7 +32300,9 @@ func (v *OffsetDeleteRequest) GetVersion() int16          { return v.Version }
 func (v *OffsetDeleteRequest) IsFlexible() bool           { return false }
 func (v *OffsetDeleteRequest) IsGroupCoordinatorRequest() {}
 func (v *OffsetDeleteRequest) ResponseKind() Response {
-	return &OffsetDeleteResponse{Version: v.Version}
+	r := &OffsetDeleteResponse{Version: v.Version}
+	r.Default()
+	return r
 }
 
 // RequestWith is requests v on r and returns the response or an error.
@@ -32606,7 +32732,9 @@ func (v *DescribeClientQuotasRequest) SetVersion(version int16) { v.Version = ve
 func (v *DescribeClientQuotasRequest) GetVersion() int16        { return v.Version }
 func (v *DescribeClientQuotasRequest) IsFlexible() bool         { return v.Version >= 1 }
 func (v *DescribeClientQuotasRequest) ResponseKind() Response {
-	return &DescribeClientQuotasResponse{Version: v.Version}
+	r := &DescribeClientQuotasResponse{Version: v.Version}
+	r.Default()
+	return r
 }
 
 // RequestWith is requests v on r and returns the response or an error.
@@ -33302,7 +33430,9 @@ func (v *AlterClientQuotasRequest) SetVersion(version int16) { v.Version = versi
 func (v *AlterClientQuotasRequest) GetVersion() int16        { return v.Version }
 func (v *AlterClientQuotasRequest) IsFlexible() bool         { return v.Version >= 1 }
 func (v *AlterClientQuotasRequest) ResponseKind() Response {
-	return &AlterClientQuotasResponse{Version: v.Version}
+	r := &AlterClientQuotasResponse{Version: v.Version}
+	r.Default()
+	return r
 }
 
 // RequestWith is requests v on r and returns the response or an error.
@@ -33946,7 +34076,9 @@ func (v *DescribeUserSCRAMCredentialsRequest) SetVersion(version int16) { v.Vers
 func (v *DescribeUserSCRAMCredentialsRequest) GetVersion() int16        { return v.Version }
 func (v *DescribeUserSCRAMCredentialsRequest) IsFlexible() bool         { return v.Version >= 0 }
 func (v *DescribeUserSCRAMCredentialsRequest) ResponseKind() Response {
-	return &DescribeUserSCRAMCredentialsResponse{Version: v.Version}
+	r := &DescribeUserSCRAMCredentialsResponse{Version: v.Version}
+	r.Default()
+	return r
 }
 
 // RequestWith is requests v on r and returns the response or an error.
@@ -34515,7 +34647,9 @@ func (v *AlterUserSCRAMCredentialsRequest) GetVersion() int16        { return v.
 func (v *AlterUserSCRAMCredentialsRequest) IsFlexible() bool         { return v.Version >= 0 }
 func (v *AlterUserSCRAMCredentialsRequest) IsAdminRequest()          {}
 func (v *AlterUserSCRAMCredentialsRequest) ResponseKind() Response {
-	return &AlterUserSCRAMCredentialsResponse{Version: v.Version}
+	r := &AlterUserSCRAMCredentialsResponse{Version: v.Version}
+	r.Default()
+	return r
 }
 
 // RequestWith is requests v on r and returns the response or an error.
@@ -35071,7 +35205,11 @@ func (v *VoteRequest) SetVersion(version int16) { v.Version = version }
 func (v *VoteRequest) GetVersion() int16        { return v.Version }
 func (v *VoteRequest) IsFlexible() bool         { return v.Version >= 0 }
 func (v *VoteRequest) IsAdminRequest()          {}
-func (v *VoteRequest) ResponseKind() Response   { return &VoteResponse{Version: v.Version} }
+func (v *VoteRequest) ResponseKind() Response {
+	r := &VoteResponse{Version: v.Version}
+	r.Default()
+	return r
+}
 
 // RequestWith is requests v on r and returns the response or an error.
 // For sharded requests, the response may be merged and still return an error.
@@ -35659,7 +35797,9 @@ func (v *BeginQuorumEpochRequest) GetVersion() int16        { return v.Version }
 func (v *BeginQuorumEpochRequest) IsFlexible() bool         { return false }
 func (v *BeginQuorumEpochRequest) IsAdminRequest()          {}
 func (v *BeginQuorumEpochRequest) ResponseKind() Response {
-	return &BeginQuorumEpochResponse{Version: v.Version}
+	r := &BeginQuorumEpochResponse{Version: v.Version}
+	r.Default()
+	return r
 }
 
 // RequestWith is requests v on r and returns the response or an error.
@@ -36099,7 +36239,9 @@ func (v *EndQuorumEpochRequest) GetVersion() int16        { return v.Version }
 func (v *EndQuorumEpochRequest) IsFlexible() bool         { return false }
 func (v *EndQuorumEpochRequest) IsAdminRequest()          {}
 func (v *EndQuorumEpochRequest) ResponseKind() Response {
-	return &EndQuorumEpochResponse{Version: v.Version}
+	r := &EndQuorumEpochResponse{Version: v.Version}
+	r.Default()
+	return r
 }
 
 // RequestWith is requests v on r and returns the response or an error.
@@ -36600,7 +36742,9 @@ func (v *DescribeQuorumRequest) GetVersion() int16        { return v.Version }
 func (v *DescribeQuorumRequest) IsFlexible() bool         { return v.Version >= 0 }
 func (v *DescribeQuorumRequest) IsAdminRequest()          {}
 func (v *DescribeQuorumRequest) ResponseKind() Response {
-	return &DescribeQuorumResponse{Version: v.Version}
+	r := &DescribeQuorumResponse{Version: v.Version}
+	r.Default()
+	return r
 }
 
 // RequestWith is requests v on r and returns the response or an error.
@@ -37305,7 +37449,9 @@ func (v *AlterPartitionRequest) GetVersion() int16        { return v.Version }
 func (v *AlterPartitionRequest) IsFlexible() bool         { return v.Version >= 0 }
 func (v *AlterPartitionRequest) IsAdminRequest()          {}
 func (v *AlterPartitionRequest) ResponseKind() Response {
-	return &AlterPartitionResponse{Version: v.Version}
+	r := &AlterPartitionResponse{Version: v.Version}
+	r.Default()
+	return r
 }
 
 // RequestWith is requests v on r and returns the response or an error.
@@ -38003,7 +38149,9 @@ func (v *UpdateFeaturesRequest) IsFlexible() bool         { return v.Version >= 
 func (v *UpdateFeaturesRequest) Timeout() int32           { return v.TimeoutMillis }
 func (v *UpdateFeaturesRequest) IsAdminRequest()          {}
 func (v *UpdateFeaturesRequest) ResponseKind() Response {
-	return &UpdateFeaturesResponse{Version: v.Version}
+	r := &UpdateFeaturesResponse{Version: v.Version}
+	r.Default()
+	return r
 }
 
 // RequestWith is requests v on r and returns the response or an error.
@@ -38457,7 +38605,11 @@ func (v *EnvelopeRequest) SetVersion(version int16) { v.Version = version }
 func (v *EnvelopeRequest) GetVersion() int16        { return v.Version }
 func (v *EnvelopeRequest) IsFlexible() bool         { return v.Version >= 0 }
 func (v *EnvelopeRequest) IsAdminRequest()          {}
-func (v *EnvelopeRequest) ResponseKind() Response   { return &EnvelopeResponse{Version: v.Version} }
+func (v *EnvelopeRequest) ResponseKind() Response {
+	r := &EnvelopeResponse{Version: v.Version}
+	r.Default()
+	return r
+}
 
 // RequestWith is requests v on r and returns the response or an error.
 // For sharded requests, the response may be merged and still return an error.
@@ -38792,7 +38944,9 @@ func (v *FetchSnapshotRequest) SetVersion(version int16) { v.Version = version }
 func (v *FetchSnapshotRequest) GetVersion() int16        { return v.Version }
 func (v *FetchSnapshotRequest) IsFlexible() bool         { return v.Version >= 0 }
 func (v *FetchSnapshotRequest) ResponseKind() Response {
-	return &FetchSnapshotResponse{Version: v.Version}
+	r := &FetchSnapshotResponse{Version: v.Version}
+	r.Default()
+	return r
 }
 
 // RequestWith is requests v on r and returns the response or an error.
@@ -39580,7 +39734,9 @@ func (v *DescribeClusterRequest) SetVersion(version int16) { v.Version = version
 func (v *DescribeClusterRequest) GetVersion() int16        { return v.Version }
 func (v *DescribeClusterRequest) IsFlexible() bool         { return v.Version >= 0 }
 func (v *DescribeClusterRequest) ResponseKind() Response {
-	return &DescribeClusterResponse{Version: v.Version}
+	r := &DescribeClusterResponse{Version: v.Version}
+	r.Default()
+	return r
 }
 
 // RequestWith is requests v on r and returns the response or an error.
@@ -40023,7 +40179,9 @@ func (v *DescribeProducersRequest) SetVersion(version int16) { v.Version = versi
 func (v *DescribeProducersRequest) GetVersion() int16        { return v.Version }
 func (v *DescribeProducersRequest) IsFlexible() bool         { return v.Version >= 0 }
 func (v *DescribeProducersRequest) ResponseKind() Response {
-	return &DescribeProducersResponse{Version: v.Version}
+	r := &DescribeProducersResponse{Version: v.Version}
+	r.Default()
+	return r
 }
 
 // RequestWith is requests v on r and returns the response or an error.
@@ -40716,7 +40874,9 @@ func (v *BrokerRegistrationRequest) SetVersion(version int16) { v.Version = vers
 func (v *BrokerRegistrationRequest) GetVersion() int16        { return v.Version }
 func (v *BrokerRegistrationRequest) IsFlexible() bool         { return v.Version >= 0 }
 func (v *BrokerRegistrationRequest) ResponseKind() Response {
-	return &BrokerRegistrationResponse{Version: v.Version}
+	r := &BrokerRegistrationResponse{Version: v.Version}
+	r.Default()
+	return r
 }
 
 // RequestWith is requests v on r and returns the response or an error.
@@ -41187,7 +41347,9 @@ func (v *BrokerHeartbeatRequest) SetVersion(version int16) { v.Version = version
 func (v *BrokerHeartbeatRequest) GetVersion() int16        { return v.Version }
 func (v *BrokerHeartbeatRequest) IsFlexible() bool         { return v.Version >= 0 }
 func (v *BrokerHeartbeatRequest) ResponseKind() Response {
-	return &BrokerHeartbeatResponse{Version: v.Version}
+	r := &BrokerHeartbeatResponse{Version: v.Version}
+	r.Default()
+	return r
 }
 
 // RequestWith is requests v on r and returns the response or an error.
@@ -41447,7 +41609,9 @@ func (v *UnregisterBrokerRequest) SetVersion(version int16) { v.Version = versio
 func (v *UnregisterBrokerRequest) GetVersion() int16        { return v.Version }
 func (v *UnregisterBrokerRequest) IsFlexible() bool         { return v.Version >= 0 }
 func (v *UnregisterBrokerRequest) ResponseKind() Response {
-	return &UnregisterBrokerResponse{Version: v.Version}
+	r := &UnregisterBrokerResponse{Version: v.Version}
+	r.Default()
+	return r
 }
 
 // RequestWith is requests v on r and returns the response or an error.
@@ -41666,7 +41830,9 @@ func (v *DescribeTransactionsRequest) SetVersion(version int16) { v.Version = ve
 func (v *DescribeTransactionsRequest) GetVersion() int16        { return v.Version }
 func (v *DescribeTransactionsRequest) IsFlexible() bool         { return v.Version >= 0 }
 func (v *DescribeTransactionsRequest) ResponseKind() Response {
-	return &DescribeTransactionsResponse{Version: v.Version}
+	r := &DescribeTransactionsResponse{Version: v.Version}
+	r.Default()
+	return r
 }
 
 // RequestWith is requests v on r and returns the response or an error.
@@ -42217,7 +42383,9 @@ func (v *ListTransactionsRequest) SetVersion(version int16) { v.Version = versio
 func (v *ListTransactionsRequest) GetVersion() int16        { return v.Version }
 func (v *ListTransactionsRequest) IsFlexible() bool         { return v.Version >= 0 }
 func (v *ListTransactionsRequest) ResponseKind() Response {
-	return &ListTransactionsResponse{Version: v.Version}
+	r := &ListTransactionsResponse{Version: v.Version}
+	r.Default()
+	return r
 }
 
 // RequestWith is requests v on r and returns the response or an error.
@@ -42687,7 +42855,9 @@ func (v *AllocateProducerIDsRequest) SetVersion(version int16) { v.Version = ver
 func (v *AllocateProducerIDsRequest) GetVersion() int16        { return v.Version }
 func (v *AllocateProducerIDsRequest) IsFlexible() bool         { return v.Version >= 0 }
 func (v *AllocateProducerIDsRequest) ResponseKind() Response {
-	return &AllocateProducerIDsResponse{Version: v.Version}
+	r := &AllocateProducerIDsResponse{Version: v.Version}
+	r.Default()
+	return r
 }
 
 // RequestWith is requests v on r and returns the response or an error.
