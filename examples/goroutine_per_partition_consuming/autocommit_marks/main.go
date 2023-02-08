@@ -75,7 +75,7 @@ func (s *splitConsume) assigned(_ context.Context, cl *kgo.Client, assigned map[
 
 func (s *splitConsume) revoked(ctx context.Context, cl *kgo.Client, revoked map[string][]int32) {
 	s.killConsumers(revoked)
-	if err := cl.CommitUncommittedOffsets(ctx); err != nil {
+	if err := cl.CommitMarkedOffsets(ctx); err != nil {
 		fmt.Printf("Revoke commit failed: %v\n", err)
 	}
 }
