@@ -788,7 +788,7 @@ var max270 = nextMax(max260, func(v listenerKeys) listenerKeys {
 var max280 = nextMax(max270, func(v listenerKeys) listenerKeys {
 	// KAFKA-10181 KAFKA-10181 KIP-590
 	v = append(v,
-		k(rController), // 58 envelope
+		k(zkBroker, rController), // 58 envelope, controller first, zk in KAFKA-14446 8b045dcbf6b89e1a9594ff95642d4882765e4b0d KIP-866 Kafka 3.4
 	)
 
 	// KAFKA-10729 85f94d50271c952c3e9ee49c4fc814c0da411618 KIP-482
@@ -939,6 +939,9 @@ var (
 	maxTip    = nextMax(maxStable, func(v listenerKeys) listenerKeys {
 		// KAFKA-14304 7b7e40a536a79cebf35cc278b9375c8352d342b9 KIP-866
 		// KAFKA-14448 67c72596afe58363eceeb32084c5c04637a33831 added BrokerRegistration
+		// KAFKA-14493 db490707606855c265bc938e1b236070e0e2eba5 changed BrokerRegistration
+		// KAFKA-14304 0bb05d8679b684ad8fbb2eb40dfc00066186a75a changed BrokerRegistration back to a bool...
+		// 5b521031edea8ea7cbcca7dc24a58429423740ff added tag to ApiVersions
 		v[4].inc()  // 7 leader and isr
 		v[5].inc()  // 4 stop replica
 		v[6].inc()  // 8 update metadata

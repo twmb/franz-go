@@ -65,3 +65,6 @@ ApiVersionsResponse =>
     MaxVersionLevel: int16
     // The cluster-wide finalized min version level for the feature.
     MinVersionLevel: int16
+  // Set by a KRaft controller if the required configurations for ZK migration
+  // are present
+  ZkMigrationReady: bool // tag 3
