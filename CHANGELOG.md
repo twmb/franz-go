@@ -1,3 +1,24 @@
+v1.12.0
+===
+
+This release is tested against Kafka 3.4, and kversion can now properly version
+guess 3.4. There are two external kgo features in this release and there is one
+internal feature.
+
+Externally,
+
+* `Client.CommitMarkedOffsets` makes committing marked offsets a bit easier
+* `Client.UpdateSeedBrokers` allows for updating seed brokers, which can be useful on extremely long lived clients.
+
+Internally,
+
+* KIP-792 improves fencing of zombie group consumers using cooperative rebalancing
+
+- [`c5f86ea`](https://github.com/twmb/franz-go/commit/c5f86ea) **feature** kgo.Client: add `UpdateSeedBrokers(...string) error`
+- [`3e45339`](https://github.com/twmb/franz-go/commit/3e45339) **internal improvement** group balancer: support KIP-792
+- [`fe727f8`](https://github.com/twmb/franz-go/commit/fe727f8) **feature** kversion: cut Kafka 3.4
+- [`6751589`](https://github.com/twmb/franz-go/commit/6751589) **feature** pkg/kgo: add `Client.CommitMarkedOffsets` (thanks [@celrenheit](https://github.com/celrenheit)!)
+
 v1.11.7
 ===
 
@@ -18,8 +39,8 @@ errors that are retryable.
 This is the last commit in the v1.11 series -- immediately after tagging this,
 I will be working on v1.12 which will officially test against Kafka 3.4.
 
-- [`17567b0..78a12c3`](https://github.com/twmb/franz-go/compare/17567b0..78a12c3) **bugfix**consumer: fix potential panic when calling PurgeTopicsFromClient
-- [`17567b0`](https://github.com/twmb/franz-go/commit/17567b0) kgo: always strip retryable errors when consuming
+- [`17567b0..78a12c3`](https://github.com/twmb/franz-go/compare/17567b0..78a12c3) **bugfix** consumer: fix potential panic when calling PurgeTopicsFromClient
+- [`17567b0`](https://github.com/twmb/franz-go/commit/17567b0) **improvement** kgo: always strip retryable errors when consuming
 
 v1.11.6
 ===
