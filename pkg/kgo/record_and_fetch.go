@@ -145,7 +145,7 @@ type Record struct {
 	// Context is an optional field that is used for enriching records.
 	//
 	// If this field is nil when producing, it is set to the Produce ctx
-	// arg. This field can be used to propagate record encrichment across
+	// arg. This field can be used to propagate record enrichment across
 	// producer hooks. It can also be set in a consumer hook to propagate
 	// enrichment to consumer clients.
 	Context context.Context
