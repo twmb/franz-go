@@ -902,7 +902,7 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how
 		case assignSetMatching:
 			// We had not yet loaded this partition, so there is
 			// nothing to set, and we keep everything.
-		case assignInvalidateMatching, assignPurgeMatching:
+		case assignInvalidateMatching:
 			loadOffsets.keepFilter(func(t string, p int32) bool {
 				if assignTopic, ok := assignments[t]; ok {
 					if _, ok := assignTopic[p]; ok {
@@ -911,16 +911,21 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how
 				}
 				return true
 			})
-		}
-
-		// We have to purge from tps _after_ the session is stopped.
-		// If we purge early while the session is ongoing, then another
-		// goroutine could be loading and using tps and expecting
-		// topics not yet removed from assignPartitions to still be
-		// there. Specifically, mapLoadsToBrokers could be expecting
-		// topic foo to be there (from the session!), so if we purge
-		// foo before stopping the session, we will panic.
-		if how == assignPurgeMatching {
+		case assignPurgeMatching:
+			// This is slightly different than invalidate in that
+			// we invalidate whole topics.
+			loadOffsets.keepFilter(func(t string, p int32) bool {
+				_, ok := assignments[t]
+				return !ok // assignments are topics to purge -- do NOT keep the topic if it is being purged
+			})
+			// We have to purge from tps _after_ the session is
+			// stopped. If we purge early while the session is
+			// ongoing, then another goroutine could be loading and
+			// using tps and expecting topics not yet removed from
+			// assignPartitions to still be there. Specifically,
+			// mapLoadsToBrokers could be expecting topic foo to be
+			// there (from the session!), so if we purge foo before
+			// stopping the session, we will panic.
 			topics := make([]string, 0, len(assignments))
 			for t := range assignments {
 				topics = append(topics, t)
@@ -1710,13 +1715,6 @@ func (s *consumerSession) mapLoadsToBrokers(loads listOrEpochLoads) map[*broker]
 	} {
 		for topic, partitions := range loads.m {
 			topicPartitions := topics.loadTopic(topic) // this must exist, it not existing would be a bug
-			if topicPartitions == nil {
-				var have []string
-				for k := range topics {
-					have = append(have, k)
-				}
-				panic(fmt.Sprintf("trying to load topic %q not in our tps set %v", topic, have))
-			}
 			for partition, offset := range partitions {
 				// We default to the first seed broker if we have no loaded
 				// the broker leader for this partition (we should have).

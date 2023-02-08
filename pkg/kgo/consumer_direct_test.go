@@ -2,7 +2,6 @@ package kgo
 
 import (
 	"context"
-	"os"
 	"testing"
 	"time"
 )
@@ -84,9 +83,6 @@ func TestDirectPartitionPurge(t *testing.T) {
 	cl, _ := NewClient(
 		getSeedBrokers(),
 		DefaultProduceTopic(topic),
-		WithLogger(BasicLogger(os.Stderr, LogLevelDebug, func() string {
-			return topic + " "
-		})),
 		RecordPartitioner(ManualPartitioner()),
 		ConsumePartitions(map[string]map[int32]Offset{
 			topic: {0: NewOffset().At(0)},
