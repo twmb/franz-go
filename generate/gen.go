@@ -25,8 +25,14 @@ func (VarintString) TypeName() string          { return "string" }
 func (VarintBytes) TypeName() string           { return "[]byte" }
 func (a Array) TypeName() string               { return "[]" + a.Inner.TypeName() }
 func (Throttle) TypeName() string              { return "int32" }
-func (s Struct) TypeName() string              { return s.Name }
 func (FieldLengthMinusBytes) TypeName() string { return "[]byte" }
+
+func (s Struct) TypeName() string {
+	if s.Nullable {
+		return "*" + s.Name
+	}
+	return s.Name
+}
 
 func (e Enum) TypeName() string { return e.Name }
 func (e Enum) WriteAppend(l *LineWriter) {
@@ -142,7 +148,7 @@ func (a Array) WriteAppend(l *LineWriter) {
 		writeNormal()
 	}
 	l.Write("for i := range v {")
-	if _, isStruct := a.Inner.(Struct); isStruct {
+	if s, isStruct := a.Inner.(Struct); isStruct && !s.Nullable {
 		// If the array elements are structs, we avoid copying the
 		// struct out and instead grab a pointer to the element.
 		l.Write("v := &v[i]")
@@ -155,13 +161,20 @@ func (a Array) WriteAppend(l *LineWriter) {
 
 func (s Struct) WriteAppend(l *LineWriter) {
 	tags := make(map[int]StructField)
+	if s.Nullable {
+		l.Write("if v == nil {")
+		l.Write("dst = append(dst, 255)") // -1
+		l.Write("} else {")
+		l.Write("dst = append(dst, 1)")
+		defer l.Write("}")
+	}
 	for _, f := range s.Fields {
 		if onlyTag := f.writeBeginAndTag(l, tags); onlyTag {
 			continue
 		}
 		// If the struct field is a struct itself, we avoid copying it
 		// and instead grab a pointer.
-		if _, isStruct := f.Type.(Struct); isStruct {
+		if s, isStruct := f.Type.(Struct); isStruct && !s.Nullable {
 			l.Write("v := &v.%s", f.FieldName)
 		} else {
 			l.Write("v := v.%s", f.FieldName)
@@ -448,8 +461,12 @@ func (a Array) WriteDecode(l *LineWriter) {
 	l.Write("}")
 
 	l.Write("for i := int32(0); i < l; i++ {")
-	switch a.Inner.(type) {
+	switch t := a.Inner.(type) {
 	case Struct:
+		if t.Nullable {
+			l.Write("if present := b.Int8(); present != -1 && b.Ok() {")
+			defer l.Write("}")
+		}
 		l.Write("v := &a[i]")
 		l.Write("v.Default()") // set defaults first
 	case Array:
@@ -476,11 +493,18 @@ func (a Array) WriteDecode(l *LineWriter) {
 }
 
 func (f StructField) WriteDecode(l *LineWriter) {
-	switch f.Type.(type) {
+	switch t := f.Type.(type) {
 	case Struct:
 		// For decoding a nested struct, we copy a pointer out.
 		// The nested version will then set the fields directly.
-		l.Write("v := &s.%s", f.FieldName)
+		if t.Nullable {
+			l.Write("if present := b.Int8(); present != -1 && b.Ok() {")
+			l.Write("s.%s = new(%s)", f.FieldName, t.Name)
+			l.Write("v := s.%s", f.FieldName)
+			defer l.Write("}")
+		} else {
+			l.Write("v := &s.%s", f.FieldName)
+		}
 		l.Write("v.Default()")
 	case Array:
 		// For arrays, we need to copy the array into a v
@@ -493,8 +517,8 @@ func (f StructField) WriteDecode(l *LineWriter) {
 
 	_, isStruct := f.Type.(Struct)
 	if !isStruct {
-		// If the field was not a struct, we need to copy the
-		// changes back.
+		// If the field was not a struct or it was a nullable struct,
+		// we need to copy the changes back.
 		l.Write("s.%s = v", f.FieldName)
 	}
 }
@@ -563,7 +587,7 @@ func (s Struct) WriteDecode(l *LineWriter) {
 }
 
 func (s Struct) WriteDefault(l *LineWriter) {
-	if len(s.Fields) == 0 {
+	if len(s.Fields) == 0 || s.Nullable {
 		return
 	}
 

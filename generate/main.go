@@ -143,6 +143,7 @@ type (
 		// (a) top level and has flexible versions, or
 		// (b) nested in a top level struct that has flexible versions
 		FromFlexible bool
+		Nullable     bool
 
 		Fields []StructField
 
@@ -367,6 +368,9 @@ func (Struct) GetDefault() (interface{}, bool) {
 }
 
 func (s Struct) GetTypeDefault() interface{} {
+	if s.Nullable {
+		return "nil"
+	}
 	// This will not work if a tagged type has its own arrays, but for now
 	// nothing has that.
 	return fmt.Sprintf("(func() %[1]s { var v %[1]s; v.Default(); return v })() ", s.Name)
