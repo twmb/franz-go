@@ -1703,7 +1703,7 @@ func (s *consumerSession) mapLoadsToBrokers(loads listOrEpochLoads) map[*broker]
 	defer s.c.cl.brokersMu.RUnlock()
 
 	brokers := s.c.cl.brokers
-	seed := s.c.cl.seeds[0]
+	seed := s.c.cl.loadSeeds()[0]
 
 	topics := s.tps.load()
 	for _, loads := range []struct {
