@@ -839,21 +839,20 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 			var keep bool
 			switch fp.Err {
 			default:
-				// - bad auth
-				// - unsupported compression
-				// - unsupported message version
-				// - unknown error
-				// - or, no error
-				keep = true
-
-			case kerr.UnknownTopicOrPartition,
-				kerr.NotLeaderForPartition,
-				kerr.ReplicaNotAvailable,
-				kerr.KafkaStorageError,
-				kerr.UnknownLeaderEpoch, // our meta is newer than broker we fetched from
-				kerr.OffsetNotAvailable: // fetched from out of sync replica or a behind in-sync one (KIP-392: case 1 and case 2)
-
-				numErrsStripped++
+				if kerr.IsRetriable(fp.Err) {
+					// UnknownLeaderEpoch: our meta is newer than the broker we fetched from
+					// OffsetNotAvailable: fetched from out of sync replica or a behind in-sync one (KIP-392 case 1 and case 2)
+					// UnknownTopicID: kafka has not synced the state on all brokers
+					// And other standard retryable errors.
+					numErrsStripped++
+				} else {
+					// - bad auth
+					// - unsupported compression
+					// - unsupported message version
+					// - unknown error
+					// - or, no error
+					keep = true
+				}
 
 			case kerr.OffsetOutOfRange:
 				// If we are out of range, we reset to what we can.

@@ -7,6 +7,8 @@ import (
 )
 
 func TestIssue325(t *testing.T) {
+	t.Parallel()
+
 	topic, cleanup := tmpTopic(t)
 	defer cleanup()
 
@@ -28,6 +30,8 @@ func TestIssue325(t *testing.T) {
 }
 
 func TestIssue337(t *testing.T) {
+	t.Parallel()
+
 	topic, cleanup := tmpTopicPartitions(t, 2)
 	defer cleanup()
 
@@ -49,21 +53,30 @@ func TestIssue337(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
+	var recs []*Record
+out:
 	for {
 		fs := cl.PollFetches(ctx)
-		if err := fs.Err0(); err == context.DeadlineExceeded {
-			break
+		switch err := fs.Err0(); err {
+		default:
+			t.Fatalf("unexpected error: %v", err)
+		case context.DeadlineExceeded:
+			break out
+		case nil:
 		}
-		recs := fs.Records()
-		if len(recs) != 1 {
-			t.Fatalf("incorrect number of records, saw: %v", len(recs))
-		} else if string(recs[0].Value) != "foo" {
-			t.Fatalf("wrong value, got: %s", recs[0].Value)
-		}
+		recs = append(recs, fs.Records()...)
+	}
+	if len(recs) != 1 {
+		t.Fatalf("incorrect number of records, saw: %v", len(recs))
+	}
+	if string(recs[0].Value) != "foo" {
+		t.Fatalf("wrong value, got: %s", recs[0].Value)
 	}
 }
 
 func TestDirectPartitionPurge(t *testing.T) {
+	t.Parallel()
+
 	topic, cleanup := tmpTopicPartitions(t, 2)
 	defer cleanup()
 
@@ -84,7 +97,7 @@ func TestDirectPartitionPurge(t *testing.T) {
 	}
 	cl.PurgeTopicsFromClient(topic)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	fs := cl.PollFetches(ctx)
 	cancel()
 	if err := fs.Err0(); err != context.DeadlineExceeded {
@@ -92,7 +105,7 @@ func TestDirectPartitionPurge(t *testing.T) {
 	}
 
 	cl.AddConsumeTopics(topic)
-	ctx, cancel = context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel = context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	exp := map[string]bool{
