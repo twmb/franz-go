@@ -559,9 +559,10 @@ func (cl *Client) reapConnectionsLoop() {
 
 func (cl *Client) reapConnections(idleTimeout time.Duration) (total int) {
 	cl.brokersMu.Lock()
-	brokers := make([]*broker, 0, len(cl.brokers)+len(cl.seeds))
+	seeds := cl.loadSeeds()
+	brokers := make([]*broker, 0, len(cl.brokers)+len(seeds))
 	brokers = append(brokers, cl.brokers...)
-	brokers = append(brokers, cl.seeds...)
+	brokers = append(brokers, seeds...)
 	cl.brokersMu.Unlock()
 
 	for _, broker := range brokers {
