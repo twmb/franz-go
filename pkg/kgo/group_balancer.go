@@ -472,10 +472,11 @@ func (g *groupConsumer) balanceGroup(proto string, members []kmsg.JoinGroupRespo
 }
 
 // helper func; range and roundrobin use v0
-func memberMetadataV0(interests []string) []byte {
+func memberMetadataV0(interests []string, generation int32) []byte {
 	meta := kmsg.NewConsumerMemberMetadata()
 	meta.Version = 0
 	meta.Topics = interests // input interests are already sorted
+	meta.Generation = generation
 	return meta.AppendTo(nil)
 }
 
@@ -507,8 +508,8 @@ type roundRobinBalancer struct{}
 
 func (*roundRobinBalancer) ProtocolName() string { return "roundrobin" }
 func (*roundRobinBalancer) IsCooperative() bool  { return false }
-func (*roundRobinBalancer) JoinGroupMetadata(interests []string, _ map[string][]int32, _ int32) []byte {
-	return memberMetadataV0(interests)
+func (*roundRobinBalancer) JoinGroupMetadata(interests []string, _ map[string][]int32, generation int32) []byte {
+	return memberMetadataV0(interests, generation)
 }
 
 func (*roundRobinBalancer) ParseSyncAssignment(assignment []byte) (map[string][]int32, error) {
@@ -591,8 +592,8 @@ type rangeBalancer struct{}
 
 func (*rangeBalancer) ProtocolName() string { return "range" }
 func (*rangeBalancer) IsCooperative() bool  { return false }
-func (*rangeBalancer) JoinGroupMetadata(interests []string, _ map[string][]int32, _ int32) []byte {
-	return memberMetadataV0(interests)
+func (*rangeBalancer) JoinGroupMetadata(interests []string, _ map[string][]int32, generation int32) []byte {
+	return memberMetadataV0(interests, generation)
 }
 
 func (*rangeBalancer) ParseSyncAssignment(assignment []byte) (map[string][]int32, error) {
@@ -723,6 +724,7 @@ func (s *stickyBalancer) JoinGroupMetadata(interests []string, currentAssignment
 	meta := kmsg.NewConsumerMemberMetadata()
 	meta.Version = 0
 	meta.Topics = interests
+	meta.Generation = generation
 	if s.cooperative {
 		meta.Version = 1
 	}
@@ -767,9 +769,12 @@ func (s *stickyBalancer) Balance(b *ConsumerBalancer, topics map[string]int32) I
 	stickyMembers := make([]sticky.GroupMember, 0, len(b.Members()))
 	b.EachMember(func(member *kmsg.JoinGroupResponseMember, meta *kmsg.ConsumerMemberMetadata) {
 		stickyMembers = append(stickyMembers, sticky.GroupMember{
-			ID:       member.MemberID,
-			Topics:   meta.Topics,
-			UserData: meta.UserData,
+			ID:          member.MemberID,
+			Topics:      meta.Topics,
+			UserData:    meta.UserData,
+			Owned:       meta.OwnedPartitions,
+			Generation:  meta.Generation,
+			Cooperative: s.cooperative,
 		})
 	})
 

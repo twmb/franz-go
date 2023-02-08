@@ -22,9 +22,12 @@ import (
 
 // GroupMember is a Kafka group member.
 type GroupMember struct {
-	ID       string
-	Topics   []string
-	UserData []byte
+	ID          string
+	Topics      []string
+	UserData    []byte
+	Owned       []kmsg.ConsumerMemberMetadataOwnedPartition
+	Generation  int32
+	Cooperative bool
 }
 
 // Plan is the plan this package came up with (member => topic => partitions).
@@ -300,7 +303,24 @@ func (b *balancer) parseMemberMetadata() {
 
 	for _, member := range b.members {
 		resetSticky(&s)
-		memberPlan, gen = deserializeUserData(&s, member.UserData, memberPlan[:0])
+		// KAFKA-13715 / KIP-792: cooperative-sticky now includes a
+		// generation directly with the currently-owned partitions, and
+		// we can avoid deserializing UserData. This guards against
+		// some zombie issues (see KIP).
+		//
+		// The eager (sticky) balancer revokes all partitions before
+		// rejoining, so we cannot use Owned.
+		if member.Cooperative && member.Generation >= 0 {
+			memberPlan = memberPlan[:0]
+			for _, t := range member.Owned {
+				for _, p := range t.Partitions {
+					memberPlan = append(memberPlan, topicPartition{t.Topic, p})
+				}
+			}
+			gen = uint32(member.Generation)
+		} else {
+			memberPlan, gen = deserializeUserData(&s, member.UserData, memberPlan[:0])
+		}
 		gen |= highBit
 		memberNum := b.memberNums[member.ID]
 		for _, topicPartition := range memberPlan {
