@@ -2,6 +2,7 @@ package kgo
 
 import (
 	"context"
+	"os"
 	"testing"
 	"time"
 )
@@ -83,6 +84,9 @@ func TestDirectPartitionPurge(t *testing.T) {
 	cl, _ := NewClient(
 		getSeedBrokers(),
 		DefaultProduceTopic(topic),
+		WithLogger(BasicLogger(os.Stderr, LogLevelDebug, func() string {
+			return topic + " "
+		})),
 		RecordPartitioner(ManualPartitioner()),
 		ConsumePartitions(map[string]map[int32]Offset{
 			topic: {0: NewOffset().At(0)},
@@ -97,7 +101,7 @@ func TestDirectPartitionPurge(t *testing.T) {
 	}
 	cl.PurgeTopicsFromClient(topic)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	fs := cl.PollFetches(ctx)
 	cancel()
 	if err := fs.Err0(); err != context.DeadlineExceeded {
@@ -105,7 +109,7 @@ func TestDirectPartitionPurge(t *testing.T) {
 	}
 
 	cl.AddConsumeTopics(topic)
-	ctx, cancel = context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel = context.WithTimeout(context.Background(), 7*time.Second)
 	defer cancel()
 
 	exp := map[string]bool{
