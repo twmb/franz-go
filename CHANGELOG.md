@@ -1,3 +1,26 @@
+v1.11.7
+===
+
+The integration test introduced in v1.11.6 was frequently failing in CI. After
+some investigation, the panic is caused from `PurgeTopicsFromClient` _while_ a
+load of offsets was happening (i.e. consuming was being initialized). That
+race is specifically easily triggered in the integration test.
+
+This patch also relaxes the error stripping while consuming. While consuming,
+retryable errors are stripped. The errors that were stripped was a small
+specific set that was originally taken from Sarama (nearly 4yr ago). Kafka 3.4
+returns a new retryable error frequently if consuming against a topic
+immediately after the topic is created. This patch changes the error set to
+just strip all retryable errors, since the kerr package already indicates which
+errors are retryable. This is more compatible against the broker returning
+errors that are retryable.
+
+This is the last commit in the v1.11 series -- immediately after tagging this,
+I will be working on v1.12 which will officially test against Kafka 3.4.
+
+- [`17567b0..78a12c3`](https://github.com/twmb/franz-go/compare/17567b0..78a12c3) **bugfix**consumer: fix potential panic when calling PurgeTopicsFromClient
+- [`17567b0`](https://github.com/twmb/franz-go/commit/17567b0) kgo: always strip retryable errors when consuming
+
 v1.11.6
 ===
 
