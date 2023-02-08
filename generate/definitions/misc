@@ -367,7 +367,7 @@ StickyMemberMetadata => not top level, no encoding
 // ConsumerMemberMetadata is the metadata that is usually sent with a join group
 // request with the "consumer" protocol (normal, non-connect consumers).
 ConsumerMemberMetadata => not top level, with version field
-  // Version is either version 0 or version 1.
+  // Version is 0, 1, or 2.
   Version: int16
   // Topics is the list of topics in the group that this member is interested
   // in consuming.
@@ -380,12 +380,13 @@ ConsumerMemberMetadata => not top level, with version field
   OwnedPartitions: [=>] // v1+
     Topic: string
     Partitions: [int32]
+  Generation: int32(-1) // v2+
 
 // ConsumerMemberAssignment is the assignment data that is usually sent with a
 // sync group request with the "consumer" protocol (normal, non-connect
 // consumers).
 ConsumerMemberAssignment => not top level, with version field
-  // Verson is currently version 0.
+  // Verson is 0, 1, or 2.
   Version: int16
   // Topics contains topics in the assignment.
   Topics: [=>]
