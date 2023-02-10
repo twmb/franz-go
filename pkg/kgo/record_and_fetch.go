@@ -177,7 +177,7 @@ func (r *Record) AppendFormat(b []byte, layout string) ([]byte, error) {
 
 // StringRecord returns a Record with the Value field set to the input value
 // string. For producing, this function is useful in tandem with the
-// client-level DefailtProduceTopic option.
+// client-level DefaultProduceTopic option.
 //
 // This function uses the 'unsafe' package to avoid copying value into a slice.
 //
@@ -196,7 +196,7 @@ func StringRecord(value string) *Record {
 
 // KeyStringRecord returns a Record with the Key and Value fields set to the
 // input key and value strings. For producing, this function is useful in
-// tandem with the client-level DefailtProduceTopic option.
+// tandem with the client-level DefaultProduceTopic option.
 //
 // This function uses the 'unsafe' package to avoid copying value into a slice.
 //
@@ -216,14 +216,14 @@ func KeyStringRecord(key, value string) *Record {
 
 // SliceRecord returns a Record with the Value field set to the input value
 // slice. For producing, this function is useful in tandem with the
-// client-level DefailtProduceTopic option.
+// client-level DefaultProduceTopic option.
 func SliceRecord(value []byte) *Record {
 	return &Record{Value: value}
 }
 
 // KeySliceRecord returns a Record with the Key and Value fields set to the
 // input key and value slices. For producing, this function is useful in
-// tandem with the client-level DefailtProduceTopic option.
+// tandem with the client-level DefaultProduceTopic option.
 func KeySliceRecord(key, value []byte) *Record {
 	return &Record{Key: key, Value: value}
 }
