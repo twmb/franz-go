@@ -15,6 +15,7 @@ func TestIssue325(t *testing.T) {
 	cl, _ := NewClient(
 		getSeedBrokers(),
 		DefaultProduceTopic(topic),
+		UnknownTopicRetries(-1),
 	)
 	if err := cl.ProduceSync(context.Background(), StringRecord("foo")).FirstErr(); err != nil {
 		t.Fatal(err)
@@ -39,6 +40,7 @@ func TestIssue337(t *testing.T) {
 		getSeedBrokers(),
 		DefaultProduceTopic(topic),
 		RecordPartitioner(ManualPartitioner()),
+		UnknownTopicRetries(-1),
 		ConsumePartitions(map[string]map[int32]Offset{
 			topic: {0: NewOffset().At(0)},
 		}),
@@ -84,6 +86,7 @@ func TestDirectPartitionPurge(t *testing.T) {
 		getSeedBrokers(),
 		DefaultProduceTopic(topic),
 		RecordPartitioner(ManualPartitioner()),
+		UnknownTopicRetries(-1),
 		ConsumePartitions(map[string]map[int32]Offset{
 			topic: {0: NewOffset().At(0)},
 		}),
