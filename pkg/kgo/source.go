@@ -854,6 +854,14 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 					keep = true
 				}
 
+			case kerr.UnknownTopicID:
+				// We need to keep UnknownTopicID even though it is
+				// retryable, because encountering this error means
+				// the topic has been recreated and we will never
+				// consume the topic again anymore. This is an error
+				// worth bubbling up.
+				keep = true
+
 			case kerr.OffsetOutOfRange:
 				// If we are out of range, we reset to what we can.
 				// With Kafka >= 2.1, we should only get offset out
@@ -998,6 +1006,14 @@ func (o *cursorOffsetNext) processRespPartition(br *broker, rp *kmsg.FetchRespon
 			}
 			if length := int32(len(in[12:length])); length != *lengthField {
 				fp.Err = fmt.Errorf("encoded length %d does not match read length %d", *lengthField, length)
+				return false
+			}
+			// We have already validated that the slice is at least
+			// 17 bytes, but our CRC may be later (i.e. RecordBatch
+			// starts at byte 21). Ensure there is at least space
+			// for a CRC.
+			if len(in) < crcAt {
+				fp.Err = fmt.Errorf("length %d is too short to allow for a crc", len(in))
 				return false
 			}
 			if crcCalc := int32(crc32.Checksum(in[crcAt:length], crcTable)); crcCalc != *crcField {
