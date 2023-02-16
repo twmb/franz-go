@@ -1008,6 +1008,14 @@ func (o *cursorOffsetNext) processRespPartition(br *broker, rp *kmsg.FetchRespon
 				fp.Err = fmt.Errorf("encoded length %d does not match read length %d", *lengthField, length)
 				return false
 			}
+			// We have already validated that the slice is at least
+			// 17 bytes, but our CRC may be later (i.e. RecordBatch
+			// starts at byte 21). Ensure there is at least space
+			// for a CRC.
+			if len(in) < crcAt {
+				fp.Err = fmt.Errorf("length %d is too short to allow for a crc", len(in))
+				return false
+			}
 			if crcCalc := int32(crc32.Checksum(in[crcAt:length], crcTable)); crcCalc != *crcField {
 				fp.Err = fmt.Errorf("encoded crc %x does not match calculated crc %x", *crcField, crcCalc)
 				return false
