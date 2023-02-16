@@ -15,7 +15,7 @@ This library attempts to provide an intuitive API while interacting with Kafka t
 
 ## Features
 
-- Feature complete client (Kafka >= 0.8.0 through v3.2+)
+- Feature complete client (Kafka >= 0.8.0 through v3.4+)
 - Full Exactly-Once-Semantics (EOS)
 - Idempotent & transactional producers
 - Simple (legacy) consumer
@@ -79,8 +79,8 @@ As an example, your require section in go.mod may look like this:
 
 ```
 require (
-	github.com/twmb/franz-go v1.7.0
-	github.com/twmb/franz-go/pkg/kmsg v1.1.0
+	github.com/twmb/franz-go v1.12.0
+	github.com/twmb/franz-go/pkg/kmsg v1.4.0
 )
 ```
 

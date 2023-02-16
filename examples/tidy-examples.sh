@@ -10,6 +10,6 @@ do
     sumdir=$(dirname "$sumfile")
     cd "$sumdir"
     echo "$sumdir"
-    go get -u ./...; go mod tidy -go=1.18
+    go get -u ./...; go mod tidy -go=1.20
     cd -    
 done
