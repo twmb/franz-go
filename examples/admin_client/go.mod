@@ -1,6 +1,6 @@
 module admin_client
 
-go 1.19
+go 1.20
 
 require (
 	github.com/twmb/franz-go v1.10.4
@@ -13,7 +13,3 @@ require (
 	github.com/twmb/franz-go/pkg/kmsg v1.2.0 // indirect
 	golang.org/x/crypto v0.3.0 // indirect
 )
-
-replace github.com/twmb/franz-go => ../..
-
-replace github.com/twmb/franz-go/pkg/kadm => ../../pkg/kadm
