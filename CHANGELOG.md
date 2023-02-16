@@ -1,3 +1,18 @@
+v1.12.1
+===
+
+This patch adds back the pre-v1.11.7 behavior of returning `UNKNOWN_TOPIC_ID`
+when consuming. Patch v1.11.7 explicitly stripped this error because it was
+found during testing that Kafka 3.4 now returns the error occasionally when
+immediately consuming from a new topic (i.e. in tests), and the error is
+explicitly marked as retryable within the Kafka source code. However, with
+topic IDs, there is no way for a client to recover if the topic has been
+deleted and recreated. By returning the error, end users can notified that
+their client is in a fatal state and they should restart. In the future, I will
+add an option to consume recreated topics.
+
+- [`efe1cdb`](https://github.com/twmb/franz-go/commit/efe1cdb) consumer: return UnknownTopicID even though it is retryable
+
 v1.12.0
 ===
 
