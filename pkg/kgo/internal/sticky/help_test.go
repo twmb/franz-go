@@ -145,8 +145,7 @@ func getStickiness(member string, memberPlan map[string][]int32, input []GroupMe
 	var priorPlan []topicPartition
 	for _, in := range input {
 		if in.ID == member {
-			s := kmsg.NewStickyMemberMetadata()
-			priorPlan, _ = deserializeUserData(&s, in.UserData, nil)
+			priorPlan, _ = deserializeUserData(in.UserData, nil)
 			break
 		}
 	}

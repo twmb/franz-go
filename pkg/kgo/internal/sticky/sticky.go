@@ -9,6 +9,7 @@ import (
 	"math"
 	"sort"
 
+	"github.com/twmb/franz-go/pkg/kbin"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
@@ -321,12 +322,10 @@ func (b *balancer) parseMemberMetadata() {
 	partitionConsumersByGeneration := b.partitionConsumersByGenerationSlice()
 
 	const highBit uint32 = 1 << 31
-	s := kmsg.NewStickyMemberMetadata()
 	var memberPlan []topicPartition
 	var gen uint32
 
 	for _, member := range b.members {
-		resetSticky(&s)
 		// KAFKA-13715 / KIP-792: cooperative-sticky now includes a
 		// generation directly with the currently-owned partitions, and
 		// we can avoid deserializing UserData. This guards against
@@ -343,7 +342,7 @@ func (b *balancer) parseMemberMetadata() {
 			}
 			gen = uint32(member.Generation)
 		} else {
-			memberPlan, gen = deserializeUserData(&s, member.UserData, memberPlan[:0])
+			memberPlan, gen = deserializeUserData(member.UserData, memberPlan[:0])
 		}
 		gen |= highBit
 		memberNum := b.memberNums[member.ID]
@@ -389,33 +388,33 @@ type topicPartition struct {
 	partition int32
 }
 
-func resetSticky(s *kmsg.StickyMemberMetadata) {
-	s.CurrentAssignment = s.CurrentAssignment[:0]
-}
-
 // deserializeUserData returns the topic partitions a member was consuming and
 // the join generation it was consuming from.
 //
 // If anything fails or we do not understand the userdata parsing generation,
 // we return empty defaults. The member will just be assumed to have no
 // history.
-func deserializeUserData(s *kmsg.StickyMemberMetadata, userdata []byte, base []topicPartition) (memberPlan []topicPartition, generation uint32) {
-	if err := s.UnsafeReadFrom(userdata); err != nil {
-		return nil, 0
-	}
+func deserializeUserData(userdata []byte, base []topicPartition) (memberPlan []topicPartition, generation uint32) {
 	memberPlan = base[:0]
-	// A generation of -1 is just as good of a generation as 0, so we use 0
-	// and then use the high bit to signify this generation has been set.
-	if s.Generation >= 0 {
-		generation = uint32(s.Generation)
-	}
-	for _, topicAssignment := range s.CurrentAssignment {
-		for _, partition := range topicAssignment.Partitions {
+	b := kbin.Reader{Src: userdata}
+	for numAssignments := b.ArrayLen(); numAssignments > 0; numAssignments-- {
+		topic := b.UnsafeString()
+		for numPartitions := b.ArrayLen(); numPartitions > 0; numPartitions-- {
 			memberPlan = append(memberPlan, topicPartition{
-				topicAssignment.Topic,
-				partition,
+				topic,
+				b.Int32(),
 			})
 		}
+	}
+	if len(b.Src) > 0 {
+		// A generation of -1 is just as good of a generation as 0, so we use 0
+		// and then use the high bit to signify this generation has been set.
+		if generationI32 := b.Int32(); generationI32 > 0 {
+			generation = uint32(generationI32)
+		}
+	}
+	if b.Complete() != nil {
+		memberPlan = memberPlan[:0]
 	}
 	return
 }
