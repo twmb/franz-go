@@ -388,7 +388,34 @@ func (cfg *cfg) validate() error {
 		return errors.New("invalid group partition assigned/revoked/lost functions set when a group was not specified")
 	}
 
+	processedHooks, err := processHooks(cfg.hooks)
+	if err != nil {
+		return err
+	}
+	cfg.hooks = processedHooks
+
 	return nil
+}
+
+// processHooks will inspect and recusively unpack slices of hooks stopping
+// if the instance implements any hook interface. It will return an error on
+// the first instance that implements no hook interface
+func processHooks(hooks []Hook) ([]Hook, error) {
+	var processedHooks []Hook
+	for _, hook := range hooks {
+		if implementsAnyHook(hook) {
+			processedHooks = append(processedHooks, hook)
+		} else if moreHooks, ok := hook.([]Hook); ok {
+			more, err := processHooks(moreHooks)
+			if err != nil {
+				return nil, err
+			}
+			processedHooks = append(processedHooks, more...)
+		} else {
+			return nil, errors.New("found an argument that implements no hook interfaces")
+		}
+	}
+	return processedHooks, nil
 }
 
 var reVersion = regexp.MustCompile(`^[a-zA-Z0-9](?:[a-zA-Z0-9.-]*[a-zA-Z0-9])?$`)
