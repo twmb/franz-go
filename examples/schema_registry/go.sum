@@ -24,12 +24,12 @@ github.com/stretchr/objx v0.1.0/go.mod h1:HFkY916IF+rwdDfMAkV7OtwuqBVzrE8GR6GFx+
 github.com/stretchr/testify v1.3.0/go.mod h1:M5WIy9Dh21IEIfnGCwXGc5bZfKNJtfHm1UVUgZn+9EI=
 github.com/stretchr/testify v1.7.2 h1:4jaiDzPyXQvSd7D0EjG45355tLlV3VOECpq10pLC+8s=
 github.com/stretchr/testify v1.7.2/go.mod h1:R6va5+xMeoiuVRoj+gSkQ7d3FALtqAAGI1FQKckRals=
-github.com/twmb/franz-go v1.12.0 h1:HWd7E9p/R15D0kofG5p6e3k3tWd/ewqs/IclKhpw+qc=
-github.com/twmb/franz-go v1.12.0/go.mod h1:Ofc5tSSUJKLmpRNUYSejUsAZKYAHDHywTS322KWdChQ=
+github.com/twmb/franz-go v1.12.1 h1:8lWT8q0spL40Nfw6eonJ8OoPGLvF9arvadRRmcSiu9Y=
+github.com/twmb/franz-go v1.12.1/go.mod h1:Ofc5tSSUJKLmpRNUYSejUsAZKYAHDHywTS322KWdChQ=
 github.com/twmb/franz-go/pkg/kmsg v1.4.0 h1:tbp9hxU6m8qZhQTlpGiaIJOm4BXix5lsuEZ7K00dF0s=
 github.com/twmb/franz-go/pkg/kmsg v1.4.0/go.mod h1:SxG/xJKhgPu25SamAq0rrucfp7lbzCpEXOC+vH/ELrY=
-github.com/twmb/franz-go/pkg/sr v0.0.0-20230216011916-e91d76dfbc5e h1:3EIuySjs7mcdAoQdgyJAk4XYOTpt70b6ktNjkmrmPC8=
-github.com/twmb/franz-go/pkg/sr v0.0.0-20230216011916-e91d76dfbc5e/go.mod h1:egX+kicq83hpztv3PRCXKLNO132Ol9JTAJOCRZcqUxI=
+github.com/twmb/franz-go/pkg/sr v0.0.0-20230216152245-3322f311fd83 h1:oNHmAoSUe9qOK0H42mTFLf4fd1Ml0Q2cA8frCRHMt1I=
+github.com/twmb/franz-go/pkg/sr v0.0.0-20230216152245-3322f311fd83/go.mod h1:egX+kicq83hpztv3PRCXKLNO132Ol9JTAJOCRZcqUxI=
 golang.org/x/crypto v0.0.0-20220817201139-bc19a97f63c8/go.mod h1:IxCIyHEi3zRg3s0A5j5BB6A9Jmi73HwBIUl50j+osU4=
 golang.org/x/net v0.0.0-20211112202133-69e39bad7dc2/go.mod h1:9nx3DQGgdP8bBQD5qxJ1jj9UTztislL4KSBs9R2vV5Y=
 golang.org/x/sys v0.0.0-20201119102817-f84b799fce68/go.mod h1:h1NjWce9XRLGQEsW7wpKNCjG9DtNlClVuFLEZdDNbEs=

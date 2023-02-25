@@ -2,7 +2,7 @@ module goroutine_per_partition_consuming_manual_commit
 
 go 1.20
 
-require github.com/twmb/franz-go v1.12.0
+require github.com/twmb/franz-go v1.12.1
 
 require (
 	github.com/klauspost/compress v1.15.15 // indirect

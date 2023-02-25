@@ -2,7 +2,7 @@ module segment
 
 go 1.20
 
-require github.com/segmentio/kafka-go v0.4.38
+require github.com/segmentio/kafka-go v0.4.39
 
 require (
 	github.com/klauspost/compress v1.15.15 // indirect
