@@ -530,6 +530,26 @@ func (s *source) loopFetch() {
 	}
 }
 
+func (s *source) killSessionOnClose(ctx context.Context) {
+	br, err := s.cl.brokerOrErr(nil, s.nodeID, errUnknownBroker)
+	if err != nil {
+		return
+	}
+	s.session.kill()
+	req := &fetchRequest{
+		maxWait:        1,
+		minBytes:       1,
+		maxBytes:       1,
+		maxPartBytes:   1,
+		rack:           s.cl.cfg.rack,
+		isolationLevel: s.cl.cfg.isolationLevel,
+		session:        s.session,
+	}
+	ch := make(chan struct{})
+	br.do(ctx, req, func(kmsg.Response, error) { close(ch) })
+	<-ch
+}
+
 // fetch is the main logic center of fetching messages.
 //
 // This is a long function, made much longer by winded documentation, that
@@ -1922,7 +1942,6 @@ type fetchSession struct {
 }
 
 func (s *fetchSession) kill() {
-	s.id = 0
 	s.epoch = -1
 	s.used = nil
 	s.killed = true
