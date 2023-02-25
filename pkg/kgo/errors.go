@@ -48,7 +48,7 @@ func isRetryableBrokerErr(err error) bool {
 	}
 	// EOF can be returned if a broker kills a connection unexpectedly, and
 	// we can retry that. Same for ErrClosed.
-	if isNetClosedErr(err) || errors.Is(err, io.EOF) {
+	if errors.Is(err, net.ErrClosed) || errors.Is(err, io.EOF) {
 		return true
 	}
 	// We could have a retryable producer ID failure, which then bubbled up
