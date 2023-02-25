@@ -64,12 +64,12 @@ func printRate() {
 	}
 }
 
-func die(msg string, args ...interface{}) {
+func die(msg string, args ...any) {
 	fmt.Fprintf(os.Stderr, msg+"\n", args...)
 	os.Exit(1)
 }
 
-func chk(err error, msg string, args ...interface{}) {
+func chk(err error, msg string, args ...any) {
 	if err != nil {
 		die(msg, args...)
 	}
@@ -247,8 +247,8 @@ func main() {
 
 var (
 	staticValue []byte
-	staticPool  = sync.Pool{New: func() interface{} { return kgo.SliceRecord(staticValue) }}
-	p           = sync.Pool{New: func() interface{} { return kgo.SliceRecord(make([]byte, *recordBytes)) }}
+	staticPool  = sync.Pool{New: func() any { return kgo.SliceRecord(staticValue) }}
+	p           = sync.Pool{New: func() any { return kgo.SliceRecord(make([]byte, *recordBytes)) }}
 )
 
 func newRecord(num int64) *kgo.Record {

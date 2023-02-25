@@ -13,7 +13,7 @@ import (
 
 var maxKey int
 
-func die(why string, args ...interface{}) {
+func die(why string, args ...any) {
 	fmt.Fprintf(os.Stderr, why+"\n", args...)
 	os.Exit(1)
 }
@@ -183,16 +183,16 @@ type (
 
 type Defaulter interface {
 	SetDefault(string) Type
-	GetDefault() (interface{}, bool)
-	GetTypeDefault() interface{}
+	GetDefault() (any, bool)
+	GetTypeDefault() any
 }
 
 func (e Enum) SetDefault(s string) Type {
 	e.Type = e.Type.(Defaulter).SetDefault(s)
 	return e
 }
-func (e Enum) GetDefault() (interface{}, bool) { return e.Type.(Defaulter).GetDefault() }
-func (e Enum) GetTypeDefault() interface{}     { return e.Type.(Defaulter).GetTypeDefault() }
+func (e Enum) GetDefault() (any, bool) { return e.Type.(Defaulter).GetDefault() }
+func (e Enum) GetTypeDefault() any     { return e.Type.(Defaulter).GetTypeDefault() }
 
 func (b Bool) SetDefault(s string) Type {
 	v, err := strconv.ParseBool(s)
@@ -203,8 +203,8 @@ func (b Bool) SetDefault(s string) Type {
 	b.HasDefault = true
 	return b
 }
-func (b Bool) GetDefault() (interface{}, bool) { return b.Default, b.HasDefault }
-func (Bool) GetTypeDefault() interface{}       { return false }
+func (b Bool) GetDefault() (any, bool) { return b.Default, b.HasDefault }
+func (Bool) GetTypeDefault() any       { return false }
 
 func (i Int8) SetDefault(s string) Type {
 	v, err := strconv.ParseInt(s, 0, 8)
@@ -215,8 +215,8 @@ func (i Int8) SetDefault(s string) Type {
 	i.HasDefault = true
 	return i
 }
-func (i Int8) GetDefault() (interface{}, bool) { return i.Default, i.HasDefault }
-func (Int8) GetTypeDefault() interface{}       { return 0 }
+func (i Int8) GetDefault() (any, bool) { return i.Default, i.HasDefault }
+func (Int8) GetTypeDefault() any       { return 0 }
 
 func (i Int16) SetDefault(s string) Type {
 	v, err := strconv.ParseInt(s, 0, 16)
@@ -227,8 +227,8 @@ func (i Int16) SetDefault(s string) Type {
 	i.HasDefault = true
 	return i
 }
-func (i Int16) GetDefault() (interface{}, bool) { return i.Default, i.HasDefault }
-func (Int16) GetTypeDefault() interface{}       { return 0 }
+func (i Int16) GetDefault() (any, bool) { return i.Default, i.HasDefault }
+func (Int16) GetTypeDefault() any       { return 0 }
 
 func (u Uint16) SetDefault(s string) Type {
 	v, err := strconv.ParseUint(s, 0, 16)
@@ -239,8 +239,8 @@ func (u Uint16) SetDefault(s string) Type {
 	u.HasDefault = true
 	return u
 }
-func (u Uint16) GetDefault() (interface{}, bool) { return u.Default, u.HasDefault }
-func (Uint16) GetTypeDefault() interface{}       { return 0 }
+func (u Uint16) GetDefault() (any, bool) { return u.Default, u.HasDefault }
+func (Uint16) GetTypeDefault() any       { return 0 }
 
 func (i Int32) SetDefault(s string) Type {
 	v, err := strconv.ParseInt(s, 0, 32)
@@ -251,8 +251,8 @@ func (i Int32) SetDefault(s string) Type {
 	i.HasDefault = true
 	return i
 }
-func (i Int32) GetDefault() (interface{}, bool) { return i.Default, i.HasDefault }
-func (Int32) GetTypeDefault() interface{}       { return 0 }
+func (i Int32) GetDefault() (any, bool) { return i.Default, i.HasDefault }
+func (Int32) GetTypeDefault() any       { return 0 }
 
 func (t Timeout) SetDefault(s string) Type {
 	t.Int32 = t.Int32.SetDefault(s).(Int32)
@@ -268,8 +268,8 @@ func (i Int64) SetDefault(s string) Type {
 	i.HasDefault = true
 	return i
 }
-func (i Int64) GetDefault() (interface{}, bool) { return i.Default, i.HasDefault }
-func (Int64) GetTypeDefault() interface{}       { return 0 }
+func (i Int64) GetDefault() (any, bool) { return i.Default, i.HasDefault }
+func (Int64) GetTypeDefault() any       { return 0 }
 
 func (f Float64) SetDefault(s string) Type {
 	v, err := strconv.ParseFloat(s, 64)
@@ -280,8 +280,8 @@ func (f Float64) SetDefault(s string) Type {
 	f.HasDefault = true
 	return f
 }
-func (f Float64) GetDefault() (interface{}, bool) { return f.Default, f.HasDefault }
-func (Float64) GetTypeDefault() interface{}       { return 0 }
+func (f Float64) GetDefault() (any, bool) { return f.Default, f.HasDefault }
+func (Float64) GetTypeDefault() any       { return 0 }
 
 func (u Uint32) SetDefault(s string) Type {
 	v, err := strconv.ParseUint(s, 10, 32)
@@ -292,8 +292,8 @@ func (u Uint32) SetDefault(s string) Type {
 	u.HasDefault = true
 	return u
 }
-func (u Uint32) GetDefault() (interface{}, bool) { return u.Default, u.HasDefault }
-func (Uint32) GetTypeDefault() interface{}       { return 0 }
+func (u Uint32) GetDefault() (any, bool) { return u.Default, u.HasDefault }
+func (Uint32) GetTypeDefault() any       { return 0 }
 
 func (i Varint) SetDefault(s string) Type {
 	v, err := strconv.ParseInt(s, 0, 32)
@@ -304,8 +304,8 @@ func (i Varint) SetDefault(s string) Type {
 	i.HasDefault = true
 	return i
 }
-func (i Varint) GetDefault() (interface{}, bool) { return i.Default, i.HasDefault }
-func (Varint) GetTypeDefault() interface{}       { return 0 }
+func (i Varint) GetDefault() (any, bool) { return i.Default, i.HasDefault }
+func (Varint) GetTypeDefault() any       { return 0 }
 
 func (i Varlong) SetDefault(s string) Type {
 	v, err := strconv.ParseInt(s, 0, 64)
@@ -316,8 +316,8 @@ func (i Varlong) SetDefault(s string) Type {
 	i.HasDefault = true
 	return i
 }
-func (i Varlong) GetDefault() (interface{}, bool) { return i.Default, i.HasDefault }
-func (Varlong) GetTypeDefault() interface{}       { return 0 }
+func (i Varlong) GetDefault() (any, bool) { return i.Default, i.HasDefault }
+func (Varlong) GetTypeDefault() any       { return 0 }
 
 func (s NullableString) SetDefault(v string) Type {
 	if v != "null" {
@@ -327,10 +327,10 @@ func (s NullableString) SetDefault(v string) Type {
 	return s
 }
 
-func (s NullableString) GetDefault() (interface{}, bool) {
+func (s NullableString) GetDefault() (any, bool) {
 	return "nil", s.HasDefault // we return the string so it is rendered correctly
 }
-func (NullableString) GetTypeDefault() interface{} { return "nil" }
+func (NullableString) GetTypeDefault() any { return "nil" }
 
 func (b NullableBytes) SetDefault(v string) Type {
 	if v != "null" {
@@ -340,10 +340,10 @@ func (b NullableBytes) SetDefault(v string) Type {
 	return b
 }
 
-func (b NullableBytes) GetDefault() (interface{}, bool) {
+func (b NullableBytes) GetDefault() (any, bool) {
 	return "nil", b.HasDefault
 }
-func (NullableBytes) GetTypeDefault() interface{} { return "nil" }
+func (NullableBytes) GetTypeDefault() any { return "nil" }
 
 func (a Array) SetDefault(v string) Type {
 	if v != "null" {
@@ -353,21 +353,21 @@ func (a Array) SetDefault(v string) Type {
 	return a
 }
 
-func (a Array) GetDefault() (interface{}, bool) {
+func (a Array) GetDefault() (any, bool) {
 	return "nil", a.HasDefault
 }
-func (Array) GetTypeDefault() interface{} { return "nil" }
+func (Array) GetTypeDefault() any { return "nil" }
 
 func (s Struct) SetDefault(string) Type {
 	die("cannot set default on a struct; we already have a default")
 	return s
 }
 
-func (Struct) GetDefault() (interface{}, bool) {
+func (Struct) GetDefault() (any, bool) {
 	return "", false // no GetDefault
 }
 
-func (s Struct) GetTypeDefault() interface{} {
+func (s Struct) GetTypeDefault() any {
 	if s.Nullable {
 		return "nil"
 	}
@@ -387,7 +387,7 @@ func (b NullableBytes) AsFromFlexible() Type  { dup := b; dup.FromFlexible = tru
 func (a Array) AsFromFlexible() Type          { dup := a; dup.FromFlexible = true; return dup }
 func (s Struct) AsFromFlexible() Type         { dup := s; dup.FromFlexible = true; return dup }
 
-func (l *LineWriter) Write(line string, args ...interface{}) {
+func (l *LineWriter) Write(line string, args ...any) {
 	fmt.Fprintf(l.buf, line, args...)
 	l.buf.WriteByte('\n')
 	l.line++

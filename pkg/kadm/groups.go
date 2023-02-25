@@ -17,7 +17,7 @@ import (
 //	*kmsg.ConsumerMemberMetadata, if the group's ProtocolType is "consumer"
 //	*kmsg.ConnectMemberMetadata, if the group's ProtocolType is "connect"
 //	[]byte, if the group's ProtocolType is unknown
-type GroupMemberMetadata struct{ i interface{} }
+type GroupMemberMetadata struct{ i any }
 
 // AsConsumer returns the metadata as a ConsumerMemberMetadata if possible.
 func (m GroupMemberMetadata) AsConsumer() (*kmsg.ConsumerMemberMetadata, bool) {
@@ -44,7 +44,7 @@ func (m GroupMemberMetadata) Raw() ([]byte, bool) {
 //	*kmsg.ConsumerMemberAssignment, if the group's ProtocolType is "consumer"
 //	*kmsg.ConnectMemberAssignment, if the group's ProtocolType is "connect"
 //	[]byte, if the group's ProtocolType is unknown
-type GroupMemberAssignment struct{ i interface{} }
+type GroupMemberAssignment struct{ i any }
 
 // AsConsumer returns the assignment as a ConsumerMemberAssignment if possible.
 func (m GroupMemberAssignment) AsConsumer() (*kmsg.ConsumerMemberAssignment, bool) {
@@ -289,7 +289,7 @@ func (cl *Client) DescribeGroups(ctx context.Context, groups ...string) (Describ
 					ClientHost: rm.ClientHost,
 				}
 
-				var mi, ai interface{}
+				var mi, ai any
 				switch g.ProtocolType {
 				case "consumer":
 					m := new(kmsg.ConsumerMemberMetadata)

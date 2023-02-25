@@ -216,8 +216,8 @@ func (p *pathHeap) Less(i, j int) bool {
 				l.node < r.node))
 }
 
-func (p *pathHeap) Push(x interface{}) { *p = append(*p, x.(*pathScore)) }
-func (p *pathHeap) Pop() interface{} {
+func (p *pathHeap) Push(x any) { *p = append(*p, x.(*pathScore)) }
+func (p *pathHeap) Pop() any {
 	h := *p
 	l := len(h)
 	r := h[l-1]

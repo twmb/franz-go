@@ -23,7 +23,7 @@ import (
 // All hook interfaces in this package have Hook in the name. Hooks must be
 // safe for concurrent use. It is expected that hooks are fast; if a hook needs
 // to take time, then copy what you need and ensure the hook is async.
-type Hook interface{}
+type Hook any
 
 type hooks []Hook
 

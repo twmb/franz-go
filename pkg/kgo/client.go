@@ -2115,7 +2115,7 @@ type unknownErrShards struct {
 // err stores a new failing partition with its failing error.
 //
 // partition's type is equal to the arg1 type of l.fn.
-func (l *unknownErrShards) err(err error, topic string, partition interface{}) {
+func (l *unknownErrShards) err(err error, topic string, partition any) {
 	if l.mapped == nil {
 		l.mapped = make(map[error]map[string]reflect.Value)
 	}
@@ -2137,7 +2137,7 @@ func (l *unknownErrShards) err(err error, topic string, partition interface{}) {
 // error.
 //
 // partitions is a slice where each element has type of arg1 of l.fn.
-func (l *unknownErrShards) errs(err error, topic string, partitions interface{}) {
+func (l *unknownErrShards) errs(err error, topic string, partitions any) {
 	v := reflect.ValueOf(partitions)
 	for i := 0; i < v.Len(); i++ {
 		l.err(err, topic, v.Index(i).Interface())
@@ -2150,7 +2150,7 @@ func (l *unknownErrShards) errs(err error, topic string, partitions interface{})
 // second is a function that adds a topic and its partitions to that request.
 //
 // Thus, fn is of type func() (kmsg.Request, func(string, []P))
-func (l *unknownErrShards) collect(mkreq, mergeParts interface{}) []issueShard {
+func (l *unknownErrShards) collect(mkreq, mergeParts any) []issueShard {
 	if len(l.mapped) == 0 {
 		return nil
 	}

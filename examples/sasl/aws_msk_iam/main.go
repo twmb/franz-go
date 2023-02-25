@@ -21,7 +21,7 @@ import (
 
 var seedBrokers = flag.String("brokers", "localhost:9092", "comma delimited list of seed brokers")
 
-func die(msg string, args ...interface{}) {
+func die(msg string, args ...any) {
 	fmt.Printf(msg+"\n", args...)
 	os.Exit(1)
 }

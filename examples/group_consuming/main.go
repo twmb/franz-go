@@ -19,7 +19,7 @@ var (
 	logger      = flag.Bool("logger", false, "if true, enable an info level logger")
 )
 
-func die(msg string, args ...interface{}) {
+func die(msg string, args ...any) {
 	fmt.Fprintf(os.Stderr, msg, args...)
 	os.Exit(1)
 }
