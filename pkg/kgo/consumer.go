@@ -198,6 +198,9 @@ type consumer struct {
 	pollWaitMu    sync.Mutex
 	pollWaitC     *sync.Cond
 	pollWaitState uint64 // 0 == nothing, low 32 bits: # pollers, high 32: # waiting rebalances
+
+	unknownTopicReloadingMu sync.Mutex
+	unknownTopicReloading   map[string]struct{}
 }
 
 func (c *consumer) loadPaused() pausedTopics   { return c.paused.Load().(pausedTopics) }
@@ -668,6 +671,30 @@ func (cl *Client) setOffsets(setOffsets map[string]map[int32]EpochOffset, log bo
 	} else {
 		c.assignPartitions(assigns, assignSetMatching, tps, "")
 	}
+}
+
+func (c *consumer) reloadUnknownTopicID(topic string) {
+	c.unknownTopicReloadingMu.Lock()
+	defer c.unknownTopicReloadingMu.Unlock()
+	if c.unknownTopicReloading == nil {
+		c.unknownTopicReloading = make(map[string]struct{})
+	}
+	if _, exists := c.unknownTopicReloading[topic]; exists {
+		return
+	}
+	c.unknownTopicReloading[topic] = struct{}{}
+	go func() {
+		c.purgeTopics([]string{topic})
+		// At this point, the topic cannot be returned anymore from
+		// fetches. Delete our guard.
+		c.unknownTopicReloadingMu.Lock()
+		delete(c.unknownTopicReloading, topic)
+		if len(c.unknownTopicReloading) == 0 {
+			c.unknownTopicReloading = nil
+		}
+		c.unknownTopicReloadingMu.Unlock()
+		c.cl.AddConsumeTopics(topic)
+	}()
 }
 
 // This is guaranteed to be called in a blocking metadata fn, which ensures

@@ -662,13 +662,6 @@ func (cl *Client) mergeTopicPartitions(
 	//
 	// Both of these scenarios should be rare to non-existent, and we do
 	// nothing if we encounter them.
-	//
-	// NOTE: we previously removed deleted partitions, but this was
-	// removed. Deleting partitions really should not happen, and not
-	// doing so simplifies the code.
-	//
-	// See commit 385cecb928e9ec3d9610c7beb223fcd1ed303fd0 for the last
-	// commit that contained deleting partitions.
 
 	// Migrating topicPartitions is a little tricky because we have to
 	// worry about underlying pointers that may currently be loaded.
@@ -676,17 +669,30 @@ func (cl *Client) mergeTopicPartitions(
 		exists := part < len(r.partitions)
 		if !exists {
 			// This is the "deleted" case; see the comment above.
-			// We will just keep our old information.
-			r.partitions = append(r.partitions, oldTP)
-			if oldTP.loadErr == nil {
-				r.writablePartitions = append(r.writablePartitions, oldTP)
-			}
+			//
+			// We need to keep the partition around. For producing,
+			// the partition could be loaded and a record could be
+			// added to it after we bump the load error. For
+			// consuming, the partition is part of a group or part
+			// of what was loaded for direct consuming.
+			//
+			// We only clear a partition if it is purged from the
+			// client (which can happen automatically for consumers
+			// if the user opted into ConsumeRecreatedTopics).
+			dup := *oldTP
+			newTP := &dup
+			newTP.loadErr = errMissingMetadataPartition
 
-			cl.cfg.logger.Log(LogLevelDebug, "metadata update is missing partition in topic, keeping old data",
+			r.partitions = append(r.partitions, newTP)
+
+			cl.cfg.logger.Log(LogLevelDebug, "metadata update is missing partition in topic, we are keeping the partition around for safety -- use PurgeTopicsFromClient if you wish to remove the topic",
 				"topic", topic,
 				"partition", part,
 			)
-
+			if isProduce {
+				oldTP.records.bumpRepeatedLoadErr(errMissingMetadataPartition)
+			}
+			retryWhy.add(topic, int32(part), errMissingMetadataPartition)
 			continue
 		}
 		newTP := r.partitions[part]

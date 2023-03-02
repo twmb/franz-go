@@ -712,7 +712,7 @@ func (s *source) fetch(consumerSession *consumerSession, doneFetch chan<- struct
 		s.session.reset()
 		return
 
-	case kerr.FetchSessionTopicIDError, kerr.UnknownTopicID, kerr.InconsistentTopicID:
+	case kerr.FetchSessionTopicIDError, kerr.InconsistentTopicID:
 		s.cl.cfg.logger.Log(LogLevelInfo, "topic id issues, resetting session and updating metadata", "broker", logID(s.nodeID), "err", err)
 		s.session.reset()
 		s.cl.triggerUpdateMetadataNow("topic id issues")
@@ -860,7 +860,11 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 				// the topic has been recreated and we will never
 				// consume the topic again anymore. This is an error
 				// worth bubbling up.
-				keep = true
+				if s.cl.cfg.consumeRecreatedTopics {
+					s.cl.consumer.reloadUnknownTopicID(topic)
+				} else {
+					keep = true
+				}
 
 			case kerr.OffsetOutOfRange:
 				// If we are out of range, we reset to what we can.
