@@ -41,8 +41,10 @@ func New(zl *zap.Logger, opts ...Opt) *Logger {
 				return kgo.LogLevelInfo
 			case c.Enabled(zap.WarnLevel):
 				return kgo.LogLevelWarn
+			case c.Enabled(zap.ErrorLevel):
+				return kgo.LogLevelError
 			}
-			return kgo.LogLevelError // default
+			return kgo.LogLevelNone // default
 		},
 	}
 	for _, opt := range opts {
@@ -79,8 +81,10 @@ func AtomicLevel(level zap.AtomicLevel) Opt {
 			return kgo.LogLevelInfo
 		case zap.WarnLevel:
 			return kgo.LogLevelWarn
+		case zap.ErrorLevel:
+			return kgo.LogLevelError
 		}
-		return kgo.LogLevelError
+		return kgo.LogLevelNone
 	})
 }
 
