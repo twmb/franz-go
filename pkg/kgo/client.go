@@ -468,7 +468,7 @@ func (cl *Client) broker() *broker {
 		// We now reset the anyBrokerIdx to begin ranging through
 		// discovered brokers again.
 		if len(cl.brokers) > 0 {
-			cl.anyBrokerIdx %= int32(len(cl.brokers))
+			cl.anyBrokerIdx = 0
 		}
 	}
 	return b
