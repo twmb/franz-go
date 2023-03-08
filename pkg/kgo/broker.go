@@ -1029,6 +1029,9 @@ func (cxn *brokerCxn) writeRequest(ctx context.Context, enqueuedForWritingAt tim
 	}
 	corrID = cxn.corrID
 	cxn.corrID++
+	if cxn.corrID < 0 {
+		cxn.corrID = 0
+	}
 	return
 }
 
