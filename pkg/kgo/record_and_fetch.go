@@ -236,7 +236,7 @@ type FetchPartition struct {
 	// Err is an error for this partition in the fetch.
 	//
 	// Note that if this is a fatal error, such as data loss or non
-	// retriable errors, this partition will never be fetched again.
+	// retryable errors, this partition will never be fetched again.
 	Err error
 	// HighWatermark is the current high watermark for this partition, that
 	// is, the current offset that is on all in sync replicas.
@@ -326,8 +326,8 @@ type FetchError struct {
 //
 // There are four classes of errors possible:
 //
-//  1. a normal kerr.Error; these are usually the non-retriable kerr.Errors,
-//     but theoretically a non-retriable error can be fixed at runtime (auth
+//  1. a normal kerr.Error; these are usually the non-retryable kerr.Errors,
+//     but theoretically a non-retryable error can be fixed at runtime (auth
 //     error? fix auth). It is worth restarting the client for these errors if
 //     you do not intend to fix this problem at runtime.
 //

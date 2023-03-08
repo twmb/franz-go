@@ -1603,14 +1603,14 @@ func (s *consumerSession) listOrEpoch(waiting listOrEpochLoads, immediate bool, 
 // Called within a consumer session, this function handles results from list
 // offsets or epoch loads and returns any loads that should be retried.
 //
-// To us, all errors are reloadable. We either have request level retriable
-// errors (unknown partition, etc) or non-retriable errors (auth), or we have
+// To us, all errors are reloadable. We either have request level retryable
+// errors (unknown partition, etc) or non-retryable errors (auth), or we have
 // request issuing errors (no dial, connection cut repeatedly).
 //
-// For retriable request errors, we may as well back off a little bit to allow
+// For retryable request errors, we may as well back off a little bit to allow
 // Kafka to harmonize if the topic exists / etc.
 //
-// For non-retriable request errors, we may as well retry to both (a) allow the
+// For non-retryable request errors, we may as well retry to both (a) allow the
 // user more signals about a problem that they can maybe fix within Kafka (i.e.
 // the auth), and (b) force the user to notice errors.
 //
@@ -1676,7 +1676,7 @@ func (s *consumerSession) handleListOrEpochResults(loaded loadedOffsets) (reload
 
 		default: // from ErrorCode in a response
 			reloads.addLoad(load.topic, load.partition, loaded.loadType, load.request)
-			if !kerr.IsRetriable(load.err) && !isRetriableBrokerErr(load.err) && !isDialErr(load.err) { // non-retriable response error; signal such in a response
+			if !kerr.IsRetriable(load.err) && !isRetryableBrokerErr(load.err) && !isDialErr(load.err) { // non-retryable response error; signal such in a response
 				s.c.addFakeReadyForDraining(load.topic, load.partition, load.err)
 			}
 
@@ -1758,7 +1758,7 @@ type loadedOffset struct {
 	leaderEpoch int32
 
 	// Any error encountered for loading this partition, or for epoch
-	// loading, potentially ErrDataLoss. If this error is not retriable, we
+	// loading, potentially ErrDataLoss. If this error is not retryable, we
 	// avoid reloading the offset and instead inject a fake partition for
 	// PollFetches containing this error.
 	err error

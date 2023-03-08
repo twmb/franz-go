@@ -603,7 +603,7 @@ func (cl *Client) fetchTopicMetadata(all bool, reqTopics []string) (map[string]*
 // mergeTopicPartitions merges a new topicPartition into an old and returns
 // whether the metadata update that caused this merge needs to be retried.
 //
-// Retries are necessary if the topic or any partition has a retriable error.
+// Retries are necessary if the topic or any partition has a retryable error.
 func (cl *Client) mergeTopicPartitions(
 	topic string,
 	l *topicPartitions,
@@ -693,7 +693,7 @@ func (cl *Client) mergeTopicPartitions(
 
 		// Like above for the entire topic, an individual partittion
 		// can have a load error. Unlike for the topic, individual
-		// partition errors are always retriable.
+		// partition errors are always retryable.
 		//
 		// If the load errored, we keep all old information minus the
 		// load error itself (the new load will have no information).

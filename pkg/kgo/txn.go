@@ -218,7 +218,7 @@ func (s *GroupTransactSession) failed() bool {
 // or aborts depending on `commit`.
 //
 // This returns whether the transaction committed or any error that occurred.
-// No returned error is retriable. Either the transactional ID has entered a
+// No returned error is retryable. Either the transactional ID has entered a
 // failed state, or the client retried so much that the retry limit was hit,
 // and odds are you should not continue. While a context is allowed, canceling
 // it will likely leave the client in an invalid state. Canceling should only
@@ -813,7 +813,7 @@ func (cl *Client) UnsafeAbortBufferedRecords() {
 //
 // If the producer ID has an error and you are trying to commit, this will
 // return with kerr.OperationNotAttempted. If this happened, retry
-// EndTransaction with TryAbort. Not other error is retriable, and you should
+// EndTransaction with TryAbort. Not other error is retryable, and you should
 // not retry with TryAbort.
 //
 // If records failed with UnknownProducerID and your Kafka version is at least

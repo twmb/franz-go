@@ -357,7 +357,7 @@ func (cl *Client) storePartitionsUpdate(topic string, l *topicPartitions, lv *to
 		return
 	}
 
-	// If we loaded no partitions because of a retriable error, we signal
+	// If we loaded no partitions because of a retryable error, we signal
 	// the waiting goroutine that a try happened. It is possible the
 	// goroutine is quitting and will not be draining unknownWait, so we do
 	// not require the send.

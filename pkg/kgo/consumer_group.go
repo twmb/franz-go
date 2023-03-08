@@ -1470,7 +1470,7 @@ start:
 		return ctx.Err()
 	}
 	if err != nil {
-		g.cfg.logger.Log(LogLevelError, "fetch offsets failed with non-retriable error", "group", g.cfg.group, "err", err)
+		g.cfg.logger.Log(LogLevelError, "fetch offsets failed with non-retryable error", "group", g.cfg.group, "err", err)
 		return err
 	}
 
@@ -2204,8 +2204,8 @@ func PreCommitFnContext(ctx context.Context, fn func(*kmsg.OffsetCommitRequest) 
 }
 
 // CommitRecords issues a synchronous offset commit for the offsets contained
-// within rs. Retriable errors are retried up to the configured retry limit,
-// and any unretriable error is returned.
+// within rs. Retryable errors are retried up to the configured retry limit,
+// and any unretryable error is returned.
 //
 // This function is useful as a simple way to commit offsets if you have
 // disabled autocommitting. As an alternative if you always want to commit
@@ -2257,7 +2257,7 @@ func (cl *Client) CommitRecords(ctx context.Context, rs ...*Record) error {
 	var rerr error // return error
 
 	// Our client retries an OffsetCommitRequest as necessary if the first
-	// response partition has a retriable group error (group coordinator
+	// response partition has a retryable group error (group coordinator
 	// loading, etc), so any partition error is fatal.
 	cl.CommitOffsetsSync(ctx, offsets, func(_ *Client, _ *kmsg.OffsetCommitRequest, resp *kmsg.OffsetCommitResponse, err error) {
 		if err != nil {
@@ -2328,8 +2328,8 @@ func (cl *Client) MarkCommitRecords(rs ...*Record) {
 
 // CommitUncommittedOffsets issues a synchronous offset commit for any
 // partition that has been consumed from that has uncommitted offsets.
-// Retriable errors are retried up to the configured retry limit, and any
-// unretriable error is returned.
+// Retryable errors are retried up to the configured retry limit, and any
+// unretryable error is returned.
 //
 // The recommended pattern for using this function is to have a poll / process
 // / commit loop. First PollFetches, then process every record, then call
@@ -2343,8 +2343,8 @@ func (cl *Client) CommitUncommittedOffsets(ctx context.Context) error {
 
 // CommitMarkedOffsets issues a synchronous offset commit for any
 // partition that has been consumed from that has marked offsets.
-// Retriable errors are retried up to the configured retry limit, and any
-// unretriable error is returned.
+// Retryable errors are retried up to the configured retry limit, and any
+// unretryable error is returned.
 //
 // This function is useful if you have marked offsets with MarkCommitRecords
 // when using AutoCommitMarks.
