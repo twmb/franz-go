@@ -3,6 +3,7 @@ package kfake
 import (
 	"fmt"
 	"net"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -32,6 +33,10 @@ type (
 		reqCh        chan clientReq
 		watchFetchCh chan *watchFetch
 
+		controlMu          sync.Mutex
+		control            map[int16][]controlFn
+		keepCurrentControl atomic.Bool
+
 		epoch int32
 		data  data
 		pids  pids
@@ -45,6 +50,8 @@ type (
 		ln   net.Listener
 		node int32
 	}
+
+	controlFn func(kmsg.Request) (kmsg.Response, error, bool)
 )
 
 // NewCluster returns a new mocked Kafka cluster.
@@ -176,11 +183,11 @@ func (c *Cluster) run() {
 			return
 		}
 
-		var (
-			kreq  = creq.kreq
-			kresp kmsg.Response
-			err   error
-		)
+		kreq := creq.kreq
+		kresp, err, handled := c.tryControl(kreq)
+		if handled {
+			goto afterControl
+		}
 
 		switch k := kmsg.Key(kreq.Key()); k {
 		case kmsg.Produce:
@@ -205,6 +212,7 @@ func (c *Cluster) run() {
 			err = fmt.Errorf("unahndled key %v", k)
 		}
 
+	afterControl:
 		if kresp == nil && err == nil { // produce request with no acks
 			continue
 		}
@@ -215,4 +223,91 @@ func (c *Cluster) run() {
 			return
 		}
 	}
+}
+
+// Control is a function to call on any client request the cluster handles.
+//
+// If the control function returns true, then either the response is written
+// back to the client or, if there the control function returns an error, the
+// client connection is closed. If both returns are nil, then the cluster will
+// loop continuing to read from the client and the client will likely have a
+// read timeout at some point.
+//
+// Controlling a request drops the control function from the cluster, meaning
+// that a control function can only control *one* request. To keep the control
+// function handling more requests, you can call KeepControl within your
+// control function.
+//
+// It is safe to add new control functions within a control function. Control
+// functions are not called concurrently.
+func (c *Cluster) Control(fn func(kmsg.Request) (kmsg.Response, error, bool)) {
+	c.controlMu.Lock()
+	defer c.controlMu.Unlock()
+	c.control[-1] = append(c.control[-1], fn)
+}
+
+// Control is a function to call on a specific request key that the cluster
+// handles.
+//
+// If the control function returns true, then either the response is written
+// back to the client or, if there the control function returns an error, the
+// client connection is closed. If both returns are nil, then the cluster will
+// loop continuing to read from the client and the client will likely have a
+// read timeout at some point.
+//
+// Controlling a request drops the control function from the cluster, meaning
+// that a control function can only control *one* request. To keep the control
+// function handling more requests, you can call KeepControl within your
+// control function.
+//
+// It is safe to add new control functions within a control function.
+func (c *Cluster) ControlKey(key int16, fn func(kmsg.Request) (kmsg.Response, error, bool)) {
+	c.controlMu.Lock()
+	defer c.controlMu.Unlock()
+	c.control[key] = append(c.control[key], fn)
+}
+
+// KeepControl marks the currently running control function to be kept even if
+// you handle the request and return true. This can be used to continuously
+// control requests without needing to re-add control functions manually.
+func (c *Cluster) KeepControl() {
+	c.keepCurrentControl.Swap(true)
+}
+
+func (c *Cluster) tryControl(kreq kmsg.Request) (kresp kmsg.Response, err error, handled bool) {
+	c.controlMu.Lock()
+	defer c.controlMu.Unlock()
+	if len(c.control) == 0 {
+		return nil, nil, false
+	}
+
+	keyFns := c.control[kreq.Key()]
+	for i, fn := range keyFns {
+		kresp, err, handled = c.callControl(kreq.Key(), kreq, fn)
+		if handled {
+			c.control[kreq.Key()] = append(keyFns[:i], keyFns[i+1:]...)
+			return
+		}
+	}
+	anyFns := c.control[-1]
+	for i, fn := range anyFns {
+		kresp, err, handled = c.callControl(-1, kreq, fn)
+		if handled {
+			c.control[-1] = append(anyFns[:i], anyFns[i+1:]...)
+			return
+		}
+	}
+	return
+}
+
+func (c *Cluster) callControl(key int16, req kmsg.Request, fn controlFn) (kresp kmsg.Response, err error, handled bool) {
+	c.keepCurrentControl.Swap(false)
+	c.controlMu.Unlock()
+	defer func() {
+		c.controlMu.Lock()
+		if handled && c.keepCurrentControl.Swap(false) {
+			c.control[key] = append(c.control[key], fn)
+		}
+	}()
+	return fn(req)
 }
