@@ -28,7 +28,6 @@ func (cc *clientConn) read() {
 		who    = cc.conn.RemoteAddr()
 		size   = make([]byte, 4)
 		readCh = make(chan read, 1)
-		corr   int32
 	)
 	for {
 		go func() {
@@ -58,16 +57,11 @@ func (cc *clientConn) read() {
 			reader  = kbin.Reader{Src: body}
 			key     = reader.Int16()
 			version = reader.Int16()
-			ccorr   = reader.Int32()
+			corr    = reader.Int32()
 			_       = reader.NullableString()
 			kreq    = kmsg.RequestForKey(key)
 		)
 		kreq.SetVersion(version)
-		if ccorr != corr {
-			cc.c.cfg.logger.Logf(LogLevelDebug, "client %s incorrect correlation, saw %d expecting %d: %v", who, ccorr, corr)
-			return
-		}
-		corr++
 		if kreq.IsFlexible() {
 			kmsg.SkipTags(&reader)
 		}
@@ -77,7 +71,7 @@ func (cc *clientConn) read() {
 		}
 
 		select {
-		case cc.c.reqCh <- clientReq{cc, kreq, time.Now()}:
+		case cc.c.reqCh <- clientReq{cc, kreq, time.Now(), corr}:
 		case <-cc.c.die:
 			return
 		}
@@ -90,7 +84,6 @@ func (cc *clientConn) write() {
 	var (
 		who     = cc.conn.RemoteAddr()
 		writeCh = make(chan error, 1)
-		corr    int32
 		buf     []byte
 	)
 	for {
@@ -116,8 +109,7 @@ func (cc *clientConn) write() {
 			start++
 		}
 		binary.BigEndian.PutUint32(buf[start:], uint32(l))
-		binary.BigEndian.PutUint32(buf[start+4:], uint32(corr))
-		corr++
+		binary.BigEndian.PutUint32(buf[start+4:], uint32(resp.corr))
 
 		go func() {
 			_, err := cc.conn.Write(buf[start:])
