@@ -75,7 +75,7 @@ func (seqs *pidseqs) pushAndValidate(firstSeq, numRecs int32) (ok, dup bool) {
 	var (
 		seq    = firstSeq
 		seq64  = int64(seq)
-		next64 = (seq64 + int64(numRecs) + 1) % math.MaxInt32
+		next64 = (seq64 + int64(numRecs)) % math.MaxInt32
 		next   = int32(next64)
 	)
 	for i := 0; i < 5; i++ {
