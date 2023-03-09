@@ -160,9 +160,11 @@ type clientReq struct {
 	cc   *clientConn
 	kreq kmsg.Request
 	at   time.Time
+	corr int32
 }
 type clientResp struct {
 	kresp kmsg.Response
+	corr  int32
 	err   error
 }
 
@@ -218,7 +220,7 @@ func (c *Cluster) run() {
 		}
 
 		select {
-		case creq.cc.respCh <- clientResp{kresp: kresp, err: err}:
+		case creq.cc.respCh <- clientResp{kresp: kresp, corr: creq.corr, err: err}:
 		case <-c.die:
 			return
 		}
