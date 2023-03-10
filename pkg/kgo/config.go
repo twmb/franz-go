@@ -60,8 +60,9 @@ func (consumerOpt) consumerOpt()       {}
 func (groupOpt) groupOpt()             {}
 
 // A cfg can be written to while initializing a client, and after that it is
-// only ever read from. Some areas of initializing may follow options, but all
-// initializing is done before NewClient returns.
+// (mostly) only ever read from. Some areas can continue to be modified --
+// particularly reconfiguring what to consume from -- but most areas are
+// static.
 type cfg struct {
 	/////////////////////
 	// GENERAL SECTION //
