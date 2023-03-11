@@ -2,6 +2,7 @@ package kotel
 
 import (
 	"context"
+	"unicode/utf8"
 
 	"github.com/twmb/franz-go/pkg/kgo"
 	"go.opentelemetry.io/otel"
@@ -25,6 +26,7 @@ type Tracer struct {
 	tracer         trace.Tracer
 	clientID       string
 	consumerGroup  string
+	keyFormatter   func(*kgo.Record) (string, error)
 }
 
 // TracerOpt interface used for setting optional config properties.
@@ -32,13 +34,41 @@ type TracerOpt interface{ apply(*Tracer) }
 
 type tracerOptFunc func(*Tracer)
 
+func (o tracerOptFunc) apply(t *Tracer) { o(t) }
+
 // TracerProvider takes a trace.TracerProvider and applies it to the Tracer.
 // If none is specified, the global provider is used.
 func TracerProvider(provider trace.TracerProvider) TracerOpt {
 	return tracerOptFunc(func(t *Tracer) { t.tracerProvider = provider })
 }
 
-func (o tracerOptFunc) apply(t *Tracer) { o(t) }
+// TracerPropagator takes a propagation.TextMapPropagator and applies it to the
+// Tracer.
+//
+// If none is specified, the global Propagator is used.
+func TracerPropagator(propagator propagation.TextMapPropagator) TracerOpt {
+	return tracerOptFunc(func(t *Tracer) { t.propagators = propagator })
+}
+
+// ClientID sets the optional client_id attribute value.
+func ClientID(id string) TracerOpt {
+	return tracerOptFunc(func(t *Tracer) { t.clientID = id })
+}
+
+// ConsumerGroup sets the optional group attribute value.
+func ConsumerGroup(group string) TracerOpt {
+	return tracerOptFunc(func(t *Tracer) { t.consumerGroup = group })
+}
+
+// KeyFormatter formats a Record's key for use in a span's attributes,
+// overriding the default of string(Record.Key).
+//
+// This option can be used to parse binary data and return a canonical string
+// representation. If the returned string is not valid UTF-8 or if the
+// formatter returns an error, the key is not attached to the span.
+func KeyFormatter(fn func(*kgo.Record) (string, error)) TracerOpt {
+	return tracerOptFunc(func(t *Tracer) { t.keyFormatter = fn })
+}
 
 // NewTracer returns a Tracer, used as option for kotel to instrument franz-go
 // with tracing.
@@ -61,22 +91,24 @@ func NewTracer(opts ...TracerOpt) *Tracer {
 	return t
 }
 
-// TracerPropagator takes a propagation.TextMapPropagator and applies it to the
-// Tracer.
-//
-// If none is specified, the global Propagator is used.
-func TracerPropagator(propagator propagation.TextMapPropagator) TracerOpt {
-	return tracerOptFunc(func(t *Tracer) { t.propagators = propagator })
-}
-
-// ClientID sets the optional client_id attribute value.
-func ClientID(id string) TracerOpt {
-	return tracerOptFunc(func(t *Tracer) { t.clientID = id })
-}
-
-// ConsumerGroup sets the optional group attribute value.
-func ConsumerGroup(group string) TracerOpt {
-	return tracerOptFunc(func(t *Tracer) { t.consumerGroup = group })
+func (t *Tracer) maybeKeyAttr(attrs []attribute.KeyValue, r *kgo.Record) []attribute.KeyValue {
+	if r.Key == nil {
+		return attrs
+	}
+	var keykey string
+	if t.keyFormatter != nil {
+		k, err := t.keyFormatter(r)
+		if err != nil || !utf8.ValidString(k) {
+			return attrs
+		}
+		keykey = k
+	} else {
+		if !utf8.Valid(r.Key) {
+			return attrs
+		}
+		keykey = string(r.Key)
+	}
+	return append(attrs, semconv.MessagingKafkaMessageKeyKey.String(keykey))
 }
 
 // WithProcessSpan starts a new span for the "process" operation on a consumer
@@ -93,9 +125,7 @@ func (t *Tracer) WithProcessSpan(r *kgo.Record) (context.Context, trace.Span) {
 		semconv.MessagingOperationProcess,
 		semconv.MessagingKafkaPartitionKey.Int64(int64(r.Partition)),
 	}
-	if r.Key != nil {
-		attrs = append(attrs, semconv.MessagingKafkaMessageKeyKey.String(string(r.Key)))
-	}
+	attrs = t.maybeKeyAttr(attrs, r)
 	if t.clientID != "" {
 		attrs = append(attrs, semconv.MessagingKafkaClientIDKey.String(t.clientID))
 	}
@@ -129,9 +159,7 @@ func (t *Tracer) OnProduceRecordBuffered(r *kgo.Record) {
 		semconv.MessagingDestinationKindTopic,
 		semconv.MessagingDestinationKey.String(r.Topic),
 	}
-	if r.Key != nil {
-		attrs = append(attrs, semconv.MessagingKafkaMessageKeyKey.String(string(r.Key)))
-	}
+	attrs = t.maybeKeyAttr(attrs, r)
 	if t.clientID != "" {
 		attrs = append(attrs, semconv.MessagingKafkaClientIDKey.String(t.clientID))
 	}
@@ -180,9 +208,7 @@ func (t *Tracer) OnFetchRecordBuffered(r *kgo.Record) {
 		semconv.MessagingOperationReceive,
 		semconv.MessagingKafkaPartitionKey.Int64(int64(r.Partition)),
 	}
-	if r.Key != nil {
-		attrs = append(attrs, semconv.MessagingKafkaMessageKeyKey.String(string(r.Key)))
-	}
+	attrs = t.maybeKeyAttr(attrs, r)
 	if t.clientID != "" {
 		attrs = append(attrs, semconv.MessagingKafkaClientIDKey.String(t.clientID))
 	}
