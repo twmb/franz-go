@@ -182,16 +182,6 @@ type cfg struct {
 	commitCallback     func(*Client, *kmsg.OffsetCommitRequest, *kmsg.OffsetCommitResponse, error)
 }
 
-// cooperative is a helper that returns whether all group balancers in the
-// config are cooperative.
-func (cfg *cfg) cooperative() bool {
-	cooperative := true
-	for _, balancer := range cfg.balancers {
-		cooperative = cooperative && balancer.IsCooperative()
-	}
-	return cooperative
-}
-
 func (cfg *cfg) validate() error {
 	if len(cfg.seedBrokers) == 0 {
 		return errors.New("config erroneously has no seed brokers")

@@ -24,7 +24,7 @@ type groupConsumer struct {
 	cancel     func()
 	manageDone chan struct{} // closed once when the manage goroutine quits
 
-	cooperative bool // true if all config balancers are cooperative
+	cooperative atomicBool // true if the group balancer chosen during Join is cooperative
 
 	// The data for topics that the user assigned. Metadata updates the
 	// atomic.Value in each pointer atomically. If we are consuming via
@@ -204,7 +204,6 @@ func (c *consumer) initGroup() {
 		reSeen: make(map[string]bool),
 
 		manageDone:       make(chan struct{}),
-		cooperative:      c.cl.cfg.cooperative(),
 		tps:              newTopicsPartitions(),
 		rejoinCh:         make(chan string, 1),
 		heartbeatForceCh: make(chan func(error)),
@@ -458,7 +457,7 @@ func (g *groupConsumer) leave() (wait func()) {
 // returns the difference of g.nowAssigned and g.lastAssigned.
 func (g *groupConsumer) diffAssigned() (added, lost map[string][]int32) {
 	nowAssigned := g.nowAssigned.clone()
-	if !g.cooperative {
+	if !g.cooperative.Load() {
 		return nowAssigned, nil
 	}
 
@@ -534,7 +533,7 @@ func (g *groupConsumer) revoke(stage revokeStage, lost map[string][]int32, leavi
 	g.c.waitAndAddRebalance()
 	defer g.c.unaddRebalance()
 
-	if !g.cooperative || leaving { // stage == revokeThisSession if not cooperative
+	if !g.cooperative.Load() || leaving { // stage == revokeThisSession if not cooperative
 		// If we are an eager consumer, we stop fetching all of our
 		// current partitions as we will be revoking them.
 		g.c.mu.Lock()
@@ -545,7 +544,7 @@ func (g *groupConsumer) revoke(stage revokeStage, lost map[string][]int32, leavi
 		}
 		g.c.mu.Unlock()
 
-		if !g.cooperative {
+		if !g.cooperative.Load() {
 			g.cfg.logger.Log(LogLevelInfo, "eager consumer revoking prior assigned partitions", "group", g.cfg.group, "revoking", g.nowAssigned.read())
 		} else {
 			g.cfg.logger.Log(LogLevelInfo, "cooperative consumer revoking prior assigned partitions because leaving group", "group", g.cfg.group, "revoking", g.nowAssigned.read())
@@ -687,7 +686,7 @@ func newAssignRevokeSession() *assignRevokeSession {
 func (s *assignRevokeSession) prerevoke(g *groupConsumer, lost map[string][]int32) <-chan struct{} {
 	go func() {
 		defer close(s.prerevokeDone)
-		if g.cooperative && len(lost) > 0 {
+		if g.cooperative.Load() && len(lost) > 0 {
 			g.revoke(revokeLastSession, lost, false)
 		}
 	}()
@@ -778,7 +777,7 @@ func (g *groupConsumer) setupAssignedAndHeartbeat() (string, error) {
 
 	// If cooperative consuming, we may have to resume fetches. See the
 	// comment on adjustCooperativeFetchOffsets.
-	if g.cooperative {
+	if g.cooperative.Load() {
 		added = g.adjustCooperativeFetchOffsets(added, lost)
 	}
 
@@ -836,7 +835,7 @@ func (g *groupConsumer) heartbeat(fetchErrCh <-chan error, s *assignRevokeSessio
 	// cooperative consumers rejoin the group immediately, and we want to
 	// detect that in 500ms rather than 3s.
 	var cooperativeFastCheck <-chan time.Time
-	if g.cooperative {
+	if g.cooperative.Load() {
 		cooperativeFastCheck = time.After(500 * time.Millisecond)
 	}
 
@@ -1139,6 +1138,17 @@ func (g *groupConsumer) handleJoinResp(resp *kmsg.JoinGroupResponse) (restart bo
 
 	if resp.Protocol != nil {
 		protocol = *resp.Protocol
+	}
+
+	for _, balancer := range g.cfg.balancers {
+		if protocol == balancer.ProtocolName() {
+			cooperative := balancer.IsCooperative()
+			if !cooperative && g.cooperative.Load() {
+				g.cfg.logger.Log(LogLevelWarn, "downgrading from cooperative group to eager group, this is not supported per KIP-429!")
+			}
+			g.cooperative.Store(cooperative)
+			break
+		}
 	}
 
 	// KIP-345 has a fundamental limitation that KIP-814 also does not
@@ -2608,7 +2618,7 @@ func (g *groupConsumer) commitAcrossRebalance(
 	// We retry four times, for five tries total: cooperative rebalancing
 	// uses two back to back rebalances, and the commit could
 	// pathologically end during both.
-	if g.cooperative && tries < 5 {
+	if g.cooperative.Load() && tries < 5 {
 		origDone := onDone
 		onDone = func(cl *Client, req *kmsg.OffsetCommitRequest, resp *kmsg.OffsetCommitResponse, err error) {
 			retry := err == nil
