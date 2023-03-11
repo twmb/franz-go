@@ -349,6 +349,7 @@ func (g *groupConsumer) manage() {
 					h.OnGroupManageError(err)
 				}
 			})
+			g.c.addFakeReadyForDraining("", 0, &ErrGroupSession{err})
 		}
 
 		// If we are eager, we should have invalidated everything
