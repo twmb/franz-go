@@ -1,5 +1,7 @@
 package kgo
 
+import "sync/atomic"
+
 const (
 	stateUnstarted = iota
 	stateWorking
@@ -62,3 +64,13 @@ func (l *workLoop) maybeFinish(again bool) bool {
 func (l *workLoop) hardFinish() {
 	l.state.Store(stateUnstarted)
 }
+
+// lazyI32 is used in a few places where we want atomics _sometimes_.  Some
+// uses do not need to be atomic (notably, setup), and we do not want the
+// noCopy guard.
+//
+// Specifically, this is used for a few int32 settings in the config.
+type lazyI32 int32
+
+func (v *lazyI32) store(s int32) { atomic.StoreInt32((*int32)(v), s) }
+func (v *lazyI32) load() int32   { return atomic.LoadInt32((*int32)(v)) }

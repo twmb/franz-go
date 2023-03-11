@@ -527,6 +527,14 @@ func (cl *Client) AllowRebalance() {
 	cl.consumer.allowRebalance()
 }
 
+// UpdateFetchMaxBytes updates the max bytes that a fetch request will ask for
+// and the max partition bytes that a fetch request will ask for each
+// partition.
+func (cl *Client) UpdateFetchMaxBytes(maxBytes, maxPartBytes int32) {
+	cl.cfg.maxBytes.store(maxBytes)
+	cl.cfg.maxPartBytes.store(maxPartBytes)
+}
+
 // PauseFetchTopics sets the client to no longer fetch the given topics and
 // returns all currently paused topics. Paused topics persist until resumed.
 // You can call this function with no topics to simply receive the list of

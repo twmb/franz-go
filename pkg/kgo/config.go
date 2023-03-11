@@ -133,8 +133,8 @@ type cfg struct {
 
 	maxWait        int32
 	minBytes       int32
-	maxBytes       int32
-	maxPartBytes   int32
+	maxBytes       lazyI32
+	maxPartBytes   lazyI32
 	resetOffset    Offset
 	isolationLevel int8
 	keepControl    bool
@@ -1132,7 +1132,7 @@ func FetchMaxWait(wait time.Duration) ConsumerOpt {
 // recommended to set this option so that decompression does not eat all of
 // your RAM.
 func FetchMaxBytes(b int32) ConsumerOpt {
-	return consumerOpt{func(cfg *cfg) { cfg.maxBytes = b }}
+	return consumerOpt{func(cfg *cfg) { cfg.maxBytes = lazyI32(b) }}
 }
 
 // FetchMinBytes sets the minimum amount of bytes a broker will try to send
@@ -1154,7 +1154,7 @@ func FetchMinBytes(b int32) ConsumerOpt {
 //
 // This corresponds to the Java max.partition.fetch.bytes setting.
 func FetchMaxPartitionBytes(b int32) ConsumerOpt {
-	return consumerOpt{func(cfg *cfg) { cfg.maxPartBytes = b }}
+	return consumerOpt{func(cfg *cfg) { cfg.maxPartBytes = lazyI32(b) }}
 }
 
 // MaxConcurrentFetches sets the maximum number of fetch requests to allow in

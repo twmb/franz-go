@@ -435,8 +435,8 @@ func (s *source) createReq() *fetchRequest {
 	req := &fetchRequest{
 		maxWait:        s.cl.cfg.maxWait,
 		minBytes:       s.cl.cfg.minBytes,
-		maxBytes:       s.cl.cfg.maxBytes,
-		maxPartBytes:   s.cl.cfg.maxPartBytes,
+		maxBytes:       s.cl.cfg.maxBytes.load(),
+		maxPartBytes:   s.cl.cfg.maxPartBytes.load(),
 		rack:           s.cl.cfg.rack,
 		isolationLevel: s.cl.cfg.isolationLevel,
 		preferLagFn:    s.cl.cfg.preferLagFn,
