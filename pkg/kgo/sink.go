@@ -1149,6 +1149,7 @@ func (recBuf *recBuf) bufferRecord(pr promisedRec, abortOnNewBatch bool) bool {
 		pr.Timestamp = time.Now()
 	}
 	pr.Timestamp = pr.Timestamp.Truncate(time.Millisecond)
+	pr.Partition = recBuf.partition // set now, for the hook below
 
 	if recBuf.purged {
 		recBuf.cl.producer.promiseRecord(pr, errPurged)
@@ -1201,6 +1202,13 @@ func (recBuf *recBuf) bufferRecord(pr promisedRec, abortOnNewBatch bool) bool {
 	}
 
 	recBuf.buffered.Add(1)
+
+	if recBuf.cl.producer.hooks != nil && len(recBuf.cl.producer.hooks.partitioned) > 0 {
+		for _, h := range recBuf.cl.producer.hooks.partitioned {
+			h.OnProduceRecordPartitioned(pr.Record, recBuf.sink.nodeID)
+		}
+	}
+
 	return true
 }
 
