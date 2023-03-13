@@ -468,7 +468,7 @@ func (cl *Client) broker() *broker {
 		// We now reset the anyBrokerIdx to begin ranging through
 		// discovered brokers again.
 		if len(cl.brokers) > 0 {
-			cl.anyBrokerIdx %= int32(len(cl.brokers))
+			cl.anyBrokerIdx = 0
 		}
 	}
 	return b
@@ -579,7 +579,7 @@ func (cl *Client) fetchMetadataForTopics(ctx context.Context, all bool, topics [
 }
 
 func (cl *Client) fetchMetadata(ctx context.Context, req *kmsg.MetadataRequest, limitRetries bool) (*broker, *kmsg.MetadataResponse, error) {
-	r := cl.retriable()
+	r := cl.retryable()
 
 	// We limit retries for internal metadata refreshes, because these do
 	// not need to retry forever and are usually blocking *other* requests.
@@ -753,7 +753,7 @@ func (cl *Client) Close() {
 }
 
 // Request issues a request to Kafka, waiting for and returning the response.
-// If a retriable network error occurs, or if a retriable group / transaction
+// If a retryable network error occurs, or if a retryable group / transaction
 // coordinator error occurs, the request is retried. All other errors are
 // returned.
 //
@@ -821,23 +821,23 @@ func (cl *Client) Request(ctx context.Context, req kmsg.Request) (kmsg.Response,
 	return merge(resps)
 }
 
-func (cl *Client) retriable() *retriable {
-	return cl.retriableBrokerFn(func() (*broker, error) { return cl.broker(), nil })
+func (cl *Client) retryable() *retryable {
+	return cl.retryableBrokerFn(func() (*broker, error) { return cl.broker(), nil })
 }
 
-func (cl *Client) retriableBrokerFn(fn func() (*broker, error)) *retriable {
-	return &retriable{cl: cl, br: fn}
+func (cl *Client) retryableBrokerFn(fn func() (*broker, error)) *retryable {
+	return &retryable{cl: cl, br: fn}
 }
 
 func (cl *Client) shouldRetry(tries int, err error) bool {
-	return (kerr.IsRetriable(err) || isRetriableBrokerErr(err)) && int64(tries) < cl.cfg.retries
+	return (kerr.IsRetriable(err) || isRetryableBrokerErr(err)) && int64(tries) < cl.cfg.retries
 }
 
 func (cl *Client) shouldRetryNext(tries int, err error) bool {
 	return isSkippableBrokerErr(err) && int64(tries) < cl.cfg.retries
 }
 
-type retriable struct {
+type retryable struct {
 	cl   *Client
 	br   func() (*broker, error)
 	last *broker
@@ -870,7 +870,7 @@ func (d *failDial) isRepeatedDialFail(err error) bool {
 	return false
 }
 
-func (r *retriable) Request(ctx context.Context, req kmsg.Request) (kmsg.Response, error) {
+func (r *retryable) Request(ctx context.Context, req kmsg.Request) (kmsg.Response, error) {
 	tries := 0
 	tryStart := time.Now()
 	retryTimeout := r.cl.cfg.retryTimeout(req.Key())
@@ -893,8 +893,8 @@ start:
 		if r.limitRetries == 0 || tries < r.limitRetries {
 			backoff := r.cl.cfg.retryBackoff(tries)
 			if retryTimeout == 0 || time.Now().Add(backoff).Sub(tryStart) <= retryTimeout {
-				// If this broker / request had a retriable error, we can
-				// just retry now. If the error is *not* retriable but
+				// If this broker / request had a retryable error, we can
+				// just retry now. If the error is *not* retryable but
 				// is a broker-specific network error, and the next
 				// broker is different than the current, we also retry.
 				if r.cl.shouldRetry(tries, err) || r.cl.shouldRetry(tries, retryErr) {
@@ -1055,8 +1055,8 @@ func (cl *Client) shardedRequest(ctx context.Context, req kmsg.Request) ([]Respo
 	}
 
 	// All other requests not handled above can be issued to any broker
-	// with the default retriable logic.
-	r := cl.retriable()
+	// with the default retryable logic.
+	r := cl.retryable()
 	resp, err := r.Request(ctx, req)
 	return shards(shard(r.last, req, resp, err)), nil
 }
@@ -1368,7 +1368,7 @@ func (cl *Client) handleAdminReq(ctx context.Context, req kmsg.Request) Response
 	// Loading a controller can perform some wait; we accept that and do
 	// not account for the retries or the time to load the controller as
 	// part of the retries / time to issue the req.
-	r := cl.retriableBrokerFn(func() (*broker, error) {
+	r := cl.retryableBrokerFn(func() (*broker, error) {
 		return cl.controller(ctx)
 	})
 
@@ -1464,7 +1464,7 @@ func (cl *Client) handleCoordinatorReq(ctx context.Context, req kmsg.Request) Re
 		}
 		// InitProducerID can go to any broker if the transactional ID
 		// is nil. By using handleReqWithCoordinator, we get the
-		// retriable-error parsing, even though we are not actually
+		// retryable-error parsing, even though we are not actually
 		// using a defined txn coordinator. This is fine; by passing no
 		// names, we delete no coordinator.
 		coordinator, resp, err := cl.handleReqWithCoordinator(ctx, func() (*broker, error) { return cl.broker(), nil }, coordinatorTypeTxn, "", req)
@@ -1500,7 +1500,7 @@ func (cl *Client) handleCoordinatorReq(ctx context.Context, req kmsg.Request) Re
 // handleCoordinatorReqSimple issues a request that contains a single group or
 // txn to its coordinator.
 //
-// The error is inspected to see if it is a retriable error and, if so, the
+// The error is inspected to see if it is a retryable error and, if so, the
 // coordinator is deleted.
 func (cl *Client) handleCoordinatorReqSimple(ctx context.Context, typ int8, name string, req kmsg.Request) ResponseShard {
 	coordinator, resp, err := cl.handleReqWithCoordinator(ctx, func() (*broker, error) {
@@ -1520,7 +1520,7 @@ func (cl *Client) handleReqWithCoordinator(
 	name string, // group ID or the transactional id
 	req kmsg.Request,
 ) (*broker, kmsg.Response, error) {
-	r := cl.retriableBrokerFn(coordinator)
+	r := cl.retryableBrokerFn(coordinator)
 	var d failDial
 	r.parseRetryErr = func(resp kmsg.Response, err error) error {
 		if err != nil {
@@ -1669,7 +1669,7 @@ func (b *Broker) Request(ctx context.Context, req kmsg.Request) (kmsg.Response, 
 }
 
 // RetriableRequest issues a request to a broker the same as Broker, but
-// retries in the face of retriable broker connection errors. This does not
+// retries in the face of retryable broker connection errors. This does not
 // retry on response internal errors.
 func (b *Broker) RetriableRequest(ctx context.Context, req kmsg.Request) (kmsg.Response, error) {
 	return b.request(ctx, true, req)
@@ -1692,7 +1692,7 @@ func (b *Broker) request(ctx context.Context, retry bool, req kmsg.Request) (kms
 				resp, err = br.waitResp(ctx, req)
 			}
 		} else {
-			resp, err = b.cl.retriableBrokerFn(func() (*broker, error) {
+			resp, err = b.cl.retryableBrokerFn(func() (*broker, error) {
 				return b.cl.brokerOrErr(ctx, b.id, errUnknownBroker)
 			}).Request(ctx, req)
 		}
@@ -1735,7 +1735,7 @@ type sharder interface {
 	// is some pre-loading that needs to happen. If an error is returned,
 	// the request that was intended for splitting is failed wholesale.
 	//
-	// Due to sharded requests not being retriable if a response is
+	// Due to sharded requests not being retryable if a response is
 	// received, to avoid stale coordinator errors, this function should
 	// not use any previously cached metadata.
 	//
@@ -1900,7 +1900,7 @@ func (cl *Client) handleShardedReq(ctx context.Context, req kmsg.Request) ([]Res
 
 				// If we failed to issue the request, we *maybe* will retry.
 				// We could have failed to even issue the request or receive
-				// a response, which is retriable.
+				// a response, which is retryable.
 				backoff := cl.cfg.retryBackoff(tries)
 				if err != nil &&
 					(retryTimeout == 0 || time.Now().Add(backoff).Sub(start) < retryTimeout) &&
@@ -1918,7 +1918,7 @@ func (cl *Client) handleShardedReq(ctx context.Context, req kmsg.Request) ([]Res
 					return
 				}
 
-				addShard(shard(broker, myUnderlyingReq, resp, err)) // the error was not retriable
+				addShard(shard(broker, myUnderlyingReq, resp, err)) // the error was not retryable
 			}()
 		}
 	}
@@ -1929,13 +1929,13 @@ func (cl *Client) handleShardedReq(ctx context.Context, req kmsg.Request) ([]Res
 	return shards, sharder.merge
 }
 
-// For sharded errors, we prefer to keep retriable errors rather than
-// non-retriable errors. We keep the non-retriable if everything is
-// non-retriable.
+// For sharded errors, we prefer to keep retryable errors rather than
+// non-retryable errors. We keep the non-retryable if everything is
+// non-retryable.
 //
-// We favor retriable because retriable means we used a stale cache value; we
+// We favor retryable because retryable means we used a stale cache value; we
 // clear the stale entries on failure and the retry uses fresh data. The
-// request will be split and remapped, and the non-retriable errors will be
+// request will be split and remapped, and the non-retryable errors will be
 // encountered again.
 func onRespShardErr(err *error, newKerr error) {
 	if newKerr == nil || *err != nil && kerr.IsRetriable(*err) {
@@ -3197,7 +3197,7 @@ func (*describeConfigsSharder) shard(_ context.Context, kreq kmsg.Request, _ err
 	return issues, false, nil // this is not reshardable, but the any block can go anywhere
 }
 
-func (*describeConfigsSharder) onResp(kmsg.Request, kmsg.Response) error { return nil } // configs: topics not mapped, nothing retriable
+func (*describeConfigsSharder) onResp(kmsg.Request, kmsg.Response) error { return nil } // configs: topics not mapped, nothing retryable
 
 func (*describeConfigsSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
 	merged := kmsg.NewPtrDescribeConfigsResponse()
@@ -3260,7 +3260,7 @@ func (*alterConfigsSharder) shard(_ context.Context, kreq kmsg.Request, _ error)
 	return issues, false, nil // this is not reshardable, but the any block can go anywhere
 }
 
-func (*alterConfigsSharder) onResp(kmsg.Request, kmsg.Response) error { return nil } // configs: topics not mapped, nothing retriable
+func (*alterConfigsSharder) onResp(kmsg.Request, kmsg.Response) error { return nil } // configs: topics not mapped, nothing retryable
 
 func (*alterConfigsSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
 	merged := kmsg.NewPtrAlterConfigsResponse()
@@ -3669,7 +3669,7 @@ func (*incrementalAlterConfigsSharder) shard(_ context.Context, kreq kmsg.Reques
 	return issues, false, nil // this is not reshardable, but the any block can go anywhere
 }
 
-func (*incrementalAlterConfigsSharder) onResp(kmsg.Request, kmsg.Response) error { return nil } // configs: topics not mapped, nothing retriable
+func (*incrementalAlterConfigsSharder) onResp(kmsg.Request, kmsg.Response) error { return nil } // configs: topics not mapped, nothing retryable
 
 func (*incrementalAlterConfigsSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
 	merged := kmsg.NewPtrIncrementalAlterConfigsResponse()

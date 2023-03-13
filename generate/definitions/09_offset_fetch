@@ -21,7 +21,7 @@ OffsetFetchRequest => key 9, max version 8, flexible v6+, group coordinator
       Topic: string
       Partitions: [int32]
   // RequireStable signifies whether the broker should wait on returning
-  // unstable offsets, instead setting a retriable error on the relevant
+  // unstable offsets, instead setting a retryable error on the relevant
   // unstable partitions (UNSTABLE_OFFSET_COMMIT). See KIP-447 for more
   // details.
   RequireStable: bool // v7+

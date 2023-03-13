@@ -326,9 +326,9 @@ func (s *sink) produce(sem <-chan struct{}) bool {
 		batchesStripped, err := s.doTxnReq(req, txnReq)
 		if err != nil {
 			switch {
-			case isRetriableBrokerErr(err) || isDialErr(err):
+			case isRetryableBrokerErr(err) || isDialErr(err):
 				s.cl.bumpRepeatedLoadErr(err)
-				s.cl.cfg.logger.Log(LogLevelWarn, "unable to AddPartitionsToTxn due to retriable broker err, bumping client's buffered record load errors by 1 and retrying", "err", err)
+				s.cl.cfg.logger.Log(LogLevelWarn, "unable to AddPartitionsToTxn due to retryable broker err, bumping client's buffered record load errors by 1 and retrying", "err", err)
 				s.cl.triggerUpdateMetadata(false, "attempting to refresh broker list due to failed AddPartitionsToTxn requests")
 				return moreToDrain || len(req.batches) > 0 // nothing stripped if request-issuing error
 			default:
@@ -422,7 +422,7 @@ func (s *sink) doTxnReq(
 	req *produceRequest,
 	txnReq *kmsg.AddPartitionsToTxnRequest,
 ) (stripped bool, err error) {
-	// If we return an unretriable error, then we have to reset everything
+	// If we return an unretryable error, then we have to reset everything
 	// to not be in the transaction and begin draining at the start.
 	//
 	// These batches must be the first in their recBuf, because we would
@@ -467,7 +467,7 @@ func (s *sink) issueTxnReq(
 			if err := kerr.ErrorForCode(partition.ErrorCode); err != nil {
 				// OperationNotAttempted is set for all partitions that are authorized
 				// if any partition is unauthorized _or_ does not exist. We simply remove
-				// unattempted partitions and treat them as retriable.
+				// unattempted partitions and treat them as retryable.
 				if !kerr.IsRetriable(err) && !errors.Is(err, kerr.OperationNotAttempted) {
 					fatalErr = err // auth err, etc
 					continue
@@ -479,7 +479,7 @@ func (s *sink) issueTxnReq(
 					continue
 				}
 
-				// We are stripping this retriable-err batch from the request,
+				// We are stripping this retryable-err batch from the request,
 				// so we must reset that it has been added to the txn.
 				batch.owner.mu.Lock()
 				batch.removeFromTxn()
@@ -533,8 +533,8 @@ func (s *sink) handleReqClientErr(req *produceRequest, err error) {
 
 	case errors.Is(err, errUnknownBroker),
 		isDialErr(err),
-		isRetriableBrokerErr(err):
-		updateMeta := !isRetriableBrokerErr(err)
+		isRetryableBrokerErr(err):
+		updateMeta := !isRetryableBrokerErr(err)
 		if updateMeta {
 			s.cl.cfg.logger.Log(LogLevelInfo, "produce request failed, triggering metadata update", "broker", logID(s.nodeID), "err", err)
 		}
@@ -759,7 +759,7 @@ func (s *sink) handleReqRespBatch(
 		//
 		// 2.7
 		// =====
-		// InvalidProducerEpoch became retriable in 2.7. Prior, it
+		// InvalidProducerEpoch became retryable in 2.7. Prior, it
 		// was ambiguous (timeout? fenced?). Now, InvalidProducerEpoch
 		// is only returned on produce, and then we can recover on other
 		// txn coordinator requests, which have PRODUCER_FENCED vs
@@ -830,7 +830,7 @@ func (s *sink) handleReqRespBatch(
 				"topic", topic,
 				"partition", partition,
 				"err", err,
-				"err_is_retriable", kerr.IsRetriable(err),
+				"err_is_retryable", kerr.IsRetriable(err),
 				"max_retries_reached", !failUnknown && batch.tries >= s.cl.cfg.recordRetries,
 			)
 			batch.owner.okOnSink = false
@@ -1261,11 +1261,11 @@ func (recBuf *recBuf) bumpRepeatedLoadErr(err error) {
 	var (
 		canFail        = !recBuf.cl.idempotent() || batch0.canFailFromLoadErrs // we can only fail if we are not idempotent or if we have no outstanding requests
 		batch0Fail     = batch0.maybeFailErr(&recBuf.cl.cfg) != nil            // timeout, retries, or aborting
-		netErr         = isRetriableBrokerErr(err) || isDialErr(err)           // we can fail if this is *not* a network error
-		retriableKerr  = kerr.IsRetriable(err)                                 // we fail if this is not a retriable kerr,
+		netErr         = isRetryableBrokerErr(err) || isDialErr(err)           // we can fail if this is *not* a network error
+		retryableKerr  = kerr.IsRetriable(err)                                 // we fail if this is not a retryable kerr,
 		isUnknownLimit = recBuf.checkUnknownFailLimit(err)                     // or if it is, but it is UnknownTopicOrPartition and we are at our limit
 
-		willFail = canFail && (batch0Fail || !netErr && (!retriableKerr || retriableKerr && isUnknownLimit))
+		willFail = canFail && (batch0Fail || !netErr && (!retryableKerr || retryableKerr && isUnknownLimit))
 	)
 
 	recBuf.cl.cfg.logger.Log(LogLevelWarn, "produce partition load error, bumping error count on first stored batch",
@@ -1276,7 +1276,7 @@ func (recBuf *recBuf) bumpRepeatedLoadErr(err error) {
 		"can_fail", canFail,
 		"batch0_should_fail", batch0Fail,
 		"is_network_err", netErr,
-		"is_retriable_kerr", retriableKerr,
+		"is_retryable_kerr", retryableKerr,
 		"is_unknown_limit", isUnknownLimit,
 		"will_fail", willFail,
 	)

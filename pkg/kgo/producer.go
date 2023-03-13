@@ -88,7 +88,7 @@ func (cl *Client) BufferedProduceRecords() int64 {
 
 type unknownTopicProduces struct {
 	buffered []promisedRec
-	wait     chan error // retriable errors
+	wait     chan error // retryable errors
 	fatal    chan error // must-signal quit errors; capacity 1
 }
 
@@ -740,7 +740,7 @@ func (cl *Client) doInitProducerID(lastID int64, lastEpoch int16) (*producerID, 
 		// We could receive concurrent transactions; this is ignorable
 		// and we just want to re-init.
 		if kerr.IsRetriable(err) || errors.Is(err, kerr.ConcurrentTransactions) {
-			cl.cfg.logger.Log(LogLevelInfo, "producer id initialization resulted in retriable error, discarding initialization attempt", "err", err)
+			cl.cfg.logger.Log(LogLevelInfo, "producer id initialization resulted in retryable error, discarding initialization attempt", "err", err)
 			return &producerID{lastID, lastEpoch, err}, false
 		}
 		cl.cfg.logger.Log(LogLevelInfo, "producer id initialization errored", "err", err)
@@ -864,20 +864,20 @@ func (cl *Client) waitUnknownTopic(
 		case <-after:
 			err = ErrRecordTimeout
 		case err = <-unknown.fatal:
-		case retriableErr, ok := <-unknown.wait:
+		case retryableErr, ok := <-unknown.wait:
 			if !ok {
 				cl.cfg.logger.Log(LogLevelInfo, "done waiting for metadata for new topic", "topic", topic)
 				return // metadata was successful!
 			}
-			cl.cfg.logger.Log(LogLevelInfo, "new topic metadata wait failed, retrying wait", "topic", topic, "err", retriableErr)
+			cl.cfg.logger.Log(LogLevelInfo, "new topic metadata wait failed, retrying wait", "topic", topic, "err", retryableErr)
 			tries++
 			if int64(tries) >= cl.cfg.recordRetries {
-				err = fmt.Errorf("no partitions available after attempting to refresh metadata %d times, last err: %w", tries, retriableErr)
+				err = fmt.Errorf("no partitions available after attempting to refresh metadata %d times, last err: %w", tries, retryableErr)
 			}
-			if cl.cfg.maxUnknownFailures >= 0 && errors.Is(retriableErr, kerr.UnknownTopicOrPartition) {
+			if cl.cfg.maxUnknownFailures >= 0 && errors.Is(retryableErr, kerr.UnknownTopicOrPartition) {
 				unknownTries++
 				if unknownTries > cl.cfg.maxUnknownFailures {
-					err = retriableErr
+					err = retryableErr
 				}
 			}
 		}
@@ -1022,7 +1022,7 @@ func (p *producer) decInflight() {
 //   - if we cannot add partitions to a txn due to RequestWith errors, producing is useless
 //
 // Note that these are specifically due to RequestWith errors, not due to
-// receiving a response that has a retriable error code. That is, if our
+// receiving a response that has a retryable error code. That is, if our
 // request keeps dying.
 func (cl *Client) bumpRepeatedLoadErr(err error) {
 	p := &cl.producer

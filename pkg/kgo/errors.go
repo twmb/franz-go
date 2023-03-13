@@ -9,11 +9,11 @@ import (
 	"os"
 )
 
-func isRetriableBrokerErr(err error) bool {
+func isRetryableBrokerErr(err error) bool {
 	// The error could be nil if we are evaluating multiple errors at once,
 	// and only one is non-nil. The intent of this function is to evaluate
-	// whether an **error** is retriable, not a non-error. We return that
-	// nil is not retriable -- the calling code evaluating multiple errors
+	// whether an **error** is retryable, not a non-error. We return that
+	// nil is not retryable -- the calling code evaluating multiple errors
 	// at once would not call into this function if all errors were nil.
 	if err == nil {
 		return false
@@ -51,7 +51,7 @@ func isRetriableBrokerErr(err error) bool {
 	if isNetClosedErr(err) || errors.Is(err, io.EOF) {
 		return true
 	}
-	// We could have a retriable producer ID failure, which then bubbled up
+	// We could have a retryable producer ID failure, which then bubbled up
 	// as errProducerIDLoadFail so as to be retried later.
 	if errors.Is(err, errProducerIDLoadFail) {
 		return true
@@ -94,7 +94,7 @@ func isDialErr(err error) bool {
 }
 
 func isSkippableBrokerErr(err error) bool {
-	// Some broker errors are not retriable for the given broker itself,
+	// Some broker errors are not retryable for the given broker itself,
 	// but we *could* skip the broker and try again on the next broker. For
 	// example, if the user input an invalid address and a valid address
 	// for seeds, when we fail dialing the first seed, we cannot retry that
