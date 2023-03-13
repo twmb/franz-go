@@ -2,6 +2,7 @@ package kgo
 
 import (
 	"context"
+	"reflect"
 	"strconv"
 	"testing"
 	"time"
@@ -122,4 +123,96 @@ func TestUnknownGroupOffsetFetchPinned(t *testing.T) {
 		}
 	}()
 	req.RequestWith(context.Background(), cl)
+}
+
+func TestProcessHooks(t *testing.T) {
+	var (
+		aHook     = Hook(&someHook{index: 10})
+		xs        = []Hook{&someHook{index: 1}, &someHook{index: 2}}
+		ys        = []Hook{&someHook{index: 3}, &someHook{index: 4}, &someHook{index: 5}}
+		all       = append(append(xs, ys...), aHook)
+		sliceHook = new(intSliceHook)
+	)
+
+	tests := []struct {
+		name     string
+		hooks    []Hook
+		expected []Hook
+	}{
+		{
+			name:     "all",
+			hooks:    all,
+			expected: all,
+		},
+		{
+			name:     "nested slice",
+			hooks:    []Hook{all},
+			expected: all,
+		},
+		{
+			name:     "hooks and slices",
+			hooks:    []Hook{xs, ys, aHook},
+			expected: all,
+		},
+		{
+			name:     "slice that implements a hook",
+			hooks:    []Hook{sliceHook},
+			expected: []Hook{sliceHook},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			hooks, err := processHooks(test.hooks)
+			if err != nil {
+				t.Fatal("expected no error", err)
+			}
+			if !reflect.DeepEqual(hooks, test.expected) {
+				t.Fatalf("didn't get expected hooks back after processing, %+v, %+v", hooks, test.expected)
+			}
+		})
+	}
+}
+
+func TestProcessHooksErrors(t *testing.T) {
+	tests := []struct {
+		name  string
+		hooks []Hook
+	}{
+		{
+			name:  "useless slice",
+			hooks: []Hook{&[]int{}},
+		},
+		{
+			name:  "deep useless slice",
+			hooks: []Hook{[]Hook{&[]int{}}},
+		},
+		{
+			name:  "mixed useful and useless",
+			hooks: []Hook{&someHook{}, &notAHook{}},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := processHooks(test.hooks)
+			if err == nil {
+				t.Fatal("expected error")
+			}
+		})
+	}
+}
+
+type notAHook struct{}
+
+type someHook struct {
+	index int
+}
+
+func (*someHook) OnNewClient(*Client) {
+	// ignore
+}
+
+type intSliceHook []int
+
+func (*intSliceHook) OnNewClient(*Client) {
+	// ignore
 }

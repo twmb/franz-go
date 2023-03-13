@@ -5,6 +5,12 @@ import (
 	"time"
 )
 
+////////////////////////////////////////////////////////////////
+// NOTE:                                                      //
+// NOTE: Make sure new hooks are checked in implementsAnyHook //
+// NOTE:                                                      //
+////////////////////////////////////////////////////////////////
+
 // Hook is a hook to be called when something happens in kgo.
 //
 // The base Hook interface is useless, but wherever a hook can occur in kgo,
@@ -355,4 +361,30 @@ type HookFetchRecordUnbuffered interface {
 	// "unbuffered" within the client, and whether the record is being
 	// returned from polling.
 	OnFetchRecordUnbuffered(r *Record, polled bool)
+}
+
+/////////////
+// HELPERS //
+/////////////
+
+// implementsAnyHook will check the incoming Hook for any Hook implementation
+func implementsAnyHook(h Hook) bool {
+	switch h.(type) {
+	case HookNewClient,
+		HookBrokerConnect,
+		HookBrokerDisconnect,
+		HookBrokerWrite,
+		HookBrokerRead,
+		HookBrokerE2E,
+		HookBrokerThrottle,
+		HookGroupManageError,
+		HookProduceBatchWritten,
+		HookFetchBatchRead,
+		HookProduceRecordBuffered,
+		HookProduceRecordUnbuffered,
+		HookFetchRecordBuffered,
+		HookFetchRecordUnbuffered:
+		return true
+	}
+	return false
 }
