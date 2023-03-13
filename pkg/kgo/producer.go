@@ -25,8 +25,9 @@ type producer struct {
 	// Hooks exist behind a pointer because likely they are not used.
 	// We only take up one byte vs. 6.
 	hooks *struct {
-		buffered   []HookProduceRecordBuffered
-		unbuffered []HookProduceRecordUnbuffered
+		buffered    []HookProduceRecordBuffered
+		partitioned []HookProduceRecordPartitioned
+		unbuffered  []HookProduceRecordUnbuffered
 	}
 
 	hasHookBatchWritten bool
@@ -108,8 +109,9 @@ func (p *producer) init(cl *Client) {
 	inithooks := func() {
 		if p.hooks == nil {
 			p.hooks = &struct {
-				buffered   []HookProduceRecordBuffered
-				unbuffered []HookProduceRecordUnbuffered
+				buffered    []HookProduceRecordBuffered
+				partitioned []HookProduceRecordPartitioned
+				unbuffered  []HookProduceRecordUnbuffered
 			}{}
 		}
 	}
@@ -118,6 +120,10 @@ func (p *producer) init(cl *Client) {
 		if h, ok := h.(HookProduceRecordBuffered); ok {
 			inithooks()
 			p.hooks.buffered = append(p.hooks.buffered, h)
+		}
+		if h, ok := h.(HookProduceRecordPartitioned); ok {
+			inithooks()
+			p.hooks.partitioned = append(p.hooks.partitioned, h)
 		}
 		if h, ok := h.(HookProduceRecordUnbuffered); ok {
 			inithooks()
@@ -375,7 +381,7 @@ func (cl *Client) produce(
 	}
 
 	p := &cl.producer
-	if p.hooks != nil {
+	if p.hooks != nil && len(p.hooks.buffered) > 0 {
 		for _, h := range p.hooks.buffered {
 			h.OnProduceRecordBuffered(r)
 		}
@@ -466,7 +472,7 @@ start:
 func (cl *Client) finishRecordPromise(pr promisedRec, err error) {
 	p := &cl.producer
 
-	if p.hooks != nil {
+	if p.hooks != nil && len(p.hooks.unbuffered) > 0 {
 		for _, h := range p.hooks.unbuffered {
 			h.OnProduceRecordUnbuffered(pr.Record, err)
 		}

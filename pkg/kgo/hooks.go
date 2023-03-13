@@ -41,6 +41,14 @@ type HookNewClient interface {
 	OnNewClient(*Client)
 }
 
+// HookClientClosed is called in Close or CloseAfterRebalance after a client
+// has been closed. This hook can be used to perform final cleanup work.
+type HookClientClosed interface {
+	// OnClientClosed is passed the client that has been closed, after
+	// all client-internal close cleanup has happened.
+	OnClientClosed(*Client)
+}
+
 //////////////////
 // BROKER HOOKS //
 //////////////////
@@ -316,13 +324,33 @@ type HookProduceRecordBuffered interface {
 	OnProduceRecordBuffered(*Record)
 }
 
+// HookProduceRecordPartitioned is called when a record is partitioned and
+// internally ready to be flushed.
+//
+// This hook can be used to create metrics of buffered records per partition,
+// and then you can correlate that to partition leaders and determine which
+// brokers are having problems.
+//
+// Note that this hook will slow down high-volume producing and it is
+// recommended to only use this temporarily or if you are ok with the
+// performance hit.
+type HookProduceRecordPartitioned interface {
+	// OnProduceRecordPartitioned is passed a record that has been
+	// partitioned and the current broker leader for the partition
+	// (note that the leader may change if the partition is moved).
+	//
+	// This hook is called once a record is queued to be flushed. The
+	// record's Partition and Timestamp fields are safe to read.
+	OnProduceRecordPartitioned(*Record, int32)
+}
+
 // HookProduceRecordUnbuffered is called just before a record's promise is
 // finished; this is effectively a mirror of a record promise.
 //
 // As an example, if using HookProduceRecordBuffered for a gauge of how many
 // record bytes are buffered, this hook can be used to decrement the gauge.
 //
-// Note that this hook may slow down high-volume producing a bit.
+// Note that this hook will slow down high-volume producing a bit.
 type HookProduceRecordUnbuffered interface {
 	// OnProduceRecordUnbuffered is passed a record that is just about to
 	// have its produce promise called, as well as the error that the
@@ -339,7 +367,7 @@ type HookProduceRecordUnbuffered interface {
 // records buffered, use the client's BufferedFetchRecords method, as it is
 // faster.
 //
-// Note that this hook may slow down high-volume consuming a bit.
+// Note that this hook will slow down high-volume consuming a bit.
 type HookFetchRecordBuffered interface {
 	// OnFetchRecordBuffered is passed a record that is now buffered, ready
 	// to be polled.
@@ -371,6 +399,7 @@ type HookFetchRecordUnbuffered interface {
 func implementsAnyHook(h Hook) bool {
 	switch h.(type) {
 	case HookNewClient,
+		HookClientClosed,
 		HookBrokerConnect,
 		HookBrokerDisconnect,
 		HookBrokerWrite,
@@ -381,6 +410,7 @@ func implementsAnyHook(h Hook) bool {
 		HookProduceBatchWritten,
 		HookFetchBatchRead,
 		HookProduceRecordBuffered,
+		HookProduceRecordPartitioned,
 		HookProduceRecordUnbuffered,
 		HookFetchRecordBuffered,
 		HookFetchRecordUnbuffered:

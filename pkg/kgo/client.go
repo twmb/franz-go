@@ -926,6 +926,12 @@ func (cl *Client) CloseAllowingRebalance() {
 // notification of revoked partitions. If you want to automatically allow
 // rebalancing, use CloseAllowingRebalance.
 func (cl *Client) Close() {
+	defer cl.cfg.hooks.each(func(h Hook) {
+		if h, ok := h.(HookClientClosed); ok {
+			h.OnClientClosed(cl)
+		}
+	})
+
 	c := &cl.consumer
 	if c.g != nil {
 		cl.LeaveGroup()
@@ -934,6 +940,7 @@ func (cl *Client) Close() {
 		c.assignPartitions(nil, assignInvalidateAll, noTopicsPartitions, "invalidating all assignments in Close")
 		c.mu.Unlock()
 	}
+
 	// After the above, consumers cannot consume anymore. LeaveGroup
 	// internally assigns noTopicsPartitions, which uses noConsumerSession,
 	// which prevents loopFetch from starting. Assigning also waits for the
