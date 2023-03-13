@@ -1455,7 +1455,7 @@ type prsPool struct{ p *sync.Pool }
 
 func newPrsPool() prsPool {
 	return prsPool{
-		p: &sync.Pool{New: func() interface{} { r := make([]promisedRec, 10); return &r }},
+		p: &sync.Pool{New: func() any { r := make([]promisedRec, 10); return &r }},
 	}
 }
 

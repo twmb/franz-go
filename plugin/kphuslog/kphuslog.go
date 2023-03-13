@@ -43,7 +43,7 @@ func (l *Logger) Level() kgo.LogLevel {
 }
 
 // Log is for the kgo.Logger interface.
-func (l *Logger) Log(level kgo.LogLevel, msg string, keyvals ...interface{}) {
+func (l *Logger) Log(level kgo.LogLevel, msg string, keyvals ...any) {
 	l.pl.WithLevel(logLevelToPhuslog(level)).KeysAndValues(keyvals...).Msg(msg)
 }
 

@@ -51,7 +51,7 @@ type Logger interface {
 	// level. Keys are always strings, while values can be any type.
 	//
 	// This must be safe to call concurrently.
-	Log(level LogLevel, msg string, keyvals ...interface{})
+	Log(level LogLevel, msg string, keyvals ...any)
 }
 
 // BasicLogger returns a logger that will print to dst in the following format:
@@ -72,7 +72,7 @@ type basicLogger struct {
 }
 
 func (b *basicLogger) Level() LogLevel { return b.level }
-func (b *basicLogger) Log(level LogLevel, msg string, keyvals ...interface{}) {
+func (b *basicLogger) Log(level LogLevel, msg string, keyvals ...any) {
 	buf := sliceWriters.Get().(*sliceWriter)
 	defer sliceWriters.Put(buf)
 
@@ -101,7 +101,7 @@ func (b *basicLogger) Log(level LogLevel, msg string, keyvals ...interface{}) {
 type nopLogger struct{}
 
 func (*nopLogger) Level() LogLevel { return LogLevelNone }
-func (*nopLogger) Log(LogLevel, string, ...interface{}) {
+func (*nopLogger) Log(LogLevel, string, ...any) {
 }
 
 // wrappedLogger wraps the config logger for convenience at logging callsites.
@@ -116,7 +116,7 @@ func (w *wrappedLogger) Level() LogLevel {
 	return w.inner.Level()
 }
 
-func (w *wrappedLogger) Log(level LogLevel, msg string, keyvals ...interface{}) {
+func (w *wrappedLogger) Log(level LogLevel, msg string, keyvals ...any) {
 	if w.Level() < level {
 		return
 	}

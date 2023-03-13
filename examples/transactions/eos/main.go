@@ -24,7 +24,7 @@ var (
 	consumeTxnID = flag.String("consume-txn-id", "eos-example-eos-consumer", "transactional ID to use for the EOS consumer/producer")
 )
 
-func die(msg string, args ...interface{}) {
+func die(msg string, args ...any) {
 	fmt.Fprintf(os.Stderr, msg, args...)
 	os.Exit(1)
 }

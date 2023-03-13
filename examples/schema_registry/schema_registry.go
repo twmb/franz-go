@@ -19,12 +19,12 @@ var (
 	registry    = flag.String("registry", "localhost:8081", "schema registry port to talk to")
 )
 
-func die(msg string, args ...interface{}) {
+func die(msg string, args ...any) {
 	fmt.Fprintf(os.Stderr, msg+"\n", args...)
 	os.Exit(1)
 }
 
-func maybeDie(err error, msg string, args ...interface{}) {
+func maybeDie(err error, msg string, args ...any) {
 	if err != nil {
 		die(msg, args...)
 	}
@@ -65,10 +65,10 @@ func main() {
 	serde.Register(
 		ss.ID,
 		example{},
-		sr.EncodeFn(func(v interface{}) ([]byte, error) {
+		sr.EncodeFn(func(v any) ([]byte, error) {
 			return avro.Marshal(avroSchema, v)
 		}),
-		sr.DecodeFn(func(b []byte, v interface{}) error {
+		sr.DecodeFn(func(b []byte, v any) error {
 			return avro.Unmarshal(avroSchema, b, v)
 		}),
 	)

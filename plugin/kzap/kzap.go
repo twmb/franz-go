@@ -99,7 +99,7 @@ func (l *Logger) Level() kgo.LogLevel {
 }
 
 // Log is for the kgo.Logger interface.
-func (l *Logger) Log(level kgo.LogLevel, msg string, keyvals ...interface{}) {
+func (l *Logger) Log(level kgo.LogLevel, msg string, keyvals ...any) {
 	fields := make([]zap.Field, 0, len(keyvals)/2)
 	for i := 0; i < len(keyvals); i += 2 {
 		k, v := keyvals[i], keyvals[i+1]

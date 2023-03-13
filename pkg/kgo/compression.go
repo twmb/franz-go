@@ -22,7 +22,7 @@ func (s *sliceWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-var sliceWriters = sync.Pool{New: func() interface{} { r := make([]byte, 8<<10); return &sliceWriter{inner: r} }}
+var sliceWriters = sync.Pool{New: func() any { r := make([]byte, 8<<10); return &sliceWriter{inner: r} }}
 
 type codecType int8
 
@@ -120,17 +120,17 @@ out:
 					level = int(codec.level)
 				}
 			}
-			c.gzPool = sync.Pool{New: func() interface{} { c, _ := gzip.NewWriterLevel(nil, level); return c }}
+			c.gzPool = sync.Pool{New: func() any { c, _ := gzip.NewWriterLevel(nil, level); return c }}
 		case codecSnappy: // (no pool needed for snappy)
 		case codecLZ4:
 			level := codec.level
 			if level < 0 {
 				level = 0 // 0 == lz4.Fast
 			}
-			fn := func() interface{} { return lz4.NewWriter(new(bytes.Buffer)) }
+			fn := func() any { return lz4.NewWriter(new(bytes.Buffer)) }
 			w := lz4.NewWriter(new(bytes.Buffer))
 			if err := w.Apply(lz4.CompressionLevelOption(lz4.CompressionLevel(level))); err == nil {
-				fn = func() interface{} {
+				fn = func() any {
 					w := lz4.NewWriter(new(bytes.Buffer))
 					w.Apply(lz4.CompressionLevelOption(lz4.CompressionLevel(level)))
 					return w
@@ -144,7 +144,7 @@ out:
 				zstd.WithEncoderConcurrency(1),
 				zstd.WithZeroFrames(true),
 			}
-			fn := func() interface{} {
+			fn := func() any {
 				zstdEnc, _ := zstd.NewWriter(nil, opts...)
 				r := &zstdEncoder{zstdEnc}
 				runtime.SetFinalizer(r, func(r *zstdEncoder) { r.inner.Close() })
@@ -232,13 +232,13 @@ type decompressor struct {
 func newDecompressor() *decompressor {
 	d := &decompressor{
 		ungzPool: sync.Pool{
-			New: func() interface{} { return new(gzip.Reader) },
+			New: func() any { return new(gzip.Reader) },
 		},
 		unlz4Pool: sync.Pool{
-			New: func() interface{} { return lz4.NewReader(nil) },
+			New: func() any { return lz4.NewReader(nil) },
 		},
 		unzstdPool: sync.Pool{
-			New: func() interface{} {
+			New: func() any {
 				zstdDec, _ := zstd.NewReader(nil,
 					zstd.WithDecoderLowmem(true),
 					zstd.WithDecoderConcurrency(1),

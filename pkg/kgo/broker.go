@@ -474,7 +474,7 @@ type bufPool struct{ p *sync.Pool }
 
 func newBufPool() bufPool {
 	return bufPool{
-		p: &sync.Pool{New: func() interface{} { r := make([]byte, 1<<10); return &r }},
+		p: &sync.Pool{New: func() any { r := make([]byte, 1<<10); return &r }},
 	}
 }
 

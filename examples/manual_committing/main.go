@@ -17,7 +17,7 @@ var (
 	group       = flag.String("group", "", "group to consume within")
 )
 
-func die(msg string, args ...interface{}) {
+func die(msg string, args ...any) {
 	fmt.Fprintf(os.Stderr, msg, args...)
 	os.Exit(1)
 }
