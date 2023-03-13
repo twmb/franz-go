@@ -43,9 +43,12 @@ func (cl *Client) ListTopicsWithInternal(
 
 // CreateTopicResponse contains the response for an individual created topic.
 type CreateTopicResponse struct {
-	Topic string  // Topic is the topic that was created.
-	ID    TopicID // ID is the topic ID for this topic, if talking to Kafka v2.8+.
-	Err   error   // Err is any error preventing this topic from being created.
+	Topic             string            // Topic is the topic that was created.
+	ID                TopicID           // ID is the topic ID for this topic, if talking to Kafka v2.8+.
+	Err               error             // Err is any error preventing this topic from being created.
+	NumPartitions     int32             // NumPartitions is the number of partitions in the response, if talking to Kafka v2.4+.
+	ReplicationFactor int16             // ReplicationFactor is how many replicas every partition has for this topic, if talking to Kafka 2.4+.
+	Configs           map[string]Config // Configs contains the topic configuration (minus config synonyms), if talking to Kafka 2.4+.
 }
 
 // CreateTopicRepsonses contains per-topic responses for created topics.
@@ -205,11 +208,23 @@ func (cl *Client) createTopics(ctx context.Context, dry bool, p int32, rf int16,
 
 	rs := make(CreateTopicResponses)
 	for _, t := range resp.Topics {
-		rs[t.Topic] = CreateTopicResponse{
-			Topic: t.Topic,
-			ID:    t.TopicID,
-			Err:   kerr.ErrorForCode(t.ErrorCode),
+		rt := CreateTopicResponse{
+			Topic:             t.Topic,
+			ID:                t.TopicID,
+			Err:               kerr.ErrorForCode(t.ErrorCode),
+			NumPartitions:     t.NumPartitions,
+			ReplicationFactor: t.ReplicationFactor,
+			Configs:           make(map[string]Config),
 		}
+		for _, c := range t.Configs {
+			rt.Configs[c.Name] = Config{
+				Key:       c.Name,
+				Value:     c.Value,
+				Source:    kmsg.ConfigSource(c.Source),
+				Sensitive: c.IsSensitive,
+			}
+		}
+		rs[t.Topic] = rt
 	}
 	return rs, nil
 }
