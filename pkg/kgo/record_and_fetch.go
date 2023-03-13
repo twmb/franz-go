@@ -324,7 +324,7 @@ type FetchError struct {
 // Errors returns all errors in a fetch with the topic and partition that
 // errored.
 //
-// There are four classes of errors possible:
+// There are a few classes of errors possible:
 //
 //  1. a normal kerr.Error; these are usually the non-retryable kerr.Errors,
 //     but theoretically a non-retryable error can be fixed at runtime (auth
@@ -345,6 +345,17 @@ type FetchError struct {
 //     is returned from every Poll call if the client has been closed.
 //     A corresponding helper function IsClientClosed can be used to detect
 //     this error.
+//
+//  5. an injected context error; this can be present if the context you were
+//     using for polling timed out or was canceled.
+//
+//  6. an injected ErrGroupSession; this is an informational error that is
+//     injected once a group session is lost in a way that is not the standard
+//     rebalance. This error can signify that your consumer member is not able
+//     to connect to the group (ACL problems, unreachable broker), or you
+//     blocked rebalancing for too long, or your callbacks took too long.
+//
+// This list may grow over time.
 func (fs Fetches) Errors() []FetchError {
 	var errs []FetchError
 	fs.EachError(func(t string, p int32, err error) {

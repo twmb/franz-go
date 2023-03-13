@@ -286,3 +286,16 @@ func (e *errUnknownCoordinator) Error() string {
 			" but did not reply with that broker in the broker list", e.key.name, e.key.typ, e.coordinator)
 	}
 }
+
+// ErrGroupSession is injected into a poll if an error occurred such that your
+// consumer group member was kicked from the group or was never able to join
+// the group.
+type ErrGroupSession struct {
+	err error
+}
+
+func (e *ErrGroupSession) Error() string {
+	return fmt.Sprintf("unable to join group session: %v", e.err)
+}
+
+func (e *ErrGroupSession) Unwrap() error { return e.err }
