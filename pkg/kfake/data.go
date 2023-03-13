@@ -106,7 +106,7 @@ func (pd *partData) searchOffset(o int64) (index int, found bool, atEnd bool) {
 	}
 
 	index, found = slices.BinarySearchFunc(pd.batches, o, func(b partBatch, o int64) int {
-		if b.FirstOffset+int64(b.NumRecords) < o {
+		if b.FirstOffset+int64(b.NumRecords) <= o {
 			return -1
 		}
 		if b.FirstOffset > o {
