@@ -114,13 +114,23 @@ var randsha = func() func() string {
 
 func tmpTopic(tb testing.TB) (string, func()) {
 	partitions := npartitions[int(atomic.AddInt64(&npartitionsAt, 1))%len(npartitions)]
-	return tmpTopicPartitions(tb, partitions)
+	topic := randsha()
+	return tmpNamedTopicPartitions(tb, topic, partitions)
 }
 
 func tmpTopicPartitions(tb testing.TB, partitions int) (string, func()) {
-	tb.Helper()
-
 	topic := randsha()
+	return tmpNamedTopicPartitions(tb, topic, partitions)
+}
+
+func tmpNamedTopic(tb testing.TB, topic string) func() {
+	partitions := npartitions[int(atomic.AddInt64(&npartitionsAt, 1))%len(npartitions)]
+	_, cleanup := tmpNamedTopicPartitions(tb, topic, partitions)
+	return cleanup
+}
+
+func tmpNamedTopicPartitions(tb testing.TB, topic string, partitions int) (string, func()) {
+	tb.Helper()
 
 	req := kmsg.NewPtrCreateTopicsRequest()
 	reqTopic := kmsg.NewCreateTopicsRequestTopic()
@@ -144,6 +154,11 @@ issue:
 
 	if err == nil {
 		err = kerr.ErrorForCode(resp.Topics[0].ErrorCode)
+		if errors.Is(err, kerr.TopicAlreadyExists) {
+			tb.Log("topic creation failed with already exists, sleeping 100ms and trying again")
+			time.Sleep(100 * time.Millisecond)
+			goto issue
+		}
 	}
 	if err != nil {
 		tb.Fatalf("unable to create topic %q: %v", topic, err)

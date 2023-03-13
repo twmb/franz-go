@@ -140,8 +140,9 @@ type cfg struct {
 	rack           string
 	preferLagFn    PreferLagFn
 
-	maxConcurrentFetches int
-	disableFetchSessions bool
+	maxConcurrentFetches   int
+	disableFetchSessions   bool
+	consumeRecreatedTopics bool
 
 	topics     map[string]*regexp.Regexp   // topics to consume; if regex is true, values are compiled regular expressions
 	partitions map[string]map[int32]Offset // partitions to directly consume from
@@ -637,7 +638,7 @@ func DialTimeout(timeout time.Duration) Opt {
 	return clientOpt{func(cfg *cfg) { cfg.dialTimeout = timeout }}
 }
 
-// DialTLSConfig opts in to dialing brokers with the given TLS config with a
+// DialTLSConfig opts into dialing brokers with the given TLS config with a
 // 10s dial timeout. This is a shortcut for manually specifying a tls dialer
 // using the Dialer option. You can also change the default 10s timeout with
 // DialTimeout.
@@ -1303,7 +1304,7 @@ func ConsumeRegex() ConsumerOpt {
 //
 // A "fetch session" is is a way to reduce bandwidth for fetch requests &
 // responses, and to potentially reduce the amount of work that brokers have to
-// do to handle fetch requests. A fetch session opts in to the broker tracking
+// do to handle fetch requests. A fetch session opts into the broker tracking
 // some state of what the client is interested in. For example, say that you
 // are interested in thousands of topics, and most of these topics are
 // receiving data only rarely. A fetch session allows the client to register
@@ -1349,6 +1350,22 @@ func ConsumePreferringLagFn(fn PreferLagFn) ConsumerOpt {
 	return consumerOpt{func(cfg *cfg) { cfg.preferLagFn = fn }}
 }
 
+// ConsumeRecreatedTopics opts into consuming topics that are recreated in
+// Kafka 3.1+. Starting in 3.1, Kafka uses unique topic IDs when fetching, and
+// if you delete and recreate your topic while a consumer is active, the
+// consumer will begin failing because the topic ID has changed. This option
+// lets you opt into consuming the recreated topic.
+//
+// Internally, this option causes the client to purge the topic from the
+// consumer and then re-add it, which likely will cause rebalances for consumer
+// groups. As well, other consumers in the consumer group will independently
+// discover the topic ID has changed, so they will rejoin at different points.
+// These rejoins likely will all happen close together, but be aware there will
+// be a rebalance storm if you recreate your topic.
+func ConsumeRecreatedTopics() ConsumerOpt {
+	return consumerOpt{func(cfg *cfg) { cfg.consumeRecreatedTopics = true }}
+}
+
 //////////////////////////////////
 // CONSUMER GROUP CONFIGURATION //
 //////////////////////////////////
@@ -1375,7 +1392,7 @@ func ConsumerGroup(group string) GroupOpt {
 // For balancing, Kafka chooses the first protocol that all group members agree
 // to support.
 //
-// Note that if you opt in to cooperative-sticky rebalancing, cooperative group
+// Note that if you opt into cooperative-sticky rebalancing, cooperative group
 // balancing is incompatible with eager (classical) rebalancing and requires a
 // careful rollout strategy (see KIP-429).
 func Balancers(balancers ...GroupBalancer) GroupOpt {
@@ -1611,7 +1628,7 @@ func DisableAutoCommit() GroupOpt {
 	return groupOpt{func(cfg *cfg) { cfg.autocommitDisable = true }}
 }
 
-// GreedyAutoCommit opts in to committing everything that has been polled when
+// GreedyAutoCommit opts into committing everything that has been polled when
 // autocommitting (the dirty offsets), rather than committing what has
 // previously been polled. This option may result in message loss if your
 // application crashes.
