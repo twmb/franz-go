@@ -42,12 +42,13 @@ func BenchmarkLogNone(b *testing.B) {
 
 var (
 	msg     = "message"
-	keyvals = []interface{}{
+	keyvals = []any{
 		"bool", true,
 		"string", "str",
 		"int", 42,
 		"float", 3.14,
-		"struct", struct{ A, B int }{13, 37},
+		"struct",
+		struct{ A, B int }{13, 37},
 		"err", fmt.Errorf("error"),
 	}
 )

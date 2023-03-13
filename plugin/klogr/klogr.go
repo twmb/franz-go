@@ -61,7 +61,7 @@ func (l *Logger) Level() kgo.LogLevel {
 
 // Log using the underlying logr.Logger. If kgo.LogLevelError is set, keyvals
 // will be type checked for an error, and the first one found will be used.
-func (l *Logger) Log(level kgo.LogLevel, msg string, keyvals ...interface{}) {
+func (l *Logger) Log(level kgo.LogLevel, msg string, keyvals ...any) {
 	switch level {
 	case kgo.LogLevelNone:
 	case kgo.LogLevelError:
