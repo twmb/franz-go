@@ -33,8 +33,6 @@ const (
 type GroupTransactSession struct {
 	cl *Client
 
-	cooperative bool
-
 	failMu sync.Mutex
 
 	revoked   bool
@@ -90,8 +88,6 @@ func NewGroupTransactSession(opts ...Opt) (*GroupTransactSession, error) {
 			return
 		}
 
-		s.cooperative = cfg.cooperative()
-
 		userRevoked := cfg.onRevoked
 		cfg.onRevoked = func(ctx context.Context, cl *Client, rev map[string][]int32) {
 			s.failMu.Lock()
@@ -100,7 +96,7 @@ func NewGroupTransactSession(opts ...Opt) (*GroupTransactSession, error) {
 				return
 			}
 
-			if s.cooperative && len(rev) == 0 && !s.revoked {
+			if cl.consumer.g.cooperative.Load() && len(rev) == 0 && !s.revoked {
 				cl.cfg.logger.Log(LogLevelInfo, "transact session in on_revoke with nothing to revoke; allowing next commit")
 			} else {
 				cl.cfg.logger.Log(LogLevelInfo, "transact session in on_revoke; aborting next commit if we are currently in a transaction")
