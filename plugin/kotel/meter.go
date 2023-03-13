@@ -13,7 +13,6 @@ import (
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/metric/global"
 	"go.opentelemetry.io/otel/metric/instrument"
-	"go.opentelemetry.io/otel/metric/unit"
 	semconv "go.opentelemetry.io/otel/semconv/v1.12.0"
 )
 
@@ -24,6 +23,11 @@ var ( // interface checks to ensure we implement the hooks properly
 	_ kgo.HookBrokerRead          = new(Meter)
 	_ kgo.HookProduceBatchWritten = new(Meter)
 	_ kgo.HookFetchBatchRead      = new(Meter)
+)
+
+const (
+	Dimensionless string = "1"
+	Bytes         string = "By"
 )
 
 type Meter struct {
@@ -94,7 +98,7 @@ func (m *Meter) newInstruments() instruments {
 
 	connects, err := m.meter.Int64Counter(
 		"messaging.kafka.connects.count",
-		instrument.WithUnit(unit.Dimensionless),
+		instrument.WithUnit(Dimensionless),
 		instrument.WithDescription("Total number of connections opened, by broker"),
 	)
 	if err != nil {
@@ -103,7 +107,7 @@ func (m *Meter) newInstruments() instruments {
 
 	connectErrs, err := m.meter.Int64Counter(
 		"messaging.kafka.connect_errors.count",
-		instrument.WithUnit(unit.Dimensionless),
+		instrument.WithUnit(Dimensionless),
 		instrument.WithDescription("Total number of connection errors, by broker"),
 	)
 	if err != nil {
@@ -112,7 +116,7 @@ func (m *Meter) newInstruments() instruments {
 
 	disconnects, err := m.meter.Int64Counter(
 		"messaging.kafka.disconnects.count",
-		instrument.WithUnit(unit.Dimensionless),
+		instrument.WithUnit(Dimensionless),
 		instrument.WithDescription("Total number of connections closed, by broker"),
 	)
 	if err != nil {
@@ -123,7 +127,7 @@ func (m *Meter) newInstruments() instruments {
 
 	writeErrs, err := m.meter.Int64Counter(
 		"messaging.kafka.write_errors.count",
-		instrument.WithUnit(unit.Dimensionless),
+		instrument.WithUnit(Dimensionless),
 		instrument.WithDescription("Total number of write errors, by broker"),
 	)
 	if err != nil {
@@ -132,7 +136,7 @@ func (m *Meter) newInstruments() instruments {
 
 	writeBytes, err := m.meter.Int64Counter(
 		"messaging.kafka.write_bytes",
-		instrument.WithUnit(unit.Bytes),
+		instrument.WithUnit(Bytes),
 		instrument.WithDescription("Total number of bytes written, by broker"),
 	)
 	if err != nil {
@@ -143,7 +147,7 @@ func (m *Meter) newInstruments() instruments {
 
 	readErrs, err := m.meter.Int64Counter(
 		"messaging.kafka.read_errors.count",
-		instrument.WithUnit(unit.Dimensionless),
+		instrument.WithUnit(Dimensionless),
 		instrument.WithDescription("Total number of read errors, by broker"),
 	)
 	if err != nil {
@@ -152,7 +156,7 @@ func (m *Meter) newInstruments() instruments {
 
 	readBytes, err := m.meter.Int64Counter(
 		"messaging.kafka.read_bytes.count",
-		instrument.WithUnit(unit.Bytes),
+		instrument.WithUnit(Bytes),
 		instrument.WithDescription("Total number of bytes read, by broker"),
 	)
 	if err != nil {
@@ -163,7 +167,7 @@ func (m *Meter) newInstruments() instruments {
 
 	produceBytes, err := m.meter.Int64Counter(
 		"messaging.kafka.produce_bytes.count",
-		instrument.WithUnit(unit.Bytes),
+		instrument.WithUnit(Bytes),
 		instrument.WithDescription("Total number of uncompressed bytes produced, by broker and topic"),
 	)
 	if err != nil {
@@ -172,7 +176,7 @@ func (m *Meter) newInstruments() instruments {
 
 	fetchBytes, err := m.meter.Int64Counter(
 		"messaging.kafka.fetch_bytes.count",
-		instrument.WithUnit(unit.Bytes),
+		instrument.WithUnit(Bytes),
 		instrument.WithDescription("Total number of uncompressed bytes fetched, by broker and topic"),
 	)
 	if err != nil {
