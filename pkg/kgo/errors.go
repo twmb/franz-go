@@ -164,8 +164,6 @@ var (
 	// Returned for all buffered produce records when a user purges topics.
 	errPurged = errors.New("topic purged while buffered")
 
-	errMissingMetadataPartition = errors.New("metadata update is missing a partition that we were previously using")
-
 	//////////////
 	// EXTERNAL //
 	//////////////
