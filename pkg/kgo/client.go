@@ -685,11 +685,33 @@ func (cl *Client) CloseAllowingRebalance() {
 // notification of revoked partitions. If you want to automatically allow
 // rebalancing, use CloseAllowingRebalance.
 func (cl *Client) Close() {
-	cl.LeaveGroup()
-	// After LeaveGroup, consumers cannot consume anymore. LeaveGroup
+	c := &cl.consumer
+	if c.g != nil {
+		cl.LeaveGroup()
+	} else if c.d != nil {
+		c.mu.Lock() // lock for assign
+		c.assignPartitions(nil, assignInvalidateAll, noTopicsPartitions, "invalidating all assignments in Close")
+		c.mu.Unlock()
+	}
+	// After the above, consumers cannot consume anymore. LeaveGroup
 	// internally assigns noTopicsPartitions, which uses noConsumerSession,
 	// which prevents loopFetch from starting. Assigning also waits for the
 	// prior session to be complete, meaning loopFetch cannot be running.
+
+	sessCloseCtx, sessCloseCancel := context.WithTimeout(cl.ctx, time.Second)
+	var wg sync.WaitGroup
+	for _, sns := range cl.sinksAndSources {
+		if sns.source.session.id != 0 {
+			sns := sns
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				sns.source.killSessionOnClose(sessCloseCtx)
+			}()
+		}
+	}
+	wg.Wait()
+	sessCloseCancel()
 
 	// Now we kill the client context and all brokers, ensuring all
 	// requests fail. This will finish all producer callbacks and
