@@ -52,10 +52,10 @@ func (pids *pids) create(txnalID *string) pid {
 	if txnalID != nil {
 		hasher := fnv.New64()
 		hasher.Write([]byte(*txnalID))
-		id = int64(hasher.Sum64())
+		id = int64(hasher.Sum64()) & math.MaxInt64
 	} else {
 		for {
-			id = int64(rand.Uint64())
+			id = int64(rand.Uint64()) & math.MaxInt64
 			if _, exists := (*pids)[id]; !exists {
 				break
 			}
