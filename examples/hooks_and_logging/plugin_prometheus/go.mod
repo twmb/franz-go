@@ -3,7 +3,7 @@ module dropin_prometheus
 go 1.20
 
 require (
-	github.com/twmb/franz-go v1.12.1
+	github.com/twmb/franz-go v1.13.0
 	github.com/twmb/franz-go/plugin/kprom v1.0.0
 )
 

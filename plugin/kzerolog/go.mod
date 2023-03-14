@@ -4,7 +4,7 @@ go 1.18
 
 require (
 	github.com/rs/zerolog v1.29.0
-	github.com/twmb/franz-go v1.12.1
+	github.com/twmb/franz-go v1.13.0
 )
 
 require (

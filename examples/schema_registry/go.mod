@@ -4,8 +4,8 @@ go 1.20
 
 require (
 	github.com/hamba/avro v1.8.0
-	github.com/twmb/franz-go v1.12.1
-	github.com/twmb/franz-go/pkg/sr v0.0.0-20230313185644-2f9613bc2700
+	github.com/twmb/franz-go v1.13.0
+	github.com/twmb/franz-go/pkg/sr v0.0.0-20230314042146-d84506940f2d
 )
 
 require (

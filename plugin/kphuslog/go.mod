@@ -4,7 +4,7 @@ go 1.19
 
 require (
 	github.com/phuslu/log v1.0.83
-	github.com/twmb/franz-go v1.12.1
+	github.com/twmb/franz-go v1.13.0
 )
 
 require (
