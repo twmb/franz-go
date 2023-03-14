@@ -628,7 +628,7 @@ func DialTimeout(timeout time.Duration) Opt {
 	return clientOpt{func(cfg *cfg) { cfg.dialTimeout = timeout }}
 }
 
-// DialTLSConfig opts in to dialing brokers with the given TLS config with a
+// DialTLSConfig opts into dialing brokers with the given TLS config with a
 // 10s dial timeout. This is a shortcut for manually specifying a tls dialer
 // using the Dialer option. You can also change the default 10s timeout with
 // DialTimeout.
@@ -869,7 +869,9 @@ func RequiredAcks(acks Acks) ProducerOpt {
 
 // DisableIdempotentWrite disables idempotent produce requests, opting out of
 // Kafka server-side deduplication in the face of reissued requests due to
-// transient network problems.
+// transient network problems. Disabling idempotent write by default
+// upper-bounds the number of in-flight produce requests per broker to 1, vs.
+// the default of 5 when using idempotency.
 //
 // Idempotent production is strictly a win, but does require the
 // IDEMPOTENT_WRITE permission on CLUSTER (pre Kafka 3.0), and not all clients
@@ -1294,7 +1296,7 @@ func ConsumeRegex() ConsumerOpt {
 //
 // A "fetch session" is is a way to reduce bandwidth for fetch requests &
 // responses, and to potentially reduce the amount of work that brokers have to
-// do to handle fetch requests. A fetch session opts in to the broker tracking
+// do to handle fetch requests. A fetch session opts into the broker tracking
 // some state of what the client is interested in. For example, say that you
 // are interested in thousands of topics, and most of these topics are
 // receiving data only rarely. A fetch session allows the client to register
@@ -1366,7 +1368,7 @@ func ConsumerGroup(group string) GroupOpt {
 // For balancing, Kafka chooses the first protocol that all group members agree
 // to support.
 //
-// Note that if you opt in to cooperative-sticky rebalancing, cooperative group
+// Note that if you opt into cooperative-sticky rebalancing, cooperative group
 // balancing is incompatible with eager (classical) rebalancing and requires a
 // careful rollout strategy (see KIP-429).
 func Balancers(balancers ...GroupBalancer) GroupOpt {
@@ -1602,7 +1604,7 @@ func DisableAutoCommit() GroupOpt {
 	return groupOpt{func(cfg *cfg) { cfg.autocommitDisable = true }}
 }
 
-// GreedyAutoCommit opts in to committing everything that has been polled when
+// GreedyAutoCommit opts into committing everything that has been polled when
 // autocommitting (the dirty offsets), rather than committing what has
 // previously been polled. This option may result in message loss if your
 // application crashes.

@@ -143,7 +143,7 @@ func (c *testConsumer) transact(txnsBeforeQuit int) {
 		// It also returns NotLeaderXyz; we handle both problems.
 		UnknownTopicRetries(-1),
 		TransactionalID(randsha()),
-		TransactionTimeout(10 * time.Second),
+		TransactionTimeout(60 * time.Second),
 		WithLogger(testLogger()),
 		// Control records have their own unique offset, so for testing,
 		// we keep the record to ensure we do not doubly consume control
