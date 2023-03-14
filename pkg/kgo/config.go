@@ -141,9 +141,8 @@ type cfg struct {
 	rack           string
 	preferLagFn    PreferLagFn
 
-	maxConcurrentFetches   int
-	disableFetchSessions   bool
-	consumeRecreatedTopics bool
+	maxConcurrentFetches int
+	disableFetchSessions bool
 
 	topics     map[string]*regexp.Regexp   // topics to consume; if regex is true, values are compiled regular expressions
 	partitions map[string]map[int32]Offset // partitions to directly consume from
@@ -870,7 +869,9 @@ func RequiredAcks(acks Acks) ProducerOpt {
 
 // DisableIdempotentWrite disables idempotent produce requests, opting out of
 // Kafka server-side deduplication in the face of reissued requests due to
-// transient network problems.
+// transient network problems. Disabling idempotent write by default
+// upper-bounds the number of in-flight produce requests per broker to 1, vs.
+// the default of 5 when using idempotency.
 //
 // Idempotent production is strictly a win, but does require the
 // IDEMPOTENT_WRITE permission on CLUSTER (pre Kafka 3.0), and not all clients
@@ -1339,22 +1340,6 @@ func DisableFetchSessions() ConsumerOpt {
 // similar lag number).
 func ConsumePreferringLagFn(fn PreferLagFn) ConsumerOpt {
 	return consumerOpt{func(cfg *cfg) { cfg.preferLagFn = fn }}
-}
-
-// ConsumeRecreatedTopics opts into consuming topics that are recreated in
-// Kafka 3.1+. Starting in 3.1, Kafka uses unique topic IDs when fetching, and
-// if you delete and recreate your topic while a consumer is active, the
-// consumer will begin failing because the topic ID has changed. This option
-// lets you opt into consuming the recreated topic.
-//
-// Internally, this option causes the client to purge the topic from the
-// consumer and then re-add it, which likely will cause rebalances for consumer
-// groups. As well, other consumers in the consumer group will independently
-// discover the topic ID has changed, so they will rejoin at different points.
-// These rejoins likely will all happen close together, but be aware there will
-// be a rebalance storm if you recreate your topic.
-func ConsumeRecreatedTopics() ConsumerOpt {
-	return consumerOpt{func(cfg *cfg) { cfg.consumeRecreatedTopics = true }}
 }
 
 //////////////////////////////////

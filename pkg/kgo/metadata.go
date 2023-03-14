@@ -790,9 +790,18 @@ func (cl *Client) mergeTopicPartitions(
 		}
 	}
 
+	// For any partitions **not currently in use**, we need to add them to
+	// the sink or source. If they are in use, they could be getting
+	// managed or moved by the sink or source itself, so we should not
+	// check the index field (which may be concurrently modified).
+	if len(lv.partitions) > len(r.partitions) {
+		return
+	}
+	newPartitions := r.partitions[len(lv.partitions):]
+
 	// Anything left with a negative recBufsIdx / cursorsIdx is a new topic
 	// partition and must be added to the sink / source.
-	for _, newTP := range r.partitions {
+	for _, newTP := range newPartitions {
 		if isProduce && newTP.records.recBufsIdx == -1 {
 			newTP.records.sink.addRecBuf(newTP.records)
 		} else if !isProduce && newTP.cursor.cursorsIdx == -1 {

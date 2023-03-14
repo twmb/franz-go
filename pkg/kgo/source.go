@@ -96,6 +96,8 @@ type cursor struct {
 	topicID   [16]byte
 	partition int32
 
+	unknownIDFails atomicI32
+
 	keepControl bool // whether to keep control records
 
 	cursorsIdx int // updated under source mutex
@@ -874,16 +876,28 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 					keep = true
 				}
 
+			case nil:
+				partOffset.from.unknownIDFails.Store(0)
+				keep = true
+
 			case kerr.UnknownTopicID:
 				// We need to keep UnknownTopicID even though it is
 				// retryable, because encountering this error means
 				// the topic has been recreated and we will never
 				// consume the topic again anymore. This is an error
 				// worth bubbling up.
-				if s.cl.cfg.consumeRecreatedTopics {
-					s.cl.consumer.reloadUnknownTopicID(topic)
-				} else {
+				//
+				// FUN FACT: Kafka will actually return this error
+				// for a brief window immediately after creating a
+				// topic for the first time, meaning the controller
+				// has not yet propagated to the leader that it is
+				// the leader of a new partition. We need to ignore
+				// this error for a _litttttlllleee bit_.
+				if fails := partOffset.from.unknownIDFails.Add(1); fails > 5 {
+					partOffset.from.unknownIDFails.Add(-1)
 					keep = true
+				} else {
+					numErrsStripped++
 				}
 
 			case kerr.OffsetOutOfRange:
