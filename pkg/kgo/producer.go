@@ -1015,6 +1015,8 @@ func (p *producer) maybeAddInflight() bool {
 
 func (p *producer) decInflight() {
 	if p.inflight.Add(-1)>>48 > 0 {
+		p.mu.Lock()
+		p.mu.Unlock() //nolint:gocritic,staticcheck // We use the lock as a barrier, unlocking immediately is safe.
 		p.c.Broadcast()
 	}
 }
