@@ -172,32 +172,27 @@ type ringSeqResp struct {
 	head uint8
 	tail uint8
 	l    uint8
-	dead bool
 }
 
-func (r *ringSeqResp) push(sr *seqResp) (first, dead bool) {
+func (r *ringSeqResp) push(sr *seqResp) (first bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	for r.l == eight && !r.dead {
+	for r.l == eight {
 		if r.c == nil {
 			r.c = sync.NewCond(&r.mu)
 		}
 		r.c.Wait()
 	}
 
-	if r.dead {
-		return false, true
-	}
-
 	r.elems[r.tail] = sr
 	r.tail = (r.tail + 1) & mask7
 	r.l++
 
-	return r.l == 1, false
+	return r.l == 1
 }
 
-func (r *ringSeqResp) dropPeek() (next *seqResp, more, dead bool) {
+func (r *ringSeqResp) dropPeek() (next *seqResp, more bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -209,7 +204,7 @@ func (r *ringSeqResp) dropPeek() (next *seqResp, more, dead bool) {
 		r.c.Signal()
 	}
 
-	return r.elems[r.head], r.l > 0, r.dead
+	return r.elems[r.head], r.l > 0
 }
 
 // Also no die; this type is slightly different because we can have overflow.

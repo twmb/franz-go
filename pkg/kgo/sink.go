@@ -398,7 +398,7 @@ func (s *sink) doSequenced(
 		wait.br = br
 	}
 
-	if first, _ := s.seqResps.push(wait); first {
+	if first := s.seqResps.push(wait); first {
 		go s.handleSeqResps(wait)
 	}
 }
@@ -410,7 +410,7 @@ start:
 	<-wait.done
 	wait.promise(wait.br, wait.resp, wait.err)
 
-	wait, more, _ = s.seqResps.dropPeek()
+	wait, more = s.seqResps.dropPeek()
 	if more {
 		goto start
 	}
