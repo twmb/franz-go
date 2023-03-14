@@ -3,7 +3,7 @@ module admin_client
 go 1.20
 
 require (
-	github.com/twmb/franz-go v1.12.1
+	github.com/twmb/franz-go v1.13.0
 	github.com/twmb/franz-go/pkg/kadm v1.7.0
 )
 

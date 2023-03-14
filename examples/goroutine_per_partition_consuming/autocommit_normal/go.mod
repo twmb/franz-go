@@ -2,7 +2,7 @@ module goroutine_per_partition_consuming_autocommit_normal
 
 go 1.20
 
-require github.com/twmb/franz-go v1.12.1
+require github.com/twmb/franz-go v1.13.0
 
 require (
 	github.com/klauspost/compress v1.16.3 // indirect
