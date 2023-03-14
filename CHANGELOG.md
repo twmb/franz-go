@@ -1,3 +1,69 @@
+v1.13.0
+===
+
+This release contains a few new APIs, two rare bug fixes, updates to plugins,
+and changes the library to now require 1.18.
+
+## Go version
+
+This library has supported Go 1.15 since the beginning. There have been many
+useful features that this library has not been able to use because of continued
+backcompat for 1.15. There is really no reason to support such an old version
+of Go, and Go itself does not support releases prior to 1.18 -- and 1.18 is
+currently only supported for security backports. Switching to 1.18 allows this
+library to remove a few 1.15 / 1.16 backcompat files, and allows switching this
+library from `interface{}` to `any`.
+
+## Behavior changes
+
+If group consuming fails with an error that looks non-retryable, the error is
+now injected into polling as a fake errored fetch. Multiple people have ran
+into problems where their group consumers were failing due to ACLs or due to
+network issues, and it is hard to detect these failures: you either have to pay
+close attention to logs, or you have to hook into HookGroupManageError. Now,
+the error is injected into polling.
+
+## Bugfixes
+
+This release contains two bug fixes, one of which is very rare to encounter, and
+one of which is very easy to encounter but requires configuring the client in
+a way that (nearly) nobody does.
+
+Rare: If you were using EndAndBeginTransaction, there was an internal race that
+could result in a deadlock.
+
+Rare configuration: If you configured balancers manually, and you configured
+CooperativeSticky with any other eager balancer, then the client would
+internally _sometimes_ think it was eager consuming, and _sometimes_ think it
+was cooperative consuming. This would result in stuck partitions while
+consuming.
+
+## Features
+
+* HookClientClosed: A new hook that allows a callback when the client is closed.
+* HookProduceRecordPartitioned: A new hook that is called when a record's partition is chosen.
+* Client.ConfigValue: Returns the value for any configuration option.
+* Client.ConfigValues: Returns the values for any configuration option (for multiple value options, or for strings that are internally string pointers).
+* kadm: a few minor API improvements.
+* plugin/klogr: A new plugin that satisfies the go-logr/logr interfaces.
+* pkg/kfake: A new experimental package that will be added to over time, this mocks brokers and can be used in unit testing (only basic producing & consuming supported so far).
+
+## Relevant commits
+
+- [`1b229ce`](https://github.com/twmb/franz-go/commit/1b229ce) kgo: bugfix transaction ending & beginning
+- [`461d2ef`](https://github.com/twmb/franz-go/commit/461d2ef) kgo: add HookClientClosed and HookProduceRecordPartitioned
+- [`3a7f35e`](https://github.com/twmb/franz-go/commit/3a7f35e) kgo.Client: add UpdateFetchMaxBytes
+- [`b0fa1a0`](https://github.com/twmb/franz-go/commit/b0fa1a0) kgo.Client: add ConfigValue and ConfigValues
+- [`b487a15`](https://github.com/twmb/franz-go/commit/b487a15) kgo: inject the group lost error into polling as `*ErrGroupLost`
+- [`bc638b0`](https://github.com/twmb/franz-go/commit/bc638b0) plugin/kotel.Tracer: add KeyFormatter, only accept utf8 keys
+- [`a568b21`](https://github.com/twmb/franz-go/commit/a568b21) bugfix kgo: do not default to eager if there is any eager balancer
+- [`bf20ac0`](https://github.com/twmb/franz-go/commit/bf20ac0) plugin/kzap: support LogLevelNone
+- [`a9369be`](https://github.com/twmb/franz-go/commit/a9369be) kadm: add state config altering using the older AlterConfigs request
+- [`f5ddf71`](https://github.com/twmb/franz-go/commit/f5ddf71) kadm: add NumPartitions,ReplicationFactor,Configs to CreateTopicResponse
+- [`e45cd72`](https://github.com/twmb/franz-go/commit/e45cd72) consuming: close fetch sessions when closing the client
+- [`d8230ca`](https://github.com/twmb/franz-go/commit/d8230ca) plugin/klogr: support for go-logr
+- [`0f42e43`](https://github.com/twmb/franz-go/commit/0f42e43) check hooks and flatten slices of hooks
+
 v1.12.1
 ===
 
