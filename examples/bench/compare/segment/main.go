@@ -137,6 +137,7 @@ func main() {
 			Brokers:         brokers,
 			Topic:           *topic,
 			ReadLagInterval: -1,
+			CommitInterval:  time.Second * 5,
 		}
 		if *group != "" {
 			cfg.GroupID = *group
