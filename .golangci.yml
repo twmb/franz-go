@@ -97,7 +97,6 @@ linters-settings:
       - evalOrder
       - ifElseChain
       - importShadow
-      - ioutilDeprecated
       - ptrToRefParam
       - sloppyReassign
       - tooManyResultsChecker
