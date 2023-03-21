@@ -1,3 +1,11 @@
+v1.13.1
+===
+
+This patch release fixes a bug where a producer could enter a deadlock if a
+topic is deleted and recreated very quickly while producing.
+
+- [`769e02f`](https://github.com/twmb/franz-go/commit/769e02f) producer: avoid deadlock when when quickly recreating a topic
+
 v1.13.0
 ===
 
