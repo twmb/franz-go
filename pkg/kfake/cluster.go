@@ -1,6 +1,7 @@
 package kfake
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"sync"
@@ -30,6 +31,7 @@ type (
 		controller *broker
 		bs         []*broker
 
+		adminCh      chan func()
 		reqCh        chan clientReq
 		watchFetchCh chan *watchFetch
 
@@ -72,6 +74,7 @@ func NewCluster(opts ...Opt) (c *Cluster, err error) {
 	c = &Cluster{
 		cfg: cfg,
 
+		adminCh:      make(chan func()),
 		reqCh:        make(chan clientReq, 20),
 		watchFetchCh: make(chan *watchFetch, 20),
 
@@ -183,6 +186,10 @@ func (c *Cluster) run() {
 			creq = w.creq
 		case <-c.die:
 			return
+		case fn := <-c.adminCh:
+			// Run a custom request in the context of the cluster
+			fn()
+			continue
 		}
 
 		kreq := creq.kreq
@@ -312,4 +319,40 @@ func (c *Cluster) callControl(key int16, req kmsg.Request, fn controlFn) (kresp 
 		}
 	}()
 	return fn(req)
+}
+
+// Various administrative requests can be passed into the cluster to simulate
+// real-world operations. These are performed synchronously in the goroutine
+// that handles client requests.
+
+func (c *Cluster) admin(fn func()) {
+	c.adminCh <- fn
+}
+
+// MoveTopicPartition simulates the rebalancing of a partition to an alternative
+// broker
+func (c *Cluster) MoveTopicPartition(topic string, partition int32, bid int32) error {
+	var br *broker
+	for _, b := range c.bs {
+		if b.node == bid {
+			br = b
+			break
+		}
+	}
+	if br == nil {
+		return errors.New("no such broker")
+	}
+
+	resp := make(chan error, 1)
+	c.admin(func() {
+		pd, ok := c.data.tps.getp(topic, partition)
+		if !ok {
+			resp <- errors.New("topic/partition not found")
+			return
+		}
+		pd.leader = br
+		resp <- nil
+	})
+
+	return <-resp
 }
