@@ -33,7 +33,8 @@ var crc32c = crc32.MakeTable(crc32.Castagnoli) // record crc's use Castagnoli ta
 
 // Client issues requests and handles responses to a Kafka cluster.
 type Client struct {
-	cfg cfg
+	cfg  cfg
+	opts []Opt
 
 	ctx       context.Context
 	ctxCancel func()
@@ -449,6 +450,7 @@ func NewClient(opts ...Opt) (*Client, error) {
 
 	cl := &Client{
 		cfg:       cfg,
+		opts:      opts,
 		ctx:       ctx,
 		ctxCancel: cancel,
 
@@ -509,6 +511,14 @@ func NewClient(opts ...Opt) (*Client, error) {
 	go cl.reapConnectionsLoop()
 
 	return cl, nil
+}
+
+// Opts returns the options that were used to create this client. This can be
+// as a base to generate a new client, where you can add override options to
+// the end of the original input list. If you want to know a specific option
+// value, you can use ConfigValue or ConfigValues.
+func (cl *Client) Opts() []Opt {
+	return cl.opts
 }
 
 func (cl *Client) loadSeeds() []*broker {
