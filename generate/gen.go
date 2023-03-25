@@ -726,8 +726,16 @@ func (s Struct) WriteThrottleMillisFunc(f StructField, l *LineWriter) {
 	l.Write("func (v *%s) Throttle() (int32, bool) { return v.ThrottleMillis, v.Version >= %d }", s.Name, t.Switchup)
 }
 
-func (s Struct) WriteTimeoutMillisFuncs(l *LineWriter) {
+func (s Struct) WriteSetThrottleMillisFunc(l *LineWriter) {
+	l.Write("func (v *%s) SetThrottle(throttleMillis int32) { v.ThrottleMillis = throttleMillis}", s.Name)
+}
+
+func (s Struct) WriteTimeoutMillisFunc(l *LineWriter) {
 	l.Write("func (v *%s) Timeout() int32 { return v.TimeoutMillis }", s.Name)
+}
+
+func (s Struct) WriteSetTimeoutMillisFunc(l *LineWriter) {
+	l.Write("func (v *%s) SetTimeout(timeoutMillis int32) { v.TimeoutMillis = timeoutMillis }", s.Name)
 }
 
 func (s Struct) WriteAppendFunc(l *LineWriter) {

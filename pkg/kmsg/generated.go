@@ -2782,12 +2782,13 @@ type ProduceRequest struct {
 	UnknownTags Tags // v9+
 }
 
-func (*ProduceRequest) Key() int16                 { return 0 }
-func (*ProduceRequest) MaxVersion() int16          { return 9 }
-func (v *ProduceRequest) SetVersion(version int16) { v.Version = version }
-func (v *ProduceRequest) GetVersion() int16        { return v.Version }
-func (v *ProduceRequest) IsFlexible() bool         { return v.Version >= 9 }
-func (v *ProduceRequest) Timeout() int32           { return v.TimeoutMillis }
+func (*ProduceRequest) Key() int16                       { return 0 }
+func (*ProduceRequest) MaxVersion() int16                { return 9 }
+func (v *ProduceRequest) SetVersion(version int16)       { v.Version = version }
+func (v *ProduceRequest) GetVersion() int16              { return v.Version }
+func (v *ProduceRequest) IsFlexible() bool               { return v.Version >= 9 }
+func (v *ProduceRequest) Timeout() int32                 { return v.TimeoutMillis }
+func (v *ProduceRequest) SetTimeout(timeoutMillis int32) { v.TimeoutMillis = timeoutMillis }
 func (v *ProduceRequest) ResponseKind() Response {
 	r := &ProduceResponse{Version: v.Version}
 	r.Default()
@@ -3232,13 +3233,14 @@ type ProduceResponse struct {
 	UnknownTags Tags // v9+
 }
 
-func (*ProduceResponse) Key() int16                 { return 0 }
-func (*ProduceResponse) MaxVersion() int16          { return 9 }
-func (v *ProduceResponse) SetVersion(version int16) { v.Version = version }
-func (v *ProduceResponse) GetVersion() int16        { return v.Version }
-func (v *ProduceResponse) IsFlexible() bool         { return v.Version >= 9 }
-func (v *ProduceResponse) Throttle() (int32, bool)  { return v.ThrottleMillis, v.Version >= 6 }
-func (v *ProduceResponse) RequestKind() Request     { return &ProduceRequest{Version: v.Version} }
+func (*ProduceResponse) Key() int16                         { return 0 }
+func (*ProduceResponse) MaxVersion() int16                  { return 9 }
+func (v *ProduceResponse) SetVersion(version int16)         { v.Version = version }
+func (v *ProduceResponse) GetVersion() int16                { return v.Version }
+func (v *ProduceResponse) IsFlexible() bool                 { return v.Version >= 9 }
+func (v *ProduceResponse) Throttle() (int32, bool)          { return v.ThrottleMillis, v.Version >= 6 }
+func (v *ProduceResponse) SetThrottle(throttleMillis int32) { v.ThrottleMillis = throttleMillis }
+func (v *ProduceResponse) RequestKind() Request             { return &ProduceRequest{Version: v.Version} }
 
 func (v *ProduceResponse) AppendTo(dst []byte) []byte {
 	version := v.Version
@@ -4541,13 +4543,14 @@ type FetchResponse struct {
 	UnknownTags Tags // v12+
 }
 
-func (*FetchResponse) Key() int16                 { return 1 }
-func (*FetchResponse) MaxVersion() int16          { return 13 }
-func (v *FetchResponse) SetVersion(version int16) { v.Version = version }
-func (v *FetchResponse) GetVersion() int16        { return v.Version }
-func (v *FetchResponse) IsFlexible() bool         { return v.Version >= 12 }
-func (v *FetchResponse) Throttle() (int32, bool)  { return v.ThrottleMillis, v.Version >= 8 }
-func (v *FetchResponse) RequestKind() Request     { return &FetchRequest{Version: v.Version} }
+func (*FetchResponse) Key() int16                         { return 1 }
+func (*FetchResponse) MaxVersion() int16                  { return 13 }
+func (v *FetchResponse) SetVersion(version int16)         { v.Version = version }
+func (v *FetchResponse) GetVersion() int16                { return v.Version }
+func (v *FetchResponse) IsFlexible() bool                 { return v.Version >= 12 }
+func (v *FetchResponse) Throttle() (int32, bool)          { return v.ThrottleMillis, v.Version >= 8 }
+func (v *FetchResponse) SetThrottle(throttleMillis int32) { v.ThrottleMillis = throttleMillis }
+func (v *FetchResponse) RequestKind() Request             { return &FetchRequest{Version: v.Version} }
 
 func (v *FetchResponse) AppendTo(dst []byte) []byte {
 	version := v.Version
@@ -5518,13 +5521,14 @@ type ListOffsetsResponse struct {
 	UnknownTags Tags // v6+
 }
 
-func (*ListOffsetsResponse) Key() int16                 { return 2 }
-func (*ListOffsetsResponse) MaxVersion() int16          { return 7 }
-func (v *ListOffsetsResponse) SetVersion(version int16) { v.Version = version }
-func (v *ListOffsetsResponse) GetVersion() int16        { return v.Version }
-func (v *ListOffsetsResponse) IsFlexible() bool         { return v.Version >= 6 }
-func (v *ListOffsetsResponse) Throttle() (int32, bool)  { return v.ThrottleMillis, v.Version >= 3 }
-func (v *ListOffsetsResponse) RequestKind() Request     { return &ListOffsetsRequest{Version: v.Version} }
+func (*ListOffsetsResponse) Key() int16                         { return 2 }
+func (*ListOffsetsResponse) MaxVersion() int16                  { return 7 }
+func (v *ListOffsetsResponse) SetVersion(version int16)         { v.Version = version }
+func (v *ListOffsetsResponse) GetVersion() int16                { return v.Version }
+func (v *ListOffsetsResponse) IsFlexible() bool                 { return v.Version >= 6 }
+func (v *ListOffsetsResponse) Throttle() (int32, bool)          { return v.ThrottleMillis, v.Version >= 3 }
+func (v *ListOffsetsResponse) SetThrottle(throttleMillis int32) { v.ThrottleMillis = throttleMillis }
+func (v *ListOffsetsResponse) RequestKind() Request             { return &ListOffsetsRequest{Version: v.Version} }
 
 func (v *ListOffsetsResponse) AppendTo(dst []byte) []byte {
 	version := v.Version
@@ -6231,13 +6235,14 @@ type MetadataResponse struct {
 	UnknownTags Tags // v9+
 }
 
-func (*MetadataResponse) Key() int16                 { return 3 }
-func (*MetadataResponse) MaxVersion() int16          { return 12 }
-func (v *MetadataResponse) SetVersion(version int16) { v.Version = version }
-func (v *MetadataResponse) GetVersion() int16        { return v.Version }
-func (v *MetadataResponse) IsFlexible() bool         { return v.Version >= 9 }
-func (v *MetadataResponse) Throttle() (int32, bool)  { return v.ThrottleMillis, v.Version >= 6 }
-func (v *MetadataResponse) RequestKind() Request     { return &MetadataRequest{Version: v.Version} }
+func (*MetadataResponse) Key() int16                         { return 3 }
+func (*MetadataResponse) MaxVersion() int16                  { return 12 }
+func (v *MetadataResponse) SetVersion(version int16)         { v.Version = version }
+func (v *MetadataResponse) GetVersion() int16                { return v.Version }
+func (v *MetadataResponse) IsFlexible() bool                 { return v.Version >= 9 }
+func (v *MetadataResponse) Throttle() (int32, bool)          { return v.ThrottleMillis, v.Version >= 6 }
+func (v *MetadataResponse) SetThrottle(throttleMillis int32) { v.ThrottleMillis = throttleMillis }
+func (v *MetadataResponse) RequestKind() Request             { return &MetadataRequest{Version: v.Version} }
 
 func (v *MetadataResponse) AppendTo(dst []byte) []byte {
 	version := v.Version
@@ -10515,13 +10520,14 @@ type OffsetCommitResponse struct {
 	UnknownTags Tags // v8+
 }
 
-func (*OffsetCommitResponse) Key() int16                 { return 8 }
-func (*OffsetCommitResponse) MaxVersion() int16          { return 8 }
-func (v *OffsetCommitResponse) SetVersion(version int16) { v.Version = version }
-func (v *OffsetCommitResponse) GetVersion() int16        { return v.Version }
-func (v *OffsetCommitResponse) IsFlexible() bool         { return v.Version >= 8 }
-func (v *OffsetCommitResponse) Throttle() (int32, bool)  { return v.ThrottleMillis, v.Version >= 4 }
-func (v *OffsetCommitResponse) RequestKind() Request     { return &OffsetCommitRequest{Version: v.Version} }
+func (*OffsetCommitResponse) Key() int16                         { return 8 }
+func (*OffsetCommitResponse) MaxVersion() int16                  { return 8 }
+func (v *OffsetCommitResponse) SetVersion(version int16)         { v.Version = version }
+func (v *OffsetCommitResponse) GetVersion() int16                { return v.Version }
+func (v *OffsetCommitResponse) IsFlexible() bool                 { return v.Version >= 8 }
+func (v *OffsetCommitResponse) Throttle() (int32, bool)          { return v.ThrottleMillis, v.Version >= 4 }
+func (v *OffsetCommitResponse) SetThrottle(throttleMillis int32) { v.ThrottleMillis = throttleMillis }
+func (v *OffsetCommitResponse) RequestKind() Request             { return &OffsetCommitRequest{Version: v.Version} }
 
 func (v *OffsetCommitResponse) AppendTo(dst []byte) []byte {
 	version := v.Version
@@ -11393,13 +11399,14 @@ type OffsetFetchResponse struct {
 	UnknownTags Tags // v6+
 }
 
-func (*OffsetFetchResponse) Key() int16                 { return 9 }
-func (*OffsetFetchResponse) MaxVersion() int16          { return 8 }
-func (v *OffsetFetchResponse) SetVersion(version int16) { v.Version = version }
-func (v *OffsetFetchResponse) GetVersion() int16        { return v.Version }
-func (v *OffsetFetchResponse) IsFlexible() bool         { return v.Version >= 6 }
-func (v *OffsetFetchResponse) Throttle() (int32, bool)  { return v.ThrottleMillis, v.Version >= 4 }
-func (v *OffsetFetchResponse) RequestKind() Request     { return &OffsetFetchRequest{Version: v.Version} }
+func (*OffsetFetchResponse) Key() int16                         { return 9 }
+func (*OffsetFetchResponse) MaxVersion() int16                  { return 8 }
+func (v *OffsetFetchResponse) SetVersion(version int16)         { v.Version = version }
+func (v *OffsetFetchResponse) GetVersion() int16                { return v.Version }
+func (v *OffsetFetchResponse) IsFlexible() bool                 { return v.Version >= 6 }
+func (v *OffsetFetchResponse) Throttle() (int32, bool)          { return v.ThrottleMillis, v.Version >= 4 }
+func (v *OffsetFetchResponse) SetThrottle(throttleMillis int32) { v.ThrottleMillis = throttleMillis }
+func (v *OffsetFetchResponse) RequestKind() Request             { return &OffsetFetchRequest{Version: v.Version} }
 
 func (v *OffsetFetchResponse) AppendTo(dst []byte) []byte {
 	version := v.Version
@@ -12150,6 +12157,10 @@ func (v *FindCoordinatorResponse) SetVersion(version int16) { v.Version = versio
 func (v *FindCoordinatorResponse) GetVersion() int16        { return v.Version }
 func (v *FindCoordinatorResponse) IsFlexible() bool         { return v.Version >= 3 }
 func (v *FindCoordinatorResponse) Throttle() (int32, bool)  { return v.ThrottleMillis, v.Version >= 2 }
+func (v *FindCoordinatorResponse) SetThrottle(throttleMillis int32) {
+	v.ThrottleMillis = throttleMillis
+}
+
 func (v *FindCoordinatorResponse) RequestKind() Request {
 	return &FindCoordinatorRequest{Version: v.Version}
 }
@@ -12954,13 +12965,14 @@ type JoinGroupResponse struct {
 	UnknownTags Tags // v6+
 }
 
-func (*JoinGroupResponse) Key() int16                 { return 11 }
-func (*JoinGroupResponse) MaxVersion() int16          { return 9 }
-func (v *JoinGroupResponse) SetVersion(version int16) { v.Version = version }
-func (v *JoinGroupResponse) GetVersion() int16        { return v.Version }
-func (v *JoinGroupResponse) IsFlexible() bool         { return v.Version >= 6 }
-func (v *JoinGroupResponse) Throttle() (int32, bool)  { return v.ThrottleMillis, v.Version >= 3 }
-func (v *JoinGroupResponse) RequestKind() Request     { return &JoinGroupRequest{Version: v.Version} }
+func (*JoinGroupResponse) Key() int16                         { return 11 }
+func (*JoinGroupResponse) MaxVersion() int16                  { return 9 }
+func (v *JoinGroupResponse) SetVersion(version int16)         { v.Version = version }
+func (v *JoinGroupResponse) GetVersion() int16                { return v.Version }
+func (v *JoinGroupResponse) IsFlexible() bool                 { return v.Version >= 6 }
+func (v *JoinGroupResponse) Throttle() (int32, bool)          { return v.ThrottleMillis, v.Version >= 3 }
+func (v *JoinGroupResponse) SetThrottle(throttleMillis int32) { v.ThrottleMillis = throttleMillis }
+func (v *JoinGroupResponse) RequestKind() Request             { return &JoinGroupRequest{Version: v.Version} }
 
 func (v *JoinGroupResponse) AppendTo(dst []byte) []byte {
 	version := v.Version
@@ -13511,13 +13523,14 @@ type HeartbeatResponse struct {
 	UnknownTags Tags // v4+
 }
 
-func (*HeartbeatResponse) Key() int16                 { return 12 }
-func (*HeartbeatResponse) MaxVersion() int16          { return 4 }
-func (v *HeartbeatResponse) SetVersion(version int16) { v.Version = version }
-func (v *HeartbeatResponse) GetVersion() int16        { return v.Version }
-func (v *HeartbeatResponse) IsFlexible() bool         { return v.Version >= 4 }
-func (v *HeartbeatResponse) Throttle() (int32, bool)  { return v.ThrottleMillis, v.Version >= 2 }
-func (v *HeartbeatResponse) RequestKind() Request     { return &HeartbeatRequest{Version: v.Version} }
+func (*HeartbeatResponse) Key() int16                         { return 12 }
+func (*HeartbeatResponse) MaxVersion() int16                  { return 4 }
+func (v *HeartbeatResponse) SetVersion(version int16)         { v.Version = version }
+func (v *HeartbeatResponse) GetVersion() int16                { return v.Version }
+func (v *HeartbeatResponse) IsFlexible() bool                 { return v.Version >= 4 }
+func (v *HeartbeatResponse) Throttle() (int32, bool)          { return v.ThrottleMillis, v.Version >= 2 }
+func (v *HeartbeatResponse) SetThrottle(throttleMillis int32) { v.ThrottleMillis = throttleMillis }
+func (v *HeartbeatResponse) RequestKind() Request             { return &HeartbeatRequest{Version: v.Version} }
 
 func (v *HeartbeatResponse) AppendTo(dst []byte) []byte {
 	version := v.Version
@@ -13945,13 +13958,14 @@ type LeaveGroupResponse struct {
 	UnknownTags Tags // v4+
 }
 
-func (*LeaveGroupResponse) Key() int16                 { return 13 }
-func (*LeaveGroupResponse) MaxVersion() int16          { return 5 }
-func (v *LeaveGroupResponse) SetVersion(version int16) { v.Version = version }
-func (v *LeaveGroupResponse) GetVersion() int16        { return v.Version }
-func (v *LeaveGroupResponse) IsFlexible() bool         { return v.Version >= 4 }
-func (v *LeaveGroupResponse) Throttle() (int32, bool)  { return v.ThrottleMillis, v.Version >= 2 }
-func (v *LeaveGroupResponse) RequestKind() Request     { return &LeaveGroupRequest{Version: v.Version} }
+func (*LeaveGroupResponse) Key() int16                         { return 13 }
+func (*LeaveGroupResponse) MaxVersion() int16                  { return 5 }
+func (v *LeaveGroupResponse) SetVersion(version int16)         { v.Version = version }
+func (v *LeaveGroupResponse) GetVersion() int16                { return v.Version }
+func (v *LeaveGroupResponse) IsFlexible() bool                 { return v.Version >= 4 }
+func (v *LeaveGroupResponse) Throttle() (int32, bool)          { return v.ThrottleMillis, v.Version >= 2 }
+func (v *LeaveGroupResponse) SetThrottle(throttleMillis int32) { v.ThrottleMillis = throttleMillis }
+func (v *LeaveGroupResponse) RequestKind() Request             { return &LeaveGroupRequest{Version: v.Version} }
 
 func (v *LeaveGroupResponse) AppendTo(dst []byte) []byte {
 	version := v.Version
@@ -14527,13 +14541,14 @@ type SyncGroupResponse struct {
 	UnknownTags Tags // v4+
 }
 
-func (*SyncGroupResponse) Key() int16                 { return 14 }
-func (*SyncGroupResponse) MaxVersion() int16          { return 5 }
-func (v *SyncGroupResponse) SetVersion(version int16) { v.Version = version }
-func (v *SyncGroupResponse) GetVersion() int16        { return v.Version }
-func (v *SyncGroupResponse) IsFlexible() bool         { return v.Version >= 4 }
-func (v *SyncGroupResponse) Throttle() (int32, bool)  { return v.ThrottleMillis, v.Version >= 2 }
-func (v *SyncGroupResponse) RequestKind() Request     { return &SyncGroupRequest{Version: v.Version} }
+func (*SyncGroupResponse) Key() int16                         { return 14 }
+func (*SyncGroupResponse) MaxVersion() int16                  { return 5 }
+func (v *SyncGroupResponse) SetVersion(version int16)         { v.Version = version }
+func (v *SyncGroupResponse) GetVersion() int16                { return v.Version }
+func (v *SyncGroupResponse) IsFlexible() bool                 { return v.Version >= 4 }
+func (v *SyncGroupResponse) Throttle() (int32, bool)          { return v.ThrottleMillis, v.Version >= 2 }
+func (v *SyncGroupResponse) SetThrottle(throttleMillis int32) { v.ThrottleMillis = throttleMillis }
+func (v *SyncGroupResponse) RequestKind() Request             { return &SyncGroupRequest{Version: v.Version} }
 
 func (v *SyncGroupResponse) AppendTo(dst []byte) []byte {
 	version := v.Version
@@ -14943,12 +14958,13 @@ type DescribeGroupsResponse struct {
 	UnknownTags Tags // v5+
 }
 
-func (*DescribeGroupsResponse) Key() int16                 { return 15 }
-func (*DescribeGroupsResponse) MaxVersion() int16          { return 5 }
-func (v *DescribeGroupsResponse) SetVersion(version int16) { v.Version = version }
-func (v *DescribeGroupsResponse) GetVersion() int16        { return v.Version }
-func (v *DescribeGroupsResponse) IsFlexible() bool         { return v.Version >= 5 }
-func (v *DescribeGroupsResponse) Throttle() (int32, bool)  { return v.ThrottleMillis, v.Version >= 2 }
+func (*DescribeGroupsResponse) Key() int16                         { return 15 }
+func (*DescribeGroupsResponse) MaxVersion() int16                  { return 5 }
+func (v *DescribeGroupsResponse) SetVersion(version int16)         { v.Version = version }
+func (v *DescribeGroupsResponse) GetVersion() int16                { return v.Version }
+func (v *DescribeGroupsResponse) IsFlexible() bool                 { return v.Version >= 5 }
+func (v *DescribeGroupsResponse) Throttle() (int32, bool)          { return v.ThrottleMillis, v.Version >= 2 }
+func (v *DescribeGroupsResponse) SetThrottle(throttleMillis int32) { v.ThrottleMillis = throttleMillis }
 func (v *DescribeGroupsResponse) RequestKind() Request {
 	return &DescribeGroupsRequest{Version: v.Version}
 }
@@ -15548,13 +15564,14 @@ type ListGroupsResponse struct {
 	UnknownTags Tags // v3+
 }
 
-func (*ListGroupsResponse) Key() int16                 { return 16 }
-func (*ListGroupsResponse) MaxVersion() int16          { return 4 }
-func (v *ListGroupsResponse) SetVersion(version int16) { v.Version = version }
-func (v *ListGroupsResponse) GetVersion() int16        { return v.Version }
-func (v *ListGroupsResponse) IsFlexible() bool         { return v.Version >= 3 }
-func (v *ListGroupsResponse) Throttle() (int32, bool)  { return v.ThrottleMillis, v.Version >= 2 }
-func (v *ListGroupsResponse) RequestKind() Request     { return &ListGroupsRequest{Version: v.Version} }
+func (*ListGroupsResponse) Key() int16                         { return 16 }
+func (*ListGroupsResponse) MaxVersion() int16                  { return 4 }
+func (v *ListGroupsResponse) SetVersion(version int16)         { v.Version = version }
+func (v *ListGroupsResponse) GetVersion() int16                { return v.Version }
+func (v *ListGroupsResponse) IsFlexible() bool                 { return v.Version >= 3 }
+func (v *ListGroupsResponse) Throttle() (int32, bool)          { return v.ThrottleMillis, v.Version >= 2 }
+func (v *ListGroupsResponse) SetThrottle(throttleMillis int32) { v.ThrottleMillis = throttleMillis }
+func (v *ListGroupsResponse) RequestKind() Request             { return &ListGroupsRequest{Version: v.Version} }
 
 func (v *ListGroupsResponse) AppendTo(dst []byte) []byte {
 	version := v.Version
@@ -16233,13 +16250,14 @@ type ApiVersionsResponse struct {
 	UnknownTags Tags // v3+
 }
 
-func (*ApiVersionsResponse) Key() int16                 { return 18 }
-func (*ApiVersionsResponse) MaxVersion() int16          { return 3 }
-func (v *ApiVersionsResponse) SetVersion(version int16) { v.Version = version }
-func (v *ApiVersionsResponse) GetVersion() int16        { return v.Version }
-func (v *ApiVersionsResponse) IsFlexible() bool         { return v.Version >= 3 }
-func (v *ApiVersionsResponse) Throttle() (int32, bool)  { return v.ThrottleMillis, v.Version >= 2 }
-func (v *ApiVersionsResponse) RequestKind() Request     { return &ApiVersionsRequest{Version: v.Version} }
+func (*ApiVersionsResponse) Key() int16                         { return 18 }
+func (*ApiVersionsResponse) MaxVersion() int16                  { return 3 }
+func (v *ApiVersionsResponse) SetVersion(version int16)         { v.Version = version }
+func (v *ApiVersionsResponse) GetVersion() int16                { return v.Version }
+func (v *ApiVersionsResponse) IsFlexible() bool                 { return v.Version >= 3 }
+func (v *ApiVersionsResponse) Throttle() (int32, bool)          { return v.ThrottleMillis, v.Version >= 2 }
+func (v *ApiVersionsResponse) SetThrottle(throttleMillis int32) { v.ThrottleMillis = throttleMillis }
+func (v *ApiVersionsResponse) RequestKind() Request             { return &ApiVersionsRequest{Version: v.Version} }
 
 func (v *ApiVersionsResponse) AppendTo(dst []byte) []byte {
 	version := v.Version
@@ -16738,13 +16756,14 @@ type CreateTopicsRequest struct {
 	UnknownTags Tags // v5+
 }
 
-func (*CreateTopicsRequest) Key() int16                 { return 19 }
-func (*CreateTopicsRequest) MaxVersion() int16          { return 7 }
-func (v *CreateTopicsRequest) SetVersion(version int16) { v.Version = version }
-func (v *CreateTopicsRequest) GetVersion() int16        { return v.Version }
-func (v *CreateTopicsRequest) IsFlexible() bool         { return v.Version >= 5 }
-func (v *CreateTopicsRequest) Timeout() int32           { return v.TimeoutMillis }
-func (v *CreateTopicsRequest) IsAdminRequest()          {}
+func (*CreateTopicsRequest) Key() int16                       { return 19 }
+func (*CreateTopicsRequest) MaxVersion() int16                { return 7 }
+func (v *CreateTopicsRequest) SetVersion(version int16)       { v.Version = version }
+func (v *CreateTopicsRequest) GetVersion() int16              { return v.Version }
+func (v *CreateTopicsRequest) IsFlexible() bool               { return v.Version >= 5 }
+func (v *CreateTopicsRequest) Timeout() int32                 { return v.TimeoutMillis }
+func (v *CreateTopicsRequest) SetTimeout(timeoutMillis int32) { v.TimeoutMillis = timeoutMillis }
+func (v *CreateTopicsRequest) IsAdminRequest()                {}
 func (v *CreateTopicsRequest) ResponseKind() Response {
 	r := &CreateTopicsResponse{Version: v.Version}
 	r.Default()
@@ -17232,13 +17251,14 @@ type CreateTopicsResponse struct {
 	UnknownTags Tags // v5+
 }
 
-func (*CreateTopicsResponse) Key() int16                 { return 19 }
-func (*CreateTopicsResponse) MaxVersion() int16          { return 7 }
-func (v *CreateTopicsResponse) SetVersion(version int16) { v.Version = version }
-func (v *CreateTopicsResponse) GetVersion() int16        { return v.Version }
-func (v *CreateTopicsResponse) IsFlexible() bool         { return v.Version >= 5 }
-func (v *CreateTopicsResponse) Throttle() (int32, bool)  { return v.ThrottleMillis, v.Version >= 3 }
-func (v *CreateTopicsResponse) RequestKind() Request     { return &CreateTopicsRequest{Version: v.Version} }
+func (*CreateTopicsResponse) Key() int16                         { return 19 }
+func (*CreateTopicsResponse) MaxVersion() int16                  { return 7 }
+func (v *CreateTopicsResponse) SetVersion(version int16)         { v.Version = version }
+func (v *CreateTopicsResponse) GetVersion() int16                { return v.Version }
+func (v *CreateTopicsResponse) IsFlexible() bool                 { return v.Version >= 5 }
+func (v *CreateTopicsResponse) Throttle() (int32, bool)          { return v.ThrottleMillis, v.Version >= 3 }
+func (v *CreateTopicsResponse) SetThrottle(throttleMillis int32) { v.ThrottleMillis = throttleMillis }
+func (v *CreateTopicsResponse) RequestKind() Request             { return &CreateTopicsRequest{Version: v.Version} }
 
 func (v *CreateTopicsResponse) AppendTo(dst []byte) []byte {
 	version := v.Version
@@ -17618,13 +17638,14 @@ type DeleteTopicsRequest struct {
 	UnknownTags Tags // v4+
 }
 
-func (*DeleteTopicsRequest) Key() int16                 { return 20 }
-func (*DeleteTopicsRequest) MaxVersion() int16          { return 6 }
-func (v *DeleteTopicsRequest) SetVersion(version int16) { v.Version = version }
-func (v *DeleteTopicsRequest) GetVersion() int16        { return v.Version }
-func (v *DeleteTopicsRequest) IsFlexible() bool         { return v.Version >= 4 }
-func (v *DeleteTopicsRequest) Timeout() int32           { return v.TimeoutMillis }
-func (v *DeleteTopicsRequest) IsAdminRequest()          {}
+func (*DeleteTopicsRequest) Key() int16                       { return 20 }
+func (*DeleteTopicsRequest) MaxVersion() int16                { return 6 }
+func (v *DeleteTopicsRequest) SetVersion(version int16)       { v.Version = version }
+func (v *DeleteTopicsRequest) GetVersion() int16              { return v.Version }
+func (v *DeleteTopicsRequest) IsFlexible() bool               { return v.Version >= 4 }
+func (v *DeleteTopicsRequest) Timeout() int32                 { return v.TimeoutMillis }
+func (v *DeleteTopicsRequest) SetTimeout(timeoutMillis int32) { v.TimeoutMillis = timeoutMillis }
+func (v *DeleteTopicsRequest) IsAdminRequest()                {}
 func (v *DeleteTopicsRequest) ResponseKind() Response {
 	r := &DeleteTopicsResponse{Version: v.Version}
 	r.Default()
@@ -17904,13 +17925,14 @@ type DeleteTopicsResponse struct {
 	UnknownTags Tags // v4+
 }
 
-func (*DeleteTopicsResponse) Key() int16                 { return 20 }
-func (*DeleteTopicsResponse) MaxVersion() int16          { return 6 }
-func (v *DeleteTopicsResponse) SetVersion(version int16) { v.Version = version }
-func (v *DeleteTopicsResponse) GetVersion() int16        { return v.Version }
-func (v *DeleteTopicsResponse) IsFlexible() bool         { return v.Version >= 4 }
-func (v *DeleteTopicsResponse) Throttle() (int32, bool)  { return v.ThrottleMillis, v.Version >= 2 }
-func (v *DeleteTopicsResponse) RequestKind() Request     { return &DeleteTopicsRequest{Version: v.Version} }
+func (*DeleteTopicsResponse) Key() int16                         { return 20 }
+func (*DeleteTopicsResponse) MaxVersion() int16                  { return 6 }
+func (v *DeleteTopicsResponse) SetVersion(version int16)         { v.Version = version }
+func (v *DeleteTopicsResponse) GetVersion() int16                { return v.Version }
+func (v *DeleteTopicsResponse) IsFlexible() bool                 { return v.Version >= 4 }
+func (v *DeleteTopicsResponse) Throttle() (int32, bool)          { return v.ThrottleMillis, v.Version >= 2 }
+func (v *DeleteTopicsResponse) SetThrottle(throttleMillis int32) { v.ThrottleMillis = throttleMillis }
+func (v *DeleteTopicsResponse) RequestKind() Request             { return &DeleteTopicsRequest{Version: v.Version} }
 
 func (v *DeleteTopicsResponse) AppendTo(dst []byte) []byte {
 	version := v.Version
@@ -18198,12 +18220,13 @@ type DeleteRecordsRequest struct {
 	UnknownTags Tags // v2+
 }
 
-func (*DeleteRecordsRequest) Key() int16                 { return 21 }
-func (*DeleteRecordsRequest) MaxVersion() int16          { return 2 }
-func (v *DeleteRecordsRequest) SetVersion(version int16) { v.Version = version }
-func (v *DeleteRecordsRequest) GetVersion() int16        { return v.Version }
-func (v *DeleteRecordsRequest) IsFlexible() bool         { return v.Version >= 2 }
-func (v *DeleteRecordsRequest) Timeout() int32           { return v.TimeoutMillis }
+func (*DeleteRecordsRequest) Key() int16                       { return 21 }
+func (*DeleteRecordsRequest) MaxVersion() int16                { return 2 }
+func (v *DeleteRecordsRequest) SetVersion(version int16)       { v.Version = version }
+func (v *DeleteRecordsRequest) GetVersion() int16              { return v.Version }
+func (v *DeleteRecordsRequest) IsFlexible() bool               { return v.Version >= 2 }
+func (v *DeleteRecordsRequest) Timeout() int32                 { return v.TimeoutMillis }
+func (v *DeleteRecordsRequest) SetTimeout(timeoutMillis int32) { v.TimeoutMillis = timeoutMillis }
 func (v *DeleteRecordsRequest) ResponseKind() Response {
 	r := &DeleteRecordsResponse{Version: v.Version}
 	r.Default()
@@ -18499,12 +18522,13 @@ type DeleteRecordsResponse struct {
 	UnknownTags Tags // v2+
 }
 
-func (*DeleteRecordsResponse) Key() int16                 { return 21 }
-func (*DeleteRecordsResponse) MaxVersion() int16          { return 2 }
-func (v *DeleteRecordsResponse) SetVersion(version int16) { v.Version = version }
-func (v *DeleteRecordsResponse) GetVersion() int16        { return v.Version }
-func (v *DeleteRecordsResponse) IsFlexible() bool         { return v.Version >= 2 }
-func (v *DeleteRecordsResponse) Throttle() (int32, bool)  { return v.ThrottleMillis, v.Version >= 1 }
+func (*DeleteRecordsResponse) Key() int16                         { return 21 }
+func (*DeleteRecordsResponse) MaxVersion() int16                  { return 2 }
+func (v *DeleteRecordsResponse) SetVersion(version int16)         { v.Version = version }
+func (v *DeleteRecordsResponse) GetVersion() int16                { return v.Version }
+func (v *DeleteRecordsResponse) IsFlexible() bool                 { return v.Version >= 2 }
+func (v *DeleteRecordsResponse) Throttle() (int32, bool)          { return v.ThrottleMillis, v.Version >= 1 }
+func (v *DeleteRecordsResponse) SetThrottle(throttleMillis int32) { v.ThrottleMillis = throttleMillis }
 func (v *DeleteRecordsResponse) RequestKind() Request {
 	return &DeleteRecordsRequest{Version: v.Version}
 }
@@ -18917,12 +18941,13 @@ type InitProducerIDResponse struct {
 	UnknownTags Tags // v2+
 }
 
-func (*InitProducerIDResponse) Key() int16                 { return 22 }
-func (*InitProducerIDResponse) MaxVersion() int16          { return 4 }
-func (v *InitProducerIDResponse) SetVersion(version int16) { v.Version = version }
-func (v *InitProducerIDResponse) GetVersion() int16        { return v.Version }
-func (v *InitProducerIDResponse) IsFlexible() bool         { return v.Version >= 2 }
-func (v *InitProducerIDResponse) Throttle() (int32, bool)  { return v.ThrottleMillis, v.Version >= 1 }
+func (*InitProducerIDResponse) Key() int16                         { return 22 }
+func (*InitProducerIDResponse) MaxVersion() int16                  { return 4 }
+func (v *InitProducerIDResponse) SetVersion(version int16)         { v.Version = version }
+func (v *InitProducerIDResponse) GetVersion() int16                { return v.Version }
+func (v *InitProducerIDResponse) IsFlexible() bool                 { return v.Version >= 2 }
+func (v *InitProducerIDResponse) Throttle() (int32, bool)          { return v.ThrottleMillis, v.Version >= 1 }
+func (v *InitProducerIDResponse) SetThrottle(throttleMillis int32) { v.ThrottleMillis = throttleMillis }
 func (v *InitProducerIDResponse) RequestKind() Request {
 	return &InitProducerIDRequest{Version: v.Version}
 }
@@ -19432,6 +19457,10 @@ func (v *OffsetForLeaderEpochResponse) GetVersion() int16        { return v.Vers
 func (v *OffsetForLeaderEpochResponse) IsFlexible() bool         { return v.Version >= 4 }
 func (v *OffsetForLeaderEpochResponse) Throttle() (int32, bool) {
 	return v.ThrottleMillis, v.Version >= 0
+}
+
+func (v *OffsetForLeaderEpochResponse) SetThrottle(throttleMillis int32) {
+	v.ThrottleMillis = throttleMillis
 }
 
 func (v *OffsetForLeaderEpochResponse) RequestKind() Request {
@@ -20020,6 +20049,10 @@ func (v *AddPartitionsToTxnResponse) Throttle() (int32, bool) {
 	return v.ThrottleMillis, v.Version >= 1
 }
 
+func (v *AddPartitionsToTxnResponse) SetThrottle(throttleMillis int32) {
+	v.ThrottleMillis = throttleMillis
+}
+
 func (v *AddPartitionsToTxnResponse) RequestKind() Request {
 	return &AddPartitionsToTxnRequest{Version: v.Version}
 }
@@ -20419,6 +20452,10 @@ func (v *AddOffsetsToTxnResponse) SetVersion(version int16) { v.Version = versio
 func (v *AddOffsetsToTxnResponse) GetVersion() int16        { return v.Version }
 func (v *AddOffsetsToTxnResponse) IsFlexible() bool         { return v.Version >= 3 }
 func (v *AddOffsetsToTxnResponse) Throttle() (int32, bool)  { return v.ThrottleMillis, v.Version >= 1 }
+func (v *AddOffsetsToTxnResponse) SetThrottle(throttleMillis int32) {
+	v.ThrottleMillis = throttleMillis
+}
+
 func (v *AddOffsetsToTxnResponse) RequestKind() Request {
 	return &AddOffsetsToTxnRequest{Version: v.Version}
 }
@@ -20682,13 +20719,14 @@ type EndTxnResponse struct {
 	UnknownTags Tags // v3+
 }
 
-func (*EndTxnResponse) Key() int16                 { return 26 }
-func (*EndTxnResponse) MaxVersion() int16          { return 3 }
-func (v *EndTxnResponse) SetVersion(version int16) { v.Version = version }
-func (v *EndTxnResponse) GetVersion() int16        { return v.Version }
-func (v *EndTxnResponse) IsFlexible() bool         { return v.Version >= 3 }
-func (v *EndTxnResponse) Throttle() (int32, bool)  { return v.ThrottleMillis, v.Version >= 1 }
-func (v *EndTxnResponse) RequestKind() Request     { return &EndTxnRequest{Version: v.Version} }
+func (*EndTxnResponse) Key() int16                         { return 26 }
+func (*EndTxnResponse) MaxVersion() int16                  { return 3 }
+func (v *EndTxnResponse) SetVersion(version int16)         { v.Version = version }
+func (v *EndTxnResponse) GetVersion() int16                { return v.Version }
+func (v *EndTxnResponse) IsFlexible() bool                 { return v.Version >= 3 }
+func (v *EndTxnResponse) Throttle() (int32, bool)          { return v.ThrottleMillis, v.Version >= 1 }
+func (v *EndTxnResponse) SetThrottle(throttleMillis int32) { v.ThrottleMillis = throttleMillis }
+func (v *EndTxnResponse) RequestKind() Request             { return &EndTxnRequest{Version: v.Version} }
 
 func (v *EndTxnResponse) AppendTo(dst []byte) []byte {
 	version := v.Version
@@ -21998,6 +22036,10 @@ func (v *TxnOffsetCommitResponse) SetVersion(version int16) { v.Version = versio
 func (v *TxnOffsetCommitResponse) GetVersion() int16        { return v.Version }
 func (v *TxnOffsetCommitResponse) IsFlexible() bool         { return v.Version >= 3 }
 func (v *TxnOffsetCommitResponse) Throttle() (int32, bool)  { return v.ThrottleMillis, v.Version >= 1 }
+func (v *TxnOffsetCommitResponse) SetThrottle(throttleMillis int32) {
+	v.ThrottleMillis = throttleMillis
+}
+
 func (v *TxnOffsetCommitResponse) RequestKind() Request {
 	return &TxnOffsetCommitRequest{Version: v.Version}
 }
@@ -22542,13 +22584,14 @@ type DescribeACLsResponse struct {
 	UnknownTags Tags // v2+
 }
 
-func (*DescribeACLsResponse) Key() int16                 { return 29 }
-func (*DescribeACLsResponse) MaxVersion() int16          { return 3 }
-func (v *DescribeACLsResponse) SetVersion(version int16) { v.Version = version }
-func (v *DescribeACLsResponse) GetVersion() int16        { return v.Version }
-func (v *DescribeACLsResponse) IsFlexible() bool         { return v.Version >= 2 }
-func (v *DescribeACLsResponse) Throttle() (int32, bool)  { return v.ThrottleMillis, v.Version >= 1 }
-func (v *DescribeACLsResponse) RequestKind() Request     { return &DescribeACLsRequest{Version: v.Version} }
+func (*DescribeACLsResponse) Key() int16                         { return 29 }
+func (*DescribeACLsResponse) MaxVersion() int16                  { return 3 }
+func (v *DescribeACLsResponse) SetVersion(version int16)         { v.Version = version }
+func (v *DescribeACLsResponse) GetVersion() int16                { return v.Version }
+func (v *DescribeACLsResponse) IsFlexible() bool                 { return v.Version >= 2 }
+func (v *DescribeACLsResponse) Throttle() (int32, bool)          { return v.ThrottleMillis, v.Version >= 1 }
+func (v *DescribeACLsResponse) SetThrottle(throttleMillis int32) { v.ThrottleMillis = throttleMillis }
+func (v *DescribeACLsResponse) RequestKind() Request             { return &DescribeACLsRequest{Version: v.Version} }
 
 func (v *DescribeACLsResponse) AppendTo(dst []byte) []byte {
 	version := v.Version
@@ -23235,13 +23278,14 @@ type CreateACLsResponse struct {
 	UnknownTags Tags // v2+
 }
 
-func (*CreateACLsResponse) Key() int16                 { return 30 }
-func (*CreateACLsResponse) MaxVersion() int16          { return 3 }
-func (v *CreateACLsResponse) SetVersion(version int16) { v.Version = version }
-func (v *CreateACLsResponse) GetVersion() int16        { return v.Version }
-func (v *CreateACLsResponse) IsFlexible() bool         { return v.Version >= 2 }
-func (v *CreateACLsResponse) Throttle() (int32, bool)  { return v.ThrottleMillis, v.Version >= 1 }
-func (v *CreateACLsResponse) RequestKind() Request     { return &CreateACLsRequest{Version: v.Version} }
+func (*CreateACLsResponse) Key() int16                         { return 30 }
+func (*CreateACLsResponse) MaxVersion() int16                  { return 3 }
+func (v *CreateACLsResponse) SetVersion(version int16)         { v.Version = version }
+func (v *CreateACLsResponse) GetVersion() int16                { return v.Version }
+func (v *CreateACLsResponse) IsFlexible() bool                 { return v.Version >= 2 }
+func (v *CreateACLsResponse) Throttle() (int32, bool)          { return v.ThrottleMillis, v.Version >= 1 }
+func (v *CreateACLsResponse) SetThrottle(throttleMillis int32) { v.ThrottleMillis = throttleMillis }
+func (v *CreateACLsResponse) RequestKind() Request             { return &CreateACLsRequest{Version: v.Version} }
 
 func (v *CreateACLsResponse) AppendTo(dst []byte) []byte {
 	version := v.Version
@@ -23772,13 +23816,14 @@ type DeleteACLsResponse struct {
 	UnknownTags Tags // v2+
 }
 
-func (*DeleteACLsResponse) Key() int16                 { return 31 }
-func (*DeleteACLsResponse) MaxVersion() int16          { return 3 }
-func (v *DeleteACLsResponse) SetVersion(version int16) { v.Version = version }
-func (v *DeleteACLsResponse) GetVersion() int16        { return v.Version }
-func (v *DeleteACLsResponse) IsFlexible() bool         { return v.Version >= 2 }
-func (v *DeleteACLsResponse) Throttle() (int32, bool)  { return v.ThrottleMillis, v.Version >= 1 }
-func (v *DeleteACLsResponse) RequestKind() Request     { return &DeleteACLsRequest{Version: v.Version} }
+func (*DeleteACLsResponse) Key() int16                         { return 31 }
+func (*DeleteACLsResponse) MaxVersion() int16                  { return 3 }
+func (v *DeleteACLsResponse) SetVersion(version int16)         { v.Version = version }
+func (v *DeleteACLsResponse) GetVersion() int16                { return v.Version }
+func (v *DeleteACLsResponse) IsFlexible() bool                 { return v.Version >= 2 }
+func (v *DeleteACLsResponse) Throttle() (int32, bool)          { return v.ThrottleMillis, v.Version >= 1 }
+func (v *DeleteACLsResponse) SetThrottle(throttleMillis int32) { v.ThrottleMillis = throttleMillis }
+func (v *DeleteACLsResponse) RequestKind() Request             { return &DeleteACLsRequest{Version: v.Version} }
 
 func (v *DeleteACLsResponse) AppendTo(dst []byte) []byte {
 	version := v.Version
@@ -24572,6 +24617,10 @@ func (v *DescribeConfigsResponse) SetVersion(version int16) { v.Version = versio
 func (v *DescribeConfigsResponse) GetVersion() int16        { return v.Version }
 func (v *DescribeConfigsResponse) IsFlexible() bool         { return v.Version >= 4 }
 func (v *DescribeConfigsResponse) Throttle() (int32, bool)  { return v.ThrottleMillis, v.Version >= 2 }
+func (v *DescribeConfigsResponse) SetThrottle(throttleMillis int32) {
+	v.ThrottleMillis = throttleMillis
+}
+
 func (v *DescribeConfigsResponse) RequestKind() Request {
 	return &DescribeConfigsRequest{Version: v.Version}
 }
@@ -25448,13 +25497,14 @@ type AlterConfigsResponse struct {
 	UnknownTags Tags // v2+
 }
 
-func (*AlterConfigsResponse) Key() int16                 { return 33 }
-func (*AlterConfigsResponse) MaxVersion() int16          { return 2 }
-func (v *AlterConfigsResponse) SetVersion(version int16) { v.Version = version }
-func (v *AlterConfigsResponse) GetVersion() int16        { return v.Version }
-func (v *AlterConfigsResponse) IsFlexible() bool         { return v.Version >= 2 }
-func (v *AlterConfigsResponse) Throttle() (int32, bool)  { return v.ThrottleMillis, v.Version >= 1 }
-func (v *AlterConfigsResponse) RequestKind() Request     { return &AlterConfigsRequest{Version: v.Version} }
+func (*AlterConfigsResponse) Key() int16                         { return 33 }
+func (*AlterConfigsResponse) MaxVersion() int16                  { return 2 }
+func (v *AlterConfigsResponse) SetVersion(version int16)         { v.Version = version }
+func (v *AlterConfigsResponse) GetVersion() int16                { return v.Version }
+func (v *AlterConfigsResponse) IsFlexible() bool                 { return v.Version >= 2 }
+func (v *AlterConfigsResponse) Throttle() (int32, bool)          { return v.ThrottleMillis, v.Version >= 1 }
+func (v *AlterConfigsResponse) SetThrottle(throttleMillis int32) { v.ThrottleMillis = throttleMillis }
+func (v *AlterConfigsResponse) RequestKind() Request             { return &AlterConfigsRequest{Version: v.Version} }
 
 func (v *AlterConfigsResponse) AppendTo(dst []byte) []byte {
 	version := v.Version
@@ -26032,6 +26082,10 @@ func (v *AlterReplicaLogDirsResponse) Throttle() (int32, bool) {
 	return v.ThrottleMillis, v.Version >= 1
 }
 
+func (v *AlterReplicaLogDirsResponse) SetThrottle(throttleMillis int32) {
+	v.ThrottleMillis = throttleMillis
+}
+
 func (v *AlterReplicaLogDirsResponse) RequestKind() Request {
 	return &AlterReplicaLogDirsRequest{Version: v.Version}
 }
@@ -26581,6 +26635,10 @@ func (v *DescribeLogDirsResponse) SetVersion(version int16) { v.Version = versio
 func (v *DescribeLogDirsResponse) GetVersion() int16        { return v.Version }
 func (v *DescribeLogDirsResponse) IsFlexible() bool         { return v.Version >= 2 }
 func (v *DescribeLogDirsResponse) Throttle() (int32, bool)  { return v.ThrottleMillis, v.Version >= 1 }
+func (v *DescribeLogDirsResponse) SetThrottle(throttleMillis int32) {
+	v.ThrottleMillis = throttleMillis
+}
+
 func (v *DescribeLogDirsResponse) RequestKind() Request {
 	return &DescribeLogDirsRequest{Version: v.Version}
 }
@@ -27226,13 +27284,14 @@ type CreatePartitionsRequest struct {
 	UnknownTags Tags // v2+
 }
 
-func (*CreatePartitionsRequest) Key() int16                 { return 37 }
-func (*CreatePartitionsRequest) MaxVersion() int16          { return 3 }
-func (v *CreatePartitionsRequest) SetVersion(version int16) { v.Version = version }
-func (v *CreatePartitionsRequest) GetVersion() int16        { return v.Version }
-func (v *CreatePartitionsRequest) IsFlexible() bool         { return v.Version >= 2 }
-func (v *CreatePartitionsRequest) Timeout() int32           { return v.TimeoutMillis }
-func (v *CreatePartitionsRequest) IsAdminRequest()          {}
+func (*CreatePartitionsRequest) Key() int16                       { return 37 }
+func (*CreatePartitionsRequest) MaxVersion() int16                { return 3 }
+func (v *CreatePartitionsRequest) SetVersion(version int16)       { v.Version = version }
+func (v *CreatePartitionsRequest) GetVersion() int16              { return v.Version }
+func (v *CreatePartitionsRequest) IsFlexible() bool               { return v.Version >= 2 }
+func (v *CreatePartitionsRequest) Timeout() int32                 { return v.TimeoutMillis }
+func (v *CreatePartitionsRequest) SetTimeout(timeoutMillis int32) { v.TimeoutMillis = timeoutMillis }
+func (v *CreatePartitionsRequest) IsAdminRequest()                {}
 func (v *CreatePartitionsRequest) ResponseKind() Response {
 	r := &CreatePartitionsResponse{Version: v.Version}
 	r.Default()
@@ -27550,6 +27609,10 @@ func (v *CreatePartitionsResponse) SetVersion(version int16) { v.Version = versi
 func (v *CreatePartitionsResponse) GetVersion() int16        { return v.Version }
 func (v *CreatePartitionsResponse) IsFlexible() bool         { return v.Version >= 2 }
 func (v *CreatePartitionsResponse) Throttle() (int32, bool)  { return v.ThrottleMillis, v.Version >= 1 }
+func (v *CreatePartitionsResponse) SetThrottle(throttleMillis int32) {
+	v.ThrottleMillis = throttleMillis
+}
+
 func (v *CreatePartitionsResponse) RequestKind() Request {
 	return &CreatePartitionsRequest{Version: v.Version}
 }
@@ -28067,6 +28130,10 @@ func (v *CreateDelegationTokenResponse) Throttle() (int32, bool) {
 	return v.ThrottleMillis, v.Version >= 1
 }
 
+func (v *CreateDelegationTokenResponse) SetThrottle(throttleMillis int32) {
+	v.ThrottleMillis = throttleMillis
+}
+
 func (v *CreateDelegationTokenResponse) RequestKind() Request {
 	return &CreateDelegationTokenRequest{Version: v.Version}
 }
@@ -28460,6 +28527,10 @@ func (v *RenewDelegationTokenResponse) Throttle() (int32, bool) {
 	return v.ThrottleMillis, v.Version >= 1
 }
 
+func (v *RenewDelegationTokenResponse) SetThrottle(throttleMillis int32) {
+	v.ThrottleMillis = throttleMillis
+}
+
 func (v *RenewDelegationTokenResponse) RequestKind() Request {
 	return &RenewDelegationTokenRequest{Version: v.Version}
 }
@@ -28694,6 +28765,10 @@ func (v *ExpireDelegationTokenResponse) GetVersion() int16        { return v.Ver
 func (v *ExpireDelegationTokenResponse) IsFlexible() bool         { return v.Version >= 2 }
 func (v *ExpireDelegationTokenResponse) Throttle() (int32, bool) {
 	return v.ThrottleMillis, v.Version >= 1
+}
+
+func (v *ExpireDelegationTokenResponse) SetThrottle(throttleMillis int32) {
+	v.ThrottleMillis = throttleMillis
 }
 
 func (v *ExpireDelegationTokenResponse) RequestKind() Request {
@@ -29091,6 +29166,10 @@ func (v *DescribeDelegationTokenResponse) GetVersion() int16        { return v.V
 func (v *DescribeDelegationTokenResponse) IsFlexible() bool         { return v.Version >= 2 }
 func (v *DescribeDelegationTokenResponse) Throttle() (int32, bool) {
 	return v.ThrottleMillis, v.Version >= 1
+}
+
+func (v *DescribeDelegationTokenResponse) SetThrottle(throttleMillis int32) {
+	v.ThrottleMillis = throttleMillis
 }
 
 func (v *DescribeDelegationTokenResponse) RequestKind() Request {
@@ -29667,13 +29746,14 @@ type DeleteGroupsResponse struct {
 	UnknownTags Tags // v2+
 }
 
-func (*DeleteGroupsResponse) Key() int16                 { return 42 }
-func (*DeleteGroupsResponse) MaxVersion() int16          { return 2 }
-func (v *DeleteGroupsResponse) SetVersion(version int16) { v.Version = version }
-func (v *DeleteGroupsResponse) GetVersion() int16        { return v.Version }
-func (v *DeleteGroupsResponse) IsFlexible() bool         { return v.Version >= 2 }
-func (v *DeleteGroupsResponse) Throttle() (int32, bool)  { return v.ThrottleMillis, v.Version >= 1 }
-func (v *DeleteGroupsResponse) RequestKind() Request     { return &DeleteGroupsRequest{Version: v.Version} }
+func (*DeleteGroupsResponse) Key() int16                         { return 42 }
+func (*DeleteGroupsResponse) MaxVersion() int16                  { return 2 }
+func (v *DeleteGroupsResponse) SetVersion(version int16)         { v.Version = version }
+func (v *DeleteGroupsResponse) GetVersion() int16                { return v.Version }
+func (v *DeleteGroupsResponse) IsFlexible() bool                 { return v.Version >= 2 }
+func (v *DeleteGroupsResponse) Throttle() (int32, bool)          { return v.ThrottleMillis, v.Version >= 1 }
+func (v *DeleteGroupsResponse) SetThrottle(throttleMillis int32) { v.ThrottleMillis = throttleMillis }
+func (v *DeleteGroupsResponse) RequestKind() Request             { return &DeleteGroupsRequest{Version: v.Version} }
 
 func (v *DeleteGroupsResponse) AppendTo(dst []byte) []byte {
 	version := v.Version
@@ -29868,13 +29948,14 @@ type ElectLeadersRequest struct {
 	UnknownTags Tags // v2+
 }
 
-func (*ElectLeadersRequest) Key() int16                 { return 43 }
-func (*ElectLeadersRequest) MaxVersion() int16          { return 2 }
-func (v *ElectLeadersRequest) SetVersion(version int16) { v.Version = version }
-func (v *ElectLeadersRequest) GetVersion() int16        { return v.Version }
-func (v *ElectLeadersRequest) IsFlexible() bool         { return v.Version >= 2 }
-func (v *ElectLeadersRequest) Timeout() int32           { return v.TimeoutMillis }
-func (v *ElectLeadersRequest) IsAdminRequest()          {}
+func (*ElectLeadersRequest) Key() int16                       { return 43 }
+func (*ElectLeadersRequest) MaxVersion() int16                { return 2 }
+func (v *ElectLeadersRequest) SetVersion(version int16)       { v.Version = version }
+func (v *ElectLeadersRequest) GetVersion() int16              { return v.Version }
+func (v *ElectLeadersRequest) IsFlexible() bool               { return v.Version >= 2 }
+func (v *ElectLeadersRequest) Timeout() int32                 { return v.TimeoutMillis }
+func (v *ElectLeadersRequest) SetTimeout(timeoutMillis int32) { v.TimeoutMillis = timeoutMillis }
+func (v *ElectLeadersRequest) IsAdminRequest()                {}
 func (v *ElectLeadersRequest) ResponseKind() Response {
 	r := &ElectLeadersResponse{Version: v.Version}
 	r.Default()
@@ -30156,13 +30237,14 @@ type ElectLeadersResponse struct {
 	UnknownTags Tags // v2+
 }
 
-func (*ElectLeadersResponse) Key() int16                 { return 43 }
-func (*ElectLeadersResponse) MaxVersion() int16          { return 2 }
-func (v *ElectLeadersResponse) SetVersion(version int16) { v.Version = version }
-func (v *ElectLeadersResponse) GetVersion() int16        { return v.Version }
-func (v *ElectLeadersResponse) IsFlexible() bool         { return v.Version >= 2 }
-func (v *ElectLeadersResponse) Throttle() (int32, bool)  { return v.ThrottleMillis, v.Version >= 0 }
-func (v *ElectLeadersResponse) RequestKind() Request     { return &ElectLeadersRequest{Version: v.Version} }
+func (*ElectLeadersResponse) Key() int16                         { return 43 }
+func (*ElectLeadersResponse) MaxVersion() int16                  { return 2 }
+func (v *ElectLeadersResponse) SetVersion(version int16)         { v.Version = version }
+func (v *ElectLeadersResponse) GetVersion() int16                { return v.Version }
+func (v *ElectLeadersResponse) IsFlexible() bool                 { return v.Version >= 2 }
+func (v *ElectLeadersResponse) Throttle() (int32, bool)          { return v.ThrottleMillis, v.Version >= 0 }
+func (v *ElectLeadersResponse) SetThrottle(throttleMillis int32) { v.ThrottleMillis = throttleMillis }
+func (v *ElectLeadersResponse) RequestKind() Request             { return &ElectLeadersRequest{Version: v.Version} }
 
 func (v *ElectLeadersResponse) AppendTo(dst []byte) []byte {
 	version := v.Version
@@ -30827,6 +30909,10 @@ func (v *IncrementalAlterConfigsResponse) Throttle() (int32, bool) {
 	return v.ThrottleMillis, v.Version >= 0
 }
 
+func (v *IncrementalAlterConfigsResponse) SetThrottle(throttleMillis int32) {
+	v.ThrottleMillis = throttleMillis
+}
+
 func (v *IncrementalAlterConfigsResponse) RequestKind() Request {
 	return &IncrementalAlterConfigsRequest{Version: v.Version}
 }
@@ -31088,7 +31174,10 @@ func (v *AlterPartitionAssignmentsRequest) SetVersion(version int16) { v.Version
 func (v *AlterPartitionAssignmentsRequest) GetVersion() int16        { return v.Version }
 func (v *AlterPartitionAssignmentsRequest) IsFlexible() bool         { return v.Version >= 0 }
 func (v *AlterPartitionAssignmentsRequest) Timeout() int32           { return v.TimeoutMillis }
-func (v *AlterPartitionAssignmentsRequest) IsAdminRequest()          {}
+func (v *AlterPartitionAssignmentsRequest) SetTimeout(timeoutMillis int32) {
+	v.TimeoutMillis = timeoutMillis
+}
+func (v *AlterPartitionAssignmentsRequest) IsAdminRequest() {}
 func (v *AlterPartitionAssignmentsRequest) ResponseKind() Response {
 	r := &AlterPartitionAssignmentsResponse{Version: v.Version}
 	r.Default()
@@ -31419,6 +31508,10 @@ func (v *AlterPartitionAssignmentsResponse) Throttle() (int32, bool) {
 	return v.ThrottleMillis, v.Version >= 0
 }
 
+func (v *AlterPartitionAssignmentsResponse) SetThrottle(throttleMillis int32) {
+	v.ThrottleMillis = throttleMillis
+}
+
 func (v *AlterPartitionAssignmentsResponse) RequestKind() Request {
 	return &AlterPartitionAssignmentsRequest{Version: v.Version}
 }
@@ -31723,7 +31816,10 @@ func (v *ListPartitionReassignmentsRequest) SetVersion(version int16) { v.Versio
 func (v *ListPartitionReassignmentsRequest) GetVersion() int16        { return v.Version }
 func (v *ListPartitionReassignmentsRequest) IsFlexible() bool         { return v.Version >= 0 }
 func (v *ListPartitionReassignmentsRequest) Timeout() int32           { return v.TimeoutMillis }
-func (v *ListPartitionReassignmentsRequest) IsAdminRequest()          {}
+func (v *ListPartitionReassignmentsRequest) SetTimeout(timeoutMillis int32) {
+	v.TimeoutMillis = timeoutMillis
+}
+func (v *ListPartitionReassignmentsRequest) IsAdminRequest() {}
 func (v *ListPartitionReassignmentsRequest) ResponseKind() Response {
 	r := &ListPartitionReassignmentsResponse{Version: v.Version}
 	r.Default()
@@ -31999,6 +32095,10 @@ func (v *ListPartitionReassignmentsResponse) GetVersion() int16        { return 
 func (v *ListPartitionReassignmentsResponse) IsFlexible() bool         { return v.Version >= 0 }
 func (v *ListPartitionReassignmentsResponse) Throttle() (int32, bool) {
 	return v.ThrottleMillis, v.Version >= 0
+}
+
+func (v *ListPartitionReassignmentsResponse) SetThrottle(throttleMillis int32) {
+	v.ThrottleMillis = throttleMillis
 }
 
 func (v *ListPartitionReassignmentsResponse) RequestKind() Request {
@@ -32611,13 +32711,14 @@ type OffsetDeleteResponse struct {
 	Topics []OffsetDeleteResponseTopic
 }
 
-func (*OffsetDeleteResponse) Key() int16                 { return 47 }
-func (*OffsetDeleteResponse) MaxVersion() int16          { return 0 }
-func (v *OffsetDeleteResponse) SetVersion(version int16) { v.Version = version }
-func (v *OffsetDeleteResponse) GetVersion() int16        { return v.Version }
-func (v *OffsetDeleteResponse) IsFlexible() bool         { return false }
-func (v *OffsetDeleteResponse) Throttle() (int32, bool)  { return v.ThrottleMillis, v.Version >= 0 }
-func (v *OffsetDeleteResponse) RequestKind() Request     { return &OffsetDeleteRequest{Version: v.Version} }
+func (*OffsetDeleteResponse) Key() int16                         { return 47 }
+func (*OffsetDeleteResponse) MaxVersion() int16                  { return 0 }
+func (v *OffsetDeleteResponse) SetVersion(version int16)         { v.Version = version }
+func (v *OffsetDeleteResponse) GetVersion() int16                { return v.Version }
+func (v *OffsetDeleteResponse) IsFlexible() bool                 { return false }
+func (v *OffsetDeleteResponse) Throttle() (int32, bool)          { return v.ThrottleMillis, v.Version >= 0 }
+func (v *OffsetDeleteResponse) SetThrottle(throttleMillis int32) { v.ThrottleMillis = throttleMillis }
+func (v *OffsetDeleteResponse) RequestKind() Request             { return &OffsetDeleteRequest{Version: v.Version} }
 
 func (v *OffsetDeleteResponse) AppendTo(dst []byte) []byte {
 	version := v.Version
@@ -33103,6 +33204,10 @@ func (v *DescribeClientQuotasResponse) GetVersion() int16        { return v.Vers
 func (v *DescribeClientQuotasResponse) IsFlexible() bool         { return v.Version >= 1 }
 func (v *DescribeClientQuotasResponse) Throttle() (int32, bool) {
 	return v.ThrottleMillis, v.Version >= 0
+}
+
+func (v *DescribeClientQuotasResponse) SetThrottle(throttleMillis int32) {
+	v.ThrottleMillis = throttleMillis
 }
 
 func (v *DescribeClientQuotasResponse) RequestKind() Request {
@@ -33882,6 +33987,10 @@ func (v *AlterClientQuotasResponse) SetVersion(version int16) { v.Version = vers
 func (v *AlterClientQuotasResponse) GetVersion() int16        { return v.Version }
 func (v *AlterClientQuotasResponse) IsFlexible() bool         { return v.Version >= 1 }
 func (v *AlterClientQuotasResponse) Throttle() (int32, bool)  { return v.ThrottleMillis, v.Version >= 0 }
+func (v *AlterClientQuotasResponse) SetThrottle(throttleMillis int32) {
+	v.ThrottleMillis = throttleMillis
+}
+
 func (v *AlterClientQuotasResponse) RequestKind() Request {
 	return &AlterClientQuotasRequest{Version: v.Version}
 }
@@ -34385,6 +34494,10 @@ func (v *DescribeUserSCRAMCredentialsResponse) GetVersion() int16        { retur
 func (v *DescribeUserSCRAMCredentialsResponse) IsFlexible() bool         { return v.Version >= 0 }
 func (v *DescribeUserSCRAMCredentialsResponse) Throttle() (int32, bool) {
 	return v.ThrottleMillis, v.Version >= 0
+}
+
+func (v *DescribeUserSCRAMCredentialsResponse) SetThrottle(throttleMillis int32) {
+	v.ThrottleMillis = throttleMillis
 }
 
 func (v *DescribeUserSCRAMCredentialsResponse) RequestKind() Request {
@@ -35044,6 +35157,10 @@ func (v *AlterUserSCRAMCredentialsResponse) GetVersion() int16        { return v
 func (v *AlterUserSCRAMCredentialsResponse) IsFlexible() bool         { return v.Version >= 0 }
 func (v *AlterUserSCRAMCredentialsResponse) Throttle() (int32, bool) {
 	return v.ThrottleMillis, v.Version >= 0
+}
+
+func (v *AlterUserSCRAMCredentialsResponse) SetThrottle(throttleMillis int32) {
+	v.ThrottleMillis = throttleMillis
 }
 
 func (v *AlterUserSCRAMCredentialsResponse) RequestKind() Request {
@@ -37882,12 +37999,13 @@ type AlterPartitionResponse struct {
 	UnknownTags Tags
 }
 
-func (*AlterPartitionResponse) Key() int16                 { return 56 }
-func (*AlterPartitionResponse) MaxVersion() int16          { return 2 }
-func (v *AlterPartitionResponse) SetVersion(version int16) { v.Version = version }
-func (v *AlterPartitionResponse) GetVersion() int16        { return v.Version }
-func (v *AlterPartitionResponse) IsFlexible() bool         { return v.Version >= 0 }
-func (v *AlterPartitionResponse) Throttle() (int32, bool)  { return v.ThrottleMillis, v.Version >= 0 }
+func (*AlterPartitionResponse) Key() int16                         { return 56 }
+func (*AlterPartitionResponse) MaxVersion() int16                  { return 2 }
+func (v *AlterPartitionResponse) SetVersion(version int16)         { v.Version = version }
+func (v *AlterPartitionResponse) GetVersion() int16                { return v.Version }
+func (v *AlterPartitionResponse) IsFlexible() bool                 { return v.Version >= 0 }
+func (v *AlterPartitionResponse) Throttle() (int32, bool)          { return v.ThrottleMillis, v.Version >= 0 }
+func (v *AlterPartitionResponse) SetThrottle(throttleMillis int32) { v.ThrottleMillis = throttleMillis }
 func (v *AlterPartitionResponse) RequestKind() Request {
 	return &AlterPartitionRequest{Version: v.Version}
 }
@@ -38226,13 +38344,14 @@ type UpdateFeaturesRequest struct {
 	UnknownTags Tags
 }
 
-func (*UpdateFeaturesRequest) Key() int16                 { return 57 }
-func (*UpdateFeaturesRequest) MaxVersion() int16          { return 1 }
-func (v *UpdateFeaturesRequest) SetVersion(version int16) { v.Version = version }
-func (v *UpdateFeaturesRequest) GetVersion() int16        { return v.Version }
-func (v *UpdateFeaturesRequest) IsFlexible() bool         { return v.Version >= 0 }
-func (v *UpdateFeaturesRequest) Timeout() int32           { return v.TimeoutMillis }
-func (v *UpdateFeaturesRequest) IsAdminRequest()          {}
+func (*UpdateFeaturesRequest) Key() int16                       { return 57 }
+func (*UpdateFeaturesRequest) MaxVersion() int16                { return 1 }
+func (v *UpdateFeaturesRequest) SetVersion(version int16)       { v.Version = version }
+func (v *UpdateFeaturesRequest) GetVersion() int16              { return v.Version }
+func (v *UpdateFeaturesRequest) IsFlexible() bool               { return v.Version >= 0 }
+func (v *UpdateFeaturesRequest) Timeout() int32                 { return v.TimeoutMillis }
+func (v *UpdateFeaturesRequest) SetTimeout(timeoutMillis int32) { v.TimeoutMillis = timeoutMillis }
+func (v *UpdateFeaturesRequest) IsAdminRequest()                {}
 func (v *UpdateFeaturesRequest) ResponseKind() Response {
 	r := &UpdateFeaturesResponse{Version: v.Version}
 	r.Default()
@@ -38459,12 +38578,13 @@ type UpdateFeaturesResponse struct {
 	UnknownTags Tags
 }
 
-func (*UpdateFeaturesResponse) Key() int16                 { return 57 }
-func (*UpdateFeaturesResponse) MaxVersion() int16          { return 1 }
-func (v *UpdateFeaturesResponse) SetVersion(version int16) { v.Version = version }
-func (v *UpdateFeaturesResponse) GetVersion() int16        { return v.Version }
-func (v *UpdateFeaturesResponse) IsFlexible() bool         { return v.Version >= 0 }
-func (v *UpdateFeaturesResponse) Throttle() (int32, bool)  { return v.ThrottleMillis, v.Version >= 0 }
+func (*UpdateFeaturesResponse) Key() int16                         { return 57 }
+func (*UpdateFeaturesResponse) MaxVersion() int16                  { return 1 }
+func (v *UpdateFeaturesResponse) SetVersion(version int16)         { v.Version = version }
+func (v *UpdateFeaturesResponse) GetVersion() int16                { return v.Version }
+func (v *UpdateFeaturesResponse) IsFlexible() bool                 { return v.Version >= 0 }
+func (v *UpdateFeaturesResponse) Throttle() (int32, bool)          { return v.ThrottleMillis, v.Version >= 0 }
+func (v *UpdateFeaturesResponse) SetThrottle(throttleMillis int32) { v.ThrottleMillis = throttleMillis }
 func (v *UpdateFeaturesResponse) RequestKind() Request {
 	return &UpdateFeaturesRequest{Version: v.Version}
 }
@@ -39467,12 +39587,13 @@ type FetchSnapshotResponse struct {
 	UnknownTags Tags
 }
 
-func (*FetchSnapshotResponse) Key() int16                 { return 59 }
-func (*FetchSnapshotResponse) MaxVersion() int16          { return 0 }
-func (v *FetchSnapshotResponse) SetVersion(version int16) { v.Version = version }
-func (v *FetchSnapshotResponse) GetVersion() int16        { return v.Version }
-func (v *FetchSnapshotResponse) IsFlexible() bool         { return v.Version >= 0 }
-func (v *FetchSnapshotResponse) Throttle() (int32, bool)  { return v.ThrottleMillis, v.Version >= 0 }
+func (*FetchSnapshotResponse) Key() int16                         { return 59 }
+func (*FetchSnapshotResponse) MaxVersion() int16                  { return 0 }
+func (v *FetchSnapshotResponse) SetVersion(version int16)         { v.Version = version }
+func (v *FetchSnapshotResponse) GetVersion() int16                { return v.Version }
+func (v *FetchSnapshotResponse) IsFlexible() bool                 { return v.Version >= 0 }
+func (v *FetchSnapshotResponse) Throttle() (int32, bool)          { return v.ThrottleMillis, v.Version >= 0 }
+func (v *FetchSnapshotResponse) SetThrottle(throttleMillis int32) { v.ThrottleMillis = throttleMillis }
 func (v *FetchSnapshotResponse) RequestKind() Request {
 	return &FetchSnapshotRequest{Version: v.Version}
 }
@@ -39967,6 +40088,10 @@ func (v *DescribeClusterResponse) SetVersion(version int16) { v.Version = versio
 func (v *DescribeClusterResponse) GetVersion() int16        { return v.Version }
 func (v *DescribeClusterResponse) IsFlexible() bool         { return v.Version >= 0 }
 func (v *DescribeClusterResponse) Throttle() (int32, bool)  { return v.ThrottleMillis, v.Version >= 0 }
+func (v *DescribeClusterResponse) SetThrottle(throttleMillis int32) {
+	v.ThrottleMillis = throttleMillis
+}
+
 func (v *DescribeClusterResponse) RequestKind() Request {
 	return &DescribeClusterRequest{Version: v.Version}
 }
@@ -40561,6 +40686,10 @@ func (v *DescribeProducersResponse) SetVersion(version int16) { v.Version = vers
 func (v *DescribeProducersResponse) GetVersion() int16        { return v.Version }
 func (v *DescribeProducersResponse) IsFlexible() bool         { return v.Version >= 0 }
 func (v *DescribeProducersResponse) Throttle() (int32, bool)  { return v.ThrottleMillis, v.Version >= 0 }
+func (v *DescribeProducersResponse) SetThrottle(throttleMillis int32) {
+	v.ThrottleMillis = throttleMillis
+}
+
 func (v *DescribeProducersResponse) RequestKind() Request {
 	return &DescribeProducersRequest{Version: v.Version}
 }
@@ -41327,6 +41456,10 @@ func (v *BrokerRegistrationResponse) Throttle() (int32, bool) {
 	return v.ThrottleMillis, v.Version >= 0
 }
 
+func (v *BrokerRegistrationResponse) SetThrottle(throttleMillis int32) {
+	v.ThrottleMillis = throttleMillis
+}
+
 func (v *BrokerRegistrationResponse) RequestKind() Request {
 	return &BrokerRegistrationRequest{Version: v.Version}
 }
@@ -41587,6 +41720,10 @@ func (v *BrokerHeartbeatResponse) SetVersion(version int16) { v.Version = versio
 func (v *BrokerHeartbeatResponse) GetVersion() int16        { return v.Version }
 func (v *BrokerHeartbeatResponse) IsFlexible() bool         { return v.Version >= 0 }
 func (v *BrokerHeartbeatResponse) Throttle() (int32, bool)  { return v.ThrottleMillis, v.Version >= 0 }
+func (v *BrokerHeartbeatResponse) SetThrottle(throttleMillis int32) {
+	v.ThrottleMillis = throttleMillis
+}
+
 func (v *BrokerHeartbeatResponse) RequestKind() Request {
 	return &BrokerHeartbeatRequest{Version: v.Version}
 }
@@ -41808,6 +41945,10 @@ func (v *UnregisterBrokerResponse) SetVersion(version int16) { v.Version = versi
 func (v *UnregisterBrokerResponse) GetVersion() int16        { return v.Version }
 func (v *UnregisterBrokerResponse) IsFlexible() bool         { return v.Version >= 0 }
 func (v *UnregisterBrokerResponse) Throttle() (int32, bool)  { return v.ThrottleMillis, v.Version >= 0 }
+func (v *UnregisterBrokerResponse) SetThrottle(throttleMillis int32) {
+	v.ThrottleMillis = throttleMillis
+}
+
 func (v *UnregisterBrokerResponse) RequestKind() Request {
 	return &UnregisterBrokerRequest{Version: v.Version}
 }
@@ -42150,6 +42291,10 @@ func (v *DescribeTransactionsResponse) GetVersion() int16        { return v.Vers
 func (v *DescribeTransactionsResponse) IsFlexible() bool         { return v.Version >= 0 }
 func (v *DescribeTransactionsResponse) Throttle() (int32, bool) {
 	return v.ThrottleMillis, v.Version >= 0
+}
+
+func (v *DescribeTransactionsResponse) SetThrottle(throttleMillis int32) {
+	v.ThrottleMillis = throttleMillis
 }
 
 func (v *DescribeTransactionsResponse) RequestKind() Request {
@@ -42699,6 +42844,10 @@ func (v *ListTransactionsResponse) SetVersion(version int16) { v.Version = versi
 func (v *ListTransactionsResponse) GetVersion() int16        { return v.Version }
 func (v *ListTransactionsResponse) IsFlexible() bool         { return v.Version >= 0 }
 func (v *ListTransactionsResponse) Throttle() (int32, bool)  { return v.ThrottleMillis, v.Version >= 0 }
+func (v *ListTransactionsResponse) SetThrottle(throttleMillis int32) {
+	v.ThrottleMillis = throttleMillis
+}
+
 func (v *ListTransactionsResponse) RequestKind() Request {
 	return &ListTransactionsRequest{Version: v.Version}
 }
@@ -43067,6 +43216,10 @@ func (v *AllocateProducerIDsResponse) GetVersion() int16        { return v.Versi
 func (v *AllocateProducerIDsResponse) IsFlexible() bool         { return v.Version >= 0 }
 func (v *AllocateProducerIDsResponse) Throttle() (int32, bool) {
 	return v.ThrottleMillis, v.Version >= 0
+}
+
+func (v *AllocateProducerIDsResponse) SetThrottle(throttleMillis int32) {
+	v.ThrottleMillis = throttleMillis
 }
 
 func (v *AllocateProducerIDsResponse) RequestKind() Request {
