@@ -56,6 +56,15 @@ type (
 	controlFn func(kmsg.Request) (kmsg.Response, error, bool)
 )
 
+// MustCluster is like NewCluster, but panics on error.
+func MustCluster(opts ...Opt) *Cluster {
+	c, err := NewCluster(opts...)
+	if err != nil {
+		panic(err)
+	}
+	return c
+}
+
 // NewCluster returns a new mocked Kafka cluster.
 func NewCluster(opts ...Opt) (c *Cluster, err error) {
 	cfg := cfg{
