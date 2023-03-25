@@ -457,8 +457,10 @@ func main() {
 				switch f.Type.(type) {
 				case Throttle:
 					s.WriteThrottleMillisFunc(f, l)
+					s.WriteSetThrottleMillisFunc(l)
 				case Timeout:
-					s.WriteTimeoutMillisFuncs(l)
+					s.WriteTimeoutMillisFunc(l)
+					s.WriteSetTimeoutMillisFunc(l)
 				}
 			}
 
