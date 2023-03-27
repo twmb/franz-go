@@ -57,6 +57,22 @@ func (c *Cluster) handleMetadata(kreq kmsg.Request) (kmsg.Response, error) {
 		st.Partitions = append(st.Partitions, sp)
 		return &st.Partitions[len(st.Partitions)-1]
 	}
+	okp := func(t string, id uuid, p int32, pd *partData) {
+		nreplicas := c.data.treplicas[t]
+		if nreplicas > len(c.bs) {
+			nreplicas = len(c.bs)
+		}
+
+		sp := donep(t, id, p, 0)
+		sp.Leader = pd.leader.node
+		sp.LeaderEpoch = pd.epoch
+
+		for i := 0; i < nreplicas; i++ {
+			idx := (pd.leader.bsIdx + i) % len(c.bs)
+			sp.Replicas = append(sp.Replicas, c.bs[idx].node)
+		}
+		sp.ISR = sp.Replicas
+	}
 
 	allowAuto := req.AllowAutoTopicCreation && c.cfg.allowAutoTopic
 	for _, rt := range req.Topics {
@@ -82,28 +98,20 @@ func (c *Cluster) handleMetadata(kreq kmsg.Request) (kmsg.Response, error) {
 				donet(topic, rt.TopicID, kerr.UnknownTopicOrPartition.Code)
 				continue
 			}
-			c.data.mkt(topic, -1)
+			c.data.mkt(topic, -1, -1)
 			ps, _ = c.data.tps.gett(topic)
 		}
 
 		id := c.data.t2id[topic]
 		for p, pd := range ps {
-			sp := donep(topic, id, p, 0)
-			sp.Leader = pd.leader.node
-			sp.LeaderEpoch = c.epoch
-			sp.Replicas = []int32{sp.Leader}
-			sp.ISR = []int32{sp.Leader}
+			okp(topic, id, p, pd)
 		}
 	}
 	if req.Topics == nil && c.data.tps != nil {
 		for topic, ps := range c.data.tps {
 			id := c.data.t2id[topic]
 			for p, pd := range ps {
-				sp := donep(topic, id, p, 0)
-				sp.Leader = pd.leader.node
-				sp.LeaderEpoch = c.epoch
-				sp.Replicas = []int32{sp.Leader}
-				sp.ISR = []int32{sp.Leader}
+				okp(topic, id, p, pd)
 			}
 		}
 	}

@@ -51,3 +51,11 @@ func (tps *tps[V]) mkpDefault(t string, p int32) *V {
 func (tps *tps[V]) set(t string, p int32, v V) {
 	*tps.mkpDefault(t, p) = v
 }
+
+func (tps *tps[V]) each(fn func(t string, p int32, v *V)) {
+	for t, ps := range *tps {
+		for p, v := range ps {
+			fn(t, p, v)
+		}
+	}
+}

@@ -55,11 +55,15 @@ func (c *Cluster) handleCreateTopics(b *broker, kreq kmsg.Request) (kmsg.Respons
 			donet(rt.Topic, kerr.InvalidReplicaAssignment.Code)
 			continue
 		}
-		c.data.mkt(rt.Topic, int(rt.NumPartitions))
+		if int(rt.ReplicationFactor) > len(c.bs) {
+			donet(rt.Topic, kerr.InvalidReplicationFactor.Code)
+			continue
+		}
+		c.data.mkt(rt.Topic, int(rt.NumPartitions), int(rt.ReplicationFactor))
 		st := donet(rt.Topic, 0)
 		st.TopicID = c.data.t2id[rt.Topic]
 		st.NumPartitions = int32(len(c.data.tps[rt.Topic]))
-		st.ReplicationFactor = rt.ReplicationFactor
+		st.ReplicationFactor = int16(c.data.treplicas[rt.Topic])
 	}
 
 	return resp, nil

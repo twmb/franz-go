@@ -1,14 +1,11 @@
 package kfake
 
 import (
+	"sort"
+
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
-
-// TODO
-//
-// * Timestamp >= 0
-// * LeaderEpoch in response
 
 func init() { regKey(2, 0, 7) }
 
@@ -57,16 +54,17 @@ func (c *Cluster) handleListOffsets(b *broker, kreq kmsg.Request) (kmsg.Response
 				continue
 			}
 			if le := rp.CurrentLeaderEpoch; le != -1 {
-				if le < c.epoch {
+				if le < pd.epoch {
 					donep(rt.Topic, rp.Partition, kerr.FencedLeaderEpoch.Code)
 					continue
-				} else if le > c.epoch {
+				} else if le > pd.epoch {
 					donep(rt.Topic, rp.Partition, kerr.UnknownLeaderEpoch.Code)
 					continue
 				}
 			}
 
 			sp := donep(rt.Topic, rp.Partition, 0)
+			sp.LeaderEpoch = pd.epoch
 			switch rp.Timestamp {
 			case -2:
 				sp.Offset = pd.logStartOffset
@@ -77,7 +75,22 @@ func (c *Cluster) handleListOffsets(b *broker, kreq kmsg.Request) (kmsg.Response
 					sp.Offset = pd.highWatermark
 				}
 			default:
-				sp.ErrorCode = kerr.UnknownServerError.Code
+				idx, _ := sort.Find(len(pd.batches), func(idx int) int {
+					maxEarlier := pd.batches[idx].maxEarlierTimestamp
+					switch {
+					case maxEarlier < rp.Timestamp:
+						return -1
+					case maxEarlier == rp.Timestamp:
+						return 0
+					default:
+						return 1
+					}
+				})
+				if idx == len(pd.batches) {
+					sp.Offset = -1
+				} else {
+					sp.Offset = pd.batches[idx].FirstOffset
+				}
 			}
 		}
 	}
