@@ -72,6 +72,10 @@ func (pids *pids) create(txnalID *string) pid {
 }
 
 func (seqs *pidseqs) pushAndValidate(firstSeq, numRecs int32) (ok, dup bool) {
+	// If there is no pid, we do not do duplicate detection.
+	if seqs == nil {
+		return true, false
+	}
 	var (
 		seq    = firstSeq
 		seq64  = int64(seq)
