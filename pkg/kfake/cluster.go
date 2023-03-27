@@ -3,7 +3,9 @@ package kfake
 import (
 	"errors"
 	"fmt"
+	"math/rand"
 	"net"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -39,18 +41,18 @@ type (
 		control            map[int16][]controlFn
 		keepCurrentControl atomic.Bool
 
-		epoch int32
-		data  data
-		pids  pids
+		data data
+		pids pids
 
 		die  chan struct{}
 		dead atomic.Bool
 	}
 
 	broker struct {
-		c    *Cluster
-		ln   net.Listener
-		node int32
+		c     *Cluster
+		ln    net.Listener
+		node  int32
+		bsIdx int
 	}
 
 	controlFn func(kmsg.Request) (kmsg.Response, error, bool)
@@ -89,8 +91,9 @@ func NewCluster(opts ...Opt) (c *Cluster, err error) {
 		control:      make(map[int16][]controlFn),
 
 		data: data{
-			id2t: make(map[uuid]string),
-			t2id: make(map[string]uuid),
+			id2t:      make(map[uuid]string),
+			t2id:      make(map[string]uuid),
+			treplicas: make(map[string]int),
 		},
 
 		die: make(chan struct{}),
@@ -107,10 +110,16 @@ func NewCluster(opts ...Opt) (c *Cluster, err error) {
 		if len(cfg.ports) > 0 {
 			port = cfg.ports[i]
 		}
+		ln, err := newListener(port)
+		if err != nil {
+			c.Close()
+			return nil, err
+		}
 		b := &broker{
-			c:    c,
-			ln:   newListener(port),
-			node: int32(i + 1),
+			c:     c,
+			ln:    ln,
+			node:  int32(i),
+			bsIdx: len(c.bs),
 		}
 		c.bs = append(c.bs, b)
 		go b.listen()
@@ -123,9 +132,11 @@ func NewCluster(opts ...Opt) (c *Cluster, err error) {
 // ListenAddrs returns the hostports that the cluster is listening on.
 func (c *Cluster) ListenAddrs() []string {
 	var addrs []string
-	for _, b := range c.bs {
-		addrs = append(addrs, b.ln.Addr().String())
-	}
+	c.admin(func() {
+		for _, b := range c.bs {
+			addrs = append(addrs, b.ln.Addr().String())
+		}
+	})
 	return addrs
 }
 
@@ -140,14 +151,8 @@ func (c *Cluster) Close() {
 	}
 }
 
-func newListener(port int) net.Listener {
-	l, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
-	if err != nil {
-		if l, err = net.Listen("tcp6", fmt.Sprintf("[::1]:%d")); err != nil {
-			panic(fmt.Sprintf("kfake: failed to listen on a port: %v", err))
-		}
-	}
-	return l
+func newListener(port int) (net.Listener, error) {
+	return net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
 }
 
 func (b *broker) listen() {
@@ -225,6 +230,8 @@ func (c *Cluster) run() {
 			kresp, err = c.handleDeleteTopics(creq.cc.b, kreq)
 		case kmsg.InitProducerID:
 			kresp, err = c.handleInitProducerID(kreq)
+		case kmsg.OffsetForLeaderEpoch:
+			kresp, err = c.handleOffsetForLeaderEpoch(kreq)
 		case kmsg.CreatePartitions:
 			kresp, err = c.handleCreatePartitions(creq.cc.b, kreq)
 		default:
@@ -336,33 +343,133 @@ func (c *Cluster) callControl(key int16, req kmsg.Request, fn controlFn) (kresp 
 // that handles client requests.
 
 func (c *Cluster) admin(fn func()) {
+	ofn := fn
+	wait := make(chan struct{})
+	fn = func() { ofn(); close(wait) }
 	c.adminCh <- fn
+	<-wait
 }
 
 // MoveTopicPartition simulates the rebalancing of a partition to an alternative
-// broker
-func (c *Cluster) MoveTopicPartition(topic string, partition int32, bid int32) error {
-	var br *broker
-	for _, b := range c.bs {
-		if b.node == bid {
-			br = b
-			break
-		}
-	}
-	if br == nil {
-		return errors.New("no such broker")
-	}
-
-	resp := make(chan error, 1)
+// broker. This returns an error if the topic, partition, or node does not exit.
+func (c *Cluster) MoveTopicPartition(topic string, partition int32, nodeID int32) error {
+	var err error
 	c.admin(func() {
+		var br *broker
+		for _, b := range c.bs {
+			if b.node == nodeID {
+				br = b
+				break
+			}
+		}
+		if br == nil {
+			err = fmt.Errorf("node %d not found", nodeID)
+			return
+		}
 		pd, ok := c.data.tps.getp(topic, partition)
 		if !ok {
-			resp <- errors.New("topic/partition not found")
+			err = errors.New("topic/partition not found")
 			return
 		}
 		pd.leader = br
-		resp <- nil
 	})
+	return err
+}
 
-	return <-resp
+// AddNode adds a node to the cluster. If nodeID is -1, the next node ID is
+// used. If port is 0 or negative, a random port is chosen. This returns the
+// added node ID and the port used, or an error if the node already exists or
+// the port cannot be listened to.
+func (c *Cluster) AddNode(nodeID int32, port int) (int32, int, error) {
+	var err error
+	c.admin(func() {
+		if nodeID >= 0 {
+			for _, b := range c.bs {
+				if b.node == nodeID {
+					err = fmt.Errorf("node %d already exists", nodeID)
+					return
+				}
+			}
+		} else if len(c.bs) > 0 {
+			// We go one higher than the max current node ID. We
+			// need to search all nodes because a person may have
+			// added and removed a bunch, with manual ID overrides.
+			nodeID = c.bs[0].node
+			for _, b := range c.bs[1:] {
+				if b.node > nodeID {
+					nodeID = b.node
+				}
+			}
+			nodeID++
+		} else {
+			nodeID = 0
+		}
+		if port < 0 {
+			port = 0
+		}
+		var ln net.Listener
+		if ln, err = newListener(port); err != nil {
+			return
+		}
+		_, strPort, _ := net.SplitHostPort(ln.Addr().String())
+		port, _ = strconv.Atoi(strPort)
+		b := &broker{
+			c:     c,
+			ln:    ln,
+			node:  nodeID,
+			bsIdx: len(c.bs),
+		}
+		c.bs = append(c.bs, b)
+		c.cfg.nbrokers++
+		c.shufflePartitionsLocked()
+		go b.listen()
+	})
+	return nodeID, port, err
+}
+
+// RemoveNode removes a ndoe from the cluster. This returns an error if the
+// node does not exist.
+func (c *Cluster) RemoveNode(nodeID int32) error {
+	var err error
+	c.admin(func() {
+		for i, b := range c.bs {
+			if b.node == nodeID {
+				if len(c.bs) == 1 {
+					err = errors.New("cannot remove all brokers")
+					return
+				}
+				b.ln.Close()
+				c.cfg.nbrokers--
+				c.bs[i] = c.bs[len(c.bs)-1]
+				c.bs[i].bsIdx = i
+				c.bs = c.bs[:len(c.bs)-1]
+				c.shufflePartitionsLocked()
+				return
+			}
+		}
+		err = fmt.Errorf("node %d not found", nodeID)
+	})
+	return err
+}
+
+// ShufflePartitionLeaders simulates a leader election for all partitions: all
+// partitions have a randomly selected new leader and their internal epochs are
+// bumped.
+func (c *Cluster) ShufflePartitionLeaders() {
+	c.admin(func() {
+		c.shufflePartitionsLocked()
+	})
+}
+
+func (c *Cluster) shufflePartitionsLocked() {
+	c.data.tps.each(func(_ string, _ int32, p *partData) {
+		var leader *broker
+		if len(c.bs) == 0 {
+			leader = c.noLeader()
+		} else {
+			leader = c.bs[rand.Intn(len(c.bs))]
+		}
+		p.leader = leader
+		p.epoch++
+	})
 }
