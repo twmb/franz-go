@@ -86,6 +86,7 @@ func NewCluster(opts ...Opt) (c *Cluster, err error) {
 		adminCh:      make(chan func()),
 		reqCh:        make(chan clientReq, 20),
 		watchFetchCh: make(chan *watchFetch, 20),
+		control:      make(map[int16][]controlFn),
 
 		data: data{
 			id2t: make(map[uuid]string),
