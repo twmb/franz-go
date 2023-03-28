@@ -231,7 +231,7 @@ func (c *Cluster) run() {
 		case kmsg.InitProducerID:
 			kresp, err = c.handleInitProducerID(kreq)
 		case kmsg.OffsetForLeaderEpoch:
-			kresp, err = c.handleOffsetForLeaderEpoch(kreq)
+			kresp, err = c.handleOffsetForLeaderEpoch(creq.cc.b, kreq)
 		case kmsg.CreatePartitions:
 			kresp, err = c.handleCreatePartitions(creq.cc.b, kreq)
 		default:
