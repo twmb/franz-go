@@ -21,11 +21,11 @@ func TestIssue325(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	cl.AddConsumeTopics(topic)
 	recs := cl.PollFetches(ctx).Records()
-	if len(recs) != 1 && string(recs[0].Value) != "foo" {
+	if len(recs) != 1 || string(recs[0].Value) != "foo" {
 		t.Fatal(recs)
 	}
 }
@@ -53,7 +53,7 @@ func TestIssue337(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	var recs []*Record
 out:

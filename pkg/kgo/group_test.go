@@ -125,6 +125,7 @@ func (c *testConsumer) etl(etlsBeforeQuit int) {
 		Balancers(c.balancer),
 		MaxBufferedRecords(10000),
 		ConsumePreferringLagFn(PreferLagAt(1)),
+		BlockRebalanceOnPoll(),
 
 		// Even with autocommitting, autocommitting does not commit
 		// *the latest* when being revoked. We always want to commit
@@ -160,7 +161,9 @@ func (c *testConsumer) etl(etlsBeforeQuit int) {
 		}
 	}()
 
+	defer cl.AllowRebalance()
 	for {
+		cl.AllowRebalance()
 		// If we etl a few times before quitting, then we want to
 		// commit at least some of our work (except the last commit,
 		// see above). To do so, we commit every time _before_ we poll.
