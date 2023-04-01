@@ -1,5 +1,7 @@
 package kfake
 
+import "time"
+
 // Opt is an option to configure a client.
 type Opt interface {
 	apply(*cfg)
@@ -16,6 +18,9 @@ type cfg struct {
 	clusterID       string
 	allowAutoTopic  bool
 	defaultNumParts int
+
+	minSessionTimeout time.Duration
+	maxSessionTimeout time.Duration
 }
 
 // NumBrokers sets the number of brokers to start in the fake cluster.
@@ -49,4 +54,16 @@ func AllowAutoTopicCreation() Opt {
 // auto created topics / CreateTopics with -1 partitions.
 func DefaultNumPartitions(n int) Opt {
 	return opt{func(cfg *cfg) { cfg.defaultNumParts = n }}
+}
+
+// GroupMinSessionTimeout sets the cluster's minimum session timeout allowed
+// for groups, overriding the default 6 seconds.
+func GroupMinSessionTimeout(d time.Duration) Opt {
+	return opt{func(cfg *cfg) { cfg.minSessionTimeout = d }}
+}
+
+// GroupMaxSessionTimeout sets the cluster's maximum session timeout allowed
+// for groups, overriding the default 5 minutes.
+func GroupMaxSessionTimeout(d time.Duration) Opt {
+	return opt{func(cfg *cfg) { cfg.maxSessionTimeout = d }}
 }

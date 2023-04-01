@@ -40,7 +40,7 @@ func (c *Cluster) handleOffsetForLeaderEpoch(b *broker, kreq kmsg.Request) (kmsg
 	for _, rt := range req.Topics {
 		ps, ok := c.data.tps.gett(rt.Topic)
 		for _, rp := range rt.Partitions {
-			if req.ReplicaID != 1 {
+			if req.ReplicaID != -1 {
 				donep(rt.Topic, rp.Partition, kerr.UnknownServerError.Code)
 				continue
 			}
