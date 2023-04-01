@@ -1,3 +1,31 @@
+v1.13.2
+===
+
+This patch improves the behavior of committing offsets while a rebalance is
+happening.
+
+In Kafka, if a commit arrives on the broker between JoinGroup and SyncGroup,
+the commit is rejected with `REBALANCE_IN_PROGRESS`. If a commit is started
+before JoinGroup but arrives to the broker after SyncGroup, the commit is
+rejected with `INVALID_GENERATION`.
+
+This patch changes how committing offsets interacts with join&sync: a client
+that is joining the group will block OffsetCommit (preventing the first error),
+and issuing an OffsetCommit will block the client from entering JoinGroup
+(preventing the second error).
+
+Previously, you could occasionally encounter these errors with the
+cooperative-sticky group balancer because the standard behavior for eager
+balancers is to commit in OnPartitionsRevoked before all partitions are dropped
+at the end of a group session. You now should no longer encounter these errors
+during a commit at all with any balancer unless something is going quite wrong
+(massive client timeouts or broker hangs).
+
+This does mean that OffsetCommit may take longer if you happen to commit in
+while a client is joining and the join&sync takes a long time.
+
+- [`ee70930`](https://github.com/twmb/franz-go/commit/ee70930) kgo groups: block join&sync while a commit is inflight
+
 v1.13.1
 ===
 
