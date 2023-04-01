@@ -1077,10 +1077,18 @@ func (cl *Client) commitTransactionOffsets(
 
 	unlockTxn()
 
+	if err := g.waitJoinSyncMu(ctx); err != nil {
+		onDone(kmsg.NewPtrTxnOffsetCommitRequest(), kmsg.NewPtrTxnOffsetCommitResponse(), err)
+		return nil
+	}
+	unblockJoinSync := func(req *kmsg.TxnOffsetCommitRequest, resp *kmsg.TxnOffsetCommitResponse, err error) {
+		g.noCommitDuringJoinAndSync.RUnlock()
+		onDone(req, resp, err)
+	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
-	g.commitTxn(ctx, uncommitted, onDone)
+	g.commitTxn(ctx, uncommitted, unblockJoinSync)
 	return g
 }
 

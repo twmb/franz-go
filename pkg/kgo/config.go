@@ -1471,6 +1471,13 @@ func RequireStableFetchOffsets() GroupOpt {
 //
 // This function can largely replace any commit logic you may want to do in
 // OnPartitionsRevoked.
+//
+// Lastly, note that this actually blocks any rebalance from calling
+// OnPartitions{Assigned,Revoked,Lost}. If you are using a cooperative
+// rebalancer such as CooperativeSticky, a rebalance can begin right before you
+// poll, and you will still receive records because no partitions are lost yet.
+// The in-progress rebalance only blocks if you are assigned new partitions or
+// if any of your partitions are revoked.
 func BlockRebalanceOnPoll() GroupOpt {
 	return groupOpt{func(cfg *cfg) { cfg.blockRebalanceOnPoll = true }}
 }
@@ -1674,5 +1681,9 @@ func GroupProtocol(protocol string) GroupOpt {
 // AutoCommitCallback sets the callback to use if autocommitting is enabled.
 // This overrides the default callback that logs errors and continues.
 func AutoCommitCallback(fn func(*Client, *kmsg.OffsetCommitRequest, *kmsg.OffsetCommitResponse, error)) GroupOpt {
-	return groupOpt{func(cfg *cfg) { cfg.commitCallback, cfg.setCommitCallback = fn, true }}
+	return groupOpt{func(cfg *cfg) {
+		if fn != nil {
+			cfg.commitCallback, cfg.setCommitCallback = fn, true
+		}
+	}}
 }
