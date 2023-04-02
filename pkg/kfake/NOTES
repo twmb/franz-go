@@ -11,22 +11,23 @@ x DeleteTopics
 x CreatePartitions
 
 GROUPS
-* OffsetCommit
-* OffsetFetch
-* FindCoordinator
-* JoinGroup
-* Heartbeat
-* LeaveGroup
-* SyncGroup
-* DescribeGroups
-* ListGroups
+x OffsetCommit
+x OffsetFetch
+x FindCoordinator
+x JoinGroup
+x Heartbeat
+x LeaveGroup
+x SyncGroup
+x DescribeGroups
+x ListGroups
+x DeleteGroups
+
+MISC
+x OffsetForLeaderEpoch
 
 SASL
 * SaslHandshake
 * SaslAuthenticate
-
-MISC
-* OffsetForLeaderEpoch
 
 TXNS
 * AddPartitionsToTxn
@@ -44,7 +45,6 @@ LOW-PRIO
 * DescribeConfigs
 * AlterConfigs
 * IncrementalAlterConfigs
-* DeleteGroups
 * OffsetDelete
 * DescribeProducers
 * DescribeTransactions

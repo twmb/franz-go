@@ -10,12 +10,32 @@ import (
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
-type clientConn struct {
-	c      *Cluster
-	b      *broker
-	conn   net.Conn
-	respCh chan clientResp
-}
+type (
+	clientConn struct {
+		c      *Cluster
+		b      *broker
+		conn   net.Conn
+		respCh chan clientResp
+	}
+
+	clientReq struct {
+		cc   *clientConn
+		kreq kmsg.Request
+		at   time.Time
+		corr int32
+		cid  string
+		seq  uint32
+	}
+
+	clientResp struct {
+		kresp kmsg.Response
+		corr  int32
+		err   error
+		seq   uint32
+	}
+)
+
+func (creq clientReq) empty() bool { return creq.cc == nil || creq.kreq == nil }
 
 func (cc *clientConn) read() {
 	defer cc.conn.Close()
@@ -28,6 +48,7 @@ func (cc *clientConn) read() {
 		who    = cc.conn.RemoteAddr()
 		size   = make([]byte, 4)
 		readCh = make(chan read, 1)
+		seq    uint32
 	)
 	for {
 		go func() {
@@ -53,13 +74,13 @@ func (cc *clientConn) read() {
 		}
 
 		var (
-			body    = read.body
-			reader  = kbin.Reader{Src: body}
-			key     = reader.Int16()
-			version = reader.Int16()
-			corr    = reader.Int32()
-			_       = reader.NullableString()
-			kreq    = kmsg.RequestForKey(key)
+			body     = read.body
+			reader   = kbin.Reader{Src: body}
+			key      = reader.Int16()
+			version  = reader.Int16()
+			corr     = reader.Int32()
+			clientID = reader.NullableString()
+			kreq     = kmsg.RequestForKey(key)
 		)
 		kreq.SetVersion(version)
 		if kreq.IsFlexible() {
@@ -70,8 +91,15 @@ func (cc *clientConn) read() {
 			return
 		}
 
+		// Within Kafka, a null client ID is treated as an empty string.
+		var cid string
+		if clientID != nil {
+			cid = *clientID
+		}
+
 		select {
-		case cc.c.reqCh <- clientReq{cc, kreq, time.Now(), corr}:
+		case cc.c.reqCh <- clientReq{cc, kreq, time.Now(), corr, cid, seq}:
+			seq++
 		case <-cc.c.die:
 			return
 		}
@@ -85,13 +113,31 @@ func (cc *clientConn) write() {
 		who     = cc.conn.RemoteAddr()
 		writeCh = make(chan error, 1)
 		buf     []byte
+		seq     uint32
+
+		// If a request is by necessity slow (join&sync), and the
+		// client sends another request down the same conn, we can
+		// actually handle them out of order because group state is
+		// managed independently in its own loop. To ensure
+		// serialization, we capture out of order responses and only
+		// send them once the prior requests are replied to.
+		//
+		// (this is also why there is a seq in the clientReq)
+		oooresp = make(map[uint32]clientResp)
 	)
 	for {
-		var resp clientResp
-		select {
-		case resp = <-cc.respCh:
-		case <-cc.c.die:
-			return
+		resp, ok := oooresp[seq]
+		if !ok {
+			select {
+			case resp = <-cc.respCh:
+				if resp.seq != seq {
+					oooresp[resp.seq] = resp
+					continue
+				}
+				seq = resp.seq + 1
+			case <-cc.c.die:
+				return
+			}
 		}
 		if err := resp.err; err != nil {
 			cc.c.cfg.logger.Logf(LogLevelInfo, "client %s request unable to be handled: %v", who, err)

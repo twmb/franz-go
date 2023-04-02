@@ -41,8 +41,9 @@ type (
 		control            map[int16][]controlFn
 		keepCurrentControl atomic.Bool
 
-		data data
-		pids pids
+		data   data
+		pids   pids
+		groups groups
 
 		die  chan struct{}
 		dead atomic.Bool
@@ -74,6 +75,9 @@ func NewCluster(opts ...Opt) (c *Cluster, err error) {
 		logger:          new(nopLogger),
 		clusterID:       "kfake",
 		defaultNumParts: 10,
+
+		minSessionTimeout: 6 * time.Second,
+		maxSessionTimeout: 5 * time.Minute,
 	}
 	for _, opt := range opts {
 		opt.apply(&cfg)
@@ -99,6 +103,7 @@ func NewCluster(opts ...Opt) (c *Cluster, err error) {
 		die: make(chan struct{}),
 	}
 	c.data.c = c
+	c.groups.c = c
 	defer func() {
 		if err != nil {
 			c.Close()
@@ -174,18 +179,6 @@ func (b *broker) listen() {
 	}
 }
 
-type clientReq struct {
-	cc   *clientConn
-	kreq kmsg.Request
-	at   time.Time
-	corr int32
-}
-type clientResp struct {
-	kresp kmsg.Response
-	corr  int32
-	err   error
-}
-
 func (c *Cluster) run() {
 	for {
 		var creq clientReq
@@ -222,6 +215,24 @@ func (c *Cluster) run() {
 			kresp, err = c.handleListOffsets(creq.cc.b, kreq)
 		case kmsg.Metadata:
 			kresp, err = c.handleMetadata(kreq)
+		case kmsg.OffsetCommit:
+			kresp, err = c.handleOffsetCommit(creq)
+		case kmsg.OffsetFetch:
+			kresp, err = c.handleOffsetFetch(creq)
+		case kmsg.FindCoordinator:
+			kresp, err = c.handleFindCoordinator(kreq)
+		case kmsg.JoinGroup:
+			kresp, err = c.handleJoinGroup(creq)
+		case kmsg.Heartbeat:
+			kresp, err = c.handleHeartbeat(creq)
+		case kmsg.LeaveGroup:
+			kresp, err = c.handleLeaveGroup(creq)
+		case kmsg.SyncGroup:
+			kresp, err = c.handleSyncGroup(creq)
+		case kmsg.DescribeGroups:
+			kresp, err = c.handleDescribeGroups(creq)
+		case kmsg.ListGroups:
+			kresp, err = c.handleListGroups(creq)
 		case kmsg.ApiVersions:
 			kresp, err = c.handleApiVersions(kreq)
 		case kmsg.CreateTopics:
@@ -234,17 +245,19 @@ func (c *Cluster) run() {
 			kresp, err = c.handleOffsetForLeaderEpoch(creq.cc.b, kreq)
 		case kmsg.CreatePartitions:
 			kresp, err = c.handleCreatePartitions(creq.cc.b, kreq)
+		case kmsg.DeleteGroups:
+			kresp, err = c.handleDeleteGroups(creq)
 		default:
 			err = fmt.Errorf("unahndled key %v", k)
 		}
 
 	afterControl:
-		if kresp == nil && err == nil { // produce request with no acks
+		if kresp == nil && err == nil { // produce request with no acks, or hijacked group request
 			continue
 		}
 
 		select {
-		case creq.cc.respCh <- clientResp{kresp: kresp, corr: creq.corr, err: err}:
+		case creq.cc.respCh <- clientResp{kresp: kresp, corr: creq.corr, err: err, seq: creq.seq}:
 		case <-c.die:
 			return
 		}
