@@ -28,17 +28,14 @@ x OffsetForLeaderEpoch
 SASL
 * SaslHandshake
 * SaslAuthenticate
+* DescribeUserScramCredentials
+* AlterUserScramCredentials
 
 TXNS
 * AddPartitionsToTxn
 * AddOffsetsToTxn
 * EndTxn
 * TxnOffsetCommit
-
-ACLS
-* DescribeACLs
-* CreateACLs
-* DeleteACLs
 
 LOW-PRIO
 * DeleteRecords
@@ -49,12 +46,17 @@ LOW-PRIO
 * DescribeProducers
 * DescribeTransactions
 * ListTransactions
-* AlterReplicaLogDirs
-* DescribeLogDirs
+
+ACLS
+* DescribeACLs
+* CreateACLs
+* DeleteACLs
+
 * AlterPartitionAssignments
 * ListPartitionReassignments
-* DescribeUserScramCredentials
-* AlterUserScramCredentials
+
+* AlterReplicaLogDirs
+* DescribeLogDirs
 * DescribeClientQuotas
 * AlterClientQuotas
 DTOKEN: ignore
