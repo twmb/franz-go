@@ -45,10 +45,10 @@ func checkReqVersion(key, version int16) error {
 		return fmt.Errorf("unsupported request key %d", key)
 	}
 	if version < v.MinVersion {
-		return fmt.Errorf("%d version %d below min supported version %d", kmsg.NameForKey(key), version, v.MinVersion)
+		return fmt.Errorf("%s version %d below min supported version %d", kmsg.NameForKey(key), version, v.MinVersion)
 	}
 	if version > v.MaxVersion {
-		return fmt.Errorf("%d version %d above max supported version %d", kmsg.NameForKey(key), version, v.MaxVersion)
+		return fmt.Errorf("%s version %d above max supported version %d", kmsg.NameForKey(key), version, v.MaxVersion)
 	}
 	return nil
 }

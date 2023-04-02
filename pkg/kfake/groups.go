@@ -105,7 +105,7 @@ func (c *Cluster) coordinator(id string) *broker {
 	return c.bs[n]
 }
 
-func (c Cluster) validateGroup(creq clientReq, group string) *kerr.Error {
+func (c *Cluster) validateGroup(creq clientReq, group string) *kerr.Error {
 	switch key := kmsg.Key(creq.kreq.Key()); key {
 	case kmsg.OffsetCommit, kmsg.OffsetFetch, kmsg.DescribeGroups, kmsg.DeleteGroups:
 	default:
