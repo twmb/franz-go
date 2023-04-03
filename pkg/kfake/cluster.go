@@ -78,12 +78,21 @@ func NewCluster(opts ...Opt) (c *Cluster, err error) {
 
 		minSessionTimeout: 6 * time.Second,
 		maxSessionTimeout: 5 * time.Minute,
+
+		sasls: sasls{
+			plain:    make(map[string]string),
+			scram256: make(map[string]scramAuth),
+			scram512: make(map[string]scramAuth),
+		},
 	}
 	for _, opt := range opts {
 		opt.apply(&cfg)
 	}
 	if len(cfg.ports) > 0 {
 		cfg.nbrokers = len(cfg.ports)
+	}
+	if cfg.enableSASL && len(cfg.sasls.plain) == 0 && len(cfg.sasls.scram256) == 0 && len(cfg.sasls.scram512) == 0 {
+		cfg.sasls.scram256["admin"] = newScramAuth(saslScram256, "admin")
 	}
 
 	c = &Cluster{
@@ -206,6 +215,13 @@ func (c *Cluster) run() {
 			goto afterControl
 		}
 
+		if c.cfg.enableSASL {
+			if allow := c.handleSASL(creq); !allow {
+				err = errors.New("not allowed given SASL state")
+				goto afterControl
+			}
+		}
+
 		switch k := kmsg.Key(kreq.Key()); k {
 		case kmsg.Produce:
 			kresp, err = c.handleProduce(creq.cc.b, kreq)
@@ -233,6 +249,8 @@ func (c *Cluster) run() {
 			kresp, err = c.handleDescribeGroups(creq)
 		case kmsg.ListGroups:
 			kresp, err = c.handleListGroups(creq)
+		case kmsg.SASLHandshake:
+			kresp, err = c.handleSASLHandshake(creq)
 		case kmsg.ApiVersions:
 			kresp, err = c.handleApiVersions(kreq)
 		case kmsg.CreateTopics:
@@ -243,6 +261,8 @@ func (c *Cluster) run() {
 			kresp, err = c.handleInitProducerID(kreq)
 		case kmsg.OffsetForLeaderEpoch:
 			kresp, err = c.handleOffsetForLeaderEpoch(creq.cc.b, kreq)
+		case kmsg.SASLAuthenticate:
+			kresp, err = c.handleSASLAuthenticate(creq)
 		case kmsg.CreatePartitions:
 			kresp, err = c.handleCreatePartitions(creq.cc.b, kreq)
 		case kmsg.DeleteGroups:

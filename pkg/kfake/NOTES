@@ -26,8 +26,8 @@ MISC
 x OffsetForLeaderEpoch
 
 SASL
-* SaslHandshake
-* SaslAuthenticate
+x SaslHandshake
+x SaslAuthenticate
 * DescribeUserScramCredentials
 * AlterUserScramCredentials
 
