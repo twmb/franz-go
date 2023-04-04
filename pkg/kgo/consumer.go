@@ -1001,8 +1001,13 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how
 			}
 
 			// If an exact offset is specified and we have loaded
-			// the partition, we use it. Without an epoch, if it is
-			// out of bounds, we just reset appropriately.
+			// the partition, we use it. We have to use epoch -1
+			// rather than the latest loaded epoch on the partition
+			// because the offset being requested to use could be
+			// from an epoch after OUR loaded epoch. Otherwise, we
+			// could update the metadata, see the later epoch,
+			// request the end offset for our prior epoch, and then
+			// think data loss occurred.
 			//
 			// If an offset is unspecified or we have not loaded
 			// the partition, we list offsets to find out what to
@@ -1012,7 +1017,7 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how
 				cursor := part.cursor
 				cursor.setOffset(cursorOffset{
 					offset:            offset.at,
-					lastConsumedEpoch: part.leaderEpoch,
+					lastConsumedEpoch: -1,
 				})
 				cursor.allowUsable()
 				c.usingCursors.use(cursor)
