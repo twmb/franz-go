@@ -155,10 +155,11 @@ type groupConsumer struct {
 
 // LeaveGroup leaves a group if in one. Calling the client's Close function
 // also leaves a group, so this is only necessary to call if you plan to leave
-// the group and continue using the client.
-//
-// If you have overridden the default revoke, you must manually commit offsets
-// before leaving the group.
+// the group and continue using the client. Note that if a rebalance is in
+// progress, this function waits for the rebalance to complete before the group
+// can be left. This is necessary to allow you to safely issue one final offset
+// commit in OnPartitionsRevoked. If you have overridden the default revoke,
+// you must manually commit offsets before leaving the group.
 //
 // If you have configured the group with an InstanceID, this does not leave the
 // group. With instance IDs, it is expected that clients will restart and
@@ -417,14 +418,13 @@ func (g *groupConsumer) leave() (wait func()) {
 	wasDead := g.dying
 	g.dying = true
 	wasManaging := g.managing
+	g.cancel()
 	g.mu.Unlock()
 
 	done := make(chan struct{})
 
 	go func() {
 		defer close(done)
-
-		g.cancel()
 
 		if wasManaging {
 			// We want to wait for the manage goroutine to be done
@@ -1034,15 +1034,23 @@ start:
 		joined   = make(chan struct{})
 	)
 
+	// NOTE: For this function, we have to use the client context, not the
+	// group context. We want to allow people to issue one final commit in
+	// OnPartitionsRevoked before leaving a group, so we need to block
+	// commits during join&sync. If we used the group context, we would be
+	// cancled immediately when leaving while a join or sync is inflight,
+	// and then our final commit will receive either REBALANCE_IN_PROGRESS
+	// or ILLEGAL_GENERATION.
+
 	go func() {
 		defer close(joined)
-		joinResp, err = joinReq.RequestWith(g.ctx, g.cl)
+		joinResp, err = joinReq.RequestWith(g.cl.ctx, g.cl)
 	}()
 
 	select {
 	case <-joined:
-	case <-g.ctx.Done():
-		return g.ctx.Err() // group killed
+	case <-g.cl.ctx.Done():
+		return g.cl.ctx.Err() // client closed
 	}
 	if err != nil {
 		return err
@@ -1075,13 +1083,13 @@ start:
 	g.cfg.logger.Log(LogLevelInfo, "syncing", "group", g.cfg.group, "protocol_type", g.cfg.protocol, "protocol", protocol)
 	go func() {
 		defer close(synced)
-		syncResp, err = syncReq.RequestWith(g.ctx, g.cl)
+		syncResp, err = syncReq.RequestWith(g.cl.ctx, g.cl)
 	}()
 
 	select {
 	case <-synced:
-	case <-g.ctx.Done():
-		return g.ctx.Err()
+	case <-g.cl.ctx.Done():
+		return g.cl.ctx.Err()
 	}
 	if err != nil {
 		return err

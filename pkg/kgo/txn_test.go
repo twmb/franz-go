@@ -170,7 +170,7 @@ func (c *testConsumer) transact(txnsBeforeQuit int) {
 		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 		fetches := txnSess.PollFetches(ctx)
 		cancel()
-		if fetches.Err() == context.DeadlineExceeded || fetches.Err() == ErrClientClosed {
+		if err := fetches.Err(); err == context.DeadlineExceeded || err == context.Canceled || err == ErrClientClosed {
 			if consumed := int(c.consumed.Load()); consumed == testRecordLimit {
 				return
 			} else if consumed > testRecordLimit {
