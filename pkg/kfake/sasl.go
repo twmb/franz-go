@@ -34,6 +34,10 @@ type (
 	saslStage uint8
 )
 
+func (s sasls) empty() bool {
+	return len(s.plain) == 0 && len(s.scram256) == 0 && len(s.scram512) == 0
+}
+
 const (
 	saslStageBegin saslStage = iota
 	saslStageAuthPlain
@@ -103,6 +107,7 @@ func newScramAuth(mechanism, pass string) scramAuth {
 	}
 	return scramAuth{
 		mechanism:  mechanism,
+		iterations: scramIterations,
 		saltedPass: saltedPass,
 		salt:       salt,
 	}
@@ -110,6 +115,7 @@ func newScramAuth(mechanism, pass string) scramAuth {
 
 type scramAuth struct {
 	mechanism  string // scram 256 or 512
+	iterations int
 	saltedPass []byte
 	salt       []byte
 }

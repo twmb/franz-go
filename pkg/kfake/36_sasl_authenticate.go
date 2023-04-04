@@ -27,8 +27,11 @@ func (c *Cluster) handleSASLAuthenticate(creq clientReq) (kmsg.Response, error) 
 		if err != nil {
 			return nil, err
 		}
-		if p != c.cfg.sasls.plain[u] {
-			return nil, errors.New("invalid user or pass")
+		if c.sasls.plain == nil {
+			return nil, errors.New("invalid sasl")
+		}
+		if p != c.sasls.plain[u] {
+			return nil, errors.New("invalid sasl")
 		}
 		creq.cc.saslStage = saslStageComplete
 
@@ -37,9 +40,12 @@ func (c *Cluster) handleSASLAuthenticate(creq clientReq) (kmsg.Response, error) 
 		if err != nil {
 			return nil, err
 		}
-		a, ok := c.cfg.sasls.scram256[c0.user]
+		if c.sasls.scram256 == nil {
+			return nil, errors.New("invalid sasl")
+		}
+		a, ok := c.sasls.scram256[c0.user]
 		if !ok {
-			return nil, errors.New("invalid scram 256 user")
+			return nil, errors.New("invalid sasl")
 		}
 		s0, serverFirst := scramServerFirst(c0, a)
 		resp.SASLAuthBytes = serverFirst
@@ -51,9 +57,12 @@ func (c *Cluster) handleSASLAuthenticate(creq clientReq) (kmsg.Response, error) 
 		if err != nil {
 			return nil, err
 		}
-		a, ok := c.cfg.sasls.scram512[c0.user]
+		if c.sasls.scram512 == nil {
+			return nil, errors.New("invalid sasl")
+		}
+		a, ok := c.sasls.scram512[c0.user]
 		if !ok {
-			return nil, errors.New("invalid scram 512user")
+			return nil, errors.New("invalid sasl")
 		}
 		s0, serverFirst := scramServerFirst(c0, a)
 		resp.SASLAuthBytes = serverFirst

@@ -15,14 +15,9 @@ import (
 
 // TODO
 //
-// * Handle requests concurrently, i.e. JoinGroup
-//   * Actually, just spin out concurrent group manager that then hooks back
-//     into the control loop
-//
 // * Add raft and make the brokers independent
 //
 // * Support multiple replicas -- we just pass this through
-// * Support per-partition leader epoch
 
 type (
 
@@ -44,6 +39,7 @@ type (
 		data   data
 		pids   pids
 		groups groups
+		sasls  sasls
 
 		die  chan struct{}
 		dead atomic.Bool
@@ -78,21 +74,12 @@ func NewCluster(opts ...Opt) (c *Cluster, err error) {
 
 		minSessionTimeout: 6 * time.Second,
 		maxSessionTimeout: 5 * time.Minute,
-
-		sasls: sasls{
-			plain:    make(map[string]string),
-			scram256: make(map[string]scramAuth),
-			scram512: make(map[string]scramAuth),
-		},
 	}
 	for _, opt := range opts {
 		opt.apply(&cfg)
 	}
 	if len(cfg.ports) > 0 {
 		cfg.nbrokers = len(cfg.ports)
-	}
-	if cfg.enableSASL && len(cfg.sasls.plain) == 0 && len(cfg.sasls.scram256) == 0 && len(cfg.sasls.scram512) == 0 {
-		cfg.sasls.scram256["admin"] = newScramAuth(saslScram256, "admin")
 	}
 
 	c = &Cluster{
@@ -118,6 +105,35 @@ func NewCluster(opts ...Opt) (c *Cluster, err error) {
 			c.Close()
 		}
 	}()
+
+	for mu, p := range cfg.sasls {
+		switch mu.m {
+		case saslPlain:
+			if c.sasls.plain == nil {
+				c.sasls.plain = make(map[string]string)
+			}
+			c.sasls.plain[mu.u] = p
+		case saslScram256:
+			if c.sasls.scram256 == nil {
+				c.sasls.scram256 = make(map[string]scramAuth)
+			}
+			c.sasls.scram256[mu.u] = newScramAuth(saslScram256, p)
+		case saslScram512:
+			if c.sasls.scram512 == nil {
+				c.sasls.scram512 = make(map[string]scramAuth)
+			}
+			c.sasls.scram512[mu.u] = newScramAuth(saslScram512, p)
+		default:
+			return nil, fmt.Errorf("unknown SASL mechanism %v", mu.m)
+		}
+	}
+	cfg.sasls = nil
+
+	if cfg.enableSASL && c.sasls.empty() {
+		c.sasls.scram256 = map[string]scramAuth{
+			"admin": newScramAuth(saslScram256, "admin"),
+		}
+	}
 
 	for i := 0; i < cfg.nbrokers; i++ {
 		var port int
@@ -267,6 +283,10 @@ func (c *Cluster) run() {
 			kresp, err = c.handleCreatePartitions(creq.cc.b, kreq)
 		case kmsg.DeleteGroups:
 			kresp, err = c.handleDeleteGroups(creq)
+		case kmsg.DescribeUserSCRAMCredentials:
+			kresp, err = c.handleDescribeUserSCRAMCredentials(kreq)
+		case kmsg.AlterUserSCRAMCredentials:
+			kresp, err = c.handleAlterUserSCRAMCredentials(creq.cc.b, kreq)
 		default:
 			err = fmt.Errorf("unahndled key %v", k)
 		}

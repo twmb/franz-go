@@ -23,7 +23,7 @@ type cfg struct {
 	maxSessionTimeout time.Duration
 
 	enableSASL bool
-	sasls      sasls
+	sasls      map[struct{ m, u string }]string // cleared after client initialization
 }
 
 // NumBrokers sets the number of brokers to start in the fake cluster.
@@ -78,22 +78,11 @@ func EnableSASL() Opt {
 	return opt{func(cfg *cfg) { cfg.enableSASL = true }}
 }
 
-// SuperuserPlain seeds the cluster with a SASL PLAIN superuser.
+// Superuser seeds the cluster with a superuser. The method must be either
+// PLAIN, SCRAM-SHA-256, or SCRAM-SHA-512.
 // Note that PLAIN superusers cannot be deleted.
-func SuperuserPlain(user, pass string) Opt {
-	return opt{func(cfg *cfg) { cfg.sasls.plain[user] = pass }}
-}
-
-// SuperuserScram256 seeds the cluster with a SASL SCRAM-SHA-256 superuser.
 // SCRAM superusers can be modified with AlterUserScramCredentials.
 // If you delete all SASL users, the kfake cluster will be unusable.
-func SuperuserScram256(user, pass string) Opt {
-	return opt{func(cfg *cfg) { cfg.sasls.scram256[user] = newScramAuth(saslScram256, pass) }}
-}
-
-// SuperuserScram512 seeds the cluster with a SASL SCRAM-SHA-512 superuser.
-// SCRAM superusers can be modified with AlterUserScramCredentials.
-// If you delete all SASL users, the kfake cluster will be unusable.
-func SuperuserScram512(user, pass string) Opt {
-	return opt{func(cfg *cfg) { cfg.sasls.scram512[user] = newScramAuth(saslScram512, pass) }}
+func Superuser(method, user, pass string) Opt {
+	return opt{func(cfg *cfg) { cfg.sasls[struct{ m, u string }{method, user}] = pass }}
 }
