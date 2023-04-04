@@ -26,16 +26,21 @@ MISC
 x OffsetForLeaderEpoch
 
 SASL
-* SaslHandshake
-* SaslAuthenticate
-* DescribeUserScramCredentials
-* AlterUserScramCredentials
+x SaslHandshake
+x SaslAuthenticate
+x DescribeUserScramCredentials
+x AlterUserScramCredentials
 
 TXNS
 * AddPartitionsToTxn
 * AddOffsetsToTxn
 * EndTxn
 * TxnOffsetCommit
+
+ACLS
+* DescribeACLs
+* CreateACLs
+* DeleteACLs
 
 LOW-PRIO
 * DeleteRecords
@@ -46,11 +51,6 @@ LOW-PRIO
 * DescribeProducers
 * DescribeTransactions
 * ListTransactions
-
-ACLS
-* DescribeACLs
-* CreateACLs
-* DeleteACLs
 
 * AlterPartitionAssignments
 * ListPartitionReassignments

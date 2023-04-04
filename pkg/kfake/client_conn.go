@@ -16,6 +16,9 @@ type (
 		b      *broker
 		conn   net.Conn
 		respCh chan clientResp
+
+		saslStage saslStage
+		s0        *scramServer0
 	}
 
 	clientReq struct {

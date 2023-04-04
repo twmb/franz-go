@@ -21,6 +21,9 @@ type cfg struct {
 
 	minSessionTimeout time.Duration
 	maxSessionTimeout time.Duration
+
+	enableSASL bool
+	sasls      map[struct{ m, u string }]string // cleared after client initialization
 }
 
 // NumBrokers sets the number of brokers to start in the fake cluster.
@@ -66,4 +69,20 @@ func GroupMinSessionTimeout(d time.Duration) Opt {
 // for groups, overriding the default 5 minutes.
 func GroupMaxSessionTimeout(d time.Duration) Opt {
 	return opt{func(cfg *cfg) { cfg.maxSessionTimeout = d }}
+}
+
+// EnableSASL enables SASL authentication for the cluster. If you do not
+// configure a bootstrap user / pass, the default superuser is "admin" /
+// "admin" with the SCRAM-SHA-256 SASL mechanisms.
+func EnableSASL() Opt {
+	return opt{func(cfg *cfg) { cfg.enableSASL = true }}
+}
+
+// Superuser seeds the cluster with a superuser. The method must be either
+// PLAIN, SCRAM-SHA-256, or SCRAM-SHA-512.
+// Note that PLAIN superusers cannot be deleted.
+// SCRAM superusers can be modified with AlterUserScramCredentials.
+// If you delete all SASL users, the kfake cluster will be unusable.
+func Superuser(method, user, pass string) Opt {
+	return opt{func(cfg *cfg) { cfg.sasls[struct{ m, u string }{method, user}] = pass }}
 }
