@@ -176,10 +176,13 @@ func (c *testConsumer) etl(etlsBeforeQuit int) {
 
 		// We poll with a short timeout so that we do not hang waiting
 		// at the end if another consumer hit the limit.
+		//
+		// If the host is slow, the context could be canceled immediately
+		// before we poll.
 		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 		fetches := cl.PollRecords(ctx, 100)
 		cancel()
-		if fetches.Err() == context.DeadlineExceeded || fetches.Err() == ErrClientClosed {
+		if err := fetches.Err(); err == context.DeadlineExceeded || err == context.Canceled || err == ErrClientClosed {
 			if consumed := int(c.consumed.Load()); consumed == testRecordLimit {
 				return
 			} else if consumed > testRecordLimit {
