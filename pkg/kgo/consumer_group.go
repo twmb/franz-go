@@ -354,7 +354,7 @@ func (g *groupConsumer) manage() {
 					h.OnGroupManageError(err)
 				}
 			})
-			g.c.addFakeReadyForDraining("", 0, &ErrGroupSession{err})
+			g.c.addFakeReadyForDraining("", 0, &ErrGroupSession{err}, "notification of group management loop error")
 		}
 
 		// If we are eager, we should have invalidated everything
@@ -997,7 +997,9 @@ func (g *groupConsumer) rejoin(why string) {
 // for group cancelation to return early.
 func (g *groupConsumer) joinAndSync(joinWhy string) error {
 	g.noCommitDuringJoinAndSync.Lock()
+	g.cfg.logger.Log(LogLevelDebug, "blocking commits from join&sync")
 	defer g.noCommitDuringJoinAndSync.Unlock()
+	defer g.cfg.logger.Log(LogLevelDebug, "unblocking commits from join&sync")
 
 	g.cfg.logger.Log(LogLevelInfo, "joining group", "group", g.cfg.group)
 	g.leader.Store(false)
@@ -1803,9 +1805,9 @@ func (g *groupConsumer) updateUncommitted(fetches Fetches) {
 
 				if debug {
 					if setHead {
-						fmt.Fprintf(&b, "%d{%d=>%d}, ", partition.Partition, prior.head.Offset, set.Offset)
+						fmt.Fprintf(&b, "%d{%d=>%d r%d}, ", partition.Partition, prior.head.Offset, set.Offset, len(partition.Records))
 					} else {
-						fmt.Fprintf(&b, "%d{%d=>%d=>%d}, ", partition.Partition, prior.head.Offset, prior.dirty.Offset, set.Offset)
+						fmt.Fprintf(&b, "%d{%d=>%d=>%d r%d}, ", partition.Partition, prior.head.Offset, prior.dirty.Offset, set.Offset, len(partition.Records))
 					}
 				}
 
@@ -2452,6 +2454,7 @@ func (cl *Client) CommitOffsetsSync(
 // early if we have to wait and the context is canceled.
 func (g *groupConsumer) waitJoinSyncMu(ctx context.Context) error {
 	if g.noCommitDuringJoinAndSync.TryRLock() {
+		g.cfg.logger.Log(LogLevelDebug, "grabbed join/sync mu on first try")
 		return nil
 	}
 
@@ -2477,8 +2480,10 @@ func (g *groupConsumer) waitJoinSyncMu(ctx context.Context) error {
 
 	select {
 	case <-blockJoinSyncCh:
+		g.cfg.logger.Log(LogLevelDebug, "grabbed join/sync mu after waiting")
 		return nil
 	case <-ctx.Done():
+		g.cfg.logger.Log(LogLevelDebug, "not grabbing mu because context canceled")
 		maybeRUnlock()
 		return ctx.Err()
 	}
