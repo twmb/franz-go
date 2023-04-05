@@ -93,6 +93,10 @@ func isDialErr(err error) bool {
 	return errors.As(err, &ne) && ne.Op == "dial"
 }
 
+func isContextErr(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+}
+
 func isSkippableBrokerErr(err error) bool {
 	// Some broker errors are not retryable for the given broker itself,
 	// but we *could* skip the broker and try again on the next broker. For
@@ -106,9 +110,7 @@ func isSkippableBrokerErr(err error) bool {
 		return true
 	}
 	var ne *net.OpError
-	if errors.As(err, &ne) &&
-		!errors.Is(err, context.Canceled) &&
-		!errors.Is(err, context.DeadlineExceeded) {
+	if errors.As(err, &ne) && !isContextErr(err) {
 		return true
 	}
 	return false

@@ -316,7 +316,8 @@ func (c *consumer) addSourceReadyForDraining(source *source) {
 
 // addFakeReadyForDraining saves a fake fetch that has important partition
 // errors--data loss or auth failures.
-func (c *consumer) addFakeReadyForDraining(topic string, partition int32, err error) {
+func (c *consumer) addFakeReadyForDraining(topic string, partition int32, err error, why string) {
+	c.cl.cfg.logger.Log(LogLevelInfo, "injecting fake fetch with an error", "err", err, "why", why)
 	c.sourcesReadyMu.Lock()
 	c.fakeReadyForDraining = append(c.fakeReadyForDraining, Fetch{Topics: []FetchTopic{{
 		Topic: topic,
@@ -1136,6 +1137,15 @@ const (
 	loadTypeEpoch
 )
 
+func (l listOrEpochLoadType) String() string {
+	switch l {
+	case loadTypeList:
+		return "list"
+	default:
+		return "epoch"
+	}
+}
+
 // adds an offset to be loaded, ensuring it exists only in the final loadType.
 func (l *listOrEpochLoads) addLoad(t string, p int32, loadType listOrEpochLoadType, load offsetLoad) {
 	l.removeLoad(t, p)
@@ -1637,14 +1647,10 @@ func (s *consumerSession) handleListOrEpochResults(loaded loadedOffsets) (reload
 	// guard this entire function.
 
 	debug := s.c.cl.cfg.logger.Level() >= LogLevelDebug
-	type offsetEpoch struct {
-		Offset      int64
-		LeaderEpoch int32
-	}
-	var using, reloading map[string]map[int32]offsetEpoch
+	var using, reloading map[string]map[int32]EpochOffset
 	if debug {
-		using = make(map[string]map[int32]offsetEpoch)
-		reloading = make(map[string]map[int32]offsetEpoch)
+		using = make(map[string]map[int32]EpochOffset)
+		reloading = make(map[string]map[int32]EpochOffset)
 		defer func() {
 			t := "list"
 			if loaded.loadType == loadTypeEpoch {
@@ -1664,10 +1670,10 @@ func (s *consumerSession) handleListOrEpochResults(loaded loadedOffsets) (reload
 			if debug {
 				tusing := using[load.topic]
 				if tusing == nil {
-					tusing = make(map[int32]offsetEpoch)
+					tusing = make(map[int32]EpochOffset)
 					using[load.topic] = tusing
 				}
-				tusing[load.partition] = offsetEpoch{load.offset, load.leaderEpoch}
+				tusing[load.partition] = EpochOffset{load.leaderEpoch, load.offset}
 			}
 
 			load.cursor.setOffset(cursorOffset{
@@ -1681,25 +1687,25 @@ func (s *consumerSession) handleListOrEpochResults(loaded loadedOffsets) (reload
 		var edl *ErrDataLoss
 		switch {
 		case errors.As(load.err, &edl):
-			s.c.addFakeReadyForDraining(load.topic, load.partition, load.err) // signal we lost data, but set the cursor to what we can
+			s.c.addFakeReadyForDraining(load.topic, load.partition, load.err, "notification of data loss") // signal we lost data, but set the cursor to what we can
 			use()
 
 		case load.err == nil:
 			use()
 
-		default: // from ErrorCode in a response
+		default: // from ErrorCode in a response, or broker request err, or request is canceled as our session is ending
 			reloads.addLoad(load.topic, load.partition, loaded.loadType, load.request)
-			if !kerr.IsRetriable(load.err) && !isRetryableBrokerErr(load.err) && !isDialErr(load.err) { // non-retryable response error; signal such in a response
-				s.c.addFakeReadyForDraining(load.topic, load.partition, load.err)
+			if !kerr.IsRetriable(load.err) && !isRetryableBrokerErr(load.err) && !isDialErr(load.err) && !isContextErr(load.err) { // non-retryable response error; signal such in a response
+				s.c.addFakeReadyForDraining(load.topic, load.partition, load.err, fmt.Sprintf("notification of non-retryable error from %s request", loaded.loadType))
 			}
 
 			if debug {
 				treloading := reloading[load.topic]
 				if treloading == nil {
-					treloading = make(map[int32]offsetEpoch)
+					treloading = make(map[int32]EpochOffset)
 					reloading[load.topic] = treloading
 				}
-				treloading[load.partition] = offsetEpoch{load.offset, load.leaderEpoch}
+				treloading[load.partition] = EpochOffset{load.leaderEpoch, load.offset}
 			}
 		}
 	}

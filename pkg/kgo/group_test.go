@@ -144,7 +144,7 @@ func (c *testConsumer) etl(etlsBeforeQuit int) {
 				return
 			}
 			if err := cl.CommitUncommittedOffsets(ctx); err != nil {
-				c.errCh <- fmt.Errorf("unable to commit: %v", err)
+				c.errCh <- fmt.Errorf("unable to commit in revoked: %v", err)
 			}
 		}),
 		OnPartitionsLost(func(context.Context, *Client, map[string][]int32) {}),
@@ -188,9 +188,11 @@ func (c *testConsumer) etl(etlsBeforeQuit int) {
 			} else if consumed > testRecordLimit {
 				panic(fmt.Sprintf("invalid: consumed too much from %s (group %s)", c.consumeFrom, c.group))
 			}
+			if fetches.NumRecords() > 0 {
+				c.errCh <- fmt.Errorf("poll got err %s but also unexpectedly received %d records", err, fetches.NumRecords())
+			}
 			continue
 		}
-
 		if fetchErrs := fetches.Errors(); len(fetchErrs) > 0 {
 			c.errCh <- fmt.Errorf("poll got unexpected errs: %v", fetchErrs)
 		}
@@ -219,7 +221,6 @@ func (c *testConsumer) etl(etlsBeforeQuit int) {
 
 			// save key for later for all-keys-consumed validation
 			c.part2key[r.Partition] = append(c.part2key[r.Partition], keyNum)
-
 			c.mu.Unlock()
 
 			c.consumed.Add(1)

@@ -159,6 +159,11 @@ issue:
 	return topic, func() {
 		tb.Helper()
 
+		if tb.Failed() {
+			tb.Logf("FAILED TESTING -- NOT DELETING TOPIC %s", topic)
+			return
+		}
+
 		tb.Logf("deleting topic %s", topic)
 
 		req := kmsg.NewPtrDeleteTopicsRequest()
@@ -184,6 +189,11 @@ func tmpGroup(tb testing.TB) (string, func()) {
 
 	return group, func() {
 		tb.Helper()
+
+		if tb.Failed() {
+			tb.Logf("FAILED TESTING -- NOT DELETING GROUP %s", group)
+			return
+		}
 		tb.Logf("deleting group %s", group)
 
 		req := kmsg.NewPtrDeleteGroupsRequest()
@@ -273,8 +283,6 @@ func testChainETL(
 	transactional bool,
 	balancer GroupBalancer,
 ) {
-	t.Helper()
-
 	var (
 		/////////////
 		// LEVEL 1 //
