@@ -2151,10 +2151,15 @@ func (cl *Client) handleShardedReq(ctx context.Context, req kmsg.Request) ([]Res
 				// If we failed to issue the request, we *maybe* will retry.
 				// We could have failed to even issue the request or receive
 				// a response, which is retryable.
+				//
+				// If a pinned req fails with errBrokerTooOld, we always retry
+				// immediately. The request was not even issued. However, as a
+				// safety, we only do this 3 times to avoid some super weird
+				// pathological spin loop.
 				backoff := cl.cfg.retryBackoff(tries)
 				if err != nil &&
-					(retryTimeout == 0 || time.Now().Add(backoff).Sub(start) < retryTimeout) &&
-					(reshardable && isPinned && errors.Is(err, errBrokerTooOld) || cl.shouldRetry(tries, err) && cl.waitTries(ctx, backoff)) {
+					(reshardable && isPinned && errors.Is(err, errBrokerTooOld) && tries <= 3) ||
+					(retryTimeout == 0 || time.Now().Add(backoff).Sub(start) < retryTimeout) && cl.shouldRetry(tries, err) && cl.waitTries(ctx, backoff) {
 					// Non-reshardable re-requests just jump back to the
 					// top where the broker is loaded. This is the case on
 					// requests where the original request is split to
