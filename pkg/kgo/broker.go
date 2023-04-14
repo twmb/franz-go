@@ -1472,6 +1472,7 @@ func (cxn *brokerCxn) handleResp(pr promisedResp) {
 		if throttleResponse, ok := pr.resp.(kmsg.ThrottleResponse); ok {
 			millis, throttlesAfterResp := throttleResponse.Throttle()
 			if millis > 0 {
+				cxn.b.cl.cfg.logger.Log(LogLevelInfo, "broker is throttling us in response", "broker", logID(cxn.b.meta.NodeID), "req", kmsg.Key(pr.resp.Key()).Name(), "throttle_millis", millis, "throttles_after_resp", throttlesAfterResp)
 				if throttlesAfterResp {
 					throttleUntil := time.Now().Add(time.Millisecond * time.Duration(millis)).UnixNano()
 					if throttleUntil > cxn.throttleUntil.Load() {
