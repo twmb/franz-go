@@ -116,6 +116,10 @@ func (t *Tracer) maybeKeyAttr(attrs []attribute.KeyValue, r *kgo.Record) []attri
 //
 // It sets up the span options. The user's application code is responsible for
 // ending the span.
+//
+// This should only ever be called within a polling loop of a consumed record and
+// not a record which has been created for producing, so call this at the start of each
+// iteration of your processing for the record.
 func (t *Tracer) WithProcessSpan(r *kgo.Record) (context.Context, trace.Span) {
 	// Set up the span options.
 	attrs := []attribute.KeyValue{
