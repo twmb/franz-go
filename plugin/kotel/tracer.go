@@ -9,7 +9,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/propagation"
-	semconv "go.opentelemetry.io/otel/semconv/v1.12.0"
+	semconv "go.opentelemetry.io/otel/semconv/v1.18.0"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -124,6 +124,7 @@ func (t *Tracer) WithProcessSpan(r *kgo.Record) (context.Context, trace.Span) {
 		semconv.MessagingDestinationKey.String(r.Topic),
 		semconv.MessagingOperationProcess,
 		semconv.MessagingKafkaPartitionKey.Int64(int64(r.Partition)),
+		semconv.MessagingKafkaMessageOffset.Int64(r.Offset),
 	}
 	attrs = t.maybeKeyAttr(attrs, r)
 	if t.clientID != "" {
