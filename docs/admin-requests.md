@@ -11,7 +11,7 @@ type that could have more helper functions, please create a pull request.
 
 Not all of the low level API can be encapsulated in a high level API, and the
 kadm package must sacrifice some details to make things easier to use. If the
-kadm package does not give you the control you need, the low level kadm package
+kadm package does not give you the control you need, the low level kmsg package
 allows you to construct requests to Kafka directly.
 
 All Kafka requests and responses are supported through generated code in the

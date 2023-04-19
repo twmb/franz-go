@@ -129,7 +129,7 @@ By default, the group consumer will autocommit every 5s, commit whenever a
 rebalance happens (in [`OnPartitionsRevoked`][16]), and will issue a blocking
 commit when leaving the group. For most purposes, this can suffice. The default
 commit logs any errors encountered, but this can be overridden with the
-[`AutoCommitCallback`][16] option or by disabling autocommit and instead committing
+[`AutoCommitCallback`][17] option or by disabling autocommit and instead committing
 yourself.
 
 [16]: https://pkg.go.dev/github.com/twmb/franz-go/pkg/kgo#OnPartitionsRevoked
