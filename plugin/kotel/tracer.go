@@ -9,14 +9,14 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/propagation"
-	semconv "go.opentelemetry.io/otel/semconv/v1.12.0"
+	semconv "go.opentelemetry.io/otel/semconv/v1.18.0"
 	"go.opentelemetry.io/otel/trace"
 )
 
 var ( // interface checks to ensure we implement the hooks properly.
 	_ kgo.HookProduceRecordBuffered   = new(Tracer)
 	_ kgo.HookProduceRecordUnbuffered = new(Tracer)
-	_ kgo.HookFetchRecordBuffered     = new(Tracer)
+	_ kgo.HookFetchRecordsBuffered    = new(Tracer)
 	_ kgo.HookFetchRecordUnbuffered   = new(Tracer)
 )
 
@@ -119,11 +119,11 @@ func (t *Tracer) maybeKeyAttr(attrs []attribute.KeyValue, r *kgo.Record) []attri
 func (t *Tracer) WithProcessSpan(r *kgo.Record) (context.Context, trace.Span) {
 	// Set up the span options.
 	attrs := []attribute.KeyValue{
-		semconv.MessagingSystemKey.String("kafka"),
-		semconv.MessagingDestinationKindTopic,
-		semconv.MessagingDestinationKey.String(r.Topic),
+		semconv.MessagingSystem("kafka"),
+		semconv.MessagingSourceKindTopic,
+		semconv.MessagingSourceName(r.Topic),
 		semconv.MessagingOperationProcess,
-		semconv.MessagingKafkaPartitionKey.Int64(int64(r.Partition)),
+		semconv.MessagingKafkaSourcePartition(int(r.Partition)),
 	}
 	attrs = t.maybeKeyAttr(attrs, r)
 	if t.clientID != "" {
@@ -137,9 +137,14 @@ func (t *Tracer) WithProcessSpan(r *kgo.Record) (context.Context, trace.Span) {
 		trace.WithSpanKind(trace.SpanKindConsumer),
 	}
 
+	ctx := t.propagators.Extract(r.Context, NewRecordCarrier(r))
+
 	if r.Context == nil {
-		r.Context = context.Background()
+		r.Context = ctx
+	} else {
+		opts = append(opts, trace.LinkFromContext(ctx))
 	}
+
 	// Start a new span using the provided context and options.
 	return t.tracer.Start(r.Context, r.Topic+" process", opts...)
 }
@@ -155,13 +160,13 @@ func (t *Tracer) WithProcessSpan(r *kgo.Record) (context.Context, trace.Span) {
 func (t *Tracer) OnProduceRecordBuffered(r *kgo.Record) {
 	// Set up span options.
 	attrs := []attribute.KeyValue{
-		semconv.MessagingSystemKey.String("kafka"),
+		semconv.MessagingSystem("kafka"),
 		semconv.MessagingDestinationKindTopic,
-		semconv.MessagingDestinationKey.String(r.Topic),
+		semconv.MessagingDestinationName(r.Topic),
 	}
 	attrs = t.maybeKeyAttr(attrs, r)
 	if t.clientID != "" {
-		attrs = append(attrs, semconv.MessagingKafkaClientIDKey.String(t.clientID))
+		attrs = append(attrs, semconv.MessagingKafkaClientID(t.clientID))
 	}
 	opts := []trace.SpanStartOption{
 		trace.WithAttributes(attrs...),
@@ -184,7 +189,7 @@ func (t *Tracer) OnProduceRecordUnbuffered(r *kgo.Record, err error) {
 	span := trace.SpanFromContext(r.Context)
 	defer span.End()
 	span.SetAttributes(
-		semconv.MessagingKafkaPartitionKey.Int64(int64(r.Partition)),
+		semconv.MessagingKafkaDestinationPartition(int(r.Partition)),
 	)
 	if err != nil {
 		span.SetStatus(codes.Error, err.Error())
@@ -192,25 +197,17 @@ func (t *Tracer) OnProduceRecordUnbuffered(r *kgo.Record, err error) {
 	}
 }
 
-// OnFetchRecordBuffered starts a new span for the "receive" operation on a
-// buffered record.
-//
-// It sets the span options and extracts the span context from the record,
-// updates the record's context to ensure it can be ended in the
-// OnFetchRecordUnbuffered hook and can be used in downstream consumer
-// processing.
-func (t *Tracer) OnFetchRecordBuffered(r *kgo.Record) {
+// OnFetchRecordsBuffered starts a new span for the "receive" operation on a
+// buffered records.
+func (t *Tracer) OnFetchRecordsBuffered(topic string, partition int32, records []*kgo.Record) {
 	// Set up the span options.
 	attrs := []attribute.KeyValue{
-		semconv.MessagingSystemKey.String("kafka"),
-		semconv.MessagingDestinationKindTopic,
-		semconv.MessagingDestinationKey.String(r.Topic),
+		semconv.MessagingSystem("kafka"),
+		semconv.MessagingSourceKindTopic,
+		semconv.MessagingSourceName(topic),
 		semconv.MessagingOperationReceive,
-		semconv.MessagingKafkaPartitionKey.Int64(int64(r.Partition)),
-	}
-	attrs = t.maybeKeyAttr(attrs, r)
-	if t.clientID != "" {
-		attrs = append(attrs, semconv.MessagingKafkaClientIDKey.String(t.clientID))
+		semconv.MessagingKafkaSourcePartition(int(partition)),
+		semconv.MessagingBatchMessageCount(len(records)),
 	}
 	if t.consumerGroup != "" {
 		attrs = append(attrs, semconv.MessagingKafkaConsumerGroupKey.String(t.consumerGroup))
@@ -220,15 +217,11 @@ func (t *Tracer) OnFetchRecordBuffered(r *kgo.Record) {
 		trace.WithSpanKind(trace.SpanKindConsumer),
 	}
 
-	if r.Context == nil {
-		r.Context = context.Background()
-	}
-	// Extract the span context from the record.
-	ctx := t.propagators.Extract(r.Context, NewRecordCarrier(r))
-	// Start the "receive" span.
-	newCtx, _ := t.tracer.Start(ctx, r.Topic+" receive", opts...)
+	newCtx, _ := t.tracer.Start(context.Background(), topic+" receive", opts...)
 	// Update the record context.
-	r.Context = newCtx
+	for _, r := range records {
+		r.Context = newCtx
+	}
 }
 
 // OnFetchRecordUnbuffered continues and ends the "receive" span for an

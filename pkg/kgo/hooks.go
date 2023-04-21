@@ -374,6 +374,10 @@ type HookFetchRecordBuffered interface {
 	OnFetchRecordBuffered(*Record)
 }
 
+type HookFetchRecordsBuffered interface {
+	OnFetchRecordsBuffered(topic string, partition int32, records []*Record)
+}
+
 // HookFetchRecordUnbuffered is called when a fetched record is unbuffered.
 //
 // A record can be internally discarded after being in some scenarios without

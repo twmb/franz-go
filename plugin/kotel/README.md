@@ -36,7 +36,7 @@ span operations:
 |-------|---------------------------------|-----------|-------|
 | 1     | kgo.HookProduceRecordBuffered   | Send      | Start |
 | 2     | kgo.HookProduceRecordUnbuffered | Send      | End   |
-| 3     | kgo.HookFetchRecordBuffered     | Receive   | Start |
+| 3     | kgo.HookFetchRecordsBuffered     | Receive   | Start |
 | 4     | kgo.HookFetchRecordUnbuffered   | Receive   | End   |
 | 5     | kotel.Tracer.WithProcessSpan    | Process   | Start |
 

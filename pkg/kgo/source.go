@@ -292,18 +292,27 @@ type bufferedFetch struct {
 func (s *source) hook(f *Fetch, buffered, polled bool) {
 	s.cl.cfg.hooks.each(func(h Hook) {
 		if buffered {
-			h, ok := h.(HookFetchRecordBuffered)
-			if !ok {
-				return
-			}
-			for i := range f.Topics {
-				t := &f.Topics[i]
-				for j := range t.Partitions {
-					p := &t.Partitions[j]
-					for _, r := range p.Records {
-						h.OnFetchRecordBuffered(r)
+			switch h := h.(type) {
+			case HookFetchRecordBuffered:
+				for i := range f.Topics {
+					t := &f.Topics[i]
+					for j := range t.Partitions {
+						p := &t.Partitions[j]
+						for _, r := range p.Records {
+							h.OnFetchRecordBuffered(r)
+						}
 					}
 				}
+			case HookFetchRecordsBuffered:
+				for i := range f.Topics {
+					t := &f.Topics[i]
+					for j := range t.Partitions {
+						p := &t.Partitions[j]
+						h.OnFetchRecordsBuffered(p.Records)
+					}
+				}
+			default:
+				return
 			}
 		} else {
 			h, ok := h.(HookFetchRecordUnbuffered)
