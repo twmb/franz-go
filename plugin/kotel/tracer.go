@@ -140,10 +140,9 @@ func (t *Tracer) WithProcessSpan(r *kgo.Record) (context.Context, trace.Span) {
 	ctx := t.propagators.Extract(r.Context, NewRecordCarrier(r))
 
 	if r.Context == nil {
-		r.Context = ctx
-	} else {
-		opts = append(opts, trace.LinkFromContext(ctx))
+		r.Context = context.Background()
 	}
+	opts = append(opts, trace.LinkFromContext(ctx))
 
 	// Start a new span using the provided context and options.
 	return t.tracer.Start(r.Context, r.Topic+" process", opts...)
