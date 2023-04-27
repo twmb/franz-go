@@ -22,6 +22,9 @@ metrics being counter vecs:
 #{ns}_buffered_fetch_records_total
 ```
 
+The above metrics can be expanded considerably with options in this package,
+allowing timings, uncompressed and compressed bytes, and different labels.
+
 Note that seed brokers use broker IDs prefixed with "seed_", with the number
 corresponding to which seed it is.
 
