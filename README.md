@@ -178,6 +178,7 @@ In alphabetical order,
 
 * [Alpaca](https://alpaca.markets/blog/alpaca-launches-next-gen-order-management-system/)
 * [Banyan](https://banyan.com)
+* [Benthos](https://www.benthos.dev/)
 * [Eoitek](https://eoitek.com/)
 * [Mux](https://mux.com/blog/processing-cdn-logs-exactly-once-with-kafka-transactions/)
 * [Redpanda Console](https://github.com/redpanda-data/console/)
