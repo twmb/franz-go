@@ -350,6 +350,23 @@ func (cl *Client) updateMetadata() (retryWhy multiUpdateWhy, err error) {
 		}
 		tpsConsumerLoad = tpsConsumer.ensureTopics(allTopics)
 		defer tpsConsumer.storeData(tpsConsumerLoad)
+
+		// For regex consuming, if a topic is not returned in the
+		// response that we were previously consuming, we assume the
+		// topic has been deleted and purge it.
+		var purgeTopics []string
+		for topic := range tpsConsumerLoad {
+			if _, ok := latest[topic]; !ok {
+				purgeTopics = append(purgeTopics, topic)
+			}
+		}
+		if len(purgeTopics) > 0 {
+			// We have to `go` because Purge issues a blocking
+			// metadata fn; this will wait for our current
+			// execution to finish then purge.
+			cl.cfg.logger.Log(LogLevelInfo, "regex consumer purging topics that were previously consumed because they are missing in a metadata response, we are assuming they are deleted", "topics", purgeTopics)
+			go cl.PurgeTopicsFromClient(purgeTopics...)
+		}
 	}
 
 	// Migrating a cursor requires stopping any consumer session. If we
