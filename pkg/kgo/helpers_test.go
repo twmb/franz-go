@@ -156,8 +156,14 @@ issue:
 		tb.Fatalf("unable to create topic %q: %v", topic, err)
 	}
 
+	var cleaned bool
 	return topic, func() {
 		tb.Helper()
+
+		if cleaned {
+			return
+		}
+		cleaned = true
 
 		if tb.Failed() {
 			tb.Logf("FAILED TESTING -- NOT DELETING TOPIC %s", topic)

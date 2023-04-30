@@ -141,8 +141,9 @@ type cfg struct {
 	rack           string
 	preferLagFn    PreferLagFn
 
-	maxConcurrentFetches int
-	disableFetchSessions bool
+	maxConcurrentFetches     int
+	disableFetchSessions     bool
+	keepFetchRetryableErrors bool
 
 	topics     map[string]*regexp.Regexp   // topics to consume; if regex is true, values are compiled regular expressions
 	partitions map[string]map[int32]Offset // partitions to directly consume from
@@ -1340,6 +1341,22 @@ func DisableFetchSessions() ConsumerOpt {
 // similar lag number).
 func ConsumePreferringLagFn(fn PreferLagFn) ConsumerOpt {
 	return consumerOpt{func(cfg *cfg) { cfg.preferLagFn = fn }}
+}
+
+// KeepFetchRetryableErrors switches the client to always return any retryable
+// broker error when fetching, rather than stripping them. By default, the
+// client strips retryable errors from fetch responses; these are usually
+// signals that a client needs to update its metadata to learn of where a
+// partition has moved to (from one broker to another), or they are signals
+// that one broker is temporarily unhealthy (broker not available). You can opt
+// into keeping these errors if you want to specifically react to certain
+// events. For example, if you want to react to you yourself deleting a topic,
+// you can watch for either UNKNOWN_TOPIC_OR_PARTITION or UNKNOWN_TOPIC_ID
+// errors being returned in fetches (and ignore the other errors).
+//
+// TODO not exported / usable yet
+func keepFetchRetryableErrors() ConsumerOpt {
+	return consumerOpt{func(cfg *cfg) { cfg.keepFetchRetryableErrors = true }}
 }
 
 //////////////////////////////////

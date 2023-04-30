@@ -861,7 +861,7 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 			var keep bool
 			switch fp.Err {
 			default:
-				if kerr.IsRetriable(fp.Err) {
+				if kerr.IsRetriable(fp.Err) && !s.cl.cfg.keepFetchRetryableErrors {
 					// UnknownLeaderEpoch: our meta is newer than the broker we fetched from
 					// OffsetNotAvailable: fetched from out of sync replica or a behind in-sync one (KIP-392 case 1 and case 2)
 					// UnknownTopicID: kafka has not synced the state on all brokers
@@ -887,14 +887,16 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 				// consume the topic again anymore. This is an error
 				// worth bubbling up.
 				//
-				// FUN FACT: Kafka will actually return this error
-				// for a brief window immediately after creating a
-				// topic for the first time, meaning the controller
-				// has not yet propagated to the leader that it is
-				// the leader of a new partition. We need to ignore
-				// this error for a _litttttlllleee bit_.
+				// Kafka will actually return this error for a brief
+				// window immediately after creating a topic for the
+				// first time, meaning the controller has not yet
+				// propagated to the leader that it is now the leader
+				// of a new partition. We need to ignore this error
+				// for a little bit.
 				if fails := partOffset.from.unknownIDFails.Add(1); fails > 5 {
 					partOffset.from.unknownIDFails.Add(-1)
+					keep = true
+				} else if s.cl.cfg.keepFetchRetryableErrors {
 					keep = true
 				} else {
 					numErrsStripped++
