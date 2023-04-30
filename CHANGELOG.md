@@ -1,3 +1,37 @@
+v1.13.3
+===
+
+This minor patch release adds a few internal improvements and fixes no bugs.
+
+Release 1.13.2 patched commits from occuring between join and sync; this patch
+extends that to blocking LeaveGroup or Close if an active join and sync is
+occurring. This is necessary because revoke callbacks are called while leaving
+a group, and usually, you commit in a revoke callback.
+
+A few extra logs are added, some areas of code are better, and a
+context.Canceled error that could occasionally be returned in fetches when an
+internal consumer session changed is no longer returned.
+
+This release went through three+ straight days of looped integration testing on
+two laptops to track down extremely rare test failures; those have been tracked
+down.
+
+Lastly, if you use a regex consumer and delete topics, the client now
+internally purges and stops fetching those topics. Previously, any topic
+discovered while regex consuming was permanently consumed until you manually
+called `PurgeTopicsFromClient`.
+
+- [`bb66f24`](https://github.com/twmb/franz-go/bb66f24) kgo: purge missing-from-meta topics while regex consuming
+- [`f72fdaf`](https://github.com/twmb/franz-go/f72fdaf) kgo: always retry on NotLeader for sharded requests
+- [`682d1f8`](https://github.com/twmb/franz-go/682d1f8) kgo: add info log when the client is throttled
+- [`88fa883`](https://github.com/twmb/franz-go/88fa883) kgo: avoid counting pinReq version failures against retries
+- [`de53fda`](https://github.com/twmb/franz-go/de53fda) kgo: add a bit more context to sharded logs, avoid info log on Close
+- [`7338bcf`](https://github.com/twmb/franz-go/7338bcf) kgo: avoiding context.Canceled fetch from List/Epoch, improve testing&logs
+- [`055b349`](https://github.com/twmb/franz-go/055b349) consumer: do not use the partition epoch when assigning offsets
+- [`d833f61`](https://github.com/twmb/franz-go/d833f61) group consuming: block LeaveGroup between join&sync
+
+
+
 v1.13.2
 ===
 
