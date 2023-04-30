@@ -23,17 +23,18 @@ jobs:
       - uses: actions/checkout@v3
       - uses: actions/setup-go@v3
         with:
-          go-version: 1.20.1
+          go-version: 1.20.3
       - uses: golangci/golangci-lint-action@v3
         with:
           version: latest
+          args: --timeout=5m
 
   integration-test-kafka:
     if: github.repository == 'twmb/franz-go'
     needs: golangci
     runs-on: ubuntu-latest
     name: "integration test kafka"
-    container: golang:1.20.1
+    container: golang:1.20.3
     services:
       kafka:
         image: bitnami/kafka:latest
@@ -48,7 +49,7 @@ jobs:
           KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: 1@127.0.0.1:9093
           # Set this to "PLAINTEXT://127.0.0.1:9092" if you want to run this container on localhost via Docker
           KAFKA_CFG_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
-          KAFKA_CFG_BROKER_ID: 1
+          KAFKA_CFG_NODE_ID: 1
           ALLOW_PLAINTEXT_LISTENER: yes
           KAFKA_KRAFT_CLUSTER_ID: XkpGZQ27R3eTl3OdTm2LYA # 16 byte base64-encoded UUID
     steps:
@@ -65,7 +66,7 @@ jobs:
     needs: golangci
     runs-on: ubuntu-latest
     name: "integration test redpanda"
-    container: golang:1.20.1
+    container: golang:1.20.3
     services:
       redpanda:
         image: vectorized/redpanda-nightly:latest
