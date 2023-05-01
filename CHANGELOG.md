@@ -21,16 +21,14 @@ internally purges and stops fetching those topics. Previously, any topic
 discovered while regex consuming was permanently consumed until you manually
 called `PurgeTopicsFromClient`.
 
-- [`bb66f24`](https://github.com/twmb/franz-go/bb66f24) kgo: purge missing-from-meta topics while regex consuming
-- [`f72fdaf`](https://github.com/twmb/franz-go/f72fdaf) kgo: always retry on NotLeader for sharded requests
-- [`682d1f8`](https://github.com/twmb/franz-go/682d1f8) kgo: add info log when the client is throttled
-- [`88fa883`](https://github.com/twmb/franz-go/88fa883) kgo: avoid counting pinReq version failures against retries
-- [`de53fda`](https://github.com/twmb/franz-go/de53fda) kgo: add a bit more context to sharded logs, avoid info log on Close
-- [`7338bcf`](https://github.com/twmb/franz-go/7338bcf) kgo: avoiding context.Canceled fetch from List/Epoch, improve testing&logs
-- [`055b349`](https://github.com/twmb/franz-go/055b349) consumer: do not use the partition epoch when assigning offsets
-- [`d833f61`](https://github.com/twmb/franz-go/d833f61) group consuming: block LeaveGroup between join&sync
-
-
+- [`bb66f24`](https://github.com/twmb/franz-go/commit/bb66f24) kgo: purge missing-from-meta topics while regex consuming
+- [`f72fdaf`](https://github.com/twmb/franz-go/commit/f72fdaf) kgo: always retry on NotLeader for sharded requests
+- [`682d1f8`](https://github.com/twmb/franz-go/commit/682d1f8) kgo: add info log when the client is throttled
+- [`88fa883`](https://github.com/twmb/franz-go/commit/88fa883) kgo: avoid counting pinReq version failures against retries
+- [`de53fda`](https://github.com/twmb/franz-go/commit/de53fda) kgo: add a bit more context to sharded logs, avoid info log on Close
+- [`7338bcf`](https://github.com/twmb/franz-go/commit/7338bcf) kgo: avoiding context.Canceled fetch from List/Epoch, improve testing&logs
+- [`055b349`](https://github.com/twmb/franz-go/commit/055b349) consumer: do not use the partition epoch when assigning offsets
+- [`d833f61`](https://github.com/twmb/franz-go/commit/d833f61) group consuming: block LeaveGroup between join&sync
 
 v1.13.2
 ===
