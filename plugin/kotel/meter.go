@@ -212,76 +212,90 @@ func strnode(node int32) string {
 
 func (m *Meter) OnBrokerConnect(meta kgo.BrokerMetadata, _ time.Duration, _ net.Conn, err error) {
 	node := strnode(meta.NodeID)
+	attributes := attribute.NewSet(attribute.String("node_id", node))
 	if err != nil {
 		m.instruments.connectErrs.Add(
 			context.Background(),
 			1,
-			attribute.String("node_id", node),
+			metric.WithAttributeSet(attributes),
 		)
 		return
 	}
 	m.instruments.connects.Add(
 		context.Background(),
 		1,
-		attribute.String("node_id", node),
+		metric.WithAttributeSet(attributes),
 	)
 }
 
 func (m *Meter) OnBrokerDisconnect(meta kgo.BrokerMetadata, _ net.Conn) {
 	node := strnode(meta.NodeID)
+	attributes := attribute.NewSet(attribute.String("node_id", node))
 	m.instruments.disconnects.Add(
 		context.Background(),
 		1,
-		attribute.String("node_id", node),
+		metric.WithAttributeSet(attributes),
 	)
 }
 
 func (m *Meter) OnBrokerWrite(meta kgo.BrokerMetadata, _ int16, bytesWritten int, _, _ time.Duration, err error) {
 	node := strnode(meta.NodeID)
+	attributes := attribute.NewSet(attribute.String("node_id", node))
 	if err != nil {
 		m.instruments.writeErrs.Add(
 			context.Background(),
 			1,
-			attribute.String("node_id", node),
+			metric.WithAttributeSet(attributes),
 		)
 		return
 	}
 	m.instruments.writeBytes.Add(
 		context.Background(),
 		int64(bytesWritten),
-		attribute.String("node_id", node),
+		metric.WithAttributeSet(attributes),
 	)
 }
 
 func (m *Meter) OnBrokerRead(meta kgo.BrokerMetadata, _ int16, bytesRead int, _, _ time.Duration, err error) {
 	node := strnode(meta.NodeID)
+	attributes := attribute.NewSet(attribute.String("node_id", node))
 	if err != nil {
 		m.instruments.readErrs.Add(
 			context.Background(),
 			1,
-			attribute.String("node_id", node),
+			metric.WithAttributeSet(attributes),
 		)
 		return
 	}
-	m.instruments.readBytes.Add(context.Background(), int64(bytesRead))
+	m.instruments.readBytes.Add(
+		context.Background(),
+		int64(bytesRead),
+		metric.WithAttributeSet(attributes),
+	)
 }
 
 func (m *Meter) OnProduceBatchWritten(meta kgo.BrokerMetadata, topic string, _ int32, pbm kgo.ProduceBatchMetrics) {
 	node := strnode(meta.NodeID)
+	attributes := attribute.NewSet(
+		attribute.String("node_id", node),
+		attribute.String("topic", topic),
+	)
 	m.instruments.produceBytes.Add(
 		context.Background(),
 		int64(pbm.UncompressedBytes),
-		attribute.String("node_id", node),
-		attribute.String("topic", topic),
+		metric.WithAttributeSet(attributes),
 	)
 }
 
 func (m *Meter) OnFetchBatchRead(meta kgo.BrokerMetadata, topic string, _ int32, fbm kgo.FetchBatchMetrics) {
 	node := strnode(meta.NodeID)
+	attributes := attribute.NewSet(
+		attribute.String("node_id", node),
+		attribute.String("topic", topic),
+	)
 	m.instruments.fetchBytes.Add(
 		context.Background(),
 		int64(fbm.UncompressedBytes),
-		attribute.String("node_id", node),
-		attribute.String("topic", topic),
+		metric.WithAttributeSet(attributes),
 	)
 }
