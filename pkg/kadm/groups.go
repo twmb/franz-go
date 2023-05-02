@@ -902,7 +902,7 @@ func (rs FetchOffsetsResponses) EachError(fn func(FetchOffsetsResponse)) {
 func (rs FetchOffsetsResponses) AllFailed() bool {
 	var n int
 	rs.EachError(func(FetchOffsetsResponse) { n++ })
-	return n == len(rs)
+	return len(rs) > 0 && n == len(rs)
 }
 
 // CommittedPartitions returns the set of unique topics and partitions that
