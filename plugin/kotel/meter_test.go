@@ -5,11 +5,12 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/metric/noop"
 	semconv "go.opentelemetry.io/otel/semconv/v1.12.0"
 )
 
 func TestWithMeter(t *testing.T) {
-	provider := metric.NewNoopMeterProvider()
+	provider := noop.NewMeterProvider()
 
 	testCases := []struct {
 		name string
