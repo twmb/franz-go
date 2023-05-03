@@ -12,7 +12,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/metric/global"
-	semconv "go.opentelemetry.io/otel/semconv/v1.12.0"
+	semconv "go.opentelemetry.io/otel/semconv/v1.18.0"
 )
 
 var ( // interface checks to ensure we implement the hooks properly
@@ -94,7 +94,6 @@ type instruments struct {
 
 func (m *Meter) newInstruments() instruments {
 	// connects and disconnects
-
 	connects, err := m.meter.Int64Counter(
 		"messaging.kafka.connects.count",
 		metric.WithUnit(dimensionless),
