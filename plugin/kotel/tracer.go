@@ -9,7 +9,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/propagation"
-	semconv "go.opentelemetry.io/otel/semconv/v1.12.0"
+	semconv "go.opentelemetry.io/otel/semconv/v1.18.0"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -116,6 +116,10 @@ func (t *Tracer) maybeKeyAttr(attrs []attribute.KeyValue, r *kgo.Record) []attri
 //
 // It sets up the span options. The user's application code is responsible for
 // ending the span.
+//
+// This should only ever be called within a polling loop of a consumed record and
+// not a record which has been created for producing, so call this at the start of each
+// iteration of your processing for the record.
 func (t *Tracer) WithProcessSpan(r *kgo.Record) (context.Context, trace.Span) {
 	// Set up the span options.
 	attrs := []attribute.KeyValue{
@@ -124,6 +128,7 @@ func (t *Tracer) WithProcessSpan(r *kgo.Record) (context.Context, trace.Span) {
 		semconv.MessagingDestinationKey.String(r.Topic),
 		semconv.MessagingOperationProcess,
 		semconv.MessagingKafkaPartitionKey.Int64(int64(r.Partition)),
+		semconv.MessagingKafkaMessageOffset.Int64(r.Offset),
 	}
 	attrs = t.maybeKeyAttr(attrs, r)
 	if t.clientID != "" {
