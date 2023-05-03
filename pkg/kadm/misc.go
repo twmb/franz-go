@@ -36,7 +36,7 @@ type FindCoordinatorResponses map[string]FindCoordinatorResponse
 func (rs FindCoordinatorResponses) AllFailed() bool {
 	var n int
 	rs.EachError(func(FindCoordinatorResponse) { n++ })
-	return n == len(rs)
+	return len(rs) > 0 && n == len(rs)
 }
 
 // Sorted returns all coordinator responses sorted by name.
@@ -536,7 +536,7 @@ func (ds DescribedUserSCRAMs) Sorted() []DescribedUserSCRAM {
 func (ds DescribedUserSCRAMs) AllFailed() bool {
 	var n int
 	ds.EachError(func(DescribedUserSCRAM) { n++ })
-	return n == len(ds)
+	return len(ds) > 0 && n == len(ds)
 }
 
 // EachError calls fn for every described user that has a non-nil error.
@@ -654,7 +654,7 @@ func (as AlteredUserSCRAMs) Sorted() []AlteredUserSCRAM {
 func (as AlteredUserSCRAMs) AllFailed() bool {
 	var n int
 	as.EachError(func(AlteredUserSCRAM) { n++ })
-	return n == len(as)
+	return len(as) > 0 && n == len(as)
 }
 
 // EachError calls fn for every altered user that has a non-nil error.
