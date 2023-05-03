@@ -124,11 +124,11 @@ func (t *Tracer) WithProcessSpan(r *kgo.Record) (context.Context, trace.Span) {
 	// Set up the span options.
 	attrs := []attribute.KeyValue{
 		semconv.MessagingSystemKey.String("kafka"),
-		semconv.MessagingDestinationKindTopic,
-		semconv.MessagingDestinationKey.String(r.Topic),
+		semconv.MessagingSourceKindTopic,
+		semconv.MessagingSourceName(r.Topic),
 		semconv.MessagingOperationProcess,
-		semconv.MessagingKafkaPartitionKey.Int64(int64(r.Partition)),
-		semconv.MessagingKafkaMessageOffset.Int64(r.Offset),
+		semconv.MessagingKafkaSourcePartition(int(r.Partition)),
+		semconv.MessagingKafkaMessageOffset(int(r.Offset)),
 	}
 	attrs = t.maybeKeyAttr(attrs, r)
 	if t.clientID != "" {
@@ -162,7 +162,7 @@ func (t *Tracer) OnProduceRecordBuffered(r *kgo.Record) {
 	attrs := []attribute.KeyValue{
 		semconv.MessagingSystemKey.String("kafka"),
 		semconv.MessagingDestinationKindTopic,
-		semconv.MessagingDestinationKey.String(r.Topic),
+		semconv.MessagingDestinationName(r.Topic),
 	}
 	attrs = t.maybeKeyAttr(attrs, r)
 	if t.clientID != "" {
@@ -189,7 +189,7 @@ func (t *Tracer) OnProduceRecordUnbuffered(r *kgo.Record, err error) {
 	span := trace.SpanFromContext(r.Context)
 	defer span.End()
 	span.SetAttributes(
-		semconv.MessagingKafkaPartitionKey.Int64(int64(r.Partition)),
+		semconv.MessagingKafkaDestinationPartition(int(r.Partition)),
 	)
 	if err != nil {
 		span.SetStatus(codes.Error, err.Error())
@@ -208,10 +208,10 @@ func (t *Tracer) OnFetchRecordBuffered(r *kgo.Record) {
 	// Set up the span options.
 	attrs := []attribute.KeyValue{
 		semconv.MessagingSystemKey.String("kafka"),
-		semconv.MessagingDestinationKindTopic,
-		semconv.MessagingDestinationKey.String(r.Topic),
+		semconv.MessagingSourceKindTopic,
+		semconv.MessagingSourceName(r.Topic),
 		semconv.MessagingOperationReceive,
-		semconv.MessagingKafkaPartitionKey.Int64(int64(r.Partition)),
+		semconv.MessagingKafkaSourcePartition(int(r.Partition)),
 	}
 	attrs = t.maybeKeyAttr(attrs, r)
 	if t.clientID != "" {
