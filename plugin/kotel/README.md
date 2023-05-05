@@ -19,12 +19,12 @@ franz-go projects.
 
 kotel provides tracing capabilities for Kafka using OpenTelemetry
 specifications. It allows for the creation of three different span
-operations: "send", "receive", and "process". Additionally, it also provides a
-set of attributes to use with these spans.
+operations: "publish", "receive", and "process". Additionally, it also provides
+a set of attributes to use with these spans.
 
 ### How it works
 
-The kotel tracer module uses hooks to automatically create and close "send"
+The kotel tracer module uses hooks to automatically create and close "publish"
 and "receive" spans as a `kgo.Record` flows through the application. However,
 for the "process" span, it uses a convenience method that must be manually
 invoked and closed in the consumer code to capture processing.
@@ -34,8 +34,8 @@ span operations:
 
 | Order | Hook/Method                     | Operation | State |
 |-------|---------------------------------|-----------|-------|
-| 1     | kgo.HookProduceRecordBuffered   | Send      | Start |
-| 2     | kgo.HookProduceRecordUnbuffered | Send      | End   |
+| 1     | kgo.HookProduceRecordBuffered   | Publish   | Start |
+| 2     | kgo.HookProduceRecordUnbuffered | Publish   | End   |
 | 3     | kgo.HookFetchRecordBuffered     | Receive   | Start |
 | 4     | kgo.HookFetchRecordUnbuffered   | Receive   | End   |
 | 5     | kotel.Tracer.WithProcessSpan    | Process   | Start |
