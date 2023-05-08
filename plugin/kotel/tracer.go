@@ -151,7 +151,7 @@ func (t *Tracer) WithProcessSpan(r *kgo.Record) (context.Context, trace.Span) {
 
 // Hooks ----------------------------------------------------------------------
 
-// OnProduceRecordBuffered starts a new span for the "send" operation on a
+// OnProduceRecordBuffered starts a new span for the "publish" operation on a
 // buffered record.
 //
 // It sets span options and injects the span context into record and updates
@@ -163,6 +163,7 @@ func (t *Tracer) OnProduceRecordBuffered(r *kgo.Record) {
 		semconv.MessagingSystemKey.String("kafka"),
 		semconv.MessagingDestinationKindTopic,
 		semconv.MessagingDestinationName(r.Topic),
+		semconv.MessagingOperationPublish,
 	}
 	attrs = t.maybeKeyAttr(attrs, r)
 	if t.clientID != "" {
@@ -172,19 +173,19 @@ func (t *Tracer) OnProduceRecordBuffered(r *kgo.Record) {
 		trace.WithAttributes(attrs...),
 		trace.WithSpanKind(trace.SpanKindProducer),
 	}
-	// Start the "send" span.
-	ctx, _ := t.tracer.Start(r.Context, r.Topic+" send", opts...)
+	// Start the "publish" span.
+	ctx, _ := t.tracer.Start(r.Context, r.Topic+" publish", opts...)
 	// Inject the span context into the record.
 	t.propagators.Inject(ctx, NewRecordCarrier(r))
 	// Update the record context.
 	r.Context = ctx
 }
 
-// OnProduceRecordUnbuffered continues and ends the "send" span for an
+// OnProduceRecordUnbuffered continues and ends the "publish" span for an
 // unbuffered record.
 //
 // It sets attributes with values unset when producing and records any error
-// that occurred during the send operation.
+// that occurred during the publish operation.
 func (t *Tracer) OnProduceRecordUnbuffered(r *kgo.Record, err error) {
 	span := trace.SpanFromContext(r.Context)
 	defer span.End()

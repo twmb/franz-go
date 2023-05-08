@@ -9,7 +9,7 @@ records and extracted from consume records. The following spans will be linked
 with a trace ID:
 
 1) request
-2) topic send
+2) topic publish
 3) topic receive
 4) topic process
 
