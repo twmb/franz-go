@@ -948,7 +948,7 @@ func (cl *Client) Close() {
 
 	sessCloseCtx, sessCloseCancel := context.WithTimeout(cl.ctx, time.Second)
 	var wg sync.WaitGroup
-	for _, sns := range cl.sinksAndSources {
+	cl.allSinksAndSources(func(sns sinkAndSource) {
 		if sns.source.session.id != 0 {
 			sns := sns
 			wg.Add(1)
@@ -957,7 +957,7 @@ func (cl *Client) Close() {
 				sns.source.killSessionOnClose(sessCloseCtx)
 			}()
 		}
-	}
+	})
 	wg.Wait()
 	sessCloseCancel()
 
