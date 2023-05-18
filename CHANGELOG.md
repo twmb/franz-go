@@ -1,3 +1,15 @@
+v1.13.4
+===
+
+This bugfix release fixes a race condition when calling client.Close.
+This bug was introduced in commit [`e45cd72`](https://github.com/twmb/franz-go/commit/e45cd72) in
+release v1.13.0. If a metadata request discovers a new broker as the client is
+closing, there is a tiny window where the metadata goroutine can update a map
+that the Close function is also concurrently accessing. The commit in this
+release fixes that by guarding the Close access with a mutex.
+
+- [`ee3d7c1`](https://github.com/twmb/franz-go/commit/ee3d7c1) **bugfix** kgo: fix race condition in close (thanks [@matino](https://github.com/matino)
+
 v1.13.3
 ===
 
