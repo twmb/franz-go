@@ -9,9 +9,9 @@ import (
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kgo"
+	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
-	"go.opentelemetry.io/otel/metric/global"
 	semconv "go.opentelemetry.io/otel/semconv/v1.18.0"
 )
 
@@ -64,7 +64,7 @@ func NewMeter(opts ...MeterOpt) *Meter {
 		opt.apply(m)
 	}
 	if m.provider == nil {
-		m.provider = global.MeterProvider()
+		m.provider = otel.GetMeterProvider()
 	}
 	m.meter = m.provider.Meter(
 		instrumentationName,
