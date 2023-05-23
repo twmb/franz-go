@@ -44,7 +44,7 @@ func URLs(urls ...string) Opt {
 	}}
 }
 
-// DialTLSConfig sets a tls.Config to use in a the default http client.
+// DialTLSConfig sets a tls.Config to use in the default http client.
 func DialTLSConfig(c *tls.Config) Opt {
 	return opt{func(cl *Client) {
 		cl.httpcl = &http.Client{

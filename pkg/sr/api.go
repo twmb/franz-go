@@ -220,6 +220,7 @@ func (cl *Client) Schemas(ctx context.Context, subject string, deleted HideShowD
 		wg           sync.WaitGroup
 		cctx, cancel = context.WithCancel(ctx)
 	)
+	defer cancel()
 	for i := range versions {
 		version := versions[i]
 		slot := i
@@ -289,7 +290,7 @@ const (
 	HardDelete = true
 )
 
-// DeleteSubjects deletes the subject. You must soft delete a subject before it
+// DeleteSubject deletes the subject. You must soft delete a subject before it
 // can be hard deleted. This returns all versions that were deleted.
 func (cl *Client) DeleteSubject(ctx context.Context, subject string, how DeleteHow) ([]int, error) {
 	// DELETE /subjects/{subject}?permanent={x}
@@ -302,7 +303,7 @@ func (cl *Client) DeleteSubject(ctx context.Context, subject string, how DeleteH
 	return versions, cl.delete(ctx, path, &versions)
 }
 
-// DeleteSubjects deletes the schema at the given version. You must soft delete
+// DeleteSchema deletes the schema at the given version. You must soft delete
 // a schema before it can be hard deleted. You can use -1 to delete the latest
 // version.
 func (cl *Client) DeleteSchema(ctx context.Context, subject string, version int, how DeleteHow) error {
@@ -331,6 +332,7 @@ func (cl *Client) SchemaReferences(ctx context.Context, subject string, version 
 		wg           sync.WaitGroup
 		cctx, cancel = context.WithCancel(ctx)
 	)
+	defer cancel()
 	for i := range ids {
 		id := ids[i]
 		wg.Add(1)
@@ -377,6 +379,7 @@ func (cl *Client) SchemaUsagesByID(ctx context.Context, id int, deleted HideShow
 		wg           sync.WaitGroup
 		cctx, cancel = context.WithCancel(ctx)
 	)
+	defer cancel()
 	for i := range subjectVersions {
 		sv := subjectVersions[i]
 		slot := i
@@ -613,7 +616,7 @@ func (cl *Client) SetMode(ctx context.Context, mode Mode, force bool, subjects .
 		go func() {
 			defer wg.Done()
 			var m modeResponse
-			err := cl.put(ctx, pathMode(subject, force), m, &m)
+			err := cl.put(ctx, pathMode(subject, force), mode, &m)
 			results[slot] = ModeResult{
 				Subject: subject,
 				Mode:    m.Mode,
