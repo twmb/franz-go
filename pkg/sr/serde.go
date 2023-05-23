@@ -59,7 +59,7 @@ func GenerateFn(fn func() any) SerdeOpt {
 // registered multiple times with different indices.
 //
 // This option supports schemas that encode many different values from the same
-// schema (namely, protobuf). The index into the the schema to encode a
+// schema (namely, protobuf). The index into the schema to encode a
 // particular message is specified with `index`.
 //
 // NOTE: this option must be used for protobuf schemas.

@@ -24,7 +24,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"sync/atomic"
 	"time"
 )
 
@@ -34,12 +33,19 @@ type ResponseError struct {
 	Method string `json:"-"`
 	// URL is the full path that was requested that resulted in this error.
 	URL string `json:"-"`
+	// Raw contains the raw response body.
+	Raw []byte `json:"-"`
 
 	ErrorCode int    `json:"error_code"`
 	Message   string `json:"message"`
 }
 
-func (e *ResponseError) Error() string { return e.Message }
+func (e *ResponseError) Error() string {
+	if e.Message != "" {
+		return e.Message
+	}
+	return string(e.Raw)
+}
 
 // Client talks to a schema registry and contains helper functions to serialize
 // and deserialize objects according to schemas.
@@ -54,8 +60,6 @@ type Client struct {
 	}
 
 	normalize bool
-
-	serdes atomic.Value // map[reflect.Type]serde
 }
 
 // NewClient returns a new schema registry client.
@@ -134,14 +138,13 @@ start:
 		return fmt.Errorf("unable to read response body from %s %q: %w", method, url, err)
 	}
 
-	if resp.StatusCode != 200 {
+	if resp.StatusCode >= 300 {
 		e := &ResponseError{
 			Method: method,
 			URL:    url,
+			Raw:    body,
 		}
-		if err := json.Unmarshal(body, e); err != nil {
-			return fmt.Errorf("unable to decode erroring response body from %s %q: %w", method, url, err)
-		}
+		_ = json.Unmarshal(body, e) // best effort
 		return e
 	}
 
