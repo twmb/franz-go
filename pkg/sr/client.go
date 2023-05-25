@@ -30,24 +30,32 @@ import (
 // ResponseError is the type returned from the schema registry for errors.
 type ResponseError struct {
 	// Method is the requested http method.
-	Method string `json:"-"`
+	Method string
 	// URL is the full path that was requested that resulted in this error.
-	URL string `json:"-"`
+	URL string
 	// Raw contains the raw response body.
-	Raw []byte `json:"-"`
-
-	ErrorCode ErrorCode `json:"error_code"`
-	Message   string    `json:"message"`
+	Raw []byte
+	// Err contains the parsed error code and message.
+	Err *Error
 }
 
-type ErrorCode int
-
-func (e *ResponseError) Error() string {
-	if e.Message != "" {
-		return e.Message
+func (e *ResponseError) Error() string { return e.Err.Error() }
+func (e *ResponseError) Format(s fmt.State, verb rune) {
+	// Body based on pkg/errors/errors.go
+	switch verb {
+	case 'v':
+		if s.Flag('+') {
+			fmt.Fprintf(s, "request: %s %s, response: %s, error: %s", e.Method, e.URL, e.Raw, e.Error())
+			return
+		}
+		fallthrough
+	case 's':
+		io.WriteString(s, e.Error())
+	case 'q':
+		fmt.Fprintf(s, "%q", e.Error())
 	}
-	return string(e.Raw)
 }
+func (e *ResponseError) Unwrap() error { return e.Err }
 
 // Client talks to a schema registry and contains helper functions to serialize
 // and deserialize objects according to schemas.
@@ -141,13 +149,16 @@ start:
 	}
 
 	if resp.StatusCode >= 300 {
-		e := &ResponseError{
+		var e struct {
+			ErrorCode int `json:"error_code"`
+		}
+		_ = json.Unmarshal(body, &e) // best effort
+		return &ResponseError{
 			Method: method,
 			URL:    url,
 			Raw:    body,
+			Err:    ErrorForCode(e.ErrorCode),
 		}
-		_ = json.Unmarshal(body, e) // best effort
-		return e
 	}
 
 	if into != nil {
