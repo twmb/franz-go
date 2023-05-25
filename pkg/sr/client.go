@@ -36,9 +36,11 @@ type ResponseError struct {
 	// Raw contains the raw response body.
 	Raw []byte `json:"-"`
 
-	ErrorCode int    `json:"error_code"`
-	Message   string `json:"message"`
+	ErrorCode ErrorCode `json:"error_code"`
+	Message   string    `json:"message"`
 }
+
+type ErrorCode int
 
 func (e *ResponseError) Error() string {
 	if e.Message != "" {

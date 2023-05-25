@@ -14,6 +14,31 @@ import (
 //     https://docs.confluent.io/platform/current/schema-registry/develop/api.html
 //
 
+const (
+	ErrorCodeSubjectNotFound  ErrorCode = 40401
+	ErrorCodeVersionNotFound  ErrorCode = 40402
+	ErrorCodeSchemaNotFound   ErrorCode = 40403
+	ErrorCodeExporterNotFound ErrorCode = 40450
+
+	ErrorCodeMissingOrInvalidExporterName   ErrorCode = 40950
+	ErrorCodeMissingOrInvalidExporterConfig ErrorCode = 40951
+	ErrorCodeInvalidExporterSubjects        ErrorCode = 40952
+	ErrorCodeExporterAlreadyExists          ErrorCode = 40960
+	ErrorCodeExporterAlreadyRunning         ErrorCode = 40961
+	ErrorCodeExporterAlreadyStarting        ErrorCode = 40962
+	ErrorCodeExporterNotPaused              ErrorCode = 40963
+	ErrorCodeTooManyExporters               ErrorCode = 40964
+
+	ErrorCodeInvalidSchema             ErrorCode = 42201
+	ErrorCodeInvalidVersion            ErrorCode = 42202
+	ErrorCodeInvalidCompatibilityLevel ErrorCode = 42203
+	ErrorCodeInvalidMode               ErrorCode = 42204
+
+	ErrorCodeErrorInBackendDataStore ErrorCode = 50001
+	ErrorCodeOperationTimedOut       ErrorCode = 50002
+	ErrorCodeErrorForwardingRequest  ErrorCode = 50003
+)
+
 // SupportedTypes returns the schema types that are supported in the schema
 // registry.
 func (cl *Client) SupportedTypes(ctx context.Context) ([]SchemaType, error) {
