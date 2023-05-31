@@ -88,8 +88,10 @@ type instruments struct {
 	readErrs  metric.Int64Counter
 	readBytes metric.Int64Counter
 
-	produceBytes metric.Int64Counter
-	fetchBytes   metric.Int64Counter
+	produceBytes   metric.Int64Counter
+	produceRecords metric.Int64Counter
+	fetchBytes     metric.Int64Counter
+	fetchRecords   metric.Int64Counter
 }
 
 func (m *Meter) newInstruments() instruments {
@@ -172,6 +174,15 @@ func (m *Meter) newInstruments() instruments {
 		log.Printf("failed to create produceBytes instrument, %v", err)
 	}
 
+	produceRecords, err := m.meter.Int64Counter(
+		"messaging.kafka.produce_records.count",
+		metric.WithUnit(dimensionless),
+		metric.WithDescription("Total number of produced records, by broker and topic"),
+	)
+	if err != nil {
+		log.Printf("failed to create produceRecords instrument, %v", err)
+	}
+
 	fetchBytes, err := m.meter.Int64Counter(
 		"messaging.kafka.fetch_bytes.count",
 		metric.WithUnit(bytes),
@@ -179,6 +190,15 @@ func (m *Meter) newInstruments() instruments {
 	)
 	if err != nil {
 		log.Printf("failed to create fetchBytes instrument, %v", err)
+	}
+
+	fetchRecords, err := m.meter.Int64Counter(
+		"messaging.kafka.fetch_records.count",
+		metric.WithUnit(dimensionless),
+		metric.WithDescription("Total number of fetched records, by broker and topic"),
+	)
+	if err != nil {
+		log.Printf("failed to create fetchRecords instrument, %v", err)
 	}
 
 	return instruments{
@@ -192,8 +212,10 @@ func (m *Meter) newInstruments() instruments {
 		readErrs:  readErrs,
 		readBytes: readBytes,
 
-		produceBytes: produceBytes,
-		fetchBytes:   fetchBytes,
+		produceBytes:   produceBytes,
+		produceRecords: produceRecords,
+		fetchBytes:     fetchBytes,
+		fetchRecords:   fetchRecords,
 	}
 }
 
@@ -283,6 +305,11 @@ func (m *Meter) OnProduceBatchWritten(meta kgo.BrokerMetadata, topic string, _ i
 		int64(pbm.UncompressedBytes),
 		metric.WithAttributeSet(attributes),
 	)
+	m.instruments.produceRecords.Add(
+		context.Background(),
+		int64(pbm.NumRecords),
+		metric.WithAttributeSet(attributes),
+	)
 }
 
 func (m *Meter) OnFetchBatchRead(meta kgo.BrokerMetadata, topic string, _ int32, fbm kgo.FetchBatchMetrics) {
@@ -294,6 +321,11 @@ func (m *Meter) OnFetchBatchRead(meta kgo.BrokerMetadata, topic string, _ int32,
 	m.instruments.fetchBytes.Add(
 		context.Background(),
 		int64(fbm.UncompressedBytes),
+		metric.WithAttributeSet(attributes),
+	)
+	m.instruments.fetchRecords.Add(
+		context.Background(),
+		int64(fbm.NumRecords),
 		metric.WithAttributeSet(attributes),
 	)
 }
