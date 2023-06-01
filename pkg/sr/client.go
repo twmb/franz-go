@@ -162,8 +162,13 @@ start:
 	}
 
 	if into != nil {
-		if err := json.Unmarshal(body, into); err != nil {
-			return fmt.Errorf("unable to decode ok response body from %s %q: %w", method, url, err)
+		switch into := into.(type) {
+		case *[]byte:
+			*into = body // return raw body to caller
+		default:
+			if err := json.Unmarshal(body, into); err != nil {
+				return fmt.Errorf("unable to decode ok response body from %s %q: %w", method, url, err)
+			}
 		}
 	}
 	return nil

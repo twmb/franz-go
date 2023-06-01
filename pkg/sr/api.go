@@ -140,6 +140,13 @@ func (cl *Client) Subjects(ctx context.Context, deleted HideShowDeleted) ([]stri
 	return subjects, cl.get(ctx, path, &subjects)
 }
 
+// SchemaByID returns the schema for a given schema ID.
+func (cl *Client) SchemaByID(ctx context.Context, id int) (Schema, error) {
+	// GET /schemas/ids/{id}
+	var s Schema
+	return s, cl.get(ctx, fmt.Sprintf("/schemas/ids/%d", id), &s)
+}
+
 // SchemaTextByID returns the actual text of a schema.
 //
 // For example, if the schema for an ID is
@@ -150,12 +157,12 @@ func (cl *Client) Subjects(ctx context.Context, deleted HideShowDeleted) ([]stri
 //
 //	{"type":"boolean"}
 func (cl *Client) SchemaTextByID(ctx context.Context, id int) (string, error) {
-	// GET /schemas/ids/{id}
-	var s Schema
-	if err := cl.get(ctx, fmt.Sprintf("/schemas/ids/%d", id), &s); err != nil {
+	// GET /schemas/ids/{id}/schema
+	var s []byte
+	if err := cl.get(ctx, fmt.Sprintf("/schemas/ids/%d/schema", id), &s); err != nil {
 		return "", err
 	}
-	return s.Schema, nil
+	return string(s), nil
 }
 
 func pathSubject(subject string) string            { return fmt.Sprintf("/subjects/%s", url.PathEscape(subject)) }

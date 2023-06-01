@@ -1,3 +1,16 @@
+v1.13.5
+===
+
+This tiny patch release relaxes SASL/PLAIN to ignore any server response. This
+patch is only useful if you are using this client against Tencent (at least as
+we known at this moment). A normal broker does not reply to a successful PLAIN
+auth with any data, but Tencent apparently does. Sarama and the Kafka client
+itself both seem to ignore extra data once auth is successful, and if a broker
+actually _rejected_ the auth then the broker would close the connection, so
+ignoring this data seems fine.
+
+- [`3addecc`](https://github.com/twmb/franz-go/commit/3addecc) sasl plain: ignore any challenge data
+
 v1.13.4
 ===
 
