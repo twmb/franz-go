@@ -54,6 +54,9 @@ func TestSerde(t *testing.T) {
 	serde.Register(3, idx4{}, Index(0, 0, 1))
 	serde.Register(3, idx3{}, Index(0, 0))
 	serde.Register(5, oneidx{}, Index(0), GenerateFn(func() any { return &oneidx{Foo: "defoo", Bar: "debar"} }))
+	serde.Register(100, nil, Index(0), EncodeFn(func(v any) ([]byte, error) {
+		return json.MarshalIndent(v, "", "  ")
+	}))
 
 	for i, test := range []struct {
 		enc    any
@@ -91,6 +94,10 @@ func TestSerde(t *testing.T) {
 			expDec: oneidx{Foo: "defoo", Bar: "bar"},
 		},
 	} {
+		if _, err := serde.Encode(test.enc, ID(99)); err != ErrNotRegistered {
+			t.Errorf("got %v != exp ErrNotRegistered", err)
+		}
+
 		b, err := serde.Encode(test.enc)
 		gotErr := err != nil
 		if gotErr != test.expErr {
@@ -111,6 +118,13 @@ func TestSerde(t *testing.T) {
 		}
 		if b2 := serde.MustAppendEncode([]byte("foo"), test.enc); !bytes.Equal(b2, append([]byte("foo"), b...)) {
 			t.Errorf("#%d got MustAppendEncode(%v) != Encode(foo%v)", i, b2, b)
+		}
+
+		bIndented := serde.MustEncode(test.enc, ID(100), Index(0))
+		if i := bytes.IndexByte(bIndented, '{'); !bytes.Equal(bIndented[:i], []byte{0, 0, 0, 0, 100, 0}) {
+			t.Errorf("#%d got Encode[ID=100](%v) != exp(%v)", i, bIndented[:i], []byte{0, 0, 0, 0, 100, 0})
+		} else if expIndented := extractIndentedJSON(b); !bytes.Equal(bIndented[i:], expIndented) {
+			t.Errorf("#%d got Encode[ID=100](%v) != exp(%v)", i, bIndented[i:], expIndented)
 		}
 
 		v, err := serde.DecodeNew(b)
@@ -138,4 +152,18 @@ func TestSerde(t *testing.T) {
 	if _, err := serde.DecodeNew([]byte{0, 0, 0, 0, 99}); err != ErrNotRegistered {
 		t.Errorf("got %v != exp ErrNotRegistered", err)
 	}
+	if _, err := serde.DecodeNew([]byte{0, 0, 0, 0, 100, 0}); err != ErrNotRegistered {
+		// schema is registered but type is unknown
+		t.Errorf("got %v != exp ErrNotRegistered", err)
+	}
+}
+
+func extractIndentedJSON(in []byte) []byte {
+	i := bytes.IndexByte(in, '{') // skip header
+	var out bytes.Buffer
+	err := json.Indent(&out, in[i:], "", "  ")
+	if err != nil {
+		panic(err)
+	}
+	return out.Bytes()
 }
