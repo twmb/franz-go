@@ -152,7 +152,9 @@ messaging.kafka.write_bytes{node_id = "#{node}"}
 messaging.kafka.read_errors.count{node_id = "#{node}"}
 messaging.kafka.read_bytes.count{node_id = "#{node}"}
 messaging.kafka.produce_bytes.count{node_id = "#{node}", topic = "#{topic}"}
+messaging.kafka.produce_records.count{node_id = "#{node}", topic = "#{topic}"}
 messaging.kafka.fetch_bytes.count{node_id = "#{node}", topic = "#{topic}"}
+messaging.kafka.fetch_records.count{node_id = "#{node}", topic = "#{topic}"}
 ```
 
 ### Getting started
