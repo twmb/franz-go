@@ -403,9 +403,8 @@ func (c ConfluentHeader) DecodeIndex(b []byte) ([]int, []byte, error) {
 		return []int{0}, buf.Bytes(), nil
 	}
 	index := make([]int, l)
-	for i := 0; i < int(l); i++ {
-		var idx int64
-		idx, err = binary.ReadVarint(buf)
+	for i := range index {
+		idx, err := binary.ReadVarint(buf)
 		if err != nil {
 			return nil, nil, err
 		}
