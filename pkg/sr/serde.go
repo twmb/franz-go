@@ -1,18 +1,13 @@
 package sr
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
-	"io"
 	"reflect"
 	"sync"
 	"sync/atomic"
 )
-
-// The wire format for encoded types is 0, then big endian uint32 of the ID,
-// then the encoded message.
-//
-// https://docs.confluent.io/platform/current/schema-registry/serdes-develop/index.html#wire-format
 
 var (
 	// ErrNotRegistered is returned from Serde when attempting to encode a
@@ -101,6 +96,7 @@ type Serde struct {
 	mu    sync.Mutex
 
 	defaults []SerdeOpt
+	header   SerdeHeader
 }
 
 var (
@@ -132,6 +128,20 @@ func (s *Serde) loadTypes() map[reflect.Type]tserde {
 // functions.
 func (s *Serde) SetDefaults(opts ...SerdeOpt) {
 	s.defaults = opts
+}
+
+// SetHeader configures which header should be used when encoding and decoding
+// values. If the header is set to nil it falls back to ConfluentHeader.
+func (s *Serde) SetHeader(header SerdeHeader) {
+	s.header = header
+}
+
+// Header returns the configured header.
+func (s *Serde) Header() SerdeHeader {
+	if s.header == nil {
+		return ConfluentHeader{}
+	}
+	return s.header
 }
 
 // Register registers a schema ID and the value it corresponds to, as well as
@@ -219,8 +229,8 @@ func tserdeMapClone(m map[int]tserde, at int, index []int) map[int]tserde {
 	return dup
 }
 
-// Encode encodes a value according to the schema registry wire format and
-// returns it. If EncodeFn was not used, this returns ErrNotRegistered.
+// Encode encodes a value and prepends the header according to the configured
+// SerdeHeader. If EncodeFn was not used, this returns ErrNotRegistered.
 func (s *Serde) Encode(v any) ([]byte, error) {
 	return s.AppendEncode(nil, v)
 }
@@ -234,23 +244,9 @@ func (s *Serde) AppendEncode(b []byte, v any) ([]byte, error) {
 		return b, ErrNotRegistered
 	}
 
-	b = append(b,
-		0,
-		byte(t.id>>24),
-		byte(t.id>>16),
-		byte(t.id>>8),
-		byte(t.id>>0),
-	)
-
-	if len(t.index) > 0 {
-		if len(t.index) == 1 && t.index[0] == 0 {
-			b = append(b, 0) // first-index shortcut (one type in the protobuf)
-		} else {
-			b = binary.AppendVarint(b, int64(len(t.index)))
-			for _, idx := range t.index {
-				b = binary.AppendVarint(b, int64(idx))
-			}
-		}
+	b, err := s.Header().AppendEncode(b, int(t.id), t.index)
+	if err != nil {
+		return nil, err
 	}
 
 	if t.appendEncode != nil {
@@ -316,44 +312,105 @@ func (s *Serde) DecodeNew(b []byte) (any, error) {
 }
 
 func (s *Serde) decodeFind(b []byte) ([]byte, tserde, error) {
-	if len(b) < 5 || b[0] != 0 {
-		return nil, tserde{}, ErrBadHeader
-	}
-	id := binary.BigEndian.Uint32(b[1:5])
-	b = b[5:]
+	h := s.Header()
 
-	t := s.loadIDs()[int(id)]
+	id, b, err := h.DecodeID(b)
+	if err != nil {
+		return nil, tserde{}, err
+	}
+
+	t := s.loadIDs()[id]
 	if len(t.subindex) > 0 {
-		r := bReader{b}
-		br := io.ByteReader(&r)
-		l, err := binary.ReadVarint(br)
-		if l == 0 { // length 0 is a shortcut for length 1, index 0
-			t = t.subindex[0]
-		}
-		for err == nil && t.subindex != nil && l > 0 {
-			var idx int64
-			idx, err = binary.ReadVarint(br)
-			t = t.subindex[int(idx)]
-			l--
-		}
+		var index []int
+		index, b, err = h.DecodeIndex(b)
 		if err != nil {
-			return nil, t, err
+			return nil, tserde{}, err
 		}
-		b = r.b
+		for _, idx := range index {
+			if t.subindex == nil {
+				return nil, tserde{}, ErrNotRegistered
+			}
+			t = t.subindex[idx]
+		}
 	}
 	if !t.exists {
-		return nil, t, ErrNotRegistered
+		return nil, tserde{}, ErrNotRegistered
 	}
 	return b, t, nil
 }
 
-type bReader struct{ b []byte }
+// SerdeHeader encodes and decodes a message header.
+type SerdeHeader interface {
+	AppendEncode(b []byte, id int, index []int) ([]byte, error)
+	DecodeID(in []byte) (id int, out []byte, err error)
+	DecodeIndex(in []byte) (index []int, out []byte, err error)
+}
 
-func (b *bReader) ReadByte() (byte, error) {
-	if len(b.b) > 0 {
-		r := b.b[0]
-		b.b = b.b[1:]
-		return r, nil
+// ConfluentHeader is a SerdeHeader that produces the Confluent wire format. It
+// starts with 0, then big endian uint32 of the ID, then index (only protobuf),
+// then the encoded message.
+//
+// https://docs.confluent.io/platform/current/schema-registry/serdes-develop/index.html#wire-format
+type ConfluentHeader struct{}
+
+// AppendEncode appends an encoded header to b according to the Confluent wire
+// format and returns it. Error is always nil.
+func (ConfluentHeader) AppendEncode(b []byte, id int, index []int) ([]byte, error) {
+	b = append(
+		b,
+		0,
+		byte(id>>24),
+		byte(id>>16),
+		byte(id>>8),
+		byte(id>>0),
+	)
+
+	if len(index) > 0 {
+		if len(index) == 1 && index[0] == 0 {
+			b = append(b, 0) // first-index shortcut (one type in the protobuf)
+		} else {
+			b = binary.AppendVarint(b, int64(len(index)))
+			for i := len(index) - 1; i >= 0; i-- {
+				b = binary.AppendVarint(b, int64(index[i]))
+			}
+		}
 	}
-	return 0, io.EOF
+
+	return b, nil
+}
+
+// DecodeID strips and decodes the schema ID from b. It returns the ID alongside
+// the unread bytes. If the header does not contain the magic byte or b contains
+// less than 5 bytes it returns ErrBadHeader.
+func (c ConfluentHeader) DecodeID(b []byte) (int, []byte, error) {
+	if len(b) < 5 || b[0] != 0 {
+		return 0, nil, ErrBadHeader
+	}
+	id := binary.BigEndian.Uint32(b[1:5])
+	return int(id), b[5:], nil
+}
+
+// DecodeIndex strips and decodes the index from b. It returns the index
+// alongside the unread bytes. It expects b to be the output of DecodeID (schema
+// ID should already be stripped away).
+func (c ConfluentHeader) DecodeIndex(b []byte) ([]int, []byte, error) {
+	buf := bytes.NewBuffer(b)
+	l, err := binary.ReadVarint(buf)
+	if err != nil {
+		return nil, nil, err
+	}
+	if l == 0 { // length 0 is a shortcut for length 1, index 0
+		return []int{0}, buf.Bytes(), nil
+	}
+	index := make([]int, l)
+	for l > 0 {
+		var idx int64
+		idx, err = binary.ReadVarint(buf)
+		if err != nil {
+			return nil, nil, err
+		}
+		index[l-1] = int(idx) // index is stored last to first
+		l--
+	}
+	return index, buf.Bytes(), nil
 }
