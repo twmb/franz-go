@@ -382,7 +382,7 @@ func (ConfluentHeader) AppendEncode(b []byte, id int, index []int) ([]byte, erro
 // DecodeID strips and decodes the schema ID from b. It returns the ID alongside
 // the unread bytes. If the header does not contain the magic byte or b contains
 // less than 5 bytes it returns ErrBadHeader.
-func (c ConfluentHeader) DecodeID(b []byte) (int, []byte, error) {
+func (ConfluentHeader) DecodeID(b []byte) (int, []byte, error) {
 	if len(b) < 5 || b[0] != 0 {
 		return 0, nil, ErrBadHeader
 	}
@@ -393,7 +393,7 @@ func (c ConfluentHeader) DecodeID(b []byte) (int, []byte, error) {
 // DecodeIndex strips and decodes the index from b. It returns the index
 // alongside the unread bytes. It expects b to be the output of DecodeID (schema
 // ID should already be stripped away).
-func (c ConfluentHeader) DecodeIndex(b []byte) ([]int, []byte, error) {
+func (ConfluentHeader) DecodeIndex(b []byte) ([]int, []byte, error) {
 	buf := bytes.NewBuffer(b)
 	l, err := binary.ReadVarint(buf)
 	if err != nil {
