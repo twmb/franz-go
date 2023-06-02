@@ -83,7 +83,7 @@ func TestSerde(t *testing.T) {
 		},
 		{
 			enc:    idx4{Bingo: "bango"},
-			expEnc: append([]byte{0, 0, 0, 0, 3, 6, 2, 0, 0}, `{"bingo":"bango"}`...),
+			expEnc: append([]byte{0, 0, 0, 0, 3, 6, 0, 0, 2}, `{"bingo":"bango"}`...),
 		},
 		{
 			enc:    oneidx{Bar: "bar"},
@@ -152,7 +152,7 @@ func TestConfluentHeader(t *testing.T) {
 		{id: 256, index: nil, expEnc: []byte{0, 0, 0, 1, 0}},
 		{id: 2, index: []int{0}, expEnc: []byte{0, 0, 0, 0, 2, 0}},
 		{id: 3, index: []int{1}, expEnc: []byte{0, 0, 0, 0, 3, 2, 2}},
-		{id: 4, index: []int{1, 2, 3}, expEnc: []byte{0, 0, 0, 0, 4, 6, 6, 4, 2}},
+		{id: 4, index: []int{1, 2, 3}, expEnc: []byte{0, 0, 0, 0, 4, 6, 2, 4, 6}},
 	} {
 		b, err := h.AppendEncode(nil, test.id, test.index)
 		if err != nil {

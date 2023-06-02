@@ -370,8 +370,8 @@ func (ConfluentHeader) AppendEncode(b []byte, id int, index []int) ([]byte, erro
 			b = append(b, 0) // first-index shortcut (one type in the protobuf)
 		} else {
 			b = binary.AppendVarint(b, int64(len(index)))
-			for i := len(index) - 1; i >= 0; i-- {
-				b = binary.AppendVarint(b, int64(index[i]))
+			for _, idx := range index {
+				b = binary.AppendVarint(b, int64(idx))
 			}
 		}
 	}
@@ -403,14 +403,13 @@ func (c ConfluentHeader) DecodeIndex(b []byte) ([]int, []byte, error) {
 		return []int{0}, buf.Bytes(), nil
 	}
 	index := make([]int, l)
-	for l > 0 {
+	for i := 0; i < int(l); i++ {
 		var idx int64
 		idx, err = binary.ReadVarint(buf)
 		if err != nil {
 			return nil, nil, err
 		}
-		index[l-1] = int(idx) // index is stored last to first
-		l--
+		index[i] = int(idx)
 	}
 	return index, buf.Bytes(), nil
 }
