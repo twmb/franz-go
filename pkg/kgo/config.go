@@ -642,6 +642,12 @@ func DialTLSConfig(c *tls.Config) Opt {
 	return clientOpt{func(cfg *cfg) { cfg.dialTLS = c }}
 }
 
+// DialTLS opts into dialing brokers with TLS. This is a shortcut for
+// DialTLSConfig with an empty config. See DialTLSConfig for more details.
+func DialTLS() Opt {
+	return DialTLSConfig(new(tls.Config))
+}
+
 // SeedBrokers sets the seed brokers for the client to use, overriding the
 // default 127.0.0.1:9092.
 //
