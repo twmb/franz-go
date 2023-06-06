@@ -298,3 +298,20 @@ func (m *Metrics) OnFetchBatchRead(meta kgo.BrokerMetadata, topic string, _ int3
 	node := strnode(meta.NodeID)
 	m.fetchBytes.WithLabelValues(node, topic).Add(float64(fbm.UncompressedBytes))
 }
+
+// Unregister the metrics if a registry was provided or created. Returns true if all metrics were unregistered.
+func (m *Metrics) Unregister() bool {
+	if m.cfg.reg == nil {
+		return false
+	}
+
+	return m.cfg.reg.Unregister(m.connects) &&
+		m.cfg.reg.Unregister(m.connectErrs) &&
+		m.cfg.reg.Unregister(m.disconnects) &&
+		m.cfg.reg.Unregister(m.writeErrs) &&
+		m.cfg.reg.Unregister(m.writeBytes) &&
+		m.cfg.reg.Unregister(m.readErrs) &&
+		m.cfg.reg.Unregister(m.readBytes) &&
+		m.cfg.reg.Unregister(m.produceBytes) &&
+		m.cfg.reg.Unregister(m.fetchBytes)
+}
