@@ -305,13 +305,14 @@ func (m *Metrics) Unregister() bool {
 		return false
 	}
 
-	return m.cfg.reg.Unregister(m.connects) &&
-		m.cfg.reg.Unregister(m.connectErrs) &&
-		m.cfg.reg.Unregister(m.disconnects) &&
-		m.cfg.reg.Unregister(m.writeErrs) &&
-		m.cfg.reg.Unregister(m.writeBytes) &&
-		m.cfg.reg.Unregister(m.readErrs) &&
-		m.cfg.reg.Unregister(m.readBytes) &&
-		m.cfg.reg.Unregister(m.produceBytes) &&
-		m.cfg.reg.Unregister(m.fetchBytes)
+	a := m.cfg.reg.Unregister(m.connects)
+	b := m.cfg.reg.Unregister(m.connectErrs)
+	c := m.cfg.reg.Unregister(m.disconnects)
+	d := m.cfg.reg.Unregister(m.writeErrs)
+	e := m.cfg.reg.Unregister(m.writeBytes)
+	f := m.cfg.reg.Unregister(m.readErrs)
+	g := m.cfg.reg.Unregister(m.readBytes)
+	h := m.cfg.reg.Unregister(m.produceBytes)
+	i := m.cfg.reg.Unregister(m.fetchBytes)
+	return a && b && c && d && e && f && g && h && i
 }
