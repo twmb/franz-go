@@ -135,6 +135,9 @@ func TestSerde(t *testing.T) {
 	if _, err := serde.DecodeNew([]byte{0, 0, 0, 0, 3}); err != io.EOF {
 		t.Errorf("got %v != exp io.EOF", err)
 	}
+	if _, err := serde.DecodeNew([]byte{0, 0, 0, 0, 3, 8}); err != ErrNotRegistered {
+		t.Errorf("got %v != exp ErrNotRegistered", err)
+	}
 	if _, err := serde.DecodeNew([]byte{0, 0, 0, 0, 99}); err != ErrNotRegistered {
 		t.Errorf("got %v != exp ErrNotRegistered", err)
 	}
@@ -183,7 +186,7 @@ func TestConfluentHeader(t *testing.T) {
 		}
 
 		if test.index != nil {
-			index, b3, err := h.DecodeIndex(b2)
+			index, b3, err := h.DecodeIndex(b2, len(test.index))
 			if err != nil {
 				t.Errorf("#%d DecodeIndex: got unexpected err %v", i, err)
 				continue
@@ -205,7 +208,10 @@ func TestConfluentHeader(t *testing.T) {
 	if _, _, err := h.DecodeID([]byte{0, 0, 0, 0}); err != ErrBadHeader {
 		t.Errorf("got %v != exp ErrBadHeader", err)
 	}
-	if _, _, err := h.DecodeIndex([]byte{2}); err != io.EOF {
+	if _, _, err := h.DecodeIndex([]byte{2}, 1); err != io.EOF {
 		t.Errorf("got %v != exp io.EOF", err)
+	}
+	if _, _, err := h.DecodeIndex([]byte{6, 2, 4, 6}, 2); err != ErrNotRegistered {
+		t.Errorf("got %v != exp ErrNotRegistered", err)
 	}
 }

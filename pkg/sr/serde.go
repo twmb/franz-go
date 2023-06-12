@@ -75,8 +75,9 @@ type tserde struct {
 	gen          func() any
 	typeof       reflect.Type
 
-	index    []int          // for encoding, an optional index we use
-	subindex map[int]tserde // for decoding, we look up sub-indices in the payload
+	index         []int          // for encoding, an optional index we use
+	subindex      map[int]tserde // for decoding, we look up sub-indices in the payload
+	subindexDepth int            // for decoding, we need to know the maximum depth of the subindex map
 }
 
 // Serde encodes and decodes values according to the schema registry wire
@@ -182,7 +183,16 @@ func (s *Serde) Register(id int, v any, opts ...SerdeOpt) {
 	// tree to find the end node we are initializing.
 	k := id
 	at := m[k]
-	for _, idx := range t.index {
+	max := func(i, j int) int {
+		if i > j {
+			return i
+		}
+		return j
+	}
+	for i, idx := range t.index {
+		at.subindexDepth = max(at.subindexDepth, len(t.index)-i)
+		m[k] = at
+
 		m = at.subindex
 		k = idx
 		at = m[k]
@@ -196,15 +206,16 @@ func (s *Serde) Register(id int, v any, opts ...SerdeOpt) {
 
 	// Now, we initialize the end node.
 	t = tserde{
-		id:           uint32(id),
-		exists:       true,
-		encode:       t.encode,
-		appendEncode: t.appendEncode,
-		decode:       t.decode,
-		gen:          t.gen,
-		typeof:       typeof,
-		index:        t.index,
-		subindex:     at.subindex,
+		id:            uint32(id),
+		exists:        true,
+		encode:        t.encode,
+		appendEncode:  t.appendEncode,
+		decode:        t.decode,
+		gen:           t.gen,
+		typeof:        typeof,
+		index:         t.index,
+		subindex:      at.subindex,
+		subindexDepth: at.subindexDepth,
 	}
 	m[k] = t
 }
@@ -322,7 +333,7 @@ func (s *Serde) decodeFind(b []byte) ([]byte, tserde, error) {
 	t := s.loadIDs()[id]
 	if len(t.subindex) > 0 {
 		var index []int
-		index, b, err = h.DecodeIndex(b)
+		index, b, err = h.DecodeIndex(b, t.subindexDepth)
 		if err != nil {
 			return nil, tserde{}, err
 		}
@@ -343,7 +354,7 @@ func (s *Serde) decodeFind(b []byte) ([]byte, tserde, error) {
 type SerdeHeader interface {
 	AppendEncode(b []byte, id int, index []int) ([]byte, error)
 	DecodeID(in []byte) (id int, out []byte, err error)
-	DecodeIndex(in []byte) (index []int, out []byte, err error)
+	DecodeIndex(in []byte, maxLength int) (index []int, out []byte, err error)
 }
 
 // ConfluentHeader is a SerdeHeader that produces the Confluent wire format. It
@@ -390,10 +401,12 @@ func (ConfluentHeader) DecodeID(b []byte) (int, []byte, error) {
 	return int(id), b[5:], nil
 }
 
-// DecodeIndex strips and decodes the index from b. It returns the index
+// DecodeIndex strips and decodes indices from b. It returns the index slice
 // alongside the unread bytes. It expects b to be the output of DecodeID (schema
-// ID should already be stripped away).
-func (ConfluentHeader) DecodeIndex(b []byte) ([]int, []byte, error) {
+// ID should already be stripped away). If maxLength is greater than 0 and the
+// encoded data contains more indices than maxLength the function returns
+// ErrNotRegistered.
+func (ConfluentHeader) DecodeIndex(b []byte, maxLength int) ([]int, []byte, error) {
 	buf := bytes.NewBuffer(b)
 	l, err := binary.ReadVarint(buf)
 	if err != nil {
@@ -401,6 +414,9 @@ func (ConfluentHeader) DecodeIndex(b []byte) ([]int, []byte, error) {
 	}
 	if l == 0 { // length 0 is a shortcut for length 1, index 0
 		return []int{0}, buf.Bytes(), nil
+	}
+	if maxLength > 0 && int(l) > maxLength { // index count is greater than expected
+		return nil, nil, ErrNotRegistered
 	}
 	index := make([]int, l)
 	for i := range index {
