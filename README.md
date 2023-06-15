@@ -187,6 +187,7 @@ In alphabetical order,
 * [ThinkingData](https://thinkingdata.cn)
 * [Unistack](https://unistack.org) (Cloud Management System)
 * [Unity Technologies](https://unity.com)
+* [Zomato](https://www.zomato.com/)
 
 If you use this library and want on the list above, please either open a PR
 or comment on [#142](https://github.com/twmb/franz-go/issues/142)!
