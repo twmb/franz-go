@@ -132,7 +132,7 @@ func (s *Serde) SetDefaults(opts ...SerdeOpt) {
 }
 
 // SetHeader configures which header should be used when encoding and decoding
-// values. If the header is set to nil it falls back to ConfluentHeader.
+// values. If the header is set to nil it falls back to confluentHeader.
 func (s *Serde) SetHeader(header SerdeHeader) {
 	s.header = header
 }
@@ -140,7 +140,7 @@ func (s *Serde) SetHeader(header SerdeHeader) {
 // Header returns the configured header.
 func (s *Serde) Header() SerdeHeader {
 	if s.header == nil {
-		return ConfluentHeader{}
+		return defaultSerdeHeader
 	}
 	return s.header
 }
@@ -363,16 +363,18 @@ type SerdeHeader interface {
 	DecodeIndex(in []byte, maxLength int) (index []int, out []byte, err error)
 }
 
-// ConfluentHeader is a SerdeHeader that produces the Confluent wire format. It
+var defaultSerdeHeader = new(confluentHeader)
+
+// confluentHeader is a SerdeHeader that produces the Confluent wire format. It
 // starts with 0, then big endian uint32 of the ID, then index (only protobuf),
 // then the encoded message.
 //
 // https://docs.confluent.io/platform/current/schema-registry/serdes-develop/index.html#wire-format
-type ConfluentHeader struct{}
+type confluentHeader struct{}
 
 // AppendEncode appends an encoded header to b according to the Confluent wire
 // format and returns it. Error is always nil.
-func (ConfluentHeader) AppendEncode(b []byte, id int, index []int) ([]byte, error) {
+func (*confluentHeader) AppendEncode(b []byte, id int, index []int) ([]byte, error) {
 	b = append(
 		b,
 		0,
@@ -399,7 +401,7 @@ func (ConfluentHeader) AppendEncode(b []byte, id int, index []int) ([]byte, erro
 // DecodeID strips and decodes the schema ID from b. It returns the ID alongside
 // the unread bytes. If the header does not contain the magic byte or b contains
 // less than 5 bytes it returns ErrBadHeader.
-func (ConfluentHeader) DecodeID(b []byte) (int, []byte, error) {
+func (*confluentHeader) DecodeID(b []byte) (int, []byte, error) {
 	if len(b) < 5 || b[0] != 0 {
 		return 0, nil, ErrBadHeader
 	}
@@ -412,7 +414,7 @@ func (ConfluentHeader) DecodeID(b []byte) (int, []byte, error) {
 // ID should already be stripped away). If maxLength is greater than 0 and the
 // encoded data contains more indices than maxLength the function returns
 // ErrNotRegistered.
-func (ConfluentHeader) DecodeIndex(b []byte, maxLength int) ([]int, []byte, error) {
+func (*confluentHeader) DecodeIndex(b []byte, maxLength int) ([]int, []byte, error) {
 	buf := bytes.NewBuffer(b)
 	l, err := binary.ReadVarint(buf)
 	if err != nil {
