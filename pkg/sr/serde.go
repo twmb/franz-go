@@ -185,18 +185,19 @@ func (s *Serde) Register(id int, v any, opts ...SerdeOpt) {
 	k := id
 	m := dupIDs
 	at := dupIDs[k]
+	depth := len(t.index)
 	max := func(i, j int) int {
 		if i > j {
 			return i
 		}
 		return j
 	}
-	myDepth := len(t.index)
-	for i, idx := range t.index {
+	for _, idx := range t.index {
 		// SAFETY: tserdeMapClone deeply clones all maps through the index, so
 		// our modified value is being saved to a new map that is not being read.
-		at.subindexDepth = max(at.subindexDepth, myDepth-i)
+		at.subindexDepth = max(at.subindexDepth, depth)
 		m[k] = at
+		depth--
 
 		m = at.subindex
 		k = idx
