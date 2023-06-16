@@ -131,12 +131,6 @@ func (s *Serde) SetDefaults(opts ...SerdeOpt) {
 	s.defaults = opts
 }
 
-// SetHeader configures which header should be used when encoding and decoding
-// values. If the header is set to nil it falls back to confluentHeader.
-func (s *Serde) SetHeader(header SerdeHeader) {
-	s.header = header
-}
-
 // Header returns the configured header.
 func (s *Serde) Header() SerdeHeader {
 	if s.header == nil {
