@@ -352,8 +352,14 @@ func (s *Serde) decodeFind(b []byte) ([]byte, tserde, error) {
 
 // SerdeHeader encodes and decodes a message header.
 type SerdeHeader interface {
+	// AppendEncode encodes a schema ID and optional index to b, returning the
+	// updated slice or an error.
 	AppendEncode(b []byte, id int, index []int) ([]byte, error)
+	// DecodeID decodes an ID from in, returning the ID and the remaining bytes,
+	// or an error.
 	DecodeID(in []byte) (id int, out []byte, err error)
+	// DecodeIndex decodes at most maxLength of a schema index from in,
+	// returning the index and remaining bytes, or an error.
 	DecodeIndex(in []byte, maxLength int) (index []int, out []byte, err error)
 }
 
