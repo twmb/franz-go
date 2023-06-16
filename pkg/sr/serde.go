@@ -421,6 +421,9 @@ func (ConfluentHeader) DecodeIndex(b []byte, maxLength int) ([]int, []byte, erro
 	if l == 0 { // length 0 is a shortcut for length 1, index 0
 		return []int{0}, buf.Bytes(), nil
 	}
+	if l < 0 { // index length can't be negative
+		return nil, nil, ErrBadHeader
+	}
 	if maxLength > 0 && int(l) > maxLength { // index count is greater than expected
 		return nil, nil, ErrNotRegistered
 	}

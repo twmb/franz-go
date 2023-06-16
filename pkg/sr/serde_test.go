@@ -214,4 +214,7 @@ func TestConfluentHeader(t *testing.T) {
 	if _, _, err := h.DecodeIndex([]byte{6, 2, 4, 6}, 2); err != ErrNotRegistered {
 		t.Errorf("got %v != exp ErrNotRegistered", err)
 	}
+	if _, _, err := h.DecodeIndex([]byte{1}, 2); err != ErrBadHeader {
+		t.Errorf("got %v != exp ErrBadHeader", err)
+	}
 }
