@@ -163,26 +163,28 @@ func (s *Serde) Register(id int, v any, opts ...SerdeOpt) {
 	defer s.mu.Unlock()
 
 	// Type mapping is easy: we just map the type to the final tserde.
-	// We defer the store because we modify the tserde below, and we
-	// may delete a type key.
 	dupTypes := make(map[reflect.Type]tserde)
 	for k, v := range s.loadTypes() {
 		dupTypes[k] = v
 	}
+
+	// For IDs, we deeply clone any path that is changing.
+	dupIDs := tserdeMapClone(s.loadIDs(), id, t.index)
+
+	// We defer the store because we modify the tserde below, and we
+	// may delete a type key.
 	defer func() {
 		dupTypes[typeof] = t
 		s.types.Store(dupTypes)
+		s.ids.Store(dupIDs)
 	}()
-
-	// For IDs, we deeply clone any path that is changing.
-	m := tserdeMapClone(s.loadIDs(), id, t.index)
-	s.ids.Store(m)
 
 	// Now we have a full path down index initialized (or, the top
 	// level map if there is no index). We iterate down the index
 	// tree to find the end node we are initializing.
 	k := id
-	at := m[k]
+	m := dupIDs
+	at := dupIDs[k]
 	max := func(i, j int) int {
 		if i > j {
 			return i
