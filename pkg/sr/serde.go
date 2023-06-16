@@ -1,9 +1,9 @@
 package sr
 
 import (
-	"bytes"
 	"encoding/binary"
 	"errors"
+	"io"
 	"reflect"
 	"sync"
 	"sync/atomic"
@@ -415,13 +415,14 @@ func (*confluentHeader) DecodeID(b []byte) (int, []byte, error) {
 // encoded data contains more indices than maxLength the function returns
 // ErrNotRegistered.
 func (*confluentHeader) DecodeIndex(b []byte, maxLength int) ([]int, []byte, error) {
-	buf := bytes.NewBuffer(b)
-	l, err := binary.ReadVarint(buf)
+	r := bReader{b}
+	br := io.ByteReader(&r)
+	l, err := binary.ReadVarint(br)
 	if err != nil {
 		return nil, nil, err
 	}
 	if l == 0 { // length 0 is a shortcut for length 1, index 0
-		return []int{0}, buf.Bytes(), nil
+		return []int{0}, r.b, nil
 	}
 	if l < 0 { // index length can't be negative
 		return nil, nil, ErrBadHeader
@@ -431,11 +432,22 @@ func (*confluentHeader) DecodeIndex(b []byte, maxLength int) ([]int, []byte, err
 	}
 	index := make([]int, l)
 	for i := range index {
-		idx, err := binary.ReadVarint(buf)
+		idx, err := binary.ReadVarint(br)
 		if err != nil {
 			return nil, nil, err
 		}
 		index[i] = int(idx)
 	}
-	return index, buf.Bytes(), nil
+	return index, r.b, nil
+}
+
+type bReader struct{ b []byte }
+
+func (b *bReader) ReadByte() (byte, error) {
+	if len(b.b) > 0 {
+		r := b.b[0]
+		b.b = b.b[1:]
+		return r, nil
+	}
+	return 0, io.EOF
 }
