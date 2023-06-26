@@ -35,6 +35,7 @@ type (
 		controlMu          sync.Mutex
 		control            map[int16][]controlFn
 		keepCurrentControl atomic.Bool
+		currentBroker      atomic.Pointer[broker]
 
 		data   data
 		pids   pids
@@ -226,7 +227,7 @@ func (c *Cluster) run() {
 		}
 
 		kreq := creq.kreq
-		kresp, err, handled := c.tryControl(kreq)
+		kresp, err, handled := c.tryControl(kreq, creq.cc.b)
 		if handled {
 			goto afterControl
 		}
@@ -353,7 +354,19 @@ func (c *Cluster) KeepControl() {
 	c.keepCurrentControl.Swap(true)
 }
 
-func (c *Cluster) tryControl(kreq kmsg.Request) (kresp kmsg.Response, err error, handled bool) {
+// CurrentNode is solely valid from within a control function; it returns
+// the broker id that the request was received by.
+// If there's no request currently inflight, this returns -1.
+func (c *Cluster) CurrentNode() int32 {
+	if b := c.currentBroker.Load(); b != nil {
+		return b.node
+	}
+	return -1
+}
+
+func (c *Cluster) tryControl(kreq kmsg.Request, b *broker) (kresp kmsg.Response, err error, handled bool) {
+	c.currentBroker.Store(b)
+	defer c.currentBroker.Store(nil)
 	c.controlMu.Lock()
 	defer c.controlMu.Unlock()
 	if len(c.control) == 0 {
