@@ -1,3 +1,18 @@
+v1.13.6
+===
+
+This minor patch release allows an injected fake fetch to be returned if that
+is the only fetch ready to be returned. A fake fetch is a fetch that actually
+does not contain any data, but instead contains an error (and may contain an
+empty topic with a single 0 partition). Previously, a fake fetch could only be
+returned if actual data was also ready to be returned. Now, a fake fetch can
+always be returned. Fake fetches are most commonly experienced if you are
+unable to join a group -- the client injects a fake fetch to notify you, the
+client, that an error occurred. This patch actually allows you to consume that
+error.
+
+- [`5c87ce0`](https://github.com/twmb/franz-go/commit/5c87ce0) consumer: return from Poll if the only error is an injected fake
+
 v1.13.5
 ===
 
