@@ -25,7 +25,7 @@ func (l *Logger) Level() kgo.LogLevel {
 func (l *Logger) Log(level kgo.LogLevel, msg string, keyvals ...any) {
 	logrusLevel, levelMatched := kgoToLogrusLevel(level)
 	if levelMatched {
-		var fields logrus.Fields
+		fields := make(logrus.Fields, len(keyvals)/2)
 		for i := 0; i < len(keyvals); i += 2 {
 			fields[keyvals[i].(string)] = keyvals[i+1]
 		}
