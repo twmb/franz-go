@@ -18,7 +18,7 @@ func New(lr *logrus.Logger) *Logger {
 
 // Level is for the kgo.Logger interface.
 func (l *Logger) Level() kgo.LogLevel {
-	return logrusToKgoLevel(l.lr.Level)
+	return logrusToKgoLevel(l.lr.GetLevel())
 }
 
 // Log is for the kgo.Logger interface.
