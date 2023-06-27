@@ -389,7 +389,7 @@ func (cfg *cfg) validate() error {
 	return nil
 }
 
-// processHooks will inspect and recusively unpack slices of hooks stopping
+// processHooks will inspect and recursively unpack slices of hooks stopping
 // if the instance implements any hook interface. It will return an error on
 // the first instance that implements no hook interface
 func processHooks(hooks []Hook) ([]Hook, error) {
