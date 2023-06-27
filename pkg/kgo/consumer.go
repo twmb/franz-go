@@ -486,7 +486,7 @@ func (cl *Client) PollRecords(ctx context.Context, maxPollRecords int) Fetches {
 		defer c.sourcesReadyMu.Unlock()
 		defer close(done)
 
-		for !quit && len(c.sourcesReadyForDraining) == 0 {
+		for !quit && len(c.sourcesReadyForDraining) == 0 && len(c.fakeReadyForDraining) == 0 {
 			c.sourcesReadyCond.Wait()
 		}
 	}()
