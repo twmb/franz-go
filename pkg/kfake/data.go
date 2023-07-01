@@ -127,13 +127,16 @@ func (pd *partData) pushBatch(nbytes int, b kmsg.RecordBatch) {
 }
 
 func (pd *partData) searchOffset(o int64) (index int, found bool, atEnd bool) {
+	if o < pd.logStartOffset || o > pd.highWatermark {
+		return 0, false, false
+	}
 	if len(pd.batches) == 0 {
 		if o == 0 {
 			return 0, false, true
 		}
 	} else {
 		lastBatch := pd.batches[len(pd.batches)-1]
-		if end := lastBatch.FirstOffset + int64(lastBatch.NumRecords); end == o {
+		if end := lastBatch.FirstOffset + int64(lastBatch.LastOffsetDelta) + 1; end == o {
 			return 0, false, true
 		}
 	}
@@ -143,10 +146,21 @@ func (pd *partData) searchOffset(o int64) (index int, found bool, atEnd bool) {
 		if o < b.FirstOffset {
 			return -1
 		}
-		if o >= b.FirstOffset+int64(b.NumRecords) {
+		if o >= b.FirstOffset+int64(b.LastOffsetDelta)+1 {
 			return 1
 		}
 		return 0
 	})
 	return index, found, false
+}
+
+func (pd *partData) trimLeft() {
+	for len(pd.batches) > 0 {
+		b0 := pd.batches[0]
+		finRec := b0.FirstOffset + int64(b0.LastOffsetDelta)
+		if finRec >= pd.logStartOffset {
+			return
+		}
+		pd.batches = pd.batches[1:]
+	}
 }

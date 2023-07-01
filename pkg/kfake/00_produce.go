@@ -12,6 +12,7 @@ import (
 // * Leaders
 // * Support txns
 // * Multiple batches in one produce
+// * Compact
 
 func init() { regKey(0, 3, 9) }
 
