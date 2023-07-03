@@ -41,6 +41,7 @@ type (
 		pids   pids
 		groups groups
 		sasls  sasls
+		bcfgs  map[string]*string
 
 		die  chan struct{}
 		dead atomic.Bool
@@ -95,7 +96,9 @@ func NewCluster(opts ...Opt) (c *Cluster, err error) {
 			id2t:      make(map[uuid]string),
 			t2id:      make(map[string]uuid),
 			treplicas: make(map[string]int),
+			tcfgs:     make(map[string]map[string]*string),
 		},
+		bcfgs: make(map[string]*string),
 
 		die: make(chan struct{}),
 	}
@@ -274,16 +277,30 @@ func (c *Cluster) run() {
 			kresp, err = c.handleCreateTopics(creq.cc.b, kreq)
 		case kmsg.DeleteTopics:
 			kresp, err = c.handleDeleteTopics(creq.cc.b, kreq)
+		case kmsg.DeleteRecords:
+			kresp, err = c.handleDeleteRecords(creq.cc.b, kreq)
 		case kmsg.InitProducerID:
 			kresp, err = c.handleInitProducerID(kreq)
 		case kmsg.OffsetForLeaderEpoch:
 			kresp, err = c.handleOffsetForLeaderEpoch(creq.cc.b, kreq)
+		case kmsg.DescribeConfigs:
+			kresp, err = c.handleDescribeConfigs(creq.cc.b, kreq)
+		case kmsg.AlterConfigs:
+			kresp, err = c.handleAlterConfigs(creq.cc.b, kreq)
+		case kmsg.AlterReplicaLogDirs:
+			kresp, err = c.handleAlterReplicaLogDirs(creq.cc.b, kreq)
+		case kmsg.DescribeLogDirs:
+			kresp, err = c.handleDescribeLogDirs(creq.cc.b, kreq)
 		case kmsg.SASLAuthenticate:
 			kresp, err = c.handleSASLAuthenticate(creq)
 		case kmsg.CreatePartitions:
 			kresp, err = c.handleCreatePartitions(creq.cc.b, kreq)
 		case kmsg.DeleteGroups:
 			kresp, err = c.handleDeleteGroups(creq)
+		case kmsg.IncrementalAlterConfigs:
+			kresp, err = c.handleIncrementalAlterConfigs(creq.cc.b, kreq)
+		case kmsg.OffsetDelete:
+			kresp, err = c.handleOffsetDelete(creq)
 		case kmsg.DescribeUserSCRAMCredentials:
 			kresp, err = c.handleDescribeUserSCRAMCredentials(kreq)
 		case kmsg.AlterUserSCRAMCredentials:
