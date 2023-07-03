@@ -33,12 +33,14 @@ type (
 
 	partData struct {
 		batches []partBatch
+		dir     string
 
 		highWatermark    int64
 		lastStableOffset int64
 		logStartOffset   int64
 		epoch            int32 // current epoch
 		maxTimestamp     int64 // current max timestamp in all batches
+		nbytes           int64
 
 		// abortedTxns
 		rf     int8
@@ -106,6 +108,7 @@ func (c *Cluster) noLeader() *broker {
 
 func (c *Cluster) newPartData() *partData {
 	return &partData{
+		dir:       defLogDir,
 		leader:    c.bs[rand.Intn(len(c.bs))],
 		watch:     make(map[*watchFetch]struct{}),
 		createdAt: time.Now(),
@@ -124,6 +127,7 @@ func (pd *partData) pushBatch(nbytes int, b kmsg.RecordBatch) {
 	pd.batches = append(pd.batches, partBatch{b, nbytes, pd.epoch, maxEarlierTimestamp})
 	pd.highWatermark += int64(b.NumRecords)
 	pd.lastStableOffset += int64(b.NumRecords) // TODO
+	pd.nbytes += int64(nbytes)
 	for w := range pd.watch {
 		w.push(nbytes)
 	}
@@ -165,6 +169,7 @@ func (pd *partData) trimLeft() {
 			return
 		}
 		pd.batches = pd.batches[1:]
+		pd.nbytes -= int64(b0.nbytes)
 	}
 }
 
@@ -360,12 +365,14 @@ var configDefaults = map[string]string{
 
 	"default.replication.factor": "3",
 	"fetch.max.bytes":            "57671680",
-	"log.dir":                    "/mem/kfake",
+	"log.dir":                    defLogDir,
 	"log.message.timestamp.type": "CreateTime",
 	"log.retention.bytes":        "-1",
 	"log.retention.ms":           "604800000",
 	"message.max.bytes":          "1048588",
 }
+
+const defLogDir = "/mem/kfake"
 
 func staticConfig(s ...string) func(*string) bool {
 	return func(v *string) bool {

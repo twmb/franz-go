@@ -287,6 +287,10 @@ func (c *Cluster) run() {
 			kresp, err = c.handleDescribeConfigs(creq.cc.b, kreq)
 		case kmsg.AlterConfigs:
 			kresp, err = c.handleAlterConfigs(creq.cc.b, kreq)
+		case kmsg.AlterReplicaLogDirs:
+			kresp, err = c.handleAlterReplicaLogDirs(creq.cc.b, kreq)
+		case kmsg.DescribeLogDirs:
+			kresp, err = c.handleDescribeLogDirs(creq.cc.b, kreq)
 		case kmsg.SASLAuthenticate:
 			kresp, err = c.handleSASLAuthenticate(creq)
 		case kmsg.CreatePartitions:

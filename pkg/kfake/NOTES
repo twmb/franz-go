@@ -37,8 +37,8 @@ x DescribeConfigs
 x AlterConfigs
 x IncrementalAlterConfigs
 x OffsetDelete
-* AlterReplicaLogDirs
-* DescribeLogDirs
+x AlterReplicaLogDirs
+x DescribeLogDirs
 
 TXNS
 * AddPartitionsToTxn
