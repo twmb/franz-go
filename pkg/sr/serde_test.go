@@ -36,8 +36,7 @@ func TestSerde(t *testing.T) {
 		}
 	)
 
-	var serde Serde
-	serde.SetDefaults(
+	serde := NewSerde(
 		EncodeFn(json.Marshal),
 		DecodeFn(json.Unmarshal),
 	)
@@ -113,6 +112,19 @@ func TestSerde(t *testing.T) {
 			t.Errorf("#%d got MustAppendEncode(%v) != Encode(foo%v)", i, b2, b)
 		}
 
+		bIndented, err := Encode(test.enc, 100, []int{0}, serde.header(), func(v any) ([]byte, error) {
+			return json.MarshalIndent(v, "", "  ")
+		})
+		if err != nil {
+			t.Errorf("#%d Encode[ID=100]: got err? %v, exp err? %v", i, gotErr, test.expErr)
+			continue
+		}
+		if i := bytes.IndexByte(bIndented, '{'); !bytes.Equal(bIndented[:i], []byte{0, 0, 0, 0, 100, 0}) {
+			t.Errorf("#%d got Encode[ID=100](%v) != exp(%v)", i, bIndented[:i], []byte{0, 0, 0, 0, 100, 0})
+		} else if expIndented := extractIndentedJSON(b); !bytes.Equal(bIndented[i:], expIndented) {
+			t.Errorf("#%d got Encode[ID=100](%v) != exp(%v)", i, bIndented[i:], expIndented)
+		}
+
 		v, err := serde.DecodeNew(b)
 		if err != nil {
 			t.Errorf("#%d DecodeNew: got unexpected err %v", i, err)
@@ -126,6 +138,7 @@ func TestSerde(t *testing.T) {
 		}
 		if !reflect.DeepEqual(v, exp) {
 			t.Errorf("#%d round trip: got %v != exp %v", i, v, exp)
+			continue
 		}
 	}
 
@@ -141,6 +154,20 @@ func TestSerde(t *testing.T) {
 	if _, err := serde.DecodeNew([]byte{0, 0, 0, 0, 99}); err != ErrNotRegistered {
 		t.Errorf("got %v != exp ErrNotRegistered", err)
 	}
+	if _, err := serde.DecodeNew([]byte{0, 0, 0, 0, 100, 0}); err != ErrNotRegistered {
+		// schema is registered but type is unknown
+		t.Errorf("got %v != exp ErrNotRegistered", err)
+	}
+}
+
+func extractIndentedJSON(in []byte) []byte {
+	i := bytes.IndexByte(in, '{') // skip header
+	var out bytes.Buffer
+	err := json.Indent(&out, in[i:], "", "  ")
+	if err != nil {
+		panic(err)
+	}
+	return out.Bytes()
 }
 
 func TestConfluentHeader(t *testing.T) {
