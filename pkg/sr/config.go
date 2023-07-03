@@ -9,30 +9,30 @@ import (
 )
 
 type (
-	// Opt is an option to configure a client.
-	Opt interface{ apply(*Client) }
-	opt struct{ fn func(*Client) }
+	// ClientOpt is an option to configure a client.
+	ClientOpt interface{ apply(*Client) }
+	clientOpt struct{ fn func(*Client) }
 )
 
-func (o opt) apply(cl *Client) { o.fn(cl) }
+func (o clientOpt) apply(cl *Client) { o.fn(cl) }
 
 // HTTPClient sets the http client that the schema registry client uses,
 // overriding the default client that speaks plaintext with a timeout of 5s.
-func HTTPClient(httpcl *http.Client) Opt {
-	return opt{func(cl *Client) { cl.httpcl = httpcl }}
+func HTTPClient(httpcl *http.Client) ClientOpt {
+	return clientOpt{func(cl *Client) { cl.httpcl = httpcl }}
 }
 
 // UserAgent sets the User-Agent to use in requests, overriding the default
 // "franz-go".
-func UserAgent(ua string) Opt {
-	return opt{func(cl *Client) { cl.ua = ua }}
+func UserAgent(ua string) ClientOpt {
+	return clientOpt{func(cl *Client) { cl.ua = ua }}
 }
 
 // URLs sets the URLs that the client speaks to, overriding the default
 // http://localhost:8081. This option automatically prefixes any URL that is
 // missing an http:// or https:// prefix with http://.
-func URLs(urls ...string) Opt {
-	return opt{func(cl *Client) {
+func URLs(urls ...string) ClientOpt {
+	return clientOpt{func(cl *Client) {
 		for i, u := range urls {
 			if strings.HasPrefix(u, "http://") || strings.HasPrefix(u, "https://") {
 				continue
@@ -45,8 +45,8 @@ func URLs(urls ...string) Opt {
 }
 
 // DialTLSConfig sets a tls.Config to use in the default http client.
-func DialTLSConfig(c *tls.Config) Opt {
-	return opt{func(cl *Client) {
+func DialTLSConfig(c *tls.Config) ClientOpt {
+	return clientOpt{func(cl *Client) {
 		cl.httpcl = &http.Client{
 			Timeout: 5 * time.Second,
 			Transport: &http.Transport{
@@ -71,13 +71,13 @@ func DialTLSConfig(c *tls.Config) Opt {
 // getting or creating schemas. This can help collapse duplicate schemas into
 // one, but can also be done with a configuration parameter on the schema
 // registry itself.
-func Normalize() Opt {
-	return opt{func(cl *Client) { cl.normalize = true }}
+func Normalize() ClientOpt {
+	return clientOpt{func(cl *Client) { cl.normalize = true }}
 }
 
 // BasicAuth sets basic authorization to use for every request.
-func BasicAuth(user, pass string) Opt {
-	return opt{func(cl *Client) {
+func BasicAuth(user, pass string) ClientOpt {
+	return clientOpt{func(cl *Client) {
 		cl.basicAuth = &struct {
 			user string
 			pass string

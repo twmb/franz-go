@@ -63,7 +63,7 @@ type Client struct {
 }
 
 // NewClient returns a new schema registry client.
-func NewClient(opts ...Opt) (*Client, error) {
+func NewClient(opts ...ClientOpt) (*Client, error) {
 	cl := &Client{
 		urls:   []string{"http://localhost:8081"},
 		httpcl: &http.Client{Timeout: 5 * time.Second},
