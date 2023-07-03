@@ -59,3 +59,17 @@ func (tps *tps[V]) each(fn func(t string, p int32, v *V)) {
 		}
 	}
 }
+
+func (tps *tps[V]) delp(t string, p int32) {
+	if *tps == nil {
+		return
+	}
+	ps := (*tps)[t]
+	if ps == nil {
+		return
+	}
+	delete(ps, p)
+	if len(ps) == 0 {
+		delete(*tps, t)
+	}
+}

@@ -155,14 +155,14 @@ you poll until you explicitly allow it. This option is much easier to reason
 about, but has a risk if processing your poll takes so long that a rebalance
 started and finished and you were kicked from the group. If you use this option
 and this API, it is recommended to take care and use [`PollRecords`][PR] and
-ensure your [SessionTimeout][ST] is long enough to encompass any processing you
+ensure your [`RebalanceTimeout`][RT] is long enough to encompass any processing you
 do between polls. My recommendation is to block rebalance on poll, ensure your
 processing is quick, and to use [`CommitUncommittedOffsets`][CUO].
 
 [BROP]: https://pkg.go.dev/github.com/twmb/franz-go/pkg/kgo#BlockRebalanceOnPoll
 [AR]: https://pkg.go.dev/github.com/twmb/franz-go/pkg/kgo#Client.AllowRebalance
 [PR]: https://pkg.go.dev/github.com/twmb/franz-go/pkg/kgo#Client.PollRecords
-[ST]: https://pkg.go.dev/github.com/twmb/franz-go/pkg/kgo#SessionTimeout
+[RT]: https://pkg.go.dev/github.com/twmb/franz-go/pkg/kgo#RebalanceTimeout
 [CUO]: https://pkg.go.dev/github.com/twmb/franz-go/pkg/kgo#Client.CommitUncommittedOffsets
 
 ##### Direct offset management outside of a group

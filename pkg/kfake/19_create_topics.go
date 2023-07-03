@@ -46,6 +46,7 @@ func (c *Cluster) handleCreateTopics(b *broker, kreq kmsg.Request) (kmsg.Respons
 		uniq[rt.Topic] = struct{}{}
 	}
 
+topics:
 	for _, rt := range req.Topics {
 		if _, ok := c.data.tps.gett(rt.Topic); ok {
 			donet(rt.Topic, kerr.TopicAlreadyExists.Code)
@@ -59,11 +60,26 @@ func (c *Cluster) handleCreateTopics(b *broker, kreq kmsg.Request) (kmsg.Respons
 			donet(rt.Topic, kerr.InvalidReplicationFactor.Code)
 			continue
 		}
-		c.data.mkt(rt.Topic, int(rt.NumPartitions), int(rt.ReplicationFactor))
+		configs := make(map[string]*string)
+		for _, c := range rt.Configs {
+			if ok := validateSetTopicConfig(c.Name, c.Value); !ok {
+				donet(rt.Topic, kerr.InvalidConfig.Code)
+				continue topics
+			}
+			configs[c.Name] = c.Value
+		}
+		c.data.mkt(rt.Topic, int(rt.NumPartitions), int(rt.ReplicationFactor), configs)
 		st := donet(rt.Topic, 0)
 		st.TopicID = c.data.t2id[rt.Topic]
 		st.NumPartitions = int32(len(c.data.tps[rt.Topic]))
 		st.ReplicationFactor = int16(c.data.treplicas[rt.Topic])
+		for k, v := range configs {
+			c := kmsg.NewCreateTopicsResponseTopicConfig()
+			c.Name = k
+			c.Value = v
+			// Source?
+			st.Configs = append(st.Configs, c)
+		}
 	}
 
 	return resp, nil
