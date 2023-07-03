@@ -36,8 +36,7 @@ func TestSerde(t *testing.T) {
 		}
 	)
 
-	var serde Serde
-	serde.SetDefaults(
+	serde := NewSerde(
 		EncodeFn(json.Marshal),
 		DecodeFn(json.Unmarshal),
 	)
