@@ -234,11 +234,13 @@ func (cl *Client) metadata(ctx context.Context, noTopics bool, topics []string) 
 			return Metadata{}, err
 		}
 		td := TopicDetail{
-			Topic:      *t.Topic,
 			ID:         t.TopicID,
 			Partitions: make(map[int32]PartitionDetail),
 			IsInternal: t.IsInternal,
 			Err:        kerr.ErrorForCode(t.ErrorCode),
+		}
+		if t.Topic != nil {
+			td.Topic = *t.Topic
 		}
 		for _, p := range t.Partitions {
 			td.Partitions[p.Partition] = PartitionDetail{
