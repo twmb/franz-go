@@ -31,6 +31,15 @@ x SaslAuthenticate
 x DescribeUserScramCredentials
 x AlterUserScramCredentials
 
+LOW-PRIO
+x DeleteRecords
+x DescribeConfigs
+x AlterConfigs
+x IncrementalAlterConfigs
+* OffsetDelete
+* AlterReplicaLogDirs
+* DescribeLogDirs
+
 TXNS
 * AddPartitionsToTxn
 * AddOffsetsToTxn
@@ -42,21 +51,12 @@ ACLS
 * CreateACLs
 * DeleteACLs
 
-LOW-PRIO
-* DeleteRecords
-* DescribeConfigs
-* AlterConfigs
-* IncrementalAlterConfigs
-* OffsetDelete
+LOWER-PRIO
 * DescribeProducers
 * DescribeTransactions
 * ListTransactions
-
 * AlterPartitionAssignments
 * ListPartitionReassignments
-
-* AlterReplicaLogDirs
-* DescribeLogDirs
 * DescribeClientQuotas
 * AlterClientQuotas
 DTOKEN: ignore

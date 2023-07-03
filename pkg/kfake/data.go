@@ -5,6 +5,7 @@ import (
 	"math/rand"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kmsg"
@@ -24,9 +25,10 @@ type (
 		c   *Cluster
 		tps tps[partData]
 
-		id2t      map[uuid]string // topic IDs => topic name
-		t2id      map[string]uuid // topic name => topic IDs
-		treplicas map[string]int  // topic name => # replicas
+		id2t      map[uuid]string               // topic IDs => topic name
+		t2id      map[string]uuid               // topic name => topic IDs
+		treplicas map[string]int                // topic name => # replicas
+		tcfgs     map[string]map[string]*string // topic name => config name => config value
 	}
 
 	partData struct {
@@ -65,7 +67,7 @@ type (
 	}
 )
 
-func (d *data) mkt(t string, nparts int, nreplicas int) {
+func (d *data) mkt(t string, nparts int, nreplicas int, configs map[string]*string) {
 	if d.tps != nil {
 		if _, exists := d.tps[t]; exists {
 			panic("should have checked existence already")
@@ -89,6 +91,7 @@ func (d *data) mkt(t string, nparts int, nreplicas int) {
 	d.id2t[id] = t
 	d.t2id[t] = id
 	d.treplicas[t] = nreplicas
+	d.tcfgs[t] = configs
 	for i := 0; i < nparts; i++ {
 		d.tps.mkp(t, int32(i), d.c.newPartData)
 	}
@@ -162,5 +165,234 @@ func (pd *partData) trimLeft() {
 			return
 		}
 		pd.batches = pd.batches[1:]
+	}
+}
+
+/////////////
+// CONFIGS //
+/////////////
+
+// TODO support modifying config values changing cluster behavior
+
+// brokerConfigs calls fn for all:
+//   - static broker configs (read only)
+//   - default configs
+//   - dynamic broker configs
+func (c *Cluster) brokerConfigs(node int32, fn func(k string, v *string, src kmsg.ConfigSource, sensitive bool)) {
+	if node >= 0 {
+		for _, b := range c.bs {
+			if b.node == node {
+				id := strconv.Itoa(int(node))
+				fn("broker.id", &id, kmsg.ConfigSourceStaticBrokerConfig, false)
+				break
+			}
+		}
+	}
+	for _, c := range []struct {
+		k    string
+		v    string
+		sens bool
+	}{
+		{k: "broker.rack", v: "krack"},
+		{k: "sasl.enabled.mechanisms", v: "PLAIN,SCRAM-SHA-256,SCRAM-SHA-512"},
+		{k: "super.users", sens: true},
+	} {
+		v := c.v
+		fn(c.k, &v, kmsg.ConfigSourceStaticBrokerConfig, c.sens)
+	}
+
+	for k, v := range configDefaults {
+		if _, ok := validBrokerConfigs[k]; ok {
+			v := v
+			fn(k, &v, kmsg.ConfigSourceDefaultConfig, false)
+		}
+	}
+
+	for k, v := range c.bcfgs {
+		fn(k, v, kmsg.ConfigSourceDynamicBrokerConfig, false)
+	}
+}
+
+// configs calls fn for all
+//   - static broker configs (read only)
+//   - default configs
+//   - dynamic broker configs
+//   - dynamic topic configs
+//
+// This differs from brokerConfigs by also including dynamic topic configs.
+func (d *data) configs(t string, fn func(k string, v *string, src kmsg.ConfigSource, sensitive bool)) {
+	for k, v := range configDefaults {
+		if _, ok := validTopicConfigs[k]; ok {
+			v := v
+			fn(k, &v, kmsg.ConfigSourceDefaultConfig, false)
+		}
+	}
+	for k, v := range d.c.bcfgs {
+		if topicEquiv, ok := validBrokerConfigs[k]; ok && topicEquiv != "" {
+			fn(k, v, kmsg.ConfigSourceDynamicBrokerConfig, false)
+		}
+	}
+	for k, v := range d.tcfgs[t] {
+		fn(k, v, kmsg.ConfigSourceDynamicTopicConfig, false)
+	}
+}
+
+// Unlike Kafka, we validate the value before allowing it to be set.
+func (c *Cluster) setBrokerConfig(k string, v *string, dry bool) bool {
+	if !validateSetBrokerConfig(k, v) {
+		return false
+	}
+	if dry {
+		return true
+	}
+	c.bcfgs[k] = v
+	return true
+}
+
+func (d *data) setTopicConfig(t string, k string, v *string, dry bool) bool {
+	if !validateSetTopicConfig(k, v) {
+		return false
+	}
+	if dry {
+		return true
+	}
+	if _, ok := d.tcfgs[t]; !ok {
+		d.tcfgs[t] = make(map[string]*string)
+	}
+	d.tcfgs[t][k] = v
+	return true
+}
+
+func validateSetTopicConfig(k string, v *string) bool {
+	if _, ok := validTopicConfigs[k]; !ok {
+		return false
+	}
+	fn, ok := validateSetConfig[k]
+	if !ok {
+		return false
+	}
+	return fn(v)
+}
+
+func validateSetBrokerConfig(k string, v *string) bool {
+	if _, ok := validBrokerConfigs[k]; !ok {
+		return false
+	}
+	fn, ok := validateSetConfig[k]
+	if !ok {
+		return false
+	}
+	return fn(v)
+}
+
+// Validation functions for all configs we support setting. Keys not in this
+// map are not settable.
+var validateSetConfig = map[string]func(*string) bool{
+	"cleanup.policy": func(v *string) bool {
+		if v == nil {
+			return false
+		}
+		s := strings.Split(*v, ",")
+		for _, policy := range s {
+			if policy != "delete" && policy != "compact" {
+				return false
+			}
+		}
+		return true
+	},
+
+	"compression.type": staticConfig("uncompressed", "lz4", "zstd", "snappy", "gzip", "producer"),
+
+	"max.message.bytes":      numberConfig(0, true, 0, false),
+	"message.timestamp.type": staticConfig("CreateTime", "LogAppendTime"),
+	"min.insync.replicas":    numberConfig(1, true, 0, false),
+	"retention.bytes":        numberConfig(-1, true, 0, false),
+	"retention.ms":           numberConfig(-1, true, 0, false),
+
+	"default.replication.factor": numberConfig(1, true, 0, false),
+	"fetch.max.bytes":            numberConfig(1024, true, 0, false),
+	"log.dir":                    func(v *string) bool { return v != nil },
+	"log.message.timestamp.type": staticConfig("CreateTime", "LogAppendTime"),
+	"log.retention.bytes":        numberConfig(-1, true, 0, false),
+	"log.retention.ms":           numberConfig(-1, true, 0, false),
+	"message.max.bytes":          numberConfig(0, true, 0, false),
+}
+
+// All valid topic configs we support, as well as the equivalent broker
+// config if there is one.
+var validTopicConfigs = map[string]string{
+	"cleanup.policy":         "",
+	"compression.type":       "compression.type",
+	"max.message.bytes":      "log.message.max.bytes",
+	"message.timestamp.type": "log.message.timestamp.type",
+	"min.insync.replicas":    "min.insync.replicas",
+	"retention.bytes":        "log.retention.bytes",
+	"retention.ms":           "log.retention.ms",
+}
+
+// All valid broker configs we support, as well as their equivalent
+// topic config if there is one.
+var validBrokerConfigs = map[string]string{
+	"broker.id":                  "",
+	"broker.rack":                "",
+	"compression.type":           "compression.type",
+	"default.replication.factor": "",
+	"fetch.max.bytes":            "",
+	"log.dir":                    "",
+	"log.message.timestamp.type": "message.timestamp.type",
+	"log.retention.bytes":        "retention.bytes",
+	"log.retention.ms":           "retention.ms",
+	"message.max.bytes":          "max.message.bytes",
+	"min.insync.replicas":        "min.insync.replicas",
+	"sasl.enabled.mechanisms":    "",
+	"super.users":                "",
+}
+
+// Default topic and broker configs.
+var configDefaults = map[string]string{
+	"cleanup.policy":         "delete",
+	"compression.type":       "producer",
+	"max.message.bytes":      "1048588",
+	"message.timestamp.type": "CreateTime",
+	"min.insync.replicas":    "1",
+	"retention.bytes":        "-1",
+	"retention.ms":           "604800000",
+
+	"default.replication.factor": "3",
+	"fetch.max.bytes":            "57671680",
+	"log.dir":                    "/mem/kfake",
+	"log.message.timestamp.type": "CreateTime",
+	"log.retention.bytes":        "-1",
+	"log.retention.ms":           "604800000",
+	"message.max.bytes":          "1048588",
+}
+
+func staticConfig(s ...string) func(*string) bool {
+	return func(v *string) bool {
+		if v == nil {
+			return false
+		}
+		for _, ok := range s {
+			if *v == ok {
+				return true
+			}
+		}
+		return false
+	}
+}
+
+func numberConfig(min int, hasMin bool, max int, hasMax bool) func(*string) bool {
+	return func(v *string) bool {
+		if v == nil {
+			return false
+		}
+		i, err := strconv.Atoi(*v)
+		if err != nil {
+			return false
+		}
+		if hasMin && i < min || hasMax && i > max {
+			return false
+		}
+		return true
 	}
 }

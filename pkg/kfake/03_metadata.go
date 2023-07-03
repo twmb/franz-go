@@ -98,7 +98,7 @@ func (c *Cluster) handleMetadata(kreq kmsg.Request) (kmsg.Response, error) {
 				donet(topic, rt.TopicID, kerr.UnknownTopicOrPartition.Code)
 				continue
 			}
-			c.data.mkt(topic, -1, -1)
+			c.data.mkt(topic, -1, -1, nil)
 			ps, _ = c.data.tps.gett(topic)
 		}
 
