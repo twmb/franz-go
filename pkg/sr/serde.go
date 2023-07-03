@@ -34,13 +34,14 @@ type (
 	}
 	encodingOpt struct{ fn func(*tserde) }
 
-	// SerdeOpt is an option to configure Serde.
+	// SerdeOpt is an option to configure a Serde.
 	SerdeOpt interface {
 		serdeOrEncodingOpt()
 		apply(*Serde)
 	}
 	serdeOpt struct{ fn func(serde *Serde) }
 
+	// SerdeOrEncodingOpt is either a SerdeOpt or EncodingOpt.
 	SerdeOrEncodingOpt interface {
 		serdeOrEncodingOpt()
 	}
@@ -74,6 +75,31 @@ func GenerateFn(fn func() any) EncodingOpt {
 	return encodingOpt{func(t *tserde) { t.gen = fn }}
 }
 
+// idOpt is a special encodingOpt that allows for specifying the ID when
+// encoding a value using Serde.Encode.
+type idOpt struct{ encodingOpt }
+
+func (o idOpt) ID() uint32 {
+	var t tserde
+	o.apply(&t)
+	return t.id
+}
+
+// ID forces Serde.Encode to use the specified schema ID.
+func ID(id int) EncodingOpt {
+	return idOpt{encodingOpt{func(opts *tserde) { opts.id = uint32(id) }}}
+}
+
+// indexOpt is a special encodingOpt that allows for specifying the index when
+// encoding a value using Serde.Encode.
+type indexOpt struct{ encodingOpt }
+
+func (o indexOpt) Index() []int {
+	var t tserde
+	o.apply(&t)
+	return t.index
+}
+
 // Index attaches a message index to a value. A single schema ID can be
 // registered multiple times with different indices.
 //
@@ -87,7 +113,12 @@ func GenerateFn(fn func() any) EncodingOpt {
 //
 //	https://docs.confluent.io/platform/current/schema-registry/serdes-develop/index.html#wire-format
 func Index(index ...int) EncodingOpt {
-	return encodingOpt{func(t *tserde) { t.index = index }}
+	return indexOpt{encodingOpt{func(t *tserde) { t.index = index }}}
+}
+
+// Header defines the SerdeHeader used to encode and decode the message header.
+func Header( /* TODO header arg */ ) SerdeOpt {
+	return serdeOpt{func(s *Serde) { /* TODO set header */ }}
 }
 
 type tserde struct {
@@ -173,6 +204,10 @@ func (s *Serde) Register(id int, v any, opts ...EncodingOpt) {
 	for _, opt := range opts {
 		opt.apply(&t)
 	}
+	if id > 0 {
+		// The explicitly supplied id takes precedence over an ID EncodingOpt.
+		t.id = uint32(id)
+	}
 
 	typeof := reflect.TypeOf(v)
 
@@ -192,13 +227,13 @@ func (s *Serde) Register(id int, v any, opts ...EncodingOpt) {
 	}()
 
 	// For IDs, we deeply clone any path that is changing.
-	m := tserdeMapClone(s.loadIDs(), id, t.index)
+	m := tserdeMapClone(s.loadIDs(), int(t.id), t.index)
 	s.ids.Store(m)
 
 	// Now we have a full path down index initialized (or, the top
 	// level map if there is no index). We iterate down the index
 	// tree to find the end node we are initializing.
-	k := id
+	k := int(t.id)
 	at := m[k]
 	for _, idx := range t.index {
 		m = at.subindex
@@ -214,7 +249,7 @@ func (s *Serde) Register(id int, v any, opts ...EncodingOpt) {
 
 	// Now, we initialize the end node.
 	t = tserde{
-		id:           uint32(id),
+		id:           t.id,
 		exists:       true,
 		encode:       t.encode,
 		appendEncode: t.appendEncode,
@@ -249,17 +284,17 @@ func tserdeMapClone(m map[int]tserde, at int, index []int) map[int]tserde {
 
 // Encode encodes a value according to the schema registry wire format and
 // returns it. If EncodeFn was not used, this returns ErrNotRegistered.
-func (s *Serde) Encode(v any) ([]byte, error) {
-	return s.AppendEncode(nil, v)
+func (s *Serde) Encode(v any, opts ...EncodingOpt) ([]byte, error) {
+	return s.AppendEncode(nil, v, opts...)
 }
 
 // AppendEncode appends an encoded value to b according to the schema registry
 // wire format and returns it. If EncodeFn was not used, this returns
 // ErrNotRegistered.
-func (s *Serde) AppendEncode(b []byte, v any) ([]byte, error) {
-	t, ok := s.loadTypes()[reflect.TypeOf(v)]
-	if !ok || (t.encode == nil && t.appendEncode == nil) {
-		return b, ErrNotRegistered
+func (s *Serde) AppendEncode(b []byte, v any, opts ...EncodingOpt) ([]byte, error) {
+	t, err := s.encodeFind(v, opts)
+	if err != nil {
+		return nil, ErrNotRegistered
 	}
 
 	b = append(b,
@@ -291,10 +326,45 @@ func (s *Serde) AppendEncode(b []byte, v any) ([]byte, error) {
 	return append(b, encoded...), nil
 }
 
+func (s *Serde) encodeFind(v any, opts []EncodingOpt) (tserde, error) {
+	optsToApply, idopt, indexopt, err := s.filterIDAndIndexOpt(opts)
+	if err != nil {
+		return tserde{}, err
+	}
+
+	var t tserde
+	if idopt != nil {
+		// Load tserde based on the supplied ID.
+		t = s.loadIDs()[int(idopt.ID())]
+		// Traverse to the right index, if Index option is supplied.
+		if indexopt != nil {
+			for _, i := range indexopt.Index() {
+				if len(t.subindex) <= i {
+					return tserde{}, ErrNotRegistered
+				}
+				t = t.subindex[i]
+			}
+		}
+	} else {
+		// Load tserde based on the registered type.
+		t = s.loadTypes()[reflect.TypeOf(v)]
+	}
+
+	// Check if we loaded a valid tserde.
+	if !t.exists || (t.encode == nil && t.appendEncode == nil) {
+		return tserde{}, ErrNotRegistered
+	}
+
+	for _, opt := range optsToApply {
+		opt.apply(&t)
+	}
+	return t, nil
+}
+
 // MustEncode returns the value of Encode, panicking on error. This is a
 // shortcut for if your encode function cannot error.
-func (s *Serde) MustEncode(v any) []byte {
-	b, err := s.Encode(v)
+func (s *Serde) MustEncode(v any, opts ...EncodingOpt) []byte {
+	b, err := s.Encode(v, opts...)
 	if err != nil {
 		panic(err)
 	}
@@ -303,8 +373,8 @@ func (s *Serde) MustEncode(v any) []byte {
 
 // MustAppendEncode returns the value of AppendEncode, panicking on error.
 // This is a shortcut for if your encode function cannot error.
-func (s *Serde) MustAppendEncode(b []byte, v any) []byte {
-	b, err := s.AppendEncode(b, v)
+func (s *Serde) MustAppendEncode(b []byte, v any, opts ...EncodingOpt) []byte {
+	b, err := s.AppendEncode(b, v, opts...)
 	if err != nil {
 		panic(err)
 	}
@@ -337,8 +407,10 @@ func (s *Serde) DecodeNew(b []byte) (any, error) {
 	var v any
 	if t.gen != nil {
 		v = t.gen()
-	} else {
+	} else if t.typeof != nil {
 		v = reflect.New(t.typeof).Interface()
+	} else {
+		return nil, ErrNotRegistered
 	}
 	return v, t.decode(b, v)
 }
@@ -373,6 +445,48 @@ func (s *Serde) decodeFind(b []byte) ([]byte, tserde, error) {
 		return nil, t, ErrNotRegistered
 	}
 	return b, t, nil
+}
+
+func (s *Serde) filterIDAndIndexOpt(opts []EncodingOpt) ([]EncodingOpt, *idOpt, *indexOpt, error) {
+	var (
+		idopt          *idOpt
+		indexopt       *indexOpt
+		ignoredIndices []int
+	)
+
+	// Find ID and Index options. In case multiple ID or Index options are
+	// supplied, only the last one is applied.
+	for i, opt := range opts {
+		switch opt := opt.(type) {
+		case idOpt:
+			idopt = &opt
+		case indexOpt:
+			indexopt = &opt
+		default:
+			continue
+		}
+		// Collect indices of all idOpt and indexOpt options.
+		ignoredIndices = append(ignoredIndices, i)
+	}
+
+	if idopt == nil && indexopt == nil {
+		return opts, nil, nil, nil // no idOpt or indexOpt found
+	} else if idopt == nil && indexopt != nil {
+		return nil, nil, nil, errors.New("invalid use of encoding options: option Index is only allowed alongside option ID")
+	} else if len(ignoredIndices) == len(opts) {
+		return nil, idopt, indexopt, nil // all opts were filtered
+	}
+
+	filteredOpts := make([]EncodingOpt, len(opts)-len(ignoredIndices))
+	j := 0
+	for i, opt := range opts {
+		if j < len(ignoredIndices) && i == ignoredIndices[j] {
+			j++
+			continue
+		}
+		filteredOpts[i-j] = opt
+	}
+	return filteredOpts, idopt, indexopt, nil
 }
 
 type bReader struct{ b []byte }
