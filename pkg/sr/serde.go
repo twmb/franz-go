@@ -17,7 +17,7 @@ var (
 
 	// ErrBadHeader is returned from Decode when the input slice is shorter
 	// than five bytes, or if the first byte is not the magic 0 byte.
-	ErrBadHeader = errors.New("5 byte header for value is missing or does no have 0 magic byte")
+	ErrBadHeader = errors.New("5 byte header for value is missing or does not have 0 magic byte")
 )
 
 type (
@@ -97,7 +97,7 @@ type Serde struct {
 	mu    sync.Mutex
 
 	defaults []SerdeOpt
-	header   SerdeHeader
+	h        SerdeHeader
 }
 
 var (
@@ -131,12 +131,24 @@ func (s *Serde) SetDefaults(opts ...SerdeOpt) {
 	s.defaults = opts
 }
 
-// Header returns the configured header.
-func (s *Serde) Header() SerdeHeader {
-	if s.header == nil {
+// DecodeID decodes an ID from in, returning the ID and the remaining bytes,
+// or an error.
+func (s *Serde) DecodeID(b []byte) (id int, out []byte, err error) {
+	return s.header().DecodeID(b)
+}
+
+// DecodeIndex decodes at most maxLength of a schema index from in, returning
+// the index and remaining bytes, or an error. It expects b to be the output of
+// DecodeID (schema ID should already be stripped away).
+func (s *Serde) DecodeIndex(in []byte, maxLength int) (index []int, out []byte, err error) {
+	return s.header().DecodeIndex(in, maxLength)
+}
+
+func (s *Serde) header() SerdeHeader {
+	if s.h == nil {
 		return defaultSerdeHeader
 	}
-	return s.header
+	return s.h
 }
 
 // Register registers a schema ID and the value it corresponds to, as well as
@@ -178,7 +190,7 @@ func (s *Serde) Register(id int, v any, opts ...SerdeOpt) {
 	// tree to find the end node we are initializing.
 	k := id
 	m := dupIDs
-	at := dupIDs[k]
+	at := m[k]
 	depth := len(t.index)
 	max := func(i, j int) int {
 		if i > j {
@@ -255,7 +267,7 @@ func (s *Serde) AppendEncode(b []byte, v any) ([]byte, error) {
 		return b, ErrNotRegistered
 	}
 
-	b, err := s.Header().AppendEncode(b, int(t.id), t.index)
+	b, err := s.header().AppendEncode(b, int(t.id), t.index)
 	if err != nil {
 		return nil, err
 	}
@@ -323,9 +335,7 @@ func (s *Serde) DecodeNew(b []byte) (any, error) {
 }
 
 func (s *Serde) decodeFind(b []byte) ([]byte, tserde, error) {
-	h := s.Header()
-
-	id, b, err := h.DecodeID(b)
+	id, b, err := s.DecodeID(b)
 	if err != nil {
 		return nil, tserde{}, err
 	}
@@ -333,7 +343,7 @@ func (s *Serde) decodeFind(b []byte) ([]byte, tserde, error) {
 	t := s.loadIDs()[id]
 	if len(t.subindex) > 0 {
 		var index []int
-		index, b, err = h.DecodeIndex(b, t.subindexDepth)
+		index, b, err = s.DecodeIndex(b, t.subindexDepth)
 		if err != nil {
 			return nil, tserde{}, err
 		}
