@@ -295,6 +295,8 @@ func (c *Cluster) run() {
 			kresp, err = c.handleDeleteGroups(creq)
 		case kmsg.IncrementalAlterConfigs:
 			kresp, err = c.handleIncrementalAlterConfigs(creq.cc.b, kreq)
+		case kmsg.OffsetDelete:
+			kresp, err = c.handleOffsetDelete(creq)
 		case kmsg.DescribeUserSCRAMCredentials:
 			kresp, err = c.handleDescribeUserSCRAMCredentials(kreq)
 		case kmsg.AlterUserSCRAMCredentials:

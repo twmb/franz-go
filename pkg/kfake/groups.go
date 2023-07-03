@@ -197,6 +197,10 @@ func (gs *groups) handleOffsetCommit(creq clientReq) bool {
 	return gs.handleHijack(creq.kreq.(*kmsg.OffsetCommitRequest).Group, creq)
 }
 
+func (gs *groups) handleOffsetDelete(creq clientReq) bool {
+	return gs.handleHijack(creq.kreq.(*kmsg.OffsetDeleteRequest).Group, creq)
+}
+
 func (gs *groups) handleList(creq clientReq) *kmsg.ListGroupsResponse {
 	req := creq.kreq.(*kmsg.ListGroupsRequest)
 	resp := req.ResponseKind().(*kmsg.ListGroupsResponse)
@@ -419,6 +423,84 @@ func (gs *groups) handleOffsetFetch(creq clientReq) *kmsg.OffsetFetchResponse {
 	return resp
 }
 
+func (g *group) handleOffsetDelete(creq clientReq) *kmsg.OffsetDeleteResponse {
+	req := creq.kreq.(*kmsg.OffsetDeleteRequest)
+	resp := req.ResponseKind().(*kmsg.OffsetDeleteResponse)
+
+	if kerr := g.c.validateGroup(creq, req.Group); kerr != nil {
+		resp.ErrorCode = kerr.Code
+		return resp
+	}
+
+	tidx := make(map[string]int)
+	donet := func(t string, errCode int16) *kmsg.OffsetDeleteResponseTopic {
+		if i, ok := tidx[t]; ok {
+			return &resp.Topics[i]
+		}
+		tidx[t] = len(resp.Topics)
+		st := kmsg.NewOffsetDeleteResponseTopic()
+		st.Topic = t
+		resp.Topics = append(resp.Topics, st)
+		return &resp.Topics[len(resp.Topics)-1]
+	}
+	donep := func(t string, p int32, errCode int16) *kmsg.OffsetDeleteResponseTopicPartition {
+		sp := kmsg.NewOffsetDeleteResponseTopicPartition()
+		sp.Partition = p
+		sp.ErrorCode = errCode
+		st := donet(t, 0)
+		st.Partitions = append(st.Partitions, sp)
+		return &st.Partitions[len(st.Partitions)-1]
+	}
+
+	// empty: delete everything in request
+	// preparingRebalance, completingRebalance, stable:
+	//   * if consumer, delete everything not subscribed to
+	//   * if not consumer, delete nothing, error with non_empty_group
+	subTopics := make(map[string]struct{})
+	switch g.state {
+	default:
+		resp.ErrorCode = kerr.GroupIDNotFound.Code
+		return resp
+	case groupEmpty:
+	case groupPreparingRebalance, groupCompletingRebalance, groupStable:
+		if g.protocolType != "consumer" {
+			resp.ErrorCode = kerr.NonEmptyGroup.Code
+			return resp
+		}
+		for _, m := range []map[string]*groupMember{
+			g.members,
+			g.pending,
+		} {
+			for _, m := range m {
+				if m.join == nil {
+					continue
+				}
+				for _, proto := range m.join.Protocols {
+					var m kmsg.ConsumerMemberMetadata
+					if err := m.ReadFrom(proto.Metadata); err == nil {
+						for _, topic := range m.Topics {
+							subTopics[topic] = struct{}{}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	for _, t := range req.Topics {
+		for _, p := range t.Partitions {
+			if _, ok := subTopics[t.Topic]; ok {
+				donep(t.Topic, p.Partition, kerr.GroupSubscribedToTopic.Code)
+				continue
+			}
+			g.commits.delp(t.Topic, p.Partition)
+			donep(t.Topic, p.Partition, 0)
+		}
+	}
+
+	return resp
+}
+
 ////////////////////
 // GROUP HANDLING //
 ////////////////////
@@ -469,6 +551,8 @@ func (g *group) manage(detachNew func()) {
 				kresp = g.handleLeave(creq)
 			case *kmsg.OffsetCommitRequest:
 				kresp = g.handleOffsetCommit(creq)
+			case *kmsg.OffsetDeleteRequest:
+				kresp = g.handleOffsetDelete(creq)
 			}
 			if kresp != nil {
 				g.reply(creq, kresp, nil)

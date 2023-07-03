@@ -36,7 +36,7 @@ x DeleteRecords
 x DescribeConfigs
 x AlterConfigs
 x IncrementalAlterConfigs
-* OffsetDelete
+x OffsetDelete
 * AlterReplicaLogDirs
 * DescribeLogDirs
 
