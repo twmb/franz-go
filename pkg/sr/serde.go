@@ -387,8 +387,8 @@ func (s *Serde) MustAppendEncode(b []byte, v any, opts ...EncodingOpt) []byte {
 // Serde does not handle references in schemas; it is up to you to register the
 // full decode function for any top-level ID, regardless of how many other
 // schemas are referenced in top-level ID.
-func (s *Serde) Decode(b []byte, v any) error {
-	b, t, err := s.decodeFind(b)
+func (s *Serde) Decode(b []byte, v any, opts ...EncodingOpt) error {
+	b, t, err := s.decodeFind(b, opts)
 	if err != nil {
 		return err
 	}
@@ -399,8 +399,8 @@ func (s *Serde) Decode(b []byte, v any) error {
 // the input value. If DecodeFn was not used, this returns ErrNotRegistered.
 // GenerateFn can be used to control the instantiation of a new value,
 // otherwise this uses reflect.New(reflect.TypeOf(v)).Interface().
-func (s *Serde) DecodeNew(b []byte) (any, error) {
-	b, t, err := s.decodeFind(b)
+func (s *Serde) DecodeNew(b []byte, opts ...EncodingOpt) (any, error) {
+	b, t, err := s.decodeFind(b, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -415,34 +415,61 @@ func (s *Serde) DecodeNew(b []byte) (any, error) {
 	return v, t.decode(b, v)
 }
 
-func (s *Serde) decodeFind(b []byte) ([]byte, tserde, error) {
-	if len(b) < 5 || b[0] != 0 {
-		return nil, tserde{}, ErrBadHeader
+func (s *Serde) decodeFind(b []byte, opts []EncodingOpt) ([]byte, tserde, error) {
+	optsToApply, idopt, indexopt, err := s.filterIDAndIndexOpt(opts)
+	if err != nil {
+		return nil, tserde{}, err
 	}
-	id := binary.BigEndian.Uint32(b[1:5])
-	b = b[5:]
 
-	t := s.loadIDs()[int(id)]
-	if len(t.subindex) > 0 {
-		r := bReader{b}
-		br := io.ByteReader(&r)
-		l, err := binary.ReadVarint(br)
-		if l == 0 { // length 0 is a shortcut for length 1, index 0
-			t = t.subindex[0]
+	var t tserde
+	if idopt != nil {
+		// Load tserde based on the supplied ID.
+		t = s.loadIDs()[int(idopt.ID())]
+		// Traverse to the right index, if Index option is supplied.
+		if indexopt != nil {
+			for _, i := range indexopt.Index() {
+				if len(t.subindex) <= i {
+					return nil, tserde{}, ErrNotRegistered
+				}
+				t = t.subindex[i]
+			}
 		}
-		for err == nil && t.subindex != nil && l > 0 {
-			var idx int64
-			idx, err = binary.ReadVarint(br)
-			t = t.subindex[int(idx)]
-			l--
+	} else {
+		// Load tserde based on the header
+		if len(b) < 5 || b[0] != 0 {
+			return nil, tserde{}, ErrBadHeader
 		}
-		if err != nil {
-			return nil, t, err
+		id := binary.BigEndian.Uint32(b[1:5])
+		b = b[5:]
+
+		t = s.loadIDs()[int(id)]
+		if len(t.subindex) > 0 {
+			r := bReader{b}
+			br := io.ByteReader(&r)
+			l, err := binary.ReadVarint(br)
+			if l == 0 { // length 0 is a shortcut for length 1, index 0
+				t = t.subindex[0]
+			}
+			for err == nil && t.subindex != nil && l > 0 {
+				var idx int64
+				idx, err = binary.ReadVarint(br)
+				t = t.subindex[int(idx)]
+				l--
+			}
+			if err != nil {
+				return nil, t, err
+			}
+			b = r.b
 		}
-		b = r.b
 	}
-	if !t.exists {
-		return nil, t, ErrNotRegistered
+
+	// Check if we loaded a valid tserde.
+	if !t.exists || t.decode == nil {
+		return nil, tserde{}, ErrNotRegistered
+	}
+
+	for _, opt := range optsToApply {
+		opt.apply(&t)
 	}
 	return b, t, nil
 }
