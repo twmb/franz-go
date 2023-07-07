@@ -52,6 +52,9 @@ func (fn oauth) Authenticate(ctx context.Context, _ string) (sasl.Session, []byt
 	if err != nil {
 		return nil, nil, err
 	}
+	if auth.Token == "" {
+		return nil, nil, errors.New("OAUTHBEARER token must be non-empty")
+	}
 
 	// We sort extensions for consistency, but it is not required.
 	type kv struct {

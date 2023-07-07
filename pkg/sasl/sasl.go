@@ -1,4 +1,4 @@
-// Package sasl specifies interfaces that any sasl authentication must provide
+// Package sasl specifies interfaces that any SASL authentication must provide
 // to interop with Kafka SASL.
 package sasl
 
@@ -32,7 +32,7 @@ type Mechanism interface {
 	Authenticate(ctx context.Context, host string) (Session, []byte, error)
 }
 
-// ClosingMechanism is an optional interface for sasl mechanism's. Implementing
+// ClosingMechanism is an optional interface for SASL mechanisms. Implementing
 // this interface signals that the mechanism should be closed if it will never
 // be used again.
 type ClosingMechanism interface {

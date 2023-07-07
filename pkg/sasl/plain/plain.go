@@ -3,6 +3,7 @@ package plain
 
 import (
 	"context"
+	"errors"
 
 	"github.com/twmb/franz-go/pkg/sasl"
 )
@@ -45,6 +46,9 @@ func (fn plain) Authenticate(ctx context.Context, _ string) (sasl.Session, []byt
 	auth, err := fn(ctx)
 	if err != nil {
 		return nil, nil, err
+	}
+	if auth.User == "" || auth.Pass == "" {
+		return nil, nil, errors.New("PLAIN user and pass must be non-empty")
 	}
 	return session{}, []byte(auth.Zid + "\x00" + auth.User + "\x00" + auth.Pass), nil
 }
