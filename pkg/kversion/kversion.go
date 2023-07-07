@@ -224,6 +224,7 @@ func (vs *Versions) VersionGuess(opts ...VersionGuessOpt) string {
 		{max320, "v3.2"},
 		{max330, "v3.3"},
 		{max340, "v3.4"},
+		{max350, "v3.5"},
 	} {
 		for k, v := range comparison.cmp.filter(cfg.listener) {
 			if v == -1 {
@@ -363,6 +364,7 @@ func V3_1_0() *Versions  { return zkBrokerOf(max310) }
 func V3_2_0() *Versions  { return zkBrokerOf(max320) }
 func V3_3_0() *Versions  { return zkBrokerOf(max330) }
 func V3_4_0() *Versions  { return zkBrokerOf(max340) }
+func V3_5_0() *Versions  { return zkBrokerOf(max350) }
 
 func zkBrokerOf(lks listenerKeys) *Versions {
 	return &Versions{lks.filter(zkBroker)}
@@ -960,15 +962,19 @@ var max340 = nextMax(max330, func(v listenerKeys) listenerKeys {
 	return v
 })
 
-var (
-	maxStable = max340
-	maxTip    = nextMax(maxStable, func(v listenerKeys) listenerKeys {
-		// KAFKA-13369 7146ac57ba9ddd035dac992b9f188a8e7677c08d KIP-405
-		v[1].inc() // 14 fetch // KAFKA-13369 7146ac57ba9 KIP-405
-		v[2].inc() // 8 list offsets // same
+var max350 = nextMax(max340, func(v listenerKeys) listenerKeys {
+	// KAFKA-13369 7146ac57ba9ddd035dac992b9f188a8e7677c08d KIP-405
+	v[1].inc() // 14 fetch
+	v[2].inc() // 8 list offsets
 
-		v[1].inc()  // 15 fetch // KAFKA-14617 79b5f7f1ce2 KIP-903
-		v[56].inc() // 3 alter partition // KAFKA-14617 8c88cdb7186b1d594f991eb324356dcfcabdf18a KIP-903
+	v[1].inc()  // 15 fetch // KAFKA-14617 79b5f7f1ce2 KIP-903
+	v[56].inc() // 3 alter partition // KAFKA-14617 8c88cdb7186b1d594f991eb324356dcfcabdf18a KIP-903
+	return v
+})
+
+var (
+	maxStable = max350
+	maxTip    = nextMax(maxStable, func(v listenerKeys) listenerKeys {
 		return v
 	})
 )
