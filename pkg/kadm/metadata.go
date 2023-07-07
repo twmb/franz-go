@@ -403,6 +403,11 @@ func (cl *Client) listOffsets(ctx context.Context, isolation int8, timestamp int
 	if err != nil {
 		return nil, err
 	}
+	for _, td := range tds {
+		if td.Err != nil {
+			return nil, td.Err
+		}
+	}
 
 	// If we request with timestamps, we may request twice: once for after
 	// timestamps, and once for any -1 (and no error) offsets where the
