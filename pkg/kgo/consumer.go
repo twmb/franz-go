@@ -749,6 +749,91 @@ func (cl *Client) AddConsumeTopics(topics ...string) {
 	cl.triggerUpdateMetadataNow("from AddConsumeTopics")
 }
 
+// AddConsumePartitions adds new partitions to be consumed at the given
+// offsets. This function works only for direct, non-regex consumers.
+func (cl *Client) AddConsumePartitions(partitions map[string]map[int32]Offset) {
+	c := &cl.consumer
+	if c.d == nil || cl.cfg.regex {
+		return
+	}
+	var topics []string
+	for t, ps := range partitions {
+		if len(ps) == 0 {
+			delete(partitions, t)
+			continue
+		}
+		topics = append(topics, t)
+	}
+	if len(partitions) == 0 {
+		return
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.d.tps.storeTopics(topics)
+	for t, ps := range partitions {
+		if c.d.ps[t] == nil {
+			c.d.ps[t] = make(map[int32]Offset)
+		}
+		for p, o := range ps {
+			c.d.m.add(t, p)
+			c.d.ps[t][p] = o
+		}
+	}
+	cl.triggerUpdateMetadataNow("from AddConsumePartitions")
+}
+
+// RemoveConsumePartitions removes partitions from being consumed. This
+// function works only for direct, non-regex consumers.
+//
+// This method does not purge the concept of any topics from the client -- if
+// you remove all partitions from a topic that was being consumed, metadata
+// fetches will still occur for the topic. If you want to remove the topic
+// entirely, use PurgeTopicsFromClient.
+//
+// If you specified ConsumeTopics and this function removes all partitions for
+// a topic, the topic will no longer be consumed.
+func (cl *Client) RemoveConsumePartitions(partitions map[string][]int32) {
+	c := &cl.consumer
+	if c.d == nil || cl.cfg.regex {
+		return
+	}
+	for t, ps := range partitions {
+		if len(ps) == 0 {
+			delete(partitions, t)
+			continue
+		}
+	}
+	if len(partitions) == 0 {
+		return
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	removeOffsets := make(map[string]map[int32]Offset, len(partitions))
+	for t, ps := range partitions {
+		removePartitionOffsets := make(map[int32]Offset, len(ps))
+		for _, p := range ps {
+			removePartitionOffsets[p] = Offset{}
+		}
+		removeOffsets[t] = removePartitionOffsets
+	}
+
+	c.assignPartitions(removeOffsets, assignInvalidateMatching, c.d.tps, fmt.Sprintf("remove of %v requested", partitions))
+	for t, ps := range partitions {
+		for _, p := range ps {
+			c.d.using.remove(t, p)
+			c.d.m.remove(t, p)
+			delete(c.d.ps[t], p)
+		}
+		if len(c.d.ps[t]) == 0 {
+			delete(c.d.ps, t)
+		}
+	}
+}
+
 // assignHow controls how assignPartitions operates.
 type assignHow int8
 

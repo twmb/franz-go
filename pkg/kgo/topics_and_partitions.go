@@ -108,6 +108,20 @@ func (m mtmps) onlyt(t string) bool {
 	return exists && len(ps) == 0
 }
 
+func (m mtmps) remove(t string, p int32) {
+	if m == nil {
+		return
+	}
+	mps, exists := m[t]
+	if !exists {
+		return
+	}
+	delete(mps, p)
+	if len(mps) == 0 {
+		delete(m, t)
+	}
+}
+
 ////////////
 // PAUSED // -- types for pausing topics and partitions
 ////////////

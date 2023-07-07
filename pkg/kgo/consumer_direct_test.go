@@ -3,6 +3,7 @@ package kgo
 import (
 	"context"
 	"fmt"
+	"sort"
 	"testing"
 	"time"
 )
@@ -197,5 +198,65 @@ func TestIssue434(t *testing.T) {
 		if !foundTopic {
 			missingTopic++
 		}
+	}
+}
+
+func TestAddRemovePartitions(t *testing.T) {
+	t.Parallel()
+
+	t1, cleanup := tmpTopicPartitions(t, 2)
+	defer cleanup()
+
+	cl, _ := NewClient(
+		getSeedBrokers(),
+		UnknownTopicRetries(-1),
+		RecordPartitioner(ManualPartitioner()),
+		FetchMaxWait(100*time.Millisecond),
+	)
+	defer cl.Close()
+
+	if err := cl.ProduceSync(context.Background(),
+		&Record{Topic: t1, Partition: 0, Value: []byte("v1")},
+		&Record{Topic: t1, Partition: 1, Value: []byte("v2")},
+		&Record{Topic: t1, Partition: 1, Value: []byte("v3")},
+	).FirstErr(); err != nil {
+		t.Fatal(err)
+	}
+
+	cl.AddConsumePartitions(map[string]map[int32]Offset{
+		t1: {0: NewOffset().At(0)},
+	})
+
+	recs := cl.PollFetches(context.Background()).Records()
+	if len(recs) != 1 || string(recs[0].Value) != "v1" {
+		t.Fatalf("expected to see v1, got %v", recs)
+	}
+
+	cl.RemoveConsumePartitions(map[string][]int32{
+		t1:   {0, 1, 2},
+		"t2": {0, 1, 2},
+	})
+
+	cl.AddConsumePartitions(map[string]map[int32]Offset{
+		t1: {
+			0: NewOffset().At(0),
+			1: NewOffset().At(1),
+		},
+	})
+
+	recs = recs[:0]
+	for len(recs) < 2 {
+		recs = append(recs, cl.PollFetches(context.Background()).Records()...)
+	}
+	if len(recs) > 2 {
+		t.Fatalf("expected to see 2 records, got %v", recs)
+	}
+
+	sort.Slice(recs, func(i, j int) bool {
+		return recs[i].Partition < recs[j].Partition
+	})
+
+	if string(recs[0].Value) != "v1" || string(recs[1].Value) != "v3" {
+		t.Fatalf("expected to see v1 and v2, got %v", recs)
 	}
 }
