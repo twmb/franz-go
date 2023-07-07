@@ -158,7 +158,7 @@ func TestIssue434(t *testing.T) {
 		ConsumeTopics(fmt.Sprintf("(%s|%s)", t1, t2)),
 		ConsumeRegex(),
 		FetchMaxWait(100*time.Millisecond),
-		keepFetchRetryableErrors(),
+		KeepRetryableFetchErrors(),
 	)
 	defer cl.Close()
 

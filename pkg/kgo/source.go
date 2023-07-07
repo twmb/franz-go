@@ -861,7 +861,7 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 			var keep bool
 			switch fp.Err {
 			default:
-				if kerr.IsRetriable(fp.Err) && !s.cl.cfg.keepFetchRetryableErrors {
+				if kerr.IsRetriable(fp.Err) && !s.cl.cfg.keepRetryableFetchErrors {
 					// UnknownLeaderEpoch: our meta is newer than the broker we fetched from
 					// OffsetNotAvailable: fetched from out of sync replica or a behind in-sync one (KIP-392 case 1 and case 2)
 					// UnknownTopicID: kafka has not synced the state on all brokers
@@ -896,7 +896,7 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 				if fails := partOffset.from.unknownIDFails.Add(1); fails > 5 {
 					partOffset.from.unknownIDFails.Add(-1)
 					keep = true
-				} else if s.cl.cfg.keepFetchRetryableErrors {
+				} else if s.cl.cfg.keepRetryableFetchErrors {
 					keep = true
 				} else {
 					numErrsStripped++
