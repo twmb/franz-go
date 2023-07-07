@@ -3554,6 +3554,36 @@ func NewProduceResponse() ProduceResponse {
 	return v
 }
 
+type FetchRequestReplicaState struct {
+	// The replica ID of the follower, or -1 if this request is from a consumer.
+	//
+	// This field has a default of -1.
+	ID int32
+
+	// The epoch of this follower, or -1 if not available.
+	//
+	// This field has a default of -1.
+	Epoch int64
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v12+
+}
+
+// Default sets any default fields. Calling this allows for future compatibility
+// if new fields are added to FetchRequestReplicaState.
+func (v *FetchRequestReplicaState) Default() {
+	v.ID = -1
+	v.Epoch = -1
+}
+
+// NewFetchRequestReplicaState returns a default FetchRequestReplicaState
+// This is a shortcut for creating a struct and calling Default yourself.
+func NewFetchRequestReplicaState() FetchRequestReplicaState {
+	var v FetchRequestReplicaState
+	v.Default()
+	return v
+}
+
 type FetchRequestTopicPartition struct {
 	// Partition is a partition in a topic to try to fetch records for.
 	Partition int32
@@ -3675,6 +3705,9 @@ func NewFetchRequestForgottenTopic() FetchRequestForgottenTopic {
 //
 // Starting in v13, topics must use UUIDs rather than their string name
 // identifiers.
+//
+// Version 15 adds the ReplicaState which includes new field ReplicaEpoch and
+// the ReplicaID, and deprecates the old ReplicaID (KIP-903).
 type FetchRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
@@ -3688,7 +3721,12 @@ type FetchRequest struct {
 	// ReplicaID is the broker ID of performing the fetch request. Standard
 	// clients should use -1. To be a "debug" replica, use -2. The debug
 	// replica can be used to fetch messages from non-leaders.
-	ReplicaID int32
+	//
+	// This field has a default of -1.
+	ReplicaID int32 // v0-v14
+
+	// ReplicaState is a broker-only tag for v15+, see KIP-903 for more details.
+	ReplicaState FetchRequestReplicaState // tag 1
 
 	// MaxWaitMillis is how long to wait for MinBytes to be hit before a broker
 	// responds to a fetch request.
@@ -3748,7 +3786,7 @@ type FetchRequest struct {
 }
 
 func (*FetchRequest) Key() int16                 { return 1 }
-func (*FetchRequest) MaxVersion() int16          { return 14 }
+func (*FetchRequest) MaxVersion() int16          { return 15 }
 func (v *FetchRequest) SetVersion(version int16) { v.Version = version }
 func (v *FetchRequest) GetVersion() int16        { return v.Version }
 func (v *FetchRequest) IsFlexible() bool         { return v.Version >= 12 }
@@ -3772,7 +3810,7 @@ func (v *FetchRequest) AppendTo(dst []byte) []byte {
 	_ = version
 	isFlexible := version >= 12
 	_ = isFlexible
-	{
+	if version >= 0 && version <= 14 {
 		v := v.ReplicaID
 		dst = kbin.AppendInt32(dst, v)
 	}
@@ -3918,6 +3956,9 @@ func (v *FetchRequest) AppendTo(dst []byte) []byte {
 		if v.ClusterID != nil {
 			toEncode = append(toEncode, 0)
 		}
+		if !reflect.DeepEqual(v.ReplicaState, (func() FetchRequestReplicaState { var v FetchRequestReplicaState; v.Default(); return v })()) {
+			toEncode = append(toEncode, 1)
+		}
 		dst = kbin.AppendUvarint(dst, uint32(len(toEncode)+v.UnknownTags.Len()))
 		for _, tag := range toEncode {
 			switch tag {
@@ -3937,6 +3978,31 @@ func (v *FetchRequest) AppendTo(dst []byte) []byte {
 						dst = kbin.AppendUvarint(dst[:lenAt], uint32(len(dst[lenAt:])))
 						sized = true
 						goto fClusterID
+					}
+				}
+			case 1:
+				{
+					v := v.ReplicaState
+					dst = kbin.AppendUvarint(dst, 1)
+					sized := false
+					lenAt := len(dst)
+				fReplicaState:
+					{
+						v := v.ID
+						dst = kbin.AppendInt32(dst, v)
+					}
+					{
+						v := v.Epoch
+						dst = kbin.AppendInt64(dst, v)
+					}
+					if isFlexible {
+						dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+						dst = v.UnknownTags.AppendEach(dst)
+					}
+					if !sized {
+						dst = kbin.AppendUvarint(dst[:lenAt], uint32(len(dst[lenAt:])))
+						sized = true
+						goto fReplicaState
 					}
 				}
 			}
@@ -3962,7 +4028,7 @@ func (v *FetchRequest) readFrom(src []byte, unsafe bool) error {
 	isFlexible := version >= 12
 	_ = isFlexible
 	s := v
-	{
+	if version >= 0 && version <= 14 {
 		v := b.Int32()
 		s.ReplicaID = v
 	}
@@ -4202,6 +4268,25 @@ func (v *FetchRequest) readFrom(src []byte, unsafe bool) error {
 				if err := b.Complete(); err != nil {
 					return err
 				}
+			case 1:
+				b := kbin.Reader{Src: b.Span(int(b.Uvarint()))}
+				v := &s.ReplicaState
+				v.Default()
+				s := v
+				{
+					v := b.Int32()
+					s.ID = v
+				}
+				{
+					v := b.Int64()
+					s.Epoch = v
+				}
+				if isFlexible {
+					s.UnknownTags = internalReadTags(&b)
+				}
+				if err := b.Complete(); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -4220,6 +4305,13 @@ func NewPtrFetchRequest() *FetchRequest {
 // if new fields are added to FetchRequest.
 func (v *FetchRequest) Default() {
 	v.ClusterID = nil
+	v.ReplicaID = -1
+	{
+		v := &v.ReplicaState
+		_ = v
+		v.ID = -1
+		v.Epoch = -1
+	}
 	v.MaxBytes = 2147483647
 	v.SessionEpoch = -1
 }
@@ -4548,7 +4640,7 @@ type FetchResponse struct {
 }
 
 func (*FetchResponse) Key() int16                         { return 1 }
-func (*FetchResponse) MaxVersion() int16                  { return 14 }
+func (*FetchResponse) MaxVersion() int16                  { return 15 }
 func (v *FetchResponse) SetVersion(version int16)         { v.Version = version }
 func (v *FetchResponse) GetVersion() int16                { return v.Version }
 func (v *FetchResponse) IsFlexible() bool                 { return v.Version >= 12 }
@@ -37579,6 +37671,33 @@ func NewDescribeQuorumResponse() DescribeQuorumResponse {
 	return v
 }
 
+type AlterPartitionRequestTopicPartitionNewEpochISR struct {
+	// The broker ID .
+	BrokerID int32
+
+	// The broker's epoch; -1 if the epoch check is not supported.
+	//
+	// This field has a default of -1.
+	BrokerEpoch int32
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
+}
+
+// Default sets any default fields. Calling this allows for future compatibility
+// if new fields are added to AlterPartitionRequestTopicPartitionNewEpochISR.
+func (v *AlterPartitionRequestTopicPartitionNewEpochISR) Default() {
+	v.BrokerEpoch = -1
+}
+
+// NewAlterPartitionRequestTopicPartitionNewEpochISR returns a default AlterPartitionRequestTopicPartitionNewEpochISR
+// This is a shortcut for creating a struct and calling Default yourself.
+func NewAlterPartitionRequestTopicPartitionNewEpochISR() AlterPartitionRequestTopicPartitionNewEpochISR {
+	var v AlterPartitionRequestTopicPartitionNewEpochISR
+	v.Default()
+	return v
+}
+
 type AlterPartitionRequestTopicPartition struct {
 	Partition int32
 
@@ -37586,7 +37705,9 @@ type AlterPartitionRequestTopicPartition struct {
 	LeaderEpoch int32
 
 	// The ISR for this partition.
-	NewISR []int32
+	NewISR []int32 // v0-v2
+
+	NewEpochISR []AlterPartitionRequestTopicPartitionNewEpochISR // v3+
 
 	// 1 if the partition is recovering from unclean leader election; 0 otherwise
 	LeaderRecoveryState int8 // v1+
@@ -37638,6 +37759,8 @@ func NewAlterPartitionRequestTopic() AlterPartitionRequestTopic {
 
 // AlterPartitionRequest, proposed in KIP-497 and introduced in Kafka 2.7.0,
 // is an admin request to modify ISR.
+//
+// Version 3 was added for KIP-903 and replaced NewISR.
 type AlterPartitionRequest struct {
 	// Version is the version of this message used with a Kafka broker.
 	Version int16
@@ -37657,7 +37780,7 @@ type AlterPartitionRequest struct {
 }
 
 func (*AlterPartitionRequest) Key() int16                 { return 56 }
-func (*AlterPartitionRequest) MaxVersion() int16          { return 2 }
+func (*AlterPartitionRequest) MaxVersion() int16          { return 3 }
 func (v *AlterPartitionRequest) SetVersion(version int16) { v.Version = version }
 func (v *AlterPartitionRequest) GetVersion() int16        { return v.Version }
 func (v *AlterPartitionRequest) IsFlexible() bool         { return v.Version >= 0 }
@@ -37728,7 +37851,7 @@ func (v *AlterPartitionRequest) AppendTo(dst []byte) []byte {
 						v := v.LeaderEpoch
 						dst = kbin.AppendInt32(dst, v)
 					}
-					{
+					if version >= 0 && version <= 2 {
 						v := v.NewISR
 						if isFlexible {
 							dst = kbin.AppendCompactArrayLen(dst, len(v))
@@ -37738,6 +37861,29 @@ func (v *AlterPartitionRequest) AppendTo(dst []byte) []byte {
 						for i := range v {
 							v := v[i]
 							dst = kbin.AppendInt32(dst, v)
+						}
+					}
+					if version >= 3 {
+						v := v.NewEpochISR
+						if isFlexible {
+							dst = kbin.AppendCompactArrayLen(dst, len(v))
+						} else {
+							dst = kbin.AppendArrayLen(dst, len(v))
+						}
+						for i := range v {
+							v := &v[i]
+							{
+								v := v.BrokerID
+								dst = kbin.AppendInt32(dst, v)
+							}
+							{
+								v := v.BrokerEpoch
+								dst = kbin.AppendInt32(dst, v)
+							}
+							if isFlexible {
+								dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+								dst = v.UnknownTags.AppendEach(dst)
+							}
 						}
 					}
 					if version >= 1 {
@@ -37860,7 +38006,7 @@ func (v *AlterPartitionRequest) readFrom(src []byte, unsafe bool) error {
 						v := b.Int32()
 						s.LeaderEpoch = v
 					}
-					{
+					if version >= 0 && version <= 2 {
 						v := s.NewISR
 						a := v
 						var l int32
@@ -37882,6 +38028,41 @@ func (v *AlterPartitionRequest) readFrom(src []byte, unsafe bool) error {
 						}
 						v = a
 						s.NewISR = v
+					}
+					if version >= 3 {
+						v := s.NewEpochISR
+						a := v
+						var l int32
+						if isFlexible {
+							l = b.CompactArrayLen()
+						} else {
+							l = b.ArrayLen()
+						}
+						if !b.Ok() {
+							return b.Complete()
+						}
+						a = a[:0]
+						if l > 0 {
+							a = append(a, make([]AlterPartitionRequestTopicPartitionNewEpochISR, l)...)
+						}
+						for i := int32(0); i < l; i++ {
+							v := &a[i]
+							v.Default()
+							s := v
+							{
+								v := b.Int32()
+								s.BrokerID = v
+							}
+							{
+								v := b.Int32()
+								s.BrokerEpoch = v
+							}
+							if isFlexible {
+								s.UnknownTags = internalReadTags(&b)
+							}
+						}
+						v = a
+						s.NewEpochISR = v
 					}
 					if version >= 1 {
 						v := b.Int8()
@@ -38012,7 +38193,7 @@ type AlterPartitionResponse struct {
 }
 
 func (*AlterPartitionResponse) Key() int16                         { return 56 }
-func (*AlterPartitionResponse) MaxVersion() int16                  { return 2 }
+func (*AlterPartitionResponse) MaxVersion() int16                  { return 3 }
 func (v *AlterPartitionResponse) SetVersion(version int16)         { v.Version = version }
 func (v *AlterPartitionResponse) GetVersion() int16                { return v.Version }
 func (v *AlterPartitionResponse) IsFlexible() bool                 { return v.Version >= 0 }
