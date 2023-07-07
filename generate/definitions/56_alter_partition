@@ -1,6 +1,8 @@
 // AlterPartitionRequest, proposed in KIP-497 and introduced in Kafka 2.7.0,
 // is an admin request to modify ISR.
-AlterPartitionRequest => key 56, max version 2, flexible v0+, admin
+//
+// Version 3 was added for KIP-903 and replaced NewISR.
+AlterPartitionRequest => key 56, max version 3, flexible v0+, admin
   // The ID of the requesting broker.
   BrokerID: int32
   // The epoch of the requesting broker.
@@ -13,7 +15,12 @@ AlterPartitionRequest => key 56, max version 2, flexible v0+, admin
       // The leader epoch of this partition.
       LeaderEpoch: int32
       // The ISR for this partition.
-      NewISR: [int32]
+      NewISR: [int32] // v0-v2
+      NewEpochISR: [=>] // v3+
+        // The broker ID .
+        BrokerID: int32
+        // The broker's epoch; -1 if the epoch check is not supported.
+        BrokerEpoch: int32(-1)
       // 1 if the partition is recovering from unclean leader election; 0 otherwise
       LeaderRecoveryState: int8 // v1+
       // The expected epoch of the partition which is being updated.
