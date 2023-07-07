@@ -204,8 +204,23 @@ func NewConsumerBalancer(balance ConsumerBalancerBalance, members []kmsg.JoinGro
 	for i, member := range members {
 		meta := &b.metadatas[i]
 		meta.Default()
-		if err := meta.ReadFrom(member.ProtocolMetadata); err != nil {
-			return nil, fmt.Errorf("unable to read member metadata: %v", err)
+		memberMeta := member.ProtocolMetadata
+		if err := meta.ReadFrom(memberMeta); err != nil {
+			// Some buggy clients claimed support for v1 but then
+			// did not add OwnedPartitions, resulting in a short
+			// metadata. If we fail at reading and the version is
+			// v1, we retry again as v0. We do not support other
+			// versions because hopefully other clients stop
+			// claiming higher and higher version support and not
+			// actually supporting them. Sarama has a similarish
+			// workaround. See #493.
+			if bytes.HasPrefix(memberMeta, []byte{0, 1}) {
+				memberMeta[0] = 0
+				memberMeta[0] = 0
+				if err = meta.ReadFrom(memberMeta); err != nil {
+					return nil, fmt.Errorf("unable to read member metadata: %v", err)
+				}
+			}
 		}
 		for _, topic := range meta.Topics {
 			b.topics[topic] = struct{}{}
