@@ -624,7 +624,7 @@ func (s *source) fetch(consumerSession *consumerSession, doneFetch chan<- struct
 	}
 
 	var didBackoff bool
-	backoff := func() {
+	backoff := func(why interface{}) {
 		// We preemptively allow more fetches (since we are not buffering)
 		// and reset our session because of the error (who knows if kafka
 		// processed the request but the client failed to receive it).
@@ -633,7 +633,7 @@ func (s *source) fetch(consumerSession *consumerSession, doneFetch chan<- struct
 		s.session.reset()
 		didBackoff = true
 
-		s.cl.triggerUpdateMetadata(false, "opportunistic load during source backoff") // as good a time as any
+		s.cl.triggerUpdateMetadata(false, fmt.Sprintf("opportunistic load during source backoff: %v", why)) // as good a time as any
 		s.consecutiveFailures++
 		after := time.NewTimer(s.cl.cfg.retryBackoff(s.consecutiveFailures))
 		defer after.Stop()
@@ -652,7 +652,7 @@ func (s *source) fetch(consumerSession *consumerSession, doneFetch chan<- struct
 	// but that is fine; we may just re-request too early and fall into
 	// another backoff.
 	if err != nil {
-		backoff()
+		backoff(err)
 		return
 	}
 
@@ -774,7 +774,7 @@ func (s *source) fetch(consumerSession *consumerSession, doneFetch chan<- struct
 		// fetching from topics that were deleted. We want to back off
 		// a bit rather than spin-loop immediately re-requesting
 		// deleted topics.
-		backoff()
+		backoff("empty fetch response due to all partitions having retryable errors")
 	}
 	return
 }
