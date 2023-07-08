@@ -7,7 +7,10 @@
 //
 // Version 7, introduced in Kafka 3.0, supports -3 as a timestamp to return
 // the timestamp and offset for the record with the largest timestamp.
-ListOffsetsRequest => key 2, max version 7, flexible v6+
+//
+// Version 8, introduced in Kafka 3.4, supports -4 as a timestamp to return
+// the local log start offset (in the context of tiered storage, see KIP-405).
+ListOffsetsRequest => key 2, max version 8, flexible v6+
   // ReplicaID is the broker ID to get offsets from. As a Kafka client, use -1.
   // The consumer replica ID (-1) causes requests to only succeed if issued
   // against the leader broker.
@@ -53,6 +56,11 @@ ListOffsetsRequest => key 2, max version 7, flexible v6+
       // to determine topic "liveness" (when was the last produce?).
       // Previously, this was not easy to determine. See KIP-734 for more
       // detail.
+      //
+      // If you are talking to Kafka 3.4+ and using request version 8+ (for
+      // KIP-405), the new special timestamp -4 returns the local log start
+      // offset. In the context of tiered storage, the earliest local log start
+      // offset is the offset actually available on disk on the broker.
       Timestamp: int64
       // MaxNumOffsets is the maximum number of offsets to report.
       // This was removed after v0.
