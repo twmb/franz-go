@@ -5,7 +5,7 @@ go 1.18
 require (
 	github.com/klauspost/compress v1.16.7
 	github.com/pierrec/lz4/v4 v4.1.18
-	github.com/twmb/franz-go/pkg/kmsg v1.6.0
+	github.com/twmb/franz-go/pkg/kmsg v1.6.1
 	golang.org/x/crypto v0.11.0
 )
 
