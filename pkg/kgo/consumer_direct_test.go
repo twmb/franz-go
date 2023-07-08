@@ -260,3 +260,61 @@ func TestAddRemovePartitions(t *testing.T) {
 		t.Fatalf("expected to see v1 and v2, got %v", recs)
 	}
 }
+
+func TestPauseIssue489(t *testing.T) {
+	t.Parallel()
+
+	t1, cleanup := tmpTopicPartitions(t, 2)
+	defer cleanup()
+
+	cl, _ := NewClient(
+		getSeedBrokers(),
+		UnknownTopicRetries(-1),
+		DefaultProduceTopic(t1),
+		RecordPartitioner(ManualPartitioner()),
+		ConsumeTopics(t1),
+		FetchMaxWait(100*time.Millisecond),
+	)
+	defer cl.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		var exit bool
+		var zeroOne uint8
+		for !exit {
+			r := StringRecord("v")
+			r.Partition = int32(zeroOne % 2)
+			zeroOne++
+			cl.Produce(ctx, r, func(r *Record, err error) {
+				if err == context.Canceled {
+					exit = true
+				}
+			})
+		}
+	}()
+	defer cancel()
+
+	for i := 0; i < 10; i++ {
+		var sawZero, sawOne bool
+		for !sawZero || !sawOne {
+			fs := cl.PollFetches(ctx)
+			fs.EachRecord(func(r *Record) {
+				sawZero = sawZero || r.Partition == 0
+				sawOne = sawOne || r.Partition == 1
+			})
+		}
+		cl.PauseFetchPartitions(map[string][]int32{t1: {0}})
+		sawZero, sawOne = false, false
+		for i := 0; i < 5; i++ {
+			fs := cl.PollFetches(ctx)
+			fs.EachRecord(func(r *Record) {
+				sawZero = sawZero || r.Partition == 0
+				sawOne = sawOne || r.Partition == 1
+			})
+		}
+		if sawZero {
+			t.Error("saw partition zero even though it was paused")
+		}
+		cl.ResumeFetchPartitions(map[string][]int32{t1: {0}})
+	}
+}
