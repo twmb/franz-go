@@ -181,8 +181,8 @@ func TestIssue434(t *testing.T) {
 	start := time.Now()
 	var missingTopic int
 	for missingTopic < 2 {
-		if time.Since(start) > 2*time.Second {
-			t.Fatal("still seeing topic after 2s")
+		if time.Since(start) > 30*time.Second {
+			t.Fatal("still seeing topic after 30s")
 		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
