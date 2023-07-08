@@ -1,6 +1,8 @@
 package klogrus
 
 import (
+	"fmt"
+
 	"github.com/sirupsen/logrus"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
@@ -27,7 +29,7 @@ func (l *Logger) Log(level kgo.LogLevel, msg string, keyvals ...any) {
 	if levelMatched {
 		fields := make(logrus.Fields, len(keyvals)/2)
 		for i := 0; i < len(keyvals); i += 2 {
-			fields[keyvals[i].(string)] = keyvals[i+1]
+			fields[fmt.Sprint(keyvals[i])] = keyvals[i+1]
 		}
 		l.lr.WithFields(fields).Log(logrusLevel, msg)
 	}
