@@ -1780,7 +1780,7 @@ func (s *consumerSession) handleListOrEpochResults(loaded loadedOffsets) (reload
 
 		default: // from ErrorCode in a response, or broker request err, or request is canceled as our session is ending
 			reloads.addLoad(load.topic, load.partition, loaded.loadType, load.request)
-			if !kerr.IsRetriable(load.err) && !isRetryableBrokerErr(load.err) && !isDialErr(load.err) && !isContextErr(load.err) { // non-retryable response error; signal such in a response
+			if !kerr.IsRetriable(load.err) && !isRetryableBrokerErr(load.err) && !isDialNonTimeoutErr(load.err) && !isContextErr(load.err) { // non-retryable response error; signal such in a response
 				s.c.addFakeReadyForDraining(load.topic, load.partition, load.err, fmt.Sprintf("notification of non-retryable error from %s request", loaded.loadType))
 			}
 
