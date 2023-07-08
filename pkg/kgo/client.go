@@ -350,6 +350,8 @@ func (cl *Client) OptValues(opt any) []any {
 		return []any{cfg.maxConcurrentFetches}
 	case namefn(Rack):
 		return []any{cfg.rack}
+	case namefn(KeepRetryableFetchErrors):
+		return []any{cfg.keepRetryableFetchErrors}
 
 	case namefn(AdjustFetchOffsetsFn):
 		return []any{cfg.adjustOffsetsBeforeAssign}
@@ -1120,7 +1122,7 @@ type failDial struct{ fails int8 }
 // repeatedly fails, we need to forget our cache to force a re-load: the broker
 // may have completely died.
 func (d *failDial) isRepeatedDialFail(err error) bool {
-	if isDialErr(err) {
+	if isAnyDialErr(err) {
 		d.fails++
 		if d.fails == 3 {
 			d.fails = 0

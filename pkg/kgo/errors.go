@@ -44,7 +44,7 @@ func isRetryableBrokerErr(err error) bool {
 		// If a dial fails, potentially we could retry if the resolver
 		// had a temporary hiccup, but we will err on the side of this
 		// being a slightly less temporary error.
-		return !isDialErr(err)
+		return !isDialNonTimeoutErr(err)
 	}
 	// EOF can be returned if a broker kills a connection unexpectedly, and
 	// we can retry that. Same for ErrClosed.
@@ -88,7 +88,12 @@ func isRetryableBrokerErr(err error) bool {
 	return false
 }
 
-func isDialErr(err error) bool {
+func isDialNonTimeoutErr(err error) bool {
+	var ne *net.OpError
+	return errors.As(err, &ne) && ne.Op == "dial" && !ne.Timeout()
+}
+
+func isAnyDialErr(err error) bool {
 	var ne *net.OpError
 	return errors.As(err, &ne) && ne.Op == "dial"
 }
