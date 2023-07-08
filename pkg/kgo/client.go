@@ -249,6 +249,8 @@ func (cl *Client) OptValues(opt any) []any {
 		return []any{cfg.dialFn}
 	case namefn(DialTLSConfig):
 		return []any{cfg.dialTLS}
+	case namefn(DialTLS):
+		return []any{cfg.dialTLS != nil}
 	case namefn(SeedBrokers):
 		return []any{cfg.seedBrokers}
 	case namefn(MaxVersions):
