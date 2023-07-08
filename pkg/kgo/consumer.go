@@ -46,6 +46,15 @@ func (o Offset) String() string {
 	}
 }
 
+// EpochOffset returns this offset as an EpochOffset, allowing visibility into
+// what this offset actually currently is.
+func (o Offset) EpochOffset() EpochOffset {
+	return EpochOffset{
+		Epoch:  o.epoch,
+		Offset: o.at,
+	}
+}
+
 // NewOffset creates and returns an offset to use in ConsumePartitions or
 // ConsumeResetOffset.
 //
