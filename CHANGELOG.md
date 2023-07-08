@@ -1,3 +1,63 @@
+v1.14.0
+===
+
+This release contains a few new APIs, one behavior change, and one minor bugfix.
+
+## Bugfixes
+
+Previously, `HookBrokerRead` and `HookBrokerE2E` could not be used at the same
+time. This has been fixed.
+
+## Behavior changes
+
+`PauseFetch{Topics,Partitions}` now causes the client to drop all buffered
+fetches and kill all in-flight fetch requests. Importantly, this also means
+that once you pause, it is no longer possible for what you paused to be
+returned while polling. Previously, the client made no attempt to clear
+internal buffers / in flight requests, meaning you could receive paused data
+for a while.
+
+Seed brokers now show up in logs as `seed_###` rather than `seed ###` (an
+underscore has been added).
+
+## Features
+
+* `kgo.Offset` now has an `EpochOffset` getter function that allows access
+  to the actual epoch and offset that are inside the opaque `Offset` type.
+* `AddConsumePartitions` allows adding individual partitions to consume, and
+  the new counterpart `RemoveConsumePartitions` allows removing individual
+  partitions from being consumed. Removing is different from purging, please
+  see the docs.
+* `KeepRetryableFetchErrors` bubbles up retryable errors to the end user that
+  are encountered while fetching. By default, these errors are stripped.
+* kversion now supports Kafka 3.5
+* kversion now supports version guessing against KRaft by default
+* `kgo.DialTLS` now exists to even more easily opt into TLS.
+* `kgo.Client.Opts` now exists to return the original options that were used
+  to configure the client, making initializing new clients easier.
+* `kgo.NodeName` returns a string form of a broker node name. Internally, seed
+  brokers use math.MinInt32 for node IDs, which shows up as massively negative
+  numbers in logs sometimes. `NodeName` can help convert that to `seed_<#>`.
+
+## Relevant commits
+
+- [`c3b083b`](https://github.com/twmb/franz-go/commit/c3b083b) **improvement** kgo: do not returned paused topics/partitions after pausing
+- [`e224e90`](https://github.com/twmb/franz-go/commit/e224e90) **bugfix** kgo: allow HookBrokerRead and HookBrokerE2E to both be called
+- [`875761a`](https://github.com/twmb/franz-go/commit/875761a) **feature** kgo Offset: add EpochOffset getter field
+- [`c5d0fc5`](https://github.com/twmb/franz-go/commit/c5d0fc5) kgo: add a debug log for stripping retryable errors from fetches
+- [`b45d663`](https://github.com/twmb/franz-go/commit/b45d663) kgo: add more context to opportunistic metadata loads while fetching
+- [`9dae366`](https://github.com/twmb/franz-go/commit/9dae366) kgo: allow retries on dial timeouts
+- [`00e4e76`](https://github.com/twmb/franz-go/commit/00e4e76) kgo: tolerate buggy v1 group member metadata
+- [`34c8b3d`](https://github.com/twmb/franz-go/commit/34c8b3d) **feature** kgo: add AddConsumePartitions and RemoveConsumePartitions
+- [`b5cafba`](https://github.com/twmb/franz-go/commit/b5cafba) sasl: validate non-empty user/pass/token
+- [`76d2e71`](https://github.com/twmb/franz-go/commit/76d2e71) **feature** kgo: add KeepRetryableFetchErrors
+- [`0df3ec0`](https://github.com/twmb/franz-go/commit/0df3ec0) kgo: fix new niche CI problem against Kafka 3.5
+- [`8ff1d0d`](https://github.com/twmb/franz-go/commit/8ff1d0d) **feature** pkg/kversion: attempt to guess KRaft by default as well
+- [`e92f5d9`](https://github.com/twmb/franz-go/commit/e92f5d9) **feature** pkg/kversion: detect v3.5
+- [`f1b923e`](https://github.com/twmb/franz-go/commit/f1b923e) **feature** kgo: add DialTLS option
+- [`9667967`](https://github.com/twmb/franz-go/commit/9667967) **feature** kgo.Client: add Opts to return the original opts, to allow seeding new clients
+- [`8e14928`](https://github.com/twmb/franz-go/commit/8e14928) **feature** kgo: add NodeName for easy user formatting of internal seed node IDs
+
 v1.13.6
 ===
 
