@@ -796,10 +796,19 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 ) {
 	f = Fetch{Topics: make([]FetchTopic, 0, len(resp.Topics))}
 	var (
-		updateWhy       multiUpdateWhy
-		numErrsStripped int
-		kip320          = s.cl.supportsOffsetForLeaderEpoch()
+		updateWhy        multiUpdateWhy
+		debugWhyStripped multiUpdateWhy
+		numErrsStripped  int
+		kip320           = s.cl.supportsOffsetForLeaderEpoch()
 	)
+
+	strip := func(t string, p int32, err error) {
+		numErrsStripped++
+		if s.cl.cfg.logger.Level() < LogLevelDebug {
+			return
+		}
+		debugWhyStripped.add(t, p, err)
+	}
 
 	for _, rt := range resp.Topics {
 		topic := rt.Topic
@@ -866,7 +875,7 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 					// OffsetNotAvailable: fetched from out of sync replica or a behind in-sync one (KIP-392 case 1 and case 2)
 					// UnknownTopicID: kafka has not synced the state on all brokers
 					// And other standard retryable errors.
-					numErrsStripped++
+					strip(topic, partition, fp.Err)
 				} else {
 					// - bad auth
 					// - unsupported compression
@@ -899,7 +908,7 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 				} else if s.cl.cfg.keepRetryableFetchErrors {
 					keep = true
 				} else {
-					numErrsStripped++
+					strip(topic, partition, fp.Err)
 				}
 
 			case kerr.OffsetOutOfRange:
@@ -992,6 +1001,10 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 		if len(fetchTopic.Partitions) > 0 {
 			f.Topics = append(f.Topics, fetchTopic)
 		}
+	}
+
+	if s.cl.cfg.logger.Level() >= LogLevelDebug && len(debugWhyStripped) > 0 {
+		s.cl.cfg.logger.Log(LogLevelDebug, "fetch stripped partitions", "why", debugWhyStripped.reason(""))
 	}
 
 	return f, reloadOffsets, preferreds, req.numOffsets == numErrsStripped, updateMeta, updateWhy.reason("fetch had inner topic errors")
