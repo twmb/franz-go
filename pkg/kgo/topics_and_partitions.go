@@ -457,6 +457,8 @@ type topicPartitionsData struct {
 	isInternal         bool
 	partitions         []*topicPartition // partition num => partition
 	writablePartitions []*topicPartition // subset of above
+	topic              string
+	when               int64
 }
 
 // topicPartition contains all information from Kafka for a topic's partition,
