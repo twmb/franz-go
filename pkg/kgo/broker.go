@@ -1217,10 +1217,10 @@ func (cxn *brokerCxn) readResponse(
 	bytesRead, buf, readWait, timeToRead, readErr := cxn.readConn(ctx, timeout, readEnqueue)
 
 	cxn.cl.cfg.hooks.each(func(h Hook) {
-		switch h := h.(type) {
-		case HookBrokerRead:
+		if h, ok := h.(HookBrokerRead); ok {
 			h.OnBrokerRead(cxn.b.meta, key, bytesRead, readWait, timeToRead, readErr)
-		case HookBrokerE2E:
+		}
+		if h, ok := h.(HookBrokerE2E); ok {
 			h.OnBrokerE2E(cxn.b.meta, key, BrokerE2E{
 				BytesWritten: bytesWritten,
 				BytesRead:    bytesRead,
