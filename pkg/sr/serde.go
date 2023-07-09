@@ -131,7 +131,7 @@ func (s *Serde) SetDefaults(opts ...SerdeOpt) {
 	s.defaults = opts
 }
 
-// DecodeID decodes an ID from in, returning the ID and the remaining bytes,
+// DecodeID decodes an ID from b, returning the ID and the remaining bytes,
 // or an error.
 func (s *Serde) DecodeID(b []byte) (id int, out []byte, err error) {
 	return s.header().DecodeID(b)
