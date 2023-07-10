@@ -931,6 +931,7 @@ func (f fmtAssignment) String() string {
 // cursors or add to the existing cursors.
 func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how assignHow, tps *topicsPartitions, why string) {
 	if c.mu.TryLock() {
+		c.mu.Unlock()
 		panic("assignPartitions called without holding the consumer lock, this is a bug in franz-go, please open an issue at github.com/twmb/franz-go")
 	}
 
