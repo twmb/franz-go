@@ -216,7 +216,7 @@ func NewConsumerBalancer(balance ConsumerBalancerBalance, members []kmsg.JoinGro
 			// workaround. See #493.
 			if bytes.HasPrefix(memberMeta, []byte{0, 1}) {
 				memberMeta[0] = 0
-				memberMeta[0] = 0
+				memberMeta[1] = 0
 				if err = meta.ReadFrom(memberMeta); err != nil {
 					return nil, fmt.Errorf("unable to read member metadata: %v", err)
 				}
