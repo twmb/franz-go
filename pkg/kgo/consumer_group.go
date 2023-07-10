@@ -2252,8 +2252,8 @@ func PreCommitFnContext(ctx context.Context, fn func(*kmsg.OffsetCommitRequest) 
 // OnPartitionsRevoked, but for most workloads, a small bit of potential
 // duplicate processing is fine.  See the documentation on DisableAutoCommit
 // for more details. You can also avoid this problem by using
-// BlockRebalanceOnCommit, but that option comes with its own tradeoffs (refer
-// to its documentation).
+// BlockRebalanceOnPoll, but that option comes with its own tradeoffs (refer to
+// its documentation).
 //
 // It is recommended to always commit records in order (per partition). If you
 // call this function twice with record for partition 0 at offset 999
