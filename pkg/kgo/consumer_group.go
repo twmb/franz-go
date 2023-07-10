@@ -174,7 +174,7 @@ func (cl *Client) LeaveGroup() {
 
 	c.waitAndAddRebalance()
 	c.mu.Lock() // lock for assign
-	c.assignPartitions(nil, assignInvalidateAll, noTopicsPartitions, "invalidating all assignments in LeaveGroup")
+	c.assignPartitions(nil, assignInvalidateAll, nil, "invalidating all assignments in LeaveGroup")
 	wait := c.g.leave()
 	c.mu.Unlock()
 	c.unaddRebalance()
