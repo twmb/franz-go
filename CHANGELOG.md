@@ -1,3 +1,16 @@
+v1.14.1
+===
+
+This patch release, quick on the heels of v1.14.0, fixes a race condition
+introduced in v1.14 in the `PauseFetchTopics` and `PauseFetchPartitions`
+functions, a second race condition that can occur when purging a topic, and
+fully addresses [#493][https://github.com/twmb/franz-go/issues/493] which was
+not completely addressed in v1.14.0.
+
+- [`8c785fa`](https://github.com/twmb/franz-go/commit/8c785fa) **bugfix** kgo: fix race between client closing and purging
+- [`dc5283e`](https://github.com/twmb/franz-go/commit/dc5283e) kgo: re-fix #493, supporting other buggy clients, and add a test
+- [`32ac27f`](https://github.com/twmb/franz-go/commit/32ac27f) **bugfix** kgo: ensure assignPartitions is locked when pausing topics/partitions
+
 v1.14.0
 ===
 
