@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -279,15 +280,15 @@ func TestPauseIssue489(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
-		var exit bool
+		var exit atomic.Bool
 		var zeroOne uint8
-		for !exit {
+		for !exit.Load() {
 			r := StringRecord("v")
 			r.Partition = int32(zeroOne % 2)
 			zeroOne++
 			cl.Produce(ctx, r, func(r *Record, err error) {
 				if err == context.Canceled {
-					exit = true
+					exit.Store(true)
 				}
 			})
 		}

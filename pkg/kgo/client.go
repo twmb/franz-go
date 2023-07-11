@@ -947,18 +947,19 @@ func (cl *Client) Close() {
 	})
 
 	c := &cl.consumer
+	c.kill.Store(true)
 	if c.g != nil {
 		cl.LeaveGroup()
 	} else if c.d != nil {
-		c.mu.Lock()                                                          // lock for assign
-		c.assignPartitions(nil, assignInvalidateAll, noTopicsPartitions, "") // we do not use a log message when not in a group
+		c.mu.Lock()                                           // lock for assign
+		c.assignPartitions(nil, assignInvalidateAll, nil, "") // we do not use a log message when not in a group
 		c.mu.Unlock()
 	}
 
 	// After the above, consumers cannot consume anymore. LeaveGroup
-	// internally assigns noTopicsPartitions, which uses noConsumerSession,
-	// which prevents loopFetch from starting. Assigning also waits for the
-	// prior session to be complete, meaning loopFetch cannot be running.
+	// internally assigns nil, which uses noConsumerSession, which prevents
+	// loopFetch from starting. Assigning also waits for the prior session
+	// to be complete, meaning loopFetch cannot be running.
 
 	sessCloseCtx, sessCloseCancel := context.WithTimeout(cl.ctx, time.Second)
 	var wg sync.WaitGroup

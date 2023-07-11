@@ -250,8 +250,6 @@ type topicPartitions struct {
 
 func (t *topicPartitions) load() *topicPartitionsData { return t.v.Load().(*topicPartitionsData) }
 
-var noTopicsPartitions = newTopicsPartitions()
-
 func newTopicsPartitions() *topicsPartitions {
 	var t topicsPartitions
 	t.v.Store(make(topicsPartitionsData))

@@ -196,6 +196,7 @@ type consumer struct {
 	sessionChangeMu sync.Mutex
 
 	session atomic.Value // *consumerSession
+	kill    atomic.Bool
 
 	usingCursors usedCursors
 
@@ -927,10 +928,16 @@ func (f fmtAssignment) String() string {
 	return sb.String()
 }
 
-// assignPartitions, called under the consumer's mu, is used to set new
-// cursors or add to the existing cursors.
+// assignPartitions, called under the consumer's mu, is used to set new cursors
+// or add to the existing cursors.
+//
+// We do not need to pass tps when we are bumping the session or when we are
+// invalidating all. All other cases, we want the tps -- the logic below does
+// not fully differentiate needing to start a new session vs. just reusing the
+// old (third if case below)
 func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how assignHow, tps *topicsPartitions, why string) {
 	if c.mu.TryLock() {
+		c.mu.Unlock()
 		panic("assignPartitions called without holding the consumer lock, this is a bug in franz-go, please open an issue at github.com/twmb/franz-go")
 	}
 
@@ -1057,7 +1064,7 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how
 
 	// This assignment could contain nothing (for the purposes of
 	// invalidating active fetches), so we only do this if needed.
-	if len(assignments) == 0 || how == assignInvalidateMatching || how == assignPurgeMatching || how == assignSetMatching || how == assignBumpSession {
+	if len(assignments) == 0 || how != assignWithoutInvalidating {
 		return
 	}
 
@@ -1564,7 +1571,7 @@ func (c *consumer) stopSession() (listOrEpochLoads, *topicsPartitions) {
 	session := c.loadSession()
 
 	if session == noConsumerSession {
-		return listOrEpochLoads{}, noTopicsPartitions // we had no session
+		return listOrEpochLoads{}, nil // we had no session
 	}
 
 	// Before storing noConsumerSession, cancel our old. This pairs
@@ -1620,6 +1627,9 @@ func (c *consumer) stopSession() (listOrEpochLoads, *topicsPartitions) {
 // 1 worker allows for initialization work to prevent the session from being
 // immediately stopped.
 func (c *consumer) startNewSession(tps *topicsPartitions) *consumerSession {
+	if c.kill.Load() {
+		tps = nil
+	}
 	session := c.newConsumerSession(tps)
 	c.session.Store(session)
 
