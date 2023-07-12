@@ -1,6 +1,9 @@
 package kfake
 
-import "time"
+import (
+	"crypto/tls"
+	"time"
+)
 
 // Opt is an option to configure a client.
 type Opt interface {
@@ -11,6 +14,11 @@ type opt struct{ fn func(*cfg) }
 
 func (opt opt) apply(cfg *cfg) { opt.fn(cfg) }
 
+type seedTopics struct {
+	p  int32
+	ts []string
+}
+
 type cfg struct {
 	nbrokers        int
 	ports           []int
@@ -18,12 +26,14 @@ type cfg struct {
 	clusterID       string
 	allowAutoTopic  bool
 	defaultNumParts int
+	seedTopics      []seedTopics
 
 	minSessionTimeout time.Duration
 	maxSessionTimeout time.Duration
 
 	enableSASL bool
 	sasls      map[struct{ m, u string }]string // cleared after client initialization
+	tls        *tls.Config
 }
 
 // NumBrokers sets the number of brokers to start in the fake cluster.
@@ -54,7 +64,8 @@ func AllowAutoTopicCreation() Opt {
 }
 
 // DefaultNumPartitions sets the number of partitions to create by default for
-// auto created topics / CreateTopics with -1 partitions.
+// auto created topics / CreateTopics with -1 partitions, overriding the
+// default of 10.
 func DefaultNumPartitions(n int) Opt {
 	return opt{func(cfg *cfg) { cfg.defaultNumParts = n }}
 }
@@ -85,4 +96,20 @@ func EnableSASL() Opt {
 // If you delete all SASL users, the kfake cluster will be unusable.
 func Superuser(method, user, pass string) Opt {
 	return opt{func(cfg *cfg) { cfg.sasls[struct{ m, u string }{method, user}] = pass }}
+}
+
+// TLS enables TLS for the cluster, using the provided TLS config for
+// listening.
+func TLS(c *tls.Config) Opt {
+	return opt{func(cfg *cfg) { cfg.tls = c }}
+}
+
+// SeedTopics provides topics to create by default in the cluster. Each topic
+// will use the given partitions and use the default internal replication
+// factor. If you use a non-positive number for partitions, [DefaultNumPartitions]
+// is used. This option can be provided multiple times if you want to seed
+// topics with different partition counts. If a topic is provided in multiple
+// options, the last specification wins.
+func SeedTopics(partitions int32, ts ...string) Opt {
+	return opt{func(cfg *cfg) { cfg.seedTopics = append(cfg.seedTopics, seedTopics{partitions, ts}) }}
 }

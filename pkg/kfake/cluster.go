@@ -1,6 +1,7 @@
 package kfake
 
 import (
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"math/rand"
@@ -144,7 +145,7 @@ func NewCluster(opts ...Opt) (c *Cluster, err error) {
 		if len(cfg.ports) > 0 {
 			port = cfg.ports[i]
 		}
-		ln, err := newListener(port)
+		ln, err := newListener(port, c.cfg.tls)
 		if err != nil {
 			c.Close()
 			return nil, err
@@ -160,6 +161,20 @@ func NewCluster(opts ...Opt) (c *Cluster, err error) {
 	}
 	c.controller = c.bs[len(c.bs)-1]
 	go c.run()
+
+	seedTopics := make(map[string]int32)
+	for _, sts := range cfg.seedTopics {
+		p := sts.p
+		if p < 1 {
+			p = int32(cfg.defaultNumParts)
+		}
+		for _, t := range sts.ts {
+			seedTopics[t] = p
+		}
+	}
+	for t, p := range seedTopics {
+		c.data.mkt(t, int(p), -1, nil)
+	}
 	return c, nil
 }
 
@@ -185,8 +200,15 @@ func (c *Cluster) Close() {
 	}
 }
 
-func newListener(port int) (net.Listener, error) {
-	return net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+func newListener(port int, tc *tls.Config) (net.Listener, error) {
+	l, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	if err != nil {
+		return nil, err
+	}
+	if tc != nil {
+		l = tls.NewListener(l, tc)
+	}
+	return l, nil
 }
 
 func (b *broker) listen() {
@@ -491,7 +513,7 @@ func (c *Cluster) AddNode(nodeID int32, port int) (int32, int, error) {
 			port = 0
 		}
 		var ln net.Listener
-		if ln, err = newListener(port); err != nil {
+		if ln, err = newListener(port, c.cfg.tls); err != nil {
 			return
 		}
 		_, strPort, _ := net.SplitHostPort(ln.Addr().String())
