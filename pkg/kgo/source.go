@@ -484,6 +484,23 @@ func (s *source) loopFetch() {
 
 	if session == noConsumerSession {
 		s.fetchState.hardFinish()
+		// It is possible that we were triggered to consume while we
+		// had no consumer session, and then *after* loopFetch loaded
+		// noConsumerSession, the session was saved and triggered to
+		// consume again. If this function is slow the first time
+		// around, it could still be running and about to hardFinish.
+		// The second trigger will do nothing, and then we hardFinish
+		// and block a new session from actually starting consuming.
+		//
+		// To guard against this, after we hard finish, we load the
+		// session again: if it is *not* noConsumerSession, we trigger
+		// attempting to consume again. Worst case, the trigger is
+		// useless and it will exit below when it builds an empty
+		// request.
+		sessionNow := consumer.loadSession()
+		if session != sessionNow {
+			s.maybeConsume()
+		}
 		return
 	}
 

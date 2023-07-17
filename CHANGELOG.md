@@ -1,3 +1,14 @@
+v1.14.2
+===
+
+This patch fixes an internal logic race that can be easily encountered when
+easily specifying exact offsets to consume from. If you encountered this bug,
+your consumer could just stop consuming for an indeterminite amount of time.
+This bug has existed for a _long_ time and relies on both the client being slow
+and the broker being fast to hit.
+
+- [`1f696ca`](https://github.com/twmb/franz-go/commit/1f696ca) **bugfix** kgo: avoid a consumer logic race where the consumer stops consuming
+
 v1.14.1
 ===
 
