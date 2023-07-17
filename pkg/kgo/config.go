@@ -1525,18 +1525,19 @@ func AdjustFetchOffsetsFn(adjustOffsetsBeforeAssign func(context.Context, map[st
 // OnPartitionsAssigned sets the function to be called when a group is joined
 // after partitions are assigned before fetches for those partitions begin.
 //
-// This function combined with OnPartitionsRevoked should not exceed the
-// rebalance interval. It is possible for the group, immediately after
-// finishing a balance, to re-enter a new balancing session.
+// This function, combined with OnPartitionsRevoked, should not exceed the
+// rebalance interval. It is possible for the group to re-enter a new balancing
+// session immediately after finishing a balance.
 //
-// The OnPartitionsAssigned function is passed the client's context, which is
-// only canceled if the client is closed.
+// This function is passed the client's context, which is only canceled if the
+// client is closed.
 //
-// This function is not called concurrent with any other On callback, and this
-// function is given a new map that the user is free to modify. This function
-// can be called at any time you are polling or processing records. If you want
-// to ensure this function is called serially with processing, consider the
-// BlockRebalanceOnPoll option.
+// This function is not called concurrent with any other OnPartitions callback,
+// and this function is given a new map that the user is free to modify.
+//
+// This function can be called at any time you are polling or processing
+// records. If you want to ensure this function is called serially with
+// processing, consider the BlockRebalanceOnPoll option.
 func OnPartitionsAssigned(onAssigned func(context.Context, *Client, map[string][]int32)) GroupOpt {
 	return groupOpt{func(cfg *cfg) { cfg.onAssigned, cfg.setAssigned = onAssigned, true }}
 }
@@ -1544,17 +1545,12 @@ func OnPartitionsAssigned(onAssigned func(context.Context, *Client, map[string][
 // OnPartitionsRevoked sets the function to be called once this group member
 // has partitions revoked.
 //
-// This function combined with OnPartitionsAssigned should not exceed the
-// rebalance interval. It is possible for the group, immediately after
-// finishing a balance, to re-enter a new balancing session.
+// This function, combined with [OnPartitionsAssigned], should not exceed the
+// rebalance interval. It is possible for the group to re-enter a new balancing
+// session immediately after finishing a balance.
 //
 // If autocommit is enabled, the default OnPartitionsRevoked is a blocking
-// commit all non-dirty offsets (where dirty is the most recent poll). The
-// reason for a blocking commit is so that no later commit cancels the blocking
-// commit. If the commit in OnPartitionsRevoked were canceled, then the
-// rebalance would proceed immediately, the commit that canceled the blocking
-// commit would fail, and duplicates could be consumed after the rebalance
-// completes.
+// commit of all non-dirty offsets (where "dirty" is the most recent poll).
 //
 // The OnPartitionsRevoked function is passed the client's context, which is
 // only canceled if the client is closed. OnPartitionsRevoked function is
@@ -1563,30 +1559,34 @@ func OnPartitionsAssigned(onAssigned func(context.Context, *Client, map[string][
 // autocommitting), it is highly recommended to do a proper blocking commit in
 // OnPartitionsRevoked.
 //
-// This function is not called concurrent with any other On callback, and this
-// function is given a new map that the user is free to modify. This function
-// can be called at any time you are polling or processing records. If you want
-// to ensure this function is called serially with processing, consider the
-// BlockRebalanceOnPoll option.
+// This function is not called concurrent with any other OnPartitions callback,
+// and this function is given a new map that the user is free to modify.
+//
+// This function can be called at any time you are polling or processing
+// records. If you want to ensure this function is called serially with
+// processing, consider the BlockRebalanceOnPoll option.
+//
+// This function is called if a "fatal" group error is encountered and you have
+// not set [OnPartitionsLost]. See OnPartitionsLost for more details.
 func OnPartitionsRevoked(onRevoked func(context.Context, *Client, map[string][]int32)) GroupOpt {
 	return groupOpt{func(cfg *cfg) { cfg.onRevoked, cfg.setRevoked = onRevoked, true }}
 }
 
 // OnPartitionsLost sets the function to be called on "fatal" group errors,
 // such as IllegalGeneration, UnknownMemberID, and authentication failures.
-// This function differs from OnPartitionsRevoked in that it is unlikely that
+// This function differs from [OnPartitionsRevoked] in that it is unlikely that
 // commits will succeed when partitions are outright lost, whereas commits
 // likely will succeed when revoking partitions.
 //
-// If this is not set, you will not know when a group error occurs that
-// forcefully loses all partitions. If you wish to use the same callback for
-// lost and revoked, you can use OnPartitionsLostAsRevoked as a shortcut.
+// Because this function is called on any fatal group error, it is possible for
+// this function to be called without the group ever being joined.
 //
-// This function is not called concurrent with any other On callback, and this
-// function is given a new map that the user is free to modify. This function
-// can be called at any time you are polling or processing records. If you want
-// to ensure this function is called serially with processing, consider the
-// BlockRebalanceOnPoll option.
+// This function is not called concurrent with any other OnPartitions callback,
+// and this function is given a new map that the user is free to modify.
+//
+// This function can be called at any time you are polling or processing
+// records. If you want to ensure this function is called serially with
+// processing, consider the BlockRebalanceOnPoll option.
 func OnPartitionsLost(onLost func(context.Context, *Client, map[string][]int32)) GroupOpt {
 	return groupOpt{func(cfg *cfg) { cfg.onLost, cfg.setLost = onLost, true }}
 }
