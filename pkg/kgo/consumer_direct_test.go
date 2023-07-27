@@ -2,6 +2,7 @@ package kgo
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"sync/atomic"
@@ -317,5 +318,50 @@ func TestPauseIssue489(t *testing.T) {
 			t.Error("saw partition zero even though it was paused")
 		}
 		cl.ResumeFetchPartitions(map[string][]int32{t1: {0}})
+	}
+}
+
+func TestIssue523(t *testing.T) {
+	t.Parallel()
+
+	t1, cleanup := tmpTopicPartitions(t, 1)
+	defer cleanup()
+	g1, gcleanup := tmpGroup(t)
+	defer gcleanup()
+
+	cl, _ := NewClient(
+		getSeedBrokers(),
+		DefaultProduceTopic(t1),
+		ConsumeTopics(".*"+t1+".*"),
+		ConsumeRegex(),
+		ConsumerGroup(g1),
+		MetadataMinAge(100*time.Millisecond),
+		FetchMaxWait(time.Second),
+		KeepRetryableFetchErrors(),
+	)
+	defer cl.Close()
+
+	if err := cl.ProduceSync(context.Background(), StringRecord("foo")).FirstErr(); err != nil {
+		t.Fatal(err)
+	}
+
+	cl.PollFetches(context.Background())
+
+	cleanup() // delete the topic
+
+	start := time.Now()
+	for {
+		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+		fs := cl.PollFetches(ctx)
+		cancel()
+		if errors.Is(fs.Err0(), context.DeadlineExceeded) {
+			break
+		}
+		if time.Since(start) > 40*time.Second { // missing topic delete is 15s by default
+			t.Fatalf("still repeatedly requesting metadata after 20s")
+		}
+		if fs.Err0() != nil {
+			time.Sleep(time.Second)
+		}
 	}
 }
