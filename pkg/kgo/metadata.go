@@ -341,13 +341,11 @@ func (cl *Client) updateMetadata() (retryWhy multiUpdateWhy, err error) {
 	}
 	groupExternal.updateLatest(latest)
 
-	const maxMissTime = 15 * time.Second
-
 	// If we are consuming with regex and fetched all topics, the metadata
 	// may have returned topics the consumer is not yet tracking. We ensure
 	// that we will store the topics at the end of our metadata update.
 	tpsConsumerLoad := tpsConsumer.load()
-	if all && len(latest) > 0 {
+	if all {
 		allTopics := make([]string, 0, len(latest))
 		for topic := range latest {
 			allTopics = append(allTopics, topic)
@@ -356,16 +354,16 @@ func (cl *Client) updateMetadata() (retryWhy multiUpdateWhy, err error) {
 		defer tpsConsumer.storeData(tpsConsumerLoad)
 
 		// For regex consuming, if a topic is not returned in the
-		// response and for at least maxMissTime from when we first
-		// discovered it, we assume the topic has been deleted and
-		// purge it. We allow for maxMissTime because (in testing
-		// locally) Kafka can originally broadcast a newly created
-		// topic exists and then fail to broadcast that info again for
-		// a while.
+		// response and for at least missingTopicDelete from when we
+		// first discovered it, we assume the topic has been deleted
+		// and purge it. We allow for missingTopicDelete because (in
+		// testing locally) Kafka can originally broadcast a newly
+		// created topic exists and then fail to broadcast that info
+		// again for a while.
 		var purgeTopics []string
 		for topic, tps := range tpsConsumerLoad {
 			if _, ok := latest[topic]; !ok {
-				if td := tps.load(); td.when != 0 && time.Since(time.Unix(td.when, 0)) > maxMissTime {
+				if td := tps.load(); td.when != 0 && time.Since(time.Unix(td.when, 0)) > cl.cfg.missingTopicDelete {
 					purgeTopics = append(purgeTopics, td.topic)
 				} else {
 					retryWhy.add(topic, -1, errMissingTopic)
@@ -445,7 +443,7 @@ func (cl *Client) updateMetadata() (retryWhy multiUpdateWhy, err error) {
 		var bumpFail []string
 		for _, tps := range missingProduceTopics {
 			if all {
-				if td := tps.load(); td.when != 0 && time.Since(time.Unix(td.when, 0)) > maxMissTime {
+				if td := tps.load(); td.when != 0 && time.Since(time.Unix(td.when, 0)) > cl.cfg.missingTopicDelete {
 					bumpFail = append(bumpFail, td.topic)
 				} else {
 					retryWhy.add(td.topic, -1, errMissingTopic)
@@ -683,6 +681,7 @@ func (cl *Client) mergeTopicPartitions(
 
 	lv.loadErr = r.loadErr
 	lv.isInternal = r.isInternal
+	lv.topic = r.topic
 	if lv.when == 0 {
 		lv.when = r.when
 	}
@@ -874,6 +873,18 @@ type multiUpdateWhy map[kerrOrString]map[string]map[int32]struct{}
 type kerrOrString struct {
 	k *kerr.Error
 	s string
+}
+
+func (m *multiUpdateWhy) isOnly(err error) bool {
+	if m == nil {
+		return false
+	}
+	for e := range *m {
+		if !errors.Is(err, e.k) {
+			return false
+		}
+	}
+	return true
 }
 
 func (m *multiUpdateWhy) add(t string, p int32, err error) {

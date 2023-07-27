@@ -121,6 +121,7 @@ type cfg struct {
 	recordTimeout       time.Duration
 	manualFlushing      bool
 	txnBackoff          time.Duration
+	missingTopicDelete  time.Duration
 
 	partitioner Partitioner
 
@@ -480,8 +481,9 @@ func defaultCfg() cfg {
 		maxBrokerWriteBytes: 100 << 20, // Kafka socket.request.max.bytes default is 100<<20
 		maxBrokerReadBytes:  100 << 20,
 
-		metadataMaxAge: 5 * time.Minute,
-		metadataMinAge: 5 * time.Second / 2,
+		metadataMaxAge:     5 * time.Minute,
+		metadataMinAge:     5 * time.Second,
+		missingTopicDelete: 15 * time.Second,
 
 		//////////////
 		// producer //
@@ -787,7 +789,7 @@ func MetadataMaxAge(age time.Duration) Opt {
 }
 
 // MetadataMinAge sets the minimum time between metadata queries, overriding
-// the default 2.5s. You may want to raise or lower this to reduce the number of
+// the default 5s. You may want to raise or lower this to reduce the number of
 // metadata queries the client will make. Notably, if metadata detects an error
 // in any topic or partition, it triggers itself to update as soon as allowed.
 func MetadataMinAge(age time.Duration) Opt {
@@ -829,6 +831,13 @@ func WithHooks(hooks ...Hook) Opt {
 // too long, the client progressively increases the backoff.
 func ConcurrentTransactionsBackoff(backoff time.Duration) Opt {
 	return clientOpt{func(cfg *cfg) { cfg.txnBackoff = backoff }}
+}
+
+// considerMissingTopicDeletedAfter sets the amount of time a topic can be
+// missing from metadata responses _after_ loading it at least once before it
+// is considered deleted.
+func considerMissingTopicDeletedAfter(t time.Duration) Opt {
+	return clientOpt{func(cfg *cfg) { cfg.missingTopicDelete = t }}
 }
 
 ////////////////////////////

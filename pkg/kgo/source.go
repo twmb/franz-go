@@ -680,8 +680,7 @@ func (s *source) fetch(consumerSession *consumerSession, doneFetch chan<- struct
 		reloadOffsets   listOrEpochLoads
 		preferreds      cursorPreferreds
 		allErrsStripped bool
-		updateMeta      bool
-		updateWhy       string
+		updateWhy       multiUpdateWhy
 		handled         = make(chan struct{})
 	)
 
@@ -692,7 +691,7 @@ func (s *source) fetch(consumerSession *consumerSession, doneFetch chan<- struct
 	// Processing the response only needs the source's nodeID and client.
 	go func() {
 		defer close(handled)
-		fetch, reloadOffsets, preferreds, allErrsStripped, updateMeta, updateWhy = s.handleReqResp(br, req, resp)
+		fetch, reloadOffsets, preferreds, allErrsStripped, updateWhy = s.handleReqResp(br, req, resp)
 	}()
 
 	select {
@@ -772,8 +771,21 @@ func (s *source) fetch(consumerSession *consumerSession, doneFetch chan<- struct
 		s.session.bumpEpoch(resp.SessionID)
 	}
 
-	if updateMeta && !reloadOffsets.loadWithSessionNow(consumerSession, updateWhy) {
-		s.cl.triggerUpdateMetadataNow(updateWhy)
+	// If we have a reason to update (per-partition fetch errors), and the
+	// reason is not just unknown topic or partition, then we immediately
+	// update metadata. We avoid updating for unknown because it _likely_
+	// means the topic does not exist and reloading is wasteful. We only
+	// trigger a metadata update if we have no reload offsets. Having
+	// reload offsets *always* triggers a metadata update.
+	if updateWhy != nil {
+		why := updateWhy.reason("fetch had inner topic errors")
+		if !reloadOffsets.loadWithSessionNow(consumerSession, why) {
+			if updateWhy.isOnly(kerr.UnknownTopicOrPartition) || updateWhy.isOnly(kerr.UnknownTopicID) {
+				s.cl.triggerUpdateMetadata(false, why)
+			} else {
+				s.cl.triggerUpdateMetadataNow(why)
+			}
+		}
 	}
 
 	if fetch.hasErrorsOrRecords() {
@@ -808,12 +820,10 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 	reloadOffsets listOrEpochLoads,
 	preferreds cursorPreferreds,
 	allErrsStripped bool,
-	updateMeta bool,
-	why string,
+	updateWhy multiUpdateWhy,
 ) {
 	f = Fetch{Topics: make([]FetchTopic, 0, len(resp.Topics))}
 	var (
-		updateWhy        multiUpdateWhy
 		debugWhyStripped multiUpdateWhy
 		numErrsStripped  int
 		kip320           = s.cl.supportsOffsetForLeaderEpoch()
@@ -878,7 +888,6 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 
 			fp := partOffset.processRespPartition(br, rp, s.cl.decompressor, s.cl.cfg.hooks)
 			if fp.Err != nil {
-				updateMeta = true
 				updateWhy.add(topic, partition, fp.Err)
 			}
 
@@ -1024,7 +1033,7 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 		s.cl.cfg.logger.Log(LogLevelDebug, "fetch stripped partitions", "why", debugWhyStripped.reason(""))
 	}
 
-	return f, reloadOffsets, preferreds, req.numOffsets == numErrsStripped, updateMeta, updateWhy.reason("fetch had inner topic errors")
+	return f, reloadOffsets, preferreds, req.numOffsets == numErrsStripped, updateWhy
 }
 
 // processRespPartition processes all records in all potentially compressed
