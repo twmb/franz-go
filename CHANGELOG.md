@@ -1,11 +1,19 @@
+v1.14.3
+===
+
+This patch fixes regex consuming a deleted topic causing an unending internal
+loop of metadata reloading (trying to discover where the topic went).
+
+- [`627d39a`](https://github.com/twmb/franz-go/commit/627d39a) **bugfix** kgo: fix / improve handling deleted topics while regex consuming
+
 v1.14.2
 ===
 
 This patch fixes an internal logic race that can be easily encountered when
-easily specifying exact offsets to consume from. If you encountered this bug,
-your consumer could just stop consuming for an indeterminite amount of time.
-This bug has existed for a _long_ time and relies on both the client being slow
-and the broker being fast to hit.
+specifying exact offsets to consume from. If you encountered this bug, your
+consumer could just stop consuming for an indeterminite amount of time. This
+bug has existed for a _long_ time and relies on both the client being slow and
+the broker being fast to hit.
 
 - [`1f696ca`](https://github.com/twmb/franz-go/commit/1f696ca) **bugfix** kgo: avoid a consumer logic race where the consumer stops consuming
 
