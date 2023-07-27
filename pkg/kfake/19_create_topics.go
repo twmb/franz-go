@@ -60,6 +60,10 @@ topics:
 			donet(rt.Topic, kerr.InvalidReplicationFactor.Code)
 			continue
 		}
+		if rt.NumPartitions == 0 {
+			donet(rt.Topic, kerr.InvalidPartitions.Code)
+			continue
+		}
 		configs := make(map[string]*string)
 		for _, c := range rt.Configs {
 			if ok := validateSetTopicConfig(c.Name, c.Value); !ok {
