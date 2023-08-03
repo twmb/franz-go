@@ -77,6 +77,8 @@ func NewCluster(opts ...Opt) (c *Cluster, err error) {
 
 		minSessionTimeout: 6 * time.Second,
 		maxSessionTimeout: 5 * time.Minute,
+
+		sasls: make(map[struct{ m, u string }]string),
 	}
 	for _, opt := range opts {
 		opt.apply(&cfg)
