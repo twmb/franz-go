@@ -138,7 +138,7 @@ func SkipKeys(keys ...int16) VersionGuessOpt {
 }
 
 // TryRaftBroker changes from guessing the version for a classical ZooKeeper
-// based broker to guessing for a raft based broker (v2.8.0+).
+// based broker to guessing for a raft based broker (v2.8+).
 //
 // Note that with raft, there can be a TryRaftController attempt as well.
 func TryRaftBroker() VersionGuessOpt {
@@ -147,7 +147,7 @@ func TryRaftBroker() VersionGuessOpt {
 
 // TryRaftController changes from guessing the version for a classical
 // ZooKeeper based broker to guessing for a raft based controller broker
-// (v2.8.0+).
+// (v2.8+).
 //
 // Note that with raft, there can be a TryRaftBroker attempt as well. Odds are
 // that if you are an end user speaking to a raft based Kafka cluster, you are
@@ -164,7 +164,7 @@ type guessCfg struct {
 
 // VersionGuess attempts to guess which version of Kafka these versions belong
 // to. If an exact match can be determined, this returns a string in the format
-// v0.#.# or v#.# (depending on whether Kafka is pre-1.0.0 or post). For
+// v0.#.# or v#.# (depending on whether Kafka is pre-1.0 or post). For
 // example, v0.8.0 or v2.7.
 //
 // Patch numbers are not included in the guess as it is not possible to
@@ -253,7 +253,15 @@ func (g guess) String() string {
 func (vs *Versions) versionGuess(opts ...VersionGuessOpt) guess {
 	cfg := guessCfg{
 		listener: zkBroker,
-		skipKeys: []int16{4, 5, 6, 7, 27},
+		// Envelope was added in 2.7 for kraft and zkBroker in 3.4; we
+		// need to skip it for 2.7 through 3.4 otherwise the version
+		// detection fails. We can just skip it generally since there
+		// are enough differentiating factors that accurately detecting
+		// envelope doesn't matter.
+		//
+		// TODO: add introduced-version to differentiate some specific
+		// keys.
+		skipKeys: []int16{4, 5, 6, 7, 27, 58},
 	}
 	for _, opt := range opts {
 		opt.apply(&cfg)
