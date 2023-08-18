@@ -1,3 +1,11 @@
+v1.14.4
+===
+
+This small patch fixes kversion.VersionGuess to properly guess versions against
+zookeeper broker versions v2.7 through 3.4. See the commit for details.
+
+- [`5978156`](https://github.com/twmb/franz-go/commit/5978156) **bugfix** kversion: fix version detection for Kafka v2.7 through 3.4
+
 v1.14.3
 ===
 
