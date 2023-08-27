@@ -70,11 +70,6 @@ func GenerateFn(fn func() any) EncodingOpt {
 	return encodingOpt{func(t *tserde) { t.gen = fn }}
 }
 
-// ID forces Serde.Encode to use the specified schema ID.
-func ID(id int) EncodingOpt {
-	return encodingOpt{func(opts *tserde) { opts.id = uint32(id) }}
-}
-
 // Index attaches a message index to a value. A single schema ID can be
 // registered multiple times with different indices.
 //
@@ -201,10 +196,6 @@ func (s *Serde) Register(id int, v any, opts ...EncodingOpt) {
 	for _, opt := range opts {
 		opt.apply(&t)
 	}
-	if id > 0 {
-		// The explicitly supplied id takes precedence over an ID EncodingOpt.
-		t.id = uint32(id)
-	}
 
 	typeof := reflect.TypeOf(v)
 
@@ -218,7 +209,7 @@ func (s *Serde) Register(id int, v any, opts ...EncodingOpt) {
 	}
 
 	// For IDs, we deeply clone any path that is changing.
-	dupIDs := tserdeMapClone(s.loadIDs(), int(t.id), t.index)
+	dupIDs := tserdeMapClone(s.loadIDs(), id, t.index)
 
 	// We defer the store because we modify the tserde below, and we
 	// may delete a type key.
@@ -231,7 +222,7 @@ func (s *Serde) Register(id int, v any, opts ...EncodingOpt) {
 	// Now we have a full path down index initialized (or, the top
 	// level map if there is no index). We iterate down the index
 	// tree to find the end node we are initializing.
-	k := int(t.id)
+	k := id
 	m := dupIDs
 	at := m[k]
 	depth := len(t.index)
@@ -261,7 +252,7 @@ func (s *Serde) Register(id int, v any, opts ...EncodingOpt) {
 
 	// Now, we initialize the end node.
 	t = tserde{
-		id:            t.id,
+		id:            uint32(id),
 		exists:        true,
 		encode:        t.encode,
 		appendEncode:  t.appendEncode,
