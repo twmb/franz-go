@@ -112,8 +112,8 @@ func Index(index ...int) EncodingOpt {
 }
 
 // Header defines the SerdeHeader used to encode and decode the message header.
-func Header( /* TODO header arg */ ) SerdeOpt {
-	return serdeOpt{func(s *Serde) { /* TODO set header */ }}
+func Header(header SerdeHeader) SerdeOpt {
+	return serdeOpt{func(s *Serde) { s.h = header }}
 }
 
 type tserde struct {
