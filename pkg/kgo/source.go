@@ -484,6 +484,23 @@ func (s *source) loopFetch() {
 
 	if session == noConsumerSession {
 		s.fetchState.hardFinish()
+		// It is possible that we were triggered to consume while we
+		// had no consumer session, and then *after* loopFetch loaded
+		// noConsumerSession, the session was saved and triggered to
+		// consume again. If this function is slow the first time
+		// around, it could still be running and about to hardFinish.
+		// The second trigger will do nothing, and then we hardFinish
+		// and block a new session from actually starting consuming.
+		//
+		// To guard against this, after we hard finish, we load the
+		// session again: if it is *not* noConsumerSession, we trigger
+		// attempting to consume again. Worst case, the trigger is
+		// useless and it will exit below when it builds an empty
+		// request.
+		sessionNow := consumer.loadSession()
+		if session != sessionNow {
+			s.maybeConsume()
+		}
 		return
 	}
 
@@ -624,7 +641,7 @@ func (s *source) fetch(consumerSession *consumerSession, doneFetch chan<- struct
 	}
 
 	var didBackoff bool
-	backoff := func() {
+	backoff := func(why interface{}) {
 		// We preemptively allow more fetches (since we are not buffering)
 		// and reset our session because of the error (who knows if kafka
 		// processed the request but the client failed to receive it).
@@ -633,7 +650,7 @@ func (s *source) fetch(consumerSession *consumerSession, doneFetch chan<- struct
 		s.session.reset()
 		didBackoff = true
 
-		s.cl.triggerUpdateMetadata(false, "opportunistic load during source backoff") // as good a time as any
+		s.cl.triggerUpdateMetadata(false, fmt.Sprintf("opportunistic load during source backoff: %v", why)) // as good a time as any
 		s.consecutiveFailures++
 		after := time.NewTimer(s.cl.cfg.retryBackoff(s.consecutiveFailures))
 		defer after.Stop()
@@ -652,7 +669,7 @@ func (s *source) fetch(consumerSession *consumerSession, doneFetch chan<- struct
 	// but that is fine; we may just re-request too early and fall into
 	// another backoff.
 	if err != nil {
-		backoff()
+		backoff(err)
 		return
 	}
 
@@ -663,8 +680,7 @@ func (s *source) fetch(consumerSession *consumerSession, doneFetch chan<- struct
 		reloadOffsets   listOrEpochLoads
 		preferreds      cursorPreferreds
 		allErrsStripped bool
-		updateMeta      bool
-		updateWhy       string
+		updateWhy       multiUpdateWhy
 		handled         = make(chan struct{})
 	)
 
@@ -675,7 +691,7 @@ func (s *source) fetch(consumerSession *consumerSession, doneFetch chan<- struct
 	// Processing the response only needs the source's nodeID and client.
 	go func() {
 		defer close(handled)
-		fetch, reloadOffsets, preferreds, allErrsStripped, updateMeta, updateWhy = s.handleReqResp(br, req, resp)
+		fetch, reloadOffsets, preferreds, allErrsStripped, updateWhy = s.handleReqResp(br, req, resp)
 	}()
 
 	select {
@@ -755,8 +771,21 @@ func (s *source) fetch(consumerSession *consumerSession, doneFetch chan<- struct
 		s.session.bumpEpoch(resp.SessionID)
 	}
 
-	if updateMeta && !reloadOffsets.loadWithSessionNow(consumerSession, updateWhy) {
-		s.cl.triggerUpdateMetadataNow(updateWhy)
+	// If we have a reason to update (per-partition fetch errors), and the
+	// reason is not just unknown topic or partition, then we immediately
+	// update metadata. We avoid updating for unknown because it _likely_
+	// means the topic does not exist and reloading is wasteful. We only
+	// trigger a metadata update if we have no reload offsets. Having
+	// reload offsets *always* triggers a metadata update.
+	if updateWhy != nil {
+		why := updateWhy.reason("fetch had inner topic errors")
+		if !reloadOffsets.loadWithSessionNow(consumerSession, why) {
+			if updateWhy.isOnly(kerr.UnknownTopicOrPartition) || updateWhy.isOnly(kerr.UnknownTopicID) {
+				s.cl.triggerUpdateMetadata(false, why)
+			} else {
+				s.cl.triggerUpdateMetadataNow(why)
+			}
+		}
 	}
 
 	if fetch.hasErrorsOrRecords() {
@@ -774,7 +803,7 @@ func (s *source) fetch(consumerSession *consumerSession, doneFetch chan<- struct
 		// fetching from topics that were deleted. We want to back off
 		// a bit rather than spin-loop immediately re-requesting
 		// deleted topics.
-		backoff()
+		backoff("empty fetch response due to all partitions having retryable errors")
 	}
 	return
 }
@@ -791,15 +820,22 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 	reloadOffsets listOrEpochLoads,
 	preferreds cursorPreferreds,
 	allErrsStripped bool,
-	updateMeta bool,
-	why string,
+	updateWhy multiUpdateWhy,
 ) {
 	f = Fetch{Topics: make([]FetchTopic, 0, len(resp.Topics))}
 	var (
-		updateWhy       multiUpdateWhy
-		numErrsStripped int
-		kip320          = s.cl.supportsOffsetForLeaderEpoch()
+		debugWhyStripped multiUpdateWhy
+		numErrsStripped  int
+		kip320           = s.cl.supportsOffsetForLeaderEpoch()
 	)
+
+	strip := func(t string, p int32, err error) {
+		numErrsStripped++
+		if s.cl.cfg.logger.Level() < LogLevelDebug {
+			return
+		}
+		debugWhyStripped.add(t, p, err)
+	}
 
 	for _, rt := range resp.Topics {
 		topic := rt.Topic
@@ -852,7 +888,6 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 
 			fp := partOffset.processRespPartition(br, rp, s.cl.decompressor, s.cl.cfg.hooks)
 			if fp.Err != nil {
-				updateMeta = true
 				updateWhy.add(topic, partition, fp.Err)
 			}
 
@@ -861,12 +896,12 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 			var keep bool
 			switch fp.Err {
 			default:
-				if kerr.IsRetriable(fp.Err) && !s.cl.cfg.keepFetchRetryableErrors {
+				if kerr.IsRetriable(fp.Err) && !s.cl.cfg.keepRetryableFetchErrors {
 					// UnknownLeaderEpoch: our meta is newer than the broker we fetched from
 					// OffsetNotAvailable: fetched from out of sync replica or a behind in-sync one (KIP-392 case 1 and case 2)
 					// UnknownTopicID: kafka has not synced the state on all brokers
 					// And other standard retryable errors.
-					numErrsStripped++
+					strip(topic, partition, fp.Err)
 				} else {
 					// - bad auth
 					// - unsupported compression
@@ -896,10 +931,10 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 				if fails := partOffset.from.unknownIDFails.Add(1); fails > 5 {
 					partOffset.from.unknownIDFails.Add(-1)
 					keep = true
-				} else if s.cl.cfg.keepFetchRetryableErrors {
+				} else if s.cl.cfg.keepRetryableFetchErrors {
 					keep = true
 				} else {
-					numErrsStripped++
+					strip(topic, partition, fp.Err)
 				}
 
 			case kerr.OffsetOutOfRange:
@@ -994,7 +1029,11 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 		}
 	}
 
-	return f, reloadOffsets, preferreds, req.numOffsets == numErrsStripped, updateMeta, updateWhy.reason("fetch had inner topic errors")
+	if s.cl.cfg.logger.Level() >= LogLevelDebug && len(debugWhyStripped) > 0 {
+		s.cl.cfg.logger.Log(LogLevelDebug, "fetch stripped partitions", "why", debugWhyStripped.reason(""))
+	}
+
+	return f, reloadOffsets, preferreds, req.numOffsets == numErrsStripped, updateWhy
 }
 
 // processRespPartition processes all records in all potentially compressed
@@ -1835,7 +1874,7 @@ func (f *fetchRequest) MaxVersion() int16 {
 	if f.disableIDs {
 		return 12
 	}
-	return 13
+	return 15
 }
 func (f *fetchRequest) SetVersion(v int16) { f.version = v }
 func (f *fetchRequest) GetVersion() int16  { return f.version }

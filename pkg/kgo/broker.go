@@ -82,11 +82,22 @@ type promisedResp struct {
 	readEnqueue  time.Time
 }
 
+// NodeName returns the name of a node, given the kgo internal node ID.
+//
+// Internally, seed brokers are stored with very negative node IDs, and these
+// node IDs are visible in the BrokerMetadata struct. You can use NodeName to
+// convert the negative node ID into "seed_#". Brokers discovered through
+// metadata responses have standard non-negative numbers and this function just
+// returns the number as a string.
+func NodeName(nodeID int32) string {
+	return logID(nodeID)
+}
+
 func logID(id int32) string {
 	if id >= -10 {
 		return strconv.FormatInt(int64(id), 10)
 	}
-	return "seed " + strconv.FormatInt(int64(id)-math.MinInt32, 10)
+	return "seed_" + strconv.FormatInt(int64(id)-math.MinInt32, 10)
 }
 
 // BrokerMetadata is metadata for a broker.
@@ -96,7 +107,8 @@ type BrokerMetadata struct {
 	// NodeID is the broker node ID.
 	//
 	// Seed brokers will have very negative IDs; kgo does not try to map
-	// seed brokers to loaded brokers.
+	// seed brokers to loaded brokers. You can use NodeName to convert
+	// the seed node ID into a formatted string.
 	NodeID int32
 
 	// Port is the port of the broker.
@@ -1205,10 +1217,10 @@ func (cxn *brokerCxn) readResponse(
 	bytesRead, buf, readWait, timeToRead, readErr := cxn.readConn(ctx, timeout, readEnqueue)
 
 	cxn.cl.cfg.hooks.each(func(h Hook) {
-		switch h := h.(type) {
-		case HookBrokerRead:
+		if h, ok := h.(HookBrokerRead); ok {
 			h.OnBrokerRead(cxn.b.meta, key, bytesRead, readWait, timeToRead, readErr)
-		case HookBrokerE2E:
+		}
+		if h, ok := h.(HookBrokerE2E); ok {
 			h.OnBrokerE2E(cxn.b.meta, key, BrokerE2E{
 				BytesWritten: bytesWritten,
 				BytesRead:    bytesRead,

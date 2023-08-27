@@ -46,6 +46,15 @@ func (o Offset) String() string {
 	}
 }
 
+// EpochOffset returns this offset as an EpochOffset, allowing visibility into
+// what this offset actually currently is.
+func (o Offset) EpochOffset() EpochOffset {
+	return EpochOffset{
+		Epoch:  o.epoch,
+		Offset: o.at,
+	}
+}
+
 // NewOffset creates and returns an offset to use in ConsumePartitions or
 // ConsumeResetOffset.
 //
@@ -187,6 +196,7 @@ type consumer struct {
 	sessionChangeMu sync.Mutex
 
 	session atomic.Value // *consumerSession
+	kill    atomic.Bool
 
 	usingCursors usedCursors
 
@@ -536,11 +546,9 @@ func (cl *Client) UpdateFetchMaxBytes(maxBytes, maxPartBytes int32) {
 // PauseFetchTopics sets the client to no longer fetch the given topics and
 // returns all currently paused topics. Paused topics persist until resumed.
 // You can call this function with no topics to simply receive the list of
-// currently paused topics.
-//
-// In contrast to the canonical Java client, this function does not clear
-// anything currently buffered. Buffered fetches containing paused topics are
-// still returned from polling.
+// currently paused topics. Pausing topics drops everything currently buffered
+// and kills any in flight fetch requests to ensure nothing that is paused
+// can be returned anymore from polling.
 //
 // Pausing topics is independent from pausing individual partitions with the
 // PauseFetchPartitions method. If you pause partitions for a topic with
@@ -555,6 +563,11 @@ func (cl *Client) PauseFetchTopics(topics ...string) []string {
 
 	c.pausedMu.Lock()
 	defer c.pausedMu.Unlock()
+	defer func() {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		c.assignPartitions(nil, assignBumpSession, nil, fmt.Sprintf("pausing fetch topics %v", topics))
+	}()
 
 	paused := c.clonePaused()
 	paused.addTopics(topics...)
@@ -565,11 +578,9 @@ func (cl *Client) PauseFetchTopics(topics ...string) []string {
 // PauseFetchPartitions sets the client to no longer fetch the given partitions
 // and returns all currently paused partitions. Paused partitions persist until
 // resumed. You can call this function with no partitions to simply receive the
-// list of currently paused partitions.
-//
-// In contrast to the canonical Java client, this function does not clear
-// anything currently buffered. Buffered fetches containing paused partitions
-// are still returned from polling.
+// list of currently paused partitions. Pausing partitions drops everything
+// currently buffered and kills any in flight fetch requests to ensure nothing
+// that is paused can be returned anymore from polling.
 //
 // Pausing individual partitions is independent from pausing topics with the
 // PauseFetchTopics method. If you pause partitions for a topic with
@@ -584,6 +595,11 @@ func (cl *Client) PauseFetchPartitions(topicPartitions map[string][]int32) map[s
 
 	c.pausedMu.Lock()
 	defer c.pausedMu.Unlock()
+	defer func() {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		c.assignPartitions(nil, assignBumpSession, nil, fmt.Sprintf("pausing fetch partitions %v", topicPartitions))
+	}()
 
 	paused := c.clonePaused()
 	paused.addPartitions(topicPartitions)
@@ -749,6 +765,91 @@ func (cl *Client) AddConsumeTopics(topics ...string) {
 	cl.triggerUpdateMetadataNow("from AddConsumeTopics")
 }
 
+// AddConsumePartitions adds new partitions to be consumed at the given
+// offsets. This function works only for direct, non-regex consumers.
+func (cl *Client) AddConsumePartitions(partitions map[string]map[int32]Offset) {
+	c := &cl.consumer
+	if c.d == nil || cl.cfg.regex {
+		return
+	}
+	var topics []string
+	for t, ps := range partitions {
+		if len(ps) == 0 {
+			delete(partitions, t)
+			continue
+		}
+		topics = append(topics, t)
+	}
+	if len(partitions) == 0 {
+		return
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.d.tps.storeTopics(topics)
+	for t, ps := range partitions {
+		if c.d.ps[t] == nil {
+			c.d.ps[t] = make(map[int32]Offset)
+		}
+		for p, o := range ps {
+			c.d.m.add(t, p)
+			c.d.ps[t][p] = o
+		}
+	}
+	cl.triggerUpdateMetadataNow("from AddConsumePartitions")
+}
+
+// RemoveConsumePartitions removes partitions from being consumed. This
+// function works only for direct, non-regex consumers.
+//
+// This method does not purge the concept of any topics from the client -- if
+// you remove all partitions from a topic that was being consumed, metadata
+// fetches will still occur for the topic. If you want to remove the topic
+// entirely, use PurgeTopicsFromClient.
+//
+// If you specified ConsumeTopics and this function removes all partitions for
+// a topic, the topic will no longer be consumed.
+func (cl *Client) RemoveConsumePartitions(partitions map[string][]int32) {
+	c := &cl.consumer
+	if c.d == nil || cl.cfg.regex {
+		return
+	}
+	for t, ps := range partitions {
+		if len(ps) == 0 {
+			delete(partitions, t)
+			continue
+		}
+	}
+	if len(partitions) == 0 {
+		return
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	removeOffsets := make(map[string]map[int32]Offset, len(partitions))
+	for t, ps := range partitions {
+		removePartitionOffsets := make(map[int32]Offset, len(ps))
+		for _, p := range ps {
+			removePartitionOffsets[p] = Offset{}
+		}
+		removeOffsets[t] = removePartitionOffsets
+	}
+
+	c.assignPartitions(removeOffsets, assignInvalidateMatching, c.d.tps, fmt.Sprintf("remove of %v requested", partitions))
+	for t, ps := range partitions {
+		for _, p := range ps {
+			c.d.using.remove(t, p)
+			c.d.m.remove(t, p)
+			delete(c.d.ps[t], p)
+		}
+		if len(c.d.ps[t]) == 0 {
+			delete(c.d.ps, t)
+		}
+	}
+}
+
 // assignHow controls how assignPartitions operates.
 type assignHow int8
 
@@ -774,6 +875,10 @@ const (
 	// The counterpart to assignInvalidateMatching, assignSetMatching
 	// resets all matching partitions to the specified offset / epoch.
 	assignSetMatching
+
+	// For pausing, we want to drop anything inflight. We start a new
+	// session with the old tps.
+	assignBumpSession
 )
 
 func (h assignHow) String() string {
@@ -788,6 +893,8 @@ func (h assignHow) String() string {
 		return "unassigning and purging any partition matching the input topics"
 	case assignSetMatching:
 		return "reassigning any currently assigned matching partition to the input"
+	case assignBumpSession:
+		return "bumping internal consumer session to drop anything currently in flight"
 	}
 	return ""
 }
@@ -821,9 +928,19 @@ func (f fmtAssignment) String() string {
 	return sb.String()
 }
 
-// assignPartitions, called under the consumer's mu, is used to set new
-// cursors or add to the existing cursors.
+// assignPartitions, called under the consumer's mu, is used to set new cursors
+// or add to the existing cursors.
+//
+// We do not need to pass tps when we are bumping the session or when we are
+// invalidating all. All other cases, we want the tps -- the logic below does
+// not fully differentiate needing to start a new session vs. just reusing the
+// old (third if case below)
 func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how assignHow, tps *topicsPartitions, why string) {
+	if c.mu.TryLock() {
+		c.mu.Unlock()
+		panic("assignPartitions called without holding the consumer lock, this is a bug in franz-go, please open an issue at github.com/twmb/franz-go")
+	}
+
 	// The internal code can avoid giving an assign reason in cases where
 	// the caller logs itself immediately before assigning. We only log if
 	// there is a reason.
@@ -858,6 +975,8 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how
 		// if we had no session before, which is why we need to pass in
 		// our topicPartitions.
 		session = c.guardSessionChange(tps)
+	} else if how == assignBumpSession {
+		loadOffsets, tps = c.stopSession()
 	} else {
 		loadOffsets, _ = c.stopSession()
 
@@ -904,7 +1023,7 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how
 		// assignment went straight to listing / epoch loading, and
 		// that list/epoch never finished.
 		switch how {
-		case assignWithoutInvalidating:
+		case assignWithoutInvalidating, assignBumpSession:
 			// Nothing to do -- this is handled above.
 		case assignInvalidateAll:
 			loadOffsets = listOrEpochLoads{}
@@ -945,7 +1064,7 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how
 
 	// This assignment could contain nothing (for the purposes of
 	// invalidating active fetches), so we only do this if needed.
-	if len(assignments) == 0 || how == assignInvalidateMatching || how == assignPurgeMatching || how == assignSetMatching {
+	if len(assignments) == 0 || how != assignWithoutInvalidating {
 		return
 	}
 
@@ -1452,7 +1571,7 @@ func (c *consumer) stopSession() (listOrEpochLoads, *topicsPartitions) {
 	session := c.loadSession()
 
 	if session == noConsumerSession {
-		return listOrEpochLoads{}, noTopicsPartitions // we had no session
+		return listOrEpochLoads{}, nil // we had no session
 	}
 
 	// Before storing noConsumerSession, cancel our old. This pairs
@@ -1508,6 +1627,9 @@ func (c *consumer) stopSession() (listOrEpochLoads, *topicsPartitions) {
 // 1 worker allows for initialization work to prevent the session from being
 // immediately stopped.
 func (c *consumer) startNewSession(tps *topicsPartitions) *consumerSession {
+	if c.kill.Load() {
+		tps = nil
+	}
 	session := c.newConsumerSession(tps)
 	c.session.Store(session)
 
@@ -1695,7 +1817,7 @@ func (s *consumerSession) handleListOrEpochResults(loaded loadedOffsets) (reload
 
 		default: // from ErrorCode in a response, or broker request err, or request is canceled as our session is ending
 			reloads.addLoad(load.topic, load.partition, loaded.loadType, load.request)
-			if !kerr.IsRetriable(load.err) && !isRetryableBrokerErr(load.err) && !isDialErr(load.err) && !isContextErr(load.err) { // non-retryable response error; signal such in a response
+			if !kerr.IsRetriable(load.err) && !isRetryableBrokerErr(load.err) && !isDialNonTimeoutErr(load.err) && !isContextErr(load.err) { // non-retryable response error; signal such in a response
 				s.c.addFakeReadyForDraining(load.topic, load.partition, load.err, fmt.Sprintf("notification of non-retryable error from %s request", loaded.loadType))
 			}
 

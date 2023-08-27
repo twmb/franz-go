@@ -98,3 +98,18 @@ func Test_stickyAdjustCooperative(t *testing.T) {
 		t.Errorf("got plan != exp\ngot: %#v\nexp: %#v\n", inPlan, expPlan)
 	}
 }
+
+func TestNewConsumerBalancerIssue493(t *testing.T) {
+	m := kmsg.NewConsumerMemberMetadata()
+	m.Version = 0
+	m.Topics = []string{"foo"}
+	protoMeta := m.AppendTo(nil)
+	protoMeta[1] = 1
+	member := kmsg.NewJoinGroupResponseMember()
+	member.MemberID = "test"
+	member.ProtocolMetadata = protoMeta
+	_, err := NewConsumerBalancer(nil, []kmsg.JoinGroupResponseMember{member})
+	if err != nil {
+		t.Errorf("got unexpected error: %v", err)
+	}
+}

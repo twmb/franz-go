@@ -105,6 +105,9 @@ func (s scram) Authenticate(ctx context.Context, _ string) (sasl.Session, []byte
 	if err != nil {
 		return nil, nil, err
 	}
+	if auth.User == "" || auth.Pass == "" {
+		return nil, nil, errors.New(s.name + " user and pass must be non-empty")
+	}
 	if len(auth.Nonce) == 0 {
 		buf := make([]byte, 20)
 		if _, err = rand.Read(buf); err != nil {

@@ -1,6 +1,7 @@
 package kfake
 
 import (
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"math/rand"
@@ -76,6 +77,8 @@ func NewCluster(opts ...Opt) (c *Cluster, err error) {
 
 		minSessionTimeout: 6 * time.Second,
 		maxSessionTimeout: 5 * time.Minute,
+
+		sasls: make(map[struct{ m, u string }]string),
 	}
 	for _, opt := range opts {
 		opt.apply(&cfg)
@@ -144,7 +147,7 @@ func NewCluster(opts ...Opt) (c *Cluster, err error) {
 		if len(cfg.ports) > 0 {
 			port = cfg.ports[i]
 		}
-		ln, err := newListener(port)
+		ln, err := newListener(port, c.cfg.tls)
 		if err != nil {
 			c.Close()
 			return nil, err
@@ -160,6 +163,20 @@ func NewCluster(opts ...Opt) (c *Cluster, err error) {
 	}
 	c.controller = c.bs[len(c.bs)-1]
 	go c.run()
+
+	seedTopics := make(map[string]int32)
+	for _, sts := range cfg.seedTopics {
+		p := sts.p
+		if p < 1 {
+			p = int32(cfg.defaultNumParts)
+		}
+		for _, t := range sts.ts {
+			seedTopics[t] = p
+		}
+	}
+	for t, p := range seedTopics {
+		c.data.mkt(t, int(p), -1, nil)
+	}
 	return c, nil
 }
 
@@ -185,8 +202,15 @@ func (c *Cluster) Close() {
 	}
 }
 
-func newListener(port int) (net.Listener, error) {
-	return net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+func newListener(port int, tc *tls.Config) (net.Listener, error) {
+	l, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	if err != nil {
+		return nil, err
+	}
+	if tc != nil {
+		l = tls.NewListener(l, tc)
+	}
+	return l, nil
 }
 
 func (b *broker) listen() {
@@ -389,20 +413,21 @@ func (c *Cluster) tryControl(kreq kmsg.Request, b *broker) (kresp kmsg.Response,
 	if len(c.control) == 0 {
 		return nil, nil, false
 	}
-
-	keyFns := c.control[kreq.Key()]
-	for i, fn := range keyFns {
-		kresp, err, handled = c.callControl(kreq.Key(), kreq, fn)
-		if handled {
-			c.control[kreq.Key()] = append(keyFns[:i], keyFns[i+1:]...)
-			return
-		}
+	kresp, err, handled = c.tryControlKey(kreq.Key(), kreq, b)
+	if !handled {
+		kresp, err, handled = c.tryControlKey(-1, kreq, b)
 	}
-	anyFns := c.control[-1]
-	for i, fn := range anyFns {
-		kresp, err, handled = c.callControl(-1, kreq, fn)
+	return kresp, err, handled
+}
+
+func (c *Cluster) tryControlKey(key int16, kreq kmsg.Request, b *broker) (kresp kmsg.Response, err error, handled bool) {
+	for i, fn := range c.control[key] {
+		kresp, err, handled = c.callControl(key, kreq, fn)
 		if handled {
-			c.control[-1] = append(anyFns[:i], anyFns[i+1:]...)
+			// fn may have called Control, ControlKey, or KeepControl,
+			// all of which will append to c.control; refresh the slice.
+			fns := c.control[key]
+			c.control[key] = append(fns[:i], fns[i+1:]...)
 			return
 		}
 	}
@@ -491,7 +516,7 @@ func (c *Cluster) AddNode(nodeID int32, port int) (int32, int, error) {
 			port = 0
 		}
 		var ln net.Listener
-		if ln, err = newListener(port); err != nil {
+		if ln, err = newListener(port, c.cfg.tls); err != nil {
 			return
 		}
 		_, strPort, _ := net.SplitHostPort(ln.Addr().String())

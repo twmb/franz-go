@@ -326,7 +326,7 @@ func (s *sink) produce(sem <-chan struct{}) bool {
 		batchesStripped, err := s.doTxnReq(req, txnReq)
 		if err != nil {
 			switch {
-			case isRetryableBrokerErr(err) || isDialErr(err):
+			case isRetryableBrokerErr(err) || isDialNonTimeoutErr(err):
 				s.cl.bumpRepeatedLoadErr(err)
 				s.cl.cfg.logger.Log(LogLevelWarn, "unable to AddPartitionsToTxn due to retryable broker err, bumping client's buffered record load errors by 1 and retrying", "err", err)
 				s.cl.triggerUpdateMetadata(false, "attempting to refresh broker list due to failed AddPartitionsToTxn requests")
@@ -532,7 +532,7 @@ func (s *sink) handleReqClientErr(req *produceRequest, err error) {
 		fallthrough
 
 	case errors.Is(err, errUnknownBroker),
-		isDialErr(err),
+		isDialNonTimeoutErr(err),
 		isRetryableBrokerErr(err):
 		updateMeta := !isRetryableBrokerErr(err)
 		if updateMeta {
@@ -1269,7 +1269,7 @@ func (recBuf *recBuf) bumpRepeatedLoadErr(err error) {
 	var (
 		canFail        = !recBuf.cl.idempotent() || batch0.canFailFromLoadErrs // we can only fail if we are not idempotent or if we have no outstanding requests
 		batch0Fail     = batch0.maybeFailErr(&recBuf.cl.cfg) != nil            // timeout, retries, or aborting
-		netErr         = isRetryableBrokerErr(err) || isDialErr(err)           // we can fail if this is *not* a network error
+		netErr         = isRetryableBrokerErr(err) || isDialNonTimeoutErr(err) // we can fail if this is *not* a network error
 		retryableKerr  = kerr.IsRetriable(err)                                 // we fail if this is not a retryable kerr,
 		isUnknownLimit = recBuf.checkUnknownFailLimit(err)                     // or if it is, but it is UnknownTopicOrPartition and we are at our limit
 

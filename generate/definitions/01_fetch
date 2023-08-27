@@ -10,14 +10,23 @@
 //
 // Starting in v13, topics must use UUIDs rather than their string name
 // identifiers.
-FetchRequest => key 1, max version 13, flexible v12+
+//
+// Version 15 adds the ReplicaState which includes new field ReplicaEpoch and
+// the ReplicaID, and deprecates the old ReplicaID (KIP-903).
+FetchRequest => key 1, max version 15, flexible v12+
   // The cluster ID, if known. This is used to validate metadata fetches
   // prior to broker registration.
   ClusterID: nullable-string(null) // tag 0
   // ReplicaID is the broker ID of performing the fetch request. Standard
   // clients should use -1. To be a "debug" replica, use -2. The debug
   // replica can be used to fetch messages from non-leaders.
-  ReplicaID: int32
+  ReplicaID: int32(-1) // v0-v14
+  // ReplicaState is a broker-only tag for v15+, see KIP-903 for more details.
+  ReplicaState: => // tag 1
+    // The replica ID of the follower, or -1 if this request is from a consumer.
+    ID: int32(-1)
+    // The epoch of this follower, or -1 if not available.
+    Epoch: int64(-1)
   // MaxWaitMillis is how long to wait for MinBytes to be hit before a broker
   // responds to a fetch request.
   MaxWaitMillis: int32
@@ -158,7 +167,11 @@ FetchResponse =>
       // OFFSET_OUT_OF_RANGE is returned if requesting an offset past the
       // current end offset or before the beginning offset.
       //
-      // UNKNOWN_TOPIC_ID is returned if using uuid's and the uuid is unknown.
+      // UNKNOWN_TOPIC_ID is returned if using uuid's and the uuid is unknown
+      // (v13+ / Kafka 3.1+).
+      //
+      // OFFSET_MOVED_TO_TIERED_STORAGE is returned if a follower is trying to
+      // fetch from an offset that is now in tiered storage.
       ErrorCode: int16
       // HighWatermark is the current high watermark for this partition,
       // that is, the current offset that is on all in sync replicas.

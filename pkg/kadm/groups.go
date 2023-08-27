@@ -208,7 +208,7 @@ func (ls ListedGroups) Groups() []string {
 // states. By default, this returns all groups. In almost all cases,
 // DescribeGroups is more useful.
 //
-// This may return *ShardErrors.
+// This may return *ShardErrors or *AuthError.
 func (cl *Client) ListGroups(ctx context.Context, filterStates ...string) (ListedGroups, error) {
 	req := kmsg.NewPtrListGroupsRequest()
 	req.StatesFilter = append(req.StatesFilter, filterStates...)
@@ -237,7 +237,7 @@ func (cl *Client) ListGroups(ctx context.Context, filterStates ...string) (Liste
 // DescribeGroups describes either all groups specified, or all groups in the
 // cluster if none are specified.
 //
-// This may return *ShardErrors.
+// This may return *ShardErrors or *AuthError.
 //
 // If no groups are specified and this method first lists groups, and list
 // groups returns a *ShardErrors, this function describes all successfully
@@ -1219,6 +1219,209 @@ func (l GroupTopicsLag) Sorted() []TopicLag {
 		return all[i].Topic < all[j].Topic
 	})
 	return all
+}
+
+// DescribedGroupLag contains a described group and its lag, or the errors that
+// prevent the lag from being calculated.
+type DescribedGroupLag struct {
+	Group string // Group is the group name.
+
+	Coordinator  BrokerDetail           // Coordinator is the coordinator broker for this group.
+	State        string                 // State is the state this group is in (Empty, Dead, Stable, etc.).
+	ProtocolType string                 // ProtocolType is the type of protocol the group is using, "consumer" for normal consumers, "connect" for Kafka connect.
+	Protocol     string                 // Protocol is the partition assignor strategy this group is using.
+	Members      []DescribedGroupMember // Members contains the members of this group sorted first by InstanceID, or if nil, by MemberID.
+	Lag          GroupLag               // Lag is the lag for the group.
+
+	DescribeErr error // DescribeErr is the error returned from describing the group, if any.
+	FetchErr    error // FetchErr is the error returned from fetching offsets, if any.
+}
+
+// Err returns the first of DescribeErr or FetchErr that is non-nil.
+func (l *DescribedGroupLag) Error() error {
+	if l.DescribeErr != nil {
+		return l.DescribeErr
+	}
+	return l.FetchErr
+}
+
+// DescribedGroupLags is a map of group names to the described group with its
+// lag, or error for those groups.
+type DescribedGroupLags map[string]DescribedGroupLag
+
+// Sorted returns all lags sorted by group name.
+func (ls DescribedGroupLags) Sorted() []DescribedGroupLag {
+	s := make([]DescribedGroupLag, 0, len(ls))
+	for _, l := range ls {
+		s = append(s, l)
+	}
+	sort.Slice(s, func(i, j int) bool { return s[i].Group < s[j].Group })
+	return s
+}
+
+// EachError calls fn for every group that has a non-nil error.
+func (ls DescribedGroupLags) EachError(fn func(l DescribedGroupLag)) {
+	for _, l := range ls {
+		if l.Error() != nil {
+			fn(l)
+		}
+	}
+}
+
+// Each calls fn for every group.
+func (ls DescribedGroupLags) Each(fn func(l DescribedGroupLag)) {
+	for _, l := range ls {
+		fn(l)
+	}
+}
+
+// Error iterates over all groups and returns the first error encountered, if
+// any.
+func (ls DescribedGroupLags) Error() error {
+	for _, l := range ls {
+		if l.Error() != nil {
+			return l.Error()
+		}
+	}
+	return nil
+}
+
+// Ok returns true if there are no errors. This is a shortcut for ls.Error() ==
+// nil.
+func (ls DescribedGroupLags) Ok() bool {
+	return ls.Error() == nil
+}
+
+// Lag returns the lag for all input groups. This function is a shortcut for
+// the steps required to use CalculateGroupLag properly, with some opinionated
+// choices for error handling since calculating lag is multi-request process.
+// If a group cannot be described or the offsets cannot be fetched, an error is
+// returned for the group. If any topic cannot have its end offsets listed, the
+// lag for the partition has a corresponding error. If any request fails with
+// an auth error, this returns *AuthError.
+func (cl *Client) Lag(ctx context.Context, groups ...string) (DescribedGroupLags, error) {
+	set := make(map[string]struct{}, len(groups))
+	for _, g := range groups {
+		set[g] = struct{}{}
+	}
+	rem := func() []string {
+		groups = groups[:0]
+		for g := range set {
+			groups = append(groups, g)
+		}
+		return groups
+	}
+	lags := make(DescribedGroupLags)
+
+	described, err := cl.DescribeGroups(ctx, rem()...)
+	// For auth err: always return.
+	// For shard errors, if we had some partial success, then we continue
+	// to the rest of the logic in this function.
+	// If every shard failed, or on all other errors, we return.
+	var ae *AuthError
+	var se *ShardErrors
+	switch {
+	case errors.As(err, &ae):
+		return nil, err
+	case errors.As(err, &se) && !se.AllFailed:
+		for _, se := range se.Errs {
+			for _, g := range se.Req.(*kmsg.DescribeGroupsRequest).Groups {
+				lags[g] = DescribedGroupLag{
+					Group:       g,
+					Coordinator: se.Broker,
+					DescribeErr: se.Err,
+				}
+				delete(set, g)
+			}
+		}
+	case err != nil:
+		return nil, err
+	}
+	for _, g := range described {
+		lags[g.Group] = DescribedGroupLag{
+			Group:        g.Group,
+			Coordinator:  g.Coordinator,
+			State:        g.State,
+			ProtocolType: g.ProtocolType,
+			Protocol:     g.Protocol,
+			Members:      g.Members,
+			DescribeErr:  g.Err,
+		}
+		if g.Err != nil {
+			delete(set, g.Group)
+		}
+	}
+	if len(set) == 0 {
+		return lags, nil
+	}
+
+	// Same thought here. For auth errors, we always return.
+	// If a group offset fetch failed, we delete it from described
+	// because we cannot calculate lag for it.
+	fetched := cl.FetchManyOffsets(ctx, rem()...)
+	for _, r := range fetched {
+		switch {
+		case errors.As(r.Err, &ae):
+			return nil, err
+		case r.Err != nil:
+			l := lags[r.Group]
+			l.FetchErr = r.Err
+			lags[r.Group] = l
+			delete(set, r.Group)
+			delete(described, r.Group)
+		}
+	}
+	if len(set) == 0 {
+		return lags, nil
+	}
+
+	// Lastly, we have to list the end offset for all assigned and
+	// committed partitions.
+	var listed ListedOffsets
+	listPartitions := described.AssignedPartitions()
+	listPartitions.Merge(fetched.CommittedPartitions())
+	if topics := listPartitions.Topics(); len(topics) > 0 {
+		listed, err = cl.ListEndOffsets(ctx, topics...)
+		// As above: return on auth error. If there are shard errors,
+		// the topics will be missing in the response and then
+		// CalculateGroupLag will return UnknownTopicOrPartition.
+		switch {
+		case errors.As(err, &ae):
+			return nil, err
+		case errors.As(err, &se):
+			// do nothing: these show up as errListMissing
+		case err != nil:
+			return nil, err
+		}
+		// For anything that lists with a single -1 partition, the
+		// topic does not exist. We add an UnknownTopicOrPartition
+		// error for all partitions that were committed to, so that
+		// this shows up in the lag output as UnknownTopicOrPartition
+		// rather than errListMissing.
+		for t, ps := range listed {
+			if len(ps) != 1 {
+				continue
+			}
+			if _, ok := ps[-1]; !ok {
+				continue
+			}
+			delete(ps, -1)
+			for p := range listPartitions[t] {
+				ps[p] = ListedOffset{
+					Topic:     t,
+					Partition: p,
+					Err:       kerr.UnknownTopicOrPartition,
+				}
+			}
+		}
+	}
+
+	for _, g := range described {
+		l := lags[g.Group]
+		l.Lag = CalculateGroupLag(g, fetched[g.Group].Fetched, listed)
+		lags[g.Group] = l
+	}
+	return lags, nil
 }
 
 // CalculateGroupLag returns the per-partition lag of all members in a group.

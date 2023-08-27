@@ -33,7 +33,8 @@ var crc32c = crc32.MakeTable(crc32.Castagnoli) // record crc's use Castagnoli ta
 
 // Client issues requests and handles responses to a Kafka cluster.
 type Client struct {
-	cfg cfg
+	cfg  cfg
+	opts []Opt
 
 	ctx       context.Context
 	ctxCancel func()
@@ -248,6 +249,8 @@ func (cl *Client) OptValues(opt any) []any {
 		return []any{cfg.dialFn}
 	case namefn(DialTLSConfig):
 		return []any{cfg.dialTLS}
+	case namefn(DialTLS):
+		return []any{cfg.dialTLS != nil}
 	case namefn(SeedBrokers):
 		return []any{cfg.seedBrokers}
 	case namefn(MaxVersions):
@@ -278,6 +281,8 @@ func (cl *Client) OptValues(opt any) []any {
 		return []any{cfg.hooks}
 	case namefn(ConcurrentTransactionsBackoff):
 		return []any{cfg.txnBackoff}
+	case namefn(considerMissingTopicDeletedAfter):
+		return []any{cfg.missingTopicDelete}
 
 	case namefn(DefaultProduceTopic):
 		return []any{cfg.defaultProduceTopic}
@@ -347,6 +352,8 @@ func (cl *Client) OptValues(opt any) []any {
 		return []any{cfg.maxConcurrentFetches}
 	case namefn(Rack):
 		return []any{cfg.rack}
+	case namefn(KeepRetryableFetchErrors):
+		return []any{cfg.keepRetryableFetchErrors}
 
 	case namefn(AdjustFetchOffsetsFn):
 		return []any{cfg.adjustOffsetsBeforeAssign}
@@ -449,6 +456,7 @@ func NewClient(opts ...Opt) (*Client, error) {
 
 	cl := &Client{
 		cfg:       cfg,
+		opts:      opts,
 		ctx:       ctx,
 		ctxCancel: cancel,
 
@@ -509,6 +517,14 @@ func NewClient(opts ...Opt) (*Client, error) {
 	go cl.reapConnectionsLoop()
 
 	return cl, nil
+}
+
+// Opts returns the options that were used to create this client. This can be
+// as a base to generate a new client, where you can add override options to
+// the end of the original input list. If you want to know a specific option
+// value, you can use ConfigValue or ConfigValues.
+func (cl *Client) Opts() []Opt {
+	return cl.opts
 }
 
 func (cl *Client) loadSeeds() []*broker {
@@ -933,18 +949,19 @@ func (cl *Client) Close() {
 	})
 
 	c := &cl.consumer
+	c.kill.Store(true)
 	if c.g != nil {
 		cl.LeaveGroup()
 	} else if c.d != nil {
-		c.mu.Lock()                                                          // lock for assign
-		c.assignPartitions(nil, assignInvalidateAll, noTopicsPartitions, "") // we do not use a log message when not in a group
+		c.mu.Lock()                                           // lock for assign
+		c.assignPartitions(nil, assignInvalidateAll, nil, "") // we do not use a log message when not in a group
 		c.mu.Unlock()
 	}
 
 	// After the above, consumers cannot consume anymore. LeaveGroup
-	// internally assigns noTopicsPartitions, which uses noConsumerSession,
-	// which prevents loopFetch from starting. Assigning also waits for the
-	// prior session to be complete, meaning loopFetch cannot be running.
+	// internally assigns nil, which uses noConsumerSession, which prevents
+	// loopFetch from starting. Assigning also waits for the prior session
+	// to be complete, meaning loopFetch cannot be running.
 
 	sessCloseCtx, sessCloseCancel := context.WithTimeout(cl.ctx, time.Second)
 	var wg sync.WaitGroup
@@ -1108,7 +1125,7 @@ type failDial struct{ fails int8 }
 // repeatedly fails, we need to forget our cache to force a re-load: the broker
 // may have completely died.
 func (d *failDial) isRepeatedDialFail(err error) bool {
-	if isDialErr(err) {
+	if isAnyDialErr(err) {
 		d.fails++
 		if d.fails == 3 {
 			d.fails = 0

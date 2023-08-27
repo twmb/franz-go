@@ -204,8 +204,23 @@ func NewConsumerBalancer(balance ConsumerBalancerBalance, members []kmsg.JoinGro
 	for i, member := range members {
 		meta := &b.metadatas[i]
 		meta.Default()
-		if err := meta.ReadFrom(member.ProtocolMetadata); err != nil {
-			return nil, fmt.Errorf("unable to read member metadata: %v", err)
+		memberMeta := member.ProtocolMetadata
+		if err := meta.ReadFrom(memberMeta); err != nil {
+			// Some buggy clients claimed support for v1 but then
+			// did not add OwnedPartitions, resulting in a short
+			// metadata. If we fail at reading and the version is
+			// v1, we retry again as v0. We do not support other
+			// versions because hopefully other clients stop
+			// claiming higher and higher version support and not
+			// actually supporting them. Sarama has a similarish
+			// workaround. See #493.
+			if bytes.HasPrefix(memberMeta, []byte{0, 1}) {
+				memberMeta[0] = 0
+				memberMeta[1] = 0
+				if err = meta.ReadFrom(memberMeta); err != nil {
+					return nil, fmt.Errorf("unable to read member metadata: %v", err)
+				}
+			}
 		}
 		for _, topic := range meta.Topics {
 			b.topics[topic] = struct{}{}
@@ -472,10 +487,11 @@ func (g *groupConsumer) balanceGroup(proto string, members []kmsg.JoinGroupRespo
 }
 
 // helper func; range and roundrobin use v0
-func memberMetadataV0(interests []string, generation int32) []byte {
+func simpleMemberMetadata(interests []string, generation int32) []byte {
 	meta := kmsg.NewConsumerMemberMetadata()
-	meta.Version = 0
+	meta.Version = 3        // BUMP ME WHEN NEW FIELDS ARE ADDED, AND BUMP BELOW
 	meta.Topics = interests // input interests are already sorted
+	// meta.OwnedPartitions is nil, since simple protocols are not cooperative
 	meta.Generation = generation
 	return meta.AppendTo(nil)
 }
@@ -509,7 +525,7 @@ type roundRobinBalancer struct{}
 func (*roundRobinBalancer) ProtocolName() string { return "roundrobin" }
 func (*roundRobinBalancer) IsCooperative() bool  { return false }
 func (*roundRobinBalancer) JoinGroupMetadata(interests []string, _ map[string][]int32, generation int32) []byte {
-	return memberMetadataV0(interests, generation)
+	return simpleMemberMetadata(interests, generation)
 }
 
 func (*roundRobinBalancer) ParseSyncAssignment(assignment []byte) (map[string][]int32, error) {
@@ -593,7 +609,7 @@ type rangeBalancer struct{}
 func (*rangeBalancer) ProtocolName() string { return "range" }
 func (*rangeBalancer) IsCooperative() bool  { return false }
 func (*rangeBalancer) JoinGroupMetadata(interests []string, _ map[string][]int32, generation int32) []byte {
-	return memberMetadataV0(interests, generation)
+	return simpleMemberMetadata(interests, generation)
 }
 
 func (*rangeBalancer) ParseSyncAssignment(assignment []byte) (map[string][]int32, error) {
@@ -722,12 +738,9 @@ func (s *stickyBalancer) ProtocolName() string {
 func (s *stickyBalancer) IsCooperative() bool { return s.cooperative }
 func (s *stickyBalancer) JoinGroupMetadata(interests []string, currentAssignment map[string][]int32, generation int32) []byte {
 	meta := kmsg.NewConsumerMemberMetadata()
-	meta.Version = 0
+	meta.Version = 3 // BUMP ME WHEN NEW FIELDS ARE ADDED, AND BUMP ABOVE
 	meta.Topics = interests
 	meta.Generation = generation
-	if s.cooperative {
-		meta.Version = 1
-	}
 	stickyMeta := kmsg.NewStickyMemberMetadata()
 	stickyMeta.Generation = generation
 	for topic, partitions := range currentAssignment {

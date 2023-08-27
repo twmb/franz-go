@@ -2,10 +2,11 @@ package kgo
 
 type directConsumer struct {
 	cfg    *cfg
-	tps    *topicsPartitions // data for topics that the user assigned
-	using  mtmps             // topics we are currently using
-	m      mtmps             // mirrors cfg.topics and cfg.partitions, but can change with Purge or Add
-	reSeen map[string]bool   // topics we evaluated against regex, and whether we want them or not
+	tps    *topicsPartitions           // data for topics that the user assigned
+	using  mtmps                       // topics we are currently using
+	m      mtmps                       // mirrors cfg.topics and cfg.partitions, but can change with Purge or Add
+	ps     map[string]map[int32]Offset // mirrors cfg.partitions, changed in Purge or Add
+	reSeen map[string]bool             // topics we evaluated against regex, and whether we want them or not
 }
 
 func (c *consumer) initDirect() {
@@ -15,6 +16,7 @@ func (c *consumer) initDirect() {
 		reSeen: make(map[string]bool),
 		using:  make(mtmps),
 		m:      make(mtmps),
+		ps:     make(map[string]map[int32]Offset),
 	}
 	c.d = d
 
@@ -28,6 +30,11 @@ func (c *consumer) initDirect() {
 		for partition := range partitions {
 			d.m.add(topic, partition)
 		}
+		p := make(map[int32]Offset, len(partitions))
+		for partition, offset := range partitions {
+			p[partition] = offset
+		}
+		d.ps[topic] = p
 	}
 	for topic := range d.cfg.topics {
 		topics = append(topics, topic)
@@ -106,7 +113,7 @@ func (d *directConsumer) findNewAssignments() map[string]map[int32]Offset {
 		// we set those. We only use partitions from topics that have
 		// not been purged.
 		for topic := range d.m {
-			for partition, offset := range d.cfg.partitions[topic] {
+			for partition, offset := range d.ps[topic] {
 				toUseTopic, exists := toUse[topic]
 				if !exists {
 					toUseTopic = make(map[int32]Offset, 10)

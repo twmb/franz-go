@@ -108,6 +108,20 @@ func (m mtmps) onlyt(t string) bool {
 	return exists && len(ps) == 0
 }
 
+func (m mtmps) remove(t string, p int32) {
+	if m == nil {
+		return
+	}
+	mps, exists := m[t]
+	if !exists {
+		return
+	}
+	delete(mps, p)
+	if len(mps) == 0 {
+		delete(m, t)
+	}
+}
+
 ////////////
 // PAUSED // -- types for pausing topics and partitions
 ////////////
@@ -235,8 +249,6 @@ type topicPartitions struct {
 }
 
 func (t *topicPartitions) load() *topicPartitionsData { return t.v.Load().(*topicPartitionsData) }
-
-var noTopicsPartitions = newTopicsPartitions()
 
 func newTopicsPartitions() *topicsPartitions {
 	var t topicsPartitions
@@ -457,6 +469,8 @@ type topicPartitionsData struct {
 	isInternal         bool
 	partitions         []*topicPartition // partition num => partition
 	writablePartitions []*topicPartition // subset of above
+	topic              string
+	when               int64
 }
 
 // topicPartition contains all information from Kafka for a topic's partition,
