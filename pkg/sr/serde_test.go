@@ -100,7 +100,7 @@ func TestSerde(t *testing.T) {
 			expMap: map[string]any{"bar": "bar"},
 		},
 	} {
-		if _, err := serde.Encode(test.enc, ID(99)); err != ErrNotRegistered {
+		if _, err := serde.DynEncode(test.enc, 99, nil); err != ErrNotRegistered {
 			t.Errorf("got %v != exp ErrNotRegistered", err)
 		}
 
@@ -126,7 +126,7 @@ func TestSerde(t *testing.T) {
 			t.Errorf("#%d got MustAppendEncode(%v) != Encode(foo%v)", i, b2, b)
 		}
 
-		bIndented := serde.MustEncode(test.enc, ID(100), Index(0))
+		bIndented := serde.MustDynEncode(test.enc, 100, []int{0})
 		if i := bytes.IndexByte(bIndented, '{'); !bytes.Equal(bIndented[:i], []byte{0, 0, 0, 0, 100, 0}) {
 			t.Errorf("#%d got Encode[ID=100](%v) != exp(%v)", i, bIndented[:i], []byte{0, 0, 0, 0, 100, 0})
 		} else if expIndented := extractIndentedJSON(b); !bytes.Equal(bIndented[i:], expIndented) {
@@ -146,15 +146,6 @@ func TestSerde(t *testing.T) {
 		}
 		if !reflect.DeepEqual(v, exp) {
 			t.Errorf("#%d round trip: got %v != exp %v", i, v, exp)
-			continue
-		}
-
-		gotMap, err := serde.DecodeNew(b[bytes.IndexByte(b, '{'):], ID(100), Index(0), GenerateFn(func() any { return new(map[string]any) }))
-		if err != nil {
-			t.Errorf("#%d DecodeNew: got unexpected err %v", i, err)
-		}
-		if !reflect.DeepEqual(gotMap, &test.expMap) {
-			t.Errorf("#%d decode new map: got %v != exp %v", i, gotMap, test.expMap)
 			continue
 		}
 	}
