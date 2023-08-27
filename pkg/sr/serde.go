@@ -298,7 +298,7 @@ func (s *Serde) Encode(v any) ([]byte, error) {
 func (s *Serde) AppendEncode(b []byte, v any) ([]byte, error) {
 	// Load tserde based on the registered type.
 	t := s.loadTypes()[reflect.TypeOf(v)]
-	return s.append(b, v, t)
+	return s.encode(b, v, t)
 }
 
 // DynEncode encodes a value with a prepended header according to the configured
@@ -321,10 +321,10 @@ func (s *Serde) DynAppendEncode(b []byte, v any, id int, index []int) ([]byte, e
 		}
 		t = t.subindex[i]
 	}
-	return s.append(b, v, t)
+	return s.encode(b, v, t)
 }
 
-func (s *Serde) append(b []byte, v any, t tserde) ([]byte, error) {
+func (s *Serde) encode(b []byte, v any, t tserde) ([]byte, error) {
 	// Check if we loaded a valid tserde.
 	if !t.exists || (t.encode == nil && t.appendEncode == nil) {
 		return nil, ErrNotRegistered
