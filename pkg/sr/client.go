@@ -50,16 +50,15 @@ func (e *ResponseError) Error() string {
 // Client talks to a schema registry and contains helper functions to serialize
 // and deserialize objects according to schemas.
 type Client struct {
-	urls   []string
-	httpcl *http.Client
-	ua     string
+	urls      []string
+	httpcl    *http.Client
+	ua        string
+	defParams Param
 
 	basicAuth *struct {
 		user string
 		pass string
 	}
-
-	normalize bool
 }
 
 // NewClient returns a new schema registry client.
@@ -123,6 +122,7 @@ start:
 	if cl.basicAuth != nil {
 		req.SetBasicAuth(cl.basicAuth.user, cl.basicAuth.pass)
 	}
+	cl.applyParams(ctx, req)
 
 	resp, err := cl.httpcl.Do(req)
 	if err != nil {

@@ -67,14 +67,6 @@ func DialTLSConfig(c *tls.Config) Opt {
 	}}
 }
 
-// Normalize sets the client to add the "?normalize=true" query parameter when
-// getting or creating schemas. This can help collapse duplicate schemas into
-// one, but can also be done with a configuration parameter on the schema
-// registry itself.
-func Normalize() Opt {
-	return opt{func(cl *Client) { cl.normalize = true }}
-}
-
 // BasicAuth sets basic authorization to use for every request.
 func BasicAuth(user, pass string) Opt {
 	return opt{func(cl *Client) {
@@ -82,5 +74,12 @@ func BasicAuth(user, pass string) Opt {
 			user string
 			pass string
 		}{user, pass}
+	}}
+}
+
+// DefaultParams sets default parameters to apply to every request.
+func DefaultParams(ps ...Param) Opt {
+	return opt{func(cl *Client) {
+		cl.defParams = mergeParams(ps...)
 	}}
 }
