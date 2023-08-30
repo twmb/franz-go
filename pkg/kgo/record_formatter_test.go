@@ -1,9 +1,12 @@
 package kgo
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"io"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -576,6 +579,29 @@ func TestRecordReader(t *testing.T) {
 			expErr: true,
 		},
 
+		// some json tests -- more below
+		{
+			layout: `%v{json} %k{json}`,
+			in:     `{"foo": "bar"} true`,
+			exp: []*Record{
+				KeyStringRecord("true", `{"foo":"bar"}`),
+			},
+		},
+		{
+			layout: `%v{json}%k{json}`,
+			in:     `3null`,
+			exp: []*Record{
+				KeyStringRecord("null", "3"),
+			},
+		},
+		{
+			layout: `%k{json}\t%v{json}`,
+			in:     `true	{ "foo" : "bar", "biz": ["\n", 4.4 , 3,4] }`,
+			exp: []*Record{
+				KeyStringRecord("true", `{"foo":"bar","biz":["\n",4.4,3,4]}`),
+			},
+		},
+
 		//
 	} {
 		t.Run(test.layout, func(t *testing.T) {
@@ -605,6 +631,142 @@ func TestRecordReader(t *testing.T) {
 				return
 			} else if !errors.Is(err, io.EOF) {
 				t.Errorf("got err %v != io.EOF after exhausting records", err)
+			}
+		})
+	}
+}
+
+func TestRecordReaderJson(t *testing.T) {
+	tests := []string{
+		"",
+		"   ",
+		" z",
+		" 1  ",
+		"   {}",
+		"   []",
+		"   true",
+		"   null",
+		"   \"n\"",
+
+		// string
+		"\"\xe2",       // begin line-sep but invalid finish
+		"\"\xe2\x79\"", // begin line-sep but not actually line sep
+		`"foo"`,
+		"\"\xe2\x80\xa8\xe2\x80\xa9\"", // line-sep and paragraph-sep
+		` "\uaaaa" `,
+		` "\uaaaa\uaaaa" `,
+		` "\`,
+		` "\z`,
+		" \"f\x00o\"",
+		` "foo`,
+		` "\uazaa" `,
+
+		// number
+		"1",
+		"  0 ",
+		" 0e1 ",
+		" 0.1 ",
+		"1.",
+		"1",
+		" 0e+0 ",
+		" -0e+0 ",
+		"-0",
+		"1e6",
+		"1e+6",
+		"-1e+6",
+		"-0e+6",
+		" -103e+1 ",
+		"-0.01e+006",
+		"-z",
+		"-",
+		"1e",
+		"1e+",
+		" 0.3e+1 ",
+		" 1e.1 ",
+		" 0 ",
+		"1.e3",
+		"0.1e+6",
+		"-0.01e+06",
+		"0e+01",
+
+		// object
+		"{}",
+		`{"foo": 3}`,
+		` {}    `,
+		strings.Repeat(`{"f":`, 1000) + "{}" + strings.Repeat("}", 1000),
+		`{"f":{}}`,
+		`{"":3,"":2}`,
+		`{"foo": [{"":3, "4": "3"}, 4, {}], "t_wo": 1}`,
+		` {"foo": 2,"fudge}`,
+		`{{"foo": }}`,
+		`{"foo": true, f "a": true}`,
+		`{{"foo": [{"":3, 4: "3"}, 4, "5": {4}]}, "t_wo": 1}`,
+		`{"\uaaaa\uaaaa" : true}`,
+		"{\"\xe2\x80\xa8\xe2\x80\xa9\": true}", // line-sep and paragraph-sep
+		"{",
+		`{"foo"`,
+		`{"foo",f}`,
+		`{"foo",`,
+		`{"foo"f`,
+		"{}",
+		`{"":[4.4]}`,
+		`{"":[4.4e4]}`,
+		`{"":d}`,
+		`{"":{}d}`,
+
+		// array
+		`[]`,
+		`[[]]`,
+		`[ ]`,
+		`[ 1, {}]`,
+		strings.Repeat("[", 1000) + strings.Repeat("]", 1000),
+		`[1, 2, 3, 4, {}]`,
+		`[`,
+		`[1,`,
+		`[1a`,
+		`[1a]`,
+		`[]`,
+
+		// boolean
+		"true",
+		"   true ",
+		"tru",
+		"false",
+		"  true ",
+		"fals",
+		"false",
+
+		// null
+		"null ",
+		" null ",
+		"nul",
+		" null ",
+	}
+
+	for i, test := range tests {
+		t.Run(strconv.Itoa(i), func(t *testing.T) {
+			r, err := NewRecordReader(strings.NewReader(test), "%v{json}")
+			if err != nil {
+				t.Errorf("unexpected err: %v", err)
+				return
+			}
+
+			in := []byte(test)
+			valid := json.Valid(in)
+			expErr := !valid
+			rec, err := r.ReadRecord()
+			gotErr := err != nil
+
+			if expErr != gotErr {
+				t.Errorf("got err? %v, exp err? %v", gotErr, expErr)
+				return
+			}
+			if expErr || !gotErr {
+				return
+			}
+
+			if !bytes.Equal(rec.Value, in) {
+				t.Errorf("got %q, exp %q", rec.Value, in)
 			}
 		})
 	}
