@@ -144,7 +144,7 @@ func TestSerde(t *testing.T) {
 }
 
 func TestConfluentHeader(t *testing.T) {
-	var h confluentHeader
+	var h ConfluentHeader
 
 	for i, test := range []struct {
 		id     int
