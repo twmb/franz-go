@@ -367,6 +367,9 @@ func NewRecordFormatter(layout string) (*RecordFormatter, error) {
 			var appendFn func([]byte, []byte) []byte
 			if handledBrace = isOpenBrace; handledBrace {
 				switch {
+				case strings.HasPrefix(layout, "}"):
+					layout = layout[len("}"):]
+					appendFn = appendPlain
 				case strings.HasPrefix(layout, "base64}"):
 					appendFn = appendBase64
 					layout = layout[len("base64}"):]
@@ -1298,6 +1301,8 @@ func (r *RecordReader) parseReadLayout(layout string) error {
 			var isJson bool
 			if handledBrace = isOpenBrace; handledBrace {
 				switch {
+				case strings.HasPrefix(layout, "}"):
+					layout = layout[len("}"):]
 				case strings.HasPrefix(layout, "base64}"):
 					decodeFn = decodeBase64
 					layout = layout[len("base64}"):]

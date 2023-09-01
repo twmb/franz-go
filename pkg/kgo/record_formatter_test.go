@@ -44,6 +44,10 @@ func TestRecordFormatter(t *testing.T) {
 			layout: "%v",
 			expR:   "value",
 		},
+		{
+			layout: "%v{}",
+			expR:   "value",
+		},
 
 		{
 			layout: "%T{hex16}%t %V{ascii} %v %V{little16} %k %K{big32} %o",
@@ -230,6 +234,11 @@ func TestRecordReader(t *testing.T) {
 	}{
 		{
 			layout: "%v",
+			in:     "foo bar biz\nbaz",
+			exp:    []*Record{StringRecord("foo bar biz\nbaz")},
+		},
+		{
+			layout: "%v{}",
 			in:     "foo bar biz\nbaz",
 			exp:    []*Record{StringRecord("foo bar biz\nbaz")},
 		},
