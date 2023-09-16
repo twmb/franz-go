@@ -88,6 +88,13 @@ func (cl *Client) BufferedProduceRecords() int64 {
 	return cl.producer.bufferedRecords.Load()
 }
 
+// BufferedProduceBytes returns the number of bytes currently buffered for
+// producing within the client. This is the sum of all keys, values, and header
+// keys/values. See the related [BufferedProduceRecords] for more information.
+func (cl *Client) BufferedProduceBytes() int64 {
+	return cl.producer.bufferedBytes.Load()
+}
+
 type unknownTopicProduces struct {
 	buffered []promisedRec
 	wait     chan error // retryable errors
