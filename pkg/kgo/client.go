@@ -298,6 +298,8 @@ func (cl *Client) OptValues(opt any) []any {
 		return []any{cfg.maxRecordBatchBytes}
 	case namefn(MaxBufferedRecords):
 		return []any{cfg.maxBufferedRecords}
+	case namefn(MaxBufferedBytes):
+		return []any{cfg.maxBufferedBytes}
 	case namefn(RecordPartitioner):
 		return []any{cfg.partitioner}
 	case namefn(ProduceRequestTimeout):
