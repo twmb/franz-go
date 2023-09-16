@@ -281,7 +281,7 @@ func (cl *Client) OptValues(opt any) []any {
 		return []any{cfg.hooks}
 	case namefn(ConcurrentTransactionsBackoff):
 		return []any{cfg.txnBackoff}
-	case namefn(considerMissingTopicDeletedAfter):
+	case namefn(ConsiderMissingTopicDeletedAfter):
 		return []any{cfg.missingTopicDelete}
 
 	case namefn(DefaultProduceTopic):
