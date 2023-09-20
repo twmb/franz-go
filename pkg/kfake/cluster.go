@@ -131,6 +131,7 @@ func NewCluster(opts ...Opt) (*Cluster, error) {
 	}
 	c.data.c = c
 	c.groups.c = c
+	c.pids.c = c
 	var err error
 	defer func() {
 		if err != nil {
@@ -391,9 +392,13 @@ outer:
 		case kmsg.DeleteRecords:
 			kresp, err = c.handleDeleteRecords(creq.cc.b, kreq)
 		case kmsg.InitProducerID:
-			kresp, err = c.handleInitProducerID(kreq)
+			kresp, err = c.handleInitProducerID(creq.cc.b, kreq)
 		case kmsg.OffsetForLeaderEpoch:
 			kresp, err = c.handleOffsetForLeaderEpoch(creq.cc.b, kreq)
+		case kmsg.AddPartitionsToTxn:
+			kresp, err = c.handleAddPartitionsToTxn(creq.cc.b, kreq)
+		case kmsg.EndTxn:
+			kresp, err = c.handleEndTxn(creq.cc.b, kreq)
 		case kmsg.DescribeConfigs:
 			kresp, err = c.handleDescribeConfigs(creq.cc.b, kreq)
 		case kmsg.AlterConfigs:
