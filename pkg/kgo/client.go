@@ -929,7 +929,10 @@ func (cl *Client) CloseAllowingRebalance() {
 	cl.Close()
 }
 
-// Close leaves any group and closes all connections and goroutines.
+// Close leaves any group and closes all connections and goroutines. This
+// function waits for the group to be left. If you want to force leave a group
+// immediately and ensure a speedy shutdown you can use LeaveGroupContext first
+// (and then Close will be immediate).
 //
 // If you are group consuming and have overridden the default
 // OnPartitionsRevoked, you must manually commit offsets before closing the
@@ -942,6 +945,10 @@ func (cl *Client) CloseAllowingRebalance() {
 // notification of revoked partitions. If you want to automatically allow
 // rebalancing, use CloseAllowingRebalance.
 func (cl *Client) Close() {
+	cl.close(cl.ctx)
+}
+
+func (cl *Client) close(ctx context.Context) (rerr error) {
 	defer cl.cfg.hooks.each(func(h Hook) {
 		if h, ok := h.(HookClientClosed); ok {
 			h.OnClientClosed(cl)
@@ -951,7 +958,7 @@ func (cl *Client) Close() {
 	c := &cl.consumer
 	c.kill.Store(true)
 	if c.g != nil {
-		cl.LeaveGroup()
+		rerr = cl.LeaveGroupContext(ctx)
 	} else if c.d != nil {
 		c.mu.Lock()                                           // lock for assign
 		c.assignPartitions(nil, assignInvalidateAll, nil, "") // we do not use a log message when not in a group
@@ -963,7 +970,7 @@ func (cl *Client) Close() {
 	// loopFetch from starting. Assigning also waits for the prior session
 	// to be complete, meaning loopFetch cannot be running.
 
-	sessCloseCtx, sessCloseCancel := context.WithTimeout(cl.ctx, time.Second)
+	sessCloseCtx, sessCloseCancel := context.WithTimeout(ctx, time.Second)
 	var wg sync.WaitGroup
 	cl.allSinksAndSources(func(sns sinkAndSource) {
 		if sns.source.session.id != 0 {
@@ -1015,6 +1022,8 @@ func (cl *Client) Close() {
 			closing.Close()
 		}
 	}
+
+	return rerr
 }
 
 // Request issues a request to Kafka, waiting for and returning the response.
