@@ -35,9 +35,10 @@ type (
 
 	partData struct {
 		batches []partBatch
+		t       string
+		p       int32
 		dir     string
 
-		p                int32 // partition number
 		highWatermark    int64
 		lastStableOffset int64
 		logStartOffset   int64
@@ -51,6 +52,9 @@ type (
 		followers followers
 
 		watch map[*watchFetch]struct{}
+
+		openPids      map[int64]int64 // pid => start offset
+		openPidStarts []int64         // offset
 
 		createdAt time.Time
 	}
@@ -72,6 +76,11 @@ type (
 		// When we drop the earlier timestamp, we update all following
 		// firstMaxTimestamps that match the dropped timestamp.
 		maxEarlierTimestamp int64
+
+		inTx bool
+
+		// Filled retroactively, if true, the pid aborted this batch.
+		aborted bool
 	}
 )
 
@@ -139,7 +148,8 @@ func (c *Cluster) newPartData(p int32) func() *partData {
 	}
 }
 
-func (pd *partData) pushBatch(nbytes int, b kmsg.RecordBatch) {
+// Returns a pointer to the new batch.
+func (pd *partData) pushBatch(nbytes int, b kmsg.RecordBatch, inTx bool) *partBatch {
 	maxEarlierTimestamp := b.FirstTimestamp
 	if maxEarlierTimestamp < pd.maxTimestamp {
 		maxEarlierTimestamp = pd.maxTimestamp
@@ -148,16 +158,20 @@ func (pd *partData) pushBatch(nbytes int, b kmsg.RecordBatch) {
 	}
 	b.FirstOffset = pd.highWatermark
 	b.PartitionLeaderEpoch = pd.epoch
-	pd.batches = append(pd.batches, partBatch{b, nbytes, pd.epoch, maxEarlierTimestamp})
+	pd.batches = append(pd.batches, partBatch{b, nbytes, pd.epoch, maxEarlierTimestamp, inTx, false})
 	pd.highWatermark += int64(b.NumRecords)
 	pd.lastStableOffset += int64(b.NumRecords) // TODO
 	pd.nbytes += int64(nbytes)
 	for w := range pd.watch {
-		w.push(nbytes)
+		w.push(pd.t, pd.p, nbytes)
 	}
+	return &pd.batches[len(pd.batches)-1]
 }
 
-func (pd *partData) searchOffset(o int64) (index int, found, atEnd bool) {
+// index: the batch index the offset is in, if the offset is found
+// found: if the offset was found
+// atEnd: if true, the requested offset is one past the HWM - "requesting at the end, wait"
+func (pd *partData) searchOffset(o int64) (index int, found bool, atEnd bool) {
 	if o < pd.logStartOffset || o > pd.highWatermark {
 		return 0, false, false
 	}

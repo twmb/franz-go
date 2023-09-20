@@ -18,6 +18,11 @@ import (
 // * Out of range fetch causes early return
 // * Raw bytes of batch counts against wait bytes
 
+// Compare:
+//
+// We want 100 messages, 50 are not in txn, 50 are: do we hang?
+// We want msg that is currently in txn, other partitions not in txn: do we hang?
+
 func init() { regKey(1, 4, 18) }
 
 func (c *Cluster) handleFetch(creq *clientReq, w *watchFetch) (kmsg.Response, error) {
@@ -31,9 +36,10 @@ func (c *Cluster) handleFetch(creq *clientReq, w *watchFetch) (kmsg.Response, er
 	}
 
 	var (
-		nbytes      int
-		returnEarly bool
-		needp       tps[int]
+		readCommitted = req.IsolationLevel == 1
+		nbytes        int
+		returnEarly   bool
+		needp         tps[int]
 	)
 	if w == nil {
 	out:
@@ -65,6 +71,9 @@ func (c *Cluster) handleFetch(creq *clientReq, w *watchFetch) (kmsg.Response, er
 				}
 				pbytes := 0
 				for _, b := range pd.batches[i:] {
+					if readCommitted && b.inTx {
+						break
+					}
 					nbytes += b.nbytes
 					pbytes += b.nbytes
 					if pbytes >= int(rp.PartitionMaxBytes) {
@@ -184,6 +193,9 @@ full:
 			}
 			var pbytes int
 			for _, b := range pd.batches[i:] {
+				if readCommitted && b.inTx {
+					break
+				}
 				if nbytes = nbytes + b.nbytes; nbytes > int(req.MaxBytes) && batchesAdded > 0 {
 					break full
 				}
@@ -202,6 +214,7 @@ full:
 type watchFetch struct {
 	need     int
 	needp    tps[int]
+	txwait   tps[int64]
 	deadline time.Time
 	creq     *clientReq
 
@@ -213,16 +226,25 @@ type watchFetch struct {
 	cleaned bool
 }
 
-func (w *watchFetch) push(nbytes int) {
+func (w *watchFetch) push(t string, p int32, nbytes int) {
 	w.need -= nbytes
-	if w.need <= 0 {
-		w.once.Do(func() {
-			go w.cb()
-		})
+	needp, _ := w.needp.getp(t, p)
+	if needp != nil {
+		*needp -= nbytes
+	}
+	if *w.txwait.getpDefault(t, p) != 0 {
+		// If we are waiting for a commit, then new batches do not
+		// matter.
+		return
+	}
+	if w.need <= 0 || needp != nil && *needp <= 0 {
+		w.do()
 	}
 }
 
-func (w *watchFetch) deleted() {
+func (w *watchFetch) deleted() { w.do() }
+
+func (w *watchFetch) do() {
 	w.once.Do(func() {
 		go w.cb()
 	})
