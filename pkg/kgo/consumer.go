@@ -162,6 +162,7 @@ func (o Offset) At(at int64) Offset {
 
 type consumer struct {
 	bufferedRecords atomicI64
+	bufferedBytes   atomicI64
 
 	cl *Client
 
@@ -283,6 +284,13 @@ func (c *consumer) unaddRebalance() {
 // values.
 func (cl *Client) BufferedFetchRecords() int64 {
 	return cl.consumer.bufferedRecords.Load()
+}
+
+// BufferedFetchBytes returns the number of bytes currently buffered from
+// fetching within the client. This is the sum of all keys, values, and header
+// keys/values. See the related [BufferedFetchRecords] for more information.
+func (cl *Client) BufferedFetchBytes() int64 {
+	return cl.consumer.bufferedBytes.Load()
 }
 
 type usedCursors map[*cursor]struct{}

@@ -15,6 +15,7 @@ import (
 
 type producer struct {
 	bufferedRecords atomicI64
+	bufferedBytes   atomicI64
 	inflight        atomicI64 // high 16: # waiters, low 48: # inflight
 
 	cl *Client
@@ -85,6 +86,13 @@ type producer struct {
 // cluster health).
 func (cl *Client) BufferedProduceRecords() int64 {
 	return cl.producer.bufferedRecords.Load()
+}
+
+// BufferedProduceBytes returns the number of bytes currently buffered for
+// producing within the client. This is the sum of all keys, values, and header
+// keys/values. See the related [BufferedProduceRecords] for more information.
+func (cl *Client) BufferedProduceBytes() int64 {
+	return cl.producer.bufferedBytes.Load()
 }
 
 type unknownTopicProduces struct {
@@ -313,8 +321,9 @@ func (f *FirstErrPromise) Err() error {
 }
 
 // TryProduce is similar to Produce, but rather than blocking if the client
-// currently has MaxBufferedRecords buffered, this fails immediately with
-// ErrMaxBuffered. See the Produce documentation for more details.
+// currently has MaxBufferedRecords or MaxBufferedBytes buffered, this fails
+// immediately with ErrMaxBuffered. See the Produce documentation for more
+// details.
 func (cl *Client) TryProduce(
 	ctx context.Context,
 	r *Record,
@@ -387,6 +396,21 @@ func (cl *Client) produce(
 		}
 	}
 
+	var (
+		userSize     = r.userSize()
+		bufRecs      = p.bufferedRecords.Add(1)
+		bufBytes     = p.bufferedBytes.Add(userSize)
+		overMaxRecs  = bufRecs > cl.cfg.maxBufferedRecords
+		overMaxBytes bool
+	)
+	if cl.cfg.maxBufferedBytes > 0 {
+		if userSize > cl.cfg.maxBufferedBytes {
+			p.promiseRecord(promisedRec{ctx, promise, r}, kerr.MessageTooLarge)
+			return
+		}
+		overMaxBytes = bufBytes > cl.cfg.maxBufferedBytes
+	}
+
 	if r.Topic == "" {
 		p.promiseRecord(promisedRec{ctx, promise, r}, errNoTopic)
 		return
@@ -396,7 +420,11 @@ func (cl *Client) produce(
 		return
 	}
 
-	if p.bufferedRecords.Add(1) > cl.cfg.maxBufferedRecords {
+	if overMaxRecs || overMaxBytes {
+		cl.cfg.logger.Log(LogLevelDebug, "blocking Produce because we are either over max buffered records or max buffered bytes",
+			"over_max_records", overMaxRecs,
+			"over_max_bytes", overMaxBytes,
+		)
 		// If the client ctx cancels or the produce ctx cancels, we
 		// need to un-count our buffering of this record. We also need
 		// to drain a slot from the waitBuffer chan, which could be
@@ -411,11 +439,14 @@ func (cl *Client) produce(
 		}
 		select {
 		case <-p.waitBuffer:
+			cl.cfg.logger.Log(LogLevelDebug, "Produce block signaled, continuing to produce")
 		case <-cl.ctx.Done():
 			drainBuffered(ErrClientClosed)
+			cl.cfg.logger.Log(LogLevelDebug, "client ctx canceled while blocked in Produce, returning")
 			return
 		case <-ctx.Done():
 			drainBuffered(ctx.Err())
+			cl.cfg.logger.Log(LogLevelDebug, "produce ctx canceled while blocked in Produce, returning")
 			return
 		}
 	}
@@ -478,15 +509,21 @@ func (cl *Client) finishRecordPromise(pr promisedRec, err error) {
 		}
 	}
 
+	// Capture user size before potential modification by the promise.
+	userSize := pr.userSize()
+	nowBufBytes := p.bufferedBytes.Add(-userSize)
+	nowBufRecs := p.bufferedRecords.Add(-1)
+	wasOverMaxRecs := nowBufRecs >= cl.cfg.maxBufferedRecords
+	wasOverMaxBytes := cl.cfg.maxBufferedBytes > 0 && nowBufBytes+userSize > cl.cfg.maxBufferedBytes
+
 	// We call the promise before finishing the record; this allows users
 	// of Flush to know that all buffered records are completely done
 	// before Flush returns.
 	pr.promise(pr.Record, err)
 
-	buffered := p.bufferedRecords.Add(-1)
-	if buffered >= cl.cfg.maxBufferedRecords {
+	if wasOverMaxRecs || wasOverMaxBytes {
 		p.waitBuffer <- struct{}{}
-	} else if buffered == 0 && p.flushing.Load() > 0 {
+	} else if nowBufRecs == 0 && p.flushing.Load() > 0 {
 		p.mu.Lock()
 		p.mu.Unlock() //nolint:gocritic,staticcheck // We use the lock as a barrier, unlocking immediately is safe.
 		p.c.Broadcast()

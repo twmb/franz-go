@@ -323,16 +323,23 @@ func (s *source) hook(f *Fetch, buffered, polled bool) {
 	})
 
 	var nrecs int
+	var nbytes int64
 	for i := range f.Topics {
 		t := &f.Topics[i]
 		for j := range t.Partitions {
-			nrecs += len(t.Partitions[j].Records)
+			p := &t.Partitions[j]
+			nrecs += len(p.Records)
+			for k := range p.Records {
+				nbytes += p.Records[k].userSize()
+			}
 		}
 	}
 	if buffered {
 		s.cl.consumer.bufferedRecords.Add(int64(nrecs))
+		s.cl.consumer.bufferedBytes.Add(nbytes)
 	} else {
 		s.cl.consumer.bufferedRecords.Add(-int64(nrecs))
+		s.cl.consumer.bufferedBytes.Add(-nbytes)
 	}
 }
 
