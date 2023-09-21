@@ -807,6 +807,18 @@ func (cl *Client) mergeTopicPartitions(
 			)
 		}
 
+		if !isProduce {
+			var noID [16]byte
+			if newTP.cursor.topicID == noID && oldTP.cursor.topicID != noID {
+				cl.cfg.logger.Log(LogLevelWarn, "metadata update is missing the topic ID when we previously had one, ignoring update",
+					"topic", topic,
+					"partition", part,
+				)
+				retryWhy.add(topic, int32(part), errMissingTopicID)
+				continue
+			}
+		}
+
 		// If the tp data is the same, we simply copy over the records
 		// and cursor pointers.
 		//
@@ -866,7 +878,10 @@ func (cl *Client) mergeTopicPartitions(
 	}
 }
 
-var errEpochRewind = errors.New("epoch rewind")
+var (
+	errEpochRewind    = errors.New("epoch rewind")
+	errMissingTopicID = errors.New("missing topic ID")
+)
 
 type multiUpdateWhy map[kerrOrString]map[string]map[int32]struct{}
 

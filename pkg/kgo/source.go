@@ -1871,7 +1871,7 @@ func (f *fetchRequest) adjustPreferringLag() {
 
 func (*fetchRequest) Key() int16 { return 1 }
 func (f *fetchRequest) MaxVersion() int16 {
-	if f.disableIDs {
+	if f.disableIDs || f.session.disableIDs {
 		return 12
 	}
 	return 15
@@ -1905,7 +1905,7 @@ func (f *fetchRequest) AppendTo(dst []byte) []byte {
 		partitions := f.usedOffsets[topic]
 
 		var reqTopic *kmsg.FetchRequestTopic
-		sessionTopic := f.session.lookupTopic(topic)
+		sessionTopic := f.session.lookupTopic(topic, f.topic2id)
 
 		var usedTopic map[int32]struct{}
 		if sessionUsed != nil {
@@ -1972,6 +1972,20 @@ func (f *fetchRequest) AppendTo(dst []byte) []byte {
 			}
 			if len(partitions) == 0 {
 				delete(f.session.used, topic)
+				id := f.session.t2id[topic]
+				delete(f.session.t2id, topic)
+				// If we deleted a topic that was missing an ID, then we clear the
+				// previous disableIDs state and potentially reenable it.
+				var noID [16]byte
+				if id == noID {
+					f.session.disableIDs = false
+					for _, id := range f.session.t2id {
+						if id == noID {
+							f.session.disableIDs = true
+							break
+						}
+					}
+				}
 			}
 		}
 	}
@@ -1996,13 +2010,17 @@ type fetchSession struct {
 	epoch int32
 
 	used map[string]map[int32]fetchSessionOffsetEpoch // what we have in the session so far
+	t2id map[string][16]byte
 
-	killed bool // if we cannot use a session anymore
+	disableIDs bool // if anything in t2id has no ID
+	killed     bool // if we cannot use a session anymore
 }
 
 func (s *fetchSession) kill() {
 	s.epoch = -1
 	s.used = nil
+	s.t2id = nil
+	s.disableIDs = false
 	s.killed = true
 }
 
@@ -2015,6 +2033,8 @@ func (s *fetchSession) reset() {
 	}
 	s.epoch = 0
 	s.used = nil
+	s.t2id = nil
+	s.disableIDs = false
 }
 
 // bumpEpoch bumps the epoch and saves the session id.
@@ -2035,17 +2055,23 @@ func (s *fetchSession) bumpEpoch(id int32) {
 	s.id = id
 }
 
-func (s *fetchSession) lookupTopic(topic string) fetchSessionTopic {
+func (s *fetchSession) lookupTopic(topic string, t2id map[string][16]byte) fetchSessionTopic {
 	if s.killed {
 		return nil
 	}
 	if s.used == nil {
 		s.used = make(map[string]map[int32]fetchSessionOffsetEpoch)
+		s.t2id = make(map[string][16]byte)
 	}
 	t := s.used[topic]
 	if t == nil {
 		t = make(map[int32]fetchSessionOffsetEpoch)
 		s.used[topic] = t
+		id := t2id[topic]
+		s.t2id[topic] = id
+		if id == ([16]byte{}) {
+			s.disableIDs = true
+		}
 	}
 	return t
 }
