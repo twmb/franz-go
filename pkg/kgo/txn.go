@@ -1222,6 +1222,13 @@ func (g *groupConsumer) commitTxn(
 			req.Topics = append(req.Topics, reqTopic)
 		}
 
+		if fn, ok := ctx.Value(commitTxnContextFn).(func(*kmsg.TxnOffsetCommitRequest) error); ok {
+			if err := fn(req); err != nil {
+				onDone(req, nil, err)
+				return
+			}
+		}
+
 		var resp *kmsg.TxnOffsetCommitResponse
 		var err error
 		if len(req.Topics) > 0 {

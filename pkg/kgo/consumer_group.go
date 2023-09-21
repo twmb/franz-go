@@ -2289,6 +2289,20 @@ func PreCommitFnContext(ctx context.Context, fn func(*kmsg.OffsetCommitRequest) 
 	return context.WithValue(ctx, commitContextFn, fn)
 }
 
+type commitTxnContextFnT struct{}
+
+var commitTxnContextFn commitTxnContextFnT
+
+// PreCommitTxnFnContext attaches fn to the context through WithValue. Using
+// the context while committing a transaction allows fn to be called just
+// before the commit is issued. This can be used to modify the actual commit,
+// such as by associating metadata with partitions (for transactions, the
+// default internal metadata is the client's current member ID). If fn returns
+// an error, the commit is not attempted.
+func PreCommitTxnFnContext(ctx context.Context, fn func(*kmsg.TxnOffsetCommitRequest) error) context.Context {
+	return context.WithValue(ctx, commitTxnContextFn, fn)
+}
+
 // CommitRecords issues a synchronous offset commit for the offsets contained
 // within rs. Retryable errors are retried up to the configured retry limit,
 // and any unretryable error is returned.
