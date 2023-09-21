@@ -667,7 +667,6 @@ func (cl *Client) ResetCompatibility(ctx context.Context, subjects ...string) []
 		go func() {
 			defer wg.Done()
 			var c SetCompatibility // unmarshals with "compatibility"
-			fmt.Println("set comp", c)
 			err := cl.delete(ctx, pathConfig(subject), &c)
 			results[slot] = CompatibilityResult{
 				Subject:          subject,
