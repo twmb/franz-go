@@ -34543,6 +34543,10 @@ type DescribeUserSCRAMCredentialsResponseResult struct {
 	User string
 
 	// The user-level error code.
+	//
+	// RESOURCE_NOT_FOUND if the user does not exist or has no credentials.
+	//
+	// DUPLICATE_RESOURCE if the user is requested twice+.
 	ErrorCode int16
 
 	// The user-level error message, if any.
@@ -34578,7 +34582,9 @@ type DescribeUserSCRAMCredentialsResponse struct {
 	// after responding to this request.
 	ThrottleMillis int32
 
-	// The request-level error code. This is 0 except for user or infra issues.
+	// The request-level error code. This is 0 except for auth or infra issues.
+	//
+	// CLUSTER_AUTHORIZATION_FAILED if you do not have DESCRIBE on CLUSTER.
 	ErrorCode int16
 
 	// The request-level error message, if any.

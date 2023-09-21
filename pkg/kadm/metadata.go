@@ -372,7 +372,9 @@ func (l ListedOffsets) KOffsets() map[string]map[int32]kgo.Offset {
 
 // ListStartOffsets returns the start (oldest) offsets for each partition in
 // each requested topic. In Kafka terms, this returns the log start offset. If
-// no topics are specified, all topics are listed.
+// no topics are specified, all topics are listed. If a requested topic does
+// not exist, no offsets for it are listed and it is not present in the
+// response.
 //
 // If any topics being listed do not exist, a special -1 partition is added
 // to the response with the expected error code kerr.UnknownTopicOrPartition.
@@ -384,7 +386,8 @@ func (cl *Client) ListStartOffsets(ctx context.Context, topics ...string) (Liste
 
 // ListEndOffsets returns the end (newest) offsets for each partition in each
 // requested topic. In Kafka terms, this returns high watermarks. If no topics
-// are specified, all topics are listed.
+// are specified, all topics are listed. If a requested topic does not exist,
+// no offsets for it are listed and it is not present in the response.
 //
 // If any topics being listed do not exist, a special -1 partition is added
 // to the response with the expected error code kerr.UnknownTopicOrPartition.
@@ -399,7 +402,8 @@ func (cl *Client) ListEndOffsets(ctx context.Context, topics ...string) (ListedO
 // latest offset. In Kafka terms, committed means the last stable offset, and
 // newest means the high watermark. Record offsets in active, uncommitted
 // transactions will not be returned. If no topics are specified, all topics
-// are listed.
+// are listed. If a requested topic does not exist, no offsets for it are
+// listed and it is not present in the response.
 //
 // If any topics being listed do not exist, a special -1 partition is added
 // to the response with the expected error code kerr.UnknownTopicOrPartition.
@@ -414,6 +418,8 @@ func (cl *Client) ListCommittedOffsets(ctx context.Context, topics ...string) (L
 // returned from this function also include the timestamp of the offset. If no
 // topics are specified, all topics are listed. If a partition has no offsets
 // after the requested millisecond, the offset will be the current end offset.
+// If a requested topic does not exist, no offsets for it are listed and it is
+// not present in the response.
 //
 // If any topics being listed do not exist, a special -1 partition is added
 // to the response with the expected error code kerr.UnknownTopicOrPartition.
