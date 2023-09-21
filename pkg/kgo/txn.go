@@ -208,6 +208,15 @@ func (s *GroupTransactSession) failed() bool {
 	return s.revoked || s.lost
 }
 
+type txnForceOffsetsT struct {}
+
+var txnForceOffsets txnForceOffsetsT
+
+// TxnForceOffsets forces GroupTransactSession.End to commit with the given offsets, even if nothing has changed.
+func TxnForceOffsets(ctx context.Context, uncommitted map[string]map[int32]EpochOffset) context.Context {
+	return context.WithValue(ctx, txnForceOffsets, uncommitted)
+}
+
 // End ends a transaction, committing if commit is true, if the group did not
 // rebalance since the transaction began, and if committing offsets is
 // successful. If any of these conditions are false, this aborts. This flushes
@@ -247,6 +256,9 @@ func (s *GroupTransactSession) End(ctx context.Context, commit TransactionEndTry
 
 	precommit := s.cl.CommittedOffsets()
 	postcommit := s.cl.UncommittedOffsets()
+	if v, ok := ctx.Value(txnForceOffsets).(map[string]map[int32]EpochOffset); ok {
+		postcommit = v
+	}
 	s.failMu.Unlock()
 
 	var hasAbortableCommitErr bool
