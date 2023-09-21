@@ -287,7 +287,7 @@ func (s *GroupTransactSession) End(ctx context.Context, commit TransactionEndTry
 		var commitErrs []string
 
 		committed := make(chan struct{})
-		g = s.cl.commitTransactionOffsets(context.Background(), postcommit,
+		g = s.cl.commitTransactionOffsets(ctx, postcommit,
 			func(_ *kmsg.TxnOffsetCommitRequest, resp *kmsg.TxnOffsetCommitResponse, err error) {
 				defer close(committed)
 				if err != nil {
@@ -1222,7 +1222,7 @@ func (g *groupConsumer) commitTxn(
 			req.Topics = append(req.Topics, reqTopic)
 		}
 
-		if fn, ok := ctx.Value(commitTxnContextFn).(func(*kmsg.TxnOffsetCommitRequest) error); ok {
+		if fn, ok := ctx.Value(txnCommitContextFn).(func(*kmsg.TxnOffsetCommitRequest) error); ok {
 			if err := fn(req); err != nil {
 				onDone(req, nil, err)
 				return
