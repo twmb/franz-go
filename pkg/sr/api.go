@@ -80,10 +80,10 @@ type (
 		References []SchemaReference `json:"references,omitempty"`
 
 		// SchemaMetadata is arbitrary information about the schema.
-		SchemaMetadata SchemaMetadata `json:"metadata,omitempty"`
+		SchemaMetadata *SchemaMetadata `json:"metadata,omitempty"`
 
 		// SchemaRuleSet is a set of rules that govern the schema.
-		SchemaRuleSet SchemaRuleSet `json:"ruleSet,omitempty"`
+		SchemaRuleSet *SchemaRuleSet `json:"ruleSet,omitempty"`
 	}
 
 	// SubjectSchema pairs the subject, global identifier, and version of a
