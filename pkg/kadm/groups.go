@@ -1618,9 +1618,9 @@ func calculateEmptyLag(commit OffsetResponses, endOffsets ListedOffsets) GroupLa
 			}
 
 			lt[p] = GroupMemberLag{
-				Commit:    pcommit.Offset,
 				Topic:     t,
 				Partition: p,
+				Commit:    pcommit.Offset,
 				End:       pend,
 				Lag:       lag,
 				Err:       perr,
@@ -1650,10 +1650,12 @@ func calculateEmptyLag(commit OffsetResponses, endOffsets ListedOffsets) GroupLa
 				lag = pend.Offset
 			}
 			lt[p] = GroupMemberLag{
-				Commit: pcommit,
-				End:    pend,
-				Lag:    lag,
-				Err:    perr,
+				Topic:     t,
+				Partition: p,
+				Commit:    pcommit,
+				End:       pend,
+				Lag:       lag,
+				Err:       perr,
 			}
 		}
 	}
