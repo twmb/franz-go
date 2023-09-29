@@ -543,10 +543,10 @@ type CompatibilityResult struct {
 	Alias            string             `json:"alias"`              // The subject alias, if any.
 	Normalize        bool               `json:"normalize"`          // Whether or not schemas are normalized by default.
 	Group            string             `json:"compatibilityGroup"` // The compatibility group, if any. Only schemas in the same group are checked for compatibility.
-	DefaultMetadata  SchemaMetadata     `json:"defaultMetadata"`    // Default metadata used for schema registration.
-	OverrideMetadata SchemaMetadata     `json:"overrideMetadata"`   // Override metadata used for schema registration.
-	DefaultRuleSet   SchemaRuleSet      `json:"defaultRuleSet"`     // Default rule set used for schema registration.
-	OverrideRuleSet  SchemaRuleSet      `json:"overrideRuleSet"`    // Override rule set used for schema registration.
+	DefaultMetadata  *SchemaMetadata    `json:"defaultMetadata"`    // Default metadata used for schema registration.
+	OverrideMetadata *SchemaMetadata    `json:"overrideMetadata"`   // Override metadata used for schema registration.
+	DefaultRuleSet   *SchemaRuleSet     `json:"defaultRuleSet"`     // Default rule set used for schema registration.
+	OverrideRuleSet  *SchemaRuleSet     `json:"overrideRuleSet"`    // Override rule set used for schema registration.
 
 	Err error `json:"-"` // The error received for getting this compatibility.
 }
@@ -594,14 +594,14 @@ func (cl *Client) Compatibility(ctx context.Context, subjects ...string) []Compa
 type SetCompatibility struct {
 	Subject string `json:"-"` // The subject this compatibility set is for, or empty for the global compatibility..
 
-	Level            CompatibilityLevel `json:"compatibility"`      // The subject (or global) compatibility level.
-	Alias            string             `json:"alias"`              // The subject alias, if any.
-	Normalize        bool               `json:"normalize"`          // Whether or not schemas are normalized by default.
-	Group            string             `json:"compatibilityGroup"` // The compatibility group, if any. Only schemas in the same group are checked for compatibility.
-	DefaultMetadata  SchemaMetadata     `json:"defaultMetadata"`    // Default metadata used for schema registration.
-	OverrideMetadata SchemaMetadata     `json:"overrideMetadata"`   // Override metadata used for schema registration.
-	DefaultRuleSet   SchemaRuleSet      `json:"defaultRuleSet"`     // Default rule set used for schema registration.
-	OverrideRuleSet  SchemaRuleSet      `json:"overrideRuleSet"`    // Override rule set used for schema registration.
+	Level            CompatibilityLevel `json:"compatibility"`                // The subject (or global) compatibility level.
+	Alias            string             `json:"alias,omitempty"`              // The subject alias, if any.
+	Normalize        bool               `json:"normalize,omitempty"`          // Whether or not schemas are normalized by default.
+	Group            string             `json:"compatibilityGroup,omitempty"` // The compatibility group, if any. Only schemas in the same group are checked for compatibility.
+	DefaultMetadata  *SchemaMetadata    `json:"defaultMetadata,omitempty"`    // Default metadata used for schema registration.
+	OverrideMetadata *SchemaMetadata    `json:"overrideMetadata,omitempty"`   // Override metadata used for schema registration.
+	DefaultRuleSet   *SchemaRuleSet     `json:"defaultRuleSet,omitempty"`     // Default rule set used for schema registration.
+	OverrideRuleSet  *SchemaRuleSet     `json:"overrideRuleSet,omitempty"`    // Override rule set used for schema registration.
 
 	Err error `json:"-"` // The error received for setting this compatibility.
 }
