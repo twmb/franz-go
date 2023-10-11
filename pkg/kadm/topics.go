@@ -231,9 +231,10 @@ func (cl *Client) createTopics(ctx context.Context, dry bool, p int32, rf int16,
 
 // DeleteTopicResponse contains the response for an individual deleted topic.
 type DeleteTopicResponse struct {
-	Topic string  // Topic is the topic that was deleted, if not using topic IDs.
-	ID    TopicID // ID is the topic ID for this topic, if talking to Kafka v2.8+ and using topic IDs.
-	Err   error   // Err is any error preventing this topic from being deleted.
+	Topic      string  // Topic is the topic that was deleted, if not using topic IDs.
+	ID         TopicID // ID is the topic ID for this topic, if talking to Kafka v2.8+ and using topic IDs.
+	Err        error   // Err is any error preventing this topic from being deleted.
+	ErrMessage string  // ErrMessage a potential extra message describing any error.
 }
 
 // DeleteTopicResponses contains per-topic responses for deleted topics.
@@ -311,9 +312,10 @@ func (cl *Client) DeleteTopics(ctx context.Context, topics ...string) (DeleteTop
 			topic = *t.Topic
 		}
 		rs[topic] = DeleteTopicResponse{
-			Topic: topic,
-			ID:    t.TopicID,
-			Err:   kerr.ErrorForCode(t.ErrorCode),
+			Topic:      topic,
+			ID:         t.TopicID,
+			Err:        kerr.ErrorForCode(t.ErrorCode),
+			ErrMessage: unptrStr(t.ErrorMessage),
 		}
 	}
 	return rs, nil
@@ -457,8 +459,9 @@ func (cl *Client) DeleteRecords(ctx context.Context, os Offsets) (DeleteRecordsR
 // CreatePartitionsResponse contains the response for an individual topic from
 // a create partitions request.
 type CreatePartitionsResponse struct {
-	Topic string // Topic is the topic this response is for.
-	Err   error  // Err is non-nil if partitions were unable to be added to this topic.
+	Topic      string // Topic is the topic this response is for.
+	Err        error  // Err is non-nil if partitions were unable to be added to this topic.
+	ErrMessage string // ErrMessage a potential extra message describing any error.
 }
 
 // CreatePartitionsResponses contains per-topic responses for a create
@@ -584,8 +587,9 @@ func (cl *Client) createPartitions(ctx context.Context, dry bool, add, set int, 
 	rs := make(CreatePartitionsResponses)
 	for _, t := range resp.Topics {
 		rs[t.Topic] = CreatePartitionsResponse{
-			Topic: t.Topic,
-			Err:   kerr.ErrorForCode(t.ErrorCode),
+			Topic:      t.Topic,
+			Err:        kerr.ErrorForCode(t.ErrorCode),
+			ErrMessage: unptrStr(t.ErrorMessage),
 		}
 	}
 	return rs, nil
