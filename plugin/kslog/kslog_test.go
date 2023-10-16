@@ -1,14 +1,15 @@
-package kslog
+package kslog_test
 
 import (
 	"log/slog"
-	"testing"
 
 	"github.com/twmb/franz-go/pkg/kgo"
+	"github.com/twmb/franz-go/plugin/kslog"
 )
 
-func TestNew(_ *testing.T) {
-	l := New(slog.Default())
+func ExampleNew() {
+	l := kslog.New(slog.Default())
 
 	l.Log(kgo.LogLevelInfo, "test message", "test-key", "test-val")
+	// Output:
 }

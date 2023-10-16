@@ -1,4 +1,4 @@
-module github.com/utilitywarehouse/franz-go/plugin/kslog
+module github.com/twmb/franz-go/plugin/kslog
 
 go 1.21.0
 
