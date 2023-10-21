@@ -260,11 +260,10 @@ func (r *ringBatchPromise) dropPeek() (next batchPromise, more bool) {
 			return next, false
 		}
 		return r.overflow[0], true
-	} else {
-		r.overflow = r.overflow[1:]
-		if len(r.overflow) > 0 {
-			return r.overflow[0], true
-		}
-		return next, false
 	}
+	r.overflow = r.overflow[1:]
+	if len(r.overflow) > 0 {
+		return r.overflow[0], true
+	}
+	return next, false
 }
