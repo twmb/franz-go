@@ -1,7 +1,7 @@
 # We may as well allow multiple golangci-lint invocations at once.
 run:
   allow-parallel-runners: true
-  go: "1.19"
+  go: "1.21"
 
 # golangci-lint by default ignores some staticcheck and vet raised issues that
 # are actually important to catch. The following ensures that we do not ignore
@@ -68,14 +68,13 @@ linters-settings:
   #
   # https://github.com/mvdan/gofumpt/issues/137
   gofumpt:
-    lang-version: "1.19"
+    lang-version: "1.21"
     extra-rules: true
 
   gosec:
     excludes:
       - G104 # unhandled errors, we exclude for the same reason we do not use errcheck
       - G404 # we want math/rand
-
 
   # Gocritic is a meta linter that has very good lints, and most of the
   # experimental ones are very good too. We opt into everything, which helps
@@ -164,5 +163,5 @@ linters-settings:
   # contexts for beneficial reasons, and we disable the SSLv3 deprecation
   # warning because this is solely for a debug log.
   staticcheck:
-    go: "1.19"
+    go: "1.21"
     checks: ["all", "-SA1012", "-SA1019"]

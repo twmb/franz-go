@@ -89,7 +89,7 @@ func testLogger() Logger {
 	num := loggerNum.Add(1)
 	pfx := strconv.Itoa(int(num))
 	return BasicLogger(os.Stderr, testLogLevel, func() string {
-		return time.Now().Format("[15:04:05 ") + pfx + "]"
+		return time.Now().UTC().Format("[15:04:05.999 ") + pfx + "]"
 	})
 }
 

@@ -201,7 +201,7 @@ func task1(host, qps string) []byte {
 	// Finally, we add our empty body.
 	//
 	//   HexEncode(Hash(RequestPayload))
-	const emptyBody = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" //nolint:gosec // this is a defined constant hash of an empty body
+	const emptyBody = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 	return append(canon, emptyBody...)
 }
 
