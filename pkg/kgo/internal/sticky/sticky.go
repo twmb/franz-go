@@ -472,6 +472,24 @@ func (b *balancer) assignUnassignedAndInitGraph() {
 	}
 
 	b.tryRestickyStales(topicPotentials, partitionConsumers)
+
+	// For each member, we now sort their current partitions by partition,
+	// then topic. Sorting the lowest numbers first means that once we
+	// steal from the end (when adding a member), we steal equally across
+	// all topics. This benefits the standard case the most, where all
+	// members consume equally.
+	for memberNum := range b.plan {
+		partNums := b.plan[memberNum]
+		sort.Slice(partNums, func(i, j int) bool {
+			lpNum, rpNum := partNums[i], partNums[j]
+			ltNum, rtNum := b.partOwners[lpNum], b.partOwners[rpNum]
+			li, ri := b.topicInfos[ltNum], b.topicInfos[rtNum]
+			lt, rt := li.topic, ri.topic
+			lp, rp := lpNum-li.partNum, rpNum-ri.partNum
+			return lp < rp || (lp == rp && lt < rt)
+		})
+	}
+
 	for _, potentials := range topicPotentials {
 		(&membersByPartitions{potentials, b.plan}).init()
 	}

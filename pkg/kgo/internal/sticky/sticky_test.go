@@ -1517,6 +1517,30 @@ func Test_stickyBalanceStrategy_Plan_AssignmentWithMultipleGenerations2(t *testi
 	testPlanUsage(t, plan3, topics, nil)
 }
 
+func Test_stickyAddEqualMove(t *testing.T) {
+	t.Parallel()
+	topics := map[string]int32{"foo": 16, "bar": 16}
+	members := []GroupMember{
+		{ID: "1", Topics: []string{"foo", "bar"}},
+	}
+	plan1 := Balance(members, topics)
+
+	// PLAN 2
+	members[0].UserData = udEncode(1, 1, plan1["1"])
+	members = append(members, GroupMember{
+		ID: "2", Topics: []string{"foo", "bar"},
+	})
+
+	plan2 := Balance(members, topics)
+	testEqualDivvy(t, plan2, 16, members)
+	testPlanUsage(t, plan2, topics, nil)
+
+	if len(plan2["1"]["foo"]) != 8 || len(plan2["1"]["bar"]) != 8 ||
+		len(plan2["2"]["foo"]) != 8 || len(plan2["2"]["bar"]) != 8 {
+		t.Errorf("bad distribution: %v", plan2)
+	}
+}
+
 func Test_stickyBalanceStrategy_Plan_AssignmentWithConflictingPreviousGenerations(t *testing.T) {
 	t.Parallel()
 
