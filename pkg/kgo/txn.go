@@ -1180,8 +1180,9 @@ func (g *groupConsumer) commitTxn(
 	req.Group = g.cfg.group
 	req.ProducerID = id
 	req.ProducerEpoch = epoch
-	req.Generation = g.generation
-	req.MemberID = g.memberID
+	memberID, generation := g.memberGen.load()
+	req.Generation = generation
+	req.MemberID = memberID
 	req.InstanceID = g.cfg.instanceID
 
 	if ctx.Done() != nil {
