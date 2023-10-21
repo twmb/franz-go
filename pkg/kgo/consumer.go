@@ -433,6 +433,8 @@ func (cl *Client) PollRecords(ctx context.Context, maxPollRecords int) Fetches {
 			}()
 		}
 
+		paused := c.loadPaused()
+
 		// A group can grab the consumer lock then the group mu and
 		// assign partitions. The group mu is grabbed to update its
 		// uncommitted map. Assigning partitions clears sources ready
@@ -451,13 +453,13 @@ func (cl *Client) PollRecords(ctx context.Context, maxPollRecords int) Fetches {
 		c.sourcesReadyMu.Lock()
 		if maxPollRecords < 0 {
 			for _, ready := range c.sourcesReadyForDraining {
-				fetches = append(fetches, ready.takeBuffered())
+				fetches = append(fetches, ready.takeBuffered(paused))
 			}
 			c.sourcesReadyForDraining = nil
 		} else {
 			for len(c.sourcesReadyForDraining) > 0 && maxPollRecords > 0 {
 				source := c.sourcesReadyForDraining[0]
-				fetch, taken, drained := source.takeNBuffered(maxPollRecords)
+				fetch, taken, drained := source.takeNBuffered(paused, maxPollRecords)
 				if drained {
 					c.sourcesReadyForDraining = c.sourcesReadyForDraining[1:]
 				}
@@ -555,9 +557,7 @@ func (cl *Client) UpdateFetchMaxBytes(maxBytes, maxPartBytes int32) {
 // PauseFetchTopics sets the client to no longer fetch the given topics and
 // returns all currently paused topics. Paused topics persist until resumed.
 // You can call this function with no topics to simply receive the list of
-// currently paused topics. Pausing topics drops everything currently buffered
-// and kills any in flight fetch requests to ensure nothing that is paused
-// can be returned anymore from polling.
+// currently paused topics.
 //
 // Pausing topics is independent from pausing individual partitions with the
 // PauseFetchPartitions method. If you pause partitions for a topic with
@@ -569,15 +569,8 @@ func (cl *Client) PauseFetchTopics(topics ...string) []string {
 	if len(topics) == 0 {
 		return c.loadPaused().pausedTopics()
 	}
-
 	c.pausedMu.Lock()
 	defer c.pausedMu.Unlock()
-	defer func() {
-		c.mu.Lock()
-		defer c.mu.Unlock()
-		c.assignPartitions(nil, assignBumpSession, nil, fmt.Sprintf("pausing fetch topics %v", topics))
-	}()
-
 	paused := c.clonePaused()
 	paused.addTopics(topics...)
 	c.storePaused(paused)
@@ -587,9 +580,7 @@ func (cl *Client) PauseFetchTopics(topics ...string) []string {
 // PauseFetchPartitions sets the client to no longer fetch the given partitions
 // and returns all currently paused partitions. Paused partitions persist until
 // resumed. You can call this function with no partitions to simply receive the
-// list of currently paused partitions. Pausing partitions drops everything
-// currently buffered and kills any in flight fetch requests to ensure nothing
-// that is paused can be returned anymore from polling.
+// list of currently paused partitions.
 //
 // Pausing individual partitions is independent from pausing topics with the
 // PauseFetchTopics method. If you pause partitions for a topic with
@@ -601,15 +592,8 @@ func (cl *Client) PauseFetchPartitions(topicPartitions map[string][]int32) map[s
 	if len(topicPartitions) == 0 {
 		return c.loadPaused().pausedPartitions()
 	}
-
 	c.pausedMu.Lock()
 	defer c.pausedMu.Unlock()
-	defer func() {
-		c.mu.Lock()
-		defer c.mu.Unlock()
-		c.assignPartitions(nil, assignBumpSession, nil, fmt.Sprintf("pausing fetch partitions %v", topicPartitions))
-	}()
-
 	paused := c.clonePaused()
 	paused.addPartitions(topicPartitions)
 	c.storePaused(paused)
@@ -884,10 +868,6 @@ const (
 	// The counterpart to assignInvalidateMatching, assignSetMatching
 	// resets all matching partitions to the specified offset / epoch.
 	assignSetMatching
-
-	// For pausing, we want to drop anything inflight. We start a new
-	// session with the old tps.
-	assignBumpSession
 )
 
 func (h assignHow) String() string {
@@ -902,8 +882,6 @@ func (h assignHow) String() string {
 		return "unassigning and purging any partition matching the input topics"
 	case assignSetMatching:
 		return "reassigning any currently assigned matching partition to the input"
-	case assignBumpSession:
-		return "bumping internal consumer session to drop anything currently in flight"
 	}
 	return ""
 }
@@ -984,8 +962,6 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how
 		// if we had no session before, which is why we need to pass in
 		// our topicPartitions.
 		session = c.guardSessionChange(tps)
-	} else if how == assignBumpSession {
-		loadOffsets, tps = c.stopSession()
 	} else {
 		loadOffsets, _ = c.stopSession()
 
@@ -1032,7 +1008,7 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how
 		// assignment went straight to listing / epoch loading, and
 		// that list/epoch never finished.
 		switch how {
-		case assignWithoutInvalidating, assignBumpSession:
+		case assignWithoutInvalidating:
 			// Nothing to do -- this is handled above.
 		case assignInvalidateAll:
 			loadOffsets = listOrEpochLoads{}
