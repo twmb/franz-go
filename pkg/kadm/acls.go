@@ -924,7 +924,7 @@ func (cl *Client) DescribeACLs(ctx context.Context, b *ACLBuilder) (DescribeACLs
 	)
 	defer cancel()
 	for i := range descs {
-		req := descs[i]
+		req := descs[i] // each req is unique per loop, we are not reusing req, this is safe
 		myIdx := i
 		wg.Add(1)
 		go func() {

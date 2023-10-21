@@ -244,10 +244,6 @@ func (cl *Client) ApiVersions(ctx context.Context) (BrokersApiVersions, error) {
 		return nil, err
 	}
 
-	req := kmsg.NewPtrApiVersionsRequest()
-	req.ClientSoftwareName = "kadm"
-	req.ClientSoftwareVersion = softwareVersion()
-
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	vs := make(BrokersApiVersions, len(m.Brokers))
@@ -256,6 +252,9 @@ func (cl *Client) ApiVersions(ctx context.Context) (BrokersApiVersions, error) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			req := kmsg.NewPtrApiVersionsRequest()
+			req.ClientSoftwareName = "kadm"
+			req.ClientSoftwareVersion = softwareVersion()
 			v := BrokerApiVersions{NodeID: n, keyVersions: make(map[int16]minmax)}
 			v.raw, v.Err = req.RequestWith(ctx, cl.cl.Broker(int(n)))
 
