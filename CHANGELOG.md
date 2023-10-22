@@ -1,3 +1,34 @@
+v1.15.1
+===
+
+This patch release contains a bunch of internal improvements to kgo and
+includes a bugfix for a very hard to encounter logic race. Each improvement
+is a bit focused on a specific use case, so I recommend reading any relevant-to-you
+commit message below.
+
+As well, the kversion package now detects Kafka 3.6, and the kgo package now
+handles AddPartitionsToTxn v4 (however, you will probably not be issuing this
+request).
+
+Lastly, this release is paired with a minor kadm release, which adds the
+ErrMessage field CreateTopicsResponse and DeleteTopicsResponse, and,
+importantly, fixes a data race in the ApiVersions request.
+
+#### franz-go
+
+- [`2a3b6bd`](https://github.com/twmb/franz-go/commit/2a3b6bd) **improvement** kversion: detect 3.6
+- [`fe5a660`](https://github.com/twmb/franz-go/commit/fe5a660) **improvement** kgo: add sharding for AddPartitionsToTxn for KIP-890
+- [`b2ccc2f`](https://github.com/twmb/franz-go/commit/b2ccc2f) **improvement** kgo: reintroduce random broker iteration
+- [`54a7418`](https://github.com/twmb/franz-go/commit/54a7418) **improvement** kgo: allow PreTxnCommitFnContext to modify empty offsets
+- [`c013050`](https://github.com/twmb/franz-go/commit/c013050) **bugfix** kgo: avoid rare panic
+- [`0ecb52b`](https://github.com/twmb/franz-go/commit/0ecb52b) **improvement** kgo: do not rotate the consumer session when pausing topics/partitions
+- [`1429d47`](https://github.com/twmb/franz-go/commit/1429d47) **improvement** sticky balancer: try for better topic distribution among members
+
+#### kadm
+
+- [`1955938`](https://github.com/twmb/franz-go/commit/1955938) **bugfix** kadm: do not reuse ApiVersions in many concurrent requests
+- [`66974e8`](https://github.com/twmb/franz-go/commit/66974e8) **feature** kadm: include ErrMessage in topic response
+
 v1.15.0
 ===
 
