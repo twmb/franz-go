@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"math/rand"
 	"net"
 	"os"
 	"strconv"
@@ -948,7 +949,9 @@ func (cxn *brokerCxn) doSasl(authenticate bool) error {
 		if latencyMillis > minPessimismMillis {
 			minPessimismMillis = latencyMillis
 		}
-		maxPessimismMillis := float64(lifetimeMillis) * (0.05 - 0.03*cxn.b.cl.rng()) // 95 to 98% of lifetime (pessimism 2% to 5%)
+		var random float64
+		cxn.b.cl.rng(func(r *rand.Rand) { random = r.Float64() })
+		maxPessimismMillis := float64(lifetimeMillis) * (0.05 - 0.03*random) // 95 to 98% of lifetime (pessimism 2% to 5%)
 
 		// Our minimum lifetime is always 1s (or latency, if larger).
 		// When our max pessimism becomes more than min pessimism,
