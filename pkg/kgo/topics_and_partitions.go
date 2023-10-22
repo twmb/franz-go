@@ -133,6 +133,14 @@ type pausedPartitions struct {
 	m   map[int32]struct{}
 }
 
+func (m pausedTopics) t(topic string) (pausedPartitions, bool) {
+	if len(m) == 0 { // potentially nil
+		return pausedPartitions{}, false
+	}
+	pps, exists := m[topic]
+	return pps, exists
+}
+
 func (m pausedTopics) has(topic string, partition int32) (paused bool) {
 	if len(m) == 0 {
 		return false

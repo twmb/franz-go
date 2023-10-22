@@ -307,8 +307,13 @@ func TestPauseIssue489(t *testing.T) {
 		}
 		cl.PauseFetchPartitions(map[string][]int32{t1: {0}})
 		sawZero, sawOne = false, false
-		for i := 0; i < 5; i++ {
-			fs := cl.PollFetches(ctx)
+		for i := 0; i < 10; i++ {
+			var fs Fetches
+			if i < 5 {
+				fs = cl.PollFetches(ctx)
+			} else {
+				fs = cl.PollRecords(ctx, 2)
+			}
 			fs.EachRecord(func(r *Record) {
 				sawZero = sawZero || r.Partition == 0
 				sawOne = sawOne || r.Partition == 1
