@@ -511,6 +511,14 @@ const (
 	// This relies on Kafka internals. Some brokers (notably Redpanda) are
 	// more strict with enforcing transaction correctness and this option
 	// cannot be used and will cause errors.
+	//
+	// Deprecated: Kafka 3.6 removed support for the hacky behavior that
+	// this option was abusing. Thus, as of Kafka 3.6, this option does not
+	// work against Kafka. This option also has never worked for Redpanda
+	// becuse Redpanda always strictly validated that partitions were a
+	// part of a transaction. Later versions of Kafka and Redpanda will
+	// remove the need for AddPartitionsToTxn at all and thus this option
+	// ultimately will be unnecessary anyway.
 	EndBeginTxnUnsafe
 )
 

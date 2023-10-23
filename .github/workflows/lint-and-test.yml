@@ -23,7 +23,7 @@ jobs:
       - uses: actions/checkout@v3
       - uses: actions/setup-go@v3
         with:
-          go-version: 1.20.3
+          go-version: 1.21.3
       - uses: golangci/golangci-lint-action@v3
         with:
           version: latest
@@ -34,10 +34,10 @@ jobs:
     needs: golangci
     runs-on: ubuntu-latest
     name: "integration test kafka"
-    container: golang:1.20.3
+    container: golang:1.21.3
     services:
       kafka:
-        image: bitnami/kafka:3.5
+        image: bitnami/kafka:latest
         ports:
           - 9092:9092
         env:
@@ -47,6 +47,7 @@ jobs:
           KAFKA_CFG_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
           KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
           KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: 1@127.0.0.1:9093
+          KAFKA_CFG_TRANSACTION_PARTITION_VERIFICATION_ENABLE: false
           # Set this to "PLAINTEXT://127.0.0.1:9092" if you want to run this container on localhost via Docker
           KAFKA_CFG_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
           KAFKA_CFG_NODE_ID: 1
@@ -58,7 +59,6 @@ jobs:
         env:
           KGO_TEST_RF: 1
           KGO_SEEDS: kafka:9092
-          KGO_TEST_UNSAFE: true
           KGO_TEST_STABLE_FETCH: true
 
   integration-test-redpanda:
@@ -66,7 +66,7 @@ jobs:
     needs: golangci
     runs-on: ubuntu-latest
     name: "integration test redpanda"
-    container: golang:1.20.3
+    container: golang:1.21.3
     services:
       redpanda:
         image: vectorized/redpanda-nightly:latest
