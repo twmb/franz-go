@@ -1541,6 +1541,20 @@ func Test_stickyAddEqualMove(t *testing.T) {
 	}
 }
 
+func Test_stickyTwoJoinEqualBalance(t *testing.T) {
+	t.Parallel()
+	topics := map[string]int32{"foo": 16, "bar": 16}
+	members := []GroupMember{
+		{ID: "1", Topics: []string{"foo", "bar"}},
+		{ID: "2", Topics: []string{"foo", "bar"}},
+	}
+	plan := Balance(members, topics)
+	if len(plan["1"]["foo"]) != 8 || len(plan["1"]["bar"]) != 8 ||
+		len(plan["2"]["foo"]) != 8 || len(plan["2"]["bar"]) != 8 {
+		t.Errorf("bad distribution: %v", plan)
+	}
+}
+
 func Test_stickyBalanceStrategy_Plan_AssignmentWithConflictingPreviousGenerations(t *testing.T) {
 	t.Parallel()
 
