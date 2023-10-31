@@ -355,6 +355,10 @@ func (s *source) takeBuffered(paused pausedTopics) Fetch {
 			// and strip the topic entirely.
 			pps, ok := paused.t(t)
 			if !ok {
+				for _, o := range ps {
+					o.from.setOffset(o.cursorOffset)
+					o.from.allowUsable()
+				}
 				continue
 			}
 			if strip == nil {
@@ -368,7 +372,6 @@ func (s *source) takeBuffered(paused pausedTopics) Fetch {
 				continue
 			}
 			stript := make(map[int32]struct{})
-			strip[t] = stript
 			for _, o := range ps {
 				if _, ok := pps.m[o.from.partition]; ok {
 					o.from.allowUsable()
@@ -377,6 +380,15 @@ func (s *source) takeBuffered(paused pausedTopics) Fetch {
 				}
 				o.from.setOffset(o.cursorOffset)
 				o.from.allowUsable()
+			}
+			// We only add stript to strip if there are any
+			// stripped partitions. We could have a paused
+			// partition that is on another broker, while this
+			// broker has no paused partitions -- if we add stript
+			// here, our logic below (stripping this entire topic)
+			// is more confusing (present nil vs. non-present nil).
+			if len(stript) > 0 {
+				strip[t] = stript
 			}
 		}
 	})
@@ -435,9 +447,15 @@ func (s *source) takeNBuffered(paused pausedTopics, n int) (Fetch, int, bool) {
 			continue
 		}
 
-		r.Topics = append(r.Topics, *t)
-		rt := &r.Topics[len(r.Topics)-1]
-		rt.Partitions = nil
+		var rt *FetchTopic
+		ensureTopicAdded := func() {
+			if rt != nil {
+				return
+			}
+			r.Topics = append(r.Topics, *t)
+			rt = &r.Topics[len(r.Topics)-1]
+			rt.Partitions = nil
+		}
 
 		tCursors := b.usedOffsets[t.Topic]
 
@@ -455,6 +473,7 @@ func (s *source) takeNBuffered(paused pausedTopics, n int) (Fetch, int, bool) {
 				continue
 			}
 
+			ensureTopicAdded()
 			rt.Partitions = append(rt.Partitions, *p)
 			rp := &rt.Partitions[len(rt.Partitions)-1]
 

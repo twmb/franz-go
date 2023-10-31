@@ -1763,10 +1763,16 @@ func (s *consumerSession) handleListOrEpochResults(loaded loadedOffsets) (reload
 	// guard this entire function.
 
 	debug := s.c.cl.cfg.logger.Level() >= LogLevelDebug
-	var using, reloading map[string]map[int32]EpochOffset
+
+	var using map[string]map[int32]EpochOffset
+	type epochOffsetWhy struct {
+		EpochOffset
+		error
+	}
+	var reloading map[string]map[int32]epochOffsetWhy
 	if debug {
 		using = make(map[string]map[int32]EpochOffset)
-		reloading = make(map[string]map[int32]EpochOffset)
+		reloading = make(map[string]map[int32]epochOffsetWhy)
 		defer func() {
 			t := "list"
 			if loaded.loadType == loadTypeEpoch {
@@ -1818,10 +1824,10 @@ func (s *consumerSession) handleListOrEpochResults(loaded loadedOffsets) (reload
 			if debug {
 				treloading := reloading[load.topic]
 				if treloading == nil {
-					treloading = make(map[int32]EpochOffset)
+					treloading = make(map[int32]epochOffsetWhy)
 					reloading[load.topic] = treloading
 				}
-				treloading[load.partition] = EpochOffset{load.leaderEpoch, load.offset}
+				treloading[load.partition] = epochOffsetWhy{EpochOffset{load.leaderEpoch, load.offset}, load.err}
 			}
 		}
 	}
