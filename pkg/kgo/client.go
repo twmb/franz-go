@@ -3420,10 +3420,17 @@ func (cl *addPartitionsToTxnSharder) shard(ctx context.Context, kreq kmsg.Reques
 
 	var issues []issueShard
 	for id, req := range brokerReqs {
-		issues = append(issues, issueShard{
-			req:    req,
-			broker: id,
-		})
+		if len(req.Transactions) <= 1 || len(req.Transactions) == 1 && !req.Transactions[0].VerifyOnly {
+			issues = append(issues, issueShard{
+				req:    &pinReq{Request: req, pinMax: true, max: 3},
+				broker: id,
+			})
+		} else {
+			issues = append(issues, issueShard{
+				req:    req,
+				broker: id,
+			})
+		}
 	}
 	for _, unkerr := range unkerrs {
 		issues = append(issues, issueShard{
