@@ -1,3 +1,15 @@
+v1.15.2
+===
+
+This patch release fixes two bugs and changes Mark functions to be no-ops when
+not using AutoCommitMarks to avoid confusion. This also includes a minor commit
+further improving the sticky balancer. See the commits for more details.
+
+- [`72778cb`](https://github.com/twmb/franz-go/commit/72778cb) **behavior change** kgo: no-op mark functions when not using AutoCommitMarks
+- [`e209bb6`](https://github.com/twmb/franz-go/commit/e209bb6) **bugfix** kgo: pin AddPartitionsToTxn to v3 when using one transaction
+- [`36b4437`](https://github.com/twmb/franz-go/commit/36b4437) sticky: further improvements
+- [`af5bc1f`](https://github.com/twmb/franz-go/commit/af5bc1f) **bugfix** kgo: be sure to use topics when other topics are paused
+
 v1.15.1
 ===
 
