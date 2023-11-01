@@ -69,7 +69,7 @@ jobs:
     container: golang:1.21.3
     services:
       redpanda:
-        image: vectorized/redpanda-nightly:latest
+        image: redpandadata/redpanda
         ports:
           - 9092:9092
         env:
