@@ -39,6 +39,7 @@ func TestGroupETL(t *testing.T) {
 			getSeedBrokers(),
 			WithLogger(BasicLogger(os.Stderr, testLogLevel, nil)),
 			MaxBufferedRecords(10000),
+			MaxBufferedBytes(50000),
 			UnknownTopicRetries(-1), // see txn_test comment
 		)
 		defer cl.Close()
@@ -124,6 +125,7 @@ func (c *testConsumer) etl(etlsBeforeQuit int) {
 		ConsumeTopics(c.consumeFrom),
 		Balancers(c.balancer),
 		MaxBufferedRecords(10000),
+		MaxBufferedBytes(50000),
 		ConsumePreferringLagFn(PreferLagAt(1)),
 		BlockRebalanceOnPoll(),
 

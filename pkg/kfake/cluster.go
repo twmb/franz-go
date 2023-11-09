@@ -68,7 +68,7 @@ func MustCluster(opts ...Opt) *Cluster {
 }
 
 // NewCluster returns a new mocked Kafka cluster.
-func NewCluster(opts ...Opt) (c *Cluster, err error) {
+func NewCluster(opts ...Opt) (*Cluster, error) {
 	cfg := cfg{
 		nbrokers:        3,
 		logger:          new(nopLogger),
@@ -87,7 +87,7 @@ func NewCluster(opts ...Opt) (c *Cluster, err error) {
 		cfg.nbrokers = len(cfg.ports)
 	}
 
-	c = &Cluster{
+	c := &Cluster{
 		cfg: cfg,
 
 		adminCh:      make(chan func()),
@@ -107,6 +107,7 @@ func NewCluster(opts ...Opt) (c *Cluster, err error) {
 	}
 	c.data.c = c
 	c.groups.c = c
+	var err error
 	defer func() {
 		if err != nil {
 			c.Close()
@@ -147,9 +148,9 @@ func NewCluster(opts ...Opt) (c *Cluster, err error) {
 		if len(cfg.ports) > 0 {
 			port = cfg.ports[i]
 		}
-		ln, err := newListener(port, c.cfg.tls)
+		var ln net.Listener
+		ln, err = newListener(port, c.cfg.tls)
 		if err != nil {
-			c.Close()
 			return nil, err
 		}
 		b := &broker{

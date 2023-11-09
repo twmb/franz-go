@@ -1,3 +1,112 @@
+v1.15.2
+===
+
+This patch release fixes two bugs and changes Mark functions to be no-ops when
+not using AutoCommitMarks to avoid confusion. This also includes a minor commit
+further improving the sticky balancer. See the commits for more details.
+
+- [`72778cb`](https://github.com/twmb/franz-go/commit/72778cb) **behavior change** kgo: no-op mark functions when not using AutoCommitMarks
+- [`e209bb6`](https://github.com/twmb/franz-go/commit/e209bb6) **bugfix** kgo: pin AddPartitionsToTxn to v3 when using one transaction
+- [`36b4437`](https://github.com/twmb/franz-go/commit/36b4437) sticky: further improvements
+- [`af5bc1f`](https://github.com/twmb/franz-go/commit/af5bc1f) **bugfix** kgo: be sure to use topics when other topics are paused
+
+v1.15.1
+===
+
+This patch release contains a bunch of internal improvements to kgo and
+includes a bugfix for a very hard to encounter logic race. Each improvement
+is a bit focused on a specific use case, so I recommend reading any relevant-to-you
+commit message below.
+
+As well, the kversion package now detects Kafka 3.6, and the kgo package now
+handles AddPartitionsToTxn v4 (however, you will probably not be issuing this
+request).
+
+Lastly, this release is paired with a minor kadm release, which adds the
+ErrMessage field CreateTopicsResponse and DeleteTopicsResponse, and,
+importantly, fixes a data race in the ApiVersions request.
+
+#### franz-go
+
+- [`2a3b6bd`](https://github.com/twmb/franz-go/commit/2a3b6bd) **improvement** kversion: detect 3.6
+- [`fe5a660`](https://github.com/twmb/franz-go/commit/fe5a660) **improvement** kgo: add sharding for AddPartitionsToTxn for KIP-890
+- [`b2ccc2f`](https://github.com/twmb/franz-go/commit/b2ccc2f) **improvement** kgo: reintroduce random broker iteration
+- [`54a7418`](https://github.com/twmb/franz-go/commit/54a7418) **improvement** kgo: allow PreTxnCommitFnContext to modify empty offsets
+- [`c013050`](https://github.com/twmb/franz-go/commit/c013050) **bugfix** kgo: avoid rare panic
+- [`0ecb52b`](https://github.com/twmb/franz-go/commit/0ecb52b) **improvement** kgo: do not rotate the consumer session when pausing topics/partitions
+- [`1429d47`](https://github.com/twmb/franz-go/commit/1429d47) **improvement** sticky balancer: try for better topic distribution among members
+
+#### kadm
+
+- [`1955938`](https://github.com/twmb/franz-go/commit/1955938) **bugfix** kadm: do not reuse ApiVersions in many concurrent requests
+- [`66974e8`](https://github.com/twmb/franz-go/commit/66974e8) **feature** kadm: include ErrMessage in topic response
+
+v1.15.0
+===
+
+This release comes 74 days (just over two months) since the last minor release.
+This mostly contains new features, with one relatively minor but important bug
+addressed (and one _very_ minor bug fixed).
+
+## Bug fixes
+
+* Fetch sessions now properly send forgotten topics if we forget the entire
+  topic (not just individual partitions while other partitions are still
+  consumed on the broker). For long-running clients where partitions move
+  around the cluster a bunch over time, this ensures we are not sending requests
+  with null topics / null topic IDs. See [#535](https://github.com/twmb/franz-go/issues/535)
+   for more details.
+* If the client talks to an http endpoint, we now properly detect the bytes
+  'HTTP' and send a more relevant error message. This previously existed, but
+  used the wrong int32 internally so 'HTTP' was not properly detected (thanks
+  [@alistairking](https://github.com/alistairking)!).
+
+## Features
+
+* `RecordReader` now supports %v{json} to parse json inputs
+* `RecordReader` now supports %v{}, an empty no-op formatting directive
+* Adds `PurgeTopicsFromProducing` and `PurgeTopicsFromConsuming` to purge _either_
+  the producing or consuming half of the client, if you are producing to and
+  consuming from the same topics in the same client.
+* The new `ConsiderMissingTopicDeletedAfter` option allows finer grained
+  control for how long a regexp-discovered topic can be missing on the cluster
+  before the topic is considered deleted (and then internally purged in the
+  client)
+* Adds `NewErrFetch` to create a single-error `Fetches`, for use in end-user
+  tests / stubs.
+* The new `MaxBufferedBytes` option can control how many bytes are buffered
+  when producing, an option similar to `MaxBufferedRecords`.
+* Adds `BufferedFetchBytes` and `BufferedProduceBytes` to return the total
+  bytes in records buffered (note this counts only keys, values, and headers).
+* Adds `PreTxnCommitFnContext` to allow custom `Metadata` annotation for
+  transactional commits.
+* Adds `LeaveGroupContext` to control how long leaving a group can take, as
+  well as to return any leave group error.
+
+## Relevant commits
+
+#### franz-go
+
+- [`4dcfb06`](https://github.com/twmb/franz-go/commit/4dcfb06) **feature** kgo: add LeaveGroupContext
+- [`910e91d`](https://github.com/twmb/franz-go/commit/910e91d) and [`60b601a`](https://github.com/twmb/franz-go/commit/60b601a) **feature** kgo: add PreTxnCommitFnContext
+- [`c80d6f4`](https://github.com/twmb/franz-go/commit/c80d6f4) **feature** kgo: add Buffered{Fetch,Produce}Bytes
+- [`304559f`](https://github.com/twmb/franz-go/commit/304559f) **feature** kgo: support MaxBufferedBytes
+- [`310a5da`](https://github.com/twmb/franz-go/commit/310a5da) **feature** kgo: add NewErrFetch
+- [`504a9d7`](https://github.com/twmb/franz-go/commit/504a9d7) **feature** kgo: expose ConsiderMissingTopicDeletedAfter
+- [`253e1a9`](https://github.com/twmb/franz-go/commit/253e1a9) **feature** kgo: add PurgeTopicsFrom{Producing,Consuming}
+- [`055e2d8`](https://github.com/twmb/franz-go/commit/055e2d8) **improvement** kgo record formatter: accept %v{} to be a no-op (plain read/format)
+- [`37edfb9`](https://github.com/twmb/franz-go/commit/37edfb9) **improvement** kgo.RecordReader: support %v{json} to read json values
+- [`8a9a459`](https://github.com/twmb/franz-go/commit/8a9a459) **bugfix** kgo: track topic IDs in the fetch session
+- [`9d25d3a`](https://github.com/twmb/franz-go/commit/9d25d3a) **bugfix** kgo: fix typo in parseReadSize to properly detect and warn about talking to HTTP endpoints (thanks [@alistairking](https://github.com/alistairking)!)
+
+#### kadm
+
+This release comes with a corresponding kadm release that contains a few
+behavior changes and improvements.
+
+- [`bfd07b2`](https://github.com/twmb/franz-go/commit/bfd07b2) kadm: fix occasionally empty topic/partitions in Lag
+- [`00ac608`](https://github.com/twmb/franz-go/commit/00ac608) kadm: change FetchOffsetsForTopics to only return requested topics by default
+
 v1.14.4
 ===
 
@@ -43,7 +152,7 @@ v1.14.0
 
 This release contains a few new APIs, one behavior change, and one minor bugfix.
 
-## Bugfixes
+## Bug fixes
 
 Previously, `HookBrokerRead` and `HookBrokerE2E` could not be used at the same
 time. This has been fixed.
@@ -231,7 +340,7 @@ network issues, and it is hard to detect these failures: you either have to pay
 close attention to logs, or you have to hook into HookGroupManageError. Now,
 the error is injected into polling.
 
-## Bugfixes
+## Bug fixes
 
 This release contains two bug fixes, one of which is very rare to encounter, and
 one of which is very easy to encounter but requires configuring the client in

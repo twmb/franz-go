@@ -157,3 +157,110 @@ func (m *Mode) UnmarshalText(text []byte) error {
 	}
 	return nil
 }
+
+// SchemaRuleKind as an enum representing the kind of schema rule.
+type SchemaRuleKind int
+
+const (
+	SchemaRuleKindTransform SchemaRuleKind = iota
+	SchemaRuleKindCondition
+)
+
+func (k SchemaRuleKind) String() string {
+	switch k {
+	case SchemaRuleKindTransform:
+		return "TRANSFORM"
+	case SchemaRuleKindCondition:
+		return "CONDITION"
+	default:
+		return ""
+	}
+}
+
+func (k SchemaRuleKind) MarshalText() ([]byte, error) {
+	s := k.String()
+	if s == "" {
+		return nil, fmt.Errorf("unknown schema rule kind %d", k)
+	}
+	return []byte(s), nil
+}
+
+func (k *SchemaRuleKind) UnmarshalText(text []byte) error {
+	switch s := strings.ToUpper(string(text)); s {
+	default:
+		return fmt.Errorf("unknown schema rule kind %q", s)
+	case "TRANSFORM":
+		*k = SchemaRuleKindTransform
+	case "CONDITION":
+		*k = SchemaRuleKindCondition
+	}
+	return nil
+}
+
+// Mode specifies a schema rule's mode.
+//
+// Migration rules can be specified for an UPGRADE, DOWNGRADE, or both
+// (UPDOWN). Migration rules are used during complex schema evolution.
+//
+// Domain rules can be specified during serialization (WRITE), deserialization
+// (READ) or both (WRITEREAD).
+//
+// Domain rules can be used to transform the domain values in a message
+// payload.
+type SchemaRuleMode int
+
+const (
+	SchemaRuleModeUpgrade SchemaRuleMode = iota
+	SchemaRuleModeDowngrade
+	SchemaRuleModeUpdown
+	SchemaRuleModeWrite
+	SchemaRuleModeRead
+	SchemaRuleModeWriteRead
+)
+
+func (m SchemaRuleMode) String() string {
+	switch m {
+	case SchemaRuleModeUpgrade:
+		return "UPGRADE"
+	case SchemaRuleModeDowngrade:
+		return "DOWNGRADE"
+	case SchemaRuleModeUpdown:
+		return "UPDOWN"
+	case SchemaRuleModeWrite:
+		return "WRITE"
+	case SchemaRuleModeRead:
+		return "READ"
+	case SchemaRuleModeWriteRead:
+		return "WRITEREAD"
+	default:
+		return ""
+	}
+}
+
+func (m SchemaRuleMode) MarshalText() ([]byte, error) {
+	s := m.String()
+	if s == "" {
+		return nil, fmt.Errorf("unknown schema rule mode %d", m)
+	}
+	return []byte(s), nil
+}
+
+func (m *SchemaRuleMode) UnmarshalText(text []byte) error {
+	switch s := strings.ToUpper(string(text)); s {
+	default:
+		return fmt.Errorf("unknown schema rule mode %q", s)
+	case "UPGRADE":
+		*m = SchemaRuleModeUpgrade
+	case "DOWNGRADE":
+		*m = SchemaRuleModeDowngrade
+	case "UPDOWN":
+		*m = SchemaRuleModeUpdown
+	case "WRITE":
+		*m = SchemaRuleModeWrite
+	case "READ":
+		*m = SchemaRuleModeRead
+	case "WRITEREAD":
+		*m = SchemaRuleModeWriteRead
+	}
+	return nil
+}

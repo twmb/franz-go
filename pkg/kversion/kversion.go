@@ -304,6 +304,7 @@ func (vs *Versions) versionGuess(opts ...VersionGuessOpt) guess {
 		{max330, "v3.3"},
 		{max340, "v3.4"},
 		{max350, "v3.5"},
+		{max360, "v3.6"},
 	} {
 		for k, v := range comparison.cmp.filter(cfg.listener) {
 			if v == -1 {
@@ -444,6 +445,10 @@ func V3_2_0() *Versions  { return zkBrokerOf(max320) }
 func V3_3_0() *Versions  { return zkBrokerOf(max330) }
 func V3_4_0() *Versions  { return zkBrokerOf(max340) }
 func V3_5_0() *Versions  { return zkBrokerOf(max350) }
+
+/* TODO wait for franz-go v1.16
+func V3_6_0() *Versions  { return zkBrokerOf(max360) }
+*/
 
 func zkBrokerOf(lks listenerKeys) *Versions {
 	return &Versions{lks.filter(zkBroker)}
@@ -1051,8 +1056,15 @@ var max350 = nextMax(max340, func(v listenerKeys) listenerKeys {
 	return v
 })
 
+var max360 = nextMax(max350, func(v listenerKeys) listenerKeys {
+	// KAFKA-14402 29a1a16668d76a1cc04ec9e39ea13026f2dce1de KIP-890
+	// Later commit swapped to stable
+	v[24].inc() // 4 add partitions to txn
+	return v
+})
+
 var (
-	maxStable = max350
+	maxStable = max360
 	maxTip    = nextMax(maxStable, func(v listenerKeys) listenerKeys {
 		return v
 	})

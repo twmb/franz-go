@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"math/rand"
 	"net"
 	"os"
 	"strconv"
@@ -948,7 +949,9 @@ func (cxn *brokerCxn) doSasl(authenticate bool) error {
 		if latencyMillis > minPessimismMillis {
 			minPessimismMillis = latencyMillis
 		}
-		maxPessimismMillis := float64(lifetimeMillis) * (0.05 - 0.03*cxn.b.cl.rng()) // 95 to 98% of lifetime (pessimism 2% to 5%)
+		var random float64
+		cxn.b.cl.rng(func(r *rand.Rand) { random = r.Float64() })
+		maxPessimismMillis := float64(lifetimeMillis) * (0.05 - 0.03*random) // 95 to 98% of lifetime (pessimism 2% to 5%)
 
 		// Our minimum lifetime is always 1s (or latency, if larger).
 		// When our max pessimism becomes more than min pessimism,
@@ -1166,7 +1169,7 @@ func (cxn *brokerCxn) parseReadSize(sizeBuf []byte) (int32, error) {
 		return 0, fmt.Errorf("invalid negative response size %d", size)
 	}
 	if maxSize := cxn.b.cl.cfg.maxBrokerReadBytes; size > maxSize {
-		if maxSize == 0x48545450 { // "HTTP"
+		if size == 0x48545450 { // "HTTP"
 			return 0, fmt.Errorf("invalid large response size %d > limit %d; the four size bytes are 'HTTP' in ascii, the beginning of an HTTP response; is your broker port correct?", size, maxSize)
 		}
 		// A TLS alert is 21, and a TLS alert has the version

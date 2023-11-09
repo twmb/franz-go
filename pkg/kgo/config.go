@@ -114,6 +114,7 @@ type cfg struct {
 	defaultProduceTopic string
 	maxRecordBatchBytes int32
 	maxBufferedRecords  int64
+	maxBufferedBytes    int64
 	produceTimeout      time.Duration
 	recordRetries       int64
 	maxUnknownFailures  int64
@@ -293,6 +294,7 @@ func (cfg *cfg) validate() error {
 
 		// Some random producer settings.
 		{name: "max buffered records", v: cfg.maxBufferedRecords, allowed: 1, badcmp: i64lt},
+		{name: "max buffered bytes", v: cfg.maxBufferedBytes, allowed: 0, badcmp: i64lt},
 		{name: "linger", v: int64(cfg.linger), allowed: int64(time.Minute), badcmp: i64gt, durs: true},
 		{name: "produce timeout", v: int64(cfg.produceTimeout), allowed: int64(100 * time.Millisecond), badcmp: i64lt, durs: true},
 		{name: "record timeout", v: int64(cfg.recordTimeout), allowed: int64(time.Second), badcmp: func(l, r int64) (bool, string) {
@@ -833,10 +835,14 @@ func ConcurrentTransactionsBackoff(backoff time.Duration) Opt {
 	return clientOpt{func(cfg *cfg) { cfg.txnBackoff = backoff }}
 }
 
-// considerMissingTopicDeletedAfter sets the amount of time a topic can be
+// ConsiderMissingTopicDeletedAfter sets the amount of time a topic can be
 // missing from metadata responses _after_ loading it at least once before it
-// is considered deleted.
-func considerMissingTopicDeletedAfter(t time.Duration) Opt {
+// is considered deleted, overriding the default of 15s. Note that for newer
+// versions of Kafka, it may take a bit of time (~15s) for the cluster to fully
+// recognize a newly created topic. If this option is set too low, there is
+// some risk that the client will internally purge and re-see a topic a few
+// times until the cluster fully broadcasts the topic creation.
+func ConsiderMissingTopicDeletedAfter(t time.Duration) Opt {
 	return clientOpt{func(cfg *cfg) { cfg.missingTopicDelete = t }}
 }
 
@@ -948,6 +954,23 @@ func MaxBufferedRecords(n int) ProducerOpt {
 	return producerOpt{func(cfg *cfg) { cfg.maxBufferedRecords = int64(n) }}
 }
 
+// MaxBufferedBytes sets the max amount of bytes that the client will buffer
+// while producing, blocking produces until records are finished if this limit
+// is reached. This overrides the unlimited default.
+//
+// Note that this option does _not_ apply for consuming: the client cannot
+// limit bytes buffered for consuming because of decompression. You can roughly
+// control consuming memory by using [MaxConcurrentFetches], [FetchMaxBytes],
+// and [FetchMaxPartitionBytes].
+//
+// If you produce a record that is larger than n, the record is immediately
+// failed with kerr.MessageTooLarge.
+//
+// Note that this limit applies after [MaxBufferedRecords].
+func MaxBufferedBytes(n int) ProducerOpt {
+	return producerOpt{func(cfg *cfg) { cfg.maxBufferedBytes = int64(n) }}
+}
+
 // RecordPartitioner uses the given partitioner to partition records, overriding
 // the default UniformBytesPartitioner(64KiB, true, true, nil).
 func RecordPartitioner(partitioner Partitioner) ProducerOpt {
@@ -1047,8 +1070,8 @@ func ProducerLinger(linger time.Duration) ProducerOpt {
 // ManualFlushing disables auto-flushing when producing. While you can still
 // set lingering, it would be useless to do so.
 //
-// With manual flushing, producing while MaxBufferedRecords have already been
-// produced and not flushed will return ErrMaxBuffered.
+// With manual flushing, producing while MaxBufferedRecords or MaxBufferedBytes
+// have already been produced and not flushed will return ErrMaxBuffered.
 func ManualFlushing() ProducerOpt {
 	return producerOpt{func(cfg *cfg) { cfg.manualFlushing = true }}
 }

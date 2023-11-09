@@ -2,28 +2,60 @@
 // partitions in the request. Before producing any records to a partition in
 // the transaction, that partition must have been added to the transaction with
 // this request.
-AddPartitionsToTxnRequest => key 24, max version 3, flexible v3+, txn coordinator
+//
+// Versions 3 and below are exclusively used by clients and versions 4 and
+// above are used by brokers.
+//
+// Version 4 adds VerifyOnly field to check if partitions are already in
+// transaction and adds support to batch multiple transactions.
+AddPartitionsToTxnRequest => key 24, max version 4, flexible v3+, txn coordinator
   // TransactionalID is the transactional ID to use for this request.
-  TransactionalID: string
+  TransactionalID: string // v0-v3
   // ProducerID is the producer ID of the client for this transactional ID
   // as received from InitProducerID.
-  ProducerID: int64
+  ProducerID: int64 // v0-v3
   // ProducerEpoch is the producer epoch of the client for this transactional ID
   // as received from InitProducerID.
-  ProducerEpoch: int16
+  ProducerEpoch: int16 // v0-v3
   // Topics are topics to add as part of the producer side of a transaction.
-  Topics: [=>]
+  Topics: [=>] // v0-v3
     // Topic is a topic name.
     Topic: string
     // Partitions are partitions within a topic to add as part of the producer
     // side of a transaction.
     Partitions: [int32]
+  // The list of transactions to add partitions to, for v4+, for brokers only.
+  // The fields in this are batch broker requests that duplicate the above fields
+  // and thus are undocumented (except VerifyOnly, which is new).
+  Transactions: [=>] // v4+
+    TransactionalID: string
+    ProducerID: int64
+    ProducerEpoch: int16
+    // VerifyOnly signifies if we want to check if the partition is in the
+    // transaction rather than add it.
+    VerifyOnly: bool
+    Topics: [=>]
+      Topic: string
+      Partitions: [int32]
 
 // AddPartitionsToTxnResponse is a response to an AddPartitionsToTxnRequest.
 AddPartitionsToTxnResponse =>
   ThrottleMillis(1)
+  // The response top level error code.
+  ErrorCode: int16 // v4+
+  // Results categorized by transactional ID, v4+ only, for brokers only.
+  // The fields duplicate v3 and below fields (except TransactionalID) and
+  // are left undocumented.
+  Transactions: [=>] // v4+
+    // The transactional id corresponding to the transaction.
+    TransactionalID: string
+    Topics: [=>]
+      Topic: string
+      Partitions: [=>]
+        Partition: int32
+        ErrorCode: int16
   // Topics are responses to topics in the request.
-  Topics: [=>]
+  Topics: [=>] // v0-v3
     // Topic is a topic being responded to.
     Topic: string
     // Partitions are responses to partitions in the request.

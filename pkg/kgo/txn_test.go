@@ -28,7 +28,9 @@ func TestTxnEtl(t *testing.T) {
 	go func() {
 		cl, err := NewClient(
 			getSeedBrokers(),
-			WithLogger(BasicLogger(os.Stderr, testLogLevel, nil)),
+			WithLogger(BasicLogger(os.Stderr, testLogLevel, func() string {
+				return time.Now().UTC().Format("15:04:05.999") + " "
+			})),
 			TransactionalID("p"+randsha()),
 			TransactionTimeout(2*time.Minute),
 			MaxBufferedRecords(10000),

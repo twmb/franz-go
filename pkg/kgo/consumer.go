@@ -41,9 +41,8 @@ func (o Offset) String() string {
 		return fmt.Sprintf("{%d e%d ce%d}", o.at, o.epoch, o.currentEpoch)
 	} else if o.relative > 0 {
 		return fmt.Sprintf("{%d+%d e%d ce%d}", o.at, o.relative, o.epoch, o.currentEpoch)
-	} else {
-		return fmt.Sprintf("{%d-%d e%d ce%d}", o.at, -o.relative, o.epoch, o.currentEpoch)
 	}
+	return fmt.Sprintf("{%d-%d e%d ce%d}", o.at, -o.relative, o.epoch, o.currentEpoch)
 }
 
 // EpochOffset returns this offset as an EpochOffset, allowing visibility into
@@ -162,6 +161,7 @@ func (o Offset) At(at int64) Offset {
 
 type consumer struct {
 	bufferedRecords atomicI64
+	bufferedBytes   atomicI64
 
 	cl *Client
 
@@ -285,6 +285,13 @@ func (cl *Client) BufferedFetchRecords() int64 {
 	return cl.consumer.bufferedRecords.Load()
 }
 
+// BufferedFetchBytes returns the number of bytes currently buffered from
+// fetching within the client. This is the sum of all keys, values, and header
+// keys/values. See the related [BufferedFetchRecords] for more information.
+func (cl *Client) BufferedFetchBytes() int64 {
+	return cl.consumer.bufferedBytes.Load()
+}
+
 type usedCursors map[*cursor]struct{}
 
 func (u *usedCursors) use(c *cursor) {
@@ -340,7 +347,9 @@ func (c *consumer) addFakeReadyForDraining(topic string, partition int32, err er
 	c.sourcesReadyCond.Broadcast()
 }
 
-func errFetch(err error) Fetches {
+// NewErrFetch returns a fake fetch containing a single empty topic with a
+// single zero partition with the given error.
+func NewErrFetch(err error) Fetches {
 	return []Fetch{{
 		Topics: []FetchTopic{{
 			Topic: "",
@@ -408,7 +417,7 @@ func (cl *Client) PollRecords(ctx context.Context, maxPollRecords int) Fetches {
 	if ctx != nil {
 		select {
 		case <-ctx.Done():
-			return errFetch(ctx.Err())
+			return NewErrFetch(ctx.Err())
 		default:
 		}
 	}
@@ -423,6 +432,8 @@ func (cl *Client) PollRecords(ctx context.Context, maxPollRecords int) Fetches {
 				}
 			}()
 		}
+
+		paused := c.loadPaused()
 
 		// A group can grab the consumer lock then the group mu and
 		// assign partitions. The group mu is grabbed to update its
@@ -442,13 +453,13 @@ func (cl *Client) PollRecords(ctx context.Context, maxPollRecords int) Fetches {
 		c.sourcesReadyMu.Lock()
 		if maxPollRecords < 0 {
 			for _, ready := range c.sourcesReadyForDraining {
-				fetches = append(fetches, ready.takeBuffered())
+				fetches = append(fetches, ready.takeBuffered(paused))
 			}
 			c.sourcesReadyForDraining = nil
 		} else {
 			for len(c.sourcesReadyForDraining) > 0 && maxPollRecords > 0 {
 				source := c.sourcesReadyForDraining[0]
-				fetch, taken, drained := source.takeNBuffered(maxPollRecords)
+				fetch, taken, drained := source.takeNBuffered(paused, maxPollRecords)
 				if drained {
 					c.sourcesReadyForDraining = c.sourcesReadyForDraining[1:]
 				}
@@ -511,10 +522,10 @@ func (cl *Client) PollRecords(ctx context.Context, maxPollRecords int) Fetches {
 	select {
 	case <-cl.ctx.Done():
 		exit()
-		return errFetch(ErrClientClosed)
+		return NewErrFetch(ErrClientClosed)
 	case <-ctx.Done():
 		exit()
-		return errFetch(ctx.Err())
+		return NewErrFetch(ctx.Err())
 	case <-done:
 	}
 
@@ -546,9 +557,7 @@ func (cl *Client) UpdateFetchMaxBytes(maxBytes, maxPartBytes int32) {
 // PauseFetchTopics sets the client to no longer fetch the given topics and
 // returns all currently paused topics. Paused topics persist until resumed.
 // You can call this function with no topics to simply receive the list of
-// currently paused topics. Pausing topics drops everything currently buffered
-// and kills any in flight fetch requests to ensure nothing that is paused
-// can be returned anymore from polling.
+// currently paused topics.
 //
 // Pausing topics is independent from pausing individual partitions with the
 // PauseFetchPartitions method. If you pause partitions for a topic with
@@ -560,15 +569,8 @@ func (cl *Client) PauseFetchTopics(topics ...string) []string {
 	if len(topics) == 0 {
 		return c.loadPaused().pausedTopics()
 	}
-
 	c.pausedMu.Lock()
 	defer c.pausedMu.Unlock()
-	defer func() {
-		c.mu.Lock()
-		defer c.mu.Unlock()
-		c.assignPartitions(nil, assignBumpSession, nil, fmt.Sprintf("pausing fetch topics %v", topics))
-	}()
-
 	paused := c.clonePaused()
 	paused.addTopics(topics...)
 	c.storePaused(paused)
@@ -578,9 +580,7 @@ func (cl *Client) PauseFetchTopics(topics ...string) []string {
 // PauseFetchPartitions sets the client to no longer fetch the given partitions
 // and returns all currently paused partitions. Paused partitions persist until
 // resumed. You can call this function with no partitions to simply receive the
-// list of currently paused partitions. Pausing partitions drops everything
-// currently buffered and kills any in flight fetch requests to ensure nothing
-// that is paused can be returned anymore from polling.
+// list of currently paused partitions.
 //
 // Pausing individual partitions is independent from pausing topics with the
 // PauseFetchTopics method. If you pause partitions for a topic with
@@ -592,15 +592,8 @@ func (cl *Client) PauseFetchPartitions(topicPartitions map[string][]int32) map[s
 	if len(topicPartitions) == 0 {
 		return c.loadPaused().pausedPartitions()
 	}
-
 	c.pausedMu.Lock()
 	defer c.pausedMu.Unlock()
-	defer func() {
-		c.mu.Lock()
-		defer c.mu.Unlock()
-		c.assignPartitions(nil, assignBumpSession, nil, fmt.Sprintf("pausing fetch partitions %v", topicPartitions))
-	}()
-
 	paused := c.clonePaused()
 	paused.addPartitions(topicPartitions)
 	c.storePaused(paused)
@@ -875,10 +868,6 @@ const (
 	// The counterpart to assignInvalidateMatching, assignSetMatching
 	// resets all matching partitions to the specified offset / epoch.
 	assignSetMatching
-
-	// For pausing, we want to drop anything inflight. We start a new
-	// session with the old tps.
-	assignBumpSession
 )
 
 func (h assignHow) String() string {
@@ -893,8 +882,6 @@ func (h assignHow) String() string {
 		return "unassigning and purging any partition matching the input topics"
 	case assignSetMatching:
 		return "reassigning any currently assigned matching partition to the input"
-	case assignBumpSession:
-		return "bumping internal consumer session to drop anything currently in flight"
 	}
 	return ""
 }
@@ -975,8 +962,6 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how
 		// if we had no session before, which is why we need to pass in
 		// our topicPartitions.
 		session = c.guardSessionChange(tps)
-	} else if how == assignBumpSession {
-		loadOffsets, tps = c.stopSession()
 	} else {
 		loadOffsets, _ = c.stopSession()
 
@@ -1023,7 +1008,7 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how
 		// assignment went straight to listing / epoch loading, and
 		// that list/epoch never finished.
 		switch how {
-		case assignWithoutInvalidating, assignBumpSession:
+		case assignWithoutInvalidating:
 			// Nothing to do -- this is handled above.
 		case assignInvalidateAll:
 			loadOffsets = listOrEpochLoads{}
@@ -1658,6 +1643,15 @@ func (c *consumer) startNewSession(tps *topicsPartitions) *consumerSession {
 func (s *consumerSession) listOrEpoch(waiting listOrEpochLoads, immediate bool, why string) {
 	defer s.decWorker()
 
+	// It is possible for a metadata update to try to migrate partition
+	// loads if the update moves partitions between brokers. If we are
+	// closing the client, the consumer session could already be stopped,
+	// but this stops before the metadata goroutine is killed. So, if we
+	// are in this function but actually have no session, we return.
+	if s == noConsumerSession {
+		return
+	}
+
 	wait := true
 	if immediate {
 		s.c.cl.triggerUpdateMetadataNow(why)
@@ -1769,10 +1763,16 @@ func (s *consumerSession) handleListOrEpochResults(loaded loadedOffsets) (reload
 	// guard this entire function.
 
 	debug := s.c.cl.cfg.logger.Level() >= LogLevelDebug
-	var using, reloading map[string]map[int32]EpochOffset
+
+	var using map[string]map[int32]EpochOffset
+	type epochOffsetWhy struct {
+		EpochOffset
+		error
+	}
+	var reloading map[string]map[int32]epochOffsetWhy
 	if debug {
 		using = make(map[string]map[int32]EpochOffset)
-		reloading = make(map[string]map[int32]EpochOffset)
+		reloading = make(map[string]map[int32]epochOffsetWhy)
 		defer func() {
 			t := "list"
 			if loaded.loadType == loadTypeEpoch {
@@ -1824,10 +1824,10 @@ func (s *consumerSession) handleListOrEpochResults(loaded loadedOffsets) (reload
 			if debug {
 				treloading := reloading[load.topic]
 				if treloading == nil {
-					treloading = make(map[int32]EpochOffset)
+					treloading = make(map[int32]epochOffsetWhy)
 					reloading[load.topic] = treloading
 				}
-				treloading[load.partition] = EpochOffset{load.leaderEpoch, load.offset}
+				treloading[load.partition] = epochOffsetWhy{EpochOffset{load.leaderEpoch, load.offset}, load.err}
 			}
 		}
 	}

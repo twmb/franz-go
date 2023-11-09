@@ -7,7 +7,6 @@ package sticky
 
 import (
 	"math"
-	"sort"
 
 	"github.com/twmb/franz-go/pkg/kbin"
 	"github.com/twmb/franz-go/pkg/kmsg"
@@ -138,7 +137,7 @@ func (b *balancer) into() Plan {
 		// partOwners is created by topic, and partNums refers to
 		// indices in partOwners. If we sort by partNum, we have sorted
 		// topics and partitions.
-		sort.Sort(&partNums) //nolint:gosec // sorting the slice, not using the pointer across iter
+		sortPartNums(partNums)
 
 		// We can reuse partNums for our topic partitions.
 		topicParts := partNums[:0]
@@ -202,10 +201,6 @@ func (m *memberPartitions) takeEnd() int32 {
 func (m *memberPartitions) add(partNum int32) {
 	*m = append(*m, partNum)
 }
-
-func (m *memberPartitions) Len() int           { return len(*m) }
-func (m *memberPartitions) Less(i, j int) bool { return (*m)[i] < (*m)[j] }
-func (m *memberPartitions) Swap(i, j int)      { (*m)[i], (*m)[j] = (*m)[j], (*m)[i] }
 
 // membersPartitions maps members to their partitions.
 type membersPartitions []memberPartitions
@@ -472,22 +467,49 @@ func (b *balancer) assignUnassignedAndInitGraph() {
 	}
 
 	b.tryRestickyStales(topicPotentials, partitionConsumers)
-	for _, potentials := range topicPotentials {
-		(&membersByPartitions{potentials, b.plan}).init()
+
+	// For each member, we now sort their current partitions by partition,
+	// then topic. Sorting the lowest numbers first means that once we
+	// steal from the end (when adding a member), we steal equally across
+	// all topics. This benefits the standard case the most, where all
+	// members consume equally.
+	for memberNum := range b.plan {
+		b.sortMemberByLiteralPartNum(memberNum)
 	}
 
-	for partNum, owner := range partitionConsumers {
-		if owner.memberNum != unassignedPart {
-			continue
+	if !b.isComplex && len(topicPotentials) > 0 {
+		potentials := topicPotentials[0]
+		(&membersByPartitions{potentials, b.plan}).init()
+		for partNum, owner := range partitionConsumers {
+			if owner.memberNum != unassignedPart {
+				continue
+			}
+			assigned := potentials[0]
+			b.plan[assigned].add(int32(partNum))
+			(&membersByPartitions{potentials, b.plan}).fix0()
+			partitionConsumers[partNum].memberNum = assigned
 		}
-		potentials := topicPotentials[b.partOwners[partNum]]
-		if len(potentials) == 0 {
-			continue
+	} else {
+		for partNum, owner := range partitionConsumers {
+			if owner.memberNum != unassignedPart {
+				continue
+			}
+			potentials := topicPotentials[b.partOwners[partNum]]
+			if len(potentials) == 0 {
+				continue
+			}
+			leastConsumingPotential := potentials[0]
+			leastConsuming := len(b.plan[leastConsumingPotential])
+			for _, potential := range potentials[1:] {
+				potentialConsuming := len(b.plan[potential])
+				if potentialConsuming < leastConsuming {
+					leastConsumingPotential = potential
+					leastConsuming = potentialConsuming
+				}
+			}
+			b.plan[leastConsumingPotential].add(int32(partNum))
+			partitionConsumers[partNum].memberNum = leastConsumingPotential
 		}
-		assigned := potentials[0]
-		b.plan[assigned].add(int32(partNum))
-		(&membersByPartitions{potentials, b.plan}).fix0()
-		partitionConsumers[partNum].memberNum = assigned
 	}
 
 	// Lastly, with everything assigned, we build our steal graph for
@@ -535,7 +557,7 @@ func (b *balancer) tryRestickyStales(
 		currentOwner := partitionConsumers[staleNum].memberNum
 		lastOwnerPartitions := &b.plan[lastOwnerNum]
 		currentOwnerPartitions := &b.plan[currentOwner]
-		if lastOwnerPartitions.Len()+1 < currentOwnerPartitions.Len() {
+		if len(*lastOwnerPartitions)+1 < len(*currentOwnerPartitions) {
 			currentOwnerPartitions.remove(staleNum)
 			lastOwnerPartitions.add(staleNum)
 		}
@@ -686,8 +708,8 @@ func (b *balancer) reassignPartition(src, dst uint16, partNum int32) {
 	srcPartitions := &b.plan[src]
 	dstPartitions := &b.plan[dst]
 
-	oldSrcLevel := srcPartitions.Len()
-	oldDstLevel := dstPartitions.Len()
+	oldSrcLevel := len(*srcPartitions)
+	oldDstLevel := len(*dstPartitions)
 
 	srcPartitions.remove(partNum)
 	dstPartitions.add(partNum)

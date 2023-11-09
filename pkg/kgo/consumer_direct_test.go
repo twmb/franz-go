@@ -263,10 +263,19 @@ func TestAddRemovePartitions(t *testing.T) {
 	}
 }
 
+func closed(ch <-chan struct{}) bool {
+	select {
+	case <-ch:
+		return true
+	default:
+		return false
+	}
+}
+
 func TestPauseIssue489(t *testing.T) {
 	t.Parallel()
 
-	t1, cleanup := tmpTopicPartitions(t, 2)
+	t1, cleanup := tmpTopicPartitions(t, 3)
 	defer cleanup()
 
 	cl, _ := NewClient(
@@ -282,42 +291,142 @@ func TestPauseIssue489(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
 		var exit atomic.Bool
-		var zeroOne uint8
+		var which uint8
 		for !exit.Load() {
 			r := StringRecord("v")
-			r.Partition = int32(zeroOne % 2)
-			zeroOne++
+			r.Partition = int32(which % 3)
+			which++
 			cl.Produce(ctx, r, func(r *Record, err error) {
 				if err == context.Canceled {
 					exit.Store(true)
 				}
 			})
+			time.Sleep(100 * time.Microsecond)
 		}
 	}()
 	defer cancel()
 
-	for i := 0; i < 10; i++ {
-		var sawZero, sawOne bool
-		for !sawZero || !sawOne {
-			fs := cl.PollFetches(ctx)
-			fs.EachRecord(func(r *Record) {
-				sawZero = sawZero || r.Partition == 0
-				sawOne = sawOne || r.Partition == 1
+	for _, pollfn := range []struct {
+		name string
+		fn   func(context.Context) Fetches
+	}{
+		{"fetches", func(ctx context.Context) Fetches { return cl.PollFetches(ctx) }},
+		{"records", func(ctx context.Context) Fetches { return cl.PollRecords(ctx, 1000) }},
+	} {
+		for i := 0; i < 10; i++ {
+			ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			var sawZero, sawOne, sawTwo bool
+			for (!sawZero || !sawOne || !sawTwo) && !closed(ctx.Done()) {
+				fs := pollfn.fn(ctx)
+				fs.EachRecord(func(r *Record) {
+					sawZero = sawZero || r.Partition == 0
+					sawOne = sawOne || r.Partition == 1
+					sawTwo = sawTwo || r.Partition == 2
+				})
+			}
+			cl.PauseFetchPartitions(map[string][]int32{t1: {0}})
+			sawZero, sawOne, sawTwo = false, false, false
+			for i := 0; i < 10 && !closed(ctx.Done()); i++ {
+				fs := pollfn.fn(ctx)
+				fs.EachRecord(func(r *Record) {
+					sawZero = sawZero || r.Partition == 0
+					sawOne = sawOne || r.Partition == 1
+					sawTwo = sawTwo || r.Partition == 2
+				})
+			}
+			cancel()
+			if sawZero {
+				t.Fatalf("%s: saw partition zero even though it was paused", pollfn.name)
+			}
+			if !sawOne {
+				t.Fatalf("%s: did not see partition one even though it was not paused", pollfn.name)
+			}
+			if !sawTwo {
+				t.Fatalf("%s: did not see partition two even though it was not paused", pollfn.name)
+			}
+			cl.ResumeFetchPartitions(map[string][]int32{t1: {0}})
+		}
+	}
+}
+
+func TestPauseIssueOct2023(t *testing.T) {
+	t.Parallel()
+
+	t1, cleanup1 := tmpTopicPartitions(t, 1)
+	t2, cleanup2 := tmpTopicPartitions(t, 1)
+	t3, cleanup3 := tmpTopicPartitions(t, 1)
+	defer cleanup1()
+	defer cleanup2()
+	defer cleanup3()
+	ts := []string{t1, t2, t3}
+
+	cl, _ := NewClient(
+		getSeedBrokers(),
+		UnknownTopicRetries(-1),
+		ConsumeTopics(ts...),
+		MetadataMinAge(50*time.Millisecond),
+		FetchMaxWait(100*time.Millisecond),
+	)
+	defer cl.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		var exit atomic.Bool
+		var which int
+		for !exit.Load() {
+			r := StringRecord("v")
+			r.Topic = ts[which%len(ts)]
+			which++
+			cl.Produce(ctx, r, func(r *Record, err error) {
+				if err == context.Canceled {
+					exit.Store(true)
+				}
 			})
+			time.Sleep(100 * time.Microsecond)
 		}
-		cl.PauseFetchPartitions(map[string][]int32{t1: {0}})
-		sawZero, sawOne = false, false
-		for i := 0; i < 5; i++ {
-			fs := cl.PollFetches(ctx)
-			fs.EachRecord(func(r *Record) {
-				sawZero = sawZero || r.Partition == 0
-				sawOne = sawOne || r.Partition == 1
-			})
+	}()
+	defer cancel()
+
+	for _, pollfn := range []struct {
+		name string
+		fn   func(context.Context) Fetches
+	}{
+		{"fetches", func(ctx context.Context) Fetches { return cl.PollFetches(ctx) }},
+		{"records", func(ctx context.Context) Fetches { return cl.PollRecords(ctx, 1000) }},
+	} {
+		for i := 0; i < 10; i++ {
+			ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			var sawt1, sawt2, sawt3 bool
+			for (!sawt1 || !sawt2 || !sawt3) && !closed(ctx.Done()) {
+				fs := pollfn.fn(ctx)
+				fs.EachRecord(func(r *Record) {
+					sawt1 = sawt1 || r.Topic == t1
+					sawt2 = sawt2 || r.Topic == t2
+					sawt3 = sawt3 || r.Topic == t3
+				})
+			}
+			cl.PauseFetchTopics(t1)
+			sawt1, sawt2, sawt3 = false, false, false
+			for i := 0; i < 10 && !closed(ctx.Done()); i++ {
+				fs := pollfn.fn(ctx)
+				fs.EachRecord(func(r *Record) {
+					sawt1 = sawt1 || r.Topic == t1
+					sawt2 = sawt2 || r.Topic == t2
+					sawt3 = sawt3 || r.Topic == t3
+				})
+			}
+			cancel()
+			if sawt1 {
+				t.Fatalf("%s: saw topic t1 even though it was paused", pollfn.name)
+			}
+			if !sawt2 {
+				t.Fatalf("%s: did not see topic t2 even though it was not paused", pollfn.name)
+			}
+			if !sawt3 {
+				t.Fatalf("%s: did not see topic t3 even though it was not paused", pollfn.name)
+			}
+			cl.ResumeFetchTopics(t1)
 		}
-		if sawZero {
-			t.Error("saw partition zero even though it was paused")
-		}
-		cl.ResumeFetchPartitions(map[string][]int32{t1: {0}})
 	}
 }
 

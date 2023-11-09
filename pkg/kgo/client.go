@@ -39,12 +39,12 @@ type Client struct {
 	ctx       context.Context
 	ctxCancel func()
 
-	rng func() float64
+	rng func(func(*rand.Rand))
 
 	brokersMu    sync.RWMutex
 	brokers      []*broker    // ordered by broker ID
 	seeds        atomic.Value // []*broker, seed brokers, also ordered by ID
-	anyBrokerIdx int32
+	anyBrokerOrd []int32      // shuffled brokers, for random ordering
 	anySeedIdx   int32
 	stopBrokers  bool // set to true on close to stop updateBrokers
 
@@ -281,7 +281,7 @@ func (cl *Client) OptValues(opt any) []any {
 		return []any{cfg.hooks}
 	case namefn(ConcurrentTransactionsBackoff):
 		return []any{cfg.txnBackoff}
-	case namefn(considerMissingTopicDeletedAfter):
+	case namefn(ConsiderMissingTopicDeletedAfter):
 		return []any{cfg.missingTopicDelete}
 
 	case namefn(DefaultProduceTopic):
@@ -298,6 +298,8 @@ func (cl *Client) OptValues(opt any) []any {
 		return []any{cfg.maxRecordBatchBytes}
 	case namefn(MaxBufferedRecords):
 		return []any{cfg.maxBufferedRecords}
+	case namefn(MaxBufferedBytes):
+		return []any{cfg.maxBufferedBytes}
 	case namefn(RecordPartitioner):
 		return []any{cfg.partitioner}
 	case namefn(ProduceRequestTimeout):
@@ -460,13 +462,13 @@ func NewClient(opts ...Opt) (*Client, error) {
 		ctx:       ctx,
 		ctxCancel: cancel,
 
-		rng: func() func() float64 {
+		rng: func() func(func(*rand.Rand)) {
 			var mu sync.Mutex
 			rng := rand.New(rand.NewSource(time.Now().UnixNano()))
-			return func() float64 {
+			return func(fn func(*rand.Rand)) {
 				mu.Lock()
 				defer mu.Unlock()
-				return rng.Float64()
+				fn(rng)
 			}
 		}(),
 
@@ -560,7 +562,9 @@ func (cl *Client) Ping(ctx context.Context) error {
 }
 
 // PurgeTopicsFromClient internally removes all internal information about the
-// input topics.
+// input topics. If you you want to purge information for only consuming or
+// only producing, see the related functions [PurgeTopicsFromConsuming] and
+// [PurgeTopicsFromProducing].
 //
 // For producing, this clears all knowledge that these topics have ever been
 // produced to. Producing to the topic again may result in out of order
@@ -608,6 +612,34 @@ func (cl *Client) PurgeTopicsFromClient(topics ...string) {
 		delete(cl.mappedMeta, t)
 	}
 	cl.mappedMetaMu.Unlock()
+}
+
+// PurgeTopicsFromProducing internally removes all internal information for
+// producing about the input topics. This runs the producer bit of logic that
+// is documented in [PurgeTopicsFromClient]; see that function for more
+// details.
+func (cl *Client) PurgeTopicsFromProducing(topics ...string) {
+	if len(topics) == 0 {
+		return
+	}
+	sort.Strings(topics)
+	cl.blockingMetadataFn(func() {
+		cl.producer.purgeTopics(topics)
+	})
+}
+
+// PurgeTopicsFromConsuming internally removes all internal information for
+// consuming about the input topics. This runs the consumer bit of logic that
+// is documented in [PurgeTopicsFromClient]; see that function for more
+// details.
+func (cl *Client) PurgeTopicsFromConsuming(topics ...string) {
+	if len(topics) == 0 {
+		return
+	}
+	sort.Strings(topics)
+	cl.blockingMetadataFn(func() {
+		cl.consumer.purgeTopics(topics)
+	})
 }
 
 // Parse broker IP/host and port from a string, using the default Kafka port if
@@ -701,9 +733,21 @@ func (c *connTimeouter) timeouts(req kmsg.Request) (r, w time.Duration) {
 	}
 }
 
+func (cl *Client) reinitAnyBrokerOrd() {
+	cl.anyBrokerOrd = append(cl.anyBrokerOrd[:0], make([]int32, len(cl.brokers))...)
+	for i := range cl.anyBrokerOrd {
+		cl.anyBrokerOrd[i] = int32(i)
+	}
+	cl.rng(func(r *rand.Rand) {
+		r.Shuffle(len(cl.anyBrokerOrd), func(i, j int) {
+			cl.anyBrokerOrd[i], cl.anyBrokerOrd[j] = cl.anyBrokerOrd[j], cl.anyBrokerOrd[i]
+		})
+	})
+}
+
 // broker returns a random broker from all brokers ever known.
 func (cl *Client) broker() *broker {
-	cl.brokersMu.Lock() // full lock needed for anyBrokerIdx below
+	cl.brokersMu.Lock()
 	defer cl.brokersMu.Unlock()
 
 	// Every time we loop through all discovered brokers, we issue one
@@ -711,23 +755,23 @@ func (cl *Client) broker() *broker {
 	// brokers are down, we will *eventually* loop through seeds and
 	// hopefully have a reachable seed.
 	var b *broker
-	if len(cl.brokers) > 0 && int(cl.anyBrokerIdx) < len(cl.brokers) {
-		cl.anyBrokerIdx %= int32(len(cl.brokers))
-		b = cl.brokers[cl.anyBrokerIdx]
-		cl.anyBrokerIdx++
-	} else {
-		seeds := cl.loadSeeds()
-		cl.anySeedIdx %= int32(len(seeds))
-		b = seeds[cl.anySeedIdx]
-		cl.anySeedIdx++
 
-		// If we have brokers, we ranged past discovered brokers.
-		// We now reset the anyBrokerIdx to begin ranging through
-		// discovered brokers again.
-		if len(cl.brokers) > 0 {
-			cl.anyBrokerIdx = 0
-		}
+	if len(cl.anyBrokerOrd) > 0 {
+		b = cl.brokers[cl.anyBrokerOrd[0]]
+		cl.anyBrokerOrd = cl.anyBrokerOrd[1:]
+		return b
 	}
+
+	seeds := cl.loadSeeds()
+	cl.anySeedIdx %= int32(len(seeds))
+	b = seeds[cl.anySeedIdx]
+	cl.anySeedIdx++
+
+	// If we have brokers, we ranged past discovered brokers.
+	// We now reset the anyBrokerOrd to begin ranging through
+	// discovered brokers again. If there are still no brokers,
+	// this reinit will do nothing and we will keep looping seeds.
+	cl.reinitAnyBrokerOrd()
 	return b
 }
 
@@ -914,6 +958,7 @@ func (cl *Client) updateBrokers(brokers []kmsg.MetadataResponseBroker) {
 	}
 
 	cl.brokers = newBrokers
+	cl.reinitAnyBrokerOrd()
 }
 
 // CloseAllowingRebalance allows rebalances, leaves any group, and closes all
@@ -929,7 +974,10 @@ func (cl *Client) CloseAllowingRebalance() {
 	cl.Close()
 }
 
-// Close leaves any group and closes all connections and goroutines.
+// Close leaves any group and closes all connections and goroutines. This
+// function waits for the group to be left. If you want to force leave a group
+// immediately and ensure a speedy shutdown you can use LeaveGroupContext first
+// (and then Close will be immediate).
 //
 // If you are group consuming and have overridden the default
 // OnPartitionsRevoked, you must manually commit offsets before closing the
@@ -942,6 +990,10 @@ func (cl *Client) CloseAllowingRebalance() {
 // notification of revoked partitions. If you want to automatically allow
 // rebalancing, use CloseAllowingRebalance.
 func (cl *Client) Close() {
+	cl.close(cl.ctx)
+}
+
+func (cl *Client) close(ctx context.Context) (rerr error) {
 	defer cl.cfg.hooks.each(func(h Hook) {
 		if h, ok := h.(HookClientClosed); ok {
 			h.OnClientClosed(cl)
@@ -951,7 +1003,7 @@ func (cl *Client) Close() {
 	c := &cl.consumer
 	c.kill.Store(true)
 	if c.g != nil {
-		cl.LeaveGroup()
+		rerr = cl.LeaveGroupContext(ctx)
 	} else if c.d != nil {
 		c.mu.Lock()                                           // lock for assign
 		c.assignPartitions(nil, assignInvalidateAll, nil, "") // we do not use a log message when not in a group
@@ -963,7 +1015,7 @@ func (cl *Client) Close() {
 	// loopFetch from starting. Assigning also waits for the prior session
 	// to be complete, meaning loopFetch cannot be running.
 
-	sessCloseCtx, sessCloseCancel := context.WithTimeout(cl.ctx, time.Second)
+	sessCloseCtx, sessCloseCancel := context.WithTimeout(ctx, time.Second)
 	var wg sync.WaitGroup
 	cl.allSinksAndSources(func(sns sinkAndSource) {
 		if sns.source.session.id != 0 {
@@ -1015,6 +1067,8 @@ func (cl *Client) Close() {
 			closing.Close()
 		}
 	}
+
+	return rerr
 }
 
 // Request issues a request to Kafka, waiting for and returning the response.
@@ -1284,6 +1338,8 @@ func (cl *Client) shardedRequest(ctx context.Context, req kmsg.Request) ([]Respo
 		*kmsg.ListGroupsRequest,              // key 16
 		*kmsg.DeleteRecordsRequest,           // key 21
 		*kmsg.OffsetForLeaderEpochRequest,    // key 23
+		*kmsg.AddPartitionsToTxnRequest,      // key 24
+		*kmsg.WriteTxnMarkersRequest,         // key 27
 		*kmsg.DescribeConfigsRequest,         // key 32
 		*kmsg.AlterConfigsRequest,            // key 33
 		*kmsg.AlterReplicaLogDirsRequest,     // key 34
@@ -1734,8 +1790,6 @@ func (cl *Client) handleCoordinatorReq(ctx context.Context, req kmsg.Request) Re
 		// names, we delete no coordinator.
 		coordinator, resp, err := cl.handleReqWithCoordinator(ctx, func() (*broker, error) { return cl.broker(), nil }, coordinatorTypeTxn, "", req)
 		return shard(coordinator, req, resp, err)
-	case *kmsg.AddPartitionsToTxnRequest:
-		return cl.handleCoordinatorReqSimple(ctx, coordinatorTypeTxn, t.TransactionalID, req)
 	case *kmsg.AddOffsetsToTxnRequest:
 		return cl.handleCoordinatorReqSimple(ctx, coordinatorTypeTxn, t.TransactionalID, req)
 	case *kmsg.EndTxnRequest:
@@ -1799,10 +1853,6 @@ func (cl *Client) handleReqWithCoordinator(
 		// TXN
 		case *kmsg.InitProducerIDResponse:
 			code = t.ErrorCode
-		case *kmsg.AddPartitionsToTxnResponse:
-			if len(t.Topics) > 0 && len(t.Topics[0].Partitions) > 0 {
-				code = t.Topics[0].Partitions[0].ErrorCode
-			}
 		case *kmsg.AddOffsetsToTxnResponse:
 			code = t.ErrorCode
 		case *kmsg.EndTxnResponse:
@@ -2039,6 +2089,8 @@ func (cl *Client) handleShardedReq(ctx context.Context, req kmsg.Request) ([]Res
 		sharder = &deleteRecordsSharder{cl}
 	case *kmsg.OffsetForLeaderEpochRequest:
 		sharder = &offsetForLeaderEpochSharder{cl}
+	case *kmsg.AddPartitionsToTxnRequest:
+		sharder = &addPartitionsToTxnSharder{cl}
 	case *kmsg.WriteTxnMarkersRequest:
 		sharder = &writeTxnMarkersSharder{cl}
 	case *kmsg.DescribeConfigsRequest:
@@ -2726,9 +2778,16 @@ func (cl *offsetFetchSharder) shard(ctx context.Context, kreq kmsg.Request, last
 					broker: id,
 				})
 			}
+		} else if len(req.Groups) == 1 {
+			single := offsetFetchGroupToReq(req.RequireStable, req.Groups[0])
+			single.Groups = req.Groups
+			issues = append(issues, issueShard{
+				req:    single,
+				broker: id,
+			})
 		} else {
 			issues = append(issues, issueShard{
-				req:    &pinReq{Request: req, pinMin: true, min: 8},
+				req:    &pinReq{Request: req, pinMin: len(req.Groups) > 1, min: 8},
 				broker: id,
 			})
 		}
@@ -2750,7 +2809,7 @@ func (cl *offsetFetchSharder) shard(ctx context.Context, kreq kmsg.Request, last
 }
 
 func (cl *offsetFetchSharder) onResp(kreq kmsg.Request, kresp kmsg.Response) error {
-	req := kreq.(*kmsg.OffsetFetchRequest) // we always issue pinned requests
+	req := kreq.(*kmsg.OffsetFetchRequest)
 	resp := kresp.(*kmsg.OffsetFetchResponse)
 
 	switch len(resp.Groups) {
@@ -2835,9 +2894,16 @@ func (*findCoordinatorSharder) shard(_ context.Context, kreq kmsg.Request, lastE
 	for key := range uniq {
 		req.CoordinatorKeys = append(req.CoordinatorKeys, key)
 	}
+	if len(req.CoordinatorKeys) == 1 {
+		req.CoordinatorKey = req.CoordinatorKeys[0]
+	}
 
 	splitReq := errors.Is(lastErr, errBrokerTooOld)
 	if !splitReq {
+		// With only one key, we do not need to split nor pin this.
+		if len(req.CoordinatorKeys) <= 1 {
+			return []issueShard{{req: req, any: true}}, false, nil
+		}
 		return []issueShard{{
 			req: &pinReq{Request: req, pinMin: true, min: 4},
 			any: true,
@@ -2858,7 +2924,7 @@ func (*findCoordinatorSharder) shard(_ context.Context, kreq kmsg.Request, lastE
 }
 
 func (*findCoordinatorSharder) onResp(kreq kmsg.Request, kresp kmsg.Response) error {
-	req := kreq.(*kmsg.FindCoordinatorRequest) // we always issue pinned requests
+	req := kreq.(*kmsg.FindCoordinatorRequest)
 	resp := kresp.(*kmsg.FindCoordinatorResponse)
 
 	switch len(resp.Coordinators) {
@@ -3249,6 +3315,202 @@ func (*offsetForLeaderEpochSharder) merge(sresps []ResponseShard) (kmsg.Response
 		respTopic.Partitions = partitions
 		merged.Topics = append(merged.Topics, respTopic)
 	}
+	return merged, firstErr
+}
+
+// handle sharding AddPartitionsToTXn, where v4+ switched to batch requests
+type addPartitionsToTxnSharder struct{ *Client }
+
+func addPartitionsReqToTxn(req *kmsg.AddPartitionsToTxnRequest) {
+	t := kmsg.NewAddPartitionsToTxnRequestTransaction()
+	t.TransactionalID = req.TransactionalID
+	t.ProducerID = req.ProducerID
+	t.ProducerEpoch = req.ProducerEpoch
+	for i := range req.Topics {
+		rt := &req.Topics[i]
+		tt := kmsg.NewAddPartitionsToTxnRequestTransactionTopic()
+		tt.Topic = rt.Topic
+		tt.Partitions = rt.Partitions
+		t.Topics = append(t.Topics, tt)
+	}
+	req.Transactions = append(req.Transactions, t)
+}
+
+func addPartitionsTxnToReq(req *kmsg.AddPartitionsToTxnRequest) {
+	if len(req.Transactions) != 1 {
+		return
+	}
+	t0 := &req.Transactions[0]
+	req.TransactionalID = t0.TransactionalID
+	req.ProducerID = t0.ProducerID
+	req.ProducerEpoch = t0.ProducerEpoch
+	for _, tt := range t0.Topics {
+		rt := kmsg.NewAddPartitionsToTxnRequestTopic()
+		rt.Topic = tt.Topic
+		rt.Partitions = tt.Partitions
+		req.Topics = append(req.Topics, rt)
+	}
+}
+
+func addPartitionsTxnToResp(resp *kmsg.AddPartitionsToTxnResponse) {
+	if len(resp.Transactions) == 0 {
+		return
+	}
+	t0 := &resp.Transactions[0]
+	for _, tt := range t0.Topics {
+		rt := kmsg.NewAddPartitionsToTxnResponseTopic()
+		rt.Topic = tt.Topic
+		for _, tp := range tt.Partitions {
+			rp := kmsg.NewAddPartitionsToTxnResponseTopicPartition()
+			rp.Partition = tp.Partition
+			rp.ErrorCode = tp.ErrorCode
+			rt.Partitions = append(rt.Partitions, rp)
+		}
+		resp.Topics = append(resp.Topics, rt)
+	}
+}
+
+func (cl *addPartitionsToTxnSharder) shard(ctx context.Context, kreq kmsg.Request, _ error) ([]issueShard, bool, error) {
+	req := kreq.(*kmsg.AddPartitionsToTxnRequest)
+
+	if len(req.Transactions) == 0 {
+		addPartitionsReqToTxn(req)
+	}
+	txnIDs := make([]string, 0, len(req.Transactions))
+	for i := range req.Transactions {
+		txnIDs = append(txnIDs, req.Transactions[i].TransactionalID)
+	}
+	coordinators := cl.loadCoordinators(ctx, coordinatorTypeTxn, txnIDs...)
+
+	type unkerr struct {
+		err error
+		txn kmsg.AddPartitionsToTxnRequestTransaction
+	}
+	var (
+		brokerReqs = make(map[int32]*kmsg.AddPartitionsToTxnRequest)
+		kerrs      = make(map[*kerr.Error][]kmsg.AddPartitionsToTxnRequestTransaction)
+		unkerrs    []unkerr
+	)
+
+	newReq := func(txns ...kmsg.AddPartitionsToTxnRequestTransaction) *kmsg.AddPartitionsToTxnRequest {
+		req := kmsg.NewPtrAddPartitionsToTxnRequest()
+		req.Transactions = txns
+		addPartitionsTxnToReq(req)
+		return req
+	}
+
+	for _, txn := range req.Transactions {
+		berr := coordinators[txn.TransactionalID]
+		var ke *kerr.Error
+		switch {
+		case berr.err == nil:
+			brokerReq := brokerReqs[berr.b.meta.NodeID]
+			if brokerReq == nil {
+				brokerReq = newReq(txn)
+				brokerReqs[berr.b.meta.NodeID] = brokerReq
+			} else {
+				brokerReq.Transactions = append(brokerReq.Transactions, txn)
+			}
+		case errors.As(berr.err, &ke):
+			kerrs[ke] = append(kerrs[ke], txn)
+		default:
+			unkerrs = append(unkerrs, unkerr{berr.err, txn})
+		}
+	}
+
+	var issues []issueShard
+	for id, req := range brokerReqs {
+		if len(req.Transactions) <= 1 || len(req.Transactions) == 1 && !req.Transactions[0].VerifyOnly {
+			issues = append(issues, issueShard{
+				req:    &pinReq{Request: req, pinMax: true, max: 3},
+				broker: id,
+			})
+		} else {
+			issues = append(issues, issueShard{
+				req:    req,
+				broker: id,
+			})
+		}
+	}
+	for _, unkerr := range unkerrs {
+		issues = append(issues, issueShard{
+			req: newReq(unkerr.txn),
+			err: unkerr.err,
+		})
+	}
+	for kerr, txns := range kerrs {
+		issues = append(issues, issueShard{
+			req: newReq(txns...),
+			err: kerr,
+		})
+	}
+
+	return issues, true, nil // reshardable to load correct coordinators
+}
+
+func (cl *addPartitionsToTxnSharder) onResp(kreq kmsg.Request, kresp kmsg.Response) error {
+	req := kreq.(*kmsg.AddPartitionsToTxnRequest)
+	resp := kresp.(*kmsg.AddPartitionsToTxnResponse)
+
+	// We default to the top level error, which is used in v4+. For v3
+	// (case 0), we use the per-partition error, which is the same for
+	// every partition on not_coordinator errors.
+	code := resp.ErrorCode
+	if code == 0 && len(resp.Transactions) == 0 {
+		// Convert v3 and prior to v4+
+		resptxn := kmsg.NewAddPartitionsToTxnResponseTransaction()
+		resptxn.TransactionalID = req.TransactionalID
+		for _, rt := range resp.Topics {
+			respt := kmsg.NewAddPartitionsToTxnResponseTransactionTopic()
+			respt.Topic = rt.Topic
+			for _, rp := range rt.Partitions {
+				respp := kmsg.NewAddPartitionsToTxnResponseTransactionTopicPartition()
+				respp.Partition = rp.Partition
+				respp.ErrorCode = rp.ErrorCode
+				code = rp.ErrorCode // v3 and prior has per-partition errors, not top level
+				respt.Partitions = append(respt.Partitions, respp)
+			}
+			resptxn.Topics = append(resptxn.Topics, respt)
+		}
+		resp.Transactions = append(resp.Transactions, resptxn)
+	} else {
+		// Convert v4 to v3 and prior: either we have a top level error
+		// code or we have at least one transaction.
+		//
+		// If the code is non-zero, we convert it to per-partition error
+		// codes; v3 does not have a top level err.
+		addPartitionsTxnToResp(resp)
+		if code != 0 {
+			for _, reqt := range req.Topics {
+				respt := kmsg.NewAddPartitionsToTxnResponseTopic()
+				respt.Topic = reqt.Topic
+				for _, reqp := range reqt.Partitions {
+					respp := kmsg.NewAddPartitionsToTxnResponseTopicPartition()
+					respp.Partition = reqp
+					respp.ErrorCode = resp.ErrorCode
+					respt.Partitions = append(respt.Partitions, respp)
+				}
+				resp.Topics = append(resp.Topics, respt)
+			}
+		}
+	}
+	if err := kerr.ErrorForCode(code); cl.maybeDeleteStaleCoordinator(req.TransactionalID, coordinatorTypeTxn, err) {
+		return err
+	}
+	return nil
+}
+
+func (*addPartitionsToTxnSharder) merge(sresps []ResponseShard) (kmsg.Response, error) {
+	merged := kmsg.NewPtrAddPartitionsToTxnResponse()
+
+	firstErr := firstErrMerger(sresps, func(kresp kmsg.Response) {
+		resp := kresp.(*kmsg.AddPartitionsToTxnResponse)
+		merged.Version = resp.Version
+		merged.ThrottleMillis = resp.ThrottleMillis
+		merged.ErrorCode = resp.ErrorCode
+		merged.Transactions = append(merged.Transactions, resp.Transactions...)
+	})
+	addPartitionsTxnToResp(merged)
 	return merged, firstErr
 }
 

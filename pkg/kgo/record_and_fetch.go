@@ -151,6 +151,14 @@ type Record struct {
 	Context context.Context
 }
 
+func (r *Record) userSize() int64 {
+	s := len(r.Key) + len(r.Value)
+	for _, h := range r.Headers {
+		s += len(h.Key) + len(h.Value)
+	}
+	return int64(s)
+}
+
 // When buffering records, we calculate the length and tsDelta ahead of time
 // (also because number width affects encoding length). We repurpose the Offset
 // field to save space.

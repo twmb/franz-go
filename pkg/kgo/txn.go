@@ -8,8 +8,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kmsg"
+
+	"github.com/twmb/franz-go/pkg/kerr"
 )
 
 // TransactionEndTry is simply a named bool.
@@ -287,7 +288,7 @@ func (s *GroupTransactSession) End(ctx context.Context, commit TransactionEndTry
 		var commitErrs []string
 
 		committed := make(chan struct{})
-		g = s.cl.commitTransactionOffsets(context.Background(), postcommit,
+		g = s.cl.commitTransactionOffsets(ctx, postcommit,
 			func(_ *kmsg.TxnOffsetCommitRequest, resp *kmsg.TxnOffsetCommitResponse, err error) {
 				defer close(committed)
 				if err != nil {
@@ -510,6 +511,14 @@ const (
 	// This relies on Kafka internals. Some brokers (notably Redpanda) are
 	// more strict with enforcing transaction correctness and this option
 	// cannot be used and will cause errors.
+	//
+	// Deprecated: Kafka 3.6 removed support for the hacky behavior that
+	// this option was abusing. Thus, as of Kafka 3.6, this option does not
+	// work against Kafka. This option also has never worked for Redpanda
+	// becuse Redpanda always strictly validated that partitions were a
+	// part of a transaction. Later versions of Kafka and Redpanda will
+	// remove the need for AddPartitionsToTxn at all and thus this option
+	// ultimately will be unnecessary anyway.
 	EndBeginTxnUnsafe
 )
 
@@ -1060,7 +1069,13 @@ func (cl *Client) commitTransactionOffsets(
 		onDone(kmsg.NewPtrTxnOffsetCommitRequest(), kmsg.NewPtrTxnOffsetCommitResponse(), errNotGroup)
 		return nil
 	}
-	if len(uncommitted) == 0 {
+
+	req, err := g.prepareTxnOffsetCommit(ctx, uncommitted)
+	if err != nil {
+		onDone(req, kmsg.NewPtrTxnOffsetCommitResponse(), err)
+		return g
+	}
+	if len(req.Topics) == 0 {
 		onDone(kmsg.NewPtrTxnOffsetCommitRequest(), kmsg.NewPtrTxnOffsetCommitResponse(), nil)
 		return g
 	}
@@ -1088,7 +1103,7 @@ func (cl *Client) commitTransactionOffsets(
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
-	g.commitTxn(ctx, uncommitted, unblockJoinSync)
+	g.commitTxn(ctx, req, unblockJoinSync)
 	return g
 }
 
@@ -1139,17 +1154,9 @@ func (cl *Client) addOffsetsToTxn(ctx context.Context, group string) error {
 // commitTxn is ALMOST EXACTLY THE SAME as commit, but changed for txn types
 // and we avoid updateCommitted. We avoid updating because we manually
 // SetOffsets when ending the transaction.
-func (g *groupConsumer) commitTxn(
-	ctx context.Context,
-	uncommitted map[string]map[int32]EpochOffset,
-	onDone func(*kmsg.TxnOffsetCommitRequest, *kmsg.TxnOffsetCommitResponse, error),
-) {
+func (g *groupConsumer) commitTxn(ctx context.Context, req *kmsg.TxnOffsetCommitRequest, onDone func(*kmsg.TxnOffsetCommitRequest, *kmsg.TxnOffsetCommitResponse, error)) {
 	if onDone == nil { // note we must always call onDone
 		onDone = func(_ *kmsg.TxnOffsetCommitRequest, _ *kmsg.TxnOffsetCommitResponse, _ error) {}
-	}
-	if len(uncommitted) == 0 { // only empty if called thru autocommit / default revoke
-		onDone(kmsg.NewPtrTxnOffsetCommitRequest(), kmsg.NewPtrTxnOffsetCommitResponse(), nil)
-		return
 	}
 
 	if g.commitCancel != nil {
@@ -1168,21 +1175,6 @@ func (g *groupConsumer) commitTxn(
 
 	g.commitCancel = commitCancel
 	g.commitDone = commitDone
-
-	// We issue this request even if the producer ID is failed; the request
-	// will fail if it is.
-	//
-	// The id must have been set at least once by this point because of
-	// addOffsetsToTxn.
-	id, epoch, _ := g.cl.producerID()
-	req := kmsg.NewPtrTxnOffsetCommitRequest()
-	req.TransactionalID = *g.cl.cfg.txnID
-	req.Group = g.cfg.group
-	req.ProducerID = id
-	req.ProducerEpoch = epoch
-	req.Generation = g.generation
-	req.MemberID = g.memberID
-	req.InstanceID = g.cfg.instanceID
 
 	if ctx.Done() != nil {
 		go func() {
@@ -1206,21 +1198,7 @@ func (g *groupConsumer) commitTxn(
 				<-priorDone // wait for any prior request to finish
 			}
 		}
-		g.cl.cfg.logger.Log(LogLevelDebug, "issuing txn offset commit", "uncommitted", uncommitted)
-
-		for topic, partitions := range uncommitted {
-			reqTopic := kmsg.NewTxnOffsetCommitRequestTopic()
-			reqTopic.Topic = topic
-			for partition, eo := range partitions {
-				reqPartition := kmsg.NewTxnOffsetCommitRequestTopicPartition()
-				reqPartition.Partition = partition
-				reqPartition.Offset = eo.Offset
-				reqPartition.LeaderEpoch = eo.Epoch
-				reqPartition.Metadata = &req.MemberID
-				reqTopic.Partitions = append(reqTopic.Partitions, reqPartition)
-			}
-			req.Topics = append(req.Topics, reqTopic)
-		}
+		g.cl.cfg.logger.Log(LogLevelDebug, "issuing txn offset commit", "uncommitted", req)
 
 		var resp *kmsg.TxnOffsetCommitResponse
 		var err error
@@ -1233,4 +1211,45 @@ func (g *groupConsumer) commitTxn(
 		}
 		onDone(req, resp, nil)
 	}()
+}
+
+func (g *groupConsumer) prepareTxnOffsetCommit(ctx context.Context, uncommitted map[string]map[int32]EpochOffset) (*kmsg.TxnOffsetCommitRequest, error) {
+	req := kmsg.NewPtrTxnOffsetCommitRequest()
+
+	// We're now generating the producerID before addOffsetsToTxn.
+	// We will not make this request until after addOffsetsToTxn, but it's possible to fail here due to a failed producerID.
+	id, epoch, err := g.cl.producerID()
+	if err != nil {
+		return req, err
+	}
+
+	req.TransactionalID = *g.cl.cfg.txnID
+	req.Group = g.cfg.group
+	req.ProducerID = id
+	req.ProducerEpoch = epoch
+	memberID, generation := g.memberGen.load()
+	req.Generation = generation
+	req.MemberID = memberID
+	req.InstanceID = g.cfg.instanceID
+
+	for topic, partitions := range uncommitted {
+		reqTopic := kmsg.NewTxnOffsetCommitRequestTopic()
+		reqTopic.Topic = topic
+		for partition, eo := range partitions {
+			reqPartition := kmsg.NewTxnOffsetCommitRequestTopicPartition()
+			reqPartition.Partition = partition
+			reqPartition.Offset = eo.Offset
+			reqPartition.LeaderEpoch = eo.Epoch
+			reqPartition.Metadata = &req.MemberID
+			reqTopic.Partitions = append(reqTopic.Partitions, reqPartition)
+		}
+		req.Topics = append(req.Topics, reqTopic)
+	}
+
+	if fn, ok := ctx.Value(txnCommitContextFn).(func(*kmsg.TxnOffsetCommitRequest) error); ok {
+		if err := fn(req); err != nil {
+			return req, err
+		}
+	}
+	return req, nil
 }
