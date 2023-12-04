@@ -5,7 +5,7 @@ import (
 	"compress/gzip"
 	"encoding/binary"
 	"errors"
-	"io/ioutil"
+	"io"
 	"runtime"
 	"sync"
 
@@ -268,7 +268,11 @@ func (d *decompressor) decompress(src []byte, codec byte) ([]byte, error) {
 		if err := ungz.Reset(bytes.NewReader(src)); err != nil {
 			return nil, err
 		}
-		return ioutil.ReadAll(ungz)
+		out := new(bytes.Buffer)
+		if _, err := io.Copy(out, ungz); err != nil {
+			return nil, err
+		}
+		return out.Bytes(), nil
 	case 2:
 		if len(src) > 16 && bytes.HasPrefix(src, xerialPfx) {
 			return xerialDecode(src)
@@ -278,7 +282,11 @@ func (d *decompressor) decompress(src []byte, codec byte) ([]byte, error) {
 		unlz4 := d.unlz4Pool.Get().(*lz4.Reader)
 		defer d.unlz4Pool.Put(unlz4)
 		unlz4.Reset(bytes.NewReader(src))
-		return ioutil.ReadAll(unlz4)
+		out := new(bytes.Buffer)
+		if _, err := io.Copy(out, unlz4); err != nil {
+			return nil, err
+		}
+		return out.Bytes(), nil
 	case 4:
 		unzstd := d.unzstdPool.Get().(*zstdDecoder)
 		defer d.unzstdPool.Put(unzstd)
