@@ -487,10 +487,9 @@ func KafkaHasher(hashFn func([]byte) uint32) PartitionerHasher {
 	}
 }
 
-// SaramaHasher is not compatible with Sarama's default default partitioner.
-// If you need sarama compatibility use SaramaCompatHasher instead.
-// This function is left as is to provide compatibility with older versions of
-// this library.
+// Deprecated: SaramaHasher is not compatible with Sarama's default partitioner
+// and only remains to avoid re-keying records for existing users of this API. See
+// [SaramaCompatHasher] for a correct partitioner.
 func SaramaHasher(hashFn func([]byte) uint32) PartitionerHasher {
 	return func(key []byte, n int) int {
 		p := int(hashFn(key)) % n
