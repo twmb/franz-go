@@ -1,3 +1,21 @@
+v1.15.3
+===
+
+This patch release fixes one minor bug, reduces allocations on gzip and lz4
+decompression, and contains a behavior improvement when OffsetOutOfRange is
+received while consuming.
+
+For the bugfix: previously, if the client was using a fetch session (as is the
+default when consuming), and all partitions for a topic transfer to a different
+broker, the client would not properly unregister the topic from the prior
+broker's fetch session. This could result in more data being consumed and
+discarded than necessary (although, it's possible the broker just reset the
+fetch session anyway, I'm not entirely positive).
+
+- [`fdf371c`](https://github.com/twmb/franz-go/commit/fdf371c) use bytes buffer instead of ReadAll (thanks [@kalbhor](https://github.com/kalbhor)!)
+- [`e6ed69f`](https://github.com/twmb/franz-go/commit/e6ed69f) consuming: reset to nearest if we receive OOOR while fetching
+- [`1b6a721`](https://github.com/twmb/franz-go/commit/1b6a721) **bugfix** kgo source: use the proper topic-to-id map when forgetting topics
+
 v1.15.2
 ===
 
