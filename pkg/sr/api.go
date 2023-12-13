@@ -404,7 +404,7 @@ func (cl *Client) DeleteSubject(ctx context.Context, subject string, how DeleteH
 	// DELETE /subjects/{subject}?permanent={x}
 	path := pathSubject(subject)
 	if how == HardDelete {
-		path += "?permanent=true"
+		ctx = WithParams(ctx, hardDelete)
 	}
 	var versions []int
 	defer func() { sort.Ints(versions) }()
@@ -419,7 +419,7 @@ func (cl *Client) DeleteSchema(ctx context.Context, subject string, version int,
 	// DELETE /subjects/{subject}/versions/{version}?permanent={x}
 	path := pathSubjectVersion(subject, version)
 	if how == HardDelete {
-		path += "?permanent=true"
+		ctx = WithParams(ctx, hardDelete)
 	}
 	return cl.delete(ctx, path, nil)
 }

@@ -22,6 +22,7 @@ type Param struct {
 	subject         string
 	page            *int
 	limit           int
+	hardDelete      bool
 }
 
 // WithParams adds query parameters to the given context. This is a merge
@@ -83,6 +84,9 @@ func (p Param) apply(req *http.Request) {
 	if p.limit > 0 {
 		q.Set("limit", fmt.Sprintf("%d", p.limit))
 	}
+	if p.hardDelete {
+		q.Set("permanent", "true")
+	}
 	req.URL.RawQuery = q.Encode()
 }
 
@@ -130,6 +134,9 @@ func mergeParams(p ...Param) Param {
 		if p.limit > 0 {
 			merged.limit = p.limit
 		}
+		if p.hardDelete {
+			merged.hardDelete = p.hardDelete
+		}
 	}
 	return merged
 }
@@ -167,6 +174,9 @@ var (
 	// DeletedOnly is a Param that configures whether to return only
 	// deleted schemas or subjects in certain get operations.
 	DeletedOnly = Param{deletedOnly: true}
+
+	// hardDelete is internal, and set when DeleteHow == HardDelete.
+	hardDelete = Param{hardDelete: true}
 )
 
 // Format returns a Param that configures how schema's are returned in certain
