@@ -30,13 +30,16 @@ type (
 		bs         []*broker
 
 		adminCh      chan func()
-		reqCh        chan clientReq
+		reqCh        chan *clientReq
+		wakeCh       chan *slept
 		watchFetchCh chan *watchFetch
 
-		controlMu          sync.Mutex
-		control            map[int16][]controlFn
-		keepCurrentControl atomic.Bool
-		currentBroker      atomic.Pointer[broker]
+		controlMu      sync.Mutex
+		control        map[int16]map[*controlCtx]struct{}
+		currentBroker  *broker
+		currentControl *controlCtx
+		sleeping       map[*clientConn]*bsleep
+		controlSleep   chan sleepChs
 
 		data   data
 		pids   pids
@@ -56,6 +59,19 @@ type (
 	}
 
 	controlFn func(kmsg.Request) (kmsg.Response, error, bool)
+
+	controlCtx struct {
+		key     int16
+		fn      controlFn
+		keep    bool
+		lastReq map[*clientConn]*clientReq // used to not re-run requests that slept, see doc comments below
+	}
+
+	controlResp struct {
+		kresp   kmsg.Response
+		err     error
+		handled bool
+	}
 )
 
 // MustCluster is like NewCluster, but panics on error.
@@ -91,9 +107,13 @@ func NewCluster(opts ...Opt) (*Cluster, error) {
 		cfg: cfg,
 
 		adminCh:      make(chan func()),
-		reqCh:        make(chan clientReq, 20),
+		reqCh:        make(chan *clientReq, 20),
+		wakeCh:       make(chan *slept, 10),
 		watchFetchCh: make(chan *watchFetch, 20),
-		control:      make(map[int16][]controlFn),
+		control:      make(map[int16]map[*controlCtx]struct{}),
+		controlSleep: make(chan sleepChs, 1),
+
+		sleeping: make(map[*clientConn]*bsleep),
 
 		data: data{
 			id2t:      make(map[uuid]string),
@@ -235,27 +255,76 @@ func (b *broker) listen() {
 
 func (c *Cluster) run() {
 	for {
-		var creq clientReq
-		var w *watchFetch
+		var (
+			creq    *clientReq
+			w       *watchFetch
+			s       *slept
+			kreq    kmsg.Request
+			kresp   kmsg.Response
+			err     error
+			handled bool
+		)
 
 		select {
+		case <-c.die:
+			return
+
+		case admin := <-c.adminCh:
+			// Run a custom request in the context of the cluster.
+			admin()
+			continue
+
 		case creq = <-c.reqCh:
+			// If we have any sleeping request on this node,
+			// we enqueue the new live request to the end and
+			// wait for the sleeping request to finish.
+			bs := c.sleeping[creq.cc]
+			if bs.enqueue(&slept{
+				creq:    creq,
+				waiting: true,
+			}) {
+				continue
+			}
+
+		case s = <-c.wakeCh:
+			// On wakeup, we know we are handling a control
+			// function that was slept, or a request that was
+			// waiting for a control function to finish sleeping.
+			creq = s.creq
+			if s.waiting {
+				break
+			}
+
+			// We continue a previously sleeping request, and
+			// handle results similar to tryControl.
+			//
+			// Control flow is weird here, but is described more
+			// fully in the finish/resleep/etc methods.
+			c.continueSleptControl(s)
+			select {
+			case res := <-s.res:
+				c.finishSleptControl(s)
+				cctx := s.cctx
+				s = nil
+				kresp, err, handled = res.kresp, res.err, res.handled
+				if handled {
+					c.popControl(cctx)
+					goto afterControl
+				}
+			case sleepChs := <-c.controlSleep:
+				c.resleepSleptControl(s, sleepChs)
+				continue
+			}
+
 		case w = <-c.watchFetchCh:
 			if w.cleaned {
 				continue // already cleaned up, this is an extraneous timer fire
 			}
 			w.cleanup(c)
 			creq = w.creq
-		case <-c.die:
-			return
-		case fn := <-c.adminCh:
-			// Run a custom request in the context of the cluster
-			fn()
-			continue
 		}
 
-		kreq := creq.kreq
-		kresp, err, handled := c.tryControl(kreq, creq.cc.b)
+		kresp, err, handled = c.tryControl(creq)
 		if handled {
 			goto afterControl
 		}
@@ -267,6 +336,7 @@ func (c *Cluster) run() {
 			}
 		}
 
+		kreq = creq.kreq
 		switch k := kmsg.Key(kreq.Key()); k {
 		case kmsg.Produce:
 			kresp, err = c.handleProduce(creq.cc.b, kreq)
@@ -331,11 +401,18 @@ func (c *Cluster) run() {
 		case kmsg.AlterUserSCRAMCredentials:
 			kresp, err = c.handleAlterUserSCRAMCredentials(creq.cc.b, kreq)
 		default:
-			err = fmt.Errorf("unahndled key %v", k)
+			err = fmt.Errorf("unhandled key %v", k)
 		}
 
 	afterControl:
-		if kresp == nil && err == nil { // produce request with no acks, or hijacked group request
+		// If s is non-nil, this is either a previously slept control
+		// that finished but was not handled, or a previously slept
+		// waiting request. In either case, we need to signal to the
+		// sleep dequeue loop to continue.
+		if s != nil {
+			s.continueDequeue <- struct{}{}
+		}
+		if kresp == nil && err == nil { // produce request with no acks, or otherwise hijacked request (group, sleep)
 			continue
 		}
 
@@ -363,9 +440,7 @@ func (c *Cluster) run() {
 // It is safe to add new control functions within a control function. Control
 // functions are not called concurrently.
 func (c *Cluster) Control(fn func(kmsg.Request) (kmsg.Response, error, bool)) {
-	c.controlMu.Lock()
-	defer c.controlMu.Unlock()
-	c.control[-1] = append(c.control[-1], fn)
+	c.ControlKey(-1, fn)
 }
 
 // Control is a function to call on a specific request key that the cluster
@@ -386,65 +461,307 @@ func (c *Cluster) Control(fn func(kmsg.Request) (kmsg.Response, error, bool)) {
 func (c *Cluster) ControlKey(key int16, fn func(kmsg.Request) (kmsg.Response, error, bool)) {
 	c.controlMu.Lock()
 	defer c.controlMu.Unlock()
-	c.control[key] = append(c.control[key], fn)
+	m := c.control[key]
+	if m == nil {
+		m = make(map[*controlCtx]struct{})
+		c.control[key] = m
+	}
+	m[&controlCtx{
+		key:     key,
+		fn:      fn,
+		lastReq: make(map[*clientConn]*clientReq),
+	}] = struct{}{}
 }
 
 // KeepControl marks the currently running control function to be kept even if
 // you handle the request and return true. This can be used to continuously
 // control requests without needing to re-add control functions manually.
 func (c *Cluster) KeepControl() {
-	c.keepCurrentControl.Swap(true)
+	c.controlMu.Lock()
+	defer c.controlMu.Unlock()
+	if c.currentControl != nil {
+		c.currentControl.keep = true
+	}
+}
+
+// SleepControl sleeps the current control function until wakeup returns. This
+// yields to run any other connection.
+//
+// Note that per protocol, requests on the same connection must be replied to
+// in order. Many clients write multiple requests to the same connection, so
+// if you sleep until a different request runs, you may sleep forever -- you
+// must know the semantics of your client to know whether requests run on
+// different connections (or, ensure you are writing to different brokers).
+//
+// For example, franz-go uses a dedicated connection for:
+//   - produce requests
+//   - fetch requests
+//   - join&sync requests
+//   - requests with a Timeout field
+//   - all other request
+//
+// So, for franz-go, there are up to five separate connections depending
+// on what you are doing.
+//
+// You can run SleepControl multiple times in the same control function. If you
+// sleep a request you are controlling, and another request of the same key
+// comes in, it will run the same control function and may also sleep (i.e.,
+// you must have logic if you want to avoid sleeping on the same request).
+func (c *Cluster) SleepControl(wakeup func()) {
+	c.controlMu.Lock()
+	if c.currentControl == nil {
+		c.controlMu.Unlock()
+		return
+	}
+	c.controlMu.Unlock()
+
+	sleepChs := sleepChs{
+		clientWait: make(chan struct{}, 1),
+		clientCont: make(chan struct{}, 1),
+	}
+	go func() {
+		wakeup()
+		sleepChs.clientWait <- struct{}{}
+	}()
+
+	c.controlSleep <- sleepChs
+	<-sleepChs.clientCont
 }
 
 // CurrentNode is solely valid from within a control function; it returns
 // the broker id that the request was received by.
 // If there's no request currently inflight, this returns -1.
 func (c *Cluster) CurrentNode() int32 {
-	if b := c.currentBroker.Load(); b != nil {
+	c.controlMu.Lock()
+	defer c.controlMu.Unlock()
+	if b := c.currentBroker; b != nil {
 		return b.node
 	}
 	return -1
 }
 
-func (c *Cluster) tryControl(kreq kmsg.Request, b *broker) (kresp kmsg.Response, err error, handled bool) {
-	c.currentBroker.Store(b)
-	defer c.currentBroker.Store(nil)
+func (c *Cluster) tryControl(creq *clientReq) (kresp kmsg.Response, err error, handled bool) {
 	c.controlMu.Lock()
 	defer c.controlMu.Unlock()
 	if len(c.control) == 0 {
 		return nil, nil, false
 	}
-	kresp, err, handled = c.tryControlKey(kreq.Key(), kreq, b)
+	kresp, err, handled = c.tryControlKey(creq.kreq.Key(), creq)
 	if !handled {
-		kresp, err, handled = c.tryControlKey(-1, kreq, b)
+		kresp, err, handled = c.tryControlKey(-1, creq)
 	}
 	return kresp, err, handled
 }
 
-func (c *Cluster) tryControlKey(key int16, kreq kmsg.Request, b *broker) (kresp kmsg.Response, err error, handled bool) {
-	for i, fn := range c.control[key] {
-		kresp, err, handled = c.callControl(key, kreq, fn)
-		if handled {
-			// fn may have called Control, ControlKey, or KeepControl,
-			// all of which will append to c.control; refresh the slice.
-			fns := c.control[key]
-			c.control[key] = append(fns[:i], fns[i+1:]...)
-			return
+func (c *Cluster) tryControlKey(key int16, creq *clientReq) (kmsg.Response, error, bool) {
+	for cctx := range c.control[key] {
+		if cctx.lastReq[creq.cc] == creq {
+			continue
+		}
+		cctx.lastReq[creq.cc] = creq
+		res := c.runControl(cctx, creq)
+		select {
+		case res := <-res:
+			if res.handled {
+				c.popControl(cctx)
+				return res.kresp, res.err, true
+			}
+		case sleepChs := <-c.controlSleep:
+			c.beginSleptControl(&slept{
+				cctx:     cctx,
+				sleepChs: sleepChs,
+				res:      res,
+				creq:     creq,
+			})
+			return nil, nil, true
 		}
 	}
-	return
+	return nil, nil, false
 }
 
-func (c *Cluster) callControl(key int16, req kmsg.Request, fn controlFn) (kresp kmsg.Response, err error, handled bool) {
-	c.keepCurrentControl.Swap(false)
+func (c *Cluster) runControl(cctx *controlCtx, creq *clientReq) chan controlResp {
+	res := make(chan controlResp, 1)
+	c.currentBroker = creq.cc.b
+	c.currentControl = cctx
+	// We unlock before entering a control function so that the control
+	// function can modify / add more control. We re-lock when exiting the
+	// control function. This does pose some weird control flow issues
+	// w.r.t. sleeping requests. Here, we have to re-lock before sending
+	// down res, otherwise we risk unlocking an unlocked mu in
+	// finishSleepControl.
 	c.controlMu.Unlock()
-	defer func() {
+	go func() {
+		kresp, err, handled := cctx.fn(creq.kreq)
 		c.controlMu.Lock()
-		if handled && c.keepCurrentControl.Swap(false) {
-			c.control[key] = append(c.control[key], fn)
-		}
+		c.currentControl = nil
+		c.currentBroker = nil
+		res <- controlResp{kresp, err, handled}
 	}()
-	return fn(req)
+	return res
+}
+
+func (c *Cluster) beginSleptControl(s *slept) {
+	// Control flow gets really weird here. We unlocked when entering the
+	// control function, so we have to re-lock now so that tryControl can
+	// unlock us safely.
+	bs := c.sleeping[s.creq.cc]
+	if bs == nil {
+		bs = &bsleep{c: c}
+		c.sleeping[s.creq.cc] = bs
+	}
+	bs.enqueue(s)
+	c.controlMu.Lock()
+	c.currentControl = nil
+	c.currentBroker = nil
+}
+
+func (c *Cluster) continueSleptControl(s *slept) {
+	// When continuing a slept control, we are in the main run loop and are
+	// not currently under the control mu. We need to re-set the current
+	// broker and current control before resuming.
+	c.controlMu.Lock()
+	c.currentBroker = s.creq.cc.b
+	c.currentControl = s.cctx
+	c.controlMu.Unlock()
+	s.sleepChs.clientCont <- struct{}{}
+}
+
+func (c *Cluster) finishSleptControl(s *slept) {
+	// When finishing a slept control, the control function exited and
+	// grabbed the control mu. We clear the control, unlock, and allow the
+	// slept control to be dequeued.
+	c.currentControl = nil
+	c.currentBroker = nil
+	c.controlMu.Unlock()
+	s.continueDequeue <- struct{}{}
+}
+
+func (c *Cluster) resleepSleptControl(s *slept, sleepChs sleepChs) {
+	// A control function previously slept and is now again sleeping. We
+	// need to clear the control broker / etc, update the sleep channels,
+	// and allow the sleep dequeueing to continue. The control function
+	// will not be deqeueued in the loop because we updated sleepChs with
+	// a non-nil clientWait.
+	c.controlMu.Lock()
+	c.currentBroker = nil
+	c.currentControl = nil
+	c.controlMu.Unlock()
+	s.sleepChs = sleepChs
+	s.continueDequeue <- struct{}{}
+}
+
+func (c *Cluster) popControl(cctx *controlCtx) {
+	if !cctx.keep {
+		delete(c.control[cctx.key], cctx)
+	}
+}
+
+// bsleep manages sleeping requests on a connection to a broker, or
+// non-sleeping requests that are waiting for sleeping requests to finish.
+type bsleep struct {
+	c     *Cluster
+	mu    sync.Mutex
+	queue []*slept
+}
+
+type slept struct {
+	cctx     *controlCtx
+	sleepChs sleepChs
+	res      <-chan controlResp
+	creq     *clientReq
+	waiting  bool
+
+	continueDequeue chan struct{}
+}
+
+type sleepChs struct {
+	clientWait chan struct{}
+	clientCont chan struct{}
+}
+
+// enqueue has a few potential behaviors.
+//
+// * If s is waiting, this is a new request enqueueing to the back of an
+// existing queue, where we are waiting for the head request to finish
+// sleeping. Easy case.
+//
+// * If s is not waiting, this is a sleeping request. If the queue is empty,
+// this is the first sleeping request on a node. We enqueue and start our wait
+// goroutine. Easy.
+//
+// * If s is not waiting, but our queue is non-empty, this must be from a
+// convoluted scenario: There was a request in front of us that slept, and we
+// were waiting, and now we ourselves slept OR we previously slept, but we
+// returned "not handled". We are now re-enqueueing ourself. Rather than add to
+// the back, we update our head request with the new enqueued values. In this
+// last case, bsleep is actually waiting for a signal down 'continueDequeue',
+// and it will be signaled in the 'run' goroutine once tryControl returns
+// (which it will, right after we are done here). We need to update values on
+// the head.
+func (bs *bsleep) enqueue(s *slept) bool {
+	if bs == nil {
+		return false
+	}
+	bs.mu.Lock()
+	defer bs.mu.Unlock()
+	if s.waiting {
+		if len(bs.queue) > 0 {
+			bs.queue = append(bs.queue, s)
+			return true
+		}
+		return false
+	}
+	if len(bs.queue) == 0 {
+		bs.queue = append(bs.queue, s)
+		go bs.wait()
+		return true
+	}
+	q0 := bs.queue[0]
+	if q0.creq != s.creq {
+		panic("internal error: sleeping request not head request")
+	}
+	q0.cctx = s.cctx
+	q0.sleepChs = s.sleepChs
+	q0.res = s.res
+	q0.waiting = s.waiting
+	return true
+}
+
+func (bs *bsleep) wait() {
+	for {
+		bs.mu.Lock()
+		if len(bs.queue) == 0 {
+			bs.mu.Unlock()
+			return
+		}
+		q0 := bs.queue[0]
+		bs.mu.Unlock()
+
+		if q0.continueDequeue == nil {
+			q0.continueDequeue = make(chan struct{}, 1)
+		}
+
+		if q0.sleepChs.clientWait != nil {
+			select {
+			case <-bs.c.die:
+			case <-q0.sleepChs.clientWait:
+				q0.sleepChs.clientWait = nil
+			}
+		}
+
+		select {
+		case <-bs.c.die:
+			return
+		case bs.c.wakeCh <- q0:
+		}
+
+		<-q0.continueDequeue
+		if q0.sleepChs.clientWait == nil {
+			bs.mu.Lock()
+			bs.queue = bs.queue[1:]
+			bs.mu.Unlock()
+		}
+	}
 }
 
 // Various administrative requests can be passed into the cluster to simulate
