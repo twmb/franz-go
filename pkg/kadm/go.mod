@@ -5,7 +5,7 @@ go 1.19
 require (
 	github.com/twmb/franz-go v1.15.0
 	github.com/twmb/franz-go/pkg/kmsg v1.6.1
-	golang.org/x/crypto v0.13.0
+	golang.org/x/crypto v0.17.0
 )
 
 require (
