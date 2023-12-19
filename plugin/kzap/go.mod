@@ -1,6 +1,6 @@
 module github.com/twmb/franz-go/plugin/kzap
 
-go 1.18
+go 1.19
 
 require (
 	github.com/twmb/franz-go v1.15.3

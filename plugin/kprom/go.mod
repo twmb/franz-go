@@ -1,6 +1,6 @@
 module github.com/twmb/franz-go/plugin/kprom
 
-go 1.18
+go 1.19
 
 require (
 	github.com/prometheus/client_golang v1.17.0

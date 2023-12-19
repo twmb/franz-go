@@ -2,7 +2,7 @@ module saram
 
 go 1.20
 
-require github.com/Shopify/sarama v1.38.1
+require github.com/IBM/sarama v1.42.1
 
 require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
