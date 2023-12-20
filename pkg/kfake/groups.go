@@ -101,7 +101,8 @@ func (gs groupState) String() string {
 }
 
 func (c *Cluster) coordinator(id string) *broker {
-	n := hashString(id) % uint64(len(c.bs))
+	gen := c.coordinatorGen.Load()
+	n := hashString(fmt.Sprint("%d", gen)+"\x00\x00"+id) % uint64(len(c.bs))
 	return c.bs[n]
 }
 
