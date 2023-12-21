@@ -1,3 +1,40 @@
+v1.15.4
+===
+
+This patch release fixes a difficult to encounter, but
+fatal-for-group-consuming bug.
+
+The sequence of events to trigger this bug:
+* OffsetCommit is issued before Heartbeat
+* The coordinator for the group needs to be loaded (so, likely, a previous `NOT_COORDINATOR` error was received)
+* OffsetCommit triggers the load
+* a second OffsetCommit happens while the first is still running, canceling the first OffsetCommit's context
+
+In this sequence of events, FindCoordinator will fail with `context.Canceled`
+and, importantly, also return that error to Heartbeat. In the guts of the
+client, a `context.Canceled` error _should_ only happen when a group is being
+left, so this error is recognized as a group-is-leaving error and the group
+management goroutine exits. Thus, the group is never rejoined.
+
+This likely requires a system to be overloaded to begin with, because
+FindCoordinator requests are usually very fast.
+
+The fix is to use the client context when issuing FindCoordinator, rather than
+the parent request. The parent request can still quit, but FindCoordinator
+continues. No parent request can affect any other waiting request.
+
+This patch also includes a dep bump for everything but klauspost/compress;
+klauspost/compress changed go.mod to require go1.19, while this repo still
+requires 1.18. v1.16 will change to require 1.19 and then this repo will bump
+klauspost/compress.
+
+There were multiple additions to the yet-unversioned kfake package, so that an
+advanced "test" could be written to trigger the behavior for this patch and
+then ensure it is fixed.  To see the test, please check the comment on PR
+[650](https://github.com/twmb/franz-go/pull/650).
+
+- [`7d050fc`](https://github.com/twmb/franz-go/commit/7d050fc) kgo: do not cancel FindCoordinator if the parent context cancels
+
 v1.15.3
 ===
 
