@@ -7,15 +7,35 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
+var (
+	_ FieldLogger = (*logrus.Logger)(nil)
+	_ kgo.Logger  = (*Logger)(nil)
+)
+
+// FieldLogger interface combines logrus.FieldLogger with GetLevel method
+// useful to represent a wrapper around *logrus.Logger.
+type FieldLogger interface {
+	logrus.FieldLogger
+	GetLevel() logrus.Level
+}
+
 // Logger provides the kgo.Logger interface for usage in kgo.WithLogger when
 // initializing a client.
 type Logger struct {
-	lr *logrus.Logger
+	lr FieldLogger
 }
 
-// New returns a new Logger.
+// New returns a new Logger using a *logrus.Logger instance.
 func New(lr *logrus.Logger) *Logger {
 	return &Logger{lr}
+}
+
+// NewFieldLogger returns a new Logger using a FieldLogger interface.
+// it is isofunctional with New constructor, except it can accept either
+// *logrus.Logger or a possible wrapper that implements logrus.FieldLogger
+// and includes GetLevel method.
+func NewFieldLogger(fl FieldLogger) *Logger {
+	return &Logger{fl}
 }
 
 // Level is for the kgo.Logger interface.
@@ -45,6 +65,8 @@ func kgoToLogrusLevel(level kgo.LogLevel) (logrus.Level, bool) {
 		return logrus.InfoLevel, true
 	case kgo.LogLevelDebug:
 		return logrus.DebugLevel, true
+	case kgo.LogLevelNone:
+		return logrus.TraceLevel, false
 	}
 	return logrus.TraceLevel, false
 }
