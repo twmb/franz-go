@@ -137,6 +137,9 @@ func (t *Tracer) WithProcessSpan(r *kgo.Record) (context.Context, trace.Span) {
 	if t.consumerGroup != "" {
 		attrs = append(attrs, semconv.MessagingKafkaConsumerGroupKey.String(t.consumerGroup))
 	}
+	if r.Key != nil && r.Value == nil {
+		attrs = append(attrs, semconv.MessagingKafkaMessageTombstoneKey.Bool(true))
+	}
 	opts := []trace.SpanStartOption{
 		trace.WithAttributes(attrs...),
 		trace.WithSpanKind(trace.SpanKindConsumer),
@@ -168,6 +171,9 @@ func (t *Tracer) OnProduceRecordBuffered(r *kgo.Record) {
 	attrs = t.maybeKeyAttr(attrs, r)
 	if t.clientID != "" {
 		attrs = append(attrs, semconv.MessagingKafkaClientIDKey.String(t.clientID))
+	}
+	if r.Key != nil && r.Value == nil {
+		attrs = append(attrs, semconv.MessagingKafkaMessageTombstoneKey.Bool(true))
 	}
 	opts := []trace.SpanStartOption{
 		trace.WithAttributes(attrs...),
@@ -220,6 +226,9 @@ func (t *Tracer) OnFetchRecordBuffered(r *kgo.Record) {
 	}
 	if t.consumerGroup != "" {
 		attrs = append(attrs, semconv.MessagingKafkaConsumerGroupKey.String(t.consumerGroup))
+	}
+	if r.Key != nil && r.Value == nil {
+		attrs = append(attrs, semconv.MessagingKafkaMessageTombstoneKey.Bool(true))
 	}
 	opts := []trace.SpanStartOption{
 		trace.WithAttributes(attrs...),
