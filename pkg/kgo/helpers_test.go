@@ -49,6 +49,8 @@ var (
 	// We create topics with a different number of partitions to exercise
 	// a few extra code paths; we index into npartitions with npartitionsAt,
 	// an atomic that we modulo after load.
+	//
+	// We can lower bound these numbers with KGO_TEST_MAX_TOPIC_PARTS.
 	npartitions   = []int{7, 11, 31}
 	npartitionsAt int64
 )
@@ -129,6 +131,20 @@ func init() {
 			}
 			if n == 512 {
 				saslScram = a.AsSha512Mechanism()
+			}
+		}
+	}
+	if maxTParts, exists := os.LookupEnv("KGO_TEST_MAX_TOPIC_PARTS"); exists {
+		n, err := strconv.Atoi(maxTParts)
+		if err != nil {
+			panic(fmt.Sprintf("invalid max topic parts %q: %v", maxTParts, err))
+		}
+		if n < 1 {
+			n = 1
+		}
+		for i, v := range npartitions {
+			if v > n {
+				npartitions[i] = n
 			}
 		}
 	}
