@@ -55,11 +55,6 @@ var (
 
 func init() {
 	var err error
-	adm, err = newTestClient()
-	if err != nil {
-		panic(fmt.Sprintf("unable to create admin client: %v", err))
-	}
-
 	if n, _ := strconv.Atoi(os.Getenv("KGO_TEST_RF")); n > 0 {
 		testrf = n
 	}
@@ -136,6 +131,10 @@ func init() {
 				saslScram = a.AsSha512Mechanism()
 			}
 		}
+	}
+	adm, err = newTestClient()
+	if err != nil {
+		panic(fmt.Sprintf("unable to create admin client: %v", err))
 	}
 }
 
