@@ -113,9 +113,7 @@ func TestUnknownGroupOffsetFetchPinned(t *testing.T) {
 	req := kmsg.NewOffsetFetchRequest()
 	req.Group = "unknown-" + strconv.FormatInt(time.Now().UnixNano(), 10)
 
-	cl, _ := NewClient(
-		getSeedBrokers(),
-	)
+	cl, _ := newTestClient()
 	defer cl.Close()
 	defer func() {
 		if err := recover(); err != nil {

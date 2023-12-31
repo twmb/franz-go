@@ -3,6 +3,8 @@ package kgo
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -18,6 +20,8 @@ import (
 
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kmsg"
+	"github.com/twmb/franz-go/pkg/sasl"
+	"github.com/twmb/franz-go/pkg/sasl/scram"
 )
 
 var (
@@ -36,20 +40,23 @@ var (
 	// cannot use EndAndBeginTransaction with EndBeginTxnUnsafe.
 	allowUnsafe = false
 
+	// KGO_TEST_TLS: DSL syntax is ({ca|cert|key}:path),{1,3}
+	testCert *tls.Config
+
+	// KGO_TEST_SCRAM: DSL is user:pass(:num); we assume 256
+	saslScram sasl.Mechanism
+
 	// We create topics with a different number of partitions to exercise
 	// a few extra code paths; we index into npartitions with npartitionsAt,
 	// an atomic that we modulo after load.
+	//
+	// We can lower bound these numbers with KGO_TEST_MAX_TOPIC_PARTS.
 	npartitions   = []int{7, 11, 31}
 	npartitionsAt int64
 )
 
 func init() {
 	var err error
-	adm, err = NewClient(getSeedBrokers())
-	if err != nil {
-		panic(fmt.Sprintf("unable to create admin client: %v", err))
-	}
-
 	if n, _ := strconv.Atoi(os.Getenv("KGO_TEST_RF")); n > 0 {
 		testrf = n
 	}
@@ -62,6 +69,104 @@ func init() {
 	if _, exists := os.LookupEnv("KGO_TEST_UNSAFE"); exists {
 		allowUnsafe = true
 	}
+	if paths, exists := os.LookupEnv("KGO_TEST_TLS"); exists {
+		var caPath, certPath, keyPath string
+		for _, path := range strings.Split(paths, ",") {
+			switch {
+			case strings.HasPrefix(path, "ca:"):
+				caPath = path[3:]
+			case strings.HasPrefix(path, "cert:"):
+				certPath = path[5:]
+			case strings.HasPrefix(path, "key:"):
+				keyPath = path[4:]
+			default:
+				panic(fmt.Sprintf("invalid tls format %q", path))
+			}
+		}
+		inittls := func() {
+			if testCert == nil {
+				testCert = &tls.Config{MinVersion: tls.VersionTLS12}
+			}
+		}
+		if caPath != "" {
+			ca, err := os.ReadFile(caPath) //nolint:gosec // we are deliberately including a file from a variable
+			if err != nil {
+				panic(fmt.Sprintf("unable to read ca: %v", err))
+			}
+			inittls()
+			testCert.RootCAs = x509.NewCertPool()
+			if !testCert.RootCAs.AppendCertsFromPEM(ca) {
+				panic("unable to append ca")
+			}
+		}
+		if certPath != "" || keyPath != "" {
+			if certPath == "" || keyPath == "" {
+				panic("both cert path and key path must be specified")
+			}
+			cert, err := tls.LoadX509KeyPair(certPath, keyPath)
+			if err != nil {
+				panic(fmt.Sprintf("unable to load cert/key pair: %v", err))
+			}
+			inittls()
+			testCert.Certificates = append(testCert.Certificates, cert)
+		}
+	}
+	if saslStr, exists := os.LookupEnv("KGO_TEST_SCRAM"); exists {
+		split := strings.Split(saslStr, ":")
+		if len(split) != 2 && len(split) != 3 {
+			panic(fmt.Sprintf("invalid scram format %q", saslStr))
+		}
+		a := scram.Auth{
+			User: split[0],
+			Pass: split[1],
+		}
+		saslScram = a.AsSha256Mechanism()
+		if len(split) == 3 {
+			n, err := strconv.Atoi(split[2])
+			if err != nil {
+				panic(fmt.Sprintf("invalid scram alg %q: %v", split[2], err))
+			}
+			if n != 256 && n != 512 {
+				panic(fmt.Sprintf("invalid scram alg %q: must be 256 or 512", split[2]))
+			}
+			if n == 512 {
+				saslScram = a.AsSha512Mechanism()
+			}
+		}
+	}
+	if maxTParts, exists := os.LookupEnv("KGO_TEST_MAX_TOPIC_PARTS"); exists {
+		n, err := strconv.Atoi(maxTParts)
+		if err != nil {
+			panic(fmt.Sprintf("invalid max topic parts %q: %v", maxTParts, err))
+		}
+		if n < 1 {
+			n = 1
+		}
+		for i, v := range npartitions {
+			if v > n {
+				npartitions[i] = n
+			}
+		}
+	}
+	adm, err = newTestClient()
+	if err != nil {
+		panic(fmt.Sprintf("unable to create admin client: %v", err))
+	}
+}
+
+func testClientOpts(opts ...Opt) []Opt {
+	opts = append(opts, getSeedBrokers())
+	if testCert != nil {
+		opts = append(opts, DialTLSConfig(testCert))
+	}
+	if saslScram != nil {
+		opts = append(opts, SASL(saslScram))
+	}
+	return opts
+}
+
+func newTestClient(opts ...Opt) (*Client, error) {
+	return NewClient(testClientOpts(opts...)...)
 }
 
 func getSeedBrokers() Opt {
