@@ -20,6 +20,8 @@ import (
 
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kmsg"
+	"github.com/twmb/franz-go/pkg/sasl"
+	"github.com/twmb/franz-go/pkg/sasl/scram"
 )
 
 var (
@@ -38,8 +40,11 @@ var (
 	// cannot use EndAndBeginTransaction with EndBeginTxnUnsafe.
 	allowUnsafe = false
 
-	// DSL syntax is ({ca|cert|key}:path),{1,3}
+	// KGO_TEST_TLS: DSL syntax is ({ca|cert|key}:path),{1,3}
 	testCert *tls.Config
+
+	// KGO_TEST_SCRAM: DSL is user:pass; we require SCRAM-SHA-256
+	saslScram sasl.Mechanism
 
 	// We create topics with a different number of partitions to exercise
 	// a few extra code paths; we index into npartitions with npartitionsAt,
@@ -109,12 +114,25 @@ func init() {
 			testCert.Certificates = append(testCert.Certificates, cert)
 		}
 	}
+	if saslStr, exists := os.LookupEnv("KGO_TEST_SCRAM"); exists {
+		split := strings.Split(saslStr, ":")
+		if len(split) != 2 {
+			panic(fmt.Sprintf("invalid scram format %q", saslStr))
+		}
+		saslScram = (scram.Auth{
+			User: split[0],
+			Pass: split[1],
+		}).AsSha256Mechanism()
+	}
 }
 
 func testClientOpts(opts ...Opt) []Opt {
 	opts = append(opts, getSeedBrokers())
 	if testCert != nil {
 		opts = append(opts, DialTLSConfig(testCert))
+	}
+	if saslScram != nil {
+		opts = append(opts, SASL(saslScram))
 	}
 	return opts
 }
