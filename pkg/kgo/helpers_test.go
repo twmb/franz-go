@@ -3,6 +3,8 @@ package kgo
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -36,6 +38,9 @@ var (
 	// cannot use EndAndBeginTransaction with EndBeginTxnUnsafe.
 	allowUnsafe = false
 
+	// DSL syntax is ({ca|cert|key}:path),{1,3}
+	testCert *tls.Config
+
 	// We create topics with a different number of partitions to exercise
 	// a few extra code paths; we index into npartitions with npartitionsAt,
 	// an atomic that we modulo after load.
@@ -45,7 +50,7 @@ var (
 
 func init() {
 	var err error
-	adm, err = NewClient(getSeedBrokers())
+	adm, err = newTestClient()
 	if err != nil {
 		panic(fmt.Sprintf("unable to create admin client: %v", err))
 	}
@@ -62,6 +67,60 @@ func init() {
 	if _, exists := os.LookupEnv("KGO_TEST_UNSAFE"); exists {
 		allowUnsafe = true
 	}
+	if paths, exists := os.LookupEnv("KGO_TEST_TLS"); exists {
+		var caPath, certPath, keyPath string
+		for _, path := range strings.Split(paths, ",") {
+			switch {
+			case strings.HasPrefix(path, "ca:"):
+				caPath = path[3:]
+			case strings.HasPrefix(path, "cert:"):
+				certPath = path[5:]
+			case strings.HasPrefix(path, "key:"):
+				keyPath = path[4:]
+			default:
+				panic(fmt.Sprintf("invalid tls format %q", path))
+			}
+		}
+		inittls := func() {
+			if testCert == nil {
+				testCert = &tls.Config{MinVersion: tls.VersionTLS12}
+			}
+		}
+		if caPath != "" {
+			ca, err := os.ReadFile(caPath) //nolint:gosec // we are deliberately including a file from a variable
+			if err != nil {
+				panic(fmt.Sprintf("unable to read ca: %v", err))
+			}
+			inittls()
+			testCert.RootCAs = x509.NewCertPool()
+			if !testCert.RootCAs.AppendCertsFromPEM(ca) {
+				panic("unable to append ca")
+			}
+		}
+		if certPath != "" || keyPath != "" {
+			if certPath == "" || keyPath == "" {
+				panic("both cert path and key path must be specified")
+			}
+			cert, err := tls.LoadX509KeyPair(certPath, keyPath)
+			if err != nil {
+				panic(fmt.Sprintf("unable to load cert/key pair: %v", err))
+			}
+			inittls()
+			testCert.Certificates = append(testCert.Certificates, cert)
+		}
+	}
+}
+
+func testClientOpts(opts ...Opt) []Opt {
+	opts = append(opts, getSeedBrokers())
+	if testCert != nil {
+		opts = append(opts, DialTLSConfig(testCert))
+	}
+	return opts
+}
+
+func newTestClient(opts ...Opt) (*Client, error) {
+	return NewClient(testClientOpts(opts...)...)
 }
 
 func getSeedBrokers() Opt {

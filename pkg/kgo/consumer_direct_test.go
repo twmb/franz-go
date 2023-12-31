@@ -18,8 +18,7 @@ func TestIssue325(t *testing.T) {
 	topic, cleanup := tmpTopic(t)
 	defer cleanup()
 
-	cl, _ := NewClient(
-		getSeedBrokers(),
+	cl, _ := newTestClient(
 		DefaultProduceTopic(topic),
 		UnknownTopicRetries(-1),
 	)
@@ -45,8 +44,7 @@ func TestIssue337(t *testing.T) {
 	topic, cleanup := tmpTopicPartitions(t, 2)
 	defer cleanup()
 
-	cl, _ := NewClient(
-		getSeedBrokers(),
+	cl, _ := newTestClient(
 		DefaultProduceTopic(topic),
 		RecordPartitioner(ManualPartitioner()),
 		UnknownTopicRetries(-1),
@@ -92,8 +90,7 @@ func TestDirectPartitionPurge(t *testing.T) {
 	topic, cleanup := tmpTopicPartitions(t, 2)
 	defer cleanup()
 
-	cl, _ := NewClient(
-		getSeedBrokers(),
+	cl, _ := newTestClient(
 		DefaultProduceTopic(topic),
 		RecordPartitioner(ManualPartitioner()),
 		UnknownTopicRetries(-1),
@@ -155,8 +152,7 @@ func TestIssue434(t *testing.T) {
 	defer cleanup1()
 	defer cleanup2()
 
-	cl, _ := NewClient(
-		getSeedBrokers(),
+	cl, _ := newTestClient(
 		UnknownTopicRetries(-1),
 		ConsumeTopics(fmt.Sprintf("(%s|%s)", t1, t2)),
 		ConsumeRegex(),
@@ -209,8 +205,7 @@ func TestAddRemovePartitions(t *testing.T) {
 	t1, cleanup := tmpTopicPartitions(t, 2)
 	defer cleanup()
 
-	cl, _ := NewClient(
-		getSeedBrokers(),
+	cl, _ := newTestClient(
 		UnknownTopicRetries(-1),
 		RecordPartitioner(ManualPartitioner()),
 		FetchMaxWait(100*time.Millisecond),
@@ -278,8 +273,7 @@ func TestPauseIssue489(t *testing.T) {
 	t1, cleanup := tmpTopicPartitions(t, 3)
 	defer cleanup()
 
-	cl, _ := NewClient(
-		getSeedBrokers(),
+	cl, _ := newTestClient(
 		UnknownTopicRetries(-1),
 		DefaultProduceTopic(t1),
 		RecordPartitioner(ManualPartitioner()),
@@ -360,8 +354,7 @@ func TestPauseIssueOct2023(t *testing.T) {
 	defer cleanup3()
 	ts := []string{t1, t2, t3}
 
-	cl, _ := NewClient(
-		getSeedBrokers(),
+	cl, _ := newTestClient(
 		UnknownTopicRetries(-1),
 		ConsumeTopics(ts...),
 		MetadataMinAge(50*time.Millisecond),
@@ -438,8 +431,7 @@ func TestIssue523(t *testing.T) {
 	g1, gcleanup := tmpGroup(t)
 	defer gcleanup()
 
-	cl, _ := NewClient(
-		getSeedBrokers(),
+	cl, _ := newTestClient(
 		DefaultProduceTopic(t1),
 		ConsumeTopics(".*"+t1+".*"),
 		ConsumeRegex(),

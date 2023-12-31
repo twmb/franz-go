@@ -26,8 +26,7 @@ func TestTxnEtl(t *testing.T) {
 	////////////////////
 
 	go func() {
-		cl, err := NewClient(
-			getSeedBrokers(),
+		cl, err := newTestClient(
 			WithLogger(BasicLogger(os.Stderr, testLogLevel, func() string {
 				return time.Now().UTC().Format("15:04:05.999") + " "
 			})),
@@ -139,7 +138,6 @@ func (c *testConsumer) transact(txnsBeforeQuit int) {
 	defer c.wg.Done()
 
 	opts := []Opt{
-		getSeedBrokers(),
 		// Kraft sometimes returns success from topic creation, and
 		// then returns UnknownTopicXyz for a while in metadata loads.
 		// It also returns NotLeaderXyz; we handle both problems.
@@ -160,6 +158,7 @@ func (c *testConsumer) transact(txnsBeforeQuit int) {
 	if requireStableFetch {
 		opts = append(opts, RequireStableFetchOffsets())
 	}
+	opts = append(opts, testClientOpts()...)
 
 	txnSess, _ := NewGroupTransactSession(opts...)
 	defer txnSess.Close()

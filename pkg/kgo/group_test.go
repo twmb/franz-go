@@ -35,8 +35,7 @@ func TestGroupETL(t *testing.T) {
 	////////////////////
 
 	go func() {
-		cl, _ := NewClient(
-			getSeedBrokers(),
+		cl, _ := newTestClient(
 			WithLogger(BasicLogger(os.Stderr, testLogLevel, nil)),
 			MaxBufferedRecords(10000),
 			MaxBufferedBytes(50000),
@@ -118,7 +117,6 @@ func (c *testConsumer) etl(etlsBeforeQuit int) {
 	netls := 0 // for if etlsBeforeQuit is non-negative
 
 	opts := []Opt{
-		getSeedBrokers(),
 		UnknownTopicRetries(-1), // see txn_test comment
 		WithLogger(testLogger()),
 		ConsumerGroup(c.group),
@@ -152,7 +150,7 @@ func (c *testConsumer) etl(etlsBeforeQuit int) {
 		OnPartitionsLost(func(context.Context, *Client, map[string][]int32) {}),
 	}
 
-	cl, _ := NewClient(opts...)
+	cl, _ := newTestClient(opts...)
 	defer cl.Close()
 
 	defer func() {
