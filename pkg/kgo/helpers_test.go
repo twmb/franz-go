@@ -43,7 +43,7 @@ var (
 	// KGO_TEST_TLS: DSL syntax is ({ca|cert|key}:path),{1,3}
 	testCert *tls.Config
 
-	// KGO_TEST_SCRAM: DSL is user:pass; we require SCRAM-SHA-256
+	// KGO_TEST_SCRAM: DSL is user:pass(:num); we assume 256
 	saslScram sasl.Mechanism
 
 	// We create topics with a different number of partitions to exercise
@@ -116,13 +116,26 @@ func init() {
 	}
 	if saslStr, exists := os.LookupEnv("KGO_TEST_SCRAM"); exists {
 		split := strings.Split(saslStr, ":")
-		if len(split) != 2 {
+		if len(split) != 2 && len(split) != 3 {
 			panic(fmt.Sprintf("invalid scram format %q", saslStr))
 		}
-		saslScram = (scram.Auth{
+		a := scram.Auth{
 			User: split[0],
 			Pass: split[1],
-		}).AsSha256Mechanism()
+		}
+		saslScram = a.AsSha256Mechanism()
+		if len(split) == 3 {
+			n, err := strconv.Atoi(split[2])
+			if err != nil {
+				panic(fmt.Sprintf("invalid scram alg %q: %v", split[2], err))
+			}
+			if n != 256 && n != 512 {
+				panic(fmt.Sprintf("invalid scram alg %q: must be 256 or 512", split[2]))
+			}
+			if n == 512 {
+				saslScram = a.AsSha512Mechanism()
+			}
+		}
 	}
 }
 
