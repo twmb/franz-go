@@ -310,8 +310,6 @@ outer:
 		inner:
 			for {
 				select {
-				case <-c.die:
-					return
 				case admin := <-c.adminCh:
 					admin()
 					continue inner
@@ -604,8 +602,6 @@ func (c *Cluster) tryControlKey(key int16, creq *clientReq) (kmsg.Response, erro
 		res := c.runControl(cctx, creq)
 		for {
 			select {
-			case <-c.die:
-				return nil, nil, false
 			case admin := <-c.adminCh:
 				admin()
 				continue
