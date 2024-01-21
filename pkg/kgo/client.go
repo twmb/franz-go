@@ -237,7 +237,7 @@ func (cl *Client) OptValues(opt any) []any {
 	case namefn(SoftwareNameAndVersion):
 		return []any{cfg.softwareName, cfg.softwareVersion}
 	case namefn(WithLogger):
-		if cfg.logger != nil {
+		if _, wrapped := cfg.logger.(*wrappedLogger); wrapped {
 			return []any{cfg.logger.(*wrappedLogger).inner}
 		}
 		return []any{nil}
