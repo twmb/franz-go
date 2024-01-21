@@ -485,7 +485,7 @@ func TestSetOffsetsForNewTopic(t *testing.T) {
 		)
 		defer cl.Close()
 
-		if err := cl.ProduceSync(context.Background(), StringRecord("foo")).FirstErr(); err != nil {
+		if err := cl.ProduceSync(context.Background(), StringRecord("foo"), StringRecord("bar")).FirstErr(); err != nil {
 			t.Fatal(err)
 		}
 		cl.Close()
@@ -495,11 +495,12 @@ func TestSetOffsetsForNewTopic(t *testing.T) {
 		cl, _ := newTestClient(
 			MetadataMinAge(100*time.Millisecond),
 			FetchMaxWait(time.Second),
+			WithLogger(BasicLogger(os.Stderr, LogLevelDebug, nil)),
 		)
 		defer cl.Close()
 
 		cl.SetOffsets(map[string]map[int32]EpochOffset{
-			t1: {0: EpochOffset{Epoch: -1, Offset: 0}},
+			t1: {0: EpochOffset{Epoch: -1, Offset: 1}},
 		})
 		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 		fs := cl.PollFetches(ctx)
@@ -508,8 +509,12 @@ func TestSetOffsetsForNewTopic(t *testing.T) {
 			t.Errorf("failed waiting for record")
 			return
 		}
-		if fs.NumRecords() == 0 {
-			t.Errorf("failed waiting for record")
+		if fs.NumRecords() != 1 {
+			t.Errorf("saw %d records, expected 1", fs.NumRecords())
+			return
+		}
+		if string(fs.Records()[0].Value) != "bar" {
+			t.Errorf("incorrect record consumed")
 			return
 		}
 		cl.Close()
@@ -529,7 +534,7 @@ func TestSetOffsetsForNewTopic(t *testing.T) {
 		defer cl.Close()
 
 		cl.SetOffsets(map[string]map[int32]EpochOffset{
-			t1: {0: EpochOffset{Epoch: -1, Offset: 0}},
+			t1: {0: EpochOffset{Epoch: -1, Offset: 1}},
 		})
 		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 		fs := cl.PollFetches(ctx)
@@ -538,8 +543,12 @@ func TestSetOffsetsForNewTopic(t *testing.T) {
 			t.Errorf("failed waiting for record")
 			return
 		}
-		if fs.NumRecords() == 0 {
-			t.Errorf("failed waiting for record")
+		if fs.NumRecords() != 1 {
+			t.Errorf("saw %d records, expected 1", fs.NumRecords())
+			return
+		}
+		if string(fs.Records()[0].Value) != "bar" {
+			t.Errorf("incorrect record consumed")
 			return
 		}
 		cl.Close()
