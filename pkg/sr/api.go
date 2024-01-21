@@ -592,8 +592,6 @@ func (cl *Client) Compatibility(ctx context.Context, subjects ...string) []Compa
 // The main difference between this and the CompatibilityResult is that this
 // struct marshals the compatibility level as "compatibility".
 type SetCompatibility struct {
-	Subject string `json:"-"` // The subject this compatibility set is for, or empty for the global compatibility..
-
 	Level            CompatibilityLevel `json:"compatibility"`                // The subject (or global) compatibility level.
 	Alias            string             `json:"alias,omitempty"`              // The subject alias, if any.
 	Normalize        bool               `json:"normalize,omitempty"`          // Whether or not schemas are normalized by default.
@@ -602,8 +600,6 @@ type SetCompatibility struct {
 	OverrideMetadata *SchemaMetadata    `json:"overrideMetadata,omitempty"`   // Override metadata used for schema registration.
 	DefaultRuleSet   *SchemaRuleSet     `json:"defaultRuleSet,omitempty"`     // Default rule set used for schema registration.
 	OverrideRuleSet  *SchemaRuleSet     `json:"overrideRuleSet,omitempty"`    // Override rule set used for schema registration.
-
-	Err error `json:"-"` // The error received for setting this compatibility.
 }
 
 // SetCompatibilitysets the compatibility for each requested subject. The
