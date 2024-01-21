@@ -1,6 +1,6 @@
 module github.com/twmb/franz-go/plugin/kgmetrics
 
-go 1.18
+go 1.19
 
 require (
 	github.com/rcrowley/go-metrics v0.0.0-20201227073835-cf1acfcdf475

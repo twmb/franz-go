@@ -1,9 +1,9 @@
 module github.com/twmb/franz-go
 
-go 1.18
+go 1.19
 
 require (
-	github.com/klauspost/compress v1.16.7
+	github.com/klauspost/compress v1.17.4
 	github.com/pierrec/lz4/v4 v4.1.19
 	github.com/twmb/franz-go/pkg/kmsg v1.7.0
 	golang.org/x/crypto v0.17.0
