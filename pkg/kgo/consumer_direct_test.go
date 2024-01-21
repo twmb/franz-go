@@ -4,10 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"sort"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/twmb/franz-go/pkg/kerr"
 )
 
 // Allow adding a topic to consume after the client is initialized with nothing
@@ -439,6 +442,7 @@ func TestIssue523(t *testing.T) {
 		MetadataMinAge(100*time.Millisecond),
 		FetchMaxWait(time.Second),
 		KeepRetryableFetchErrors(),
+		UnknownTopicRetries(-1),
 	)
 	defer cl.Close()
 
@@ -464,5 +468,106 @@ func TestIssue523(t *testing.T) {
 		if fs.Err0() != nil {
 			time.Sleep(time.Second)
 		}
+	}
+}
+
+func TestSetOffsetsForNewTopic(t *testing.T) {
+	t.Parallel()
+	t1, tcleanup := tmpTopicPartitions(t, 1)
+	defer tcleanup()
+
+	{
+		cl, _ := newTestClient(
+			DefaultProduceTopic(t1),
+			MetadataMinAge(100*time.Millisecond),
+			FetchMaxWait(time.Second),
+			UnknownTopicRetries(-1),
+		)
+		defer cl.Close()
+
+		if err := cl.ProduceSync(context.Background(), StringRecord("foo")).FirstErr(); err != nil {
+			t.Fatal(err)
+		}
+		cl.Close()
+	}
+
+	{
+		cl, _ := newTestClient(
+			MetadataMinAge(100*time.Millisecond),
+			FetchMaxWait(time.Second),
+		)
+		defer cl.Close()
+
+		cl.SetOffsets(map[string]map[int32]EpochOffset{
+			t1: {0: EpochOffset{Epoch: -1, Offset: 0}},
+		})
+		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+		fs := cl.PollFetches(ctx)
+		cancel()
+		if errors.Is(fs.Err0(), context.DeadlineExceeded) {
+			t.Errorf("failed waiting for record")
+			return
+		}
+		if fs.NumRecords() == 0 {
+			t.Errorf("failed waiting for record")
+			return
+		}
+		cl.Close()
+	}
+
+	// Duplicate above, but with a group.
+	{
+		g1, gcleanup := tmpGroup(t)
+		defer gcleanup()
+
+		cl, _ := newTestClient(
+			MetadataMinAge(100*time.Millisecond),
+			FetchMaxWait(time.Second),
+			ConsumerGroup(g1),
+			WithLogger(BasicLogger(os.Stderr, LogLevelDebug, nil)),
+		)
+		defer cl.Close()
+
+		cl.SetOffsets(map[string]map[int32]EpochOffset{
+			t1: {0: EpochOffset{Epoch: -1, Offset: 0}},
+		})
+		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+		fs := cl.PollFetches(ctx)
+		cancel()
+		if errors.Is(fs.Err0(), context.DeadlineExceeded) {
+			t.Errorf("failed waiting for record")
+			return
+		}
+		if fs.NumRecords() == 0 {
+			t.Errorf("failed waiting for record")
+			return
+		}
+		cl.Close()
+	}
+}
+
+func TestIssue648(t *testing.T) {
+	t.Parallel()
+	cl, _ := newTestClient(
+		MetadataMinAge(100*time.Millisecond),
+		ConsumeTopics("bizbazbuz"),
+		FetchMaxWait(time.Second),
+		KeepRetryableFetchErrors(),
+	)
+	defer cl.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	fs := cl.PollFetches(ctx)
+	cancel()
+
+	var found bool
+	fs.EachError(func(_ string, _ int32, err error) {
+		if !errors.Is(err, kerr.UnknownTopicOrPartition) {
+			t.Errorf("expected ErrUnknownTopicOrPartition, got %v", err)
+		} else {
+			found = true
+		}
+	})
+	if !found {
+		t.Errorf("did not see ErrUnknownTopicOrPartition")
 	}
 }
