@@ -2416,6 +2416,7 @@ func (cl *Client) cachedMappedMetadata(ts ...string) (map[string]mappedMetadataT
 			cached[t] = tcached
 		} else {
 			needed = append(needed, t)
+			delete(cl.mappedMeta, t)
 		}
 	}
 	return cached, needed
@@ -2463,6 +2464,16 @@ func (cl *Client) fetchMappedMetadata(ctx context.Context, topics []string, useC
 		r[*topic.Topic] = t
 		for _, partition := range topic.Partitions {
 			t.ps[partition.Partition] = partition
+		}
+	}
+	if len(meta.Topics) != len(cl.mappedMeta) {
+		for topic, mapped := range cl.mappedMeta {
+			if mapped.when.Equal(when) {
+				continue
+			}
+			if time.Since(mapped.when) > cl.cfg.metadataMinAge {
+				delete(cl.mappedMeta, topic)
+			}
 		}
 	}
 	return r, nil
