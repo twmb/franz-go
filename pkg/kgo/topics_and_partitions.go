@@ -89,7 +89,7 @@ func (m *mtmps) add(t string, p int32) {
 	mps[p] = struct{}{}
 }
 
-func (m *mtmps) addt(t string) bool {
+func (m *mtmps) addt(t string) {
 	if *m == nil {
 		*m = make(mtmps)
 	}
@@ -97,9 +97,7 @@ func (m *mtmps) addt(t string) bool {
 	if mps == nil {
 		mps = make(map[int32]struct{})
 		(*m)[t] = mps
-		return true
 	}
-	return false
 }
 
 func (m mtmps) onlyt(t string) bool {
@@ -292,12 +290,7 @@ func (t *topicsPartitions) load() topicsPartitionsData {
 	return t.v.Load().(topicsPartitionsData)
 }
 func (t *topicsPartitions) storeData(d topicsPartitionsData) { t.v.Store(d) }
-func (t *topicsPartitions) storeTopics(topics []string) bool {
-	v, added := t.ensureTopics(topics)
-	t.v.Store(v)
-	return added
-}
-
+func (t *topicsPartitions) storeTopics(topics []string)      { t.v.Store(t.ensureTopics(topics)) }
 func (t *topicsPartitions) clone() topicsPartitionsData {
 	current := t.load()
 	clone := make(map[string]*topicPartitions, len(current))
@@ -310,7 +303,7 @@ func (t *topicsPartitions) clone() topicsPartitionsData {
 // Ensures that the topics exist in the returned map, but does not store the
 // update. This can be used to update the data and store later, rather than
 // storing immediately.
-func (t *topicsPartitions) ensureTopics(topics []string) (topicsPartitionsData, bool) {
+func (t *topicsPartitions) ensureTopics(topics []string) topicsPartitionsData {
 	var cloned bool
 	current := t.load()
 	for _, topic := range topics {
@@ -322,7 +315,7 @@ func (t *topicsPartitions) ensureTopics(topics []string) (topicsPartitionsData, 
 			current[topic] = newTopicPartitions()
 		}
 	}
-	return current, cloned
+	return current
 }
 
 // Opposite of ensureTopics, this purges the input topics and *does* store.
