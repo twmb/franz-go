@@ -2250,8 +2250,12 @@ func (cl *Client) handleShardedReq(ctx context.Context, req kmsg.Request) ([]Res
 				}
 
 				resp, err := broker.waitResp(ctx, myIssue.req)
+				var errIsFromResp bool
 				if err == nil {
 					err = sharder.onResp(myUnderlyingReq, resp) // perform some potential cleanup, and potentially receive an error to retry
+					if ke := (*kerr.Error)(nil); errors.As(err, &ke) {
+						errIsFromResp = true
+					}
 				}
 
 				// If we failed to issue the request, we *maybe* will retry.
@@ -2279,6 +2283,14 @@ func (cl *Client) handleShardedReq(ctx context.Context, req kmsg.Request) ([]Res
 					return
 				}
 
+				// If we pulled an error out of the response body in an attempt
+				// to possibly retry, the request was NOT an error that we want
+				// to bubble as a shard error. The request was successful, we
+				// have a response. Before we add the shard, strip the error.
+				// The end user can parse the response ErrorCode.
+				if errIsFromResp {
+					err = nil
+				}
 				addShard(shard(broker, myUnderlyingReq, resp, err)) // the error was not retryable
 			}()
 		}
