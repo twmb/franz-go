@@ -364,11 +364,6 @@ func (c *consumer) initGroup() {
 		}
 		g.tps.storeTopics(topics)
 	}
-
-	if !g.cfg.autocommitDisable && g.cfg.autocommitInterval > 0 {
-		g.cfg.logger.Log(LogLevelInfo, "beginning autocommit loop", "group", g.cfg.group)
-		go g.loopCommit()
-	}
 }
 
 // Manages the group consumer's join / sync / heartbeat / fetch offset flow.
@@ -380,6 +375,10 @@ func (c *consumer) initGroup() {
 func (g *groupConsumer) manage() {
 	defer close(g.manageDone)
 	g.cfg.logger.Log(LogLevelInfo, "beginning to manage the group lifecycle", "group", g.cfg.group)
+	if !g.cfg.autocommitDisable && g.cfg.autocommitInterval > 0 {
+		g.cfg.logger.Log(LogLevelInfo, "beginning autocommit loop", "group", g.cfg.group)
+		go g.loopCommit()
+	}
 
 	var consecutiveErrors int
 	joinWhy := "beginning to manage the group lifecycle"
@@ -2131,11 +2130,17 @@ func (g *groupConsumer) loopCommit() {
 		g.noCommitDuringJoinAndSync.RLock()
 		g.mu.Lock()
 		if !g.blockAuto {
-			g.cfg.logger.Log(LogLevelDebug, "autocommitting", "group", g.cfg.group)
-			g.commit(g.ctx, g.getUncommittedLocked(true, false), func(cl *Client, req *kmsg.OffsetCommitRequest, resp *kmsg.OffsetCommitResponse, err error) {
+			uncommitted := g.getUncommittedLocked(true, false)
+			if len(uncommitted) == 0 {
+				g.cfg.logger.Log(LogLevelDebug, "skipping autocommit due to no offsets to commit", "group", g.cfg.group)
 				g.noCommitDuringJoinAndSync.RUnlock()
-				g.cfg.commitCallback(cl, req, resp, err)
-			})
+			} else {
+				g.cfg.logger.Log(LogLevelDebug, "autocommitting", "group", g.cfg.group)
+				g.commit(g.ctx, uncommitted, func(cl *Client, req *kmsg.OffsetCommitRequest, resp *kmsg.OffsetCommitResponse, err error) {
+					g.noCommitDuringJoinAndSync.RUnlock()
+					g.cfg.commitCallback(cl, req, resp, err)
+				})
+			}
 		} else {
 			g.noCommitDuringJoinAndSync.RUnlock()
 		}
