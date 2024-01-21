@@ -215,11 +215,11 @@ func (cl *Client) OptValue(opt any) any {
 //			InstanceID("foo"),
 //			ConsumeTopics("foo", "bar"),
 //		)
-//		idValues = cl.OptValues(InstanceID)          // idValues is []any{"foo", true}
-//		tValues  = cl.OptValues(SessionTimeout)      // tValues is []any{45 * time.Second}
-//		topics   = cl.OptValues(ConsumeTopics)       // topics is []any{[]string{"foo", "bar"}
+//		idValues = cl.OptValues(InstanceID)           // idValues is []any{"foo", true}
+//		tValues  = cl.OptValues(SessionTimeout)       // tValues is []any{45 * time.Second}
+//		topics   = cl.OptValues(ConsumeTopics)        // topics is []any{[]string{"foo", "bar"}
 //		bpoll    = cl.OptValues(BlockRebalanceOnPoll) // bpoll is []any{false}
-//		unknown  = cl.OptValues("Unknown")           // unknown is nil
+//		unknown  = cl.OptValues("Unknown")            // unknown is nil
 //	)
 func (cl *Client) OptValues(opt any) []any {
 	name := namefn(opt)
@@ -524,7 +524,7 @@ func NewClient(opts ...Opt) (*Client, error) {
 // Opts returns the options that were used to create this client. This can be
 // as a base to generate a new client, where you can add override options to
 // the end of the original input list. If you want to know a specific option
-// value, you can use ConfigValue or ConfigValues.
+// value, you can use OptValue or OptValues.
 func (cl *Client) Opts() []Opt {
 	return cl.opts
 }
