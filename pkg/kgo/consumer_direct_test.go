@@ -442,6 +442,7 @@ func TestIssue523(t *testing.T) {
 		MetadataMinAge(100*time.Millisecond),
 		FetchMaxWait(time.Second),
 		KeepRetryableFetchErrors(),
+		UnknownTopicRetries(-1),
 	)
 	defer cl.Close()
 
@@ -480,6 +481,7 @@ func TestSetOffsetsForNewTopic(t *testing.T) {
 			DefaultProduceTopic(t1),
 			MetadataMinAge(100*time.Millisecond),
 			FetchMaxWait(time.Second),
+			UnknownTopicRetries(-1),
 		)
 		defer cl.Close()
 
