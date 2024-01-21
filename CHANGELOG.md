@@ -1,3 +1,38 @@
+v1.16.0
+===
+
+This release contains a few minor APIs and internal improvements and fixes two
+minor bugs.
+
+One new API that is introduced also fixes a bug. API-wise, the `SaramaHasher`
+was actually _not_ a 1:1 compatible hasher. The logic was identical, but there
+was a rounding error because Sarama uses int32 module arithmetic, whereas kgo
+used int (which is likely int64) which caused a different hash result. A new
+`SaramaCompatHasher` has been introduced and the old `SaramaHasher` has been
+deprecated.
+
+The other bugfix is that `OptValue` on the `kgo.Logger` option panicked if you
+were not using a logger. That has been fixed.
+
+The only other APIs that are introduced are in the `kversions` package; they
+are minor, see the commit list below.
+
+If you issue a sharded request and any of the responses has a retryable error
+_in_ the response, this is no-longer returned as a top-level shard error. The
+shard error is now nil, and you can properly inspect the response fully.
+
+Lastly (besides other internal minor improvements not worth mentioning),
+metadata fetches can now inject fake fetches if the metadata response has topic
+or partition load errors. This is unconditionally true for non-retryable
+errors. If you use `KeepRetryableFetchErrors`, you can now _also_ see when
+metadata fetching is showing unknown topic errors or other retryable errors.
+
+- [`a2340eb`](https://github.com/twmb/franz-go/commit/a2340eb) **improvement** pkg/kgo: inject fake fetches on metadata load errors
+- [`d07efd9`](https://github.com/twmb/franz-go/commit/d07efd9) **feature** kversion: add `VersionStrings`, `FromString`, `V3_6_0`
+- [`8d30de0`](https://github.com/twmb/franz-go/commit/8d30de0) **bugfix** pkg/kgo: fix OptValue with no logger set
+- [`012cd7c`](https://github.com/twmb/franz-go/commit/012cd7c) **improvement** kgo: do not return response ErrorCode's as shard errors
+- [`1dc3d40`](https://github.com/twmb/franz-go/commit/1dc3d40) **bugfix**: actually have correct sarama compatible hasher (thanks [@C-Pro](https://github.com/C-Pro))
+
 v1.15.4
 ===
 
