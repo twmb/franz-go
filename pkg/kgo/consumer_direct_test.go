@@ -9,6 +9,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/twmb/franz-go/pkg/kerr"
 )
 
 // Allow adding a topic to consume after the client is initialized with nothing
@@ -539,5 +541,31 @@ func TestSetOffsetsForNewTopic(t *testing.T) {
 			return
 		}
 		cl.Close()
+	}
+}
+
+func TestIssue648(t *testing.T) {
+	t.Parallel()
+	cl, _ := newTestClient(
+		MetadataMinAge(100*time.Millisecond),
+		ConsumeTopics("bizbazbuz"),
+		FetchMaxWait(time.Second),
+		KeepRetryableFetchErrors(),
+	)
+	defer cl.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	fs := cl.PollFetches(ctx)
+	cancel()
+
+	var found bool
+	fs.EachError(func(_ string, _ int32, err error) {
+		if !errors.Is(err, kerr.UnknownTopicOrPartition) {
+			t.Errorf("expected ErrUnknownTopicOrPartition, got %v", err)
+		} else {
+			found = true
+		}
+	})
+	if !found {
+		t.Errorf("did not see ErrUnknownTopicOrPartition")
 	}
 }
