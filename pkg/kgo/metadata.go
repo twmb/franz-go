@@ -350,7 +350,7 @@ func (cl *Client) updateMetadata() (retryWhy multiUpdateWhy, err error) {
 		for topic := range latest {
 			allTopics = append(allTopics, topic)
 		}
-		tpsConsumerLoad, _ = tpsConsumer.ensureTopics(allTopics)
+		tpsConsumerLoad = tpsConsumer.ensureTopics(allTopics)
 		defer tpsConsumer.storeData(tpsConsumerLoad)
 
 		// For regex consuming, if a topic is not returned in the

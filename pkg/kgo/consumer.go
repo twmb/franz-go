@@ -636,7 +636,10 @@ func (cl *Client) ResumeFetchPartitions(topicPartitions map[string][]int32) {
 }
 
 // SetOffsets sets any matching offsets in setOffsets to the given
-// epoch/offset. Partitions that are not specified are not set.
+// epoch/offset. Partitions that are not specified are not set. It is invalid
+// to set topics that were not yet returned from a PollFetches: this function
+// sets only partitions that were previously consumed, any extra partitions are
+// skipped.
 //
 // If directly consuming, this function operates as expected given the caveats
 // of the prior paragraph.
@@ -644,11 +647,11 @@ func (cl *Client) ResumeFetchPartitions(topicPartitions map[string][]int32) {
 // If using transactions, it is advised to just use a GroupTransactSession and
 // avoid this function entirely.
 //
-// If using group consuming, it is strongly recommended to use this function
+// If using group consuming, It is strongly recommended to use this function
 // outside of the context of a PollFetches loop and only when you know the
 // group is not revoked (i.e., block any concurrent revoke while issuing this
 // call) and to not use this concurrent with committing. Any other usage is
-// prone to odd interactions around rebalancing.
+// prone to odd interactions.
 func (cl *Client) SetOffsets(setOffsets map[string]map[int32]EpochOffset) {
 	cl.setOffsets(setOffsets, true)
 }
@@ -657,12 +660,6 @@ func (cl *Client) setOffsets(setOffsets map[string]map[int32]EpochOffset, log bo
 	if len(setOffsets) == 0 {
 		return
 	}
-
-	topics := make([]string, 0, len(setOffsets))
-	for topic := range setOffsets {
-		topics = append(topics, topic)
-	}
-	cl.AddConsumeTopics(topics...)
 
 	// We assignPartitions before returning, so we grab the consumer lock
 	// first to preserve consumer mu => group mu ordering, or to ensure
@@ -750,18 +747,15 @@ func (cl *Client) AddConsumeTopics(topics ...string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	var added bool
 	if c.g != nil {
-		added = c.g.tps.storeTopics(topics)
+		c.g.tps.storeTopics(topics)
 	} else {
-		added = c.d.tps.storeTopics(topics)
+		c.d.tps.storeTopics(topics)
 		for _, topic := range topics {
-			added = c.d.m.addt(topic) || added
+			c.d.m.addt(topic)
 		}
 	}
-	if added {
-		cl.triggerUpdateMetadataNow("from AddConsumeTopics")
-	}
+	cl.triggerUpdateMetadataNow("from AddConsumeTopics")
 }
 
 // AddConsumePartitions adds new partitions to be consumed at the given
