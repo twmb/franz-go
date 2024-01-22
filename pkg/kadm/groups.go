@@ -162,6 +162,17 @@ func (rs DescribedGroups) On(group string, fn func(*DescribedGroup) error) (Desc
 	return DescribedGroup{}, kerr.GroupIDNotFound
 }
 
+// Error iterates over all groups and returns the first error encountered, if
+// any.
+func (ds DescribedGroups) Error() error {
+	for _, d := range ds {
+		if d.Err != nil {
+			return d.Err
+		}
+	}
+	return nil
+}
+
 // Topics returns a sorted list of all group names.
 func (ds DescribedGroups) Names() []string {
 	all := make([]string, 0, len(ds))
@@ -383,6 +394,32 @@ func (rs DeleteGroupResponses) On(group string, fn func(*DeleteGroupResponse) er
 		}
 	}
 	return DeleteGroupResponse{}, kerr.GroupIDNotFound
+}
+
+// Error iterates over all groups and returns the first error encountered, if
+// any.
+func (rs DeleteGroupResponses) Error() error {
+	for _, r := range rs {
+		if r.Err != nil {
+			return r.Err
+		}
+	}
+	return nil
+}
+
+// DeleteGroup deletes the specified group. This is similar to DeleteGroups,
+// but returns the kerr.ErrorForCode(response.ErrorCode) if the request/response
+// is successful.
+func (cl *Client) DeleteGroup(ctx context.Context, group string) (DeleteGroupResponse, error) {
+	rs, err := cl.DeleteGroups(ctx, group)
+	if err != nil {
+		return DeleteGroupResponse{}, err
+	}
+	g, exists := rs[group]
+	if !exists {
+		return DeleteGroupResponse{}, errors.New("requested group was not part of the delete group response")
+	}
+	return g, g.Err
 }
 
 // DeleteGroups deletes all groups specified.
@@ -984,6 +1021,17 @@ func (rs FetchOffsetsResponses) On(group string, fn func(*FetchOffsetsResponse) 
 	return FetchOffsetsResponse{}, kerr.GroupIDNotFound
 }
 
+// Error iterates over all responses and returns the first error encountered,
+// if any.
+func (rs FetchOffsetsResponses) Error() error {
+	for _, r := range rs {
+		if r.Err != nil {
+			return r.Err
+		}
+	}
+	return nil
+}
+
 // FetchManyOffsets issues a fetch offsets requests for each group specified.
 //
 // This function is a batch version of FetchOffsets. FetchOffsets and
@@ -1090,6 +1138,19 @@ func (ds DeleteOffsetsResponses) EachError(fn func(string, int32, error)) {
 			}
 		}
 	}
+}
+
+// Error iterates over all responses and returns the first error encountered,
+// if any.
+func (ds DeleteOffsetsResponses) Error() error {
+	for _, ps := range ds {
+		for _, err := range ps {
+			if err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // DeleteOffsets deletes offsets for the given group.
