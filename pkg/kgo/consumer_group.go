@@ -2584,6 +2584,7 @@ func (g *groupConsumer) commitOffsetsSync(
 
 	if err := g.waitJoinSyncMu(ctx); err != nil {
 		onDone(g.cl, kmsg.NewPtrOffsetCommitRequest(), kmsg.NewPtrOffsetCommitResponse(), err)
+		close(done)
 		return
 	}
 	unblockCommits := func(cl *Client, req *kmsg.OffsetCommitRequest, resp *kmsg.OffsetCommitResponse, err error) {

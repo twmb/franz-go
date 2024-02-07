@@ -487,9 +487,16 @@ func KafkaHasher(hashFn func([]byte) uint32) PartitionerHasher {
 	}
 }
 
-// Deprecated: SaramaHasher is not compatible with Sarama's default partitioner
-// and only remains to avoid re-keying records for existing users of this API. See
-// [SaramaCompatHasher] for a correct partitioner.
+// SaramaHasher is a historical misnamed partitioner. This library's original
+// implementation of the SaramaHasher was incorrect, if you want an exact
+// match for the Sarama partitioner, use the [SaramaCompatHasher].
+//
+// This partitioner remains because as it turns out, other ecosystems provide
+// a similar partitioner and this partitioner is useful for compatibility.
+//
+// In particular, using this function with a crc32.ChecksumIEEE hasher makes
+// this partitioner match librdkafka's consistent partitioner, or the
+// zendesk/ruby-kafka partitioner.
 func SaramaHasher(hashFn func([]byte) uint32) PartitionerHasher {
 	return func(key []byte, n int) int {
 		p := int(hashFn(key)) % n

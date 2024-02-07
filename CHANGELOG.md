@@ -1,3 +1,20 @@
+v1.16.1
+===
+
+This patch release fixes one bug and un-deprecates SaramaHasher.
+
+SaramaHasher, while not identical to Sarama's partitioner, actually _is_
+identical to some other partitioners in the Kafka client ecosystem. So, the old
+function is now un-deprecated, but the documentation correctly points you to
+SaramaCompatHasher and mentions why you may still want to use SaramaHasher.
+
+For the bug: if you tried using CommitOffsetsSync during a group rebalance, and
+you canceled your context while the group was still rebalancing, then
+CommitOffsetsSync would enter a deadlock and never return. That has been fixed.
+
+- [`cd65d77`](https://github.com/twmb/franz-go/commit/cd65d77) kgo: fix bug
+- [`d40ac19`](https://github.com/twmb/franz-go/commit/d40ac19) kgo: un-deprecate SaramaHasher and add docs explaining why
+
 v1.16.0
 ===
 
