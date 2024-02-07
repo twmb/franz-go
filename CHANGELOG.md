@@ -12,7 +12,7 @@ For the bug: if you tried using CommitOffsetsSync during a group rebalance, and
 you canceled your context while the group was still rebalancing, then
 CommitOffsetsSync would enter a deadlock and never return. That has been fixed.
 
-- [`cd65d77`](https://github.com/twmb/franz-go/commit/cd65d77) kgo: fix bug
+- [`cd65d77`](https://github.com/twmb/franz-go/commit/cd65d77) and [`99d6dfb`](https://github.com/twmb/franz-go/commit/99d6dfb) kgo: fix bug
 - [`d40ac19`](https://github.com/twmb/franz-go/commit/d40ac19) kgo: un-deprecate SaramaHasher and add docs explaining why
 
 v1.16.0
