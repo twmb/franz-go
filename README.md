@@ -184,6 +184,7 @@ In alphabetical order,
 * [Mux](https://mux.com/blog/processing-cdn-logs-exactly-once-with-kafka-transactions/)
 * [Redpanda Console](https://github.com/redpanda-data/console/)
 * [Redpanda Data](https://redpanda.com/)
+* [Sharechat](https://sharechat.com/about)
 * [StoneCo](https://www.stone.com.br/)
 * [ThinkingData](https://thinkingdata.cn)
 * [Unistack](https://unistack.org) (Cloud Management System)
