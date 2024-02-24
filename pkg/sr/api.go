@@ -216,7 +216,7 @@ func (cl *Client) SubjectsByID(ctx context.Context, id int) ([]string, error) {
 	return subjects, err
 }
 
-// SchemaVersion is a subject version pair.
+// SubjectVersion is a subject version pair.
 type SubjectVersion struct {
 	Subject string `json:"subject"`
 	Version int    `json:"version"`
@@ -602,7 +602,7 @@ type SetCompatibility struct {
 	OverrideRuleSet  *SchemaRuleSet     `json:"overrideRuleSet,omitempty"`    // Override rule set used for schema registration.
 }
 
-// SetCompatibilitysets the compatibility for each requested subject. The
+// SetCompatibility sets the compatibility for each requested subject. The
 // global compatibility can be set by either using an empty subject or by
 // specifying no subjects. If specifying no subjects, this returns one element.
 func (cl *Client) SetCompatibility(ctx context.Context, compat SetCompatibility, subjects ...string) []CompatibilityResult {

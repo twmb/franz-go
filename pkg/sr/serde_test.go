@@ -53,9 +53,6 @@ func TestSerde(t *testing.T) {
 	serde.Register(3, idx4{}, Index(0, 0, 1))
 	serde.Register(3, idx3{}, Index(0, 0))
 	serde.Register(5, oneidx{}, Index(0), GenerateFn(func() any { return &oneidx{Foo: "defoo", Bar: "debar"} }))
-	serde.Register(100, nil, Index(0), EncodeFn(func(v any) ([]byte, error) {
-		return json.MarshalIndent(v, "", "  ")
-	}))
 
 	for i, test := range []struct {
 		enc    any
@@ -100,10 +97,6 @@ func TestSerde(t *testing.T) {
 			expMap: map[string]any{"bar": "bar"},
 		},
 	} {
-		if _, err := serde.DynEncode(test.enc, 99, nil); err != ErrNotRegistered {
-			t.Errorf("got %v != exp ErrNotRegistered", err)
-		}
-
 		b, err := serde.Encode(test.enc)
 		gotErr := err != nil
 		if gotErr != test.expErr {
@@ -126,7 +119,13 @@ func TestSerde(t *testing.T) {
 			t.Errorf("#%d got MustAppendEncode(%v) != Encode(foo%v)", i, b2, b)
 		}
 
-		bIndented := serde.MustDynEncode(test.enc, 100, []int{0})
+		bIndented, err := Encode(test.enc, 100, []int{0}, serde.header(), func(v any) ([]byte, error) {
+			return json.MarshalIndent(v, "", "  ")
+		})
+		if err != nil {
+			t.Errorf("#%d Encode[ID=100]: got err? %v, exp err? %v", i, gotErr, test.expErr)
+			continue
+		}
 		if i := bytes.IndexByte(bIndented, '{'); !bytes.Equal(bIndented[:i], []byte{0, 0, 0, 0, 100, 0}) {
 			t.Errorf("#%d got Encode[ID=100](%v) != exp(%v)", i, bIndented[:i], []byte{0, 0, 0, 0, 100, 0})
 		} else if expIndented := extractIndentedJSON(b); !bytes.Equal(bIndented[i:], expIndented) {
