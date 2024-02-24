@@ -152,6 +152,11 @@ type cursorOffset struct {
 	// details.
 	lastConsumedEpoch int32
 
+	// If we receive OFFSET_OUT_OF_RANGE, and we previously *know* we
+	// consumed an offset, we reset to the nearest offset after our prior
+	// known valid consumed offset.
+	lastConsumedTime time.Time
+
 	// The current high watermark of the partition. Uninitialized (0) means
 	// we do not know the HWM, or there is no lag.
 	hwm int64
@@ -506,6 +511,7 @@ func (s *source) takeNBuffered(paused pausedTopics, n int) (Fetch, int, bool) {
 			pCursor.from.setOffset(cursorOffset{
 				offset:            lastReturnedRecord.Offset + 1,
 				lastConsumedEpoch: lastReturnedRecord.LeaderEpoch,
+				lastConsumedTime:  lastReturnedRecord.Timestamp,
 				hwm:               p.HighWatermark,
 			})
 		}
@@ -1067,23 +1073,44 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 				// In all cases except case 4, we also have to check if
 				// no reset offset was configured. If so, we ignore
 				// trying to reset and instead keep our failed partition.
-				addList := func(replica int32) {
+				addList := func(replica int32, log bool) {
 					if s.cl.cfg.resetOffset.noReset {
 						keep = true
+					} else if !partOffset.from.lastConsumedTime.IsZero() {
+						reloadOffsets.addLoad(topic, partition, loadTypeList, offsetLoad{
+							replica: replica,
+							Offset:  NewOffset().AfterMilli(partOffset.from.lastConsumedTime.UnixMilli()),
+						})
+						if log {
+							s.cl.cfg.logger.Log(LogLevelWarn, "received OFFSET_OUT_OF_RANGE, resetting to the nearest offset; either you were consuming too slowly and the broker has deleted the segment you were in the middle of consuming, or the broker has lost data and has not yet transferred leadership",
+								"broker", logID(s.nodeID),
+								"topic", topic,
+								"partition", partition,
+								"prior_offset", partOffset.offset,
+							)
+						}
 					} else {
 						reloadOffsets.addLoad(topic, partition, loadTypeList, offsetLoad{
 							replica: replica,
 							Offset:  s.cl.cfg.resetOffset,
 						})
+						if log {
+							s.cl.cfg.logger.Log(LogLevelInfo, "received OFFSET_OUT_OF_RANGE on the first fetch, resetting to the configured ConsumeResetOffset",
+								"broker", logID(s.nodeID),
+								"topic", topic,
+								"partition", partition,
+								"prior_offset", partOffset.offset,
+							)
+						}
 					}
 				}
 
 				switch {
 				case s.nodeID == partOffset.from.leader: // non KIP-392 case
-					addList(-1)
+					addList(-1, true)
 
 				case partOffset.offset < fp.LogStartOffset: // KIP-392 case 3
-					addList(s.nodeID)
+					addList(s.nodeID, false)
 
 				default: // partOffset.offset > fp.HighWatermark, KIP-392 case 4
 					if kip320 {
@@ -1098,7 +1125,7 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 						// If the broker does not support offset for leader epoch but
 						// does support follower fetching for some reason, we have to
 						// fallback to listing.
-						addList(-1)
+						addList(-1, true)
 					}
 				}
 
@@ -1630,6 +1657,7 @@ func (o *cursorOffsetNext) maybeKeepRecord(fp *FetchPartition, record *Record, a
 	// topic is compacted.
 	o.offset = record.Offset + 1
 	o.lastConsumedEpoch = record.LeaderEpoch
+	o.lastConsumedTime = record.Timestamp
 }
 
 ///////////////////////////////
@@ -1741,6 +1769,26 @@ type fetchRequest struct {
 	torder []string           // order of topics to write
 	porder map[string][]int32 // per topic, order of partitions to write
 
+	// topic2id and id2topic track bidirectional lookup of topics and IDs
+	// that are being added to *this* specific request. topic2id slightly
+	// duplicates the map t2id in the fetch session, but t2id is different
+	// in that t2id tracks IDs in use from all prior requests -- and,
+	// importantly, t2id is cleared of IDs that are no longer used (see
+	// ForgottenTopics).
+	//
+	// We need to have both a session t2id map and a request t2id map:
+	//
+	//   * The session t2id is what we use when creating forgotten topics.
+	//   If we are forgetting a topic, the ID is not in the req t2id.
+	//
+	//   * The req topic2id is used for adding to the session t2id. When
+	//   building a request, if the id is in req.topic2id but not
+	//   session.t2id, we promote the ID into the session map.
+	//
+	// Lastly, id2topic is used when handling the response, as our reverse
+	// lookup from the ID back to the topic (and then we work with the
+	// topic name only). There is no equivalent in the session because
+	// there is no need for the id2topic lookup ever in the session.
 	topic2id map[string][16]byte
 	id2topic map[[16]byte]string
 
@@ -2067,7 +2115,7 @@ func (f *fetchRequest) AppendTo(dst []byte) []byte {
 				if forgottenTopic == nil {
 					t := kmsg.NewFetchRequestForgottenTopic()
 					t.Topic = topic
-					t.TopicID = f.topic2id[topic]
+					t.TopicID = f.session.t2id[topic]
 					req.ForgottenTopics = append(req.ForgottenTopics, t)
 					forgottenTopic = &req.ForgottenTopics[len(req.ForgottenTopics)-1]
 				}
@@ -2079,7 +2127,8 @@ func (f *fetchRequest) AppendTo(dst []byte) []byte {
 				id := f.session.t2id[topic]
 				delete(f.session.t2id, topic)
 				// If we deleted a topic that was missing an ID, then we clear the
-				// previous disableIDs state and potentially reenable it.
+				// previous disableIDs state. We potentially *reenable* disableIDs
+				// if any remaining topics in our session are also missing their ID.
 				var noID [16]byte
 				if id == noID {
 					f.session.disableIDs = false

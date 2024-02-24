@@ -404,7 +404,7 @@ func (cl *Client) DeleteSubject(ctx context.Context, subject string, how DeleteH
 	// DELETE /subjects/{subject}?permanent={x}
 	path := pathSubject(subject)
 	if how == HardDelete {
-		path += "?permanent=true"
+		ctx = WithParams(ctx, hardDelete)
 	}
 	var versions []int
 	defer func() { sort.Ints(versions) }()
@@ -419,7 +419,7 @@ func (cl *Client) DeleteSchema(ctx context.Context, subject string, version int,
 	// DELETE /subjects/{subject}/versions/{version}?permanent={x}
 	path := pathSubjectVersion(subject, version)
 	if how == HardDelete {
-		path += "?permanent=true"
+		ctx = WithParams(ctx, hardDelete)
 	}
 	return cl.delete(ctx, path, nil)
 }
@@ -592,8 +592,6 @@ func (cl *Client) Compatibility(ctx context.Context, subjects ...string) []Compa
 // The main difference between this and the CompatibilityResult is that this
 // struct marshals the compatibility level as "compatibility".
 type SetCompatibility struct {
-	Subject string `json:"-"` // The subject this compatibility set is for, or empty for the global compatibility..
-
 	Level            CompatibilityLevel `json:"compatibility"`                // The subject (or global) compatibility level.
 	Alias            string             `json:"alias,omitempty"`              // The subject alias, if any.
 	Normalize        bool               `json:"normalize,omitempty"`          // Whether or not schemas are normalized by default.
@@ -602,8 +600,6 @@ type SetCompatibility struct {
 	OverrideMetadata *SchemaMetadata    `json:"overrideMetadata,omitempty"`   // Override metadata used for schema registration.
 	DefaultRuleSet   *SchemaRuleSet     `json:"defaultRuleSet,omitempty"`     // Default rule set used for schema registration.
 	OverrideRuleSet  *SchemaRuleSet     `json:"overrideRuleSet,omitempty"`    // Override rule set used for schema registration.
-
-	Err error `json:"-"` // The error received for setting this compatibility.
 }
 
 // SetCompatibilitysets the compatibility for each requested subject. The

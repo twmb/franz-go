@@ -191,3 +191,33 @@ func TestVersionProbeKafka3_1(t *testing.T) {
 		t.Errorf("unexpected version guess, got %s != exp %s", guess, "v3.1")
 	}
 }
+
+func TestFromString(t *testing.T) {
+	for _, test := range []struct {
+		in, out string
+	}{
+		{"v0.8.0", "v0.8.0"},
+		{"v0.8.1.0", "v0.8.1"},
+		{"v2.1", "v2.1"},
+		{"v2.1.3", "v2.1"},
+		{"v3.1", "v3.1"},
+
+		{"v0.7.0", ""},     // too low
+		{"v999.9", ""},     // too high
+		{"v3", ""},         // not enough digits
+		{"v0.8.1.0.3", ""}, // too many digits for v0
+		{"v3.1.0.3", ""},   // too many digits for v1+
+	} {
+		v := FromString(test.in)
+		if v == nil {
+			if test.out != "" {
+				t.Errorf("unexpectedly got nil for %s", test.in)
+			}
+			continue
+		}
+		out := v.VersionGuess()
+		if out != test.out {
+			t.Errorf("got %s != exp %s for %s", out, test.out, test.in)
+		}
+	}
+}

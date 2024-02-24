@@ -1,3 +1,110 @@
+v1.16.1
+===
+
+This patch release fixes one bug and un-deprecates SaramaHasher.
+
+SaramaHasher, while not identical to Sarama's partitioner, actually _is_
+identical to some other partitioners in the Kafka client ecosystem. So, the old
+function is now un-deprecated, but the documentation correctly points you to
+SaramaCompatHasher and mentions why you may still want to use SaramaHasher.
+
+For the bug: if you tried using CommitOffsetsSync during a group rebalance, and
+you canceled your context while the group was still rebalancing, then
+CommitOffsetsSync would enter a deadlock and never return. That has been fixed.
+
+- [`cd65d77`](https://github.com/twmb/franz-go/commit/cd65d77) and [`99d6dfb`](https://github.com/twmb/franz-go/commit/99d6dfb) kgo: fix bug
+- [`d40ac19`](https://github.com/twmb/franz-go/commit/d40ac19) kgo: un-deprecate SaramaHasher and add docs explaining why
+
+v1.16.0
+===
+
+This release contains a few minor APIs and internal improvements and fixes two
+minor bugs.
+
+One new API that is introduced also fixes a bug. API-wise, the `SaramaHasher`
+was actually _not_ a 1:1 compatible hasher. The logic was identical, but there
+was a rounding error because Sarama uses int32 module arithmetic, whereas kgo
+used int (which is likely int64) which caused a different hash result. A new
+`SaramaCompatHasher` has been introduced and the old `SaramaHasher` has been
+deprecated.
+
+The other bugfix is that `OptValue` on the `kgo.Logger` option panicked if you
+were not using a logger. That has been fixed.
+
+The only other APIs that are introduced are in the `kversions` package; they
+are minor, see the commit list below.
+
+If you issue a sharded request and any of the responses has a retryable error
+_in_ the response, this is no-longer returned as a top-level shard error. The
+shard error is now nil, and you can properly inspect the response fully.
+
+Lastly (besides other internal minor improvements not worth mentioning),
+metadata fetches can now inject fake fetches if the metadata response has topic
+or partition load errors. This is unconditionally true for non-retryable
+errors. If you use `KeepRetryableFetchErrors`, you can now _also_ see when
+metadata fetching is showing unknown topic errors or other retryable errors.
+
+- [`a2340eb`](https://github.com/twmb/franz-go/commit/a2340eb) **improvement** pkg/kgo: inject fake fetches on metadata load errors
+- [`d07efd9`](https://github.com/twmb/franz-go/commit/d07efd9) **feature** kversion: add `VersionStrings`, `FromString`, `V3_6_0`
+- [`8d30de0`](https://github.com/twmb/franz-go/commit/8d30de0) **bugfix** pkg/kgo: fix OptValue with no logger set
+- [`012cd7c`](https://github.com/twmb/franz-go/commit/012cd7c) **improvement** kgo: do not return response ErrorCode's as shard errors
+- [`1dc3d40`](https://github.com/twmb/franz-go/commit/1dc3d40) **bugfix**: actually have correct sarama compatible hasher (thanks [@C-Pro](https://github.com/C-Pro))
+
+v1.15.4
+===
+
+This patch release fixes a difficult to encounter, but
+fatal-for-group-consuming bug.
+
+The sequence of events to trigger this bug:
+* OffsetCommit is issued before Heartbeat
+* The coordinator for the group needs to be loaded (so, likely, a previous `NOT_COORDINATOR` error was received)
+* OffsetCommit triggers the load
+* a second OffsetCommit happens while the first is still running, canceling the first OffsetCommit's context
+
+In this sequence of events, FindCoordinator will fail with `context.Canceled`
+and, importantly, also return that error to Heartbeat. In the guts of the
+client, a `context.Canceled` error _should_ only happen when a group is being
+left, so this error is recognized as a group-is-leaving error and the group
+management goroutine exits. Thus, the group is never rejoined.
+
+This likely requires a system to be overloaded to begin with, because
+FindCoordinator requests are usually very fast.
+
+The fix is to use the client context when issuing FindCoordinator, rather than
+the parent request. The parent request can still quit, but FindCoordinator
+continues. No parent request can affect any other waiting request.
+
+This patch also includes a dep bump for everything but klauspost/compress;
+klauspost/compress changed go.mod to require go1.19, while this repo still
+requires 1.18. v1.16 will change to require 1.19 and then this repo will bump
+klauspost/compress.
+
+There were multiple additions to the yet-unversioned kfake package, so that an
+advanced "test" could be written to trigger the behavior for this patch and
+then ensure it is fixed.  To see the test, please check the comment on PR
+[650](https://github.com/twmb/franz-go/pull/650).
+
+- [`7d050fc`](https://github.com/twmb/franz-go/commit/7d050fc) kgo: do not cancel FindCoordinator if the parent context cancels
+
+v1.15.3
+===
+
+This patch release fixes one minor bug, reduces allocations on gzip and lz4
+decompression, and contains a behavior improvement when OffsetOutOfRange is
+received while consuming.
+
+For the bugfix: previously, if the client was using a fetch session (as is the
+default when consuming), and all partitions for a topic transfer to a different
+broker, the client would not properly unregister the topic from the prior
+broker's fetch session. This could result in more data being consumed and
+discarded than necessary (although, it's possible the broker just reset the
+fetch session anyway, I'm not entirely positive).
+
+- [`fdf371c`](https://github.com/twmb/franz-go/commit/fdf371c) use bytes buffer instead of ReadAll (thanks [@kalbhor](https://github.com/kalbhor)!)
+- [`e6ed69f`](https://github.com/twmb/franz-go/commit/e6ed69f) consuming: reset to nearest if we receive OOOR while fetching
+- [`1b6a721`](https://github.com/twmb/franz-go/commit/1b6a721) **bugfix** kgo source: use the proper topic-to-id map when forgetting topics
+
 v1.15.2
 ===
 

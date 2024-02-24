@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 )
 
@@ -100,21 +101,25 @@ func (cl *Client) do(ctx context.Context, method, path string, v, into any) erro
 	urls := cl.urls
 
 start:
-	url := fmt.Sprintf("%s%s", urls[0], path)
+	reqURL, err := url.JoinPath(urls[0], path)
+	if err != nil {
+		return fmt.Errorf("unable to join path for %q and %q: %w", urls[0], path, err)
+	}
+
 	urls = urls[1:]
 
 	var reqBody io.Reader
 	if v != nil {
 		marshaled, err := json.Marshal(v)
 		if err != nil {
-			return fmt.Errorf("unable to encode body for %s %q: %w", method, url, err)
+			return fmt.Errorf("unable to encode body for %s %q: %w", method, reqURL, err)
 		}
 		reqBody = bytes.NewReader(marshaled)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, method, url, reqBody)
+	req, err := http.NewRequestWithContext(ctx, method, reqURL, reqBody)
 	if err != nil {
-		return fmt.Errorf("unable to create request for %s %q: %v", method, url, err)
+		return fmt.Errorf("unable to create request for %s %q: %v", method, reqURL, err)
 	}
 	req.Header.Set("Content-Type", "application/vnd.schemaregistry.v1+json")
 	req.Header.Set("Accept", "application/vnd.schemaregistry.v1+json")
@@ -127,7 +132,7 @@ start:
 	resp, err := cl.httpcl.Do(req)
 	if err != nil {
 		if len(urls) == 0 {
-			return fmt.Errorf("unable to %s %q: %w", method, url, err)
+			return fmt.Errorf("unable to %s %q: %w", method, reqURL, err)
 		}
 		goto start
 	}
@@ -135,13 +140,13 @@ start:
 	body, err := io.ReadAll(resp.Body)
 	resp.Body.Close()
 	if err != nil {
-		return fmt.Errorf("unable to read response body from %s %q: %w", method, url, err)
+		return fmt.Errorf("unable to read response body from %s %q: %w", method, reqURL, err)
 	}
 
 	if resp.StatusCode >= 300 {
 		e := &ResponseError{
 			Method: method,
-			URL:    url,
+			URL:    reqURL,
 			Raw:    body,
 		}
 		_ = json.Unmarshal(body, e) // best effort
@@ -154,7 +159,7 @@ start:
 			*into = body // return raw body to caller
 		default:
 			if err := json.Unmarshal(body, into); err != nil {
-				return fmt.Errorf("unable to decode ok response body from %s %q: %w", method, url, err)
+				return fmt.Errorf("unable to decode ok response body from %s %q: %w", method, reqURL, err)
 			}
 		}
 	}

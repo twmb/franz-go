@@ -1110,7 +1110,7 @@ func RecordDeliveryTimeout(timeout time.Duration) ProducerOpt {
 // the equation. You must also assign a group to consume from.
 //
 // To produce transactionally, you first BeginTransaction, then produce records
-// consumed from a group, then you EndTransaction. All records prodcued outside
+// consumed from a group, then you EndTransaction. All records produced outside
 // of a transaction will fail immediately with an error.
 //
 // After producing a batch, you must commit what you consumed. Auto committing

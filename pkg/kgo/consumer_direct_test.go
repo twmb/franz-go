@@ -8,6 +8,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/twmb/franz-go/pkg/kerr"
 )
 
 // Allow adding a topic to consume after the client is initialized with nothing
@@ -18,8 +20,7 @@ func TestIssue325(t *testing.T) {
 	topic, cleanup := tmpTopic(t)
 	defer cleanup()
 
-	cl, _ := NewClient(
-		getSeedBrokers(),
+	cl, _ := newTestClient(
 		DefaultProduceTopic(topic),
 		UnknownTopicRetries(-1),
 	)
@@ -45,8 +46,7 @@ func TestIssue337(t *testing.T) {
 	topic, cleanup := tmpTopicPartitions(t, 2)
 	defer cleanup()
 
-	cl, _ := NewClient(
-		getSeedBrokers(),
+	cl, _ := newTestClient(
 		DefaultProduceTopic(topic),
 		RecordPartitioner(ManualPartitioner()),
 		UnknownTopicRetries(-1),
@@ -92,8 +92,7 @@ func TestDirectPartitionPurge(t *testing.T) {
 	topic, cleanup := tmpTopicPartitions(t, 2)
 	defer cleanup()
 
-	cl, _ := NewClient(
-		getSeedBrokers(),
+	cl, _ := newTestClient(
 		DefaultProduceTopic(topic),
 		RecordPartitioner(ManualPartitioner()),
 		UnknownTopicRetries(-1),
@@ -155,8 +154,7 @@ func TestIssue434(t *testing.T) {
 	defer cleanup1()
 	defer cleanup2()
 
-	cl, _ := NewClient(
-		getSeedBrokers(),
+	cl, _ := newTestClient(
 		UnknownTopicRetries(-1),
 		ConsumeTopics(fmt.Sprintf("(%s|%s)", t1, t2)),
 		ConsumeRegex(),
@@ -209,8 +207,7 @@ func TestAddRemovePartitions(t *testing.T) {
 	t1, cleanup := tmpTopicPartitions(t, 2)
 	defer cleanup()
 
-	cl, _ := NewClient(
-		getSeedBrokers(),
+	cl, _ := newTestClient(
 		UnknownTopicRetries(-1),
 		RecordPartitioner(ManualPartitioner()),
 		FetchMaxWait(100*time.Millisecond),
@@ -278,8 +275,7 @@ func TestPauseIssue489(t *testing.T) {
 	t1, cleanup := tmpTopicPartitions(t, 3)
 	defer cleanup()
 
-	cl, _ := NewClient(
-		getSeedBrokers(),
+	cl, _ := newTestClient(
 		UnknownTopicRetries(-1),
 		DefaultProduceTopic(t1),
 		RecordPartitioner(ManualPartitioner()),
@@ -360,8 +356,7 @@ func TestPauseIssueOct2023(t *testing.T) {
 	defer cleanup3()
 	ts := []string{t1, t2, t3}
 
-	cl, _ := NewClient(
-		getSeedBrokers(),
+	cl, _ := newTestClient(
 		UnknownTopicRetries(-1),
 		ConsumeTopics(ts...),
 		MetadataMinAge(50*time.Millisecond),
@@ -438,8 +433,7 @@ func TestIssue523(t *testing.T) {
 	g1, gcleanup := tmpGroup(t)
 	defer gcleanup()
 
-	cl, _ := NewClient(
-		getSeedBrokers(),
+	cl, _ := newTestClient(
 		DefaultProduceTopic(t1),
 		ConsumeTopics(".*"+t1+".*"),
 		ConsumeRegex(),
@@ -447,6 +441,7 @@ func TestIssue523(t *testing.T) {
 		MetadataMinAge(100*time.Millisecond),
 		FetchMaxWait(time.Second),
 		KeepRetryableFetchErrors(),
+		UnknownTopicRetries(-1),
 	)
 	defer cl.Close()
 
@@ -472,5 +467,31 @@ func TestIssue523(t *testing.T) {
 		if fs.Err0() != nil {
 			time.Sleep(time.Second)
 		}
+	}
+}
+
+func TestIssue648(t *testing.T) {
+	t.Parallel()
+	cl, _ := newTestClient(
+		MetadataMinAge(100*time.Millisecond),
+		ConsumeTopics("bizbazbuz"),
+		FetchMaxWait(time.Second),
+		KeepRetryableFetchErrors(),
+	)
+	defer cl.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	fs := cl.PollFetches(ctx)
+	cancel()
+
+	var found bool
+	fs.EachError(func(_ string, _ int32, err error) {
+		if !errors.Is(err, kerr.UnknownTopicOrPartition) {
+			t.Errorf("expected ErrUnknownTopicOrPartition, got %v", err)
+		} else {
+			found = true
+		}
+	})
+	if !found {
+		t.Errorf("did not see ErrUnknownTopicOrPartition")
 	}
 }
