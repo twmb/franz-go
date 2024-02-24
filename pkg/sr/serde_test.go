@@ -59,7 +59,6 @@ func TestSerde(t *testing.T) {
 		expEnc []byte
 		expDec any
 		expErr bool
-		expMap map[string]any
 	}{
 		{
 			enc:    overridden{},
@@ -68,33 +67,27 @@ func TestSerde(t *testing.T) {
 		{
 			enc:    overrides{"foo"},
 			expEnc: append([]byte{0, 0, 0, 0, 127}, `{"one":"foo"}`...),
-			expMap: map[string]any{"one": "foo"},
 		},
 		{
 			enc:    idx1{Two: 2, Three: 3},
 			expEnc: append([]byte{0, 0, 0, 0, 3, 0}, `{"two":2,"three":3}`...),
-			expMap: map[string]any{"two": float64(2), "three": float64(3)},
 		},
 		{
 			enc:    idx2{Biz: "bizzy", Baz: "bazzy"},
 			expEnc: append([]byte{0, 0, 0, 0, 3, 2, 2}, `{"biz":"bizzy","baz":"bazzy"}`...),
-			expMap: map[string]any{"biz": "bizzy", "baz": "bazzy"},
 		},
 		{
 			enc:    idx3{Boz: 8},
 			expEnc: append([]byte{0, 0, 0, 0, 3, 4, 0, 0}, `{"boz":8}`...),
-			expMap: map[string]any{"boz": float64(8)},
 		},
 		{
 			enc:    idx4{Bingo: "bango"},
 			expEnc: append([]byte{0, 0, 0, 0, 3, 6, 0, 0, 2}, `{"bingo":"bango"}`...),
-			expMap: map[string]any{"bingo": "bango"},
 		},
 		{
 			enc:    oneidx{Bar: "bar"},
 			expEnc: append([]byte{0, 0, 0, 0, 5, 0}, `{"bar":"bar"}`...),
 			expDec: oneidx{Foo: "defoo", Bar: "bar"},
-			expMap: map[string]any{"bar": "bar"},
 		},
 	} {
 		b, err := serde.Encode(test.enc)
