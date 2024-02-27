@@ -39,6 +39,47 @@ func TestIssue325(t *testing.T) {
 	}
 }
 
+// Allow adding a topic to consume after the client is initialized with nothing
+// to consume.
+func TestConsumeTopicRetrieval(t *testing.T) {
+	t.Parallel()
+	topicName := "test"
+	cl, _ := newTestClient()
+	defer cl.Close()
+	topics := cl.GetConsumeTopics()
+	if len(topics) != 0 {
+		t.Fatalf("expected no topics, got %v", topics)
+	}
+	cl.AddConsumeTopics(topicName)
+	topics = cl.GetConsumeTopics()
+	if len(topics) != 1 || topics[0] != topicName {
+		t.Fatalf("expected to see %v, got %v", topicName, topics)
+	}
+}
+
+// Allow adding a topic to consume after the client is initialized with nothing
+// to consume.
+func TestConsumeTopicRetrieval_Many(t *testing.T) {
+	t.Parallel()
+	topicName := "test"
+	cl, _ := newTestClient()
+	defer cl.Close()
+	topics := cl.GetConsumeTopics()
+	if len(topics) != 0 {
+		t.Fatalf("expected no topics, got %v", topics)
+	}
+	for i := 0; i < 100; i++ {
+		cl.AddConsumeTopics(fmt.Sprintf("%s_%d", topicName, i))
+	}
+	topics = cl.GetConsumeTopics()
+	sort.Slice(topics, func(i, j int) bool {
+		return topics[i] < topics[j]
+	})
+	if len(topics) != 100 || topics[0] != fmt.Sprintf("%s_%d", topicName, 0) {
+		t.Fatalf("expected to see %v, got %v", topicName, topics)
+	}
+}
+
 // Ensure we only consume one partition if we only ask for one partition.
 func TestIssue337(t *testing.T) {
 	t.Parallel()
