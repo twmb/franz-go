@@ -209,6 +209,9 @@ func (opt guessOpt) apply(cfg *guessCfg) { opt.fn(cfg) }
 //	 6: UpdateMetadata
 //	 7: ControlledShutdown
 //	27: WriteTxnMarkers
+//	57: UpdateFeatures
+//	64: UnregisterBroker
+//	67: AllocateProducerIds
 func SkipKeys(keys ...int16) VersionGuessOpt {
 	return guessOpt{func(cfg *guessCfg) { cfg.skipKeys = keys }}
 }
@@ -337,7 +340,7 @@ func (vs *Versions) versionGuess(opts ...VersionGuessOpt) guess {
 		//
 		// TODO: add introduced-version to differentiate some specific
 		// keys.
-		skipKeys: []int16{4, 5, 6, 7, 27, 58},
+		skipKeys: []int16{4, 5, 6, 7, 27, 57, 64, 67},
 	}
 	for _, opt := range opts {
 		opt.apply(&cfg)
