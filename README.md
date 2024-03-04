@@ -181,6 +181,7 @@ In alphabetical order,
 * [Benthos](https://www.benthos.dev/)
 * [DeltaStream](https://deltastream.io/)
 * [Eoitek](https://eoitek.com/)
+* [Hilton](https://www.hilton.com/en/corporate/)
 * [Mux](https://mux.com/blog/processing-cdn-logs-exactly-once-with-kafka-transactions/)
 * [Redpanda Console](https://github.com/redpanda-data/console/)
 * [Redpanda Data](https://redpanda.com/)
