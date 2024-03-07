@@ -261,7 +261,7 @@ func pathMode(subject string) string {
 func (cl *Client) SubjectVersions(ctx context.Context, subject string) ([]int, error) {
 	// GET /subjects/{subject}/versions
 	var versions []int
-	err := cl.get(ctx, pathSubject(subject), &versions)
+	err := cl.get(ctx, pathSubjectWithVersion(subject), &versions)
 	return versions, err
 }
 
