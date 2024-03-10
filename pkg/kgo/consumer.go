@@ -758,6 +758,29 @@ func (cl *Client) AddConsumeTopics(topics ...string) {
 	cl.triggerUpdateMetadataNow("from AddConsumeTopics")
 }
 
+// GetConsumeTopics retrives a list of current topics being consumed.
+func (cl *Client) GetConsumeTopics() []string {
+	c := &cl.consumer
+	if c.g == nil && c.d == nil {
+		return nil
+	}
+	var m map[string]*topicPartitions
+	var ok bool
+	if c.g != nil {
+		m, ok = c.g.tps.v.Load().(topicsPartitionsData)
+	} else {
+		m, ok = c.d.tps.v.Load().(topicsPartitionsData)
+	}
+	if !ok {
+		return nil
+	}
+	topics := make([]string, 0, len(m))
+	for k := range m {
+		topics = append(topics, k)
+	}
+	return topics
+}
+
 // AddConsumePartitions adds new partitions to be consumed at the given
 // offsets. This function works only for direct, non-regex consumers.
 func (cl *Client) AddConsumePartitions(partitions map[string]map[int32]Offset) {
