@@ -6,3 +6,4 @@ TESTING
 generate/generate
 go.work
 go.work.sum
+/vendor

@@ -398,6 +398,8 @@ func (cl *Client) OptValues(opt any) []any {
 		return []any{cfg.requireStable}
 	case namefn(SessionTimeout):
 		return []any{cfg.sessionTimeout}
+	case namefn(DefaultToLeaderEpoch()):
+		return []any{cfg.defaultToLeaderEpoch}
 	default:
 		return nil
 	}

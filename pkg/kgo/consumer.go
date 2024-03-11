@@ -1873,6 +1873,11 @@ func (s *consumerSession) mapLoadsToBrokers(loads listOrEpochLoads) map[*broker]
 					if tryBroker := findBroker(brokers, brokerID); tryBroker != nil {
 						broker = tryBroker
 					}
+
+					if offset.epoch != topicPartition.leaderEpoch && s.c.cl.cfg.defaultToLeaderEpoch {
+						offset.epoch = topicPartition.leaderEpoch // sets the epoch to the leader's epoch if we are defaulting to leader epoch
+					}
+
 					offset.currentEpoch = topicPartition.leaderEpoch // ensure we set our latest epoch for the partition
 				}
 

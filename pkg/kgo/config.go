@@ -184,6 +184,8 @@ type cfg struct {
 	autocommitMarks    bool
 	autocommitInterval time.Duration
 	commitCallback     func(*Client, *kmsg.OffsetCommitRequest, *kmsg.OffsetCommitResponse, error)
+
+	defaultToLeaderEpoch bool
 }
 
 func (cfg *cfg) validate() error {
@@ -1739,4 +1741,11 @@ func AutoCommitCallback(fn func(*Client, *kmsg.OffsetCommitRequest, *kmsg.Offset
 			cfg.commitCallback, cfg.setCommitCallback = fn, true
 		}
 	}}
+}
+
+// DefaultToLeaderEpoch sets the client to default to using leader epochs when
+// fetching offsets. This is useful if you are using a Kafka 2.5+ broker and
+// want to ensure that you are fetching the most recent offset for a partition.
+func DefaultToLeaderEpoch() GroupOpt {
+	return groupOpt{func(cfg *cfg) { cfg.defaultToLeaderEpoch = true }}
 }
