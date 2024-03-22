@@ -444,16 +444,16 @@ func NewRecordFormatter(layout string) (*RecordFormatter, error) {
 				layout = layout[len("compression}"):]
 				f.fns = append(f.fns, func(b []byte, _ *FetchPartition, r *Record) []byte {
 					return writeR(b, r, func(b []byte, r *Record) []byte {
-						switch r.Attrs.CompressionType() {
-						case 0:
+						switch codecType(r.Attrs.CompressionType()) {
+						case codecNone:
 							return append(b, "none"...)
-						case 1:
+						case codecGzip:
 							return append(b, "gzip"...)
-						case 2:
+						case codecSnappy:
 							return append(b, "snappy"...)
-						case 3:
+						case codecLZ4:
 							return append(b, "lz4"...)
-						case 4:
+						case codecZstd:
 							return append(b, "zstd"...)
 						default:
 							return append(b, "unknown"...)
