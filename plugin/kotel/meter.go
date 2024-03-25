@@ -55,9 +55,12 @@ func MeterProvider(provider metric.MeterProvider) MeterOpt {
 }
 
 // WithMergedConnectsMeter merges the `messaging.kafka.connect_errors.count`
-// meter into the `messaging.kafka.connects.count` meter, adding an attribute
-// "outcome" with the values "success" or "failure". This option may be used because
-// ...
+// counter into the `messaging.kafka.connects.count` counter, adding an
+// attribute "outcome" with the values "success" or "failure". This option
+// shall be used when a single metric with different dimensions is preferred
+// over two separate metrics that produce data at alternating intervals.
+// For example, it becomes possible to alert on the metric no longer
+// producing data.
 func WithMergedConnectsMeter() MeterOpt {
 	return meterOptFunc(func(m *Meter) {
 		m.mergeConnectsMeter = true
