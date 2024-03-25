@@ -255,20 +255,20 @@ func (m *Meter) OnBrokerConnect(meta kgo.BrokerMetadata, _ time.Duration, _ net.
 			m.instruments.connects.Add(
 				context.Background(),
 				1,
-				metric.WithAttributes(
+				metric.WithAttributeSet(attribute.NewSet(
 					attribute.String("node_id", node),
 					attribute.String("outcome", "failure"),
-				),
+				)),
 			)
 			return
 		}
 		m.instruments.connects.Add(
 			context.Background(),
 			1,
-			metric.WithAttributes(
+			metric.WithAttributeSet(attribute.NewSet(
 				attribute.String("node_id", node),
 				attribute.String("outcome", "success"),
-			),
+			)),
 		)
 		return
 	}
