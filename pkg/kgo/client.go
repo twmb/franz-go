@@ -283,8 +283,6 @@ func (cl *Client) OptValues(opt any) []any {
 		return []any{cfg.txnBackoff}
 	case namefn(ConsiderMissingTopicDeletedAfter):
 		return []any{cfg.missingTopicDelete}
-	case namefn(ForceUsingListOffset):
-		return []any{cfg.forceListOffsets}
 
 	case namefn(DefaultProduceTopic):
 		return []any{cfg.defaultProduceTopic}
@@ -358,6 +356,8 @@ func (cl *Client) OptValues(opt any) []any {
 		return []any{cfg.rack}
 	case namefn(KeepRetryableFetchErrors):
 		return []any{cfg.keepRetryableFetchErrors}
+	case namefn(DisableOffsetForLeaderEpoch):
+		return []any{cfg.disableOffsetForLeaderEpoch}
 
 	case namefn(AdjustFetchOffsetsFn):
 		return []any{cfg.adjustOffsetsBeforeAssign}
@@ -815,6 +815,12 @@ func (cl *Client) waitTries(ctx context.Context, backoff time.Duration) bool {
 // not support (even though one in the cluster does), we will loop fail until
 // the rest of the cluster is upgraded and supports the request.
 func (cl *Client) supportsOffsetForLeaderEpoch() bool {
+	if cl.cfg.disableOffsetForLeaderEpoch {
+		cl.cfg.logger.Log(LogLevelDebug,
+			"reason", "disable OffsetForLeaderEpoch",
+		)
+		return false
+	}
 	return cl.supportsKeyVersion(int16(kmsg.OffsetForLeaderEpoch), 2)
 }
 

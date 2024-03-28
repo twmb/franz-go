@@ -179,12 +179,12 @@ type cfg struct {
 	setLost           bool
 	setCommitCallback bool
 
-	autocommitDisable  bool // true if autocommit was disabled or we are transactional
-	autocommitGreedy   bool
-	autocommitMarks    bool
-	autocommitInterval time.Duration
-	commitCallback     func(*Client, *kmsg.OffsetCommitRequest, *kmsg.OffsetCommitResponse, error)
-	forceListOffsets   bool
+	autocommitDisable           bool // true if autocommit was disabled or we are transactional
+	autocommitGreedy            bool
+	autocommitMarks             bool
+	autocommitInterval          time.Duration
+	commitCallback              func(*Client, *kmsg.OffsetCommitRequest, *kmsg.OffsetCommitResponse, error)
+	disableOffsetForLeaderEpoch bool
 }
 
 func (cfg *cfg) validate() error {
@@ -515,8 +515,8 @@ func defaultCfg() cfg {
 		resetOffset:    NewOffset().AtStart(),
 		isolationLevel: 0,
 
-		maxConcurrentFetches: 0, // unbounded default
-		forceListOffsets:     false,
+		maxConcurrentFetches:        0, // unbounded default
+		disableOffsetForLeaderEpoch: false,
 
 		///////////
 		// group //
@@ -848,16 +848,7 @@ func ConsiderMissingTopicDeletedAfter(t time.Duration) Opt {
 	return clientOpt{func(cfg *cfg) { cfg.missingTopicDelete = t }}
 }
 
-// ForceUsingListOffset set the group consumer to use ListOffsets for fetching
-// offsets rather than the default OffsetFetch. This is useful if you are
-// seeing issues with OffsetFetch and want to use ListOffsets instead.
-func ForceUsingListOffset(enable bool) ConsumerOpt {
-	return consumerOpt{func(cfg *cfg) {
-		cfg.forceListOffsets = enable
-	}}
-}
-
-////////////////////////////
+// //////////////////////////
 // PRODUCER CONFIGURATION //
 ////////////////////////////
 
@@ -1404,6 +1395,14 @@ func ConsumePreferringLagFn(fn PreferLagFn) ConsumerOpt {
 // errors being returned in fetches (and ignore the other errors).
 func KeepRetryableFetchErrors() ConsumerOpt {
 	return consumerOpt{func(cfg *cfg) { cfg.keepRetryableFetchErrors = true }}
+}
+
+// DisableOffsetForLeaderEpoch sets the default behavior claim the broker not support
+// OffsetForLeaderEpoch
+func DisableOffsetForLeaderEpoch(enable bool) ConsumerOpt {
+	return consumerOpt{func(cfg *cfg) {
+		cfg.disableOffsetForLeaderEpoch = enable
+	}}
 }
 
 //////////////////////////////////
