@@ -283,6 +283,8 @@ func (cl *Client) OptValues(opt any) []any {
 		return []any{cfg.txnBackoff}
 	case namefn(ConsiderMissingTopicDeletedAfter):
 		return []any{cfg.missingTopicDelete}
+	case namefn(ForceUsingListOffset):
+		return []any{cfg.forceListOffsets}
 
 	case namefn(DefaultProduceTopic):
 		return []any{cfg.defaultProduceTopic}

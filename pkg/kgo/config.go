@@ -184,6 +184,7 @@ type cfg struct {
 	autocommitMarks    bool
 	autocommitInterval time.Duration
 	commitCallback     func(*Client, *kmsg.OffsetCommitRequest, *kmsg.OffsetCommitResponse, error)
+	forceListOffsets   bool
 }
 
 func (cfg *cfg) validate() error {
@@ -515,6 +516,7 @@ func defaultCfg() cfg {
 		isolationLevel: 0,
 
 		maxConcurrentFetches: 0, // unbounded default
+		forceListOffsets:     false,
 
 		///////////
 		// group //
@@ -844,6 +846,15 @@ func ConcurrentTransactionsBackoff(backoff time.Duration) Opt {
 // times until the cluster fully broadcasts the topic creation.
 func ConsiderMissingTopicDeletedAfter(t time.Duration) Opt {
 	return clientOpt{func(cfg *cfg) { cfg.missingTopicDelete = t }}
+}
+
+// ForceUsingListOffset set the group consumer to use ListOffsets for fetching
+// offsets rather than the default OffsetFetch. This is useful if you are
+// seeing issues with OffsetFetch and want to use ListOffsets instead.
+func ForceUsingListOffset(enable bool) ConsumerOpt {
+	return consumerOpt{func(cfg *cfg) {
+		cfg.forceListOffsets = enable
+	}}
 }
 
 ////////////////////////////
