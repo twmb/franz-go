@@ -201,6 +201,7 @@ func TestFromString(t *testing.T) {
 		{"v2.1", "v2.1"},
 		{"v2.1.3", "v2.1"},
 		{"v3.1", "v3.1"},
+		{"3.1", "v3.1"},
 
 		{"v0.7.0", ""},     // too low
 		{"v999.9", ""},     // too high
