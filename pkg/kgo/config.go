@@ -700,7 +700,7 @@ func RetryBackoffFn(backoff func(int) time.Duration) Opt {
 }
 
 // RequestRetries sets the number of tries that retryable requests are allowed,
-// overriding the default of 20.
+// overriding the default of 20s.
 //
 // This option does not apply to produce requests; to limit produce request
 // retries / record retries, see RecordRetries.
