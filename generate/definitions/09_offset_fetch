@@ -1,6 +1,6 @@
 // OffsetFetchRequest requests the most recent committed offsets for topic
 // partitions in a group.
-OffsetFetchRequest => key 9, max version 8, flexible v6+, group coordinator
+OffsetFetchRequest => key 9, max version 9, flexible v6+, group coordinator
   // Group is the group to fetch offsets for.
   Group: string // v0-v7
   // Topics contains topics to fetch offets for. Version 2+ allows this to be
@@ -17,6 +17,10 @@ OffsetFetchRequest => key 9, max version 8, flexible v6+, group coordinator
   // are left undocumented. Refer to the top level documentation if necessary.
   Groups: [=>] // v8+
     Group: string
+    // The member ID assigned by the group coordinator if using the new consumer protocol (KIP-848).
+    MemberID: nullable-string // v9+
+    // The member epoch if using the new consumer protocol (KIP-848).
+    MemberEpoch: int32(-1) // v9+
     Topics: nullable[=>]
       Topic: string
       Partitions: [int32]

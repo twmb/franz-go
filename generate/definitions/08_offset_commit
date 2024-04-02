@@ -1,6 +1,6 @@
 // OffsetCommitRequest commits offsets for consumed topics / partitions in
 // a group.
-OffsetCommitRequest => key 8, max version 8, flexible v8+, group coordinator
+OffsetCommitRequest => key 8, max version 9, flexible v8+, group coordinator
   // Group is the group this request is committing offsets to.
   Group: string
   // Generation being -1 and group being empty means the group is being used
