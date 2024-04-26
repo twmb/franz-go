@@ -1460,7 +1460,12 @@ func (cl *Client) Lag(ctx context.Context, groups ...string) (DescribedGroupLags
 		}
 		if g.Err != nil {
 			delete(set, g.Group)
+			continue
 		}
+
+		// if no groups were specified for lag calculation, we will calculate lag for all groups
+		// adding groups to the set again.
+		set[g.Group] = struct{}{}
 	}
 	if len(set) == 0 {
 		return lags, nil
