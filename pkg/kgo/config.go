@@ -708,8 +708,10 @@ func RequestRetries(n int) Opt {
 	return clientOpt{func(cfg *cfg) { cfg.retries = int64(n) }}
 }
 
-// RetryTimeout sets the upper limit on how long we allow requests to retry,
-// overriding the default of:
+// RetryTimeout sets the upper limit on how long we allow a request to be
+// issued and then reissued on failure. That is, this control the total
+// end-to-end maximum time we allow for trying a request, This overrides the
+// default of:
 //
 //	JoinGroup: cfg.SessionTimeout (default 45s)
 //	SyncGroup: cfg.SessionTimeout (default 45s)
@@ -721,15 +723,17 @@ func RequestRetries(n int) Opt {
 //
 // A value of zero indicates no request timeout.
 //
-// The timeout is evaluated after a request is issued. If a retry backoff
-// places the next request past the retry timeout deadline, the request will
-// still be tried once more once the backoff expires.
+// The timeout is evaluated after a request errors. If the time since the start
+// of the first request plus any backoff for the latest failure is less than
+// the retry timeout, the request will be issued again.
 func RetryTimeout(t time.Duration) Opt {
 	return RetryTimeoutFn(func(int16) time.Duration { return t })
 }
 
-// RetryTimeoutFn sets the per-request upper limit on how long we allow
-// requests to retry, overriding the default of:
+// RetryTimeoutFn sets the upper limit on how long we allow a request to be
+// issued and then reissued on failure. That is, this control the total
+// end-to-end maximum time we allow for trying a request, This overrides the
+// default of:
 //
 //	JoinGroup: cfg.SessionTimeout (default 45s)
 //	SyncGroup: cfg.SessionTimeout (default 45s)
@@ -745,9 +749,9 @@ func RetryTimeout(t time.Duration) Opt {
 //
 // If the function returns zero, there is no retry timeout.
 //
-// The timeout is evaluated after a request is issued. If a retry backoff
-// places the next request past the retry timeout deadline, the request will
-// still be tried once more once the backoff expires.
+// The timeout is evaluated after a request errors. If the time since the start
+// of the first request plus any backoff for the latest failure is less than
+// the retry timeout, the request will be issued again.
 func RetryTimeoutFn(t func(int16) time.Duration) Opt {
 	return clientOpt{func(cfg *cfg) { cfg.retryTimeout = t }}
 }
