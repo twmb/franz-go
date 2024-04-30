@@ -1027,7 +1027,7 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how
 		case assignPurgeMatching:
 			// This is slightly different than invalidate in that
 			// we invalidate whole topics.
-			loadOffsets.keepFilter(func(t string, p int32) bool {
+			loadOffsets.keepFilter(func(t string, _ int32) bool {
 				_, ok := assignments[t]
 				return !ok // assignments are topics to purge -- do NOT keep the topic if it is being purged
 			})
