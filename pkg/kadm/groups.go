@@ -1463,8 +1463,9 @@ func (cl *Client) Lag(ctx context.Context, groups ...string) (DescribedGroupLags
 			continue
 		}
 
-		// if no groups were specified for lag calculation, we will calculate lag for all groups
-		// adding groups to the set again.
+		// If the input set of groups is empty, DescribeGroups returns all groups.
+		// We add to `set` here so that the Lag function itself can calculate
+		// lag for all groups.
 		set[g.Group] = struct{}{}
 	}
 	if len(set) == 0 {
