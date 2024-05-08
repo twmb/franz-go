@@ -1585,6 +1585,9 @@ func CalculateGroupLag(
 			}
 
 			tcommit := commit[t.Topic]
+			if tcommit == nil {
+				continue
+			}
 			tend := endOffsets[t.Topic]
 			for _, p := range t.Partitions {
 				var (
@@ -1594,15 +1597,14 @@ func CalculateGroupLag(
 					ok      bool
 				)
 
-				if tcommit != nil {
-					if pcommit, ok = tcommit[p]; !ok {
-						pcommit = OffsetResponse{Offset: Offset{
-							Topic:     t.Topic,
-							Partition: p,
-							At:        -1,
-						}}
-					}
+				if pcommit, ok = tcommit[p]; !ok {
+					pcommit = OffsetResponse{Offset: Offset{
+						Topic:     t.Topic,
+						Partition: p,
+						At:        -1,
+					}}
 				}
+
 				if tend == nil {
 					perr = errListMissing
 				} else {
