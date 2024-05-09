@@ -292,7 +292,7 @@ func TestPauseIssue489(t *testing.T) {
 			r := StringRecord("v")
 			r.Partition = int32(which % 3)
 			which++
-			cl.Produce(ctx, r, func(r *Record, err error) {
+			cl.Produce(ctx, r, func(_ *Record, err error) {
 				if err == context.Canceled {
 					exit.Store(true)
 				}
@@ -372,7 +372,7 @@ func TestPauseIssueOct2023(t *testing.T) {
 			r := StringRecord("v")
 			r.Topic = ts[which%len(ts)]
 			which++
-			cl.Produce(ctx, r, func(r *Record, err error) {
+			cl.Produce(ctx, r, func(_ *Record, err error) {
 				if err == context.Canceled {
 					exit.Store(true)
 				}

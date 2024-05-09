@@ -541,7 +541,7 @@ type topicPartitionData struct {
 // has changed. This moves record production from one sink to the other; this
 // must be done such that records produced during migration follow those
 // already buffered.
-func (old *topicPartition) migrateProductionTo(new *topicPartition) {
+func (old *topicPartition) migrateProductionTo(new *topicPartition) { //nolint:revive // old/new naming makes this clearer
 	// First, remove our record buffer from the old sink.
 	old.records.sink.removeRecBuf(old.records)
 
@@ -572,7 +572,7 @@ func (old *topicPartition) migrateProductionTo(new *topicPartition) {
 // This is a little bit different from above, in that we do this logic only
 // after stopping a consumer session. With the consumer session stopped, we
 // have fewer concurrency issues to worry about.
-func (old *topicPartition) migrateCursorTo(
+func (old *topicPartition) migrateCursorTo( //nolint:revive // old/new naming makes this clearer
 	new *topicPartition,
 	css *consumerSessionStopper,
 ) {
