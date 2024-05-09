@@ -1,10 +1,12 @@
 // Introduced for KIP-700, DescribeClusterRequest is effectively an "admin"
 // type metadata request for information that producers or consumers do not
 // need to care about.
-DescribeClusterRequest => key 60, max version 0, flexible v0+
+DescribeClusterRequest => key 60, max version 1, flexible v0+
   // Whether to include cluster authorized operations. This requires DESCRIBE
   // on CLUSTER.
   IncludeClusterAuthorizedOperations: bool
+  // The endpoint type to describe. 1=brokers, 2=controllers.
+  EndpointType: int8(1) // v1+
 
 // DescribeClusterResponse is a response to a DescribeClusterRequest.
 DescribeClusterResponse =>
@@ -13,6 +15,8 @@ DescribeClusterResponse =>
   ErrorCode: int16
   // The top level error message, if any.
   ErrorMessage: nullable-string
+  // The endpoint type that was described. 1=brokers, 2=controllers.
+  EndpointType: int8(1) // v1+
   // The cluster ID that responding broker belongs to.
   ClusterID: string
   // The ID of the controller broker.

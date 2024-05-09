@@ -6,7 +6,7 @@
 // Note that the special client ID "__admin_client" will allow you to produce
 // records to internal topics. This is generally recommended if you want to
 // break your Kafka cluster.
-ProduceRequest => key 0, max version 9, flexible v9+
+ProduceRequest => key 0, max version 10, flexible v9+
   // TransactionID is the transaction ID to use for this request, allowing for
   // exactly once semantics.
   TransactionID: nullable-string // v3+
@@ -145,4 +145,20 @@ ProduceResponse =>
       // ErrorMessage is the global error message of of what caused this batch
       // to error.
       ErrorMessage: nullable-string // v8+
+      CurrentLeader: => // tag 0
+        // The ID of the current leader, or -1 if unknown.
+        LeaderID: int32(-1)
+        // The latest known leader epoch.
+        LeaderEpoch: int32(-1)
   ThrottleMillis(6) // v1+
+  // Brokers is present if any partition responses contain the error
+  // NOT_LEADER_OR_FOLLOWER.
+  Brokers: [=>] // tag 0
+    // NodeID is the node ID of a Kafka broker.
+    NodeID: int32
+    // Host is the hostname of a Kafka broker.
+    Host: string
+    // Port is the port of a Kafka broker.
+    Port: int32
+    // Rack is the rack this Kafka broker is in.
+    Rack: nullable-string
