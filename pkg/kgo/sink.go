@@ -721,7 +721,9 @@ func (s *sink) handleReqRespBatch(
 	batch.owner.okOnSink = false
 
 	if moving := kmove.maybeAddProducePartition(resp, rp, batch.owner); moving {
-		fmt.Fprintf(b, "move:%d:%d@%d,%d}, ", rp.CurrentLeader.LeaderID, rp.CurrentLeader.LeaderEpoch, rp.BaseOffset, nrec)
+		if debug {
+			fmt.Fprintf(b, "move:%d:%d@%d,%d}, ", rp.CurrentLeader.LeaderID, rp.CurrentLeader.LeaderEpoch, rp.BaseOffset, nrec)
+		}
 		batch.owner.failing = true
 		return true, false
 	}
