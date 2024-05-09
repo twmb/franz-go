@@ -5,7 +5,8 @@
 
 set -euo pipefail
 
-minlang="1.19"
+minlang="1.21"
+maxlang="1.22"
 for modfile in $(find . -name 'go.mod' -print0 | xargs -0)
 do
     moddir=$(dirname "$modfile")
@@ -17,7 +18,7 @@ do
         lang=" -go=$filelang"
     fi
     if [[ $(pwd) == *"/franz-go/examples/"* ]]; then
-        lang=" -go=1.20"
+        lang=" -go=$maxlang"
     fi
     go get -u ./...; go mod tidy $lang
     cd - >/dev/null
