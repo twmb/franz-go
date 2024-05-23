@@ -75,7 +75,8 @@ func inputProducer() {
 		for i := 0; i < 10; i++ {
 			cl.Produce(ctx, kgo.StringRecord(msg+strconv.Itoa(i)), e.Promise())
 		}
-		commit := kgo.TransactionEndTry(doCommit && e.Err() == nil)
+		perr := e.Err() // always evaluate e.Err() to ensure we do not short circuit in the logic below (doCommit && ... would fail if doCommit is false!)
+		commit := kgo.TransactionEndTry(doCommit && perr == nil)
 
 		switch err := cl.EndTransaction(ctx, commit); err {
 		case nil:
