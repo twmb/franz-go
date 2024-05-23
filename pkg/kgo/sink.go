@@ -1229,7 +1229,7 @@ func (recBuf *recBuf) tryStopLingerForDraining() bool {
 
 // Begins a linger timer unless the producer is being flushed.
 func (recBuf *recBuf) lockedMaybeStartLinger() bool {
-	if recBuf.cl.producer.flushing.Load() > 0 {
+	if recBuf.cl.producer.flushing.Load() > 0 || recBuf.cl.producer.blocked.Load() > 0 {
 		return false
 	}
 	recBuf.lingering = time.AfterFunc(recBuf.cl.cfg.linger, recBuf.sink.maybeDrain)
