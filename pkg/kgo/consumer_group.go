@@ -639,6 +639,7 @@ func (g *groupConsumer) revoke(stage revokeStage, lost map[string][]int32, leavi
 			g.cfg.onRevoked(g.cl.ctx, g.cl, g.nowAssigned.read())
 		}
 		g.nowAssigned.store(nil)
+		g.lastAssigned = nil
 
 		// After nilling uncommitted here, nothing should recreate
 		// uncommitted until a future fetch after the group is
