@@ -1,3 +1,85 @@
+v1.17.0
+===
+
+This long-coming release, four months after v1.16.0, adds support for Kafka 3.7
+and adds a few community added or requested APIs. There will be a kadm release
+shortly following this one, and maybe a plugin release.
+
+This adds full support for [KIP-951][KIP-951], as well as protocol support for
+[KIP-919][KIP-919] (which has no client facing features) and [KIP-848][KIP-848]
+(protocol only, not the feature!). KIP-951 should make the client faster at
+handling when the broker moves partition leadership to a different broker.
+
+There are two fairly minor bug fixes in the kgo package in this release, both
+described below. There is also one bugfix in the pkg/sr independent (and
+currently) untagged module. Because pkg/sr is untagged, the bugfix was released
+a long time ago, but the relevant commit is still mentioned below.
+
+[KIP-951]: https://cwiki.apache.org/confluence/display/KAFKA/KIP-951%3A+Leader+discovery+optimisations+for+the+client
+[KIP-919]: https://cwiki.apache.org/confluence/display/KAFKA/KIP-919%3A+Allow+AdminClient+to+Talk+Directly+with+the+KRaft+Controller+Quorum+and+add+Controller+Registration
+[KIP-848]: https://cwiki.apache.org/confluence/display/KAFKA/KIP-848%3A+The+Next+Generation+of+the+Consumer+Rebalance+Protocol
+
+## Bug fixes
+
+* Previously, upgrading a consumer group from non-cooperative to cooperative
+  _while_ the group was running did not work. This is now fixed (by [@hamdanjaveed](https://github.com/hamdanjaveed), thank you!).
+
+* Previously, if a cooperative consumer group member rebalanced _while_ fetching
+  offsets for partitions, if those partitions were _not_ lost in the rebalance,
+  the member would call OnPartitionsAssigned with those partitions _again_.
+  Now, those partitions are passed to OnPartitionsAssigned only once (the first time).
+
+## Improvements
+
+* The client will now stop lingering if you hit max buffered records or bytes.
+  Previously, if your linger was long enough, you could stall once you hit
+either of the Max options; that is no longer the case.
+
+* If you are issuing admin APIs on the same client you are using for consuming
+  or producing, you may see fewer metadata requests being issued.
+
+There are a few other even more minor improvements in the commit list if you
+wish to go spelunking :).
+
+## Features
+
+* The `Offset` type now has a new method `AtCommitted()`, which causes the
+  consumer to not fetch any partitions that do _not_ have a previous commit.
+  This mirrors Kafka's `auto.offset.reset=none` option.
+
+* KIP-951, linked above and the commit linked below, improves latency around
+  partition leader transfers on brokers.
+
+* `Client.GetConsumeTopics` allows you to query what topics the client is
+  currently consuming. This may be useful if you are consuming via regex.
+
+* `Client.MarkCommitOffsets` allows you to mark offsets to be committed in
+   bulk, mirroring the non-mark API `CommitOffsets`.
+
+## Relevant commits
+
+#### franz-go
+
+- [`a7caf20`](https://github.com/twmb/franz-go/commit/a7caf20) **feature** kgo.Offset: add AtCommitted()
+- [`55dc7a0`](https://github.com/twmb/franz-go/commit/55dc7a0) **bugfix** kgo: re-add fetch-canceled partitions AFTER the user callback
+- [`db24bbf`](https://github.com/twmb/franz-go/commit/db24bbf) **improvement** kgo: avoid / wakeup lingering if we hit max bytes or max records
+- [`993544c`](https://github.com/twmb/franz-go/commit/993544c) **improvement** kgo: Optimistically cache mapped metadata when cluster metadata is periodically refreshed (thanks [@pracucci](https://github.com/pracucci)!)
+- [`1ed02eb`](https://github.com/twmb/franz-go/commit/1ed02eb) **feature** kgo: add support for KIP-951
+- [`2fbbda5`](https://github.com/twmb/franz-go/commit/2fbbda5) **bugfix** fix: clear lastAssigned when revoking eager consumer
+- [`d9c1a41`](https://github.com/twmb/franz-go/commit/d9c1a41) pkg/kerr: add new errors
+- [`54d3032`](https://github.com/twmb/franz-go/commit/54d3032) pkg/kversion: add 3.7
+- [`892db71`](https://github.com/twmb/franz-go/commit/892db71) **pkg/sr bugfix** sr SubjectVersions calls pathSubjectVersion
+- [`ed26ed0`](https://github.com/twmb/franz-go/commit/ed26ed0) **feature** kgo: adds Client.GetConsumeTopics (thanks [@UnaffiliatedCode](https://github.com/UnaffiliatedCode)!)
+- [`929d564`](https://github.com/twmb/franz-go/commit/929d564) **feature** kgo: adds Client.MarkCommitOffsets (thanks [@sudo-sturbia](https://github.com/sudo-sturbia)!)
+
+#### kfake
+
+kfake as well has a few improvements worth calling out:
+
+- [`18e2cc3`](https://github.com/twmb/franz-go/commit/18e2cc3) kfake: support committing to non-existing groups
+- [`b05c3b9`](https://github.com/twmb/franz-go/commit/b05c3b9) kfake: support KIP-951, fix OffsetForLeaderEpoch
+- [`5d8aa1c`](https://github.com/twmb/franz-go/commit/5d8aa1c) kfake: fix handling ListOffsets with requested timestamp
+
 v1.16.1
 ===
 
