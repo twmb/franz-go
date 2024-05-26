@@ -1237,8 +1237,10 @@ func MaxConcurrentFetches(n int) ConsumerOpt {
 // from. For group consumers, this is the offset that partitions begin to
 // consume from if a partition has no commits. If partitions have commits, the
 // commit offset is used. While fetching, if OffsetOutOfRange is encountered,
-// the partition resets to ConsumeResetOffset. Conversely, using NoResetOffset
-// stops consuming a partition if the client encounters OffsetOutOfRange.
+// the partition resets to ConsumeResetOffset. Using [NoResetOffset] stops
+// consuming a partition if the client encounters OffsetOutOfRange. Using
+// [Offset.AtCommitted] prevents consuming a partition in a group if the
+// partition has no prior commits.
 //
 // If you use an exact offset or relative offsets and the offset ends up out of
 // range, the client chooses the nearest of either the log start offset or the
@@ -1254,6 +1256,16 @@ func MaxConcurrentFetches(n int) ConsumerOpt {
 //	reset relative?                        => the above, + / - the relative amount
 //	reset exact or relative out of bounds? => nearest boundary (start or end)
 //	reset after millisec?                  => high watermark, or first offset after millisec if one exists
+//
+// To match Kafka's auto.offset.reset,
+//
+//	NewOffset().AtStart()     == auto.offset.reset "earliest"
+//	NewOffset().AtEnd()       == auto.offset.reset "latest"
+//	NewOffset().AtCommitted() == auto.offset.reset "none"
+//
+// With the above, make sure to use NoResetOffset() if you want to stop
+// consuming when you encounter OffsetOutOfRange. It is highly recommended
+// to read the docs for all Offset methods to see a few other alternatives.
 func ConsumeResetOffset(offset Offset) ConsumerOpt {
 	return consumerOpt{func(cfg *cfg) { cfg.resetOffset = offset }}
 }
