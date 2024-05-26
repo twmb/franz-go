@@ -531,6 +531,11 @@ func (cl *Client) fetchTopicMetadata(all bool, reqTopics []string) (map[string]*
 		return nil, err
 	}
 
+	// Since we've fetched the metadata for some topics we can optimistically cache it
+	// for mapped metadata too. This may reduce the number of Metadata requests issued
+	// by the client.
+	cl.storeCachedMappedMetadata(meta, nil)
+
 	topics := make(map[string]*metadataTopic, len(meta.Topics))
 
 	// Even if metadata returns a leader epoch, we do not use it unless we
