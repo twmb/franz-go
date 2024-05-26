@@ -5,7 +5,7 @@ go 1.21
 toolchain go1.22.0
 
 require (
-	github.com/phuslu/log v1.0.97
+	github.com/phuslu/log v1.0.101
 	github.com/twmb/franz-go v1.16.1
 )
 

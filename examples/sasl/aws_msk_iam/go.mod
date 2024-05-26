@@ -5,7 +5,7 @@ go 1.22
 toolchain go1.22.0
 
 require (
-	github.com/aws/aws-sdk-go v1.52.5
+	github.com/aws/aws-sdk-go v1.53.10
 	github.com/twmb/franz-go v1.16.1
 	github.com/twmb/franz-go/pkg/kmsg v1.8.0
 )
