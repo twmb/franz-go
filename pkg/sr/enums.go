@@ -197,7 +197,7 @@ func (k *SchemaRuleKind) UnmarshalText(text []byte) error {
 	return nil
 }
 
-// Mode specifies a schema rule's mode.
+// SchemaRuleMode specifies a schema rule's mode.
 //
 // Migration rules can be specified for an UPGRADE, DOWNGRADE, or both
 // (UPDOWN). Migration rules are used during complex schema evolution.
