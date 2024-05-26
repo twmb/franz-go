@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"sort"
@@ -397,13 +396,13 @@ func (l *LineWriter) Write(line string, args ...any) {
 func main() {
 	const dir = "definitions"
 	const enums = "enums"
-	dirents, err := ioutil.ReadDir(dir)
+	dirents, err := os.ReadDir(dir)
 	if err != nil {
 		die("unable to read definitions dir %s: %v", dir, err)
 	}
 
 	{ // first parse all enums for use in definitions
-		f, err := ioutil.ReadFile(filepath.Join(dir, enums))
+		f, err := os.ReadFile(filepath.Join(dir, enums))
 		if err != nil {
 			die("unable to read %s/%s: %v", dir, enums, err)
 		}
@@ -414,7 +413,7 @@ func main() {
 		if ent.Name() == enums || strings.HasPrefix(ent.Name(), ".") {
 			continue
 		}
-		f, err := ioutil.ReadFile(filepath.Join(dir, ent.Name()))
+		f, err := os.ReadFile(filepath.Join(dir, ent.Name()))
 		if err != nil {
 			die("unable to read %s/%s: %v", dir, ent.Name(), err)
 		}
