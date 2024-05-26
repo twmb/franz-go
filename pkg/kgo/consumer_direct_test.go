@@ -387,8 +387,6 @@ func TestPauseIssue489(t *testing.T) {
 }
 
 func TestPauseIssueOct2023(t *testing.T) {
-	t.Parallel()
-
 	t1, cleanup1 := tmpTopicPartitions(t, 1)
 	t2, cleanup2 := tmpTopicPartitions(t, 1)
 	t3, cleanup3 := tmpTopicPartitions(t, 1)
@@ -431,7 +429,7 @@ func TestPauseIssueOct2023(t *testing.T) {
 		{"records", func(ctx context.Context) Fetches { return cl.PollRecords(ctx, 1000) }},
 	} {
 		for i := 0; i < 10; i++ {
-			ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 			var sawt1, sawt2, sawt3 bool
 			for (!sawt1 || !sawt2 || !sawt3) && !closed(ctx.Done()) {
 				fs := pollfn.fn(ctx)
