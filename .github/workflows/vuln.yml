@@ -1,0 +1,19 @@
+name: govulncheck
+
+on:
+  push:
+    branches: ["*"]
+    paths-ignore:
+      - '**/*.md'
+  pull_request:
+    branches: ["*"]
+    paths-ignore:
+      - '**/*.md'
+
+jobs:
+  vulncheck:
+    runs-on: ubuntu-latest
+    name: govulncheck
+    steps:
+      - id: govulncheck
+        uses: golang/govulncheck-action@v1
