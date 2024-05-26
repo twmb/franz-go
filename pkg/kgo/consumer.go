@@ -27,6 +27,9 @@ type Offset struct {
 	afterMilli bool
 }
 
+// Random negative, only significant within this package.
+const atCommitted = -999
+
 // MarshalJSON implements json.Marshaler.
 func (o Offset) MarshalJSON() ([]byte, error) {
 	if o.relative == 0 {
@@ -54,8 +57,8 @@ func (o Offset) EpochOffset() EpochOffset {
 	}
 }
 
-// NewOffset creates and returns an offset to use in ConsumePartitions or
-// ConsumeResetOffset.
+// NewOffset creates and returns an offset to use in [ConsumePartitions] or
+// [ConsumeResetOffset].
 //
 // The default offset begins at the end.
 func NewOffset() Offset {
@@ -66,24 +69,26 @@ func NewOffset() Offset {
 }
 
 // NoResetOffset returns an offset that can be used as a "none" option for the
-// ConsumeResetOffset option. By default, NoResetOffset starts consuming from
+// [ConsumeResetOffset] option. By default, NoResetOffset starts consuming from
 // the beginning of partitions (similar to NewOffset().AtStart()). This can be
 // changed with AtEnd, Relative, etc.
 //
 // Using this offset will make it such that if OffsetOutOfRange is ever
 // encountered while consuming, rather than trying to recover, the client will
-// return the error to the user and enter a fatal state (for the partition).
+// return the error to the user and enter a fatal state (for the affected
+// partition).
 func NoResetOffset() Offset {
 	return Offset{
-		at:       math.MinInt64,
-		relative: 0,
-		noReset:  true,
+		at:      -1,
+		epoch:   -1,
+		noReset: true,
 	}
 }
 
 // AfterMilli returns an offset that consumes from the first offset after a
-// given timestamp. This option is not compatible with At/Relative/WithEpoch;
-// using any of those will clear the special millisecond state.
+// given timestamp. This option is *not* compatible with any At options (nor
+// Relative nor WithEpoch); using any of those will clear the special
+// millisecond state.
 //
 // This option can be used to consume at the end of existing partitions, but at
 // the start of any new partitions that are created later:
@@ -93,7 +98,7 @@ func NoResetOffset() Offset {
 // By default when using this offset, if consuming encounters an
 // OffsetOutOfRange error, consuming will reset to the first offset after this
 // timestamp. You can use NoResetOffset().AfterMilli(...) to instead switch the
-// client to a fatal state.
+// client to a fatal state (for the affected partition).
 func (o Offset) AfterMilli(millisec int64) Offset {
 	o.at = millisec
 	o.relative = 0
@@ -102,36 +107,49 @@ func (o Offset) AfterMilli(millisec int64) Offset {
 	return o
 }
 
-// AtStart returns a copy of the calling offset, changing the returned offset
-// to begin at the beginning of a partition.
+// AtStart copies 'o' and returns an offset starting at the beginning of a
+// partition.
 func (o Offset) AtStart() Offset {
 	o.afterMilli = false
 	o.at = -2
 	return o
 }
 
-// AtEnd returns a copy of the calling offset, changing the returned offset to
-// begin at the end of a partition. If you want to consume at the end of the
-// topic as it exists right now, but at the beginning of new partitions as they
-// are added to the topic later, check out AfterMilli.
+// AtEnd copies 'o' and returns an offset starting at the end of a partition.
+// If you want to consume at the end of the topic as it exists right now, but
+// at the beginning of new partitions as they are added to the topic later,
+// check out AfterMilli.
 func (o Offset) AtEnd() Offset {
 	o.afterMilli = false
 	o.at = -1
 	return o
 }
 
-// Relative returns a copy of the calling offset, changing the returned offset
-// to be n relative to what it currently is. If the offset is beginning at the
-// end, Relative(-100) will begin 100 before the end.
+// AtCommitted copies 'o' and returns an offset that is used *only if*
+// there is an existing commit. This is only useful for group consumers.
+// If a partition being consumed does not have a commit, the partition will
+// enter a fatal state and return an error from PollFetches.
+//
+// Using this function automatically opts into [NoResetOffset].
+func (o Offset) AtCommitted() Offset {
+	o.noReset = true
+	o.afterMilli = false
+	o.at = atCommitted
+	return o
+}
+
+// Relative copies 'o' and returns an offset that starts 'n' relative to what
+// 'o' currently is. If 'o' is at the end (from [AtEnd]), Relative(-100) will
+// begin 100 before the end.
 func (o Offset) Relative(n int64) Offset {
 	o.afterMilli = false
 	o.relative = n
 	return o
 }
 
-// WithEpoch returns a copy of the calling offset, changing the returned offset
-// to use the given epoch. This epoch is used for truncation detection; the
-// default of -1 implies no truncation detection.
+// WithEpoch copies 'o' and returns an offset with the given epoch.  to use the
+// given epoch. This epoch is used for truncation detection; the default of -1
+// implies no truncation detection.
 func (o Offset) WithEpoch(e int32) Offset {
 	o.afterMilli = false
 	if e < 0 {
@@ -1149,6 +1167,14 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how
 				})
 				cursor.allowUsable()
 				c.usingCursors.use(cursor)
+				continue
+			}
+
+			// If the offset is atCommitted, then no offset was
+			// loaded from FetchOffsets. We inject an error and
+			// avoid using this partition.
+			if offset.at == atCommitted {
+				c.addFakeReadyForDraining(topic, partition, errNoCommittedOffset, "notification of uncommitted partition")
 				continue
 			}
 

@@ -1588,19 +1588,19 @@ func CalculateGroupLag(
 			tend := endOffsets[t.Topic]
 			for _, p := range t.Partitions {
 				var (
-					pcommit OffsetResponse
-					pend    ListedOffset
-					perr    error
-					ok      bool
+					pcommit = OffsetResponse{Offset: Offset{
+						Topic:     t.Topic,
+						Partition: p,
+						At:        -1,
+					}}
+					pend ListedOffset
+					perr error
+					ok   bool
 				)
 
 				if tcommit != nil {
-					if pcommit, ok = tcommit[p]; !ok {
-						pcommit = OffsetResponse{Offset: Offset{
-							Topic:     t.Topic,
-							Partition: p,
-							At:        -1,
-						}}
+					if actualpcommit, ok := tcommit[p]; ok {
+						pcommit = actualpcommit
 					}
 				}
 				if tend == nil {
