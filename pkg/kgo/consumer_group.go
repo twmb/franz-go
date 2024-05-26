@@ -862,12 +862,6 @@ func (g *groupConsumer) setupAssignedAndHeartbeat() (string, error) {
 	fetchDone := make(chan struct{})
 	defer func() { <-fetchDone }()
 
-	// If cooperative consuming, we may have to resume fetches. See the
-	// comment on adjustCooperativeFetchOffsets.
-	if g.cooperative.Load() {
-		added = g.adjustCooperativeFetchOffsets(added, lost)
-	}
-
 	// Before we fetch offsets, we wait for the user's onAssign callback to
 	// be done. This ensures a few things:
 	//
@@ -884,6 +878,18 @@ func (g *groupConsumer) setupAssignedAndHeartbeat() (string, error) {
 	// necessarily run onRevoke before returning (because of a fatal
 	// error).
 	s.assign(g, added)
+
+	// If cooperative consuming, we may have to resume fetches. See the
+	// comment on adjustCooperativeFetchOffsets.
+	//
+	// We do this AFTER the user's callback. If we add more partitions
+	// to `added` that are from a previously canceled fetch, we do NOT
+	// want to pass those fetch-resumed partitions to the user callback
+	// again. See #705.
+	if g.cooperative.Load() {
+		added = g.adjustCooperativeFetchOffsets(added, lost)
+	}
+
 	<-s.assignDone
 
 	if len(added) > 0 {
