@@ -571,7 +571,7 @@ func WithLogger(l Logger) Opt {
 // RequestTimeoutOverhead uses the given time as overhead while deadlining
 // requests, overriding the default overhead of 10s.
 //
-// For most requests, the overhead will simply be this timeout. However, for
+// For most requests, the timeout is set to the overhead. However, for
 // any request with a TimeoutMillis field, the overhead is added on top of the
 // request's TimeoutMillis. This ensures that we give Kafka enough time to
 // actually process the request given the timeout, while still having a
