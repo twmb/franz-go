@@ -112,7 +112,7 @@ func TestSerde(t *testing.T) {
 			t.Errorf("#%d got MustAppendEncode(%v) != Encode(foo%v)", i, b2, b)
 		}
 
-		bIndented, err := Encode(test.enc, 100, []int{0}, serde.header(), func(v any) ([]byte, error) {
+		bIndented, err := Encode(test.enc, serde.header(), 100, []int{0}, func(v any) ([]byte, error) {
 			return json.MarshalIndent(v, "", "  ")
 		})
 		if err != nil {

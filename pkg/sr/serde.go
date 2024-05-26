@@ -395,8 +395,8 @@ func (s *Serde) decodeFind(b []byte) ([]byte, tserde, error) {
 
 // Encode encodes a value and prepends the header. If the encoding function
 // fails, this returns an error.
-func Encode(v any, id int, index []int, h SerdeHeader, enc func(any) ([]byte, error)) ([]byte, error) {
-	return AppendEncode(nil, v, id, index, h, func(b []byte, val any) ([]byte, error) {
+func Encode(v any, h SerdeHeader, id int, index []int, enc func(any) ([]byte, error)) ([]byte, error) {
+	return AppendEncode(nil, v, h, id, index, func(b []byte, val any) ([]byte, error) {
 		encoded, err := enc(val)
 		if err != nil {
 			return nil, err
@@ -407,7 +407,7 @@ func Encode(v any, id int, index []int, h SerdeHeader, enc func(any) ([]byte, er
 
 // AppendEncode encodes a value and prepends the header, appends it to b and
 // returns b. If the encoding function fails, this returns an error.
-func AppendEncode(b []byte, v any, id int, index []int, h SerdeHeader, enc func([]byte, any) ([]byte, error)) ([]byte, error) {
+func AppendEncode(b []byte, v any, h SerdeHeader, id int, index []int, enc func([]byte, any) ([]byte, error)) ([]byte, error) {
 	b, err := h.AppendEncode(b, id, index)
 	if err != nil {
 		return nil, err
