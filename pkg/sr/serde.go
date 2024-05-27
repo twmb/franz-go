@@ -387,7 +387,7 @@ func (s *Serde) decodeFind(b []byte) ([]byte, tserde, error) {
 			t = t.subindex[idx]
 		}
 	}
-	if !t.exists {
+	if !t.exists || t.decode == nil {
 		return nil, tserde{}, ErrNotRegistered
 	}
 	return b, t, nil
