@@ -53,6 +53,7 @@ func TestSerde(t *testing.T) {
 	serde.Register(3, idx4{}, Index(0, 0, 1))
 	serde.Register(3, idx3{}, Index(0, 0))
 	serde.Register(5, oneidx{}, Index(0), GenerateFn(func() any { return &oneidx{Foo: "defoo", Bar: "debar"} }))
+	serde.Register(101, struct{}{}, DecodeFn(nil))
 
 	for i, test := range []struct {
 		enc    any
@@ -154,8 +155,8 @@ func TestSerde(t *testing.T) {
 	if _, err := serde.DecodeNew([]byte{0, 0, 0, 0, 99}); err != ErrNotRegistered {
 		t.Errorf("got %v != exp ErrNotRegistered", err)
 	}
-	if _, err := serde.DecodeNew([]byte{0, 0, 0, 0, 100, 0}); err != ErrNotRegistered {
-		// schema is registered but type is unknown
+	if _, err := serde.DecodeNew([]byte{0, 0, 0, 0, 101, 0}); err != ErrNotRegistered {
+		// schema is registered but no decode function
 		t.Errorf("got %v != exp ErrNotRegistered", err)
 	}
 }
