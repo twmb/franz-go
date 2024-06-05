@@ -869,7 +869,7 @@ func DefaultProduceTopic(t string) ProducerOpt {
 // This controls the durability of written records and corresponds to "acks" in
 // Kafka's Producer Configuration documentation.
 //
-// The default is LeaderAck.
+// The default is AllISRAcks.
 type Acks struct {
 	val int16
 }
