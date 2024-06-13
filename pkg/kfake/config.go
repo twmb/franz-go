@@ -36,6 +36,10 @@ type cfg struct {
 	tls        *tls.Config
 
 	sleepOutOfOrder bool
+
+	// Support custom topic configuration
+	validTopicConfigs map[string]string
+	validateSetConfig map[string]func(*string) bool
 }
 
 // NumBrokers sets the number of brokers to start in the fake cluster.
@@ -123,4 +127,14 @@ func SeedTopics(partitions int32, ts ...string) Opt {
 // advance when you know another request is actively being handled.
 func SleepOutOfOrder() Opt {
 	return opt{func(cfg *cfg) { cfg.sleepOutOfOrder = true }}
+}
+
+// CustomTopicValidation installs additional topic configurables.
+func CustomTopicValidation(name string, validate func(*string) bool) Opt {
+	return opt{func(cfg *cfg) {
+		if _, ok := cfg.validTopicConfigs[name]; !ok {
+			cfg.validTopicConfigs[name] = ""
+		}
+		cfg.validateSetConfig[name] = validate
+	}}
 }

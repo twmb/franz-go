@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"maps"
 	"math/rand"
 	"net"
 	"strconv"
@@ -98,6 +99,9 @@ func NewCluster(opts ...Opt) (*Cluster, error) {
 		maxSessionTimeout: 5 * time.Minute,
 
 		sasls: make(map[struct{ m, u string }]string),
+
+		validTopicConfigs: maps.Clone(validTopicConfigs),
+		validateSetConfig: maps.Clone(validateSetConfig),
 	}
 	for _, opt := range opts {
 		opt.apply(&cfg)

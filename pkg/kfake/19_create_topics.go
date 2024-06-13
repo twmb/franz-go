@@ -65,12 +65,12 @@ topics:
 			continue
 		}
 		configs := make(map[string]*string)
-		for _, c := range rt.Configs {
-			if ok := validateSetTopicConfig(c.Name, c.Value); !ok {
+		for _, cf := range rt.Configs {
+			if ok := c.cfg.validateSetTopicConfig(cf.Name, cf.Value); !ok {
 				donet(rt.Topic, kerr.InvalidConfig.Code)
 				continue topics
 			}
-			configs[c.Name] = c.Value
+			configs[cf.Name] = cf.Value
 		}
 		c.data.mkt(rt.Topic, int(rt.NumPartitions), int(rt.ReplicationFactor), configs)
 		st := donet(rt.Topic, 0)

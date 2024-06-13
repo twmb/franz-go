@@ -255,7 +255,7 @@ func (c *Cluster) setBrokerConfig(k string, v *string, dry bool) bool {
 }
 
 func (d *data) setTopicConfig(t string, k string, v *string, dry bool) bool {
-	if !validateSetTopicConfig(k, v) {
+	if !d.c.cfg.validateSetTopicConfig(k, v) {
 		return false
 	}
 	if dry {
@@ -268,11 +268,11 @@ func (d *data) setTopicConfig(t string, k string, v *string, dry bool) bool {
 	return true
 }
 
-func validateSetTopicConfig(k string, v *string) bool {
-	if _, ok := validTopicConfigs[k]; !ok {
+func (c cfg) validateSetTopicConfig(k string, v *string) bool {
+	if _, ok := c.validTopicConfigs[k]; !ok {
 		return false
 	}
-	fn, ok := validateSetConfig[k]
+	fn, ok := c.validateSetConfig[k]
 	if !ok {
 		return false
 	}
