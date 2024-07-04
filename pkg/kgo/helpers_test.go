@@ -521,3 +521,47 @@ out:
 		}
 	}
 }
+
+func testAutocommitMarked(
+	t *testing.T,
+	topic string,
+	body []byte,
+	errs chan error,
+	balancer GroupBalancer,
+) {
+	var (
+		group, groupCleanup = tmpGroup(t)
+
+		consumer = newTestConsumer(
+			errs,
+			topic,
+			"",
+			group,
+			balancer,
+			body,
+		)
+	)
+
+	defer func() {
+		groupCleanup()
+	}()
+
+	consumer.wg.Add(1)
+	go consumer.runAutocommitMarkedProcessing(testRecordLimit)
+
+	doneConsume := make(chan struct{})
+	go func() {
+		consumer.wait()
+		close(doneConsume)
+	}()
+
+out:
+	for {
+		select {
+		case err := <-errs:
+			t.Fatal(err)
+		case <-doneConsume:
+			break out
+		}
+	}
+}
