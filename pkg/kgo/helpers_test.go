@@ -542,9 +542,7 @@ func testAutocommitMarked(
 		)
 	)
 
-	defer func() {
-		groupCleanup()
-	}()
+	defer groupCleanup()
 
 	consumer.wg.Add(1)
 	go consumer.runAutocommitMarkedProcessing(testRecordLimit)
