@@ -2094,8 +2094,9 @@ func (b seqRecBatch) appendTo(
 	m.CompressedBytes = m.UncompressedBytes
 
 	if compressor != nil {
-		w := sliceWriters.Get().(*sliceWriter)
-		defer sliceWriters.Put(w)
+		w := byteBuffers.Get().(*bytes.Buffer)
+		defer byteBuffers.Put(w)
+		w.Reset()
 
 		compressed, codec := compressor.compress(w, toCompress, version)
 		if compressed != nil && // nil would be from an error
@@ -2175,8 +2176,9 @@ func (b seqRecBatch) appendToAsMessageSet(dst []byte, version uint8, compressor 
 	m.CompressedBytes = m.UncompressedBytes
 
 	if compressor != nil {
-		w := sliceWriters.Get().(*sliceWriter)
-		defer sliceWriters.Put(w)
+		w := byteBuffers.Get().(*bytes.Buffer)
+		defer byteBuffers.Put(w)
+		w.Reset()
 
 		compressed, codec := compressor.compress(w, toCompress, int16(version))
 		inner := &Record{Value: compressed}
