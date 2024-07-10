@@ -180,6 +180,7 @@ In alphabetical order,
 * [Banyan](https://banyan.com)
 * [Benthos](https://www.benthos.dev/)
 * [DeltaStream](https://deltastream.io/)
+* [EasyPost](https://easypost.com/)
 * [Eoitek](https://eoitek.com/)
 * [Hilton](https://www.hilton.com/en/corporate/)
 * [Mux](https://mux.com/blog/processing-cdn-logs-exactly-once-with-kafka-transactions/)
