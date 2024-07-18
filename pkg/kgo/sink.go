@@ -208,6 +208,7 @@ func (s *sink) maybeBackoff() {
 	select {
 	case <-after.C:
 	case <-s.cl.ctx.Done():
+	case <-s.anyCtx().Done():
 	}
 }
 
@@ -247,6 +248,34 @@ func (s *sink) drain() {
 	}
 }
 
+// Returns the first context encountered ranging across all records.
+// This does not use defers to make it clear at the return that all
+// unlocks are called in proper order. Ideally, do not call this func
+// due to lock intensity.
+func (s *sink) anyCtx() context.Context {
+	s.recBufsMu.Lock()
+	for _, recBuf := range s.recBufs {
+		recBuf.mu.Lock()
+		if len(recBuf.batches) > 0 {
+			batch0 := recBuf.batches[0]
+			batch0.mu.Lock()
+			if batch0.canFailFromLoadErrs && len(batch0.records) > 0 {
+				r0 := batch0.records[0]
+				if rctx := r0.cancelingCtx(); rctx != nil {
+					batch0.mu.Unlock()
+					recBuf.mu.Unlock()
+					s.recBufsMu.Unlock()
+					return rctx
+				}
+			}
+			batch0.mu.Unlock()
+		}
+		recBuf.mu.Unlock()
+	}
+	s.recBufsMu.Unlock()
+	return context.Background()
+}
+
 func (s *sink) produce(sem <-chan struct{}) bool {
 	var produced bool
 	defer func() {
@@ -267,6 +296,7 @@ func (s *sink) produce(sem <-chan struct{}) bool {
 	// - auth failure
 	// - transactional: a produce failure that failed the producer ID
 	// - AddPartitionsToTxn failure (see just below)
+	// - some head-of-line context failure
 	//
 	// All but the first error is fatal. Recovery may be possible with
 	// EndTransaction in specific cases, but regardless, all buffered
@@ -275,10 +305,71 @@ func (s *sink) produce(sem <-chan struct{}) bool {
 	// NOTE: we init the producer ID before creating a request to ensure we
 	// are always using the latest id/epoch with the proper sequence
 	// numbers. (i.e., resetAllSequenceNumbers && producerID logic combo).
-	id, epoch, err := s.cl.producerID()
+	//
+	// For the first-discovered-record-head-of-line context, we want to
+	// avoid looking it up if possible (which is why producerID takes a
+	// ctxFn). If we do use one, we want to be sure that the
+	// context.Canceled error is from *that* context rather than the client
+	// context or something else. So, we go through some special care to
+	// track setting the ctx / looking up if it is canceled.
+	var holCtxMu sync.Mutex
+	var holCtx context.Context
+	ctxFn := func() context.Context {
+		holCtxMu.Lock()
+		defer holCtxMu.Unlock()
+		holCtx = s.anyCtx()
+		return holCtx
+	}
+	isHolCtxDone := func() bool {
+		holCtxMu.Lock()
+		defer holCtxMu.Unlock()
+		if holCtx == nil {
+			return false
+		}
+		select {
+		case <-holCtx.Done():
+			return true
+		default:
+		}
+		return false
+	}
+
+	id, epoch, err := s.cl.producerID(ctxFn)
 	if err != nil {
+		var pe *errProducerIDLoadFail
 		switch {
-		case errors.Is(err, errProducerIDLoadFail):
+		case errors.As(err, &pe):
+			if errors.Is(pe.err, context.Canceled) && isHolCtxDone() {
+				// Some head-of-line record in a partition had a context cancelation.
+				// We look for any partition with HOL cancelations and fail them all.
+				s.cl.cfg.logger.Log(LogLevelInfo, "the first record in some partition(s) had a context cancelation; failing all relevant partitions", "broker", logID(s.nodeID))
+				s.recBufsMu.Lock()
+				defer s.recBufsMu.Unlock()
+				for _, recBuf := range s.recBufs {
+					recBuf.mu.Lock()
+					var failAll bool
+					if len(recBuf.batches) > 0 {
+						batch0 := recBuf.batches[0]
+						batch0.mu.Lock()
+						if batch0.canFailFromLoadErrs && len(batch0.records) > 0 {
+							r0 := batch0.records[0]
+							if rctx := r0.cancelingCtx(); rctx != nil {
+								select {
+								case <-rctx.Done():
+									failAll = true // we must not call failAllRecords here, because failAllRecords locks batches!
+								default:
+								}
+							}
+						}
+						batch0.mu.Unlock()
+					}
+					if failAll {
+						recBuf.failAllRecords(err)
+					}
+					recBuf.mu.Unlock()
+				}
+				return true
+			}
 			s.cl.bumpRepeatedLoadErr(err)
 			s.cl.cfg.logger.Log(LogLevelWarn, "unable to load producer ID, bumping client's buffered record load errors by 1 and retrying")
 			return true // whatever caused our produce, we did nothing, so keep going
@@ -385,6 +476,9 @@ func (s *sink) doSequenced(
 		promise: promise,
 	}
 
+	// We can NOT use any record context. If we do, we force the request to
+	// fail while also force the batch to be unfailable (due to no
+	// response),
 	br, err := s.cl.brokerOrErr(s.cl.ctx, s.nodeID, errUnknownBroker)
 	if err != nil {
 		wait.err = err
@@ -432,6 +526,11 @@ func (s *sink) doTxnReq(
 			req.batches.eachOwnerLocked(seqRecBatch.removeFromTxn)
 		}
 	}()
+	// We do NOT let record context cancelations fail this request: doing
+	// so would put the transactional ID in an unknown state. This is
+	// similar to the warning we give in the txn.go file, but the
+	// difference there is the user knows explicitly at the function call
+	// that canceling the context will opt them into invalid state.
 	err = s.cl.doWithConcurrentTransactions(s.cl.ctx, "AddPartitionsToTxn", func() error {
 		stripped, err = s.issueTxnReq(req, txnReq)
 		return err
@@ -1422,6 +1521,16 @@ type promisedRec struct {
 	*Record
 }
 
+func (pr promisedRec) cancelingCtx() context.Context {
+	if pr.ctx.Done() != nil {
+		return pr.ctx
+	}
+	if pr.Context.Done() != nil {
+		return pr.Context
+	}
+	return nil
+}
+
 // recBatch is the type used for buffering records before they are written.
 type recBatch struct {
 	owner *recBuf // who owns us
@@ -1454,10 +1563,12 @@ type recBatch struct {
 // Returns an error if the batch should fail.
 func (b *recBatch) maybeFailErr(cfg *cfg) error {
 	if len(b.records) > 0 {
-		ctx := b.records[0].ctx
+		r0 := &b.records[0]
 		select {
-		case <-ctx.Done():
-			return ctx.Err()
+		case <-r0.ctx.Done():
+			return r0.ctx.Err()
+		case <-r0.Context.Done():
+			return r0.Context.Err()
 		default:
 		}
 	}

@@ -150,7 +150,7 @@ func TestIssue769(t *testing.T) {
 		case <-timer.C:
 			t.Fatal("expected record to fail within 3s")
 		}
-		if pe := (*errProducerIDLoadFail)(nil); !errors.As(rerr, &pe) || !errors.Is(pe.err, context.Canceled) {
+		if pe := (*errProducerIDLoadFail)(nil); !errors.As(rerr, &pe) || !(errors.Is(pe.err, context.Canceled) || strings.Contains(pe.err.Error(), "canceled")) {
 			t.Errorf("got %v != exp errProducerIDLoadFail{context.Canceled}", rerr)
 		}
 	}

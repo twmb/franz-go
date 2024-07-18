@@ -956,6 +956,9 @@ func (s *source) fetch(consumerSession *consumerSession, doneFetch chan<- struct
 	// reload offsets *always* triggers a metadata update.
 	if updateWhy != nil {
 		why := updateWhy.reason(fmt.Sprintf("fetch had inner topic errors from broker %d", s.nodeID))
+		// loadWithSessionNow triggers a metadata update IF there are
+		// offsets to reload. If there are no offsets to reload, we
+		// trigger one here.
 		if !reloadOffsets.loadWithSessionNow(consumerSession, why) {
 			if updateWhy.isOnly(kerr.UnknownTopicOrPartition) || updateWhy.isOnly(kerr.UnknownTopicID) {
 				s.cl.triggerUpdateMetadata(false, why)
