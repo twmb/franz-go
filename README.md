@@ -179,6 +179,7 @@ In alphabetical order,
 * [Alpaca](https://alpaca.markets/blog/alpaca-launches-next-gen-order-management-system/)
 * [Banyan](https://banyan.com)
 * [Benthos](https://www.benthos.dev/)
+* [Conduit](https://github.com/ConduitIO/conduit)
 * [DeltaStream](https://deltastream.io/)
 * [EasyPost](https://easypost.com/)
 * [Eoitek](https://eoitek.com/)
