@@ -113,8 +113,8 @@ out:
 		case codecGzip:
 			level := gzip.DefaultCompression
 			if codec.level != 0 {
-				if _, err := gzip.NewWriterLevel(nil, int(codec.level)); err != nil {
-					level = int(codec.level)
+				if _, err := gzip.NewWriterLevel(nil, codec.level); err != nil {
+					level = codec.level
 				}
 			}
 			c.gzPool = sync.Pool{New: func() any { c, _ := gzip.NewWriterLevel(nil, level); return c }}
