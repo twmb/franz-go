@@ -1,3 +1,65 @@
+v1.17.1
+===
+
+This patch release fixes four bugs (two are fixed in one commit), contains two
+internal improvements, and adds two other minor changes.
+
+## Bug fixes
+
+* If you were using the `MaxBufferedBytes` option and ever hit the max, odds are
+  likely that you would experience a deadlock eventually. That has been fixed.
+
+* If you ever produced a record with no topic field and without using `DefaultProduceTopic`,
+  or if you produced a transactional record while not in a transaction, AND if the client
+  was at the maximum buffered records, odds are you would eventually deadlock.
+  This has been fixed.
+
+* It was previously not possible to set lz4 compression levels.
+
+* There was a data race on a boolean field if a produce request was being
+  written at the same time a metadata update happened, _and_ if the metadata
+  update has an error on the topic or partition that is actively being written.
+  Note that the race was unlikely and if you experienced it, you would have noticed
+  an OutOfOrderSequenceNumber error. See [this comment](https://github.com/twmb/franz-go/pull/781#issuecomment-2248563542)
+  for more details.
+
+## Improvements
+
+* Canceling the context you pass to `Produce` now propagates in two more areas:
+  the initial `InitProducerID` request that occurs the first time you produce,
+  and if the client is internally backing off due to a produce request failure.
+  Note that there is no guarantee on _which_ context is used for cancelation if
+  you produce many records, and the client does _not_ allow canceling if it is
+  currently unsafe to do so. However, this does mean that if your cluster is
+  somewhat down such that `InitProducerID` is failing on your new client, you
+  can now actually cause the `Produce` to quit. See [this comment](https://github.com/twmb/franz-go/issues/769#issuecomment-2235707417)
+  for what it means for a record to be "safe" to fail.
+
+* The client now ignores aborted records while consuming only if you have
+  configured `FetchIsolationLevel(ReadCommitted())`. Previously, the client relied
+  entirely on the `FetchResponse` `AbortedTransactions` field, but it's possible
+  that brokers could send aborted transactions even when not using read committed.
+  Specifically, this was a behavior difference in Redpanda, and the KIP that introduced
+  transactions and all relevant documents do not mention what the broker behavior
+  actually should be here. Redpanda itself was also changed to not send aborted
+  transactions when using read committed, but we may as well improve franz-go as well.
+
+* Decompression now better reuses buffers under the hood, reducing allocations.
+
+* Brokers that return preferred replicas to fetch from now causes an info level
+  log in the client.
+
+## Relevant commits
+
+* [`305d8dc`](https://github.com/twmb/franz-go/commit/305d8dc) kgo: allow record ctx cancelation to propagate a bit more
+* [`24fbb0f`](https://github.com/twmb/franz-go/commit/24fbb0f) **bugfix** kgo: fix deadlock in Produce when using MaxBufferedBytes
+* [`1827add`](https://github.com/twmb/franz-go/commit/1827add) **bugfix** kgo sink: fix read/write race for recBatch.canFailFromLoadErrs
+* [`d7ea2c3`](https://github.com/twmb/franz-go/commit/d7ea2c3) **bugfix** fix setting lz4 compression levels (thanks [@asg0451](https://github.com/asg0451)!)
+* [`5809dec`](https://github.com/twmb/franz-go/commit/5809dec) optimise: use byteBuffer pool in decompression (thanks [@kalbhor](https://github.com/kalbhor)!)
+* [`cda897d`](https://github.com/twmb/franz-go/commit/cda897d) kgo: add log for preferred replicas
+* [`e62b402`](https://github.com/twmb/franz-go/commit/e62b402) **improvement** kgo sink: do not back off on certain edge case
+* [`9e32bf9`](https://github.com/twmb/franz-go/commit/9e32bf9) kgo: ignore aborted txns if using `READ_UNCOMMITTED`
+
 v1.17.0
 ===
 
