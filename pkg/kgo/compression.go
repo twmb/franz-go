@@ -33,7 +33,7 @@ const (
 // for that batch.
 type CompressionCodec struct {
 	codec codecType
-	level int8
+	level int
 }
 
 // NoCompression is a compression option that avoids compression. This can
@@ -60,10 +60,7 @@ func ZstdCompression() CompressionCodec { return CompressionCodec{codecZstd, 0} 
 //
 // If the level is invalid, compressors just use a default level.
 func (c CompressionCodec) WithLevel(level int) CompressionCodec {
-	if level > 127 {
-		level = 127 // lz4 could theoretically be large, I guess
-	}
-	c.level = int8(level)
+	c.level = level
 	return c
 }
 
@@ -108,8 +105,8 @@ out:
 		case codecGzip:
 			level := gzip.DefaultCompression
 			if codec.level != 0 {
-				if _, err := gzip.NewWriterLevel(nil, int(codec.level)); err != nil {
-					level = int(codec.level)
+				if _, err := gzip.NewWriterLevel(nil, codec.level); err != nil {
+					level = codec.level
 				}
 			}
 			c.gzPool = sync.Pool{New: func() any { c, _ := gzip.NewWriterLevel(nil, level); return c }}

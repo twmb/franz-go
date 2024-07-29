@@ -8,7 +8,21 @@ import (
 	"reflect"
 	"sync"
 	"testing"
+
+	"github.com/pierrec/lz4/v4"
 )
+
+// Regression test for #778.
+func TestCompressionCodecLZ4WithSpecifiedLevel(t *testing.T) {
+	t.Parallel()
+
+	codec := Lz4Compression().WithLevel(512)
+	w := lz4.NewWriter(new(bytes.Buffer))
+	err := w.Apply(lz4.CompressionLevelOption(lz4.CompressionLevel(codec.level)))
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
 
 func TestNewCompressor(t *testing.T) {
 	t.Parallel()
