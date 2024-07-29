@@ -31,7 +31,6 @@ jobs:
 
   integration-test-kafka:
     if: github.repository == 'twmb/franz-go'
-    needs: golangci
     runs-on: ubuntu-latest
     name: "integration test kafka"
     container: golang:latest
@@ -55,7 +54,7 @@ jobs:
           KAFKA_KRAFT_CLUSTER_ID: XkpGZQ27R3eTl3OdTm2LYA # 16 byte base64-encoded UUID
     steps:
       - uses: actions/checkout@v4
-      - run: go test ./...
+      - run: go test -timeout 5m ./...
         env:
           KGO_TEST_RF: 1
           KGO_SEEDS: kafka:9092
@@ -63,7 +62,6 @@ jobs:
 
   integration-test-redpanda:
     if: github.repository == 'twmb/franz-go'
-    needs: golangci
     runs-on: ubuntu-latest
     name: "integration test redpanda"
     container: golang:latest
@@ -76,7 +74,7 @@ jobs:
           REDPANDA_ADVERTISE_KAFKA_ADDRESS: redpanda:9092
     steps:
       - uses: actions/checkout@v4
-      - run: go test ./...
+      - run: go test -timeout 5m ./...
         env:
           KGO_TEST_RF: 1
           KGO_SEEDS: redpanda:9092
