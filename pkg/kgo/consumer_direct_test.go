@@ -338,7 +338,8 @@ func TestPauseIssue489(t *testing.T) {
 					exit.Store(true)
 				}
 			})
-			time.Sleep(100 * time.Microsecond)
+			cl.Flush(ctx)
+			time.Sleep(50 * time.Microsecond)
 		}
 	}()
 	defer cancel()
@@ -416,7 +417,8 @@ func TestPauseIssueOct2023(t *testing.T) {
 					exit.Store(true)
 				}
 			})
-			time.Sleep(100 * time.Microsecond)
+			cl.Flush(ctx)
+			time.Sleep(50 * time.Microsecond)
 		}
 	}()
 	defer cancel()

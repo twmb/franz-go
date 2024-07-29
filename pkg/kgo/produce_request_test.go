@@ -2,12 +2,74 @@ package kgo
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"hash/crc32"
+	"math/rand"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/twmb/franz-go/pkg/kbin"
 	"github.com/twmb/franz-go/pkg/kmsg"
 )
+
+func TestClient_Produce(t *testing.T) {
+	var (
+		topic, cleanup = tmpTopicPartitions(t, 1)
+		numWorkers     = 50
+		recsToWrite    = int64(20_000)
+
+		workers      sync.WaitGroup
+		writeSuccess atomic.Int64
+		writeFailure atomic.Int64
+
+		randRec = func() *Record {
+			return &Record{
+				Key:   []byte("test"),
+				Value: []byte(strings.Repeat("x", rand.Intn(1000))),
+				Topic: topic,
+			}
+		}
+	)
+	defer cleanup()
+
+	cl, _ := newTestClient(MaxBufferedBytes(5000))
+	defer cl.Close()
+
+	// Start N workers that will concurrently write to the same partition.
+	var recsWritten atomic.Int64
+	var fatal atomic.Bool
+	for i := 0; i < numWorkers; i++ {
+		workers.Add(1)
+
+		go func() {
+			defer workers.Done()
+
+			for recsWritten.Add(1) <= recsToWrite {
+				res := cl.ProduceSync(context.Background(), randRec())
+				if err := res.FirstErr(); err == nil {
+					writeSuccess.Add(1)
+				} else {
+					if !errors.Is(err, ErrMaxBuffered) {
+						t.Errorf("unexpected error: %v", err)
+						fatal.Store(true)
+					}
+
+					writeFailure.Add(1)
+				}
+			}
+		}()
+	}
+	workers.Wait()
+
+	t.Logf("writes succeeded: %d", writeSuccess.Load())
+	t.Logf("writes failed:    %d", writeFailure.Load())
+	if fatal.Load() {
+		t.Fatal("failed")
+	}
+}
 
 // This file contains golden tests against kmsg AppendTo's to ensure our custom
 // encoding is correct.

@@ -258,7 +258,7 @@ func (s *sink) produce(sem <-chan struct{}) bool {
 	// We could have been triggered from a metadata update even though the
 	// user is not producing at all. If we have no buffered records, let's
 	// avoid potentially creating a producer ID.
-	if s.cl.producer.bufferedRecords.Load() == 0 {
+	if s.cl.BufferedProduceRecords() == 0 {
 		return false
 	}
 
