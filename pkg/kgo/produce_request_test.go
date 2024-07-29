@@ -163,7 +163,9 @@ func TestRecBatchAppendTo(t *testing.T) {
 	compressor, _ = newCompressor(CompressionCodec{codec: 2}) // snappy
 	{
 		kbatch.Attributes |= 0x0002 // snappy
-		kbatch.Records, _ = compressor.compress(sliceWriters.Get().(*sliceWriter), kbatch.Records, version)
+		w := byteBuffers.Get().(*bytes.Buffer)
+		w.Reset()
+		kbatch.Records, _ = compressor.compress(w, kbatch.Records, version)
 	}
 
 	fixFields()
@@ -254,7 +256,9 @@ func TestMessageSetAppendTo(t *testing.T) {
 		Offset:     1,
 		Attributes: 0x02,
 	}
-	kset0c.Value, _ = compressor.compress(sliceWriters.Get().(*sliceWriter), kset0raw, 1) // version 0, 1 use message set 0
+	w := byteBuffers.Get().(*bytes.Buffer)
+	w.Reset()
+	kset0c.Value, _ = compressor.compress(w, kset0raw, 1) // version 0, 1 use message set 0
 	kset0c.CRC = int32(crc32.ChecksumIEEE(kset0c.AppendTo(nil)[16:]))
 	kset0c.MessageSize = int32(len(kset0c.AppendTo(nil)[12:]))
 
@@ -265,7 +269,9 @@ func TestMessageSetAppendTo(t *testing.T) {
 		Attributes: 0x02,
 		Timestamp:  kset11.Timestamp,
 	}
-	kset1c.Value, _ = compressor.compress(sliceWriters.Get().(*sliceWriter), kset1raw, 2) // version 2 use message set 1
+	wbuf := byteBuffers.Get().(*bytes.Buffer)
+	wbuf.Reset()
+	kset1c.Value, _ = compressor.compress(wbuf, kset1raw, 2) // version 2 use message set 1
 	kset1c.CRC = int32(crc32.ChecksumIEEE(kset1c.AppendTo(nil)[16:]))
 	kset1c.MessageSize = int32(len(kset1c.AppendTo(nil)[12:]))
 
