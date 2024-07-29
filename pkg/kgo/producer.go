@@ -362,7 +362,11 @@ func (cl *Client) TryProduce(
 // retries. If any of these conditions are hit and it is currently safe to fail
 // records, all buffered records for the relevant partition are failed. Only
 // the first record's context in a batch is considered when determining whether
-// the batch should be canceled.
+// the batch should be canceled. A record is not safe to fail if the client
+// is idempotently producing and a request has been sent; in this case, the
+// client cannot know if the broker actually processed the request (if so, then
+// removing the records from the client will create errors the next time you
+// produce).
 //
 // If the client is transactional and a transaction has not been begun, the
 // promise is immediately called with an error corresponding to not being in a
@@ -679,7 +683,7 @@ func (cl *Client) ProducerID(ctx context.Context) (int64, int16, error) {
 
 	go func() {
 		defer close(done)
-		id, epoch, err = cl.producerID()
+		id, epoch, err = cl.producerID(ctx2fn(ctx))
 	}()
 
 	select {
@@ -701,7 +705,7 @@ var errReloadProducerID = errors.New("producer id needs reloading")
 // initProducerID initializes the client's producer ID for idempotent
 // producing only (no transactions, which are more special). After the first
 // load, this clears all buffered unknown topics.
-func (cl *Client) producerID() (int64, int16, error) {
+func (cl *Client) producerID(ctxFn func() context.Context) (int64, int16, error) {
 	p := &cl.producer
 
 	id := p.id.Load().(*producerID)
@@ -730,7 +734,7 @@ func (cl *Client) producerID() (int64, int16, error) {
 				}
 				p.id.Store(id)
 			} else {
-				newID, keep := cl.doInitProducerID(id.id, id.epoch)
+				newID, keep := cl.doInitProducerID(ctxFn, id.id, id.epoch)
 				if keep {
 					id = newID
 					// Whenever we have a new producer ID, we need
@@ -748,7 +752,7 @@ func (cl *Client) producerID() (int64, int16, error) {
 					id = &producerID{
 						id:    id.id,
 						epoch: id.epoch,
-						err:   errProducerIDLoadFail,
+						err:   &errProducerIDLoadFail{newID.err},
 					}
 				}
 			}
@@ -825,7 +829,7 @@ func (cl *Client) failProducerID(id int64, epoch int16, err error) {
 
 // doInitProducerID inits the idempotent ID and potentially the transactional
 // producer epoch, returning whether to keep the result.
-func (cl *Client) doInitProducerID(lastID int64, lastEpoch int16) (*producerID, bool) {
+func (cl *Client) doInitProducerID(ctxFn func() context.Context, lastID int64, lastEpoch int16) (*producerID, bool) {
 	cl.cfg.logger.Log(LogLevelInfo, "initializing producer id")
 	req := kmsg.NewPtrInitProducerIDRequest()
 	req.TransactionalID = cl.cfg.txnID
@@ -835,7 +839,8 @@ func (cl *Client) doInitProducerID(lastID int64, lastEpoch int16) (*producerID, 
 		req.TransactionTimeoutMillis = int32(cl.cfg.txnTimeout.Milliseconds())
 	}
 
-	resp, err := req.RequestWith(cl.ctx, cl)
+	ctx := ctxFn()
+	resp, err := req.RequestWith(ctx, cl)
 	if err != nil {
 		if errors.Is(err, errUnknownRequestKey) || errors.Is(err, errBrokerTooOld) {
 			cl.cfg.logger.Log(LogLevelInfo, "unable to initialize a producer id because the broker is too old or the client is pinned to an old version, continuing without a producer id")
@@ -940,13 +945,14 @@ func (cl *Client) addUnknownTopicRecord(pr promisedRec) {
 	}
 	unknown.buffered = append(unknown.buffered, pr)
 	if len(unknown.buffered) == 1 {
-		go cl.waitUnknownTopic(pr.ctx, pr.Topic, unknown)
+		go cl.waitUnknownTopic(pr.ctx, pr.Record.Context, pr.Topic, unknown)
 	}
 }
 
 // waitUnknownTopic waits for a notification
 func (cl *Client) waitUnknownTopic(
-	rctx context.Context,
+	pctx context.Context, // context passed to Produce
+	rctx context.Context, // context on the record itself
 	topic string,
 	unknown *unknownTopicProduces,
 ) {
@@ -974,6 +980,8 @@ func (cl *Client) waitUnknownTopic(
 
 	for err == nil {
 		select {
+		case <-pctx.Done():
+			err = pctx.Err()
 		case <-rctx.Done():
 			err = rctx.Err()
 		case <-cl.ctx.Done():

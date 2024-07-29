@@ -55,6 +55,32 @@ var (
 	npartitionsAt int64
 )
 
+type slowConn struct {
+	net.Conn
+}
+
+func (s *slowConn) Write(p []byte) (int, error) {
+	time.Sleep(100 * time.Millisecond)
+	return s.Conn.Write(p)
+}
+
+func (s *slowConn) Read(p []byte) (int, error) {
+	time.Sleep(100 * time.Millisecond)
+	return s.Conn.Read(p)
+}
+
+type slowDialer struct {
+	d net.Dialer
+}
+
+func (s *slowDialer) DialContext(ctx context.Context, network, host string) (net.Conn, error) {
+	c, err := s.d.DialContext(ctx, network, host)
+	if err != nil {
+		return nil, err
+	}
+	return &slowConn{c}, nil
+}
+
 func init() {
 	var err error
 	if n, _ := strconv.Atoi(os.Getenv("KGO_TEST_RF")); n > 0 {
