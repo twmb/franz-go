@@ -773,7 +773,10 @@ func (cl *Client) SetMode(ctx context.Context, mode Mode, subjects ...string) []
 		go func() {
 			defer wg.Done()
 			var m modeResponse
-			err := cl.put(ctx, pathMode(subject), mode, &m)
+			body := struct {
+				Mode Mode `json:"mode"`
+			}{mode}
+			err := cl.put(ctx, pathMode(subject), body, &m)
 			results[slot] = ModeResult{
 				Subject: subject,
 				Mode:    m.Mode,
