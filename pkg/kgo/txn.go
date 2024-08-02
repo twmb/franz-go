@@ -159,6 +159,18 @@ func (s *GroupTransactSession) Close() {
 	s.cl.Close()
 }
 
+// AllowRebalance is a wrapper around Client.AllowRebalance, with the exact
+// same semantics. Refer to that function's documentation.
+func (s *GroupTransactSession) AllowRebalance() {
+	s.cl.AllowRebalance()
+}
+
+// CloseAllowingRebalance is a wrapper around Client.CloseAllowingRebalance,
+// with the exact same semantics. Refer to that function's documentation.
+func (s *GroupTransactSession) CloseAllowingRebalance() {
+	s.cl.CloseAllowingRebalance()
+}
+
 // PollFetches is a wrapper around Client.PollFetches, with the exact same
 // semantics. Refer to that function's documentation.
 //
