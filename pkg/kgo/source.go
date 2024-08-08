@@ -1685,7 +1685,12 @@ func processV1Message(
 
 // Processes an outer v0 message. We expect inner messages to be entirely v0 as
 // well, so this only tries v0 always.
-func processV0OuterMessage(o *ProcessFetchPartitionOptions, fp *FetchPartition, message *kmsg.MessageV0, decompressor *decompressor) (int, int) {
+func processV0OuterMessage(
+	o *ProcessFetchPartitionOptions,
+	fp *FetchPartition,
+	message *kmsg.MessageV0,
+	decompressor *decompressor,
+) (int, int) {
 	compression := byte(message.Attributes & 0x0003)
 	if compression == 0 {
 		processV0Message(o, fp, message)
