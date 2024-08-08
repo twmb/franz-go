@@ -176,7 +176,7 @@ func (m *Metrics) OnNewClient(client *kgo.Client) {
 		Subsystem:   subsystem,
 		ConstLabels: constLabels,
 		Name:        "write_bytes_total",
-		Help:        "Total number of bytes written",
+		Help:        "Total number of bytes written to the TCP connection. The bytes count is tracked after compression (when used).",
 	}, []string{"node_id"})
 
 	m.writeErrorsTotal = factory.NewCounterVec(prometheus.CounterOpts{
@@ -212,7 +212,7 @@ func (m *Metrics) OnNewClient(client *kgo.Client) {
 		Subsystem:   subsystem,
 		ConstLabels: constLabels,
 		Name:        "read_bytes_total",
-		Help:        "Total number of bytes read",
+		Help:        "Total number of bytes read from the TCP connection. The bytes count is tracked before uncompression (when used).",
 	}, []string{"node_id"})
 
 	m.readErrorsTotal = factory.NewCounterVec(prometheus.CounterOpts{
