@@ -429,7 +429,7 @@ retry:
 			"state_currently_committed", currentCommit,
 		)
 		s.cl.setOffsets(currentCommit, false)
-	} else if willTryCommit && endTxnErr == nil {
+	} else if willTryCommit {
 		s.cl.cfg.logger.Log(LogLevelInfo, "transact session successful, setting to newly committed state",
 			"tried_commit", willTryCommit,
 			"postcommit", postcommit,
