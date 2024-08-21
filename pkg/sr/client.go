@@ -60,6 +60,7 @@ type Client struct {
 		user string
 		pass string
 	}
+	bearerToken string
 }
 
 // NewClient returns a new schema registry client.
@@ -126,6 +127,9 @@ start:
 	req.Header.Set("User-Agent", cl.ua)
 	if cl.basicAuth != nil {
 		req.SetBasicAuth(cl.basicAuth.user, cl.basicAuth.pass)
+	}
+	if cl.bearerToken != "" {
+		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", cl.bearerToken))
 	}
 	cl.applyParams(ctx, req)
 

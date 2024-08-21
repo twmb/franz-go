@@ -77,6 +77,14 @@ func BasicAuth(user, pass string) ClientOpt {
 	}}
 }
 
+// BearerToken sets an Authorization header to use for every request.
+// The format will be: "Authorization: Bearer $token".
+func BearerToken(token string) ClientOpt {
+	return clientOpt{func(cl *Client) {
+		cl.bearerToken = token
+	}}
+}
+
 // DefaultParams sets default parameters to apply to every request.
 func DefaultParams(ps ...Param) ClientOpt {
 	return clientOpt{func(cl *Client) {
