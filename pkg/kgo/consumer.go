@@ -620,7 +620,7 @@ func (cl *Client) PauseFetchPartitions(topicPartitions map[string][]int32) map[s
 
 // ResumeFetchTopics resumes fetching the input topics if they were previously
 // paused. Resuming topics that are not currently paused is a per-topic no-op.
-// See the documentation on PauseTfetchTopics for more details.
+// See the documentation on PauseFetchTopics for more details.
 func (cl *Client) ResumeFetchTopics(topics ...string) {
 	defer cl.allSinksAndSources(func(sns sinkAndSource) {
 		sns.source.maybeConsume()
