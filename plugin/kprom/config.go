@@ -96,9 +96,12 @@ func HandlerOpts(opts promhttp.HandlerOpts) Opt {
 	return opt{func(c *cfg) { c.handlerOpts = opts }}
 }
 
-// WithClientLabel adds a "cliend_id" label to all metrics.
+// WithClientLabel adds a "client_id" label to all metrics.
 func WithClientLabel() Opt {
-	return opt{func(c *cfg) { c.withClientLabel = true }}
+	return opt{func(c *cfg) {
+		c.withClientLabel = true
+		c.fetchProduceOpts.labels = append(c.fetchProduceOpts.labels, "client_id")
+	}}
 }
 
 // Subsystem sets the subsystem for the kprom metrics, overriding the default
@@ -182,6 +185,7 @@ type Detail uint8
 const (
 	ByNode            Detail = iota // Include label "node_id" for fetch and produce metrics.
 	ByTopic                         // Include label "topic" for fetch and produce metrics.
+	ByClient                        // Include label "client_id" for fetch and produce metrics
 	Batches                         // Report number of fetched and produced batches.
 	Records                         // Report the number of fetched and produced records.
 	CompressedBytes                 // Report the number of fetched and produced compressed bytes.
@@ -211,6 +215,8 @@ func FetchAndProduceDetail(details ...Detail) Opt {
 					labelsDeduped[ByTopic] = "topic"
 				case ByNode:
 					labelsDeduped[ByNode] = "node_id"
+				case ByClient:
+					labelsDeduped[ByClient] = "client_id"
 				case Batches:
 					c.fetchProduceOpts.batches = true
 				case Records:
