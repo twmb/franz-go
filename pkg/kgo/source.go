@@ -1362,6 +1362,7 @@ func (o *cursorOffsetNext) processRespPartition(br *broker, rp *kmsg.FetchRespon
 		in = in[length:]
 
 		var m FetchBatchMetrics
+		m.ClientID = br.cl.clientIDString()
 
 		switch t := r.(type) {
 		case *kmsg.MessageV0:
