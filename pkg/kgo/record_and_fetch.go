@@ -120,7 +120,7 @@ type Record struct {
 	// before the record is unbuffered.
 	ProducerEpoch int16
 
-	// ProducerEpoch is the producer ID of this message if it was produced
+	// ProducerID is the producer ID of this message if it was produced
 	// with a producer ID. An epoch and ID of 0 means it was not.
 	//
 	// For producing, this is left unset. This will be set by the client
