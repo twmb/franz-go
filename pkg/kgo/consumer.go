@@ -551,6 +551,17 @@ func (cl *Client) PollRecords(ctx context.Context, maxPollRecords int) Fetches {
 	return fetches
 }
 
+// ReuseRecords returns records that have been previously obtained from a
+// PollRecords call.
+//
+// This can be useful if you are processing records in a goroutine and
+// want to avoid allocating memory for each poll.
+func (cl *Client) ReuseRecords(records []*Record) {
+	for _, record := range records {
+		cl.cfg.recordsPool.put(record)
+	}
+}
+
 // AllowRebalance allows a consumer group to rebalance if it was blocked by you
 // polling records in tandem with the BlockRebalanceOnPoll option.
 //
