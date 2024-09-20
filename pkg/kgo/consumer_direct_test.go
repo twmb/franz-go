@@ -106,7 +106,7 @@ func TestIssue337(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	var recs []*Record
+	var recs []Record
 out:
 	for {
 		fs := cl.PollFetches(ctx)
@@ -171,7 +171,7 @@ func TestDirectPartitionPurge(t *testing.T) {
 		if err := fs.Err0(); err == context.DeadlineExceeded {
 			break
 		}
-		fs.EachRecord(func(r *Record) {
+		fs.EachRecord(func(r Record) {
 			v := string(r.Value)
 			if !exp[v] {
 				t.Errorf("saw unexpected value %v", v)
@@ -356,7 +356,7 @@ func TestPauseIssue489(t *testing.T) {
 			var sawZero, sawOne, sawTwo bool
 			for (!sawZero || !sawOne || !sawTwo) && !closed(ctx.Done()) {
 				fs := pollfn.fn(ctx)
-				fs.EachRecord(func(r *Record) {
+				fs.EachRecord(func(r Record) {
 					sawZero = sawZero || r.Partition == 0
 					sawOne = sawOne || r.Partition == 1
 					sawTwo = sawTwo || r.Partition == 2
@@ -366,7 +366,7 @@ func TestPauseIssue489(t *testing.T) {
 			sawZero, sawOne, sawTwo = false, false, false
 			for i := 0; i < 10 && !closed(ctx.Done()); i++ {
 				fs := pollfn.fn(ctx)
-				fs.EachRecord(func(r *Record) {
+				fs.EachRecord(func(r Record) {
 					sawZero = sawZero || r.Partition == 0
 					sawOne = sawOne || r.Partition == 1
 					sawTwo = sawTwo || r.Partition == 2
@@ -435,7 +435,7 @@ func TestPauseIssueOct2023(t *testing.T) {
 			var sawt1, sawt2, sawt3 bool
 			for (!sawt1 || !sawt2 || !sawt3) && !closed(ctx.Done()) {
 				fs := pollfn.fn(ctx)
-				fs.EachRecord(func(r *Record) {
+				fs.EachRecord(func(r Record) {
 					sawt1 = sawt1 || r.Topic == t1
 					sawt2 = sawt2 || r.Topic == t2
 					sawt3 = sawt3 || r.Topic == t3
@@ -445,7 +445,7 @@ func TestPauseIssueOct2023(t *testing.T) {
 			sawt1, sawt2, sawt3 = false, false, false
 			for i := 0; i < 10 && !closed(ctx.Done()); i++ {
 				fs := pollfn.fn(ctx)
-				fs.EachRecord(func(r *Record) {
+				fs.EachRecord(func(r Record) {
 					sawt1 = sawt1 || r.Topic == t1
 					sawt2 = sawt2 || r.Topic == t2
 					sawt3 = sawt3 || r.Topic == t3

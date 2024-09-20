@@ -1717,7 +1717,7 @@ func (o *cursorOffsetNext) processV0Message(
 //
 // If the record is being aborted or the record is a control record and the
 // client does not want to keep control records, this does not keep the record.
-func (o *cursorOffsetNext) maybeKeepRecord(fp *FetchPartition, record *Record, abort bool) {
+func (o *cursorOffsetNext) maybeKeepRecord(fp *FetchPartition, record Record, abort bool) {
 	if record.Offset < o.offset {
 		// We asked for offset 5, but that was in the middle of a
 		// batch; we got offsets 0 thru 4 that we need to skip.
@@ -1753,7 +1753,7 @@ func recordToRecord(
 	partition int32,
 	batch *kmsg.RecordBatch,
 	record *kmsg.Record,
-) *Record {
+) Record {
 	h := make([]RecordHeader, 0, len(record.Headers))
 	for _, kv := range record.Headers {
 		h = append(h, RecordHeader{
@@ -1762,7 +1762,7 @@ func recordToRecord(
 		})
 	}
 
-	r := &Record{
+	r := Record{
 		Key:           record.Key,
 		Value:         record.Value,
 		Headers:       h,
@@ -1794,8 +1794,8 @@ func v0MessageToRecord(
 	topic string,
 	partition int32,
 	message *kmsg.MessageV0,
-) *Record {
-	return &Record{
+) Record {
+	return Record{
 		Key:           message.Key,
 		Value:         message.Value,
 		Topic:         topic,
@@ -1812,8 +1812,8 @@ func v1MessageToRecord(
 	topic string,
 	partition int32,
 	message *kmsg.MessageV1,
-) *Record {
-	return &Record{
+) Record {
+	return Record{
 		Key:           message.Key,
 		Value:         message.Value,
 		Timestamp:     timeFromMillis(message.Timestamp),

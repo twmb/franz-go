@@ -371,7 +371,7 @@ type HookProduceRecordUnbuffered interface {
 type HookFetchRecordBuffered interface {
 	// OnFetchRecordBuffered is passed a record that is now buffered, ready
 	// to be polled.
-	OnFetchRecordBuffered(*Record)
+	OnFetchRecordBuffered(Record)
 }
 
 // HookFetchRecordUnbuffered is called when a fetched record is unbuffered.
@@ -388,7 +388,7 @@ type HookFetchRecordUnbuffered interface {
 	// OnFetchRecordUnbuffered is passwed a record that is being
 	// "unbuffered" within the client, and whether the record is being
 	// returned from polling.
-	OnFetchRecordUnbuffered(r *Record, polled bool)
+	OnFetchRecordUnbuffered(r Record, polled bool)
 }
 
 /////////////

@@ -260,11 +260,11 @@ type FetchPartition struct {
 	// known as the earliest offset in the partition.
 	LogStartOffset int64
 	// Records contains feched records for this partition.
-	Records []*Record
+	Records []Record
 }
 
 // EachRecord calls fn for each record in the partition.
-func (p *FetchPartition) EachRecord(fn func(*Record)) {
+func (p *FetchPartition) EachRecord(fn func(Record)) {
 	for _, r := range p.Records {
 		fn(r)
 	}
@@ -287,7 +287,7 @@ func (t *FetchTopic) EachPartition(fn func(FetchPartition)) {
 }
 
 // EachRecord calls fn for each record in the topic, in any partition order.
-func (t *FetchTopic) EachRecord(fn func(*Record)) {
+func (t *FetchTopic) EachRecord(fn func(Record)) {
 	for i := range t.Partitions {
 		for _, r := range t.Partitions[i].Records {
 			fn(r)
@@ -300,12 +300,12 @@ func (t *FetchTopic) EachRecord(fn func(*Record)) {
 // This is a convenience function that does a single slice allocation. If you
 // can process records individually, it is far more efficient to use the Each
 // functions.
-func (t *FetchTopic) Records() []*Record {
+func (t *FetchTopic) Records() []Record {
 	var n int
 	t.EachPartition(func(p FetchPartition) {
 		n += len(p.Records)
 	})
-	rs := make([]*Record, 0, n)
+	rs := make([]Record, 0, n)
 	t.EachPartition(func(p FetchPartition) {
 		rs = append(rs, p.Records...)
 	})
@@ -480,7 +480,7 @@ func (i *FetchesRecordIter) Done() bool {
 }
 
 // Next returns the next record from a fetch.
-func (i *FetchesRecordIter) Next() *Record {
+func (i *FetchesRecordIter) Next() Record {
 	next := i.fetches[0].Topics[i.ti].Partitions[i.pi].Records[i.ri]
 	i.ri++
 	i.prepareNext()
@@ -569,7 +569,7 @@ func (fs Fetches) EachTopic(fn func(FetchTopic)) {
 //
 // This is very similar to using a record iter, and is solely a convenience
 // function depending on which style you prefer.
-func (fs Fetches) EachRecord(fn func(*Record)) {
+func (fs Fetches) EachRecord(fn func(Record)) {
 	for iter := fs.RecordIter(); !iter.Done(); {
 		fn(iter.Next())
 	}
@@ -580,8 +580,8 @@ func (fs Fetches) EachRecord(fn func(*Record)) {
 // This is a convenience function that does a single slice allocation. If you
 // can process records individually, it is far more efficient to use the Each
 // functions or the RecordIter.
-func (fs Fetches) Records() []*Record {
-	rs := make([]*Record, 0, fs.NumRecords())
+func (fs Fetches) Records() []Record {
+	rs := make([]Record, 0, fs.NumRecords())
 	fs.EachPartition(func(p FetchTopicPartition) {
 		rs = append(rs, p.Records...)
 	})
@@ -621,7 +621,7 @@ type FetchTopicPartition struct {
 }
 
 // EachRecord calls fn for each record in the topic's partition.
-func (r *FetchTopicPartition) EachRecord(fn func(*Record)) {
+func (r *FetchTopicPartition) EachRecord(fn func(Record)) {
 	for _, r := range r.Records {
 		fn(r)
 	}
