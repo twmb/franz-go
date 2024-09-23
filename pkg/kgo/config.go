@@ -1353,7 +1353,7 @@ func ConsumeRegex() ConsumerOpt {
 // in order to minimize the number of allocations.
 //
 // By enabling this option, the records returned by PollFetches/PollRecords
-// can be sent back to the pool via ReuseRecords method in order to be recycled.
+// can be sent back to the pool via Reuse method in order to be recycled.
 //
 // This option is particularly useful for use cases where the volume of generated records is very high,
 // as it can negatively impact performance due to the extra GC overhead.
