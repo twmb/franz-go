@@ -274,6 +274,9 @@ func (p *FetchPartition) EachRecord(fn func(*Record)) {
 type FetchTopic struct {
 	// Topic is the topic this is for.
 	Topic string
+	// TopicID is the ID of the topic, if your cluster supports returning
+	// topic IDs in fetch responses (Kafka 3.1+).
+	TopicID [16]byte
 	// Partitions contains individual partitions in the topic that were
 	// fetched.
 	Partitions []FetchPartition
@@ -560,6 +563,7 @@ func (fs Fetches) EachTopic(fn func(FetchTopic)) {
 	for topic, partitions := range topics {
 		fn(FetchTopic{
 			topic,
+			[16]byte{},
 			partitions,
 		})
 	}
