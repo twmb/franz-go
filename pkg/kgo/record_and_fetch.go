@@ -345,8 +345,8 @@ type FetchError struct {
 //     client for.
 //
 //  3. an untyped batch parse failure; these are usually unrecoverable by
-//     restarts, and it may be best to just let the client continue. However,
-//     restarting is an option, but you may need to manually repair your
+//     restarts, and it may be best to just let the client continue.
+//     Restarting is an option, but you may need to manually repair your
 //     partition.
 //
 //  4. an injected ErrClientClosed; this is a fatal informational error that
