@@ -504,6 +504,7 @@ func (mp metadataPartition) newPartition(cl *Client, isProduce bool) *topicParti
 			failing:             mp.loadErr != 0,
 			sink:                mp.sns.sink,
 			topicPartitionData:  td,
+			lastAckedOffset:     -1,
 		}
 	} else {
 		p.cursor = &cursor{
