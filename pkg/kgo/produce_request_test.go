@@ -195,6 +195,43 @@ func TestIssue769(t *testing.T) {
 	}
 }
 
+func TestIssue831(t *testing.T) {
+	t.Parallel()
+
+	topic, cleanup := tmpTopic(t)
+	defer cleanup()
+
+	cl, _ := newTestClient(
+		DefaultProduceTopic(topic),
+		UnknownTopicRetries(-1),
+		MaxBufferedRecords(1),
+	)
+	defer cl.Close()
+
+	var wg sync.WaitGroup
+	for i := 0; i < 500; i++ {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		wg.Add(1)
+		go cl.Produce(ctx, &Record{Value: []byte("foo")}, func(*Record, error) {
+			wg.Done()
+		})
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		wg.Wait()
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(15 * time.Second):
+		t.Fatal("still trying to produce after delay")
+	}
+}
+
 // This file contains golden tests against kmsg AppendTo's to ensure our custom
 // encoding is correct.
 

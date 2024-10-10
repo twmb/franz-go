@@ -24,9 +24,9 @@ linters:
     - asciicheck
     - bidichk
     - bodyclose
+    - copyloopvar
     - durationcheck
     - exhaustive
-    - exportloopref
     - gocritic
     - gofmt
     - gofumpt
@@ -74,6 +74,7 @@ linters-settings:
     excludes:
       - G104 # unhandled errors, we exclude for the same reason we do not use errcheck
       - G404 # we want math/rand
+      - G115 # irrelevant flags in this repo
 
   # Gocritic is a meta linter that has very good lints, and most of the
   # experimental ones are very good too. We opt into everything, which helps
