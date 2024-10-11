@@ -43955,8 +43955,15 @@ type ListTransactionsRequest struct {
 
 	// The producer IDs to filter by: if empty, all transactions will be
 	// returned; if non-empty, only transactions which match one of the filtered
-	// producer IDs will be returned
+	// producer IDs will be returned.
 	ProducerIDFilters []int64
+
+	// Duration (in millis) to filter by: if < 0, all transactions will be
+	// returned; otherwise, only transactions running longer than this duration
+	// will be returned.
+	//
+	// This field has a default of -1.
+	DurationFilterMillis int64 // v1+
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
 	UnknownTags Tags
@@ -44014,6 +44021,10 @@ func (v *ListTransactionsRequest) AppendTo(dst []byte) []byte {
 			v := v[i]
 			dst = kbin.AppendInt64(dst, v)
 		}
+	}
+	if version >= 1 {
+		v := v.DurationFilterMillis
+		dst = kbin.AppendInt64(dst, v)
 	}
 	if isFlexible {
 		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
@@ -44097,6 +44108,10 @@ func (v *ListTransactionsRequest) readFrom(src []byte, unsafe bool) error {
 		v = a
 		s.ProducerIDFilters = v
 	}
+	if version >= 1 {
+		v := b.Int64()
+		s.DurationFilterMillis = v
+	}
 	if isFlexible {
 		s.UnknownTags = internalReadTags(&b)
 	}
@@ -44114,6 +44129,7 @@ func NewPtrListTransactionsRequest() *ListTransactionsRequest {
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to ListTransactionsRequest.
 func (v *ListTransactionsRequest) Default() {
+	v.DurationFilterMillis = -1
 }
 
 // NewListTransactionsRequest returns a default ListTransactionsRequest

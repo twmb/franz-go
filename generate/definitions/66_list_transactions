@@ -8,8 +8,12 @@ ListTransactionsRequest => key 66, max version 0, flexible v0+
   StateFilters: [string]
   // The producer IDs to filter by: if empty, all transactions will be
   // returned; if non-empty, only transactions which match one of the filtered
-  // producer IDs will be returned
+  // producer IDs will be returned.
   ProducerIDFilters: [int64]
+  // Duration (in millis) to filter by: if < 0, all transactions will be
+  // returned; otherwise, only transactions running longer than this duration
+  // will be returned.
+  DurationFilterMillis: int64(-1) // v1+
 
 // ListTransactionsResponse is a response to a ListTransactionsRequest.
 ListTransactionsResponse =>
