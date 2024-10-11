@@ -379,6 +379,7 @@ func (vs *Versions) versionGuess(opts ...VersionGuessOpt) guess {
 		{max350, "v3.5"},
 		{max360, "v3.6"},
 		{max370, "v3.7"},
+		{max380, "v3.8"},
 	} {
 		for k, v := range comparison.cmp.filter(cfg.listener) {
 			if v == -1 {
@@ -1182,6 +1183,9 @@ var max380 = nextMax(max370, func(v listenerKeys) listenerKeys {
 	v = append(v,
 		k(zkBroker, rBroker), // 69 consumer group describe
 	)
+
+	// KAFKA-16265 b4e96913cc6c827968e47a31261e0bd8fdf677b5 KIP-994 (part 1)
+	v[66].inc()
 
 	return v
 })
