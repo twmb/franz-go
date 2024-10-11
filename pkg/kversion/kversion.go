@@ -1171,6 +1171,18 @@ var max380 = nextMax(max370, func(v listenerKeys) listenerKeys {
 	v[26].inc() // 4 end txn
 	v[28].inc() // 4 txn offset commit
 
+	// KAFKA-15460 68745ef21a9d8fe0f37a8c5fbc7761a598718d46 KIP-848
+	v[16].inc() // 5 list groups
+
+	// KAFKA-14509 90e646052a17e3f6ec1a013d76c1e6af2fbb756e KIP-848 added
+	// 7b0352f1bd9b923b79e60b18b40f570d4bfafcc0
+	// b7c99e22a77392d6053fe231209e1de32b50a98b
+	// 68389c244e720566aaa8443cd3fc0b9d2ec4bb7a
+	// 5f410ceb04878ca44d2d007655155b5303a47907 stabilized
+	v = append(v,
+		k(zkBroker, rBroker), // 69 consumer group describe
+	)
+
 	return v
 })
 
