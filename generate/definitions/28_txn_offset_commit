@@ -1,7 +1,7 @@
 // TxnOffsetCommitRequest sends offsets that are a part of this transaction
 // to be committed once the transaction itself finishes. This effectively
 // replaces OffsetCommitRequest for when using transactions.
-TxnOffsetCommitRequest => key 28, max version 3, flexible v3+, group coordinator
+TxnOffsetCommitRequest => key 28, max version 4, flexible v3+, group coordinator
   // TransactionalID is the transactional ID to use for this request.
   TransactionalID: string
   // Group is the group consumed in this transaction and to be used for

@@ -3,7 +3,7 @@
 // This coordinator is different from the broker leader coordinator. This
 // coordinator is the partition leader for the partition that is storing
 // the group or transaction ID.
-FindCoordinatorRequest => key 10, max version 4, flexible v3+
+FindCoordinatorRequest => key 10, max version 5, flexible v3+
   // CoordinatorKey is the ID to use for finding the coordinator. For groups,
   // this is the group name, for transactional producer, this is the
   // transactional ID.

@@ -6,7 +6,7 @@
 // Note that the special client ID "__admin_client" will allow you to produce
 // records to internal topics. This is generally recommended if you want to
 // break your Kafka cluster.
-ProduceRequest => key 0, max version 10, flexible v9+
+ProduceRequest => key 0, max version 11, flexible v9+
   // TransactionID is the transaction ID to use for this request, allowing for
   // exactly once semantics.
   TransactionID: nullable-string // v3+

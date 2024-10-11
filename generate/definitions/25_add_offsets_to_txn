@@ -6,7 +6,7 @@
 // Internally, this request simply adds the __consumer_offsets topic as a
 // partition for this transaction with AddPartitionsToTxn for the partition
 // in that topic that contains the group.
-AddOffsetsToTxnRequest => key 25, max version 3, flexible v3+, txn coordinator
+AddOffsetsToTxnRequest => key 25, max version 4, flexible v3+, txn coordinator
   // TransactionalID is the transactional ID to use for this request.
   TransactionalID: string
   // ProducerID is the producer ID of the client for this transactional ID

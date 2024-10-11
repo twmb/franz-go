@@ -4,7 +4,7 @@
 //
 // Note that you do not need to go to a txn coordinator if you are initializing
 // a producer id without a transactional id.
-InitProducerIDRequest => key 22, max version 4, flexible v2+, txn coordinator
+InitProducerIDRequest => key 22, max version 5, flexible v2+, txn coordinator
   // TransactionalID is the ID to use for transactions if using transactions.
   TransactionalID: nullable-string
   // TransactionTimeoutMillis is how long a transaction is allowed before

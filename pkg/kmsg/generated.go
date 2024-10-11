@@ -2783,7 +2783,7 @@ type ProduceRequest struct {
 }
 
 func (*ProduceRequest) Key() int16                       { return 0 }
-func (*ProduceRequest) MaxVersion() int16                { return 10 }
+func (*ProduceRequest) MaxVersion() int16                { return 11 }
 func (v *ProduceRequest) SetVersion(version int16)       { v.Version = version }
 func (v *ProduceRequest) GetVersion() int16              { return v.Version }
 func (v *ProduceRequest) IsFlexible() bool               { return v.Version >= 9 }
@@ -3306,7 +3306,7 @@ type ProduceResponse struct {
 }
 
 func (*ProduceResponse) Key() int16                         { return 0 }
-func (*ProduceResponse) MaxVersion() int16                  { return 10 }
+func (*ProduceResponse) MaxVersion() int16                  { return 11 }
 func (v *ProduceResponse) SetVersion(version int16)         { v.Version = version }
 func (v *ProduceResponse) GetVersion() int16                { return v.Version }
 func (v *ProduceResponse) IsFlexible() bool                 { return v.Version >= 9 }
@@ -12493,7 +12493,7 @@ type FindCoordinatorRequest struct {
 }
 
 func (*FindCoordinatorRequest) Key() int16                 { return 10 }
-func (*FindCoordinatorRequest) MaxVersion() int16          { return 4 }
+func (*FindCoordinatorRequest) MaxVersion() int16          { return 5 }
 func (v *FindCoordinatorRequest) SetVersion(version int16) { v.Version = version }
 func (v *FindCoordinatorRequest) GetVersion() int16        { return v.Version }
 func (v *FindCoordinatorRequest) IsFlexible() bool         { return v.Version >= 3 }
@@ -12733,7 +12733,7 @@ type FindCoordinatorResponse struct {
 }
 
 func (*FindCoordinatorResponse) Key() int16                 { return 10 }
-func (*FindCoordinatorResponse) MaxVersion() int16          { return 4 }
+func (*FindCoordinatorResponse) MaxVersion() int16          { return 5 }
 func (v *FindCoordinatorResponse) SetVersion(version int16) { v.Version = version }
 func (v *FindCoordinatorResponse) GetVersion() int16        { return v.Version }
 func (v *FindCoordinatorResponse) IsFlexible() bool         { return v.Version >= 3 }
@@ -19348,7 +19348,7 @@ type InitProducerIDRequest struct {
 }
 
 func (*InitProducerIDRequest) Key() int16                 { return 22 }
-func (*InitProducerIDRequest) MaxVersion() int16          { return 4 }
+func (*InitProducerIDRequest) MaxVersion() int16          { return 5 }
 func (v *InitProducerIDRequest) SetVersion(version int16) { v.Version = version }
 func (v *InitProducerIDRequest) GetVersion() int16        { return v.Version }
 func (v *InitProducerIDRequest) IsFlexible() bool         { return v.Version >= 2 }
@@ -19523,7 +19523,7 @@ type InitProducerIDResponse struct {
 }
 
 func (*InitProducerIDResponse) Key() int16                         { return 22 }
-func (*InitProducerIDResponse) MaxVersion() int16                  { return 4 }
+func (*InitProducerIDResponse) MaxVersion() int16                  { return 5 }
 func (v *InitProducerIDResponse) SetVersion(version int16)         { v.Version = version }
 func (v *InitProducerIDResponse) GetVersion() int16                { return v.Version }
 func (v *InitProducerIDResponse) IsFlexible() bool                 { return v.Version >= 2 }
@@ -20367,7 +20367,7 @@ type AddPartitionsToTxnRequest struct {
 }
 
 func (*AddPartitionsToTxnRequest) Key() int16                 { return 24 }
-func (*AddPartitionsToTxnRequest) MaxVersion() int16          { return 4 }
+func (*AddPartitionsToTxnRequest) MaxVersion() int16          { return 5 }
 func (v *AddPartitionsToTxnRequest) SetVersion(version int16) { v.Version = version }
 func (v *AddPartitionsToTxnRequest) GetVersion() int16        { return v.Version }
 func (v *AddPartitionsToTxnRequest) IsFlexible() bool         { return v.Version >= 3 }
@@ -20953,7 +20953,7 @@ type AddPartitionsToTxnResponse struct {
 }
 
 func (*AddPartitionsToTxnResponse) Key() int16                 { return 24 }
-func (*AddPartitionsToTxnResponse) MaxVersion() int16          { return 4 }
+func (*AddPartitionsToTxnResponse) MaxVersion() int16          { return 5 }
 func (v *AddPartitionsToTxnResponse) SetVersion(version int16) { v.Version = version }
 func (v *AddPartitionsToTxnResponse) GetVersion() int16        { return v.Version }
 func (v *AddPartitionsToTxnResponse) IsFlexible() bool         { return v.Version >= 3 }
@@ -21388,7 +21388,7 @@ type AddOffsetsToTxnRequest struct {
 }
 
 func (*AddOffsetsToTxnRequest) Key() int16                 { return 25 }
-func (*AddOffsetsToTxnRequest) MaxVersion() int16          { return 3 }
+func (*AddOffsetsToTxnRequest) MaxVersion() int16          { return 4 }
 func (v *AddOffsetsToTxnRequest) SetVersion(version int16) { v.Version = version }
 func (v *AddOffsetsToTxnRequest) GetVersion() int16        { return v.Version }
 func (v *AddOffsetsToTxnRequest) IsFlexible() bool         { return v.Version >= 3 }
@@ -21559,7 +21559,7 @@ type AddOffsetsToTxnResponse struct {
 }
 
 func (*AddOffsetsToTxnResponse) Key() int16                 { return 25 }
-func (*AddOffsetsToTxnResponse) MaxVersion() int16          { return 3 }
+func (*AddOffsetsToTxnResponse) MaxVersion() int16          { return 4 }
 func (v *AddOffsetsToTxnResponse) SetVersion(version int16) { v.Version = version }
 func (v *AddOffsetsToTxnResponse) GetVersion() int16        { return v.Version }
 func (v *AddOffsetsToTxnResponse) IsFlexible() bool         { return v.Version >= 3 }
@@ -21668,7 +21668,7 @@ type EndTxnRequest struct {
 }
 
 func (*EndTxnRequest) Key() int16                 { return 26 }
-func (*EndTxnRequest) MaxVersion() int16          { return 3 }
+func (*EndTxnRequest) MaxVersion() int16          { return 4 }
 func (v *EndTxnRequest) SetVersion(version int16) { v.Version = version }
 func (v *EndTxnRequest) GetVersion() int16        { return v.Version }
 func (v *EndTxnRequest) IsFlexible() bool         { return v.Version >= 3 }
@@ -21832,7 +21832,7 @@ type EndTxnResponse struct {
 }
 
 func (*EndTxnResponse) Key() int16                         { return 26 }
-func (*EndTxnResponse) MaxVersion() int16                  { return 3 }
+func (*EndTxnResponse) MaxVersion() int16                  { return 4 }
 func (v *EndTxnResponse) SetVersion(version int16)         { v.Version = version }
 func (v *EndTxnResponse) GetVersion() int16                { return v.Version }
 func (v *EndTxnResponse) IsFlexible() bool                 { return v.Version >= 3 }
@@ -22678,7 +22678,7 @@ type TxnOffsetCommitRequest struct {
 }
 
 func (*TxnOffsetCommitRequest) Key() int16                   { return 28 }
-func (*TxnOffsetCommitRequest) MaxVersion() int16            { return 3 }
+func (*TxnOffsetCommitRequest) MaxVersion() int16            { return 4 }
 func (v *TxnOffsetCommitRequest) SetVersion(version int16)   { v.Version = version }
 func (v *TxnOffsetCommitRequest) GetVersion() int16          { return v.Version }
 func (v *TxnOffsetCommitRequest) IsFlexible() bool           { return v.Version >= 3 }
@@ -23143,7 +23143,7 @@ type TxnOffsetCommitResponse struct {
 }
 
 func (*TxnOffsetCommitResponse) Key() int16                 { return 28 }
-func (*TxnOffsetCommitResponse) MaxVersion() int16          { return 3 }
+func (*TxnOffsetCommitResponse) MaxVersion() int16          { return 4 }
 func (v *TxnOffsetCommitResponse) SetVersion(version int16) { v.Version = version }
 func (v *TxnOffsetCommitResponse) GetVersion() int16        { return v.Version }
 func (v *TxnOffsetCommitResponse) IsFlexible() bool         { return v.Version >= 3 }

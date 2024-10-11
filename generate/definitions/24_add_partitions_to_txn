@@ -8,7 +8,7 @@
 //
 // Version 4 adds VerifyOnly field to check if partitions are already in
 // transaction and adds support to batch multiple transactions.
-AddPartitionsToTxnRequest => key 24, max version 4, flexible v3+, txn coordinator
+AddPartitionsToTxnRequest => key 24, max version 5, flexible v3+, txn coordinator
   // TransactionalID is the transactional ID to use for this request.
   TransactionalID: string // v0-v3
   // ProducerID is the producer ID of the client for this transactional ID
