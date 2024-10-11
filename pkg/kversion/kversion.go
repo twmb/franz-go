@@ -334,7 +334,7 @@ func (vs *Versions) versionGuess(opts ...VersionGuessOpt) guess {
 		//
 		// TODO: add introduced-version to differentiate some specific
 		// keys.
-		skipKeys: []int16{4, 5, 6, 7, 27, 52, 53, 54, 55, 56, 57, 58, 59, 62, 63, 64, 67},
+		skipKeys: []int16{4, 5, 6, 7, 27, 52, 53, 54, 55, 56, 57, 58, 59, 62, 63, 64, 67, 74, 75},
 	}
 	for _, opt := range opts {
 		opt.apply(&cfg)
