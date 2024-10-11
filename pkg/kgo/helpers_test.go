@@ -404,9 +404,9 @@ func (c *testConsumer) wait() {
 	c.wg.Wait()
 }
 
-func (c *testConsumer) goRun(transactional bool, etlsBeforeQuit int) {
+func (c *testConsumer) goRun(transactional bool, etlsBeforeQuit int, assumeStable bool) {
 	if transactional {
-		c.goTransact(etlsBeforeQuit)
+		c.goTransact(etlsBeforeQuit, assumeStable)
 	} else {
 		c.goGroupETL(etlsBeforeQuit)
 	}
@@ -419,6 +419,7 @@ func testChainETL(
 	errs chan error,
 	transactional bool,
 	balancer GroupBalancer,
+	assumeStable bool,
 ) {
 	var (
 		/////////////
@@ -484,24 +485,24 @@ func testChainETL(
 	////////////////////
 
 	for i := 0; i < 3; i++ { // three consumers start with standard poll&commit behavior
-		consumers1.goRun(transactional, -1)
-		consumers2.goRun(transactional, -1)
-		consumers3.goRun(transactional, -1)
+		consumers1.goRun(transactional, -1, assumeStable)
+		consumers2.goRun(transactional, -1, assumeStable)
+		consumers3.goRun(transactional, -1, assumeStable)
 	}
 
-	consumers1.goRun(transactional, 0) // bail immediately
-	consumers1.goRun(transactional, 2) // bail after two txns
-	consumers2.goRun(transactional, 2) // same
+	consumers1.goRun(transactional, 0, assumeStable) // bail immediately
+	consumers1.goRun(transactional, 2, assumeStable) // bail after two txns
+	consumers2.goRun(transactional, 2, assumeStable) // same
 
 	time.Sleep(5 * time.Second)
 	for i := 0; i < 3; i++ { // trigger rebalance after 5s with more consumers
-		consumers1.goRun(transactional, -1)
-		consumers2.goRun(transactional, -1)
-		consumers3.goRun(transactional, -1)
+		consumers1.goRun(transactional, -1, assumeStable)
+		consumers2.goRun(transactional, -1, assumeStable)
+		consumers3.goRun(transactional, -1, assumeStable)
 	}
 
-	consumers2.goRun(transactional, 0) // bail immediately
-	consumers1.goRun(transactional, 1) // bail after one txn
+	consumers2.goRun(transactional, 0, assumeStable) // bail immediately
+	consumers1.goRun(transactional, 1, assumeStable) // bail after one txn
 
 	doneConsume := make(chan struct{})
 	go func() {

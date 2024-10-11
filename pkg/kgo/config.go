@@ -160,10 +160,11 @@ type cfg struct {
 	balancers  []GroupBalancer // balancers we can use
 	protocol   string          // "consumer" by default, expected to never be overridden
 
-	sessionTimeout    time.Duration
-	rebalanceTimeout  time.Duration
-	heartbeatInterval time.Duration
-	requireStable     bool
+	sessionTimeout               time.Duration
+	rebalanceTimeout             time.Duration
+	heartbeatInterval            time.Duration
+	requireStable                bool
+	assumeConsumersRequireStable bool
 
 	onAssigned func(context.Context, *Client, map[string][]int32)
 	onRevoked  func(context.Context, *Client, map[string][]int32)
@@ -1503,8 +1504,19 @@ func HeartbeatInterval(interval time.Duration) GroupOpt {
 // transactional timeouts to a small value (10s) rather than the default 60s.
 // Lowering the transactional timeout will reduce the chance that consumers are
 // entirely blocked.
+//
+// If all consumers in your group also require stable fetch offsets, you may
+// want to additionally use [AssumeConsumersRequireStable].
 func RequireStableFetchOffsets() GroupOpt {
 	return groupOpt{func(cfg *cfg) { cfg.requireStable = true }}
+}
+
+// AssumeConsumersRequireStable opts the [GroupTransactSession] into NOT
+// aborting whenever rebalance occur (i.e., opts this client into assuming
+// every other client in the group also requires stable offsets). This
+// option should be used in tandem with [RequireStableFetchOffsets].
+func AssumeConsumersRequireStable() GroupOpt {
+	return groupOpt{func(cfg *cfg) { cfg.assumeConsumersRequireStable = true }}
 }
 
 // BlockRebalanceOnPoll switches the client to block rebalances whenever you

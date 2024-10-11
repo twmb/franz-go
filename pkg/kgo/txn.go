@@ -31,8 +31,10 @@ const (
 // (EOS).
 //
 // If you are running Kafka 2.5+, it is strongly recommended that you also use
-// RequireStableFetchOffsets. See that config option's documentation for more
-// details.
+// [RequireStableFetchOffsets]. See that config option's documentation for more
+// details. By default, if the client detects any rebalance, any active transaction
+// is aborted for safety. You can use the [AssumeConsumersRequireStable] to opt into
+// NOT aborting automatically on rebalance. See issue 754 for more detail.
 type GroupTransactSession struct {
 	cl *Client
 
@@ -94,18 +96,27 @@ func NewGroupTransactSession(opts ...Opt) (*GroupTransactSession, error) {
 		userRevoked := cfg.onRevoked
 		cfg.onRevoked = func(ctx context.Context, cl *Client, rev map[string][]int32) {
 			s.failMu.Lock()
-			defer s.failMu.Unlock()
 			if s.revoked {
+				s.failMu.Unlock()
 				return
 			}
 
 			if cl.consumer.g.cooperative.Load() && len(rev) == 0 && !s.revoked {
 				cl.cfg.logger.Log(LogLevelInfo, "transact session in on_revoke with nothing to revoke; allowing next commit")
+			} else if cl.cfg.assumeConsumersRequireStable {
+				cl.cfg.logger.Log(LogLevelInfo, "transact session in on_revoke, but we are assuming all consumers require stable; allowing commit while in user revoked")
+				defer func() {
+					s.failMu.Lock()
+					s.revoked = true
+					close(s.revokedCh)
+					s.failMu.Unlock()
+				}()
 			} else {
 				cl.cfg.logger.Log(LogLevelInfo, "transact session in on_revoke; aborting next commit if we are currently in a transaction")
 				s.revoked = true
 				close(s.revokedCh)
 			}
+			s.failMu.Unlock()
 
 			if userRevoked != nil {
 				userRevoked(ctx, cl, rev)
@@ -115,14 +126,15 @@ func NewGroupTransactSession(opts ...Opt) (*GroupTransactSession, error) {
 		userLost := cfg.onLost
 		cfg.onLost = func(ctx context.Context, cl *Client, lost map[string][]int32) {
 			s.failMu.Lock()
-			defer s.failMu.Unlock()
 			if s.lost {
+				s.failMu.Unlock()
 				return
 			}
 
 			cl.cfg.logger.Log(LogLevelInfo, "transact session in on_lost; aborting next commit if we are currently in a transaction")
 			s.lost = true
 			close(s.lostCh)
+			s.failMu.Unlock()
 
 			if userLost != nil {
 				userLost(ctx, cl, lost)

@@ -101,6 +101,7 @@ func TestGroupETL(t *testing.T) {
 				errs,
 				false,
 				tc.balancer,
+				false,
 			)
 		})
 	}

@@ -108,13 +108,15 @@ func TestTxnEtl(t *testing.T) {
 	////////////////////////////
 
 	for _, tc := range []struct {
-		name     string
-		balancer GroupBalancer
+		name         string
+		balancer     GroupBalancer
+		assumeStable bool
 	}{
-		{"roundrobin", RoundRobinBalancer()},
-		{"range", RangeBalancer()},
-		{"sticky", StickyBalancer()},
-		{"cooperative-sticky", CooperativeStickyBalancer()},
+		{"roundrobin", RoundRobinBalancer(), false},
+		{"range", RangeBalancer(), true},
+		{"sticky", StickyBalancer(), false},
+		{"cooperative-sticky", CooperativeStickyBalancer(), true},
+		{"cooperative-sticky", CooperativeStickyBalancer(), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			testChainETL(
@@ -124,17 +126,18 @@ func TestTxnEtl(t *testing.T) {
 				errs,
 				true,
 				tc.balancer,
+				tc.assumeStable,
 			)
 		})
 	}
 }
 
-func (c *testConsumer) goTransact(txnsBeforeQuit int) {
+func (c *testConsumer) goTransact(txnsBeforeQuit int, assumeStable bool) {
 	c.wg.Add(1)
-	go c.transact(txnsBeforeQuit)
+	go c.transact(txnsBeforeQuit, assumeStable)
 }
 
-func (c *testConsumer) transact(txnsBeforeQuit int) {
+func (c *testConsumer) transact(txnsBeforeQuit int, assumeStable bool) {
 	defer c.wg.Done()
 
 	opts := []Opt{
@@ -155,12 +158,21 @@ func (c *testConsumer) transact(txnsBeforeQuit int) {
 		Balancers(c.balancer),
 		MaxBufferedRecords(10000),
 	}
-	if requireStableFetch {
-		opts = append(opts, RequireStableFetchOffsets())
+	var txnSess *GroupTransactSession
+	if assumeStable {
+		opts = append(opts, OnPartitionsRevoked(func(ctx context.Context, cl *Client, _ map[string][]int32) {
+			txnSess.End(ctx, TryCommit)
+		}))
+	}
+	if requireStableFetch || assumeStable {
+		opts = append(opts,
+			RequireStableFetchOffsets(),
+			AssumeConsumersRequireStable(),
+		)
 	}
 	opts = append(opts, testClientOpts()...)
 
-	txnSess, _ := NewGroupTransactSession(opts...)
+	txnSess, _ = NewGroupTransactSession(opts...)
 	defer txnSess.Close()
 
 	ntxns := 0 // for if txnsBeforeQuit is non-negative
