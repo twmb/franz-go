@@ -67,6 +67,7 @@ var versions = []struct {
 	{"v3.5", V3_5_0()},
 	{"v3.6", V3_6_0()},
 	{"v3.7", V3_7_0()},
+	{"v3.8", V3_8_0()},
 }
 
 // VersionStrings returns all recognized versions, minus any patch, that can be
@@ -520,6 +521,7 @@ func V3_4_0() *Versions  { return zkBrokerOf(max340) }
 func V3_5_0() *Versions  { return zkBrokerOf(max350) }
 func V3_6_0() *Versions  { return zkBrokerOf(max360) }
 func V3_7_0() *Versions  { return zkBrokerOf(max370) }
+func V3_8_0() *Versions  { return zkBrokerOf(max380) }
 
 func zkBrokerOf(lks listenerKeys) *Versions {
 	return &Versions{lks.filter(zkBroker)}
@@ -1158,8 +1160,22 @@ var max370 = nextMax(max360, func(v listenerKeys) listenerKeys {
 	return v
 })
 
+var max380 = nextMax(max370, func(v listenerKeys) listenerKeys {
+	// KAFKA-16314 2e8d69b78ca52196decd851c8520798aa856c073 KIP-890
+	// Then error rename in cf1ba099c0723f9cf65dda4cd334d36b7ede6327
+	v[0].inc()  // 11 produce
+	v[10].inc() // 5 find coordinator
+	v[22].inc() // 5 init producer id
+	v[24].inc() // 5 add partitions to txn
+	v[25].inc() // 4 add offsets to txn
+	v[26].inc() // 4 end txn
+	v[28].inc() // 4 txn offset commit
+
+	return v
+})
+
 var (
-	maxStable = max370
+	maxStable = max380
 	maxTip    = nextMax(maxStable, func(v listenerKeys) listenerKeys {
 		return v
 	})

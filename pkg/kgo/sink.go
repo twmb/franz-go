@@ -406,6 +406,7 @@ func (s *sink) produce(sem <-chan struct{}) bool {
 
 	if txnReq != nil {
 		// txnReq can fail from:
+		// - TransactionAbortable
 		// - retry failure
 		// - auth failure
 		// - producer id mapping / epoch errors
@@ -417,6 +418,10 @@ func (s *sink) produce(sem <-chan struct{}) bool {
 		batchesStripped, err := s.doTxnReq(req, txnReq)
 		if err != nil {
 			switch {
+			case errors.Is(err, kerr.TransactionAbortable):
+				// If we get TransactionAbortable, we continue into producing.
+				// The produce will fail with the same error, and this is the
+				// only way to notify the user to abort the txn.
 			case isRetryableBrokerErr(err) || isDialNonTimeoutErr(err):
 				s.cl.bumpRepeatedLoadErr(err)
 				s.cl.cfg.logger.Log(LogLevelWarn, "unable to AddPartitionsToTxn due to retryable broker err, bumping client's buffered record load errors by 1 and retrying", "err", err)
@@ -431,8 +436,8 @@ func (s *sink) produce(sem <-chan struct{}) bool {
 				// with produce request vs. end txn (KAFKA-12671)
 				s.cl.failProducerID(id, epoch, err)
 				s.cl.cfg.logger.Log(LogLevelError, "fatal AddPartitionsToTxn error, failing all buffered records (it is possible the client can recover after EndTransaction)", "broker", logID(s.nodeID), "err", err)
+				return false
 			}
-			return false
 		}
 
 		// If we stripped everything, ensure we backoff to force a
@@ -563,7 +568,7 @@ func (s *sink) issueTxnReq(
 			continue
 		}
 		for _, partition := range topic.Partitions {
-			if err := kerr.ErrorForCode(partition.ErrorCode); err != nil {
+			if err := kerr.ErrorForCode(partition.ErrorCode); err != nil && err != kerr.TransactionAbortable { // see below for txn abortable
 				// OperationNotAttempted is set for all partitions that are authorized
 				// if any partition is unauthorized _or_ does not exist. We simply remove
 				// unattempted partitions and treat them as retryable.
@@ -2057,7 +2062,7 @@ func (b *recBatch) tryBuffer(pr promisedRec, produceVersion, maxBatchBytes int32
 //////////////
 
 func (*produceRequest) Key() int16           { return 0 }
-func (*produceRequest) MaxVersion() int16    { return 10 }
+func (*produceRequest) MaxVersion() int16    { return 11 }
 func (p *produceRequest) SetVersion(v int16) { p.version = v }
 func (p *produceRequest) GetVersion() int16  { return p.version }
 func (p *produceRequest) IsFlexible() bool   { return p.version >= 9 }
