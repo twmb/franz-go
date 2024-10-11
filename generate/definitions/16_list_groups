@@ -1,12 +1,15 @@
 // ListGroupsRequest issues a request to list all groups.
 //
 // To list all groups in a cluster, this must be issued to every broker.
-ListGroupsRequest => key 16, max version 4, flexible v3+
+ListGroupsRequest => key 16, max version 5, flexible v3+
   // StatesFilter, proposed in KIP-518 and introduced in Kafka 2.6.0,
   // allows filtering groups by state, where a state is any of
   // "Preparing", "PreparingRebalance", "CompletingRebalance", "Stable",
   // "Dead", or "Empty". If empty, all groups are returned.
   StatesFilter: [string] // v4+
+  // TypesFilter, part of KIP-848, filters the types of groups we want
+  // to list. If empty, all groups are returned.
+  TypesFilter: [string] // v5+
 
 // ListGroupsResponse is returned from a ListGroupsRequest.
 ListGroupsResponse =>
@@ -25,3 +28,5 @@ ListGroupsResponse =>
     ProtocolType: string
     // The group state.
     GroupState: string // v4+
+    // The group type.
+    GroupType: string // v5+

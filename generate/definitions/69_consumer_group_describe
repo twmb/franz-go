@@ -1,0 +1,67 @@
+// Assignment contains consumer group assignments.
+Assignment => not top level, no encoding, flexible v0+
+  // The topics & partitions assigned to the member.
+  TopicPartitions: [=>]
+    TopicID: uuid
+    Topic: string
+    Partitions: [int32]
+
+// ConsumerGroupDescribe is a part of KIP-848; this is the
+// "next generation" equivalent of DescribeGroups.
+ConsumerGroupDescribeRequest => key 69, max version 0, flexible v0+
+  // The IDs of the groups to describe.
+  Groups: [string]
+  // Whether to include authorized operations.
+  IncludeAuthorizedOperations: bool
+
+// ConsumerGroupDescribeResponse is returned from a ConsumerGroupDescribeRequest.
+ConsumerGroupDescribeResponse =>
+  ThrottleMillis
+  Groups: [=>]
+    // ErrorCode is the error for this response.
+    //
+    // Supported errors:
+    // - GROUP_AUTHORIZATION_FAILED (version 0+)
+    // - NOT_COORDINATOR (version 0+)
+    // - COORDINATOR_NOT_AVAILABLE (version 0+)
+    // - COORDINATOR_LOAD_IN_PROGRESS (version 0+)
+    // - INVALID_REQUEST (version 0+)
+    // - INVALID_GROUP_ID (version 0+)
+    // - GROUP_ID_NOT_FOUND (version 0+)
+    ErrorCode: int16
+    // A supplementary message if this errored.
+    ErrorMessage: nullable-string
+    // The group ID.
+    Group: string
+    // The group state.
+    State: string
+    // The group epoch.
+    Epoch: int32
+    // The assignment epoch.
+    AssignmentEpoch: int32
+    // The selected assignor.
+    AssignorName: string
+    // Members of the group.
+    Members: [=>]
+      // The member ID.
+      MemberID: string
+      // The member instance ID, if any.
+      InstanceID: nullable-string
+      // The member rack ID, if any.
+      RackID: nullable-string
+      // The current member epoch.
+      MemberEpoch: int32
+      // The client ID.
+      ClientID: string
+      // The client host.
+      ClientHost: string
+      // The subscribed topic names.
+      SubscribedTopics: [string]
+      // The subscribed topic regex, if any.
+      SubscribedTopicRegex: nullable-string
+      // The current assignment.
+      Assignment: Assignment
+      // The target assignment.
+      TargetAssignment: Assignment
+    // 32 bit bitfield representing authorized operations for the group.
+    AuthorizedOperations: int32(-2147483648)
