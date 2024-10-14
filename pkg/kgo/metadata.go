@@ -350,6 +350,14 @@ func (cl *Client) updateMetadata() (retryWhy multiUpdateWhy, err error) {
 		for topic := range latest {
 			allTopics = append(allTopics, topic)
 		}
+
+		// We filter out topics will not match any of our regex's.
+		// This ensures that the `tps` field does not contain topics
+		// we will never use (the client works with misc. topics in
+		// there, but it's better to avoid it -- and allows us to use
+		// `tps` in GetConsumeTopics).
+		allTopics = c.filterMetadataAllTopics(allTopics)
+
 		tpsConsumerLoad = tpsConsumer.ensureTopics(allTopics)
 		defer tpsConsumer.storeData(tpsConsumerLoad)
 

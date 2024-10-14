@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"sort"
 	"sync/atomic"
 	"testing"
@@ -534,5 +535,73 @@ func TestIssue648(t *testing.T) {
 	})
 	if !found {
 		t.Errorf("did not see ErrUnknownTopicOrPartition")
+	}
+}
+
+func TestIssue810(t *testing.T) {
+	t.Parallel()
+
+	t1, cleanup1 := tmpTopicPartitions(t, 1)
+	defer cleanup1()
+
+	_, cleanup2 := tmpTopicPartitions(t, 1)
+	defer cleanup2()
+
+	// Non-regex consuming: topics are available immediately.
+	{
+		cl, _ := newTestClient(
+			ConsumeTopics(t1),
+			UnknownTopicRetries(-1),
+		)
+		defer cl.Close()
+
+		topics := cl.GetConsumeTopics()
+		exp := []string{t1}
+
+		if !reflect.DeepEqual(topics, exp) {
+			t.Errorf("non-regex got %v != exp %v", topics, exp)
+		}
+	}
+
+	// Regex consuming: topics are available only after discovery.
+	{
+		cl, _ := newTestClient(
+			ConsumeTopics(t1),
+			ConsumeRegex(),
+			UnknownTopicRetries(-1),
+			MetadataMaxAge(time.Second),
+			MetadataMinAge(100*time.Millisecond),
+		)
+		defer cl.Close()
+
+		var (
+			ticker  = time.NewTicker(100 * time.Millisecond)
+			fail    = time.NewTimer(15 * time.Second)
+			failed  bool
+			lastSaw []string
+			exp     = []string{t1}
+		)
+
+		defer ticker.Stop()
+		defer fail.Stop()
+
+	out:
+		for {
+			select {
+			case <-ticker.C:
+				lastSaw = cl.GetConsumeTopics()
+				if reflect.DeepEqual(lastSaw, exp) {
+					break out
+				}
+				cl.ForceMetadataRefresh()
+			case <-fail.C:
+				failed = true
+				break out
+			}
+		}
+
+		if failed {
+			t.Errorf("did not see expected topics in time, last saw %v != exp %v", lastSaw, exp)
+		}
 	}
 }

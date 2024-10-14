@@ -1186,6 +1186,44 @@ func (c *consumer) assignPartitions(assignments map[string]map[int32]Offset, how
 	}
 }
 
+// filterMetadataAllTopics, called BEFORE doOnMetadataUpdate, evaluates
+// all topics received against the user provided regex.
+func (c *consumer) filterMetadataAllTopics(topics []string) []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	var rns reNews
+	defer rns.log(&c.cl.cfg)
+
+	var reSeen map[string]bool
+	if c.d != nil {
+		reSeen = c.d.reSeen
+	} else {
+		reSeen = c.g.reSeen
+	}
+
+	keep := topics[:0]
+	for _, topic := range topics {
+		want, seen := reSeen[topic]
+		if !seen {
+			for rawRe, re := range c.cl.cfg.topics {
+				if want = re.MatchString(topic); want {
+					rns.add(rawRe, topic)
+					break
+				}
+			}
+			if !want {
+				rns.skip(topic)
+			}
+			reSeen[topic] = want
+		}
+		if want {
+			keep = append(keep, topic)
+		}
+	}
+	return keep
+}
+
 func (c *consumer) doOnMetadataUpdate() {
 	if !c.consuming() {
 		return
