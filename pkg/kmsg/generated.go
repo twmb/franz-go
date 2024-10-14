@@ -922,6 +922,8 @@ type GroupMetadataValueMember struct {
 	ClientHost string
 
 	// RebalanceTimeoutMillis is the rebalance timeout of this group member.
+	//
+	// This field has a default of -1.
 	RebalanceTimeoutMillis int32 // v1+
 
 	// SessionTimeoutMillis is the session timeout of this group member.
@@ -932,11 +934,15 @@ type GroupMetadataValueMember struct {
 
 	// Assignment is what the leader assigned this group member.
 	Assignment []byte
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v4+
 }
 
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to GroupMetadataValueMember.
 func (v *GroupMetadataValueMember) Default() {
+	v.RebalanceTimeoutMillis = -1
 }
 
 // NewGroupMetadataValueMember returns a default GroupMetadataValueMember
@@ -980,22 +986,33 @@ type GroupMetadataValue struct {
 
 	// CurrentStateTimestamp is the timestamp for this state of the group
 	// (stable, etc.).
+	//
+	// This field has a default of -1.
 	CurrentStateTimestamp int64 // v2+
 
 	// Members are the group members.
 	Members []GroupMetadataValueMember
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags // v4+
 }
 
 func (v *GroupMetadataValue) AppendTo(dst []byte) []byte {
 	version := v.Version
 	_ = version
+	isFlexible := version >= 4
+	_ = isFlexible
 	{
 		v := v.Version
 		dst = kbin.AppendInt16(dst, v)
 	}
 	{
 		v := v.ProtocolType
-		dst = kbin.AppendString(dst, v)
+		if isFlexible {
+			dst = kbin.AppendCompactString(dst, v)
+		} else {
+			dst = kbin.AppendString(dst, v)
+		}
 	}
 	{
 		v := v.Generation
@@ -1003,11 +1020,19 @@ func (v *GroupMetadataValue) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Protocol
-		dst = kbin.AppendNullableString(dst, v)
+		if isFlexible {
+			dst = kbin.AppendCompactNullableString(dst, v)
+		} else {
+			dst = kbin.AppendNullableString(dst, v)
+		}
 	}
 	{
 		v := v.Leader
-		dst = kbin.AppendNullableString(dst, v)
+		if isFlexible {
+			dst = kbin.AppendCompactNullableString(dst, v)
+		} else {
+			dst = kbin.AppendNullableString(dst, v)
+		}
 	}
 	if version >= 2 {
 		v := v.CurrentStateTimestamp
@@ -1015,24 +1040,44 @@ func (v *GroupMetadataValue) AppendTo(dst []byte) []byte {
 	}
 	{
 		v := v.Members
-		dst = kbin.AppendArrayLen(dst, len(v))
+		if isFlexible {
+			dst = kbin.AppendCompactArrayLen(dst, len(v))
+		} else {
+			dst = kbin.AppendArrayLen(dst, len(v))
+		}
 		for i := range v {
 			v := &v[i]
 			{
 				v := v.MemberID
-				dst = kbin.AppendString(dst, v)
+				if isFlexible {
+					dst = kbin.AppendCompactString(dst, v)
+				} else {
+					dst = kbin.AppendString(dst, v)
+				}
 			}
 			if version >= 3 {
 				v := v.InstanceID
-				dst = kbin.AppendNullableString(dst, v)
+				if isFlexible {
+					dst = kbin.AppendCompactNullableString(dst, v)
+				} else {
+					dst = kbin.AppendNullableString(dst, v)
+				}
 			}
 			{
 				v := v.ClientID
-				dst = kbin.AppendString(dst, v)
+				if isFlexible {
+					dst = kbin.AppendCompactString(dst, v)
+				} else {
+					dst = kbin.AppendString(dst, v)
+				}
 			}
 			{
 				v := v.ClientHost
-				dst = kbin.AppendString(dst, v)
+				if isFlexible {
+					dst = kbin.AppendCompactString(dst, v)
+				} else {
+					dst = kbin.AppendString(dst, v)
+				}
 			}
 			if version >= 1 {
 				v := v.RebalanceTimeoutMillis
@@ -1044,13 +1089,29 @@ func (v *GroupMetadataValue) AppendTo(dst []byte) []byte {
 			}
 			{
 				v := v.Subscription
-				dst = kbin.AppendBytes(dst, v)
+				if isFlexible {
+					dst = kbin.AppendCompactBytes(dst, v)
+				} else {
+					dst = kbin.AppendBytes(dst, v)
+				}
 			}
 			{
 				v := v.Assignment
-				dst = kbin.AppendBytes(dst, v)
+				if isFlexible {
+					dst = kbin.AppendCompactBytes(dst, v)
+				} else {
+					dst = kbin.AppendBytes(dst, v)
+				}
+			}
+			if isFlexible {
+				dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+				dst = v.UnknownTags.AppendEach(dst)
 			}
 		}
+	}
+	if isFlexible {
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
 	}
 	return dst
 }
@@ -1069,13 +1130,23 @@ func (v *GroupMetadataValue) readFrom(src []byte, unsafe bool) error {
 	v.Version = b.Int16()
 	version := v.Version
 	_ = version
+	isFlexible := version >= 4
+	_ = isFlexible
 	s := v
 	{
 		var v string
 		if unsafe {
-			v = b.UnsafeString()
+			if isFlexible {
+				v = b.UnsafeCompactString()
+			} else {
+				v = b.UnsafeString()
+			}
 		} else {
-			v = b.String()
+			if isFlexible {
+				v = b.CompactString()
+			} else {
+				v = b.String()
+			}
 		}
 		s.ProtocolType = v
 	}
@@ -1085,19 +1156,35 @@ func (v *GroupMetadataValue) readFrom(src []byte, unsafe bool) error {
 	}
 	{
 		var v *string
-		if unsafe {
-			v = b.UnsafeNullableString()
+		if isFlexible {
+			if unsafe {
+				v = b.UnsafeCompactNullableString()
+			} else {
+				v = b.CompactNullableString()
+			}
 		} else {
-			v = b.NullableString()
+			if unsafe {
+				v = b.UnsafeNullableString()
+			} else {
+				v = b.NullableString()
+			}
 		}
 		s.Protocol = v
 	}
 	{
 		var v *string
-		if unsafe {
-			v = b.UnsafeNullableString()
+		if isFlexible {
+			if unsafe {
+				v = b.UnsafeCompactNullableString()
+			} else {
+				v = b.CompactNullableString()
+			}
 		} else {
-			v = b.NullableString()
+			if unsafe {
+				v = b.UnsafeNullableString()
+			} else {
+				v = b.NullableString()
+			}
 		}
 		s.Leader = v
 	}
@@ -1109,7 +1196,11 @@ func (v *GroupMetadataValue) readFrom(src []byte, unsafe bool) error {
 		v := s.Members
 		a := v
 		var l int32
-		l = b.ArrayLen()
+		if isFlexible {
+			l = b.CompactArrayLen()
+		} else {
+			l = b.ArrayLen()
+		}
 		if !b.Ok() {
 			return b.Complete()
 		}
@@ -1124,36 +1215,68 @@ func (v *GroupMetadataValue) readFrom(src []byte, unsafe bool) error {
 			{
 				var v string
 				if unsafe {
-					v = b.UnsafeString()
+					if isFlexible {
+						v = b.UnsafeCompactString()
+					} else {
+						v = b.UnsafeString()
+					}
 				} else {
-					v = b.String()
+					if isFlexible {
+						v = b.CompactString()
+					} else {
+						v = b.String()
+					}
 				}
 				s.MemberID = v
 			}
 			if version >= 3 {
 				var v *string
-				if unsafe {
-					v = b.UnsafeNullableString()
+				if isFlexible {
+					if unsafe {
+						v = b.UnsafeCompactNullableString()
+					} else {
+						v = b.CompactNullableString()
+					}
 				} else {
-					v = b.NullableString()
+					if unsafe {
+						v = b.UnsafeNullableString()
+					} else {
+						v = b.NullableString()
+					}
 				}
 				s.InstanceID = v
 			}
 			{
 				var v string
 				if unsafe {
-					v = b.UnsafeString()
+					if isFlexible {
+						v = b.UnsafeCompactString()
+					} else {
+						v = b.UnsafeString()
+					}
 				} else {
-					v = b.String()
+					if isFlexible {
+						v = b.CompactString()
+					} else {
+						v = b.String()
+					}
 				}
 				s.ClientID = v
 			}
 			{
 				var v string
 				if unsafe {
-					v = b.UnsafeString()
+					if isFlexible {
+						v = b.UnsafeCompactString()
+					} else {
+						v = b.UnsafeString()
+					}
 				} else {
-					v = b.String()
+					if isFlexible {
+						v = b.CompactString()
+					} else {
+						v = b.String()
+					}
 				}
 				s.ClientHost = v
 			}
@@ -1166,23 +1289,41 @@ func (v *GroupMetadataValue) readFrom(src []byte, unsafe bool) error {
 				s.SessionTimeoutMillis = v
 			}
 			{
-				v := b.Bytes()
+				var v []byte
+				if isFlexible {
+					v = b.CompactBytes()
+				} else {
+					v = b.Bytes()
+				}
 				s.Subscription = v
 			}
 			{
-				v := b.Bytes()
+				var v []byte
+				if isFlexible {
+					v = b.CompactBytes()
+				} else {
+					v = b.Bytes()
+				}
 				s.Assignment = v
+			}
+			if isFlexible {
+				s.UnknownTags = internalReadTags(&b)
 			}
 		}
 		v = a
 		s.Members = v
 	}
+	if isFlexible {
+		s.UnknownTags = internalReadTags(&b)
+	}
 	return b.Complete()
 }
+func (v *GroupMetadataValue) IsFlexible() bool { return v.Version >= 4 }
 
 // Default sets any default fields. Calling this allows for future compatibility
 // if new fields are added to GroupMetadataValue.
 func (v *GroupMetadataValue) Default() {
+	v.CurrentStateTimestamp = -1
 }
 
 // NewGroupMetadataValue returns a default GroupMetadataValue
