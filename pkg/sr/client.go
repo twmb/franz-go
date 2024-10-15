@@ -34,6 +34,8 @@ type ResponseError struct {
 	Method string `json:"-"`
 	// URL is the full path that was requested that resulted in this error.
 	URL string `json:"-"`
+	// StatusCode is the status code that was returned for this error.
+	StatusCode int `json:"-"`
 	// Raw contains the raw response body.
 	Raw []byte `json:"-"`
 
@@ -158,9 +160,13 @@ start:
 
 	if resp.StatusCode >= 300 {
 		e := &ResponseError{
-			Method: method,
-			URL:    reqURL,
-			Raw:    body,
+			Method:     method,
+			URL:        reqURL,
+			StatusCode: resp.StatusCode,
+			Raw:        bytes.TrimSpace(body),
+		}
+		if len(e.Raw) == 0 {
+			e.Message = "no response"
 		}
 		_ = json.Unmarshal(body, e) // best effort
 		return e
