@@ -1,3 +1,58 @@
+v1.18.0
+===
+
+This release adds support for Kafka 3.7, adds a few community requested APIs,
+some internal improvements, and fixes two bugs. One of the bugfixes is for a
+deadlock; it is recommended to bump to this release to ensure you do not run
+into the deadlock. The features in this release are relatively small.
+
+This adds protocol support for [KIP-890][KIP-890] and [KIP-994][KIP-994], and
+adds further protocol support for [KIP-848][KIP-848]. If you are using
+transactions, you may see a new `kerr.TransactionAbortable` error, which
+signals that your ongoing transaction should be aborted and will not be
+successful if you try to commit it.
+
+[KIP-890]: https://cwiki.apache.org/confluence/display/KAFKA/KIP-890%3A+Transactions+Server-Side+Defense
+[KIP-994]: https://cwiki.apache.org/confluence/display/KAFKA/KIP-994%3A+Minor+Enhancements+to+ListTransactions+and+DescribeTransactions+APIs
+
+Lastly, there have been a few improvements to `pkg/sr` that are not mentioned
+in these changelog notes.
+
+## Bug fixes
+
+* If you canceled the context used while producing while your client was
+  at the maximum buffered records or bytes, it was possible to experience
+  deadlocks. This has been fixed. See #832 for more details.
+
+* Previously, if using `GetConsumeTopics` while regex consuming, the function
+  would return all topics ever discovered. It now returns only the topics that
+  are being consumed.
+
+## Improvements
+
+* The client now internaly ignores OutOfOrderSequenceNumber errors that are
+  encountered when consuming _if possible_. If a producer produces very infrequently,
+  it is possible the broker forgets the producer by the next time the producer
+  produces. In this case, the producer receives an OutOfOrderSequenceNumber error.
+  The client now internally resets properly so that you do not see the error.
+
+## Features
+
+* `AllowRebalance` and `CloseAllowingRebalance` have been added to `GroupTransactSession`.
+* The `FetchTopic` type now has includes the topic's `TopicID`.
+* The `ErrGroupSession` internal error field is now public, allowing you to test how you handle the internal error.
+* You may now receive a `kerr.TransactionAbortable` error from many functions while using transactions.
+
+## Relevant commits
+
+* [`0fd1959d`](https://github.com/twmb/franz-go/commit/0fd1959d) kgo: support Kafka 3.8's kip-890 modifications
+* [`68163c55`](https://github.com/twmb/franz-go/commit/68163c55) **bugfix** kgo: do not add all topics to internal tps map when regex consuming
+* [`3548d1f7`](https://github.com/twmb/franz-go/commit/3548d1f7) **improvement** kgo: ignore OOOSN where possible
+* [`6a759401`](https://github.com/twmb/franz-go/commit/6a759401) **bugfix** kgo: fix potential deadlock when reaching max buffered (records|bytes)
+* [`4bfb0c68`](https://github.com/twmb/franz-go/commit/4bfb0c68) **feature** kgo: add TopicID to the FetchTopic type
+* [`06a9c47d`](https://github.com/twmb/franz-go/commit/06a9c47d) **feature** kgo: export the wrapped error from ErrGroupSession
+* [`4affe8ef`](https://github.com/twmb/franz-go/commit/4affe8ef) **feature** kgo: add AllowRebalance and CloseAllowingRebalance to GroupTransactSession
+
 v1.17.1
 ===
 
