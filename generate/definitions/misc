@@ -272,7 +272,7 @@ GroupMetadataKey => not top level, with version field
 //
 // KAFKA-7862 commit 0f995ba6be, proposed in KIP-345 and included in 2.3.0
 // released version 3.
-GroupMetadataValue => not top level, with version field
+GroupMetadataValue => not top level, with version field, flexible v4+
   // Version is the version of this value.
   Version: int16
   // ProtocolType is the type of protocol being used for the group
@@ -287,7 +287,7 @@ GroupMetadataValue => not top level, with version field
   Leader: nullable-string
   // CurrentStateTimestamp is the timestamp for this state of the group
   // (stable, etc.).
-  CurrentStateTimestamp: int64 // v2+
+  CurrentStateTimestamp: int64(-1) // v2+
   // Members are the group members.
   Members: [=>]
     // MemberID is a group member.
@@ -299,7 +299,7 @@ GroupMetadataValue => not top level, with version field
     // ClientHost is the hostname of this group member.
     ClientHost: string
     // RebalanceTimeoutMillis is the rebalance timeout of this group member.
-    RebalanceTimeoutMillis: int32 // v1+
+    RebalanceTimeoutMillis: int32(-1) // v1+
     // SessionTimeoutMillis is the session timeout of this group member.
     SessionTimeoutMillis: int32
     // Subscription is the subscription of this group member.

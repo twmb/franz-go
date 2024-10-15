@@ -1,6 +1,6 @@
 // EndTxnRequest ends a transaction. This should be called after
 // TxnOffsetCommitRequest.
-EndTxnRequest => key 26, max version 3, flexible v3+, txn coordinator
+EndTxnRequest => key 26, max version 4, flexible v3+, txn coordinator
   // TransactionalID is the transactional ID to use for this request.
   TransactionalID: string
   // ProducerID is the producer ID of the client for this transactional ID
