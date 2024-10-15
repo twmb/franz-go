@@ -281,7 +281,8 @@ func (s *GroupTransactSession) End(ctx context.Context, commit TransactionEndTry
 				errors.Is(err, kerr.CoordinatorLoadInProgress),
 				errors.Is(err, kerr.NotCoordinator),
 				errors.Is(err, kerr.ConcurrentTransactions),
-				errors.Is(err, kerr.UnknownServerError):
+				errors.Is(err, kerr.UnknownServerError),
+				errors.Is(err, kerr.TransactionAbortable):
 				return true
 			}
 			return false
@@ -408,6 +409,11 @@ retry:
 			willTryCommit = false
 			goto retry
 
+		case errors.Is(endTxnErr, kerr.TransactionAbortable):
+			s.cl.cfg.logger.Log(LogLevelInfo, "end transaction returned TransactionAbortable; retrying as abort")
+			willTryCommit = false
+			goto retry
+
 		case errors.Is(endTxnErr, kerr.UnknownServerError):
 			s.cl.cfg.logger.Log(LogLevelInfo, "end transaction with commit unknown server error; retrying")
 			after := time.NewTimer(s.cl.cfg.retryBackoff(tries))
@@ -517,7 +523,7 @@ const (
 	// Deprecated: Kafka 3.6 removed support for the hacky behavior that
 	// this option was abusing. Thus, as of Kafka 3.6, this option does not
 	// work against Kafka. This option also has never worked for Redpanda
-	// becuse Redpanda always strictly validated that partitions were a
+	// because Redpanda always strictly validated that partitions were a
 	// part of a transaction. Later versions of Kafka and Redpanda will
 	// remove the need for AddPartitionsToTxn at all and thus this option
 	// ultimately will be unnecessary anyway.
@@ -820,8 +826,9 @@ func (cl *Client) UnsafeAbortBufferedRecords() {
 //
 // If the producer ID has an error and you are trying to commit, this will
 // return with kerr.OperationNotAttempted. If this happened, retry
-// EndTransaction with TryAbort. Not other error is retryable, and you should
-// not retry with TryAbort.
+// EndTransaction with TryAbort. If this returns kerr.TransactionAbortable, you
+// can retry with TryAbort. No other error is retryable, and you should not
+// retry with TryAbort.
 //
 // If records failed with UnknownProducerID and your Kafka version is at least
 // 2.5, then aborting here will potentially allow the client to recover for
