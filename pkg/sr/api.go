@@ -392,10 +392,10 @@ type DeleteHow bool
 
 const (
 	// SoftDelete performs a soft deletion.
-	SoftDelete = false
+	SoftDelete DeleteHow = false
 	// HardDelete performs a hard deletion. Values must be soft deleted
 	// before they can be hard deleted.
-	HardDelete = true
+	HardDelete DeleteHow = true
 )
 
 // DeleteSubject deletes the subject. You must soft delete a subject before it
