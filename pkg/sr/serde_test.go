@@ -175,15 +175,17 @@ func TestConfluentHeader(t *testing.T) {
 	var h ConfluentHeader
 
 	for i, test := range []struct {
-		id     int
-		index  []int
-		expEnc []byte
+		id        int
+		newID     uint32
+		index     []int
+		expEnc    []byte
+		expEncUpd []byte
 	}{
-		{id: 1, index: nil, expEnc: []byte{0, 0, 0, 0, 1}},
-		{id: 256, index: nil, expEnc: []byte{0, 0, 0, 1, 0}},
-		{id: 2, index: []int{0}, expEnc: []byte{0, 0, 0, 0, 2, 0}},
-		{id: 3, index: []int{1}, expEnc: []byte{0, 0, 0, 0, 3, 2, 2}},
-		{id: 4, index: []int{1, 2, 3}, expEnc: []byte{0, 0, 0, 0, 4, 6, 2, 4, 6}},
+		{id: 1, newID: 2, index: nil, expEnc: []byte{0, 0, 0, 0, 1}, expEncUpd: []byte{0, 0, 0, 0, 2}},
+		{id: 256, newID: 65536, index: nil, expEnc: []byte{0, 0, 0, 1, 0}, expEncUpd: []byte{0, 0, 1, 0, 0}},
+		{id: 2, newID: 3, index: []int{0}, expEnc: []byte{0, 0, 0, 0, 2, 0}, expEncUpd: []byte{0, 0, 0, 0, 3, 0}},
+		{id: 3, newID: 4, index: []int{1}, expEnc: []byte{0, 0, 0, 0, 3, 2, 2}, expEncUpd: []byte{0, 0, 0, 0, 4, 2, 2}},
+		{id: 4, newID: 5, index: []int{1, 2, 3}, expEnc: []byte{0, 0, 0, 0, 4, 6, 2, 4, 6}, expEncUpd: []byte{0, 0, 0, 0, 5, 6, 2, 4, 6}},
 	} {
 		b, err := h.AppendEncode(nil, test.id, test.index)
 		if err != nil {
@@ -228,12 +230,28 @@ func TestConfluentHeader(t *testing.T) {
 				continue
 			}
 		}
+
+		if err := h.UpdateID(b, test.newID); err != nil {
+			t.Errorf("#%d UpdateID: got unexpected err %v", i, err)
+			continue
+		}
+		if !bytes.Equal(b, test.expEncUpd) {
+			t.Errorf("#%d: UpdateID(%v) != exp(%v)", i, b, test.expEncUpd)
+			continue
+		}
+
 	}
 
 	if _, _, err := h.DecodeID([]byte{1, 0, 0, 0, 0, 1}); err != ErrBadHeader {
 		t.Errorf("got %v != exp ErrBadHeader", err)
 	}
 	if _, _, err := h.DecodeID([]byte{0, 0, 0, 0}); err != ErrBadHeader {
+		t.Errorf("got %v != exp ErrBadHeader", err)
+	}
+	if err := h.UpdateID([]byte{1, 0, 0, 0, 0, 1}, 42); err != ErrBadHeader {
+		t.Errorf("got %v != exp ErrBadHeader", err)
+	}
+	if err := h.UpdateID([]byte{0, 0, 0, 0}, 42); err != ErrBadHeader {
 		t.Errorf("got %v != exp ErrBadHeader", err)
 	}
 	if _, _, err := h.DecodeIndex([]byte{2}, 1); err != io.EOF {
