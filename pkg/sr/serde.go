@@ -474,6 +474,16 @@ func (*ConfluentHeader) DecodeID(b []byte) (int, []byte, error) {
 	return int(id), b[5:], nil
 }
 
+// UpdateID replaces the schema ID in b. If the header does not contain the
+// magic byte or b contains less than 5 bytes it returns ErrBadHeader.
+func (*ConfluentHeader) UpdateID(b []byte, id uint32) error {
+	if len(b) < 5 || b[0] != 0 {
+		return ErrBadHeader
+	}
+	binary.BigEndian.PutUint32(b[1:5], id)
+	return nil
+}
+
 // DecodeIndex strips and decodes indices from b. It returns the index slice
 // alongside the unread bytes. It expects b to be the output of DecodeID (schema
 // ID should already be stripped away). If maxLength is greater than 0 and the
