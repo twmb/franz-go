@@ -12,12 +12,12 @@ func TestDecodeACLOperations(t *testing.T) {
 	tests := []struct {
 		name     string
 		bitfield int32
-		expected []kmsg.ACLOperation
+		expected []ACLOperation
 	}{
 		{
 			name:     "Example 264",
 			bitfield: 264,
-			expected: []kmsg.ACLOperation{
+			expected: []ACLOperation{
 				kmsg.ACLOperationRead,
 				kmsg.ACLOperationDescribe,
 			},
@@ -25,7 +25,7 @@ func TestDecodeACLOperations(t *testing.T) {
 		{
 			name:     "Example 3400",
 			bitfield: 3400,
-			expected: []kmsg.ACLOperation{
+			expected: []ACLOperation{
 				kmsg.ACLOperationRead,
 				kmsg.ACLOperationDescribe,
 				kmsg.ACLOperationAlterConfigs,
@@ -36,7 +36,7 @@ func TestDecodeACLOperations(t *testing.T) {
 		{
 			name:     "Example 3968",
 			bitfield: 3968,
-			expected: []kmsg.ACLOperation{
+			expected: []ACLOperation{
 				kmsg.ACLOperationAlter,
 				kmsg.ACLOperationAlterConfigs,
 				kmsg.ACLOperationClusterAction,
@@ -47,7 +47,7 @@ func TestDecodeACLOperations(t *testing.T) {
 		{
 			name:     "Example 4000",
 			bitfield: 4000,
-			expected: []kmsg.ACLOperation{
+			expected: []ACLOperation{
 				kmsg.ACLOperationAlter,
 				kmsg.ACLOperationAlterConfigs,
 				kmsg.ACLOperationClusterAction,
@@ -59,7 +59,7 @@ func TestDecodeACLOperations(t *testing.T) {
 		{
 			name:     "All Operations",
 			bitfield: math.MaxInt32, // All bits set
-			expected: []kmsg.ACLOperation{
+			expected: []ACLOperation{
 				kmsg.ACLOperationRead,
 				kmsg.ACLOperationWrite,
 				kmsg.ACLOperationCreate,
@@ -77,12 +77,12 @@ func TestDecodeACLOperations(t *testing.T) {
 		{
 			name:     "Invalid Operations Excluded",
 			bitfield: 1<<15 | 1<<16, // Bits beyond known operations
-			expected: []kmsg.ACLOperation{},
+			expected: []ACLOperation{},
 		},
 		{
 			name:     "Empty Bitfield",
 			bitfield: math.MinInt32,
-			expected: []kmsg.ACLOperation{},
+			expected: []ACLOperation{},
 		},
 	}
 

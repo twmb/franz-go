@@ -1145,8 +1145,8 @@ func createDelDescACL(b *ACLBuilder) ([]kmsg.DeleteACLsRequestFilter, []*kmsg.De
 // - Cluster Operations: Retrieved via the DescribeCluster API or older Metadata API versions (v8–v10).
 // - Topic Operations: Retrieved via the Metadata API when `IncludeTopicAuthorizedOperations` is set.
 // - Group Operations: Retrieved in the DescribeGroups API response.
-func DecodeACLOperations(bitfield int32) []kmsg.ACLOperation {
-	var operations []kmsg.ACLOperation
+func DecodeACLOperations(bitfield int32) []ACLOperation {
+	var operations []ACLOperation
 
 	// MinInt32 represents "AUTHORIZED_OPERATIONS_OMITTED"
 	if bitfield == math.MinInt32 {
