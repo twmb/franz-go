@@ -126,11 +126,11 @@ func (m *Metrics) Handler() http.Handler {
 // This method is meant to be called by the hook system and not by the user
 func (m *Metrics) OnNewClient(client *kgo.Client) {
 	var (
-		factory   = promauto.With(m.cfg.reg)
-		namespace = m.cfg.namespace
-		subsystem = m.cfg.subsystem
+		factory     = promauto.With(m.cfg.reg)
+		namespace   = m.cfg.namespace
+		subsystem   = m.cfg.subsystem
+		constLabels prometheus.Labels
 	)
-	var constLabels prometheus.Labels
 	dynamicLabels := []string{"node_id"}
 	if m.cfg.withClientLabel {
 		constLabels = make(prometheus.Labels)
