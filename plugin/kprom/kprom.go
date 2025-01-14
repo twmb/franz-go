@@ -157,24 +157,27 @@ func (m *Metrics) OnNewClient(client *kgo.Client) {
 	// Connection
 
 	m.connConnectsTotal = factory.NewCounterVec(prometheus.CounterOpts{
-		Namespace: namespace,
-		Subsystem: subsystem,
-		Name:      "connects_total",
-		Help:      "Total number of connections opened",
+		Namespace:   namespace,
+		Subsystem:   subsystem,
+		ConstLabels: constLabels,
+		Name:        "connects_total",
+		Help:        "Total number of connections opened",
 	}, []string{"node_id"})
 
 	m.connConnectErrorsTotal = factory.NewCounterVec(prometheus.CounterOpts{
-		Namespace: namespace,
-		Subsystem: subsystem,
-		Name:      "connect_errors_total",
-		Help:      "Total number of connection errors",
+		Namespace:   namespace,
+		Subsystem:   subsystem,
+		ConstLabels: constLabels,
+		Name:        "connect_errors_total",
+		Help:        "Total number of connection errors",
 	}, []string{"node_id"})
 
 	m.connDisconnectsTotal = factory.NewCounterVec(prometheus.CounterOpts{
-		Namespace: namespace,
-		Subsystem: subsystem,
-		Name:      "disconnects_total",
-		Help:      "Total number of connections closed",
+		Namespace:   namespace,
+		Subsystem:   subsystem,
+		ConstLabels: constLabels,
+		Name:        "disconnects_total",
+		Help:        "Total number of connections closed",
 	}, []string{"node_id"})
 
 	// Write
