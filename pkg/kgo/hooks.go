@@ -135,7 +135,7 @@ type BrokerE2E struct {
 	// ReadErr is any error encountered during reading.
 	ReadErr error
 
-	// ClientID is pointer to ID of the client that made the request
+	// ClientID is the ID of the client that made the request
 	ClientID string
 }
 
@@ -243,7 +243,7 @@ type ProduceBatchMetrics struct {
 	// zstd.
 	CompressionType uint8
 
-	// ClientID is pointer to ID of the client that made the request
+	// ClientID is the ID of the client that made the request
 	ClientID string
 }
 
@@ -295,7 +295,7 @@ type FetchBatchMetrics struct {
 	// zstd.
 	CompressionType uint8
 
-	// ClientID is pointer to ID of the client that made the request
+	// ClientID is the ID of the client that made the request
 	ClientID string
 }
 
