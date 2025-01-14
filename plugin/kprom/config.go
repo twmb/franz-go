@@ -100,7 +100,6 @@ func HandlerOpts(opts promhttp.HandlerOpts) Opt {
 func WithClientLabel() Opt {
 	return opt{func(c *cfg) {
 		c.withClientLabel = true
-		c.fetchProduceOpts.labels = append(c.fetchProduceOpts.labels, "client_id")
 	}}
 }
 
@@ -185,7 +184,6 @@ type Detail uint8
 const (
 	ByNode            Detail = iota // Include label "node_id" for fetch and produce metrics.
 	ByTopic                         // Include label "topic" for fetch and produce metrics.
-	ByClient                        // Include label "client_id" for fetch and produce metrics
 	Batches                         // Report number of fetched and produced batches.
 	Records                         // Report the number of fetched and produced records.
 	CompressedBytes                 // Report the number of fetched and produced compressed bytes.
@@ -215,8 +213,6 @@ func FetchAndProduceDetail(details ...Detail) Opt {
 					labelsDeduped[ByTopic] = "topic"
 				case ByNode:
 					labelsDeduped[ByNode] = "node_id"
-				case ByClient:
-					labelsDeduped[ByClient] = "client_id"
 				case Batches:
 					c.fetchProduceOpts.batches = true
 				case Records:

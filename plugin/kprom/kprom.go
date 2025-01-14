@@ -37,6 +37,7 @@ package kprom
 import (
 	"net"
 	"net/http"
+	"slices"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -135,6 +136,9 @@ func (m *Metrics) OnNewClient(client *kgo.Client) {
 		constLabels = make(prometheus.Labels)
 		constLabels["client_id"] = client.OptValue(kgo.ClientID).(string)
 		dynamicLabels = append(dynamicLabels, "client_id")
+		if !slices.Contains(m.cfg.fetchProduceOpts.labels, "client_id") {
+			m.cfg.fetchProduceOpts.labels = append(m.cfg.fetchProduceOpts.labels, "client_id")
+		}
 	}
 
 	// Skip metrics definitions if hook was already called
