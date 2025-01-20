@@ -23,8 +23,6 @@ MetadataRequest => key 3, max version 12, flexible v9+
   // IncludeTopicAuthorizedOperations, introduced in Kakfa 2.3.0, specifies
   // whether to return a bitfield of AclOperations that this client can perform
   // on individual topics. See KIP-430 for more details.
-  //
-  // This field was removed in Kafka 2.8.0 in favor of the new DescribeClusterRequest.
   IncludeTopicAuthorizedOperations: bool // v8+
 
 // MetadataResponse is returned from a MetdataRequest.
