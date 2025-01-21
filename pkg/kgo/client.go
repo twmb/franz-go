@@ -860,11 +860,11 @@ func (cl *Client) fetchBrokerMetadata(ctx context.Context) error {
 		close(wait.done)
 	}()
 
-	_, _, wait.err = cl.fetchMetadata(ctx, kmsg.NewPtrMetadataRequest(), true)
+	_, _, wait.err = cl.fetchMetadata(ctx, kmsg.NewPtrMetadataRequest(), true, nil)
 	return wait.err
 }
 
-func (cl *Client) fetchMetadataForTopics(ctx context.Context, all bool, topics []string) (*broker, *kmsg.MetadataResponse, error) {
+func (cl *Client) fetchMetadataForTopics(ctx context.Context, all bool, topics []string, intoMapped map[string]mappedMetadataTopic) (*broker, *kmsg.MetadataResponse, error) {
 	req := kmsg.NewPtrMetadataRequest()
 	req.AllowAutoTopicCreation = cl.cfg.allowAutoTopicCreation
 	if all {
@@ -878,10 +878,10 @@ func (cl *Client) fetchMetadataForTopics(ctx context.Context, all bool, topics [
 			req.Topics = append(req.Topics, reqTopic)
 		}
 	}
-	return cl.fetchMetadata(ctx, req, true)
+	return cl.fetchMetadata(ctx, req, true, intoMapped)
 }
 
-func (cl *Client) fetchMetadata(ctx context.Context, req *kmsg.MetadataRequest, limitRetries bool) (*broker, *kmsg.MetadataResponse, error) {
+func (cl *Client) fetchMetadata(ctx context.Context, req *kmsg.MetadataRequest, limitRetries bool, intoMapped map[string]mappedMetadataTopic) (*broker, *kmsg.MetadataResponse, error) {
 	r := cl.retryable()
 
 	var rebootstrapped bool
@@ -919,6 +919,9 @@ start:
 			cl.controllerIDMu.Unlock()
 		}
 		cl.updateBrokers(meta.Brokers)
+
+		// Cache the mapped metadata, and potentially store each topic in the results.
+		cl.storeCachedMappedMetadata(meta, intoMapped)
 	}
 	return r.last, meta, err
 }
@@ -1376,7 +1379,7 @@ func (cl *Client) shardedRequest(ctx context.Context, req kmsg.Request) ([]Respo
 	case *kmsg.MetadataRequest:
 		// We hijack any metadata request so as to populate our
 		// own brokers and controller ID.
-		br, resp, err := cl.fetchMetadata(ctx, t, false)
+		br, resp, err := cl.fetchMetadata(ctx, t, false, nil)
 		return shards(shard(br, req, resp, err)), nil
 
 	case kmsg.AdminRequest:
@@ -2405,11 +2408,12 @@ func (cl *Client) maybeDeleteMappedMetadata(unknownTopic bool, ts ...string) (sh
 		}
 	}
 
+	now := time.Now()
 	cl.mappedMetaMu.Lock()
 	defer cl.mappedMetaMu.Unlock()
 	for _, t := range ts {
 		tcached, exists := cl.mappedMeta[t]
-		if exists && (min == 0 || time.Since(tcached.when) > min) {
+		if exists && (min == 0 || now.Sub(tcached.when) > min) {
 			shouldRetry = true
 			delete(cl.mappedMeta, t)
 		}
@@ -2448,34 +2452,25 @@ func (cl *Client) fetchCachedMappedMetadata(ts ...string) (map[string]mappedMeta
 // this is garbage heavy, so it is only used in one off requests in this
 // package.
 func (cl *Client) fetchMappedMetadata(ctx context.Context, topics []string, useCache bool) (map[string]mappedMetadataTopic, error) {
-	var r map[string]mappedMetadataTopic
+	var intoMapped map[string]mappedMetadataTopic
 	needed := topics
 	if useCache {
-		r, needed = cl.fetchCachedMappedMetadata(topics...)
+		intoMapped, needed = cl.fetchCachedMappedMetadata(topics...)
 		if len(needed) == 0 {
-			return r, nil
+			return intoMapped, nil
 		}
 	}
-	if r == nil {
-		r = make(map[string]mappedMetadataTopic)
+	if intoMapped == nil {
+		intoMapped = make(map[string]mappedMetadataTopic)
 	}
 
-	_, meta, err := cl.fetchMetadataForTopics(ctx, false, needed)
-	if err != nil {
-		return nil, err
-	}
-
-	// Cache the mapped metadata, and also store each topic in the results.
-	cl.storeCachedMappedMetadata(meta, func(entry mappedMetadataTopic) {
-		r[*entry.t.Topic] = entry
-	})
-
-	return r, nil
+	_, _, err := cl.fetchMetadataForTopics(ctx, false, needed, intoMapped)
+	return intoMapped, err
 }
 
 // storeCachedMappedMetadata caches the fetched metadata in the Client, and calls the onEachTopic callback
 // function for each topic in the MetadataResponse.
-func (cl *Client) storeCachedMappedMetadata(meta *kmsg.MetadataResponse, onEachTopic func(_ mappedMetadataTopic)) {
+func (cl *Client) storeCachedMappedMetadata(meta *kmsg.MetadataResponse, intoMapped map[string]mappedMetadataTopic) {
 	cl.mappedMetaMu.Lock()
 	defer cl.mappedMetaMu.Unlock()
 	if cl.mappedMeta == nil {
@@ -2498,16 +2493,17 @@ func (cl *Client) storeCachedMappedMetadata(meta *kmsg.MetadataResponse, onEachT
 			t.ps[partition.Partition] = partition
 		}
 
-		if onEachTopic != nil {
-			onEachTopic(t)
+		if intoMapped != nil {
+			intoMapped[*t.t.Topic] = t
 		}
 	}
 	if len(meta.Topics) != len(cl.mappedMeta) {
+		now := time.Now()
 		for topic, mapped := range cl.mappedMeta {
 			if mapped.when.Equal(when) {
 				continue
 			}
-			if time.Since(mapped.when) > cl.cfg.metadataMinAge {
+			if now.Sub(mapped.when) > cl.cfg.metadataMinAge {
 				delete(cl.mappedMeta, topic)
 			}
 		}
