@@ -1,3 +1,69 @@
+v1.18.1
+===
+
+This patch release contains a myriad of fixes for _relatively_ minor bugs, a
+few improvements, and updates all dependencies. Both `pkg/kadm` and `pkg/sr`
+are also being released as minors in tandem with a few quality of life APIs.
+
+## Bug fixes
+
+* Previously, if records were successfully produced but returned with an
+  invalid offset (-1), the client would erroneously return bogus offsets
+  to the end users. This has been fixed to return -1. (Note this was never
+  encountered in the wild).
+
+* Pausing topics & partitions while using `PollRecords` previously could result
+  in incorrect accounting in `BufferedFetchRecords` and `BufferedFetchBytes`,
+  permanently causing the numbers returned to be larger than reality. That is,
+  it is possible the functions would return non-zero numbers even though nothing
+  was buffered.
+
+* When consuming from a follower (i.e. you were using the `Rack` option and your
+  cluster is configured with follower fetching), if the follower you consumed from
+  had a _higher_ log start offset than the leader, and if you were trying to consume
+  from an early offset that exists on the leader but not on the follower, the client
+  would enter a permanent spinloop trying to list offsets against the follower.
+  This is due to KIP-320 case 3, which mentions that clients should send a ListOffsets 
+  to the follower -- _this is not the case_, Kafka actually returns NotLeaderOrFollower
+  when sending that request to the follower. Now the client clears the preferred replica
+  and sends the next fetch request to the leader, at which point the leader can either
+  serve the request or redirect back to a different preferred replica.
+
+## Improvements
+
+* When finishing batches, if any records were blocked in Produce due to
+  the client hitting the maximum number of buffered records, the client would broadcast
+  to all waiters that a message was finished for _every_ message finished until there were
+  no other goroutines waiting to try to produce. When lingering
+  is enabled, linger occurs _except_ when the client has reached the maximum number of
+  buffered records. Once the client is as max buffered records, the client tries to flush until more records can be buffered.
+  If you have a few concurrent producers, they will all hang _trying_ to buffer. As soon
+  as one is signaled, it will grab the free spot, enter into the client as buffered,
+  and then see the client is now again at max buffered and immediately create a batch
+  rather than lingering. Thus, signalling one at a time would cause many small single-record
+  batches to be created and each cause a round trip to the cluster. This would result in slow performance.
+  Now, by finishing a batch at a time, the client opens many slots at a time for any producers _waiting_,
+  and ideally they can fit into being buffered without hitting max buffered and clearing any linger state.
+  Note that single-message batches can still cause the original behavior, but there is not
+  much more that can be done.
+
+* Decompression errors encountered while consuming are now returned to the end user, rather
+  than being stripped internally. Previously, stripping the error internally would result in
+  the client spinlooping: it could never make forward progress and nothing ever signaled the
+  end user that something was going wrong.
+
+## Relevant commits
+
+* [`13584b5`](https://github.com/twmb/franz-go/commit/13584b5) **feature** kadm: always request authorized operations
+* [`847095b`](https://github.com/twmb/franz-go/commit/847095b) **bugfix** kgo: redirect back to the leader on KIP-392 case 3 failure
+* [`d6d3015`](https://github.com/twmb/franz-go/commit/d6d3015) **feature** pkg/sr: add PreReq option (and others by [@mihaitodor](https://github.com/mihaitodor), thank you!)
+* [`1473778`](https://github.com/twmb/franz-go/commit/1473778) **improvement** kgo: return decompression errors while consuming
+* [`3e9beae`](https://github.com/twmb/franz-go/commit/3e9beae) **bugfix** kgo: fix accounting when topics/partitions are {,un}paused for PollRecords
+* [`ead18d3`](https://github.com/twmb/franz-go/commit/ead18d3) **improvement** kgo: broadcast batch finishes in one big blast
+* [`aa1c73c`](https://github.com/twmb/franz-go/commit/aa1c73c) **feature** kadm: add func to decode AuthorizedOperations (thanks [@weeco](https://github.com/weeco)!)
+* [`f66d495`](https://github.com/twmb/franz-go/commit/f66d495) kfake: do not listen until the cluster is fully set up
+* [`2eed36e`](https://github.com/twmb/franz-go/commit/2eed36e) **bugfix** pkg/kgo: fix handling of invalid base offsets (thanks [@rodaine](https://github.com/rodaine)!)
+
 v1.18.0
 ===
 
