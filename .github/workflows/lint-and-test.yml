@@ -29,6 +29,15 @@ jobs:
           version: latest
           args: --timeout=5m
 
+  test-kfake:
+    if: github.repository == 'twmb/franz-go'
+    runs-on: ubuntu-latest
+    name: "test kfake"
+    container: golang:latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cd pkg/kfake && go test .
+
   integration-test-kafka:
     if: github.repository == 'twmb/franz-go'
     runs-on: ubuntu-latest
