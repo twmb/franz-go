@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/kmsg"
@@ -420,5 +421,130 @@ func TestIssue906(t *testing.T) {
 			t.Errorf("unable to produce: %v", err)
 		}
 		produced += len(records)
+	}
+}
+
+func TestIssueTimestampInclusivity(t *testing.T) {
+	const (
+		testTopic        = "bar"
+		producedBatches  = 5
+		followerLogStart = 3
+	)
+
+	c, err := NewCluster(
+		NumBrokers(2),
+		SeedTopics(1, testTopic),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	// Inline anonymous function so that we can defer and cleanup within scope.
+	func() {
+		cl, err := kgo.NewClient(
+			kgo.DefaultProduceTopic(testTopic),
+			kgo.SeedBrokers(c.ListenAddrs()...),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer cl.Close()
+
+		for i := 0; i < producedBatches; i++ {
+			_, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			offset := i * 4
+			r1 := kgo.StringRecord(strconv.Itoa(offset))
+			r1.Timestamp = time.UnixMilli(10_000 + int64(offset))
+			offset += 1
+			r2 := kgo.StringRecord(strconv.Itoa(offset))
+			r2.Timestamp = time.UnixMilli(10_000 + int64(offset))
+			offset += 1
+			r3 := kgo.StringRecord(strconv.Itoa(offset))
+			r3.Timestamp = time.UnixMilli(10_000 + int64(offset))
+			err := cl.ProduceSync(context.TODO(), r1, r2, r3).FirstErr()
+			cancel()
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+	}()
+
+	cl, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+	adm := kadm.NewClient(cl)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	tests := []struct {
+		SearchTimestamp   int64
+		ExpectedOffset    int64
+		ExpectedTimestamp int64
+	}{
+		{
+			SearchTimestamp:   99,
+			ExpectedOffset:    0,
+			ExpectedTimestamp: 10_000,
+		},
+		{
+			SearchTimestamp:   10_000,
+			ExpectedOffset:    0,
+			ExpectedTimestamp: 10_000,
+		},
+		{
+			SearchTimestamp:   10_001,
+			ExpectedOffset:    1,
+			ExpectedTimestamp: 10_001,
+		},
+		{
+			SearchTimestamp:   10_003,
+			ExpectedOffset:    3,
+			ExpectedTimestamp: 10_004,
+		},
+		{
+			SearchTimestamp:   10_004,
+			ExpectedOffset:    3,
+			ExpectedTimestamp: 10_004,
+		},
+		{
+			SearchTimestamp:   10_015,
+			ExpectedOffset:    12,
+			ExpectedTimestamp: 10_016,
+		},
+		{
+			SearchTimestamp:   10_018,
+			ExpectedOffset:    14,
+			ExpectedTimestamp: 10_018,
+		},
+		{
+			SearchTimestamp:   11_000,
+			ExpectedOffset:    15,
+			ExpectedTimestamp: -1,
+		},
+	}
+	for _, test := range tests {
+		offsets, err := adm.ListOffsetsAfterMilli(ctx, test.SearchTimestamp)
+		if err != nil {
+			t.Fatal(err)
+		}
+		offset, ok := offsets.Lookup(testTopic, 0)
+		if !ok {
+			t.Fatal("missing partition")
+		}
+		if offset.Offset != test.ExpectedOffset || offset.Timestamp != test.ExpectedTimestamp {
+			t.Fatalf(
+				"searching for %d got: %+v, want offset %d, timestamp %d",
+				test.SearchTimestamp,
+				offset,
+				test.ExpectedOffset,
+				test.ExpectedTimestamp,
+			)
+		}
 	}
 }
