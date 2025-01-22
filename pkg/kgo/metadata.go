@@ -535,15 +535,10 @@ func (mp metadataPartition) newPartition(cl *Client, isProduce bool) *topicParti
 // fetchTopicMetadata fetches metadata for all reqTopics and returns new
 // topicPartitionsData for each topic.
 func (cl *Client) fetchTopicMetadata(all bool, reqTopics []string) (map[string]*metadataTopic, error) {
-	_, meta, err := cl.fetchMetadataForTopics(cl.ctx, all, reqTopics)
+	_, meta, err := cl.fetchMetadataForTopics(cl.ctx, all, reqTopics, nil)
 	if err != nil {
 		return nil, err
 	}
-
-	// Since we've fetched the metadata for some topics we can optimistically cache it
-	// for mapped metadata too. This may reduce the number of Metadata requests issued
-	// by the client.
-	cl.storeCachedMappedMetadata(meta, nil)
 
 	topics := make(map[string]*metadataTopic, len(meta.Topics))
 
