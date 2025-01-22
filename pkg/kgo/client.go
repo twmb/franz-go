@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/crc32"
+	"math"
 	"math/rand"
 	"net"
 	"reflect"
@@ -65,6 +66,7 @@ type Client struct {
 
 	controllerIDMu sync.Mutex
 	controllerID   int32
+	clusterID      *string // we piggy back updating clusterID
 
 	// The following two ensure that we only have one fetchBrokerMetadata
 	// at once. This avoids unnecessary broker metadata requests and
@@ -913,11 +915,12 @@ start:
 				}
 			}
 		}
+		cl.controllerIDMu.Lock()
 		if meta.ControllerID >= 0 {
-			cl.controllerIDMu.Lock()
 			cl.controllerID = meta.ControllerID
-			cl.controllerIDMu.Unlock()
 		}
+		cl.clusterID = meta.ClusterID
+		cl.controllerIDMu.Unlock()
 		cl.updateBrokers(meta.Brokers)
 
 		// Cache the mapped metadata, and potentially store each topic in the results.
@@ -1163,6 +1166,89 @@ func (cl *Client) Request(ctx context.Context, req kmsg.Request) (kmsg.Response,
 		return resps[0].Resp, resps[0].Err
 	}
 	return merge(resps)
+}
+
+// RequestCachedMetadata returns a metadata response, using any cached topic
+// data possible. Any topic with data cached longer than 'limit' has its
+// metadata updated before being returned. If limit is zero or less,
+// MetadataMinAge is used (default 5s).
+//
+// This function is useful if you run a lot of functions that internally
+// fetch metadata to execute. As an example, many functions in the kadm
+// package all require metadata to run; those functions use cached metadata
+// as much as possible.
+//
+// This function does *not* return authorized operations, even if the request
+// has IncludeClusterAuthorizedOperations or IncludeTopicAuthorizedOperations
+// set to true. This function cannot be used to request topics via TopicID;
+// the direct topic name must be used.
+func (cl *Client) RequestCachedMetadata(ctx context.Context, req *kmsg.MetadataRequest, limit time.Duration) (*kmsg.MetadataResponse, error) {
+	topics := make([]string, 0, len(req.Topics))
+	for _, t := range req.Topics {
+		if t.Topic == nil || *t.Topic == "" {
+			return nil, errors.New("unable to request cached metadata with a missing topic name (topic IDs are not supported)")
+		}
+		topics = append(topics, *t.Topic)
+	}
+	mapped, err := cl.fetchMappedMetadata(ctx, topics, true, limit)
+	if err != nil {
+		return nil, err
+	}
+
+	// With potentially cached data, we build the response. We deeply clone
+	// all cached data so that the end user cannot modify internal data.
+	dups := func(s *string) *string {
+		if s == nil {
+			return nil
+		}
+		s2 := *s
+		return &s2
+	}
+	dupp := func(p kmsg.MetadataResponseTopicPartition) kmsg.MetadataResponseTopicPartition {
+		p2 := p
+		p2.Replicas = append([]int32(nil), p2.Replicas...)
+		p2.ISR = append([]int32(nil), p2.ISR...)
+		p2.OfflineReplicas = append([]int32(nil), p2.OfflineReplicas...)
+		p2.UnknownTags = kmsg.Tags{}
+		return p2
+	}
+	dupt := func(t kmsg.MetadataResponseTopic) kmsg.MetadataResponseTopic {
+		t2 := t
+		t2.Topic = dups(t2.Topic)
+		t2.Partitions = make([]kmsg.MetadataResponseTopicPartition, 0, len(t2.Partitions))
+		for _, p := range t.Partitions {
+			t2.Partitions = append(t2.Partitions, dupp(p))
+		}
+		t2.AuthorizedOperations = math.MinInt32
+		t2.UnknownTags = kmsg.Tags{}
+		return t2
+	}
+
+	resp := kmsg.NewPtrMetadataResponse()
+
+	cl.brokersMu.RLock()
+	for _, b := range cl.brokers {
+		resp.Brokers = append(resp.Brokers, kmsg.MetadataResponseBroker{
+			NodeID: b.meta.NodeID,
+			Host:   b.meta.Host,
+			Port:   b.meta.Port,
+			Rack:   b.meta.Rack,
+		})
+	}
+	cl.brokersMu.RUnlock()
+
+	cl.controllerIDMu.Lock()
+	resp.ClusterID = dups(cl.clusterID)
+	resp.ControllerID = cl.controllerID
+	cl.controllerIDMu.Unlock()
+
+	for _, t := range mapped {
+		resp.Topics = append(resp.Topics, dupt(t.t))
+	}
+
+	resp.AuthorizedOperations = math.MinInt32
+
+	return resp, nil
 }
 
 func (cl *Client) retryable() *retryable {
@@ -2427,7 +2513,7 @@ func (cl *Client) maybeDeleteMappedMetadata(unknownTopic bool, ts ...string) (sh
 // requests that are sharded and use metadata, and the one this benefits most
 // is ListOffsets. Likely, ListOffsets for the same topic will be issued back
 // to back, so not caching for so long is ok.
-func (cl *Client) fetchCachedMappedMetadata(ts ...string) (map[string]mappedMetadataTopic, []string) {
+func (cl *Client) fetchCachedMappedMetadata(limit time.Duration, ts ...string) (map[string]mappedMetadataTopic, []string) {
 	cl.mappedMetaMu.Lock()
 	defer cl.mappedMetaMu.Unlock()
 	if cl.mappedMeta == nil {
@@ -2436,9 +2522,13 @@ func (cl *Client) fetchCachedMappedMetadata(ts ...string) (map[string]mappedMeta
 	cached := make(map[string]mappedMetadataTopic)
 	needed := ts[:0]
 
+	if limit <= 0 {
+		limit = cl.cfg.metadataMinAge
+	}
+
 	for _, t := range ts {
 		tcached, exists := cl.mappedMeta[t]
-		if exists && time.Since(tcached.when) < cl.cfg.metadataMinAge {
+		if exists && time.Since(tcached.when) < limit {
 			cached[t] = tcached
 		} else {
 			needed = append(needed, t)
@@ -2451,11 +2541,11 @@ func (cl *Client) fetchCachedMappedMetadata(ts ...string) (map[string]mappedMeta
 // fetchMappedMetadata provides a convenience type of working with metadata;
 // this is garbage heavy, so it is only used in one off requests in this
 // package.
-func (cl *Client) fetchMappedMetadata(ctx context.Context, topics []string, useCache bool) (map[string]mappedMetadataTopic, error) {
+func (cl *Client) fetchMappedMetadata(ctx context.Context, topics []string, useCache bool, limit time.Duration) (map[string]mappedMetadataTopic, error) {
 	var intoMapped map[string]mappedMetadataTopic
 	needed := topics
 	if useCache {
-		intoMapped, needed = cl.fetchCachedMappedMetadata(topics...)
+		intoMapped, needed = cl.fetchCachedMappedMetadata(limit, topics...)
 		if len(needed) == 0 {
 			return intoMapped, nil
 		}
@@ -2617,7 +2707,7 @@ func (cl *listOffsetsSharder) shard(ctx context.Context, kreq kmsg.Request, _ er
 	for _, topic := range req.Topics {
 		need = append(need, topic.Topic)
 	}
-	mapping, err := cl.fetchMappedMetadata(ctx, need, true)
+	mapping, err := cl.fetchMappedMetadata(ctx, need, true, 0)
 	if err != nil {
 		return nil, false, err
 	}
@@ -3177,7 +3267,7 @@ func (cl *deleteRecordsSharder) shard(ctx context.Context, kreq kmsg.Request, _ 
 	for _, topic := range req.Topics {
 		need = append(need, topic.Topic)
 	}
-	mapping, err := cl.fetchMappedMetadata(ctx, need, true)
+	mapping, err := cl.fetchMappedMetadata(ctx, need, true, 0)
 	if err != nil {
 		return nil, false, err
 	}
@@ -3298,7 +3388,7 @@ func (cl *offsetForLeaderEpochSharder) shard(ctx context.Context, kreq kmsg.Requ
 	for _, topic := range req.Topics {
 		need = append(need, topic.Topic)
 	}
-	mapping, err := cl.fetchMappedMetadata(ctx, need, true)
+	mapping, err := cl.fetchMappedMetadata(ctx, need, true, 0)
 	if err != nil {
 		return nil, false, err
 	}
@@ -3617,7 +3707,7 @@ func (cl *writeTxnMarkersSharder) shard(ctx context.Context, kreq kmsg.Request, 
 			need = append(need, topic.Topic)
 		}
 	}
-	mapping, err := cl.fetchMappedMetadata(ctx, need, true)
+	mapping, err := cl.fetchMappedMetadata(ctx, need, true, 0)
 	if err != nil {
 		return nil, false, err
 	}
@@ -3939,7 +4029,7 @@ func (cl *alterReplicaLogDirsSharder) shard(ctx context.Context, kreq kmsg.Reque
 	for topic := range needMap {
 		need = append(need, topic)
 	}
-	mapping, err := cl.fetchMappedMetadata(ctx, need, false) // bypass cache, tricky to manage response
+	mapping, err := cl.fetchMappedMetadata(ctx, need, false, 0) // bypass cache, tricky to manage response
 	if err != nil {
 		return nil, false, err
 	}
@@ -4087,7 +4177,7 @@ func (cl *describeLogDirsSharder) shard(ctx context.Context, kreq kmsg.Request, 
 	for _, topic := range req.Topics {
 		need = append(need, topic.Topic)
 	}
-	mapping, err := cl.fetchMappedMetadata(ctx, need, false) // bypass cache, tricky to manage response
+	mapping, err := cl.fetchMappedMetadata(ctx, need, false, 0) // bypass cache, tricky to manage response
 	if err != nil {
 		return nil, false, err
 	}
@@ -4342,7 +4432,7 @@ func (cl *describeProducersSharder) shard(ctx context.Context, kreq kmsg.Request
 	for _, topic := range req.Topics {
 		need = append(need, topic.Topic)
 	}
-	mapping, err := cl.fetchMappedMetadata(ctx, need, true)
+	mapping, err := cl.fetchMappedMetadata(ctx, need, true, 0)
 	if err != nil {
 		return nil, false, err
 	}
