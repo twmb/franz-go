@@ -755,6 +755,7 @@ func (os OffsetResponses) Ok() bool {
 func (cl *Client) CommitOffsets(ctx context.Context, group string, os Offsets) (OffsetResponses, error) {
 	req := kmsg.NewPtrOffsetCommitRequest()
 	req.Group = group
+	req.MemberID, req.Generation = cl.cl.GroupMetadata()
 	for t, ps := range os {
 		rt := kmsg.NewOffsetCommitRequestTopic()
 		rt.Topic = t
