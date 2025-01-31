@@ -1613,7 +1613,7 @@ func (b *recBatch) maybeFailErr(cfg *cfg) error {
 	switch {
 	case b.isTimedOut(cfg.recordTimeout):
 		return ErrRecordTimeout
-	case b.tries >= cfg.recordRetries:
+	case b.tries > cfg.recordRetries:
 		return ErrRecordRetries
 	case b.owner.cl.producer.isAborting():
 		return ErrAborting
