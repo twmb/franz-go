@@ -127,6 +127,7 @@ type cfg struct {
 	missingTopicDelete  time.Duration
 
 	partitioner Partitioner
+	compressor  Compressor
 
 	stopOnDataLoss bool
 	onDataLoss     func(string, int32)
@@ -144,6 +145,7 @@ type cfg struct {
 	keepControl    bool
 	rack           string
 	preferLagFn    PreferLagFn
+	decompressor   Decompressor
 
 	maxConcurrentFetches     int
 	disableFetchSessions     bool
@@ -947,16 +949,29 @@ func MaxProduceRequestsInflightPerBroker(n int) ProducerOpt {
 // ProducerBatchCompression sets the compression codec to use for producing
 // records.
 //
-// Compression is chosen in the order preferred based on broker support.  For
-// example, zstd compression was introduced in Kafka 2.1, so the preference
-// can be first zstd, fallback snappy, fallback none.
+// Compression is chosen in the order preferred based on broker support. For
+// example, zstd compression was introduced in Kafka 2.1, so the preference can
+// be first zstd, fallback snappy, fallback none.
 //
 // The default preference is [snappy, none], which should be fine for all old
 // consumers since snappy compression has existed since Kafka 0.8.0.  To use
 // zstd, your brokers must be at least 2.1 and all consumers must be upgraded
 // to support decoding zstd records.
+//
+// Alternatively, if you want finer control over compression you can use
+// [WithCompressor] for complete control.
 func ProducerBatchCompression(preference ...CompressionCodec) ProducerOpt {
 	return producerOpt{func(cfg *cfg) { cfg.compression = preference }}
+}
+
+// WithCompressor allows you to completely control how produce batches are
+// compressed, allowing you to use alternative libraries than what franz-go
+// supports, allowing you to have more control over memory & pooling, and
+// other benefits. It is recommended to just use [ProducerBatchCompression]
+// for simplicity (or specify nothing, which opts into snappy by default).
+// The client default compressor is the [DefaultCompressor].
+func WithCompressor(compressor Compressor) ProducerOpt {
+	return producerOpt{func(cfg *cfg) { cfg.compressor = compressor }}
 }
 
 // ProducerBatchMaxBytes upper bounds the size of a record batch, overriding
@@ -1420,6 +1435,14 @@ func DisableFetchSessions() ConsumerOpt {
 // similar lag number).
 func ConsumePreferringLagFn(fn PreferLagFn) ConsumerOpt {
 	return consumerOpt{func(cfg *cfg) { cfg.preferLagFn = fn }}
+}
+
+// WithDecompressor allows you to completely control how fetch batches are
+// decompressed, allowing you to use alternative libraries than what franz-go
+// supports, allowing you to have more control over memory & pooling, and other
+// benefits. The client default compressor is the [DefaultDecompressor].
+func WithDecompressor(decompressor Decompressor) ConsumerOpt {
+	return consumerOpt{func(cfg *cfg) { cfg.decompressor = decompressor }}
 }
 
 // KeepRetryableFetchErrors switches the client to always return any retryable

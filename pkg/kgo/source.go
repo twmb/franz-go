@@ -1098,7 +1098,7 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 				continue
 			}
 
-			fp := partOffset.processRespPartition(br, rp, s.cl.decompressor, s.cl.cfg.hooks)
+			fp := partOffset.processRespPartition(br, rp, s.cl.cfg.decompressor, s.cl.cfg.hooks)
 			if fp.Err != nil {
 				if moving := kmove.maybeAddFetchPartition(resp, rp, partOffset.from); moving {
 					strip(topic, partition, fp.Err)

@@ -85,7 +85,7 @@ func (s *sink) createReq(id int64, epoch int16) (*produceRequest, *kmsg.AddParti
 		producerEpoch: epoch,
 
 		hasHook:    s.cl.producer.hasHookBatchWritten,
-		compressor: s.cl.compressor,
+		compressor: s.cl.cfg.compressor,
 
 		wireLength:      s.cl.baseProduceRequestLength(), // start length with no topics
 		wireLengthLimit: s.cl.cfg.maxBrokerWriteBytes,
