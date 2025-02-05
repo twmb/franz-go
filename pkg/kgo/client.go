@@ -80,8 +80,8 @@ type Client struct {
 	producer producer
 	consumer consumer
 
-	compressor   *compressor
-	decompressor *decompressor
+	compressor   Compressor
+	decompressor Decompressor
 
 	coordinatorsMu sync.Mutex
 	coordinators   map[coordinatorKey]*coordinatorLoad
@@ -138,7 +138,7 @@ func parseSeeds(addrs []string) ([]hostport, error) {
 // This function validates the configuration and returns a few things that we
 // initialize while validating. The difference between this and NewClient
 // initialization is all NewClient initialization is infallible.
-func validateCfg(opts ...Opt) (cfg, []hostport, *compressor, error) {
+func validateCfg(opts ...Opt) (cfg, []hostport, Compressor, error) {
 	cfg := defaultCfg()
 	for _, opt := range opts {
 		opt.apply(&cfg)
@@ -150,7 +150,7 @@ func validateCfg(opts ...Opt) (cfg, []hostport, *compressor, error) {
 	if err != nil {
 		return cfg, nil, nil, err
 	}
-	compressor, err := newCompressor(cfg.compression...)
+	compressor, err := DefaultCompressor(cfg.compression...)
 	if err != nil {
 		return cfg, nil, nil, err
 	}
@@ -487,7 +487,7 @@ func NewClient(opts ...Opt) (*Client, error) {
 		prsPool: newPrsPool(),
 
 		compressor:   compressor,
-		decompressor: newDecompressor(),
+		decompressor: DefaultDecompressor(),
 
 		coordinators: make(map[coordinatorKey]*coordinatorLoad),
 

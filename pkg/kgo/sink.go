@@ -1760,7 +1760,7 @@ type produceRequest struct {
 	metrics produceMetrics
 	hasHook bool
 
-	compressor *compressor
+	compressor Compressor
 
 	// wireLength is initially the size of sending a produce request,
 	// including the request header, with no topics. We start with the
@@ -2204,7 +2204,7 @@ func (b seqRecBatch) appendTo(
 	producerID int64,
 	producerEpoch int16,
 	transactional bool,
-	compressor *compressor,
+	compressor Compressor,
 ) (dst []byte, m ProduceBatchMetrics) { // named return so that our defer for flexible versions can modify it
 	flexible := version >= 9
 	dst = in
@@ -2293,7 +2293,7 @@ func (b seqRecBatch) appendTo(
 		defer byteBuffers.Put(w)
 		w.Reset()
 
-		compressed, codec := compressor.compress(w, toCompress, version)
+		compressed, codec := compressor.Compress(w, toCompress, version)
 		if compressed != nil && // nil would be from an error
 			len(compressed) < len(toCompress) {
 			// our compressed was shorter: copy over
@@ -2336,7 +2336,7 @@ func (pr promisedRec) appendTo(dst []byte, offsetDelta int32) []byte {
 	return dst
 }
 
-func (b seqRecBatch) appendToAsMessageSet(dst []byte, version uint8, compressor *compressor) ([]byte, ProduceBatchMetrics) {
+func (b seqRecBatch) appendToAsMessageSet(dst []byte, version uint8, compressor Compressor) ([]byte, ProduceBatchMetrics) {
 	var m ProduceBatchMetrics
 
 	nullableBytesLenAt := len(dst)
@@ -2375,7 +2375,7 @@ func (b seqRecBatch) appendToAsMessageSet(dst []byte, version uint8, compressor 
 		defer byteBuffers.Put(w)
 		w.Reset()
 
-		compressed, codec := compressor.compress(w, toCompress, int16(version))
+		compressed, codec := compressor.Compress(w, toCompress, int16(version))
 		inner := &Record{Value: compressed}
 		wrappedLength := messageSet0Length(inner)
 		if version == 2 {

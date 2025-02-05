@@ -1293,7 +1293,7 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 
 // processRespPartition processes all records in all potentially compressed
 // batches (or message sets).
-func (o *cursorOffsetNext) processRespPartition(br *broker, rp *kmsg.FetchResponseTopicPartition, decompressor *decompressor, hooks hooks) FetchPartition {
+func (o *cursorOffsetNext) processRespPartition(br *broker, rp *kmsg.FetchResponseTopicPartition, decompressor Decompressor, hooks hooks) FetchPartition {
 	fp := FetchPartition{
 		Partition:        rp.Partition,
 		Err:              kerr.ErrorForCode(rp.ErrorCode),
@@ -1518,7 +1518,7 @@ func (o *cursorOffsetNext) processRecordBatch(
 	fp *FetchPartition,
 	batch *kmsg.RecordBatch,
 	aborter aborter,
-	decompressor *decompressor,
+	decompressor Decompressor,
 ) (int, int) {
 	if batch.Magic != 2 {
 		fp.Err = fmt.Errorf("unknown batch magic %d", batch.Magic)
@@ -1533,9 +1533,9 @@ func (o *cursorOffsetNext) processRecordBatch(
 	}
 
 	rawRecords := batch.Records
-	if compression := byte(batch.Attributes & 0x0007); compression != 0 {
+	if compression := CompressionCodecType(batch.Attributes & 0x0007); compression != 0 {
 		var err error
-		if rawRecords, err = decompressor.decompress(rawRecords, compression); err != nil {
+		if rawRecords, err = decompressor.Decompress(rawRecords, compression); err != nil {
 			fp.Err = &errDecompress{err}
 			return 0, 0 // truncated batch
 		}
@@ -1593,15 +1593,15 @@ func (o *cursorOffsetNext) processRecordBatch(
 func (o *cursorOffsetNext) processV1OuterMessage(
 	fp *FetchPartition,
 	message *kmsg.MessageV1,
-	decompressor *decompressor,
+	decompressor Decompressor,
 ) (int, int) {
-	compression := byte(message.Attributes & 0x0003)
+	compression := CompressionCodecType(message.Attributes & 0x0003)
 	if compression == 0 {
 		o.processV1Message(fp, message)
 		return 1, 0
 	}
 
-	rawInner, err := decompressor.decompress(message.Value, compression)
+	rawInner, err := decompressor.Decompress(message.Value, compression)
 	if err != nil {
 		fp.Err = &errDecompress{err}
 		return 0, 0 // truncated batch
@@ -1705,15 +1705,15 @@ func (o *cursorOffsetNext) processV1Message(
 func (o *cursorOffsetNext) processV0OuterMessage(
 	fp *FetchPartition,
 	message *kmsg.MessageV0,
-	decompressor *decompressor,
+	decompressor Decompressor,
 ) (int, int) {
-	compression := byte(message.Attributes & 0x0003)
+	compression := CompressionCodecType(message.Attributes & 0x0003)
 	if compression == 0 {
 		o.processV0Message(fp, message)
 		return 1, 0 // uncompressed bytes is 0; set to compressed bytes on return
 	}
 
-	rawInner, err := decompressor.decompress(message.Value, compression)
+	rawInner, err := decompressor.Decompress(message.Value, compression)
 	if err != nil {
 		fp.Err = &errDecompress{err}
 		return 0, 0 // truncated batch
