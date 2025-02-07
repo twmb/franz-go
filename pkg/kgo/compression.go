@@ -89,6 +89,9 @@ type Compressor interface {
 type Decompressor interface {
 	// Decompress decompresses src, which is compressed with codecType,
 	// and returns the decompressed data or an error.
+	//
+	// If the decompression codec type is CodecNone, this should return
+	// the input slice.
 	Decompress(src []byte, codecType CompressionCodecType) ([]byte, error)
 }
 
@@ -275,10 +278,13 @@ type decompressor struct {
 	ungzPool   sync.Pool
 	unlz4Pool  sync.Pool
 	unzstdPool sync.Pool
+	pools      pools
 }
 
 // DefaultDecompressor returns the default decompressor used by clients.
-func DefaultDecompressor() Decompressor {
+// If a pool is provided and implements PoolDecompressBytes, it will be
+// used.
+func DefaultDecompressor(pools ...Pool) Decompressor {
 	d := &decompressor{
 		ungzPool: sync.Pool{
 			New: func() any { return new(gzip.Reader) },
@@ -299,6 +305,7 @@ func DefaultDecompressor() Decompressor {
 				return r
 			},
 		},
+		pools: pools,
 	}
 	return d
 }
@@ -311,9 +318,25 @@ func (d *decompressor) Decompress(src []byte, codecType CompressionCodecType) ([
 	if codecType == CodecNone {
 		return src, nil
 	}
-	out := byteBuffers.Get().(*bytes.Buffer)
-	out.Reset()
-	defer byteBuffers.Put(out)
+
+	var out *bytes.Buffer
+	var rfn func() []byte
+	var userPooled bool
+	d.pools.each(func(p Pool) {
+		if pdecompressBytes, ok := p.(PoolDecompressBytes); ok {
+			s := pdecompressBytes.GetDecompressBytes(src, codecType)
+			out = bytes.NewBuffer(s)
+			rfn = out.Bytes
+			userPooled = true
+		}
+	})
+	if out == nil {
+		out = byteBuffers.Get().(*bytes.Buffer)
+		out.Reset()
+		defer byteBuffers.Put(out)
+		// We clone out.Bytes since we our pooling out ourselves.
+		rfn = func() []byte { return append([]byte(nil), out.Bytes()...) }
+	}
 
 	switch codecType {
 	case CodecGzip:
@@ -325,7 +348,7 @@ func (d *decompressor) Decompress(src []byte, codecType CompressionCodecType) ([
 		if _, err := io.Copy(out, ungz); err != nil {
 			return nil, err
 		}
-		return append([]byte(nil), out.Bytes()...), nil
+		return rfn(), nil
 	case CodecSnappy:
 		if len(src) > 16 && bytes.HasPrefix(src, xerialPfx) {
 			return xerialDecode(src)
@@ -334,7 +357,11 @@ func (d *decompressor) Decompress(src []byte, codecType CompressionCodecType) ([
 		if err != nil {
 			return nil, err
 		}
-		return append([]byte(nil), decoded...), nil
+		if userPooled {
+			return decoded, nil
+		} else {
+			return append([]byte(nil), decoded...), nil
+		}
 	case CodecLz4:
 		unlz4 := d.unlz4Pool.Get().(*lz4.Reader)
 		defer d.unlz4Pool.Put(unlz4)
@@ -342,7 +369,7 @@ func (d *decompressor) Decompress(src []byte, codecType CompressionCodecType) ([
 		if _, err := io.Copy(out, unlz4); err != nil {
 			return nil, err
 		}
-		return append([]byte(nil), out.Bytes()...), nil
+		return rfn(), nil
 	case CodecZstd:
 		unzstd := d.unzstdPool.Get().(*zstdDecoder)
 		defer d.unzstdPool.Put(unzstd)
@@ -350,7 +377,11 @@ func (d *decompressor) Decompress(src []byte, codecType CompressionCodecType) ([
 		if err != nil {
 			return nil, err
 		}
-		return append([]byte(nil), decoded...), nil
+		if userPooled {
+			return decoded, nil
+		} else {
+			return append([]byte(nil), decoded...), nil
+		}
 	default:
 		return nil, errors.New("unknown compression codec")
 	}
