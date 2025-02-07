@@ -1496,11 +1496,10 @@ func (a aborter) trackAbortedPID(producerID int64) {
 // processing records to fetch part //
 //////////////////////////////////////
 
-// readRawRecords reads n records from in and returns them, returning early if
-// there were partial records.
-func readRawRecords(n int, in []byte) []kmsg.Record {
-	rs := make([]kmsg.Record, n)
-	for i := 0; i < n; i++ {
+// readRawRecordsInto reads records from in and returns them, returning early
+// if there were partial records.
+func readRawRecordsInto(rs []kmsg.Record, in []byte) []kmsg.Record {
+	for i := 0; i < len(rs); i++ {
 		length, used := kbin.Varint(in)
 		total := used + int(length)
 		if used == 0 || length < 0 || len(in) < total {
@@ -1544,7 +1543,8 @@ func (o *cursorOffsetNext) processRecordBatch(
 	uncompressedBytes := len(rawRecords)
 
 	numRecords := int(batch.NumRecords)
-	krecords := readRawRecords(numRecords, rawRecords)
+	krecords := make([]kmsg.Record, numRecords)
+	krecords = readRawRecordsInto(krecords, rawRecords)
 
 	// KAFKA-5443: compacted topics preserve the last offset in a batch,
 	// even if the last record is removed, meaning that using offsets from
@@ -1564,12 +1564,15 @@ func (o *cursorOffsetNext) processRecordBatch(
 	}()
 
 	abortBatch := aborter.shouldAbortBatch(batch)
+	rrecords := make([]Record, len(krecords))
 	for i := range krecords {
-		record := recordToRecord(
+		record := &rrecords[i]
+		recordToRecord(
 			o.from.topic,
 			fp.Partition,
 			batch,
 			&krecords[i],
+			record,
 		)
 		o.maybeKeepRecord(fp, record, abortBatch)
 
@@ -1816,19 +1819,19 @@ func recordToRecord(
 	topic string,
 	partition int32,
 	batch *kmsg.RecordBatch,
-	record *kmsg.Record,
-) *Record {
-	h := make([]RecordHeader, 0, len(record.Headers))
-	for _, kv := range record.Headers {
+	krecord *kmsg.Record,
+	r *Record,
+) {
+	h := make([]RecordHeader, 0, len(krecord.Headers))
+	for _, kv := range krecord.Headers {
 		h = append(h, RecordHeader{
 			Key:   kv.Key,
 			Value: kv.Value,
 		})
 	}
-
-	r := &Record{
-		Key:           record.Key,
-		Value:         record.Value,
+	*r = Record{
+		Key:           krecord.Key,
+		Value:         krecord.Value,
 		Headers:       h,
 		Topic:         topic,
 		Partition:     partition,
@@ -1840,14 +1843,13 @@ func recordToRecord(
 	if batch.FirstOffset == -1 {
 		r.Offset = -1
 	} else {
-		r.Offset = batch.FirstOffset + int64(record.OffsetDelta)
+		r.Offset = batch.FirstOffset + int64(krecord.OffsetDelta)
 	}
 	if r.Attrs.TimestampType() == 0 {
-		r.Timestamp = timeFromMillis(batch.FirstTimestamp + record.TimestampDelta64)
+		r.Timestamp = timeFromMillis(batch.FirstTimestamp + krecord.TimestampDelta64)
 	} else {
 		r.Timestamp = timeFromMillis(batch.MaxTimestamp)
 	}
-	return r
 }
 
 func messageAttrsToRecordAttrs(attrs int8, v0 bool) RecordAttrs {
