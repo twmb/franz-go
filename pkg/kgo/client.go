@@ -152,7 +152,7 @@ func validateCfg(opts ...Opt) (cfg, []hostport, error) {
 		}
 	}
 	if cfg.decompressor == nil {
-		cfg.decompressor = DefaultDecompressor()
+		cfg.decompressor = DefaultDecompressor(cfg.pools...)
 	}
 
 	return cfg, seeds, nil
@@ -282,6 +282,8 @@ func (cl *Client) OptValues(opt any) []any {
 		return []any{cfg.sasls}
 	case namefn(WithHooks):
 		return []any{cfg.hooks}
+	case namefn(WithPools):
+		return []any{cfg.pools}
 	case namefn(ConcurrentTransactionsBackoff):
 		return []any{cfg.txnBackoff}
 	case namefn(ConsiderMissingTopicDeletedAfter):

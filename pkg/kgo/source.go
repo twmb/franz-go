@@ -1301,6 +1301,7 @@ func (o *cursorOffsetNext) processRespPartition(br *broker, rp *kmsg.FetchRespon
 		IsolationLevel:     IsolationLevel{br.cl.cfg.isolationLevel},
 		Topic:              o.from.topic,
 		Partition:          o.from.partition,
+		Pools:              br.cl.cfg.pools,
 	}
 	fp, o.offset = ProcessFetchPartition(opts, rp, decompressor, func(m FetchBatchMetrics) {
 		hooks.each(func(h Hook) {
@@ -1341,6 +1342,9 @@ type ProcessFetchPartitionOpts struct {
 
 	// Topic is used to populate the Partition field of each Record.
 	Partition int32
+
+	// Pools contain potential pools to use for memory pooling.
+	Pools []Pool
 }
 
 // ProcessFetchPartition processes all records in all batches or message sets
@@ -1558,6 +1562,7 @@ func readRawRecordsInto(rs []kmsg.Record, in []byte) []kmsg.Record {
 			return rs[:i]
 		}
 		if err := (&rs[i]).ReadFrom(in[:total]); err != nil {
+			rs[i] = kmsg.Record{} // clear any invalid partial data
 			return rs[:i]
 		}
 		in = in[total:]
@@ -1583,19 +1588,53 @@ func (o *ProcessFetchPartitionOpts) processRecordBatch(
 		return 0, 0
 	}
 
+	var usesPools bool
+
 	rawRecords := batch.Records
+	var decompressBytes []byte
 	if compression := CompressionCodecType(batch.Attributes & 0x0007); compression != 0 {
 		var err error
 		if rawRecords, err = decompressor.Decompress(rawRecords, compression); err != nil {
 			fp.Err = &errDecompress{err}
 			return 0, 0 // truncated batch
 		}
+		// We only put back into the decompress pool IF we decompressed
+		// AND if a pool implement the interface AND if the batch was
+		// actually compressed. The default decompressor uses the pool
+		// if present, and it is expected that users overriding the
+		// decompressor use the pool as well (if provided to the
+		// client). Worst case, the use gets data put back into their
+		// pool that they didn't create.
+		pools(o.Pools).each(func(p Pool) bool {
+			if _, ok := p.(PoolDecompressBytes); ok {
+				decompressBytes = rawRecords
+				usesPools = true
+				return true
+			}
+			return false
+		})
 	}
 
 	uncompressedBytes := len(rawRecords)
 
 	numRecords := int(batch.NumRecords)
-	krecords := make([]kmsg.Record, numRecords)
+	var krecords []kmsg.Record
+	var krecordsPool PoolKRecords
+	pools(o.Pools).each(func(p Pool) bool {
+		if pkrecs, ok := p.(PoolKRecords); ok {
+			krecords = pkrecs.GetKRecords(numRecords)
+			krecordsPool = pkrecs
+			return true
+		}
+		return false
+	})
+	if krecordsPool != nil {
+		defer func() {
+			krecords = krecords[:cap(krecords)]
+			krecordsPool.PutKRecords(krecords)
+		}()
+	}
+	krecords = ensureLen(krecords, numRecords)
 	krecords = readRawRecordsInto(krecords, rawRecords)
 
 	// KAFKA-5443: compacted topics preserve the last offset in a batch,
@@ -1616,7 +1655,29 @@ func (o *ProcessFetchPartitionOpts) processRecordBatch(
 	}()
 
 	abortBatch := aborter.shouldAbortBatch(batch)
-	rrecords := make([]Record, len(krecords))
+	var rrecords []Record
+	pools(o.Pools).each(func(p Pool) bool {
+		if precs, ok := p.(PoolRecords); ok {
+			rrecords = precs.GetRecords(numRecords)
+			usesPools = true
+			return true
+		}
+		return false
+	})
+	rrecords = ensureLen(rrecords, numRecords)
+
+	var p *recordPools
+	var poolsCtx context.Context
+	if usesPools {
+		p, poolsCtx = recordPoolsCtx(o.Pools, decompressBytes, rrecords)
+	}
+	var nkept int
+	defer func() {
+		if p != nil && nkept > 0 {
+			p.n.Add(int64(nkept))
+		}
+	}()
+
 	for i := range krecords {
 		record := &rrecords[i]
 		recordToRecord(
@@ -1626,7 +1687,11 @@ func (o *ProcessFetchPartitionOpts) processRecordBatch(
 			&krecords[i],
 			record,
 		)
-		o.maybeKeepRecord(fp, record, abortBatch)
+		record.Context = poolsCtx
+		krecords[i] = kmsg.Record{} // prevent the kmsg.Record from hanging onto anything
+		if kept := o.maybeKeepRecord(fp, record, abortBatch); kept {
+			nkept++
+		}
 
 		if abortBatch && record.Attrs.IsControl() {
 			// A control record has a key and a value where the key
@@ -1836,11 +1901,11 @@ func (o *ProcessFetchPartitionOpts) processV0Message(
 //
 // If the record is being aborted or the record is a control record and the
 // client does not want to keep control records, this does not keep the record.
-func (o *ProcessFetchPartitionOpts) maybeKeepRecord(fp *FetchPartition, record *Record, abort bool) {
+func (o *ProcessFetchPartitionOpts) maybeKeepRecord(fp *FetchPartition, record *Record, abort bool) (kept bool) {
 	if record.Offset < o.Offset {
 		// We asked for offset 5, but that was in the middle of a
 		// batch; we got offsets 0 thru 4 that we need to skip.
-		return
+		return false
 	}
 
 	// We only keep control records if specifically requested.
@@ -1849,11 +1914,13 @@ func (o *ProcessFetchPartitionOpts) maybeKeepRecord(fp *FetchPartition, record *
 	}
 	if !abort {
 		fp.Records = append(fp.Records, record)
+		kept = true
 	}
 
 	// The record offset may be much larger than our expected offset if the
 	// topic is compacted.
 	o.Offset = record.Offset + 1
+	return kept
 }
 
 ///////////////////////////////
