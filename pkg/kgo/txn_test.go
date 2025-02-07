@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strconv"
 	"testing"
 	"time"
@@ -154,6 +155,7 @@ func (c *testConsumer) transact(txnsBeforeQuit int) {
 		FetchIsolationLevel(ReadCommitted()),
 		Balancers(c.balancer),
 		MaxBufferedRecords(10000),
+		WithPools(new(primitivePool)),
 	}
 	if requireStableFetch {
 		opts = append(opts, RequireStableFetchOffsets())
@@ -217,8 +219,8 @@ func (c *testConsumer) transact(txnsBeforeQuit int) {
 				context.Background(),
 				&Record{
 					Topic: c.produceTo,
-					Key:   r.Key,
-					Value: r.Value,
+					Key:   slices.Clone(r.Key),
+					Value: slices.Clone(r.Value),
 				},
 				func(_ *Record, err error) {
 					if err != nil && !errors.Is(err, ErrAborting) {
@@ -226,6 +228,7 @@ func (c *testConsumer) transact(txnsBeforeQuit int) {
 					}
 				},
 			)
+			r.Recycle() // we take care above to copy necessary fields
 		}
 
 		wantCommit := txnsBeforeQuit < 0 || ntxns < txnsBeforeQuit
