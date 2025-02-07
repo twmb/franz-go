@@ -345,6 +345,51 @@ func tmpGroup(tb testing.TB) (string, func()) {
 	}
 }
 
+// The point of this pool is that, if used, it *will* return something from the
+// Get's after the Put's have been put into. Using it in txn test allows us to
+// detect races.
+type primitivePool struct {
+	bytes sync.Pool
+	krecs sync.Pool
+	recs  sync.Pool
+}
+
+func (p *primitivePool) GetDecompressBytes([]byte, CompressionCodecType) []byte {
+	get := p.bytes.Get()
+	if get != nil {
+		return get.([]byte)
+	}
+	return nil
+}
+
+func (p *primitivePool) PutDecompressBytes(put []byte) {
+	p.bytes.Put(put) //nolint:staticcheck // ...
+}
+
+func (p *primitivePool) GetKRecords(int) []kmsg.Record {
+	get := p.krecs.Get()
+	if get != nil {
+		return get.([]kmsg.Record)
+	}
+	return nil
+}
+
+func (p *primitivePool) PutKRecords(put []kmsg.Record) {
+	p.krecs.Put(put) //nolint:staticcheck // ...
+}
+
+func (p *primitivePool) GetRecords(int) []kmsg.Record {
+	get := p.recs.Get()
+	if get != nil {
+		return get.([]kmsg.Record)
+	}
+	return nil
+}
+
+func (p *primitivePool) PutRecords(put []kmsg.Record) {
+	p.recs.Put(put) //nolint:staticcheck // ...
+}
+
 // testConsumer performs ETL inside or outside transactions;
 // the ETL functions are defined in group_test.go and txn_test.go
 type testConsumer struct {

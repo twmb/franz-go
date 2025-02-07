@@ -1680,6 +1680,9 @@ func (recBuf *recBuf) newRecordBatch() *recBatch {
 	}
 }
 
+// prsPool is the one pool we have internally that is hard to expose an
+// interface for. That said, ideally batch size is relatively consistent
+// over time and using our own internal pool is fine enough.
 type prsPool struct{ p *sync.Pool }
 
 func newPrsPool() prsPool {

@@ -238,6 +238,7 @@ func (c *testConsumer) etl(etlsBeforeQuit int) {
 					}
 				},
 			)
+			r.Recycle() // should be a no-op since we are not using pooling
 		}
 	}
 }

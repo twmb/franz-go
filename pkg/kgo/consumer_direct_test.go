@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kerr"
+	"github.com/twmb/franz-go/pkg/kmsg"
 )
 
 // Allow adding a topic to consume after the client is initialized with nothing
@@ -681,5 +682,114 @@ func TestIssue865(t *testing.T) {
 	}
 	if nbytebuf != 0 {
 		t.Errorf("got byte buffered %d != 0", nbytebuf)
+	}
+}
+
+type testPooling struct {
+	t *testing.T
+
+	givenDecompress []byte
+	givenKRecs      []kmsg.Record
+	givenRecs       []Record
+
+	putDecompress bool
+	putKRecs      bool
+	putRecs       bool
+}
+
+func (p *testPooling) GetDecompressBytes([]byte, CompressionCodecType) []byte {
+	r := make([]byte, 10<<10) // surely enough for the small amount we produce
+	p.givenDecompress = r
+	return r
+}
+
+func (p *testPooling) PutDecompressBytes(put []byte) {
+	if &put[0] != &p.givenDecompress[0] {
+		p.t.Error("PutDecompressByte != given!")
+	}
+	p.putDecompress = true
+}
+
+func (p *testPooling) GetKRecords(int) []kmsg.Record {
+	r := make([]kmsg.Record, 100) // same
+	p.givenKRecs = r
+	return r
+}
+
+func (p *testPooling) PutKRecords(put []kmsg.Record) {
+	if &put[0] != &p.givenKRecs[0] {
+		p.t.Error("PutKRecords != given!")
+	}
+	p.putKRecs = true
+}
+
+func (p *testPooling) GetRecords(int) []Record {
+	r := make([]Record, 100) // same
+	p.givenRecs = r
+	return r
+}
+
+func (p *testPooling) PutRecords(put []Record) {
+	if &put[0] != &p.givenRecs[0] {
+		p.t.Error("PutRecords != given!")
+	}
+	p.putRecs = true
+}
+
+func TestPooling(t *testing.T) {
+	t.Parallel()
+
+	var _ interface {
+		PoolDecompressBytes
+		PoolKRecords
+		PoolRecords
+	} = new(testPooling)
+
+	t1, cleanup1 := tmpTopicPartitions(t, 1)
+	defer cleanup1()
+
+	pool := &testPooling{t: t}
+
+	cl, _ := newTestClient(
+		UnknownTopicRetries(-1),
+		DefaultProduceTopic(t1),
+		ConsumeTopics(t1),
+		ManualFlushing(),
+		WithPools(pool),
+	)
+	defer cl.Close()
+
+	const nrecs = 10
+
+	var wg sync.WaitGroup
+	for i := 0; i < nrecs; i++ {
+		wg.Add(1)
+		cl.Produce(context.Background(), StringRecord("foobarfoobarfoobarfoobar"), func(_ *Record, err error) {
+			defer wg.Done()
+			if err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+
+	cl.Flush(context.Background())
+	wg.Wait()
+
+	for consumed := 0; consumed < nrecs; {
+		fs := cl.PollFetches(context.Background())
+		consumed += fs.NumRecords()
+		fs.EachRecord(func(r *Record) {
+			r.Recycle()
+		})
+	}
+
+	if !pool.putDecompress {
+		t.Error("did not put decompress!")
+	}
+	if !pool.putKRecs {
+		t.Error("did not put krecs!")
+	}
+	if !pool.putRecs {
+		t.Error("did not put recs!")
 	}
 }
