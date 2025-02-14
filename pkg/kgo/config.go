@@ -569,9 +569,9 @@ func WithLogger(l Logger) Opt {
 	return clientOpt{func(cfg *cfg) { cfg.logger = &wrappedLogger{l} }}
 }
 
-// WithContext sets the client to use the a custom context.
+// WithContext sets the client to use a custom context.
 //
-// By default the client uses context.Background.
+// By default, the client uses context.Background.
 func WithContext(ctx context.Context) Opt {
 	return clientOpt{func(cfg *cfg) { cfg.ctx = ctx }}
 }
