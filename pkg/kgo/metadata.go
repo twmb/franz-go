@@ -75,6 +75,26 @@ func (cl *Client) PartitionLeader(topic string, partition int32) (leader, leader
 	return p.leader, p.leaderEpoch, p.loadErr
 }
 
+func (cl *Client) id2topic(id [16]byte) string {
+	m := cl.id2tMap()
+	t := m[id]
+	return t
+}
+
+var noid2t = make(map[[16]byte]string)
+
+func (cl *Client) id2tMap() map[[16]byte]string {
+	v := cl.id2t.Load()
+	if v == nil {
+		return noid2t
+	}
+	m := v.(map[[16]byte]string)
+	if m == nil {
+		return noid2t
+	}
+	return m
+}
+
 // waitmeta returns immediately if metadata was updated within the last second,
 // otherwise this waits for up to wait for a metadata update to complete.
 func (cl *Client) waitmeta(ctx context.Context, wait time.Duration, why string) {
@@ -460,6 +480,7 @@ type metadataTopic struct {
 	loadErr    error
 	isInternal bool
 	topic      string
+	id         [16]byte
 	partitions []metadataPartition
 }
 
@@ -471,6 +492,7 @@ func (mt *metadataTopic) newPartitions(cl *Client, isProduce bool) *topicPartiti
 		partitions:         make([]*topicPartition, 0, n),
 		writablePartitions: make([]*topicPartition, 0, n),
 		topic:              mt.topic,
+		id:                 mt.id,
 		when:               time.Now().Unix(),
 	}
 	for i := range mt.partitions {
@@ -541,6 +563,8 @@ func (cl *Client) fetchTopicMetadata(all bool, reqTopics []string) (map[string]*
 	}
 
 	topics := make(map[string]*metadataTopic, len(meta.Topics))
+	id2t := make(map[[16]byte]string, len(meta.Topics))
+	defer cl.id2t.Store(id2t)
 
 	// Even if metadata returns a leader epoch, we do not use it unless we
 	// can validate it per OffsetForLeaderEpoch. Some brokers may have an
@@ -555,10 +579,13 @@ func (cl *Client) fetchTopicMetadata(all bool, reqTopics []string) (map[string]*
 		}
 		topic := *topicMeta.Topic
 
+		id2t[topicMeta.TopicID] = topic
+
 		mt := &metadataTopic{
 			loadErr:    kerr.ErrorForCode(topicMeta.ErrorCode),
 			isInternal: topicMeta.IsInternal,
 			topic:      topic,
+			id:         topicMeta.TopicID,
 			partitions: make([]metadataPartition, 0, len(topicMeta.Partitions)),
 		}
 
@@ -666,6 +693,7 @@ func (cl *Client) mergeTopicPartitions(
 	lv.loadErr = r.loadErr
 	lv.isInternal = r.isInternal
 	lv.topic = r.topic
+	lv.id = r.id
 	if lv.when == 0 {
 		lv.when = r.when
 	}
