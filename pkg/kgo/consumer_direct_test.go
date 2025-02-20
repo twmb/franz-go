@@ -793,3 +793,40 @@ func TestPooling(t *testing.T) {
 		t.Error("did not put recs!")
 	}
 }
+
+func TestGroupSimple(t *testing.T) {
+	t.Parallel()
+
+	t1, cleanup := tmpTopicPartitions(t, 1)
+	defer cleanup()
+	g1, gcleanup := tmpGroup(t)
+	defer gcleanup()
+
+	cl, _ := newTestClient(
+		DefaultProduceTopic(t1),
+		ConsumeTopics(t1),
+		ConsumerGroup(g1),
+		MetadataMinAge(100*time.Millisecond),
+		FetchMaxWait(time.Second),
+		UnknownTopicRetries(-1),
+	)
+	defer cl.Close()
+
+	for i := 0; i < 2; i++ {
+		if err := cl.ProduceSync(context.Background(), StringRecord("foo")).FirstErr(); err != nil {
+			t.Fatal(err)
+		}
+
+		fs := cl.PollFetches(context.Background())
+
+		if errs := fs.Errors(); errs != nil {
+			t.Errorf("unexpected fetch errors: %v", errs)
+		}
+		if num := fs.NumRecords(); num != 1 {
+			t.Errorf("expected only one record, got %d", num)
+		}
+		if err := cl.CommitUncommittedOffsets(context.Background()); err != nil {
+			t.Errorf("unexpected err: %v", err)
+		}
+	}
+}
