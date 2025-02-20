@@ -448,7 +448,8 @@ func NewClient(opts ...Opt) (*Client, error) {
 			switch key {
 			case ((*kmsg.JoinGroupRequest)(nil)).Key(),
 				((*kmsg.SyncGroupRequest)(nil)).Key(),
-				((*kmsg.HeartbeatRequest)(nil)).Key():
+				((*kmsg.HeartbeatRequest)(nil)).Key(),
+				((*kmsg.ConsumerGroupHeartbeatRequest)(nil)).Key():
 				return cfg.sessionTimeout
 			}
 			return 30 * time.Second
@@ -616,7 +617,9 @@ func (cl *Client) Ping(ctx context.Context) error {
 // topic no longer exists, or if you are consuming via regex and know that some
 // previously consumed topics no longer exist, or if you simply do not want to
 // ever consume from a topic again. If you are group consuming, this function
-// will likely cause a rebalance.
+// will likely cause a rebalance. If you are consuming via regex and the topic
+// still exists on the broker, this function will at most only temporarily
+// remove the topic from the client and the topic will be re-discovered.
 //
 // For admin requests, this deletes the topic from the cached metadata map for
 // sharded requests. Metadata for sharded admin requests is only cached for
@@ -847,6 +850,18 @@ func (cl *Client) waitTries(ctx context.Context, backoff time.Duration) bool {
 // the rest of the cluster is upgraded and supports the request.
 func (cl *Client) supportsOffsetForLeaderEpoch() bool {
 	return cl.supportsKeyVersion(int16(kmsg.OffsetForLeaderEpoch), 2)
+}
+
+// Called after the first metadata request, before we go into either
+// (*groupConsumer).manage or (*groupConsumer).manage848.
+func (cl *Client) supportsKIP848() bool {
+	return cl.supportsKeyVersion(int16(kmsg.ConsumerGroupHeartbeat), 0)
+}
+
+// v1 introduces support for regex and requires the client to generate
+// the member ID.
+func (cl *Client) supportsKIP848v1() bool {
+	return cl.supportsKeyVersion(int16(kmsg.ConsumerGroupHeartbeat), 1)
 }
 
 // A broker may not support some requests we want to make. This function checks
@@ -1501,7 +1516,8 @@ func (cl *Client) shardedRequest(ctx context.Context, req kmsg.Request) ([]Respo
 		return shards(cl.handleAdminReq(ctx, t)), nil
 
 	case kmsg.GroupCoordinatorRequest,
-		kmsg.TxnCoordinatorRequest:
+		kmsg.TxnCoordinatorRequest,
+		*kmsg.ConsumerGroupHeartbeatRequest:
 		return shards(cl.handleCoordinatorReq(ctx, t)), nil
 
 	case *kmsg.ApiVersionsRequest:
@@ -1990,6 +2006,8 @@ func (cl *Client) handleCoordinatorReq(ctx context.Context, req kmsg.Request) Re
 		return cl.handleCoordinatorReqSimple(ctx, coordinatorTypeGroup, t.Group, req)
 	case *kmsg.OffsetDeleteRequest:
 		return cl.handleCoordinatorReqSimple(ctx, coordinatorTypeGroup, t.Group, req)
+	case *kmsg.ConsumerGroupHeartbeatRequest:
+		return cl.handleCoordinatorReqSimple(ctx, coordinatorTypeGroup, t.Group, req)
 	}
 }
 
@@ -2051,6 +2069,8 @@ func (cl *Client) handleReqWithCoordinator(
 		case *kmsg.LeaveGroupResponse:
 			code = t.ErrorCode
 		case *kmsg.SyncGroupResponse:
+			code = t.ErrorCode
+		case *kmsg.ConsumerGroupHeartbeatResponse:
 			code = t.ErrorCode
 		}
 

@@ -75,12 +75,6 @@ func (cl *Client) PartitionLeader(topic string, partition int32) (leader, leader
 	return p.leader, p.leaderEpoch, p.loadErr
 }
 
-func (cl *Client) id2topic(id [16]byte) string {
-	m := cl.id2tMap()
-	t := m[id]
-	return t
-}
-
 var noid2t = make(map[[16]byte]string)
 
 func (cl *Client) id2tMap() map[[16]byte]string {
