@@ -5,7 +5,7 @@ type directConsumer struct {
 	tps    *topicsPartitions           // data for topics that the user assigned
 	using  mtmps                       // topics we are currently using
 	m      mtmps                       // mirrors cfg.topics and cfg.partitions, but can change with Purge or Add
-	ps     map[string]map[int32]Offset // mirrors cfg.partitions, changed in Purge or Add
+	ps     map[string]map[int32]Offset // mirrors cfg.partitions, changed in Purge or Add, for direct partition consuming
 	reSeen map[string]bool             // topics we evaluated against regex, and whether we want them or not
 }
 
