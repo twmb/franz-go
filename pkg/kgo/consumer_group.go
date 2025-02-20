@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -722,7 +723,7 @@ func (g *groupConsumer) revoke(stage revokeStage, lost map[string][]int32, leavi
 	}
 
 	if stage != revokeThisSession { // cooperative consumers rejoin after they revoking what they lost
-		defer g.rejoin("cooperative rejoin after revoking what we lost from a rebalance")
+		defer g.rejoin("after revoking what we lost from a rebalance")
 	}
 
 	// The block below deletes everything lost from our uncommitted map.
@@ -914,8 +915,8 @@ func (g *groupConsumer) setupAssignedAndHeartbeat() (string, error) {
 //
 // This function begins before fetching offsets to allow the consumer's
 // onAssigned to be called before fetching. If the eventual offset fetch
-// errors, we continue heartbeating until onRevoked finishes and our metadata
-// is updated. If the error is not RebalanceInProgress, we return immediately.
+// errors, we continue heartbeating until onRevoked finishes.
+// If the error is not RebalanceInProgress, we return immediately.
 //
 // If the offset fetch is successful, then we basically sit in this function
 // until a heartbeat errors or we, being the leader, decide to re-join.
@@ -931,8 +932,8 @@ func (g *groupConsumer) heartbeat(fetchErrCh <-chan error, s *assignRevokeSessio
 		cooperativeFastCheck = time.After(500 * time.Millisecond)
 	}
 
-	var metadone, revoked <-chan struct{}
-	var heartbeat, didMetadone, didRevoke bool
+	var revoked <-chan struct{}
+	var heartbeat, didRevoke bool
 	var rejoinWhy string
 	var lastErr error
 
@@ -956,9 +957,6 @@ func (g *groupConsumer) heartbeat(fetchErrCh <-chan error, s *assignRevokeSessio
 			err = kerr.RebalanceInProgress
 		case err = <-fetchErrCh:
 			fetchErrCh = nil
-		case <-metadone:
-			metadone = nil
-			didMetadone = true
 		case <-revoked:
 			revoked = nil
 			didRevoke = true
@@ -989,11 +987,10 @@ func (g *groupConsumer) heartbeat(fetchErrCh <-chan error, s *assignRevokeSessio
 			}
 		}
 
-		// The first error either triggers a clean revoke and metadata
-		// update or it returns immediately. If we triggered the
-		// revoke, we wait for it to complete regardless of any future
-		// error.
-		if didMetadone && didRevoke {
+		// The first error either triggers a clean revoke or it returns
+		// immediately. If we triggered the revoke, we wait for it to
+		// complete regardless of any future error.
+		if didRevoke {
 			return rejoinWhy, lastErr
 		}
 
@@ -1033,17 +1030,6 @@ func (g *groupConsumer) heartbeat(fetchErrCh <-chan error, s *assignRevokeSessio
 			// left and we revoke everything.
 			revoked = s.revoke(g, errors.Is(err, context.Canceled))
 		}
-		// Since we errored, while waiting for the revoke to finish, we
-		// update our metadata. A leader may have re-joined with new
-		// metadata, and we want the update.
-		if !didMetadone && metadone == nil {
-			waited := make(chan struct{})
-			metadone = waited
-			go func() {
-				g.cl.waitmeta(g.ctx, g.cfg.sessionTimeout, "waitmeta after heartbeat error")
-				close(waited)
-			}()
-		}
 
 		// We always save the latest error; generally this should be
 		// REBALANCE_IN_PROGRESS, but if the revoke takes too long,
@@ -1066,7 +1052,7 @@ func (g *groupConsumer) heartbeat(fetchErrCh <-chan error, s *assignRevokeSessio
 // rebalance and will instead reply to the member with its current assignment.
 func (cl *Client) ForceRebalance() {
 	if g := cl.consumer.g; g != nil {
-		g.rejoin("rejoin from ForceRebalance")
+		g.rejoin("from ForceRebalance")
 	}
 }
 
@@ -1433,6 +1419,9 @@ func (g *groupConsumer) handleSyncResp(protocol string, resp *kmsg.SyncGroupResp
 	if err != nil {
 		g.cfg.logger.Log(LogLevelError, "sync assignment parse failed", "group", g.cfg.group, "err", err)
 		return err
+	}
+	for _, v := range assigned {
+		slices.Sort(v)
 	}
 
 	g.cfg.logger.Log(LogLevelInfo, "synced", "group", g.cfg.group, "assigned", mtps(assigned))
