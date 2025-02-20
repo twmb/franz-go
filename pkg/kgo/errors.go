@@ -7,6 +7,8 @@ import (
 	"io"
 	"net"
 	"os"
+
+	"github.com/twmb/franz-go/pkg/kerr"
 )
 
 func isRetryableBrokerErr(err error) bool {
@@ -333,4 +335,14 @@ func (e *errDecompress) Unwrap() error { return e.err }
 func isDecompressErr(err error) bool {
 	var ed *errDecompress
 	return errors.As(err, &ed)
+}
+
+func errCodeMessage(code int16, errMessage *string) error {
+	if err := kerr.ErrorForCode(code); err != nil {
+		if errMessage != nil {
+			return fmt.Errorf("%s: %w", *errMessage, err)
+		}
+		return err
+	}
+	return nil
 }
