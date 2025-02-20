@@ -77,6 +77,7 @@ type Client struct {
 
 	producer producer
 	consumer consumer
+	id2t     atomic.Value // map[[16]byte]string
 
 	compressor   *compressor
 	decompressor *decompressor
