@@ -472,7 +472,9 @@ func (cl *Client) produce(
 			p.mu.Lock()
 			calcNums()
 			for !quit && (overMaxRecs || overMaxBytes) {
+				p.mu.Unlock()
 				p.c.Wait()
+				p.mu.Lock()
 				calcNums()
 			}
 			p.blocked.Add(-1)
@@ -481,7 +483,7 @@ func (cl *Client) produce(
 
 		drainBuffered := func(err error) {
 			// The expected case here is that a context was
-			// canceled while we we waiting for space, so we are
+			// canceled while we waiting for space, so we are
 			// exiting and need to kill the goro above.
 			//
 			// However, it is possible that the goro above has
