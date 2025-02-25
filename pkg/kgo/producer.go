@@ -471,13 +471,13 @@ func (cl *Client) produce(
 			defer close(wait)
 			p.mu.Lock()
 			calcNums()
-
-			// Condition lock is required for wait semantics
-			p.c.L.Lock()
-			defer p.c.L.Unlock()
 			for !quit && (overMaxRecs || overMaxBytes) {
 				p.mu.Unlock()
+				// Condition lock is required for wait semantics
+				p.c.L.Lock()
 				p.c.Wait()
+				p.c.L.Unlock()
+				// Re-acquire log to keep the lock on exit
 				p.mu.Lock()
 				calcNums()
 			}
