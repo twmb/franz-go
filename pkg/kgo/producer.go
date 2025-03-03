@@ -249,16 +249,18 @@ func (rs ProduceResults) First() (*Record, error) {
 func (cl *Client) ProduceSync(ctx context.Context, rs ...*Record) ProduceResults {
 	var (
 		wg      sync.WaitGroup
-		results = make(ProduceResults, 0, len(rs))
-		promise = func(r *Record, err error) {
-			results = append(results, ProduceResult{r, err})
-			wg.Done()
+		results = make(ProduceResults, len(rs))
+		promise = func(i int) func(r *Record, err error) {
+			return func(r *Record, err error) {
+				results[i] = ProduceResult{r, err}
+				wg.Done()
+			}
 		}
 	)
 
 	wg.Add(len(rs))
-	for _, r := range rs {
-		cl.Produce(ctx, r, promise)
+	for i, r := range rs {
+		cl.Produce(ctx, r, promise(i))
 	}
 	wg.Wait()
 
