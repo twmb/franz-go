@@ -271,7 +271,7 @@ issue:
 	// If we run tests in a container _immediately_ after the container
 	// starts, we can receive dial errors for a bit if the container is not
 	// fully initialized. Handle this by retrying specifically dial errors.
-	if ne := (*net.OpError)(nil); errors.As(err, &ne) && ne.Op == "dial" && time.Since(start) < 5*time.Second {
+	if ne := (*net.OpError)(nil); errors.As(err, &ne) && ne.Op == "dial" && time.Since(start) < 15*time.Second {
 		time.Sleep(10 * time.Millisecond)
 		goto issue
 	}
@@ -515,14 +515,14 @@ func testChainETL(
 		)
 	)
 
-	defer func() {
+	t.Cleanup(func() {
 		groupCleanup1()
 		groupCleanup2()
 		groupCleanup3()
 		topic2Cleanup()
 		topic3Cleanup()
 		topic4Cleanup()
-	}()
+	})
 
 	////////////////////
 	// CONSUMER START //

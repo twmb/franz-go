@@ -17,7 +17,7 @@ func TestTxnEtl(t *testing.T) {
 	t.Parallel()
 
 	topic1, topic1Cleanup := tmpTopic(t)
-	defer topic1Cleanup()
+	t.Cleanup(topic1Cleanup)
 
 	errs := make(chan error)
 	body := []byte(randsha()) // a small body so we do not flood RAM
