@@ -99,6 +99,7 @@ type cfg struct {
 	sasls []sasl.Mechanism
 
 	hooks hooks
+	pools pools
 
 	//////////////////////
 	// PRODUCER SECTION //
@@ -125,6 +126,7 @@ type cfg struct {
 	missingTopicDelete  time.Duration
 
 	partitioner Partitioner
+	compressor  Compressor
 
 	stopOnDataLoss bool
 	onDataLoss     func(string, int32)
@@ -142,6 +144,7 @@ type cfg struct {
 	keepControl    bool
 	rack           string
 	preferLagFn    PreferLagFn
+	decompressor   Decompressor
 
 	maxConcurrentFetches     int
 	disableFetchSessions     bool
@@ -389,6 +392,12 @@ func (cfg *cfg) validate() error {
 	}
 	cfg.hooks = processedHooks
 
+	processedPools, err := processPools(cfg.pools)
+	if err != nil {
+		return err
+	}
+	cfg.pools = processedPools
+
 	return nil
 }
 
@@ -411,6 +420,25 @@ func processHooks(hooks []Hook) ([]Hook, error) {
 		}
 	}
 	return processedHooks, nil
+}
+
+// Same as the above, but for pools.
+func processPools(pools []Pool) ([]Pool, error) {
+	var processedPools []Pool
+	for _, pool := range pools {
+		if implementsAnyPool(pool) {
+			processedPools = append(processedPools, pool)
+		} else if morePools, ok := pool.([]Pool); ok {
+			more, err := processPools(morePools)
+			if err != nil {
+				return nil, err
+			}
+			processedPools = append(processedPools, more...)
+		} else {
+			return nil, errors.New("found an argument that implements no pool interfaces")
+		}
+	}
+	return processedPools, nil
 }
 
 var reVersion = regexp.MustCompile(`^[a-zA-Z0-9](?:[a-zA-Z0-9.-]*[a-zA-Z0-9])?$`)
@@ -817,10 +845,25 @@ func SASL(sasls ...sasl.Mechanism) Opt {
 // Hooks can be used to layer in metrics (such as Prometheus hooks) or anything
 // else. The client will call all hooks in order. See the Hooks interface for
 // more information, as well as any interface that contains "Hook" in the name
-// to know the available hooks. A single hook can implement zero or all hook
+// to know the available hooks. A single hook can implement any or all hook
 // interfaces, and only the hooks that it implements will be called.
 func WithHooks(hooks ...Hook) Opt {
 	return clientOpt{func(cfg *cfg) { cfg.hooks = append(cfg.hooks, hooks...) }}
+}
+
+// WithPools sets memory pools to use wherever relevant.
+//
+// Pools can be used to optimize memory usage for data that is frequently
+// thrown away after a short usage. For a list of all supported pools, look at
+// the documentation for any interface that begins with "Pool". Multiple pools
+// may be used; the first pool that is received from is the first pull put back
+// into. A single pool can implement any or all pool interfaces.
+//
+// If you use pools for fetching, the record Context field will be populated.
+// This field is used for recycling the underlying memory once Recycle is
+// called; do not clear the field.
+func WithPools(pools ...Pool) Opt {
+	return clientOpt{func(cfg *cfg) { cfg.pools = append(cfg.pools, pools...) }}
 }
 
 // ConcurrentTransactionsBackoff sets the backoff interval to use during
@@ -922,16 +965,29 @@ func MaxProduceRequestsInflightPerBroker(n int) ProducerOpt {
 // ProducerBatchCompression sets the compression codec to use for producing
 // records.
 //
-// Compression is chosen in the order preferred based on broker support.  For
-// example, zstd compression was introduced in Kafka 2.1, so the preference
-// can be first zstd, fallback snappy, fallback none.
+// Compression is chosen in the order preferred based on broker support. For
+// example, zstd compression was introduced in Kafka 2.1, so the preference can
+// be first zstd, fallback snappy, fallback none.
 //
 // The default preference is [snappy, none], which should be fine for all old
 // consumers since snappy compression has existed since Kafka 0.8.0.  To use
 // zstd, your brokers must be at least 2.1 and all consumers must be upgraded
 // to support decoding zstd records.
+//
+// Alternatively, if you want finer control over compression you can use
+// [WithCompressor] for complete control.
 func ProducerBatchCompression(preference ...CompressionCodec) ProducerOpt {
 	return producerOpt{func(cfg *cfg) { cfg.compression = preference }}
+}
+
+// WithCompressor allows you to completely control how produce batches are
+// compressed, allowing you to use alternative libraries than what franz-go
+// supports, allowing you to have more control over memory & pooling, and
+// other benefits. It is recommended to just use [ProducerBatchCompression]
+// for simplicity (or specify nothing, which opts into snappy by default).
+// The client default compressor is the [DefaultCompressor].
+func WithCompressor(compressor Compressor) ProducerOpt {
+	return producerOpt{func(cfg *cfg) { cfg.compressor = compressor }}
 }
 
 // ProducerBatchMaxBytes upper bounds the size of a record batch, overriding
@@ -1395,6 +1451,14 @@ func DisableFetchSessions() ConsumerOpt {
 // similar lag number).
 func ConsumePreferringLagFn(fn PreferLagFn) ConsumerOpt {
 	return consumerOpt{func(cfg *cfg) { cfg.preferLagFn = fn }}
+}
+
+// WithDecompressor allows you to completely control how fetch batches are
+// decompressed, allowing you to use alternative libraries than what franz-go
+// supports, allowing you to have more control over memory & pooling, and other
+// benefits. The client default compressor is the [DefaultDecompressor].
+func WithDecompressor(decompressor Decompressor) ConsumerOpt {
+	return consumerOpt{func(cfg *cfg) { cfg.decompressor = decompressor }}
 }
 
 // KeepRetryableFetchErrors switches the client to always return any retryable

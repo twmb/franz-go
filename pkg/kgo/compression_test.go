@@ -52,7 +52,7 @@ func TestNewCompressor(t *testing.T) {
 			{codec: 1, level: 1},
 		}},
 	} {
-		_, err := newCompressor(test.codecs...)
+		_, err := DefaultCompressor(test.codecs...)
 		fail := err != nil
 		if fail != test.fail {
 			t.Errorf("#%d: ok? %v, exp ok? %v", i, !fail, !test.fail)
@@ -71,7 +71,7 @@ func TestCompressDecompress(t *testing.T) {
 	}
 
 	t.Parallel()
-	d := newDecompressor()
+	d := DefaultDecompressor()
 	inputs := [][]byte{
 		randStr(1 << 2),
 		randStr(1 << 5),
@@ -93,7 +93,7 @@ func TestCompressDecompress(t *testing.T) {
 				{{codec: 4}},
 				{{codec: 4}, {codec: 3}},
 			} {
-				c, _ := newCompressor(codecs...)
+				c, _ := DefaultCompressor(codecs...)
 				if c == nil {
 					if codecs[0].codec == 0 {
 						continue
@@ -109,8 +109,8 @@ func TestCompressDecompress(t *testing.T) {
 						for _, in := range inputs {
 							w.Reset()
 
-							got, used := c.compress(w, in, produceVersion)
-							got, err := d.decompress(got, byte(used))
+							got, used := c.Compress(w, in, produceVersion)
+							got, err := d.Decompress(got, used)
 							if err != nil {
 								t.Errorf("unexpected decompress err: %v", err)
 								return
@@ -129,14 +129,14 @@ func TestCompressDecompress(t *testing.T) {
 
 func BenchmarkCompress(b *testing.B) {
 	in := bytes.Repeat([]byte("abcdefghijklmno pqrs tuvwxy   z"), 100)
-	for _, codec := range []codecType{codecGzip, codecSnappy, codecLZ4, codecZstd} {
-		c, _ := newCompressor(CompressionCodec{codec: codec})
+	for _, codec := range []CompressionCodecType{CodecGzip, CodecSnappy, CodecLz4, CodecZstd} {
+		c, _ := DefaultCompressor(CompressionCodec{codec: codec})
 		b.Run(fmt.Sprint(codec), func(b *testing.B) {
 			var afterSize int
 			for i := 0; i < b.N; i++ {
 				w := byteBuffers.Get().(*bytes.Buffer)
 				w.Reset()
-				after, _ := c.compress(w, in, 99)
+				after, _ := c.Compress(w, in, 99)
 				afterSize = len(after)
 				byteBuffers.Put(w)
 			}
@@ -147,16 +147,16 @@ func BenchmarkCompress(b *testing.B) {
 
 func BenchmarkDecompress(b *testing.B) {
 	in := bytes.Repeat([]byte("abcdefghijklmno pqrs tuvwxy   z"), 100)
-	for _, codec := range []codecType{codecGzip, codecSnappy, codecLZ4, codecZstd} {
-		c, _ := newCompressor(CompressionCodec{codec: codec})
+	for _, codec := range []CompressionCodecType{CodecGzip, CodecSnappy, CodecLz4, CodecZstd} {
+		c, _ := DefaultCompressor(CompressionCodec{codec: codec})
 		w := byteBuffers.Get().(*bytes.Buffer)
 		w.Reset()
-		c.compress(w, in, 99)
+		c.Compress(w, in, 99)
 
 		b.Run(fmt.Sprint(codec), func(b *testing.B) {
 			for i := 0; i < b.N; i++ {
-				d := newDecompressor()
-				d.decompress(w.Bytes(), byte(codec))
+				d := DefaultDecompressor()
+				d.Decompress(w.Bytes(), codec)
 			}
 		})
 		byteBuffers.Put(w)
