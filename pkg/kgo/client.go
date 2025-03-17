@@ -537,6 +537,10 @@ func (cl *Client) Opts() []Opt {
 	return cl.opts
 }
 
+func (cl *Client) Context() context.Context {
+	return cl.ctx
+}
+
 func (cl *Client) loadSeeds() []*broker {
 	return cl.seeds.Load().([]*broker)
 }
