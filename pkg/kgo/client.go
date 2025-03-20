@@ -537,6 +537,10 @@ func (cl *Client) Opts() []Opt {
 	return cl.opts
 }
 
+// Context returns the internal context used wherever possible in the client.
+// By default this is context.WithCancel(context.Background()). You may
+// override the background context with your own via [WithContext].
+// The context is occasionally wrapped further internally in client subsystems.
 func (cl *Client) Context() context.Context {
 	return cl.ctx
 }
