@@ -969,6 +969,9 @@ func (cl *Client) updateBrokers(brokers []kmsg.MetadataResponseBroker) {
 // revoke, and the client does not assume that the final revoke is concurrency
 // safe. The CloseAllowingRebalance function exists a a shortcut to opt into
 // allowing rebalance while closing.
+//
+// If you are using static membership, CloseAllowingRebalance will NOT send a
+// leave group request. See InstanceID for more details.
 func (cl *Client) CloseAllowingRebalance() {
 	cl.AllowRebalance()
 	cl.Close()
@@ -989,6 +992,9 @@ func (cl *Client) CloseAllowingRebalance() {
 // and leaving a group causes a rebalance so that you can get one final
 // notification of revoked partitions. If you want to automatically allow
 // rebalancing, use CloseAllowingRebalance.
+//
+// If you are using static membership, Close will NOT send a leave group
+// request. See InstanceID for more details.
 func (cl *Client) Close() {
 	cl.close(cl.ctx)
 }
