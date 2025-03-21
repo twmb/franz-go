@@ -1541,9 +1541,9 @@ func (s *consumerSession) manageFetchConcurrency() {
 			var found bool
 			for i, want := range wantFetch {
 				if want == cancel {
-					_ = append(wantFetch[i:], wantFetch[i+1:]...)
-					wantFetch = wantFetch[:len(wantFetch)-1]
+					wantFetch = append(wantFetch[:i], wantFetch[i+1:]...)
 					found = true
+					break
 				}
 			}
 			// If we did not find the channel, then we have already
