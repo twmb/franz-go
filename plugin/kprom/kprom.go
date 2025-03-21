@@ -128,10 +128,12 @@ func (m *Metrics) OnNewClient(client *kgo.Client) {
 		factory     = promauto.With(m.cfg.reg)
 		namespace   = m.cfg.namespace
 		subsystem   = m.cfg.subsystem
-		constLabels prometheus.Labels
+		constLabels = m.cfg.withConstLabels
 	)
 	if m.cfg.withClientLabel {
-		constLabels = make(prometheus.Labels)
+		if constLabels == nil {
+			constLabels = make(prometheus.Labels)
+		}
 		constLabels["client_id"] = client.OptValue(kgo.ClientID).(string)
 	}
 

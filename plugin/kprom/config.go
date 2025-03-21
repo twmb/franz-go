@@ -3,6 +3,7 @@ package kprom
 import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"maps"
 )
 
 type cfg struct {
@@ -13,6 +14,7 @@ type cfg struct {
 	gatherer prometheus.Gatherer
 
 	withClientLabel  bool
+	withConstLabels  prometheus.Labels
 	histograms       map[Histogram][]float64
 	defBuckets       []float64
 	fetchProduceOpts fetchProduceOpts
@@ -99,6 +101,13 @@ func HandlerOpts(opts promhttp.HandlerOpts) Opt {
 // WithClientLabel adds a "cliend_id" label to all metrics.
 func WithClientLabel() Opt {
 	return opt{func(c *cfg) { c.withClientLabel = true }}
+}
+
+// WithStaticLabel adds a static label to all metrics.
+func WithStaticLabel(labels prometheus.Labels) Opt {
+	return opt{func(c *cfg) {
+		c.withConstLabels = maps.Clone(labels)
+	}}
 }
 
 // Subsystem sets the subsystem for the kprom metrics, overriding the default
