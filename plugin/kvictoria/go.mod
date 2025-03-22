@@ -1,8 +1,8 @@
 module github.com/twmb/franz-go/plugin/kvictoria
 
-go 1.21.13
+go 1.23.7
 
-toolchain go1.23.4
+toolchain go1.24.1
 
 require (
 	github.com/VictoriaMetrics/metrics v1.35.1

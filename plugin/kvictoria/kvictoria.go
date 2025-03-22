@@ -2,8 +2,9 @@ package kvictoria
 
 import (
 	"errors"
+	"maps"
 	"net"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -217,16 +218,11 @@ func (m *Metrics) buildName(name string, labels map[string]string) string {
 	}
 	builder.WriteString(name)
 
-	// Note: can't use maps.Keys yet because it needs Go 1.23+
-	labelNames := make([]string, 0, len(labels)/2)
-	for name := range labels {
-		labelNames = append(labelNames, name)
-	}
-	sort.Strings(labelNames)
+	labelNames := slices.Sorted(maps.Keys(labels))
 
 	if len(labels) > 0 {
 		builder.WriteRune('{')
-		for i, name := range labelNames {
+		for i, name := range slices.Sorted(maps.Keys(labels)) {
 			value := labels[name]
 
 			builder.WriteString(name)
