@@ -6532,8 +6532,6 @@ type MetadataRequest struct {
 	// IncludeTopicAuthorizedOperations, introduced in Kakfa 2.3.0, specifies
 	// whether to return a bitfield of AclOperations that this client can perform
 	// on individual topics. See KIP-430 for more details.
-	//
-	// This field was removed in Kafka 2.8.0 in favor of the new DescribeClusterRequest.
 	IncludeTopicAuthorizedOperations bool // v8+
 
 	// UnknownTags are tags Kafka sent that we do not know the purpose of.
@@ -44879,11 +44877,12 @@ type ConsumerGroupHeartbeatRequest struct {
 	UnknownTags Tags
 }
 
-func (*ConsumerGroupHeartbeatRequest) Key() int16                 { return 68 }
-func (*ConsumerGroupHeartbeatRequest) MaxVersion() int16          { return 0 }
-func (v *ConsumerGroupHeartbeatRequest) SetVersion(version int16) { v.Version = version }
-func (v *ConsumerGroupHeartbeatRequest) GetVersion() int16        { return v.Version }
-func (v *ConsumerGroupHeartbeatRequest) IsFlexible() bool         { return v.Version >= 0 }
+func (*ConsumerGroupHeartbeatRequest) Key() int16                   { return 68 }
+func (*ConsumerGroupHeartbeatRequest) MaxVersion() int16            { return 0 }
+func (v *ConsumerGroupHeartbeatRequest) SetVersion(version int16)   { v.Version = version }
+func (v *ConsumerGroupHeartbeatRequest) GetVersion() int16          { return v.Version }
+func (v *ConsumerGroupHeartbeatRequest) IsFlexible() bool           { return v.Version >= 0 }
+func (v *ConsumerGroupHeartbeatRequest) IsGroupCoordinatorRequest() {}
 func (v *ConsumerGroupHeartbeatRequest) ResponseKind() Response {
 	r := &ConsumerGroupHeartbeatResponse{Version: v.Version}
 	r.Default()
