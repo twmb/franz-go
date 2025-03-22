@@ -1,3 +1,64 @@
+// Package kvictoria provides metrics using the [VictoriaMetrics/metrics] library for a kgo client.
+//
+// # Metrics
+//
+// This package tracks the following metrics:
+//
+// Buffering:
+//
+//	{namespace}_{subsystem}_buffered_fetch_bytes_total{client_id="#{client_id}"} (gauge)
+//	{namespace}_{subsystem}_buffered_fetch_records_total{client_id="#{client_id}"} (gauge)
+//	{namespace}_{subsystem}_buffered_produce_bytes_total{client_id="#{client_id}"} (gauge)
+//	{namespace}_{subsystem}_buffered_produce_records_total{client_id="#{client_id}"} (gauge)
+//
+// Connections:
+//
+//	{namespace}_{subsystem}_connect_errors_total{node_id="#{node_id}"} (counter)
+//	{namespace}_{subsystem}_connects_total{node_id="#{node_id}"} (counter)
+//	{namespace}_{subsystem}_connect_seconds{node_id="#{node_id}"} (histogram)
+//	{namespace}_{subsystem}_disconnects_total{node_id="#{node_id}"} (counter)
+//
+// End to end:
+//
+//	{namespace}_{subsystem}_write_errors_total{node_id="#{node_id}"} (counter)
+//	{namespace}_{subsystem}_write_bytes_total{node_id="#{node_id}"} (counter)
+//	{namespace}_{subsystem}_write_wait_seconds{node_id="#{node_id}"} (histogram)
+//	{namespace}_{subsystem}_write_time_seconds{node_id="#{node_id}"} (histogram)
+//	{namespace}_{subsystem}_read_errors_total{node_id="#{node_id}"} (counter)
+//	{namespace}_{subsystem}_read_bytes_total{node_id="#{node_id}"} (counter)
+//	{namespace}_{subsystem}_read_wait_seconds{node_id="#{node_id}"} (histogram)
+//	{namespace}_{subsystem}_read_time_seconds{node_id="#{node_id}"} (histogram)
+//	{namespace}_{subsystem}_request_duration_e2e_seconds{node_id="#{node_id}"} (histogram)
+//
+// Misc:
+//
+//	{namespace}_{subsystem}_request_throttled_seconds{node_id="#{node_id}"} (histogram)
+//	{namespace}_{subsystem}_group_manage_error{node_id="#{node_id}"} (counter)
+//
+// Batches:
+//
+//	{namespace}_{subsystem}_produce_uncompressed_bytes_total{node_id="#{node_id}", topic="#{topic}", partition="#{partition}"} (counter)
+//	{namespace}_{subsystem}_produce_compressed_bytes_total{node_id="#{node_id}", topic="#{topic}", partition="#{partition}"} (counter)
+//	{namespace}_{subsystem}_produce_batches_total{node_id="#{node_id}", topic="#{topic}", partition="#{partition}"} (counter)
+//	{namespace}_{subsystem}_produce_records_total{node_id="#{node_id}", topic="#{topic}", partition="#{partition}"} (counter)
+//
+//	{namespace}_{subsystem}_fetch_uncompressed_bytes_total{node_id="#{node_id}", topic="#{topic}", partition="#{partition}"} (counter)
+//	{namespace}_{subsystem}_fetch_compressed_bytes_total{node_id="#{node_id}", topic="#{topic}", partition="#{partition}"} (counter)
+//	{namespace}_{subsystem}_fetch_batches_total{node_id="#{node_id}", topic="#{topic}", partition="#{partition}"} (counter)
+//	{namespace}_{subsystem}_fetch_records_total{node_id="#{node_id}", topic="#{topic}", partition="#{partition}"} (counter)
+//
+// # Usage
+//
+// This can be used in a client like this:
+//
+//	cl, err := kgo.NewCLient(
+//		kgo.WithHooks(kvictoria.NewMetrics("my_namespace")),
+//	)
+//
+// Note that you MUST use a new [Metrics] instance per client otherwise you can get surprising behaviour.
+//
+// Note that seed brokers use broker IDs prefixed with "seed_", with the number
+// corresponding to which seed it is.
 package kvictoria
 
 import (
@@ -35,7 +96,7 @@ var (
 type Metrics struct {
 	cfg cfg
 
-	sets map[string]*vm.Set
+	set *vm.Set
 }
 
 // NewMetrics returns a new Metrics that tracks metrics under the given namespace.
@@ -43,8 +104,7 @@ type Metrics struct {
 // You can pass options to configure the metrics reporting. See [Opt] for all existing options.
 func NewMetrics(namespace string, opts ...Opt) *Metrics {
 	return &Metrics{
-		cfg:  newCfg(namespace, opts...),
-		sets: make(map[string]*vm.Set),
+		cfg: newCfg(namespace, opts...),
 	}
 }
 
@@ -53,28 +113,24 @@ func NewMetrics(namespace string, opts ...Opt) *Metrics {
 func (m *Metrics) OnNewClient(client *kgo.Client) {
 	clientID := client.OptValue(kgo.ClientID).(string)
 
-	set, ok := m.sets[clientID]
-	if !ok {
-		set = vm.NewSet()
-		m.sets[clientID] = set
-	}
+	m.set = vm.NewSet()
 
 	labels := map[string]string{"client_id": clientID}
 
-	set.GetOrCreateGauge(m.buildName("buffered_fetch_bytes_total", labels), func() float64 {
+	m.set.GetOrCreateGauge(m.buildName("buffered_fetch_bytes_total", labels), func() float64 {
 		return float64(client.BufferedFetchBytes())
 	})
-	set.GetOrCreateGauge(m.buildName("buffered_fetch_records_total", labels), func() float64 {
+	m.set.GetOrCreateGauge(m.buildName("buffered_fetch_records_total", labels), func() float64 {
 		return float64(client.BufferedFetchRecords())
 	})
-	set.GetOrCreateGauge(m.buildName("buffered_produce_bytes_total", labels), func() float64 {
+	m.set.GetOrCreateGauge(m.buildName("buffered_produce_bytes_total", labels), func() float64 {
 		return float64(client.BufferedProduceBytes())
 	})
-	set.GetOrCreateGauge(m.buildName("buffered_produce_records_total", labels), func() float64 {
+	m.set.GetOrCreateGauge(m.buildName("buffered_produce_records_total", labels), func() float64 {
 		return float64(client.BufferedProduceRecords())
 	})
 
-	vm.RegisterSet(set)
+	vm.RegisterSet(m.set)
 }
 
 // OnClientClosed implements the [kgo.HookClientClosed] interface for metrics gathering.
@@ -82,14 +138,7 @@ func (m *Metrics) OnNewClient(client *kgo.Client) {
 //
 // This will unregister all metrics that are scoped to the client id of the client provided.
 func (m *Metrics) OnClientClosed(client *kgo.Client) {
-	clientID := client.OptValue(kgo.ClientID).(string)
-
-	set, ok := m.sets[clientID]
-	if !ok {
-		return
-	}
-
-	vm.UnregisterSet(set, true)
+	vm.UnregisterSet(m.set, true)
 }
 
 // OnBrokerConnect implements the [kgo.HookBrokerConnect] interface for metrics gathering.
