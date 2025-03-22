@@ -721,7 +721,7 @@ func (cl *Client) EndAndBeginTransaction(
 	// there could be a stranded txn within Kafka's ProducerStateManager,
 	// but ideally the user will reconnect with the same txnal id.
 	cl.producer.readded = true
-	return cl.doWithConcurrentTransactions(ctx, "AddPartitionsToTxn", func() error {
+	return cl.doWithConcurrentTransactions(ctx, "AddPartitionsToTxn-end&begin", func() error {
 		req := kmsg.NewPtrAddPartitionsToTxnRequest()
 		req.TransactionalID = *cl.cfg.txnID
 		req.ProducerID = id
@@ -939,6 +939,72 @@ func (cl *Client) EndTransaction(ctx context.Context, commit TransactionEndTry) 
 		}
 		return kerr.ErrorForCode(resp.ErrorCode)
 	})
+
+	if err == nil {
+		if cl.supportsKeyVersion(int16(kmsg.ListTransactions), 0) {
+			cl.cfg.logger.Log(LogLevelDebug, "verifying transaction has transitioned out of the prepare state to avoid hanging concurrent_transactions",
+				"transactional_id", *cl.cfg.txnID,
+				"producer_id", id,
+			)
+			verifyStart := time.Now()
+
+		listtxns:
+			for i := 1; ; i++ {
+				req := kmsg.NewListTransactionsRequest()
+				req.StateFilters = []string{"PrepareCommit", "PrepareAbort"}
+				req.ProducerIDFilters = []int64{id}
+				resp, err := req.RequestWith(ctx, cl)
+				if err != nil {
+					cl.cfg.logger.Log(LogLevelWarn, "unable to verify if the transaction successfully transitioned out of the prepare state, continuing to allow new transactions",
+						"transactional_id", *cl.cfg.txnID,
+						"producer_id", id,
+						"tries", i,
+						"err", err,
+					)
+					break
+				}
+				if len(resp.TransactionStates) == 0 {
+					cl.cfg.logger.Log(LogLevelDebug, "verified the transaction is no longer in prepare, allowing new transactions",
+						"transactional_id", *cl.cfg.txnID,
+						"producer_id", id,
+						"tries", i,
+					)
+					break
+				}
+				state := resp.TransactionStates[0].TransactionState
+				if time.Since(verifyStart) > 10*time.Second {
+					cl.cfg.logger.Log(LogLevelWarn, fmt.Sprintf("transaction has hung in the %s state for >10s, we are re-initializing the producer ID (bumping the epoch by one) to force forward progress on the broker", state))
+					cl.producer.idMu.Lock()
+					cl.producer.txnStuck = true
+					cl.producer.idMu.Unlock()
+					cl.producer.id.Store(&producerID{
+						id: id,
+						epoch: epoch,
+						err: errReloadProducerID,
+					})
+					break listtxns
+				}
+				wait := 100*time.Millisecond * time.Duration(i)
+				if wait > time.Second {
+					wait = time.Second
+				}
+				cl.cfg.logger.Log(LogLevelInfo, fmt.Sprintf("transaction has still not transitioned out of the %s state, sleeping %v", state, wait),
+					"transactional_id", *cl.cfg.txnID,
+					"producer_id", id,
+					"current_state", state,
+					"time_since_verify_start", time.Since(verifyStart),
+					"tries", i,
+				)
+				after := time.NewTimer(wait)
+				select {
+				case <-after.C:
+				case <-cl.ctx.Done():
+					after.Stop()
+					break listtxns // canceled context, but we have no more waiting: just return from func below with no error
+				}
+			}
+		}
+	}
 
 	// If the returned error is still a Kafka error, this is fatal and we
 	// need to fail our producer ID we loaded above.
