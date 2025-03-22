@@ -63,6 +63,7 @@ package kvictoria
 
 import (
 	"errors"
+	"fmt"
 	"maps"
 	"net"
 	"slices"
@@ -96,7 +97,8 @@ var (
 type Metrics struct {
 	cfg cfg
 
-	set *vm.Set
+	clientID string
+	set      *vm.Set
 }
 
 // NewMetrics returns a new Metrics that tracks metrics under the given namespace.
@@ -113,6 +115,11 @@ func NewMetrics(namespace string, opts ...Opt) *Metrics {
 func (m *Metrics) OnNewClient(client *kgo.Client) {
 	clientID := client.OptValue(kgo.ClientID).(string)
 
+	if m.clientID != "" {
+		panic(fmt.Errorf("do not reuse a Metrics instance for multiple kgo clients; current client id: %s", m.clientID))
+	}
+
+	m.clientID = clientID
 	m.set = vm.NewSet()
 
 	labels := map[string]string{"client_id": clientID}
