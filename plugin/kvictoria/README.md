@@ -29,34 +29,34 @@ http.HandleFunc("/metrics", func(w http.ResponseWriter, req *http.Request) {
 This package provides the following metrics.
 
 ```
-{namespace}_{subsystem}_connects_total{node_id="#{node}"}
-{namespace}_{subsystem}_connect_errors_total{node_id="#{node}"}
-{namespace}_{subsystem}_connect_seconds{node_id="#{node}"}
-{namespace}_{subsystem}_disconnects_total{node_id="#{node}"}
+{namespace}_{subsystem}_connects_total{client_id="#{client_id}",node_id="#{node}"}
+{namespace}_{subsystem}_connect_errors_total{client_id="#{client_id}",node_id="#{node}"}
+{namespace}_{subsystem}_connect_seconds{client_id="#{client_id}",node_id="#{node}"}
+{namespace}_{subsystem}_disconnects_total{client_id="#{client_id}",node_id="#{node}"}
 
-{namespace}_{subsystem}_write_errors_total{node_id="#{node}"}
-{namespace}_{subsystem}_write_bytes_total{node_id="#{node}"}
-{namespace}_{subsystem}_write_wait_seconds{node_id="#{node}"}
-{namespace}_{subsystem}_write_time_seconds{node_id="#{node}"}
-{namespace}_{subsystem}_read_errors_total{node_id="#{node}"}
-{namespace}_{subsystem}_read_bytes_total{node_id="#{node}"}
-{namespace}_{subsystem}_read_wait_seconds{node_id="#{node}"}
-{namespace}_{subsystem}_read_time_seconds{node_id="#{node}"}
+{namespace}_{subsystem}_write_errors_total{client_id="#{client_id}",node_id="#{node}"}
+{namespace}_{subsystem}_write_bytes_total{client_id="#{client_id}",node_id="#{node}"}
+{namespace}_{subsystem}_write_wait_seconds{client_id="#{client_id}",node_id="#{node}"}
+{namespace}_{subsystem}_write_time_seconds{client_id="#{client_id}",node_id="#{node}"}
+{namespace}_{subsystem}_read_errors_total{client_id="#{client_id}",node_id="#{node}"}
+{namespace}_{subsystem}_read_bytes_total{client_id="#{client_id}",node_id="#{node}"}
+{namespace}_{subsystem}_read_wait_seconds{client_id="#{client_id}",node_id="#{node}"}
+{namespace}_{subsystem}_read_time_seconds{client_id="#{client_id}",node_id="#{node}"}
 
-{namespace}_{subsystem}_request_duration_e2e_seconds{node_id="#{node}"}
-{namespace}_{subsystem}_request_throttled_seconds{node_id="#{node}"}
+{namespace}_{subsystem}_request_duration_e2e_seconds{client_id="#{client_id}",node_id="#{node}"}
+{namespace}_{subsystem}_request_throttled_seconds{client_id="#{client_id}",node_id="#{node}"}
 
-{namespace}_{subsystem}_group_manage_error{node_id="#{node}",error_message="#{error_message}"}
+{namespace}_{subsystem}_group_manage_error{client_id="#{client_id}",node_id="#{node}",error_message="#{error_message}"}
 
-{namespace}_{subsystem}_produce_uncompressed_bytes_total{node_id="#{node}",topic="#{topic}",partition="#{partition}"}
-{namespace}_{subsystem}_produce_compressed_bytes_total{node_id="#{node}",topic="#{topic}",partition="#{partition}"}
-{namespace}_{subsystem}_produce_batches_total{node_id="#{node}",topic="#{topic}",partition="#{partition}"}
-{namespace}_{subsystem}_produce_records_total{node_id="#{node}",topic="#{topic}",partition="#{partition}"}
+{namespace}_{subsystem}_produce_uncompressed_bytes_total{client_id="#{client_id}",node_id="#{node}",topic="#{topic}",partition="#{partition}"}
+{namespace}_{subsystem}_produce_compressed_bytes_total{client_id="#{client_id}",node_id="#{node}",topic="#{topic}",partition="#{partition}"}
+{namespace}_{subsystem}_produce_batches_total{client_id="#{client_id}",node_id="#{node}",topic="#{topic}",partition="#{partition}"}
+{namespace}_{subsystem}_produce_records_total{client_id="#{client_id}",node_id="#{node}",topic="#{topic}",partition="#{partition}"}
 
-{namespace}_{subsystem}_fetch_uncompressed_bytes_total{node_id="#{node}",topic="#{topic}",partition="#{partition}"}
-{namespace}_{subsystem}_fetch_compressed_bytes_total{node_id="#{node}",topic="#{topic}",partition="#{partition}"}
-{namespace}_{subsystem}_fetch_batches_total{node_id="#{node}",topic="#{topic}",partition="#{partition}"}
-{namespace}_{subsystem}_fetch_records_total{node_id="#{node}",topic="#{topic}",partition="#{partition}"}
+{namespace}_{subsystem}_fetch_uncompressed_bytes_total{client_id="#{client_id}",node_id="#{node}",topic="#{topic}",partition="#{partition}"}
+{namespace}_{subsystem}_fetch_compressed_bytes_total{client_id="#{client_id}",node_id="#{node}",topic="#{topic}",partition="#{partition}"}
+{namespace}_{subsystem}_fetch_batches_total{client_id="#{client_id}",node_id="#{node}",topic="#{topic}",partition="#{partition}"}
+{namespace}_{subsystem}_fetch_records_total{client_id="#{client_id}",node_id="#{node}",topic="#{topic}",partition="#{partition}"}
 
 {namespace}_{subsystem}_buffered_produce_records_total{client_id="#{client_id}"}
 {namespace}_{subsystem}_buffered_produce_bytes_total{client_id="#{client_id}"}

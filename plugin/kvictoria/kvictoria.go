@@ -13,39 +13,39 @@
 //
 // Connections:
 //
-//	{namespace}_{subsystem}_connect_errors_total{node_id="#{node_id}"} (counter)
-//	{namespace}_{subsystem}_connects_total{node_id="#{node_id}"} (counter)
-//	{namespace}_{subsystem}_connect_seconds{node_id="#{node_id}"} (histogram)
-//	{namespace}_{subsystem}_disconnects_total{node_id="#{node_id}"} (counter)
+//	{namespace}_{subsystem}_connect_errors_total{client_id="#{client_id}",node_id="#{node_id}"} (counter)
+//	{namespace}_{subsystem}_connects_total{client_id="#{client_id}",node_id="#{node_id}"} (counter)
+//	{namespace}_{subsystem}_connect_seconds{client_id="#{client_id}",node_id="#{node_id}"} (histogram)
+//	{namespace}_{subsystem}_disconnects_total{client_id="#{client_id}",node_id="#{node_id}"} (counter)
 //
 // End to end:
 //
-//	{namespace}_{subsystem}_write_errors_total{node_id="#{node_id}"} (counter)
-//	{namespace}_{subsystem}_write_bytes_total{node_id="#{node_id}"} (counter)
-//	{namespace}_{subsystem}_write_wait_seconds{node_id="#{node_id}"} (histogram)
-//	{namespace}_{subsystem}_write_time_seconds{node_id="#{node_id}"} (histogram)
-//	{namespace}_{subsystem}_read_errors_total{node_id="#{node_id}"} (counter)
-//	{namespace}_{subsystem}_read_bytes_total{node_id="#{node_id}"} (counter)
-//	{namespace}_{subsystem}_read_wait_seconds{node_id="#{node_id}"} (histogram)
-//	{namespace}_{subsystem}_read_time_seconds{node_id="#{node_id}"} (histogram)
-//	{namespace}_{subsystem}_request_duration_e2e_seconds{node_id="#{node_id}"} (histogram)
+//	{namespace}_{subsystem}_write_errors_total{client_id="#{client_id}",node_id="#{node_id}"} (counter)
+//	{namespace}_{subsystem}_write_bytes_total{client_id="#{client_id}",node_id="#{node_id}"} (counter)
+//	{namespace}_{subsystem}_write_wait_seconds{client_id="#{client_id}",node_id="#{node_id}"} (histogram)
+//	{namespace}_{subsystem}_write_time_seconds{client_id="#{client_id}",node_id="#{node_id}"} (histogram)
+//	{namespace}_{subsystem}_read_errors_total{client_id="#{client_id}",node_id="#{node_id}"} (counter)
+//	{namespace}_{subsystem}_read_bytes_total{client_id="#{client_id}",node_id="#{node_id}"} (counter)
+//	{namespace}_{subsystem}_read_wait_seconds{client_id="#{client_id}",node_id="#{node_id}"} (histogram)
+//	{namespace}_{subsystem}_read_time_seconds{client_id="#{client_id}",node_id="#{node_id}"} (histogram)
+//	{namespace}_{subsystem}_request_duration_e2e_seconds{client_id="#{client_id}",node_id="#{node_id}"} (histogram)
 //
 // Misc:
 //
-//	{namespace}_{subsystem}_request_throttled_seconds{node_id="#{node_id}"} (histogram)
-//	{namespace}_{subsystem}_group_manage_error{node_id="#{node_id}"} (counter)
+//	{namespace}_{subsystem}_request_throttled_seconds{client_id="#{client_id}",node_id="#{node_id}"} (histogram)
+//	{namespace}_{subsystem}_group_manage_error{client_id="#{client_id}",node_id="#{node_id}"} (counter)
 //
 // Batches:
 //
-//	{namespace}_{subsystem}_produce_uncompressed_bytes_total{node_id="#{node_id}", topic="#{topic}", partition="#{partition}"} (counter)
-//	{namespace}_{subsystem}_produce_compressed_bytes_total{node_id="#{node_id}", topic="#{topic}", partition="#{partition}"} (counter)
-//	{namespace}_{subsystem}_produce_batches_total{node_id="#{node_id}", topic="#{topic}", partition="#{partition}"} (counter)
-//	{namespace}_{subsystem}_produce_records_total{node_id="#{node_id}", topic="#{topic}", partition="#{partition}"} (counter)
+//	{namespace}_{subsystem}_produce_uncompressed_bytes_total{client_id="#{client_id}",node_id="#{node_id}",topic="#{topic}",partition="#{partition}"} (counter)
+//	{namespace}_{subsystem}_produce_compressed_bytes_total{client_id="#{client_id}",node_id="#{node_id}",topic="#{topic}",partition="#{partition}"} (counter)
+//	{namespace}_{subsystem}_produce_batches_total{client_id="#{client_id}",node_id="#{node_id}",topic="#{topic}",partition="#{partition}"} (counter)
+//	{namespace}_{subsystem}_produce_records_total{client_id="#{client_id}",node_id="#{node_id}",topic="#{topic}",partition="#{partition}"} (counter)
 //
-//	{namespace}_{subsystem}_fetch_uncompressed_bytes_total{node_id="#{node_id}", topic="#{topic}", partition="#{partition}"} (counter)
-//	{namespace}_{subsystem}_fetch_compressed_bytes_total{node_id="#{node_id}", topic="#{topic}", partition="#{partition}"} (counter)
-//	{namespace}_{subsystem}_fetch_batches_total{node_id="#{node_id}", topic="#{topic}", partition="#{partition}"} (counter)
-//	{namespace}_{subsystem}_fetch_records_total{node_id="#{node_id}", topic="#{topic}", partition="#{partition}"} (counter)
+//	{namespace}_{subsystem}_fetch_uncompressed_bytes_total{client_id="#{client_id}",node_id="#{node_id}",topic="#{topic}",partition="#{partition}"} (counter)
+//	{namespace}_{subsystem}_fetch_compressed_bytes_total{client_id="#{client_id}",node_id="#{node_id}",topic="#{topic}",partition="#{partition}"} (counter)
+//	{namespace}_{subsystem}_fetch_batches_total{client_id="#{client_id}",node_id="#{node_id}",topic="#{topic}",partition="#{partition}"} (counter)
+//	{namespace}_{subsystem}_fetch_records_total{client_id="#{client_id}",node_id="#{node_id}",topic="#{topic}",partition="#{partition}"} (counter)
 //
 // # Usage
 //
@@ -151,23 +151,29 @@ func (m *Metrics) OnClientClosed(client *kgo.Client) {
 // OnBrokerConnect implements the [kgo.HookBrokerConnect] interface for metrics gathering.
 // This method is meant to be called by the hook system and not by the user.
 func (m *Metrics) OnBrokerConnect(meta kgo.BrokerMetadata, dialTime time.Duration, _ net.Conn, err error) {
-	labels := map[string]string{"node_id": kgo.NodeName(meta.NodeID)}
+	labels := map[string]string{
+		"client_id": m.clientID,
+		"node_id":   kgo.NodeName(meta.NodeID),
+	}
 
 	if err != nil {
-		vm.GetOrCreateCounter(m.buildName("connect_errors_total", labels)).Inc()
+		m.set.GetOrCreateCounter(m.buildName("connect_errors_total", labels)).Inc()
 		return
 	}
 
-	vm.GetOrCreateCounter(m.buildName("connects_total", labels)).Inc()
-	vm.GetOrCreateHistogram(m.buildName("connect_seconds", labels)).Update(dialTime.Seconds())
+	m.set.GetOrCreateCounter(m.buildName("connects_total", labels)).Inc()
+	m.set.GetOrCreateHistogram(m.buildName("connect_seconds", labels)).Update(dialTime.Seconds())
 }
 
 // OnBrokerDisconnect implements the [kgo.HookBrokerDisconnect] interface for metrics gathering.
 // This method is meant to be called by the hook system and not by the user
 func (m *Metrics) OnBrokerDisconnect(meta kgo.BrokerMetadata, _ net.Conn) {
-	labels := map[string]string{"node_id": kgo.NodeName(meta.NodeID)}
+	labels := map[string]string{
+		"client_id": m.clientID,
+		"node_id":   kgo.NodeName(meta.NodeID),
+	}
 
-	vm.GetOrCreateCounter(m.buildName("disconnects_total", labels)).Inc()
+	m.set.GetOrCreateCounter(m.buildName("disconnects_total", labels)).Inc()
 }
 
 // OnBrokerWrite is a noop implementation of [kgo.HookBrokerWrite], logic moved to OnBrokerE2E
@@ -181,41 +187,47 @@ func (m *Metrics) OnBrokerRead(meta kgo.BrokerMetadata, _ int16, bytesRead int, 
 // OnBrokerE2E implements the [kgo.HookBrokerE2E] interface for metrics gathering
 // This method is meant to be called by the hook system and not by the user.
 func (m *Metrics) OnBrokerE2E(meta kgo.BrokerMetadata, _ int16, e2e kgo.BrokerE2E) {
-	labels := map[string]string{"node_id": kgo.NodeName(meta.NodeID)}
+	labels := map[string]string{
+		"client_id": m.clientID,
+		"node_id":   kgo.NodeName(meta.NodeID),
+	}
 
 	if e2e.WriteErr != nil {
-		vm.GetOrCreateCounter(m.buildName("write_errors_total", labels)).Inc()
+		m.set.GetOrCreateCounter(m.buildName("write_errors_total", labels)).Inc()
 		return
 	}
 
-	vm.GetOrCreateCounter(m.buildName("write_bytes_total", labels)).Add(e2e.BytesWritten)
-	vm.GetOrCreateHistogram(m.buildName("write_wait_seconds", labels)).Update(e2e.WriteWait.Seconds())
-	vm.GetOrCreateHistogram(m.buildName("write_time_seconds", labels)).Update(e2e.TimeToWrite.Seconds())
+	m.set.GetOrCreateCounter(m.buildName("write_bytes_total", labels)).Add(e2e.BytesWritten)
+	m.set.GetOrCreateHistogram(m.buildName("write_wait_seconds", labels)).Update(e2e.WriteWait.Seconds())
+	m.set.GetOrCreateHistogram(m.buildName("write_time_seconds", labels)).Update(e2e.TimeToWrite.Seconds())
 
 	if e2e.ReadErr != nil {
-		vm.GetOrCreateCounter(m.buildName("read_errors_total", labels)).Inc()
+		m.set.GetOrCreateCounter(m.buildName("read_errors_total", labels)).Inc()
 		return
 	}
 
-	vm.GetOrCreateCounter(m.buildName("read_bytes_total", labels)).Add(e2e.BytesRead)
-	vm.GetOrCreateHistogram(m.buildName("read_wait_seconds", labels)).Update(e2e.ReadWait.Seconds())
-	vm.GetOrCreateHistogram(m.buildName("read_time_seconds", labels)).Update(e2e.TimeToRead.Seconds())
+	m.set.GetOrCreateCounter(m.buildName("read_bytes_total", labels)).Add(e2e.BytesRead)
+	m.set.GetOrCreateHistogram(m.buildName("read_wait_seconds", labels)).Update(e2e.ReadWait.Seconds())
+	m.set.GetOrCreateHistogram(m.buildName("read_time_seconds", labels)).Update(e2e.TimeToRead.Seconds())
 
-	vm.GetOrCreateHistogram(m.buildName("request_duration_e2e_seconds", labels)).Update(e2e.DurationE2E().Seconds())
+	m.set.GetOrCreateHistogram(m.buildName("request_duration_e2e_seconds", labels)).Update(e2e.DurationE2E().Seconds())
 }
 
 // OnBrokerThrottle implements the [kgo.HookBrokerThrottle] interface for metrics gathering.
 // This method is meant to be called by the hook system and not by the user.
 func (m *Metrics) OnBrokerThrottle(meta kgo.BrokerMetadata, throttleInterval time.Duration, _ bool) {
-	labels := map[string]string{"node_id": kgo.NodeName(meta.NodeID)}
+	labels := map[string]string{
+		"client_id": m.clientID,
+		"node_id":   kgo.NodeName(meta.NodeID),
+	}
 
-	vm.GetOrCreateHistogram(m.buildName("request_throttled_seconds", labels)).Update(throttleInterval.Seconds())
+	m.set.GetOrCreateHistogram(m.buildName("request_throttled_seconds", labels)).Update(throttleInterval.Seconds())
 }
 
 // OnGroupManageError implements the [kgo.HookBrokerThrottle] interface for metrics gathering.
 // This method is meant to be called by the hook system and not by the user.
 func (m *Metrics) OnGroupManageError(err error) {
-	labels := make(map[string]string)
+	labels := map[string]string{"client_id": m.clientID}
 
 	var kerr *kerr.Error
 	if errors.As(err, &kerr) {
@@ -224,37 +236,39 @@ func (m *Metrics) OnGroupManageError(err error) {
 		labels["error_message"] = err.Error()
 	}
 
-	vm.GetOrCreateCounter(m.buildName("group_manage_error", labels)).Inc()
+	m.set.GetOrCreateCounter(m.buildName("group_manage_error", labels)).Inc()
 }
 
 // OnProduceBatchWritten implements the [kgo.HookProduceBatchWritten] interface for metrics gathering.
 // This method is meant to be called by the hook system and not by the user.
 func (m *Metrics) OnProduceBatchWritten(meta kgo.BrokerMetadata, topic string, partition int32, metrics kgo.ProduceBatchMetrics) {
 	labels := map[string]string{
+		"client_id": m.clientID,
 		"node_id":   kgo.NodeName(meta.NodeID),
 		"topic":     topic,
 		"partition": strconv.FormatInt(int64(partition), 10),
 	}
 
-	vm.GetOrCreateCounter(m.buildName("produce_uncompressed_bytes_total", labels)).Add(metrics.UncompressedBytes)
-	vm.GetOrCreateCounter(m.buildName("produce_compressed_bytes_total", labels)).Add(metrics.CompressedBytes)
-	vm.GetOrCreateCounter(m.buildName("produce_batches_total", labels)).Inc()
-	vm.GetOrCreateCounter(m.buildName("produce_records_total", labels)).Add(metrics.NumRecords)
+	m.set.GetOrCreateCounter(m.buildName("produce_uncompressed_bytes_total", labels)).Add(metrics.UncompressedBytes)
+	m.set.GetOrCreateCounter(m.buildName("produce_compressed_bytes_total", labels)).Add(metrics.CompressedBytes)
+	m.set.GetOrCreateCounter(m.buildName("produce_batches_total", labels)).Inc()
+	m.set.GetOrCreateCounter(m.buildName("produce_records_total", labels)).Add(metrics.NumRecords)
 }
 
 // OnFetchBatchRead implements the [kgo.HookFetchBatchRead] interface for metrics gathering.
 // This method is meant to be called by the hook system and not by the user.
 func (m *Metrics) OnFetchBatchRead(meta kgo.BrokerMetadata, topic string, partition int32, metrics kgo.FetchBatchMetrics) {
 	labels := map[string]string{
+		"client_id": m.clientID,
 		"node_id":   kgo.NodeName(meta.NodeID),
 		"topic":     topic,
 		"partition": strconv.FormatInt(int64(partition), 10),
 	}
 
-	vm.GetOrCreateCounter(m.buildName("fetch_uncompressed_bytes_total", labels)).Add(metrics.UncompressedBytes)
-	vm.GetOrCreateCounter(m.buildName("fetch_compressed_bytes_total", labels)).Add(metrics.CompressedBytes)
-	vm.GetOrCreateCounter(m.buildName("fetch_batches_total", labels)).Inc()
-	vm.GetOrCreateCounter(m.buildName("fetch_records_total", labels)).Add(metrics.NumRecords)
+	m.set.GetOrCreateCounter(m.buildName("fetch_uncompressed_bytes_total", labels)).Add(metrics.UncompressedBytes)
+	m.set.GetOrCreateCounter(m.buildName("fetch_compressed_bytes_total", labels)).Add(metrics.CompressedBytes)
+	m.set.GetOrCreateCounter(m.buildName("fetch_batches_total", labels)).Inc()
+	m.set.GetOrCreateCounter(m.buildName("fetch_records_total", labels)).Add(metrics.NumRecords)
 }
 
 // buildName constructs a metric name for the VictoriaMetrics metrics library.
