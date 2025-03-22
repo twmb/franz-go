@@ -164,6 +164,8 @@ func (m *Metrics) OnGroupManageError(err error) {
 	var kerr *kerr.Error
 	if errors.As(err, &kerr) {
 		labels["error_message"] = kerr.Message
+	} else {
+		labels["error_message"] = err.Error()
 	}
 
 	vm.GetOrCreateCounter(m.buildName("group_manage_error", labels)).Inc()
