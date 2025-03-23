@@ -55,7 +55,8 @@
 //		kgo.WithHooks(kvictoria.NewMetrics("my_namespace")),
 //	)
 //
-// Note that you MUST use a new [Metrics] instance per client otherwise you can get surprising behaviour.
+// Note that you MUST use a new [Metrics] instance per client: you'll get a panic if you don't.
+// This is necessary to avoid unexpected behaviour.
 //
 // Note that seed brokers use broker IDs prefixed with "seed_", with the number
 // corresponding to which seed it is.
