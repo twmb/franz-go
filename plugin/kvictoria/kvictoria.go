@@ -82,8 +82,6 @@ var (
 	_ kgo.HookClientClosed        = new(Metrics)
 	_ kgo.HookBrokerConnect       = new(Metrics)
 	_ kgo.HookBrokerDisconnect    = new(Metrics)
-	_ kgo.HookBrokerWrite         = new(Metrics)
-	_ kgo.HookBrokerRead          = new(Metrics)
 	_ kgo.HookBrokerE2E           = new(Metrics)
 	_ kgo.HookBrokerThrottle      = new(Metrics)
 	_ kgo.HookGroupManageError    = new(Metrics)
@@ -174,14 +172,6 @@ func (m *Metrics) OnBrokerDisconnect(meta kgo.BrokerMetadata, _ net.Conn) {
 	}
 
 	m.set.GetOrCreateCounter(m.buildName("disconnects_total", labels)).Inc()
-}
-
-// OnBrokerWrite is a noop implementation of [kgo.HookBrokerWrite], logic moved to OnBrokerE2E
-func (m *Metrics) OnBrokerWrite(meta kgo.BrokerMetadata, _ int16, bytesWritten int, _, _ time.Duration, err error) {
-}
-
-// OnBrokerRead is a noop implementation of [kgo.HookBrokerRead], logic moved to OnBrokerE2E
-func (m *Metrics) OnBrokerRead(meta kgo.BrokerMetadata, _ int16, bytesRead int, _, _ time.Duration, err error) {
 }
 
 // OnBrokerE2E implements the [kgo.HookBrokerE2E] interface for metrics gathering
