@@ -4,5 +4,6 @@ dev
 origin
 TESTING
 generate/generate
+.idea
 go.work
 go.work.sum
