@@ -13,7 +13,7 @@ import (
 
 // Hook is a hook to be called when something happens in kgo.
 //
-// The base Hook interface is useless, but wherever a hook can occur in kgo,
+// The base Hook interface is meaningless, but wherever a hook can occur in kgo,
 // the client checks if your hook implements an appropriate interface. If so,
 // your hook is called.
 //
