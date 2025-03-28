@@ -2,6 +2,7 @@ package kprom
 
 import (
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
@@ -12,10 +13,11 @@ type cfg struct {
 	reg      prometheus.Registerer
 	gatherer prometheus.Gatherer
 
-	withClientLabel  bool
-	histograms       map[Histogram][]float64
-	defBuckets       []float64
-	fetchProduceOpts fetchProduceOpts
+	withSkipRegisterer bool
+	withClientLabel    bool
+	histograms         map[Histogram][]float64
+	defBuckets         []float64
+	fetchProduceOpts   fetchProduceOpts
 
 	handlerOpts  promhttp.HandlerOpts
 	goCollectors bool
@@ -40,8 +42,8 @@ func newCfg(namespace string, opts ...Opt) cfg {
 	}
 
 	if cfg.goCollectors {
-		cfg.reg.MustRegister(prometheus.NewProcessCollector(prometheus.ProcessCollectorOpts{}))
-		cfg.reg.MustRegister(prometheus.NewGoCollector())
+		cfg.reg.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
+		cfg.reg.MustRegister(collectors.NewGoCollector())
 	}
 
 	return cfg
@@ -81,8 +83,15 @@ func Gatherer(gatherer prometheus.Gatherer) Opt {
 	return opt{func(c *cfg) { c.gatherer = gatherer }}
 }
 
+// SkipRegisterer allows registering an external registry,
+// exposing kprom as a custom prometheus collector
+// This option is mutually exclusive with Registerer & GoCollectors
+func SkipRegisterer() Opt {
+	return opt{func(c *cfg) { c.withSkipRegisterer = true }}
+}
+
 // GoCollectors adds the prometheus.NewProcessCollector and
-// prometheus.NewGoCollector collectors the the Metric's registry.
+// prometheus.NewGoCollector collectors the Metric's registry.
 func GoCollectors() Opt {
 	return opt{func(c *cfg) { c.goCollectors = true }}
 }
