@@ -840,7 +840,7 @@ func (s *sink) handleReqRespBatch(
 	case kerr.IsRetriable(err) &&
 		!failUnknown &&
 		err != kerr.CorruptMessage &&
-		batch.tries < s.cl.cfg.recordRetries:
+		batch.tries <= s.cl.cfg.recordRetries:
 
 		if debug {
 			fmt.Fprintf(b, "retrying@%d,%d(%s)}, ", rp.BaseOffset, nrec, err)
@@ -982,7 +982,7 @@ func (s *sink) handleReqRespBatch(
 				"partition", rp.Partition,
 				"err", err,
 				"err_is_retryable", kerr.IsRetriable(err),
-				"max_retries_reached", !failUnknown && batch.tries >= s.cl.cfg.recordRetries,
+				"max_retries_reached", !failUnknown && batch.tries > s.cl.cfg.recordRetries,
 			)
 		} else {
 			batch.owner.okOnSink = true
@@ -1573,8 +1573,11 @@ func (pr promisedRec) cancelingCtx() context.Context {
 type recBatch struct {
 	owner *recBuf // who owns us
 
-	tries int64 // if this was sent before and is thus now immutable
+	tries int64 // how many times this batch has been sent, or should have been sent but requests leading up to it failed (metadata, add partitions to txn, etc)
 
+	// Once this batch is actually selected to be sent in a produce request,
+	// we freeze it. No more records can be added.
+	frozen bool
 	// We can only fail a batch if we have never issued it, or we have
 	// issued it and have received a response. If we do not receive a
 	// response, we cannot know whether we actually wrote bytes that Kafka
@@ -1613,7 +1616,7 @@ func (b *recBatch) maybeFailErr(cfg *cfg) error {
 	switch {
 	case b.isTimedOut(cfg.recordTimeout):
 		return ErrRecordTimeout
-	case b.tries >= cfg.recordRetries:
+	case b.tries > cfg.recordRetries:
 		return ErrRecordRetries
 	case b.owner.cl.producer.isAborting():
 		return ErrAborting
@@ -1826,7 +1829,7 @@ func (p *produceRequest) tryAddBatch(produceVersion int32, recBuf *recBuf, batch
 		}
 	}
 
-	batch.tries++
+	batch.frozen = true
 	p.wireLength += batchWireLength
 	p.batches.addBatch(
 		recBuf.topic,
@@ -2076,7 +2079,7 @@ func (b *recBatch) tryBuffer(pr promisedRec, produceVersion, maxBatchBytes int32
 	batchWireLength, _ := b.wireLengthForProduceVersion(produceVersion)
 	newBatchLength := batchWireLength + nums.wireLength()
 
-	if b.tries != 0 || newBatchLength > maxBatchBytes {
+	if b.frozen || newBatchLength > maxBatchBytes {
 		return false, false
 	}
 	if abortOnNewBatch {
@@ -2150,6 +2153,7 @@ func (p *produceRequest) AppendTo(dst []byte) []byte {
 				continue
 			}
 			batch.canFailFromLoadErrs = false // we are going to write this batch: the response status is now unknown
+			batch.tries++
 			var pmetrics ProduceBatchMetrics
 			if p.version < 3 {
 				dst, pmetrics = batch.appendToAsMessageSet(dst, uint8(p.version), p.compressor)
