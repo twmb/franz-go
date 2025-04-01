@@ -356,6 +356,8 @@ func (cl *Client) OptValues(opt any) []any {
 		return []any{cfg.rack}
 	case namefn(KeepRetryableFetchErrors):
 		return []any{cfg.keepRetryableFetchErrors}
+	case namefn(RecheckPreferredReplicaInterval):
+		return []any{cfg.recheckPreferredReplicaInterval}
 
 	case namefn(AdjustFetchOffsetsFn):
 		return []any{cfg.adjustOffsetsBeforeAssign}
