@@ -59,12 +59,13 @@ type producer struct {
 
 	idMu      sync.Mutex
 	idVersion int16
+	txnStuck bool
 
 	batchPromises ringBatchPromise
 	promisesMu    sync.Mutex
 
-	txnMu sync.Mutex
-	inTxn bool
+	txnMu   sync.Mutex
+	inTxn   bool
 
 	// If using EndBeginTxnUnsafe, and any partitions are actually produced
 	// to, we issue an AddPartitionsToTxn at the end to re-add them to a
@@ -863,8 +864,28 @@ func (cl *Client) doInitProducerID(ctxFn func() context.Context, lastID int64, l
 	}
 
 	ctx := ctxFn()
-	resp, err := req.RequestWith(ctx, cl)
-	if err != nil {
+	stuck := cl.producer.txnStuck // we are *in* idMu
+	var resp *kmsg.InitProducerIDResponse
+	var isKerr bool
+	start := time.Now()
+	err := cl.doWithConcurrentTransactions(ctx, "InitProducerID", func() error {
+		var err error
+		isKerr = false
+		if stuck && time.Since(start) > 5*time.Second {
+			cl.cfg.logger.Log(LogLevelWarn, "hard resetting producer ID")
+			req.ProducerID = -1
+			req.ProducerEpoch =-1
+		}
+		resp, err = req.RequestWith(ctx, cl)
+		if err != nil {
+			return err
+		}
+		if resp.ErrorCode != 0 {
+			isKerr = true
+		}
+		return kerr.ErrorForCode(resp.ErrorCode)
+	})
+	if err != nil && !isKerr {
 		if errors.Is(err, errUnknownRequestKey) || errors.Is(err, errBrokerTooOld) {
 			cl.cfg.logger.Log(LogLevelInfo, "unable to initialize a producer id because the broker is too old or the client is pinned to an old version, continuing without a producer id")
 			return &producerID{-1, -1, nil}, true
