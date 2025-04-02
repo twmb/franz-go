@@ -77,9 +77,7 @@ type Client struct {
 
 	producer producer
 	consumer consumer
-
-	compressor   *compressor
-	decompressor *decompressor
+	id2t     atomic.Value // map[[16]byte]string
 
 	coordinatorsMu sync.Mutex
 	coordinators   map[coordinatorKey]*coordinatorLoad
@@ -117,7 +115,7 @@ type hostport struct {
 
 // ValidateOpts returns an error if the options are invalid.
 func ValidateOpts(opts ...Opt) error {
-	_, _, _, err := validateCfg(opts...)
+	_, _, err := validateCfg(opts...)
 	return err
 }
 
@@ -136,23 +134,29 @@ func parseSeeds(addrs []string) ([]hostport, error) {
 // This function validates the configuration and returns a few things that we
 // initialize while validating. The difference between this and NewClient
 // initialization is all NewClient initialization is infallible.
-func validateCfg(opts ...Opt) (cfg, []hostport, *compressor, error) {
+func validateCfg(opts ...Opt) (cfg, []hostport, error) {
 	cfg := defaultCfg()
 	for _, opt := range opts {
 		opt.apply(&cfg)
 	}
 	if err := cfg.validate(); err != nil {
-		return cfg, nil, nil, err
+		return cfg, nil, err
 	}
 	seeds, err := parseSeeds(cfg.seedBrokers)
 	if err != nil {
-		return cfg, nil, nil, err
+		return cfg, nil, err
 	}
-	compressor, err := newCompressor(cfg.compression...)
-	if err != nil {
-		return cfg, nil, nil, err
+	if cfg.compressor == nil {
+		cfg.compressor, err = DefaultCompressor(cfg.compression...)
+		if err != nil {
+			return cfg, nil, err
+		}
 	}
-	return cfg, seeds, compressor, nil
+	if cfg.decompressor == nil {
+		cfg.decompressor = DefaultDecompressor(cfg.pools...)
+	}
+
+	return cfg, seeds, nil
 }
 
 func namefn(fn any) string {
@@ -279,6 +283,8 @@ func (cl *Client) OptValues(opt any) []any {
 		return []any{cfg.sasls}
 	case namefn(WithHooks):
 		return []any{cfg.hooks}
+	case namefn(WithPools):
+		return []any{cfg.pools}
 	case namefn(ConcurrentTransactionsBackoff):
 		return []any{cfg.txnBackoff}
 	case namefn(ConsiderMissingTopicDeletedAfter):
@@ -294,6 +300,8 @@ func (cl *Client) OptValues(opt any) []any {
 		return []any{cfg.maxProduceInflight}
 	case namefn(ProducerBatchCompression):
 		return []any{cfg.compression}
+	case namefn(WithCompressor):
+		return []any{cfg.compressor}
 	case namefn(ProducerBatchMaxBytes):
 		return []any{cfg.maxRecordBatchBytes}
 	case namefn(MaxBufferedRecords):
@@ -330,6 +338,8 @@ func (cl *Client) OptValues(opt any) []any {
 		return []any{cfg.partitions}
 	case namefn(ConsumePreferringLagFn):
 		return []any{cfg.preferLagFn}
+	case namefn(WithDecompressor):
+		return []any{cfg.decompressor}
 	case namefn(ConsumeRegex):
 		return []any{cfg.regex}
 	case namefn(ConsumeResetOffset):
@@ -356,6 +366,8 @@ func (cl *Client) OptValues(opt any) []any {
 		return []any{cfg.rack}
 	case namefn(KeepRetryableFetchErrors):
 		return []any{cfg.keepRetryableFetchErrors}
+	case namefn(DisableFetchCRCValidation):
+		return []any{cfg.disableFetchCRCValidation}
 
 	case namefn(AdjustFetchOffsetsFn):
 		return []any{cfg.adjustOffsetsBeforeAssign}
@@ -416,7 +428,7 @@ func (cl *Client) OptValues(opt any) []any {
 // NewClient also launches a goroutine which periodically updates the cached
 // topic metadata.
 func NewClient(opts ...Opt) (*Client, error) {
-	cfg, seeds, compressor, err := validateCfg(opts...)
+	cfg, seeds, err := validateCfg(opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -426,7 +438,8 @@ func NewClient(opts ...Opt) (*Client, error) {
 			switch key {
 			case ((*kmsg.JoinGroupRequest)(nil)).Key(),
 				((*kmsg.SyncGroupRequest)(nil)).Key(),
-				((*kmsg.HeartbeatRequest)(nil)).Key():
+				((*kmsg.HeartbeatRequest)(nil)).Key(),
+				((*kmsg.ConsumerGroupHeartbeatRequest)(nil)).Key():
 				return cfg.sessionTimeout
 			}
 			return 30 * time.Second
@@ -481,9 +494,6 @@ func NewClient(opts ...Opt) (*Client, error) {
 
 		bufPool: newBufPool(),
 		prsPool: newPrsPool(),
-
-		compressor:   compressor,
-		decompressor: newDecompressor(),
 
 		coordinators: make(map[coordinatorKey]*coordinatorLoad),
 
@@ -562,7 +572,7 @@ func (cl *Client) Ping(ctx context.Context) error {
 }
 
 // PurgeTopicsFromClient internally removes all internal information about the
-// input topics. If you you want to purge information for only consuming or
+// input topics. If you want to purge information for only consuming or
 // only producing, see the related functions [PurgeTopicsFromConsuming] and
 // [PurgeTopicsFromProducing].
 //
@@ -583,7 +593,9 @@ func (cl *Client) Ping(ctx context.Context) error {
 // topic no longer exists, or if you are consuming via regex and know that some
 // previously consumed topics no longer exist, or if you simply do not want to
 // ever consume from a topic again. If you are group consuming, this function
-// will likely cause a rebalance.
+// will likely cause a rebalance. If you are consuming via regex and the topic
+// still exists on the broker, this function will at most only temporarily
+// remove the topic from the client and the topic will be re-discovered.
 //
 // For admin requests, this deletes the topic from the cached metadata map for
 // sharded requests. Metadata for sharded admin requests is only cached for
@@ -816,6 +828,18 @@ func (cl *Client) supportsOffsetForLeaderEpoch() bool {
 	return cl.supportsKeyVersion(int16(kmsg.OffsetForLeaderEpoch), 2)
 }
 
+// Called after the first metadata request, before we go into either
+// (*groupConsumer).manage or (*groupConsumer).manage848.
+func (cl *Client) supportsKIP848() bool {
+	return cl.supportsKeyVersion(int16(kmsg.ConsumerGroupHeartbeat), 0)
+}
+
+// v1 introduces support for regex and requires the client to generate
+// the member ID.
+func (cl *Client) supportsKIP848v1() bool {
+	return cl.supportsKeyVersion(int16(kmsg.ConsumerGroupHeartbeat), 1)
+}
+
 // A broker may not support some requests we want to make. This function checks
 // support. This should only be used *after* at least one successful response.
 func (cl *Client) supportsKeyVersion(key, version int16) bool {
@@ -967,7 +991,7 @@ func (cl *Client) updateBrokers(brokers []kmsg.MetadataResponseBroker) {
 // will hang if you polled, did not allow rebalances, and want to close. Close
 // does not automatically allow rebalances because leaving a group causes a
 // revoke, and the client does not assume that the final revoke is concurrency
-// safe. The CloseAllowingRebalance function exists a a shortcut to opt into
+// safe. The CloseAllowingRebalance function exists a shortcut to opt into
 // allowing rebalance while closing.
 //
 // If you are using static membership, CloseAllowingRebalance will NOT send a
@@ -1367,7 +1391,8 @@ func (cl *Client) shardedRequest(ctx context.Context, req kmsg.Request) ([]Respo
 		return shards(cl.handleAdminReq(ctx, t)), nil
 
 	case kmsg.GroupCoordinatorRequest,
-		kmsg.TxnCoordinatorRequest:
+		kmsg.TxnCoordinatorRequest,
+		*kmsg.ConsumerGroupHeartbeatRequest:
 		return shards(cl.handleCoordinatorReq(ctx, t)), nil
 
 	case *kmsg.ApiVersionsRequest:
@@ -1856,6 +1881,8 @@ func (cl *Client) handleCoordinatorReq(ctx context.Context, req kmsg.Request) Re
 		return cl.handleCoordinatorReqSimple(ctx, coordinatorTypeGroup, t.Group, req)
 	case *kmsg.OffsetDeleteRequest:
 		return cl.handleCoordinatorReqSimple(ctx, coordinatorTypeGroup, t.Group, req)
+	case *kmsg.ConsumerGroupHeartbeatRequest:
+		return cl.handleCoordinatorReqSimple(ctx, coordinatorTypeGroup, t.Group, req)
 	}
 }
 
@@ -1918,6 +1945,8 @@ func (cl *Client) handleReqWithCoordinator(
 			code = t.ErrorCode
 		case *kmsg.SyncGroupResponse:
 			code = t.ErrorCode
+		case *kmsg.ConsumerGroupHeartbeatResponse:
+			code = t.ErrorCode
 		}
 
 		// ListGroups, OffsetFetch, DeleteGroups, DescribeGroups, and
@@ -1935,7 +1964,7 @@ func (cl *Client) handleReqWithCoordinator(
 
 // Broker returns a handle to a specific broker to directly issue requests to.
 // Note that there is no guarantee that this broker exists; if it does not,
-// requests will fail with with an unknown broker error.
+// requests will fail with an unknown broker error.
 func (cl *Client) Broker(id int) *Broker {
 	return &Broker{
 		id: int32(id),
