@@ -148,9 +148,10 @@ type cfg struct {
 	preferLagFn    PreferLagFn
 	decompressor   Decompressor
 
-	maxConcurrentFetches     int
-	disableFetchSessions     bool
-	keepRetryableFetchErrors bool
+	maxConcurrentFetches      int
+	disableFetchSessions      bool
+	keepRetryableFetchErrors  bool
+	disableFetchCRCValidation bool
 
 	topics     map[string]*regexp.Regexp   // topics to consume; if regex is true, values are compiled regular expressions
 	partitions map[string]map[int32]Offset // partitions to directly consume from
@@ -1498,6 +1499,13 @@ func WithDecompressor(decompressor Decompressor) ConsumerOpt {
 // errors being returned in fetches (and ignore the other errors).
 func KeepRetryableFetchErrors() ConsumerOpt {
 	return consumerOpt{func(cfg *cfg) { cfg.keepRetryableFetchErrors = true }}
+}
+
+// DisableFetchCRCValidation disables crc32 checksum validation when fetching.
+// This should only be used if you are working with a broker that does not
+// properly support CRCs in record batches.
+func DisableFetchCRCValidation() ConsumerOpt {
+	return consumerOpt{func(cfg *cfg) { cfg.disableFetchCRCValidation = true }}
 }
 
 //////////////////////////////////

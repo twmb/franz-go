@@ -1296,12 +1296,13 @@ func (o *cursorOffsetNext) processRespPartition(br *broker, rp *kmsg.FetchRespon
 		o.hwm = rp.HighWatermark
 	}
 	opts := ProcessFetchPartitionOpts{
-		KeepControlRecords: br.cl.cfg.keepControl,
-		Offset:             o.offset,
-		IsolationLevel:     IsolationLevel{br.cl.cfg.isolationLevel},
-		Topic:              o.from.topic,
-		Partition:          o.from.partition,
-		Pools:              br.cl.cfg.pools,
+		KeepControlRecords:   br.cl.cfg.keepControl,
+		DisableCRCValidation: br.cl.cfg.disableFetchCRCValidation,
+		Offset:               o.offset,
+		IsolationLevel:       IsolationLevel{br.cl.cfg.isolationLevel},
+		Topic:                o.from.topic,
+		Partition:            o.from.partition,
+		Pools:                br.cl.cfg.pools,
 	}
 	fp, o.offset = ProcessFetchPartition(opts, rp, decompressor, func(m FetchBatchMetrics) {
 		hooks.each(func(h Hook) {
@@ -1328,6 +1329,11 @@ type ProcessFetchPartitionOpts struct {
 	// Generally, control messages are not useful. This field is the same
 	// as [KeepControlRecords].
 	KeepControlRecords bool
+
+	// DisableFetchCRCValidation opts out of validating the CRC prefixing
+	// every batch. This should only be true if your broker does not
+	// properly support CRCs.
+	DisableCRCValidation bool
 
 	// Offset is the minimum offset for which we'll parse records. Records
 	// with lower offsets will not be parsed or returned.
@@ -1407,13 +1413,15 @@ func ProcessFetchPartition(o ProcessFetchPartitionOpts, rp *kmsg.FetchResponseTo
 			// 17 bytes, but our CRC may be later (i.e. RecordBatch
 			// starts at byte 21). Ensure there is at least space
 			// for a CRC.
-			if len(in) < crcAt {
-				fp.Err = fmt.Errorf("length %d is too short to allow for a crc", len(in))
-				return false
-			}
-			if crcCalc := int32(crc32.Checksum(in[crcAt:length], crcTable)); crcCalc != *crcField {
-				fp.Err = fmt.Errorf("encoded crc %x does not match calculated crc %x", *crcField, crcCalc)
-				return false
+			if !o.DisableCRCValidation {
+				if len(in) < crcAt {
+					fp.Err = fmt.Errorf("length %d is too short to allow for a crc", len(in))
+					return false
+				}
+				if crcCalc := int32(crc32.Checksum(in[crcAt:length], crcTable)); crcCalc != *crcField {
+					fp.Err = fmt.Errorf("encoded crc %x does not match calculated crc %x", *crcField, crcCalc)
+					return false
+				}
 			}
 			return true
 		}
@@ -1771,9 +1779,11 @@ out:
 			fp.Err = fmt.Errorf("encoded length %d does not match read length %d", *lengthField, length)
 			break
 		}
-		if crcCalc := int32(crc32.ChecksumIEEE(rawInner[16:length])); crcCalc != *crcField {
-			fp.Err = fmt.Errorf("encoded crc %x does not match calculated crc %x", *crcField, crcCalc)
-			break
+		if !o.DisableCRCValidation {
+			if crcCalc := int32(crc32.ChecksumIEEE(rawInner[16:length])); crcCalc != *crcField {
+				fp.Err = fmt.Errorf("encoded crc %x does not match calculated crc %x", *crcField, crcCalc)
+				break
+			}
 		}
 		innerMessages = append(innerMessages, msg)
 		rawInner = rawInner[length:]
@@ -1857,9 +1867,11 @@ func (o *ProcessFetchPartitionOpts) processV0OuterMessage(
 			fp.Err = fmt.Errorf("encoded length %d does not match read length %d", m.MessageSize, length)
 			break
 		}
-		if crcCalc := int32(crc32.ChecksumIEEE(rawInner[16:length])); crcCalc != m.CRC {
-			fp.Err = fmt.Errorf("encoded crc %x does not match calculated crc %x", m.CRC, crcCalc)
-			break
+		if !o.DisableCRCValidation {
+			if crcCalc := int32(crc32.ChecksumIEEE(rawInner[16:length])); crcCalc != m.CRC {
+				fp.Err = fmt.Errorf("encoded crc %x does not match calculated crc %x", m.CRC, crcCalc)
+				break
+			}
 		}
 		innerMessages = append(innerMessages, m)
 		rawInner = rawInner[length:]
