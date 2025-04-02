@@ -1603,11 +1603,12 @@ func (*RecordReader) parseReadSize(layout string, dst *uint64, needBrace bool) (
 
 				switch state {
 				default: // stateUnknown
-					if b == 't' {
+					switch b {
+					case 't':
 						state = stateTrue
 						last = b
 						return 1
-					} else if b == 'f' {
+					case 'f':
 						state = stateFalse
 						last = b
 						return 1

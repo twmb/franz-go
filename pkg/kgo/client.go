@@ -572,7 +572,7 @@ func (cl *Client) Ping(ctx context.Context) error {
 }
 
 // PurgeTopicsFromClient internally removes all internal information about the
-// input topics. If you you want to purge information for only consuming or
+// input topics. If you want to purge information for only consuming or
 // only producing, see the related functions [PurgeTopicsFromConsuming] and
 // [PurgeTopicsFromProducing].
 //
@@ -995,7 +995,7 @@ func (cl *Client) updateBrokers(brokers []kmsg.MetadataResponseBroker) {
 // will hang if you polled, did not allow rebalances, and want to close. Close
 // does not automatically allow rebalances because leaving a group causes a
 // revoke, and the client does not assume that the final revoke is concurrency
-// safe. The CloseAllowingRebalance function exists a a shortcut to opt into
+// safe. The CloseAllowingRebalance function exists a shortcut to opt into
 // allowing rebalance while closing.
 //
 // If you are using static membership, CloseAllowingRebalance will NOT send a
@@ -2046,7 +2046,7 @@ func (cl *Client) handleReqWithCoordinator(
 
 // Broker returns a handle to a specific broker to directly issue requests to.
 // Note that there is no guarantee that this broker exists; if it does not,
-// requests will fail with with an unknown broker error.
+// requests will fail with an unknown broker error.
 func (cl *Client) Broker(id int) *Broker {
 	return &Broker{
 		id: int32(id),

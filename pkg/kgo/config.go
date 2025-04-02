@@ -1023,7 +1023,7 @@ func WithCompressor(compressor Compressor) ProducerOpt {
 // many record batches for many topics.
 //
 // If a single record encodes larger than this number (before compression), it
-// will will not be written and a callback will have the appropriate error.
+// will not be written and a callback will have the appropriate error.
 //
 // Note that this is the maximum size of a record batch before compression. If
 // a batch compresses poorly and actually grows the batch, the uncompressed
@@ -1180,7 +1180,7 @@ func ManualFlushing() ProducerOpt {
 // only to produce a later one successfully. This also allows for easier
 // sequence number ordering internally.
 //
-// The timeout is only evaluated evaluated before writing a request or after a
+// The timeout is only evaluated before writing a request or after a
 // produce response. Thus, a sink backoff may delay record timeout slightly.
 //
 // This option is roughly equivalent to delivery.timeout.ms.
@@ -1430,7 +1430,7 @@ func ConsumeRegex() ConsumerOpt {
 
 // DisableFetchSessions sets the client to not use fetch sessions (Kafka 1.0+).
 //
-// A "fetch session" is is a way to reduce bandwidth for fetch requests &
+// A "fetch session" is a way to reduce bandwidth for fetch requests &
 // responses, and to potentially reduce the amount of work that brokers have to
 // do to handle fetch requests. A fetch session opts into the broker tracking
 // some state of what the client is interested in. For example, say that you

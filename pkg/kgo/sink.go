@@ -881,7 +881,7 @@ func (s *sink) handleReqRespBatch(
 		// in flight). With KIP-890, we still just disregard whatever
 		// supposedly non-retryable / actually-is-retryable error is
 		// returned if the LogStartOffset is _after_ what we previously
-		// produced. Specifically, this is step (4) in in wiki link
+		// produced. Specifically, this is step (4) in wiki link
 		// within KAFKA-5793.
 		//
 		// InvalidMapping is similar to UnknownProducerID, but occurs
