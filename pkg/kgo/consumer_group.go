@@ -208,7 +208,7 @@ func (cl *Client) LeaveGroup() {
 	cl.LeaveGroupContext(cl.ctx)
 }
 
-// LeaveGroup leaves a group. Close automatically leaves the group, so this is
+// LeaveGroupContext leaves a group. Close automatically leaves the group, so this is
 // only necessary to call if you plan to leave the group but continue to use
 // the client. If a rebalance is in progress, this function waits for the
 // rebalance to complete before the group can be left. This is necessary to
@@ -864,7 +864,7 @@ func (g *groupConsumer) setupAssignedAndHeartbeat() (string, error) {
 	// Before we fetch offsets, we wait for the user's onAssign callback to
 	// be done. This ensures a few things:
 	//
-	// * that we wait for for prerevoking to be done, which updates the
+	// * that we wait for prerevoking to be done, which updates the
 	// uncommitted field. Waiting for that ensures that a rejoin and poll
 	// does not have weird concurrent interaction.
 	//
@@ -1799,7 +1799,7 @@ type uncommit struct {
 type EpochOffset struct {
 	// Epoch is the leader epoch of the record being committed. Truncation
 	// detection relies on the epoch of the CURRENT record. For truncation
-	// detection, the client asks "what is the the end of this epoch?",
+	// detection, the client asks "what is the end of this epoch?",
 	// which returns one after the end offset (see the next field, and
 	// check the docs on kmsg.OffsetForLeaderEpochRequest).
 	Epoch int32
