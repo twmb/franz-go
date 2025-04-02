@@ -959,7 +959,7 @@ var max270 = nextMax(max260, func(v listenerKeys) listenerKeys {
 })
 
 var max280 = nextMax(max270, func(v listenerKeys) listenerKeys {
-	// KAFKA-10181 KAFKA-10181 KIP-590
+	// KAFKA-10181 KIP-590
 	v = append(v,
 		k(zkBroker, rController), // 58 envelope, controller first, zk in KAFKA-14446 8b045dcbf6b89e1a9594ff95642d4882765e4b0d KIP-866 Kafka 3.4
 	)

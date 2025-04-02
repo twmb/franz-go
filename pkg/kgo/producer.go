@@ -481,7 +481,7 @@ func (cl *Client) produce(
 
 		drainBuffered := func(err error) {
 			// The expected case here is that a context was
-			// canceled while we we waiting for space, so we are
+			// canceled while we waiting for space, so we are
 			// exiting and need to kill the goro above.
 			//
 			// However, it is possible that the goro above has
@@ -968,7 +968,7 @@ func (cl *Client) addUnknownTopicRecord(pr promisedRec) {
 	}
 	unknown.buffered = append(unknown.buffered, pr)
 	if len(unknown.buffered) == 1 {
-		go cl.waitUnknownTopic(pr.ctx, pr.Record.Context, pr.Topic, unknown)
+		go cl.waitUnknownTopic(pr.ctx, pr.Context, pr.Topic, unknown)
 	}
 }
 

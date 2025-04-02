@@ -282,8 +282,8 @@ type decompressor struct {
 }
 
 // DefaultDecompressor returns the default decompressor used by clients.
-// The first pool provided, if any, that implements PoolDecompressBytes
-// will be used.
+// The first pool provided that implements PoolDecompressBytes will be
+// used where possible.
 func DefaultDecompressor(pools ...Pool) Decompressor {
 	d := &decompressor{
 		ungzPool: sync.Pool{
@@ -371,9 +371,8 @@ func (d *decompressor) Decompress(src []byte, codecType CompressionCodecType) ([
 		}
 		if userPooled {
 			return decoded, nil
-		} else {
-			return append([]byte(nil), decoded...), nil
 		}
+		return append([]byte(nil), decoded...), nil
 	case CodecLz4:
 		unlz4 := d.unlz4Pool.Get().(*lz4.Reader)
 		defer d.unlz4Pool.Put(unlz4)
@@ -391,9 +390,8 @@ func (d *decompressor) Decompress(src []byte, codecType CompressionCodecType) ([
 		}
 		if userPooled {
 			return decoded, nil
-		} else {
-			return append([]byte(nil), decoded...), nil
 		}
+		return append([]byte(nil), decoded...), nil
 	default:
 		return nil, errors.New("unknown compression codec")
 	}
