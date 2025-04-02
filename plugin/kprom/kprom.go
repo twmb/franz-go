@@ -137,9 +137,6 @@ func (m *Metrics) OnNewClient(client *kgo.Client) {
 		constLabels = make(prometheus.Labels)
 		constLabels["client_id"] = client.OptValue(kgo.ClientID).(string)
 	}
-	if m.cfg.withSkipRegisterer {
-		factory = promauto.With(nil)
-	}
 
 	// returns Hist buckets if set, otherwise defBucket
 	getHistogramBuckets := func(h Histogram) []float64 {
@@ -396,7 +393,7 @@ func (m *Metrics) OnNewClient(client *kgo.Client) {
 
 // OnClientClosed will unregister kprom metrics from kprom registerer
 func (m *Metrics) OnClientClosed(*kgo.Client) {
-	if !m.cfg.withSkipRegisterer {
+	if m.cfg.reg != nil {
 		for _, c := range m.allMetricCollectors {
 			m.cfg.reg.Unregister(c)
 		}
@@ -511,13 +508,19 @@ func (m *Metrics) OnBrokerE2E(meta kgo.BrokerMetadata, _ int16, e2e kgo.BrokerE2
 	}
 }
 
+// Collect returns the current state of all metrics of the collector.
+// Collect & Describe will allow applications that use kprom to
+// register multiple collectors to the same registry by inverting the dependency.
+// This follows the recommended approach of collector implementation
+// https://github.com/prometheus/client_golang/blob/main/prometheus/collector.go#L16-L18
 func (m *Metrics) Collect(ch chan<- prometheus.Metric) {
 	for _, c := range m.allMetricCollectors {
 		c.Collect(ch)
 	}
 }
 
-func (m *Metrics) Desc(ch chan<- *prometheus.Desc) {
+// Describe returns all descriptions of the collector.
+func (m *Metrics) Describe(ch chan<- *prometheus.Desc) {
 	for _, c := range m.allMetricCollectors {
 		c.Describe(ch)
 	}
