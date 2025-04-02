@@ -1,7 +1,10 @@
 package kprom
 
 import (
+	"reflect"
+
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"maps"
 )
@@ -41,9 +44,9 @@ func newCfg(namespace string, opts ...Opt) cfg {
 		opt.apply(&cfg)
 	}
 
-	if cfg.goCollectors {
-		cfg.reg.MustRegister(prometheus.NewProcessCollector(prometheus.ProcessCollectorOpts{}))
-		cfg.reg.MustRegister(prometheus.NewGoCollector())
+	if cfg.goCollectors && cfg.reg != nil {
+		cfg.reg.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
+		cfg.reg.MustRegister(collectors.NewGoCollector())
 	}
 
 	return cfg
@@ -66,10 +69,18 @@ type RegistererGatherer interface {
 // Registry sets the registerer and gatherer to add metrics to, rather than a
 // new registry. Use this option if you want to configure both Gatherer and
 // Registerer with the same object.
+// Additionally, passing a `nil`  RegistererGatherer allows registering an external registry,
+// exposing kprom as a custom prometheus collector, this option is mutually
+// exclusive with GoCollectors
 func Registry(rg RegistererGatherer) Opt {
 	return opt{func(c *cfg) {
-		c.reg = rg
-		c.gatherer = rg
+		if rg == nil || (reflect.ValueOf(rg).Kind() == reflect.Ptr && reflect.ValueOf(rg).IsNil()) {
+			c.reg = nil
+			c.gatherer = nil
+		} else {
+			c.reg = rg
+			c.gatherer = rg
+		}
 	}}
 }
 
@@ -84,7 +95,7 @@ func Gatherer(gatherer prometheus.Gatherer) Opt {
 }
 
 // GoCollectors adds the prometheus.NewProcessCollector and
-// prometheus.NewGoCollector collectors the the Metric's registry.
+// prometheus.NewGoCollector collectors the Metric's registry.
 func GoCollectors() Opt {
 	return opt{func(c *cfg) { c.goCollectors = true }}
 }
