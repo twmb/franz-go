@@ -105,10 +105,15 @@ func (vs *Versions) versionGuess2(cmp *release, opts ...VersionGuessOpt) guess {
 		//  * (57) UpdateFeatures
 		//  * (58) Envelope
 		//  * (67) AllocateProducerIDs
+		//  * (71) GetTelemetrySubscriptions
+		//  * (72) PushTelemetry
 		//
 		// Most of these keys are broker-to-broker only requests, and
 		// most non-Kafka implementations do not implement them.
-		skipKeys: []int16{4, 5, 6, 7, 27, 56, 57, 58, 67},
+		//
+		// We skip 71 and 72 because telemetry requests are only
+		// advertised if the broker is configured to support it.
+		skipKeys: []int16{4, 5, 6, 7, 27, 56, 57, 58, 67, 71, 72},
 	}
 	for _, opt := range opts {
 		opt.apply(&cfg)
@@ -951,6 +956,11 @@ func b37() *release {
 	now.incmax(8, 9)
 	now.incmax(9, 9)
 	now.incmax(60, 1)
+
+	// KAFKA-15604 36abc8dcea1 KIP-714, only exposed if broker is configured
+	now.addkey(71)
+	now.addkey(72)
+
 	now.addkey(68)
 	// KAFKA-15831 587f50d48f8 KIP-1000
 	now.addkey(74) // 74 list client metrics
@@ -1020,16 +1030,16 @@ func b40() *release {
 	setmin(40, 1)
 	setmin(41, 1)
 
-	now.incmax(0, 12)
-	now.incmax(2, 10)
-	now.incmax(3, 13)
-	now.incmax(15, 6)
-	now.incmax(26, 5)
-	now.incmax(28, 5)
-	now.incmax(57, 2)
-	now.incmax(60, 2)
-	now.incmax(68, 1)
-	now.incmax(69, 1)
+	now.incmax(0, 12) // KAFKA-14563 755adf8a566 KIP-890
+	now.incmax(2, 10) // KAFKA-15859 560076ba9e8 KIP-1075
+	now.incmax(3, 13) // KAFKA-17885 52d2fa5c8b3 KIP-1102
+	now.incmax(15, 6) // KAFKA-17550 e7d986e48c2 KIP-1043
+	now.incmax(26, 5) // KAFKA-14562 ede0c94aaae KIP-890
+	now.incmax(28, 5) // KAFKA-14563 755adf8a566 KIP-890
+	now.incmax(57, 2) // documented on controller
+	now.incmax(60, 2) // documented on controller
+	now.incmax(68, 1) // KAFKA-17592 ab0df20489a KIP-848; includes KAFKA-17116 6f040cabc7c KIP-1082 in same release
+	now.incmax(69, 1) // KAFKA-17750 fe88232b07c KIP-858
 
 	return now
 }
@@ -1134,7 +1144,7 @@ func c33() *release {
 
 func c34() *release {
 	now := c33().clone(3, 4)
-	now.incmax(62, 1)
+	now.incmax(62, 1) // KAFKA-14304 7b7e40a536a (type change in 0bb05d8679b) KIP-866
 	return now
 }
 
@@ -1162,13 +1172,13 @@ func c37() *release {
 	now.incmax(1, 16)
 	now.addkeyver(32, 4)
 	now.addkeyver(60, 1)
-	now.incmax(62, 2)
-	now.incmax(62, 3)
-	now.incmax(63, 1)
+	now.incmax(62, 2) // KAFKA-15355 a94bc8d6d52 KIP-858
+	now.incmax(62, 3) // KAFKA-15582 14029e2ddd1 KIP-966 (some later commit swapped the docs on which came first between this and prior line)
+	now.incmax(63, 1) // KAFKA-15355 0390d5b1a24 KIP-858 (adds tag... no version bump actually needed...)
 
 	// KAFKA-15369 41b695b6e30 KIP-919
 	now.addkey(70) // 70 controller registration
-	// KAFKA-15355 0390d5b1a24
+	// KAFKA-15355 0390d5b1a24 KIP-858
 	now.addkey(73) // 73 assign replica to dirs
 	return now
 }
@@ -1183,15 +1193,12 @@ func c39() *release {
 	now.incmax(1, 17)
 	now.incmax(18, 4)
 
-	// KAFKA-17641 b73e31eb159 KIP-996 adds PreVote to Vote
 	// KAFKA-16527 adee6f0cc11 KIP-853 adds a bunch of fields to Vote/{Begin,End}QuorumEpoch
 	now.incmax(52, 1)
 	now.incmax(53, 1)
 	now.incmax(54, 1)
-	now.incmax(55, 2) // KAFKA-16520 aecaf444756 KIP-853
-
-	// KAFKA-16527 adee6f0cc11 KIP-853
 	now.incmax(59, 1)
+	now.incmax(55, 2) // KAFKA-16520 aecaf444756 KIP-853
 
 	// KAFKA-17001 ede289db93f -- no kip, this is a bugfix
 	now.incmax(62, 4)
@@ -1229,9 +1236,9 @@ func c40() *release {
 	setmin(56, 2)
 	delete(now.reqs, 7)
 
-	now.incmax(52, 2)
-	now.incmax(57, 2)
-	now.incmax(60, 2)
+	now.incmax(52, 2) // KAFKA-17641 b73e31eb159 KIP-996 adds PreVote to Vote
+	now.incmax(57, 2) // KAFKA-16308 49d7ea6c6a2; no kip referenced
+	now.incmax(60, 2) // KAFKA-17094 747dc172e87 KIP-1073
 
 	return now
 }
