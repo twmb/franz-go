@@ -8,7 +8,7 @@ Assignment => not top level, no encoding, flexible v0+
 
 // ConsumerGroupDescribe is a part of KIP-848; this is the
 // "next generation" equivalent of DescribeGroups.
-ConsumerGroupDescribeRequest => key 69, max version 0, flexible v0+
+ConsumerGroupDescribeRequest => key 69, max version 1, flexible v0+
   // The IDs of the groups to describe.
   Groups: [string]
   // Whether to include authorized operations.
@@ -63,5 +63,7 @@ ConsumerGroupDescribeResponse =>
       Assignment: Assignment
       // The target assignment.
       TargetAssignment: Assignment
+      // The member type;  -1 for unknown. 0 for classic member. +1 for consumer member.
+      MemberType: int8(-1) // v1+
     // 32 bit bitfield representing authorized operations for the group.
     AuthorizedOperations: int32(-2147483648)
