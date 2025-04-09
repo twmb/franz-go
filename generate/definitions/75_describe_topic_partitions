@@ -1,0 +1,58 @@
+// DescribeTopicPartitionsRequest, introduced for KIP-966, allows you to fetch
+// all details about a topic (particularly, eligible leader replicas).
+// Note this contains more information in the response than Metadata does,
+// so this request can also help avoid expensive full-cluster queries of
+// topic information.
+DescribeTopicPartitionsRequest => key 75, max version 0, flexible v0+
+  // Topics to fetch details for.
+  Topics: [=>]
+    // Topic is a topic name.
+    Topic: string
+  // The maximum nuber of partitions included in the response.
+  ResponsePartitionLimit: int32(200)
+  // If non-nil, cursor is the first topic and partition to fetch details for.
+  Cursor: nullable=>
+    // Topic is the topic to start with.
+    Topic: string
+    // Partition is the partition to start with.
+    Partition: int32
+
+DescribeTopicPartitionsResponse =>
+  ThrottleMillis
+  // Each topic in the response.
+  Topics: [=>]
+    // The topic error, or 0 if there is no error.
+    ErrorCode: int32
+    // The topic name.
+    Topic: nullable-string
+    // The topic ID.
+    TopicID: uuid
+    // True if the topic is internal.
+    IsInternal: bool
+    Partitions: [=>]
+      // The partition error, or 0 if there is no error.
+      ErrorCode: int32
+      // The partition this is a response for.
+      Partition: int32
+      // The ID of the leader broker for this partition.
+      LeaderID: int32
+      // The leader epoch of this partition.
+      LeaderEpoch: int32(-1)
+      // The set of all nodes that host this partition.
+      Replicas: [int32]
+      // The set of all nodes that are in sync with the leader for this partition.
+      ISR: [int32]
+      // The eligible leader replicas for this partition.
+      EligibleLeaderReplicas: nullable[int32]
+      // The last known eligible leader replicas.
+      LastKnownELR: nullable[int32]
+      // The set of offline replicas for this partition.
+      OfflineReplicas: [int32]
+    // 32-bit bitfield representing authorized operations for this topic.
+    AuthorizedOperations: int32(-2147483648)
+  // The cursor to use in the next request to iterate through topic/partition details.
+  NextCursor: nullable=>
+    // Topic is the topic to start with.
+    Topic: string
+    // Partition is the partition to start with.
+    Partition: int32
