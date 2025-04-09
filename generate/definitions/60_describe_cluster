@@ -1,12 +1,14 @@
 // Introduced for KIP-700, DescribeClusterRequest is effectively an "admin"
 // type metadata request for information that producers or consumers do not
 // need to care about.
-DescribeClusterRequest => key 60, max version 1, flexible v0+
+DescribeClusterRequest => key 60, max version 2, flexible v0+
   // Whether to include cluster authorized operations. This requires DESCRIBE
   // on CLUSTER.
   IncludeClusterAuthorizedOperations: bool
   // The endpoint type to describe. 1=brokers, 2=controllers.
   EndpointType: int8(1) // v1+
+  // Whether to include fenced brokers when listing brokers.
+  IncludeFencedBrokers: bool // v2+
 
 // DescribeClusterResponse is a response to a DescribeClusterRequest.
 DescribeClusterResponse =>
@@ -31,5 +33,7 @@ DescribeClusterResponse =>
     Port: int32
     // Rack is the rack this Kafka broker is in, if any.
     Rack: nullable-string
+    // Whether the broker is fenced.
+    IsFenced: bool // v2+
   // 32-bit bitfield to represent authorized operations for this cluster.
   ClusterAuthorizedOperations: int32(-2147483648)
