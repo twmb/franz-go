@@ -3,20 +3,27 @@
 // VoteRequest is used by voters to hold a leader election.
 //
 // Since this is relatively Kafka internal, most fields are left undocumented.
-VoteRequest => key 52, max version 0, flexible v0+, admin
+VoteRequest => key 52, max version 2, flexible v0+, admin
   ClusterID: nullable-string
+  VoterID: int32(-1) // v1+
   Topics: [=>]
     Topic: string
     Partitions: [=>]
       Partition: int32
-      // The bumped epoch of the candidate sending the request.
+      // The bumped epoch of the voter sending the request.
       CandidateEpoch: int32
       // The ID of the voter sending the request.
       CandidateID: int32
+      // The directory ID of the voter sending the request.
+      CandidateDirectoryID: uuid // v1+
+      // The directory ID of the voter receiving the request.
+      VoterDirectoryID: uuid // v1+
       // The epoch of the last record written to the metadata log.
       LastOffsetEpoch: int32
       // The offset of the last record written to the metadata log.
       LastOffset: int64
+      // Whether the request is a PreVote request (not persisted) or not.
+      PreVote: bool // v2+
 
 VoteResponse =>
   ErrorCode: int16
@@ -31,3 +38,8 @@ VoteResponse =>
       LeaderEpoch: int32
       // Whether the vote was granted.
       VoteGranted: bool
+  // Endpoints for all leaders enumerated in PartitionData.
+  NodeEndpoints: [=>] // tag 0
+    NodeID: int32 // v1+
+    Host: string // v1+
+    Port: uint16 // v1+

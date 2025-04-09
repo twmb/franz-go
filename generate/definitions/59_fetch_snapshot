@@ -1,6 +1,6 @@
 // Introduced for KIP-630, FetchSnapshotRequest is a part of the inter-Kafka
 // raft protocol to remove the dependency on Zookeeper.
-FetchSnapshotRequest => key 59, max version 0, flexible v0+
+FetchSnapshotRequest => key 59, max version 1, flexible v0+
   // The ClusterID if known, this is used to validate metadata fetches prior to
   // broker registration.
   ClusterID: nullable-string // tag 0
@@ -24,6 +24,8 @@ FetchSnapshotRequest => key 59, max version 0, flexible v0+
         Epoch: int32
       // The byte position within the snapshot to start fetching from.
       Position: int64
+      // The directory id of the follower fetching.
+      ReplicaDirectoryID: uuid // tag 0
 
 // FetchSnapshotResponse is a response for a FetchSnapshotRequest.
 FetchSnapshotResponse =>
@@ -56,3 +58,8 @@ FetchSnapshotResponse =>
       Position: int64
       // Snapshot data.
       Bytes: bytes
+  // Endpoints for all leaders enumerated in PartitionData.
+  NodeEndpoints: [=>] // tag 0
+    NodeID: int32 // v1+
+    Host: string // v1+
+    Port: uint16 // v1+

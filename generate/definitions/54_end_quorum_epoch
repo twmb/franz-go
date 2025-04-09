@@ -4,7 +4,7 @@
 // (i.e. on shutdown). Stepping down begins a new election.
 //
 // Since this is relatively Kafka internal, most fields are left undocumented.
-EndQuorumEpochRequest => key 54, max version 0, admin
+EndQuorumEpochRequest => key 54, max version 1, flexible v1+, admin
   ClusterID: nullable-string
   Topics: [=>]
     Topic: string
@@ -16,6 +16,15 @@ EndQuorumEpochRequest => key 54, max version 0, admin
       LeaderEpoch: int32
       // A sorted list of preferred successors to start the election.
       PreferredSuccessors: [int32]
+      // A sorted list of preferred candidates to start the election.
+      PreferredCandidates: [=>] // v1+
+        CandidateID: int32
+        CandidateDirectoryID: uuid
+  // Endpoints for the leader.
+  LeaderEndpoints: [=>] // v1+
+    Name: string
+    Host: string
+    Port: uint16
 
 EndQuorumEpochResponse =>
   ErrorCode: int16
@@ -28,3 +37,8 @@ EndQuorumEpochResponse =>
       LeaderID: int32
       // The latest known leader epoch.
       LeaderEpoch: int32
+  // Endpoints for all leaders enumerated in PartitionData.
+  NodeEndpoints: [=>] // tag 0
+    NodeID: int32 // v1+
+    Host: string // v1+
+    Port: uint16 // v1+
