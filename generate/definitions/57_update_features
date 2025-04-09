@@ -1,5 +1,5 @@
 // From KIP-584 and introduced in 2.7.0, this request updates broker-wide features.
-UpdateFeaturesRequest => key 57, max version 1, flexible v0+, admin
+UpdateFeaturesRequest => key 57, max version 2, flexible v0+, admin
   TimeoutMillis(60000)
   // The list of updates to finalized features.
   FeatureUpdates: [=>]
