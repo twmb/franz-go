@@ -1,0 +1,33 @@
+// AssignReplicasToDirs, introduced in Kafka 3.7, is a part of KIP-858.
+// The KIP is about handling JBOD failures in KRaft, and this request,
+// as the name implies, allows you to assign replicas to specific directories.
+AssignReplicasToDirsRequest => key 73, max version 0, flexible v0+
+  // The ID of the requesting broker.
+  BrokerID: int32
+  // The epoch of the requesting broker.
+  BrokerEpoch: int64(-1)
+  // The directories to which replicas should be assigned.
+  Directories: [=>]
+    // The ID of the directory.
+    ID: uuid
+    // The topics assigned to the directory.
+    Topics: [=>]
+      // The ID of the assigned topic.
+      TopicID: uuid
+      // The partitions assigned to the directory.
+      Partitions: [=>]
+        // The partition index.
+        Partition: int32
+
+// AssignReplicasToDirsResponse mirrors the request fields and shape,
+// with an added ErrorCode alongside each partition.
+AssignReplicasToDirsResponse =>
+  ThrottleMillis
+  ErrorCode: int16
+  Directories: [=>]
+    ID: uuid
+    Topics: [=>]
+      TopicID: uuid
+      Partitions: [=>]
+        Partition: int32
+        ErrorCode: int16
