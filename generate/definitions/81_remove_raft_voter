@@ -1,0 +1,14 @@
+// RemoveRaftVoter, added for KIP-853, allows you to manage your KRaft
+// controllers.
+RemoveRaftVoterRequest => key 81, max version 0, flexible v0+
+  // The cluster ID of the request.
+  ClusterID: nullable-string
+  // The replica ID of the voter getting added to the topic partition.
+  VoterID: int32
+  // The directory ID of the voter getting added to the topic partition.
+  VoterDirectoryID: uuid
+
+RemoveRaftVoterResponse =>
+  ThrottleMillis
+  ErrorCode: int16
+  ErrorMessage: nullable-string
