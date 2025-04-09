@@ -411,6 +411,8 @@ generation.
 | [KIP-919](https://cwiki.apache.org/confluence/display/KAFKA/KIP-919%3A+Allow+AdminClient+to+Talk+Directly+with+the+KRaft+Controller+Quorum+and+add+Controller+Registration) — Admin client talk to KRaft , Controller registration | 3.7 | Supported (proto) |
 | [KIP-951](https://cwiki.apache.org/confluence/display/KAFKA/KIP-951%3A+Leader+discovery+optimisations+for+the+client) — Leader discovery optimizations | 3.7 | Supported |
 | [KIP-994](https://cwiki.apache.org/confluence/display/KAFKA/KIP-994%3A+Minor+Enhancements+to+ListTransactions+and+DescribeTransactions+APIs) — List/Describe transactions enhancements | 3.8 (partial) | Supported |
+| [KIP-1005](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1005%3A+Expose+EarliestLocalOffset+and+TieredOffset) — ListOffsets w. Timestamp -5 | 3.9 | Supported |
+| [KIP-1075](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1075%3A+Introduce+delayed+remote+list+offsets+purgatory+to+make+LIST_OFFSETS+async) — TimeoutMillis on ListOffsets | 4.0 | Supported |
 
 Missing from above but included in librdkafka is:
 

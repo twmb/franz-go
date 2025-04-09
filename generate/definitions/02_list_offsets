@@ -10,7 +10,14 @@
 //
 // Version 8, introduced in Kafka 3.4, supports -4 as a timestamp to return
 // the local log start offset (in the context of tiered storage, see KIP-405).
-ListOffsetsRequest => key 2, max version 8, flexible v6+
+//
+// Version 9, introduced in Kafka 3.9, supports -5 as a timestamp to return
+// the latest offset in remote storage. See KIP-1005.
+//
+// Version 10, introduced in Kafka 4.0, adds TimeoutMillis, allowing you to set
+// a timeout when the ListOffsets request triggers a lookup from remote storage.
+// See KIP-1075.
+ListOffsetsRequest => key 2, max version 10, flexible v6+
   // ReplicaID is the broker ID to get offsets from. As a Kafka client, use -1.
   // The consumer replica ID (-1) causes requests to only succeed if issued
   // against the leader broker.
@@ -61,10 +68,16 @@ ListOffsetsRequest => key 2, max version 8, flexible v6+
       // KIP-405), the new special timestamp -4 returns the local log start
       // offset. In the context of tiered storage, the earliest local log start
       // offset is the offset actually available on disk on the broker.
+      //
+      // If you are talking to Kafka 3.9+ and using request version 9+ (for KIP-1005),
+      // the special timestamp -5 returns the latest offset in remote storage.
       Timestamp: int64
       // MaxNumOffsets is the maximum number of offsets to report.
       // This was removed after v0.
       MaxNumOffsets: int32(1) // v0-v0
+  // TimeoutMillis is how long to wait for a lookup the offset being looked up
+  // is in remote storage.
+  TimeoutMillis: int32(30000) // v10+
 
 // ListOffsetsResponse is returned from a ListOffsetsRequest.
 ListOffsetsResponse =>
