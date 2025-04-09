@@ -392,6 +392,20 @@ func (l *LineWriter) Write(line string, args ...any) {
 	l.line++
 }
 
+func validateMaxVersions(top, on *Struct) {
+	for _, f := range on.Fields {
+		if f.MinVersion > top.MaxVersion {
+			die("field %s min version %d > containing struct %s max version %d", f.FieldName, f.MinVersion, top.Name, top.MaxVersion)
+		}
+		if f.MaxVersion > top.MaxVersion {
+			die("field %s max version %d > containing struct %s max version %d", f.FieldName, f.MaxVersion, top.Name, top.MaxVersion)
+		}
+		if substruct, ok := f.Type.(Struct); ok {
+			validateMaxVersions(top, &substruct)
+		}
+	}
+}
+
 //go:generate sh -c "go run . | gofumpt | gofumpt -lang 1.19 -extra > ../pkg/kmsg/generated.go"
 func main() {
 	const dir = "definitions"
@@ -418,6 +432,11 @@ func main() {
 			die("unable to read %s/%s: %v", dir, ent.Name(), err)
 		}
 		Parse(f)
+	}
+	for _, s := range newStructs {
+		if s.TopLevel {
+			validateMaxVersions(&s, &s)
+		}
 	}
 
 	l := &LineWriter{buf: bytes.NewBuffer(make([]byte, 0, 300<<10))}
