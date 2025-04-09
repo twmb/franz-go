@@ -1,4 +1,4 @@
-// ControllerRegistrationREquest, added for KIP-919, is what controllers
+// ControllerRegistrationRequest, was added for KIP-919, is what controllers
 // send to the active controller to register themselves.
 //
 // This requires CLUSTER_ACTION on CLUSTER.
