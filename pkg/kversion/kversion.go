@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"maps"
 	"regexp"
+	"slices"
 	"sync"
 	"text/tabwriter"
 
@@ -142,8 +143,13 @@ func (vs *Versions) Equal(other *Versions) bool {
 // EachMaxKeyVersion calls fn for each key and max version
 func (vs *Versions) EachMaxKeyVersion(fn func(k, v int16)) {
 	vs.lazyInit()
-	for k, req := range vs.reqs {
-		fn(k, req.vmax)
+	keys := make([]int16, 0, len(vs.reqs))
+	for k := range vs.reqs {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	for _, k := range keys {
+		fn(k, vs.reqs[k].vmax)
 	}
 }
 
@@ -288,7 +294,9 @@ func relversion(fn func() *release) *Versions {
 // Stable is a shortcut for the latest _released_ Kafka versions.
 //
 // This is the default version used in kgo to avoid breaking tip changes.
-func Stable() *Versions { return relversion(ztip) }
+// The stable version is only bumped once kgo internally supports all
+// features in the release.
+func Stable() *Versions { return relversion(z38) }
 
 // Tip is the latest defined Kafka key versions; this may be slightly out of date.
 func Tip() *Versions { return relversion(ztip) }
