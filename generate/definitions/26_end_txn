@@ -1,6 +1,6 @@
 // EndTxnRequest ends a transaction. This should be called after
 // TxnOffsetCommitRequest.
-EndTxnRequest => key 26, max version 4, flexible v3+, txn coordinator
+EndTxnRequest => key 26, max version 5, flexible v3+, txn coordinator
   // TransactionalID is the transactional ID to use for this request.
   TransactionalID: string
   // ProducerID is the producer ID of the client for this transactional ID
@@ -36,3 +36,10 @@ EndTxnResponse =>
   // INVALID_TXN_STATE is returned if this request is attempted at the wrong
   // time (given the order of how transaction requests should go).
   ErrorCode: int16
+  // Kafka 4.0+ returns the producer ID that the producer should use on the
+  // *next* transaction. This is the same as the ID used in the request, but
+  // is bumped if the epoch overflows. See KIP-890.
+  ProducerID: int64(-1) // v5+
+  // Kafka 4.0+ returns the producer epoch that the producer should use on the
+  // *next* transaction. See KIP-890.
+  ProducerEpoch: int16(-1) // v5+
