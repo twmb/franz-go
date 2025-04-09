@@ -10,9 +10,9 @@ func TestSetMaxKeyVersion(t *testing.T) {
 	for i := int16(0); i < math.MaxInt16; i++ {
 		vs.SetMaxKeyVersion(i, i)
 	}
-	for i, v := range vs.k2v {
-		if int16(i) != v {
-			t.Errorf("set incorrect: at %d got %d != exp %d", i, v, i)
+	for i, req := range vs.reqs {
+		if i != req.vmax {
+			t.Errorf("set incorrect: at %d got %d != exp %d", i, req.vmax, i)
 		}
 	}
 }
@@ -29,7 +29,7 @@ func TestVersionGuess(t *testing.T) {
 			t.Errorf("got %s != exp %s unsetting produce", got, exp)
 		}
 		v.SetMaxKeyVersion(0, 100)
-		if got, exp := v.VersionGuess(), "unknown custom version at least v0.8.0"; got != exp {
+		if got, exp := v.VersionGuess(), "between v0.8.0 and v0.8.1"; got != exp {
 			t.Errorf("got %s != exp %s maxing produce", got, exp)
 		}
 		v.SetMaxKeyVersion(1, -1)
@@ -61,7 +61,7 @@ func TestVersionGuess(t *testing.T) {
 	// This hits the case where versions are -1.
 	{
 		v := V2_7_0()
-		v.SetMaxKeyVersion(int16(len(v.k2v)+1), -1)
+		v.SetMaxKeyVersion(100, -1)
 		if got, exp := v.VersionGuess(), "v2.7"; got != exp {
 			t.Errorf("got %s != exp %s without modifications", got, exp)
 		}
@@ -86,7 +86,7 @@ func TestVersionGuess(t *testing.T) {
 
 func TestEqual(t *testing.T) {
 	l := V2_7_0()
-	l.SetMaxKeyVersion(int16(len(l.k2v)+1), -1)
+	l.SetMaxKeyVersion(100, -1)
 
 	r := V2_7_0()
 
@@ -250,10 +250,14 @@ func TestGuessVersions(t *testing.T) {
 		{V3_0_0(), "v3.0"},
 		{V3_1_0(), "v3.1"},
 		{V3_2_0(), "v3.2"},
-		{V3_3_0(), "v3.3"},
+		{V3_3_0(), "v3.4"}, // v3.3 has no zookeeper differences from 3.4, and we prefer detecting higher
 		{V3_4_0(), "v3.4"},
 		{V3_5_0(), "v3.5"},
 		{V3_6_0(), "v3.6"},
+		{V3_7_0(), "v3.7"},
+		{V3_8_0(), "v3.8"},
+		{V3_9_0(), "v3.9"},
+		{V4_0_0(), "v4.0"},
 	} {
 		got := test.vs.VersionGuess()
 		if got != test.exp {
