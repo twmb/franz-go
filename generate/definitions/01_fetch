@@ -13,7 +13,7 @@
 //
 // Version 15 adds the ReplicaState which includes new field ReplicaEpoch and
 // the ReplicaID, and deprecates the old ReplicaID (KIP-903).
-FetchRequest => key 1, max version 16, flexible v12+
+FetchRequest => key 1, max version 17, flexible v12+
   // The cluster ID, if known. This is used to validate metadata fetches
   // prior to broker registration.
   ClusterID: nullable-string(null) // tag 0
@@ -86,6 +86,9 @@ FetchRequest => key 1, max version 16, flexible v12+
       // This can be used to limit how many bytes an individual partition in
       // a request is allotted so that it does not dominate all of MaxBytes.
       PartitionMaxBytes: int32
+      // The directory ID of the follower fetching. This is not relevant for
+      // clients; see KIP-853.
+      ReplicaDirectoryID: uuid // tag 0
   // ForgottenTopics contains topics and partitions that a fetch session
   // wants to remove from its session.
   //

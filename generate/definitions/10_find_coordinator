@@ -3,7 +3,10 @@
 // This coordinator is different from the broker leader coordinator. This
 // coordinator is the partition leader for the partition that is storing
 // the group or transaction ID.
-FindCoordinatorRequest => key 10, max version 5, flexible v3+
+//
+// Kafka 3.9, introducing request version 6, adds support for share groups (see KIP-932).
+// The format for key type SHARE(2) is "groupId:topicId:partition".
+FindCoordinatorRequest => key 10, max version 6, flexible v3+
   // CoordinatorKey is the ID to use for finding the coordinator. For groups,
   // this is the group name, for transactional producer, this is the
   // transactional ID.

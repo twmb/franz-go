@@ -1,0 +1,11 @@
+// ListClientMetricsResourcesRequest, introduced in KIP-1000, 
+// allows you to list client metric resources (from KIP-714).
+ListClientMetricsResourcesRequest => key 74, max version 0, flexible v0+
+
+ListClientMetricsResourcesResponse =>
+  ThrottleMillis
+  ErrorCode: int16
+  // Each client metrics resource in the response.
+  ClientMetricsResources: [=>]
+    // The resource name.
+    Name: string

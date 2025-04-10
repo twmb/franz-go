@@ -1,5 +1,5 @@
 // For KIP-664, ListTransactionsRequest lists transactions.
-ListTransactionsRequest => key 66, max version 0, flexible v0+
+ListTransactionsRequest => key 66, max version 1, flexible v0+
   // The transaction states to filter by: if empty, all transactions are
   // returned; if non-empty, then only transactions matching one of the
   // filtered states will be returned.

@@ -1,0 +1,26 @@
+key 3 kmsg 12 < max 13 // FINISH AFTER KMSG RELEASE
+key 26 kmsg 4 < max 5 // FINISH AFTER KMSG RELEASE
+missing key 70, 71
+
+Produce v12: no more AddPartitionsToTxn
+Metadata v13: Handle RebootstrapRequired ErrorCode
+EndTxn v4: ProducerID & ProducerEpoch in response
+ConsumerGroupHeartbeat: SubscribedTopicRegex in request
+GetTelemetry & PushTelemetry
+
+
+kadm
+====
+ListOffsets -3, -4, -5
+FindCoordinator v6 -- SHARE(2) type, format groupId:topicId:partition
+DescribeGroups: handle ErrorMessage
+DescribeQuorum?
+UpdateFeatures?
+DescribeCluster?
+BrokerRegistration?
+ConsumerGroupDescribe?
+AssignReplicasToDirs?
+ListClientMetricsResources
+DescribeTopicPartitions
+AddRaftVoter
+RemoveRaftVoter

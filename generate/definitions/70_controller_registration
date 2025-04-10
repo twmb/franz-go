@@ -1,0 +1,27 @@
+// ControllerRegistrationRequest, was added for KIP-919, is what controllers
+// send to the active controller to register themselves.
+//
+// This requires CLUSTER_ACTION on CLUSTER.
+ControllerRegistrationRequest => key 70, max version 0, flexible v0+
+  // The ID of the controller to register.
+  ControllerID: int32
+  // The controller incarnation ID, which is unique to each process run.
+  IncarnationID: uuid
+  // Set if the required configurations for ZK migration are present.
+  ZkMigrationReady: bool
+  // The listeners of this controller.
+  Listeners: [=>]
+    Name: string
+    Host: string
+    Port: uint16
+    SecurityProtocol: int16
+  // The features on this controller.
+  Features: [=>]
+    Name: string
+    MinSupportedVersion: int16
+    MaxSupportedVersion: int16
+
+ControllerRegistrationResponse =>
+  ThrottleMillis
+  ErrorCode: int16
+  ErrorMessage: nullable-string

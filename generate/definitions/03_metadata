@@ -1,5 +1,5 @@
 // MetadataRequest requests metadata from Kafka.
-MetadataRequest => key 3, max version 12, flexible v9+
+MetadataRequest => key 3, max version 13, flexible v9+
   // Topics is a list of topics to return metadata about. If this is null
   // in v1+, all topics are included. If this is empty, no topics are.
   // For v0 (<Kafka 0.10.0.0), if this is empty, all topics are included.
@@ -106,3 +106,6 @@ MetadataResponse =>
   // AuthorizedOperations is a bitfield containing which operations the client
   // is allowed to perform on this cluster.
   AuthorizedOperations: int32(-2147483648) // v8-v10
+  // ErrorCode indicates any error. Kafka 4.0 introduced this via KIP-1102
+  // to signal to clients that rebootstrapping is required.
+  ErrorCode: int16 // v13+

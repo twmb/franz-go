@@ -12,7 +12,7 @@
 // understands, the broker replies with UNSUPPORTED_VERSIONS using the version
 // 0 message format but additionally includes the api versions the broker does
 // support.
-ApiVersionsRequest => key 18, max version 3, flexible v3+
+ApiVersionsRequest => key 18, max version 4, flexible v3+
   // ClientSoftwareName, added for KIP-511 with Kafka 2.4.0, is the name of the
   // client issuing this request. The broker can use this to enrich its own
   // debugging information of which version of what clients are connected.

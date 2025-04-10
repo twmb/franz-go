@@ -1,0 +1,26 @@
+// GetTelemetrySubscriptionsRequest is the initial request from the
+// client asking the broker which metrics the client should send.
+// This request is periodically reissued to check for updates on what
+// or how the client should send. See KIP-714 for more details.
+GetTelemetrySubscriptionsRequest => key 71, max version 0, flexible v0+
+  // Unique ID for this client instance; must be set to 0 on the first request.
+  ClientInstanceID: uuid
+
+GetTelemetrySubscriptionsResponse =>
+  ThrottleMillis
+  // ErrorCode is the error, if any.
+  ErrorCode: int16
+  // Assigned client instance id if ClientInstanceID was 0 in the request, else 0.
+  ClientInstanceID: uuid
+  // Unique identifier for the current subscription set for this client instance.
+  SubscriptionID: int32
+  // Compression types that broker accepts for the PushTelemetryRequest.
+  AcceptedCompressionTypes: [int8]
+  // Configured push interval, which is the lowest configured interval in the current subscription set.
+  PushIntervalMillis: int32
+  // The maximum bytes of binary data the broker accepts in PushTelemetryRequest.
+  TelemetryMaxBytes: int32
+  // Flag to indicate monotonic/counter metrics are to be emitted as deltas or cumulative values.
+  DeltaTemporality: bool
+  // Requested metrics prefix string match. Empty array: No metrics subscribed, Array[0] empty string: All metrics subscribed.
+  RequestedMetrics: [string]

@@ -4,16 +4,25 @@
 // to all voters in the election.
 //
 // Since this is relatively Kafka internal, most fields are left undocumented.
-BeginQuorumEpochRequest => key 53, max version 0, admin
+BeginQuorumEpochRequest => key 53, max version 1, flexible v1+, admin
   ClusterID: nullable-string
+  // Replica ID of the voter receiving the request.
+  VoterID: int32(-1) // v1+
   Topics: [=>]
     Topic: string
     Partitions: [=>]
       Partition: int32
+      // Directory ID of the receiving replica.
+      VoterDirectoryID: uuid // v1+
       // The ID of the newly elected leader.
       LeaderID: int32
       // The epoch of the newly elected leader.
       LeaderEpoch: int32
+  // Endpoints for the leader.
+  LeaderEndpoints: [=>] // v1+
+    Name: string
+    Host: string
+    Port: uint16
 
 BeginQuorumEpochResponse =>
   ErrorCode: int16
@@ -26,3 +35,8 @@ BeginQuorumEpochResponse =>
       LeaderID: int32
       // The latest known leader epoch.
       LeaderEpoch: int32
+  // Endpoints for all leaders enumerated in PartitionData.
+  NodeEndpoints: [=>] // tag 0
+    NodeID: int32 // v1+
+    Host: string // v1+
+    Port: uint16 // v1+

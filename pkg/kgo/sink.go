@@ -94,6 +94,7 @@ func (s *sink) createReq(id int64, epoch int16) (*produceRequest, *kmsg.AddParti
 		txnID: req.txnID,
 		id:    id,
 		epoch: epoch,
+		// pv12:  s.cl.supportsKeyVersion(0, 12), // produce request v12 means we no longer send AddPartitionsToTxn
 	}
 
 	var moreToDrain bool
@@ -151,11 +152,12 @@ type txnReqBuilder struct {
 	req         *kmsg.AddPartitionsToTxnRequest
 	id          int64
 	epoch       int16
+	pv12        bool
 	addedTopics map[string]int // topic => index into req
 }
 
 func (t *txnReqBuilder) add(rb *recBuf) {
-	if t.txnID == nil {
+	if t.txnID == nil || t.pv12 {
 		return
 	}
 	if rb.addedToTxn.Swap(true) {

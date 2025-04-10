@@ -1,0 +1,39 @@
+// UpdateRaftVoterRequest, added for KIP-853, allows you to manage your KRaft
+// controllers.
+UpdateRaftVoterRequest => key 82, max version 0, flexible v0+
+  // The cluster ID of the request.
+  ClusterID: nullable-string
+  // The current leader epoch of the partition; -1 if unknown.
+  CurrentLeaderEpoch: int32
+  // The replica ID of the voter getting added to the topic partition.
+  VoterID: int32
+  // The directory ID of the voter getting added to the topic partition.
+  VoterDirectoryID: uuid
+  // The endpoints that can be used to communicate with the leader.
+  Listeners: [=>]
+    // The name of the endpoint.
+    Name: string
+    // The hostname.
+    Host: string
+    // The port.
+    Port: int16
+  // The range of versions of the protocol that the replica supports.
+  KRaftVersionFeature: =>
+    // The min supported KRaft protocol version.
+    MinSupportedVersion: int16
+    // The max supported KRaft protocol version.
+    MaxSupportedVersion: int16
+
+UpdateRaftVoterResponse =>
+  ThrottleMillis
+  ErrorCode: int16
+  // Defaults of the current Raft leader.
+  CurrentLeader: => // tag 0
+    // The replica ID of the current leader, or -1 if unknown.
+    LeaderID: int32(-1)
+    // The latest known leader epoch.
+    LeaderEpoch: int32(-1)
+    // The node's hostname.
+    Host: string
+    // The node's port.
+    Port: int32

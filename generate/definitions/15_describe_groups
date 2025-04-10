@@ -1,5 +1,5 @@
 // DescribeGroupsRequest requests metadata for group IDs.
-DescribeGroupsRequest => key 15, max version 5, flexible v5+, group coordinator
+DescribeGroupsRequest => key 15, max version 6, flexible v5+, group coordinator
   // Groups is an array of group IDs to request metadata for.
   Groups: [string]
   // IncludeAuthorizedOperations, introduced in Kafka 2.3.0, specifies
@@ -26,7 +26,11 @@ DescribeGroupsResponse =>
     //
     // NOT_COORDINATOR is returned if the requested broker is not the
     // coordinator for this group.
+    //
+    // GROUP_ID_NOT_FOUND is returned on v6+ if the group ID is not found (KIP-1043).
     ErrorCode: int16
+    // ErrorMessage is an optional message with more detail for the error code.
+    ErrorMessage: nullable-string
     // Group is the id of this group.
     Group: string
     // State is the state this group is in.

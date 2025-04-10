@@ -447,7 +447,7 @@ func defaultCfg() cfg {
 		logger: new(nopLogger),
 
 		seedBrokers: []string{"127.0.0.1"},
-		maxVersions: kversion.Stable(),
+		maxVersions: kversion.Stable(), // kversion bumps what is returned from Stable on the same release we add support for new features to kgo
 
 		retryBackoff: func() func(int) time.Duration {
 			var rngMu sync.Mutex

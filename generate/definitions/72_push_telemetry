@@ -1,0 +1,16 @@
+// PushTelemetryRequest, part of KIP-714, is a client side push of metrics.
+PushTelemetryRequest => key 72, max version 0, flexible v0+
+  // Unique ID for this client instance.
+  ClientInstanceID: uuid
+  // The unique identifier for the current subscription.
+  SubscriptionID: int32
+  // If the client is terminating the connection.
+  Terminating: bool
+  // Compression codec used to compress the metrics.
+  CompressionType: int8
+  // Metrics encoded in OpenTelemetry MetricsData v1 protobuf format.
+  Metrics: bytes
+
+PushTelemetryResponse =>
+  ThrottleMillis
+  ErrorCode: int16

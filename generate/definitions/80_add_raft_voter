@@ -1,0 +1,23 @@
+// AddRaftVoter, added for KIP-853, allows you to manage your KRaft
+// controllers.
+AddRaftVoterRequest => key 80, max version 0, flexible v0+
+  // The cluster ID of the request.
+  ClusterID: nullable-string
+  TimeoutMillis
+  // The replica ID of the voter getting added to the topic partition.
+  VoterID: int32
+  // The directory ID of the voter getting added to the topic partition.
+  VoterDirectoryID: uuid
+  // The endpoints that can be used to communicate with the voter.
+  Listeners: [=>]
+    // The name of the endpoint.
+    Name: string
+    // The hostname.
+    Host: string
+    // The port.
+    Port: int16
+
+AddRaftVoterResponse =>
+  ThrottleMillis
+  ErrorCode: int16
+  ErrorMessage: nullable-string
