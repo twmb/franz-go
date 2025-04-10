@@ -1,7 +1,7 @@
 # We may as well allow multiple golangci-lint invocations at once.
 run:
   allow-parallel-runners: true
-  go: "1.22"
+  go: "1.24"
 
 # golangci-lint by default ignores some staticcheck and vet raised issues that
 # are actually important to catch. The following ensures that we do not ignore
