@@ -3986,250 +3986,6 @@ func NewProduceResponse() ProduceResponse {
 	return v
 }
 
-// PushTelemetryRequest, part of KIP-714, is a client side push of metrics.
-type PushTelemetryRequest struct {
-	// Version is the version of this message used with a Kafka broker.
-	Version int16
-
-	// Unique ID for this client instance.
-	ClientInstanceID [16]byte
-
-	// The unique identifier for the current subscription.
-	SubscriptionID int32
-
-	// If the client is terminating the connection.
-	Terminating bool
-
-	// Compression codec used to compress the metrics.
-	CompressionType int8
-
-	// Metrics encoded in OpenTelemetry MetricsData v1 protobuf format.
-	Metrics []byte
-
-	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
-}
-
-func (*PushTelemetryRequest) Key() int16                 { return 0 }
-func (*PushTelemetryRequest) MaxVersion() int16          { return 0 }
-func (v *PushTelemetryRequest) SetVersion(version int16) { v.Version = version }
-func (v *PushTelemetryRequest) GetVersion() int16        { return v.Version }
-func (v *PushTelemetryRequest) IsFlexible() bool         { return v.Version >= 0 }
-func (v *PushTelemetryRequest) ResponseKind() Response {
-	r := &PushTelemetryResponse{Version: v.Version}
-	r.Default()
-	return r
-}
-
-// RequestWith is requests v on r and returns the response or an error.
-// For sharded requests, the response may be merged and still return an error.
-// It is better to rely on client.RequestSharded than to rely on proper merging behavior.
-func (v *PushTelemetryRequest) RequestWith(ctx context.Context, r Requestor) (*PushTelemetryResponse, error) {
-	kresp, err := r.Request(ctx, v)
-	resp, _ := kresp.(*PushTelemetryResponse)
-	return resp, err
-}
-
-func (v *PushTelemetryRequest) AppendTo(dst []byte) []byte {
-	version := v.Version
-	_ = version
-	isFlexible := version >= 0
-	_ = isFlexible
-	{
-		v := v.ClientInstanceID
-		dst = kbin.AppendUuid(dst, v)
-	}
-	{
-		v := v.SubscriptionID
-		dst = kbin.AppendInt32(dst, v)
-	}
-	{
-		v := v.Terminating
-		dst = kbin.AppendBool(dst, v)
-	}
-	{
-		v := v.CompressionType
-		dst = kbin.AppendInt8(dst, v)
-	}
-	{
-		v := v.Metrics
-		if isFlexible {
-			dst = kbin.AppendCompactBytes(dst, v)
-		} else {
-			dst = kbin.AppendBytes(dst, v)
-		}
-	}
-	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
-	}
-	return dst
-}
-
-func (v *PushTelemetryRequest) ReadFrom(src []byte) error {
-	return v.readFrom(src, false)
-}
-
-func (v *PushTelemetryRequest) UnsafeReadFrom(src []byte) error {
-	return v.readFrom(src, true)
-}
-
-func (v *PushTelemetryRequest) readFrom(src []byte, unsafe bool) error {
-	v.Default()
-	b := kbin.Reader{Src: src}
-	version := v.Version
-	_ = version
-	isFlexible := version >= 0
-	_ = isFlexible
-	s := v
-	{
-		v := b.Uuid()
-		s.ClientInstanceID = v
-	}
-	{
-		v := b.Int32()
-		s.SubscriptionID = v
-	}
-	{
-		v := b.Bool()
-		s.Terminating = v
-	}
-	{
-		v := b.Int8()
-		s.CompressionType = v
-	}
-	{
-		var v []byte
-		if isFlexible {
-			v = b.CompactBytes()
-		} else {
-			v = b.Bytes()
-		}
-		s.Metrics = v
-	}
-	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
-	}
-	return b.Complete()
-}
-
-// NewPtrPushTelemetryRequest returns a pointer to a default PushTelemetryRequest
-// This is a shortcut for creating a new(struct) and calling Default yourself.
-func NewPtrPushTelemetryRequest() *PushTelemetryRequest {
-	var v PushTelemetryRequest
-	v.Default()
-	return &v
-}
-
-// Default sets any default fields. Calling this allows for future compatibility
-// if new fields are added to PushTelemetryRequest.
-func (v *PushTelemetryRequest) Default() {
-}
-
-// NewPushTelemetryRequest returns a default PushTelemetryRequest
-// This is a shortcut for creating a struct and calling Default yourself.
-func NewPushTelemetryRequest() PushTelemetryRequest {
-	var v PushTelemetryRequest
-	v.Default()
-	return v
-}
-
-type PushTelemetryResponse struct {
-	// Version is the version of this message used with a Kafka broker.
-	Version int16
-
-	// ThrottleMillis is how long of a throttle Kafka will apply to the client
-	// after responding to this request.
-	ThrottleMillis int32
-
-	ErrorCode int16
-
-	// UnknownTags are tags Kafka sent that we do not know the purpose of.
-	UnknownTags Tags
-}
-
-func (*PushTelemetryResponse) Key() int16                         { return 0 }
-func (*PushTelemetryResponse) MaxVersion() int16                  { return 0 }
-func (v *PushTelemetryResponse) SetVersion(version int16)         { v.Version = version }
-func (v *PushTelemetryResponse) GetVersion() int16                { return v.Version }
-func (v *PushTelemetryResponse) IsFlexible() bool                 { return v.Version >= 0 }
-func (v *PushTelemetryResponse) Throttle() (int32, bool)          { return v.ThrottleMillis, v.Version >= 0 }
-func (v *PushTelemetryResponse) SetThrottle(throttleMillis int32) { v.ThrottleMillis = throttleMillis }
-func (v *PushTelemetryResponse) RequestKind() Request {
-	return &PushTelemetryRequest{Version: v.Version}
-}
-
-func (v *PushTelemetryResponse) AppendTo(dst []byte) []byte {
-	version := v.Version
-	_ = version
-	isFlexible := version >= 0
-	_ = isFlexible
-	{
-		v := v.ThrottleMillis
-		dst = kbin.AppendInt32(dst, v)
-	}
-	{
-		v := v.ErrorCode
-		dst = kbin.AppendInt16(dst, v)
-	}
-	if isFlexible {
-		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
-		dst = v.UnknownTags.AppendEach(dst)
-	}
-	return dst
-}
-
-func (v *PushTelemetryResponse) ReadFrom(src []byte) error {
-	return v.readFrom(src, false)
-}
-
-func (v *PushTelemetryResponse) UnsafeReadFrom(src []byte) error {
-	return v.readFrom(src, true)
-}
-
-func (v *PushTelemetryResponse) readFrom(src []byte, unsafe bool) error {
-	v.Default()
-	b := kbin.Reader{Src: src}
-	version := v.Version
-	_ = version
-	isFlexible := version >= 0
-	_ = isFlexible
-	s := v
-	{
-		v := b.Int32()
-		s.ThrottleMillis = v
-	}
-	{
-		v := b.Int16()
-		s.ErrorCode = v
-	}
-	if isFlexible {
-		s.UnknownTags = internalReadTags(&b)
-	}
-	return b.Complete()
-}
-
-// NewPtrPushTelemetryResponse returns a pointer to a default PushTelemetryResponse
-// This is a shortcut for creating a new(struct) and calling Default yourself.
-func NewPtrPushTelemetryResponse() *PushTelemetryResponse {
-	var v PushTelemetryResponse
-	v.Default()
-	return &v
-}
-
-// Default sets any default fields. Calling this allows for future compatibility
-// if new fields are added to PushTelemetryResponse.
-func (v *PushTelemetryResponse) Default() {
-}
-
-// NewPushTelemetryResponse returns a default PushTelemetryResponse
-// This is a shortcut for creating a struct and calling Default yourself.
-func NewPushTelemetryResponse() PushTelemetryResponse {
-	var v PushTelemetryResponse
-	v.Default()
-	return v
-}
-
 type FetchRequestReplicaState struct {
 	// The replica ID of the follower, or -1 if this request is from a consumer.
 	//
@@ -39964,7 +39720,7 @@ type DescribeQuorumResponseTopicPartition struct {
 
 	ErrorCode int16
 
-	ErrorCode *string // v2+
+	ErrorMessage *string // v2+
 
 	// The ID of the current leader, or -1 if the leader is unknown.
 	LeaderID int32
@@ -40140,7 +39896,7 @@ func (v *DescribeQuorumResponse) AppendTo(dst []byte) []byte {
 						dst = kbin.AppendInt16(dst, v)
 					}
 					if version >= 2 {
-						v := v.ErrorCode
+						v := v.ErrorMessage
 						if isFlexible {
 							dst = kbin.AppendCompactNullableString(dst, v)
 						} else {
@@ -40419,7 +40175,7 @@ func (v *DescribeQuorumResponse) readFrom(src []byte, unsafe bool) error {
 								v = b.NullableString()
 							}
 						}
-						s.ErrorCode = v
+						s.ErrorMessage = v
 					}
 					{
 						v := b.Int32()
@@ -49562,6 +49318,250 @@ func NewGetTelemetrySubscriptionsResponse() GetTelemetrySubscriptionsResponse {
 	return v
 }
 
+// PushTelemetryRequest, part of KIP-714, is a client side push of metrics.
+type PushTelemetryRequest struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	// Unique ID for this client instance.
+	ClientInstanceID [16]byte
+
+	// The unique identifier for the current subscription.
+	SubscriptionID int32
+
+	// If the client is terminating the connection.
+	Terminating bool
+
+	// Compression codec used to compress the metrics.
+	CompressionType int8
+
+	// Metrics encoded in OpenTelemetry MetricsData v1 protobuf format.
+	Metrics []byte
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
+}
+
+func (*PushTelemetryRequest) Key() int16                 { return 72 }
+func (*PushTelemetryRequest) MaxVersion() int16          { return 0 }
+func (v *PushTelemetryRequest) SetVersion(version int16) { v.Version = version }
+func (v *PushTelemetryRequest) GetVersion() int16        { return v.Version }
+func (v *PushTelemetryRequest) IsFlexible() bool         { return v.Version >= 0 }
+func (v *PushTelemetryRequest) ResponseKind() Response {
+	r := &PushTelemetryResponse{Version: v.Version}
+	r.Default()
+	return r
+}
+
+// RequestWith is requests v on r and returns the response or an error.
+// For sharded requests, the response may be merged and still return an error.
+// It is better to rely on client.RequestSharded than to rely on proper merging behavior.
+func (v *PushTelemetryRequest) RequestWith(ctx context.Context, r Requestor) (*PushTelemetryResponse, error) {
+	kresp, err := r.Request(ctx, v)
+	resp, _ := kresp.(*PushTelemetryResponse)
+	return resp, err
+}
+
+func (v *PushTelemetryRequest) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	isFlexible := version >= 0
+	_ = isFlexible
+	{
+		v := v.ClientInstanceID
+		dst = kbin.AppendUuid(dst, v)
+	}
+	{
+		v := v.SubscriptionID
+		dst = kbin.AppendInt32(dst, v)
+	}
+	{
+		v := v.Terminating
+		dst = kbin.AppendBool(dst, v)
+	}
+	{
+		v := v.CompressionType
+		dst = kbin.AppendInt8(dst, v)
+	}
+	{
+		v := v.Metrics
+		if isFlexible {
+			dst = kbin.AppendCompactBytes(dst, v)
+		} else {
+			dst = kbin.AppendBytes(dst, v)
+		}
+	}
+	if isFlexible {
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
+	}
+	return dst
+}
+
+func (v *PushTelemetryRequest) ReadFrom(src []byte) error {
+	return v.readFrom(src, false)
+}
+
+func (v *PushTelemetryRequest) UnsafeReadFrom(src []byte) error {
+	return v.readFrom(src, true)
+}
+
+func (v *PushTelemetryRequest) readFrom(src []byte, unsafe bool) error {
+	v.Default()
+	b := kbin.Reader{Src: src}
+	version := v.Version
+	_ = version
+	isFlexible := version >= 0
+	_ = isFlexible
+	s := v
+	{
+		v := b.Uuid()
+		s.ClientInstanceID = v
+	}
+	{
+		v := b.Int32()
+		s.SubscriptionID = v
+	}
+	{
+		v := b.Bool()
+		s.Terminating = v
+	}
+	{
+		v := b.Int8()
+		s.CompressionType = v
+	}
+	{
+		var v []byte
+		if isFlexible {
+			v = b.CompactBytes()
+		} else {
+			v = b.Bytes()
+		}
+		s.Metrics = v
+	}
+	if isFlexible {
+		s.UnknownTags = internalReadTags(&b)
+	}
+	return b.Complete()
+}
+
+// NewPtrPushTelemetryRequest returns a pointer to a default PushTelemetryRequest
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrPushTelemetryRequest() *PushTelemetryRequest {
+	var v PushTelemetryRequest
+	v.Default()
+	return &v
+}
+
+// Default sets any default fields. Calling this allows for future compatibility
+// if new fields are added to PushTelemetryRequest.
+func (v *PushTelemetryRequest) Default() {
+}
+
+// NewPushTelemetryRequest returns a default PushTelemetryRequest
+// This is a shortcut for creating a struct and calling Default yourself.
+func NewPushTelemetryRequest() PushTelemetryRequest {
+	var v PushTelemetryRequest
+	v.Default()
+	return v
+}
+
+type PushTelemetryResponse struct {
+	// Version is the version of this message used with a Kafka broker.
+	Version int16
+
+	// ThrottleMillis is how long of a throttle Kafka will apply to the client
+	// after responding to this request.
+	ThrottleMillis int32
+
+	ErrorCode int16
+
+	// UnknownTags are tags Kafka sent that we do not know the purpose of.
+	UnknownTags Tags
+}
+
+func (*PushTelemetryResponse) Key() int16                         { return 72 }
+func (*PushTelemetryResponse) MaxVersion() int16                  { return 0 }
+func (v *PushTelemetryResponse) SetVersion(version int16)         { v.Version = version }
+func (v *PushTelemetryResponse) GetVersion() int16                { return v.Version }
+func (v *PushTelemetryResponse) IsFlexible() bool                 { return v.Version >= 0 }
+func (v *PushTelemetryResponse) Throttle() (int32, bool)          { return v.ThrottleMillis, v.Version >= 0 }
+func (v *PushTelemetryResponse) SetThrottle(throttleMillis int32) { v.ThrottleMillis = throttleMillis }
+func (v *PushTelemetryResponse) RequestKind() Request {
+	return &PushTelemetryRequest{Version: v.Version}
+}
+
+func (v *PushTelemetryResponse) AppendTo(dst []byte) []byte {
+	version := v.Version
+	_ = version
+	isFlexible := version >= 0
+	_ = isFlexible
+	{
+		v := v.ThrottleMillis
+		dst = kbin.AppendInt32(dst, v)
+	}
+	{
+		v := v.ErrorCode
+		dst = kbin.AppendInt16(dst, v)
+	}
+	if isFlexible {
+		dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))
+		dst = v.UnknownTags.AppendEach(dst)
+	}
+	return dst
+}
+
+func (v *PushTelemetryResponse) ReadFrom(src []byte) error {
+	return v.readFrom(src, false)
+}
+
+func (v *PushTelemetryResponse) UnsafeReadFrom(src []byte) error {
+	return v.readFrom(src, true)
+}
+
+func (v *PushTelemetryResponse) readFrom(src []byte, unsafe bool) error {
+	v.Default()
+	b := kbin.Reader{Src: src}
+	version := v.Version
+	_ = version
+	isFlexible := version >= 0
+	_ = isFlexible
+	s := v
+	{
+		v := b.Int32()
+		s.ThrottleMillis = v
+	}
+	{
+		v := b.Int16()
+		s.ErrorCode = v
+	}
+	if isFlexible {
+		s.UnknownTags = internalReadTags(&b)
+	}
+	return b.Complete()
+}
+
+// NewPtrPushTelemetryResponse returns a pointer to a default PushTelemetryResponse
+// This is a shortcut for creating a new(struct) and calling Default yourself.
+func NewPtrPushTelemetryResponse() *PushTelemetryResponse {
+	var v PushTelemetryResponse
+	v.Default()
+	return &v
+}
+
+// Default sets any default fields. Calling this allows for future compatibility
+// if new fields are added to PushTelemetryResponse.
+func (v *PushTelemetryResponse) Default() {
+}
+
+// NewPushTelemetryResponse returns a default PushTelemetryResponse
+// This is a shortcut for creating a struct and calling Default yourself.
+func NewPushTelemetryResponse() PushTelemetryResponse {
+	var v PushTelemetryResponse
+	v.Default()
+	return v
+}
+
 type AssignReplicasToDirsRequestDirectorieTopicPartition struct {
 	// The partition index.
 	Partition int32
@@ -51458,7 +51458,7 @@ type AddRaftVoterRequest struct {
 	UnknownTags Tags
 }
 
-func (*AddRaftVoterRequest) Key() int16                       { return 81 }
+func (*AddRaftVoterRequest) Key() int16                       { return 80 }
 func (*AddRaftVoterRequest) MaxVersion() int16                { return 0 }
 func (v *AddRaftVoterRequest) SetVersion(version int16)       { v.Version = version }
 func (v *AddRaftVoterRequest) GetVersion() int16              { return v.Version }
@@ -51701,7 +51701,7 @@ type AddRaftVoterResponse struct {
 	UnknownTags Tags
 }
 
-func (*AddRaftVoterResponse) Key() int16                         { return 81 }
+func (*AddRaftVoterResponse) Key() int16                         { return 80 }
 func (*AddRaftVoterResponse) MaxVersion() int16                  { return 0 }
 func (v *AddRaftVoterResponse) SetVersion(version int16)         { v.Version = version }
 func (v *AddRaftVoterResponse) GetVersion() int16                { return v.Version }
@@ -52651,8 +52651,6 @@ func RequestForKey(key int16) Request {
 		return nil
 	case 0:
 		return NewPtrProduceRequest()
-	case 0:
-		return NewPtrPushTelemetryRequest()
 	case 1:
 		return NewPtrFetchRequest()
 	case 2:
@@ -52795,13 +52793,15 @@ func RequestForKey(key int16) Request {
 		return NewPtrControllerRegistrationRequest()
 	case 71:
 		return NewPtrGetTelemetrySubscriptionsRequest()
+	case 72:
+		return NewPtrPushTelemetryRequest()
 	case 73:
 		return NewPtrAssignReplicasToDirsRequest()
 	case 74:
 		return NewPtrListClientMetricsResourcesRequest()
 	case 75:
 		return NewPtrDescribeTopicPartitionsRequest()
-	case 81:
+	case 80:
 		return NewPtrAddRaftVoterRequest()
 	case 81:
 		return NewPtrRemoveRaftVoterRequest()
@@ -52818,8 +52818,6 @@ func ResponseForKey(key int16) Response {
 		return nil
 	case 0:
 		return NewPtrProduceResponse()
-	case 0:
-		return NewPtrPushTelemetryResponse()
 	case 1:
 		return NewPtrFetchResponse()
 	case 2:
@@ -52962,13 +52960,15 @@ func ResponseForKey(key int16) Response {
 		return NewPtrControllerRegistrationResponse()
 	case 71:
 		return NewPtrGetTelemetrySubscriptionsResponse()
+	case 72:
+		return NewPtrPushTelemetryResponse()
 	case 73:
 		return NewPtrAssignReplicasToDirsResponse()
 	case 74:
 		return NewPtrListClientMetricsResourcesResponse()
 	case 75:
 		return NewPtrDescribeTopicPartitionsResponse()
-	case 81:
+	case 80:
 		return NewPtrAddRaftVoterResponse()
 	case 81:
 		return NewPtrRemoveRaftVoterResponse()
@@ -52985,8 +52985,6 @@ func NameForKey(key int16) string {
 		return "Unknown"
 	case 0:
 		return "Produce"
-	case 0:
-		return "PushTelemetry"
 	case 1:
 		return "Fetch"
 	case 2:
@@ -53129,13 +53127,15 @@ func NameForKey(key int16) string {
 		return "ControllerRegistration"
 	case 71:
 		return "GetTelemetrySubscriptions"
+	case 72:
+		return "PushTelemetry"
 	case 73:
 		return "AssignReplicasToDirs"
 	case 74:
 		return "ListClientMetricsResources"
 	case 75:
 		return "DescribeTopicPartitions"
-	case 81:
+	case 80:
 		return "AddRaftVoter"
 	case 81:
 		return "RemoveRaftVoter"
@@ -53149,7 +53149,6 @@ type Key int16
 
 const (
 	Produce                      Key = 0
-	PushTelemetry                Key = 0
 	Fetch                        Key = 1
 	ListOffsets                  Key = 2
 	Metadata                     Key = 3
@@ -53221,10 +53220,11 @@ const (
 	ConsumerGroupDescribe        Key = 69
 	ControllerRegistration       Key = 70
 	GetTelemetrySubscriptions    Key = 71
+	PushTelemetry                Key = 72
 	AssignReplicasToDirs         Key = 73
 	ListClientMetricsResources   Key = 74
 	DescribeTopicPartitions      Key = 75
-	AddRaftVoter                 Key = 81
+	AddRaftVoter                 Key = 80
 	RemoveRaftVoter              Key = 81
 	UpdateRaftVoter              Key = 82
 )
