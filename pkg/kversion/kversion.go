@@ -287,8 +287,25 @@ func (vs *Versions) String() string {
 	return buf.String()
 }
 
-func relversion(fn func() *release) *Versions {
-	return &Versions{reqs: fn().reqs}
+func relversion(fns ...func() *release) *Versions {
+	// For 4.0+, we merge the Raft broker, Raft controller, and Zk broker
+	// requests. We merge *in order*: any key that exists is kept, any key
+	// that does not exist is merged.
+	var reqs map[int16]req
+	for _, fn := range fns {
+		if reqs == nil {
+			reqs = fn().reqs
+			continue
+		}
+		merge := fn().reqs
+		for k, req := range merge {
+			if _, ok := reqs[k]; ok {
+				continue
+			}
+			reqs[k] = req
+		}
+	}
+	return &Versions{reqs: reqs}
 }
 
 // Stable is a shortcut for the latest _released_ Kafka versions.
@@ -296,7 +313,7 @@ func relversion(fn func() *release) *Versions {
 // This is the default version used in kgo to avoid breaking tip changes.
 // The stable version is only bumped once kgo internally supports all
 // features in the release.
-func Stable() *Versions { return relversion(z38) }
+func Stable() *Versions { return relversion(b40, c40, z39) }
 
 // Tip is the latest defined Kafka key versions; this may be slightly out of date.
 func Tip() *Versions { return relversion(ztip) }
