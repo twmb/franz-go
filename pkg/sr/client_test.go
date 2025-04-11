@@ -284,3 +284,90 @@ func TestSchemaRegistryAPI(t *testing.T) {
 		})
 	}
 }
+
+func TestOptValue(t *testing.T) {
+	httpcl := &http.Client{}
+
+	c, err := NewClient(
+		HTTPClient(httpcl),
+		URLs("localhost:8081", "localhost2:8082"),
+		UserAgent("some-ua"),
+		BasicAuth("some-user", "some-pass"),
+		BearerToken("some-bearer"),
+		PreReq(func(req *http.Request) error {
+			req.Header.Set("Authorization", "foobar")
+			return nil
+		}),
+		DefaultParams(Normalize, Verbose),
+	)
+	if err != nil {
+		t.Fatalf("unable to create client: %s", err)
+	}
+
+	tests := []struct {
+		name     string
+		opt      any
+		assertFn func(v any) bool
+	}{
+		{
+			name:     "HTTPClient",
+			opt:      "HTTPClient",
+			assertFn: func(v any) bool { return v == httpcl },
+		},
+		{
+			name: "URLs",
+			opt:  "URLs",
+			assertFn: func(v any) bool {
+				vs := v.([]string)
+				return vs[0] == "http://localhost:8081" && vs[1] == "http://localhost2:8082"
+			},
+		},
+		{
+			name:     "UserAgent",
+			opt:      "UserAgent",
+			assertFn: func(v any) bool { return v.(string) == "some-ua" },
+		},
+		{
+			name: "BasicAuth",
+			opt:  BasicAuth,
+			assertFn: func(v any) bool {
+				vs := v.(*struct {
+					user string
+					pass string
+				})
+				return vs.user == "some-user" && vs.pass == "some-pass"
+			},
+		},
+		{
+			name:     "BearerToken",
+			opt:      BearerToken,
+			assertFn: func(v any) bool { return v.(string) == "some-bearer" },
+		},
+		{
+			name:     "PreReq",
+			opt:      "PreReq",
+			assertFn: func(v any) bool { return v != nil },
+		},
+		{
+			name: "DefaultParams",
+			opt:  DefaultParams,
+			assertFn: func(v any) bool {
+				vp := v.(Param)
+				return vp.normalize == true && vp.verbose == true
+			},
+		},
+		{
+			name:     "unknown option name",
+			opt:      "Unknown",
+			assertFn: func(v any) bool { return v == nil },
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := c.OptValue(test.opt)
+			if !test.assertFn(got) {
+				t.Errorf("assertion failed: %q", got)
+			}
+		})
+	}
+}
