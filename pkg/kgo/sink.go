@@ -547,7 +547,7 @@ func (s *sink) doTxnReq(
 	// similar to the warning we give in the txn.go file, but the
 	// difference there is the user knows explicitly at the function call
 	// that canceling the context will opt them into invalid state.
-	err = s.cl.doWithConcurrentTransactions(s.cl.ctx, "AddPartitionsToTxn", func() error {
+	err = s.cl.doWithConcurrentTransactions(s.cl.ctx, fmt.Sprintf("AddPartitionsToTxn-sink%d", s.nodeID), func() error {
 		stripped, err = s.issueTxnReq(req, txnReq)
 		return err
 	})

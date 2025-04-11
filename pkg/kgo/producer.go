@@ -863,7 +863,15 @@ func (cl *Client) doInitProducerID(ctxFn func() context.Context, lastID int64, l
 	}
 
 	ctx := ctxFn()
-	resp, err := req.RequestWith(ctx, cl)
+	var resp *kmsg.InitProducerIDResponse
+	err := cl.doWithConcurrentTransactions(ctx, "InitProducerID", func() error {
+		var err error
+		resp, err = req.RequestWith(ctx, cl)
+		if err != nil {
+			return err
+		}
+		return nil // resp.ErrorCode handled below
+	})
 	if err != nil {
 		if errors.Is(err, errUnknownRequestKey) || errors.Is(err, errBrokerTooOld) {
 			cl.cfg.logger.Log(LogLevelInfo, "unable to initialize a producer id because the broker is too old or the client is pinned to an old version, continuing without a producer id")
