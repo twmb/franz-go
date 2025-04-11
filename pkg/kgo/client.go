@@ -295,6 +295,8 @@ func (cl *Client) OptValues(opt any) []any {
 
 	case namefn(DefaultProduceTopic):
 		return []any{cfg.defaultProduceTopic}
+	case namefn(DefaultProduceTopicAlways):
+		return []any{cfg.defaultProduceTopicAlways}
 	case namefn(RequiredAcks):
 		return []any{cfg.acks}
 	case namefn(DisableIdempotentWrite):

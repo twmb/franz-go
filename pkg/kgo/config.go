@@ -115,18 +115,19 @@ type cfg struct {
 	maxProduceInflight int                // if idempotency is disabled, we allow a configurable max inflight
 	compression        []CompressionCodec // order of preference
 
-	defaultProduceTopic string
-	maxRecordBatchBytes int32
-	maxBufferedRecords  int64
-	maxBufferedBytes    int64
-	produceTimeout      time.Duration
-	recordRetries       int64
-	maxUnknownFailures  int64
-	linger              time.Duration
-	recordTimeout       time.Duration
-	manualFlushing      bool
-	txnBackoff          time.Duration
-	missingTopicDelete  time.Duration
+	defaultProduceTopic       string
+	defaultProduceTopicAlways bool
+	maxRecordBatchBytes       int32
+	maxBufferedRecords        int64
+	maxBufferedBytes          int64
+	produceTimeout            time.Duration
+	recordRetries             int64
+	maxUnknownFailures        int64
+	linger                    time.Duration
+	recordTimeout             time.Duration
+	manualFlushing            bool
+	txnBackoff                time.Duration
+	missingTopicDelete        time.Duration
 
 	partitioner Partitioner
 	compressor  Compressor
@@ -339,6 +340,10 @@ func (cfg *cfg) validate() error {
 			}
 			return fmt.Errorf("%s %v is %s than allowed %v", limit.name, limit.v, cmp, limit.allowed)
 		}
+	}
+
+	if cfg.defaultProduceTopicAlways && cfg.defaultProduceTopic == "" {
+		return errors.New("invalid empty DefaultProduceTopic when using DefaultProduceTopicAlways")
 	}
 
 	if cfg.dialFn != nil {
@@ -938,6 +943,13 @@ func OnRebootstrapRequired(fn func() ([]string, error)) Opt {
 // cannot be produced and will be failed immediately.
 func DefaultProduceTopic(t string) ProducerOpt {
 	return producerOpt{func(cfg *cfg) { cfg.defaultProduceTopic = t }}
+}
+
+// DefaultProduceTopicAlways sets the client to ALWAYS produce to the
+// [DefaultProduceTopic], overriding any Topic field that may be present
+// in the Record when producing.
+func DefaultProduceTopicAlways() ProducerOpt {
+	return producerOpt{func(cfg *cfg) { cfg.defaultProduceTopicAlways = true }}
 }
 
 // Acks represents the number of acks a broker leader must have before

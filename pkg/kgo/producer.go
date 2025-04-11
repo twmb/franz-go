@@ -394,7 +394,7 @@ func (cl *Client) produce(
 	if promise == nil {
 		promise = noPromise
 	}
-	if r.Topic == "" {
+	if r.Topic == "" || cl.cfg.defaultProduceTopicAlways {
 		r.Topic = cl.cfg.defaultProduceTopic
 	}
 
