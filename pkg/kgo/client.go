@@ -283,6 +283,8 @@ func (cl *Client) OptValues(opt any) []any {
 		return []any{cfg.txnBackoff}
 	case namefn(ConsiderMissingTopicDeletedAfter):
 		return []any{cfg.missingTopicDelete}
+	case namefn(OnRebootstrapRequired):
+		return []any{cfg.onRebootstrapRequired}
 
 	case namefn(DefaultProduceTopic):
 		return []any{cfg.defaultProduceTopic}
@@ -882,6 +884,8 @@ func (cl *Client) fetchMetadataForTopics(ctx context.Context, all bool, topics [
 func (cl *Client) fetchMetadata(ctx context.Context, req *kmsg.MetadataRequest, limitRetries bool) (*broker, *kmsg.MetadataResponse, error) {
 	r := cl.retryable()
 
+	var rebootstrapped bool
+start:
 	// We limit retries for internal metadata refreshes, because these do
 	// not need to retry forever and are usually blocking *other* requests.
 	// e.g., producing bumps load errors when metadata returns, so 3
@@ -897,6 +901,18 @@ func (cl *Client) fetchMetadata(ctx context.Context, req *kmsg.MetadataRequest, 
 
 	meta, err := req.RequestWith(ctx, r)
 	if err == nil {
+		if err = kerr.ErrorForCode(meta.ErrorCode); !rebootstrapped && errors.Is(err, kerr.RebootstrapRequired) && cl.cfg.onRebootstrapRequired != nil {
+			var seeds []string
+			seeds, err = cl.cfg.onRebootstrapRequired()
+			if err == nil && len(seeds) > 0 {
+				err = cl.UpdateSeedBrokers(seeds...)
+				if err == nil {
+					cl.updateBrokers(nil)
+					rebootstrapped = true
+					goto start
+				}
+			}
+		}
 		if meta.ControllerID >= 0 {
 			cl.controllerIDMu.Lock()
 			cl.controllerID = meta.ControllerID

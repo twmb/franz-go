@@ -94,7 +94,7 @@ func (s *sink) createReq(id int64, epoch int16) (*produceRequest, *kmsg.AddParti
 		txnID: req.txnID,
 		id:    id,
 		epoch: epoch,
-		// pv12:  s.cl.supportsKeyVersion(0, 12), // produce request v12 means we no longer send AddPartitionsToTxn
+		pv12:  s.cl.supportsKeyVersion(0, 12), // produce request v12 means we no longer send AddPartitionsToTxn
 	}
 
 	var moreToDrain bool
@@ -157,10 +157,7 @@ type txnReqBuilder struct {
 }
 
 func (t *txnReqBuilder) add(rb *recBuf) {
-	if t.txnID == nil || t.pv12 {
-		return
-	}
-	if rb.addedToTxn.Swap(true) {
+	if t.txnID == nil || rb.addedToTxn.Swap(true) || t.pv12 {
 		return
 	}
 	if t.req == nil {
@@ -2097,7 +2094,7 @@ func (b *recBatch) tryBuffer(pr promisedRec, produceVersion, maxBatchBytes int32
 //////////////
 
 func (*produceRequest) Key() int16           { return 0 }
-func (*produceRequest) MaxVersion() int16    { return 11 }
+func (*produceRequest) MaxVersion() int16    { return 12 }
 func (p *produceRequest) SetVersion(v int16) { p.version = v }
 func (p *produceRequest) GetVersion() int16  { return p.version }
 func (p *produceRequest) IsFlexible() bool   { return p.version >= 9 }

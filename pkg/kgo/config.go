@@ -84,6 +84,8 @@ type cfg struct {
 	maxVersions *kversion.Versions
 	minVersions *kversion.Versions
 
+	onRebootstrapRequired func() ([]string, error)
+
 	retryBackoff func(int) time.Duration
 	retries      int64
 	retryTimeout func(int16) time.Duration
@@ -848,6 +850,29 @@ func ConcurrentTransactionsBackoff(backoff time.Duration) Opt {
 // times until the cluster fully broadcasts the topic creation.
 func ConsiderMissingTopicDeletedAfter(t time.Duration) Opt {
 	return clientOpt{func(cfg *cfg) { cfg.missingTopicDelete = t }}
+}
+
+// OnRebootstrapRequired sets the function to call when a metadata response has
+// the REBOOTSTRAP_REQUIRED errored. The function should return new seed
+// brokers for the client to use, or an error. Internally, the client will then
+// call UpdateSeedBrokers with the seeds you return. All other live connections
+// to brokers are stopped and active requests are failed.
+//
+// The REBOOTSTRAP_REQUIRED error was introduced in Kafka 4.0, as a way for
+// Kafka to tell the client that the client needs to stop all non seed broker
+// connections to stop and for the client to query the seed brokers again.
+// Franz-go by default already periodically sends a request to a seed broker
+// to prevent a scenario where all previously discovered brokers are down
+// or unavailable, so this client does not have as much of a need for
+// REBOOTSTRAP_REQUIRED. That said, this function can be useful if Kafka knows
+// the client should specifically talk to seed brokers next, and this function
+// allows you a chance to update your seed brokers at the same time. If you
+// do not want to update your seed brokers, you can just return the same value
+// that you use in your [SeedBrokers] configuration option.
+//
+// You can read KIP-1102 for more info about this option.
+func OnRebootstrapRequired(fn func() ([]string, error)) Opt {
+	return clientOpt{func(cfg *cfg) { cfg.onRebootstrapRequired = fn }}
 }
 
 ////////////////////////////
