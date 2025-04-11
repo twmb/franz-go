@@ -120,6 +120,12 @@ func (s *sink) createReq(id int64, epoch int16) (*produceRequest, *kmsg.AddParti
 			continue
 		}
 
+		if s.cl.cfg.disableIdempotency {
+			if cctx := batch.records[0].cancelingCtx(); cctx != nil && req.firstCancelingCtx == nil {
+				req.firstCancelingCtx = cctx
+			}
+		}
+
 		recBuf.inflightOnSink = s
 		recBuf.inflight++
 
@@ -472,7 +478,7 @@ func (s *sink) produce(sem <-chan struct{}) bool {
 // With handleSeqResps below, this function ensures that all request responses
 // are handled in order. We use this guarantee while in handleReqResp below.
 func (s *sink) doSequenced(
-	req kmsg.Request,
+	req *produceRequest,
 	promise func(*broker, kmsg.Response, error),
 ) {
 	wait := &seqResp{
@@ -482,13 +488,19 @@ func (s *sink) doSequenced(
 
 	// We can NOT use any record context. If we do, we force the request to
 	// fail while also force the batch to be unfailable (due to no
-	// response),
-	br, err := s.cl.brokerOrErr(s.cl.ctx, s.nodeID, errUnknownBroker)
+	// response). If and only if the user has disabled idempotency, we
+	// allow the user to cancel the request via some random record with a
+	// canceling context.
+	ctx := req.firstCancelingCtx
+	if ctx == nil {
+		ctx = s.cl.ctx
+	}
+	br, err := s.cl.brokerOrErr(ctx, s.nodeID, errUnknownBroker)
 	if err != nil {
 		wait.err = err
 		close(wait.done)
 	} else {
-		br.do(s.cl.ctx, req, func(resp kmsg.Response, err error) {
+		br.do(ctx, req, func(resp kmsg.Response, err error) {
 			wait.resp = resp
 			wait.err = err
 			close(wait.done)
@@ -1735,6 +1747,8 @@ type produceRequest struct {
 	acks    int16
 	timeout int32
 	batches seqRecBatches
+
+	firstCancelingCtx context.Context // of all batches added, the first one with a record that has a canceling context; only used with disableIdempotency
 
 	producerID    int64
 	producerEpoch int16
