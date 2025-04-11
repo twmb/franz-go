@@ -373,6 +373,8 @@ func (cl *Client) OptValues(opt any) []any {
 		return []any{cfg.keepRetryableFetchErrors}
 	case namefn(DisableFetchCRCValidation):
 		return []any{cfg.disableFetchCRCValidation}
+	case namefn(RecheckPreferredReplicaInterval):
+		return []any{cfg.recheckPreferredReplicaInterval}
 
 	case namefn(AdjustFetchOffsetsFn):
 		return []any{cfg.adjustOffsetsBeforeAssign}

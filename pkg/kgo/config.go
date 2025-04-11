@@ -155,6 +155,8 @@ type cfg struct {
 	keepRetryableFetchErrors  bool
 	disableFetchCRCValidation bool
 
+	recheckPreferredReplicaInterval time.Duration
+
 	topics     map[string]*regexp.Regexp   // topics to consume; if regex is true, values are compiled regular expressions
 	partitions map[string]map[int32]Offset // partitions to directly consume from
 	regex      bool
@@ -299,6 +301,10 @@ func (cfg *cfg) validate() error {
 		{name: "metadata max age", v: int64(cfg.metadataMaxAge), allowed: int64(time.Hour), badcmp: i64gt, durs: true},
 		{name: "metadata min age", v: int64(cfg.metadataMinAge), allowed: int64(10 * time.Millisecond), badcmp: i64lt, durs: true},
 		{v: int64(cfg.metadataMaxAge), allowed: int64(cfg.metadataMinAge), badcmp: i64lt, fmt: "metadata max age %v is erroneously less than metadata min age %v", durs: true},
+
+		// 10ms <= preferred recheck interval <= 7d
+		{name: "recheck preferred replica interval", v: int64(cfg.recheckPreferredReplicaInterval), allowed: int64(10 * time.Millisecond), badcmp: i64lt, durs: true},
+		{name: "recheck preferred replica interval", v: int64(cfg.recheckPreferredReplicaInterval), allowed: int64(7 * 24 * time.Hour), badcmp: i64gt, durs: true},
 
 		// Some random producer settings.
 		{name: "max buffered records", v: cfg.maxBufferedRecords, allowed: 1, badcmp: i64lt},
@@ -552,6 +558,8 @@ func defaultCfg() cfg {
 		isolationLevel: 0,
 
 		maxConcurrentFetches: 0, // unbounded default
+
+		recheckPreferredReplicaInterval: 30 * time.Minute,
 
 		///////////
 		// group //
@@ -1526,6 +1534,19 @@ func KeepRetryableFetchErrors() ConsumerOpt {
 // properly support CRCs in record batches.
 func DisableFetchCRCValidation() ConsumerOpt {
 	return consumerOpt{func(cfg *cfg) { cfg.disableFetchCRCValidation = true }}
+}
+
+// RecheckPreferredReplicaInterval configures how long the consumer should
+// fetch from a preferred replica before switching back to the leader.
+// Periodically switching back to the leader allows the leader to re-choose a
+// perhaps better preferred replica (say you added a new cluster, or added
+// nodes to an existing cluster, or something else changed). For implementation
+// simplicity, the interval is checked after fetch responses, meaning one more
+// request can be issued after the interval has elapsed.
+//
+// The default interval is 30 minutes.
+func RecheckPreferredReplicaInterval(interval time.Duration) ConsumerOpt {
+	return consumerOpt{func(cfg *cfg) { cfg.recheckPreferredReplicaInterval = interval }}
 }
 
 //////////////////////////////////

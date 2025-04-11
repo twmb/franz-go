@@ -115,6 +115,13 @@ type cursor struct {
 	// transitioning from used to usable.
 	source *source
 
+	// If this cursor moves to a preferred replica: unix nano of when.
+	// This is set in `move`, and read when handling a response. Both are
+	// independent events in a live session. If we have been consuming from
+	// the preferred replica for more than RecheckPreferredReplicaInterval,
+	// we fetch from the original leader again.
+	moveAt int64
+
 	// useState is an atomic that has two states: unusable and usable. A
 	// cursor can be used in a fetch request if it is in the usable state.
 	// Once used, the cursor is unusable, and will be set back to usable
@@ -235,6 +242,7 @@ type cursorOffsetPreferred struct {
 	cursorOffsetNext
 	preferredReplica int32
 	ooor             bool
+	recheck          bool
 }
 
 // Moves a cursor from one source to another. This is done while handling
@@ -261,21 +269,23 @@ func (p *cursorOffsetPreferred) move() {
 	c.source.removeCursor(c)
 	c.source = sns.source
 	c.source.addCursor(c)
+	c.moveAt = time.Now().UnixNano()
 }
 
 type cursorPreferreds []cursorOffsetPreferred
 
 func (cs cursorPreferreds) String() string {
 	type pnext struct {
-		p    int32
-		next int32
-		ooor bool
+		p       int32
+		next    int32
+		ooor    bool
+		recheck bool
 	}
 	ts := make(map[string][]pnext)
 	for _, c := range cs {
 		t := c.from.topic
 		p := c.from.partition
-		ts[t] = append(ts[t], pnext{p, c.preferredReplica, c.ooor})
+		ts[t] = append(ts[t], pnext{p, c.preferredReplica, c.ooor, c.recheck})
 	}
 	tsorted := make([]string, 0, len(ts))
 	for t, ps := range ts {
@@ -307,12 +317,16 @@ func (cs cursorPreferreds) String() string {
 			if j < len(ps)-1 {
 				if p.ooor {
 					fmt.Fprintf(sb, "%d=>%d[ooor], ", p.p, p.next)
+				} else if p.recheck {
+					fmt.Fprintf(sb, "%d=>%d[recheck], ", p.p, p.next)
 				} else {
 					fmt.Fprintf(sb, "%d=>%d, ", p.p, p.next)
 				}
 			} else {
 				if p.ooor {
 					fmt.Fprintf(sb, "%d=>%d[ooor]", p.p, p.next)
+				} else if p.recheck {
+					fmt.Fprintf(sb, "%d=>%d[recheck]", p.p, p.next)
 				} else {
 					fmt.Fprintf(sb, "%d=>%d", p.p, p.next)
 				}
@@ -1085,22 +1099,22 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 				)
 				continue
 			}
+			c := partOffset.from
 
 			// If we are fetching from the replica already, Kafka replies with a -1
 			// preferred read replica. If Kafka replies with a preferred replica,
 			// it sends no records.
 			if preferred := rp.PreferredReadReplica; resp.Version >= 11 && preferred >= 0 {
 				preferreds = append(preferreds, cursorOffsetPreferred{
-					*partOffset,
-					preferred,
-					false,
+					cursorOffsetNext: *partOffset,
+					preferredReplica: preferred,
 				})
 				continue
 			}
 
 			fp := partOffset.processRespPartition(br, rp, s.cl.cfg.decompressor, s.cl.cfg.hooks)
 			if fp.Err != nil {
-				if moving := kmove.maybeAddFetchPartition(resp, rp, partOffset.from); moving {
+				if moving := kmove.maybeAddFetchPartition(resp, rp, c); moving {
 					strip(topic, partition, fp.Err)
 					continue
 				}
@@ -1128,7 +1142,7 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 				}
 
 			case nil:
-				partOffset.from.unknownIDFails.Store(0)
+				c.unknownIDFails.Store(0)
 				keep = true
 
 			case kerr.UnknownTopicID:
@@ -1144,8 +1158,8 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 				// propagated to the leader that it is now the leader
 				// of a new partition. We need to ignore this error
 				// for a little bit.
-				if fails := partOffset.from.unknownIDFails.Add(1); fails > 5 {
-					partOffset.from.unknownIDFails.Add(-1)
+				if fails := c.unknownIDFails.Add(1); fails > 5 {
+					c.unknownIDFails.Add(-1)
 					keep = true
 				} else if s.cl.cfg.keepRetryableFetchErrors {
 					keep = true
@@ -1185,10 +1199,10 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 				addList := func(replica int32, log bool) {
 					if s.cl.cfg.resetOffset.noReset {
 						keep = true
-					} else if !partOffset.from.lastConsumedTime.IsZero() {
+					} else if !c.lastConsumedTime.IsZero() {
 						reloadOffsets.addLoad(topic, partition, loadTypeList, offsetLoad{
 							replica: replica,
-							Offset:  NewOffset().AfterMilli(partOffset.from.lastConsumedTime.UnixMilli()),
+							Offset:  NewOffset().AfterMilli(c.lastConsumedTime.UnixMilli()),
 						})
 						if log {
 							s.cl.cfg.logger.Log(LogLevelWarn, "received OFFSET_OUT_OF_RANGE, resetting to the nearest offset; either you were consuming too slowly and the broker has deleted the segment you were in the middle of consuming, or the broker has lost data and has not yet transferred leadership",
@@ -1215,7 +1229,7 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 				}
 
 				switch {
-				case s.nodeID == partOffset.from.leader: // non KIP-392 case
+				case s.nodeID == c.leader: // non KIP-392 case
 					addList(-1, true)
 
 				case partOffset.offset < fp.LogStartOffset: // KIP-392 case 3
@@ -1231,9 +1245,9 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 					// hope that the offset is available on the leader, and if not, we'll
 					// just get an OOOR error again and fall into case 1 just above.
 					preferreds = append(preferreds, cursorOffsetPreferred{
-						*partOffset,
-						partOffset.from.leader,
-						true,
+						cursorOffsetNext: *partOffset,
+						preferredReplica: c.leader,
+						ooor:             true,
 					})
 
 				default: // partOffset.offset > fp.HighWatermark, KIP-392 case 4
@@ -1276,6 +1290,16 @@ func (s *source) handleReqResp(br *broker, req *fetchRequest, resp *kmsg.FetchRe
 
 			if keep {
 				fetchTopic.Partitions = append(fetchTopic.Partitions, fp)
+			}
+
+			if s.nodeID != c.leader && c.moveAt > 0 && time.Since(time.Unix(0, c.moveAt)) > s.cl.cfg.recheckPreferredReplicaInterval {
+				if len(preferreds) == 0 || preferreds[len(preferreds)-1].cursorOffsetNext != *partOffset {
+					preferreds = append(preferreds, cursorOffsetPreferred{
+						cursorOffsetNext: *partOffset,
+						preferredReplica: c.leader,
+						recheck:          true,
+					})
+				}
 			}
 		}
 
