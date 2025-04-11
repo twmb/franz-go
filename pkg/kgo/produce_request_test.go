@@ -353,7 +353,7 @@ func TestRecBatchAppendTo(t *testing.T) {
 		kbatch.CRC = int32(crc32.Checksum(rawBatch[8+4+4+1+4:], crc32c)) // skip thru crc
 	}
 
-	var compressor *compressor
+	var compressor Compressor
 	var checkNum int
 	check := func() {
 		exp := kbatch.AppendTo(nil)
@@ -383,12 +383,12 @@ func TestRecBatchAppendTo(t *testing.T) {
 
 	// ***Compressed record batch check***
 
-	compressor, _ = newCompressor(CompressionCodec{codec: 2}) // snappy
+	compressor, _ = DefaultCompressor(CompressionCodec{codec: 2}) // snappy
 	{
 		kbatch.Attributes |= 0x0002 // snappy
 		w := byteBuffers.Get().(*bytes.Buffer)
 		w.Reset()
-		kbatch.Records, _ = compressor.compress(w, kbatch.Records, version)
+		kbatch.Records, _ = compressor.Compress(w, kbatch.Records, version)
 	}
 
 	fixFields()
@@ -471,7 +471,7 @@ func TestMessageSetAppendTo(t *testing.T) {
 	var (
 		kset0raw      = append(kset01.AppendTo(nil), kset02.AppendTo(nil)...) // for comparing & compressing
 		kset1raw      = append(kset11.AppendTo(nil), kset12.AppendTo(nil)...) // for comparing & compressing
-		compressor, _ = newCompressor(CompressionCodec{codec: 2})             // snappy
+		compressor, _ = DefaultCompressor(CompressionCodec{codec: 2})         // snappy
 	)
 
 	// golden v0, compressed
@@ -481,7 +481,7 @@ func TestMessageSetAppendTo(t *testing.T) {
 	}
 	w := byteBuffers.Get().(*bytes.Buffer)
 	w.Reset()
-	kset0c.Value, _ = compressor.compress(w, kset0raw, 1) // version 0, 1 use message set 0
+	kset0c.Value, _ = compressor.Compress(w, kset0raw, 1) // version 0, 1 use message set 0
 	kset0c.CRC = int32(crc32.ChecksumIEEE(kset0c.AppendTo(nil)[16:]))
 	kset0c.MessageSize = int32(len(kset0c.AppendTo(nil)[12:]))
 
@@ -494,7 +494,7 @@ func TestMessageSetAppendTo(t *testing.T) {
 	}
 	wbuf := byteBuffers.Get().(*bytes.Buffer)
 	wbuf.Reset()
-	kset1c.Value, _ = compressor.compress(wbuf, kset1raw, 2) // version 2 use message set 1
+	kset1c.Value, _ = compressor.Compress(wbuf, kset1raw, 2) // version 2 use message set 1
 	kset1c.CRC = int32(crc32.ChecksumIEEE(kset1c.AppendTo(nil)[16:]))
 	kset1c.MessageSize = int32(len(kset1c.AppendTo(nil)[12:]))
 
@@ -635,16 +635,16 @@ func BenchmarkAppendBatch(b *testing.B) {
 	buf := make([]byte, 10<<10) // broker's reuse input buffers, so we do so here as well
 	for _, pair := range []struct {
 		name  string
-		codec codecType
+		codec CompressionCodecType
 	}{
-		{"no compression", codecNone},
-		{"gzip", codecGzip},
-		{"snappy", codecSnappy},
-		{"lz4", codecLZ4},
-		{"zstd", codecZstd},
+		{"no compression", CodecNone},
+		{"gzip", CodecGzip},
+		{"snappy", CodecSnappy},
+		{"lz4", CodecLz4},
+		{"zstd", CodecZstd},
 	} {
 		b.Run(pair.name, func(b *testing.B) {
-			compressor, _ := newCompressor(CompressionCodec{codec: pair.codec})
+			compressor, _ := DefaultCompressor(CompressionCodec{codec: pair.codec})
 			ourReq.compressor = compressor
 			for i := 0; i < b.N; i++ {
 				buf = ourReq.AppendTo(buf[:0])

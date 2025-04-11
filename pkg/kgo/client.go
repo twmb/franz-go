@@ -80,9 +80,6 @@ type Client struct {
 	producer producer
 	consumer consumer
 
-	compressor   *compressor
-	decompressor *decompressor
-
 	coordinatorsMu sync.Mutex
 	coordinators   map[coordinatorKey]*coordinatorLoad
 
@@ -119,7 +116,7 @@ type hostport struct {
 
 // ValidateOpts returns an error if the options are invalid.
 func ValidateOpts(opts ...Opt) error {
-	_, _, _, err := validateCfg(opts...)
+	_, _, err := validateCfg(opts...)
 	return err
 }
 
@@ -138,23 +135,29 @@ func parseSeeds(addrs []string) ([]hostport, error) {
 // This function validates the configuration and returns a few things that we
 // initialize while validating. The difference between this and NewClient
 // initialization is all NewClient initialization is infallible.
-func validateCfg(opts ...Opt) (cfg, []hostport, *compressor, error) {
+func validateCfg(opts ...Opt) (cfg, []hostport, error) {
 	cfg := defaultCfg()
 	for _, opt := range opts {
 		opt.apply(&cfg)
 	}
 	if err := cfg.validate(); err != nil {
-		return cfg, nil, nil, err
+		return cfg, nil, err
 	}
 	seeds, err := parseSeeds(cfg.seedBrokers)
 	if err != nil {
-		return cfg, nil, nil, err
+		return cfg, nil, err
 	}
-	compressor, err := newCompressor(cfg.compression...)
-	if err != nil {
-		return cfg, nil, nil, err
+	if cfg.compressor == nil {
+		cfg.compressor, err = DefaultCompressor(cfg.compression...)
+		if err != nil {
+			return cfg, nil, err
+		}
 	}
-	return cfg, seeds, compressor, nil
+	if cfg.decompressor == nil {
+		cfg.decompressor = DefaultDecompressor(cfg.pools...)
+	}
+
+	return cfg, seeds, nil
 }
 
 func namefn(fn any) string {
@@ -281,6 +284,8 @@ func (cl *Client) OptValues(opt any) []any {
 		return []any{cfg.sasls}
 	case namefn(WithHooks):
 		return []any{cfg.hooks}
+	case namefn(WithPools):
+		return []any{cfg.pools}
 	case namefn(ConcurrentTransactionsBackoff):
 		return []any{cfg.txnBackoff}
 	case namefn(ConsiderMissingTopicDeletedAfter):
@@ -298,6 +303,8 @@ func (cl *Client) OptValues(opt any) []any {
 		return []any{cfg.maxProduceInflight}
 	case namefn(ProducerBatchCompression):
 		return []any{cfg.compression}
+	case namefn(WithCompressor):
+		return []any{cfg.compressor}
 	case namefn(ProducerBatchMaxBytes):
 		return []any{cfg.maxRecordBatchBytes}
 	case namefn(MaxBufferedRecords):
@@ -334,6 +341,8 @@ func (cl *Client) OptValues(opt any) []any {
 		return []any{cfg.partitions}
 	case namefn(ConsumePreferringLagFn):
 		return []any{cfg.preferLagFn}
+	case namefn(WithDecompressor):
+		return []any{cfg.decompressor}
 	case namefn(ConsumeRegex):
 		return []any{cfg.regex}
 	case namefn(ConsumeResetOffset):
@@ -360,6 +369,8 @@ func (cl *Client) OptValues(opt any) []any {
 		return []any{cfg.rack}
 	case namefn(KeepRetryableFetchErrors):
 		return []any{cfg.keepRetryableFetchErrors}
+	case namefn(DisableFetchCRCValidation):
+		return []any{cfg.disableFetchCRCValidation}
 
 	case namefn(AdjustFetchOffsetsFn):
 		return []any{cfg.adjustOffsetsBeforeAssign}
@@ -420,7 +431,7 @@ func (cl *Client) OptValues(opt any) []any {
 // NewClient also launches a goroutine which periodically updates the cached
 // topic metadata.
 func NewClient(opts ...Opt) (*Client, error) {
-	cfg, seeds, compressor, err := validateCfg(opts...)
+	cfg, seeds, err := validateCfg(opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -485,9 +496,6 @@ func NewClient(opts ...Opt) (*Client, error) {
 
 		bufPool: newBufPool(),
 		prsPool: newPrsPool(),
-
-		compressor:   compressor,
-		decompressor: newDecompressor(),
 
 		coordinators: make(map[coordinatorKey]*coordinatorLoad),
 
@@ -566,7 +574,7 @@ func (cl *Client) Ping(ctx context.Context) error {
 }
 
 // PurgeTopicsFromClient internally removes all internal information about the
-// input topics. If you you want to purge information for only consuming or
+// input topics. If you want to purge information for only consuming or
 // only producing, see the related functions [PurgeTopicsFromConsuming] and
 // [PurgeTopicsFromProducing].
 //
@@ -989,7 +997,7 @@ func (cl *Client) updateBrokers(brokers []kmsg.MetadataResponseBroker) {
 // will hang if you polled, did not allow rebalances, and want to close. Close
 // does not automatically allow rebalances because leaving a group causes a
 // revoke, and the client does not assume that the final revoke is concurrency
-// safe. The CloseAllowingRebalance function exists a a shortcut to opt into
+// safe. The CloseAllowingRebalance function exists a shortcut to opt into
 // allowing rebalance while closing.
 //
 // If you are using static membership, CloseAllowingRebalance will NOT send a
@@ -2040,7 +2048,7 @@ func (cl *Client) handleReqWithCoordinator(
 
 // Broker returns a handle to a specific broker to directly issue requests to.
 // Note that there is no guarantee that this broker exists; if it does not,
-// requests will fail with with an unknown broker error.
+// requests will fail with an unknown broker error.
 func (cl *Client) Broker(id int) *Broker {
 	return &Broker{
 		id: int32(id),
