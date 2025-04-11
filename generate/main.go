@@ -375,6 +375,19 @@ func (s Struct) GetTypeDefault() any {
 	return fmt.Sprintf("(func() %[1]s { var v %[1]s; v.Default(); return v })() ", s.Name)
 }
 
+func (u Uuid) SetDefault(string) Type {
+	die("cannot set default on a uuid")
+	return u
+}
+
+func (Uuid) GetDefault() (any, bool) {
+	return "", false // no GetDefault
+}
+
+func (Uuid) GetTypeDefault() any {
+	return "[16]byte{}"
+}
+
 type FlexibleSetter interface {
 	AsFromFlexible() Type
 }

@@ -4329,12 +4329,21 @@ func (v *FetchRequest) AppendTo(dst []byte) []byte {
 						dst = kbin.AppendInt32(dst, v)
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 1+uint32(v.UnknownTags.Len()))
-						{
-							v := v.ReplicaDirectoryID
-							dst = kbin.AppendUvarint(dst, 0)
-							dst = kbin.AppendUvarint(dst, 16)
-							dst = kbin.AppendUuid(dst, v)
+						var toEncode []uint32
+						if v.ReplicaDirectoryID != [16]byte{} {
+							toEncode = append(toEncode, 0)
+						}
+						dst = kbin.AppendUvarint(dst, uint32(len(toEncode)+v.UnknownTags.Len()))
+						for _, tag := range toEncode {
+							switch tag {
+							case 0:
+								{
+									v := v.ReplicaDirectoryID
+									dst = kbin.AppendUvarint(dst, 0)
+									dst = kbin.AppendUvarint(dst, 16)
+									dst = kbin.AppendUuid(dst, v)
+								}
+							}
 						}
 						dst = v.UnknownTags.AppendEach(dst)
 					}
@@ -42175,12 +42184,21 @@ func (v *FetchSnapshotRequest) AppendTo(dst []byte) []byte {
 						dst = kbin.AppendInt64(dst, v)
 					}
 					if isFlexible {
-						dst = kbin.AppendUvarint(dst, 1+uint32(v.UnknownTags.Len()))
-						{
-							v := v.ReplicaDirectoryID
-							dst = kbin.AppendUvarint(dst, 0)
-							dst = kbin.AppendUvarint(dst, 16)
-							dst = kbin.AppendUuid(dst, v)
+						var toEncode []uint32
+						if v.ReplicaDirectoryID != [16]byte{} {
+							toEncode = append(toEncode, 0)
+						}
+						dst = kbin.AppendUvarint(dst, uint32(len(toEncode)+v.UnknownTags.Len()))
+						for _, tag := range toEncode {
+							switch tag {
+							case 0:
+								{
+									v := v.ReplicaDirectoryID
+									dst = kbin.AppendUvarint(dst, 0)
+									dst = kbin.AppendUvarint(dst, 16)
+									dst = kbin.AppendUuid(dst, v)
+								}
+							}
 						}
 						dst = v.UnknownTags.AppendEach(dst)
 					}
