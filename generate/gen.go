@@ -190,20 +190,19 @@ func (s Struct) WriteAppend(l *LineWriter) {
 	l.Write("if isFlexible {")
 	defer l.Write("}")
 
-	var tagsCanDefault bool
 	for i := 0; i < len(tags); i++ {
 		f, exists := tags[i]
 		if !exists {
 			die("saw %d tags, but did not see tag %d; expected monotonically increasing", len(tags), i)
 		}
-		if _, tagsCanDefault = f.Type.(Defaulter); tagsCanDefault {
-			break
+		if _, canDefault := f.Type.(Defaulter); !canDefault {
+			die("no Defaulter for %s", f.FieldName)
 		}
 	}
 
 	defer l.Write("dst = v.UnknownTags.AppendEach(dst)")
 
-	if tagsCanDefault {
+	if len(tags) > 0 {
 		l.Write("var toEncode []uint32")
 		for i := 0; i < len(tags); i++ {
 			f := tags[i]
@@ -241,13 +240,17 @@ func (s Struct) WriteAppend(l *LineWriter) {
 		defer l.Write("}")
 		defer l.Write("}")
 	} else {
-		l.Write("dst = kbin.AppendUvarint(dst, %d + uint32(v.UnknownTags.Len()))", len(tags))
+		// No defined tags, we add unknown only.
+		//
+		// We keep a 0+ at the beginning for now to not cause a large
+		// delta on the generated code (previous versions of the
+		// generator did something slightly different here). This can
+		// be removed someday.
+		l.Write("dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))")
 	}
 
 	for i := 0; i < len(tags); i++ {
-		if tagsCanDefault {
-			l.Write("case %d:", i)
-		}
+		l.Write("case %d:", i)
 		f := tags[i]
 
 		l.Write("{")
