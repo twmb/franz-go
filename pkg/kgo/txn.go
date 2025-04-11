@@ -721,12 +721,16 @@ func (cl *Client) UnsafeAbortBufferedRecords() {
 // If the producer ID has an error and you are trying to commit, this will
 // return with kerr.OperationNotAttempted. If this happened, retry
 // EndTransaction with TryAbort. If this returns kerr.TransactionAbortable, you
-// can retry with TryAbort. No other error is retryable, and you should not
-// retry with TryAbort.
+// can retry with TryAbort. You should not retry this function on any other
+// error.
 //
-// If records failed with UnknownProducerID and your Kafka version is at least
-// 2.5, then aborting here will potentially allow the client to recover for
-// more production.
+// It may be possible for the client to recover in a new transaction via
+// BeginTransaction if an error is returned from this function:
+//
+//   - Before Kafka 4.0, InvalidProducerIDMapping and InvalidProducerEpoch
+//     are recoverable
+//   - UnknownProducerID is recoverable for Kafka 2.5+
+//   - TransactionAbortable is always recoverable (after aborting)
 //
 // Note that canceling the context will likely leave the client in an
 // undesirable state, because canceling the context may cancel the in-flight
@@ -863,10 +867,18 @@ func (cl *Client) maybeRecoverProducerID(ctx context.Context) (necessary, did bo
 		return true, false, err
 	}
 
-	kip360 := cl.producer.idVersion >= 3 && (errors.Is(ke, kerr.UnknownProducerID) || errors.Is(ke, kerr.InvalidProducerIDMapping))
-	kip588 := cl.producer.idVersion >= 4 && errors.Is(ke, kerr.InvalidProducerEpoch /* || err == kerr.TransactionTimedOut when implemented in Kafka */)
+	var recoverable bool
+	if cl.supportsKeyVersion(int16(kmsg.EndTxn), 5) {
+		// As of KIP-890 / Kafka 4.0, InvalidProducerIDMapping and
+		// InvalidProducerEpoch are NOT recoverable. Only
+		// UnknownProducerID and TransactionAbortable are.
+		recoverable = errors.Is(ke, kerr.UnknownProducerID) || errors.Is(ke, kerr.TransactionAbortable)
+	} else {
+		kip360 := cl.producer.idVersion >= 3 && (errors.Is(ke, kerr.UnknownProducerID) || errors.Is(ke, kerr.InvalidProducerIDMapping))
+		kip588 := cl.producer.idVersion >= 4 && errors.Is(ke, kerr.InvalidProducerEpoch /* || err == kerr.TransactionTimedOut when implemented in Kafka */)
+		recoverable = kip360 || kip588
+	}
 
-	recoverable := kip360 || kip588
 	if !recoverable {
 		return true, false, err // fatal, unrecoverable
 	}
