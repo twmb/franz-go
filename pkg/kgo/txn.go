@@ -632,7 +632,17 @@ func (cl *Client) EndAndBeginTransaction(
 		if err != nil {
 			return err
 		}
-		return kerr.ErrorForCode(resp.ErrorCode)
+		if err = kerr.ErrorForCode(resp.ErrorCode); err != nil {
+			return err
+		}
+		if resp.Version >= 5 && resp.ProducerID >= 0 {
+			cl.producer.id.Store(&producerID{
+				id:    resp.ProducerID,
+				epoch: resp.ProducerEpoch,
+			})
+			cl.resetAllProducerSequences()
+		}
+		return nil
 	})
 	var ke *kerr.Error
 	if errors.As(err, &ke) && !ke.Retriable {
@@ -806,7 +816,17 @@ func (cl *Client) EndTransaction(ctx context.Context, commit TransactionEndTry) 
 		if err != nil {
 			return err
 		}
-		return kerr.ErrorForCode(resp.ErrorCode)
+		if err = kerr.ErrorForCode(resp.ErrorCode); err != nil {
+			return err
+		}
+		if resp.Version >= 5 && resp.ProducerID >= 0 {
+			cl.producer.id.Store(&producerID{
+				id:    resp.ProducerID,
+				epoch: resp.ProducerEpoch,
+			})
+			cl.resetAllProducerSequences()
+		}
+		return nil
 	})
 
 	// If the returned error is still a Kafka error, this is fatal and we
