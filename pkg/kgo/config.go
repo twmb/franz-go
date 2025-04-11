@@ -69,6 +69,7 @@ type cfg struct {
 	/////////////////////
 
 	id                     *string // client ID
+	ctx                    context.Context
 	dialFn                 func(context.Context, string, string) (net.Conn, error)
 	dialTimeout            time.Duration
 	dialTLS                *tls.Config
@@ -597,6 +598,13 @@ func SoftwareNameAndVersion(name, version string) Opt {
 // It is invalid to use a nil logger; doing so will cause panics.
 func WithLogger(l Logger) Opt {
 	return clientOpt{func(cfg *cfg) { cfg.logger = &wrappedLogger{l} }}
+}
+
+// WithContext sets the client to use a custom context.
+//
+// By default, the client uses context.Background.
+func WithContext(ctx context.Context) Opt {
+	return clientOpt{func(cfg *cfg) { cfg.ctx = ctx }}
 }
 
 // RequestTimeoutOverhead uses the given time as overhead while deadlining
