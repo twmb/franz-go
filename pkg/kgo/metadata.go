@@ -345,6 +345,35 @@ func (cl *Client) updateMetadata() (retryWhy multiUpdateWhy, err error) {
 		}
 	}
 
+	// If the user has auto topic creation while producing AND is consuming
+	// via regex, we need to send a separate metadata request with unknown
+	// produce topics before our standard metadata request. The standard
+	// metadata request is send with a nil Topics field (requesting all),
+	// which prevents us from ever creating the topics.
+	var unknownCreateResp map[string]*metadataTopic
+	if all && cl.cfg.allowAutoTopicCreation {
+		cl.producer.unknownTopicsMu.Lock()
+		if len(cl.producer.unknownTopics) > 0 {
+			unknownTopics := make([]string, 0, len(cl.producer.unknownTopics))
+			for unknown := range cl.producer.unknownTopics {
+				unknownTopics = append(unknownTopics, unknown)
+			}
+			var err error
+			unknownCreateResp, err = cl.fetchTopicMetadata(false, unknownTopics)
+			if err != nil {
+				// We bump all produce topics even though we
+				// only explicitly requested unknown ones; this
+				// is a general request failure and we want to
+				// note it (also this is simpler...).
+				cl.bumpMetadataFailForTopics(
+					tpsProducerLoad,
+					err,
+				)
+			}
+		}
+		cl.producer.unknownTopicsMu.Unlock()
+	}
+
 	latest, err := cl.fetchTopicMetadata(all, reqTopics)
 	if err != nil {
 		cl.bumpMetadataFailForTopics( // bump load failures for all topics
@@ -355,14 +384,31 @@ func (cl *Client) updateMetadata() (retryWhy multiUpdateWhy, err error) {
 	}
 	groupExternal.updateLatest(latest)
 
+	// If regex consuming AND we issued a metadata request to forcefully
+	// create topics, we merge any topics missing into the all-request from
+	// the create-request. It is possible we want to keep failed creation
+	// errors.
+	for t, mt := range unknownCreateResp {
+		if _, ok := latest[t]; !ok {
+			latest[t] = mt
+		}
+	}
+
 	// If we are consuming with regex and fetched all topics, the metadata
 	// may have returned topics the consumer is not yet tracking. We ensure
 	// that we will store the topics at the end of our metadata update.
 	tpsConsumerLoad := tpsConsumer.load()
 	if all {
 		allTopics := make([]string, 0, len(latest))
-		for topic := range latest {
-			allTopics = append(allTopics, topic)
+		for topic, mt := range latest {
+			// loadErr should only be non-nil when requesting all
+			// topics if this is with auto-topic-creation && the
+			// creation failed. That is, we should not consume the
+			// topic since we just tried creating it and creating
+			// it failed.
+			if mt.loadErr == nil {
+				allTopics = append(allTopics, topic)
+			}
 		}
 
 		// We filter out topics will not match any of our regex's.
