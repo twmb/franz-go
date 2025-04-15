@@ -854,12 +854,9 @@ func (cl *Client) supportsOffsetForLeaderEpoch() bool {
 
 // Called after the first metadata request, before we go into either
 // (*groupConsumer).manage or (*groupConsumer).manage848.
-func (cl *Client) supportsKIP848() bool {
-	return cl.supportsKeyVersion(int16(kmsg.ConsumerGroupHeartbeat), 0)
-}
-
+//
 // v1 introduces support for regex and requires the client to generate
-// the member ID.
+// the member ID, and fully stabilizes KIP-848.
 func (cl *Client) supportsKIP848v1() bool {
 	return cl.supportsKeyVersion(int16(kmsg.ConsumerGroupHeartbeat), 1)
 }

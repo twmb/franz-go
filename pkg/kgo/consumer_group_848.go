@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kerr"
@@ -15,7 +16,8 @@ import (
 )
 
 func (g *groupConsumer) should848() bool {
-	if !g.cl.supportsKIP848() {
+	// We pin to v1, introduced in Kafka 4, which fully stabilizes KIP-848.
+	if !g.cl.supportsKIP848v1() {
 		return false
 	}
 	switch g.cfg.balancers[0].(type) {
@@ -196,14 +198,10 @@ func newStringUUID() string {
 }
 
 func (g *g848) initialJoin() (time.Duration, error) {
-	var memberID string
-	rejoin := true
-	if g.g.cl.supportsKIP848v1() {
-		memberID = newStringUUID()
-		rejoin = false
-	}
-	g.g.memberGen.store(memberID, 0) // 0 joins the group
-reissue:
+	// v1+ requires the client to generate their own memberID.
+	// On v0, the server provides the ID and we join twice.
+	// We pin to v1+.
+	g.g.memberGen.store(newStringUUID(), 0) // 0 joins the group
 	req := g.mkreq()
 	resp, err := req.RequestWith(g.g.ctx, g.g.cl)
 	if err == nil {
@@ -212,13 +210,7 @@ reissue:
 	if err != nil {
 		return 0, err
 	}
-	// On the initial join, IF we are v0, we need to rejoin with the
-	// server-provided memberID. We should not be assigned anything yet...
 	nowAssigned := g.handleResp(resp)
-	if len(nowAssigned) == 0 && rejoin {
-		rejoin = false
-		goto reissue
-	}
 	g.g.cfg.logger.Log(LogLevelInfo, "consumer group initial heartbeat received assignment", "now_assigned", nowAssigned)
 	// We always keep nowAssigned: the field is always nil here, so we
 	// either re-store nil or we save an update.
@@ -289,15 +281,25 @@ func (g *g848) mkreq() *kmsg.ConsumerGroupHeartbeatRequest {
 		req.RebalanceTimeoutMillis = int32(g.g.cfg.rebalanceTimeout.Milliseconds())
 		req.ServerAssignor = &g.serverAssignor
 
-		// SubscribedTopics must always exist when epoch == 0.
-		// We specifically 'make' the slice to ensure it is non-nil.
 		tps := g.g.tps.load()
-		subscribedTopics := make([]string, 0, len(tps))
-		for t := range tps {
-			subscribedTopics = append(subscribedTopics, t)
+		if g.g.cl.cfg.regex {
+			topics := g.g.cl.cfg.topics
+			patterns := make([]string, 0, len(topics))
+			for topic := range topics {
+				patterns = append(patterns, "(?:"+topic+")")
+			}
+			pattern := strings.Join(patterns, "|")
+			req.SubscribedTopicRegex = &pattern
+		} else {
+			// SubscribedTopics must always exist when epoch == 0.
+			// We specifically 'make' the slice to ensure it is non-nil.
+			subscribedTopics := make([]string, 0, len(tps))
+			for t := range tps {
+				subscribedTopics = append(subscribedTopics, t)
+			}
+			g.lastSubscribedTopics = subscribedTopics
+			req.SubscribedTopicNames = subscribedTopics
 		}
-		g.lastSubscribedTopics = subscribedTopics
-		req.SubscribedTopicNames = subscribedTopics
 
 		// Topics must be empty when we do the initial join.
 		// We sanity-check that we are not assigned anything.
@@ -309,14 +311,19 @@ func (g *g848) mkreq() *kmsg.ConsumerGroupHeartbeatRequest {
 
 	default:
 		tps := g.g.tps.load()
-		subscribedTopics := make([]string, 0, len(tps))
-		for t := range tps {
-			subscribedTopics = append(subscribedTopics, t)
+
+		// SubscribedTopicRegex never changes, so we never need to
+		// re-include it.
+		if !g.g.cl.cfg.regex {
+			subscribedTopics := make([]string, 0, len(tps))
+			for t := range tps {
+				subscribedTopics = append(subscribedTopics, t)
+			}
+			if !slicesDeepEq(g.lastSubscribedTopics, subscribedTopics) {
+				req.SubscribedTopicNames = subscribedTopics
+			}
+			g.lastSubscribedTopics = subscribedTopics
 		}
-		if !slicesDeepEq(g.lastSubscribedTopics, subscribedTopics) {
-			req.SubscribedTopicNames = subscribedTopics
-		}
-		g.lastSubscribedTopics = subscribedTopics
 
 		nowAssigned := g.g.nowAssigned.clone() // always returns non-nil
 		if !mapi32sDeepEq(g.lastTopics, nowAssigned) {
