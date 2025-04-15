@@ -30,7 +30,7 @@ DescribeGroupsResponse =>
     // GROUP_ID_NOT_FOUND is returned on v6+ if the group ID is not found (KIP-1043).
     ErrorCode: int16
     // ErrorMessage is an optional message with more detail for the error code.
-    ErrorMessage: nullable-string
+    ErrorMessage: nullable-string // v6+
     // Group is the id of this group.
     Group: string
     // State is the state this group is in.
