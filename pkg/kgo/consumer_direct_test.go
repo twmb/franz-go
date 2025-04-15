@@ -473,45 +473,55 @@ func TestPauseIssueOct2023(t *testing.T) {
 func TestIssue523(t *testing.T) {
 	t.Parallel()
 
-	t1, cleanup := tmpTopicPartitions(t, 1)
-	defer cleanup()
-	g1, gcleanup := tmpGroup(t)
-	defer gcleanup()
+	for _, balancer := range []GroupBalancer{
+		RoundRobinBalancer(),
+		StickyBalancer(),
+	} {
+		t.Run(balancer.ProtocolName(), func(t *testing.T) {
+			t.Parallel()
 
-	cl, _ := newTestClient(
-		DefaultProduceTopic(t1),
-		ConsumeTopics(".*"+t1+".*"),
-		ConsumeRegex(),
-		ConsumerGroup(g1),
-		MetadataMinAge(100*time.Millisecond),
-		FetchMaxWait(time.Second),
-		KeepRetryableFetchErrors(),
-		UnknownTopicRetries(-1),
-	)
-	defer cl.Close()
+			t1, cleanup := tmpTopicPartitions(t, 1)
+			defer cleanup()
+			g1, gcleanup := tmpGroup(t)
+			defer gcleanup()
 
-	if err := cl.ProduceSync(context.Background(), StringRecord("foo")).FirstErr(); err != nil {
-		t.Fatal(err)
-	}
+			cl, _ := newTestClient(
+				DefaultProduceTopic(t1),
+				ConsumeTopics(".*"+t1+".*"),
+				ConsumeRegex(),
+				Balancers(balancer),
+				ConsumerGroup(g1),
+				MetadataMinAge(100*time.Millisecond),
+				FetchMaxWait(time.Second),
+				KeepRetryableFetchErrors(),
+				UnknownTopicRetries(-1),
+			)
+			defer cl.Close()
 
-	cl.PollFetches(context.Background())
+			if err := cl.ProduceSync(context.Background(), StringRecord("foo")).FirstErr(); err != nil {
+				t.Fatal(err)
+			}
 
-	cleanup() // delete the topic
+			cl.PollFetches(context.Background())
 
-	start := time.Now()
-	for {
-		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
-		fs := cl.PollFetches(ctx)
-		cancel()
-		if errors.Is(fs.Err0(), context.DeadlineExceeded) {
-			break
-		}
-		if time.Since(start) > 40*time.Second { // missing topic delete is 15s by default
-			t.Fatalf("still repeatedly requesting metadata after 20s")
-		}
-		if fs.Err0() != nil {
-			time.Sleep(time.Second)
-		}
+			cleanup() // delete the topic
+
+			start := time.Now()
+			for {
+				ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+				fs := cl.PollFetches(ctx)
+				cancel()
+				if errors.Is(fs.Err0(), context.DeadlineExceeded) {
+					break
+				}
+				if time.Since(start) > 40*time.Second { // missing topic delete is 15s by default
+					t.Fatalf("still repeatedly requesting metadata after 20s")
+				}
+				if fs.Err0() != nil {
+					time.Sleep(time.Second)
+				}
+			}
+		})
 	}
 }
 
