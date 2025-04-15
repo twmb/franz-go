@@ -163,7 +163,19 @@ type txnReqBuilder struct {
 }
 
 func (t *txnReqBuilder) add(rb *recBuf) {
-	if t.txnID == nil || rb.addedToTxn.Swap(true) || t.pv12 {
+	// For produce v12+, we mark the partition as added to the transaction
+	// if there is no partition error code in a produce response.
+	//
+	// For prior versions, we actually issue an AddPartitionsToTxn request.
+	// The original logic was to mark addedToTxn before issuing the request
+	// and swap it back to false if the request failed or there was a
+	// partition error. We *could* swap this to only add to the txn on
+	// successful request, but there is other logic that needs to run on
+	// failure and the old code is well tested, so we'll keep it.
+	//
+	// We must keep the pv12 check first, otherwise we may accidentally
+	// mark something as added to the txn while produce requests fail.
+	if t.txnID == nil || t.pv12 || rb.addedToTxn.Swap(true) {
 		return
 	}
 	if t.req == nil {
@@ -418,8 +430,6 @@ func (s *sink) produce(sem <-chan struct{}) bool {
 		// The latter case can potentially recover with the kip logic
 		// we have defined in EndTransaction. Regardless, on failure
 		// here, all buffered records must fail.
-		// We do not need to clear the addedToTxn flag for any recBuf
-		// it was set on, since producer id recovery resets the flag.
 		batchesStripped, err := s.doTxnReq(req, txnReq)
 		if err != nil {
 			switch {
@@ -998,6 +1008,9 @@ func (s *sink) handleReqRespBatch(
 		} else {
 			batch.owner.okOnSink = true
 			batch.owner.lastAckedOffset = rp.BaseOffset + int64(len(batch.records))
+			if resp.Version >= 12 && s.cl.cfg.txnID != nil {
+				batch.owner.addedToTxn.Swap(true)
+			}
 		}
 		s.cl.finishBatch(batch.recBatch, producerID, producerEpoch, rp.Partition, rp.BaseOffset, err)
 		didProduce = err == nil
