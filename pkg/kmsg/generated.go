@@ -46681,11 +46681,12 @@ type ConsumerGroupHeartbeatRequest struct {
 	UnknownTags Tags
 }
 
-func (*ConsumerGroupHeartbeatRequest) Key() int16                 { return 68 }
-func (*ConsumerGroupHeartbeatRequest) MaxVersion() int16          { return 1 }
-func (v *ConsumerGroupHeartbeatRequest) SetVersion(version int16) { v.Version = version }
-func (v *ConsumerGroupHeartbeatRequest) GetVersion() int16        { return v.Version }
-func (v *ConsumerGroupHeartbeatRequest) IsFlexible() bool         { return v.Version >= 0 }
+func (*ConsumerGroupHeartbeatRequest) Key() int16                   { return 68 }
+func (*ConsumerGroupHeartbeatRequest) MaxVersion() int16            { return 1 }
+func (v *ConsumerGroupHeartbeatRequest) SetVersion(version int16)   { v.Version = version }
+func (v *ConsumerGroupHeartbeatRequest) GetVersion() int16          { return v.Version }
+func (v *ConsumerGroupHeartbeatRequest) IsFlexible() bool           { return v.Version >= 0 }
+func (v *ConsumerGroupHeartbeatRequest) IsGroupCoordinatorRequest() {}
 func (v *ConsumerGroupHeartbeatRequest) ResponseKind() Response {
 	r := &ConsumerGroupHeartbeatResponse{Version: v.Version}
 	r.Default()

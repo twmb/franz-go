@@ -727,8 +727,20 @@ func (c *consumer) purgeTopics(topics []string) {
 
 	// The difference for groups is we need to lock the group and there is
 	// a slight type difference in g.using vs d.using.
+	//
+	// assignPartitions removes the topics from 'tps', which removes them
+	// from FUTURE metadata requests meaning they will not be repopulated
+	// in the future. Any loaded tps is fine; metadata updates the topic
+	// pointers underneath -- metadata does not re-store the tps itself
+	// with any new topics that we just purged (except in the case of regex,
+	// which is impossible to permanently purge anyway).
+	//
+	// We are guarded from adding back to 'using' via the consumer mu;
+	// this cannot run concurrent with findNewAssignments. Thus, we first
+	// purge tps, then clear using, and once the lock releases, findNewAssignments
+	// will use the now-purged tps and will not add back to using.
 	if c.g != nil {
-		c.g.mu.Lock()
+		c.g.mu.Lock() // required when updating using
 		defer c.g.mu.Unlock()
 		c.assignPartitions(purgeAssignments, assignPurgeMatching, c.g.tps, fmt.Sprintf("purge of %v requested", topics))
 		for _, topic := range topics {
@@ -742,6 +754,7 @@ func (c *consumer) purgeTopics(topics []string) {
 			delete(c.d.using, topic)
 			delete(c.d.reSeen, topic)
 			delete(c.d.m, topic)
+			delete(c.d.ps, topic)
 		}
 	}
 }
