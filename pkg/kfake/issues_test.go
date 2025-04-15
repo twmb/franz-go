@@ -2,6 +2,7 @@ package kfake
 
 import (
 	"context"
+	"os"
 	"strconv"
 	"sync/atomic"
 	"testing"
@@ -349,4 +350,75 @@ func TestIssue905(t *testing.T) {
 	}
 
 	// Success.
+}
+
+func TestIssue906(t *testing.T) {
+	const testTopic = "foo"
+
+	c, err := NewCluster(
+		NumBrokers(1),
+		SleepOutOfOrder(),
+		SeedTopics(1, testTopic),
+		AllowAutoTopicCreation(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	// Seed "foo" with two records.
+	func() {
+		cl, err := kgo.NewClient(
+			kgo.DefaultProduceTopic(testTopic),
+			kgo.SeedBrokers(c.ListenAddrs()...),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer cl.Close()
+
+		for i := 0; i < 2; i++ {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			err := cl.ProduceSync(ctx, kgo.StringRecord(strconv.Itoa(i))).FirstErr()
+			cancel()
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+	}()
+
+	client, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.ConsumeTopics("^foo.*"),
+		kgo.ConsumeRegex(),
+		kgo.AllowAutoTopicCreation(),
+		kgo.WithLogger(kgo.BasicLogger(os.Stderr, kgo.LogLevelDebug, nil)),
+	)
+	if err != nil {
+		t.Fatal(err)
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	var produced int
+	for produced != 2 {
+		fetches := client.PollRecords(ctx, 10)
+
+		var records []*kgo.Record
+		iter := fetches.RecordIter()
+		for !iter.Done() {
+			record := iter.Next()
+			records = append(records, &kgo.Record{
+				Topic: "bar",
+				Key:   record.Key,
+				Value: record.Value,
+			})
+		}
+
+		if err := client.ProduceSync(ctx, records...).FirstErr(); err != nil {
+			t.Errorf("unable to produce: %v", err)
+		}
+		produced += len(records)
+	}
 }
