@@ -11,6 +11,18 @@ import (
 	"github.com/twmb/franz-go/pkg/kerr"
 )
 
+// IsRetryableBrokerErr returns whether the client considers an error from a
+// broker retrayble. This returns true specifically if the client thinks it can
+// retry whatever it was just trying to do with a broker. It returns false in
+// all other cases.
+//
+// This can used external to the library to help filter errors if use kgo
+// hooks: errors may be sent to hooks before the client retries whatever it was
+// just attempting.
+func IsRetryableBrokerErr(err error) bool {
+	return isRetryableBrokerErr(err)
+}
+
 func isRetryableBrokerErr(err error) bool {
 	// The error could be nil if we are evaluating multiple errors at once,
 	// and only one is non-nil. The intent of this function is to evaluate
