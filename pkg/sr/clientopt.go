@@ -2,10 +2,8 @@ package sr
 
 import (
 	"crypto/tls"
-	"net"
 	"net/http"
 	"strings"
-	"time"
 )
 
 type (
@@ -44,27 +42,10 @@ func URLs(urls ...string) ClientOpt {
 	}}
 }
 
-// DialTLSConfig sets a tls.Config to use in the default http client.
+// DialTLSConfig sets a tls.Config to use in the http client, either the default client or a client previously
+// set with the HTTPClient option. When setting this option, HTTP/2 support may not be enabled by default.
 func DialTLSConfig(c *tls.Config) ClientOpt {
-	return clientOpt{func(cl *Client) {
-		cl.httpcl = &http.Client{
-			Timeout: 5 * time.Second,
-			Transport: &http.Transport{
-				Proxy: http.ProxyFromEnvironment,
-				DialContext: (&net.Dialer{
-					Timeout:   30 * time.Second,
-					KeepAlive: 30 * time.Second,
-				}).DialContext,
-				TLSClientConfig:       c,
-				ForceAttemptHTTP2:     true,
-				MaxIdleConns:          100,
-				MaxIdleConnsPerHost:   100,
-				IdleConnTimeout:       90 * time.Second,
-				TLSHandshakeTimeout:   10 * time.Second,
-				ExpectContinueTimeout: 1 * time.Second,
-			},
-		}
-	}}
+	return clientOpt{func(cl *Client) { cl.dialTLS = c }}
 }
 
 // BasicAuth sets basic authorization to use for every request.
