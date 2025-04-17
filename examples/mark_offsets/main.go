@@ -75,16 +75,19 @@ func (c *consumer) run(ctx context.Context, wg *sync.WaitGroup) {
 				continue
 			}
 			fetches.EachPartition(func(p kgo.FetchTopicPartition) {
-				//create offsets map for each partition
-				offsets := make(map[int32]kgo.EpochOffset, len(p.Records))
+				var epoch int32
+				var offset int64
 				for _, r := range p.Records {
 					if err := c.process(r); err != nil {
 						// do other job like retry and dlq
 						log.Println("failed to process record", err)
 					}
-					offsets[r.Partition] = kgo.EpochOffset{Epoch: r.LeaderEpoch, Offset: r.Offset + 1}
+					epoch = r.LeaderEpoch
+					offset = r.Offset + 1
 				}
-				c.client.MarkCommitOffsets(map[string]map[int32]kgo.EpochOffset{p.Topic: offsets})
+				c.client.MarkCommitOffsets(map[string]map[int32]kgo.EpochOffset{p.Topic: {
+					p.Partition: kgo.EpochOffset{Epoch: epoch, Offset: offset}},
+				})
 			})
 		}
 	}
