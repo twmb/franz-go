@@ -98,3 +98,8 @@ func DefaultParams(ps ...Param) ClientOpt {
 		cl.defParams = mergeParams(ps...)
 	}}
 }
+
+// WithLogger sets the logger to use.
+func WithLogger(logger Logger) ClientOpt {
+	return clientOpt{func(cl *Client) { cl.logger = logger }}
+}
