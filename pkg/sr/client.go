@@ -58,6 +58,7 @@ type Client struct {
 	ua        string
 	defParams Param
 	opts      []ClientOpt
+	logger    Logger
 
 	basicAuth *struct {
 		user string
@@ -74,6 +75,7 @@ func NewClient(opts ...ClientOpt) (*Client, error) {
 		httpcl: &http.Client{Timeout: 5 * time.Second},
 		ua:     "franz-go",
 		opts:   opts,
+		logger: new(nopLogger),
 	}
 
 	for _, opt := range opts {
@@ -150,12 +152,17 @@ start:
 			return fmt.Errorf("pre-request hook failed for %s %q: %w", method, reqURL, err)
 		}
 	}
-
+	if cl.logger.Level() >= LogLevelDebug {
+		cl.logger.Log(LogLevelDebug, "sending request", "method", method, "URL", reqURL, "has_bearer", cl.bearerToken != "", "has_basic_auth", cl.basicAuth != nil)
+	} else {
+		cl.logger.Log(LogLevelInfo, "sending request", "method", method, "URL", reqURL)
+	}
 	resp, err := cl.httpcl.Do(req)
 	if err != nil {
 		if len(urls) == 0 {
 			return fmt.Errorf("unable to %s %q: %w", method, reqURL, err)
 		}
+		cl.logger.Log(LogLevelDebug, "retrying request", "method", method, "URL", reqURL, "error", err)
 		goto start
 	}
 
