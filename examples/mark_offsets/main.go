@@ -86,8 +86,8 @@ func (c *consumer) run(ctx context.Context, wg *sync.WaitGroup) {
 					offset = r.Offset + 1
 				}
 				c.client.MarkCommitOffsets(map[string]map[int32]kgo.EpochOffset{p.Topic: {
-					p.Partition: kgo.EpochOffset{Epoch: epoch, Offset: offset}},
-				})
+					p.Partition: kgo.EpochOffset{Epoch: epoch, Offset: offset},
+				}})
 			})
 		}
 	}
