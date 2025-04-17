@@ -63,6 +63,8 @@ type Client struct {
 	ua        string
 	defParams Param
 	opts      []ClientOpt
+	logFn     func(int8, string, ...any)
+	logLvlFn  func() int8
 
 	basicAuth *struct {
 		user string
@@ -75,10 +77,12 @@ type Client struct {
 // NewClient returns a new schema registry client.
 func NewClient(opts ...ClientOpt) (*Client, error) {
 	cl := &Client{
-		urls:   []string{"http://localhost:8081"},
-		httpcl: &http.Client{Timeout: 5 * time.Second},
-		ua:     "franz-go",
-		opts:   opts,
+		urls:     []string{"http://localhost:8081"},
+		httpcl:   &http.Client{Timeout: 5 * time.Second},
+		ua:       "franz-go",
+		opts:     opts,
+		logFn:    func(int8, string, ...any) {},
+		logLvlFn: func() int8 { return LogLevelInfo },
 	}
 
 	for _, opt := range opts {
@@ -206,6 +210,12 @@ func (cl *Client) OptValues(opt any) []any {
 		return []any{cl.preReq}
 	case namefn(DefaultParams):
 		return []any{cl.defParams}
+	case namefn(LogFn):
+		return []any{cl.logFn}
+	case namefn(LogLevelFn):
+		return []any{cl.logLvlFn}
+	case namefn(LogLevel):
+		return []any{cl.logLvlFn()}
 	default:
 		return nil
 	}
@@ -267,12 +277,17 @@ start:
 			return fmt.Errorf("pre-request hook failed for %s %q: %w", method, reqURL, err)
 		}
 	}
-
+	if cl.logLvlFn() >= LogLevelDebug {
+		cl.logFn(LogLevelDebug, "sending request", "method", method, "URL", reqURL, "has_bearer", cl.bearerToken != "", "has_basic_auth", cl.basicAuth != nil)
+	} else {
+		cl.logFn(LogLevelInfo, "sending request", "method", method, "URL", reqURL)
+	}
 	resp, err := cl.httpcl.Do(req)
 	if err != nil {
 		if len(urls) == 0 {
 			return fmt.Errorf("unable to %s %q: %w", method, reqURL, err)
 		}
+		cl.logFn(LogLevelDebug, "retrying request", "method", method, "URL", reqURL, "error", err)
 		goto start
 	}
 
