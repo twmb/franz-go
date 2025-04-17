@@ -19,10 +19,12 @@ package sr
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"time"
@@ -55,6 +57,7 @@ func (e *ResponseError) Error() string {
 type Client struct {
 	urls      []string
 	httpcl    *http.Client
+	dialTLS   *tls.Config
 	ua        string
 	defParams Param
 	opts      []ClientOpt
@@ -82,6 +85,29 @@ func NewClient(opts ...ClientOpt) (*Client, error) {
 
 	if len(cl.urls) == 0 {
 		return nil, errors.New("unable to create client with no URLs")
+	}
+
+	if cl.dialTLS != nil {
+		tr := http.DefaultTransport.(*http.Transport)
+
+		dialFn := func(ctx context.Context, network, host string) (net.Conn, error) {
+			nd := &net.Dialer{ // values taken from http.DefaultTransport.DialContext
+				Timeout:   30 * time.Second,
+				KeepAlive: 30 * time.Second,
+			}
+
+			return (&tls.Dialer{
+				NetDialer: nd,
+				Config:    cl.dialTLS.Clone(),
+			}).DialContext(ctx, network, host)
+		}
+
+		tr.DialTLSContext = dialFn
+
+		cl.httpcl = &http.Client{
+			Timeout:   5 * time.Second,
+			Transport: tr,
+		}
 	}
 
 	return cl, nil
