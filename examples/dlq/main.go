@@ -69,7 +69,7 @@ func (k *kafka) connectConsumer(ctx context.Context) error {
 	var err error
 	k.consumer, err = kgo.NewClient([]kgo.Opt{
 		kgo.SeedBrokers([]string{"localhost:9092"}...),
-		kgo.ConsumerGroup("example"),
+		kgo.ConsumerGroup("example-group"),
 		kgo.ConsumeTopics("example"),
 	}...)
 	if err != nil {
@@ -185,8 +185,9 @@ func (k *kafka) sendToDlq(ctx context.Context, r *kgo.Record, err error) {
 			{Key: "error", Value: []byte(err.Error())},
 		},
 	}
+
+	//then dlq consumer should handle produced records
 	k.producer.Produce(ctx, dlq, func(r *kgo.Record, err error) {
-		//now dlq consumer should handle these records
 		log.Println("failed to produce dlq record", err)
 	})
 }

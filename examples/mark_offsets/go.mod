@@ -1,4 +1,4 @@
-module dlq
+module mark_offsets
 
 go 1.24.1
 

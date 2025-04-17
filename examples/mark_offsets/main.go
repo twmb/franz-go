@@ -37,7 +37,7 @@ func main() {
 
 	c.client, err = kgo.NewClient([]kgo.Opt{
 		kgo.SeedBrokers([]string{"localhost:9092"}...),
-		kgo.ConsumerGroup("example"),
+		kgo.ConsumerGroup("example-group"),
 		kgo.ConsumeTopics("example"),
 		kgo.AutoCommitMarks(),
 		kgo.AutoCommitInterval(3 * time.Second), //default is 5s
@@ -80,13 +80,13 @@ func (c *consumer) run(ctx context.Context, wg *sync.WaitGroup) {
 				offsets := make(map[int32]kgo.EpochOffset, len(p.Records))
 				for _, r := range p.Records {
 					if err := c.process(r); err != nil {
-						// do other job like retry and dlq mechanism
+						// do other job like retry and dlq
 						log.Println("failed to process record", err)
 					}
 					offsets[r.Partition] = kgo.EpochOffset{Epoch: r.LeaderEpoch, Offset: r.Offset + 1}
 				}
 				// instead of using MarkCommitRecords, we can use MarkCommitOffsets
-				// because it stores only offsets instead of records but does the same logic,
+				// because it stores offsets instead of records but does the same logic,
 				// so the only thing we need using auto commit marks is to get the actual offset
 				c.client.MarkCommitOffsets(map[string]map[int32]kgo.EpochOffset{p.Topic: offsets})
 			})
@@ -115,11 +115,10 @@ func (c *consumer) process(r *kgo.Record) error {
 }
 
 func (c *consumer) revoked(ctx context.Context, cl *kgo.Client, _ map[string][]int32) {
-	//there we need to commit all marked offsets before the partitions are revoked
+	//need to commit all marked offsets before the partitions are revoked
 	if err := cl.CommitMarkedOffsets(ctx); err != nil {
 		log.Println("failed to commit marked offsets", err)
 	}
-
 	//do handling revoked partitions
 	//see goroutine_per_partition_consuming examples folder
 }
