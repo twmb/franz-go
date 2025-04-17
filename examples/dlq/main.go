@@ -30,14 +30,12 @@ type message struct {
 }
 
 func main() {
-	//good practice to run app with support of graceful shutdown
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
 	k := &kafka{}
 	var wg sync.WaitGroup
 
-	//separate conns due to different conf
 	if err := k.connectProducer(ctx); err != nil {
 		log.Fatal("failed to connect producer", err)
 	}

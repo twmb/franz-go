@@ -27,7 +27,6 @@ type message struct {
 }
 
 func main() {
-	//good practice to run app with support of graceful shutdown
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -85,9 +84,6 @@ func (c *consumer) run(ctx context.Context, wg *sync.WaitGroup) {
 					}
 					offsets[r.Partition] = kgo.EpochOffset{Epoch: r.LeaderEpoch, Offset: r.Offset + 1}
 				}
-				// instead of using MarkCommitRecords, we can use MarkCommitOffsets
-				// because it stores offsets instead of records but does the same logic,
-				// so the only thing we need using auto commit marks is to get the actual offset
 				c.client.MarkCommitOffsets(map[string]map[int32]kgo.EpochOffset{p.Topic: offsets})
 			})
 		}
