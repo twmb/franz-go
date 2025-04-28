@@ -1256,7 +1256,7 @@ func (cxn *brokerCxn) readResponse(
 
 	if readErr == nil {
 		latencyMillis := (writeWait + timeToWrite + readWait + timeToRead).Milliseconds()
-		if key == 0 {
+		if key == 0 { //nolint:staticcheck // tagged switch not needed for one case...
 			cxn.b.cl.metrics.observeNodeTime(cxn.b.meta.NodeID, &cxn.b.cl.metrics.pReqLatency, latencyMillis)
 		} else if key == 1 {
 			cxn.b.cl.metrics.observeNodeTime(cxn.b.meta.NodeID, &cxn.b.cl.metrics.cReqLatency, latencyMillis)

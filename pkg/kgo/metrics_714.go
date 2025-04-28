@@ -67,6 +67,7 @@ func (cl *Client) pushMetrics() {
 		var codecs []CompressionCodec
 		for _, accepted := range gresp.AcceptedCompressionTypes {
 			switch CompressionCodecType(accepted) {
+			case CodecNone:
 			case CodecGzip:
 				codecs = append(codecs, GzipCompression())
 			case CodecSnappy:
@@ -169,9 +170,8 @@ func (cl *Client) pushMetrics() {
 				if !kerr.IsRetriable(err) {
 					cl.cfg.logger.Log(LogLevelError, "client metrics received an unknown error we do not know how to handle, exiting metrics loop", "err", err)
 					return
-				} else {
-					cl.cfg.logger.Log(LogLevelWarn, "client metrics received an unknown error that is retryably, continuing to next push cycle", "err", err)
 				}
+				cl.cfg.logger.Log(LogLevelWarn, "client metrics received an unknown error that is retryably, continuing to next push cycle", "err", err)
 			}
 		}
 	}
@@ -593,7 +593,7 @@ func (m *metrics) appendTo(b []byte, useDeltaSums bool, maxBytes int32, allowedN
 	// SERIALIZING - finally append metricsData to b
 	////////////
 
-	serialized, codec := metricsData.appendTo(nil), CodecNone
+	serialized, codec := metricsData.appendTo(b[:0]), CodecNone
 	if compressor != nil {
 		serialized, codec = compressor.Compress(new(bytes.Buffer), serialized)
 	}
@@ -604,7 +604,7 @@ func (m *metrics) appendTo(b []byte, useDeltaSums bool, maxBytes int32, allowedN
 			"serialized_bytes_with_user", len(serialized),
 		)
 		*metrics = (*metrics)[:userAt]
-		serialized, codec = metricsData.appendTo(nil), CodecNone
+		serialized, codec = metricsData.appendTo(b[:0]), CodecNone
 		if compressor != nil {
 			serialized, codec = compressor.Compress(new(bytes.Buffer), serialized)
 		}
@@ -713,7 +713,7 @@ const (
 )
 
 // appendProtoTag adds a Protocol Buffer tag (field number + proto type)
-func appendProtoTag(b []byte, fieldNumber int, protoType int) []byte {
+func appendProtoTag(b []byte, fieldNumber, protoType int) []byte {
 	return binary.AppendUvarint(b, uint64((fieldNumber<<3)|protoType))
 }
 
@@ -931,7 +931,7 @@ outer:
 			case uint32:
 				v = uint64(t)
 			case uint64:
-				v = uint64(t)
+				v = t
 			case uintptr:
 				v = uint64(t)
 			}
