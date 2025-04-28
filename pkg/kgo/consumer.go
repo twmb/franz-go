@@ -2313,7 +2313,7 @@ func (*Client) loadEpochsForBrokerLoad(ctx context.Context, broker *broker, load
 			offset := loadPart.at
 			var err error
 			if rPartition.EndOffset < offset {
-				err = &ErrDataLoss{topic, partition, offset, rPartition.EndOffset}
+				err = &ErrDataLoss{topic, partition, offset, loadPart.epoch, rPartition.EndOffset, rPartition.LeaderEpoch}
 				offset = rPartition.EndOffset
 			}
 
