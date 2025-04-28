@@ -81,6 +81,8 @@ type Client struct {
 	consumer consumer
 	id2t     atomic.Value // map[[16]byte]string
 
+	metrics metrics
+
 	coordinatorsMu sync.Mutex
 	coordinators   map[coordinatorKey]*coordinatorLoad
 

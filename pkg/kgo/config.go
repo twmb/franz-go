@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"iter"
 	"math"
 	"math/rand"
 	"net"
@@ -100,6 +101,9 @@ type cfg struct {
 	metadataMinAge time.Duration
 
 	sasls []sasl.Mechanism
+
+	disableClientMetrics bool
+	userMetrics          func() iter.Seq[Metric]
 
 	hooks hooks
 	pools pools
@@ -938,6 +942,32 @@ func ConsiderMissingTopicDeletedAfter(t time.Duration) Opt {
 // You can read KIP-1102 for more info about this option.
 func OnRebootstrapRequired(fn func() ([]string, error)) Opt {
 	return clientOpt{func(cfg *cfg) { cfg.onRebootstrapRequired = fn }}
+}
+
+// DisableClientMetrics opts out of collecting and sending client metrics to
+// the broker (if the broker supports receiving client metrics). By default,
+// clients are recommended to gather a small set of metrics to help cluster
+// operators debug client issues (rather than relying on clients which may not
+// be instrumented at all).
+//
+// For more details on client metrics, see KIP-714.
+func DisableClientMetrics() Opt {
+	return clientOpt{func(cfg *cfg) { cfg.disableClientMetrics = true }}
+}
+
+// UserMetricsFn sets the function to call to add user metrics when rolling up
+// client metrics to send to the broker. Every metric rollup, fn is called and
+// returns an iterator. All metrics returned from the iterator are included in
+// the client metric aggregation and are sent to the broker. It is your
+// responsibility to ensure the metric name is formatted correctly (namespaced
+// and following OpenTelemetry format), and you need to ensure your Sum metrics
+// are monotonically increasing. See the documentation on [Metric] for more
+// details.
+//
+// For more details about the client sending metrics, see KIP-714. For more
+// details about enhancing client metrics with user metrics, see KIP-1076.
+func UserMetricsFn(fn func() iter.Seq[Metric]) Opt {
+	return clientOpt{func(cfg *cfg) { cfg.userMetrics = fn }}
 }
 
 ////////////////////////////
