@@ -1,6 +1,6 @@
 module github.com/twmb/franz-go
 
-go 1.21
+go 1.23
 
 require (
 	github.com/klauspost/compress v1.17.11
