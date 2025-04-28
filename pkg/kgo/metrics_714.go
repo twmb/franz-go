@@ -90,8 +90,7 @@ type (
 	// metricTime reports average latency, max latency, and total latency.
 	// The unit is in milliseconds.
 	metricTime struct {
-		sum     atomic.Int64 // With count, avg = sum/count at rollup.
-		count   atomic.Int64
+		sum     atomic.Int64 // With separate aggDur field, avg = sum/aggDur at rollup.
 		max     atomic.Int64 // Max latency seen during this window.
 		tot     atomic.Int64 // Total sum of all latencies seen over all time (only encoded if name has a .WITH_TOTAL suffix)
 		lastTot int64
@@ -157,7 +156,6 @@ func (t *metricRate) rollNums() (rate float64, tot, lastTot int64) {
 
 func (t *metricTime) observe(millis int64) {
 	t.sum.Add(millis)
-	t.count.Add(1)
 	t.tot.Add(millis)
 	for {
 		max := t.max.Load()
@@ -170,15 +168,14 @@ func (t *metricTime) observe(millis int64) {
 	}
 }
 
-func (t *metricTime) rollNums() (avg float64, max, tot, lastTot int64) {
+func (t *metricTime) rollNums(aggDur time.Duration) (avg float64, max, tot, lastTot int64) {
 	sum := t.sum.Swap(0)
-	count := t.count.Swap(0)
 	max = t.max.Swap(0)
 	lastTot = t.lastTot
 	tot = t.tot.Load()
 	t.lastTot = tot
 
-	avg = safeDiv(float64(sum), float64(count))
+	avg = safeDiv(float64(sum), float64(aggDur.Milliseconds()))
 	return avg, max, tot, lastTot
 }
 
@@ -197,11 +194,7 @@ func (m *metrics) observeNodeLatency(node int32, field *map[int32]*metricTime, m
 }
 
 // If labels is non-nil, we use that for the Resource.
-func (m *metrics) appendTo(
-	b []byte,
-	aggregateDur time.Duration,
-	useDeltaSums bool,
-) []byte {
+func (m *metrics) appendTo(b []byte, useDeltaSums bool) []byte {
 	////////////
 	// VARIABLE INITIALIZATION
 	////////////
@@ -236,9 +229,14 @@ func (m *metrics) appendTo(
 	scope.name = "kgo"
 	scope.version = softwareVersion()
 
-	now := time.Now().UnixNano()
+	now := time.Now()
+	nowNano := now.UnixNano()
 	lastPush := m.lastPushNano
-	m.lastPushNano = now
+	aggDur := now.Sub(time.Unix(0, lastPush))
+	if lastPush == 0 {
+		aggDur = now.Sub(time.Unix(0, m.initNano))
+	}
+	m.lastPushNano = nowNano
 
 	////////////
 	// FUNCTIONS THAT APPEND TO `metrics`.
@@ -256,7 +254,7 @@ func (m *metrics) appendTo(
 					vInt:       vi64,
 					vDouble:    vf64,
 					startNano:  lastPush,
-					timeNano:   now,
+					timeNano:   nowNano,
 				},
 			},
 		})
@@ -273,7 +271,7 @@ func (m *metrics) appendTo(
 						attributes: attrs,
 						vInt:       tot - lastTot,
 						startNano:  lastPush,
-						timeNano:   now,
+						timeNano:   nowNano,
 					},
 					aggregationTemporality: otelTempDelta,
 				},
@@ -286,7 +284,7 @@ func (m *metrics) appendTo(
 						attributes: attrs,
 						vInt:       tot,
 						startNano:  m.initNano,
-						timeNano:   now,
+						timeNano:   nowNano,
 					},
 					aggregationTemporality: otelTempCumulative,
 				},
@@ -324,7 +322,7 @@ func (m *metrics) appendTo(
 			// measurement of latency. We special case this with a
 			// .WITH_TOTAL suffix on the name.
 			name, includeTotal := strings.CutSuffix(s.name, ".WITH_TOTAL")
-			avg, max, tot, lastTot := t.rollNums()
+			avg, max, tot, lastTot := t.rollNums(aggDur)
 			appendGauge(name+".avg", 0, avg, nil)
 			appendGauge(name+".max", max, 0, nil)
 			if includeTotal {
@@ -333,7 +331,7 @@ func (m *metrics) appendTo(
 
 		case map[int32]*metricTime:
 			for broker, m := range t {
-				avg, max, _, _ := m.rollNums()
+				avg, max, _, _ := m.rollNums(aggDur)
 				attrs := map[string]any{"node_id": broker}
 				appendGauge(s.name+".avg", 0, avg, attrs)
 				appendGauge(s.name+".max", max, 0, attrs)
