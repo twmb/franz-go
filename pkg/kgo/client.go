@@ -545,6 +545,7 @@ func NewClient(opts ...Opt) (*Client, error) {
 	cl.seeds.Store(seedBrokers)
 	go cl.updateMetadataLoop()
 	go cl.reapConnectionsLoop()
+	go cl.pushMetrics()
 
 	return cl, nil
 }
@@ -863,6 +864,12 @@ func (cl *Client) supportsKIP848v1() bool {
 	return cl.supportsKeyVersion(int16(kmsg.ConsumerGroupHeartbeat), 1)
 }
 
+// Called after the first metric observed, which is always after a response.
+func (cl *Client) supportsClientMetrics() bool {
+	return cl.supportsKeyVersion(int16(kmsg.GetTelemetrySubscriptions), 0) &&
+		cl.supportsKeyVersion(int16(kmsg.PushTelemetry), 0)
+}
+
 // A broker may not support some requests we want to make. This function checks
 // support. This should only be used *after* at least one successful response.
 func (cl *Client) supportsKeyVersion(key, version int16) bool {
@@ -1103,8 +1110,21 @@ func (cl *Client) close(ctx context.Context) (rerr error) {
 
 	// Now we kill the client context and all brokers, ensuring all
 	// requests fail. This will finish all producer callbacks and
-	// stop the metadata loop.
+	// stop the metadata loop and metrics loop.
 	cl.ctxCancel()
+
+	// Before killing brokers, give metrics 1s to push any final
+	// terminating message. The client context cancelation awakens
+	// the push-period-wait loop.
+	after := time.NewTimer(time.Second)
+	select {
+	case <-cl.metrics.ctx.Done():
+	case <-after.C:
+		cl.metrics.ctxCancel()
+	case <-ctx.Done():
+		cl.metrics.ctxCancel()
+	}
+
 	cl.brokersMu.Lock()
 	cl.stopBrokers = true
 	for _, broker := range cl.brokers {

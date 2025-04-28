@@ -1,13 +1,198 @@
 package kgo
 
 import (
+	"bytes"
+	"context"
 	"encoding/binary"
+	"errors"
 	"math"
+	"math/rand"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/twmb/franz-go/pkg/kerr"
+	"github.com/twmb/franz-go/pkg/kmsg"
 )
+
+func (cl *Client) pushMetrics() {
+	defer cl.metrics.ctxCancel()
+
+	if cl.cfg.disableClientMetrics {
+		return
+	}
+
+	m := &cl.metrics
+
+	select {
+	case <-cl.ctx.Done():
+		return
+	case <-m.firstObserve:
+	}
+
+	if !cl.supportsClientMetrics() {
+		m.mu.Lock()
+		m.unsupported.Store(true)
+		m.pReqLatency = nil
+		m.cReqLatency = nil
+		m.mu.Unlock()
+		return
+	}
+
+	var clientInstanceID [16]byte
+	var terminating bool
+	for !terminating {
+		greq := kmsg.NewGetTelemetrySubscriptionsRequest()
+		greq.ClientInstanceID = clientInstanceID
+
+		gresp, err := greq.RequestWith(m.ctx, cl)
+		if err == nil {
+			err = kerr.ErrorForCode(gresp.ErrorCode)
+		}
+		if err != nil {
+			cl.cfg.logger.Log(LogLevelInfo, "unable to get telemetry subscriptions, retrying in 30s", "err", err)
+			after := time.NewTimer(30 * time.Second)
+			select {
+			case <-cl.ctx.Done():
+				after.Stop()
+				return
+			case <-after.C:
+			}
+			continue
+		}
+
+		clientInstanceID = gresp.ClientInstanceID
+
+		var codecs []CompressionCodec
+		for _, accepted := range gresp.AcceptedCompressionTypes {
+			switch CompressionCodecType(accepted) {
+			case CodecGzip:
+				codecs = append(codecs, GzipCompression())
+			case CodecSnappy:
+				codecs = append(codecs, SnappyCompression())
+			case CodecLz4:
+				codecs = append(codecs, Lz4Compression())
+			case CodecZstd:
+				codecs = append(codecs, ZstdCompression())
+			}
+		}
+		compressor, _ := DefaultCompressor(codecs...)
+		allowedNames := buildNameFilter(gresp.RequestedMetrics)
+
+		// We want to pin pushing metrics to a single broker until that
+		// broker goes away. To do this, we first issue RequestSharded,
+		// figure out the broker that responded, and then use that
+		// broker until we receive errUnknownBroker.
+		var br *Broker
+
+	push:
+		for i := 0; !terminating; i++ {
+			wait := time.Duration(gresp.PushIntervalMillis) * time.Millisecond
+			if wait < time.Second {
+				wait = time.Second
+			}
+			if i == 0 { // for the first request, jitter 0.5 <= wait <= 1.5
+				cl.rng(func(r *rand.Rand) {
+					wait = time.Duration(float64(wait) * (0.5 + r.Float64()))
+				})
+			}
+
+			// Wait until our push interval; if the client is quitting,
+			// we immediately send a push with Terminating=true.
+			after := time.NewTimer(wait)
+			var terminating bool
+			select {
+			case <-cl.ctx.Done():
+				terminating = true
+			case <-after.C:
+			}
+
+			// Create our request.
+			preq := kmsg.NewPushTelemetryRequest()
+			preq.ClientInstanceID = clientInstanceID
+			preq.SubscriptionID = gresp.SubscriptionID
+			preq.Terminating = terminating
+			serialized, compression := m.appendTo(nil, gresp.DeltaTemporality, gresp.TelemetryMaxBytes, allowedNames, compressor)
+			if len(serialized) > int(gresp.TelemetryMaxBytes) {
+				cl.cfg.logger.Log(LogLevelWarn, "serialized metrics are larger than the broker provided max limit, sending anyway and hoping for the best",
+					"max_bytes", gresp.TelemetryMaxBytes,
+					"serialized_bytes", len(serialized),
+				)
+			}
+			preq.CompressionType = compression
+			preq.Metrics = serialized
+
+			// Send our request, pinning to the broker we get a response
+			// from or using the pinned broker if possible.
+			var resp kmsg.Response
+			var err error
+		doreq:
+			if br == nil {
+				shard := cl.RequestSharded(m.ctx, &preq)[0]
+				resp, err = shard.Resp, shard.Err
+				if err == nil {
+					br = cl.Broker(int(shard.Meta.NodeID))
+				}
+			} else {
+				resp, err = br.RetriableRequest(m.ctx, &preq)
+				if errors.Is(err, errUnknownBroker) {
+					br = nil
+					goto doreq
+				}
+			}
+			if err != nil {
+				cl.cfg.logger.Log(LogLevelWarn, "unable to send client metrics, resetting subscription", "err", err)
+				break
+			}
+
+			// Not much to do on the response besides a bunch of
+			// error handling.
+			presp := resp.(*kmsg.PushTelemetryResponse)
+			switch err := kerr.ErrorForCode(presp.ErrorCode); err {
+			case nil:
+			case kerr.InvalidRequest:
+				cl.cfg.logger.Log(LogLevelError, "client metrics was sent at the wrong time (after sending terminating request already?), exiting metrics loop", "err", err)
+				return
+			case kerr.InvalidRecord:
+				cl.cfg.logger.Log(LogLevelError, "broker could not understand our client metrics serialization, this is perhaps a franz-go bug", "err", err)
+				return
+			case kerr.TelemetryTooLarge:
+				cl.cfg.logger.Log(LogLevelWarn, "client metrics payload was too large (check your broker max telemetry bytes)", "err", err)
+				// Do nothing; continue aggregating
+			case kerr.UnknownSubscriptionID:
+				cl.cfg.logger.Log(LogLevelInfo, "client metrics has an outdated subscription, re-getting our subscription information", "err", err)
+				break push
+			case kerr.UnsupportedCompressionType:
+				cl.cfg.logger.Log(LogLevelInfo, "client metrics compression is not supported by the broker even though we only used previously supported compressors, re-getting our subscription information", "err", err)
+			default:
+				if !kerr.IsRetriable(err) {
+					cl.cfg.logger.Log(LogLevelError, "client metrics received an unknown error we do not know how to handle, exiting metrics loop", "err", err)
+					return
+				} else {
+					cl.cfg.logger.Log(LogLevelWarn, "client metrics received an unknown error that is retryably, continuing to next push cycle", "err", err)
+				}
+			}
+		}
+	}
+}
+
+func buildNameFilter(requested []string) func(string) bool {
+	if len(requested) == 0 {
+		return func(string) bool { return false }
+	}
+	if len(requested) == 1 && requested[0] == "" {
+		return func(string) bool { return true }
+	}
+	return func(name string) bool {
+		for _, pfx := range requested {
+			if strings.HasPrefix(name, pfx) {
+				return true
+			}
+		}
+		return false
+	}
+}
 
 const (
 	// MetricTypeSum is a sum type metric. Every time the metric is
@@ -106,8 +291,11 @@ type (
 	metrics struct {
 		cl *Client
 
+		closedFirstObserve atomic.Bool
+
 		// mu is grabbed when accessing the map fields.
-		mu sync.Mutex
+		mu          sync.Mutex
+		unsupported atomic.Bool // set to true if the broker does not support client metrics; guards nil-ing the maps
 
 		pConnCreation metricRate
 		pReqLatency   map[int32]*metricTime
@@ -124,12 +312,19 @@ type (
 		lastPushNano int64
 
 		userSumLast map[string]int64
+
+		firstObserve chan struct{}
+
+		ctx       context.Context
+		ctxCancel func()
 	}
 )
 
 func (m *metrics) init(cl *Client) {
 	m.cl = cl
 	m.initNano = time.Now().UnixNano()
+	m.firstObserve = make(chan struct{})
+	m.ctx, m.ctxCancel = context.WithCancel(context.Background()) // for graceful shutdown
 }
 
 func safeDiv[T ~int64 | ~float64](num, denom T) T {
@@ -139,6 +334,8 @@ func safeDiv[T ~int64 | ~float64](num, denom T) T {
 	return num / denom
 }
 
+// Internally we use the metrics.observeRate function so that
+// triggerFirstObserve is always called.
 func (t *metricRate) observe() {
 	t.count.Add(1)
 	t.tot.Add(1)
@@ -154,6 +351,8 @@ func (t *metricRate) rollNums() (rate float64, tot, lastTot int64) {
 	return rate, tot, lastTot
 }
 
+// Internally we use the metrics.observeTime function so that
+// triggerFirstObserve is always called.
 func (t *metricTime) observe(millis int64) {
 	t.sum.Add(millis)
 	t.tot.Add(millis)
@@ -179,9 +378,32 @@ func (t *metricTime) rollNums(aggDur time.Duration) (avg float64, max, tot, last
 	return avg, max, tot, lastTot
 }
 
+func (m *metrics) triggerFirstObserve() {
+	if !m.closedFirstObserve.Swap(true) {
+		close(m.firstObserve)
+	}
+}
+
+func (m *metrics) observeRate(field *metricRate) {
+	m.triggerFirstObserve()
+	field.observe()
+}
+
+func (m *metrics) observeTime(field *metricTime, millis int64) {
+	m.triggerFirstObserve()
+	field.observe(millis)
+}
+
 func (m *metrics) observeNodeLatency(node int32, field *map[int32]*metricTime, millis int64) {
+	m.triggerFirstObserve()
+	if m.unsupported.Load() {
+		return
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.unsupported.Load() { // one more check inside the lock to avoid a race where the maps are set nil after storing true
+		return
+	}
 	if *field == nil {
 		*field = make(map[int32]*metricTime)
 	}
@@ -193,8 +415,7 @@ func (m *metrics) observeNodeLatency(node int32, field *map[int32]*metricTime, m
 	t.observe(millis)
 }
 
-// If labels is non-nil, we use that for the Resource.
-func (m *metrics) appendTo(b []byte, useDeltaSums bool) []byte {
+func (m *metrics) appendTo(b []byte, useDeltaSums bool, maxBytes int32, allowedNames func(string) bool, compressor Compressor) ([]byte, int8) {
 	////////////
 	// VARIABLE INITIALIZATION
 	////////////
@@ -246,6 +467,9 @@ func (m *metrics) appendTo(b []byte, useDeltaSums bool) []byte {
 		if vi64 == 0 && vf64 == 0 || vi64 != 0 && vf64 != 0 {
 			return
 		}
+		if !allowedNames(name) {
+			return
+		}
 		*metrics = append(*metrics, otelMetric{
 			name: name,
 			gauge: otelGauge{
@@ -261,6 +485,9 @@ func (m *metrics) appendTo(b []byte, useDeltaSums bool) []byte {
 	}
 	appendSum := func(name string, tot, lastTot int64, attrs map[string]any) {
 		if tot-lastTot == 0 {
+			return
+		}
+		if !allowedNames(name) {
 			return
 		}
 		if useDeltaSums {
@@ -353,6 +580,7 @@ func (m *metrics) appendTo(b []byte, useDeltaSums bool) []byte {
 	}
 	m.mu.Unlock()
 
+	userAt := len(*metrics)
 	if m.cl.cfg.userMetrics != nil {
 		var userSkipped []string
 		last := m.userSumLast
@@ -389,7 +617,23 @@ func (m *metrics) appendTo(b []byte, useDeltaSums bool) []byte {
 	// SERIALIZING - finally append metricsData to b
 	////////////
 
-	return metricsData.appendTo(nil)
+	serialized, codec := metricsData.appendTo(nil), CodecNone
+	if compressor != nil {
+		serialized, codec = compressor.Compress(new(bytes.Buffer), serialized)
+	}
+
+	if len(serialized) > int(maxBytes) && userAt < len(*metrics) {
+		m.cl.cfg.logger.Log(LogLevelWarn, "adding user metrics results in a too-large payload; dropping user metrics and serializing only standard client metrics",
+			"max_bytes", maxBytes,
+			"serialized_bytes_with_user", len(serialized),
+		)
+		*metrics = (*metrics)[:userAt]
+		serialized, codec = metricsData.appendTo(nil), CodecNone
+		if compressor != nil {
+			serialized, codec = compressor.Compress(new(bytes.Buffer), serialized)
+		}
+	}
+	return serialized, int8(codec)
 }
 
 // The types below are encoded in protobuf format; canonical
