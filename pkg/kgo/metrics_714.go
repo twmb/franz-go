@@ -275,19 +275,16 @@ type (
 	// metricTime reports average latency, max latency, and total latency.
 	// The unit is in milliseconds.
 	metricTime struct {
-		sum     atomic.Int64 // With separate aggDur field, avg = sum/aggDur at rollup.
-		max     atomic.Int64 // Max latency seen during this window.
-		tot     atomic.Int64 // Total sum of all latencies seen over all time (only encoded if name has a .WITH_TOTAL suffix)
-		lastTot int64
-	}
-
-	metricGauge struct {
-		v atomic.Int64
+		sum atomic.Int64 // With separate aggDur field, avg = sum/aggDur at rollup.
+		max atomic.Int64 // Max latency seen during this window.
 	}
 
 	// We skip:
-	// * producer.record.queue.time.{avg,max} : medium signal; requires more wiring in the producer
-	// * consumer.poll.idle.ratio.avg         : less relevant in this client
+	// * producer.record.queue.time.{avg,max}     : medium signal; requires more wiring in the producer
+	// * consumer.poll.idle.ratio.avg             : less relevant in this client
+	// * consumer.coordinator.rebalance.latency   : underspecified: should this just track leader rebalance time? or from when we notice rebalance in progress to the next ok heartbeat? or..?
+	// * consumer.fetch.manager.fetch.latency     : seems to duplicate consumer.node.request.latency ??
+	// * consumer.coordinator.assigned.partitions : honestly just tedious to work in given incremental changes from cooperative rebalancing; open to being convinced to add this
 	metrics struct {
 		cl *Client
 
@@ -301,12 +298,9 @@ type (
 		pReqLatency   map[int32]*metricTime
 		pThrottle     metricTime
 
-		cConnCreation       metricRate
-		cReqLatency         map[int32]*metricTime
-		cCommitLatency      metricTime
-		cRebalanceLatency   metricTime
-		cFetchLatency       metricTime
-		cAssignedPartitions metricGauge
+		cConnCreation  metricRate
+		cReqLatency    map[int32]*metricTime
+		cCommitLatency metricTime
 
 		initNano     int64
 		lastPushNano int64
@@ -355,7 +349,6 @@ func (t *metricRate) rollNums() (rate float64, tot, lastTot int64) {
 // triggerFirstObserve is always called.
 func (t *metricTime) observe(millis int64) {
 	t.sum.Add(millis)
-	t.tot.Add(millis)
 	for {
 		max := t.max.Load()
 		if millis < max {
@@ -367,15 +360,11 @@ func (t *metricTime) observe(millis int64) {
 	}
 }
 
-func (t *metricTime) rollNums(aggDur time.Duration) (avg float64, max, tot, lastTot int64) {
+func (t *metricTime) rollNums(aggDur time.Duration) (avg float64, max int64) {
 	sum := t.sum.Swap(0)
 	max = t.max.Swap(0)
-	lastTot = t.lastTot
-	tot = t.tot.Load()
-	t.lastTot = tot
-
 	avg = safeDiv(float64(sum), float64(aggDur.Milliseconds()))
-	return avg, max, tot, lastTot
+	return avg, max
 }
 
 func (m *metrics) triggerFirstObserve() {
@@ -394,7 +383,7 @@ func (m *metrics) observeTime(field *metricTime, millis int64) {
 	field.observe(millis)
 }
 
-func (m *metrics) observeNodeLatency(node int32, field *map[int32]*metricTime, millis int64) {
+func (m *metrics) observeNodeTime(node int32, field *map[int32]*metricTime, millis int64) {
 	m.triggerFirstObserve()
 	if m.unsupported.Load() {
 		return
@@ -534,9 +523,6 @@ func (m *metrics) appendTo(b []byte, useDeltaSums bool, maxBytes int32, allowedN
 		{"consumer.connection.creation", &m.cConnCreation},
 		{"consumer.node.request.latency", &m.cReqLatency},
 		{"consumer.coordinator.commit.latency", &m.cCommitLatency},
-		{"consumer.coordinator.rebalance.latency.WITH_TOTAL", &m.cRebalanceLatency},
-		{"consumer.fetch.manager.fetch.latency", &m.cFetchLatency},
-		{"consumer.coordinator.assigned.partitions", &m.cAssignedPartitions},
 	} {
 		switch t := s.v.(type) {
 		case *metricRate:
@@ -545,20 +531,13 @@ func (m *metrics) appendTo(b []byte, useDeltaSums bool, maxBytes int32, allowedN
 			appendSum(s.name+".total", tot, lastTot, nil)
 
 		case *metricTime:
-			// One metric in particular includes a `.total`
-			// measurement of latency. We special case this with a
-			// .WITH_TOTAL suffix on the name.
-			name, includeTotal := strings.CutSuffix(s.name, ".WITH_TOTAL")
-			avg, max, tot, lastTot := t.rollNums(aggDur)
-			appendGauge(name+".avg", 0, avg, nil)
-			appendGauge(name+".max", max, 0, nil)
-			if includeTotal {
-				appendSum(name+".total", tot, lastTot, nil)
-			}
+			avg, max := t.rollNums(aggDur)
+			appendGauge(s.name+".avg", 0, avg, nil)
+			appendGauge(s.name+".max", max, 0, nil)
 
 		case map[int32]*metricTime:
 			for broker, m := range t {
-				avg, max, _, _ := m.rollNums(aggDur)
+				avg, max := m.rollNums(aggDur)
 				attrs := map[string]any{"node_id": broker}
 				appendGauge(s.name+".avg", 0, avg, attrs)
 				appendGauge(s.name+".max", max, 0, attrs)
@@ -569,9 +548,6 @@ func (m *metrics) appendTo(b []byte, useDeltaSums bool, maxBytes int32, allowedN
 					delete(t, broker)
 				}
 			}
-
-		case *metricGauge:
-			appendGauge(s.name, t.v.Load(), 0, nil)
 
 		default:
 			m.mu.Unlock()

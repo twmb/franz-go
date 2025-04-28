@@ -2903,11 +2903,13 @@ func (g *groupConsumer) commit(
 			}
 		}
 
+		start := time.Now()
 		resp, err := req.RequestWith(commitCtx, g.cl)
 		if err != nil {
 			onDone(g.cl, req, nil, err)
 			return
 		}
+		g.cl.metrics.observeTime(&g.cl.metrics.cCommitLatency, time.Since(start).Milliseconds())
 		g.updateCommitted(req, resp)
 		onDone(g.cl, req, resp, nil)
 	}()
