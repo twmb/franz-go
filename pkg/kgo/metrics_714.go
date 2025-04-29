@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"math"
 	"math/rand"
 	"strings"
@@ -67,7 +68,9 @@ func (cl *Client) pushMetrics() {
 		// If there are no requested metrics, we wait the push interval
 		// and re-get.
 		if len(gresp.RequestedMetrics) == 0 {
-			after := time.NewTimer(time.Duration(gresp.PushIntervalMillis) * time.Millisecond)
+			wait := time.Duration(gresp.PushIntervalMillis) * time.Millisecond
+			cl.cfg.logger.Log(LogLevelInfo, "no metrics requested, sleeping and asking again later", "sleep", wait)
+			after := time.NewTimer(wait)
 			select {
 			case <-cl.ctx.Done():
 				terminating = true
@@ -75,6 +78,12 @@ func (cl *Client) pushMetrics() {
 			}
 			continue
 		}
+		cl.cfg.logger.Log(LogLevelInfo, "received client metrics subscription, beginning periodic send loop",
+			"client_instance_id", fmt.Sprintf("%x", gresp.ClientInstanceID),
+			"subscription_id", gresp.SubscriptionID,
+			"push_interval", time.Duration(gresp.PushIntervalMillis)*time.Millisecond,
+			"requested_metrics", gresp.RequestedMetrics,
+		)
 
 		var codecs []CompressionCodec
 		for _, accepted := range gresp.AcceptedCompressionTypes {
@@ -126,7 +135,7 @@ func (cl *Client) pushMetrics() {
 			preq.ClientInstanceID = clientInstanceID
 			preq.SubscriptionID = gresp.SubscriptionID
 			preq.Terminating = terminating
-			serialized, compression := m.appendTo(nil, gresp.DeltaTemporality, gresp.TelemetryMaxBytes, allowedNames, compressor)
+			serialized, compression, nmetrics := m.appendTo(nil, gresp.DeltaTemporality, gresp.TelemetryMaxBytes, allowedNames, compressor)
 			if len(serialized) > int(gresp.TelemetryMaxBytes) {
 				cl.cfg.logger.Log(LogLevelWarn, "serialized metrics are larger than the broker provided max limit, sending anyway and hoping for the best",
 					"max_bytes", gresp.TelemetryMaxBytes,
@@ -135,6 +144,8 @@ func (cl *Client) pushMetrics() {
 			}
 			preq.CompressionType = compression
 			preq.Metrics = serialized
+
+			cl.cfg.logger.Log(LogLevelInfo, "sending client metrics to broker", "num_metrics", nmetrics)
 
 			// Send our request, pinning to the broker we get a response
 			// from or using the pinned broker if possible.
@@ -416,7 +427,7 @@ func (m *metrics) observeNodeTime(node int32, field *map[int32]*metricTime, mill
 	t.observe(millis)
 }
 
-func (m *metrics) appendTo(b []byte, useDeltaSums bool, maxBytes int32, allowedNames func(string) bool, compressor Compressor) ([]byte, int8) {
+func (m *metrics) appendTo(b []byte, useDeltaSums bool, maxBytes int32, allowedNames func(string) bool, compressor Compressor) ([]byte, int8, int) {
 	////////////
 	// VARIABLE INITIALIZATION
 	////////////
@@ -621,7 +632,7 @@ func (m *metrics) appendTo(b []byte, useDeltaSums bool, maxBytes int32, allowedN
 			serialized, codec = compressor.Compress(new(bytes.Buffer), serialized)
 		}
 	}
-	return serialized, int8(codec)
+	return serialized, int8(codec), len(*metrics)
 }
 
 // The types below are encoded in protobuf format; canonical
