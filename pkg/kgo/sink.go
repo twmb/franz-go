@@ -2313,7 +2313,7 @@ func (b seqRecBatch) appendTo(
 		defer byteBuffers.Put(w)
 		w.Reset()
 
-		compressed, codec := compressor.Compress(w, toCompress, version)
+		compressed, codec := compressor.Compress(w, toCompress, mkCompressFlags(version)...)
 		if compressed != nil && // nil would be from an error
 			len(compressed) < len(toCompress) {
 			// our compressed was shorter: copy over
@@ -2395,7 +2395,7 @@ func (b seqRecBatch) appendToAsMessageSet(dst []byte, version uint8, compressor 
 		defer byteBuffers.Put(w)
 		w.Reset()
 
-		compressed, codec := compressor.Compress(w, toCompress, int16(version))
+		compressed, codec := compressor.Compress(w, toCompress, mkCompressFlags(int16(version))...)
 		inner := &Record{Value: compressed}
 		wrappedLength := messageSet0Length(inner)
 		if version == 2 {

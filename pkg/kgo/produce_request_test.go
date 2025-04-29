@@ -388,7 +388,7 @@ func TestRecBatchAppendTo(t *testing.T) {
 		kbatch.Attributes |= 0x0002 // snappy
 		w := byteBuffers.Get().(*bytes.Buffer)
 		w.Reset()
-		kbatch.Records, _ = compressor.Compress(w, kbatch.Records, version)
+		kbatch.Records, _ = compressor.Compress(w, kbatch.Records)
 	}
 
 	fixFields()

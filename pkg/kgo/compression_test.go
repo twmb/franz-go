@@ -79,11 +79,11 @@ func TestCompressDecompress(t *testing.T) {
 	}
 
 	var wg sync.WaitGroup
-	for _, produceVersion := range []int16{
-		0, 7,
+	for _, flag := range []CompressFlag{
+		0, CompressDisableZstd,
 	} {
 		wg.Add(1)
-		go func(produceVersion int16) {
+		go func(flag CompressFlag) {
 			defer wg.Done()
 			for _, codecs := range [][]CompressionCodec{
 				{{codec: 0}},
@@ -109,7 +109,7 @@ func TestCompressDecompress(t *testing.T) {
 						for _, in := range inputs {
 							w.Reset()
 
-							got, used := c.Compress(w, in, produceVersion)
+							got, used := c.Compress(w, in, flag)
 							got, err := d.Decompress(got, used)
 							if err != nil {
 								t.Errorf("unexpected decompress err: %v", err)
@@ -122,7 +122,7 @@ func TestCompressDecompress(t *testing.T) {
 					}()
 				}
 			}
-		}(produceVersion)
+		}(flag)
 	}
 	wg.Wait()
 }
