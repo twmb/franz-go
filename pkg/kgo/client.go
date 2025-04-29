@@ -428,6 +428,9 @@ func (cl *Client) OptValues(opt any) []any {
 		return []any{cfg.requireStable}
 	case namefn(SessionTimeout):
 		return []any{cfg.sessionTimeout}
+	case namefn(DisableNextGenRebalancer):
+		return []any{cfg.disableNextGenBalancer}
+
 	default:
 		return nil
 	}

@@ -16,6 +16,9 @@ import (
 )
 
 func (g *groupConsumer) should848() bool {
+	if g.cl.cfg.disableNextGenBalancer {
+		return false
+	}
 	// We pin to v1, introduced in Kafka 4, which fully stabilizes KIP-848.
 	if !g.cl.supportsKIP848v1() {
 		return false

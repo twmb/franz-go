@@ -198,6 +198,8 @@ type cfg struct {
 	autocommitMarks    bool
 	autocommitInterval time.Duration
 	commitCallback     func(*Client, *kmsg.OffsetCommitRequest, *kmsg.OffsetCommitResponse, error)
+
+	disableNextGenBalancer bool
 }
 
 func (cfg *cfg) validate() error {
@@ -1923,4 +1925,19 @@ func AutoCommitCallback(fn func(*Client, *kmsg.OffsetCommitRequest, *kmsg.Offset
 			cfg.commitCallback, cfg.setCommitCallback = fn, true
 		}
 	}}
+}
+
+// DisableNextGenRebalancer opts out of the "next gen" rebalancer that is
+// the default as of Kafka 4.0+. The client opts in to the next gen rebalancer
+// automatically if the broker supports it AND if you are using either the
+// [RangeBalancer] or [StickyBalancer] or [CooperativeStickyBalancer]. If you
+// use your own rebalancer or use the [RoundRobinBalancer] or are talking to
+// a broker that does not support the next gen balancer, the client uses the
+// old client-driven group balancing behavior.
+//
+// You may want to use this function if you notice a regression or run into
+// a broker or client bug, or if you prefer the performance of the old
+// client driven rebalancers.
+func DisableNextGenRebalancer() GroupOpt {
+	return groupOpt{func(cfg *cfg) { cfg.disableNextGenBalancer = true }}
 }
