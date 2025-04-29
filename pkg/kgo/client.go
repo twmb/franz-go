@@ -259,6 +259,8 @@ func (cl *Client) OptValues(opt any) []any {
 		return []any{cfg.dialTLS}
 	case namefn(DialTLS):
 		return []any{cfg.dialTLS != nil}
+	case namefn(DialTimeout):
+		return []any{cfg.dialTimeout}
 	case namefn(SeedBrokers):
 		return []any{cfg.seedBrokers}
 	case namefn(MaxVersions):
@@ -295,6 +297,12 @@ func (cl *Client) OptValues(opt any) []any {
 		return []any{cfg.missingTopicDelete}
 	case namefn(OnRebootstrapRequired):
 		return []any{cfg.onRebootstrapRequired}
+	case namefn(WithContext):
+		return []any{cfg.ctx}
+	case namefn(DisableClientMetrics):
+		return []any{cfg.disableClientMetrics}
+	case namefn(UserMetricsFn):
+		return []any{cfg.userMetrics}
 
 	case namefn(DefaultProduceTopic):
 		return []any{cfg.defaultProduceTopic}
@@ -420,8 +428,6 @@ func (cl *Client) OptValues(opt any) []any {
 		return []any{cfg.requireStable}
 	case namefn(SessionTimeout):
 		return []any{cfg.sessionTimeout}
-	case namefn(WithContext):
-		return []any{cfg.ctx}
 	default:
 		return nil
 	}
