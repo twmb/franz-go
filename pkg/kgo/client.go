@@ -588,14 +588,14 @@ func (cl *Client) loadSeeds() []*broker {
 	return cl.seeds.Load().([]*broker)
 }
 
-// Ping returns whether any broker is reachable, iterating over any discovered
-// broker or seed broker until one returns a successful response to an
-// ApiVersions request. No discovered broker nor seed broker is attempted more
-// than once. If all requests fail, this returns final error.
+// Ping returns whether any broker is reachable and that the client can
+// communicate with it, iterating over any discovered broker or seed broker
+// until one returns a successful response to a broker-only Metadata request.
+// No discovered broker nor seed broker is attempted more than once. If all
+// requests fail, this returns final error.
 func (cl *Client) Ping(ctx context.Context) error {
-	req := kmsg.NewPtrApiVersionsRequest()
-	req.ClientSoftwareName = cl.cfg.softwareName
-	req.ClientSoftwareVersion = cl.cfg.softwareVersion
+	req := kmsg.NewPtrMetadataRequest()
+	req.Topics = []kmsg.MetadataRequestTopic{}
 
 	cl.brokersMu.RLock()
 	brokers := append([]*broker(nil), cl.brokers...)
@@ -607,8 +607,9 @@ func (cl *Client) Ping(ctx context.Context) error {
 		cl.loadSeeds(),
 	} {
 		for _, br := range brs {
-			_, err := br.waitResp(ctx, req)
+			resp, err := br.waitResp(ctx, req)
 			if lastErr = err; lastErr == nil {
+				cl.updateMetadataBrokers(resp.(*kmsg.MetadataResponse))
 				return nil
 			}
 		}
@@ -930,7 +931,9 @@ func (cl *Client) fetchBrokerMetadata(ctx context.Context) error {
 		close(wait.done)
 	}()
 
-	_, _, wait.err = cl.fetchMetadata(ctx, kmsg.NewPtrMetadataRequest(), true, nil)
+	req := kmsg.NewPtrMetadataRequest()
+	req.Topics = []kmsg.MetadataRequestTopic{}
+	_, _, wait.err = cl.fetchMetadata(ctx, req, true, nil)
 	return wait.err
 }
 
@@ -983,18 +986,22 @@ start:
 				}
 			}
 		}
-		cl.controllerIDMu.Lock()
-		if meta.ControllerID >= 0 {
-			cl.controllerID = meta.ControllerID
-		}
-		cl.clusterID = meta.ClusterID
-		cl.controllerIDMu.Unlock()
-		cl.updateBrokers(meta.Brokers)
+		cl.updateMetadataBrokers(meta)
 
 		// Cache the mapped metadata, and potentially store each topic in the results.
 		cl.storeCachedMappedMetadata(meta, intoMapped)
 	}
 	return r.last, meta, err
+}
+
+func (cl *Client) updateMetadataBrokers(resp *kmsg.MetadataResponse) {
+	cl.controllerIDMu.Lock()
+	if resp.ControllerID >= 0 {
+		cl.controllerID = resp.ControllerID
+	}
+	cl.clusterID = resp.ClusterID
+	cl.controllerIDMu.Unlock()
+	cl.updateBrokers(resp.Brokers)
 }
 
 // updateBrokers is called with the broker portion of every metadata response.
