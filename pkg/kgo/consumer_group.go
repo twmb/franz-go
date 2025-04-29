@@ -1673,7 +1673,7 @@ start:
 				offset.epoch = rPartition.LeaderEpoch
 			}
 			if rPartition.Offset == -1 {
-				offset = g.cfg.resetOffset
+				offset = g.cfg.startOffset
 			}
 			topicOffsets[rPartition.Partition] = offset
 		}
