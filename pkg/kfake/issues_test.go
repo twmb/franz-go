@@ -3,6 +3,7 @@ package kfake
 import (
 	"context"
 	"strconv"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -89,7 +90,6 @@ func TestIssue885(t *testing.T) {
 		if req.Version < 11 {
 			t.Fatal("unable to run test with fetch requests < v11")
 		}
-
 		if len(req.Topics) != 1 || len(req.Topics[0].Partitions) != 1 {
 			t.Fatalf("unexpected malformed req topics or partitions: %v", req)
 		}
@@ -157,4 +157,196 @@ func TestIssue885(t *testing.T) {
 		}
 		consumed += fs.NumRecords()
 	}
+}
+
+func TestIssue905(t *testing.T) {
+	const (
+		testTopic        = "foo"
+		producedMessages = 5
+	)
+
+	c, err := NewCluster(
+		NumBrokers(2),
+		SleepOutOfOrder(),
+		SeedTopics(1, testTopic),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	// Flow:
+	//
+	// * Leader always returns the follower
+	//
+	// * We produce 5 separate batches just to have some data
+	//
+	// END SETUP STAGE.
+	//
+	// TEST
+	//
+	// * We set recheck period to 1s
+	// * We fetch -- leader should be hit once, then follower
+	// * We sleep >1s before polling again. Follower should be hit a second time (buffering a fetch), then redirect to leader, then follower.
+	//
+	// If we do not redirect back to follower within 2s, consider failure.
+
+	// Inline anonymous function so that we can defer and cleanup within scope.
+	func() {
+		cl, err := kgo.NewClient(
+			kgo.DefaultProduceTopic(testTopic),
+			kgo.SeedBrokers(c.ListenAddrs()...),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer cl.Close()
+
+		for i := 0; i < producedMessages; i++ {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			err := cl.ProduceSync(ctx, kgo.StringRecord(strconv.Itoa(i))).FirstErr()
+			cancel()
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+	}()
+
+	ti := c.TopicInfo(testTopic)
+	pi := c.PartitionInfo(testTopic, 0)
+	follower := (pi.Leader + 1) % 2
+	c.SetFollowers(testTopic, 0, []int32{follower})
+
+	var leaderReqs, followerReqs atomic.Int32
+	allowFollower := make(chan struct{}, 1)
+	c.ControlKey(1, func(kreq kmsg.Request) (kmsg.Response, error, bool) {
+		c.KeepControl()
+
+		req := kreq.(*kmsg.FetchRequest)
+		if req.Version < 11 {
+			t.Fatal("unable to run test with fetch requests < v11")
+		}
+		if len(req.Topics) != 1 || len(req.Topics[0].Partitions) != 1 {
+			t.Fatalf("unexpected malformed req topics or partitions: %v", req)
+		}
+
+		req.MaxBytes = 1 // Always ensure only one batch is returned
+
+		// Every leader request we redirect back to the follower.
+		if c.CurrentNode() == pi.Leader {
+			leaderReqs.Add(1)
+
+			resp := req.ResponseKind().(*kmsg.FetchResponse)
+			rt := kmsg.NewFetchResponseTopic()
+			rt.Topic = testTopic
+			rt.TopicID = ti.TopicID
+			rp := kmsg.NewFetchResponseTopicPartition()
+
+			resp.Topics = append(resp.Topics, rt)
+			rtp := &resp.Topics[0]
+
+			rtp.Partitions = append(rtp.Partitions, rp)
+			rpp := &rtp.Partitions[0]
+
+			rpp.Partition = 0
+			rpp.ErrorCode = 0
+			rpp.HighWatermark = pi.HighWatermark
+			rpp.LastStableOffset = pi.LastStableOffset
+			rpp.LogStartOffset = 0
+
+			rpp.PreferredReadReplica = (pi.Leader + 1) % 2
+			return resp, nil, true
+		}
+
+		<-allowFollower
+		followerReqs.Add(1)
+
+		return nil, nil, false
+	})
+
+	cl, err := kgo.NewClient(
+		kgo.SeedBrokers(c.ListenAddrs()...),
+		kgo.ConsumeTopics(testTopic),
+		kgo.Rack("foo"),
+		kgo.DisableFetchSessions(),
+		kgo.RecheckPreferredReplicaInterval(time.Second),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cl.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	chkfs := func(fs kgo.Fetches) {
+		if fs.NumRecords() != 1 {
+			t.Errorf("got %d records != exp 1", fs.NumRecords())
+		}
+		if len(fs.Errors()) != 0 {
+			t.Errorf("got fetch errors: %v", fs.Errors())
+		}
+	}
+
+	// First poll. Standard; triggers us to fetch from the follower.
+	// We guard if the broker can reply to ensure our followerReqs
+	// check does not race against a client internally buffering
+	// another fetch quickly.
+	{
+		allowFollower <- struct{}{}
+		fs := cl.PollFetches(ctx)
+		chkfs(fs)
+		if lr := leaderReqs.Load(); lr != 1 {
+			t.Errorf("stage 1 leader reqs %d != exp 1", lr)
+		}
+		if fr := followerReqs.Load(); fr != 1 {
+			t.Errorf("stage 1 follower reqs reqs %d != exp 1", fr)
+		}
+		allowFollower <- struct{}{} // allow a background buffered fetch
+	}
+
+	// Sleep 1s. We are now polling a buffered fetch from the follower.
+	time.Sleep(time.Second)
+	for followerReqs.Load() != 2 {
+		time.Sleep(50 * time.Millisecond)
+	}
+	{
+		fs := cl.PollFetches(ctx)
+		chkfs(fs)
+		if lr := leaderReqs.Load(); lr != 1 {
+			t.Errorf("stage 2 leader reqs %d != exp 1", lr)
+		}
+		if fr := followerReqs.Load(); fr != 2 {
+			t.Errorf("stage 2 follower reqs reqs %d != exp 2", fr)
+		}
+		allowFollower <- struct{}{} // again allow a background buffered fetch; this one will notice we need to redir back to follower
+	}
+
+	// Poll again. This is buffered, and the NEXT one should go back
+	// to the leader again.
+	{
+		fs := cl.PollFetches(ctx)
+		chkfs(fs)
+		if lr := leaderReqs.Load(); lr != 1 {
+			t.Errorf("stage 3 leader reqs %d != exp 1", lr)
+		}
+		if fr := followerReqs.Load(); fr != 3 {
+			t.Errorf("stage 3 follower reqs reqs %d != exp 3", fr)
+		}
+		close(allowFollower) // allow all reqs; the next check is our last
+	}
+
+	// We now expect leader finally before the follower again.
+	{
+		fs := cl.PollFetches(ctx)
+		chkfs(fs)
+		if lr := leaderReqs.Load(); lr != 2 {
+			t.Errorf("stage 4 leader reqs %d != exp 2", lr)
+		}
+		if fr := followerReqs.Load(); fr != 4 {
+			t.Errorf("stage 4 follower reqs reqs %d != exp 4", fr)
+		}
+	}
+
+	// Success.
 }
