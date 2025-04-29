@@ -1536,8 +1536,7 @@ func (cl *Client) shardedRequest(ctx context.Context, req kmsg.Request) ([]Respo
 		return shards(cl.handleAdminReq(ctx, t)), nil
 
 	case kmsg.GroupCoordinatorRequest,
-		kmsg.TxnCoordinatorRequest,
-		*kmsg.ConsumerGroupHeartbeatRequest:
+		kmsg.TxnCoordinatorRequest:
 		return shards(cl.handleCoordinatorReq(ctx, t)), nil
 
 	case *kmsg.ApiVersionsRequest:
