@@ -545,7 +545,7 @@ func (g *groupConsumer) leave(ctx context.Context) {
 		// member ID, there's nothing we can do.
 		memberID := g.memberGen.memberID()
 		if memberID == "" {
-			g.cfg.logger.Log(LogLevelInfo, "tried to leave group but we have no member ID yet, returning early", g.cfg.group)
+			g.cfg.logger.Log(LogLevelInfo, "tried to leave group but we have no member ID yet, returning early", "group", g.cfg.group)
 			return
 		}
 
