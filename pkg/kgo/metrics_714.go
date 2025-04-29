@@ -64,6 +64,18 @@ func (cl *Client) pushMetrics() {
 
 		clientInstanceID = gresp.ClientInstanceID
 
+		// If there are no requested metrics, we wait the push interval
+		// and re-get.
+		if len(gresp.RequestedMetrics) == 0 {
+			after := time.NewTimer(time.Duration(gresp.PushIntervalMillis) * time.Millisecond)
+			select {
+			case <-cl.ctx.Done():
+				terminating = true
+			case <-after.C:
+			}
+			continue
+		}
+
 		var codecs []CompressionCodec
 		for _, accepted := range gresp.AcceptedCompressionTypes {
 			switch CompressionCodecType(accepted) {

@@ -532,6 +532,7 @@ func NewClient(opts ...Opt) (*Client, error) {
 	cl.producer.init(cl)
 	cl.consumer.init(cl)
 	cl.metawait.init()
+	cl.metrics.init(cl)
 
 	if cfg.id != nil {
 		cl.reqFormatter = kmsg.NewRequestFormatter(kmsg.FormatterClientID(*cfg.id))

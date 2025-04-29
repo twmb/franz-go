@@ -2903,13 +2903,30 @@ func (g *groupConsumer) commit(
 			}
 		}
 
+		var tries int
+	issue:
 		start := time.Now()
 		resp, err := req.RequestWith(commitCtx, g.cl)
+		tries++
 		if err != nil {
 			onDone(g.cl, req, nil, err)
 			return
 		}
 		g.cl.metrics.observeTime(&g.cl.metrics.cCommitLatency, time.Since(start).Milliseconds())
+
+		// With next gen consumer groups, it is possible for the group
+		// to rebalance again immediately after we discover we need to
+		// revoke. We try up to 3x reloading and resending.
+		if len(resp.Topics) > 0 && len(resp.Topics[0].Partitions) > 0 {
+			ec := resp.Topics[0].Partitions[0].ErrorCode
+			if kerr.ErrorForCode(ec) == kerr.StaleMemberEpoch && tries < 3 {
+				memberID, generation := g.memberGen.load()
+				req.Generation = generation
+				req.MemberID = memberID
+				goto issue
+			}
+		}
+
 		g.updateCommitted(req, resp)
 		onDone(g.cl, req, resp, nil)
 	}()
