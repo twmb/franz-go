@@ -279,7 +279,7 @@ generation.
 | [KIP-35](https://cwiki.apache.org/confluence/display/KAFKA/KIP-35+-+Retrieving+protocol+version) — ApiVersion | 0.10.0 | Supported |
 | [KIP-40](https://cwiki.apache.org/confluence/display/KAFKA/KIP-40%3A+ListGroups+and+DescribeGroup) — ListGroups and DescribeGroups | 0.9.0 | Supported |
 | [KIP-41](https://cwiki.apache.org/confluence/display/KAFKA/KIP-41%3A+KafkaConsumer+Max+Records) — max.poll.records | 0.10.0 | Supported (via PollRecords) |
-| [KIP-42](https://cwiki.apache.org/confluence/display/KAFKA/KIP-42%3A+Add+Producer+and+Consumer+Interceptors) — Producer & consumer interceptors | 0.10.0 | Partial support (hooks) |
+| [KIP-42](https://cwiki.apache.org/confluence/display/KAFKA/KIP-42%3A+Add+Producer+and+Consumer+Interceptors) — Producer & consumer interceptors | 0.10.0 | Supported via hooks |
 | [KIP-43](https://cwiki.apache.org/confluence/display/KAFKA/KIP-43%3A+Kafka+SASL+enhancements) — SASL PLAIN & handshake | 0.10.0 | Supported |
 | [KIP-48](https://cwiki.apache.org/confluence/display/KAFKA/KIP-48+Delegation+token+support+for+Kafka) — Delegation tokens | 1.1 | Supported |
 | [KIP-54](https://cwiki.apache.org/confluence/display/KAFKA/KIP-54+-+Sticky+Partition+Assignment+Strategy) — Sticky partitioning | 0.11.0 | Supported |
@@ -289,7 +289,7 @@ generation.
 | [KIP-74](https://cwiki.apache.org/confluence/display/KAFKA/KIP-74%3A+Add+Fetch+Response+Size+Limit+in+Bytes) — Fetch response size limits | 0.10.1 | Supported |
 | [KIP-78](https://cwiki.apache.org/confluence/display/KAFKA/KIP-78%3A+Cluster+Id) — ClusterID in Metadata | 0.10.1 | Supported |
 | [KIP-79](https://cwiki.apache.org/confluence/pages/viewpage.action?pageId=65868090) — List offsets for times | 0.10.1 | Supported |
-| [KIP-81](https://cwiki.apache.org/confluence/display/KAFKA/KIP-81%3A+Bound+Fetch+memory+usage+in+the+consumer) — Bound fetch memory usage | WIP | Supported (through a combo of options) |
+| [KIP-81](https://cwiki.apache.org/confluence/display/KAFKA/KIP-81%3A+Bound+Fetch+memory+usage+in+the+consumer) — Bound fetch memory usage | WIP | Supported (through options) |
 | [KIP-82](https://cwiki.apache.org/confluence/display/KAFKA/KIP-82+-+Add+Record+Headers) — Record headers | 0.11.0 | Supported |
 | [KIP-84](https://cwiki.apache.org/confluence/display/KAFKA/KIP-84%3A+Support+SASL+SCRAM+mechanisms) — SASL SCRAM | 0.10.2 | Supported |
 | [KIP-86](https://cwiki.apache.org/confluence/display/KAFKA/KIP-86%3A+Configurable+SASL+callback+handlers) — SASL Callbacks | 0.10.2 | Supported (through callback fns) |
@@ -304,7 +304,7 @@ generation.
 | [KIP-110](https://cwiki.apache.org/confluence/display/KAFKA/KIP-110%3A+Add+Codec+for+ZStandard+Compression) — zstd | 2.1 | Supported |
 | [KIP-112](https://cwiki.apache.org/confluence/display/KAFKA/KIP-112%3A+Handle+disk+failure+for+JBOD) — Broker request protocol changes | 1.0 | Supported |
 | [KIP-113](https://cwiki.apache.org/confluence/display/KAFKA/KIP-113%3A+Support+replicas+movement+between+log+directories) — LogDir requests | 1.0 | Supported |
-| [KIP-117](https://cwiki.apache.org/confluence/display/KAFKA/KIP-117%3A+Add+a+public+AdminClient+API+for+Kafka+admin+operations) — Admin client | 0.11.0 | Supported (via kmsg) |
+| [KIP-117](https://cwiki.apache.org/confluence/display/KAFKA/KIP-117%3A+Add+a+public+AdminClient+API+for+Kafka+admin+operations) — Admin client | 0.11.0 | Supported |
 | [KIP-124](https://cwiki.apache.org/confluence/display/KAFKA/KIP-124+-+Request+rate+quotas) — Request rate quotas | 0.11.0 | Supported |
 | [KIP-126](https://cwiki.apache.org/confluence/pages/viewpage.action?pageId=68715855) — Ensure proper batch size after compression | 0.11.0 | Supported (avoided entirely) |
 | [KIP-133](https://cwiki.apache.org/confluence/display/KAFKA/KIP-133%3A+Describe+and+Alter+Configs+Admin+APIs) — Describe & Alter configs | 0.11.0 | Supported |
@@ -362,7 +362,7 @@ generation.
 | [KIP-498](https://cwiki.apache.org/confluence/display/KAFKA/KIP-498%3A+Add+client-side+configuration+for+maximum+response+size+to+protect+against+OOM) — Max bound on reads | ? | Supported |
 | [KIP-511](https://cwiki.apache.org/confluence/display/KAFKA/KIP-511%3A+Collect+and+Expose+Client%27s+Name+and+Version+in+the+Brokers) — Client name/version in ApiVersions request | 2.4 | Supported |
 | [KIP-514](https://cwiki.apache.org/confluence/display/KAFKA/KIP-514%3A+Add+a+bounded+flush%28%29+API+to+Kafka+Producer) — Bounded Flush | 2.4 | Supported (via context) |
-| [KIP-516](https://cwiki.apache.org/confluence/display/KAFKA/KIP-516%3A+Topic+Identifiers) — Topic IDs | ??? | Supported as it is implemented |
+| [KIP-516](https://cwiki.apache.org/confluence/display/KAFKA/KIP-516%3A+Topic+Identifiers) — Topic IDs | 2.8 | Supported |
 | [KIP-518](https://cwiki.apache.org/confluence/display/KAFKA/KIP-518%3A+Allow+listing+consumer+groups+per+state) — List groups by state | 2.6 | Supported |
 | [KIP-519](https://cwiki.apache.org/confluence/pages/viewpage.action?pageId=128650952) — Configurable SSL "engine" | 2.6 | Supported (via dialer) |
 | [KIP-525](https://cwiki.apache.org/confluence/display/KAFKA/KIP-525+-+Return+topic+metadata+and+configs+in+CreateTopics+response) — CreateTopics v5 returns configs | 2.4 | Supported |
@@ -402,7 +402,7 @@ generation.
 | [KIP-827](https://cwiki.apache.org/confluence/display/KAFKA/KIP-827%3A+Expose+logdirs+total+and+usable+space+via+Kafka+API) — `DescribeLogDirs.{Total,Usable}Bytes` | 3.3 | Supported |
 | [KIP-836](https://cwiki.apache.org/confluence/display/KAFKA/KIP-836%3A+Addition+of+Information+in+DescribeQuorumResponse+about+Voter+Lag) — `DescribeQuorum` voter lag info | 3.3 | Supported |
 | [KIP-841](https://cwiki.apache.org/confluence/display/KAFKA/KIP-841%3A+Fenced+replicas+should+not+be+allowed+to+join+the+ISR+in+KRaft) — `AlterPartition.TopicID` | 3.3 | Supported |
-| [KIP-848](https://cwiki.apache.org/confluence/display/KAFKA/KIP-848%3A+The+Next+Generation+of+the+Consumer+Rebalance+Protocol) — Next gen consumer rebalance protocol | 3.7 | Unsupported (proto supported) |
+| [KIP-848](https://cwiki.apache.org/confluence/display/KAFKA/KIP-848%3A+The+Next+Generation+of+the+Consumer+Rebalance+Protocol) — Next gen consumer rebalance protocol | 3.7 | Supported |
 | [KIP-853](https://cwiki.apache.org/confluence/display/KAFKA/KIP-853%3A+KRaft+Controller+Membership+Changes) — Add replica directory ID for replica fetchers | 3.9 | Supported |
 | [KIP-858](https://cwiki.apache.org/confluence/display/KAFKA/KIP-858%3A+Handle+JBOD+broker+disk+failure+in+KRaft) — JBOD in KRaft (protocol) | 3.7 | Supported |
 | [KIP-866](https://cwiki.apache.org/confluence/display/KAFKA/KIP-866+ZooKeeper+to+KRaft+Migration) — ZK to Raft RPC changes | 3.4 | Supported |
@@ -415,11 +415,12 @@ generation.
 | [KIP-966](https://cwiki.apache.org/confluence/display/KAFKA/KIP-966%3A+Eligible+Leader+Replicas) — Eligible leader replicas (protocol) | 3.7 | Supported |
 | [KIP-994](https://cwiki.apache.org/confluence/display/KAFKA/KIP-994%3A+Minor+Enhancements+to+ListTransactions+and+DescribeTransactions+APIs) — List/Describe transactions enhancements | 3.8 (partial) | Supported |
 | [KIP-1000](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1000%3A+List+Client+Metrics+Configuration+Resources) — ListClientMetricsResources | 3.7 | Supported |
-| [KIP-1106](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1076%3A++Metrics+for+client+applications+KIP-714+extension) — User provided client metrics | 4.0 | Supported |
 | [KIP-1005](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1005%3A+Expose+EarliestLocalOffset+and+TieredOffset) — ListOffsets w. Timestamp -5 | 3.9 | Supported |
+| [KIP-1106](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1106%3A+Add+duration+based+offset+reset+option+for+consumer+clients) - Reset offset by duration | 4.0 | Skipped, unneeded |
 | [KIP-1043](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1043%3A+Administration+of+groups) — Administration of groups (protocol) | 4.0 | Supported |
 | [KIP-1073](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1073:+Return+fenced+brokers+in+DescribeCluster+response) — DescribeCluster.IsFenced | 4.0 | Supported |
 | [KIP-1075](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1075%3A+Introduce+delayed+remote+list+offsets+purgatory+to+make+LIST_OFFSETS+async) — TimeoutMillis on ListOffsets | 4.0 | Supported |
+| [KIP-1076](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1076%3A++Metrics+for+client+applications+KIP-714+extension) — User provided client metrics | 4.0 | Supported |
 | [KIP-1102](https://cwiki.apache.org/confluence/display/KAFKA/KIP-1102%3A+Enable+clients+to+rebootstrap+based+on+timeout+or+error+code) — RebootstrapRequired | 4.0 | Supported |
 
 Missing from above but included in librdkafka is:

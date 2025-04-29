@@ -350,6 +350,8 @@ func (cl *Client) OptValues(opt any) []any {
 		return []any{cfg.decompressor}
 	case namefn(ConsumeRegex):
 		return []any{cfg.regex}
+	case namefn(ConsumeStartOffset):
+		return []any{cfg.startOffset}
 	case namefn(ConsumeResetOffset):
 		return []any{cfg.resetOffset}
 	case namefn(ConsumeTopics):
@@ -478,6 +480,12 @@ func NewClient(opts ...Opt) (*Client, error) {
 			}
 		}
 	}
+
+	if cfg.setResetOffset && !cfg.setStartOffset {
+		cfg.startOffset = cfg.resetOffset
+	} else if cfg.setStartOffset && !cfg.setResetOffset {
+		cfg.resetOffset = cfg.startOffset
+	} // else they are both set (keep) or both unset (defaults)
 
 	ctx := context.Background()
 
