@@ -81,6 +81,8 @@ func (cl *Client) pushMetrics() {
 		cl.cfg.logger.Log(LogLevelInfo, "received client metrics subscription, beginning periodic send loop",
 			"client_instance_id", fmt.Sprintf("%x", gresp.ClientInstanceID),
 			"subscription_id", gresp.SubscriptionID,
+			"accepteded_compression_types", gresp.AcceptedCompressionTypes,
+			"telemetry_max_bytes", gresp.TelemetryMaxBytes,
 			"push_interval", time.Duration(gresp.PushIntervalMillis)*time.Millisecond,
 			"requested_metrics", gresp.RequestedMetrics,
 		)
@@ -145,7 +147,7 @@ func (cl *Client) pushMetrics() {
 			preq.CompressionType = compression
 			preq.Metrics = serialized
 
-			cl.cfg.logger.Log(LogLevelInfo, "sending client metrics to broker", "num_metrics", nmetrics)
+			cl.cfg.logger.Log(LogLevelDebug, "sending client metrics to broker", "num_metrics", nmetrics)
 
 			// Send our request, pinning to the broker we get a response
 			// from or using the pinned broker if possible.
@@ -540,12 +542,12 @@ func (m *metrics) appendTo(b []byte, useDeltaSums bool, maxBytes int32, allowedN
 		name string
 		v    any
 	}{
-		{"producer.connection.creation", &m.pConnCreation},
-		{"producer.node.request.latency", &m.pReqLatency},
-		{"producer.produce.throttle.time", &m.pThrottle},
-		{"consumer.connection.creation", &m.cConnCreation},
-		{"consumer.node.request.latency", &m.cReqLatency},
-		{"consumer.coordinator.commit.latency", &m.cCommitLatency},
+		{"org.apache.kafka.producer.connection.creation", &m.pConnCreation},
+		{"org.apache.kafka.producer.node.request.latency", &m.pReqLatency},
+		{"org.apache.kafka.producer.produce.throttle.time", &m.pThrottle},
+		{"org.apache.kafka.consumer.connection.creation", &m.cConnCreation},
+		{"org.apache.kafka.consumer.node.request.latency", &m.cReqLatency},
+		{"org.apache.kafka.consumer.coordinator.commit.latency", &m.cCommitLatency},
 	} {
 		switch t := s.v.(type) {
 		case *metricRate:
@@ -558,8 +560,8 @@ func (m *metrics) appendTo(b []byte, useDeltaSums bool, maxBytes int32, allowedN
 			appendGauge(s.name+".avg", 0, avg, nil)
 			appendGauge(s.name+".max", max, 0, nil)
 
-		case map[int32]*metricTime:
-			for broker, m := range t {
+		case *map[int32]*metricTime:
+			for broker, m := range *t {
 				avg, max := m.rollNums(aggDur)
 				attrs := map[string]any{"node_id": broker}
 				appendGauge(s.name+".avg", 0, avg, attrs)
@@ -568,7 +570,7 @@ func (m *metrics) appendTo(b []byte, useDeltaSums bool, maxBytes int32, allowedN
 				// We only have per-push increments, so we can safely delete
 				// the node every round (i.e., clean up if a broker goes away).
 				if avg == 0 && max == 0 {
-					delete(t, broker)
+					delete(*t, broker)
 				}
 			}
 
@@ -617,6 +619,7 @@ func (m *metrics) appendTo(b []byte, useDeltaSums bool, maxBytes int32, allowedN
 	////////////
 
 	serialized, codec := metricsData.appendTo(b[:0]), CodecNone
+
 	if compressor != nil {
 		serialized, codec = compressor.Compress(new(bytes.Buffer), serialized)
 	}
@@ -885,10 +888,10 @@ func (d *otelNumDataPoint) appendTo(b []byte) []byte {
 		b = binary.LittleEndian.AppendUint64(b, math.Float64bits(d.vDouble))
 	}
 
-	// Field 6: asInt (int64)
+	// Field 6: asInt (sfixed64)
 	if d.vInt != 0 {
-		b = appendProtoTag(b, 6, protoTypeVarint)
-		b = binary.AppendUvarint(b, uint64(d.vInt))
+		b = appendProtoTag(b, 6, protoType64bit)
+		b = binary.LittleEndian.AppendUint64(b, uint64(d.vInt))
 	}
 
 	// Field 7: attributes
