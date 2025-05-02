@@ -848,6 +848,11 @@ func (s *sink) handleReqRespBatch(
 	err := kerr.ErrorForCode(rp.ErrorCode)
 	failUnknown := batch.owner.checkUnknownFailLimit(err)
 	switch {
+	case err == kerr.ConcurrentTransactions:
+		// Occasionally this is bubbled back to the producer as of
+		// KIP-890; we retry this.
+		fallthrough
+
 	case kerr.IsRetriable(err) &&
 		!failUnknown &&
 		err != kerr.CorruptMessage &&
