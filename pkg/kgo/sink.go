@@ -399,15 +399,6 @@ func (s *sink) produce(sem <-chan struct{}) bool {
 		return false
 	}
 
-	if !s.cl.producer.maybeAddInflight() { // must do before marking recBufs on a txn
-		return false
-	}
-	defer func() {
-		if !produced {
-			s.cl.producer.decInflight()
-		}
-	}()
-
 	// NOTE: we create the req AFTER getting our producer ID!
 	//
 	// If a prior response caused errReloadProducerID, then calling
@@ -478,7 +469,6 @@ func (s *sink) produce(sem <-chan struct{}) bool {
 	batches := req.batches.sliced()
 	s.doSequenced(req, func(br *broker, resp kmsg.Response, err error) {
 		s.handleReqResp(br, req, resp, err)
-		s.cl.producer.decInflight()
 		batches.eachOwnerLocked((*recBatch).decInflight)
 		<-sem
 	})
