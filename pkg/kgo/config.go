@@ -1974,6 +1974,9 @@ func AutoCommitCallback(fn func(*Client, *kmsg.OffsetCommitRequest, *kmsg.Offset
 	}}
 }
 
+// !!! Only uncomment once we trust the broker implementation!
+// !!! And add this option to Opt!
+//
 // DisableNextGenRebalancer opts out of the "next gen" rebalancer that is
 // the default as of Kafka 4.0+. The client opts in to the next gen rebalancer
 // automatically if the broker supports it AND if you are using either the
@@ -1985,6 +1988,7 @@ func AutoCommitCallback(fn func(*Client, *kmsg.OffsetCommitRequest, *kmsg.Offset
 // You may want to use this function if you notice a regression or run into
 // a broker or client bug, or if you prefer the performance of the old
 // client driven rebalancers.
-func DisableNextGenRebalancer() GroupOpt {
-	return groupOpt{func(cfg *cfg) { cfg.disableNextGenBalancer = true }}
-}
+//func DisableNextGenRebalancer() GroupOpt {
+//	return groupOpt{func(cfg *cfg) { cfg.disableNextGenBalancer = true }}
+//}
+//

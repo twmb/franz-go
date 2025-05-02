@@ -163,6 +163,7 @@ type groupConsumer struct {
 	// If we detect we should run in 848 mode, we set is848 true.
 	managing bool
 	is848    bool
+	g848     *g848
 
 	dying    bool // set when closing, read in findNewAssignments
 	left     chan struct{}
@@ -1602,15 +1603,22 @@ func (g *groupConsumer) fetchOffsets(ctx context.Context, added map[string][]int
 	// request, if we are only requesting one group, as well as maps the
 	// response back, so we do not need to worry about v8+ here.
 start:
+	member, gen := g.memberGen.load()
 	req := kmsg.NewPtrOffsetFetchRequest()
-	req.Group = g.cfg.group
 	req.RequireStable = g.cfg.requireStable
+	reqg := kmsg.NewOffsetFetchRequestGroup()
+	reqg.Group = g.cfg.group
+	if member != "" {
+		reqg.MemberID = &member
+		reqg.MemberEpoch = gen
+	}
 	for topic, partitions := range added {
-		reqTopic := kmsg.NewOffsetFetchRequestTopic()
+		reqTopic := kmsg.NewOffsetFetchRequestGroupTopic()
 		reqTopic.Topic = topic
 		reqTopic.Partitions = partitions
-		req.Topics = append(req.Topics, reqTopic)
+		reqg.Topics = append(reqg.Topics, reqTopic)
 	}
+	req.Groups = append(req.Groups, reqg)
 
 	var resp *kmsg.OffsetFetchResponse
 	var err error
@@ -2858,6 +2866,8 @@ func (g *groupConsumer) commit(
 	req.MemberID = memberID
 	req.InstanceID = g.cfg.instanceID
 
+	is848 := g.is848 // safe since we are under g.mu
+
 	if ctx.Done() != nil {
 		go func() {
 			select {
@@ -2903,11 +2913,10 @@ func (g *groupConsumer) commit(
 			}
 		}
 
-		var tries int
+		var retries int
 	issue:
 		start := time.Now()
 		resp, err := req.RequestWith(commitCtx, g.cl)
-		tries++
 		if err != nil {
 			onDone(g.cl, req, nil, err)
 			return
@@ -2917,13 +2926,34 @@ func (g *groupConsumer) commit(
 		// With next gen consumer groups, it is possible for the group
 		// to rebalance again immediately after we discover we need to
 		// revoke. We try up to 3x reloading and resending.
-		if len(resp.Topics) > 0 && len(resp.Topics[0].Partitions) > 0 {
+		if is848 && len(resp.Topics) > 0 && len(resp.Topics[0].Partitions) > 0 {
 			ec := resp.Topics[0].Partitions[0].ErrorCode
-			if kerr.ErrorForCode(ec) == kerr.StaleMemberEpoch && tries < 3 {
-				memberID, generation := g.memberGen.load()
-				req.Generation = generation
-				req.MemberID = memberID
-				goto issue
+			if kerr.ErrorForCode(ec) == kerr.StaleMemberEpoch && retries < 3 {
+				hbreq := g.g848.mkreq()
+				hbresp, err := hbreq.RequestWith(commitCtx, g.cl)
+				if err != nil {
+					g.cl.cfg.logger.Log(LogLevelInfo, "received STALE_MEMBER_EPOCH while committing; unable to force heartbeat; returning original stale error",
+						"last_generation", generation,
+						"err", err,
+					)
+				} else {
+					if err := kerr.ErrorForCode(hbresp.ErrorCode); err != nil {
+						g.cl.cfg.logger.Log(LogLevelInfo, "received STALE_MEMBER_EPOCH while committing; forced immediate heartbeat to load the latest generation but received an error",
+							"last_generation", generation,
+							"err", err,
+						)
+					} else {
+						g.cl.cfg.logger.Log(LogLevelInfo, "received STALE_MEMBER_EPOCH while committing; forced immediate heartbeat to load the latest generation",
+							"last_generation", generation,
+							"new_generation", hbresp.MemberEpoch,
+						)
+						g.memberGen.storeGeneration(hbresp.MemberEpoch)
+						generation = hbresp.MemberEpoch
+						req.Generation = generation
+						retries++
+						goto issue
+					}
+				}
 			}
 		}
 

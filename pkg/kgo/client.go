@@ -430,8 +430,6 @@ func (cl *Client) OptValues(opt any) []any {
 		return []any{cfg.requireStable}
 	case namefn(SessionTimeout):
 		return []any{cfg.sessionTimeout}
-	case namefn(DisableNextGenRebalancer):
-		return []any{cfg.disableNextGenBalancer}
 
 	default:
 		return nil
@@ -2049,8 +2047,15 @@ func (cl *Client) handleCoordinatorReq(ctx context.Context, req kmsg.Request) Re
 		return cl.handleCoordinatorReqSimple(ctx, coordinatorTypeGroup, t.Group, req)
 	case *kmsg.OffsetDeleteRequest:
 		return cl.handleCoordinatorReqSimple(ctx, coordinatorTypeGroup, t.Group, req)
+
+	// ConsumerGroupHeartbeat cannot be retried at all
 	case *kmsg.ConsumerGroupHeartbeatRequest:
-		return cl.handleCoordinatorReqSimple(ctx, coordinatorTypeGroup, t.Group, req)
+		br, err := cl.loadCoordinator(ctx, coordinatorTypeGroup, t.Group)
+		var resp kmsg.Response
+		if err == nil {
+			resp, err = br.waitResp(ctx, req)
+		}
+		return shard(br, req, resp, err)
 	}
 }
 
