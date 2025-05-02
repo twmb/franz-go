@@ -138,12 +138,13 @@ func (c *testConsumer) goTransact(txnsBeforeQuit int) {
 func (c *testConsumer) transact(txnsBeforeQuit int) {
 	defer c.wg.Done()
 
+	txid := randsha()
 	opts := []Opt{
 		// Kraft sometimes returns success from topic creation, and
 		// then returns UnknownTopicXyz for a while in metadata loads.
 		// It also returns NotLeaderXyz; we handle both problems.
 		UnknownTopicRetries(-1),
-		TransactionalID(randsha()),
+		TransactionalID(txid),
 		TransactionTimeout(60 * time.Second),
 		WithLogger(testLogger()),
 		// Control records have their own unique offset, so for testing,
@@ -177,7 +178,7 @@ func (c *testConsumer) transact(txnsBeforeQuit int) {
 			if consumed := int(c.consumed.Load()); consumed == testRecordLimit {
 				return
 			} else if consumed > testRecordLimit {
-				panic("invalid: consumed too much")
+				panic(fmt.Sprintf("invalid: consumed too much from %s (at %d, group %s, tx %s)", c.consumeFrom, consumed, c.group, txid))
 			}
 			continue
 		}
