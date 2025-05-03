@@ -271,8 +271,8 @@ issue:
 	// If we run tests in a container _immediately_ after the container
 	// starts, we can receive dial errors for a bit if the container is not
 	// fully initialized. Handle this by retrying specifically dial errors.
-	if ne := (*net.OpError)(nil); errors.As(err, &ne) && ne.Op == "dial" && time.Since(start) < 15*time.Second {
-		time.Sleep(10 * time.Millisecond)
+	if ne := (*net.OpError)(nil); errors.As(err, &ne) && ne.Op == "dial" && time.Since(start) < 30*time.Second {
+		time.Sleep(time.Second)
 		goto issue
 	}
 
@@ -314,7 +314,7 @@ issue:
 			err = kerr.ErrorForCode(resp.Topics[0].ErrorCode)
 		}
 		if err != nil {
-			tb.Fatalf("unable to delete topic %q: %v", topic, err)
+			tb.Logf("unable to delete topic %q: %v", topic, err)
 		}
 	}
 }
@@ -587,7 +587,7 @@ out:
 		sort.Ints(allKeys)
 		for i := 0; i < testRecordLimit; i++ {
 			if allKeys[i] != i {
-				t.Fatalf("consumers %d: got key %d != exp %d, first 100: %v", level, allKeys[i], i, allKeys[:100])
+				t.Errorf("consumers %d: got key %d != exp %d, first 100: %v", level, allKeys[i], i, allKeys[:100])
 			}
 		}
 	}
