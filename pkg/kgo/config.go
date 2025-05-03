@@ -1988,7 +1988,7 @@ func AutoCommitCallback(fn func(*Client, *kmsg.OffsetCommitRequest, *kmsg.Offset
 // You may want to use this function if you notice a regression or run into
 // a broker or client bug, or if you prefer the performance of the old
 // client driven rebalancers.
-//func DisableNextGenRebalancer() GroupOpt {
-//	return groupOpt{func(cfg *cfg) { cfg.disableNextGenBalancer = true }}
-//}
+//  func DisableNextGenRebalancer() GroupOpt {
+//  	return groupOpt{func(cfg *cfg) { cfg.disableNextGenBalancer = true }}
+//  }
 //

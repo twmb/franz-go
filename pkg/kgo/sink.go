@@ -851,7 +851,7 @@ func (s *sink) handleReqRespBatch(
 	case err == kerr.ConcurrentTransactions:
 		// Occasionally this is bubbled back to the producer as of
 		// KIP-890; we retry this.
-		fallthrough
+		fallthrough //nolint:gocritic // easier to read this way
 
 	case kerr.IsRetriable(err) &&
 		!failUnknown &&

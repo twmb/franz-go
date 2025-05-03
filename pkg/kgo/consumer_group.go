@@ -2937,7 +2937,7 @@ func (g *groupConsumer) commit(
 						"err", err,
 					)
 				} else {
-					if err := kerr.ErrorForCode(hbresp.ErrorCode); err != nil {
+					if err := kerr.ErrorForCode(hbresp.ErrorCode); err != nil { //nolint:revive // err != nil is more standard as the first case
 						g.cl.cfg.logger.Log(LogLevelInfo, "received STALE_MEMBER_EPOCH while committing; forced immediate heartbeat to load the latest generation but received an error",
 							"last_generation", generation,
 							"err", err,
