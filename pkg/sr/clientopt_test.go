@@ -70,27 +70,6 @@ func TestDialTLSConfigWithHTTPClientAndTransport(t *testing.T) {
 	}
 }
 
-func TestDialTLSConfigWithNilHTTPClient(t *testing.T) {
-	tlscfg := &tls.Config{}
-
-	rcl, err := NewClient(
-		HTTPClient(nil),
-		DialTLSConfig(tlscfg),
-	)
-	if err != nil {
-		t.Fatalf("unable to create client: %s", err)
-	}
-
-	if rcl.dialTLS != tlscfg {
-		t.Errorf("TLS config: expected %+v, got %+v", tlscfg, rcl.dialTLS)
-	}
-
-	tr := rcl.httpcl.Transport.(*http.Transport)
-	if tr.TLSClientConfig != tlscfg {
-		t.Errorf("TLS config in transport: expected %+v, got %+v", tlscfg, tr.TLSClientConfig)
-	}
-}
-
 func TestDialTLSConfigWithIncompatibleHTTPClient(t *testing.T) {
 	dialFn := func(network, addr string) (net.Conn, error) { return nil, nil }
 	httptr := &http.Transport{Dial: dialFn}

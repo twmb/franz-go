@@ -86,34 +86,29 @@ func NewClient(opts ...ClientOpt) (*Client, error) {
 		return nil, errors.New("unable to create client with no URLs")
 	}
 
+	if cl.httpcl == nil {
+		return nil, errors.New("unable to create client with no http client")
+	}
+
 	if cl.dialTLS != nil {
-		if cl.httpcl != nil {
-			// Sanity check some invariants: if the user is using DialTLSConfig
-			// and a custom http client, the client must be compatible with us
-			// setting the one needed field (and no others should be set).
-			if cl.httpcl.Transport != nil {
-				tr, ok := cl.httpcl.Transport.(*http.Transport)
-				if !ok {
-					return nil, errors.New("unable to use DialTLSConfig with a custom http.Client that does not use an *http.Transport")
-				}
-				if tr.Dial != nil || tr.DialContext != nil || tr.DialTLS != nil || tr.DialTLSContext != nil {
-					return nil, errors.New("unable to use DialTLSConfig with an http.Client that has a custom dial function")
-				}
-				tr = tr.Clone()
-				tr.TLSClientConfig = cl.dialTLS
-				cl.httpcl.Transport = tr
-			} else {
-				tr := http.DefaultTransport.(*http.Transport).Clone()
-				tr.TLSClientConfig = cl.dialTLS
-				cl.httpcl.Transport = tr
+		// Sanity check some invariants: if the user is using DialTLSConfig
+		// and a custom http client, the client must be compatible with us
+		// setting the one needed field (and no others should be set).
+		if cl.httpcl.Transport != nil {
+			tr, ok := cl.httpcl.Transport.(*http.Transport)
+			if !ok {
+				return nil, errors.New("unable to use DialTLSConfig with a custom http.Client that does not use an *http.Transport")
 			}
+			if tr.Dial != nil || tr.DialContext != nil || tr.DialTLS != nil || tr.DialTLSContext != nil {
+				return nil, errors.New("unable to use DialTLSConfig with an http.Client that has a custom dial function")
+			}
+			tr = tr.Clone()
+			tr.TLSClientConfig = cl.dialTLS
+			cl.httpcl.Transport = tr
 		} else {
 			tr := http.DefaultTransport.(*http.Transport).Clone()
 			tr.TLSClientConfig = cl.dialTLS
-			cl.httpcl = &http.Client{
-				Timeout:   5 * time.Second,
-				Transport: tr,
-			}
+			cl.httpcl.Transport = tr
 		}
 	}
 
