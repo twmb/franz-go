@@ -9,7 +9,7 @@ import (
 
 func TestDialTLSConfigOpt(t *testing.T) {
 	t.Run("Defaults", func(t *testing.T) {
-		tlscfg := &tls.Config{}
+		tlscfg := &tls.Config{} //nolint:gosec // not relevant for this test case
 
 		rcl, err := NewClient(DialTLSConfig(tlscfg))
 		if err != nil {
@@ -28,7 +28,7 @@ func TestDialTLSConfigOpt(t *testing.T) {
 
 	t.Run("CustomHTTPClient", func(t *testing.T) {
 		httpcl := &http.Client{}
-		tlscfg := &tls.Config{}
+		tlscfg := &tls.Config{} //nolint:gosec // not relevant for this test case
 
 		rcl, err := NewClient(
 			HTTPClient(httpcl),
@@ -51,7 +51,7 @@ func TestDialTLSConfigOpt(t *testing.T) {
 	t.Run("CustomHTTPTransport", func(t *testing.T) {
 		httptr := &http.Transport{}
 		httpcl := &http.Client{Transport: httptr}
-		tlscfg := &tls.Config{}
+		tlscfg := &tls.Config{} //nolint:gosec // not relevant for this test case
 
 		rcl, err := NewClient(
 			HTTPClient(httpcl),
@@ -72,10 +72,10 @@ func TestDialTLSConfigOpt(t *testing.T) {
 	})
 
 	t.Run("IncompatibleHTTPClient", func(t *testing.T) {
-		dialFn := func(network, addr string) (net.Conn, error) { return nil, nil }
+		dialFn := func(_, _ string) (net.Conn, error) { return nil, nil }
 		httptr := &http.Transport{Dial: dialFn}
 		httpcl := &http.Client{Transport: httptr}
-		tlscfg := &tls.Config{}
+		tlscfg := &tls.Config{} //nolint:gosec // not relevant for this test case
 
 		_, err := NewClient(
 			HTTPClient(httpcl),
