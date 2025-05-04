@@ -83,8 +83,8 @@ func TestDialTLSConfigOpt(t *testing.T) {
 		)
 
 		expected := "unable to use DialTLSConfig with an http.Client that has a custom dial function"
-		if err.Error() != expected {
-			t.Errorf("new client error: expected %q, got %q", expected, err.Error())
+		if err == nil || err.Error() != expected {
+			t.Errorf("new client error: expected %q, got %q", expected, err)
 		}
 	})
 }
