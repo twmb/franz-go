@@ -1,13 +1,13 @@
 module github.com/twmb/franz-go/pkg/kfake
 
-go 1.23
+go 1.23.8
 
-toolchain go1.22.0
+toolchain go1.24.2
 
 require (
 	github.com/twmb/franz-go v1.18.1
-	github.com/twmb/franz-go/pkg/kmsg v1.9.0
-	golang.org/x/crypto v0.32.0
+	github.com/twmb/franz-go/pkg/kmsg v1.11.2
+	golang.org/x/crypto v0.38.0
 )
 
 require (
