@@ -1,8 +1,6 @@
 module segment
 
-go 1.23.0
-
-toolchain go1.23.3
+go 1.24.2
 
 require github.com/segmentio/kafka-go v0.4.47
 

@@ -5,8 +5,8 @@
 
 set -euo pipefail
 
-minlang="1.21"
-maxlang="1.23"
+minlang="1.23.8"
+maxlang="1.24.2"
 for modfile in $(find . -name 'go.mod' -print0 | xargs -0)
 do
     moddir=$(dirname "$modfile")
