@@ -21,9 +21,12 @@ var (
 	seedBrokers = flag.String("brokers", "localhost:9092", "comma delimited list of seed brokers")
 	topic       = flag.String("topic", "", "topic to produce to or consume from")
 
-	recordBytes   = flag.Int("record-bytes", 100, "bytes per record (producing)")
-	noCompression = flag.Bool("no-compression", false, "set to disable snappy compression (producing)")
-	poolProduce   = flag.Bool("pool", false, "if true, use a sync.Pool to reuse record slices (producing)")
+	writeSize   = flag.Int("records-per-write", 1, "number of records to create before a single WriteMessage call")
+	batchSize   = flag.Int("batch-size", 1, "value for the kafka.Writer.BatchSize field")
+	acks        = flag.Int("acks", -1, "value for the Writer.Acks field")
+	recordBytes = flag.Int("record-bytes", 100, "bytes per record (producing)")
+	compression = flag.String("compression", "none", "compression algorithm to use (none,gzip,snappy,lz4,zstd, for producing)")
+	poolProduce = flag.Bool("pool", false, "if true, use a sync.Pool to reuse record slices (producing)")
 
 	consume = flag.Bool("consume", false, "if true, consume rather than produce")
 	group   = flag.String("group", "", "if non-empty, group to use for consuming rather than direct partition consuming (consuming)")
@@ -106,7 +109,8 @@ func main() {
 		w := &kafka.Writer{
 			Addr:         kafka.TCP(brokers...),
 			Topic:        *topic,
-			RequiredAcks: -1,
+			BatchSize:    *batchSize,
+			RequiredAcks: kafka.RequiredAcks(*acks),
 			Async:        true,
 			Completion: func(ms []kafka.Message, err error) {
 				chk(err, "produce err: %v", err)
@@ -120,12 +124,27 @@ func main() {
 				}
 			},
 		}
-		if !*noCompression {
+		switch strings.ToLower(*compression) {
+		case "", "none":
+		case "gzip":
+			w.Compression = kafka.Gzip
+		case "snappy":
 			w.Compression = kafka.Snappy
+		case "lz4":
+			w.Compression = kafka.Lz4
+		case "zstd":
+			w.Compression = kafka.Zstd
+		default:
+			die("unrecognized compression %s", *compression)
 		}
 
 		var num int64
+		var msgs []kafka.Message
 		for {
+			msgs = msgs[:0]
+			for i := 0; i < *writeSize; i++ {
+				msgs = append(msgs, kafka.Message{Value: newValue(num)})
+			}
 			w.WriteMessages(context.Background(), kafka.Message{
 				Value: newValue(num),
 			})
