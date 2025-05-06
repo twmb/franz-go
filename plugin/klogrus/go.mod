@@ -2,8 +2,6 @@ module github.com/twmb/franz-go/plugin/klogrus
 
 go 1.23.8
 
-toolchain go1.24.2
-
 require (
 	github.com/sirupsen/logrus v1.9.3
 	github.com/stretchr/testify v1.8.0
