@@ -2,8 +2,6 @@ module github.com/twmb/franz-go/plugin/kzerolog
 
 go 1.23.8
 
-toolchain go1.24.2
-
 require (
 	github.com/rs/zerolog v1.34.0
 	github.com/twmb/franz-go v1.18.1
