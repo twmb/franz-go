@@ -31,12 +31,14 @@ var (
 
 	useStaticValue = flag.Bool("static-record", false, "if true, use the same record value for every record (eliminates creating and formatting values for records; implies -pool)")
 
-	recordBytes   = flag.Int("record-bytes", 100, "bytes per record value (producing)")
-	compression   = flag.String("compression", "none", "compression algorithm to use (none,gzip,snappy,lz4,zstd, for producing)")
-	poolProduce   = flag.Bool("pool", false, "if true, use a sync.Pool to reuse record structs/slices (producing)")
-	noIdempotency = flag.Bool("disable-idempotency", false, "if true, disable idempotency (force 1 produce rps)")
-	linger        = flag.Duration("linger", 0, "if non-zero, linger to use when producing")
-	batchMaxBytes = flag.Int("batch-max-bytes", 1000000, "the maximum batch size to allow per-partition (must be less than Kafka's max.message.bytes, producing)")
+	recordBytes         = flag.Int("record-bytes", 100, "bytes per record value (producing)")
+	compression         = flag.String("compression", "none", "compression algorithm to use (none,gzip,snappy,lz4,zstd, for producing)")
+	poolProduce         = flag.Bool("pool", false, "if true, use a sync.Pool to reuse record structs/slices (producing)")
+	noIdempotency       = flag.Bool("disable-idempotency", false, "if true, disable idempotency (force 1 produce rps)")
+	noIdempotentMaxReqs = flag.Int("max-inflight-produce-per-broker", 5, "if idempotency is disabled, the number of produce requests to allow per broker")
+	acks                = flag.Int("acks", -1, "acks required; 0, -1, 1")
+	linger              = flag.Duration("linger", 0, "if non-zero, linger to use when producing")
+	batchMaxBytes       = flag.Int("batch-max-bytes", 1000000, "the maximum batch size to allow per-partition (must be less than Kafka's max.message.bytes, producing)")
 
 	logLevel = flag.String("log-level", "", "if non-empty, use a basic logger with this log level (debug, info, warn, error)")
 
@@ -105,12 +107,21 @@ func main() {
 	}
 	if *noIdempotency {
 		opts = append(opts, kgo.DisableIdempotentWrite())
+		opts = append(opts, kgo.MaxProduceRequestsInflightPerBroker(*noIdempotentMaxReqs))
 	}
 	if *consume {
 		opts = append(opts, kgo.ConsumeTopics(*topic))
 		if *group != "" {
 			opts = append(opts, kgo.ConsumerGroup(*group))
 		}
+	}
+	switch *acks {
+	case 0:
+		opts = append(opts, kgo.RequiredAcks(kgo.NoAck()))
+	case 1:
+		opts = append(opts, kgo.RequiredAcks(kgo.LeaderAck()))
+	default:
+		opts = append(opts, kgo.RequiredAcks(kgo.AllISRAcks()))
 	}
 
 	if *prom {
