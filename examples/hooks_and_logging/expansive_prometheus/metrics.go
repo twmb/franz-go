@@ -216,19 +216,19 @@ func NewMetrics(namespace string) (m *Metrics) {
 		produceBatchesCompressed: factory.NewCounterVec(prometheus.CounterOpts{
 			Namespace: namespace,
 			Name:      "produce_bytes_compressed_total",
-			Help:      "Total number of compressed bytes actually produced, by topic and partition",
-		}, []string{"topic", "partition"}),
+			Help:      "Total number of compressed bytes actually produced, by broker and topic",
+		}, []string{"broker", "topic"}),
 
 		fetchBatchesUncompressed: factory.NewCounterVec(prometheus.CounterOpts{
 			Namespace: namespace,
 			Name:      "fetch_bytes_uncompressed_total",
-			Help:      "Total number of uncompressed bytes fetched, by topic and partition",
-		}, []string{"topic", "partition"}),
+			Help:      "Total number of uncompressed bytes fetched, by broker and topic",
+		}, []string{"broker", "topic"}),
 
 		fetchBatchesCompressed: factory.NewCounterVec(prometheus.CounterOpts{
 			Namespace: namespace,
 			Name:      "fetch_bytes_compressed_total",
-			Help:      "Total number of compressed bytes actually fetched, by topic and partition",
-		}, []string{"topic", "partition"}),
+			Help:      "Total number of compressed bytes actually fetched, by broker and topic",
+		}, []string{"broker", "topic"}),
 	}
 }
