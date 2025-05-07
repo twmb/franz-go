@@ -1804,7 +1804,8 @@ func (cl *Client) doLoadCoordinators(ctx context.Context, typ int8, keys ...stri
 			"coordinator_keys", req.CoordinatorKeys,
 		)
 
-		shards := cl.RequestSharded(cl.ctx, req)
+		ctx := context.WithValue(cl.ctx, noShardRetryCtx, true)
+		shards := cl.RequestSharded(ctx, req)
 
 		for _, shard := range shards {
 			if shard.Err != nil {
@@ -2316,6 +2317,8 @@ type sharder interface {
 	merge([]ResponseShard) (kmsg.Response, error)
 }
 
+var noShardRetryCtx = func() *string { s := "no_shard_retry"; return &s }()
+
 // handleShardedReq splits and issues requests to brokers, recursively
 // splitting as necessary if requests fail and need remapping.
 func (cl *Client) handleShardedReq(ctx context.Context, req kmsg.Request) ([]ResponseShard, shardMerge) {
@@ -2388,6 +2391,7 @@ func (cl *Client) handleShardedReq(ctx context.Context, req kmsg.Request) ([]Res
 
 	l := cl.cfg.logger
 	debug := l.Level() >= LogLevelDebug
+	noRetries := ctx != nil && ctx.Value(noShardRetryCtx) != nil
 
 	// issue is called to progressively split and issue requests.
 	//
@@ -2479,7 +2483,7 @@ func (cl *Client) handleShardedReq(ctx context.Context, req kmsg.Request) ([]Res
 				backoff := cl.cfg.retryBackoff(tries)
 				if err != nil &&
 					(reshardable && isPinned && errors.Is(err, errBrokerTooOld) && tries <= 3) ||
-					(retryTimeout == 0 || time.Now().Add(backoff).Sub(start) <= retryTimeout) && cl.shouldRetry(tries, err) && cl.waitTries(ctx, backoff) {
+					(retryTimeout == 0 || time.Now().Add(backoff).Sub(start) <= retryTimeout) && cl.shouldRetry(tries, err) && cl.waitTries(ctx, backoff) && !noRetries {
 					// Non-reshardable re-requests just jump back to the
 					// top where the broker is loaded. This is the case on
 					// requests where the original request is split to
