@@ -1346,11 +1346,11 @@ func (cl *Client) retryableBrokerFn(fn func() (*broker, error)) *retryable {
 }
 
 func (cl *Client) shouldRetry(tries int, err error) bool {
-	return (kerr.IsRetriable(err) || isRetryableBrokerErr(err)) && int64(tries) < cl.cfg.retries
+	return (kerr.IsRetriable(err) || isRetryableBrokerErr(err)) && int64(tries) <= cl.cfg.retries
 }
 
 func (cl *Client) shouldRetryNext(tries int, err error) bool {
-	return isSkippableBrokerErr(err) && int64(tries) < cl.cfg.retries
+	return isSkippableBrokerErr(err) && int64(tries) <= cl.cfg.retries
 }
 
 type retryable struct {
@@ -1406,7 +1406,7 @@ start:
 	}
 
 	if err != nil || retryErr != nil {
-		if r.limitRetries == 0 || tries < r.limitRetries {
+		if r.limitRetries == 0 || tries <= r.limitRetries {
 			backoff := r.cl.cfg.retryBackoff(tries)
 			if retryTimeout == 0 || time.Now().Add(backoff).Sub(tryStart) <= retryTimeout {
 				// If this broker / request had a retryable error, we can
@@ -1415,8 +1415,10 @@ start:
 				// broker is different than the current, we also retry.
 				if r.cl.shouldRetry(tries, err) || r.cl.shouldRetry(tries, retryErr) {
 					r.cl.cfg.logger.Log(LogLevelDebug, "retrying request",
+						"request", kmsg.NameForKey(req.Key()),
 						"tries", tries,
 						"backoff", backoff,
+						"time_since_start", time.Since(tryStart),
 						"request_error", err,
 						"response_error", retryErr,
 					)
