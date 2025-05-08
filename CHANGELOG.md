@@ -1,3 +1,238 @@
+v1.19.0
+===
+
+This is the largest release of franz-go yet. The last patch release was Jan 20, '25.
+The last minor release was Oct 14, '24.
+
+A big reason for delays the past few month+ has been from spin looping tests
+and investigating any issue that popped up. Another big delay is that Kafka has
+a full company adding features -- some questionable -- and I'm one person that
+spent a significant amount of time catching this library up with the latest
+Kafka release. Lastly, Kafka released Kafka v3.9 three weeks after my last
+major release, and simultaneously, a few requests came in for new features in
+this library that required a lot of time.  I wanted a bit of a break and only
+resumed development more seriously in late Feb. This release is likely >100hrs
+of work over the last ~4mo, from understanding new features and implementing
+them, reviewing PRs, and debugging rare test failures.
+
+The next Kafka release is poised to implement more large features (share
+groups), which unfortunately will mean even more heads down time trying to bolt
+in yet another feature to an already large library. I hope that Confluent
+chills with introducing massive client-impacting changes; they've introduced
+more in the past year than has been introduced from 2019-2023.
+
+## Bug fixes / changes / deprecations
+
+* The BasicLogger will no longer panic if only a single key (no val) is used. Thanks [@vicluq](https://github.com/vicluq)!
+
+* An internal coding error around managing fetch concurrency was fixed. Thanks [@iimos](https://github.com/iimos)!
+
+* Some off by ones with retries were fixed (tldr: we retried one fewer times than configured)
+
+* `AllowAutoTopicCreation` and `ConsumeRegex` can now be used together.
+  Previously, topics would not be created if you were producing and consuming
+  from the same client AND if you used the `ConsumeRegex` option.
+
+* A data race in the consumer code path has been fixed. The race is hard to
+  encounter (which is why it never came up even in my weeks of spin-looping
+  tests with `-race`). See [PR #984](https://github.com/twmb/franz-go/pull/984)
+  for more details.
+
+* `EndBeginTxnUnsafe` is deprecated and unused. `EndAndBeginTransaction` now
+  flushes, and you cannot produce while the function happens (the function will
+  just be stuck flushing). As of KIP-890, the behavior that the library relied on
+  is now completely unsupported. Trying to produce while ending & beginning a
+  transaction very occasionally leads to duplicate messages. The function now is
+  just a shortcut for flush, end, begin.
+
+* The kversion package guts have been entirely reimplemented; version guessing
+  should be more reliable.
+
+* `OnBrokerConnect` now encompasses the entire SASL flow (if using SASL) rather
+  than just connection dialing. This allows you more visibility into successful
+  or broken connections, as well as visibility into how long it actually takes
+  to initialize a connection. The `dialDur` arg has been renamed to `initDur`.
+  You may see the duration increase in your metrics. enough If feedback comes
+  in that this is confusing or unacceptable, I may issue a patch to revert
+  the change and instead introduce a separate hook in the next minor release.
+  I do not aim to create another minor release for a while.
+
+## Features / improvements
+
+* This release adds support for user-configurable memory pooling to a few select
+  locations. See any "Pool" suffixed interface type in the documentation. You can
+  use this to add bucketed pooling (or whatever strategy you choose) to cut down
+  on memory waste in a few areas. As well, a few allocations that were previously
+  many-tiny allocs have been converted to slab allocations (slice backed). Lastly,
+  if you opt into `kgo.Record` pooling, the `Record` type has a new `Recycle`
+  method to send it and all other pooled slices back to their pools.
+
+* You can now completely override how compression or decompression is done via
+  the new `WithCompressor` and `WithDecompressor` options. This allows you to
+  use libraries or options that franz-go does not automatically support, perhaps
+  opting for higher performance libraries or options or using memory more memory
+  pooling behind the scenes.
+
+* `ConsumeResetOffset` has been split into two options, `ConsumeResetOffset` and
+  `ConsumeStartOffset`. The documentation has been cleaned up. I personally always
+  found it confusing to use the reset offset for both what to start consuming from
+  and what to reset to when the client sees an offset out of range error. The start
+  offset defaults to the reset offset (and vice versa) if you only set one.
+
+* For users that produce infrequently but want the latency to be low when producing,
+  the client now has a `EnsureProduceConnectionIsOpen` method. You can call this
+  before producing to force connections to be open.
+
+* The client now has a `RequestCachedMetadata` function, which can be used to
+  request metadata _only if_ the information you're requesting is not cached,
+  or is cached but is too stale. This can be very useful for admin packages that
+  need metadata to do anything else -- rather than requesting metadata for every
+  single admin operation, you can have metadata requested once and use that
+  repeatedly. Notably, I'll be switching `kadm` to using this function.
+
+* KIP-714 support: the client now internally aggregates a small set of metrics
+  and sends them to the broker by default. This client implements all required
+  metrics and a subset of recommended metrics (the ones that make more sense).
+  To opt out of metrics collection & sending to the broker by default, you
+  can use the new `DisableClienMetrics` option. You can also provide your own
+  metrics to send to the broker via the new `UserMetricsFn` option. The client
+  does not attempt to sanitize any user provided metric names; be sure you provide
+  the names in the correct format (see docs).
+
+* KIP-848 support: this exists but is hidden. You must explicitly opt in by using
+  the new WithContext option, and the context must have a special string key,
+  `opt_in_kafka_next_gen_balancer_beta`. I noticed while testing that if you
+  repeat `ConsumerGroupHeartbeat` requests (i.e. what can happen when clients
+  are on unreliable networks), group members repeatedly get fenced. This is
+  recoverable, but it happens way _way_ more than it should and I don't believe
+  the broker implementation to be great at the moment. Confluent historically
+  ignores any bug reports I create on the KAFKA issue tracker, but if you
+  would like to follow along or perhaps nudge to help get a reply, please
+  chime in on [KAFKA-19222][19222], [KAFKA-19233][19233], and [KAFKA-19235][19235].
+
+* A few other more niche APIs have been added. See the full breadth of new APIs
+  below and check pkg.go.dev for docs for any API you're curious about.
+
+[19222]: https://issues.apache.org/jira/browse/KAFKA-19222
+[19233]: https://issues.apache.org/jira/browse/KAFKA-19233
+[19235]: https://issues.apache.org/jira/browse/KAFKA-19235
+
+## API additions
+
+This section contains all net-new APIs in this release. See the documentation
+on pkg.go.dev.
+
+```go
+const (
+        CodecNone CompressionCodecType = iota
+        CodecGzip
+        CodecSnappy
+        CodecLz4
+        CodecZstd
+        CodecError = -1
+)
+const CompressDisableZstd CompressFlag = 1 + iota
+const (
+    MetricTypeSum = 1 + iota
+    MetricTypeGauge
+)
+
+type CompressFlag uint16
+type CompressionCodecType int8
+type Compressor interface {
+    Compress(dst *bytes.Buffer, src []byte, flags ...CompressFlag) ([]byte, CompressionCodecType)
+}
+type Decompressor interface {
+    Decompress(src []byte, codecType CompressionCodecType) ([]byte, error)
+}
+type Metric struct {
+        Name string
+        Type MetricType
+        ValueInt int64
+        ValueFloat float64
+        Attrs map[string]any
+}
+type MetricType uint8
+type Pool any
+type PoolDecompressBytes interface {
+        GetDecompressBytes(compressed []byte, codec CompressionCodecType) []byte
+        PutDecompressBytes([]byte)
+}
+type PoolKRecords interface {
+        GetKRecords(n int) []kmsg.Record
+        PutKRecords([]kmsg.Record)
+}
+type PoolRecords interface {
+        GetRecords(n int) []Record
+        PutRecords([]Record)
+}
+type ProcessFetchPartitionOpts struct {
+        KeepControlRecords bool
+        DisableCRCValidation bool
+        Offset int64
+        IsolationLevel IsolationLevel
+        Topic string
+        Partition int32
+        Pools []Pool
+}
+
+func DefaultCompressor(...CompressionCodec) (Compressor, error)
+func DefaultDecompressor(...Pool) Decompressor
+func IsRetryableBrokerErr(error) bool
+func ProcessFetchPartition(ProcessFetchPartitionOpts, *kmsg.FetchResponseTopicPartition, Decompressor, func(FetchBatchMetrics)) (FetchPartition, int64)
+
+func DisableClientMetrics() Opt
+func OnRebootstrapRequired(func() ([]string, error)) Opt
+func UserMetricsFn(fn func() iter.Seq[Metric]) Opt
+func WithContext(ctx context.Context) Opt
+func WithPools(pools ...Pool) Opt
+
+func ConsumeStartOffset(Offset) ConsumerOpt
+func DisableFetchCRCValidation() ConsumerOpt
+func RecheckPreferredReplicaInterval(time.Duration) ConsumerOpt
+func WithDecompressor(decompressor Decompressor) ConsumerOpt
+
+func DefaultProduceTopicAlways() ProducerOpt
+func WithCompressor(Compressor) ProducerOpt
+
+func (*Client) Context() context.Context
+func (*Client) EnsureProduceConnectionIsOpen(context.Context, ...int32) error
+func (*Client) RequestCachedMetadata(context.Context, *kmsg.MetadataRequest, time.Duration) (*kmsg.MetadataResponse, error)
+
+func (*Record) Recycle()
+```
+
+## Relevant commits
+
+This is a small selection of what I think are the most pertinent commits in
+this release. This release is very large, though. Many commits and PRs have
+been left out that introduce or change smaller things.
+
+- [`07e57d3e`](https://github.com/twmb/franz-go/commits/07e57d3e) kgo: remove all EndAndBeginTransaction internal "optimizations"
+- [`a54ffa96`](https://github.com/twmb/franz-go/commits/a54ffa96) kgo: add ConsumeStartOffset, expand offset docs, update readme KIPs
+- [`PR #988`](https://github.com/twmb/franz-go/pull/988)#988 kgo: add support for KIP-714 (client metrics)
+- [`7a17a03c`](https://github.com/twmb/franz-go/commits/7a17a03c) kgo: fix data race in consumer code path
+- [`ae96af1d`](https://github.com/twmb/franz-go/commits/ae96af1d) kgo: expose IsRetryableBrokerErr
+- [`1eb82fee`](https://github.com/twmb/franz-go/commits/1eb82fee) kgo: add EnsureProduceConnectionIsOpen
+- [`fc778ba8`](https://github.com/twmb/franz-go/commits/fc778ba8) kgo: fix AllowAutoTopicCreation && ConsumeRegex when used together
+- [`ae7eea7c`](https://github.com/twmb/franz-go/commits/ae7eea7c) kgo: add DisableFetchCRCValidation option
+- [`6af90823`](https://github.com/twmb/franz-go/commits/6af90823) kgo: add the ability to pool memory in a few places while consuming
+- [`8c7a36db`](https://github.com/twmb/franz-go/commits/8c7a36db) kgo: export utilities for decompressing and parsing partition fetch responses
+- [`33400303`](https://github.com/twmb/franz-go/commits/33400303) kgo: do a slab allocation for Record's when processing a batch
+- [`39c2157a`](https://github.com/twmb/franz-go/commits/39c2157a) kgo: add WithCompressor and WithDecompressor options
+- [`9252a6b6`](https://github.com/twmb/franz-go/commits/9252a6b6) kgo: export Compressor and Decompressor
+- [`be15c285`](https://github.com/twmb/franz-go/commits/be15c285) kgo: add Client.RequestCachedMetadata
+- [`fc040bc0`](https://github.com/twmb/franz-go/commits/fc040bc0) kgo: add OnRebootstrapRequired
+- [`c8aec00a`](https://github.com/twmb/franz-go/commits/c8aec00a) kversion: document changes through 4.0
+- [`718c5606`](https://github.com/twmb/franz-go/commits/718c5606) kgo: remove all code handling EndBeginTxnUnsafe, make it a no-op
+- [`5494c59e`](https://github.com/twmb/franz-go/commits/5494c59e) kversions: entirely reimplement internals
+- [`9d266fcd`](https://github.com/twmb/franz-go/commits/9d266fcd) kgo: allow outstanding produce requests to be context canceled if the user disables idempotency
+- [`c60bf4c2`](https://github.com/twmb/franz-go/commits/c60bf4c2) kgo: add DefaultProduceTopicAlways ProducerOpt
+- [`50cfe060`](https://github.com/twmb/franz-go/commits/50cfe060) kgo: fix off-by-one with retries accounting
+- [`e9ba83a6`](https://github.com/twmb/franz-go/commits/e9ba83a6), [`05099ba0`](https://github.com/twmb/franz-go/commits/05099ba0) kgo: add WithContext, Client.Context()
+- [`ddb0c0c3`](https://github.com/twmb/franz-go/commits/ddb0c0c3) kgo: fix cancellation of a fetch in manageFetchConcurrency
+- [`83843a53`](https://github.com/twmb/franz-go/commits/83843a53) kgo: fixed panic when keyvals len equals 1
+
 v1.18.1
 ===
 
