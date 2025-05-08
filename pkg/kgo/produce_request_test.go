@@ -36,7 +36,7 @@ func TestClient_Produce(t *testing.T) {
 	)
 	defer cleanup()
 
-	cl, _ := newTestClient(MaxBufferedBytes(5000))
+	cl, _ := newTestClient(UnknownTopicRetries(-1), MaxBufferedBytes(5000))
 	defer cl.Close()
 
 	// Start N workers that will concurrently write to the same partition.
