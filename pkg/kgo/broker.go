@@ -533,7 +533,16 @@ func (b *broker) loadConnection(ctx context.Context, req kmsg.Request) (*brokerC
 		return *pcxn, nil
 	}
 
+	start := time.Now()
 	conn, err := b.connect(ctx)
+	defer func() {
+		since := time.Since(start)
+		b.cl.cfg.hooks.each(func(h Hook) {
+			if h, ok := h.(HookBrokerConnect); ok {
+				h.OnBrokerConnect(b.meta, since, conn, err)
+			}
+		})
+	}()
 	if err != nil {
 		return nil, err
 	}
@@ -643,14 +652,7 @@ func (b *broker) reapConnections(idleTimeout time.Duration) (total int) {
 // connect connects to the broker's addr, returning the new connection.
 func (b *broker) connect(ctx context.Context) (net.Conn, error) {
 	b.cl.cfg.logger.Log(LogLevelDebug, "opening connection to broker", "addr", b.addr, "broker", logID(b.meta.NodeID))
-	start := time.Now()
 	conn, err := b.cl.cfg.dialFn(ctx, "tcp", b.addr)
-	since := time.Since(start)
-	b.cl.cfg.hooks.each(func(h Hook) {
-		if h, ok := h.(HookBrokerConnect); ok {
-			h.OnBrokerConnect(b.meta, since, conn, err)
-		}
-	})
 	if err != nil {
 		if !errors.Is(err, ErrClientClosed) && !errors.Is(err, context.Canceled) && !strings.Contains(err.Error(), "operation was canceled") {
 			if errors.Is(err, io.EOF) {
