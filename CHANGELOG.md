@@ -1,3 +1,14 @@
+v1.19.1
+===
+
+This release fixes a very old bug that finally started being possible to hit in
+v1.19.0. The v1.19.0 release does not work for Kafka versions pre-4.0. This
+release fixes that (by fixing the bug that has existed since Kafka 2.4) and
+adds a GH action to test against Kafka 3.8 to help prevent regressions against
+older brokers as this library marches forward.
+
+- [`50aa74f1`](https://github.com/twmb/franz-go/commits/50aa74f1) kgo bugfix: ApiVersions replies only with key 18, not all keys
+
 v1.19.0
 ===
 
