@@ -214,3 +214,17 @@ type intSliceHook []int
 func (*intSliceHook) OnNewClient(*Client) {
 	// ignore
 }
+
+func TestPing(t *testing.T) {
+	t.Parallel()
+
+	cl, _ := newTestClient()
+	defer cl.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	err := cl.Ping(ctx)
+	if err != nil {
+		t.Errorf("unable to ping: %v", err)
+	}
+}
