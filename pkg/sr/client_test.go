@@ -2,6 +2,7 @@ package sr
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -283,4 +284,107 @@ func TestSchemaRegistryAPI(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestOptValue(t *testing.T) {
+	httpcl := &http.Client{}
+	tlscfg := &tls.Config{}
+
+	c, err := NewClient(
+		HTTPClient(httpcl),
+		URLs("localhost:8081", "localhost2:8082"),
+		UserAgent("some-ua"),
+		DialTLSConfig(tlscfg),
+		BasicAuth("some-user", "some-pass"),
+		BearerToken("some-bearer"),
+		PreReq(func(req *http.Request) error {
+			req.Header.Set("Authorization", "foobar")
+			return nil
+		}),
+		DefaultParams(Normalize, Verbose),
+	)
+	if err != nil {
+		t.Fatalf("unable to create client: %s", err)
+	}
+
+	tests := []struct {
+		name     string
+		opt      any
+		assertFn func(v any) bool
+	}{
+		{
+			name:     "HTTPClient",
+			opt:      "HTTPClient",
+			assertFn: func(v any) bool { return v == httpcl },
+		},
+		{
+			name: "URLs",
+			opt:  "URLs",
+			assertFn: func(v any) bool {
+				vs := v.([]string)
+				return vs[0] == "http://localhost:8081" && vs[1] == "http://localhost2:8082"
+			},
+		},
+		{
+			name:     "UserAgent",
+			opt:      "UserAgent",
+			assertFn: func(v any) bool { return v.(string) == "some-ua" },
+		},
+		{
+			name:     "DialTLSConfig",
+			opt:      "DialTLSConfig",
+			assertFn: func(v any) bool { return v == tlscfg },
+		},
+		{
+			name:     "BasicAuth",
+			opt:      BasicAuth,
+			assertFn: func(v any) bool { return v.(string) == "some-user" },
+		},
+		{
+			name:     "BearerToken",
+			opt:      BearerToken,
+			assertFn: func(v any) bool { return v.(string) == "some-bearer" },
+		},
+		{
+			name:     "PreReq",
+			opt:      "PreReq",
+			assertFn: func(v any) bool { return v != nil },
+		},
+		{
+			name: "DefaultParams",
+			opt:  DefaultParams,
+			assertFn: func(v any) bool {
+				vp := v.(Param)
+				return vp.normalize == true && vp.verbose == true
+			},
+		},
+		{
+			name:     "unknown option name",
+			opt:      "Unknown",
+			assertFn: func(v any) bool { return v == nil },
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := c.OptValue(test.opt)
+			if !test.assertFn(got) {
+				t.Errorf("assertion failed: %q", got)
+			}
+		})
+	}
+
+	t.Run("BasicAuthValues", func(t *testing.T) {
+		got := c.OptValues(BasicAuth)
+		if len(got) != 2 {
+			t.Errorf("number of return values: expected 2, got %d", len(got))
+		}
+		expected := "some-user"
+		if got[0] != expected {
+			t.Errorf("username: expected %q, got %q", expected, got[0])
+		}
+		expected = "some-pass"
+		if got[1] != expected {
+			t.Errorf("password: expected %q, got %q", expected, got[1])
+		}
+	})
 }
