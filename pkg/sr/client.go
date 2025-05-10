@@ -26,6 +26,9 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"reflect"
+	"runtime"
+	"strings"
 	"time"
 )
 
@@ -115,11 +118,97 @@ func NewClient(opts ...ClientOpt) (*Client, error) {
 	return cl, nil
 }
 
+func namefn(fn any) string {
+	v := reflect.ValueOf(fn)
+	if v.Type().Kind() != reflect.Func {
+		return ""
+	}
+	name := runtime.FuncForPC(v.Pointer()).Name()
+	dot := strings.LastIndexByte(name, '.')
+	if dot >= 0 {
+		return name[dot+1:]
+	}
+	return name
+}
+
 // Opts returns the options that were used to create this client. This can be
 // as a base to generate a new client, where you can add override options to
 // the end of the original input list.
 func (cl *Client) Opts() []ClientOpt {
 	return cl.opts
+}
+
+// OptValue returns the value for the given configuration option. If the
+// given option does not exist, this returns nil. This function takes either a
+// raw ClientOpt, or an Opt function name.
+//
+// If a configuration option has multiple inputs, this function returns only
+// the first input. Variadic option inputs are returned as a single slice.
+// Options that are internally stored as a pointer are returned as their
+// string input; you can see if the option is internally nil by looking at
+// the second value returned from OptValues.
+//
+//		var (
+//	 		cl, _ := NewClient(
+//	 			URLs("foo", "bar"),
+//				UserAgent("baz"),
+//	 		)
+//	 		urls = cl.OptValue("URLs")     // urls is []string{"foo", "bar"}; string lookup for the option works
+//	 		ua   = cl.OptValue(UserAgent)  // ua is "baz"
+//	 		unk  = cl.OptValue("Unknown"), // unk is nil
+//		)
+func (cl *Client) OptValue(opt any) any {
+	vs := cl.OptValues(opt)
+	if len(vs) > 0 {
+		return vs[0]
+	}
+	return nil
+}
+
+// OptValues returns all values for options. This method is useful for
+// options that have multiple inputs (notably, BasicAuth). This is also useful
+// for options that are internally stored as a pointer -- this function will
+// return the string value of the option but also whether the option is non-nil.
+// Boolean options are returned as a single-element slice with the bool value.
+// Variadic inputs are returned as a signle slice. If the input option does not
+// exist, this returns nil.
+//
+//	     var (
+//		 		cl, _ := NewClient(
+//		 			URLs("foo", "bar"),
+//					UserAgent("baz"),
+//		 		)
+//		 		urls = cl.OptValues("URLs")     // urls is []any{[]string{"foo", "bar"}}
+//		 		ua   = cl.OptValues(UserAgent)  // ua is []any{"baz"}
+//		 		ba   = cl.OptValues(BasicAuth)  // ba is []any{"user", "pass"}
+//		 		unk  = cl.OptValues("Unknown"), // unk is nil
+//	     )
+func (cl *Client) OptValues(opt any) []any {
+	name := namefn(opt)
+	if s, ok := opt.(string); ok {
+		name = s
+	}
+
+	switch name {
+	case namefn(HTTPClient):
+		return []any{cl.httpcl}
+	case namefn(UserAgent):
+		return []any{cl.ua}
+	case namefn(URLs):
+		return []any{cl.urls}
+	case namefn(DialTLSConfig):
+		return []any{cl.dialTLS}
+	case namefn(BasicAuth):
+		return []any{cl.basicAuth.user, cl.basicAuth.pass}
+	case namefn(BearerToken):
+		return []any{cl.bearerToken}
+	case namefn(PreReq):
+		return []any{cl.preReq}
+	case namefn(DefaultParams):
+		return []any{cl.defParams}
+	default:
+		return nil
+	}
 }
 
 func (cl *Client) get(ctx context.Context, path string, into any) error {
