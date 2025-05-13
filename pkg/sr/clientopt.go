@@ -79,3 +79,32 @@ func DefaultParams(ps ...Param) ClientOpt {
 		cl.defParams = mergeParams(ps...)
 	}}
 }
+
+// LogFn sets the logger function to use.
+func LogFn(logFn func(int8, string, ...any)) ClientOpt {
+	return clientOpt{func(cl *Client) { cl.logFn = logFn }}
+}
+
+// LogLevelFn sets a function to return the log level dynamically.
+// See [LogLevel] for more information.
+func LogLevelFn(fn func() int8) ClientOpt {
+	return clientOpt{func(cl *Client) { cl.logLvlFn = fn }}
+}
+
+// LogLevel sets a static log level to use, overriding the default
+// "info" level.
+//
+// There are five levels:
+//   - None (0)
+//   - Error (1)
+//   - Warn (2)
+//   - Info (3)
+//   - Debug (4)
+//
+// This package defines int8 constants for convenience. The levels
+// (and log function) mirror kgo's Logger and LogLevel definitions,
+// making it easy to use any existing kgo logging functionality you
+// may already be using in this package as well.
+func LogLevel(lvl int8) ClientOpt {
+	return clientOpt{func(cl *Client) { cl.logLvlFn = func() int8 { return lvl } }}
+}
