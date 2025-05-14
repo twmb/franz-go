@@ -663,7 +663,7 @@ func (b *Reader) String() string {
 	return string(b.Span(int(l)))
 }
 
-// œCompactString returns a Kafka compact string from the reader without
+// UnsafeCompactString returns a Kafka compact string from the reader without
 // allocating using the unsafe package. This must be used with care; note the
 // string holds a reference to the original slice.
 func (b *Reader) UnsafeCompactString() string {
