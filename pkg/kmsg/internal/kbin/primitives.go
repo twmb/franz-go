@@ -6,8 +6,8 @@ import (
 	"errors"
 	"math"
 	"math/bits"
-	"reflect"
-	"unsafe"
+
+	gotils_strconv "github.com/savsgio/gotils/strconv"
 )
 
 // This file contains primitive type encoding and decoding.
@@ -86,6 +86,12 @@ func VarintLen(i int32) int {
 // UvarintLen returns how long u would be if it were uvarint encoded.
 func UvarintLen(u uint32) int {
 	return int(uvarintLens[byte(bits.Len32(u))])
+}
+
+// VarlongLen returns how long i would be if it were varlong encoded.
+func VarlongLen(i int64) int {
+	u := uint64(i)<<1 ^ uint64(i>>63)
+	return uvarlongLen(u)
 }
 
 func uvarlongLen(u uint64) int {
@@ -657,7 +663,7 @@ func (b *Reader) String() string {
 	return string(b.Span(int(l)))
 }
 
-// UnsafeCompactString returns a Kafka compact string from the reader without
+// œCompactString returns a Kafka compact string from the reader without
 // allocating using the unsafe package. This must be used with care; note the
 // string holds a reference to the original slice.
 func (b *Reader) UnsafeCompactString() string {
@@ -842,9 +848,5 @@ func (b *Reader) Ok() bool {
 
 // UnsafeString returns the slice as a string using unsafe rule (6).
 func UnsafeString(slice []byte) string {
-	var str string
-	strhdr := (*reflect.StringHeader)(unsafe.Pointer(&str))             //nolint:gosec // known way to convert slice to string
-	strhdr.Data = ((*reflect.SliceHeader)(unsafe.Pointer(&slice))).Data //nolint:gosec // known way to convert slice to string
-	strhdr.Len = len(slice)
-	return str
+	return gotils_strconv.B2S(slice)
 }
