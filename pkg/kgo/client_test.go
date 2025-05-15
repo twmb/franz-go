@@ -14,7 +14,7 @@ func TestMaxVersions(t *testing.T) {
 	if ours, main := new(fetchRequest).MaxVersion(), new(kmsg.FetchRequest).MaxVersion(); ours != main {
 		t.Errorf("our fetch request max version %d != kmsg's %d", ours, main)
 	}
-	if ours, main := new(produceRequest).MaxVersion(), new(kmsg.ProduceRequest).MaxVersion(); ours != main {
+	if ours, main := (&produceRequest{can12: true}).MaxVersion(), new(kmsg.ProduceRequest).MaxVersion(); ours != main {
 		t.Errorf("our produce request max version %d != kmsg's %d", ours, main)
 	}
 }
