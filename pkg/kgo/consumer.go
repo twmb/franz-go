@@ -1752,6 +1752,15 @@ func (c *consumer) startNewSession(tps *topicsPartitions) *consumerSession {
 	return session
 }
 
+func (c *consumer) position(topic string, partition int32) (int64, error) {
+	for usedCursor := range c.usingCursors {
+		if usedCursor.topic == topic && usedCursor.partition == partition {
+			return usedCursor.offset, nil
+		}
+	}
+	return -1, fmt.Errorf("no assignment for topics %s partition %d", topic, partition)
+}
+
 // This function is responsible for issuing ListOffsets or
 // OffsetForLeaderEpoch. These requests's responses  are only handled within
 // the context of a consumer session.

@@ -2727,6 +2727,10 @@ func (cl *Client) storeCachedMappedMetadata(meta *kmsg.MetadataResponse, intoMap
 	}
 }
 
+func (cl *Client) Position(topic string, partition int32) (int64, error) {
+	return cl.consumer.position(topic, partition)
+}
+
 func unknownOrCode(exists bool, code int16) error {
 	if !exists {
 		return kerr.UnknownTopicOrPartition
