@@ -906,6 +906,30 @@ func (cl *Client) supportsKeyVersion(key, version int16) bool {
 	return false
 }
 
+func (cl *Client) supportsKIP890p2() bool {
+	return cl.supportsFeature("transaction.version", 2)
+}
+
+// Same as above. A cluster returns a max version for a feature only once the
+// entire cluster supports the feature. This should only be used *after* at
+// least one successful response.
+func (cl *Client) supportsFeature(name string, version int16) bool {
+	cl.brokersMu.RLock()
+	defer cl.brokersMu.RUnlock()
+
+	for _, brokers := range [][]*broker{
+		cl.brokers,
+		cl.loadSeeds(),
+	} {
+		for _, b := range brokers {
+			if v := b.loadVersions(); v != nil && v.features[name] >= version {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // fetchBrokerMetadata issues a metadata request solely for broker information.
 func (cl *Client) fetchBrokerMetadata(ctx context.Context) error {
 	cl.fetchingBrokersMu.Lock()

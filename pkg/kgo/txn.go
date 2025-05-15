@@ -495,6 +495,9 @@ func (cl *Client) BeginTransaction() error {
 	}
 
 	cl.producer.inTxn = true
+	if !cl.producer.tx890p2 {
+		cl.producer.tx890p2 = cl.supportsKIP890p2()
+	}
 	cl.producer.producingTxn.Store(true) // allow produces for txns now
 	cl.cfg.logger.Log(LogLevelInfo, "beginning transaction", "transactional_id", *cl.cfg.txnID)
 
@@ -717,10 +720,15 @@ func (cl *Client) EndTransaction(ctx context.Context, commit TransactionEndTry) 
 		req.ProducerID = id
 		req.ProducerEpoch = epoch
 		req.Commit = bool(commit)
-		resp, err := req.RequestWith(ctx, cl)
+		kreq := kmsg.Request(req)
+		if !cl.producer.tx890p2 { // v5 is only supported with KIP-890 part 2
+			kreq = &pinReq{Request: req, pinMax: true, max: 4}
+		}
+		kresp, err := cl.Request(ctx, kreq)
 		if err != nil {
 			return err
 		}
+		resp := kresp.(*kmsg.EndTxnResponse)
 		if err = kerr.ErrorForCode(resp.ErrorCode); err != nil {
 			return err
 		}
@@ -745,6 +753,18 @@ func (cl *Client) EndTransaction(ctx context.Context, commit TransactionEndTry) 
 				"producer_id", id,
 				"epoch", epoch,
 			)
+			if !cl.producer.tx890p2 && cl.supportsKIP890p2() {
+				cl.cfg.logger.Log(LogLevelInfo, "end transaction noticed the cluster now supports KIP-890p2, reloading the producer ID and opting in",
+					"transactional_id", *cl.cfg.txnID,
+					"producer_id", id,
+					"epoch", epoch,
+				)
+				cl.producer.id.Store(&producerID{
+					id:    id,
+					epoch: epoch,
+					err:   errReloadProducerID,
+				})
+			}
 		}
 		return nil
 	})
@@ -918,12 +938,19 @@ func (cl *Client) commitTransactionOffsets(
 		return g
 	}
 
+	tx890p2 := cl.producer.tx890p2 // requires mu
+
 	if !g.offsetsAddedToTxn {
-		if err := cl.addOffsetsToTxn(ctx, g.cfg.group); err != nil {
-			if onDone != nil {
-				onDone(nil, nil, err)
+		// We only need to issue the AddOffsetsToTxn request if we are
+		// pre-KIP-890p2, or if we are KIP-890p2 but for some reason
+		// the broker does not support TxnOffsetCommit v5+.
+		if !tx890p2 || !cl.supportsKeyVersion(int16(kmsg.TxnOffsetCommit), 5) {
+			if err := cl.addOffsetsToTxn(ctx, g.cfg.group); err != nil {
+				if onDone != nil {
+					onDone(nil, nil, err)
+				}
+				return g
 			}
-			return g
 		}
 		g.offsetsAddedToTxn = true
 	}
@@ -941,7 +968,7 @@ func (cl *Client) commitTransactionOffsets(
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
-	g.commitTxn(ctx, req, unblockJoinSync)
+	g.commitTxn(ctx, tx890p2, req, unblockJoinSync)
 	return g
 }
 
@@ -992,7 +1019,7 @@ func (cl *Client) addOffsetsToTxn(ctx context.Context, group string) error {
 // commitTxn is ALMOST EXACTLY THE SAME as commit, but changed for txn types
 // and we avoid updateCommitted. We avoid updating because we manually
 // SetOffsets when ending the transaction.
-func (g *groupConsumer) commitTxn(ctx context.Context, req *kmsg.TxnOffsetCommitRequest, onDone func(*kmsg.TxnOffsetCommitRequest, *kmsg.TxnOffsetCommitResponse, error)) {
+func (g *groupConsumer) commitTxn(ctx context.Context, tx890p2 bool, req *kmsg.TxnOffsetCommitRequest, onDone func(*kmsg.TxnOffsetCommitRequest, *kmsg.TxnOffsetCommitResponse, error)) {
 	if onDone == nil { // note we must always call onDone
 		onDone = func(_ *kmsg.TxnOffsetCommitRequest, _ *kmsg.TxnOffsetCommitResponse, _ error) {}
 	}
@@ -1038,17 +1065,19 @@ func (g *groupConsumer) commitTxn(ctx context.Context, req *kmsg.TxnOffsetCommit
 		}
 		g.cl.cfg.logger.Log(LogLevelDebug, "issuing txn offset commit", "uncommitted", req)
 
-		var resp *kmsg.TxnOffsetCommitResponse
-		var err error
-		if len(req.Topics) > 0 {
-			start := time.Now()
-			resp, err = req.RequestWith(commitCtx, g.cl)
-			if err != nil {
-				onDone(req, nil, err)
-				return
-			}
-			g.cl.metrics.observeTime(&g.cl.metrics.cCommitLatency, time.Since(start).Milliseconds())
+		start := time.Now()
+		kreq := kmsg.Request(req)
+		if !tx890p2 {
+			kreq = &pinReq{Request: req, pinMax: true, max: 4} // v5 is only supported with KIP-890 part 2
 		}
+		kresp, err := g.cl.Request(commitCtx, kreq)
+		if err != nil {
+			onDone(req, nil, err)
+			return
+		}
+		resp := kresp.(*kmsg.TxnOffsetCommitResponse)
+		g.cl.metrics.observeTime(&g.cl.metrics.cCommitLatency, time.Since(start).Milliseconds())
+
 		onDone(req, resp, nil)
 	}()
 }

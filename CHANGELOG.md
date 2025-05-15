@@ -1,3 +1,31 @@
+v1.19.2
+===
+
+This release fixes two bugs, a data race and a misunderstanding in some of the
+implementation of KIP-890.
+
+The data race has existed for years and has only been caught once. It could
+only be encountered in a specific section of decoding a fetch response WHILE a
+metadata response was concurrently being handled, and the metadata response
+indicated a partition changed leaders. The race was benign; it was a read race,
+and the decoded response is always discarded _because_ a metadata change
+happened. Regardless, metadata handling and fetch response decoding are no
+longer concurrent.
+
+For KIP-890, some things were not called out all to clearly (imo) in the KIP.
+If your 4.0 cluster had not yet enabled the transaction.version feature v2+,
+then transactions would not work in this client. As it turns out, Kafka 4
+finally started using a v2.6 introduced "features" field in a way that is
+important to clients. In short: I opted into KIP-890 behavior based on if a
+broker could handle requests (produce v12+, end txn v5+, etc). I also needed to
+check if "transaction.version" was v2+. Features handling is now supported in
+the client, and this single client-relevant feature is now implemented.
+
+See the commits for more details.
+
+- [`dda08fd9`](https://github.com/twmb/franz-go/commits/dda08fd9) kgo: fix KIP-890 handling of the transaction.version feature
+- [`8a364819`](https://github.com/twmb/franz-go/commits/8a364819) kgo: fix data race in fetch response handling
+
 v1.19.1
 ===
 

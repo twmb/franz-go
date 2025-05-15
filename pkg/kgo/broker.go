@@ -178,14 +178,17 @@ type broker struct {
 // broker.
 type brokerVersions struct {
 	versions [kmsg.MaxKey + 1]int16
+	features map[string]int16
 }
 
 func newBrokerVersions() *brokerVersions {
-	var v brokerVersions
+	v := &brokerVersions{
+		features: make(map[string]int16),
+	}
 	for i := range &v.versions {
 		v.versions[i] = -1
 	}
-	return &v
+	return v
 }
 
 func (*brokerVersions) len() int { return kmsg.MaxKey + 1 }
@@ -814,6 +817,12 @@ start:
 		}
 		v.versions[key.ApiKey] = key.MaxVersion
 	}
+	if resp.FinalizedFeaturesEpoch != -1 {
+		for _, feat := range resp.FinalizedFeatures {
+			v.features[feat.Name] = feat.MaxVersionLevel
+		}
+	}
+
 	cxn.b.storeVersions(v)
 	return nil
 }
