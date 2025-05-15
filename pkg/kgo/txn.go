@@ -720,15 +720,13 @@ func (cl *Client) EndTransaction(ctx context.Context, commit TransactionEndTry) 
 		req.ProducerID = id
 		req.ProducerEpoch = epoch
 		req.Commit = bool(commit)
-		kreq := kmsg.Request(req)
 		if !cl.producer.tx890p2 { // v5 is only supported with KIP-890 part 2
-			kreq = &pinReq{Request: req, pinMax: true, max: 4}
+			ctx = context.WithValue(ctx, ctxPinReq, &pinReq{pinMax: true, max: 4})
 		}
-		kresp, err := cl.Request(ctx, kreq)
+		resp, err := req.RequestWith(ctx, cl)
 		if err != nil {
 			return err
 		}
-		resp := kresp.(*kmsg.EndTxnResponse)
 		if err = kerr.ErrorForCode(resp.ErrorCode); err != nil {
 			return err
 		}
@@ -1066,16 +1064,14 @@ func (g *groupConsumer) commitTxn(ctx context.Context, tx890p2 bool, req *kmsg.T
 		g.cl.cfg.logger.Log(LogLevelDebug, "issuing txn offset commit", "uncommitted", req)
 
 		start := time.Now()
-		kreq := kmsg.Request(req)
 		if !tx890p2 {
-			kreq = &pinReq{Request: req, pinMax: true, max: 4} // v5 is only supported with KIP-890 part 2
+			ctx = context.WithValue(ctx, ctxPinReq, &pinReq{pinMax: true, max: 4}) // v5 is only supported with KIP-890 part 2
 		}
-		kresp, err := g.cl.Request(commitCtx, kreq)
+		resp, err := req.RequestWith(ctx, g.cl)
 		if err != nil {
 			onDone(req, nil, err)
 			return
 		}
-		resp := kresp.(*kmsg.TxnOffsetCommitResponse)
 		g.cl.metrics.observeTime(&g.cl.metrics.cCommitLatency, time.Since(start).Milliseconds())
 
 		onDone(req, resp, nil)

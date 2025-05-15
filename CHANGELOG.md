@@ -1,3 +1,13 @@
+v1.19.3
+===
+
+This release fully fixes (and has a positive field report) the KIP-890 problem
+that was meant to be fixed in v1.19.2. See the commit description for more
+details.
+
+- [`a13f633b`](https://github.com/twmb/franz-go/commits/a13f633b) kgo: remove pinReq wrapping request
+
+
 v1.19.2
 ===
 
