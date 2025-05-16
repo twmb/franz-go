@@ -419,7 +419,7 @@ func validateMaxVersions(top, on *Struct) {
 	}
 }
 
-//go:generate sh -c "go run . | gofumpt | gofumpt -lang 1.19 -extra > ../pkg/kmsg/generated.go"
+//go:generate sh -c "go run . | gofumpt | gofumpt -lang go1.19 -extra > ../pkg/kmsg/generated.go"
 func main() {
 	const dir = "definitions"
 	const enums = "enums"
