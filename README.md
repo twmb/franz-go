@@ -42,6 +42,15 @@ This library attempts to provide an intuitive API while interacting with Kafka t
 - **Kafka**: the original Java project
 - **Confluent Platform**
 - **Microsoft Event Hubs**
+  - As of May 16, 2025, Event Hubs supports only Kafka version 3.8. You **must** set the `kgo.MaxVersions(kversion.V3_8_0())` 
+    option; otherwise, you'll encounter the following error:
+    ```
+    [DEBUG] connection opened to broker; addr: XXX.servicebus.windows.net:9093, broker: seed_0
+    [DEBUG] issuing api versions request; broker: seed_0, version: 4
+    [DEBUG] wrote ApiVersions v4; broker: seed_0, bytes_written: 31, write_wait: 45.291µs, time_to_write: 22.107µs, err: <nil>
+    [DEBUG] read ApiVersions v4; broker: seed_0, bytes_read: 0, read_wait: 29.877µs, time_to_read: 62.945813ms, err: read tcp 192.168.0.36:50812->X.X.X.X:9093: read: connection reset by peer
+    [DEBUG] connection initialization failed; addr: XXXX.servicebus.windows.net:9093, broker: seed_0, err: read tcp 192.168.0.36:50812->X.X.X.X:9093: read: connection reset by peer
+
   - Event Hubs does [not support][MSEH] producing with compression; be sure to use `kgo.ProducerBatchCompression(kgo.NoCompression)`.
 - **Amazon MSK**
 
