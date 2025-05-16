@@ -720,8 +720,9 @@ func (cl *Client) EndTransaction(ctx context.Context, commit TransactionEndTry) 
 		req.ProducerID = id
 		req.ProducerEpoch = epoch
 		req.Commit = bool(commit)
-		if !cl.producer.tx890p2 { // v5 is only supported with KIP-890 part 2
-			ctx = context.WithValue(ctx, ctxPinReq, &pinReq{pinMax: true, max: 4})
+		ctx := ctx // capture a local ctx variable in case we introduce concurrency above later
+		if !cl.producer.tx890p2 {
+			ctx = context.WithValue(ctx, ctxPinReq, &pinReq{pinMax: true, max: 4}) // v5 is only supported with KIP-890 part 2
 		}
 		resp, err := req.RequestWith(ctx, cl)
 		if err != nil {
@@ -1064,6 +1065,7 @@ func (g *groupConsumer) commitTxn(ctx context.Context, tx890p2 bool, req *kmsg.T
 		g.cl.cfg.logger.Log(LogLevelDebug, "issuing txn offset commit", "uncommitted", req)
 
 		start := time.Now()
+		ctx := ctx // capture a local ctx variable; do not use the shared one that is concurrently read above
 		if !tx890p2 {
 			ctx = context.WithValue(ctx, ctxPinReq, &pinReq{pinMax: true, max: 4}) // v5 is only supported with KIP-890 part 2
 		}
