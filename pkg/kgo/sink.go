@@ -835,7 +835,12 @@ func (s *sink) handleReqRespBatch(
 	// Since we have received a response and we are the first batch, we can
 	// at this point re-enable failing from load errors.
 	//
-	// We do not need a lock since the owner is locked.
+	// We do not need the mutex lock on the batch. We already have the
+	// recBuf mu (guarding most concurrency). The only place batch fields
+	// are accessed & modified without the recBuf mu is when writing a
+	// batch, and we only ever use a batch in inflight request at a time
+	// (regardless of the partition  being canceled or moving to a
+	// different sink).
 	batch.canFailFromLoadErrs = true
 
 	// By default, we assume we errored. Non-error updates this back
@@ -1475,12 +1480,12 @@ func (recBuf *recBuf) bumpRepeatedLoadErr(err error) {
 		return
 	}
 	batch0 := recBuf.batches[0]
-	batch0.tries++
 
 	// We need to lock the batch as well because there could be a buffered
 	// request about to be written. Writing requests only grabs the batch
 	// mu, not the recBuf mu.
 	batch0.mu.Lock()
+	batch0.tries++
 	var (
 		canFail        = !recBuf.cl.idempotent() || batch0.canFailFromLoadErrs // we can only fail if we are not idempotent or if we have no outstanding requests
 		batch0Fail     = batch0.maybeFailErr(&recBuf.cl.cfg) != nil            // timeout, retries, or aborting
