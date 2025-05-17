@@ -1,5 +1,8 @@
-franz-go - A complete Apache Kafka client written in Go
-===
+# franz-go
+
+<img align="right" width="300" src="docs/images/logo2.png">
+
+A complete Apache Kafka client written in Go
 
 [![GoDev](https://img.shields.io/static/v1?label=godev&message=reference&color=00add8)][godev]
 ![GitHub](https://img.shields.io/github/license/twmb/franz-go)
