@@ -1,6 +1,6 @@
 # franz-go
 
-<img align="right" width="300" src="docs/images/logo2.png">
+<img align="right" width="300" src="docs/images/logo.png">
 
 A complete Apache Kafka client written in Go
 
