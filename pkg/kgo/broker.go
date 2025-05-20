@@ -550,7 +550,10 @@ func (b *broker) loadConnection(ctx context.Context, req kmsg.Request) (*brokerC
 		return *pcxn, nil
 	}
 
+	var tries int
 	start := time.Now()
+doConnect:
+	tries++
 	conn, err := b.connect(ctx)
 	defer func() {
 		since := time.Since(start)
@@ -572,7 +575,17 @@ func (b *broker) loadConnection(ctx context.Context, req kmsg.Request) (*brokerC
 		conn:   conn,
 		deadCh: make(chan struct{}),
 	}
-	if err = cxn.init(isProduceCxn); err != nil {
+	if err = cxn.init(isProduceCxn, tries); err != nil {
+		// EventHubs does not handle v4 and resets the connection. We
+		// retry twice. On the first and second attempt, we try our max
+		// version possible (as should be allowed). On the third try,
+		// we downgrade to v0.
+		if er := (*errApiVersionsReset)(nil); errors.As(err, &er) {
+			if tries < 3 {
+				tries++
+				goto doConnect
+			}
+		}
 		b.cl.cfg.logger.Log(LogLevelDebug, "connection initialization failed", "addr", b.addr, "broker", logID(b.meta.NodeID), "err", err)
 		cxn.closeConn()
 		return nil, err
@@ -719,11 +732,11 @@ type brokerCxn struct {
 	deadCh chan struct{}
 }
 
-func (cxn *brokerCxn) init(isProduceCxn bool) error {
+func (cxn *brokerCxn) init(isProduceCxn bool, tries int) error {
 	hasVersions := cxn.b.loadVersions() != nil
 	if !hasVersions {
 		if cxn.b.cl.cfg.maxVersions == nil || cxn.b.cl.cfg.maxVersions.HasKey(18) {
-			if err := cxn.requestAPIVersions(); err != nil {
+			if err := cxn.requestAPIVersions(tries); err != nil {
 				if !errors.Is(err, ErrClientClosed) && !isRetryableBrokerErr(err) {
 					cxn.cl.cfg.logger.Log(LogLevelError, "unable to request api versions", "broker", logID(cxn.b.meta.NodeID), "err", err)
 				}
@@ -749,14 +762,15 @@ func (cxn *brokerCxn) init(isProduceCxn bool) error {
 	return nil
 }
 
-func (cxn *brokerCxn) requestAPIVersions() error {
-	maxVersion := int16(3)
-
-	// If the user configured a max versions, we check that the key exists
-	// before entering this function. Thus, we expect exists to be true,
-	// but we still doubly check it for sanity (as well as userMax, which
-	// can only be non-negative based off of LookupMaxKeyVersion's API).
-	if cxn.cl.cfg.maxVersions != nil {
+func (cxn *brokerCxn) requestAPIVersions(tries int) error {
+	maxVersion := int16(4)
+	if tries >= 3 { // on the third try, we pin to v0; see above in cxn initialization
+		maxVersion = 0
+	} else if cxn.cl.cfg.maxVersions != nil {
+		// If the user configured a max versions, we check that the key exists
+		// before entering this function. Thus, we expect exists to be true,
+		// but we still doubly check it for sanity (as well as userMax, which
+		// can only be non-negative based off of LookupMaxKeyVersion's API).
 		userMax, exists := cxn.cl.cfg.maxVersions.LookupMaxKeyVersion(18) // 18 == api versions
 		if exists && userMax >= 0 {
 			maxVersion = userMax
@@ -779,6 +793,9 @@ start:
 	// api versions does *not* use flexible response headers; see comment in promisedResp
 	rawResp, err := cxn.readResponse(nil, req.Key(), req.GetVersion(), corrID, false, rt, bytesWritten, writeWait, timeToWrite, readEnqueue)
 	if err != nil {
+		if strings.HasSuffix(err.Error(), "connection reset by peer") {
+			return &errApiVersionsReset{err}
+		}
 		return err
 	}
 	if len(rawResp) < 2 {
