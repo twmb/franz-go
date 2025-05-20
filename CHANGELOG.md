@@ -1,3 +1,27 @@
+v1.19.4
+===
+
+Fixes one bug introduced from the prior release (an obvious data race in
+retrospect), and one data race introduced in 1.19.0. I've looped the tests more
+in this release and am not seeing further races. I don't mean to downplay the
+severity here, but these are races on pointer-sized variables where reading the
+before or after state is of little difference. One of the read/write races is
+on a context.Context, so there are actually two pointer sized reads & writes --
+but reading the (effectively) type vtable for the new context and then the data
+pointer for the old context doesn't really break things here. Anyway, you
+should upgrade.
+
+This also adds a workaround for Azure EventHubs, which does not handle
+ApiVersions correctly when the broker does not recognize the version we are
+sending. The broker _should_ reply with an `UNSUPPORTED_VERSION` error and
+reply with the version the broker _can_ handle. Instead, Azure is resetting the
+connection. To workaround, we detect a cxn reset twice and then downgrade the
+request we send client side to 0.
+
+- [`7910f6b6`](https://github.com/twmb/franz-go/commit/7910f6b6) kgo: retry `connection reset by peer` from ApiVersions to work around EventHubs
+- [`d310cabd`](https://github.com/twmb/franz-go/commit/d310cabd) kgo: fix data read/write race on ctx variable
+- [`7a5ddcec`](https://github.com/twmb/franz-go/commit/7a5ddcec) kgo bugfix: guard sink batch field access more
+
 v1.19.3
 ===
 
