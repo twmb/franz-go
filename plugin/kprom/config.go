@@ -3,10 +3,11 @@ package kprom
 import (
 	"reflect"
 
+	"maps"
+
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"maps"
 )
 
 type cfg struct {
@@ -166,7 +167,7 @@ type HistogramOpts struct {
 //	 		Buckets: prometheus.LinearBuckets(10, 10, 8),
 //	 	},
 //	 	kprom.HistogramOpts{
-//	 		Enable: kprom.ReadeTime,
+//	 		Enable: kprom.ReadTime,
 //	 		// kprom default bucket will be used
 //	 	},
 //	 ),
