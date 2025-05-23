@@ -50,7 +50,7 @@ func main() {
 		panic(err)
 	}
 
-	//populate fake data
+	// Populate fake data.
 	for i := 0; i < 10; i++ {
 		k.producer.Produce(ctx, &kgo.Record{
 			Topic:     exampleTopic,
