@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 	"errors"
-	"log"
+	"fmt"
 	"math/rand/v2"
 	"os/signal"
 	"sync"
@@ -11,6 +11,11 @@ import (
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kgo"
+)
+
+const (
+	exampleGroup = "example-group"
+	exampleTopic = "example"
 )
 
 type consumer struct {
@@ -36,32 +41,31 @@ func main() {
 
 	c.client, err = kgo.NewClient([]kgo.Opt{
 		kgo.SeedBrokers([]string{"localhost:9092"}...),
-		kgo.ConsumerGroup("example-group"),
-		kgo.ConsumeTopics("example"),
+		kgo.ConsumerGroup(exampleGroup),
+		kgo.ConsumeTopics(exampleTopic),
 		kgo.AutoCommitMarks(),
-		kgo.AutoCommitInterval(3 * time.Second), //default is 5s
+		kgo.AutoCommitInterval(3 * time.Second),
 		kgo.OnPartitionsRevoked(c.revoked),
+		kgo.BlockRebalanceOnPoll(),
 	}...)
 	if err != nil {
-		log.Fatal("failed to create consumer")
+		panic(err)
 	}
 	defer c.client.Close()
 	if err = c.client.Ping(ctx); err != nil {
-		log.Fatal("failed to ping consumer")
+		panic(err)
 	}
 
 	wg.Add(1)
 	go c.run(ctx, &wg)
 
-	//waiting for stop signal
+	// Waiting for stop signal.
 	<-ctx.Done()
 	wg.Wait()
-	log.Println("ok")
 }
 
 func (c *consumer) run(ctx context.Context, wg *sync.WaitGroup) {
 	defer wg.Done()
-	log.Print("start consumer")
 	for {
 		select {
 		case <-ctx.Done():
@@ -74,14 +78,14 @@ func (c *consumer) run(ctx context.Context, wg *sync.WaitGroup) {
 			if fetches.Empty() {
 				continue
 			}
+			fetches.EachError(func(_ string, _ int32, err error) {
+				panic(err)
+			})
 			fetches.EachPartition(func(p kgo.FetchTopicPartition) {
 				var epoch int32
 				var offset int64
 				for _, r := range p.Records {
-					if err := c.process(r); err != nil {
-						// do other job like retry and dlq
-						log.Println("failed to process record", err)
-					}
+					fmt.Printf("Handled record, p: %d, o: %d, e: %d\n", p.Partition, r.Offset, r.LeaderEpoch)
 					epoch = r.LeaderEpoch
 					offset = r.Offset + 1
 				}
@@ -89,12 +93,12 @@ func (c *consumer) run(ctx context.Context, wg *sync.WaitGroup) {
 					p.Partition: kgo.EpochOffset{Epoch: epoch, Offset: offset},
 				}})
 			})
+			c.client.AllowRebalance()
 		}
 	}
 }
 
 func (c *consumer) process(r *kgo.Record) error {
-	//consider using sync.Pool to decrease mem allocation for message struct
 	msg := &message{
 		topic:     r.Topic,
 		key:       r.Key,
@@ -104,20 +108,20 @@ func (c *consumer) process(r *kgo.Record) error {
 		partition: r.Partition,
 	}
 	if rand.IntN(100)%2 != 0 {
-		//simulate error
+		// Simulate error.
 		return errors.New("failed to process record")
 	}
 
-	//simulate normal behavior
-	log.Printf("%v", msg)
+	// Simulate normal behavior.
+	fmt.Printf("%v", msg)
 	return nil
 }
 
 func (c *consumer) revoked(ctx context.Context, cl *kgo.Client, _ map[string][]int32) {
-	//need to commit all marked offsets before the partitions are revoked
+	// Need to commit all marked offsets before the partitions are revoked.
 	if err := cl.CommitMarkedOffsets(ctx); err != nil {
-		log.Println("failed to commit marked offsets", err)
+		fmt.Printf("Failed to commit marked offsets: %v\n", err)
 	}
-	//do handling revoked partitions
-	//see goroutine_per_partition_consuming examples folder
+	// Note: please look at the goroutine-per-partition examples
+	// if you want better concurrency and safe handling of partitions.
 }

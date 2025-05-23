@@ -15,18 +15,26 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
+const (
+	exampleGroup     = "example-group"
+	exampleTopic     = "example"
+	dlqTopic         = "dlq"
+	maxRecRetryCount = 3
+)
+
 type kafka struct {
 	producer *kgo.Client
 	consumer *kgo.Client
 }
 
 type message struct {
-	topic     string
-	key       []byte
-	value     []byte
-	timestamp time.Time
-	offset    int64
-	partition int32
+	topic       string
+	key         []byte
+	value       []byte
+	timestamp   time.Time
+	offset      int64
+	partition   int32
+	leaderEpoch int32
 }
 
 func main() {
@@ -35,40 +43,37 @@ func main() {
 
 	k := &kafka{}
 	var wg sync.WaitGroup
-
 	if err := k.connectProducer(ctx); err != nil {
-		log.Fatal("failed to connect producer", err)
+		panic(err)
 	}
 	if err := k.connectConsumer(ctx); err != nil {
-		log.Fatal("failed to connect consumer", err)
+		panic(err)
 	}
 
 	//populate fake data
 	for i := 0; i < 10; i++ {
 		k.producer.Produce(ctx, &kgo.Record{
-			Topic:     "example",
+			Topic:     exampleTopic,
 			Key:       []byte("key" + strconv.Itoa(i)),
 			Value:     []byte("value" + strconv.Itoa(i)),
 			Timestamp: time.Now(),
 		}, nil)
 	}
-
 	wg.Add(1)
 	go k.run(ctx, &wg)
 
-	//waiting for stop signal
+	// Waiting for the stop signal.
 	<-ctx.Done()
 	k.close()
 	wg.Wait()
-	log.Println("ok")
 }
 
 func (k *kafka) connectConsumer(ctx context.Context) error {
 	var err error
 	k.consumer, err = kgo.NewClient([]kgo.Opt{
 		kgo.SeedBrokers([]string{"localhost:9092"}...),
-		kgo.ConsumerGroup("example-group"),
-		kgo.ConsumeTopics("example"),
+		kgo.ConsumerGroup(exampleGroup),
+		kgo.ConsumeTopics(exampleTopic),
 	}...)
 	if err != nil {
 		return err
@@ -84,7 +89,6 @@ func (k *kafka) connectProducer(ctx context.Context) error {
 	k.producer, err = kgo.NewClient([]kgo.Opt{
 		kgo.SeedBrokers([]string{"localhost:9092"}...),
 		kgo.AllowAutoTopicCreation(),
-		kgo.DefaultProduceTopic("example"),
 	}...)
 	if err != nil {
 		return err
@@ -97,7 +101,6 @@ func (k *kafka) connectProducer(ctx context.Context) error {
 
 func (k *kafka) run(ctx context.Context, wg *sync.WaitGroup) {
 	defer wg.Done()
-	log.Print("start consumer")
 	for {
 		select {
 		case <-ctx.Done():
@@ -110,18 +113,39 @@ func (k *kafka) run(ctx context.Context, wg *sync.WaitGroup) {
 			if fetches.Empty() {
 				continue
 			}
+			fetches.EachError(func(_ string, _ int32, err error) {
+				panic(err)
+			})
 			fetches.EachPartition(func(p kgo.FetchTopicPartition) {
+				// Note: please look at the goroutine-per-partition examples
+				// if you want better concurrency.
 				for _, rec := range p.Records {
 					if err := k.process(rec); err != nil {
-						//if error occurs we spawn a goroutine because
-						//other records should not wait for the current one
-						go func() {
-							//before dlq we probably want to add a retry mechanism
-							//to make sure that there's no obvious errors
-							if err = k.retry(rec); err != nil {
-								k.sendToDlq(ctx, rec, err)
-							}
-						}()
+						// Before DLQ we probably want to add a retry mechanism
+						// to make sure that there's no obvious errors.
+						if err = k.retry(rec); err != nil {
+							failed, _ := json.Marshal(&message{
+								topic:       rec.Topic,
+								key:         rec.Key,
+								value:       rec.Value,
+								timestamp:   rec.Timestamp,
+								offset:      rec.Offset,
+								partition:   rec.Partition,
+								leaderEpoch: rec.LeaderEpoch,
+							})
+							// Then DLQ consumer should handle produced records.
+							k.producer.Produce(ctx, &kgo.Record{
+								Topic:     dlqTopic,
+								Key:       rec.Key,
+								Value:     failed,
+								Timestamp: time.Now(),
+								Headers: []kgo.RecordHeader{
+									// Some headers as review info.
+									{Key: "status", Value: []byte("review")},
+									{Key: "error", Value: []byte(err.Error())},
+								},
+							}, nil)
+						}
 					}
 				}
 			})
@@ -130,64 +154,37 @@ func (k *kafka) run(ctx context.Context, wg *sync.WaitGroup) {
 }
 
 func (k *kafka) process(r *kgo.Record) error {
-	//simulate load
+	// Simulate load.
 	time.Sleep(1 * time.Second)
 	msg := &message{
-		topic:     r.Topic,
-		key:       r.Key,
-		value:     r.Value,
-		timestamp: r.Timestamp,
-		offset:    r.Offset,
-		partition: r.Partition,
+		topic:       r.Topic,
+		key:         r.Key,
+		value:       r.Value,
+		timestamp:   r.Timestamp,
+		offset:      r.Offset,
+		partition:   r.Partition,
+		leaderEpoch: r.LeaderEpoch,
 	}
 	if rand.IntN(100)%2 != 0 {
-		//simulate error
+		// Simulate error.
 		return errors.New("failed to process record")
 	}
-
-	//simulate normal behavior
+	// Simulate normal behavior.
 	log.Printf("%v", msg)
 	return nil
 }
 
 func (k *kafka) retry(r *kgo.Record) error {
 	var err error
-	for i := 1; i <= 3; i++ {
+	for i := 1; i <= maxRecRetryCount; i++ {
 		if err = k.process(r); err != nil {
-			//simulate backoff
+			// Simulate backoff.
 			time.Sleep(time.Duration(i*2) * time.Second)
 		} else {
 			return nil
 		}
 	}
 	return err
-}
-
-func (k *kafka) sendToDlq(ctx context.Context, r *kgo.Record, err error) {
-	failed, _ := json.Marshal(&message{
-		topic:     r.Topic,
-		key:       r.Key,
-		value:     r.Value,
-		timestamp: r.Timestamp,
-		offset:    r.Offset,
-		partition: r.Partition,
-	})
-	dlq := &kgo.Record{
-		Topic:     "dlq",
-		Key:       r.Key,
-		Value:     failed,
-		Timestamp: time.Now(),
-		Headers: []kgo.RecordHeader{
-			//some headers as review info
-			{Key: "status", Value: []byte("review")},
-			{Key: "error", Value: []byte(err.Error())},
-		},
-	}
-
-	//then dlq consumer should handle produced records
-	k.producer.Produce(ctx, dlq, func(r *kgo.Record, err error) {
-		log.Println("failed to produce dlq record", err)
-	})
 }
 
 func (k *kafka) close() {
