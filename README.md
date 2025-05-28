@@ -18,7 +18,7 @@ This library attempts to provide an intuitive API while interacting with Kafka t
 
 ## Features
 
-- Feature complete client (Kafka >= 0.8.0 through v3.8+) _minus_ the next generation group protocol
+- Feature complete client (Kafka >= 0.8.0 through v4.0+) _minus_ the next generation group protocol, which is implemented but deliberately hidden due to concerns with the broker implementation (see the 1.19.0 release notes for how to opt in)
 - Full Exactly-Once-Semantics (EOS)
 - Idempotent & transactional producers
 - Simple (legacy) consumer
