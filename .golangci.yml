@@ -20,6 +20,7 @@ linters:
     - durationcheck
     - exhaustive
     - exptostd
+    - fatcontext
     - gocheckcompilerdirectives
     - gochecksumtype
     - gocritic
