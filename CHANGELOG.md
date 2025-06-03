@@ -1,3 +1,14 @@
+v1.19.5
+===
+
+Fixes a bug introduced in 1.19.3 that caused batched FindCoordinator requests
+to no longer work against older brokers (Kafka brokers before 2.4, or all
+Redpanda versions brokers).
+
+All credit to [@douglasbouttell](https://github.com/douglasbouttell) for exactly diagnosing the bug.
+
+- [`06272c66`](https://github.com/twmb/franz-go/commit/06272c66) bugfix kgo: bugfix batched FindCoordinator requests against older brokers
+
 v1.19.4
 ===
 
