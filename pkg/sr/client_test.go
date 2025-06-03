@@ -188,6 +188,18 @@ func TestSchemaRegistryAPI(t *testing.T) {
 			expected: `[{"subject":"foo","version":1,"id":1,"schema":"{\"name\":\"foo\", \"type\": \"record\", \"fields\":[{\"name\":\"str\", \"type\": \"string\"}]}"}]`,
 		},
 		{
+			name:     "register schema",
+			fn:       func() (any, error) { return c.RegisterSchema(ctx, dummySchema.Subject, dummySchema.Schema, -1, -1) },
+			expected: `1`,
+		},
+		{
+			name: "register schema with ID and version",
+			fn: func() (any, error) {
+				return c.RegisterSchema(ctx, dummySchema.Subject, dummySchema.Schema, dummySchema.ID, dummySchema.Version)
+			},
+			expected: `1`,
+		},
+		{
 			name:     "create schema",
 			fn:       func() (any, error) { return c.CreateSchema(ctx, dummySchema.Subject, dummySchema.Schema) },
 			expected: `{"subject":"foo","version":1,"id":1,"schema":"{\"name\":\"foo\", \"type\": \"record\", \"fields\":[{\"name\":\"str\", \"type\": \"string\"}]}"}`,
