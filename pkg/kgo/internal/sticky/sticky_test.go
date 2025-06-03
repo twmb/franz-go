@@ -1303,6 +1303,7 @@ func TestMultiGenerational(t *testing.T) {
 		//
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
 			plan := Balance(test.members, test.topics)
 			testStickyResult(t, plan, test.members, test.nsticky, test.balance)
 			testPlanUsage(t, plan, test.topics, nil)
