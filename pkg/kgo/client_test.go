@@ -228,3 +228,32 @@ func TestPing(t *testing.T) {
 		t.Errorf("unable to ping: %v", err)
 	}
 }
+
+func TestIssue1034(t *testing.T) {
+	t.Parallel()
+
+	cl, _ := newTestClient()
+	defer cl.Close()
+
+	req := kmsg.NewPtrFindCoordinatorRequest()
+	req.CoordinatorType = 0
+	req.CoordinatorKeys = []string{"foo", "bar", "biz"}
+	resp, err := req.RequestWith(context.Background(), cl)
+	if err != nil {
+		t.Fatalf("unable to request coordinators: %v", err)
+	}
+	need := make(map[string]struct{})
+	for _, k := range req.CoordinatorKeys {
+		need[k] = struct{}{}
+	}
+	for _, c := range resp.Coordinators {
+		if c.Key == "" {
+			t.Errorf("response coordinator erroneously has an empty key")
+			continue
+		}
+		delete(need, c.Key)
+	}
+	if len(need) > 0 {
+		t.Errorf("coordinator key responses missing: %v", need)
+	}
+}

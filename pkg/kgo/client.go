@@ -3227,7 +3227,7 @@ func (*findCoordinatorSharder) shard(_ context.Context, kreq kmsg.Request, lastE
 		sreq.CoordinatorType = req.CoordinatorType
 		sreq.CoordinatorKey = key
 		issues = append(issues, issueShard{
-			req: req,
+			req: sreq,
 			pin: &pinReq{pinMax: true, max: 3},
 			any: true,
 		})
