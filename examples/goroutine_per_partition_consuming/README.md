@@ -29,7 +29,7 @@ This example adds a few things to the simpler auto-committing example. First,
 we switch to `BlockRebalanceOnPoll` and uses some locking to avoid rebalances
 while the partition goroutines are processing, and we switch to
 `AutoCommitMarks` to have more control over what will actually be committed.
-This example uses `CommitUncommittedOffsets` at the end of being revoked to
+This example uses `CommitMarkedOffsets` at the end of being revoked to
 ensure that marked records are committed before revoking is allowed to
 continue. Lastly, we use `EachPartition` rather than `EachTopic` to avoid the
 internal allocations that `EachTopic` may do.
@@ -66,4 +66,3 @@ comma delimited set of brokers.
 `-t` specifies the topic to consume (required)
 
 `-g` specifies the group to consume in (required)
-
