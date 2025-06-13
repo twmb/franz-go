@@ -203,7 +203,10 @@ func (cl *Client) OptValues(opt any) []any {
 	case namefn(DialTLSConfig):
 		return []any{cl.dialTLS}
 	case namefn(BasicAuth):
-		return []any{cl.basicAuth.user, cl.basicAuth.pass}
+		if cl.basicAuth != nil {
+			return []any{cl.basicAuth.user, cl.basicAuth.pass}
+		}
+		return []any{}
 	case namefn(BearerToken):
 		return []any{cl.bearerToken}
 	case namefn(PreReq):
