@@ -8,11 +8,12 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/twmb/franz-go/pkg/kgo"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 	semconv "go.opentelemetry.io/otel/semconv/v1.18.0"
+
+	"github.com/twmb/franz-go/pkg/kgo"
 )
 
 var ( // interface checks to ensure we implement the hooks properly

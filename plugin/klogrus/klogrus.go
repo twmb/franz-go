@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/sirupsen/logrus"
+
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 

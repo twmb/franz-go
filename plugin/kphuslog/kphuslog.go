@@ -11,6 +11,7 @@ package kphuslog
 
 import (
 	"github.com/phuslu/log"
+
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
