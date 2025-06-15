@@ -1,9 +1,8 @@
 package kprom
 
 import (
-	"reflect"
-
 	"maps"
+	"reflect"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"

@@ -3,6 +3,7 @@ package klogr
 
 import (
 	"github.com/go-logr/logr"
+
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 

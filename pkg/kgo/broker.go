@@ -1027,10 +1027,7 @@ func (cxn *brokerCxn) doSasl(authenticate bool) error {
 		// every second after, we add between 0.05s or 0.08s to our
 		// backoff. At 12hr, we reauth ~24 to 28min before the
 		// lifetime.
-		usePessimismMillis := maxPessimismMillis
-		if minPessimismMillis > maxPessimismMillis {
-			usePessimismMillis = minPessimismMillis
-		}
+		usePessimismMillis := max(minPessimismMillis, maxPessimismMillis)
 		useLifetimeMillis := lifetimeMillis - int64(usePessimismMillis)
 
 		// Subtracting our min pessimism may result in our connection

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"sort"
 	"strconv"
 	"sync"
@@ -72,13 +73,11 @@ func TestConsumeTopicRetrieval_Many(t *testing.T) {
 	if len(topics) != 0 {
 		t.Fatalf("expected no topics, got %v", topics)
 	}
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		cl.AddConsumeTopics(fmt.Sprintf("%s_%d", topicName, i))
 	}
 	topics = cl.GetConsumeTopics()
-	sort.Slice(topics, func(i, j int) bool {
-		return topics[i] < topics[j]
-	})
+	slices.Sort(topics)
 	if len(topics) != 100 || topics[0] != fmt.Sprintf("%s_%d", topicName, 0) {
 		t.Fatalf("expected to see %v, got %v", topicName, topics)
 	}
@@ -355,7 +354,7 @@ func TestPauseIssue489(t *testing.T) {
 		{"fetches", func(ctx context.Context) Fetches { return cl.PollFetches(ctx) }},
 		{"records", func(ctx context.Context) Fetches { return cl.PollRecords(ctx, 1000) }},
 	} {
-		for i := 0; i < 10; i++ {
+		for range 10 {
 			ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 			var sawZero, sawOne, sawTwo bool
 			for (!sawZero || !sawOne || !sawTwo) && !closed(ctx.Done()) {
@@ -434,7 +433,7 @@ func TestPauseIssueOct2023(t *testing.T) {
 		{"fetches", func(ctx context.Context) Fetches { return cl.PollFetches(ctx) }},
 		{"records", func(ctx context.Context) Fetches { return cl.PollRecords(ctx, 1000) }},
 	} {
-		for i := 0; i < 10; i++ {
+		for range 10 {
 			ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 			var sawt1, sawt2, sawt3 bool
 			for (!sawt1 || !sawt2 || !sawt3) && !closed(ctx.Done()) {
@@ -644,7 +643,7 @@ func TestIssue865(t *testing.T) {
 	)
 
 	var wg sync.WaitGroup
-	for i := 0; i < nrecs; i++ {
+	for i := range nrecs {
 		r1 := StringRecord(strconv.Itoa(i))
 		r1.Topic = t1
 		wg.Add(1)
@@ -772,7 +771,7 @@ func TestPooling(t *testing.T) {
 	const nrecs = 10
 
 	var wg sync.WaitGroup
-	for i := 0; i < nrecs; i++ {
+	for range nrecs {
 		wg.Add(1)
 		cl.Produce(context.Background(), StringRecord("foobarfoobarfoobarfoobar"), func(_ *Record, err error) {
 			defer wg.Done()
@@ -822,7 +821,7 @@ func TestGroupSimple(t *testing.T) {
 	)
 	defer cl.Close()
 
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		if err := cl.ProduceSync(context.Background(), StringRecord("foo")).FirstErr(); err != nil {
 			t.Fatal(err)
 		}

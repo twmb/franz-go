@@ -14,8 +14,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/twmb/franz-go/plugin/kprom"
 	"github.com/twmb/tlscfg"
+
+	"github.com/twmb/franz-go/plugin/kprom"
 
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/sasl/aws"

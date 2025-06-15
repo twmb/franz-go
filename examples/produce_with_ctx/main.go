@@ -32,7 +32,7 @@ func main() {
 	wg.Add(count)
 
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
-	//ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(2*time.Second))
+	// ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(2*time.Second))
 	defer cancel()
 	for i := range count {
 		r := &kgo.Record{

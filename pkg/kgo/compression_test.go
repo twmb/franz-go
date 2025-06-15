@@ -100,7 +100,7 @@ func TestCompressDecompress(t *testing.T) {
 					}
 					t.Errorf("unexpected nil compressor from codecs %v", codecs)
 				}
-				for i := 0; i < 3; i++ {
+				for range 3 {
 					wg.Add(1)
 					go func() {
 						w := byteBuffers.Get().(*bytes.Buffer)

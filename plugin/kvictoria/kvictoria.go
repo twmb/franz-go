@@ -73,6 +73,7 @@ import (
 	"time"
 
 	vm "github.com/VictoriaMetrics/metrics"
+
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
