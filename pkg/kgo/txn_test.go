@@ -57,7 +57,7 @@ func TestTxnEtl(t *testing.T) {
 			}
 		}()
 		var safeUnsafe bool
-		for i := 0; i < testRecordLimit; i++ {
+		for i := range testRecordLimit {
 			// We start with a transaction, and every 10k records
 			// we commit and begin a new one.
 			if i > 0 && i%10000 == 0 {

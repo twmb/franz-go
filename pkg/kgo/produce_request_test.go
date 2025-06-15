@@ -42,7 +42,7 @@ func TestClient_Produce(t *testing.T) {
 	// Start N workers that will concurrently write to the same partition.
 	var recsWritten atomic.Int64
 	var fatal atomic.Bool
-	for i := 0; i < numWorkers; i++ {
+	for range numWorkers {
 		workers.Add(1)
 
 		go func() {
@@ -209,7 +209,7 @@ func TestIssue831(t *testing.T) {
 	defer cl.Close()
 
 	var wg sync.WaitGroup
-	for i := 0; i < 500; i++ {
+	for range 500 {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 

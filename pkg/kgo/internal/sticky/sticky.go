@@ -10,6 +10,7 @@ import (
 
 	"github.com/twmb/franz-go/pkg/kbin"
 	"github.com/twmb/franz-go/pkg/kmsg"
+	"slices"
 )
 
 // Sticky partitioning has two versions, the latter from KIP-341 preventing a
@@ -452,11 +453,8 @@ func (b *balancer) assignUnassignedAndInitGraph() {
 			}
 			memberTopics := b.members[memberNum].Topics
 			var memberStillWantsTopic bool
-			for _, memberTopic := range memberTopics {
-				if memberTopic == b.topicInfos[topicNum].topic {
-					memberStillWantsTopic = true
-					break
-				}
+			if slices.Contains(memberTopics, b.topicInfos[topicNum].topic) {
+				memberStillWantsTopic = true
 			}
 			if !memberStillWantsTopic {
 				partNums.remove(partNum)

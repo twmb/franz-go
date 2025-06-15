@@ -9,6 +9,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo/internal/sticky"
 	"github.com/twmb/franz-go/pkg/kmsg"
+	"slices"
 )
 
 // GroupBalancer balances topics and partitions among group members.
@@ -295,7 +296,7 @@ func (p *BalancePlan) IntoSyncAssignment() []kmsg.SyncGroupRequestGroupAssignmen
 	for member, assignment := range p.plan {
 		var kassignment kmsg.ConsumerMemberAssignment
 		for topic, partitions := range assignment {
-			sort.Slice(partitions, func(i, j int) bool { return partitions[i] < partitions[j] })
+			slices.Sort(partitions)
 			assnTopic := kmsg.NewConsumerMemberAssignmentTopic()
 			assnTopic.Topic = topic
 			assnTopic.Partitions = partitions
@@ -432,7 +433,7 @@ func (g *groupConsumer) balanceGroup(proto string, members []kmsg.JoinGroupRespo
 			interests.Reset()
 			fmt.Fprintf(interests, "interested topics: %v, previously owned: ", meta.Topics)
 			for _, owned := range meta.OwnedPartitions {
-				sort.Slice(owned.Partitions, func(i, j int) bool { return owned.Partitions[i] < owned.Partitions[j] })
+				slices.Sort(owned.Partitions)
 				fmt.Fprintf(interests, "%s%v, ", owned.Topic, owned.Partitions)
 			}
 			strInterests := interests.String()

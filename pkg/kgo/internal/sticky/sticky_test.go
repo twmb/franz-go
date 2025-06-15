@@ -1660,7 +1660,7 @@ func makeLargeBalance(withImbalance bool) generatedInput {
 	var allTopics []string
 	topics := make(map[string]int32)
 	var totalPartitions int
-	for i := 0; i < topicNum; i++ {
+	for i := range topicNum {
 		n := rng.Intn(partitionNum * 5 / 2)
 		totalPartitions += n
 		topic := fmt.Sprintf("topic%d", i)
@@ -1669,7 +1669,7 @@ func makeLargeBalance(withImbalance bool) generatedInput {
 	}
 
 	var members []GroupMember
-	for i := 0; i < memberNum; i++ {
+	for i := range memberNum {
 		members = append(members, GroupMember{
 			ID:     fmt.Sprintf("consumer%d", i),
 			Topics: allTopics,
@@ -1694,7 +1694,7 @@ func makeLargeBalanceWithExisting(withImbalance bool) generatedInput {
 
 	oldMembers := input.members
 	input.members = input.members[:0]
-	for i := 0; i < topicNum; i++ {
+	for i := range topicNum {
 		consumer := fmt.Sprintf("consumer%d", i)
 		input.members = append(input.members, GroupMember{
 			ID:       consumer,
@@ -1752,14 +1752,14 @@ func makeJavaPlan(topicCount, partitionCount, consumerCount int, imbalanced bool
 	p := generatedInput{topics: make(map[string]int32)}
 	var allTopics []string
 
-	for i := 0; i < topicCount; i++ {
+	for i := range topicCount {
 		topic := fmt.Sprintf("t%d", i)
 		allTopics = append(allTopics, topic)
 		p.topics[topic] = int32(partitionCount)
 		p.totalPartitions += partitionCount
 	}
 
-	for i := 0; i < consumerCount; i++ {
+	for i := range consumerCount {
 		p.members = append(p.members, GroupMember{
 			ID:     fmt.Sprintf("c%d", i),
 			Topics: allTopics,
