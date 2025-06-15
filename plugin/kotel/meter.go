@@ -65,7 +65,6 @@ func WithMergedConnectsMeter() MeterOpt {
 	return meterOptFunc(func(m *Meter) {
 		m.mergeConnectsMeter = true
 	})
-
 }
 
 func (o meterOptFunc) apply(m *Meter) {

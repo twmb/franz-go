@@ -3,13 +3,13 @@ package kgo
 import (
 	"bytes"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo/internal/sticky"
 	"github.com/twmb/franz-go/pkg/kmsg"
-	"slices"
 )
 
 // GroupBalancer balances topics and partitions among group members.

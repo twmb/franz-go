@@ -74,10 +74,11 @@ func TestRecordCarrier_Keys(t *testing.T) {
 		},
 		{
 			name: "Multiple",
-			record: &kgo.Record{Headers: []kgo.RecordHeader{
-				{Key: "key1", Value: []byte("value1")},
-				{Key: "key2", Value: []byte("value2")},
-			},
+			record: &kgo.Record{
+				Headers: []kgo.RecordHeader{
+					{Key: "key1", Value: []byte("value1")},
+					{Key: "key2", Value: []byte("value2")},
+				},
 			},
 			want: []string{"key1", "key2"},
 		},

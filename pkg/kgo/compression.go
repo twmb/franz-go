@@ -7,12 +7,12 @@ import (
 	"errors"
 	"io"
 	"runtime"
+	"slices"
 	"sync"
 
 	"github.com/klauspost/compress/s2"
 	"github.com/klauspost/compress/zstd"
 	"github.com/pierrec/lz4/v4"
-	"slices"
 )
 
 var byteBuffers = sync.Pool{New: func() any { return bytes.NewBuffer(make([]byte, 8<<10)) }}

@@ -4,13 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kerr"
-	"slices"
 )
 
 type metawait struct {

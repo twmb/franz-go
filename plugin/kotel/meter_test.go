@@ -209,5 +209,4 @@ func TestHook_OnBrokerConnect(t *testing.T) {
 			metricdatatest.IgnoreTimestamp(),
 		)
 	})
-
 }
