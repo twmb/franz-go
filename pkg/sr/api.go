@@ -348,6 +348,38 @@ func (cl *Client) Schemas(ctx context.Context, subject string) ([]SubjectSchema,
 	return schemas, firstErr
 }
 
+// CreateSchemaID attempts to create a schema with a fixed ID and version ID in the given subject,
+// and returns the globally unique identifier assigned by the registry. If the id is set to -1 or 0,
+// the registry will try to allocate a new identifier or reuse an existing one (see below).
+// If the versionID is set to -1 or 0, it will be omitted when creating the schema.
+//
+// If the same schema is registered under a different subject, the same identifier will be returned.
+// If the schema is identical to an existing schema in the registry, a new version will not be created.
+// Instead, the registry will return the identifier of the existing schema.
+//
+// This supports param [Normalize].
+func (cl *Client) CreateSchemaID(ctx context.Context, subject string, s Schema, id, versionID int) (int, error) {
+	// POST /subjects/{subject}/versions => returns ID
+	path := pathSubjectWithVersion(subject)
+	var into struct {
+		ID int `json:"id"`
+	}
+	if id == -1 {
+		if err := cl.post(ctx, path, s, &into); err != nil {
+			return 0, err
+		}
+	} else {
+		ss := SubjectSchema{Schema: s, ID: id}
+		if versionID != -1 {
+			ss.Version = versionID
+		}
+		if err := cl.post(ctx, path, ss, &into); err != nil {
+			return 0, err
+		}
+	}
+	return into.ID, nil
+}
+
 // CreateSchema attempts to create a schema in the given subject.
 //
 // This supports param [Normalize].
@@ -362,28 +394,13 @@ func (cl *Client) CreateSchema(ctx context.Context, subject string, s Schema) (S
 //
 // This supports param [Normalize].
 func (cl *Client) CreateSchemaWithIDAndVersion(ctx context.Context, subject string, s Schema, id, versionID int) (SubjectSchema, error) {
-	// POST /subjects/{subject}/versions => returns ID
 	// Newer SR returns the full SubjectSchema, but old does not, so we
 	// re-request to find the full information.
-	path := pathSubjectWithVersion(subject)
-	var into struct {
-		ID int `json:"id"`
+	sid, err := cl.CreateSchemaID(ctx, subject, s, id, versionID)
+	if err != nil {
+		return SubjectSchema{}, err
 	}
-	if id == -1 {
-		if err := cl.post(ctx, path, s, &into); err != nil {
-			return SubjectSchema{}, err
-		}
-	} else {
-		ss := SubjectSchema{Schema: s, ID: id}
-		if versionID != -1 {
-			ss.Version = versionID
-		}
-		if err := cl.post(ctx, path, ss, &into); err != nil {
-			return SubjectSchema{}, err
-		}
-	}
-
-	usages, err := cl.SchemaUsagesByID(ctx, into.ID)
+	usages, err := cl.SchemaUsagesByID(ctx, sid)
 	if err != nil {
 		return SubjectSchema{}, err
 	}
@@ -392,7 +409,7 @@ func (cl *Client) CreateSchemaWithIDAndVersion(ctx context.Context, subject stri
 			return usage, nil
 		}
 	}
-	return SubjectSchema{}, fmt.Errorf("created schema under id %d, but unable to find SubjectSchema", into.ID)
+	return SubjectSchema{}, fmt.Errorf("created schema under id %d, but unable to find SubjectSchema", sid)
 }
 
 // LookupSchema checks to see if a schema is already registered and if so,
