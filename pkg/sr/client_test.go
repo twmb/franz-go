@@ -113,7 +113,6 @@ func TestSchemaRegistryAPI(t *testing.T) {
 				return
 			}
 			_, err = w.Write(b)
-
 			if err != nil {
 				http.Error(w, fmt.Sprintf("unable to write response: %s", err), http.StatusInternalServerError)
 				return

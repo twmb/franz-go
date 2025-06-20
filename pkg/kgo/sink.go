@@ -108,7 +108,7 @@ func (s *sink) createReq(id int64, epoch int16) (*produceRequest, *kmsg.AddParti
 	defer s.recBufsMu.Unlock()
 
 	recBufsIdx := s.recBufsStart
-	for i := 0; i < len(s.recBufs); i++ {
+	for range s.recBufs {
 		recBuf := s.recBufs[recBufsIdx]
 		recBufsIdx = (recBufsIdx + 1) % len(s.recBufs)
 

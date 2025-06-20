@@ -528,7 +528,7 @@ func testChainETL(
 	// CONSUMER START //
 	////////////////////
 
-	for i := 0; i < 3; i++ { // three consumers start with standard poll&commit behavior
+	for range 3 { // three consumers start with standard poll&commit behavior
 		consumers1.goRun(transactional, -1)
 		consumers2.goRun(transactional, -1)
 		consumers3.goRun(transactional, -1)
@@ -539,7 +539,7 @@ func testChainETL(
 	consumers2.goRun(transactional, 2) // same
 
 	time.Sleep(5 * time.Second)
-	for i := 0; i < 3; i++ { // trigger rebalance after 5s with more consumers
+	for range 3 { // trigger rebalance after 5s with more consumers
 		consumers1.goRun(transactional, -1)
 		consumers2.goRun(transactional, -1)
 		consumers3.goRun(transactional, -1)
@@ -585,7 +585,7 @@ out:
 		}
 
 		sort.Ints(allKeys)
-		for i := 0; i < testRecordLimit; i++ {
+		for i := range testRecordLimit {
 			if allKeys[i] != i {
 				t.Errorf("consumers %d: got key %d != exp %d, first 100: %v", level, allKeys[i], i, allKeys[:100])
 			}

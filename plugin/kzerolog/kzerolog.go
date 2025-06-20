@@ -11,6 +11,7 @@ package kzerolog
 
 import (
 	"github.com/rs/zerolog"
+
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 

@@ -50,7 +50,7 @@ func TestGroupETL(t *testing.T) {
 				errs <- fmt.Errorf("unable to flush: %v", err)
 			}
 		}()
-		for i := 0; i < testRecordLimit; i++ {
+		for i := range testRecordLimit {
 			myKey := []byte(strconv.Itoa(i))
 			cl.Produce(
 				context.Background(),

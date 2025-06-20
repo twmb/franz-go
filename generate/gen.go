@@ -190,7 +190,7 @@ func (s Struct) WriteAppend(l *LineWriter) {
 	l.Write("if isFlexible {")
 	defer l.Write("}")
 
-	for i := 0; i < len(tags); i++ {
+	for i := range len(tags) {
 		f, exists := tags[i]
 		if !exists {
 			die("saw %d tags, but did not see tag %d; expected monotonically increasing", len(tags), i)
@@ -204,7 +204,7 @@ func (s Struct) WriteAppend(l *LineWriter) {
 
 	if len(tags) > 0 {
 		l.Write("var toEncode []uint32")
-		for i := 0; i < len(tags); i++ {
+		for i := range len(tags) {
 			f := tags[i]
 			canDefault := false
 			if d, ok := f.Type.(Defaulter); ok {
@@ -249,7 +249,7 @@ func (s Struct) WriteAppend(l *LineWriter) {
 		l.Write("dst = kbin.AppendUvarint(dst, 0+uint32(v.UnknownTags.Len()))")
 	}
 
-	for i := 0; i < len(tags); i++ {
+	for i := range len(tags) {
 		l.Write("case %d:", i)
 		f := tags[i]
 
@@ -574,7 +574,7 @@ func (s Struct) WriteDecode(l *LineWriter) {
 	l.Write("default:")
 	l.Write("s.UnknownTags.Set(key, b.Span(int(b.Uvarint())))")
 
-	for i := 0; i < len(tags); i++ {
+	for i := range len(tags) {
 		f, exists := tags[i]
 		if !exists {
 			die("saw %d tags, but did not see tag %d; expected monotonically increasing", len(tags), i)

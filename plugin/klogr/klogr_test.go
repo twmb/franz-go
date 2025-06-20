@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/go-logr/logr/funcr"
+
 	"github.com/twmb/franz-go/pkg/kgo"
 )
 
