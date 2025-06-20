@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 func TestSchemaRegistryAPI(t *testing.T) {
@@ -307,15 +308,22 @@ func TestOptValue(t *testing.T) {
 		t.Fatalf("unable to create client: %s", err)
 	}
 
+	cd, err := NewClient()
+	if err != nil {
+		t.Fatalf("unable to create default client: %s", err)
+	}
+
 	tests := []struct {
-		name     string
-		opt      any
-		assertFn func(v any) bool
+		name        string
+		opt         any
+		assertFn    func(v any) bool
+		assertDefFn func(v any) bool
 	}{
 		{
-			name:     "HTTPClient",
-			opt:      "HTTPClient",
-			assertFn: func(v any) bool { return v == httpcl },
+			name:        "HTTPClient",
+			opt:         "HTTPClient",
+			assertFn:    func(v any) bool { return v.(*http.Client) == httpcl },
+			assertDefFn: func(v any) bool { return v.(*http.Client).Timeout == time.Second*5 },
 		},
 		{
 			name: "URLs",
@@ -324,44 +332,52 @@ func TestOptValue(t *testing.T) {
 				vs := v.([]string)
 				return vs[0] == "http://localhost:8081" && vs[1] == "http://localhost2:8082"
 			},
-		},
-		{
-			name:     "UserAgent",
-			opt:      "UserAgent",
-			assertFn: func(v any) bool { return v.(string) == "some-ua" },
-		},
-		{
-			name:     "DialTLSConfig",
-			opt:      "DialTLSConfig",
-			assertFn: func(v any) bool { return v == tlscfg },
-		},
-		{
-			name:     "BasicAuth",
-			opt:      BasicAuth,
-			assertFn: func(v any) bool { return v.(string) == "some-user" },
-		},
-		{
-			name:     "BearerToken",
-			opt:      BearerToken,
-			assertFn: func(v any) bool { return v.(string) == "some-bearer" },
-		},
-		{
-			name:     "PreReq",
-			opt:      "PreReq",
-			assertFn: func(v any) bool { return v != nil },
-		},
-		{
-			name: "DefaultParams",
-			opt:  DefaultParams,
-			assertFn: func(v any) bool {
-				vp := v.(Param)
-				return vp.normalize == true && vp.verbose == true
+			assertDefFn: func(v any) bool {
+				vs := v.([]string)
+				return vs[0] == "http://localhost:8081"
 			},
 		},
 		{
-			name:     "unknown option name",
-			opt:      "Unknown",
-			assertFn: func(v any) bool { return v == nil },
+			name:        "UserAgent",
+			opt:         "UserAgent",
+			assertFn:    func(v any) bool { return v.(string) == "some-ua" },
+			assertDefFn: func(v any) bool { return v.(string) == "franz-go" },
+		},
+		{
+			name:        "DialTLSConfig",
+			opt:         "DialTLSConfig",
+			assertFn:    func(v any) bool { return v.(*tls.Config) == tlscfg },
+			assertDefFn: func(v any) bool { return v.(*tls.Config) == nil },
+		},
+		{
+			name:        "BasicAuth",
+			opt:         BasicAuth,
+			assertFn:    func(v any) bool { return v.(string) == "some-user" },
+			assertDefFn: func(v any) bool { return v == nil },
+		},
+		{
+			name:        "BearerToken",
+			opt:         BearerToken,
+			assertFn:    func(v any) bool { return v.(string) == "some-bearer" },
+			assertDefFn: func(v any) bool { return v.(string) == "" },
+		},
+		{
+			name:        "PreReq",
+			opt:         "PreReq",
+			assertFn:    func(v any) bool { return v.(func(*http.Request) error) != nil },
+			assertDefFn: func(v any) bool { return v.(func(*http.Request) error) == nil },
+		},
+		{
+			name:        "DefaultParams",
+			opt:         DefaultParams,
+			assertFn:    func(v any) bool { return v.(Param).normalize && v.(Param).verbose },
+			assertDefFn: func(v any) bool { return v.(Param) == Param{} },
+		},
+		{
+			name:        "unknown option name",
+			opt:         "Unknown",
+			assertFn:    func(v any) bool { return v == nil },
+			assertDefFn: func(v any) bool { return v == nil },
 		},
 	}
 	for _, test := range tests {
@@ -370,21 +386,39 @@ func TestOptValue(t *testing.T) {
 			if !test.assertFn(got) {
 				t.Errorf("assertion failed: %q", got)
 			}
+			gotDef := cd.OptValue(test.opt)
+			if !test.assertDefFn(gotDef) {
+				t.Errorf("assertion for default failed: %q", gotDef)
+			}
 		})
 	}
+}
 
-	t.Run("BasicAuthValues", func(t *testing.T) {
+func TestOptValues(t *testing.T) {
+	c, err := NewClient(
+		BasicAuth("some-user", "some-pass"),
+	)
+	if err != nil {
+		t.Fatalf("unable to create client: %s", err)
+	}
+
+	cd, err := NewClient()
+	if err != nil {
+		t.Fatalf("unable to create default client: %s", err)
+	}
+
+	t.Run("BasicAuth", func(t *testing.T) {
 		got := c.OptValues(BasicAuth)
 		if len(got) != 2 {
 			t.Errorf("number of return values: expected 2, got %d", len(got))
 		}
-		expected := "some-user"
-		if got[0] != expected {
-			t.Errorf("username: expected %q, got %q", expected, got[0])
+		expected := []string{"some-user", "some-pass"}
+		if got[0] != expected[0] || got[1] != expected[1] {
+			t.Errorf("values: expected %q, got %q", expected, got)
 		}
-		expected = "some-pass"
-		if got[1] != expected {
-			t.Errorf("password: expected %q, got %q", expected, got[1])
+		gotDef := cd.OptValues(BasicAuth)
+		if len(gotDef) != 0 {
+			t.Errorf("number of return values for default: expected 0, got %d", len(gotDef))
 		}
 	})
 }
