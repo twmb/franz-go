@@ -224,6 +224,18 @@ func (cl *Client) OptValues(opt any) []any {
 	}
 }
 
+// Do sends an HTTP request to the schema registry using the given method and
+// path, optionally encoding the provided request body `v` as JSON, and decoding
+// the response into `into` if non-nil.
+//
+// This method is a general-purpose extension point for users who need to
+// interact with custom or non-standard schema registry endpoints while reusing
+// the client's configured authentication, user-agent, retry logic, and error
+// handling.
+func (cl *Client) Do(ctx context.Context, method, path string, v, into any) error {
+	return cl.do(ctx, method, path, v, into)
+}
+
 func (cl *Client) get(ctx context.Context, path string, into any) error {
 	return cl.do(ctx, http.MethodGet, path, nil, into)
 }
