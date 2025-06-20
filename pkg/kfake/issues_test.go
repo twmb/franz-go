@@ -399,6 +399,7 @@ func TestIssue906(t *testing.T) {
 		t.Fatal(err)
 		return
 	}
+	defer client.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
