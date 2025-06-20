@@ -2,6 +2,7 @@ package kfake
 
 import (
 	"crypto/tls"
+	"net"
 	"time"
 )
 
@@ -22,6 +23,7 @@ type seedTopics struct {
 type cfg struct {
 	nbrokers        int
 	ports           []int
+	listeners       []net.Listener
 	logger          Logger
 	clusterID       string
 	allowAutoTopic  bool
@@ -47,6 +49,13 @@ func NumBrokers(n int) Opt {
 // amount of ports.
 func Ports(ports ...int) Opt {
 	return opt{func(cfg *cfg) { cfg.ports = ports }}
+}
+
+// Listeners sets the listeners to use, overriding randomly choosing NumBrokers
+// amount of ports. This allows providing custom net.Listener implementations
+// for testing scenarios.
+func Listeners(listeners ...net.Listener) Opt {
+	return opt{func(cfg *cfg) { cfg.listeners = listeners }}
 }
 
 // WithLogger sets the logger to use.

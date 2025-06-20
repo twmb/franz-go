@@ -105,6 +105,9 @@ func NewCluster(opts ...Opt) (*Cluster, error) {
 	if len(cfg.ports) > 0 {
 		cfg.nbrokers = len(cfg.ports)
 	}
+	if len(cfg.listeners) > 0 {
+		cfg.nbrokers = len(cfg.listeners)
+	}
 
 	c := &Cluster{
 		cfg: cfg,
@@ -167,14 +170,18 @@ func NewCluster(opts ...Opt) (*Cluster, error) {
 	}
 
 	for i := 0; i < cfg.nbrokers; i++ {
-		var port int
-		if len(cfg.ports) > 0 {
-			port = cfg.ports[i]
-		}
 		var ln net.Listener
-		ln, err = newListener(port, c.cfg.tls)
-		if err != nil {
-			return nil, err
+		if len(cfg.listeners) > 0 {
+			ln = cfg.listeners[i]
+		} else {
+			var port int
+			if len(cfg.ports) > 0 {
+				port = cfg.ports[i]
+			}
+			ln, err = newListener(port, c.cfg.tls)
+			if err != nil {
+				return nil, err
+			}
 		}
 		b := &broker{
 			c:     c,
