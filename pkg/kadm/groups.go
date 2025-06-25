@@ -1485,7 +1485,12 @@ func (cl *Client) Lag(ctx context.Context, groups ...string) (DescribedGroupLags
 		return nil, err
 	case errors.As(err, &se) && !se.AllFailed:
 		for _, se := range se.Errs {
-			for _, g := range se.Req.(*kmsg.DescribeGroupsRequest).Groups {
+			// can be ListGroupsRequest as well
+			req, ok := se.Req.(*kmsg.DescribeGroupsRequest)
+			if !ok {
+				continue
+			}
+			for _, g := range req.Groups {
 				lags[g] = DescribedGroupLag{
 					Group:       g,
 					Coordinator: se.Broker,
