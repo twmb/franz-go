@@ -725,7 +725,7 @@ type brokerCxn struct {
 	successes uint64
 
 	// resps manages reading kafka responses.
-	resps fixedRing[promisedResp]
+	resps unlimitedRing[promisedResp]
 	// dead is an atomic so that a backed up resps cannot block cxn death.
 	dead atomicBool
 	// closed in cloneConn; allows throttle waiting to quit
