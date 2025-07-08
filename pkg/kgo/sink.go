@@ -33,7 +33,7 @@ type sink struct {
 	// seqRespsMu, guarded by seqRespsMu, contains responses that must
 	// be handled sequentially. These responses are handled asynchronously,
 	// but sequentially.
-	seqResps ringSeqResp
+	seqResps unlimitedRing[*seqResp] // we never call die() on it
 
 	backoffMu   sync.Mutex // guards the following
 	needBackoff bool
@@ -515,7 +515,7 @@ func (s *sink) doSequenced(
 		wait.br = br
 	}
 
-	if first := s.seqResps.push(wait); first {
+	if first, _ := s.seqResps.push(wait); first {
 		go s.handleSeqResps(wait)
 	}
 }
@@ -527,7 +527,7 @@ start:
 	<-wait.done
 	wait.promise(wait.br, wait.resp, wait.err)
 
-	wait, more = s.seqResps.dropPeek()
+	wait, more, _ = s.seqResps.dropPeek()
 	if more {
 		goto start
 	}
