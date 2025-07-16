@@ -293,7 +293,7 @@ start:
 		}
 	}
 	if cl.logLvlFn() >= LogLevelDebug {
-		cl.logFn(LogLevelDebug, "sending request", "method", method, "URL", reqURL, "has_bearer", cl.bearerToken != "", "has_basic_auth", cl.basicAuth != nil)
+		cl.logFn(LogLevelDebug, "sending request", "method", method, "URL", req.URL.String(), "has_bearer", cl.bearerToken != "", "has_basic_auth", cl.basicAuth != nil)
 	} else {
 		cl.logFn(LogLevelInfo, "sending request", "method", method, "URL", reqURL)
 	}

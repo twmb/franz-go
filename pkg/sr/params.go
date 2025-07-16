@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/url"
 )
 
 // Param is a parameter that can be passed to various APIs. Each API documents
@@ -23,6 +24,7 @@ type Param struct {
 	page            *int
 	limit           int
 	hardDelete      bool
+	rawParams       url.Values
 }
 
 // WithParams adds query parameters to the given context. This is a merge
@@ -87,6 +89,13 @@ func (p Param) apply(req *http.Request) {
 	if p.hardDelete {
 		q.Set("permanent", "true")
 	}
+	if p.rawParams != nil {
+		for key, values := range p.rawParams {
+			for _, val := range values {
+				q.Add(key, val)
+			}
+		}
+	}
 	req.URL.RawQuery = q.Encode()
 }
 
@@ -136,6 +145,9 @@ func mergeParams(p ...Param) Param {
 		}
 		if p.hardDelete {
 			merged.hardDelete = p.hardDelete
+		}
+		if p.rawParams != nil {
+			merged.rawParams = p.rawParams
 		}
 	}
 	return merged
@@ -194,6 +206,9 @@ func SubjectPrefix(pfx string) Param { return Param{subjectPrefix: pfx} }
 // Subject returns a Param limiting which subject is returned in certain
 // list-schema or list-subject operations.
 func Subject(s string) Param { return Param{subject: s} }
+
+// RawParams returns a Param with raw query parameters.
+func RawParams(v url.Values) Param { return Param{rawParams: v} }
 
 /*
 TODO once we know the header that is returned for pagination, we can use these.
