@@ -8,13 +8,16 @@ import (
 	"net/http"
 	_ "net/http/pprof"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/segmentio/kafka-go"
 	"github.com/twmb/tlscfg"
+	"go4.org/syncutil"
 
 	"github.com/twmb/franz-go/plugin/kprom"
 
@@ -44,6 +47,7 @@ var (
 	logLevel = flag.String("log-level", "", "if non-empty, use a basic logger with this log level (debug, info, warn, error)")
 
 	consume = flag.Bool("consume", false, "if true, consume rather than produce")
+	fast    = flag.Bool("fast", false, "if true, uses fast producer")
 	group   = flag.String("group", "", "if non-empty, group to use for consuming rather than direct partition consuming (consuming)")
 
 	dialTLS  = flag.Bool("tls", false, "if true, use tls for connecting (if using well-known TLS certs)")
@@ -225,9 +229,27 @@ func main() {
 
 	switch *consume {
 	case false:
+		var producer Producer
+		if *fast {
+			const maxBatchSize = 10000
+			wr := &kafka.Writer{
+				Addr:        kafka.TCP(strings.Split(*seedBrokers, ",")...),
+				Topic:       *topic,
+				Balancer:    &kafka.LeastBytes{},
+				BatchSize:   maxBatchSize,
+				Compression: kafka.Snappy,
+			}
+			fp := NewFastProducer(wr, maxBatchSize)
+
+			go fp.Run(context.Background(), *noIdempotentMaxReqs)
+			producer = fp
+		} else {
+			producer = cl
+		}
+
 		var num int64
 		for {
-			cl.Produce(context.Background(), newRecord(num), func(r *kgo.Record, err error) {
+			producer.Produce(context.Background(), newRecord(num), func(r *kgo.Record, err error) {
 				if *useStaticValue {
 					staticPool.Put(r)
 				} else if *poolProduce {
@@ -284,5 +306,74 @@ func formatValue(num int64, v []byte) {
 	n := copy(v, b)
 	for n != len(v) {
 		n += copy(v[n:], b)
+	}
+}
+
+//------------------------------------------------------------------------------
+
+type Producer interface {
+	Produce(ctx context.Context, r *kgo.Record, promise func(*kgo.Record, error))
+}
+
+type FastProducer struct {
+	wr           *kafka.Writer
+	ch           chan produceItem
+	maxBatchSize int
+}
+
+type produceItem struct {
+	rec     *kgo.Record
+	promise func(*kgo.Record, error)
+}
+
+func NewFastProducer(wr *kafka.Writer, maxBatchSize int) *FastProducer {
+	return &FastProducer{
+		wr:           wr,
+		ch:           make(chan produceItem, 10*maxBatchSize),
+		maxBatchSize: maxBatchSize,
+	}
+}
+
+func (p *FastProducer) Produce(
+	ctx context.Context, r *kgo.Record, promise func(*kgo.Record, error),
+) {
+	p.ch <- produceItem{r, promise}
+}
+
+func (p *FastProducer) Run(ctx context.Context, maxThreads int) {
+	gate := syncutil.NewGate(maxThreads)
+	batch := make([]produceItem, 0, p.maxBatchSize)
+	for {
+		select {
+		case item := <-p.ch:
+			batch = append(batch, item)
+			if len(batch) == p.maxBatchSize {
+				threadBatch := slices.Clone(batch)
+				batch = batch[:0]
+
+				gate.Start()
+				go func() {
+					defer gate.Done()
+					p.produceBatch(ctx, threadBatch)
+				}()
+			}
+		}
+	}
+}
+
+func (p *FastProducer) produceBatch(
+	ctx context.Context, batch []produceItem,
+) {
+	messages := make([]kafka.Message, len(batch))
+	for i, item := range batch {
+		messages[i] = kafka.Message{
+			Key:   item.rec.Key,
+			Value: item.rec.Value,
+		}
+	}
+
+	err := p.wr.WriteMessages(ctx, messages...)
+	for _, item := range batch {
+		item.promise(item.rec, err)
 	}
 }
