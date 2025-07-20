@@ -367,10 +367,27 @@ func TestOptValue(t *testing.T) {
 			assertDefFn: func(v any) bool { return v.(func(*http.Request) error) == nil },
 		},
 		{
-			name:        "DefaultParams",
-			opt:         DefaultParams,
-			assertFn:    func(v any) bool { return v.(Param).normalize && v.(Param).verbose },
-			assertDefFn: func(v any) bool { return v.(Param) == Param{} },
+			name:     "DefaultParams",
+			opt:      DefaultParams,
+			assertFn: func(v any) bool { return v.(Param).normalize && v.(Param).verbose },
+			assertDefFn: func(v any) bool {
+				vp := v.(Param)
+				return !vp.normalize &&
+					!vp.verbose &&
+					!vp.fetchMaxID &&
+					!vp.defaultToGlobal &&
+					!vp.force &&
+					!vp.latestOnly &&
+					!vp.showDeleted &&
+					!vp.deletedOnly &&
+					vp.format == "" &&
+					vp.subjectPrefix == "" &&
+					vp.subject == "" &&
+					vp.page == nil &&
+					vp.limit == 0 &&
+					!vp.hardDelete &&
+					len(vp.rawParams) == 0
+			},
 		},
 		{
 			name:        "unknown option name",
