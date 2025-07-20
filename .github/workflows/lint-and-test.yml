@@ -38,6 +38,15 @@ jobs:
       - uses: actions/checkout@v4
       - run: cd pkg/kfake && go work init ../.. . && go test .
 
+  test-sr:
+    if: github.repository == 'twmb/franz-go'
+    runs-on: ubuntu-latest
+    name: "test sr"
+    container: golang:latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cd pkg/sr && go work init ../.. . && go test .
+
   integration-test-kafka:
     if: github.repository == 'twmb/franz-go'
     runs-on: ubuntu-latest
