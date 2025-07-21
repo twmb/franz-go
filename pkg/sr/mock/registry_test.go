@@ -1213,6 +1213,11 @@ func TestRaceConditionRegisterSchema(t *testing.T) {
 	reg := mock.New()
 	t.Cleanup(reg.Close)
 
+	cl, err := sr.NewClient(sr.URLs(reg.URL()))
+	if err != nil {
+		t.Fatalf("Failed to create sr.Client: %v", err)
+	}
+
 	// Set up a referenced schema
 	refSchema := sr.Schema{
 		Schema: `{"type":"record","name":"RefSchema","fields":[{"name":"id","type":"string"}]}`,
@@ -1277,12 +1282,16 @@ func TestRaceConditionRegisterSchema(t *testing.T) {
 	}
 
 	// Now try to register another schema with the same reference - should fail
-	_, _, err = reg.RegisterSchema("main-subject-2", referencingSchema)
+	_, err = cl.CreateSchema(t.Context(), "main-subject-2", referencingSchema)
 	if err == nil {
 		t.Fatalf("Registration should have failed after referenced schema was deleted")
 	}
-	if !errors.Is(err, mock.ErrReferenceNotFound) {
-		t.Errorf("Expected a reference not found error, got: %v", err)
+	var respErr *sr.ResponseError
+	if !errors.As(err, &respErr) {
+		t.Fatalf("expected ResponseError, got %T", err)
+	}
+	if respErr.ErrorCode != 42201 || respErr.StatusCode != http.StatusUnprocessableEntity {
+		t.Errorf("expected reference not found error (422, 42201), got (%d, %d)", respErr.StatusCode, respErr.ErrorCode)
 	}
 
 	// Test case 3: Verify the referenced schema was actually deleted
@@ -1587,11 +1596,16 @@ func jsonEqual(a, b string) bool {
 	return reflect.DeepEqual(j1, j2)
 }
 
-// TestRegistryError verifies that RegistryError properly implements the error interface
-// and supports Go's error handling patterns (errors.Is and errors.As).
-func TestRegistryError(t *testing.T) {
+// TestErrorHandling verifies that the mock registry returns proper sr.ResponseError objects
+// that clients can use for error checking.
+func TestErrorHandling(t *testing.T) {
 	registry := mock.New()
 	t.Cleanup(registry.Close)
+
+	cl, err := sr.NewClient(sr.URLs(registry.URL()))
+	if err != nil {
+		t.Fatalf("Failed to create sr.Client: %v", err)
+	}
 
 	// Test case 1: Subject not found error
 	t.Run("subject not found error", func(t *testing.T) {
@@ -1611,8 +1625,8 @@ func TestRegistryError(t *testing.T) {
 		}
 		resp.Body.Close()
 
-		// Now try to register to the soft-deleted subject
-		_, _, err = registry.RegisterSchema("test", sr.Schema{
+		// Now try to register to the soft-deleted subject using the client
+		_, err = cl.CreateSchema(t.Context(), "test", sr.Schema{
 			Schema: `{"type": "number"}`,
 			Type:   sr.TypeAvro,
 		})
@@ -1621,24 +1635,16 @@ func TestRegistryError(t *testing.T) {
 			t.Fatalf("expected error, got nil")
 		}
 
-		// Test errors.Is with the expected cause
-		if !errors.Is(err, mock.ErrSubjectNotFound) {
-			t.Errorf("errors.Is failed: expected ErrSubjectNotFound, got %v", err)
-		}
-
-		// Test errors.As with RegistryError
-		var regErr *mock.RegistryError
-		if !errors.As(err, &regErr) {
-			t.Errorf("errors.As failed: expected RegistryError, got %T", err)
+		// Test errors.As with ResponseError (the client-facing error type)
+		var respErr *sr.ResponseError
+		if !errors.As(err, &respErr) {
+			t.Errorf("errors.As failed: expected ResponseError, got %T", err)
 		} else {
-			if regErr.HTTPStatus != http.StatusNotFound {
-				t.Errorf("expected HTTP status %d, got %d", http.StatusNotFound, regErr.HTTPStatus)
+			if respErr.StatusCode != http.StatusNotFound {
+				t.Errorf("expected HTTP status %d, got %d", http.StatusNotFound, respErr.StatusCode)
 			}
-			if regErr.SRCode != 40401 {
-				t.Errorf("expected SR code %d, got %d", 40401, regErr.SRCode)
-			}
-			if regErr.Cause != mock.ErrSubjectNotFound {
-				t.Errorf("expected cause %v, got %v", mock.ErrSubjectNotFound, regErr.Cause)
+			if respErr.ErrorCode != 40401 {
+				t.Errorf("expected SR error code %d, got %d", 40401, respErr.ErrorCode)
 			}
 		}
 
@@ -1652,8 +1658,8 @@ func TestRegistryError(t *testing.T) {
 	t.Run("invalid schema error", func(t *testing.T) {
 		registry.Reset()
 
-		// Try to register an invalid schema
-		_, _, err := registry.RegisterSchema("test", sr.Schema{
+		// Try to register an invalid schema using the client
+		_, err := cl.CreateSchema(t.Context(), "test", sr.Schema{
 			Schema: `invalid json`,
 			Type:   sr.TypeAvro,
 		})
@@ -1662,20 +1668,16 @@ func TestRegistryError(t *testing.T) {
 			t.Fatalf("expected error, got nil")
 		}
 
-		// Test errors.As with RegistryError
-		var regErr *mock.RegistryError
-		if !errors.As(err, &regErr) {
-			t.Errorf("errors.As failed: expected RegistryError, got %T", err)
+		// Test errors.As with ResponseError (the client-facing error type)
+		var respErr *sr.ResponseError
+		if !errors.As(err, &respErr) {
+			t.Errorf("errors.As failed: expected ResponseError, got %T", err)
 		} else {
-			if regErr.HTTPStatus != http.StatusUnprocessableEntity {
-				t.Errorf("expected HTTP status %d, got %d", http.StatusUnprocessableEntity, regErr.HTTPStatus)
+			if respErr.StatusCode != http.StatusUnprocessableEntity {
+				t.Errorf("expected HTTP status %d, got %d", http.StatusUnprocessableEntity, respErr.StatusCode)
 			}
-			if regErr.SRCode != 42201 {
-				t.Errorf("expected SR code %d, got %d", 42201, regErr.SRCode)
-			}
-			// For JSON parsing errors, the cause should be the original JSON error, not ErrInvalidSchema
-			if regErr.Cause == nil {
-				t.Errorf("expected cause to be set, got nil")
+			if respErr.ErrorCode != 42201 {
+				t.Errorf("expected SR error code %d, got %d", 42201, respErr.ErrorCode)
 			}
 		}
 
