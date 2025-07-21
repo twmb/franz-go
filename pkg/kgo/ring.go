@@ -112,7 +112,7 @@ func (r *ring[T]) dropPeek() (next T, more, dead bool) {
 	}
 
 	r.overflow[0] = zero
-	
+
 	// In case of continuous push and pulls to the overflow slice, the overflow
 	// slice's underlying memory array is not expected to grow indefinitely because
 	// append() will eventually re-allocate the memory and, when will do it, it will
