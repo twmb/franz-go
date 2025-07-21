@@ -89,19 +89,19 @@ func (r *ring[T]) push(elem T) (first, dead bool) {
 }
 
 func (r *ring[T]) dropPeek() (next T, more, dead bool) {
+	var zero T
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	// We always drain the ring first. If the ring is ever empty, there
 	// must be overflow: we would not be here if the ring is not-empty.
 	if r.l > 1 {
-		var zero T
 		r.elems[r.head] = zero
 		r.head = (r.head + 1) & mask7
 		r.l--
 		return r.elems[r.head], true, r.dead
 	} else if r.l == 1 {
-		var zero T
 		r.elems[r.head] = zero
 		r.head = (r.head + 1) & mask7
 		r.l--
@@ -110,17 +110,14 @@ func (r *ring[T]) dropPeek() (next T, more, dead bool) {
 		}
 		return r.overflow[0], true, r.dead
 	}
-	r.overflow = r.overflow[1:]
 
-	// If the overflow slice is 8x the fixed ring size, and the overflow length
-	// is less than 1/8 of the capacity, then we do shrink the overflow slice
-	// to 2x the currently required capacity. This prevents edge cases where
-	// the overflow slice could grow indefinitely.
-	if cap(r.overflow) > 64 && len(r.overflow) < cap(r.overflow)/8 {
-		shrunk := make([]T, len(r.overflow), len(r.overflow)*2)
-		copy(shrunk, r.overflow)
-		r.overflow = shrunk
-	}
+	r.overflow[0] = zero
+	
+	// In case of continuous push and pulls to the overflow slice, the overflow
+	// slice's underlying memory array is not expected to grow indefinitely because
+	// append() will eventually re-allocate the memory and, when will do it, it will
+	// only copy the "live" elements (the part of the slide pointed by the slice header).
+	r.overflow = r.overflow[1:]
 
 	if len(r.overflow) > 0 {
 		return r.overflow[0], true, r.dead
