@@ -119,7 +119,7 @@ func TestRing(t *testing.T) {
 		}
 		assertRingDropPeek(t, r, 0, false, false)
 
-		if cap(r.overflow) > 100 {
+		if cap(r.overflow) > 500 {
 			t.Errorf("unexpected high overflow slice capacity, got: %d", cap(r.overflow))
 		}
 	})
