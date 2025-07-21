@@ -1,26 +1,14 @@
 package mock
 
 import (
-	"errors"
 	"fmt"
 	"net/http"
 
 	"github.com/twmb/franz-go/pkg/sr"
 )
 
-// Error constants for different error types
-var (
-	ErrSubjectNotFound   = errors.New("subject not found")
-	ErrVersionNotFound   = errors.New("version not found")
-	ErrSchemaNotFound    = errors.New("schema not found")
-	ErrInvalidSchema     = errors.New("invalid schema")
-	ErrReferenceNotFound = errors.New("reference not found")
-)
-
-// RegistryError is a single, unified error type for the mock registry.
-type RegistryError struct {
-	// The underlying cause of the error. Can be compared with errors.Is.
-	Cause error
+// registryError is a single, unified error type for the mock registry.
+type registryError struct {
 	// The user-facing message for the HTTP response.
 	Message string
 	// The HTTP status code to return.
@@ -30,63 +18,57 @@ type RegistryError struct {
 }
 
 // Error implements the standard error interface.
-func (e *RegistryError) Error() string {
+func (e *registryError) Error() string {
 	return e.Message
 }
 
-// Unwrap allows errors.Is to work on the underlying cause.
-func (e *RegistryError) Unwrap() error {
-	return e.Cause
-}
-
-// newErr creates a new RegistryError with the given parameters.
-func newErr(httpStatus, srCode int, cause error, format string, a ...any) *RegistryError {
-	return &RegistryError{
+// newErr creates a new registryError with the given parameters.
+func newErr(httpStatus, srCode int, format string, a ...any) *registryError {
+	return &registryError{
 		HTTPStatus: httpStatus,
 		SRCode:     srCode,
-		Cause:      cause,
 		Message:    fmt.Sprintf(format, a...),
 	}
 }
 
 // Specific error constructors for common error scenarios
 
-func errSubjectNotFound(subject string) *RegistryError {
-	return newErr(http.StatusNotFound, errCodeSubjectNotFound, ErrSubjectNotFound, "subject %q not found", subject)
+func errSubjectNotFound(subject string) *registryError {
+	return newErr(http.StatusNotFound, errCodeSubjectNotFound, "subject %q not found", subject)
 }
 
-func errVersionNotFound(subject string, version int) *RegistryError {
-	return newErr(http.StatusNotFound, errCodeVersionNotFound, ErrVersionNotFound, "version %d not found for %q", version, subject)
+func errVersionNotFound(subject string, version int) *registryError {
+	return newErr(http.StatusNotFound, errCodeVersionNotFound, "version %d not found for %q", version, subject)
 }
 
-func errSchemaNotFound() *RegistryError {
-	return newErr(http.StatusNotFound, errCodeSchemaNotFound, ErrSchemaNotFound, "schema not found")
+func errSchemaNotFound() *registryError {
+	return newErr(http.StatusNotFound, errCodeSchemaNotFound, "schema not found")
 }
 
-func errSchemaIsReferenced(subject string, version int, by []int) *RegistryError {
-	return newErr(http.StatusConflict, errCodeInvalidSchema, ErrInvalidSchema, "Cannot delete schema %s:%d as it is still referenced by schema IDs: %v", subject, version, by)
+func errSchemaIsReferenced(subject string, version int, by []int) *registryError {
+	return newErr(http.StatusConflict, errCodeInvalidSchema, "Cannot delete schema %s:%d as it is still referenced by schema IDs: %v", subject, version, by)
 }
 
-func errInvalidReference(ref sr.SchemaReference) *RegistryError {
-	return newErr(http.StatusUnprocessableEntity, errCodeInvalidSchema, ErrReferenceNotFound, "reference %q subject %q version %d not found", ref.Name, ref.Subject, ref.Version)
+func errInvalidReference(ref sr.SchemaReference) *registryError {
+	return newErr(http.StatusUnprocessableEntity, errCodeInvalidSchema, "reference %q subject %q version %d not found", ref.Name, ref.Subject, ref.Version)
 }
 
-func errInvalidSchema(msg string) *RegistryError {
-	return newErr(http.StatusUnprocessableEntity, errCodeInvalidSchema, ErrInvalidSchema, msg)
+func errInvalidSchema(msg string) *registryError {
+	return newErr(http.StatusUnprocessableEntity, errCodeInvalidSchema, msg)
 }
 
-func errInvalidSchemaWithCause(cause error, msg string) *RegistryError {
-	return newErr(http.StatusUnprocessableEntity, errCodeInvalidSchema, cause, msg)
+func errInvalidSchemaWithCause(cause error, msg string) *registryError {
+	return newErr(http.StatusUnprocessableEntity, errCodeInvalidSchema, msg)
 }
 
-func errInvalidVersion(msg string) *RegistryError {
-	return newErr(http.StatusBadRequest, errCodeInvalidVersion, nil, msg)
+func errInvalidVersion(msg string) *registryError {
+	return newErr(http.StatusBadRequest, errCodeInvalidVersion, msg)
 }
 
-func errInvalidCompatLevel(msg string) *RegistryError {
-	return newErr(http.StatusBadRequest, errCodeInvalidCompatLevel, nil, msg)
+func errInvalidCompatLevel(msg string) *registryError {
+	return newErr(http.StatusBadRequest, errCodeInvalidCompatLevel, msg)
 }
 
-func errCircularDependency(subject string) *RegistryError {
-	return newErr(http.StatusUnprocessableEntity, errCodeInvalidSchema, ErrInvalidSchema, "circular dependency detected: subject %s is referenced in a cycle", subject)
+func errCircularDependency(subject string) *registryError {
+	return newErr(http.StatusUnprocessableEntity, errCodeInvalidSchema, "circular dependency detected: subject %s is referenced in a cycle", subject)
 }
