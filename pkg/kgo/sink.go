@@ -33,7 +33,7 @@ type sink struct {
 	// seqRespsMu, guarded by seqRespsMu, contains responses that must
 	// be handled sequentially. These responses are handled asynchronously,
 	// but sequentially.
-	seqResps unlimitedRing[*seqResp] // we never call die() on it
+	seqResps ring[*seqResp] // we never call die() on it
 
 	backoffMu   sync.Mutex // guards the following
 	needBackoff bool

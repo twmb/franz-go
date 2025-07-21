@@ -58,7 +58,7 @@ type producer struct {
 	idMu      sync.Mutex
 	idVersion int16
 
-	batchPromises unlimitedRing[batchPromise] // we never call die() on it
+	batchPromises ring[batchPromise] // we never call die() on it
 
 	txnMu   sync.Mutex
 	inTxn   bool

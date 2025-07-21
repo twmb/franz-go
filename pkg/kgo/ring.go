@@ -4,11 +4,12 @@ import (
 	"sync"
 )
 
-// The ring types below are based on fixed sized blocking MPSC ringbuffer.
-// One type is a fixed size ring, and the other type is an unlimited ring
-// that uses a fixed size ring if the number of elements is less than 8.
+// The ring type below in based on fixed sized blocking MPSC ringbuffer
+// if the number of elements is less than or equal to 8, and fallback to a slice if
+// the number of elements in greater than 8. The maximum number of elements
+// in the ring is unlimited.
 //
-// These rings replace channels in a few places in this client. The *main* advantage they
+// This ring replace channels in a few places in this client. The *main* advantage it
 // provide is to allow loops that terminate.
 //
 // With channels, we always have to have a goroutine draining the channel.  We
@@ -22,10 +23,9 @@ import (
 // which would block the worker from grabbing the lock. Any other lock ordering
 // has TOCTOU problems as well.
 //
-// We could use a slice that we always push to and pop the front of. This is a
-// bit easier to reason about, but constantly reallocates and has no bounded
-// capacity. The second we think about adding bounded capacity, we get this
-// ringbuffer below.
+// We could exclusively use a slice that we always push to and pop the front of.
+// This is a bit easier to reason about, but constantly reallocates and has no bounded
+// capacity, so we use it only if the number of elements is greater than 8.
 //
 // The key insight is that we only pop the front *after* we are done with it.
 // If there are still more elements, the worker goroutine can continue working.
@@ -45,7 +45,7 @@ const (
 	eight = mask7 + 1
 )
 
-type unlimitedRing[T any] struct {
+type ring[T any] struct {
 	mu sync.Mutex
 
 	elems [eight]T
@@ -58,14 +58,14 @@ type unlimitedRing[T any] struct {
 	overflow []T
 }
 
-func (r *unlimitedRing[T]) die() {
+func (r *ring[T]) die() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	r.dead = true
 }
 
-func (r *unlimitedRing[T]) push(elem T) (first, dead bool) {
+func (r *ring[T]) push(elem T) (first, dead bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -88,7 +88,7 @@ func (r *unlimitedRing[T]) push(elem T) (first, dead bool) {
 	return r.l == 1, false
 }
 
-func (r *unlimitedRing[T]) dropPeek() (next T, more, dead bool) {
+func (r *ring[T]) dropPeek() (next T, more, dead bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
