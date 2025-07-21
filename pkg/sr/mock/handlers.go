@@ -1,7 +1,6 @@
 package mock
 
 import (
-	"encoding/json"
 	"errors"
 	"net/http"
 	"sort"
@@ -180,7 +179,7 @@ func (r *Registry) handlePostSubjectVersion(w http.ResponseWriter, req *http.Req
 	subject := req.PathValue("subject")
 
 	var body sr.Schema
-	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+	if err := decodeJSONRequest(req.Body, &body); err != nil {
 		r.handleAPIError(w, errInvalidSchemaWithCause(err, err.Error()))
 		return
 	}
@@ -249,7 +248,7 @@ func (r *Registry) handleGetReferencedBy(w http.ResponseWriter, req *http.Reques
 	defer r.mu.RUnlock()
 
 	// Check if the target schema exists
-	_, exists := r.getSchemaBySubjectVersionUnsafe(subject, version)
+	_, exists := r.getSchemaBySubjectVersionLocked(subject, version)
 	if !exists {
 		r.handleAPIError(w, errVersionNotFound(subject, version))
 		return
@@ -337,7 +336,7 @@ func (r *Registry) handleCheckSchema(w http.ResponseWriter, req *http.Request) {
 	}
 
 	var body sr.Schema
-	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+	if err := decodeJSONRequest(req.Body, &body); err != nil {
 		r.handleAPIError(w, errInvalidSchemaWithCause(err, err.Error()))
 		return
 	}
@@ -360,7 +359,7 @@ func (r *Registry) handleCheckSchema(w http.ResponseWriter, req *http.Request) {
 			"subject": subject,
 			"version": v,
 			"id":      versionData.schema.ID,
-			"schema":  versionData.schema.Schema,
+			"schema":  versionData.schema.Schema.Schema,
 		}
 		if versionData.schema.Type != sr.TypeAvro {
 			resp["schemaType"] = versionData.schema.Type.String()
@@ -378,7 +377,8 @@ func (r *Registry) handleCheckSchema(w http.ResponseWriter, req *http.Request) {
 // to check schema compatibility. Note: This is a stub that always returns true.
 func (r *Registry) handleCheckCompatibility(w http.ResponseWriter, req *http.Request) {
 	req.Body = http.MaxBytesReader(w, req.Body, 1<<20)
-	if err := json.NewDecoder(req.Body).Decode(&sr.Schema{}); err != nil {
+	var schema sr.Schema
+	if err := decodeJSONRequest(req.Body, &schema); err != nil {
 		r.handleAPIError(w, errInvalidSchemaWithCause(err, err.Error()))
 		return
 	}
@@ -404,7 +404,7 @@ func (r *Registry) handlePutGlobalConfig(w http.ResponseWriter, req *http.Reques
 	var body struct {
 		Compatibility sr.CompatibilityLevel `json:"compatibility"`
 	}
-	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+	if err := decodeJSONRequest(req.Body, &body); err != nil {
 		r.handleAPIError(w, errInvalidCompatLevel(err.Error()))
 		return
 	}
@@ -443,7 +443,7 @@ func (r *Registry) handlePutSubjectConfig(w http.ResponseWriter, req *http.Reque
 	var body struct {
 		Compatibility sr.CompatibilityLevel `json:"compatibility"`
 	}
-	if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+	if err := decodeJSONRequest(req.Body, &body); err != nil {
 		r.handleAPIError(w, errInvalidCompatLevel(err.Error()))
 		return
 	}
@@ -473,7 +473,7 @@ func (r *Registry) handleDeleteSubjectConfig(w http.ResponseWriter, req *http.Re
 
 // handleGetMode emulates GET /mode and returns the mock's current operational
 // mode.
-func (_ *Registry) handleGetMode(w http.ResponseWriter, _ *http.Request) {
+func (*Registry) handleGetMode(w http.ResponseWriter, _ *http.Request) {
 	respondJSON(w, http.StatusOK, map[string]string{"mode": "READWRITE"})
 }
 
@@ -482,10 +482,10 @@ func (_ *Registry) handleGetMode(w http.ResponseWriter, _ *http.Request) {
    ------------------------------------------------------------------------- */
 
 // handleAPIError is a centralized error handler that takes an error and writes
-// the correct HTTP response. It checks if the error is a RegistryError and uses
+// the correct HTTP response. It checks if the error is a registryError and uses
 // its properties, otherwise returns a generic 500 error.
-func (_ *Registry) handleAPIError(w http.ResponseWriter, err error) {
-	var regErr *RegistryError
+func (*Registry) handleAPIError(w http.ResponseWriter, err error) {
+	var regErr *registryError
 	if errors.As(err, &regErr) {
 		// This is a known registry error, use its properties.
 		writeError(w, regErr.HTTPStatus, regErr.SRCode, regErr.Message)
