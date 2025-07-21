@@ -343,8 +343,8 @@ func (r *Registry) Reset() {
 	r.globalCompat = sr.CompatBackward
 }
 
-// getSchemaBySubjectVersionUnsafe is like getSchemaBySubjectVersion but assumes caller holds lock
-func (r *Registry) getSchemaBySubjectVersionUnsafe(subject string, version int) (sr.SubjectSchema, bool) {
+// getSchemaBySubjectVersionLocked is like getSchemaBySubjectVersion but assumes caller holds lock
+func (r *Registry) getSchemaBySubjectVersionLocked(subject string, version int) (sr.SubjectSchema, bool) {
 	subj, ok := r.subjects[subject]
 	if !ok || subj.isDeleted {
 		return sr.SubjectSchema{}, false
@@ -411,7 +411,7 @@ func (r *Registry) deleteSubject(subject string, permanent bool) ([]int, error) 
 		}
 	}
 	if len(allReferencingIDs) > 0 {
-		return nil, newErr(http.StatusConflict, errCodeInvalidSchema, ErrInvalidSchema,
+		return nil, newErr(http.StatusConflict, errCodeInvalidSchema,
 			"Cannot delete subject %s as its schemas are still referenced by schema IDs: %v",
 			subject, allReferencingIDs)
 	}
@@ -489,10 +489,10 @@ func (r *Registry) getSchemaBySubjectVersion(subject string, version int) (sr.Su
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	return r.getSchemaBySubjectVersionUnsafe(subject, version)
+	return r.getSchemaBySubjectVersionLocked(subject, version)
 }
 
-func (_ *Registry) schemasEqual(a, b sr.Schema) bool {
+func (*Registry) schemasEqual(a, b sr.Schema) bool {
 	ta := a.Type
 	if ta == 0 {
 		ta = sr.TypeAvro
@@ -529,7 +529,7 @@ func (_ *Registry) schemasEqual(a, b sr.Schema) bool {
 	return true
 }
 
-func (_ *Registry) validateSubject(subject string) error {
+func (*Registry) validateSubject(subject string) error {
 	if subject == "" {
 		return errInvalidSchema("subject name cannot be empty")
 	}
@@ -543,7 +543,7 @@ func (_ *Registry) validateSubject(subject string) error {
 	return nil
 }
 
-func (_ *Registry) validateSchema(s sr.Schema) error {
+func (*Registry) validateSchema(s sr.Schema) error {
 	switch s.Type {
 	case sr.TypeAvro, sr.TypeJSON:
 		var tmp any
@@ -628,7 +628,7 @@ func (r *Registry) detectCycle(schema sr.Schema, subject string, version int, vi
 	}
 
 	// Remove from subject stack before returning
-	subjectStack[subject] = false
+	delete(subjectStack, subject)
 	return nil
 }
 
