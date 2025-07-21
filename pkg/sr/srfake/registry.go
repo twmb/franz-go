@@ -1,4 +1,4 @@
-// Package mock provides an in-memory, concurrency-safe mock implementation of
+// Package srfake provides an in-memory, concurrency-safe mock implementation of
 // the Confluent Schema Registry REST API for unit and integration testing.
 //
 // The mock spins up an `httptest.Server`, persists all data in process memory,
@@ -7,7 +7,7 @@
 // only on the Go standard library plus franz-go’s sr package.
 //
 // See the README for complete API coverage, limitations, and detailed examples.
-package mock
+package srfake
 
 import (
 	"encoding/json"

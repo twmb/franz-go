@@ -1,6 +1,6 @@
 # Schema Registry Mock
 
-The `mock` package provides an in-memory, concurrency-safe implementation of the Confluent Schema Registry REST API for unit and integration testing.
+The `srfake` package provides an in-memory, concurrency-safe implementation of the Confluent Schema Registry REST API for unit and integration testing.
 
 ## Features
 
@@ -14,14 +14,14 @@ The `mock` package provides an in-memory, concurrency-safe implementation of the
 ```go
 import (
     "github.com/twmb/franz-go/pkg/sr"
-    "github.com/twmb/franz-go/pkg/sr/mock"
+    "github.com/twmb/franz-go/pkg/sr/srfake"
 )
 
 func TestSchemaRegistry(t *testing.T) {
     // Create mock registry
-    reg := mock.New(
-        mock.WithAuth("Bearer token"),
-        mock.WithGlobalCompat(sr.CompatBackward),
+    reg := srfake.New(
+        srfake.WithAuth("Bearer token"),
+        srfake.WithGlobalCompat(sr.CompatBackward),
     )
     defer reg.Close()
 
@@ -87,7 +87,7 @@ type Interceptor func(w http.ResponseWriter, r *http.Request) (handled bool)
 
 ```go
 func TestSchemaIncompatibility(t *testing.T) {
-    reg := mock.New()
+    reg := srfake.New()
     defer reg.Close()
 
     // Intercept compatibility check requests
@@ -149,15 +149,15 @@ The mock implements the core Schema Registry endpoints:
 
 ```go
 // Authentication
-reg := mock.New(mock.WithAuth("Bearer token"))
+reg := srfake.New(srfake.WithAuth("Bearer token"))
 
 // Global compatibility
-reg := mock.New(mock.WithGlobalCompat(sr.CompatBackward))
+reg := srfake.New(srfake.WithGlobalCompat(sr.CompatBackward))
 
 // Combined
-reg := mock.New(
-    mock.WithAuth("Bearer token"),
-    mock.WithGlobalCompat(sr.CompatForward),
+reg := srfake.New(
+    srfake.WithAuth("Bearer token"),
+    srfake.WithGlobalCompat(sr.CompatForward),
 )
 ```
 

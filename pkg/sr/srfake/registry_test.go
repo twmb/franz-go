@@ -1,6 +1,6 @@
 // The _test package suffix indicates this is a black-box test. It can only
-// access the exported APIs of the 'mock' package, just like a real consumer.
-package mock_test
+// access the exported APIs of the 'srfake' package, just like a real consumer.
+package srfake_test
 
 import (
 	"context"
@@ -14,7 +14,7 @@ import (
 	"testing"
 
 	"github.com/twmb/franz-go/pkg/sr"
-	"github.com/twmb/franz-go/pkg/sr/mock"
+	"github.com/twmb/franz-go/pkg/sr/srfake"
 )
 
 var (
@@ -38,7 +38,7 @@ func TestSubjectHandlers(t *testing.T) {
 		method     string
 		path       string
 		body       string
-		setup      func(*mock.Registry)
+		setup      func(*srfake.Registry)
 		wantStatus int
 		wantBody   string // Use jsonEqual for comparison
 	}{
@@ -47,7 +47,7 @@ func TestSubjectHandlers(t *testing.T) {
 			name:   "GET /subjects - no subjects",
 			method: "GET",
 			path:   "/subjects",
-			setup: func(r *mock.Registry) {
+			setup: func(r *srfake.Registry) {
 				// no setup needed
 			},
 			wantStatus: http.StatusOK,
@@ -57,7 +57,7 @@ func TestSubjectHandlers(t *testing.T) {
 			name:   "GET /subjects - with subjects",
 			method: "GET",
 			path:   "/subjects",
-			setup: func(r *mock.Registry) {
+			setup: func(r *srfake.Registry) {
 				r.SeedSchema("user-topic-value", 1, 1, userSchema)
 				r.SeedSchema("product-topic-value", 1, 2, productSchema)
 			},
@@ -68,7 +68,7 @@ func TestSubjectHandlers(t *testing.T) {
 			name:   "GET /subjects - with soft-deleted subject",
 			method: "GET",
 			path:   "/subjects",
-			setup: func(r *mock.Registry) {
+			setup: func(r *srfake.Registry) {
 				r.SeedSchema("user-topic-value", 1, 1, userSchema)
 				r.SeedSchema("product-topic-value", 1, 2, productSchema)
 
@@ -87,7 +87,7 @@ func TestSubjectHandlers(t *testing.T) {
 			name:   "GET /subjects - including soft-deleted",
 			method: "GET",
 			path:   "/subjects?deleted=true",
-			setup: func(r *mock.Registry) {
+			setup: func(r *srfake.Registry) {
 				r.SeedSchema("user-topic-value", 1, 1, userSchema)
 				r.SeedSchema("product-topic-value", 1, 2, productSchema)
 				// Perform a soft-delete via the public HTTP API
@@ -116,7 +116,7 @@ func TestSubjectHandlers(t *testing.T) {
 			method: "POST",
 			path:   "/subjects/user-topic-value/versions",
 			body:   `{"schema": "{\"type\":\"record\",\"name\":\"User\",\"fields\":[{\"name\":\"id\",\"type\":\"string\"}]}"}`,
-			setup: func(r *mock.Registry) {
+			setup: func(r *srfake.Registry) {
 				r.RegisterSchema("user-topic-value", sr.Schema{Schema: `{"type":"record","name":"User","fields":[{"name":"id","type":"string"}]}`})
 			},
 			wantStatus: http.StatusOK,
@@ -127,7 +127,7 @@ func TestSubjectHandlers(t *testing.T) {
 			method: "POST",
 			path:   "/subjects/user-topic-key/versions",
 			body:   `{"schema": "{\"type\":\"record\",\"name\":\"User\",\"fields\":[{\"name\":\"id\",\"type\":\"string\"}]}"}`,
-			setup: func(r *mock.Registry) {
+			setup: func(r *srfake.Registry) {
 				// Schema exists under a different subject, should reuse the ID
 				r.RegisterSchema("user-topic-value", sr.Schema{Schema: `{"type":"record","name":"User","fields":[{"name":"id","type":"string"}]}`})
 			},
@@ -147,7 +147,7 @@ func TestSubjectHandlers(t *testing.T) {
 			method: "POST",
 			path:   "/subjects/user-topic-value/versions",
 			body:   `{"schema": "{\"type\":\"record\",\"name\":\"User\",\"fields\":[{\"name\":\"id\",\"type\":\"string\"}]}"}`,
-			setup: func(r *mock.Registry) {
+			setup: func(r *srfake.Registry) {
 				// First register a schema, then soft-delete the subject
 				r.SeedSchema("user-topic-value", 1, 1, userSchema)
 				// Perform a soft-delete via the public HTTP API
@@ -174,7 +174,7 @@ func TestSubjectHandlers(t *testing.T) {
 			name:   "GET /subjects/{s}/versions - list versions",
 			method: "GET",
 			path:   "/subjects/user-topic-value/versions",
-			setup: func(r *mock.Registry) {
+			setup: func(r *srfake.Registry) {
 				r.SeedSchema("user-topic-value", 1, 1, userSchema)
 				r.SeedSchema("user-topic-value", 2, 2, userSchemaV2)
 			},
@@ -187,7 +187,7 @@ func TestSubjectHandlers(t *testing.T) {
 			name:   "GET /subjects/{s}/versions/{v} - by number",
 			method: "GET",
 			path:   "/subjects/user-topic-value/versions/2",
-			setup: func(r *mock.Registry) {
+			setup: func(r *srfake.Registry) {
 				r.SeedSchema("user-topic-value", 1, 1, userSchema)
 				r.SeedSchema("user-topic-value", 2, 2, userSchemaV2)
 			},
@@ -198,7 +198,7 @@ func TestSubjectHandlers(t *testing.T) {
 			name:   "GET /subjects/{s}/versions/{v} - by 'latest'",
 			method: "GET",
 			path:   "/subjects/user-topic-value/versions/latest",
-			setup: func(r *mock.Registry) {
+			setup: func(r *srfake.Registry) {
 				r.SeedSchema("user-topic-value", 1, 1, userSchema)
 				r.SeedSchema("user-topic-value", 2, 2, userSchemaV2)
 			},
@@ -209,7 +209,7 @@ func TestSubjectHandlers(t *testing.T) {
 			name:   "GET /subjects/{s}/versions/{v} - latest with no active versions",
 			method: "GET",
 			path:   "/subjects/user-topic-value/versions/latest",
-			setup: func(r *mock.Registry) {
+			setup: func(r *srfake.Registry) {
 				// Create a subject with a schema, then hard delete the version
 				// to simulate a subject with no active versions
 				r.SeedSchema("user-topic-value", 1, 1, userSchema)
@@ -229,7 +229,7 @@ func TestSubjectHandlers(t *testing.T) {
 			name:   "GET /subjects/{s}/versions/{v} - latest on non-existent subject",
 			method: "GET",
 			path:   "/subjects/non-existent-subject/versions/latest",
-			setup: func(r *mock.Registry) {
+			setup: func(r *srfake.Registry) {
 				// No setup needed - subject doesn't exist
 			},
 			wantStatus: http.StatusNotFound,
@@ -239,7 +239,7 @@ func TestSubjectHandlers(t *testing.T) {
 			name:   "GET /subjects/{s}/versions/{v} - version not found",
 			method: "GET",
 			path:   "/subjects/user-topic-value/versions/99",
-			setup: func(r *mock.Registry) {
+			setup: func(r *srfake.Registry) {
 				r.SeedSchema("user-topic-value", 1, 1, userSchema)
 			},
 			wantStatus: http.StatusNotFound,
@@ -251,7 +251,7 @@ func TestSubjectHandlers(t *testing.T) {
 			name:   "DELETE /subjects/{s} - soft delete",
 			method: "DELETE",
 			path:   "/subjects/user-topic-value",
-			setup: func(r *mock.Registry) {
+			setup: func(r *srfake.Registry) {
 				r.SeedSchema("user-topic-value", 1, 1, userSchema)
 				r.SeedSchema("user-topic-value", 2, 2, userSchemaV2)
 			},
@@ -262,7 +262,7 @@ func TestSubjectHandlers(t *testing.T) {
 			name:   "DELETE /subjects/{s} - permanent delete",
 			method: "DELETE",
 			path:   "/subjects/user-topic-value?permanent=true",
-			setup: func(r *mock.Registry) {
+			setup: func(r *srfake.Registry) {
 				r.SeedSchema("user-topic-value", 1, 1, userSchema)
 			},
 			wantStatus: http.StatusOK,
@@ -275,7 +275,7 @@ func TestSubjectHandlers(t *testing.T) {
 			method: "POST",
 			path:   "/subjects/user-topic-value",
 			body:   `{"schema":"{\"type\":\"record\",\"name\":\"User\",\"fields\":[{\"name\":\"id\",\"type\":\"string\"},{\"name\":\"name\",\"type\":\"string\"}]}"}`,
-			setup: func(r *mock.Registry) {
+			setup: func(r *srfake.Registry) {
 				r.SeedSchema("user-topic-value", 1, 1, userSchema)
 			},
 			wantStatus: http.StatusOK,
@@ -286,7 +286,7 @@ func TestSubjectHandlers(t *testing.T) {
 			method: "POST",
 			path:   "/subjects/user-topic-value",
 			body:   `{"schema":"{\"type\":\"record\",\"name\":\"DoesNotExist\"}"}`,
-			setup: func(r *mock.Registry) {
+			setup: func(r *srfake.Registry) {
 				r.SeedSchema("user-topic-value", 1, 1, userSchema)
 			},
 			wantStatus: http.StatusNotFound,
@@ -297,7 +297,7 @@ func TestSubjectHandlers(t *testing.T) {
 			method: "POST",
 			path:   "/subjects/user-topic-value",
 			body:   `{"schema":"{\"type\":\"record\",\"name\":\"User\",\"fields\":[{\"name\":\"id\",\"type\":\"string\"},{\"name\":\"name\",\"type\":\"string\"}]}"}`,
-			setup: func(r *mock.Registry) {
+			setup: func(r *srfake.Registry) {
 				// First register a schema, then soft-delete the subject
 				r.SeedSchema("user-topic-value", 1, 1, userSchema)
 				// Perform a soft-delete via the public HTTP API
@@ -315,7 +315,7 @@ func TestSubjectHandlers(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			reg := mock.New()
+			reg := srfake.New()
 			t.Cleanup(reg.Close)
 			client := &http.Client{}
 
@@ -351,7 +351,7 @@ func TestSubjectHandlers(t *testing.T) {
 }
 
 func TestSchemaHandlers(t *testing.T) {
-	reg := mock.New()
+	reg := srfake.New()
 	t.Cleanup(reg.Close)
 	client := &http.Client{}
 	reg.SeedSchema("user-topic", 1, 123, userSchema)
@@ -410,7 +410,7 @@ func TestSchemaHandlers(t *testing.T) {
 }
 
 func TestConfigHandlers(t *testing.T) {
-	reg := mock.New()
+	reg := srfake.New()
 	t.Cleanup(reg.Close)
 	client := &http.Client{}
 
@@ -494,7 +494,7 @@ func TestConfigHandlers(t *testing.T) {
 
 func TestAuthMiddleware(t *testing.T) {
 	const authToken = "Bearer my-secret-token"
-	reg := mock.New(mock.WithAuth(authToken))
+	reg := srfake.New(srfake.WithAuth(authToken))
 	t.Cleanup(reg.Close)
 	client := &http.Client{}
 
@@ -551,7 +551,7 @@ func TestClientIntegration(t *testing.T) {
 
 	testCases := []struct {
 		name       string
-		setup      func(t *testing.T, r *mock.Registry)
+		setup      func(t *testing.T, r *srfake.Registry)
 		act        func(t *testing.T, cl *sr.Client) (any, error)
 		wantErr    any
 		wantResult any
@@ -571,7 +571,7 @@ func TestClientIntegration(t *testing.T) {
 		},
 		{
 			name: "CreateSchema - existing schema same subject",
-			setup: func(t *testing.T, r *mock.Registry) {
+			setup: func(t *testing.T, r *srfake.Registry) {
 				r.SeedSchema(subject, 1, 1, userSchema)
 			},
 			act: func(t *testing.T, cl *sr.Client) (any, error) {
@@ -586,7 +586,7 @@ func TestClientIntegration(t *testing.T) {
 		},
 		{
 			name: "CreateSchema - new version for subject",
-			setup: func(t *testing.T, r *mock.Registry) {
+			setup: func(t *testing.T, r *srfake.Registry) {
 				r.SeedSchema(subject, 1, 1, userSchema)
 			},
 			act: func(t *testing.T, cl *sr.Client) (any, error) {
@@ -601,7 +601,7 @@ func TestClientIntegration(t *testing.T) {
 		},
 		{
 			name: "CreateSchema - existing schema different subject should reuse ID",
-			setup: func(t *testing.T, r *mock.Registry) {
+			setup: func(t *testing.T, r *srfake.Registry) {
 				r.SeedSchema("another-subject", 1, 99, productSchema)
 			},
 			act: func(t *testing.T, cl *sr.Client) (any, error) {
@@ -618,7 +618,7 @@ func TestClientIntegration(t *testing.T) {
 		// --- Schema Retrieval ---
 		{
 			name: "SchemaByID - found",
-			setup: func(t *testing.T, r *mock.Registry) {
+			setup: func(t *testing.T, r *srfake.Registry) {
 				r.SeedSchema(subject, 1, 123, userSchema)
 			},
 			act: func(t *testing.T, cl *sr.Client) (any, error) {
@@ -628,7 +628,7 @@ func TestClientIntegration(t *testing.T) {
 		},
 		{
 			name: "SchemaByVersion - found",
-			setup: func(t *testing.T, r *mock.Registry) {
+			setup: func(t *testing.T, r *srfake.Registry) {
 				r.SeedSchema(subject, 1, 1, userSchema)
 				r.SeedSchema(subject, 2, 2, userSchemaV2)
 			},
@@ -644,7 +644,7 @@ func TestClientIntegration(t *testing.T) {
 		},
 		{
 			name: "LatestSchema - found",
-			setup: func(t *testing.T, r *mock.Registry) {
+			setup: func(t *testing.T, r *srfake.Registry) {
 				r.SeedSchema(subject, 1, 1, userSchema)
 				r.SeedSchema(subject, 2, 2, userSchemaV2)
 			},
@@ -662,7 +662,7 @@ func TestClientIntegration(t *testing.T) {
 		// --- Subject & Version Management ---
 		{
 			name: "Subjects - list all",
-			setup: func(t *testing.T, r *mock.Registry) {
+			setup: func(t *testing.T, r *srfake.Registry) {
 				r.SeedSchema("subj-a", 1, 1, userSchema)
 				r.SeedSchema("subj-b", 1, 2, productSchema)
 			},
@@ -673,7 +673,7 @@ func TestClientIntegration(t *testing.T) {
 		},
 		{
 			name: "SchemaVersions - list all for subject",
-			setup: func(t *testing.T, r *mock.Registry) {
+			setup: func(t *testing.T, r *srfake.Registry) {
 				r.SeedSchema(subject, 1, 1, userSchema)
 				r.SeedSchema(subject, 2, 2, userSchemaV2)
 			},
@@ -684,7 +684,7 @@ func TestClientIntegration(t *testing.T) {
 		},
 		{
 			name: "DeleteSubject - permanent",
-			setup: func(t *testing.T, r *mock.Registry) {
+			setup: func(t *testing.T, r *srfake.Registry) {
 				r.SeedSchema(subject, 1, 1, userSchema)
 				r.SeedSchema(subject, 2, 2, userSchemaV2)
 			},
@@ -695,7 +695,7 @@ func TestClientIntegration(t *testing.T) {
 		},
 		{
 			name: "DeleteSchemaVersion - then verify not found",
-			setup: func(t *testing.T, r *mock.Registry) {
+			setup: func(t *testing.T, r *srfake.Registry) {
 				r.SeedSchema(subject, 1, 1, userSchema)
 				r.SeedSchema(subject, 2, 2, userSchemaV2)
 			},
@@ -712,7 +712,7 @@ func TestClientIntegration(t *testing.T) {
 		},
 		{
 			name: "DeleteSchemaVersion - latest version recalculation",
-			setup: func(t *testing.T, r *mock.Registry) {
+			setup: func(t *testing.T, r *srfake.Registry) {
 				// Set up versions 1, 2, and 3 with version 3 being latest
 				r.SeedSchema(subject, 1, 1, userSchema)
 				r.SeedSchema(subject, 2, 2, userSchemaV2)
@@ -746,7 +746,7 @@ func TestClientIntegration(t *testing.T) {
 		},
 		{
 			name: "DeleteSchemaVersion - delete all versions",
-			setup: func(t *testing.T, r *mock.Registry) {
+			setup: func(t *testing.T, r *srfake.Registry) {
 				// Set up a single version
 				r.SeedSchema(subject, 1, 1, userSchema)
 			},
@@ -764,7 +764,7 @@ func TestClientIntegration(t *testing.T) {
 		},
 		{
 			name: "DeleteSchemaVersion - delete non-latest version",
-			setup: func(t *testing.T, r *mock.Registry) {
+			setup: func(t *testing.T, r *srfake.Registry) {
 				// Set up versions 1, 2, and 3 with version 3 being latest
 				r.SeedSchema(subject, 1, 1, userSchema)
 				r.SeedSchema(subject, 2, 2, userSchemaV2)
@@ -789,7 +789,7 @@ func TestClientIntegration(t *testing.T) {
 		},
 		{
 			name: "DeleteSchemaVersion - soft delete latest version recalculation",
-			setup: func(t *testing.T, r *mock.Registry) {
+			setup: func(t *testing.T, r *srfake.Registry) {
 				// Set up versions 1, 2, and 3 with version 3 being latest
 				r.SeedSchema(subject, 1, 1, userSchema)
 				r.SeedSchema(subject, 2, 2, userSchemaV2)
@@ -823,7 +823,7 @@ func TestClientIntegration(t *testing.T) {
 		},
 		{
 			name: "DeleteSchemaVersion - soft delete all versions",
-			setup: func(t *testing.T, r *mock.Registry) {
+			setup: func(t *testing.T, r *srfake.Registry) {
 				// Set up a single version
 				r.SeedSchema(subject, 1, 1, userSchema)
 			},
@@ -841,7 +841,7 @@ func TestClientIntegration(t *testing.T) {
 		},
 		{
 			name: "DeleteSchemaVersion - soft delete non-latest version",
-			setup: func(t *testing.T, r *mock.Registry) {
+			setup: func(t *testing.T, r *srfake.Registry) {
 				// Set up versions 1, 2, and 3 with version 3 being latest
 				r.SeedSchema(subject, 1, 1, userSchema)
 				r.SeedSchema(subject, 2, 2, userSchemaV2)
@@ -945,7 +945,7 @@ func TestClientIntegration(t *testing.T) {
 		},
 		{
 			name: "CreateSchema - indirect circular reference",
-			setup: func(t *testing.T, r *mock.Registry) {
+			setup: func(t *testing.T, r *srfake.Registry) {
 				// Set up schema A
 				schemaA := sr.Schema{
 					Schema: `{"type":"record","name":"SchemaA","fields":[{"name":"id","type":"string"}]}`,
@@ -979,7 +979,7 @@ func TestClientIntegration(t *testing.T) {
 		},
 		{
 			name: "CreateSchema - valid references without cycles",
-			setup: func(t *testing.T, r *mock.Registry) {
+			setup: func(t *testing.T, r *srfake.Registry) {
 				// Set up a base schema with no references
 				baseSchema := sr.Schema{
 					Schema: `{"type":"record","name":"Base","fields":[{"name":"id","type":"string"}]}`,
@@ -1013,7 +1013,7 @@ func TestClientIntegration(t *testing.T) {
 		},
 		{
 			name: "CreateSchema - soft-deleted subject should fail",
-			setup: func(t *testing.T, r *mock.Registry) {
+			setup: func(t *testing.T, r *srfake.Registry) {
 				// First register a schema, then soft-delete the subject
 				r.SeedSchema(subject, 1, 1, userSchema)
 				// Soft-delete the subject
@@ -1047,7 +1047,7 @@ func TestClientIntegration(t *testing.T) {
 		},
 		{
 			name: "Version numbering - no reuse after latest version deletion",
-			setup: func(t *testing.T, r *mock.Registry) {
+			setup: func(t *testing.T, r *srfake.Registry) {
 				// Set up versions 1, 2, 3 with version 3 being latest
 				r.SeedSchema(subject, 1, 1, userSchema)
 				r.SeedSchema(subject, 2, 2, userSchemaV2)
@@ -1085,7 +1085,7 @@ func TestClientIntegration(t *testing.T) {
 		},
 		{
 			name: "Version numbering - no reuse after non-latest version deletion",
-			setup: func(t *testing.T, r *mock.Registry) {
+			setup: func(t *testing.T, r *srfake.Registry) {
 				// Set up versions 1, 2, 3, 4, 5 with version 5 being latest
 				r.SeedSchema(subject, 1, 1, userSchema)
 				r.SeedSchema(subject, 2, 2, userSchemaV2)
@@ -1116,7 +1116,7 @@ func TestClientIntegration(t *testing.T) {
 		},
 		{
 			name: "Version numbering - no reuse after soft delete",
-			setup: func(t *testing.T, r *mock.Registry) {
+			setup: func(t *testing.T, r *srfake.Registry) {
 				// Set up versions 1, 2, 3 with version 3 being latest
 				r.SeedSchema(subject, 1, 1, userSchema)
 				r.SeedSchema(subject, 2, 2, userSchemaV2)
@@ -1145,7 +1145,7 @@ func TestClientIntegration(t *testing.T) {
 		},
 		{
 			name: "Schema ID allocation - no reuse after hard delete",
-			setup: func(t *testing.T, r *mock.Registry) {
+			setup: func(t *testing.T, r *srfake.Registry) {
 				// Set up schemas with IDs 1, 2, 3
 				r.SeedSchema("subject-1", 1, 1, userSchema)
 				r.SeedSchema("subject-2", 1, 2, userSchemaV2)
@@ -1176,7 +1176,7 @@ func TestClientIntegration(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			reg := mock.New()
+			reg := srfake.New()
 			t.Cleanup(reg.Close)
 			cl, err := sr.NewClient(sr.URLs(reg.URL()))
 			if err != nil {
@@ -1210,7 +1210,7 @@ func TestClientIntegration(t *testing.T) {
 // TestRaceConditionRegisterSchema tests that RegisterSchema is safe from race conditions
 // where referenced schemas could be deleted between validation and registration.
 func TestRaceConditionRegisterSchema(t *testing.T) {
-	reg := mock.New()
+	reg := srfake.New()
 	t.Cleanup(reg.Close)
 
 	cl, err := sr.NewClient(sr.URLs(reg.URL()))
@@ -1311,7 +1311,7 @@ func TestRaceConditionRegisterSchema(t *testing.T) {
 
 // TestReferencedByEndpoint tests the /referencedby endpoint functionality
 func TestReferencedByEndpoint(t *testing.T) {
-	reg := mock.New()
+	reg := srfake.New()
 	t.Cleanup(reg.Close)
 
 	// Set up a base schema that will be referenced
@@ -1415,7 +1415,7 @@ func TestReferencedByEndpoint(t *testing.T) {
 // TestDeletionWithReferences tests schema deletion behavior when schemas are referenced
 func TestDeletionWithReferences(t *testing.T) {
 	t.Run("Cannot delete schema that is still referenced", func(t *testing.T) {
-		reg := mock.New()
+		reg := srfake.New()
 		t.Cleanup(reg.Close)
 
 		// Set up a base schema that will be referenced
@@ -1479,7 +1479,7 @@ func TestDeletionWithReferences(t *testing.T) {
 	})
 
 	t.Run("Cannot delete entire subject when it has referenced schemas", func(t *testing.T) {
-		reg := mock.New()
+		reg := srfake.New()
 		t.Cleanup(reg.Close)
 
 		// Set up schemas
@@ -1512,7 +1512,7 @@ func TestDeletionWithReferences(t *testing.T) {
 	})
 
 	t.Run("Cannot soft delete referenced schema", func(t *testing.T) {
-		reg := mock.New()
+		reg := srfake.New()
 		t.Cleanup(reg.Close)
 
 		// Set up schemas
@@ -1545,7 +1545,7 @@ func TestDeletionWithReferences(t *testing.T) {
 	})
 
 	t.Run("Can delete schema with no references", func(t *testing.T) {
-		reg := mock.New()
+		reg := srfake.New()
 		t.Cleanup(reg.Close)
 
 		// Set up a schema with no references
@@ -1599,7 +1599,7 @@ func jsonEqual(a, b string) bool {
 // TestErrorHandling verifies that the mock registry returns proper sr.ResponseError objects
 // that clients can use for error checking.
 func TestErrorHandling(t *testing.T) {
-	registry := mock.New()
+	registry := srfake.New()
 	t.Cleanup(registry.Close)
 
 	cl, err := sr.NewClient(sr.URLs(registry.URL()))

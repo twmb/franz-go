@@ -1,4 +1,4 @@
-package mock
+package srfake
 
 import "github.com/twmb/franz-go/pkg/sr"
 
