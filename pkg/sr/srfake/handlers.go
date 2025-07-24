@@ -16,11 +16,11 @@ import (
 func (r *Registry) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		if req.Header.Get("Authorization") == "" {
-			writeError(w, http.StatusUnauthorized, sr.ErrCodeOperationTimeout, "Missing Authorization header")
+			writeError(w, http.StatusUnauthorized, sr.ErrOperationTimeout.Code, "Missing Authorization header")
 			return
 		}
 		if req.Header.Get("Authorization") != r.expectedAuth {
-			writeError(w, http.StatusForbidden, sr.ErrCodeOperationTimeout, "User not authorized")
+			writeError(w, http.StatusForbidden, sr.ErrOperationTimeout.Code, "User not authorized")
 			return
 		}
 		next.ServeHTTP(w, req)
@@ -492,6 +492,6 @@ func (*Registry) handleAPIError(w http.ResponseWriter, err error) {
 	} else {
 		// This is an unexpected or generic error.
 		// Return a generic 500 error.
-		writeError(w, http.StatusInternalServerError, sr.ErrCodeStoreError, err.Error())
+		writeError(w, http.StatusInternalServerError, sr.ErrStoreError.Code, err.Error())
 	}
 }
