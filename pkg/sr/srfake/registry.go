@@ -411,7 +411,7 @@ func (r *Registry) deleteSubject(subject string, permanent bool) ([]int, error) 
 		}
 	}
 	if len(allReferencingIDs) > 0 {
-		return nil, newErr(http.StatusConflict, errCodeInvalidSchema,
+		return nil, newErr(http.StatusConflict, sr.ErrCodeInvalidSchema,
 			"Cannot delete subject %s as its schemas are still referenced by schema IDs: %v",
 			subject, allReferencingIDs)
 	}

@@ -7,18 +7,6 @@ import (
 	"net/http"
 )
 
-const (
-	errCodeSubjectNotFound     = 40401
-	errCodeVersionNotFound     = 40402
-	errCodeSchemaNotFound      = 40403
-	errCodeInvalidSchema       = 42201
-	errCodeInvalidVersion      = 42202
-	errCodeInvalidCompatLevel  = 42203
-	errCodeBackendDataStore    = 50001
-	errCodeOperationTimeout    = 50002
-	errCodeForwardRequestError = 50003
-)
-
 func respondJSON(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Content-Type", "application/vnd.schemaregistry.v1+json")
 	w.WriteHeader(status)
