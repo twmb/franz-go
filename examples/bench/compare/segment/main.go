@@ -23,12 +23,12 @@ var (
 	seedBrokers = flag.String("brokers", "localhost:9092", "comma delimited list of seed brokers")
 	topic       = flag.String("topic", "", "topic to produce to or consume from")
 
-	batchSize           = flag.Int("batch-size", 10000, "value for the kafka.Writer.BatchSize field")
-	acks                = flag.Int("acks", 0, "value for the Writer.Acks field")
-	recordBytes         = flag.Int("record-bytes", 100, "bytes per record (producing)")
-	compression         = flag.String("compression", "none", "compression algorithm to use (none,gzip,snappy,lz4,zstd, for producing)")
-	poolProduce         = flag.Bool("pool", false, "if true, use a sync.Pool to reuse record slices (producing)")
-	noIdempotentMaxReqs = flag.Int("max-inflight-produce-per-broker", 5, "if idempotency is disabled, the number of produce requests to allow per broker")
+	batchSize       = flag.Int("batch-size", 10000, "value for the kafka.Writer.BatchSize field")
+	acks            = flag.Int("acks", -1, "value for the Writer.Acks field")
+	recordBytes     = flag.Int("record-bytes", 100, "bytes per record (producing)")
+	compression     = flag.String("compression", "none", "compression algorithm to use (none,gzip,snappy,lz4,zstd, for producing)")
+	poolProduce     = flag.Bool("pool", false, "if true, use a sync.Pool to reuse record slices (producing)")
+	maxWriteThreads = flag.Int("max-write-threads", 5, "if idempotency is disabled, the number of produce requests to allow per broker")
 
 	consume = flag.Bool("consume", false, "if true, consume rather than produce")
 	group   = flag.String("group", "", "if non-empty, group to use for consuming rather than direct partition consuming (consuming)")
@@ -142,7 +142,7 @@ func main() {
 
 		ctx := context.Background()
 		producer := NewProducer(w, *batchSize)
-		go producer.Run(ctx, *noIdempotentMaxReqs)
+		go producer.Run(ctx, *maxWriteThreads)
 
 		var num int64
 		for {
