@@ -3,9 +3,11 @@ module bench
 go 1.24.2
 
 require (
+	github.com/segmentio/kafka-go v0.4.48
 	github.com/twmb/franz-go v1.18.1
 	github.com/twmb/franz-go/plugin/kprom v1.2.1
 	github.com/twmb/tlscfg v1.2.1
+	go4.org v0.0.0-20230225012048-214862532bf5
 )
 
 require (
