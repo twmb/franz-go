@@ -54,6 +54,12 @@ func (e *ResponseError) Error() string {
 	return string(e.Raw)
 }
 
+// SchemaError returns the typed Error corresponding to this response error's error code.
+// If the error code is unknown, this returns nil.
+func (e *ResponseError) SchemaError() *Error {
+	return ErrorForCode(e.ErrorCode)
+}
+
 // Client talks to a schema registry and contains helper functions to serialize
 // and deserialize objects according to schemas.
 type Client struct {

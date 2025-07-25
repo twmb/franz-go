@@ -34,41 +34,41 @@ func newErr(httpStatus, srCode int, format string, a ...any) *registryError {
 // Specific error constructors for common error scenarios
 
 func errSubjectNotFound(subject string) *registryError {
-	return newErr(http.StatusNotFound, errCodeSubjectNotFound, "subject %q not found", subject)
+	return newErr(http.StatusNotFound, sr.ErrSubjectNotFound.Code, "subject %q not found", subject)
 }
 
 func errVersionNotFound(subject string, version int) *registryError {
-	return newErr(http.StatusNotFound, errCodeVersionNotFound, "version %d not found for %q", version, subject)
+	return newErr(http.StatusNotFound, sr.ErrVersionNotFound.Code, "version %d not found for %q", version, subject)
 }
 
 func errSchemaNotFound() *registryError {
-	return newErr(http.StatusNotFound, errCodeSchemaNotFound, "schema not found")
+	return newErr(http.StatusNotFound, sr.ErrSchemaNotFound.Code, "schema not found")
 }
 
 func errSchemaIsReferenced(subject string, version int, by []int) *registryError {
-	return newErr(http.StatusConflict, errCodeInvalidSchema, "Cannot delete schema %s:%d as it is still referenced by schema IDs: %v", subject, version, by)
+	return newErr(http.StatusConflict, sr.ErrInvalidSchema.Code, "Cannot delete schema %s:%d as it is still referenced by schema IDs: %v", subject, version, by)
 }
 
 func errInvalidReference(ref sr.SchemaReference) *registryError {
-	return newErr(http.StatusUnprocessableEntity, errCodeInvalidSchema, "reference %q subject %q version %d not found", ref.Name, ref.Subject, ref.Version)
+	return newErr(http.StatusUnprocessableEntity, sr.ErrInvalidSchema.Code, "reference %q subject %q version %d not found", ref.Name, ref.Subject, ref.Version)
 }
 
 func errInvalidSchema(msg string) *registryError {
-	return newErr(http.StatusUnprocessableEntity, errCodeInvalidSchema, msg)
+	return newErr(http.StatusUnprocessableEntity, sr.ErrInvalidSchema.Code, msg)
 }
 
 func errInvalidSchemaWithCause(cause error, msg string) *registryError {
-	return newErr(http.StatusUnprocessableEntity, errCodeInvalidSchema, msg)
+	return newErr(http.StatusUnprocessableEntity, sr.ErrInvalidSchema.Code, msg)
 }
 
 func errInvalidVersion(msg string) *registryError {
-	return newErr(http.StatusBadRequest, errCodeInvalidVersion, msg)
+	return newErr(http.StatusBadRequest, sr.ErrInvalidVersion.Code, msg)
 }
 
 func errInvalidCompatLevel(msg string) *registryError {
-	return newErr(http.StatusBadRequest, errCodeInvalidCompatLevel, msg)
+	return newErr(http.StatusBadRequest, sr.ErrInvalidCompatibilityLevel.Code, msg)
 }
 
 func errCircularDependency(subject string) *registryError {
-	return newErr(http.StatusUnprocessableEntity, errCodeInvalidSchema, "circular dependency detected: subject %s is referenced in a cycle", subject)
+	return newErr(http.StatusUnprocessableEntity, sr.ErrInvalidSchema.Code, "circular dependency detected: subject %s is referenced in a cycle", subject)
 }
