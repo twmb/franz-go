@@ -122,5 +122,9 @@ func (r *ring[T]) dropPeek() (next T, more, dead bool) {
 	if len(r.overflow) > 0 {
 		return r.overflow[0], true, r.dead
 	}
+
+	// We have no more overflow elements. We reset the slice to nil to release memory.
+	r.overflow = nil
+
 	return next, false, r.dead
 }
