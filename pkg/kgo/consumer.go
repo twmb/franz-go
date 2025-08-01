@@ -1238,6 +1238,14 @@ func (c *consumer) filterMetadataAllTopics(topics []string) []string {
 					break
 				}
 			}
+			if want {
+				for _, re := range c.cl.cfg.excludeTopics {
+					if re.MatchString(topic) {
+						want = false
+						break
+					}
+				}
+			}
 			if !want {
 				rns.skip(topic)
 			}
