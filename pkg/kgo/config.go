@@ -164,9 +164,10 @@ type cfg struct {
 
 	recheckPreferredReplicaInterval time.Duration
 
-	topics     map[string]*regexp.Regexp   // topics to consume; if regex is true, values are compiled regular expressions
-	partitions map[string]map[int32]Offset // partitions to directly consume from
-	regex      bool
+	topics        map[string]*regexp.Regexp   // topics to consume; if regex is true, values are compiled regular expressions
+	excludeTopics map[string]*regexp.Regexp   // topics to exclude; only used if regex is true, values are compiled regular expressions
+	partitions    map[string]map[int32]Offset // partitions to directly consume from
+	regex         bool
 
 	////////////////////////////
 	// CONSUMER GROUP SECTION //
@@ -384,6 +385,15 @@ func (cfg *cfg) validate() error {
 			}
 			cfg.topics[re] = compiled
 		}
+		for re := range cfg.excludeTopics {
+			compiled, err := regexp.Compile(re)
+			if err != nil {
+				return fmt.Errorf("invalid regular expression %q", re)
+			}
+			cfg.excludeTopics[re] = compiled
+		}
+	} else if len(cfg.excludeTopics) > 0 {
+		return errors.New("invalid use of ConsumeExcludeTopics when not using ConsumeRegex")
 	}
 
 	if cfg.topics != nil && cfg.partitions != nil {
@@ -1526,7 +1536,8 @@ func ConsumePartitions(partitions map[string]map[int32]Offset) ConsumerOpt {
 }
 
 // ConsumeRegex sets the client to parse all topics passed to ConsumeTopics as
-// regular expressions.
+// regular expressions. You can further use ConsumeExcludeTopics to exclude
+// topics that would match any ConsumeTopics regex.
 //
 // When consuming via regex, every metadata request loads *all* topics, so that
 // all topics can be passed to any regular expressions. Every topic is
@@ -1534,6 +1545,22 @@ func ConsumePartitions(partitions map[string]map[int32]Offset) ConsumerOpt {
 // permanently is known to match, or is permanently known to not match.
 func ConsumeRegex() ConsumerOpt {
 	return consumerOpt{func(cfg *cfg) { cfg.regex = true }}
+}
+
+// ConsumeExcludeTopics sets topics to exclude when using regex consumption.
+// This option only has effect when ConsumeRegex is enabled.
+//
+// Topics matching any of the provided regular expressions will be excluded from
+// consumption, even if they match patterns provided to ConsumeTopics.
+func ConsumeExcludeTopics(topics ...string) ConsumerOpt {
+	return consumerOpt{func(cfg *cfg) {
+		if cfg.excludeTopics == nil {
+			cfg.excludeTopics = make(map[string]*regexp.Regexp, len(topics))
+		}
+		for _, topic := range topics {
+			cfg.excludeTopics[topic] = nil
+		}
+	}}
 }
 
 // DisableFetchSessions sets the client to not use fetch sessions (Kafka 1.0+).
