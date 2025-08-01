@@ -8,6 +8,7 @@ import (
 	"slices"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -80,6 +81,41 @@ func TestConsumeTopicRetrieval_Many(t *testing.T) {
 	slices.Sort(topics)
 	if len(topics) != 100 || topics[0] != fmt.Sprintf("%s_%d", topicName, 0) {
 		t.Fatalf("expected to see %v, got %v", topicName, topics)
+	}
+}
+
+func TestConsumeRegex(t *testing.T) {
+	t.Parallel()
+
+	// Create test topics
+	var cleanup []func()
+	for _, name := range []string{"test-include-1", "test-include-2", "test-exclude-1", "test-exclude-2"} {
+		_, c := tmpNamedTopicPartitions(t, name, 1)
+		cleanup = append(cleanup, c)
+	}
+	defer func() {
+		for _, c := range cleanup {
+			c()
+		}
+	}()
+
+	cl, _ := newTestClient(
+		ConsumeTopics(".*"),                     // Match all test-* topics
+		ConsumeExcludeTopics("test-exclude-.*"), // Exclude test-exclude-* topics
+		ConsumeRegex(),
+	)
+	defer cl.Close()
+	cl.triggerUpdateMetadataNow("querying metadata for consumer initialization")
+	time.Sleep(100 * time.Millisecond)
+
+	topics := cl.GetConsumeTopics()
+	if len(topics) != 2 {
+		t.Fatalf("expected 2 topics, got %v", topics)
+	}
+	for _, topic := range topics {
+		if !strings.HasPrefix(topic, "test-include-") {
+			t.Fatalf("expected to see test-include-*, got %v", topic)
+		}
 	}
 }
 
