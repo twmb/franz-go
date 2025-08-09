@@ -232,6 +232,7 @@ func main() {
 				fmt.Println("starting thread", threadID)
 				for {
 					num := count.Add(1)
+					start := time.Now()
 					cl.Produce(context.Background(), newRecord(num), func(r *kgo.Record, err error) {
 						if *useStaticValue {
 							staticPool.Put(r)
@@ -242,7 +243,9 @@ func main() {
 						atomic.AddInt64(&rateRecs, 1)
 						atomic.AddInt64(&rateBytes, int64(*recordBytes))
 					})
-					num++
+					if d := time.Since(start); d > 10*time.Millisecond {
+						fmt.Println("Produce took", d)
+					}
 				}
 			}()
 		}
