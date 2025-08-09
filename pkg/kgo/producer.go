@@ -500,6 +500,8 @@ func (cl *Client) produce(
 	p.mu.Lock()
 	calcNums()
 	if overMaxRecs || overMaxBytes {
+		fmt.Println("over buffered (never triggers)", nextBufRecs, nextBufBytes)
+
 		if !block || cl.cfg.manualFlushing {
 			p.mu.Unlock()
 			p.promiseRecordBeforeBuf(promisedRec{ctx, promise, r}, ErrMaxBuffered)

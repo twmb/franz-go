@@ -32,6 +32,7 @@ var (
 
 	useStaticValue = flag.Bool("static-record", false, "if true, use the same record value for every record (eliminates creating and formatting values for records; implies -pool)")
 
+	threads             = flag.Int("threads", 1, "number of threads producing records")
 	recordBytes         = flag.Int("record-bytes", 100, "bytes per record value (producing)")
 	compression         = flag.String("compression", "none", "compression algorithm to use (none,gzip,snappy,lz4,zstd, for producing)")
 	poolProduce         = flag.Bool("pool", false, "if true, use a sync.Pool to reuse record structs/slices (producing)")
@@ -225,20 +226,27 @@ func main() {
 
 	switch *consume {
 	case false:
-		var num int64
-		for {
-			cl.Produce(context.Background(), newRecord(num), func(r *kgo.Record, err error) {
-				if *useStaticValue {
-					staticPool.Put(r)
-				} else if *poolProduce {
-					p.Put(r)
+		var count atomic.Int64
+		for threadID := range *threads {
+			go func() {
+				fmt.Println("starting thread", threadID)
+				for {
+					num := count.Add(1)
+					cl.Produce(context.Background(), newRecord(num), func(r *kgo.Record, err error) {
+						if *useStaticValue {
+							staticPool.Put(r)
+						} else if *poolProduce {
+							p.Put(r)
+						}
+						chk(err, "produce error: %v", err)
+						atomic.AddInt64(&rateRecs, 1)
+						atomic.AddInt64(&rateBytes, int64(*recordBytes))
+					})
+					num++
 				}
-				chk(err, "produce error: %v", err)
-				atomic.AddInt64(&rateRecs, 1)
-				atomic.AddInt64(&rateBytes, int64(*recordBytes))
-			})
-			num++
+			}()
 		}
+		select {}
 	case true:
 		for {
 			fetches := cl.PollFetches(context.Background())

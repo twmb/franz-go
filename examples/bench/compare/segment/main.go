@@ -29,6 +29,7 @@ var (
 	compression     = flag.String("compression", "none", "compression algorithm to use (none,gzip,snappy,lz4,zstd, for producing)")
 	poolProduce     = flag.Bool("pool", false, "if true, use a sync.Pool to reuse record slices (producing)")
 	maxWriteThreads = flag.Int("max-write-threads", 5, "if idempotency is disabled, the number of produce requests to allow per broker")
+	threads         = flag.Int("threads", 1, "number of threads to produce messages")
 
 	consume = flag.Bool("consume", false, "if true, consume rather than produce")
 	group   = flag.String("group", "", "if non-empty, group to use for consuming rather than direct partition consuming (consuming)")
@@ -144,11 +145,16 @@ func main() {
 		producer := NewProducer(w, *batchSize)
 		go producer.Run(ctx, *maxWriteThreads)
 
-		var num int64
-		for {
-			producer.Produce(&kafka.Message{Value: newValue(num)})
-			num++
+		var counter atomic.Int64
+		for range *threads {
+			go func() {
+				for {
+					num := counter.Add(1)
+					producer.Produce(&kafka.Message{Value: newValue(num)})
+				}
+			}()
 		}
+		select {}
 
 	case true:
 		cfg := kafka.ReaderConfig{

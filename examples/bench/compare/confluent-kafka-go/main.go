@@ -17,6 +17,7 @@ var (
 
 	recordBytes   = flag.Int("record-bytes", 100, "bytes per record (producing)")
 	noCompression = flag.Bool("no-compression", false, "set to disable snappy compression (producing)")
+	threads       = flag.Int("threads", 1, "number of threads to produce messages")
 
 	consume = flag.Bool("consume", false, "if true, consume rather than produce")
 	group   = flag.String("group", "", "if non-empty, group to use for consuming rather than direct partition consuming (consuming)")
@@ -76,15 +77,21 @@ func main() {
 				}
 			}
 		}()
-		var num int64
-		for {
-			err = p.Produce(&kafka.Message{
-				TopicPartition: kafka.TopicPartition{Topic: topic, Partition: kafka.PartitionAny},
-				Value:          newValue(num),
-			}, nil)
-			num++
-			chk(err, "unable to produce: %v", err)
+
+		var counter atomic.Int64
+		for range *threads {
+			go func() {
+				for {
+					num := counter.Add(1)
+					err = p.Produce(&kafka.Message{
+						TopicPartition: kafka.TopicPartition{Topic: topic, Partition: kafka.PartitionAny},
+						Value:          newValue(num),
+					}, nil)
+					chk(err, "unable to produce: %v", err)
+				}
+			}()
 		}
+		select {}
 
 	case true:
 		cfg := &kafka.ConfigMap{
