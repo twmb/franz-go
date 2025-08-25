@@ -1,6 +1,6 @@
 module github.com/twmb/franz-go/pkg/sasl/kerberos
 
-go 1.23.8
+go 1.24.0
 
 require (
 	github.com/jcmturner/gokrb5/v8 v8.4.4

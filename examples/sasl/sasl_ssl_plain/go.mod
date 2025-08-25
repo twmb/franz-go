@@ -1,6 +1,6 @@
 module sasl_ssl_plain
 
-go 1.24.2
+go 1.25.0
 
 require github.com/twmb/franz-go v1.18.1
 

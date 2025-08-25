@@ -1,6 +1,6 @@
 module github.com/twmb/franz-go/plugin/kslog
 
-go 1.23.8
+go 1.24.0
 
 require github.com/twmb/franz-go v1.18.1
 

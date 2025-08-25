@@ -1,6 +1,6 @@
 module saram
 
-go 1.24.2
+go 1.25.0
 
 require github.com/IBM/sarama v1.45.1
 

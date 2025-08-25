@@ -1,6 +1,6 @@
 module github.com/twmb/franz-go/plugin/klogrus
 
-go 1.23.8
+go 1.24.0
 
 require (
 	github.com/sirupsen/logrus v1.9.3
