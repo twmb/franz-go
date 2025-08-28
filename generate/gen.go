@@ -628,7 +628,7 @@ func (s Struct) WriteDefault(l *LineWriter) {
 
 func (s Struct) WriteDefn(l *LineWriter) {
 	if s.Comment != "" {
-		l.Write(s.Comment)
+		l.Write("%s", s.Comment)
 	}
 	l.Write("type %s struct {", s.Name)
 	if s.TopLevel {
@@ -825,7 +825,7 @@ func (s Struct) WriteNewPtrFunc(l *LineWriter) {
 
 func (e Enum) WriteDefn(l *LineWriter) {
 	if e.Comment != "" {
-		l.Write(e.Comment)
+		l.Write("%s", e.Comment)
 		l.Write("// ")
 	}
 	l.Write("// Possible values and their meanings:")
@@ -833,7 +833,7 @@ func (e Enum) WriteDefn(l *LineWriter) {
 	for _, v := range e.Values {
 		l.Write("// * %d (%s)", v.Value, v.Word)
 		if len(v.Comment) > 0 {
-			l.Write(v.Comment)
+			l.Write("%s", v.Comment)
 		}
 		l.Write("//")
 	}
