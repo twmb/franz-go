@@ -524,7 +524,7 @@ beforePartition:
 
 // RecordsAll returns a Go native iterator that yields the records in a fetch.
 //
-// Similarly to RecordIter(), the errors should be inspected separately.
+// Similarly to [RecordIter], the errors should be inspected separately.
 func (fs Fetches) RecordsAll() iter.Seq[*Record] {
 	return func(yield func(*Record) bool) {
 		for iter := fs.RecordIter(); !iter.Done(); {
