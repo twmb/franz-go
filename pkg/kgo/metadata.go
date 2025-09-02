@@ -870,6 +870,7 @@ func (cl *Client) mergeTopicPartitions(
 					"topic", topic,
 					"partition", part,
 				)
+				*newTP = *oldTP
 				retryWhy.add(topic, int32(part), errMissingTopicID)
 				continue
 			}
