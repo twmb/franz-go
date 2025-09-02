@@ -1,6 +1,6 @@
 module github.com/twmb/franz-go/plugin/kotel
 
-go 1.23.8
+go 1.24.0
 
 require (
 	github.com/stretchr/testify v1.10.0

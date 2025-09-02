@@ -1,6 +1,6 @@
 module schema_registry
 
-go 1.24.2
+go 1.25.0
 
 require (
 	github.com/hamba/avro/v2 v2.28.0

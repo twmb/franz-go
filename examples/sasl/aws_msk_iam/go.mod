@@ -1,6 +1,6 @@
 module aws_msk_iam
 
-go 1.24.2
+go 1.25.0
 
 require (
 	github.com/aws/aws-sdk-go v1.55.7
