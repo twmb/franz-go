@@ -465,6 +465,8 @@ func (fs Fetches) EachError(fn func(string, int32, error)) {
 // RecordIter returns an iterator over all records in a fetch.
 //
 // Note that errors should be inspected as well.
+//
+// Alternatively, use [RecordsAll] for a native Go iterator over records in the fetch.
 func (fs Fetches) RecordIter() *FetchesRecordIter {
 	iter := &FetchesRecordIter{fetches: fs}
 	iter.prepareNext()
