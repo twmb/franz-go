@@ -4194,7 +4194,7 @@ type FetchRequest struct {
 	// ID used should be 0, and thereafter (until session resets) the ID should
 	// be the ID returned in the fetch response.
 	//
-	// Read KIP-227 for more details. Use -1 if you want to disable sessions.
+	// Read KIP-227 for more details.
 	SessionID int32 // v7+
 
 	// SessionEpoch is the session epoch for this request if using sessions.
