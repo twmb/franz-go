@@ -1341,7 +1341,7 @@ type ProcessFetchPartitionOpts struct {
 	// Topic is used to populate the Topic field of each Record.
 	Topic string
 
-	// Topic is used to populate the Partition field of each Record.
+	// Partition is used to populate the Partition field of each Record.
 	Partition int32
 
 	// Pools contain potential pools to use for memory pooling.
