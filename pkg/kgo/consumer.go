@@ -382,7 +382,8 @@ func NewErrFetch(err error) Fetches {
 
 // PollFetches waits for fetches to be available, returning as soon as any
 // broker returns a fetch. If the context is nil, this function will return
-// immediately with any currently buffered records.
+// immediately with any currently buffered records. It is functionally
+// equivalent to calling PollRecords(ctx, 0).
 //
 // If the client is closed, a fake fetch will be injected that has no topic, a
 // partition of 0, and a partition error of ErrClientClosed. If the context is
@@ -402,9 +403,9 @@ func (cl *Client) PollFetches(ctx context.Context) Fetches {
 	return cl.PollRecords(ctx, 0)
 }
 
-// PollRecords waits for records to be available, returning as soon as any
-// broker returns records in a fetch. If the context is nil, this function will
-// return immediately with any currently buffered records.
+// PollRecords waits for fetches to be available, returning as soon as any
+// broker returns a fetch. If the context is nil, this function will return
+// immediately with any currently buffered fetches.
 //
 // If the client is closed, a fake fetch will be injected that has no topic, a
 // partition of -1, and a partition error of ErrClientClosed. If the context is
