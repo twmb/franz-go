@@ -1829,7 +1829,9 @@ func OnPartitionsAssigned(onAssigned func(context.Context, *Client, map[string][
 //
 // This function can be called at any time you are polling or processing
 // records. If you want to ensure this function is called serially with
-// processing, consider the BlockRebalanceOnPoll option.
+// processing, consider the BlockRebalanceOnPoll option. It is guaranteed
+// that once the callback has completed any subsequent polls will not return
+// records for the revoked partitions.
 //
 // This function is called if a "fatal" group error is encountered and you have
 // not set [OnPartitionsLost]. See OnPartitionsLost for more details.
