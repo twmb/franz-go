@@ -185,7 +185,7 @@ func (ds TopicDetails) TopicsList() TopicsList {
 
 // Metadata is the data from a metadata response.
 type Metadata struct {
-	Cluster              string         // Cluster is the cluster name, if any.
+	Cluster              string         // Cluster is the cluster ID, if any.
 	Controller           int32          // Controller is the node ID of the controller broker, if available, otherwise -1.
 	Brokers              BrokerDetails  // Brokers contains broker details, sorted by default.
 	Topics               TopicDetails   // Topics contains topic details.
