@@ -40,6 +40,7 @@ var (
 	acks                = flag.Int("acks", -1, "acks required; 0, -1, 1")
 	linger              = flag.Duration("linger", 0, "if non-zero, linger to use when producing")
 	batchMaxBytes       = flag.Int("batch-max-bytes", 1000000, "the maximum batch size to allow per-partition (must be less than Kafka's max.message.bytes, producing)")
+	synchronous         = flag.Bool("sync", false, "if true, runs operations synchronously (producing)")
 
 	logLevel = flag.String("log-level", "", "if non-empty, use a basic logger with this log level (debug, info, warn, error)")
 
@@ -226,6 +227,18 @@ func main() {
 	switch *consume {
 	case false:
 		var num int64
+
+		if *synchronous {
+			for {
+				cl.ProduceSync(context.Background(), newRecord(num))
+				chk(err, "produce error: %v", err)
+				atomic.AddInt64(&rateRecs, 1)
+				atomic.AddInt64(&rateBytes, int64(*recordBytes))
+				num++
+			}
+		}
+
+		// Run Produce async
 		for {
 			cl.Produce(context.Background(), newRecord(num), func(r *kgo.Record, err error) {
 				if *useStaticValue {

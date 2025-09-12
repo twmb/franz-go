@@ -310,21 +310,98 @@ func (rs ProduceResults) First() (*Record, error) {
 // to be produced before returning.
 func (cl *Client) ProduceSync(ctx context.Context, rs ...*Record) ProduceResults {
 	var (
-		wg      sync.WaitGroup
 		results = make(ProduceResults, 0, len(rs))
 		promise = func(r *Record, err error) {
 			results = append(results, ProduceResult{r, err})
-			wg.Done()
 		}
 	)
 
-	wg.Add(len(rs))
 	for _, r := range rs {
-		cl.Produce(ctx, r, promise)
+		cl.produceSync(ctx, r, promise, true)
 	}
-	wg.Wait()
 
 	return results
+}
+
+func (cl *Client) produceSync(
+	ctx context.Context,
+	r *Record,
+	promise func(*Record, error),
+	block bool,
+) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if r.Context == nil {
+		r.Context = ctx
+	}
+	if promise == nil {
+		promise = noPromise
+	}
+	if r.Topic == "" || cl.cfg.defaultProduceTopicAlways {
+		r.Topic = cl.cfg.defaultProduceTopic
+	}
+
+	p := &cl.producer
+	if p.hooks != nil && len(p.hooks.buffered) > 0 {
+		for _, h := range p.hooks.buffered {
+			h.OnProduceRecordBuffered(r)
+		}
+	}
+
+	// We can now fail the rec after the buffered hook.
+	if r.Topic == "" {
+		p.promiseRecordBeforeBuf(promisedRec{ctx, promise, r}, errNoTopic)
+		return
+	}
+	if cl.cfg.txnID != nil && !p.producingTxn.Load() {
+		p.promiseRecordBeforeBuf(promisedRec{ctx, promise, r}, errNotInTransaction)
+		return
+	}
+
+	userSize := r.userSize()
+	if cl.cfg.maxBufferedBytes > 0 && userSize > cl.cfg.maxBufferedBytes {
+		p.promiseRecordBeforeBuf(promisedRec{ctx, promise, r}, kerr.MessageTooLarge)
+		return
+	}
+
+	// We have to grab the produce lock to check if this record will exceed
+	// configured limits. We try to keep the logic tight since this is
+	// effectively a global lock around producing.
+	p.mu.Lock()
+	nextBufRecs := p.bufferedRecords + 1
+	nextBufBytes := p.bufferedBytes + userSize
+	overMaxRecs := nextBufRecs > cl.cfg.maxBufferedRecords
+	overMaxBytes := cl.cfg.maxBufferedBytes > 0 && nextBufBytes > cl.cfg.maxBufferedBytes
+
+	if overMaxRecs || overMaxBytes {
+		if !block || cl.cfg.manualFlushing {
+			p.promiseRecordBeforeBuf(promisedRec{ctx, promise, r}, ErrMaxBuffered)
+			return
+		}
+
+		// We synchronously wait for buffer space to become available
+		// instead of using a separate goroutine. This wakeup call
+		// ensures anything actively lingering is notified.
+
+		// Before we potentially unlinger, add that we are blocked to
+		// ensure we do NOT start a linger anymore. We THEN wakeup
+		// anything that is actively lingering. Note that blocked is
+		// also used when finishing promises to see if we need to be
+		// notified.
+
+		cl.cfg.logger.Log(LogLevelDebug, "blocking Produce because we are either over max buffered records or max buffered bytes",
+			"over_max_records", overMaxRecs,
+			"over_max_bytes", overMaxBytes,
+		)
+		cl.unlingerDueToMaxRecsBuffered()
+		cl.cfg.logger.Log(LogLevelDebug, "Produce block resolved, we now have space to produce, continuing to partition and produce")
+	}
+	p.bufferedRecords = nextBufRecs
+	p.bufferedBytes = nextBufBytes
+	p.mu.Unlock()
+
+	cl.partitionRecord(promisedRec{ctx, promise, r})
 }
 
 // FirstErrPromise is a helper type to capture only the first failing error
