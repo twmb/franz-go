@@ -202,8 +202,7 @@ func (c *testConsumer) etl(etlsBeforeQuit int) {
 		}
 		netls++
 
-		for iter := fetches.RecordIter(); !iter.Done(); {
-			r := iter.Next()
+		for r := range fetches.RecordsAll() {
 			keyNum, err := strconv.Atoi(string(r.Key))
 			if err != nil {
 				c.errCh <- err
