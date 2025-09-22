@@ -793,7 +793,7 @@ start:
 	// api versions does *not* use flexible response headers; see comment in promisedResp
 	rawResp, err := cxn.readResponse(nil, req.Key(), req.GetVersion(), corrID, false, rt, bytesWritten, writeWait, timeToWrite, readEnqueue)
 	if err != nil {
-		if strings.HasSuffix(err.Error(), "connection reset by peer") {
+		if errors.As(err, new(net.Error)) {
 			return &errApiVersionsReset{err}
 		}
 		return err
