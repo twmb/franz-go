@@ -298,9 +298,9 @@ func (cfg *cfg) validate() error {
 		// 0 <= allowed concurrency
 		{name: "max concurrent fetches", v: int64(cfg.maxConcurrentFetches), allowed: 0, badcmp: i64lt},
 
-		// 1s <= request timeout overhead <= 15m
+		// 100ms <= request timeout overhead <= 15m
 		{name: "request timeout max overhead", v: int64(cfg.requestTimeoutOverhead), allowed: int64(15 * time.Minute), badcmp: i64gt, durs: true},
-		{name: "request timeout min overhead", v: int64(cfg.requestTimeoutOverhead), allowed: int64(time.Second), badcmp: i64lt, durs: true},
+		{name: "request timeout min overhead", v: int64(cfg.requestTimeoutOverhead), allowed: int64(100 * time.Millisecond), badcmp: i64lt, durs: true},
 
 		// 1s <= conn idle <= 15m
 		{name: "conn min idle timeout", v: int64(cfg.connIdleTimeout), allowed: int64(time.Second), badcmp: i64lt, durs: true},
