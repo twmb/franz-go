@@ -34,7 +34,7 @@ type pconsumer struct {
 }
 
 type splitConsume struct {
-	// Using BlockRebalanceOnCommit means we do not need a mu to manage
+	// Using BlockRebalanceOnPoll means we do not need a mu to manage
 	// consumers, unlike the autocommit normal example.
 	consumers map[tp]*pconsumer
 }
