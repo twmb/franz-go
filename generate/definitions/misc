@@ -233,7 +233,9 @@ OffsetCommitKey => not top level, with version field
 //
 // KAFKA-7437 commit 9f7267dd2f, proposed in KIP-320 and included in 2.1.0
 // released version 3.
-OffsetCommitValue => not top level, with version field
+//
+// KAFKA-19141 commit 199772a included in 4.1.0 released version 4.
+OffsetCommitValue => not top level, with version field, flexible v4+
   // Version is which encoding version this value is using.
   Version: int16
   // Offset is the committed offset.
@@ -247,6 +249,8 @@ OffsetCommitValue => not top level, with version field
   // ExpireTimestamp, introduced in v1 and dropped in v2 with KIP-111,
   // is when this commit expires.
   ExpireTimestamp: int64 // v1-v1
+  // TopicID is the topic id of the committed offset
+  TopicID: uuid // tag 0
 
 // GroupMetadataKey is the key for the Kafka internal __consumer_offsets topic
 // if the key starts with an int16 with a value of 2.
