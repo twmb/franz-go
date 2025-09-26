@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kbin"
@@ -793,7 +794,8 @@ start:
 	// api versions does *not* use flexible response headers; see comment in promisedResp
 	rawResp, err := cxn.readResponse(nil, req.Key(), req.GetVersion(), corrID, false, rt, bytesWritten, writeWait, timeToWrite, readEnqueue)
 	if err != nil {
-		if strings.HasSuffix(err.Error(), "connection reset by peer") {
+		var errno syscall.Errno
+		if errors.As(err, &errno) && isConnReset(errno) {
 			return &errApiVersionsReset{err}
 		}
 		return err
