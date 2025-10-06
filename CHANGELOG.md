@@ -40,7 +40,7 @@ This release fully fixes (and has a positive field report) the KIP-890 problem
 that was meant to be fixed in v1.19.2. See the commit description for more
 details.
 
-- [`a13f633b`](https://github.com/twmb/franz-go/commits/a13f633b) kgo: remove pinReq wrapping request
+- [`a13f633b`](https://github.com/twmb/franz-go/commit/a13f633b) kgo: remove pinReq wrapping request
 
 
 v1.19.2
@@ -68,8 +68,8 @@ the client, and this single client-relevant feature is now implemented.
 
 See the commits for more details.
 
-- [`dda08fd9`](https://github.com/twmb/franz-go/commits/dda08fd9) kgo: fix KIP-890 handling of the transaction.version feature
-- [`8a364819`](https://github.com/twmb/franz-go/commits/8a364819) kgo: fix data race in fetch response handling
+- [`dda08fd9`](https://github.com/twmb/franz-go/commit/dda08fd9) kgo: fix KIP-890 handling of the transaction.version feature
+- [`8a364819`](https://github.com/twmb/franz-go/commit/8a364819) kgo: fix data race in fetch response handling
 
 v1.19.1
 ===
@@ -80,7 +80,7 @@ release fixes that (by fixing the bug that has existed since Kafka 2.4) and
 adds a GH action to test against Kafka 3.8 to help prevent regressions against
 older brokers as this library marches forward.
 
-- [`50aa74f1`](https://github.com/twmb/franz-go/commits/50aa74f1) kgo bugfix: ApiVersions replies only with key 18, not all keys
+- [`50aa74f1`](https://github.com/twmb/franz-go/commit/50aa74f1) kgo bugfix: ApiVersions replies only with key 18, not all keys
 
 v1.19.0
 ===
@@ -292,30 +292,30 @@ This is a small selection of what I think are the most pertinent commits in
 this release. This release is very large, though. Many commits and PRs have
 been left out that introduce or change smaller things.
 
-- [`07e57d3e`](https://github.com/twmb/franz-go/commits/07e57d3e) kgo: remove all EndAndBeginTransaction internal "optimizations"
-- [`a54ffa96`](https://github.com/twmb/franz-go/commits/a54ffa96) kgo: add ConsumeStartOffset, expand offset docs, update readme KIPs
+- [`07e57d3e`](https://github.com/twmb/franz-go/commit/07e57d3e) kgo: remove all EndAndBeginTransaction internal "optimizations"
+- [`a54ffa96`](https://github.com/twmb/franz-go/commit/a54ffa96) kgo: add ConsumeStartOffset, expand offset docs, update readme KIPs
 - [`PR #988`](https://github.com/twmb/franz-go/pull/988)#988 kgo: add support for KIP-714 (client metrics)
-- [`7a17a03c`](https://github.com/twmb/franz-go/commits/7a17a03c) kgo: fix data race in consumer code path
-- [`ae96af1d`](https://github.com/twmb/franz-go/commits/ae96af1d) kgo: expose IsRetryableBrokerErr
-- [`1eb82fee`](https://github.com/twmb/franz-go/commits/1eb82fee) kgo: add EnsureProduceConnectionIsOpen
-- [`fc778ba8`](https://github.com/twmb/franz-go/commits/fc778ba8) kgo: fix AllowAutoTopicCreation && ConsumeRegex when used together
-- [`ae7eea7c`](https://github.com/twmb/franz-go/commits/ae7eea7c) kgo: add DisableFetchCRCValidation option
-- [`6af90823`](https://github.com/twmb/franz-go/commits/6af90823) kgo: add the ability to pool memory in a few places while consuming
-- [`8c7a36db`](https://github.com/twmb/franz-go/commits/8c7a36db) kgo: export utilities for decompressing and parsing partition fetch responses
-- [`33400303`](https://github.com/twmb/franz-go/commits/33400303) kgo: do a slab allocation for Record's when processing a batch
-- [`39c2157a`](https://github.com/twmb/franz-go/commits/39c2157a) kgo: add WithCompressor and WithDecompressor options
-- [`9252a6b6`](https://github.com/twmb/franz-go/commits/9252a6b6) kgo: export Compressor and Decompressor
-- [`be15c285`](https://github.com/twmb/franz-go/commits/be15c285) kgo: add Client.RequestCachedMetadata
-- [`fc040bc0`](https://github.com/twmb/franz-go/commits/fc040bc0) kgo: add OnRebootstrapRequired
-- [`c8aec00a`](https://github.com/twmb/franz-go/commits/c8aec00a) kversion: document changes through 4.0
-- [`718c5606`](https://github.com/twmb/franz-go/commits/718c5606) kgo: remove all code handling EndBeginTxnUnsafe, make it a no-op
-- [`5494c59e`](https://github.com/twmb/franz-go/commits/5494c59e) kversions: entirely reimplement internals
-- [`9d266fcd`](https://github.com/twmb/franz-go/commits/9d266fcd) kgo: allow outstanding produce requests to be context canceled if the user disables idempotency
-- [`c60bf4c2`](https://github.com/twmb/franz-go/commits/c60bf4c2) kgo: add DefaultProduceTopicAlways ProducerOpt
-- [`50cfe060`](https://github.com/twmb/franz-go/commits/50cfe060) kgo: fix off-by-one with retries accounting
-- [`e9ba83a6`](https://github.com/twmb/franz-go/commits/e9ba83a6), [`05099ba0`](https://github.com/twmb/franz-go/commits/05099ba0) kgo: add WithContext, Client.Context()
-- [`ddb0c0c3`](https://github.com/twmb/franz-go/commits/ddb0c0c3) kgo: fix cancellation of a fetch in manageFetchConcurrency
-- [`83843a53`](https://github.com/twmb/franz-go/commits/83843a53) kgo: fixed panic when keyvals len equals 1
+- [`7a17a03c`](https://github.com/twmb/franz-go/commit/7a17a03c) kgo: fix data race in consumer code path
+- [`ae96af1d`](https://github.com/twmb/franz-go/commit/ae96af1d) kgo: expose IsRetryableBrokerErr
+- [`1eb82fee`](https://github.com/twmb/franz-go/commit/1eb82fee) kgo: add EnsureProduceConnectionIsOpen
+- [`fc778ba8`](https://github.com/twmb/franz-go/commit/fc778ba8) kgo: fix AllowAutoTopicCreation && ConsumeRegex when used together
+- [`ae7eea7c`](https://github.com/twmb/franz-go/commit/ae7eea7c) kgo: add DisableFetchCRCValidation option
+- [`6af90823`](https://github.com/twmb/franz-go/commit/6af90823) kgo: add the ability to pool memory in a few places while consuming
+- [`8c7a36db`](https://github.com/twmb/franz-go/commit/8c7a36db) kgo: export utilities for decompressing and parsing partition fetch responses
+- [`33400303`](https://github.com/twmb/franz-go/commit/33400303) kgo: do a slab allocation for Record's when processing a batch
+- [`39c2157a`](https://github.com/twmb/franz-go/commit/39c2157a) kgo: add WithCompressor and WithDecompressor options
+- [`9252a6b6`](https://github.com/twmb/franz-go/commit/9252a6b6) kgo: export Compressor and Decompressor
+- [`be15c285`](https://github.com/twmb/franz-go/commit/be15c285) kgo: add Client.RequestCachedMetadata
+- [`fc040bc0`](https://github.com/twmb/franz-go/commit/fc040bc0) kgo: add OnRebootstrapRequired
+- [`c8aec00a`](https://github.com/twmb/franz-go/commit/c8aec00a) kversion: document changes through 4.0
+- [`718c5606`](https://github.com/twmb/franz-go/commit/718c5606) kgo: remove all code handling EndBeginTxnUnsafe, make it a no-op
+- [`5494c59e`](https://github.com/twmb/franz-go/commit/5494c59e) kversions: entirely reimplement internals
+- [`9d266fcd`](https://github.com/twmb/franz-go/commit/9d266fcd) kgo: allow outstanding produce requests to be context canceled if the user disables idempotency
+- [`c60bf4c2`](https://github.com/twmb/franz-go/commit/c60bf4c2) kgo: add DefaultProduceTopicAlways ProducerOpt
+- [`50cfe060`](https://github.com/twmb/franz-go/commit/50cfe060) kgo: fix off-by-one with retries accounting
+- [`e9ba83a6`](https://github.com/twmb/franz-go/commit/e9ba83a6), [`05099ba0`](https://github.com/twmb/franz-go/commit/05099ba0) kgo: add WithContext, Client.Context()
+- [`ddb0c0c3`](https://github.com/twmb/franz-go/commit/ddb0c0c3) kgo: fix cancellation of a fetch in manageFetchConcurrency
+- [`83843a53`](https://github.com/twmb/franz-go/commit/83843a53) kgo: fixed panic when keyvals len equals 1
 
 v1.18.1
 ===
