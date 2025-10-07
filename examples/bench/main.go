@@ -43,6 +43,7 @@ var (
 
 	batchRecs  = flag.Int("batch-recs", 1, "number of records to create before produce calls")
 	psync      = flag.Bool("psync", false, "produce synchronously")
+	psyncBatch = flag.Bool("psync-batch", false, "produce synchronously with ProduceSyncBatch")
 
 	pgoros = flag.Int("pgoros", 1, "number of goroutines concurrently spawn to produce")
 
@@ -244,7 +245,7 @@ func main() {
 			atomic.AddInt64(&rateRecs, recs)
 			atomic.AddInt64(&rateBytes, bytes)
 		}
-	case !*psync:
+	case !*psync && !*psyncBatch:
 		var num atomic.Int64
 		for range *pgoros {
 			go func() {
@@ -281,7 +282,12 @@ func main() {
 						recs = append(recs, newRecord(num.Add(1)))
 					}
 
-					ress := cl.ProduceSync(context.Background(), recs...)
+					var ress kgo.ProduceResults
+					if *psyncBatch {
+						ress = cl.ProduceSyncBatch(context.Background(), recs...)
+					} else {
+						ress = cl.ProduceSync(context.Background(), recs...)
+					}
 					go func() {
 						for _, res := range ress {
 							r, err := res.Record, res.Err
