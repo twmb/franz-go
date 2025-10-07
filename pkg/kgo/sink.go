@@ -306,9 +306,7 @@ func (s *sink) produce(sem <-chan struct{}) bool {
 		}
 	}()
 
-	// We could have been triggered from a metadata update even though the
-	// user is not producing at all. If we have no buffered records, let's
-	// avoid potentially creating a producer ID.
+	// We could have some spurious produce calls while wrapping up.
 	if s.cl.BufferedProduceRecords() == 0 {
 		return false
 	}
@@ -415,7 +413,7 @@ func (s *sink) produce(sem <-chan struct{}) bool {
 	// sequence numbers using our new producer ID, which will then again
 	// fail with OOOSN.
 	req, txnReq, moreToDrain := s.createReq(id, epoch)
-	if len(req.batches) == 0 { // everything was failing or lingering
+	if len(req.batches) == 0 { // everything was failing or lingering, or what is buffered is in flight already
 		return moreToDrain
 	}
 
@@ -1392,9 +1390,11 @@ func (recBuf *recBuf) bufferRecord(pr promisedRec, abortOnNewBatch bool) bool {
 
 		switch {
 		case aborted: // not processed
+			recBuf.cl.prsPool.put(newBatch.records)
 			return false
 		case appended: // we return true below
 		default: // processed as failure
+			recBuf.cl.prsPool.put(newBatch.records)
 			recBuf.cl.producer.promiseRecord(pr, kerr.MessageTooLarge)
 			return true
 		}

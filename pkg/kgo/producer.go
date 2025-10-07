@@ -303,11 +303,11 @@ func (rs ProduceResults) First() (*Record, error) {
 	return rs[0].Record, rs[0].Err
 }
 
-// ProduceSync is a synchronous produce. See the Produce documentation for an
+// ProduceSync is a synchronous produce. See the [Produce] documentation for an
 // in depth description of how producing works.
 //
-// This function produces all records in one range loop and waits for them all
-// to be produced before returning.
+// This function simply produces all records in one range loop and waits for
+// them all to be produced before returning.
 func (cl *Client) ProduceSync(ctx context.Context, rs ...*Record) ProduceResults {
 	var (
 		wg      sync.WaitGroup
@@ -580,7 +580,7 @@ func (cl *Client) produce(
 	p.bufferedBytes = nextBufBytes
 	p.mu.Unlock()
 
-	cl.partitionRecord(promisedRec{ctx, promise, r})
+	cl.loadPartsAndPartition(promisedRec{ctx, promise, r})
 }
 
 type batchPromise struct {
@@ -678,20 +678,18 @@ func (cl *Client) finishRecordPromise(pr promisedRec, err error, beforeBuffering
 	return broadcast
 }
 
-// partitionRecord loads the partitions for a topic and produce to them. If
-// the topic does not currently exist, the record is buffered in unknownTopics
-// for a metadata update to deal with.
-func (cl *Client) partitionRecord(pr promisedRec) {
+// loadPartsAndPartition loads the partitions for a topic and produce to them.
+// If the topic does not currently exist, the record is buffered in
+// unknownTopics for a metadata update to deal with.
+func (cl *Client) loadPartsAndPartition(pr promisedRec) {
 	parts, partsData := cl.partitionsForTopicProduce(pr)
 	if parts == nil { // saved in unknownTopics
 		return
 	}
-	cl.doPartitionRecord(parts, partsData, pr)
+	cl.doPartition(parts, partsData, pr)
 }
 
-// doPartitionRecord is separate so that metadata updates that load unknown
-// partitions can call this directly.
-func (cl *Client) doPartitionRecord(parts *topicPartitions, partsData *topicPartitionsData, pr promisedRec) {
+func (cl *Client) doPartition(parts *topicPartitions, partsData *topicPartitionsData, pr promisedRec) {
 	if partsData.loadErr != nil && !kerr.IsRetriable(partsData.loadErr) {
 		cl.producer.promiseRecord(pr, partsData.loadErr)
 		return
