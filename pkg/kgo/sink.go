@@ -2107,7 +2107,7 @@ func (b *recBatch) wireLengthForProduceVersion(v int32) (batchWireLength int32, 
 		}
 	}
 
-	return
+	return batchWireLength, flexible
 }
 
 func (b *recBatch) tryBuffer(pr promisedRec, produceVersion, maxBatchBytes int32, abortOnNewBatch bool) (appended, aborted bool) {

@@ -1082,7 +1082,7 @@ func (cxn *brokerCxn) writeRequest(ctx context.Context, enqueuedForWritingAt tim
 			if writeErr != nil {
 				after.Stop()
 				writeWait = time.Since(enqueuedForWritingAt)
-				return
+				return corrID, bytesWritten, writeWait, timeToWrite, readEnqueue, writeErr
 			}
 		}
 	}
@@ -1108,14 +1108,14 @@ func (cxn *brokerCxn) writeRequest(ctx context.Context, enqueuedForWritingAt tim
 	}
 
 	if writeErr != nil {
-		return
+		return corrID, bytesWritten, writeWait, timeToWrite, readEnqueue, writeErr
 	}
 	corrID = cxn.corrID
 	cxn.corrID++
 	if cxn.corrID < 0 {
 		cxn.corrID = 0
 	}
-	return
+	return corrID, bytesWritten, writeWait, timeToWrite, readEnqueue, writeErr
 }
 
 func (cxn *brokerCxn) writeConn(
@@ -1164,7 +1164,7 @@ func (cxn *brokerCxn) writeConn(
 			maybeUpdateCtxErr(cxn.cl.ctx, ctx, &writeErr)
 		}
 	}
-	return
+	return bytesWritten, writeWait, timeToWrite, readEnqueue, writeErr
 }
 
 func (cxn *brokerCxn) readConn(
@@ -1226,7 +1226,7 @@ func (cxn *brokerCxn) readConn(
 			maybeUpdateCtxErr(cxn.cl.ctx, ctx, &err)
 		}
 	}
-	return
+	return nread, buf, readWait, timeToRead, err
 }
 
 // Parses a length 4 slice and enforces the min / max read size based off the

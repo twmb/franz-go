@@ -665,7 +665,7 @@ func (cl *Client) finishRecordPromise(pr promisedRec, err error, beforeBuffering
 	// If this record was never buffered, it's size was never accounted
 	// for on any p field: return early.
 	if beforeBuffering {
-		return
+		return broadcast
 	}
 
 	// Keep the lock as tight as possible: the broadcast can come after.

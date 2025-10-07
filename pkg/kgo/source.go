@@ -817,7 +817,7 @@ func (s *source) fetch(consumerSession *consumerSession, doneFetch chan<- struct
 	}()
 
 	if req.numOffsets == 0 { // cursors could have been set unusable
-		return
+		return fetched
 	}
 
 	// If our fetch is killed, we want to cancel waiting for the response.
@@ -842,7 +842,7 @@ func (s *source) fetch(consumerSession *consumerSession, doneFetch chan<- struct
 	case <-requested:
 		fetched = true
 	case <-ctx.Done():
-		return
+		return fetched
 	}
 
 	var didBackoff bool
@@ -875,7 +875,7 @@ func (s *source) fetch(consumerSession *consumerSession, doneFetch chan<- struct
 	// another backoff.
 	if err != nil {
 		backoff(err)
-		return
+		return fetched
 	}
 
 	// The logic below here should be relatively quick.
@@ -936,17 +936,17 @@ func (s *source) fetch(consumerSession *consumerSession, doneFetch chan<- struct
 			s.cl.cfg.logger.Log(LogLevelInfo, "received SessionIDNotFound from our in use session, our session was likely evicted; resetting session", "broker", logID(s.nodeID))
 			s.session.reset()
 		}
-		return
+		return fetched
 	case kerr.InvalidFetchSessionEpoch:
 		s.cl.cfg.logger.Log(LogLevelInfo, "resetting fetch session", "broker", logID(s.nodeID), "err", err)
 		s.session.reset()
-		return
+		return fetched
 
 	case kerr.FetchSessionTopicIDError, kerr.InconsistentTopicID:
 		s.cl.cfg.logger.Log(LogLevelInfo, "topic id issues, resetting session and updating metadata", "broker", logID(s.nodeID), "err", err)
 		s.session.reset()
 		s.cl.triggerUpdateMetadataNow("topic id issues")
-		return
+		return fetched
 	}
 
 	// At this point, we have successfully processed the response. Even if
@@ -1000,7 +1000,7 @@ func (s *source) fetch(consumerSession *consumerSession, doneFetch chan<- struct
 		// deleted topics.
 		backoff("empty fetch response due to all partitions having retryable errors")
 	}
-	return
+	return fetched
 }
 
 // Parses a fetch response into a Fetch, offsets to reload, and whether
